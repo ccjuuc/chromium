@@ -4,16 +4,21 @@
 
 #include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
 
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
+#include "chrome/browser/glic/resources/glic_resources.h"
+#include "chrome/browser/glic/resources/grit/glic_browser_resources.h"
 #include "chrome/browser/policy/browser_signin_policy_handler.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
@@ -24,7 +29,6 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/profile_picker_resources.h"
@@ -34,6 +38,7 @@
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/strings/grit/components_strings.h"
@@ -44,13 +49,9 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/base/webui/resource_path.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 #include "url/gurl.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/resources/glic_resources.h"
-#include "chrome/browser/glic/resources/grit/glic_browser_resources.h"
-#endif
 
 namespace {
 
@@ -61,12 +62,6 @@ bool IsBrowserSigninAllowed() {
 #if BUILDFLAG(IS_CHROMEOS)
   return true;
 #else
-  if (base::FeatureList::IsEnabled(
-          switches::
-              kProfileCreationFrictionReductionExperimentRemoveSigninStep)) {
-    return false;
-  }
-
   policy::PolicyService* policy_service = g_browser_process->policy_service();
   DCHECK(policy_service);
   const policy::PolicyMap& policies = policy_service->GetPolicies(
@@ -102,75 +97,31 @@ std::string GetManagedDeviceDisclaimer() {
 }
 
 int GetMainViewTitleId(bool is_glic_version) {
-#if BUILDFLAG(ENABLE_GLIC)
   if (is_glic_version) {
     return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_GLIC;
-  }
-#endif
-  return ProfilePicker::Shown() ? IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_V2
-                                : IDS_PROFILE_PICKER_MAIN_VIEW_TITLE;
-}
-
-int GetMainViewSingleProfileTitleId(bool is_glic_version) {
-#if BUILDFLAG(ENABLE_GLIC)
-  if (is_glic_version) {
-    return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_GLIC;
-  }
-#endif
-  if (base::FeatureList::IsEnabled(switches::kProfilePickerTextVariations)) {
-    switch (switches::kProfilePickerTextVariation.Get()) {
-      case switches::ProfilePickerVariation::kKeepWorkAndLifeSeparate:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_KEEP_WORK_AND_LIFE_SEPARATE;
-      case switches::ProfilePickerVariation::kGotAnotherGoogleAccount:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_GOT_ANOTHER_GOOGLE_ACCOUNT;
-      case switches::ProfilePickerVariation::kKeepTasksSeparate:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_KEEP_TASKS_SEPARATE;
-      case switches::ProfilePickerVariation::kSharingAComputer:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_SHARING_A_COMPUTER;
-      case switches::ProfilePickerVariation::kKeepEverythingInChrome:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_KEEP_EVERYTHING_IN_CHROME;
-    }
   }
   return ProfilePicker::Shown() ? IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_V2
                                 : IDS_PROFILE_PICKER_MAIN_VIEW_TITLE;
 }
 
-int GetMainViewSubtitleId(bool is_glic_version) {
-#if BUILDFLAG(ENABLE_GLIC)
-  if (is_glic_version) {
-    return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_GLIC;
+int GetProfileTypeChoiceNotNowButtonLabelId(
+    bool is_first_run_desktop_refresh_enabled) {
+  if (base::FeatureList::IsEnabled(
+          switches::kProfileCreationDeclineSigninCTAExperiment)) {
+    return IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_STAY_SIGNED_OUT_BUTTON_LABEL;
   }
-#endif
-  return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE;
+
+  return is_first_run_desktop_refresh_enabled
+             ? IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_DONT_SIGN_IN_BUTTON_LABEL
+             : IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_NOT_NOW_BUTTON_LABEL;
 }
 
-int GetMainViewSingleProfileSubtitleId(bool is_glic_version) {
-#if BUILDFLAG(ENABLE_GLIC)
-  if (is_glic_version) {
-    return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_GLIC;
-  }
-#endif
-  if (base::FeatureList::IsEnabled(switches::kProfilePickerTextVariations)) {
-    switch (switches::kProfilePickerTextVariation.Get()) {
-      case switches::ProfilePickerVariation::kKeepWorkAndLifeSeparate:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_KEEP_WORK_AND_LIFE_SEPARATE;
-      case switches::ProfilePickerVariation::kGotAnotherGoogleAccount:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_GOT_ANOTHER_GOOGLE_ACCOUNT;
-      case switches::ProfilePickerVariation::kKeepTasksSeparate:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_KEEP_TASKS_SEPARATE;
-      case switches::ProfilePickerVariation::kSharingAComputer:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_SHARING_A_COMPUTER;
-      case switches::ProfilePickerVariation::kKeepEverythingInChrome:
-        return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_KEEP_EVERYTHING_IN_CHROME;
-    }
-  }
-  return IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE;
-}
-
-void AddStrings(content::WebUIDataSource* html_source, bool is_glic_version) {
+void AddStrings(content::WebUIDataSource* html_source,
+                bool is_glic_version,
+                bool is_first_run_desktop_refresh_enabled) {
   constexpr webui::LocalizedString kLocalizedStrings[] = {
       {"addSpaceButton", IDS_PROFILE_PICKER_ADD_SPACE_BUTTON},
-      {"askOnStartupCheckboxText", IDS_PROFILE_PICKER_ASK_ON_STARTUP},
+      {"askOnStartupText", IDS_PROFILE_PICKER_ASK_ON_STARTUP},
       {"openAllProfilesButtonText",
        IDS_PROFILE_PICKER_OPEN_ALL_PROFILES_BUTTON},
       {"browseAsGuestButton", IDS_PROFILE_PICKER_BROWSE_AS_GUEST_BUTTON},
@@ -205,43 +156,38 @@ void AddStrings(content::WebUIDataSource* html_source, bool is_glic_version) {
        IDS_PROFILE_PICKER_PROFILE_SWITCH_SWITCH_BUTTON_LABEL},
       {"removeWarningLocalProfile",
        IDS_PROFILE_PICKER_REMOVE_WARNING_LOCAL_PROFILE},
-      {"removeWarningSignedInProfile",
-       IDS_PROFILE_PICKER_REMOVE_WARNING_SIGNED_IN_PROFILE},
       {"ok", IDS_OK},
       {"signInButtonLabel",
        IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_SIGNIN_BUTTON_LABEL},
-#if BUILDFLAG(ENABLE_GLIC)
       {"glicAddProfileHelper", IDS_PROFILE_PICKER_ADD_PROFILE_HELPER_GLIC},
       {"glicTitleNoProfile",
        IDS_PROFILE_PICKER_MAIN_VIEW_TITLE_GLIC_NO_PROFILE},
       {"mainViewSubtitleGlicNoProfile",
        IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_GLIC_NO_PROFILE},
-#endif  // BUILDFLAG(ENABLE_GLIC)
   };
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
-  html_source->AddLocalizedString(
-      "declineSignInButtonLabel",
-       base::FeatureList::IsEnabled(
-           switches::kProfileCreationDeclineSigninCTAExperiment)
-           ? IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_STAY_SIGNED_OUT_BUTTON_LABEL
-           : IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_NOT_NOW_BUTTON_LABEL);
+  html_source->AddLocalizedString("declineSignInButtonLabel",
+                                  GetProfileTypeChoiceNotNowButtonLabelId(
+                                      is_first_run_desktop_refresh_enabled));
   html_source->AddLocalizedString("mainViewTitle",
                                   GetMainViewTitleId(is_glic_version));
   html_source->AddLocalizedString(
-      "mainViewSingleProfileTitle",
-      GetMainViewSingleProfileTitleId(is_glic_version));
-  html_source->AddLocalizedString("mainViewSubtitle",
-                                  GetMainViewSubtitleId(is_glic_version));
-  html_source->AddLocalizedString(
-      "mainViewSingleProfileSubtitle",
-      GetMainViewSingleProfileSubtitleId(is_glic_version));
+      "mainViewSubtitle", is_glic_version
+                              ? IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE_GLIC
+                              : IDS_PROFILE_PICKER_MAIN_VIEW_SUBTITLE);
 
   html_source->AddLocalizedString(
       "profileTypeChoiceSubtitle",
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE_UNO_BOOKMARKS
           : IDS_PROFILE_PICKER_PROFILE_CREATION_FLOW_PROFILE_TYPE_CHOICE_SUBTITLE_UNO);
+
+  html_source->AddLocalizedString(
+      "removeWarningSignedInProfile",
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
+          ? IDS_PROFILE_PICKER_REMOVE_WARNING_SIGNED_IN_PROFILE_SIGN_IN_AS
+          : IDS_PROFILE_PICKER_REMOVE_WARNING_SIGNED_IN_PROFILE);
 
   html_source->AddString("minimumPickerSize",
                          base::StringPrintf("%ipx", kMinimumPickerSizePx));
@@ -250,7 +196,9 @@ void AddStrings(content::WebUIDataSource* html_source, bool is_glic_version) {
                          GetManagedDeviceDisclaimer());
 }
 
-void AddFlags(content::WebUIDataSource* html_source, bool is_glic_version) {
+void AddFlags(content::WebUIDataSource* html_source,
+              bool is_glic_version,
+              bool is_first_run_desktop_refresh_enabled) {
   html_source->AddBoolean("isGlicVersion", is_glic_version);
 
   // TODO(crbug.com/385726690): Check if we want to show the locked profiles or
@@ -269,10 +217,9 @@ void AddFlags(content::WebUIDataSource* html_source, bool is_glic_version) {
     html_source->AddBoolean("isBrowserSigninAllowed", false);
     html_source->AddBoolean("isGuestModeEnabled", false);
     html_source->AddBoolean("isProfileCreationAllowed", false);
-    html_source->AddBoolean("showProfilePickerToAllUsersExperiment", false);
-    html_source->AddBoolean("isProfilePickerTextVariationsEnabled", false);
     html_source->AddBoolean("isOpenAllProfilesButtonExperimentEnabled", false);
     html_source->AddInteger("maxProfilesCountToShowOpenAllProfilesButton", 0);
+    html_source->AddBoolean("useRefreshedUI", false);
     return;
   }
 
@@ -298,20 +245,8 @@ void AddFlags(content::WebUIDataSource* html_source, bool is_glic_version) {
   html_source->AddBoolean("isProfileCreationAllowed",
                           profiles::IsProfileCreationAllowed());
 
-  html_source->AddBoolean(
-      "showProfilePickerToAllUsersExperiment",
-      base::FeatureList::IsEnabled(
-          switches::kShowProfilePickerToAllUsersExperiment));
-  html_source->AddBoolean(
-      "isProfilePickerTextVariationsEnabled",
-      base::FeatureList::IsEnabled(switches::kProfilePickerTextVariations));
-  html_source->AddBoolean(
-      "isOpenAllProfilesButtonExperimentEnabled",
-      base::FeatureList::IsEnabled(
-          switches::kOpenAllProfilesFromProfilePickerExperiment));
-  html_source->AddInteger(
-      "maxProfilesCountToShowOpenAllProfilesButton",
-      switches::kMaxProfilesCountToShowOpenAllButtonInProfilePicker.Get());
+  html_source->AddBoolean("useRefreshedUI",
+                          is_first_run_desktop_refresh_enabled);
 }
 
 void AddResourcePaths(content::WebUIDataSource* html_source,
@@ -321,7 +256,10 @@ void AddResourcePaths(content::WebUIDataSource* html_source,
       {"left_banner_dark.svg", IDR_SIGNIN_IMAGES_SHARED_LEFT_BANNER_DARK_SVG},
       {"right_banner.svg", IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_SVG},
       {"right_banner_dark.svg", IDR_SIGNIN_IMAGES_SHARED_RIGHT_BANNER_DARK_SVG},
-#if BUILDFLAG(ENABLE_GLIC)
+      {"profile_picker_light_background.svg",
+       IDR_SIGNIN_IMAGES_PROFILE_PICKER_LIGHT_BACKGROUND_SVG},
+      {"profile_picker_dark_background.svg",
+       IDR_SIGNIN_IMAGES_PROFILE_PICKER_DARK_BACKGROUND_SVG},
       {"glic_banner_top_right.svg",
        glic::GetResourceID(IDR_GLIC_PROFILE_BANNER_TOP_RIGHT)},
       {"glic_banner_bottom_left.svg",
@@ -332,19 +270,23 @@ void AddResourcePaths(content::WebUIDataSource* html_source,
        glic::GetResourceID(IDR_GLIC_PROFILE_BANNER_BOTTOM_LEFT_LIGHT)},
       {"glic_profile_branding.css",
        glic::GetResourceID(IDR_GLIC_PROFILE_BRANDING_CSS)},
-#endif  // BUILDFLAG(ENABLE_GLIC)
   };
   html_source->AddResourcePaths(kResourcePaths);
 
-  int logo_resource_id;
-#if BUILDFLAG(ENABLE_GLIC)
-  logo_resource_id = is_glic_version
-                         ? glic::GetResourceID(IDR_GLIC_PROFILE_LOGO)
-                         : IDR_PRODUCT_LOGO_SVG;
-#else
-  logo_resource_id = IDR_PRODUCT_LOGO_SVG;
-#endif  // BUILDFLAG(ENABLE_GLIC)
+  int logo_resource_id = is_glic_version
+                             ? glic::GetResourceID(IDR_GLIC_PROFILE_LOGO)
+                             : IDR_PRODUCT_LOGO_SVG;
   html_source->AddResourcePath("picker_logo.svg", logo_resource_id);
+}
+
+bool IsInSearchEngineChoiceScreenRegion(Profile& profile) {
+  if (profile.IsSystemProfile()) {
+    return regional_capabilities::RegionalCapabilitiesServiceFactory::
+        IsInSearchEngineChoiceScreenRegionForSystemProfile(&profile);
+  }
+  return CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                         GetForProfile(&profile))
+      .IsInSearchEngineChoiceScreenRegion();
 }
 
 }  // namespace
@@ -379,23 +321,30 @@ ProfilePickerUI::ProfilePickerUI(content::WebUI* web_ui)
   web_ui->OverrideTitle(
       l10n_util::GetStringUTF16(GetMainViewTitleId(is_glic_version)));
 
+  const bool is_first_run_desktop_refresh_enabled =
+      switches::IsFirstRunDesktopRefreshEnabled(
+          IsInSearchEngineChoiceScreenRegion(CHECK_DEREF(profile)));
   // Add all resources.
-  AddStrings(html_source, is_glic_version);
-  AddFlags(html_source, is_glic_version);
+  AddStrings(html_source, is_glic_version,
+             is_first_run_desktop_refresh_enabled);
+  AddFlags(html_source, is_glic_version, is_first_run_desktop_refresh_enabled);
   AddResourcePaths(html_source, is_glic_version);
 
   webui::SetupWebUIDataSource(html_source, kProfilePickerResources,
                               IDR_PROFILE_PICKER_PROFILE_PICKER_HTML);
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this, std::vector<ui::ElementIdentifier>{});
 }
 
 ProfilePickerUI::~ProfilePickerUI() = default;
-
 void ProfilePickerUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{});
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 void ProfilePickerUI::BindInterface(
@@ -416,10 +365,9 @@ ProfilePickerHandler* ProfilePickerUI::GetProfilePickerHandlerForTesting() {
   return profile_picker_handler_;
 }
 
-void ProfilePickerUI::ShowForceSigninErrorDialog(
-    const ForceSigninUIError& error) {
-  profile_picker_handler_->DisplayForceSigninErrorDialog(base::FilePath(),
-                                                         error);
+void ProfilePickerUI::ShowSigninErrorDialog(
+    const std::variant<ForceSigninUIError, SigninUIError>& error) {
+  profile_picker_handler_->DisplaySigninErrorDialog(base::FilePath(), error);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(ProfilePickerUI)

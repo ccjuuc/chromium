@@ -3,11 +3,13 @@
 // found in the LICENSE file.
 
 #include "base/test/test_future.h"
-#include "chrome/browser/actor/actor_features.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/common/actor.mojom.h"
+#include "chrome/common/chrome_features.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -27,7 +29,8 @@ class ActorNavigateToolBrowserTest : public ActorToolsTest {
  public:
   ActorNavigateToolBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
+        /*enabled_features=*/
+        {features::kGlicActor},
         /*disabled_features=*/{kGlicCrossOriginNavigationGating});
   }
   ~ActorNavigateToolBrowserTest() override = default;
@@ -147,11 +150,13 @@ class ActorNavigateToolRequestBrowserTest
   ActorNavigateToolRequestBrowserTest() {
     if (GetParam()) {
       scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{kGlicNavigateToolUseOpaqueInitiator},
+          /*enabled_features=*/{features::kGlicActor,
+                                kGlicNavigateToolUseOpaqueInitiator},
           /*disabled_features=*/{kGlicCrossOriginNavigationGating});
     } else {
       scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{},
+          /*enabled_features=*/
+          {features::kGlicActor},
           /*disabled_features=*/{kGlicNavigateToolUseOpaqueInitiator,
                                  kGlicCrossOriginNavigationGating});
     }

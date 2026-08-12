@@ -5,10 +5,13 @@
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_coordinator.h"
 
 #import "base/feature_list.h"
+#import "components/feature_engagement/public/tracker.h"
 #import "components/image_fetcher/ios/ios_image_data_fetcher_wrapper.h"
 #import "components/prefs/pref_service.h"
+#import "components/sync/base/features.h"
 #import "ios/chrome/browser/commerce/model/shopping_service_factory.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_browser_agent.h"
+#import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/google/model/google_logo_service_factory.h"
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_background_configuration_mediator.h"
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_background_picker_action_sheet_coordinator.h"
@@ -25,14 +28,21 @@
 #import "ios/chrome/browser/home_customization/ui/home_customization_search_engine_logo_mediator_provider.h"
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
 #import "ios/chrome/browser/image_fetcher/model/image_fetcher_service_factory.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/ntp/model/set_up_list_item_type.h"
+#import "ios/chrome/browser/ntp/model/set_up_list_prefs.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/mediator/search_engine_logo_mediator.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette_util.h"
+#import "ios/chrome/browser/promos_manager/coordinator/promos_manager_ui_handler.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
@@ -42,21 +52,15 @@
 #import "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace {
-
-// The height of the menu's initial detent, which roughly represents a header
-// and 3 cells.
-const CGFloat kInitialDetentHeight = 350;
-
 // The corner radius of the customization menu sheet.
 CGFloat const kSheetCornerRadius = 30;
-
 }  // namespace
 
 @interface HomeCustomizationCoordinator () <
-    UISheetPresentationControllerDelegate,
     HomeCustomizationBackgroundPickerPresentationDelegate,
     HomeCustomizationMainViewControllerDelegate,
-    HomeCustomizationSearchEngineLogoMediatorProvider> {
+    HomeCustomizationSearchEngineLogoMediatorProvider,
+    UISheetPresentationControllerDelegate> {
   // Displays the background picker action sheet.
   HomeCustomizationBackgroundPickerActionSheetCoordinator*
       _backgroundPickerActionSheetCoordinator;
@@ -70,8 +74,7 @@ CGFloat const kSheetCornerRadius = 30;
 
   // The Background customization service for getting current and recently used
   // backgrounds.
-  raw_ptr<HomeBackgroundCustomizationService, DanglingUntriaged>
-      _backgroundService;
+  raw_ptr<HomeBackgroundCustomizationService> _backgroundService;
 
   // The mediator for background configuration generation and interactions.
   HomeCustomizationBackgroundConfigurationMediator*
@@ -107,11 +110,20 @@ CGFloat const kSheetCornerRadius = 30;
 
 @end
 
-@implementation HomeCustomizationCoordinator
+@implementation HomeCustomizationCoordinator {
+  // Command handler for the gemini floaty.
+  __weak id<GeminiCommands> _geminiHandler;
+}
 
 #pragma mark - ChromeCoordinator
 
 - (void)start {
+  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+  if (IsPageActionMenuEnabled()) {
+    if ([dispatcher dispatchingForProtocol:@protocol(GeminiCommands)]) {
+      _geminiHandler = HandlerForProtocol(dispatcher, GeminiCommands);
+    }
+  }
   _activeSearchEngineLogoMediator = [NSMutableDictionary dictionary];
   _backgroundService =
       HomeBackgroundCustomizationServiceFactory::GetForProfile(self.profile);
@@ -124,15 +136,14 @@ CGFloat const kSheetCornerRadius = 30;
                                              GetForProfile(self.profile)];
   _mediator.navigationDelegate = self;
 
-  if (IsNTPBackgroundCustomizationEnabled() &&
-      !_backgroundService->IsCustomizationDisabledOrColorManagedByPolicy()) {
+  if (!_backgroundService->IsCustomizationDisabledOrColorManagedByPolicy()) {
     UserUploadedImageManager* userUploadedImageManager =
         UserUploadedImageManagerFactory::GetForProfile(self.profile);
     image_fetcher::ImageFetcherService* imageFetcherService =
         ImageFetcherServiceFactory::GetForProfile(self.profile);
     image_fetcher::ImageFetcher* imageFetcher =
         imageFetcherService->GetImageFetcher(
-            image_fetcher::ImageFetcherConfig::kDiskCacheOnly);
+            image_fetcher::ImageFetcherConfig::kReducedMode);
     _backgroundConfigurationMediator =
         [[HomeCustomizationBackgroundConfigurationMediator alloc]
             initWithBackgroundCustomizationService:_backgroundService
@@ -146,15 +157,51 @@ CGFloat const kSheetCornerRadius = 30;
   // the first page.
   _currentPageViewController = self.baseViewController;
 
+  if (IsPageActionMenuEnabled()) {
+    [_geminiHandler
+        hideFloatyIfInvokedAnimated:YES
+                         fromSource:gemini::FloatyUpdateSource::ViewTransition];
+  }
+
   [super start];
 }
 
 - (void)stop {
   [_backgroundConfigurationMediator saveCurrentTheme];
 
-  [self.baseViewController dismissViewControllerAnimated:YES completion:nil];
+  if (IsPageActionMenuEnabled()) {
+    __weak id<GeminiCommands> geminiHandler = _geminiHandler;
+    [self.baseViewController
+        dismissViewControllerAnimated:YES
+                           completion:^{
+                             [geminiHandler
+                                 updateFloatyVisibilityIfEligibleAnimated:NO
+                                                               fromSource:
+                                                                   gemini::FloatyUpdateSource::
+                                                                       ViewTransition];
+                           }];
+  } else {
+    [self.baseViewController dismissViewControllerAnimated:YES completion:nil];
+  }
 
   [self dismissBackgroundPickerActionSheet];
+
+  for (SearchEngineLogoMediator* mediator in _activeSearchEngineLogoMediator
+           .allValues) {
+    [mediator disconnect];
+  }
+  [_activeSearchEngineLogoMediator removeAllObjects];
+
+  if (self.openedForUserEducation) {
+    feature_engagement::Tracker* tracker =
+        feature_engagement::TrackerFactory::GetForProfile(self.profile);
+    if (tracker) {
+      tracker->Dismissed(
+          feature_engagement::kIPHiOSPromoBackgroundCustomizationFeature);
+    }
+
+    [self.promosManagerUIHandler promoWasDismissed];
+  }
 
   if ([self.browser->GetCommandDispatcher()
           dispatchingForProtocol:@protocol(SnackbarCommands)]) {
@@ -162,11 +209,16 @@ CGFloat const kSheetCornerRadius = 30;
         dismissAllSnackbars];
   }
 
+  [_mediator disconnect];
   _mediator = nil;
+  [_backgroundConfigurationMediator disconnect];
+  _backgroundConfigurationMediator = nil;
+  _backgroundService = nullptr;
   _mainViewController = nil;
   _magicStackViewController = nil;
   _discoverViewController = nil;
   _dimView = nil;
+  _activeSearchEngineLogoMediator = nil;
 
   // Enable accessibility in the presenting view, as UIKit doesn't enable it
   // automatically.
@@ -197,6 +249,15 @@ CGFloat const kSheetCornerRadius = 30;
 
 - (void)presentCustomizationMenuPage:(CustomizationMenuPage)page {
   UIViewController* menuPage = [self createMenuPage:page];
+
+  if (page == CustomizationMenuPage::kMain) {
+    feature_engagement::Tracker* tracker =
+        feature_engagement::TrackerFactory::GetForProfile(self.profile);
+    if (tracker) {
+      tracker->NotifyUsedEvent(
+          feature_engagement::kIPHiOSPromoBackgroundCustomizationFeature);
+    }
+  }
 
   // True if this is the first page being presented in the half sheet hierarchy.
   BOOL isFirstPagePresentation =
@@ -281,9 +342,14 @@ CGFloat const kSheetCornerRadius = 30;
 
 // Creates a view controller for a page in the menu.
 - (UIViewController*)createMenuPage:(CustomizationMenuPage)page {
+  UITraitCollection* windowTraits =
+      self.baseViewController.view.window.traitCollection;
+  BOOL isRegularWidth =
+      windowTraits.horizontalSizeClass == UIUserInterfaceSizeClassRegular;
+
   auto detentResolver = ^CGFloat(
       id<UISheetPresentationControllerDetentResolutionContext> context) {
-    return kInitialDetentHeight;
+    return kBottomSheetDetentHeight;
   };
   UISheetPresentationControllerDetent* initialDetent =
       [UISheetPresentationControllerDetent
@@ -318,8 +384,21 @@ CGFloat const kSheetCornerRadius = 30;
       menuPage = self.mainViewController;
 
       __weak __typeof(self) weakSelf = self;
+
+      // On iPad, use a single expanded detent so the sheet opens at full
+      // content height and cannot be resized shorter. The presenting view
+      // controller has compact traits inside a form sheet, so check the
+      // window's traits.
       auto expandedDetentResolver = ^CGFloat(
           id<UISheetPresentationControllerDetentResolutionContext> context) {
+        if (isRegularWidth) {
+          CGFloat height = weakSelf.mainViewController.viewContentHeight;
+          // Before layout completes, content height may be too small.
+          // Fall back to the maximum available height.
+          return (height < kBottomSheetDetentHeight)
+                     ? context.maximumDetentValue
+                     : height;
+        }
         return [weakSelf detentHeightForMainViewControllerExpanded];
       };
 
@@ -327,8 +406,17 @@ CGFloat const kSheetCornerRadius = 30;
           [UISheetPresentationControllerDetent
               customDetentWithIdentifier:kBottomSheetExpandedDetentIdentifier
                                 resolver:expandedDetentResolver];
+
+      if (isRegularWidth) {
+        [detents removeAllObjects];
+      }
       [detents addObject:expandedDetent];
 
+      // Opening the Home Customization main page marks the
+      // background customization item as completed in prefs.
+      set_up_list_prefs::MarkItemComplete(
+          GetApplicationContext()->GetLocalState(),
+          SetUpListItemType::kBackgroundCustomization);
       break;
     }
     case CustomizationMenuPage::kMagicStack: {
@@ -370,15 +458,23 @@ CGFloat const kSheetCornerRadius = 30;
   UISheetPresentationController* presentationController =
       navigationController.sheetPresentationController;
   presentationController.prefersEdgeAttachedInCompactHeight = YES;
-  presentationController.preferredCornerRadius = kSheetCornerRadius;
+  if (isRegularWidth) {
+    presentationController.preferredCornerRadius = kSheetCornerRadius;
+  }
   presentationController.delegate = self;
 
   presentationController.detents = detents;
   presentationController.prefersScrollingExpandsWhenScrolledToEdge = NO;
-  presentationController.selectedDetentIdentifier =
-      kBottomSheetDetentIdentifier;
-  presentationController.largestUndimmedDetentIdentifier =
-      [self currentLargestUndimmedDetentIdentifier];
+
+  // Only set the initial detent and undimmed identifier when the custom
+  // detents are in use (iPhone). On iPad with large-only detent, these
+  // identifiers don't exist in the detents array.
+  if (presentationController.detents.count > 1) {
+    presentationController.selectedDetentIdentifier =
+        kBottomSheetDetentIdentifier;
+    presentationController.largestUndimmedDetentIdentifier =
+        [self currentLargestUndimmedDetentIdentifier];
+  }
 
   return navigationController;
 }
@@ -414,12 +510,13 @@ CGFloat const kSheetCornerRadius = 30;
 
     // The presenting page should become interactable for voiceover.
     self.currentPageViewController.view.accessibilityViewIsModal = YES;
+    self.currentPageViewController.view.accessibilityElementsHidden = NO;
   }
 }
 
 - (CGFloat)detentHeightForMainViewControllerExpanded {
   CGFloat height = self.mainViewController.viewContentHeight;
-  return (height < kInitialDetentHeight)
+  return (height < kBottomSheetDetentHeight)
              ? UISheetPresentationControllerDetentInactive
              : height;
 }
@@ -472,6 +569,13 @@ CGFloat const kSheetCornerRadius = 30;
   self.currentPageViewController.view.accessibilityElementsHidden = NO;
 
   [self dismissBackgroundPickerActionSheet];
+}
+
+- (void)schedulePhotoNotSyncedSnackbarOnDismiss {
+  if (base::FeatureList::IsEnabled(syncer::kSyncThemesIos) &&
+      _backgroundService->IsThemeSyncActive()) {
+    _shouldShowPhotoNotSyncedSnackbarOnDismiss = YES;
+  }
 }
 
 #pragma mark - HomeCustomizationSearchEngineLogoMediator

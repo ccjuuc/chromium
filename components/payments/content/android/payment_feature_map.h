@@ -16,6 +16,12 @@ namespace android {
 // to Android payment apps.
 BASE_DECLARE_FEATURE(kAndroidPaymentIntentsOmitDeprecatedParameters);
 
+// If enabled, then the Android intent payment app factory will 'yield' to an
+// internal factory if present for the following payment methods:
+// - https://google.com/pay
+// - https://pay.google.com/authentication.
+BASE_DECLARE_FEATURE(kDeduplicateNativePaymentApps);
+
 // If enabled, use Android intents for the following payment methods:
 // - https://google.com/pay
 // - https://pay.google.com/authentication.
@@ -24,10 +30,6 @@ BASE_DECLARE_FEATURE(kGooglePayViaAndroidIntents);
 // If enabled, then the web merchant origin and web wallet parameters will be
 // omitted from the isReadyToPayRequest. See: https://crbug.com/1406655.
 BASE_DECLARE_FEATURE(kOmitParametersInReadyToPay);
-
-// If enabled, then apps will be available to show even if the "is ready to pay"
-// query returns false. See: crbug.com/427918761.
-BASE_DECLARE_FEATURE(kAllowShowWithoutReadyToPay);
 
 // If enabled, the payment details update service reconnects to the Android
 // payment app when the connection is lost unexpectedly.

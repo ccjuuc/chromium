@@ -12,7 +12,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -207,8 +207,7 @@ TEST_F(ManagePasswordsBubbleControllerTest, ShouldReturnPasswordSyncState) {
       controller()->GetPasswordSyncState(),
       ManagePasswordsBubbleController::SyncState::kActiveWithAccountPasswords);
 
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     sync_service()->SetIsUsingExplicitPassphrase(true);
     EXPECT_EQ(controller()->GetPasswordSyncState(),
               ManagePasswordsBubbleController::SyncState::
@@ -248,7 +247,8 @@ TEST_F(ManagePasswordsBubbleControllerTest, OnUpdatePasswordNote) {
 
   password_manager::PasswordForm expected_updated_form = updated_form;
 
-  EXPECT_CALL(*GetStore(), UpdateLogin(expected_updated_form, _));
+  EXPECT_CALL(*GetStore(),
+              UpdateLogin(EqStoredCredential(expected_updated_form), _));
   controller()->set_details_bubble_credential(original_form);
   controller()->UpdateDetailsBubbleCredentialInPasswordStore(updated_form);
   EXPECT_EQ(controller()->get_details_bubble_credential(), updated_form);
@@ -276,8 +276,9 @@ TEST_F(ManagePasswordsBubbleControllerTest, OnUpdateUsername) {
       password_manager::InsecureType::kLeaked);
 
   EXPECT_CALL(*GetStore(), UpdateLogin).Times(0);
-  EXPECT_CALL(*GetStore(), UpdateLoginWithPrimaryKey(expected_updated_form,
-                                                     original_form, _));
+  EXPECT_CALL(*GetStore(), UpdateLoginWithPrimaryKey(
+                               EqStoredCredential(expected_updated_form),
+                               EqStoredCredential(original_form), _));
   controller()->set_details_bubble_credential(original_form);
   controller()->UpdateDetailsBubbleCredentialInPasswordStore(updated_form);
 }
@@ -296,8 +297,9 @@ TEST_F(ManagePasswordsBubbleControllerTest, OnUpdateUsernameAndPasswordNote) {
   password_manager::PasswordForm expected_updated_form = updated_form;
 
   EXPECT_CALL(*GetStore(), UpdateLogin).Times(0);
-  EXPECT_CALL(*GetStore(), UpdateLoginWithPrimaryKey(expected_updated_form,
-                                                     original_form, _));
+  EXPECT_CALL(*GetStore(), UpdateLoginWithPrimaryKey(
+                               EqStoredCredential(expected_updated_form),
+                               EqStoredCredential(original_form), _));
   controller()->set_details_bubble_credential(original_form);
   controller()->UpdateDetailsBubbleCredentialInPasswordStore(updated_form);
 }

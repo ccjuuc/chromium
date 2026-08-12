@@ -4,30 +4,46 @@
 
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_sync_bridge.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <set>
-#include <unordered_set>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/proto/autofill_sync.pb.h"
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_table.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
+#include "components/sync/model/data_batch.h"
 #include "components/sync/model/data_type_local_change_processor.h"
+#include "components/sync/model/entity_change.h"
+#include "components/sync/model/model_error.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
+#include "components/sync/protocol/autofill_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
 #include "components/webdata/common/web_database.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 using sync_pb::AutofillSpecifics;
 using syncer::ClientTagBasedDataTypeProcessor;
@@ -419,12 +435,11 @@ AutocompleteSyncBridge::AutocompleteSyncBridge::GetDataForCommit(
     return nullptr;
   }
 
-  std::unordered_set<std::string> keys_set(storage_keys.begin(),
-                                           storage_keys.end());
+  absl::flat_hash_set<std::string> keys_set(std::from_range, storage_keys);
   auto batch = std::make_unique<MutableDataBatch>();
   for (const AutocompleteEntry& entry : entries) {
     std::string key = GetStorageKeyFromModel(entry.key());
-    if (keys_set.find(key) != keys_set.end()) {
+    if (keys_set.contains(key)) {
       batch->Put(key, CreateEntityData(entry));
     }
   }
@@ -544,6 +559,14 @@ std::string AutocompleteSyncBridge::GetStorageKey(
   // instead of URL escaping for Unicode characters.
   const AutofillSpecifics specifics = entity_data.specifics.autofill();
   return BuildSerializedStorageKey(specifics.name(), specifics.value());
+}
+
+sync_pb::EntitySpecifics
+AutocompleteSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool AutocompleteSyncBridge::IsEntityDataValid(

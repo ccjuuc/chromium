@@ -7,6 +7,7 @@
 #import <AuthenticationServices/AuthenticationServices.h>
 
 #import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
 #import "ios/chrome/common/credential_provider/archivable_credential.h"
 #import "ios/chrome/common/credential_provider/constants.h"
@@ -36,7 +37,8 @@ constexpr int64_t kJan1st2024 = 1704085200;
 
 ArchivableCredential* TestPasswordCredential(NSString* username,
                                              NSString* url,
-                                             NSString* domain) {
+                                             NSString* domain,
+                                             int64_t lastUsedTime) {
   return [[ArchivableCredential alloc] initWithFavicon:nil
                                                   gaia:nil
                                               password:@"qwerty123"
@@ -46,7 +48,8 @@ ArchivableCredential* TestPasswordCredential(NSString* username,
                                            serviceName:url
                               registryControlledDomain:domain
                                               username:username
-                                                  note:@"note"];
+                                                  note:@"note"
+                                          lastUsedTime:lastUsedTime];
 }
 
 ArchivableCredential* TestPasskeyCredential(NSString* username,
@@ -86,9 +89,15 @@ void PasskeyRequestDetailsTest::TearDown() {}
 
 // Tests that the allowed credentials list works as expected.
 TEST_F(PasskeyRequestDetailsTest, MatchingPassword) {
-  id<Credential> credential1 = TestPasswordCredential(user1, url1, domain1);
-  id<Credential> credential2 = TestPasswordCredential(user2, url2, domain2);
-  id<Credential> credential3 = TestPasswordCredential(user1, url2, domain2);
+  int64_t recentTime =
+      base::Time::Now().ToDeltaSinceWindowsEpoch().InMicroseconds();
+
+  id<Credential> credential1 =
+      TestPasswordCredential(user1, url1, domain1, recentTime);
+  id<Credential> credential2 =
+      TestPasswordCredential(user2, url2, domain2, recentTime);
+  id<Credential> credential3 =
+      TestPasswordCredential(user1, url2, domain2, recentTime);
   id<Credential> credential4 = TestPasskeyCredential(user3, url1);
   NSArray<id<Credential>>* credentials =
       @[ credential1, credential2, credential3, credential4 ];
@@ -105,6 +114,31 @@ TEST_F(PasskeyRequestDetailsTest, MatchingPassword) {
                                               username:user2
                                    excludedCredentials:nil];
   EXPECT_TRUE([details hasMatchingPassword:credentials]);
+
+  // Private Registry boundary and hijack checks.
+  id<Credential> credentialRailway = TestPasswordCredential(
+      user1, @"https://railway.app/", @"railway.app", recentTime);
+  NSArray<id<Credential>>* credentialsWithRailway =
+      [credentials arrayByAddingObject:credentialRailway];
+
+  // Standard subdomain should match.
+  details = [[PasskeyRequestDetails alloc] initWithURL:@"www.login.railway.app"
+                                              username:user1
+                                   excludedCredentials:nil];
+  EXPECT_TRUE([details hasMatchingPassword:credentialsWithRailway]);
+
+  // Rogue subdomain crossing private suffix boundary should NOT match!
+  details =
+      [[PasskeyRequestDetails alloc] initWithURL:@"attacker.up.railway.app"
+                                        username:user1
+                             excludedCredentials:nil];
+  EXPECT_FALSE([details hasMatchingPassword:credentialsWithRailway]);
+
+  // False suffix match should NOT match!
+  details = [[PasskeyRequestDetails alloc] initWithURL:@"evil-railway.app"
+                                              username:user1
+                                   excludedCredentials:nil];
+  EXPECT_FALSE([details hasMatchingPassword:credentialsWithRailway]);
 
   // Empty credentials list.
   EXPECT_FALSE([details hasMatchingPassword:@[]]);
@@ -124,7 +158,8 @@ TEST_F(PasskeyRequestDetailsTest, MatchingPassword) {
 
 // Tests that the excluded credentials list works as expected.
 TEST_F(PasskeyRequestDetailsTest, ExcludedPasskey) {
-  id<Credential> credential1 = TestPasswordCredential(user1, url1, domain1);
+  id<Credential> credential1 =
+      TestPasswordCredential(user1, url1, domain1, /*lastUsedTime=*/0);
   id<Credential> credential2 = TestPasskeyCredential(user2, url2);
   id<Credential> credential3 = TestPasskeyCredential(user3, url3);
   NSData* id2 = credential2.credentialId;
@@ -162,51 +197,83 @@ TEST_F(PasskeyRequestDetailsTest, ExcludedPasskey) {
 }
 
 TEST_F(PasskeyRequestDetailsTest, LargeBlobHelperDetectsRequest) {
-  if (@available(iOS 18.0, *)) {
-    NSUserDefaults* defaults = app_group::GetGroupUserDefaults();
-    [defaults
-        setBool:YES
-         forKey:AppGroupUserDefaulsCredentialProviderPasskeyLargeBlobEnabled()];
-    [defaults synchronize];
+  NSUserDefaults* defaults = app_group::GetGroupUserDefaults();
+  [defaults
+      setBool:YES
+       forKey:AppGroupUserDefaulsCredentialProviderPasskeyLargeBlobEnabled()];
+  [defaults synchronize];
 
-    // Large Blob required.
-    id mockInputRequired =
-        OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
-    id mockLargeBlobRequired = OCMClassMock(
-        [ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput class]);
-    OCMStub([mockLargeBlobRequired supportRequirement])
-        .andReturn(
-            ASAuthorizationPublicKeyCredentialLargeBlobSupportRequirementRequired);
-    OCMStub([mockInputRequired largeBlob]).andReturn(mockLargeBlobRequired);
-    EXPECT_TRUE([PasskeyRequestDetails
-        isLargeBlobSupportRequestedFromRegistrationInput:mockInputRequired]);
+  // Large Blob required.
+  id mockInputRequired =
+      OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
+  id mockLargeBlobRequired = OCMClassMock(
+      [ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput class]);
+  OCMStub([mockLargeBlobRequired supportRequirement])
+      .andReturn(
+          ASAuthorizationPublicKeyCredentialLargeBlobSupportRequirementRequired);
+  OCMStub([mockInputRequired largeBlob]).andReturn(mockLargeBlobRequired);
+  EXPECT_TRUE([PasskeyRequestDetails
+      isLargeBlobSupportRequestedFromRegistrationInput:mockInputRequired]);
 
-    // Large Blob preferred.
-    id mockInputPreferred =
-        OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
-    id mockLargeBlobPreferred = OCMClassMock(
-        [ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput class]);
-    OCMStub([mockLargeBlobPreferred supportRequirement])
-        .andReturn(
-            ASAuthorizationPublicKeyCredentialLargeBlobSupportRequirementPreferred);
-    OCMStub([mockInputPreferred largeBlob]).andReturn(mockLargeBlobPreferred);
-    EXPECT_TRUE([PasskeyRequestDetails
-        isLargeBlobSupportRequestedFromRegistrationInput:mockInputPreferred]);
+  // Large Blob preferred.
+  id mockInputPreferred =
+      OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
+  id mockLargeBlobPreferred = OCMClassMock(
+      [ASAuthorizationPublicKeyCredentialLargeBlobRegistrationInput class]);
+  OCMStub([mockLargeBlobPreferred supportRequirement])
+      .andReturn(
+          ASAuthorizationPublicKeyCredentialLargeBlobSupportRequirementPreferred);
+  OCMStub([mockInputPreferred largeBlob]).andReturn(mockLargeBlobPreferred);
+  EXPECT_TRUE([PasskeyRequestDetails
+      isLargeBlobSupportRequestedFromRegistrationInput:mockInputPreferred]);
 
-    // Large Blob preference none.
-    id mockInputNil =
-        OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
-    OCMStub([mockInputNil largeBlob]).andReturn(nil);
-    EXPECT_FALSE([PasskeyRequestDetails
-        isLargeBlobSupportRequestedFromRegistrationInput:mockInputNil]);
+  // Large Blob preference none.
+  id mockInputNil =
+      OCMClassMock([ASPasskeyRegistrationCredentialExtensionInput class]);
+  OCMStub([mockInputNil largeBlob]).andReturn(nil);
+  EXPECT_FALSE([PasskeyRequestDetails
+      isLargeBlobSupportRequestedFromRegistrationInput:mockInputNil]);
 
-    // Clean up flag.
-    [defaults
-        removeObjectForKey:
-            AppGroupUserDefaulsCredentialProviderPasskeyLargeBlobEnabled()];
-  } else {
-    GTEST_SKIP() << "Large Blob requires iOS 18.0+.";
-  }
+  // Clean up flag.
+  [defaults removeObjectForKey:
+                AppGroupUserDefaulsCredentialProviderPasskeyLargeBlobEnabled()];
+}
+
+// Tests that the 5-minute time constraint works as expected for passwords.
+TEST_F(PasskeyRequestDetailsTest, MatchingPasswordTimeConstraints) {
+  base::Time now = base::Time::Now();
+
+  int64_t validTime = now.ToDeltaSinceWindowsEpoch().InMicroseconds();
+  int64_t expiredTime =
+      (now - base::Minutes(6)).ToDeltaSinceWindowsEpoch().InMicroseconds();
+
+  id<Credential> validCred =
+      TestPasswordCredential(user1, url1, domain1, validTime);
+  id<Credential> expiredCred =
+      TestPasswordCredential(user2, url2, domain2, expiredTime);
+  id<Credential> neverUsedCred =
+      TestPasswordCredential(user3, url3, domain3, /*lastUsedTime=*/0);
+
+  // Recent credential should match.
+  PasskeyRequestDetails* detailsValid =
+      [[PasskeyRequestDetails alloc] initWithURL:domain1
+                                        username:user1
+                             excludedCredentials:nil];
+  EXPECT_TRUE([detailsValid hasMatchingPassword:@[ validCred ]]);
+
+  // Expired credential should not match.
+  PasskeyRequestDetails* detailsExpired =
+      [[PasskeyRequestDetails alloc] initWithURL:domain2
+                                        username:user2
+                             excludedCredentials:nil];
+  EXPECT_FALSE([detailsExpired hasMatchingPassword:@[ expiredCred ]]);
+
+  // Never used credential should not match.
+  PasskeyRequestDetails* detailsNeverUsed =
+      [[PasskeyRequestDetails alloc] initWithURL:domain3
+                                        username:user3
+                             excludedCredentials:nil];
+  EXPECT_FALSE([detailsNeverUsed hasMatchingPassword:@[ neverUsedCred ]]);
 }
 
 }  // namespace credential_provider_extension

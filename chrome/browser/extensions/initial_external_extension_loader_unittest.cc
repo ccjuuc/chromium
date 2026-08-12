@@ -16,9 +16,12 @@
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_urls.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 namespace {
@@ -46,7 +49,7 @@ class TestInitialExternalExtensionLoader
   TestInitialExternalExtensionLoader& operator=(
       const TestInitialExternalExtensionLoader&) = delete;
 
-  base::Value::Dict WaitForLoadFinished() {
+  base::DictValue WaitForLoadFinished() {
     if (!saw_load_) {
       load_loop_.Run();
     }
@@ -59,7 +62,7 @@ class TestInitialExternalExtensionLoader
  protected:
   ~TestInitialExternalExtensionLoader() override = default;
 
-  void LoadFinished(base::Value::Dict prefs) override {
+  void LoadFinished(base::DictValue prefs) override {
     ++load_finished_count_;
     last_loaded_prefs_ = prefs.Clone();
     saw_load_ = true;
@@ -71,7 +74,7 @@ class TestInitialExternalExtensionLoader
   int load_finished_count_ = 0;
   base::RunLoop load_loop_;
   bool saw_load_ = false;
-  base::Value::Dict last_loaded_prefs_;
+  base::DictValue last_loaded_prefs_;
 };
 
 class InitialExternalExtensionLoaderTest : public ::testing::Test {
@@ -84,7 +87,7 @@ class InitialExternalExtensionLoaderTest : public ::testing::Test {
   }
 
   void SetInitialIds(const std::vector<std::string>& ids) {
-    base::Value::List list;
+    base::ListValue list;
     for (const auto& id : ids) {
       list.Append(id);
     }
@@ -103,7 +106,7 @@ TEST_F(InitialExternalExtensionLoaderTest, StartLoadingProducesPrefs) {
       base::MakeRefCounted<TestInitialExternalExtensionLoader>(prefs_);
 
   loader->StartLoading();
-  base::Value::Dict prefs = loader->WaitForLoadFinished();
+  base::DictValue prefs = loader->WaitForLoadFinished();
 
   const std::string expected_update_url =
       extension_urls::GetWebstoreUpdateUrl().spec();
@@ -127,7 +130,7 @@ TEST_F(InitialExternalExtensionLoaderTest, IgnoresInvalidIds) {
       base::MakeRefCounted<TestInitialExternalExtensionLoader>(prefs_);
 
   loader->StartLoading();
-  base::Value::Dict prefs = loader->WaitForLoadFinished();
+  base::DictValue prefs = loader->WaitForLoadFinished();
 
   EXPECT_NE(nullptr, prefs.FindStringByDottedPath(MakePrefName(
                          kValidIdA, ExternalProviderImpl::kExternalUpdateUrl)));
@@ -152,7 +155,7 @@ TEST_F(InitialExternalExtensionLoaderTest, EmptyListProducesEmptyPrefs) {
       base::MakeRefCounted<TestInitialExternalExtensionLoader>(prefs_);
 
   loader->StartLoading();
-  base::Value::Dict prefs = loader->WaitForLoadFinished();
+  base::DictValue prefs = loader->WaitForLoadFinished();
 
   EXPECT_TRUE(prefs.empty());
   EXPECT_EQ(loader->load_finished_count(), 1);
@@ -169,7 +172,7 @@ TEST_F(InitialExternalExtensionLoaderTest, ReloadAfterPrefChange) {
   // Shrink the list, then trigger another load.
   SetInitialIds({kValidIdB});
   loader->StartLoading();
-  base::Value::Dict prefs2 = loader->WaitForLoadFinished();
+  base::DictValue prefs2 = loader->WaitForLoadFinished();
 
   EXPECT_NE(nullptr, prefs2.FindStringByDottedPath(MakePrefName(
                          kValidIdB, ExternalProviderImpl::kExternalUpdateUrl)));

@@ -7,6 +7,9 @@
         "namespace": [ "protocol" ],
         "options": [
             {
+                "domain": "Ads"
+            },
+            {
                 "domain": "Page",
                 "include": [ "enable", "disable", "setAdBlockingEnabled", "getInstallabilityErrors", "getManifestIcons", "printToPDF", "getAppId", "setSPCTransactionMode", "setRPHRegistrationMode" ],
                 "include_events": [],
@@ -28,13 +31,14 @@
             },
             {
                 "domain": "Emulation",
-                "include": ["disable", "setAutomationOverride", "getScreenInfos", "addScreen", "removeScreen"]
+                "include": ["disable", "setAutomationOverride", "getScreenInfos", "addScreen", "removeScreen", "updateScreen", "setPrimaryScreen"]
             },
             {
                 "domain": "WindowManager"
             },
             {
                 "domain": "Extensions",
+                "include": [ "triggerAction", "loadUnpacked", "getStorageItems", "setStorageItems", "removeStorageItems", "clearStorageItems", "uninstall", "getExtensions" ],
                 "async": [ "loadUnpacked", "getStorageItems", "setStorageItems", "removeStorageItems", "clearStorageItems", "uninstall" ]
             },
             {
@@ -44,7 +48,7 @@
             },
             {
                 "domain": "Storage",
-                "include": ["runBounceTrackingMitigations", "getRelatedWebsiteSets", "getAffectedUrlsForThirdPartyCookieMetadata"],
+                "include": ["runBounceTrackingMitigations", "getRelatedWebsiteSets"],
                 "async": ["runBounceTrackingMitigations", "getRelatedWebsiteSets"]
             },
             {
@@ -58,6 +62,11 @@
             {
                 "domain": "PWA",
                 "async": [ "changeAppUserSettings", "getOsAppState", "install", "launch", "launchFilesInApp", "uninstall" ]
+            },
+            {
+              "domain": "WebMCP",
+              "include": [ "enable" ],
+              "include_events": []
             }
         ]
     },

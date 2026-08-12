@@ -38,6 +38,11 @@ EventsMetricsManager::ScopedMonitor::DoneCallback CreateSimpleDoneCallback(
       std::move(metrics));
 }
 
+constexpr base::TimeTicks kScrollBeginGeneratedTimestamp =
+    base::TimeTicks() + base::Microseconds(1);
+constexpr base::TimeTicks kScrollBeginArrivalTimestamp =
+    base::TimeTicks() + base::Microseconds(2);
+
 }  // namespace
 
 using ::testing::Each;
@@ -68,7 +73,8 @@ class EventsMetricsManagerTest : public testing::Test {
         NextEventTimestamps();
     return ScrollEventMetrics::CreateForTesting(
         type, ui::ScrollInputType::kTouchscreen, is_inertial, event_time,
-        arrived_in_browser_main_timestamp, &test_tick_clock_);
+        arrived_in_browser_main_timestamp, &test_tick_clock_,
+        kScrollBeginGeneratedTimestamp, kScrollBeginArrivalTimestamp);
   }
 
   std::unique_ptr<ScrollEventMetrics> CreateScrollUpdateEventMetrics(
@@ -82,7 +88,8 @@ class EventsMetricsManagerTest : public testing::Test {
         scroll_update_type,
         /* delta= */ 4.2f, event_time, arrived_in_browser_main_timestamp,
         &test_tick_clock_,
-        /* trace_id= */ std::nullopt);
+        /* trace_id= */ std::nullopt, kScrollBeginGeneratedTimestamp,
+        kScrollBeginArrivalTimestamp);
   }
 
   std::tuple<base::TimeTicks, base::TimeTicks> NextEventTimestamps() {

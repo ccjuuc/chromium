@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "content/public/browser/cookie_access_details.h"
@@ -57,6 +59,17 @@ class FrameCookieAccessObserver : public content::WebContentsObserver {
 class BtmBounceTrackingDevToolsIssueTest
     : public content::TestDevToolsProtocolClient,
       public PlatformBrowserTest {
+ public:
+  BtmBounceTrackingDevToolsIssueTest() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+  }
+
  protected:
   void SetUpOnMainThread() override {
     PlatformBrowserTest::SetUpOnMainThread();
@@ -67,23 +80,23 @@ class BtmBounceTrackingDevToolsIssueTest
 
   void WaitForIssueAndCheckTrackingSites(
       const std::vector<std::string>& sites) {
-    auto is_btm_issue = [](const base::Value::Dict& params) {
+    auto is_btm_issue = [](const base::DictValue& params) {
       return *(params.FindStringByDottedPath("issue.code")) ==
              "BounceTrackingIssue";
     };
 
     // Wait for notification of a Bounce Tracking Issue.
-    base::Value::Dict params = WaitForMatchingNotification(
+    base::DictValue params = WaitForMatchingNotification(
         "Audits.issueAdded", base::BindRepeating(is_btm_issue));
     ASSERT_EQ(*params.FindStringByDottedPath("issue.code"),
               "BounceTrackingIssue");
 
-    base::Value::Dict* bounce_tracking_issue_details =
+    base::DictValue* bounce_tracking_issue_details =
         params.FindDictByDottedPath("issue.details.bounceTrackingIssueDetails");
     ASSERT_TRUE(bounce_tracking_issue_details);
 
     std::vector<std::string> tracking_sites;
-    base::Value::List* tracking_sites_list =
+    base::ListValue* tracking_sites_list =
         bounce_tracking_issue_details->FindList("trackingSites");
     if (tracking_sites_list) {
       for (const auto& val : *tracking_sites_list) {
@@ -103,6 +116,9 @@ class BtmBounceTrackingDevToolsIssueTest
     DetachProtocolClient();
     PlatformBrowserTest::TearDownOnMainThread();
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(BtmBounceTrackingDevToolsIssueTest,

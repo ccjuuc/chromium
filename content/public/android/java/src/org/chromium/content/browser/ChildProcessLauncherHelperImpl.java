@@ -7,6 +7,7 @@ package org.chromium.content.browser;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -400,8 +401,10 @@ public final class ChildProcessLauncherHelperImpl {
             String[] commandLine,
             IFileDescriptorInfo[] filesToBeMapped,
             boolean canUseWarmUpConnection,
-            boolean isSpareRenderer) {
+            boolean isSpareRenderer,
+            boolean isForOutermostMainFrame) {
         assert LauncherThread.runningOnLauncherThread();
+        assert !isSpareRenderer || !isForOutermostMainFrame;
         String processType =
                 ContentSwitchUtils.getSwitchValue(commandLine, ContentSwitches.SWITCH_PROCESS_TYPE);
 
@@ -443,7 +446,8 @@ public final class ChildProcessLauncherHelperImpl {
                         reducePriorityOnBackground,
                         canUseWarmUpConnection,
                         binderCallback,
-                        isSpareRenderer);
+                        isSpareRenderer,
+                        isForOutermostMainFrame);
         helper.start();
 
         if (sandboxed && !sCheckedServiceGroupImportance) {
@@ -688,6 +692,19 @@ public final class ChildProcessLauncherHelperImpl {
                                 /* fallbackToNextSlot= */ false,
                                 sandboxed);
             } else if (ChildProcessConnection.supportVariableConnections()) {
+                final int maxIsolatedServices;
+
+                // Safesetid is only guaranteed to be enabled for 6.18 kernel on Android 17 and
+                // therefore the process limit can only be increased for devices with a new enough
+                // kernel that are also running Android 17.
+                if (isKernelVersionAtLeast6_18()
+                        && Build.VERSION.SDK_INT >= 37
+                        && ContentFeatureList.sSandboxedProcessServiceLimitOnAndroid.isEnabled()) {
+                    maxIsolatedServices = Integer.MAX_VALUE;
+                } else {
+                    maxIsolatedServices = ChildConnectionAllocator.MAX_VARIABLE_ALLOCATED;
+                }
+
                 connectionAllocator =
                         ChildConnectionAllocator.createVariableSize(
                                 context,
@@ -697,7 +714,8 @@ public final class ChildProcessLauncherHelperImpl {
                                 ChildProcessCreationParamsImpl.getSandboxedServicesName(),
                                 bindToCaller,
                                 bindAsExternalService,
-                                sandboxed);
+                                sandboxed,
+                                maxIsolatedServices);
             } else {
                 connectionAllocator =
                         ChildConnectionAllocator.create(
@@ -736,7 +754,8 @@ public final class ChildProcessLauncherHelperImpl {
             boolean reducePriorityOnBackground,
             boolean canUseWarmUpConnection,
             @Nullable IBinder binderCallback,
-            boolean isSpareRenderer) {
+            boolean isSpareRenderer,
+            boolean isForOutermostMainFrame) {
         assert LauncherThread.runningOnLauncherThread();
 
         mNativeChildProcessLauncherHelper = nativePointer;
@@ -775,7 +794,11 @@ public final class ChildProcessLauncherHelperImpl {
             if (useWaivedBinding) {
                 mEffectiveImportance = ChildProcessImportance.NORMAL;
             } else if (useNotPerceptibleBinding) {
-                mEffectiveImportance = ChildProcessImportance.PERCEPTIBLE;
+                mEffectiveImportance = ChildProcessImportance.NOT_PERCEPTIBLE;
+            } else if (!isSpareRenderer
+                    && isForOutermostMainFrame
+                    && ContentFeatureList.sEarlyTopAppForSandboxedRenderer.isEnabled()) {
+                mEffectiveImportance = ChildProcessImportance.IMPORTANT;
             } else {
                 mEffectiveImportance = ChildProcessImportance.MODERATE;
             }
@@ -848,7 +871,7 @@ public final class ChildProcessLauncherHelperImpl {
         switch (mEffectiveImportance) {
             case ChildProcessImportance.NORMAL:
                 return ChildBindingState.WAIVED;
-            case ChildProcessImportance.PERCEPTIBLE:
+            case ChildProcessImportance.NOT_PERCEPTIBLE:
                 return ChildBindingState.NOT_PERCEPTIBLE;
             case ChildProcessImportance.MODERATE:
                 return ChildBindingState.VISIBLE;
@@ -910,8 +933,7 @@ public final class ChildProcessLauncherHelperImpl {
             boolean boostForPendingViews,
             boolean boostForLoading,
             boolean isSpareRenderer,
-            @ChildProcessImportance int importance,
-            boolean hasActiveClients) {
+            @ChildProcessImportance int importance) {
         assert LauncherThread.runningOnLauncherThread();
         assert mLauncher.getPid() == pid
                 : "The provided pid ("
@@ -949,10 +971,10 @@ public final class ChildProcessLauncherHelperImpl {
                 || hasForegroundServiceWorker
                 || boostForLoading) {
             newEffectiveImportance = ChildProcessImportance.MODERATE;
-        } else if (importance == ChildProcessImportance.PERCEPTIBLE
+        } else if (importance == ChildProcessImportance.NOT_PERCEPTIBLE
                 || (isSpareRenderer
                         && ContentFeatureList.sSpareRendererAddNotPerceptibleBinding.getValue())) {
-            newEffectiveImportance = ChildProcessImportance.PERCEPTIBLE;
+            newEffectiveImportance = ChildProcessImportance.NOT_PERCEPTIBLE;
         } else {
             newEffectiveImportance = ChildProcessImportance.NORMAL;
         }
@@ -963,15 +985,7 @@ public final class ChildProcessLauncherHelperImpl {
                 case ChildProcessImportance.NORMAL:
                     // Nothing to add.
                     break;
-                case ChildProcessImportance.PERCEPTIBLE:
-                    // Use not-perceptible binding for protected tabs. A service binding which leads
-                    // to PERCEPTIBLE_APP_ADJ (= 200) is ideal for protected tabs, but Android does
-                    // not provide the service binding yet.
-                    // TODO(crbug.com/400602112): Use Context.BIND_NOT_VISIBLE binding instead.
-                    //
-                    // This binding is out of control of BindingManager which always unbinds the
-                    // lowest ranked process from not-perceptible binding by
-                    // ensureLowestRankIsWaived().
+                case ChildProcessImportance.NOT_PERCEPTIBLE:
                     connection.addNotPerceptibleBinding();
                     break;
                 case ChildProcessImportance.MODERATE:
@@ -990,12 +1004,6 @@ public final class ChildProcessLauncherHelperImpl {
         // should be applied first.
         if (visible && !mVisible) {
             if (mBindingManager != null) mBindingManager.addConnection(connection);
-        } else if (!hasActiveClients
-                && ContentFeatureList.sRemoveCachedProcessFromBindingManager.isEnabled()) {
-            // If all RenderWidgetHost tied to the process connection are inactive (i.e. in
-            // bfcache), the process connection should be downgraded to NORMAL priority by removing
-            // from the BindingManager.
-            if (mBindingManager != null) mBindingManager.removeConnection(connection);
         }
         mVisible = visible;
 
@@ -1021,7 +1029,7 @@ public final class ChildProcessLauncherHelperImpl {
                             case ChildProcessImportance.NORMAL:
                                 // Nothing to remove.
                                 break;
-                            case ChildProcessImportance.PERCEPTIBLE:
+                            case ChildProcessImportance.NOT_PERCEPTIBLE:
                                 connection.removeNotPerceptibleBinding();
                                 break;
                             case ChildProcessImportance.MODERATE:
@@ -1109,9 +1117,9 @@ public final class ChildProcessLauncherHelperImpl {
     /**
      * Groups all currently tracked processes by type and returns a map of type -> list of PIDs.
      *
-     * @param callback The callback to notify with the process information.  {@code callback} will
-     *                 run on the same thread this method is called on.  That thread must support a
-     *                 {@link android.os.Looper}.
+     * @param callback The callback to notify with the process information. {@code callback} will
+     *     run on the same thread this method is called on. That thread must support a {@link
+     *     android.os.Looper}.
      */
     public static void getProcessIdsByType(Callback<Map<String, List<Integer>>> callback) {
         final Handler responseHandler = new Handler();
@@ -1132,6 +1140,24 @@ public final class ChildProcessLauncherHelperImpl {
                 });
     }
 
+    private static boolean isKernelVersionAtLeast6_18() {
+        String osVersion = System.getProperty("os.version");
+        if (osVersion == null) return false;
+
+        String[] pieces = osVersion.split("\\.");
+        if (pieces.length >= 2) {
+            try {
+                int major = Integer.parseInt(pieces[0]);
+                int minor = Integer.parseInt(pieces[1]);
+                if (major > 6) return true;
+                if (major == 6 && minor >= 18) return true;
+            } catch (NumberFormatException e) {
+                // Ignore
+            }
+        }
+        return false;
+    }
+
     // Testing only related methods.
 
     int getPidForTesting() {
@@ -1150,7 +1176,9 @@ public final class ChildProcessLauncherHelperImpl {
             boolean reducePriorityOnBackground,
             boolean canUseWarmUpConnection,
             IBinder binderCallback,
-            boolean doSetupConnection) {
+            boolean doSetupConnection,
+            boolean isSpareRenderer,
+            boolean isForOutermostMainFrame) {
         ChildProcessLauncherHelperImpl launcherHelper =
                 new ChildProcessLauncherHelperImpl(
                         0L,
@@ -1160,7 +1188,8 @@ public final class ChildProcessLauncherHelperImpl {
                         reducePriorityOnBackground,
                         canUseWarmUpConnection,
                         binderCallback,
-                        /* isSpareRenderer= */ false);
+                        isSpareRenderer,
+                        isForOutermostMainFrame);
         launcherHelper.mLauncher.start(
                 doSetupConnection,
                 /* queueIfNoFreeConnection= */ true,
@@ -1168,7 +1197,9 @@ public final class ChildProcessLauncherHelperImpl {
         return launcherHelper;
     }
 
-    /** @return the count of services set-up and working. */
+    /**
+     * @return the count of services set-up and working.
+     */
     static int getConnectedServicesCountForTesting() {
         int count =
                 sPrivilegedChildConnectionAllocator == null

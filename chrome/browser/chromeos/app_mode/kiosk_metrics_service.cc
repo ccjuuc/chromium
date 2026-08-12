@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
@@ -21,7 +22,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/user_manager/user_manager.h"
@@ -130,12 +130,6 @@ void KioskMetricsService::RecordKioskSessionStopped() {
                              kKioskSessionDurationInDaysNormalHistogram);
 }
 
-void KioskMetricsService::RecordKioskSessionPluginCrashed() {
-  RecordKioskSessionState(KioskSessionState::kPluginCrashed);
-  RecordKioskSessionDuration(kKioskSessionDurationCrashedHistogram,
-                             kKioskSessionDurationInDaysCrashedHistogram);
-}
-
 void KioskMetricsService::RecordKioskSessionPluginHung() {
   RecordKioskSessionState(KioskSessionState::kPluginHung);
   RecordKioskSessionDuration(kKioskSessionDurationCrashedHistogram,
@@ -200,7 +194,8 @@ void KioskMetricsService::RecordKioskSessionDuration(
 }
 
 void KioskMetricsService::CheckIfPreviousSessionCrashed() {
-  const base::Value::Dict& metrics_dict = prefs_->GetDict(prefs::kKioskMetrics);
+  const base::DictValue& metrics_dict =
+      prefs_->GetDict(ash::prefs::kKioskMetrics);
   auto previous_start_time =
       base::ValueToTime(metrics_dict.Find(kKioskSessionStartTime));
   if (!previous_start_time.has_value()) {
@@ -229,8 +224,9 @@ void KioskMetricsService::RecordPreviousKioskSessionCrashed(
 
 size_t KioskMetricsService::RetrieveLastDaySessionCount(
     base::Time session_start_time) {
-  const base::Value::Dict& metrics_dict = prefs_->GetDict(prefs::kKioskMetrics);
-  const base::Value::List* previous_times = nullptr;
+  const base::DictValue& metrics_dict =
+      prefs_->GetDict(ash::prefs::kKioskMetrics);
+  const base::ListValue* previous_times = nullptr;
 
   const auto* times_value = metrics_dict.Find(kKioskSessionLastDayList);
   if (times_value) {
@@ -238,7 +234,7 @@ size_t KioskMetricsService::RetrieveLastDaySessionCount(
     DCHECK(previous_times);
   }
 
-  base::Value::List times;
+  base::ListValue times;
   if (previous_times) {
     for (const auto& time : *previous_times) {
       if (base::ValueToTime(time).has_value() &&
@@ -253,9 +249,9 @@ size_t KioskMetricsService::RetrieveLastDaySessionCount(
 
   start_time_ = session_start_time;
 
-  ScopedDictPrefUpdate(prefs_, prefs::kKioskMetrics)
+  ScopedDictPrefUpdate(prefs_, ash::prefs::kKioskMetrics)
       ->Set(kKioskSessionLastDayList, std::move(times));
-  ScopedDictPrefUpdate(prefs_, prefs::kKioskMetrics)
+  ScopedDictPrefUpdate(prefs_, ash::prefs::kKioskMetrics)
       ->Set(kKioskSessionStartTime, base::TimeToValue(start_time_));
   return result;
 }
@@ -264,7 +260,7 @@ void KioskMetricsService::ClearStartTime() {
   start_time_ = base::Time();
 
   // Clear metric from prefs.
-  ScopedDictPrefUpdate(prefs_, prefs::kKioskMetrics)
+  ScopedDictPrefUpdate(prefs_, ash::prefs::kKioskMetrics)
       ->Remove(kKioskSessionStartTime);
   prefs_->CommitPendingWrite(base::DoNothing(), base::DoNothing());
 }

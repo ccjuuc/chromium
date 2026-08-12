@@ -9,9 +9,12 @@
 #include <utility>
 #include <vector>
 
+#include "base/run_loop.h"
 #include "base/strings/cstring_view.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/services/font_data/public/mojom/font_data_service.mojom.h"
+#include "content/common/features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "skia/ext/font_utils.h"
@@ -44,6 +47,11 @@ class TestFontServiceApp : public font_data_service::mojom::FontDataService {
                        font_data_service::mojom::TypefaceStylePtr style,
                        MatchFamilyNameCallback callback) override {
     match_family_call_count_++;
+    if (fail_match_family_) {
+      std::move(callback).Run(nullptr);
+      return;
+    }
+
     int ttc_index = 0;
     SkFontStyle font_style(style->weight, style->width,
                            static_cast<SkFontStyle::Slant>(style->slant));
@@ -129,6 +137,13 @@ class TestFontServiceApp : public font_data_service::mojom::FontDataService {
                     std::move(callback));
   }
 
+  void MatchLocalFont(const std::string& font_unique_name,
+                      MatchLocalFontCallback callback) override {
+    // Required stub: the Mojo interface now includes MatchLocalFont as a pure
+    // virtual method. Return null since this mock does not need real matching.
+    std::move(callback).Run(nullptr);
+  }
+
   size_t match_family_call_count() const { return match_family_call_count_; }
   size_t match_family_character_call_count() const {
     return match_family_character_call_count_;
@@ -146,6 +161,7 @@ class TestFontServiceApp : public font_data_service::mojom::FontDataService {
   void set_use_memory_fallback(bool fallback) {
     use_memory_fallback_ = fallback;
   }
+  void set_fail_match_family(bool fail) { fail_match_family_ = fail; }
 
   size_t GetUniqueFileId(base::FilePath path) {
     size_t new_id = unique_path_ids_.size() + 1;
@@ -160,9 +176,10 @@ class TestFontServiceApp : public font_data_service::mojom::FontDataService {
   std::vector<std::string> last_match_family_character_call_bcp47s_;
   int32_t last_match_family_character_call_character_;
   size_t legacy_make_typeface_call_count_ = 0;
+  bool fail_match_family_ = false;
   base::MappedReadOnlyRegion memory_map_region_;
-#if BUILDFLAG(IS_LINUX)
-  // On Linux, only the shared memory fallback is supported.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // On Linux/ChromeOS, only the shared memory fallback is supported.
   bool use_memory_fallback_ = true;
 #else
   bool use_memory_fallback_ = false;
@@ -216,10 +233,86 @@ class FontDataManagerUnitTest : public testing::Test {
     skia_font_manager_->SetFontServiceForTesting(
         test_font_data_service_app_.CreateRemote());
   }
-  base::test::SingleThreadTaskEnvironment task_environment_;
+
+  void TearDown() override {
+    if (!prewarmer_initialized_) {
+      return;
+    }
+
+    base::RunLoop run_loop;
+    skia_font_manager_->ShutdownPrewarmerForTesting(run_loop.QuitClosure());
+    run_loop.Run();
+  }
+
+  void InitializePrewarmer() {
+    skia_font_manager_->InitializePrewarmerForTesting(
+        test_font_data_service_app_.CreateRemote());
+    prewarmer_initialized_ = true;
+  }
+
+  base::test::TaskEnvironment task_environment_;
   TestFontServiceApp test_font_data_service_app_;
   sk_sp<font_data_service::FontDataManager> skia_font_manager_;
+  bool prewarmer_initialized_ = false;
 };
+
+using FontDataManagerDeathTest = FontDataManagerUnitTest;
+
+TEST_F(FontDataManagerUnitTest, PrewarmFamilyCachesTypeface) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kFontDataManagerPrewarming);
+#if BUILDFLAG(IS_WIN)
+  base::cstring_view family_name = "Segoe UI";
+#else
+  base::cstring_view family_name = "Arimo";
+#endif
+  InitializePrewarmer();
+
+  base::RunLoop run_loop;
+  skia_font_manager_->PrewarmFamilyForTesting(
+      blink::WebString::FromUtf8(family_name), run_loop.QuitClosure());
+  run_loop.Run();
+  EXPECT_EQ(test_font_data_service_app_.match_family_call_count(), 1u);
+
+  sk_sp<SkTypeface> result =
+      skia_font_manager_->matchFamilyStyle(family_name.data(), SkFontStyle());
+  EXPECT_TRUE(result);
+  EXPECT_EQ(test_font_data_service_app_.match_family_call_count(), 1u);
+}
+
+TEST_F(FontDataManagerUnitTest, FailedPrewarmDoesNotCacheFailure) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kFontDataManagerPrewarming);
+#if BUILDFLAG(IS_WIN)
+  base::cstring_view family_name = "Segoe UI";
+#else
+  base::cstring_view family_name = "Arimo";
+#endif
+  InitializePrewarmer();
+  test_font_data_service_app_.set_fail_match_family(true);
+
+  base::RunLoop run_loop;
+  skia_font_manager_->PrewarmFamilyForTesting(
+      blink::WebString::FromUtf8(family_name), run_loop.QuitClosure());
+  run_loop.Run();
+  EXPECT_EQ(test_font_data_service_app_.match_family_call_count(), 1u);
+
+  test_font_data_service_app_.set_fail_match_family(false);
+  sk_sp<SkTypeface> result =
+      skia_font_manager_->matchFamilyStyle(family_name.data(), SkFontStyle());
+  EXPECT_TRUE(result);
+  EXPECT_EQ(test_font_data_service_app_.match_family_call_count(), 2u);
+}
+
+TEST_F(FontDataManagerDeathTest, PrewarmingRequiresEnabledFeature) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kFontDataManagerPrewarming);
+
+  EXPECT_DEATH_IF_SUPPORTED(
+      skia_font_manager_->PrewarmFamilyForTesting(
+          blink::WebString::FromUtf8("Unused Font"), base::OnceClosure()),
+      "");
+}
 
 TEST_F(FontDataManagerUnitTest, MatchFamilyStyle) {
   SkFontStyle style(400, 5, SkFontStyle::kUpright_Slant);
@@ -306,8 +399,8 @@ TEST_F(FontDataManagerUnitTest, MatchFamilyStyleWithMemoryRegion) {
   EXPECT_EQ(test_font_data_service_app_.match_family_call_count(), 1u);
 }
 
-// TODO(crbug.com/462090356): Find an available font in Linux with multiples
-// axes.
+// TODO(crbug.com/462090356): Find an available font in Linux/ChromeOS with
+// multiples axes.
 #if BUILDFLAG(IS_WIN)
 TEST_F(FontDataManagerUnitTest, FontArgumentTest) {
   // Bahnschrift is a font family with 2 axes hence coordinate count should
@@ -402,8 +495,6 @@ TEST_F(FontDataManagerUnitTest, GetFamilyName) {
   skia_font_manager_->getFamilyName(2, &empty_family_name);
   EXPECT_TRUE(empty_family_name.isEmpty());
 }
-
-using FontDataManagerDeathTest = FontDataManagerUnitTest;
 
 // Methods are unused in FontDataManager.
 TEST_F(FontDataManagerDeathTest, CreateStyleSet) {

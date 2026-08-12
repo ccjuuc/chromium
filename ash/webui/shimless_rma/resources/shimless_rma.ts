@@ -72,7 +72,6 @@ import {WrapupWaitForManualWpEnablePage} from './wrapup_wait_for_manual_wp_enabl
 declare global {
   interface WindowEventMap {
     [TRANSITION_STATE]: TransitionStateEvent;
-    [DISABLE_NEXT_BUTTON]: DisableNextButtonEvent;
     [FATAL_HARDWARE_ERROR]: FatalHardwareEvent;
     [DISABLE_ALL_BUTTONS]: DisableAllButtonsEvent;
     [DISABLE_NEXT_BUTTON]: DisableNextButtonEvent;
@@ -414,16 +413,16 @@ export class ShimlessRma extends ShimlessRmaBase {
     };
   }
 
-  protected currentPage: PageInfo;
-  protected allButtonsDisabled: boolean;
-  protected showBusyStateOverlay: boolean;
-  protected nextButtonClicked: boolean;
-  protected backButtonClicked: boolean;
-  protected confirmExitButtonClicked: boolean;
-  protected log: string;
-  protected usbLogState: UsbLogState;
-  protected logSavedStatusText: string;
-  shimlessRmaService: ShimlessRmaServiceInterface = getShimlessRmaService();
+  declare protected currentPage: PageInfo;
+  declare protected allButtonsDisabled: boolean;
+  declare protected showBusyStateOverlay: boolean;
+  declare protected nextButtonClicked: boolean;
+  declare protected backButtonClicked: boolean;
+  declare protected confirmExitButtonClicked: boolean;
+  declare protected log: string;
+  declare protected usbLogState: UsbLogState;
+  declare protected logSavedStatusText: string;
+  declare shimlessRmaService: ShimlessRmaServiceInterface;
   errorObserverReceiver: ErrorObserverReceiver;
   externalDiskStateReceiver: ExternalDiskStateObserverReceiver;
   transitionState: (e: TransitionStateEvent) => void;
@@ -439,6 +438,7 @@ export class ShimlessRma extends ShimlessRmaBase {
 
   constructor() {
     super();
+    this.shimlessRmaService = getShimlessRmaService();
 
     this.errorObserverReceiver = new ErrorObserverReceiver(this);
 

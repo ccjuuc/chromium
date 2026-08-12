@@ -49,6 +49,10 @@ std::vector<T> Sorted(const std::vector<T>& in) {
 
 }  // namespace
 
+// static
+const char* ExternallyConnectableInfo::kManifestDataKey =
+    keys::kExternallyConnectable;
+
 ExternallyConnectableHandler::ExternallyConnectableHandler() = default;
 
 ExternallyConnectableHandler::~ExternallyConnectableHandler() = default;
@@ -68,7 +72,7 @@ bool ExternallyConnectableHandler::Parse(Extension* extension,
   }
 
   extension->AddInstallWarnings(std::move(install_warnings));
-  extension->SetManifestData(keys::kExternallyConnectable, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 
@@ -78,10 +82,9 @@ base::span<const char* const> ExternallyConnectableHandler::Keys() const {
 }
 
 // static
-ExternallyConnectableInfo* ExternallyConnectableInfo::Get(
+const ExternallyConnectableInfo* ExternallyConnectableInfo::Get(
     const Extension* extension) {
-  return static_cast<ExternallyConnectableInfo*>(
-      extension->GetManifestData(keys::kExternallyConnectable));
+  return extension->GetManifestData<ExternallyConnectableInfo>();
 }
 
 // static
@@ -164,7 +167,7 @@ ExternallyConnectableInfo::ExternallyConnectableInfo(
       all_ids(all_ids),
       accepts_tls_channel_id(accepts_tls_channel_id) {}
 
-bool ExternallyConnectableInfo::IdCanConnect(const ExtensionId& id) {
+bool ExternallyConnectableInfo::IdCanConnect(const ExtensionId& id) const {
   if (all_ids) {
     return true;
   }

@@ -74,7 +74,7 @@ class CrostiniUninstallerViewBrowserTest : public CrostiniDialogBrowserTest {
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    crostini::ShowCrostiniUninstallerView(browser()->profile());
+    crostini::ShowCrostiniUninstallerView(browser()->GetProfile());
   }
 
   CrostiniUninstallerView* ActiveView() {
@@ -144,7 +144,8 @@ IN_PROC_BROWSER_TEST_F(CrostiniUninstalledUninstallerViewBrowserTest,
                        OfflineUninstallFlowWithoutTermina) {
   base::HistogramTester histogram_tester;
 
-  SetConnectionType(network::mojom::ConnectionType::CONNECTION_NONE);
+  SetConnectionType(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
 
   ShowUi("default");
   EXPECT_NE(nullptr, ActiveView());

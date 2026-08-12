@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/containers/id_map.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
@@ -20,6 +21,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/observer_list_types.h"
+#include "build/android_buildflags.h"
 #include "components/services/storage/public/mojom/quota_client.mojom.h"
 #include "components/services/storage/public/mojom/service_worker_storage_control.mojom.h"
 #include "content/browser/service_worker/service_worker_info.h"
@@ -30,6 +32,7 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/service_worker_context.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -54,8 +57,11 @@ struct ServiceWorkerContextSynchronousObserverList;
 
 #if !BUILDFLAG(IS_ANDROID)
 class ServiceWorkerHidDelegateObserver;
-class ServiceWorkerUsbDelegateObserver;
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+class ServiceWorkerUsbDelegateObserver;
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 
 // A smart pointer of `ServiceWorkerClient`.
 //
@@ -225,7 +231,7 @@ class CONTENT_EXPORT ServiceWorkerClientOwner final {
   // Used for starting a web worker (dedicated worker or shared worker). Returns
   // a service worker client for the worker.
   ScopedServiceWorkerClient CreateServiceWorkerClientForWorker(
-      int process_id,
+      ChildProcessId process_id,
       ServiceWorkerClientInfo client_info);
 
   // Binds the ServiceWorkerContainerHost mojo receiver for `container_host`.
@@ -257,6 +263,10 @@ class CONTENT_EXPORT ServiceWorkerClientOwner final {
   // The `ServiceWorkerContextCore` that owns `this`. This can change due to
   // `DeleteAndStartOver` but is still always valid and non-null.
   raw_ref<ServiceWorkerContextCore> context_;
+
+  // Whether this owner has started destruction. Used to avoid mutating
+  // `service_worker_clients_by_uuid_` reentrantly while it is being destroyed.
+  bool in_dtor_ = false;
 
   // Owns `ServiceWorkerContainerForClient` (via `ServiceWorkerClient`).
   // `ServiceWorkerContainerForServiceWorker`s are owned by `ServiceWorkerHost`.
@@ -402,6 +412,10 @@ class CONTENT_EXPORT ServiceWorkerContextCore
     return job_coordinator_.get();
   }
 
+  // TODO(crbug.com/537630723): Replace the `requesting_frame_id`, which is a
+  // `GlobalRenderFrameHostId`, with a `WeakDocumentPtr` to avoid referencing a
+  // reused `RenderFrameHost` via the `GlobalRenderFrameHostId`, which can
+  // happen when there is a same-site navigation.
   void RegisterServiceWorker(
       const GURL& script_url,
       const blink::StorageKey& key,
@@ -514,7 +528,7 @@ class CONTENT_EXPORT ServiceWorkerContextCore
   void NotifyRegistrationStored(const int64_t registration_id,
                                 const GURL& scope,
                                 const blink::StorageKey& key,
-                                uint64_t stored_resources_total_size_bytes);
+                                base::ByteSize stored_resources_total_size);
   // Notifies observers that all registrations have been deleted for a
   // particular `key`.
   void NotifyAllRegistrationsDeletedForStorageKey(const blink::StorageKey& key);
@@ -563,15 +577,17 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
   void SetServiceWorkerHidDelegateObserverForTesting(
       std::unique_ptr<ServiceWorkerHidDelegateObserver> hid_delegate_observer);
+#endif  // !BUILDFLAG(IS_ANDROID)
 
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   // In the service worker case, WebUSB is only available in extension service
-  // workers. Since extension isn't available in ANDROID, guard
-  // ServiceWorkerUsbDelegateObserver within non-android platforms.
+  // workers. Limit ServiceWorkerUsbDelegateObserver to platforms that support
+  // extensions.
   ServiceWorkerUsbDelegateObserver* usb_delegate_observer();
 
   void SetServiceWorkerUsbDelegateObserverForTesting(
       std::unique_ptr<ServiceWorkerUsbDelegateObserver> usb_delegate_observer);
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 
  private:
   friend class ServiceWorkerContextCoreTest;
@@ -690,8 +706,11 @@ class CONTENT_EXPORT ServiceWorkerContextCore
 
 #if !BUILDFLAG(IS_ANDROID)
   std::unique_ptr<ServiceWorkerHidDelegateObserver> hid_delegate_observer_;
-  std::unique_ptr<ServiceWorkerUsbDelegateObserver> usb_delegate_observer_;
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+  std::unique_ptr<ServiceWorkerUsbDelegateObserver> usb_delegate_observer_;
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 
   base::ObserverList<TestVersionObserver> test_version_observers_;
 

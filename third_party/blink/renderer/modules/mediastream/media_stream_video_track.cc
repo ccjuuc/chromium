@@ -8,7 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
@@ -577,7 +576,7 @@ void MediaStreamVideoTrack::FrameDeliverer::
         CrossThreadOnceClosure callback) {
   DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
   CHECK_NE(capture_version, media::CaptureVersion());
-  CHECK(!base::Contains(capture_version_callbacks_, capture_version));
+  CHECK(!capture_version_callbacks_.Contains(capture_version));
 
   capture_version_callbacks_.Set(capture_version, std::move(callback));
 }
@@ -961,7 +960,7 @@ MediaStreamVideoTrack::CreateFromComponent(
 
 static void AddSinkInternal(Vector<WebMediaStreamSink*>* sinks,
                             WebMediaStreamSink* sink) {
-  DCHECK(!base::Contains(*sinks, sink));
+  DCHECK(!std::ranges::contains(*sinks, sink));
   sinks->push_back(sink);
 }
 
@@ -1159,7 +1158,7 @@ void MediaStreamVideoTrack::GetSettings(
 
   settings.facing_mode = ToPlatformFacingMode(
       static_cast<mojom::blink::FacingMode>(source_->device().video_facing));
-  settings.resize_mode = WebString::FromASCII(std::string(
+  settings.resize_mode = WebString::FromAscii(std::string(
       adapter_settings().target_size() ? WebMediaStreamTrack::kResizeModeRescale
                                        : WebMediaStreamTrack::kResizeModeNone));
   if (source_->device().display_media_info) {
@@ -1206,10 +1205,10 @@ MediaStreamVideoTrack::GetCaptureHandle() {
 
   if (!info->capture_handle->origin.opaque()) {
     capture_handle.origin =
-        String::FromUTF8(info->capture_handle->origin.Serialize());
+        String::FromUtf8(info->capture_handle->origin.Serialize());
   }
   capture_handle.handle =
-      WebString::FromUTF16(info->capture_handle->capture_handle);
+      WebString::FromUtf16(info->capture_handle->capture_handle);
 
   return capture_handle;
 }

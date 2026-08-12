@@ -9,8 +9,9 @@
 #include "partition_alloc/page_allocator.h"
 
 // IMPORTANT: This needs to stay in sync with <enum name="CrashExitCodes"> and
-// <enum name="WindowsExitCode"> in tools/metrics/histograms/enums.xml. So do
-// not remove any entries, and always append entries to the bottom just above
+// <enum name="WindowsExitCode"> in
+// tools/metrics/histograms/metadata/stability/enums.xml. So do not remove any
+// entries, and always append entries to the bottom just above
 // RESULT_CODE_CHROME_LAST_CODE.
 
 enum ResultCode {
@@ -76,7 +77,7 @@ enum ResultCode {
   // running browser.
   CHROME_RESULT_CODE_NORMAL_EXIT_PROCESS_NOTIFIED,
 
-  // A dummy value we should not use. See crbug.com/152285.
+  // A dummy value we should not use. See crbug.com/40289296.
   CHROME_RESULT_CODE_NOTUSED_1,
 
   // Failed to install an item from the webstore when the
@@ -85,7 +86,7 @@ enum ResultCode {
   // returned.
   CHROME_RESULT_CODE_INSTALL_FROM_WEBSTORE_ERROR_2,
 
-  // A dummy value we should not use. See crbug.com/152285.
+  // A dummy value we should not use. See crbug.com/40289296.
   CHROME_RESULT_CODE_NOTUSED_2,
 
   // Returned when the user has not yet accepted the EULA.
@@ -135,11 +136,15 @@ enum ResultCode {
       partition_alloc::kTerminateOnCommitFailureExitCode,
   // LINT.ThenChange(/base/allocator/partition_allocator/src/partition_alloc/page_allocator.h:CHROME_RESULT_CODE_TERMINATED_BY_OTHER_PROCESS_ON_COMMIT_FAILURE)
 
+  // The isolated browser process launched but it was not possible to wait on
+  // the exit of the process, so the browser must exit. This should not happen.
+  CHROME_RESULT_CODE_INVALID_ISOLATED_BROWSER_PROCESS,
+
   // Last return code (keep this last).
   CHROME_RESULT_CODE_CHROME_LAST_CODE
 };
 
-static_assert(CHROME_RESULT_CODE_CHROME_LAST_CODE == 40,
+static_assert(CHROME_RESULT_CODE_CHROME_LAST_CODE == 41,
               "Please make sure the enum values are in sync with enums.xml");
 
 // Returns true if the result code should be treated as a normal exit code i.e.

@@ -12,6 +12,7 @@
 
 #include "ash/display/screen_orientation_controller.h"
 #include "ash/rotator/screen_rotation_animator_observer.h"
+#include "base/auto_reset.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_installer.h"
 #include "chrome/browser/ash/printing/cups_printers_manager.h"
 #include "chrome/browser/platform_util.h"
+#include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/common/extensions/api/autotest_private.h"
 #include "chromeos/ash/experiences/arc/mojom/power.mojom.h"
 #include "chromeos/ash/experiences/arc/mojom/process.mojom.h"
@@ -441,6 +443,7 @@ class AutotestPrivateGetClipboardTextDataFunction : public ExtensionFunction {
  private:
   ~AutotestPrivateGetClipboardTextDataFunction() override;
   ResponseAction Run() override;
+  void OnTextRead(std::u16string data);
 };
 
 class AutotestPrivateSetClipboardTextDataFunction
@@ -531,26 +534,6 @@ class AutotestPrivateCouldAllowCrostiniFunction : public ExtensionFunction {
   ResponseAction Run() override;
 };
 
-class AutotestPrivateSetPluginVMPolicyFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("autotestPrivate.setPluginVMPolicy",
-                             AUTOTESTPRIVATE_SETPLUGINVMPOLICY)
-
- private:
-  ~AutotestPrivateSetPluginVMPolicyFunction() override;
-  ResponseAction Run() override;
-};
-
-class AutotestPrivateShowPluginVMInstallerFunction : public ExtensionFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION("autotestPrivate.showPluginVMInstaller",
-                             AUTOTESTPRIVATE_SHOWPLUGINVMINSTALLER)
-
- private:
-  ~AutotestPrivateShowPluginVMInstallerFunction() override;
-  ResponseAction Run() override;
-};
-
 class AutotestPrivateInstallBorealisFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("autotestPrivate.installBorealis",
@@ -626,7 +609,7 @@ class AutotestPrivateGetPrinterListFunction
   // ash::CupsPrintersManager::Observer
   void OnEnterprisePrintersInitialized() override;
 
-  base::Value::List results_;
+  base::ListValue results_;
   std::unique_ptr<ash::CupsPrintersManager> printers_manager_;
   base::OneShotTimer timeout_timer_;
 };
@@ -1129,7 +1112,8 @@ class AutotestPrivateInstallPWAForCurrentURLFunction
   std::unique_ptr<PWABannerObserver> banner_observer_;
   std::unique_ptr<PWAInstallManagerObserver> install_mananger_observer_;
   base::OneShotTimer timeout_timer_;
-  base::AutoReset<bool> auto_accept_pwa_install_confirmation_;
+  base::AutoReset<web_app::InstallDialogTestResponse>
+      auto_accept_pwa_install_confirmation_;
 };
 
 class AutotestPrivateActivateAcceleratorFunction : public ExtensionFunction {

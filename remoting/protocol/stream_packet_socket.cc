@@ -4,6 +4,7 @@
 
 #include "remoting/protocol/stream_packet_socket.h"
 
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/notimplemented.h"
 #include "components/webrtc/net_address_utils.h"
@@ -144,8 +145,14 @@ bool StreamPacketSocket::InitClientTcp(
   }
 
   auto socket = std::make_unique<net::TCPClientSocket>(
-      net::AddressList(remote_endpoint), nullptr, nullptr, nullptr,
-      net::NetLogSource());
+      net::AddressList(remote_endpoint),
+      /* socket_performance_watcher= */ nullptr,
+      /* network_quality_estimator= */ nullptr,
+      /* net_log= */ nullptr, net::NetLogSource(),
+      // Currently, there is no use case for targeting a network when using
+      // StreamPacketSocket. This makes it safe to always target the default
+      // network. Consider supporting a target network if a need arises.
+      net::handles::kInvalidNetworkHandle);
 
   int result = socket->Bind(local_endpoint);
   if (result != net::OK) {
@@ -188,8 +195,8 @@ int StreamPacketSocket::Send(const void* data,
     return -1;
   }
 
-  auto packet = packet_processor_->Pack(reinterpret_cast<const uint8_t*>(data),
-                                        data_size);
+  auto packet = packet_processor_->Pack(
+      UNSAFE_TODO(base::span(static_cast<const uint8_t*>(data), data_size)));
   if (!packet) {
     SetError(EINVAL);
     return -1;
@@ -236,7 +243,7 @@ int StreamPacketSocket::GetOption(webrtc::Socket::Option option, int* value) {
 
 int StreamPacketSocket::SetOption(webrtc::Socket::Option option, int value) {
   if (!socket_) {
-    NOTREACHED();
+    return -1;
   }
 
   switch (option) {
@@ -256,7 +263,8 @@ int StreamPacketSocket::SetOption(webrtc::Socket::Option option, int value) {
 
     case webrtc::Socket::OPT_NODELAY:
       // Should call TCPClientSocket::SetNoDelay directly.
-      NOTREACHED();
+      NOTIMPLEMENTED();
+      return -1;
 
     case webrtc::Socket::OPT_IPV6_V6ONLY:
       NOTIMPLEMENTED();
@@ -301,13 +309,6 @@ void StreamPacketSocket::DoWrite() {
 
   while (!send_queue_.empty()) {
     PendingPacket& packet = send_queue_.front();
-    if (packet.data->BytesConsumed() == 0) {
-      // Only apply packet options when we are about to send the head of the
-      // packet.
-      packet_processor_->ApplyPacketOptions(packet.data->bytes(),
-                                            packet.data->size(),
-                                            packet.options.packet_time_params);
-    }
     int result = socket_->Write(
         packet.data.get(), packet.data->BytesRemaining(),
         base::BindOnce(&StreamPacketSocket::OnAsyncWriteCompleted,
@@ -394,12 +395,11 @@ bool StreamPacketSocket::HandleReadResult(int result) {
   base::span<uint8_t> span = read_buffer_->span_before_offset();
   while (!span.empty()) {
     size_t bytes_consumed = 0;
-    auto packet =
-        packet_processor_->Unpack(span.data(), span.size(), &bytes_consumed);
+    auto packet = packet_processor_->Unpack(span, &bytes_consumed);
     if (packet) {
       NotifyPacketReceived(webrtc::ReceivedIpPacket(
-          webrtc::MakeArrayView(packet->bytes(), packet->size()),
-          GetRemoteAddress(), webrtc::Timestamp::Micros(webrtc::TimeMicros())));
+          packet->span(), GetRemoteAddress(),
+          webrtc::Timestamp::Micros(webrtc::TimeMicros())));
     }
     if (!bytes_consumed) {
       break;

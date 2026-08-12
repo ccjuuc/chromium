@@ -9,6 +9,7 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected_macros.h"
 #include "components/signin/public/webdata/token_service_table.h"
@@ -55,15 +56,17 @@ class TokenWebDataBackend
       const std::string& service,
       const std::string& token,
       const std::vector<uint8_t>& wrapped_binding_key,
+      bool mtls_token_binding,
       WebDatabase* db) {
     if (TokenServiceTable::FromWebDatabase(db)->SetTokenForService(
-            service, token, wrapped_binding_key)) {
+            service, token, wrapped_binding_key, mtls_token_binding)) {
       return WebDatabase::COMMIT_NEEDED;
     }
     return WebDatabase::COMMIT_NOT_NEEDED;
   }
 
   std::unique_ptr<WDTypedResult> GetAllTokens(WebDatabase* db) {
+    SCOPED_UMA_HISTOGRAM_TIMER("Signin.TokenTable.GetAllTokensTime");
     TokenResult result;
     result.db_result = TokenServiceTable::FromWebDatabase(db)->GetAllTokens(
         &result.tokens, result.should_reencrypt);
@@ -107,10 +110,12 @@ TokenWebData::TokenWebData(
 void TokenWebData::SetTokenForService(
     const std::string& service,
     const std::string& token,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const std::vector<uint8_t>& wrapped_binding_key,
+    bool mtls_token_binding) {
   wdbs_->ScheduleDBTask(
-      FROM_HERE, BindOnce(&TokenWebDataBackend::SetTokenForService,
-                          token_backend_, service, token, wrapped_binding_key));
+      FROM_HERE,
+      BindOnce(&TokenWebDataBackend::SetTokenForService, token_backend_,
+               service, token, wrapped_binding_key, mtls_token_binding));
 }
 
 void TokenWebData::RemoveAllTokens() {

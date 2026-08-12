@@ -32,9 +32,11 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <utility>
 
-#include "base/types/zip.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/rand_util.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/properties/css_property_ref.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
@@ -55,33 +57,26 @@ static unsigned ComputeMatchedPropertiesHash(const MatchResult& result,
                                HashTraits<unsigned>::DeletedValue();
                       }))
       << "This should have been checked in AddMatchedProperties()";
-  unsigned hash = StringHasher::HashMemory(base::as_byte_span(hashes));
-  hash = HashInts(hash, additional_hash);
-
-  // See CSSPropertyValueSet::ComputeHash() for asserts that this is safe.
-  if (hash == HashTraits<unsigned>::EmptyValue() ||
-      hash == HashTraits<unsigned>::DeletedValue()) {
-    hash ^= 0x80000000;
-  }
-
-  return hash;
+  unsigned hash = StringHasher::HashMemory32(base::as_byte_span(hashes));
+  return EnsureValidHash(HashInts(hash, additional_hash));
 }
 
 CachedMatchedProperties::CachedMatchedProperties(
     const ComputedStyle* style,
     const ComputedStyle* parent_style,
+    const ComputedStyle* layout_parent_style,
     const ComputedStyle* originating_element_style,
     const MatchedPropertiesVector& properties,
+    StyleAdjuster::ElementTypeForCache element_type,
     unsigned clock)
-    : entries({Entry{style, parent_style, originating_element_style, clock}}) {
-  matched_properties.ReserveInitialCapacity(properties.size());
-  for (const auto& new_matched_properties : properties) {
-    matched_properties.emplace_back(
-        new_matched_properties.properties,
-        new_matched_properties.mixin_parameter_bindings,
-        new_matched_properties.data_);
-  }
-}
+    : matched_properties(properties,
+                         [](const MatchedProperties& property) {
+                           return Key{property.properties,
+                                      property.mixin_parameter_bindings,
+                                      property.data_};
+                         }),
+      entries({Entry{style, parent_style, layout_parent_style,
+                     originating_element_style, element_type, clock}}) {}
 
 void CachedMatchedProperties::Clear() {
   matched_properties.clear();
@@ -102,12 +97,9 @@ MatchedPropertiesCache::Key::Key(const MatchResult& result, unsigned hash)
 
 const CachedMatchedProperties::Entry* MatchedPropertiesCache::Find(
     const Key& key,
+    StyleAdjuster::ElementTypeForCache element_type,
+    PseudoId style_type,
     const StyleResolverState& style_resolver_state) {
-  // Matches the corresponding test in IsStyleCacheable().
-  if (style_resolver_state.TextAutosizingMultiplier() != 1.0f) {
-    return nullptr;
-  }
-
   Cache::iterator it = cache_.find(key.hash_);
   if (it == cache_.end()) {
     return nullptr;
@@ -131,6 +123,25 @@ const CachedMatchedProperties::Entry* MatchedPropertiesCache::Find(
   for (auto it2 = cache_item->entries.rbegin();
        it2 != cache_item->entries.rend(); ++it2) {
     CachedMatchedProperties::Entry& entry = *it2;
+
+    // If the stored style hasn't been through the StyleAdjuster, it can be used
+    // for any element type. Otherwise, the types need to match.
+    if (entry.HasRunStyleAdjuster() && element_type != entry.element_type) {
+      continue;
+    }
+
+    // Highlight pseudo resolutions store a non-null
+    // originating_element_computed_style; non-highlight resolutions store
+    // nullptr. If the two resolve to the same hash (e.g., both have an empty
+    // matched-properties list), they must not share cache entries, because
+    // the highlight branch below dereferences
+    // originating_element_computed_style unconditionally.  Allowing mixed
+    // entries would not only crash but also produce the wrong computed
+    // result.
+    if (style_resolver_state.IsForHighlight() !=
+        (entry.originating_element_computed_style != nullptr)) {
+      continue;
+    }
 
     if (style_resolver_state.IsForHighlight()) {
       // For highlight pseudos, inherited _and_ non-inherited data
@@ -160,6 +171,14 @@ const CachedMatchedProperties::Entry* MatchedPropertiesCache::Find(
       if (!style_resolver_state.ParentStyle()
                ->InheritedEqualIncludingInheritedVariables(
                    *entry.parent_computed_style)) {
+        continue;
+      }
+      if (entry.HasRunStyleAdjuster() &&
+          (style_type != entry.computed_style->StyleType() ||
+           !StyleAdjuster::IsCacheCompatible(
+               *style_resolver_state.ParentStyle(),
+               *style_resolver_state.LayoutParentStyle(),
+               *entry.parent_computed_style, *entry.layout_parent_style))) {
         continue;
       }
 
@@ -223,7 +242,7 @@ bool CachedMatchedProperties::CorrespondsTo(
   }
 
   for (const auto [lookup_it, cached_it] :
-       base::zip(lookup_properties, matched_properties)) {
+       std::views::zip(lookup_properties, matched_properties)) {
     CSSPropertyValueSet* cached_properties = cached_it.properties.Get();
     DCHECK(!lookup_it.properties->ModifiedSinceHashing())
         << "This should have been checked in AddMatchedProperties()";
@@ -255,7 +274,7 @@ void CachedMatchedProperties::RefreshKey(
     const MatchedPropertiesVector& lookup_properties) {
   DCHECK(CorrespondsTo(lookup_properties));
   for (auto [lookup_it, cached_it] :
-       base::zip(lookup_properties, matched_properties)) {
+       std::views::zip(lookup_properties, matched_properties)) {
     cached_it.properties = lookup_it.properties;
     cached_it.mixin_parameter_bindings = lookup_it.mixin_parameter_bindings;
   }
@@ -263,21 +282,32 @@ void CachedMatchedProperties::RefreshKey(
 
 void MatchedPropertiesCache::Add(
     const Key& key,
+    StyleAdjuster::ElementTypeForCache element_type,
     const ComputedStyle* style,
     const ComputedStyle* parent_style,
+    const ComputedStyle* layout_parent_style,
     const ComputedStyle* originating_element_style) {
   Member<CachedMatchedProperties>& cache_item =
       cache_.insert(key.hash_, nullptr).stored_value->value;
 
   if (!cache_item) {
     cache_item = MakeGarbageCollected<CachedMatchedProperties>(
-        style, parent_style, originating_element_style,
-        key.result_.GetMatchedProperties(), clock_++);
+        style, parent_style, layout_parent_style, originating_element_style,
+        key.result_.GetMatchedProperties(), element_type, clock_++);
   } else {
-    cache_item->entries.emplace_back(style, parent_style,
-                                     originating_element_style, clock_++);
+    cache_item->entries.emplace_back(style, parent_style, layout_parent_style,
+                                     originating_element_style, element_type,
+                                     clock_++);
   }
   ++cache_entries_;
+
+  // Record the size of the bucket in which the item landed, subsampled to 1% of
+  // writes.
+  if (base::ShouldRecordSubsampledMetric(0.01)) {
+    base::UmaHistogramCounts10000(
+        "Blink.Style.MatchedPropertiesCache.BucketSize",
+        static_cast<int>(cache_item->entries.size()));
+  }
 }
 
 void MatchedPropertiesCache::Clear() {
@@ -310,9 +340,6 @@ bool MatchedPropertiesCache::IsStyleCacheable(
   if (builder.Zoom() != ComputedStyleInitialValues::InitialZoom()) {
     return false;
   }
-  if (builder.TextAutosizingMultiplier() != 1) {
-    return false;
-  }
   if (builder.HasContainerRelativeValue()) {
     return false;
   }
@@ -326,10 +353,12 @@ bool MatchedPropertiesCache::IsStyleCacheable(
     // element's position in the DOM.
     return false;
   }
-  // Functional media queries cause the style to depend directly on
-  // the current MediaValues, without going through RuleSet invalidation.
-  // These values are not captured by the MatchResult.
-  if (builder.AffectedByFunctionalMedia()) {
+  // Functional media queries cause the style to depend directly on the current
+  // MediaValues, without going through RuleSet invalidation. These values are
+  // not captured by the MatchResult. Similarly, evaluation of if() functions
+  // may be affected by navigation queries.
+  if (builder.AffectedByFunctionalMedia() ||
+      builder.AffectedByFunctionalNavigation()) {
     return false;
   }
   if (builder.HasElementDependentRandomFunctions()) {

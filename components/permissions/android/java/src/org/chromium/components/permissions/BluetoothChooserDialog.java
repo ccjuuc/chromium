@@ -22,11 +22,11 @@ import android.view.View;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.graphics.drawable.DrawableCompat;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ContextUtils;
@@ -203,9 +203,7 @@ public class BluetoothChooserDialog
                 assumeNonNull(
                         TraceEventVectorDrawableCompat.create(res, icon, mContext.getTheme()));
         DrawableCompat.setTintList(
-                drawable,
-                AppCompatResources.getColorStateList(
-                        mContext, R.color.item_chooser_row_icon_color));
+                drawable, mContext.getColorStateList(R.color.item_chooser_row_icon_color));
         return drawable;
     }
 
@@ -433,7 +431,7 @@ public class BluetoothChooserDialog
     @VisibleForTesting
     public static @Nullable BluetoothChooserDialog create(
             WindowAndroid windowAndroid,
-            String origin,
+            @JniType("std::u16string") String origin,
             int securityLevel,
             BluetoothChooserAndroidDelegate delegate,
             long nativeBluetoothChooserDialogPtr) {
@@ -470,7 +468,10 @@ public class BluetoothChooserDialog
     @VisibleForTesting
     @CalledByNative
     public void addOrUpdateDevice(
-            String deviceId, String deviceName, boolean isGATTConnected, int signalStrengthLevel) {
+            @JniType("std::string") String deviceId,
+            @JniType("std::u16string") String deviceName,
+            boolean isGATTConnected,
+            int signalStrengthLevel) {
         Drawable icon = null;
         String iconDescription = null;
         if (isGATTConnected) {
@@ -537,7 +538,10 @@ public class BluetoothChooserDialog
     @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     @NativeMethods
     public interface Natives {
-        void onDialogFinished(long nativeBluetoothChooserAndroid, int eventType, String deviceId);
+        void onDialogFinished(
+                long nativeBluetoothChooserAndroid,
+                @JniType("content::BluetoothChooserEvent") int eventType,
+                @JniType("std::string") String deviceId);
 
         void restartSearch(long nativeBluetoothChooserAndroid);
 

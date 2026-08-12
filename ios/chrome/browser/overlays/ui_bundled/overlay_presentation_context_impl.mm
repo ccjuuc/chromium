@@ -6,10 +6,10 @@
 
 #import <UIKit/UIKit.h>
 
-#import "base/containers/contains.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback.h"
 #import "base/memory/ptr_util.h"
+#import "ios/chrome/browser/overlays/model/public/common/infobars/infobar_overlay_request_config.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presentation_context_observer.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/ui_bundled/overlay_coordinator_factory.h"
@@ -412,7 +412,13 @@ void OverlayPresentationContextImpl::ShowUIForPresentedRequest(
     state->OverlayUIWillBePresented(overlay_coordinator);
   }
 
-  [overlay_coordinator startAnimated:!state->has_ui_been_presented()];
+  bool animated = !state->has_ui_been_presented();
+  InfobarOverlayRequestConfig* config =
+      request->GetConfig<InfobarOverlayRequestConfig>();
+  if (config) {
+    animated &= config->start_animated();
+  }
+  [overlay_coordinator startAnimated:animated];
   state->OverlayUIWasPresented();
 }
 
@@ -472,9 +478,7 @@ void OverlayPresentationContextImpl::OverlayRequestCoordinatorDelegateImpl::
 }
 
 void OverlayPresentationContextImpl::OverlayRequestCoordinatorDelegateImpl::
-    OverlayUIDidFinishDismissal(OverlayRequest* request) {
-  DCHECK(request);
-  const OverlayRequestId request_id = OverlayRequestIdForRequest(request);
+    OverlayUIDidFinishDismissal(OverlayRequestId request_id) {
   DCHECK_EQ(presentation_context_->request_id_, request_id);
   presentation_context_->OverlayUIWasDismissed();
 }

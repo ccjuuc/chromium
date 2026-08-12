@@ -103,7 +103,7 @@ Error ReadInt(Cursor* cursor,
   }
   const size_t start_pos = cursor->pos;
   bool have_leading_zero = '0' == data[cursor->pos];
-  while (cursor->pos < data.size() && IsASCIIDigit(data[cursor->pos])) {
+  while (cursor->pos < data.size() && IsAsciiDigit(data[cursor->pos])) {
     ++(cursor->pos);
   }
   const size_t length = cursor->pos - start_pos;
@@ -179,7 +179,7 @@ Error ReadHexDigits(Cursor* cursor,
     return Error::kInvalidEscape;
   }
   for (size_t i = 0; i < digits; ++i) {
-    if (!IsASCIIHexDigit(data[cursor->pos++])) {
+    if (!IsAsciiHexDigit(data[cursor->pos++])) {
       cursor->pos = token_start;
       return Error::kInvalidEscape;
     }
@@ -442,10 +442,10 @@ Error DecodeString(Cursor* cursor,
         c = '\v';
         break;
       case 'u':
-        c = (ToASCIIHexValue(data[cursor->pos]) << 12) +
-            (ToASCIIHexValue(data[cursor->pos + 1]) << 8) +
-            (ToASCIIHexValue(data[cursor->pos + 2]) << 4) +
-            ToASCIIHexValue(data[cursor->pos + 3]);
+        c = (ToAsciiHexValue(data[cursor->pos]) << 12) +
+            (ToAsciiHexValue(data[cursor->pos + 1]) << 8) +
+            (ToAsciiHexValue(data[cursor->pos + 2]) << 4) +
+            ToAsciiHexValue(data[cursor->pos + 3]);
         cursor->pos += 4;
         break;
       default:
@@ -490,20 +490,18 @@ Error BuildValue(Cursor* cursor,
       *result = std::make_unique<JSONBasicValue>(false);
       break;
     case kNumber: {
-      bool ok;
-      double value = CharactersToDouble(
-          data.subspan(token_start.pos,
-                       static_cast<size_t>(cursor->pos - token_start.pos)),
-          &ok);
-      if (!ok || std::isinf(value)) {
+      std::optional<double> value = CharactersToDouble(
+          data.subspan(token_start.pos, cursor->pos - token_start.pos));
+      if (!value || std::isinf(*value)) {
         *cursor = token_start;
         return Error::kSyntaxError;
       }
-      if (base::IsValueInRangeForNumericType<int>(value) &&
-          static_cast<int>(value) == value)
-        *result = std::make_unique<JSONBasicValue>(static_cast<int>(value));
-      else
-        *result = std::make_unique<JSONBasicValue>(value);
+      if (base::IsValueInRangeForNumericType<int>(*value) &&
+          static_cast<int>(*value) == *value) {
+        *result = std::make_unique<JSONBasicValue>(static_cast<int>(*value));
+      } else {
+        *result = std::make_unique<JSONBasicValue>(*value);
+      }
       break;
     }
     case kStringLiteral: {

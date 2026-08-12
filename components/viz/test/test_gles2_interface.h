@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/heap_array.h"
 #include "base/functional/callback.h"
@@ -108,7 +107,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
 
   size_t NumUsedTextures() const { return used_textures_.size(); }
   bool UsedTexture(int texture) const {
-    return base::Contains(used_textures_, texture);
+    return used_textures_.contains(texture);
   }
   void ResetUsedTextures() { used_textures_.clear(); }
 
@@ -130,8 +129,6 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   void set_support_texture_half_float_linear(bool support);
   void set_support_texture_norm16(bool support);
   void set_max_texture_size(int size);
-  void set_supports_gpu_memory_buffer_format(gfx::BufferFormat format,
-                                             bool support);
   void set_supports_texture_rg(bool support);
 
   // When set, MapBufferCHROMIUM will return NULL after this many times.
@@ -194,6 +191,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   unsigned current_framebuffer_ = 0;
   std::vector<raw_ptr<TestGLES2Interface, VectorExperimental>> shared_contexts_;
   raw_ptr<TestContextSupport> test_support_ = nullptr;
+  const uint64_t test_command_buffer_id_ = 1u;
   gfx::Rect update_rect_;
   UpdateType last_update_type_ = NO_UPDATE;
   GLuint64 next_insert_fence_sync_ = 1;

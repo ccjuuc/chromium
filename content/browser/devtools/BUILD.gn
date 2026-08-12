@@ -7,6 +7,7 @@ import("//build/config/devtools.gni")
 import("//components/viz/common/debugger/viz_debugger.gni")
 import("//content/browser/devtools/features.gni")
 import("//device/bluetooth/emulation/buildflags.gni")
+import("//third_party/blink/public/public_features.gni")
 import("//third_party/inspector_protocol/inspector_protocol.gni")
 import("//third_party/protobuf/proto_library.gni")
 import("//tools/grit/grit_rule.gni")
@@ -62,7 +63,11 @@ action("concatenate_protocols") {
 
   _blink_protocol_path =
       "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json"
-  inputs = [ _blink_protocol_path ]
+  inputs = [
+    _blink_protocol_path,
+    "//v8/include/js_protocol.pdl",
+    "//third_party/inspector_protocol/pdl.py",
+  ]
   output_file = _concatenated_protocol_path
   outputs = [ output_file ]
 
@@ -109,8 +114,12 @@ inspector_protocol_generate("protocol_sources") {
     "protocol/device_access.h",
     "protocol/device_orientation.cc",
     "protocol/device_orientation.h",
+    "protocol/digital_credentials.cc",
+    "protocol/digital_credentials.h",
     "protocol/dom.cc",
     "protocol/dom.h",
+    "protocol/debugger.cc",
+    "protocol/debugger.h",
     "protocol/emulation.cc",
     "protocol/emulation.h",
     "protocol/fed_cm.cc",
@@ -155,6 +164,8 @@ inspector_protocol_generate("protocol_sources") {
     "protocol/tethering.h",
     "protocol/tracing.cc",
     "protocol/tracing.h",
+    "protocol/web_mcp.cc",
+    "protocol/web_mcp.h",
     "protocol/web_authn.cc",
     "protocol/web_authn.h",
   ]
@@ -177,6 +188,13 @@ inspector_protocol_generate("protocol_sources") {
     outputs += [
       "protocol/bluetooth_emulation.cc",
       "protocol/bluetooth_emulation.h",
+    ]
+  }
+
+  if (enable_smart_card) {
+    outputs += [
+      "protocol/smart_card_emulation.cc",
+      "protocol/smart_card_emulation.h",
     ]
   }
 }

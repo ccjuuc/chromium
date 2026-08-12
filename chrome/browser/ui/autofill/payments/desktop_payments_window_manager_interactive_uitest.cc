@@ -13,12 +13,11 @@
 #include "chrome/browser/ui/autofill/payments/desktop_payments_window_manager.h"
 #include "chrome/browser/ui/autofill/payments/desktop_payments_window_manager_test_api.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/autofill/payments/payments_window_user_consent_dialog_view.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -41,7 +40,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/window/dialog_client_view.h"
 
-namespace autofill {
+namespace autofill::payments {
+namespace {
 
 class TestContentAutofillClientForWindowManagerTest
     : public TestContentAutofillClient {
@@ -50,16 +50,14 @@ class TestContentAutofillClientForWindowManagerTest
       content::WebContents* web_contents)
       : TestContentAutofillClient(web_contents) {
     GetPaymentsAutofillClient()->set_payments_network_interface(
-        std::make_unique<payments::TestPaymentsNetworkInterface>(
-            nullptr, nullptr, nullptr));
+        std::make_unique<TestPaymentsNetworkInterface>(nullptr, nullptr,
+                                                       nullptr));
     GetPaymentsAutofillClient()->set_payments_window_manager(
-        std::make_unique<payments::DesktopPaymentsWindowManager>(this));
+        std::make_unique<DesktopPaymentsWindowManager>(this));
   }
 
   ~TestContentAutofillClientForWindowManagerTest() override = default;
 };
-
-namespace payments {
 
 constexpr std::string_view kTestUrl = "https://site.example/";
 constexpr std::string_view kBnplInitialUrl = "https://www.bnplinitialurl.com/";
@@ -123,14 +121,11 @@ class DesktopPaymentsWindowManagerInteractiveUiTest : public UiBrowserTest {
   bool VerifyUi() override {
     // There should be two browsers present, the original browser and the
     // pop-up's browser.
-    if (chrome::GetTotalBrowserCount() != 2U) {
+    if (GlobalBrowserCollection::GetInstance()->GetSize() != 2U) {
       return false;
     }
 
     auto* source_web_contents = GetOriginalPageWebContents();
-
-    // The pop-up must be created from `source_web_contents`, so it will always
-    // be the second browser in the BrowserList.
     auto* popup_web_contents = GetPopupWebContents();
 
     // This ensures that there is no scripting relationship between the pop-up
@@ -344,8 +339,8 @@ IN_PROC_BROWSER_TEST_F(DesktopPaymentsWindowManagerInteractiveUiTest,
   auto* autofill_client = client();
   EXPECT_TRUE(autofill_client->GetPaymentsAutofillClient()
                   ->autofill_progress_dialog_shown());
-  const std::optional<payments::UnmaskRequestDetails>& unmask_request =
-      static_cast<payments::TestPaymentsNetworkInterface*>(
+  const std::optional<UnmaskRequestDetails>& unmask_request =
+      static_cast<TestPaymentsNetworkInterface*>(
           autofill_client->GetPaymentsAutofillClient()
               ->GetPaymentsNetworkInterface())
           ->unmask_request();
@@ -510,8 +505,8 @@ IN_PROC_BROWSER_TEST_F(DesktopPaymentsWindowManagerInteractiveUiTest,
   // with the correct fields set, and the progress dialog was shown.
   EXPECT_TRUE(
       client()->GetPaymentsAutofillClient()->autofill_progress_dialog_shown());
-  const std::optional<payments::UnmaskRequestDetails>& unmask_request =
-      static_cast<payments::TestPaymentsNetworkInterface*>(
+  const std::optional<UnmaskRequestDetails>& unmask_request =
+      static_cast<TestPaymentsNetworkInterface*>(
           client()->GetPaymentsAutofillClient()->GetPaymentsNetworkInterface())
           ->unmask_request();
   ASSERT_TRUE(unmask_request.has_value());
@@ -597,8 +592,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_FALSE(test_api(window_manager()).GetFlowState().has_value());
 
   // Check that the flow was ended and no UnmaskCardRequest was triggered.
-  const std::optional<payments::UnmaskRequestDetails>& unmask_request =
-      static_cast<payments::TestPaymentsNetworkInterface*>(
+  const std::optional<UnmaskRequestDetails>& unmask_request =
+      static_cast<TestPaymentsNetworkInterface*>(
           client()->GetPaymentsAutofillClient()->GetPaymentsNetworkInterface())
           ->unmask_request();
   ASSERT_FALSE(unmask_request.has_value());
@@ -655,8 +650,8 @@ IN_PROC_BROWSER_TEST_F(DesktopPaymentsWindowManagerInteractiveUiTest,
   EXPECT_FALSE(test_api(window_manager()).GetFlowState().has_value());
 
   // Check that the flow was ended and no UnmaskCardRequest was triggered.
-  const std::optional<payments::UnmaskRequestDetails>& unmask_request =
-      static_cast<payments::TestPaymentsNetworkInterface*>(
+  const std::optional<UnmaskRequestDetails>& unmask_request =
+      static_cast<TestPaymentsNetworkInterface*>(
           client()->GetPaymentsAutofillClient()->GetPaymentsNetworkInterface())
           ->unmask_request();
   ASSERT_FALSE(unmask_request.has_value());
@@ -712,8 +707,8 @@ IN_PROC_BROWSER_TEST_F(DesktopPaymentsWindowManagerInteractiveUiTest,
   EXPECT_FALSE(test_api(window_manager()).GetFlowState().has_value());
 
   // Check that the flow was ended and no UnmaskCardRequest was triggered.
-  const std::optional<payments::UnmaskRequestDetails>& unmask_request =
-      static_cast<payments::TestPaymentsNetworkInterface*>(
+  const std::optional<UnmaskRequestDetails>& unmask_request =
+      static_cast<TestPaymentsNetworkInterface*>(
           client()->GetPaymentsAutofillClient()->GetPaymentsNetworkInterface())
           ->unmask_request();
   ASSERT_FALSE(unmask_request.has_value());
@@ -1145,7 +1140,7 @@ IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
 // accept callback and creates the pop-up.
 IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
                        DialogAccepted) {
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1U);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1U);
 
   RunTestSequence(
       TriggerDialogAndWaitForShow(views::DialogClientView::kOkButtonElementId),
@@ -1153,15 +1148,16 @@ IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
       // must be used.
       InSameContext(
           PressButton(views::DialogClientView::kOkButtonElementId),
-          AfterHide(PaymentsWindowUserConsentDialogView::kTopViewId,
-                    []() { EXPECT_EQ(chrome::GetTotalBrowserCount(), 2U); })));
+          AfterHide(PaymentsWindowUserConsentDialogView::kTopViewId, []() {
+            EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2U);
+          })));
 }
 
 // Tests that the VCN 3DS consent dialog accepted histogram bucket is logged to
 // when the consent dialog is accepted.
 IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
                        DialogAccepted_AcceptedHistogramBucketLogs) {
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1U);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1U);
 
   RunTestSequence(
       TriggerDialogAndWaitForShow(views::DialogClientView::kOkButtonElementId),
@@ -1170,7 +1166,11 @@ IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
       InSameContext(
           PressButton(views::DialogClientView::kOkButtonElementId),
           AfterHide(PaymentsWindowUserConsentDialogView::kTopViewId,
-                    []() { EXPECT_EQ(chrome::GetTotalBrowserCount(), 2U); }),
+                    []() {
+                      EXPECT_EQ(
+                          GlobalBrowserCollection::GetInstance()->GetSize(),
+                          2U);
+                    }),
           Check([this]() {
             return histogram_tester_.GetBucketCount(
                        kVcn3dsFlowEventsHistogramName,
@@ -1227,6 +1227,5 @@ IN_PROC_BROWSER_TEST_F(PaymentsWindowUserConsentDialogIntegrationTest,
           })));
 }
 
-}  // namespace payments
-
-}  // namespace autofill
+}  // namespace
+}  // namespace autofill::payments

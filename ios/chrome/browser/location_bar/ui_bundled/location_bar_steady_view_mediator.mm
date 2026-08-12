@@ -25,8 +25,8 @@
 #import "ui/base/l10n/l10n_util.h"
 
 @interface LocationBarSteadyViewMediator () <CRWWebStateObserver,
-                                             WebStateListObserving,
-                                             OverlayPresenterObserving>
+                                             OverlayPresenterObserving,
+                                             WebStateListObserving>
 
 // Whether an overlay is currently presented over the web content area.
 @property(nonatomic, assign, getter=isWebContentAreaShowingOverlay)
@@ -142,6 +142,19 @@
   }
 }
 
+- (void)setTracker:(feature_engagement::Tracker*)tracker {
+  _tracker = tracker;
+  if (_tracker) {
+    __weak __typeof(self) weakSelf = self;
+    _tracker->AddOnInitializedCallback(base::BindRepeating(^(bool success) {
+      if (!success) {
+        return;
+      }
+      [weakSelf.consumer updateAIHubNewBadgeVisibility];
+    }));
+  }
+}
+
 #pragma mark - CRWWebStateObserver
 
 - (void)webState:(web::WebState*)webState didLoadPageWithSuccess:(BOOL)success {
@@ -169,7 +182,7 @@
   // Records the leading icon type when the document changes to avoid too many
   // recording. Don't record on NTP as the leading icon is not visible.
   if (navigation && !navigation->IsSameDocument() &&
-      !IsURLNewTabPage(navigation->GetUrl())) {
+      !IsUrlNtp(navigation->GetUrl())) {
     [self.consumer recordLensOverlayAvailability];
   }
 }
@@ -235,9 +248,7 @@
 - (void)notifyConsumerOfChangedLocation {
   [self.consumer updateLocationText:[self currentLocationString]
                            clipTail:[self locationShouldClipTail]];
-  GURL URL =
-      self.currentWebState ? self.currentWebState->GetVisibleURL() : GURL();
-  BOOL isNTP = IsURLNewTabPage(URL);
+  BOOL isNTP = IsVisibleURLNewTabPage(self.currentWebState);
   if (isNTP) {
     [self.consumer updateAfterNavigatingToNTP];
   }

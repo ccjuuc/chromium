@@ -10,7 +10,6 @@
 
 #include "base/feature_list.h"
 #include "base/json/json_writer.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -53,7 +52,7 @@ const char kSansSerifJsFontFamily[] = "sans-serif";
 const char kMonospaceJsFontFamily[] = "monospace";
 const char kLexendJsFontFamily[] = "Lexend";
 
-// LINT.ThenChange(//components/dom_distiller/core/javascript/dom_distiller_viewer.js:JSThemesAndFonts)
+// LINT.ThenChange(//components/dom_distiller/core/javascript/dom_distiller_viewer_main.js:JSThemesAndFonts)
 
 // LINT.IfChange
 
@@ -71,20 +70,13 @@ const char kLexendCssClass[] = "Lexend";
 // LINT.ThenChange(//components/dom_distiller/core/css/distilledpage_common.css)
 
 std::string GetVersionedCss() {
-#if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(dom_distiller::kReaderModeDistillInApp)) {
-    return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
-        IDR_DISTILLER_NEW_CSS);
-  }
-#endif
-#if BUILDFLAG(IS_IOS)
-  if (base::FeatureList::IsEnabled(dom_distiller::kEnableReaderModeNewCss)) {
-    return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
-        IDR_DISTILLER_NEW_CSS);
-  }
-#endif
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+      IDR_DISTILLER_NEW_CSS);
+#else
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
       IDR_DISTILLER_CSS);
+#endif
 }
 
 std::string GetPlatformSpecificCss() {
@@ -220,7 +212,11 @@ std::string ReplaceHtmlTemplateValues(const mojom::Theme theme,
     csp << "default-src 'none'; ";
     csp << "script-src 'nonce-" << csp_nonce << "'; ";
     // YouTube videos are embedded as an iframe.
-    csp << "frame-src http://www.youtube.com; ";
+    csp << "frame-src https://www.youtube.com "
+           "https://www.youtube-nocookie.com; ";
+
+    // Allow the browser to send a referrer.
+    csp << "referrer strict-origin-when-cross-origin; ";
     csp << "style-src 'unsafe-inline' https://fonts.googleapis.com; ";
     // Allows the fallback font-face from the main stylesheet.
     csp << "font-src https://fonts.gstatic.com; ";
@@ -314,8 +310,7 @@ const std::string GetUnsafeArticleContentJs(
 
 const std::string GetAddToPageJs(const std::string& unsafe_content) {
   std::string output =
-      base::WriteJson(base::Value(EnsureNonEmptyContent(unsafe_content)))
-          .value_or("");
+      base::WriteJson(EnsureNonEmptyContent(unsafe_content)).value_or("");
   return "addToPage(" + output + ");";
 }
 
@@ -336,9 +331,7 @@ static std::string GetMinPinchZoomScale() {
 #if BUILDFLAG(IS_ANDROID)
   // Make the minimum pinch zoom value to be 1.0 for distillation in app to
   // align with prefs UI.
-  if (base::FeatureList::IsEnabled(kReaderModeDistillInApp)) {
-    min_scale = kMinFontScaleAndroidInApp;
-  }
+  min_scale = kMinFontScaleAndroidInApp;
 #endif
   return base::NumberToString(min_scale);
 }
@@ -348,9 +341,7 @@ static std::string GetMaxPinchZoomScale() {
 #if BUILDFLAG(IS_ANDROID)
   // Make the maximum pinch zoom value to be 2.5 for distillation in app to
   // align with prefs UI.
-  if (base::FeatureList::IsEnabled(kReaderModeDistillInApp)) {
-    max_scale = kMaxFontScaleAndroidInApp;
-  }
+  max_scale = kMaxFontScaleAndroidInApp;
 #endif
   return base::NumberToString(max_scale);
 }
@@ -363,6 +354,10 @@ const std::string GetJavaScript() {
                                          GetMinPinchZoomScale());
   base::ReplaceFirstSubstringAfterOffset(&js, 0, "$MAX_SCALE",
                                          GetMaxPinchZoomScale());
+  // The viewer's UI components are lazily instantiated. This call initializes
+  // them after the script loads. This relies on the script being loaded after
+  // the relevant DOM elements are available.
+  js += "initializeDomDistillerViewer();";
   return js;
 }
 
@@ -403,6 +398,10 @@ std::unique_ptr<ViewerHandle> CreateViewRequest(
 
 const std::string GetDistilledPageThemeJs(mojom::Theme theme) {
   return "useTheme('" + GetJsTheme(theme) + "');";
+}
+
+const std::string GetDistilledPageLinksEnabledJs(bool enabled) {
+  return "setLinksEnabled(" + base::ToString(enabled) + ");";
 }
 
 const std::string GetDistilledPageFontFamilyJs(mojom::FontFamily font_family) {

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
@@ -48,7 +49,7 @@ size_t DiscardableCacheSizeLimit() {
   // Device ram threshold at which we move from a normal cache to a large cache.
   // While this is a GPU memory cache, we can't read GPU memory reliably, so we
   // use system ram as a proxy.
-  constexpr base::ByteCount kLargeCacheSizeMemoryThreshold = base::GiB(4);
+  constexpr base::ByteSize kLargeCacheSizeMemoryThreshold = base::GiBU(4);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -58,7 +59,7 @@ size_t DiscardableCacheSizeLimit() {
     return kNormalCacheSizeBytes;
   }
 #else
-  if (base::SysInfo::AmountOfPhysicalMemory() <
+  if (base::SysInfo::AmountOfTotalPhysicalMemory() <
       kLargeCacheSizeMemoryThreshold) {
     return kNormalCacheSizeBytes;
   } else {
@@ -409,42 +410,6 @@ void ServiceTransferCache::DeleteAllEntriesForDecoder(int decoder_id) {
     }
     it = ForceDeleteEntry(it);
   }
-}
-
-bool ServiceTransferCache::CreateLockedHardwareDecodedImageEntry(
-    int decoder_id,
-    uint32_t entry_id,
-    ServiceDiscardableHandle handle,
-    GrDirectContext* context,
-    std::vector<sk_sp<SkImage>> plane_images,
-    SkYUVAInfo::PlaneConfig plane_config,
-    SkYUVAInfo::Subsampling subsampling,
-    SkYUVColorSpace yuv_color_space,
-    size_t buffer_byte_size,
-    bool needs_mips) {
-  EntryKey key(decoder_id, cc::TransferCacheEntryType::kImage, entry_id);
-  auto found = entries_.Peek(key);
-  if (found != entries_.end())
-    return false;
-
-  // Create the service-side image transfer cache entry.
-  auto entry = std::make_unique<cc::ServiceImageTransferCacheEntry>();
-  if (!entry->BuildFromHardwareDecodedImage(
-          context, std::move(plane_images), plane_config, subsampling,
-          yuv_color_space, buffer_byte_size, needs_mips)) {
-    return false;
-  }
-
-  // Insert it in the transfer cache.
-  total_size_ += entry->CachedSize();
-  if (key.entry_type == cc::TransferCacheEntryType::kImage) {
-    total_image_count_++;
-    total_image_size_ += entry->CachedSize();
-  }
-  entries_.Put(key, CacheEntryInternal(handle, std::move(entry)));
-  EnforceLimits();
-  MaybePostPruneOldEntries();
-  return true;
 }
 
 bool ServiceTransferCache::OnMemoryDump(

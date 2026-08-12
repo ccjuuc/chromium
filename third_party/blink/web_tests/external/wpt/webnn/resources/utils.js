@@ -208,8 +208,21 @@ async function getContext() {
   try {
     context = await navigator.ml.createContext(contextOptions);
   } catch (e) {
-    throw new AssertionError(
-        `Unable to create context for ${variant} variant. ${e}`);
+    // A previous test case may kill the GPU process on which the WebNN service
+    // runs. If you call `createContext` again immediately before the GPU
+    // process restarts, it will fail again. So wait a moment and retry.
+    if (e.message.includes('WebNN service connection error.')) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      try {
+        context = await navigator.ml.createContext(contextOptions);
+      } catch (retryError) {
+        throw new AssertionError(
+            `Unable to create context for ${variant} variant on retry. ${retryError}`);
+      }
+    } else {
+      throw new AssertionError(
+          `Unable to create context for ${variant} variant. ${e}`);
+    }
   }
   return context;
 }
@@ -1343,7 +1356,7 @@ const getResample2dPrecisionTolerance =
       return {metricType: 'ULP', value: tolerance};
     };
 
-let minimumDataTypeSet;
+let requiredDataTypesAndRanks;
 
 function checkMinimum(descriptor, operandMinimumLimits) {
   const targetRank = descriptor.shape.length;
@@ -1372,7 +1385,7 @@ function getOutputMinimumLimits(operatorsResources, outputOperandName) {
         operator.outputs.includes(outputOperandName)) {
       // Current gru, lstm, lstmCell and split operators have multiple outputs
       operatorName = operator.name;
-      if (minimumDataTypeSet[operatorName].hasOwnProperty('outputs')) {
+      if (requiredDataTypesAndRanks[operatorName].hasOwnProperty('outputs')) {
         // for split operator
         outputName = 'outputs';
       } else {
@@ -1383,12 +1396,12 @@ function getOutputMinimumLimits(operatorsResources, outputOperandName) {
     }
   }
 
-  return minimumDataTypeSet[operatorName][outputName];
+  return requiredDataTypesAndRanks[operatorName][outputName];
 }
 
-async function getMinimumDataTypeSetJson() {
+async function getRequiredDataTypesAndRanks() {
   try {
-    const response = await fetch('/webnn/resources/minimum_datatype_set.json');
+    const response = await fetch('/webnn/resources/required_datatypes_ranks.json');
 
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
@@ -1397,11 +1410,11 @@ async function getMinimumDataTypeSetJson() {
     const text = await response.text();
     const jsonText =
         text.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');  // Remove comments
-    minimumDataTypeSet = JSON.parse(jsonText);
+    requiredDataTypesAndRanks = JSON.parse(jsonText);
   } catch (error) {
     throw new Error(`Error fetching and parsing JSON: ${error.message}`);
   }
-  return minimumDataTypeSet;
+  return requiredDataTypesAndRanks;
 }
 
 function isMinimumTest(test) {
@@ -1411,7 +1424,7 @@ function isMinimumTest(test) {
 
   // check inputs
   for (let operator of graphResources.operators) {
-    const minimumLimits = minimumDataTypeSet[operator.name];
+    const minimumLimits = requiredDataTypesAndRanks[operator.name];
     for (let argument of operator.arguments) {
       for (let [operandName, value] of Object.entries(argument)) {
         if (operandName !== 'options') {
@@ -1481,7 +1494,7 @@ async function webnn_conformance_test(
     promise_setup(async () => {
       // Create a context for checking whether tests are supported.
       const context = await getContext();
-      minimumDataTypeSet = await getMinimumDataTypeSetJson();
+      requiredDataTypesAndRanks = await getRequiredDataTypesAndRanks();
       tests.filter(isTargetTest).forEach((test) => {
         if (validateContextSupportsGraph(context, test.graph) ||
             isMinimumTest(test)) {

@@ -5,6 +5,7 @@
 #ifndef MEDIA_CAPTURE_VIDEO_CHROMEOS_MOCK_VIDEO_CAPTURE_CLIENT_H_
 #define MEDIA_CAPTURE_VIDEO_CHROMEOS_MOCK_VIDEO_CAPTURE_CLIENT_H_
 
+#include "base/containers/span.h"
 #include "media/capture/video/video_capture_device.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -41,8 +42,7 @@ class MockVideoCaptureClient : public VideoCaptureDevice::Client {
                  const std::string& message);
 
   void OnIncomingCapturedData(
-      const uint8_t* data,
-      int length,
+      base::span<const uint8_t> data,
       const VideoCaptureFormat& format,
       const gfx::ColorSpace& color_space,
       int rotation,
@@ -59,6 +59,7 @@ class MockVideoCaptureClient : public VideoCaptureDevice::Client {
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
       std::optional<base::TimeTicks> capture_begin_time,
+      const gfx::Size& natural_size,
       const std::optional<media::VideoFrameMetadata>& metadata,
       int frame_feedback_id) override;
   void OnIncomingCapturedExternalBuffer(
@@ -67,6 +68,7 @@ class MockVideoCaptureClient : public VideoCaptureDevice::Client {
       base::TimeDelta timestamp,
       std::optional<base::TimeTicks> capture_begin_time,
       const gfx::Rect& visible_rect,
+      const gfx::Size& natural_size,
       const std::optional<media::VideoFrameMetadata>& metadata) override;
   // Trampoline methods to workaround GMOCK problems with std::unique_ptr<>.
   ReserveResult ReserveOutputBuffer(const gfx::Size& dimensions,

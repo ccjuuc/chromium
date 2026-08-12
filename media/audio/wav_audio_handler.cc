@@ -14,9 +14,11 @@
 #include "base/containers/span.h"
 #include "base/containers/span_reader.h"
 #include "base/logging.h"
+#include "base/memory/aligned_memory.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/numerics/byte_conversions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "build/build_config.h"
 #include "media/base/audio_bus.h"
@@ -209,6 +211,12 @@ std::optional<ParseWavResult> ParseWavData(base::span<const uint8_t> wav_data) {
     base::span<const uint8_t> chunk_payload =
         *buf.Read(std::min(size_t{chunk_length}, buf.remaining()));
 
+    // Chunks are 2-byte aligned, so if the chunk length is odd, there is a
+    // padding byte that we should skip.
+    if (chunk_length % 2 != 0) {
+      buf.Skip(1u);
+    }
+
     // Parse the subsection header, handling it if it is a "data" or "fmt "
     // chunk. Skip it otherwise.
     if (chunk_fmt == kFmtSubchunkId) {
@@ -235,6 +243,59 @@ std::optional<ParseWavResult> ParseWavData(base::span<const uint8_t> wav_data) {
   return result;
 }
 
+template <typename T>
+T ReadLittleEndian(base::span<const uint8_t, sizeof(T)> bytes) {
+  if constexpr (std::is_same_v<T, uint8_t>) {
+    return base::U8FromLittleEndian(bytes);
+  } else if constexpr (std::is_same_v<T, int16_t>) {
+    return base::I16FromLittleEndian(bytes);
+  } else if constexpr (std::is_same_v<T, int32_t>) {
+    return base::I32FromLittleEndian(bytes);
+  } else if constexpr (std::is_same_v<T, float>) {
+    return base::FloatFromLittleEndian(bytes);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return base::DoubleFromLittleEndian(bytes);
+  }
+}
+
+template <typename Traits>
+void InterleavedBytesToAudioBus(AudioBus* bus,
+                                int dest_start_frame,
+                                int requested_frame_count,
+                                base::span<const uint8_t> source_data,
+                                size_t frames) {
+  using SampleType = typename Traits::ValueType;
+  CHECK_LE(frames, static_cast<size_t>(requested_frame_count));
+
+  if (dest_start_frame == 0 && requested_frame_count == bus->frames() &&
+      base::IsAligned(source_data.data(), alignof(SampleType))) {
+    bus->FromInterleavedBytes<Traits>(source_data,
+                                      /*zero_remaining_frames=*/true);
+    return;
+  }
+
+  auto channels = bus->AllChannelsSubspan(dest_start_frame, frames);
+  const size_t num_channels = channels.size();
+  const size_t sample_size = sizeof(SampleType);
+  const size_t frame_size_in_bytes = num_channels * sample_size;
+
+  for (size_t ch = 0; ch < num_channels; ++ch) {
+    base::span<const uint8_t> source = source_data;
+    const size_t channel_offset = ch * sample_size;
+    for (float& dest_sample : channels[ch]) {
+      // Load the next frame
+      auto frame = source.take_first(frame_size_in_bytes);
+      dest_sample = Traits::ToFloat(ReadLittleEndian<SampleType>(
+          frame.subspan(channel_offset).template first<sample_size>()));
+    }
+  }
+
+  if (frames < static_cast<size_t>(requested_frame_count)) {
+    bus->ZeroFramesPartial(dest_start_frame + frames,
+                           requested_frame_count - frames);
+  }
+}
+
 }  // namespace
 
 WavAudioHandler::WavAudioHandler(base::span<const uint8_t> audio_data,
@@ -242,7 +303,8 @@ WavAudioHandler::WavAudioHandler(base::span<const uint8_t> audio_data,
                                  uint32_t sample_rate,
                                  uint16_t bits_per_sample,
                                  AudioFormat audio_format)
-    : audio_data_(audio_data),
+    : original_data_(audio_data),
+      remaining_data_(audio_data),
       num_channels_(num_channels),
       sample_rate_(sample_rate),
       bits_per_sample_(bits_per_sample),
@@ -250,7 +312,7 @@ WavAudioHandler::WavAudioHandler(base::span<const uint8_t> audio_data,
   DCHECK_NE(num_channels_, 0u);
   DCHECK_NE(sample_rate_, 0u);
   DCHECK_NE(bits_per_sample_, 0u);
-  total_frames_ = audio_data_.size() * 8 / num_channels_ / bits_per_sample_;
+  total_frames_ = original_data_.size() * 8 / num_channels_ / bits_per_sample_;
 }
 WavAudioHandler::~WavAudioHandler() = default;
 
@@ -282,37 +344,53 @@ int WavAudioHandler::GetSampleRate() const {
 }
 
 bool WavAudioHandler::AtEnd() const {
-  return audio_data_.size() <= cursor_;
+  return remaining_data_.empty();
 }
 
 bool WavAudioHandler::CopyTo(AudioBus* bus, size_t* frames_written) {
-  DCHECK(bus);
-  DCHECK_EQ(bus->channels(), num_channels_);
+  CHECK(bus);
+  return CopyPartialFramesTo(bus, bus->frames(), /*bus_start_frame=*/0,
+                             frames_written);
+}
+
+bool WavAudioHandler::CopyPartialFramesTo(AudioBus* bus,
+                                          int frame_count,
+                                          int bus_start_frame,
+                                          size_t* frames_written) {
+  CHECK(bus);
+  CHECK_EQ(bus->channels(), num_channels_);
+  CHECK_LE(bus_start_frame + frame_count, bus->frames());
+  CHECK_GE(frame_count, 0);
+  CHECK_GE(bus_start_frame, 0);
 
   if (AtEnd()) {
-    bus->Zero();
+    bus->ZeroFramesPartial(bus_start_frame, frame_count);
     *frames_written = 0;
     return true;
   }
-  const int bytes_per_frame = num_channels_ * bits_per_sample_ / 8;
-  const int remaining_frames = (audio_data_.size() - cursor_) / bytes_per_frame;
-  const int frames = std::min(bus->frames(), remaining_frames);
-  const auto* source = audio_data_.subspan(cursor_).data();
+
+  const size_t bytes_per_frame = num_channels_ * bits_per_sample_ / 8;
+  const size_t remaining_frames = remaining_data_.size() / bytes_per_frame;
+  const size_t frames =
+      std::min(static_cast<size_t>(frame_count), remaining_frames);
+
+  base::span<const uint8_t> source =
+      remaining_data_.take_first(frames * bytes_per_frame);
 
   switch (audio_format_) {
     case AudioFormat::kAudioFormatPCM:
       switch (bits_per_sample_) {
         case 8:
-          bus->FromInterleaved<UnsignedInt8SampleTypeTraits>(
-              reinterpret_cast<const uint8_t*>(source), frames);
+          InterleavedBytesToAudioBus<UnsignedInt8SampleTypeTraits>(
+              bus, bus_start_frame, frame_count, source, frames);
           break;
         case 16:
-          bus->FromInterleaved<SignedInt16SampleTypeTraits>(
-              reinterpret_cast<const int16_t*>(source), frames);
+          InterleavedBytesToAudioBus<SignedInt16SampleTypeTraits>(
+              bus, bus_start_frame, frame_count, source, frames);
           break;
         case 32:
-          bus->FromInterleaved<SignedInt32SampleTypeTraits>(
-              reinterpret_cast<const int32_t*>(source), frames);
+          InterleavedBytesToAudioBus<SignedInt32SampleTypeTraits>(
+              bus, bus_start_frame, frame_count, source, frames);
           break;
         default:
           NOTREACHED()
@@ -323,12 +401,12 @@ bool WavAudioHandler::CopyTo(AudioBus* bus, size_t* frames_written) {
     case AudioFormat::kAudioFormatFloat:
       switch (bits_per_sample_) {
         case 32:
-          bus->FromInterleaved<Float32SampleTypeTraitsNoClip>(
-              reinterpret_cast<const float*>(source), frames);
+          InterleavedBytesToAudioBus<Float32SampleTypeTraitsNoClip>(
+              bus, bus_start_frame, frame_count, source, frames);
           break;
         case 64:
-          bus->FromInterleaved<Float64SampleTypeTraits>(
-              reinterpret_cast<const double*>(source), frames);
+          InterleavedBytesToAudioBus<Float64SampleTypeTraits>(
+              bus, bus_start_frame, frame_count, source, frames);
           break;
         default:
           NOTREACHED()
@@ -340,9 +418,8 @@ bool WavAudioHandler::CopyTo(AudioBus* bus, size_t* frames_written) {
       NOTREACHED() << "Unsupported audio format encountered: "
                    << static_cast<uint16_t>(audio_format_);
   }
+
   *frames_written = frames;
-  cursor_ += frames * bytes_per_frame;
-  bus->ZeroFramesPartial(frames, bus->frames() - frames);
   return true;
 }
 
@@ -351,7 +428,7 @@ base::TimeDelta WavAudioHandler::GetDuration() const {
 }
 
 void WavAudioHandler::Reset() {
-  cursor_ = 0;
+  remaining_data_ = original_data_;
 }
 
 }  // namespace media

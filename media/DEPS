@@ -21,6 +21,7 @@ include_rules = [
   "+third_party/ffmpeg",
   "+third_party/flac",
   "+third_party/fuzztest",
+  "+third_party/iamf_tools",
   "+third_party/libaom",
   "+third_party/libdrm",
   "+third_party/libgav1",
@@ -53,19 +54,19 @@ specific_include_rules = {
   "fuchsia_video_decoder_unittest.cc": [
     "+components/viz/test/test_context_support.h",
   ],
-  "gpu_memory_buffer_video_frame_pool_unittest.cc": [
+  "mappable_shared_image_video_frame_pool_unittest.cc": [
     "+components/viz/test/test_context_provider.h",
   ],
   "video_encode_accelerator_adapter_test.cc": [
     "+components/viz/test/test_context_provider.h"
   ],
-  "renderable_gpu_memory_buffer_video_frame_pool_unittest.cc": [
+  "renderable_mappable_shared_image_video_frame_pool_unittest.cc": [
     "+components/viz/test/test_context_provider.h",
   ],
   "null_video_sink_unittest.cc": [
     "+components/viz/common/frame_sinks/begin_frame_args.h",
   ],
-  "fuchsia_.*_mojom_traits\.h": [
+  "fuchsia_.*_mojom_traits\\.h": [
     "+mojo/public/cpp/base/fuchsia/fidl_interface_request_mojom_traits.h",
   ],
 }

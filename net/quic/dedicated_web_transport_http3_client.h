@@ -12,6 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/dns/host_resolver.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/proxy_info.h"
@@ -53,6 +54,7 @@ class NET_EXPORT DedicatedWebTransportHttp3Client
       const url::Origin& origin,
       WebTransportClientVisitor* visitor,
       const NetworkAnonymizationKey& anonymization_key,
+      handles::NetworkHandle target_network,
       URLRequestContext* context,
       const WebTransportParameters& parameters);
   ~DedicatedWebTransportHttp3Client() override;
@@ -67,6 +69,8 @@ class NET_EXPORT DedicatedWebTransportHttp3Client
 
   quic::WebTransportSession* session() override;
 
+  handles::NetworkHandle target_network() const { return target_network_; }
+
   void OnSettingsReceived();
   void OnHeadersComplete(const quiche::HttpHeaderBlock& headers);
   void OnConnectStreamWriteSideInDataRecvdState();
@@ -74,6 +78,8 @@ class NET_EXPORT DedicatedWebTransportHttp3Client
   void OnConnectStreamDeleted();
   void OnCloseTimeout();
   void OnDatagramProcessed(std::optional<quic::DatagramStatus> status);
+
+  void OnSessionDraining();
 
   // QuicTransportClientSession::ClientVisitor methods.
   void OnSessionReady() override;
@@ -155,7 +161,14 @@ class NET_EXPORT DedicatedWebTransportHttp3Client
   const GURL url_;
   const url::Origin origin_;
   const NetworkAnonymizationKey anonymization_key_;
+  const handles::NetworkHandle target_network_;
   const std::vector<std::string> application_protocols_;
+  const WebTransportParameters::CongestionControlHint congestion_control_hint_;
+  const std::optional<uint16_t>
+      anticipated_concurrent_incoming_unidirectional_streams_;
+  const std::optional<uint16_t>
+      anticipated_concurrent_incoming_bidirectional_streams_;
+  const std::vector<HttpRequestHeaders::HeaderKeyValuePair> additional_headers_;
   const raw_ptr<URLRequestContext> context_;          // Unowned.
   const raw_ptr<WebTransportClientVisitor> visitor_;  // Unowned.
 
@@ -190,9 +203,11 @@ class NET_EXPORT DedicatedWebTransportHttp3Client
   // and `session_` owns the packet writer, which has a raw pointer to the
   // socket.
   std::unique_ptr<QuicChromiumPacketReader> packet_reader_;
+  // This must be destroyed after `session_` whose destruction may access it
+  // (the raw_ptr) via OnConnectStreamDeleted().
+  raw_ptr<quic::WebTransportSession> web_transport_session_ = nullptr;
   std::unique_ptr<quic::QuicSpdyClientSession> session_;
   raw_ptr<quic::QuicConnection> connection_;  // owned by |session_|
-  raw_ptr<quic::WebTransportSession> web_transport_session_ = nullptr;
   std::unique_ptr<QuicEventLogger> event_logger_;
   quic::DeterministicConnectionIdGenerator connection_id_generator_{
       quic::kQuicDefaultConnectionIdLength};

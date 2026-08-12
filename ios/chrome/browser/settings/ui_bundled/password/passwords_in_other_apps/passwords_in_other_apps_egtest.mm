@@ -4,10 +4,10 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/passwords/model/password_manager_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_egtest_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/password/password_settings_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_in_other_apps/constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_in_other_apps/passwords_in_other_apps_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_table_view_constants.h"
@@ -69,25 +69,22 @@ id<GREYMatcher> OpenSettingsButton() {
       kPasswordsInOtherAppsActionAccessibilityIdentifier);
 }
 
-// Returns whether the device is running on iOS 18+.
-BOOL IsIOS18() {
-  if (@available(iOS 18, *)) {
-    return YES;
-  }
-  return NO;
-}
-
 // Action to open the Passwords in Other Apps modal from Chrome root view.
 void OpensPasswordsInOtherApps() {
-  // The autofill status needs to be set to "on" on iOS 18+ as the Passwords in
-  // Other Apps screen isn't accessible otherwise.
-  if (IsIOS18()) {
-    [PasswordsInOtherAppsAppInterface startFakeManagerWithAutoFillStatus:YES];
-  }
+  [PasswordsInOtherAppsAppInterface startFakeManagerWithAutoFillStatus:YES];
 
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI
-      tapSettingsMenuButton:chrome_test_util::SettingsMenuPasswordsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::
+                                            SettingsMenuPasswordsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:chrome_test_util::SettingsMenuPasswordsButton()];
+  }
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                           kSettingsToolbarSettingsButtonId)]
       performAction:grey_tap()];
@@ -117,8 +114,7 @@ void OpensPasswordsInOtherApps() {
               swizzlePasswordAutoFillStatusManagerWithFake]);
 
   // Mock successful reauth when opening the Password Manager.
-  [PasswordSettingsAppInterface setUpMockReauthenticationModule];
-  [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kSuccess];
 }
 
@@ -126,8 +122,6 @@ void OpensPasswordsInOtherApps() {
   [super tearDownHelper];
   [PasswordsInOtherAppsAppInterface resetManager];
   _passwordAutoFillStatusSwizzler.reset();
-  // Remove mock to keep the app in the same state as before running the test.
-  [PasswordSettingsAppInterface removeMockReauthenticationModule];
 }
 
 #pragma mark - helper functions
@@ -198,33 +192,6 @@ void OpensPasswordsInOtherApps() {
 
 #pragma mark - Test cases
 
-// Tests Passwords In Other Apps first shows instructions when auto-fill is off,
-// then shows the caption label after auto-fill is turned on.
-- (void)testTurnOnPasswordsInOtherApps {
-  if (IsIOS18()) {
-    EARL_GREY_TEST_SKIPPED(@"The Password in Other Apps screen isn't "
-                           @"accessible as of iOS 18 when autofill is off.");
-  }
-
-  // Rewrites passwordInAppsViewController.useShortInstruction property.
-  EarlGreyScopedBlockSwizzler longInstruction(
-      @"PasswordsInOtherAppsViewController", @"useShortInstruction", ^{
-        return NO;
-      });
-
-  [PasswordsInOtherAppsAppInterface startFakeManagerWithAutoFillStatus:NO];
-  OpensPasswordsInOtherApps();
-
-  [self checkThatCommonElementsAreVisibleWithAutofillOn:NO];
-  [self checkThatTurnOnInstructionsAreVisible];
-  [self checkThatTurnOffInstructionsAreNotVisible];
-
-  [PasswordsInOtherAppsAppInterface setAutoFillStatus:YES];
-
-  [self checkThatTurnOnInstructionsAreNotVisible];
-  [self checkThatTurnOffInstructionsAreVisible];
-}
-
 // Tests Passwords In Other Apps first shows instructions when auto-fill is on,
 // then shows the caption label after auto-fill is turned off.
 - (void)testTurnOffPasswordsInOtherApps {
@@ -247,48 +214,11 @@ void OpensPasswordsInOtherApps() {
   [self checkThatTurnOnInstructionsAreVisible];
 }
 
-// Tests Passwords In Other Apps shows instructions when auto-fill is off with
-// short instruction.
-- (void)testShowPasswordsInOtherAppsWithShortInstruction {
-  if (IsIOS18()) {
-    EARL_GREY_TEST_SKIPPED(@"The Password in Other Apps screen isn't "
-                           @"accessible as of iOS 18 when autofill is off.");
-  }
-
-  // Rewrites passwordInAppsViewController.useShortInstruction property.
-  EarlGreyScopedBlockSwizzler shortInstruction(
-      @"PasswordsInOtherAppsViewController", @"useShortInstruction", ^{
-        return YES;
-      });
-
-  [PasswordsInOtherAppsAppInterface startFakeManagerWithAutoFillStatus:NO];
-  OpensPasswordsInOtherApps();
-  // Check both turn off instructions and default turn on instructions aren't
-  // visible.
-  [self checkThatCommonElementsAreVisibleWithAutofillOn:NO];
-  [self checkThatTurnOnInstructionsAreNotVisible];
-  [self checkThatTurnOffInstructionsAreNotVisible];
-
-  // Check backup instructions are visible.
-  NSArray<NSString*>* steps = @[
-    l10n_util::GetNSString(
-        IDS_IOS_SETTINGS_PASSWORDS_IN_OTHER_APPS_SHORTENED_STEP_1_IOS16),
-    l10n_util::GetNSString(
-        IDS_IOS_SETTINGS_PASSWORDS_PASSKEYS_IN_OTHER_APPS_SHORTENED_STEP_2)
-  ];
-  for (NSString* step in steps) {
-    [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(step)]
-        assertWithMatcher:grey_sufficientlyVisible()];
-  }
-  [[EarlGrey selectElementWithMatcher:OpenSettingsButton()]
-      assertWithMatcher:grey_interactable()];
-}
-
 // Tests Passwords In Other Apps dismisses itself when top right "done" button
 // is tapped.
 - (void)testTapPasswordsInOtherAppsDoneButtonToDismiss {
   OpensPasswordsInOtherApps();
-  [self checkThatCommonElementsAreVisibleWithAutofillOn:IsIOS18()];
+  [self checkThatCommonElementsAreVisibleWithAutofillOn:YES];
   // Taps done button and check settings dismissed.
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(SettingsDoneButton(),
@@ -301,7 +231,7 @@ void OpensPasswordsInOtherApps() {
 // Tests Passwords In Other Apps dismisses itself when the user swipes down.
 - (void)testSwipeDownPasswordsInOtherAppsToDismiss {
   OpensPasswordsInOtherApps();
-  [self checkThatCommonElementsAreVisibleWithAutofillOn:IsIOS18()];
+  [self checkThatCommonElementsAreVisibleWithAutofillOn:YES];
   // Swipes down and check settings dismissed.
   [[EarlGrey selectElementWithMatcher:PasswordsInOtherAppsViewMatcher()]
       performAction:grey_swipeFastInDirection(kGREYDirectionDown)];
@@ -335,9 +265,9 @@ void OpensPasswordsInOtherApps() {
 - (void)testTapPasswordsInOtherAppsWithFailedAuth {
   OpensPasswordsInOtherApps();
 
-  [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kFailure];
-  [PasswordSettingsAppInterface mockReauthenticationModuleShouldSkipReAuth:NO];
+  [ReauthenticationAppInterface mockReauthenticationModuleShouldSkipReAuth:NO];
 
   [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
 
@@ -348,7 +278,7 @@ void OpensPasswordsInOtherApps() {
                                           ReauthenticationController()]
       assertWithMatcher:grey_sufficientlyVisible()];
 
-  [PasswordSettingsAppInterface mockReauthenticationModuleReturnMockedResult];
+  [ReauthenticationAppInterface mockReauthenticationModuleReturnMockedResult];
 
   // The Password Manager UI should have been dismissed leaving Settings
   // visible.

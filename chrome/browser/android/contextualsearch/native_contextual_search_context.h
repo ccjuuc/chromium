@@ -36,13 +36,13 @@ class NativeContextualSearchContext final : public ContextualSearchContext {
 
   // Sets the properties needed to resolve a context.
   void SetResolveProperties(JNIEnv* env,
-                            std::string& home_country,
-                            jboolean j_may_send_base_page_url);
+                            const std::string& home_country,
+                            bool j_may_send_base_page_url);
 
   // Adjust the current selection offsets by the given signed amounts.
   void AdjustSelection(JNIEnv* env,
-                       jint j_start_adjust,
-                       jint j_end_adjust);
+                       int32_t j_start_adjust,
+                       int32_t j_end_adjust);
 
   // Prepares the context to be used in a resolve request by supplying last
   // minute parameters.
@@ -52,8 +52,8 @@ class NativeContextualSearchContext final : public ContextualSearchContext {
   // identify related searches. If the string is empty then Related Searches
   // are not being requested.
   void PrepareToResolve(JNIEnv* env,
-                        jboolean j_is_exact_resolve,
-                        std::string& related_searches_stamp);
+                        bool j_is_exact_resolve,
+                        const std::string& related_searches_stamp);
 
   // Detects the language of the context using CLD from the translate utility.
   std::string DetectLanguage(JNIEnv* env) const;
@@ -61,9 +61,9 @@ class NativeContextualSearchContext final : public ContextualSearchContext {
   // Sets the languages to remember for use in translation.
   // See |GetTranslationLanguages|.
   void SetTranslationLanguages(JNIEnv* env,
-                               std::string& detected_language,
-                               std::string& target_language,
-                               std::string& fluent_languages);
+                               const std::string& detected_language,
+                               const std::string& target_language,
+                               const std::string& fluent_languages);
 
  private:
   // The linked Java object.

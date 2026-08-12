@@ -10,38 +10,24 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "mojo/public/cpp/system/data_pipe.h"
+#include "services/device/public/cpp/device_features.h"
 #include "services/device/serial/serial_io_handler.h"
 
 namespace device {
 
 // static
 void SerialPortImpl::Open(
-    const base::FilePath& path,
-    mojom::SerialConnectionOptionsPtr options,
-    mojo::PendingRemote<mojom::SerialPortClient> client,
-    mojo::PendingRemote<mojom::SerialPortConnectionWatcher> watcher,
-    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
-    OpenCallback callback) {
-  // This SerialPortImpl is owned by |receiver_| and |watcher_| and will
-  // self-destruct on close.
-  auto* port = new SerialPortImpl(
-      device::SerialIoHandler::Create(path, std::move(ui_task_runner)),
-      std::move(client), std::move(watcher));
-  port->OpenPort(*options, std::move(callback));
-}
-
-// static
-void SerialPortImpl::OpenForTesting(
     scoped_refptr<SerialIoHandler> io_handler,
     mojom::SerialConnectionOptionsPtr options,
     mojo::PendingRemote<mojom::SerialPortClient> client,
     mojo::PendingRemote<mojom::SerialPortConnectionWatcher> watcher,
     OpenCallback callback) {
-  // This SerialPortImpl is owned by |receiver| and |watcher| and will
+  // This SerialPortImpl is owned by |receiver_| and |watcher_| and will
   // self-destruct on close.
-  auto* port = new SerialPortImpl(std::move(io_handler), std::move(client),
-                                  std::move(watcher));
+  auto* port =
+      new SerialPortImpl(io_handler, std::move(client), std::move(watcher));
   port->OpenPort(*options, std::move(callback));
 }
 
@@ -64,6 +50,21 @@ SerialPortImpl::SerialPortImpl(
 SerialPortImpl::~SerialPortImpl() {
   // Cancel I/O operations so that |io_handler_| drops its self-reference.
   io_handler_->Close(base::DoNothing());
+
+#if BUILDFLAG(IS_WIN)
+  // Prevent Use-After-Unmap by keeping the Mojo handles (and backing shared
+  // memory) alive until pending overlapped I/O completes in the OS kernel.
+  if (base::FeatureList::IsEnabled(features::kSafeSerialPortImplWinClose)) {
+    if (io_handler_->IsReadPending()) {
+      io_handler_->KeepAliveUntilReadCompletes(
+          base::DoNothingWithBoundArgs(std::move(out_stream_)));
+    }
+    if (io_handler_->IsWritePending()) {
+      io_handler_->KeepAliveUntilWriteCompletes(
+          base::DoNothingWithBoundArgs(std::move(in_stream_)));
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 void SerialPortImpl::OpenPort(const mojom::SerialConnectionOptions& options,

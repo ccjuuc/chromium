@@ -7,14 +7,18 @@
 
 #import <Foundation/Foundation.h>
 
+#import <optional>
+
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+
 // Configuration for the AccountPickerCoordinator.
 @interface AccountPickerConfiguration : NSObject
 
 // If yes, the title view will be display a branded title.
 @property(nonatomic, assign) BOOL useBrandedTitle;
 
-// The branded symbol name that will be displayed in the title view.
-@property(nonatomic, copy) NSString* brandedSymbolName;
+// The branded symbol that will be displayed in the title view.
+@property(nonatomic, assign) std::optional<Symbol> brandedSymbol;
 
 // Title of the account picker confirmation screen.
 @property(nonatomic, copy) NSString* titleText;
@@ -35,10 +39,6 @@
 
 // Enable always bounce on the view.
 @property(nonatomic, assign) BOOL alwaysBounceVertical;
-
-// Whether to use the default corner radius for the account selection (if `NO`
-// set the corner radius to match the UIButton one).
-@property(nonatomic, assign) BOOL defaultCornerRadius;
 
 // Accessibility label for the "Submit" button when it has been tapped and there
 // is a spinner in place of the button title. If nil, a default "Action in

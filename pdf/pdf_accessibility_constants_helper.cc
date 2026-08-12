@@ -23,6 +23,7 @@ constexpr auto kAXRoleFromPdfTagTypeMap =
         {PdfTagType::kTOC, ax::mojom::Role::kDocToc},
         {PdfTagType::kTOCI, ax::mojom::Role::kListItem},
         {PdfTagType::kIndex, ax::mojom::Role::kDocIndex},
+        {PdfTagType::kNonStruct, ax::mojom::Role::kGenericContainer},
         {PdfTagType::kP, ax::mojom::Role::kParagraph},
         // All heading types map to kHeading role.
         {PdfTagType::kH, ax::mojom::Role::kHeading},
@@ -46,6 +47,8 @@ constexpr auto kAXRoleFromPdfTagTypeMap =
         {PdfTagType::kTD, ax::mojom::Role::kCell},
         {PdfTagType::kSpan, ax::mojom::Role::kStaticText},
         {PdfTagType::kLink, ax::mojom::Role::kLink},
+        {PdfTagType::kRuby, ax::mojom::Role::kRuby},
+        {PdfTagType::kRT, ax::mojom::Role::kRubyAnnotation},
         {PdfTagType::kFigure, ax::mojom::Role::kFigure},
         {PdfTagType::kFormula, ax::mojom::Role::kMath},
         {PdfTagType::kForm, ax::mojom::Role::kForm},
@@ -65,6 +68,7 @@ constexpr auto kStringToPdfTagTypeMap =
          {kPDFStructureTypeTOC, PdfTagType::kTOC},
          {kPDFStructureTypeTOCI, PdfTagType::kTOCI},
          {kPDFStructureTypeIndex, PdfTagType::kIndex},
+         {kPDFStructureTypeNonStruct, PdfTagType::kNonStruct},
          {kPDFStructureTypeParagraph, PdfTagType::kP},
          {kPDFStructureTypeHeading, PdfTagType::kH},
          {kPDFStructureTypeH1, PdfTagType::kH1},
@@ -86,6 +90,8 @@ constexpr auto kStringToPdfTagTypeMap =
          {kPDFStructureTypeTableCell, PdfTagType::kTD},
          {kPDFStructureTypeSpan, PdfTagType::kSpan},
          {kPDFStructureTypeLink, PdfTagType::kLink},
+         {kPDFStructureTypeRuby, PdfTagType::kRuby},
+         {kPDFStructureTypeRubyText, PdfTagType::kRT},
          {kPDFStructureTypeFigure, PdfTagType::kFigure},
          {kPDFStructureTypeFormula, PdfTagType::kFormula},
          {kPDFStructureTypeForm, PdfTagType::kForm}});
@@ -103,7 +109,7 @@ ax::mojom::Role AXRoleFromPdfTagType(PdfTagType tag_type) {
   return ax::mojom::Role::kGenericContainer;
 }
 
-const base::fixed_flat_map<std::string_view, PdfTagType, 35>&
+const base::fixed_flat_map<std::string_view, PdfTagType, 38>&
 GetPdfTagTypeMap() {
   return kStringToPdfTagTypeMap;
 }

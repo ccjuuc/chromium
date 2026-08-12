@@ -4,13 +4,13 @@
 
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate_chromeos.h"
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <set>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -25,7 +25,6 @@
 #include "components/account_manager_core/account_manager_facade.h"
 #include "components/account_manager_core/account_manager_facade_impl.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
-#include "components/account_manager_core/chromeos/account_manager_mojo_service.h"
 #include "components/account_manager_core/mock_account_manager_facade.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
 #include "components/signin/internal/identity_manager/mock_profile_oauth2_token_service_observer.h"
@@ -219,6 +218,9 @@ class ProfileOAuth2TokenServiceDelegateChromeOSTest : public testing::Test {
     AccountTrackerService::RegisterPrefs(pref_service_.registry());
     AccountManager::RegisterPrefs(pref_service_.registry());
 
+    account_tracker_service_ = std::make_unique<AccountTrackerService>(
+        &pref_service_, base::FilePath());
+
     client_ = std::make_unique<TestSigninClient>(&pref_service_);
 
     account_manager_ = ash::AccountManagerFactory::Get()->GetAccountManager(
@@ -234,11 +236,9 @@ class ProfileOAuth2TokenServiceDelegateChromeOSTest : public testing::Test {
 
     task_environment_.RunUntilIdle();
 
-    account_tracker_service_.Initialize(&pref_service_, base::FilePath());
-
-    account_info_ = CreateAccountInfoTestFixture(account_tracker_service_,
+    account_info_ = CreateAccountInfoTestFixture(*account_tracker_service_,
                                                  kGaiaId, kUserEmail);
-    account_tracker_service_.SeedAccountInfo(account_info_);
+    account_tracker_service_->SeedAccountInfo(account_info_);
     ResetProfileOAuth2TokenServiceDelegateChromeOS();
   }
 
@@ -246,7 +246,7 @@ class ProfileOAuth2TokenServiceDelegateChromeOSTest : public testing::Test {
     delegate_.reset();
     delegate_ =
         std::make_unique<signin::ProfileOAuth2TokenServiceDelegateChromeOS>(
-            client_.get(), &account_tracker_service_,
+            client_.get(), account_tracker_service_.get(),
             network::TestNetworkConnectionTracker::GetInstance(),
             account_manager_facade_.get(),
             /*is_regular_profile=*/true);
@@ -309,7 +309,7 @@ class ProfileOAuth2TokenServiceDelegateChromeOSTest : public testing::Test {
 
   base::ScopedTempDir profile_dir_;
   AccountInfo account_info_;
-  AccountTrackerService account_tracker_service_;
+  std::unique_ptr<AccountTrackerService> account_tracker_service_;
 
   raw_ptr<AccountManager> account_manager_ = nullptr;
   raw_ptr<account_manager::AccountManagerFacade> account_manager_facade_ =
@@ -330,7 +330,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 
   auto delegate =
       std::make_unique<signin::ProfileOAuth2TokenServiceDelegateChromeOS>(
-          client_.get(), &account_tracker_service_,
+          client_.get(), account_tracker_service_.get(),
           network::TestNetworkConnectionTracker::GetInstance(),
           account_manager_facade_.get(),
           /*is_regular_profile=*/false);
@@ -352,14 +352,14 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
       delegate_->load_credentials_state());
 
   EXPECT_FALSE(delegate_->RefreshTokenIsAvailable(account_info_.account_id));
-  EXPECT_FALSE(
-      base::Contains(delegate_->GetAccounts(), account_info_.account_id));
+  EXPECT_FALSE(std::ranges::contains(delegate_->GetAccounts(),
+                                     account_info_.account_id));
 
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail, kGaiaToken);
 
   EXPECT_TRUE(delegate_->RefreshTokenIsAvailable(account_info_.account_id));
-  EXPECT_TRUE(
-      base::Contains(delegate_->GetAccounts(), account_info_.account_id));
+  EXPECT_TRUE(std::ranges::contains(delegate_->GetAccounts(),
+                                    account_info_.account_id));
 }
 
 TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
@@ -369,23 +369,22 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
       delegate_->load_credentials_state());
 
   EXPECT_FALSE(delegate_->RefreshTokenIsAvailable(account_info_.account_id));
-  EXPECT_FALSE(
-      base::Contains(delegate_->GetAccounts(), account_info_.account_id));
+  EXPECT_FALSE(std::ranges::contains(delegate_->GetAccounts(),
+                                     account_info_.account_id));
 
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail,
                                     AccountManager::kInvalidToken);
 
   EXPECT_TRUE(delegate_->RefreshTokenIsAvailable(account_info_.account_id));
-  EXPECT_TRUE(
-      base::Contains(delegate_->GetAccounts(), account_info_.account_id));
+  EXPECT_TRUE(std::ranges::contains(delegate_->GetAccounts(),
+                                    account_info_.account_id));
 }
 
 TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        ObserversAreNotifiedOnAuthErrorChange) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail, kGaiaToken);
   TestOAuth2TokenServiceObserver observer(delegate_.get());
-  auto error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR);
+  auto error = GoogleServiceAuthError::FromServiceError(std::string());
 
   delegate_->UpdateAuthError(account_info_.account_id, error);
   EXPECT_EQ(error, delegate_->GetAuthError(account_info_.account_id));
@@ -431,8 +430,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        ObserversAreNotNotifiedIfErrorDidntChange) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail, kGaiaToken);
   TestOAuth2TokenServiceObserver observer(delegate_.get());
-  auto error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR);
+  auto error = GoogleServiceAuthError::FromServiceError(std::string());
 
   delegate_->UpdateAuthError(account_info_.account_id, error);
   EXPECT_EQ(1, observer.on_auth_error_changed_calls_);
@@ -447,13 +445,13 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
   TestOAuth2TokenServiceObserver observer(delegate_.get());
   delegate_->UpdateAuthError(
       account_info_.account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR));
+      GoogleServiceAuthError::FromServiceError(std::string()));
   EXPECT_EQ(1, observer.on_auth_error_changed_calls_);
 
   delegate_->UpdateAuthError(
       account_info_.account_id,
-      GoogleServiceAuthError(
-          GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   EXPECT_EQ(2, observer.on_auth_error_changed_calls_);
 }
 
@@ -475,8 +473,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
                                     kGaiaToken);
 
   // Deliberately add an error.
-  auto error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR);
+  auto error = GoogleServiceAuthError::FromServiceError(std::string());
   delegate_->UpdateAuthError(account_info_.account_id, error);
 
   // Update credentials. The delegate will check if see cached errors.
@@ -486,8 +483,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 
 TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        ObserversDoNotSeeCachedErrorsOnAccountRemoval) {
-  auto error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR);
+  auto error = GoogleServiceAuthError::FromServiceError(std::string());
   UpsertAccountAndWaitForCompletion(gaia_account_key(), account_info_.email,
                                     kGaiaToken);
   // Deliberately add an error.
@@ -598,8 +594,8 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 
   account_manager::AccountKey gaia_account_key2 =
       account_manager::AccountKey::FromGaiaId(GaiaId("random-gaia-id"));
-  account_tracker_service_.SeedAccountInfo(CreateAccountInfoTestFixture(
-      account_tracker_service_, GaiaId(gaia_account_key2.id()), kUserEmail2));
+  account_tracker_service_->SeedAccountInfo(CreateAccountInfoTestFixture(
+      *account_tracker_service_, GaiaId(gaia_account_key2.id()), kUserEmail2));
   UpsertAccountAndWaitForCompletion(gaia_account_key2, kUserEmail2,
                                     AccountManager::kInvalidToken);
 
@@ -684,8 +680,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        SigninErrorObserversAreNotifiedOnAuthErrorChange) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail, kGaiaToken);
-  auto error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::SERVICE_ERROR);
+  auto error = GoogleServiceAuthError::FromServiceError(std::string());
 
   delegate_->UpdateAuthError(account_info_.account_id, error);
 
@@ -695,8 +690,8 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        TransientErrorsAreNotShown) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), kUserEmail, kGaiaToken);
-  auto transient_error = GoogleServiceAuthError(
-      GoogleServiceAuthError::State::SERVICE_UNAVAILABLE);
+  auto transient_error =
+      GoogleServiceAuthError::FromServiceUnavailable(std::string());
   EXPECT_EQ(GoogleServiceAuthError::AuthErrorNone(),
             delegate_->GetAuthError(account_info_.account_id));
 
@@ -710,8 +705,8 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        BackOffIsTriggerredForTransientErrors) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), account_info_.email,
                                     kGaiaToken);
-  auto transient_error = GoogleServiceAuthError(
-      GoogleServiceAuthError::State::SERVICE_UNAVAILABLE);
+  auto transient_error =
+      GoogleServiceAuthError::FromServiceUnavailable(std::string());
   delegate_->UpdateAuthError(account_info_.account_id, transient_error);
   // Add a dummy success response. The actual network call has not been made
   // yet.
@@ -750,8 +745,8 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
        BackOffIsResetOnNetworkChange) {
   UpsertAccountAndWaitForCompletion(gaia_account_key(), account_info_.email,
                                     kGaiaToken);
-  auto transient_error = GoogleServiceAuthError(
-      GoogleServiceAuthError::State::SERVICE_UNAVAILABLE);
+  auto transient_error =
+      GoogleServiceAuthError::FromServiceUnavailable(std::string());
   delegate_->UpdateAuthError(account_info_.account_id, transient_error);
   // Add a dummy success response. The actual network call has not been made
   // yet.
@@ -777,7 +772,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSTest,
 
   // Notify of network change and ensure that request now runs.
   delegate_->OnConnectionChanged(
-      network::mojom::ConnectionType::CONNECTION_WIFI);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   fetcher = delegate_->CreateAccessTokenFetcher(
       account_info_.account_id, delegate_->GetURLLoaderFactory(),
       &access_token_consumer, kNoBindingChallenge);
@@ -837,7 +832,8 @@ class ProfileOAuth2TokenServiceDelegateChromeOSObserverTest
     AccountManager::RegisterPrefs(pref_service_.registry());
 
     client_ = std::make_unique<TestSigninClient>(ProfilePrefs());
-    account_tracker_service_.Initialize(ProfilePrefs(), base::FilePath());
+    account_tracker_service_ = std::make_unique<AccountTrackerService>(
+        ProfilePrefs(), base::FilePath());
   }
 
  protected:
@@ -850,7 +846,7 @@ class ProfileOAuth2TokenServiceDelegateChromeOSObserverTest
   base::ScopedTempDir profile_dir_;
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   std::unique_ptr<TestSigninClient> client_;
-  AccountTrackerService account_tracker_service_;
+  std::unique_ptr<AccountTrackerService> account_tracker_service_;
 };
 
 // If observers register themselves with |ProfileOAuth2TokenServiceDelegate|
@@ -860,12 +856,12 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSObserverTest,
        BatchChangeObserversAreNotifiedOncePerBatch) {
   // Setup
   AccountInfo account1 = CreateAccountInfoTestFixture(
-      account_tracker_service_, GaiaId("1"), "user1@example.com");
+      *account_tracker_service_, GaiaId("1"), "user1@example.com");
   AccountInfo account2 = CreateAccountInfoTestFixture(
-      account_tracker_service_, GaiaId("2"), "user2@example.com");
+      *account_tracker_service_, GaiaId("2"), "user2@example.com");
 
-  account_tracker_service_.SeedAccountInfo(account1);
-  account_tracker_service_.SeedAccountInfo(account2);
+  account_tracker_service_->SeedAccountInfo(account1);
+  account_tracker_service_->SeedAccountInfo(account2);
 
   {
     auto* account_manager =
@@ -899,7 +895,7 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSObserverTest,
   // Register callbacks before AccountManager has been fully initialized.
   auto delegate =
       std::make_unique<signin::ProfileOAuth2TokenServiceDelegateChromeOS>(
-          client_.get(), &account_tracker_service_,
+          client_.get(), account_tracker_service_.get(),
           network::TestNetworkConnectionTracker::GetInstance(),
           ash::AccountManagerFactory::Get()->GetAccountManagerFacade(
               ProfilePath().value()),
@@ -919,6 +915,6 @@ TEST_F(ProfileOAuth2TokenServiceDelegateChromeOSObserverTest,
   const std::vector<CoreAccountId>& first_batch =
       observer.batch_change_records_[0];
   EXPECT_EQ(2UL, first_batch.size());
-  EXPECT_TRUE(base::Contains(first_batch, account1.account_id));
-  EXPECT_TRUE(base::Contains(first_batch, account2.account_id));
+  EXPECT_TRUE(std::ranges::contains(first_batch, account1.account_id));
+  EXPECT_TRUE(std::ranges::contains(first_batch, account2.account_id));
 }

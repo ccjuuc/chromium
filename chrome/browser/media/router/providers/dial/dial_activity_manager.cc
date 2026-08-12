@@ -8,7 +8,6 @@
 #include <optional>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_split.h"
 #include "chrome/browser/media/router/discovery/dial/dial_app_discovery_service.h"
@@ -21,17 +20,11 @@ namespace media_router {
 
 namespace {
 
-// Returns the URL to use to launch |app_name| on |sink|.
-GURL GetAppURL(const MediaSinkInternal& sink, const std::string& app_name) {
-  // The DIAL spec (Section 5.4) implies that the app URL must not have a
-  // trailing slash.
-  return GURL(sink.dial_data().app_url.spec() + "/" + app_name);
-}
-
 // Returns the Application Instance URL from the POST response headers given by
 // |response_info|.
 GURL GetApplicationInstanceURL(
-    const network::mojom::URLResponseHead& response_info) {
+    const network::mojom::URLResponseHead& response_info,
+    const net::IPAddress& expected_ip) {
   if (!response_info.headers) {
     return GURL();
   }
@@ -51,6 +44,12 @@ GURL GetApplicationInstanceURL(
 
   GURL app_instance_url(*location_header);
   if (!app_instance_url.is_valid() || !app_instance_url.SchemeIs("http")) {
+    return GURL();
+  }
+
+  net::IPAddress host_address;
+  if (!net::ParseURLHostnameToAddress(app_instance_url.host(), &host_address) ||
+      host_address != expected_ip) {
     return GURL();
   }
 
@@ -106,8 +105,10 @@ std::unique_ptr<DialActivity> DialActivity::From(
     return nullptr;
   }
 
-  GURL app_launch_url = GetAppURL(sink, app_name);
-  DCHECK(app_launch_url.is_valid());
+  GURL app_launch_url = GetDialAppUrl(sink.dial_data().app_url, app_name);
+  if (!app_launch_url.is_valid()) {
+    return nullptr;
+  }
 
   const MediaSink::Id& sink_id = sink.sink().id();
   DialLaunchInfo launch_info(app_name, post_data, client_id, app_launch_url);
@@ -143,7 +144,7 @@ void DialActivityManager::AddActivity(const DialActivity& activity) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   MediaRoute::Id route_id = activity.route.media_route_id();
-  DCHECK(!base::Contains(records_, route_id));
+  DCHECK(!records_.contains(route_id));
   // TODO(crbug.com/40090609): Consider adding a timeout for transitioning
   // to kLaunched state to clean up unresponsive launches.
   records_.emplace(route_id,
@@ -302,7 +303,8 @@ void DialActivityManager::OnLaunchSuccess(const MediaRoute::Id& route_id,
       record->pending_launch_request->fetcher->GetResponseHead();
 
   DCHECK(response_info);
-  record->app_instance_url = GetApplicationInstanceURL(*response_info);
+  record->app_instance_url = GetApplicationInstanceURL(
+      *response_info, record->activity.sink.dial_data().ip_address);
   record->state = DialActivityManager::Record::State::kLaunched;
   std::move(record->pending_launch_request->callback).Run(true);
   record->pending_launch_request.reset();

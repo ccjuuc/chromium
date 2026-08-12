@@ -7,11 +7,9 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/autofill/payments/save_iban_ui.h"
-#include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/browser_resources.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -20,10 +18,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/layout/box_layout.h"
@@ -78,16 +73,42 @@ void SaveIbanBubbleView::Hide() {
 
 void SaveIbanBubbleView::AddedToWidget() {
   ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
-  auto image_view = std::make_unique<views::ImageView>(
-      bundle.GetThemedLottieImageNamed(IDR_AUTOFILL_SAVE_CARD_LOCAL_LOTTIE));
+  auto image_view =
+      std::make_unique<views::ImageView>(bundle.GetThemedLottieImageNamed(
+          base::FeatureList::IsEnabled(
+              features::kAutofillEnableWalletBrandingV2)
+              ? IDR_AUTOFILL_SAVE_IBAN_TO_WALLET_LOTTIE
+              : IDR_AUTOFILL_SAVE_IBAN_LOTTIE));
   image_view->GetViewAccessibility().SetIsInvisible(true);
 
   GetBubbleFrameView()->SetHeaderView(std::move(image_view));
 
   if (controller_->IsUploadSave()) {
-    GetBubbleFrameView()->SetTitleView(
-        std::make_unique<TitleWithIconAfterLabelView>(
-            GetWindowTitle(), TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+    if (base::FeatureList::IsEnabled(
+            features::kAutofillEnableWalletBrandingV2)) {
+      auto title_view = std::make_unique<views::Label>(
+          GetWindowTitle(), views::style::CONTEXT_DIALOG_TITLE);
+      title_view->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
+      title_view->SetMultiLine(true);
+      GetBubbleFrameView()->SetTitleView(std::move(title_view));
+    } else {
+      GetBubbleFrameView()->SetTitleView(
+          std::make_unique<TitleWithIconAfterLabelView>(
+              GetWindowTitle(),
+              base::FeatureList::IsEnabled(
+                  features::kAutofillEnableWalletBranding)
+                  ? TitleWithIconAfterLabelView::Icon::GOOGLE_WALLET
+                  : TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+    }
+  } else if (base::FeatureList::IsEnabled(
+                 features::kAutofillEnableWalletBranding)) {
+    // Failed server saves should not show a Google Wallet logo, as the card did
+    // not successfully save there.
+    auto title_view = std::make_unique<views::Label>(
+        GetWindowTitle(), views::style::CONTEXT_DIALOG_TITLE);
+    title_view->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
+    title_view->SetMultiLine(true);
+    GetBubbleFrameView()->SetTitleView(std::move(title_view));
   }
 }
 
@@ -309,9 +330,15 @@ std::unique_ptr<views::View> SaveIbanBubbleView::CreateLegalMessageView() {
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           DISTANCE_RELATED_CONTROL_VERTICAL_SMALL));
 
+  bool v2_branding_enabled =
+      base::FeatureList::IsEnabled(features::kAutofillEnableWalletBrandingV2);
   legal_message_view->AddChildView(::autofill::CreateLegalMessageView(
-      message_lines, base::UTF8ToUTF16(controller()->GetAccountInfo().email),
-      GetProfileAvatar(controller()->GetAccountInfo()),
+      message_lines,
+      v2_branding_enabled
+          ? /*user_email=*/std::u16string()
+          : base::UTF8ToUTF16(controller()->GetAccountInfo().email),
+      v2_branding_enabled ? /*user_avatar=*/ui::ImageModel()
+                          : GetProfileAvatar(controller()->GetAccountInfo()),
       base::BindRepeating(&SaveIbanBubbleView::LinkClicked,
                           base::Unretained(this))));
 

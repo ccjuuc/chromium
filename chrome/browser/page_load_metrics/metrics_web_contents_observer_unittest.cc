@@ -21,7 +21,7 @@
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "base/values.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "extensions/browser/extension_registrar.h"
@@ -30,7 +30,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/manifest_constants.h"
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 using content::NavigationSimulator;
 
@@ -74,17 +74,17 @@ class MetricsWebContentsObserverTest : public ChromeRenderViewHostTestHarness {
       embedder_interface_ = nullptr;
 };
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 TEST_F(MetricsWebContentsObserverTest,
        RecordFeatureUsageIgnoresChromeExtensionUpdates) {
   // Register our fake extension. The URL we access must be part of the
   // 'web_accessible_resources' for the network commit to work.
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set(extensions::manifest_keys::kVersion, "1.0.0.0")
                       .Set(extensions::manifest_keys::kName, "TestExtension")
                       .Set(extensions::manifest_keys::kManifestVersion, 2)
                       .Set("web_accessible_resources",
-                           base::Value::List().Append("main.html"));
+                           base::ListValue().Append("main.html"));
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder()
           .SetManifest(std::move(manifest))
@@ -114,6 +114,6 @@ TEST_F(MetricsWebContentsObserverTest,
   // The features come from an extension source, so shouldn't be counted.
   EXPECT_EQ(observed_features().size(), 0ul);
 }
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 }  // namespace page_load_metrics

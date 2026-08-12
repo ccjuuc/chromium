@@ -17,12 +17,14 @@
 
 Status ExecuteAlertCommand(const AlertCommand& alert_command,
                            Session* session,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            std::unique_ptr<base::Value>* value) {
   WebView* web_view = nullptr;
   Status status = session->GetTargetWindow(&web_view);
   if (status.IsError())
     return status;
+
+  std::unique_ptr<WebViewHolder> scoped_web_view_lock = web_view->GetHolder();
 
   status = web_view->HandleReceivedEvents();
   if (status.IsError())
@@ -38,7 +40,7 @@ Status ExecuteAlertCommand(const AlertCommand& alert_command,
 
 Status ExecuteGetAlert(Session* session,
                        WebView* web_view,
-                       const base::Value::Dict& params,
+                       const base::DictValue& params,
                        std::unique_ptr<base::Value>* value) {
   *value = std::make_unique<base::Value>(web_view->IsDialogOpen());
   return Status(kOk);
@@ -46,7 +48,7 @@ Status ExecuteGetAlert(Session* session,
 
 Status ExecuteGetAlertText(Session* session,
                            WebView* web_view,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            std::unique_ptr<base::Value>* value) {
   std::string message;
   Status status = web_view->GetDialogMessage(message);
@@ -58,7 +60,7 @@ Status ExecuteGetAlertText(Session* session,
 
 Status ExecuteSetAlertText(Session* session,
                            WebView* web_view,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            std::unique_ptr<base::Value>* value) {
   const std::string* text = params.FindString("text");
   if (!text)
@@ -86,7 +88,7 @@ Status ExecuteSetAlertText(Session* session,
 
 Status ExecuteAcceptAlert(Session* session,
                           WebView* web_view,
-                          const base::Value::Dict& params,
+                          const base::DictValue& params,
                           std::unique_ptr<base::Value>* value) {
   Status status = web_view->HandleDialog(true, session->prompt_text);
   session->prompt_text.reset();
@@ -95,7 +97,7 @@ Status ExecuteAcceptAlert(Session* session,
 
 Status ExecuteDismissAlert(Session* session,
                            WebView* web_view,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            std::unique_ptr<base::Value>* value) {
   Status status = web_view->HandleDialog(false, session->prompt_text);
   session->prompt_text.reset();

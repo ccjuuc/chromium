@@ -13,12 +13,12 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/version.h"
-#include "chrome/browser/web_applications/isolated_web_apps/key_distribution/iwa_key_distribution_histograms.h"
-#include "chrome/browser/web_applications/isolated_web_apps/key_distribution/iwa_key_distribution_info_provider.h"
-#include "chrome/browser/web_applications/isolated_web_apps/key_distribution/proto/key_distribution.pb.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/key_distribution/test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/component_updater/component_updater_paths.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_key_distribution_histograms.h"
+#include "components/webapps/isolated_web_apps/key_distribution/iwa_key_distribution_info_provider.h"
+#include "components/webapps/isolated_web_apps/key_distribution/proto/key_distribution.pb.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 
@@ -76,12 +76,10 @@ IN_PROC_BROWSER_TEST_F(
     IwaKeyDistributionComponentInstallBrowserTest,
     CallComponentReadyWhenRegistrationFindsExistingComponent) {
   base::ScopedAllowBlockingForTesting allow_blocking;
-  // Override the pre-install component directory and its alternative directory
-  // so that the component update will not find the pre-loaded component.
+  // Override the pre-install component directory so that the component update
+  // will not find the pre-loaded component.
   base::ScopedPathOverride preinstalled_dir_override(
       component_updater::DIR_COMPONENT_PREINSTALLED);
-  base::ScopedPathOverride preinstalled_alt_dir_override(
-      component_updater::DIR_COMPONENT_PREINSTALLED_ALT);
 
   EXPECT_THAT(test::InstallIwaKeyDistributionComponent(base::Version("2.0.0"),
                                                        CreateValidData()),

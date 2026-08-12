@@ -4,9 +4,15 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/update_bnpl_payment_instrument_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -36,11 +42,10 @@ std::string UpdateBnplPaymentInstrumentRequest::GetRequestContentType() {
 }
 
 std::string UpdateBnplPaymentInstrumentRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
+  base::DictValue request_dict;
+  base::DictValue context;
   context.Set("language_code", request_details_.app_locale);
-  context.Set("billable_service",
-              payments::kUploadPaymentMethodBillableServiceNumber);
+  context.Set("billable_service", kUploadPaymentMethodBillableServiceNumber);
   if (request_details_.billing_customer_number != 0) {
     context.Set("customer_context",
                 BuildCustomerContextDictionary(
@@ -48,14 +53,13 @@ std::string UpdateBnplPaymentInstrumentRequest::GetRequestContent() {
   }
   request_dict.Set("context", std::move(context));
 
-  base::Value::Dict chrome_user_context;
+  base::DictValue chrome_user_context;
   chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
   request_dict.Set("chrome_user_context", std::move(chrome_user_context));
 
-  request_dict.Set("instrument_id",
-                   base::NumberToString(request_details_.instrument_id));
+  request_dict.Set("instrument_id", request_details_.instrument_id);
 
-  base::Value::Dict buy_now_pay_later_info;
+  base::DictValue buy_now_pay_later_info;
   buy_now_pay_later_info.Set("type", static_cast<int>(request_details_.type));
   buy_now_pay_later_info.Set("issuer_id", request_details_.issuer_id);
   request_dict.Set("buy_now_pay_later_info", std::move(buy_now_pay_later_info));
@@ -68,7 +72,7 @@ std::string UpdateBnplPaymentInstrumentRequest::GetRequestContent() {
 }
 
 void UpdateBnplPaymentInstrumentRequest::ParseResponse(
-    const base::Value::Dict& response) {
+    const base::DictValue& response) {
   received_buy_now_pay_later_info_ =
       response.FindDict("buy_now_pay_later_info") != nullptr;
 }

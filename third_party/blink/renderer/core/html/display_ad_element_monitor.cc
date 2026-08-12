@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/layout/map_coordinates_flags.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
+#include "third_party/blink/renderer/core/probe/core_probes.h"
 
 namespace blink {
 
@@ -49,9 +50,12 @@ bool ShouldMonitorElement(Element* element) {
 
 }  // namespace
 
-DisplayAdElementMonitor::DisplayAdElementMonitor(Element* element)
-    : element_(element) {
+DisplayAdElementMonitor::DisplayAdElementMonitor(Element* element,
+                                                 AdProvenance ad_provenance)
+    : element_(element), ad_provenance_(std::move(ad_provenance)) {
   DCHECK(element_);
+  probe::UpdateAdRelatedState(*element, ad_provenance_);
+
   EnsureStarted();
 }
 
@@ -64,15 +68,18 @@ void DisplayAdElementMonitor::EnsureStarted() {
   element_->GetDocument().View()->RegisterForLifecycleNotifications(this);
 }
 
-void DisplayAdElementMonitor::OnElementRemovedOrUntagged() {
+void DisplayAdElementMonitor::OnElementRemoved() {
   if (!started_) {
     return;
   }
 
   if (element_->InActiveDocument() && !last_reported_rect_.IsEmpty()) {
     gfx::Rect empty_rect;
-    element_->GetDocument().GetFrame()->Client()->OnMainFrameAdRectangleChanged(
-        element_->GetDomNodeId(), empty_rect);
+    element_->GetDocument()
+        .GetFrame()
+        ->LocalFrameRoot()
+        .Client()
+        ->OnMainFrameAdRectangleChanged(element_->GetDomNodeId(), empty_rect);
     last_reported_rect_ = empty_rect;
   }
 
@@ -93,11 +100,14 @@ void DisplayAdElementMonitor::DidFinishLifecycleUpdate(
   LocalFrame* frame = element_->GetDocument().GetFrame();
   DCHECK(frame);
 
-  // We use this lifecycle update as an opportunity to poll the "Highlight ads"
-  // setting (toggled by DevTools). If it has changed, we trigger a repaint.
-  // This polling approach is less precise than relying on direct events, but
-  // it's more robust against potential race conditions or missed state updates.
-  bool should_highlight = frame->GetPage()->GetSettings().GetHighlightAds();
+  // We use this lifecycle update to check the "Highlight ads" settings, which
+  // are toggled via the internals page and DevTools. If the combined state
+  // changes, we trigger a repaint. While less precise than relying on direct
+  // toggling events, reading this local state provides better robustness
+  // against race conditions and missed updates.
+  bool should_highlight =
+      frame->GetPage()->GetSettings().GetHighlightAds() ||
+      frame->GetPage()->GetSettings().GetInspectorHighlightAds();
   if (should_highlight != should_highlight_) {
     should_highlight_ = should_highlight;
     if (auto* layout_object = element_->GetLayoutObject()) {
@@ -116,8 +126,8 @@ void DisplayAdElementMonitor::DidFinishLifecycleUpdate(
   gfx::Rect rect_to_report;
   if (LayoutObject* r = element_->GetLayoutObject()) {
     // Get the element's bounding box relative to the main frame's viewport.
-    gfx::Rect rect_in_viewport =
-        r->AbsoluteBoundingBoxRect(kTraverseDocumentBoundaries);
+    gfx::Rect rect_in_viewport = r->AbsoluteBoundingBoxRect(
+        {MapCoordinatesMode::kTraverseDocumentBoundaries});
 
     // Exclude ads that are invisible or too small (e.g. tracking pixels).
     if (rect_in_viewport.width() > 1 && rect_in_viewport.height() > 1) {
@@ -205,7 +215,7 @@ DisplayAdElementMonitor::CheckOverlayVisibility(
 
 void DisplayAdElementMonitor::Trace(Visitor* visitor) const {
   visitor->Trace(element_);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 }  // namespace blink

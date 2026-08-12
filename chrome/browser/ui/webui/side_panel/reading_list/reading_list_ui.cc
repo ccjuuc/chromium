@@ -15,6 +15,7 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/side_panel/reading_list/reading_list_page_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/ui/webui_browser/webui_browser.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -33,6 +34,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/views/style/platform_style.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
 ReadingListUI::ReadingListUI(content::WebUI* web_ui)
@@ -76,9 +78,16 @@ ReadingListUI::ReadingListUI(content::WebUI* web_ui)
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
   webui::SetupWebUIDataSource(source, kSidePanelReadingListResources,
                               IDR_SIDE_PANEL_READING_LIST_READING_LIST_HTML);
   source->AddResourcePaths(kSidePanelSharedResources);
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this, std::vector<ui::ElementIdentifier>{
+                kAddCurrentTabToReadingListElementId,
+                kSidePanelReadingListUnreadElementId,
+            });
 }
 
 ReadingListUI::~ReadingListUI() = default;
@@ -112,11 +121,9 @@ void ReadingListUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{
-          kAddCurrentTabToReadingListElementId,
-          kSidePanelReadingListUnreadElementId,
-      });
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 void ReadingListUI::SetActiveTabURL(const GURL& url) {

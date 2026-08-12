@@ -18,7 +18,7 @@ namespace google_apis::people {
 
 struct Person;
 
-// Requires `GaiaConstants::kContactsOAuth2Scope`.
+// Uses `OAuthConsumerId::kAshScannerKeyedService`.
 //
 // From the People API reference:
 //
@@ -57,7 +57,7 @@ class CreateContactRequest : public UrlFetchRequestBase {
 
   void OnDataParsed(std::optional<Person> person);
 
-  base::Value::Dict contact_payload_;
+  base::DictValue contact_payload_;
   Callback callback_;
 
   base::WeakPtrFactory<CreateContactRequest> weak_ptr_factory_{this};

@@ -5,13 +5,13 @@
 import 'chrome://history/history.js';
 
 import type {HistoryAppElement} from 'chrome://history/history.js';
-import {BrowserServiceImpl} from 'chrome://history/history.js';
+import {BrowserProxyImpl} from 'chrome://history/history.js';
 import {isMac} from 'chrome://resources/js/platform.js';
 import {assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {pressAndReleaseKeyOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
-import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {TestBrowserService} from './test_browser_service.js';
+import {TestHistoryBrowserProxy} from './test_browser_proxy.js';
 
 suite('<history-toolbar>', function() {
   let app: HistoryAppElement;
@@ -19,7 +19,7 @@ suite('<history-toolbar>', function() {
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     window.history.replaceState({}, '', '/');
-    BrowserServiceImpl.setInstance(new TestBrowserService());
+    BrowserProxyImpl.setInstance(new TestHistoryBrowserProxy());
 
     app = document.createElement('history-app');
     document.body.appendChild(app);
@@ -28,7 +28,7 @@ suite('<history-toolbar>', function() {
   test('search bar is focused on load in wide mode', async () => {
     app.$.toolbar.$.mainToolbar.narrow = false;
 
-    await flushTasks();
+    await microtasksFinished();
 
     // Ensure the search bar is focused on load.
     assertTrue(app.$.toolbar.$.mainToolbar.getSearchField().isSearchFocused());
@@ -37,7 +37,7 @@ suite('<history-toolbar>', function() {
   test('search bar is not focused on load in narrow mode', async () => {
     app.$.toolbar.$.mainToolbar.narrow = true;
 
-    await flushTasks();
+    await microtasksFinished();
     // Ensure the search bar is focused on load.
     assertFalse(app.$.toolbar.$.mainToolbar.getSearchField().isSearchFocused());
   });

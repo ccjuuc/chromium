@@ -24,17 +24,19 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/i18n/rtl.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "components/android_system_error_page/error_page_populator.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/cdm/renderer/key_system_support_update.h"
 #include "components/js_injection/renderer/js_communication.h"
+#include "components/metrics/call_stacks/call_stack_profile_builder.h"
+#include "components/metrics/public/mojom/call_stack_profile_collector.mojom.h"
 #include "components/network_hints/renderer/web_prescient_networking_impl.h"
 #include "components/page_load_metrics/renderer/metrics_render_frame_observer.h"
 #include "components/printing/renderer/print_render_frame_helper.h"
 #include "components/security_interstitials/content/renderer/security_interstitial_page_controller_delegate_impl.h"
+#include "components/visitedlink/common/visitedlink_common.h"
 #include "components/visitedlink/renderer/visitedlink_reader.h"
 #include "content/public/child/child_thread.h"
 #include "content/public/common/url_constants.h"
@@ -73,30 +75,17 @@ void AwContentRendererClient::RenderThreadStarted() {
   thread->AddObserver(aw_render_thread_observer_.get());
 
   visited_link_reader_ = std::make_unique<visitedlink::VisitedLinkReader>();
+  if (base::FeatureList::IsEnabled(features::kWebViewMigrateVisitedLinks)) {
+    visited_link_reader_->SetIsPseudoPartitioned(true);
+  }
 
   browser_interface_broker_ =
       blink::Platform::Current()->GetBrowserInterfaceBroker();
 
 #if BUILDFLAG(SUPPORTS_CODE_ORDERING)
-  // Default behavior.
   bool shouldPrefetchNativeLibrary =
       base::FeatureList::IsEnabled(features::kWebViewPrefetchNativeLibrary) &&
       features::kWebViewPrefetchFromRenderer.Get();
-
-  // The new API can override the default.
-  if (base::FeatureList::IsEnabled(
-          features::kWebViewConfigurableLibraryPrefetch)) {
-    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-    if (command_line->HasSwitch(switches::kWebViewRendererLibraryPrefetch)) {
-      std::string value = command_line->GetSwitchValueASCII(
-          switches::kWebViewRendererLibraryPrefetch);
-      if (value == switches::kWebViewRendererLibraryPrefetchEnabled) {
-        shouldPrefetchNativeLibrary = true;
-      } else if (value == switches::kWebViewRendererLibraryPrefetchDisabled) {
-        shouldPrefetchNativeLibrary = false;
-      }
-    }
-  }
 
   if (shouldPrefetchNativeLibrary) {
     base::ThreadPool::PostTask(
@@ -110,6 +99,15 @@ void AwContentRendererClient::RenderThreadStarted() {
   if (!spellcheck_)
     spellcheck_ = std::make_unique<SpellCheck>(this);
 #endif
+
+  // Set up the profile collector pipe that the renderer process uses to send
+  // profiles to the browser_process.
+  if (base::FeatureList::IsEnabled(features::kWebViewMemoryProfilingClient)) {
+    mojo::PendingRemote<metrics::mojom::CallStackProfileCollector> collector;
+    thread->BindHostReceiver(collector.InitWithNewPipeAndPassReceiver());
+    metrics::CallStackProfileBuilder::SetParentProfileCollectorForChildProcess(
+        std::move(collector));
+  }
 }
 
 void AwContentRendererClient::ExposeInterfacesToBrowser(
@@ -125,20 +123,9 @@ bool AwContentRendererClient::HandleNavigation(
     blink::WebFrame* frame,
     const blink::WebURLRequest& request,
     blink::WebNavigationType type,
-    blink::WebNavigationPolicy default_policy,
-    bool is_redirect) {
+    blink::WebNavigationPolicy default_policy) {
   // Only GETs can be overridden.
   if (!request.HttpMethod().Equals("GET"))
-    return false;
-
-  // Any navigation from loadUrl, and goBack/Forward are considered application-
-  // initiated and hence will not yield a shouldOverrideUrlLoading() callback.
-  // Webview classic does not consider reload application-initiated so we
-  // continue the same behavior.
-  bool application_initiated = type == blink::kWebNavigationTypeBackForward;
-
-  // Don't offer application-initiated navigations unless it's a redirect.
-  if (application_initiated && !is_redirect)
     return false;
 
   bool is_outermost_main_frame = frame->IsOutermostMainFrame();
@@ -174,9 +161,8 @@ bool AwContentRendererClient::HandleNavigation(
   mojo::AssociatedRemote<mojom::FrameHost> frame_host_remote;
   render_frame->GetRemoteAssociatedInterfaces()->GetInterface(
       &frame_host_remote);
-  frame_host_remote->ShouldOverrideUrlLoading(
-      url, has_user_gesture, is_redirect, is_outermost_main_frame,
-      &ignore_navigation);
+  frame_host_remote->ShouldOverrideUrlLoading(url, has_user_gesture,
+                                              &ignore_navigation);
 
   return ignore_navigation;
 }
@@ -261,6 +247,10 @@ void AwContentRendererClient::PrepareErrorPage(
 
 uint64_t AwContentRendererClient::VisitedLinkHash(
     std::string_view canonical_url) {
+  if (base::FeatureList::IsEnabled(features::kWebViewMigrateVisitedLinks)) {
+    return visitedlink::VisitedLinkCommon::ComputePseudoPartitionedFingerprint(
+        canonical_url);
+  }
   return visited_link_reader_->ComputeURLFingerprint(canonical_url);
 }
 
@@ -268,8 +258,10 @@ uint64_t AwContentRendererClient::PartitionedVisitedLinkFingerprint(
     std::string_view canonical_link_url,
     const net::SchemefulSite& top_level_site,
     const url::Origin& frame_origin) {
-  // Android WebView does not support partitioned :visited links, so we return
-  // the null fingerprint value for all queries.
+  if (base::FeatureList::IsEnabled(features::kWebViewMigrateVisitedLinks)) {
+    return visitedlink::VisitedLinkCommon::ComputePseudoPartitionedFingerprint(
+        canonical_link_url);
+  }
   return 0;
 }
 
@@ -277,9 +269,10 @@ bool AwContentRendererClient::IsLinkVisited(uint64_t link_hash) {
   return visited_link_reader_->IsVisited(link_hash);
 }
 
-// Android WebView does not support partitioned :visited links. Since per-origin
-// salts are only used in the partitioned hashtable, AndroidWebView clients do
-// not need to take any action if a per-origin salt is received.
+// Android WebView uses a static salt in :visited links. Since per-origin
+// salts are only used in non-WebView uses of the partitioned hashtable,
+// Android WebView clients do not need to take any action if a per-origin salt
+// is received.
 void AwContentRendererClient::AddOrUpdateVisitedLinkSalt(
     const url::Origin& origin,
     uint64_t salt) {}
@@ -288,7 +281,16 @@ void AwContentRendererClient::RunScriptsAtDocumentStart(
     content::RenderFrame* render_frame) {
   js_injection::JsCommunication* communication =
       js_injection::JsCommunication::Get(render_frame);
-  communication->RunScriptsAtDocumentStart();
+  communication->RunScripts(
+      js_injection::mojom::DocumentInjectionTime::kDocumentStart);
+}
+
+void AwContentRendererClient::RunScriptsAtDocumentEnd(
+    content::RenderFrame* render_frame) {
+  js_injection::JsCommunication* communication =
+      js_injection::JsCommunication::Get(render_frame);
+  communication->RunScripts(
+      js_injection::mojom::DocumentInjectionTime::kDocumentEnd);
 }
 
 std::unique_ptr<media::KeySystemSupportRegistration>

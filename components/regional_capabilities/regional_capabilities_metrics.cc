@@ -6,10 +6,11 @@
 
 #include "base/containers/flat_map.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/puma_histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "components/country_codes/country_codes.h"
+#include "components/metrics/private_metrics/puma_histogram_functions.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/regional_capabilities/program_settings.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
@@ -91,11 +92,15 @@ std::string ToString(SearchEngineChoiceScreenConditions condition) {
       return "AccountNotEligible";
     case SearchEngineChoiceScreenConditions::kIneligibleSurface:
       return "IneligibleSurface";
+    case SearchEngineChoiceScreenConditions::
+        kHasNonHighlightablePrepopulatedSearchEngine:
+      return "HasNonHighlightablePrepopulatedSearchEngine";
     case SearchEngineChoiceScreenConditions::kManaged:
       return "Managed";
-    case search_engines::SearchEngineChoiceScreenConditions::
-        kEligibleForRestore:
+    case SearchEngineChoiceScreenConditions::kEligibleForRestore:
       return "EligibleForRestore";
+    case SearchEngineChoiceScreenConditions::kUnavailableCurrentLocation:
+      return "UnavailableCurrentLocation";
   }
   NOTREACHED();
 }
@@ -123,8 +128,11 @@ bool IsEligible(SearchEngineChoiceScreenConditions condition) {
     case SearchEngineChoiceScreenConditions::kAlreadyBeingShown:
     case SearchEngineChoiceScreenConditions::kUsingPersistedGuestSessionChoice:
     case SearchEngineChoiceScreenConditions::kIncompatibleCurrentLocation:
+    case SearchEngineChoiceScreenConditions::kUnavailableCurrentLocation:
     case SearchEngineChoiceScreenConditions::kAccountNotEligible:
     case SearchEngineChoiceScreenConditions::kIneligibleSurface:
+    case SearchEngineChoiceScreenConditions::
+        kHasNonHighlightablePrepopulatedSearchEngine:
     case SearchEngineChoiceScreenConditions::kManaged:
       return false;
   }
@@ -165,30 +173,34 @@ void RecordAndroidProgramResolution(AndroidProgramResolution resolution) {
       "RegionalCapabilities.Debug.AndroidProgramResolution", resolution);
 }
 
-void RecordFunnelStage(FunnelStage stage) {
-  base::UmaHistogramEnumeration("RegionalCapabilities.FunnelStage.Reported",
-                                stage);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Reported",
-      stage);
+void RecordFunnelStage(
+    FunnelStage stage,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
+      "RegionalCapabilities.FunnelStage.Reported", stage);
+  metrics::private_metrics::PumaHistogramEnumeration(
+      metrics::private_metrics::PumaType::kRc,
+      "PUMA.RegionalCapabilities.FunnelStage.Reported", stage);
 }
 
 void RecordEligibilityFunnelStageDetails(
-    SearchEngineChoiceScreenConditions conditions) {
-  base::UmaHistogramEnumeration("RegionalCapabilities.FunnelStage.Eligibility",
-                                conditions);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Eligibility",
-      conditions);
+    SearchEngineChoiceScreenConditions conditions,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
+      "RegionalCapabilities.FunnelStage.Eligibility", conditions);
+  metrics::private_metrics::PumaHistogramEnumeration(
+      metrics::private_metrics::PumaType::kRc,
+      "PUMA.RegionalCapabilities.FunnelStage.Eligibility", conditions);
 }
 
 void RecordTriggeringFunnelStageDetails(
-    SearchEngineChoiceScreenConditions conditions) {
-  base::UmaHistogramEnumeration("RegionalCapabilities.FunnelStage.Triggering",
-                                conditions);
-  base::PumaHistogramEnumeration(
-      base::PumaType::kRc, "PUMA.RegionalCapabilities.FunnelStage.Triggering",
-      conditions);
+    SearchEngineChoiceScreenConditions conditions,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
+      "RegionalCapabilities.FunnelStage.Triggering", conditions);
+  metrics::private_metrics::PumaHistogramEnumeration(
+      metrics::private_metrics::PumaType::kRc,
+      "PUMA.RegionalCapabilities.FunnelStage.Triggering", conditions);
 }
 
 void RecordActiveRegionalProgram(
@@ -219,9 +231,26 @@ void RecordActiveRegionalProgram(
                                 merged_program);
 }
 
+void RecordActiveRegionalProgramPerProfile(
+    ActiveRegionalProgram program,
+    metrics::ProfileMetricsService& profile_metrics_service) {
+  profile_metrics_service.UmaHistogramEnumeration(
+      "RegionalCapabilities.ActiveRegionalProgram3", program);
+}
+
 void RecordProgramSpecificExclusion(ProgramSpecificExclusion exclusion) {
   base::UmaHistogramEnumeration(
       "RegionalCapabilities.Debug.ProgramSpecificExclusion", exclusion);
+}
+
+void RecordDebugTriggeringEligibility(
+    SearchEngineChoiceScreenConditions conditions,
+    bool is_first_run) {
+  auto* histogram_name =
+      is_first_run
+          ? "RegionalCapabilities.Debug.TriggeringEligibility.FirstRun"
+          : "RegionalCapabilities.Debug.TriggeringEligibility.NotFirstRun";
+  base::UmaHistogramEnumeration(histogram_name, conditions);
 }
 
 }  // namespace regional_capabilities

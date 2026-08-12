@@ -5,6 +5,7 @@
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
 
 #include "base/auto_reset.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -37,8 +38,6 @@ std::string SourceToString(SourceForRefreshTokenOperation source) {
       return "Unknown";
     case SourceForRefreshTokenOperation::kTokenService_LoadCredentials:
       return "TokenService::LoadCredentials";
-    case SourceForRefreshTokenOperation::kInlineLoginHandler_Signin:
-      return "InlineLoginHandler::Signin";
     case SourceForRefreshTokenOperation::kPrimaryAccountManager_ClearAccount:
       return "PrimaryAccountManager::ClearAccount";
     case SourceForRefreshTokenOperation::kUserMenu_SignOutAllAccounts:
@@ -217,6 +216,12 @@ void ProfileOAuth2TokenServiceDelegate::FireRefreshTokensLoaded() {
   // was the original state before LoadCredentials was called.
   update_refresh_token_source_ = SourceForRefreshTokenOperation::kUnknown;
 
+  if (load_credentials_timer_.has_value()) {
+    base::UmaHistogramMediumTimes("Signin.RefreshTokensLoaded.Duration",
+                                  load_credentials_timer_->Elapsed());
+    load_credentials_timer_.reset();
+  }
+
   for (auto& observer : observer_list_) {
     observer.OnRefreshTokensLoaded();
   }
@@ -278,6 +283,7 @@ void ProfileOAuth2TokenServiceDelegate::LoadCredentials(
     const CoreAccountId& primary_account_id) {
   DCHECK_EQ(SourceForRefreshTokenOperation::kUnknown,
             update_refresh_token_source_);
+  load_credentials_timer_ = base::ElapsedTimer();
   // AutoReset is not used here since the call to loading the credentials is
   // asynchronous. The source will be reset in `FireRefreshTokensLoaded()`.
   update_refresh_token_source_ =
@@ -319,10 +325,10 @@ void ProfileOAuth2TokenServiceDelegate::UpdateCredentials(
     const CoreAccountId& account_id,
     const std::string& refresh_token,
     SourceForRefreshTokenOperation source,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const signin::TokenBindingInfo& token_binding_info) {
   base::AutoReset<SourceForRefreshTokenOperation> auto_reset(
       &update_refresh_token_source_, source);
-  UpdateCredentialsInternal(account_id, refresh_token, wrapped_binding_key);
+  UpdateCredentialsInternal(account_id, refresh_token, token_binding_info);
 }
 
 bool ProfileOAuth2TokenServiceDelegate::FixAccountErrorIfPossible() {
@@ -414,6 +420,11 @@ void ProfileOAuth2TokenServiceDelegate::ResetBackOffEntry() {
                     "constructor.";
   }
   backoff_entry_->Reset();
+}
+
+FakeProfileOAuth2TokenServiceDelegate* ProfileOAuth2TokenServiceDelegate::
+    AsFakeProfileOAuth2TokenServiceDelegateForTesting() {
+  return nullptr;
 }
 
 void ProfileOAuth2TokenServiceDelegate::

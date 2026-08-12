@@ -10,6 +10,7 @@ import groovy.transform.SourceURI
 import org.gradle.api.DefaultTask
 import org.gradle.api.Project
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
 
@@ -30,6 +31,21 @@ import java.util.regex.Pattern
  * </pre>
  */
 class BuildConfigGenerator extends DefaultTask {
+
+    // Gradle 8+ deprecates accessing `Task.getProject()` at execution time (inside @TaskAction).
+    // Capturing `project` at configuration time (task construction) and overriding `getProject()`
+    // allows all `project.*` calls in this task to use the cached Project reference directly,
+    // avoiding DefaultTask's execution-time access checks and deprecation warnings. This is a hacky
+    // workaround, see
+    // https://docs.gradle.org/current/userguide/configuration_cache_requirements.html#config_cache:requirements:use_project_during_execution
+    // for what we "should" do.
+    private Project projectRef = project
+
+    @Override
+    @Internal
+    Project getProject() {
+        return projectRef ?: super.getProject()
+    }
 
     private static final String BUILD_GN_TOKEN_START = '# === Generated Code Start ==='
     private static final String BUILD_GN_TOKEN_END = '# === Generated Code End ==='
@@ -203,10 +219,21 @@ wnwen@chromium.org
     }
 
     static String makeReadme(ChromiumDepGraph.DependencyDescription dependency) {
-        List<String> licenseStrings = []
+        List<String> licenseNames = []
         for (ChromiumDepGraph.LicenseSpec license : dependency.licenses) {
+            String name = license.name
+            if (!licenseNames.isEmpty() && (name?.startsWith("Version ") || name?.startsWith("Inc."))) {
+                String last = licenseNames.remove(licenseNames.size() - 1)
+                licenseNames.add(last + ", " + name)
+            } else {
+                licenseNames.add(name)
+            }
+        }
+
+        List<String> licenseStrings = []
+        for (String licenseName : licenseNames) {
             // Replace license names with ones that are whitelisted, see third_party/PRESUBMIT.py
-            switch (license.name) {
+            switch (licenseName) {
                 case 'The Apache License, Version 2.0':
                 case 'The Apache Software License, Version 2.0':
                 case 'Apache 2.0':
@@ -224,8 +251,16 @@ wnwen@chromium.org
                 case 'GNU General Public License, version 2, with the Classpath Exception':
                     licenseStrings.add('GPL-2.0-with-classpath-exception')
                     break
+                case 'SIL Open Font License':
+                case 'SIL Open Font License, Version 1.1':
+                    licenseStrings.add('OFL-1.1')
+                    break
+                case 'Unicode':
+                case 'Unicode, Inc. License':
+                    licenseStrings.add('Unicode-DFS-2016')
+                    break
                 default:
-                    licenseStrings.add(license.name)
+                    licenseStrings.add(licenseName)
             }
         }
         String licenseString = String.join(', ', licenseStrings)
@@ -372,9 +407,16 @@ No modifications.
     }
 
     static String make3ppFetch(Template fetchTemplate, ChromiumDepGraph.DependencyDescription dependency) {
+        String fileExt = dependency.extension
+        if (dependency.id == 'org_mockito_mockito_android') {
+            // In mockito-andorid 5.23, the artifact went from a jar to an aar, but 5.23 is a breaking change
+            // that we don't support yet. When we update our version to 5.23 we can remove this special case.
+            fileExt = 'aar'
+        }
         Map bindMap = [
                 copyrightHeader: COPYRIGHT_HEADER,
                 dependency: dependency,
+                fileExt: fileExt,
         ]
         return fetchTemplate.make(bindMap).toString()
     }
@@ -585,7 +627,7 @@ No modifications.
             String gnTarget;
             if (aliasedLib) {
                 gnTarget = aliasedLib
-            } else if (depTargetName.startsWith('google_play_services_') || depTargetName.startsWith('google_firebase_')) {
+            } else if (isPlayServicesTarget(depTargetName)) {
                 gnTarget = '$google_play_services_package:' + depTargetName
             } else if (dep.buildGnPath != pathToBuildGradle) {
                 if (dep.isAndroidx) {
@@ -820,17 +862,6 @@ No modifications.
                     append('  # Reduce binary size. https:crbug.com/954584\n')
                     append('  ignore_proguard_configs = true\n')
                     append('  proguard_configs = ["material_design.flags"]\n')
-                    append('\n')
-                    append('  # Ensure ConstraintsLayout is not included by unused layouts:\n')
-                    append('  # https://crbug.com/1292510\n')
-                    // Keep in sync with the copy in fetch_all.py.
-                    append('  resource_exclusion_globs = [\n')
-                    append('      "res/layout*/*calendar*",\n')
-                    append('      "res/layout*/*chip_input*",\n')
-                    append('      "res/layout*/*clock*",\n')
-                    append('      "res/layout*/*picker*",\n')
-                    append('      "res/layout*/*time*",\n')
-                    append('  ]\n')
                 }
                 break
             case 'com_google_ar_core':
@@ -871,8 +902,8 @@ No modifications.
                 sb.append('  # Rules are unnecessary.\n')
                 sb.append('  ignore_proguard_configs = true\n')
                 sb.append('\n')
-                sb.append('  # Chrome does not use the APIs that require the native library.\n')
-                sb.append('  ignore_native_libraries = true\n')
+                sb.append('  # ChromeXR does use the APIs that require the native library.\n')
+                sb.append('  extract_native_libraries = true\n')
                 break
             case 'net_sf_kxml_kxml2':
                 sb.append('  # Target needs to exclude *xmlpull* files as already included in Android SDK.\n')

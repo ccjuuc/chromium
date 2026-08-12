@@ -5,14 +5,21 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
+#include "chrome/browser/safe_browsing/v5_get_hash_protocol_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/webshare/share_service_impl.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/safe_browsing/content/common/file_type_policies_test_util.h"
 #include "components/safe_browsing/core/browser/db/fake_database_manager.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test.h"
@@ -101,6 +108,31 @@ IN_PROC_BROWSER_TEST_F(ShareServiceBrowserTest, Text) {
                                      WebShareMethod::kShare, kRepeats);
 }
 
+IN_PROC_BROWSER_TEST_F(ShareServiceBrowserTest, InactiveWebContents) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/webshare/index.html")));
+  content::WebContents* contents_0 =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Create a split and verify there are now 2 tabs
+  chrome::NewSplitTab(browser(), split_tabs::SplitTabLayout::kSideBySide,
+                      split_tabs::SplitTabCreatedSource::kToolbarButton);
+  ASSERT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_TRUE(browser()->tab_strip_model()->GetTabAtIndex(0)->IsSplit());
+  EXPECT_TRUE(browser()->tab_strip_model()->GetTabAtIndex(1)->IsSplit());
+
+  // Tab 0 is now inactive.
+  tabs::TabInterface* tab_0 = tabs::TabInterface::GetFromContents(contents_0);
+  EXPECT_FALSE(tab_0->IsActivated());
+
+  // Initiate share from tab 0. Permission in denied because it's inactive.
+  std::string result =
+      content::EvalJs(contents_0, "share_text('hello')").ExtractString();
+  EXPECT_THAT(result, testing::HasSubstr("share failed"));
+  EXPECT_THAT(result, testing::HasSubstr("NotAllowedError"));
+}
+
 #if BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(ShareServiceBrowserTest, Fullscreen) {
   base::HistogramTester histogram_tester;
@@ -122,6 +154,39 @@ IN_PROC_BROWSER_TEST_F(ShareServiceBrowserTest, Fullscreen) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+namespace {
+
+class V5TestingDatabaseManager
+    : public safe_browsing::FakeSafeBrowsingDatabaseManager {
+ public:
+  V5TestingDatabaseManager()
+      : safe_browsing::FakeSafeBrowsingDatabaseManager(
+            content::GetUIThreadTaskRunner({})) {}
+
+  bool CheckDownloadUrl(const std::vector<GURL>& url_chain,
+                        Client* client) override {
+    if (client) {
+      v5_manager_from_client_ = client->GetV5GetHashProtocolManager();
+    }
+    return safe_browsing::FakeSafeBrowsingDatabaseManager::CheckDownloadUrl(
+        url_chain, client);
+  }
+
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+  v5_manager_from_client() const {
+    return v5_manager_from_client_;
+  }
+
+ protected:
+  ~V5TestingDatabaseManager() override = default;
+
+ private:
+  base::WeakPtr<safe_browsing::V5GetHashProtocolManager>
+      v5_manager_from_client_;
+};
+
+}  // namespace
+
 class SafeBrowsingShareServiceBrowserTest : public ShareServiceBrowserTest {
  public:
   SafeBrowsingShareServiceBrowserTest()
@@ -133,8 +198,7 @@ class SafeBrowsingShareServiceBrowserTest : public ShareServiceBrowserTest {
   void CreatedBrowserMainParts(
       content::BrowserMainParts* browser_main_parts) override {
     fake_safe_browsing_database_manager_ =
-        base::MakeRefCounted<safe_browsing::FakeSafeBrowsingDatabaseManager>(
-            content::GetUIThreadTaskRunner({}));
+        base::MakeRefCounted<V5TestingDatabaseManager>();
     safe_browsing_factory_->SetTestDatabaseManager(
         fake_safe_browsing_database_manager_.get());
     safe_browsing::SafeBrowsingService::RegisterFactory(
@@ -153,9 +217,12 @@ class SafeBrowsingShareServiceBrowserTest : public ShareServiceBrowserTest {
     safe_browsing::SafeBrowsingService::RegisterFactory(nullptr);
   }
 
+  V5TestingDatabaseManager* fake_safe_browsing_database_manager() {
+    return fake_safe_browsing_database_manager_.get();
+  }
+
  private:
-  scoped_refptr<safe_browsing::FakeSafeBrowsingDatabaseManager>
-      fake_safe_browsing_database_manager_;
+  scoped_refptr<V5TestingDatabaseManager> fake_safe_browsing_database_manager_;
   std::unique_ptr<safe_browsing::TestSafeBrowsingServiceFactory>
       safe_browsing_factory_;
 };
@@ -181,11 +248,24 @@ IN_PROC_BROWSER_TEST_F(SafeBrowsingShareServiceBrowserTest,
   content::WebContents* const contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
+  base::HistogramTester histogram_tester;
   EXPECT_EQ("share succeeded", content::EvalJs(contents, "share_pdf_file()"));
+  histogram_tester.ExpectBucketCount("WebShare.SafeBrowsingCheck.Result",
+                                     SafeBrowsingRequest::CheckResult::kSafe,
+                                     1);
+  auto* expected_v5_manager =
+      safe_browsing::V5GetHashProtocolManagerFactory::GetForBrowserContext(
+          GetProfile());
+  EXPECT_EQ(
+      fake_safe_browsing_database_manager()->v5_manager_from_client().get(),
+      expected_v5_manager);
 
   AddDangerousUrl(url);
   EXPECT_EQ("share failed: NotAllowedError: Permission denied",
             content::EvalJs(contents, "share_pdf_file()"));
+  histogram_tester.ExpectBucketCount("WebShare.SafeBrowsingCheck.Result",
+                                     SafeBrowsingRequest::CheckResult::kUnsafe,
+                                     1);
 }
 
 class ShareServicePrerenderBrowserTest : public ShareServiceBrowserTest {
@@ -216,7 +296,7 @@ IN_PROC_BROWSER_TEST_F(ShareServicePrerenderBrowserTest, Text) {
   // Start a prerender.
   const GURL kPrerenderUrl =
       embedded_test_server()->GetURL("/webshare/index.html");
-  const content::FrameTreeNodeId kPrerenderHostId =
+  const content::PrerenderHostId kPrerenderHostId =
       prerender_helper_.AddPrerender((kPrerenderUrl));
   ASSERT_EQ(prerender_helper_.GetHostForUrl(kPrerenderUrl), kPrerenderHostId);
 

@@ -39,39 +39,33 @@ inline constexpr char kDefaultListCountryOverride[] = "DEFAULT_EEA";
 // list of all EEA engines.
 inline constexpr char kEeaListCountryOverride[] = "EEA_ALL";
 
-#if BUILDFLAG(IS_ANDROID)
-// Ensure that the legacy search engine promos don't trigger on out of
-// scope device types.
-BASE_DECLARE_FEATURE(kRestrictLegacySearchEnginePromoOnFormFactors);
+#if BUILDFLAG(IS_IOS)
+// Enables the Taiyaki regional program on all surfaces, including post-FRE
+// surfaces. When disabled, Taiyaki is only enabled on the FRE.
+BASE_DECLARE_FEATURE(kTaiyakiAllSurfaces);
 
-// Obtains the active regional program directly from the device instead of
-// deriving it from the profile country. Kill switch, enabled by default.
-BASE_DECLARE_FEATURE(kResolveRegionalCapabilitiesFromDevice);
+// Feature flag for SearchEngineChoiceScreenSnackbar.
+BASE_DECLARE_FEATURE(kSearchEngineChoiceScreenSnackbar);
+
+// Returns true if SearchEngineChoiceScreenSnackbar is enabled.
+bool IsSearchEngineChoiceScreenSnackbarEnabled();
+#endif  // BUILDFLAG(IS_IOS)
+
+// Returns true if the dynamic profile country feature is enabled.
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+bool IsDynamicProfileCountryEnabled();
+#else
+// Always returns true on iOS and Android.
+consteval bool IsDynamicProfileCountryEnabled() {
+  return true;
+}
 #endif
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
-// Describes UI surfaces that can receive the choice screen.
-enum class RegionalCapabilitiesChoiceScreenSurface : int {
-  // The choice screen should always be shown.
-  kAll = 0,
-  // The choice screen should only be shown in FRE.
-  kInFreOnly = 1,
-};
-
-COMPONENT_EXPORT(REGIONAL_CAPABILITIES_SWITCHES)
-BASE_DECLARE_FEATURE(kTaiyaki);
-
-// For kTaiyaki enabled, defines which UI surfaces the choice screen can be
-// shown on. Only used if kTaiyaki is enabled.
-extern const base::FeatureParam<RegionalCapabilitiesChoiceScreenSurface>
-    kTaiyakiChoiceScreenSurface;
-
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 // Updates profile country preference stored in preferences
 // dynamically when the current country does not match the stored value.
 BASE_DECLARE_FEATURE(kDynamicProfileCountry);
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 
 // Whether support for showing the current default in the choice screen should
 // be enabled. When enabled, the associated program settings will be read to
@@ -85,6 +79,12 @@ BASE_DECLARE_FEATURE(kWaffleRestrictToAssociatedCountries);
 // For programs with restrict_to_associated_countries, whether an exact country
 // match is required (in addition to a region match).
 BASE_DECLARE_FEATURE(kStrictAssociatedCountriesCheck);
+
+// Guards the incremental rollout of the feature that enables migrating
+// prepopulated engines.
+// Note: Due to the migration changing the client's data locally persisted in
+// various places, we don't support rollbacks to the feature state.
+BASE_DECLARE_FEATURE(kPrepopulatedEnginesMigration);
 
 }  // namespace switches
 

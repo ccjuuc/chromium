@@ -15,7 +15,7 @@ struct SameSizeAsLineClampData {
   int lines_until_clamp;
   LayoutUnit clamp_bfc_offset;
   UntracedMember<const LayoutObject> clamp_after_layout_object;
-  int state;
+  uint8_t states[2];
 };
 
 ASSERT_SIZE(LineClampData, SameSizeAsLineClampData);
@@ -25,43 +25,92 @@ ASSERT_SIZE(LineClampData, SameSizeAsLineClampData);
 CORE_EXPORT LineClampData::LineClampData(const LineClampData& o)
     : state(o.state) {
   switch (state) {
-    case kDisabled:
+    case State::kDisabled:
       break;
-    case kClampByLines:
+    case State::kClampByLines:
+    case State::kCountLines:
       lines_until_clamp = o.lines_until_clamp;
       break;
-    case kClampAfterLayoutObject:
+    case State::kClampAfterLayoutObject:
       clamp_after_layout_object = o.clamp_after_layout_object;
       break;
-    case kMeasureLinesUntilBfcOffset:
-    case kClampByLinesWithBfcOffset:
+    case State::kMeasureLinesUntilBfcOffset:
+    case State::kClampByLinesWithBfcOffset:
       lines_until_clamp = o.lines_until_clamp;
       clamp_bfc_offset = o.clamp_bfc_offset;
       break;
   }
+  block_ellipsis = o.block_ellipsis;
 }
 
 CORE_EXPORT LineClampData& LineClampData::operator=(const LineClampData& o) {
-  if (state == kClampAfterLayoutObject && o.state != kClampAfterLayoutObject) {
+  if (state == State::kClampAfterLayoutObject &&
+      o.state != State::kClampAfterLayoutObject) {
     clamp_after_layout_object.Clear();
   }
   state = o.state;
   switch (state) {
-    case kDisabled:
+    case State::kDisabled:
       break;
-    case kClampByLines:
+    case State::kClampByLines:
+    case State::kCountLines:
       lines_until_clamp = o.lines_until_clamp;
       break;
-    case kClampAfterLayoutObject:
+    case State::kClampAfterLayoutObject:
       clamp_after_layout_object = o.clamp_after_layout_object;
       break;
-    case kMeasureLinesUntilBfcOffset:
-    case kClampByLinesWithBfcOffset:
+    case State::kMeasureLinesUntilBfcOffset:
+    case State::kClampByLinesWithBfcOffset:
       lines_until_clamp = o.lines_until_clamp;
       clamp_bfc_offset = o.clamp_bfc_offset;
       break;
   }
+  block_ellipsis = o.block_ellipsis;
   return *this;
+}
+
+LayoutUnit LineClampAncestorChain::InnerFinalLineClampBlockSize(
+    LayoutUnit bfc_offset_override,
+    LayoutUnit inflow_block_offset,
+    MarginStrut margin_strut) const {
+  LayoutUnit block_size = inflow_block_offset;
+  if (end_border_padding_ || !parent_) {
+    block_size += margin_strut.Sum() + end_border_padding_;
+    margin_strut = MarginStrut();
+  }
+
+  if (parent_) {
+    // TODO(abotella@igalia.com): handle fills viewport quirk
+    // TODO(abotella@igalia.com): handle aspect-ratio
+
+    // Handling {min,max}-height
+    LayoutUnit clamped_size =
+        block_min_max_sizes_.ClampSizeToMinAndMax(block_size);
+    if (clamped_size != block_size ||
+        block_min_max_sizes_.max_size == block_size) {
+      margin_strut = MarginStrut();
+    }
+
+    margin_strut.Append(end_margin_, /* is_quirky */ false);
+
+    // TODO(abotella@igalia.com): is this enough to correctly resolve the BFC
+    // offset of all ancestors, even when pushed by floats?
+    LayoutUnit bfc_offset = bfc_offset_.value_or(bfc_offset_override);
+    LayoutUnit parent_bfc_offset =
+        parent_->bfc_offset_.value_or(bfc_offset_override);
+    return parent_->InnerFinalLineClampBlockSize(
+        bfc_offset, bfc_offset + clamped_size - parent_bfc_offset,
+        margin_strut);
+  } else {
+    DCHECK(bfc_offset_.has_value());
+    DCHECK_EQ(*bfc_offset_, LayoutUnit());
+    DCHECK(margin_strut.IsEmpty());
+    return block_size;
+  }
+}
+
+void LineClampAncestorChain::Trace(Visitor* visitor) const {
+  visitor->Trace(parent_);
 }
 
 }  // namespace blink

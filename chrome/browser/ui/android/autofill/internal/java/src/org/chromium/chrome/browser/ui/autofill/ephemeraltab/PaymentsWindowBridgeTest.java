@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.ui.autofill.ephemeraltab;
 
 import static org.junit.Assert.assertNotNull;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -80,5 +81,30 @@ public class PaymentsWindowBridgeTest {
         mPaymentsWindowBridge.onWebContentsDestroyed();
 
         verify(mNativeMock).onWebContentsDestroyed(AUTOFILL_PAYMENTS_WINDOW_BRIDGE_NATIVE_POINTER);
+    }
+
+    @Test
+    public void testOnUserDeniedTabOpening() {
+        PaymentsWindowBridgeJni.setInstanceForTesting(mNativeMock);
+
+        mPaymentsWindowBridge.onUserDeniedTabOpening();
+
+        verify(mNativeMock).onUserDeniedTabOpening(AUTOFILL_PAYMENTS_WINDOW_BRIDGE_NATIVE_POINTER);
+    }
+
+    @Test
+    public void testNativeMethodsNotCalledAfterNativeDestroyed() {
+        PaymentsWindowBridgeJni.setInstanceForTesting(mNativeMock);
+
+        // Simulate native object destruction.
+        mPaymentsWindowBridge.onNativeDestroyed();
+
+        // Native method calls.
+        mPaymentsWindowBridge.onNavigationFinished(ISSUER_URL);
+        mPaymentsWindowBridge.onWebContentsObservationStarted(mMerchantWebContents);
+        mPaymentsWindowBridge.onWebContentsDestroyed();
+        mPaymentsWindowBridge.onUserDeniedTabOpening();
+
+        verifyNoInteractions(mNativeMock);
     }
 }

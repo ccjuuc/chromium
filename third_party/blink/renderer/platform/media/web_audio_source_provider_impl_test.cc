@@ -6,12 +6,14 @@
 
 #include <stddef.h>
 
+#include <ranges>
+
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/types/zip.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_glitch_info.h"
 #include "media/base/audio_parameters.h"
@@ -36,16 +38,13 @@ MATCHER(IsMuted, std::string(negation ? "isn't" : "is") + " muted") {
 const float kTestVolume = 0.25;
 const int kTestSampleRate = 48000;
 
-// TODO(crbug.com/420150619): Re-enable this and make it a global feature.
-constexpr bool kDelayStopForMediaElementSourceNode = false;
-
-std::vector<float*> GetRawChannelPointers(media::AudioBus* bus) {
-  std::vector<float*> channel_pointers;
-  channel_pointers.reserve(static_cast<size_t>(bus->channels()));
+std::vector<base::span<float>> GetChannelSpans(media::AudioBus* bus) {
+  std::vector<base::span<float>> channel_spans;
+  channel_spans.reserve(static_cast<size_t>(bus->channels()));
   for (auto channel : bus->AllChannels()) {
-    channel_pointers.push_back(channel.data());
+    channel_spans.push_back(channel);
   }
-  return channel_pointers;
+  return channel_spans;
 }
 
 }  // namespace
@@ -96,8 +95,7 @@ class WebAudioSourceProviderImplTest : public testing::Test,
     testing::InSequence s;
 
     if (client) {
-      EXPECT_CALL(*mock_sink_, Stop())
-          .Times(kDelayStopForMediaElementSourceNode ? 0 : 1);
+      EXPECT_CALL(*mock_sink_, Stop());
       if (expect_format) {
         EXPECT_CALL(*this,
                     SetFormat(params_.channels(), params_.sample_rate()));
@@ -114,7 +112,7 @@ class WebAudioSourceProviderImplTest : public testing::Test,
     EXPECT_EQ(bus1->channels(), bus2->channels());
     EXPECT_EQ(bus1->frames(), bus2->frames());
     for (auto [ch_1, ch_2] :
-         base::zip(bus1->AllChannels(), bus2->AllChannels())) {
+         std::views::zip(bus1->AllChannels(), bus2->AllChannels())) {
       if (ch_1 != ch_2) {
         return false;
       }
@@ -184,7 +182,7 @@ TEST_F(WebAudioSourceProviderImplTest, SinkMethods) {
 
   // Removing the client should cause WASP to revert to the underlying sink.
   SetClient(nullptr);
-  CallAllSinkMethodsAndVerify(kDelayStopForMediaElementSourceNode);
+  CallAllSinkMethodsAndVerify(false);
 }
 
 // Test tainting effects on Render().
@@ -217,7 +215,7 @@ TEST_F(WebAudioSourceProviderImplTest, ProvideInput) {
   auto bus2 = media::AudioBus::Create(params_);
 
   // Point the std::vector into memory owned by |bus1|.
-  std::vector<float*> audio_data = GetRawChannelPointers(bus1.get());
+  std::vector<base::span<float>> audio_data = GetChannelSpans(bus1.get());
 
   // Verify provideInput() works before Initialize() and returns silence.
   bus1->channel(0)[0] = 1;
@@ -301,7 +299,7 @@ TEST_F(WebAudioSourceProviderImplTest, ProvideInputTainted) {
   bus->Zero();
 
   // Point the std::vector into memory owned by |bus|.
-  std::vector<float*> audio_data = GetRawChannelPointers(bus.get());
+  std::vector<base::span<float>> audio_data = GetChannelSpans(bus.get());
 
   wasp_impl_->Initialize(params_, &fake_callback_);
   SetClient(this);
@@ -397,7 +395,7 @@ TEST_F(WebAudioSourceProviderImplTest, MultipleInitializeWithSetClient) {
   auto bus2 = media::AudioBus::Create(stream_params);
 
   // Point the std::vector into memory owned by |bus1|.
-  std::vector<float*> audio_data = GetRawChannelPointers(bus1.get());
+  std::vector<base::span<float>> audio_data = GetChannelSpans(bus1.get());
 
   // Verify provideInput() doesn't return silence and doesn't crash.
   bus1->channel(0)[0] = 1;
@@ -431,7 +429,7 @@ TEST_F(WebAudioSourceProviderImplTest, ProvideInputDifferentChannelCount) {
   auto bus = media::AudioBus::Create(mono_params);
 
   // Point the std::vector into memory owned by |bus|.
-  std::vector<float*> audio_data = GetRawChannelPointers(bus.get());
+  std::vector<base::span<float>> audio_data = GetChannelSpans(bus.get());
 
   auto zero_bus = media::AudioBus::Create(mono_params);
   zero_bus->Zero();
@@ -467,32 +465,4 @@ TEST_F(WebAudioSourceProviderImplTest, SetClientCallback) {
   base::RunLoop().RunUntilIdle();
   ::testing::Mock::VerifyAndClearExpectations(this);
 }
-
-TEST_F(WebAudioSourceProviderImplTest, ConnectToDestinationReadyCallStop) {
-  wasp_impl_ = base::MakeRefCounted<WebAudioSourceProviderImpl>(
-      mock_sink_, &media_log_,
-      blink::BindOnce(&WebAudioSourceProviderImplTest::OnClientSet,
-                      weak_factory_.GetWeakPtr()));
-
-  // ConnectToDestinationReady call without client does not call stop().
-  EXPECT_CALL(*mock_sink_, Stop()).Times(0);
-  wasp_impl_->ConnectToDestinationReady();
-
-  EXPECT_CALL(*this, OnClientSet()).Times(1);
-  SetClient(this, /*expect_format=*/false);
-
-  // ConnectToDestinationReady after client calls sink stop()
-  EXPECT_CALL(*mock_sink_, Stop())
-      .Times(kDelayStopForMediaElementSourceNode ? 1 : 0);
-  wasp_impl_->ConnectToDestinationReady();
-  base::RunLoop().RunUntilIdle();
-
-  // ConnectToDestinationReady again after Stop() does not call stop() again.
-  EXPECT_CALL(*mock_sink_, Stop()).Times(0);
-  wasp_impl_->ConnectToDestinationReady();
-  base::RunLoop().RunUntilIdle();
-
-  ::testing::Mock::VerifyAndClearExpectations(this);
-}
-
 }  // namespace blink

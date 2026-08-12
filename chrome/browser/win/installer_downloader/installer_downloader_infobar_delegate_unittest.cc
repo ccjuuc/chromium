@@ -10,16 +10,13 @@
 
 #include "base/functional/callback.h"
 #include "base/test/mock_callback.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
 #include "chrome/browser/ui/views/infobars/infobar_view.h"
-#include "chrome/browser/win/installer_downloader/installer_downloader_feature.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_delegate.h"
-#include "components/vector_icons/vector_icons.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
 #include "ui/events/event_constants.h"
@@ -48,9 +45,6 @@ class InstallerDownloaderInfoBarDelegateTest
  protected:
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
-    feature_list_.InitAndEnableFeatureWithParameters(
-        kInstallerDownloader,
-        {{kLearnMoreUrl.name, "https://example.com/learn_more"}});
     infobars::ContentInfoBarManager::CreateForWebContents(web_contents());
 
     widget_ = std::make_unique<views::Widget>();
@@ -82,7 +76,6 @@ class InstallerDownloaderInfoBarDelegateTest
 
   StrictMock<base::MockCallback<base::OnceClosure>> mock_accept_cb_;
   StrictMock<base::MockCallback<base::OnceClosure>> mock_cancel_cb_;
-  base::test::ScopedFeatureList feature_list_;
 
  private:
   gfx::AnimationTestApi::RenderModeResetter disable_animations_;
@@ -184,17 +177,8 @@ TEST_F(InstallerDownloaderInfoBarDelegateTest,
       static_cast<ConfirmInfoBar*>(added_infobar_ptr);
   ASSERT_TRUE(confirm_infobar_view);
 
-  views::View* dismiss_button_view = nullptr;
-  for (views::View* child : confirm_infobar_view->children()) {
-    if (child->GetProperty(views::kElementIdentifierKey) ==
-        InfoBarView::kDismissButtonElementId) {
-      dismiss_button_view = child;
-      break;
-    }
-  }
-  ASSERT_TRUE(dismiss_button_view);
-
-  views::Button* dismiss_button = views::Button::AsButton(dismiss_button_view);
+  views::Button* dismiss_button =
+      views::Button::AsButton(confirm_infobar_view->close_button());
   ASSERT_TRUE(dismiss_button);
   ASSERT_TRUE(dismiss_button->GetVisible());
   ASSERT_TRUE(dismiss_button->GetEnabled());

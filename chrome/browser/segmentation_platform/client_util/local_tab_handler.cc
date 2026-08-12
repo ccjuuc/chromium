@@ -18,11 +18,11 @@
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "components/sync_sessions/synced_tab_delegate.h"
 
-#else  // BUILDFLAG(IS_ANDROID)
+#else  // !BUILDFLAG(IS_ANDROID)
 
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"

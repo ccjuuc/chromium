@@ -48,7 +48,7 @@ const char kHttpOkResponseHeader[] =
     "Content-Type: text/html; charset=utf-8\r\n"
     "\r\n";
 
-const base::ByteCount kMaxHeavyAdNetworkSize =
+const base::ByteSize kMaxHeavyAdNetworkSize =
     heavy_ad_thresholds::kMaxNetworkBytes +
     AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider::
         kMaxNetworkThresholdNoiseBytes;
@@ -91,7 +91,7 @@ void CreateAndWaitForIframeAtRect(content::WebContents* web_contents,
   // The intersections returned by the renderer are scaled to the device's
   // scale factor.
   gfx::Rect scaled_rect = ScaleRectByDeviceScaleFactor(rect, web_contents);
-  waiter->AddMainFrameIntersectionExpectation(scaled_rect);
+  waiter->AddMainFrameRectExpectation(scaled_rect);
 }
 
 // Navigate to |url| in |web_contents| and wait until we see the first
@@ -158,7 +158,7 @@ void TriggerAndDetectOverlayPopupAd(content::WebContents* web_contents) {
 }
 
 void LoadLargeResource(net::test_server::ControllableHttpResponse* response,
-                       base::ByteCount bytes) {
+                       base::ByteSize bytes) {
   response->WaitForRequest();
   response->Send(kHttpOkResponseHeader);
   response->Send(std::string(bytes.InBytes(), ' '));

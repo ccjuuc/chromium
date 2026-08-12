@@ -4,23 +4,31 @@
 
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 
-#include "base/check.h"
+#include <stdint.h>
+
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
-#include "base/observer_list.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/uuid.h"
+#include "base/time/time.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
-#include "components/autofill/core/browser/geo/autofill_country.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend_impl.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/webdata/common/web_data_service_consumer.h"
 #include "components/webdata/common/web_database_backend.h"
 #include "components/webdata/common/web_database_service.h"
 
@@ -50,6 +58,8 @@ void AutofillWebDataService::AddFormFields(
                                 autofill_backend_, fields));
 }
 
+// TODO(crbug.com/507327886): Remove after kAutofillLabelSensitiveAutocomplete
+// launch.
 WebDataServiceBase::Handle AutofillWebDataService::GetFormValuesForElementName(
     const std::u16string& name,
     const std::u16string& prefix,
@@ -59,6 +69,22 @@ WebDataServiceBase::Handle AutofillWebDataService::GetFormValuesForElementName(
       FROM_HERE,
       base::BindOnce(&AutofillWebDataBackendImpl::GetFormValuesForElementName,
                      autofill_backend_, name, prefix, limit),
+      std::move(consumer));
+}
+
+WebDataServiceBase::Handle
+AutofillWebDataService::GetFormValuesForElementNameAndLabel(
+    std::u16string_view name,
+    std::u16string_view label,
+    std::u16string_view prefix,
+    int limit,
+    WebDataServiceRequestCallback consumer) {
+  return wdbs_->ScheduleDBTaskWithResult(
+      FROM_HERE,
+      base::BindOnce(
+          &AutofillWebDataBackendImpl::GetFormValuesForElementNameAndLabel,
+          autofill_backend_, std::u16string(name), std::u16string(label),
+          std::u16string(prefix), limit),
       std::move(consumer));
 }
 
@@ -72,13 +98,16 @@ void AutofillWebDataService::RemoveFormElementsAddedBetween(
           autofill_backend_, delete_begin, delete_end));
 }
 
-void AutofillWebDataService::RemoveFormValueForElementName(
-    const std::u16string& name,
-    const std::u16string& value) {
+void AutofillWebDataService::RemoveFormValueForElementNameAndLabel(
+    std::u16string_view name,
+    std::u16string_view label,
+    std::u16string_view value) {
   wdbs_->ScheduleDBTask(
       FROM_HERE,
-      base::BindOnce(&AutofillWebDataBackendImpl::RemoveFormValueForElementName,
-                     autofill_backend_, name, value));
+      base::BindOnce(
+          &AutofillWebDataBackendImpl::RemoveFormValueForElementNameAndLabel,
+          autofill_backend_, std::u16string(name), std::u16string(label),
+          std::u16string(value)));
 }
 
 void AutofillWebDataService::AddAutofillProfile(
@@ -175,6 +204,14 @@ WebDataServiceBase::Handle AutofillWebDataService::GetLoyaltyCards(
       std::move(consumer));
 }
 
+void AutofillWebDataService::UpdateValuableMetadata(
+    const ValuableMetadata& metadata) {
+  wdbs_->ScheduleDBTask(
+      FROM_HERE,
+      base::BindOnce(&AutofillWebDataBackendImpl::UpdateValuableMetadata,
+                     autofill_backend_, metadata));
+}
+
 WebDataServiceBase::Handle
 AutofillWebDataService::GetCountOfValuesContainedBetween(
     base::Time begin,
@@ -188,6 +225,9 @@ AutofillWebDataService::GetCountOfValuesContainedBetween(
       std::move(consumer));
 }
 
+// TODO(crbug.com/507327886): Remove after kAutofillLabelSensitiveAutocomplete
+// launch. There is no update action for label-sensitive autocomplete. Update
+// was used only by sync. Sync for label-sensitive autocomplete is turned off.
 void AutofillWebDataService::UpdateAutocompleteEntries(
     const std::vector<AutocompleteEntry>& autocomplete_entries) {
   wdbs_->ScheduleDBTask(
@@ -295,13 +335,6 @@ void AutofillWebDataService::ClearLocalCvcs() {
   wdbs_->ScheduleDBTask(
       FROM_HERE, base::BindOnce(&AutofillWebDataBackendImpl::ClearLocalCvcs,
                                 autofill_backend_));
-}
-
-void AutofillWebDataService::ClearLocalCvcsUpToMay2025() {
-  wdbs_->ScheduleDBTask(
-      FROM_HERE,
-      base::BindOnce(&AutofillWebDataBackendImpl::ClearLocalCvcsUpToMay2025,
-                     autofill_backend_));
 }
 
 #if BUILDFLAG(IS_IOS)

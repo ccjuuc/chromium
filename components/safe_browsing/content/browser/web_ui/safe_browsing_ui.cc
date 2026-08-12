@@ -34,7 +34,7 @@ SafeBrowsingUI::SafeBrowsingUI(
 
   // Add required resources.
   html_source->AddResourcePaths(kSafeBrowsingResources);
-  html_source->AddResourcePath("", IDR_SAFE_BROWSING_SAFE_BROWSING_HTML);
+  html_source->SetDefaultResource(IDR_SAFE_BROWSING_SAFE_BROWSING_HTML);
 
   // Static types
   html_source->OverrideContentSecurityPolicy(
@@ -44,11 +44,11 @@ SafeBrowsingUI::SafeBrowsingUI(
 
 SafeBrowsingUI::~SafeBrowsingUI() = default;
 
-CrSBLogMessage::CrSBLogMessage() = default;
+CrSBContentLogMessage::CrSBContentLogMessage() = default;
 
-CrSBLogMessage::~CrSBLogMessage() {
-  WebUIContentInfoSingleton::GetInstance()->LogMessage(stream_.str());
-  DLOG(WARNING) << stream_.str();
+CrSBContentLogMessage::~CrSBContentLogMessage() {
+  CrSBLogMessage::LogStreamToInfoSingleton(
+      WebUIContentInfoSingleton::GetInstance());
 }
 
 }  // namespace safe_browsing

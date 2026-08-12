@@ -10,7 +10,7 @@ import {ScreenshotBitmapBrowserProxyImpl} from 'chrome-untrusted://lens-overlay/
 import type {SelectionOverlayElement} from 'chrome-untrusted://lens-overlay/selection_overlay.js';
 import {loadTimeData} from 'chrome-untrusted://resources/js/load_time_data.js';
 import {assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
-import {flushTasks, waitAfterNextRender} from 'chrome-untrusted://webui-test/polymer_test_util.js';
+import {waitAfterNextRender} from 'chrome-untrusted://webui-test/polymer_test_util.js';
 import {eventToPromise} from 'chrome-untrusted://webui-test/test_util.js';
 
 import {fakeScreenshotBitmap, waitForScreenshotRendered} from '../utils/image_utils.js';
@@ -75,54 +75,33 @@ suite('ReshowOverlay', function() {
   });
 
   test(
-      'verify screenshotDataReceived with side panel open disables context menu and text highlights',
-      async () => {
-        assertTrue(
-            selectionOverlayElement.hasAttribute('enable-region-context-menu'));
-        assertTrue(selectionOverlayElement.$.textLayer.hasAttribute(
-            'enable-highlights'));
-
-        // ScreenshotBitmapBrowserProxy assumes only one screenshot will be
-        // sent. We need to reset it to allow a new screenshot to be fetched.
-        ScreenshotBitmapBrowserProxyImpl.setInstance(
-            new ScreenshotBitmapBrowserProxyImpl());
-        selectionOverlayElement.fetchNewScreenshotForTesting();
-
-        // Send a fake screenshot of size 100x100 with side panel open.
-        testBrowserProxy.page.screenshotDataReceived(
-            fakeScreenshotBitmap(100, 100), /*isSidePanelOpen=*/ true);
-        await waitForScreenshotRendered(selectionOverlayElement);
-        await waitForScreenshotResize();
-
-        assertFalse(
-            selectionOverlayElement.hasAttribute('enable-region-context-menu'));
-        assertFalse(selectionOverlayElement.$.textLayer.hasAttribute(
-            'enable-highlights'));
-      });
-
-  test(
       'verify onOverlayReshown hides and reshows the background image canvas',
       async () => {
         assertFalse(selectionOverlayElement.hasAttribute('is-closing'));
         assertFalse(selectionOverlayElement.hasAttribute('side-panel-opened'));
-        assertTrue(
-            selectionOverlayElement.hasAttribute('enable-region-context-menu'));
-        assertTrue(selectionOverlayElement.$.textLayer.hasAttribute(
-            'enable-highlights'));
 
         const finishReshowEvent =
             eventToPromise('on-finish-reshow-overlay', selectionOverlayElement);
         callbackRouterRemote.onOverlayReshown(fakeScreenshotBitmap(100, 100));
-        await flushTasks();
+        // createImageBitmap resolves in a task, so wait for the
+        // onOverlayReshown callback rather than just flushing microtasks.
+        await new Promise<void>(resolve => {
+          const observer = new MutationObserver(() => {
+            if (selectionOverlayElement.hasAttribute('side-panel-opened')) {
+              observer.disconnect();
+              resolve();
+            }
+          });
+          observer.observe(selectionOverlayElement, {
+            attributes: true,
+            attributeFilter: ['side-panel-opened'],
+          });
+        });
 
         assertFalse(selectionOverlayElement.hasAttribute('is-closing'));
         assertTrue(selectionOverlayElement.hasAttribute('side-panel-opened'));
         assertTrue(
             selectionOverlayElement.getHideBackgroundImageCanvasForTesting());
-        assertFalse(
-            selectionOverlayElement.hasAttribute('enable-region-context-menu'));
-        assertFalse(selectionOverlayElement.$.textLayer.hasAttribute(
-            'enable-highlights'));
         await finishReshowEvent;
 
         // after onFinishReshowOverlay, hideBackgroundImageCanvas should be

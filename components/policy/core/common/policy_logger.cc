@@ -14,11 +14,17 @@
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/policy/core/common/features.h"
+#include "components/policy/resources/webui/mojom/policy.mojom.h"
 #include "components/version_info/version_info.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/channel/channel_info.h"
+#endif
 
 namespace policy {
 
@@ -26,7 +32,17 @@ namespace {
 
 // The base format for the Chromium Code Search URLs.
 constexpr char kChromiumCSUrlFormat[] =
-    "https://source.chromium.org/chromium/chromium/src/+/main:%s;l=%i;drc:%s";
+    "https://source.chromium.org/chromium/chromium/src/+/main:%s;l=%i";
+
+// The suffix format for the Chromium Code Search URLs with a specified change
+// ID.
+constexpr char kLastChangeSuffixFormat[] = ";drc:%s";
+
+// The invalid last change value that is returned by `GetLastChange()` for local
+// builds.
+constexpr char kInvalidLastChange[] =
+    "0000000000000000000000000000000000000000-"
+    "0000000000000000000000000000000000000000";
 
 // Gets the string value for the log source.
 std::string GetLogSourceValue(const PolicyLogger::Log::Source log_source) {
@@ -80,16 +96,48 @@ int GetLogSeverityInt(const PolicyLogger::Log::Severity log_severity) {
   }
 }
 
+// Most logging initializes `file` from __FILE__. Unfortunately, because we
+// build from out/Foo we get a `../../` (or \) prefix for all of our
+// __FILE__s. This isn't true for base::Location::Current() which already does
+// the stripping (and is used for some logging, especially CHECKs).
+//
+// Here we strip the first 6 (../../ or ..\..\) characters if `file` starts
+// with `.` but defensively clamp to strlen(file) just in case.
+//
+// TODO(nicolaso): Consider migrating to use base::Location directly. See
+// base/check.h for inspiration.
+std::string_view StripParentPrefix(std::string_view file) {
+  return (!file.empty() && file[0] == '.')
+             ? std::string_view(file).substr(
+                   std::min(std::size_t{6}, file.length()))
+             : file;
+}
+
 // Constructs the URL for Chromium Code Search that points to the line of code
 // that generated the log and the Chromium git revision hash.
 std::string GetLineURL(std::string_view file, int line) {
   std::string last_change(version_info::GetLastChange());
 
-  // The substring separates the last change commit hash from the branch name on
-  // the '-'.
-  return base::StringPrintf(
-      kChromiumCSUrlFormat, file, line,
-      last_change.substr(0, last_change.find('-')).c_str());
+  std::string url =
+      base::StringPrintf(kChromiumCSUrlFormat, StripParentPrefix(file), line);
+  if (last_change != kInvalidLastChange) {
+    // The substring separates the last change commit hash from the branch name
+    // on the '-'.
+    url += base::StringPrintf(
+        kLastChangeSuffixFormat,
+        last_change.substr(0, last_change.find('-')).c_str());
+  }
+  return url;
+}
+
+// GetFileBasename("/a/b/c.txt") -> "c.txt"
+std::string_view GetFileBasename(std::string_view file) {
+  size_t pos = file.find_last_of("/\\");
+  return pos == std::string_view::npos ? file : file.substr(pos + 1);
+}
+
+std::string GetFileAndLine(std::string_view file, int line) {
+  return base::StrCat({GetFileBasename(file), ":", base::NumberToString(line)});
 }
 
 // Checks if the log has been if the list for at least `kTimeToLive` minutes.
@@ -110,9 +158,30 @@ PolicyLogger::Log::Log(const Severity log_severity,
       file_(file),
       line_(line),
       timestamp_(base::Time::Now()) {}
+
+// static
 PolicyLogger* PolicyLogger::GetInstance() {
   static base::NoDestructor<PolicyLogger> instance;
   return instance.get();
+}
+
+// static
+bool PolicyLogger::IsPolicyLoggingEnabled() {
+#if BUILDFLAG(IS_CHROMEOS)
+  // All choices are explicit to ensure that new channels added in the future
+  // will need to be explicitly handled here and follow the right logic.
+  switch (ash::GetChannel()) {
+    case version_info::Channel::STABLE:
+      return false;
+    case version_info::Channel::BETA:
+    case version_info::Channel::DEV:
+    case version_info::Channel::CANARY:
+    case version_info::Channel::UNKNOWN:
+      return true;
+  }
+#else
+  return true;
+#endif
 }
 
 PolicyLogger::LogHelper::LogHelper(
@@ -130,8 +199,10 @@ PolicyLogger::LogHelper::LogHelper(
       line_(line) {}
 
 PolicyLogger::LogHelper::~LogHelper() {
-  policy::PolicyLogger::GetInstance()->AddLog(PolicyLogger::Log(
-      log_severity_, log_source_, message_buffer_.str(), file_, line_));
+  if (PolicyLogger::IsPolicyLoggingEnabled()) {
+    PolicyLogger::GetInstance()->AddLog(PolicyLogger::Log(
+        log_severity_, log_source_, message_buffer_.str(), file_, line_));
+  }
   StreamLog();
 }
 
@@ -163,35 +234,42 @@ void PolicyLogger::LogHelper::StreamLog() const {
       << message_buffer_.str();
 }
 
-base::Value::Dict PolicyLogger::Log::GetAsDict() const {
-  base::Value::Dict log_dict;
-  log_dict.Set("message", base::EscapeForHTML(message_));
-  log_dict.Set("logSeverity", GetLogSeverity(log_severity_));
-  log_dict.Set("logSource", GetLogSourceValue(log_source_));
-  log_dict.Set("location", GetLineURL(file_, line_));
-  log_dict.Set("timestamp", base::TimeFormatHTTP(timestamp_));
-  return log_dict;
+base::DictValue PolicyLogger::Log::GetAsDict() const {
+  return base::DictValue()
+      .Set("message", message_)
+      .Set("logSeverity", GetLogSeverity(log_severity_))
+      .Set("logSource", GetLogSourceValue(log_source_))
+      .Set("fileAndLine", GetFileAndLine(file_, line_))
+      .Set("location", GetLineURL(file_, line_))
+      .Set("timestamp", base::TimeFormatHTTP(timestamp_));
+}
+
+policy::mojom::LogPtr PolicyLogger::Log::GetAsMojoLog() const {
+  return policy::mojom::Log::New(
+      message_, GetLogSeverity(log_severity_), GetLogSourceValue(log_source_),
+      GetFileAndLine(file_, line_), GetLineURL(file_, line_),
+      base::TimeFormatHTTP(timestamp_));
 }
 
 PolicyLogger::PolicyLogger() = default;
 PolicyLogger::~PolicyLogger() = default;
 
 void PolicyLogger::AddLog(PolicyLogger::Log&& new_log) {
-    {
-      base::AutoLock lock(lock_);
+  {
+    base::AutoLock lock(lock_);
 
-      // The logs deque size should not exceed `kMaxLogsSize`. Remove the first
-      // log if the size is reached before adding the new log.
-      if (logs_.size() == kMaxLogsSize) {
-        logs_.pop_front();
-      }
-
-      logs_.emplace_back(std::move(new_log));
+    // The logs deque size should not exceed `kMaxLogsSize`. Remove the first
+    // log if the size is reached before adding the new log.
+    if (logs_.size() == kMaxLogsSize) {
+      logs_.pop_front();
     }
 
-    if (!is_log_deletion_scheduled_ && is_log_deletion_enabled_) {
-      ScheduleOldLogsDeletion();
-    }
+    logs_.emplace_back(std::move(new_log));
+  }
+
+  if (!is_log_deletion_scheduled_ && is_log_deletion_enabled_) {
+    ScheduleOldLogsDeletion();
+  }
 }
 
 void PolicyLogger::DeleteOldLogs() {
@@ -208,22 +286,32 @@ void PolicyLogger::DeleteOldLogs() {
 }
 
 void PolicyLogger::ScheduleOldLogsDeletion() {
-  if (!base::SequencedTaskRunner::HasCurrentDefault()) {
+  if (!base::SequencedTaskRunner::HasCurrentDefault() ||
+      !is_log_deletion_enabled_) {
     return;
   }
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
-      base::BindOnce(&PolicyLogger::DeleteOldLogs, weak_factory_.GetWeakPtr()),
+      base::BindOnce(&PolicyLogger::DeleteOldLogs, base::Unretained(this)),
       kTimeToLive);
   is_log_deletion_scheduled_ = true;
 }
 
-base::Value::List PolicyLogger::GetAsList() {
-  base::Value::List all_logs_list;
+base::ListValue PolicyLogger::GetAsList() {
+  base::ListValue all_logs_list;
   base::AutoLock lock(lock_);
   for (const Log& log : logs_) {
     all_logs_list.Append(log.GetAsDict());
   }
+  return all_logs_list;
+}
+
+std::vector<policy::mojom::LogPtr> PolicyLogger::GetAsMojoList() {
+  std::vector<policy::mojom::LogPtr> all_logs_list;
+  base::AutoLock lock(lock_);
+  all_logs_list.reserve(logs_.size());
+  std::ranges::transform(logs_, std::back_inserter(all_logs_list),
+                         &PolicyLogger::Log::GetAsMojoLog);
   return all_logs_list;
 }
 
@@ -243,6 +331,11 @@ void PolicyLogger::ResetLoggerForTesting() {
   logs_.erase(logs_.begin(), logs_.end());
   is_log_deletion_scheduled_ = false;
   is_log_deletion_enabled_ = false;
+}
+
+void PolicyLogger::ScheduleOldLogsDeletionForTesting() {
+  CHECK_IS_TEST();
+  ScheduleOldLogsDeletion();
 }
 
 }  // namespace policy

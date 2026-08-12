@@ -12,14 +12,13 @@
 #import "build/branding_buildflags.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
-#import "ios/chrome/browser/autofill/ui_bundled/authentication/authentication_egtest_util.h"
+#import "ios/chrome/browser/autofill/authentication/test/authentication_egtest_util.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_app_interface.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/testing/earl_grey/matchers.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
@@ -90,7 +89,7 @@ NSString* const kVirtualCardEnrollResponseSuccess =
 
 id<GREYMatcher> VirtualCardEnrollmentTitle() {
   return grey_accessibilityLabel(l10n_util::GetNSString(
-      IDS_AUTOFILL_VIRTUAL_CARD_ENROLLMENT_DIALOG_TITLE_LABEL));
+      IDS_AUTOFILL_VIRTUAL_CARD_ENROLLMENT_DIALOG_TITLE_LABEL_V2));
 }
 
 id<GREYMatcher> VirtualCardEnrollmentAcceptButton() {
@@ -115,7 +114,7 @@ id<GREYMatcher> ActivityIndicatorMatcher() {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
   config.features_enabled.push_back(
-      autofill::features::kAutofillSaveCardBottomSheet);
+      autofill::features::kAutofillEnableWalletBrandingV2);
   return config;
 }
 

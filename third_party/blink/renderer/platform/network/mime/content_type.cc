@@ -38,18 +38,18 @@ static bool IsASCIIQuote(UChar c) {
 }
 
 String ContentType::Parameter(StringView parameter_name) const {
-  Vector<String> parameters;
-  ParseParameters(parameters);
+  Vector<StringView> parameters = ParseParameters();
 
   for (auto& parameter : parameters) {
-    String stripped_parameter = parameter.StripWhiteSpace();
+    StringView stripped_parameter = parameter.StripWhiteSpace();
     wtf_size_t separator_pos = stripped_parameter.find('=');
     if (separator_pos != kNotFound) {
-      String attribute =
-          stripped_parameter.Left(separator_pos).StripWhiteSpace();
-      if (EqualIgnoringASCIICase(attribute, parameter_name)) {
-        return stripped_parameter.Substring(separator_pos + 1)
+      StringView attribute =
+          StringView(stripped_parameter, 0, separator_pos).StripWhiteSpace();
+      if (EqualIgnoringAsciiCase(attribute, parameter_name)) {
+        return StringView(stripped_parameter, separator_pos + 1)
             .StripWhiteSpace()
+            .ToString()
             .RemoveCharacters(IsASCIIQuote);
       }
     }
@@ -62,12 +62,13 @@ String ContentType::GetType() const {
   // "type" can have parameters after a semi-colon, strip them
   const wtf_size_t semicolon_index = type_.find(';');
   if (semicolon_index != kNotFound) {
-    return type_.Left(semicolon_index).StripWhiteSpace();
+    return type_.subview(0, semicolon_index).StripWhiteSpace().ToString();
   }
   return type_;
 }
 
-void ContentType::ParseParameters(Vector<String>& result) const {
+Vector<StringView> ContentType::ParseParameters() const {
+  Vector<StringView> result;
   unsigned cur_pos = 0;
   unsigned end_pos = type_.length();
   unsigned start_pos = 0;
@@ -77,7 +78,7 @@ void ContentType::ParseParameters(Vector<String>& result) const {
     const UChar ch = type_[cur_pos];
     if (!is_quote && ch == ';') {
       if (cur_pos != start_pos) {
-        result.push_back(type_.Substring(start_pos, cur_pos - start_pos));
+        result.push_back(StringView(type_, start_pos, cur_pos - start_pos));
       }
       start_pos = cur_pos + 1;
     } else if (ch == '"') {
@@ -87,7 +88,8 @@ void ContentType::ParseParameters(Vector<String>& result) const {
   }
 
   if (start_pos != end_pos)
-    result.push_back(type_.Substring(start_pos));
+    result.push_back(StringView(type_, start_pos));
+  return result;
 }
 
 }  // namespace blink

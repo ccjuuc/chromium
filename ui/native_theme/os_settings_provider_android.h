@@ -24,15 +24,20 @@ class COMPONENT_EXPORT(NATIVE_THEME) OsSettingsProviderAndroid
   ~OsSettingsProviderAndroid() override;
 
   // OsSettingsProvider:
+  NativeTheme::PreferredColorScheme PreferredColorScheme() const override;
   NativeTheme::PreferredContrast PreferredContrast() const override;
   bool PrefersReducedTransparency() const override;
   bool PrefersInvertedColors() const override;
   base::TimeDelta CaretBlinkInterval() const override;
+  bool IsAndroidProvider() const override;
 
   // AccessibilityState::AccessibilityStateObserver:
   void OnDisplayInversionEnabledChanged(bool enabled) override;
   void OnContrastLevelChanged(bool high_contrast_enabled) override;
   void OnTextCursorBlinkIntervalChanged(base::TimeDelta new_interval) override;
+
+  // Android JNI APIs:
+  void SetPreferredColorScheme(NativeTheme::PreferredColorScheme scheme);
 
  private:
   base::ScopedObservation<AccessibilityState,
@@ -42,6 +47,9 @@ class COMPONENT_EXPORT(NATIVE_THEME) OsSettingsProviderAndroid
   bool high_contrast_enabled_ = false;
   bool display_inversion_enabled_ = false;
   base::TimeDelta text_cursor_blink_interval_ = kDefaultCaretBlinkInterval;
+
+  NativeTheme::PreferredColorScheme preferred_color_scheme_ =
+      NativeTheme::PreferredColorScheme::kNoPreference;
 };
 
 }  // namespace ui

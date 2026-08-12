@@ -66,8 +66,6 @@ class TabGroupSyncDelegateBrowserTest : public InProcessBrowserTest,
                                         public TabGroupSyncService::Observer {
  public:
   TabGroupSyncDelegateBrowserTest() {
-    features_.InitWithFeatures({}, {});
-
     dependency_manager_subscription_ =
         BrowserContextDependencyManager::GetInstance()
             ->RegisterCreateServicesCallbackForTesting(base::BindRepeating(
@@ -128,7 +126,7 @@ class TabGroupSyncDelegateBrowserTest : public InProcessBrowserTest,
 
     // `service_` is instantiated the first time GetForProfile() is called.
     TabGroupSyncService* service =
-        TabGroupSyncServiceFactory::GetForProfile(browser()->profile());
+        TabGroupSyncServiceFactory::GetForProfile(browser()->GetProfile());
     service->AddObserver(this);
   }
 
@@ -174,7 +172,6 @@ class TabGroupSyncDelegateBrowserTest : public InProcessBrowserTest,
     return std::move(service);
   }
 
-  base::test::ScopedFeatureList features_;
   base::CallbackListSubscription subscription_;
   raw_ptr<SavedTabGroupModel> model_;
   raw_ptr<TabGroupSyncService> service_;
@@ -621,7 +618,7 @@ IN_PROC_BROWSER_TEST_F(TabGroupSyncDelegateBrowserTest, ReorderDiscardedTab) {
   // Discard the first tab and move it to the right of the second tab.
   std::unique_ptr<content::WebContents> replacement_web_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
   browser()->tab_strip_model()->DiscardWebContentsAt(
       0, std::move(replacement_web_contents));
   browser()->tab_strip_model()->MoveWebContentsAt(0, 1, true, group_id);
@@ -977,6 +974,97 @@ IN_PROC_BROWSER_TEST_F(TabGroupSyncDelegateBrowserTest,
   // total.
   EXPECT_EQ(2u, SavedTabGroupUtils::GetTabsInGroup(local_id).size());
   EXPECT_EQ(3, browser()->tab_strip_model()->count());
+}
+
+IN_PROC_BROWSER_TEST_F(TabGroupSyncDelegateBrowserTest,
+                       UpdateFromSyncWithLocalTabMovedOutOfGroup) {
+  // Add a second tab at index 1. It starts ungrouped.
+  chrome::AddTabAt(browser(), GURL("chrome://newtab"), 1, false);
+  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+
+  // Create a tab group containing ONLY the first tab (index 0).
+  LocalTabGroupID local_id = browser()->tab_strip_model()->AddToNewGroup({0});
+  WaitUntilCallbackReceived();
+
+  const SavedTabGroup* saved_group = model_->Get(local_id);
+  ASSERT_TRUE(saved_group);
+
+  LocalTabID second_tab_id =
+      browser()->tab_strip_model()->GetTabAtIndex(1)->GetHandle().raw_value();
+
+  // Create a new SavedTabGroupTab representing the second tab, and set its
+  // local_tab_id to the ungrouped tab's handle.
+  SavedTabGroupTab tab_2(GURL("chrome://newtab"), u"New Tab",
+                         saved_group->saved_guid(),
+                         /*position=*/1);
+  tab_2.SetLocalTabID(second_tab_id);
+
+  // Add the second tab to the saved group from sync.
+  // This triggers UpdateFromSync. It should not crash and should pull the
+  // ungrouped local tab into the group.
+  model_->AddTabToGroupFromSync(saved_group->saved_guid(), tab_2);
+  WaitUntilCallbackReceived();
+
+  // Verify that the tab was pulled into the group and the group now contains
+  // both tabs.
+  EXPECT_EQ(local_id, browser()->tab_strip_model()->GetTabGroupForTab(0));
+  EXPECT_EQ(local_id, browser()->tab_strip_model()->GetTabGroupForTab(1));
+  EXPECT_EQ(2u, SavedTabGroupUtils::GetTabsInGroup(local_id).size());
+}
+
+IN_PROC_BROWSER_TEST_F(TabGroupSyncDelegateBrowserTest,
+                       UpdateFromSyncWithLocalTabMovedToDifferentGroup) {
+  // Add a second tab at index 1. It starts ungrouped.
+  chrome::AddTabAt(browser(), GURL("chrome://newtab"), 1, false);
+  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+
+  // Create a tab group containing ONLY the first tab (index 0).
+  LocalTabGroupID local_id_1 = browser()->tab_strip_model()->AddToNewGroup({0});
+  WaitUntilCallbackReceived();
+
+  // Create a tab group containing ONLY the second tab (index 1).
+  LocalTabGroupID local_id_2 = browser()->tab_strip_model()->AddToNewGroup({1});
+  WaitUntilCallbackReceived();
+
+  // Unsave the second group so that it is not tracked by the sync service,
+  // preventing re-entrancy crashes during local observations, while still
+  // keeping the local tab grouped in a different group locally.
+  service_->UnsaveGroup(local_id_2);
+
+  const SavedTabGroup* saved_group_1 = model_->Get(local_id_1);
+  ASSERT_TRUE(saved_group_1);
+
+  LocalTabID second_tab_id =
+      browser()->tab_strip_model()->GetTabAtIndex(1)->GetHandle().raw_value();
+
+  // Create a new SavedTabGroupTab representing the second tab, and set its
+  // local_tab_id to the second tab's handle.
+  SavedTabGroupTab tab_2(GURL("chrome://newtab"), u"New Tab",
+                         saved_group_1->saved_guid(),
+                         /*position=*/1);
+  tab_2.SetLocalTabID(second_tab_id);
+
+  // Add the second tab to the saved group 1 from sync.
+  // This triggers UpdateFromSync on local_id_1. It should not crash and should
+  // steal the local tab from local_id_2 and add it to local_id_1.
+  model_->AddTabToGroupFromSync(saved_group_1->saved_guid(), tab_2);
+  WaitUntilCallbackReceived();
+
+  // Verify that the tab was duplicated into the first group, preserving the
+  // second group! Tab 0 and Tab 1 should be in local_id_1. Tab 2 should remain
+  // in local_id_2.
+  EXPECT_EQ(3, browser()->tab_strip_model()->count());
+
+  EXPECT_EQ(local_id_1, browser()->tab_strip_model()->GetTabGroupForTab(0));
+  EXPECT_EQ(local_id_1, browser()->tab_strip_model()->GetTabGroupForTab(1));
+  EXPECT_EQ(local_id_2, browser()->tab_strip_model()->GetTabGroupForTab(2));
+
+  EXPECT_EQ(2u, SavedTabGroupUtils::GetTabsInGroup(local_id_1).size());
+  EXPECT_EQ(1u, SavedTabGroupUtils::GetTabsInGroup(local_id_2).size());
+
+  // Verify that local_id_2 still exists.
+  EXPECT_TRUE(browser()->tab_strip_model()->group_model()->ContainsTabGroup(
+      local_id_2));
 }
 
 }  // namespace

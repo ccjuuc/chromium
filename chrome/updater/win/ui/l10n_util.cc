@@ -4,7 +4,10 @@
 
 #include "chrome/updater/win/ui/l10n_util.h"
 
+#include <windows.h>
+
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/debug/alias.h"
@@ -14,7 +17,7 @@
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/win/atl.h"
+#include "base/win/current_module.h"
 #include "base/win/embedded_i18n/language_selector.h"
 #include "base/win/i18n.h"
 #include "chrome/updater/util/util.h"
@@ -57,12 +60,16 @@ std::wstring GetLocalizedString(unsigned int base_message_id,
   }
 
   // Map `base_message_id` to the base id for the current install mode.
-  const unsigned int message_id =
-      static_cast<UINT>(base_message_id + GetLanguageOffset(lang));
-  const ATLSTRINGRESOURCEIMAGE* image =
-      AtlGetStringResourceImage(_AtlBaseModule.GetModuleInstance(), message_id);
-  if (image) {
-    return std::wstring(image->achString, image->nLength);
+  const unsigned int message_id = base_message_id + GetLanguageOffset(lang);
+
+  // Use the zero-copy form of `LoadStringW`: passing `cchBufferMax == 0`
+  // causes `lpBuffer` to be treated as `LPWSTR*` and receives a pointer to
+  // the (non-null-terminated) string image directly in the resource section.
+  LPCWSTR str_ptr = nullptr;
+  const int str_len = ::LoadStringW(CURRENT_MODULE(), message_id,
+                                    reinterpret_cast<LPWSTR>(&str_ptr), 0);
+  if (str_len > 0 && str_ptr) {
+    return std::wstring(str_ptr, static_cast<size_t>(str_len));
   }
   const DWORD error_code = ::GetLastError();
   base::debug::Alias(&base_message_id);
@@ -101,7 +108,7 @@ std::wstring GetLocalizedMetainstallerErrorString(DWORD exit_code,
                                                   DWORD windows_error,
                                                   const std::wstring& lang) {
 #define METAINSTALLER_ERROR_SWITCH_ENTRY(exit_code)                        \
-  case static_cast<int>(exit_code):                                        \
+  case std::to_underlying(exit_code):                                      \
     return GetLocalizedStringF(                                            \
         IDS_GENERIC_METAINSTALLER_ERROR_BASE,                              \
         {L#exit_code, windows_error ? GetTextForSystemError(windows_error) \

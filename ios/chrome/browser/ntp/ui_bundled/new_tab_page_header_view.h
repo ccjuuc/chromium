@@ -7,59 +7,43 @@
 
 #import <UIKit/UIKit.h>
 
-@class GradientView;
-@class TabGroupIndicatorView;
-@protocol NewTabPageShortcutsHandler;
-@class OmniboxContainerView;
+#import "ios/chrome/browser/content_suggestions/ui/user_account_image_update_delegate.h"
+#import "ios/chrome/browser/location_bar/ui_bundled/fakebox_buttons_snapshot_provider.h"
+#import "ios/chrome/browser/ntp/search_engine_logo/ui/search_engine_logo_consumer.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_consumer.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_delegate.h"
+
+@class FakeLocationBarView;
+@class NTPIdentityDiscButton;
+@class LayoutGuideCenter;
 @class NewTabPageColorPalette;
+@protocol NewTabPageShortcutsHandler;
+@protocol NewTabPageHeaderCommands;
+@protocol NewTabPageMutator;
+@protocol HelpCommands;
+@protocol FakeboxFocuser;
+@class OmniboxContainerView;
 enum class SearchEngineLogoState;
+@class TabGroupIndicatorView;
 
 // Header view for the NTP. The header view contains all views that are
 // displayed above the list of most visited sites, which includes the
 // primary toolbar, doodle, and fake omnibox.
-@interface NewTabPageHeaderView : UIView
-
-// Initializes the view with the Lens button new badge status.
-- (instancetype)initWithUseNewBadgeForLensButton:(BOOL)useNewBadgeForLensButton
-    NS_DESIGNATED_INITIALIZER;
-- (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
-- (instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;
-
+@interface NewTabPageHeaderView : UIView <FakeboxButtonsSnapshotProvider,
+                                          NewTabPageHeaderConsumer,
+                                          SearchEngineLogoConsumer,
+                                          UserAccountImageUpdateDelegate>
 // Returns the toolbar view.
 @property(nonatomic, readonly) UIView* toolBarView;
 
-// The Identity Disc showing the current user's avatar on NTP.
-@property(nonatomic, strong) UIView* identityDiscView;
-
-// The entrypoint for the Home customization menu.
-@property(nonatomic, strong) UIButton* customizationMenuButton;
-
-// Voice search button. May be nil for some variations where MIA button takes
-// the entire available space.
-@property(nonatomic, strong, readonly) UIButton* voiceSearchButton;
-
-// The button that opens Lens. May be nil if Lens is not enabled.
-@property(nonatomic, strong, readonly) UIButton* lensButton;
-
-// The button that opens MIA. May be nil if MIA is not enabled.
-@property(nonatomic, strong, readonly) UIButton* miaButton;
-
-// Fake cancel button, used for animations. Hidden by default.
-@property(nonatomic, strong) UIView* cancelButton;
-// Fake omnibox, used for animations. Hidden by default.
-@property(nonatomic, strong) OmniboxContainerView* omnibox;
-
-@property(nonatomic, strong)
-    NSLayoutConstraint* fakeLocationBarLeadingConstraint;
-@property(nonatomic, strong)
-    NSLayoutConstraint* fakeLocationBarTrailingConstraint;
-@property(nonatomic, strong) UIView* fakeLocationBar;
-@property(nonatomic, strong) UILabel* searchHintLabel;
+// The layout guide center for the current scene. Owned by this view's owning
+// view controller.
+@property(nonatomic, weak) LayoutGuideCenter* layoutGuideCenter;
 
 // View that contains tab group information.
 @property(nonatomic, weak) TabGroupIndicatorView* tabGroupIndicatorView;
 
-// `YES` if Google is the default search engine.
+// Sets whether Google is the default search engine.
 @property(nonatomic, assign) BOOL isGoogleDefaultSearchEngine;
 
 // Name of the default search engine. Used for the omnibox placeholder text.
@@ -72,66 +56,92 @@ enum class SearchEngineLogoState;
 // Handles the actions for the NTP shortcuts, like Lens or voice search.
 @property(nonatomic, weak) id<NewTabPageShortcutsHandler> NTPShortcutsHandler;
 
-// The logo state.
-@property(nonatomic, assign) SearchEngineLogoState logoState;
+// Handler for dispatched commands.
+@property(nonatomic, weak) id<NewTabPageHeaderCommands> commandHandler;
 
-// Adds the separator to the searchField. Must be called after the searchField
-// is added as a subview.
-- (void)addSeparatorToSearchField:(UIView*)searchField;
+// The target for scribble events as forwarded by the NTP fakebox.
+@property(nonatomic, weak) UIResponder<UITextInput>* scribbleForwardingTarget;
 
-// Adds the `toolbarView` to the view implementing this protocol.
-// Can only be added once.
-- (void)addToolbarView:(UIView*)toolbarView;
+// The scroll progress of the fakebox animation (0.0 to 1.0).
+@property(nonatomic, assign, readonly) CGFloat scrollProgress;
 
-// Returns the progress of the search field position along
-// `ntp_header::kAnimationDistance` as the offset changes.
-- (CGFloat)searchFieldProgressForOffset:(CGFloat)offset;
+// Delegate for header view actions.
+@property(nonatomic, weak) id<NewTabPageHeaderViewDelegate> delegate;
 
-// Changes the constraints of searchField based on its initialFrame and the
-// scroll view's y `offset`. Also adjust the alpha values for `_searchBoxBorder`
-// and `_shadow` and the constant values for the `constraints`. `screenWidth` is
-// the width of the screen, including the space outside the safe area. The
-// `safeAreaInsets` is relative to the view used to calculate the `width`.
-- (void)updateSearchFieldWidth:(NSLayoutConstraint*)widthConstraint
-                        height:(NSLayoutConstraint*)heightConstraint
-                     topMargin:(NSLayoutConstraint*)topMarginConstraint
-                     forOffset:(CGFloat)offset
-                   screenWidth:(CGFloat)screenWidth
-                safeAreaInsets:(UIEdgeInsets)safeAreaInsets;
+// The mutator for the NTP.
+@property(nonatomic, weak) id<NewTabPageMutator> mutator;
 
-// Adds views necessary to customize the NTP search box.
-- (void)addViewsToSearchField:(UIView*)searchField;
+// In-product help handler.
+@property(nonatomic, weak) id<HelpCommands> helpHandler;
 
-// Configures the current default search engine logo.
-- (void)setDefaultSearchEngineLogo:(UIImage*)logo;
+// Fakebox focus handler.
+@property(nonatomic, weak) id<FakeboxFocuser> fakeboxFocuserHandler;
 
-// Highlights the fake omnibox.
-- (void)setFakeboxHighlighted:(BOOL)highlighted;
+// Whether the NTP is currently showing.
+@property(nonatomic, assign, getter=isShowing) BOOL showing;
 
-// Shows account disc particle error badge.
-- (void)setIdentityDiscErrorBadge;
+// The search engine logo view.
+@property(nonatomic, weak) UIView* searchEngineLogoView;
 
-// Removes account disc particle error badge.
-- (void)removeIdentityDiscErrorBadge;
+// Initializes the view with the Lens and customization menu badge status.
+- (instancetype)initWithUseNewBadgeForLensButton:(BOOL)useNewBadgeForLensButton
+                 useNewBadgeForCustomizationMenu:
+                     (BOOL)useNewBadgeForCustomizationMenu
+    NS_DESIGNATED_INITIALIZER;
 
-// Sets the Home customization menu entrypoint with a conditional "new feature"
-// badge.
-- (void)setCustomizationMenuButton:(UIButton*)customizationMenuButton
-                      withNewBadge:(BOOL)hasNewBadge;
+- (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
+- (instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;
+
+
+// Sets up the subviews (fake omnibox, tap view) after properties are set.
+- (void)setupSubviews;
 
 // Hides the new feature badge on the Home customization menu's entrypoint.
 - (void)hideBadgeOnCustomizationMenu;
 
-// Updates the `tabGroupIndicatorView` availability.
-// `offset` represents the scroll view's y `offset`.
-- (void)updateTabGroupIndicatorAvailabilityWithOffset:(CGFloat)offset;
+// Animation to expand this header in response to focusing the omnibox.
+- (void)expandHeaderForFocus;
 
-// Returns a snapshot view of the fakebox's buttons to be used during focus
-// and defocus animations.
-- (UIView*)fakeboxButtonsSnapshot;
+// Reverts the effects of expanding the header.
+- (void)revertHeaderExpansionOnUnfocus;
 
-// Whether AIM is allowed.
-- (void)setAIMAllowed:(BOOL)allowed;
+// Updates the fake omnibox layout for the given scroll offset.
+- (void)updateFakeOmniboxForOffset:(CGFloat)offset
+                       screenWidth:(CGFloat)screenWidth
+                    safeAreaInsets:(UIEdgeInsets)safeAreaInsets
+            animateScrollAnimation:(BOOL)animateScrollAnimation;
+
+// Updates the fake omnibox layout for the given width.
+- (void)updateFakeOmniboxForWidth:(CGFloat)width;
+
+// Layouts the header view.
+- (void)layoutHeader;
+
+// Returns the height of the header.
+- (CGFloat)headerHeight;
+
+// Notifies the view that it appeared.
+- (void)didAppear;
+
+// Sends notification to focus the accessibility of the omnibox.
+- (void)focusAccessibilityOnOmnibox;
+
+// Configure the header after the focus omnibox animation has completed.
+- (void)completeHeaderFakeOmniboxFocusAnimationWithFinalPosition:
+    (UIViewAnimatingPosition)finalPosition;
+
+// Resets fakebox state when omnibox ends editing.
+- (void)omniboxDidEndEditing;
+
+// Returns the view containing the fake omnibox.
+- (UIView*)fakeOmniboxView;
+
+// Returns the Y value to use for the scroll view's contentOffset when scrolling
+// the omnibox to the top of the screen.
+- (CGFloat)pinnedOffsetY;
+
+// Sets the overflow menu blue dot visibility.
+- (void)setOverflowMenuBlueDot:(BOOL)hasBlueDot;
 
 @end
 

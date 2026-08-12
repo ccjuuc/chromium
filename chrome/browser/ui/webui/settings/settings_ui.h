@@ -22,11 +22,10 @@
 #include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
+#include "ui/webui/resources/cr_components/signin/signin.mojom.h"
 #include "ui/webui/resources/cr_components/theme_color_picker/theme_color_picker.mojom.h"
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 #include "ui/webui/resources/js/batch_upload_promo/batch_upload_promo.mojom.h"
-#endif  // !BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 namespace content {
 class WebUIMessageHandler;
@@ -38,10 +37,9 @@ class PrefRegistrySyncable;
 
 #if !BUILDFLAG(IS_CHROMEOS)
 class ThemeColorPickerHandler;
+class SigninUtilsHandler;
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
 class BatchUploadPromoHandler;
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 class CustomizeColorSchemeModeHandler;
 namespace settings {
@@ -65,13 +63,11 @@ class SettingsUI
     ,
       // chrome://settings/manageProfile which only exists on !IS_CHROMEOS
       // requires mojo bindings.
-      public theme_color_picker::mojom::ThemeColorPickerHandlerFactory
+      public theme_color_picker::mojom::ThemeColorPickerHandlerFactory,
+      public signin::mojom::SigninPageHandlerFactory
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
     ,
-      public batch_upload_promo::mojom::PageHandlerFactory
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
-{
+      public batch_upload_promo::mojom::PageHandlerFactory {
  public:
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -95,16 +91,18 @@ class SettingsUI
   void BindInterface(mojo::PendingReceiver<
                      theme_color_picker::mojom::ThemeColorPickerHandlerFactory>
                          pending_receiver);
+
+  void BindInterface(
+      mojo::PendingReceiver<signin::mojom::SigninPageHandlerFactory>
+          pending_receiver);
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Instantiates the implementor of the
   // batch_upload_promo::mojom::PageHandlerFactory mojo interface
   // passing the pending receiver that will be internally bound.
   void BindInterface(
       mojo::PendingReceiver<batch_upload_promo::mojom::PageHandlerFactory>
           pending_receiver);
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Implements support for help bubbles (IPH, tutorials, etc.) in settings
   // pages.
@@ -124,27 +122,32 @@ class SettingsUI
   // Makes a request to show a HaTS survey.
   void TryShowHatsSurveyWithTimeout();
 
-#if BUILDFLAG(ENABLE_GLIC)
   // Updates, based on account and profile state, the loadTimeData values that
   // control whether the glic settings page should be shown. Returns the enabled
   // value.
   void UpdateShowGlicState();
-#endif
 
 #if !BUILDFLAG(IS_CHROMEOS)
   // theme_color_picker::mojom::ThemeColorPickerHandlerFactory:
   void CreateThemeColorPickerHandler(
-      mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
-          handler,
       mojo::PendingRemote<theme_color_picker::mojom::ThemeColorPickerClient>
-          client) override;
+          client,
+      mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
+          handler) override;
 
   std::unique_ptr<ThemeColorPickerHandler> theme_color_picker_handler_;
   mojo::Receiver<theme_color_picker::mojom::ThemeColorPickerHandlerFactory>
       theme_color_picker_handler_factory_receiver_{this};
+
+  // signin::mojom::SigninPageHandlerFactory:
+  void CreateSigninPageHandler(
+      mojo::PendingReceiver<signin::mojom::SigninPageHandler> handler) override;
+
+  std::unique_ptr<SigninUtilsHandler> signin_handler_;
+  mojo::Receiver<signin::mojom::SigninPageHandlerFactory>
+      signin_handler_factory_receiver_{this};
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // batch_upload_promo::mojom::PageHandlerFactory:
   void CreateBatchUploadPromoHandler(
       mojo::PendingRemote<batch_upload_promo::mojom::Page> pending_page,
@@ -154,7 +157,6 @@ class SettingsUI
   std::unique_ptr<BatchUploadPromoHandler> batch_upload_promo_handler_;
   mojo::Receiver<batch_upload_promo::mojom::PageHandlerFactory>
       batch_upload_promo_factory_receiver_{this};
-#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // help_bubble::mojom::HelpBubbleHandlerFactory:
   void CreateHelpBubbleHandler(
@@ -180,9 +182,7 @@ class SettingsUI
                      CustomizeColorSchemeModeHandlerFactory>
       customize_color_scheme_mode_handler_factory_receiver_{this};
 
-#if BUILDFLAG(ENABLE_GLIC)
   base::CallbackListSubscription glic_settings_state_subscription_;
-#endif
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

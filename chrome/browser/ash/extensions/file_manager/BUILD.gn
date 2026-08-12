@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
 
 assert(is_chromeos)
@@ -94,7 +93,6 @@ static_library("file_manager") {
     "//chrome/browser/ash/fusebox",
     "//chrome/browser/ash/guest_os",
     "//chrome/browser/ash/guest_os/public",
-    "//chrome/browser/ash/plugin_vm",
     "//chrome/browser/ash/policy/dlp",
     "//chrome/browser/ash/policy/dlp/dialogs",
     "//chrome/browser/ash/policy/skyvault",
@@ -106,31 +104,35 @@ static_library("file_manager") {
     "//chrome/browser/chromeos/policy/dlp",
     "//chrome/browser/chromeos/upload_office_to_cloud",
     "//chrome/browser/devtools",
+    "//chrome/browser/download",
     "//chrome/browser/feedback",
+    "//chrome/browser/net",
+    "//chrome/browser/notifications:system_notification_helper",
     "//chrome/browser/pdf",
     "//chrome/browser/pdf:pdf_pref_names",
     "//chrome/browser/pdf:pdf_service",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
+    "//chrome/browser/ui:chrome_pages",
     "//chrome/browser/ui/ash/login",
     "//chrome/browser/ui/ash/multi_user",
     "//chrome/browser/ui/webui/ash/manage_mirrorsync",
     "//chrome/common",
-    "//chrome/services/media_gallery_util/public/cpp",
-    "//chrome/services/media_gallery_util/public/mojom",
     "//chrome/services/pdf/public/mojom",
     "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/dbus/cros_disks",
     "//chromeos/ash/components/disks",
     "//chromeos/ash/components/drivefs",
     "//chromeos/ash/components/file_manager",
+    "//chromeos/ash/components/file_manager:constants",
     "//chromeos/ash/components/login/login_state",
     "//chromeos/ash/components/network",
     "//chromeos/ash/components/settings",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc/intent_helper",
     "//chromeos/ash/experiences/arc/mojom",
+    "//chromeos/ash/experiences/settings_ui",
     "//chromeos/components/disks:prefs",
     "//chromeos/components/sharesheet:constants",
     "//chromeos/dbus/dlp",
@@ -139,6 +141,8 @@ static_library("file_manager") {
     "//components/drive",
     "//components/drive:drive_chromeos",
     "//components/enterprise/data_controls/core/browser",
+    "//components/media_gallery_util",
+    "//components/media_gallery_util/public/mojom",
     "//components/prefs",
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
@@ -166,7 +170,6 @@ static_library("file_manager") {
 
   allow_circular_includes_from = [
     "//chrome/browser/ash/drive",
-    "//chrome/browser/ash/exo",
     "//chrome/browser/ash/policy/dlp",
     "//chrome/browser/ash/system_web_apps/apps",
   ]

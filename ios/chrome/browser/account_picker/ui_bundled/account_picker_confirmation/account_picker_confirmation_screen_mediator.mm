@@ -11,17 +11,21 @@
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_configuration.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_confirmation/account_picker_confirmation_screen_consumer.h"
+#import "ios/chrome/browser/account_picker/ui_bundled/account_picker_confirmation/account_picker_confirmation_screen_mediator_delegate.h"
 #import "ios/chrome/browser/authentication/ui_bundled/enterprise/enterprise_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/browser/signin/model/system_identity_util.h"
 
 @interface AccountPickerConfirmationScreenMediator () <
-    IdentityManagerObserverBridgeDelegate> {
+    AuthenticationServiceObserving,
+    IdentityManagerObserving> {
 }
 
 @end
@@ -37,13 +41,18 @@
   __strong AccountPickerConfiguration* _configuration;
   // Avatar of selected identity.
   __strong UIImage* _avatar;
+  raw_ptr<AuthenticationService> _authenticationService;
+  std::unique_ptr<AuthenticationServiceObserverBridge>
+      _authServiceObserverBridge;
 }
 
 - (instancetype)
     initWithAccountManagerService:
         (ChromeAccountManagerService*)accountManagerService
                   identityManager:(signin::IdentityManager*)identityManager
-                    configuration:(AccountPickerConfiguration*)configuration {
+                    configuration:(AccountPickerConfiguration*)configuration
+            authenticationService:
+                (AuthenticationService*)authenticationService {
   if ((self = [super init])) {
     CHECK(accountManagerService);
     CHECK(identityManager);
@@ -53,19 +62,28 @@
         std::make_unique<signin::IdentityManagerObserverBridge>(
             _identityManager, self);
     _configuration = configuration;
+    _authenticationService = authenticationService;
+    _authServiceObserverBridge =
+        std::make_unique<AuthenticationServiceObserverBridge>(
+            authenticationService, self);
+    CHECK(authenticationService->SigninEnabled(), base::NotFatalUntil::M152);
   }
   return self;
 }
 
 - (void)dealloc {
-  DCHECK(!_accountManagerService);
-  DCHECK(!_identityManager);
+  CHECK(!_accountManagerService, base::NotFatalUntil::M151);
+  CHECK(!_identityManager, base::NotFatalUntil::M151);
 }
+
+#pragma mark - AccountPickerConfirmationScreenMediator
 
 - (void)disconnect {
   _identityManager = nullptr;
   _identityManagerObserver.reset();
   _accountManagerService = nullptr;
+  _authenticationService = nil;
+  _authServiceObserverBridge = nullptr;
 }
 
 #pragma mark - Properties
@@ -98,8 +116,8 @@
 
   // If the user is signed-in, present the signed-in account, otherwise the
   // default account on the device.
-  id<SystemIdentity> identity = GetPrimarySystemIdentity(
-      signin::ConsentLevel::kSignin, _identityManager, _accountManagerService);
+  id<SystemIdentity> identity =
+      GetPrimarySystemIdentity(_identityManager, _accountManagerService);
   if (!identity) {
     identity = signin::GetDefaultIdentityOnDevice(_identityManager,
                                                   _accountManagerService);
@@ -122,7 +140,6 @@
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           selectedIdentity, IdentityAvatarSize::TableViewIcon);
   [_consumer showDefaultAccountWithFullName:selectedIdentity.userFullName
-                                  givenName:selectedIdentity.userGivenName
                                       email:selectedIdentity.userEmail
                                      avatar:avatar
                                     managed:[self isIdentityKnownToBeManaged:
@@ -142,7 +159,7 @@
 // called asynchronously when the management status if retrieved and the
 // identity is managed.
 - (BOOL)isIdentityKnownToBeManaged:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if (std::optional<BOOL> managed = IsIdentityManaged(identity);
       managed.has_value()) {
     return managed.value();
@@ -159,14 +176,25 @@
 
 #pragma mark -  IdentityManagerObserver
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   [self selectDefaultIdentity];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
       _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
   [self handleIdentityUpdated:identity];
+}
+
+#pragma mark - AuthenticationServiceObserving
+
+- (void)onServiceStatusChanged {
+  if (!_authenticationService->SigninEnabled()) {
+    // Signin is now disabled, so the consistency default account must be
+    // stopped.
+    [self.delegate
+        accountPickerConfirmationScreenMediatorWantsToBeStopped:self];
+  }
 }
 
 @end

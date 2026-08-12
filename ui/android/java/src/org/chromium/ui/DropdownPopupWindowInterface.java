@@ -83,4 +83,14 @@ public interface DropdownPopupWindowInterface {
      * @return Whether the popup is currently showing.
      */
     boolean isShowing();
+
+    /**
+     * Sets whether the popup is focusable.
+     *
+     * @param focusable True if the popup should be focusable, false otherwise.
+     */
+    void setFocusable(boolean focusable);
+
+    /** Sets the list selector to transparent to prevent double ripple effects. */
+    void setListSelectorTransparent();
 }

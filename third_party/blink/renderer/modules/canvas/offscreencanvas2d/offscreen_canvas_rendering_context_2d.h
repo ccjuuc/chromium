@@ -15,19 +15,22 @@
 #include "third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_2d_color_params.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/flush_for_image_listener.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 
 namespace blink {
 
-class CanvasResourceProvider;
+class Canvas2DBitmapProvider;
+class Canvas2DResourceProvider;
 class ExceptionState;
 class ExecutionContext;
 class MemoryManagedPaintCanvas;
 
 class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
     : public ScriptWrappable,
-      public BaseRenderingContext2D {
+      public BaseRenderingContext2D,
+      public FlushForImageObserver {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -63,6 +66,8 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
   V8OffscreenRenderingContext* AsV8OffscreenRenderingContext() final;
   void Stop() final { NOTREACHED(); }
   scoped_refptr<StaticBitmapImage> GetImage() final;
+  scoped_refptr<StaticBitmapImage> PaintRenderingResultsToSnapshot(
+      SourceDrawingBuffer source_buffer) override;
   void Reset() override;
   // CanvasRenderingContext - ActiveScriptWrappable
   // This method will avoid this class to be garbage collected, as soon as
@@ -71,8 +76,8 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
     if (!Host())
       return false;
     DCHECK(Host()->IsOffscreenCanvas());
-    return static_cast<OffscreenCanvas*>(Host())->HasPlaceholderCanvas() &&
-           !dirty_rect_for_commit_.isEmpty();
+    auto* offscreen_canvas = static_cast<OffscreenCanvas*>(Host());
+    return offscreen_canvas->IsPendingFrame();
   }
 
   // BaseRenderingContext2D implementation
@@ -83,6 +88,7 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
   int Height() const final;
 
   bool CanCreateResourceProvider() final;
+  bool Is2DCanvasAccelerated() const override;
 
   // Offscreen canvas doesn't have any notion of image orientation.
   RespectImageOrientationEnum RespectImageOrientation() const final {
@@ -96,8 +102,13 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
   const MemoryManagedPaintCanvas* GetPaintCanvas() const final;
   const MemoryManagedPaintRecorder* Recorder() const final;
 
-  void WillDraw(const SkIRect& dirty_rect,
+  void WillDraw(const gfx::Rect& dirty_rect,
                 CanvasPerformanceMonitor::DrawType) final;
+
+  void FlushIfRecordingLimitExceeded();
+
+  // FlushForImageObserver implementation
+  void OnFlushForImage(cc::PaintImage::ContentId content_id) override;
 
   sk_sp<PaintFilter> StateGetFilter() final;
 
@@ -113,12 +124,14 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
 
   void Trace(Visitor*) const override;
 
-  bool PushFrame() override;
+  scoped_refptr<CanvasResource> GetResourceForPushFrame(
+      bool& should_call_push_frame) override;
 
   CanvasRenderingContextHost* GetCanvasRenderingContextHost() const override;
   ExecutionContext* GetTopExecutionContext() const override;
 
   std::optional<cc::PaintRecord> FlushCanvas(FlushReason) override;
+  base::ByteSize AllocatedBufferSize() const override;
 
  protected:
   OffscreenCanvas* HostAsOffscreenCanvas() const final;
@@ -133,22 +146,17 @@ class MODULES_EXPORT OffscreenCanvasRenderingContext2D final
   bool ResolveFont(const String& new_font) override;
 
  private:
-  CanvasResourceProvider* GetResourceProvider() const override;
   void FinalizeFrame(FlushReason) final;
 
   bool IsPaintable() const final;
 
   scoped_refptr<CanvasResource> ProduceCanvasResource(FlushReason);
 
-  CanvasResourceProvider* GetOrCreateResourceProvider() override;
-  std::unique_ptr<CanvasResourceProvider> ReplaceResourceProvider(
-      std::unique_ptr<CanvasResourceProvider>) override;
+  bool InitializeResourceProvider() override;
+  bool IsResourceProviderValid() const;
 
-  std::unique_ptr<CanvasResourceProvider> resource_provider_;
-
-  SkIRect dirty_rect_for_commit_;
-
-  bool is_valid_size_ = false;
+  std::unique_ptr<Canvas2DResourceProvider> shared_image_provider_;
+  std::unique_ptr<Canvas2DBitmapProvider> bitmap_provider_;
 };
 
 }  // namespace blink

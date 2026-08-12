@@ -4,7 +4,8 @@
 
 #include "chrome/browser/net/http_auth_cache_status.h"
 
-#include "base/memory/raw_ptr.h"
+#include <memory>
+
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -36,19 +37,18 @@ class HttpAuthCacheStatusTest : public ChromeRenderViewHostTestHarness {
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
     InitializePageLoadMetricsForWebContents(web_contents());
-    HttpAuthCacheStatus::CreateForWebContents(web_contents());
     http_auth_cache_status_ =
-        HttpAuthCacheStatus::FromWebContents(web_contents());
+        std::make_unique<HttpAuthCacheStatus>(web_contents());
   }
 
   void TearDown() override {
-    http_auth_cache_status_ = nullptr;
+    http_auth_cache_status_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
  protected:
   base::HistogramTester histogram_tester_;
-  raw_ptr<HttpAuthCacheStatus> http_auth_cache_status_;
+  std::unique_ptr<HttpAuthCacheStatus> http_auth_cache_status_;
 };
 
 // This test verifies that when a same-partition subresource load completes with
@@ -56,9 +56,10 @@ class HttpAuthCacheStatusTest : public ChromeRenderViewHostTestHarness {
 TEST_F(HttpAuthCacheStatusTest, UseCounterNotIncrementedSamePartition) {
   NavigateAndCommit(GURL("https://www.google.com/"));
   // Simulate a subresource load with HTTP Auth.
+  const GURL subresource_url("https://www.google.com/subresource");
   http_auth_cache_status_->ResourceLoadComplete(
-      main_rfh(), content::GlobalRequestID(),
-      *CreateResourceLoadInfo(GURL("https://www.google.com/subresource"),
+      main_rfh(), content::GlobalRequestID(), subresource_url,
+      *CreateResourceLoadInfo(subresource_url,
                               /*did_use_server_http_auth=*/true));
 
   histogram_tester_.ExpectBucketCount(
@@ -74,9 +75,10 @@ TEST_F(HttpAuthCacheStatusTest, UseCounterNotIncrementedSamePartition) {
 TEST_F(HttpAuthCacheStatusTest, UseCounterNotIncrementedNoHttpAuth) {
   NavigateAndCommit(GURL("https://www.google.com/"));
   // Simulate a subresource load without HTTP Auth.
+  const GURL subresource_url("https://www.google.com/subresource");
   http_auth_cache_status_->ResourceLoadComplete(
-      main_rfh(), content::GlobalRequestID(),
-      *CreateResourceLoadInfo(GURL("https://www.google.com/subresource"),
+      main_rfh(), content::GlobalRequestID(), subresource_url,
+      *CreateResourceLoadInfo(subresource_url,
                               /*did_use_server_http_auth=*/false));
 
   histogram_tester_.ExpectBucketCount(
@@ -92,9 +94,10 @@ TEST_F(HttpAuthCacheStatusTest, UseCounterNotIncrementedNoHttpAuth) {
 TEST_F(HttpAuthCacheStatusTest, UseCounterIncrementedCrossPartition) {
   NavigateAndCommit(GURL("https://www.google.com/"));
   // Simulate a cross-origin subresource load with HTTP Auth.
+  const GURL subresource_url("https://www.example.com/subresource");
   http_auth_cache_status_->ResourceLoadComplete(
-      main_rfh(), content::GlobalRequestID(),
-      *CreateResourceLoadInfo(GURL("https://www.example.com/subresource"),
+      main_rfh(), content::GlobalRequestID(), subresource_url,
+      *CreateResourceLoadInfo(subresource_url,
                               /*did_use_server_http_auth=*/true));
   histogram_tester_.ExpectBucketCount(
       "Blink.UseCounter.Features",

@@ -6,9 +6,10 @@
 #define COMPONENTS_POLICY_CORE_COMMON_POLICY_SERVICE_H_
 
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 
-#include "absl/container/flat_hash_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
@@ -104,7 +105,7 @@ class POLICY_EXPORT PolicyService {
   // hashes
   //    are not calculated for that case as an optimization)
   // - `policy_name` does not exist
-  // - POLICY_DOMAIN_CHROME policies are not initialized yet.
+  // - IsFirstPolicyLoadComplete(POLICY_DOMAIN_CHROME) is false.
   virtual std::optional<size_t> GetInitialChromePolicyValueHash(
       std::string_view policy_name) const = 0;
 

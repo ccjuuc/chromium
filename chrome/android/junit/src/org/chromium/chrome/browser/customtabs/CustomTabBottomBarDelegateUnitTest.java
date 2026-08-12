@@ -38,7 +38,6 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsSizer;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
@@ -52,7 +51,6 @@ import org.chromium.ui.base.WindowAndroid;
 
 /** Unit test for {@link CustomTabBottomBarDelegate}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 @Config(manifest = Config.NONE)
 public class CustomTabBottomBarDelegateUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -113,13 +111,15 @@ public class CustomTabBottomBarDelegateUnitTest {
 
     @Test
     public void testIsSwipeEnabled() {
+        MotionEvent ev = MotionEvent.obtain(0, 0, MotionEvent.ACTION_MOVE, 0f, 0f, 0);
+
         // Swipe should only be enabled when the bottom bar is visible and the direction is up.
         when(mBottomBarView.getVisibility()).thenReturn(View.VISIBLE);
-        assertTrue(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.UP));
-        assertFalse(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.DOWN));
+        assertTrue(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.UP, ev));
+        assertFalse(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.DOWN, ev));
 
         when(mBottomBarView.getVisibility()).thenReturn(View.INVISIBLE);
-        assertFalse(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.UP));
+        assertFalse(mBottomBarDelegate.isSwipeEnabled(ScrollDirection.UP, ev));
     }
 
     @Test
@@ -213,7 +213,7 @@ public class CustomTabBottomBarDelegateUnitTest {
     @Test
     public void testOnBottomControlsHeightChanged() {
         when(mBrowserControlsSizer.getBottomControlsMinHeightOffset()).thenReturn(100);
-        when(mBrowserControlsSizer.getBrowserControlHiddenRatio()).thenReturn(1f);
+        when(mBrowserControlsSizer.getBottomControlHiddenRatio()).thenReturn(1f);
         mBottomBarDelegate.onBottomControlsHeightChanged(
                 /* bottomControlsHeight= */ 50, /* bottomControlsMinHeight= */ 0);
 

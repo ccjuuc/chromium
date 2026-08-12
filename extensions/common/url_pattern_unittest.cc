@@ -12,6 +12,7 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -966,6 +967,7 @@ TEST(ExtensionURLPatternTest, MatchesSingleOrigin) {
 TEST(ExtensionURLPatternTest, TrailingDotDomain) {
   const GURL normal_domain("http://example.com/");
   const GURL trailing_dot_domain("http://example.com./");
+  const GURL multiple_trailing_dots_domain("http://example.com../");
 
   // Both patterns should match trailing dot and non trailing dot domains. More
   // information about this not obvious behaviour can be found in [1].
@@ -985,11 +987,20 @@ TEST(ExtensionURLPatternTest, TrailingDotDomain) {
   const URLPattern pattern(URLPattern::SCHEME_HTTP, "*://example.com/*");
   EXPECT_TRUE(pattern.MatchesURL(normal_domain));
   EXPECT_TRUE(pattern.MatchesURL(trailing_dot_domain));
+  EXPECT_TRUE(pattern.MatchesURL(multiple_trailing_dots_domain));
 
   const URLPattern trailing_pattern(URLPattern::SCHEME_HTTP,
                                     "*://example.com./*");
   EXPECT_TRUE(trailing_pattern.MatchesURL(normal_domain));
   EXPECT_TRUE(trailing_pattern.MatchesURL(trailing_dot_domain));
+  EXPECT_TRUE(trailing_pattern.MatchesURL(multiple_trailing_dots_domain));
+
+  const URLPattern multiple_trailing_pattern(URLPattern::SCHEME_HTTP,
+                                             "*://example.com../*");
+  EXPECT_TRUE(multiple_trailing_pattern.MatchesURL(normal_domain));
+  EXPECT_TRUE(multiple_trailing_pattern.MatchesURL(trailing_dot_domain));
+  EXPECT_TRUE(
+      multiple_trailing_pattern.MatchesURL(multiple_trailing_dots_domain));
 }
 
 TEST(ExtensionURLPatternTest, MatchesEffectiveTLD) {
@@ -1326,6 +1337,22 @@ TEST(ExtensionURLPatternTest, WhitespaceHostParsing) {
     EXPECT_TRUE(match_subdomains_pattern.MatchesURL(subdomain_url))
         << subdomain_url;
   }
+}
+
+// Verifies that intersecting two patterns where one pattern's scheme is
+// excluded from the other pattern's valid scheme mask results in an empty
+// intersection (std::nullopt) rather than a crash.
+TEST(ExtensionURLPatternTest, ValidSchemeAndPatternIntersection) {
+  URLPattern pattern1(URLPattern::GetValidSchemeMaskForExtensions(),
+                      "chrome-extension://abcdefghijklmnoabcdefghijklmno/*");
+  int pattern2_schemes = extensions::Extension::kValidHostPermissionSchemes;
+  URLPattern pattern2(pattern2_schemes, "<all_urls>");
+  std::optional<URLPattern> intersection1 =
+      pattern1.CreateIntersection(pattern2);
+  std::optional<URLPattern> intersection2 =
+      pattern2.CreateIntersection(pattern1);
+  EXPECT_EQ(std::nullopt, intersection1);
+  EXPECT_EQ(std::nullopt, intersection2);
 }
 
 }  // namespace

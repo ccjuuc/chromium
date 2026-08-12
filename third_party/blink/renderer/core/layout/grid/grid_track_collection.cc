@@ -119,8 +119,7 @@ void GridRangeBuilder::EnsureTrackCoverage(
 }
 
 GridRangeVector GridRangeBuilder::FinalizeRanges(
-    bool needs_intrinsic_track_size,
-    Vector<wtf_size_t>* collapsed_track_indexes) {
+    bool needs_intrinsic_track_size) {
   DCHECK_EQ(start_lines_.size(), end_lines_.size());
 
   // Sort start and ending tracks from low to high.
@@ -134,7 +133,13 @@ GridRangeVector GridRangeBuilder::FinalizeRanges(
     must_sort_grid_lines_ = false;
   }
 
-  const wtf_size_t explicit_repeater_count = explicit_tracks_.RepeaterCount();
+  // For a subgridded axis that is not subgridded onto a parent grid (a
+  // standalone axis), https://drafts.csswg.org/css-grid-2/#subgrid-listing
+  // gives a used value of "none". The subgrid line-name repeaters contribute no
+  // explicit tracks.
+  const wtf_size_t explicit_repeater_count =
+      explicit_tracks_.IsSubgriddedAxis() ? 0u
+                                          : explicit_tracks_.RepeaterCount();
   const wtf_size_t grid_line_count = start_lines_.size();
 
   GridRangeVector ranges;
@@ -315,13 +320,6 @@ GridRangeVector GridRangeBuilder::FinalizeRanges(
         !needs_intrinsic_track_size) {
       range.SetIsCollapsed();
       range.set_count = 0;
-      if (collapsed_track_indexes) {
-        wtf_size_t start_line = range.start_line;
-        for (wtf_size_t i = start_line; i < start_line + range.track_count;
-             ++i) {
-          collapsed_track_indexes->emplace_back(i);
-        }
-      }
     } else {
       // If this is a non-collapsed range, the number of sets in this range is
       // the number of track definitions in the current repeater clamped by the
@@ -363,7 +361,13 @@ GridRangeBuilder::GridRangeBuilder(const GridTrackList& explicit_tracks,
   DCHECK_LE(implicit_tracks_.RepeaterCount(), 1u);
   DCHECK_NE(auto_repetitions_, kNotFound);
 
-  const wtf_size_t repeater_count = explicit_tracks_.RepeaterCount();
+  // For a subgridded axis that is not subgridded onto a parent grid (a
+  // standalone axis), https://drafts.csswg.org/css-grid-2/#subgrid-listing
+  // gives a used value of "none". The subgrid line-name repeaters contribute no
+  // explicit tracks.
+  const wtf_size_t repeater_count = explicit_tracks_.IsSubgriddedAxis()
+                                        ? 0u
+                                        : explicit_tracks_.RepeaterCount();
 
   // Add extra capacity for the extra lines needed for named grids.
   start_lines_.ReserveInitialCapacity(repeater_count + 1);
@@ -486,9 +490,6 @@ bool GridLayoutTrackCollection::operator==(
          accumulated_start_extra_margin_ ==
              other.accumulated_start_extra_margin_ &&
          accumulated_end_extra_margin_ == other.accumulated_end_extra_margin_ &&
-         baselines_.has_value() == other.baselines_.has_value() &&
-         (!baselines_ || (baselines_->major == other.baselines_->major &&
-                          baselines_->minor == other.baselines_->minor)) &&
          last_indefinite_index_ == other.last_indefinite_index_ &&
          ranges_ == other.ranges_ && sets_geometry_ == other.sets_geometry_;
 }
@@ -567,31 +568,18 @@ LayoutUnit GridLayoutTrackCollection::EndExtraMargin(
              : accumulated_end_extra_margin_;
 }
 
-LayoutUnit GridLayoutTrackCollection::MajorBaseline(
-    wtf_size_t set_index) const {
-  if (!baselines_) {
-    return LayoutUnit::Min();
-  }
-
-  DCHECK_LT(set_index, baselines_->major.size());
-  return baselines_->major[set_index];
-}
-
-LayoutUnit GridLayoutTrackCollection::MinorBaseline(
-    wtf_size_t set_index) const {
-  if (!baselines_) {
-    return LayoutUnit::Min();
-  }
-
-  DCHECK_LT(set_index, baselines_->minor.size());
-  return baselines_->minor[set_index];
+void GridLayoutTrackCollection::AdjustSingleSetOffset(wtf_size_t set_index,
+                                                      LayoutUnit delta) {
+  DCHECK_LT(set_index, sets_geometry_.size());
+  sets_geometry_[set_index].offset += delta;
 }
 
 void GridLayoutTrackCollection::AdjustSetOffsets(wtf_size_t set_index,
                                                  LayoutUnit delta) {
   DCHECK_LT(set_index, sets_geometry_.size());
-  for (wtf_size_t i = set_index; i < sets_geometry_.size(); ++i)
-    sets_geometry_[i].offset += delta;
+  for (wtf_size_t i = set_index; i < sets_geometry_.size(); ++i) {
+    AdjustSingleSetOffset(i, delta);
+  }
 }
 
 LayoutUnit GridLayoutTrackCollection::CalculateSetSpanSize() const {
@@ -634,7 +622,7 @@ bool GridLayoutTrackCollection::IsSpanningIndefiniteSet(
          begin_set_index <= last_indefinite_index;
 }
 
-GridLayoutTrackCollection
+GridLayoutTrackCollection*
 GridLayoutTrackCollection::CreateSubgridTrackCollection(
     wtf_size_t begin_range_index,
     wtf_size_t end_range_index,
@@ -642,11 +630,13 @@ GridLayoutTrackCollection::CreateSubgridTrackCollection(
     const BoxStrut& subgrid_margin,
     const BoxStrut& subgrid_border_scrollbar_padding,
     GridTrackSizingDirection subgrid_track_direction,
-    bool is_opposite_direction_in_root_grid) const {
+    bool is_opposite_direction_in_root_grid,
+    bool is_subgrid_auto_placed) const {
   DCHECK_LE(begin_range_index, end_range_index);
   DCHECK_LT(end_range_index, ranges_.size());
 
-  GridLayoutTrackCollection subgrid_track_collection(subgrid_track_direction);
+  GridLayoutTrackCollection* subgrid_track_collection =
+      MakeGarbageCollected<GridLayoutTrackCollection>(subgrid_track_direction);
 
   const wtf_size_t begin_set_index = ranges_[begin_range_index].begin_set_index;
   const wtf_size_t end_set_index = ranges_[end_range_index].begin_set_index +
@@ -657,8 +647,8 @@ GridLayoutTrackCollection::CreateSubgridTrackCollection(
 
   // Copy and translate the ranges in the subgrid's span.
   {
-    auto& subgrid_properties = subgrid_track_collection.properties_;
-    auto& subgrid_ranges = subgrid_track_collection.ranges_;
+    auto& subgrid_properties = subgrid_track_collection->properties_;
+    auto& subgrid_ranges = subgrid_track_collection->ranges_;
 
     const wtf_size_t range_count = end_range_index - begin_range_index;
     wtf_size_t current_begin_set_index = 0;
@@ -709,25 +699,83 @@ GridLayoutTrackCollection::CreateSubgridTrackCollection(
   // Accumulate the extra margin from the spanned sets in the parent track
   // collection and this subgrid's margins and gutter size delta.
   {
-    subgrid_track_collection.accumulated_gutter_size_delta_ =
+    subgrid_track_collection->accumulated_gutter_size_delta_ =
         subgrid_gutter_size_delta + accumulated_gutter_size_delta_;
 
-    auto& subgrid_sets_geometry = subgrid_track_collection.sets_geometry_;
+    auto& subgrid_sets_geometry = subgrid_track_collection->sets_geometry_;
     subgrid_sets_geometry.ReserveInitialCapacity(set_span_size + 1);
     subgrid_sets_geometry.emplace_back(
         /* offset */ subgrid_border_scrollbar_padding_start);
 
-    // Opposite direction subgrids adjust extra margin from the opposite side.
-    subgrid_track_collection.accumulated_start_extra_margin_ =
-        subgrid_margin_border_scrollbar_padding_start +
-        (is_opposite_direction_in_root_grid
-             ? EndExtraMargin(end_set_index)
-             : StartExtraMargin(begin_set_index));
+    auto ExtraMarginsFromParent =
+        [&](LayoutUnit& out_accumulated_start_extra_margin,
+            LayoutUnit& out_accumulated_end_extra_margin) {
+          // When the subgrid is auto-placed in this parent (e.g. inside a
+          // grid-lanes ancestor), its final position isn't known, so we reserve
+          // the largest extra margin it could pick up.
+          if (is_subgrid_auto_placed) {
+            out_accumulated_start_extra_margin =
+                accumulated_start_extra_margin_;
+            out_accumulated_end_extra_margin = accumulated_end_extra_margin_;
 
-    subgrid_track_collection.accumulated_end_extra_margin_ =
+            // If the subgrid spans all the tracks of the parent, no internal
+            // gap can ever be adjacent to the subgrid's boundary, so the
+            // parent's edge margin is the upper bound.
+            const wtf_size_t parent_track_count = EndLineOfImplicitGrid();
+            const wtf_size_t subgrid_track_count =
+                subgrid_track_collection->EndLineOfImplicitGrid();
+            if (parent_track_count == subgrid_track_count) {
+              return;
+            }
+
+            DCHECK_LT(subgrid_track_count, parent_track_count);
+
+            // If the difference between the parent and subgrid track counts is
+            // 1, then the subgrid will never be in a position where it spans a
+            // track that starts and ends at a parent gap at the same time.
+            // Ensure that the gap can only impact the max accumulated margin on
+            // one output value.
+            if (parent_track_count - subgrid_track_count == 1) {
+              if (out_accumulated_start_extra_margin >=
+                  out_accumulated_end_extra_margin) {
+                out_accumulated_end_extra_margin =
+                    accumulated_gutter_size_delta_ / 2;
+                return;
+              } else {
+                out_accumulated_start_extra_margin =
+                    accumulated_gutter_size_delta_ / 2;
+                return;
+              }
+            }
+
+            // In all other cases, any combination of start and end tracks are
+            // possible, so take the max of the margin and gap start/end;
+            out_accumulated_start_extra_margin =
+                std::max(out_accumulated_start_extra_margin,
+                         accumulated_gutter_size_delta_ / 2);
+            out_accumulated_end_extra_margin =
+                std::max(out_accumulated_end_extra_margin,
+                         accumulated_gutter_size_delta_ / 2);
+          } else {
+            out_accumulated_start_extra_margin =
+                StartExtraMargin(begin_set_index);
+            out_accumulated_end_extra_margin = EndExtraMargin(end_set_index);
+          }
+        };
+
+    LayoutUnit parent_start_extra_margin, parent_end_extra_margin;
+    ExtraMarginsFromParent(parent_start_extra_margin, parent_end_extra_margin);
+
+    // Opposite direction subgrids adjust extra margin from the opposite side.
+    subgrid_track_collection->accumulated_start_extra_margin_ =
+        subgrid_margin_border_scrollbar_padding_start +
+        (is_opposite_direction_in_root_grid ? parent_end_extra_margin
+                                            : parent_start_extra_margin);
+
+    subgrid_track_collection->accumulated_end_extra_margin_ =
         subgrid_margin_border_scrollbar_padding_end +
-        (is_opposite_direction_in_root_grid ? StartExtraMargin(begin_set_index)
-                                            : EndExtraMargin(end_set_index));
+        (is_opposite_direction_in_root_grid ? parent_start_extra_margin
+                                            : parent_end_extra_margin);
 
     // Opposite direction subgrids iterate backwards.
     const wtf_size_t first_set_index =
@@ -784,7 +832,7 @@ GridLayoutTrackCollection::CreateSubgridTrackCollection(
   // Copy the last indefinite indices in the subgrid's span.
   if (!last_indefinite_index_.empty()) {
     auto& subgrid_last_indefinite_index =
-        subgrid_track_collection.last_indefinite_index_;
+        subgrid_track_collection->last_indefinite_index_;
 
     subgrid_last_indefinite_index.ReserveInitialCapacity(set_span_size + 1);
     subgrid_last_indefinite_index.push_back(kNotFound);
@@ -808,44 +856,73 @@ GridLayoutTrackCollection::CreateSubgridTrackCollection(
     }
   }
 
-  // Copy the major and minor baselines in the subgrid's span.
-  if (baselines_ && !baselines_->major.empty()) {
-    DCHECK_LE(end_set_index, baselines_->major.size());
-    DCHECK_LE(end_set_index, baselines_->minor.size());
+  subgrid_track_collection->gutter_size_ = subgrid_gutter_size;
+  return subgrid_track_collection;
+}
 
-    Baselines subgrid_baselines;
-    subgrid_baselines.major.ReserveInitialCapacity(set_span_size);
-    subgrid_baselines.minor.ReserveInitialCapacity(set_span_size);
+GridTrackBaselines* GridLayoutTrackCollection::CreateSubgridBaselines(
+    wtf_size_t begin_range_index,
+    wtf_size_t end_range_index,
+    LayoutUnit subgrid_gutter_size,
+    const BoxStrut& subgrid_margin,
+    const BoxStrut& subgrid_border_scrollbar_padding,
+    GridTrackSizingDirection subgrid_track_direction,
+    bool is_opposite_direction_in_root_grid,
+    const GridTrackBaselines& parent_baselines) const {
+  DCHECK_LE(begin_range_index, end_range_index);
+  DCHECK_LT(end_range_index, ranges_.size());
 
-    // Adjust the baselines to accommodate the subgrid extra margins.
-    for (wtf_size_t i = 0; i < set_span_size; ++i) {
-      LayoutUnit major_adjust =
-          (i == 0) ? subgrid_margin_border_scrollbar_padding_start
-                   : subgrid_gutter_size_delta / 2;
-      LayoutUnit minor_adjust =
-          (i == set_span_size - 1) ? subgrid_margin_border_scrollbar_padding_end
-                                   : subgrid_gutter_size_delta / 2;
-      if (is_opposite_direction_in_root_grid) {
-        std::swap(major_adjust, minor_adjust);
-      }
-      const wtf_size_t current_index = is_opposite_direction_in_root_grid
-                                           ? end_set_index - i - 1
-                                           : begin_set_index + i;
-      subgrid_baselines.major.emplace_back(baselines_->major[current_index] -
-                                           major_adjust);
-      subgrid_baselines.minor.emplace_back(baselines_->minor[current_index] -
-                                           minor_adjust);
-    }
+  const wtf_size_t begin_set_index = ranges_[begin_range_index].begin_set_index;
+  const wtf_size_t end_set_index = ranges_[end_range_index].begin_set_index +
+                                   ranges_[end_range_index].set_count;
 
+  DCHECK_LT(begin_set_index, end_set_index);
+  DCHECK_LE(end_set_index, parent_baselines.major.size());
+  DCHECK_LE(end_set_index, parent_baselines.minor.size());
+
+  const wtf_size_t set_span_size = end_set_index - begin_set_index;
+  const auto subgrid_gutter_size_delta = subgrid_gutter_size - gutter_size_;
+
+  const bool is_for_columns = subgrid_track_direction == kForColumns;
+  const auto subgrid_margin_border_scrollbar_padding_start =
+      (is_for_columns ? subgrid_margin.inline_start
+                      : subgrid_margin.block_start) +
+      (is_for_columns ? subgrid_border_scrollbar_padding.inline_start
+                      : subgrid_border_scrollbar_padding.block_start);
+  const auto subgrid_margin_border_scrollbar_padding_end =
+      is_for_columns ? subgrid_margin.inline_end +
+                           subgrid_border_scrollbar_padding.inline_end
+                     : subgrid_margin.block_end +
+                           subgrid_border_scrollbar_padding.block_end;
+
+  auto* subgrid_baselines = MakeGarbageCollected<GridTrackBaselines>();
+  subgrid_baselines->major.ReserveInitialCapacity(set_span_size);
+  subgrid_baselines->minor.ReserveInitialCapacity(set_span_size);
+
+  for (wtf_size_t i = 0; i < set_span_size; ++i) {
+    LayoutUnit major_adjust =
+        (i == 0) ? subgrid_margin_border_scrollbar_padding_start
+                 : subgrid_gutter_size_delta / 2;
+    LayoutUnit minor_adjust = (i == set_span_size - 1)
+                                  ? subgrid_margin_border_scrollbar_padding_end
+                                  : subgrid_gutter_size_delta / 2;
     if (is_opposite_direction_in_root_grid) {
-      std::swap(subgrid_baselines.major, subgrid_baselines.minor);
+      std::swap(major_adjust, minor_adjust);
     }
-
-    subgrid_track_collection.baselines_.emplace(std::move(subgrid_baselines));
+    const wtf_size_t current_index = is_opposite_direction_in_root_grid
+                                         ? end_set_index - i - 1
+                                         : begin_set_index + i;
+    subgrid_baselines->major.emplace_back(
+        parent_baselines.major[current_index] - major_adjust);
+    subgrid_baselines->minor.emplace_back(
+        parent_baselines.minor[current_index] - minor_adjust);
   }
 
-  subgrid_track_collection.gutter_size_ = subgrid_gutter_size;
-  return subgrid_track_collection;
+  if (is_opposite_direction_in_root_grid) {
+    std::swap(subgrid_baselines->major, subgrid_baselines->minor);
+  }
+
+  return subgrid_baselines;
 }
 
 bool GridLayoutTrackCollection::HasFlexibleTrack() const {
@@ -865,6 +942,18 @@ bool GridLayoutTrackCollection::IsDependentOnAvailableSize() const {
       TrackSpanProperties::kIsDependentOnAvailableSize);
 }
 
+wtf_size_t GridLayoutTrackCollection::FirstNonCollapsedLineIndex() const {
+  if (ranges_.empty()) {
+    return kNotFound;
+  }
+  const auto& range = ranges_[0];
+  if (!range.IsCollapsed()) {
+    return range.start_line;
+  }
+
+  return range.start_line + range.track_count;
+}
+
 bool GridLayoutTrackCollection::HasIndefiniteSet() const {
   return !last_indefinite_index_.empty() &&
          last_indefinite_index_.back() != kNotFound;
@@ -873,12 +962,12 @@ bool GridLayoutTrackCollection::HasIndefiniteSet() const {
 GridSizingTrackCollection::GridSizingTrackCollection(
     GridRangeVector&& ranges,
     GridTrackSizingDirection track_direction,
-    bool must_create_baselines)
+    bool should_store_collapsed_track_indexes)
     : GridLayoutTrackCollection(track_direction) {
   ranges_ = std::move(ranges);
 
-  if (must_create_baselines) {
-    baselines_.emplace();
+  if (should_store_collapsed_track_indexes) {
+    collapsed_track_indexes_.Shrink(0);
   }
 
   wtf_size_t set_count = 0;
@@ -886,6 +975,11 @@ GridSizingTrackCollection::GridSizingTrackCollection(
     if (!range.IsCollapsed()) {
       non_collapsed_track_count_ += range.track_count;
       set_count += range.set_count;
+    } else if (should_store_collapsed_track_indexes) {
+      for (wtf_size_t i = range.start_line;
+           i < range.start_line + range.track_count; ++i) {
+        collapsed_track_indexes_.emplace_back(i);
+      }
     }
   }
 
@@ -995,30 +1089,6 @@ void GridSizingTrackCollection::SetIndefiniteGrowthLimitsToBaseSize() {
   }
 }
 
-void GridSizingTrackCollection::ResetBaselines() {
-  DCHECK(baselines_);
-
-  const wtf_size_t set_count = sets_.size();
-  baselines_->major = Vector<LayoutUnit, 16>(set_count, LayoutUnit::Min());
-  baselines_->minor = Vector<LayoutUnit, 16>(set_count, LayoutUnit::Min());
-}
-
-void GridSizingTrackCollection::SetMajorBaseline(
-    wtf_size_t set_index,
-    LayoutUnit candidate_baseline) {
-  DCHECK(baselines_ && set_index < baselines_->major.size());
-  if (candidate_baseline > baselines_->major[set_index])
-    baselines_->major[set_index] = candidate_baseline;
-}
-
-void GridSizingTrackCollection::SetMinorBaseline(
-    wtf_size_t set_index,
-    LayoutUnit candidate_baseline) {
-  DCHECK(baselines_ && set_index < baselines_->minor.size());
-  if (candidate_baseline > baselines_->minor[set_index])
-    baselines_->minor[set_index] = candidate_baseline;
-}
-
 void GridSizingTrackCollection::BuildSets(
     const ComputedStyle& container_style,
     const LogicalSize& container_available_size) {
@@ -1031,7 +1101,7 @@ void GridSizingTrackCollection::BuildSets(
 
   BuildSets(container_style.TemplateTracks(track_direction_).GetTrackList(),
             container_style.AutoTracks(track_direction_),
-            container_style.IsDisplayGridLanesBox(),
+            container_style.IsDisplayGridLanes(),
             available_size == kIndefiniteSize);
   InitializeSets(available_size);
 }
@@ -1135,32 +1205,6 @@ void GridSizingTrackCollection::BuildSets(
         if (set_track_size.HasPercentage()) {
           range.properties.SetProperty(
               TrackSpanProperties::kIsDependentOnAvailableSize);
-        }
-
-        if (intrinsic_sized_repeater_set_index_ == kNotFound &&
-            range.IsAutoRepeat() &&
-            set_track_size.IsTrackDefinitionIntrinsic()) {
-          // This is not yet supported in Grid, only Grid-lanes.
-          CHECK(is_grid_lanes);
-
-          // Get the index of the first set of the intrinsic auto repeat. For
-          // example, if the track definition was repeat(auto-fill, 50px auto),
-          // we want the index of the set that holds 50px.
-          wtf_size_t repeater_offset = range.repeater_offset;
-
-          // Use the size since that will be the index of the current set once
-          // it is added.
-          wtf_size_t set_index = sets_.size();
-
-          // If this range/set doesn't start the intrinsic auto repeat, walk the
-          // sets backward until we hit the first track in the repeat.
-          while (repeater_offset > 0) {
-            set_index--;
-            CHECK_LT(set_index, sets_.size());
-            repeater_offset -= sets_[set_index].track_count;
-          }
-          CHECK_EQ(repeater_offset, 0U);
-          intrinsic_sized_repeater_set_index_ = set_index;
         }
 
         CacheSetProperties(sets_.emplace_back(set_track_count, set_track_size,

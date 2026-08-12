@@ -95,6 +95,7 @@ VideoDecoderHelper::Status VideoDecoderHelper::Initialize(
           if (const auto* sps = parser.GetSPS(sps_id)) {
             // Interlaced content isn't supported by any hardware decoders based
             // on media::H264Decoder and is only sometimes supported on Android.
+            // Similarly, 4:4:4 content is often unsupported by hardware.
             //
             // Sadly this information is not part of the codec string, nor is it
             // part of the information we get back from the OS support matrix.
@@ -106,7 +107,8 @@ VideoDecoderHelper::Status VideoDecoderHelper::Initialize(
             // This does not fix the problem for annex-b formatted H.264, which
             // we can't detect until after we've selected the decoder. Given how
             // rare this type of content is, this fix is best effort.
-            requires_software_decoder_ = sps->frame_mbs_only_flag == 0;
+            requires_software_decoder_ =
+                sps->frame_mbs_only_flag == 0 || sps->chroma_format_idc == 3;
           }
         }
       }
@@ -164,11 +166,23 @@ VideoDecoderHelper::Status VideoDecoderHelper::ConvertNalUnitStreamToByteStream(
     base::SpanWriter writer(output);
     converted = h265_converter_->ConvertNalUnitStreamToByteStream(
         input, is_first_chunk ? h265_hvcc_.get() : nullptr, writer);
-    *output_size = writer.num_written();
+    *output_size = base::checked_cast<uint32_t>(writer.num_written());
   }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
   return converted ? Status::kSucceed : Status::kBitstreamConvertFailed;
+}
+
+gfx::HDRMetadata VideoDecoderHelper::GetHdrMetadata() const {
+#if BUILDFLAG(USE_PROPRIETARY_CODECS) && BUILDFLAG(ENABLE_PLATFORM_HEVC) && \
+    BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+  if (h265_hvcc_) {
+    return h265_hvcc_->GetHDRMetadata();
+  }
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS) &&
+        // BUILDFLAG(ENABLE_PLATFORM_HEVC) &&
+        // BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+  return {};
 }
 
 }  // namespace blink

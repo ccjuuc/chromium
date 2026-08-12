@@ -9,13 +9,20 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_element_namespace.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_element_namespace_with_attributes.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_presets.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_sanitizer_processing_instruction.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerattributenamespace_string.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerconfig_sanitizerpresets.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerelementnamespace_string.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerelementnamespacewithattributes_string.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_sanitizerprocessinginstruction_string.h"
+#include "third_party/blink/renderer/core/dom/comment.h"
+#include "third_party/blink/renderer/core/dom/container_node.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
+#include "third_party/blink/renderer/core/dom/processing_instruction.h"
+#include "third_party/blink/renderer/core/dom/qualified_name.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/tree_scope.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
@@ -23,8 +30,10 @@
 #include "third_party/blink/renderer/core/mathml_names.h"
 #include "third_party/blink/renderer/core/sanitizer/sanitizer_builtins.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
@@ -33,9 +42,9 @@ Sanitizer* Sanitizer::Create(
     const V8UnionSanitizerConfigOrSanitizerPresets* config_or_preset,
     ExceptionState& exception_state) {
   if (!config_or_preset) {
-    return Create(nullptr, /*safe*/ false, exception_state);
+    return Create(nullptr, Mode::kUnsafe, exception_state);
   } else if (config_or_preset->IsSanitizerConfig()) {
-    return Create(config_or_preset->GetAsSanitizerConfig(), /*safe*/ false,
+    return Create(config_or_preset->GetAsSanitizerConfig(), Mode::kUnsafe,
                   exception_state);
   } else if (config_or_preset->IsSanitizerPresets()) {
     return Create(config_or_preset->GetAsSanitizerPresets().AsEnum(),
@@ -46,18 +55,19 @@ Sanitizer* Sanitizer::Create(
 }
 
 Sanitizer* Sanitizer::Create(const SanitizerConfig* sanitizer_config,
-                             bool safe,
+                             Mode safe,
                              ExceptionState& exception_state) {
   Sanitizer* sanitizer = MakeGarbageCollected<Sanitizer>();
   if (!sanitizer_config) {
     // Default case: Set from builtin Sanitizer.
-    sanitizer->setFrom(*(safe ? SanitizerBuiltins::GetDefaultSafe()
-                              : SanitizerBuiltins::GetDefaultUnsafe()));
+    sanitizer->setFrom(*(safe == Mode::kSafe
+                             ? SanitizerBuiltins::GetDefaultSafe()
+                             : SanitizerBuiltins::GetDefaultUnsafe()));
     DCHECK(sanitizer->isValid());
     return sanitizer;
   }
 
-  bool success = sanitizer->setFrom(sanitizer_config, !safe);
+  bool success = sanitizer->setFrom(sanitizer_config, safe != Mode::kSafe);
   if (!success) {
     exception_state.ThrowTypeError("Invalid Sanitizer configuration.");
     return nullptr;
@@ -79,10 +89,18 @@ Sanitizer* Sanitizer::CreateEmpty() {
   Sanitizer* sanitizer = MakeGarbageCollected<Sanitizer>();
   sanitizer->remove_elements_ = std::make_unique<SanitizerNameSet>();
   sanitizer->remove_attrs_ = std::make_unique<SanitizerNameSet>();
+  sanitizer->remove_processing_instructions_ =
+      std::make_unique<HashSet<AtomicString>>();
   sanitizer->data_attrs_ = SanitizerBoolWithAbsence::kAbsent;
   sanitizer->comments_ = SanitizerBoolWithAbsence::kAbsent;
   DCHECK(sanitizer->isValid());
   return sanitizer;
+}
+
+Sanitizer* Sanitizer::Clone() const {
+  Sanitizer* clone = MakeGarbageCollected<Sanitizer>();
+  clone->setFrom(*this);
+  return clone;
 }
 
 Sanitizer::Sanitizer(std::unique_ptr<SanitizerNameSet> allow_elements,
@@ -92,6 +110,8 @@ Sanitizer::Sanitizer(std::unique_ptr<SanitizerNameSet> allow_elements,
                      std::unique_ptr<SanitizerNameSet> remove_attrs,
                      SanitizerNameMap allow_attrs_per_element,
                      SanitizerNameMap remove_attrs_per_element,
+                     std::unique_ptr<HashSet<AtomicString>> allow_pi,
+                     std::unique_ptr<HashSet<AtomicString>> remove_pi,
                      bool allow_data_attrs,
                      bool allow_comments)
     : allow_elements_(allow_elements.release()),
@@ -101,6 +121,8 @@ Sanitizer::Sanitizer(std::unique_ptr<SanitizerNameSet> allow_elements,
       remove_attrs_(remove_attrs.release()),
       allow_attrs_per_element_(allow_attrs_per_element),
       remove_attrs_per_element_(remove_attrs_per_element),
+      allow_processing_instructions_(allow_pi.release()),
+      remove_processing_instructions_(remove_pi.release()),
       data_attrs_(allow_data_attrs ? SanitizerBoolWithAbsence::kTrue
                                    : SanitizerBoolWithAbsence::kFalse),
       comments_(allow_comments ? SanitizerBoolWithAbsence::kTrue
@@ -109,6 +131,19 @@ Sanitizer::Sanitizer(std::unique_ptr<SanitizerNameSet> allow_elements,
     data_attrs_ = SanitizerBoolWithAbsence::kAbsent;
   }
   DCHECK(isValid());
+}
+
+bool Sanitizer::IsElementAllowed(const QualifiedName& name) const {
+  if (remove_elements_ && remove_elements_->Contains(name)) {
+    return false;
+  }
+  if (replace_elements_ && replace_elements_->Contains(name)) {
+    return false;
+  }
+  if (allow_elements_ && !allow_elements_->Contains(name)) {
+    return false;
+  }
+  return true;
 }
 
 bool Sanitizer::allowElement(
@@ -188,6 +223,8 @@ void Sanitizer::removeUnsafe() {
   CHECK(!baseline->replace_elements_);
   CHECK(baseline->allow_attrs_per_element_.empty());
   CHECK(baseline->remove_attrs_per_element_.empty());
+  CHECK(!baseline->allow_processing_instructions_);
+  CHECK(baseline->remove_processing_instructions_->empty());
 
   for (const QualifiedName& name : *(baseline->remove_elements_)) {
     RemoveElement(name);
@@ -222,6 +259,13 @@ Vector<QualifiedName> Sorted(const SanitizerNameSet& unsorted) {
   Vector<QualifiedName> result;
   std::ranges::copy(unsorted, std::back_inserter(result));
   std::ranges::sort(result, &SanitizerQNameLessThan);
+  return result;
+}
+
+Vector<AtomicString> Sorted(const HashSet<AtomicString>& unsorted) {
+  Vector<AtomicString> result;
+  std::ranges::copy(unsorted, std::back_inserter(result));
+  std::ranges::sort(result, &SanitizerAtomicStringLessThan);
   return result;
 }
 
@@ -353,6 +397,33 @@ SanitizerConfig* Sanitizer::get() const {
     config->setRemoveAttributes(remove_attrs);
   }
 
+  if (allow_processing_instructions_) {
+    HeapVector<Member<V8UnionSanitizerProcessingInstructionOrString>> allow_pis;
+    for (const String& target : Sorted(*allow_processing_instructions_)) {
+      Member<SanitizerProcessingInstruction> pi =
+          SanitizerProcessingInstruction::Create();
+      pi->setTarget(target);
+      allow_pis.push_back(
+          MakeGarbageCollected<V8UnionSanitizerProcessingInstructionOrString>(
+              pi));
+    }
+    config->setProcessingInstructions(allow_pis);
+  }
+
+  if (remove_processing_instructions_) {
+    HeapVector<Member<V8UnionSanitizerProcessingInstructionOrString>>
+        remove_pis;
+    for (const String& target : Sorted(*remove_processing_instructions_)) {
+      Member<SanitizerProcessingInstruction> pi =
+          SanitizerProcessingInstruction::Create();
+      pi->setTarget(target);
+      remove_pis.push_back(
+          MakeGarbageCollected<V8UnionSanitizerProcessingInstructionOrString>(
+              pi));
+    }
+    config->setRemoveProcessingInstructions(remove_pis);
+  }
+
   if (data_attrs_ != SanitizerBoolWithAbsence::kAbsent) {
     config->setDataAttributes(data_attrs_ == SanitizerBoolWithAbsence::kTrue);
   }
@@ -386,7 +457,7 @@ bool Sanitizer::AllowElement(const QualifiedName& name,
         // Step 2.3.1.3: If dataAttributes is true:
         if (data_attrs_ == SanitizerBoolWithAbsence::kTrue) {
           allow_attrs->erase_if([](const QualifiedName& name) {
-            return name.LocalName().StartsWith("data-");
+            return name.LocalName().starts_with("data-");
           });
         }
       }
@@ -442,15 +513,14 @@ bool Sanitizer::AllowElement(const QualifiedName& name,
     // where item[name] equals element[name] and item[namespace] equals
     // element[namespace]. Step 2.8: If element equals current element then
     // return modified.
+    auto it = allow_attrs_per_element_.find(name);
+    bool attr_found = it != allow_attrs_per_element_.end();
     bool allow_attrs_current_equal_new =
-        (allow_attrs == nullptr && !allow_attrs_per_element_.Contains(name)) ||
-        (allow_attrs && allow_attrs_per_element_.Contains(name) &&
-         *allow_attrs == allow_attrs_per_element_.at(name));
+        allow_attrs ? (attr_found && *allow_attrs == it->value) : !attr_found;
+    it = remove_attrs_per_element_.find(name);
+    attr_found = it != remove_attrs_per_element_.end();
     bool remove_attrs_current_equal_new =
-        (remove_attrs == nullptr &&
-         !remove_attrs_per_element_.Contains(name)) ||
-        (remove_attrs && remove_attrs_per_element_.Contains(name) &&
-         *remove_attrs == remove_attrs_per_element_.at(name));
+        remove_attrs ? (attr_found && *remove_attrs == it->value) : !attr_found;
     if (allow_attrs_current_equal_new && remove_attrs_current_equal_new) {
       return modified;
     }
@@ -531,6 +601,14 @@ bool Sanitizer::ReplaceElement(const QualifiedName& name) {
   DCHECK(isValid());
   // Step 3: Set element to the result of canonicalize a sanitizer element
   // with element. (Done by caller.)
+  // Step 4: If the built-in non-replaceable elements list contains element,
+  // return false.
+  if (SanitizerBuiltins::GetNonReplaceableElements()->Contains(name)) {
+    return false;
+  }
+
+  // Implementation from previous spec version. Is functionally identical to
+  // current version:
   // Step 4: If configuration["replaceWithChildrenElements"] contains element:
   // Step 4.1: Return false.
   bool contains_name = replace_elements_ && replace_elements_->Contains(name);
@@ -566,7 +644,7 @@ bool Sanitizer::AllowAttribute(const QualifiedName& name) {
     // Step 2.1: Comment: If we have a global allow-list, [...]
     // Step 2.2: If configuration["dataAttributes"] is true and [...]
     if (data_attrs_ == SanitizerBoolWithAbsence::kTrue &&
-        name.NamespaceURI().IsNull() && name.LocalName().StartsWith("data-")) {
+        name.NamespaceURI().IsNull() && name.LocalName().starts_with("data-")) {
       return false;
     }
     // Step 2.3: If configuration["attributes"] contains attribute return false.
@@ -618,21 +696,34 @@ bool Sanitizer::RemoveAttribute(const QualifiedName& name) {
   // with attribute. Step 2: If configuration["attributes"] exists:
   if (allow_attrs_) {
     // Step 2.1: Comment: If we have a global allow-list, we need to add
-    // attribute. Step 2.2: If configuration["attributes"] does not contain
-    // attribute:
-    if (!allow_attrs_->Contains(name)) {
-      // Step 2.2.1: Return false.
-      return false;
-    }
+    // attribute.
+    // Step 2.2: Set |modified| to the result of remove attribute  from
+    // |configuration|["{{SanitizerConfig/attributes}}"].
+    bool modified = allow_attrs_->Contains(name);
     // Step 2.3: Comment: Fix-up per-element allow and remove lists.
     // Step 2.4: If configuration["elements"] exists:
     if (allow_elements_) {
       // Step 2.4.1: For each element in configuration["elements"]:
-      // Step 2.4.1.1: If element["removeAttributes"] with default « » contains
-      // attribute: Step 2.4.1.1.1: Remove attribute from
-      // element["removeAttributes"].
-      for (const auto& item : remove_attrs_per_element_) {
+      for (const auto& item : allow_attrs_per_element_) {
+        // Step 2.4.1.1: If element["attributes"] with default «» contains
+        // attribute:
         if (item.value.Contains(name)) {
+          // Step 2.4.1.1.1: Set modified to true.
+          modified = true;
+          // Step 2.4.1.1.2: Remove attribute from element["attributes"].
+          SanitizerNameSet attrs(item.value);
+          attrs.erase(name);
+          allow_attrs_per_element_.Set(item.key, attrs);
+        }
+      }
+      // ALso Step 2.4.1, For each element in configuration["elements"]
+      for (const auto& item : remove_attrs_per_element_) {
+        // Step 2.4.1.2: If element["removeAttributes"] with default «» contains
+        // attribute:
+        if (item.value.Contains(name)) {
+          // Step 2.4.1.2.1: Assert: modified is true.
+          CHECK(modified);
+          // Step 2.4.1.2.2: Remove attribute from element["removeAttributes"].
           SanitizerNameSet attrs(item.value);
           attrs.erase(name);
           remove_attrs_per_element_.Set(item.key, attrs);
@@ -642,7 +733,7 @@ bool Sanitizer::RemoveAttribute(const QualifiedName& name) {
     // Step 2.5: Remove attribute from configuration["attributes"].
     allow_attrs_->erase(name);
     // Step 2.6: Return true.
-    return true;
+    return modified;
   } else {
     // Step 3: Otherwise:
     DCHECK(remove_attrs_);
@@ -683,7 +774,82 @@ bool Sanitizer::RemoveAttribute(const QualifiedName& name) {
   }
 }
 
-void Sanitizer::SanitizeElement(Element* element) const {
+bool Sanitizer::allowProcessingInstruction(
+    const V8UnionSanitizerProcessingInstructionOrString* pi) {
+  AtomicString target;
+  if (pi->IsString()) {
+    target = AtomicString(pi->GetAsString());
+  } else {
+    target = AtomicString(pi->GetAsSanitizerProcessingInstruction()->target());
+  }
+  return AllowProcessingInstruction(target);
+}
+
+bool Sanitizer::removeProcessingInstruction(
+    const V8UnionSanitizerProcessingInstructionOrString* pi) {
+  AtomicString target;
+  if (pi->IsString()) {
+    target = AtomicString(pi->GetAsString());
+  } else {
+    target = AtomicString(pi->GetAsSanitizerProcessingInstruction()->target());
+  }
+  return RemoveProcessingInstruction(target);
+}
+
+bool Sanitizer::AllowProcessingInstruction(const AtomicString& target) {
+  if (allow_processing_instructions_) {
+    if (allow_processing_instructions_->Contains(target)) {
+      return false;
+    }
+    allow_processing_instructions_->insert(target);
+    return true;
+  } else {
+    DCHECK(remove_processing_instructions_);
+    if (!remove_processing_instructions_->Contains(target)) {
+      return false;
+    }
+    remove_processing_instructions_->erase(target);
+    return true;
+  }
+}
+
+bool Sanitizer::RemoveProcessingInstruction(const AtomicString& target) {
+  if (allow_processing_instructions_) {
+    bool modified = allow_processing_instructions_->Contains(target);
+    allow_processing_instructions_->erase(target);
+    return modified;
+  } else {
+    DCHECK(remove_processing_instructions_);
+    if (remove_processing_instructions_->Contains(target)) {
+      return false;
+    }
+    remove_processing_instructions_->insert(target);
+    return true;
+  }
+}
+
+bool Sanitizer::KeepAttribute(const SanitizerNameSet* allow_per_element,
+                              const SanitizerNameSet* remove_per_element,
+                              const QualifiedName& attribute) const {
+  bool keep = false;
+  if (remove_per_element && remove_per_element->Contains(attribute)) {
+    keep = false;
+  } else if (allow_attrs_ && allow_attrs_->Contains(attribute)) {
+    keep = true;
+  } else if (allow_per_element && allow_per_element->Contains(attribute)) {
+    keep = true;
+  } else if (remove_attrs_ && remove_attrs_->Contains(attribute)) {
+    keep = false;
+  } else if (allow_attrs_ && attribute.NamespaceURI().IsNull() &&
+             attribute.LocalName().starts_with("data-")) {
+    keep = data_attrs_ == SanitizerBoolWithAbsence::kTrue;
+  } else {
+    keep = !allow_attrs_ && !allow_per_element;
+  }
+  return keep;
+}
+
+void Sanitizer::SanitizeElement(Element* element, Mode safe) const {
   // https://wicg.github.io/sanitizer-api/#sanitize-core, Step 1.5.8 + 1.5.9.1-4
   //
   // The sanitize-core algorithm is fairly long. This implements the steps to
@@ -703,32 +869,32 @@ void Sanitizer::SanitizeElement(Element* element) const {
           ? nullptr
           : &remove_per_element_iter->value;
   for (const QualifiedName& name : element->getAttributeQualifiedNames()) {
-    bool keep = false;
-    if (remove_per_element && remove_per_element->Contains(name)) {
-      keep = false;
-    } else if (allow_attrs_ && allow_attrs_->Contains(name)) {
-      keep = true;
-    } else if (allow_per_element && allow_per_element->Contains(name)) {
-      keep = true;
-    } else if (remove_attrs_ && remove_attrs_->Contains(name)) {
-      keep = false;
-    } else if (allow_attrs_ && name.NamespaceURI().IsNull() &&
-               name.LocalName().StartsWith("data-")) {
-      keep = data_attrs_ == SanitizerBoolWithAbsence::kTrue;
-    } else {
-      keep =
-          !allow_attrs_ && (!allow_per_element || allow_per_element->empty());
-    }
+    bool keep = KeepAttribute(allow_per_element, remove_per_element, name);
     if (!keep) {
       element->removeAttribute(name);
     }
+
+    if (keep && safe == Mode::kSafe) {
+      // This is an overly conservative CHECK to prevent another bug like
+      // 477643913. Presumably, we can remove this check at some point.
+      CHECK(name.NamespaceURI() ||
+            !TrustedTypePolicyFactory::IsEventHandlerAttributeName(
+                name.LocalName()));
+    }
+  }
+
+  if (safe == Mode::kSafe) {
+    // This is an overly conservative CHECK to prevent another bug like
+    // 477643913. Presumably, we can remove this check at some point.
+    CHECK_NE(element->TagQName(), html_names::kScriptTag);
+    CHECK_NE(element->TagQName(), svg_names::kScriptTag);
   }
 }
 
 void RemoveAttributeIfProtocolIsJavaScript(Element* element,
                                            const QualifiedName& attribute) {
   const AtomicString& value = element->getAttribute(attribute);
-  if (value && KURL(value.GetString()).ProtocolIsJavaScript()) {
+  if (value && ProtocolIsJavaScript(value)) {
     element->removeAttribute(attribute);
   }
 }
@@ -736,46 +902,53 @@ void RemoveAttributeIfProtocolIsJavaScript(Element* element,
 void RemoveAttributeIfValueIsHref(Element* element,
                                   const QualifiedName& attribute) {
   const AtomicString& value = element->getAttribute(attribute);
-  if (value == "href" or value == "xlink:href") {
+
+  // The spec asks to compare against "href" and "xlink:href". Instead, we'll
+  // run the same parsing as SVGAnimateElement and check on the result.
+  AtomicString prefix;
+  AtomicString local_name;
+  if (Document::ParseQualifiedName(
+          value, prefix, local_name, IGNORE_EXCEPTION,
+          Document::QualifiedNameParsingMode::kParsingAttribute) &&
+      local_name == html_names::kHrefAttr.LocalName()) {
     element->removeAttribute(attribute);
   }
 }
 
 void Sanitizer::SanitizeJavascriptNavigationAttributes(Element* element,
-                                                       bool safe) const {
+                                                       Mode safe) const {
   // Special treatment of javascript: URLs when used for navigation.
   // https://wicg.github.io/sanitizer-api/#sanitize-core, Steps 1.5.9.5
-  if (!safe) {
+  if (safe == Mode::kUnsafe) {
     return;
   }
 
   // Attributes that trigger navigation:
   const QualifiedName& qname = element->TagQName();
-  if (qname == html_names::kATag || qname == html_names::kAreaTag ||
-      qname == html_names::kBaseTag) {
+  if (html_names::kATag.Matches(qname) || html_names::kAreaTag.Matches(qname) ||
+      html_names::kBaseTag.Matches(qname)) {
     RemoveAttributeIfProtocolIsJavaScript(element, html_names::kHrefAttr);
-  } else if (qname == svg_names::kATag ||
+  } else if (svg_names::kATag.Matches(qname) ||
              element->namespaceURI() == mathml_names::kNamespaceURI) {
     RemoveAttributeIfProtocolIsJavaScript(element, html_names::kHrefAttr);
     RemoveAttributeIfProtocolIsJavaScript(element, xlink_names::kHrefAttr);
-  } else if (qname == html_names::kButtonTag ||
-             qname == html_names::kInputTag) {
+  } else if (html_names::kButtonTag.Matches(qname) ||
+             html_names::kInputTag.Matches(qname)) {
     RemoveAttributeIfProtocolIsJavaScript(element, html_names::kFormactionAttr);
-  } else if (qname == html_names::kFormTag) {
+  } else if (html_names::kFormTag.Matches(qname)) {
     RemoveAttributeIfProtocolIsJavaScript(element, html_names::kActionAttr);
-  } else if (qname == html_names::kIFrameTag) {
+  } else if (html_names::kIFrameTag.Matches(qname)) {
     RemoveAttributeIfProtocolIsJavaScript(element, html_names::kSrcAttr);
 
     // SVG animations of navigating attributes:
-  } else if (qname == svg_names::kAnimateTag ||
-             qname == svg_names::kAnimateMotionTag ||
-             qname == svg_names::kAnimateTransformTag ||
-             qname == svg_names::kSetTag) {
+  } else if (svg_names::kAnimateTag.Matches(qname) ||
+             svg_names::kAnimateTransformTag.Matches(qname) ||
+             svg_names::kSetTag.Matches(qname)) {
     RemoveAttributeIfValueIsHref(element, svg_names::kAttributeNameAttr);
   }
 }
 
-void Sanitizer::SanitizeTemplate(Node* node, bool safe) const {
+void Sanitizer::SanitizeTemplate(Node* node, Mode safe) const {
   // https://wicg.github.io/sanitizer-api/#sanitize-core,
   // Step 1.5.5: Recurse into template content.
   if (IsA<HTMLTemplateElement>(node)) {
@@ -800,15 +973,92 @@ void Sanitizer::SanitizeSafe(Node* root) const {
   Sanitizer* safe = MakeGarbageCollected<Sanitizer>();
   safe->setFrom(*this);
   safe->removeUnsafe();
-  safe->Sanitize(root, /*safe*/ true);
+  safe->Sanitize(root, Mode::kSafe);
 }
 
 void Sanitizer::SanitizeUnsafe(Node* root) const {
   CHECK(!root->GetDocument().IsActive());
-  Sanitize(root, /*safe*/ false);
+  Sanitize(root, Mode::kUnsafe);
 }
 
-void Sanitizer::Sanitize(Node* root, bool safe) const {
+Sanitizer::Action Sanitizer::ActionForNode(Node* node, Node* root) const {
+  switch (node->getNodeType()) {
+    case Node::NodeType::kElementNode: {
+      // Step 5: Child implements Element.
+      // Step 5.1: Let elementName [...]. Here: Get the element pointer.
+      Element* element = To<Element>(node);
+      if (replace_elements_ &&
+          replace_elements_->Contains(element->TagQName())) {
+        // See: crbug.com/476333990.
+        CHECK(!SanitizerBuiltins::GetNonReplaceableElements()->Contains(
+            element->TagQName()));
+        CHECK(!element->IsInDocumentTree() ||
+              !element->parentNode()->IsDocumentNode());
+        // Step 5.2: If [...configuration["replaceWithChildrenElements"]...]
+        return Action::kReplaceWithChildren;
+      }
+
+      if (allow_elements_) {
+        // Step 5.3: If configuration["elements"] exists:
+        // 5.3.1: If configuration["elements"] does not contain elementName:
+        return allow_elements_->Contains(element->TagQName())
+                   ? Action::kKeepElement
+                   : Action::kDrop;
+      }
+
+      // Step 5.4: Otherwise.
+      // Step 5.4.1: If configuration["removeElements"] contains elementName
+      DCHECK(remove_elements_);
+      return remove_elements_->Contains(element->TagQName())
+                 ? Action::kDrop
+                 : Action::kKeepElement;
+      // Steps 5.5-5.9 are in the subsequent switch-case, based on |action|.
+    }
+    case Node::NodeType::kCommentNode:
+      return (comments_ == SanitizerBoolWithAbsence::kTrue) ? Action::kKeep
+                                                            : Action::kDrop;
+    case Node::NodeType::kProcessingInstructionNode: {
+      ProcessingInstruction* pi = To<ProcessingInstruction>(node);
+      AtomicString target = AtomicString(pi->target());
+      if (allow_processing_instructions_) {
+        return allow_processing_instructions_->Contains(target) ? Action::kKeep
+                                                                : Action::kDrop;
+      }
+      DCHECK(remove_processing_instructions_);
+      return remove_processing_instructions_->Contains(target) ? Action::kDrop
+                                                               : Action::kKeep;
+    }
+    case Node::NodeType::kTextNode:
+      // Step 3: If child implements Text, then continue.
+      return Action::kKeep;
+    case Node::NodeType::kDocumentTypeNode:
+      // Step 2: If child implement DocumentType, then continue.
+      // Should only happen when parsing full documents w/ parseHTML.
+      DCHECK(root->IsDocumentNode());
+      return Action::kKeep;
+    default:
+      // Step 1: Assert: child implements Text, Comment, Element, DocType.
+      // TODO(nrosenthal): check if this holds true for streaming sanitizer.
+      NOTREACHED();
+  }
+}
+
+void Sanitizer::ProcessElement(Element* element, Mode safe) const {
+  SanitizeElement(element, safe);
+  SanitizeJavascriptNavigationAttributes(element, safe);
+}
+
+namespace {
+void ReplaceWithChildren(Node& node) {
+  ContainerNode* parent = node.parentNode();
+  while (Node* child = node.firstChild()) {
+    parent->InsertBefore(child, &node);
+  }
+  node.remove();
+}
+}  // namespace
+
+void Sanitizer::Sanitize(Node* root, Mode safe) const {
   // https://wicg.github.io/sanitizer-api/#sanitize-core
   // This is structured a little differently than the spec, for better
   // readability. For step 1.5, we may call into helper methods.
@@ -816,82 +1066,32 @@ void Sanitizer::Sanitize(Node* root, bool safe) const {
   SanitizeTemplate(root, safe);
   Node* node = NodeTraversal::Next(*root);
   while (node) {
-    enum { kKeep, kKeepElement, kDrop, kReplaceWithChildren } action = kDrop;
-    switch (node->getNodeType()) {
-      case Node::NodeType::kElementNode: {
-        // Step 5: Child implements Element.
-        // Step 5.1: Let elementName [...]. Here: Get the element pointer.
-        Element* element = To<Element>(node);
-        if (replace_elements_ &&
-            replace_elements_->Contains(element->TagQName())) {
-          // Step 5.2: If [...configuration["replaceWithChildrenElements"]...]
-          action = kReplaceWithChildren;
-        } else if (allow_elements_) {
-          // Step 5.3: If configuration["elements"] exists:
-          // 5.3.1: If configuration["elements"] does not contain elementName:
-          action = allow_elements_->Contains(element->TagQName()) ? kKeepElement
-                                                                  : kDrop;
-        } else {
-          // Step 5.4: Otherwise.
-          // Step 5.4.1: If configuration["removeElements"] contains elementName
-          DCHECK(remove_elements_);
-          action = remove_elements_->Contains(element->TagQName())
-                       ? kDrop
-                       : kKeepElement;
-        }
-        // Steps 5.5-5.9 are in the subsequent switch-case, based on |action|.
-        break;
-      }
-      case Node::NodeType::kCommentNode:
-        // Step 4: If child implement Comments & config["comments"] is not true:
-        action = (comments_ == SanitizerBoolWithAbsence::kTrue) ? kKeep : kDrop;
-        break;
-      case Node::NodeType::kTextNode:
-        // Step 3: If child implements Text, then continue.
-        action = kKeep;
-        break;
-      case Node::NodeType::kDocumentTypeNode:
-        // Step 2: If child implement DocumentType, then continue.
-        // Should only happen when parsing full documents w/ parseHTML.
-        DCHECK(root->IsDocumentNode());
-        action = kKeep;
-        break;
-      default:
-        // Step 1: Assert: child implements Text, Comment, Element, DocType.
-        NOTREACHED();
-    }
-
-    switch (action) {
-      case kKeepElement: {
+    switch (ActionForNode(node, root)) {
+      case Action::kKeepElement: {
         // This performs Steps 5.5 - 5.9:
         CHECK_EQ(node->getNodeType(), Node::NodeType::kElementNode);
-        SanitizeElement(To<Element>(node));
-        SanitizeJavascriptNavigationAttributes(To<Element>(node), safe);
+        ProcessElement(To<Element>(node), safe);
         SanitizeTemplate(node, safe);
         node = NodeTraversal::Next(*node);
         break;
       }
-      case kKeep: {
+      case Action::kKeep: {
         CHECK_NE(node->getNodeType(), Node::NodeType::kElementNode);
         node = NodeTraversal::Next(*node);
         break;
       }
-      case kReplaceWithChildren: {
+      case Action::kReplaceWithChildren: {
         // Steps 5.2.*:
         CHECK_EQ(node->getNodeType(), Node::NodeType::kElementNode);
         Node* next_node = node->firstChild();
         if (!next_node) {
           next_node = NodeTraversal::Next(*node);
         }
-        ContainerNode* parent = node->parentNode();
-        while (Node* child = node->firstChild()) {
-          parent->InsertBefore(child, node);
-        }
-        node->remove();
+        ReplaceWithChildren(*node);
         node = next_node;
         break;
       }
-      case kDrop: {
+      case Action::kDrop: {
         Node* next_node = NodeTraversal::NextSkippingChildren(*node);
         node->parentNode()->removeChild(node);
         node = next_node;
@@ -901,12 +1101,28 @@ void Sanitizer::Sanitize(Node* root, bool safe) const {
   }
 }
 
+Sanitizer::Action Sanitizer::SanitizeSingleNode(Node* node, Mode safe) const {
+  Action action = ActionForNode(node, node);
+  if (action == Action::kKeepElement) {
+    ProcessElement(To<Element>(node), safe);
+    return Action::kKeep;
+  }
+
+  return action;
+}
+
+bool Sanitizer::ShouldReplaceNodeWithChildren(Node* node) const {
+  return replace_elements_ && node->IsElementNode() &&
+         !IsA<HTMLTemplateElement>(node) &&
+         replace_elements_->Contains(To<Element>(node)->TagQName());
+}
+
 bool Sanitizer::setFrom(const SanitizerConfig* config,
                         bool allowCommentsAndDataAttributes) {
   // https://wicg.github.io/sanitizer-api/#configuration-set
   //
-  // Since out internal representation is quite different from the external one,
-  // the structure here is quite different from the spec text.
+  // Since out internal representation is quite different from the external
+  // one, the structure here is quite different from the spec text.
 
   // This method assumes a newly constructed instance.
   CHECK(!allow_elements_);
@@ -914,6 +1130,8 @@ bool Sanitizer::setFrom(const SanitizerConfig* config,
   CHECK(!replace_elements_);
   CHECK(!allow_attrs_);
   CHECK(!remove_attrs_);
+  CHECK(!allow_processing_instructions_);
+  CHECK(!remove_processing_instructions_);
   CHECK(allow_attrs_per_element_.empty());
   CHECK(remove_attrs_per_element_.empty());
 
@@ -979,6 +1197,34 @@ bool Sanitizer::setFrom(const SanitizerConfig* config,
       all_new_entries &= remove_attrs_->insert(getFrom(attribute)).is_new_entry;
     }
   }
+  if (config->hasProcessingInstructions()) {
+    allow_processing_instructions_ = std::make_unique<HashSet<AtomicString>>();
+    for (const auto& pi : config->processingInstructions()) {
+      AtomicString target;
+      if (pi->IsString()) {
+        target = AtomicString(pi->GetAsString());
+      } else {
+        target =
+            AtomicString(pi->GetAsSanitizerProcessingInstruction()->target());
+      }
+      all_new_entries &=
+          allow_processing_instructions_->insert(target).is_new_entry;
+    }
+  }
+  if (config->hasRemoveProcessingInstructions()) {
+    remove_processing_instructions_ = std::make_unique<HashSet<AtomicString>>();
+    for (const auto& pi : config->removeProcessingInstructions()) {
+      AtomicString target;
+      if (pi->IsString()) {
+        target = AtomicString(pi->GetAsString());
+      } else {
+        target =
+            AtomicString(pi->GetAsSanitizerProcessingInstruction()->target());
+      }
+      all_new_entries &=
+          remove_processing_instructions_->insert(target).is_new_entry;
+    }
+  }
   setComments(config->getCommentsOr(allowCommentsAndDataAttributes));
   if (allow_attrs_ || config->hasDataAttributes()) {
     setDataAttributes(
@@ -992,6 +1238,9 @@ bool Sanitizer::setFrom(const SanitizerConfig* config,
   }
   if (!config->hasAttributes() && !config->hasRemoveAttributes()) {
     remove_attrs_ = std::make_unique<SanitizerNameSet>();
+  }
+  if (!allow_processing_instructions_ && !remove_processing_instructions_) {
+    remove_processing_instructions_ = std::make_unique<HashSet<AtomicString>>();
   }
 
   return all_new_entries && isValid();
@@ -1022,6 +1271,16 @@ void Sanitizer::setFrom(const Sanitizer& other) {
   remove_attrs_per_element_ = other.remove_attrs_per_element_;
   data_attrs_ = other.data_attrs_;
   comments_ = other.comments_;
+  allow_processing_instructions_ =
+      other.allow_processing_instructions_
+          ? std::make_unique<HashSet<AtomicString>>(
+                *other.allow_processing_instructions_.get())
+          : nullptr;
+  remove_processing_instructions_ =
+      other.remove_processing_instructions_
+          ? std::make_unique<HashSet<AtomicString>>(
+                *other.remove_processing_instructions_.get())
+          : nullptr;
 }
 
 QualifiedName Sanitizer::getFrom(const String& name,
@@ -1104,58 +1363,73 @@ bool Subset(const SanitizerNameSet& a, const SanitizerNameSet& b) {
 }
 
 bool Sanitizer::isValid() const {
-  // https://wicg.github.io/sanitizer-api/#sanitizerconfig-valid
-  // Step 1: [..] either an elements or a removeElements key, but not both.
+  // https://html.spec.whatwg.org/#dom-sanitizerconfig-valid
+  // Step 1+2: [..] either an elements or a removeElements key, but not both.
+  DCHECK(allow_elements_ || remove_elements_);
   if (allow_elements_ && remove_elements_) {
     return false;
   }
-  // Step 2: [..] either an attributes or a removeAttributes key, but not both.
+  // Step 3+4: [..] Either PI or removePI, but not both.
+  DCHECK(allow_processing_instructions_ || remove_processing_instructions_);
+  if (allow_processing_instructions_ && remove_processing_instructions_) {
+    return false;
+  }
+  // Step 5+6: [..] either an attributes or a removeAttributes key, but not
+  // both.
+  DCHECK(allow_attrs_ || remove_attrs_);
   if (allow_attrs_ && remove_attrs_) {
     return false;
   }
-  // Step 3: Assert. (Not meaningful here, since we use QNames.)
-  // Step 4: None of [...], if they exist, has duplicates.
-  //   (Not meaningful here, since we use sets.)
-  // Step 5: If both config[elements] and config[replaceWithChildrenElements]
-  //   exist, then the intersection of config[elements] and
-  //   config[replaceWithChildrenElements] is empty.
+
+  // Step 7: Assert. (Not meaningful here, since we use QNames.)
+  // Step 8-14: No duplicates. Not meaningful here, because we use sets.
+  // Step 15.1: For each element of config["replaceWithChildrenElements"]:
+  //         If the built-in non-replaceable elements list contains element,
+  //         then return false.
+  if (replace_elements_ &&
+      Intersect(replace_elements_,
+                *SanitizerBuiltins::GetNonReplaceableElements())) {
+    return false;
+  }
+  // Step 15.2: Intersection elements + replace elements
   if (Intersect(allow_elements_, replace_elements_)) {
     return false;
   }
-  // Step 6: If both config[removeElements] and
-  //   config[replaceWithChildrenElements] exist, then the intersection of
-  //   config[removeElements] and config[replaceWithChildrenElements] is empty.
+  // Step 15.3: Intersection remove elements + replace elements.
   if (Intersect(remove_elements_, replace_elements_)) {
     return false;
   }
-  // Step 7: If config[attributes] exists:
+  // Step 16: If config[attributes] exists:
   if (allow_attrs_) {
-    // Step 7.1: If config[elements] exists:
+    // Step 16.1: Assertion.
+    // Step 16.2: If config[elements] exists:
     if (allow_elements_) {
-      // Step 7.1.1: For each element of config[elements]:
+      // Step 16.2.1: For each element of config[elements]:
       for (const auto& element : *allow_elements_) {
-        // Step 7.1.1.1: [No dupes:] element[attributes] +
-        //   element[removeAttributes] (Not meaningful here, since we use sets.)
-        // Step 7.1.1.2: The intersection of config[attributes] and
+        // Step 16.2.1.1: [No dupes:] element[attributes] +
+        //   element[removeAttributes] (Not meaningful here, since we use
+        //   sets.)
+        // Step 16.2.1.2: The intersection of config[attributes] and
         //   element[attributes] [..] is empty.
-        if (allow_attrs_per_element_.Contains(element) &&
-            Intersect(allow_attrs_, allow_attrs_per_element_.at(element))) {
+        auto it_allow = allow_attrs_per_element_.find(element);
+        if (it_allow != allow_attrs_per_element_.end() &&
+            Intersect(allow_attrs_, it_allow->value)) {
           return false;
         }
-        // Step 7.1.1.3: element[removeAttributes] [..] is a subset of
+        // Step 16.2.1.3: element[removeAttributes] [..] is a subset of
         // config[attributes]
-        if (remove_attrs_per_element_.Contains(element) && allow_attrs_ &&
-            !Subset(remove_attrs_per_element_.at(element),
-                    *allow_attrs_.get())) {
+        auto it_remove = remove_attrs_per_element_.find(element);
+        if (it_remove != remove_attrs_per_element_.end() && allow_attrs_ &&
+            !Subset(it_remove->value, *allow_attrs_.get())) {
           return false;
         }
-        // Step 7.1.1.4: If dataAttributes exists and dataAttributes is true:
+        // Step 16.2.1.4: If dataAttributes exists and dataAttributes is true:
         if (data_attrs_ == SanitizerBoolWithAbsence::kTrue) {
-          // Step 7.1.1.5: element[attributes] does not contain a custom data
+          // Step 16.2.1.5: element[attributes] does not contain a custom data
           // attribute.
-          if (allow_attrs_per_element_.Contains(element)) {
-            for (const auto& attr : allow_attrs_per_element_.at(element)) {
-              if (attr.LocalName().StartsWith("data-")) {
+          if (it_allow != allow_attrs_per_element_.end()) {
+            for (const auto& attr : it_allow->value) {
+              if (attr.LocalName().starts_with("data-")) {
                 return false;
               }
             }
@@ -1163,51 +1437,104 @@ bool Sanitizer::isValid() const {
         }
       }
     }
-    // Step 7.2: If dataAttributes is true:
+    // Step 16.3: If dataAttributes is true and attributes contains a data
+    // attribute.
     if (data_attrs_ == SanitizerBoolWithAbsence::kTrue) {
-      // Step 7.2.1: config[attributes] does not contain a custom data
-      // attribute.
       for (const auto& attr : *allow_attrs_) {
-        if (attr.LocalName().StartsWith("data-")) {
+        if (attr.LocalName().starts_with("data-")) {
           return false;
         }
       }
     }
   }
-  // Step 8: If config[removeAttributes] exists:
+  // Step 17: Otherwise (if config[removeAttributes] exists):
   if (remove_attrs_) {
-    // Step 8.1: If config[elements] exists, then for each element of
+    // Step 17.1 + 17.1.1: If config[elements] exists, then for each element of
     // config[elements]:
     if (allow_elements_) {
       for (const auto& element : *allow_elements_) {
-        // Step 8.1.1: Not both element[attributes] and
+        auto it_allow = allow_attrs_per_element_.find(element);
+        auto it_remove = remove_attrs_per_element_.find(element);
+        bool has_allow = it_allow != allow_attrs_per_element_.end();
+        bool has_remove = it_remove != remove_attrs_per_element_.end();
+        // Step 17.1.1.1: Not both element[attributes] and
         // element[removeAttributes] exist.
-        if (allow_attrs_per_element_.Contains(element) &&
-            remove_attrs_per_element_.Contains(element)) {
+        if (has_allow && has_remove) {
           return false;
         }
-        // Step 8.1.2: [No dupes.] (Not meaningful, since we're using sets.)
-        // Step 8.1.3: The intersection of config[removeAttributes] and
+        // Step 17.1.1.2: [No dupes.] (Not meaningful, since we're using sets.)
+        // Step 17.1.1.3: The intersection of config[removeAttributes] and
         //   element[attributes] [..] is empty.
-        if (allow_attrs_per_element_.Contains(element) &&
-            Intersect(remove_attrs_, allow_attrs_per_element_.at(element))) {
+        if (has_allow && Intersect(remove_attrs_, it_allow->value)) {
           return false;
         }
-        // Step 8.1.4: The intersection of config[removeAttributes] and
+        // Step 17.1.1.4: The intersection of config[removeAttributes] and
         //   element[removeAttributes] [..] is empty.
-        if (remove_attrs_per_element_.Contains(element) &&
-            Intersect(remove_attrs_, remove_attrs_per_element_.at(element))) {
+        if (has_remove && Intersect(remove_attrs_, it_remove->value)) {
           return false;
         }
       }
     }
-    // Step 8.2: config[dataAttributes] does not exist.
+    // Step 17.2: config[dataAttributes] does not exist.
     if (data_attrs_ != SanitizerBoolWithAbsence::kAbsent) {
       return false;
     }
   }
 
   return true;
+}
+
+bool Sanitizer::AllowIsAttribute(const QualifiedName& element_name) const {
+  const auto allow_per_element_iter =
+      allow_attrs_per_element_.find(element_name);
+  const SanitizerNameSet* allow_per_element =
+      (allow_per_element_iter == allow_attrs_per_element_.end())
+          ? nullptr
+          : &allow_per_element_iter->value;
+  const auto remove_per_element_iter =
+      remove_attrs_per_element_.find(element_name);
+  const SanitizerNameSet* remove_per_element =
+      (remove_per_element_iter == remove_attrs_per_element_.end())
+          ? nullptr
+          : &remove_per_element_iter->value;
+  return KeepAttribute(allow_per_element, remove_per_element,
+                       html_names::kIsAttr);
+}
+
+void StreamingSanitizer::DidParseDocument(Document* document) {
+  Element* root = document->documentElement();
+  CHECK(root);
+  switch (sanitizer_->ActionForNode(root, root)) {
+    case Sanitizer::Action::kKeepElement:
+      sanitizer_->ProcessElement(root, mode_);
+      break;
+    case Sanitizer::Action::kReplaceWithChildren:
+      ReplaceWithChildren(*root);
+      break;
+    case Sanitizer::Action::kDrop:
+      root->remove();
+      break;
+    case Sanitizer::Action::kKeep:
+      NOTREACHED();
+  }
+}
+
+// static
+StreamingSanitizer* StreamingSanitizer::SafeFor(StreamingSanitizer* parent) {
+  CHECK(RuntimeEnabledFeatures::DeclarativeFragmentEnabled());
+  if (!parent) {
+    return MakeGarbageCollected<StreamingSanitizer>(
+        SanitizerBuiltins::GetDefaultSafe(), Sanitizer::Mode::kSafe);
+  }
+
+  if (parent->mode_ == Sanitizer::Mode::kSafe) {
+    return parent;
+  }
+  Sanitizer* clone = MakeGarbageCollected<Sanitizer>();
+  clone->setFrom(*parent->sanitizer_);
+  clone->removeUnsafe();
+  return MakeGarbageCollected<StreamingSanitizer>(clone,
+                                                  Sanitizer::Mode::kSafe);
 }
 
 }  // namespace blink

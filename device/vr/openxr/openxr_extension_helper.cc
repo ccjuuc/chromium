@@ -9,12 +9,12 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/dcheck_is_on.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "device/vr/openxr/openxr_extension_handler_factories.h"
 #include "device/vr/openxr/openxr_extension_handler_factory.h"
+#include "device/vr/openxr/openxr_mesh_manager.h"
 #include "device/vr/openxr/openxr_platform_helper.h"
 #include "device/vr/public/mojom/xr_session.mojom.h"
 
@@ -65,6 +65,13 @@ bool IsSceneUnderstandingFeature(mojom::XRSessionFeature feature) {
          feature == device::mojom::XRSessionFeature::PLANE_DETECTION;
 }
 }  // namespace
+
+bool OpenXrExtensionHelper::HasSceneUnderstandingFeatures(
+    const std::vector<mojom::XRSessionFeature>& required_features,
+    const std::vector<mojom::XRSessionFeature>& optional_features) const {
+  return std::ranges::any_of(required_features, &IsSceneUnderstandingFeature) ||
+         std::ranges::any_of(optional_features, &IsSceneUnderstandingFeature);
+}
 
 OpenXrExtensionMethods::OpenXrExtensionMethods() = default;
 OpenXrExtensionMethods::~OpenXrExtensionMethods() = default;
@@ -154,6 +161,7 @@ OpenXrExtensionHelper::OpenXrExtensionHelper(
   OPENXR_LOAD_FN(xrEnumerateSpatialCapabilitiesEXT);
   OPENXR_LOAD_FN(xrEnumerateSpatialCapabilityComponentTypesEXT);
   OPENXR_LOAD_FN(xrQuerySpatialComponentDataEXT);
+  OPENXR_LOAD_FN(xrGetSpatialBufferVector2fEXT);
 
   // Spatial Anchors
   OPENXR_LOAD_FN(xrCreateSpatialAnchorEXT);
@@ -186,6 +194,15 @@ OpenXrExtensionHelper::OpenXrExtensionHelper(
   OPENXR_LOAD_FN(xrEnumerateDepthSwapchainImagesANDROID);
   OPENXR_LOAD_FN(xrEnumerateDepthResolutionsANDROID);
   OPENXR_LOAD_FN(xrAcquireDepthSwapchainImagesANDROID);
+
+  // Meshing
+  OPENXR_LOAD_FN(xrEnumerateSupportedSemanticLabelSetsANDROID);
+  OPENXR_LOAD_FN(xrCreateSceneMeshingTrackerANDROID);
+  OPENXR_LOAD_FN(xrDestroySceneMeshingTrackerANDROID);
+  OPENXR_LOAD_FN(xrCreateSceneMeshSnapshotANDROID);
+  OPENXR_LOAD_FN(xrDestroySceneMeshSnapshotANDROID);
+  OPENXR_LOAD_FN(xrGetAllSubmeshStatesANDROID);
+  OPENXR_LOAD_FN(xrGetSubmeshDataANDROID);
 #endif
 }
 
@@ -197,13 +214,14 @@ bool OpenXrExtensionHelper::IsFeatureSupported(
     case device::mojom::XRSessionFeature::HAND_INPUT:
     case device::mojom::XRSessionFeature::HIT_TEST:
     case device::mojom::XRSessionFeature::LIGHT_ESTIMATION:
+    case device::mojom::XRSessionFeature::MESH_DETECTION:
     case device::mojom::XRSessionFeature::PLANE_DETECTION:
     case device::mojom::XRSessionFeature::REF_SPACE_UNBOUNDED:
       return std::ranges::any_of(
           GetExtensionHandlerFactories(),
           [feature](const auto* extension_handler_factory) {
-            return base::Contains(
-                extension_handler_factory->GetSupportedFeatures(), feature);
+            return extension_handler_factory->GetSupportedFeatures().contains(
+                feature);
           });
     case device::mojom::XRSessionFeature::SECONDARY_VIEWS:
       return IsExtensionSupported(
@@ -240,6 +258,16 @@ std::unique_ptr<OpenXrDepthSensor> OpenXrExtensionHelper::CreateDepthSensor(
         }
 
         return nullptr;
+      });
+}
+
+std::unique_ptr<OpenXrMeshManager> OpenXrExtensionHelper::CreateMeshManager(
+    XrSession session,
+    XrSpace mojo_space) const {
+  return CreateExtensionHandler<OpenXrMeshManager>(
+      [this, session,
+       mojo_space](const OpenXrExtensionHandlerFactory& factory) {
+        return factory.CreateMeshManager(*this, session, mojo_space);
       });
 }
 
@@ -284,7 +312,7 @@ OpenXrExtensionHelper::CreateSceneUnderstandingManager(
     auto supported_function =
         [&supported_features](mojom::XRSessionFeature feature) {
           return IsSceneUnderstandingFeature(feature) &&
-                 base::Contains(supported_features, feature);
+                 supported_features.contains(feature);
         };
 
     // Get the count of how many required and optional features are scene

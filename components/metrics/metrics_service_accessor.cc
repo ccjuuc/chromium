@@ -7,8 +7,11 @@
 #include <string_view>
 
 #include "base/base_switches.h"
+#include "base/feature_list.h"
 #include "build/branding_buildflags.h"
+#include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_switches.h"
 #include "components/prefs/pref_service.h"
@@ -21,7 +24,8 @@ namespace {
 bool g_force_official_enabled_test = false;
 
 bool IsMetricsReportingEnabledForOfficialBuild(PrefService* local_state) {
-  return local_state->GetBoolean(prefs::kMetricsReportingEnabled);
+  return MetricsReportingChoiceService::IsBasicMetricsReportingEnabled(
+      local_state);
 }
 
 }  // namespace

@@ -128,9 +128,6 @@ FormData CreateFormDataForFrame(FormData form, LocalFrameToken frame_token);
 // Returns a copy of `form` with cleared values.
 FormData WithoutValues(FormData form);
 
-// Returns a copy of `form` with `is_autofilled` set as specified.
-FormData AsAutofilled(FormData form, bool is_autofilled = true);
-
 // Strips those members from `form` and `field` that are not serialized via
 // mojo, i.e., resets them to `{}`.
 FormData WithoutUnserializedData(FormData form);
@@ -239,6 +236,23 @@ inline constexpr char kIbanValue_2[] = "CH93 0076 2011 6238 5295 7";
 
 // Creates a `FormData` with a single unclassified field.
 [[nodiscard]] FormData CreateTestUnclassifiedFormData();
+
+// Usage:
+//   EXPECT_THAT(actual_field, FormFieldDataEq(expected_field));
+//   EXPECT_THAT(actual_form, FormDataEq(expected_form));
+//
+// For partial comparisons, normalize the values before matching. For example:
+//   EXPECT_THAT(test::WithoutUnserializedData(actual),
+//               test::FormDataEq(test::WithoutUnserializedData(expected)));
+
+// Uses property matchers for detailed mismatch information, and
+// IdenticalAndEquivalentDomElements() as a backstop for the members it
+// compares.
+testing::Matcher<FormFieldData> FormFieldDataEq(const FormFieldData& expected);
+
+// Like FormFieldDataEq(), but recursively compares fields with
+// FormFieldDataEq().
+testing::Matcher<FormData> FormDataEq(const FormData& expected);
 
 }  // namespace test
 

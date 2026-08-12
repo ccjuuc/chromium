@@ -40,13 +40,6 @@ Status& Status::operator=(const Status& rhs) = default;
 
 Status& Status::operator=(Status&& rhs) noexcept = default;
 
-Status& Status::operator=(leveldb::Status&& rhs) noexcept {
-  msg_.clear();
-  leveldb_status_ = std::move(rhs);
-  type_ = Type::kDatabaseEngine;
-  return *this;
-}
-
 // static
 Status Status::OK() {
   return Status();
@@ -111,7 +104,9 @@ std::string Status::ToString() const {
 }
 
 bool Status::IndicatesDiskFull() const {
-  return leveldb_status_ && leveldb_env::IndicatesDiskFull(*leveldb_status_);
+  return (leveldb_status_ &&
+          leveldb_env::IndicatesDiskFull(*leveldb_status_)) ||
+         sqlite_code_ == sql::SqliteResultCode::kFullDisk;
 }
 
 void Status::LogLevelDbStatus(std::string_view histogram_name) const {

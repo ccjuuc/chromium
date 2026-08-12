@@ -7,45 +7,39 @@
 #include <memory>
 #include <string>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
-#include "base/timer/timer.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/features.h"
-#include "chrome/browser/ui/tabs/tab_renderer_data.h"
+#include "chrome/browser/ui/tabs/tab_data.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_root_view.h"
 #include "chrome/browser/ui/views/tabs/fake_base_tab_strip_controller.h"
+#include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_observer.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+#include "chrome/browser/ui/views/tabs/tab/tab_title.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_group_highlight.h"
 #include "chrome/browser/ui/views/tabs/tab_group_underline.h"
 #include "chrome/browser/ui/views/tabs/tab_group_views.h"
-#include "chrome/browser/ui/views/tabs/tab_icon.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_observer.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 #include "chrome/browser/ui/views/tabs/tab_style_views.h"
-#include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/data_sharing/public/features.h"
-#include "components/saved_tab_groups/public/features.h"
 #include "components/tab_groups/tab_group_id.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/platform/assistive_tech.h"
+#include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/pointer/touch_ui_controller.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/animation/animation_test_api.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/views_test_utils.h"
@@ -55,6 +49,8 @@
 #include "ui/views/view_targeter.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+
+using ::testing::NiceMock;
 
 namespace {
 
@@ -115,7 +111,10 @@ class TabStripTestBase : public ChromeViewsTestBase {
     ChromeViewsTestBase::SetUp();
 
     controller_ = new FakeBaseTabStripController;
-    tab_strip_ = new TabStrip(std::unique_ptr<TabStripController>(controller_));
+    tab_strip_ =
+        new TabStrip(std::unique_ptr<TabStripController>(controller_),
+                     std::unique_ptr<NiceMock<TabHoverCardController>>());
+    tab_strip_->Initialize();
     controller_->set_tab_strip(tab_strip_);
     // Do this to force TabStrip to create the buttons.
     auto tab_strip_parent = std::make_unique<views::View>();
@@ -139,12 +138,12 @@ class TabStripTestBase : public ChromeViewsTestBase {
         tab_strip_parent.get()));
 
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     tab_strip_parent_ = widget_->SetContentsView(std::move(tab_strip_parent));
 
     // Prevent hover cards from appearing when the mouse is over the tab. Tests
     // don't typically account for this possibly, so it can cause unrelated
-    // tests to fail due to tab data not being set. See crbug.com/1050012.
+    // tests to fail due to tab data not being set. See crbug.com/40672885.
     Tab::SetShowHoverCardOnMouseHoverForTesting(false);
   }
 
@@ -155,8 +154,8 @@ class TabStripTestBase : public ChromeViewsTestBase {
 
  protected:
   void SetMaxTabStripWidth(int max_width) {
-    tab_strip_parent_->SetBounds(0, 0, max_width,
-                                 GetLayoutConstant(TAB_STRIP_HEIGHT));
+    tab_strip_parent_->SetBounds(
+        0, 0, max_width, GetLayoutConstant(LayoutConstant::kTabStripHeight));
     // Layout is handled from the Widget, so make sure it is also the correct
     // size.
     widget_->SetSize(tab_strip_parent_->bounds().size());
@@ -164,10 +163,6 @@ class TabStripTestBase : public ChromeViewsTestBase {
 
   bool IsShowingAttentionIndicator(Tab* tab) {
     return tab->icon_->GetShowingAttentionIndicator();
-  }
-
-  bool IsShowingAttentionIndicator(const tab_groups::TabGroupId& id) {
-    return tab_strip_->group_header(id)->GetShowingAttentionIndicator();
   }
 
   void CompleteAnimationAndLayout() {
@@ -242,26 +237,27 @@ TEST_P(TabStripTest, GetModelCount) {
 }
 
 TEST_P(TabStripTest, AccessibilityEvents) {
+  // By default no assistive technology needs the synthetic selection event that
+  // is fired on window activation, so make sure none is active.
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kNone);
+
   views::test::AXEventCounter ax_counter(views::AXUpdateNotifier::Get());
 
   controller_->AddTab(0, TabActive::kInactive);
   controller_->AddTab(1, TabActive::kActive);
   Tab* tab = tab_strip_->tab_at(1);
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionAdd));
   EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
   ui::AXNodeData node_data;
   tab->GetViewAccessibility().GetAccessibleNodeData(&node_data);
   EXPECT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionRemove));
 
   tab = tab_strip_->tab_at(0);
   controller_->RemoveTab(1);
   node_data = ui::AXNodeData();
   tab->GetViewAccessibility().GetAccessibleNodeData(&node_data);
   EXPECT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionAdd));
   EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kSelection));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionRemove));
 
   // Before the Widget actcivation changes to true, it must be deactivated
   // first.
@@ -269,18 +265,63 @@ TEST_P(TabStripTest, AccessibilityEvents) {
   node_data = ui::AXNodeData();
   tab->GetViewAccessibility().GetAccessibleNodeData(&node_data);
   EXPECT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionAdd));
   EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kSelection));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionRemove));
 
-  // When activating widget, refire selection event on tab.
+  // Without an assistive technology that needs it, activating the widget does
+  // not refire a selection event on the active tab. See crbug.com/505781387.
   widget_->OnNativeWidgetActivationChanged(true);
   node_data = ui::AXNodeData();
   tab->GetViewAccessibility().GetAccessibleNodeData(&node_data);
   EXPECT_TRUE(node_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionAdd));
-  EXPECT_EQ(3, ax_counter.GetCount(ax::mojom::Event::kSelection));
-  EXPECT_EQ(0, ax_counter.GetCount(ax::mojom::Event::kSelectionRemove));
+  EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kSelection));
+}
+
+TEST_P(TabStripTest, WindowActivationRefiresSelectionForOldJaws) {
+  // Simulate an older JAWS that still relies on the synthetic selection event
+  // fired on window activation to restore per-tab settings. See
+  // crbug.com/505781387.
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kJaws);
+  ui::AXPlatform::GetInstance().SetJawsNeedsTabSelectionEvent(true);
+
+  views::test::AXEventCounter ax_counter(views::AXUpdateNotifier::Get());
+  controller_->AddTab(0, TabActive::kInactive);
+  controller_->AddTab(1, TabActive::kActive);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
+
+  // The widget must be deactivated before it can be reactivated.
+  widget_->OnNativeWidgetActivationChanged(false);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
+
+  // Reactivating the widget refires a selection event on the active tab.
+  widget_->OnNativeWidgetActivationChanged(true);
+  EXPECT_EQ(2, ax_counter.GetCount(ax::mojom::Event::kSelection));
+
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kNone);
+  ui::AXPlatform::GetInstance().SetJawsNeedsTabSelectionEvent(false);
+}
+
+TEST_P(TabStripTest, WindowActivationDoesNotRefireSelectionForNewJaws) {
+  // Newer JAWS versions detect the active tab on their own, so no synthetic
+  // selection event should be fired on window activation. See
+  // crbug.com/505781387.
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kJaws);
+  ui::AXPlatform::GetInstance().SetJawsNeedsTabSelectionEvent(false);
+
+  views::test::AXEventCounter ax_counter(views::AXUpdateNotifier::Get());
+  controller_->AddTab(0, TabActive::kInactive);
+  controller_->AddTab(1, TabActive::kActive);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
+
+  widget_->OnNativeWidgetActivationChanged(false);
+  widget_->OnNativeWidgetActivationChanged(true);
+  EXPECT_EQ(1, ax_counter.GetCount(ax::mojom::Event::kSelection));
+
+  ui::AXPlatform::GetInstance().NotifyAssistiveTechChanged(
+      ui::AssistiveTech::kNone);
+  ui::AXPlatform::GetInstance().SetJawsNeedsTabSelectionEvent(false);
 }
 
 TEST_P(TabStripTest, IsValidModelIndex) {
@@ -366,7 +407,7 @@ TEST_P(TabStripTest, TabCloseButtonVisibility) {
 
   // Shrink the tab sizes by adding more tabs.
   // An inactive tab added to the tabstrip, now each tab size is not
-  // big enough to accomodate 3 icons, so it should not show its
+  // big enough to accommodate 3 icons, so it should not show its
   // tab close button.
   controller_->AddTab(3, TabActive::kInactive);
   Tab* tab3 = tab_strip_->tab_at(3);
@@ -416,44 +457,8 @@ TEST_P(TabStripTest, TabCloseButtonVisibility) {
   EXPECT_FALSE(tab4->showing_close_button_);
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
-TEST_P(TabStripTest, CloseButtonHiddenWhenLockedForOnTask) {
-  controller_->SetLockedForOnTask(true);
-
-  controller_->AddTab(0, TabActive::kInactive);
-  controller_->AddTab(1, TabActive::kActive);
-  controller_->AddTab(2, TabActive::kInactive);
-  ASSERT_EQ(3, tab_strip_->GetTabCount());
-
-  Tab* const tab0 = tab_strip_->tab_at(0);
-  ASSERT_FALSE(tab0->IsActive());
-  EXPECT_FALSE(tab0->showing_close_button_);
-
-  Tab* const tab1 = tab_strip_->tab_at(1);
-  ASSERT_TRUE(tab1->IsActive());
-  EXPECT_FALSE(tab1->showing_close_button_);
-
-  Tab* tab2 = tab_strip_->tab_at(2);
-  ASSERT_FALSE(tab2->IsActive());
-  EXPECT_FALSE(tab2->showing_close_button_);
-
-  // Switch tabs and confirm close button remains hidden for all opened tabs.
-  tab_strip_->SelectTab(tab2, dummy_event_);
-  ASSERT_TRUE(tab2->IsActive());
-  EXPECT_FALSE(tab0->showing_close_button_);
-  EXPECT_FALSE(tab1->showing_close_button_);
-  EXPECT_FALSE(tab2->showing_close_button_);
-
-  // Closing a tab should not alter tab close button visibility either.
-  tab_strip_->CloseTab(tab2, CloseTabSource::kFromMouse);
-  tab2 = nullptr;
-  EXPECT_FALSE(tab0->showing_close_button_);
-  EXPECT_FALSE(tab1->showing_close_button_);
-}
-#endif
-
 // The active tab should always be at least as wide as its minimum width.
-// http://crbug.com/587688
+// http://crbug.com/40457423
 TEST_P(TabStripTest, ActiveTabWidthWhenTabsAreTiny) {
   // The bug was caused when it's animating. Therefore we should make widget
   // visible so that animation can be triggered.
@@ -489,7 +494,7 @@ TEST_P(TabStripTest, ActiveTabWidthWhenTabsAreTiny) {
 }
 
 // Inactive tabs shouldn't shrink during mouse-based tab closure.
-// http://crbug.com/850190
+// http://crbug.com/40579617
 TEST_P(TabStripTest, InactiveTabWidthWhenTabsAreTiny) {
   SetMaxTabStripWidth(200);
 
@@ -522,7 +527,7 @@ TEST_P(TabStripTest, InactiveTabWidthWhenTabsAreTiny) {
 }
 
 // When dragged tabs are moving back to their position, changes to ideal bounds
-// should be respected. http://crbug.com/848016
+// should be respected. http://crbug.com/40578598
 TEST_P(TabStripTest, ResetBoundsForDraggedTabs) {
   SetMaxTabStripWidth(200);
 
@@ -572,9 +577,9 @@ TEST_P(TabStripTest, TabNeedsAttentionBlocked) {
   Tab* tab1 = tab_strip_->tab_at(1);
 
   // Block tab1.
-  TabRendererData data;
+  tabs::TabData data;
   data.blocked = true;
-  tab1->SetData(data);
+  tab1->SetDataForTesting(data);
 
   EXPECT_FALSE(IsShowingAttentionIndicator(tab1));
   controller_->SelectTab(0, dummy_event_);
@@ -590,37 +595,16 @@ TEST_P(TabStripTest, TabNeedsAttentionGeneric) {
 
   Tab* tab1 = tab_strip_->tab_at(1);
 
-  tab1->SetTabNeedsAttention(true);
+  // Set needs attention.
+  tabs::TabData data;
+  data.needs_attention = true;
+  tab1->SetDataForTesting(data);
 
   EXPECT_TRUE(IsShowingAttentionIndicator(tab1));
   controller_->SelectTab(0, dummy_event_);
   EXPECT_TRUE(IsShowingAttentionIndicator(tab1));
   controller_->SelectTab(1, dummy_event_);
   EXPECT_TRUE(IsShowingAttentionIndicator(tab1));
-}
-
-// The tab group header can display an attention indicator.
-TEST_P(TabStripTest, TabGroupNeedsAttention) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {data_sharing::features::kDataSharingFeature}, {});
-  controller_->AddTab(0, TabActive::kInactive);
-  controller_->AddTab(1, TabActive::kActive);
-
-  auto group_id = tab_groups::TabGroupId::GenerateNew();
-  controller_->MoveTabIntoGroup(0, group_id);
-
-  // Collapse the group so it can accept attention state.
-  controller_->ToggleTabGroupCollapsedState(
-      group_id, ToggleTabGroupCollapsedStateOrigin::kMenuAction);
-  tab_strip_->group_header(group_id)->VisualsChanged();
-  EXPECT_TRUE(controller_->IsGroupCollapsed(group_id));
-
-  tab_strip_->SetTabGroupNeedsAttention(group_id, true);
-  EXPECT_TRUE(IsShowingAttentionIndicator(group_id));
-
-  tab_strip_->SetTabGroupNeedsAttention(group_id, false);
-  EXPECT_FALSE(IsShowingAttentionIndicator(group_id));
 }
 
 // Closing tab should be targeted during event dispatching.
@@ -644,7 +628,7 @@ TEST_P(TabStripTest, EventsOnClosingTab) {
   EXPECT_TRUE(second_tab->closing());
 }
 
-// TODO (crbug.com/1520595): Disabled for now due to test failing when CR2023
+// TODO (crbug.com/41493572): Disabled for now due to test failing when CR2023
 // enabled.
 TEST_P(TabStripTest, DISABLED_ChangingLayoutTypeResizesTabs) {
   SetMaxTabStripWidth(1000);
@@ -670,7 +654,7 @@ TEST_P(TabStripTest, DISABLED_ChangingLayoutTypeResizesTabs) {
 // the first tab in a group was animating closed, attempting to close the next
 // tab could result in a crash. This was due to TabStripLayoutHelper mistakenly
 // mapping the next tab's model index to the closing tab's slot. See
-// https://crbug.com/1138748 for a related crash.
+// https://crbug.com/40725628 for a related crash.
 TEST_P(TabStripTest, CloseTabInGroupWhilePreviousTabAnimatingClosed) {
   controller_->AddTab(0, TabActive::kActive);
   controller_->AddTab(1, TabActive::kInactive);
@@ -779,7 +763,7 @@ struct SizeChangeObserver : public views::ViewObserver {
 }  // namespace
 
 // When dragged tabs' bounds are modified through TabDragContext, both tab strip
-// and its parent view must get re-laid out http://crbug.com/1151092.
+// and its parent view must get re-laid out http://crbug.com/40732823.
 TEST_P(TabStripTest, RelayoutAfterDraggedTabBoundsUpdate) {
   SetMaxTabStripWidth(400);
 

@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_FORMAT_PROVIDER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_FORMAT_PROVIDER_H_
 
-#include <string>
+#include <string_view>
 
 #include "base/no_destructor.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -32,9 +32,9 @@ class StructuredAddressesFormatProvider {
 
   // Returns the formatting expression corresponding to the provided parameters.
   // If the expression can't be found, an empty string is returned.
-  std::u16string GetPattern(FieldType type,
-                            std::string_view country_code,
-                            const ContextInfo& info = ContextInfo()) const;
+  std::u16string_view GetPattern(FieldType type,
+                                 std::string_view country_code,
+                                 const ContextInfo& info = ContextInfo()) const;
 
  private:
   StructuredAddressesFormatProvider();

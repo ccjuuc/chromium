@@ -24,6 +24,7 @@
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "media/base/fake_single_thread_task_runner.h"
 #include "media/base/media_switches.h"
@@ -78,14 +79,13 @@ void SaveOperationalStatus(std::vector<OperationalStatus>* statuses,
 
 void IgnorePlayoutDelayChanges(base::TimeDelta unused_playout_delay) {}
 
-int GetVideoNetworkBandwidth() {
+uint32_t GetVideoNetworkBandwidth() {
   return openscreen::cast::kDefaultVideoMinBitRate;
 }
 
 }  // namespace
 
-class VideoSenderTest : public ::testing::TestWithParam<bool>,
-                        public WithCastEnvironment {
+class VideoSenderTest : public ::testing::Test, public WithCastEnvironment {
  public:
   VideoSenderTest(const VideoSenderTest&) = delete;
   VideoSenderTest(VideoSenderTest&&) = delete;
@@ -105,8 +105,6 @@ class VideoSenderTest : public ::testing::TestWithParam<bool>,
 
     vea_factory_->SetAutoRespond(true);
     last_pixel_value_ = kPixelValue;
-    feature_list_.InitWithFeatureState(kCastStreamingMediaVideoEncoder,
-                                       GetParam());
   }
 
   ~VideoSenderTest() override {
@@ -261,7 +259,7 @@ class VideoSenderTest : public ::testing::TestWithParam<bool>,
   raw_ptr<MockVideoEncoder> mock_encoder_ = nullptr;
 };
 
-TEST_P(VideoSenderTest, BuiltInEncoder) {
+TEST_F(VideoSenderTest, BuiltInEncoder) {
   CreateSender(EncoderType::kSoftware);
   ASSERT_EQ(STATUS_INITIALIZED, status_changes().front());
 
@@ -272,7 +270,13 @@ TEST_P(VideoSenderTest, BuiltInEncoder) {
   RunUntilQuit();
 }
 
-TEST_P(VideoSenderTest, MockEncoderGoldenCase) {
+// TODO(crbug.com/500613219): Enable the test.
+#if defined(MEMORY_SANITIZER) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#define MAYBE_MockEncoderGoldenCase DISABLED_MockEncoderGoldenCase
+#else
+#define MAYBE_MockEncoderGoldenCase MockEncoderGoldenCase
+#endif
+TEST_F(VideoSenderTest, MAYBE_MockEncoderGoldenCase) {
   CreateSender(EncoderType::kMock);
 
   VideoEncoder::FrameEncodedCallback callback;
@@ -310,7 +314,7 @@ TEST_P(VideoSenderTest, MockEncoderGoldenCase) {
 // Make sure we properly handle the frame change callback, even if the encoded
 // frame result is nullptr. For more information on this test, see
 // https://issuetracker.google.com/393880773.
-TEST_P(VideoSenderTest, HandlesNullptrFrameChangeCallback) {
+TEST_F(VideoSenderTest, HandlesNullptrFrameChangeCallback) {
   CreateSender(EncoderType::kMock);
 
   VideoEncoder::FrameEncodedCallback callback;
@@ -343,7 +347,7 @@ TEST_P(VideoSenderTest, HandlesNullptrFrameChangeCallback) {
       }));
 }
 
-TEST_P(VideoSenderTest, ExternalEncoder) {
+TEST_F(VideoSenderTest, ExternalEncoder) {
   CreateSender(EncoderType::kHardware);
   SetVeaFactoryInitializationWillSucceed(true);
   ASSERT_EQ(STATUS_INITIALIZED, status_changes().front());
@@ -377,7 +381,7 @@ TEST_P(VideoSenderTest, ExternalEncoder) {
   EXPECT_EQ(1, VeaResponseCount());
 }
 
-TEST_P(VideoSenderTest, ExternalEncoderInitFails) {
+TEST_F(VideoSenderTest, ExternalEncoderInitFails) {
   CreateSender(EncoderType::kHardware);
   SetVeaFactoryInitializationWillSucceed(false);
   EXPECT_EQ(STATUS_INITIALIZED, status_changes().front());
@@ -391,11 +395,23 @@ TEST_P(VideoSenderTest, ExternalEncoderInitFails) {
   RunTasksAndAdvanceClock();
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         VideoSenderTest,
-                         ::testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& param) {
-                           return param.param ? "Experimental" : "Stable";
-                         });
+TEST_F(VideoSenderTest, GettersReturnValidValues) {
+  CreateSender(EncoderType::kSoftware);
+  ASSERT_EQ(STATUS_INITIALIZED, status_changes().front());
+
+  // They should have some default values or zeroes
+  EXPECT_GE(video_sender().GetEncoderBitrate(), 0u);
+  EXPECT_GE(video_sender().GetEncoderUtilization(), -1.0);  // Defaults to -1.0
+  EXPECT_GE(video_sender().GetLossiness(), -1.0);           // Defaults to -1.0
+  EXPECT_GE(video_sender().GetFramesInserted(), 0);
+  EXPECT_GE(video_sender().GetFramesDropped(), 0);
+
+  // Send a frame to update metrics
+  video_sender().InsertRawVideoFrame(GetNewVideoFrame(), NowTicks());
+  RunTasksAndAdvanceClock();
+
+  EXPECT_EQ(video_sender().GetFramesInserted(), 1);
+  EXPECT_GE(video_sender().GetEncoderBitrate(), 0u);
+}
 
 }  // namespace media::cast

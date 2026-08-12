@@ -23,9 +23,9 @@
 #include "ash/wm/wm_event.h"
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
-#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "ui/aura/client/cursor_shape_client.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -1077,9 +1077,11 @@ class HostWindowObserver : aura::WindowObserver {
 
   bool removed_from_host() const { return removed_from_host_; }
 
+  void reset() { host_window_ = nullptr; }
+
  private:
   bool removed_from_host_ = false;
-  raw_ptr<const aura::Window, DanglingUntriaged> host_window_ = nullptr;
+  raw_ptr<const aura::Window> host_window_;
 };
 
 // Tests that RoundedDisplayProvider and its host window are correctly deleted
@@ -1105,6 +1107,7 @@ TEST_F(WindowTreeHostManagerRoundedDisplayTest,
   // Since the primary display was removed and it was the only display,
   // the primary window tree was temporarily stored and then attached to the new
   // display.
+  observer.reset();
   display_manager()->OnNativeDisplaysChanged(
       {display::ManagedDisplayInfo::CreateFromSpec("1+1-300x200")});
 
@@ -1223,7 +1226,9 @@ TEST_F(WindowTreeHostManagerTest, SwapPrimaryById) {
 
   // Deleting 2nd display should move the primary to original primary display.
   UpdateDisplay("300x200");
-  base::RunLoop().RunUntilIdle();  // RootWindow is deleted in a posted task.
+  // The secondary root window is deleted in a posted task.
+  ASSERT_TRUE(
+      base::test::RunUntil([&] { return !tracker.Contains(secondary_root); }));
   EXPECT_EQ(1, display::Screen::Get()->GetNumDisplays());
   EXPECT_EQ(primary_display.id(),
             display::Screen::Get()->GetPrimaryDisplay().id());

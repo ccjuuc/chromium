@@ -55,6 +55,7 @@
 #include "mojo/public/cpp/base/proto_wrapper.h"
 #include "net/cert/internal/trust_store_chrome.h"
 #include "net/cert/root_store_proto_lite/root_store.pb.h"
+#include "net/cert/root_store_proto_lite/signer_set.pb.h"
 #include "third_party/boringssl/src/pki/parse_name.h"
 #include "third_party/boringssl/src/pki/parsed_certificate.h"
 #endif
@@ -64,6 +65,15 @@ class ChromeRootStoreData;
 }
 namespace cert_verifier {
 namespace {
+
+// The maximum uncertainty for network time that is considered acceptable. This
+// value is used to determine whether the network time update should be used to
+// update the CertVerifierService's time tracker.
+//
+// This is derived from the 99th percentile of observed network time tracker
+// uncertainty in June 2026, plus a comfortable margin. It is still well below
+// the maximum uncertainty allowed by the network time service's timeout.
+constexpr base::TimeDelta kMaxUncertaintyForNetworkTime = base::Seconds(45);
 
 internal::CertVerifierServiceImpl* GetNewCertVerifierImpl(
     mojo::PendingReceiver<mojom::CertVerifierService> service_receiver,
@@ -110,8 +120,9 @@ internal::CertVerifierServiceImpl* GetNewCertVerifierImpl(
   }
 
   // Return reference to cert_net_fetcher for testing purposes.
-  if (out_cert_net_fetcher)
+  if (out_cert_net_fetcher) {
     *out_cert_net_fetcher = cert_net_fetcher;
+  }
 
   // The service will delete itself upon disconnection.
   return new internal::CertVerifierServiceImpl(
@@ -364,41 +375,105 @@ void CertVerifierServiceFactoryImpl::OnCRLSetParsed(
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
 void CertVerifierServiceFactoryImpl::UpdateChromeRootStore(
     mojo_base::ProtoWrapper new_root_store,
+    std::optional<mojo_base::ProtoWrapper> new_mtc_config,
     UpdateChromeRootStoreCallback callback) {
   // Ensure the callback is run regardless which return path is used.
   base::ScopedClosureRunner scoped_callback_runner(std::move(callback));
 
-  auto message = new_root_store.As<chrome_root_store::RootStore>();
-  if (!message.has_value()) {
-    LOG(ERROR) << "error parsing proto for Chrome Root Store";
+  std::optional<net::ChromeRootStoreData> new_crs_data =
+      ParseChromeRootStoreProto(new_root_store);
+  std::optional<chrome_root_store::MtcConfig> mtc_config_data =
+      ParseMtcConfigProto(new_mtc_config);
+
+  if (!new_crs_data && !mtc_config_data) {
     return;
   }
 
-  // We only check against the compiled version to allow for us to to use
+  InitializeRootStoreDataIfNecessary();
+
+  net::ChromeRootStoreData root_store_data =
+      new_crs_data ? std::move(*new_crs_data) : *proc_params_.root_store_data;
+
+  std::optional<net::ChromeRootStoreSignerSet> signer_set;
+  bool disable_mtc =
+      proc_params_.root_store_data->disable_mtc_mirroring_requirements();
+
+  if (new_mtc_config && mtc_config_data) {
+    if (mtc_config_data->has_signer_set() &&
+        mtc_config_data->signer_set().timestamp().seconds() >
+            net::CompiledSignerSetTimestampSeconds()) {
+      signer_set = net::ChromeRootStoreSignerSet::CreateFromProto(
+          mtc_config_data->signer_set());
+      if (!signer_set) {
+        signer_set = proc_params_.root_store_data->signer_set();
+      }
+    } else {
+      signer_set = proc_params_.root_store_data->signer_set();
+    }
+    disable_mtc = mtc_config_data->disable_mtc_mirroring_requirements();
+  } else {
+    signer_set = proc_params_.root_store_data->signer_set();
+  }
+
+  if (signer_set) {
+    root_store_data.SetSignerSet(std::move(*signer_set));
+  }
+  root_store_data.SetDisableMtcMirroringRequirements(disable_mtc);
+
+  proc_params_.root_store_data = std::move(root_store_data);
+  UpdateVerifierServices();
+}
+
+// static
+std::optional<net::ChromeRootStoreData>
+CertVerifierServiceFactoryImpl::ParseChromeRootStoreProto(
+    const mojo_base::ProtoWrapper& new_root_store) {
+  auto crs_message = new_root_store.As<chrome_root_store::RootStore>();
+  if (!crs_message.has_value()) {
+    LOG(ERROR) << "error parsing proto for Chrome Root Store";
+    return std::nullopt;
+  }
+
+  // We only check against the compiled version to allow for us to use
   // Component Updater to revert to older versions. Check is left in
   // to guard against Component updater being stuck on older versions due
   // to daily updates of the PKI Metadata component being broken.
-  if (message->version_major() <= net::CompiledChromeRootStoreVersion()) {
-    return;
+  if (crs_message->version_major() <= net::CompiledChromeRootStoreVersion()) {
+    return std::nullopt;
   }
 
   std::optional<net::ChromeRootStoreData> root_store_data =
-      net::ChromeRootStoreData::CreateFromRootStoreProto(message.value());
+      net::ChromeRootStoreData::CreateFromRootStoreProto(crs_message.value());
   if (!root_store_data) {
     LOG(ERROR) << "error interpreting proto for Chrome Root Store";
-    return;
+    return std::nullopt;
   }
 
   if (root_store_data->trust_anchors().empty()) {
     LOG(ERROR) << "parsed root store contained no anchors";
-    return;
+    return std::nullopt;
   }
 
-  // Update the stored Chrome Root Store so that new CertVerifierService
-  // instances will start with the updated store.
-  proc_params_.root_store_data = std::move(root_store_data);
+  return root_store_data;
+}
 
-  UpdateVerifierServices();
+// static
+std::optional<chrome_root_store::MtcConfig>
+CertVerifierServiceFactoryImpl::ParseMtcConfigProto(
+    const std::optional<mojo_base::ProtoWrapper>& new_mtc_config) {
+  if (!new_mtc_config.has_value() ||
+      !base::FeatureList::IsEnabled(net::features::kVerifyMTCs)) {
+    return std::nullopt;
+  }
+
+  std::optional<chrome_root_store::MtcConfig> mtc_config_message =
+      new_mtc_config->As<chrome_root_store::MtcConfig>();
+  if (!mtc_config_message.has_value()) {
+    LOG(ERROR) << "error parsing proto for MtcConfig";
+    return std::nullopt;
+  }
+
+  return mtc_config_message;
 }
 
 void CertVerifierServiceFactoryImpl::UpdateMtcMetadata(
@@ -452,38 +527,11 @@ void CertVerifierServiceFactoryImpl::GetChromeRootStoreInfo(
   if (proc_params_.root_store_mtc_metadata) {
     info_ptr->mtc_metadata_update_time =
         proc_params_.root_store_mtc_metadata->update_time();
-
-    // TODO(crbug.com/452983502): when full MTCs are supported, populating
-    // `root_mtc_info` should be moved outside the
-    // `if (proc_params_.root_store_mtc_metadata)` so that we report MTC anchor
-    // info even when the metadata hasn't been loaded yet.
-    for (const auto& anchor :
-         proc_params_.root_store_data->mtc_trust_anchors()) {
-      if (!IsAnchorTrustedOnThisChromeVersion(anchor.constraints)) {
-        continue;
-      }
-      auto it = proc_params_.root_store_mtc_metadata->mtc_anchor_data().find(
-          anchor.log_id);
-      if (it == proc_params_.root_store_mtc_metadata->mtc_anchor_data().end()) {
-        continue;
-      }
-
-      const net::ChromeRootStoreMtcMetadata::MtcAnchorData& anchor_data =
-          it->second;
-
-      info_ptr->root_mtc_info.push_back(
-          mojom::ChromeRootMerkleTreeCertInfo::New(
-              net::x509_util::RelativeOidToString(anchor.log_id),
-              net::x509_util::RelativeOidToString(
-                  net::x509_util::AppendOidComponent(
-                      anchor_data.landmark_base_id,
-                      anchor_data.landmark_min_inclusive)),
-              net::x509_util::RelativeOidToString(
-                  net::x509_util::AppendOidComponent(
-                      anchor_data.landmark_base_id,
-                      anchor_data.landmark_max_inclusive))));
-    }
   }
+  // TODO(crbug.com/462227032): include signer_set timestamp in output
+  // TODO(crbug.com/462227032): Update this to show plants-05 style MTC CA
+  // information. (Which should show even if the fastpush data isn't
+  // available.)
 
   std::move(callback).Run(std::move(info_ptr));
 }
@@ -510,9 +558,14 @@ void CertVerifierServiceFactoryImpl::GetPlatformRootStoreInfo(
 void CertVerifierServiceFactoryImpl::UpdateNetworkTime(
     base::Time system_time,
     base::TimeTicks system_ticks,
-    base::Time current_time) {
+    base::Time current_time,
+    base::TimeDelta uncertainty) {
+  // Ignore network time updates having excessive uncertainty.
+  if (uncertainty > kMaxUncertaintyForNetworkTime) {
+    return;
+  }
   proc_params_.time_tracker.emplace(system_time, system_ticks, current_time,
-                                    base::TimeDelta());
+                                    uncertainty);
   UpdateVerifierServices();
 }
 

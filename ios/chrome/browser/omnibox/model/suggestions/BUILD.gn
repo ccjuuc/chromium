@@ -6,7 +6,8 @@ import("//build/config/apple/swift_source_set.gni")
 
 # Build target allowed while moving files from ui_bundled to other folders.
 # Model dependencies should be moved to the model folder.
-# TODO(crbug.com/394567614): Remove this target once model files have been moved.
+# TODO(crbug.com/394567614): Remove this target once model files have been
+# moved.
 source_set("ui_interface") {
   sources = [
     "autocomplete_suggestion.h",
@@ -56,11 +57,13 @@ source_set("suggestions") {
     "//ios/chrome/browser/aim/model:aim_availability",
     "//ios/chrome/browser/default_browser/model",
     "//ios/chrome/browser/net/model:crurl",
+    "//ios/chrome/browser/omnibox/model:client",
     "//ios/chrome/browser/omnibox/public",
     "//ios/chrome/browser/omnibox/public:constants",
     "//ios/chrome/browser/omnibox/public:features",
     "//ios/chrome/browser/search_engines/model",
     "//ios/chrome/browser/shared/model/application_context",
+    "//ios/chrome/browser/shared/model/url",
     "//ios/chrome/browser/shared/model/url:constants",
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/shared/public/features",
@@ -71,6 +74,7 @@ source_set("suggestions") {
     "//ios/chrome/common/ui/util:image_util",
     "//ios/components/webui:url_constants",
     "//ios/public/provider/chrome/browser/branded_images:branded_images_api",
+    "//ios/web/public",
     "//net",
     "//ui/base",
     "//ui/base:types",
@@ -123,6 +127,7 @@ source_set("unit_tests") {
     "//components/search_engines:test_support",
     "//ios/chrome/browser/autocomplete/model",
     "//ios/chrome/browser/omnibox/model",
+    "//ios/chrome/browser/omnibox/model:test_support",
     "//ios/chrome/browser/search_engines/model:template_url_service_factory",
     "//ios/chrome/browser/shared/model/profile/test",
     "//ios/chrome/test:test_support",

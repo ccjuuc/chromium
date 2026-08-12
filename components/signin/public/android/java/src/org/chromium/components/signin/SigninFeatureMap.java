@@ -30,7 +30,30 @@ public final class SigninFeatureMap extends FeatureMap {
                     SigninFeatures.MIGRATE_ACCOUNT_MANAGER_DELEGATE,
                     /* defaultValue= */ false,
                     /* defaultValueInTests= */ true);
-    public static final List<CachedFlag> sCachedFlags = List.of(sMigrateAccountManagerDelegate);
+    public static final CachedFlag sProfileDiscOnAllPages =
+            new CachedFlag(
+                    sInstance,
+                    SigninFeatures.PROFILE_DISC_ON_ALL_PAGES,
+                    /* defaultValue= */ false,
+                    /* defaultValueInTests= */ true);
+    public static final CachedFlag sSigninLevelUpButton =
+            new CachedFlag(
+                    sInstance,
+                    SigninFeatures.SIGNIN_LEVEL_UP_BUTTON,
+                    /* defaultValue= */ false,
+                    /* defaultValueInTests= */ true);
+    public static final CachedFlag sSupportForcedSigninPolicy =
+            new CachedFlag(
+                    sInstance,
+                    SigninFeatures.SUPPORT_FORCED_SIGNIN_POLICY,
+                    /* defaultValue= */ true,
+                    /* defaultValueInTests= */ true);
+    public static final List<CachedFlag> sCachedFlags =
+            List.of(
+                    sMigrateAccountManagerDelegate,
+                    sProfileDiscOnAllPages,
+                    sSigninLevelUpButton,
+                    sSupportForcedSigninPolicy);
 
     /** Layout type for the sign-in promo. */
     @IntDef({
@@ -88,6 +111,18 @@ public final class SigninFeatureMap extends FeatureMap {
             default:
                 return SeamlessSigninStringType.NON_SEAMLESS;
         }
+    }
+
+    /**
+     * Returns whether the activityless sign-in is enabled for all entry points.
+     *
+     * <p>{@link SigninFeatures#ENABLE_SEAMLESS_SIGNIN} is for enabling the new activity-less
+     * sign-in flow. {@link SigninFeatures#ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT} is for
+     * migrating rest of the sign-in entry points.
+     */
+    public boolean isActivitylessSigninAllEntryPointEnabled() {
+        return isEnabledInNative(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
+                && isEnabledInNative(SigninFeatures.ENABLE_ACTIVITYLESS_SIGNIN_ALL_ENTRY_POINT);
     }
 
     /**

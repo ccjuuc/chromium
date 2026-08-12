@@ -141,15 +141,11 @@ uint64_t GetMachTimeFromSeconds(CFTimeInterval seconds) {
     // operation.
     _preferredRefreshRate =
         std::clamp(refresh_rate, kMinimumRefreshRate, _maximumRefreshRate);
-    if (@available(iOS 15, *)) {
-      [_displayLink
-          setPreferredFrameRateRange:CAFrameRateRange{
-                                         .minimum = kMinimumRefreshRate,
-                                         .maximum = _maximumRefreshRate,
-                                         .preferred = _preferredRefreshRate}];
-    } else if (@available(iOS 10, *)) {
-      [_displayLink setPreferredFramesPerSecond:_preferredRefreshRate];
-    }
+    [_displayLink
+        setPreferredFrameRateRange:CAFrameRateRange{
+                                       .minimum = kMinimumRefreshRate,
+                                       .maximum = _maximumRefreshRate,
+                                       .preferred = _preferredRefreshRate}];
 
     // _displayLink.frameInterval is used on iOS 3-10. However, these are pretty
     // old iOS versions, which we are not targeting.
@@ -234,7 +230,8 @@ void ExternalBeginFrameSourceIOS::OnVSync(base::TimeTicks vsync_time,
                                           base::TimeTicks next_vsync_time,
                                           base::TimeDelta vsync_interval) {
   OnBeginFrame(begin_frame_args_generator_.GenerateBeginFrameArgs(
-      source_id(), vsync_time, next_vsync_time, vsync_interval));
+      source_id(), vsync_time, next_vsync_time, vsync_interval,
+      GetMinimumFrameInterval()));
 }
 
 void ExternalBeginFrameSourceIOS::OnNeedsBeginFrames(bool needs_begin_frames) {

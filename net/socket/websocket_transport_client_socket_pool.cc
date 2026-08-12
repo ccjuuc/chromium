@@ -5,7 +5,6 @@
 #include "net/socket/websocket_transport_client_socket_pool.h"
 
 #include <algorithm>
-#include <set>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
@@ -33,11 +32,9 @@ namespace net {
 
 WebSocketTransportClientSocketPool::WebSocketTransportClientSocketPool(
     size_t socket_soft_cap,
-    SocketPoolAdditionalCapacity additional_capacity,
     const ProxyChain& proxy_chain,
     const CommonConnectJobParams* common_connect_job_params)
     : ClientSocketPool(socket_soft_cap,
-                       additional_capacity,
                        proxy_chain,
                        /*is_for_websockets=*/true,
                        common_connect_job_params,
@@ -61,8 +58,13 @@ void WebSocketTransportClientSocketPool::UnlockEndpoint(
   DCHECK(handle->is_initialized());
   DCHECK(handle->socket());
   IPEndPoint address;
-  if (handle->socket()->GetPeerAddress(&address) == OK)
-    websocket_endpoint_lock_manager->UnlockEndpoint(address);
+  if (handle->socket()->GetPeerAddress(&address) == OK) {
+    // WebSocketTransportClientSocketPool only operates on ClientSocketHandle
+    // objects, so `handle` is guaranteed to be a ClientSocketHandle.
+    auto* client_socket_handle = static_cast<ClientSocketHandle*>(handle);
+    websocket_endpoint_lock_manager->UnlockEndpoint(
+        address, client_socket_handle->group_id().network_anonymization_key());
+  }
 }
 
 int WebSocketTransportClientSocketPool::RequestSocket(
@@ -75,7 +77,6 @@ int WebSocketTransportClientSocketPool::RequestSocket(
     ClientSocketHandle* handle,
     CompletionOnceCallback callback,
     const ProxyAuthCallback& proxy_auth_callback,
-    bool fail_if_alias_requires_proxy_override,
     const NetLogWithSource& request_net_log) {
   DCHECK(params);
   CHECK(!callback.is_null());
@@ -84,15 +85,14 @@ int WebSocketTransportClientSocketPool::RequestSocket(
 
   NetLogTcpClientSocketPoolRequestedSocket(request_net_log, group_id);
   request_net_log.BeginEvent(NetLogEventType::SOCKET_POOL);
-  UpdateStateBeforeAllocation();
+  UpdateExpandabilityBeforeAllocation();
 
-  if (State() == SocketPoolState::kCapped &&
+  if (Expandability() == SocketPoolExpandability::kCapped &&
       respect_limits == ClientSocketPool::RespectLimits::ENABLED) {
     request_net_log.AddEvent(NetLogEventType::SOCKET_POOL_STALLED_MAX_SOCKETS);
-    stalled_request_queue_.emplace_back(
-        group_id, params, proxy_annotation_tag, priority, handle,
-        std::move(callback), proxy_auth_callback,
-        fail_if_alias_requires_proxy_override, request_net_log);
+    stalled_request_queue_.emplace_back(group_id, params, proxy_annotation_tag,
+                                        priority, handle, std::move(callback),
+                                        proxy_auth_callback, request_net_log);
     auto iterator = stalled_request_queue_.end();
     --iterator;
     DCHECK_EQ(handle, iterator->handle);
@@ -138,8 +138,7 @@ int WebSocketTransportClientSocketPool::RequestSockets(
     scoped_refptr<SocketParams> params,
     const std::optional<NetworkTrafficAnnotationTag>& proxy_annotation_tag,
     size_t num_sockets,
-    bool fail_if_alias_requires_proxy_override,
-    CompletionOnceCallback callback,
+    PreconnectCompletionCallback callback,
     const NetLogWithSource& net_log) {
   NOTIMPLEMENTED();
   return OK;
@@ -169,9 +168,9 @@ void WebSocketTransportClientSocketPool::CancelRequest(
     ReleaseSocket(handle->group_id(), std::move(socket),
                   handle->group_generation());
   if (DeleteJob(handle)) {
-    UpdateStateAfterRelease();
-    CHECK(!base::Contains(pending_callbacks_,
-                          reinterpret_cast<ClientSocketHandleID>(handle)));
+    UpdateExpandabilityAfterRelease();
+    CHECK(!pending_callbacks_.contains(
+        reinterpret_cast<ClientSocketHandleID>(handle)));
   } else {
     pending_callbacks_.erase(reinterpret_cast<ClientSocketHandleID>(handle));
   }
@@ -185,7 +184,7 @@ void WebSocketTransportClientSocketPool::ReleaseSocket(
     int64_t generation) {
   CHECK_GT(handed_out_socket_count_, 0u);
   --handed_out_socket_count_;
-  UpdateStateAfterRelease();
+  UpdateExpandabilityAfterRelease();
 
   ActivateStalledRequest();
 }
@@ -217,7 +216,7 @@ void WebSocketTransportClientSocketPool::FlushWithError(
   stalled_request_map_.clear();
   stalled_request_queue_.clear();
   flushing_ = false;
-  ResetState();
+  ResetExpandability();
 }
 
 void WebSocketTransportClientSocketPool::CloseIdleSockets(
@@ -254,7 +253,7 @@ base::Value WebSocketTransportClientSocketPool::GetInfoAsValue(
     const std::string& name,
     const std::string& type) const {
   auto dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set("name", name)
           .Set("type", type)
           .Set("handed_out_socket_count",
@@ -356,7 +355,7 @@ void WebSocketTransportClientSocketPool::OnConnectJobComplete(
   connect_job_delegate = nullptr;
 
   if (!handed_out_socket) {
-    UpdateStateAfterRelease();
+    UpdateExpandabilityAfterRelease();
     ActivateStalledRequest();
   }
 
@@ -442,7 +441,7 @@ void WebSocketTransportClientSocketPool::ActivateStalledRequest() {
   // however if all the connects fail synchronously for some reason, we may be
   // able to clear the whole queue at once.
   while (!stalled_request_queue_.empty() &&
-         State() == SocketPoolState::kUncapped) {
+         Expandability() == SocketPoolExpandability::kUncapped) {
     StalledRequest request = std::move(stalled_request_queue_.front());
     stalled_request_queue_.pop_front();
     stalled_request_map_.erase(request.handle);
@@ -455,8 +454,7 @@ void WebSocketTransportClientSocketPool::ActivateStalledRequest() {
         // Stalled requests can't have |respect_limits|
         // DISABLED.
         RespectLimits::ENABLED, request.handle, std::move(split_callback.first),
-        request.proxy_auth_callback,
-        request.fail_if_alias_requires_proxy_override, request.net_log);
+        request.proxy_auth_callback, request.net_log);
 
     // ActivateStalledRequest() never returns synchronously, so it is never
     // called re-entrantly.
@@ -506,14 +504,6 @@ void WebSocketTransportClientSocketPool::ConnectJobDelegate::OnNeedsProxyAuth(
   NOTREACHED();
 }
 
-Error WebSocketTransportClientSocketPool::ConnectJobDelegate::
-    OnDestinationDnsAliasesResolved(const std::set<std::string>& aliases,
-                                    ConnectJob* job) {
-  // TODO(crbug.com/383134117): Implement logic for cancelling requests if cname
-  // cloaking is detected.
-  return OK;
-}
-
 int WebSocketTransportClientSocketPool::ConnectJobDelegate::Connect(
     std::unique_ptr<ConnectJob> connect_job) {
   connect_job_ = std::move(connect_job);
@@ -533,7 +523,6 @@ WebSocketTransportClientSocketPool::StalledRequest::StalledRequest(
     ClientSocketHandle* handle,
     CompletionOnceCallback callback,
     const ProxyAuthCallback& proxy_auth_callback,
-    bool fail_if_alias_requires_proxy_override,
     const NetLogWithSource& net_log)
     : group_id(group_id),
       params(params),
@@ -542,8 +531,6 @@ WebSocketTransportClientSocketPool::StalledRequest::StalledRequest(
       handle(handle),
       callback(std::move(callback)),
       proxy_auth_callback(proxy_auth_callback),
-      fail_if_alias_requires_proxy_override(
-          fail_if_alias_requires_proxy_override),
       net_log(net_log) {}
 
 WebSocketTransportClientSocketPool::StalledRequest::StalledRequest(

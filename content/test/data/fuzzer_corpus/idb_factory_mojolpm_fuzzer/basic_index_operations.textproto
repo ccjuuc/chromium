@@ -42,6 +42,7 @@ actions {
       m_version_change_transaction_receiver: 0
       m_transaction_id: 1
       m_priority: 0
+      m_request_shared_connection: 0
     }
   }
 }
@@ -370,6 +371,7 @@ actions {
     }
   }
 }
+
 sequences {
   action_indexes: 0
   action_indexes: 4
@@ -391,6 +393,10 @@ sequences {
   action_indexes: 12
   action_indexes: 1
   action_indexes: 3
+  action_indexes: 1
+  action_indexes: 1
+  action_indexes: 1
+  action_indexes: 1
   action_indexes: 1
   action_indexes: 2
 }

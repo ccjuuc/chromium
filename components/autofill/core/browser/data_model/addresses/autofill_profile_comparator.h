@@ -5,19 +5,19 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_PROFILE_COMPARATOR_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_PROFILE_COMPARATOR_H_
 
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
-#include "base/containers/flat_map.h"
+#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/address.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_name.h"
 #include "components/autofill/core/browser/data_model/addresses/contact_info.h"
+#include "components/autofill/core/browser/data_model/addresses/phone_number.h"
 #include "components/autofill/core/browser/field_types.h"
 
 namespace autofill {
@@ -63,8 +63,7 @@ class AutofillProfileComparator {
   static bool Compare(
       std::u16string_view text1,
       std::u16string_view text2,
-      normalization::WhitespaceSpec whitespace_spec =
-          normalization::WhitespaceSpec::kDiscard,
+      normalization::WhitespaceSpec whitespace_spec,
       std::optional<FieldType> type = std::nullopt,
       AddressCountryCode country_code_1 = AddressCountryCode(""),
       AddressCountryCode country_code_2 = AddressCountryCode(""));
@@ -97,7 +96,8 @@ class AutofillProfileComparator {
   //
   // Note that mergeability is non-directional; merging two profiles will likely
   // incorporate data from both profiles.
-  // TODO(crbug.com/359768803): Move this function to AutofillProfile.
+  // TODO(crbug.com/453945181): Delete this function once callers are migrated to
+  // `AutofillProfile::MergeDataFrom`.
   bool AreMergeable(const AutofillProfile& p1, const AutofillProfile& p2) const;
 
   // Populates `email_info` with the result of merging the email addresses in

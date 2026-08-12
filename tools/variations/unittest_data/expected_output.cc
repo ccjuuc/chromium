@@ -10,18 +10,19 @@
 #include "test_output.h"
 
 
-const OverrideUIString array_kFieldTrialConfig_override_ui_string[] = {
-      {
-        4045341670,
-        "test",
-      },
+const char* const array_kFieldTrialConfig_exclude_hardware_manufacturers[] = {
+      "OnePlus",
+};
+const char* const array_kFieldTrialConfig_hardware_manufacturers[] = {
+      "Google",
+      "Samsung",
 };
 const Study::Platform array_kFieldTrialConfig_platforms_11[] = {
       Study::PLATFORM_WINDOWS,
 };
 const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_6[] = {
     {
-      "TestGroup",
+      "TestGroup1",
       array_kFieldTrialConfig_platforms_11,
       {},
       std::nullopt,
@@ -31,9 +32,10 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_6[] = {
       {},
       {},
       nullptr,
-      array_kFieldTrialConfig_override_ui_string,
       {},
       {},
+      array_kFieldTrialConfig_hardware_manufacturers,
+      array_kFieldTrialConfig_exclude_hardware_manufacturers,
     },
 };
 const Study::FormFactor array_kFieldTrialConfig_form_factors_0[] = {
@@ -64,6 +66,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_5[] = {
       {},
       {},
       {},
+      {},
     },
     {
       "TestGroup2",
@@ -76,6 +79,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_5[] = {
       {},
       {},
       nullptr,
+      {},
       {},
       {},
       {},
@@ -96,6 +100,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_4[] = {
       {},
       {},
       "my-forcing-flag",
+      {},
       {},
       {},
       {},
@@ -125,6 +130,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_3[] = {
       {},
       {},
       {},
+      {},
     },
     {
       "TestGroup2",
@@ -140,6 +146,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_3[] = {
       {},
       {},
       {},
+      {},
     },
     {
       "TestGroup3",
@@ -152,6 +159,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_3[] = {
       {},
       {},
       nullptr,
+      {},
       {},
       {},
       {},
@@ -178,6 +186,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_2[] = {
       {},
       {},
       {},
+      {},
     },
     {
       "TestGroup2",
@@ -190,6 +199,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_2[] = {
       {},
       {},
       nullptr,
+      {},
       {},
       {},
       {},
@@ -213,6 +223,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_1[] = {
       array_kFieldTrialConfig_enable_features_1,
       {},
       nullptr,
+      {},
       {},
       {},
       {},
@@ -273,6 +284,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_0[] = {
       {},
       {},
       {},
+      {},
     },
     {
       "TestGroup2-2",
@@ -285,6 +297,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments_0[] = {
       array_kFieldTrialConfig_enable_features_0,
       array_kFieldTrialConfig_disable_features_0,
       nullptr,
+      {},
       {},
       {},
       {},
@@ -305,6 +318,7 @@ const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
       {},
       {},
       nullptr,
+      {},
       {},
       {},
       {},
@@ -340,7 +354,7 @@ const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
     array_kFieldTrialConfig_experiments_5,
   },
   {
-    "TrialWithOverrideUIString",
+    "TrialWithHardwareManufacturers",
     array_kFieldTrialConfig_experiments_6,
   },
 };

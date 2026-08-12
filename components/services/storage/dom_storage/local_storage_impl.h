@@ -9,6 +9,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -20,14 +21,15 @@
 #include "base/threading/sequence_bound.h"
 #include "base/trace_event/memory_allocator_dump.h"
 #include "base/trace_event/memory_dump_provider.h"
+#include "build/build_config.h"
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_policy_update.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "storage/common/database/db_status.h"
 #include "third_party/blink/public/mojom/dom_storage/storage_area.mojom.h"
 
 namespace blink {
@@ -35,8 +37,19 @@ class StorageKey;
 }  // namespace blink
 
 namespace storage {
-
+class StorageAreaImpl;
 class StorageServiceImpl;
+
+// Limits on the cache size and number of areas in memory, over which the areas
+// are purged.
+#if BUILDFLAG(IS_ANDROID)
+inline constexpr unsigned kMaxLocalStorageAreaCount = 10;
+inline constexpr size_t kMaxLocalStorageCacheSize = 2 * 1024 * 1024;
+#else
+inline constexpr unsigned kMaxLocalStorageAreaCount = 50;
+inline constexpr size_t kMaxLocalStorageCacheSize = 20 * 1024 * 1024;
+#endif
+
 // The Local Storage implementation. An instance of this class exists for each
 // profile directory (within the user data directory) that is using Local
 // Storage. It manages storage for all StorageKeys and namespaces within that
@@ -47,14 +60,16 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
   using DestructLocalStorageCallback =
       base::OnceCallback<void(LocalStorageImpl*)>;
   // Constructs a Local Storage implementation which will create its root
-  // "Local Storage" directory in |storage_root| if non-empty.If valid,
-  // |receiver| will be bound to this object to allow for remote control via the
-  // LocalStorageControl interface.
-  LocalStorageImpl(const base::FilePath& storage_root,
+  // "Local Storage" directory in `storage_partition_directory` if non-empty.If
+  // valid, |receiver| will be bound to this object to allow for remote control
+  // via the LocalStorageControl interface.
+  LocalStorageImpl(const base::FilePath& storage_partition_directory,
                    DestructLocalStorageCallback destruct_callback,
                    mojo::PendingReceiver<mojom::LocalStorageControl> receiver);
   ~LocalStorageImpl() override;
 
+  StorageAreaImpl* GetStorageAreaForTesting(
+      const blink::StorageKey& storage_key);
   void FlushStorageKeyForTesting(const blink::StorageKey& storage_key);
 
   // Used by content settings to alter the behavior around
@@ -84,7 +99,7 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
-  base::FilePath GetStoragePath() const;
+  const base::FilePath& GetStoragePartitionDirectory() const;
 
   // Access the underlying AsyncDomStorageDatabase. May be null if the database
   // is not yet open.
@@ -101,6 +116,7 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
 
  private:
   friend class DOMStorageBrowserTest;
+  friend class LocalStorageImplTest;
 
   class StorageAreaHolder;
 
@@ -109,19 +125,17 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
 
   // Runs |callback| immediately if already connected to a database, otherwise
   // delays running |callback| untill after a connection has been established.
-  // Initiates connecting to the database if no connection is in progres yet.
+  // Initiates connecting to the database if no connection is in progress yet.
   void RunWhenConnected(base::OnceClosure callback);
 
-  // StorageAreas held by this LocalStorageImpl retain an unmanaged reference to
-  // `database_`. This deletes them and is used any time `database_` is reset.
-  void PurgeAllStorageAreas();
-
-  // Part of our asynchronous directory opening called from RunWhenConnected().
-  void InitiateConnection(bool in_memory_only = false);
-  void OnDatabaseOpened(DbStatus status);
+  // Part of asynchronous database opening called from `RunWhenConnected()`. If
+  // opening the database on disk fails twice, falls back to in memory. If
+  // opening the database in memory fails, runs without a database.
+  void InitiateConnection(bool in_memory_only = false,
+                          bool destroy_existing_db_for_recovery = false);
+  void OnDatabaseOpened(AsyncDomStorageDatabase::OpenOutcome outcome);
   void OnConnectionFinished();
-  void DeleteAndRecreateDatabase();
-  void OnDBDestroyed(bool recreate_in_memory, DbStatus status);
+  void DeleteAndRecreateDatabase(DomStorageRecoveryReason reason);
 
   StorageAreaHolder* GetOrCreateStorageArea(
       const blink::StorageKey& storage_key);
@@ -146,7 +160,12 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
   // that this LocalStorageImpl can be destructed when the Receiver is
   // disconnected.
   DestructLocalStorageCallback destruct_callback_;
-  const base::FilePath directory_;
+
+  // The profile data directory, which is an ancestor of the database path.
+  // Empty for in-memory databases. When not empty, the owner of
+  // `LocalStorageImpl` uses this path as an ID for the `LocalStorageImpl`
+  // instance.
+  const base::FilePath storage_partition_directory_;
 
   enum ConnectionState {
     NO_CONNECTION,
@@ -158,20 +177,22 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
 
   base::trace_event::MemoryAllocatorDumpGuid memory_dump_id_;
 
+  // `database_` is null after failing to open repeatedly.
   std::unique_ptr<AsyncDomStorageDatabase> database_;
   bool tried_to_recreate_during_open_ = false;
   bool in_memory_ = false;
 
   std::vector<base::OnceClosure> on_database_opened_callbacks_;
 
-  // Maps between a StorageKey and its view of the map's key/value pairs in the
-  // database.
-  std::map<blink::StorageKey, std::unique_ptr<StorageAreaHolder>> areas_;
-
   // Counts consecutive commit errors. If this number reaches a threshold, the
   // whole database is thrown away.
   int commit_error_count_ = 0;
   bool tried_to_recover_from_commit_errors_ = false;
+
+  // Tracks the state of the current recovery cycle, including what triggered
+  // it and the outcome of each Destroy() attempt. Populated in
+  // DeleteAndRecreateDatabase() and consumed in OnConnectionFinished().
+  std::optional<DomStorageRecoveryState> recovery_state_;
 
   // The set of Origins which should be cleared on shutdown.
   // this is used by ApplyPolicyUpdates to store which origin
@@ -184,6 +205,12 @@ class LocalStorageImpl : public base::trace_event::MemoryDumpProvider,
   // restore has taken place, otherwise we might fail to record current usage.
   // See crbug.com/40281870 for more info.
   base::TimeDelta delete_stale_storage_areas_delay_{base::Minutes(1)};
+
+  // Maps between a StorageKey and its view of the map's key/value pairs in the
+  // database.  Declared near the bottom of this class so it destructs
+  // before its dependencies accessed by `StorageAreaHolder::context_` in
+  // `~StorageAreaHolder()`.
+  std::map<blink::StorageKey, std::unique_ptr<StorageAreaHolder>> areas_;
 
   base::WeakPtrFactory<LocalStorageImpl> weak_ptr_factory_{this};
 };

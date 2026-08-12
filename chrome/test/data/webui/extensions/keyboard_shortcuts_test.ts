@@ -66,28 +66,62 @@ suite('ExtensionShortcutTest', function() {
     document.body.appendChild(keyboardShortcuts);
   });
 
+  /**
+   * Tests the layout of extension command cards and verifies that command
+   * details, input fields, dropdown menus, and visual text labels are properly
+   * rendered and visible.
+   */
   test('Layout', function() {
     function isVisibleOnCard(e: HTMLElement, s: string): boolean {
       // We check the light DOM in the card because it's a regular old div,
       // rather than a fancy-schmancy custom element.
       return isChildVisible(e, s, true);
     }
+
+    // Verify that `.shortcut-card` elements are rendered for extensions with
+    // commands.
     const cards = keyboardShortcuts.shadowRoot.querySelector('#container')!
                       .querySelectorAll('.shortcut-card');
     assertEquals(2, cards.length);
 
+    // Check the first card's title and command entry count.
     const card1 = cards[0]!;
     assertEquals(
         oneCommand.name,
         card1.querySelector<HTMLElement>('.card-title span')!.textContent);
     let commands = card1.querySelectorAll<HTMLElement>('.command-entry');
     assertEquals(1, commands.length);
+
+    // Verify that `.command-name`, `.shortcut-input-label`,
+    // `cr-shortcut-input`, `.shortcut-scope-label`, and `select.md-select`
+    // are visible on the command entry, and that label text is populated.
     assertTrue(isVisibleOnCard(commands[0]!, '.command-name'));
+    assertTrue(isVisibleOnCard(commands[0]!, '.shortcut-input-label'));
+    assertTrue(isVisibleOnCard(commands[0]!, 'cr-shortcut-input'));
+    assertTrue(isVisibleOnCard(commands[0]!, '.shortcut-scope-label'));
     assertTrue(isVisibleOnCard(commands[0]!, 'select.md-select'));
 
+    const inputLabel =
+        commands[0]!.querySelector<HTMLElement>('.shortcut-input-label')!;
+    const scopeLabel =
+        commands[0]!.querySelector<HTMLElement>('.shortcut-scope-label')!;
+    assertTrue(inputLabel.textContent.trim().length > 0);
+    assertTrue(scopeLabel.textContent.trim().length > 0);
+    assertEquals('true', inputLabel.getAttribute('aria-hidden'));
+    assertEquals('true', scopeLabel.getAttribute('aria-hidden'));
+
+    // Verify that the second card renders the expected command entries and
+    // that all controls and visual text labels are visible across all entries.
     const card2 = cards[1]!;
     commands = card2.querySelectorAll('.command-entry');
     assertEquals(2, commands.length);
+    for (const command of commands) {
+      assertTrue(isVisibleOnCard(command, '.command-name'));
+      assertTrue(isVisibleOnCard(command, '.shortcut-input-label'));
+      assertTrue(isVisibleOnCard(command, 'cr-shortcut-input'));
+      assertTrue(isVisibleOnCard(command, '.shortcut-scope-label'));
+      assertTrue(isVisibleOnCard(command, 'select.md-select'));
+    }
   });
 
   test('ScopeChange', async function() {
@@ -168,27 +202,24 @@ suite('ExtensionShortcutTest', function() {
     assertEquals('Ctrl+A', shortcutInput.shortcut);
 
     // Test clearing the shortcut.
-    shortcutInput.$.edit.click();
-    assertEquals(shortcutInput.$.input, shortcutInput.shadowRoot.activeElement);
+    shortcutInput.$.clear.click();
     arg = await testDelegate.whenCalled('updateExtensionCommandKeybinding');
     await microtasksFinished();
 
-    field.blur();
     testDelegate.reset();
     assertDeepEquals([oneCommand.id, oneCommand.commands[0]!.name, ''], arg);
     assertEquals('', shortcutInput.shortcut);
+    assertEquals('', field.value);
 
-    // The click event causes the input element to lose focus on mouse down
-    // but regains focus on mouse up after triggering the edit button on mouse
-    // up. This should ultimately result in shortcuts being suspended.
+    // The click event on the edit button should result in shortcuts handling
+    // being suspended.
     shortcutInput.$.edit.click();
     await testDelegate.whenCalled('setShortcutHandlingSuspended');
     await microtasksFinished();
     const shortcutSuspendedArgs =
         testDelegate.getArgs('setShortcutHandlingSuspended');
-    assertEquals(2, testDelegate.getCallCount('setShortcutHandlingSuspended'));
-    assertFalse(shortcutSuspendedArgs[0]);
-    assertTrue(shortcutSuspendedArgs[1]);
+    assertEquals(1, testDelegate.getCallCount('setShortcutHandlingSuspended'));
+    assertTrue(shortcutSuspendedArgs[0]);
     testDelegate.reset();
 
     // Test ending capture using the escape key.

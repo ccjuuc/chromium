@@ -20,7 +20,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/runtime_data/chrome_iwa_runtime_data_provider.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/fake_iwa_runtime_data_provider_mixin.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_test_update_server.h"
@@ -32,6 +31,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/web_package/test_support/signed_web_bundles/key_pair.h"
 #include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "content/public/test/browser_test.h"
 #include "ui/message_center/public/cpp/notification.h"
 
@@ -135,7 +135,7 @@ class MultiCaptureUsageIndicatorBrowserTestBase
 
   void InstallIwa(const InstalledApp& app) {
     PrefService& prefs = CHECK_DEREF(profile()->GetPrefs());
-    base::Value::List app_install_force_list =
+    base::ListValue app_install_force_list =
         prefs.GetList(prefs::kIsolatedWebAppInstallForceList).Clone();
     iwa_test_update_server_.AddBundle(
         web_app::IsolatedWebAppBuilder(web_app::ManifestBuilder()
@@ -148,7 +148,7 @@ class MultiCaptureUsageIndicatorBrowserTestBase
 
     prefs.SetList(prefs::kIsolatedWebAppInstallForceList,
                   std::move(app_install_force_list));
-    web_app::WebAppTestInstallObserver(browser()->profile())
+    web_app::WebAppTestInstallObserver(browser()->GetProfile())
         .BeginListeningAndWait(
             {web_app::IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
                  app.bundle_id)
@@ -163,7 +163,7 @@ class MultiCaptureUsageIndicatorBrowserTestBase
   }
 
   void SetCaptureAllowList() {
-    base::Value::List capture_allow_list;
+    base::ListValue capture_allow_list;
     for (const auto& allowed_app : allowlisted_capture_apps_) {
       capture_allow_list.Append(
           base::Value("isolated-app://" + allowed_app.bundle_id.id()));

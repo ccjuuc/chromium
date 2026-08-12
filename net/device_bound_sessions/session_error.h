@@ -5,8 +5,14 @@
 #ifndef NET_DEVICE_BOUND_SESSIONS_SESSION_ERROR_H_
 #define NET_DEVICE_BOUND_SESSIONS_SESSION_ERROR_H_
 
+#include <optional>
+
+#include "base/types/expected.h"
 #include "net/base/schemeful_site.h"
 #include "net/device_bound_sessions/deletion_reason.h"
+#include "net/device_bound_sessions/failed_request.h"
+#include "net/device_bound_sessions/refresh_result.h"
+#include "url/gurl.h"
 
 namespace net::device_bound_sessions {
 
@@ -17,7 +23,7 @@ struct NET_EXPORT SessionError {
   enum class ErrorType {
     kSuccess = 0,  // Only used for metrics, a session error will never have
                    // this error type.
-    kKeyError = 1,
+    kSigningKeyGenerationError = 1,
     kSigningError = 2,
     // Deprecated: kNetError = 3,
     // Deprecated: kHttpError = 4,
@@ -98,7 +104,13 @@ struct NET_EXPORT SessionError {
     kInvalidFederatedSessionProviderFailedToRestoreKey = 79,
     kFailedToUnwrapKey = 80,
     kSessionDeletedDuringRefresh = 81,
-    kMaxValue = kSessionDeletedDuringRefresh,
+    kTransientSigningError = 82,
+    kCrossOriginRegistrationSiteNotIncluded = 83,
+    kAttestationKeyGenerationError = 84,
+    kInvalidPreProvisionedKeyInitiatorMissing = 85,
+    kPreProvisionedKeyAccessNotGranted = 86,
+    kPreProvisionedKeyNotFound = 87,
+    kMaxValue = kPreProvisionedKeyNotFound,
   };
   // LINT.ThenChange(//tools/metrics/histograms/enums.xml:DeviceBoundSessionError,//services/network/public/mojom/device_bound_sessions.mojom:DeviceBoundSessionError)
 
@@ -107,8 +119,8 @@ struct NET_EXPORT SessionError {
   explicit SessionError(ErrorType type);
   ~SessionError();
 
-  SessionError(const SessionError&);
-  SessionError& operator=(const SessionError&);
+  SessionError(const SessionError&) = delete;
+  SessionError& operator=(const SessionError&) = delete;
 
   SessionError(SessionError&&) noexcept;
   SessionError& operator=(SessionError&&) noexcept;
@@ -120,12 +132,17 @@ struct NET_EXPORT SessionError {
   // Whether the error is due to server-side behavior.
   bool IsServerError() const;
 
-  ErrorType type;
+  // Returns the mapped `RefreshResult` for this error, if applicable.
+  std::optional<RefreshResult> GetRefreshResult() const;
 
-  bool operator==(const SessionError& other) const {
-    return type == other.type;
-  }
+  ErrorType type;
+  // If a network request failed during registration/refresh, details
+  // about that request.
+  std::optional<FailedRequest> failed_request;
 };
+
+template <typename T>
+using SessionErrorOr = base::expected<T, SessionError::ErrorType>;
 
 }  // namespace net::device_bound_sessions
 

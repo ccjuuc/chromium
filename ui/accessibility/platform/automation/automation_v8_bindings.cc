@@ -19,7 +19,6 @@
 #include "gin/handle.h"
 #include "ui/accessibility/ax_enum_util.h"
 #include "ui/accessibility/ax_event_generator.h"
-#include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_role_properties.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/ax_text_utils.h"
@@ -83,9 +82,9 @@ class GenericHandlerFunctionWrapper : public V8HandlerFunctionWrapper {
 // constructor.
 //
 
-typedef void (*TreeIDFunction)(v8::Isolate* isolate,
-                               v8::ReturnValue<v8::Value> result,
-                               AutomationAXTreeWrapper* tree_wrapper);
+using TreeIDFunction = void (*)(v8::Isolate* isolate,
+                                v8::ReturnValue<v8::Value> result,
+                                AutomationAXTreeWrapper* tree_wrapper);
 
 class TreeIDWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -134,11 +133,11 @@ class TreeIDWrapper : public V8HandlerFunctionWrapper {
 // AutomationAXTreeWrapper and the AXNode and passes them to the function
 // passed to the constructor.
 //
-typedef base::RepeatingCallback<void(v8::Isolate* isolate,
-                                     v8::ReturnValue<v8::Value> result,
-                                     AutomationAXTreeWrapper* tree_wrapper,
-                                     AXNode* node)>
-    NodeIDFunction;
+using NodeIDFunction =
+    base::RepeatingCallback<void(v8::Isolate* isolate,
+                                 v8::ReturnValue<v8::Value> result,
+                                 AutomationAXTreeWrapper* tree_wrapper,
+                                 AXNode* node)>;
 
 class NodeIDWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -193,11 +192,11 @@ class NodeIDWrapper : public V8HandlerFunctionWrapper {
 // them to the function passed to the constructor.
 //
 
-typedef void (*NodeIDPlusAttributeFunction)(v8::Isolate* isolate,
-                                            v8::ReturnValue<v8::Value> result,
-                                            AXTree* tree,
-                                            AXNode* node,
-                                            const std::string& attribute);
+using NodeIDPlusAttributeFunction = void (*)(v8::Isolate* isolate,
+                                             v8::ReturnValue<v8::Value> result,
+                                             AXTree* tree,
+                                             AXNode* node,
+                                             const std::string& attribute);
 
 class NodeIDPlusAttributeWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -255,14 +254,14 @@ class NodeIDPlusAttributeWrapper : public V8HandlerFunctionWrapper {
 // passes them to the function passed to the constructor.
 //
 
-typedef base::RepeatingCallback<void(v8::Isolate* isolate,
-                                     v8::ReturnValue<v8::Value> result,
-                                     AutomationAXTreeWrapper* tree_wrapper,
-                                     AXNode* node,
-                                     int start,
-                                     int end,
-                                     bool clipped)>
-    NodeIDPlusRangeFunction;
+using NodeIDPlusRangeFunction =
+    base::RepeatingCallback<void(v8::Isolate* isolate,
+                                 v8::ReturnValue<v8::Value> result,
+                                 AutomationAXTreeWrapper* tree_wrapper,
+                                 AXNode* node,
+                                 int start,
+                                 int end,
+                                 bool clipped)>;
 
 class NodeIDPlusRangeWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -315,13 +314,13 @@ class NodeIDPlusRangeWrapper : public V8HandlerFunctionWrapper {
   NodeIDPlusRangeFunction function_;
 };
 
-typedef base::RepeatingCallback<void(v8::Isolate* isolate,
-                                     v8::ReturnValue<v8::Value> result,
-                                     AutomationAXTreeWrapper* tree_wrapper,
-                                     AXNode* node,
-                                     const std::string& strVal,
-                                     bool boolVal)>
-    NodeIDPlusStringBoolFunction;
+using NodeIDPlusStringBoolFunction =
+    base::RepeatingCallback<void(v8::Isolate* isolate,
+                                 v8::ReturnValue<v8::Value> result,
+                                 AutomationAXTreeWrapper* tree_wrapper,
+                                 AXNode* node,
+                                 const std::string& strVal,
+                                 bool boolVal)>;
 
 class NodeIDPlusStringBoolWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -437,13 +436,12 @@ class NodeIDPlusDimensionsWrapper : public V8HandlerFunctionWrapper {
   NodeIDPlusDimensionsFunction function_;
 };
 
-typedef base::RepeatingCallback<void(
+using NodeIDPlusEventFunction = base::RepeatingCallback<void(
     v8::Isolate* isolate,
     v8::ReturnValue<v8::Value> result,
     AutomationAXTreeWrapper* tree_wrapper,
     AXNode* node,
-    const std::tuple<ax::mojom::Event, AXEventGenerator::Event>& event_type)>
-    NodeIDPlusEventFunction;
+    const std::tuple<ax::mojom::Event, AXEventGenerator::Event>& event_type)>;
 
 class NodeIDPlusEventWrapper : public V8HandlerFunctionWrapper {
  public:
@@ -523,7 +521,7 @@ void AutomationV8Bindings::SendTreeChangeEvent(
     const AXTreeID& tree_id,
     int node_id,
     ax::mojom::Mutation change_type) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(observer_id);
   args.Append(tree_id.ToString());
   args.Append(node_id);
@@ -533,10 +531,10 @@ void AutomationV8Bindings::SendTreeChangeEvent(
 
 void AutomationV8Bindings::SendNodesRemovedEvent(const AXTreeID& tree_id,
                                                  const std::vector<int>& ids) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(tree_id.ToString());
   {
-    base::Value::List nodes;
+    base::ListValue nodes;
     for (auto id : ids)
       nodes.Append(id);
     args.Append(std::move(nodes));
@@ -547,14 +545,14 @@ void AutomationV8Bindings::SendNodesRemovedEvent(const AXTreeID& tree_id,
 }
 
 void AutomationV8Bindings::SendChildTreeIDEvent(const AXTreeID& child_tree_id) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(child_tree_id.ToString());
   automation_v8_router_->DispatchEvent("automationInternal.onChildTreeID",
                                        args);
 }
 
 void AutomationV8Bindings::SendTreeDestroyedEvent(const AXTreeID& tree_id) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(tree_id.ToString());
   automation_v8_router_->DispatchEvent(
       "automationInternal.onAccessibilityTreeDestroyed", args);
@@ -563,7 +561,7 @@ void AutomationV8Bindings::SendTreeDestroyedEvent(const AXTreeID& tree_id) {
 void AutomationV8Bindings::SendGetTextLocationResult(
     const AXActionData& data,
     const std::optional<gfx::Rect>& rect) {
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("treeID", data.target_tree_id.ToString());
   params.Set("childTreeID", data.child_tree_id.ToString());
   params.Set("nodeID", data.target_node_id);
@@ -577,7 +575,7 @@ void AutomationV8Bindings::SendGetTextLocationResult(
   }
   params.Set("requestID", data.request_id);
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(std::move(params));
   automation_v8_router_->DispatchEvent(
       "automationInternal.onGetTextLocationResult", args);
@@ -585,7 +583,7 @@ void AutomationV8Bindings::SendGetTextLocationResult(
 
 void AutomationV8Bindings::SendActionResultEvent(const AXActionData& data,
                                                  bool result) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(data.target_tree_id.ToString());
   args.Append(data.request_id);
   args.Append(result);
@@ -601,7 +599,7 @@ void AutomationV8Bindings::SendAutomationEvent(
   const std::string automation_event_type_str =
       automation_v8_router_->GetEventTypeString(event_type);
 
-  base::Value::Dict event_params;
+  base::DictValue event_params;
   event_params.Set("treeID", base::Value(tree_id.ToString()));
   event_params.Set("targetID", base::Value(event.id));
   event_params.Set("eventType", base::Value(automation_event_type_str));
@@ -614,9 +612,9 @@ void AutomationV8Bindings::SendAutomationEvent(
   event_params.Set("mouseY", base::Value(mouse_location.y()));
 
   // Populate intents.
-  base::Value::List value_intents;
+  base::ListValue value_intents;
   for (const auto& intent : event.event_intents) {
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set("command", base::Value(ToString(intent.command)));
     dict.Set("inputEventType", base::Value(ToString(intent.input_event_type)));
     dict.Set("textBoundary", base::Value(ToString(intent.text_boundary)));
@@ -626,14 +624,14 @@ void AutomationV8Bindings::SendAutomationEvent(
 
   event_params.Set("intents", std::move(value_intents));
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append(std::move(event_params));
   automation_v8_router_->DispatchEvent(
       "automationInternal.onAccessibilityEvent", args);
 }
 
 void AutomationV8Bindings::SendTreeSerializationError(const AXTreeID& tree_id) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append(tree_id.ToString());
   automation_v8_router_->DispatchEvent(
       "automationInternal.onAccessibilityTreeSerializationError", args);
@@ -642,7 +640,7 @@ void AutomationV8Bindings::SendTreeSerializationError(const AXTreeID& tree_id) {
 void AutomationV8Bindings::SendOnAllEventListenersRemoved() {
   automation_v8_router_->DispatchEvent(
       "automationInternal.onAllAutomationEventListenersRemoved",
-      base::Value::List());
+      base::ListValue());
 }
 
 void AutomationV8Bindings::AddV8Routes() {

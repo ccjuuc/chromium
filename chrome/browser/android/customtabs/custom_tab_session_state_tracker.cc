@@ -58,14 +58,12 @@ CustomTabSessionStateTracker::~CustomTabSessionStateTracker() = default;
 
 static void JNI_CustomTabsOpenTimeRecorder_RecordCustomTabSession(
     JNIEnv* env,
-    jlong j_time,
-    std::string& package_name,
-    jlong j_session_duration,
-    jboolean j_was_user_closed,
-    jboolean j_is_partial_cct) {
-  chrome::android::CustomTabSessionStateTracker::GetInstance()
-      .RecordCustomTabSession(j_time, package_name, j_session_duration,
-                              j_was_user_closed, j_is_partial_cct);
+    int64_t j_time,
+    const std::string& package_name,
+    int64_t j_session_duration,
+    bool j_was_user_closed,
+    bool j_is_partial_cct) {
+  // TODO(https://crbug.com/530239451): Delete the rest of the recordation code.
 }
 
 DEFINE_JNI(CustomTabsOpenTimeRecorder)

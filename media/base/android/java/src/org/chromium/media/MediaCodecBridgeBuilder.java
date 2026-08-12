@@ -32,6 +32,9 @@ class MediaCodecBridgeBuilder {
             Surface surface,
             byte[] csd0,
             byte[] csd1,
+            int colorStandard,
+            int colorTransfer,
+            int colorRange,
             HdrMetadata hdrMetadata,
             boolean allowAdaptivePlayback,
             boolean useAsyncApi,
@@ -63,6 +66,9 @@ class MediaCodecBridgeBuilder {
                             width,
                             height,
                             csds,
+                            colorStandard,
+                            colorTransfer,
+                            colorRange,
                             hdrMetadata,
                             info.supportsAdaptivePlayback && allowAdaptivePlayback,
                             profile);
@@ -72,11 +78,14 @@ class MediaCodecBridgeBuilder {
                 // since setting it even to disabled (the default) breaks on
                 // some devices (e.g., Android X86 emulator).
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+                format.setInteger("vdec-lowlatency", 1);
+            }
 
-                // TODO(crbug.com/439294798): This should probably be limited to Dimensity chips.
-                if (decoderName.contains("mtk")) {
-                    format.setInteger("vendor.mtk.vdec.cpu.boost.mode.value", 1);
-                }
+            if (codecType == CodecType.SECURE) {
+                // Explicitly configure the format to require secure playback.
+                format.setFeatureEnabled(
+                        android.media.MediaCodecInfo.CodecCapabilities.FEATURE_SecurePlayback,
+                        true);
             }
 
             if (!bridge.configureVideo(

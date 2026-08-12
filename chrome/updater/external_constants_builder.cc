@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/logging.h"
@@ -22,7 +23,7 @@
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/external_constants_override.h"
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
 #include "url/gurl.h"
@@ -33,14 +34,7 @@ namespace {
 
 std::vector<std::string> StringVectorFromGURLVector(
     const std::vector<GURL>& gurls) {
-  std::vector<std::string> ret;
-  ret.reserve(gurls.size());
-
-  std::ranges::transform(gurls, std::back_inserter(ret), [](const GURL& gurl) {
-    return gurl.possibly_invalid_spec();
-  });
-
-  return ret;
+  return base::ToVector(gurls, &GURL::possibly_invalid_spec);
 }
 
 }  // namespace
@@ -53,7 +47,7 @@ ExternalConstantsBuilder::~ExternalConstantsBuilder() {
 
 ExternalConstantsBuilder& ExternalConstantsBuilder::SetUpdateURL(
     const std::vector<std::string>& urls) {
-  base::Value::List url_list;
+  base::ListValue url_list;
   url_list.reserve(urls.size());
   for (const std::string& url_string : urls) {
     url_list.Append(url_string);
@@ -176,7 +170,7 @@ ExternalConstantsBuilder::ClearServerKeepAliveSeconds() {
 ExternalConstantsBuilder& ExternalConstantsBuilder::SetCrxVerifierFormat(
     crx_file::VerifierFormat crx_verifier_format) {
   overrides_.Set(kDevOverrideKeyCrxVerifierFormat,
-                 static_cast<int>(crx_verifier_format));
+                 std::to_underlying(crx_verifier_format));
   return *this;
 }
 
@@ -199,7 +193,7 @@ ExternalConstantsBuilder& ExternalConstantsBuilder::ClearCrxPublicKeyHash() {
 }
 
 ExternalConstantsBuilder& ExternalConstantsBuilder::SetDictPolicies(
-    const base::Value::Dict& dict_policies) {
+    const base::DictValue& dict_policies) {
   overrides_.Set(kDevOverrideKeyDictPolicies, dict_policies.Clone());
   return *this;
 }

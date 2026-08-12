@@ -7,6 +7,7 @@ import 'chrome://resources/cr_elements/cr_page_host_style.css.js';
 import 'chrome://resources/cr_elements/cr_page_selector/cr_page_selector.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
+import 'chrome://resources/cr_elements/cr_scrollable.css.js';
 import '/shared/settings/prefs/prefs.js';
 import './checkup_section.js';
 import './checkup_details_section.js';
@@ -18,16 +19,18 @@ import './settings_section.js';
 import './shared_style.css.js';
 import './side_bar.js';
 import './toolbar.js';
+import './dialogs/trusted_vault_error_dialog.js';
 
 import type {CrToastElement} from '//resources/cr_elements/cr_toast/cr_toast.js';
 import {focusWithoutInk} from '//resources/js/focus_without_ink.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import type {SettingsPrefsElement} from '/shared/settings/prefs/prefs.js';
-import {CrContainerShadowMixin} from 'chrome://resources/cr_elements/cr_container_shadow_mixin.js';
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import type {CrDrawerElement} from 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
 import type {CrPageSelectorElement} from 'chrome://resources/cr_elements/cr_page_selector/cr_page_selector.js';
 import {FindShortcutMixin} from 'chrome://resources/cr_elements/find_shortcut_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 import {getDeepActiveElement, listenOnce} from 'chrome://resources/js/util.js';
@@ -39,13 +42,14 @@ import type {BackupPasswordRemovedEvent} from './credential_details/backup_passw
 import type {PasswordRemovedEvent} from './credential_details/password_details_card.js';
 import type {FocusConfig} from './focus_config.js';
 import {getTemplate} from './password_manager_app.html.js';
-import {PasswordManagerImpl} from './password_manager_proxy.js';
+import {PasswordManagerActionableError, PasswordManagerImpl} from './password_manager_proxy.js';
 import type {PasswordsSectionElement} from './passwords_section.js';
 import type {Route} from './router.js';
 import {Page, RouteObserverMixin, Router} from './router.js';
 import type {SettingsSectionElement} from './settings_section.js';
 import type {PasswordManagerSideBarElement} from './side_bar.js';
 import type {PasswordManagerToolbarElement} from './toolbar.js';
+import {UserUtilMixin} from './user_utils_mixin.js';
 
 /**
  * Checks if an HTML element is an editable. An editable is either a text
@@ -74,14 +78,15 @@ export interface PasswordManagerAppElement {
     passwords: PasswordsSectionElement,
     prefs: SettingsPrefsElement,
     toast: CrToastElement,
+    scrollableShadow: HTMLElement,
     settings: SettingsSectionElement,
     sidebar: PasswordManagerSideBarElement,
     toolbar: PasswordManagerToolbarElement,
   };
 }
 
-const PasswordManagerAppElementBase = FindShortcutMixin(
-    I18nMixin(CrContainerShadowMixin(RouteObserverMixin(PolymerElement))));
+const PasswordManagerAppElementBase = UserUtilMixin(
+    FindShortcutMixin(I18nMixin(RouteObserverMixin(PolymerElement))));
 
 export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
   static get is() {
@@ -127,6 +132,8 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
         value: Page,
       },
 
+      showTrustedVaultErrorDialog_: Boolean,
+
       toastMessage_: String,
 
       /**
@@ -150,11 +157,18 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
     };
   }
 
-  declare private prefs_: {[key: string]: any};
+  static get observers() {
+    return [
+      'onActionableErrorChanged_(actionableError)',
+    ];
+  }
+
+  declare private prefs_: {[key: string]: unknown};
   declare private selectedPage_: Page;
   declare private narrow_: boolean;
   declare private collapsed_: boolean;
   declare private pageTitle_: string;
+  declare private showTrustedVaultErrorDialog_: boolean;
   declare private toastMessage_: string;
   declare private showUndo_: boolean;
   declare private focusConfig_: FocusConfig;
@@ -162,6 +176,13 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
 
   override connectedCallback() {
     super.connectedCallback();
+
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
 
     const narrowQuery = window.matchMedia('(max-width: 1300px)');
     this.narrow_ = narrowQuery.matches;
@@ -234,16 +255,10 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
 
   override currentRouteChanged(route: Route): void {
     this.selectedPage_ = route.page;
-    setTimeout(() => {  // Async to allow page to load.
-      if (route.page === Page.CHECKUP_DETAILS ||
-          route.page === Page.PASSWORD_CHANGE) {
-        this.enableScrollObservation(false);
-        this.setForceDropShadows(true);
-      } else {
-        this.setForceDropShadows(false);
-        this.enableScrollObservation(true);
-      }
-    }, 0);
+    this.$.scrollableShadow.classList.toggle(
+        'force-on',
+        route.page === Page.CHECKUP_DETAILS ||
+            route.page === Page.PASSWORD_CHANGE);
   }
 
   // Override FindShortcutMixin methods.
@@ -379,6 +394,27 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
       }
       handler();
     }
+  }
+
+  // TODO(crub.com/509908129): Add static stylesheet in password_manager.html
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
+  }
+
+  private onActionableErrorChanged_(
+      actionableError: PasswordManagerActionableError) {
+    this.showTrustedVaultErrorDialog_ =
+        loadTimeData.getBoolean('enableTrustedVaultUnlock') &&
+        actionableError ===
+            PasswordManagerActionableError.kTrustedVaultKeyNeeded;
+  }
+
+  private onTrustedVaultErrorDialogClose_() {
+    this.showTrustedVaultErrorDialog_ = false;
   }
 }
 declare global {

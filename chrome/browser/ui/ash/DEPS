@@ -10,13 +10,20 @@ include_rules = [
   # moved out of chrome/.
   "+chrome/browser/ash/browser_delegate/browser_controller.h",
   "+chrome/browser/ash/browser_delegate/browser_delegate.h",
-  "+chrome/browser/ash/browser_delegate/browser_type.h"
+  "+chrome/browser/ash/browser_delegate/browser_type.h",
 ]
 
 specific_include_rules = {
+  "projector_app_client_impl\\.cc": [
+    "+chrome/browser/ui/ash/account_manager",
+  ],
+
+  "projector_client_impl_browsertest\\.cc": [
+    "+chrome/browser/ui/ash/account_manager",
+  ],
+
   ".*test.*": [
     "+chrome/test",
-    "+chrome/browser/ui/views/tabs",
     "+components/user_education/views",
     "+components/viz/test",
     "+media",
@@ -27,8 +34,10 @@ specific_include_rules = {
     "+chrome/browser/ui/ash",
     "+chrome/browser/ui/browser_commands.h",
     "+chrome/browser/ui/browser.h",
+    "+chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h",
     "+chrome/browser/ui/browser_window/public/browser_window_features.h",
     "+chrome/browser/ui/exclusive_access",
+    "+chrome/browser/ui/immersive",
     "+chrome/browser/ui/views",
   ],
 }

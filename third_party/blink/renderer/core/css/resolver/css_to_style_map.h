@@ -79,7 +79,8 @@ class CSSToStyleMap {
                                                const CSSValue&);
   static double MapAnimationIterationCount(StyleResolverState&,
                                            const CSSValue&);
-  static AtomicString MapAnimationName(StyleResolverState&, const CSSValue&);
+  static const ScopedCSSName* MapAnimationName(StyleResolverState&,
+                                               const CSSValue&);
   static CSSTransitionData::TransitionBehavior MapAnimationBehavior(
       StyleResolverState&,
       const CSSValue&);
@@ -126,16 +127,16 @@ class CSSToStyleMap {
   static EAnimationTriggerBehavior MapAnimationTimelineTriggerBehavior(
       StyleResolverState&,
       const CSSValue&);
-  static std::optional<TimelineOffset> MapAnimationTimelineTriggerRangeStart(
+  static std::optional<TimelineOffset>
+  MapAnimationTimelineTriggerActivationRangeStart(StyleResolverState&,
+                                                  const CSSValue&);
+  static std::optional<TimelineOffset>
+  MapAnimationTimelineTriggerActivationRangeEnd(StyleResolverState&,
+                                                const CSSValue&);
+  static TimelineOffsetOrAuto MapAnimationTimelineTriggerActiveRangeStart(
       StyleResolverState&,
       const CSSValue&);
-  static std::optional<TimelineOffset> MapAnimationTimelineTriggerRangeEnd(
-      StyleResolverState&,
-      const CSSValue&);
-  static TimelineOffsetOrAuto MapAnimationTimelineTriggerExitRangeStart(
-      StyleResolverState&,
-      const CSSValue&);
-  static TimelineOffsetOrAuto MapAnimationTimelineTriggerExitRangeEnd(
+  static TimelineOffsetOrAuto MapAnimationTimelineTriggerActiveRangeEnd(
       StyleResolverState&,
       const CSSValue&);
   static StyleTimeline MapAnimationTimelineTriggerSource(StyleResolverState&,

@@ -14,6 +14,7 @@ import android.view.ViewGroup;
 
 import androidx.annotation.ColorInt;
 
+import org.chromium.base.ApplicationStatus;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
@@ -21,11 +22,11 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.SnackbarActivity;
+import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.incognito.IncognitoWindowNightModeStateProvider;
 import org.chromium.chrome.browser.incognito_window.PreAttachIntentObserver;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorItemSelectionId;
 import org.chromium.components.browser_ui.styles.ChromeColors;
@@ -54,14 +55,7 @@ public class ChromeItemPickerActivity extends SnackbarActivity implements PreAtt
         ViewGroup containerView = findViewById(R.id.chrome_item_picker_container);
         ViewGroup rootView = containerView;
 
-        mWindowId =
-                IntentUtils.safeGetIntExtra(
-                        getIntent(),
-                        IntentHandler.EXTRA_WINDOW_ID,
-                        TabWindowManager.INVALID_WINDOW_ID);
-        if (mWindowId == TabWindowManager.INVALID_WINDOW_ID) {
-            mWindowId = MultiWindowUtils.getLastAccessedWindowId();
-        }
+        mWindowId = resolveTargetWindowId();
         if (mWindowId == TabWindowManager.INVALID_WINDOW_ID) {
             handleFailureToShowPicker("Could not determine a valid target browser window ID.");
             return;
@@ -96,7 +90,7 @@ public class ChromeItemPickerActivity extends SnackbarActivity implements PreAtt
                         allowedSelectionCount,
                         isSingleContextMode);
 
-        mItemPickerCoordinator.showTabItemPicker(this::handleModelFailure);
+        mItemPickerCoordinator.showTabItemPicker(this::handlePickerShowAttempt);
     }
 
     @Override
@@ -168,8 +162,6 @@ public class ChromeItemPickerActivity extends SnackbarActivity implements PreAtt
                         /* defaultValue= */ false);
     }
 
-    // TODO(bbetini): Make method private when it is set to be the callback of
-    // TabItemPickerCoordinator.showTabItemPicker().
     public void finishWithSelectedItems(List<TabListEditorItemSelectionId> selectedItems) {
         ArrayList<Integer> tabIds = new ArrayList<>();
         for (TabListEditorItemSelectionId selectionId : selectedItems) {
@@ -189,18 +181,49 @@ public class ChromeItemPickerActivity extends SnackbarActivity implements PreAtt
         finish();
     }
 
-    private void handleModelFailure(@Nullable TabModelSelector tabModelSelector) {
-        if (tabModelSelector == null) {
-            handleFailureToShowPicker("Failed to launch activity.");
-            return;
+    private void handlePickerShowAttempt(boolean success) {
+        if (!success) {
+            handleFailureToShowPicker("Failed to load the TabModelSelector.");
         }
+    }
+
+    private int resolveTargetWindowId() {
+        int windowId =
+                IntentUtils.safeGetIntExtra(
+                        getIntent(),
+                        IntentHandler.EXTRA_WINDOW_ID,
+                        TabWindowManager.INVALID_WINDOW_ID);
+        if (windowId != TabWindowManager.INVALID_WINDOW_ID) {
+            return windowId;
+        }
+
+        // If EXTRA_WINDOW_ID is missing from the launch intent, find the host activity in the
+        // same Android task. This accurately links back to the initiating window in split-screen
+        // mode.
+        int currentTaskId = getTaskId();
+        for (Activity activity : ApplicationStatus.getRunningActivities()) {
+            if (activity.getTaskId() == currentTaskId && activity != this) {
+                int id = TabWindowManagerSingleton.getInstance().getIdForWindow(activity);
+                if (id != TabWindowManager.INVALID_WINDOW_ID) {
+                    return id;
+                }
+            }
+        }
+
+        // Fall back to the last accessed window ID if no activity in the current task has a valid
+        // window ID.
+        return MultiWindowUtils.getLastAccessedWindowId();
     }
 
     private void handleFailureToShowPicker(String error) {
         Log.e(TAG, error);
         final Intent resultIntent = new Intent();
-        resultIntent.putExtra(IntentHandler.EXTRA_ITEM_PICKER_ERROR, error);
+        resultIntent.putExtra(ChromeItemPickerExtras.EXTRA_ITEM_PICKER_ERROR, error);
         setResult(Activity.RESULT_CANCELED, resultIntent);
         finish();
+    }
+
+    int getWindowIdForTesting() {
+        return mWindowId;
     }
 }

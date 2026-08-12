@@ -5,17 +5,17 @@
 #include "chrome/browser/ui/safety_hub/password_status_check_service_factory.h"
 
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
 #include "chrome/browser/password_manager/factories/bulk_leak_check_service_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/safety_hub/password_status_check_service.h"
-#include "chrome/common/chrome_features.h"
 
 // static
 PasswordStatusCheckServiceFactory*
 PasswordStatusCheckServiceFactory::GetInstance() {
-  return base::Singleton<PasswordStatusCheckServiceFactory>::get();
+  static base::NoDestructor<PasswordStatusCheckServiceFactory> instance;
+  return instance.get();
 }
 
 // static

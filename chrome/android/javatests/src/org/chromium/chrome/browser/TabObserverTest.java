@@ -20,8 +20,11 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
@@ -32,6 +35,7 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.ChromeTabUtils;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
@@ -44,10 +48,16 @@ public class TabObserverTest {
     /** A {@Link TabObserver} that has callback helpers for each event. */
     private static class TestTabObserver extends EmptyTabObserver {
         private final CallbackHelper mInteractabilityHelper = new CallbackHelper();
+        private final CallbackHelper mUrlUpdatedHelper = new CallbackHelper();
 
         @Override
         public void onInteractabilityChanged(Tab tab, boolean isInteractable) {
             mInteractabilityHelper.notifyCalled();
+        }
+
+        @Override
+        public void onUrlUpdated(Tab tab) {
+            mUrlUpdatedHelper.notifyCalled();
         }
     }
 
@@ -55,18 +65,18 @@ public class TabObserverTest {
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
-    private static ChromeTabbedActivity sActivity;
-    private static Tab sTab;
-    private static TestTabObserver sTabObserver;
+    private ChromeTabbedActivity mActivity;
+    private Tab mTab;
+    private TestTabObserver mTabObserver;
 
     @Before
     public void setUp() throws Exception {
-        sTabObserver = new TestTabObserver();
+        mTabObserver = new TestTabObserver();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    sTab = mActivityTestRule.getActivity().getActivityTab();
-                    sTab.addObserver(sTabObserver);
-                    sActivity = mActivityTestRule.getActivity();
+                    mTab = mActivityTestRule.getActivity().getActivityTab();
+                    mTab.addObserver(mTabObserver);
+                    mActivity = mActivityTestRule.getActivity();
                 });
     }
 
@@ -74,7 +84,7 @@ public class TabObserverTest {
     public void tearDown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    sTab.removeObserver(sTabObserver);
+                    mTab.removeObserver(mTabObserver);
                 });
     }
 
@@ -82,51 +92,107 @@ public class TabObserverTest {
     @SmallTest
     @Restriction(DeviceFormFactor.PHONE)
     public void testTabInteractable_tabSwitcher() throws TimeoutException {
-        final LayoutManagerChrome layoutManager = sActivity.getLayoutManager();
-        CallbackHelper interactabilityHelper = sTabObserver.mInteractabilityHelper;
+        final LayoutManagerChrome layoutManager = mActivity.getLayoutManager();
+        CallbackHelper interactabilityHelper = mTabObserver.mInteractabilityHelper;
 
-        assertTrue("Tab should be interactable.", sTab.isUserInteractable());
+        assertTrue("Tab should be interactable.", mTab.isUserInteractable());
 
         int interactableCallCount = interactabilityHelper.getCallCount();
 
         // Enter tab switcher mode and make sure the event is triggered.
-        TabUiTestHelper.enterTabSwitcher(sActivity);
+        TabUiTestHelper.enterTabSwitcher(mActivity);
 
         interactabilityHelper.waitForCallback(interactableCallCount);
         interactableCallCount = interactabilityHelper.getCallCount();
-        assertFalse("Tab should not be interactable.", sTab.isUserInteractable());
+        assertFalse("Tab should not be interactable.", mTab.isUserInteractable());
 
         // Exit tab switcher and wait for event again.
         LayoutTestUtils.startShowingAndWaitForLayout(layoutManager, LayoutType.BROWSING, false);
 
         interactabilityHelper.waitForCallback(interactableCallCount);
-        assertTrue("Tab should be interactable.", sTab.isUserInteractable());
+        assertTrue("Tab should be interactable.", mTab.isUserInteractable());
     }
 
     @Test
     @SmallTest
     public void testTabInteractable_multipleTabs() throws TimeoutException {
-        CallbackHelper interactabilityHelper = sTabObserver.mInteractabilityHelper;
+        CallbackHelper interactabilityHelper = mTabObserver.mInteractabilityHelper;
 
-        assertTrue("Tab should be interactable.", sTab.isUserInteractable());
+        assertTrue("Tab should be interactable.", mTab.isUserInteractable());
 
         int interactableCallCount = interactabilityHelper.getCallCount();
 
         // Launch a new tab in the foreground.
-        ChromeTabUtils.newTabFromMenu(InstrumentationRegistry.getInstrumentation(), sActivity);
+        ChromeTabUtils.newTabFromMenu(InstrumentationRegistry.getInstrumentation(), mActivity);
 
         // The original tab should be hidden.
         interactabilityHelper.waitForCallback(interactableCallCount);
-        assertFalse("Tab should not be interactable.", sTab.isUserInteractable());
+        assertFalse("Tab should not be interactable.", mTab.isUserInteractable());
     }
 
     @Test
     @SmallTest
-    public void testTabDetach_observerUnregistered() {
+    public void testTabDetach_observerUnregistered() throws TimeoutException {
+        final Tab tempTab =
+                ChromeTabUtils.fullyLoadUrlInNewTab(
+                        InstrumentationRegistry.getInstrumentation(),
+                        mActivity,
+                        "about:blank",
+                        false);
+
+        final TestTabObserver tempObserver = new TestTabObserver();
+
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    sTab.updateAttachment(null, null);
-                    assertFalse(sTab.hasObserver(sTabObserver));
+                    tempTab.addObserver(tempObserver);
                 });
+
+        boolean hasObserverBefore =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tempTab.hasObserverForTesting(tempObserver));
+        assertTrue("Tab should have the observer before detach.", hasObserverBefore);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tempTab.updateAttachment(null, null);
+                });
+
+        boolean hasObserverAfter =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> tempTab.hasObserverForTesting(tempObserver));
+        assertFalse("Tab should not have the observer after detach.", hasObserverAfter);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tempTab.destroy();
+                });
+    }
+
+    private void doTestNavigationStateChanged() throws TimeoutException {
+        CallbackHelper urlUpdatedHelper = mTabObserver.mUrlUpdatedHelper;
+        int callCount = urlUpdatedHelper.getCallCount();
+
+        final String url = "about:blank";
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mTab.loadUrl(new LoadUrlParams(url));
+                });
+
+        urlUpdatedHelper.waitForCallback(callCount);
+        org.junit.Assert.assertEquals(url, mTab.getUrl().getSpec());
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ChromeFeatureList.DEFER_NAVIGATION_STATE_CHANGED)
+    public void testNavigationStateChanged_DeferEnabled() throws TimeoutException {
+        doTestNavigationStateChanged();
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(ChromeFeatureList.DEFER_NAVIGATION_STATE_CHANGED)
+    public void testNavigationStateChanged_DeferDisabled() throws TimeoutException {
+        doTestNavigationStateChanged();
     }
 }

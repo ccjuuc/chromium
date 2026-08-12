@@ -8,15 +8,16 @@
 #include <string>
 
 #include "base/callback_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/glic/glic_metrics.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
-#include "chrome/browser/page_content_annotations/multi_source_page_context_fetcher.h"
+#include "chrome/browser/glic/public/glic_invoke_options.h"
+#include "chrome/browser/ui/tabs/page_context_eligibility_helper.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "components/lens/lens_metadata.mojom.h"
 #include "components/tabs/public/tab_interface.h"
-#include "content/public/browser/clipboard_types.h"
 #include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -26,11 +27,8 @@
 
 namespace content {
 class RenderFrameHost;
+class WebContents;
 }  // namespace content
-
-namespace ui {
-class ClipboardFormatType;
-}  // namespace ui
 
 namespace tabs {
 class TabInterface;
@@ -39,6 +37,7 @@ class TabInterface;
 namespace glic {
 
 class GlicKeyedService;
+class GlicInstance;
 
 // Manages the capturing of context images (i.e., images for which the user has
 // opened the context menu), and sending to the web client as additional data.
@@ -53,6 +52,8 @@ class GlicShareImageHandler : public content::WebContentsObserver {
                          const GURL& src_url);
 
  private:
+  friend class GlicShareImageHandlerTest;
+
   // content::WebContentsObserver.
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
@@ -73,26 +74,16 @@ class GlicShareImageHandler : public content::WebContentsObserver {
                        const std::string& image_extension,
                        std::vector<lens::mojom::LatencyLogPtr> log_data);
 
-  // Called once tab context has been fetched
-  void OnReceivedTabContext(
-      base::expected<glic::mojom::GetContextResultPtr,
-                     page_content_annotations::FetchPageContextErrorDetails>
-          result);
-
   // Attempt to display an error toast
   void MaybeShowErrorToast(tabs::TabInterface* tab);
 
-  // Starts a process that will perform a paste policy check once the glic panel
-  // is ready.
-  void PerformPastePolicyCheckWhenReady();
+  // Called if the invoke API hits a failure. This completes the share process
+  // and causes metrics to be logged.
+  void OnInvokeError(GlicInvokeError error);
 
-  // Performs the paste policy check. This is called by
-  // `PerformPastePolicyCheckWhenReady` once the client is ready.
-  void DoPastePolicyCheck();
-
-  // Returns true if the glic client for the given tab is ready for context to
-  // be sent.
-  bool IsClientReady(tabs::TabInterface& tab);
+  // Called when the invoke API succeeds. Completes the share process unless
+  // held for testing.
+  void OnInvokeSuccess();
 
   // Called when the end result of sharing is known. Sends context on success.
   void ShareComplete(ShareImageResult result);
@@ -101,38 +92,40 @@ class GlicShareImageHandler : public content::WebContentsObserver {
   // calling Reset).
   void StopObservingNavigation();
 
+  // Returns true if clipboard policy checks are required for the current state.
+  // If `size` is not provided, we will use the maximum image size.
+  bool AreClipboardPolicyChecksRequired(std::optional<size_t> size);
+
+  // Starts observing navigation if policy checks are required.
+  void MaybeStartObservingNavigation(tabs::TabInterface* tab);
+
+  // Starts observing page context eligibility changes. Returns false if the
+  // context is ineligible or eligibility cannot be determined.
+  bool MaybeStartObservingEligibility(tabs::TabInterface* tab);
+
+  // Called when eligibility changes.
+  void OnPageContextEligibilityChanged(
+      optimization_guide::PageContextEligibilityStatus eligibility);
+
   // Called whenever sharing is completed, successful or otherwise. Stops the
   // timer if it is running and clears state.
   void Reset();
-
-  void OnCopyPolicyCheckComplete(
-      const ui::ClipboardFormatType& data_type,
-      const content::ClipboardPasteData& data,
-      std::optional<std::u16string> replacement_data);
-
-  void OnPastePolicyCheckComplete(
-      std::optional<content::ClipboardPasteData> data);
 
   raw_ref<GlicKeyedService> service_;  // owns this
 
   bool is_share_in_progress_ = false;
 
-  // TODO(b:448652827): Find another way to observe the outcome of ToggleUI.
-  // For the moment, we will poll and these members are used for controlling
-  // this process and sending the captured context when the panel is ready, if
-  // possible.
-  base::RepeatingTimer glic_panel_ready_timer_;
-  base::TimeTicks glic_panel_open_time_;
-  mojom::AdditionalContextPtr additional_context_;
   tabs::TabHandle tab_handle_;
   content::GlobalRenderFrameHostId render_frame_host_id_;
   GURL src_url_;
   GURL frame_url_;
   url::Origin frame_origin_;
-  std::string mime_type_;
-  std::vector<uint8_t> thumbnail_data_;
   base::CallbackListSubscription will_discard_web_contents_subscription_;
   base::CallbackListSubscription will_detach_subscription_;
+  base::CallbackListSubscription eligibility_subscription_;
+
+  // This is the instance associated with the current invocation, if any.
+  base::WeakPtr<GlicInstance> current_invocation_instance_;
 
   // This is used for communicating with the renderer to capture image context.
   std::unique_ptr<mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame>>

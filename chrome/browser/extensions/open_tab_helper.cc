@@ -11,11 +11,11 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/chrome_navigation_ui_data.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/site_instance.h"
@@ -28,17 +28,19 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/unload_controller.h"
 #endif
 
 namespace extensions {
 namespace {
 
 #if !BUILDFLAG(IS_ANDROID)
+// This variant is only available on non-Android platforms. On Android, window
+// creation / initialization is an async process.
 BrowserWindowInterface* CreateAndShowBrowser(Profile* profile,
                                              bool user_gesture) {
-  if (Browser::GetCreationStatusForProfile(profile) !=
+  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
       Browser::CreationStatus::kOk) {
     return nullptr;
   }
@@ -46,8 +48,6 @@ BrowserWindowInterface* CreateAndShowBrowser(Profile* profile,
   BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
                                    *profile, user_gesture);
 
-  // TODO(https://crbug.com/430344931): When this is ported to android
-  // platforms, this window isn't guaranteed to be fully initialized.
   BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
   if (!browser) {
     return nullptr;
@@ -85,7 +85,8 @@ OpenTabHelper::FindOrCreateBrowser(const GURL& validated_url,
     return base::unexpected(ExtensionTabUtil::kNoCurrentWindowError);
   }
 
-  BrowserWindowInterface* browser = controller->GetBrowserWindowInterface();
+  BrowserWindowInterface* browser =
+      controller ? controller->GetBrowserWindowInterface() : nullptr;
 
   // We can't load extension URLs into incognito windows unless the extension
   // uses split mode. Special case to fall back to a tabbed window or, if
@@ -105,7 +106,8 @@ OpenTabHelper::FindOrCreateBrowser(const GURL& validated_url,
   // back to the dawn of time, AKA the initial implementation in 2014:
   // https://codereview.chromium.org/245933002.
   if (browser && browser->GetType() != BrowserWindowInterface::TYPE_NORMAL &&
-      browser->GetBrowserForMigrationOnly()->IsAttemptingToCloseBrowser()) {
+      UnloadController::From(browser->GetBrowserForMigrationOnly())
+          ->is_attempting_to_close_browser()) {
     browser = nullptr;
     fallback_to_tabbed_browser = true;
   }
@@ -182,9 +184,6 @@ base::expected<content::WebContents*, std::string> OpenTabHelper::OpenTab(
   navigate_params.tabstrip_index = index;
   navigate_params.user_gesture = false;
 
-  // TODO(https://crbug.com/430344931): `NavigateParams::tabstrip_add_types`
-  // isn't supported on android builds yet.
-#if !BUILDFLAG(IS_ANDROID)
   // Default to not pinning the tab. Setting the 'pinned' property to true
   // will override this default.
   bool pinned = params.pinned.value_or(false);
@@ -195,23 +194,16 @@ base::expected<content::WebContents*, std::string> OpenTabHelper::OpenTab(
     add_types |= AddTabTypes::ADD_PINNED;
   }
   navigate_params.tabstrip_add_types = add_types;
-#endif
 
   // Ensure that this navigation will not get 'captured' into PWA windows, as
   // this means that `browser` could be ignored. It may be useful/desired in
   // the future to allow this behavior, but this may require an API change, and
   // likely a re-write of how this navigation is called to be compatible with
   // the navigation capturing behavior.
-  navigate_params.pwa_navigation_capturing_force_off = true;
+  navigate_params.web_app_navigation_data.emplace();
+  navigate_params.web_app_navigation_data->SetNavigationCapturingForceOff(true);
 
-  // Treat PDF open-in-new-window navigations consistently with other PDF
-  // navigations, as done in TabsUpdateFunction::UpdateURL().
-  if (extension && extension->id() == extension_misc::kPdfExtensionId) {
-    navigate_params.is_renderer_initiated = true;
-    navigate_params.initiator_origin = extension->origin();
-    navigate_params.source_site_instance = content::SiteInstance::CreateForURL(
-        function.browser_context(), navigate_params.initiator_origin->GetURL());
-  }
+  MaybeSetPdfNavigateParams(function, navigate_params);
 
   base::WeakPtr<content::NavigationHandle> handle = Navigate(&navigate_params);
   if (handle && params.bookmark_id) {
@@ -233,6 +225,21 @@ base::expected<content::WebContents*, std::string> OpenTabHelper::OpenTab(
   }
 
   return new_contents;
+}
+
+// static
+bool OpenTabHelper::MaybeSetPdfNavigateParams(const ExtensionFunction& function,
+                                              NavigateParams& navigate_params) {
+  auto* const extension = function.extension();
+  if (!extension || extension->id() != extension_misc::kPdfExtensionId) {
+    return false;
+  }
+
+  navigate_params.is_renderer_initiated = true;
+  navigate_params.initiator_origin = extension->origin();
+  navigate_params.source_site_instance = content::SiteInstance::CreateForURL(
+      function.browser_context(), navigate_params.initiator_origin->GetURL());
+  return true;
 }
 
 }  // namespace extensions

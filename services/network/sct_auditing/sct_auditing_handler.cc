@@ -128,8 +128,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
     // hashdance lookup query.
     sct_metadata.emplace();
     const net::ct::SignedCertificateTimestamp* sct =
-        validated_scts.at(base::RandInt(0, validated_scts.size() - 1))
-            .sct.get();
+        base::RandomChoice(validated_scts).sct.get();
     sct_metadata->issued = sct->timestamp;
     net::ct::MerkleTreeLeaf tree_leaf;
     bool result = net::ct::GetMerkleTreeLeaf(validated_certificate_chain, sct,
@@ -188,7 +187,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
 std::optional<std::string> SCTAuditingHandler::SerializeData() {
   DCHECK(foreground_runner_->RunsTasksInCurrentSequence());
 
-  base::Value::List reports;
+  base::ListValue reports;
   for (const auto& kv : pending_reporters_) {
     auto reporter_key = kv.first;
     auto* reporter = kv.second.get();
@@ -198,7 +197,7 @@ std::optional<std::string> SCTAuditingHandler::SerializeData() {
     serialized_report = base::Base64Encode(serialized_report);
 
     auto report_entry =
-        base::Value::Dict()
+        base::DictValue()
             .Set(kReporterKeyKey, reporter_key.ToString())
             .Set(kBackoffEntryKey,
                  net::BackoffEntrySerializer::SerializeToList(
@@ -231,7 +230,7 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
 
   size_t num_reporters_deserialized = 0u;
   for (base::Value& sct_entry : value->GetList()) {
-    base::Value::Dict* entry_dict = sct_entry.GetIfDict();
+    base::DictValue* entry_dict = sct_entry.GetIfDict();
     if (!sct_entry.is_dict()) {
       continue;
     }
@@ -240,7 +239,7 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
     std::string* report_string = entry_dict->FindString(kReportKey);
     const std::optional<base::Value> sct_metadata_value =
         entry_dict->Extract(kSCTHashdanceMetadataKey);
-    const base::Value::List* backoff_entry_value =
+    const base::ListValue* backoff_entry_value =
         entry_dict->FindList(kBackoffEntryKey);
     const std::optional<bool> counted_towards_report_limit =
         entry_dict->FindBool(kAlreadyCountedKey);
@@ -251,14 +250,15 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
 
     // Try to read the reporter_key from the entry and convert back to a
     // HashValue. If it fails, continue to the next entry.
-    net::HashValue cache_key(net::HASH_VALUE_SHA256);
-    if (!cache_key.FromString(*reporter_key_string)) {
+    std::optional<net::HashValue> cache_key =
+        net::HashValue::FromString(*reporter_key_string);
+    if (!cache_key) {
       continue;
     }
 
     // Check if cache_key already exists. If it's already in the pending set,
     // skip re-adding it.
-    auto it = pending_reporters_.Get(cache_key);
+    auto it = pending_reporters_.Get(*cache_key);
     if (it != pending_reporters_.end()) {
       continue;
     }
@@ -291,7 +291,7 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
       }
     }
 
-    AddReporter(cache_key, std::move(audit_report), std::move(sct_metadata),
+    AddReporter(*cache_key, std::move(audit_report), std::move(sct_metadata),
                 std::move(backoff_entry),
                 counted_towards_report_limit.value_or(false));
     ++num_reporters_deserialized;
@@ -447,7 +447,7 @@ network::mojom::URLLoaderFactory* SCTAuditingHandler::GetURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = OriginatingProcessId::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
   params->automatically_assign_isolation_info = true;

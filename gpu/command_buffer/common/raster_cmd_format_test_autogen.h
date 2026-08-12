@@ -8,11 +8,6 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 // This file contains unit tests for raster commands
 // It is included by raster_cmd_format_test.cc
 
@@ -63,7 +58,8 @@ TEST_F(RasterFormatTest, GenQueriesEXTImmediate) {
   CheckBytesWrittenMatchesExpectedSize(
       next_cmd,
       sizeof(cmd) + RoundSizeToMultipleOfEntries(std::size(ids) * 4u));
-  EXPECT_EQ(0, memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids)));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids))));
 }
 
 TEST_F(RasterFormatTest, DeleteQueriesEXTImmediate) {
@@ -83,7 +79,8 @@ TEST_F(RasterFormatTest, DeleteQueriesEXTImmediate) {
   CheckBytesWrittenMatchesExpectedSize(
       next_cmd,
       sizeof(cmd) + RoundSizeToMultipleOfEntries(std::size(ids) * 4u));
-  EXPECT_EQ(0, memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids)));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids))));
 }
 
 TEST_F(RasterFormatTest, BeginQueryEXT) {
@@ -198,6 +195,17 @@ TEST_F(RasterFormatTest, EndRasterCHROMIUM) {
   CheckBytesWrittenMatchesExpectedSize(next_cmd, sizeof(cmd));
 }
 
+TEST_F(RasterFormatTest, FlushTileRasterGraphiteCommandsCHROMIUM) {
+  cmds::FlushTileRasterGraphiteCommandsCHROMIUM& cmd =
+      *GetBufferAs<cmds::FlushTileRasterGraphiteCommandsCHROMIUM>();
+  void* next_cmd = cmd.Set(&cmd);
+  EXPECT_EQ(static_cast<uint32_t>(
+                cmds::FlushTileRasterGraphiteCommandsCHROMIUM::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  CheckBytesWrittenMatchesExpectedSize(next_cmd, sizeof(cmd));
+}
+
 TEST_F(RasterFormatTest, CreateTransferCacheEntryINTERNAL) {
   cmds::CreateTransferCacheEntryINTERNAL& cmd =
       *GetBufferAs<cmds::CreateTransferCacheEntryINTERNAL>();
@@ -265,7 +273,8 @@ TEST_F(RasterFormatTest, DeletePaintCachePathsINTERNALImmediate) {
   CheckBytesWrittenMatchesExpectedSize(
       next_cmd,
       sizeof(cmd) + RoundSizeToMultipleOfEntries(std::size(ids) * 4u));
-  EXPECT_EQ(0, memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids)));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids))));
 }
 
 TEST_F(RasterFormatTest, DeletePaintCachePathsINTERNAL) {
@@ -301,7 +310,8 @@ TEST_F(RasterFormatTest, DeletePaintCacheEffectsINTERNALImmediate) {
   CheckBytesWrittenMatchesExpectedSize(
       next_cmd,
       sizeof(cmd) + RoundSizeToMultipleOfEntries(std::size(ids) * 4u));
-  EXPECT_EQ(0, memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids)));
+  EXPECT_EQ(0,
+            UNSAFE_TODO(memcmp(ids, ImmediateDataAddress(&cmd), sizeof(ids))));
 }
 
 TEST_F(RasterFormatTest, DeletePaintCacheEffectsINTERNAL) {
@@ -560,24 +570,30 @@ TEST_F(RasterFormatTest, ReadbackYUVImagePixelsINTERNALImmediate) {
       *GetBufferAs<cmds::ReadbackYUVImagePixelsINTERNALImmediate>();
   void* next_cmd = cmd.Set(
       &cmd, static_cast<GLuint>(11), static_cast<GLuint>(12),
-      static_cast<GLint>(13), static_cast<GLuint>(14), static_cast<GLuint>(15),
-      static_cast<GLuint>(16), static_cast<GLuint>(17), static_cast<GLuint>(18),
-      static_cast<GLuint>(19), static_cast<GLuint>(20), data);
+      static_cast<GLuint>(13), static_cast<GLuint>(14), static_cast<GLuint>(15),
+      static_cast<GLuint>(16), static_cast<GLint>(17), static_cast<GLuint>(18),
+      static_cast<GLuint>(19), static_cast<GLuint>(20), static_cast<GLuint>(21),
+      static_cast<GLuint>(22), static_cast<GLuint>(23), static_cast<GLuint>(24),
+      data);
   EXPECT_EQ(static_cast<uint32_t>(
                 cmds::ReadbackYUVImagePixelsINTERNALImmediate::kCmdId),
             cmd.header.command);
   EXPECT_EQ(sizeof(cmd) + RoundSizeToMultipleOfEntries(sizeof(data)),
             cmd.header.size * 4u);
-  EXPECT_EQ(static_cast<GLuint>(11), cmd.dst_width);
-  EXPECT_EQ(static_cast<GLuint>(12), cmd.dst_height);
-  EXPECT_EQ(static_cast<GLint>(13), cmd.shm_id);
-  EXPECT_EQ(static_cast<GLuint>(14), cmd.shm_offset);
-  EXPECT_EQ(static_cast<GLuint>(15), cmd.y_offset);
-  EXPECT_EQ(static_cast<GLuint>(16), cmd.y_stride);
-  EXPECT_EQ(static_cast<GLuint>(17), cmd.u_offset);
-  EXPECT_EQ(static_cast<GLuint>(18), cmd.u_stride);
-  EXPECT_EQ(static_cast<GLuint>(19), cmd.v_offset);
-  EXPECT_EQ(static_cast<GLuint>(20), cmd.v_stride);
+  EXPECT_EQ(static_cast<GLuint>(11), cmd.src_x);
+  EXPECT_EQ(static_cast<GLuint>(12), cmd.src_y);
+  EXPECT_EQ(static_cast<GLuint>(13), cmd.src_width);
+  EXPECT_EQ(static_cast<GLuint>(14), cmd.src_height);
+  EXPECT_EQ(static_cast<GLuint>(15), cmd.dst_width);
+  EXPECT_EQ(static_cast<GLuint>(16), cmd.dst_height);
+  EXPECT_EQ(static_cast<GLint>(17), cmd.shm_id);
+  EXPECT_EQ(static_cast<GLuint>(18), cmd.shm_offset);
+  EXPECT_EQ(static_cast<GLuint>(19), cmd.y_offset);
+  EXPECT_EQ(static_cast<GLuint>(20), cmd.y_stride);
+  EXPECT_EQ(static_cast<GLuint>(21), cmd.u_offset);
+  EXPECT_EQ(static_cast<GLuint>(22), cmd.u_stride);
+  EXPECT_EQ(static_cast<GLuint>(23), cmd.v_offset);
+  EXPECT_EQ(static_cast<GLuint>(24), cmd.v_stride);
   CheckBytesWrittenMatchesExpectedSize(
       next_cmd, sizeof(cmd) + RoundSizeToMultipleOfEntries(sizeof(data)));
 }

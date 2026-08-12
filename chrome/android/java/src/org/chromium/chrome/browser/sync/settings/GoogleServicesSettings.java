@@ -17,9 +17,10 @@ import androidx.annotation.VisibleForTesting;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceGroup;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -46,8 +47,8 @@ import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.commerce.core.CommerceFeatureUtils;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.prefs.PrefService;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.components.user_prefs.UserPrefs;
@@ -69,7 +70,10 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
     @VisibleForTesting public static final String PREF_ALLOW_SIGNIN = "allow_signin";
 
     private static final String PREF_SEARCH_SUGGESTIONS = "search_suggestions";
-    private static final String PREF_USAGE_AND_CRASH_REPORTING = "usage_and_crash_reports";
+
+    @VisibleForTesting
+    public static final String PREF_USAGE_AND_CRASH_REPORTING = "usage_and_crash_reports";
+
     private static final String PREF_URL_KEYED_ANONYMIZED_DATA = "url_keyed_anonymized_data";
     private static final String PREF_CONTEXTUAL_SEARCH = "contextual_search";
 
@@ -96,7 +100,8 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
     private @Nullable Preference mPriceNotificationSection;
     private @Nullable Preference mUsageStatsReporting;
     private @Nullable OneshotSupplier<SnackbarManager> mSnackbarManagerSupplier;
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
@@ -127,6 +132,10 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
                 (ChromeSwitchPreference) findPreference(PREF_USAGE_AND_CRASH_REPORTING);
         mUsageAndCrashReporting.setOnPreferenceChangeListener(this);
         mUsageAndCrashReporting.setManagedPreferenceDelegate(mManagedPreferenceDelegate);
+        // TODO(b/483043192): Add UI for new Metrics Consent settings.
+        if (mPrivacyPrefManager.shouldUseMetricsChoiceRestructure()) {
+            mUsageAndCrashReporting.setVisible(false);
+        }
 
         mUrlKeyedAnonymizedData =
                 (ChromeSwitchPreference) findPreference(PREF_URL_KEYED_ANONYMIZED_DATA);
@@ -164,7 +173,7 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -172,7 +181,7 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
         MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
+                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, getHelpMenuStringRes());
         help.setIcon(R.drawable.ic_help_24dp);
     }
 
@@ -201,7 +210,7 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
             IdentityManager identityManager =
                     assumeNonNull(IdentityServicesProvider.get().getIdentityManager(getProfile()));
             boolean shouldSignUserOut =
-                    identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN) && !((boolean) newValue);
+                    identityManager.hasPrimaryAccount() && !((boolean) newValue);
             if (!shouldSignUserOut) {
                 mPrefService.setBoolean(Pref.SIGNIN_ALLOWED, (boolean) newValue);
                 return true;
@@ -210,7 +219,6 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
             SignOutCoordinator.startSignOutFlow(
                     requireContext(),
                     getProfile(),
-                    getActivity().getSupportFragmentManager(),
                     ((ModalDialogManagerHolder) getActivity()).getModalDialogManager(),
                     assertNonNull(assumeNonNull(mSnackbarManagerSupplier).get()),
                     SignoutReason.USER_DISABLED_ALLOW_CHROME_SIGN_IN,
@@ -225,7 +233,7 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
         } else if (PREF_SEARCH_SUGGESTIONS.equals(key)) {
             mPrefService.setBoolean(Pref.SEARCH_SUGGEST_ENABLED, (boolean) newValue);
         } else if (PREF_USAGE_AND_CRASH_REPORTING.equals(key)) {
-            UmaSessionStats.changeMetricsReportingConsent(
+            UmaSessionStats.changeMetricsReportingState(
                     (boolean) newValue, ChangeMetricsReportingStateCalledFrom.UI_SETTINGS);
         } else if (PREF_URL_KEYED_ANONYMIZED_DATA.equals(key)) {
             UnifiedConsentServiceBridge.setUrlKeyedAnonymizedDataCollectionEnabled(
@@ -292,7 +300,7 @@ public class GoogleServicesSettings extends ChromeBaseSettingsFragment
     }
 
     private static boolean shouldShowContextualSearch() {
-        return ContextualSearchFieldTrial.isEnabled();
+        return ContextualSearchFieldTrial.isEnabled() && !OmniboxCapabilities.isDesktopPlatform();
     }
 
     private static boolean shouldShowPriceTrackingAnnotations(Profile profile) {

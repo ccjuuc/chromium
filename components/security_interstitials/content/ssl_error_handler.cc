@@ -346,7 +346,7 @@ class SSLErrorHandlerDelegateImpl : public SSLErrorHandler::Delegate {
       content::WebContents* web_contents,
       const net::SSLInfo& ssl_info,
       content::BrowserContext* const browser_context,
-      int cert_error,
+      net::Error cert_error,
       int options_mask,
       const GURL& request_url,
       captive_portal::CaptivePortalService* captive_portal_service,
@@ -387,6 +387,7 @@ class SSLErrorHandlerDelegateImpl : public SSLErrorHandler::Delegate {
   void ShowBadClockInterstitial(const base::Time& now,
                                 ssl_errors::ClockState clock_state) override;
   void ShowBlockedInterceptionInterstitial() override;
+  void ShowLocalSelfSignedInterstitial() override;
   void ReportNetworkConnectivity(base::OnceClosure callback) override;
   bool HasBlockedInterception() const override;
 
@@ -400,7 +401,7 @@ class SSLErrorHandlerDelegateImpl : public SSLErrorHandler::Delegate {
   raw_ptr<content::WebContents> web_contents_;
   const net::SSLInfo ssl_info_;
   const raw_ptr<content::BrowserContext> browser_context_;
-  const int cert_error_;
+  const net::Error cert_error_;
   const int options_mask_;
   const GURL request_url_;
   std::unique_ptr<CommonNameMismatchHandler> common_name_mismatch_handler_;
@@ -502,6 +503,12 @@ void SSLErrorHandlerDelegateImpl::ShowBlockedInterceptionInterstitial() {
           web_contents_, cert_error_, request_url_, ssl_info_));
 }
 
+void SSLErrorHandlerDelegateImpl::ShowLocalSelfSignedInterstitial() {
+  OnBlockingPageReady(blocking_page_factory_->CreateLocalSelfSignedBlockingPage(
+      web_contents_, cert_error_, ssl_info_, request_url_, options_mask_,
+      base::Time::NowFromSystemTime(), GURL()));
+}
+
 void SSLErrorHandlerDelegateImpl::ReportNetworkConnectivity(
     base::OnceClosure callback) {
 #if BUILDFLAG(IS_ANDROID)
@@ -532,16 +539,17 @@ void SSLErrorHandlerDelegateImpl::OnBlockingPageReady(
                                 std::move(interstitial_page)));
 }
 
-}  // namespace
-
 ConfigSingleton& GetConfig() {
   static base::NoDestructor<ConfigSingleton> config;
   return *config;
 }
 
+}  // namespace
+
+// static
 void SSLErrorHandler::HandleSSLError(
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     base::OnceCallback<
@@ -558,16 +566,16 @@ void SSLErrorHandler::HandleSSLError(
   int options_mask = security_interstitials::CalculateSSLErrorOptionsMask(
       cert_error, hard_override_disabled, ssl_info.is_fatal_cert_error);
 
-  SSLErrorHandler* error_handler = new SSLErrorHandler(
-      std::unique_ptr<SSLErrorHandler::Delegate>(
-          new SSLErrorHandlerDelegateImpl(
-              web_contents, ssl_info, web_contents->GetBrowserContext(),
-              cert_error, options_mask, request_url, captive_portal_service,
-              std::move(blocking_page_factory),
-              GetConfig().on_blocking_page_shown_callback(),
-              std::move(blocking_page_ready_callback))),
-      web_contents, cert_error, ssl_info, network_time_tracker,
-      captive_portal_service, request_url);
+  auto delegate = std::make_unique<SSLErrorHandlerDelegateImpl>(
+      web_contents, ssl_info, web_contents->GetBrowserContext(), cert_error,
+      options_mask, request_url, captive_portal_service,
+      std::move(blocking_page_factory),
+      GetConfig().on_blocking_page_shown_callback(),
+      std::move(blocking_page_ready_callback));
+  // Protected ctor.
+  auto* error_handler = new SSLErrorHandler(
+      std::move(delegate), web_contents, cert_error, ssl_info,
+      network_time_tracker, captive_portal_service, request_url);
   web_contents->SetUserData(UserDataKey(), base::WrapUnique(error_handler));
   error_handler->StartHandlingError();
 }
@@ -643,7 +651,7 @@ void SSLErrorHandler::SetClientCallbackOnInterstitialsShown(
 SSLErrorHandler::SSLErrorHandler(
     std::unique_ptr<Delegate> delegate,
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     network_time::NetworkTimeTracker* network_time_tracker,
     captive_portal::CaptivePortalService* captive_portal_service,
@@ -669,6 +677,10 @@ void SSLErrorHandler::StartHandlingError() {
 
   if (delegate_->HasBlockedInterception()) {
     return ShowBlockedInterceptionInterstitial();
+  }
+
+  if (cert_error_ == net::ERR_CERT_SELF_SIGNED_LOCAL_NETWORK) {
+    return ShowLocalSelfSignedInterstitial();
   }
 
   if (ssl_errors::ErrorInfo::NetErrorToErrorType(cert_error_) ==
@@ -896,6 +908,14 @@ void SSLErrorHandler::ShowBlockedInterceptionInterstitial() {
   // Show a blocking page. The interstitial owns the blocking page.
   RecordUMA(SHOW_BLOCKED_INTERCEPTION_INTERSTITIAL);
   delegate_->ShowBlockedInterceptionInterstitial();
+  // Once an interstitial is displayed, no need to keep the handler around.
+  // This is the equivalent of "delete this".
+  web_contents()->RemoveUserData(UserDataKey());
+}
+
+void SSLErrorHandler::ShowLocalSelfSignedInterstitial() {
+  RecordUMA(SHOW_LOCAL_SELF_SIGNED_INTERSTITIAL);
+  delegate_->ShowLocalSelfSignedInterstitial();
   // Once an interstitial is displayed, no need to keep the handler around.
   // This is the equivalent of "delete this".
   web_contents()->RemoveUserData(UserDataKey());

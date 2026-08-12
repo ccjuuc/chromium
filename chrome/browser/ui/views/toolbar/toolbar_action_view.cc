@@ -58,13 +58,14 @@ ToolbarActionView::ToolbarActionView(ToolbarActionViewModel* view_model,
                                      base::Unretained(this))),
       view_model_(view_model),
       delegate_(delegate) {
-  ConfigureInkDropForToolbar(this);
+  ConfigureInkDrop(this);
   SetHideInkDropWhenShowingContextMenu(false);
   SetShowInkDropWhenHotTracked(true);
   SetID(VIEW_ID_BROWSER_ACTION);
   SetProperty(views::kElementIdentifierKey, kToolbarActionViewElementId);
-  model_subscription_ = view_model_->RegisterUpdateObserver(base::BindRepeating(
-      &ToolbarActionView::UpdateState, base::Unretained(this)));
+  model_subscription_ =
+      view_model_->RegisterIconUpdateObserver(base::BindRepeating(
+          &ToolbarActionView::UpdateState, base::Unretained(this)));
   SetHorizontalAlignment(gfx::ALIGN_CENTER);
   set_drag_controller(delegate_);
   // Normally, the notify action is determined by whether a view is draggable
@@ -144,13 +145,26 @@ bool ToolbarActionView::OnKeyPressed(const ui::KeyEvent& event) {
 
 // Linux enter/leave events are sometimes flaky, so we don't want to "miss"
 // an enter event and fail to hover the button. This is effectively a no-op if
-// the button is already showing the hover card (crbug.com/1326272).
+// the button is already showing the hover card (crbug.com/40840442).
 void ToolbarActionView::OnMouseMoved(const ui::MouseEvent& event) {
   MaybeUpdateHoverCardStatus(event);
 }
 
 void ToolbarActionView::OnMouseEntered(const ui::MouseEvent& event) {
   MaybeUpdateHoverCardStatus(event);
+}
+
+void ToolbarActionView::OnFocus() {
+  MenuButton::OnFocus();
+  delegate_->UpdateHoverCard(this, ToolbarActionHoverCardUpdateType::kFocus);
+}
+
+void ToolbarActionView::OnBlur() {
+  MenuButton::OnBlur();
+  if (!delegate_->IsFocusOnExtensionAction()) {
+    delegate_->UpdateHoverCard(nullptr,
+                               ToolbarActionHoverCardUpdateType::kFocus);
+  }
 }
 
 void ToolbarActionView::MaybeUpdateHoverCardStatus(
@@ -214,7 +228,7 @@ bool ToolbarActionView::OnMousePressed(const ui::MouseEvent& event) {
       // This event is likely to trigger the MenuButton action.
       // TODO(bruthig): The ACTION_PENDING triggering logic should be in
       // MenuButton::OnPressed() however there is a bug with the pressed state
-      // logic in MenuButton. See http://crbug.com/567252.
+      // logic in MenuButton. See http://crbug.com/41227327.
       views::InkDrop::Get(this)->AnimateToState(
           views::InkDropState::ACTION_PENDING, &event);
     }
@@ -285,7 +299,7 @@ views::Button* ToolbarActionView::GetReferenceButtonForPopupInternal() {
 }
 
 views::BubbleAnchor ToolbarActionView::GetReferenceButtonForPopup() {
-  return GetReferenceButtonForPopupInternal();
+  return views::BubbleAnchor(GetReferenceButtonForPopupInternal());
 }
 
 void ToolbarActionView::ShowContextMenuAsFallback() {

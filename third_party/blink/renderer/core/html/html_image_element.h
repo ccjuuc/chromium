@@ -26,6 +26,7 @@
 
 #include <optional>
 
+#include "base/types/strong_alias.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/create_element_flags.h"
@@ -42,8 +43,8 @@ namespace blink {
 
 class ExceptionState;
 class HTMLFormElement;
+class HTMLMapElement;
 class ImageCandidate;
-class ShadowRoot;
 
 class CORE_EXPORT HTMLImageElement
     : public HTMLElement,
@@ -65,6 +66,11 @@ class CORE_EXPORT HTMLImageElement
   HTMLImageElement(Document&, const CreateElementFlags);
   explicit HTMLImageElement(Document&, bool created_by_parser = false);
   ~HTMLImageElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLImageElement;
+  }
+
   void Trace(Visitor*) const override;
 
   unsigned width();
@@ -81,6 +87,7 @@ class CORE_EXPORT HTMLImageElement
 
   const String& currentSrc() const;
 
+  HTMLMapElement* GetImageMap() const;
   bool IsServerMap() const;
 
   String AltText() const final;
@@ -129,7 +136,9 @@ class CORE_EXPORT HTMLImageElement
   virtual void EnsureCollapsedOrFallbackContent();
   virtual void EnsureFallbackForGeneratedContent();
   virtual void EnsurePrimaryContent();
+  void OnImageLoadComplete();
   bool IsCollapsed() const;
+  bool IsPrimaryContent() const;
 
   void SetAutoSizesUsecounter();
 
@@ -139,7 +148,15 @@ class CORE_EXPORT HTMLImageElement
       const RespectImageOrientationEnum) const override;
 
   // public so that HTMLPictureElement can call this as well.
-  void SelectSourceURL(ImageLoader::UpdateFromElementBehavior);
+  // `should_reset_image_replacement` determines whether we should reset any
+  // active image replacement associated with this image if the selected URL
+  // is different from the previous URL. We typically set this to false if the
+  // source change is triggered by a sizing related change.
+  using ShouldResetImageReplacement =
+      base::StrongAlias<class ShouldResetImageReplacementTag, bool>;
+  void SelectSourceURL(
+      ImageLoader::UpdateFromElementBehavior,
+      ShouldResetImageReplacement should_reset_image_replacement);
 
   void SetIsFallbackImage() { is_fallback_image_ = true; }
 
@@ -189,6 +206,18 @@ class CORE_EXPORT HTMLImageElement
   // created, if LCPScriptObserver was active.
   const HashSet<String>& creator_scripts() const { return creator_scripts_; }
 
+  // Returns true if the image has an active image replacement.
+  bool HasImageReplacement() const;
+  // Resets corresponding ImageReplacement (if any), and goes back to displaying
+  // the primary content (if StartImageReplacement() was previously called).
+  // Uses the element's current document if |document| is not specified.
+  void ResetImageReplacement(Document* document = nullptr);
+  void StartImageReplacement();
+
+  bool replacedByUserAgent() const;
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(uareplacestart, kUareplacestart)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(uareplaceend, kUareplaceend)
+
  protected:
   // Controls how an image element appears in the layout. See:
   // https://html.spec.whatwg.org/C/#image-request
@@ -203,12 +232,13 @@ class CORE_EXPORT HTMLImageElement
     // No layout object. Corresponds to the `current request` being in the
     // `broken` state when the resource load failed with an error that has the
     // |shouldCollapseInitiator| flag set.
-    kCollapsed
+    kCollapsed,
+    // The image is being replaced by a remote image.
+    kImageReplacement,
   };
 
   void DidMoveToNewDocument(Document& old_document) override;
 
-  void DidAddUserAgentShadowRoot(ShadowRoot&) override;
   void AdjustStyle(ComputedStyleBuilder&) override;
 
  private:
@@ -225,6 +255,7 @@ class CORE_EXPORT HTMLImageElement
   void CollectExtraStyleForPresentationAttribute(
       HeapVector<CSSPropertyValue, 8>&) override;
   void SetLayoutDisposition(LayoutDisposition, bool force_reattach = false);
+  void ResetLayoutDisposition();
 
   void AttachLayoutTree(AttachContext&) override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
@@ -247,13 +278,15 @@ class CORE_EXPORT HTMLImageElement
   void ResetFormOwner();
   ImageCandidate FindBestFitImageFromPictureParent();
   void SetBestFitURLAndDPRFromImageCandidate(const ImageCandidate&);
-  PhysicalSize DensityCorrectedIntrinsicDimensions() const;
+  gfx::Size DensityCorrectedIntrinsicDimensions() const;
   HTMLImageLoader& GetImageLoader() const override { return *image_loader_; }
   void NotifyViewportChanged();
   void CreateMediaQueryListIfDoesNotExist();
 
   // LocalFrameView::LifecycleNotificationObserver
   void DidFinishLayout() override;
+
+  void ResetImageReplacementInternal(Document& document);
 
   Member<HTMLImageLoader> image_loader_;
   Member<ViewportChangeListener> listener_;
@@ -273,6 +306,7 @@ class CORE_EXPORT HTMLImageElement
   bool is_lcp_element_ : 1;
   bool is_auto_sized_ : 1;
   bool is_predicted_lcp_element_ : 1;
+  bool is_lazy_load_issue_reported_ : 1;
 
   HashSet<String> creator_scripts_;
 };

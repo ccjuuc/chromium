@@ -7,6 +7,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/ax_constants.mojom.h"
 #include "ui/accessibility/platform/ax_platform_for_test.h"
 #include "ui/accessibility/platform/ax_platform_node_unittest.h"
 #include "ui/accessibility/platform/test_ax_node_wrapper.h"
@@ -22,10 +23,11 @@ void SetIsInvisible(AXTree* tree, int id, bool invisible) {
   AXTreeUpdate update;
   update.nodes.resize(1);
   update.nodes[0] = tree->GetFromId(id)->data();
-  if (invisible)
+  if (invisible) {
     update.nodes[0].AddState(ax::mojom::State::kInvisible);
-  else
+  } else {
     update.nodes[0].RemoveState(ax::mojom::State::kInvisible);
+  }
   tree->Unserialize(update);
 }
 
@@ -687,6 +689,180 @@ TEST_F(AXPlatformNodeTest, HypertextOffsetFromEndpoint) {
     EXPECT_EQ(link->GetHypertextOffsetFromEndpoint(link, 0), 0);
     EXPECT_EQ(link->GetHypertextOffsetFromEndpoint(link, 1), 4);
   }
+}
+
+TEST_F(AXPlatformNodeTest, GetTextSelection) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+  root_data.child_ids = {2, 3};
+
+  AXNodeData text1_data;
+  text1_data.id = 2;
+  text1_data.role = ax::mojom::Role::kStaticText;
+  text1_data.SetName("abc");
+
+  AXNodeData text2_data;
+  text2_data.id = 3;
+  text2_data.role = ax::mojom::Role::kStaticText;
+  text2_data.SetName("def");
+
+  AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data, text1_data, text2_data};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+  update.tree_data.sel_anchor_object_id = text1_data.id;
+  update.tree_data.sel_anchor_offset = 1;
+  update.tree_data.sel_focus_object_id = text2_data.id;
+  update.tree_data.sel_focus_offset = 2;
+
+  AXTree* tree = Init(update);
+  ScopedAXModeSetter ax_mode_setter(kAXModeComplete);
+  auto* root = static_cast<AXPlatformNodeBase*>(
+      TestAXNodeWrapper::GetOrCreate(tree, tree->root())->ax_platform_node());
+  auto* text1 = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(0)));
+  auto* text2 = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(1)));
+
+  AXPlatformNodeBase::TextSelection selection;
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kSuccess,
+            root->GetTextSelection(&selection));
+  EXPECT_EQ(text1, selection.start_object);
+  EXPECT_EQ(1, selection.start_offset);
+  EXPECT_EQ(text2, selection.end_object);
+  EXPECT_EQ(2, selection.end_offset);
+  EXPECT_FALSE(selection.start_is_active);
+
+  AXTreeData tree_data = tree->data();
+  tree_data.sel_is_backward = true;
+  tree_data.sel_anchor_object_id = text2_data.id;
+  tree_data.sel_anchor_offset = 2;
+  tree_data.sel_focus_object_id = text1_data.id;
+  tree_data.sel_focus_offset = 1;
+  tree->UpdateDataForTesting(tree_data);
+
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kSuccess,
+            root->GetTextSelection(&selection));
+  EXPECT_EQ(text1, selection.start_object);
+  EXPECT_EQ(1, selection.start_offset);
+  EXPECT_EQ(text2, selection.end_object);
+  EXPECT_EQ(2, selection.end_offset);
+  EXPECT_TRUE(selection.start_is_active);
+
+  tree_data.sel_anchor_offset = ax::mojom::kNoSelectionOffset;
+  tree_data.sel_focus_offset = ax::mojom::kNoSelectionOffset;
+  tree->UpdateDataForTesting(tree_data);
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kNoSelection,
+            root->GetTextSelection(&selection));
+}
+
+TEST_F(AXPlatformNodeTest, SetTextSelection) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+  root_data.child_ids = {2, 3};
+
+  AXNodeData text1_data;
+  text1_data.id = 2;
+  text1_data.role = ax::mojom::Role::kStaticText;
+  text1_data.SetName("abc");
+
+  AXNodeData text2_data;
+  text2_data.id = 3;
+  text2_data.role = ax::mojom::Role::kStaticText;
+  text2_data.SetName("def");
+
+  AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data, text1_data, text2_data};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+
+  AXTree* tree = Init(update);
+  ScopedAXModeSetter ax_mode_setter(kAXModeComplete);
+  auto* root = static_cast<AXPlatformNodeBase*>(
+      TestAXNodeWrapper::GetOrCreate(tree, tree->root())->ax_platform_node());
+  auto* text1 = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(0)));
+  auto* text2 = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(1)));
+
+  AXPlatformNodeBase::TextSelection selection = {
+      .start_object = text1,
+      .start_offset = 1,
+      .end_object = text2,
+      .end_offset = 2,
+  };
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kSuccess,
+            root->SetTextSelection(selection));
+  EXPECT_EQ(text1_data.id, tree->data().sel_anchor_object_id);
+  EXPECT_EQ(1, tree->data().sel_anchor_offset);
+  EXPECT_EQ(text2_data.id, tree->data().sel_focus_object_id);
+  EXPECT_EQ(2, tree->data().sel_focus_offset);
+
+  selection.start_is_active = true;
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kSuccess,
+            root->SetTextSelection(selection));
+  EXPECT_EQ(text2_data.id, tree->data().sel_anchor_object_id);
+  EXPECT_EQ(2, tree->data().sel_anchor_offset);
+  EXPECT_EQ(text1_data.id, tree->data().sel_focus_object_id);
+  EXPECT_EQ(1, tree->data().sel_focus_offset);
+}
+
+TEST_F(AXPlatformNodeTest, ClearTextSelection) {
+  AXTree* tree = Init(BuildContentEditableWithSelectionRange(1, 2));
+  ScopedAXModeSetter ax_mode_setter(kAXModeComplete);
+  auto* root = static_cast<AXPlatformNodeBase*>(
+      TestAXNodeWrapper::GetOrCreate(tree, tree->root())->ax_platform_node());
+
+  EXPECT_EQ(AXPlatformNodeBase::TextSelectionResult::kSuccess,
+            root->ClearTextSelection());
+  EXPECT_EQ(root->GetData().id, tree->data().sel_anchor_object_id);
+  EXPECT_EQ(ax::mojom::kNoSelectionOffset, tree->data().sel_anchor_offset);
+  EXPECT_EQ(root->GetData().id, tree->data().sel_focus_object_id);
+  EXPECT_EQ(ax::mojom::kNoSelectionOffset, tree->data().sel_focus_offset);
+}
+
+TEST_F(AXPlatformNodeTest, CanvasAnnotationName) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+
+  AXNodeData canvas_node;
+  canvas_node.id = 2;
+  canvas_node.role = ax::mojom::Role::kCanvas;
+  canvas_node.AddStringAttribute(ax::mojom::StringAttribute::kCanvasAnnotation,
+                                 "captured_text");
+
+  AXNodeData canvas_node_with_name;
+  canvas_node_with_name.id = 3;
+  canvas_node_with_name.role = ax::mojom::Role::kCanvas;
+  canvas_node_with_name.SetName("author_name");
+  canvas_node_with_name.AddStringAttribute(
+      ax::mojom::StringAttribute::kCanvasAnnotation, "captured_text");
+
+  root_data.child_ids = {canvas_node.id, canvas_node_with_name.id};
+
+  AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes = {root_data, canvas_node, canvas_node_with_name};
+
+  AXTree* tree = Init(update);
+
+  ScopedAXModeSetter ax_mode_setter(kAXModeComplete);
+
+  AXPlatformNodeBase* root = static_cast<AXPlatformNodeBase*>(
+      TestAXNodeWrapper::GetOrCreate(tree, tree->root())->ax_platform_node());
+
+  AXPlatformNodeBase* canvas = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(0)));
+  EXPECT_EQ(canvas->GetName(), "captured_text");
+
+  AXPlatformNodeBase* canvas_with_name = static_cast<AXPlatformNodeBase*>(
+      AXPlatformNode::FromNativeViewAccessible(root->ChildAtIndex(1)));
+  EXPECT_EQ(canvas_with_name->GetName(), "author_name. captured_text");
 }
 
 }  // namespace ui

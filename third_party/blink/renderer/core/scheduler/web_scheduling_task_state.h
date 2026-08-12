@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/scheduler/task_attribution_task_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink::scheduler {
 class TaskAttributionInfo;
@@ -16,6 +17,9 @@ class TaskAttributionInfo;
 
 namespace blink {
 class SchedulerTaskContext;
+class ResourceTimingContext;
+class SoftNavigationContext;
+class ScriptToolContext;
 
 class CORE_EXPORT WebSchedulingTaskState final
     : public TaskAttributionTaskState {
@@ -26,11 +30,26 @@ class CORE_EXPORT WebSchedulingTaskState final
   // `TaskAttributionTaskState` implementation:
   scheduler::TaskAttributionInfo* GetTaskAttributionInfo() override;
   SchedulerTaskContext* GetSchedulerTaskContext() override;
+  bool IsWebSchedulingTaskState() const override;
+  TaskAttributionTaskState* ForkAndSetVariable(
+      ResourceTimingContext*) override;
+  TaskAttributionTaskState* ForkAndSetVariable(
+      SoftNavigationContext*) override;
+  TaskAttributionTaskState* ForkAndSetVariable(ScriptToolContext*) override;
+
   void Trace(Visitor*) const override;
 
  private:
   const Member<scheduler::TaskAttributionInfo> subtask_propagatable_task_state_;
   const Member<SchedulerTaskContext> scheduler_task_context_;
+};
+
+template <>
+struct DowncastTraits<WebSchedulingTaskState> {
+  static bool AllowFrom(
+      const TaskAttributionTaskState& task_attribution_task_state) {
+    return task_attribution_task_state.IsWebSchedulingTaskState();
+  }
 };
 
 }  // namespace blink

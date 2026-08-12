@@ -5,13 +5,20 @@
 #include "net/device_bound_sessions/session_store_impl.h"
 
 #include <algorithm>
+#include <optional>
 
+#include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/process/process.h"
 #include "base/sequence_checker.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/types/expected_macros.h"
 #include "components/unexportable_keys/background_task_priority.h"
+#include "components/unexportable_keys/features.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
@@ -26,8 +33,8 @@ namespace {
 using unexportable_keys::BackgroundTaskPriority;
 using unexportable_keys::ServiceError;
 using unexportable_keys::ServiceErrorOr;
-using unexportable_keys::UnexportableKeyId;
 using unexportable_keys::UnexportableKeyService;
+using unexportable_keys::UnexportableSigningKeyId;
 
 // Priority is set to `USER_VISIBLE` because the initial load of
 // sessions from disk is required to complete before URL requests
@@ -38,6 +45,15 @@ constexpr base::TaskTraits kDBTaskTraits = {
 
 const char kSessionTableName[] = "dbsc_session_tbl";
 const base::TimeDelta kFlushDelay = base::Seconds(2);
+
+// The delay between when the session service is loaded and the garbage
+// collection is started. This is delayed to not slow down the startup of the
+// browser.
+constexpr base::TimeDelta kGarbageCollectionDelay = base::Minutes(2);
+
+// Histogram name for the garbage collection of unexportable keys.
+constexpr std::string_view kGarbageCollectionHistogramPrefix =
+    "Crypto.UnexportableKeys.GarbageCollection.DeviceBoundSessions.";
 
 SessionStoreImpl::DBStatus InitializeOnDbSequence(
     sql::Database* db,
@@ -66,9 +82,8 @@ SessionStoreImpl::SessionStoreImpl(base::FilePath db_storage_path,
       db_task_runner_(
           base::ThreadPool::CreateSequencedTaskRunner(kDBTaskTraits)),
       db_storage_path_(std::move(db_storage_path)),
-      db_(std::make_unique<sql::Database>(
-          sql::DatabaseOptions().set_preload(true),
-          sql::Database::Tag("DBSCSessions"))),
+      db_(std::make_unique<sql::Database>(sql::DatabaseOptions(),
+                                          sql::Database::Tag("DBSCSessions"))),
       table_manager_(base::MakeRefCounted<sqlite_proto::ProtoTableManager>(
           db_task_runner_)),
       session_table_(
@@ -137,10 +152,22 @@ void SessionStoreImpl::OnDatabaseLoaded(LoadSessionsCallback callback,
     std::vector<std::string> keys_to_delete;
     sessions = CreateSessionsFromLoadedData(session_data_->GetAllCached(),
                                             keys_to_delete);
-    if (keys_to_delete.size() > 0) {
+    if (!keys_to_delete.empty()) {
       session_data_->DeleteData(keys_to_delete);
     }
+
+    // Schedule a task for original profiles to obtain all keys that were
+    // created for this profile in the past, including all OTR profiles.
+    if (base::FeatureList::IsEnabled(
+            unexportable_keys::kUnexportableKeyDeletion)) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&SessionStoreImpl::StartGarbageCollection,
+                         weak_ptr_factory_.GetWeakPtr()),
+          kGarbageCollectionDelay);
+    }
   }
+
   base::UmaHistogramBoolean("Net.DeviceBoundSessions.SessionStoreLoadSuccess",
                             db_status == DBStatus::kSuccess);
   base::UmaHistogramTimes("Net.DeviceBoundSessions.SessionStoreLoadDuration",
@@ -202,7 +229,8 @@ void SessionStoreImpl::SetShutdownCallbackForTesting(
 }
 
 void SessionStoreImpl::SaveSession(const SchemefulSite& site,
-                                   const Session& session) {
+                                   const Session& session,
+                                   SessionStore::SaveSessionMode mode) {
   if (db_status_ != DBStatus::kSuccess) {
     return;
   }
@@ -221,6 +249,13 @@ void SessionStoreImpl::SaveSession(const SchemefulSite& site,
   proto::Session session_proto = session.ToProto();
   session_proto.set_wrapped_key(
       std::string(wrapped_key->begin(), wrapped_key->end()));
+
+  // Handle attestation key if present.
+  AttestationKeySaveOutcome outcome =
+      SetWrappedAttestationKey(site, session, session_proto, mode);
+  base::UmaHistogramEnumeration(
+      "Net.DeviceBoundSessions.AttestationKeySaveOutcome", outcome);
+
   proto::SiteSessions site_proto;
   std::string site_str = site.Serialize();
   session_data_->TryGetData(site_str, &site_proto);
@@ -228,6 +263,68 @@ void SessionStoreImpl::SaveSession(const SchemefulSite& site,
       std::move(session_proto);
 
   session_data_->UpdateData(site_str, site_proto);
+}
+
+SessionStoreImpl::AttestationKeySaveOutcome
+SessionStoreImpl::SetWrappedAttestationKey(const SchemefulSite& site,
+                                           const Session& session,
+                                           proto::Session& session_proto,
+                                           SessionStore::SaveSessionMode mode) {
+  const auto& maybe_aik_id_or_error =
+      session.maybe_unexportable_attestation_key_id();
+
+  // The in-memory session indicates the attestation key is not yet loaded into
+  // the TPM by returning `ServiceError::kKeyNotReady`.
+  //
+  // During a session refresh (`kRefresh`), the refreshed session is expected
+  // to reuse the same attestation key. Since loading it is an expensive
+  // operation, we delay loading it until it is actually needed, and in the
+  // meantime, we preserve the existing wrapped key by copying it from the
+  // database entry of the old session.
+  //
+  // If this is a new session (`kNewSession`), key preservation is disabled to
+  // avoid leaking a key between two independent sessions.
+  if (mode == SessionStore::SaveSessionMode::kRefresh &&
+      maybe_aik_id_or_error == base::unexpected(ServiceError::kKeyNotReady)) {
+    proto::SiteSessions old_site_proto;
+    if (!session_data_->TryGetData(site.Serialize(), &old_site_proto)) {
+      return AttestationKeySaveOutcome::kKeyNotReadyNoSiteInDb;
+    }
+
+    const proto::Session* old_session =
+        base::FindOrNull(old_site_proto.sessions(), *session.id());
+    if (!old_session || !old_session->has_wrapped_attestation_key()) {
+      return old_session ? AttestationKeySaveOutcome::kKeyNotReadyNoOldKeyToCopy
+                         : AttestationKeySaveOutcome::kKeyNotReadyNoSessionInDb;
+    }
+
+    session_proto.set_wrapped_attestation_key(
+        old_session->wrapped_attestation_key());
+    return AttestationKeySaveOutcome::kKeyNotReadyCopiedOldKey;
+  }
+
+  // Unexpected error (e.g. kFailure or kKeyNotFound).
+  ASSIGN_OR_RETURN(
+      std::optional<unexportable_keys::UnexportableAttestationKeyId>
+          maybe_aik_id,
+      maybe_aik_id_or_error,
+      [](auto) { return AttestationKeySaveOutcome::kUnexpectedError; });
+
+  // No key is expected (nullopt). Do not set it in the proto (clearing it).
+  if (!maybe_aik_id) {
+    session_proto.clear_wrapped_attestation_key();
+    return AttestationKeySaveOutcome::kNoAttestationKey;
+  }
+
+  // Wrap the attestation key and save it.
+  ASSIGN_OR_RETURN(std::vector<uint8_t> wrapped_attestation_key,
+                   key_service_->GetWrappedKey(*maybe_aik_id), [](auto) {
+                     return AttestationKeySaveOutcome::kGetWrappedKeyFailure;
+                   });
+
+  session_proto.set_wrapped_attestation_key(
+      base::as_string_view(wrapped_attestation_key));
+  return AttestationKeySaveOutcome::kSaveSessionKeySuccess;
 }
 
 void SessionStoreImpl::DeleteSession(const SessionKey& key) {
@@ -273,60 +370,116 @@ SessionStore::SessionsMap SessionStoreImpl::GetAllSessions() const {
   return all_sessions;
 }
 
+std::optional<proto::Session> SessionStoreImpl::GetSessionProto(
+    const SessionKey& session_key) const {
+  if (db_status_ != DBStatus::kSuccess) {
+    return std::nullopt;
+  }
+
+  proto::SiteSessions site_proto;
+  if (!session_data_->TryGetData(session_key.site.Serialize(), &site_proto)) {
+    return std::nullopt;
+  }
+
+  proto::Session* session =
+      base::FindOrNull(*site_proto.mutable_sessions(), *session_key.id);
+  return session ? std::optional(std::move(*session)) : std::nullopt;
+}
+
 void SessionStoreImpl::RestoreSessionBindingKey(
     const SessionKey& session_key,
     RestoreSessionBindingKeyCallback callback) {
-  auto key_id_or_error = base::unexpected(ServiceError::kKeyNotFound);
-  if (db_status_ != DBStatus::kSuccess) {
-    std::move(callback).Run(key_id_or_error);
+  std::optional<proto::Session> session_proto = GetSessionProto(session_key);
+  session_proto ? key_service_->FromWrappedSigningKeySlowlyAsync(
+                      base::as_byte_span(session_proto->wrapped_key()),
+                      unexportable_keys::BackgroundTaskPriority::kUserVisible,
+                      std::move(callback))
+                : std::move(callback).Run(base::unexpected(
+                      unexportable_keys::ServiceError::kKeyNotFound));
+}
+
+void SessionStoreImpl::RestoreSessionAttestationKey(
+    const SessionKey& session_key,
+    RestoreSessionAttestationKeyCallback callback) {
+  std::optional<proto::Session> session_proto = GetSessionProto(session_key);
+  (session_proto && session_proto->has_wrapped_attestation_key())
+      ? key_service_->FromWrappedAttestationKeySlowlyAsync(
+            base::as_byte_span(session_proto->wrapped_attestation_key()),
+            unexportable_keys::BackgroundTaskPriority::kUserVisible,
+            std::move(callback))
+      : std::move(callback).Run(
+            base::unexpected(unexportable_keys::ServiceError::kKeyNotFound));
+}
+
+void SessionStoreImpl::StartGarbageCollection() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  CHECK_EQ(db_status_, DBStatus::kSuccess);
+  key_service_->GetAllKeysForGarbageCollectionSlowlyAsync(
+      unexportable_keys::BackgroundTaskPriority::kBestEffort,
+      base::BindOnce(&SessionStoreImpl::OnGetAllKeysForGarbageCollection,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void SessionStoreImpl::OnGetAllKeysForGarbageCollection(
+    unexportable_keys::ServiceErrorOr<
+        std::vector<unexportable_keys::UnexportableSigningKeyId>>
+        all_key_ids_or_error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!all_key_ids_or_error.has_value() || all_key_ids_or_error->empty()) {
     return;
   }
 
-  // Retrieve the session's persisted binding key and unwrap it.
-  proto::SiteSessions site_proto;
-  if (session_data_->TryGetData(session_key.site.Serialize(), &site_proto)) {
-    auto it = site_proto.sessions().find(*session_key.id);
-    if (it != site_proto.sessions().end()) {
-      // Make sure we only do one key restore at a time for the given
-      // session key.
-      auto [callbacks_it, inserted] =
-          restore_callbacks_.try_emplace(session_key);
-      callbacks_it->second.emplace_back(std::move(callback));
-      if (!inserted) {
-        return;
+  absl::flat_hash_set<std::vector<uint8_t>> known_wrapped_keys;
+  for (const auto& [_, site_sessions] : session_data_->GetAllCached()) {
+    for (const auto& [_, session_proto] : site_sessions.sessions()) {
+      if (std::string_view wrapped_key = session_proto.wrapped_key();
+          !wrapped_key.empty()) {
+        known_wrapped_keys.emplace(std::from_range, wrapped_key);
       }
-
-      // Unwrap the binding key asynchronously.
-      std::vector<uint8_t> wrapped_key(it->second.wrapped_key().begin(),
-                                       it->second.wrapped_key().end());
-      key_service_->FromWrappedSigningKeySlowlyAsync(
-          wrapped_key, BackgroundTaskPriority::kUserVisible,
-          base::BindOnce(&SessionStoreImpl::OnSessionBindingKeyRestored,
-                         weak_ptr_factory_.GetWeakPtr(), session_key));
-      return;
+      if (std::string_view wrapped_attestation_key =
+              session_proto.wrapped_attestation_key();
+          !wrapped_attestation_key.empty()) {
+        known_wrapped_keys.emplace(std::from_range, wrapped_attestation_key);
+      }
     }
   }
 
-  // The session is not present in the store,
-  // invoke the callback immediately.
-  std::move(callback).Run(key_id_or_error);
-}
+  std::vector<unexportable_keys::UnexportableSigningKeyId> all_key_ids =
+      *std::move(all_key_ids_or_error);
 
-void SessionStoreImpl::OnSessionBindingKeyRestored(
-    const SessionKey& session_key,
-    unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>
-        key_or_error) {
-  auto it = restore_callbacks_.find(session_key);
-  if (it == restore_callbacks_.end()) {
-    return;
-  }
+  const size_t key_count = all_key_ids.size();
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "TotalKeyCount"}),
+      key_count);
 
-  auto callbacks = std::move(it->second);
-  for (auto& callback : callbacks) {
-    std::move(callback).Run(key_or_error);
-  }
+  // Don't garbage collect keys that are still used, or were created after the
+  // process started.
+  std::erase_if(all_key_ids, [&](unexportable_keys::UnexportableSigningKeyId
+                                     key_id) {
+    return known_wrapped_keys.contains(
+               key_service_->GetWrappedKey(key_id).value_or({})) ||
+           key_service_->GetCreationTime(key_id).value_or(base::Time::Now()) >=
+               base::Process::Current().CreationTime();
+  });
 
-  restore_callbacks_.erase(it);
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "UsedKeyCount"}),
+      key_count - all_key_ids.size());
+
+  base::UmaHistogramCounts100(
+      base::StrCat({kGarbageCollectionHistogramPrefix, "ObsoleteKeyCount"}),
+      all_key_ids.size());
+
+  // Delete all remaining keys.
+  key_service_->DeleteKeysSlowlyAsync(
+      all_key_ids, unexportable_keys::BackgroundTaskPriority::kBestEffort,
+      base::BindOnce([](unexportable_keys::ServiceErrorOr<size_t> result) {
+        base::UmaHistogramCounts100(
+            base::StrCat({kGarbageCollectionHistogramPrefix,
+                          "ObsoleteKeyDeletionCount"}),
+            result.value_or(0));
+      }));
 }
 
 }  // namespace net::device_bound_sessions

@@ -18,6 +18,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/chrome_template_url_service_client.h"
@@ -72,7 +73,7 @@ class TestingTemplateURLServiceClient : public ChromeTemplateURLServiceClient {
 void SetManagedDefaultSearchPreferences(const TemplateURLData& managed_data,
                                         bool enabled,
                                         TestingProfile* profile) {
-  base::Value::Dict dict = TemplateURLDataToDictionary(managed_data);
+  base::DictValue dict = TemplateURLDataToDictionary(managed_data);
   dict.Set(DefaultSearchManager::kDisabledByPolicy, !enabled);
 
   profile->GetTestingPrefService()->SetManagedPref(
@@ -88,7 +89,7 @@ void RemoveManagedDefaultSearchPreferences(TestingProfile* profile) {
 void SetRecommendedDefaultSearchPreferences(const TemplateURLData& data,
                                             bool enabled,
                                             TestingProfile* profile) {
-  base::Value::Dict dict = TemplateURLDataToDictionary(data);
+  base::DictValue dict = TemplateURLDataToDictionary(data);
   dict.Set(DefaultSearchManager::kDisabledByPolicy, !enabled);
 
   profile->GetTestingPrefService()->SetRecommendedPref(
@@ -100,7 +101,7 @@ void SetManagedSearchSettingsPreference(
     const EnterpriseSearchManager::OwnedTemplateURLDataVector&
         enterprise_search_engines,
     TestingProfile* profile) {
-  base::Value::List pref_value;
+  base::ListValue pref_value;
   for (auto& enterprise_search_engine : enterprise_search_engines) {
     pref_value.Append(
         base::Value(TemplateURLDataToDictionary(*enterprise_search_engine)));
@@ -200,31 +201,32 @@ TemplateURLServiceTestUtil::SetUpRequiredServicesWithCustomLocalState(
 
   testing_factories.push_back({
       search_engines::SearchEngineChoiceServiceFactory::GetInstance(),
-      base::BindLambdaForTesting(
-          [local_state_override](content::BrowserContext* browser_context)
-              -> std::unique_ptr<KeyedService> {
-            Profile* profile = Profile::FromBrowserContext(browser_context);
-            regional_capabilities::RegionalCapabilitiesService*
-                regional_capabilities =
-                    regional_capabilities::RegionalCapabilitiesServiceFactory::
-                        GetInstance()
-                            ->GetForProfile(profile);
-            PrefService* local_state =
-                local_state_override
-                    ? local_state_override
-                    : TestingBrowserProcess::GetGlobal()->local_state();
-            CHECK(local_state);
+      base::BindLambdaForTesting([local_state_override](
+                                     content::BrowserContext* browser_context)
+                                     -> std::unique_ptr<KeyedService> {
+        Profile* profile = Profile::FromBrowserContext(browser_context);
+        regional_capabilities::RegionalCapabilitiesService*
+            regional_capabilities =
+                regional_capabilities::RegionalCapabilitiesServiceFactory::
+                    GetInstance()
+                        ->GetForProfile(profile);
+        PrefService* local_state =
+            local_state_override
+                ? local_state_override
+                : TestingBrowserProcess::GetGlobal()->local_state();
+        CHECK(local_state);
 
-            return std::make_unique<search_engines::SearchEngineChoiceService>(
-                std::make_unique<FakeSearchEngineChoiceServiceClient>(),
-                *profile->GetPrefs(), local_state, *regional_capabilities,
-                CHECK_DEREF(
-                    TemplateURLPrepopulateData::ResolverFactory::GetInstance()
-                        ->GetForProfile(profile)),
-                CHECK_DEREF(IdentityManagerFactory::GetForProfile(profile)),
-                CHECK_DEREF(
-                    policy::ManagementServiceFactory::GetForProfile(profile)));
-          }),
+        return std::make_unique<search_engines::SearchEngineChoiceService>(
+            std::make_unique<FakeSearchEngineChoiceServiceClient>(),
+            *profile->GetPrefs(), local_state, *regional_capabilities,
+            CHECK_DEREF(
+                TemplateURLPrepopulateData::ResolverFactory::GetInstance()
+                    ->GetForProfile(profile)),
+            CHECK_DEREF(IdentityManagerFactory::GetForProfile(profile)),
+            CHECK_DEREF(
+                policy::ManagementServiceFactory::GetForProfile(profile)),
+            CHECK_DEREF(ProfileMetricsServiceFactory::GetForProfile(profile)));
+      }),
   });
 
   return testing_factories;

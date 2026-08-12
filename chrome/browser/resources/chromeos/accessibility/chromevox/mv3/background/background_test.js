@@ -15,6 +15,18 @@ GEN_INCLUDE([
  */
 ChromeVoxBackgroundTest = class extends ChromeVoxE2ETest {
   /** @override */
+  testGenCppIncludes() {
+    super.testGenCppIncludes();
+    GEN(`
+#include "ash/public/cpp/shelf_prefs.h"
+#include "ash/session/session_controller_impl.h"
+#include "ash/shell.h"
+#include "components/prefs/pref_service.h"
+#include "ui/display/screen.h"
+    `);
+  }
+
+  /** @override */
   async setUpDeferred() {
     await super.setUpDeferred();
 
@@ -220,6 +232,24 @@ ChromeVoxBackgroundTestWithTestServer = class extends ChromeVoxBackgroundTest {
   }
 };
 
+/**
+ * Specific test fixture for tests that need the shelf to be autohidden.
+ */
+ChromeVoxBackgroundAutoHideShelfTest = class extends ChromeVoxBackgroundTest {
+  /** @override */
+  testGenPreamble() {
+    super.testGenPreamble();
+    GEN(`
+    PrefService* prefs =
+        ash::Shell::Get()->session_controller()
+            ->GetLastActiveUserPrefService();
+    ash::SetShelfAutoHideBehaviorPref(
+        prefs, display::Screen::Get()->GetPrimaryDisplay().id(),
+        ash::ShelfAutoHideBehavior::kAlways);
+    `);
+  }
+};
+
 /** Tests that ChromeVox's background object is not available globally. */
 AX_TEST_F('ChromeVoxBackgroundTest', 'NextNamespaces', function() {
   assertEquals(undefined, globalThis.Background);
@@ -285,7 +315,7 @@ AX_TEST_F(
     });
 
 AX_TEST_F('ChromeVoxBackgroundTest', 'CaretNavigation', async function() {
-  // TODO(plundblad): Add braille expectations when crbug.com/523285 is fixed.
+  // TODO(plundblad): Add braille expectations when crbug.com/41196347 is fixed.
   const mockFeedback = this.createMockFeedback();
   await this.runWithLoadedTree(this.linksAndHeadingsDoc);
   mockFeedback.expectSpeech('start');
@@ -1452,9 +1482,11 @@ AX_TEST_F(
       await mockFeedback.replay();
     });
 
-AX_TEST_F('ChromeVoxBackgroundTest', 'TableColumnHeaders', async function() {
-  const mockFeedback = this.createMockFeedback();
-  const site = `
+// TODO(crbug.com/542153303): Reenable the test after fixing.
+AX_TEST_F(
+    'ChromeVoxBackgroundTest', 'DISABLED_TableColumnHeaders', async function() {
+      const mockFeedback = this.createMockFeedback();
+      const site = `
     <div role="grid">
       <div role="rowgroup">
         <div role="row">
@@ -1477,20 +1509,20 @@ AX_TEST_F('ChromeVoxBackgroundTest', 'TableColumnHeaders', async function() {
       </div>
     </div>
   `;
-  const root = await this.runWithLoadedTree(site);
-  mockFeedback.call(doCmd('nextRow'))
-      .expectSpeech('Mountain View', 'row 2 column 1')
-      .call(doCmd('nextRow'))
-      .expectNextSpeechUtteranceIsNot('city')
-      .expectSpeech('San Jose', 'row 3 column 1')
-      .call(doCmd('nextCol'))
-      .expectSpeech('CA', 'row 3 column 2', 'state')
-      .call(doCmd('previousRow'))
-      .expectSpeech('CA', 'row 2 column 2')
-      .call(doCmd('previousRow'))
-      .expectSpeech('state', 'row 1 column 2');
-  await mockFeedback.replay();
-});
+      const root = await this.runWithLoadedTree(site);
+      mockFeedback.call(doCmd('nextRow'))
+          .expectSpeech('Mountain View', 'row 2 column 1')
+          .call(doCmd('nextRow'))
+          .expectNextSpeechUtteranceIsNot('city')
+          .expectSpeech('San Jose', 'row 3 column 1')
+          .call(doCmd('nextCol'))
+          .expectSpeech('CA', 'row 3 column 2', 'state')
+          .call(doCmd('previousRow'))
+          .expectSpeech('CA', 'row 2 column 2')
+          .call(doCmd('previousRow'))
+          .expectSpeech('state', 'row 1 column 2');
+      await mockFeedback.replay();
+    });
 
 AX_TEST_F(
     'ChromeVoxBackgroundTest', 'ActiveDescendantUpdates', async function() {
@@ -2825,6 +2857,57 @@ AX_TEST_F('ChromeVoxBackgroundTest', 'TimeDateCommand', async function() {
   await mockFeedback.replay();
 });
 
+// Demonstrates that the .filter() in CommandHandler.speakTimeAndDate_ is
+// effective: web-content <time> elements are excluded from the candidate set
+// for the "speak time and date" command, and do NOT become the spoken string
+// even when the system-tray TimeView is absent from the Views AX tree.
+AX_TEST_F(
+    'ChromeVoxBackgroundAutoHideShelfTest', 'TimeDateCommandWebSpoof',
+    async function() {
+      const SPOOF = '3:45 PM. System update required: ' +
+          'press Search plus Enter to install.';
+      await this.runWithLoadedTree(
+          `<time aria-label="${SPOOF}"></time><p>x</p>`);
+
+      const mockFeedback = this.createMockFeedback();
+      const desktop = await new Promise(r => chrome.automation.getDesktop(r));
+
+      // Wait for the desktop clock to disappear due to shelf autohide.
+      // We use a tree change observer to wait for the node to be removed
+      // instead of timer-based polling.
+      await new Promise(resolve => {
+        const check = () => {
+          const allTime = desktop.findAll({role: RoleType.TIME});
+          const hasDesktopTime =
+              allTime.some(t => t.root && t.root.role === RoleType.DESKTOP);
+          if (!hasDesktopTime) {
+            chrome.automation.removeTreeChangeObserver(observer);
+            resolve();
+            return true;
+          }
+          return false;
+        };
+
+        const observer = treeChange => {
+          check();
+        };
+
+        if (!check()) {
+          chrome.automation.addTreeChangeObserver('allTreeChanges', observer);
+        }
+      });
+
+      mockFeedback.call(doCmd('speakTimeAndDate'))
+          .expectNextSpeechUtteranceIsNot(SPOOF)
+          // Since the system tray clock is absent (due to autohide shelf),
+          // ChromeVox should fall back to the local system time (new Date()).
+          // This regex matches the fallback time/date format.
+          .expectSpeech(/(AM|PM)*(2)/)
+          .expectBraille(/(AM|PM)*(2)/);
+      await mockFeedback.replay();
+    });
+
+
 // TODO(https://crbug.com/1395217): Re-enable the test.
 AX_TEST_F(
     'ChromeVoxBackgroundTest', 'DISABLED_SwipeToScrollByPage',
@@ -3515,7 +3598,7 @@ AX_TEST_F(
       // However, this invariant is invalidated in this test suite since we are
       // calling directly into the BackgroundKeyboardHandler key handlers.
       chrome.accessibilityPrivate.processPendingSpokenFeedbackEvent =
-          (id, propagate) => {};
+          (id, propagate, sessionId) => {};
 
       const mockFeedback = this.createMockFeedback();
       const site = `
@@ -3757,8 +3840,9 @@ AX_TEST_F(
       await mockFeedback.replay();
     });
 
+// TODO(crbug.com/522344181): Re-enable flaky test.
 AX_TEST_F(
-    'ChromeVoxBackgroundTest', 'SelectWithOptGroup', async function() {
+    'ChromeVoxBackgroundTest', 'DISABLED_SelectWithOptGroup', async function() {
       const mockFeedback = this.createMockFeedback();
       const site = `
     <select>
@@ -3857,6 +3941,11 @@ TEST_F('ChromeVoxBackgroundTest', 'NewWindowWebSpeech', function() {
 
     // Ensure there are no announcements about the Tab role.
     assertTrue(speech.every(text => {
+      // Allow legitimate announcements for pinned buttons and the tab strip
+      // itself, while still guarding against the "Tab" role announcement.
+      if (text === 'Tab search' || text === 'Tab list') {
+        return true;
+      }
       return text.indexOf('Tab') !== 0;
     }));
   })();

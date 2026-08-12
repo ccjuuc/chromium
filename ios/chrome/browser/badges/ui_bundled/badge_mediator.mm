@@ -17,6 +17,8 @@
 #import "ios/chrome/browser/badges/ui_bundled/badge_tappable_item.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_type.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_type_util.h"
+#import "ios/chrome/browser/contextual_panel/model/contextual_panel_item_type.h"
+#import "ios/chrome/browser/contextual_panel/model/contextual_panel_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/badge_state.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper.h"
 #import "ios/chrome/browser/infobars/model/infobar_badge_tab_helper_delegate.h"
@@ -48,7 +50,7 @@
 #import "ios/web/public/web_state_observer_bridge.h"
 
 namespace {
-// Historgram name for when an overflow badge was tapped.
+// Histogram name for when an overflow badge was tapped.
 const char kInfobarOverflowBadgeTappedUserAction[] =
     "MobileMessagesOverflowBadgeTapped";
 // Histogram name for when the overflow badge is shown
@@ -63,7 +65,8 @@ bool IsInfobarTypeSupportedInReaderMode(InfobarType infobarType,
     case InfobarType::kInfobarTypePermissions:
       return true;
     case InfobarType::kInfobarTypeReaderMode:
-      return IsProactiveSuggestionsFrameworkEnabled() && !is_incognito;
+      return IsProactiveSuggestionsFrameworkEnabled() &&
+             (!is_incognito || IsChromeNextIaEnabled());
     case InfobarType::kInfobarTypeConfirm:
     case InfobarType::kInfobarTypePasswordSave:
     case InfobarType::kInfobarTypePasswordUpdate:
@@ -77,8 +80,12 @@ bool IsInfobarTypeSupportedInReaderMode(InfobarType infobarType,
     case InfobarType::kInfobarTypeCollaborationGroup:
     case InfobarType::kInfobarTypeCollaborationOutOfDate:
     case InfobarType::kInfobarTypeSaveCvc:
-      return IsProactiveSuggestionsFrameworkEnabled() ||
-             IsReaderModeBadgeSupportEnabled();
+      return IsProactiveSuggestionsFrameworkEnabled();
+    case InfobarType::kInfobarTypeAutofillAiSaveEntity:
+    case InfobarType::kInfobarTypeFormsAiPrivateInference:
+      // This infobar is not supported in reader mode since forms are not shown
+      // in reader mode, so the user shouldn't be able to submit a form.
+      return false;
   }
 }
 
@@ -156,6 +163,9 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
                     overlayPresenter:(OverlayPresenter*)overlayPresenter {
   self = [super init];
   if (self) {
+    if (!IsChromeNextIaEnabled()) {
+      _active = YES;
+    }
     // Set up the OverlayPresenterObserver for the infobar banner presentation.
     _overlayPresenterObserver =
         std::make_unique<OverlayPresenterObserverBridge>(self);
@@ -172,8 +182,9 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
     _webStateObserver = std::make_unique<web::WebStateObserverBridge>(self);
 
     if (_webState) {
-      InfobarBadgeTabHelper::GetOrCreateForWebState(_webState)->SetDelegate(
-          self);
+      if (!IsChromeNextIaEnabled()) {
+        InfobarBadgeTabHelper::FromWebState(_webState)->SetDelegate(self);
+      }
       if (ReaderModeTabHelper* readerModeTabHelper =
               ReaderModeTabHelper::FromWebState(_webState)) {
         readerModeTabHelper->AddObserver(_readerModeObserver.get());
@@ -232,6 +243,19 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
 
 #pragma mark - Accessors
 
+- (void)setActive:(BOOL)active {
+  if (_active == active) {
+    return;
+  }
+  _active = active;
+  if (active) {
+    if (self.badgeTabHelper) {
+      self.badgeTabHelper->SetDelegate(self);
+      [self updateBadgesShownForWebState:self.webState];
+    }
+  }
+}
+
 - (NSArray<id<BadgeItem>>*)badges {
   if (!self.badgeTabHelper) {
     return [NSArray array];
@@ -277,7 +301,8 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
         InfobarType::kInfobarTypePermissions) {
       // TODO(crbug.com/458307626): Migrate to LocationBarBadge.
       if (IsProactiveSuggestionsFrameworkEnabled() && self.webState &&
-          !self.webState->GetBrowserState()->IsOffTheRecord()) {
+          (!self.webState->GetBrowserState()->IsOffTheRecord() ||
+           IsChromeNextIaEnabled())) {
         // Check camera permission.
         if (self.webState->GetStateForPermission(web::PermissionCamera) ==
             web::PermissionStateAllowed) {
@@ -303,6 +328,15 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
       }
     }
 
+    // Add badge at the front of the list if it is the Reader mode badge.
+    if (badgeType == kBadgeTypeReaderMode) {
+      BadgeTappableItem* readerModeItem =
+          [[BadgeTappableItem alloc] initWithBadgeType:kBadgeTypeReaderMode];
+      readerModeItem.badgeState = infobarTypeBadgeStatePair.second;
+      [badges insertObject:readerModeItem atIndex:0];
+      continue;
+    }
+
     BadgeTappableItem* item =
         [[BadgeTappableItem alloc] initWithBadgeType:badgeType];
     item.badgeState = infobarTypeBadgeStatePair.second;
@@ -324,7 +358,9 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
     return;
   }
   if (_webState) {
-    InfobarBadgeTabHelper::GetOrCreateForWebState(_webState)->SetDelegate(nil);
+    if (self.active) {
+      InfobarBadgeTabHelper::FromWebState(_webState)->SetDelegate(nil);
+    }
     if (ReaderModeTabHelper* readerModeTabHelper =
             ReaderModeTabHelper::FromWebState(_webState)) {
       readerModeTabHelper->RemoveObserver(_readerModeObserver.get());
@@ -333,7 +369,9 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
   }
   _webState = webState;
   if (_webState) {
-    InfobarBadgeTabHelper::GetOrCreateForWebState(_webState)->SetDelegate(self);
+    if (self.active) {
+      InfobarBadgeTabHelper::FromWebState(_webState)->SetDelegate(self);
+    }
     if (ReaderModeTabHelper* readerModeTabHelper =
             ReaderModeTabHelper::FromWebState(_webState)) {
       readerModeTabHelper->AddObserver(_readerModeObserver.get());
@@ -346,9 +384,8 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
 }
 
 - (InfobarBadgeTabHelper*)badgeTabHelper {
-  return self.webState
-             ? InfobarBadgeTabHelper::GetOrCreateForWebState(self.webState)
-             : nullptr;
+  return self.webState ? InfobarBadgeTabHelper::FromWebState(self.webState)
+                       : nullptr;
 }
 
 - (BadgeType)permissionsBadgeType {
@@ -400,6 +437,10 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
 - (NSArray<NSNumber*>*)badgeTypesForOverflowMenu {
   NSMutableArray<NSNumber*>* badgeTypes = [NSMutableArray array];
   for (id<BadgeItem> badgeItem in self.badges) {
+    // Skip Reader mode badge.
+    if (badgeItem.badgeType == BadgeType::kBadgeTypeReaderMode) {
+      continue;
+    }
     [badgeTypes addObject:@(badgeItem.badgeType)];
   }
   return badgeTypes;
@@ -459,39 +500,16 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
 #pragma mark - InfobarBadgeTabHelperDelegate
 
 - (BOOL)badgeSupportedForInfobarType:(InfobarType)infobarType {
-  if (base::FeatureList::IsEnabled(kAutofillBadgeRemoval)) {
-    // TODO(crbug.com/440366193): Remove this ad hoc logic once we can fully
-    // cleanup the autofill and password badges code once we are done
-    // experimenting.
-    switch (infobarType) {
-      case InfobarType::kInfobarTypePasswordSave:
-      case InfobarType::kInfobarTypePasswordUpdate:
-      case InfobarType::kInfobarTypeSaveCard:
-      case InfobarType::kInfobarTypeSaveAutofillAddressProfile:
-        // Special case where we dynamically want to exclude the badge for
-        // certain infobars while still keeping a badge type for the infobar
-        // in BadgeTypeForInfobarType(). This ad hoc logic is temporary the
-        // time we sunset these badges.
-        return false;
-      case InfobarType::kInfobarTypeConfirm:
-      case InfobarType::kInfobarTypeTranslate:
-      case InfobarType::kInfobarTypePermissions:
-      case InfobarType::kInfobarTypeTailoredSecurityService:
-      case InfobarType::kInfobarTypeSyncError:
-      case InfobarType::kInfobarTypeEnhancedSafeBrowsing:
-      case InfobarType::kInfobarTypeSignin:
-      case InfobarType::kInfobarTypeCollaborationGroup:
-      case InfobarType::kInfobarTypeCollaborationOutOfDate:
-      case InfobarType::kInfobarTypeSaveCvc:
-      case InfobarType::kInfobarTypeReaderMode:
-        return BadgeTypeForInfobarType(infobarType) != kBadgeTypeNone;
-    }
-  } else {
-    return BadgeTypeForInfobarType(infobarType) != kBadgeTypeNone;
+  if (!self.active) {
+    return NO;
   }
+  return IsBadgeSupportedForInfobarType(infobarType);
 }
 
 - (void)updateBadgesShownForWebState:(web::WebState*)webState {
+  if (!self.active) {
+    return;
+  }
   if (webState != self.webStateList->GetActiveWebState()) {
     // Don't update badges if the update request is not coming from the
     // currently active WebState.
@@ -501,7 +519,8 @@ LocationBarBadgeType LocationBarBadgeTypeFromBadgeType(BadgeType badgeType) {
   NSArray<id<BadgeItem>>* badges = self.badges;
 
   if (IsProactiveSuggestionsFrameworkEnabled() && self.webState &&
-      !self.webState->GetBrowserState()->IsOffTheRecord()) {
+      (!self.webState->GetBrowserState()->IsOffTheRecord() ||
+       IsChromeNextIaEnabled())) {
     [self handleMultiBadgeDisplay:badges];
   } else {
     [self handleSingleBadgeDisplay:badges];

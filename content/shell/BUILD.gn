@@ -3,12 +3,12 @@
 # found in the LICENSE file.
 
 import("//build/config/cast.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/ozone.gni")
 import("//build/config/sanitizers/sanitizers.gni")
 import("//build/config/ui.gni")
 import("//build/config/win/console_app.gni")
 import("//build/config/win/manifest.gni")
+import("//build/rust/rust_static_library.gni")
 import("//content/public/common/features.gni")
 import("//device/vr/buildflags/buildflags.gni")
 import("//gpu/vulkan/features.gni")
@@ -41,8 +41,8 @@ if (is_android) {
   }
 }
 
-# TODO(crbug.com/1336055, spang): Investigate using shell_views with cast builds as
-# true.
+# TODO(crbug.com/1336055, spang): Investigate using shell_views with cast builds
+# as true.
 shell_use_toolkit_views = toolkit_views && !is_castos
 
 declare_args() {
@@ -131,7 +131,12 @@ static_library("content_shell_app") {
       "app/ios/web_tests_support_ios.mm",
     ]
 
-    deps += [ "//components/crash/core/common:reporter_running_ios" ]
+    if (target_platform == "tvos") {
+      sources += [
+        "app/ios/shell_app_scene_delegate_tvos.h",
+        "app/ios/shell_app_scene_delegate_tvos.mm",
+      ]
+    }
 
     # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
     # enable the diagnostic by removing this line.
@@ -222,6 +227,8 @@ static_library("content_shell_lib") {
     "common/shell_switches.h",
     "gpu/shell_content_gpu_client.cc",
     "gpu/shell_content_gpu_client.h",
+    "renderer/memory_coordinator/memory_coordinator_test_impl.cc",
+    "renderer/memory_coordinator/memory_coordinator_test_impl.h",
     "renderer/render_frame_test_helper.cc",
     "renderer/render_frame_test_helper.h",
     "renderer/shell_content_renderer_client.cc",
@@ -318,6 +325,9 @@ static_library("content_shell_lib") {
     ":content_browsertests_mojom",
     ":protocol_sources",
     ":resources",
+    ":rust_test_mojom",
+    ":rust_test_mojom_js",
+    ":rust_test_service_ffi",
     ":shell_controller_mojom",
     "//base",
     "//base:base_static",
@@ -338,6 +348,7 @@ static_library("content_shell_lib") {
     "//components/permissions",
     "//components/prefs",
     "//components/services/storage/test_api",
+    "//components/surface_embed/renderer",
     "//components/url_formatter",
     "//components/variations/service",
     "//components/web_cache/renderer",
@@ -521,13 +532,11 @@ repack("pak") {
   sources = [
     "$root_gen_dir/base/tracing/protos/tracing_proto_resources.pak",
     "$root_gen_dir/components/ukm_resources.pak",
-    "$root_gen_dir/content/attribution_internals_resources.pak",
     "$root_gen_dir/content/browser/resources/media/media_internals_resources.pak",
     "$root_gen_dir/content/browser/webrtc/resources/webrtc_internals_resources.pak",
     "$root_gen_dir/content/content_resources.pak",
     "$root_gen_dir/content/gpu_resources.pak",
     "$root_gen_dir/content/histograms_resources.pak",
-    "$root_gen_dir/content/private_aggregation_internals_resources.pak",
     "$root_gen_dir/content/process_resources.pak",
     "$root_gen_dir/content/quota_internals_resources.pak",
     "$root_gen_dir/content/service_worker_resources.pak",
@@ -636,6 +645,9 @@ if (is_android) {
       ":content_shell_framework_bundle_data",
       ":content_shell_resources_bundle_data",
 
+      # This target contains only macros. No C++ declarations/definitions.
+      "//base:compiler_specific",
+
       # Despite its path, this does not add a //base dependency, see comments in
       # the .cc file.
       "//base/allocator:early_zone_registration_apple",
@@ -650,8 +662,8 @@ if (is_android) {
   }
 } else if (is_ios) {
   declare_args() {
-    # The bundle identifier. Overriding this will affect the provisioning profile
-    # used, and hence will affect the app's capabilities.
+    # The bundle identifier. Overriding this will affect the provisioning
+    # profile used, and hence will affect the app's capabilities.
     ios_content_shell_bundle_identifier = shared_bundle_id_for_test_apps
 
     # Path to an entitlements file used in ios_content_shell. Can be overridden
@@ -921,6 +933,7 @@ if (is_mac) {
       ":content_shell_framework_resources",
       ":content_shell_swiftshader_binaries",
     ]
+    bundle_deps += [ ":content_shell_vulkan_binaries" ]
 
     if (!is_component_build) {
       # Specify a sensible install_name for static builds. The library is
@@ -938,9 +951,10 @@ if (is_mac) {
           [ "-Wl,-install_name,@rpath/$output_name.framework/$output_name" ]
 
       # Set up the rpath for the framework so that it can find dylibs in the
-      # root output directory. The framework is at
-      # Content Shell.app/Contents/Frameworks/Content Shell Framework.framework/Versions/C/Content Shell Framework
-      # so use loader_path to go back to the root output directory.
+      # root output directory. The framework is at Content
+      # Shell.app/Contents/Frameworks/Content Shell
+      # Framework.framework/Versions/C/Content Shell Framework so use
+      # loader_path to go back to the root output directory.
       ldflags += [ "-Wl,-rpath,@loader_path/../../../../../.." ]
     }
 
@@ -978,6 +992,8 @@ if (is_mac) {
         "CONTENT_SHELL_HELPER_BUNDLE_ID_SUFFIX=${invoker.helper_bundle_id_suffix}",
       ]
       deps = [
+        # This target contains only macros. No C++ declarations/definitions.
+        "//base:compiler_specific",
         "//base/allocator:early_zone_registration_apple",
         "//sandbox/mac:seatbelt",
       ]
@@ -986,7 +1002,9 @@ if (is_mac) {
 
       if (is_component_build) {
         ldflags = [
-          # The helper is in Content Shell.app/Contents/Frameworks/Content Shell Framework.framework/Versions/C/Helpers/Content Shell Helper.app/Contents/MacOS
+          # The helper is in Content Shell.app/Contents/Frameworks/Content Shell
+          # Framework.framework/Versions/C/Helpers/Content Shell
+          # Helper.app/Contents/MacOS
 
           # Set up an rpath to the Contents/Frameworks/ directory so that
           # Content Shell Framework.framework will be found there. This matches
@@ -1057,20 +1075,47 @@ if (is_mac) {
     outputs = [ "{{bundle_contents_dir}}/Libraries/{{source_file_part}}" ]
     public_deps = [ "//ui/gl:swiftshader_vk_library_copy" ]
   }
+
+  # Add the Vulkan loader .dylib in the Libraries directory of the Framework.
+  bundle_data("content_shell_vulkan_binaries") {
+    sources = [ "$root_out_dir/vulkan_intermediates/libvulkan.dylib" ]
+    outputs = [ "{{bundle_contents_dir}}/Libraries/{{source_file_part}}" ]
+    public_deps = [ "//ui/gl:vulkan_loader_library_copy" ]
+  }
 }
 
 mojom("content_browsertests_mojom") {
+  cpp_only = true
   sources = [
     "common/main_frame_counter_test.mojom",
+    "common/memory_coordinator/memory_coordinator_test.mojom",
     "common/power_monitor_test.mojom",
     "common/render_frame_test_helper.mojom",
   ]
   public_deps = [
+    "//content/common/memory_coordinator/mojom",
     "//mojo/public/mojom/base",
     "//sandbox/policy/mojom",
     "//third_party/blink/public/mojom/fingerprinting_protection",
     "//third_party/blink/public/mojom/tokens",
   ]
+}
+
+if (is_android) {
+  group("content_shell_freeze_test") {
+    testonly = true
+    data = [
+      "//content/shell/tools/aaudio_freezer_integration_test.py",
+      "//content/test/data/media/",
+    ]
+    data_deps = [
+      ":content_shell",
+      "//build/android:devil_chromium_py",
+      "//build/android:test_runner_py",
+      "//testing:test_scripts_shared",
+      "//tools/android/forwarder2",
+    ]
+  }
 }
 
 group("content_shell_crash_test") {
@@ -1080,6 +1125,14 @@ group("content_shell_crash_test") {
     "//testing:test_scripts_shared",
     "//third_party/angle:includes",
   ]
+  if (is_fuchsia) {
+    data_deps += [
+      ":content_shell_pkg",
+      ":content_shell_pkg__archive-manifest",
+      ":content_shell_script_meta",
+      "//build/config/fuchsia:deployment_resources",
+    ]
+  }
   data = [
     "//content/shell/tools/breakpad_integration_test.py",
     "//testing/scripts/content_shell_crash_test.py",
@@ -1126,4 +1179,37 @@ mojom("shell_controller_mojom") {
   testonly = true
   sources = [ "common/shell_controller.test-mojom" ]
   public_deps = [ "//mojo/public/mojom/base" ]
+}
+
+mojom("rust_test_mojom") {
+  testonly = true
+  sources = [ "common/rust_test.test-mojom" ]
+  generate_rust = true
+}
+
+rust_static_library("rust_test_service") {
+  testonly = true
+  crate_root = "browser/rust_test_service.rs"
+  sources = [ "browser/rust_test_service.rs" ]
+  deps = [
+    ":rust_test_mojom_rust",
+    "//base:command_line",
+    "//base:feature",
+    "//mojo/public/rust/bindings",
+  ]
+}
+
+rust_static_library("rust_test_service_ffi") {
+  testonly = true
+  allow_unsafe = true
+  crate_root = "browser/rust_test_service_ffi.rs"
+  sources = [ "browser/rust_test_service_ffi.rs" ]
+  cxx_bindings = [ "browser/rust_test_service_ffi.rs" ]
+  deps = [
+    ":rust_test_mojom_rust",
+    ":rust_test_service",
+    "//base",
+    "//mojo/public/rust/bindings",
+    "//mojo/public/rust/system",
+  ]
 }

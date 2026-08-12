@@ -28,34 +28,42 @@ inline constexpr std::string_view kAccountIdKey = "account_id";
 // `AccountInfo` dictionary.
 inline constexpr std::string_view kLastDownloadedImageURLWithSizeKey =
     "last_downloaded_image_url_with_size";
+// Key for the `accountcapability_overrides` in the serialized `AccountInfo`
+// dictionary.
+inline constexpr std::string_view kAccountCapabilityOverridesKey =
+    "accountcapability_overrides";
 
 // Builds an `AccountInfo` from the JSON data returned by the Gaia servers, if
 // possible.
 std::optional<AccountInfo> AccountInfoFromUserInfo(
-    const base::Value::Dict& user_info);
+    const base::DictValue& user_info);
 
 // Builds an `AccountCapabilities` from the JSON data returned by the Gaia
 // servers, if possible.
 std::optional<AccountCapabilities> AccountCapabilitiesFromServerResponse(
-    const base::Value::Dict& account_capabilities);
+    const base::DictValue& account_capabilities);
 
-// Serializes an `AccountCapabilities` object to a `base::Value::Dict`.
-base::Value::Dict SerializeAccountCapabilities(
+// Serializes an `AccountCapabilities` object to a `base::DictValue`.
+base::DictValue SerializeAccountCapabilities(
     const AccountCapabilities& account_capabilities);
 
-// Deserializes an `AccountCapabilities` from a `base::Value::Dict` previously
+// Deserializes an `AccountCapabilities` from a `base::DictValue` previously
 // created by `SerializeAccountCapabilities()`.
 AccountCapabilities DeserializeAccountCapabilities(
-    const base::Value::Dict& dict);
+    const base::DictValue& capabilities_dict,
+    const base::DictValue& overrides_dict);
 
-// Serializes an `AccountInfo` object to a `base::Value::Dict`.
-base::Value::Dict SerializeAccountInfo(const AccountInfo& account_info);
+// Serializes an `AccountCapabilities` overrides to a `base::DictValue`.
+base::DictValue SerializeAccountCapabilityOverrides(
+    const AccountCapabilities& account_capabilities);
 
-// Deserializes an `AccountInfo` from a `base::Value::Dict` previously created
+// Serializes an `AccountInfo` object to a `base::DictValue`.
+base::DictValue SerializeAccountInfo(const AccountInfo& account_info);
+
+// Deserializes an `AccountInfo` from a `base::DictValue` previously created
 // by `SerializeAccountInfo()`.
 // Returns `std::nullopt` if the dictionary is not valid.
-std::optional<AccountInfo> DeserializeAccountInfo(
-    const base::Value::Dict& dict);
+std::optional<AccountInfo> DeserializeAccountInfo(const base::DictValue& dict);
 
 }  // namespace signin
 

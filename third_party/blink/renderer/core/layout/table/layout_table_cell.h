@@ -50,10 +50,7 @@ class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
   // fragment would be in the incorrect state).
   void InvalidateLayoutResultCacheAfterMeasure() const;
 
-  LayoutUnit BorderTop() const override;
-  LayoutUnit BorderBottom() const override;
-  LayoutUnit BorderLeft() const override;
-  LayoutUnit BorderRight() const override;
+  PhysicalBoxStrut BorderOutsets() const override;
 
   LayoutTableCell* NextCell() const;
   LayoutTableCell* PreviousCell() const;
@@ -65,6 +62,7 @@ class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
 
   void StyleDidChange(StyleDifference diff,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) final;
 
   void WillBeRemovedFromTree() override;
@@ -105,6 +103,11 @@ class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
   bool IsTableCell() const final {
     NOT_DESTROYED();
     return true;
+  }
+
+  bool IsEligibleForSizeContainment() const final {
+    NOT_DESTROYED();
+    return false;
   }
 
   bool CanMergeWith(const LayoutBoxModelObject& other) const override {

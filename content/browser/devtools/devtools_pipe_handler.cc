@@ -360,8 +360,7 @@ class PipeReaderCBOR : public PipeReaderBase {
 
  private:
   static uint32_t UInt32FromCBOR(base::span<const uint8_t> buf) {
-    return UNSAFE_TODO((buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) +
-                       buf[3]);
+    return (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
   }
 
   void ReadLoopInternal() override {
@@ -463,6 +462,10 @@ void DevToolsPipeHandler::DispatchProtocolMessage(
 }
 
 void DevToolsPipeHandler::AgentHostClosed(DevToolsAgentHost* agent_host) {}
+
+bool DevToolsPipeHandler::MayAccessAllCookies() {
+  return true;
+}
 
 bool DevToolsPipeHandler::UsesBinaryProtocol() {
   return mode_ == ProtocolMode::kCBOR;

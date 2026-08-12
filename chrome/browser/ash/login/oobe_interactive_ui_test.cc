@@ -20,7 +20,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/buildflag.h"
 #include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/recommend_apps_fetcher.h"
 #include "chrome/browser/apps/app_discovery_service/recommended_arc_apps/recommend_apps_fetcher_delegate.h"
@@ -51,7 +50,6 @@
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "chrome/browser/extensions/api/quick_unlock_private/quick_unlock_private_api.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/ai_intro_screen_handler.h"
@@ -452,14 +450,14 @@ class FakeRecommendAppsFetcher : public apps::RecommendAppsFetcher {
 
   // RecommendAppsFetcher:
   void Start() override {
-    base::Value::Dict app;
+    base::DictValue app;
     app.Set("packageName", "test.package");
     app.Set("title", "TestName");
-    base::Value::Dict big_app;
+    base::DictValue big_app;
     big_app.Set("androidApp", std::move(app));
-    base::Value::List app_list;
+    base::ListValue app_list;
     app_list.Append(std::move(big_app));
-    base::Value::Dict response_dict;
+    base::DictValue response_dict;
     response_dict.Set("recommendedApp", std::move(app_list));
     delegate_->OnLoadSuccess(base::Value(std::move(response_dict)));
   }
@@ -694,7 +692,9 @@ class OobeInteractiveUITest : public OobeBaseTest,
     // If the login display is still showing, exit gracefully.
     if (LoginDisplayHost::default_host()) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&chrome::AttemptExit));
+          FROM_HERE, base::BindOnce([]() {
+            session_manager::SessionManager::Get()->RequestSignOut();
+          }));
       RunUntilBrowserProcessQuits();
     }
     OobeBaseTest::TearDownOnMainThread();
@@ -839,7 +839,7 @@ void OobeInteractiveUITest::SimpleEndToEnd() {
 }
 
 // Disabled on *San bots since they time out.
-// crbug.com/1260131: SimpleEndToEnd is flaky on builder "linux-chromeos-dbg"
+// crbug.com/40798039: SimpleEndToEnd is flaky on builder "linux-chromeos-dbg"
 #if defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) || \
     defined(LEAK_SANITIZER) || !defined(NDEBUG)
 #define MAYBE_SimpleEndToEnd DISABLED_SimpleEndToEnd
@@ -927,8 +927,8 @@ void OobeZeroTouchInteractiveUITest::ZeroTouchEndToEnd() {
   WaitForLoginDisplayHostShutdown();
 }
 
-// crbug.com/997987. Disabled on MSAN since they time out.
-// crbug.com/1055853: EndToEnd is flaky on Linux Chromium OS ASan LSan
+// crbug.com/40642229. Disabled on MSAN since they time out.
+// crbug.com/40120095: EndToEnd is flaky on Linux Chromium OS ASan LSan
 #if defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) || \
     defined(LEAK_SANITIZER) || !defined(NDEBUG)
 #define MAYBE_EndToEnd DISABLED_EndToEnd

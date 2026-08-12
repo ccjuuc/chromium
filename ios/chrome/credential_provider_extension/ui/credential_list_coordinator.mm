@@ -24,9 +24,8 @@
 #import "ios/chrome/credential_provider_extension/ui/feature_flags.h"
 #import "ios/chrome/credential_provider_extension/ui/new_password_coordinator.h"
 
-@interface CredentialListCoordinator () <ConfirmationAlertActionHandler,
+@interface CredentialListCoordinator () <CredentialDetailsConsumerDelegate,
                                          CredentialListUIHandler,
-                                         CredentialDetailsConsumerDelegate,
                                          NewPasswordCoordinatorDelegate>
 
 // Base view controller from where `viewController` is presented.
@@ -119,7 +118,6 @@
 - (void)showEmptyCredentials {
   EmptyCredentialsViewController* emptyCredentialsViewController =
       [[EmptyCredentialsViewController alloc] init];
-  emptyCredentialsViewController.actionHandler = self;
   UINavigationController* navigationController = [[UINavigationController alloc]
       initWithRootViewController:emptyCredentialsViewController];
   navigationController.modalPresentationStyle =
@@ -203,12 +201,6 @@
                        }];
 }
 
-#pragma mark - ConfirmationAlertActionHandler
-
-- (void)confirmationAlertPrimaryAction {
-  // No-op.
-}
-
 #pragma mark - NewPasswordCoordinatorDelegate
 
 - (void)dismissNewPasswordCoordinator:
@@ -231,8 +223,7 @@
 // or an access to passwords (when `NO`).
 - (void)reauthenticateIfNeededToAccessPasskeys:(BOOL)forPasskeys
                          withCompletionHandler:
-                             (void (^)(ReauthenticationResult))
-                                 completionHandler {
+                             (ReauthenticationResultBlock)completionHandler {
   [self.reauthenticationHandler verifyUserToAccessPasskeys:forPasskeys
                                      withCompletionHandler:completionHandler
                            presentReminderOnViewController:self.viewController];

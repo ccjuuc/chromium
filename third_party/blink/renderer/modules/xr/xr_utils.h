@@ -77,12 +77,17 @@ device::mojom::blink::XRLayerLayout V8ToMojomLayerLayout(
     V8XRLayerLayout::Enum layout);
 
 // Helper method to get the number of views per texture.
-uint16_t GetVerticalViewCount(V8XRLayerLayout);
-uint16_t GetHorizontalViewCount(V8XRLayerLayout);
+uint16_t GetVerticalViewCount(V8XRLayerLayout::Enum);
+uint16_t GetHorizontalViewCount(V8XRLayerLayout::Enum);
 
 // Helper method to treat values that are smaller than epsilon
 // as float zero.
 float ExcludeNegativeAndNoise(float value);
+
+// Converts an XRSemanticLabel to its string representation as defined by the
+// WebXR Mesh Detection API spec. Returns an empty string if |label| is null.
+String SemanticLabelToString(
+    const std::optional<device::mojom::blink::XRSemanticLabel>& label);
 
 }  // namespace blink
 

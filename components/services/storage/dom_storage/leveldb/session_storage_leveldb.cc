@@ -4,20 +4,18 @@
 
 #include "components/services/storage/dom_storage/leveldb/session_storage_leveldb.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/types/expected_macros.h"
-#include "components/services/storage/dom_storage/dom_storage_constants.h"
 #include "components/services/storage/dom_storage/leveldb/dom_storage_batch_operation_leveldb.h"
 #include "components/services/storage/dom_storage/leveldb/dom_storage_database_leveldb.h"
-#include "components/services/storage/dom_storage/leveldb/dom_storage_database_leveldb_utils.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 
@@ -96,27 +94,97 @@ DomStorageDatabase::Key GetSessionPrefix(const std::string& session_id) {
   return session_prefix;
 }
 
-SessionStorageLevelDB::SessionStorageLevelDB(PassKey) {}
+// Returns `namespace-<session_id>-<storage_key>`.
+DomStorageDatabase::Key CreateMapMetadataKey(
+    std::string session_id,
+    const blink::StorageKey& storage_key) {
+  // `session_id` must be a GUID string.
+  CHECK_EQ(session_id.size(), blink::kSessionStorageNamespaceIdLength);
+
+  std::string serialized_storage_key = storage_key.Serialize();
+
+  DomStorageDatabase::Key key;
+  key.reserve(std::size(kNamespacePrefix) + session_id.size() +
+              /*kNamespaceStorageKeySeparator=*/1 +
+              serialized_storage_key.length());
+
+  // Add 'namespace-'.
+  key.insert(key.end(), std::begin(kNamespacePrefix),
+             std::end(kNamespacePrefix));
+
+  // Append `session_id`.
+  key.insert(key.end(), session_id.begin(), session_id.end());
+
+  // Append '-'.
+  key.push_back(kNamespaceStorageKeySeparator);
+
+  // Append `storage_key`.
+  key.insert(key.end(), serialized_storage_key.begin(),
+             serialized_storage_key.end());
+  return key;
+}
+
+// Returns the prefix for all key/value pairs that belong to a specific map.
+// For example: "map-1-".
+DomStorageDatabase::Key GetMapPrefix(int64_t map_id) {
+  std::string map_id_text = base::NumberToString(map_id);
+
+  DomStorageDatabase::Key map_prefix;
+  map_prefix.reserve(std::size(kMapIdPrefix) + map_id_text.size() +
+                     /*kMapIdKeySeparator=*/1);
+
+  // Append "map-".
+  map_prefix.insert(map_prefix.end(), std::begin(kMapIdPrefix),
+                    std::end(kMapIdPrefix));
+
+  // Append `map_id` as text.
+  map_prefix.insert(map_prefix.end(), map_id_text.begin(), map_id_text.end());
+
+  // Append "-".
+  map_prefix.push_back(kMapIdKeySeparator);
+  return map_prefix;
+}
+
+namespace {
+
+//  Write metadata for each session's map usage.  Adds an entry to write in
+//  `batch` for each session in `map_locator`.  Each entry uses the format:
+//
+//  { "namespace-<session_id>-<storage_key>", "<map_id>" }.
+//
+// Multiple cloned sessions use the same map, but create separate metadata
+// entries in the database.
+void PutMapLocator(DomStorageBatchOperationLevelDB& batch,
+                   const DomStorageDatabase::MapLocator& map_locator) {
+  std::string map_id_value = base::NumberToString(map_locator.map_id().value());
+
+  for (const std::string& session_id : map_locator.session_ids()) {
+    DomStorageDatabase::Key key =
+        CreateMapMetadataKey(session_id, map_locator.storage_key());
+    batch.Put(std::move(key), base::as_byte_span(map_id_value));
+  }
+}
+
+}  // namespace
+
+SessionStorageLevelDB::SessionStorageLevelDB(PassKey, bool write_exp_tag)
+    : write_exp_tag_(write_exp_tag) {}
 
 SessionStorageLevelDB::~SessionStorageLevelDB() = default;
 
 DbStatus SessionStorageLevelDB::Open(
-    PassKey,
     const base::FilePath& directory,
-    const std::string& name,
     const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
         memory_dump_id) {
-  ASSIGN_OR_RETURN(
-      leveldb_,
-      DomStorageDatabaseLevelDB::Open(
-          directory, name, memory_dump_id, kSessionStorageLevelDBVersionKey,
-          /*min_supported_version=*/kSessionStorageLevelDBVersion,
-          /*max_supported_version=*/kSessionStorageLevelDBVersion));
+  ASSIGN_OR_RETURN(leveldb_,
+                   DomStorageDatabaseLevelDB::Open(
+                       StorageType::kSessionStorage, directory, memory_dump_id,
+                       kSessionStorageLevelDBVersionKey,
+                       /*min_supported_version=*/kSessionStorageLevelDBVersion,
+                       /*max_supported_version=*/kSessionStorageLevelDBVersion,
+                       /*write_tag_file=*/write_exp_tag_));
+  write_exp_tag_ = false;
   return DbStatus::OK();
-}
-
-DomStorageDatabaseLevelDB& SessionStorageLevelDB::GetLevelDB() {
-  return *leveldb_;
 }
 
 StatusOr<std::map<DomStorageDatabase::Key, DomStorageDatabase::Value>>
@@ -133,7 +201,11 @@ DbStatus SessionStorageLevelDB::UpdateMaps(
     // Session storage must not record map usage metadata.
     CHECK(!map_update.map_usage.has_value());
 
+    // crbug.com/513822044: Always update the map's metadata to prevent orphaned
+    // key/value pairs if `PutMetadata()` failed.
     const MapLocator& map_locator = map_update.map_locator;
+    PutMapLocator(*leveldb_batch, map_locator);
+
     DomStorageDatabase::Key map_prefix =
         GetMapPrefix(map_locator.map_id().value());
 
@@ -148,6 +220,10 @@ DbStatus SessionStorageLevelDB::CloneMap(MapLocator source_map,
   std::unique_ptr<DomStorageBatchOperationLevelDB> batch =
       leveldb_->CreateBatchOperation();
 
+  // crbug.com/513822044: Always update the map's metadata to prevent orphaned
+  // key/value pairs if `PutMetadata()` failed.
+  PutMapLocator(*batch, target_map);
+
   // Copy the key/value pairs from `source_map` to `target_map`.
   DB_RETURN_IF_ERROR(
       batch->CopyPrefixed(GetMapPrefix(source_map.map_id().value()),
@@ -158,7 +234,6 @@ DbStatus SessionStorageLevelDB::CloneMap(MapLocator source_map,
 StatusOr<DomStorageDatabase::Metadata>
 SessionStorageLevelDB::ReadAllMetadata() {
   Metadata metadata;
-  ASSIGN_OR_RETURN(metadata.next_map_id, ReadNextMapId());
   ASSIGN_OR_RETURN(metadata.map_metadata, ReadAllMapMetadata());
   return metadata;
 }
@@ -167,25 +242,9 @@ DbStatus SessionStorageLevelDB::PutMetadata(Metadata metadata) {
   std::unique_ptr<DomStorageBatchOperationLevelDB> batch =
       leveldb_->CreateBatchOperation();
 
-  // Write the next map ID when provided.
-  if (metadata.next_map_id) {
-    batch->Put(kNextMapIdKey,
-               base::as_byte_span(base::NumberToString(*metadata.next_map_id)));
-  }
-
   // Write the metadata for each map in `metadata.map_metadata`
   for (const MapMetadata& map_metadata : metadata.map_metadata) {
-    const MapLocator& map_locator = map_metadata.map_locator;
-
-    std::string map_id_value =
-        base::NumberToString(map_locator.map_id().value());
-
-    // Write metadata for each session's map usage.  Multiple cloned sessions
-    // use the same map, but create separate metadata entries in the database.
-    for (const std::string& session_id : map_locator.session_ids()) {
-      Key key = CreateMapMetadataKey(session_id, map_locator.storage_key());
-      batch->Put(std::move(key), base::as_byte_span(map_id_value));
-    }
+    PutMapLocator(*batch, map_metadata.map_locator);
   }
   return batch->Commit();
 }
@@ -206,7 +265,7 @@ DbStatus SessionStorageLevelDB::DeleteStorageKeysFromSession(
   for (const DomStorageDatabase::MapLocator& map : maps_to_delete) {
     // A valid `map` must be in `storage_keys` and `session_id`.
     CHECK(map.session_ids().empty());
-    DCHECK(base::Contains(metadata_to_delete, map.storage_key()));
+    DCHECK(std::ranges::contains(metadata_to_delete, map.storage_key()));
 
     DB_RETURN_IF_ERROR(
         batch->DeletePrefixed(GetMapPrefix(map.map_id().value())));
@@ -241,7 +300,7 @@ DbStatus SessionStorageLevelDB::PurgeOrigins(std::set<url::Origin> origins) {
   NOTREACHED();
 }
 
-DbStatus SessionStorageLevelDB::RewriteDB() {
+DbStatus SessionStorageLevelDB::CleanUpStaleData() {
   return leveldb_->RewriteDB();
 }
 
@@ -259,73 +318,8 @@ void SessionStorageLevelDB::SetDestructionCallbackForTesting(
   leveldb_->SetDestructionCallbackForTesting(std::move(callback));
 }
 
-DomStorageDatabase::Key SessionStorageLevelDB::CreateMapMetadataKey(
-    std::string session_id,
-    const blink::StorageKey& storage_key) {
-  // `session_id` must be a GUID string.
-  CHECK_EQ(session_id.size(), blink::kSessionStorageNamespaceIdLength);
-
-  std::string serialized_storage_key = storage_key.Serialize();
-
-  Key key;
-  key.reserve(std::size(kNamespacePrefix) + session_id.size() +
-              /*kNamespaceStorageKeySeparator=*/1 +
-              serialized_storage_key.length());
-
-  // Add 'namespace-'.
-  key.insert(key.end(), std::begin(kNamespacePrefix),
-             std::end(kNamespacePrefix));
-
-  // Append `session_id`.
-  key.insert(key.end(), session_id.begin(), session_id.end());
-
-  // Append '-'.
-  key.push_back(kNamespaceStorageKeySeparator);
-
-  // Append `storage_key`.
-  key.insert(key.end(), serialized_storage_key.begin(),
-             serialized_storage_key.end());
-  return key;
-}
-
-DomStorageDatabase::Key SessionStorageLevelDB::GetMapPrefix(int64_t map_id) {
-  std::string map_id_text = base::NumberToString(map_id);
-
-  Key map_prefix;
-  map_prefix.reserve(std::size(kMapIdPrefix) + map_id_text.size() +
-                     /*kMapIdKeySeparator=*/1);
-
-  // Append "map-".
-  map_prefix.insert(map_prefix.end(), std::begin(kMapIdPrefix),
-                    std::end(kMapIdPrefix));
-
-  // Append `map_id` as text.
-  map_prefix.insert(map_prefix.end(), map_id_text.begin(), map_id_text.end());
-
-  // Append "-".
-  map_prefix.push_back(kMapIdKeySeparator);
-  return map_prefix;
-}
-
-StatusOr<int64_t> SessionStorageLevelDB::ReadNextMapId() const {
-  StatusOr<Value> map_id_bytes = leveldb_->Get(kNextMapIdKey);
-  if (!map_id_bytes.has_value()) {
-    if (map_id_bytes.error().IsNotFound()) {
-      // Empty databases start with zero for the next map ID.
-      return 0;
-    }
-
-    // Failed to read the LevelDB.
-    return base::unexpected(std::move(map_id_bytes).error());
-  }
-
-  // Convert the integer text string to an `int64_t`.
-  int64_t next_map_id;
-  if (!base::StringToInt64(base::as_string_view(*map_id_bytes), &next_map_id)) {
-    return base::unexpected(
-        DbStatus::Corruption("next map id is not a number"));
-  }
-  return next_map_id;
+DomStorageDatabaseLevelDB& SessionStorageLevelDB::GetLevelDBForTesting() {
+  return *leveldb_;
 }
 
 StatusOr<std::vector<DomStorageDatabase::MapMetadata>>

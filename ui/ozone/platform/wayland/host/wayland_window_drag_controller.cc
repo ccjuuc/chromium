@@ -8,13 +8,15 @@
 #include <wayland-client-protocol.h>
 #include <xdg-toplevel-drag-v1-client-protocol.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <ostream>
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
@@ -164,8 +166,15 @@ WaylandWindowDragController::~WaylandWindowDragController() {
 bool WaylandWindowDragController::StartDragSession(
     WaylandToplevelWindow* origin,
     DragEventSource drag_source) {
-  if (state_ != State::kIdle)
-    return true;
+  if (state_ != State::kIdle) {
+    if (!data_source_) {
+      LOG(ERROR) << "Received StartDragSession in non-idle state without a "
+                    "data source. Resetting state.";
+      state_ = State::kIdle;
+    } else {
+      return true;
+    }
+  }
 
   // TODO(crbug.com/340398746): This should be a CHECK instead. However
   // currently buggy compositors, eg: KWin 6, which do not send
@@ -234,16 +243,21 @@ bool WaylandWindowDragController::Drag(WaylandToplevelWindow* window,
                                        const gfx::Vector2d& offset) {
   DCHECK_GE(state_, State::kAttached);
   DCHECK(window);
+  CHECK(data_source_);
 
   SetDraggedWindow(window, offset);
   state_ = State::kDetached;
   RunLoop();
   SetDraggedWindow(nullptr, {});
 
-  DCHECK(state_ == State::kAttaching || state_ == State::kDropped ||
-         state_ == State::kCancelled) << "Drag state: " << int(state_);
+  DCHECK(state_ == State::kIdle || state_ == State::kAttaching ||
+         state_ == State::kDropped || state_ == State::kCancelled)
+      << "Drag state: " << int(state_);
   if (state_ == State::kAttaching) {
-    state_ = State::kAttached;
+    state_ = data_source_ ? State::kAttached : State::kIdle;
+    return false;
+  }
+  if (state_ == State::kIdle) {
     return false;
   }
 
@@ -292,8 +306,19 @@ void WaylandWindowDragController::CancelDragSession() {
 }
 
 bool WaylandWindowDragController::IsDragSource() const {
-  CHECK(!IsDragInProgress() || !!data_source_) << " state=" << state_;
-  return IsDragInProgress();
+  // TODO(https://crbug.com/498008192): Diagnose the failure reason and remove.
+  if (IsDragInProgress() && !data_source_) {
+    constexpr auto kStateToString = base::MakeFixedFlatMap<State, const char*>(
+        {{State::kAttached, "attached"},
+         {State::kDetached, "detached"},
+         {State::kDropped, "dropped"},
+         {State::kCancelled, "canceled"},
+         {State::kAttaching, "attaching"}});
+    SCOPED_CRASH_KEY_STRING32("WaylandWindowDrag", "state",
+                              GetMapValueOrDefault(kStateToString, state_));
+    base::debug::DumpWithoutCrashing();
+  }
+  return !!data_source_;
 }
 
 // Icon drawing and update for window/tab dragging is handled by buffer manager.
@@ -346,7 +371,8 @@ void WaylandWindowDragController::OnDragEnter(WaylandWindow* window,
   // TODO(crbug.com/40704369): Exo does not support custom mime types. In this
   // case, |data_offer_| will hold an empty mime_types list and, at this point,
   // it's safe just to skip the offer checks and requests here.
-  if (!base::Contains(data_offer_->mime_types(), kMimeTypeChromiumWindow)) {
+  if (!std::ranges::contains(data_offer_->mime_types(),
+                             kMimeTypeChromiumWindow)) {
     DVLOG(1) << "OnEnter. No valid mime type found.";
     return;
   }
@@ -489,6 +515,9 @@ void WaylandWindowDragController::OnDataSourceDropPerformed(
 void WaylandWindowDragController::OnDataSourceFinish(WaylandDataSource* source,
                                                      base::TimeTicks timestamp,
                                                      bool completed) {
+  if (source != data_source_.get()) {
+    return;
+  }
   VLOG(1) << __func__ << " completed=" << completed << " state=" << state_;
   HandleDragEnd(completed, timestamp);
   data_source_.reset();
@@ -497,7 +526,8 @@ void WaylandWindowDragController::OnDataSourceFinish(WaylandDataSource* source,
 void WaylandWindowDragController::HandleDragEnd(bool completed,
                                                 base::TimeTicks timestamp) {
   // No-op if drag end has already been handled.
-  if (state_ != State::kAttached && state_ != State::kDetached) {
+  if (state_ != State::kAttached && state_ != State::kDetached &&
+      state_ != State::kAttaching) {
     return;
   }
 
@@ -529,11 +559,13 @@ void WaylandWindowDragController::HandleDragEnd(bool completed,
   window_manager_->RemoveObserver(this);
 }
 
-void WaylandWindowDragController::OnDataSourceSend(WaylandDataSource* source,
-                                                   const std::string& mime_type,
-                                                   std::string* contents) {
+void WaylandWindowDragController::OnDataSourceSend(
+    WaylandDataSource* source,
+    const std::string& mime_type,
+    WaylandDataSource::Delegate::ContentCallback callback) {
   // There is no actual data exchange in DnD window dragging sessions. Window
   // snapping, for example, is supposed to be handled at higher level UI layers.
+  std::move(callback).Run("");
 }
 
 bool WaylandWindowDragController::CanDispatchEvent(const PlatformEvent& event) {
@@ -630,7 +662,8 @@ void WaylandWindowDragController::HandleMotionEvent(LocatedEvent* event) {
 // about to finish.
 void WaylandWindowDragController::HandleDropAndResetState(
     base::TimeTicks timestamp) {
-  DCHECK(state_ == State::kDropped || state_ == State::kCancelled);
+  DCHECK(state_ == State::kDropped || state_ == State::kCancelled ||
+         state_ == State::kAttaching);
   VLOG(1) << "Notifying drop. window=" << events_grabber_;
 
   // StopDragging() may get called in response to bogus input events, eg:

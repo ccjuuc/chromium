@@ -7,6 +7,7 @@
 #include <Carbon/Carbon.h>  // for <HIToolbox/Events.h>
 
 #include "base/apple/call_with_eh_frame.h"
+#include "base/apple/foundation_util.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #import "base/mac/mac_util.h"
@@ -27,6 +28,11 @@
 #include "content/public/common/content_features.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/base/cocoa/accessibility_focus_overrider.h"
+
+// When enabled, causes sendEvent: to manually forward KeyUp events that have
+// the command modifier to the application's key window instead of to |super|.
+// Used as a killswitch if this has unintended consequences.
+BASE_FEATURE(kForwardCmdKeyUpEventsToWindow, base::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace chrome_browser_application_mac {
 
@@ -54,7 +60,7 @@ namespace {
 // Calling -[NSEvent description] is rather slow to build up the event
 // description. The description is stored in a crash key to aid debugging, so
 // this helper function constructs a shorter, but still useful, description.
-// See <https://crbug.com/770405>.
+// See <https://crbug.com/40542574>.
 std::string DescriptionForNSEvent(NSEvent* event) {
   std::string desc = base::StringPrintf(
       "NSEvent type=%ld modifierFlags=0x%lx locationInWindow=(%g,%g)",
@@ -64,7 +70,7 @@ std::string DescriptionForNSEvent(NSEvent* event) {
     case NSEventTypeKeyDown:
     case NSEventTypeKeyUp: {
       // Some NSEvents return a string with NUL in event.characters, see
-      // <https://crbug.com/826908>. To make matters worse, in rare cases,
+      // <https://crbug.com/41379586>. To make matters worse, in rare cases,
       // NSEvent.characters or NSEvent.charactersIgnoringModifiers can throw an
       // NSException complaining that "TSMProcessRawKeyCode failed". Since we're
       // trying to gather a crash key here, if that exception happens, just
@@ -130,7 +136,6 @@ std::string DescriptionForNSEvent(NSEvent* event) {
 @implementation BrowserCrApplication {
   base::ObserverList<content::NativeEventProcessorObserver>::Unchecked
       _observers;
-  BOOL _handlingSendEvent;
   std::unique_ptr<content::ScopedAccessibilityMode>
       _scoped_accessibility_mode_voiceover;
   std::unique_ptr<content::ScopedAccessibilityMode>
@@ -200,15 +205,11 @@ std::string DescriptionForNSEvent(NSEvent* event) {
   // on a notification we set up (vs. NSApplication, say).
   if ([keyPath isEqualToString:@"voiceOverEnabled"] &&
       context == content::BrowserAccessibilityState::GetInstance()) {
-    NSNumber* newValueNumber = [change objectForKey:NSKeyValueChangeNewKey];
+    NSNumber* newValueNumber =
+        base::apple::ObjCCast<NSNumber>(change[NSKeyValueChangeNewKey]);
 
-    // In the if statement below, we check newValueNumber's class before
-    // accessing it to guard against crashes should the return type suddenly
-    // change in the future. We DCHECK here to flag any such change.
-    DCHECK([newValueNumber isKindOfClass:[NSNumber class]]);
-
-    if ([newValueNumber isKindOfClass:[NSNumber class]]) {
-      [self voiceOverStateChanged:[newValueNumber boolValue]];
+    if (newValueNumber) {
+      [self voiceOverStateChanged:newValueNumber.boolValue];
     }
 
     return;
@@ -315,97 +316,21 @@ std::string DescriptionForNSEvent(NSEvent* event) {
 // NSApplication event loop, so final post- MessageLoop::Run() work is done
 // before exiting.
 - (void)terminate:(id)sender {
-  [AppController.sharedController tryToTerminateApplication:self];
+  [AppController.sharedController tryToTerminateApplication];
   // Return, don't exit. The application is responsible for exiting on its own.
 }
 
 - (void)cancelTerminate:(id)sender {
-  [AppController.sharedController stopTryingToTerminateApplication:self];
+  [AppController.sharedController stopTryingToTerminateApplication];
 }
 
-- (NSEvent*)nextEventMatchingMask:(NSEventMask)mask
-                        untilDate:(NSDate*)expiration
-                           inMode:(NSString*)mode
-                          dequeue:(BOOL)dequeue {
-  __block NSEvent* event = nil;
-  base::apple::CallWithEHFrame(^{
-    event = [super nextEventMatchingMask:mask
-                               untilDate:expiration
-                                  inMode:mode
-                                 dequeue:dequeue];
-  });
-  return event;
-}
-
-- (BOOL)sendAction:(SEL)anAction to:(id)aTarget from:(id)sender {
-  // The Dock menu contains an automagic section where you can select
-  // amongst open windows.  If a window is closed via JavaScript while
-  // the menu is up, the menu item for that window continues to exist.
-  // When a window is selected this method is called with the
-  // now-freed window as |aTarget|.  Short-circuit the call if
-  // |aTarget| is not a valid window.
-  if (anAction == @selector(_selectWindow:)) {
-    // Not using -[NSArray containsObject:] because |aTarget| may be a
-    // freed object.
-    BOOL found = NO;
-    for (NSWindow* window in [self windows]) {
-      if (window == aTarget) {
-        found = YES;
-        break;
-      }
-    }
-    if (!found) {
-      return NO;
-    }
-  }
-
-  // When a Cocoa control is wired to a freed object, we get crashers
-  // in the call to |super| with no useful information in the
-  // backtrace.  Attempt to add some useful information.
-
-  // If the action is something generic like -commandDispatch:, then
-  // the tag is essential.
-  NSInteger tag = 0;
-  if ([sender isKindOfClass:[NSControl class]]) {
-    tag = [sender tag];
-    if (tag == 0 || tag == -1) {
-      tag = [sender selectedTag];
-    }
-  } else if ([sender isKindOfClass:[NSMenuItem class]]) {
-    tag = [sender tag];
-  }
-
-  NSString* actionString = NSStringFromSelector(anAction);
-  std::string value = base::StringPrintf("%s tag %ld sending %s to %p",
-      [[sender className] UTF8String],
-      static_cast<long>(tag),
-      [actionString UTF8String],
-      aTarget);
-
-  static crash_reporter::CrashKeyString<256> sendActionKey("sendaction");
-  crash_reporter::ScopedCrashKeyString scopedKey(&sendActionKey, value);
-
-  __block BOOL rv;
-  base::apple::CallWithEHFrame(^{
-    rv = [super sendAction:anAction to:aTarget from:sender];
-  });
-  return rv;
-}
-
-- (BOOL)isHandlingSendEvent {
-  return _handlingSendEvent;
-}
-
-- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
-  _handlingSendEvent = handlingSendEvent;
-}
 
 - (void)sendEvent:(NSEvent*)event {
   TRACE_EVENT0("toplevel", "BrowserCrApplication::sendEvent");
 
-  // TODO(bokan): Tracing added temporarily to diagnose crbug.com/1039833.
-  TRACE_EVENT_INSTANT1("toplevel", "KeyWindow", TRACE_EVENT_SCOPE_THREAD,
-                       "KeyWin", [[NSApp keyWindow] windowNumber]);
+  // TODO(bokan): Tracing added temporarily to diagnose crbug.com/40113768.
+  TRACE_EVENT_INSTANT("toplevel", "KeyWindow", "KeyWin",
+                      [[NSApp keyWindow] windowNumber]);
 
   static crash_reporter::CrashKeyString<256> nseventKey("nsevent");
   crash_reporter::ScopedCrashKeyString scopedKey(&nseventKey,
@@ -428,11 +353,25 @@ std::string DescriptionForNSEvent(NSEvent* event) {
     base::mac::ScopedSendingEvent sendingEventScoper;
     content::ScopedNotifyNativeEventProcessorObserver scopedObserverNotifier(
         &self->_observers, event);
-    // Mac Eisu and Kana keydown events are by default swallowed by sendEvent
-    // and sent directly to IME, which prevents ui keydown events from firing.
-    // These events need to be sent to [NSApp keyWindow] for handling.
+
+    BOOL sendEventToKeyWindow = NO;
     if (event.type == NSEventTypeKeyDown &&
         (event.keyCode == kVK_JIS_Eisu || event.keyCode == kVK_JIS_Kana)) {
+      // Mac Eisu and Kana keydown events are by default swallowed by sendEvent
+      // and sent directly to IME, which prevents ui keydown events from firing.
+      // These events need to be sent to [NSApp keyWindow] for handling.
+      sendEventToKeyWindow = YES;
+    } else if (event.type == NSEventTypeKeyUp &&
+               event.modifierFlags & NSEventModifierFlagCommand &&
+               base::FeatureList::IsEnabled(kForwardCmdKeyUpEventsToWindow)) {
+      // The base NSApplication implementation of sendEvent: swallows keyUp
+      // events if the command modifier is present. We work around this by
+      // forwarding them to [NSApp keyWindow] to ensure all keyUp events are
+      // reported and handled (crbug.com/407598429, crbug.com/438807261).
+      sendEventToKeyWindow = YES;
+    }
+
+    if (sendEventToKeyWindow) {
       [NSApp.keyWindow sendEvent:event];
     } else {
       [super sendEvent:event];

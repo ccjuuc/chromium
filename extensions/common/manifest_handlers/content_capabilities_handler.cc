@@ -28,6 +28,10 @@ namespace errors = manifest_errors;
 
 using api::extensions_manifest_types::ContentCapabilities;
 
+// static
+const char* ContentCapabilitiesInfo::kManifestDataKey =
+    keys::kContentCapabilities;
+
 ContentCapabilitiesInfo::ContentCapabilitiesInfo() = default;
 ContentCapabilitiesInfo::~ContentCapabilitiesInfo() = default;
 
@@ -37,8 +41,8 @@ static base::LazyInstance<ContentCapabilitiesInfo>::DestructorAtExit
 // static
 const ContentCapabilitiesInfo& ContentCapabilitiesInfo::Get(
     const Extension* extension) {
-  ContentCapabilitiesInfo* info = static_cast<ContentCapabilitiesInfo*>(
-      extension->GetManifestData(keys::kContentCapabilities));
+  const ContentCapabilitiesInfo* info =
+      extension->GetManifestData<ContentCapabilitiesInfo>();
   return info ? *info : g_empty_content_capabilities_info.Get();
 }
 
@@ -112,7 +116,7 @@ bool ContentCapabilitiesHandler::Parse(Extension* extension,
     }
   }
 
-  extension->SetManifestData(keys::kContentCapabilities, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

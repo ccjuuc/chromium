@@ -37,13 +37,12 @@
 #import "url/gurl.h"
 
 using chrome_test_util::BrowsingDataButtonMatcher;
-using chrome_test_util::BrowsingDataConfirmButtonMatcher;
+using chrome_test_util::BrowsingDataDoneButtonMatcher;
 using chrome_test_util::ButtonWithAccessibilityLabelId;
 using chrome_test_util::ClearBrowsingDataButton;
 using chrome_test_util::ClearBrowsingHistoryButton;
 using chrome_test_util::ClearCacheButton;
 using chrome_test_util::ClearCookiesButton;
-using chrome_test_util::ClearSavedPasswordsButton;
 using chrome_test_util::SettingsCollectionView;
 using chrome_test_util::SettingsDoneButton;
 using chrome_test_util::SettingsMenuBackButton;
@@ -116,19 +115,6 @@ id<GREYMatcher> SafariImportButton() {
   [super tearDownHelper];
 }
 
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.relaunch_policy = ForceRelaunchByCleanShutdown;
-  if ([self isRunningTest:@selector
-            (testSafariImportButtonHiddenWhenAllBlocked)] ||
-      [self isRunningTest:@selector
-            (testSafariImportButtonVisibleWhenSomeBlocked)]) {
-    config.features_enabled.push_back(kImportPasswordsFromSafari);
-  }
-
-  return config;
-}
-
 // Performs the steps to clear browsing data. Must be called on the
 // Clear Browsing Data settings screen, after having selected the data types
 // scheduled for removal.
@@ -167,46 +153,11 @@ id<GREYMatcher> SafariImportButton() {
   [[EarlGrey selectElementWithMatcher:ClearCacheButton()]
       performAction:grey_tap()];
 
-  // Tap the confirm button to save the prefs.
-  [[EarlGrey selectElementWithMatcher:BrowsingDataConfirmButtonMatcher()]
+  // Tap the done button to save the prefs.
+  [[EarlGrey selectElementWithMatcher:BrowsingDataDoneButtonMatcher()]
       performAction:grey_tap()];
 
   [self clearBrowsingData];
-  [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
-      performAction:grey_tap()];
-}
-
-// From the NTP, clears the saved passwords via the UI.
-- (void)clearPasswords {
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsMenuPrivacyButton()];
-  [ChromeEarlGreyUI tapPrivacyMenuButton:ClearBrowsingDataCell()];
-
-  // "Browsing history", "Cookies, Site Data" and "Cached Images and Files"
-  // are the default checked options when the prefs are registered. Unckeck all
-  // of them and check "Passwords".
-  [[EarlGrey selectElementWithMatcher:ClearBrowsingHistoryButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearCookiesButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearCacheButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearSavedPasswordsButton()]
-      performAction:grey_tap()];
-
-  [self clearBrowsingData];
-
-  // Re-tap all the previously tapped cells, so that the default state of the
-  // checkmarks is preserved.
-  [[EarlGrey selectElementWithMatcher:ClearBrowsingHistoryButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearCookiesButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearCacheButton()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:ClearSavedPasswordsButton()]
-      performAction:grey_tap()];
-
   [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
       performAction:grey_tap()];
 }

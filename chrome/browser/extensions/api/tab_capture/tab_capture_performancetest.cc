@@ -10,7 +10,7 @@
 #include "base/files/file_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/tab_capture/tab_capture_performance_test_base.h"
@@ -52,17 +52,16 @@ constexpr char kMetricCaptureLatencyMs[] = "capture_latency";
 constexpr char kMetricRendererFrameDrawMs[] = "renderer_frame_draw";
 
 constexpr char kEventCapture[] = "Capture";
-constexpr char kEventSuffixFailRate[] = "FailRate";
-constexpr char kEventSuffixLatency[] = "Latency";
+constexpr char kEventCaptureFailRate[] = "CaptureFailRate";
+constexpr char kEventCaptureLatency[] = "CaptureLatency";
 constexpr char kEventCommitAndDrawCompositorFrame[] =
     "WidgetBase::DidCommitAndDrawCompositorFrame";
-const base::flat_map<std::string, std::string> kEventToMetricMap(
-    {{kEventCapture, kMetricCaptureMs},
-     {std::string(kEventCapture) + kEventSuffixFailRate,
-      kMetricCaptureFailRatePercent},
-     {std::string(kEventCapture) + kEventSuffixLatency,
-      kMetricCaptureLatencyMs},
-     {kEventCommitAndDrawCompositorFrame, kMetricRendererFrameDrawMs}});
+constexpr auto kEventToMetricMap =
+    base::MakeFixedFlatMap<std::string_view, std::string_view>(
+        {{kEventCapture, kMetricCaptureMs},
+         {kEventCaptureFailRate, kMetricCaptureFailRatePercent},
+         {kEventCaptureLatency, kMetricCaptureLatencyMs},
+         {kEventCommitAndDrawCompositorFrame, kMetricRendererFrameDrawMs}});
 
 perf_test::PerfResultReporter SetUpTabCaptureReporter(
     const std::string& story) {
@@ -74,7 +73,7 @@ perf_test::PerfResultReporter SetUpTabCaptureReporter(
   return reporter;
 }
 
-std::string GetMetricFromEventName(const std::string& event_name) {
+std::string_view GetMetricFromEventName(const std::string& event_name) {
   auto iter = kEventToMetricMap.find(event_name);
   return iter == kEventToMetricMap.end() ? event_name : iter->second;
 }
@@ -124,18 +123,25 @@ class TabCapturePerformanceTest : public TabCapturePerformanceTestBase,
   TabCapturePerformanceTest() = default;
   ~TabCapturePerformanceTest() override = default;
 
+  // Member constants to avoid exit-time destructor.
+  const std::string kEventSuffixLatency = "Latency";
+  const std::string kEventSuffixFailRate = "FailRate";
+
   bool HasFlag(TestFlags flag) const {
     return (GetParam() & flag) == flag;
   }
 
   std::string GetSuffixForTestFlags() const {
     std::string suffix;
-    if (HasFlag(kUseGpu))
+    if (HasFlag(kUseGpu)) {
       suffix += "_comp_gpu";
-    if (HasFlag(kTestThroughWebRTC))
+    }
+    if (HasFlag(kTestThroughWebRTC)) {
       suffix += "_webrtc";
-    if (HasFlag(kSmallWindow))
+    }
+    if (HasFlag(kSmallWindow)) {
       suffix += "_small";
+    }
     // Make sure we always have a story.
     if (suffix.size() == 0) {
       suffix = "_baseline_story";
@@ -153,8 +159,9 @@ class TabCapturePerformanceTest : public TabCapturePerformanceTestBase,
     CHECK(success) << "Failed to load test page at: "
                    << test_file.AsUTF8Unsafe();
 
-    if (!HasFlag(kUseGpu))
+    if (!HasFlag(kUseGpu)) {
       UseSoftwareCompositing();
+    }
 
     TabCapturePerformanceTestBase::SetUp();
   }
@@ -223,8 +230,9 @@ class TabCapturePerformanceTest : public TabCapturePerformanceTestBase,
     int count = 0;
     for (const auto* begin_event : events_to_analyze) {
       const auto* end_event = begin_event->other_event.get();
-      if (!end_event)
+      if (!end_event) {
         continue;
+      }
       const double latency = end_event->timestamp - begin_event->timestamp;
       sum += latency;
       sqr_sum += latency * latency;

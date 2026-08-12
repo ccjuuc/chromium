@@ -31,7 +31,6 @@
 #include "chrome/browser/notifications/notification_platform_bridge_delegator.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -204,6 +203,7 @@ class SystemNotificationManagerTest
         profile_,
         base::BindLambdaForTesting([this](content::BrowserContext* context) {
           return std::unique_ptr<KeyedService>(std::make_unique<VolumeManager>(
+              TestingBrowserProcess::GetGlobal()->local_state(),
               Profile::FromBrowserContext(context), nullptr, nullptr,
               &disk_mount_manager_, nullptr,
               VolumeManager::GetMtpStorageInfoCallback()));
@@ -1132,7 +1132,7 @@ std::u16string kGoogleDrive = u"Google Drive";
 
 // Tests the bulk-pinning notifications.
 TEST_F(SystemNotificationManagerTest, BulkPinningNotification) {
-  using List = base::Value::List;
+  using List = base::ListValue;
   const std::string_view event_name = "unused-event-name";
 
   // Event with no args should be ignored.

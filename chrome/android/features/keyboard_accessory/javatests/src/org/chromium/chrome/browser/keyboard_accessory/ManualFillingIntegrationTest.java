@@ -21,7 +21,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertNotNull;
 
-import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabAtPosition;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabWithDescription;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.waitToBeHidden;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.whenDisplayed;
@@ -33,6 +32,8 @@ import androidx.test.espresso.Espresso;
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,12 +41,14 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.ChromeWindow;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupView;
@@ -54,8 +57,8 @@ import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
@@ -66,12 +69,23 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableFeatures({ChromeFeatureList.AUTOFILL_ANDROID_DESKTOP_KEYBOARD_ACCESSORY_REVAMP})
+@Batch(Batch.PER_CLASS)
 public class ManualFillingIntegrationTest {
     @Rule
-    public final FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public final AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
 
     private final ManualFillingTestHelper mHelper = new ManualFillingTestHelper(mActivityTestRule);
+
+    @BeforeClass
+    public static void setUpClass() {
+        ChromeWindow.setKeyboardVisibilityDelegateFactory(FakeKeyboard::new);
+    }
+
+    @AfterClass
+    public static void tearDownClass() {
+        ChromeWindow.resetKeyboardVisibilityDelegateFactory();
+    }
 
     @After
     public void tearDown() {
@@ -90,6 +104,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287512
     public void testKeyboardAccessoryHiddenUntilKeyboardShows() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -105,6 +120,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287512
     public void testKeyboardAccessoryDisappearsWithKeyboard() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -164,8 +180,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
-    @DisableIf.Build(supported_abis_includes = "x86", message = "https://crbug.com/420290639")
-    @DisableIf.Build(supported_abis_includes = "x86_64", message = "https://crbug.com/420290639")
+    @DisabledTest(message = "https://crbug.com/41486132")
     public void testAccessorySheetHiddenWhenRefocusingField() throws TimeoutException {
         AtomicReference<ViewGroup.MarginLayoutParams> accessoryMargins = new AtomicReference<>();
         AtomicReference<View> accessorySheetView = new AtomicReference<>();
@@ -210,7 +225,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1466461")
+    @DisabledTest(message = "https://crbug.com/40276407")
     public void testAccessoryHiddenAfterTappingAutoGenerationButton() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -221,7 +236,7 @@ public class ManualFillingIntegrationTest {
 
         // Click the tab to show the sheet and hide the keyboard.
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
         mHelper.waitForKeyboardToDisappear();
         whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet_frame)));
 
@@ -233,7 +248,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1406328,https://crbug.com/1466461")
+    @DisabledTest(message = "https://crbug.com/40887193,https://crbug.com/40276407")
     public void testHidingSheetBringsBackKeyboard() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -243,13 +258,13 @@ public class ManualFillingIntegrationTest {
 
         // Click the tab to show the sheet and hide the keyboard.
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
         mHelper.waitForKeyboardToDisappear();
         whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet_frame)));
 
         // Click the tab again to hide the sheet and show the keyboard.
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
         mHelper.waitForKeyboardAccessoryToBeShown();
         onView(withId(R.id.keyboard_accessory)).check(matches(isDisplayed()));
         waitToBeHidden(withChild(withId(R.id.keyboard_accessory_sheet_frame)));
@@ -257,6 +272,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287512
     public void testSelectingNonPasswordInputDismissesAccessory() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -273,6 +289,7 @@ public class ManualFillingIntegrationTest {
     @Test
     @SmallTest
     @Restriction(DeviceFormFactor.PHONE)
+    @DisabledTest(message = "https://crbug.com/473803610")
     public void testInvokingTabSwitcherHidesAccessory() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -292,7 +309,7 @@ public class ManualFillingIntegrationTest {
         whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet_frame)));
 
         LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.TAB_SWITCHER, false);
+                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.HUB, false);
 
         LayoutTestUtils.startShowingAndWaitForLayout(
                 mActivityTestRule.getActivity().getLayoutManager(), LayoutType.BROWSING, false);
@@ -304,6 +321,7 @@ public class ManualFillingIntegrationTest {
     @SmallTest
     @DisableIf.Build(supported_abis_includes = "x86", message = "https://crbug.com/420290639")
     @DisableIf.Build(supported_abis_includes = "x86_64", message = "https://crbug.com/420290639")
+    @DisabledTest(message = "https://crbug.com/420290639")
     public void testResumingTheAppDismissesAllInputMethods() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -359,6 +377,7 @@ public class ManualFillingIntegrationTest {
     @SmallTest
     @DisableIf.Build(supported_abis_includes = "x86", message = "https://crbug.com/420290639")
     @DisableIf.Build(supported_abis_includes = "x86_64", message = "https://crbug.com/420290639")
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // See https://crbug.com/480913329.
     public void testPressingBackButtonHidesAccessorySheet() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
 
@@ -385,6 +404,7 @@ public class ManualFillingIntegrationTest {
 
     @Test
     @SmallTest
+    @DisabledTest(message = "https://crbug.com/480163488")
     public void testMovesUpSnackbar() throws TimeoutException {
         final String kSnackbarText = "snackbar";
 

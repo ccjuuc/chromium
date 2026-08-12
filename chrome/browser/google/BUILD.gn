@@ -10,6 +10,8 @@ source_set("google") {
   sources = [
     "google_brand.cc",
     "google_brand.h",
+    "google_update_policy_fetcher.cc",
+    "google_update_policy_fetcher.h",
   ]
 
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
@@ -17,6 +19,8 @@ source_set("google") {
   deps = [
     "//base",
     "//chrome/common:constants",
+    "//components/policy/core/browser",
+    "//components/policy/core/common",
     "//components/prefs",
     "//content/public/browser",
   ]
@@ -31,6 +35,7 @@ source_set("google") {
 
     deps += [
       "//chrome/browser:browser_process",
+      "//chrome/browser:browser_process_platform_part",
       "//chrome/browser/ash/policy/core",
       "//chromeos/ash/components/system",
       "//components/policy/core/common:common_constants",
@@ -43,26 +48,20 @@ source_set("google") {
       "did_run_updater_win.h",
       "google_update_app_command.cc",
       "google_update_app_command.h",
+      "google_update_win.cc",
+      "google_update_win.h",
+      "switches.cc",
+      "switches.h",
     ]
-    if (is_chrome_branded) {
-      sources += [
-        "google_update_policy_fetcher_win.cc",
-        "google_update_policy_fetcher_win.h",
-        "google_update_policy_fetcher_win_util.cc",
-        "google_update_policy_fetcher_win_util.h",
-        "google_update_win.cc",
-        "google_update_win.h",
-        "switches.cc",
-        "switches.h",
-      ]
-    }
 
     deps += [
       "//chrome/app:generated_resources_grit",
+      "//chrome/browser/component_updater",
       "//chrome/common",
       "//chrome/install_static:install_static_util",
       "//chrome/installer/util:with_no_strings",
       "//chrome/updater/app/server/win:updater_legacy_idl",
+      "//components/activity_reporter:buildflags",
       "//components/policy/core/browser",
       "//components/policy/core/common",
     ]
@@ -75,19 +74,15 @@ source_set("google") {
       "//chrome/updater:tagging",
     ]
   }
-
-  if (is_posix) {
-    sources += [ "google_update_settings_posix.cc" ]
-  }
-  if (is_posix) {
-    deps += [ "//components/crash/core/app" ]
-  }
 }
 
 source_set("unit_tests") {
   testonly = true
 
-  sources = [ "google_update_settings_unittest.cc" ]
+  sources = [
+    "google_update_policy_fetcher_unittest.cc",
+    "google_update_settings_unittest.cc",
+  ]
 
   deps = [
     ":google",
@@ -95,6 +90,7 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//chrome/common:constants",
     "//chrome/installer/util:with_no_strings",
+    "//components/policy/core/common",
     "//content/test:test_support",
     "//testing/gtest",
   ]
@@ -104,11 +100,7 @@ source_set("unit_tests") {
   }
 
   if (is_win && is_chrome_branded) {
-    sources += [
-      "google_update_policy_fetcher_win_util_unittest.cc",
-      "google_update_win_unittest.cc",
-    ]
-
+    sources += [ "google_update_win_unittest.cc" ]
     deps += [
       "//chrome/common:version_header",
       "//chrome/install_static/test:test_support",

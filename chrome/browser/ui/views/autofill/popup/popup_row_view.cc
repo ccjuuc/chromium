@@ -27,7 +27,6 @@
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_views.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
@@ -35,7 +34,6 @@
 #include "components/strings/grit/components_strings.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/base_type_conversion.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -58,6 +56,23 @@
 namespace autofill {
 
 namespace {
+
+bool ShouldIgnoreMouseObservedOutsideItemBoundsCheck(
+    const AutofillPopupController& controller,
+    const Suggestion& suggestion) {
+  // Keep the controller-owned policy for popup-level exemptions, such as
+  // explicitly opened manual fallback popups and autocomplete rows regenerated
+  // after deletion.
+  if (controller.ShouldIgnoreMouseObservedOutsideItemBoundsCheck()) {
+    return true;
+  }
+
+  // Datalist entries are page-provided choices for the current field. The
+  // initial-hover suppression protects against accidental acceptance of
+  // non-page-provided suggestions and should not make datalist clicks depend on
+  // pointer movement.
+  return suggestion.type == SuggestionType::kDatalistEntry;
+}
 
 // Utility event handler for mouse enter/exit and tap events.
 class EnterExitHandler : public ui::EventHandler {
@@ -178,8 +193,10 @@ PopupRowView::PopupRowView(
       controller_(controller),
       line_number_(line_number),
       should_ignore_mouse_observed_outside_item_bounds_check_(
-          controller &&
-          controller->ShouldIgnoreMouseObservedOutsideItemBoundsCheck()),
+          controller && line_number < controller->GetLineCount() &&
+          ShouldIgnoreMouseObservedOutsideItemBoundsCheck(
+              *controller,
+              controller->GetSuggestionAt(line_number))),
       suggestion_is_acceptable_(
           controller && line_number < controller->GetLineCount() &&
           controller->GetSuggestionAt(line_number).IsAcceptable()) {
@@ -248,6 +265,7 @@ PopupRowView::PopupRowView(
                               /*add_call_to_action_if_expandable=*/false));
   GetViewAccessibility().SetPosInSet(position);
   GetViewAccessibility().SetSetSize(set_size);
+  GetViewAccessibility().SetIsSelected(false);
 
   content_event_handler_ =
       set_exit_enter_callbacks(CellType::kContent, *content_view_);
@@ -290,7 +308,7 @@ void PopupRowView::OnMouseExited(const ui::MouseEvent& event) {
   // `OnMouseExited()` does not imply that the mouse has left the item's screen
   // bounds: `OnMouseExited()` fires (on Windows, at least) when another popup
   // overlays this item and the mouse is above the new popup
-  // (crbug.com/1287364).
+  // (crbug.com/40058496).
   mouse_observed_outside_item_bounds_ |= !IsMouseHovered();
 }
 
@@ -305,20 +323,16 @@ void PopupRowView::OnMouseReleased(const ui::MouseEvent& event) {
   }
 
   if (event.IsOnlyLeftMouseButton() &&
-      content_view_->HitTestPoint(event.location()) && controller_ &&
-      IsViewVisibleEnough()) {
-    controller_->AcceptSuggestion(
-        line_number_, AutofillMetrics::SuggestionAcceptedMethod::kMouse);
+      content_view_->HitTestPoint(event.location())) {
+    Accept(AutofillMetrics::SuggestionAcceptedMethod::kMouse);
   }
 }
 
 void PopupRowView::OnGestureEvent(ui::GestureEvent* event) {
   switch (event->type()) {
     case ui::EventType::kGestureTap:
-      if (content_view_->HitTestPoint(event->location()) && controller_ &&
-          IsViewVisibleEnough()) {
-        controller_->AcceptSuggestion(
-            line_number_, AutofillMetrics::SuggestionAcceptedMethod::kTap);
+      if (content_view_->HitTestPoint(event->location())) {
+        Accept(AutofillMetrics::SuggestionAcceptedMethod::kTap);
       }
       break;
     default:
@@ -337,12 +351,15 @@ bool PopupRowView::GetNeedsNotificationWhenVisibleBoundsChange() const {
 }
 
 void PopupRowView::OnVisibleBoundsChanged() {
-  if (GetVisibleBounds().size().GetArea() >=
+  if (GetVisibleBounds().size().GetArea() <
       size().GetArea() * kAcceptingGuardVisibleAreaPortion) {
+    // Row is not visible enough, do not allow user to accept the suggestion.
+    barrier_for_accepting_.reset();
+  } else if (!barrier_for_accepting_) {
+    // If the row was out of sight before, start timer to only accept
+    // suggestions after predefined delay has passed.
     barrier_for_accepting_ = NextIdleBarrier::CreateNextIdleBarrierWithDelay(
         AutofillSuggestionController::kIgnoreEarlyClicksOnSuggestionsDuration);
-  } else {
-    barrier_for_accepting_.reset();
   }
 }
 
@@ -357,19 +374,27 @@ void PopupRowView::OnViewFocused(views::View* view) {
   OnCellSelected(type, PopupCellSelectionSource::kKeyboard);
 }
 
+std::optional<PopupRowView::CellType> PopupRowView::GetSelectedCell() const {
+  return selected_cell_;
+}
+
 void PopupRowView::SetSelectedCell(std::optional<CellType> new_cell) {
   if (!controller_) {
     return;
   }
 
-  if (new_cell == selected_cell_) {
+  if (new_cell == selected_cell_ || (new_cell && !IsSelectable())) {
     return;
   }
 
   // If the previous cell was content, set it as unselected.
   if (selected_cell_ == CellType::kContent) {
     content_view_->UpdateStyle(/*selected=*/false);
-    content_view_->GetViewAccessibility().SetIsSelected(false);
+    if (!TrackAndRun(this, [this]() {
+          content_view_->GetViewAccessibility().SetIsSelected(false);
+        })) {
+      return;
+    }
     controller_->UnselectSuggestion();
   }
 
@@ -380,18 +405,34 @@ void PopupRowView::SetSelectedCell(std::optional<CellType> new_cell) {
     // is required for a11y focus working on a non-activatable popup.  Consider
     // moving `SetIsSelected()` into `NotifyAXSelection()` (and rename it) to
     // hide this API complexity from clients.
-    GetA11ySelectionDelegate().NotifyAXSelection(*this);
-    GetViewAccessibility().SetIsSelected(true);
-    NotifyAccessibilityEventDeprecated(
-        ax::mojom::Event::kSelectedChildrenChanged, true);
+    if (!TrackAndRun(
+            this,
+            [this]() { GetA11ySelectionDelegate().NotifyAXSelection(*this); },
+            [this]() { GetViewAccessibility().SetIsSelected(true); },
+            [this]() {
+              NotifyAccessibilityEventDeprecated(
+                  ax::mojom::Event::kSelectedChildrenChanged, true);
+            })) {
+      return;
+    }
     selected_cell_ = new_cell;
   } else if (new_cell == CellType::kContent) {
     controller_->SelectSuggestion(line_number_);
     content_view_->UpdateStyle(/*selected=*/true);
-    GetA11ySelectionDelegate().NotifyAXSelection(*content_view_);
-    content_view_->GetViewAccessibility().SetIsSelected(true);
-    NotifyAccessibilityEventDeprecated(
-        ax::mojom::Event::kSelectedChildrenChanged, true);
+    if (!TrackAndRun(
+            this,
+            [this]() {
+              GetA11ySelectionDelegate().NotifyAXSelection(*content_view_);
+            },
+            [this]() {
+              content_view_->GetViewAccessibility().SetIsSelected(true);
+            },
+            [this]() {
+              NotifyAccessibilityEventDeprecated(
+                  ax::mojom::Event::kSelectedChildrenChanged, true);
+            })) {
+      return;
+    }
     selected_cell_ = new_cell;
   } else {
     // Set the selected cell to none in case an invalid choice was made (e.g.
@@ -399,8 +440,13 @@ void PopupRowView::SetSelectedCell(std::optional<CellType> new_cell) {
     // explicitly with `std::nullopt`.
     selected_cell_ = std::nullopt;
 
-    GetViewAccessibility().SetIsSelected(false);
-    content_view_->GetViewAccessibility().SetIsSelected(false);
+    if (!TrackAndRun(
+            this, [this]() { GetViewAccessibility().SetIsSelected(false); },
+            [this]() {
+              content_view_->GetViewAccessibility().SetIsSelected(false);
+            })) {
+      return;
+    }
   }
 
   UpdateBackground();
@@ -439,11 +485,8 @@ bool PopupRowView::HandleKeyPressEvent(
     case ui::VKEY_RETURN: {
       const bool kHasKeyModifierPressed =
           event.GetModifiers() & blink::WebInputEvent::kKeyModifiers;
-      if (*GetSelectedCell() == CellType::kContent && controller_ &&
-          !kHasKeyModifierPressed && IsViewVisibleEnough()) {
-        controller_->AcceptSuggestion(
-            line_number_, AutofillMetrics::SuggestionAcceptedMethod::kKeyboard);
-        return true;
+      if (*GetSelectedCell() == CellType::kContent && !kHasKeyModifierPressed) {
+        return Accept(AutofillMetrics::SuggestionAcceptedMethod::kKeyboard);
       }
       return false;
     }
@@ -454,7 +497,16 @@ bool PopupRowView::HandleKeyPressEvent(
 
 bool PopupRowView::IsSelectable() const {
   return controller_ && line_number_ < controller_->GetLineCount() &&
-         !controller_->GetSuggestionAt(line_number_).HasDeactivatedStyle();
+         controller_->GetSuggestionAt(line_number_).IsSelectable();
+}
+
+bool PopupRowView::Accept(
+    AutofillMetrics::SuggestionAcceptedMethod method) const {
+  if (controller_ && IsViewVisibleEnough()) {
+    controller_->AcceptSuggestion(line_number_, method);
+    return true;
+  }
+  return false;
 }
 
 void PopupRowView::OnCellSelected(std::optional<CellType> type,

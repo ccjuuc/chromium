@@ -8,6 +8,7 @@
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
@@ -340,9 +341,6 @@ TEST_P(ExtensionActionManifestTest, ValidDefaultPopup) {
   ASSERT_TRUE(test_extension) << error;
 
   std::vector<InstallWarning> warnings;
-  if (GetParam() == ActionInfo::Type::kBrowser) {
-    warnings.emplace_back("Unrecognized manifest key 'browser_action'.");
-  }
   if (manifest_version == 2) {
     warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
   }
@@ -366,9 +364,6 @@ TEST_P(ExtensionActionManifestTest, EmptyDefaultPopup) {
   ASSERT_TRUE(test_extension) << error;
 
   std::vector<InstallWarning> warnings;
-  if (GetParam() == ActionInfo::Type::kBrowser) {
-    warnings.emplace_back("Unrecognized manifest key 'browser_action'.");
-  }
   if (manifest_version == 2) {
     warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
   }
@@ -406,9 +401,6 @@ TEST_P(ExtensionActionManifestTest, NonexistentDefaultPopup) {
   ASSERT_TRUE(test_extension) << error;
 
   std::vector<InstallWarning> warnings;
-  if (GetParam() == ActionInfo::Type::kBrowser) {
-    warnings.emplace_back("Unrecognized manifest key 'browser_action'.");
-  }
   if (manifest_version == 2) {
     warnings.emplace_back(manifest_errors::kManifestV2IsDeprecatedWarning);
   }

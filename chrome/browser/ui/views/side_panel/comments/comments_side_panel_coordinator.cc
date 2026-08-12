@@ -10,15 +10,16 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
+#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
-#include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/webui/side_panel/comments/comments_side_panel_ui.h"
 #include "chrome/common/webui_url_constants.h"
@@ -31,6 +32,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 
+DEFINE_USER_DATA(CommentsSidePanelCoordinator);
+
 using SidePanelWebUIViewT_CommentsSidePanelUI =
     SidePanelWebUIViewT<CommentsSidePanelUI>;
 BEGIN_TEMPLATE_METADATA(SidePanelWebUIViewT_CommentsSidePanelUI,
@@ -42,7 +45,8 @@ CommentsSidePanelCoordinator::CommentsSidePanelCoordinator(
     : browser_(browser),
       tab_group_sync_service_(
           tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-              browser_->GetProfile())) {
+              browser_->GetProfile())),
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {
   browser_->GetTabStripModel()->AddObserver(this);
   tab_groups::TabGroupSyncServiceFactory::GetForProfile(browser_->GetProfile())
       ->AddObserver(this);
@@ -83,15 +87,17 @@ void CommentsSidePanelCoordinator::TabGroupedStateChanged(
 void CommentsSidePanelCoordinator::OnTabGroupUpdated(
     const tab_groups::SavedTabGroup& group,
     tab_groups::TriggerSource source) {
+  tabs::TabInterface* active_tab = browser_->GetActiveTabInterface();
+
   // Only handle updates to the active group.
   std::optional<tab_groups::TabGroupId> active_group_id =
-      browser_->GetTabStripModel()->GetActiveTabGroupId();
+      active_tab ? active_tab->GetGroup() : std::nullopt;
   if (!active_group_id.has_value() ||
       active_group_id.value() != group.local_group_id()) {
     return;
   }
 
-  UpdateVisuals(browser_->GetActiveTabInterface());
+  UpdateVisuals(active_tab);
 }
 
 void CommentsSidePanelCoordinator::UpdateVisuals(
@@ -126,8 +132,8 @@ bool CommentsSidePanelCoordinator::ShouldShowCommentsAction(
 
 void CommentsSidePanelCoordinator::UpdateCommentsActionVisibility(
     bool should_show_comments_action) {
-  PinnedToolbarActionsController* controller =
-      browser_->GetFeatures().pinned_toolbar_actions_controller();
+  PinnedToolbarActions* controller =
+      browser_->GetFeatures().pinned_toolbar_actions();
   if (!controller) {
     return;
   }
@@ -140,15 +146,6 @@ void CommentsSidePanelCoordinator::UpdateCommentsActionVisibility(
 
   controller->ShowActionEphemerallyInToolbar(kActionSidePanelShowComments,
                                              should_show_comments_action);
-
-  if (should_show_comments_action) {
-    PinnedActionToolbarButton* button =
-        controller->GetButtonFor(kActionSidePanelShowComments);
-    CHECK(button);
-
-    button->SetProperty(views::kElementIdentifierKey,
-                        kSharedTabGroupCommentsActionElementId);
-  }
 }
 
 void CommentsSidePanelCoordinator::UpdateCommentsSidePanelVisibility(
@@ -168,11 +165,9 @@ void CommentsSidePanelCoordinator::UpdateCommentsSidePanelVisibility(
   }
 
   if (side_panel_showing) {
-    SidePanelEntry* const side_panel_entry =
-        SidePanelRegistry::From(browser_)->GetEntryForKey(side_panel_entry_key);
     // Close the side panel, setting the flag to recall the state when the
     // comments action is shown again.
-    side_panel_ui->Close(side_panel_entry->type());
+    side_panel_ui->Close();
     side_panel_should_be_resumed_ = true;
     return;
   }
@@ -215,7 +210,8 @@ void CommentsSidePanelCoordinator::UpdateSidePanelTitle(
                 IDS_COLLABORATION_SHARED_TAB_GROUPS_COMMENTS_TITLE);
 
   actions::ActionItem* action_item = actions::ActionManager::Get().FindAction(
-      kActionSidePanelShowComments, browser_->GetActions()->root_action_item());
+      kActionSidePanelShowComments,
+      BrowserActions::From(browser_)->root_action_item());
 
   if (title != action_item->GetText()) {
     action_item->SetText(title);
@@ -226,6 +222,11 @@ void CommentsSidePanelCoordinator::UpdateSidePanelTitle(
 bool CommentsSidePanelCoordinator::IsSupported() {
   return base::FeatureList::IsEnabled(
       collaboration::features::kCollaborationComments);
+}
+
+CommentsSidePanelCoordinator* CommentsSidePanelCoordinator::From(
+    BrowserWindowInterface* interface) {
+  return Get(interface->GetUnownedUserDataHost());
 }
 
 void CommentsSidePanelCoordinator::CreateAndRegisterEntry(

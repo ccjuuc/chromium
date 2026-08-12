@@ -18,9 +18,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_manager.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/service_worker/service_worker_client.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
@@ -30,6 +30,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -44,6 +45,7 @@
 #include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 
@@ -51,9 +53,10 @@ namespace {
 
 bool g_force_disable_high_priority_fetch_response_callback = false;
 
-void NotifyNavigationPreloadRequestSent(const network::ResourceRequest& request,
-                                        const std::pair<int, int>& worker_id,
-                                        const std::string& request_id) {
+void NotifyNavigationPreloadRequestSent(
+    const network::ResourceRequest& request,
+    const std::pair<ChildProcessId, int>& worker_id,
+    const std::string& request_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   ServiceWorkerDevToolsManager::GetInstance()->NavigationPreloadRequestSent(
       worker_id.first, worker_id.second, request_id, request);
@@ -62,7 +65,7 @@ void NotifyNavigationPreloadRequestSent(const network::ResourceRequest& request,
 void NotifyNavigationPreloadResponseReceived(
     const GURL& url,
     network::mojom::URLResponseHeadPtr response,
-    const std::pair<int, int>& worker_id,
+    const std::pair<ChildProcessId, int>& worker_id,
     const std::string& request_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   ServiceWorkerDevToolsManager::GetInstance()
@@ -72,7 +75,7 @@ void NotifyNavigationPreloadResponseReceived(
 
 void NotifyNavigationPreloadCompleted(
     const network::URLLoaderCompletionStatus& status,
-    const std::pair<int, int>& worker_id,
+    const std::pair<ChildProcessId, int>& worker_id,
     const std::string& request_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   ServiceWorkerDevToolsManager::GetInstance()->NavigationPreloadCompleted(
@@ -85,7 +88,7 @@ void NotifyNavigationPreloadCompleted(
 // DevTools.
 class DelegatingURLLoaderClient final : public network::mojom::URLLoaderClient {
  public:
-  using WorkerId = std::pair<int, int>;
+  using WorkerId = std::pair<ChildProcessId, int>;
   explicit DelegatingURLLoaderClient(
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       const network::ResourceRequest& request)
@@ -218,7 +221,7 @@ class DelegatingURLLoaderClient final : public network::mojom::URLLoaderClient {
   const GURL url_;
   const bool devtools_enabled_;
 
-  std::optional<std::pair<int, int>> worker_id_;
+  std::optional<std::pair<ChildProcessId, int>> worker_id_;
   std::string devtools_request_id_;
   base::queue<base::OnceCallback<void(const WorkerId&, const std::string&)>>
       devtools_callbacks;
@@ -299,8 +302,11 @@ void GrantFileAccessToProcess(int process_id,
       ChildProcessSecurityPolicyImpl::GetInstance();
 
   for (const auto& file : file_paths) {
-    if (!policy->CanReadFile(process_id, file))
-      policy->GrantReadFile(process_id, file);
+    // TODO(crbug.com/379869738) Remove FromUnsafeValue.
+    ChildProcessId child_id = ChildProcessId::FromUnsafeValue(process_id);
+    if (!policy->CanReadFile(child_id, file)) {
+      policy->GrantReadFile(child_id, file);
+    }
   }
 }
 
@@ -352,26 +358,32 @@ class ServiceWorkerFetchDispatcher::ResponseCallback
   // Implements blink::mojom::ServiceWorkerFetchResponseCallback.
   void OnResponse(
       blink::mojom::FetchAPIResponsePtr response,
-      blink::mojom::ServiceWorkerFetchEventTimingPtr timing) override {
+      blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) override {
     HandleResponse(fetch_dispatcher_, version_, fetch_event_id_,
                    std::move(response), nullptr /* body_as_stream */,
-                   FetchEventResult::kGotResponse, std::move(timing));
+                   FetchEventResult::kGotResponse, std::move(timing),
+                   std::move(errors));
   }
   void OnResponseStream(
       blink::mojom::FetchAPIResponsePtr response,
       blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-      blink::mojom::ServiceWorkerFetchEventTimingPtr timing) override {
+      blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) override {
     HandleResponse(fetch_dispatcher_, version_, fetch_event_id_,
                    std::move(response), std::move(body_as_stream),
-                   FetchEventResult::kGotResponse, std::move(timing));
+                   FetchEventResult::kGotResponse, std::move(timing),
+                   std::move(errors));
   }
   void OnFallback(
       std::optional<network::DataElementChunkedDataPipe> request_body,
-      blink::mojom::ServiceWorkerFetchEventTimingPtr timing) override {
+      blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) override {
     HandleResponse(fetch_dispatcher_, version_, fetch_event_id_,
                    blink::mojom::FetchAPIResponse::New(),
                    nullptr /* body_as_stream */,
-                   FetchEventResult::kShouldFallback, std::move(timing));
+                   FetchEventResult::kShouldFallback, std::move(timing),
+                   std::move(errors));
   }
 
  private:
@@ -384,7 +396,8 @@ class ServiceWorkerFetchDispatcher::ResponseCallback
       blink::mojom::FetchAPIResponsePtr response,
       blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
       FetchEventResult fetch_result,
-      blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+      blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+      blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) {
     if (!version->FinishRequest(
             fetch_event_id.value(),
             fetch_result == FetchEventResult::kGotResponse)) {
@@ -395,7 +408,7 @@ class ServiceWorkerFetchDispatcher::ResponseCallback
       return;
     fetch_dispatcher->DidFinish(fetch_event_id.value(), fetch_result,
                                 std::move(response), std::move(body_as_stream),
-                                std::move(timing));
+                                std::move(timing), std::move(errors));
   }
 
   mojo::Receiver<blink::mojom::ServiceWorkerFetchResponseCallback> receiver_;
@@ -431,7 +444,7 @@ class ServiceWorkerFetchDispatcher::URLLoaderAssets
   URLLoaderAssets(const URLLoaderAssets&) = delete;
   URLLoaderAssets& operator=(const URLLoaderAssets&) = delete;
 
-  void MaybeReportToDevTools(std::pair<int, int> worker_id,
+  void MaybeReportToDevTools(std::pair<ChildProcessId, int> worker_id,
                              int fetch_event_id) {
     url_loader_client_->MaybeReportToDevTools(worker_id, fetch_event_id);
   }
@@ -469,19 +482,17 @@ ServiceWorkerFetchDispatcher::ServiceWorkerFetchDispatcher(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!request_->blob);
-  TRACE_EVENT_WITH_FLOW1(
-      "ServiceWorker",
-      "ServiceWorkerFetchDispatcher::ServiceWorkerFetchDispatcher",
-      TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_OUT, "event_type",
-      ServiceWorkerMetrics::EventTypeToString(GetEventType()));
+  TRACE_EVENT("ServiceWorker",
+              "ServiceWorkerFetchDispatcher::ServiceWorkerFetchDispatcher",
+              perfetto::Flow::FromPointer(this), "event_type",
+              ServiceWorkerMetrics::EventTypeToString(GetEventType()));
 }
 
 ServiceWorkerFetchDispatcher::~ServiceWorkerFetchDispatcher() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0(
-      "ServiceWorker",
-      "ServiceWorkerFetchDispatcher::~ServiceWorkerFetchDispatcher",
-      TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_IN);
+  TRACE_EVENT("ServiceWorker",
+              "ServiceWorkerFetchDispatcher::~ServiceWorkerFetchDispatcher",
+              perfetto::TerminatingFlow::FromPointer(this));
 }
 
 void ServiceWorkerFetchDispatcher::Run() {
@@ -489,9 +500,8 @@ void ServiceWorkerFetchDispatcher::Run() {
   DCHECK(version_->status() == ServiceWorkerVersion::ACTIVATING ||
          version_->status() == ServiceWorkerVersion::ACTIVATED)
       << version_->status();
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker", "ServiceWorkerFetchDispatcher::Run",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerFetchDispatcher::Run",
+              perfetto::Flow::FromPointer(this));
 
   if (version_->status() == ServiceWorkerVersion::ACTIVATING) {
     version_->RegisterStatusChangeCallback(
@@ -504,19 +514,16 @@ void ServiceWorkerFetchDispatcher::Run() {
 
 void ServiceWorkerFetchDispatcher::DidWaitForActivation() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerFetchDispatcher::DidWaitForActivation",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker",
+              "ServiceWorkerFetchDispatcher::DidWaitForActivation",
+              perfetto::Flow::FromPointer(this));
   StartWorker();
 }
 
 void ServiceWorkerFetchDispatcher::StartWorker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerFetchDispatcher::StartWorker",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerFetchDispatcher::StartWorker",
+              perfetto::Flow::FromPointer(this));
 
   // We might be REDUNDANT if a new worker started activating and kicked us out
   // before we could finish activation.
@@ -546,10 +553,8 @@ void ServiceWorkerFetchDispatcher::StartWorker() {
 void ServiceWorkerFetchDispatcher::DidStartWorker(
     blink::ServiceWorkerStatusCode status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerFetchDispatcher::DidStartWorker",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerFetchDispatcher::DidStartWorker",
+              perfetto::Flow::FromPointer(this));
 
   if (status != blink::ServiceWorkerStatusCode::kOk) {
     DidFail(status);
@@ -566,14 +571,15 @@ void ServiceWorkerFetchDispatcher::DispatchFetchEvent() {
   DCHECK(blink::EmbeddedWorkerStatus::kStarting == version_->running_status() ||
          blink::EmbeddedWorkerStatus::kRunning == version_->running_status())
       << "Worker stopped too soon after it was started.";
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerFetchDispatcher::DispatchFetchEvent",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker",
+              "ServiceWorkerFetchDispatcher::DispatchFetchEvent",
+              perfetto::Flow::FromPointer(this));
   // Grant the service worker's process access to files in the request body.
   if (request_->body) {
-    GrantFileAccessToProcess(version_->embedded_worker()->process_id(),
-                             request_->body->GetReferencedFiles());
+    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
+    GrantFileAccessToProcess(
+        version_->embedded_worker()->process_id().GetUnsafeValue(),
+        request_->body->GetReferencedFiles());
   }
 
   // Run callback to say that the fetch event will be dispatched.
@@ -645,13 +651,12 @@ void ServiceWorkerFetchDispatcher::DidFail(
     blink::ServiceWorkerStatusCode status) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_NE(blink::ServiceWorkerStatusCode::kOk, status);
-  TRACE_EVENT_WITH_FLOW1(
-      "ServiceWorker", "ServiceWorkerFetchDispatcher::DidFail",
-      TRACE_ID_LOCAL(this),
-      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "status", status);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerFetchDispatcher::DidFail",
+              perfetto::Flow::FromPointer(this), "status", status);
   RunCallback(status, FetchEventResult::kShouldFallback,
               blink::mojom::FetchAPIResponse::New(),
-              nullptr /* body_as_stream */, nullptr /* timing */);
+              nullptr /* body_as_stream */, nullptr /* timing */,
+              nullptr /* errors */);
 }
 
 void ServiceWorkerFetchDispatcher::DidFinish(
@@ -659,15 +664,14 @@ void ServiceWorkerFetchDispatcher::DidFinish(
     FetchEventResult fetch_result,
     blink::mojom::FetchAPIResponsePtr response,
     blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+    blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerFetchDispatcher::DidFinish",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerFetchDispatcher::DidFinish",
+              perfetto::Flow::FromPointer(this));
   RunCallback(blink::ServiceWorkerStatusCode::kOk, fetch_result,
-              std::move(response), std::move(body_as_stream),
-              std::move(timing));
+              std::move(response), std::move(body_as_stream), std::move(timing),
+              std::move(errors));
 }
 
 void ServiceWorkerFetchDispatcher::RunCallback(
@@ -675,7 +679,8 @@ void ServiceWorkerFetchDispatcher::RunCallback(
     FetchEventResult fetch_result,
     blink::mojom::FetchAPIResponsePtr response,
     blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
-    blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
+    blink::mojom::ServiceWorkerFetchEventTimingPtr timing,
+    blink::mojom::ServiceWorkerFetchHandlerErrorsPtr errors) {
   // Fetch dispatcher can be completed at this point due to a failure of
   // starting up a worker. In that case, let's simply ignore it.
   if (!fetch_callback_)
@@ -683,7 +688,7 @@ void ServiceWorkerFetchDispatcher::RunCallback(
 
   std::move(fetch_callback_)
       .Run(status, fetch_result, std::move(response), std::move(body_as_stream),
-           std::move(timing), version_);
+           std::move(timing), std::move(errors), version_);
 }
 
 // static
@@ -745,7 +750,8 @@ bool ServiceWorkerFetchDispatcher::MaybeStartNavigationPreload(
       service_worker_client->CreateNetworkURLLoaderFactory(
           ServiceWorkerClient::CreateNetworkURLLoaderFactoryType::
               kNavigationPreload,
-          context_wrapper->storage_partition(), resource_request);
+          context_wrapper->storage_partition(), resource_request,
+          version_->network_restrictions_id());
 
   // Create the DelegatingURLLoaderClient, which becomes the
   // URLLoaderClient for the navigation preload network request.

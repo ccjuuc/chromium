@@ -4,7 +4,9 @@
 
 #include "remoting/host/linux/gnome_desktop_resizer.h"
 
+#include <array>
 #include <functional>
+#include <iterator>
 #include <optional>
 
 #include "base/check.h"
@@ -29,7 +31,6 @@
 #include "remoting/proto/control.pb.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_geometry.h"
-#include "ui/base/glib/gsettings.h"
 
 namespace remoting {
 
@@ -42,15 +43,6 @@ constexpr GnomeDisplayConfig::LayoutMode kPreferredLayoutMode =
 
 constexpr base::TimeDelta kClearPreferredConfigDelay = base::Seconds(5);
 
-// Minimum text scaling factor (inverted if less than 1) required to be applied,
-// meaning the text scale will only be applied if
-// `preferred_scale / best_monitor_scale` is higher than kTextScaleThreshold,
-// or lower than `1 / kTextScaleThreshold`, otherwise it will be reverted to 1.
-// This is to prevent setting the text scale when the monitor scale is close
-// enough to the preferred scale, since a non-1 text scale usually negatively
-// affects how the OS layouts UI elements.
-constexpr double kTextScaleThreshold = 1.25;
-
 inline double InverseIfLessThanOne(double v) {
   return v < 1.0 ? 1.0 / v : v;
 }
@@ -59,18 +51,12 @@ inline double InverseIfLessThanOne(double v) {
 // example, the best scale for 1.5 with supported_scales=[1, 2] is 2, since
 // 2 / 1.5 = 1.33, which is smaller than 1.5 / 1 = 1.5.
 inline double FindBestScale(double preferred_scale,
-                            const std::vector<double>& supported_scales,
-                            bool ignore_fractional_scales) {
+                            const std::vector<double>& supported_scales) {
   DCHECK_GT(preferred_scale, 0.0);
   auto it = std::ranges::min_element(
-      supported_scales,
-      [preferred_scale, ignore_fractional_scales](double s1, double s2) {
+      supported_scales, [preferred_scale](double s1, double s2) {
         DCHECK_GT(s1, 0.0);
         DCHECK_GT(s2, 0.0);
-        if (ignore_fractional_scales && trunc(s1) == s1 && trunc(s2) != s2) {
-          // Make non-fractional scales better than fractional scales.
-          return true;
-        }
         return InverseIfLessThanOne(preferred_scale / s1) <
                InverseIfLessThanOne(preferred_scale / s2);
       });
@@ -78,15 +64,7 @@ inline double FindBestScale(double preferred_scale,
     LOG(ERROR) << "Cannot find best scale for " << preferred_scale;
     return 1.0;
   }
-  if (ignore_fractional_scales && trunc(*it) != *it) {
-    LOG(ERROR) << "Cannot find non-fractional scales";
-    return 1.0;
-  }
   return *it;
-}
-
-inline bool IsSameScale(double s1, double s2) {
-  return std::abs(s1 - s2) < 0.01;
 }
 
 // Note: this method only adds a monitor for the purpose of layout calculation.
@@ -109,11 +87,50 @@ void AddMonitorForLayoutCalculation(GnomeDisplayConfig& config,
   info.modes.push_back(mode);
 }
 
-inline ScopedGObject<GSettings> CreateGsettingsRegistry() {
-  auto registry = ui::GSettingsNew("org.gnome.desktop.interface");
-  CHECK(registry)
-      << "ui::GSettingsNew(\"org.gnome.desktop.interface\") failed.";
-  return registry;
+struct GnomeScale {
+  double scale;
+  int numerator;
+  int denominator;
+};
+
+// Valid GNOME fractional scales in the range [1.0, 4.0], sorted in ascending
+// order.
+//
+// The scale list is filtered based on two constraints:
+// 1. Denominator <= 4: GNOME 49 only supports fractional scales with
+//    denominators up to 4.
+// 2. Numerator <= 7: GNOME 49 does not restrict the numerator, but we cap it
+//    at 7. When adjusting the physical resolution, we round it down to a
+//    multiple of the numerator. Capping the numerator at 7 guarantees that
+//    this rounding-down operation will never reduce the width or height by
+//    more than 6 pixels, ensuring the resulting resolution remains a close
+//    fit for the client's screen size.
+constexpr auto kGnomeScales = std::to_array<GnomeScale>({
+    {1.0, 1, 1},
+    {5.0 / 4.0, 5, 4},
+    {4.0 / 3.0, 4, 3},
+    {3.0 / 2.0, 3, 2},
+    {5.0 / 3.0, 5, 3},
+    {7.0 / 4.0, 7, 4},
+    {2.0, 2, 1},
+    {7.0 / 3.0, 7, 3},
+    {5.0 / 2.0, 5, 2},
+    {3.0, 3, 1},
+    {7.0 / 2.0, 7, 2},
+    {4.0, 4, 1},
+});
+
+int FindBestScaleIndex(double requested_scale) {
+  int best_idx = 0;
+  double best_diff = -1.0;
+  for (size_t i = 0; i < kGnomeScales.size(); ++i) {
+    double diff = InverseIfLessThanOne(requested_scale / kGnomeScales[i].scale);
+    if (best_diff < 0.0 || diff < best_diff) {
+      best_diff = diff;
+      best_idx = i;
+    }
+  }
+  return best_idx;
 }
 
 }  // namespace
@@ -125,7 +142,6 @@ GnomeDesktopResizer::GnomeDesktopResizer(
     : GnomeDesktopResizer(
           stream_manager,
           display_config_monitor,
-          CreateGsettingsRegistry(),
           base::BindRepeating(
               &GnomeDisplayConfigDBusClient::ApplyMonitorsConfig,
               display_config_client)) {}
@@ -133,12 +149,10 @@ GnomeDesktopResizer::GnomeDesktopResizer(
 GnomeDesktopResizer::GnomeDesktopResizer(
     base::WeakPtr<CaptureStreamManager> stream_manager,
     base::WeakPtr<GnomeDisplayConfigMonitor> display_config_monitor,
-    ScopedGObject<GSettings> registry,
     base::RepeatingCallback<void(const GnomeDisplayConfig&)>
         apply_monitors_config)
     : stream_manager_(stream_manager),
-      apply_monitors_config_(apply_monitors_config),
-      registry_(std::move(registry)) {
+      apply_monitors_config_(apply_monitors_config) {
   if (display_config_monitor) {
     monitors_changed_subscription_ = display_config_monitor->AddCallback(
         base::BindRepeating(&GnomeDesktopResizer::OnGnomeDisplayConfigReceived,
@@ -162,8 +176,7 @@ ScreenResolution GnomeDesktopResizer::GetCurrentResolution(
     return {};
   }
 
-  double text_scaling_factor = GetTextScalingFactor();
-  double dpi = kDefaultDpi * text_scaling_factor;
+  double dpi = kDefaultDpi;
   auto monitor_it = current_display_config_.FindMonitor(screen_id);
   if (monitor_it == current_display_config_.monitors.end()) {
     LOG(ERROR) << "Cannot find monitor with screen ID: " << screen_id;
@@ -176,15 +189,64 @@ ScreenResolution GnomeDesktopResizer::GetCurrentResolution(
 std::list<ScreenResolution> GnomeDesktopResizer::GetSupportedResolutions(
     const ScreenResolution& preferred,
     webrtc::ScreenId screen_id) {
-  // TODO: crbug.com/431816005 - clamp scale to the supported range of
-  // text-scaling-factor. Also, the effective scale of non-primary displays are
-  // dictated by the preferred scale of the primary display, which may need to
-  // be reflected here.
-  return {preferred};
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (preferred.dimensions().width() <= 0 ||
+      preferred.dimensions().height() <= 0) {
+    return {preferred};
+  }
+
+  double requested_scale = 1.0;
+  if (preferred.dpi().x() > 0) {
+    requested_scale = static_cast<double>(preferred.dpi().x()) / kDefaultDpi;
+  }
+
+  int best_idx = FindBestScaleIndex(requested_scale);
+
+  for (int i = best_idx; i >= 0; --i) {
+    const auto& candidate = kGnomeScales[i];
+    if (candidate.scale == 1.0) {
+      // 1.0 is always supported, and we don't need to tweak the resolution.
+      return {
+          ScreenResolution(preferred.dimensions(), {kDefaultDpi, kDefaultDpi})};
+    }
+
+    int w = preferred.dimensions().width();
+    int h = preferred.dimensions().height();
+    int rounded_w = w - (w % candidate.numerator);
+    int rounded_h = h - (h % candidate.numerator);
+
+    int logical_w = (rounded_w * candidate.denominator) / candidate.numerator;
+    int logical_h = (rounded_h * candidate.denominator) / candidate.numerator;
+
+    // GNOME enforces a minimum logical area of 600x600 (360,000 pixels).
+    if (logical_w * logical_h >= 360000) {
+      int dpi = static_cast<int>(candidate.scale * kDefaultDpi);
+      return {ScreenResolution({rounded_w, rounded_h}, {dpi, dpi})};
+    }
+  }
+
+  // Fallback to satisfy the compiler. This is unreachable because the loop
+  // is guaranteed to return when it reaches the 1.0x scale (which is always
+  // supported).
+  return {ScreenResolution(preferred.dimensions(), {kDefaultDpi, kDefaultDpi})};
 }
 
 void GnomeDesktopResizer::SetResolution(const ScreenResolution& resolution,
                                         webrtc::ScreenId screen_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (block_and_queue_display_changes_) {
+    pending_requests_.push_back(
+        base::BindOnce(&GnomeDesktopResizer::DoSetResolution,
+                       weak_ptr_factory_.GetWeakPtr(), resolution, screen_id));
+  } else {
+    DoSetResolution(resolution, screen_id);
+  }
+}
+
+void GnomeDesktopResizer::DoSetResolution(const ScreenResolution& resolution,
+                                          webrtc::ScreenId screen_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // Sometimes the client will send multiple SetResolution requests. The display
@@ -195,10 +257,17 @@ void GnomeDesktopResizer::SetResolution(const ScreenResolution& resolution,
     preferred_layout_ = current_display_config_.GetLayoutInfo();
     MaybeDelayClearPreferredConfig();
   }
+
+  ScreenResolution clamped_resolution = ScreenResolution(
+      webrtc::DesktopSize(std::max(640, resolution.dimensions().width()),
+                          std::max(480, resolution.dimensions().height())),
+      resolution.dpi());
+
   // Note: When changing a monitor's resolution via PipeWire, the monitor order
   // will also be reset. We could try to preserve the monitor order, but that
   // will cause existing apps to act strangely. See crbug.com/441824091.
-  SetResolutionAndPosition(resolution, /*position=*/std::nullopt, screen_id);
+  SetResolutionAndPosition(clamped_resolution, /*position=*/std::nullopt,
+                           screen_id);
 }
 
 void GnomeDesktopResizer::RestoreResolution(const ScreenResolution& original,
@@ -209,35 +278,24 @@ void GnomeDesktopResizer::RestoreResolution(const ScreenResolution& original,
 void GnomeDesktopResizer::SetVideoLayout(const protocol::VideoLayout& layout) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (block_and_queue_display_changes_) {
+    // We can clear the pending requests since all the previous
+    // SetResolution/SetVideoLayout calls will become irrelevant.
+    pending_requests_.clear();
+    pending_requests_.push_back(
+        base::BindOnce(&GnomeDesktopResizer::DoSetVideoLayout,
+                       weak_ptr_factory_.GetWeakPtr(), layout));
+  } else {
+    DoSetVideoLayout(layout);
+  }
+}
+
+void GnomeDesktopResizer::DoSetVideoLayout(
+    const protocol::VideoLayout& layout) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   if (!stream_manager_) {
     return;
-  }
-  auto active_screen_ids = base::MakeFlatSet<webrtc::ScreenId>(
-      stream_manager_->GetActiveStreams(), std::less<>(),
-      [](const auto& kv) { return kv.first; });
-  base::flat_set<webrtc::ScreenId> screen_ids_in_video_track;
-  for (const auto& track : layout.video_track()) {
-    if (track.has_screen_id()) {
-      screen_ids_in_video_track.emplace(track.screen_id());
-    }
-  }
-  auto streams_to_be_removed =
-      base::STLSetDifference<base::flat_set<webrtc::ScreenId>>(
-          active_screen_ids, screen_ids_in_video_track);
-  if (!streams_to_be_removed.empty()) {
-    if (!streams_being_removed_.empty()) {
-      LOG(WARNING) << "Streams will not be removed since there are already "
-                   << "streams being removed.";
-    } else {
-      // Set `streams_being_removed_` beforehand so that the
-      // SetResolutionAndPosition() calls below know whether they should be
-      // queued up or executed right away.
-      streams_being_removed_ = streams_to_be_removed;
-      for (webrtc::ScreenId stream_id : streams_being_removed_) {
-        stream_manager_->RemoveVirtualStream(stream_id);
-        preferred_monitors_config_.erase(stream_id);
-      }
-    }
   }
 
   // `display_config_for_layout_calculation` is just for calculating the
@@ -259,7 +317,62 @@ void GnomeDesktopResizer::SetVideoLayout(const protocol::VideoLayout& layout) {
           GnomeDisplayConfig::LayoutMode::kPhysical;
       break;
   }
+
+  // Compute the set of available screen ids as those that already exist, but
+  // are not present in the video layout. When processing new streams, these
+  // will be used in preference to creating new virtual monitors in order to
+  // minimize monitor layout changes.
+  auto active_screen_ids = base::MakeFlatSet<webrtc::ScreenId>(
+      stream_manager_->GetActiveStreams(), std::less<>(),
+      [](const auto& kv) { return kv.first; });
+  base::flat_set<webrtc::ScreenId> screen_ids_in_video_track;
   for (const auto& track : layout.video_track()) {
+    if (track.has_screen_id()) {
+      screen_ids_in_video_track.emplace(track.screen_id());
+    }
+  }
+  auto available_screen_ids =
+      base::STLSetDifference<base::flat_set<webrtc::ScreenId>>(
+          active_screen_ids, screen_ids_in_video_track);
+
+  // Process displays according to whether they should be created or updated.
+  std::vector<protocol::VideoTrackLayout> displays;
+
+  for (auto track : layout.video_track()) {
+    // An update request for a non-existent screen is equivalent to a create
+    // request. Clear the screen id to indicate this (we can't guarantee that
+    // the requested id will be used anyway).
+    if (track.has_screen_id() &&
+        !active_screen_ids.contains(track.screen_id())) {
+      track.clear_screen_id();
+    }
+    // Reuse existing screen ids if possible.
+    if (!track.has_screen_id() && !available_screen_ids.empty()) {
+      auto it = available_screen_ids.begin();
+      track.set_screen_id(*it);
+      available_screen_ids.erase(it);
+    }
+    displays.push_back(std::move(track));
+  }
+
+  // Any available screens that haven't been reused should be removed first to
+  // ensure that `streams_being_removed_` is accurate, which allows the
+  // SetResolutionAndPosition() calls to know whether they should be queued up
+  // or executed right away.
+  if (!available_screen_ids.empty()) {
+    if (!streams_being_removed_.empty()) {
+      LOG(WARNING) << "Streams will not be removed since there are already "
+                   << "streams being removed.";
+    } else {
+      streams_being_removed_ = available_screen_ids;
+      for (webrtc::ScreenId stream_id : streams_being_removed_) {
+        stream_manager_->RemoveVirtualStream(stream_id);
+        preferred_monitors_config_.erase(stream_id);
+      }
+    }
+  }
+
+  for (const auto& track : displays) {
     // The client doesn't seem to set the initial DPI, so we set it to 1 if
     // the calculated scale is 0. This allows the correct scale to be used if
     // the client later decides to send the initial DPI.
@@ -273,16 +386,34 @@ void GnomeDesktopResizer::SetVideoLayout(const protocol::VideoLayout& layout) {
             ? scale
             : 1.0;
 
-    webrtc::DesktopSize physical_resolution{
+    webrtc::DesktopSize original_physical_resolution{
         static_cast<int>(track.width() * physical_resolution_multiplier),
         static_cast<int>(track.height() * physical_resolution_multiplier)};
+    ScreenResolution original_screen_resolution{original_physical_resolution,
+                                                {track.x_dpi(), track.y_dpi()}};
+
+    webrtc::DesktopSize physical_resolution = original_physical_resolution;
+    physical_resolution.set(std::max(640, physical_resolution.width()),
+                            std::max(480, physical_resolution.height()));
     ScreenResolution screen_resolution{physical_resolution,
                                        {track.x_dpi(), track.y_dpi()}};
+    screen_resolution =
+        GetSupportedResolutions(
+            screen_resolution, track.has_screen_id() ? track.screen_id()
+                                                     : webrtc::kInvalidScreenId)
+            .front();
+    scale = static_cast<double>(screen_resolution.dpi().x()) / kDefaultDpi;
+    if (scale == 0.0) {
+      scale = 1.0;
+    }
+    physical_resolution = screen_resolution.dimensions();
     // If a physical layout is passed, the position will be invalid but the
     // Relayout() call in DoApplyPreferredMonitorsConfig() will fix it.
     webrtc::DesktopVector position{track.position_x(), track.position_y()};
 
-    if (!track.has_screen_id()) {
+    if (track.has_screen_id()) {
+      SetResolutionAndPosition(screen_resolution, position, track.screen_id());
+    } else {
       stream_manager_->AddVirtualStream(
           screen_resolution,
           base::BindOnce(&GnomeDesktopResizer::OnAddStreamResult,
@@ -292,11 +423,13 @@ void GnomeDesktopResizer::SetVideoLayout(const protocol::VideoLayout& layout) {
                              .position = position,
                              .scale = scale,
                          }));
-    } else {
-      SetResolutionAndPosition(screen_resolution, position, track.screen_id());
     }
+    // |display_config_for_layout_calculation| is only used to calculate the
+    // layout direction and alignment, which is used--with the clamped sizes
+    // and positions--to pack the displays later. Since the packed displays
+    // may not form a valid layout, we use the original screen resolution here.
     AddMonitorForLayoutCalculation(display_config_for_layout_calculation,
-                                   position, screen_resolution);
+                                   position, original_screen_resolution);
   }
   preferred_layout_ = display_config_for_layout_calculation.GetLayoutInfo();
   MaybeDelayClearPreferredConfig();
@@ -304,6 +437,20 @@ void GnomeDesktopResizer::SetVideoLayout(const protocol::VideoLayout& layout) {
 
 base::WeakPtr<GnomeDesktopResizer> GnomeDesktopResizer::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
+}
+
+void GnomeDesktopResizer::BlockAndQueueDisplayChanges() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  block_and_queue_display_changes_ = true;
+}
+
+void GnomeDesktopResizer::UnblockAndFlushDisplayChanges() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  block_and_queue_display_changes_ = false;
+  for (auto& request : pending_requests_) {
+    std::move(request).Run();
+  }
+  pending_requests_.clear();
 }
 
 void GnomeDesktopResizer::SetResolutionAndPosition(
@@ -444,12 +591,6 @@ void GnomeDesktopResizer::DoApplyPreferredMonitorsConfig() {
   // desired scales and positions, in which case we don't want to apply the
   // display config, since it would show a confirmation dialog.
   GnomeDisplayConfig new_config = current_display_config_;
-  // There is a bug in mutter such that fractional scales may be reported as
-  // supported but will fail to be applied when there are multiple virtual
-  // monitors, so we ignore fractional scales in that case.
-  // See: https://gitlab.gnome.org/GNOME/mutter/-/issues/4277
-  bool ignore_fractional_scales =
-      ignore_fractional_scales_in_multimon_ && new_config.monitors.size() > 1;
   bool config_changed = false;
   // Code below will early return if not all expected resolution changes have
   // been reflected in the display config.
@@ -479,19 +620,10 @@ void GnomeDesktopResizer::DoApplyPreferredMonitorsConfig() {
       config_changed = true;
     }
     double best_monitor_scale = FindBestScale(
-        preferred_config.scale, monitor.GetCurrentMode()->supported_scales,
-        ignore_fractional_scales);
+        preferred_config.scale, monitor.GetCurrentMode()->supported_scales);
     if (monitor.scale != best_monitor_scale) {
       monitor.scale = best_monitor_scale;
       config_changed = true;
-    }
-    // For the primary monitor, we correct the effective scale by applying
-    // a text scale. We can't do this for all monitors, since the text scale
-    // is globally applied, so we only do this for the primary monitor.
-    // Note: an integer scale is usually supported, so this is usually only
-    // applied when the client requests a fractional scale for a monitor.
-    if (monitor.is_primary) {
-      SetTextScalingFactor(preferred_config.scale / best_monitor_scale);
     }
   }
 
@@ -560,28 +692,6 @@ void GnomeDesktopResizer::MaybeDelayClearPreferredConfig() {
 
   if (clear_preferred_config_timer_.IsRunning()) {
     clear_preferred_config_timer_.Reset();
-  }
-}
-
-double GnomeDesktopResizer::GetTextScalingFactor() const {
-  if (!registry_) {
-    return 1.0;
-  }
-  return g_settings_get_double(registry_.get(), "text-scaling-factor");
-}
-
-void GnomeDesktopResizer::SetTextScalingFactor(double text_scaling_factor) {
-  if (!registry_) {
-    return;
-  }
-  if (InverseIfLessThanOne(text_scaling_factor) < kTextScaleThreshold) {
-    // Revert text scale to 1 if it doesn't exceed the threshold.
-    text_scaling_factor = 1.0;
-  }
-  if (!IsSameScale(GetTextScalingFactor(), text_scaling_factor) &&
-      !g_settings_set_double(registry_.get(), "text-scaling-factor",
-                             text_scaling_factor)) {
-    LOG(ERROR) << "Failed to set text-scaling-factor";
   }
 }
 

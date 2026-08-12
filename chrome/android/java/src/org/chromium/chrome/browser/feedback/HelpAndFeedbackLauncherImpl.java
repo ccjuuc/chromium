@@ -4,12 +4,12 @@
 
 package org.chromium.chrome.browser.feedback;
 
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalBookmarksUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalHistoryUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeHistoryUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeBookmarksUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeHistoryUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpUrl;
 
 import android.app.Activity;
 import android.content.Context;
@@ -26,9 +26,10 @@ import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileKeyedMap;
-import org.chromium.components.embedder_support.util.UrlUtilitiesJni;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 
 import java.util.Map;
 
@@ -52,7 +53,7 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
 
         if (sProfileToLauncherMap == null) {
             sProfileToLauncherMap =
-                    new ProfileKeyedMap<>(ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+                    new ProfileKeyedMap<>(ProfileKeyedMap.noRequiredCleanupAction());
         }
         return sProfileToLauncherMap.getForProfile(profile, HelpAndFeedbackLauncherImpl::new);
     }
@@ -80,11 +81,15 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
     @Override
     public void show(final Activity activity, final String helpContext, @Nullable String url) {
         RecordUserAction.record("MobileHelpAndFeedback");
+        ScreenshotTask screenshotTask =
+                FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()
+                        ? new ScreenshotTask(activity)
+                        : null;
         new ChromeFeedbackCollector(
                 activity,
                 /* categoryTag= */ null,
                 /* description= */ null,
-                new ScreenshotTask(activity),
+                screenshotTask,
                 new ChromeFeedbackCollector.InitParams(mProfile, url, helpContext),
                 collector -> mDelegate.show(activity, helpContext, collector),
                 mProfile);
@@ -93,8 +98,12 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
     /**
      * Starts an activity prompting the user to enter feedback.
      *
+     * <p>Note: Please check the isUserFeedbackAllowed policy (via {@link
+     * FeedbackPolicyManager#isUserFeedbackAllowed()}) when adding a UI entry to send feedback. See
+     * crbug.com/467060116 for more details.
+     *
      * @param activity The activity to use for starting the feedback activity and to take a
-     *                 screenshot of.
+     *     screenshot of.
      * @param url the current URL. May be null.
      * @param categoryTag The category that this feedback report falls under.
      * @param screenshotMode The kind of screenshot to include with the feedback.
@@ -107,6 +116,10 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
             @Nullable final String categoryTag,
             @ScreenshotMode int screenshotMode,
             @Nullable final String feedbackContext) {
+        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            reportDisabledFeedbackRequest();
+            return;
+        }
         long startTime = SystemClock.elapsedRealtime();
         new ChromeFeedbackCollector(
                 activity,
@@ -126,8 +139,12 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
     /**
      * Starts an activity prompting the user to enter feedback.
      *
+     * <p>Note: Please check the isUserFeedbackAllowed policy (via {@link
+     * FeedbackPolicyManager#isUserFeedbackAllowed()}) when adding a UI entry to send feedback. See
+     * crbug.com/467060116 for more details.
+     *
      * @param activity The activity to use for starting the feedback activity and to take a
-     *                 screenshot of.
+     *     screenshot of.
      * @param url the current URL. May be null.
      * @param categoryTag The category that this feedback report falls under.
      */
@@ -140,8 +157,12 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
     /**
      * Starts an activity prompting the user to enter feedback for the interest feed.
      *
+     * <p>Note: Please check the isUserFeedbackAllowed policy (via {@link
+     * FeedbackPolicyManager#isUserFeedbackAllowed()}) when adding a UI entry to send feedback. See
+     * crbug.com/467060116 for more details.
+     *
      * @param activity The activity to use for starting the feedback activity and to take a
-     *                 screenshot of.
+     *     screenshot of.
      * @param categoryTag The category that this feedback report falls under.
      * @param feedContext Feed specific parameters (url, title, etc) to include with feedback.
      */
@@ -151,6 +172,10 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
             @Nullable String url,
             @Nullable final String categoryTag,
             @Nullable final Map<String, String> feedContext) {
+        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            reportDisabledFeedbackRequest();
+            return;
+        }
         new FeedFeedbackCollector(
                 activity,
                 categoryTag,
@@ -172,24 +197,37 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
         if (TextUtils.isEmpty(url)) {
             return context.getString(R.string.help_context_general);
         } else if (url.startsWith(getOriginalNativeBookmarksUrl())
-                || url.startsWith(getOriginalNonNativeBookmarksUrl())) {
+                || url.startsWith(getOriginalBookmarksUrl())) {
             return context.getString(R.string.help_context_bookmarks);
         } else if (url.equals(getOriginalNativeHistoryUrl())
-                || url.equals(getOriginalNonNativeHistoryUrl())) {
+                || url.equals(getOriginalHistoryUrl())) {
             return context.getString(R.string.help_context_history);
         }
         // Note: For www.google.com the following function returns false.
-        else if (UrlUtilitiesJni.get().isGoogleSearchUrl(url)) {
+        else if (UrlUtilities.isGoogleSearchUrl(url)) {
             return context.getString(R.string.help_context_search_results);
         }
         // For incognito NTP, we want to show incognito help.
         else if (isIncognito) {
             return context.getString(R.string.help_context_incognito);
-        } else if (url.equals(getOriginalNativeNtpUrl())
-                || url.equals(getOriginalNonNativeNtpUrl())) {
+        } else if (url.equals(getOriginalNativeNtpUrl()) || url.equals(getOriginalNtpUrl())) {
             return context.getString(R.string.help_context_new_tab);
         }
         return context.getString(R.string.help_context_webpage);
+    }
+
+    /**
+     * Helper to show help and feedback for a given URL and record a user action.
+     *
+     * @param activity The activity to use for starting the help activity.
+     * @param url The current URL.
+     * @param recordAction The user action to record.
+     */
+    @Override
+    public void showHelpAndFeedbackForUrl(Activity activity, String url, String recordAction) {
+        String helpContextId = getHelpContextIdFromUrl(activity, url, mProfile.isOffTheRecord());
+        show(activity, helpContextId, url);
+        RecordUserAction.record(recordAction);
     }
 
     protected static void launchFallbackSupportUri(Context context) {
@@ -200,5 +238,13 @@ public class HelpAndFeedbackLauncherImpl implements HelpAndFeedbackLauncher {
         intent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
         intent.setPackage(context.getPackageName());
         context.startActivity(intent);
+    }
+
+    private void reportDisabledFeedbackRequest() {
+        Throwable throwable =
+                new Throwable(
+                        "Feedback requested when disallowed by policy. This is not a crash. See"
+                                + " https://crbug.com/467060116 for details.");
+        ChromePureJavaExceptionReporter.reportJavaException(throwable);
     }
 }

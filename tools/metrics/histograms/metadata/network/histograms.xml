@@ -69,25 +69,6 @@ chromium-metrics-reviews@google.com.
   <variant name="SuspendResume"/>
 </variants>
 
-<variants name="HTTPRequestConnectionProtocol">
-  <variant name="Multiplexed"/>
-  <variant name="Simple"/>
-</variants>
-
-<variants name="HTTPRequestMethod">
-  <variant name="Get"/>
-</variants>
-
-<variants name="HTTPRequestResult">
-  <variant name="ClientError"/>
-  <variant name="ServerError"/>
-  <variant name="Success"/>
-</variants>
-
-<variants name="HTTPRequestType">
-  <variant name="MainFrame"/>
-</variants>
-
 <variants name="IPsecVPNType">
   <variant name="Ikev2" summary="IKEv2"/>
   <variant name="L2tpIpsec" summary="L2TP/IPsec"/>
@@ -130,7 +111,7 @@ chromium-metrics-reviews@google.com.
   <variant name="Throttled"/>
 </variants>
 
-<!-- LINT.ThenChange(//services/network/scheduler/network_service_task_queues.cc:PriorityToString) -->
+<!-- LINT.ThenChange(//net/base/scheduler/net_task_queues.cc:PriorityToString) -->
 
 <!-- LINT.IfChange(RequestPriority) -->
 
@@ -939,18 +920,6 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
-<histogram name="Network.Ash.WiFi.WeakestLoginConnectionAvailability"
-    enum="WiFiSecurityType" expires_after="2025-07-01">
-  <owner>skuhne@chromium.org</owner>
-  <owner>rbock@google.com</owner>
-  <summary>
-    Logs the weakest security type for a connectable, configured and available
-    wireless network while the user logs in.
-
-    Note: This histogram is needed for managed migration related research.
-  </summary>
-</histogram>
-
 <histogram name="Network.Ash.WiFiDirect.CapabilitiesWhenUpgrade"
     enum="WifiP2PCapabilities" expires_after="2026-12-01">
   <owner>jiajunz@google.com</owner>
@@ -1034,7 +1003,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Ash.{NetworkType}.ConnectionResult.{Filtering}"
-    enum="ShillConnectResult" expires_after="2026-12-01">
+    enum="ShillConnectResult" expires_after="2027-01-31">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1118,6 +1087,34 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
+<histogram name="Network.BrokeredTcpClientSocket.SocketCreationTime"
+    units="microseconds" expires_after="2026-03-30">
+  <owner>ricea@chromium.org</owner>
+  <owner>src/net/OWNERS</owner>
+  <summary>
+    The time elapsed between the start of a brokered TCP socket creation request
+    and when the socket is received by the network service. This is recorded
+    once for every brokered TCP socket that is created.
+
+    The histogram is not reported on Windows machines without high resolution
+    clocks.
+  </summary>
+</histogram>
+
+<histogram name="Network.BrokeredUdpClientSocket.SocketCreationTime"
+    units="microseconds" expires_after="2026-03-30">
+  <owner>ricea@chromium.org</owner>
+  <owner>src/net/OWNERS</owner>
+  <summary>
+    The time elapsed between the start of a brokered UDP socket creation request
+    and when the socket is received by the network service. This is recorded
+    once for every brokered UDP socket that is created.
+
+    The histogram is not reported on Windows machines without high resolution
+    clocks.
+  </summary>
+</histogram>
+
 <histogram name="Network.CaptivePortalResult" enum="CaptivePortalNetworkState"
     expires_after="2026-12-31">
   <owner>stevenjb@chromium.org</owner>
@@ -1129,7 +1126,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.Apn.UseAttachApnOnSave" enum="Boolean"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1141,8 +1138,8 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Network.Cellular.CarrierLock.ConfigurationStateAfterInitialization"
-    enum="CellularCarrierLockInitialState" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockInitialState" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted each time Carrier Lock Manager was successfully initialized and a
@@ -1152,8 +1149,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.Error.{ErrorType}"
-    enum="CellularCarrierLockError" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockError" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted every time the error occurs during manager initialization, modem
@@ -1169,8 +1166,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.FcmCommunicationResult"
-    enum="CellularCarrierLockFcmResult" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockFcmResult" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted each time registration or subscription to FCM topic was successful.
@@ -1178,15 +1175,15 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.FcmNotificationType"
-    enum="CellularCarrierLockFcmNotification" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockFcmNotification" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>Emitted on every notification received from FCM service.</summary>
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.Initialization.{Trigger}"
-    units="count" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    units="count" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted every time the Initialization step is triggered. Reports number of
@@ -1201,8 +1198,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.LockState"
-    enum="CellularCarrierLockLockState" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockLockState" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted when the property SimLockStatus was updated. State of LockType will
@@ -1213,16 +1210,16 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.ModemConfigurationResult"
-    enum="CellularCarrierLockConfigurationResult" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockConfigurationResult" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>Emitted each time the modem was successfully configured.</summary>
 </histogram>
 
 <histogram
     name="Network.Cellular.CarrierLock.NumConsecutiveConfigurationFailures"
-    units="count" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    units="count" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emits current number of failures every time the error counter (any cause of
@@ -1233,8 +1230,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.ProvisioningServerResponse"
-    enum="CellularCarrierLockProvisioningResult" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockProvisioningResult" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted each time lock configuration was downloaded from Provisioning
@@ -1243,8 +1240,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.PsmClaimResponse"
-    enum="CellularCarrierLockPsmResult" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    enum="CellularCarrierLockPsmResult" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted each time PSM service was requested about device membership.
@@ -1252,8 +1249,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.CarrierLock.{ConsecutiveFailuresType}"
-    units="count" expires_after="2026-05-15">
-  <owner>michamazur@google.com</owner>
+    units="count" expires_after="2027-04-05">
+  <owner>ujjwalpande@google.com</owner>
   <owner>cros-cellular-core@google.com</owner>
   <summary>
     Emitted when the modem was successfully locked or unlocked. It reports the
@@ -1266,7 +1263,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.DisableProfile.Result"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1278,7 +1275,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.EnableProfile.Result"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1290,7 +1287,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Installation.NonUserErrorSuccessRate"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>nikhilcn@chromium.org</owner>
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
@@ -1307,7 +1304,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.InstallPendingProfile.Result"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1323,7 +1320,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.InstallViaQrCode.DBusResult"
-    enum="DBusResult" expires_after="2026-12-01">
+    enum="DBusResult" expires_after="2027-04-05">
   <owner>nikhilcn@chromium.org</owner>
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
@@ -1336,7 +1333,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.InstallViaQrCode.Result{OperationType}"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1356,7 +1353,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.BlockNonManagedCellularBehavior"
-    enum="NetworkBlockNonManagedCellularBehavior" expires_after="2026-12-01">
+    enum="NetworkBlockNonManagedCellularBehavior" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1368,7 +1365,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.ConnectionResult.All"
-    enum="ShillCellularConnectResult" expires_after="2026-12-01">
+    enum="ShillCellularConnectResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
@@ -1381,7 +1378,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.Disconnections"
-    enum="NetworkCellularConnectionState" expires_after="2026-12-01">
+    enum="NetworkCellularConnectionState" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1391,7 +1388,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.EuiccStatusUploadResult"
-    enum="BooleanSuccess" expires_after="2026-12-01">
+    enum="BooleanSuccess" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1404,7 +1401,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.ResetEuicc.Duration" units="ms"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1413,7 +1410,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.ResetEuicc.Result"
-    enum="NetworkCellularResetEuiccResult" expires_after="2026-12-01">
+    enum="NetworkCellularResetEuiccResult" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1425,7 +1422,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.ServiceAtLogin.Count"
-    units="units" expires_after="2026-12-01">
+    units="units" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1435,7 +1432,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.StatusAtLogin"
-    enum="NetworkESimPolicyStatusAtLogin" expires_after="2026-12-01">
+    enum="NetworkESimPolicyStatusAtLogin" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1448,7 +1445,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.Usage.Count"
-    enum="NetworkCellularUsage" expires_after="2026-12-01">
+    enum="NetworkCellularUsage" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1458,7 +1455,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Policy.Usage.Duration" units="seconds"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
@@ -1469,7 +1466,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.ProfileDownload.ActivationCode.Latency"
-    units="ms" expires_after="2026-12-01">
+    units="ms" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1482,7 +1479,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.ProfileDownload.PendingProfile.Latency"
-    units="ms" expires_after="2026-12-01">
+    units="ms" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1491,21 +1488,21 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.ProfileRenameResult"
-    enum="BooleanSuccess" expires_after="2026-12-01">
+    enum="BooleanSuccess" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>Tracks the rate of success of setting a profile nickname.</summary>
 </histogram>
 
 <histogram name="Network.Cellular.ESim.ProfileUninstallationResult"
-    enum="BooleanSuccess" expires_after="2026-12-01">
+    enum="BooleanSuccess" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>Tracks the rate of success of uninstalling a profile.</summary>
 </histogram>
 
 <histogram name="Network.Cellular.ESim.RefreshInstalledProfilesLatency"
-    units="ms" expires_after="2026-12-01">
+    units="ms" expires_after="2027-04-05">
   <owner>nikhilcn@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1517,7 +1514,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Cellular.ESim.RequestPendingProfiles.OperationResult"
     enum="NetworkCellularESimRequestPendingProfilesResult"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1531,7 +1528,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.SetupFlowResult"
-    enum="ESimSetupFlowResult" expires_after="2026-12-01">
+    enum="ESimSetupFlowResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1540,7 +1537,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.StatusAtLogin"
-    enum="NetworkCellularESimProfileStatus" expires_after="2026-12-01">
+    enum="NetworkCellularESimProfileStatus" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1551,7 +1548,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Cellular.ESim.UninstallProfile.OperationResult"
     enum="NetworkCellularESimUninstallOperationResult"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1564,7 +1561,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.UninstallProfile.Result"
-    enum="HermesResponseStatus" expires_after="2026-12-01">
+    enum="HermesResponseStatus" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1574,7 +1571,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.ESim.Usage.Count" enum="NetworkCellularUsage"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1584,7 +1581,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.InhibitResult"
-    enum="NetworkCellularInhibitResult" expires_after="2026-12-01">
+    enum="NetworkCellularInhibitResult" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1595,7 +1592,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.Pin.{SimPinOperation}"
-    enum="SimPinOperationResult" expires_after="2026-12-01">
+    enum="SimPinOperationResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1621,7 +1618,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.PrepareCellularConnection.OperationResult"
-    enum="NetworkCellularPrepareForConnectionResult" expires_after="2026-12-01">
+    enum="NetworkCellularPrepareForConnectionResult" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1634,7 +1631,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.PSim.OtaActivationResult"
-    enum="NetworkCellularPSimActivationResult" expires_after="2026-12-01">
+    enum="NetworkCellularPSimActivationResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1644,7 +1641,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.PSim.SetupFlowResult"
-    enum="PSimSetupFlowResult" expires_after="2026-12-01">
+    enum="PSimSetupFlowResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1654,7 +1651,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.PSim.StatusAtLogin"
-    enum="NetworkCellularPSimActivationState" expires_after="2026-12-01">
+    enum="NetworkCellularPSimActivationState" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1664,7 +1661,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.PSim.Usage.Count" enum="NetworkCellularUsage"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1674,7 +1671,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimPinOperation}.SimPINLockPolicy"
-    enum="BooleanEnabled" expires_after="2026-12-01">
+    enum="BooleanEnabled" expires_after="2027-04-05">
   <owner>nikhilcn@chromium.org</owner>
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
@@ -1691,7 +1688,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.CellularSetup.{Result}.Duration"
-    units="ms" expires_after="2026-12-01">
+    units="ms" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1709,7 +1706,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.ConnectionResult.All"
-    enum="ShillCellularConnectResult" expires_after="2026-12-01">
+    enum="ShillCellularConnectResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1728,7 +1725,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.ConnectionResult.UserInitiated"
-    enum="UserInitiatedCellularConnectResult" expires_after="2026-12-01">
+    enum="UserInitiatedCellularConnectResult" expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1743,7 +1740,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.DisconnectByPolicy.Result"
-    enum="BooleanSuccess" expires_after="2026-12-01">
+    enum="BooleanSuccess" expires_after="2027-04-05">
   <owner>jiajunz@google.com</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1757,7 +1754,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.Disconnections"
-    enum="NetworkCellularConnectionState" expires_after="2026-12-01">
+    enum="NetworkCellularConnectionState" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1772,7 +1769,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.ServiceAtLoginCount{PolicyState}"
-    units="units" expires_after="2026-12-01">
+    units="units" expires_after="2027-04-05">
   <owner>khorimoto@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1793,7 +1790,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.TimeToConnected" units="ms"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1807,7 +1804,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Cellular.{SimType}.Usage.Duration" units="seconds"
-    expires_after="2026-12-01">
+    expires_after="2027-04-05">
   <owner>hsuregan@chromium.org</owner>
   <owner>cros-device-enablement@google.com</owner>
   <summary>
@@ -1822,7 +1819,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Network.ContentDecodingInterceptor.CreateDataPipeSuccess.{ContentDecodingInterceptorClientType}"
-    enum="Boolean" expires_after="2026-04-26">
+    enum="Boolean" expires_after="2026-11-29">
   <owner>horo@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -1832,6 +1829,26 @@ chromium-metrics-reviews@google.com.
     decoded, or content decoding is intercepted for downloads initiated via
     navigation or for Signed Exchange (SXG) responses and when
     RendererSideContentDecoding feature is enabled.
+  </summary>
+  <token key="ContentDecodingInterceptorClientType"
+      variants="ContentDecodingInterceptorClientType"/>
+</histogram>
+
+<histogram
+    name="Network.ContentDecodingInterceptor.CreateDataPipeSuccessTime.{ContentDecodingInterceptorClientType}"
+    units="microseconds" expires_after="2026-11-29">
+  <owner>horo@chromium.org</owner>
+  <owner>blink-network-stack@google.com</owner>
+  <summary>
+    The time taken to create the Mojo data pipe used between the decoding thread
+    and the data receiving thread for the RendererSideContentDecoding feature.
+    Recorded whenever the renderer process successfully creates the data pipe
+    for a resource that needs to be decoded, or content decoding is intercepted
+    for downloads initiated via navigation or for Signed Exchange (SXG)
+    responses and when RendererSideContentDecoding feature is enabled.
+
+    The histogram is not reported on Windows machines without high resolution
+    clocks.
   </summary>
   <token key="ContentDecodingInterceptorClientType"
       variants="ContentDecodingInterceptorClientType"/>
@@ -2135,6 +2152,20 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
+<histogram name="Network.GlobalPrivacyControlSource.Subsampled"
+    enum="GPCSignalSourceType" expires_after="2026-12-31">
+  <owner>arichiv@chromium.org</owner>
+  <owner>zalmashni@google.com</owner>
+  <summary>
+    During request initialization, this metric records the source of each
+    outgoing HTTP(S) request that had the Sec-GPC header set, categorized by the
+    type of the request.
+
+    Logged each time the Sec-GPC header is attached to an outgoing request,
+    during request finalization. Subsampled to one out of one thousand times.
+  </summary>
+</histogram>
+
 <histogram name="Network.Mdns.{ServiceType}" enum="MdnsQueryType"
     expires_after="2026-12-31">
   <owner>nmuggli@google.com</owner>
@@ -2378,7 +2409,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.PrefetchMatches.FirstHeaderMissingFromPrefetch"
-    enum="RequestHeader" expires_after="2026-05-18">
+    enum="RequestHeader" expires_after="2026-07-19">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2391,7 +2422,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.PrefetchMatches.FirstHeaderValueMismatch"
-    enum="RequestHeader" expires_after="2026-05-18">
+    enum="RequestHeader" expires_after="2026-07-19">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2405,7 +2436,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.PrefetchMatches.FirstMismatch"
-    enum="PrefetchMatchesResourceRequestField" expires_after="2026-05-18">
+    enum="PrefetchMatchesResourceRequestField" expires_after="2026-07-19">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2416,7 +2447,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.PrefetchMatches.HeaderOnlyInPrefetch"
-    enum="RequestHeader" expires_after="2026-05-18">
+    enum="RequestHeader" expires_after="2026-07-19">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2431,7 +2462,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.PrefetchMatches.Result" enum="Boolean"
-    expires_after="2026-05-18">
+    expires_after="2026-07-19">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2454,7 +2485,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Network.SharedDictionary.CreateBrotliSourceStreamWithDictionary"
-    units="microseconds" expires_after="2026-07-01">
+    units="microseconds" expires_after="2027-01-03">
   <owner>pmeenan@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2468,7 +2499,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.SharedDictionary.CreateZstdSourceStreamWithDictionary"
-    units="microseconds" expires_after="2026-07-01">
+    units="microseconds" expires_after="2027-01-03">
   <owner>pmeenan@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2486,7 +2517,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.SharedDictionary.DocumentRequestCacheResult"
     enum="SharedDictionaryDocumentRequestCacheResult"
-    expires_after="2026-05-03">
+    expires_after="2027-01-10">
   <owner>pmeenan@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2518,7 +2549,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.SharedDictionary.EncodingType"
-    enum="SharedDictionaryEncodingType" expires_after="2026-06-21">
+    enum="SharedDictionaryEncodingType" expires_after="2026-12-27">
   <owner>nidhijaju@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -2586,7 +2617,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Cellular.3GPPRegistrationDelayedDrop"
     enum="NetworkCellular3GPPRegistrationDelayedDrop"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2597,7 +2628,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.AutoConnectTotalTime" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2610,7 +2641,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.AutoConnectTries" units="units"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2623,7 +2654,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.ConnectResult"
-    enum="PlatformCellularConnectResult" expires_after="2026-12-31">
+    enum="PlatformCellularConnectResult" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2637,7 +2668,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.ConnectResult.{ApnType}"
-    enum="PlatformCellularConnectResult" expires_after="2026-12-31">
+    enum="PlatformCellularConnectResult" expires_after="2027-04-05">
   <owner>danielwinkler@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2651,7 +2682,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.DevicePresenceStatus"
-    enum="BooleanPresent" expires_after="2026-12-31">
+    enum="BooleanPresent" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2661,7 +2692,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.Drop" enum="NetworkCellularTechnology"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2671,7 +2702,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.EntitlementCheck"
-    enum="NetworkCellularEntitlementCheck" expires_after="2026-12-31">
+    enum="NetworkCellularEntitlementCheck" expires_after="2027-04-05">
   <owner>andrewlassalle@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2682,7 +2713,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.ExpiredLeaseLengthSeconds2"
-    units="seconds" expires_after="2026-12-31">
+    units="seconds" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2695,7 +2726,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.NetworkConnectionIPType"
-    enum="NetworkConnectionIPType" expires_after="2026-12-31">
+    enum="NetworkConnectionIPType" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2705,7 +2736,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.PortalResult"
-    enum="NetworkPortalResult" expires_after="2026-12-31">
+    enum="NetworkPortalResult" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2715,7 +2746,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.ServiceErrors"
-    enum="NetworkServiceError" expires_after="2026-12-31">
+    enum="NetworkServiceError" expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2725,7 +2756,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.SignalStrengthBeforeDrop" units="units"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2735,7 +2766,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TechnologyEnabled"
-    enum="BooleanEnabled" expires_after="2026-12-31">
+    enum="BooleanEnabled" expires_after="2027-04-05">
   <owner>rmao@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2745,7 +2776,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToConfig" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2755,7 +2786,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToConnect" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2765,7 +2796,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToDisable" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2775,7 +2806,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToEnable" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2785,7 +2816,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToInitialize" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2795,7 +2826,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToOnline" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2805,7 +2836,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToPortal" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2815,7 +2846,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToRedirectFound" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>hugobenichi@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -2826,7 +2857,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Shill.Cellular.TimeToScan" units="ms"
-    expires_after="2026-12-31">
+    expires_after="2027-04-05">
   <owner>ejcaruso@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -3784,7 +3815,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.AdapterAllowlisted"
     enum="WiFiAdapterInAllowlist" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS WiFi usage metric emitted every time the WiFi adapter is enabled.
@@ -3847,7 +3878,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.Ap80211kSupport" enum="WiFiAp80211kSupport"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -3857,7 +3888,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.Ap80211rSupport" enum="WiFiAp80211rSupport"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -3877,7 +3908,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.Ap80211vBSSMaxIdlePeriodSupport"
     enum="WiFiAp80211vBSSMaxIdlePeriodSupport" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -3888,7 +3919,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.Ap80211vBSSTransitionSupport"
     enum="WiFiAp80211vBSSTransitionSupport" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -3899,7 +3930,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.Ap80211vDMSSupport"
     enum="WiFiAp80211vDMSSupport" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -3920,7 +3951,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ApChannelSwitch" enum="WiFiApChannelSwitch"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric sampled when an AP switches channels. Shows
@@ -3930,7 +3961,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ApDisconnectReason" enum="WiFiReasonCode"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Reason code reported when the AP disconnects
@@ -3940,7 +3971,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ApDisconnectType" enum="WiFiStatusType"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Broad category of reason AP disconnected a
@@ -3960,7 +3991,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.AssocFailureType" enum="WiFiStatusCode"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Status code reported when an 802.11
@@ -3972,7 +4003,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.AuthFailureType" enum="WiFiStatusCode"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Status code reported when an 802.11
@@ -3984,7 +4015,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.AutoConnectableServices" units="units"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of wifi services available for
@@ -3994,7 +4025,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.AvailableBSSesAtConnect" units="units"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of BSSes (endpoints) available
@@ -4026,7 +4057,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.BSSTransitionManagementSupport"
     enum="WiFiBSSTransitionManagementSupport" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric recording BSS Transition Management statuses. This
@@ -4037,7 +4068,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.Channel" enum="NetworkChannelType"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. The channel used for each successful WiFi
@@ -4047,7 +4078,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.CiscoAdaptiveFTSupport"
     enum="WiFiCiscoAdaptiveFTSupport" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of Wireless Access Points that
@@ -4058,7 +4089,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ClientDisconnectReason"
     enum="WiFiReasonCode" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Reason code reported when the client
@@ -4068,7 +4099,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ClientDisconnectType" enum="WiFiStatusType"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. Broad category of reason client disconnected
@@ -4078,7 +4109,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.CQMNotification"
     enum="WiFiCQMNotificationType" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS Wifi Connection Quality Monitor(CQM) Notifications metric. This is
@@ -4090,7 +4121,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.DevicePresenceStatus" enum="BooleanPresent"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric that tracks the presence of a WiFi device in the
@@ -4100,7 +4131,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.Disconnect"
     enum="NetworkWiFiDisconnectType" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric that tracks the cause of an 802.11 wireless
@@ -4111,7 +4142,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.EapInnerProtocol" enum="EAPInnerProtocol"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric sampled on each successful 802.1x wireless
@@ -4121,7 +4152,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.EapOuterProtocol" enum="EAPOuterProtocol"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric sampled on each successful 802.1x wireless
@@ -4131,7 +4162,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.ExpiredLeaseLengthSeconds2" units="seconds"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the length of a lease for a
@@ -4142,7 +4173,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.FallbackDNSTestResult"
     enum="FallbackDNSTestResult" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the result of the fallback
@@ -4222,7 +4253,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.MBOSupport" enum="MBOSupport"
     expires_after="2026-12-31">
-  <owner>norvez@google.com</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric that tracks the Multi-Band Operation (MBO) support
@@ -4244,7 +4275,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.NetworkConnectionIPType"
     enum="NetworkConnectionIPType" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric that tracks the types of IP configuration used for
@@ -4254,7 +4285,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.NetworkProblemDetected"
     enum="NetworkProblemType" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the network problems
@@ -4435,7 +4466,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.PhyMode" enum="NetworkPhyModeType"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. The standard advertised by the AP for each
@@ -4459,7 +4490,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.RegulatoryDomain" enum="RegulatoryDomain"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric that tracks which country the WiFi regulatory
@@ -4470,7 +4501,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.RememberedNetworkCount" units="units"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network diagnostic metric sampling the number of 802.11 wireless
@@ -4483,7 +4514,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="Network.Shill.WiFi.RememberedSystemNetworkCount{ShillWiFiRememberedNetworkSecurityMode}"
     units="units" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of 802.11 wireless networks
@@ -4505,7 +4536,7 @@ chromium-metrics-reviews@google.com.
 <histogram
     name="Network.Shill.WiFi.RememberedUserNetworkCount{ShillWiFiRememberedNetworkSecurityMode}"
     units="units" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the number of 802.11 wireless networks
@@ -4521,7 +4552,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.RoamComplete{RoamSecurityType}"
     enum="WiFiRoamComplete" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric recording roam successes or failures. This is
@@ -4532,7 +4563,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.RoamTime{RoamSecurityType}" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric recording roam time in milliseconds. This is
@@ -4543,7 +4574,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ScanResult{ProgressiveScan}"
     enum="WiFiScanResult" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric describing, for a WiFi scan attempt, what scan
@@ -4556,7 +4587,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.ScanTimeInEbusy" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric describing, for a WiFi scan attempt, how many
@@ -4566,7 +4597,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.Security" enum="NetworkSecurityType"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network usage metric. The security setting for each successful WiFi
@@ -4589,7 +4620,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.ServiceErrors" enum="NetworkServiceError"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS connection manager service errors for wifi interface.
@@ -4598,7 +4629,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.SessionLength{RoamSecurityType}" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric recording session length in milliseconds. This is
@@ -4609,7 +4640,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.SessionTagState.{Event}"
     enum="WiFiSessionTagState" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>druth@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
@@ -4628,7 +4659,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.SignalAtDisconnect" units="negative dBm"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric indicating the negative of the dBm received signal
@@ -4638,7 +4669,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.SignalStrength" units="negative dBm"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric indicating the negative of the dBm received signal
@@ -4648,7 +4679,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.SupplicantAttempts" units="attempts"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     Number of attempts required for a WiFi device to be established with WPA
@@ -4677,7 +4708,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeResumeToReady" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time from the resume event
@@ -4688,7 +4719,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.TimeResumeToReadyHB" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time from the resume event
@@ -4700,7 +4731,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.TimeResumeToReadyLB" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time from the resume event
@@ -4712,7 +4743,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.TimeResumeToReadyUHB" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time from the resume event
@@ -4724,7 +4755,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToConfig" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to configure Layer 3
@@ -4734,7 +4765,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToConnect{ProgressiveScan}" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to connect to a WiFi
@@ -4749,7 +4780,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToInitialize" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to initialize an
@@ -4759,7 +4790,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToJoin{ProgressiveScan}" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to join (associate
@@ -4772,7 +4803,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToOnline" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to determine that an
@@ -4804,7 +4835,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToScanAndConnect{ProgressiveScan}"
     units="ms" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time between the beginning
@@ -4819,7 +4850,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.TimeToScan{ProgressiveScan}" units="ms"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric sampling the time to scan WiFi until a
@@ -4832,7 +4863,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.TransmitBitrateMbps" units="Mbps"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the transmit bitrate in Mbps
@@ -4843,7 +4874,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.Wifi.UnreliableLinkSignalStrength" units="units"
     expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network metric sampling the signal strength (0-100) of the wifi
@@ -4854,7 +4885,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.UserInitiatedConnectionFailureReason"
     enum="ConnectionFailureReason" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the reasons of failed
@@ -4866,7 +4897,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram name="Network.Shill.WiFi.UserInitiatedConnectionResult"
     enum="ConnectionResult" expires_after="2026-12-31">
-  <owner>norvez@chromium.org</owner>
+  <owner>kglund@google.com</owner>
   <owner>cros-network-metrics@google.com</owner>
   <summary>
     ChromeOS network performance metric that tracks the result of user-initiated
@@ -4943,6 +4974,19 @@ chromium-metrics-reviews@google.com.
   <token key="DHCPProvisionReason" variants="DHCPProvisionReason"/>
 </histogram>
 
+<histogram name="Network.SyntheticResponse.IsHeaderConsistent" enum="Boolean"
+    expires_after="2027-01-24">
+  <owner>sisidovski@chromium.org</owner>
+  <owner>chrome-worker@google.com</owner>
+  <summary>
+    Records whether the committed response headers are consistent with the
+    headers from the network when the service worker synthetic response is used.
+
+    This is recorded in navigation, when the browser receives the response from
+    the network, while committed the navigation with locally stored headers.
+  </summary>
+</histogram>
+
 <histogram name="Network.TrafficCounters.{Technology}.AverageDailyDataUsage"
     units="MB" expires_after="2026-12-31">
   <owner>khegde@google.com</owner>
@@ -4977,9 +5021,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.Connection.FailureReason"
-    enum="ConnectionFailureReason" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="ConnectionFailureReason" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the failure reason for all connection attempts,
@@ -4988,9 +5032,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.Connection.Result" enum="BooleanSuccess"
-    expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the result of all connection attempts, manual or
@@ -4999,7 +5043,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.Hidden.Fixed" units="networks"
-    expires_after="2026-06-01">
+    expires_after="2027-06-01">
+  <owner>crisrael@google.com</owner>
   <owner>jonmann@chromium.org</owner>
   <owner>tnagel@chromium.org</owner>
   <owner>cros-network-metrics@google.com</owner>
@@ -5012,9 +5057,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.ManualConnection.FailureReason"
-    enum="ConnectionFailureReason" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="ConnectionFailureReason" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the failure reason for manual connection
@@ -5023,9 +5068,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.ManualConnection.Result"
-    enum="BooleanSuccess" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="BooleanSuccess" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the result of manual connection attempts to
@@ -5034,9 +5079,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.TotalCount" units="units"
-    expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the total number of Wi-Fi networks which are
@@ -5045,9 +5090,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.UpdateOperation.FailureReason"
-    enum="ConnectionFailureReason" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="ConnectionFailureReason" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the failure reason for update attempts to synced
@@ -5058,9 +5103,9 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Network.Wifi.Synced.UpdateOperation.GenerateLocalNetworkConfig.Result"
-    enum="BooleanSuccess" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="BooleanSuccess" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the success or failure to generate a local
@@ -5069,9 +5114,9 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.UpdateOperation.Result"
-    enum="BooleanSuccess" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="BooleanSuccess" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric that tracks the result of update attempts to synced Wi-Fi
@@ -5081,14 +5126,28 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Network.Wifi.Synced.ZeroNetworksEligibleForSync.Reason"
-    enum="NetworkEligibilityStatus" expires_after="2026-06-01">
-  <owner>jonmann@chromium.org</owner>
+    enum="NetworkEligibilityStatus" expires_after="2027-06-01">
   <owner>crisrael@google.com</owner>
+  <owner>jonmann@chromium.org</owner>
   <owner>chromeos-cross-device-eng@google.com</owner>
   <summary>
     ChromeOS metric logged for users who have the feature enabled but have zero
     networks eligible for sync. Tracks the reasons why none of the networks are
     eligible.
+  </summary>
+</histogram>
+
+<histogram name="NetworkService.ConnectionAllowlist.Type"
+    enum="ConnectionAllowlistType" expires_after="2026-12-16">
+  <owner>averge@chromium.org</owner>
+  <owner>mkwst@chromium.org</owner>
+  <owner>shivanisha@chromium.org</owner>
+  <owner>xiaochenzh@chromium.org</owner>
+  <summary>
+    Records the presence of parsed Connection-Allowlist and
+    Connection-Allowlist-Report-Only headers. This is recorded when the network
+    restrictions throttles are executed for either navigations or worker
+    scripts, immediately before the allowlist takes effect.
   </summary>
 </histogram>
 
@@ -5108,7 +5167,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="NetworkService.CorsURLLoaderFactory.CreateLoaderAndStart2.Duration"
-    units="microseconds" expires_after="2026-05-17">
+    units="microseconds" expires_after="2027-01-24">
   <owner>olivier@chromium.org</owner>
   <owner>cduvall@chromium.org</owner>
   <improvement direction="LOWER_IS_BETTER"/>
@@ -5139,6 +5198,19 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="NetworkService.CorsURLLoaderFactory.IsOutermostMainFrameClamped"
+    enum="Boolean" expires_after="2027-01-16">
+  <owner>pmeenan@chromium.org</owner>
+  <owner>src/services/network/OWNERS</owner>
+  <summary>
+    Recorded whenever a renderer request claims to originate from an outermost
+    main frame while its browser-created URLLoaderFactory does not. The request
+    value is clamped to the factory value. One known legitimate source is an
+    initial empty document in an opener-retaining popup created by a subframe.
+  </summary>
+</histogram>
+
 <histogram name="NetworkService.GrantAccessToDataPathError.{Directory}.Posix"
     enum="PopularOSErrno" expires_after="2026-01-22">
   <owner>ricea@chromium.org</owner>
@@ -5157,7 +5229,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.GrantAccessToDataPathError.{Directory}.Windows"
-    enum="WinGetLastError" expires_after="2026-06-21">
+    enum="WinGetLastError" expires_after="2026-08-23">
   <owner>ricea@chromium.org</owner>
   <owner>src/net/OWNERS</owner>
   <summary>
@@ -5186,7 +5258,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.NetworkLoaderCompletionTime2.{Source}"
-    units="ms" expires_after="2026-05-03">
+    units="ms" expires_after="2027-01-10">
   <owner>hayato@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -5205,7 +5277,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="NetworkService.NetworkLoaderCompletionTime2.{Source}.{Priority}"
-    units="ms" expires_after="2026-05-17">
+    units="ms" expires_after="2027-01-31">
   <owner>hayato@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -5225,7 +5297,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.ParsedHeaders.IPCHandleTime"
-    units="microseconds" expires_after="2026-06-07">
+    units="microseconds" expires_after="2026-12-16">
   <owner>yyanagisawa@chromium.org</owner>
   <owner>chrome-loading@google.com</owner>
   <summary>
@@ -5238,59 +5310,8 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="NetworkService.Requests.{Multiplexed}.{RequestType}.{Method}.{Result}.TotalHeadersSize"
-    units="bytes" expires_after="2026-06-21">
-  <owner>ortuno@chromium.org</owner>
-  <owner>navtracking-team@google.com</owner>
-  <summary>
-    The total size of request headers. Many servers reject requests where
-    headers exceed a certain size, which can cause cross-site leaks. This
-    metrics helps us understand what those header sizes are. Recorded at the
-    start of a request's response.
-  </summary>
-  <token key="Multiplexed" variants="HTTPRequestConnectionProtocol"/>
-  <token key="RequestType" variants="HTTPRequestType"/>
-  <token key="Method" variants="HTTPRequestMethod"/>
-  <token key="Result" variants="HTTPRequestResult"/>
-</histogram>
-
-<histogram
-    name="NetworkService.Requests.{Multiplexed}.{RequestType}.{Method}.{Result}.TotalRequestSize"
-    units="bytes" expires_after="2026-06-21">
-  <owner>ortuno@chromium.org</owner>
-  <owner>navtracking-team@google.com</owner>
-  <summary>
-    The total size of network requests. Many servers reject requests that exceed
-    a certain size, which can cause cross-site leaks. This metrics helps us
-    understand what those sizes are. Recorded at the start of a request's
-    response.
-  </summary>
-  <token key="Multiplexed" variants="HTTPRequestConnectionProtocol"/>
-  <token key="RequestType" variants="HTTPRequestType"/>
-  <token key="Method" variants="HTTPRequestMethod"/>
-  <token key="Result" variants="HTTPRequestResult"/>
-</histogram>
-
-<histogram
-    name="NetworkService.Requests.{Multiplexed}.{RequestType}.{Method}.{Result}.TotalUrlSize"
-    units="bytes" expires_after="2026-02-09">
-  <owner>ortuno@chromium.org</owner>
-  <owner>navtracking-team@google.com</owner>
-  <summary>
-    The total size of the requested URL. Many servers reject requests that
-    exceed a certain size, which can cause cross-site leaks. This metrics helps
-    us understand how much URLs contribute to that size. Recorded at the start
-    of a request's response.
-  </summary>
-  <token key="Multiplexed" variants="HTTPRequestConnectionProtocol"/>
-  <token key="RequestType" variants="HTTPRequestType"/>
-  <token key="Method" variants="HTTPRequestMethod"/>
-  <token key="Result" variants="HTTPRequestResult"/>
-</histogram>
-
-<histogram
     name="NetworkService.Scheduler.IOThread.NumberOfPendingTasks.{QueueName}Queue"
-    units="count" expires_after="2026-05-03">
+    units="count" expires_after="2027-01-10">
   <owner>hayato@chromium.org</owner>
   <owner>net-dev@chromium.org</owner>
   <summary>
@@ -5303,7 +5324,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="NetworkService.Scheduler.IOThread.QueuingTime.{QueueName}Queue"
-    units="ms" expires_after="2026-05-03">
+    units="ms" expires_after="2027-01-10">
   <owner>hayato@chromium.org</owner>
   <owner>net-dev@chromium.org</owner>
   <summary>
@@ -5315,7 +5336,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.Scheduler.IOThread.TaskOffCpuDuration"
-    units="ms" expires_after="2025-12-25">
+    units="ms" expires_after="2026-12-01">
   <owner>hayato@chromium.org</owner>
   <owner>net-dev@chromium.org</owner>
   <summary>
@@ -5326,7 +5347,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.Scheduler.IOThread.TaskOnCpuDuration"
-    units="ms" expires_after="2025-12-25">
+    units="ms" expires_after="2026-12-01">
   <owner>hayato@chromium.org</owner>
   <owner>net-dev@chromium.org</owner>
   <summary>
@@ -5337,7 +5358,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.Scheduler.IOThread.TaskOnCpuPercentage"
-    units="%" expires_after="2025-12-25">
+    units="%" expires_after="2026-12-01">
   <owner>hayato@chromium.org</owner>
   <owner>net-dev@chromium.org</owner>
   <summary>
@@ -5347,8 +5368,30 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="NetworkService.SecCHHeaderSize" units="bytes"
+    expires_after="2026-12-06">
+  <owner>toyoshim@chromium.org</owner>
+  <owner>chrome-loading@google.com</owner>
+  <summary>
+    The size of Sec-CH-* headers in bytes. Recorded when validating
+    renderer-initiated requests in the Network Service. This helps monitor the
+    impact of size limits imposed to protect the IPC boundary.
+  </summary>
+</histogram>
+
+<histogram name="NetworkService.SecSpeculationTagsHeaderSize" units="bytes"
+    expires_after="2026-12-06">
+  <owner>toyoshim@chromium.org</owner>
+  <owner>chrome-loading@google.com</owner>
+  <summary>
+    The size of Sec-Speculation-Tags headers in bytes. Recorded when validating
+    renderer-initiated requests in the Network Service. This helps monitor the
+    impact of size limits imposed to protect the IPC boundary.
+  </summary>
+</histogram>
+
 <histogram name="NetworkService.SlopBucket.ChunkAllocationFailedReason"
-    enum="SlopBucketChunkAllocationFailedReason" expires_after="2026-05-03">
+    enum="SlopBucketChunkAllocationFailedReason" expires_after="2026-09-06">
   <owner>ricea@chromium.org</owner>
   <owner>yoichio@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
@@ -5359,7 +5402,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.SlopBucket.DisabledReason"
-    enum="SlopBucketDisabledReason" expires_after="2026-05-03">
+    enum="SlopBucketDisabledReason" expires_after="2026-07-05">
   <owner>ricea@chromium.org</owner>
   <owner>yoichio@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
@@ -5375,7 +5418,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.SlopBucket.PeakChunksAllocated" units="chunks"
-    expires_after="2026-05-03">
+    expires_after="2026-09-06">
   <owner>ricea@chromium.org</owner>
   <owner>yoichio@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
@@ -5389,7 +5432,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.SlopBucket.RequestedPriority"
-    enum="NetRequestPriority" expires_after="2026-05-03">
+    enum="NetRequestPriority" expires_after="2026-09-06">
   <owner>ricea@chromium.org</owner>
   <owner>blink-network-stack@google.com</owner>
   <summary>
@@ -5404,8 +5447,18 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="NetworkService.TimeToFirstCreateNetworkContext" units="ms"
+    expires_after="2026-12-20">
+  <owner>horo@chromium.org</owner>
+  <owner>blink-network-stack@google.com</owner>
+  <summary>
+    The time taken from NetworkService creation to the first
+    CreateNetworkContext call. Recorded once per NetworkService initialization.
+  </summary>
+</histogram>
+
 <histogram name="NetworkService.TimeToGrantCacheAccess" units="ms"
-    expires_after="2026-05-03">
+    expires_after="2026-07-05">
   <owner>wfh@chromium.org</owner>
   <owner>mmenke@chromium.org</owner>
   <summary>
@@ -5419,7 +5472,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="NetworkService.TimeToGrantDataAccess" units="ms"
-    expires_after="2026-05-03">
+    expires_after="2026-07-05">
   <owner>wfh@chromium.org</owner>
   <owner>mmenke@chromium.org</owner>
   <summary>
@@ -5436,23 +5489,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="NetworkService.TimeToGrantNoVarySearchAccess" units="ms"
-    expires_after="2026-05-03">
-  <owner>ricea@chromium.org</owner>
-  <owner>src/net/OWNERS</owner>
-  <summary>
-    The time taken to permit the sandbox access to the no vary search
-    persistence directory during network context initialization. This is
-    recorded each time a network context is created with a no vary search
-    directory specified. This histogram is platform dependent so values from
-    different platforms cannot be directly compared. On Windows, this records
-    the amount of time taken to set the filesystem ACLs to allow the sandbox
-    access to the cache directory.
-  </summary>
-</histogram>
-
 <histogram name="NetworkService.TimeToGrantSharedDictionaryAccess" units="ms"
-    expires_after="2026-07-01">
+    expires_after="2026-08-30">
   <owner>pmeenan@chromium.org</owner>
   <owner>src/net/extras/shared_dictionary/OWNERS</owner>
   <summary>
@@ -5481,25 +5519,29 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram
-    name="NetworkService.URLLoader.CloneDeviceBoundSessionAccessObserver"
-    units="microseconds" expires_after="2026-05-03">
-  <owner>horo@chromium.org</owner>
-  <owner>blink-network-stack@google.com</owner>
+<histogram name="NetworkTime.EstimatedTimeUncertainty" units="ms"
+    expires_after="2027-05-20">
+  <owner>rogerm@chromium.org</owner>
+  <owner>asvitkine@chromium.org</owner>
   <summary>
-    Records the time taken (in microseconds) by the
-    `DeviceBoundSessionAccessObserver::Clone()` function call itself, executed
-    within the network service's URLLoader. This function initiates an
-    asynchronous IPC call; this histogram measures the duration of this
-    initiating call on the network service thread, not the time until the
-    asynchronous IPC operation completes in the background.
+    The uncertainty of the estimated network time, recorded when the current
+    network time is estimated based on a previous network time synchronization.
+    The uncertainty is calculated based on the uncertainty inherent in the
+    previous network time update and any skew detected between the local wall
+    and tick clocks since that update.
+  </summary>
+</histogram>
 
-    This measurement occurs only for relevant resource requests when the
-    `DeviceBoundSessionAccessObserverSharedRemote` optimization feature is
-    disabled.
-
-    Note that clients without high-resolution clocks will report 0 for very
-    short times.
+<histogram name="NetworkTime.NetworkTimeUncertainty" units="ms"
+    expires_after="2027-05-20">
+  <owner>rogerm@chromium.org</owner>
+  <owner>asvitkine@chromium.org</owner>
+  <summary>
+    The uncertainty of the network time, recorded when the network time is
+    successfully synchronized. The uncertainty is calculated based on the
+    resolution of the time source, the latency of the query, and the resolution
+    of the local tick clock. This is the uncertainty in the data which will
+    later be used to estimate/calculate network time.
   </summary>
 </histogram>
 

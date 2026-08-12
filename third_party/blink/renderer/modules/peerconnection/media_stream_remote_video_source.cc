@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -96,6 +97,8 @@ class MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate
       EncodedVideoFrameCB encoded_frame_callback,
       VideoCaptureVersionCB capture_version_callback);
 
+  void SetHasSeenScreencastContentTypeCallback(base::OnceClosure callback);
+
  protected:
   friend class ThreadSafeRefCounted<RemoteVideoSourceDelegate>;
   ~RemoteVideoSourceDelegate() override;
@@ -108,8 +111,10 @@ class MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate
   // VideoSinkInterface<webrtc::RecordableEncodedFrame>
   void OnFrame(const webrtc::RecordableEncodedFrame& frame) override;
 
-  void DoRenderFrameOnIOThread(scoped_refptr<media::VideoFrame> video_frame,
-                               base::TimeTicks estimated_capture_time);
+  void DoRenderFrameOnIOThread(
+      scoped_refptr<media::VideoFrame> video_frame,
+      base::TimeTicks estimated_capture_time,
+      std::optional<webrtc::VideoContentType> content_type);
 
  private:
   void OnEncodedVideoFrameOnIO(scoped_refptr<EncodedVideoFrame> frame,
@@ -138,6 +143,10 @@ class MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate
   // Determined from a feature flag; if set WebRTC won't forward an unspecified
   // color space.
   const bool ignore_unspecified_color_space_;
+
+  // Called with true if frames where ever received here with screenshare
+  // content type.
+  base::OnceClosure has_seen_screencast_content_type_callback_;
 };
 
 MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::
@@ -197,6 +206,18 @@ void MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::OnFrame(
   if (incoming_frame.rotation() != webrtc::kVideoRotation_0) {
     video_frame->metadata().transformation =
         WebRtcToMediaVideoRotation(incoming_frame.rotation());
+  }
+
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::"
+                  "OnFrame video_frame color_space = "
+               << video_frame->ColorSpace().ToString();
+    if (incoming_frame.color_space()) {
+      LOG(ERROR) << "WebRTC color_space = "
+                 << incoming_frame.color_space()->AsString();
+    } else {
+      LOG(ERROR) << "WebRTC color_space = UNSET";
+    }
   }
 
   // The third clause of the condition is controlled by the feature flag
@@ -283,14 +304,22 @@ void MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::OnFrame(
   PostCrossThreadTask(
       *video_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&RemoteVideoSourceDelegate::DoRenderFrameOnIOThread,
-                          WrapRefCounted(this), video_frame, render_time));
+                          WrapRefCounted(this), video_frame, render_time,
+                          incoming_frame.content_type()));
 }
 
 void MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::
-    DoRenderFrameOnIOThread(scoped_refptr<media::VideoFrame> video_frame,
-                            base::TimeTicks estimated_capture_time) {
-  DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
+    DoRenderFrameOnIOThread(
+        scoped_refptr<media::VideoFrame> video_frame,
+        base::TimeTicks estimated_capture_time,
+        std::optional<webrtc::VideoContentType> content_type) {
   TRACE_EVENT0("webrtc", "RemoteVideoSourceDelegate::DoRenderFrameOnIOThread");
+  DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
+  if (content_type.has_value() &&
+      *content_type == webrtc::VideoContentType::SCREENSHARE &&
+      has_seen_screencast_content_type_callback_) {
+    std::move(has_seen_screencast_content_type_callback_).Run();
+  }
   frame_callback_.Run(std::move(video_frame), estimated_capture_time);
 }
 
@@ -321,6 +350,12 @@ void MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::
                             base::TimeTicks estimated_capture_time) {
   DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
   encoded_frame_callback_.Run(std::move(frame), estimated_capture_time);
+}
+
+void MediaStreamRemoteVideoSource::RemoteVideoSourceDelegate::
+    SetHasSeenScreencastContentTypeCallback(base::OnceClosure callback) {
+  DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
+  has_seen_screencast_content_type_callback_ = std::move(callback);
 }
 
 MediaStreamRemoteVideoSource::MediaStreamRemoteVideoSource(
@@ -424,6 +459,19 @@ void MediaStreamRemoteVideoSource::RequestKeyFrame() {
 base::WeakPtr<MediaStreamVideoSource>
 MediaStreamRemoteVideoSource::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
+}
+
+bool MediaStreamRemoteVideoSource::AllowsVideoThreadTypeOverride() const {
+  return true;
+}
+
+void MediaStreamRemoteVideoSource::SetHasSeenScreencastContentTypeCallback(
+    base::OnceClosure callback) {
+  PostCrossThreadTask(
+      *video_task_runner(), FROM_HERE,
+      CrossThreadBindOnce(
+          &RemoteVideoSourceDelegate::SetHasSeenScreencastContentTypeCallback,
+          delegate_, std::move(callback)));
 }
 
 void MediaStreamRemoteVideoSource::OnEncodedSinkEnabled() {

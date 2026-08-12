@@ -14,8 +14,6 @@ static_library("core") {
   sources = [
     "confirm_infobar_delegate.cc",
     "confirm_infobar_delegate.h",
-    "features.cc",
-    "features.h",
     "infobar.cc",
     "infobar.h",
     "infobar_container.cc",
@@ -67,16 +65,4 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//url",
   ]
-}
-
-if (is_android) {
-  java_cpp_enum("infobar_generated_enums") {
-    sources = [ "infobar_delegate.h" ]
-  }
-
-  android_library("infobar_enums_java") {
-    deps = [ "//third_party/androidx:androidx_annotation_annotation_java" ]
-
-    srcjar_deps = [ ":infobar_generated_enums" ]
-  }
 }

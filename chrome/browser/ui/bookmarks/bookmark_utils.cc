@@ -23,11 +23,14 @@
 #include "chrome/common/url_constants.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/bookmarks/managed/managed_bookmark_service.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/prefs/pref_service.h"
+#include "components/saved_tab_groups/public/features.h"
+#include "components/search/ntp_features.h"
 #include "components/search/search.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_formatter.h"
@@ -113,11 +116,19 @@ bool IsValidBookmarkDropLocation(
     return true;
   }
 
-  // `dragged_node` is null if the node is from another profile or the user is
-  // dragging a url. In both cases, `dragged_from_same_profile` is expected to
-  // be false. For dragging a node within the same profile, the `dragged_node`
-  // must be not null.
-  CHECK(dragged_node);
+  // In general, `dragged_node` is null if the node is from another profile or
+  // the user is dragging a url. In both cases, `dragged_from_same_profile` is
+  // expected to be false. For dragging a node within the same profile, the
+  // `dragged_node` must be not null.
+  // However, there’s an edge case. `dragged_node` might get deleted and become
+  // null during the drag operation, and it only happens when using the
+  // `chrome.bookmarks` extension API. In this case, return false to cancel the
+  // current drag operation.
+  // See https://crbug.com/472376579
+  if (!dragged_node) {
+    return false;
+  }
+
   CHECK(!dragged_node->is_root());
   CHECK(!dragged_node->is_permanent_node());
   // Don't allow the drop if the user is attempting to drop on the node being
@@ -176,7 +187,7 @@ bool GetURLAndTitleToBookmark(content::WebContents* web_contents,
   }
 
   // Use "New tab" as title if the current page is NTP even in incognito mode.
-  if (u == GURL(chrome::kChromeUINewTabURL)) {
+  if (u == chrome::ChromeUINewTabURLAsGURL()) {
     *title = l10n_util::GetStringUTF16(IDS_NEW_TAB_TITLE);
   }
 
@@ -185,11 +196,61 @@ bool GetURLAndTitleToBookmark(content::WebContents* web_contents,
 
 void ToggleBookmarkBarWhenVisible(content::BrowserContext* browser_context) {
   PrefService* prefs = user_prefs::UserPrefs::Get(browser_context);
-  const bool always_show =
-      !prefs->GetBoolean(bookmarks::prefs::kShowBookmarkBar);
-
   // The user changed when the bookmark bar is shown, update the preferences.
-  prefs->SetBoolean(bookmarks::prefs::kShowBookmarkBar, always_show);
+  if (base::FeatureList::IsEnabled(
+          ntp_features::kNtpSimplificationBookmarkBar)) {
+    auto current_state = static_cast<bookmarks::BookmarkBarVisibilityState>(
+        prefs->GetInteger(bookmarks::prefs::kBookmarkBarVisibilityState));
+    if (current_state == bookmarks::BookmarkBarVisibilityState::kAlwaysShow) {
+      prefs->SetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState,
+          static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
+    } else {
+      prefs->SetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState,
+          static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+    }
+  } else {
+    const bool always_show =
+        !prefs->GetBoolean(bookmarks::prefs::kShowBookmarkBar);
+    prefs->SetBoolean(bookmarks::prefs::kShowBookmarkBar, always_show);
+  }
+}
+
+// Called upon direct user interaction with the Bookmarks Bar UI (e.g. clicking
+// a bookmark/folder, interacting with saved tab groups, or modifying items via
+// context menu/drag-and-drop).
+//
+// For users in the NTP Simplification transition period (`IsDefaultValue()` is
+// true), this explicitly sets `kBookmarkBarVisibilityState` to
+// `kOnlyShowOnNtp`. This establishes the user store as the controlling
+// preference store, transitioning the user out of the experiment's default
+// state and preventing future auto-hiding.
+//
+// Note: Users who had `kShowBookmarkBar` set to true prior to the experiment
+// are upgraded to `kAlwaysShow` at startup in `BookmarkBarController`, making
+// `IsDefaultValue()` false. Therefore, `IsDefaultValue()` is only true here for
+// users in the "off by default" / "only show on NTP" transition group.
+void UpdateBookmarkBarVisibilityPrefOnUserAction(Profile* profile) {
+  if (!profile || !profile->GetPrefs()) {
+    return;
+  }
+
+  if (!base::FeatureList::IsEnabled(
+          ntp_features::kNtpSimplificationBookmarkBar)) {
+    return;
+  }
+
+  PrefService* prefs = profile->GetPrefs();
+  const PrefService::Preference* state_pref =
+      prefs->FindPreference(bookmarks::prefs::kBookmarkBarVisibilityState);
+
+  if (state_pref && state_pref->IsDefaultValue()) {
+    prefs->SetInteger(
+        bookmarks::prefs::kBookmarkBarVisibilityState,
+        static_cast<int>(
+            bookmarks::BookmarkBarVisibilityState::kOnlyShowOnNtp));
+  }
 }
 
 std::u16string FormatBookmarkURLForDisplay(const GURL& url) {
@@ -202,7 +263,7 @@ std::u16string FormatBookmarkURLForDisplay(const GURL& url) {
       ~url_formatter::kFormatUrlOmitUsernamePassword;
 
   // If username is present, we must not omit the scheme because FixupURL() will
-  // subsequently interpret the username as a scheme. crbug.com/639126
+  // subsequently interpret the username as a scheme. crbug.com/40085150
   if (url.has_username()) {
     format_types &= ~url_formatter::kFormatUrlOmitHTTP;
   }
@@ -324,9 +385,13 @@ ui::ImageModel GetBookmarkFolderIcon(BookmarkFolderIconType icon_type,
                                      ui::ColorVariant color) {
   const gfx::VectorIcon* icon_id;
   if (icon_type == BookmarkFolderIconType::kNormal) {
-    icon_id = &vector_icons::kFolderChromeRefreshIcon;
+    icon_id = &(features::IsRoundedIconsEnabled()
+                    ? vector_icons::kFolderFlippableIcon
+                    : vector_icons::kFolderChromeRefreshOldIcon);
   } else {
-    icon_id = &vector_icons::kFolderManagedRefreshIcon;
+    icon_id = &(features::IsRoundedIconsEnabled()
+                    ? vector_icons::kFolderManagedFlippableIcon
+                    : vector_icons::kFolderManagedRefreshOldIcon);
   }
   return ui::ImageModel::FromVectorIcon(*icon_id, color);
 }

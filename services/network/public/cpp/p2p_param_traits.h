@@ -13,7 +13,6 @@
 #include "ipc/param_traits_macros.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "net/base/ip_address.h"
-#include "net/base/network_change_notifier.h"
 #include "net/base/network_interfaces.h"
 #include "services/network/public/cpp/p2p_socket_type.h"
 #include "services/network/public/mojom/p2p.mojom-shared.h"
@@ -23,15 +22,14 @@
 #define INTERNAL_SERVICES_NETWORK_PUBLIC_CPP_P2P_PARAM_TRAITS_H_
 
 #undef IPC_MESSAGE_EXPORT
-#define IPC_MESSAGE_EXPORT COMPONENT_EXPORT(NETWORK_CPP_BASE)
+#define IPC_MESSAGE_EXPORT COMPONENT_EXPORT(NETWORK_CPP_P2P)
 
 namespace mojo {
 template <>
-struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
+struct COMPONENT_EXPORT(NETWORK_CPP_P2P)
     EnumTraits<network::mojom::EcnMarking, webrtc::EcnMarking> {
   static network::mojom::EcnMarking ToMojom(webrtc::EcnMarking input);
-  static bool FromMojom(network::mojom::EcnMarking input,
-                        webrtc::EcnMarking* output);
+  static webrtc::EcnMarking FromMojom(network::mojom::EcnMarking input);
 };
 }  // namespace mojo
 
@@ -40,8 +38,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE)
 IPC_ENUM_TRAITS_MAX_VALUE(network::P2PSocketType, network::P2P_SOCKET_TYPE_LAST)
 IPC_ENUM_TRAITS_MAX_VALUE(network::P2PSocketOption,
                           network::P2P_SOCKET_OPT_MAX - 1)
-IPC_ENUM_TRAITS_MAX_VALUE(net::NetworkChangeNotifier::ConnectionType,
-                          net::NetworkChangeNotifier::CONNECTION_LAST)
 IPC_ENUM_TRAITS_MIN_MAX_VALUE(webrtc::DiffServCodePoint,
                               webrtc::DSCP_NO_CHANGE,
                               webrtc::DSCP_CS7)

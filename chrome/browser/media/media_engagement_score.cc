@@ -36,11 +36,11 @@ const int kScoreMinVisitsParamDefault = 20;
 const double kHighScoreLowerThresholdParamDefault = 0.2;
 const double kHighScoreUpperThresholdParamDefault = 0.3;
 
-base::Value::Dict GetMediaEngagementScoreDictForSettings(
+base::DictValue GetMediaEngagementScoreDictForSettings(
     const HostContentSettingsMap* settings,
     const url::Origin& origin) {
   if (!settings)
-    return base::Value::Dict();
+    return base::DictValue();
 
   base::Value value = settings->GetWebsiteSetting(
       origin.GetURL(), origin.GetURL(), ContentSettingsType::MEDIA_ENGAGEMENT,
@@ -48,10 +48,10 @@ base::Value::Dict GetMediaEngagementScoreDictForSettings(
   if (value.is_dict())
     return std::move(value).TakeDict();
 
-  return base::Value::Dict();
+  return base::DictValue();
 }
 
-void GetIntegerFromScore(const base::Value::Dict& dict,
+void GetIntegerFromScore(const base::DictValue& dict,
                          std::string_view key,
                          int* out) {
   if (std::optional<int> v = dict.FindInt(key)) {
@@ -93,7 +93,7 @@ MediaEngagementScore::MediaEngagementScore(base::Clock* clock,
 
 MediaEngagementScore::MediaEngagementScore(base::Clock* clock,
                                            const url::Origin& origin,
-                                           base::Value::Dict score_dict,
+                                           base::DictValue score_dict,
                                            HostContentSettingsMap* settings)
     : origin_(origin),
       clock_(clock),
@@ -209,11 +209,11 @@ bool MediaEngagementScore::UpdateScoreDict(bool force_update) {
                   double(last_media_playback_time_.ToInternalValue()));
   score_dict_.Set(kHasHighScoreKey, is_high_);
 
-  // visitsWithMediaTag was deprecated in https://crbug.com/998687 and should
+  // visitsWithMediaTag was deprecated in https://crbug.com/40642498 and should
   // be removed if we see it in |score_dict_|.
   score_dict_.Remove("visitsWithMediaTag");
 
-  // These keys were deprecated in https://crbug.com/998892 and should be
+  // These keys were deprecated in https://crbug.com/40642544 and should be
   // removed if we see it in |score_dict_|.
   score_dict_.Remove("audiblePlaybacks");
   score_dict_.Remove("significantPlaybacks");

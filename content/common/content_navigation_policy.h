@@ -39,6 +39,15 @@ enum class RenderDocumentLevel {
   kAllFrames = 4,
 };
 
+// LINT.IfChange(DuplicateNavsCookieStatus)
+enum class DuplicateNavsCookieStatus {
+  kNoListener = 0,
+  kCookiesChanged = 1,
+  kCookiesNotChanged = 2,
+  kMaxValue = kCookiesNotChanged,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:DuplicateNavsCookieStatus)
+
 // Whether same-SiteInstance navigations will result in a change of
 // RenderFrameHosts, which will happen when RenderDocument is enabled. Due to
 // the various levels of the feature, the result may differ depending on whether
@@ -64,30 +73,6 @@ inline constexpr char kRenderDocumentLevelParameterName[] = "level";
 // frame.
 // TODO(crbug.com/40052076): Stop allowing this.
 CONTENT_EXPORT bool ShouldSkipEarlyCommitPendingForCrashedFrame();
-
-// The levels for the kQueueNavigationsWhileWaitingForCommit feature.
-enum class NavigationQueueingFeatureLevel {
-  // Feature is disabled.
-  kNone,
-  // Navigation code attempts to avoid unnecessary cancellations; otherwise,
-  // queueing navigations is pointless because the slow-to-commit page will
-  // simply cancel the queued navigation request.
-  kAvoidRedundantCancellations,
-  // Navigation code attempts to queue navigations rather than clobbering a
-  // speculative RenderFrameHost that is waiting for the renderer to acknowledge
-  // the navigation commit.
-  kFull,
-};
-
-CONTENT_EXPORT NavigationQueueingFeatureLevel
-GetNavigationQueueingFeatureLevel();
-
-// Returns true if GetNavigationQueueingFeatureLevel() returns at least
-// kAvoidRedundantCancellations.
-CONTENT_EXPORT bool ShouldAvoidRedundantNavigationCancellations();
-
-// Returns true if GetNavigationQueueingFeatureLevel() is kFull.
-CONTENT_EXPORT bool ShouldQueueNavigationsWhenPendingCommitRFHExists();
 
 // Returns true if data: URL subframes should be put in a separate SiteInstance
 // in the SiteInstanceGroup of the initiator.

@@ -12,7 +12,6 @@ import com.google.common.util.concurrent.AtomicDouble;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -21,9 +20,9 @@ import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
 import org.chromium.components.dom_distiller.core.DomDistillerService;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.dom_distiller.mojom.FontFamily;
 import org.chromium.dom_distiller.mojom.Theme;
 
@@ -36,9 +35,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 public class DistilledPagePrefsTest {
-    @ClassRule
-    public static final ChromeBrowserTestRule sChromeBrowserTestRule = new ChromeBrowserTestRule();
-
     private DistilledPagePrefs mDistilledPagePrefs;
 
     private static final double EPSILON = 1e-5;
@@ -48,6 +44,7 @@ public class DistilledPagePrefsTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         getDistilledPagePrefs();
     }
 
@@ -60,7 +57,7 @@ public class DistilledPagePrefsTest {
     private void getDistilledPagePrefs() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+                    // TODO (https://crbug.com/40680929):  Add incognito mode tests.
                     DomDistillerService domDistillerService =
                             DomDistillerServiceFactory.getForProfile(
                                     ProfileManager.getLastUsedRegularProfile());
@@ -242,6 +239,18 @@ public class DistilledPagePrefsTest {
         Assert.assertFalse(removeObserver(test));
     }
 
+    @Test
+    @SmallTest
+    @UiThreadTest
+    @Feature({"DomDistiller"})
+    public void testGetAndSetLinksEnabled() {
+        // Check the default links enabled.
+        Assert.assertTrue(mDistilledPagePrefs.getLinksEnabled());
+        // Check that links enabled can be correctly set.
+        setLinksEnabled(false);
+        Assert.assertFalse(mDistilledPagePrefs.getLinksEnabled());
+    }
+
     private static class TestingObserver implements DistilledPagePrefs.Observer {
         private final AtomicInteger mFontFamily = new AtomicInteger();
         private final Semaphore mFontFamilySemaphore = new Semaphore(0);
@@ -249,6 +258,7 @@ public class DistilledPagePrefsTest {
         private final Semaphore mThemeSemaphore = new Semaphore(0);
         private final AtomicDouble mFontScaling = new AtomicDouble();
         private final Semaphore mFontScalingSemaphore = new Semaphore(0);
+        private final AtomicBoolean mLinksEnabled = new AtomicBoolean(true);
 
         public TestingObserver() {}
 
@@ -304,6 +314,11 @@ public class DistilledPagePrefsTest {
             mFontScaling.set(scaling);
             mFontScalingSemaphore.release();
         }
+
+        @Override
+        public void onChangeLinksEnabled(boolean enabled) {
+            mLinksEnabled.set(enabled);
+        }
     }
 
     private void setFontFamily(final int font) {
@@ -316,6 +331,10 @@ public class DistilledPagePrefsTest {
 
     private void setFontScaling(final float scaling) {
         ThreadUtils.runOnUiThreadBlocking(() -> mDistilledPagePrefs.setFontScaling(scaling));
+    }
+
+    private void setLinksEnabled(final boolean enabled) {
+        ThreadUtils.runOnUiThreadBlocking(() -> mDistilledPagePrefs.setLinksEnabled(enabled));
     }
 
     private boolean removeObserver(TestingObserver testObserver) {

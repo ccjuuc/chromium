@@ -171,21 +171,21 @@ export class OsSettingsSyncSubpageElement extends
     ];
   }
 
-  prefs: PrefsState;
-  private pageStatus_: PageStatus;
-  syncPrefs?: SyncPrefs;
-  syncStatus: SyncStatus;
-  private dataEncrypted_: boolean;
-  private encryptionExpanded_: boolean;
-  forceEncryptionExpanded: boolean;
-  private existingPassphrase_: string;
-  private showExistingPassphraseBelowAccount_: boolean;
-  private signedIn_: boolean;
-  private syncDisabledByAdmin_: boolean;
-  private syncSectionDisabled_: boolean;
+  declare prefs: PrefsState;
+  declare private pageStatus_: PageStatus;
+  declare syncPrefs?: SyncPrefs;
+  declare syncStatus: SyncStatus;
+  declare private dataEncrypted_: boolean;
+  declare private encryptionExpanded_: boolean;
+  declare forceEncryptionExpanded: boolean;
+  declare private existingPassphrase_: string;
+  declare private showExistingPassphraseBelowAccount_: boolean;
+  declare private signedIn_: boolean;
+  declare private syncDisabledByAdmin_: boolean;
+  declare private syncSectionDisabled_: boolean;
 
-  private enterPassphraseLabel_: TrustedHTML;
-  private existingPassphraseLabel_: TrustedHTML;
+  declare private enterPassphraseLabel_: TrustedHTML;
+  declare private existingPassphraseLabel_: TrustedHTML;
 
   private browserProxy_: SyncBrowserProxy = SyncBrowserProxyImpl.getInstance();
   private collapsibleSectionsInitialized_: boolean;
@@ -300,7 +300,9 @@ export class OsSettingsSyncSubpageElement extends
 
   private computeSyncSectionDisabled_(): boolean {
     return this.syncStatus !== undefined &&
-        (this.syncStatus.signedInState !== SignedInState.SYNCING ||
+        (this.syncStatus.signedInState !== SignedInState.SYNCING &&
+             (this.syncStatus.signedInState !== SignedInState.SIGNED_IN ||
+              !loadTimeData.getBoolean('replaceSyncPromosWithSignInPromos')) ||
          !!this.syncStatus.disabled ||
          (!!this.syncStatus.hasError &&
           this.syncStatus.statusAction !== StatusAction.ENTER_PASSPHRASE &&
@@ -534,9 +536,11 @@ export class OsSettingsSyncSubpageElement extends
   }
 
   private computeShowExistingPassphraseBelowAccount_(): boolean {
-    return this.syncStatus !== undefined &&
-        this.syncStatus.signedInState === SignedInState.SYNCING &&
-        this.syncPrefs !== undefined && !!this.syncPrefs.passphraseRequired;
+    return this.syncStatus !== undefined && this.syncPrefs !== undefined &&
+        this.syncPrefs.passphraseRequired &&
+        (this.syncStatus.signedInState === SignedInState.SYNCING ||
+         (this.syncStatus.signedInState === SignedInState.SIGNED_IN &&
+          loadTimeData.getBoolean('replaceSyncPromosWithSignInPromos')));
   }
 
   private onSyncAdvancedClick_(): void {

@@ -154,7 +154,14 @@ enum class IOSExternalAction {
   // Logged when Chrome is passed a "DefaultBrowserSettings" action, but instead
   // will show the NTP, since Chrome is already set as default browser.
   ACTION_SKIPPED_DEFAULT_BROWSER_SETTINGS_FOR_NTP = 3,
-  kMaxValue = ACTION_SKIPPED_DEFAULT_BROWSER_SETTINGS_FOR_NTP,
+  // Logged when Chrome is passed a "AppStoreGeminiPromo" action.
+  ACTION_APP_STORE_GEMINI_PROMO = 4,
+  // Logged when Chrome is receiving a post opening action when triggering
+  // external actions from the App Switcher. Also logged when Chrome is passed
+  // an "AppSwitcherTesting" action which is purely to force this external
+  // action in testing.
+  ACTION_START_GEMINI_AI_SUMMARIZATION = 5,
+  kMaxValue = ACTION_START_GEMINI_AI_SUMMARIZATION,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml)
 

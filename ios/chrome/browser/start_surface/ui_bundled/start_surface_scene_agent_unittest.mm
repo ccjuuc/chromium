@@ -7,6 +7,8 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/favicon/ios/web_favicon_driver.h"
+#import "components/prefs/pref_service.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "components/tab_groups/tab_group_id.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/fake_startup_information.h"
@@ -14,17 +16,20 @@
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/profile/profile_state_test_utils.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state_prefs.h"
 #import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/url/url_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
@@ -47,28 +52,33 @@ using tab_groups::TabGroupId;
 namespace {
 
 const char kURL[] = "https://chromium.org/";
-const char kOneHourTreshold[] = "3600";
 
 }  // namespace
 
 class StartSurfaceSceneAgentTest : public PlatformTest {
  public:
   StartSurfaceSceneAgentTest() {
-    profile_ = TestProfileIOS::Builder().Build();
+    TestProfileIOS::Builder builder;
+    builder.SetName(profile_manager_.ReserveNewProfileName());
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
     startup_information_ = [[FakeStartupInformation alloc] init];
     app_state_ = OCMClassMock([AppState class]);
     OCMStub([app_state_ startupInformation]).andReturn(startup_information_);
 
     profile_state_ = [[ProfileState alloc] initWithAppState:app_state_];
     SetProfileStateInitStage(profile_state_, ProfileInitStage::kFinal);
+    profile_state_.profile = profile_.get();
 
-    scene_state_ = [[FakeSceneState alloc] initWithAppState:app_state_
-                                                    profile:profile_.get()];
-    scene_state_.scene = static_cast<UIWindowScene*>(
-        [[[UIApplication sharedApplication] connectedScenes] anyObject]);
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
     scene_state_.activationLevel = SceneActivationLevelUnattached;
     scene_state_.profileState = profile_state_;
+    scene_state_.sceneSessionID = "scene";
     scene_state_.UIEnabled = YES;
+    scene_state_.prefs = [[SceneStatePrefs alloc]
+        initWithProfileManager:&profile_manager_
+                   profileName:profile_->GetProfileName()
+             sessionIdentifier:scene_state_.sceneSessionID
+                  sceneSession:nil];
 
     agent_ = [[StartSurfaceSceneAgent alloc] init];
     agent_.sceneState = scene_state_;
@@ -78,7 +88,7 @@ class StartSurfaceSceneAgentTest : public PlatformTest {
     dispatcher_ = browser->GetCommandDispatcher();
     StartSurfaceRecentTabBrowserAgent::CreateForBrowser(browser);
     TabInsertionBrowserAgent::CreateForBrowser(browser);
-    application_handler_ = OCMProtocolMock(@protocol(ApplicationCommands));
+    application_handler_ = OCMProtocolMock(@protocol(SceneCommands));
     [[NSUserDefaults standardUserDefaults] setObject:@14400
                                               forKey:@"HomeSurfaceDuration"];
   }
@@ -99,6 +109,7 @@ class StartSurfaceSceneAgentTest : public PlatformTest {
     app_state_ = nil;
     profile_state_ = nil;
     [scene_state_ shutdown];
+    scene_state_.prefs = nil;
     scene_state_ = nil;
     agent_ = nil;
     dispatcher_ = nil;
@@ -114,7 +125,8 @@ class StartSurfaceSceneAgentTest : public PlatformTest {
  protected:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_;
   FakeStartupInformation* startup_information_;
   AppState* app_state_;
   ProfileState* profile_state_;
@@ -124,7 +136,7 @@ class StartSurfaceSceneAgentTest : public PlatformTest {
   StartSurfaceSceneAgent* agent_;
   ScopedKeyWindow scoped_window_;
   base::HistogramTester histogram_tester_;
-  id<ApplicationCommands> application_handler_;
+  id<SceneCommands> application_handler_;
   id dispatcher_;
 
   // Returns the Browser for the SceneState.
@@ -418,6 +430,10 @@ TEST_F(StartSurfaceSceneAgentTest, LogCorrectColdStartHistogram) {
 }
 
 TEST_F(StartSurfaceSceneAgentTest, PrefetchCapabilitiesOnAppStart) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kBuildExternalPrivacyContext);
+
   // Set up fake identity with account capabilities.
   FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
   fake_system_identity_manager()->AddIdentity(identity);
@@ -452,22 +468,13 @@ TEST_F(StartSurfaceSceneAgentTest, PrefetchCapabilitiesOnAppStart) {
 // Tests that the tab group in grid view is opened if Chrome is activated in the
 // right time interval.
 TEST_F(StartSurfaceSceneAgentTest, ShowTabGroupInGridOnStart) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Within the interval.
   base::Time time_last_background = base::Time::Now() - base::Hours(2);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -488,29 +495,19 @@ TEST_F(StartSurfaceSceneAgentTest, ShowTabGroupInGridOnStart) {
 // the right time interval but in IncognitoMode.
 TEST_F(StartSurfaceSceneAgentTest,
        DoNotShowTabGroupInGridOnStartInIncognitoMode) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Within the interval
   base::Time time_last_background = base::Time::Now() - base::Hours(2);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   // Forcing the current BrowserProvider to be incognito.
-  scene_state_.browserProviderInterface.currentBrowserProvider =
-      scene_state_.browserProviderInterface.incognitoBrowserProvider;
+  auto interface = scene_state_.browserProviderInterface;
+  [scene_state_ setCurrentBrowserProvider:interface.incognitoBrowserProvider];
   CommandDispatcher* dispatcherIncognito =
-      scene_state_.browserProviderInterface.currentBrowserProvider.browser
-          ->GetCommandDispatcher();
+      interface.currentBrowserProvider.browser->GetCommandDispatcher();
 
   [dispatcherIncognito startDispatchingToTarget:application_handler_
-                                    forProtocol:@protocol(ApplicationCommands)];
+                                    forProtocol:@protocol(SceneCommands)];
 
   InsertNewIncognitoWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetIncognitoWebStateList();
@@ -531,22 +528,13 @@ TEST_F(StartSurfaceSceneAgentTest,
 // before the time interval.
 TEST_F(StartSurfaceSceneAgentTest,
        DoNotShowTabGroupInGridOnStartIfOpenedTooEarly) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Not in interval.
   base::Time time_last_background = base::Time::Now() - base::Minutes(30);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -567,22 +555,13 @@ TEST_F(StartSurfaceSceneAgentTest,
 // after the time interval.
 TEST_F(StartSurfaceSceneAgentTest,
        DoNotShowTabGroupInGridOnStartIfOpenedTooLate) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Not in interval.
   base::Time time_last_background = base::Time::Now() - base::Hours(5);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -606,22 +585,13 @@ TEST_F(StartSurfaceSceneAgentTest,
 // part of a group.
 TEST_F(StartSurfaceSceneAgentTest,
        DoNotShowTabGroupInGridOnStartIfNotInAGroup) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Within the interval but no group.
   base::Time time_last_background = base::Time::Now() - base::Hours(2);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -642,22 +612,13 @@ TEST_F(StartSurfaceSceneAgentTest,
 // level is set to ForegroundActive.
 TEST_F(StartSurfaceSceneAgentTest,
        DoNotShowTabGroupInGridOnStartBeforeForegroundActivation) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
   // Within the interval.
   base::Time time_last_background = base::Time::Now() - base::Hours(2);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -675,24 +636,15 @@ TEST_F(StartSurfaceSceneAgentTest,
   [dispatcher_ stopDispatchingToTarget:application_handler_];
 }
 
-// Tests that a NTP is created when Chrome is foregrounded after being +4 hours
-// in background.
-TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterFourHours) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
+// Tests that a NTP is created when Chrome is foregrounded after being in
+// background past the threshold.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterThreshold) {
   base::Time time_last_background = base::Time::Now() - base::Hours(5);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -708,23 +660,14 @@ TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterFourHours) {
 }
 
 // Tests that a NTP is created outside the active group when Chrome is
-// foregrounded after being +4 hours in background.
-TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterFourHoursOutsideActiveGroup) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  // Setting the ShowTabGroupInGridInactiveDuration to 1 hour.
-  base::FieldTrialParams show_tab_grid_treshold = {
-      {kShowTabGroupInGridInactiveDurationInSeconds, kOneHourTreshold}};
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {{kShowTabGroupInGridOnStart, show_tab_grid_treshold}},
-      /*disabled_features=*/{});
-
+// foregrounded after being in background past the threshold.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterThresholdOutsideActiveGroup) {
   base::Time time_last_background = base::Time::Now() - base::Hours(5);
   test::SetStartSurfaceSessionObjectForSceneStateForTesting(
       scene_state_, time_last_background);
 
   [dispatcher_ startDispatchingToTarget:application_handler_
-                            forProtocol:@protocol(ApplicationCommands)];
+                            forProtocol:@protocol(SceneCommands)];
 
   InsertNewWebState(0, GURL(kURL));
   WebStateList* web_state_list = GetWebStateList();
@@ -737,6 +680,141 @@ TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterFourHoursOutsideActiveGroup) {
   scene_state_.activationLevel = SceneActivationLevelForegroundActive;
   ASSERT_EQ(2, web_state_list->count());
   ASSERT_FALSE(web_state_list->GetGroupOfWebStateAt(1));
+
+  [dispatcher_ stopDispatchingToTarget:application_handler_];
+}
+
+// Tests that a NTP is NOT created when Chrome is foregrounded after being in
+// background past the threshold if the Start Surface setting is disabled.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterThresholdSettingOff) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kStartSurfaceUserSetting);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kStartSurfaceEnabled, false);
+
+  base::Time time_last_background = base::Time::Now() - base::Hours(5);
+  test::SetStartSurfaceSessionObjectForSceneStateForTesting(
+      scene_state_, time_last_background);
+
+  [dispatcher_ startDispatchingToTarget:application_handler_
+                            forProtocol:@protocol(SceneCommands)];
+
+  InsertNewWebState(0, GURL(kURL));
+  WebStateList* web_state_list = GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  favicon::WebFaviconDriver::CreateForWebState(
+      web_state_list->GetActiveWebState(),
+      /*favicon_service=*/nullptr);
+
+  scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+  // Count should remain 1 (no NTP created).
+  ASSERT_EQ(1, web_state_list->count());
+
+  [dispatcher_ stopDispatchingToTarget:application_handler_];
+}
+
+// Tests that a NTP IS created when Chrome is foregrounded after being in
+// background past the threshold if the Start Surface setting is explicitly
+// enabled.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPAfterThresholdSettingOn) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kStartSurfaceUserSetting);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kStartSurfaceEnabled, true);
+
+  base::Time time_last_background = base::Time::Now() - base::Hours(5);
+  test::SetStartSurfaceSessionObjectForSceneStateForTesting(
+      scene_state_, time_last_background);
+
+  [dispatcher_ startDispatchingToTarget:application_handler_
+                            forProtocol:@protocol(SceneCommands)];
+
+  InsertNewWebState(0, GURL(kURL));
+  WebStateList* web_state_list = GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  favicon::WebFaviconDriver::CreateForWebState(
+      web_state_list->GetActiveWebState(),
+      /*favicon_service=*/nullptr);
+
+  scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+  // Count should become 2 (NTP created).
+  ASSERT_EQ(2, web_state_list->count());
+
+  [dispatcher_ stopDispatchingToTarget:application_handler_];
+}
+
+// Tests that a NTP is NOT created when Chrome is foregrounded within the
+// threshold, even if the Start Surface setting is enabled.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPWithinThresholdSettingOn) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kStartSurfaceUserSetting);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kStartSurfaceEnabled, true);
+
+  base::Time time_last_background = base::Time::Now() - base::Hours(2);
+  test::SetStartSurfaceSessionObjectForSceneStateForTesting(
+      scene_state_, time_last_background);
+
+  [dispatcher_ startDispatchingToTarget:application_handler_
+                            forProtocol:@protocol(SceneCommands)];
+
+  InsertNewWebState(0, GURL(kURL));
+  WebStateList* web_state_list = GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  favicon::WebFaviconDriver::CreateForWebState(
+      web_state_list->GetActiveWebState(),
+      /*favicon_service=*/nullptr);
+
+  scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+  // Count should remain 1 (no NTP created).
+  ASSERT_EQ(1, web_state_list->count());
+
+  [dispatcher_ stopDispatchingToTarget:application_handler_];
+}
+
+// Tests that a NTP is NOT created when Chrome is foregrounded within the
+// threshold when the Start Surface setting is disabled.
+TEST_F(StartSurfaceSceneAgentTest, OpenNTPWithinThresholdSettingOff) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kStartSurfaceUserSetting);
+
+  profile_->GetPrefs()->SetBoolean(prefs::kStartSurfaceEnabled, false);
+
+  base::Time time_last_background = base::Time::Now() - base::Hours(2);
+  test::SetStartSurfaceSessionObjectForSceneStateForTesting(
+      scene_state_, time_last_background);
+
+  [dispatcher_ startDispatchingToTarget:application_handler_
+                            forProtocol:@protocol(SceneCommands)];
+
+  InsertNewWebState(0, GURL(kURL));
+  WebStateList* web_state_list = GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  favicon::WebFaviconDriver::CreateForWebState(
+      web_state_list->GetActiveWebState(),
+      /*favicon_service=*/nullptr);
+
+  scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+  // Count should remain 1 (no NTP created).
+  ASSERT_EQ(1, web_state_list->count());
+
+  [dispatcher_ stopDispatchingToTarget:application_handler_];
+}
+
+// Tests that the app does not crash when the webStateList is empty.
+TEST_F(StartSurfaceSceneAgentTest, AppDoesNotCrashWhenWebStateListEmpty) {
+  // Within the interval.
+  base::Time time_last_background = base::Time::Now() - base::Hours(2);
+  test::SetStartSurfaceSessionObjectForSceneStateForTesting(
+      scene_state_, time_last_background);
+
+  [dispatcher_ startDispatchingToTarget:application_handler_
+                            forProtocol:@protocol(SceneCommands)];
+
+  WebStateList* web_state_list = GetWebStateList();
+  ASSERT_TRUE(web_state_list->empty());
+
+  scene_state_.activationLevel = SceneActivationLevelForegroundActive;
 
   [dispatcher_ stopDispatchingToTarget:application_handler_];
 }

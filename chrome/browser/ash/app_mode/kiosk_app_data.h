@@ -14,9 +14,10 @@
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_data_base.h"
-#include "chrome/browser/extensions/cws_item_service.pb.h"
-#include "chrome/browser/extensions/webstore_data_fetcher_delegate.h"
 #include "components/account_id/account_id.h"
+#include "extensions/browser/cws_item_service.pb.h"
+#include "extensions/browser/webstore_data_fetcher_delegate.h"
+#include "extensions/browser/webstore_install_helper.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/gurl.h"
 
@@ -102,7 +103,6 @@ class KioskAppData : public KioskAppDataBase,
 
  private:
   class CrxLoader;
-  class WebstoreDataParser;
 
   void SetStatus(Status status);
 
@@ -117,10 +117,7 @@ class KioskAppData : public KioskAppDataBase,
   // Callback for extensions::ImageLoader.
   void OnExtensionIconLoaded(const gfx::Image& icon);
 
-  // Callbacks for WebstoreDataParser
-  void OnWebstoreParseSuccess(const SkBitmap& icon,
-                              const std::string& required_platform_version);
-  void OnWebstoreParseFailure();
+  void OnWebstoreParseFinished(extensions::WebstoreParseResult result);
 
   // Starts to fetch data from web store.
   void StartFetch();
@@ -137,7 +134,7 @@ class KioskAppData : public KioskAppDataBase,
   // `response`. Passes `key`'s content via `value` and returns
   // true when `key` is present.
   bool CheckResponseKeyValue(const std::string& extension_id,
-                             const base::Value::Dict& response,
+                             const base::DictValue& response,
                              const char* key,
                              std::string* value);
 

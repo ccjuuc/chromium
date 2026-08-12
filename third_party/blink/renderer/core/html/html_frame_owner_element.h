@@ -24,6 +24,7 @@
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/trust_tokens.mojom-blink-forward.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
+#include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
 #include "third_party/blink/public/mojom/scroll/scrollbar_mode.mojom-blink.h"
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -31,8 +32,8 @@
 #include "third_party/blink/renderer/core/frame/dom_window.h"
 #include "third_party/blink/renderer/core/frame/embedded_content_view.h"
 #include "third_party/blink/renderer/core/frame/frame_owner.h"
-#include "third_party/blink/renderer/core/html/display_ad_element_monitor.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/layout/natural_sizing_info.h"
 #include "third_party/blink/renderer/core/permissions_policy/permissions_policy_parser.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
@@ -81,6 +82,12 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
     return embedded_content_view_.Get();
   }
 
+  // The last `NaturalSizingInfo` received from the embedded content.
+  // This persists across the lifetime of the embedded content.
+  const std::optional<NaturalSizingInfo>& LastNaturalSizingInfo() const {
+    return last_natural_sizing_info_;
+  }
+
   void SetColorScheme(mojom::blink::ColorScheme);
   void SetPreferredColorScheme(mojom::blink::PreferredColorScheme);
 
@@ -107,6 +114,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   // Node overrides:
   Node::InsertionNotificationRequest InsertedInto(
       ContainerNode& insertion_point) override;
+  void DidChangeIsInCanvasSubtree() override;
   void RemovedFrom(ContainerNode& insertion_point) override;
   // Element overrides:
   void DidRecalcStyle(const StyleRecalcChange) override;
@@ -118,7 +126,9 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   void AddResourceTiming(mojom::blink::ResourceTimingInfoPtr) final;
   void DispatchLoad() final;
   const FramePolicy& GetFramePolicy() const final { return frame_policy_; }
-  void NaturalSizingInfoChanged() override {}
+  void NaturalSizingInfoChanged() override;
+  void ClearLastNaturalSizingInfo() override;
+  void ClearAllNaturalSizingInfo() override;
   void SetNeedsOcclusionTracking(bool) override {}
   AtomicString BrowsingContextContainerName() const override {
     return FastGetAttribute(html_names::kNameAttr);
@@ -131,6 +141,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   bool AllowFullscreen() const override { return false; }
   bool AllowPaymentRequest() const override { return false; }
   bool IsDisplayNone() const override { return !embedded_content_view_; }
+  mojom::blink::FrameResponsiveSizing GetResponsiveSizing() const override;
   mojom::blink::ColorScheme GetColorScheme() const override;
   mojom::blink::PreferredColorScheme GetPreferredColorScheme() const override;
   bool ShouldLazyLoadChildren() const final;
@@ -156,12 +167,6 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
 
   void ParseAttribute(const AttributeModificationParams&) override;
 
-  void DidSetAdStatus();
-
-  // Element overrides:
-  bool IsAdRelated() const override;
-  bool ShouldHighlightAd() const override;
-
   // If the iframe is lazy-loaded, initiate its load, and return true if such
   // a load was initiated.
   bool LoadImmediatelyIfLazy();
@@ -179,6 +184,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   bool IsKeyboardFocusableSlow(
       UpdateBehavior update_behavior =
           UpdateBehavior::kStyleAndLayout) const override;
+  FocusgroupFlags NativeArrowKeyAxes() const final;
   void FrameOwnerPropertiesChanged() override;
 
   void DisposePluginSoon(WebPluginContainerImpl*);
@@ -187,7 +193,7 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   // policies, as "the origin of the URL in the frame's src attribute" (see
   // https://w3c.github.io/webappsec-permissions-policy/#iframe-allow-attribute).
   // This method is intended to be overridden by specific frame classes.
-  virtual scoped_refptr<const SecurityOrigin> GetOriginForPermissionsPolicy()
+  virtual scoped_refptr<const SecurityOrigin> MakeOriginForPermissionsPolicy()
       const {
     return SecurityOrigin::CreateUniqueOpaque();
   }
@@ -259,11 +265,14 @@ class CORE_EXPORT HTMLFrameOwnerElement : public HTMLElement,
   FramePolicy frame_policy_;
 
   Member<LazyLoadFrameObserver> lazy_load_frame_observer_;
-  Member<DisplayAdElementMonitor> display_ad_element_monitor_;
   mojom::blink::ResourceTimingInfoPtr fallback_timing_info_;
+  std::optional<NaturalSizingInfo> last_natural_sizing_info_;
   bool should_lazy_load_children_;
   bool is_swapping_frames_{false};
-  mojom::blink::PreferredColorScheme preferred_color_scheme_;
+  mojom::blink::FrameResponsiveSizing responsive_sizing_{
+      mojom::blink::FrameResponsiveSizing::kNone};
+  mojom::blink::PreferredColorScheme preferred_color_scheme_{
+      mojom::blink::PreferredColorScheme::kLight};
 };
 
 class SubframeLoadingDisabler {

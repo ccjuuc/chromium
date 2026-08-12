@@ -36,6 +36,7 @@ struct IApkInfo {
   const std::string hostVersionCode;
   const std::string installerPackageName;
   bool isDebugApp;
+  bool isSystemApp;
   const std::string packageName;
   const std::string packageVersionCode;
   const std::string packageVersionName;
@@ -71,21 +72,23 @@ void Set(const IApkInfo& info) {
 }
 
 static void JNI_ApkInfo_FillFields(JNIEnv* env,
-                                   std::string& hostPackageName,
-                                   std::string& hostVersionCode,
-                                   std::string& hostPackageLabel,
-                                   std::string& packageVersionCode,
-                                   std::string& packageVersionName,
-                                   std::string& packageName,
-                                   std::string& resourcesVersion,
-                                   std::string& installerPackageName,
-                                   jboolean isDebugApp,
-                                   jint targetSdkVersion) {
+                                   const std::string& hostPackageName,
+                                   const std::string& hostVersionCode,
+                                   const std::string& hostPackageLabel,
+                                   const std::string& packageVersionCode,
+                                   const std::string& packageVersionName,
+                                   const std::string& packageName,
+                                   const std::string& resourcesVersion,
+                                   const std::string& installerPackageName,
+                                   bool isDebugApp,
+                                   bool isSystemApp,
+                                   int32_t targetSdkVersion) {
   Set(IApkInfo{.hostPackageLabel = hostPackageLabel,
                .hostPackageName = hostPackageName,
                .hostVersionCode = hostVersionCode,
                .installerPackageName = installerPackageName,
-               .isDebugApp = static_cast<bool>(isDebugApp),
+               .isDebugApp = isDebugApp,
+               .isSystemApp = isSystemApp,
                .packageName = packageName,
                .packageVersionCode = packageVersionCode,
                .packageVersionName = packageVersionName,
@@ -127,6 +130,10 @@ const std::string& installer_package_name() {
 
 bool is_debug_app() {
   return get_apk_info().isDebugApp;
+}
+
+bool is_system_app() {
+  return get_apk_info().isSystemApp;
 }
 
 int target_sdk_version() {

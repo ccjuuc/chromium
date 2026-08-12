@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/ash/login/network_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/screens/network_screen.h"
@@ -20,7 +21,7 @@ NetworkScreenHandler::NetworkScreenHandler() : BaseScreenHandler(kScreenId) {}
 
 NetworkScreenHandler::~NetworkScreenHandler() = default;
 
-void NetworkScreenHandler::ShowScreenWithData(base::Value::Dict data) {
+void NetworkScreenHandler::ShowScreenWithData(base::DictValue data) {
   ShowInWebUI(std::move(data));
 }
 
@@ -61,7 +62,7 @@ void NetworkScreenHandler::DeclareLocalizedValues(
   cellular_setup::AddLocalizedValuesToBuilder(builder);
 }
 
-void NetworkScreenHandler::GetAdditionalParameters(base::Value::Dict* dict) {
+void NetworkScreenHandler::GetAdditionalParameters(base::DictValue* dict) {
   cellular_setup::AddNonStringLoadTimeDataToDict(dict);
 }
 

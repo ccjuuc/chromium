@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/check.h"
 #import "base/containers/adapters.h"
 #import "base/functional/callback_helpers.h"
 #import "base/metrics/user_metrics.h"
@@ -21,7 +22,6 @@
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/web/model/features.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_java_script_feature.h"
 #import "ios/components/ui_util/dynamic_type_util.h"
 #import "ios/public/provider/chrome/browser/text_zoom/text_zoom_api.h"
@@ -30,11 +30,21 @@
 FontSizeTabHelper::FontSizeTabHelper(web::WebState* web_state)
     : web_state_(web_state), weak_factory_(this) {
   DCHECK(ios::provider::IsTextZoomEnabled());
-  web_state->AddObserver(this);
+  CHECK(web_state_->IsRealized());
+  web_state_->AddObserver(this);
+  FontSizeJavaScriptFeature* feature = FontSizeJavaScriptFeature::GetInstance();
+  feature->GetWebFramesManager(web_state_)->AddObserver(this);
 
-  if (web_state->IsRealized()) {
-    CreateNotificationObserver();
-  }
+  base::RepeatingCallback<void(NSNotification*)> callback =
+      base::IgnoreArgs<NSNotification*>(
+          base::BindRepeating(&FontSizeTabHelper::OnContentSizeCategoryChanged,
+                              weak_factory_.GetWeakPtr()));
+
+  notification_observer_ = [[NSNotificationCenter defaultCenter]
+      addObserverForName:UIContentSizeCategoryDidChangeNotification
+                  object:nil
+                   queue:nil
+              usingBlock:base::CallbackToBlock(callback)];
 }
 
 FontSizeTabHelper::~FontSizeTabHelper() {}
@@ -153,13 +163,8 @@ bool FontSizeTabHelper::CurrentPageSupportsTextZoom() const {
 }
 
 int FontSizeTabHelper::GetFontSize() const {
-  // Only add in the dynamic type multiplier if the flag is enabled.
-  double dynamic_type_multiplier =
-      base::FeatureList::IsEnabled(web::kWebPageDefaultZoomFromDynamicType)
-          ? ui_util::SystemSuggestedFontSizeMultiplier()
-          : 1;
   // Multiply by 100 as the web property needs a percentage.
-  return dynamic_type_multiplier * GetCurrentUserZoomMultiplier() * 100;
+  return GetCurrentUserZoomMultiplier() * 100;
 }
 
 void FontSizeTabHelper::OnContentSizeCategoryChanged() {
@@ -186,27 +191,6 @@ void FontSizeTabHelper::DidFinishNavigation(web::WebState* web_state,
   if (IsGoogleCachedAMPPage()) {
     NewPageZoom();
   }
-}
-
-void FontSizeTabHelper::WebStateRealized(web::WebState* web_state) {
-  CHECK(!notification_observer_);
-  CreateNotificationObserver();
-}
-
-void FontSizeTabHelper::CreateNotificationObserver() {
-  FontSizeJavaScriptFeature* feature = FontSizeJavaScriptFeature::GetInstance();
-  feature->GetWebFramesManager(web_state_)->AddObserver(this);
-
-  base::RepeatingCallback<void(NSNotification*)> callback =
-      base::IgnoreArgs<NSNotification*>(
-          base::BindRepeating(&FontSizeTabHelper::OnContentSizeCategoryChanged,
-                              weak_factory_.GetWeakPtr()));
-
-  notification_observer_ = [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIContentSizeCategoryDidChangeNotification
-                  object:nil
-                   queue:nil
-              usingBlock:base::CallbackToBlock(callback)];
 }
 
 void FontSizeTabHelper::WebFrameBecameAvailable(
@@ -239,13 +223,8 @@ PrefService* FontSizeTabHelper::GetPrefService() const {
 }
 
 std::string FontSizeTabHelper::GetCurrentUserZoomMultiplierKey() const {
-  UIContentSizeCategory content_size_category =
-      base::FeatureList::IsEnabled(web::kWebPageDefaultZoomFromDynamicType)
-          ? UIApplication.sharedApplication.preferredContentSizeCategory
-          : UIContentSizeCategoryLarge;
-
   std::string content_size_category_key =
-      base::SysNSStringToUTF8(content_size_category);
+      base::SysNSStringToUTF8(UIContentSizeCategoryLarge);
   return base::StringPrintf("%s.%s", content_size_category_key.c_str(),
                             GetUserZoomMultiplierKeyUrlPart().c_str());
 }
@@ -259,7 +238,7 @@ std::string FontSizeTabHelper::GetUserZoomMultiplierKeyUrlPart() const {
 }
 
 double FontSizeTabHelper::GetCurrentUserZoomMultiplier() const {
-  const base::Value::Dict& pref =
+  const base::DictValue& pref =
       GetPrefService()->GetDict(prefs::kIosUserZoomMultipliers);
 
   return pref.FindDoubleByDottedPath(GetCurrentUserZoomMultiplierKey())

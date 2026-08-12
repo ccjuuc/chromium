@@ -7,12 +7,17 @@
 
 #import <string>
 
+class GURL;
+
 namespace ios::provider {
+
+// Returns true if a URL is protected.
+bool IsProtectedUrlV2(const GURL& url);
 
 // TODO(crbug.com/460380319): Remove V2 once the migration is completed.
 // Gets the portion of the PageContext script that checks whether PageContext
 // should be detached from the request.
-const std::u16string GetPageContextShouldDetachScriptV2();
+std::u16string GetPageContextShouldDetachScriptV2();
 
 }  // namespace ios::provider
 

@@ -7,7 +7,11 @@
 
 #import <Foundation/Foundation.h>
 
-@protocol ApplicationCommands;
+#import <string>
+
+#import "url/origin.h"
+
+class AuthenticationService;
 class ChromeAccountManagerService;
 @protocol GoogleOneCommands;
 class GURL;
@@ -15,6 +19,7 @@ class GURL;
 class PhotosService;
 class PrefService;
 @protocol SaveToPhotosMediatorDelegate;
+@protocol SceneCommands;
 @protocol SnackbarCommands;
 @protocol SystemIdentity;
 
@@ -57,11 +62,12 @@ extern NSString* const kGooglePhotosAppURLScheme;
                           prefService:(PrefService*)prefService
                 accountManagerService:
                     (ChromeAccountManagerService*)accountManagerService
+                authenticationService:
+                    (AuthenticationService*)authenticationService
                       identityManager:(signin::IdentityManager*)identityManager
             manageStorageAlertHandler:
                 (id<ManageStorageAlertCommands>)manageStorageAlertHandler
-                   applicationHandler:
-                       (id<ApplicationCommands>)applicationHandler
+                         sceneHandler:(id<SceneCommands>)sceneHandler
                      googleOneHandler:(id<GoogleOneCommands>)googleOneHandler;
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -75,13 +81,18 @@ extern NSString* const kGooglePhotosAppURLScheme;
 //      b. Otherwise, the account picker is presented through the `delegate`.
 - (void)startWithImageURL:(const GURL&)imageURL
                  referrer:(const web::Referrer&)referrer
-                 webState:(web::WebState*)webState;
+                 webState:(web::WebState*)webState
+                  frameID:(const std::string&)frameID
+              frameOrigin:(const url::Origin&)frameOrigin;
 
 // Resumes the process of saving the image with the given `identity`. If
 // `askEveryTime` is NO, then the Gaia ID of `identity` will be memorized so the
 // account picker can be skipped next time the user saves an image.
 - (void)accountPickerDidSelectIdentity:(id<SystemIdentity>)identity
                           askEveryTime:(BOOL)askEveryTime;
+
+// Called after the user signed in to save an image with the given `identity`.
+- (void)userSignedInToSaveImageWithIdentity:(id<SystemIdentity>)identity;
 
 // Called when the user taps "Cancel" in the account picker.
 - (void)accountPickerDidCancel;
@@ -102,6 +113,9 @@ extern NSString* const kGooglePhotosAppURLScheme;
 
 // Called when the user taps "Cancel" in the "Manage Storage" alert.
 - (void)manageStorageAlertDidCancel;
+
+// Informs the mediator that the user reauth is done.
+- (void)userIsReauth;
 
 @end
 

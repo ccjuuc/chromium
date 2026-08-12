@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/platform/media/multi_buffer.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
@@ -101,7 +102,8 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
   bool IsLoading() const;
 
   // Reader implementation.
-  void NotifyAvailableRange(const Interval<MultiBufferBlockId>& range) override;
+  void NotifyAvailableRange(
+      const media::Interval<MultiBufferBlockId>& range) override;
 
   // Getters
   int64_t preload_high() const { return preload_high_; }
@@ -112,8 +114,8 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
 
   // Returns the block for a particular byte position.
   MultiBufferBlockId block(int64_t byte_pos) const {
-    return static_cast<MultiBufferBlockId>(byte_pos >>
-                                           multibuffer_->block_size_shift());
+    return base::checked_cast<MultiBufferBlockId>(
+        byte_pos >> multibuffer_->block_size_shift());
   }
 
   // Returns the block for a particular byte position, rounding up.
@@ -160,7 +162,7 @@ class PLATFORM_EXPORT MultiBufferReader : public MultiBuffer::Reader {
   int64_t current_buffer_size_;
 
   // Currently pinned range.
-  Interval<MultiBuffer::BlockId> pinned_range_;
+  media::Interval<MultiBuffer::BlockId> pinned_range_;
 
   // Current position in bytes.
   int64_t pos_;

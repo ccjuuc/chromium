@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/cocoa/tab_group_menu_bridge.h"
 
+#include <vector>
+
 #include "base/apple/foundation_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/sys_string_conversions.h"
@@ -14,19 +16,23 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_metrics.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_menu_utils.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image_skia.h"
@@ -84,8 +90,8 @@ TabGroupMenuBridge::~TabGroupMenuBridge() {
 }
 
 NSMenu* TabGroupMenuBridge::TabGroupsMenu() {
-  NSMenu* tab_groups_menu =
-      [[[NSApp mainMenu] itemWithTag:IDC_SAVED_TAB_GROUPS_MENU] submenu];
+  NSMenu* tab_groups_menu = [[[NSApp mainMenu]
+      itemWithTag:AppMenuModel::kSavedTabGroupsMenuPlaceholder] submenu];
   return tab_groups_menu;
 }
 
@@ -138,7 +144,9 @@ void TabGroupMenuBridge::BuildMenu() {
         [AppController.sharedController lastActiveColorProvider];
     const ui::ColorId color_id = GetTabGroupContextMenuColorId(group->color());
     gfx::ImageSkia group_icon = gfx::CreateVectorIcon(
-        kTabGroupIcon, gfx::kFaviconSize, color_provider.GetColor(color_id));
+        features::IsRoundedIconsEnabled() ? kCircleFilledIcon
+                                          : kTabGroupOldIcon,
+        gfx::kFaviconSize, color_provider.GetColor(color_id));
     item.image = NSImageFromImageSkia(group_icon);
 
     NSMenu* submenu = [[NSMenu alloc] init];
@@ -240,15 +248,16 @@ void TabGroupMenuBridge::OnMenuItem(NSMenuItem* item) {
     return;
   }
 
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   if (!browser) {
     return;
   }
 
   tab_groups::TabGroupMenuAction action = it->second;
   tab_groups::SavedTabGroupUtils::PerformTabGroupMenuAction(
-      action, tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU, browser,
-      tab_group_service_);
+      action, tab_groups::TabGroupMenuContext::MAC_SYSTEM_MENU,
+      browser->GetBrowserForMigrationOnly(), tab_group_service_);
 }
 
 NSMenuItem* TabGroupMenuBridge::CreateStaticSubmenuItem(

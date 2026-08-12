@@ -12,7 +12,7 @@ TouchSelectionControllerClientManagerAndroid::
     TouchSelectionControllerClientManagerAndroid(
         RenderWidgetHostViewAndroid* rwhv)
     : rwhv_(rwhv), active_client_(rwhv) {
-  DCHECK(rwhv_);
+  CHECK(rwhv_, base::NotFatalUntil::M152);
 }
 
 TouchSelectionControllerClientManagerAndroid::
@@ -34,7 +34,7 @@ void TouchSelectionControllerClientManagerAndroid::OnClientHitTestRegionUpdated(
     ui::TouchSelectionControllerClient* client) {
   if (client != active_client_ || !GetTouchSelectionController() ||
       GetTouchSelectionController()->active_status() ==
-          ui::TouchSelectionController::INACTIVE) {
+          ui::TouchSelectionController::ActiveStatus::kInactive) {
     return;
   }
 

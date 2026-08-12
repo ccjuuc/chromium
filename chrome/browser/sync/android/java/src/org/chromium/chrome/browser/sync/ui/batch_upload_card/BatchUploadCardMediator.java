@@ -10,6 +10,7 @@ import android.app.Activity;
 import android.content.Context;
 
 import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleObserver;
 import androidx.lifecycle.LifecycleOwner;
 
@@ -30,8 +31,7 @@ import org.chromium.chrome.browser.sync.ui.BatchUploadDialogCoordinator;
 import org.chromium.chrome.browser.sync.ui.batch_upload_card.BatchUploadCardCoordinator.EntryPoint;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.sync.DataType;
 import org.chromium.components.sync.LocalDataDescription;
@@ -59,6 +59,7 @@ class BatchUploadCardMediator
                 }
             };
 
+    private final Lifecycle mLifecycle;
     private final Context mContext;
     private final Profile mProfile;
     private final PropertyModel mModel;
@@ -117,12 +118,14 @@ class BatchUploadCardMediator
                                 : DeviceAuthSource.SETTINGS_BATCH_UPLOAD);
         mDialogManager = modalDialogManager;
 
-        lifecycleOwner.getLifecycle().addObserver(mLifeCycleObserver);
+        mLifecycle = lifecycleOwner.getLifecycle();
+        mLifecycle.addObserver(mLifeCycleObserver);
 
         updateBatchUploadCard();
     }
 
     public void destroy() {
+        mLifecycle.removeObserver(mLifeCycleObserver);
         if (mSyncService != null) {
             mSyncService.removeSyncStateChangedListener(this);
         }
@@ -172,16 +175,15 @@ class BatchUploadCardMediator
         SyncService syncService = SyncServiceFactory.getForProfile(mProfile);
         assumeNonNull(syncService);
         syncService.triggerLocalDataMigration(types);
-        CoreAccountInfo coreAccountInfo =
-                mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
-        assumeNonNull(coreAccountInfo);
+        @Nullable AccountInfo accountInfo = mIdentityManager.getPrimaryAccountInfo();
+        assumeNonNull(accountInfo);
         // TODO(crbug.com/354922852): Handle accounts with non-displayable email address.
         String snackbarMessage =
                 mContext.getResources()
                         .getQuantityString(
                                 R.plurals.batch_upload_saved_snackbar_message,
                                 itemsCount,
-                                coreAccountInfo.getEmail());
+                                accountInfo.getEmail());
         SnackbarManager snackbarManager = assumeNonNull(mSnackbarManagerSupplier.get());
         snackbarManager.showSnackbar(
                 Snackbar.make(
@@ -239,7 +241,7 @@ class BatchUploadCardMediator
     }
 
     private void setupBatchUploadCardPropertyModel() {
-        CoreAccountInfo accountInfo = mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+        @Nullable AccountInfo accountInfo = mIdentityManager.getPrimaryAccountInfo();
         // setupBatchUploadCardView() is called asynchronously through updateBatchUploadCard(), so
         // it could be called while there is no primary account.
         if (accountInfo == null) {
@@ -254,8 +256,8 @@ class BatchUploadCardMediator
                             mContext,
                             mLocalDataDescriptionsMap,
                             mDialogManager,
-                            /* displayableProfileData= */ mProfileDataCache.getProfileDataOrDefault(
-                                    accountInfo.getEmail()),
+                            /* displayableProfileData= */ mProfileDataCache.getById(
+                                    accountInfo.getId()),
                             this);
                 });
 

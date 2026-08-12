@@ -22,9 +22,7 @@
 
 namespace blink {
 
-LayoutTextCombine::LayoutTextCombine() : LayoutBlockFlow(nullptr) {
-  SetIsAtomicInlineLevel(true);
-}
+LayoutTextCombine::LayoutTextCombine() : LayoutBlockFlow(nullptr) {}
 
 LayoutTextCombine::~LayoutTextCombine() = default;
 
@@ -33,7 +31,7 @@ LayoutTextCombine* LayoutTextCombine::CreateAnonymous(LayoutText* text_child) {
   DCHECK(ShouldBeParentOf(*text_child)) << text_child;
   auto* const layout_object = MakeGarbageCollected<LayoutTextCombine>();
   auto& document = text_child->GetDocument();
-  layout_object->SetDocumentForAnonymous(&document);
+  layout_object->SetDocumentForAnonymous(document);
   ComputedStyleBuilder new_style_builder =
       document.GetStyleResolver().CreateAnonymousStyleBuilderWithDisplay(
           text_child->StyleRef(), EDisplay::kInlineBlock);
@@ -255,7 +253,7 @@ PhysicalRect LayoutTextCombine::RecalcContentsInkOverflow(
     // |LayoutTextCombine| does not support decorating box, as it is not
     // supported in vertical flow and text-combine is only for vertical flow.
     const LogicalRect decoration_rect = InkOverflow::ComputeDecorationOverflow(
-        cursor, style, *style.GetFont(),
+        cursor, style, UsedFont(*style.GetFont(), 1.0f),
         /* offset_in_container */ PhysicalOffset(), ink_overflow,
         /* inline_context */ nullptr, writing_mode);
     ink_overflow.Unite(decoration_rect);

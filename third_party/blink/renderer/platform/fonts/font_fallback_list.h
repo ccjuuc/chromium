@@ -66,7 +66,6 @@ class PLATFORM_EXPORT FontFallbackList
   bool ShouldSkipDrawing() const;
 
   FontSelector* GetFontSelector() const { return font_selector_.Get(); }
-  uint16_t Generation() const { return generation_; }
 
   const ShapeResult& GetOrCreateEmphasisMarkShape(const Font&,
                                                   const AtomicString& mark);
@@ -116,7 +115,7 @@ class PLATFORM_EXPORT FontFallbackList
   const FontData* FontDataAt(const FontDescription&, unsigned index);
 
   base::span<const FontFeatureRange> GetFontFeatures(const FontDescription&);
-  bool HasNonInitialFontFeatures(const FontDescription&);
+  bool HasSimpleFontFeatures(const FontDescription&);
 
   bool CanShapeWordByWord(const FontDescription&);
 
@@ -155,7 +154,6 @@ class PLATFORM_EXPORT FontFallbackList
   Member<const SimpleFontData> cached_primary_simple_font_data_for_tab_size_;
   const Member<FontSelector> font_selector_;
   int family_index_ = 0;
-  const uint16_t generation_;
   Vector<FontFeatureRange, FontFeatureRange::kInitialSize> font_features_;
 
   bool has_loading_fallback_ : 1 = false;
@@ -165,7 +163,7 @@ class PLATFORM_EXPORT FontFallbackList
   bool is_invalid_ : 1 = false;
   bool nullify_primary_font_data_for_test_ : 1 = false;
   bool is_font_features_computed_ : 1 = false;
-  bool has_non_initial_font_features_ : 1 = false;
+  bool has_simple_font_features_ : 1 = false;
 
   // `emphasis_mark_shape_` and `emphasis_mark_text_` makes a simple cache of a
   // ShapeResult for an emphasis mark.

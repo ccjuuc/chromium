@@ -7,11 +7,13 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "base/barrier_closure.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -26,7 +28,6 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -47,6 +48,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 using net::test_server::BasicHttpResponse;
@@ -199,8 +201,9 @@ TEST_F(BackgroundDownloaderTest, DISABLED_SimpleDownload) {
                         EXPECT_EQ(result.error, 0);
                         ExpectSmallDownloadContents(result.response);
                         ExpectDownloadMetrics(
-                            metrics, static_cast<int>(CrxDownloaderError::NONE),
-                            0, std::strlen(kSmallDownloadData),
+                            metrics,
+                            std::to_underlying(CrxDownloaderError::NONE), 0,
+                            std::strlen(kSmallDownloadData),
                             std::strlen(kSmallDownloadData), true);
                       })
                       .Then(run_loop.QuitClosure()));
@@ -216,9 +219,8 @@ TEST_F(BackgroundDownloaderTest, DISABLED_DownloadDiscoveredInCache) {
 
   // Place a download in the cache.
   ASSERT_TRUE(base::CreateDirectory(download_cache_));
-  uint32_t url_hash = base::PersistentHash(GetURL().spec());
-  base::FilePath cached_download_path = download_cache_.Append(
-      base::HexEncode(reinterpret_cast<uint8_t*>(&url_hash), sizeof(url_hash)));
+  base::FilePath cached_download_path = download_cache_.Append(base::HexEncode(
+      base::byte_span_from_ref(base::PersistentHash(GetURL().spec()))));
   ASSERT_TRUE(base::WriteFile(cached_download_path, kSmallDownloadData));
 
   base::RunLoop run_loop;
@@ -230,8 +232,9 @@ TEST_F(BackgroundDownloaderTest, DISABLED_DownloadDiscoveredInCache) {
                         EXPECT_EQ(result.error, 0);
                         ExpectSmallDownloadContents(result.response);
                         ExpectDownloadMetrics(
-                            metrics, static_cast<int>(CrxDownloaderError::NONE),
-                            0, std::strlen(kSmallDownloadData),
+                            metrics,
+                            std::to_underlying(CrxDownloaderError::NONE), 0,
+                            std::strlen(kSmallDownloadData),
                             std::strlen(kSmallDownloadData), false);
                       })
                       .Then(run_loop.QuitClosure()));
@@ -278,9 +281,8 @@ TEST_F(BackgroundDownloaderTest, DISABLED_ServerHangup) {
               std::make_unique<BasicHttpResponse>();
           response->set_code(net::HTTP_PARTIAL_CONTENT);
           response->AddCustomHeader(
-              "Content-Range",
-              base::StringPrintf("bytes %d-%zu/%zu", lower_range, data.size(),
-                                 data.size()));
+              "Content-Range", absl::StrFormat("bytes %d-%zu/%zu", lower_range,
+                                               data.size(), data.size()));
           response->set_content(data.substr(lower_range));
           return base::WrapUnique<HttpResponse>(response.release());
         } else {
@@ -298,8 +300,9 @@ TEST_F(BackgroundDownloaderTest, DISABLED_ServerHangup) {
                         EXPECT_EQ(result.error, 0);
                         ExpectLargeDownloadContents(result.response);
                         ExpectDownloadMetrics(
-                            metrics, static_cast<int>(CrxDownloaderError::NONE),
-                            0, data.size(), data.size(), true);
+                            metrics,
+                            std::to_underlying(CrxDownloaderError::NONE), 0,
+                            data.size(), data.size(), true);
                       })
                       .Then(run_loop.QuitClosure()));
   run_loop.Run();
@@ -321,11 +324,11 @@ TEST_F(BackgroundDownloaderTest, DISABLED_DuplicateDownload) {
                     EXPECT_FALSE(is_handled);
                     EXPECT_EQ(
                         result.error,
-                        static_cast<int>(
+                        std::to_underlying(
                             CrxDownloaderError::MAC_BG_DUPLICATE_DOWNLOAD));
                     ExpectDownloadMetrics(
                         metrics,
-                        static_cast<int>(
+                        std::to_underlying(
                             CrxDownloaderError::MAC_BG_DUPLICATE_DOWNLOAD),
                         0, -1, -1, false);
                   })
@@ -424,11 +427,11 @@ TEST_F(BackgroundDownloaderTest, DISABLED_MaxDownloads) {
                   EXPECT_FALSE(is_handled);
                   EXPECT_EQ(
                       result.error,
-                      static_cast<int>(
+                      std::to_underlying(
                           CrxDownloaderError::MAC_BG_SESSION_TOO_MANY_TASKS));
                   ExpectDownloadMetrics(
                       metrics,
-                      static_cast<int>(
+                      std::to_underlying(
                           CrxDownloaderError::MAC_BG_SESSION_TOO_MANY_TASKS),
                       0, -1, -1, false);
                 })
@@ -573,9 +576,8 @@ TEST_F(BackgroundDownloaderCrashingClientTest, DISABLED_ClientCrash) {
               std::make_unique<BasicHttpResponse>();
           response->set_code(net::HTTP_PARTIAL_CONTENT);
           response->AddCustomHeader(
-              "Content-Range",
-              base::StringPrintf("bytes %d-%zu/%zu", lower_range, data.size(),
-                                 data.size()));
+              "Content-Range", absl::StrFormat("bytes %d-%zu/%zu", lower_range,
+                                               data.size(), data.size()));
           response->set_content(data.substr(lower_range));
           return base::WrapUnique<HttpResponse>(response.release());
         } else {

@@ -27,7 +27,13 @@ namespace content {
 
 URLProvisionFetcher::URLProvisionFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : url_loader_factory_(std::move(url_loader_factory)) {
+    : URLProvisionFetcher(std::move(url_loader_factory), "Widevine CDM v1.0") {}
+
+URLProvisionFetcher::URLProvisionFetcher(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string_view user_agent)
+    : url_loader_factory_(std::move(url_loader_factory)),
+      user_agent_(user_agent) {
   DCHECK(url_loader_factory_);
 }
 
@@ -80,22 +86,15 @@ void URLProvisionFetcher::Retrieve(
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   resource_request->method = net::HttpRequestHeaders::kPostMethod;
   resource_request->headers.SetHeader(net::HttpRequestHeaders::kUserAgent,
-                                      "Widevine CDM v1.0");
+                                      user_agent_);
 
   std::string post_body;
   std::string content_type;
 
-  if (base::FeatureList::IsEnabled(media::kUsePostBodyForUrlProvisionFetcher)) {
-    resource_request->url = default_url;
-    post_body = "signedRequest=" + request_data;
-    content_type = "application/x-www-form-urlencoded";
-  } else {
-    const std::string request_string =
-        default_url.spec() + "&signedRequest=" + request_data;
-    resource_request->url = GURL(request_string);
-    post_body = "";
-    content_type = "application/json";
-  }
+  resource_request->url = default_url;
+  post_body = "signedRequest=" + request_data;
+  content_type = "application/x-www-form-urlencoded";
+
   DVLOG(1) << __func__ << ": url:'" << resource_request->url
            << "' content_type:'" << content_type << "' body:'" << post_body
            << "'";
@@ -143,6 +142,14 @@ std::unique_ptr<media::ProvisionFetcher> CreateProvisionFetcher(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   DCHECK(url_loader_factory);
   return std::make_unique<URLProvisionFetcher>(std::move(url_loader_factory));
+}
+
+std::unique_ptr<media::ProvisionFetcher> CreateProvisionFetcherWithUserAgent(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string_view user_agent) {
+  DCHECK(url_loader_factory);
+  return std::make_unique<URLProvisionFetcher>(std::move(url_loader_factory),
+                                               user_agent);
 }
 
 }  // namespace content

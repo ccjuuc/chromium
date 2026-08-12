@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <string_view>
@@ -14,8 +15,9 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/field_trial.h"
@@ -35,7 +37,7 @@
 #include "chrome/browser/extensions/external_component_loader.h"
 #include "chrome/browser/extensions/external_policy_loader.h"
 #include "chrome/browser/extensions/external_pref_loader.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
+#include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/browser/extensions/initial_external_extension_loader.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
@@ -50,6 +52,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/external_install_info.h"
 #include "extensions/browser/external_provider_interface.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/pref_names.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
@@ -58,7 +61,6 @@
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/preinstalled_apps.h"
 #include "chrome/browser/web_applications/preinstalled_app_install_features.h"
 #endif
 
@@ -79,6 +81,7 @@
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "chromeos/constants/chromeos_features.h"
 #else
+#include "chrome/browser/extensions/preinstalled_extensions.h"
 #include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #endif
 
@@ -92,8 +95,10 @@ using content::BrowserThread;
 using extensions::mojom::ManifestLocation;
 
 namespace extensions {
-
 namespace {
+
+using ::base::i18n::LanguageTag;
+using ::base::i18n::LanguageTagConverter;
 
 #if BUILDFLAG(IS_CHROMEOS)
 
@@ -163,7 +168,7 @@ void ExternalProviderImpl::VisitRegisteredExtension() {
   loader_->StartLoading();
 }
 
-void ExternalProviderImpl::SetPrefs(base::Value::Dict prefs) {
+void ExternalProviderImpl::SetPrefs(base::DictValue prefs) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Check if the service is still alive. It is possible that it went
@@ -172,7 +177,7 @@ void ExternalProviderImpl::SetPrefs(base::Value::Dict prefs) {
     return;
 
   InstallStageTracker* install_stage_tracker =
-      InstallStageTracker::Get(profile_);
+      InstallStageTrackerFactory::GetForBrowserContext(profile_);
   for (auto it : prefs) {
     install_stage_tracker->ReportInstallCreationStage(
         it.first,
@@ -213,7 +218,7 @@ void ExternalProviderImpl::NotifyServiceOnExternalExtensionsFound() {
   service_->OnExternalProviderReady(this);
 }
 
-void ExternalProviderImpl::UpdatePrefs(base::Value::Dict prefs) {
+void ExternalProviderImpl::UpdatePrefs(base::DictValue prefs) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CHECK(allow_updates_);
 
@@ -254,7 +259,7 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
   // Set of unsupported extensions that need to be deleted from prefs_.
   std::set<std::string> unsupported_extensions;
   InstallStageTracker* install_stage_tracker =
-      InstallStageTracker::Get(profile_);
+      InstallStageTrackerFactory::GetForBrowserContext(profile_);
 
   // Discover all the extensions this provider has.
   for (auto pref : *prefs_) {
@@ -298,7 +303,7 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
       continue;
     }
 
-    const base::Value::Dict& extension_dict = pref.second.GetDict();
+    const base::DictValue& extension_dict = pref.second.GetDict();
     const std::string* external_crx = extension_dict.FindString(kExternalCrx);
     std::string external_version;
     const std::string* external_update_url = nullptr;
@@ -342,27 +347,38 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
     }
 
     // Check that extension supports current browser locale.
-    const base::Value::List* supported_locales =
+    const base::ListValue* supported_locales =
         extension_dict.FindList(kSupportedLocales);
     if (supported_locales) {
-      std::vector<std::string> browser_locales = l10n_util::GetParentLocales(
-          g_browser_process->GetApplicationLocale());
+      std::vector<LanguageTag> browser_tags;
+      if (std::optional<LanguageTag> tag =
+              LanguageTagConverter::GetInstance().FromString(
+                  g_browser_process->GetApplicationLocale())) {
+        browser_tags = tag->GetLineage();
+      }
 
       bool locale_supported = false;
       for (const base::Value& locale : *supported_locales) {
         const std::string* current_locale = locale.GetIfString();
-        if (current_locale && l10n_util::IsValidLocaleSyntax(*current_locale)) {
-          std::string normalized_locale =
-              l10n_util::NormalizeLocale(*current_locale);
-          if (base::Contains(browser_locales, normalized_locale)) {
-            locale_supported = true;
-            break;
-          }
-        } else {
+        if (!current_locale) {
           LOG(WARNING) << "Unrecognized locale '"
-                       << (current_locale ? *current_locale : "(Not a string)")
+                       << "(Not a string)"
                        << "' found as supported locale for extension: "
                        << extension_id;
+          continue;
+        }
+        std::optional<LanguageTag> current_tag =
+            LanguageTagConverter::GetInstance().FromString(*current_locale);
+        if (!current_tag) {
+          LOG(WARNING) << "Unrecognized locale '" << *current_locale
+                       << "' found as supported locale for extension: "
+                       << extension_id;
+          continue;
+        }
+
+        if (std::ranges::contains(browser_tags, *current_tag)) {
+          locale_supported = true;
+          break;
         }
       }
 
@@ -561,7 +577,7 @@ bool ExternalProviderImpl::HasExtensionWithLocation(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CHECK(prefs_);
   CHECK(ready_);
-  const base::Value::Dict* dict = prefs_->FindDict(id);
+  const base::DictValue* dict = prefs_->FindDict(id);
   if (!dict) {
     return false;
   }
@@ -585,7 +601,7 @@ bool ExternalProviderImpl::GetExtensionDetails(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   CHECK(prefs_);
   CHECK(ready_);
-  const base::Value::Dict* dict = prefs_->FindDict(id);
+  const base::DictValue* dict = prefs_->FindDict(id);
   if (!dict)
     return false;
 
@@ -614,7 +630,7 @@ bool ExternalProviderImpl::GetExtensionDetails(
 }
 
 bool ExternalProviderImpl::HandleMinProfileVersion(
-    const base::Value::Dict& extension,
+    const base::DictValue& extension,
     const std::string& extension_id,
     std::set<std::string>* unsupported_extensions) {
   const std::string* min_profile_created_by_version =
@@ -625,7 +641,7 @@ bool ExternalProviderImpl::HandleMinProfileVersion(
     base::Version min_version(*min_profile_created_by_version);
     if (min_version.IsValid() && profile_version.CompareTo(min_version) < 0) {
       unsupported_extensions->insert(extension_id);
-      InstallStageTracker::Get(profile_)->ReportFailure(
+      InstallStageTrackerFactory::GetForBrowserContext(profile_)->ReportFailure(
           extension_id, InstallStageTracker::FailureReason::TOO_OLD_PROFILE);
       VLOG(1) << "Skip installing (or uninstall) external extension: "
               << extension_id
@@ -639,7 +655,7 @@ bool ExternalProviderImpl::HandleMinProfileVersion(
 }
 
 bool ExternalProviderImpl::HandleDoNotInstallForEnterprise(
-    const base::Value::Dict& extension,
+    const base::DictValue& extension,
     const std::string& extension_id,
     std::set<std::string>* unsupported_extensions) {
   std::optional<bool> do_not_install_for_enterprise =
@@ -649,7 +665,7 @@ bool ExternalProviderImpl::HandleDoNotInstallForEnterprise(
         profile_->GetProfilePolicyConnector();
     if (connector->IsManaged()) {
       unsupported_extensions->insert(extension_id);
-      InstallStageTracker::Get(profile_)->ReportFailure(
+      InstallStageTrackerFactory::GetForBrowserContext(profile_)->ReportFailure(
           extension_id,
           InstallStageTracker::FailureReason::DO_NOT_INSTALL_FOR_ENTERPRISE);
       VLOG(1) << "Skip installing (or uninstall) external extension "
@@ -877,14 +893,16 @@ void ExternalProviderImpl::CreateExternalProviders(
 #endif
   }
 
-#if !BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(ENABLE_EXTENSIONS)
-  // The pre-installed apps are installed as INTERNAL but use the external
-  // extension installer codeflow.
-  provider_list->push_back(std::make_unique<preinstalled_apps::Provider>(
-      profile, service,
-      base::MakeRefCounted<ExternalPrefLoader>(
-          chrome::DIR_DEFAULT_APPS, ExternalPrefLoader::NONE, nullptr),
-      ManifestLocation::kInternal, ManifestLocation::kInternal,
+#if !BUILDFLAG(IS_CHROMEOS)
+  // The pre-installed apps and extensions are installed as
+  // `ManifestLocation::kInternal` but use the external extension installer
+  // codeflow. `download_location` must be `ManifestLocation::kInternal` so the
+  // Chrome Web Store requests will include `installedby=internal` and allow
+  // certain extension downloads (e.g. Docs Offline). Unused on Chrome OS, which
+  // has its own mechanism for preinstalls.
+  provider_list->push_back(std::make_unique<preinstalled_extensions::Provider>(
+      profile, service, ManifestLocation::kInternal,
+      ManifestLocation::kInternal,
       Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
 #endif
 

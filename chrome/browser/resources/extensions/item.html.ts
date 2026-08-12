@@ -59,7 +59,7 @@ export function getHtml(this: ItemElement) {
       </div>
       ${this.showSevereWarnings() ? html`
         <div id="warnings">
-          <cr-icon class="message-icon" icon="cr:error-outline"></cr-icon>
+          <cr-icon class="message-icon" icon="cr:error"></cr-icon>
           <span id="runtime-warnings" class="cr-secondary-text"
               aria-describedby="a11yAssociation"
               ?hidden="${!this.data.runtimeWarnings.length}">
@@ -91,7 +91,7 @@ export function getHtml(this: ItemElement) {
         </div>` : ''}
       ${this.showMv2DeprecationWarning_() ? html`
         <div id="warnings">
-          <cr-icon class="message-icon" icon="cr:error-outline"></cr-icon>
+          <cr-icon class="message-icon" icon="cr:error"></cr-icon>
           <span id="mv2-deprecation-warning" class="cr-secondary-text"
               aria-describedby="a11yAssociation">
             $i18n{mv2DeprecationUnsupportedExtensionOffText}
@@ -100,7 +100,9 @@ export function getHtml(this: ItemElement) {
       ${this.showAllowlistWarning_() ? html`
         <div id="allowlist-warning">
           <cr-icon class="message-icon"
-              icon="extensions-icons:safebrowsing_warning">
+              icon="${this.webuiRoundedIconsEnabled_
+                  ? 'extensions-icons:android-security-privacy-alert'
+                  : 'extensions-icons:safebrowsing_warning-old'}">
           </cr-icon>
           <span class="cr-secondary-text" aria-describedby="a11yAssociation">
             $i18n{itemAllowlistWarning}
@@ -159,7 +161,9 @@ export function getHtml(this: ItemElement) {
     ${this.showAccountUploadButton_() ? html`
       <cr-icon-button id="account-upload-button" class="no-overlap"
           title="$i18n{itemUpload}" aria-label="$i18n{itemUpload}"
-          iron-icon="extensions-icons:extension_cloud_upload"
+          iron-icon="${this.webuiRoundedIconsEnabled_
+              ? 'extensions-icons:cloud-upload'
+              : 'extensions-icons:extension_cloud_upload-old'}"
           aria-describedby="a11yAssociation" @click="${this.onUploadClick_}">
       </cr-icon-button>` : ''}
     ${this.showDevReloadButton_() ? html`
@@ -180,17 +184,12 @@ export function getHtml(this: ItemElement) {
     <cr-tooltip-icon id="parentDisabledPermissionsToolTip"
         ?hidden="${!this.data.disableReasons.parentDisabledPermissions}"
         tooltip-text="$i18n{parentDisabledPermissions}"
-        icon-class="cr20:kite"
+        icon-class="cr20:family-link"
         icon-aria-label="$i18n{parentDisabledPermissions}">
     </cr-tooltip-icon>
-    <cr-tooltip id="enable-toggle-tooltip" for="enableToggle"
-        position="${this.enableToggleTooltipPosition_}"
-        aria-hidden="true" animation-delay="0" fit-to-visible-bounds>
-      ${this.getEnableToggleTooltipText_()}
-    </cr-tooltip>
     <cr-toggle id="enableToggle"
         aria-label="${this.getEnableToggleAriaLabel_()}"
-        aria-describedby="a11yAssociation enable-toggle-tooltip"
+        aria-describedby="a11yAssociation"
         ?checked="${this.isEnabled_()}" @change="${this.onEnableToggleChange_}"
         ?disabled="${!this.isEnableToggleEnabled_()}"
         ?hidden="${!this.showEnableToggle_()}">

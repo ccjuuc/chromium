@@ -37,7 +37,8 @@ class MockD3D12VideoEncodeDelegate : public D3D12VideoEncodeDelegate {
   EncoderStatus EncodeImpl(ID3D12Resource*,
                            UINT,
                            const VideoEncoder::EncodeOptions&,
-                           const gfx::ColorSpace&) override {
+                           const gfx::ColorSpace&,
+                           const gfx::HDRMetadata&) override {
     return EncoderStatus::Codes::kOk;
   }
 
@@ -72,8 +73,18 @@ D3D12VideoEncodeDelegateTestBase::CreateVideoProcessorWrapper(
     Microsoft::WRL::ComPtr<ID3D12VideoDevice>&& video_device) {
   auto video_processor_wrapper =
       std::make_unique<NiceMock<MockD3D12VideoProcessorWrapper>>(video_device);
+  // The lambda captures the fence ComPtr by value, which ensures the fence
+  // outlives the lambda stored in ON_CALL.
+  auto fence = MakeComPtr<NiceMock<D3D12FenceMock>>();
   ON_CALL(*video_processor_wrapper, Init).WillByDefault(Return(true));
-  ON_CALL(*video_processor_wrapper, ProcessFrames).WillByDefault(Return(true));
+  ON_CALL(*video_processor_wrapper, CheckVideoProcessorSupport)
+      .WillByDefault(Return(true));
+  ON_CALL(*video_processor_wrapper, ProcessFrames)
+      .WillByDefault([fence](ID3D12Resource*, UINT, const gfx::ColorSpace&,
+                             const gfx::Rect&, ID3D12Resource*, UINT,
+                             const gfx::ColorSpace&, const gfx::Rect&) {
+        return D3D12FenceAndValue{fence.Get(), 0};
+      });
   return std::move(video_processor_wrapper);
 }
 
@@ -89,6 +100,7 @@ D3D12VideoEncodeDelegateTestBase::CreateVideoEncoderWrapper(
   auto video_encoder_wrapper =
       std::make_unique<NiceMock<MockD3D12VideoEncoderWrapper>>();
   ON_CALL(*video_encoder_wrapper, Initialize).WillByDefault(Return(true));
+  ON_CALL(*video_encoder_wrapper, Wait).WillByDefault(Return(true));
   ON_CALL(*video_encoder_wrapper, Encode)
       .WillByDefault(Return(EncoderStatus::Codes::kOk));
   ON_CALL(*video_encoder_wrapper, ReadbackBitstream)
@@ -127,18 +139,23 @@ D3D12VideoEncodeDelegateTestBase::GetEncoderOutputMetadataResourceMap(
       MakeComPtr<NiceMock<D3D12ResourceMock>>();
   ON_CALL(*resource.Get(), GetDesc())
       .WillByDefault(Return(CD3DX12_RESOURCE_DESC::Buffer(bitstream_size)));
-  static base::NoDestructor<base::flat_map<
-      D3D12ResourceMock*, std::unique_ptr<D3D12_VIDEO_ENCODER_OUTPUT_METADATA>>>
+  static base::NoDestructor<
+      base::flat_map<D3D12ResourceMock*, std::unique_ptr<uint8_t[]>>>
       mapped_metadata;
   ON_CALL(*resource.Get(), Map(0, _, _))
       .WillByDefault([&](UINT, const D3D12_RANGE*, void** data) {
-        D3D12_VIDEO_ENCODER_OUTPUT_METADATA* metadata =
-            new D3D12_VIDEO_ENCODER_OUTPUT_METADATA{
-                .EncodedBitstreamWrittenBytesCount = bitstream_size,
-                .WrittenSubregionsCount = 1,
-            };
-        (*mapped_metadata)[resource.Get()].reset(metadata);
-        *data = metadata;
+        // Allocate a buffer large enough for the metadata structure or the
+        // bitstream size, whichever is larger.
+        auto buffer = std::make_unique<uint8_t[]>(std::max(
+            bitstream_size, sizeof(D3D12_VIDEO_ENCODER_OUTPUT_METADATA)));
+        auto* metadata = reinterpret_cast<D3D12_VIDEO_ENCODER_OUTPUT_METADATA*>(
+            buffer.get());
+        *metadata = D3D12_VIDEO_ENCODER_OUTPUT_METADATA{
+            .EncodedBitstreamWrittenBytesCount = bitstream_size,
+            .WrittenSubregionsCount = 1,
+        };
+        *data = buffer.get();
+        (*mapped_metadata)[resource.Get()] = std::move(buffer);
         return S_OK;
       });
   ScopedD3D12ResourceMap metadata_buffer;
@@ -214,6 +231,50 @@ TEST_F(D3D12VideoEncodeDelegateTest, P010InputFormatFor10BitProfile) {
   EXPECT_EQ(encoder_delegate_->GetFormatForTesting(), DXGI_FORMAT_P010);
 }
 
+TEST_F(D3D12VideoEncodeDelegateTest,
+       P010InputFormatForRGBInputWith10BitProfile) {
+  // RGB(A) inputs feeding a 10-bit profile (e.g. HDR content delivered via an
+  // RGBA shared image) must select P010 as the encoder input format so the
+  // video processor converts to 10-bit before encoding.
+  for (VideoPixelFormat rgb_format : {PIXEL_FORMAT_ARGB, PIXEL_FORMAT_XRGB,
+                                      PIXEL_FORMAT_ABGR, PIXEL_FORMAT_XBGR}) {
+    VideoEncodeAccelerator::Config config = GetDefaultH264Config();
+    config.input_format = rgb_format;
+    config.output_profile = H264PROFILE_HIGH10PROFILE;
+    EXPECT_TRUE(encoder_delegate_->Initialize(config).is_ok());
+    EXPECT_EQ(encoder_delegate_->GetFormatForTesting(), DXGI_FORMAT_P010)
+        << "Unexpected input format for RGB pixel format "
+        << VideoPixelFormatToString(rgb_format);
+  }
+}
+
+TEST_F(D3D12VideoEncodeDelegateTest, EncodeFailsWhenVideoProcessorUnsupported) {
+  // The encoder input format and the required conversion are only resolved at
+  // Encode() time, when the actual input frame format is known. If the video
+  // processor cannot perform the conversion, Encode() should fail with an
+  // unsupported-config error before submitting any GPU work.
+  VideoEncodeAccelerator::Config config = GetDefaultH264Config();
+  ASSERT_TRUE(encoder_delegate_->Initialize(config).is_ok());
+
+  ON_CALL(*GetVideoProcessorWrapper(), CheckVideoProcessorSupport)
+      .WillByDefault(Return(false));
+
+  // An ARGB input frame differs from the NV12 encoder input format, so the
+  // encoder must run the video processor to convert it.
+  auto input_frame =
+      CreateResource(config.input_visible_size, PIXEL_FORMAT_ARGB);
+  constexpr size_t kPayloadSize = 1024;
+  auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
+  BitstreamBuffer bitstream_buffer(0, shared_memory.Duplicate(), kPayloadSize);
+  EXPECT_CALL(*GetVideoProcessorWrapper(), ProcessFrames).Times(0);
+  auto result_or_error = encoder_delegate_->Encode(
+      input_frame, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
+      VideoEncoder::EncodeOptions());
+  ASSERT_FALSE(result_or_error.has_value());
+  EXPECT_EQ(std::move(result_or_error).error().code(),
+            EncoderStatus::Codes::kEncoderUnsupportedConfig);
+}
+
 TEST_F(D3D12VideoEncodeDelegateTest, ExternalRateControl) {
   VideoEncodeAccelerator::Config config = GetDefaultH264Config();
   config.bitrate = Bitrate::ExternalRateControl();
@@ -234,16 +295,18 @@ TEST_F(D3D12VideoEncodeDelegateTestWithProcessFrame, EncodeFrameWithoutVP) {
   gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
   constexpr size_t kPayloadSize = 1024;
   auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
-  BitstreamBuffer bitstream_buffer(base::RandInt(0, H264DPB::kDPBMaxSize - 1),
-                                   shared_memory.Duplicate(), kPayloadSize);
+  BitstreamBuffer bitstream_buffer(
+      base::RandIntInclusive(0, H264DPB::kDPBMaxSize - 1),
+      shared_memory.Duplicate(), kPayloadSize);
   EXPECT_CALL(*GetVideoProcessorWrapper(), ProcessFrames).Times(0);
   EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata)
       .WillOnce(Return(GetEncoderOutputMetadataResourceMap(kPayloadSize)));
   auto result_or_error =
-      encoder_delegate_->Encode(input_frame, 0, color_space, bitstream_buffer,
+      encoder_delegate_->Encode(input_frame, color_space, bitstream_buffer,
                                 VideoEncoder::EncodeOptions());
   Mock::VerifyAndClearExpectations(GetVideoProcessorWrapper());
-  ASSERT_TRUE(result_or_error.has_value());
+  ASSERT_TRUE(result_or_error.has_value())
+      << std::move(result_or_error).error().message();
 
   auto [bitstream_buffer_id, metadata] = std::move(result_or_error).value();
   EXPECT_EQ(bitstream_buffer_id, bitstream_buffer.id());
@@ -261,8 +324,10 @@ TEST_F(D3D12VideoEncodeDelegateTestWithProcessFrame, EncodeFrameWithVP) {
   gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
   constexpr size_t kPayloadSize = 1024;
   auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
-  BitstreamBuffer bitstream_buffer(base::RandInt(0, H264DPB::kDPBMaxSize - 1),
-                                   shared_memory.Duplicate(), kPayloadSize);
+  BitstreamBuffer bitstream_buffer(
+      base::RandIntInclusive(0, H264DPB::kDPBMaxSize - 1),
+      shared_memory.Duplicate(), kPayloadSize);
+  auto fence = MakeComPtr<NiceMock<D3D12FenceMock>>();
   EXPECT_CALL(*GetVideoProcessorWrapper(), ProcessFrames)
       .WillOnce([&](ID3D12Resource*, UINT, const gfx::ColorSpace&,
                     const gfx::Rect& input_rectangle, ID3D12Resource*, UINT,
@@ -272,16 +337,17 @@ TEST_F(D3D12VideoEncodeDelegateTestWithProcessFrame, EncodeFrameWithVP) {
         EXPECT_EQ(output_rectangle.width(), config.input_visible_size.width());
         EXPECT_EQ(output_rectangle.height(),
                   config.input_visible_size.height());
-        return true;
+        return D3D12FenceAndValue{fence.Get(), 0};
       });
 
   EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata)
       .WillOnce(Return(GetEncoderOutputMetadataResourceMap(kPayloadSize)));
   auto result_or_error =
-      encoder_delegate_->Encode(input_frame, 0, color_space, bitstream_buffer,
+      encoder_delegate_->Encode(input_frame, color_space, bitstream_buffer,
                                 VideoEncoder::EncodeOptions());
   Mock::VerifyAndClearExpectations(GetVideoProcessorWrapper());
-  ASSERT_TRUE(result_or_error.has_value());
+  ASSERT_TRUE(result_or_error.has_value())
+      << std::move(result_or_error).error().message();
 
   auto [bitstream_buffer_id, metadata] = std::move(result_or_error).value();
   EXPECT_EQ(bitstream_buffer_id, bitstream_buffer.id());
@@ -300,8 +366,9 @@ TEST_F(D3D12VideoEncodeDelegateTest, EncodeWithTooManyReferenceBuffersFails) {
   gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
   constexpr size_t kPayloadSize = 1024;
   auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
-  BitstreamBuffer bitstream_buffer(base::RandInt(0, H264DPB::kDPBMaxSize - 1),
-                                   shared_memory.Duplicate(), kPayloadSize);
+  BitstreamBuffer bitstream_buffer(
+      base::RandIntInclusive(0, H264DPB::kDPBMaxSize - 1),
+      shared_memory.Duplicate(), kPayloadSize);
 
   VideoEncoder::EncodeOptions options;
   // Fill reference_buffers with one more than supported to trigger failure.
@@ -310,10 +377,93 @@ TEST_F(D3D12VideoEncodeDelegateTest, EncodeWithTooManyReferenceBuffersFails) {
     options.reference_buffers.push_back(static_cast<uint8_t>(i));
   }
 
-  auto result_or_error = encoder_delegate_->Encode(input_frame, 0u, color_space,
+  auto result_or_error = encoder_delegate_->Encode(input_frame, color_space,
                                                    bitstream_buffer, options);
 
   // Expect an error indicating too many reference buffers.
+  EXPECT_FALSE(result_or_error.has_value());
+  EXPECT_EQ(result_or_error.code(), EncoderStatus::Codes::kBadReferenceBuffer);
+}
+
+TEST_F(D3D12VideoEncodeDelegateTest,
+       EncodeWithOutOfRangeReferenceBufferIndexFails) {
+  VideoEncodeAccelerator::Config config = GetDefaultH264Config();
+  ASSERT_TRUE(encoder_delegate_->Initialize(config).is_ok());
+
+  gfx::Size input_size = config.input_visible_size;
+  auto input_frame = CreateResource(input_size, config.input_format);
+  gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
+  constexpr size_t kPayloadSize = 1024;
+  auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
+  BitstreamBuffer bitstream_buffer(0, shared_memory.Duplicate(), kPayloadSize);
+
+  VideoEncoder::EncodeOptions options;
+  // Use a single reference buffer with an index >= GetMaxNumOfManualRefBuffers.
+  options.reference_buffers.push_back(
+      static_cast<uint8_t>(encoder_delegate_->GetMaxNumOfManualRefBuffers()));
+
+  auto result_or_error = encoder_delegate_->Encode(input_frame, color_space,
+                                                   bitstream_buffer, options);
+
+  EXPECT_FALSE(result_or_error.has_value());
+  EXPECT_EQ(result_or_error.code(), EncoderStatus::Codes::kBadReferenceBuffer);
+}
+
+TEST_F(D3D12VideoEncodeDelegateTest,
+       EncodeWithOutOfRangeUpdateBufferIndexFails) {
+  VideoEncodeAccelerator::Config config = GetDefaultH264Config();
+  ASSERT_TRUE(encoder_delegate_->Initialize(config).is_ok());
+
+  gfx::Size input_size = config.input_visible_size;
+  auto input_frame = CreateResource(input_size, config.input_format);
+  gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
+  constexpr size_t kPayloadSize = 1024;
+  auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
+  BitstreamBuffer bitstream_buffer(0, shared_memory.Duplicate(), kPayloadSize);
+
+  VideoEncoder::EncodeOptions options;
+  // Set update_buffer to a value >= GetMaxNumOfRefFrames.
+  options.update_buffer =
+      static_cast<uint8_t>(encoder_delegate_->GetMaxNumOfRefFrames());
+
+  auto result_or_error = encoder_delegate_->Encode(input_frame, color_space,
+                                                   bitstream_buffer, options);
+
+  EXPECT_FALSE(result_or_error.has_value());
+  EXPECT_EQ(result_or_error.code(), EncoderStatus::Codes::kBadReferenceBuffer);
+}
+
+TEST_F(D3D12VideoEncodeDelegateTest, EncodeWithEmptyRefsOnNonKeyframeFails) {
+  VideoEncodeAccelerator::Config config = GetDefaultH264Config();
+  config.manual_reference_buffer_control = true;
+  ASSERT_TRUE(encoder_delegate_->Initialize(config).is_ok());
+
+  gfx::Size input_size = config.input_visible_size;
+  auto input_frame = CreateResource(input_size, config.input_format);
+  gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
+  constexpr size_t kPayloadSize = 1024;
+  auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kPayloadSize);
+  BitstreamBuffer bitstream_buffer(0, shared_memory.Duplicate(), kPayloadSize);
+
+  EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata)
+      .WillRepeatedly(
+          [&] { return GetEncoderOutputMetadataResourceMap(kPayloadSize); });
+
+  // Frame 0: keyframe with empty references — should succeed.
+  VideoEncoder::EncodeOptions options;
+  options.key_frame = true;
+  options.reference_buffers = {};
+  options.update_buffer = 0;
+  auto result_or_error = encoder_delegate_->Encode(input_frame, color_space,
+                                                   bitstream_buffer, options);
+  ASSERT_TRUE(result_or_error.has_value());
+
+  // Frame 1: non-keyframe with empty references — should fail.
+  options.key_frame = false;
+  options.reference_buffers = {};
+  options.update_buffer = std::nullopt;
+  result_or_error = encoder_delegate_->Encode(input_frame, color_space,
+                                              bitstream_buffer, options);
   EXPECT_FALSE(result_or_error.has_value());
   EXPECT_EQ(result_or_error.code(), EncoderStatus::Codes::kBadReferenceBuffer);
 }

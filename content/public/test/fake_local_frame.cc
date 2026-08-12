@@ -81,9 +81,13 @@ void FakeLocalFrame::ReportBlinkFeatureUsage(
 
 void FakeLocalFrame::RenderFallbackContent() {}
 void FakeLocalFrame::BeforeUnload(bool is_reload,
+                                  bool force_to_proceed,
                                   BeforeUnloadCallback callback) {
   base::TimeTicks now = base::TimeTicks::Now();
-  std::move(callback).Run(true /*leave the page*/, now, now);
+  std::move(callback).Run(
+      true /*leave the page*/, now, now,
+      /*before_unload_dialog_opened_time=*/base::TimeTicks(),
+      /*before_unload_dialog_closed_time=*/base::TimeTicks());
 }
 
 void FakeLocalFrame::MediaPlayerActionAt(
@@ -111,9 +115,6 @@ void FakeLocalFrame::ReportContentSecurityPolicyViolation(
 void FakeLocalFrame::DidUpdateFramePolicy(
     const blink::FramePolicy& frame_policy) {}
 
-void FakeLocalFrame::OnFrameVisibilityChanged(
-    blink::mojom::FrameVisibility visibility) {}
-
 void FakeLocalFrame::PostMessageEvent(
     const std::optional<blink::RemoteFrameToken>& source_frame_token,
     const std::optional<url::Origin>& source_origin,
@@ -123,7 +124,7 @@ void FakeLocalFrame::PostMessageEvent(
 void FakeLocalFrame::JavaScriptMethodExecuteRequest(
     const std::u16string& object_name,
     const std::u16string& method_name,
-    base::Value::List arguments,
+    base::ListValue arguments,
     bool wants_result,
     JavaScriptMethodExecuteRequestCallback callback) {}
 
@@ -150,8 +151,12 @@ void FakeLocalFrame::GetSavableResourceLinks(
     GetSavableResourceLinksCallback callback) {}
 
 #if BUILDFLAG(IS_MAC)
-void FakeLocalFrame::GetCharacterIndexAtPoint(const gfx::Point& point) {}
-void FakeLocalFrame::GetFirstRectForRange(const gfx::Range& range) {}
+void FakeLocalFrame::GetCharacterIndexAtPoint(
+    const base::UnguessableToken& request_token,
+    const gfx::Point& point) {}
+void FakeLocalFrame::GetFirstRectForRange(
+    const base::UnguessableToken& request_token,
+    const gfx::Range& range) {}
 void FakeLocalFrame::GetStringForRange(const gfx::Range& range,
                                        GetStringForRangeCallback callback) {
   std::move(callback).Run(nullptr, gfx::Point());
@@ -225,6 +230,7 @@ void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     ::base::TimeTicks redirect_time,
     ::base::TimeTicks request_start,
     ::base::TimeTicks response_start,
+    ::base::TimeTicks completion_time,
     uint32_t response_code,
     const std::string& mime_type,
     const ::net::LoadTimingInfo& load_timing_info,
@@ -233,7 +239,7 @@ void FakeLocalFrame::AddResourceTimingEntryForFailedSubframeNavigation(
     bool is_secure_transport,
     bool is_validated,
     const std::string& normalized_server_timing,
-    const ::network::URLLoaderCompletionStatus& completion_status) {}
+    blink::mojom::SubframeResourceLengthsPtr resource_lengths) {}
 
 void FakeLocalFrame::BindFrameHostReceiver(
     mojo::ScopedInterfaceEndpointHandle handle) {
@@ -250,8 +256,19 @@ void FakeLocalFrame::GetScrollPosition(GetScrollPositionCallback callback) {
   std::move(callback).Run(gfx::Point(0, 0));
 }
 
+void FakeLocalFrame::InvokeScriptToolForInspector(
+    const base::UnguessableToken& invocation_id,
+    const std::string& tool_name,
+    const std::string& input_arguments,
+    InvokeScriptToolForInspectorCallback callback) {
+  std::move(callback).Run(false);
+}
+
+void FakeLocalFrame::NotifyInspectorOfCrossDocumentScriptToolResult(
+    const base::UnguessableToken& invocation_id) {}
+
 #if BUILDFLAG(IS_ANDROID)
-void FakeLocalFrame::PerformSpellCheck() {}
+void FakeLocalFrame::PerformFullContentSpellCheck() {}
 #endif
 
 }  // namespace content

@@ -3,9 +3,9 @@
 // found in the LICENSE file.
 #include "device/vr/openxr/android/openxr_graphics_binding_open_gles.h"
 
+#include <algorithm>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "device/vr/android/xr_image_transport_base.h"
 #include "device/vr/openxr/openxr_api_wrapper.h"
@@ -80,8 +80,8 @@ bool OpenXrGraphicsBindingOpenGLES::InitializeGl() {
   }
 
   // None of the other runtimes support ANGLE, so we disable it too for now.
-  // TODO(alcooper): Investigate if we can support ANGLE or if we'll run into
-  // similar problems as cardboard.
+  // TODO(crbug.com/529457533): Investigate if we can support ANGLE or if we'll
+  // run into similar problems as cardboard.
   gl::DisableANGLE();
 
   // Everything below is a hacky first pass at making a session and likely needs
@@ -160,7 +160,7 @@ bool OpenXrGraphicsBindingOpenGLES::Initialize(XrInstance instance,
     return false;
   }
 
-  // TODO(alcooper): Validate/set version based on the output here.
+  // TODO(crbug.com/529458212): Validate/set version based on the output here.
   XrGraphicsRequirementsOpenGLESKHR graphics_requirements = {
       XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR};
   if (XR_FAILED(get_graphics_requirements_fn(instance, system,
@@ -192,7 +192,7 @@ int64_t OpenXrGraphicsBindingOpenGLES::GetSwapchainFormat(
   // still return it anyway as that will cause an error with creating the
   // swapchain, which is better than arbitrarily returning a type that the
   // runtime supports, but we don't.
-  if (!base::Contains(swapchain_formats, kSwapchainFormat)) {
+  if (!std::ranges::contains(swapchain_formats, kSwapchainFormat)) {
     LOG(ERROR) << "No matching supported swapchain formats with OpenXr Runtime";
   }
 
@@ -257,10 +257,11 @@ void OpenXrGraphicsBindingOpenGLES::ResizeSharedBuffer(
   if (swap_chain_info.shared_image) {
     DVLOG(2) << ": DestroySharedImage, mailbox="
              << swap_chain_info.shared_image->mailbox().ToDebugString();
-    // Note: the sync token in mailbox_holder may not be accurate. See comment
-    // in TransferFrame below.
-    sii->DestroySharedImage(swap_chain_info.sync_token,
-                            std::move(swap_chain_info.shared_image));
+    // Note: The sync token in shared image may not be accurate. See comment
+    // in XrImageTransportBase::TransferFrame.
+    swap_chain_info.shared_image->UpdateDestructionSyncToken(
+        swap_chain_info.sync_token);
+    swap_chain_info.shared_image.reset();
   }
 
   // Remove reference to previous image (if any).
@@ -276,6 +277,11 @@ void OpenXrGraphicsBindingOpenGLES::ResizeSharedBuffer(
   gpu::SharedImageUsageSet shared_image_usage =
       gpu::SHARED_IMAGE_USAGE_SCANOUT | gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
       gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_GLES2_WRITE;
+
+  if (layer.read_only_data().needs_raster_access) {
+    shared_image_usage |= gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                          gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
+  }
 
   // If the XRSession is producing frames with WebGPU then the appropriate usage
   // also needs to be added.
@@ -305,7 +311,9 @@ void OpenXrGraphicsBindingOpenGLES::ResizeSharedBuffer(
        shared_image_usage, "OpenXrGraphicsBinding"},
       std::move(gmb_handle));
   CHECK(swap_chain_info.shared_image);
-  swap_chain_info.sync_token = sii->GenVerifiedSyncToken();
+  swap_chain_info.sync_token =
+      swap_chain_info.shared_image->creation_sync_token();
+  sii->VerifySyncToken(swap_chain_info.sync_token);
   DCHECK_EQ(swap_chain_info.shared_image->GetTextureTarget(),
             static_cast<uint32_t>(GL_TEXTURE_2D));
 
@@ -439,12 +447,16 @@ bool OpenXrGraphicsBindingOpenGLES::WaitOnFence(OpenXrCompositionLayer& layer,
 
 bool OpenXrGraphicsBindingOpenGLES::ShouldFlipSubmittedImage(
     OpenXrCompositionLayer& layer) const {
+  bool should_flip = layer.flip_y();
   // WebGPU produces textures that are y-flipped relative to WebGL, which needs
   // to be accounted for during frame submission.
-  return IsWebGPUSession();
+  if (IsWebGPUSession()) {
+    should_flip = !should_flip;
+  }
+  return should_flip;
 }
 
-void OpenXrGraphicsBindingOpenGLES::OnSwapchainImageActivated(
+void OpenXrGraphicsBindingOpenGLES::OnSwapchainImageReady(
     OpenXrCompositionLayer& layer,
     gpu::SharedImageInterface* sii) {
   OpenXrSwapchainInfo* swap_chain_info = layer.GetActiveSwapchainImage();

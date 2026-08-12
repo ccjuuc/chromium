@@ -93,10 +93,7 @@ class OverviewButtonTrayTest : public AshTestBase {
     TabletModeController::SetUseScreenshotForTest(true);
   }
 
-  void NotifySessionStateChanged() {
-    GetTray()->OnSessionStateChanged(
-        Shell::Get()->session_controller()->GetSessionState());
-  }
+  void NotifySessionStateChanged() { GetTray()->UpdateIconVisibility(); }
 
   // Helper function to perform a double tap on the overview button tray.
   void PerformDoubleTap() {
@@ -110,7 +107,7 @@ class OverviewButtonTrayTest : public AshTestBase {
 
  protected:
   views::ImageView* GetImageView(OverviewButtonTray* tray) {
-    return tray->icon_;
+    return tray->image_view();
   }
 
  private:
@@ -359,8 +356,7 @@ TEST_F(OverviewButtonTrayTest, HideAnimationAlwaysCompletesOnDelete) {
 // tablet mode with a system modal window open, and that it hides once
 // the user exits tablet mode.
 TEST_F(OverviewButtonTrayTest, VisibilityChangesForSystemModalWindow) {
-  std::unique_ptr<aura::Window> window =
-      CreateTestWindow(gfx::Rect(), aura::client::WINDOW_TYPE_NORMAL);
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   window->SetProperty(aura::client::kModalKey, ui::mojom::ModalType::kSystem);
   window->Show();
   ParentWindowInPrimaryRootWindow(window.get());
@@ -377,10 +373,10 @@ TEST_F(OverviewButtonTrayTest, VisibilityChangesForSystemModalWindow) {
 TEST_F(OverviewButtonTrayTest, TransientChildQuickSwitch) {
   TabletModeControllerTestApi().EnterTabletMode();
 
-  std::unique_ptr<aura::Window> window1 = CreateTestWindow();
+  std::unique_ptr<aura::Window> window1 = CreateWindowWithAppType();
   std::unique_ptr<aura::Window> window2 =
-      CreateTestWindow(gfx::Rect(), aura::client::WINDOW_TYPE_POPUP);
-  std::unique_ptr<aura::Window> window3 = CreateTestWindow();
+      CreateTestWindowInShell({.window_type = aura::client::WINDOW_TYPE_POPUP});
+  std::unique_ptr<aura::Window> window3 = CreateWindowWithAppType();
 
   // Add |window2| as a transient child of |window1|, and focus |window1|.
   wm::AddTransientChild(window1.get(), window2.get());
@@ -400,9 +396,9 @@ TEST_F(OverviewButtonTrayTest, SplitviewModeQuickSwitch) {
   TabletModeControllerTestApi().EnterTabletMode();
 
   // We want the order in the MRU list to be |window2|, |window1|, |window3|.
-  std::unique_ptr<aura::Window> window3 = CreateTestWindow();
-  std::unique_ptr<aura::Window> window1 = CreateTestWindow();
-  std::unique_ptr<aura::Window> window2 = CreateTestWindow();
+  std::unique_ptr<aura::Window> window3 = CreateWindowWithAppType();
+  std::unique_ptr<aura::Window> window1 = CreateWindowWithAppType();
+  std::unique_ptr<aura::Window> window2 = CreateWindowWithAppType();
 
   // Enter splitview mode. Snap |window1| to the left, this will be the default
   // splitview window.

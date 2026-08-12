@@ -13,15 +13,18 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_config.h"
 #include "content/public/browser/bluetooth_chooser.h"
 #include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/extension_prefs_observer.h"
 #include "extensions/browser/extensions_browser_api_provider.h"
+#include "extensions/browser/screenshot_access.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/common/url_pattern_set.h"
@@ -34,11 +37,11 @@
 #include "url/gurl.h"
 
 class ExtensionFunctionRegistry;
-class PrefService;
 
 namespace base {
 class CommandLine;
 class FilePath;
+class Version;
 }  // namespace base
 
 namespace content {
@@ -48,6 +51,14 @@ class SiteInstance;
 class StoragePartitionConfig;
 class WebContents;
 }  // namespace content
+
+namespace download {
+class DownloadItem;
+}  // namespace download
+
+namespace image_fetcher {
+class ImageDecoder;
+}  // namespace image_fetcher
 
 namespace mojo {
 template <typename>
@@ -92,24 +103,33 @@ class SafeBrowsingDatabaseManager;
 
 namespace extensions {
 
+class Blocklist;
+class CrxInstaller;
 class ComponentExtensionResourceManager;
 class Extension;
+class ExtensionAssetsManager;
 class ExtensionCache;
 class ExtensionError;
 class ExtensionHostDelegate;
+class ExtensionInstallPromptClient;
 class ExtensionManagementClient;
 class ExtensionSet;
 class ExtensionSystem;
 class ExtensionSystemProvider;
 class ExtensionWebContentsObserver;
+class InstallPromptData;
+class InstallStageTracker;
+class InstallTracker;
+class InstallVerifier;
 class KioskDelegate;
 class PermissionSet;
 class ProcessManagerDelegate;
 class ProcessMap;
 class RuntimeAPIDelegate;
 class SafeBrowsingDelegate;
-class ScopedExtensionUpdaterKeepAlive;
+class ScopedBrowserContextKeepAlive;
 class ScriptExecutor;
+class SharedModuleService;
 class SitePermissionsHelper;
 class UserScriptListener;
 
@@ -194,7 +214,18 @@ class ExtensionsBrowserClient {
   // - if `context` is a System Profile: returns null.
   // - if `context` is Original: returns itself.
   // - if `context` is OTR: returns the associated parent context.
+  // - if `context` is ash internals: returns the associated parent context.
   virtual content::BrowserContext* GetContextRedirectedToOriginal(
+      content::BrowserContext* context) = 0;
+
+  // Similar to GetContextRedirectedToOriginal(), but additionally filters out
+  // ash-internal profiles.
+  // - if `context` is a System Profile: returns null.
+  // - if `context` is Original: returns itself.
+  // - if `context` is OTR: returns the associated parent context.
+  // - if `context` is ash internals: returns null.
+  virtual content::BrowserContext*
+  GetContextRedirectedToOriginalWithoutAshInternals(
       content::BrowserContext* context) = 0;
 
   // - if `context` is a System Profile: returns null.
@@ -219,11 +250,6 @@ class ExtensionsBrowserClient {
   // Returns true if `browser_context` is the active one.
   virtual bool IsActiveContext(
       content::BrowserContext* browser_context) const = 0;
-
-  // Returns a user id hash from `context` or an empty string if no hash could
-  // be extracted.
-  virtual std::string GetUserIdHashFromContext(
-      content::BrowserContext* context) = 0;
 #endif
 
   // Returns true if `context` corresponds to a guest session.
@@ -232,6 +258,9 @@ class ExtensionsBrowserClient {
   // Returns true if `extension_id` can run in an incognito window.
   virtual bool IsExtensionIncognitoEnabled(
       const ExtensionId& extension_id,
+      content::BrowserContext* context) const = 0;
+  virtual bool IsExtensionIncognitoEnabled(
+      const Extension* extension,
       content::BrowserContext* context) const = 0;
 
   // Returns true if `extension` can see events and data from another
@@ -254,7 +283,8 @@ class ExtensionsBrowserClient {
       const base::FilePath& resource_relative_path,
       int resource_id,
       scoped_refptr<net::HttpResponseHeaders> headers,
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client) = 0;
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      content::BrowserContext* browser_context) = 0;
 
   // Returns true if the embedder wants to allow a chrome-extension:// resource
   // request coming from renderer A to access a resource in an extension running
@@ -264,16 +294,12 @@ class ExtensionsBrowserClient {
       const network::ResourceRequest& request,
       network::mojom::RequestDestination destination,
       ui::PageTransition page_transition,
-      int child_id,
+      content::ChildProcessId child_id,
       bool is_incognito,
       const Extension* extension,
       const ExtensionSet& extensions,
       const ProcessMap& process_map,
       const GURL& upstream_url) = 0;
-
-  // Returns the PrefService associated with `context`.
-  virtual PrefService* GetPrefServiceForContext(
-      content::BrowserContext* context) = 0;
 
   // Populates a list of ExtensionPrefs observers to be attached to each
   // BrowserContext's ExtensionPrefs upon construction. These observers
@@ -350,7 +376,7 @@ class ExtensionsBrowserClient {
   virtual void BroadcastEventToRenderers(
       events::HistogramValue histogram_value,
       const std::string& event_name,
-      base::Value::List args,
+      base::ListValue args,
       bool dispatch_to_off_the_record_profiles) = 0;
 
   // Gets the single ExtensionCache instance shared across the browser process.
@@ -402,13 +428,21 @@ class ExtensionsBrowserClient {
   virtual scoped_refptr<update_client::Configurator>
   CreateUpdateClientConfigurator(content::BrowserContext* context);
 
-  // Returns a new ScopedExtensionUpdaterKeepAlive, or nullptr if the embedder
+  // Returns a new ScopedBrowserContextKeepAlive, or nullptr if the embedder
   // does not support keeping the context alive while the updater is running.
-  virtual std::unique_ptr<ScopedExtensionUpdaterKeepAlive>
-  CreateUpdaterKeepAlive(content::BrowserContext* context);
+  virtual std::unique_ptr<ScopedBrowserContextKeepAlive> CreateUpdaterKeepAlive(
+      content::BrowserContext* context);
+
+  // Returns a new ScopedBrowserContextKeepAlive, or nullptr if the embedder
+  // does not support keeping the context alive while the installer is running.
+  virtual std::unique_ptr<ScopedBrowserContextKeepAlive>
+  CreateCrxInstallerKeepAlive(content::BrowserContext* context);
 
   // Returns true if activity logging is enabled for the given `context`.
   virtual bool IsActivityLoggingEnabled(content::BrowserContext* context);
+
+  // Returns true if telemetry logging is enabled for the given `context`.
+  virtual bool IsTelemetryLoggingEnabled(content::BrowserContext* context);
 
   // Retrives the embedder's notion of tab and window ID for a given
   // WebContents. May return -1 for either or both values if the embedder does
@@ -438,7 +472,7 @@ class ExtensionsBrowserClient {
   virtual bool IsExtensionEnabled(const ExtensionId& extension_id,
                                   content::BrowserContext* context) const;
 
-  // http://crbug.com/829412
+  // http://crbug.com/40091019
   // Renderers with WebUI bindings shouldn't make http(s) requests for security
   // reasons (e.g. to avoid malicious responses being able to run code in
   // priviliged renderers). Fix these webui's to make requests through C++
@@ -459,6 +493,12 @@ class ExtensionsBrowserClient {
   virtual bool ShouldSchemeBypassNavigationChecks(
       const std::string& scheme) const;
 
+  // Checks whether the given `request_url` and `redirect_url` correspond to a
+  // Default Search Engine redirect.
+  virtual bool IsDefaultSearchEngineRedirect(content::BrowserContext* context,
+                                             const GURL& request_url,
+                                             const GURL& redirect_url) const;
+
   // Gets and sets the last save (download) path for a given context.
   virtual base::FilePath GetSaveFilePath(content::BrowserContext* context);
   virtual void SetLastSaveFilePath(content::BrowserContext* context,
@@ -469,9 +509,10 @@ class ExtensionsBrowserClient {
   virtual bool HasIsolatedStorage(const ExtensionId& extension_id,
                                   content::BrowserContext* context);
 
-  // Returns whether screenshot of `web_contents` is restricted due to Data Leak
-  // Protection policy.
-  virtual bool IsScreenshotRestricted(content::WebContents* web_contents) const;
+  // Returns whether screenshot of `web_contents` is restricted due to
+  // preference or Data Leak Protection policy.
+  virtual base::expected<void, ScreenshotAccessError> IsScreenshotRestricted(
+      content::WebContents* web_contents) const;
 
   // Returns true if `tab_id` exists on `browser_context`.
   virtual bool IsValidTabId(content::BrowserContext* browser_context,
@@ -518,18 +559,18 @@ class ExtensionsBrowserClient {
       content::BrowserContext* browser_context,
       const ExtensionId& extension_id,
       const std::string& call_name,
-      base::Value::List args,
+      base::ListValue args,
       const std::string& extra);
   virtual void AddEventToActivityLog(content::BrowserContext* context,
                                      const ExtensionId& extension_id,
                                      const std::string& call_name,
-                                     base::Value::List args,
+                                     base::ListValue args,
                                      const std::string& extra);
   virtual void AddDOMActionToActivityLog(
       content::BrowserContext* browser_context,
       const ExtensionId& extension_id,
       const std::string& call_name,
-      base::Value::List args,
+      base::ListValue args,
       const GURL& url,
       const std::u16string& url_title,
       int call_type);
@@ -605,6 +646,68 @@ class ExtensionsBrowserClient {
   // Shows a dialog box with the given |title| and |message|.
   virtual void ShowWarningMessageBox(const std::u16string& title,
                                      const std::u16string& message);
+
+  // Records command-line extension metrics, emitted when a command line
+  // extension is installed.
+  virtual void RecordCommandLineMetricsOnUnpackedInstallation(
+      content::BrowserContext* context,
+      const Extension* extension) const;
+
+  // Returns the implementation of ExtensionAssetsManager.
+  // On ChromeOS, this provides a platform-specific implementation, while
+  // other platforms fall back to a trivial default implementation.
+  virtual ExtensionAssetsManager* GetAssetsManager();
+
+  // Returns GetBlocklist associated with `context`.
+  virtual Blocklist* GetBlocklist(content::BrowserContext* context);
+
+  // Returns InstallStageTracker associated with `context`.
+  virtual InstallStageTracker* GetInstallStageTracker(
+      content::BrowserContext* context);
+
+  // Returns InstallTracker associated with `context`.
+  virtual InstallTracker* GetInstallTracker(content::BrowserContext* context);
+
+  // Returns InstallVerifier associated with `context`.
+  virtual InstallVerifier* GetInstallVerifier(content::BrowserContext* context);
+
+  // Returns SharedModuleService associated with `context`.
+  virtual SharedModuleService* GetSharedModuleService(
+      content::BrowserContext* context);
+
+  // Run an update check if the updater is enabled.
+  virtual void UpdateCheckIfEnabled(content::BrowserContext* context);
+
+  // Returns the path to the user's data directory.
+  virtual base::FilePath GetUserDataDir();
+
+  // Creates and pre-configures a CrxInstaller with an install prompt UI for a
+  // given |download_item|.
+  virtual scoped_refptr<CrxInstaller> CreateCrxInstallerFromDownloadItem(
+      content::BrowserContext* context,
+      const download::DownloadItem& download);
+
+  // Creates an implementation of image_fetcher::ImageDecoder.
+  virtual std::unique_ptr<image_fetcher::ImageDecoder> CreateImageDecoder();
+
+  // Returns whether the given browser context is allowed to use non-component
+  // extensions.
+  virtual bool CanUseNonComponentExtensions(content::BrowserContext* context);
+
+  // Checks whether the extension can be installed based on policy.
+  virtual void CanInstallExtensionByPolicy(
+      content::BrowserContext* context,
+      const ExtensionId& extension_id,
+      const base::Version& extension_version,
+      base::OnceCallback<void(bool, std::u16string)> callback);
+
+  // Creates install prompt UI.
+  virtual std::unique_ptr<ExtensionInstallPromptClient> CreateInstallPrompt(
+      content::WebContents* web_contents,
+      std::unique_ptr<InstallPromptData> prompt);
+
+ protected:
+  std::unique_ptr<ExtensionAssetsManager> assets_manager_;
 
  private:
   std::vector<std::unique_ptr<ExtensionsBrowserAPIProvider>> providers_;

@@ -5,7 +5,6 @@
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_credit_card_edit_table_view_controller.h"
 
 #import "base/apple/foundation_util.h"
-#import "base/feature_list.h"
 #import "base/format_macros.h"
 #import "base/ios/block_types.h"
 #import "base/memory/raw_ptr.h"
@@ -18,21 +17,20 @@
 #import "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #import "components/autofill/core/browser/field_types.h"
 #import "components/autofill/core/browser/payments/payments_service_url.h"
-#import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/autofill/core/common/credit_card_network_identifiers.h"
 #import "components/autofill/core/common/credit_card_number_validation.h"
 #import "components/autofill/ios/browser/credit_card_util.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type_util.h"
-#import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_util.h"
 #import "ios/chrome/browser/autofill/ui_bundled/cells/autofill_credit_card_edit_item.h"
+#import "ios/chrome/browser/autofill/ui_bundled/util/autofill_credit_card_util.h"
+#import "ios/chrome/browser/autofill/ui_bundled/util/autofill_settings_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item_delegate.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
@@ -137,7 +135,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
         autofill::payments::GetManageInstrumentUrl(_creditCard.instrument_id());
     OpenNewTabCommand* command =
         [OpenNewTabCommand commandWithURLFromChrome:paymentsURL];
-    [self.applicationHandler closePresentedViewsAndOpenURL:command];
+    [self.sceneHandler closePresentedViewsAndOpenURL:command];
 
     return;
   }
@@ -231,11 +229,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
     [model addItem:item toSectionWithIdentifier:SectionIdentifierFields];
   }
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    [model addItem:[self cvcItem:isEditing]
-        toSectionWithIdentifier:SectionIdentifierFields];
-  }
+  [model addItem:[self cvcItem:isEditing]
+      toSectionWithIdentifier:SectionIdentifierFields];
 }
 
 #pragma mark - TableViewTextEditItemDelegate
@@ -480,7 +475,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
       l10n_util::GetNSString(IDS_IOS_AUTOFILL_SECURITY_CODE);
   cvcItem.textFieldValue = autofill::GetCreditCardCvcString(_creditCard);
   cvcItem.textFieldPlaceholder =
-      l10n_util::GetNSString(IDS_IOS_AUTOFILL_DIALOG_PLACEHOLDER_CVC_OPTIONAL);
+      l10n_util::GetNSString(IDS_IOS_AUTOFILL_DIALOG_PLACEHOLDER_OPTIONAL);
   cvcItem.textFieldEnabled = isEditing;
   cvcItem.autofillCreditCardUIType = AutofillCreditCardUIType::kSecurityCode;
   cvcItem.keyboardType = UIKeyboardTypeNumberPad;
@@ -497,11 +492,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
   NSString* expirationYear =
       [self textfieldValueForItemType:ItemTypeExpirationYear];
   NSString* nickname = [self textfieldValueForItemType:ItemTypeNickname];
-  NSString* cvc = @"";
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    cvc = [self textfieldValueForItemType:ItemTypeCvc];
-  }
+  NSString* cvc = [self textfieldValueForItemType:ItemTypeCvc];
   return [AutofillCreditCardUtil
       isValidCreditCard:cardNumber
         expirationMonth:expirationMonth

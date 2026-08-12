@@ -8,7 +8,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/regional_capabilities/regional_capabilities_country_id.h"
@@ -36,9 +35,11 @@ void TestMetricsServiceClient::SetMetricsClientId(
   client_id_ = client_id;
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 bool TestMetricsServiceClient::ShouldUploadMetricsForUserId(uint64_t user_id) {
-  return base::Contains(allowed_user_ids_, user_id);
+  return allowed_user_ids_.contains(user_id);
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 int32_t TestMetricsServiceClient::GetProduct() {
   return product_;
@@ -85,6 +86,16 @@ std::unique_ptr<MetricsLogUploader> TestMetricsServiceClient::CreateUploader(
   uploader_ = uploader->AsWeakPtr();
   return uploader;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+bool TestMetricsServiceClient::IsJobSchedulerSupported() const {
+  // For simplicity, don't go through the JobScheduler code path, as all it does
+  // is add a layer of indirection and is usually irrelevant to most tests.
+  // There is a full end to end test of the JobScheduler code path in
+  // chrome/browser/metrics/android/background_upload_task_browsertest.cc.
+  return false;
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 base::TimeDelta TestMetricsServiceClient::GetStandardUploadInterval() {
   return base::Minutes(5);

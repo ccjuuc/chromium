@@ -6,8 +6,10 @@
 #define CHROMEOS_ASH_COMPONENTS_DBUS_SHILL_SHILL_MANAGER_CLIENT_H_
 
 #include <string>
+#include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
 #include "base/scoped_observation_traits.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -35,6 +37,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
  public:
   typedef ShillClientHelper::ErrorCallback ErrorCallback;
   typedef ShillClientHelper::StringCallback StringCallback;
+
+  // A callback that handles the byte array result of TestHostsConnectivity.
+  using TestHostsConnectivityCallback =
+      base::OnceCallback<void(const std::vector<uint8_t>&)>;
 
   struct NetworkThrottlingStatus {
     // Enable or disable network bandwidth throttling.
@@ -115,7 +121,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
     // which will be appended to the results returned from
     // GetNetworksForGeolocation().
     virtual void AddGeoNetwork(const std::string& technology,
-                               const base::Value::Dict& network) = 0;
+                               const base::DictValue& network) = 0;
 
     // Does not create an actual profile in the ProfileClient but update the
     // profiles list and sends a notification to observers. This should only be
@@ -131,7 +137,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
                                     const base::Value& value) = 0;
 
     // Get stub manager properties.
-    virtual base::Value::Dict GetStubProperties() = 0;
+    virtual base::DictValue GetStubProperties() = 0;
 
     // Modify services in the Manager's list.
     virtual void AddManagerService(const std::string& service_path,
@@ -140,7 +146,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
     virtual void ClearManagerServices() = 0;
 
     // Returns all enabled services in the given property.
-    virtual base::Value::List GetEnabledServiceList() const = 0;
+    virtual base::ListValue GetEnabledServiceList() const = 0;
 
     // Restarts hotspot by disabling and enabling after configured interactive
     // delay.
@@ -223,6 +229,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
         FakeShillSimulatedResult operation_result,
         const std::string& result_code) = 0;
 
+    virtual void SetConfigureServiceHook(
+        base::RepeatingCallback<void(const base::DictValue&)>
+            configure_service_hook) = 0;
+
     // Clears profile list.
     virtual void ClearProfiles() = 0;
 
@@ -255,6 +265,15 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
     // previously.
     virtual void TriggerScanCompleted(const std::string& device_path) = 0;
 
+    // Sets the canned response for TestHostsConnectivity. The `response`
+    // bytes are returned via callback when the method is called.
+    virtual void SetTestHostsConnectivityResponse(
+        const std::vector<uint8_t>& response) = 0;
+
+    // Makes TestHostsConnectivity succeed, fail, or timeout.
+    virtual void SetSimulateTestHostsConnectivityResult(
+        FakeShillSimulatedResult result) = 0;
+
    protected:
     virtual ~TestInterface() = default;
   };
@@ -286,13 +305,13 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
   // |callback| receives a dictionary Value containing the Manager properties on
   // success or nullopt on failure.
   virtual void GetProperties(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) = 0;
+      chromeos::DBusMethodCallback<base::DictValue> callback) = 0;
 
   // Calls the GetNetworksForGeolocation DBus method and invokes |callback| when
   // complete. |callback| receives a dictionary Value containing an entry for
   // available network types. See Shill manager-api documentation for details.
   virtual void GetNetworksForGeolocation(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) = 0;
+      chromeos::DBusMethodCallback<base::DictValue> callback) = 0;
 
   // Calls SetProperty method.
   virtual void SetProperty(const std::string& name,
@@ -317,20 +336,20 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
 
   // Calls Manager.ConfigureService with |properties| which must be a
   // dictionary value describing a Shill service.
-  virtual void ConfigureService(const base::Value::Dict& properties,
+  virtual void ConfigureService(const base::DictValue& properties,
                                 chromeos::ObjectPathCallback callback,
                                 ErrorCallback error_callback) = 0;
 
   // Calls Manager.ConfigureServiceForProfile for |profile_path| with
   // |properties| which must be a dictionary value describing a Shill service.
   virtual void ConfigureServiceForProfile(const dbus::ObjectPath& profile_path,
-                                          const base::Value::Dict& properties,
+                                          const base::DictValue& properties,
                                           chromeos::ObjectPathCallback callback,
                                           ErrorCallback error_callback) = 0;
 
   // Calls Manager.GetService with |properties| which must be a dictionary value
   // describing a Service.
-  virtual void GetService(const base::Value::Dict& properties,
+  virtual void GetService(const base::DictValue& properties,
                           chromeos::ObjectPathCallback callback,
                           ErrorCallback error_callback) = 0;
 
@@ -350,14 +369,14 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
   // Creates a set of Passpoint credentials from |properties| in the profile
   // referenced by |profile_path|.
   virtual void AddPasspointCredentials(const dbus::ObjectPath& profile_path,
-                                       const base::Value::Dict& properties,
+                                       const base::DictValue& properties,
                                        base::OnceClosure callback,
                                        ErrorCallback error_callback) = 0;
 
   // Removes all Passpoint credentials that matches all property of |properties|
   // in the profile referenced by |profile_path|.
   virtual void RemovePasspointCredentials(const dbus::ObjectPath& profile_path,
-                                          const base::Value::Dict& properties,
+                                          const base::DictValue& properties,
                                           base::OnceClosure callback,
                                           ErrorCallback error_callback) = 0;
 
@@ -395,26 +414,37 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
   // Creates a P2P group that uses WiFi direct as the underlying medium.
   virtual void CreateP2PGroup(
       const CreateP2PGroupParameter& create_group_argument,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) = 0;
 
   // Connects to a P2P group
   virtual void ConnectToP2PGroup(
       const ConnectP2PGroupParameter& connect_group_argument,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) = 0;
 
   // Destroys P2PGroup
   virtual void DestroyP2PGroup(
       const int shill_id,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) = 0;
 
   // Disconnects from P2PGroup
   virtual void DisconnectFromP2PGroup(
       const int shill_id,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) = 0;
+
+  // Tests connectivity to multiple `hosts`. The `options` map contains
+  // optional configuration (timeout, max_errors, proxy). The `callback`
+  // receives a serialized protobuf byte array on success. `timeout_ms`
+  // overrides the default D-Bus call timeout when provided.
+  virtual void TestHostsConnectivity(
+      const std::vector<std::string>& hosts,
+      const base::flat_map<std::string, std::string>& options,
+      TestHostsConnectivityCallback callback,
+      ErrorCallback error_callback,
+      std::optional<int> timeout_ms = std::nullopt) = 0;
 
   // Returns an interface for testing (stub only), or returns null.
   virtual TestInterface* GetTestInterface() = 0;

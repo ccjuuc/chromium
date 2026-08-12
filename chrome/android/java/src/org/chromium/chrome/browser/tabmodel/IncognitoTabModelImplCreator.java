@@ -4,10 +4,12 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
-import org.chromium.base.Holder;
+import static org.chromium.chrome.browser.tab.TabStateStorageServiceFactory.createBatch;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.IncognitoTabModelImpl.IncognitoTabModelDelegate;
@@ -28,6 +30,7 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
     private final TabUngrouperFactory mTabUngrouperFactory;
 
     private final @ActivityType int mActivityType;
+    private final @Nullable @CustomTabProfileType Integer mCustomTabProfileType;
 
     /**
      * Constructor for an IncognitoTabModelImplCreator, used by {@link IncognitoTabModelImpl}.
@@ -44,6 +47,7 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
      * @param nextTabPolicySupplier Supplies the policy to pick a next tab if the current is closed
      * @param asyncTabParamsManager An {@link AsyncTabParamsManager} instance.
      * @param activityType Type of the activity for the tab model.
+     * @param customTabProfileType Profile type of the custom tab, or null if not a custom tab.
      * @param modelDelegate Delegate to handle external dependencies and interactions.
      * @param tabRemover Delegate to handle removing tabs tabs.
      * @param tabUngrouperFactory Factory to create a {@link TabUngrouper}.
@@ -57,6 +61,7 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
             NextTabPolicySupplier nextTabPolicySupplier,
             AsyncTabParamsManager asyncTabParamsManager,
             @ActivityType int activityType,
+            @Nullable @CustomTabProfileType Integer customTabProfileType,
             TabModelDelegate modelDelegate,
             TabRemover tabRemover,
             TabUngrouperFactory tabUngrouperFactory) {
@@ -68,6 +73,7 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
         mNextTabPolicySupplier = nextTabPolicySupplier;
         mAsyncTabParamsManager = asyncTabParamsManager;
         mActivityType = activityType;
+        mCustomTabProfileType = customTabProfileType;
         mModelDelegate = modelDelegate;
         mTabRemover = tabRemover;
         mTabUngrouperFactory = tabUngrouperFactory;
@@ -75,14 +81,12 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
 
     @Override
     public TabModelInternal createTabModel() {
-        Holder<@Nullable TabGroupModelFilter> filterHolder = new Holder<>(null);
-        TabUngrouper tabUngrouper =
-                mTabUngrouperFactory.create(/* isIncognitoBranded= */ true, filterHolder);
         TabCollectionTabModelImpl model =
                 new TabCollectionTabModelImpl(
                         mProfileProvider.getOrCreateOffTheRecordProfile(),
                         mActivityType,
-                        /* isArchivedTabModel= */ false,
+                        mCustomTabProfileType,
+                        TabModelType.STANDARD,
                         mRegularTabCreator,
                         mIncognitoTabCreator,
                         mOrderController,
@@ -91,9 +95,10 @@ class IncognitoTabModelImplCreator implements IncognitoTabModelDelegate {
                         mModelDelegate,
                         mAsyncTabParamsManager,
                         mTabRemover,
-                        tabUngrouper,
+                        /* isIncognitoBranded= */ true,
+                        mTabUngrouperFactory,
+                        () -> createBatch(mProfileProvider.getOriginalProfile()),
                         /* supportUndo= */ false);
-        filterHolder.value = model;
         return model;
     }
 

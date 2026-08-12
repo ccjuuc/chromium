@@ -15,6 +15,7 @@ import org.junit.Assert;
 
 import org.chromium.android_webview.AwConsoleMessage;
 import org.chromium.android_webview.AwRenderProcessGoneDetail;
+import org.chromium.android_webview.AwWebResourceError;
 import org.chromium.android_webview.AwWebResourceRequest;
 import org.chromium.base.Callback;
 import org.chromium.base.Log;
@@ -1013,6 +1014,10 @@ public class TestAwContentsClient extends NullContentsClient {
 
         public Bitmap getIcon() {
             assert getCallCount() > 0;
+            return mIcon;
+        }
+
+        public Bitmap getIconNullable() {
             return mIcon;
         }
     }

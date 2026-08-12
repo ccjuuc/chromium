@@ -80,6 +80,19 @@ If you don't need the full repo history, you can save time by using
 `fetch --no-history chromium`. You can call `git fetch --unshallow` to retrieve
 the full history later.
 
+You can make this much faster by passing `--git-cache` to `fetch`, which
+seeds the checkout from a shared, prebuilt snapshot instead of cloning from
+scratch (and, unlike `--no-history`, keeps the full history):
+
+```shell
+$ fetch --git-cache chromium
+```
+
+The cache directory is chosen automatically (override with `$GIT_CACHE_PATH`).
+It mirrors every repo it fetches (~30 GB for Chromium) and is shared by all
+checkouts on the machine: working trees reference it instead of copying the
+objects, so the per-checkout `.git` stays small.
+
 Expect the command to take 30 minutes on even a fast connection, and many
 hours on slower ones.
 
@@ -154,6 +167,18 @@ in your args.gn to disable debug symbols altogether.  This makes both full
 rebuilds and linking faster (at the cost of not getting symbolized backtraces
 in gdb).
 
+Put
+
+```
+use_lld = false
+```
+
+in your `args.gn` to use Apple's linker (ld-prime) instead of LLVM's LLD.
+This is supported for local non-cross arm64 macOS builds (ARM Mac) and
+improves link speed. See
+[Linkers for macOS and iOS builds](apple_platform_linkers.md)
+for more information.
+
 #### Use Reclient
 
 In addition, Google employees should use Reclient, a distributed compilation system.
@@ -185,7 +210,7 @@ out/Default` from the command line. To compile one, pass the GN label to Ninja
 with no preceding "//" (so, for `//chrome/test:unit_tests` use `autoninja -C
 out/Default chrome/test:unit_tests`).
 
-See [Siso tips](../siso_tips.md) too.
+See [Siso tips](siso_tips.md) too.
 
 ## Run Chromium
 
@@ -216,7 +241,7 @@ exist in the directory structure. To see what target a given unit test or
 browser test file corresponds to, the following command can be used:
 
 ```shell
-$ gn refs out/Default --testonly=true --type=executable --all chrome/browser/ui/browser_list_unittest.cc
+$ gn refs out/Default --testonly=true --type=executable --all chrome/browser/ui/browser_unittest.cc
 //chrome/test:unit_tests
 ```
 

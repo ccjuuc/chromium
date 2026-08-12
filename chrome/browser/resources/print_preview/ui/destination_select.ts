@@ -9,6 +9,7 @@ import '/strings.m.js';
 
 import {IconsetMap} from 'chrome://resources/cr_elements/cr_icon/iconset_map.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {Destination} from '../data/destination.js';
@@ -85,7 +86,7 @@ export class PrintPreviewDestinationSelectElement extends
 
     // Check for the Save as PDF id first.
     if (this.selectedValue === PDF_DESTINATION_KEY) {
-      return 'cr:insert-drive-file';
+      return 'cr:draft-filled';
     }
 
     // Otherwise, must be in the recent list.
@@ -99,7 +100,9 @@ export class PrintPreviewDestinationSelectElement extends
     // The key/recent destinations don't have information about what icon to
     // use, so just return the generic print icon for now. It will be updated
     // when the destination is set.
-    return 'print-preview:print';
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'print-preview:print-filled' :
+        'print-preview:print-old';
   }
 
   /**

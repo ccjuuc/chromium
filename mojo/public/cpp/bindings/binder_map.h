@@ -11,15 +11,13 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/containers/contains.h"
-#include "base/containers/variant_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/types/pass_key.h"
 #include "build/chromecast_buildflags.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
 #include "mojo/public/cpp/bindings/lib/binder_map_internal.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace mojo {
 
@@ -36,15 +34,17 @@ namespace mojo {
 // additional ContextType argument, and each invocation of |TryBind()| must
 // provide such a value.
 //
+// The exception to this is where a SequencedTaskRunner is provided and in that
+// case the ContextType is not passed to prevent cross-sequence access.
+//
 // NOTE: Most common uses of BinderMapWithContext do not require a context value
 // per bind request. Use the BinderMap alias defined below this class in such
 // cases.
 template <typename ContextType>
 class BinderMapWithContext {
  public:
-  using PassKey = base::PassKey<BinderMapWithContext>;
-
   using Traits = internal::BinderContextTraits<ContextType>;
+  using SequenceTraits = internal::BinderContextTraits<void>;
   using ContextValueType = typename Traits::ValueType;
   using GenericBinderType = typename Traits::GenericBinderType;
 
@@ -54,7 +54,15 @@ class BinderMapWithContext {
   template <typename Interface>
   using FuncType = typename Traits::template FuncType<Interface>;
 
-  BinderMapWithContext() : binders_(PassKey()) {}
+  template <typename Interface>
+  using SequenceBinderType =
+      typename SequenceTraits::template BinderType<Interface>;
+
+  template <typename Interface>
+  using SequenceFuncType =
+      typename SequenceTraits::template FuncType<Interface>;
+
+  BinderMapWithContext() = default;
 
   BinderMapWithContext(const BinderMapWithContext&) = default;
   BinderMapWithContext(BinderMapWithContext&&) = default;
@@ -66,19 +74,54 @@ class BinderMapWithContext {
   // Adds a new binder specifically for Interface receivers. This exists for the
   // convenience of being able to register strongly-typed binding methods like:
   //
-  //   void OnBindFoo(mojo::PendingReceiver<Foo> receiver) { ... }
+  //   void OnBindFoo(ContextType, mojo::PendingReceiver<Foo> receiver) { ... }
   //
   // more easily.
   //
   // If Add() is called multiple times for the same interface, the most recent
   // one replaces any existing binder.
   template <typename Interface>
-  void Add(std::type_identity_t<BinderType<Interface>> binder,
-           scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr) {
-    Add(internal::StaticString(Interface::Name_),
-        internal::GenericCallbackBinderWithContext<ContextType>(
-            Traits::MakeGenericBinder(std::move(binder)),
-            std::move(task_runner)));
+  void Add(std::type_identity_t<BinderType<Interface>> binder) {
+    Add<Interface>(internal::StaticString(Interface::Name_),
+                   internal::GenericCallbackBinderWithContext<ContextType>(
+                       Traits::MakeGenericBinder(std::move(binder))));
+  }
+
+  // Adds a new binder specifically for Interface receivers. This exists for the
+  // convenience of being able to register strongly-typed binding methods like:
+  //
+  //   void OnBindFoo(mojo::PendingReceiver<Foo> receiver) { ... }
+  //
+  // more easily.
+  //
+  // This takes a task runner and therefore does not provide the context to the
+  // bound method to ensure it is not leaked cross-thread.
+  //
+  // If Add() is called multiple times for the same interface, the most recent
+  // one replaces any existing binder.
+  template <typename Interface>
+  void Add(std::type_identity_t<SequenceBinderType<Interface>> binder,
+           scoped_refptr<base::SequencedTaskRunner> task_runner) {
+    Add<Interface>(internal::StaticString(Interface::Name_),
+                   internal::GenericCallbackBinderWithContext<ContextType>(
+                       SequenceTraits::MakeGenericBinder(std::move(binder)),
+                       std::move(task_runner)));
+  }
+
+  // Adds a new binder specifically for Interface functors. This exists for the
+  // convenience of being able to register strongly-typed functors like:
+  //
+  //   void OnBindFoo(ContextType, mojo::PendingReceiver<Foo> receiver) { ... }
+  //
+  // more easily.
+  //
+  // If Add() is called multiple times for the same interface, the most recent
+  // one replaces any existing binder.
+  template <typename Interface>
+  void Add(std::type_identity_t<FuncType<Interface>>* func) {
+    Add<Interface>(internal::StaticString(Interface::Name_),
+                   internal::GenericCallbackBinderWithContext<ContextType>(
+                       Traits::MakeGenericBinder(func)));
   }
 
   // Adds a new binder specifically for Interface functors. This exists for the
@@ -88,20 +131,24 @@ class BinderMapWithContext {
   //
   // more easily.
   //
+  // This takes a task runner and therefore does not provide the context to the
+  // bound method to ensure it is not leaked cross-thread.
+  //
   // If Add() is called multiple times for the same interface, the most recent
   // one replaces any existing binder.
   template <typename Interface>
-  void Add(std::type_identity_t<FuncType<Interface>>* func,
-           scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr) {
-    Add(internal::StaticString(Interface::Name_),
+  void Add(std::type_identity_t<SequenceFuncType<Interface>>* func,
+           scoped_refptr<base::SequencedTaskRunner> task_runner) {
+    Add<Interface>(
+        internal::StaticString(Interface::Name_),
         internal::GenericCallbackBinderWithContext<ContextType>(
-            Traits::MakeGenericBinder(func), std::move(task_runner)));
+            SequenceTraits::MakeGenericBinder(func), std::move(task_runner)));
   }
 
   // Returns true if this map contains a binder for `Interface` receivers.
   template <typename Interface>
   bool Contains() {
-    return base::Contains(binders_, Interface::Name_);
+    return binders_.contains(Interface::Name_);
   }
 
   // Attempts to bind the |receiver| using one of the registered binders in
@@ -170,8 +217,12 @@ class BinderMapWithContext {
  private:
   using IsVoidContext = std::is_same<ContextType, void>;
 
+  template <typename Interface>
   void Add(internal::StaticString name,
            internal::GenericCallbackBinderWithContext<ContextType>&& binder) {
+    if (!internal::GetRuntimeFeature_IsEnabled<Interface>()) {
+      return;
+    }
     // This is not a public method because it is not safe to use with a
     // non-static `name`. The map key is a `string_view` which would result in
     // a dangling pointer if the underlying string were to be freed.
@@ -183,8 +234,8 @@ class BinderMapWithContext {
     binders_.try_emplace(key, std::move(binder));
   }
 
-  base::VariantMap<std::string_view,
-                   internal::GenericCallbackBinderWithContext<ContextType>>
+  absl::flat_hash_map<std::string_view,
+                      internal::GenericCallbackBinderWithContext<ContextType>>
       binders_;
 
 #if BUILDFLAG(IS_CASTOS) || BUILDFLAG(IS_CAST_ANDROID)

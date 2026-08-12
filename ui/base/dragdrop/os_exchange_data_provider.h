@@ -5,6 +5,8 @@
 #ifndef UI_BASE_DRAGDROP_OS_EXCHANGE_DATA_PROVIDER_H_
 #define UI_BASE_DRAGDROP_OS_EXCHANGE_DATA_PROVIDER_H_
 
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,9 +14,11 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "build/build_config.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/clipboard/clipboard_url_info.h"
 #include "ui/base/clipboard/file_info.h"
 #include "ui/base/dragdrop/download_file_info.h"
 #include "ui/base/dragdrop/download_file_interface.h"
@@ -67,25 +71,20 @@ class COMPONENT_EXPORT(UI_BASE_DATA_EXCHANGE) OSExchangeDataProvider {
   virtual bool IsFromPrivileged() const = 0;
 
   virtual void SetString(std::u16string_view data) = 0;
-  virtual void SetURL(const GURL& url, std::u16string_view title) = 0;
+  virtual void SetURLs(base::span<const ClipboardUrlInfo> url_infos) = 0;
   virtual void SetFilename(const base::FilePath& path) = 0;
   virtual void SetFilenames(const std::vector<FileInfo>& file_names) = 0;
   virtual void SetPickledData(const ClipboardFormatType& format,
                               const base::Pickle& data) = 0;
 
   virtual std::optional<std::u16string> GetString() const = 0;
-  struct UrlInfo {
-    GURL url;
-    std::u16string title;
-  };
+
   // Even if there is no URL data present, many implementations will coerce text
   // content into URLs if the text is a valid URL. This coercion should only
   // happen for HTTP-like URLs (i.e. http or https) if the data originates from
   // a renderer (i.e. `IsRendererTainted()` is true) to avoid bypassing the URL
   // filtering applied when a drag is started.
-  virtual std::optional<UrlInfo> GetURLAndTitle(
-      FilenameToURLPolicy policy) const = 0;
-  virtual std::optional<std::vector<GURL>> GetURLs(
+  virtual std::vector<ClipboardUrlInfo> GetURLs(
       FilenameToURLPolicy policy) const = 0;
   virtual std::optional<std::vector<FileInfo>> GetFilenames() const = 0;
   virtual std::optional<base::Pickle> GetPickledData(
@@ -97,10 +96,10 @@ class COMPONENT_EXPORT(UI_BASE_DATA_EXCHANGE) OSExchangeDataProvider {
   virtual bool HasCustomFormat(const ClipboardFormatType& format) const = 0;
 
   virtual void SetFileContents(const base::FilePath& filename,
-                               const std::string& file_contents) = 0;
+                               base::span<const uint8_t> file_contents) = 0;
   struct FileContentsInfo {
     base::FilePath filename;
-    std::string file_contents;
+    std::vector<uint8_t> file_contents;
   };
   virtual std::optional<FileContentsInfo> GetFileContents() const = 0;
   virtual bool HasFileContents() const = 0;
@@ -112,10 +111,14 @@ class COMPONENT_EXPORT(UI_BASE_DATA_EXCHANGE) OSExchangeDataProvider {
           void(const std::vector<std::pair</*temp path*/ base::FilePath,
                                            /*display name*/ base::FilePath>>&)>
           callback) const = 0;
+  // Test only method for adding virtual file content to the data store.
+  // If |show_cfhdrop_without_data| is true, CF_HDROP will be advertised via
+  // QueryGetData but GetData will fail - simulating ZIP Shell Folder behavior.
   virtual void SetVirtualFileContentsForTesting(
-      const std::vector<std::pair<base::FilePath, std::string>>&
+      const std::vector<std::pair<base::FilePath, base::span<const uint8_t>>>&
           filenames_and_contents,
-      DWORD tymed) = 0;
+      DWORD tymed,
+      bool show_cfhdrop_without_data = false) = 0;
   virtual void SetDownloadFileInfo(DownloadFileInfo* download) = 0;
 #endif
 

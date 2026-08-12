@@ -159,7 +159,6 @@ TEST_F(PageLoadMetricsUtilTest, GetNonPrerenderingBackgroundStartTiming) {
 
     switch (test_case.prerendering_state) {
       case PrerenderingState::kNoPrerendering:
-      case PrerenderingState::kInPreview:
         DCHECK_NE(test_case.visibility_at_start_or_activation_,
                   PageVisibility::kNotInitialized);
         delegate.started_in_foreground_ =
@@ -191,57 +190,53 @@ TEST_F(PageLoadMetricsUtilTest, GetNonPrerenderingBackgroundStartTiming) {
 
 TEST_F(PageLoadMetricsUtilTest, CorrectEventAsNavigationOrActivationOrigined) {
   struct {
+    std::string description;
     PrerenderingState prerendering_state;
     std::optional<base::TimeDelta> activation_start;
     base::TimeDelta event;
     std::optional<base::TimeDelta> expected_result;
   } test_cases[] = {
-      // Not modified
-      {PrerenderingState::kNoPrerendering, std::nullopt, base::Seconds(2),
-       base::Seconds(2)},
-      // max(0, 2 - x), where x is time of activation start that may come in the
-      // future and should be greater than an already occurred event.
-      {PrerenderingState::kInPrerendering, std::nullopt, base::Seconds(2),
+      {"Not modified", PrerenderingState::kNoPrerendering, std::nullopt,
+       base::Seconds(2), base::Seconds(2)},
+      {"max(0, 2 - x), where x is time of activation start that may come in "
+       "the future and should be greater than an already occurred event.",
+       PrerenderingState::kInPrerendering, std::nullopt, base::Seconds(2),
        base::Seconds(0)},
-      {PrerenderingState::kActivatedNoActivationStart, std::nullopt,
+      {"activation start not yet available in browser, otherwise same as above",
+       PrerenderingState::kActivatedNoActivationStart, std::nullopt,
        base::Seconds(2), base::Seconds(0)},
-      // crash due to incorrect data
-      {PrerenderingState::kActivated, base::Seconds(10), base::Seconds(2),
-       base::Seconds(0)},
-      // max(0, 12 - 10)
-      {PrerenderingState::kActivated, base::Seconds(10), base::Seconds(12),
-       base::Seconds(2)},
+      {"crash due to incorrect data", PrerenderingState::kActivated,
+       base::Seconds(10), base::Seconds(2), base::Seconds(0)},
+      {"max(0, 12 - 10)", PrerenderingState::kActivated, base::Seconds(10),
+       base::Seconds(12), base::Seconds(2)},
   };
 
-  page_load_metrics::mojom::PageLoadTiming timing;
-  page_load_metrics::InitPageLoadTimingForTest(&timing);
   for (const auto& test_case : test_cases) {
+    SCOPED_TRACE(test_case.description);
     page_load_metrics::FakePageLoadMetricsObserverDelegate delegate;
     delegate.prerendering_state_ = test_case.prerendering_state;
     delegate.activation_start_ = test_case.activation_start;
 
-    auto test_expectation_runner =
-        [&](base::TimeDelta event,
-            std::optional<base::TimeDelta> expected_result) {
-            base::TimeDelta got = CorrectEventAsNavigationOrActivationOrigined(
-                delegate, timing, event);
-            EXPECT_EQ(expected_result, got);
-        };
-
-    test_expectation_runner(test_case.event, test_case.expected_result);
-
-    // Currently, multiple implementations of PageLoadMetricsObserver is
-    // ongoing. We'll left the old version for a while.
-    // TODO(crbug.com/40222513): Delete below.
-    timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
-    timing.activation_start = test_case.activation_start;
-    test_expectation_runner(test_case.event, test_case.expected_result);
-
-    // In some path, this function is called with old PageLoadTiming, which can
-    // lack activation_start. The result is the same for such case.
-    timing.activation_start = std::nullopt;
-    test_expectation_runner(test_case.event, test_case.expected_result);
+    EXPECT_EQ(test_case.expected_result,
+              CorrectEventAsNavigationOrActivationOrigined(delegate,
+                                                           test_case.event));
   }
+}
+
+TEST_F(PageLoadMetricsUtilTest, CalculateLCPEntropyBucket) {
+  EXPECT_EQ(0, CalculateLCPEntropyBucket(0));
+  EXPECT_EQ(1, CalculateLCPEntropyBucket(0.000005));
+  EXPECT_EQ(17, CalculateLCPEntropyBucket(0.42));
+  EXPECT_EQ(35, CalculateLCPEntropyBucket(42.0));
+  EXPECT_EQ(42, CalculateLCPEntropyBucket(4200.0));
+  EXPECT_EQ(43, CalculateLCPEntropyBucket(42000.0));
+  EXPECT_EQ(43, CalculateLCPEntropyBucket(42000000.0));
+  // These are not expected, we're just testing them for robustness.
+  EXPECT_EQ(0, CalculateLCPEntropyBucket(-1));
+  EXPECT_EQ(43,
+            CalculateLCPEntropyBucket(std::numeric_limits<double>::infinity()));
+  EXPECT_EQ(
+      0, CalculateLCPEntropyBucket(std::numeric_limits<double>::quiet_NaN()));
 }
 
 // A type to support parameterized testing for the category of the request.

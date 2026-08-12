@@ -15,6 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 
 namespace ui {
@@ -79,11 +80,10 @@ std::string ClipboardFormatType::WebCustomFormatName(int index) {
 // static
 ClipboardFormatType ClipboardFormatType::CustomPlatformType(
     std::string_view format_string) {
-  CHECK(base::IsStringASCII(format_string));
   // Once these formats are registered, `RegisterClipboardFormat` just returns
   // the `cfFormat` associated with it and doesn't register a new format.
   return ClipboardFormatType(
-      RegisterClipboardFormatChecked(base::ASCIIToWide(format_string).c_str()));
+      RegisterClipboardFormatChecked(base::UTF8ToWide(format_string).c_str()));
 }
 
 // static
@@ -175,6 +175,13 @@ const ClipboardFormatType& ClipboardFormatType::UrlAType() {
 }
 
 // static
+const ClipboardFormatType& ClipboardFormatType::BookmarkListType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(L"Bookmark List"));
+  return *format;
+}
+
+// static
 const ClipboardFormatType& ClipboardFormatType::PlainTextAType() {
   static base::NoDestructor<ClipboardFormatType> format(CF_TEXT);
   return *format;
@@ -219,22 +226,6 @@ const ClipboardFormatType& ClipboardFormatType::FileDescriptorType() {
 }
 
 // static
-const ClipboardFormatType& ClipboardFormatType::FileContentZeroType() {
-  // This uses a storage media type of TYMED_HGLOBAL, which is not commonly
-  // used with CFSTR_FILECONTENTS (but used in Chromium--see
-  // OSExchangeDataProviderWin::SetFileContents). Use FileContentAtIndexType
-  // if TYMED_ISTREAM and TYMED_ISTORAGE are needed.
-  // TODO(crbug.com/41451800): Should TYMED_ISTREAM / TYMED_ISTORAGE be
-  // used instead of TYMED_HGLOBAL in
-  // OSExchangeDataProviderWin::SetFileContents.
-  // The 0 constructor argument is used with CFSTR_FILECONTENTS to specify file
-  // content.
-  static base::NoDestructor<ClipboardFormatType> format(
-      RegisterClipboardFormatChecked(CFSTR_FILECONTENTS), 0);
-  return *format;
-}
-
-// static
 std::map<LONG, ClipboardFormatType>& ClipboardFormatType::FileContentTypeMap() {
   static base::NoDestructor<std::map<LONG, ClipboardFormatType>>
       index_to_type_map;
@@ -244,6 +235,13 @@ std::map<LONG, ClipboardFormatType>& ClipboardFormatType::FileContentTypeMap() {
 // static
 const ClipboardFormatType& ClipboardFormatType::FileContentAtIndexType(
     LONG index) {
+  // FileContentTypeMap() is accessed from both the browser UI thread and
+  // base::ThreadPool workers during virtual-file drag-and-drop, so serialize
+  // map mutation. base::NoDestructor only makes construction thread-safe;
+  // std::map::insert itself is not.
+  static base::NoDestructor<base::Lock> map_lock;
+  base::AutoLock auto_lock(*map_lock);
+
   auto& index_to_type_map = FileContentTypeMap();
 
   auto insert_or_assign_result = index_to_type_map.insert(
@@ -307,6 +305,14 @@ const ClipboardFormatType& ClipboardFormatType::ClipboardHistoryType() {
 const ClipboardFormatType& ClipboardFormatType::UploadCloudClipboardType() {
   static base::NoDestructor<ClipboardFormatType> format(
       RegisterClipboardFormatChecked(L"CanUploadToCloudClipboard"));
+  return *format;
+}
+
+// static
+const ClipboardFormatType& ClipboardFormatType::BookmarkEntriesType() {
+  static base::NoDestructor<ClipboardFormatType> format(
+      RegisterClipboardFormatChecked(
+          base::ASCIIToWide(kMimeTypeBookmarkEntries).c_str()));
   return *format;
 }
 

@@ -32,21 +32,19 @@ import {AnnotationMode} from './constants.js';
     @change-page="${this.onChangePage_}"
     @display-annotations-changed="${this.onDisplayAnnotationsChanged_}"
     @fit-to-changed="${this.onFitToChanged}"
+    @glic-summarize="${this.onGlicSummarize_}"
     @present-click="${this.onPresentClick_}"
     @properties-click="${this.onPropertiesClick_}"
     @sidenav-toggle-click="${this.onSidenavToggleClick_}"
     @two-up-view-changed="${this.onTwoUpViewChanged_}"
     @zoom-changed="${this.onZoomChanged}" @zoom-in="${this.onZoomIn}"
-    @zoom-out="${this.onZoomOut}" @rotate-left="${this.rotateCounterclockwise}"
+    @zoom-out="${this.onZoomOut}" @rotate-left="${this.onRotateLeft_}"
 <if expr="enable_pdf_ink2">
     @annotation-mode-updated="${this.onAnnotationModeUpdated_}"
 </if>
     @print="${this.onPrint_}" @save="${this.onToolbarSave_}"
 <if expr="enable_pdf_save_to_drive">
     @save-to-drive="${this.onSaveToDrive_}"
-</if>
-<if expr="enable_pdf_ink2">
-    @strokes-updated="${this.onStrokesUpdated_}"
 </if>
     hidden>
 </viewer-toolbar>
@@ -72,10 +70,9 @@ import {AnnotationMode} from './constants.js';
       </div>
       <if expr="enable_pdf_ink2">
         ${this.isInTextAnnotationMode_() ? html`
-          <div class="text-box-container">
-            <ink-text-box @state-changed="${this.onTextBoxStateChanged_}">
-            </ink-text-box>
-          </div>` : ''}
+          <ink-text-annotations .viewport="${this.viewport}"
+              @state-changed="${this.onTextBoxStateChanged_}">
+          </ink-text-annotations>` : ''}
       </if>
       <div id="content">
       </div>

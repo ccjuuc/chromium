@@ -69,7 +69,7 @@ class URLLoaderFactoryParamsHelper {
       network::mojom::TrustTokenOperationPolicyVerdict
           trust_token_redemption_policy,
       net::CookieSettingOverrides cookie_setting_overrides,
-      const std::optional<base::UnguessableToken>& network_restrictions_id,
+      const base::UnguessableToken& network_restrictions_id,
       std::string_view debug_tag);
 
   // Creates URLLoaderFactoryParams to be used by |isolated_world_origin| hosted
@@ -92,7 +92,8 @@ class URLLoaderFactoryParamsHelper {
   static network::mojom::URLLoaderFactoryParamsPtr CreateForPrefetch(
       RenderFrameHostImpl* frame,
       network::mojom::ClientSecurityStatePtr client_security_state,
-      net::CookieSettingOverrides cookie_setting_overrides);
+      net::CookieSettingOverrides cookie_setting_overrides,
+      const base::UnguessableToken& network_restrictions_id);
 
   // Creates URLLoaderFactoryParams for either fetching the worker script or for
   // fetches initiated from a worker.
@@ -108,6 +109,7 @@ class URLLoaderFactoryParamsHelper {
           url_loader_network_observer,
       mojo::PendingRemote<network::mojom::DevToolsObserver> devtools_observer,
       network::mojom::ClientSecurityStatePtr client_security_state,
+      const base::UnguessableToken& network_restrictions_id,
       std::string_view debug_tag,
       bool require_cross_site_request_for_cookies,
       bool is_for_service_worker);
@@ -136,6 +138,21 @@ class URLLoaderFactoryParamsHelper {
   // Returns if the main frame origin from the `IsolationInfo` is recently
   // accessed from any tab in the current BrowserContext.
   static CONTENT_EXPORT bool IsMainFrameOriginRecentlyAccessed(
+      const net::IsolationInfo& isolation_info);
+
+  // Returns whether the network service should prefer the factory's
+  // `isolation_info.site_for_cookies()` over the renderer-provided
+  // `ResourceRequest::site_for_cookies` for this factory. Set the
+  // corresponding `URLLoaderFactoryParams` flag when this returns true.
+  //
+  // Scoped to frames whose effective top frame for storage partitioning
+  // differs from the actual top frame. In that arrangement the renderer
+  // sees a cross-site top-level and computes a null `site_for_cookies`,
+  // while `RenderFrameHostImpl::ComputeIsolationInfoInternal()` has
+  // already overridden the browser-side SFC. Outside that subtree the
+  // renderer's value is already correct and the flag is redundant.
+  static CONTENT_EXPORT bool ShouldPreferFactorySiteForCookies(
+      bool has_effective_top_frame_for_storage_partitioning,
       const net::IsolationInfo& isolation_info);
 
  private:

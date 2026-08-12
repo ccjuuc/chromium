@@ -16,7 +16,6 @@
 #include "third_party/blink/renderer/core/view_transition/view_transition.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_transition_element.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -183,7 +182,18 @@ ViewTransition* ViewTransitionUtils::GetTransition(const Node& node) {
   return GetTransition(node.GetDocument());
 }
 
-ViewTransition* ViewTransitionUtils::TransitionForTaggedElement(
+ViewTransition* ViewTransitionUtils::TransitionForParticipant(
+    const Element& element) {
+  ViewTransition* result = nullptr;
+  ForEachTransition(element.GetDocument(), [&](ViewTransition& transition) {
+    if (transition.IsTransitionElementExcludingRoot(element)) {
+      result = &transition;
+    }
+  });
+  return result;
+}
+
+ViewTransition* ViewTransitionUtils::TransitionForParticipantOrScope(
     const LayoutObject& layout_object) {
   ViewTransition* result = nullptr;
   // Note: an element can't participate in more than one transition at the same
@@ -283,6 +293,25 @@ ViewTransitionUtils::GetPropertyCSSValueScope::~GetPropertyCSSValueScope() {
 void ViewTransitionUtils::WillUpdateStyleAndLayoutTree(Document& document) {
   if (auto* supplement = document.GetViewTransitionsIfExists()) {
     supplement->WillUpdateStyleAndLayoutTree();
+  }
+}
+
+// static
+PseudoId ViewTransitionUtils::ParentViewTransitionPseudoId(PseudoId pseudo_id) {
+  switch (pseudo_id) {
+    case kPseudoIdViewTransitionNew:
+    case kPseudoIdViewTransitionOld:
+      return kPseudoIdViewTransitionImagePair;
+
+    case kPseudoIdViewTransitionImagePair:
+    case kPseudoIdViewTransitionGroupChildren:
+      return kPseudoIdViewTransitionGroup;
+
+    case kPseudoIdViewTransitionGroup:
+      return kPseudoIdViewTransition;
+
+    default:
+      return kPseudoIdNone;
   }
 }
 

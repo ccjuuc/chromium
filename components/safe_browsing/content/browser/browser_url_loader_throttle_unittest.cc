@@ -8,26 +8,35 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/safe_browsing/content/browser/async_check_tracker.h"
 #include "components/safe_browsing/content/browser/base_ui_manager.h"
+#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
+#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/content/browser/url_checker_holder.h"
 #include "components/safe_browsing/core/browser/realtime/fake_url_lookup_service.h"
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
 #include "components/safe_browsing/core/browser/url_checker_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/fake_service_worker_context.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_web_contents_factory.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -54,6 +63,9 @@ class MockUrlCheckerDelegate : public UrlCheckerDelegate {
                void(const security_interstitials::UnsafeResource&));
   MOCK_METHOD1(NotifySuspiciousSiteDetected,
                void(const base::RepeatingCallback<content::WebContents*()>&));
+  MOCK_METHOD2(ShowSuspiciousSiteWarning,
+               void(int64_t,
+                    const base::RepeatingCallback<content::WebContents*()>&));
   MOCK_METHOD0(GetUIManager, BaseUIManager*());
   MOCK_METHOD0(GetThreatTypes, const SBThreatTypeSet&());
   MOCK_METHOD1(IsUrlAllowlisted, bool(const GURL&));
@@ -63,6 +75,8 @@ class MockUrlCheckerDelegate : public UrlCheckerDelegate {
                void(std::unique_ptr<ClientSafeBrowsingReportRequest>,
                     const base::RepeatingCallback<content::WebContents*()>&));
   MOCK_METHOD1(AreBackgroundHashRealTimeSampleLookupsAllowed,
+               bool(const base::RepeatingCallback<content::WebContents*()>&));
+  MOCK_METHOD1(AreSuspiciousSiteWarningsAllowed,
                bool(const base::RepeatingCallback<content::WebContents*()>&));
 
   SafeBrowsingDatabaseManager* GetDatabaseManager() override { return nullptr; }
@@ -176,7 +190,8 @@ class MockSafeBrowsingUrlChecker : public SafeBrowsingUrlCheckerImpl {
             is_async_check,
             /*check_allowlist_before_hash_database=*/false,
             SessionID::InvalidValue(),
-            /*referring_app_info=*/std::nullopt) {}
+            /*referring_app_info=*/std::nullopt,
+            /*v5_get_hash_protocol_manager=*/nullptr) {}
 
   // Returns the CallbackInfo that was previously added in |AddCallbackInfo|.
   // It will crash if |AddCallbackInfo| was not called.
@@ -294,7 +309,8 @@ class SBBrowserUrlLoaderThrottleTestBase : public ::testing::Test {
             ? hash_realtime_utils::HashRealTimeSelection::kHashRealTimeService
             : hash_realtime_utils::HashRealTimeSelection::kNone,
         async_check_tracker_ ? async_check_tracker_->GetWeakPtr() : nullptr,
-        /*referring_app_info=*/std::nullopt);
+        /*referring_app_info=*/std::nullopt,
+        /*v5_get_hash_protocol_manager=*/nullptr);
 
     url_checker_delegate_ = base::MakeRefCounted<MockUrlCheckerDelegate>();
     throttle_delegate_ = std::make_unique<MockThrottleDelegate>();
@@ -392,15 +408,14 @@ class SBBrowserUrlLoaderThrottleTestBase : public ::testing::Test {
   }
 
   // This function returns the value of |defer| after the function is called.
-  bool CallWillRedirectRequest() {
+  bool CallWillRedirectRequest(const GURL& new_url = GURL()) {
     bool defer = false;
     net::RedirectInfo redirect_info;
-    std::vector<std::string> to_be_removed_headers;
-    net::HttpRequestHeaders modified_headers;
-    net::HttpRequestHeaders modified_cors_exempt_headers;
+    redirect_info.new_url = new_url;
+    network::HttpRequestHeadersUpdateParams headers_update_params;
     throttle_->WillRedirectRequest(&redirect_info, *response_head_, &defer,
-                                   &to_be_removed_headers, &modified_headers,
-                                   &modified_cors_exempt_headers);
+                                   &headers_update_params);
+
     task_environment_.RunUntilIdle();
     return defer;
   }
@@ -428,6 +443,8 @@ class SBBrowserUrlLoaderThrottleTestBase : public ::testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   GURL url_;
   network::mojom::URLResponseHeadPtr response_head_;
+  // Must outlive `throttle_`.
+  std::unique_ptr<MockThrottleDelegate> throttle_delegate_;
   std::unique_ptr<BrowserURLLoaderThrottle> throttle_;
   // Owned by |throttle_|. May be deleted before the test completes. Prefer
   // setting it up at the start of the test.
@@ -436,7 +453,6 @@ class SBBrowserUrlLoaderThrottleTestBase : public ::testing::Test {
   std::unique_ptr<FakeRealTimeUrlLookupService> url_lookup_service_ =
       std::make_unique<FakeRealTimeUrlLookupService>();
   scoped_refptr<MockUrlCheckerDelegate> url_checker_delegate_;
-  std::unique_ptr<MockThrottleDelegate> throttle_delegate_;
   std::unique_ptr<AsyncCheckTracker> async_check_tracker_;
   scoped_refptr<BaseUIManager> ui_manager_;
   content::TestBrowserContext browser_context_;
@@ -454,6 +470,11 @@ class SBBrowserUrlLoaderThrottleTest
   void SetUpTest() {
     bool async_check_enabled = GetParam();
     SBBrowserUrlLoaderThrottleTestBase::SetUpTest(async_check_enabled);
+  }
+
+  SafeBrowsingNavigationObserverManager::HostToIpMap* GetHostToIpMap(
+      SafeBrowsingNavigationObserverManager* manager) {
+    return &manager->host_to_ip_map_;
   }
 
   void RunTotalDelayHistogramsUrlCheckTypeTest(
@@ -839,6 +860,85 @@ TEST_P(SBBrowserUrlLoaderThrottleTest,
       "SafeBrowsing.BrowserThrottle.TotalDelay2.MockFullUrlLookup");
 }
 
+TEST_P(SBBrowserUrlLoaderThrottleTest, VerifyRedirectIpAddressRecorded) {
+  SetUpTest();
+  // One for original URL, one for first redirect, one for second redirect.
+  AddCallbackInfo(/*should_proceed=*/true,
+                  /*should_show_interstitial=*/false,
+                  /*should_delay_callback=*/false);
+  AddCallbackInfo(/*should_proceed=*/true,
+                  /*should_show_interstitial=*/false,
+                  /*should_delay_callback=*/false);
+  AddCallbackInfo(/*should_proceed=*/true,
+                  /*should_show_interstitial=*/false,
+                  /*should_delay_callback=*/false);
+
+  // Setup SafeBrowsingNavigationObserver and its dependencies.
+  sync_preferences::TestingPrefServiceSyncable pref_service;
+  HostContentSettingsMap::RegisterProfilePrefs(pref_service.registry());
+  safe_browsing::RegisterProfilePrefs(pref_service.registry());
+  pref_service.SetBoolean(prefs::kSafeBrowsingEnabled, true);
+
+  scoped_refptr<HostContentSettingsMap> settings_map =
+      base::MakeRefCounted<HostContentSettingsMap>(
+          &pref_service, /*is_off_the_record=*/false,
+          /*store_last_modified=*/false, /*restore_session=*/false,
+          /*should_record_metrics=*/false);
+
+  // Ensure that settings_map is shut down even if assertions fail.
+  base::ScopedClosureRunner shutdown_runner(base::BindOnce(
+      &HostContentSettingsMap::ShutdownOnUIThread, settings_map));
+
+  // Declaration order matters to ensure teardown is in right order.
+  content::FakeServiceWorkerContext service_worker_context;
+  SafeBrowsingNavigationObserverManager observer_manager(
+      &pref_service, &service_worker_context);
+  content::WebContents* local_web_contents =
+      web_contents_factory_.CreateWebContents(&browser_context_);
+
+  // Redirect the throttle to use the local WebContents.
+  EXPECT_CALL(mock_web_contents_getter_, Run())
+      .WillRepeatedly(::testing::Return(local_web_contents));
+
+  SafeBrowsingNavigationObserver::MaybeCreateForWebContents(
+      local_web_contents, settings_map.get(), &observer_manager, &pref_service,
+      /*has_safe_browsing_service=*/true);
+
+  // Simulate starting request for the original URL.
+  url_ = GURL("https://original.example.com/");
+  CallWillStartRequest();
+
+  // First redirect: original.example.com -> first-redirect.example.com
+  response_head_->remote_endpoint =
+      net::IPEndPoint(net::IPAddress(1, 2, 3, 4), 443);
+  bool defer =
+      CallWillRedirectRequest(GURL("https://first-redirect.example.com/"));
+  EXPECT_FALSE(defer);
+
+  // Second redirect: first-redirect.example.com -> second-redirect.example.com
+  response_head_->remote_endpoint =
+      net::IPEndPoint(net::IPAddress(5, 6, 7, 8), 443);
+  defer = CallWillRedirectRequest(GURL("https://second-redirect.example.com/"));
+  EXPECT_FALSE(defer);
+
+  // Verify that the IP mapping for the original URL was recorded.
+  auto* host_to_ip_map = GetHostToIpMap(&observer_manager);
+  auto it = host_to_ip_map->find("original.example.com");
+  ASSERT_NE(it, host_to_ip_map->end());
+  ASSERT_EQ(it->second.size(), 1u);
+  EXPECT_EQ(it->second[0].ip, "1.2.3.4");
+
+  // Verify that the IP mapping for the first redirect URL was recorded.
+  it = host_to_ip_map->find("first-redirect.example.com");
+  ASSERT_NE(it, host_to_ip_map->end());
+  ASSERT_EQ(it->second.size(), 1u);
+  EXPECT_EQ(it->second[0].ip, "5.6.7.8");
+
+  // Clear expectations that bind local_web_contents before destroying it.
+  ::testing::Mock::VerifyAndClearExpectations(&mock_web_contents_getter_);
+  web_contents_factory_.DestroyWebContents(local_web_contents);
+}
+
 class SBBrowserUrlLoaderThrottleAsyncCheckTest
     : public SBBrowserUrlLoaderThrottleTestBase {
  protected:
@@ -940,6 +1040,10 @@ TEST_F(SBBrowserUrlLoaderThrottleAsyncCheckTest, VerifyDefer_AsyncNotDeferred) {
   EXPECT_FALSE(defer);
   // Async check is transferred to the tracker.
   EXPECT_EQ(async_check_tracker_->PendingCheckersSizeForTesting(), 1u);
+  histogram_tester_.ExpectUniqueSample(
+      "SafeBrowsing.BrowserThrottle.IsAsyncCheckTrackerAliveOnTransfer",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
 
   // Async check completed afterwards doesn't cause a crash.
   EXPECT_FALSE(async_url_checker_.WasInvalidated());
@@ -1225,6 +1329,30 @@ TEST_F(SBBrowserUrlLoaderThrottleAsyncCheckTest,
 
   defer = CallWillProcessResponse();
   EXPECT_TRUE(defer);
+}
+
+TEST_F(SBBrowserUrlLoaderThrottleAsyncCheckTest,
+       VerifyNoCrashWhenTrackerDestroyed) {
+  SetUpTest();
+  AddSyncCallbackInfo(/*should_proceed=*/true,
+                      /*should_delay_callback=*/false);
+  AddAsyncCallbackInfo(
+      /*should_proceed=*/true,
+      /*should_delay_callback=*/true);
+
+  CallWillStartRequest();
+
+  // Destroy the tracker.
+  async_check_tracker_.reset();
+
+  // This calls WillProcessResponse, which calls MaybeTransferAsyncChecker.
+  // This should not crash.
+  CallWillProcessResponse();
+
+  histogram_tester_.ExpectUniqueSample(
+      "SafeBrowsing.BrowserThrottle.IsAsyncCheckTrackerAliveOnTransfer",
+      /*sample=*/false,
+      /*expected_bucket_count=*/1);
 }
 
 }  // namespace safe_browsing

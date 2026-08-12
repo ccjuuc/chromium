@@ -1,7 +1,6 @@
 include_rules = [
     "-third_party/blink/renderer/modules",
     "+base/threading",
-    "+components/aggregation_service",
     "+third_party/blink/renderer/modules/modules_export.h",
     "+third_party/blink/renderer/modules/shared_storage",
     "+third_party/blink/renderer/modules/crypto",
@@ -14,7 +13,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-    ".*_(unit)?test\.cc": [
+    ".*_(unit)?test\\.cc": [
         "+gin",
         "+services/network/test/test_url_loader_factory.h",
     ],

@@ -16,7 +16,8 @@
 #include "chrome/browser/performance_manager/public/user_tuning/battery_saver_mode_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/performance_controls/test_support/battery_saver_browser_test_mixin.h"
@@ -78,7 +79,7 @@ const WebContentsInteractionTestUtil::DeepQuery kExceptionDialogEntry = {
     "tab-discard-exception-list",
     "tab-discard-exception-tabbed-add-dialog",
     "tab-discard-exception-current-sites-list#list",
-    "settings-checkbox-list-entry"};
+    "cr-checkbox"};
 
 const WebContentsInteractionTestUtil::DeepQuery kExceptionDialogAddButton = {
     "settings-ui",
@@ -194,7 +195,8 @@ IN_PROC_BROWSER_TEST_F(PerformanceSettingsCrosInteractiveTest,
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOsFeedbackDialogElementId);
   CreateBrowserWindow(
       GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage)));
-  Browser* const browser = chrome::FindLastActive();
+  BrowserWindowInterface* const browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   ASSERT_NE(browser, nullptr);
 
   RunTestSequence(
@@ -339,7 +341,8 @@ IN_PROC_BROWSER_TEST_F(MemorySettingsCrosInteractiveTest,
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOsFeedbackDialogElementId);
   CreateBrowserWindow(
       GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage)));
-  Browser* const browser = chrome::FindLastActive();
+  BrowserWindowInterface* const browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   ASSERT_NE(browser, nullptr);
 
   RunTestSequence(
@@ -638,7 +641,8 @@ IN_PROC_BROWSER_TEST_F(BatterySettingsInteractiveTest,
 
   CreateBrowserWindow(
       GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage)));
-  Browser* const browser = chrome::FindLastActive();
+  BrowserWindowInterface* const browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   ASSERT_NE(browser, nullptr);
 
   RunTestSequence(
@@ -661,7 +665,8 @@ IN_PROC_BROWSER_TEST_F(BatterySettingsInteractiveTest,
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOsFeedbackDialogElementId);
   CreateBrowserWindow(
       GURL(chrome::GetSettingsUrl(chrome::kPerformanceSubPage)));
-  Browser* const browser = chrome::FindLastActive();
+  BrowserWindowInterface* const browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
   ASSERT_NE(browser, nullptr);
 
   RunTestSequence(
@@ -685,9 +690,7 @@ class TabDiscardExceptionsSettingsInteractiveTest
     StateChange element_renders;
     element_renders.event = kElementHides;
     element_renders.where = element;
-    element_renders.test_function =
-        "(el) => { let rect = el.getBoundingClientRect(); return rect.width "
-        "=== 0 && rect.height === 0; }";
+    element_renders.type = StateChange::Type::kDoesNotExist;
 
     return WaitForStateChange(contents_id, element_renders);
   }

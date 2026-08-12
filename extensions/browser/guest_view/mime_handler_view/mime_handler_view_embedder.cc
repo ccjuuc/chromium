@@ -4,7 +4,6 @@
 
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.h"
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
@@ -14,6 +13,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_constants.h"
@@ -52,8 +52,7 @@ void MimeHandlerViewEmbedder::Create(
     const GURL& resource_url,
     const std::string& stream_id,
     const std::string& internal_id) {
-  DCHECK(
-      !base::Contains(*GetMimeHandlerViewEmbeddersMap(), frame_tree_node_id));
+  DCHECK(!GetMimeHandlerViewEmbeddersMap()->contains(frame_tree_node_id));
   GetMimeHandlerViewEmbeddersMap()->insert_or_assign(
       frame_tree_node_id,
       base::WrapUnique(new MimeHandlerViewEmbedder(
@@ -191,7 +190,7 @@ void MimeHandlerViewEmbedder::CreateMimeHandlerViewGuest(
         ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
   }
   CHECK(render_frame_host_);
-  base::Value::Dict create_params;
+  base::DictValue create_params;
   create_params.Set(mime_handler_view::kStreamId, stream_id_);
   manager->CreateGuestAndTransferOwnership(
       MimeHandlerViewGuest::Type, render_frame_host_, nullptr, create_params,
@@ -218,21 +217,21 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
   DCHECK_EQ(placeholder_render_frame_host_for_inner_contents_->GetParent(),
             render_frame_host_);
 
-  const int embedder_frame_process_id =
-      render_frame_host_->GetProcess()->GetDeprecatedID();
+  const content::ChildProcessId embedder_frame_process_id =
+      render_frame_host_->GetProcess()->GetID();
   const int element_instance_id =
       placeholder_render_frame_host_for_inner_contents_->GetRoutingID();
   const int guest_instance_id = guest_view->guest_instance_id();
 
   // TODO(ekaramad): This URL is used to communicate with
   // MimeHandlerViewFrameContainer which is only the case if the embedder frame
-  // is the content frame of a plugin element (https://crbug.com/957373).
+  // is the content frame of a plugin element (https://crbug.com/40624996).
   guest_view->set_original_resource_url(resource_url_);
   guest_view::GuestViewManager::FromBrowserContext(
       web_contents()->GetBrowserContext())
       ->AttachGuest(embedder_frame_process_id, element_instance_id,
                     guest_instance_id,
-                    base::Value::Dict() /* unused attach_params */);
+                    base::DictValue() /* unused attach_params */);
   // Full page plugin refers to <iframe> or main frame navigations to a
   // MimeHandlerView resource. In such cases MHVG does not have a frame
   // container.
@@ -241,7 +240,7 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
       !guest_view->GetEmbedderFrame()->GetParentOrOuterDocument();
   MimeHandlerViewAttachHelper::Get(embedder_frame_process_id)
       ->AttachToOuterWebContents(
-          std::move(guest_view), embedder_frame_process_id,
+          std::move(guest_view),
           placeholder_render_frame_host_for_inner_contents_,
           element_instance_id, is_full_page /* is_full_page_plugin */);
   // MHVE is no longer required.

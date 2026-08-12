@@ -92,9 +92,6 @@ namespace blink {
 
 /* Constants */
 
-static const double kMinimumECMADateInMs = -8640000000000000.0;
-static const double kMaximumECMADateInMs = 8640000000000000.0;
-
 // Day of year for the first day of each month, where index 0 is January, and
 // day 0 is January 1.  First for non-leap years, then for leap years.
 static const std::array<std::array<int, 12>, 2> kFirstDayOfMonth = {
@@ -145,8 +142,8 @@ static double MsToDays(double ms) {
 
 int MsToYear(double ms) {
   DCHECK(std::isfinite(ms));
-  DCHECK_GE(ms, kMinimumECMADateInMs);
-  DCHECK_LE(ms, kMaximumECMADateInMs);
+  DCHECK_GE(ms, kMinimumEcmaDateInMs);
+  DCHECK_LE(ms, kMaximumEcmaDateInMs);
   static constexpr double kMsPerDay = base::Time::kMillisecondsPerDay;
   int approx_year = static_cast<int>(floor(ms / (kMsPerDay * 365.2425)) + 1970);
   double ms_from_approx_year_to1970 =

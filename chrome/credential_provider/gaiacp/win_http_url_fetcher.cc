@@ -10,12 +10,12 @@
 #include <process.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 
 #include "base/base64.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -72,9 +72,9 @@ class HttpServiceRequest {
   // within the given |request_timeout|. If the background thread returns before
   // the timeout expires, it is guaranteed that a result can be returned and the
   // requester will delete itself.
-  std::optional<base::Value::Dict> WaitForResponseFromHttpService(
+  std::optional<base::DictValue> WaitForResponseFromHttpService(
       const base::TimeDelta& request_timeout) {
-    std::optional<base::Value::Dict> result;
+    std::optional<base::DictValue> result;
 
     // Start the thread and wait on its handle until |request_timeout| expires
     // or the thread finishes.
@@ -92,7 +92,7 @@ class HttpServiceRequest {
     // completely if needed.
     base::win::ScopedHandle thread_handle(
         reinterpret_cast<HANDLE>(wait_thread));
-    hr = ::WaitForSingleObject(thread_handle.Get(),
+    hr = ::WaitForSingleObject(thread_handle.get(),
                                request_timeout.InMilliseconds());
 
     // The race condition starts here. It is possible that between the expiry of
@@ -293,7 +293,6 @@ HRESULT WinHttpUrlFetcher::SetHttpRequestTimeout(const int timeout_in_millis) {
 }
 
 HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
-  USES_CONVERSION;
   DCHECK(response);
 
   response->clear();
@@ -307,8 +306,9 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
   ScopedWinHttpHandle connect;
   {
     std::string host = url_.GetHost();
-    ScopedWinHttpHandle::Handle connect_tmp = ::WinHttpConnect(
-        session_.Get(), A2CW(host.c_str()), INTERNET_DEFAULT_PORT, 0);
+    ScopedWinHttpHandle::Handle connect_tmp =
+        ::WinHttpConnect(session_.get(), base::UTF8ToWide(host).c_str(),
+                         INTERNET_DEFAULT_PORT, 0);
     if (!connect_tmp) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "WinHttpConnect hr=" << putHR(hr);
@@ -320,7 +320,7 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
   {
     // Set timeout if specified.
     if (timeout_in_millis_ != 0) {
-      if (!::WinHttpSetTimeouts(session_.Get(), timeout_in_millis_,
+      if (!::WinHttpSetTimeouts(session_.get(), timeout_in_millis_,
                                 timeout_in_millis_, timeout_in_millis_,
                                 timeout_in_millis_)) {
         HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
@@ -334,10 +334,11 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
     bool use_post = !body_.empty();
     std::string path = url_.GetPath();
     std::string path_for_request = url_.PathForRequest();
+    std::wstring object_name =
+        base::UTF8ToWide(use_post ? path : path_for_request);
     ScopedWinHttpHandle::Handle request = ::WinHttpOpenRequest(
-        connect.Get(), use_post ? L"POST" : L"GET",
-        use_post ? A2CW(path.c_str()) : A2CW(path_for_request.c_str()), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+        connect.get(), use_post ? L"POST" : L"GET", object_name.c_str(),
+        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
         WINHTTP_FLAG_REFRESH | WINHTTP_FLAG_SECURE);
     if (!request) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
@@ -350,11 +351,10 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
   // Add request headers.
 
   for (const auto& kv : request_headers_) {
-    const wchar_t* key = A2CW(kv.first.c_str());
-    const wchar_t* value = A2CW(kv.second.c_str());
-    std::wstring header = base::StrCat({key, L": ", value});
+    std::wstring header = base::StrCat(
+        {base::UTF8ToWide(kv.first), L": ", base::UTF8ToWide(kv.second)});
     if (!::WinHttpAddRequestHeaders(
-            request_.Get(), header.c_str(), header.length(),
+            request_.get(), header.c_str(), header.length(),
             WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "WinHttpAddRequestHeaders name=" << kv.first
@@ -365,7 +365,7 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
 
   // Write request body if needed.
 
-  if (!::WinHttpSendRequest(request_.Get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+  if (!::WinHttpSendRequest(request_.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             const_cast<char*>(body_.c_str()), body_.length(),
                             body_.length(),
                             reinterpret_cast<DWORD_PTR>(nullptr))) {
@@ -376,14 +376,14 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
 
   // Wait for the response.
 
-  if (!::WinHttpReceiveResponse(request_.Get(), nullptr)) {
+  if (!::WinHttpReceiveResponse(request_.get(), nullptr)) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "WinHttpReceiveResponse hr=" << putHR(hr);
     return hr;
   }
 
   DWORD length = 0;
-  if (!::WinHttpQueryDataAvailable(request_.Get(), &length)) {
+  if (!::WinHttpQueryDataAvailable(request_.get(), &length)) {
     HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
     LOGFN(ERROR) << "WinHttpQueryDataAvailable hr=" << putHR(hr);
     return hr;
@@ -395,21 +395,42 @@ HRESULT WinHttpUrlFetcher::Fetch(std::vector<char>* response) {
   // buffer than 256k.
   constexpr size_t kMaxResponseSize = 256 * 1024 * 1024;
   // Read the response.
-  auto buffer = std::make_unique<char[]>(length);
   DWORD actual = 0;
   do {
-    if (!::WinHttpReadData(request_.Get(), buffer.get(), length, &actual)) {
+    DWORD available_to_read = 0;
+    if (!::WinHttpQueryDataAvailable(request_.get(), &available_to_read)) {
+      HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
+      LOGFN(ERROR) << "WinHttpQueryDataAvailable hr=" << putHR(hr);
+      return hr;
+    }
+
+    if (available_to_read == 0) {
+      break;
+    }
+
+    size_t current_size = response->size();
+    // Check for overflow before resizing
+    if (current_size + available_to_read > kMaxResponseSize) {
+      LOGFN(ERROR) << "Response has exceeded max size=" << kMaxResponseSize;
+      return E_OUTOFMEMORY;
+    }
+
+    response->resize(current_size + available_to_read);
+
+    // Create a span of the newly allocated space in the vector.
+    // We use UNSAFE_BUFFERS only where we interface with the raw Win32 API.
+    auto dest_span = base::span(*response).subspan(current_size);
+
+    if (!::WinHttpReadData(request_.get(), dest_span.data(),
+                           static_cast<DWORD>(dest_span.size()), &actual)) {
       HRESULT hr = HRESULT_FROM_WIN32(::GetLastError());
       LOGFN(ERROR) << "WinHttpReadData hr=" << putHR(hr);
       return hr;
     }
 
-    size_t current_size = response->size();
-    response->resize(response->size() + actual);
-    UNSAFE_TODO(memcpy(response->data() + current_size, buffer.get(), actual));
-    if (response->size() >= kMaxResponseSize) {
-      LOGFN(ERROR) << "Response has exceeded max size=" << kMaxResponseSize;
-      return E_OUTOFMEMORY;
+    // Shrink vector if actual read was less than available.
+    if (actual < available_to_read) {
+      response->resize(current_size + actual);
     }
   } while (actual);
 
@@ -425,10 +446,10 @@ HRESULT WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
     const GURL& request_url,
     std::string access_token,
     const std::vector<std::pair<std::string, std::string>>& headers,
-    const base::Value::Dict& request_dict,
+    const base::DictValue& request_dict,
     const base::TimeDelta& request_timeout,
     unsigned int request_retries,
-    std::optional<base::Value::Dict>* request_result) {
+    std::optional<base::DictValue>* request_result) {
   DCHECK(request_result);
 
   std::string request_body;
@@ -460,7 +481,7 @@ HRESULT WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
 
     *request_result = std::move(extracted_param);
 
-    const base::Value::Dict* error_detail =
+    const base::DictValue* error_detail =
         (*request_result)->FindDict(kErrorKeyInRequestResult);
     if (!error_detail)
       return S_OK;
@@ -471,7 +492,7 @@ HRESULT WinHttpUrlFetcher::BuildRequestAndFetchResultFromHttpService(
     std::optional<int> error_code =
         error_detail->FindInt(kHttpErrorCodeKeyNameInResponse);
     if (error_code.has_value() &&
-        !base::Contains(kRetryableHttpErrorCodes, error_code.value())) {
+        !std::ranges::contains(kRetryableHttpErrorCodes, error_code.value())) {
       return E_FAIL;
     }
   }

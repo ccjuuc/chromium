@@ -51,8 +51,6 @@ import org.robolectric.shadows.ShadowActivity;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.feed.FeedServiceBridge;
 import org.chromium.chrome.browser.feed.FeedServiceBridgeJni;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridge;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridgeJni;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.ListContainerViewDelegate;
 import org.chromium.chrome.browser.ntp_customization.R;
@@ -70,7 +68,6 @@ public class FeedSettingsMediatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private FeedServiceBridge.Natives mFeedServiceBridgeJniMock;
-    @Mock private WebFeedBridge.Natives mWebFeedBridgeJniMock;
     @Mock private PropertyModel mContainerPropertyModel;
     @Mock private PropertyModel mBottomSheetPropertyModel;
     @Mock private PropertyModel mFeedSettingsPropertyModel;
@@ -92,7 +89,6 @@ public class FeedSettingsMediatorUnitTest {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mShadowActivity = Shadows.shadowOf(mActivity);
         FeedServiceBridgeJni.setInstanceForTesting(mFeedServiceBridgeJniMock);
-        WebFeedBridgeJni.setInstanceForTesting(mWebFeedBridgeJniMock);
         FeedSettingsMediator.setPrefForTesting(mPrefChangeRegistrar, mPrefService);
         mFeedSettingsMediator =
                 new FeedSettingsMediator(
@@ -189,36 +185,31 @@ public class FeedSettingsMediatorUnitTest {
                 mFeedSettingsMediator.createListDelegate();
         Assert.assertTrue(delegateForNotSignedIn.getListItems().isEmpty());
 
-        // Verifies the sections when user has signed in and web feed is enabled.
+        // Verifies the sections when user has signed in.
         when(mFeedServiceBridgeJniMock.isSignedIn()).thenReturn(true);
-        when(mWebFeedBridgeJniMock.isWebFeedEnabled()).thenReturn(true);
         mFeedSettingsMediator.setListItemsContentForTesting(
                 mFeedSettingsMediator.buildFeedListContent());
-        ListContainerViewDelegate delegateForWebFeedEnabled =
-                mFeedSettingsMediator.createListDelegate();
-        List<Integer> content = delegateForWebFeedEnabled.getListItems();
+        ListContainerViewDelegate delegateForSignedIn = mFeedSettingsMediator.createListDelegate();
+        List<Integer> content = delegateForSignedIn.getListItems();
         Assert.assertTrue(content.contains(ACTIVITY));
-        Assert.assertTrue(content.contains(FOLLOWING));
-        Assert.assertTrue(content.contains(HIDDEN));
+        Assert.assertTrue(content.contains(INTERESTS));
 
-        // Verifies the sections when user has signed in and web feed is disabled.
-        when(mWebFeedBridgeJniMock.isWebFeedEnabled()).thenReturn(false);
         mFeedSettingsMediator.setListItemsContentForTesting(
                 mFeedSettingsMediator.buildFeedListContent());
-        ListContainerViewDelegate delegateForWebFeedDisabled =
+        ListContainerViewDelegate delegateWithoutFollowing =
                 mFeedSettingsMediator.createListDelegate();
-        content = delegateForWebFeedDisabled.getListItems();
+        content = delegateWithoutFollowing.getListItems();
         Assert.assertTrue(content.contains(ACTIVITY));
         Assert.assertTrue(content.contains(INTERESTS));
 
         testCreateListContainerViewDelegateImplForSectionTitle(
-                delegateForWebFeedEnabled, delegateForWebFeedDisabled);
+                delegateForSignedIn, delegateWithoutFollowing);
 
         testCreateListContainerViewDelegateImplForSectionSubtitle(
-                delegateForWebFeedEnabled, delegateForWebFeedDisabled);
+                delegateForSignedIn, delegateWithoutFollowing);
 
         testCreateListContainerViewDelegateImplForSectionListener(
-                delegateForWebFeedEnabled, delegateForWebFeedDisabled);
+                delegateForSignedIn, delegateWithoutFollowing);
     }
 
     @Test
@@ -231,68 +222,68 @@ public class FeedSettingsMediatorUnitTest {
 
     /** Verifies that the subtitles of sections are correct. */
     private void testCreateListContainerViewDelegateImplForSectionSubtitle(
-            ListContainerViewDelegate delegateForWebFeedEnabled,
-            ListContainerViewDelegate delegateForWebFeedDisabled) {
+            ListContainerViewDelegate delegateWithFollowing,
+            ListContainerViewDelegate delegateWithoutFollowing) {
         assertEquals(
                 mContext.getString(R.string.feed_manage_activity_description),
-                delegateForWebFeedEnabled.getListItemSubtitle(ACTIVITY, mContext));
+                delegateWithFollowing.getListItemSubtitle(ACTIVITY, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_following_description),
-                delegateForWebFeedEnabled.getListItemSubtitle(FOLLOWING, mContext));
+                delegateWithFollowing.getListItemSubtitle(FOLLOWING, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_hidden_description),
-                delegateForWebFeedEnabled.getListItemSubtitle(HIDDEN, mContext));
+                delegateWithFollowing.getListItemSubtitle(HIDDEN, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_interests_description),
-                delegateForWebFeedDisabled.getListItemSubtitle(INTERESTS, mContext));
+                delegateWithoutFollowing.getListItemSubtitle(INTERESTS, mContext));
     }
 
     /** Verifies that the titles of sections are correct. */
     private void testCreateListContainerViewDelegateImplForSectionTitle(
-            ListContainerViewDelegate delegateForWebFeedEnabled,
-            ListContainerViewDelegate delegateForWebFeedDisabled) {
+            ListContainerViewDelegate delegateWithFollowing,
+            ListContainerViewDelegate delegateWithoutFollowing) {
         assertEquals(
                 mContext.getString(R.string.feed_manage_activity),
-                delegateForWebFeedEnabled.getListItemTitle(ACTIVITY, mContext));
+                delegateWithFollowing.getListItemTitle(ACTIVITY, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_following),
-                delegateForWebFeedEnabled.getListItemTitle(FOLLOWING, mContext));
+                delegateWithFollowing.getListItemTitle(FOLLOWING, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_hidden),
-                delegateForWebFeedEnabled.getListItemTitle(HIDDEN, mContext));
+                delegateWithFollowing.getListItemTitle(HIDDEN, mContext));
         assertEquals(
                 mContext.getString(R.string.feed_manage_interests),
-                delegateForWebFeedDisabled.getListItemTitle(INTERESTS, mContext));
+                delegateWithoutFollowing.getListItemTitle(INTERESTS, mContext));
     }
 
     /** Verifies that the click listener of sections are correct. */
     private void testCreateListContainerViewDelegateImplForSectionListener(
-            ListContainerViewDelegate delegateForWebFeedEnabled,
-            ListContainerViewDelegate delegateForWebFeedDisabled) {
+            ListContainerViewDelegate delegateWithFollowing,
+            ListContainerViewDelegate delegateWithoutFollowing) {
         when(mView.getContext()).thenReturn(mActivity);
 
         // Verifies the click listener is correct for Activity section.
-        delegateForWebFeedEnabled.getListener(ACTIVITY).onClick(mView);
+        delegateWithFollowing.getListener(ACTIVITY).onClick(mView);
         Intent intent = mShadowActivity.peekNextStartedActivityForResult().intent;
         assertEquals(
                 intent.getData(), Uri.parse("https://myactivity.google.com/myactivity?product=50"));
 
         // Verifies the click listener is correct for Following section.
-        delegateForWebFeedEnabled.getListener(FOLLOWING).onClick(mView);
+        delegateWithFollowing.getListener(FOLLOWING).onClick(mView);
         intent = mShadowActivity.peekNextStartedActivityForResult().intent;
         assertEquals(
                 intent.getData(),
                 Uri.parse("https://www.google.com/preferences/interests/yourinterests?sh=n"));
 
         // Verifies the click listener is correct for Hidden section.
-        delegateForWebFeedEnabled.getListener(HIDDEN).onClick(mView);
+        delegateWithFollowing.getListener(HIDDEN).onClick(mView);
         intent = mShadowActivity.peekNextStartedActivityForResult().intent;
         assertEquals(
                 intent.getData(),
                 Uri.parse("https://www.google.com/preferences/interests/hidden?sh=n"));
 
         // Verifies the click listener is correct for Interests section.
-        delegateForWebFeedDisabled.getListener(INTERESTS).onClick(mView);
+        delegateWithoutFollowing.getListener(INTERESTS).onClick(mView);
         intent = mShadowActivity.peekNextStartedActivityForResult().intent;
         assertEquals(intent.getData(), Uri.parse("https://www.google.com/preferences/interests"));
     }

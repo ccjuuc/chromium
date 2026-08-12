@@ -4,22 +4,22 @@
 
 'use strict';
 
-var systemTokenEnabled;
-var serverCertsBaseUrl;
+let systemTokenEnabled;
+let serverCertsBaseUrl;
 
-var assertEq = chrome.test.assertEq;
-var assertTrue = chrome.test.assertTrue;
-var assertFalse = chrome.test.assertFalse;
-var fail = chrome.test.fail;
-var succeed = chrome.test.succeed;
-var callbackPass = chrome.test.callbackPass;
-var callbackFail = chrome.test.callbackFail;
-var checkDeepEq = chrome.test.checkDeepEq;
+const assertEq = chrome.test.assertEq;
+const assertTrue = chrome.test.assertTrue;
+const assertFalse = chrome.test.assertFalse;
+const fail = chrome.test.fail;
+const succeed = chrome.test.succeed;
+const callbackPass = chrome.test.callbackPass;
+const callbackFail = chrome.test.callbackFail;
+const checkDeepEq = chrome.test.checkDeepEq;
 
 
 // Each value is the path to a file in this extension's folder that will be
 // loaded and replaced by a Uint8Array in the setUp() function below.
-var data = {
+const DATA = {
 
   // X.509 client certificate in DER encoding.
   // Algorithm in SPKI: rsaEncryption.
@@ -98,20 +98,24 @@ async function readData(dictionary) {
 }
 
 async function setUp() {
-  await readData(data);
+  await readData(DATA);
 }
 
 // Some array comparison. Note: not lexicographical!
 function compareArrays(array1, array2) {
-  if (array1.length < array2.length)
+  if (array1.length < array2.length) {
     return -1;
-  if (array1.length > array2.length)
+  }
+  if (array1.length > array2.length) {
     return 1;
+  }
   for (let i = 0; i < array1.length; i++) {
-    if (array1[i] < array2[i])
+    if (array1[i] < array2[i]) {
       return -1;
-    if (array1[i] > array2[i])
+    }
+    if (array1[i] > array2[i]) {
       return 1;
+    }
   }
   return 0;
 }
@@ -130,26 +134,26 @@ function assertCertsSelected(details, expectedCerts) {
         assertEq(
             expectedCerts.length, actualMatches.length,
             'Number of stored certs not as expected');
-        if (expectedCerts.length == actualMatches.length) {
-          let actualCerts = actualMatches.map(match => new Uint8Array(match.certificate));
+        if (expectedCerts.length === actualMatches.length) {
+          let actualCerts =
+              actualMatches.map(match => new Uint8Array(match.certificate));
           actualCerts = sortCerts(actualCerts);
           expectedCerts = sortCerts(expectedCerts);
           for (let i = 0; i < expectedCerts.length; i++) {
             assertEq(
-                expectedCerts[i], actualCerts[i],
-                'Certs at index ' + i + ' differ');
+                expectedCerts[i], actualCerts[i], `Certs at index ${i} differ`);
           }
         }
       }));
 }
 
 function checkRsaAlgorithmIsCopiedOnRead(key) {
-  let algorithm = key.algorithm;
-  let originalAlgorithm = {
+  const algorithm = key.algorithm;
+  const originalAlgorithm = {
     name: algorithm.name,
     modulusLength: algorithm.modulusLength,
     publicExponent: algorithm.publicExponent,
-    hash: {name: algorithm.hash.name}
+    hash: {name: algorithm.hash.name},
   };
   algorithm.hash.name = null;
   algorithm.hash = null;
@@ -160,8 +164,8 @@ function checkRsaAlgorithmIsCopiedOnRead(key) {
 }
 
 function checkEcAlgorithmIsCopiedOnRead(key) {
-  let algorithm = key.algorithm;
-  let originalAlgorithm = {
+  const algorithm = key.algorithm;
+  const originalAlgorithm = {
     name: algorithm.name,
     namedCurve: algorithm.namedCurve,
   };
@@ -178,7 +182,7 @@ function checkAlgorithmIsCopiedOnRead(key) {
   } else if (algorithmName === 'ECDSA') {
     checkEcAlgorithmIsCopiedOnRead(key);
   } else {
-    fail('Unexpected algorithm name: ' + algorithmName);
+    fail(`Unexpected algorithm name: ${algorithmName}`);
   }
 }
 
@@ -187,8 +191,8 @@ function checkPropertyIsReadOnly(object, key) {
   try {
     object[key] = {};
     fail(
-        'Expected the property ' + key +
-        ' to be read-only and an exception to be thrown');
+        `Expected the property ${key} ` +
+        'to be read-only and an exception to be thrown');
   } catch (error) {
     assertEq(original, object[key]);
   }
@@ -210,7 +214,7 @@ function checkPublicKeyFormat(publicKey) {
 
 async function loadServerCerts(certs) {
   return await Promise.all(certs.map(async (cert) => {
-    const response = await fetch(serverCertsBaseUrl + cert);
+    const response = await fetch(`${serverCertsBaseUrl}${cert}`);
     return response.arrayBuffer();
   }));
 }
@@ -233,71 +237,78 @@ function testStaticMethods() {
   succeed();
 }
 
-var requestAll = {certificateTypes: [], certificateAuthorities: []};
+const REQUEST_ALL = {
+  certificateTypes: [],
+  certificateAuthorities: [],
+};
 
-// Depends on |data|, thus it cannot be created immediately.
+// Depends on |DATA|, thus it cannot be created immediately.
 function requestCA1() {
   return {
     certificateTypes: [],
-    certificateAuthorities: [data.client_1_issuer_dn.buffer]
+    certificateAuthorities: [DATA.client_1_issuer_dn.buffer],
   };
 }
 
 function testSelectAllCerts() {
-  let expectedCerts = [data.client_1, data.client_3];
-  if (systemTokenEnabled)
-    expectedCerts.push(data.client_2);
-  assertCertsSelected({interactive: false, request: requestAll}, expectedCerts);
+  const expectedCerts = [DATA.client_1, DATA.client_3];
+  if (systemTokenEnabled) {
+    expectedCerts.push(DATA.client_2);
+  }
+  assertCertsSelected(
+      {interactive: false, request: REQUEST_ALL}, expectedCerts);
 }
 
 function testSelectWithInputClientCerts() {
-  let expectedCerts = [];
-  if (systemTokenEnabled)
-    expectedCerts.push(data.client_2);
+  const expectedCerts = [];
+  if (systemTokenEnabled) {
+    expectedCerts.push(DATA.client_2);
+  }
   assertCertsSelected(
       {
         interactive: false,
-        request: requestAll,
-        clientCerts: [data.client_2.buffer]
+        request: REQUEST_ALL,
+        clientCerts: [DATA.client_2.buffer],
       },
       expectedCerts);
 }
 
 function testSelectCA1Certs() {
   assertCertsSelected(
-      {interactive: false, request: requestCA1()}, [data.client_1]);
+      {interactive: false, request: requestCA1()}, [DATA.client_1]);
 }
 
 function testSelectAllReturnsNoCerts() {
   assertCertsSelected(
-      {interactive: false, request: requestAll}, [] /* no certs selected */);
+      {interactive: false, request: REQUEST_ALL}, [] /* no certs selected */);
 }
 
 function testSelectAllReturnsClient1() {
   assertCertsSelected(
-      {interactive: false, request: requestAll}, [data.client_1]);
+      {interactive: false, request: REQUEST_ALL}, [DATA.client_1]);
 }
 
 function testInteractiveSelectNoCerts() {
   assertCertsSelected(
-      {interactive: true, request: requestAll}, [] /* no certs selected */);
+      {interactive: true, request: REQUEST_ALL}, [] /* no certs selected */);
 }
 
 function testInteractiveSelectClient1() {
   assertCertsSelected(
-      {interactive: true, request: requestAll}, [data.client_1]);
+      {interactive: true, request: REQUEST_ALL}, [DATA.client_1]);
 }
 
 function testInteractiveSelectClient2() {
-  let expectedCerts = [];
-  if (systemTokenEnabled)
-    expectedCerts.push(data.client_2);
-  assertCertsSelected({interactive: true, request: requestAll}, expectedCerts);
+  const expectedCerts = [];
+  if (systemTokenEnabled) {
+    expectedCerts.push(DATA.client_2);
+  }
+  assertCertsSelected({interactive: true, request: REQUEST_ALL}, expectedCerts);
 }
 
 function testInteractiveSelectClient3() {
   assertCertsSelected(
-      {interactive: true, request: requestAll}, [data.client_3]);
+      {interactive: true, request: REQUEST_ALL}, [DATA.client_3]);
 }
 
 function testMatchResultCA1() {
@@ -307,7 +318,7 @@ function testMatchResultCA1() {
         const expectedAlgorithm = {
           modulusLength: 2048,
           name: 'RSASSA-PKCS1-v1_5',
-          publicExponent: new Uint8Array([0x01, 0x00, 0x01])
+          publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
         };
         const actualAlgorithm = matches[0].keyAlgorithm;
         assertEq(
@@ -319,16 +330,16 @@ function testMatchResultCA1() {
 function testMatchResultECDSA() {
   const requestECDSA = {
     certificateTypes: ['ecdsaSign'],
-    certificateAuthorities: []
+    certificateAuthorities: [],
   };
   assertCertsSelected(
-      {interactive: false, request: requestECDSA}, [data.client_3]);
+      {interactive: false, request: requestECDSA}, [DATA.client_3]);
 }
 
 function testMatchResultRSA() {
   const requestRSA = {
     certificateTypes: ['rsaSign'],
-    certificateAuthorities: []
+    certificateAuthorities: [],
   };
   chrome.platformKeys.selectClientCertificates(
       {interactive: false, request: requestRSA},
@@ -336,7 +347,7 @@ function testMatchResultRSA() {
         const expectedAlgorithm = {
           modulusLength: 2048,
           name: 'RSASSA-PKCS1-v1_5',
-          publicExponent: new Uint8Array([0x01, 0x00, 0x01])
+          publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
         };
         const actualAlgorithm = matches[0].keyAlgorithm;
         assertEq(
@@ -348,7 +359,7 @@ function testMatchResultRSA() {
 function verifyMissingAlgorithmError(getKeyFunction, buffer, name) {
   const keyParams = {
     // This is missing the algorithm name.
-    hash: {name: 'SHA-1'}
+    hash: {name: 'SHA-1'},
   };
   try {
     getKeyFunction(buffer, keyParams, function(_error) {
@@ -363,31 +374,31 @@ function verifyMissingAlgorithmError(getKeyFunction, buffer, name) {
 
 function testGetKeyPairMissingAlgorithmName() {
   verifyMissingAlgorithmError(
-      chrome.platformKeys.getKeyPair, data.client_1.buffer, 'getKeyPair');
+      chrome.platformKeys.getKeyPair, DATA.client_1.buffer, 'getKeyPair');
 }
 
 function testGetKeyPairBySpkiMissingAlgorithmName() {
   verifyMissingAlgorithmError(
-      chrome.platformKeys.getKeyPairBySpki, data.client_1_spki.buffer,
+      chrome.platformKeys.getKeyPairBySpki, DATA.client_1_spki.buffer,
       'getKeyPairBySpki');
 }
 
 function testGetKeyPairRejectsRSAPSS() {
   const keyParams = {name: 'RSA-PSS', hash: {name: 'SHA-1'}};
   chrome.platformKeys.getKeyPair(
-      data.client_1.buffer, keyParams,
+      DATA.client_1.buffer, keyParams,
       callbackFail('Algorithm not supported.'));
   chrome.platformKeys.getKeyPairBySpki(
-      data.client_1_spki.buffer, keyParams,
+      DATA.client_1_spki.buffer, keyParams,
       callbackFail('Algorithm not supported.'));
 }
 
 function verifyRsaKeyPairValidity(publicKey, privateKey) {
-  let expectedAlgorithm = {
+  const expectedAlgorithm = {
     modulusLength: 2048,
     name: 'RSASSA-PKCS1-v1_5',
     publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-    hash: {name: 'SHA-1'}
+    hash: {name: 'SHA-1'},
   };
   assertEq(expectedAlgorithm, publicKey.algorithm);
   assertEq(expectedAlgorithm, privateKey.algorithm);
@@ -401,28 +412,28 @@ function verifyRsaKeyPairValidity(publicKey, privateKey) {
           callbackPass(function(actualPublicKeySpki) {
             assertTrue(
                 compareArrays(
-                    data.client_1_spki, new Uint8Array(actualPublicKeySpki)) ==
+                    DATA.client_1_spki, new Uint8Array(actualPublicKeySpki)) ===
                     0,
                 'Match did not contain correct public key');
           }),
           function(error) {
-            fail('Export failed: ' + error);
+            fail(`Export failed: ${error}`);
           });
 }
 
 const RSA_KEY_PARAMS = {
   name: 'RSASSA-PKCS1-V1_5',
-  hash: {name: 'SHA-1'}
+  hash: {name: 'SHA-1'},
 };
 
 const EC_KEY_PARAMS = {
   name: 'ECDSA',
-  namedCurve: 'P-256'
+  namedCurve: 'P-256',
 };
 
 const AES_KEY_PARAMS = {
   name: 'AES-CBC',
-  length: 256
+  length: 256,
 };
 
 async function verifyEcKeyPairValidity(publicKey, privateKey) {
@@ -437,11 +448,11 @@ async function verifyEcKeyPairValidity(publicKey, privateKey) {
     actualPublicKeySpki =
         await chrome.platformKeys.subtleCrypto().exportKey('spki', publicKey);
   } catch (error) {
-    fail('Export failed: ' + error);
+    fail(`Export failed: ${error}`);
   }
   const actualPublicKeySpkiArray = new Uint8Array(actualPublicKeySpki);
   assertEq(
-      data.ec_spki, actualPublicKeySpkiArray,
+      DATA.ec_spki, actualPublicKeySpkiArray,
       'Match did not contain correct public key');
   succeed();
 }
@@ -449,66 +460,66 @@ async function verifyEcKeyPairValidity(publicKey, privateKey) {
 // TODO(b/288880151): Replace the 'Algorithm not supported.' errors below with a
 // proper error, after modifying the internal API to support AES keys.
 function testGetRsaKeyPairRejectsOtherAlgorithms() {
-  const rsa_key_cert = data.client_1;
+  const rsaKeyCert = DATA.client_1;
 
   chrome.platformKeys.getKeyPair(
-      rsa_key_cert.buffer, EC_KEY_PARAMS,
+      rsaKeyCert.buffer, EC_KEY_PARAMS,
       callbackFail(
           'The requested Algorithm is not permitted by the certificate.'));
 
   chrome.platformKeys.getKeyPair(
-      rsa_key_cert.buffer, AES_KEY_PARAMS,
+      rsaKeyCert.buffer, AES_KEY_PARAMS,
       callbackFail('Algorithm not supported.'));
 }
 
 function testGetEcKeyPairRejectsOtherAlgorithms() {
   chrome.platformKeys.getKeyPair(
-      data.ec_cert.buffer, RSA_KEY_PARAMS,
+      DATA.ec_cert.buffer, RSA_KEY_PARAMS,
       callbackFail(
           'The requested Algorithm is not permitted by the certificate.'));
 
   chrome.platformKeys.getKeyPair(
-      data.ec_cert.buffer, AES_KEY_PARAMS,
+      DATA.ec_cert.buffer, AES_KEY_PARAMS,
       callbackFail('Algorithm not supported.'));
 }
 
 function testGetRsaKeyPairBySpkiRejectsOtherAlgorithms() {
-  const rsa_key_spki = data.client_1_spki;
+  const rsaKeySpki = DATA.client_1_spki;
 
   chrome.platformKeys.getKeyPairBySpki(
-      rsa_key_spki.buffer, EC_KEY_PARAMS,
+      rsaKeySpki.buffer, EC_KEY_PARAMS,
       callbackFail(
           'The requested Algorithm is not permitted by the certificate.'));
 
   chrome.platformKeys.getKeyPairBySpki(
-      rsa_key_spki.buffer, AES_KEY_PARAMS,
+      rsaKeySpki.buffer, AES_KEY_PARAMS,
       callbackFail('Algorithm not supported.'));
 }
 
 function testGetEcKeyPairBySpkiRejectsOtherAlgorithms() {
   chrome.platformKeys.getKeyPairBySpki(
-      data.ec_spki.buffer, RSA_KEY_PARAMS,
+      DATA.ec_spki.buffer, RSA_KEY_PARAMS,
       callbackFail(
           'The requested Algorithm is not permitted by the certificate.'));
 
   chrome.platformKeys.getKeyPairBySpki(
-      data.ec_spki.buffer, AES_KEY_PARAMS,
+      DATA.ec_spki.buffer, AES_KEY_PARAMS,
       callbackFail('Algorithm not supported.'));
 }
 
 function testGetRsaKeyPair() {
-  let keyParams = {
+  const keyParams = {
     // Algorithm names are case-insensitive.
     name: 'RSASSA-Pkcs1-V1_5',
-    hash: {name: 'sha-1'}
+    hash: {name: 'sha-1'},
   };
   chrome.platformKeys.getKeyPair(
-      data.client_1.buffer, keyParams,
+      DATA.client_1.buffer, keyParams,
       callbackPass(function(publicKey, privateKey) {
         verifyRsaKeyPairValidity(publicKey, privateKey);
       }));
   chrome.platformKeys.getKeyPairBySpki(
-      data.client_1_spki.buffer, keyParams,
+      DATA.client_1_spki.buffer, keyParams,
       callbackPass(function(publicKey, privateKey) {
         verifyRsaKeyPairValidity(publicKey, privateKey);
       }));
@@ -516,23 +527,23 @@ function testGetRsaKeyPair() {
 
 function testGetEcKeyPair() {
   chrome.platformKeys.getKeyPair(
-      data.ec_cert.buffer, EC_KEY_PARAMS, function(publicKey, privateKey) {
+      DATA.ec_cert.buffer, EC_KEY_PARAMS, function(publicKey, privateKey) {
         verifyEcKeyPairValidity(publicKey, privateKey);
       });
 
   chrome.platformKeys.getKeyPairBySpki(
-      data.ec_spki.buffer, EC_KEY_PARAMS, function(publicKey, privateKey) {
+      DATA.ec_spki.buffer, EC_KEY_PARAMS, function(publicKey, privateKey) {
         verifyEcKeyPairValidity(publicKey, privateKey);
       });
 }
 
 function verifySignWithNoHash(privateKey, signParams) {
   chrome.platformKeys.subtleCrypto()
-      .sign(signParams, privateKey, data.raw_data)
+      .sign(signParams, privateKey, DATA.raw_data)
       .then(callbackPass(function(signature) {
         const actualSignature = new Uint8Array(signature);
         assertTrue(
-            compareArrays(data.signature_nohash_pkcs, actualSignature) == 0,
+            compareArrays(DATA.signature_nohash_pkcs, actualSignature) === 0,
             'Incorrect signature');
       }));
 }
@@ -541,16 +552,16 @@ function testSignNoHash() {
   const keyParams = {
     // Algorithm names are case-insensitive.
     name: 'RSASSA-PKCS1-V1_5',
-    hash: {name: 'NONE'}
+    hash: {name: 'NONE'},
   };
   const signParams = {name: 'RSASSA-PKCS1-v1_5'};
   chrome.platformKeys.getKeyPair(
-      data.client_1.buffer, keyParams,
+      DATA.client_1.buffer, keyParams,
       callbackPass(function(_publicKey, privateKey) {
         verifySignWithNoHash(privateKey, signParams);
       }));
   chrome.platformKeys.getKeyPairBySpki(
-      data.client_1_spki.buffer, keyParams,
+      DATA.client_1_spki.buffer, keyParams,
       callbackPass(function(_publicKey, privateKey) {
         verifySignWithNoHash(privateKey, signParams);
       }));
@@ -558,11 +569,11 @@ function testSignNoHash() {
 
 function verifySignWithSha1(privateKey, signParams, client_signature) {
   chrome.platformKeys.subtleCrypto()
-      .sign(signParams, privateKey, data.raw_data)
+      .sign(signParams, privateKey, DATA.raw_data)
       .then(callbackPass(function(signature) {
         const actualSignature = new Uint8Array(signature);
         assertTrue(
-            compareArrays(client_signature, actualSignature) == 0,
+            compareArrays(client_signature, actualSignature) === 0,
             'Incorrect signature');
       }));
 }
@@ -571,23 +582,23 @@ function testSignSha1Client1() {
   const keyParams = {
     name: 'RSASSA-PKCS1-v1_5',
     // Hash names are case-insensitive.
-    hash: {name: 'Sha-1'}
+    hash: {name: 'Sha-1'},
   };
   const signParams = {
     // Algorithm names are case-insensitive.
-    name: 'RSASSA-Pkcs1-v1_5'
+    name: 'RSASSA-Pkcs1-v1_5',
   };
   chrome.platformKeys.getKeyPair(
-      data.client_1.buffer, keyParams,
+      DATA.client_1.buffer, keyParams,
       callbackPass(function(_publicKey, privateKey) {
         verifySignWithSha1(
-            privateKey, signParams, data.signature_client1_sha1_pkcs);
+            privateKey, signParams, DATA.signature_client1_sha1_pkcs);
       }));
   chrome.platformKeys.getKeyPairBySpki(
-      data.client_1_spki.buffer, keyParams,
+      DATA.client_1_spki.buffer, keyParams,
       callbackPass(function(_publicKey, privateKey) {
         verifySignWithSha1(
-            privateKey, signParams, data.signature_client1_sha1_pkcs);
+            privateKey, signParams, DATA.signature_client1_sha1_pkcs);
       }));
 }
 
@@ -595,17 +606,17 @@ function testSignSha1Client2() {
   const keyParams = {
     name: 'RSASSA-PKCS1-v1_5',
     // Hash names are case-insensitive.
-    hash: {name: 'Sha-1'}
+    hash: {name: 'Sha-1'},
   };
   const signParams = {
     // Algorithm names are case-insensitive.
-    name: 'RSASSA-Pkcs1-v1_5'
+    name: 'RSASSA-Pkcs1-v1_5',
   };
   chrome.platformKeys.getKeyPair(
-      data.client_2.buffer, keyParams,
+      DATA.client_2.buffer, keyParams,
       callbackPass(function(_publicKey, privateKey) {
         verifySignWithSha1(
-            privateKey, signParams, data.signature_client2_sha1_pkcs);
+            privateKey, signParams, DATA.signature_client2_sha1_pkcs);
       }));
 }
 
@@ -619,7 +630,7 @@ function testSignSha1Client2OnSystemTokenOnly() {
 
 function verifySignFail(privateKey, signParams) {
   chrome.platformKeys.subtleCrypto()
-      .sign(signParams, privateKey, data.raw_data)
+      .sign(signParams, privateKey, DATA.raw_data)
       .then(function(_signature) {
         fail('Sign was expected to fail.');
       }, callbackPass(function(error) {
@@ -649,15 +660,15 @@ function testSignFails(cert, spki) {
 }
 
 function testSignClient1Fails() {
-  testSignFails(data.client_1, data.client_1_spki);
+  testSignFails(DATA.client_1, DATA.client_1_spki);
 }
 
 function testSignClient2Fails() {
-  testSignFails(data.client_2);
+  testSignFails(DATA.client_2);
 }
 
 function testBackgroundInteractiveSelect() {
-  const details = {interactive: true, request: requestAll};
+  const details = {interactive: true, request: REQUEST_ALL};
 
   chrome.platformKeys.selectClientCertificates(
       details, function(actualMatches) {
@@ -673,7 +684,7 @@ function testBackgroundInteractiveSelect() {
 async function testVerifyTrusted() {
   const details = {
     serverCertificateChain: await loadServerCerts(['l1_leaf.der']),
-    hostname: 'l1_leaf'
+    hostname: 'l1_leaf',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -686,7 +697,7 @@ async function testVerifyTrustedChain() {
   const details = {
     serverCertificateChain:
         await loadServerCerts(['l2_leaf.der', 'l1_interm.der']),
-    hostname: 'l2_leaf'
+    hostname: 'l2_leaf',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -700,7 +711,7 @@ async function testVerifyCommonNameInvalid() {
     serverCertificateChain:
         await loadServerCerts(['l2_leaf.der', 'l1_interm.der']),
     // Use any hostname not matching the common name 'l2_leaf' of the cert.
-    hostname: 'abc.example'
+    hostname: 'abc.example',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -711,8 +722,8 @@ async function testVerifyCommonNameInvalid() {
 
 function testVerifyUntrusted() {
   const details = {
-    serverCertificateChain: [data.client_1.buffer],
-    hostname: '127.0.0.1'
+    serverCertificateChain: [DATA.client_1.buffer],
+    hostname: '127.0.0.1',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -733,7 +744,7 @@ async function testVerifyTrustedOnlyLeafParentFetchEnabled() {
   // caIssuers section with the link to the intermediate.
   const details = {
     serverCertificateChain: await loadServerCerts(['l2_leaf.der']),
-    hostname: 'l2_leaf'
+    hostname: 'l2_leaf',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -747,7 +758,7 @@ async function testVerifyUntrustedParentNotFound() {
   // non existing file.
   const details = {
     serverCertificateChain: await loadServerCerts(['l3_leaf.der']),
-    hostname: 'l3_leaf'
+    hostname: 'l3_leaf',
   };
   chrome.platformKeys.verifyTLSServerCertificate(
       details, callbackPass(function(result) {
@@ -756,7 +767,7 @@ async function testVerifyUntrustedParentNotFound() {
       }));
 }
 
-var testSuites = {
+const testSuites = {
   basicTests: function() {
     const tests = [
       testStaticMethods,
@@ -766,21 +777,30 @@ var testSuites = {
       // certificates.
       // TODO(crbug.com/40217298): We should move all interactive tests to
       // a separate test suite.
-      testInteractiveSelectClient1, testInteractiveSelectClient2,
+      testInteractiveSelectClient1,
+      testInteractiveSelectClient2,
       testInteractiveSelectClient3,
 
       // In non-interactive calls all certs must be returned now.
       testSelectAllCerts,
 
-      testSelectWithInputClientCerts, testSelectCA1Certs,
-      testInteractiveSelectNoCerts, testMatchResultCA1, testMatchResultECDSA,
-      testMatchResultRSA, testGetKeyPairMissingAlgorithmName,
-      testGetKeyPairBySpkiMissingAlgorithmName, testGetKeyPairRejectsRSAPSS,
+      testSelectWithInputClientCerts,
+      testSelectCA1Certs,
+      testInteractiveSelectNoCerts,
+      testMatchResultCA1,
+      testMatchResultECDSA,
+      testMatchResultRSA,
+      testGetKeyPairMissingAlgorithmName,
+      testGetKeyPairBySpkiMissingAlgorithmName,
+      testGetKeyPairRejectsRSAPSS,
       testGetRsaKeyPairRejectsOtherAlgorithms,
       testGetEcKeyPairRejectsOtherAlgorithms,
       testGetRsaKeyPairBySpkiRejectsOtherAlgorithms,
-      testGetEcKeyPairBySpkiRejectsOtherAlgorithms, testGetRsaKeyPair,
-      testGetEcKeyPair, testSignNoHash, testSignSha1Client1
+      testGetEcKeyPairBySpkiRejectsOtherAlgorithms,
+      testGetRsaKeyPair,
+      testGetEcKeyPair,
+      testSignNoHash,
+      testSignSha1Client1,
     ];
 
     chrome.test.runTests(tests);
@@ -788,10 +808,13 @@ var testSuites = {
 
   verifyServerCertTests: async function() {
     const tests = [
-      testVerifyTrusted, testVerifyTrustedChain, testVerifyCommonNameInvalid,
-      testVerifyUntrusted, testVerifyAbsentCert,
+      testVerifyTrusted,
+      testVerifyTrustedChain,
+      testVerifyCommonNameInvalid,
+      testVerifyUntrusted,
+      testVerifyAbsentCert,
       testVerifyTrustedOnlyLeafParentFetchEnabled,
-      testVerifyUntrustedParentNotFound
+      testVerifyUntrustedParentNotFound,
     ];
     chrome.test.runTests(tests);
   },
@@ -830,7 +853,7 @@ var testSuites = {
     const tests = [
       // If the profile is managed, the user cannot grant permissions for any
       // certificates.
-      testInteractiveSelectNoCerts
+      testInteractiveSelectNoCerts,
     ];
     chrome.test.runTests(tests);
   },
@@ -890,13 +913,13 @@ var testSuites = {
 };
 
 chrome.test.getConfig(async (config) => {
-  let customArg = JSON.parse(config.customArg);
-  let selectedTestSuite = customArg.testSuiteName;
+  const customArg = JSON.parse(config.customArg);
+  const selectedTestSuite = customArg.testSuiteName;
   systemTokenEnabled = customArg.systemTokenEnabled;
   serverCertsBaseUrl = `http://127.0.0.1:${config.testServer.port}/`;
-  console.log(
-      '[SELECTED TEST SUITE] ' + selectedTestSuite +
-      ', systemTokenEnabled: ' + systemTokenEnabled);
+  console.info(
+      `[SELECTED TEST SUITE] ${selectedTestSuite}` +
+      `, systemTokenEnabled: ${systemTokenEnabled}`);
   await setUp();
   testSuites[selectedTestSuite]();
 });

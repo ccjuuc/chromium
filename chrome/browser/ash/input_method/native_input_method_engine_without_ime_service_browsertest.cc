@@ -13,24 +13,18 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "chrome/browser/ash/input_method/assistive_window_controller.h"
 #include "chrome/browser/ash/input_method/native_input_method_engine.h"
 #include "chrome/browser/ash/input_method/stub_input_method_engine_observer.h"
 #include "chrome/browser/ash/input_method/suggestion_enums.h"
 #include "chrome/browser/ash/input_method/textinput_test_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -122,15 +116,15 @@ class NativeInputMethodEngineWithoutImeServiceTest
     auto observer = std::make_unique<TestObserver>();
     observer_ = observer.get();
 
-    profile_ = browser()->profile();
+    profile_ = browser()->GetProfile();
     prefs_ = profile_->GetPrefs();
-    prefs_->Set(::prefs::kLanguageInputMethodSpecificSettings,
+    prefs_->Set(ash::prefs::kLanguageInputMethodSpecificSettings,
                 base::Value(base::Value::Type::DICT));
     engine_->Initialize(std::move(observer), /*extension_id=*/"", profile_);
 
     // Ensure predictive writing is off to stop tests from attempting to
     // load the shared library.
-    prefs_->SetBoolean(prefs::kAssistPredictiveWritingEnabled, false);
+    prefs_->SetBoolean(ash::prefs::kAssistPredictiveWritingEnabled, false);
 
     InProcessBrowserTest::SetUpOnMainThread();
   }
@@ -196,7 +190,11 @@ class NativeInputMethodEngineWithoutImeServiceTest
   }
 
   ui::InputMethod* GetBrowserInputMethod() {
-    return browser()->window()->GetNativeWindow()->GetHost()->GetInputMethod();
+    return browser()
+        ->GetWindow()
+        ->GetNativeWindow()
+        ->GetHost()
+        ->GetInputMethod();
   }
 
   std::unique_ptr<NativeInputMethodEngine> engine_;
@@ -217,23 +215,23 @@ constexpr char kEngineIdUs[] = "xkb:us::eng";
 IN_PROC_BROWSER_TEST_F(NativeInputMethodEngineWithoutImeServiceTest,
                        FiresOnInputMethodOptionsChangedEvent) {
   {
-    base::Value::Dict settings;
+    base::DictValue settings;
     // Add key will trigger event.
-    base::Value::Dict pinyin1;
+    base::DictValue pinyin1;
     pinyin1.Set("foo", true);
     settings.SetByDottedPath("pinyin", std::move(pinyin1));
-    prefs_->Set(::prefs::kLanguageInputMethodSpecificSettings,
+    prefs_->Set(ash::prefs::kLanguageInputMethodSpecificSettings,
                 base::Value(std::move(settings)));
     EXPECT_EQ(observer_->changed_engine_id(), "pinyin");
     observer_->ClearChangedEngineId();
   }
   {
-    base::Value::Dict settings;
+    base::DictValue settings;
     // Change key will trigger event.
-    base::Value::Dict pinyin2;
+    base::DictValue pinyin2;
     pinyin2.Set("foo", false);
     settings.SetByDottedPath("pinyin", std::move(pinyin2));
-    prefs_->Set(::prefs::kLanguageInputMethodSpecificSettings,
+    prefs_->Set(ash::prefs::kLanguageInputMethodSpecificSettings,
                 base::Value(std::move(settings)));
     EXPECT_EQ(observer_->changed_engine_id(), "pinyin");
   }
@@ -244,12 +242,11 @@ IN_PROC_BROWSER_TEST_F(NativeInputMethodEngineWithoutImeServiceTest,
 // still present in its ObserverList. Usually this is a sign of UAFs waiting to
 // happen (those observers will likely try to unregister themselves later). It's
 // unclear if this is a quirk of the test or a bug in production code.
-#if defined(OFFICIAL_BUILD) && !DCHECK_IS_ON()
+#if defined(OFFICIAL_BUILD) && !DCHECK_IS_ON() && !BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DestroyProfile DestroyProfile
 #else
 #define MAYBE_DestroyProfile DISABLED_DestroyProfile
-#endif  // defined(OFFICIAL_BUILD) && !DCHECK_IS_ON()
-
+#endif  // defined(OFFICIAL_BUILD) && !DCHECK_IS_ON() && !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(NativeInputMethodEngineWithoutImeServiceTest,
                        MAYBE_DestroyProfile) {
   EXPECT_NE(engine_->GetPrefChangeRegistrarForTesting(), nullptr);

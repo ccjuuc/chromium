@@ -9,6 +9,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/browser_management/browser_management_service.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/extensions/settings_api_helpers.h"
@@ -24,18 +25,17 @@
 #include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer_helper.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.h"
+#include "chrome/browser/ui/webui/util/webui_util_desktop.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
-#include "chrome/browser/ui/webui/webui_util_desktop.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "net/base/url_util.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -45,6 +45,7 @@
 #include "ui/color/color_provider.h"
 #include "ui/gfx/image/image_skia_rep_default.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "url/url_constants.h"
 
 NewTabFooterHandler::NewTabFooterHandler(
     mojo::PendingReceiver<new_tab_footer::mojom::NewTabFooterHandler>
@@ -123,11 +124,11 @@ void NewTabFooterHandler::OpenExtensionOptionsPageWithFallback() {
     options_url = net::AppendOrReplaceQueryParameter(options_url, "id",
                                                      curr_ntp_extension_id_);
   }
-  OpenUrlInCurrentTab(options_url);
+  OpenUrlInCurrentTabInternal(options_url);
 }
 
 void NewTabFooterHandler::OpenManagementPage() {
-  OpenUrlInCurrentTab(GURL(chrome::kChromeUIManagementURL));
+  OpenUrlInCurrentTabInternal(GURL(chrome::kChromeUIManagementURL));
 }
 
 void NewTabFooterHandler::ShowContextMenu(const gfx::Point& point) {
@@ -165,6 +166,16 @@ void NewTabFooterHandler::UpdateManagementNotice() {
 }
 
 void NewTabFooterHandler::OpenUrlInCurrentTab(const GURL& url) {
+  // Mojo entry: renderer-supplied URLs become browser-initiated navigations,
+  // so only https:// is allowed; anything else is treated as a bad message.
+  if (!url.SchemeIs(url::kHttpsScheme)) {
+    mojo::ReportBadMessage("OpenUrlInCurrentTab: scheme must be https");
+    return;
+  }
+  OpenUrlInCurrentTabInternal(url);
+}
+
+void NewTabFooterHandler::OpenUrlInCurrentTabInternal(const GURL& url) {
   auto* browser_window = webui::GetBrowserWindowInterface(web_contents_);
   if (!browser_window || !url.is_valid()) {
     return;
@@ -173,7 +184,7 @@ void NewTabFooterHandler::OpenUrlInCurrentTab(const GURL& url) {
   content::OpenURLParams params(url, content::Referrer(),
                                 WindowOpenDisposition::CURRENT_TAB,
                                 ui::PAGE_TRANSITION_LINK, false);
-  browser_window->OpenURL(params, /*navigation_handle_callback=*/{});
+  web_contents_->OpenURL(params, /*navigation_handle_callback=*/{});
 }
 
 std::string NewTabFooterHandler::GetManagementNoticeText() {

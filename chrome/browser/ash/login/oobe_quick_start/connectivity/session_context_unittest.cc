@@ -35,7 +35,8 @@ class SessionContextTest : public testing::Test {
   SessionContextTest& operator=(const SessionContextTest&) = delete;
 
   void SetUp() override {
-    session_context_ = std::make_unique<SessionContext>();
+    session_context_ = std::make_unique<SessionContext>(
+        TestingBrowserProcess::GetGlobal()->local_state());
     session_context_->FillOrResetSession();
   }
 
@@ -58,7 +59,7 @@ class SessionContextTest : public testing::Test {
 
 TEST_F(SessionContextTest, GetPrepareForUpdateInfo) {
   session_context_->SetDidTransferWifi(true);
-  base::Value::Dict prepare_for_update_info =
+  base::DictValue prepare_for_update_info =
       session_context_->GetPrepareForUpdateInfo();
   EXPECT_FALSE(prepare_for_update_info.empty());
   EXPECT_EQ(base::NumberToString(session_context_->session_id()),
@@ -91,7 +92,8 @@ TEST_F(SessionContextTest, ResumeAfterUpdate) {
 
   // To simulate "update" behavior, re-instantiate |session_context| with proper
   // local state prefs set.
-  session_context_ = std::make_unique<SessionContext>();
+  session_context_ = std::make_unique<SessionContext>(
+      TestingBrowserProcess::GetGlobal()->local_state());
   session_context_->FillOrResetSession();
 
   EXPECT_TRUE(session_context_->is_resume_after_update());
@@ -112,7 +114,8 @@ TEST_F(SessionContextTest, CancelResume) {
   // Simulate resume after update.
   GetLocalState()->SetDict(prefs::kResumeQuickStartAfterRebootInfo,
                            session_context_->GetPrepareForUpdateInfo());
-  session_context_ = std::make_unique<SessionContext>();
+  session_context_ = std::make_unique<SessionContext>(
+      TestingBrowserProcess::GetGlobal()->local_state());
   session_context_->FillOrResetSession();
   ASSERT_TRUE(session_context_->is_resume_after_update());
 

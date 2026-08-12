@@ -35,6 +35,14 @@
 
 - (void)populateItems:(NSArray<GridItemIdentifier*>*)items
     selectedItemIdentifier:(GridItemIdentifier*)selectedItemIdentifier {
+  [self populateItems:items
+      selectedItemIdentifier:selectedItemIdentifier
+                  completion:nil];
+}
+
+- (void)populateItems:(NSArray<GridItemIdentifier*>*)items
+    selectedItemIdentifier:(GridItemIdentifier*)selectedItemIdentifier
+                completion:(void (^)(void))completion {
   _selectedItem = selectedItemIdentifier;
   _items.clear();
   for (GridItemIdentifier* item in items) {
@@ -52,6 +60,9 @@
       case GridItemType::kActivitySummary:
         NOTREACHED();
     }
+  }
+  if (completion) {
+    completion();
   }
 }
 
@@ -81,6 +92,7 @@
   if (it != _items.end()) {
     *it = replacementItem.tabSwitcherItem.identifier;
   }
+  _replaceItemCount++;
 }
 
 - (void)moveItem:(GridItemIdentifier*)item
@@ -104,19 +116,15 @@
   // No-op.
 }
 
-- (void)willCloseAll {
-}
-
-- (void)didCloseAll {
-}
-
-- (void)willUndoCloseAll {
-}
-
-- (void)didUndoCloseAll {
-}
-
 - (void)reload {
+}
+
+#pragma mark - InactiveTabsInfoConsumer
+
+- (void)updateInactiveTabsCount:(NSInteger)count {
+}
+
+- (void)updateInactiveTabsDaysThreshold:(NSInteger)daysThreshold {
 }
 
 @end

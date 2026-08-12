@@ -10,9 +10,9 @@
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "content/child/child_thread_impl.h"
 #include "content/child/scoped_child_process_reference.h"
@@ -96,9 +96,7 @@ void EmbeddedWorkerInstanceClientImpl::StartWorker(
   start_data->policy_container =
       ToWebPolicyContainer(std::move(params->policy_container));
 
-  for (const auto& feature : params->forced_enabled_runtime_features) {
-    blink::WebRuntimeFeatures::EnableFeatureFromString(feature, true);
-  }
+  start_data->is_cross_origin_isolated = params->cross_origin_isolated;
 
   // `cache_storage` may be null if COEP is not enabled, we cannot bind
   // eagerly in that case.
@@ -138,9 +136,6 @@ void EmbeddedWorkerInstanceClientImpl::StartWorker(
             std::move(params->installed_scripts_info->manager_host_remote));
   }
 
-  // Wait for the process has processed the security settings before starting
-  // the worker thread.
-  GetContentClient()->renderer()->WaitForProcessReady();
   auto worker =
       blink::WebEmbeddedWorker::Create(service_worker_context_client_.get());
   service_worker_context_client_->StartWorkerContextOnInitiatorThread(
@@ -199,7 +194,7 @@ EmbeddedWorkerInstanceClientImpl::BuildStartData(
           params.outside_fetch_client_settings_object));
 
   start_data->script_url = params.script_url;
-  start_data->user_agent = blink::WebString::FromUTF8(params.user_agent);
+  start_data->user_agent = blink::WebString::FromUtf8(params.user_agent);
   start_data->ua_metadata = params.ua_metadata;
   start_data->script_type = params.script_type;
   start_data->wait_for_debugger_mode =

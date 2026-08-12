@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_wasm_response_extensions.h"
 
+#include "base/containers/span.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -91,9 +92,8 @@ class WasmCodeCachingCallback {
 
   void OnMoreFunctionsCanBeSerialized(v8::CompiledWasmModule compiled_module) {
     // Called from V8 background thread.
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                         "v8.wasm.compiledModule", TRACE_EVENT_SCOPE_THREAD,
-                         "url", response_url_.Utf8());
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "v8.wasm.compiledModule", "url", response_url_.Utf8());
     v8::OwnedBuffer serialized_module;
     {
       // Use a standard milliseconds based timer (up to 10 seconds, 50 buckets),
@@ -105,17 +105,17 @@ class WasmCodeCachingCallback {
     if (serialized_module.size == 0)
       return;
 
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                         "v8.wasm.cachedModule", TRACE_EVENT_SCOPE_THREAD,
-                         "producedCacheSize", serialized_module.size);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "v8.wasm.cachedModule", "producedCacheSize",
+                        serialized_module.size);
 
-    v8::MemorySpan<const uint8_t> wire_bytes =
-        compiled_module.GetWireBytesRef();
     DigestValue wire_bytes_digest;
     {
       TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
                    "v8.wasm.compileDigestForCreate");
-      if (!ComputeDigest(kHashAlgorithmSha256, wire_bytes, wire_bytes_digest)) {
+      if (!ComputeDigest(kHashAlgorithmSha256,
+                         compiled_module.GetWireBytesRef(),
+                         wire_bytes_digest)) {
         return;
       }
       if (wire_bytes_digest.size() != kWireBytesDigestSize)
@@ -127,10 +127,11 @@ class WasmCodeCachingCallback {
     Vector<uint8_t> serialized_data = CachedMetadata::GetSerializedDataHeader(
         kWasmModuleTag, kWireBytesDigestSize + base::checked_cast<wtf_size_t>(
                                                    serialized_module.size));
-    serialized_data.AppendSpan(base::span(wire_bytes_digest));
+    serialized_data.append_range(wire_bytes_digest);
     // SAFETY: v8::CompiledWasmModule::Serialize ensures the
     // serialized_module.buffer size is equal to serialized_module.size.
-    serialized_data.AppendSpan(UNSAFE_BUFFERS(base::span(
+    serialized_data.append_range(UNSAFE_BUFFERS(base::span(
+        base::unchecked,
         reinterpret_cast<const uint8_t*>(serialized_module.buffer.get()),
         serialized_module.size)));
 
@@ -272,11 +273,15 @@ class FetchDataLoaderForWasmStreaming final : public FetchDataLoader,
                     caching_interface.SetCachedCompiledModuleBytes(
                         {metadata.data(), metadata.size()});
                 if (!bytes_are_valid) {
-                  TRACE_EVENT_INSTANT0(
-                      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                      digest_matches ? "v8.wasm.moduleCacheInvalid"
-                                     : "v8.wasm.moduleCacheInvalidDigest",
-                      TRACE_EVENT_SCOPE_THREAD);
+                  if (digest_matches) {
+                    TRACE_EVENT_INSTANT(
+                        TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "v8.wasm.moduleCacheInvalid");
+                  } else {
+                    TRACE_EVENT_INSTANT(
+                        TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "v8.wasm.moduleCacheInvalidDigest");
+                  }
                   base::UmaHistogramEnumeration(
                       "V8.WasmCodeCaching",
                       WasmCodeCaching::kInvalidCacheEntry);
@@ -394,10 +399,9 @@ class FetchDataLoaderForWasmStreaming final : public FetchDataLoader,
     }
     base::span<const uint8_t> metadata_with_digest = cached_module->Data();
 
-    TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                         "v8.wasm.moduleCacheHit", TRACE_EVENT_SCOPE_THREAD,
-                         "url", url_.Utf8(), "consumedCacheSize",
-                         metadata_with_digest.size());
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "v8.wasm.moduleCacheHit", "url", url_.Utf8(),
+                        "consumedCacheSize", metadata_with_digest.size());
 
     streaming_->SetHasCompiledModuleBytes();
 
@@ -430,7 +434,7 @@ class WasmDataLoaderClient final
 
   void DidFetchDataLoadedCustomFormat() override {}
   void DidFetchDataLoadFailed() override { NOTREACHED(); }
-  void Abort() override { loader_->AbortFromClient(); }
+  void Abort(ScriptValue reason) override { loader_->AbortFromClient(); }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(loader_);
@@ -488,9 +492,8 @@ scoped_refptr<base::SingleThreadTaskRunner> GetContextTaskRunner(
 
 void StreamFromResponseCallback(
     const v8::FunctionCallbackInfo<v8::Value>& args) {
-  TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "v8.wasm.streamFromResponseCallback",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "v8.wasm.streamFromResponseCallback");
   std::shared_ptr<v8::WasmStreaming> streaming =
       v8::WasmStreaming::Unpack(args.GetIsolate(), args.Data());
 
@@ -546,7 +549,7 @@ void StreamFromResponseCallback(
   // The spec explicitly disallows any extras on the Content-Type header,
   // so we check against ContentType() rather than MimeType(), which
   // implicitly strips extras.
-  if (!EqualIgnoringASCIICase(response->ContentType(), "application/wasm")) {
+  if (!EqualIgnoringAsciiCase(response->ContentType(), "application/wasm")) {
     base::UmaHistogramEnumeration("V8.WasmStreamingInputType",
                                   WasmStreamingInputType::kWrongMimeType);
     auto exception = V8ThrowException::CreateTypeError(

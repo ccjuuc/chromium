@@ -5,24 +5,19 @@
 package org.chromium.chrome.browser.multiwindow;
 
 import android.app.Activity;
-import android.content.Intent;
 import android.hardware.display.DisplayManager;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.CommandLine;
-import org.chromium.base.ObserverList;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.multiwindow.UiUtils.NameWindowDialogSource;
-import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupMetadata;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabModelObserver;
-import org.chromium.components.messages.MessageDispatcher;
-import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -38,31 +33,52 @@ import java.util.List;
 @NullMarked
 public abstract class MultiInstanceManager {
     public static final int INVALID_TASK_ID = -1; // Defined in android.app.ActivityTaskManager.
+    public static final int INVALID_WINDOW_ID = -1;
     public static final String NEW_WINDOW_APP_SOURCE_HISTOGRAM =
-            "Android.MultiWindowMode.NewWindow.AppSource";
+            "Android.MultiWindowMode.NewWindow.AppSource4";
 
     @VisibleForTesting
     static final String CLOSE_WINDOW_APP_SOURCE_HISTOGRAM =
-            "Android.MultiWindowMode.CloseWindow.AppSource";
+            "Android.MultiWindowMode.CloseWindow.AppSource3";
 
     // These values are persisted to logs. Entries should not be renumbered and numeric values
-    // should never be reused.
+    // should never be reused. If none of the existing values are suitable for a feature that
+    // creates a new window, update the enum.
     // LINT.IfChange(NewWindowAppSource)
     @IntDef({
-        NewWindowAppSource.OTHER,
+        NewWindowAppSource.UNKNOWN,
         NewWindowAppSource.MENU,
         NewWindowAppSource.WINDOW_MANAGER,
         NewWindowAppSource.KEYBOARD_SHORTCUT,
-        NewWindowAppSource.RECENT_TABS
+        NewWindowAppSource.RECENT_TABS,
+        NewWindowAppSource.DRAG_DROP_LAUNCHER,
+        NewWindowAppSource.TAB_REPARENTING_TO_INSTANCE_WITH_NO_ACTIVITY,
+        NewWindowAppSource.URL_LAUNCH,
+        NewWindowAppSource.EXTERNAL_NAVIGATION,
+        NewWindowAppSource.DEV_TOOLS,
+        NewWindowAppSource.BROWSER_WINDOW_CREATOR,
+        NewWindowAppSource.ANDROID_S_UPDATE,
+        NewWindowAppSource.CRASH_RECOVERY,
+        NewWindowAppSource.RELAUNCH
     })
     public @interface NewWindowAppSource {
-        int OTHER = 0;
+        int UNKNOWN = 0;
         int MENU = 1;
         int WINDOW_MANAGER = 2;
         int KEYBOARD_SHORTCUT = 3;
         int RECENT_TABS = 4;
-        int NUM_ENTRIES = 5;
+        int DRAG_DROP_LAUNCHER = 5;
+        int TAB_REPARENTING_TO_INSTANCE_WITH_NO_ACTIVITY = 6;
+        int URL_LAUNCH = 7;
+        int EXTERNAL_NAVIGATION = 8;
+        int DEV_TOOLS = 9;
+        int BROWSER_WINDOW_CREATOR = 10;
+        int ANDROID_S_UPDATE = 11;
+        int CRASH_RECOVERY = 12;
+        int RELAUNCH = 13;
+        int NUM_ENTRIES = 14;
     }
+
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml)
 
     // These values are persisted to logs. Entries should not be renumbered and
@@ -73,7 +89,8 @@ public abstract class MultiInstanceManager {
         CloseWindowAppSource.WINDOW_MANAGER,
         CloseWindowAppSource.RETENTION_PERIOD_EXPIRATION,
         CloseWindowAppSource.NO_TABS_IN_WINDOW,
-        CloseWindowAppSource.RECENT_TABS
+        CloseWindowAppSource.RECENT_TABS,
+        CloseWindowAppSource.RECENTLY_CLOSED_LIMIT_EXCEEDED
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface CloseWindowAppSource {
@@ -82,8 +99,10 @@ public abstract class MultiInstanceManager {
         int RETENTION_PERIOD_EXPIRATION = 2;
         int NO_TABS_IN_WINDOW = 3;
         int RECENT_TABS = 4;
-        int NUM_ENTRIES = 5;
+        int RECENTLY_CLOSED_LIMIT_EXCEEDED = 5;
+        int NUM_ENTRIES = 6;
     }
+
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml)
 
     @IntDef({
@@ -106,6 +125,33 @@ public abstract class MultiInstanceManager {
         int NEW_INSTANCE_NEW_TASK = 5;
         int EXISTING_INSTANCE_NEW_TASK = 6;
         int INVALID_INSTANCE = 7;
+    }
+
+    /**
+     * Types of app-controlled session exits that determine how windows are restored on subsequent
+     * app launch.
+     */
+    @IntDef({
+        LastSessionExitType.DEFAULT,
+        LastSessionExitType.LAST_WINDOW_CLOSED_BY_APP,
+        LastSessionExitType.QUIT
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface LastSessionExitType {
+        /** Default session termination type. */
+        int DEFAULT = 0;
+
+        /**
+         * The last active window was closed by an app action that triggered {@link
+         * #closeWindows(boolean)}.
+         */
+        int LAST_WINDOW_CLOSED_BY_APP = 1;
+
+        /**
+         * The session was terminated by an app quit or restart action (e.g. chrome://quit,
+         * chrome://restart).
+         */
+        int QUIT = 2;
     }
 
     /** A class that holds information about an allocated instance ID. */
@@ -137,21 +183,6 @@ public abstract class MultiInstanceManager {
     protected static int sMergedInstanceTaskId;
 
     protected static List<Integer> sTestDisplayIds = new ArrayList<>();
-
-    /** The type of tab/profile the activity supports. */
-    @IntDef({
-        SupportedProfileType.UNSET,
-        SupportedProfileType.REGULAR,
-        SupportedProfileType.OFF_THE_RECORD,
-        SupportedProfileType.MIXED
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface SupportedProfileType {
-        int UNSET = 0;
-        int REGULAR = 1;
-        int OFF_THE_RECORD = 2;
-        int MIXED = 3;
-    }
 
     /**
      * Called during activity startup to check whether the activity is recreated because the
@@ -186,30 +217,6 @@ public abstract class MultiInstanceManager {
     public abstract boolean isStartedUpCorrectly(int activityTaskId);
 
     /**
-     * Creates a new {@link Intent} for a new instance of the main Chrome window (Task).
-     *
-     * <p>The root {@link Activity} of the new Chrome window depends on the implementation. It can
-     * be either {@code ChromeTabbedActivity} or {@code ChromeTabbedActivity2}.
-     *
-     * <p>The intended use cases of this method:
-     *
-     * <ul>
-     *   <li>The caller doesn't (need to) know the specifics of the {@link Intent}, such as flags,
-     *       Extras, the target {@link Activity}, the new window's instance ID, etc. An example of
-     *       this is the "open new window" option in the app menu.
-     *   <li>The caller is in a modularized target and can't depend on code at the "glue" layer,
-     *       such as {@link MultiWindowUtils#createNewWindowIntent}. In this case, the caller should
-     *       inject {@link MultiInstanceManager} at the "glue" layer, then use it in the caller's
-     *       internal logic to create the {@link Intent}.
-     * </ul>
-     *
-     * @param isIncognito Whether the new window should be in the incognito mode.
-     * @return The new {@link Intent} as described above, or {@code null} if the new window cannot
-     *     be created.
-     */
-    public abstract @Nullable Intent createNewWindowIntent(boolean isIncognito);
-
-    /**
      * Merges tabs from a second ChromeTabbedActivity instance if necessary and calls
      * finishAndRemoveTask() on the other activity.
      */
@@ -217,139 +224,19 @@ public abstract class MultiInstanceManager {
     public abstract void maybeMergeTabs();
 
     /**
-     * Open a new instance of the ChromeTabbedActivity window and move the specified tabs from
-     * existing instance to the new one.
-     *
-     * @param tabs Tabs that are to be moved to a new Chrome instance.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabsToNewWindow(List<Tab> tabs, @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * Open a new instance of the ChromeTabbedActivity window and move the specified tab group from
-     * existing instance to the new one.
-     *
-     * @param tabGroupMetadata The object containing the metadata of the tab group.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabGroupToNewWindow(
-            TabGroupMetadata tabGroupMetadata, @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * Move the specified tabs to the current instance of the ChromeTabbedActivity window.
-     *
-     * @param activity Activity of the Chrome Window in which the tab is to be moved.
-     * @param tabs The list of tabs that is to be moved to the current instance.
-     * @param atIndex Tab position index in the destination window instance.
-     */
-    public void moveTabsToWindow(@Nullable Activity activity, List<Tab> tabs, int atIndex) {
-        // Not implemented
-    }
-
-    /**
-     * Move the specified tabs to the specified instance of the ChromeTabbedActivity window.
-     *
-     * @param info {@link InstanceInfo} describing the destination window.
-     * @param tabs The list of tabs that is to be moved to the current instance.
-     * @param atIndex Tab position index in the destination window instance.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabsToWindow(
-            InstanceInfo info, List<Tab> tabs, int atIndex, @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * Move the specified tabs to the specified instance of the ChromeTabbedActivity window and
-     * merge with the destination tab group. The tabs are added to the end of the destination tab
-     * group. If the activity from {@code info} does not exist, this will not create a new window.
-     *
-     * @param info {@link InstanceInfo} describing the destination window.
-     * @param tabs The list of ungrouped tabs that is to be moved to the current instance.
-     * @param destTabId The id of the tab in the destination tab group. The tab with this ID must
-     *     exist in the destination window, otherwise this operation will fail.
-     */
-    public void moveTabsToWindowAndMergeToDest(InstanceInfo info, List<Tab> tabs, int destTabId) {
-        // Not implemented
-    }
-
-    /**
-     * Move an entire tab group to the current instance of the ChromeTabbedActivity window.
-     *
-     * @param activity Activity of the Chrome Window in which the tab group is to be moved.
-     * @param tabGroupMetadata The object containing the metadata of the tab group.
-     * @param atIndex Tab position index in the destination window instance.
-     */
-    public void moveTabGroupToWindow(
-            @Nullable Activity activity, TabGroupMetadata tabGroupMetadata, int atIndex) {
-        // Not implemented
-    }
-
-    /**
-     * Move an entire tab group to the specified instance of the ChromeTabbedActivity window.
-     *
-     * @param info {@link InstanceInfo} describing the destination window.
-     * @param tabGroupMetadata The object containing the metadata of the tab group.
-     * @param atIndex Tab position index in the destination window instance.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabGroupToWindow(
-            InstanceInfo info,
-            TabGroupMetadata tabGroupMetadata,
-            int atIndex,
-            @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * If there's only one window currently, moves {@param tabs} to a new window. Otherwise, opens a
-     * dialog to select which window to move {@param tabs} to.
-     *
-     * @param tabs The list of tabs to move.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabsToOtherWindow(List<Tab> tabs, @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * Opens a URL in another existing window or a new window.
-     *
-     * @param loadUrlParams The url to open.
-     * @param parentTabId The ID of the parent tab.
-     * @param preferNew Whether we should prioritize launching the tab in a new window.
-     * @param instanceType The {@link PersistedInstanceType} that will be used to determine the type
-     *     of window the URL can be opened in.
-     */
-    public void openUrlInOtherWindow(
-            LoadUrlParams loadUrlParams,
-            int parentTabId,
-            boolean preferNew,
-            @PersistedInstanceType int instanceType) {
-        // not implemented
-    }
-
-    /**
-     * If there's only one window currently, moves the matching group to a new window. Otherwise,
-     * opens a dialog to select which window to move the matching group to.
-     *
-     * @param tabGroupMetadata The metadata for the group to move.
-     * @param source The new window creation source used for metrics.
-     */
-    public void moveTabGroupToOtherWindow(
-            TabGroupMetadata tabGroupMetadata, @NewWindowAppSource int source) {
-        // Not implemented
-    }
-
-    /**
-     * @return List of {@link InstanceInfo} structs with {@link PersistedInstanceType} {@param type}
-     *     for an activity that can be switched to, or newly launched.
+     * @return A list of {@link InstanceInfo} structs for the specified {@link
+     *     PersistedInstanceType}. This excludes unusable instances that are marked for deletion.
      */
     public List<InstanceInfo> getInstanceInfo(@PersistedInstanceType int type) {
+        return Collections.emptyList();
+    }
+
+    /**
+     * @return A list of {@link InstanceInfo} structs for inactive instances, including currently
+     *     unusable instances that are marked for deletion. This excludes {@link
+     *     PersistedInstanceType#OFF_THE_RECORD} type instances.
+     */
+    public List<InstanceInfo> getRecentlyClosedInstances() {
         return Collections.emptyList();
     }
 
@@ -366,11 +253,12 @@ public abstract class MultiInstanceManager {
             int windowId, int taskId, boolean preferNew, boolean isIncognitoIntent);
 
     /**
-     * Initialize the manager with the allocated instance ID.
+     * Initialize the manager with the allocated instance ID, and perform other post-inflation
+     * activity startup tasks, including relevant instance state persistence.
      *
      * @param instanceId Instance ID of the activity.
      * @param taskId Task ID of the activity.
-     * @param profileType The type of tab/profile the activity supports
+     * @param profileType The type of tab/profile the activity supports.
      */
     public void initialize(int instanceId, int taskId, @SupportedProfileType int profileType) {}
 
@@ -432,25 +320,10 @@ public abstract class MultiInstanceManager {
     }
 
     /**
-     * Shows a message to notify the user when excess of {@link MultiWindowUtils#getMaxInstances()}
-     * running activities have been finished after an instance limit downgrade causing existence of
-     * more active instances than the instance limit.
-     *
-     * @param messageDispatcher The {@link MessageDispatcher} to enqueue the instance restoration
-     *     message.
-     * @return {@code true} if the instance restoration message was shown, {@code false} otherwise.
-     */
-    public boolean showInstanceRestorationMessage(@Nullable MessageDispatcher messageDispatcher) {
-        return false;
-    }
-
-    /**
      * Shows a message to notify the user that a new window cannot be created because {@link
      * MultiWindowUtils#getMaxInstances()} activities already exist.
-     *
-     * @param messageDispatcher The {@link MessageDispatcher} to enqueue the instance limit message.
      */
-    public void showInstanceCreationLimitMessage(@Nullable MessageDispatcher messageDispatcher) {
+    public void showInstanceCreationLimitMessage() {
         // Not implemented
     }
 
@@ -476,35 +349,6 @@ public abstract class MultiInstanceManager {
 
     public abstract void setTabModelObserverForTesting(
             TabModelSelectorTabModelObserver tabModelObserver);
-
-    protected ObserverList<InstanceStateObserver> mInstanceStateObservers = new ObserverList<>();
-
-    /** Observer interface to notify about instance closure events. */
-    public interface InstanceStateObserver {
-        /**
-         * Notifies when an instance is closed due to activity destruction and / or an explicit user
-         * request.
-         */
-        void onInstanceClosed();
-    }
-
-    /**
-     * Registers an observer to receive notifications about changes to the instance state.
-     *
-     * @param instanceStateObserver The observer to be added.
-     */
-    public void addInstanceStateObserver(InstanceStateObserver instanceStateObserver) {
-        mInstanceStateObservers.addObserver(instanceStateObserver);
-    }
-
-    /**
-     * Unregisters an observer, stopping notifications about changes to the instance state.
-     *
-     * @param instanceStateObserver The observer to be removed.
-     */
-    public void removeInstanceStateObserver(InstanceStateObserver instanceStateObserver) {
-        mInstanceStateObservers.removeObserver(instanceStateObserver);
-    }
 
     // The instance types are defined as bit flags, so they can be or-ed to reflect
     // more than one value. Or-ed values should be validated at points of access.

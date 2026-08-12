@@ -4,7 +4,6 @@
 
 #include "chrome/updater/util/util.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -16,6 +15,9 @@
 #include <initguid.h>
 #include <windows.h>
 
+#include <shlobj.h>
+
+#include "base/base_paths_win.h"
 #include "base/logging_win.h"
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -32,6 +34,7 @@
 #include "base/functional/function_ref.h"
 #include "base/logging.h"
 #include "base/logging/logging_settings.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
@@ -44,6 +47,7 @@
 #include "base/time/time.h"
 #include "base/version.h"
 #include "build/build_config.h"
+#include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/tag.h"
 #include "chrome/updater/updater_branding.h"
@@ -69,16 +73,25 @@ namespace {
 
 constexpr int64_t kLogRotateAtSize = 1024 * 1024;  // 1 MiB.
 
+template <typename CharT>
+bool IsValidAppIdImpl(std::basic_string_view<CharT> app_id) {
+  static constexpr size_t kMaxAppIdLength = 256;
+  return !app_id.empty() && app_id.length() <= kMaxAppIdLength &&
+         std::ranges::all_of(app_id, &base::IsAsciiPrintable<CharT>) &&
+         app_id.find(CharT{'/'}) == std::basic_string_view<CharT>::npos &&
+         app_id.find(CharT{'\\'}) == std::basic_string_view<CharT>::npos &&
+         app_id[0] != CharT{'.'};
+}
+
 }  // namespace
 
 std::optional<base::FilePath> GetVersionedInstallDirectory(
     UpdaterScope scope,
     const base::Version& version) {
-  const std::optional<base::FilePath> path = GetInstallDirectory(scope);
-  if (!path) {
-    return std::nullopt;
-  }
-  return path->AppendUTF8(version.GetString());
+  return GetInstallDirectory(scope).transform(
+      [&version](const base::FilePath& path) {
+        return path.AppendUTF8(version.GetString());
+      });
 }
 
 std::optional<base::FilePath> GetVersionedInstallDirectory(UpdaterScope scope) {
@@ -88,20 +101,35 @@ std::optional<base::FilePath> GetVersionedInstallDirectory(UpdaterScope scope) {
 std::optional<base::FilePath> GetUpdaterExecutablePath(
     UpdaterScope scope,
     const base::Version& version) {
-  std::optional<base::FilePath> path =
-      GetVersionedInstallDirectory(scope, version);
-  if (!path) {
-    return std::nullopt;
-  }
-  return path->Append(GetExecutableRelativePath());
+  return GetVersionedInstallDirectory(scope, version)
+      .transform([](const base::FilePath& path) {
+        return path.Append(GetExecutableRelativePath());
+      });
 }
 
 std::optional<base::FilePath> GetCrxCacheDirectory(UpdaterScope scope) {
-  const std::optional<base::FilePath> cache_path(GetInstallDirectory(scope));
-  if (!cache_path) {
+  return GetInstallDirectory(scope).transform(
+      [](const base::FilePath& path) { return path.AppendUTF8("crx_cache"); });
+}
+
+std::optional<base::FilePath> GetUpdaterTempDir() {
+  base::FilePath temp_dir;
+#if BUILDFLAG(IS_WIN)
+  if (::IsUserAnAdmin()) {
+    if (!base::PathService::Get(base::DIR_SYSTEM_TEMP, &temp_dir)) {
+      return std::nullopt;
+    }
+  } else {
+    if (!base::GetTempDir(&temp_dir)) {
+      return std::nullopt;
+    }
+  }
+#else
+  if (!base::GetTempDir(&temp_dir)) {
     return std::nullopt;
   }
-  return std::optional<base::FilePath>(cache_path->AppendUTF8("crx_cache"));
+#endif
+  return temp_dir;
 }
 
 std::optional<base::FilePath> GetUpdaterExecutablePath(UpdaterScope scope) {
@@ -109,16 +137,18 @@ std::optional<base::FilePath> GetUpdaterExecutablePath(UpdaterScope scope) {
 }
 
 std::optional<base::FilePath> GetCrashDatabasePath(UpdaterScope scope) {
-  const std::optional<base::FilePath> path(GetVersionedInstallDirectory(scope));
-  return path ? std::optional<base::FilePath>(path->AppendUTF8("Crashpad"))
-              : std::nullopt;
+  return GetVersionedInstallDirectory(scope).transform(
+      [](const base::FilePath& path) { return path.AppendUTF8("Crashpad"); });
 }
 
 std::optional<base::FilePath> EnsureCrashDatabasePath(UpdaterScope scope) {
-  const std::optional<base::FilePath> database_path(
-      GetCrashDatabasePath(scope));
-  return database_path && base::CreateDirectory(*database_path) ? database_path
-                                                                : std::nullopt;
+  return GetCrashDatabasePath(scope).and_then(
+      [](const base::FilePath& path) -> std::optional<base::FilePath> {
+        if (base::CreateDirectory(path)) {
+          return path;
+        }
+        return std::nullopt;
+      });
 }
 
 TagParsingResult::TagParsingResult() = default;
@@ -192,14 +222,6 @@ std::string GetDecodedInstallDataFromAppArgs(const std::string& app_id) {
 std::string GetInstallDataIndexFromAppArgs(const std::string& app_id) {
   const std::optional<tagging::AppArgs> app_args = GetAppArgs(app_id);
   return app_args ? app_args->install_data_index : std::string();
-}
-
-std::optional<base::FilePath> GetLogFilePath(UpdaterScope scope) {
-  const std::optional<base::FilePath> log_dir = GetInstallDirectory(scope);
-  if (log_dir) {
-    return log_dir->Append(FILE_PATH_LITERAL("updater.log"));
-  }
-  return std::nullopt;
 }
 
 void InitLogging(UpdaterScope updater_scope) {
@@ -397,6 +419,14 @@ void EnumerateUpdateClientTempDirectories(
                              base::StrCat({"*", kProdId, matcher, "*"})))
         .ForEach([&callback](const base::FilePath& dir) { callback(dir); });
   }
+}
+
+bool IsValidAppId(std::string_view app_id) {
+  return IsValidAppIdImpl(app_id);
+}
+
+bool IsValidAppId(std::wstring_view app_id) {
+  return IsValidAppIdImpl(app_id);
 }
 
 }  // namespace updater

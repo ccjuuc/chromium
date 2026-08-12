@@ -28,7 +28,8 @@
 
 #include "third_party/blink/renderer/core/css/resolver/scoped_style_resolver.h"
 
-#include "base/types/zip.h"
+#include <ranges>
+
 #include "third_party/blink/renderer/core/animation/document_timeline.h"
 #include "third_party/blink/renderer/core/css/cascade_layer_map.h"
 #include "third_party/blink/renderer/core/css/cascade_layered.h"
@@ -291,7 +292,8 @@ void ScopedStyleResolver::ForAllStylesheets(ElementRuleCollector& collector,
   DCHECK_EQ(ref_groups.size(), rule_set_groups_.size())
       << "Differing number of requests for " << active_style_sheets_.size()
       << " sheets";
-  for (const auto [ref, actual] : base::zip(ref_groups, rule_set_groups_)) {
+  for (const auto [ref, actual] :
+       std::views::zip(ref_groups, rule_set_groups_)) {
     actual.AssertEqualTo(ref);
   }
 #endif
@@ -435,7 +437,7 @@ ScopedStyleResolver::FontFeatureValuesRulesForFamily(AtomicString font_family) {
 
 // When appending/removing stylesheets, we go through all implicit
 // StyleScope instances in each stylesheet and store those instances
-// in the StyleScopeData (ElementRareData) of the triggering element.
+// in the StyleScopeData (NodeRareData) of the triggering element.
 //
 // See StyleScopeData for more information.
 
@@ -520,7 +522,7 @@ void ScopedStyleResolver::RemoveImplicitScopeTrigger(
 void ScopedStyleResolver::QuietlySwapActiveStyleSheets(
     ActiveStyleSheetVector& other) {
   // The new stylesheets may change which implicit @scope rules apply;
-  // various StyleScopeData objects (stored on ElementRareData) need
+  // various StyleScopeData objects (stored on NodeRareData) need
   // to be updated.
   RemoveImplicitScopeTriggers();
 

@@ -11,6 +11,7 @@ namespace autofill::autofill_metrics {
 // These events are triggered separately for address and credit card forms.
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(FormEvent)
 enum FormEvent {
   // User interacted with a field of this kind of form. Logged only once per
   // page load.
@@ -346,8 +347,33 @@ enum FormEvent {
   // Same as above but only triggered once per page load.
   FORM_EVENT_LOCAL_CARD_SUGGESTION_SELECTED_ONCE = 109,
 
+  // Metric logged when a suggestion for a card saved through other Google
+  // services outside of Chrome was shown.
+  FORM_EVENT_SUGGESTION_FOR_EXTERNALLY_SAVED_CARD_SHOWN = 110,
+  // Metric logged when a suggestion for a card saved through other Google
+  // services outside of Chrome was shown. Logged once per page load.
+  FORM_EVENT_SUGGESTION_FOR_EXTERNALLY_SAVED_CARD_SHOWN_ONCE = 111,
+  // Metric logged when a suggestion for a card saved through other Google
+  // services outside of Chrome was selected.
+  FORM_EVENT_SUGGESTION_FOR_EXTERNALLY_SAVED_CARD_SELECTED = 112,
+  // Metric logged when a suggestion for a card saved through other Google
+  // services outside of Chrome was selected. Logged once per page load.
+  FORM_EVENT_SUGGESTION_FOR_EXTERNALLY_SAVED_CARD_SELECTED_ONCE = 113,
+
+  // Metric logged when a never before used card suggestion was shown.
+  FORM_EVENT_SUGGESTION_FOR_NEVER_USED_CARD_SHOWN = 114,
+  // Metric logged when a never before used card suggestion was shown. Logged
+  // once per page load.
+  FORM_EVENT_SUGGESTION_FOR_NEVER_USED_CARD_SHOWN_ONCE = 115,
+  // Metric logged when a never before used card suggestion was selected.
+  FORM_EVENT_SUGGESTION_FOR_NEVER_USED_CARD_SELECTED = 116,
+  // Metric logged when a never before used card suggestion was selected. Logged
+  // once per page load.
+  FORM_EVENT_SUGGESTION_FOR_NEVER_USED_CARD_SELECTED_ONCE = 117,
+
   NUM_FORM_EVENTS,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillFormEvent)
 
 }  // namespace autofill::autofill_metrics
 

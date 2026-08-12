@@ -5,21 +5,21 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WEBDATA_SERVICE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WEBDATA_SERVICE_H_
 
+#include <stdint.h>
+
 #include <string>
-#include <string_view>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/observer_list.h"
 #include "base/supports_user_data.h"
-#include "base/uuid.h"
+#include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/common/form_field_data.h"
-#include "components/sync/base/data_type.h"
-#include "components/webdata/common/web_data_results.h"
 #include "components/webdata/common/web_data_service_base.h"
 #include "components/webdata/common/web_data_service_consumer.h"
 
@@ -56,21 +56,35 @@ class AutofillWebDataService : public WebDataServiceBase {
   // Schedules a task to add form fields to the web database.
   virtual void AddFormFields(const std::vector<FormFieldData>& fields);
 
-  // Initiates the request for a vector of values which have been entered in
-  // form input fields named |name|. The method OnWebDataServiceRequestDone of
-  // |consumer| gets called back when the request is finished, with the vector
-  // included in the argument |result|.
+  // Initiates a request for autocomplete entries in the legacy
+  // non-label-sensitive table matching `name` and `prefix`.
+  // `consumer::OnWebDataServiceRequestDone` is called when the request
+  // finishes.
   virtual WebDataServiceBase::Handle GetFormValuesForElementName(
       const std::u16string& name,
       const std::u16string& prefix,
       int limit,
       WebDataServiceRequestCallback consumer);
 
+  // Asynchronously fetches Autofill suggestions.
+  //
+  // Queries for stored form values matching the field's `name`, `label`,
+  // and the user-typed `prefix`. Returns up to `limit` suggestions
+  // via the `consumer`'s OnWebDataServiceRequestDone callback.
+  virtual WebDataServiceBase::Handle GetFormValuesForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view prefix,
+      int limit,
+      WebDataServiceRequestCallback consumer);
+
   // Removes form elements recorded for Autocomplete from the database.
   void RemoveFormElementsAddedBetween(base::Time delete_begin,
                                       base::Time delete_end);
-  void RemoveFormValueForElementName(const std::u16string& name,
-                                     const std::u16string& value);
+  // Deletes autocomplete `value` entries with matching `name` and/or `label`.
+  virtual void RemoveFormValueForElementNameAndLabel(std::u16string_view name,
+                                                     std::u16string_view label,
+                                                     std::u16string_view value);
 
   // Schedules a task to add an Autofill profile to the web database.
   void AddAutofillProfile(
@@ -120,6 +134,9 @@ class AutofillWebDataService : public WebDataServiceBase {
   // Retrieves LoyaltyCards from the database.
   WebDataServiceBase::Handle GetLoyaltyCards(
       WebDataServiceRequestCallback consumer);
+
+  // Updates the `ValuableMetadata` for a valuable.
+  void UpdateValuableMetadata(const ValuableMetadata& metadata);
 
   // Schedules a task to count the number of unique autofill values contained
   // in the time interval [|begin|, |end|). |begin| and |end| can be null
@@ -177,10 +194,6 @@ class AutofillWebDataService : public WebDataServiceBase {
 
   // Method to clear all the local CVCs from the web database.
   void ClearLocalCvcs();
-
-  // Method to clear all local CVCs created before mid-May 2025. For more
-  // information, see crbug.com/411681430.
-  void ClearLocalCvcsUpToMay2025();
 
 #if BUILDFLAG(IS_IOS)
   // Method to clean up for crbug.com/445879524.

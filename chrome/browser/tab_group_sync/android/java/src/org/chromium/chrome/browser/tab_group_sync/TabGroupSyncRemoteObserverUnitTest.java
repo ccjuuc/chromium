@@ -33,7 +33,6 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncControllerImpl.TabCreationDelegate;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.tab_group_sync.ClosingSource;
@@ -54,14 +53,12 @@ public class TabGroupSyncRemoteObserverUnitTest {
     private static final Token TOKEN_1 = new Token(2, 3);
     private static final Token TOKEN_2 = new Token(4, 4);
     private static final int TAB_ID_1 = 1;
-    private static final int ROOT_ID_1 = 1;
     private static final LocalTabGroupId LOCAL_TAB_GROUP_ID_1 = new LocalTabGroupId(TOKEN_1);
     private static final LocalTabGroupId LOCAL_TAB_GROUP_ID_2 = new LocalTabGroupId(TOKEN_2);
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Profile mProfile;
     private MockTabModel mTabModel;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private PrefService mPrefService;
     private @Mock Supplier<Boolean> mIsActiveWindowSupplier;
@@ -76,12 +73,11 @@ public class TabGroupSyncRemoteObserverUnitTest {
     @Before
     public void setUp() {
         mTabModel = spy(new MockTabModel(mProfile, null));
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         mNavigationTracker = new NavigationTracker();
         mTabCreationDelegate = new TestTabCreationDelegate();
         mRemoteObserver =
                 new TabGroupSyncRemoteObserver(
-                        mTabGroupModelFilter,
+                        mTabModel,
                         mTabGroupSyncService,
                         mLocalMutationHelper,
                         enable -> {
@@ -91,9 +87,9 @@ public class TabGroupSyncRemoteObserverUnitTest {
                         mIsActiveWindowSupplier);
         mEnabledLocalObservers = true;
 
-        when(mTabGroupModelFilter.getGroupLastShownTabId(any())).thenReturn(Tab.INVALID_TAB_ID);
-        when(mTabGroupModelFilter.getGroupLastShownTabId(TOKEN_1)).thenReturn(ROOT_ID_1);
-        when(mTabGroupModelFilter.tabGroupExists(TOKEN_1)).thenReturn(true);
+        when(mTabModel.getGroupLastShownTabId(any())).thenReturn(Tab.INVALID_TAB_ID);
+        when(mTabModel.getGroupLastShownTabId(TOKEN_1)).thenReturn(TAB_ID_1);
+        when(mTabModel.tabGroupExists(TOKEN_1)).thenReturn(true);
         when(mPrefService.getBoolean(eq(Pref.AUTO_OPEN_SYNCED_TAB_GROUPS))).thenReturn(true);
         when(mIsActiveWindowSupplier.get()).thenReturn(true);
     }
@@ -108,7 +104,7 @@ public class TabGroupSyncRemoteObserverUnitTest {
         mTabModel.addTab(TAB_ID_1);
         Tab tab = mTabModel.getTabAt(0);
         tab.setTabGroupId(TOKEN_1);
-        when(mTabGroupModelFilter.getTabsInGroup(eq(TOKEN_1))).thenReturn(List.of(tab));
+        when(mTabModel.getTabsInGroup(eq(TOKEN_1))).thenReturn(List.of(tab));
     }
 
     @Test
@@ -242,8 +238,10 @@ public class TabGroupSyncRemoteObserverUnitTest {
             MockTab tab = new MockTab(++mNextTabId, mProfile);
             tab.setIsInitialized(true);
             tab.setUrl(url);
-            tab.setRootId(parent == null ? tab.getId() : parent.getRootId());
             tab.setTitle("Tab Title");
+            if (parent != null) {
+                tab.setTabGroupId(parent.getTabGroupId());
+            }
             mTabModel.addTab(
                     tab, -1, TabLaunchType.FROM_TAB_GROUP_UI, TabCreationState.LIVE_IN_BACKGROUND);
             return tab;

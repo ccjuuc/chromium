@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -17,6 +16,7 @@
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
@@ -34,6 +34,7 @@
 #include "extensions/common/api/storage.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/context_type.mojom.h"
+#include "third_party/leveldatabase/env_chromium.h"
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -46,6 +47,48 @@ namespace {
 base::LazyInstance<BrowserContextKeyedAPIFactory<StorageFrontend>>::
     DestructorAtExit g_factory = LAZY_INSTANCE_INITIALIZER;
 
+// Logs a database error or a restore/repair attempt for a local storage
+// operation.
+void LogLocalErrorOrRestore(
+    StorageFrontend::ExtensionsDatabaseOperation operation,
+    const ValueStore::Status& status,
+    StorageAreaNamespace storage_area) {
+  if (storage_area != StorageAreaNamespace::kLocal) {
+    return;
+  }
+
+  std::string operation_name;
+  switch (operation) {
+    case StorageFrontend::ExtensionsDatabaseOperation::kGet:
+      operation_name = "get";
+      break;
+    case StorageFrontend::ExtensionsDatabaseOperation::kSet:
+      operation_name = "set";
+      break;
+    case StorageFrontend::ExtensionsDatabaseOperation::kRemove:
+      operation_name = "remove";
+      break;
+    case StorageFrontend::ExtensionsDatabaseOperation::kClear:
+      operation_name = "clear";
+      break;
+  }
+
+  base::UmaHistogramEnumeration(
+      base::StringPrintf("Extensions.Database.Local.StatusCodeByOperation.%s",
+                         operation_name.c_str()),
+      status.code, value_store::ValueStore::STATUS_CODE_MAX);
+
+  if (status.restore_status != value_store::ValueStore::RESTORE_NONE) {
+    base::UmaHistogramEnumeration("Extensions.Database.Local.RestoreStatus",
+                                  status.restore_status,
+                                  value_store::ValueStore::RESTORE_STATUS_MAX);
+  }
+
+  if (!status.ok()) {
+    base::UmaHistogramEnumeration("Extensions.Database.Local.ErrorByOperation",
+                                  operation);
+  }
+}
 events::HistogramValue StorageAreaToEventHistogram(
     StorageAreaNamespace storage_area) {
   switch (storage_area) {
@@ -58,25 +101,32 @@ events::HistogramValue StorageAreaToEventHistogram(
     case StorageAreaNamespace::kSession:
       return events::STORAGE_SESSION_ON_CHANGE;
     case StorageAreaNamespace::kInvalid:
+    default:
       NOTREACHED();
   }
 }
 
 void GetKeysWithValueStore(
+    StorageAreaNamespace storage_area,
     base::OnceCallback<void(ValueStore::ReadResult)> callback,
     ValueStore* store) {
   ValueStore::ReadResult result = store->GetKeys();
+  LogLocalErrorOrRestore(StorageFrontend::ExtensionsDatabaseOperation::kGet,
+                         result.status(), storage_area);
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
 }
 
 void GetWithValueStore(
+    StorageAreaNamespace storage_area,
     std::optional<std::vector<std::string>> keys,
     base::OnceCallback<void(ValueStore::ReadResult)> callback,
     ValueStore* store) {
   ValueStore::ReadResult result =
       keys.has_value() ? store->Get(keys.value()) : store->Get();
+  LogLocalErrorOrRestore(StorageFrontend::ExtensionsDatabaseOperation::kGet,
+                         result.status(), storage_area);
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
@@ -93,33 +143,42 @@ void GetBytesInUseWithValueStore(std::optional<std::vector<std::string>> keys,
 }
 
 void SetWithValueStore(
-    const base::Value::Dict& values,
+    StorageAreaNamespace storage_area,
+    const base::DictValue& values,
     base::OnceCallback<void(ValueStore::WriteResult)> callback,
     ValueStore* store) {
   ValueStore::WriteResult result = store->Set(ValueStore::DEFAULTS, values);
+  LogLocalErrorOrRestore(StorageFrontend::ExtensionsDatabaseOperation::kSet,
+                         result.status(), storage_area);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
 }
 
 void RemoveWithValueStore(
+    StorageAreaNamespace storage_area,
     std::vector<std::string> keys,
     base::OnceCallback<void(ValueStore::WriteResult)> callback,
     ValueStore* store) {
   ValueStore::WriteResult result = store->Remove(keys);
+  LogLocalErrorOrRestore(StorageFrontend::ExtensionsDatabaseOperation::kRemove,
+                         result.status(), storage_area);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
 }
 
 void ClearWithValueStore(
+    StorageAreaNamespace storage_area,
     base::OnceCallback<void(ValueStore::WriteResult)> callback,
     ValueStore* store) {
   ValueStore::WriteResult result = store->Clear();
+  LogLocalErrorOrRestore(StorageFrontend::ExtensionsDatabaseOperation::kClear,
+                         result.status(), storage_area);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), std::move(result)));
 }
 
-base::Value::List KeysFromDict(base::Value::Dict dict) {
-  base::Value::List list = base::Value::List::with_capacity(dict.size());
+base::ListValue KeysFromDict(base::DictValue dict) {
+  base::ListValue list = base::ListValue::with_capacity(dict.size());
   for (auto item : dict) {
     list.Append(std::move(item.first));
   }
@@ -277,7 +336,7 @@ void StorageFrontend::GetValues(scoped_refptr<const Extension> extension,
                          : storage_manager->GetAll(extension->id());
 
     GetResult get_result;
-    get_result.data = base::Value::Dict();
+    get_result.data = base::DictValue();
 
     for (auto item : result) {
       get_result.data->Set(std::move(item.first), item.second->Clone());
@@ -297,7 +356,7 @@ void StorageFrontend::GetValues(scoped_refptr<const Extension> extension,
 
   RunWithStorage(
       extension, settings_namespace,
-      base::BindOnce(&GetWithValueStore, std::move(keys),
+      base::BindOnce(&GetWithValueStore, storage_area, std::move(keys),
                      base::BindOnce(&StorageFrontend::OnReadFinished,
                                     weak_factory_.GetWeakPtr(), extension->id(),
                                     storage_area, std::move(callback))));
@@ -315,7 +374,7 @@ void StorageFrontend::GetKeys(
 
     std::vector<std::string> keys = storage_manager->GetKeys(extension->id());
 
-    base::Value::List list = base::Value::List::with_capacity(keys.size());
+    base::ListValue list = base::ListValue::with_capacity(keys.size());
     for (const std::string& key : keys) {
       list.Append(key);
     }
@@ -339,8 +398,9 @@ void StorageFrontend::GetKeys(
   base::OnceCallback<void(ValueStore::ReadResult)> test =
       base::BindOnce(&StorageFrontend::OnReadKeysFinished,
                      weak_factory_.GetWeakPtr(), std::move(callback));
-  RunWithStorage(extension, settings_namespace,
-                 base::BindOnce(&GetKeysWithValueStore, std::move(test)));
+  RunWithStorage(
+      extension, settings_namespace,
+      base::BindOnce(&GetKeysWithValueStore, storage_area, std::move(test)));
 }
 
 void StorageFrontend::GetBytesInUse(
@@ -378,7 +438,7 @@ void StorageFrontend::GetBytesInUse(
 
 void StorageFrontend::Set(scoped_refptr<const Extension> extension,
                           StorageAreaNamespace storage_area,
-                          base::Value::Dict values,
+                          base::DictValue values,
                           base::OnceCallback<void(ResultStatus)> callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -421,7 +481,7 @@ void StorageFrontend::Set(scoped_refptr<const Extension> extension,
 
   RunWithStorage(
       extension, settings_namespace,
-      base::BindOnce(&SetWithValueStore, std::move(values),
+      base::BindOnce(&SetWithValueStore, storage_area, std::move(values),
                      base::BindOnce(&StorageFrontend::OnWriteFinished,
                                     weak_factory_.GetWeakPtr(), extension->id(),
                                     storage_area, std::move(callback))));
@@ -462,7 +522,7 @@ void StorageFrontend::Remove(scoped_refptr<const Extension> extension,
 
   RunWithStorage(
       extension, settings_namespace,
-      base::BindOnce(&RemoveWithValueStore, keys,
+      base::BindOnce(&RemoveWithValueStore, storage_area, keys,
                      base::BindOnce(&StorageFrontend::OnWriteFinished,
                                     weak_factory_.GetWeakPtr(), extension->id(),
                                     storage_area, std::move(callback))));
@@ -503,7 +563,7 @@ void StorageFrontend::Clear(
 
   RunWithStorage(
       extension, settings_namespace,
-      base::BindOnce(&ClearWithValueStore,
+      base::BindOnce(&ClearWithValueStore, storage_area,
                      base::BindOnce(&StorageFrontend::OnWriteFinished,
                                     weak_factory_.GetWeakPtr(), extension->id(),
                                     storage_area, std::move(callback))));
@@ -521,7 +581,7 @@ ValueStoreCache* StorageFrontend::GetValueStoreCache(
 
 bool StorageFrontend::IsStorageEnabled(
     settings_namespace::Namespace settings_namespace) const {
-  return base::Contains(caches_, settings_namespace);
+  return caches_.contains(settings_namespace);
 }
 
 void StorageFrontend::RunWithStorage(
@@ -610,17 +670,26 @@ void StorageFrontend::OnSettingsChanged(
   bool has_area_changed_event_listener =
       event_router->ExtensionHasEventListener(extension_id, area_event_name);
 
+  if (!has_event_changed_listener && !has_area_changed_event_listener) {
+    return;
+  }
+
+  api::storage::AccessLevel effective_access_level =
+      access_level.has_value()
+          ? access_level.value()
+          : storage_utils::GetAccessLevelForArea(
+                extension_id, *browser_context_, storage_area);
+
+  std::optional<mojom::ContextType> restrict_to_context_type = std::nullopt;
   // Restrict event to privileged context if access level is set only to trusted
   // contexts.
-  std::optional<mojom::ContextType> restrict_to_context_type = std::nullopt;
-  if (access_level.has_value() &&
-      access_level.value() == api::storage::AccessLevel::kTrustedContexts) {
+  if (effective_access_level == api::storage::AccessLevel::kTrustedContexts) {
     restrict_to_context_type = mojom::ContextType::kPrivilegedExtension;
   }
 
   auto make_changed_event = [&namespace_string,
                              restrict_to_context_type](base::Value changes) {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(std::move(changes));
     args.Append(namespace_string);
 
@@ -632,7 +701,7 @@ void StorageFrontend::OnSettingsChanged(
   auto make_area_changed_event = [&storage_area, &area_event_name,
                                   restrict_to_context_type](
                                      base::Value changes) {
-    base::Value::List args;
+    base::ListValue args;
     args.Append(std::move(changes));
     return std::make_unique<Event>(StorageAreaToEventHistogram(storage_area),
                                    area_event_name, std::move(args), nullptr,

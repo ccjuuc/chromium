@@ -5,11 +5,11 @@
 #include "chrome/browser/ui/views/global_media_controls/cast_device_footer_view.h"
 
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/views/global_media_controls/media_item_ui_helper.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/layout/box_layout.h"
@@ -47,7 +47,8 @@ CastDeviceFooterView::CastDeviceFooterView(
   // Add the device icon.
   device_icon_ = AddChildView(
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          vector_icons::kCastIcon,
+          features::IsRoundedIconsEnabled() ? vector_icons::kCastIcon
+                                            : vector_icons::kCastOldIcon,
           media_color_theme.device_selector_foreground_color_id,
           kDeviceIconSize)));
 
@@ -73,7 +74,8 @@ CastDeviceFooterView::CastDeviceFooterView(
   stop_casting_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(
-          vector_icons::kStopCircleIcon,
+          features::IsRoundedIconsEnabled() ? vector_icons::kStopCircleIcon
+                                            : vector_icons::kStopCircleOldIcon,
           media_color_theme.error_foreground_color_id,
           kStopCastingButtonIconSize));
   stop_casting_button_->SetBorder(

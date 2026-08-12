@@ -71,10 +71,8 @@ class MockAutomationEventRouter
 
   void DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) override {}
 
-  void DispatchActionResult(
-      const ui::AXActionData& data,
-      bool result,
-      content::BrowserContext* browser_context = nullptr) override {
+  void DispatchActionResult(const ui::AXActionData& data,
+                            bool result) override {
     last_dispatched_action_data_ = data;
     last_dispatched_action_result_ = result;
   }
@@ -108,7 +106,7 @@ class ArcAccessibilityHelperBridgeBrowserTest : public InProcessBrowserTest {
     WaitForInstanceReady(
         ArcServiceManager::Get()->arc_bridge_service()->accessibility_helper());
 
-    AccessibilityManager::Get()->SetProfileForTest(browser()->profile());
+    AccessibilityManager::Get()->SetProfileForTest(browser()->GetProfile());
 
     wm_helper_ = std::make_unique<exo::WMHelper>();
     wm_helper_->RegisterAppPropertyResolver(
@@ -175,7 +173,8 @@ IN_PROC_BROWSER_TEST_F(ArcAccessibilityHelperBridgeBrowserTest,
       aura::client::kAccessibilityTouchExplorationPassThrough));
 
   ArcAccessibilityHelperBridge* bridge =
-      ArcAccessibilityHelperBridge::GetForBrowserContext(browser()->profile());
+      ArcAccessibilityHelperBridge::GetForBrowserContext(
+          browser()->GetProfile());
 
   // Enable TalkBack. Touch exploration pass through of shell_surface1
   // (current active window) would become true.
@@ -279,7 +278,8 @@ IN_PROC_BROWSER_TEST_F(ArcAccessibilityHelperBridgeBrowserTest,
   node->bounds_in_screen = node_rect1;
 
   ArcAccessibilityHelperBridge* bridge =
-      ArcAccessibilityHelperBridge::GetForBrowserContext(browser()->profile());
+      ArcAccessibilityHelperBridge::GetForBrowserContext(
+          browser()->GetProfile());
   bridge->OnAccessibilityEvent(event.Clone());
 
   ash::AccessibilityFocusRingControllerImpl* ring_controller =
@@ -334,7 +334,8 @@ IN_PROC_BROWSER_TEST_F(ArcAccessibilityHelperBridgeBrowserTest, PerformAction) {
   AccessibilityManager::Get()->EnableSpokenFeedback(true);
 
   ArcAccessibilityHelperBridge* bridge =
-      ArcAccessibilityHelperBridge::GetForBrowserContext(browser()->profile());
+      ArcAccessibilityHelperBridge::GetForBrowserContext(
+          browser()->GetProfile());
   auto& tree_map = bridge->trees_for_test();
   ASSERT_EQ(1u, tree_map.size());
   ax::android::AXTreeSourceAndroid* tree_source =
@@ -375,7 +376,8 @@ IN_PROC_BROWSER_TEST_F(ArcAccessibilityHelperBridgeBrowserTest,
   AccessibilityManager::Get()->EnableSpokenFeedback(true);
 
   ArcAccessibilityHelperBridge* bridge =
-      ArcAccessibilityHelperBridge::GetForBrowserContext(browser()->profile());
+      ArcAccessibilityHelperBridge::GetForBrowserContext(
+          browser()->GetProfile());
   auto& tree_map = bridge->trees_for_test();
   ASSERT_EQ(1u, tree_map.size());
   ax::android::AXTreeSourceAndroid* tree_source =
@@ -422,7 +424,8 @@ IN_PROC_BROWSER_TEST_F(ArcAccessibilityHelperBridgeBrowserTest,
   AccessibilityManager::Get()->SetSelectToSpeakEnabled(true);
 
   ArcAccessibilityHelperBridge* bridge =
-      ArcAccessibilityHelperBridge::GetForBrowserContext(browser()->profile());
+      ArcAccessibilityHelperBridge::GetForBrowserContext(
+          browser()->GetProfile());
   auto& tree_map = bridge->trees_for_test();
   ASSERT_EQ(1u, tree_map.size());
   ax::android::AXTreeSourceAndroid* tree_source =

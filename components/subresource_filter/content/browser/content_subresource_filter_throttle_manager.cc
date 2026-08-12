@@ -8,7 +8,6 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -157,8 +156,7 @@ void ContentSubresourceFilterThrottleManager::ReadyToCommitInFrameNavigation(
     // CHECK.
     DCHECK_EQ(
         ad_evidence.parent_is_ad(),
-        base::Contains(
-            ad_frames_,
+        ad_frames_.contains(
             frame_host->GetParentOrOuterDocument()->GetFrameTreeNodeId()));
     ad_evidence.set_is_complete();
     ad_evidence_for_navigation = ad_evidence;
@@ -293,7 +291,7 @@ void ContentSubresourceFilterThrottleManager::DidFinishInFrameNavigation(
       !(navigation_handle->HasCommitted() &&
         !navigation_handle->GetURL().IsAboutBlank()) &&
       !navigation_handle->IsWaitingToCommit() &&
-      !base::Contains(ad_frames_, frame_tree_node_id)) {
+      !ad_frames_.contains(frame_tree_node_id)) {
     EnsureFrameAdEvidence(navigation_handle).set_is_complete();
 
     // TODO(crbug.com/342351452): Remove these temporary crash keys once rare
@@ -546,10 +544,10 @@ void ContentSubresourceFilterThrottleManager::OnChildFrameNavigationEvaluated(
 
   // TODO(crbug.com/347625215): This is rarely hit. After fixing, upgrade to a
   // CHECK.
-  DCHECK_EQ(ad_evidence.parent_is_ad(),
-            base::Contains(ad_frames_,
-                           navigation_handle->GetParentFrameOrOuterDocument()
-                               ->GetFrameTreeNodeId()));
+  DCHECK_EQ(
+      ad_evidence.parent_is_ad(),
+      ad_frames_.contains(navigation_handle->GetParentFrameOrOuterDocument()
+                              ->GetFrameTreeNodeId()));
 
   ad_evidence.UpdateFilterListResult(
       InterpretLoadPolicyAsEvidence(load_policy));
@@ -572,8 +570,8 @@ void ContentSubresourceFilterThrottleManager::
   }
   MaybeCreateAndAddChildNavigationThrottle(registry);
 
-  CHECK(!base::Contains(ongoing_activation_throttles_,
-                        navigation_handle.GetNavigationId()));
+  CHECK(!ongoing_activation_throttles_.contains(
+      navigation_handle.GetNavigationId()));
   if (auto activation_throttle =
           MaybeCreateActivationStateComputingThrottle(registry)) {
     ongoing_activation_throttles_[navigation_handle.GetNavigationId()] =
@@ -584,7 +582,7 @@ void ContentSubresourceFilterThrottleManager::
 
 bool ContentSubresourceFilterThrottleManager::IsFrameTaggedAsAd(
     content::FrameTreeNodeId frame_tree_node_id) const {
-  return base::Contains(ad_frames_, frame_tree_node_id);
+  return ad_frames_.contains(frame_tree_node_id);
 }
 
 bool ContentSubresourceFilterThrottleManager::IsRenderFrameHostTaggedAsAd(
@@ -638,8 +636,7 @@ void ContentSubresourceFilterThrottleManager::
     return;
   }
   registry.AddThrottle(std::make_unique<SafeBrowsingChildNavigationThrottle>(
-      registry, parent_filter, profile_interaction_manager_->AsWeakPtr(),
-      base::BindRepeating([](const GURL& url) {
+      registry, parent_filter, base::BindRepeating([](const GURL& url) {
         return base::StringPrintf(kDisallowChildFrameConsoleMessageFormat,
                                   url.possibly_invalid_spec().c_str());
       }),
@@ -763,7 +760,7 @@ void ContentSubresourceFilterThrottleManager::SetIsAdFrame(
     bool is_ad_frame) {
   content::FrameTreeNodeId frame_tree_node_id =
       render_frame_host->GetFrameTreeNodeId();
-  CHECK(base::Contains(tracked_ad_evidence_, frame_tree_node_id));
+  CHECK(tracked_ad_evidence_.contains(frame_tree_node_id));
 
   // TODO(crbug.com/373985560): This is rarely hit. After fixing, upgrade to a
   // CHECK.
@@ -772,7 +769,7 @@ void ContentSubresourceFilterThrottleManager::SetIsAdFrame(
   CHECK(render_frame_host->GetParentOrOuterDocument());
 
   // `ad_frames_` does not need updating.
-  if (is_ad_frame == base::Contains(ad_frames_, frame_tree_node_id)) {
+  if (is_ad_frame == ad_frames_.contains(frame_tree_node_id)) {
     return;
   }
 
@@ -796,7 +793,7 @@ void ContentSubresourceFilterThrottleManager::SetIsAdFrameForTesting(
     bool is_ad_frame) {
   CHECK(render_frame_host->GetParentOrOuterDocument());
   if (is_ad_frame ==
-      base::Contains(ad_frames_, render_frame_host->GetFrameTreeNodeId())) {
+      ad_frames_.contains(render_frame_host->GetFrameTreeNodeId())) {
     return;
   }
 
@@ -828,7 +825,7 @@ ContentSubresourceFilterThrottleManager::GetAdEvidenceForFrame(
 }
 
 void ContentSubresourceFilterThrottleManager::DidDisallowFirstSubresource() {
-  MaybeShowNotification(receiver_.GetCurrentTargetFrame());
+  MaybeShowNotification(&receiver_.CurrentTargetFrame());
 }
 
 void ContentSubresourceFilterThrottleManager::FrameIsAd() {
@@ -841,10 +838,9 @@ void ContentSubresourceFilterThrottleManager::FrameIsAd() {
   // that case we do can rely on passing through ReadyToCommitNavigation and we
   // do so since fenced frame ad tagging varies significantly from regular
   // iframes, see `AdScriptDidCreateFencedFrame`.
-  content::RenderFrameHost* render_frame_host =
-      receiver_.GetCurrentTargetFrame();
-  CHECK(!render_frame_host->IsFencedFrameRoot());
-  OnFrameIsAd(receiver_.GetCurrentTargetFrame());
+  content::RenderFrameHost& render_frame_host = receiver_.CurrentTargetFrame();
+  CHECK(!render_frame_host.IsFencedFrameRoot());
+  OnFrameIsAd(&render_frame_host);
 }
 
 void ContentSubresourceFilterThrottleManager::SetDocumentLoadStatistics(
@@ -857,7 +853,7 @@ void ContentSubresourceFilterThrottleManager::SetDocumentLoadStatistics(
 void ContentSubresourceFilterThrottleManager::OnAdsViolationTriggered(
     mojom::AdsViolation violation) {
   CHECK(page_);
-  CHECK_EQ(&GetSubresourceFilterRootPage(receiver_.GetCurrentTargetFrame()),
+  CHECK_EQ(&GetSubresourceFilterRootPage(&receiver_.CurrentTargetFrame()),
            page_);
   // TODO(bokan) How should we deal with violations coming from a fenced frame?
   // Should we pass in the fenced frame root instead? crbug.com/1263541.
@@ -865,7 +861,7 @@ void ContentSubresourceFilterThrottleManager::OnAdsViolationTriggered(
 }
 
 void ContentSubresourceFilterThrottleManager::FrameWasCreatedByAdScript() {
-  OnChildFrameWasCreatedByAdScript(receiver_.GetCurrentTargetFrame());
+  OnChildFrameWasCreatedByAdScript(&receiver_.CurrentTargetFrame());
 }
 
 void ContentSubresourceFilterThrottleManager::AdScriptDidCreateFencedFrame(
@@ -888,11 +884,10 @@ void ContentSubresourceFilterThrottleManager::AdScriptDidCreateFencedFrame(
   // which point we cannot inspect the v8 stack so we use this special path for
   // fenced frames.
 
-  content::RenderFrameHost* owner_frame = receiver_.GetCurrentTargetFrame();
-  CHECK(owner_frame);
+  content::RenderFrameHost& owner_frame = receiver_.CurrentTargetFrame();
 
   auto* fenced_frame_root = content::RenderFrameHost::FromPlaceholderToken(
-      owner_frame->GetProcess()->GetDeprecatedID(), placeholder_token);
+      owner_frame.GetProcess()->GetDeprecatedID(), placeholder_token);
 
   if (!fenced_frame_root) {
     return;
@@ -905,15 +900,15 @@ void ContentSubresourceFilterThrottleManager::AdScriptDidCreateFencedFrame(
     return;
   }
 
-  if (fenced_frame_root->GetParentOrOuterDocument() != owner_frame) {
+  if (fenced_frame_root->GetParentOrOuterDocument() != &owner_frame) {
     mojo::ReportBadMessage(
         "AdScriptDidCreateFencedFrame called from non-embedder of fenced "
         "frame.");
     return;
   }
 
-  CHECK(!base::Contains(tracked_ad_evidence_,
-                        fenced_frame_root->GetFrameTreeNodeId()));
+  CHECK(
+      !tracked_ad_evidence_.contains(fenced_frame_root->GetFrameTreeNodeId()));
   OnChildFrameWasCreatedByAdScript(fenced_frame_root);
 }
 
@@ -955,8 +950,7 @@ ContentSubresourceFilterThrottleManager::EnsureFrameAdEvidence(
   CHECK(parent_frame_tree_node_id);
   return tracked_ad_evidence_
       .emplace(frame_tree_node_id,
-               /*parent_is_ad=*/base::Contains(ad_frames_,
-                                               parent_frame_tree_node_id))
+               /*parent_is_ad=*/ad_frames_.contains(parent_frame_tree_node_id))
       .first->second;
 }
 

@@ -6,7 +6,6 @@
 
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/autofill/payments/create_card_unmask_prompt_view.h"
@@ -17,7 +16,6 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
-#include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -25,9 +23,9 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -138,9 +136,11 @@ void CardUnmaskPromptViews::GotVerificationResult(
       overlay_->RemoveAllChildViews();
 
       // Create and add the error icon.
-      overlay_->AddChildView(
-          std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-              kBrowserToolsErrorIcon, ui::kColorAlertHighSeverity)));
+      overlay_->AddChildView(std::make_unique<views::ImageView>(
+          ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kErrorFilledIcon
+                                             : kBrowserToolsErrorOldIcon,
+                                         ui::kColorAlertHighSeverity)));
 
       // Create and add the label of the overlay, and show the error in gray.
       auto* error_label = overlay_->AddChildView(std::make_unique<views::Label>(
@@ -388,8 +388,12 @@ void CardUnmaskPromptViews::InitIfNecessary() {
   temporary_error->SetVisible(false);
   temporary_error->AddChildView(
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          vector_icons::kErrorIcon, ui::kColorAlertHighSeverity,
-          gfx::GetDefaultSizeOfVectorIcon(vector_icons::kErrorIcon))));
+          ::features::IsRoundedIconsEnabled() ? vector_icons::kErrorFilledIcon
+                                              : vector_icons::kErrorOldIcon,
+          ui::kColorAlertHighSeverity,
+          gfx::GetDefaultSizeOfVectorIcon(::features::IsRoundedIconsEnabled()
+                                              ? vector_icons::kErrorFilledIcon
+                                              : vector_icons::kErrorOldIcon))));
 
   auto error_label = std::make_unique<views::Label>(
       std::u16string(), ChromeTextContext::CONTEXT_DIALOG_BODY_TEXT_SMALL,

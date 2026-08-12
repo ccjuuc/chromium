@@ -11,6 +11,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/token.h"
 #include "chrome/browser/tab/payload.h"
+#include "chrome/browser/tab/payload_util.h"
 #include "chrome/browser/tab/protocol/children.pb.h"
 #include "chrome/browser/tab/protocol/tab_state.pb.h"
 #include "chrome/browser/tab/protocol/tab_strip_collection_state.pb.h"
@@ -47,6 +48,8 @@ StorageId GetOrCreateStorageId(
 
 }  // namespace
 
+using ScopedBatch = TabStateStorageService::ScopedBatch;
+
 TabStateStorageService::OpenBatches::OpenBatches(
     TabStateStorageService& service,
     TabStoragePackager* packager)
@@ -56,10 +59,11 @@ TabStateStorageService::OpenBatches::~OpenBatches() = default;
 
 TabStateStorageService::TabStateStorageService(
     const base::FilePath& profile_path,
+    bool support_off_the_record_data,
     std::unique_ptr<TabStoragePackager> packager,
     TabCanonicalizer tab_canonicalizer,
     RestoreEntityTrackerFactory tracker_factory)
-    : tab_backend_(profile_path),
+    : tab_backend_(profile_path, support_off_the_record_data),
       packager_(std::move(packager)),
       tab_canonicalizer_(tab_canonicalizer),
       tracker_factory_(tracker_factory) {
@@ -88,16 +92,32 @@ void TabStateStorageService::WaitForAllPendingOperations(
   tab_backend_.WaitForAllPendingOperations(std::move(on_idle));
 }
 
-TabStateStorageService::ScopedBatch
-TabStateStorageService::CreateScopedBatch() {
+ScopedBatch::ScopedBatch(base::ScopedClosureRunner runner,
+                         TabStateStorageUpdaterBuilder* builder)
+    : runner_(std::move(runner)), builder_(builder) {}
+
+ScopedBatch::ScopedBatch() = default;
+ScopedBatch::~ScopedBatch() = default;
+
+ScopedBatch::ScopedBatch(ScopedBatch&&) = default;
+ScopedBatch& ScopedBatch::operator=(ScopedBatch&&) = default;
+
+void ScopedBatch::AddCallback(base::OnceClosure callback) {
+  if (builder_) {
+    builder_->AddCallback(std::move(callback));
+  }
+}
+
+ScopedBatch TabStateStorageService::CreateScopedBatch() {
   if (!open_batches_) {
     open_batches_.emplace(*this, packager_.get());
   }
   open_batches_->batch_cnt++;
 
-  return base::ScopedClosureRunner(
-      base::BindOnce(&TabStateStorageService::OnScopedBatchDestroyed,
-                     weak_ptr_factory_.GetWeakPtr()));
+  return ScopedBatch(base::ScopedClosureRunner(base::BindOnce(
+                         &TabStateStorageService::OnScopedBatchDestroyed,
+                         weak_ptr_factory_.GetWeakPtr())),
+                     &open_batches_->builder);
 }
 
 void TabStateStorageService::OnScopedBatchDestroyed() {
@@ -159,6 +179,17 @@ void TabStateStorageService::SaveChildren(const TabCollection* collection) {
   });
 }
 
+void TabStateStorageService::SaveDivergentChildren(
+    const TabCollection* collection,
+    base::PassKey<StorageRestoreOrchestrator>) {
+  DCHECK(packager_);
+
+  StorageId storage_id = GetStorageId(collection);
+  ApplyUpdate([&](TabStateStorageUpdaterBuilder& builder) {
+    builder.SaveDivergentChildren(storage_id, collection);
+  });
+}
+
 void TabStateStorageService::Remove(const TabInterface* tab) {
   DCHECK(packager_);
 
@@ -173,6 +204,13 @@ void TabStateStorageService::Remove(const TabCollection* collection) {
   ApplyUpdate([&](TabStateStorageUpdaterBuilder& builder) {
     builder.RemoveNode(GetStorageId(collection));
   });
+}
+
+void TabStateStorageService::Remove(StorageId id) {
+  DCHECK(packager_);
+
+  ApplyUpdate(
+      [&](TabStateStorageUpdaterBuilder& builder) { builder.RemoveNode(id); });
 }
 
 void TabStateStorageService::CommitCurrentBatch() {
@@ -194,6 +232,14 @@ void TabStateStorageService::ApplyUpdate(UpdateOperation operation) {
   }
 }
 
+void TabStateStorageService::CountTabsForWindow(
+    std::string_view window_tag,
+    bool is_off_the_record,
+    CountTabsForWindowCallback callback) {
+  tab_backend_.CountTabsForWindow(window_tag, is_off_the_record,
+                                  std::move(callback));
+}
+
 void TabStateStorageService::LoadAllNodes(std::string_view window_tag,
                                           bool is_off_the_record,
                                           LoadDataCallback callback) {
@@ -209,18 +255,66 @@ void TabStateStorageService::LoadAllNodes(std::string_view window_tag,
   std::unique_ptr<RestoreEntityTracker> tracker =
       tracker_factory_.Run(on_tab_association, on_collection_association);
   DCHECK(tracker);
-  auto builder =
-      std::make_unique<StorageLoadedData::Builder>(std::move(tracker));
+  auto builder = std::make_unique<StorageLoadedData::Builder>(
+      window_tag, is_off_the_record, std::move(tracker));
   tab_backend_.LoadAllNodes(window_tag, is_off_the_record, std::move(builder),
                             std::move(callback));
 }
 
-void TabStateStorageService::ClearState() {
+void TabStateStorageService::ClearAllWindows() {
   tab_backend_.ClearAllNodes();
+}
+
+void TabStateStorageService::ClearAllDivergenceWindows() {
+  tab_backend_.ClearAllDivergentNodes();
 }
 
 void TabStateStorageService::ClearWindow(std::string_view window_tag) {
   tab_backend_.ClearWindow(window_tag);
+}
+
+void TabStateStorageService::ClearDivergenceWindow(
+    std::string_view window_tag) {
+  tab_backend_.ClearDivergenceWindow(window_tag);
+}
+
+void TabStateStorageService::ClearAllWindowsExcept(
+    std::vector<std::string> window_tags) {
+  tab_backend_.ClearAllWindowsExcept(std::move(window_tags));
+}
+
+void TabStateStorageService::ClearDivergentNodesForWindow(
+    std::string_view window_tag,
+    bool is_off_the_record) {
+  tab_backend_.ClearDivergentNodesForWindow(window_tag, is_off_the_record);
+}
+
+void TabStateStorageService::ClearNodesForWindowExcept(
+    std::string_view window_tag,
+    bool is_off_the_record,
+    std::vector<StorageId> ids) {
+  tab_backend_.ClearNodesForWindowExcept(window_tag, is_off_the_record,
+                                         std::move(ids));
+}
+
+void TabStateStorageService::SetKey(std::string_view window_tag,
+                                    std::vector<uint8_t> key) {
+  tab_backend_.SetKey(window_tag, std::move(key));
+}
+
+void TabStateStorageService::RemoveKey(std::string_view window_tag) {
+  tab_backend_.RemoveKey(window_tag);
+}
+
+std::vector<uint8_t> TabStateStorageService::GenerateKey(
+    std::string_view window_tag) {
+  std::vector<uint8_t> key = GenerateKeyForOtrPayloads();
+  tab_backend_.SetKey(window_tag, key);
+  return key;
+}
+
+TabCanonicalizer TabStateStorageService::GetCanonicalizer() const {
+  return tab_canonicalizer_;
 }
 
 #if defined(NDEBUG)

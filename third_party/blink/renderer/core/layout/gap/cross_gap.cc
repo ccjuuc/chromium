@@ -40,10 +40,30 @@ String CrossGap::ToString(bool verbose) const {
     } else {
       edge_state = "kNone";
     }
-    return StrCat({"CrossStartOffset(",
-                   gap_logical_offset_.inline_offset.ToString(), ", ",
-                   gap_logical_offset_.block_offset.ToString(), "); ",
-                   "EdgeState: ", edge_state, ";"});
+
+    String segment_state_ranges_str;
+    if (gap_segment_state_ranges_.has_value()) {
+      segment_state_ranges_str = "[";
+      for (const auto& range : gap_segment_state_ranges_.value()) {
+        segment_state_ranges_str = StrCat(
+            {segment_state_ranges_str, "[", String::Number(range.start), ", ",
+             String::Number(range.end), ") ", range.state.ToString(), ", "});
+      }
+      segment_state_ranges_str = StrCat({segment_state_ranges_str, "]"});
+    }
+
+    return StrCat({
+        "CrossStartOffset(",
+        gap_logical_offset_.inline_offset.ToString(),
+        ", ",
+        gap_logical_offset_.block_offset.ToString(),
+        "); ",
+        "EdgeState: ",
+        edge_state,
+        "; ",
+        "SegmentStateRanges: ",
+        segment_state_ranges_str,
+    });
   }
 
   return StrCat({"CrossStartOffset(",
@@ -57,50 +77,6 @@ void CrossGap::AddGapSegmentStateRange(
     gap_segment_state_ranges_ = GapSegmentStateRanges();
   }
   gap_segment_state_ranges_->emplace_back(gap_segment_state_range);
-}
-
-void CrossGap::UpdateCrossGapRangeEdgeState(
-    Vector<CrossGap>& cross_gaps,
-    wtf_size_t start_index,
-    wtf_size_t end_index,
-    CrossGap::EdgeIntersectionState new_state) {
-  if (cross_gaps.empty() || start_index > cross_gaps.size() - 1 ||
-      start_index > end_index) {
-    return;
-  }
-
-  for (wtf_size_t i = start_index; i <= end_index; ++i) {
-    CrossGap& gap = cross_gaps[i];
-    CrossGap::EdgeIntersectionState old_state = gap.GetEdgeIntersectionState();
-
-    if (new_state == old_state) {
-      // No update needed.
-      continue;
-    }
-
-    switch (new_state) {
-      case CrossGap::EdgeIntersectionState::kBoth:
-        gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kBoth);
-        break;
-      case CrossGap::EdgeIntersectionState::kStart:
-        if (old_state == CrossGap::EdgeIntersectionState::kEnd) {
-          gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kBoth);
-        } else if (old_state != CrossGap::EdgeIntersectionState::kBoth) {
-          gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kStart);
-        }
-        break;
-      case CrossGap::EdgeIntersectionState::kEnd:
-        if (old_state == CrossGap::EdgeIntersectionState::kStart) {
-          gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kBoth);
-        } else if (old_state != CrossGap::EdgeIntersectionState::kBoth) {
-          gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kEnd);
-        }
-        break;
-      case CrossGap::EdgeIntersectionState::kNone:
-        gap.SetEdgeIntersectionState(CrossGap::EdgeIntersectionState::kNone);
-        break;
-    }
-  }
 }
 
 void CrossGap::AdjustGapSegmentStateRangesForFragmentation(

@@ -13,6 +13,7 @@
 #include "content/common/content_navigation_policy.h"
 #include "content/common/features.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
@@ -1412,55 +1413,6 @@ IN_PROC_BROWSER_TEST_P(BackForwardCacheStillNavigatingBrowserTest,
                     FROM_HERE);
 }
 
-class BackForwardCacheDelayedRfhDeletion : public BackForwardCacheBrowserTest {
- protected:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    // Effectively never run the RFHs cleanup.
-    EnableFeatureAndSetParams(features::kDelayRfhDestructionsOnUnloadAndDetach,
-                              "task_delay", "1h");
-    BackForwardCacheBrowserTest::SetUpCommandLine(command_line);
-  }
-};
-
-// Check that a frame with a subframe that is pending deletion isn't stored
-// in the cache.
-IN_PROC_BROWSER_TEST_F(BackForwardCacheDelayedRfhDeletion,
-                       DoesNotRestoreSubframeReadyToBeDeleted) {
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  GURL url(embedded_test_server()->GetURL("a.com", "/page_with_iframe.html"));
-
-  EXPECT_TRUE(NavigateToURL(shell(), url));
-
-  RenderFrameHostImplWrapper main_rfh(current_frame_host());
-  RenderFrameHostImplWrapper child_rfh(
-      main_rfh->child_at(0)->current_frame_host());
-
-  // 1) Detach subframe RFH, but prevent its deletion, due to artificially long
-  // delay for kDelayRfhDestructionsOnUnloadAndDetach.
-  EXPECT_TRUE(ExecJs(main_rfh.get(),
-                     "var f = document.querySelector('iframe');"
-                     "f.parentNode.removeChild(f);"));
-  EXPECT_EQ(child_rfh->lifecycle_state(),
-            RenderFrameHostImpl::LifecycleStateImpl::kReadyToBeDeleted);
-
-  // 2) Navigate away.
-  shell()->LoadURL(embedded_test_server()->GetURL("b.com", "/title1.html"));
-  EXPECT_TRUE(WaitForLoadStop(web_contents()));
-
-  // The page should be added to cache even with a subframe that was pending
-  // deletion at the time it was navigated away from.
-  EXPECT_TRUE(main_rfh->IsInBackForwardCache());
-
-  // 3) Go back.
-  ASSERT_TRUE(HistoryGoBack(web_contents()));
-  ExpectRestored(FROM_HERE);
-  EXPECT_TRUE(main_rfh->IsActive());
-  // The subframe remains ready to be deleted.
-  EXPECT_EQ(child_rfh->lifecycle_state(),
-            RenderFrameHostImpl::LifecycleStateImpl::kReadyToBeDeleted);
-}
-
 IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                        DoesNotRestoreSubframeRunningUnloadHandlers) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -1590,7 +1542,8 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest,
                                               ->web_contents()
                                               ->GetPrimaryMainFrame()
                                               ->GetSiteInstance()
-                                              ->GetSiteURL());
+                                              ->GetSecurityPrincipal()
+                                              .GetDeprecatedSiteURL());
   EXPECT_EQ(net::OK, current_frame_host()->last_http_status_code());
 
   RenderFrameDeletedObserver delete_rfh_a(current_frame_host());
@@ -2107,9 +2060,15 @@ IN_PROC_BROWSER_TEST_F(BackForwardCacheBrowserTest, DISABLED_NavigationStart) {
   // performance.timing.navigationStart returns a 64-bit integer instead of
   // double, we might be losing somewhere between 0 to 1 milliseconds of
   // precision, hence the usage of EXPECT_NEAR.
-  EXPECT_NEAR(
-      (back_navigation_start - base::TimeTicks::UnixEpoch()).InMillisecondsF(),
-      latest_page_show_time_stamp + initial_navigation_start, 1.0);
+  // Express |back_navigation_start| (a TimeTicks) as milliseconds since the
+  // Unix epoch by anchoring both clocks to the current instant, to compare
+  // against the JS wall-clock values.
+  const base::TimeTicks now_ticks = base::TimeTicks::Now();
+  const double back_navigation_start_since_epoch =
+      (base::Time::Now() - (now_ticks - back_navigation_start))
+          .InMillisecondsFSinceUnixEpochIgnoringNull();
+  EXPECT_NEAR(back_navigation_start_since_epoch,
+              latest_page_show_time_stamp + initial_navigation_start, 1.0);
   // Expect that the back navigation start value calculated from the JS results
   // are between time taken before & after navigation, just like
   // |before_navigation_start|.

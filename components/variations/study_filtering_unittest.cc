@@ -13,6 +13,7 @@
 #include <array>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
@@ -52,11 +53,16 @@ std::vector<std::string> SplitFilterString(const std::string& input) {
                            base::SPLIT_WANT_ALL);
 }
 
-ClientFilterableState ClientFilterableStateForGoogleGroups(
+std::unique_ptr<ClientFilterableState> ClientFilterableStateForGoogleGroups(
     const base::flat_set<uint64_t> google_groups) {
-  return ClientFilterableState(
-      base::BindOnce([] { return false; }),
+  return ClientFilterableState::CreateWithGoogleGroups(
       base::BindLambdaForTesting([=]() { return google_groups; }));
+}
+
+std::unique_ptr<ClientFilterableState> ClientFilterableStateForEnterpriseGroups(
+    const base::flat_set<std::string> enterprise_groups) {
+  return ClientFilterableState::CreateWithEnterpriseGroups(
+      base::BindLambdaForTesting([=]() { return enterprise_groups; }));
 }
 
 }  // namespace
@@ -229,10 +235,8 @@ TEST(VariationsStudyFilteringTest, CheckStudyLocale) {
 TEST(VariationsStudyFilteringTest, CheckStudyPlatform) {
   constexpr auto platforms = std::to_array<Study::Platform>(
       {Study::PLATFORM_WINDOWS, Study::PLATFORM_MAC, Study::PLATFORM_LINUX,
-       Study::PLATFORM_CHROMEOS, Study::PLATFORM_CHROMEOS_LACROS,
-       Study::PLATFORM_ANDROID, Study::PLATFORM_IOS,
-       Study::PLATFORM_ANDROID_WEBLAYER, Study::PLATFORM_FUCHSIA,
-       Study::PLATFORM_ANDROID_WEBVIEW});
+       Study::PLATFORM_CHROMEOS, Study::PLATFORM_ANDROID, Study::PLATFORM_IOS,
+       Study::PLATFORM_FUCHSIA, Study::PLATFORM_ANDROID_WEBVIEW});
   static_assert(platforms.size() == Study::Platform_ARRAYSIZE,
                 "|platforms| must include all platforms.");
   std::array<bool, platforms.size()> platform_added = {false};
@@ -290,24 +294,22 @@ TEST(VariationsStudyFilteringTest, CheckStudyLowEndDevice) {
 
 TEST(VariationsStudyFilteringTest, CheckStudyEnterprise) {
   Study::Filter filter;
-  ClientFilterableState client_non_enterprise(
-      base::BindOnce([] { return false; }),
-      base::BindOnce([] { return base::flat_set<uint64_t>(); }));
-  ClientFilterableState client_enterprise(
-      base::BindOnce([] { return true; }),
-      base::BindOnce([] { return base::flat_set<uint64_t>(); }));
+  ClientFilterableState client_non_enterprise;
+  std::unique_ptr<ClientFilterableState> client_enterprise =
+      ClientFilterableState::CreateWithIsEnterprise(
+          base::BindOnce([] { return true; }));
 
   // Check that if the filter is not set, study applies to both enterprise and
   // non-enterprise clients.
-  EXPECT_TRUE(internal::CheckStudyEnterprise(filter, client_enterprise));
+  EXPECT_TRUE(internal::CheckStudyEnterprise(filter, *client_enterprise));
   EXPECT_TRUE(internal::CheckStudyEnterprise(filter, client_non_enterprise));
 
   filter.set_is_enterprise(true);
-  EXPECT_TRUE(internal::CheckStudyEnterprise(filter, client_enterprise));
+  EXPECT_TRUE(internal::CheckStudyEnterprise(filter, *client_enterprise));
   EXPECT_FALSE(internal::CheckStudyEnterprise(filter, client_non_enterprise));
 
   filter.set_is_enterprise(false);
-  EXPECT_FALSE(internal::CheckStudyEnterprise(filter, client_enterprise));
+  EXPECT_FALSE(internal::CheckStudyEnterprise(filter, *client_enterprise));
   EXPECT_TRUE(internal::CheckStudyEnterprise(filter, client_non_enterprise));
 }
 
@@ -421,6 +423,8 @@ TEST(VariationsStudyFilteringTest, CheckStudyOSVersion) {
       {"0.3.4", "1.2.3", true},
       // Wildcards.
       {"1.*", "1.2.3", true},
+      {"1.2.*", "1.1", false},
+      {"1.2.*", "1.2", true},
       {"1.2.*", "1.2.3", true},
       {"1.2.3.*", "1.2.3", true},
       {"1.2.4.*", "1.2.3", false},
@@ -646,6 +650,50 @@ TEST(VariationsStudyFilteringTest, CheckStudyHardwareClass) {
   }
 }
 
+TEST(VariationsStudyFilteringTest, CheckStudyHardwareManufacturer) {
+  struct {
+    const char* hardware_manufacturer;
+    const char* exclude_hardware_manufacturer;
+    const char* actual_hardware_manufacturer;
+    bool expected_result;
+  } test_cases[] = {
+      // Neither filtered nor excluded set:
+      // True since empty is always a match.
+      {"", "", "Google", true},
+      {"", "", "", true},
+
+      // Filtered set:
+      {"google,lenovo,dell", "", "google", true},
+      {"google,lenovo,dell", "", "GoOgLe", true},
+      {"google,lenovo,dell", "", "apple", false},
+      {"google,lenovo,dell", "", "", false},
+
+      // Excluded set:
+      {"", "google,lenovo,dell", "google", false},
+      {"", "google,lenovo,dell", "apple", true},
+      {"", "google,lenovo,dell", "", true},
+  };
+
+  for (const auto& test : test_cases) {
+    Study::Filter filter;
+    for (const auto& hw_man : SplitFilterString(test.hardware_manufacturer)) {
+      filter.add_hardware_manufacturer(hw_man);
+    }
+    for (const auto& hw_man :
+         SplitFilterString(test.exclude_hardware_manufacturer)) {
+      filter.add_exclude_hardware_manufacturer(hw_man);
+    }
+
+    EXPECT_EQ(test.expected_result,
+              internal::CheckStudyHardwareManufacturer(
+                  filter, test.actual_hardware_manufacturer))
+        << "hardware_manufacturer=" << test.hardware_manufacturer << " "
+        << "exclude_hardware_manufacturer="
+        << test.exclude_hardware_manufacturer << " "
+        << "actual_hardware_manufacturer=" << test.actual_hardware_manufacturer;
+  }
+}
+
 TEST(VariationsStudyFilteringTest, CheckStudyCountry) {
   struct {
     const char* country;
@@ -696,10 +744,10 @@ TEST(VariationsStudyFilteringTest, CheckStudyGoogleGroupFilterNotSet) {
   // Check that if the filter is not set, the study always applies.
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
 }
 
 TEST(VariationsStudyFilteringTest, CheckStudyGoogleGroupFilterSet) {
@@ -711,16 +759,16 @@ TEST(VariationsStudyFilteringTest, CheckStudyGoogleGroupFilterSet) {
   filter.add_google_group(2);
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({3}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({3}))));
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 3}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 3}))));
 }
 
 TEST(VariationsStudyFilteringTest, CheckStudyExcludeGoogleGroupFilterSet) {
@@ -732,16 +780,16 @@ TEST(VariationsStudyFilteringTest, CheckStudyExcludeGoogleGroupFilterSet) {
   filter.add_exclude_google_group(2);
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({3}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({3}))));
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 3}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 3}))));
 }
 
 TEST(VariationsStudyFilteringTest, CheckStudyBothGoogleGroupFiltersSet) {
@@ -753,16 +801,94 @@ TEST(VariationsStudyFilteringTest, CheckStudyBothGoogleGroupFiltersSet) {
   filter.add_exclude_google_group(2);
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>())));
   EXPECT_TRUE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1}))));
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({2}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({2}))));
   EXPECT_FALSE(internal::CheckStudyGoogleGroup(
       filter,
-      ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 2}))));
+      *ClientFilterableStateForGoogleGroups(base::flat_set<uint64_t>({1, 2}))));
+}
+
+TEST(VariationsStudyFilteringTest, CheckStudyEnterpriseGroupFilterNotSet) {
+  Study::Filter filter;
+
+  // Check that if the filter is not set, the study always applies.
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>())));
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a"}))));
+}
+
+TEST(VariationsStudyFilteringTest, CheckStudyEnterpriseGroupFilterSet) {
+  Study::Filter filter;
+
+  // Check that if a enterprise_group filter is set, then only members of that
+  // group match.
+  filter.add_enterprise_group("a");
+  filter.add_enterprise_group("b");
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>())));
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a"}))));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"c"}))));
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a", "c"}))));
+}
+
+TEST(VariationsStudyFilteringTest, CheckStudyExcludeEnterpriseGroupFilterSet) {
+  Study::Filter filter;
+
+  // Check that if an exclude_enterprise_group filter is set, then only
+  // non-members of that group match.
+  filter.add_exclude_enterprise_group("a");
+  filter.add_exclude_enterprise_group("b");
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>())));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a"}))));
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"c"}))));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a", "c"}))));
+}
+
+TEST(VariationsStudyFilteringTest, CheckStudyBothEnterpriseGroupFiltersSet) {
+  Study::Filter filter;
+
+  // Check that both enterprise_group and exclude_enterprise_group filter is
+  // set, the study is filtered out.
+  filter.add_enterprise_group("a");
+  filter.add_exclude_enterprise_group("b");
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>())));
+  EXPECT_TRUE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a"}))));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"b"}))));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"c"}))));
+  EXPECT_FALSE(internal::CheckStudyEnterpriseGroup(
+      filter, *ClientFilterableStateForEnterpriseGroups(
+                  base::flat_set<std::string>({"a", "b"}))));
 }
 
 TEST(VariationsStudyFilteringTest, FilterAndValidateStudies) {
@@ -804,6 +930,39 @@ TEST(VariationsStudyFilteringTest, FilterAndValidateStudies) {
   EXPECT_EQ(kTrial1Name, processed_studies[0].study()->name());
   EXPECT_EQ(kGroup1Name, processed_studies[0].study()->experiment(0).name());
   EXPECT_EQ(kTrial3Name, processed_studies[1].study()->name());
+}
+
+TEST(VariationsStudyFilteringTest, FilterAndValidateStudiesWithCustomFilter) {
+  const std::string kMutableTrialName = "A";
+  const std::string kImmutableTrialName = "B";
+
+  VariationsSeed seed;
+  Study* study1 = seed.add_study();
+  study1->set_name(kMutableTrialName);
+  study1->set_default_experiment_name("Default");
+  study1->set_runtime_mutable(true);
+  AddExperiment("Default", 100, study1);
+
+  Study* study2 = seed.add_study();
+  study2->set_name(kImmutableTrialName);
+  study2->set_default_experiment_name("Default");
+  study2->set_runtime_mutable(false);
+  AddExperiment("Default", 100, study2);
+
+  auto client_state = CreateDummyClientFilterableState();
+  client_state->locale = "en-CA";
+  client_state->reference_date = base::Time::Now();
+  client_state->version = base::Version("20.0.0.0");
+  client_state->channel = Study::STABLE;
+  client_state->form_factor = Study::DESKTOP;
+  client_state->platform = Study::PLATFORM_ANDROID;
+
+  std::vector<ProcessedStudy> processed_studies = FilterAndValidateStudies(
+      seed, *client_state, VariationsLayers(),
+      [](const Study& study) { return study.runtime_mutable(); });
+
+  ASSERT_EQ(1U, processed_studies.size());
+  EXPECT_EQ(kMutableTrialName, processed_studies[0].study()->name());
 }
 
 TEST(VariationsStudyFilteringTest, FilterAndValidateStudiesWithBadFilters) {
@@ -902,6 +1061,39 @@ TEST(VariationsStudyFilteringTest, FilterAndValidateStudiesWithBlankStudyName) {
 
   ASSERT_EQ(0U, processed_studies.size());
   histogram_tester.ExpectUniqueSample("Variations.InvalidStudyReason", 8, 1);
+}
+
+TEST(VariationsStudyFilteringTest,
+     FilterAndValidateStudiesWithEnterpriseGroups) {
+  VariationsSeed seed;
+  Study* study1 = seed.add_study();
+  study1->set_name("enterprise_study");
+  study1->set_default_experiment_name("First");
+  AddExperiment("First", 100, study1);
+  study1->mutable_filter()->add_platform(Study::PLATFORM_ANDROID);
+  study1->mutable_filter()->add_enterprise_group("a");
+
+  Study* study2 = seed.add_study();
+  study2->set_name("non_enterprise_study");
+  study2->set_default_experiment_name("Second");
+  AddExperiment("Second", 100, study2);
+  study2->mutable_filter()->add_platform(Study::PLATFORM_ANDROID);
+  study2->mutable_filter()->add_exclude_enterprise_group("a");
+
+  auto client_state = ClientFilterableStateForEnterpriseGroups(
+      base::flat_set<std::string>({"a"}));
+  client_state->locale = "en-CA";
+  client_state->reference_date = base::Time::Now();
+  client_state->version = base::Version("20.0.0.0");
+  client_state->channel = Study::STABLE;
+  client_state->form_factor = Study::DESKTOP;
+  client_state->platform = Study::PLATFORM_ANDROID;
+
+  std::vector<ProcessedStudy> processed_studies =
+      FilterAndValidateStudies(seed, *client_state, VariationsLayers());
+
+  ASSERT_THAT(processed_studies, testing::SizeIs(1));
+  EXPECT_EQ(processed_studies[0].study()->name(), "enterprise_study");
 }
 
 TEST(VariationsStudyFilteringTest, FilterAndValidateStudiesWithCountry) {

@@ -33,6 +33,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/login/users/scoped_account_id_annotator.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/ambient_video_albums.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_metrics.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
@@ -222,6 +223,8 @@ class PersonalizationAppAmbientProviderImplTest : public ChromeAshTestBase {
     ChromeAshTestBase::SetUp();
 
     ASSERT_TRUE(profile_manager_.SetUp());
+    ash::ScopedAccountIdAnnotator annotator(profile_manager_.profile_manager(),
+                                            kFakeTestAccountId);
     profile_ = profile_manager_.CreateTestingProfile(kFakeTestEmail);
 
     ash::FakeChromeUserManager* user_manager =
@@ -959,7 +962,7 @@ TEST_F(PersonalizationAppAmbientProviderImplTest,
 
   // The fake data has album '1' as selected.
   std::vector<std::string> selected_ids = SelectedAlbumIds();
-  EXPECT_TRUE(base::Contains(selected_ids, "1"));
+  EXPECT_TRUE(std::ranges::contains(selected_ids, "1"));
 
   ash::personalization_app::mojom::AmbientModeAlbumPtr album =
       ash::personalization_app::mojom::AmbientModeAlbum::New();
@@ -981,7 +984,7 @@ TEST_F(PersonalizationAppAmbientProviderImplTest,
 
   selected_ids = SelectedAlbumIds();
   EXPECT_EQ(1u, selected_ids.size());
-  EXPECT_TRUE(base::Contains(selected_ids, "1"));
+  EXPECT_TRUE(std::ranges::contains(selected_ids, "1"));
   EXPECT_EQ(mojom::TopicSource::kGooglePhotos, TopicSource());
 }
 

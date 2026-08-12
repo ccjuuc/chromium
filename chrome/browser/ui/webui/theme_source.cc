@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -16,11 +17,8 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/timer/elapsed_timer.h"
-#include "build/branding_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resources_util.h"
-#include "chrome/browser/search/instant_service.h"
-#include "chrome/browser/themes/browser_theme_pack.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
@@ -50,32 +48,35 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/gurl.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/search/instant_service.h"
+#include "chrome/browser/themes/browser_theme_pack.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/grit/cros_styles_resources.h"  // nogncheck crbug.com/1113869
+#include "chrome/grit/cros_styles_resources.h"  // nogncheck crbug.com/40143654
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
 GURL GetThemeUrl(const std::string& path) {
-  return GURL(std::string(content::kChromeUIScheme) + "://" +
-              std::string(chrome::kChromeUIThemeHost) + "/" + path);
+  return GURL(base::StrCat({content::kChromeUIScheme, "://",
+                            chrome::kChromeUIThemeHost, "/", path}));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 bool IsNewTabCssPath(const std::string& path) {
   static const char kNewTabThemeCssPath[] = "css/new_tab_theme.css";
   static const char kIncognitoTabThemeCssPath[] = "css/incognito_tab_theme.css";
   return path == kNewTabThemeCssPath || path == kIncognitoTabThemeCssPath;
 }
+#endif
 
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // ThemeSource, public:
-
-// static
-const char ThemeSource::kThemeColorsCssUrl[] =
-    "chrome://theme/colors.css?sets=ui,chrome";
 
 ThemeSource::ThemeSource(Profile* profile)
     : profile_(profile), serve_untrusted_(false) {}
@@ -104,6 +105,7 @@ void ThemeSource::StartDataRequest(
   std::string parsed_path;
   webui::ParsePathAndImageSpec(GetThemeUrl(path), &parsed_path, &scale, &frame);
 
+#if !BUILDFLAG(IS_ANDROID)
   if (IsNewTabCssPath(parsed_path)) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     NTPResourceCache::WindowType type =
@@ -112,6 +114,7 @@ void ThemeSource::StartDataRequest(
     std::move(callback).Run(cache->GetNewTabCSS(type, wc_getter));
     return;
   }
+#endif
 
   // kColorsCssPath should stay consistent with COLORS_CSS_SELECTOR in
   // colors_css_updater.js.
@@ -144,7 +147,7 @@ void ThemeSource::StartDataRequest(
   const float max_scale = ui::GetScaleForResourceScaleFactor(
       ui::ResourceBundle::GetSharedInstance().GetMaxResourceScaleFactor());
   const float unreasonable_scale = max_scale * 32;
-  // TODO(reveman): Add support frames beyond 0 (crbug.com/750064).
+  // TODO(reveman): Add support frames beyond 0 (crbug.com/40532347).
   if ((resource_id == -1) || (scale >= unreasonable_scale) || (frame > 0)) {
     // Either we have no data to send back, or the requested scale is
     // unreasonably large.  This shouldn't happen normally, as chrome://theme/
@@ -156,7 +159,7 @@ void ThemeSource::StartDataRequest(
              ((scale > max_scale) || (frame != -1))) {
     // This will extract and scale frame 0 of animated images.
     // TODO(reveman): Support scaling of animated images and avoid scaling and
-    // re-encode when specific frame is specified (crbug.com/750064).
+    // re-encode when specific frame is specified (crbug.com/40532347).
     DCHECK_LE(frame, 0);
     SendThemeImage(std::move(callback), resource_id, scale);
   } else {
@@ -181,11 +184,14 @@ bool ThemeSource::AllowCaching() {
 bool ThemeSource::ShouldServiceRequest(const GURL& url,
                                        content::BrowserContext* browser_context,
                                        int render_process_id) {
-  return url.SchemeIs(chrome::kChromeSearchScheme)
-             ? InstantService::ShouldServiceRequest(url, browser_context,
-                                                    render_process_id)
-             : URLDataSource::ShouldServiceRequest(url, browser_context,
-                                                   render_process_id);
+#if !BUILDFLAG(IS_ANDROID)
+  if (url.SchemeIs(chrome::kChromeSearchScheme)) {
+    return InstantService::ShouldServiceRequest(url, browser_context,
+                                                render_process_id);
+  }
+#endif
+  return URLDataSource::ShouldServiceRequest(url, browser_context,
+                                             render_process_id);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -197,16 +203,18 @@ void ThemeSource::SendThemeBitmap(
     float scale) {
   ui::ResourceScaleFactor scale_factor =
       ui::GetSupportedResourceScaleFactor(scale);
+#if !BUILDFLAG(IS_ANDROID)
   if (BrowserThemePack::IsPersistentImageID(resource_id)) {
     scoped_refptr<base::RefCountedMemory> image_data(
         ThemeService::GetThemeProviderForProfile(profile_->GetOriginalProfile())
             .GetRawData(resource_id, scale_factor));
     std::move(callback).Run(image_data.get());
-  } else {
-    const ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-    std::move(callback).Run(
-        rb.LoadDataResourceBytesForScale(resource_id, scale_factor));
+    return;
   }
+#endif
+  const ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+  std::move(callback).Run(
+      rb.LoadDataResourceBytesForScale(resource_id, scale_factor));
 }
 
 void ThemeSource::SendThemeImage(
@@ -215,12 +223,15 @@ void ThemeSource::SendThemeImage(
     float scale) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  gfx::ImageSkia* image;
+  gfx::ImageSkia* image = nullptr;
+#if !BUILDFLAG(IS_ANDROID)
   if (BrowserThemePack::IsPersistentImageID(resource_id)) {
     const ui::ThemeProvider& tp = ThemeService::GetThemeProviderForProfile(
         profile_->GetOriginalProfile());
     image = tp.GetImageSkiaNamed(resource_id);
-  } else {
+  }
+#endif
+  if (!image) {
     image =
         ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(resource_id);
   }
@@ -291,6 +302,11 @@ std::optional<std::string> ThemeSource::GenerateColorsCss(
       {"legacy", cros_tokens::kLegacySemanticColorsStart,
        cros_tokens::kLegacySemanticColorsEnd,
        base::BindRepeating(cros_tokens::ColorIdName)},
+#elif BUILDFLAG(IS_ANDROID)
+      {"ref", ui::kColorRefPrimary0, ui::kColorRefNeutralVariant100,
+       base::BindRepeating(to_css_id, ui::ColorIdName)},
+      {"sys", ui::kColorSysPrimary, ui::kColorSysOmniboxContainer,
+       base::BindRepeating(to_css_id, ui::ColorIdName)},
 #endif
   };
 
@@ -325,7 +341,7 @@ std::optional<std::string> ThemeSource::GenerateColorsCss(
   css_string.append(css_header);
 
   for (const auto& def : definitions) {
-    if (!base::Contains(color_id_sets, def.name)) {
+    if (!std::ranges::contains(color_id_sets, def.name)) {
       continue;
     }
 
@@ -356,12 +372,18 @@ void ThemeSource::SendColorsCss(
   base::ElapsedTimer timer;
   const ui::ColorProvider& color_provider = wc_getter.Run()->GetColorProvider();
 
+#if BUILDFLAG(IS_ANDROID)
+  bool is_grayscale = false;
+  bool is_baseline = true;
+#else
   const auto* theme_service =
       ThemeServiceFactory::GetForProfile(profile_->GetOriginalProfile());
+  bool is_grayscale = theme_service->GetIsGrayscale();
+  bool is_baseline = theme_service->GetIsBaseline();
+#endif
 
   std::optional<std::string> css_content =
-      GenerateColorsCss(color_provider, url, theme_service->GetIsGrayscale(),
-                        theme_service->GetIsBaseline());
+      GenerateColorsCss(color_provider, url, is_grayscale, is_baseline);
 
   if (!css_content) {
     std::move(callback).Run(nullptr);

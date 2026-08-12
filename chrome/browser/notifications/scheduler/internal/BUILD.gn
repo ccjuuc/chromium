@@ -14,6 +14,8 @@ source_set("lib") {
   sources = [
     "background_task_coordinator.cc",
     "background_task_coordinator.h",
+    "clients/finds_client.cc",
+    "clients/finds_client.h",
     "collection_store.h",
     "display_decider.cc",
     "display_decider.h",
@@ -34,8 +36,6 @@ source_set("lib") {
     "init_aware_scheduler.h",
     "noop_notification_schedule_service.cc",
     "noop_notification_schedule_service.h",
-    "notification_entry.cc",
-    "notification_entry.h",
     "notification_schedule_service_impl.cc",
     "notification_schedule_service_impl.h",
     "notification_scheduler.cc",
@@ -64,18 +64,22 @@ source_set("lib") {
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
-  # This target should not depend on anything in //chrome/* except the proto library.
+  # This target should not depend on anything in //chrome/* except the proto
+  # library.
   deps = [
     "//base",
     "//chrome/app:generated_resources",
+    "//chrome/browser/finds/core",
     "//chrome/browser/notifications/proto",
     "//chrome/browser/notifications/scheduler/public",
+    "//chrome/browser/tips/core",
     "//components/keyed_service/core",
     "//components/leveldb_proto",
     "//components/prefs",
     "//skia",
     "//ui/base",
     "//ui/gfx/codec",
+    "//url",
   ]
 }
 
@@ -83,6 +87,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "background_task_coordinator_unittest.cc",
+    "clients/finds_client_unittest.cc",
     "display_decider_unittest.cc",
     "icon_converter_unittest.cc",
     "icon_store_unittest.cc",
@@ -101,17 +106,22 @@ source_set("unit_tests") {
   ]
 
   deps = [
+    "//chrome/browser/finds/core",
     "//chrome/browser/notifications/proto",
     "//chrome/browser/notifications/scheduler/internal:lib",
     "//chrome/browser/notifications/scheduler/public",
     "//chrome/browser/notifications/scheduler/test:test_lib",
     "//chrome/browser/notifications/scheduler/test:test_support",
+    "//chrome/browser/tips/core",
     "//chrome/common:constants",
     "//components/leveldb_proto:test_support",
+    "//components/optimization_guide/core:features",
+    "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/prefs:test_support",
     "//skia",
     "//testing/gmock",
     "//testing/gtest",
+    "//url",
   ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and

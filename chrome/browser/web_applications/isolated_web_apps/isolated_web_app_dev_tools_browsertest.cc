@@ -6,6 +6,8 @@
 
 #include "base/check_deref.h"
 #include "base/files/file_path.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -15,6 +17,7 @@
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_frame_host.h"
@@ -39,7 +42,12 @@ constexpr std::string_view kIsolatedAppVersion = "1.0.0";
 constexpr std::string_view kIsolatedAppDevToolsTitle =
     "Simple Isolated App (1.0.0)";
 }
-class IsolatedWebAppDevToolsTest : public IsolatedWebAppBrowserTestHarness {
+class IsolatedWebAppDevToolsTest : public base::test::WithFeatureOverride,
+                                   public IsolatedWebAppBrowserTestHarness {
+ public:
+  IsolatedWebAppDevToolsTest()
+      : base::test::WithFeatureOverride(::features::kWebAppInstallDialog) {}
+
  protected:
   IsolatedWebAppUrlInfo InstallIsolatedWebApp() {
     auto app =
@@ -51,13 +59,13 @@ class IsolatedWebAppDevToolsTest : public IsolatedWebAppBrowserTestHarness {
   }
 };
 
-// TODO (crbug.com/1522953): Resolve flakiness on linux debug builds.
+// TODO (crbug.com/41495909): Resolve flakiness on linux debug builds.
 #if BUILDFLAG(IS_LINUX) && !defined(NDEBUG)
 #define MAYBE_ErrorPage DISABLED_ErrorPage
 #else
 #define MAYBE_ErrorPage ErrorPage
 #endif
-IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, MAYBE_ErrorPage) {
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppDevToolsTest, MAYBE_ErrorPage) {
   std::unique_ptr<net::EmbeddedTestServer> server =
       CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
   IsolatedWebAppUrlInfo url_info =
@@ -84,7 +92,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, MAYBE_ErrorPage) {
               Eq(profile()->GetDefaultStoragePartition()));
 }
 
-IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, IwaIdentifiedAsApp) {
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppDevToolsTest, IwaIdentifiedAsApp) {
   // 1) Install an Isolated Web App and check its type in DevTools
   IsolatedWebAppUrlInfo url_info = InstallIsolatedWebApp();
   Browser* iwa_app = LaunchWebAppBrowserAndWait(url_info.app_id());
@@ -109,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, IwaIdentifiedAsApp) {
                             "getElementsByClassName('name')[0].innerText"));
 }
 
-IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, IwaWithCorrectTitle) {
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppDevToolsTest, IwaWithCorrectTitle) {
   IsolatedWebAppUrlInfo url_info = InstallIsolatedWebApp();
   Browser* iwa_app = LaunchWebAppBrowserAndWait(url_info.app_id());
   scoped_refptr<content::DevToolsAgentHost> iwa_host =
@@ -119,14 +127,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, IwaWithCorrectTitle) {
   EXPECT_EQ(iwa_host->GetTitle(), kIsolatedAppDevToolsTitle);
 }
 
-IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, PwaIdentifiedAsPage) {
+IN_PROC_BROWSER_TEST_P(IsolatedWebAppDevToolsTest, PwaIdentifiedAsPage) {
   // 1) Regression test to install PWA and make sure they still show as page
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL app_url = embedded_test_server()->GetURL("/simple.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), app_url));
   webapps::AppId pwa_id = web_app::test::InstallPwaForCurrentUrl(browser());
   Browser* pwa_app =
-      web_app::LaunchWebAppBrowserAndWait(browser()->profile(), pwa_id);
+      web_app::LaunchWebAppBrowserAndWait(browser()->GetProfile(), pwa_id);
   scoped_refptr<content::DevToolsAgentHost> pwa_host =
       content::DevToolsAgentHost::GetOrCreateFor(
           pwa_app->tab_strip_model()->GetActiveWebContents());
@@ -144,5 +152,7 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppDevToolsTest, PwaIdentifiedAsPage) {
                    web_contents,
                    "document.getElementById('apps-list').children.length"));
 }
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(IsolatedWebAppDevToolsTest);
 
 }  // namespace web_app

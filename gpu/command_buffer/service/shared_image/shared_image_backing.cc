@@ -6,17 +6,22 @@
 
 #include <algorithm>
 
+#include "base/check.h"
+#include "base/logging.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "build/build_config.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_trace_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
+#include "gpu/vulkan/vulkan_ycbcr_info.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -74,24 +79,18 @@ const char* BackingTypeToString(SharedImageBackingType type) {
 
 SharedImageBacking::SharedImageBacking(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     size_t estimated_size,
     bool is_thread_safe,
     std::optional<gfx::BufferUsage> buffer_usage)
     : mailbox_(mailbox),
-      format_(format),
-      size_(size),
-      color_space_(color_space),
-      surface_origin_(surface_origin),
-      alpha_type_(alpha_type),
-      usage_(usage),
-      debug_label_(std::move(debug_label)),
+      format_(si_info.format),
+      size_(si_info.size),
+      color_space_(si_info.color_space),
+      surface_origin_(si_info.surface_origin),
+      alpha_type_(si_info.alpha_type),
+      usage_(si_info.usage),
+      debug_label_(si_info.debug_label),
       estimated_size_(estimated_size),
       buffer_usage_(std::move(buffer_usage)) {
   DCHECK_CALLED_ON_VALID_THREAD(factory_thread_checker_);
@@ -108,7 +107,7 @@ void SharedImageBacking::OnContextLost() {
   have_context_ = false;
 }
 
-SkImageInfo SharedImageBacking::AsSkImageInfo(int plane_index) const {
+SkImageInfo SharedImageBacking::AsSkImageInfo(size_t plane_index) const {
   gfx::Size plane_size = format_.GetPlaneSize(plane_index, size_);
   return SkImageInfo::Make(plane_size.width(), plane_size.height(),
                            viz::ToClosestSkColorType(format(), plane_index),
@@ -128,12 +127,14 @@ void SharedImageBacking::Update(std::unique_ptr<gfx::GpuFence> in_fence) {}
 
 bool SharedImageBacking::UploadFromMemory(
     const std::vector<SkPixmap>& pixmaps) {
-  NOTREACHED();
+  LOG(FATAL) << "Shared image debug info: " << debug_label()
+             << ", backing type = " << GetName();
 }
 
 bool SharedImageBacking::ReadbackToMemory(
     const std::vector<SkPixmap>& pixmaps) {
-  NOTREACHED();
+  LOG(FATAL) << "Shared image debug info: " << debug_label()
+             << ", backing type = " << GetName();
 }
 
 void SharedImageBacking::ReadbackToMemoryAsync(
@@ -208,14 +209,11 @@ std::unique_ptr<SkiaImageRepresentation> SharedImageBacking::ProduceSkia(
     case gpu::GrContextType::kGL:
     case gpu::GrContextType::kVulkan:
       return ProduceSkiaGanesh(manager, tracker, context_state);
-    case gpu::GrContextType::kGraphiteMetal:
     case gpu::GrContextType::kGraphiteDawn:
       return ProduceSkiaGraphite(manager, tracker, context_state);
       // NOTE: Do not add a default case to force any new types to be
       // handled here on addition.
   }
-
-  NOTREACHED();
 }
 
 std::unique_ptr<SkiaGaneshImageRepresentation>
@@ -422,24 +420,12 @@ base::Lock* SharedImageBacking::AutoLock::InitializeLock(
 
 ClearTrackingSharedImageBacking::ClearTrackingSharedImageBacking(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    gpu::SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     size_t estimated_size,
     bool is_thread_safe,
     std::optional<gfx::BufferUsage> buffer_usage)
     : SharedImageBacking(mailbox,
-                         format,
-                         size,
-                         color_space,
-                         surface_origin,
-                         alpha_type,
-                         usage,
-                         std::move(debug_label),
+                         si_info,
                          estimated_size,
                          is_thread_safe,
                          std::move(buffer_usage)) {}
@@ -483,12 +469,32 @@ gfx::GpuMemoryBufferHandle SharedImageBacking::GetGpuMemoryBufferHandle() {
   NOTREACHED();
 }
 
+#if BUILDFLAG(IS_ANDROID)
+std::optional<VulkanYCbCrInfo> SharedImageBacking::GetVkCbCrInfo(
+    SharedContextState* context_state) {
+  return std::nullopt;
+}
+#endif
+
 bool SharedImageBacking::IsPurgeable() const {
   return false;
 }
 
 bool SharedImageBacking::IsImportedFromExo() {
   return false;
+}
+
+AccessParams::AccessParams() = default;
+AccessParams::AccessParams(const AccessParams&) = default;
+AccessParams& AccessParams::operator=(const AccessParams&) = default;
+AccessParams::~AccessParams() = default;
+
+bool SharedImageBacking::SupportsAccess(SharedImageAccessStream stream,
+                                        const AccessParams& params) const {
+  // The default implementation allows access, assuming the backing is
+  // compatible. Subclasses with specific context requirements (like GL vs.
+  // Vulkan) should override this method.
+  return true;
 }
 
 }  // namespace gpu

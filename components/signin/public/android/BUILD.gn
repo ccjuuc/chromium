@@ -10,6 +10,7 @@ android_library("java") {
     "//build/android:build_java",
     "//components/cached_flags:java",
     "//components/externalauth/android:java",
+    "//extensions/buildflags:buildflags_java",
     "//google_apis/gaia/android:java",
     "//net/android:net_java",
     "//third_party/android_deps:chromium_play_services_availability_java",
@@ -24,7 +25,6 @@ android_library("java") {
     ":java_enums",
     ":jni_headers",
     ":signin_java_features_srcjar",
-    "//components/signin/public/base:consent_level_enum_javagen",
     "//components/signin/public/base:signin_metrics_enum_javagen",
     "//components/signin/public/identity_manager:primary_account_mutator_enum_javagen",
   ]
@@ -52,9 +52,7 @@ android_library("java") {
     "java/src/org/chromium/components/signin/base/AccountCapabilities.java",
     "java/src/org/chromium/components/signin/base/AccountInfo.java",
     "java/src/org/chromium/components/signin/base/CoreAccountInfo.java",
-    "java/src/org/chromium/components/signin/identitymanager/AccountInfoService.java",
-    "java/src/org/chromium/components/signin/identitymanager/AccountInfoServiceImpl.java",
-    "java/src/org/chromium/components/signin/identitymanager/AccountInfoServiceProvider.java",
+    "java/src/org/chromium/components/signin/base/SigninDeepLinkPayload.java",
     "java/src/org/chromium/components/signin/identitymanager/AccountManagedStatusFinder.java",
     "java/src/org/chromium/components/signin/identitymanager/IdentityManager.java",
     "java/src/org/chromium/components/signin/identitymanager/IdentityManagerImpl.java",
@@ -72,13 +70,13 @@ java_cpp_features("signin_java_features_srcjar") {
 }
 
 generate_jni("jni_headers") {
-  namespace = "signin"
   sources = [
     "java/src/org/chromium/components/signin/AccountCapabilitiesFetcher.java",
     "java/src/org/chromium/components/signin/SigninFeatureMap.java",
     "java/src/org/chromium/components/signin/base/AccountCapabilities.java",
     "java/src/org/chromium/components/signin/base/AccountInfo.java",
     "java/src/org/chromium/components/signin/base/CoreAccountInfo.java",
+    "java/src/org/chromium/components/signin/base/SigninDeepLinkPayload.java",
     "java/src/org/chromium/components/signin/identitymanager/AccountManagedStatusFinder.java",
     "java/src/org/chromium/components/signin/identitymanager/IdentityManagerImpl.java",
     "java/src/org/chromium/components/signin/identitymanager/IdentityMutator.java",
@@ -107,7 +105,6 @@ java_cpp_enum("java_enums") {
 }
 
 generate_jni("test_support_jni_headers") {
-  namespace = "signin"
   sources = [
     "java/src/org/chromium/components/signin/test/util/AccountCapabilitiesFetcherTestUtil.java",
     "java/src/org/chromium/components/signin/test/util/AccountInfoSerializer.java",
@@ -139,7 +136,6 @@ android_library("signin_java_test_support") {
     "java/src/org/chromium/components/signin/test/util/AccountHolder.java",
     "java/src/org/chromium/components/signin/test/util/AccountInfoSerializer.java",
     "java/src/org/chromium/components/signin/test/util/AccountManagerFacadeUtil.java",
-    "java/src/org/chromium/components/signin/test/util/FakeAccountInfoService.java",
     "java/src/org/chromium/components/signin/test/util/FakeAccountManagerDelegate.java",
     "java/src/org/chromium/components/signin/test/util/FakeAccountManagerFacade.java",
     "java/src/org/chromium/components/signin/test/util/FakeIdentityManager.java",
@@ -177,6 +173,7 @@ android_library("unit_device_javatests") {
     "//chrome/test/android:chrome_java_test_support_common",
     "//components/cached_flags:java",
     "//content/public/test/android:content_java_test_support",
+    "//extensions/buildflags:buildflags_java",
     "//google_apis/gaia/android:java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_test_monitor_java",
@@ -197,7 +194,6 @@ robolectric_library("junit") {
     "junit/src/org/chromium/components/signin/AccountUtilsTest.java",
     "junit/src/org/chromium/components/signin/PatternMatcherTest.java",
     "junit/src/org/chromium/components/signin/base/AccountCapabilitiesTest.java",
-    "junit/src/org/chromium/components/signin/identitymanager/AccountInfoServiceImplTest.java",
   ]
   deps = [
     ":java",
@@ -209,6 +205,7 @@ robolectric_library("junit") {
     "//base:base_junit_test_support",
     "//components/cached_flags:java",
     "//components/externalauth/android:java",
+    "//extensions/buildflags:buildflags_java",
     "//google_apis/gaia/android:java",
     "//testing/android/junit:junit_test_support",
     "//third_party/android_deps:guava_android_java",

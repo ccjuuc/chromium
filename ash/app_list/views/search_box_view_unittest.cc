@@ -4,6 +4,7 @@
 
 #include "ash/app_list/views/search_box_view.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -52,7 +53,6 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller_test_api.h"
 #include "ash/wm/window_state.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -122,7 +122,7 @@ bool IsValidSearchBoxAccessibilityHint(const std::u16string& hint) {
               IDS_APP_LIST_SEARCH_BOX_PLACEHOLDER_IMAGES))};
   // Check if the current accessibility text is one of the possible
   // options.
-  return base::Contains(possible_a11y_text, hint);
+  return std::ranges::contains(possible_a11y_text, hint);
 }
 
 }  // namespace
@@ -195,7 +195,7 @@ class SearchBoxViewTest : public views::test::WidgetTest,
     ui::ColorProviderManager::Get().AppendColorProviderInitializer(
         base::BindRepeating(AddAshColorMixer));
 
-    widget_ = CreateTopLevelPlatformWidget();
+    widget_ = base::WrapUnique(CreateTopLevelPlatformWidget());
     widget_->SetBounds(gfx::Rect(0, 0, 300, 200));
 
     std::unique_ptr<SearchBoxView> view;
@@ -213,17 +213,16 @@ class SearchBoxViewTest : public views::test::WidgetTest,
 
   void TearDown() override {
     ui::ColorProviderManager::ResetForTesting();
-    if (app_list_view_) {
-      app_list_view_->GetWidget()->Close();
-    }
-    widget_->CloseNow();
+    counter_view_ = nullptr;
+    search_view_ = nullptr;
+    view_ = nullptr;
+    widget_.release()->CloseNow();
     views::test::WidgetTest::TearDown();
   }
 
  protected:
-  views::Widget* widget() { return widget_; }
+  views::Widget* widget() { return widget_.get(); }
   SearchBoxView* view() { return view_; }
-  AppListView* app_list_view() { return app_list_view_; }
   AppListTestViewDelegate* view_delegate() { return &view_delegate_; }
 
   void SetSearchEngineIsGoogle(bool is_google) {
@@ -313,12 +312,10 @@ class SearchBoxViewTest : public views::test::WidgetTest,
   bool CanSelectSearchResults() override { return true; }
 
   AshColorProvider ash_color_provider_;
-  raw_ptr<AppListSearchView, DanglingUntriaged> search_view_ = nullptr;
+  raw_ptr<AppListSearchView> search_view_ = nullptr;
   AppListTestViewDelegate view_delegate_;
-  raw_ptr<views::Widget, DanglingUntriaged> widget_ = nullptr;
-  raw_ptr<AppListView> app_list_view_ = nullptr;
-  raw_ptr<SearchBoxView, DanglingUntriaged> view_ =
-      nullptr;  // Owned by views hierarchy.
+  std::unique_ptr<views::Widget> widget_ = nullptr;
+  raw_ptr<SearchBoxView> view_ = nullptr;  // Owned by views hierarchy.
   raw_ptr<KeyPressCounterView> counter_view_ =
       nullptr;  // Owned by views hierarchy.
   int last_result_id_ = 0;
@@ -1512,9 +1509,9 @@ TEST_P(SunfishLauncherButtonTest, TabletModeSwitchesToLastWindow) {
   }
   ash::TabletModeControllerTestApi().EnterTabletMode();
   // Activate some windows.
-  std::unique_ptr<aura::Window> w1 = CreateTestWindow();
-  std::unique_ptr<aura::Window> w2 = CreateTestWindow();
-  std::unique_ptr<aura::Window> w3 = CreateTestWindow();
+  std::unique_ptr<aura::Window> w1 = CreateWindowWithAppType();
+  std::unique_ptr<aura::Window> w2 = CreateWindowWithAppType();
+  std::unique_ptr<aura::Window> w3 = CreateWindowWithAppType();
   wm::ActivateWindow(w3.get());
   wm::ActivateWindow(w2.get());
   wm::ActivateWindow(w1.get());

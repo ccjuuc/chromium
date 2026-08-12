@@ -42,8 +42,13 @@ class DesktopBnplUiDelegateBrowserTest
  public:
   DesktopBnplUiDelegateBrowserTest() {
     if (GetParam().dialog == DialogEnum::kSelectBnplIssuerUpdate) {
-      feature_list_.InitAndEnableFeature(
-          features::kAutofillEnableAiBasedAmountExtraction);
+      feature_list_.InitWithFeatures(
+          {/*enabled_features=*/features::
+               kAutofillEnableAiBasedAmountExtraction},
+          {/*disabled_features=*/features::kAutofillEnablePayNowPayLaterTabs});
+    } else if (GetParam().dialog == DialogEnum::kSelectBnplIssuer) {
+      feature_list_.InitAndDisableFeature(
+          features::kAutofillEnablePayNowPayLaterTabs);
     }
   }
   DesktopBnplUiDelegateBrowserTest(const DesktopBnplUiDelegateBrowserTest&) =
@@ -75,9 +80,13 @@ class DesktopBnplUiDelegateBrowserTest
                                BnplIssuerEligibilityForPage::kIsEligible)},
             /*app_locale=*/"en-US", base::DoNothing(), base::DoNothing(),
             /*has_seen_ai_terms=*/true);
-        GetDesktopBnplUiDelegate()->UpdateBnplIssuerDialogUi(
+        GetDesktopBnplUiDelegate()->UpdateBnplIssuerUi(
             {BnplIssuerContext(test::GetTestUnlinkedBnplIssuer(),
-                               BnplIssuerEligibilityForPage::kIsEligible)});
+                               BnplIssuerEligibilityForPage::kIsEligible)},
+            /*extracted_amount=*/100,
+            /*is_amount_supported_by_any_issuer=*/true, /*app_locale=*/"en-US",
+            /*selected_issuer_callback=*/base::DoNothing(),
+            /*cancel_callback=*/base::DoNothing());
         break;
       }
     }
@@ -147,7 +156,7 @@ IN_PROC_BROWSER_TEST_P(DesktopBnplUiDelegateBrowserTest,
                        ShowAndVerifyUi_ThenCloseWindow) {
   ShowAndVerifyUi();
   // Close the browser window.
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   // Wait until the browser window is closed.
   base::RunLoop().RunUntilIdle();
 }

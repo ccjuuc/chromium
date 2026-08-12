@@ -18,6 +18,7 @@ class GURL;
 
 namespace web {
 class WebState;
+struct ContextMenuParams;
 }
 
 // Factory providing methods to create UIActions that depends on the provided
@@ -36,13 +37,13 @@ class WebState;
 
 // Creates a UIAction instance configured for opening the `URL` in a new tab and
 // which will invoke the given `completion` block after execution.
-- (UIAction*)actionToOpenInNewTabWithURL:(const GURL)URL
+- (UIAction*)actionToOpenInNewTabWithURL:(const GURL&)URL
                               completion:(ProceduralBlock)completion;
 
 // Creates a UIAction instance configured for opening the `URL` in a new
 // incognito tab and which will invoke the given `completion` block after
 // execution.
-- (UIAction*)actionToOpenInNewIncognitoTabWithURL:(const GURL)URL
+- (UIAction*)actionToOpenInNewIncognitoTabWithURL:(const GURL&)URL
                                        completion:(ProceduralBlock)completion;
 
 // Creates a UIAction instance whose title and icon are configured for opening a
@@ -52,7 +53,7 @@ class WebState;
 
 // Creates a UIAction instance configured for opening the `URL` in a new window
 // from `activityOrigin`.
-- (UIAction*)actionToOpenInNewWindowWithURL:(const GURL)URL
+- (UIAction*)actionToOpenInNewWindowWithURL:(const GURL&)URL
                              activityOrigin:
                                  (WindowActivityOrigin)activityOrigin;
 
@@ -62,7 +63,7 @@ class WebState;
 
 // Creates a UIAction instance for opening an image `URL` in current tab and
 // invoke the given `completion` block after execution.
-- (UIAction*)actionOpenImageWithURL:(const GURL)URL
+- (UIAction*)actionOpenImageWithURL:(const GURL&)URL
                          completion:(ProceduralBlock)completion;
 
 // Creates a UIAction instance for opening an image `params` in a new tab and
@@ -80,7 +81,19 @@ class WebState;
 - (UIAction*)actionToSaveToPhotosWithImageURL:(const GURL&)url
                                      referrer:(const web::Referrer&)referrer
                                      webState:(web::WebState*)webState
+                                       params:
+                                           (const web::ContextMenuParams&)params
                                         block:(ProceduralBlock)block;
+
+// Creates a UIAction instance whose title and icon are configured for opening a
+// new tab. When triggered, the action will invoke the `block` which needs to
+// open a new tab.
+- (UIAction*)actionToOpenNewTabWithBlock:(ProceduralBlock)block;
+
+// Creates a UIAction instance whose title and icon are configured for opening a
+// new incognito tab. When triggered, the action will invoke the `block` which
+// needs to open a new incognito tab.
+- (UIAction*)actionToOpenNewIncognitoTabWithBlock:(ProceduralBlock)block;
 
 // Creates a UIAction instance for opening a new tab.
 - (UIAction*)actionToOpenNewTab;

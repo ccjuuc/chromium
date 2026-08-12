@@ -94,7 +94,7 @@ class ExtensionMessagePort : public MessagePort {
   void RevalidatePort() override;
   void DispatchOnConnect(mojom::ChannelType channel_type,
                          const std::string& channel_name,
-                         std::optional<base::Value::Dict> source_tab,
+                         std::optional<base::DictValue> source_tab,
                          const ExtensionApiFrameIdMap::FrameData& source_frame,
                          int guest_process_id,
                          int guest_render_frame_routing_id,
@@ -105,7 +105,7 @@ class ExtensionMessagePort : public MessagePort {
                          const std::set<base::UnguessableToken>&
                              open_channel_tracking_ids) override;
   void DispatchOnDisconnect(const std::string& error_message) override;
-  void DispatchOnMessage(const Message& message) override;
+  void DispatchOnMessage(Message message) override;
   void IncrementLazyKeepaliveCount(Activity::Type activity_type) override;
   void DecrementLazyKeepaliveCount(Activity::Type activity_type) override;
   void OpenPort(int process_id, const PortContext& port_context) override;

@@ -13,7 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/bookmarks/android/bookmark_bridge.h"
@@ -28,7 +28,6 @@
 #include "chrome/browser/signin/account_id_from_account_info.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/google/core/common/google_util.h"
 #include "components/password_manager/core/browser/features/password_features.h"
@@ -36,7 +35,6 @@
 #include "components/policy/core/common/policy_switches.h"
 #include "components/prefs/android/pref_service_android.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_managed_status_finder.h"
 #include "components/signin/public/identity_manager/accounts_cookie_mutator.h"
@@ -45,10 +43,15 @@
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/storage_partition.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/sync/account_extension_tracker.h"
+#endif
+
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "chrome/android/chrome_jni_headers/SigninManagerImpl_jni.h"
+#include "chrome/browser/signin/services/android/jni_headers/SigninManagerImpl_jni.h"
 
 using base::android::JavaRef;
 
@@ -62,9 +65,7 @@ class ProfileDataRemover : public content::BrowsingDataRemover::Observer {
   ProfileDataRemover(Profile* profile,
                      ClearedTypes cleared_types,
                      base::OnceClosure callback)
-      : profile_(profile),
-        cleared_types_(cleared_types),
-        callback_(std::move(callback)),
+      : callback_(std::move(callback)),
         origin_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
         remover_(profile->GetBrowsingDataRemover()) {
     remover_->AddObserver(this);
@@ -89,30 +90,9 @@ class ProfileDataRemover : public content::BrowsingDataRemover::Observer {
             std::move(google_tld_filter), this);
         break;
       }
-      case ClearedTypes::kSyncData: {
-        // TODO(crbug.com/469453727): determine if DATA_TYPE_READING_LIST should
-        // be added here.
-        chrome_browsing_data_remover::DataType removed_types =
-            content::BrowsingDataRemover::DATA_TYPE_CACHE |
-            chrome_browsing_data_remover::DATA_TYPE_FORM_DATA |
-            chrome_browsing_data_remover::DATA_TYPE_SITE_DATA |
-            chrome_browsing_data_remover::DATA_TYPE_HISTORY |
-            chrome_browsing_data_remover::DATA_TYPE_BOOKMARKS;
-        remover_->RemoveAndReply(base::Time(), base::Time::Max(), removed_types,
-                                 chrome_browsing_data_remover::ALL_ORIGIN_TYPES,
-                                 this);
-        break;
-      }
       case ClearedTypes::kAllData: {
-        chrome_browsing_data_remover::DataType removed_types =
-            chrome_browsing_data_remover::ALL_DATA_TYPES;
-        // Browser sign-in won't upload existing passwords, so there's no reason
-        // to wipe them immediately before. Similarly, on browser sign-out,
-        // account passwords should survive (outside of the browser) to be used
-        // by other apps, until system-level sign-out. In other words, the
-        // browser has no business deleting any passwords here.
-        removed_types &= ~chrome_browsing_data_remover::DATA_TYPE_PASSWORDS;
-        remover_->RemoveAndReply(base::Time(), base::Time::Max(), removed_types,
+        remover_->RemoveAndReply(base::Time(), base::Time::Max(),
+                                 chrome_browsing_data_remover::ALL_DATA_TYPES,
                                  chrome_browsing_data_remover::ALL_ORIGIN_TYPES,
                                  this);
         break;
@@ -127,25 +107,11 @@ class ProfileDataRemover : public content::BrowsingDataRemover::Observer {
 
   void OnBrowsingDataRemoverDone(uint64_t failed_data_types) override {
     remover_->RemoveObserver(this);
-
-    if (cleared_types_ == ClearedTypes::kAllData) {
-      // All the Profile data has been wiped. Clear the last signed in username
-      // as well, so that the next signin doesn't trigger the account
-      // change dialog.
-      profile_->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingGaiaId);
-      profile_->GetPrefs()->ClearPref(
-          prefs::kGoogleServicesLastSyncingUsername);
-      profile_->GetPrefs()->ClearPref(
-          prefs::kGoogleServicesLastSignedInUsername);
-    }
-
     origin_runner_->PostTask(FROM_HERE, std::move(callback_));
     origin_runner_->DeleteSoon(FROM_HERE, this);
   }
 
  private:
-  raw_ptr<Profile> profile_;
-  ClearedTypes cleared_types_;
   base::OnceClosure callback_;
   scoped_refptr<base::SingleThreadTaskRunner> origin_runner_;
   raw_ptr<content::BrowsingDataRemover> remover_;
@@ -172,9 +138,6 @@ SigninManagerAndroid::SigninManagerAndroid(
   DCHECK(identity_manager_);
   DCHECK(user_cloud_policy_manager_);
   DCHECK(user_policy_signin_service_);
-
-  force_browser_signin_.Init(prefs::kForceBrowserSignin,
-                             g_browser_process->local_state());
 
   java_signin_manager_ = Java_SigninManagerImpl_create(
       base::android::AttachCurrentThread(), reinterpret_cast<intptr_t>(this),
@@ -204,10 +167,6 @@ SigninManagerAndroid::ManagementCredentials::ManagementCredentials(
 
 SigninManagerAndroid::ManagementCredentials::~ManagementCredentials() = default;
 
-bool SigninManagerAndroid::IsForceSigninEnabled(JNIEnv* env) {
-  return force_browser_signin_.GetValue();
-}
-
 // static
 bool SigninManagerAndroid::MatchesCachedIsAccountManagedEntry(
     const CachedIsAccountManaged& cached_entry,
@@ -224,6 +183,19 @@ void SigninManagerAndroid::RegisterPolicyWithAccount(
     const CoreAccountInfo& account,
     RegisterPolicyWithAccountCallback callback) {
   if (!ShouldLoadPolicyForUser(account.email)) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  bool user_accepted_account_management =
+      enterprise_util::UserAcceptedAccountManagement(profile_);
+  base::UmaHistogramBoolean(
+      "Signin.Android.AccountManagementAcceptedBeforeUserPolicyFetch",
+      user_accepted_account_management);
+
+  if (!user_accepted_account_management &&
+      base::FeatureList::IsEnabled(
+          switches::kUserPolicyFetchRequiresAcceptance)) {
     std::move(callback).Run(std::nullopt);
     return;
   }
@@ -283,20 +255,6 @@ void SigninManagerAndroid::FetchPolicyBeforeSignIn(
                      std::move(policy_callback)));
 }
 
-base::android::ScopedJavaLocalRef<jstring>
-SigninManagerAndroid::GetManagementDomain(JNIEnv* env) {
-  base::android::ScopedJavaLocalRef<jstring> domain;
-
-  policy::CloudPolicyStore* store = user_cloud_policy_manager_->core()->store();
-
-  if (store && store->is_managed() && store->policy()->has_username()) {
-    domain.Reset(base::android::ConvertUTF8ToJavaString(
-        env, gaia::ExtractDomainName(store->policy()->username())));
-  }
-
-  return domain;
-}
-
 void SigninManagerAndroid::WipeProfileData(
     JNIEnv* env,
     const base::RepeatingClosure& callback) {
@@ -309,10 +267,26 @@ void SigninManagerAndroid::WipeGoogleServiceWorkerCaches(
   WipeData(profile_, ClearedTypes::kGoogleServiceWorkerCaches, callback);
 }
 
-void SigninManagerAndroid::WipeSyncUserData(
+void SigninManagerAndroid::SetUninstallAccountExtensionsOnSignout(
     JNIEnv* env,
-    const base::RepeatingClosure& callback) {
-  WipeData(profile_, ClearedTypes::kSyncData, callback);
+    bool uninstall) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extensions::AccountExtensionTracker* tracker =
+      extensions::AccountExtensionTracker::Get(profile_);
+  if (tracker) {
+    tracker->set_uninstall_account_extensions_on_signout(uninstall);
+  }
+#endif
+}
+
+bool SigninManagerAndroid::HasSignedInAccountExtensions(JNIEnv* env) {
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  extensions::AccountExtensionTracker* tracker =
+      extensions::AccountExtensionTracker::Get(profile_);
+  return tracker && !tracker->GetSignedInAccountExtensions().empty();
+#else
+  return false;
+#endif
 }
 
 // static
@@ -323,8 +297,9 @@ void SigninManagerAndroid::WipeData(Profile* profile,
   new ProfileDataRemover(profile, cleared_types, std::move(callback));
 }
 
-static std::string JNI_SigninManagerImpl_ExtractDomainName(JNIEnv* env,
-                                                           std::string& email) {
+static std::string JNI_SigninManagerImpl_ExtractDomainName(
+    JNIEnv* env,
+    const std::string& email) {
   return gaia::ExtractDomainName(email);
 }
 

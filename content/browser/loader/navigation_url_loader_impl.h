@@ -14,6 +14,7 @@
 #include "content/browser/loader/navigation_url_loader.h"
 #include "content/browser/loader/response_head_update_params.h"
 #include "content/browser/navigation_subresource_loader_params.h"
+#include "content/browser/scoped_browser_file_access.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/global_request_id.h"
@@ -25,6 +26,7 @@
 #include "net/cookies/cookie_setting_override.h"
 #include "net/url_request/url_request.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/http_request_headers_update_params.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/cpp/single_request_url_loader_factory.h"
 #include "services/network/public/mojom/accept_ch_frame_observer.mojom.h"
@@ -106,7 +108,8 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
       network::URLLoaderFactoryBuilder factory_builder,
       StoragePartitionImpl* partition,
       std::optional<net::CookieSettingOverrides> devtools_cookie_overrides,
-      std::optional<net::CookieSettingOverrides> cookie_overrides);
+      std::optional<net::CookieSettingOverrides> cookie_overrides,
+      const base::UnguessableToken& network_restrictions_id);
 
   // NavigationURLLoader implementation:
   // Starts the loader by finalizing loader factories initialization and
@@ -115,9 +118,7 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
   // Sets `started_` true.
   void Start() override;
   void FollowRedirect(
-      std::vector<std::string> removed_headers,
-      net::HttpRequestHeaders modified_headers,
-      net::HttpRequestHeaders modified_cors_exempt_headers) override;
+      network::HttpRequestHeadersUpdateParams headers_update_params) override;
   bool SetNavigationTimeout(base::TimeDelta timeout) override;
   void CancelNavigationTimeout() override;
 
@@ -168,7 +169,8 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
                              StoragePartitionImpl* storage_partition,
                              FrameTreeNode* frame_tree_node,
                              const ukm::SourceIdObj& ukm_id,
-                             bool* bypass_redirect_checks);
+                             bool* bypass_redirect_checks,
+                             bool allow_same_site_none_cookies_override);
 
   void BindAndInterceptNonNetworkURLLoaderFactoryReceiver(
       const GURL& url,
@@ -287,12 +289,20 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
   void MaybeRecordServiceWorkerMainResourceInfo(
       const network::mojom::URLResponseHeadPtr& head);
 
+  const network::ResourceRequest& resource_request() const;
+
   raw_ptr<NavigationURLLoaderDelegate, DanglingUntriaged> delegate_;
   raw_ptr<BrowserContext> browser_context_;
   raw_ptr<StoragePartitionImpl> storage_partition_;
   raw_ptr<ServiceWorkerMainResourceHandle> service_worker_handle_;
 
+  // Use `resource_request()` for read access.
+  // This is created upon ctor and can be updated upon:
+  // - Request start (`Accept` header and by `ThrottlingURLLoader`).
+  // - ACCEPT_CH frame restart.
+  // - Redirects.
   std::unique_ptr<network::ResourceRequest> resource_request_;
+
   std::unique_ptr<NavigationRequestInfo> request_info_;
 
   // Current URL that is being navigated, updated after redirection.
@@ -307,6 +317,11 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
   std::unique_ptr<NavigationUIData> navigation_ui_data_;
 
   scoped_refptr<network::SharedURLLoaderFactory> network_loader_factory_;
+
+  // Whether `network_loader_factory_` was created with the cookie-setting
+  // override that allows SameSite=None cookies in sandboxed contexts. Tracked
+  // so the factory can be recreated if the value changes after a redirect.
+  bool allow_same_site_none_cookies_override_ = false;
 
   SubresourceLoaderParams subresource_loader_params_;
 
@@ -392,9 +407,6 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
     State state() const { return state_; }
 
     blink::ThrottlingURLLoader* url_loader() const { return url_loader_.get(); }
-    mojo::PendingRemote<network::mojom::URLLoader>* response_url_loader() {
-      return &response_url_loader_;
-    }
 
     // Cancel the current loading, if any.
     // Any associated pending operations should be cancelled.
@@ -435,7 +447,7 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
 
     // Redirect handling: the expected sequence is:
     // 1. `NavigationURLLoaderImpl::OnReceiveRedirect()`
-    // 2. `LoaderHolder::SetModifiedHeadersOnRedirect()`
+    // 2. `LoaderHolder::SetHeadersUpdateParamsOnRedirect()`
     // 3. Either:
     //    - `LoaderHolder::FollowRedirect()`, when we want and can continue
     //      using the current `url_loader` for the next redirect leg, or
@@ -450,10 +462,8 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
     // Cache the modified request headers provided by clients during redirect.
     // They will be consumed by next `FollowRedirect()` or
     // `ResetForFollowRedirect()`.
-    void SetModifiedHeadersOnRedirect(
-        std::vector<std::string> removed_headers,
-        net::HttpRequestHeaders modified_headers,
-        net::HttpRequestHeaders modified_cors_exempt_headers);
+    void SetHeadersUpdateParamsOnRedirect(
+        network::HttpRequestHeadersUpdateParams headers_update_params);
 
     // Follows the redirect using the current `url_loader_`.
     void FollowRedirect();
@@ -499,30 +509,8 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
     std::unique_ptr<blink::ThrottlingURLLoader> url_loader_;
     mojo::Receiver<network::mojom::URLLoaderClient> response_loader_receiver_;
 
-    // URLLoader instance for response loaders, i.e loaders created for handling
-    // responses received from the network URLLoader.
-    //
-    // NOTE: This looks like coupled with
-    // `LoaderHolder::response_loader_receiver_` but actually isn't, because
-    // `response_url_loader_` is never touched during
-    // `MaybeCreateLoaderForResponse()` (at least within Chromium codesearch).
-    // For now this is kept here as-is but probably can be removed.
-    mojo::PendingRemote<network::mojom::URLLoader> response_url_loader_;
-
-    struct ModifiedHeadersOnRedirect final {
-      ModifiedHeadersOnRedirect(
-          std::vector<std::string> removed_headers,
-          net::HttpRequestHeaders modified_headers,
-          net::HttpRequestHeaders modified_cors_exempt_headers);
-      ModifiedHeadersOnRedirect(const ModifiedHeadersOnRedirect&) = delete;
-      ModifiedHeadersOnRedirect(ModifiedHeadersOnRedirect&&) = delete;
-      ~ModifiedHeadersOnRedirect();
-
-      std::vector<std::string> removed_headers_;
-      net::HttpRequestHeaders modified_headers_;
-      net::HttpRequestHeaders modified_cors_exempt_headers_;
-    };
-    std::optional<ModifiedHeadersOnRedirect> modified_headers_on_redirect_;
+    std::optional<network::HttpRequestHeadersUpdateParams>
+        headers_update_params_;
 
     // `NavigationURLLoaderImpl` can be waiting for a certain (possibly async)
     // "exclusive task" and can't start a new request nor receive
@@ -588,6 +576,9 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
   // Whether the navigation processed an ACCEPT_CH frame in the TLS handshake.
   bool received_accept_ch_frame_ = false;
 
+  // The time the most recent `Restart()` was called.
+  base::TimeTicks last_restart_time_;
+
   // UKM source id used for recording events associated with navigation loading.
   const ukm::SourceId ukm_source_id_;
 
@@ -595,6 +586,12 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
   // it, we still expose some parameters like the worker timing as part of the
   // response.
   ResponseHeadUpdateParams head_update_params_;
+
+  // If the navigation request includes a file upload, this object ensures the
+  // browser process is aware that the Network Service is allowed to read the
+  // files. The files are granted access upon creation and revoked when this
+  // loader is destroyed.
+  std::unique_ptr<ScopedBrowserFileAccess> scoped_browser_file_access_;
 
   base::WeakPtrFactory<NavigationURLLoaderImpl> weak_factory_{this};
 };
@@ -611,7 +608,10 @@ class CONTENT_EXPORT NavigationURLLoaderImpl
 // This helper method is used to create consistent navigational
 // `ResourceRequest`s (exposed to the network service and ServiceWorker fetch
 // handlers) and make them look similar, regardless of whether they are created
-// for prefetches or non-prefetch navigations.
+// for prefetches or non-prefetch navigations. Also note that this is called
+// from non-UI thread when pre-prefetching. (Please see
+// //content/browser/preloading/prefetch/pre_prefetch_container.h for more
+// details.)
 std::unique_ptr<network::ResourceRequest> CreateResourceRequestForNavigation(
     const std::string& method,
     const GURL& url,

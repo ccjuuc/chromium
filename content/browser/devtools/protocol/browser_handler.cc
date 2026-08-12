@@ -33,7 +33,6 @@
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/protocol/devtools_download_manager_delegate.h"
 #include "content/browser/gpu/gpu_process_host.h"
-#include "content/browser/interest_group/interest_group_manager_impl.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/public/browser/browser_context.h"
@@ -165,7 +164,7 @@ Response PermissionDescriptorToPermissionType(
   } else if (name == "notifications") {
     *permission_type = PermissionType::NOTIFICATIONS;
   } else if (name == "persistent-storage") {
-    *permission_type = PermissionType::DURABLE_STORAGE;
+    *permission_type = PermissionType::PERSISTENT_STORAGE;
   } else if (name == "push") {
     if (!descriptor->GetUserVisibleOnly(false)) {
       return Response::InvalidParams(
@@ -261,7 +260,7 @@ Response FromProtocolPermissionType(
   } else if (type == protocol::Browser::PermissionTypeEnum::Midi) {
     *out_type = PermissionType::MIDI;
   } else if (type == protocol::Browser::PermissionTypeEnum::DurableStorage) {
-    *out_type = PermissionType::DURABLE_STORAGE;
+    *out_type = PermissionType::PERSISTENT_STORAGE;
   } else if (type == protocol::Browser::PermissionTypeEnum::AudioCapture) {
     *out_type = PermissionType::AUDIO_CAPTURE;
   } else if (type == protocol::Browser::PermissionTypeEnum::VideoCapture) {
@@ -371,21 +370,18 @@ Response BrowserHandler::FindBrowserContext(
         "Browser context management is not supported.");
   if (!browser_context_id.has_value()) {
     *browser_context = delegate->GetDefaultBrowserContext();
-    if (*browser_context == nullptr)
+    if (!*browser_context) {
       return Response::ServerError(
           "Browser context management is not supported.");
+    }
     return Response::Success();
   }
-
-  std::string context_id = browser_context_id.value();
-  for (auto* context : delegate->GetBrowserContexts()) {
-    if (context->UniqueId() == context_id) {
-      *browser_context = context;
-      return Response::Success();
-    }
+  *browser_context = delegate->GetBrowserContext(browser_context_id.value());
+  if (!*browser_context) {
+    return Response::InvalidParams("Failed to find browser context for id " +
+                                   browser_context_id.value());
   }
-  return Response::InvalidParams("Failed to find browser context for id " +
-                                 context_id);
+  return Response::Success();
 }
 
 // static
@@ -571,6 +567,7 @@ Response BrowserHandler::SetDownloadBehavior(
                                    std::move(download_path));
   if (!response.IsSuccess())
     return response;
+
   SetDownloadEventsEnabled(events_enabled.value_or(false));
   return response;
 }
@@ -701,59 +698,6 @@ Response BrowserHandler::CrashGpuProcess() {
     host->gpu_service()->Crash();
   }
   return Response::Success();
-}
-
-void BrowserHandler::AddPrivacySandboxCoordinatorKeyConfig(
-    const std::string& in_api,
-    const std::string& in_coordinator_origin,
-    const std::string& in_key_config,
-    std::optional<std::string> browser_context_id,
-    std::unique_ptr<AddPrivacySandboxCoordinatorKeyConfigCallback> callback) {
-  BrowserContext* browser_context = nullptr;
-  Response response = FindBrowserContext(browser_context_id, &browser_context);
-  if (!response.IsSuccess()) {
-    callback->sendFailure(response);
-    return;
-  }
-
-  url::Origin coordinator_origin =
-      url::Origin::Create(GURL(in_coordinator_origin));
-
-  if (!base::EndsWith(coordinator_origin.host(), ".test")) {
-    callback->sendFailure(
-        Response::InvalidParams("coordinatorOrigin not a .test domain"));
-    return;
-  }
-
-  std::optional<InterestGroupManager::TrustedServerAPIType> api;
-  if (in_api ==
-      protocol::Browser::PrivacySandboxAPIEnum::BiddingAndAuctionServices) {
-    api = InterestGroupManager::TrustedServerAPIType::kBiddingAndAuction;
-  } else if (in_api ==
-             protocol::Browser::PrivacySandboxAPIEnum::TrustedKeyValue) {
-    api = InterestGroupManager::TrustedServerAPIType::kTrustedKeyValue;
-  } else {
-    callback->sendFailure(Response::InvalidParams("Unrecognized API target"));
-    return;
-  }
-
-  CHECK(api.has_value());
-  static_cast<InterestGroupManagerImpl*>(
-      browser_context->GetDefaultStoragePartition()->GetInterestGroupManager())
-      ->AddTrustedServerKeysDebugOverride(
-          *api, coordinator_origin, in_key_config,
-          base::BindOnce(
-              [](std::unique_ptr<AddPrivacySandboxCoordinatorKeyConfigCallback>
-                     callback,
-                 std::optional<std::string> maybe_error) {
-                if (maybe_error.has_value()) {
-                  callback->sendFailure(
-                      Response::InvalidParams(std::move(maybe_error).value()));
-                } else {
-                  callback->sendSuccess();
-                }
-              },
-              std::move(callback)));
 }
 
 void BrowserHandler::OnDownloadUpdated(download::DownloadItem* item) {

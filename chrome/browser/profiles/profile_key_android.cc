@@ -18,8 +18,9 @@ using base::android::ScopedJavaLocalRef;
 
 ProfileKeyAndroid::ProfileKeyAndroid(ProfileKey* key) : key_(key) {
   JNIEnv* env = AttachCurrentThread();
-  base::android::ScopedJavaLocalRef<jobject> jkey =
-      Java_ProfileKey_create(env, reinterpret_cast<intptr_t>(this));
+  base::android::ScopedJavaLocalRef<jobject> jkey = Java_ProfileKey_create(
+      env, reinterpret_cast<intptr_t>(this),
+      reinterpret_cast<intptr_t>(static_cast<SimpleFactoryKey*>(key_)));
   obj_.Reset(env, jkey);
 }
 
@@ -47,12 +48,8 @@ ScopedJavaLocalRef<jobject> ProfileKeyAndroid::GetOriginalKey(JNIEnv* env) {
   return original_key->GetJavaObject();
 }
 
-jboolean ProfileKeyAndroid::IsOffTheRecord(JNIEnv* env) {
+bool ProfileKeyAndroid::IsOffTheRecord(JNIEnv* env) {
   return key_->IsOffTheRecord();
-}
-
-jlong ProfileKeyAndroid::GetSimpleFactoryKeyPointer(JNIEnv* env) {
-  return reinterpret_cast<jlong>(static_cast<SimpleFactoryKey*>(key_));
 }
 
 ScopedJavaLocalRef<jobject> ProfileKeyAndroid::GetJavaObject() {

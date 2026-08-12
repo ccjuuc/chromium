@@ -112,6 +112,19 @@ bool IsCleartextPermitted(std::string_view host) {
   return Java_AndroidNetworkLibrary_isCleartextPermitted(env, host_string);
 }
 
+EchMode GetEchMode(std::string_view host) {
+  // DomainEncryptionMode was introduced in Android CINNAMON_BUN.
+  // Return default value early to avoid JNI overhead.
+  if (base::android::android_info::sdk_int() <
+      base::android::android_info::SDK_VERSION_CINNAMON_BUN) {
+    return EchMode::kOpportunistic;
+  }
+
+  JNIEnv* env = AttachCurrentThread();
+  return static_cast<EchMode>(
+      Java_AndroidNetworkLibrary_getEchMode(env, std::string(host)));
+}
+
 bool HaveOnlyLoopbackAddresses() {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
@@ -210,6 +223,9 @@ bool GetCurrentDnsServers(std::vector<IPEndPoint>* dns_servers,
                           bool* dns_over_tls_active,
                           std::string* dns_over_tls_hostname,
                           std::vector<std::string>* search_suffixes) {
+  if (!base::android::IsJavaAvailable()) {
+    return false;
+  }
   JNIEnv* env = AttachCurrentThread();
   // Get the DNS status for the current default network.
   ScopedJavaLocalRef<jobject> result =
@@ -228,6 +244,9 @@ bool GetDnsServersForNetwork(std::vector<IPEndPoint>* dns_servers,
   DCHECK_GE(base::android::android_info::sdk_int(),
             base::android::android_info::SDK_VERSION_P);
 
+  if (!base::android::IsJavaAvailable()) {
+    return false;
+  }
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> result =
       Java_AndroidNetworkLibrary_getDnsStatusForNetwork(env, network);
@@ -238,6 +257,9 @@ bool GetDnsServersForNetwork(std::vector<IPEndPoint>* dns_servers,
 }
 
 bool ReportBadDefaultNetwork() {
+  if (!base::android::IsJavaAvailable()) {
+    return false;
+  }
   return Java_AndroidNetworkLibrary_reportBadDefaultNetwork(
       AttachCurrentThread());
 }
@@ -340,6 +362,38 @@ void RegisterQuicConnectionClosePayload(int fd, base::span<uint8_t> payload) {
 void UnregisterQuicConnectionClosePayload(int fd) {
   JNIEnv* env = AttachCurrentThread();
   Java_AndroidNetworkLibrary_unregisterQuicConnectionClosePayload(env, fd);
+}
+
+namespace {
+
+using AndroidGetNetworkBlockedReason = int (*)(int fd);
+
+AndroidGetNetworkBlockedReason GetAndroidGetNetworkBlockedReason() {
+  base::FilePath file(base::GetNativeLibraryName("android"));
+  void* dl = dlopen(file.value().c_str(), RTLD_NOW);
+  if (!dl) {
+    return nullptr;
+  }
+  return reinterpret_cast<AndroidGetNetworkBlockedReason>(
+      dlsym(dl, "android_getnetworkblockedreason"));
+}
+
+}  // namespace
+
+NetworkBlockedReason GetNetworkBlockedReason(int fd) {
+  static AndroidGetNetworkBlockedReason get_network_blocked_reason =
+      GetAndroidGetNetworkBlockedReason();
+  if (!base::FeatureList::IsEnabled(features::kLocalNetworkPermissionCheck)) {
+    return NetworkBlockedReason::kNone;
+  }
+  if (!get_network_blocked_reason) {
+    return NetworkBlockedReason::kNone;
+  }
+  int reason = get_network_blocked_reason(fd);
+  if (reason == static_cast<int>(NetworkBlockedReason::kLnp)) {
+    return NetworkBlockedReason::kLnp;
+  }
+  return NetworkBlockedReason::kNone;
 }
 
 }  // namespace net::android

@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "remoting/proto/event.pb.h"
@@ -63,15 +62,17 @@ MATCHER_P(EqualsSinglePointerTouchInfo, expected, "") {
 
 // Make sure that every touch point has the right flag (pointerFlags).
 MATCHER_P(EqualsPointerTouchInfoFlag, id_to_flag_map, "") {
-  for (size_t i = 0; i < id_to_flag_map.size(); ++i) {
-    const POINTER_TOUCH_INFO* touch_info = UNSAFE_TODO(arg + i);
-    const uint32_t id = touch_info->pointerInfo.pointerId;
-    if (!base::Contains(id_to_flag_map, id)) {
+  // SAFETY: arg points to the same num elements as id_to_flag_map's size.
+  auto touch_infos = UNSAFE_BUFFERS(base::span(arg, id_to_flag_map.size()));
+
+  for (const auto& touch_info : touch_infos) {
+    const uint32_t id = touch_info.pointerInfo.pointerId;
+    if (!id_to_flag_map.contains(id)) {
       return false;
     }
 
     if (id_to_flag_map.find(id)->second !=
-        touch_info->pointerInfo.pointerFlags) {
+        touch_info.pointerInfo.pointerFlags) {
       return false;
     }
   }
@@ -84,9 +85,14 @@ class TouchInjectorWinDelegateMock : public TouchInjectorWinDelegate {
       : TouchInjectorWinDelegate(nullptr, nullptr, nullptr) {}
   ~TouchInjectorWinDelegateMock() override {}
 
-  MOCK_METHOD2(InitializeTouchInjection, BOOL(UINT32 max_count, DWORD dw_mode));
-  MOCK_METHOD2(InjectTouchInput,
-               DWORD(UINT32 count, const POINTER_TOUCH_INFO* contacts));
+  MOCK_METHOD(BOOL,
+              InitializeTouchInjection,
+              (UINT32 max_count, DWORD dw_mode),
+              (override));
+  MOCK_METHOD(DWORD,
+              InjectTouchInput,
+              (UINT32 count, const POINTER_TOUCH_INFO* contacts),
+              (override));
 };
 
 class TouchInjectorWinTest : public testing::Test {

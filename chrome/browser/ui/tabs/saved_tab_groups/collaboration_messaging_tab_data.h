@@ -47,11 +47,49 @@ class CollaborationMessagingTabData {
 
   static CollaborationMessagingTabData* From(tabs::TabInterface* tab);
 
+  // Get the image to use when displaying the current message in the
+  // hovercard container.
+  static ui::ImageModel GetHoverCardImage(const views::Widget* widget,
+                                          const gfx::Image& avatar,
+                                          bool has_message);
+
   void SetMessage(PersistentMessage message);
   void ClearMessage(PersistentMessage message);
+
+  // Register a callback to be notified when the message changes.
+  base::CallbackListSubscription RegisterMessageChangedCallback(
+      CallbackList::CallbackType cb);
+
+  // TODO(crbug.com/430025519): Remove this method after migrating to new page
+  // actions.
+  // Get the image to use when displaying the current message in the
+  // page action.
+  ui::ImageModel GetPageActionImage(const views::Widget* widget) const;
+
+  // Helper method for getting page action image.
+  ui::ImageModel GetPageActionImage(
+      float scale_factor,
+      const ui::ColorProvider* color_provider) const;
+
   bool HasMessage() const {
     return !given_name_.empty() &&
            collaboration_event_ != CollaborationEvent::UNDEFINED;
+  }
+
+  gfx::Image avatar() { return avatar_; }
+
+  std::u16string given_name() {
+    CHECK(HasMessage());
+    return given_name_;
+  }
+
+  CollaborationEvent collaboration_event() {
+    CHECK(HasMessage());
+    return collaboration_event_;
+  }
+
+  base::WeakPtr<CollaborationMessagingTabData> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
   }
 
   // Testing only. Method for setting the avatar image fetch result.
@@ -66,39 +104,6 @@ class CollaborationMessagingTabData {
     return &avatar_;
   }
 
-  // Register a callback to be notified when the message changes.
-  base::CallbackListSubscription RegisterMessageChangedCallback(
-      CallbackList::CallbackType cb);
-
-  std::u16string given_name() {
-    CHECK(HasMessage());
-    return given_name_;
-  }
-
-  // TODO(crbug.com/430025519): Remove this method after migrating to new page
-  // actions.
-  // Get the image to use when displaying the current message in the
-  // page action.
-  ui::ImageModel GetPageActionImage(const views::Widget* widget) const;
-
-  // Helper method for getting page action image.
-  ui::ImageModel GetPageActionImage(
-      float scale_factor,
-      const ui::ColorProvider* color_provider) const;
-
-  // Get the image to use when displaying the current message in the
-  // hovercard container.
-  ui::ImageModel GetHoverCardImage(const views::Widget* widget) const;
-
-  CollaborationEvent collaboration_event() {
-    CHECK(HasMessage());
-    return collaboration_event_;
-  }
-
-  base::WeakPtr<CollaborationMessagingTabData> GetWeakPtr() {
-    return weak_factory_.GetWeakPtr();
-  }
-
  private:
   FRIEND_TEST_ALL_PREFIXES(CollaborationMessagingTabDataTest,
                            IgnoresRequestsWhenMessageIsCleared);
@@ -106,13 +111,6 @@ class CollaborationMessagingTabData {
                            IgnoresRequestsWhenMessageIsChanged);
   FRIEND_TEST_ALL_PREFIXES(CollaborationMessagingTabDataTest,
                            IgnoresMessageWithoutUser);
-
-  // Creates the image model for the collaboration avatar, falling back to a
-  // generic icon if needed.
-  ui::ImageModel GetImage(float scale_factor,
-                          const ui::ColorProvider* color_provider,
-                          int icon_width,
-                          bool add_border) const;
 
   // Notify callback list that a new message has been committed.
   void NotifyMessageChanged();
@@ -123,18 +121,19 @@ class CollaborationMessagingTabData {
   // Set the message data to be displayed and notify the callback list.
   void CommitMessage(PersistentMessage message, const gfx::Image& avatar);
 
-  // Create image to use as the fallback when the avatar image is empty.
-  ui::ImageModel CreateSizedFallback(float scale_factor,
-                                     const ui::ColorProvider* color_provider,
-                                     int icon_width,
-                                     bool add_border) const;
+  // Creates the image model for the collaboration avatar, falling back to a
+  // generic icon if needed.
+  ui::ImageModel GetImage(float scale_factor,
+                          const ui::ColorProvider* color_provider,
+                          int icon_width,
+                          bool add_border) const;
 
   raw_ptr<Profile> profile_;
 
   // The cached message while a request is in flight. This is used to
   // verify that the message has not changed while the image was being
   // requested.
-  std::optional<PersistentMessage> message_to_commit_ = std::nullopt;
+  std::optional<PersistentMessage> message_to_commit_;
 
   // Contains the given name of the user who triggered the event.
   std::u16string given_name_;
@@ -147,7 +146,7 @@ class CollaborationMessagingTabData {
 
   // Testing purposes only. Contains a mock image to use in lieu of making
   // a network request for the avatar.
-  std::optional<gfx::Image> mock_avatar_for_testing_ = std::nullopt;
+  std::optional<gfx::Image> mock_avatar_for_testing_;
 
   // Listeners to notify when the message for this tab changes.
   CallbackList message_changed_callback_list_;

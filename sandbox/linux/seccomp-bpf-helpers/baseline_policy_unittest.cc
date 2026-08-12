@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "sandbox/linux/seccomp-bpf-helpers/baseline_policy.h"
 
 #include <errno.h>
@@ -29,9 +24,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <array>
+#include <string_view>
 #include <tuple>
 
 #include "base/clang_profiling_buildflags.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_file.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/synchronization/lock_impl.h"
@@ -86,16 +84,18 @@ void TestPipeOrSocketPair(base::ScopedFD read_end, base::ScopedFD write_end) {
   BPF_ASSERT_EQ(EPERM, errno);
 
   const ssize_t kTestTransferSize = 4;
-  static const char kTestString[kTestTransferSize] = {'T', 'E', 'S', 'T'};
+  static constexpr std::array<char, kTestTransferSize> kTestString = {'T', 'E',
+                                                                      'S', 'T'};
   ssize_t transfered = 0;
 
+  transfered = HANDLE_EINTR(
+      write(write_end.get(), kTestString.data(), kTestString.size()));
+  BPF_ASSERT_EQ(kTestTransferSize, transfered);
+  std::array<char, kTestTransferSize> read_buf = {};
   transfered =
-      HANDLE_EINTR(write(write_end.get(), kTestString, kTestTransferSize));
+      HANDLE_EINTR(read(read_end.get(), read_buf.data(), read_buf.size()));
   BPF_ASSERT_EQ(kTestTransferSize, transfered);
-  char read_buf[kTestTransferSize + 1] = {};
-  transfered = HANDLE_EINTR(read(read_end.get(), read_buf, sizeof(read_buf)));
-  BPF_ASSERT_EQ(kTestTransferSize, transfered);
-  BPF_ASSERT_EQ(0, memcmp(kTestString, read_buf, kTestTransferSize));
+  BPF_ASSERT_EQ(kTestString, read_buf);
 }
 
 // Test that a few easy-to-test system calls are allowed.
@@ -187,8 +187,8 @@ BPF_TEST_C(BaselinePolicy, CloneVforkEperm, BaselinePolicy) {
                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
   BPF_ASSERT_NE(child_stack, nullptr);
   pid_t pid = syscall(__NR_clone, CLONE_VM | CLONE_VFORK | SIGCHLD,
-                      static_cast<char*>(child_stack) + kStackSize, nullptr,
-                      nullptr, nullptr);
+                      UNSAFE_TODO(static_cast<char*>(child_stack) + kStackSize),
+                      nullptr, nullptr, nullptr);
   const int clone_errno = errno;
   TestUtils::HandlePostForkReturn(pid);
 
@@ -369,69 +369,6 @@ BPF_TEST_C(BaselinePolicy, FutexEINVAL, BaselinePolicy) {
     BPF_ASSERT_EQ(EINVAL, errno);
   }
 }
-#else
-
-#define TEST_BASELINE_PI_FUTEX(op)                            \
-  _TEST_BASELINE_PI_FUTEX(BaselinePolicy, Futex_##op) {       \
-    syscall(__NR_futex, nullptr, op, 0, nullptr, nullptr, 0); \
-    _exit(1);                                                 \
-  }
-
-#if BUILDFLAG(ENABLE_MUTEX_PRIORITY_INHERITANCE)
-// PI futexes are only allowed by the sandbox on kernels >= 6.1 iff the
-// background thread pool field trial is active and configured to use priority
-// inheritance locks. In order to test this,
-// |_TEST_BASELINE_PI_FUTEX| generates a test which has two parts:
-//  - The first part of the test enables the feature and performs the futex
-//    syscall in a child process with the provided futex operation. Then it
-//    asserts that the syscall succeed only if the kernel version is at
-//    least 6.1.
-//  - The second part of the test disables the feature and performs the futex
-//    syscall in a child process with the provided futex operation. Then it
-//    asserts that the syscall always crashes the process.
-#define _TEST_BASELINE_PI_FUTEX(test_case_name, test_name)                     \
-  void BPF_TEST_PI_FUTEX_##test_name();                                        \
-  TEST(test_case_name, DISABLE_ON_TSAN(test_name)) {                           \
-    {                                                                          \
-      base::android::ScopedUsePriorityInheritanceLocksForTesting use_pi_locks; \
-      __TEST_BASELINE_PI_FUTEX(BPF_TEST_PI_FUTEX_##test_name);                 \
-    }                                                                          \
-    {                                                                          \
-      __TEST_BASELINE_PI_FUTEX(BPF_TEST_PI_FUTEX_##test_name);                 \
-    }                                                                          \
-  }                                                                            \
-  void BPF_TEST_PI_FUTEX_##test_name()
-
-#define __TEST_BASELINE_PI_FUTEX(test_name)                               \
-  {                                                                       \
-    sandbox::SandboxBPFTestRunner bpf_test_runner(                        \
-        new BPFTesterSimpleDelegate<BaselinePolicy>(test_name));          \
-    sandbox::UnitTests::RunTestInProcess(                                 \
-        &bpf_test_runner, PIFutexDeath,                                   \
-        static_cast<const void*>(GetFutexErrorMessageContentForTests())); \
-  }
-
-void PIFutexDeath(int status, const std::string& msg, const void* aux) {
-  if (base::android::BackgroundThreadPoolFieldTrial::
-          ShouldUsePriorityInheritanceLocks()) {
-    sandbox::UnitTests::DeathSuccess(status, msg, nullptr);
-  } else {
-    sandbox::UnitTests::DeathSEGVMessage(status, msg, aux);
-  }
-}
-#else
-#define _TEST_BASELINE_PI_FUTEX(test_case_name, test_name)                    \
-  BPF_DEATH_TEST_C(BaselinePolicy, test_name,                                 \
-                   DEATH_SEGV_MESSAGE(GetFutexErrorMessageContentForTests()), \
-                   BaselinePolicy)
-#endif
-
-TEST_BASELINE_PI_FUTEX(FUTEX_LOCK_PI)
-TEST_BASELINE_PI_FUTEX(FUTEX_LOCK_PI2)
-TEST_BASELINE_PI_FUTEX(FUTEX_TRYLOCK_PI)
-TEST_BASELINE_PI_FUTEX(FUTEX_WAIT_REQUEUE_PI)
-TEST_BASELINE_PI_FUTEX(FUTEX_CMP_REQUEUE_PI)
-TEST_BASELINE_PI_FUTEX(FUTEX_UNLOCK_PI_PRIVATE)
 #endif
 
 BPF_TEST_C(BaselinePolicy, PrctlDumpable, BaselinePolicy) {

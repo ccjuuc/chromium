@@ -11,10 +11,9 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -25,7 +24,6 @@
 #include "base/process/process_handle.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
-#include "base/stl_util.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -87,36 +85,12 @@ static const auto kConfigurations = std::to_array<UsbTestGadgetConfiguration>({
     {UsbTestGadget::ECHO, "/echo/configure", 0x58F4},
 });
 
-bool ReadFile(const base::FilePath& file_path, std::string* content) {
-  base::File file(file_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
-  if (!file.IsValid()) {
-    LOG(ERROR) << "Cannot open " << file_path.MaybeAsASCII() << ": "
-               << base::File::ErrorToString(file.error_details());
-    return false;
-  }
-
-  base::STLClearObject(content);
-  int rv;
-  do {
-    char buf[4096];
-    rv = UNSAFE_TODO(file.ReadAtCurrentPos(buf, sizeof buf));
-    if (rv == -1) {
-      LOG(ERROR) << "Cannot read " << file_path.MaybeAsASCII() << ": "
-                 << base::File::ErrorToString(file.error_details());
-      return false;
-    }
-    content->append(buf, rv);
-  } while (rv > 0);
-
-  return true;
-}
-
 bool ReadLocalVersion(std::string* version) {
   base::FilePath file_path;
   CHECK(base::PathService::Get(base::DIR_EXE, &file_path));
   file_path = file_path.AppendASCII("usb_gadget.zip.md5");
 
-  return ReadFile(file_path, version);
+  return base::ReadFileToString(file_path, version);
 }
 
 bool ReadLocalPackage(std::string* package) {
@@ -124,7 +98,7 @@ bool ReadLocalPackage(std::string* package) {
   CHECK(base::PathService::Get(base::DIR_EXE, &file_path));
   file_path = file_path.AppendASCII("usb_gadget.zip");
 
-  return ReadFile(file_path, package);
+  return base::ReadFileToString(file_path, package);
 }
 
 class URLRequestContextGetter : public net::URLRequestContextGetter {
@@ -163,7 +137,8 @@ std::unique_ptr<net::URLRequest> CreateSimpleRequest(
     const std::string& form_data_type,
     const std::string& form_data) {
   std::unique_ptr<net::URLRequest> request(request_context.CreateRequest(
-      url, net::DEFAULT_PRIORITY, delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
+      url, net::DEFAULT_PRIORITY, delegate, TRAFFIC_ANNOTATION_FOR_TESTS,
+      net::handles::kInvalidNetworkHandle));
   if (!form_data_type.empty()) {
     net::HttpRequestHeaders extra_headers;
     extra_headers.SetHeader(net::HttpRequestHeaders::kContentType,

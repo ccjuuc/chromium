@@ -38,6 +38,9 @@ import org.chromium.chrome.browser.autofill.AutofillImageFetcherFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManagerProvider;
 import org.chromium.components.autofill.payments.AccountType;
 import org.chromium.components.autofill.payments.BankAccount;
 import org.chromium.components.autofill.payments.Ewallet;
@@ -47,58 +50,60 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFacto
 import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
 import org.chromium.ui.base.WindowAndroid;
 
+import java.util.List;
+
 /** Unit tests for {@link FacilitatedPaymentsPaymentMethodsViewBridge}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
-    private static final BankAccount[] BANK_ACCOUNTS = {
-        new BankAccount.Builder()
-                .setPaymentInstrument(
-                        new PaymentInstrument.Builder()
-                                .setInstrumentId(100)
-                                .setNickname("nickname1")
-                                .setSupportedPaymentRails(new int[] {PaymentRail.PIX})
-                                .build())
-                .setBankName("bankName1")
-                .setAccountNumberSuffix("1111")
-                .setAccountType(AccountType.CHECKING)
-                .build(),
-        new BankAccount.Builder()
-                .setPaymentInstrument(
-                        new PaymentInstrument.Builder()
-                                .setInstrumentId(200)
-                                .setNickname("nickname2")
-                                .setSupportedPaymentRails(new int[] {PaymentRail.PIX})
-                                .build())
-                .setBankName("bankName2")
-                .setAccountNumberSuffix("2222")
-                .setAccountType(AccountType.CHECKING)
-                .build()
-    };
+    private static final List<BankAccount> BANK_ACCOUNTS =
+            List.of(
+                    new BankAccount.Builder()
+                            .setPaymentInstrument(
+                                    new PaymentInstrument.Builder()
+                                            .setInstrumentId(100)
+                                            .setNickname("nickname1")
+                                            .setSupportedPaymentRails(new int[] {PaymentRail.PIX})
+                                            .build())
+                            .setBankName("bankName1")
+                            .setAccountNumberSuffix("1111")
+                            .setAccountType(AccountType.CHECKING)
+                            .build(),
+                    new BankAccount.Builder()
+                            .setPaymentInstrument(
+                                    new PaymentInstrument.Builder()
+                                            .setInstrumentId(200)
+                                            .setNickname("nickname2")
+                                            .setSupportedPaymentRails(new int[] {PaymentRail.PIX})
+                                            .build())
+                            .setBankName("bankName2")
+                            .setAccountNumberSuffix("2222")
+                            .setAccountType(AccountType.CHECKING)
+                            .build());
 
-    private static final Ewallet[] EWALLETS = {
-        new Ewallet.Builder()
-                .setPaymentInstrument(
-                        new PaymentInstrument.Builder()
-                                .setInstrumentId(100)
-                                .setNickname("nickname")
-                                .setSupportedPaymentRails(new int[] {2})
-                                .setIsFidoEnrolled(true)
-                                .build())
-                .setEwalletName("eWallet name 1")
-                .setAccountDisplayName("account display name 1")
-                .build(),
-        new Ewallet.Builder()
-                .setPaymentInstrument(
-                        new PaymentInstrument.Builder()
-                                .setInstrumentId(200)
-                                .setNickname("nickname2")
-                                .setSupportedPaymentRails(new int[] {2})
-                                .setIsFidoEnrolled(false)
-                                .build())
-                .setEwalletName("eWallet name 2")
-                .setAccountDisplayName("account display name 2")
-                .build()
-    };
+    private static final List<Ewallet> EWALLETS =
+            List.of(
+                    new Ewallet.Builder()
+                            .setPaymentInstrument(
+                                    new PaymentInstrument.Builder()
+                                            .setInstrumentId(100)
+                                            .setNickname("nickname")
+                                            .setSupportedPaymentRails(new int[] {2})
+                                            .setIsFidoEnrolled(true)
+                                            .build())
+                            .setEwalletName("eWallet name 1")
+                            .setAccountDisplayName("account display name 1")
+                            .build(),
+                    new Ewallet.Builder()
+                            .setPaymentInstrument(
+                                    new PaymentInstrument.Builder()
+                                            .setInstrumentId(200)
+                                            .setNickname("nickname2")
+                                            .setSupportedPaymentRails(new int[] {2})
+                                            .setIsFidoEnrolled(false)
+                                            .build())
+                            .setEwalletName("eWallet name 2")
+                            .setAccountDisplayName("account display name 2")
+                            .build());
 
     private static final ResolveInfo[] APPS = {new ResolveInfo(), new ResolveInfo()};
 
@@ -108,6 +113,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     @Mock private ManagedBottomSheetController mBottomSheetController;
     @Mock private AutofillImageFetcher mAutofillImageFetcher;
     @Mock private Profile mProfile;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private Context mApplicationContext;
     private FacilitatedPaymentsPaymentMethodsViewBridge mViewBridge;
@@ -118,8 +124,10 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         AutofillImageFetcherFactory.setInstanceForTesting(mAutofillImageFetcher);
         mApplicationContext = ApplicationProvider.getApplicationContext();
-        mWindow = new WindowAndroid(mApplicationContext, /* trackOcclusion= */ false);
+        mApplicationContext.setTheme(R.style.Theme_BrowserUI_DayNight);
+        mWindow = new WindowAndroid(mApplicationContext, /* occlusionTrackingAllowed= */ false);
         BottomSheetControllerFactory.attach(mWindow, mBottomSheetController);
+        SnackbarManagerProvider.attach(mWindow, mSnackbarManager);
         mViewBridge =
                 FacilitatedPaymentsPaymentMethodsViewBridge.create(
                         mDelegateMock, mWindow, mProfile);
@@ -127,6 +135,7 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
 
     @After
     public void tearDown() {
+        SnackbarManagerProvider.detach(mSnackbarManager);
         BottomSheetControllerFactory.detach(mBottomSheetController);
         mWindow.destroy();
     }
@@ -256,10 +265,31 @@ public class FacilitatedPaymentsPaymentMethodsViewBridgeTest {
     @SmallTest
     public void showPixAccountLinkingPrompt_callsControllerRequestShowContent() {
 
-        mViewBridge.showPixAccountLinkingPrompt();
+        mViewBridge.showPixAccountLinkingPrompt(/* strikeCount= */ 0, "test@gmail.com");
 
         verify(mBottomSheetController)
                 .requestShowContent(
                         any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    @SmallTest
+    public void showPixAccountLinkingSuccessScreen_callsControllerRequestShowContent() {
+
+        mViewBridge.showPixAccountLinkingSuccessScreen();
+
+        verify(mBottomSheetController)
+                .requestShowContent(
+                        any(FacilitatedPaymentsPaymentMethodsView.class), /* animate= */ eq(true));
+    }
+
+    @Test
+    @SmallTest
+    public void showAccountLinkingFailureNotification_showsSnackbar() {
+        mViewBridge.showAccountLinkingFailureNotification(
+                org.chromium.components.facilitated_payments.core.metrics.FacilitatedPaymentsType
+                        .PIX);
+
+        verify(mSnackbarManager).showSnackbar(any(Snackbar.class));
     }
 }

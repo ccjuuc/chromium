@@ -31,19 +31,21 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tasks.tab_management.TabActionListener;
@@ -72,13 +74,11 @@ public class PinnedTabStripMediatorTest {
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
             new ActivityScenarioRule<>(TestActivity.class);
 
-    private final ObservableSupplierImpl<TabGroupModelFilter> mTabGroupModelFilterSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
 
     @Mock private GridLayoutManager mLayoutManager;
     @Mock private TabListCoordinator mTabListCoordinator;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
-    @Mock private TabGroupModelFilter mIncognitoTabGroupModelFilter;
     @Mock private Tab mTab1;
     @Mock private Tab mTab2;
     @Mock private Tab mTab3;
@@ -89,14 +89,16 @@ public class PinnedTabStripMediatorTest {
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private CollaborationService mCollaborationService;
     @Mock private BookmarkModel mBookmarkModel;
-    @Mock private ObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
     @Mock private BottomSheetController mBottomSheetController;
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private Runnable mOnTabGroupCreation;
     @Mock private View mMockView;
+    @Mock private MultiInstanceOrchestrator mMultiInstanceOrchestrator;
 
     @Captor private ArgumentCaptor<TabModelObserver> mTabModelObserverCaptor;
 
+    private final MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier =
+            ObservableSuppliers.alwaysNull();
     private TabListModel mTabListModel;
     private TabListModel mPinnedTabsModelList;
     private PropertyModel mStripPropertyModel;
@@ -106,17 +108,17 @@ public class PinnedTabStripMediatorTest {
 
     @Before
     public void setUp() {
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.getProfile()).thenReturn(mProfile);
-        when(mIncognitoTabGroupModelFilter.getTabModel()).thenReturn(mIncognitoTabModel);
         when(mIncognitoTabModel.getProfile()).thenReturn(mProfile);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
         CollaborationServiceFactory.setForTesting(mCollaborationService);
         BookmarkModel.setInstanceForTesting(mBookmarkModel);
+        MultiInstanceOrchestratorFactory.setInstanceForTesting(mMultiInstanceOrchestrator);
         mActivityScenarioRule.getScenario().onActivity(this::onActivity);
     }
 
     void onActivity(TestActivity activity) {
+        mTabModelSupplier.set(mTabModel);
         mActivity = activity;
         mTabListModel = new TabListModel();
         mPinnedTabsModelList = new TabListModel();
@@ -134,7 +136,7 @@ public class PinnedTabStripMediatorTest {
                         mTabListModel,
                         mPinnedTabsModelList,
                         mStripPropertyModel,
-                        mTabGroupModelFilterSupplier,
+                        mTabModelSupplier,
                         mTabBookmarkerSupplier,
                         mBottomSheetController,
                         mModalDialogManager,
@@ -146,9 +148,8 @@ public class PinnedTabStripMediatorTest {
         mTabListItemSizeChangedObserver = observerCaptor.getValue();
         when(mLayoutManager.getSpanCount()).thenReturn(2);
 
-        mTabGroupModelFilterSupplier.set(mTabGroupModelFilter);
         mMediator.setContextMenuCoordinatorForTesting(mMenuCoordinator);
-        verify(mTabGroupModelFilter).addObserver(mTabModelObserverCaptor.capture());
+        verify(mTabModel).addObserver(mTabModelObserverCaptor.capture());
     }
 
     @Test
@@ -546,16 +547,26 @@ public class PinnedTabStripMediatorTest {
         mTabModelObserverCaptor.getValue().tabClosureUndone(mTab1);
         // The updatePinnedTabsBar() call is now posted to the UI thread.
         // We need to advance the looper to ensure the posted task is executed.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mLayoutManager, times(2)).findFirstVisibleItemPosition();
     }
 
     @Test
-    public void testChangingTabGroupModelFilters() {
-        mTabGroupModelFilterSupplier.set(mIncognitoTabGroupModelFilter);
+    public void testChangingTabModels() {
+        mTabModelSupplier.set(mIncognitoTabModel);
 
-        verify(mTabGroupModelFilter).removeObserver(any());
-        verify(mIncognitoTabGroupModelFilter).addObserver(any());
+        verify(mTabModel).removeObserver(any());
+        verify(mIncognitoTabModel).addObserver(any());
+    }
+
+    @Test
+    public void testOnTabModelChanged_NullProfile() {
+        when(mTabModel.getProfile()).thenReturn(null);
+
+        mTabModelSupplier.set(mTabModel);
+
+        // Verify that the downstream dependencies are not created.
+        verify(mOnTabGroupCreation, times(0)).run();
     }
 
     @Test
@@ -563,6 +574,9 @@ public class PinnedTabStripMediatorTest {
         mMediator.destroy();
         verify(mTabListCoordinator)
                 .removeTabListItemSizeChangedObserver(mTabListItemSizeChangedObserver);
+        // Regression test: destroy() must remove the TabModel observer to avoid leaking the
+        // mediator.
+        verify(mTabModel).removeObserver(mTabModelObserverCaptor.getValue());
     }
 
     @Test

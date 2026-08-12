@@ -6,6 +6,7 @@
 #define UI_TOUCH_SELECTION_TOUCH_SELECTION_CONTROLLER_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
@@ -54,10 +55,10 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
     : public TouchHandleClient,
       public LongPressDragSelectorClient {
  public:
-  enum ActiveStatus {
-    INACTIVE,
-    INSERTION_ACTIVE,
-    SELECTION_ACTIVE,
+  enum class ActiveStatus {
+    kInactive,
+    kInsertionActive,
+    kSelectionActive,
   };
 
   struct UI_TOUCH_SELECTION_EXPORT Config {
@@ -188,7 +189,12 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
  private:
   friend class TouchSelectionControllerTestApi;
 
-  enum InputEventType { TAP, REPEATED_TAP, LONG_PRESS, INPUT_EVENT_TYPE_NONE };
+  enum class InputEventType {
+    kTap,
+    kRepeatedTap,
+    kLongPress,
+    kNone,
+  };
 
   enum class DragSelectorInitiatingGesture { kNone, kLongPress, kDoublePress };
 
@@ -292,6 +298,8 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
 
   // Whether a swipe-to-move-cursor gesture is activated.
   bool swipe_to_move_cursor_activated_ = false;
+
+  base::WeakPtrFactory<TouchSelectionController> weak_factory_{this};
 };
 
 }  // namespace ui

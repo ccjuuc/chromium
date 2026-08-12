@@ -7,11 +7,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/compiler_specific.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/i18n/string_search.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/checked_math.h"
 #include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
 #include "base/win/variant_vector.h"
@@ -94,9 +94,48 @@ class AXRangePhysicalPixelRectDelegate : public AXRangeRectDelegate {
   raw_ptr<AXPlatformNodeTextRangeProviderWin> host_;
 };
 
-AXPlatformNodeTextRangeProviderWin::AXPlatformNodeTextRangeProviderWin() {}
+AXPlatformNodeTextRangeProviderWin::AXPlatformNodeTextRangeProviderWin(
+    AXPositionInstance start,
+    AXPositionInstance end) {
+  SetStart(std::move(start));
+  SetEnd(std::move(end));
+}
 
 AXPlatformNodeTextRangeProviderWin::~AXPlatformNodeTextRangeProviderWin() {}
+
+IFACEMETHODIMP_(ULONG) AXPlatformNodeTextRangeProviderWin::AddRef() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ref_count_ = base::CheckAdd(ref_count_, 1).ValueOrDie();
+  return ref_count_;
+}
+
+IFACEMETHODIMP_(ULONG) AXPlatformNodeTextRangeProviderWin::Release() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ULONG ref_count = base::CheckSub(ref_count_, 1).ValueOrDie();
+  ref_count_ = ref_count;
+  if (ref_count == 0) {
+    delete this;
+  }
+  return ref_count;
+}
+
+IFACEMETHODIMP AXPlatformNodeTextRangeProviderWin::QueryInterface(
+    REFIID iid,
+    void** ppvObject) {
+  if (!ppvObject) {
+    return E_INVALIDARG;
+  }
+  *ppvObject = nullptr;
+  if (iid == __uuidof(IUnknown) || iid == __uuidof(ITextRangeProvider)) {
+    *ppvObject = static_cast<ITextRangeProvider*>(this);
+  } else if (iid == __uuidof(AXPlatformNodeTextRangeProviderWin)) {
+    *ppvObject = this;
+  } else {
+    return E_NOINTERFACE;
+  }
+  AddRef();
+  return S_OK;
+}
 
 void AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
     AXPositionInstance start,
@@ -104,18 +143,9 @@ void AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
     ITextRangeProvider** text_range_provider) {
   DCHECK(text_range_provider);
   DCHECK_EQ(*text_range_provider, nullptr);
-  *text_range_provider = nullptr;
 
-  CComObject<AXPlatformNodeTextRangeProviderWin>* text_range_provider_win =
-      nullptr;
-  if (SUCCEEDED(CComObject<AXPlatformNodeTextRangeProviderWin>::CreateInstance(
-          &text_range_provider_win))) {
-    DCHECK(text_range_provider_win);
-    text_range_provider_win->SetStart(std::move(start));
-    text_range_provider_win->SetEnd(std::move(end));
-    text_range_provider_win->AddRef();
-    *text_range_provider = text_range_provider_win;
-  }
+  *text_range_provider =
+      new AXPlatformNodeTextRangeProviderWin(std::move(start), std::move(end));
 }
 
 void AXPlatformNodeTextRangeProviderWin::CreateTextRangeProviderForTesting(
@@ -124,12 +154,8 @@ void AXPlatformNodeTextRangeProviderWin::CreateTextRangeProviderForTesting(
     AXPositionInstance end,
     ITextRangeProvider** text_range_provider) {
   CreateTextRangeProvider(start->Clone(), end->Clone(), text_range_provider);
-  Microsoft::WRL::ComPtr<AXPlatformNodeTextRangeProviderWin>
-      text_range_provider_win;
-  if (SUCCEEDED((*text_range_provider)
-                    ->QueryInterface(IID_PPV_ARGS(&text_range_provider_win)))) {
-    text_range_provider_win->SetOwnerForTesting(owner);  // IN-TEST
-  }
+  static_cast<AXPlatformNodeTextRangeProviderWin*>(*text_range_provider)
+      ->SetOwnerForTesting(owner);  // IN-TEST
 }
 
 //
@@ -170,6 +196,8 @@ HRESULT AXPlatformNodeTextRangeProviderWin::CompareEndpoints(
     ITextRangeProvider* other,
     TextPatternRangeEndpoint other_endpoint,
     int* result) {
+  ScopedAXEmbeddedObjectBehaviorSetter ax_embedded_object_behavior(
+      AXEmbeddedObjectBehavior::kUIAExposeCharacterForTextContent);
   UIA_VALIDATE_TEXTRANGEPROVIDER_CALL_1_IN_1_OUT(other, result);
   WIN_ACCESSIBILITY_API_HISTOGRAM(UMA_API_TEXTRANGE_COMPAREENDPOINTS);
   WIN_ACCESSIBILITY_API_PERF_HISTOGRAM(UMA_API_TEXTRANGE_COMPAREENDPOINTS);
@@ -620,6 +648,7 @@ HRESULT AXPlatformNodeTextRangeProviderWin::GetAttributeValue(
   // The range is inclusive, so advance our endpoint to the next position
   const auto end_leaf_text_position = normalized_end->AsLeafTextPosition();
   auto end = end_leaf_text_position->CreateNextAnchorPosition();
+  bool has_attribute_value = false;
 
   // Iterate over anchor positions
   for (auto it = normalized_start->AsLeafTextPosition();
@@ -630,51 +659,95 @@ HRESULT AXPlatformNodeTextRangeProviderWin::GetAttributeValue(
     // range, return failure. This is unexpected but may happen if the range
     // became inverted.
     DCHECK(!it->IsNullPosition());
-    if (it->IsNullPosition())
+    if (it->IsNullPosition()) {
       return E_FAIL;
+    }
 
     AXPlatformNodeDelegate* delegate = GetDelegate(it.get());
     DCHECK(delegate);
 
-    AXPlatformNodeWin* platform_node = static_cast<AXPlatformNodeWin*>(
+    AXPlatformNodeWin* anchor_node = static_cast<AXPlatformNodeWin*>(
         delegate->GetFromNodeID(it->anchor_id()));
-    DCHECK(platform_node);
+    DCHECK(anchor_node);
 
     // Only get attributes for nodes in the tree. Exclude descendants of leaves
     // and ignored objects.
-    platform_node = static_cast<AXPlatformNodeWin*>(
+    AXPlatformNodeWin* platform_node = static_cast<AXPlatformNodeWin*>(
         AXPlatformNode::FromNativeViewAccessible(
-            platform_node->GetDelegate()->GetLowestPlatformAncestor()));
+            anchor_node->GetDelegate()->GetLowestPlatformAncestor()));
     DCHECK(platform_node);
 
     base::win::VariantVector current_value;
     const bool at_end_leaf_text_anchor =
         it->anchor_id() == end_leaf_text_position->anchor_id() &&
         it->tree_id() == end_leaf_text_position->tree_id();
-    const std::optional<int> start_offset =
-        it->IsTextPosition() ? std::make_optional(it->text_offset())
-                             : std::nullopt;
-    const std::optional<int> end_offset =
-        at_end_leaf_text_anchor
-            ? std::make_optional(end_leaf_text_position->text_offset())
-            : std::nullopt;
+
+    // When the iterator is on a leaf node (e.g., an inline text box) but
+    // GetLowestPlatformAncestor() resolves to a parent node (e.g., static
+    // text), the text offsets from the iterator are local to the leaf. They
+    // must be translated to the parent's coordinate space so that marker
+    // lookups (e.g., spelling annotations) use correct offsets.
+    const bool needs_offset_adjustment = platform_node != anchor_node;
+
+    const AXNode* platform_anchor = needs_offset_adjustment
+                                        ? platform_node->GetDelegate()->node()
+                                        : nullptr;
+    DCHECK(!needs_offset_adjustment || platform_anchor);
+
+    std::optional<int> start_offset;
+    std::optional<int> end_offset;
+    if (!needs_offset_adjustment) {
+      if (it->IsTextPosition()) {
+        start_offset = it->text_offset();
+      }
+      if (at_end_leaf_text_anchor && end_leaf_text_position->IsTextPosition()) {
+        end_offset = end_leaf_text_position->text_offset();
+      }
+    } else if (platform_anchor) {
+      auto translate_offset =
+          [platform_anchor](
+              const AXNodePosition::AXPositionInstance& position,
+              ax::mojom::MoveDirection direction) -> std::optional<int> {
+        auto text_position = position->AsTextPosition();
+        if (text_position->IsNullPosition()) {
+          return std::nullopt;
+        }
+        auto ancestor_position =
+            text_position->CreateAncestorPosition(platform_anchor, direction);
+        if (ancestor_position->IsNullPosition() ||
+            ancestor_position->GetAnchor() != platform_anchor) {
+          return std::nullopt;
+        }
+        return ancestor_position->text_offset();
+      };
+      start_offset = translate_offset(it, ax::mojom::MoveDirection::kForward);
+      auto current_end_position = at_end_leaf_text_anchor
+                                      ? end_leaf_text_position->Clone()
+                                      : it->CreatePositionAtEndOfAnchor();
+      end_offset = translate_offset(current_end_position,
+                                    ax::mojom::MoveDirection::kBackward);
+    }
+
     HRESULT hr = platform_node->GetTextAttributeValue(
         attribute_id, start_offset, end_offset, &current_value);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
       return E_FAIL;
+    }
 
-    if (attribute_value.Type() == VT_EMPTY) {
+    if (!has_attribute_value) {
       attribute_value = std::move(current_value);
+      has_attribute_value = true;
     } else if (attribute_value != current_value) {
       V_VT(value) = VT_UNKNOWN;
       return ::UiaGetReservedMixedAttributeValue(&V_UNKNOWN(value));
     }
   }
 
-  if (ShouldReleaseTextAttributeAsSafearray(attribute_id, attribute_value))
+  if (ShouldReleaseTextAttributeAsSafearray(attribute_id, attribute_value)) {
     *value = attribute_value.ReleaseAsSafearrayVariant();
-  else
+  } else {
     *value = attribute_value.ReleaseAsScalarVariant();
+  }
   return S_OK;
 }
 
@@ -691,37 +764,36 @@ HRESULT AXPlatformNodeTextRangeProviderWin::GetBoundingRectangles(
   AXRangePhysicalPixelRectDelegate rect_delegate(this);
   std::vector<gfx::Rect> rects = range.GetRects(&rect_delegate);
 
+  size_t num_safe_array_elems = rects.size() * 4;
   // 4 array items per rect: left, top, width, height
-  SAFEARRAY* safe_array = SafeArrayCreateVector(
-      VT_R8 /* element type */, 0 /* lower bound */, rects.size() * 4);
+  base::win::ScopedSafearray safe_array(::SafeArrayCreateVector(
+      /*element_type=*/VT_R8, /*lower bound=*/0, num_safe_array_elems));
 
-  if (!safe_array)
+  if (!safe_array.Get()) {
     return E_OUTOFMEMORY;
+  }
 
   if (rects.size() > 0) {
-    double* double_array = nullptr;
-    HRESULT hr = SafeArrayAccessData(safe_array,
-                                     reinterpret_cast<void**>(&double_array));
+    auto locked_array = safe_array.CreateLockScope<VT_R8>();
 
-    if (SUCCEEDED(hr)) {
+    if (locked_array) {
+      auto double_span = base::span(*locked_array);
+
       for (size_t rect_index = 0; rect_index < rects.size(); rect_index++) {
         const gfx::Rect& rect = rects[rect_index];
-        UNSAFE_TODO(double_array[rect_index * 4]) = rect.x();
-        UNSAFE_TODO(double_array[rect_index * 4 + 1]) = rect.y();
-        UNSAFE_TODO(double_array[rect_index * 4 + 2]) = rect.width();
-        UNSAFE_TODO(double_array[rect_index * 4 + 3]) = rect.height();
-      }
-      hr = SafeArrayUnaccessData(safe_array);
-    }
+        size_t base_idx = rect_index * 4;
 
-    if (FAILED(hr)) {
-      DCHECK(safe_array);
-      SafeArrayDestroy(safe_array);
+        double_span[base_idx] = rect.x();
+        double_span[base_idx + 1] = rect.y();
+        double_span[base_idx + 2] = rect.width();
+        double_span[base_idx + 3] = rect.height();
+      }
+    } else {
       return E_FAIL;
     }
   }
 
-  *screen_physical_pixel_rectangles = safe_array;
+  *screen_physical_pixel_rectangles = safe_array.Release();
   return S_OK;
 }
 
@@ -1181,27 +1253,26 @@ HRESULT AXPlatformNodeTextRangeProviderWin::GetChildren(SAFEARRAY** children) {
   descendants = common_delegate->GetUIADirectChildrenInRange(start_delegate,
                                                              end_delegate);
 
-  SAFEARRAY* safe_array =
-      SafeArrayCreateVector(VT_UNKNOWN, 0, descendants.size());
+  base::win::ScopedSafearray safe_array(
+      ::SafeArrayCreateVector(VT_UNKNOWN, 0, descendants.size()));
 
-  if (!safe_array)
-    return E_OUTOFMEMORY;
-
-  if (safe_array->rgsabound->cElements != descendants.size()) {
-    DCHECK(safe_array);
-    SafeArrayDestroy(safe_array);
+  if (!safe_array.Get()) {
     return E_OUTOFMEMORY;
   }
 
+  auto locked_array = safe_array.CreateLockScope<VT_UNKNOWN>();
+  if (!locked_array) {
+    return E_FAIL;
+  }
+  auto locked_span = base::span(*locked_array);
   LONG i = 0;
   for (const gfx::NativeViewAccessible& descendant : descendants) {
     Microsoft::WRL::ComPtr<IRawElementProviderSimple> raw_provider;
     descendant->QueryInterface(IID_PPV_ARGS(&raw_provider));
-    SafeArrayPutElement(safe_array, &i, raw_provider.Get());
-    ++i;
+    locked_span[i++] = raw_provider.Detach();
   }
 
-  *children = safe_array;
+  *children = safe_array.Release();
   return S_OK;
 }
 

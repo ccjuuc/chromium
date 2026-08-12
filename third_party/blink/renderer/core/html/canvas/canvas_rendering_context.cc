@@ -30,26 +30,44 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_element_elementimage.h"
 #include "third_party/blink/renderer/core/animation_frame/worker_animation_frame_provider.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_context_creation_attributes_core.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_image_source.h"
+#include "third_party/blink/renderer/core/html/canvas/element_image.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_accessibility_manager.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/paint/cull_rect_updater.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_painter.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
+#include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record_builder.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
 
 namespace blink {
+namespace {
+BASE_FEATURE(kAllowAcceleratedTexElement, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Delay for recording the UKM for canvas accessibility to allow the canvas
+// element to update its accessibility related information. This value is chosen
+// arbitrarily and can be subject to optimization.
+constexpr base::TimeDelta kAccessibilityUkmRecordingDelay = base::Seconds(5);
+}
 
 CanvasRenderingContext::CanvasRenderingContext(
     CanvasRenderingContextHost* host,
@@ -71,21 +89,12 @@ CanvasRenderingContext::CanvasRenderingContext(
   CHECK(host_);
 }
 
-base::ByteSize CanvasRenderingContext::AllocatedBufferSize() const {
-  if (!Host() || isContextLost()) {
-    return base::ByteSize(0);
-  }
-  const gfx::Size& size = DrawingBufferSize();
-  if (size.IsEmpty()) {
-    return base::ByteSize(0);
-  }
-  int buffer_count = AllocatedBufferCountPerPixel();
-  return buffer_count *
-         base::ByteSize(GetSharedImageFormat().EstimatedSizeInBytes(size));
-}
-
 void CanvasRenderingContext::Dispose() {
   RenderTaskEnded();
+
+  if (did_schedule_accessibility_ukm_recording_) {
+    RecordUKMCanvasAccessibility();
+  }
 
   // HTMLCanvasElement and CanvasRenderingContext have a circular reference.
   // When the pair is no longer reachable, their destruction order is non-
@@ -105,35 +114,17 @@ CanvasRenderingContext::GetEnclosingContextForDrawElement(
     Element* element,
     const String& func_name,
     ExceptionState& exception_state) {
-  auto build_error = [&func_name](const char* format) {
-    StringBuilder builder;
-    builder.AppendFormat(format, func_name.Utf8().c_str());
-    return builder.ToString();
-  };
-
-  HTMLCanvasElement* canvas = nullptr;
-  for (Node* ancestor = element->parentNode(); ancestor && !canvas;
-       ancestor = ancestor->parentNode()) {
-    canvas = DynamicTo<HTMLCanvasElement>(ancestor);
-    if (!RuntimeEnabledFeatures::CanvasDrawElementInSubtreeEnabled()) {
-      break;
-    }
-  }
+  auto* canvas = DynamicTo<HTMLCanvasElement>(element->parentNode());
   if (!canvas) {
-    exception_state.ThrowTypeError(build_error(
-        RuntimeEnabledFeatures::CanvasDrawElementInSubtreeEnabled()
-            ? ("Only immediate children of the <canvas> element can be "
-               "passed to %s.")
-            : ("Only descendants of the <canvas> element can be passed "
-               "to %s.")));
-
+    exception_state.ThrowTypeError(StrCat(
+        {"Only immediate children of the <canvas> element can be passed to ",
+         func_name, "."}));
     return nullptr;
   }
   CanvasRenderingContext* context = canvas->RenderingContext();
   if (!context) {
-    exception_state.ThrowTypeError(
-        build_error("%s: containing canvas does not have a rendering "
-                    "context."));
+    exception_state.ThrowTypeError(StrCat(
+        {func_name, ": containing canvas does not have a rendering context."}));
     return nullptr;
   }
   if (!context->IsDrawElementImageEligible(element, func_name,
@@ -148,6 +139,9 @@ bool CanvasRenderingContext::IsDrawElementImageEligible(
     const String& func_name,
     ExceptionState& exception_state) {
   if (!Host() || Host()->IsOffscreenCanvas()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "Elements cannot be drawn into an OffscreenCanvas.");
     return false;
   }
 
@@ -156,137 +150,93 @@ bool CanvasRenderingContext::IsDrawElementImageEligible(
     return false;
   }
 
-  auto build_error = [&func_name](const char* format) {
-    StringBuilder builder;
-    builder.AppendFormat(format, func_name.Utf8().c_str());
-    return builder.ToString();
-  };
+  return canvas_element->VerifyDrawElementImageEligibility(element, func_name,
+                                                           exception_state);
+}
 
-  if (!RuntimeEnabledFeatures::CanvasDrawElementInSubtreeEnabled()) {
-    if (element->parentElement() != canvas_element) {
-      exception_state.ThrowTypeError(
-          build_error("Only immediate children of the <canvas> element can be "
-                      "passed to %s."));
-      return false;
-    }
-  } else {
-    if (!element->IsDescendantOf(canvas_element)) {
-      exception_state.ThrowTypeError(build_error(
-          "Only descendants of the <canvas> element can be passed to %s."));
-      return false;
-    }
-    // TODO(pdr): Update these checks to point to the updated spec. These are
-    // currently copied from element capture, which has similar paint reqs:
-    // https://screen-share.github.io/element-capture/#elements-eligible-for-restriction
-    auto* object = element->GetLayoutObject();
-    if (!object || !object->IsStackingContext() || !object->CreatesGroup() ||
-        !object->IsBox() ||
-        To<LayoutBox>(object)->PhysicalFragmentCount() > 1) {
-      exception_state.ThrowTypeError(
-          build_error("Only elements with certain requirements (stacking "
-                      "context, etc) can be passed to %s."));
-      return false;
-    }
+bool CanvasRenderingContext::IsDrawElementImageEligible(
+    const V8UnionElementOrElementImage* element_or_image,
+    const String& func_name,
+    ExceptionState& exception_state) {
+  if (element_or_image->IsElement()) {
+    return IsDrawElementImageEligible(element_or_image->GetAsElement(),
+                                      func_name, exception_state);
   }
 
-  if (!canvas_element->layoutSubtree()) {
-    exception_state.ThrowTypeError(build_error(
-        "<canvas> elements without layoutsubtree do not support %s."));
+  const auto& record = element_or_image->GetAsElementImage()->PaintRecord();
+  if (!record) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "The ElementImage has been closed.");
     return false;
   }
 
-  if (!element->GetLayoutObject()) {
-    exception_state.ThrowTypeError(build_error(
-        "The canvas and element used with %s must have been laid "
-        "out. Detached canvases are not supported, nor canvas or children that "
-        "are `display: none`."));
-    return false;
+  DOMNodeId current_canvas_node_id = kInvalidDOMNodeId;
+  if (Host()) {
+    if (!Host()->IsOffscreenCanvas()) {
+      current_canvas_node_id =
+          static_cast<HTMLCanvasElement*>(Host())->GetDomNodeId();
+    } else {
+      current_canvas_node_id =
+          static_cast<OffscreenCanvas*>(Host())->PlaceholderCanvasId();
+    }
   }
 
+  if (current_canvas_node_id == kInvalidDOMNodeId ||
+      record->paint_state.canvas_node_id != current_canvas_node_id) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "The source was captured from a different canvas.");
+    return false;
+  }
   return true;
 }
 
-std::optional<cc::PaintRecord> CanvasRenderingContext::GetElementPaintRecord(
-    Element* element,
-    std::optional<CullRect> cull_rect,
-    const String& func_name,
-    ExceptionState& exception_state) {
-  if (!IsDrawElementImageEligible(element, func_name, exception_state)) {
-    return std::nullopt;
-  }
-
-  PaintRecordBuilder builder;
-  LayoutBox* layout_box = element->GetLayoutBox();
-  // All drawn elements should have their own stacking contexts.
-  CHECK(layout_box->HasLayer());
-  CHECK(layout_box->IsStacked());
-  PaintLayer* layer = layout_box->EnclosingLayer();
-
-  if (!cull_rect) {
-    auto box_rect =
-        gfx::Rect(ToCeiledSize(layer->GetLayoutBox()->StitchedSize()));
-    cull_rect.emplace(box_rect);
-  }
-
-  OverriddenCullRectScope cull_rect_scope(*layer, *cull_rect,
-                                          /*disable_expansion*/ true);
-
-  PaintLayerPainter paint_layer_painter = PaintLayerPainter(*layer);
-  paint_layer_painter.Paint(
-      builder.Context(),
-      PaintFlag::kPrivacyPreserving | PaintFlag::kOmitCompositingInfo);
-
-  // Use the drawn element's local property tree state to start drawing, but
-  // then modify this to include effects and clips between the drawn element
-  // and the canvas element. This will exclude transforms above the local
-  // border box state (e.g., css transform is ignored), but will include effects
-  // (e.g., css filter is not ignored).
-  PropertyTreeState property_tree_state = layer->GetLayoutBox()
-                                              ->FirstFragment()
-                                              .LocalBorderBoxProperties()
-                                              .Unalias();
-  HTMLCanvasElement* canvas_element = static_cast<HTMLCanvasElement*>(Host());
-  const auto& canvas_fragment = canvas_element->GetLayoutBox()->FirstFragment();
-  property_tree_state.SetEffect(canvas_fragment.ContentsEffect().Unalias());
-  property_tree_state.SetClip(canvas_fragment.ContentsClip().Unalias());
-
-  cc::PaintRecord paint_record = builder.EndRecording(property_tree_state);
-  return paint_record;
+std::optional<CanvasChildPaintRecord>
+CanvasRenderingContext::GetChildPaintRecord(Element* element) {
+  return Host()->GetCanvasChildPaintRecord(element->GetDomNodeId());
 }
 
 scoped_refptr<StaticBitmapImage> CanvasRenderingContext::GetElementImage(
-    Element* element,
+    const V8UnionElementOrElementImage* element,
     std::optional<float> sx,
     std::optional<float> sy,
     std::optional<float> swidth,
     std::optional<float> sheight,
     std::optional<uint32_t> width,
     std::optional<uint32_t> height,
+    gpu::SharedImageUsageSet usage,
     const String& func_name,
     ExceptionState& exception_state) {
-  element->GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
-      DocumentUpdateReason::kCanvasDrawElementImage);
-
-  // Element size in physical coordinates.
-  gfx::SizeF box_size;
-  if (element->GetLayoutBox()) {
-    box_size = gfx::SizeF(element->GetLayoutBox()->StitchedSize());
-  }
-  gfx::RectF src_rect(box_size);
-  std::optional<CullRect> cull_rect;
-  if (sx && sy && swidth && sheight) {
-    float dpr = element->ComputedStyleRef().EffectiveZoom();
-    src_rect = gfx::RectF(*sx * dpr, *sy * dpr, *swidth * dpr, *sheight * dpr);
-    cull_rect.emplace(gfx::ToEnclosingRect(src_rect));
-  }
-
-  std::optional<cc::PaintRecord> paint_record =
-      GetElementPaintRecord(element, cull_rect, func_name, exception_state);
-  if (!paint_record) {
+  if (!IsDrawElementImageEligible(element, func_name, exception_state)) {
     return nullptr;
   }
 
-  HTMLCanvasElement* canvas_element = static_cast<HTMLCanvasElement*>(Host());
+  std::optional<CanvasChildPaintRecord> child_paint_record;
+  if (element->IsElement()) {
+    child_paint_record = GetChildPaintRecord(element->GetAsElement());
+  } else {
+    if (const auto& record = element->GetAsElementImage()->PaintRecord()) {
+      child_paint_record = *record;
+    }
+  }
+
+  if (!child_paint_record) {
+    if (element->IsElementImage()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "The ElementImage has been closed.");
+    } else {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "No cached paint record for element.");
+    }
+    return nullptr;
+  }
+
+  // Element size in physical coordinates.
+  gfx::RectF src_rect(child_paint_record->paint_state.box_size);
+  if (sx && sy && swidth && sheight) {
+    float dpr = child_paint_record->paint_state.effective_zoom;
+    src_rect = gfx::RectF(*sx * dpr, *sy * dpr, *swidth * dpr, *sheight * dpr);
+  }
 
   // The default destination size for GetElementImage is the source content
   // size scaled to canvas grid coordinates. This causes the element to have
@@ -294,7 +244,7 @@ scoped_refptr<StaticBitmapImage> CanvasRenderingContext::GetElementImage(
   // were it painted outside the canvas.
   gfx::SizeF intrinsic_size(src_rect.size());
   gfx::Vector2dF canvas_scale =
-      canvas_element->PhysicalPixelToCanvasGridScaleFactor();
+      GetCanvasGridScaleFactor(child_paint_record->paint_state, Host()->Size());
   intrinsic_size.Scale(canvas_scale.x(), canvas_scale.y());
   gfx::Size intrinsic_dest_size = gfx::ToCeiledSize(intrinsic_size);
   gfx::Size dest_size(intrinsic_dest_size);
@@ -304,26 +254,48 @@ scoped_refptr<StaticBitmapImage> CanvasRenderingContext::GetElementImage(
         static_cast<float>(dest_size.width()) / intrinsic_dest_size.width(),
         static_cast<float>(dest_size.height()) / intrinsic_dest_size.height());
   }
-
-  sk_sp<SkSurface> surface = SkSurfaces::Raster(
-      SkImageInfo::MakeN32Premul(dest_size.width(), dest_size.height()),
-      /*surface_props*/ nullptr);
-  if (!surface) {
+  if (dest_size.IsEmpty()) {
     return nullptr;
   }
 
-  SkiaPaintCanvas skia_paint_canvas(surface->getCanvas());
-  skia_paint_canvas.scale(canvas_scale.x(), canvas_scale.y());
-  skia_paint_canvas.translate(-src_rect.x(), -src_rect.y());
-  skia_paint_canvas.drawPicture(*paint_record);
-  return UnacceleratedStaticBitmapImage::Create(surface->makeImageSnapshot());
+  auto draw_to_canvas = [&](cc::PaintCanvas& canvas) {
+    canvas.scale(canvas_scale.x(), canvas_scale.y());
+    canvas.translate(-src_rect.x(), -src_rect.y());
+    canvas.drawPicture(child_paint_record->record);
+  };
+
+  if (base::FeatureList::IsEnabled(kAllowAcceleratedTexElement) &&
+      SharedGpuContext::IsGpuCompositingEnabled()) {
+    if (auto wrapper = SharedGpuContext::ContextProviderWrapper()) {
+      auto resource_provider = CanvasNon2DResourceProvider::Create(
+          dest_size, GetN32FormatForCanvas(), kPremul_SkAlphaType,
+          gfx::ColorSpace::CreateSRGB(), gfx::HDRMetadata(), wrapper,
+          gpu::SHARED_IMAGE_USAGE_RASTER_WRITE | usage);
+
+      // GetOrCreateImageProvider() to make sure one is created prior to the
+      // call to SetAnimatedImageFrameIndexMaps().
+      resource_provider->GetOrCreateImageProvider();
+      resource_provider->SetAnimatedImageFrameIndexes(
+          child_paint_record->paint_state.animated_image_frame_index_map);
+
+      return resource_provider->DoExternalOverdrawAndSnapshot(
+          [&](cc::PaintCanvas& canvas) { draw_to_canvas(canvas); },
+          ImageOrientation());
+    }
+  }
+
+  return UnacceleratedStaticBitmapImage::CreateFromRaster(
+      dest_size, draw_to_canvas,
+      child_paint_record->paint_state.animated_image_frame_index_map);
 }
 
 void CanvasRenderingContext::DidDraw(
-    const SkIRect& dirty_rect,
+    const gfx::Rect& dirty_rect,
     CanvasPerformanceMonitor::DrawType draw_type) {
   CanvasRenderingContextHost* const host = Host();
   host->DidDraw(dirty_rect);
+
+  did_draw_text_ |= (draw_type == CanvasPerformanceMonitor::DrawType::kText);
 
   auto& monitor = GetCanvasPerformanceMonitor();
   monitor.DidDraw(draw_type);
@@ -345,7 +317,6 @@ void CanvasRenderingContext::DidProcessTask(
 
   // The end of a script task that drew content to the canvas is the point
   // at which the current frame may be considered complete.
-  PreFinalizeFrame();
   FlushReason reason = did_print_in_current_task_
                            ? FlushReason::kCanvasPushFrameWhilePrinting
                            : FlushReason::kCanvasPushFrame;
@@ -354,6 +325,104 @@ void CanvasRenderingContext::DidProcessTask(
   if (CanvasRenderingContextHost* host = Host()) [[likely]] {
     host->PostFinalizeFrame(reason);
   }
+
+  did_process_task_ = true;
+  MaybeRecordUKMCanvasAccessibility();
+}
+
+void CanvasRenderingContext::MaybeRecordUKMCanvasAccessibility() {
+  if (did_record_accessibility_ukm_ || !did_process_task_) {
+    return;
+  }
+
+  // If heuristic collection is disabled, record the UKM immediately.
+  if (!base::FeatureList::IsEnabled(
+          ::features::kEnableCollectAccessibilityHeuristicInCanvasUkm)) {
+    RecordUKMCanvasAccessibility();
+    return;
+  }
+
+  if (did_schedule_accessibility_ukm_recording_) {
+    return;
+  }
+  CanvasRenderingContextHost* const host = Host();
+  if (!host) {
+    return;
+  }
+  ExecutionContext* execution_context = host->GetTopExecutionContext();
+  if (!execution_context) {
+    return;
+  }
+  did_schedule_accessibility_ukm_recording_ = true;
+  execution_context->GetTaskRunner(TaskType::kInternalDefault)
+      ->PostDelayedTask(
+          FROM_HERE,
+          blink::BindOnce(&CanvasRenderingContext::RecordUKMCanvasAccessibility,
+                          WrapWeakPersistent(this)),
+          kAccessibilityUkmRecordingDelay);
+}
+
+void CanvasRenderingContext::RecordUKMCanvasAccessibility() {
+  if (did_record_accessibility_ukm_ || !did_process_task_) {
+    return;
+  }
+
+  CanvasRenderingContextHost* const host = Host();
+  if (!host) {
+    return;
+  }
+
+  bool has_keyboard_listener = false;
+  bool has_mouse_listener = false;
+  bool is_offscreen = host->IsOffscreenCanvas();
+  if (is_offscreen) {
+    // Offscreen canvases are collected only if they push their rendered output
+    // to a placeholder element in DOM.
+    if (!static_cast<OffscreenCanvas*>(host)->HasPlaceholderCanvas()) {
+      return;
+    }
+  } else {
+    HTMLCanvasElement* canvas_element = static_cast<HTMLCanvasElement*>(host);
+    // Non offscreen canvases are only collected if they are visible.
+    if (!canvas_element->IsDisplayed()) {
+      return;
+    }
+
+    DEFINE_STATIC_LOCAL(
+        const Vector<AtomicString>, keyboard_event_types,
+        ({event_type_names::kKeydown, event_type_names::kKeypress,
+          event_type_names::kKeyup}));
+    DEFINE_STATIC_LOCAL(
+        const Vector<AtomicString>, mouse_event_types,
+        ({event_type_names::kClick, event_type_names::kMousedown,
+          event_type_names::kMouseup, event_type_names::kMousemove,
+          event_type_names::kMouseover, event_type_names::kMouseout}));
+
+    has_keyboard_listener =
+        canvas_element->HasAnyEventListeners(keyboard_event_types);
+    has_mouse_listener =
+        canvas_element->HasAnyEventListeners(mouse_event_types);
+  }
+
+  const auto& ukm_params = host->GetUkmParameters();
+  auto ukm_builder = ukm::builders::Accessibility_Canvas(ukm_params.source_id);
+  ukm_builder.SetRenderingContext(static_cast<int>(canvas_rendering_type_))
+      .SetIsOffscreen(is_offscreen)
+      .SetHasKeyboardListener(has_keyboard_listener)
+      .SetHasMouseListener(has_mouse_listener)
+      .SetHasText(did_draw_text_);
+
+  if (!is_offscreen &&
+      base::FeatureList::IsEnabled(
+          ::features::kEnableCollectAccessibilityHeuristicInCanvasUkm)) {
+    HTMLCanvasElement* canvas_element = static_cast<HTMLCanvasElement*>(host);
+    ukm_builder.SetNeedsAccessibilitySupport(
+        canvas_element->GetNeedsAccessibilitySupportHeuristic());
+  }
+
+  ukm_builder.Record(ukm_params.ukm_recorder);
+
+  did_record_accessibility_ukm_ = true;
 }
 
 void CanvasRenderingContext::RecordUMACanvasRenderingAPI() {

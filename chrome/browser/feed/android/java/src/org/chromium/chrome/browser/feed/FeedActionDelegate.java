@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.feed;
 
-import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
@@ -59,7 +58,7 @@ public interface FeedActionDelegate {
      * @param inGroup Whether to open the url in a tab in group.
      * @param pageId An unique ID identifying the page to load.
      * @param pageLoadObserver Observer to get called with page load events.
-     * @param onVisitComplete Called when the user closes or navigates away from the page.
+     * @param surfaceId The surface ID of the feeds.
      */
     void openSuggestionUrl(
             int disposition,
@@ -67,7 +66,7 @@ public interface FeedActionDelegate {
             boolean inGroup,
             int pageId,
             PageLoadObserver pageLoadObserver,
-            Callback<VisitResult> onVisitComplete);
+            int surfaceId);
 
     /**
      * Opens a page.
@@ -88,12 +87,6 @@ public interface FeedActionDelegate {
 
     /** Add an item to the reading list. */
     default void addToReadingList(String title, String url) {}
-
-    /**
-     * Opens a specific WebFeed by name.
-     * @param webFeedName the relevant web feed name.
-     */
-    default void openWebFeed(String webFeedName, @SingleWebFeedEntryPoint int entryPoint) {}
 
     //
     // Optional methods for handing events.
@@ -116,9 +109,12 @@ public interface FeedActionDelegate {
      * Shows a sign in interstitial as a result of a feed user action.
      *
      * @param signinAccessPoint the entry point for the signin.
-     * @param mBottomSheetController bottomsheet controller attached to the activity.
+     * @param bottomSheetController bottomsheet controller attached to the activity.
      */
     default void showSignInInterstitial(
             @SigninAccessPoint int signinAccessPoint,
-            BottomSheetController mBottomSheetController) {}
+            BottomSheetController bottomSheetController) {}
+
+    /** Cleans up resources used by the delegate. */
+    default void destroy() {}
 }

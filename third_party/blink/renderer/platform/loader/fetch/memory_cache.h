@@ -165,6 +165,10 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
 
   void SaveStrongReference(Resource* resource);
 
+  // Save a data URI resource as a strong reference to prevent GC across
+  // navigations. Data URIs are immutable so caching is always safe.
+  void SaveDataURIStrongReference(Resource* resource);
+
   // Take memory usage snapshot for tracing.
   bool OnMemoryDump(WebMemoryDumpLevelOfDetail, WebProcessMemoryDump*) override;
 
@@ -210,11 +214,14 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
 
   void PruneStrongReferences();
   void ClearStrongReferences();
+  void ClearDataURIStrongReferences();
 
   // Helper for saving a resource to the tiered cache.
   void SaveTieredStrongReference(Resource* resource);
 
   double CalculateResourceValue(const Resource* resource) const;
+  size_t GetStrongReferencesTotalSize() const;
+  size_t GetTargetStrongReferencesMaxSize() const;
 
   MemoryPressureListenerRegistration memory_pressure_listener_registration_;
 
@@ -236,6 +243,13 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
 
   HeapVector<Member<Resource>> tiered_strong_references_;
 
+  // Strong references specifically for data URI resources. These are kept
+  // separate from the main strong_references_ to avoid evicting critical
+  // resources (scripts, fonts, CSS). Uses LRU - oldest entries are at the
+  // front.
+  HeapLinkedHashSet<Member<Resource>> data_uri_strong_references_;
+  size_t data_uri_strong_references_total_bytes_ = 0;
+
   base::TimeTicks strong_references_prune_time_;
   base::TimeDelta strong_references_prune_duration_;
 
@@ -247,7 +261,20 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
   FRIEND_TEST_ALL_PREFIXES(MemoryCacheStrongReferenceTest,
                            ClearStrongReferences);
   FRIEND_TEST_ALL_PREFIXES(MemoryCacheStrongReferenceTest,
-                           ChangeMemoryCacheSize);
+                           ChangeMemoryCacheSizeStateful);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheStrongReferenceTest,
+                           ChangeMemoryCacheSizeStateless);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIStrongReferenceTest,
+                           DataURIStrongReference);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIStrongReferenceTest, DataURILRU);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIStrongReferenceTest,
+                           DataURIClearStrongReferences);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIStrongReferenceTest,
+                           DataURIRemovedFromStrongRefsOnRemove);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIEvictionTest,
+                           EvictsOldestWhenOverCapacity);
+  FRIEND_TEST_ALL_PREFIXES(MemoryCacheDataURIEvictionTest,
+                           LRUTouchPreventsEviction);
 };
 
 // Sets the global cache, used to swap in a test instance. Saves the old

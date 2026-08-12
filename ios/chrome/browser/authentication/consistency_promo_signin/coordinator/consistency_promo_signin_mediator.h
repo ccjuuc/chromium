@@ -58,9 +58,11 @@ typedef NS_ENUM(NSInteger, ConsistencyPromoSigninMediatorError) {
     (ConsistencyPromoSigninMediator*)mediator;
 
 // Called if the sign-in is successful.
+// Requests to stop the coordinator asynchrously, then execute `completion`.
 - (void)consistencyPromoSigninMediatorSignInDone:
             (ConsistencyPromoSigninMediator*)mediator
-                                    withIdentity:(id<SystemIdentity>)identity;
+                                    withIdentity:(id<SystemIdentity>)identity
+                                      completion:(ProceduralBlock)completion;
 
 // Called if it became impossible to sign-in through the consistency promo.
 // Either sign-in is disabled or the user is already signed-in.
@@ -73,6 +75,13 @@ typedef NS_ENUM(NSInteger, ConsistencyPromoSigninMediatorError) {
 // Called if the sign-in is cancelled.
 - (void)consistencyPromoSigninMediatorSignInCancelled:
     (ConsistencyPromoSigninMediator*)mediator;
+
+// Called if the sign-in is cancelled and the user wants to stay signed out.
+// Asynchronously stops the coordinator, then execute completion.
+- (void)consistencyPromoSigninMediatorDidCancelToStaySignedOut:
+            (ConsistencyPromoSigninMediator*)mediator
+                                                    completion:(ProceduralBlock)
+                                                                   completion;
 
 // Called if there is sign-in error.
 - (void)consistencyPromoSigninMediator:(ConsistencyPromoSigninMediator*)mediator

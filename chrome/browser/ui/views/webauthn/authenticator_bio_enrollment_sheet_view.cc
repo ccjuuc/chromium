@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/webauthn/ring_progress_bar.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/vector_icons.h"
 
@@ -28,8 +29,8 @@ AuthenticatorBioEnrollmentSheetView::AuthenticatorBioEnrollmentSheetView(
   // Override the DialogClientView (i.e. this view's parent) handling of the
   // escape key to avoid closing the dialog when we want to cancel instead,
   // since cancelling might do something different.
-  // This is a workaround to fix crbug.com/1145724.
-  // TODO(nsatragno): remove this workaround once crbug.com/1147927 is fixed.
+  // This is a workaround to fix crbug.com/40155990.
+  // TODO(nsatragno): remove this workaround once crbug.com/40156827 is fixed.
   AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
 }
 
@@ -56,8 +57,11 @@ AuthenticatorBioEnrollmentSheetView::BuildStepSpecificContent() {
   auto image_view = std::make_unique<NonAccessibleImageView>();
   image_view->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
   image_view->SetImage(ui::ImageModel::FromVectorIcon(
-      target >= 1 ? views::kMenuCheckIcon : kFingerprintIcon, ui::kColorAccent,
-      kFingerprintSize));
+      target >= 1 ? features::IsRoundedIconsEnabled() ? views::kCheckIcon
+                                                      : views::kMenuCheckOldIcon
+      : features::IsRoundedIconsEnabled() ? kFingerprintIcon
+                                          : kFingerprintOldIcon,
+      ui::kColorAccent, kFingerprintSize));
   animation_container->AddChildView(std::move(image_view));
 
   auto ring_progress_bar = std::make_unique<RingProgressBar>();

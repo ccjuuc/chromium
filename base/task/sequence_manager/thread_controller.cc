@@ -11,7 +11,6 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -307,11 +306,6 @@ ThreadController::RunLevelTracker::RunLevel::~RunLevel() {
       // this wasn't the last nested RunLevel, this is ignored and will be
       // applied on the final pop().
       time_keeper_->RecordEndOfPhase(kNested, *exit_lazy_now_);
-
-      // TODO(crbug.com/458682617): Remove this.
-      // This one is surprisingly necessary as a single racy test fails without
-      // (GamepadServiceSimulationTest.SurfaceIdNotFound).
-      PerformFortuitousMemoryBarrierIfNecessary();
     }
   }
 }
@@ -376,7 +370,7 @@ void ThreadController::RunLevelTracker::RunLevel::LogOnActiveMetrics(
   const double probability =
       time_keeper_->wall_time_based_metrics_enabled_for_testing() ? 1.0 : 0.001;
   if (thread_ticks_supported &&
-      metrics_sub_sampler_.ShouldSample(probability)) {
+      base::ShouldRecordSubsampledMetric(probability)) {
     last_active_start_ = lazy_now.Now();
     last_active_threadtick_start_ = ThreadTicks::Now();
   }
@@ -483,11 +477,10 @@ void ThreadController::RunLevelTracker::RunLevel::UpdateState(
                       [&](perfetto::EventContext& ctx) {
                         time_keeper_->MaybeEmitIncomingWakeupFlow(ctx);
                       });
-
-    // TODO(crbug.com/458682617): Remove this.
-    PerformFortuitousMemoryBarrierIfNecessary();
   } else {
-    // TODO(crbug.com/458682617): Remove this.
+    // TODO(crbug.com/458682617): Remove this after fixing
+    // HeadlessBrowserUAHeaderTest.* (which only need the memory barrier when
+    // ThreadControllerActive ends).
     PerformFortuitousMemoryBarrierIfNecessary();
 
     LogOnIdleMetrics(lazy_now);

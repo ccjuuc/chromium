@@ -35,6 +35,7 @@ import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.AutocompleteResult;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
 import org.chromium.components.omnibox.SuggestTemplateInfoProto.SuggestTemplateInfo.TemplateAction;
+import org.chromium.components.omnibox.action.ActionPresentationMode;
 import org.chromium.components.omnibox.action.OmniboxAction;
 
 import java.util.ArrayList;
@@ -51,21 +52,20 @@ import java.util.List;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Batch(Batch.PER_CLASS)
 public class OmniboxActionsTest {
-    @Rule
-    public ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
+    public @Rule ReusedCtaTransitTestRule<WebPageStation> mActivityTestRule =
             ChromeTransitTestRules.blankPageStartReusedActivityRule();
 
-    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock AutocompleteController.Natives mAutocompleteControllerJniMock;
+    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    private @Mock AutocompleteController mAutocompleteController;
 
     private WebPageStation mStartingPage;
     private OmniboxTestUtils mOmniboxUtils;
 
     @Before
     public void setUp() throws InterruptedException {
+        AutocompleteController.setInstanceForTesting(mAutocompleteController);
         mStartingPage = mActivityTestRule.start();
         mOmniboxUtils = new OmniboxTestUtils(mActivityTestRule.getActivity());
-        AutocompleteControllerJni.setInstanceForTesting(mAutocompleteControllerJniMock);
     }
 
     @After
@@ -77,7 +77,6 @@ public class OmniboxActionsTest {
                 () -> {
                     IncognitoTabHostUtils.closeAllIncognitoTabs();
                 });
-        AutocompleteControllerJni.setInstanceForTesting(null);
     }
 
     /**
@@ -117,7 +116,7 @@ public class OmniboxActionsTest {
                             type.getNumber(),
                             "https://www.google.com",
                             /* tabId= */ 0,
-                            /* showAsActionButton= */ false));
+                            ActionPresentationMode.CHIP));
         }
 
         return createFakeSuggestion(actions);

@@ -21,7 +21,7 @@ namespace {
 const char kScriptName[] = "suggestion_controller";
 
 // The timeout for any JavaScript call in this file.
-const int64_t kJavaScriptExecutionTimeoutInSeconds = 5;
+constexpr base::TimeDelta kJavaScriptExecutionTimeout = base::Seconds(5);
 
 void ProcessPreviousAndNextElementsPresenceResult(
     base::OnceCallback<void(bool, bool)> completion_handler,
@@ -37,7 +37,7 @@ void ProcessPreviousAndNextElementsPresenceResult(
     return;
   }
 
-  const base::Value::Dict& dict = res->GetDict();
+  const base::DictValue& dict = res->GetDict();
   std::optional<bool> previous = dict.FindBool("previous");
   std::optional<bool> next = dict.FindBool("next");
   if (!previous || !next) {
@@ -81,7 +81,7 @@ void SuggestionControllerJavaScriptFeature::SelectNextElementInFrame(
     const std::string& field_name) {
   CallJavaScriptFunction(
       frame, "suggestion.selectNextElement",
-      base::Value::List().Append(form_name).Append(field_name));
+      base::ListValue().Append(form_name).Append(field_name));
 }
 
 void SuggestionControllerJavaScriptFeature::SelectPreviousElementInFrame(
@@ -95,7 +95,7 @@ void SuggestionControllerJavaScriptFeature::SelectPreviousElementInFrame(
     const std::string& field_name) {
   CallJavaScriptFunction(
       frame, "suggestion.selectPreviousElement",
-      base::Value::List().Append(form_name).Append(field_name));
+      base::ListValue().Append(form_name).Append(field_name));
 }
 
 void SuggestionControllerJavaScriptFeature::
@@ -115,10 +115,10 @@ void SuggestionControllerJavaScriptFeature::
   DCHECK(completion_handler);
   CallJavaScriptFunction(
       frame, "suggestion.hasPreviousNextElements",
-      base::Value::List().Append(form_name).Append(field_name),
+      base::ListValue().Append(form_name).Append(field_name),
       base::BindOnce(&ProcessPreviousAndNextElementsPresenceResult,
                      std::move(completion_handler)),
-      base::Seconds(kJavaScriptExecutionTimeoutInSeconds));
+      kJavaScriptExecutionTimeout);
 }
 
 }  // namespace autofill

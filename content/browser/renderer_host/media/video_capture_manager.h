@@ -20,13 +20,13 @@
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/timer/timer.h"
-#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/media/media_stream_provider.h"
 #include "content/browser/renderer_host/media/video_capture_controller_event_handler.h"
 #include "content/browser/renderer_host/media/video_capture_device_launch_observer.h"
 #include "content/browser/renderer_host/media/video_capture_provider.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/desktop_capture.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/screenlock_observer.h"
 #include "media/base/video_facing.h"
@@ -36,7 +36,7 @@
 #include "media/capture/video_capture_types.h"
 #include "ui/gfx/native_ui_types.h"
 
-#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/application_status_listener.h"
 #endif
 
@@ -127,6 +127,7 @@ class CONTENT_EXPORT VideoCaptureManager
                      const GlobalRenderFrameHostId& render_frame_host_id,
                      VideoCaptureControllerEventHandler* client_handler,
                      std::optional<url::Origin> origin,
+                     bool is_allowed_on_lock_screen,
                      DoneCB done_cb);
 
   // Called by VideoCaptureHost to remove |client_handler|. If this is the last
@@ -211,7 +212,7 @@ class CONTENT_EXPORT VideoCaptureManager
   void TakePhoto(const base::UnguessableToken& session_id,
                  VideoCaptureDevice::TakePhotoCallback callback);
 
-#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // Some devices had troubles when stopped and restarted quickly, so the device
   // is only stopped when Chrome is sent to background and not when, e.g., a tab
   // is hidden, see http://crbug.com/582295.
@@ -237,9 +238,19 @@ class CONTENT_EXPORT VideoCaptureManager
       base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
       base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
       base::OnceCallback<void()> cancel_callback,
-      base::OnceCallback<void()> error_callback);
+      base::OnceCallback<void()> error_callback,
+      base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback =
+          base::DoNothing());
 
   void CloseNativeScreenCapturePicker(DesktopMediaID device_id);
+
+#if BUILDFLAG(IS_MAC)
+  void GetApplicationAudioCaptureId(
+      DesktopMediaID::Id session_id,
+      base::OnceCallback<void(
+          const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+          callback);
+#endif
 
   VideoCaptureProvider& video_capture_provider() {
     return *video_capture_provider_.get();
@@ -327,7 +338,7 @@ class CONTENT_EXPORT VideoCaptureManager
   void ReleaseDevices();
   void ResumeDevices();
 
-#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<base::android::ApplicationStatusListener>
       app_status_listener_;
   bool application_state_has_running_activities_;
@@ -349,9 +360,13 @@ class CONTENT_EXPORT VideoCaptureManager
   // only on the IO thread.
   SessionMap sessions_;
 
+  // True between OnScreenLocked() and OnScreenUnlocked() on platforms where
+  // the screen lock state is observed. Used to defer starting capture devices
+  // while the screen is locked.
+  bool is_screen_locked_ = false;
+
   // A set of sessions that have encountered screen lock.
   base::flat_set<media::VideoCaptureSessionId> locked_sessions_;
-  base::TimeTicks lock_time_;
 
   // Currently opened VideoCaptureController instances. The device may or may
   // not be started. This member is only accessed on IO thread.
@@ -369,8 +384,7 @@ class CONTENT_EXPORT VideoCaptureManager
   const std::unique_ptr<VideoCaptureProvider> video_capture_provider_;
   base::RepeatingCallback<void(const std::string&)> emit_log_message_cb_;
 
-  base::ObserverList<media::VideoCaptureObserver>::UncheckedAndDanglingUntriaged
-      capture_observers_;
+  base::ObserverList<media::VideoCaptureObserver> capture_observers_;
 
   // Local cache of the enumerated DeviceInfos. GetDeviceSupportedFormats() will
   // use this list if the device is not started, otherwise it will retrieve the
@@ -388,6 +402,13 @@ class CONTENT_EXPORT VideoCaptureManager
 
   SetDesktopCaptureWindowIdCallback
       set_desktop_capture_window_id_callback_for_testing_;
+
+  // Stores the session IDs of display capture streams in the order they were
+  // started. Used for testing purposes.
+  // TODO(crbug.com/485200165): Remove this once testing is completed and the
+  // bug is fixed.
+  std::vector<base::UnguessableToken> display_capture_session_ids_;
+  base::WeakPtrFactory<VideoCaptureManager> weak_factory_{this};
 };
 
 }  // namespace content

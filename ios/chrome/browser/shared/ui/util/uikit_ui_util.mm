@@ -22,14 +22,14 @@
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
+#import "ios/web/public/thread/web_task_traits.h"
+#import "ios/web/public/thread/web_thread.h"
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "ui/base/resource/resource_bundle.h"
-#import "ui/gfx/ios/uikit_util.h"
 #import "ui/gfx/scoped_cg_context_save_gstate_mac.h"
 
 void SetA11yLabelAndUiAutomationName(
@@ -172,7 +172,7 @@ UIImage* NativeImage(int imageID) {
 }
 
 UIInterfaceOrientation GetInterfaceOrientation(UIWindow* window) {
-  return window.windowScene.interfaceOrientation;
+  return window.windowScene.effectiveGeometry.interfaceOrientation;
 }
 
 UIActivityIndicatorView* GetMediumUIActivityIndicatorView() {
@@ -189,15 +189,34 @@ CGFloat CurrentKeyboardHeight(NSValue* keyboardFrameValue) {
   return [keyboardFrameValue CGRectValue].size.height;
 }
 
+CGFloat VisibleKeyboardHeightFromNotification(NSNotification* notification,
+                                              UIWindow* window) {
+  if (!window) {
+    return 0;
+  }
+  NSDictionary* user_info = notification.userInfo;
+  CGRect keyboard_frame =
+      [user_info[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+
+  id<UICoordinateSpace> from_coordinate_space =
+      ((UIScreen*)notification.object).coordinateSpace;
+
+  CGRect keyboard_frame_in_window =
+      [from_coordinate_space convertRect:keyboard_frame
+                       toCoordinateSpace:window.coordinateSpace];
+
+  return CGRectIntersection(keyboard_frame_in_window, window.bounds)
+      .size.height;
+}
+
 UIImage* ImageWithColor(UIColor* color) {
   CGRect rect = CGRectMake(0, 0, 1, 1);
-  UIGraphicsBeginImageContext(rect.size);
-  CGContextRef context = UIGraphicsGetCurrentContext();
-  CGContextSetFillColorWithColor(context, [color CGColor]);
-  CGContextFillRect(context, rect);
-  UIImage* image = UIGraphicsGetImageFromCurrentImageContext();
-  UIGraphicsEndImageContext();
-  return image;
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:rect.size];
+  return [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+    [color setFill];
+    [context fillRect:rect];
+  }];
 }
 
 UIImage* CircularImageFromImage(UIImage* image, CGFloat width) {
@@ -228,6 +247,23 @@ UIImage* CircularImageFromImage(UIImage* image, CGFloat width) {
       }];
 }
 
+UIImage* ImageWithCornerRadius(UIImage* image, CGFloat cornerRadius) {
+  CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
+
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:rect.size];
+
+  UIImage* roundedImage = [renderer
+      imageWithActions:^(UIGraphicsImageRendererContext* rendererContext) {
+        UIBezierPath* path =
+            [UIBezierPath bezierPathWithRoundedRect:rect
+                                       cornerRadius:cornerRadius];
+        [path addClip];
+        [image drawInRect:rect];
+      }];
+  return roundedImage;
+}
+
 bool IsPortrait(UIWindow* window) {
   UIInterfaceOrientation orient = GetInterfaceOrientation(window);
   return UIInterfaceOrientationIsPortrait(orient) ||
@@ -236,6 +272,17 @@ bool IsPortrait(UIWindow* window) {
 
 bool IsLandscape(UIWindow* window) {
   return UIInterfaceOrientationIsLandscape(GetInterfaceOrientation(window));
+}
+
+bool IsWindowedMode(UIWindow* window) {
+  if (!window) {
+    return false;
+  }
+  UIWindowScene* scene = window.windowScene;
+  if (!scene) {
+    return false;
+  }
+  return !CGRectEqualToRect(window.bounds, scene.screen.bounds);
 }
 
 bool CanShowTabStrip(UITraitCollection* traitCollection) {
@@ -251,6 +298,14 @@ bool CanShowTabStrip(UITraitCollection* traitCollection) {
 
 bool CanShowTabStrip(id<UITraitEnvironment> environment) {
   return CanShowTabStrip(environment.traitCollection);
+}
+
+bool IsIPhoneLandscape(id<UITraitEnvironment> environment) {
+  return IsIPhoneLandscape(environment.traitCollection);
+}
+
+bool IsIPhoneLandscape(UITraitCollection* trait_collection) {
+  return IsCompactHeight(trait_collection);
 }
 
 bool IsCompactWidth(id<UITraitEnvironment> environment) {
@@ -318,7 +373,7 @@ UIResponder* GetFirstResponderInWindowScene(UIWindowScene* windowScene) {
   }
 
   for (UIWindow* window in windowScene.windows) {
-    if (window.isKeyWindow) {
+    if (window.keyWindow) {
       continue;
     }
     responder = GetFirstResponderSubview(window);
@@ -382,7 +437,7 @@ void TriggerHapticFeedbackForNotification(UINotificationFeedbackType type) {
 NSAttributedString* TextForTabCount(int count, CGFloat font_size) {
   NSString* string;
   if (count <= 0) {
-    string = @"";
+    string = IsChromeNextIaEnabled() ? @"0" : @"";
   } else if (count > 99) {
     string = @":)";
   } else {
@@ -435,20 +490,18 @@ UIView* ViewHierarchyRootForView(UIView* view) {
   return ViewHierarchyRootForView(view.superview);
 }
 
-bool IsScrollViewScrolledToTop(UIScrollView* scroll_view) {
-  return scroll_view.contentOffset.y <= -scroll_view.adjustedContentInset.top;
+CGFloat RemainingScrollDistanceToTop(UIScrollView* scroll_view) {
+  return scroll_view.contentOffset.y + scroll_view.adjustedContentInset.top;
 }
 
-bool IsScrollViewScrolledToBottom(UIScrollView* scroll_view) {
+CGFloat RemainingScrollDistanceToBottom(UIScrollView* scroll_view) {
   CGFloat scrollable_height = scroll_view.contentSize.height +
                               scroll_view.adjustedContentInset.bottom -
                               scroll_view.bounds.size.height;
-  return scroll_view.contentOffset.y >= scrollable_height;
+  return scrollable_height - scroll_view.contentOffset.y;
 }
 
 CGFloat DeviceCornerRadius() {
-  UIUserInterfaceIdiom idiom = [[UIDevice currentDevice] userInterfaceIdiom];
-
   UIWindow* window = nil;
   for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
     UIWindowScene* windowScene =
@@ -461,12 +514,14 @@ CGFloat DeviceCornerRadius() {
   }
 
   // Estimated iPhone rounded corners radii.
-  if (window.safeAreaInsets.bottom && idiom == UIUserInterfaceIdiomPhone) {
+  if (window.safeAreaInsets.bottom &&
+      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE) {
     return 50.0;
   }
 
   // Estimated iPad rounded corners radii.
-  if (window.safeAreaInsets.bottom && idiom == UIUserInterfaceIdiomPad) {
+  if (window.safeAreaInsets.bottom &&
+      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
     return 18.0;
   }
 
@@ -500,15 +555,66 @@ NSArray<UITrait>* TraitCollectionSetForTraits(NSArray<UITrait>* traits) {
       UITraitSceneCaptureState.class, UITraitToolbarItemPresentationSize.class,
       UITraitTypesettingLanguage.class, UITraitUserInterfaceIdiom.class,
       UITraitUserInterfaceLevel.class, UITraitUserInterfaceStyle.class,
-      UITraitVerticalSizeClass.class
+      UITraitVerticalSizeClass.class, UITraitListEnvironment.class
     ] mutableCopy];
-
-    if (@available(iOS 18, *)) {
-      [mutableTraits addObject:UITraitListEnvironment.class];
-    }
 
     everyUIMutableTrait = [NSArray arrayWithArray:mutableTraits];
   });
 
   return everyUIMutableTrait;
+}
+
+size_t MemoryFootprintForImage(UIImage* image) {
+  CGImageRef cgImage = [image CGImage];
+  size_t bytesPerRow = CGImageGetBytesPerRow(cgImage);
+  size_t height = CGImageGetHeight(cgImage);
+  size_t totalBytes = bytesPerRow * height;
+  return totalBytes / 1024;
+}
+
+void ExecuteWhenTransitionsComplete(ProceduralBlock action,
+                                    UIViewController* viewController) {
+  if (!viewController) {
+    return;
+  }
+
+  // If there is another transition going on (e.g. dismissal/presentation),
+  // postpone the execution of the block to allow it to complete first.
+  id<UIViewControllerTransitionCoordinator> transitionCoordinator =
+      viewController.transitionCoordinator;
+  if (transitionCoordinator) {
+    __weak UIViewController* weakViewController = viewController;
+    [transitionCoordinator
+        animateAlongsideTransition:nil
+                        completion:^(
+                            id<UIViewControllerTransitionCoordinatorContext>
+                                context) {
+                          // Re-evaluate in the next run loop turn.
+                          web::GetUIThreadTaskRunner({})->PostTask(
+                              FROM_HERE, base::BindOnce(^{
+                                ExecuteWhenTransitionsComplete(
+                                    action, weakViewController);
+                              }));
+                        }];
+    return;
+  }
+
+  id<ContextMenuTransitionStateProviding> provider = nil;
+  if ([viewController
+          conformsToProtocol:@protocol(ContextMenuTransitionStateProviding)]) {
+    provider = (id<ContextMenuTransitionStateProviding>)viewController;
+  }
+
+  if (provider.activeContextMenuAnimator) {
+    __weak UIViewController* weakViewController = viewController;
+    [provider.activeContextMenuAnimator addCompletion:^{
+      // Re-evaluate in the next run loop turn.
+      web::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE, base::BindOnce(^{
+            ExecuteWhenTransitionsComplete(action, weakViewController);
+          }));
+    }];
+  } else {
+    action();
+  }
 }

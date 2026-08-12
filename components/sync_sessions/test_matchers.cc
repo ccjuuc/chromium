@@ -16,6 +16,7 @@ using testing::_;
 using testing::ContainerEq;
 using testing::ElementsAreArray;
 using testing::Eq;
+using testing::MakeMatcher;
 using testing::Matcher;
 using testing::MatcherInterface;
 using testing::MatchResultListener;
@@ -157,13 +158,72 @@ class MatchesTabMatcher
   Matcher<std::vector<std::string>> urls_;
 };
 
+class MatchesTabScreenshotMatcher
+    : public MatcherInterface<const sync_pb::SessionSpecifics&> {
+ public:
+  MatchesTabScreenshotMatcher(Matcher<std::string> session_tag,
+                              Matcher<int> tab_node_id,
+                              Matcher<std::string> screenshot_data,
+                              Matcher<std::string> url)
+      : session_tag_(session_tag),
+        tab_node_id_(tab_node_id),
+        screenshot_data_(screenshot_data),
+        url_(url) {}
+
+  bool MatchAndExplain(const sync_pb::SessionSpecifics& actual,
+                       MatchResultListener* listener) const override {
+    if (!actual.has_tab_screenshot()) {
+      *listener << " which is not a tab screenshot entity";
+      return false;
+    }
+    if (!session_tag_.MatchAndExplain(actual.session_tag(), listener)) {
+      *listener << " which contains an unexpected session tag: "
+                << actual.session_tag();
+      return false;
+    }
+    if (!tab_node_id_.MatchAndExplain(actual.tab_node_id(), listener)) {
+      *listener << " which contains an unexpected tab node ID: "
+                << actual.tab_node_id();
+      return false;
+    }
+    if (!screenshot_data_.MatchAndExplain(
+            actual.tab_screenshot().screenshot_data(), listener)) {
+      *listener << " which contains unexpected screenshot data";
+      return false;
+    }
+    if (!url_.MatchAndExplain(actual.tab_screenshot().url(), listener)) {
+      *listener << " which contains an unexpected URL: "
+                << actual.tab_screenshot().url();
+      return false;
+    }
+    return true;
+  }
+
+  void DescribeTo(::std::ostream* os) const override {
+    *os << "matches expected tab screenshot";
+  }
+
+  void DescribeNegationTo(::std::ostream* os) const override {
+    *os << "does not match expected tab screenshot";
+  }
+
+ private:
+  Matcher<std::string> session_tag_;
+  Matcher<int> tab_node_id_;
+  Matcher<std::string> screenshot_data_;
+  Matcher<std::string> url_;
+};
+
 class MatchesSyncedSessionMatcher
     : public MatcherInterface<const SyncedSession*> {
  public:
   MatchesSyncedSessionMatcher(
       Matcher<std::string> session_tag,
+      Matcher<std::string> session_name,
       Matcher<std::map<int, std::vector<int>>> window_id_to_tabs)
-      : session_tag_(session_tag), window_id_to_tabs_(window_id_to_tabs) {}
+      : session_tag_(session_tag),
+        session_name_(session_name),
+        window_id_to_tabs_(window_id_to_tabs) {}
 
   bool MatchAndExplain(const SyncedSession* actual,
                        MatchResultListener* listener) const override {
@@ -174,6 +234,11 @@ class MatchesSyncedSessionMatcher
     if (!session_tag_.MatchAndExplain(actual->GetSessionTag(), listener)) {
       *listener << " which contains an unexpected session tag: "
                 << actual->GetSessionTag();
+      return false;
+    }
+    if (!session_name_.MatchAndExplain(actual->GetSessionName(), listener)) {
+      *listener << " which contains an unexpected session name: "
+                << actual->GetSessionName();
       return false;
     }
 
@@ -208,6 +273,7 @@ class MatchesSyncedSessionMatcher
 
  private:
   Matcher<std::string> session_tag_;
+  Matcher<std::string> session_name_;
   Matcher<std::map<int, std::vector<int>>> window_id_to_tabs_;
 };
 
@@ -252,7 +318,7 @@ Matcher<const sync_pb::SessionSpecifics&> MatchesTab(
     Matcher<int> tab_id,
     Matcher<int> tab_node_id,
     Matcher<std::vector<std::string>> urls) {
-  return testing::MakeMatcher(
+  return MakeMatcher(
       new MatchesTabMatcher(session_tag, window_id, tab_id, tab_node_id, urls));
 }
 
@@ -266,17 +332,43 @@ Matcher<const sync_pb::SessionSpecifics&> MatchesTab(
                     ElementsAreArray(urls));
 }
 
-Matcher<const SyncedSession*> MatchesSyncedSession(
+Matcher<const sync_pb::SessionSpecifics&> MatchesTabScreenshot(
     Matcher<std::string> session_tag,
-    Matcher<std::map<int, std::vector<int>>> window_id_to_tabs) {
-  return testing::MakeMatcher(
-      new MatchesSyncedSessionMatcher(session_tag, window_id_to_tabs));
+    Matcher<int> tab_node_id) {
+  return MakeMatcher(
+      new MatchesTabScreenshotMatcher(session_tag, tab_node_id, _, _));
+}
+
+Matcher<const sync_pb::SessionSpecifics&> MatchesTabScreenshot(
+    Matcher<std::string> session_tag,
+    Matcher<int> tab_node_id,
+    Matcher<std::string> screenshot_data,
+    Matcher<std::string> url) {
+  return MakeMatcher(new MatchesTabScreenshotMatcher(
+      session_tag, tab_node_id, screenshot_data, url));
 }
 
 Matcher<const SyncedSession*> MatchesSyncedSession(
     Matcher<std::string> session_tag,
     const std::map<int, std::vector<int>>& window_id_to_tabs) {
-  return MatchesSyncedSession(session_tag, ContainerEq(window_id_to_tabs));
+  return MatchesSyncedSession(session_tag, _,
+                              ContainerEq(window_id_to_tabs));
+}
+
+Matcher<const SyncedSession*> MatchesSyncedSession(
+    Matcher<std::string> session_tag,
+    Matcher<std::string> session_name,
+    Matcher<std::map<int, std::vector<int>>> window_id_to_tabs) {
+  return MakeMatcher(new MatchesSyncedSessionMatcher(
+      session_tag, session_name, window_id_to_tabs));
+}
+
+Matcher<const SyncedSession*> MatchesSyncedSession(
+    Matcher<std::string> session_tag,
+    Matcher<std::string> session_name,
+    const std::map<int, std::vector<int>>& window_id_to_tabs) {
+  return MatchesSyncedSession(session_tag, session_name,
+                              ContainerEq(window_id_to_tabs));
 }
 
 }  // namespace sync_sessions

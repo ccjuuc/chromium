@@ -5,14 +5,14 @@
 #include "chrome/browser/chooser_controller/title_util.h"
 
 #include "base/command_line.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/navigation_simulator.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_service.h"  // nogncheck
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -20,7 +20,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "base/test/gmock_expected_support.h"
@@ -57,14 +57,14 @@ TEST_F(CreateChooserTitleTest, UrlFrameTree) {
             CreateChooserTitle(subframe, kTitleResourceId));
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 TEST_F(CreateChooserTitleTest, ExtensionsFrameTree) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", "Chooser Title Subframe Test")
                       .Set("version", "0.1")
                       .Set("manifest_version", 2)
                       .Set("web_accessible_resources",
-                           base::Value::List().Append("index.html"));
+                           base::ListValue().Append("index.html"));
   scoped_refptr<const extensions::Extension> extension =
       extensions::ExtensionBuilder().SetManifest(std::move(manifest)).Build();
   ASSERT_TRUE(extension);
@@ -90,10 +90,11 @@ TEST_F(CreateChooserTitleTest, ExtensionsFrameTree) {
   EXPECT_EQ(u"Chooser Title Subframe Test wants to connect",
             CreateChooserTitle(subframe, kTitleResourceId));
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if !BUILDFLAG(IS_ANDROID)
 TEST_F(CreateChooserTitleTest, IsolatedWebAppFrameTree) {
+  base::test::ScopedFeatureList scoped_feature_list{features::kIsolatedWebApps};
   data_decoder::test::InProcessDataDecoder in_process_data_decoder;
   web_app::test::AwaitStartWebAppProviderAndSubsystems(profile());
 

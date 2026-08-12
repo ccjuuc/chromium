@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="zh-CN">
-<translation id="1028699632127661925">正在发送到<ph name="DEVICE_NAME" />…</translation>
 <translation id="111910763555783249">通知设置</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 天前}other{# 天前}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 分钟前}other{# 分钟前}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">触摸目标已移至右上角。点按此处。</translation>
 <translation id="1266864766717917324">无法分享<ph name="CONTENT_TYPE" /></translation>
 <translation id="1269641567813814718">Win 键</translation>
-<translation id="1291104554099683393">请尝试使用较小的文本块进行分享。</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">从左向右</translation>
 <translation id="1383876407941801731">搜索</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 分钟前}other{# 分钟前}}</translation>
 <translation id="1450753235335490080">无法分享<ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 个月前}other{# 个月前}}</translation>
+<translation id="1591017414891297549">预览版</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 分钟 }other{# 分钟 }}</translation>
 <translation id="1643823602425662293">通知</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">今天</translation>
 <translation id="2168039046890040389">向上翻页</translation>
 <translation id="2190355936436201913">（空）</translation>
-<translation id="2192232475740621500">使用低密度</translation>
 <translation id="2267918077332197517">屏蔽来自此网站的所有通知</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">点按您屏幕上的触摸目标。</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">要用手机拨打此号码？</translation>
 <translation id="2435457462613246316">显示密码</translation>
 <translation id="24452542372838207">展开通知</translation>
-<translation id="2445449901874883781">使用高密度</translation>
 <translation id="2448407890032181691">触摸目标已移至右下角。点按此处。</translation>
 <translation id="2482878487686419369">通知</translation>
 <translation id="2497284189126895209">所有文件</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">剪贴板</translation>
 <translation id="2653844658857826081">新</translation>
 <translation id="2666092431469916601">顶部</translation>
-<translation id="2701330563083355633">共享自 <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 年前}other{# 年前}}</translation>
 <translation id="2878511608894704031">全部删除</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 天后}other{# 天后}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">内置显示屏</translation>
 <translation id="335581015389089642">语音</translation>
 <translation id="3372635229069101468">点击<ph name="BEGIN_BOLD" />详细信息<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">文本过长</translation>
 <translation id="3406306243914553062">HTML 内容</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{还剩 1 天}other{还剩 # 天}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> 文件</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 条未读通知}other{# 条未读通知}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{在无痕模式下启用以下扩展程序：}other{在无痕模式下启用以下扩展程序：}}</translation>
+<translation id="4230098358142093034">首页</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 个月前}other{# 个月前}}</translation>
 <translation id="4277033906326892359">“<ph name="COLUMN_NAME" />”列目前是按升序排列</translation>
 <translation id="4289300219472526559">开始讲话</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">确定</translation>
 <translation id="6974053822202609517">从右向左</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">您的应用的显示设置会在下次重启此应用时生效。</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{还剩 1 分钟}other{还剩 # 分钟}}</translation>
 <translation id="7252604552361840748">查找以上扩展程序</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{还剩 1 分钟}other{还剩 # 分钟}}</translation>
 <translation id="7437971918971306061">“<ph name="COLUMN_NAME" />”列已取消排序。</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">表情符号</translation>
 <translation id="7620655452534002301">已移除。</translation>
 <translation id="7658239707568436148">取消</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">+ 另外 <ph name="NUMBER" /> 项</translation>
 <translation id="8730621377337864115">完成</translation>
+<translation id="8741385002816058621">这是一项预览版功能</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 小时}other{# 小时}}</translation>
 <translation id="8798099450830957504">默认</translation>
 <translation id="8841375032071747811">“返回”按钮</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">撤消(&amp;U)</translation>
 <translation id="9195990613383871904">明天</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">家</translation>
 <translation id="944069440740578670">未读通知</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 秒前}other{# 秒前}}</translation>
 </translationbundle>

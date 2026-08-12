@@ -4,7 +4,7 @@
 
 module blink.mojom;
 
-import "third_party/blink/public/mojom/ai/model_download_progress_observer.mojom";
+import "services/on_device_model/public/mojom/download_observer.mojom";
 import "third_party/blink/public/mojom/on_device_translation/translator.mojom";
 
 struct TranslatorLanguageCode {
@@ -92,6 +92,9 @@ enum CreateTranslatorError {
   // The translator cannot be created, because the API was accessed from an invalid
   // storage partition.
   kInvalidStoragePartition = 10,
+
+  // The translator cannot be created, because a requested language is not supported.
+  kNotSupportedLanguage = 11,
 };
 
 // The result of TranslationManager's CreateTranslator IPC.
@@ -127,7 +130,7 @@ struct TranslatorCreateOptions {
   TranslatorLanguageCode target_lang;
   // A remote to the `CreateMonitor` that we can report download progress
   // events to.
-  pending_remote<ModelDownloadProgressObserver>? observer_remote;
+  pending_remote<on_device_model.mojom.DownloadObserver>? observer_remote;
 };
 
 // Interface to manage translation between languages on-device. Process called

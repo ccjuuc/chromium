@@ -6,36 +6,28 @@
 
 #include <algorithm>
 #include <map>
+#include <utility>
 
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/apps/link_capturing/link_capturing_navigation_throttle.h"
 #include "chrome/browser/apps/link_capturing/metrics/intent_handling_metrics.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
-#include "chrome/browser/sharing/click_to_call/click_to_call_metrics.h"
-#include "chrome/browser/sharing/click_to_call/click_to_call_ui_controller.h"
-#include "chrome/browser/sharing/click_to_call/click_to_call_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/intent_picker_tab_helper.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
-#include "components/sharing_message/sharing_target_device_info.h"
-#include "components/sync/protocol/sync_enums.pb.h"
-#include "components/sync_device_info/device_info.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/color/color_id.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "url/gurl.h"
 
 using content::WebContents;
@@ -43,6 +35,44 @@ using content::WebContents;
 namespace arc {
 
 namespace {
+
+bool IsCapturableLinkNavigation(ui::PageTransition page_transition,
+                                bool allow_form_submit,
+                                bool is_in_fenced_frame_tree,
+                                bool has_user_gesture) {
+  // Navigations inside fenced frame trees are marked with
+  // PAGE_TRANSITION_AUTO_SUBFRAME in order not to add session history items
+  // (see https://crrev.com/c/3265344). So we only check |has_user_gesture|.
+  if (is_in_fenced_frame_tree) {
+    DCHECK(ui::PageTransitionCoreTypeIs(page_transition,
+                                        ui::PAGE_TRANSITION_AUTO_SUBFRAME));
+    return has_user_gesture;
+  }
+
+  // Mask out any redirect qualifiers
+  page_transition = ui::PageTransitionFromInt(
+      page_transition & ~ui::PAGE_TRANSITION_IS_REDIRECT_MASK);
+
+  if (!ui::PageTransitionCoreTypeIs(page_transition,
+                                    ui::PAGE_TRANSITION_LINK) &&
+      !(allow_form_submit &&
+        ui::PageTransitionCoreTypeIs(page_transition,
+                                     ui::PAGE_TRANSITION_FORM_SUBMIT))) {
+    // Do not handle the |url| if this event wasn't spawned by the user clicking
+    // on a link.
+    return false;
+  }
+
+  if (std::to_underlying(ui::PageTransitionGetQualifier(page_transition)) !=
+      0) {
+    // Qualifiers indicate that this navigation was the result of a click on a
+    // forward/back button, or typing in the URL bar. Don't handle any of those
+    // types of navigations.
+    return false;
+  }
+
+  return true;
+}
 
 // The proxy activity for launching an ARC IME's settings activity. These names
 // have to be in sync with the ones used in ArcInputMethodManagerService.java on
@@ -52,60 +82,12 @@ constexpr char kPackageForOpeningArcImeSettingsPage[] =
 constexpr char kActivityForOpeningArcImeSettingsPage[] =
     "org.chromium.arc.applauncher.InputMethodSettingsActivity";
 
-// Size of device icons in DIPs.
-constexpr int kDeviceIconSize = 16;
-
-using IntentPickerResponseWithDevices =
-    base::OnceCallback<void(std::vector<SharingTargetDeviceInfo> devices,
-                            apps::IntentPickerBubbleType intent_picker_type,
-                            const std::string& launch_name,
-                            apps::PickerEntryType entry_type,
-                            apps::IntentPickerCloseReason close_reason,
-                            bool should_persist)>;
-
-// Creates an icon for a specific |device_form_factor|.
-ui::ImageModel CreateDeviceIcon(
-    const syncer::DeviceInfo::FormFactor device_form_factor) {
-  const gfx::VectorIcon& icon =
-      device_form_factor == syncer::DeviceInfo::FormFactor::kTablet
-          ? kTabletIcon
-          : kHardwareSmartphoneIcon;
-  return ui::ImageModel::FromVectorIcon(icon, ui::kColorIcon, kDeviceIconSize);
-}
-
-// Adds |devices| to |picker_entries| and returns the new list. The devices are
-// added to the beginning of the list.
-std::vector<apps::IntentPickerAppInfo> AddDevices(
-    const std::vector<SharingTargetDeviceInfo>& devices,
-    std::vector<apps::IntentPickerAppInfo> picker_entries) {
-  DCHECK(!devices.empty());
-
-  // First add all devices to the list.
-  std::vector<apps::IntentPickerAppInfo> all_entries;
-  for (const SharingTargetDeviceInfo& device : devices) {
-    all_entries.emplace_back(apps::PickerEntryType::kDevice,
-                             CreateDeviceIcon(device.form_factor()),
-                             device.guid(), device.client_name());
-  }
-
-  // Append the previous list by moving its elements.
-  for (auto& entry : picker_entries) {
-    all_entries.emplace_back(std::move(entry));
-  }
-
-  return all_entries;
-}
-
-// Adds remote devices to |app_info| and shows the intent picker dialog if there
-// is at least one app or device to choose from.
-bool MaybeAddDevicesAndShowPicker(
-    const GURL& url,
-    const std::optional<url::Origin>& initiating_origin,
-    WebContents* web_contents,
-    std::vector<apps::IntentPickerAppInfo> app_info,
-    bool stay_in_chrome,
-    bool show_remember_selection,
-    IntentPickerResponseWithDevices callback) {
+bool ShowIntentPicker(const std::optional<url::Origin>& initiating_origin,
+                      WebContents* web_contents,
+                      std::vector<apps::IntentPickerAppInfo> app_info,
+                      bool show_stay_in_chrome,
+                      bool show_remember_selection,
+                      IntentPickerResponse callback) {
   ash::BrowserDelegate* browser =
       web_contents ? ash::BrowserController::GetInstance()->GetBrowserForTab(
                          web_contents)
@@ -114,39 +96,17 @@ bool MaybeAddDevicesAndShowPicker(
     return false;
   }
 
-  bool has_apps = !app_info.empty();
-  bool has_devices = false;
-
-  auto bubble_type = apps::IntentPickerBubbleType::kExternalProtocol;
-  ClickToCallUiController* controller = nullptr;
-  std::vector<SharingTargetDeviceInfo> devices;
-
-  if (ShouldOfferClickToCallForURL(web_contents->GetBrowserContext(), url)) {
-    bubble_type = apps::IntentPickerBubbleType::kClickToCall;
-    controller =
-        ClickToCallUiController::GetOrCreateFromWebContents(web_contents);
-    devices = controller->GetDevices();
-    has_devices = !devices.empty();
-    if (has_devices) {
-      app_info = AddDevices(devices, std::move(app_info));
-    }
-  }
-
   if (app_info.empty()) {
     return false;
   }
 
-  IntentPickerTabHelper::ShowOrHideIcon(
-      web_contents,
-      bubble_type == apps::IntentPickerBubbleType::kExternalProtocol);
-  browser->GetBrowser().window()->ShowIntentPickerBubble(
-      std::move(app_info), stay_in_chrome, show_remember_selection, bubble_type,
-      initiating_origin,
-      base::BindOnce(std::move(callback), std::move(devices), bubble_type));
-
-  if (controller) {
-    controller->OnIntentPickerShown(has_devices, has_apps);
-  }
+  IntentPickerTabHelper::ShowOrHideIcon(web_contents,
+                                        /*should_show_icon=*/true);
+  BrowserWindow::FromBrowser(&browser->GetBrowser())
+      ->ShowIntentPickerBubble(std::move(app_info), show_stay_in_chrome,
+                               show_remember_selection,
+                               apps::IntentPickerBubbleType::kExternalProtocol,
+                               initiating_origin, std::move(callback));
 
   return true;
 }
@@ -370,24 +330,6 @@ bool GetAndResetSafeToRedirectToArcWithoutUserConfirmationFlag(
   return true;
 }
 
-void HandleDeviceSelection(WebContents* web_contents,
-                           const std::vector<SharingTargetDeviceInfo>& devices,
-                           const std::string& device_guid,
-                           const GURL& url) {
-  if (!web_contents) {
-    return;
-  }
-
-  const auto it =
-      std::ranges::find(devices, device_guid, &SharingTargetDeviceInfo::guid);
-  CHECK(it != devices.end());
-  const SharingTargetDeviceInfo& device = *it;
-
-  ClickToCallUiController::GetOrCreateFromWebContents(web_contents)
-      ->OnDeviceSelected(url.GetContent(), device,
-                         SharingClickToCallEntryPoint::kLeftClickLink);
-}
-
 // Handles |url| if possible. Returns true if it is actually handled.
 bool HandleUrl(
     base::WeakPtr<WebContents> web_contents,
@@ -479,8 +421,6 @@ void OnIntentPickerClosed(
     bool safe_to_bypass_ui,
     std::vector<ArcIntentHelperMojoDelegate::IntentHandlerInfo> handlers,
     std::unique_ptr<ArcIntentHelperMojoDelegate> mojo_delegate,
-    std::vector<SharingTargetDeviceInfo> devices,
-    apps::IntentPickerBubbleType intent_picker_type,
     const std::string& selected_app_package,
     apps::PickerEntryType entry_type,
     apps::IntentPickerCloseReason reason,
@@ -496,22 +436,8 @@ void OnIntentPickerClosed(
   auto* context = web_contents ? web_contents->GetBrowserContext() : nullptr;
 
   if (web_contents) {
-    if (intent_picker_type != apps::IntentPickerBubbleType::kClickToCall) {
-      IntentPickerTabHelper::ShowOrHideIcon(web_contents.get(),
-                                            /*should_show_icon=*/false);
-    }
-  }
-
-  if (entry_type == apps::PickerEntryType::kDevice) {
-    DCHECK_EQ(apps::IntentPickerCloseReason::OPEN_APP, reason);
-    DCHECK(!should_persist);
-    HandleDeviceSelection(web_contents.get(), devices, selected_app_package,
-                          url);
-    if (context) {
-      apps::IntentHandlingMetrics::RecordExternalProtocolUserInteractionMetrics(
-          context, entry_type, reason, should_persist);
-    }
-    return;
+    IntentPickerTabHelper::ShowOrHideIcon(web_contents.get(),
+                                          /*should_show_icon=*/false);
   }
 
   // If the user selected an app to continue the navigation, confirm that the
@@ -609,8 +535,8 @@ void OnAppIconsReceived(
     return std::move(handled_cb).Run(false);
   }
 
-  bool handled = MaybeAddDevicesAndShowPicker(
-      url, initiating_origin, web_contents.get(), std::move(app_info),
+  bool handled = ShowIntentPicker(
+      initiating_origin, web_contents.get(), std::move(app_info),
       show_stay_in_chrome,
       /*show_remember_selection=*/true,
       base::BindOnce(OnIntentPickerClosed, web_contents, url, safe_to_bypass_ui,
@@ -624,9 +550,9 @@ void ShowExternalProtocolDialogWithoutApps(
     const std::optional<url::Origin>& initiating_origin,
     std::unique_ptr<ArcIntentHelperMojoDelegate> mojo_delegate,
     base::OnceCallback<void(bool)> handled_cb) {
-  // Try to show the device picker and fallback to the default dialog otherwise.
-  bool handled = MaybeAddDevicesAndShowPicker(
-      url, initiating_origin, web_contents.get(),
+  // Try to show the intent picker and fallback to the default dialog otherwise.
+  bool handled = ShowIntentPicker(
+      initiating_origin, web_contents.get(),
       /*app_info=*/{}, /*stay_in_chrome=*/false,
       /*show_remember_selection=*/false,
       base::BindOnce(
@@ -716,14 +642,12 @@ void RunArcExternalProtocolDialog(
   DCHECK(!url.SchemeIsHTTPOrHTTPS()) << url;
 
   // For external protocol navigation, always ignore the FROM_API qualifier.
-  const ui::PageTransition masked_page_transition =
-      apps::LinkCapturingNavigationThrottle::MaskOutPageTransition(
-          page_transition, ui::PAGE_TRANSITION_FROM_API);
+  const ui::PageTransition masked_page_transition = ui::PageTransitionFromInt(
+      page_transition & ~ui::PAGE_TRANSITION_FROM_API);
 
-  if (!apps::LinkCapturingNavigationThrottle::IsCapturableLinkNavigation(
-          masked_page_transition,
-          /*allow_form_submit=*/true, is_in_fenced_frame_tree,
-          has_user_gesture)) {
+  if (!IsCapturableLinkNavigation(masked_page_transition,
+                                  /*allow_form_submit=*/true,
+                                  is_in_fenced_frame_tree, has_user_gesture)) {
     LOG(WARNING) << "RunArcExternalProtocolDialog: ignoring " << url
                  << " with PageTransition=" << masked_page_transition
                  << ", is_in_fenced_frame_tree=" << is_in_fenced_frame_tree
@@ -793,24 +717,6 @@ bool IsChromeAnAppCandidateForTesting(
     const std::vector<ArcIntentHelperMojoDelegate::IntentHandlerInfo>&
         handlers) {
   return IsChromeAnAppCandidate(handlers);
-}
-
-void OnIntentPickerClosedForTesting(
-    base::WeakPtr<WebContents> web_contents,
-    const GURL& url,
-    bool safe_to_bypass_ui,
-    std::vector<ArcIntentHelperMojoDelegate::IntentHandlerInfo> handlers,
-    std::unique_ptr<ArcIntentHelperMojoDelegate> mojo_delegate,
-    std::vector<SharingTargetDeviceInfo> devices,
-    const std::string& selected_app_package,
-    apps::PickerEntryType entry_type,
-    apps::IntentPickerCloseReason reason,
-    bool should_persist) {
-  OnIntentPickerClosed(
-      web_contents, url, safe_to_bypass_ui, std::move(handlers),
-      std::move(mojo_delegate), std::move(devices),
-      apps::IntentPickerBubbleType::kExternalProtocol, selected_app_package,
-      entry_type, reason, should_persist);
 }
 
 }  // namespace arc

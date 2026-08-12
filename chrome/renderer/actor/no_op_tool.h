@@ -6,9 +6,9 @@
 #define CHROME_RENDERER_ACTOR_NO_OP_TOOL_H_
 
 #include "base/types/expected.h"
-#include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
+#include "chrome/common/actor.mojom-forward.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 
 namespace content {
 class RenderFrame;
@@ -29,12 +29,12 @@ class NoOpTool : public ToolBase {
   ~NoOpTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   std::string DebugString() const override;
 
  private:
-  using ValidatedResult = base::expected<void, mojom::ActionResultPtr>;
-  ValidatedResult Validate() const;
+  std::optional<ResolvedTarget> validated_target_;
 };
 
 }  // namespace actor

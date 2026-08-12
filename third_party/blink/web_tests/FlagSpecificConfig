@@ -21,10 +21,6 @@
     "args": ["--enable-blink-features=AIPageContentBuildOnLoadForTesting"]
   },
   {
-    "name": "devtools-tab-target",
-    "args": ["--content-shell-devtools-tab-target"]
-  },
-  {
     "name": "disable-site-isolation-trials",
     "args": ["--disable-site-isolation-trials"]
   },
@@ -65,6 +61,16 @@
           "--enable-features=TreesInViz"
     ],
     "smoke_file": "TestLists/trees-in-viz"
+  },
+  {
+    "name": "surface-embed",
+    "args": [
+          "--enable-features=SurfaceEmbed,Webium"
+    ],
+    "comments": [
+          "Used for testing web capabilities when a web page is embedded using",
+          "SurfaceEmbed, which embeds tabs in a Top Chrome WebUI."
+    ]
   },
   {
     "name": "webgpu",
@@ -218,15 +224,6 @@
     ],
     "comments": [
       "Used to test Chrome with Skia Ganesh."
-    ]
-  },
-  {
-    "name": "ComputePressureOwnContributionEstimate",
-    "args": [
-      "--enable-features=ComputePressureOwnContributionEstimate"
-    ],
-    "comments": [
-      "Enable experimental attribute onwContributionEstimate."
     ]
   }
 ]

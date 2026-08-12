@@ -9,9 +9,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/web_applications/scheduler/navigate_and_trigger_install_dialog_result.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -44,9 +44,7 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   provider().scheduler().ScheduleNavigateAndTriggerInstallDialog(
       test_url, kOriginUrl, /*is_renderer_initiated=*/true,
       base::BindLambdaForTesting(
-          [&](NavigateAndTriggerInstallDialogCommandResult result) {
-            loop.Quit();
-          }));
+          [&](NavigateAndTriggerInstallDialogResult result) { loop.Quit(); }));
   navigation_observer.Wait();
   // The browser should now have 2 tabs.
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
@@ -70,9 +68,8 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   provider().scheduler().ScheduleNavigateAndTriggerInstallDialog(
       test_url, kOriginUrl, /*is_renderer_initiated=*/true,
       base::BindLambdaForTesting(
-          [&](NavigateAndTriggerInstallDialogCommandResult result) {
-            EXPECT_EQ(result,
-                      NavigateAndTriggerInstallDialogCommandResult::kFailure);
+          [&](NavigateAndTriggerInstallDialogResult result) {
+            EXPECT_EQ(result, NavigateAndTriggerInstallDialogResult::kFailure);
             loop.Quit();
           }));
   navigation_observer.Wait();
@@ -85,7 +82,8 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
 
 IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
                        DoesNotTriggerDialogIfNotWebApp) {
-  GURL test_url = https_server()->GetURL("/banners/no_manifest_test_page.html");
+  GURL test_url = embedded_https_test_server().GetURL(
+      "/banners/no_manifest_test_page.html");
   ASSERT_TRUE(test_url.SchemeIs(url::kHttpsScheme));
   ASSERT_FALSE(NavigateAndAwaitInstallabilityCheck(browser(), test_url));
 
@@ -93,9 +91,8 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   provider().scheduler().ScheduleNavigateAndTriggerInstallDialog(
       test_url, kOriginUrl, /*is_renderer_initiated=*/true,
       base::BindLambdaForTesting(
-          [&](NavigateAndTriggerInstallDialogCommandResult result) {
-            EXPECT_EQ(result,
-                      NavigateAndTriggerInstallDialogCommandResult::kFailure);
+          [&](NavigateAndTriggerInstallDialogResult result) {
+            EXPECT_EQ(result, NavigateAndTriggerInstallDialogResult::kFailure);
             loop.Quit();
           }));
 
@@ -114,9 +111,9 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   provider().scheduler().ScheduleNavigateAndTriggerInstallDialog(
       test_url, kOriginUrl, /*is_renderer_initiated=*/true,
       base::BindLambdaForTesting(
-          [&](NavigateAndTriggerInstallDialogCommandResult result) {
-            EXPECT_EQ(result, NavigateAndTriggerInstallDialogCommandResult::
-                                  kAlreadyInstalled);
+          [&](NavigateAndTriggerInstallDialogResult result) {
+            EXPECT_EQ(result,
+                      NavigateAndTriggerInstallDialogResult::kAlreadyInstalled);
             loop.Quit();
           }));
 
@@ -133,10 +130,9 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   provider().scheduler().ScheduleNavigateAndTriggerInstallDialog(
       test_url, kOriginUrl, /*is_renderer_initiated=*/true,
       base::BindLambdaForTesting(
-          [&](NavigateAndTriggerInstallDialogCommandResult result) {
-            EXPECT_EQ(
-                result,
-                NavigateAndTriggerInstallDialogCommandResult::kDialogShown);
+          [&](NavigateAndTriggerInstallDialogResult result) {
+            EXPECT_EQ(result,
+                      NavigateAndTriggerInstallDialogResult::kDialogShown);
             loop.Quit();
           }));
 

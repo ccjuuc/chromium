@@ -10,10 +10,10 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_or_update_job.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_icon_operations.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
@@ -60,8 +60,8 @@ void PopulateFileHandlerInfoFromManifest(
     WebAppInstallInfo* web_app_info);
 
 // Populate non-product icons in WebAppInstallInfo using the IconsMap. This
-// currently covers shortcut item icons and file handler icons. It ignores
-// icons that might have already existed in `web_app_info`.
+// currently covers shortcut item and home tab icons. It ignores icons that
+// might have already existed in `web_app_info`.
 void PopulateOtherIcons(WebAppInstallInfo* web_app_info,
                         const IconsMap& icons_map);
 
@@ -130,9 +130,8 @@ void ApplyParamsToWebAppInstallInfo(const WebAppInstallParams& install_params,
                                     WebAppInstallInfo& web_app_info);
 
 // Update |options| using |install_params|.
-void ApplyParamsToFinalizeOptions(
-    const WebAppInstallParams& install_params,
-    WebAppInstallFinalizer::FinalizeOptions& options);
+void ApplyParamsToFinalizeOptions(const WebAppInstallParams& install_params,
+                                  FinalizeJobOptions& options);
 
 // Returns whether the home tab icons exist.
 bool HomeTabIconsExistInTabStrip(const WebAppInstallInfo& web_app_info);

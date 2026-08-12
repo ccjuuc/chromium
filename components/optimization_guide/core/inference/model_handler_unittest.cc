@@ -3,10 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/test_optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/inference/test_model_executor.h"
 #include "components/optimization_guide/core/inference/test_model_handler.h"
@@ -93,12 +94,11 @@ class ModelHandlerTest : public testing::Test {
       proto::OptimizationTarget optimization_target,
       const std::optional<proto::Any>& model_metadata) {
     DCHECK(model_handler());
-    std::unique_ptr<ModelInfo> model_info =
-        TestModelInfoBuilder()
-            .SetModelFilePath(model_file_path_)
-            .SetModelMetadata(model_metadata)
-            .Build();
-    model_handler()->OnModelUpdated(optimization_target, *model_info);
+    ModelInfo model_info = {
+        .model_file_path = model_file_path_,
+        .model_metadata = model_metadata,
+    };
+    model_handler()->OnModelUpdated(optimization_target, model_info);
     RunUntilIdle();
   }
 
@@ -239,9 +239,10 @@ TEST_F(ModelHandlerTest, Execute) {
   run_loop->Run();
 
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutor.TaskExecutionLatency." +
-          optimization_guide::GetStringNameForOptimizationTarget(
-              proto::OptimizationTarget::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD),
+      base::StrCat({"OptimizationGuide.ModelExecutor.TaskExecutionLatency.",
+                    optimization_guide::GetStringNameForOptimizationTarget(
+                        proto::OptimizationTarget::
+                            OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)}),
       1);
 }
 
@@ -271,9 +272,10 @@ TEST_F(ModelHandlerTest, ExecuteWithCancelableTaskTracker) {
   run_loop->Run();
 
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutor.TaskExecutionLatency." +
-          optimization_guide::GetStringNameForOptimizationTarget(
-              proto::OptimizationTarget::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD),
+      base::StrCat({"OptimizationGuide.ModelExecutor.TaskExecutionLatency.",
+                    optimization_guide::GetStringNameForOptimizationTarget(
+                        proto::OptimizationTarget::
+                            OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)}),
       1);
 }
 
@@ -300,9 +302,10 @@ TEST_F(ModelHandlerTest, ExecuteWithCancelableTaskTrackerCanceled) {
 
   ASSERT_FALSE(task_completed);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutor.TaskExecutionLatency." +
-          optimization_guide::GetStringNameForOptimizationTarget(
-              proto::OptimizationTarget::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD),
+      base::StrCat({"OptimizationGuide.ModelExecutor.TaskExecutionLatency.",
+                    optimization_guide::GetStringNameForOptimizationTarget(
+                        proto::OptimizationTarget::
+                            OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)}),
       0);
 }
 
@@ -323,9 +326,10 @@ TEST_F(ModelHandlerTest, BatchExecuteModelWithInputSync) {
   }
 
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutor.TaskExecutionLatency." +
-          optimization_guide::GetStringNameForOptimizationTarget(
-              proto::OptimizationTarget::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD),
+      base::StrCat({"OptimizationGuide.ModelExecutor.TaskExecutionLatency.",
+                    optimization_guide::GetStringNameForOptimizationTarget(
+                        proto::OptimizationTarget::
+                            OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)}),
       1);
 }
 

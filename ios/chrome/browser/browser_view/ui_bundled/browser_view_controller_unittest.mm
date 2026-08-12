@@ -17,10 +17,11 @@
 #import "components/open_from_clipboard/fake_clipboard_recent_content.h"
 #import "components/search_engines/template_url_service.h"
 #import "components/supervised_user/core/common/features.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/autocomplete/model/autocomplete_browser_agent.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/bookmarks/ui_bundled/home/bookmarks_coordinator.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/browser_container_view_controller.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/browser_content_view_controller.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/browser_view/ui_bundled/browser_view_controller+private.h"
 #import "ios/chrome/browser/browser_view/ui_bundled/key_commands_provider.h"
@@ -36,18 +37,19 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/history/model/history_service_factory.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_commands.h"
-#import "ios/chrome/browser/lens/model/lens_browser_agent.h"
+#import "ios/chrome/browser/metrics/model/activity_reporter.h"
 #import "ios/chrome/browser/metrics/model/tab_usage_recorder_browser_agent.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/ui_bundled/logo_animation_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_component_factory.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_coordinator.h"
-#import "ios/chrome/browser/omnibox/model/omnibox_position/omnibox_position_browser_agent.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_focus/omnibox_focus_browser_agent.h"
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_coordinator.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_sync_service_factory.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/segmentation_platform/model/segmentation_platform_service_factory.h"
 #import "ios/chrome/browser/sessions/model/ios_chrome_tab_restore_service_factory.h"
+#import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_scene_agent.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
@@ -56,19 +58,19 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_iph_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
 #import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_info_commands.h"
 #import "ios/chrome/browser/shared/public/commands/qr_scanner_commands.h"
 #import "ios/chrome/browser/shared/public/commands/quick_delete_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/commands/text_zoom_commands.h"
@@ -76,17 +78,19 @@
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_recent_tab_browser_agent.h"
-#import "ios/chrome/browser/tab_switcher/tab_strip/coordinator/tab_strip_coordinator.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/tabs/model/tab_helper_util.h"
 #import "ios/chrome/browser/tabs/ui_bundled/foreground_tab_animation_view.h"
 #import "ios/chrome/browser/tips_manager/model/tips_manager_ios_factory.h"
-#import "ios/chrome/browser/toolbar/coordinator/toolbar_coordinator.h"
+#import "ios/chrome/browser/toolbar/coordinator/main_toolbar_coordinator.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/fullscreen/toolbars_size_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/new_tab_animation_tab_helper.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_notifier_browser_agent.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
 #import "ios/chrome/browser/web/model/web_state_update_browser_agent.h"
 #import "ios/chrome/browser/web_state_list/model/web_usage_enabler/web_usage_enabler_browser_agent.h"
+#import "ios/chrome/test/app/uikit_test_util.h"
 #import "ios/chrome/test/block_cleanup_test.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
@@ -120,7 +124,10 @@ class BrowserViewControllerTest : public BlockCleanupTest {
   void SetUp() override {
     BlockCleanupTest::SetUp();
 
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
+    LayoutGuideSceneAgent* layout_guide_scene_agent =
+        [[LayoutGuideSceneAgent alloc] init];
+    [scene_state_ addAgent:layout_guide_scene_agent];
 
     // Set up a TestProfileIOS instance.
     TestProfileIOS::Builder test_profile_builder;
@@ -153,8 +160,11 @@ class BrowserViewControllerTest : public BlockCleanupTest {
         ios::BookmarkModelFactory::GetDefaultFactory());
     test_profile_builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    test_profile_builder.AddTestingFactory(
+        SyncServiceFactory::GetInstance(),
+        base::BindRepeating(&CreateTestSyncService));
     test_profile_builder.AddTestingFactory(
         segmentation_platform::SegmentationPlatformServiceFactory::
             GetInstance(),
@@ -176,11 +186,10 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     browser_ = std::make_unique<TestBrowser>(GetProfile(), scene_state_);
     WebUsageEnablerBrowserAgent::CreateForBrowser(browser_.get());
     UrlLoadingNotifierBrowserAgent::CreateForBrowser(browser_.get());
-    LensBrowserAgent::CreateForBrowser(browser_.get());
     WebNavigationBrowserAgent::CreateForBrowser(browser_.get());
     TabUsageRecorderBrowserAgent::CreateForBrowser(browser_.get());
     StartSurfaceRecentTabBrowserAgent::CreateForBrowser(browser_.get());
-    OmniboxPositionBrowserAgent::CreateForBrowser(browser_.get());
+    OmniboxFocusBrowserAgent::CreateForBrowser(browser_.get());
     AutocompleteBrowserAgent::CreateForBrowser(browser_.get());
     BrowserViewVisibilityNotifierBrowserAgent::CreateForBrowser(browser_.get());
     // FullscreenController depends on ToolbarsSizeBrowserAgent, so the agent
@@ -244,15 +253,15 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     [dispatcher startDispatchingToTarget:page_action_menu_handler
                              forProtocol:@protocol(PageActionMenuCommands)];
 
-    id bwg_handler = OCMProtocolMock(@protocol(BWGCommands));
-    [dispatcher startDispatchingToTarget:bwg_handler
-                             forProtocol:@protocol(BWGCommands)];
+    id gemini_handler = OCMProtocolMock(@protocol(GeminiCommands));
+    [dispatcher startDispatchingToTarget:gemini_handler
+                             forProtocol:@protocol(GeminiCommands)];
 
     // Set up Applicationhander and SettingsHandler mocks.
-    mock_application_handler_ = OCMProtocolMock(@protocol(ApplicationCommands));
+    mock_application_handler_ = OCMProtocolMock(@protocol(SceneCommands));
     id mock_settings_handler = OCMProtocolMock(@protocol(SettingsCommands));
     [dispatcher startDispatchingToTarget:mock_application_handler_
-                             forProtocol:@protocol(ApplicationCommands)];
+                             forProtocol:@protocol(SceneCommands)];
     [dispatcher startDispatchingToTarget:mock_settings_handler
                              forProtocol:@protocol(SettingsCommands)];
 
@@ -283,7 +292,7 @@ class BrowserViewControllerTest : public BlockCleanupTest {
         std::make_unique<ScopedClipboardRecentContentInstaller>(
             std::make_unique<FakeClipboardRecentContent>());
 
-    container_ = [[BrowserContainerViewController alloc] init];
+    container_ = [[BrowserContentViewController alloc] init];
     key_commands_provider_ =
         [[KeyCommandsProvider alloc] initWithBrowser:browser_.get()];
     safe_area_provider_ =
@@ -294,11 +303,8 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     [popup_menu_coordinator_ start];
 
     toolbar_coordinator_ =
-        [[ToolbarCoordinator alloc] initWithBrowser:browser_.get()];
+        [[MainToolbarCoordinator alloc] initWithBrowser:browser_.get()];
     [toolbar_coordinator_ start];
-
-    tab_strip_coordinator_ =
-        [[TabStripCoordinator alloc] initWithBrowser:browser_.get()];
 
     fullscreen_controller_ = FullscreenController::FromBrowser(browser_.get());
     side_swipe_coordinator_ = [[SideSwipeCoordinator alloc]
@@ -319,7 +325,6 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     BrowserViewControllerDependencies dependencies;
     dependencies.popupMenuCoordinator = popup_menu_coordinator_;
     dependencies.toolbarCoordinator = toolbar_coordinator_;
-    dependencies.tabStripCoordinator = tab_strip_coordinator_;
     dependencies.sideSwipeCoordinator = side_swipe_coordinator_;
     dependencies.bookmarksCoordinator = bookmarks_coordinator_;
     dependencies.fullscreenController = fullscreen_controller_;
@@ -329,13 +334,14 @@ class BrowserViewControllerTest : public BlockCleanupTest {
         LayoutGuideCenterForBrowser(browser_.get());
     dependencies.webStateList = browser_->GetWebStateList()->AsWeakPtr();
     dependencies.safeAreaProvider = safe_area_provider_;
-    dependencies.applicationCommandsHandler = mock_application_handler_;
+    dependencies.sceneHandler = mock_application_handler_;
     dependencies.ntpCoordinator = NTPCoordinator_;
+    dependencies.isOffTheRecord = browser_->GetProfile()->IsOffTheRecord();
 
     bvc_ = [[BrowserViewController alloc]
-        initWithBrowserContainerViewController:container_
-                           keyCommandsProvider:key_commands_provider_
-                                  dependencies:dependencies];
+        initWithBrowserContentViewController:container_
+                         keyCommandsProvider:key_commands_provider_
+                                dependencies:dependencies];
     bvc_.webUsageEnabled = YES;
     bvc_.browserViewVisibilityStateChangedCallback =
         BrowserViewVisibilityNotifierBrowserAgent::FromBrowser(browser_.get())
@@ -356,7 +362,9 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     tab_events_mediator_.consumer = bvc_;
 
     // Force the view to load.
-    UIWindow* window = [[UIWindow alloc] initWithFrame:CGRectZero];
+    UIWindow* window = [[UIWindow alloc]
+        initWithWindowScene:chrome_test_util::GetAnyWindowScene()];
+    window_.frame = CGRectZero;
     window.rootViewController = bvc_;
     [window makeKeyAndVisible];
     window_ = window;
@@ -370,7 +378,6 @@ class BrowserViewControllerTest : public BlockCleanupTest {
     [[bvc_ view] removeFromSuperview];
     [bvc_ shutdown];
     [bookmarks_coordinator_ stop];
-    [tab_strip_coordinator_ stop];
     [toolbar_coordinator_ stop];
     [popup_menu_coordinator_ stop];
     [NTPCoordinator_ stop];
@@ -455,14 +462,13 @@ class BrowserViewControllerTest : public BlockCleanupTest {
   raw_ptr<TestProfileIOS> profile_;
   std::unique_ptr<Browser> browser_;
   KeyCommandsProvider* key_commands_provider_;
-  BrowserContainerViewController* container_;
+  BrowserContentViewController* container_;
   BrowserViewController* bvc_;
   UIWindow* window_;
   SceneState* scene_state_;
   raw_ptr<commerce::MockShoppingService> shopping_service_;
   PopupMenuCoordinator* popup_menu_coordinator_;
-  ToolbarCoordinator* toolbar_coordinator_;
-  TabStripCoordinator* tab_strip_coordinator_;
+  MainToolbarCoordinator* toolbar_coordinator_;
   SideSwipeCoordinator* side_swipe_coordinator_;
   BookmarksCoordinator* bookmarks_coordinator_;
   raw_ptr<FullscreenController> fullscreen_controller_;
@@ -565,6 +571,7 @@ TEST_F(BrowserViewControllerTest, didInsertOffTheRecordWebState) {
                                 })];
   InsertWebState(std::move(web_state));
   EXPECT_OCMOCK_VERIFY(container_view_mock);
+  [container_view_mock stopMocking];
 }
 
 // Tests that when a webstate is inserted, the correct view is used during
@@ -605,6 +612,7 @@ TEST_F(BrowserViewControllerTest, ViewOnInsert) {
                                 })];
   InsertWebState(std::move(ntp_web_state2));
   EXPECT_OCMOCK_VERIFY(container_view_mock);
+  [container_view_mock stopMocking];
 }
 
 // BrowserViewController needs to conform to
@@ -613,4 +621,36 @@ TEST_F(BrowserViewControllerTest, ViewOnInsert) {
 TEST_F(BrowserViewControllerTest, LogoAnimationControllerOwnerOwner) {
   EXPECT_TRUE(
       [bvc_ conformsToProtocol:@protocol(LogoAnimationControllerOwnerOwner)]);
+}
+
+TEST_F(BrowserViewControllerTest, ActivityReporting) {
+  id mockInstance = OCMClassMock([ActivityReporterWithIncognito class]);
+  [bvc_ setValue:mockInstance forKey:@"activityReporter"];
+
+  // Initial state is active, non-incognito standard web state.
+  OCMExpect([mockInstance reportActiveWithIncognito:NO]);
+  [bvc_ setActive:YES];
+  [mockInstance verify];
+
+  // Making BVC inactive -> reports inactive.
+  OCMExpect([mockInstance reportInactive]);
+  [bvc_ setActive:NO];
+  [mockInstance verify];
+
+  // Making BVC active again -> reports active.
+  OCMExpect([mockInstance reportActiveWithIncognito:NO]);
+  [bvc_ setActive:YES];
+  [mockInstance verify];
+
+  // Simulating navigating to NTP -> reports inactive.
+  OCMExpect([mockInstance reportInactive]);
+  auto ntp_web_state = CreateWebState();
+  NewTabPageTabHelper::FromWebState(ntp_web_state.get())
+      ->SetDelegate(tab_events_mediator_);
+  LoadNTP(ntp_web_state.get());
+  InsertWebState(std::move(ntp_web_state));
+  [mockInstance verify];
+
+  [bvc_ setActive:NO];
+  [mockInstance stopMocking];
 }

@@ -19,6 +19,7 @@
 #import "ios/web/public/test/web_task_environment.h"
 #import "services/metrics/public/cpp/ukm_builders.h"
 #import "testing/platform_test.h"
+#import "url/origin.h"
 
 using IOS_ReaderMode_Heuristic_Result =
     ukm::builders::IOS_ReaderMode_Heuristic_Result;
@@ -40,14 +41,14 @@ class ReaderModeJavaScriptFeatureTest : public PlatformTest {
     return web::ScriptMessage(ValidDerivedFeatures(),
                               /*is_user_interacting=*/true,
                               /*is_main_frame=*/true,
-                              /*request_url=*/url);
+                              /*request_url=*/url, url::Origin::Create(url));
   }
 
   web::ScriptMessage ScriptMessageForInvalidUrl() {
     return web::ScriptMessage(ValidDerivedFeatures(),
                               /*is_user_interacting=*/true,
                               /*is_main_frame=*/true,
-                              /*request_url=*/std::nullopt);
+                              /*request_url=*/std::nullopt, url::Origin());
   }
 
   web::FakeWebState* web_state() { return &web_state_; }
@@ -85,7 +86,7 @@ class ReaderModeJavaScriptFeatureTest : public PlatformTest {
 
  protected:
   std::unique_ptr<base::Value> ValidDerivedFeatures() {
-    return std::make_unique<base::Value>(base::Value::Dict()
+    return std::make_unique<base::Value>(base::DictValue()
                                              .Set("time", 10.0)
                                              .Set("numElements", 0.0)
                                              .Set("numAnchors", 0.0)
@@ -138,7 +139,8 @@ TEST_F(ReaderModeJavaScriptFeatureTest, MalformedResponseNotDict) {
   web::ScriptMessage script_message(std::move(invalid_body),
                                     /*is_user_interacting=*/true,
                                     /*is_main_frame=*/true,
-                                    /*request_url=*/valid_url());
+                                    /*request_url=*/valid_url(),
+                                    url::Origin::Create(valid_url()));
   ReaderModeJavaScriptFeature::GetInstance()->ScriptMessageReceived(
       web_state(), script_message);
   // Test heuristic result histogram.
@@ -155,11 +157,12 @@ TEST_F(ReaderModeJavaScriptFeatureTest, MalformedResponseNotDict) {
 TEST_F(ReaderModeJavaScriptFeatureTest, MalformedResponseMissingFeatures) {
   CommitNavigation();
   auto invalid_body =
-      std::make_unique<base::Value>(base::Value(base::Value::Dict()));
+      std::make_unique<base::Value>(base::Value(base::DictValue()));
   web::ScriptMessage script_message(std::move(invalid_body),
                                     /*is_user_interacting=*/true,
                                     /*is_main_frame=*/true,
-                                    /*request_url=*/valid_url());
+                                    /*request_url=*/valid_url(),
+                                    url::Origin::Create(valid_url()));
   ReaderModeJavaScriptFeature::GetInstance()->ScriptMessageReceived(
       web_state(), script_message);
   // Test heuristic result histogram.

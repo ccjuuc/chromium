@@ -11,7 +11,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "content/public/browser/web_contents.h"
+#include "components/tabs/public/tab_interface.h"
 
 namespace glic {
 
@@ -66,20 +66,19 @@ GlicPinCandidateComparator::GlicPinCandidateComparator(
 
 GlicPinCandidateComparator::~GlicPinCandidateComparator() = default;
 
-bool GlicPinCandidateComparator::operator()(content::WebContents* a,
-                                            content::WebContents* b) {
+bool GlicPinCandidateComparator::operator()(tabs::TabInterface* a,
+                                            tabs::TabInterface* b) {
   if (query_.empty()) {
-    return a->GetLastActiveTimeTicks() > b->GetLastActiveTimeTicks();
+    return a->GetLastActiveTime() > b->GetLastActiveTime();
   }
 
   const SearchResult a_results = GetSearchResults(a->GetTitle());
   const SearchResult b_results = GetSearchResults(b->GetTitle());
 
-  // Use last active time as a tie-breaker when other search result criteria are
-  // equal.
-  auto a_tie_breaker = a->GetLastActiveTimeTicks();
-  auto b_tie_breaker = b->GetLastActiveTimeTicks();
-
+  // Use last active time (via GetLastActiveTime) as a tie-breaker when other
+  // search result criteria are equal.
+  auto a_tie_breaker = a->GetLastActiveTime();
+  auto b_tie_breaker = b->GetLastActiveTime();
   // Compare WebContents based on a tuple of search result criteria and
   // last active time. The comparison order prioritizes:
   // 1. `matches_prefix`: Whether the query matches the beginning of the title.
@@ -94,13 +93,10 @@ bool GlicPinCandidateComparator::operator()(content::WebContents* a,
 }
 
 const SearchResult GlicPinCandidateComparator::GetSearchResults(
-    std::u16string_view title) {
-  std::u16string title_str(title);
-  auto it = search_results_cache_.find(title_str);
+    const std::u16string& title) {
+  auto it = search_results_cache_.find(title);
   if (it == search_results_cache_.end()) {
-    it = search_results_cache_
-             .insert({std::move(title_str), Search(title, query_)})
-             .first;
+    it = search_results_cache_.insert({title, Search(title, query_)}).first;
   }
   return it->second;
 }

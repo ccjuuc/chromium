@@ -41,7 +41,7 @@ class TextSuggestionControllerTest : public EditingTestBase {
   EphemeralRangeInFlatTree ComputeRangeSurroundingCaret(
       const PositionInFlatTree& caret_position) {
     const Node* const position_node = caret_position.ComputeContainerNode();
-    const unsigned position_offset_in_node =
+    const wtf_size_t position_offset_in_node =
         caret_position.ComputeOffsetInContainerNode();
     // See ComputeRangeSurroundingCaret() in TextSuggestionController.
     return EphemeralRangeInFlatTree(
@@ -64,7 +64,7 @@ TEST_F(TextSuggestionControllerTest, ApplySpellCheckSuggestion) {
       Color::kBlack, Color::kBlack);
   // Select immediately before misspelling
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 0))
           .Build(),
       SetSelectionOptions());
@@ -148,7 +148,7 @@ TEST_F(TextSuggestionControllerTest, MAYBE_ApplyTextSuggestion) {
 
   // Select immediately before word2.
   GetDocument().GetFrame()->Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 6), Position(text, 6))
           .Build());
 
@@ -226,7 +226,7 @@ TEST_F(TextSuggestionControllerTest,
 
   // Select immediately before "mispelled".
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 0))
           .Build(),
       SetSelectionOptions());
@@ -240,7 +240,7 @@ TEST_F(TextSuggestionControllerTest,
 }
 
 TEST_F(TextSuggestionControllerTest,
-       ApplyingMisspellingTextSuggestionShouldNotChangeDOM) {
+       ApplyingMisspellingTextSuggestionShouldNotChangeDom) {
   SetBodyContent(
       "<div contenteditable>"
       "<span style='color: rgb(255, 0, 0);'>"
@@ -268,7 +268,7 @@ TEST_F(TextSuggestionControllerTest,
 
   // Select immediately before "mispelled".
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 10), Position(text, 10))
           .Build(),
       SetSelectionOptions());
@@ -298,7 +298,7 @@ TEST_F(TextSuggestionControllerTest, DeleteActiveSuggestionRange_DeleteAtEnd) {
       ImeTextSpanUnderlineStyle::kSolid, Color::kBlack, Color::kBlack);
   // Select immediately before word2
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 6), Position(text, 6))
           .Build(),
       SetSelectionOptions());
@@ -326,7 +326,7 @@ TEST_F(TextSuggestionControllerTest,
       ImeTextSpanUnderlineStyle::kSolid, Color::kBlack, Color::kBlack);
   // Select immediately before word2
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 6), Position(text, 6))
           .Build(),
       SetSelectionOptions());
@@ -355,7 +355,7 @@ TEST_F(TextSuggestionControllerTest,
       Color::kBlack, Color::kBlack);
   // Select immediately before word1
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 0))
           .Build(),
       SetSelectionOptions());
@@ -385,7 +385,7 @@ TEST_F(TextSuggestionControllerTest,
       Color::kBlack, Color::kBlack);
   // Select immediately before word1
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 0))
           .Build(),
       SetSelectionOptions());
@@ -418,7 +418,7 @@ TEST_F(TextSuggestionControllerTest,
       ImeTextSpanUnderlineStyle::kSolid, Color::kBlack, Color::kBlack);
   // Select immediately before word2
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 5), Position(text, 5))
           .Build(),
       SetSelectionOptions());
@@ -446,7 +446,7 @@ TEST_F(TextSuggestionControllerTest,
       ImeTextSpanUnderlineStyle::kSolid, Color::kBlack, Color::kBlack);
   // Select immediately before word2
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 6), Position(text, 6))
           .Build(),
       SetSelectionOptions());
@@ -474,7 +474,7 @@ TEST_F(TextSuggestionControllerTest,
       Color::kBlack, Color::kBlack);
   // Select immediately before word1
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 0), Position(text, 0))
           .Build(),
       SetSelectionOptions());
@@ -500,7 +500,7 @@ TEST_F(TextSuggestionControllerTest,
       EphemeralRange(Position(text, 0), Position(text, 8)));
   // Select inside before "embiggen"
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 1), Position(text, 1))
           .Build(),
       SetSelectionOptions());
@@ -553,7 +553,7 @@ TEST_F(TextSuggestionControllerTest, SuggestionMarkerWithEmptySuggestion) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -603,7 +603,7 @@ TEST_F(TextSuggestionControllerTest, SuggestionMarkerWithSuggestion) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -628,7 +628,7 @@ TEST_F(TextSuggestionControllerTest, SpellingMarkerWithSuggestionNotHidden) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -661,7 +661,7 @@ TEST_F(TextSuggestionControllerTest, SpellingMarkerWithSuggestionHidden) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -694,7 +694,7 @@ TEST_F(TextSuggestionControllerTest, GrammarMarkerWithSuggestionNotHidden) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -727,7 +727,7 @@ TEST_F(TextSuggestionControllerTest, GrammarMarkerWithSuggestionHidden) {
 
   // Set the caret inside the word.
   GetDocument().GetFrame()->Selection().SetSelection(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .SetBaseAndExtent(Position(text, 3), Position(text, 3))
           .Build(),
       SetSelectionOptions());
@@ -744,6 +744,78 @@ TEST_F(TextSuggestionControllerTest, GrammarMarkerWithSuggestionHidden) {
       .GetFrame()
       ->GetTextSuggestionController()
       .SuggestionMenuTimeoutCallback(0);
+
+  EXPECT_FALSE(
+      GetDocument().GetFrame()->GetTextSuggestionController().IsMenuOpen());
+}
+
+TEST_F(TextSuggestionControllerTest, SuggestionMarkerWithSuggestionNotHidden) {
+  SetBodyContent("<div contenteditable>helloo</div>");
+  Element* div = QuerySelector("div");
+  auto* text = To<Text>(div->firstChild());
+
+  GetDocument().Markers().AddSuggestionMarker(
+      EphemeralRange(Position(text, 0), Position(text, 5)),
+      SuggestionMarkerProperties::Builder()
+          .SetSuggestions(Vector<String>({"hello", "yellow"}))
+          .SetShouldHideSuggestionMenu(false)
+          .Build());
+
+  // Set the caret inside the word.
+  GetDocument().GetFrame()->Selection().SetSelection(
+      SelectionInDomTree::Builder()
+          .SetBaseAndExtent(Position(text, 3), Position(text, 3))
+          .Build(),
+      SetSelectionOptions());
+
+  // Handle potential suggestion tap on the caret position.
+  // This is to force a connection to the host.
+  GetDocument()
+      .GetFrame()
+      ->GetTextSuggestionController()
+      .HandlePotentialSuggestionTap(PositionInFlatTree(text, 3));
+
+  // Force open suggestion menu.
+  GetDocument()
+      .GetFrame()
+      ->GetTextSuggestionController()
+      .SuggestionMenuTimeoutCallback(/*max_number_of_suggestions=*/3);
+
+  EXPECT_TRUE(
+      GetDocument().GetFrame()->GetTextSuggestionController().IsMenuOpen());
+}
+
+TEST_F(TextSuggestionControllerTest, SuggestionMarkerWithSuggestionHidden) {
+  SetBodyContent("<div contenteditable>helloo</div>");
+  Element* div = QuerySelector("div");
+  auto* text = To<Text>(div->firstChild());
+
+  GetDocument().Markers().AddSuggestionMarker(
+      EphemeralRange(Position(text, 0), Position(text, 5)),
+      SuggestionMarkerProperties::Builder()
+          .SetSuggestions(Vector<String>({"hello", "yellow"}))
+          .SetShouldHideSuggestionMenu(true)
+          .Build());
+
+  // Set the caret inside the word.
+  GetDocument().GetFrame()->Selection().SetSelection(
+      SelectionInDomTree::Builder()
+          .SetBaseAndExtent(Position(text, 3), Position(text, 3))
+          .Build(),
+      SetSelectionOptions());
+
+  // Handle potential suggestion tap on the caret position.
+  // This is to force a connection to the host.
+  GetDocument()
+      .GetFrame()
+      ->GetTextSuggestionController()
+      .HandlePotentialSuggestionTap(PositionInFlatTree(text, 3));
+
+  // Force open suggestion menu.
+  GetDocument()
+      .GetFrame()
+      ->GetTextSuggestionController()
+      .SuggestionMenuTimeoutCallback(/*max_number_of_suggestions=*/3);
 
   EXPECT_FALSE(
       GetDocument().GetFrame()->GetTextSuggestionController().IsMenuOpen());

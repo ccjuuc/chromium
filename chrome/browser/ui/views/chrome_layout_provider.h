@@ -27,6 +27,10 @@ enum ChromeInsetsMetric {
   INSETS_TASK_MANAGER,
   // Padding used in the page info footer button.
   INSETS_PAGE_INFO_FOOTER_BUTTON,
+  // Outer border insets around the Block-style Action App Menu container popup.
+  INSETS_ACTION_APP_MENU_POPUP,
+  // Border insets for Block-style Action App Menu items.
+  INSETS_ACTION_APP_MENU_ITEM,
 };
 
 enum ChromeDistanceMetric {
@@ -95,10 +99,8 @@ enum ChromeDistanceMetric {
   DISTANCE_SIDE_PANEL_HEADER_BUTTON_MINIMUM_SIZE,
   // Horizontal spacing for separating side panel header border from controls.
   DISTANCE_SIDE_PANEL_HEADER_INTERIOR_MARGIN_HORIZONTAL,
-  // The corner radius for the content height side panel content.
-  DISTANCE_CONTENT_HEIGHT_SIDE_PANEL_CONTENT_RADIUS,
-  // The corner radius for the toolbar height side panel content.
-  DISTANCE_TOOLBAR_HEIGHT_SIDE_PANEL_CONTENT_RADIUS,
+  // The corner radius for the side panel content.
+  DISTANCE_SIDE_PANEL_CONTENT_RADIUS,
   // Horizontal padding between separator in the page info view.
   DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW,
   // Horizontal padding applied between the icon and label in the infobar.
@@ -199,6 +201,20 @@ enum ChromeDistanceMetric {
   DISTANCE_INFOBAR_BUTTON_VERTICAL_PADDING,
   // Horizontal padding for the infobar buttons.
   DISTANCE_INFOBAR_BUTTON_HORIZONTAL_PADDING,
+  // Minimum width of the Block Action App Menu popup.
+  DISTANCE_ACTION_APP_MENU_MINIMUM_WIDTH,
+  // Corner radius for Block-style Action App Menu section container cards.
+  DISTANCE_ACTION_APP_MENU_CONTAINER_CORNER_RADIUS,
+  // Top padding for the first item in a Block-style Action App Menu section card.
+  DISTANCE_ACTION_APP_MENU_ITEM_FIRST_TOP_PADDING,
+  // Bottom padding for the last item in a Block-style Action App Menu section card.
+  DISTANCE_ACTION_APP_MENU_ITEM_LAST_BOTTOM_PADDING,
+  // Default vertical margin for Block-style Action App Menu items.
+  DISTANCE_ACTION_APP_MENU_ITEM_DEFAULT_VERTICAL_MARGIN,
+  // Size of vector icons in the Block-style Action App Menu.
+  DISTANCE_ACTION_APP_MENU_ICON_SIZE,
+  // Full height of a Block-style Action App Menu item row.
+  DISTANCE_ACTION_APP_MENU_FULL_ITEM_HEIGHT,
 };
 
 class ChromeLayoutProvider : public views::LayoutProvider {

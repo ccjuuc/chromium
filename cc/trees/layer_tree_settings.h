@@ -126,7 +126,7 @@ class CC_EXPORT LayerTreeSettings {
       ImageDecodeCacheUtils::GetWorkingSetBytesForImageDecode(
           /*for_renderer=*/false);
   int max_preraster_distance_in_screen_pixels = 1000;
-  bool use_rgba_4444 = false;
+  bool prefer_rgba_4444 = false;
 
   // If set to true, the compositor may selectively defer image decodes to the
   // Image Decode Service and raster tiles without images until the decode is
@@ -192,10 +192,6 @@ class CC_EXPORT LayerTreeSettings {
   // https://crbug.com/414283.
   bool commit_fractional_scroll_deltas = false;
 
-  // Whether the compositor should attempt to sync with the scroll handlers
-  // before submitting a frame.
-  bool enable_synchronized_scrolling = true;
-
 #if DCHECK_IS_ON()
   // Whether to check if any double blur exists.
   bool log_on_ui_double_background_blur = false;
@@ -207,7 +203,7 @@ class CC_EXPORT LayerTreeSettings {
 
   // Enables ThrottleDecider which produces a list of FrameSinkIds that are
   // candidates for throttling.
-  // LayerTreeHostSingleThreadClient::FrameSinksToThrottleUpdated() will be
+  // LayerTreeHostSingleThreadDelegate::FrameSinksToThrottleUpdated() will be
   // called with candidates.
   bool enable_compositing_based_throttling = false;
 
@@ -243,6 +239,9 @@ class CC_EXPORT LayerTreeSettings {
 
   // Whether to use variable refresh rates when generating begin frames.
   bool enable_variable_refresh_rate = false;
+
+  // Whether the unbounded element API is enabled.
+  bool enable_unbounded_element = false;
 };
 
 }  // namespace cc

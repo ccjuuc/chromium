@@ -107,7 +107,7 @@ void ScopedSyncPointClientState::Reset() {
 }
 
 TaskGraph::Sequence::Task::Task(base::OnceClosure task_closure,
-                                uint32_t order_num,
+                                uint64_t order_num,
                                 const SyncToken& release,
                                 ReportingCallback report_callback)
     : task_closure(std::move(task_closure)),
@@ -124,7 +124,7 @@ TaskGraph::Sequence::Task& TaskGraph::Sequence::Task::operator=(Task&& other) =
     default;
 
 TaskGraph::Sequence::WaitFence::WaitFence(const SyncToken& sync_token,
-                                          uint32_t order_num,
+                                          uint64_t order_num,
                                           SequenceId release_sequence_id)
     : sync_token(sync_token),
       order_num(order_num),
@@ -159,6 +159,8 @@ TaskGraph::Sequence::Sequence(
 }
 
 TaskGraph::Sequence::~Sequence() {
+  task_graph_->UpdateConcurrencyMetrics(base::TimeTicks::Now());
+  task_graph_->running_sequences_.erase(sequence_id_);
 }
 
 ScopedSyncPointClientState TaskGraph::Sequence::CreateSyncPointClientState(
@@ -171,7 +173,7 @@ ScopedSyncPointClientState TaskGraph::Sequence::CreateSyncPointClientState(
                                     command_buffer_id);
 }
 
-uint32_t TaskGraph::Sequence::AddTask(TaskCallback task_callback,
+uint64_t TaskGraph::Sequence::AddTask(TaskCallback task_callback,
                                       std::vector<SyncToken> wait_fences,
                                       const SyncToken& release,
                                       ReportingCallback report_callback) {
@@ -179,11 +181,11 @@ uint32_t TaskGraph::Sequence::AddTask(TaskCallback task_callback,
                  std::move(wait_fences), release, std::move(report_callback));
 }
 
-uint32_t TaskGraph::Sequence::AddTask(base::OnceClosure task_closure,
+uint64_t TaskGraph::Sequence::AddTask(base::OnceClosure task_closure,
                                       std::vector<SyncToken> wait_fences,
                                       const SyncToken& release,
                                       ReportingCallback report_callback) {
-  const uint32_t order_num = order_data_->GenerateUnprocessedOrderNumber();
+  const uint64_t order_num = order_data_->GenerateUnprocessedOrderNumber();
   tasks_.push_back({std::move(task_closure), order_num, release,
                     std::move(report_callback)});
 
@@ -217,15 +219,22 @@ uint32_t TaskGraph::Sequence::AddTask(base::OnceClosure task_closure,
   return order_num;
 }
 
-uint32_t TaskGraph::Sequence::BeginTask(base::OnceClosure* task_closure) {
+uint64_t TaskGraph::Sequence::BeginTask(base::OnceClosure* task_closure) {
   DCHECK(task_closure);
   DCHECK(!tasks_.empty());
 
+  base::TimeTicks now = base::TimeTicks::Now();
+  task_graph_->UpdateConcurrencyMetrics(now);
+  task_graph_->running_sequences_.insert(sequence_id_);
+
   DVLOG(10) << "Sequence " << sequence_id() << " is now running.";
   *task_closure = std::move(tasks_.front().task_closure);
-  uint32_t order_num = tasks_.front().order_num;
+  uint64_t order_num = tasks_.front().order_num;
   current_task_release_ = tasks_.front().release;
   release_delegate_.Reset(current_task_release_);
+
+  current_task_start_time_ = now;
+  current_task_concurrent_time_ = base::TimeDelta();
 
   if (!tasks_.front().report_callback.is_null()) {
     std::move(tasks_.front().report_callback).Run(tasks_.front().running_ready);
@@ -237,6 +246,20 @@ uint32_t TaskGraph::Sequence::BeginTask(base::OnceClosure* task_closure) {
 
 void TaskGraph::Sequence::FinishTask() {
   DVLOG(10) << "Sequence " << sequence_id() << " is now ending.";
+
+  base::TimeTicks now = base::TimeTicks::Now();
+  task_graph_->UpdateConcurrencyMetrics(now);
+  task_graph_->running_sequences_.erase(sequence_id_);
+
+  base::TimeDelta duration = now - current_task_start_time_;
+  if (duration.is_positive()) {
+    last_task_concurrency_ratio_ =
+        current_task_concurrent_time_.InMicrosecondsF() /
+        duration.InMicrosecondsF();
+  } else {
+    last_task_concurrency_ratio_ = 0;
+  }
+
   SyncToken release = current_task_release_;
   current_task_release_.Clear();
   UpdateValidationTimer();
@@ -247,7 +270,7 @@ void TaskGraph::Sequence::ContinueTask(TaskCallback task_callback) {
 }
 
 void TaskGraph::Sequence::ContinueTask(base::OnceClosure task_closure) {
-  const uint32_t order_num = order_data_->current_order_num();
+  const uint64_t order_num = order_data_->current_order_num();
   tasks_.push_front({std::move(task_closure), order_num, current_task_release_,
                      ReportingCallback()});
   current_task_release_.Clear();
@@ -271,13 +294,8 @@ base::TimeDelta TaskGraph::Sequence::FrontTaskWaitingDependencyDelta() {
   return tasks_.front().running_ready - tasks_.front().first_dependency_added;
 }
 
-base::TimeDelta TaskGraph::Sequence::FrontTaskSchedulingDelay() {
-  DCHECK(!tasks_.empty());
-  return base::TimeTicks::Now() - tasks_.front().running_ready;
-}
-
 void TaskGraph::Sequence::RemoveWaitFence(const SyncToken& sync_token,
-                                          uint32_t order_num,
+                                          uint64_t order_num,
                                           SequenceId release_sequence_id) {
   DVLOG(10) << "Sequence " << sequence_id_.value()
             << " removing wait fence that was released by sequence "
@@ -362,10 +380,10 @@ std::pair<TaskGraph::Sequence::WaitFenceConstIter,
           TaskGraph::Sequence::WaitFenceConstIter>
 TaskGraph::Sequence::GetTaskWaitFences(const Task& task) const {
   struct Comp {
-    bool operator()(const WaitFence& left, uint32_t right) {
+    bool operator()(const WaitFence& left, uint64_t right) {
       return left.order_num < right;
     }
-    bool operator()(uint32_t left, const WaitFence& right) {
+    bool operator()(uint64_t left, const WaitFence& right) {
       return left < right.order_num;
     }
   };
@@ -443,13 +461,28 @@ TaskGraph::Sequence* TaskGraph::GetSequence(SequenceId sequence_id) {
 }
 
 void TaskGraph::SyncTokenFenceReleased(const SyncToken& sync_token,
-                                       uint32_t order_num,
+                                       uint64_t order_num,
                                        SequenceId release_sequence_id,
                                        SequenceId waiting_sequence_id) {
   base::AutoLock auto_lock(lock_);
   if (auto* sequence = GetSequence(waiting_sequence_id)) {
     sequence->RemoveWaitFence(sync_token, order_num, release_sequence_id);
   }
+}
+
+void TaskGraph::UpdateConcurrencyMetrics(base::TimeTicks now) {
+  if (!last_concurrency_update_time_.is_null()) {
+    base::TimeDelta delta = now - last_concurrency_update_time_;
+    if (delta.is_positive() && running_sequences_.size() > 1) {
+      for (SequenceId id : running_sequences_) {
+        Sequence* sequence = GetSequence(id);
+        if (sequence) {
+          sequence->current_task_concurrent_time_ += delta;
+        }
+      }
+    }
+  }
+  last_concurrency_update_time_ = now;
 }
 
 void TaskGraph::DestroySyncPointClientState(SequenceId sequence_id,

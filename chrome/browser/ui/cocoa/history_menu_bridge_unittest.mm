@@ -27,6 +27,7 @@
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/favicon_base/favicon_types.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/sessions/content/content_test_helper.h"
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
@@ -41,11 +42,12 @@ namespace {
 
 class MockTRS : public sessions::TabRestoreServiceImpl {
  public:
-  explicit MockTRS(Profile* profile)
+  MockTRS(Profile* profile, os_crypt_async::OSCryptAsync* os_crypt_async)
       : sessions::TabRestoreServiceImpl(
             std::make_unique<ChromeTabRestoreServiceClient>(profile),
             profile->GetPrefs(),
-            nullptr) {}
+            nullptr,
+            os_crypt_async) {}
   MOCK_CONST_METHOD0(entries, const sessions::TabRestoreService::Entries&());
 };
 
@@ -98,6 +100,18 @@ sessions::tab_restore::Group* CreateSessionGroup(
   return group;
 }
 
+sessions::tab_restore::Split* CreateSessionSplit(
+    SessionID::id_type id,
+    std::initializer_list<sessions::tab_restore::Tab*> tabs) {
+  auto* split = new sessions::tab_restore::Split;
+  split->id = SessionID::FromSerializedValue(id);
+  split->tabs.reserve(tabs.size());
+  for (auto* tab : tabs) {
+    split->tabs.emplace_back(tab);
+  }
+  return split;
+}
+
 std::unique_ptr<HistoryMenuBridge::HistoryItem> CreateItem(
     const std::u16string& title) {
   auto item = std::make_unique<HistoryMenuBridge::HistoryItem>();
@@ -130,6 +144,7 @@ class HistoryMenuBridgeTest : public BrowserWithTestWindowTest {
     [AppController.sharedController setLastProfileForTesting:profile()];
 
     bridge_ = std::make_unique<MockBridge>(profile());
+    os_crypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting(true);
   }
 
   void TearDown() override {
@@ -196,11 +211,10 @@ class HistoryMenuBridgeTest : public BrowserWithTestWindowTest {
 
  private:
   CocoaTestHelper cocoa_test_helper_;
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kShowTabGroupsMacSystemMenu};
 
  protected:
   std::unique_ptr<MockBridge> bridge_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 };
 
 class HistoryMenuBridgeLifetimeTest : public testing::Test {
@@ -344,7 +358,7 @@ TEST_F(HistoryMenuBridgeTest, AddItemToMenu) {
 
 // Test that the menu is created for a set of simple tabs.
 TEST_F(HistoryMenuBridgeTest, RecentlyClosedTabs) {
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile()));
+  std::unique_ptr<MockTRS> trs(new MockTRS(profile(), os_crypt_async_.get()));
   auto entries{CreateSessionEntries({
       CreateSessionTab(24, "http://google.com", "Google"),
       CreateSessionTab(42, "http://apple.com", "Apple"),
@@ -378,7 +392,7 @@ TEST_F(HistoryMenuBridgeTest, RecentlyClosedTabs) {
 
 // Test that the menu is created for a mix of windows and tabs.
 TEST_F(HistoryMenuBridgeTest, RecentlyClosedTabsAndWindows) {
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile()));
+  std::unique_ptr<MockTRS> trs(new MockTRS(profile(), os_crypt_async_.get()));
   auto entries{CreateSessionEntries({
       CreateSessionTab(24, "http://google.com", "Google"),
       CreateSessionWindow(30,
@@ -467,7 +481,7 @@ TEST_F(HistoryMenuBridgeTest, RecentlyClosedGroups) {
   tab_groups::TabGroupVisualData visual_data2(
       u"title", tab_groups::TabGroupColorId::kBlue);
 
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile()));
+  std::unique_ptr<MockTRS> trs(new MockTRS(profile(), os_crypt_async_.get()));
   auto entries{CreateSessionEntries({
       CreateSessionGroup(30, visual_data1,
                          {
@@ -535,6 +549,47 @@ TEST_F(HistoryMenuBridgeTest, RecentlyClosedGroups) {
   EXPECT_EQ(51, hist2->tabs[0]->session_id.id());
   EXPECT_EQ(52, hist2->tabs[1]->session_id.id());
   EXPECT_EQ(53, hist2->tabs[2]->session_id.id());
+}
+
+TEST_F(HistoryMenuBridgeTest, RecentlyClosedSplits) {
+  std::unique_ptr<MockTRS> trs(new MockTRS(profile(), os_crypt_async_.get()));
+
+  auto entries{CreateSessionEntries({
+      CreateSessionSplit(
+          30,
+          {
+              CreateSessionTab(31, "http://left.com", "Left View"),
+              CreateSessionTab(32, "http://right.com", "Right View"),
+          }),
+  })};
+
+  using ::testing::ReturnRef;
+  EXPECT_CALL(*trs.get(), entries()).WillOnce(ReturnRef(entries));
+
+  bridge_->TabRestoreServiceChanged(trs.get());
+
+  NSMenu* menu = bridge_->HistoryMenu();
+  ASSERT_EQ(1U, [[menu itemArray] count]);
+
+  // Verify the parent Split item
+  NSMenuItem* parent_item = [menu itemAtIndex:0];
+  MockBridge::HistoryItem* hist_parent =
+      bridge_->HistoryItemForMenuItem(parent_item);
+  EXPECT_TRUE(hist_parent);
+  EXPECT_EQ(30, hist_parent->session_id.id());
+  EXPECT_EQ(2U, hist_parent->tabs.size());
+  EXPECT_NSEQ(@"Split View", [parent_item title]);
+
+  // Verify the submenu containing the individual tabs
+  NSMenu* submenu = [parent_item submenu];
+  EXPECT_EQ(4U,
+            [[submenu itemArray] count]);  // Restore All + Separator + 2 Tabs
+
+  EXPECT_NSEQ(@"Left View", [[submenu itemAtIndex:2] title]);
+  EXPECT_NSEQ(@"Right View", [[submenu itemAtIndex:3] title]);
+
+  EXPECT_EQ(31, hist_parent->tabs[0]->session_id.id());
+  EXPECT_EQ(32, hist_parent->tabs[1]->session_id.id());
 }
 
 // Tests that we properly request an icon from the FaviconService.
@@ -638,7 +693,10 @@ TEST_F(HistoryMenuBridgeLifetimeTest, StillValidAfterProfileShutdown) {
   std::ignore = AppController.sharedController;
 
   auto bridge = std::make_unique<MockBridge>(profile.get());
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile.get()));
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async =
+      os_crypt_async::GetTestOSCryptAsyncForTesting(true);
+  std::unique_ptr<MockTRS> trs(
+      new MockTRS(profile.get(), os_crypt_async.get()));
   auto entries{CreateSessionEntries({
       CreateSessionTab(24, "http://google.com", "Google"),
       CreateSessionTab(42, "http://apple.com", "Apple"),
@@ -714,7 +772,10 @@ TEST_F(HistoryMenuBridgeLifetimeTest, EmptyTabRestoreService) {
 
   // Load an empty `TabRestoreService`. `TabRestoreServiceChanged()` is not
   // called because the service is empty.
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile.get()));
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async =
+      os_crypt_async::GetTestOSCryptAsyncForTesting(true);
+  std::unique_ptr<MockTRS> trs(
+      new MockTRS(profile.get(), os_crypt_async.get()));
   MockTRS::Entries no_entries;
   EXPECT_CALL(*trs.get(), entries()).WillOnce(testing::ReturnRef(no_entries));
   bridge->TabRestoreServiceLoaded(trs.get());
@@ -725,39 +786,5 @@ TEST_F(HistoryMenuBridgeLifetimeTest, EmptyTabRestoreService) {
   bridge.reset();
 }
 
-TEST_F(HistoryMenuBridgeTest, RecentlyClosedTabsInGroup) {
-  std::unique_ptr<MockTRS> trs(new MockTRS(profile()));
-
-  tab_groups::TabGroupVisualData visual_data(
-      std::u16string(), tab_groups::TabGroupColorId::kGrey);
-  auto entries{CreateSessionEntries({
-      CreateSessionTab(24, "http://google.com", "Google"),
-      CreateSessionTab(42, "http://apple.com", "Apple", visual_data),
-  })};
-
-  using ::testing::ReturnRef;
-  EXPECT_CALL(*trs.get(), entries()).WillOnce(ReturnRef(entries));
-
-  bridge_->TabRestoreServiceChanged(trs.get());
-
-  NSMenu* menu = bridge_->HistoryMenu();
-  ASSERT_EQ(2U, [[menu itemArray] count]);
-
-  // Verify tab1 doesn't have a group indicator.
-  NSMenuItem* item1 = [menu itemAtIndex:0];
-  MockBridge::HistoryItem* hist1 = bridge_->HistoryItemForMenuItem(item1);
-  EXPECT_TRUE(hist1);
-  EXPECT_EQ(24, hist1->session_id.id());
-  EXPECT_EQ(std::nullopt, hist1->tab_group_color_id);
-  EXPECT_EQ(nil, item1.attributedTitle);
-
-  // Verify tab2 has a grey group indicator.
-  NSMenuItem* item2 = [menu itemAtIndex:1];
-  MockBridge::HistoryItem* hist2 = bridge_->HistoryItemForMenuItem(item2);
-  EXPECT_TRUE(hist2);
-  EXPECT_EQ(42, hist2->session_id.id());
-  EXPECT_EQ(tab_groups::TabGroupColorId::kGrey, hist2->tab_group_color_id);
-  EXPECT_NE(nil, item2.attributedTitle);
-}
 
 }  // namespace

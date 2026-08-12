@@ -5,8 +5,10 @@
 #include "ui/views/bubble/bubble_frame_view.h"
 
 #include <algorithm>
+#include <optional>
 
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "components/vector_icons/vector_icons.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -58,6 +60,10 @@
 #include "ui/views/window/dialog_delegate.h"
 #include "ui/views/window/vector_icons/vector_icons.h"
 
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
 namespace views {
 
 namespace {
@@ -108,7 +114,10 @@ BubbleFrameView::BubbleFrameView(const gfx::Insets& title_margins,
       subtitle_(title_container_->AddChildView(
           CreateLabelWithContextAndStyle(std::u16string(),
                                          style::CONTEXT_LABEL,
-                                         style::STYLE_SECONDARY))) {
+                                         style::STYLE_SECONDARY))),
+      available_screen_bounds_callback_(
+          base::BindRepeating(&BubbleFrameView::GetDefaultAvailableScreenBounds,
+                              base::Unretained(this))) {
   title_container_->SetOrientation(BoxLayout::Orientation::kVertical);
 
   default_title_->SetVisible(false);
@@ -173,7 +182,9 @@ std::unique_ptr<Label> BubbleFrameView::CreateDefaultTitleLabel(
 std::unique_ptr<Button> BubbleFrameView::CreateCloseButton(
     Button::PressedCallback callback) {
   auto close_button = CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), vector_icons::kCloseChromeRefreshIcon);
+      std::move(callback), features::IsRoundedIconsEnabled()
+                               ? vector_icons::kCloseIcon
+                               : vector_icons::kCloseChromeRefreshOldIcon);
   close_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
   close_button->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_APP_CLOSE));
@@ -188,7 +199,9 @@ std::unique_ptr<Button> BubbleFrameView::CreateCloseButton(
 std::unique_ptr<Button> BubbleFrameView::CreateMinimizeButton(
     Button::PressedCallback callback) {
   auto minimize_button = CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), kWindowControlMinimizeIcon);
+      std::move(callback), features::IsRoundedIconsEnabled()
+                               ? kChromeMinimizeIcon
+                               : kWindowControlMinimizeOldIcon);
   minimize_button->SetTooltipText(
       l10n_util::GetStringUTF16(IDS_APP_ACCNAME_MINIMIZE));
   minimize_button->GetViewAccessibility().SetName(
@@ -290,8 +303,8 @@ int BubbleFrameView::NonClientHitTest(const gfx::Point& point) {
     }
   }
 
-  if (!non_client_hit_test_cb_.is_null()) {
-    const int result = non_client_hit_test_cb_.Run(point);
+  if (!non_client_hit_test_callback_.is_null()) {
+    int result = non_client_hit_test_callback_.Run(point);
     if (result != HTNOWHERE) {
       return result;
     }
@@ -396,6 +409,17 @@ void BubbleFrameView::InsertClientView(ClientView* client_view) {
       : AddChildViewRaw(client_view);
 }
 
+gfx::Rect BubbleFrameView::GetNonDecoratedClientAreaBoundsInScreen() const {
+  gfx::Rect bounds = GetLocalBounds();
+  View::ConvertRectToScreen(this, &bounds);
+
+  if (bubble_border_) {
+    bounds.Inset(bubble_border_->GetInsets());
+  }
+
+  return bounds;
+}
+
 void BubbleFrameView::UpdateWindowRoundedCorners() {
   // BubbleFrameView makes the frame round by drawing a rounded border.
   // Additionally, it rounds `footnote_container_` if present; it makes the
@@ -488,16 +512,16 @@ void BubbleFrameView::UpdateMainImage() {
 
     const int border_radius = LayoutProvider::Get()->GetCornerRadiusMetric(
         Emphasis::kHigh, gfx::Size());
+    const ui::ColorProvider* color_provider = GetColorProvider();
     main_image_->SetImage(ui::ImageModel::FromImageSkia(
         gfx::ImageSkiaOperations::CreateCroppedCenteredRoundRectImage(
             gfx::Size(main_image_dimension, main_image_dimension),
             border_radius - 2 * kMainImageBorderStrokeThickness,
-            model.GetImage().AsImageSkia())));
+            model.Rasterize(color_provider))));
     main_image_->SetBorder(views::CreateRoundedRectBorder(
         kMainImageBorderStrokeThickness, border_radius, image_insets,
-        GetColorProvider()
-            ? GetColorProvider()->GetColor(ui::kColorBubbleBorder)
-            : gfx::kPlaceholderColor));
+        color_provider ? color_provider->GetColor(ui::kColorBubbleBorder)
+                       : gfx::kPlaceholderColor));
 
     main_image_->SetVisible(true);
   }
@@ -984,10 +1008,48 @@ gfx::Insets BubbleFrameView::GetClientViewInsets() const {
 
 gfx::Rect BubbleFrameView::GetAvailableScreenBounds(
     const gfx::Rect& rect) const {
+  return available_screen_bounds_callback_.Run(rect);
+}
+
+gfx::Rect BubbleFrameView::GetDefaultAvailableScreenBounds(
+    const gfx::Rect& rect) const {
+  display::Display display =
+      display::Screen::Get()->GetDisplayNearestPoint(rect.CenterPoint());
+
+  // On Ozone/Wayland platforms that don't support global screen coordinates,
+  // the display returned by `GetDisplayNearestPoint` may be incorrect because
+  // the coordinates for `rect` aren't global. Instead, fall back to getting the
+  // display from the anchor. See crbug.com/524087116 for context.
+#if BUILDFLAG(IS_OZONE)
+  if (!ui::OzonePlatform::GetInstance()
+           ->GetPlatformProperties()
+           .supports_global_screen_coordinates) {
+    if (auto* bubble_delegate =
+            GetWidget()->widget_delegate()->AsBubbleDialogDelegate()) {
+      views::Widget* anchor_widget = bubble_delegate->anchor_widget();
+      if (anchor_widget && anchor_widget->GetNativeWindow()) {
+        display = display::Screen::Get()->GetDisplayNearestWindow(
+            anchor_widget->GetNativeWindow());
+      }
+    }
+  }
+#endif
+
+  gfx::Rect work_area = display.work_area();
+#if BUILDFLAG(IS_OZONE)
+  // When global screen coordinates aren't supported, shift the work area to
+  // (0,0). If two displays are offset, the work area coordinates may not start
+  // at 0 which results in invalid comparisons when positioning bubbles.
+  // TODO(crbug.com/510418617): Consider moving this logic to the display level
+  // in the future rather than hosting it in Views.
+  if (!ui::OzonePlatform::GetInstance()
+           ->GetPlatformProperties()
+           .supports_global_screen_coordinates) {
+    work_area.set_origin(gfx::Point(0, 0));
+  }
+#endif
   // The bubble attempts to fit within the current screen bounds.
-  return display::Screen::Get()
-      ->GetDisplayNearestPoint(rect.CenterPoint())
-      .work_area();
+  return work_area;
 }
 
 gfx::Rect BubbleFrameView::GetAvailableAnchorWindowBounds() const {
@@ -1186,12 +1248,6 @@ BubbleFrameView::ButtonsPositioning BubbleFrameView::GetButtonsPositioning()
   return HasTitle() && !(header_view_ && header_view_->GetVisible())
              ? ButtonsPositioning::kInTitleRow
              : ButtonsPositioning::kOnFrameEdge;
-}
-
-bool BubbleFrameView::TitleRowHasButtons() const {
-  return GetButtonsPositioning() == ButtonsPositioning::kInTitleRow &&
-         (GetWidget()->widget_delegate()->ShouldShowCloseButton() ||
-          GetWidget()->widget_delegate()->CanMinimize());
 }
 
 gfx::Insets BubbleFrameView::GetTitleLabelInsetsFromFrame() const {

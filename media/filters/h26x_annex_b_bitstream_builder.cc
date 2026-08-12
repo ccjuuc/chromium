@@ -128,9 +128,9 @@ void H26xAnnexBBitstreamBuilder::AppendBool(bool val) {
 
 void H26xAnnexBBitstreamBuilder::AppendSE(int val) {
   if (val > 0)
-    AppendUE(val * 2 - 1);
+    AppendUE(static_cast<unsigned int>(val) * 2 - 1);
   else
-    AppendUE(-val * 2);
+    AppendUE(-static_cast<unsigned int>(val) * 2);
 }
 
 void H26xAnnexBBitstreamBuilder::AppendUE(unsigned int val) {
@@ -173,7 +173,7 @@ void H26xAnnexBBitstreamBuilder::BeginNALU(H265NALU::Type nalu_type) {
   DCHECK(!in_nalu_);
   DCHECK_FINISHED();
 
-  DCHECK_LE(nalu_type, H265NALU::Type::EOS_NUT);
+  DCHECK_LE(nalu_type, H265NALU::Type::SUFFIX_SEI_NUT);
 
   AppendBits(32, 0x00000001);
   Flush();

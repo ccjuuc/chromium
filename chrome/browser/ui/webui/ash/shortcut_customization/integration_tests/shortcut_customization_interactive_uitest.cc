@@ -8,11 +8,11 @@
 #include "ash/public/cpp/accelerator_actions.h"
 #include "ash/shell.h"
 #include "ash/webui/settings/public/constants/routes.mojom-forward.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "ash/webui/shortcut_customization_ui/url_constants.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 #include "device/udev_linux/fake_udev_loader.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -35,7 +35,7 @@ constexpr char kKbdTopRowLayout1Tag[] = "1";
 
 std::string ConvertVectorToJsonList(const std::vector<std::string>& expected) {
   // Safely convert the selector list in `where` to a JSON/JS list.
-  base::Value::List selector_list;
+  base::ListValue selector_list;
   for (const auto& selector : expected) {
     selector_list.Append(selector);
   }
@@ -124,10 +124,7 @@ class ShortcutCustomizationInteractiveUiTest : public InteractiveAshTest {
   ui::test::InteractiveTestApi::StepBuilder SendKeyPressEvent(
       ui::KeyboardCode key,
       int modifier) {
-    return Do([key, modifier]() {
-      ui::test::EventGenerator(Shell::GetPrimaryRootWindow())
-          .PressKey(key, modifier);
-    });
+    return SendKeyPress(webcontents_id_, key, modifier);
   }
 
   auto OpenEditShortcutDialog(const DeepQuery& query) {
@@ -469,7 +466,7 @@ IN_PROC_BROWSER_TEST_F(ShortcutCustomizationInteractiveUiTest,
       ClickElement(webcontents_id_, kKeyboardSettingsLink),
       WaitForWebContentsReady(
           kSettingsWebContentsId,
-          GURL(chrome::GetOSSettingsUrl(
+          GURL(chromeos::settings::GetOSSettingsUrl(
               chromeos::settings::mojom::kPerDeviceKeyboardSubpagePath))));
 }
 

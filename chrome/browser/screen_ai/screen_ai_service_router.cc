@@ -7,13 +7,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
@@ -143,6 +141,10 @@ void ScreenAIServiceRouter::StateChanged(ScreenAIInstallState::State state) {
   }
 
   // No need to observe after library is downloaded or download has failed.
+  component_ready_observer_.Reset();
+}
+
+void ScreenAIServiceRouter::OnScreenAIInstallStateDestroying() {
   component_ready_observer_.Reset();
 }
 

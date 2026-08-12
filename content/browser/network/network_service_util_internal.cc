@@ -4,6 +4,7 @@
 
 #include "content/browser/network/network_service_util_internal.h"
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "build/build_config.h"
@@ -25,8 +26,8 @@ std::optional<bool> g_force_network_service_process_in_or_out;
 // Using 1077 rather than 1024 because it helps ensure that devices with
 // exactly 1GB of RAM won't get included because of inaccuracies or off-by-one
 // errors.
-constexpr base::ByteCount kNetworkServiceOutOfProcessThreshold =
-    base::MiB(1077);
+constexpr base::ByteSize kNetworkServiceOutOfProcessThreshold =
+    base::MiBU(1077);
 #endif
 
 }  // namespace
@@ -55,7 +56,7 @@ bool IsInProcessNetworkServiceImpl() {
 #if BUILDFLAG(IS_ANDROID)
   // Check RAM size before looking at kNetworkServiceInProcess flag
   // so that we can throttle the finch groups including control.
-  if (base::SysInfo::AmountOfPhysicalMemory() <=
+  if (base::SysInfo::AmountOfTotalPhysicalMemory() <=
       kNetworkServiceOutOfProcessThreshold) {
     return true;
   }

@@ -10,6 +10,7 @@
 #import "base/files/file_path.h"
 #import "base/files/file_util.h"
 #import "base/logging.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/sequence_checker.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
@@ -33,7 +34,12 @@ const ImageType kImageTypes[] = {
     IMAGE_TYPE_GREYSCALE,
 };
 
-const CGFloat kJPEGImageQuality = 1.0;  // Highest quality. No compression.
+// Default JPEG quality (no compression).
+const CGFloat kJPEGImageQualityDefault = 1.0;
+
+// Compressed JPEG quality. Provides visually lossless quality while reducing
+// file size by ~3-5x compared to 1.0.
+const CGFloat kJPEGImageQualityCompressed = 0.97;
 
 // Returns the suffix to append to image filename for `image_type`.
 const char* SuffixForImageType(ImageType image_type) {
@@ -102,8 +108,14 @@ UIImage* ReadImageForSnapshotIDFromDisk(SnapshotID snapshot_id,
   base::FilePath file_path =
       ImagePath(snapshot_id, IMAGE_TYPE_COLOR, image_scale, directory);
   NSString* path = base::apple::FilePathToNSString(file_path);
+  // Downsampled images are stored at half the device scale, so read
+  // them back at the same reduced scale to preserve point dimensions.
+  CGFloat device_scale = [SnapshotImageScale floatImageScaleForDevice];
+  CGFloat read_scale = IsSnapshotDownsampleImageEnabled()
+                           ? (device_scale / 2.0)
+                           : device_scale;
   return [UIImage imageWithData:[NSData dataWithContentsOfFile:path]
-                          scale:[SnapshotImageScale floatImageScaleForDevice]];
+                          scale:read_scale];
 }
 
 // Helper function to write an image to disk.
@@ -131,13 +143,21 @@ void WriteImageToDisk(UIImage* image, const base::FilePath& file_path) {
   }
 
   NSString* path = base::apple::FilePathToNSString(file_path);
-  NSData* data = UIImageJPEGRepresentation(image, kJPEGImageQuality);
+  const CGFloat quality =
+      base::FeatureList::IsEnabled(kSnapshotCompressedJPEGQuality)
+          ? kJPEGImageQualityCompressed
+          : kJPEGImageQualityDefault;
+  NSData* data = UIImageJPEGRepresentation(image, quality);
   if (!data) {
     // Use UIImagePNGRepresentation instead when ImageJPEGRepresentation returns
     // nil. It happens when the underlying CGImageRef contains data in an
     // unsupported bitmap format.
     data = UIImagePNGRepresentation(image);
   }
+
+  base::UmaHistogramMemoryKB(
+      "IOS.Snapshots.DowngradedQualityImageMemoryFootprint",
+      [data length] / 1024);
   [data writeToFile:path atomically:YES];
 
   // Encrypt the snapshot file (mostly for Incognito, but can't hurt to
@@ -189,7 +209,7 @@ void RemoveAllImages(const base::FilePath& directory) {
 // Helper function to delete images created before `threshold_date` from disk.
 void PurgeImagesOlderThan(
     const base::FilePath& directory,
-    const base::Time& threshold_date,
+    base::Time threshold_date,
     const std::vector<SnapshotID>& keep_alive_snapshot_ids,
     ImageScale snapshot_scale) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
@@ -214,7 +234,7 @@ void PurgeImagesOlderThan(
     if (current_file.Extension() != ".jpg") {
       continue;
     }
-    if (base::Contains(files_to_keep, current_file)) {
+    if (files_to_keep.contains(current_file)) {
       continue;
     }
     base::FileEnumerator::FileInfo file_info = enumerator.GetInfo();

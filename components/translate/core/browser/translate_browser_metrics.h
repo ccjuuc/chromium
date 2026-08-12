@@ -35,9 +35,10 @@ enum class TargetLanguageOrigin {
   kChangedByUser,
   kUninitialized,
   kAutoTranslate,
+  kForcedTranslateLanguage,
   // Insert new items here. Keep in sync with TranslateTargetLanguageOrigin in
   // enums.xml when adding values.
-  kMaxValue = kAutoTranslate
+  kMaxValue = kForcedTranslateLanguage
 };
 
 enum class MenuTranslationUnavailableReason {
@@ -75,6 +76,14 @@ void ReportTranslateTargetLanguage(std::string_view language);
 // Called when Chrome Translate is initiated, the navigation is from Google, and
 // a href translate target is present.
 void ReportTranslateHrefHintStatus(HrefTranslateStatus status);
+
+// Called when a PDF page is translated to report the source language. Buckets
+// are labelled with LocaleCodeBCP47 values.
+void ReportPdfSourceLanguage(std::string_view language);
+
+// Called when a PDF page is translated to report the target language. Buckets
+// are labelled with LocaleCodeBCP47 values.
+void ReportPdfTargetLanguage(std::string_view language);
 
 }  // namespace translate::TranslateBrowserMetrics
 

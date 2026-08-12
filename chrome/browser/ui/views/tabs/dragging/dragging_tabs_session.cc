@@ -9,7 +9,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
@@ -23,8 +22,7 @@ namespace {
 constexpr char kDragAmongTabsPresentationTimeHistogram[] =
     "Browser.TabDragging.DragAmongTabsPresentationTime";
 
-int CalculateMouseOffset(const DragSessionData& drag_data_,
-                         float offset_to_width_ratio_) {
+int CalculateMouseOffset(const DragSessionData& drag_data_) {
   std::vector<TabSlotView*> tabs_to_source(drag_data_.attached_views());
   TabSlotView* source_view = drag_data_.source_view_drag_data()->attached_view;
   tabs_to_source.erase(
@@ -32,7 +30,8 @@ int CalculateMouseOffset(const DragSessionData& drag_data_,
       tabs_to_source.end());
   const int new_x =
       TabStrip::GetSizeNeededForViews(tabs_to_source) - source_view->width() +
-      base::ClampRound(offset_to_width_ratio_ * source_view->width());
+      base::ClampRound(drag_data_.mouse_offset_to_size_ratios.x() *
+                       source_view->width());
 
   return new_x;
 }
@@ -43,13 +42,12 @@ DraggingTabsSession::DraggingTabsSession(
     DragSessionData drag_data,
     TabDragContext& attached_context,
     TabDragPositioningDelegate& drag_position_delegate,
-    float offset_to_width_ratio_,
     bool initial_move,
     gfx::Point start_point_in_screen)
     : drag_data_(drag_data),
       attached_context_(attached_context),
       drag_position_delegate_(drag_position_delegate),
-      mouse_offset_(CalculateMouseOffset(drag_data_, offset_to_width_ratio_)),
+      mouse_offset_(CalculateMouseOffset(drag_data_)),
       initial_move_(initial_move),
       last_move_attached_context_loc_(
           views::View::ConvertPointFromScreen(&attached_context,
@@ -134,9 +132,9 @@ void DraggingTabsSession::MoveAttachedImpl(gfx::Point point_in_screen,
               base::TimeTicks::Now()));
     }
 
-    if (drag_data_.group_drag_data_.has_value()) {
-      attached_model->MoveGroupTo(drag_data_.group_drag_data_.value().group,
-                                  to_index);
+    if (drag_data_.group_header_drag_data_.has_value()) {
+      attached_model->MoveGroupTo(
+          drag_data_.group_header_drag_data_.value().group, to_index);
     } else {
       attached_model->MoveSelectedTabsTo(
           to_index, CalculateGroupForDraggedTabs(to_index));
@@ -159,7 +157,7 @@ void DraggingTabsSession::MoveAttachedImpl(gfx::Point point_in_screen,
 
   // Snap the non-dragged tabs to their ideal bounds now, otherwise those tabs
   // will animate to those bounds after attach, which looks flickery/bad. See
-  // https://crbug.com/1360330.
+  // https://crbug.com/40862994.
   if (just_attached && !initial_move_) {
     drag_position_delegate_->ForceLayout();
   }
@@ -182,7 +180,7 @@ gfx::Rect DraggingTabsSession::GetDraggedViewTabStripBounds(
 
   return gfx::Rect(tab_strip_point.x(), tab_strip_point.y(),
                    TabStyle::Get()->GetStandardWidth(/*is_split=*/false),
-                   GetLayoutConstant(TAB_HEIGHT));
+                   GetLayoutConstant(LayoutConstant::kTabHeight));
 }
 
 bool DraggingTabsSession::AreTabsConsecutive() const {
@@ -216,7 +214,9 @@ DraggingTabsSession::CalculateGroupForDraggedTabs(int to_index) {
           base::PassKey<DraggingTabsSession>(), to_index);
 
   const ui::ListSelectionModel::SelectedIndices selected =
-      attached_model->selection_model().selected_indices();
+      attached_model->selection_model()
+          .GetListSelectionModel()
+          .selected_indices();
 
   // Pinned tabs cannot be grouped, so we only change the group membership of
   // unpinned tabs.
@@ -301,7 +301,7 @@ DraggingTabsSession::CalculateGroupForDraggedTabs(int to_index) {
     // tabs are as far right as they can go without being pulled out into a new
     // window. In this case, since the dragged tabs can't move further right in
     // the tabstrip, it will never go "beyond" the left_group and therefore
-    // never leave it unless we add this check. See crbug.com/1134376.
+    // never leave it unless we add this check. See crbug.com/40723040.
     if (tab_bounds_in_drag_context_coords(selected_unpinned.back()).right() >=
         drag_position_delegate_->TabDragAreaEndX()) {
       return std::nullopt;
@@ -329,7 +329,7 @@ gfx::Point DraggingTabsSession::GetAttachedDragPoint(
   // If the width needed for the `attached_views_` is greater than what is
   // available in the tab drag area the attached drag point should simply be the
   // beginning of the tab strip. Once attached the `attached_views_` will simply
-  // overflow as usual (see https://crbug.com/1250184).
+  // overflow as usual (see https://crbug.com/40791711).
   const int max_x = std::max(
       0, drag_position_delegate_->GetTabDragAreaWidth() -
              TabStrip::GetSizeNeededForViews(drag_data_.attached_views()));

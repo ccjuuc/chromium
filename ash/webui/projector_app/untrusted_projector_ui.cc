@@ -5,6 +5,7 @@
 
 #include "ash/webui/projector_app/untrusted_projector_ui.h"
 
+#include "ash/constants/web_app_id_constants.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/grit/ash_projector_app_untrusted_resources.h"
 #include "ash/webui/grit/ash_projector_app_untrusted_resources_map.h"
@@ -37,7 +38,7 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
   source->AddResourcePaths(kAshProjectorCommonResources);
   source->AddResourcePaths(kChromeosProjectorAppBundleResources);
 
-  source->AddResourcePath("", IDR_ASH_PROJECTOR_APP_UNTRUSTED_INDEX_HTML);
+  source->SetDefaultResource(IDR_ASH_PROJECTOR_APP_UNTRUSTED_INDEX_HTML);
   source->AddLocalizedString("appTitle", IDS_ASH_PROJECTOR_DISPLAY_SOURCE);
 
   // Provide a list of specific script resources (javascript files and inlined
@@ -46,15 +47,18 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
   // needed to allow the post message api.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ScriptSrc,
-      "script-src 'self' chrome-untrusted://resources;");
+      "script-src 'self' chrome-untrusted://resources "
+      "chrome-untrusted://webui-test;");
   // Allow fonts.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::FontSrc,
       "font-src https://fonts.gstatic.com;");
-  // Allow styles to include inline styling needed for Polymer elements.
+  // Allow styles to include inline styling needed for Polymer elements and
+  // the material 3 dynamic palette.
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::StyleSrc,
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;");
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
+      "chrome-untrusted://theme;");
   std::string mediaCSP =
       std::string("media-src 'self' https://*.drive.google.com ") +
       kChromeUIUntrustedProjectorPwaUrl + " blob:;";
@@ -70,11 +74,6 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
       network::mojom::CSPDirectiveName::ConnectSrc,
       "connect-src 'self' https://www.googleapis.com "
       "https://drive.google.com;");
-  // Allow styles to include inline styling needed for Polymer elements and
-  // the material 3 dynamic palette.
-  source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::StyleSrc,
-      "style-src 'self' 'unsafe-inline' chrome-untrusted://theme;");
 
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
@@ -98,8 +97,13 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
 UntrustedProjectorUI::UntrustedProjectorUI(
     content::WebUI* web_ui,
     UntrustedProjectorUIDelegate* delegate,
-    PrefService* pref_service)
-    : UntrustedWebUIController(web_ui), pref_service_(pref_service) {
+    PrefService* pref_service,
+    signin::IdentityManager* identity_manager,
+    network::mojom::URLLoaderFactory* url_loader_factory)
+    : UntrustedWebUIController(web_ui),
+      pref_service_(pref_service),
+      identity_manager_(identity_manager),
+      url_loader_factory_(url_loader_factory) {
   CreateAndAddProjectorHTMLSource(web_ui, delegate);
   ProjectorAppClient::Get()->NotifyAppUIActive(true);
 }
@@ -122,7 +126,8 @@ void UntrustedProjectorUI::Create(
         projector_handler,
     mojo::PendingRemote<projector::mojom::UntrustedProjectorPage> projector) {
   page_handler_ = std::make_unique<UntrustedProjectorPageHandlerImpl>(
-      std::move(projector_handler), std::move(projector), pref_service_);
+      std::move(projector_handler), std::move(projector), pref_service_,
+      identity_manager_, url_loader_factory_);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(UntrustedProjectorUI)

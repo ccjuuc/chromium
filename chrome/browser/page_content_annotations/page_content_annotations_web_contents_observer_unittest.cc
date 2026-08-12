@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/page_content_annotations/page_content_annotations_web_contents_observer.h"
+#include "components/page_content_annotations/content/page_content_annotations_web_contents_observer.h"
 
 #include <string>
 #include <utility>
@@ -10,6 +10,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/autocomplete/zero_suggest_cache_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/page_content_annotations/page_content_annotations_service_factory.h"
+#include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_test_util.h"
@@ -105,7 +107,6 @@ class FakePageContentAnnotationsService : public PageContentAnnotationsService {
                                       zero_suggest_cache_service,
                                       nullptr,
                                       base::FilePath(),
-                                      nullptr,
                                       nullptr,
                                       nullptr,
                                       nullptr,
@@ -210,11 +211,11 @@ class PageContentAnnotationsWebContentsObserverTest
         history::TestHistoryDatabaseParamsForPath(temp_dir_.GetPath())));
 
     PageContentAnnotationsWebContentsObserver::CreateForWebContents(
-        web_contents());
+        web_contents(),
+        *PageContentAnnotationsServiceFactory::GetForProfile(profile()));
   }
 
   void TearDown() override {
-    history_service()->Shutdown();
     task_environment()->RunUntilIdle();
 
     DeleteContents();

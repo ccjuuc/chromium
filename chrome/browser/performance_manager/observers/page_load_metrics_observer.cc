@@ -20,7 +20,7 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/process_manager.h"
 #endif
 
@@ -32,7 +32,7 @@
 #include "chrome/browser/android/tab_android.h"
 #else
 #include "chrome/browser/devtools/devtools_window.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #endif
 
 namespace performance_manager {
@@ -154,12 +154,13 @@ bool PageLoadMetricsWebContentsObserver::IsTab() const {
 #if BUILDFLAG(IS_ANDROID)
   return !!TabAndroid::FromWebContents(web_contents());
 #else
-  return !!chrome::FindBrowserWithTab(web_contents());
+  return !!GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+      web_contents());
 #endif
 }
 
 bool PageLoadMetricsWebContentsObserver::IsExtension() const {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // The process manager might be null for some irregular profiles, e.g. the
   // System Profile.
   if (extensions::ProcessManager* service = extensions::ProcessManager::Get(

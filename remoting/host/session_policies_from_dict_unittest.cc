@@ -39,9 +39,9 @@ const SessionPolicies GetFullSessionPolicies() {
   return session_policies;
 }
 
-const base::Value::Dict& GetFullSessionPolicyDict() {
-  static const base::NoDestructor<base::Value::Dict> dict(
-      base::Value::Dict()
+const base::DictValue& GetFullSessionPolicyDict() {
+  static const base::NoDestructor<base::DictValue> dict(
+      base::DictValue()
           .Set(policy::key::kRemoteAccessHostClipboardSizeBytes, 1024)
           .Set(policy::key::kRemoteAccessHostFirewallTraversal, true)
           .Set(policy::key::kRemoteAccessHostAllowRelayedConnection, false)
@@ -61,13 +61,13 @@ const base::Value::Dict& GetFullSessionPolicyDict() {
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
-base::Value::Dict GetPolicyDictWithMaxDurationMins(int mins) {
+base::DictValue GetPolicyDictWithMaxDurationMins(int mins) {
   return GetFullSessionPolicyDict().Clone().Set(
       policy::key::kRemoteAccessHostMaximumSessionDurationMinutes, mins);
 }
 #endif
 
-base::Value::Dict GetPolicyDictWithClipboardSize(int clipboard_size) {
+base::DictValue GetPolicyDictWithClipboardSize(int clipboard_size) {
   return GetFullSessionPolicyDict().Clone().Set(
       policy::key::kRemoteAccessHostClipboardSizeBytes, clipboard_size);
 }
@@ -76,31 +76,39 @@ base::Value::Dict GetPolicyDictWithClipboardSize(int clipboard_size) {
 
 TEST(SessionPoliciesFromDict, EmptyDict_CreatesEmptyPolicies) {
   std::optional<SessionPolicies> policies =
-      SessionPoliciesFromDict(base::Value::Dict());
+      SessionPoliciesFromDict(base::DictValue());
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
   EXPECT_EQ(*policies, SessionPolicies());
 }
 
 TEST(SessionPoliciesFromDict, FullDict_CreatesFullPolicies) {
   std::optional<SessionPolicies> policies =
       SessionPoliciesFromDict(GetFullSessionPolicyDict());
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
   EXPECT_EQ(*policies, GetFullSessionPolicies());
 }
 
 TEST(SessionPoliciesFromDict, FullDict_ExpectNoValueForAllowRemoteInput) {
   // `SessionPolicies.allow_remote_input` is not set from `PolicyWatcher` so we
-  // expect the value to be empty .
+  // expect the value to be empty.
   std::optional<SessionPolicies> policies =
       SessionPoliciesFromDict(GetFullSessionPolicyDict());
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
   EXPECT_FALSE(policies->allow_remote_input.has_value());
 }
 
 TEST(SessionPoliciesFromDict, PartialDict_CreatesPartialPolicies) {
-  base::Value::Dict policy_dict = GetFullSessionPolicyDict().Clone();
+  base::DictValue policy_dict = GetFullSessionPolicyDict().Clone();
   policy_dict.Remove(policy::key::kRemoteAccessHostClipboardSizeBytes);
   policy_dict.Remove(policy::key::kRemoteAccessHostUdpPortRange);
 
   std::optional<SessionPolicies> policies =
       SessionPoliciesFromDict(policy_dict);
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
 
   SessionPolicies expected_policies = GetFullSessionPolicies();
   expected_policies.clipboard_size_bytes.reset();
@@ -110,7 +118,7 @@ TEST(SessionPoliciesFromDict, PartialDict_CreatesPartialPolicies) {
 
 TEST(SessionPoliciesFromDict,
      FirewallTraversalDisabled_DisablesStunAndRelayedConnections) {
-  base::Value::Dict policy_dict =
+  base::DictValue policy_dict =
       GetFullSessionPolicyDict()
           .Clone()
           .Set(policy::key::kRemoteAccessHostFirewallTraversal, false)
@@ -118,6 +126,8 @@ TEST(SessionPoliciesFromDict,
 
   std::optional<SessionPolicies> policies =
       SessionPoliciesFromDict(policy_dict);
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
 
   SessionPolicies expected_policies = GetFullSessionPolicies();
   expected_policies.allow_stun_connections = false;
@@ -127,10 +137,10 @@ TEST(SessionPoliciesFromDict,
 
 #if !BUILDFLAG(IS_CHROMEOS)
 TEST(SessionPoliciesFromDict, InvalidMaxSessionDuration_ReturnsNullopt) {
-  EXPECT_EQ(SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(-1)),
-            std::nullopt);
-  EXPECT_EQ(SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(10)),
-            std::nullopt);
+  EXPECT_FALSE(SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(-1))
+                   .has_value());
+  EXPECT_FALSE(SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(10))
+                   .has_value());
 }
 #endif
 
@@ -138,29 +148,38 @@ TEST(SessionPoliciesFromDict, InvalidMaxSessionDuration_ReturnsNullopt) {
 TEST(SessionPoliciesFromDict, ZeroMaxSessionDuration_FieldIsNullopt) {
   SessionPolicies expected_policies = GetFullSessionPolicies();
   expected_policies.maximum_session_duration.reset();
-  EXPECT_EQ(SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(0)),
-            expected_policies);
+  std::optional<SessionPolicies> policies =
+      SessionPoliciesFromDict(GetPolicyDictWithMaxDurationMins(0));
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
+  EXPECT_EQ(*policies, expected_policies);
 }
 #endif
 
 TEST(SessionPoliciesFromDict, InvalidHostUdpPortRange_ReturnsNullopt) {
-  base::Value::Dict policy_dict = GetFullSessionPolicyDict().Clone().Set(
+  base::DictValue policy_dict = GetFullSessionPolicyDict().Clone().Set(
       policy::key::kRemoteAccessHostUdpPortRange, "456-123");
-  EXPECT_EQ(SessionPoliciesFromDict(policy_dict), std::nullopt);
+  EXPECT_FALSE(SessionPoliciesFromDict(policy_dict).has_value());
 }
 
 TEST(SessionPoliciesFromDict, NegativeClipboardSize_FieldIsNullopt) {
   SessionPolicies expected_policies = GetFullSessionPolicies();
   expected_policies.clipboard_size_bytes.reset();
-  EXPECT_EQ(SessionPoliciesFromDict(GetPolicyDictWithClipboardSize(-1)),
-            expected_policies);
+  std::optional<SessionPolicies> policies =
+      SessionPoliciesFromDict(GetPolicyDictWithClipboardSize(-1));
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
+  EXPECT_EQ(*policies, expected_policies);
 }
 
 TEST(SessionPoliciesFromDict, ZeroClipboardSize_FieldIsZero) {
   SessionPolicies expected_policies = GetFullSessionPolicies();
   expected_policies.clipboard_size_bytes = 0;
-  EXPECT_EQ(SessionPoliciesFromDict(GetPolicyDictWithClipboardSize(0)),
-            expected_policies);
+  std::optional<SessionPolicies> policies =
+      SessionPoliciesFromDict(GetPolicyDictWithClipboardSize(0));
+  ASSERT_TRUE(policies.has_value());
+  EXPECT_TRUE(policies->Validate().has_value());
+  EXPECT_EQ(*policies, expected_policies);
 }
 
 }  // namespace remoting

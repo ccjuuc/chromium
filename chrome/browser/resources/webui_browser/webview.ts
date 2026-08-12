@@ -3,18 +3,14 @@
 // found in the LICENSE file.
 
 import {assert} from '//resources/js/assert.js';
-import {CrLitElement, html} from '//resources/lit/v3_0/lit.rollup.js';
+import {loadTimeData} from '//resources/js/load_time_data.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
+import {browserProxyFactory, GuestHandlerRemote} from './browser.mojom-webui.js';
 import type {SecurityIcon} from './browser.mojom-webui.js';
-import {GuestHandlerRemote} from './browser.mojom-webui.js';
-import {BrowserProxy} from './browser_proxy.js';
 import {getCss} from './webview.css.js';
-
-export interface WebviewElement {
-  $: {
-    iframe: HTMLIFrameElement,
-  };
-}
+import {getHtml} from './webview.html.js';
 
 export class WebviewElement extends CrLitElement {
   static get is() {
@@ -26,37 +22,57 @@ export class WebviewElement extends CrLitElement {
   }
 
   override render() {
-    return html`<iframe id="iframe"></iframe>`;
+    return getHtml.bind(this)();
   }
 
   static override get properties() {
     return {
-      guestId: {type: Number},
+      guestId: {type: String},
+      enableSurfaceEmbed: {type: Boolean},
     };
   }
 
-  accessor guestId: number = -1;
+  accessor guestId: string = '';
+  // Whether to use surface embed instead of guest contents.
+  protected accessor enableSurfaceEmbed: boolean =
+      loadTimeData.getBoolean('enableSurfaceEmbed');
+
   private attached: boolean = false;
 
-  override async connectedCallback() {
+  override connectedCallback() {
     super.connectedCallback();
-    await this.tryToAttach();
+    this.tryToAttach();
   }
 
   protected async tryToAttach() {
-    if (this.attached || this.guestId === -1) {
+    // For surface embed, the plugin reads data-content-id directly from the
+    // element attributes.
+    if (this.enableSurfaceEmbed) {
+      return;
+    }
+
+    if (this.attached || this.guestId.length === 0) {
       return;
     }
     this.attached = true;
 
+    const iframe = this.getContentElement<HTMLIFrameElement>();
     // Wait until iframe.contentWindow becomes available.
-    if (!this.$.iframe.contentWindow) {
-      await this.whenIframeContentWindowAvailable_(this.$.iframe);
+    if (!iframe.contentWindow) {
+      await this.whenIframeContentWindowAvailable_(iframe);
     }
-    this.attachGuestToIframe(this.guestId, this.$.iframe);
+    this.attachGuestToIframe(this.guestId, iframe);
   }
 
-  private attachGuestToIframe(guestId: number, iframe: HTMLIFrameElement) {
+  // Returns whichever content element is currently active based on the mode.
+  protected getContentElement<T extends HTMLElement>(): T {
+    const element = this.shadowRoot.querySelector<T>('.content');
+    assert(element);
+    return element;
+  }
+
+  private attachGuestToIframe(guestId: string, iframe: HTMLIFrameElement) {
+    assert(!this.enableSurfaceEmbed);
     const iframeContentWindow = iframe.contentWindow;
     assert(iframeContentWindow);
     chrome.browser.attachIframeGuest(guestId, iframeContentWindow);
@@ -64,6 +80,7 @@ export class WebviewElement extends CrLitElement {
 
   private async whenIframeContentWindowAvailable_(iframe: HTMLIFrameElement):
       Promise<void> {
+    assert(!this.enableSurfaceEmbed);
     return new Promise(resolve => {
       // TODO(webium): find a way to get notified when the contentWindow is
       // ready. This is a workaround to poll every 100ms.
@@ -95,9 +112,24 @@ export class TabWebviewElement extends WebviewElement {
   setActive(active: boolean) {
     if (active) {
       this.classList.add('active');
-      this.$.iframe.focus();
+      const content = this.shadowRoot.querySelector<HTMLElement>('.content');
+      // The .content element might not be available during browser startup.
+      if (content) {
+        content.focus();
+      }
     } else {
       this.classList.remove('active');
+    }
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+    // Focus the content element when guestId is set and the tab is active.
+    if (this.classList.contains('active') && changedProperties.has('guestId')) {
+      const content = this.shadowRoot.querySelector<HTMLElement>('.content');
+      if (content) {
+        content.focus();
+      }
     }
   }
 
@@ -111,7 +143,8 @@ export class TabWebviewElement extends WebviewElement {
   }
 
   private attachTabContents() {
-    BrowserProxy.getPageHandler()
+    browserProxyFactory.getInstance()
+        .handler
         .getGuestIdForTabId(
             this.tabId, this.guestHandler.$.bindNewPipeAndPassReceiver())
         .then(({guestId}) => {

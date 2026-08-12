@@ -7,7 +7,9 @@ import datetime
 import unittest
 import xml.dom.minidom
 
-import generate_expired_histograms_array
+import setup_modules  # pylint: disable=unused-import
+
+import chromium_src.tools.metrics.histograms.generate_expired_histograms_array as generate_expired_histograms_array
 
 _EXPECTED_HEADER_FILE_CONTENT = (
 """// Generated from generate_expired_histograms_array.py. Do not edit!
@@ -168,7 +170,7 @@ class ExpiredHistogramsTest(unittest.TestCase):
     This is a summary.
   </summary>
     </histogram>
-  <histogram name="ThirdHistogram" expires_after="M60" units="units">
+  <histogram name="ThirdHistogram" expires_after="M59" units="units">
     <owner>me@chromium.org</owner>
     <summary>
       This is a summary.

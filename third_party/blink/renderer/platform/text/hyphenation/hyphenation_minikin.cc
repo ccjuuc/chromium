@@ -12,8 +12,6 @@
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/timer/elapsed_timer.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/hyphenation/hyphenation.mojom-blink.h"
@@ -21,7 +19,7 @@
 #include "third_party/blink/renderer/platform/text/character.h"
 #include "third_party/blink/renderer/platform/text/hyphenation/hyphenator_aosp.h"
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
-#include "third_party/blink/renderer/platform/wtf/text/case_folding_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/ignoring_ascii_case_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/utf16.h"
 
 namespace blink {
@@ -65,9 +63,7 @@ static mojom::blink::Hyphenation* GetService() {
 bool HyphenationMinikin::OpenDictionary(const AtomicString& locale) {
   mojom::blink::Hyphenation* service = GetService();
   base::File file;
-  base::ElapsedTimer timer;
   service->OpenDictionary(locale, &file);
-  UMA_HISTOGRAM_TIMES("Hyphenation.Open", timer.Elapsed());
 
   return OpenDictionary(std::move(file));
 }
@@ -80,7 +76,7 @@ bool HyphenationMinikin::OpenDictionary(base::File file) {
     return false;
   }
 
-  hyphenator_ = base::WrapUnique(Hyphenator::loadBinary(file_.data()));
+  hyphenator_ = base::WrapUnique(Hyphenator::loadBinary(file_.bytes().data()));
 
   return true;
 }
@@ -91,10 +87,13 @@ StringView HyphenationMinikin::WordToHyphenate(
   if (text.Is8Bit()) {
     wtf_size_t begin = 0u;
     wtf_size_t end = text.length();
-    while (begin != end && ShouldSkipLeadingChar(text[begin])) {
+    // SAFETY: begin != end implies begin is valid index.
+    while (begin != end && ShouldSkipLeadingChar(UNSAFE_BUFFERS(text[begin]))) {
       ++begin;
     }
-    while (begin != end && ShouldSkipTrailingChar(text[end - 1])) {
+    // SAFETY: begin != end implies end - 1 is valid index.
+    while (begin != end &&
+           ShouldSkipTrailingChar(UNSAFE_BUFFERS(text[end - 1]))) {
       --end;
     }
     *num_leading_chars_out = begin;
@@ -130,10 +129,9 @@ Vector<uint8_t> HyphenationMinikin::Hyphenate(const StringView& text) const {
   if (text.Is8Bit()) {
     String text16_bit = text.ToString();
     text16_bit.Ensure16Bit();
-    hyphenator_->hyphenate(&result, text16_bit.SpanUint16().data(),
-                           text16_bit.length());
+    hyphenator_->hyphenate(&result, text16_bit.SpanUint16());
   } else {
-    hyphenator_->hyphenate(&result, text.SpanUint16().data(), text.length());
+    hyphenator_->hyphenate(&result, text.SpanUint16());
   }
   return result;
 }
@@ -194,7 +192,7 @@ struct HyphenatorLocaleData {
 
 using LocaleMap = HashMap<AtomicString,
                           const HyphenatorLocaleData*,
-                          CaseFoldingHashTraits<AtomicString>>;
+                          IgnoringAsciiCaseHashTraits<AtomicString>>;
 
 static LocaleMap CreateLocaleFallbackMap() {
   // This data is from CLDR, compiled by AOSP.
@@ -276,22 +274,24 @@ AtomicString HyphenationMinikin::MapLocale(const AtomicString& locale) {
         return AtomicString(it->value->locale_for_exact_match);
       return AtomicString(it->value->locale);
     }
-    const wtf_size_t last_hyphen = mapped_locale.ReverseFind('-');
+    const wtf_size_t last_hyphen = mapped_locale.rfind('-');
     if (last_hyphen == kNotFound || !last_hyphen)
       return mapped_locale;
-    mapped_locale = AtomicString(mapped_locale.GetString().Left(last_hyphen));
+    mapped_locale =
+        AtomicString(mapped_locale.GetString().substr(0, last_hyphen));
   }
 }
 
 scoped_refptr<Hyphenation> Hyphenation::PlatformGetHyphenation(
     const AtomicString& locale) {
   const AtomicString mapped_locale = HyphenationMinikin::MapLocale(locale);
-  if (!EqualIgnoringASCIICase(mapped_locale, locale))
+  if (!EqualIgnoringAsciiCase(mapped_locale, locale)) {
     return LayoutLocale::Get(mapped_locale)->GetHyphenation();
+  }
 
   scoped_refptr<HyphenationMinikin> hyphenation(
       base::AdoptRef(new HyphenationMinikin));
-  const AtomicString lower_ascii_locale = locale.LowerASCII();
+  const AtomicString lower_ascii_locale = locale.ToAsciiLower();
   if (!hyphenation->OpenDictionary(lower_ascii_locale))
     return nullptr;
   hyphenation->Initialize(lower_ascii_locale);

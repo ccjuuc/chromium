@@ -26,6 +26,8 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinator;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinatorProvider;
 import org.chromium.chrome.browser.layouts.LayoutManagerAppUtils;
 import org.chromium.chrome.browser.layouts.ManagedLayoutManager;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -51,7 +53,7 @@ public final class AutofillSaveIbanBottomSheetBridgeTest {
                     .withDescriptionText("")
                     .withIbanValue("CH5604835012345678009")
                     .withTitleText("Save IBAN?")
-                    .withLegalMessageLines(Collections.EMPTY_LIST)
+                    .withLegalMessageLines(Collections.emptyList())
                     .withLogoIcon(0)
                     .withTitleText("")
                     .build();
@@ -60,6 +62,7 @@ public final class AutofillSaveIbanBottomSheetBridgeTest {
 
     @Mock private AutofillSaveIbanBottomSheetBridge.Natives mBridgeNatives;
     @Mock private ManagedBottomSheetController mBottomSheetController;
+    @Mock private AnchoredDialogCoordinator mAnchoredDialogCoordinator;
     @Mock private ManagedLayoutManager mLayoutManager;
     @Mock private Profile mProfile;
 
@@ -72,8 +75,9 @@ public final class AutofillSaveIbanBottomSheetBridgeTest {
         Activity activity = Robolectric.buildActivity(Activity.class).create().get();
         // set a MaterialComponents theme which is required for the `OutlinedBox` text field.
         activity.setTheme(R.style.Theme_BrowserUI_DayNight);
-        mWindow = new WindowAndroid(activity, /* trackOcclusion= */ true);
+        mWindow = new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true);
         BottomSheetControllerFactory.attach(mWindow, mBottomSheetController);
+        AnchoredDialogCoordinatorProvider.attach(mWindow, mAnchoredDialogCoordinator);
         LayoutManagerAppUtils.attach(mWindow, mLayoutManager);
         MockTabModel tabModel = new MockTabModel(mProfile, /* delegate= */ null);
         mAutofillSaveIbanBottomSheetBridge =
@@ -82,6 +86,7 @@ public final class AutofillSaveIbanBottomSheetBridgeTest {
 
     @After
     public void tearDown() {
+        AnchoredDialogCoordinatorProvider.detach(mAnchoredDialogCoordinator);
         BottomSheetControllerFactory.detach(mBottomSheetController);
         LayoutManagerAppUtils.detach(mLayoutManager);
         mWindow.destroy();

@@ -14,7 +14,6 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -40,15 +39,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/startup/startup_launch_manager.h"
 #include "chrome/browser/status_icons/status_icon.h"
 #include "chrome/browser/status_icons/status_tray.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/web_applications/extensions/launch.h"
@@ -77,6 +75,7 @@
 #include "ui/gfx/image/image_skia.h"
 
 #if BUILDFLAG(IS_WIN)
+#include "chrome/browser/startup/startup_launch_manager.h"
 #include "chrome/browser/win/app_icon.h"
 #endif
 
@@ -159,7 +158,8 @@ void BackgroundModeManager::BackgroundModeData::
   manager_->ReleaseForceInstalledExtensionsKeepAlive();
 }
 
-Browser* BackgroundModeManager::BackgroundModeData::GetBrowserWindow() {
+BrowserWindowInterface*
+BackgroundModeManager::BackgroundModeData::GetBrowserWindow() {
   return BackgroundModeManager::GetBrowserWindowForProfile(profile_);
 }
 
@@ -189,8 +189,8 @@ void BackgroundModeManager::BackgroundModeData::BuildProfileMenu(
           base::RetainedRef(application)));
       menu->AddItem(command_id, base::UTF8ToUTF16(name));
       if (!icon.isNull()) {
-        menu->SetIcon(menu->GetItemCount() - 1,
-                      ui::ImageModel::FromImageSkia(icon));
+        menu->SetIconForCommandId(command_id,
+                                  ui::ImageModel::FromImageSkia(icon));
       }
 
       // Component extensions with background that do not have an options page
@@ -328,7 +328,8 @@ BackgroundModeManager::BackgroundModeManager(
   on_app_terminating_subscription_ =
       browser_shutdown::AddAppTerminatingCallback(base::BindOnce(
           &BackgroundModeManager::OnAppTerminating, base::Unretained(this)));
-  BrowserList::AddObserver(this);
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
 }
 
 BackgroundModeManager::~BackgroundModeManager() {
@@ -337,7 +338,6 @@ BackgroundModeManager::~BackgroundModeManager() {
   for (const auto& it : background_mode_data_) {
     it.second->applications()->RemoveObserver(this);
   }
-  BrowserList::RemoveObserver(this);
 
   // We're going away, so exit background mode (does nothing if we aren't in
   // background mode currently). This is primarily needed for unit tests,
@@ -353,7 +353,7 @@ void BackgroundModeManager::RegisterPrefs(PrefRegistrySimple* registry) {
 
 void BackgroundModeManager::RegisterProfile(Profile* profile) {
   // We don't want to register multiple times for one profile.
-  DCHECK(!base::Contains(background_mode_data_, profile));
+  DCHECK(!background_mode_data_.contains(profile));
   auto bmd = std::make_unique<BackgroundModeData>(this, profile,
                                                   &command_id_handler_vector_);
   BackgroundModeData* bmd_ptr = bmd.get();
@@ -396,7 +396,9 @@ bool BackgroundModeManager::UnregisterProfile(Profile* profile) {
   background_mode_data_.erase(it);
   // If there are no background mode profiles any longer, then turn off
   // background mode.
+#if BUILDFLAG(IS_WIN)
   startup_launch_client_.SetLaunchOnStartup(ShouldLaunchOnStartup());
+#endif
   if (!ShouldBeInBackgroundMode()) {
     EndBackgroundMode();
   }
@@ -425,8 +427,10 @@ void BackgroundModeManager::LaunchBackgroundApplication(
 }
 
 // static
-Browser* BackgroundModeManager::GetBrowserWindowForProfile(Profile* profile) {
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
+BrowserWindowInterface* BackgroundModeManager::GetBrowserWindowForProfile(
+    Profile* profile) {
+  BrowserWindowInterface* browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
   return browser ? browser : chrome::OpenEmptyWindow(profile);
 }
 
@@ -473,7 +477,9 @@ void BackgroundModeManager::OnExtensionsReady(Profile* profile) {
 }
 
 void BackgroundModeManager::OnBackgroundModeEnabledPrefChanged() {
+#if BUILDFLAG(IS_WIN)
   startup_launch_client_.SetLaunchOnStartup(ShouldLaunchOnStartup());
+#endif
   if (IsBackgroundModePrefEnabled()) {
     EnableBackgroundMode();
   } else {
@@ -702,7 +708,9 @@ void BackgroundModeManager::EnableBackgroundMode() {
   if (!in_background_mode_ && ShouldBeInBackgroundMode()) {
     StartBackgroundMode();
 
+#if BUILDFLAG(IS_WIN)
     startup_launch_client_.SetLaunchOnStartup(ShouldLaunchOnStartup());
+#endif
   }
 }
 
@@ -743,7 +751,7 @@ void BackgroundModeManager::UpdateKeepAliveAndTrayIcon() {
   keep_alive_.reset();
 }
 
-void BackgroundModeManager::OnBrowserAdded(Browser* browser) {
+void BackgroundModeManager::OnBrowserCreated(BrowserWindowInterface*) {
   ResumeBackgroundMode();
 }
 
@@ -761,7 +769,9 @@ void BackgroundModeManager::OnClientsChanged(
         HasPersistentBackgroundClientForProfile(profile));
   }
 
+#if BUILDFLAG(IS_WIN)
   startup_launch_client_.SetLaunchOnStartup(ShouldLaunchOnStartup());
+#endif
   if (!ShouldBeInBackgroundMode()) {
     // We've uninstalled our last background client, make sure we exit
     // background mode and no longer launch on startup.
@@ -918,8 +928,13 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
     return;
   }
 
+  // We build a new menu and submenus into local variables first, to avoid
+  // deleting the old submenus until after the status icon's context menu has
+  // been replaced. This prevents dangling pointers in platforms that keep
+  // references to the menu model items (e.g., Linux DBus menu).
+  // TODO(crbug.com/495947678): add a regression test for this.
   command_id_handler_vector_.clear();
-  submenus.clear();
+  std::vector<std::unique_ptr<StatusIconMenuModel>> new_submenus;
 
   std::unique_ptr<StatusIconMenuModel> menu(new StatusIconMenuModel(this));
   menu->AddItem(IDC_ABOUT, l10n_util::GetStringUTF16(IDS_ABOUT));
@@ -941,8 +956,8 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
       if (bmd->HasAnyBackgroundClient()) {
         // The submenu constructor caller owns the lifetime of the submenu.
         // The containing menu does not handle the lifetime.
-        submenus.push_back(std::make_unique<StatusIconMenuModel>(bmd));
-        bmd->BuildProfileMenu(submenus.back().get(), menu.get());
+        new_submenus.push_back(std::make_unique<StatusIconMenuModel>(bmd));
+        bmd->BuildProfileMenu(new_submenus.back().get(), menu.get());
         profiles_using_background_mode++;
       }
     }
@@ -961,10 +976,7 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
   }
 
   menu->AddSeparator(ui::NORMAL_SEPARATOR);
-  bool use_background_setting = false;
-#if BUILDFLAG(ENABLE_GLIC)
-  use_background_setting = glic::GlicEnabling::IsEnabledByFlags();
-#endif
+  bool use_background_setting = glic::GlicEnabling::IsEnabledByGlobalCriteria();
   if (use_background_setting) {
     menu->AddCheckItemWithStringId(
         IDC_STATUS_TRAY_KEEP_CHROME_RUNNING_IN_BACKGROUND_SETTING,
@@ -988,6 +1000,7 @@ void BackgroundModeManager::UpdateStatusTrayIconContextMenu() {
 
   context_menu_ = menu.get();
   status_icon_->SetContextMenu(std::move(menu));
+  submenus = std::move(new_submenus);
 }
 
 void BackgroundModeManager::RemoveStatusTrayIcon() {

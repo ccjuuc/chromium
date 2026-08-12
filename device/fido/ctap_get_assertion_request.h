@@ -15,14 +15,14 @@
 #include "base/component_export.h"
 #include "base/containers/span.h"
 #include "crypto/sha2.h"
+#include "device/fido/ctap_request_common.h"
 #include "device/fido/json_request.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/pin.h"
 #include "device/fido/prf_input.h"
-#include "device/fido/public/cable_discovery_data.h"
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public/public_key_credential_descriptor.h"
-#include "third_party/blink/public/mojom/webauthn/authenticator.mojom-data-view.h"
+#include "third_party/blink/public/mojom/webauthn/authenticator.mojom-shared.h"
 
 namespace cbor {
 class Value;
@@ -83,25 +83,6 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
     bool reject_all_extensions = false;
   };
 
-  // HMACSecret contains the inputs to the hmac-secret extension:
-  // https://fidoalliance.org/specs/fido-v2.0-ps-20190130/fido-client-to-authenticator-protocol-v2.0-ps-20190130.html#sctn-hmac-secret-extension
-  struct HMACSecret {
-    HMACSecret(base::span<const uint8_t, kP256X962Length> public_key_x962,
-               base::span<const uint8_t> encrypted_salts,
-               base::span<const uint8_t> salts_auth,
-               std::optional<PINUVAuthProtocol> pin_protocol);
-    HMACSecret(const HMACSecret&);
-    ~HMACSecret();
-    HMACSecret& operator=(const HMACSecret&);
-
-    std::array<uint8_t, kP256X962Length> public_key_x962;
-    std::vector<uint8_t> encrypted_salts;
-    std::vector<uint8_t> salts_auth;
-    // pin_protocol is ignored during serialisation and the request's PIN
-    // protocol will be used instead.
-    std::optional<PINUVAuthProtocol> pin_protocol;
-  };
-
   // Decodes a CTAP2 authenticatorGetAssertion request message. The request's
   // |client_data_json| will be empty and |client_data_hash| will be set.
   //
@@ -121,11 +102,6 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
   CtapGetAssertionRequest& operator=(CtapGetAssertionRequest&& other);
   ~CtapGetAssertionRequest();
 
-  // This can be constructed with an empty ClientDataJson, but it must be
-  // provided before dispatching any authenticators into a RequestHandler that
-  // uses this request.
-  void SetClientDataJson(std::string client_data_json);
-
   std::string rp_id;
   std::string client_data_json;
   std::array<uint8_t, kClientDataHashLength> client_data_hash;
@@ -136,13 +112,13 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
   std::vector<PublicKeyCredentialDescriptor> allow_list;
   std::optional<std::vector<uint8_t>> pin_auth;
   std::optional<PINUVAuthProtocol> pin_protocol;
-  std::optional<std::vector<CableDiscoveryData>> cable_extension;
   std::optional<std::string> app_id;
   std::optional<std::array<uint8_t, crypto::kSHA256Length>>
       alternative_application_parameter;
   std::optional<HMACSecret> hmac_secret;
   bool large_blob_key = false;
   bool get_cred_blob = false;
+  bool cmtg_key = false;
 
   // prf_inputs is non-empty if the `prf` extension is contained in the request.
   // The WebAuthn-level `prf` extension is implemented at the CTAP level by
@@ -159,6 +135,7 @@ struct COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
   // in getAssertion requests.
   bool large_blob_extension_read = false;
   std::optional<LargeBlob> large_blob_extension_write;
+  std::optional<std::string> cross_device_fallback_url;
 };
 
 struct CtapGetNextAssertionRequest {};

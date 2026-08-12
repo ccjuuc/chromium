@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "url/gurl.h"
@@ -225,7 +224,7 @@ bool URLMatcherCondition::IsMatch(
     const std::set<MatcherStringPattern::ID>& matching_patterns,
     const GURL& url) const {
   DCHECK(string_pattern_);
-  if (!base::Contains(matching_patterns, string_pattern_->id())) {
+  if (!matching_patterns.contains(string_pattern_->id())) {
     return false;
   }
   // The criteria HOST_CONTAINS, PATH_CONTAINS, QUERY_CONTAINS are based on
@@ -468,7 +467,7 @@ void URLMatcherConditionFactory::ForgetUnusedPatterns(
     const std::set<MatcherStringPattern::ID>& used_patterns) {
   auto i = substring_pattern_singletons_.begin();
   while (i != substring_pattern_singletons_.end()) {
-    if (base::Contains(used_patterns, i->first->id())) {
+    if (used_patterns.contains(i->first->id())) {
       ++i;
     } else {
       substring_pattern_singletons_.erase(i++);
@@ -477,7 +476,7 @@ void URLMatcherConditionFactory::ForgetUnusedPatterns(
 
   i = regex_pattern_singletons_.begin();
   while (i != regex_pattern_singletons_.end()) {
-    if (base::Contains(used_patterns, i->first->id())) {
+    if (used_patterns.contains(i->first->id())) {
       ++i;
     } else {
       regex_pattern_singletons_.erase(i++);
@@ -486,7 +485,7 @@ void URLMatcherConditionFactory::ForgetUnusedPatterns(
 
   i = origin_and_path_regex_pattern_singletons_.begin();
   while (i != origin_and_path_regex_pattern_singletons_.end()) {
-    if (base::Contains(used_patterns, i->first->id())) {
+    if (used_patterns.contains(i->first->id())) {
       ++i;
     } else {
       origin_and_path_regex_pattern_singletons_.erase(i++);
@@ -527,10 +526,17 @@ URLMatcherCondition URLMatcherConditionFactory::CreateCondition(
 
 std::string URLMatcherConditionFactory::CanonicalizeHostSuffix(
     const std::string& suffix) const {
-  if (suffix.empty()) {
+  // Strip all trailing dots, then append exactly one. This collapses
+  // "host", "host." and "host.." (etc.) to the same canonical "host." so
+  // that multi-dot FQDN forms cannot bypass host-suffix filters. GURL
+  // accepts hosts with empty labels (see url/url_idna_icu.cc), so the
+  // URL side can otherwise present "host.." while the filter side stores
+  // "host.".
+  const size_t end = suffix.find_last_not_of('.');
+  if (end == std::string::npos) {
     return ".";
   }
-  return suffix.back() == '.' ? suffix : suffix + ".";
+  return suffix.substr(0, end + 1) + ".";
 }
 
 std::string URLMatcherConditionFactory::CanonicalizeHostPrefix(
@@ -715,7 +721,7 @@ URLMatcherSchemeFilter::URLMatcherSchemeFilter(
 URLMatcherSchemeFilter::~URLMatcherSchemeFilter() = default;
 
 bool URLMatcherSchemeFilter::IsMatch(const GURL& url) const {
-  return base::Contains(filters_, url.GetScheme());
+  return std::ranges::contains(filters_, url.GetScheme());
 }
 
 //
@@ -855,7 +861,7 @@ bool URLMatcherConditionSet::IsMatch(
   // elements are found, no need to verify match that is expected to take more
   // cycles.
   for (auto i = query_conditions_.begin(); i != query_conditions_.end(); ++i) {
-    if (!base::Contains(matching_patterns, i->string_pattern()->id())) {
+    if (!matching_patterns.contains(i->string_pattern()->id())) {
       return false;
     }
   }
@@ -877,16 +883,22 @@ URLMatcher::~URLMatcher() = default;
 
 void URLMatcher::AddConditionSets(
     const URLMatcherConditionSet::Vector& condition_sets) {
-  for (auto i = condition_sets.begin(); i != condition_sets.end(); ++i) {
-    DCHECK(url_matcher_condition_sets_.find((*i)->id()) ==
+  if (condition_sets.empty()) {
+    return;
+  }
+  for (const auto& condition_set : condition_sets) {
+    DCHECK(url_matcher_condition_sets_.find(condition_set->id()) ==
            url_matcher_condition_sets_.end());
-    url_matcher_condition_sets_[(*i)->id()] = *i;
+    url_matcher_condition_sets_[condition_set->id()] = condition_set;
   }
   UpdateInternalDatastructures();
 }
 
 void URLMatcher::RemoveConditionSets(
     const std::vector<base::MatcherStringPattern::ID>& condition_set_ids) {
+  if (condition_set_ids.empty()) {
+    return;
+  }
   for (auto id : condition_set_ids) {
     DCHECK(url_matcher_condition_sets_.find(id) !=
            url_matcher_condition_sets_.end());

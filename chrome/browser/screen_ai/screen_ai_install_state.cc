@@ -23,12 +23,19 @@ namespace {
 const char kMinExpectedVersion[] = "140.3";
 const int kScreenAICleanUpDelayInDays = 30;
 
-bool IsDeviceCompatible() {
+}  // namespace
+
+namespace screen_ai {
+
+// ScreenAIInstallState is created through ScreenAIDownloader and we expect
+// only one instance of it exists during browser's life time.
+ScreenAIInstallState* g_instance = nullptr;
+
+// static
+bool ScreenAIInstallState::IsDeviceCompatible() {
 #if defined(ARCH_CPU_X86_FAMILY)
   // Check if the CPU has the required instruction set to run the Screen AI
   // library.
-  // TODO(crbug.com/381256355): Update when ScreenAI library is compatible with
-  // older CPUs.
   static const bool device_compatible = base::CPU().has_sse42();
 #elif BUILDFLAG(IS_LINUX)
   // On Linux, the library is only built for X86 CPUs.
@@ -39,14 +46,6 @@ bool IsDeviceCompatible() {
 
   return device_compatible;
 }
-
-}  // namespace
-
-namespace screen_ai {
-
-// ScreenAIInstallState is created through ScreenAIDownloader and we expect on
-// and only one of it exists during browser's life time.
-ScreenAIInstallState* g_instance = nullptr;
 
 // static
 ScreenAIInstallState* ScreenAIInstallState::GetInstance() {
@@ -84,6 +83,9 @@ ScreenAIInstallState::ScreenAIInstallState() {
 }
 
 ScreenAIInstallState::~ScreenAIInstallState() {
+  for (ScreenAIInstallState::Observer& observer : observers_) {
+    observer.OnScreenAIInstallStateDestroying();
+  }
   CHECK_NE(g_instance, nullptr);
   g_instance = nullptr;
 }

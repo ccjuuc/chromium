@@ -14,10 +14,13 @@ import type {ColorOption} from './ink_color_selector.js';
 
 type Constructor<T> = new (...args: any[]) => T;
 
+// LINT.IfChange(TextSizes)
 export const TEXT_SIZES: number[] =
     [6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 72, 100];
+// LINT.ThenChange(//pdf/pdfium/pdfium_ink_reader.cc:TextSizes)
 
 export const TEXT_COLORS: ColorOption[] = [
+  // LINT.IfChange(TextAnnotationColors)
   // Row 1:
   {label: 'annotationColorBlack', color: '#000000', blended: false},
   {label: 'ink2BrushColorDarkGrey2', color: '#5f6368', blended: false},
@@ -42,6 +45,7 @@ export const TEXT_COLORS: ColorOption[] = [
   {label: 'ink2BrushColorGreen3', color: '#188038', blended: false},
   {label: 'ink2TextColorCyan3', color: '#12a4af', blended: false},
   {label: 'ink2BrushColorBlue3', color: '#1967d2', blended: false},
+  // LINT.ThenChange(//pdf/pdf_ink_metrics_handler.cc:TextAnnotationColors)
 ];
 
 export const InkAnnotationTextMixin =
@@ -133,6 +137,6 @@ export interface InkAnnotationTextMixinInterface {
   isSelectedSize(size: number): boolean;
   onTypefaceSelected(e: Event): void;
   onCurrentColorChanged(e: CustomEvent<{value: Color}>): void;
-  onSizeSelected(e: CustomEvent<{value: number}>): void;
+  onSizeSelected(e: Event): void;
   onTextAttributesChanged(attributes: TextAttributes): void;
 }

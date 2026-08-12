@@ -2116,7 +2116,8 @@ message ChromeDeviceSettingsProto {
   optional BooleanPolicyProto DeviceExtensionsSystemLogEnabled = 1252;
   optional BooleanPolicyProto DeviceAllowEnterpriseRemoteAccessConnections =
       1268;
-  optional BooleanPolicyProto DevicePostQuantumKeyAgreementEnabled = 1276;
+  optional BooleanPolicyProto DevicePostQuantumKeyAgreementEnabled = 1276
+      [deprecated = true];
   optional StringPolicyProto DeviceRestrictionSchedule = 1290;
   optional BooleanPolicyProto DeviceNativeClientForceAllowed = 1314
       [deprecated = true];
@@ -2130,4 +2131,11 @@ message ChromeDeviceSettingsProto {
       1385;
   optional StringPolicyProto DeviceLoginScreenPreferSlowKexAlgorithms = 1414;
   optional StringPolicyProto DeviceLoginScreenPreferSlowCiphers = 1415;
+  optional IntegerPolicyProto DeviceWeeklyScheduledResuspendDelayMs = 1461;
+  optional IntegerPolicyProto DeviceOnlinePasswordMismatchBehavior = 1470;
+  optional StringListPolicyProto DeviceLocalNetworkAccessAllowedForUrls = 1478;
+  optional StringListPolicyProto DeviceLocalNetworkAccessBlockedForUrls = 1479;
+  optional StringListPolicyProto
+      DeviceLocalNetworkAccessIpAddressSpaceOverrides = 1480;
+
 }

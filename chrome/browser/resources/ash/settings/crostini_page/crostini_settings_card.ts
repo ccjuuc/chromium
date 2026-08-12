@@ -25,9 +25,11 @@ import {isCrostiniAllowed, isCrostiniSupported} from '../common/load_time_boolea
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import {type Route, Router, routes} from '../router.js';
+import {Router, routes} from '../router.js';
+import type {Route} from '../router.js';
 
-import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
+import {CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
+import type {CrostiniBrowserProxy} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_settings_card.html.js';
 
 const CrostiniSettingsCardElementBase = DeepLinkingMixin(PrefsMixin(
@@ -81,10 +83,10 @@ export class CrostiniSettingsCardElement extends
   ]);
 
   private browserProxy_: CrostiniBrowserProxy;
-  private disableCrostiniInstall_: boolean;
-  private isCrostiniAllowed_: boolean;
-  private isCrostiniSupported_: boolean;
-  private readonly showBruschetta_: boolean;
+  declare private disableCrostiniInstall_: boolean;
+  declare private isCrostiniAllowed_: boolean;
+  declare private isCrostiniSupported_: boolean;
+  declare private readonly showBruschetta_: boolean;
 
   constructor() {
     super();

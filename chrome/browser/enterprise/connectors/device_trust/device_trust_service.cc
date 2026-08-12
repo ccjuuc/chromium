@@ -5,44 +5,41 @@
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 
 #include "base/base64.h"
+#include "base/json/json_reader.h"
 #include "base/values.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_utils.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/signals_type.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/signals/signals_service.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
+#include "components/enterprise/device_trust/core/attestation/attestation_service.h"
+#include "components/enterprise/device_trust/core/attestation/attestation_utils.h"
+#include "components/enterprise/device_trust/core/attestation/signals_type.h"
+#include "components/enterprise/device_trust/core/common_types.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/signals/signals_service.h"
 #include "components/prefs/pref_service.h"
 
 namespace enterprise_connectors {
 
 namespace {
 
-// Runs the `callback` to return the `result` from the data decoder
-// service after it is validated and decoded.
-void OnJsonParsed(DeviceTrustService::ParseJsonChallengeCallback callback,
-                  data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value()) {
-    std::move(callback).Run(std::string());
-    return;
+// Parses the `serialized_challenge` and returns its value.
+std::string ParseJsonChallenge(const std::string& serialized_challenge) {
+  auto dict =
+      base::JSONReader::ReadDict(serialized_challenge, base::JSON_PARSE_RFC);
+  if (!dict) {
+    return std::string();
   }
 
   // Check if json is malformed or it doesn't include the needed field.
-  const std::string* challenge = result->GetDict().FindString("challenge");
+  const std::string* challenge = dict->FindString("challenge");
   if (!challenge) {
-    std::move(callback).Run(std::string());
-    return;
+    return std::string();
   }
 
   std::string serialized_signed_challenge;
   if (!base::Base64Decode(*challenge, &serialized_signed_challenge)) {
-    std::move(callback).Run(std::string());
-    return;
+    return std::string();
   }
-  std::move(callback).Run(serialized_signed_challenge);
-  return;
+  return serialized_signed_challenge;
 }
 
 DeviceTrustResponse CreateFailedResponse(DeviceTrustError error) {
@@ -79,22 +76,13 @@ void DeviceTrustService::BuildChallengeResponse(
     const std::string& serialized_challenge,
     const std::set<DTCPolicyLevel>& levels,
     DeviceTrustCallback callback) {
-  ParseJsonChallenge(
-      serialized_challenge,
-      base::BindOnce(&DeviceTrustService::OnChallengeParsed,
-                     weak_factory_.GetWeakPtr(), levels, std::move(callback)));
+  OnChallengeParsed(levels, std::move(callback),
+                    ParseJsonChallenge(serialized_challenge));
 }
 
 const std::set<DTCPolicyLevel> DeviceTrustService::Watches(
     const GURL& url) const {
   return connector_ ? connector_->Watches(url) : std::set<DTCPolicyLevel>();
-}
-
-void DeviceTrustService::ParseJsonChallenge(
-    const std::string& serialized_challenge,
-    ParseJsonChallengeCallback callback) {
-  data_decoder_.ParseJson(serialized_challenge,
-                          base::BindOnce(&OnJsonParsed, std::move(callback)));
 }
 
 void DeviceTrustService::OnChallengeParsed(
@@ -121,7 +109,7 @@ void DeviceTrustService::OnSignalsCollected(
     const std::string& challenge,
     const std::set<DTCPolicyLevel>& levels,
     DeviceTrustCallback callback,
-    base::Value::Dict signals) {
+    base::DictValue signals) {
   LogAttestationFunnelStep(DTAttestationFunnelStep::kSignalsCollected);
 
   attestation_service_->BuildChallengeResponseForVAChallenge(

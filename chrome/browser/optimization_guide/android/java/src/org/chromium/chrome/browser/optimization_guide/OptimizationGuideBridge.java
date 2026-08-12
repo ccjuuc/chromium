@@ -6,6 +6,8 @@ package org.chromium.chrome.browser.optimization_guide;
 
 import androidx.annotation.VisibleForTesting;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
@@ -273,12 +275,12 @@ public class OptimizationGuideBridge {
                         optimizationType);
         if (notifications == null) return null;
 
-        byte[][] encoded_notifications = new byte[notifications.length][];
+        byte[][] encodedNotifications = new byte[notifications.length][];
         for (int i = 0; i < notifications.length; i++) {
-            encoded_notifications[i] = notifications[i].toByteArray();
+            encodedNotifications[i] = notifications[i].toByteArray();
         }
 
-        return encoded_notifications;
+        return encodedNotifications;
     }
 
     /**
@@ -290,7 +292,7 @@ public class OptimizationGuideBridge {
         HintNotificationPayload notification;
         try {
             notification = HintNotificationPayload.parseFrom(encodedNotification);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        } catch (InvalidProtocolBufferException e) {
             return;
         }
         OptimizationGuidePushNotificationManager.onPushNotificationNotHandledByNative(notification);
@@ -312,7 +314,7 @@ public class OptimizationGuideBridge {
         Any anyMetadata;
         try {
             anyMetadata = Any.parseFrom(serializedAnyMetadata);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+        } catch (InvalidProtocolBufferException e) {
             return null;
         }
         return anyMetadata;
@@ -340,7 +342,7 @@ public class OptimizationGuideBridge {
                 int[] optimizationTypes,
                 int requestContext,
                 OnDemandOptimizationGuideCallback callback,
-                @JniType("jni_zero::ByteArrayView") byte[] requestContextMetadata);
+                byte[] requestContextMetadata);
 
         void onNewPushNotification(long nativeOptimizationGuideBridge, byte[] encodedNotification);
 

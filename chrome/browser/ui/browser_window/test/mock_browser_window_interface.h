@@ -8,6 +8,7 @@
 #include "base/callback_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 class MockBrowserWindowInterface : public BrowserWindowInterface {
  public:
@@ -16,26 +17,46 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
 
   MOCK_METHOD(Profile*, GetProfile, (), (override));
   MOCK_METHOD(const Profile*, GetProfile, (), (const override));
-  MOCK_METHOD(void,
-              OpenGURL,
-              (const GURL& gurl, WindowOpenDisposition disposition),
-              (override));
   MOCK_METHOD(const SessionID&, GetSessionID, (), (const override));
-  MOCK_METHOD(TabStripModel*, GetTabStripModel, (), (override));
-  MOCK_METHOD(const TabStripModel*, GetTabStripModel, (), (const, override));
-  MOCK_METHOD(bool, IsTabStripVisible, (), (override));
-  MOCK_METHOD(bool, ShouldHideUIForFullscreen, (), (const, override));
+  MOCK_METHOD(bool, IsDeleteScheduled, (), (const override));
   MOCK_METHOD(base::CallbackListSubscription,
               RegisterBrowserDidClose,
               (BrowserDidCloseCallback callback),
               (override));
-  MOCK_METHOD(base::CallbackListSubscription,
-              RegisterBrowserCloseCancelled,
-              (BrowserCloseCancelledCallback callback),
+  // The non-const version should never return something different from the
+  // const version, so implement one in terms of the other.
+  ui::UnownedUserDataHost& GetUnownedUserDataHost() override;
+  MOCK_METHOD(const ui::UnownedUserDataHost&,
+              GetUnownedUserDataHost,
+              (),
+              (const, override));
+  MOCK_METHOD(Type, GetType, (), (const, override));
+  MOCK_METHOD(ui::BaseWindow*, GetWindow, (), (override));
+  MOCK_METHOD(const ui::BaseWindow*, GetWindow, (), (const override));
+
+  // PageNavigator methods
+  MOCK_METHOD(content::WebContents*,
+              OpenURL,
+              (const content::OpenURLParams& params,
+               base::OnceCallback<void(content::NavigationHandle&)>
+                   navigation_handle_callback),
               (override));
   MOCK_METHOD(base::WeakPtr<BrowserWindowInterface>,
               GetWeakPtr,
               (),
+              (override));
+
+#if !BUILDFLAG(IS_ANDROID)
+  MOCK_METHOD(void,
+              OpenGURL,
+              (const GURL& gurl, WindowOpenDisposition disposition),
+              (override));
+  MOCK_METHOD(TabStripModel*, GetTabStripModel, (), (override));
+  MOCK_METHOD(const TabStripModel*, GetTabStripModel, (), (const, override));
+  MOCK_METHOD(bool, IsTabStripVisible, (), (override));
+  MOCK_METHOD(base::CallbackListSubscription,
+              RegisterBrowserCloseCancelled,
+              (BrowserCloseCancelledCallback callback),
               (override));
   MOCK_METHOD(base::CallbackListSubscription,
               RegisterActiveTabDidChange,
@@ -44,13 +65,6 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
   MOCK_METHOD(tabs::TabInterface*, GetActiveTabInterface, (), (override));
   MOCK_METHOD(BrowserWindowFeatures&, GetFeatures, (), (override));
   MOCK_METHOD(const BrowserWindowFeatures&, GetFeatures, (), (const, override));
-  // The non-const version should never return something different from the
-  // const version, so implement one in terms of th other.
-  ui::UnownedUserDataHost& GetUnownedUserDataHost() override;
-  MOCK_METHOD(const ui::UnownedUserDataHost&,
-              GetUnownedUserDataHost,
-              (),
-              (const, override));
   MOCK_METHOD(web_modal::WebContentsModalDialogHost*,
               GetWebContentsModalDialogHostForWindow,
               (),
@@ -68,12 +82,6 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
               RegisterDidBecomeInactive,
               (DidBecomeInactiveCallback callback),
               (override));
-  MOCK_METHOD(ExclusiveAccessManager*,
-              GetExclusiveAccessManager,
-              (),
-              (override));
-  MOCK_METHOD(BrowserActions*, GetActions, (), (override));
-  MOCK_METHOD(Type, GetType, (), (const, override));
   MOCK_METHOD(std::vector<tabs::TabInterface*>,
               GetAllTabInterfaces,
               (),
@@ -83,28 +91,20 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
               GetBrowserForMigrationOnly,
               (),
               (const, override));
-  MOCK_METHOD(bool, IsTabModalPopupDeprecated, (), (const, override));
-  MOCK_METHOD(ui::BaseWindow*, GetWindow, (), (override));
-  MOCK_METHOD(const ui::BaseWindow*, GetWindow, (), (const override));
+  MOCK_METHOD(bool, IsTabModalPopup, (), (const, override));
+  MOCK_METHOD(void,
+              SetIsTabModalPopup,
+              (bool, base::PassKey<internal::ScopedBrowserShower>),
+              (override));
+  MOCK_METHOD(bool, CreatedBySessionRestore, (), (const, override));
   MOCK_METHOD(DesktopBrowserWindowCapabilities*, capabilities, (), (override));
   MOCK_METHOD(const DesktopBrowserWindowCapabilities*,
               capabilities,
               (),
               (const, override));
-
-  // PageNavigator methods
-  MOCK_METHOD(content::WebContents*,
-              OpenURL,
-              (const content::OpenURLParams& params,
-               base::OnceCallback<void(content::NavigationHandle&)>
-                   navigation_handle_callback),
-              (override));
-
-  MOCK_METHOD(bool, CanShowCallToAction, (), (const, override));
-  MOCK_METHOD(std::unique_ptr<ScopedWindowCallToAction>,
-              ShowCallToAction,
-              (),
-              (override));
+#endif
+ private:
+  ui::UnownedUserDataHost unowned_user_data_host_;
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_WINDOW_TEST_MOCK_BROWSER_WINDOW_INTERFACE_H_

@@ -107,14 +107,15 @@ AshSignalsDecorator::AshSignalsDecorator(
     Profile* profile)
     : browser_policy_connector_(browser_policy_connector),
       profile_(profile),
-      attributes_(std::make_unique<policy::DeviceAttributesImpl>()) {
+      attributes_(std::make_unique<policy::DeviceAttributesImpl>(
+          browser_policy_connector_)) {
   DCHECK(browser_policy_connector_);
   DCHECK(profile_);
 }
 
 AshSignalsDecorator::~AshSignalsDecorator() = default;
 
-void AshSignalsDecorator::Decorate(base::Value::Dict& signals,
+void AshSignalsDecorator::Decorate(base::DictValue& signals,
                                    base::OnceClosure done_closure) {
   auto start_time = base::TimeTicks::Now();
 
@@ -139,8 +140,8 @@ void AshSignalsDecorator::Decorate(base::Value::Dict& signals,
   signals.Set(device_signals::names::kScreenLockSecured,
               static_cast<int32_t>(device_signals::SettingValue::ENABLED));
 
-  base::Value::List imei_list;
-  base::Value::List meid_list;
+  base::ListValue imei_list;
+  base::ListValue meid_list;
   ash::NetworkStateHandler::DeviceStateList device_list;
   GetNetworkDeviceStates(profile_, &device_list);
   for (auto* device_state : device_list) {

@@ -6,12 +6,12 @@
 
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/app_shortcut_shelf_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_prefs.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/common/extension.h"
@@ -51,11 +51,11 @@ IN_PROC_BROWSER_TEST_F(PinnedAppsCleanupHandlerBrowserTest,
   const std::string policy_pinned_id = extension->id();
 
   // App 1 is pinned by policy.
-  base::Value::List policy_value;
-  base::Value::Dict entry;
+  base::ListValue policy_value;
+  base::DictValue entry;
   entry.Set(ChromeShelfPrefs::kPinnedAppsPrefAppIDKey, policy_pinned_id);
   policy_value.Append(std::move(entry));
-  profile()->GetPrefs()->SetList(prefs::kPolicyPinnedLauncherApps,
+  profile()->GetPrefs()->SetList(ash::prefs::kPolicyPinnedLauncherApps,
                                  std::move(policy_value));
 
   // App 2 and App 3 are installed and user pinned.

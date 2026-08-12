@@ -20,6 +20,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/arc/arc_util.h"
@@ -299,6 +300,10 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest, MultipleWindows) {
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowBrowserTest,
                        HostedAppandExtensionApp) {
   const extensions::Extension* extension1 = InstallHostedApp();
+  // Allowlist the deprecated hosted app so it can still be launched for the
+  // test.
+  apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting allowlist(
+      extension1->id());
   LaunchHostedApp(extension1);
 
   std::string app_id1 = extension1->id();
@@ -472,7 +477,7 @@ class AppServiceAppWindowWebAppBrowserTest
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(GetAppURL());
     web_app_info->scope = GetAppURL().GetWithoutFilename();
 
-    std::string app_id = web_app::test::InstallWebApp(browser()->profile(),
+    std::string app_id = web_app::test::InstallWebApp(browser()->GetProfile(),
                                                       std::move(web_app_info));
     CreateWebAppWindow(app_id);
     return app_id;
@@ -485,7 +490,7 @@ class AppServiceAppWindowWebAppBrowserTest
   void CreateWebAppWindow(const std::string& app_id) const {
     content::TestNavigationObserver navigation_observer(GetAppURL());
     navigation_observer.StartWatchingNewWebContents();
-    web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+    web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
     navigation_observer.WaitForNavigationFinished();
   }
 
@@ -558,7 +563,7 @@ IN_PROC_BROWSER_TEST_F(AppServiceAppWindowWebAppBrowserTest,
             GetAppInstanceState(app_id, instance2->Window()));
 
   // Bring the browser window to foreground.
-  browser()->window()->Show();
+  browser()->GetWindow()->Show();
 
   EXPECT_EQ(apps::InstanceState::kStarted | apps::InstanceState::kRunning |
                 apps::InstanceState::kVisible,
@@ -876,11 +881,11 @@ using AppServiceAppWindowSystemWebAppBrowserTest =
 
 IN_PROC_BROWSER_TEST_F(AppServiceAppWindowSystemWebAppBrowserTest,
                        SystemWebAppWindow) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
 
   const std::string app_id = ash::kOsSettingsAppId;
-  web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+  web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
 
   auto instances = app_service_proxy_->InstanceRegistry().GetInstances(app_id);
   EXPECT_EQ(1u, instances.size());

@@ -44,6 +44,7 @@ struct IAndroidInfo {
   const std::string manufacturer;
   const std::string model;
   int sdkInt;
+  int sdkIntFull;
   const std::string securityPatch;
   // Available only on android S+. For S-, this method returns empty string.
   const std::string socManufacturer;
@@ -81,22 +82,24 @@ void Set(const IAndroidInfo& info) {
   holder.emplace(info);
 }
 
-static void JNI_AndroidInfo_FillFields(std::string& brand,
-                                       std::string& device,
-                                       std::string& buildId,
-                                       std::string& manufacturer,
-                                       std::string& model,
-                                       std::string& type,
-                                       std::string& board,
-                                       std::string& androidBuildFingerprint,
-                                       std::string& versionIncremental,
-                                       std::string& hardware,
-                                       std::string& codename,
-                                       std::string& socManufacturer,
-                                       std::string& supportedAbis,
-                                       jint sdkInt,
-                                       jboolean isDebugAndroid,
-                                       std::string& securityPatch) {
+static void JNI_AndroidInfo_FillFields(
+    const std::string& brand,
+    const std::string& device,
+    const std::string& buildId,
+    const std::string& manufacturer,
+    const std::string& model,
+    const std::string& type,
+    const std::string& board,
+    const std::string& androidBuildFingerprint,
+    const std::string& versionIncremental,
+    const std::string& hardware,
+    const std::string& codename,
+    const std::string& socManufacturer,
+    const std::string& supportedAbis,
+    int32_t sdkInt,
+    int32_t sdkIntFull,
+    bool isDebugAndroid,
+    const std::string& securityPatch) {
   Set(IAndroidInfo{.abiName = supportedAbis,
                    .androidBuildFp = androidBuildFingerprint,
                    .androidBuildId = buildId,
@@ -106,10 +109,11 @@ static void JNI_AndroidInfo_FillFields(std::string& brand,
                    .codename = codename,
                    .device = device,
                    .hardware = hardware,
-                   .isDebugAndroid = static_cast<bool>(isDebugAndroid),
+                   .isDebugAndroid = isDebugAndroid,
                    .manufacturer = manufacturer,
                    .model = model,
                    .sdkInt = sdkInt,
+                   .sdkIntFull = sdkIntFull,
                    .securityPatch = securityPatch,
                    .socManufacturer = socManufacturer,
                    .versionIncremental = versionIncremental});
@@ -149,6 +153,10 @@ const std::string& android_build_fp() {
 
 int sdk_int() {
   return get_android_info().sdkInt;
+}
+
+int sdk_int_full() {
+  return get_android_info().sdkIntFull;
 }
 
 bool is_debug_android() {

@@ -31,7 +31,7 @@ ScopedJavaLocalFrame::~ScopedJavaLocalFrame() {
 // else here.
 JavaRef<jobject>::JavaRef(JNIEnv* env, jobject obj) : obj_(obj) {
   if (obj) {
-    JNI_ZERO_DCHECK(env && env->GetObjectRefType(obj) == JNILocalRefType);
+    JNI_ZERO_DCHECK(env && env->GetObjectRefType(obj) != JNIInvalidRefType);
   }
 }
 #endif
@@ -69,6 +69,11 @@ void JavaRef<jobject>::SetNewGlobalRef(JNIEnv* env, jobject obj) {
   obj_ = obj;
 }
 
+void JavaRef<jobject>::SetNewGlobalRefAndLeak(JNIEnv* env, jobject obj) {
+  JNI_ZERO_DCHECK(env == AttachCurrentThread());
+  obj_ = env->NewGlobalRef(obj);
+}
+
 void JavaRef<jobject>::ResetLocalRef(JNIEnv* env) {
   if (obj_) {
     JNI_ZERO_DCHECK(env ==
@@ -103,7 +108,7 @@ void ScopedJavaGlobalWeakRef::reset() {
 
 ScopedJavaLocalRef<jobject> ScopedJavaGlobalWeakRef::get(JNIEnv* env) const {
   jobject real = obj_ ? real = env->NewLocalRef(obj_) : nullptr;
-  return ScopedJavaLocalRef<jobject>::Adopt(env, real);
+  return jni_zero::AdoptRef(env, real);
 }
 
 void ScopedJavaGlobalWeakRef::Assign(const ScopedJavaGlobalWeakRef& other) {

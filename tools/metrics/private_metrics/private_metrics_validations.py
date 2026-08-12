@@ -2,18 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import os
-import sys
 import xml.dom.minidom
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'ukm'))
-import xml_validations
+import setup_modules  # pylint: disable=unused-import
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'histograms'))
-import extract_histograms
-import histogram_paths
-import merge_xml
-
+import chromium_src.tools.metrics.ukm.xml_validations as xml_validations
+import chromium_src.tools.metrics.histograms.extract_histograms as extract_histograms
+import chromium_src.tools.metrics.histograms.histogram_paths as histogram_paths
+import chromium_src.tools.metrics.histograms.merge_xml as merge_xml
 
 class EventBasedXmlValidation(xml_validations.UkmXmlValidation):
   """Validations for the content of event-based Private Metrics configurations.
@@ -30,7 +26,7 @@ class EventBasedXmlValidation(xml_validations.UkmXmlValidation):
     super().__init__(config_xml)
     self.config_type = config_type
 
-  def checkMetricTypeIsSpecified(self):
+  def check_metric_type_is_specified(self):
     """Checks each metric is either specified with an enum or a unit."""
     errors = []
 
@@ -51,18 +47,6 @@ class EventBasedXmlValidation(xml_validations.UkmXmlValidation):
     is_success = not errors
 
     return (is_success, errors)
-
-
-class DkmXmlValidation(EventBasedXmlValidation):
-  """Validations for the content of dkm.xml."""
-
-  def __init__(self, dkm_config: xml.dom.minidom.Element) -> None:
-    """Attributes:
-
-    dkm_config: A XML minidom Element representing the root node of the DKM
-        config tree.
-    """
-    super().__init__(dkm_config, "DKM")
 
 
 class DwaXmlValidation(EventBasedXmlValidation):

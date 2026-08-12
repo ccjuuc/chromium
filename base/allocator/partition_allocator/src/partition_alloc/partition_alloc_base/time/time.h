@@ -526,7 +526,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC_BASE) Time
   // following: ((1970-1601)*365+89)*24*60*60*1000*1000, where 89 is the number
   // of leap year days between 1601 and 1970: (1970-1601)/4 excluding 1700,
   // 1800, and 1900.
-  static constexpr int64_t kTimeTToMicrosecondsOffset =
+  static constexpr int64_t kMicrosecondsFromWindowsToUnixEpoch =
       INT64_C(11644473600000000);
 
 #if PA_BUILDFLAG(IS_WIN)
@@ -540,7 +540,9 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC_BASE) Time
   constexpr Time() : TimeBase(0) {}
 
   // Returns the time for epoch in Unix-like system (Jan 1, 1970).
-  static constexpr Time UnixEpoch() { return Time(kTimeTToMicrosecondsOffset); }
+  static constexpr Time UnixEpoch() {
+    return Time(kMicrosecondsFromWindowsToUnixEpoch);
+  }
 
   // Returns the current time. Watch out, the system might adjust its clock
   // in which case time will actually go backwards. We don't guarantee that
@@ -675,42 +677,42 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC_BASE) Time
 
 template <typename T>
 constexpr TimeDelta Days(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) *
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) *
                                       Time::kMicrosecondsPerDay);
 }
 template <typename T>
 constexpr TimeDelta Hours(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) *
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) *
                                       Time::kMicrosecondsPerHour);
 }
 template <typename T>
 constexpr TimeDelta Minutes(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) *
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) *
                                       Time::kMicrosecondsPerMinute);
 }
 template <typename T>
 constexpr TimeDelta Seconds(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) *
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) *
                                       Time::kMicrosecondsPerSecond);
 }
 template <typename T>
 constexpr TimeDelta Milliseconds(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) *
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) *
                                       Time::kMicrosecondsPerMillisecond);
 }
 template <typename T>
 constexpr TimeDelta Microseconds(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n));
+  return TimeDelta::FromInternalValue(ClampedNumeric(n));
 }
 template <typename T>
 constexpr TimeDelta Nanoseconds(T n) {
-  return TimeDelta::FromInternalValue(MakeClampedNum(n) /
+  return TimeDelta::FromInternalValue(ClampedNumeric(n) /
                                       Time::kNanosecondsPerMicrosecond);
 }
 template <typename T>
 constexpr TimeDelta Hertz(T n) {
   return n ? TimeDelta::FromInternalValue(Time::kMicrosecondsPerSecond /
-                                          MakeClampedNum(n))
+                                          ClampedNumeric(n))
            : TimeDelta::Max();
 }
 

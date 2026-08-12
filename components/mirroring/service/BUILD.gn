@@ -6,6 +6,8 @@ import("//testing/test.gni")
 
 component("mirroring_service") {
   sources = [
+    "audio_capturing_callback.cc",
+    "audio_capturing_callback.h",
     "captured_audio_input.cc",
     "captured_audio_input.h",
     "media_remoter.cc",
@@ -31,8 +33,6 @@ component("mirroring_service") {
     "rpc_dispatcher.h",
     "rpc_dispatcher_impl.cc",
     "rpc_dispatcher_impl.h",
-    "rtp_stream.cc",
-    "rtp_stream.h",
     "video_capture_client.cc",
     "video_capture_client.h",
   ]
@@ -74,28 +74,26 @@ component("mirroring_service") {
   # //third_party/openscreen/src/third_party/protobuf. direct include_dirs
   # takes precedence over those pulled in from configs.
   include_dirs = [ "//third_party/protobuf/src" ]
-  configs +=
-      [ "//third_party/openscreen/src/build_overrides:openscreen_include_dirs" ]
+  configs += [ "//third_party/openscreen/src:include_dirs" ]
   defines = [ "IS_MIRRORING_SERVICE_IMPL" ]
 }
 
 source_set("unittests") {
   testonly = true
   sources = [
+    "audio_capturing_callback_unittest.cc",
     "captured_audio_input_unittest.cc",
-    "fake_network_service.cc",
-    "fake_network_service.h",
+    "fake_socket_factory.cc",
+    "fake_socket_factory.h",
     "fake_video_capture_host.cc",
     "fake_video_capture_host.h",
     "media_remoter_unittest.cc",
+    "mirroring_gpu_factories_factory_unittest.cc",
     "openscreen_message_port_unittest.cc",
     "openscreen_session_host_unittest.cc",
     "openscreen_stats_client_unittest.cc",
     "remoting_sender_unittest.cc",
     "rpc_dispatcher_impl_unittest.cc",
-    "rtp_stream_unittest.cc",
-    "value_util.cc",
-    "value_util.h",
     "video_capture_client_unittest.cc",
   ]
 
@@ -133,8 +131,7 @@ source_set("unittests") {
   # //third_party/openscreen/src/third_party/protobuf. direct include_dirs
   # takes precedence over those pulled in from configs.
   include_dirs = [ "//third_party/protobuf/src" ]
-  configs +=
-      [ "//third_party/openscreen/src/build_overrides:openscreen_include_dirs" ]
+  configs += [ "//third_party/openscreen/src:include_dirs" ]
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.

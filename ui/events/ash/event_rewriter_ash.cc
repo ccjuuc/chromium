@@ -1462,28 +1462,6 @@ bool EventRewriterAsh::RewriteModifierKeys(const KeyEvent& key_event,
   // Implement the Caps Lock modifier here, rather than in the
   // AcceleratorController, so that the event is visible to apps (see
   // crbug.com/775743).
-  if (!ash::features::IsModifierSplitEnabled() &&
-      key_event.type() == EventType::kKeyPressed &&
-      state->key_code == VKEY_CAPITAL) {
-    // Toggle the EF_CAPS_LOCK_ON only when the key is pressed, so here it
-    // checks whether the key is auto-repeat event. Unfortunately, EF_IS_REPEAT
-    // for CapsLock is not reliable, because it checks whether flags are the
-    // same, too, but actually CapsLock will trigger to change the
-    // EF_CAPS_LOCK_ON flag of the original event. Instead, check whether the
-    // current key is already pressed or not.
-    bool is_repeat = std::ranges::find(
-                         pressed_key_states_,
-                         std::tuple(key_event.code(),
-                                    DomKey::Base{key_event.GetDomKey()},
-                                    key_event.key_code()),
-                         [](auto entry) {
-                           return std::tuple(entry.first.code, entry.first.key,
-                                             entry.first.key_code);
-                         }) != pressed_key_states_.end();
-    if (!is_repeat) {
-      ime_keyboard_->SetCapsLockEnabled(!ime_keyboard_->IsCapsLockEnabled());
-    }
-  }
   state->flags = (state->flags & ~EF_CAPS_LOCK_ON) |
                  (ime_keyboard_->IsCapsLockEnabled() ? EF_CAPS_LOCK_ON : 0);
 
@@ -1575,9 +1553,7 @@ bool EventRewriterAsh::ShouldRemapToRightClick(
   // TODO(crbug.com/1179893): When enabling the deprecate alt click flag by
   // default, decide whether kUseSearchClickForRightClick being disabled
   // should be able to override it.
-  bool use_search_key = base::FeatureList::IsEnabled(
-                            ::ash::features::kUseSearchClickForRightClick) ||
-                        ::features::IsDeprecateAltClickEnabled();
+  bool use_search_key = ::features::IsDeprecateAltClickEnabled();
   bool use_alt_key = is_alt_down_remapping_enabled_;
 
   const bool alt_click_down = AreFlagsSet(flags, kAltLeftButton);

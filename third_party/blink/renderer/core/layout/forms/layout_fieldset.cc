@@ -31,21 +31,6 @@ LayoutBlock* LayoutFieldset::FindAnonymousFieldsetContentBox() const {
 
 void LayoutFieldset::AddChild(LayoutObject* new_child,
                               LayoutObject* before_child) {
-  if (!new_child->IsText() && !new_child->IsAnonymous()) {
-    // Adding a child LayoutObject always causes reattach of <fieldset>. So
-    // |before_child| is always nullptr.
-    // See HTMLFieldSetElement::DidRecalcStyle().
-    DCHECK(!before_child);
-  } else if (before_child && before_child->IsRenderedLegend()) {
-    // Whitespace changes resulting from removed nodes are handled in
-    // MarkForWhitespaceReattachment(), and don't trigger
-    // HTMLFieldSetElement::DidRecalcStyle(). So the fieldset is not
-    // reattached. We adjust |before_child| instead.
-    Node* before_node =
-        LayoutTreeBuilderTraversal::NextLayoutSibling(*before_child->GetNode());
-    before_child = before_node ? before_node->GetLayoutObject() : nullptr;
-  }
-
   // https://html.spec.whatwg.org/C/#the-fieldset-and-legend-elements
   // > * If the element has a rendered legend, then that element is expected
   // >   to be the first child box.
@@ -53,11 +38,18 @@ void LayoutFieldset::AddChild(LayoutObject* new_child,
   // >   rendered legend and is expected to contain the content (including
   // >   the '::before' and '::after' pseudo-elements) of the fieldset
   // >   element except for the rendered legend, if there is one.
-
   if (new_child->IsRenderedLegendCandidate() && !FindInFlowLegend()) {
     LayoutBlockFlow::AddChild(new_child, FirstChild());
     return;
   }
+
+  // Adjust before_child so that it avoids the <legend>.
+  if (before_child && before_child->IsRenderedLegend()) {
+    const Node* before_node =
+        LayoutTreeBuilderTraversal::NextLayoutSibling(*before_child->GetNode());
+    before_child = before_node ? before_node->GetLayoutObject() : nullptr;
+  }
+
   LayoutBlock* fieldset_content = FindAnonymousFieldsetContentBox();
   DCHECK(fieldset_content);
   fieldset_content->AddChild(new_child, before_child);
@@ -158,6 +150,29 @@ void LayoutFieldset::UpdateAnonymousChildStyle(
   child_style_builder.SetRowRuleWidth(
       GapDataList<int>(StyleRef().RowRuleWidth()));
 
+  child_style_builder.SetColumnRuleBreak(StyleRef().ColumnRuleBreak());
+  child_style_builder.SetRowRuleBreak(StyleRef().RowRuleBreak());
+  child_style_builder.SetRuleOverlap(StyleRef().RuleOverlap());
+  child_style_builder.SetColumnRuleVisibilityItems(
+      StyleRef().ColumnRuleVisibilityItems());
+  child_style_builder.SetRowRuleVisibilityItems(
+      StyleRef().RowRuleVisibilityItems());
+  child_style_builder.SetColumnRuleInsetCapStart(
+      StyleRef().ColumnRuleInsetCapStart());
+  child_style_builder.SetColumnRuleInsetCapEnd(
+      StyleRef().ColumnRuleInsetCapEnd());
+  child_style_builder.SetColumnRuleInsetJunctionStart(
+      StyleRef().ColumnRuleInsetJunctionStart());
+  child_style_builder.SetColumnRuleInsetJunctionEnd(
+      StyleRef().ColumnRuleInsetJunctionEnd());
+  child_style_builder.SetRowRuleInsetCapStart(
+      StyleRef().RowRuleInsetCapStart());
+  child_style_builder.SetRowRuleInsetCapEnd(StyleRef().RowRuleInsetCapEnd());
+  child_style_builder.SetRowRuleInsetJunctionStart(
+      StyleRef().RowRuleInsetJunctionStart());
+  child_style_builder.SetRowRuleInsetJunctionEnd(
+      StyleRef().RowRuleInsetJunctionEnd());
+
   child_style_builder.SetFlexDirection(StyleRef().FlexDirection());
   child_style_builder.SetFlexWrap(StyleRef().FlexWrap());
 
@@ -182,6 +197,7 @@ void LayoutFieldset::UpdateAnonymousChildStyle(
   child_style_builder.SetJustifyItems(StyleRef().JustifyItems());
   child_style_builder.SetOverflowX(StyleRef().OverflowX());
   child_style_builder.SetOverflowY(StyleRef().OverflowY());
+  child_style_builder.SetScrollbarGutter(StyleRef().ScrollbarGutter());
   child_style_builder.SetUnicodeBidi(StyleRef().GetUnicodeBidi());
 }
 

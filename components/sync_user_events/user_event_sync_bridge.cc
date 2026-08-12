@@ -79,10 +79,6 @@ UserEventSyncBridge::~UserEventSyncBridge() {
   }
 }
 
-std::unique_ptr<MetadataChangeList>
-UserEventSyncBridge::CreateMetadataChangeList() {
-  return DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
 
 std::optional<ModelError> UserEventSyncBridge::MergeFullSyncData(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
@@ -164,6 +160,14 @@ std::string UserEventSyncBridge::GetStorageKey(
   return GetStorageKeyFromSpecifics(entity_data.specifics.user_event());
 }
 
+sync_pb::EntitySpecifics
+UserEventSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
+}
+
 bool UserEventSyncBridge::IsEntityDataValid(
     const EntityData& entity_data) const {
   // USER_EVENTS is a commit only data type so this method is not called.
@@ -174,8 +178,10 @@ void UserEventSyncBridge::ApplyDisableSyncChanges(
     std::unique_ptr<MetadataChangeList> delete_metadata_change_list) {
   CHECK(store_);
 
-  store_->DeleteAllDataAndMetadata(base::BindOnce(
-      &UserEventSyncBridge::OnStoreCommit, weak_ptr_factory_.GetWeakPtr()));
+  store_->DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list),
+      base::BindOnce(&UserEventSyncBridge::OnStoreCommit,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void UserEventSyncBridge::RecordUserEvent(

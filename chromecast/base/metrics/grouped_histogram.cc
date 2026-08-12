@@ -12,6 +12,7 @@
 
 #include "base/check_op.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/metrics_hashes.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
@@ -80,10 +81,11 @@ class GroupedHistogram : public base::Histogram {
   // TODO(crbug.com/40824087): min/max parameters are redundant with "ranges"
   // and can probably be removed.
   GroupedHistogram(base::DurableStringView metric_to_override,
+                   uint64_t name_hash,
                    Sample32 minimum,
                    Sample32 maximum,
                    const base::BucketRanges* ranges)
-      : Histogram(metric_to_override, ranges),
+      : Histogram(metric_to_override, name_hash, ranges),
         minimum_(minimum),
         maximum_(maximum),
         bucket_count_(ranges->bucket_count()) {}
@@ -129,9 +131,11 @@ void PreregisterHistogram(base::DurableStringView durable_name,
                           GroupedHistogram::Sample32 maximum,
                           size_t bucket_count,
                           int32_t flags) {
+  uint64_t name_hash = base::HashMetricName(*durable_name);
   DCHECK(base::Histogram::InspectConstructionArguments(
-      *durable_name, &minimum, &maximum, &bucket_count));
-  DCHECK(!base::StatisticsRecorder::FindHistogram(*durable_name))
+             *durable_name, name_hash, &minimum, &maximum, &bucket_count) ==
+         base::Histogram::kOK);
+  DCHECK(!base::StatisticsRecorder::FindHistogram(name_hash, *durable_name))
       << "Failed to preregister " << *durable_name
       << ", Histogram already exists.";
 
@@ -141,8 +145,8 @@ void PreregisterHistogram(base::DurableStringView durable_name,
   const base::BucketRanges* registered_ranges =
       base::StatisticsRecorder::RegisterOrDeleteDuplicateRanges(ranges);
 
-  GroupedHistogram* tentative_histogram =
-      new GroupedHistogram(durable_name, minimum, maximum, registered_ranges);
+  GroupedHistogram* tentative_histogram = new GroupedHistogram(
+      durable_name, name_hash, minimum, maximum, registered_ranges);
 
   tentative_histogram->SetFlags(flags);
   base::HistogramBase* histogram =
@@ -153,7 +157,7 @@ void PreregisterHistogram(base::DurableStringView durable_name,
   DCHECK(histogram->HasConstructionArguments(minimum, maximum, bucket_count));
 }
 
-} // namespace
+}  // namespace
 
 void PreregisterAllGroupedHistograms() {
   for (const auto& histogram : kHistogramsToGroup) {
@@ -168,5 +172,5 @@ void TagAppStartForGroupedHistograms(const std::string& app_name) {
   GetCurrentApp().app_name = app_name;
 }
 
-} // namespace metrics
-} // namespace chromecast
+}  // namespace metrics
+}  // namespace chromecast

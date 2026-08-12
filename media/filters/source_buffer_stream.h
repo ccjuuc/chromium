@@ -390,9 +390,11 @@ class MEDIA_EXPORT SourceBufferStream {
   // returns true.  Otherwise returns false.
   bool SetPendingBuffer(scoped_refptr<StreamParserBuffer>* out_buffer);
 
+  bool IsRangeListSortedForTesting() const;
+
   // Used to report log messages that can help the web developer figure out what
   // is wrong with the content.
-  raw_ptr<MediaLog> media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   // List of disjoint buffered ranges, ordered by start time.
   RangeList ranges_;

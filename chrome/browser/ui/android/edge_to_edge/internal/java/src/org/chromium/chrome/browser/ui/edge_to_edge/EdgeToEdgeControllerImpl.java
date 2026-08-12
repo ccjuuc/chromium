@@ -26,8 +26,8 @@ import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ValueChangedCallback;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
@@ -137,7 +137,7 @@ public class EdgeToEdgeControllerImpl
     private final ObserverList<ChangeObserver> mEdgeChangeObservers = new ObserverList<>();
     private final TabObserver mTabObserver;
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
-    private final ObservableSupplier<LayoutManager> mLayoutManagerSupplier;
+    private final MonotonicObservableSupplier<LayoutManager> mLayoutManagerSupplier;
     private final Callback<LayoutManager> mOnLayoutManagerCallback =
             new ValueChangedCallback<>(this::updateLayoutStateProvider);
     private final FullscreenManager mFullscreenManager;
@@ -215,7 +215,7 @@ public class EdgeToEdgeControllerImpl
             @Nullable EdgeToEdgeOSWrapper edgeToEdgeOsWrapper,
             EdgeToEdgeManager edgeToEdgeManager,
             BrowserControlsStateProvider browserControlsStateProvider,
-            ObservableSupplier<LayoutManager> layoutManagerSupplier,
+            MonotonicObservableSupplier<LayoutManager> layoutManagerSupplier,
             FullscreenManager fullscreenManager) {
         mActivity = activity;
         mWindowAndroid = windowAndroid;
@@ -251,7 +251,7 @@ public class EdgeToEdgeControllerImpl
         mBrowserControlsStateProvider.addObserver(this);
 
         mLayoutManagerSupplier = layoutManagerSupplier;
-        mLayoutManagerSupplier.addObserver(mOnLayoutManagerCallback);
+        mLayoutManagerSupplier.addSyncObserverAndPostIfNonNull(mOnLayoutManagerCallback);
         mLayoutManager = layoutManagerSupplier.get();
         if (mLayoutManager != null) {
             mLayoutManager.addObserver(this);
@@ -271,7 +271,7 @@ public class EdgeToEdgeControllerImpl
         mIsBottomChinEnabled = isSupportedByConfiguration(mActivity, mInsetObserver);
 
         mEdgeToEdgeStateProvider = mEdgeToEdgeManager.getEdgeToEdgeStateProvider();
-        mEdgeToEdgeToken = mEdgeToEdgeStateProvider.acquireSetDecorFitsSystemWindowToken();
+        mEdgeToEdgeToken = mEdgeToEdgeStateProvider.acquireEdgeToEdgeToken();
 
         // Any padding to make the content fit the window insets has not yet been applied, so by
         // default, the content is not yet fitting the window insets. The signal should be set to
@@ -695,7 +695,7 @@ public class EdgeToEdgeControllerImpl
         @LayoutType
         int currentLayoutType =
                 mLayoutManager != null ? mLayoutManager.getActiveLayoutType() : LayoutType.NONE;
-        if (mBottomControlsAreVisible && currentLayoutType != LayoutType.TAB_SWITCHER) return false;
+        if (mBottomControlsAreVisible && currentLayoutType != LayoutType.HUB) return false;
 
         // Pad the adjusters if drawing to edge.
         return isDrawingToEdge();
@@ -803,7 +803,7 @@ public class EdgeToEdgeControllerImpl
         if (mFullscreenManager != null) {
             mFullscreenManager.removeObserver(this);
         }
-        mEdgeToEdgeStateProvider.releaseSetDecorFitsSystemWindowToken(mEdgeToEdgeToken);
+        mEdgeToEdgeStateProvider.releaseEdgeToEdgeToken(mEdgeToEdgeToken);
     }
 
     static void recordConfigurationSwitchScenario(

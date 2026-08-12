@@ -12,6 +12,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -19,6 +20,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -90,7 +92,8 @@ RelatedAppRowView::RelatedAppRowView(
   // facts, we will continue using registrar_unsafe(), and add a sanity check
   // here that the app_id we're trying to make a view for is still in the
   // registrar since we last checked. If it's not, early return an empty view.
-  if (!registrar.IsInRegistrar(app_id_)) {
+  if (!registrar.AppMatches(app_id_,
+                            web_app::WebAppFilter::IsAppSurfaceableToUser())) {
     return;
   }
   web_app::WebAppIconManager& icon_manager = provider->icon_manager();
@@ -119,7 +122,10 @@ RelatedAppRowView::RelatedAppRowView(
 
   auto* app_settings_page_link = uninstall_button_container->AddChildView(
       views::CreateVectorImageButtonWithNativeTheme(
-          std::move(callback), views::kLaunchIcon, kLinkIconSize));
+          std::move(callback),
+          features::IsRoundedIconsEnabled() ? views::kOpenInNewIcon
+                                            : views::kLaunchOldIcon,
+          kLinkIconSize));
 
   views::InstallCircleHighlightPathGenerator(app_settings_page_link);
   app_settings_page_link->SetTooltipText(l10n_util::GetStringUTF16(

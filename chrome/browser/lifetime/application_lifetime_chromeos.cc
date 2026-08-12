@@ -9,19 +9,17 @@
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
-#include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
@@ -39,19 +37,9 @@ ash::UpdateEngineClient* GetUpdateEngineClient() {
   return update_engine_client;
 }
 
-chromeos::PowerManagerClient* GetPowerManagerClient() {
-  chromeos::PowerManagerClient* power_manager_client =
-      chromeos::PowerManagerClient::Get();
-  DCHECK(power_manager_client);
-  return power_manager_client;
-}
-
-// Whether Chrome should send stop request to a session manager.
-bool g_send_stop_request_to_session_manager = false;
-
 void ReportSessionUMAMetrics() {
-  // GetProfileByUser() will crash in tests if profile_manager() from
-  // g_browser_process is not initialized.
+  // BrowserContextHelper looks up the user's profile through ProfileManager,
+  // which may be uninitialized in tests.
   if (!user_manager::UserManager::IsInitialized() ||
       !g_browser_process->profile_manager()) {
     return;
@@ -63,7 +51,8 @@ void ReportSessionUMAMetrics() {
     return;
   }
 
-  Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(primary_user);
+  Profile* profile = Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(primary_user));
   // Could be nullptr in tests.
   if (!profile) {
     return;
@@ -113,16 +102,16 @@ void AttemptUserExit() {
       state->CommitPendingWrite();
     }
   }
-  SetSendStopRequestToSessionManager();
+  ash::SessionTerminationManager::SetSendStopRequestToSessionManager();
   // On ChromeOS, always terminate the browser, regardless of the result of
-  // AreAllBrowsersCloseable(). See crbug.com/123107.
+  // AreAllBrowsersCloseable(). See crbug.com/40779433.
   browser_shutdown::NotifyAppTerminating();
   StopSession();
 }
 
 void AttemptRelaunch() {
-  GetPowerManagerClient()->RequestRestart(power_manager::REQUEST_RESTART_OTHER,
-                                          "Chrome relaunch");
+  ash::SessionTerminationManager::Get()->Reboot(
+      power_manager::REQUEST_RESTART_OTHER, "Chrome relaunch");
 }
 
 void AttemptExit() {
@@ -150,7 +139,7 @@ bool UpdatePending() {
 bool SetLocaleForNextStart(PrefService* local_state) {
   // If a policy mandates the login screen locale, use it.
   ash::CrosSettings* cros_settings = ash::CrosSettings::Get();
-  const base::Value::List* login_screen_locales = nullptr;
+  const base::ListValue* login_screen_locales = nullptr;
   if (cros_settings->GetList(ash::kDeviceLoginScreenLocales,
                              &login_screen_locales) &&
       !login_screen_locales->empty() &&
@@ -162,7 +151,7 @@ bool SetLocaleForNextStart(PrefService* local_state) {
   }
 
   // Login screen should show up in owner's locale.
-  std::string owner_locale = local_state->GetString(prefs::kOwnerLocale);
+  std::string owner_locale = local_state->GetString(ash::prefs::kOwnerLocale);
   std::string pref_locale =
       local_state->GetString(language::prefs::kApplicationLocale);
   language::ConvertToActualUILocale(&pref_locale);
@@ -173,14 +162,6 @@ bool SetLocaleForNextStart(PrefService* local_state) {
   }
 
   return false;
-}
-
-bool IsSendingStopRequestToSessionManager() {
-  return g_send_stop_request_to_session_manager;
-}
-
-void SetSendStopRequestToSessionManager(bool should_send_request) {
-  g_send_stop_request_to_session_manager = should_send_request;
 }
 
 void StopSession() {
@@ -203,7 +184,7 @@ void StopSession() {
 
   // Signal session manager to stop the session if Chrome has initiated an
   // attempt to do so.
-  if (chrome::IsSendingStopRequestToSessionManager() &&
+  if (ash::SessionTerminationManager::IsSendingStopRequestToSessionManager() &&
       ash::SessionTerminationManager::Get()) {
     ash::SessionTerminationManager::Get()->StopSession(
         login_manager::SessionStopReason::REQUEST_FROM_SESSION_MANAGER);

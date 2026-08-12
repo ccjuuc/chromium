@@ -14,7 +14,7 @@ export function getHtml(this: VoiceSelectionMenuElement) {
   .template='${() => html`
     <cr-action-menu
         @close="${this.onClose_}"
-        @keydown="${this.onVoiceMenuKeyDown_}"
+        @keydown="${this.onVoiceMenuKeydown_}"
         accessibility-label="$i18n{voiceSelectionLabel}"
         role-description="$i18n{menu}"
         ?non-modal="${this.nonModal}"
@@ -42,7 +42,9 @@ export function getHtml(this: VoiceSelectionMenuElement) {
               <span class="voice-name">
                 <cr-icon id="check-mark"
                     class="item-hidden-${!voice.selected} check-mark"
-                    icon="read-anything-20:check-mark">
+                    icon="${this.webuiRoundedIconsEnabled_
+                        ? 'read-anything-20:check-small'
+                        : 'read-anything-20:check-mark-old'}">
                 </cr-icon>
                 ${voice.title}
               </span>
@@ -74,7 +76,7 @@ export function getHtml(this: VoiceSelectionMenuElement) {
       <button
           class="dropdown-item dropdown-voice-selection-button language-menu-button"
           tabindex="0"
-          @click="${this.openLanguageMenu_}">
+          @click="${this.onLanguageMenuClick_}">
         $i18n{readingModeLanguageMenu}
       </button>
 
@@ -87,7 +89,7 @@ ${this.showLanguageMenuDialog_
   <language-menu id="languageMenu"
       .enabledLangs="${this.enabledLangs}"
       .localeToDisplayName="${this.localeToDisplayName}"
-      .selectedLang="${this.selectedVoice?.lang}"
+      .selectedLang="${this.selectedVoice?.lang || ''}"
       .availableVoices="${this.availableVoices}"
       @close="${this.onLanguageMenuClose_}">
   </language-menu>

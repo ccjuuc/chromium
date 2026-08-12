@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_POLICY_HANDLERS_H_
 #define CHROME_BROWSER_EXTENSIONS_POLICY_HANDLERS_H_
 
+#include <memory>
 #include <optional>
 
 #include "base/values.h"
@@ -42,7 +43,7 @@ class ExtensionListPolicyHandler : public policy::ListPolicyHandler {
   bool CheckListEntry(const base::Value& value) override;
 
   // Sets `prefs` at pref_path() to `filtered_list`.
-  void ApplyList(base::Value::List filtered_list, PrefValueMap* prefs) override;
+  void ApplyList(base::ListValue filtered_list, PrefValueMap* prefs) override;
 
  private:
   const char* pref_path_;
@@ -70,17 +71,17 @@ class ExtensionInstallForceListPolicyHandler
   void ApplyPolicySettings(const policy::PolicyMap& policies,
                            PrefValueMap* prefs) override;
 
-  // Returns a `base::Value::Dict` with the extensions that must be force
+  // Returns a `base::DictValue` with the extensions that must be force
   // installed.
   //
   // Returns nullopt if the policy is unset.
-  std::optional<base::Value::Dict> GetPolicyDict(
+  std::optional<base::DictValue> GetPolicyDict(
       const policy::PolicyMap& policy_map);
 
  private:
   // Parses the data in `policy_value` and writes them to `extension_dict`.
   bool ParseList(const base::Value* policy_value,
-                 base::Value::Dict* extension_dict,
+                 base::DictValue* extension_dict,
                  policy::PolicyErrorMap* errors);
 };
 
@@ -154,6 +155,15 @@ class ExtensionSettingsPolicyHandler
   // dictionary. Validation errors are stored in `errors` if non-null.
   void SanitizePolicySettings(base::Value* dict_value,
                               policy::PolicyErrorMap* errors);
+
+  // Cached policy value from CheckPolicySettings(), reused by
+  // ApplyPolicySettings() to avoid redundant clone + normalization +
+  // sanitization of the same data.
+  std::unique_ptr<base::Value> checked_value_;
+
+  // Tracks whether CheckPolicySettings() was called before
+  // ApplyPolicySettings(). Used to enforce the framework contract via CHECK.
+  bool check_called_ = false;
 };
 
 }  // namespace extensions

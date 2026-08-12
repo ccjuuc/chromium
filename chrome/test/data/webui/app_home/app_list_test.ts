@@ -7,18 +7,17 @@ import 'chrome://apps/app_item.js';
 import 'chrome://apps/deprecated_apps_link.js';
 
 import type {AppInfo, PageRemote} from 'chrome://apps/app_home.mojom-webui.js';
-import {AppType, RunOnOsLoginMode} from 'chrome://apps/app_home.mojom-webui.js';
+import {AppType, browserProxyFactory, RunOnOsLoginMode} from 'chrome://apps/app_home.mojom-webui.js';
 import type {AppHomeEmptyPageElement} from 'chrome://apps/app_home_empty_page.js';
 import {AppHomeUserAction} from 'chrome://apps/app_home_utils.js';
 import type {AppListElement} from 'chrome://apps/app_list.js';
-import {BrowserProxy} from 'chrome://apps/browser_proxy.js';
 import type {DeprecatedAppsLinkElement} from 'chrome://apps/deprecated_apps_link.js';
 import type {CrCheckboxElement} from 'chrome://resources/cr_elements/cr_checkbox/cr_checkbox.js';
 import type {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {assertEquals, assertFalse, assertNull, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {TestAppHomeBrowserProxy} from './test_app_home_browser_proxy.js';
+import {FakePageHandler} from './test_app_home_page_handler.js';
 
 interface AppList {
   appList: AppInfo[];
@@ -43,7 +42,7 @@ class MetricsPrivateMock {
 suite('AppListTest', () => {
   let appListElement: AppListElement;
   let apps: AppList;
-  let testBrowserProxy: TestAppHomeBrowserProxy;
+  let fakeHandler: FakePageHandler;
   let callbackRouterRemote: PageRemote;
   let testAppInfo: AppInfo;
   let deprecatedAppInfo: AppInfo;
@@ -56,11 +55,10 @@ suite('AppListTest', () => {
         {
           appType: AppType.kWebApp,
           id: 'ahfgeienlihckogmohjhadlkjgocpleb',
-          startUrl: {url: 'https://test.google.com/testapp1'},
+          startUrl: 'https://test.google.com/testapp1',
           name: 'Test App 1',
-          iconUrl: {
-            url: 'chrome://app-icon/ahfgeienlihckogmohjhadlkjgocpleb/128/1',
-          },
+          iconUrl: 'chrome://app-icon/ahfgeienlihckogmohjhadlkjgocpleb/128/1',
+
           mayShowRunOnOsLoginMode: true,
           mayToggleRunOnOsLoginMode: true,
           runOnOsLoginMode: RunOnOsLoginMode.kNotRun,
@@ -72,11 +70,10 @@ suite('AppListTest', () => {
         {
           appType: AppType.kWebApp,
           id: 'ahfgeienlihckogmotestdlkjgocpleb',
-          startUrl: {url: 'https://test.google.com/testapp2'},
+          startUrl: 'https://test.google.com/testapp2',
           name: 'Test App 2',
-          iconUrl: {
-            url: 'chrome://app-icon/ahfgeienlihckogmotestdlkjgocpleb/128/1',
-          },
+          iconUrl: 'chrome://app-icon/ahfgeienlihckogmotestdlkjgocpleb/128/1',
+
           mayShowRunOnOsLoginMode: false,
           mayToggleRunOnOsLoginMode: false,
           runOnOsLoginMode: RunOnOsLoginMode.kNotRun,
@@ -91,11 +88,10 @@ suite('AppListTest', () => {
     testAppInfo = {
       appType: AppType.kWebApp,
       id: 'mmfbcljfglbokpmkimbfghdkjmjhdgbg',
-      startUrl: {url: 'https://test.google.com/testapp3'},
+      startUrl: 'https://test.google.com/testapp3',
       name: 'A Test App 3',
-      iconUrl: {
-        url: 'chrome://app-icon/mmfbcljfglbokpmkimbfghdkjmjhdgbg/128/1',
-      },
+      iconUrl: 'chrome://app-icon/mmfbcljfglbokpmkimbfghdkjmjhdgbg/128/1',
+
       mayShowRunOnOsLoginMode: false,
       mayToggleRunOnOsLoginMode: false,
       runOnOsLoginMode: RunOnOsLoginMode.kNotRun,
@@ -107,29 +103,27 @@ suite('AppListTest', () => {
     deprecatedAppInfo = {
       appType: AppType.kDeprecatedChromeApp,
       id: 'mplpmdejoamenolpcojgegminhcnmibo',
-      startUrl: {url: 'https://test.google.com/deprecated_app'},
+      startUrl: 'https://test.google.com/deprecated_app',
       name: 'Deprecated App',
-      iconUrl: {
-        url: 'chrome://extension-icon/mplpmdejoamenolpcojgegminhcnmibo/128/1',
-      },
+      iconUrl: 'chrome://extension-icon/mplpmdejoamenolpcojgegminhcnmibo/128/1',
+
       mayShowRunOnOsLoginMode: false,
       mayToggleRunOnOsLoginMode: false,
       runOnOsLoginMode: RunOnOsLoginMode.kNotRun,
       isLocallyInstalled: true,
       openInWindow: true,
       mayUninstall: true,
-      storePageUrl: {
-        url: '',
-      },
+      storePageUrl: '',
+
     };
     isolatedWebAppInfo = {
       appType: AppType.kIsolatedWebApp,
       id: 'bfeileggdikbmggaogebloieaiejgdie',
-      startUrl: {url: 'isolated-app://amoiebz32b7o24tilu257xne2yf3nkblkploanxzm7ebeglseqpfeaacai'},
+      startUrl:
+          'isolated-app://amoiebz32b7o24tilu257xne2yf3nkblkploanxzm7ebeglseqpfeaacai',
       name: 'IWA',
-      iconUrl: {
-        url: 'chrome://app-icon/bfeileggdikbmggaogebloieaiejgdie/128/1',
-      },
+      iconUrl: 'chrome://app-icon/bfeileggdikbmggaogebloieaiejgdie/128/1',
+
       mayShowRunOnOsLoginMode: true,
       mayToggleRunOnOsLoginMode: true,
       runOnOsLoginMode: RunOnOsLoginMode.kNotRun,
@@ -141,9 +135,11 @@ suite('AppListTest', () => {
     metricsPrivateMock = new MetricsPrivateMock();
     chrome.metricsPrivate =
         metricsPrivateMock as unknown as typeof chrome.metricsPrivate;
-    testBrowserProxy = new TestAppHomeBrowserProxy(apps);
-    callbackRouterRemote = testBrowserProxy.callbackRouterRemote;
-    BrowserProxy.setInstance(testBrowserProxy);
+    fakeHandler = new FakePageHandler(apps);
+    const {instance, remote} = browserProxyFactory.createForTest(fakeHandler);
+    callbackRouterRemote = remote;
+    fakeHandler.setCallbackRouterRemote(callbackRouterRemote);
+    browserProxyFactory.setInstance(instance);
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     appListElement = document.createElement('app-list');
     document.body.appendChild(appListElement);
@@ -166,7 +162,7 @@ suite('AppListTest', () => {
     assertEquals(
         appItems[0]!.shadowRoot.querySelector<HTMLImageElement>(
                                    '#iconImage')!.src,
-        apps.appList[0]!.iconUrl.url);
+        apps.appList[0]!.iconUrl);
 
     assertEquals(
         appItems[1]!.shadowRoot.querySelector('#textContainer')!.textContent,
@@ -174,7 +170,7 @@ suite('AppListTest', () => {
     assertEquals(
         appItems[1]!.shadowRoot.querySelector<HTMLImageElement>(
                                    '#iconImage')!.src,
-        apps.appList[1]!.iconUrl.url + '?grayscale=true');
+        apps.appList[1]!.iconUrl + '?grayscale=true');
   });
 
   test('add/remove app', async () => {
@@ -395,7 +391,7 @@ suite('AppListTest', () => {
     assertTrue(!!uninstall);
 
     uninstall.click();
-    await testBrowserProxy.fakeHandler.whenCalled('uninstallApp')
+    await fakeHandler.whenCalled('uninstallApp')
         .then((appId: string) => assertEquals(appId, apps.appList[0]!.id));
     assertEquals(
         1, metricsPrivateMock.getUserActionCount(AppHomeUserAction.UNINSTALL));
@@ -412,7 +408,7 @@ suite('AppListTest', () => {
     assertTrue(!!appSettings);
 
     appSettings.click();
-    await testBrowserProxy.fakeHandler.whenCalled('showAppSettings')
+    await fakeHandler.whenCalled('showAppSettings')
         .then((appId: string) => assertEquals(appId, apps.appList[0]!.id));
     assertEquals(
         1,
@@ -431,7 +427,7 @@ suite('AppListTest', () => {
     assertTrue(!!createShortcut);
 
     createShortcut.click();
-    await testBrowserProxy.fakeHandler.whenCalled('createAppShortcut')
+    await fakeHandler.whenCalled('createAppShortcut')
         .then((appId: string) => assertEquals(appId, apps.appList[0]!.id));
     assertEquals(
         1,
@@ -445,7 +441,7 @@ suite('AppListTest', () => {
 
     assertEquals(
         appItem.shadowRoot.querySelector<HTMLImageElement>('#iconImage')!.src,
-        apps.appList[1]!.iconUrl.url + '?grayscale=true');
+        apps.appList[1]!.iconUrl + '?grayscale=true');
 
     assertEquals(appItem.ariaLabel, 'Test App 2 (not locally installed)');
 
@@ -468,13 +464,13 @@ suite('AppListTest', () => {
     assertFalse(installLocally.hidden);
 
     installLocally.click();
-    await testBrowserProxy.fakeHandler.whenCalled('installAppLocally')
+    await fakeHandler.whenCalled('installAppLocally')
         .then((appId: string) => assertEquals(appId, apps.appList[1]!.id));
 
     await callbackRouterRemote.$.flushForTesting();
     assertEquals(
         appItem.shadowRoot.querySelector<HTMLImageElement>('#iconImage')!.src,
-        apps.appList[1]!.iconUrl.url);
+        apps.appList[1]!.iconUrl);
 
     assertEquals(appItem.ariaLabel, 'Test App 2');
 
@@ -507,8 +503,7 @@ suite('AppListTest', () => {
     });
 
     appItem.dispatchEvent(mouseEvent);
-    const [appId, clickEvent] =
-        await testBrowserProxy.fakeHandler.whenCalled('launchApp');
+    const [appId, clickEvent] = await fakeHandler.whenCalled('launchApp');
     assertEquals(appId, apps.appList[1]!.id);
     assertEquals(clickEvent.button, mouseEvent.button);
     assertEquals(clickEvent.altKey, mouseEvent.altKey);
@@ -610,8 +605,7 @@ suite('AppListTest', () => {
         apps.appList[0]!.id, appListElement.shadowRoot.activeElement?.id);
 
     document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
-    const [appId, clickEvent] =
-        await testBrowserProxy.fakeHandler.whenCalled('launchApp');
+    const [appId, clickEvent] = await fakeHandler.whenCalled('launchApp');
     assertEquals(appId, apps.appList[0]!.id);
     assertEquals(clickEvent, null);
   });
@@ -641,7 +635,7 @@ suite('AppListTest', () => {
   });
 
   test('Deprecated link', async () => {
-    testBrowserProxy.fakeHandler.addAppToList(deprecatedAppInfo);
+    fakeHandler.addAppToList(deprecatedAppInfo);
 
     const deprecatedAppsLink: DeprecatedAppsLinkElement =
         document.createElement('deprecated-apps-link');
@@ -699,7 +693,7 @@ suite('AppListTest', () => {
     });
     appItem.dispatchEvent(mouseEvent);
 
-    await testBrowserProxy.fakeHandler.whenCalled('launchApp');
+    await fakeHandler.whenCalled('launchApp');
     assertEquals(
         1,
         metricsPrivateMock.getUserActionCount(
@@ -709,7 +703,7 @@ suite('AppListTest', () => {
   test('Clicking deprecation link calls handler', async () => {
     // Test adding an app.
     callbackRouterRemote.addApp(deprecatedAppInfo);
-    testBrowserProxy.fakeHandler.addAppToList(deprecatedAppInfo);
+    fakeHandler.addAppToList(deprecatedAppInfo);
     await callbackRouterRemote.$.flushForTesting();
 
     const deprecatedAppsLink: DeprecatedAppsLinkElement =
@@ -723,7 +717,7 @@ suite('AppListTest', () => {
 
     link.click();
 
-    await testBrowserProxy.fakeHandler.whenCalled('launchDeprecatedAppDialog');
+    await fakeHandler.whenCalled('launchDeprecatedAppDialog');
   });
 
   test('Empty app page', async () => {
@@ -752,7 +746,7 @@ suite('AppListTest', () => {
   });
 
   test('context menu not closed on checkbox click', async () => {
-    // Test for crbug.com/1435592: Clicking the checkbox options on
+    // Test for crbug.com/40265204: Clicking the checkbox options on
     // the context menu does not close it.
     const appItem = appListElement.shadowRoot.querySelector('app-item');
     assertTrue(!!appItem);
@@ -816,6 +810,6 @@ suite('AppListTest', () => {
     const openInWindow =
         contextMenu.querySelector<CrCheckboxElement>('#openInWindow');
     assertTrue(!!openInWindow);
-    assertEquals(openInWindow.hidden, true);
+    assertTrue(openInWindow.hidden);
   });
 });

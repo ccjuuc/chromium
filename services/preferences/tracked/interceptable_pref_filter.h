@@ -6,6 +6,7 @@
 #define SERVICES_PREFERENCES_TRACKED_INTERCEPTABLE_PREF_FILTER_H_
 
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/deferred_sequenced_task_runner.h"
 #include "base/values.h"
@@ -23,21 +24,21 @@ class InterceptablePrefFilter : public PrefFilter {
   // indicates whether the |prefs| were actually altered by the
   // FilterOnLoadInterceptor before being handed back.
   using FinalizeFilterOnLoadCallback =
-      base::OnceCallback<void(base::Value::Dict prefs, bool prefs_altered)>;
+      base::OnceCallback<void(base::DictValue prefs, bool prefs_altered)>;
 
   // A callback to be invoked from FilterOnLoad. It takes ownership of prefs
   // and may modify them before handing them back to this
   // InterceptablePrefFilter via |finalize_filter_on_load|.
   using FilterOnLoadInterceptor = base::OnceCallback<void(
       FinalizeFilterOnLoadCallback finalize_filter_on_load,
-      base::Value::Dict prefs)>;
+      base::DictValue prefs)>;
 
   InterceptablePrefFilter();
   ~InterceptablePrefFilter() override;
 
   // PrefFilter partial implementation.
   void FilterOnLoad(PostFilterOnLoadCallback post_filter_on_load_callback,
-                    base::Value::Dict pref_store_contents) override;
+                    base::DictValue pref_store_contents) override;
 
   // Registers |filter_on_load_interceptor| to intercept the next FilterOnLoad
   // event. At most one FilterOnLoadInterceptor should be registered per
@@ -47,7 +48,8 @@ class InterceptablePrefFilter : public PrefFilter {
 
   void OnStoreDeletionFromDisk() override;
 
-  virtual void OnEncryptorReceived(os_crypt_async::Encryptor encryptor) = 0;
+  virtual void OnEncryptorReceived(
+      scoped_refptr<os_crypt_async::Encryptor> encryptor) = 0;
 
  private:
   // Does any extra filtering required by the implementation of this
@@ -55,7 +57,7 @@ class InterceptablePrefFilter : public PrefFilter {
   // initial caller of FilterOnLoad.
   virtual void FinalizeFilterOnLoad(
       PostFilterOnLoadCallback post_filter_on_load_callback,
-      base::Value::Dict pref_store_contents,
+      base::DictValue pref_store_contents,
       bool prefs_altered) = 0;
 
   virtual base::WeakPtr<InterceptablePrefFilter> AsWeakPtr() = 0;

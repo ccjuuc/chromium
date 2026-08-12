@@ -39,14 +39,16 @@ class LoadProgressSimulator {
                     @Override
                     public void handleMessage(Message msg) {
                         assert msg.what == MSG_ID_UPDATE_PROGRESS;
-                        mProgress = Math.min(1, mProgress += PROGRESS_INCREMENT);
+                        mProgress = Math.min(1.0f, mProgress + PROGRESS_INCREMENT);
                         mModel.set(LoadProgressProperties.PROGRESS, mProgress);
 
                         if (MathUtils.areFloatsEqual(mProgress, 1.0f)) {
                             mModel.set(
                                     LoadProgressProperties.COMPLETION_STATE,
                                     LoadProgressProperties.CompletionState.FINISHED_DO_ANIMATE);
-                            mIsStarted = false;
+                            if (ChromeFeatureList.sAndroidApb144Patch7.isEnabled()) {
+                                mIsStarted = false;
+                            }
                             return;
                         }
                         sendEmptyMessageDelayed(
@@ -57,7 +59,9 @@ class LoadProgressSimulator {
 
     /** Start simulating load progress from a baseline of 0. */
     public void start() {
-        mIsStarted = true;
+        if (ChromeFeatureList.sAndroidApb144Patch7.isEnabled()) {
+            mIsStarted = true;
+        }
         mProgress = 0.0f;
         mModel.set(
                 LoadProgressProperties.COMPLETION_STATE,
@@ -68,7 +72,8 @@ class LoadProgressSimulator {
 
     /** Cancels simulating load progress. */
     public void cancel() {
-        if (!ChromeFeatureList.sAndroidAnimatedProgressBarInBrowser.isEnabled()
+        if (!ChromeFeatureList.sAndroidApb144Patch7.isEnabled()
+                || !ChromeFeatureList.sAndroidAnimatedProgressBarInBrowser.isEnabled()
                 || (mIsStarted && !MathUtils.areFloatsEqual(mProgress, 1.0f))) {
             mModel.set(
                     LoadProgressProperties.COMPLETION_STATE,

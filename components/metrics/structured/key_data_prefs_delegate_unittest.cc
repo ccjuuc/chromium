@@ -7,6 +7,7 @@
 #include <memory>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -62,7 +63,7 @@ constexpr char kValueTwoHash[] = "87CEF12FB15E0B3A";
 constexpr base::TimeDelta kKeyRotationPeriod = base::Days(90);
 
 std::string HashToHex(const uint64_t hash) {
-  return base::HexEncode(&hash, sizeof(uint64_t));
+  return base::HexEncode(base::byte_span_from_ref(hash));
 }
 }  // namespace
 
@@ -94,9 +95,9 @@ class KeyDataPrefsDelegateTest : public testing::Test {
     std::string_view project_name =
         validators->GetProjectName(project_name_hash).value();
 
-    const base::Value::Dict& keys_dict = prefs_.GetDict(kTestPrefName);
+    const base::DictValue& keys_dict = prefs_.GetDict(kTestPrefName);
 
-    const base::Value::Dict* value = keys_dict.FindDict(project_name);
+    const base::DictValue* value = keys_dict.FindDict(project_name);
 
     std::optional<KeyProto> key = util::CreateKeyProtoFromValue(*value);
 
@@ -126,7 +127,7 @@ class KeyDataPrefsDelegateTest : public testing::Test {
 
     ScopedDictPrefUpdate pref_updater(&prefs_, kTestPrefName);
 
-    base::Value::Dict& dict = pref_updater.Get();
+    base::DictValue& dict = pref_updater.Get();
     const validator::Validators* validators = validator::Validators::Get();
     auto project_name = validators->GetProjectName(project_name_hash);
 
@@ -359,7 +360,7 @@ TEST_F(KeyDataPrefsDelegateTest, Purge) {
   key_data_->Purge();
   EXPECT_EQ(delegate_->proto_.keys().size(), 0ul);
 
-  const base::Value::Dict& keys_dict = prefs_.GetDict(kTestPrefName);
+  const base::DictValue& keys_dict = prefs_.GetDict(kTestPrefName);
   EXPECT_EQ(keys_dict.size(), 0ul);
 }
 

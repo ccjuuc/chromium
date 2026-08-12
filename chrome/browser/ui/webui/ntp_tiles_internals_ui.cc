@@ -40,7 +40,7 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/new_tab_page/new_tab_page_util.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "components/prefs/pref_service.h"
 #endif
 
@@ -71,8 +71,7 @@ class ChromeNTPTilesInternalsMessageHandlerClient
   PrefService* GetPrefs() override;
   void RegisterMessageCallback(
       std::string_view message,
-      base::RepeatingCallback<void(const base::Value::List&)> callback)
-      override;
+      base::RepeatingCallback<void(const base::ListValue&)> callback) override;
   void CallJavascriptFunctionSpan(
       std::string_view name,
       base::span<const base::ValueView> values) override;
@@ -108,11 +107,11 @@ ChromeNTPTilesInternalsMessageHandlerClient::MakeMostVisitedSites() {
   most_visited_sites->EnableTileTypes(
       ntp_tiles::MostVisitedSites::EnableTileTypesOptions()
           .with_top_sites(
-              base::Contains(enabled_types, ntp_tiles::TileType::kTopSites))
+              enabled_types.contains(ntp_tiles::TileType::kTopSites))
           .with_custom_links(
-              base::Contains(enabled_types, ntp_tiles::TileType::kCustomLinks))
-          .with_enterprise_shortcuts(base::Contains(
-              enabled_types, ntp_tiles::TileType::kEnterpriseShortcuts)));
+              enabled_types.contains(ntp_tiles::TileType::kCustomLinks))
+          .with_enterprise_shortcuts(enabled_types.contains(
+              ntp_tiles::TileType::kEnterpriseShortcuts)));
 #endif
   return most_visited_sites;
 }
@@ -123,7 +122,7 @@ PrefService* ChromeNTPTilesInternalsMessageHandlerClient::GetPrefs() {
 
 void ChromeNTPTilesInternalsMessageHandlerClient::RegisterMessageCallback(
     std::string_view message,
-    base::RepeatingCallback<void(const base::Value::List&)> callback) {
+    base::RepeatingCallback<void(const base::ListValue&)> callback) {
   web_ui()->RegisterMessageCallback(message, std::move(callback));
 }
 
@@ -136,10 +135,8 @@ void ChromeNTPTilesInternalsMessageHandlerClient::CallJavascriptFunctionSpan(
 void CreateAndAddNTPTilesInternalsHTMLSource(Profile* profile) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUINTPTilesInternalsHost);
-  webui::SetupWebUIDataSource(
-      source,
-      base::span<const webui::ResourcePath>(kNtpTilesInternalsResources),
-      IDR_NTP_TILES_INTERNALS_NTP_TILES_INTERNALS_HTML);
+  webui::SetupWebUIDataSource(source, kNtpTilesInternalsResources,
+                              IDR_NTP_TILES_INTERNALS_NTP_TILES_INTERNALS_HTML);
 
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ScriptSrc,

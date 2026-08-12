@@ -77,10 +77,10 @@ class DemoSetupScreen extends DemoSetupScreenBase {
     };
   }
 
-  private setupSteps_: Record<string, number>;
-  private currentStepIndex_: number;
-  private errorMessage_: string;
-  private isPowerwashRequired_: boolean;
+  declare private setupSteps_: Record<string, number>;
+  declare private currentStepIndex_: number;
+  declare private errorMessage_: string;
+  declare private isPowerwashRequired_: boolean;
 
   constructor() {
     super();
@@ -168,7 +168,7 @@ class DemoSetupScreen extends DemoSetupScreenBase {
    * Close button click handler.
    */
   private onCloseClicked_(): void {
-    // TODO(wzang): Remove this after crbug.com/900640 is fixed.
+    // TODO(wzang): Remove this after crbug.com/41423700 is fixed.
     if (this.isPowerwashRequired_) {
       return;
     }

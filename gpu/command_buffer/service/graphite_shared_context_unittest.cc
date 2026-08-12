@@ -6,6 +6,7 @@
 
 #include "base/threading/thread.h"
 #include "gpu/command_buffer/common/shm_count.h"
+#include "gpu/command_buffer/service/skia_utils.h"
 #include "skia/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,9 +33,14 @@ class MockGpuProcessShmCount : public GpuProcessShmCount {
   MOCK_METHOD(void, Decrement, (), (override));
 };
 
-class MockBackendFlushCallback {
+class MockDelegate : public GraphiteSharedContext::Delegate {
  public:
-  MOCK_METHOD(void, Flush, ());
+  MOCK_METHOD(void, FlushBackend, (), (override));
+  MOCK_METHOD(void,
+              MarkContextLost,
+              (error::ContextLostReason reason),
+              (override));
+  MOCK_METHOD(bool, IsContextLost, (), (const, override));
 };
 
 // Test fixture for GraphiteSharedContext with thread safety enabled.
@@ -86,8 +92,7 @@ class GraphiteSharedContextTest : public testing::TestWithParam<bool> {
 
     wgpu::DeviceDescriptor device_desc = {};
 
-    wgpu::Device device =
-        wgpu::Adapter(adapters[0].Get()).CreateDevice(&device_desc);
+    auto device = wgpu::Adapter(adapters[0].Get()).CreateDevice(&device_desc);
     CHECK(device);
 
     skgpu::graphite::DawnBackendContext backend_context = {};
@@ -95,17 +100,20 @@ class GraphiteSharedContextTest : public testing::TestWithParam<bool> {
     backend_context.fDevice = device;
     backend_context.fQueue = device.GetQueue();
 
-    skgpu::graphite::ContextOptions context_options = {};
+    // Use the default Graphite context options that Chromium uses e.g. disallow
+    // things like out of order recordings.
+    gpu::GpuDriverBugWorkarounds workarounds;
+    auto context_options = GetDefaultGraphiteContextOptions(workarounds);
+
     graphite_shared_context_ = std::make_unique<GraphiteSharedContext>(
         skgpu::graphite::ContextFactory::MakeDawn(backend_context,
                                                   context_options),
         &use_shader_cache_shm_count_, is_thread_safe(), kMaxPendingRecordings,
-        base::BindRepeating(&MockBackendFlushCallback::Flush,
-                            base::Unretained(&backend_flush_callback_)));
+        &delegate_);
   }
 
   MockGpuProcessShmCount use_shader_cache_shm_count_;
-  NiceMock<MockBackendFlushCallback> backend_flush_callback_;
+  NiceMock<MockDelegate> delegate_;
   std::unique_ptr<GraphiteSharedContext> graphite_shared_context_;
   std::unique_ptr<base::Thread> secondary_thread_;
 };
@@ -133,14 +141,12 @@ TEST_P(GraphiteSharedContextTest, ConcurrentAccess) {
   auto run_graphite_functions =
       [](GraphiteSharedContext* graphite_shared_context) {
         // Call a method that acquires the lock
-        std::unique_ptr<skgpu::graphite::Recorder> recorder =
-            graphite_shared_context->makeRecorder();
+        auto recorder = graphite_shared_context->makeRecorder();
         EXPECT_TRUE(recorder);
 
         for (int i = 0; i < 2; ++i) {
           for (int j = 0; j < 10; ++j) {
-            std::unique_ptr<skgpu::graphite::Recording> recording =
-                recorder->snap();
+            auto recording = recorder->snap();
             skgpu::graphite::InsertRecordingInfo info = {};
             info.fRecording = recording.get();
             EXPECT_TRUE(recording);
@@ -172,18 +178,17 @@ TEST_P(GraphiteSharedContextTest, ConcurrentAccess) {
 }
 
 TEST_P(GraphiteSharedContextTest, AsyncShaderCompilesFailed) {
-  std::unique_ptr<skgpu::graphite::Recorder> recorder =
-      graphite_shared_context_->makeRecorder();
+  auto recorder = graphite_shared_context_->makeRecorder();
   EXPECT_TRUE(recorder);
 
   auto ii = SkImageInfo::Make(64, 64, kN32_SkColorType, kPremul_SkAlphaType);
-  sk_sp<SkSurface> surface1 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  auto surface1 = SkSurfaces::RenderTarget(recorder.get(), ii);
   surface1->getCanvas()->clear(SK_ColorRED);
 
-  sk_sp<SkSurface> surface2 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  auto surface2 = SkSurfaces::RenderTarget(recorder.get(), ii);
   surface2->getCanvas()->drawImage(surface1->makeTemporaryImage(), 0, 0);
 
-  std::unique_ptr<skgpu::graphite::Recording> recording = recorder->snap();
+  auto recording = recorder->snap();
   EXPECT_TRUE(recording);
 
   skgpu::graphite::InsertRecordingInfo info = {};
@@ -197,19 +202,43 @@ TEST_P(GraphiteSharedContextTest, AsyncShaderCompilesFailed) {
   EXPECT_FALSE(graphite_shared_context_->insertRecording(info));
 }
 
-TEST_P(GraphiteSharedContextTest, AddCommandsFailed) {
-  std::unique_ptr<skgpu::graphite::Recorder> recorder =
-      graphite_shared_context_->makeRecorder();
+TEST_P(GraphiteSharedContextTest, OutOfOrderRecording) {
+  auto recorder = graphite_shared_context_->makeRecorder();
   EXPECT_TRUE(recorder);
 
   auto ii = SkImageInfo::Make(64, 64, kN32_SkColorType, kPremul_SkAlphaType);
-  sk_sp<SkSurface> surface1 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  auto surface1 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  surface1->getCanvas()->clear(SK_ColorRED);
+  auto recording1 = recorder->snap();
+  EXPECT_TRUE(recording1);
+
+  auto surface2 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  surface2->getCanvas()->drawImage(surface1->makeTemporaryImage(), 0, 0);
+  auto recording2 = recorder->snap();
+  EXPECT_TRUE(recording2);
+
+  skgpu::graphite::InsertRecordingInfo info = {};
+
+  info.fRecording = recording2.get();
+  graphite_shared_context_->insertRecording(info);
+
+  info.fRecording = recording1.get();
+  EXPECT_CALL(delegate_, MarkContextLost(testing::_)).Times(1);
+  EXPECT_FALSE(graphite_shared_context_->insertRecording(info));
+}
+
+TEST_P(GraphiteSharedContextTest, AddCommandsFailed) {
+  auto recorder = graphite_shared_context_->makeRecorder();
+  EXPECT_TRUE(recorder);
+
+  auto ii = SkImageInfo::Make(64, 64, kN32_SkColorType, kPremul_SkAlphaType);
+  auto surface1 = SkSurfaces::RenderTarget(recorder.get(), ii);
   surface1->getCanvas()->clear(SK_ColorRED);
 
-  sk_sp<SkSurface> surface2 = SkSurfaces::RenderTarget(recorder.get(), ii);
+  auto surface2 = SkSurfaces::RenderTarget(recorder.get(), ii);
   surface2->getCanvas()->drawImage(surface1->makeTemporaryImage(), 0, 0);
 
-  std::unique_ptr<skgpu::graphite::Recording> recording = recorder->snap();
+  auto recording = recorder->snap();
   EXPECT_TRUE(recording);
 
   skgpu::graphite::InsertRecordingInfo info = {};
@@ -223,39 +252,37 @@ TEST_P(GraphiteSharedContextTest, AddCommandsFailed) {
 }
 
 TEST_P(GraphiteSharedContextTest, LowPendingRecordings) {
-  std::unique_ptr<skgpu::graphite::Recorder> recorder =
-      graphite_shared_context_->makeRecorder();
+  auto recorder = graphite_shared_context_->makeRecorder();
   EXPECT_TRUE(recorder);
 
-  std::unique_ptr<skgpu::graphite::Recording> recording = recorder->snap();
-  EXPECT_TRUE(recording);
-
-  skgpu::graphite::InsertRecordingInfo info = {};
-  info.fRecording = recording.get();
-
   // No flush is expected if the number of pending recordings is low.
-  EXPECT_CALL(backend_flush_callback_, Flush()).Times(0);
+  EXPECT_CALL(delegate_, FlushBackend()).Times(0);
 
   for (size_t i = 0; i < kMaxPendingRecordings - 1; ++i) {
+    auto recording = recorder->snap();
+    EXPECT_TRUE(recording);
+
+    skgpu::graphite::InsertRecordingInfo info = {};
+    info.fRecording = recording.get();
+
     EXPECT_TRUE(graphite_shared_context_->insertRecording(info));
   }
 }
 
 TEST_P(GraphiteSharedContextTest, MaxPendingRecordings) {
-  std::unique_ptr<skgpu::graphite::Recorder> recorder =
-      graphite_shared_context_->makeRecorder();
+  auto recorder = graphite_shared_context_->makeRecorder();
   EXPECT_TRUE(recorder);
 
-  std::unique_ptr<skgpu::graphite::Recording> recording = recorder->snap();
-  EXPECT_TRUE(recording);
-
-  skgpu::graphite::InsertRecordingInfo info = {};
-  info.fRecording = recording.get();
-
   // Expect a flush when the number of pending recordings reaches the max.
-  EXPECT_CALL(backend_flush_callback_, Flush()).Times(1);
+  EXPECT_CALL(delegate_, FlushBackend()).Times(1);
 
   for (size_t i = 0; i < kMaxPendingRecordings; ++i) {
+    auto recording = recorder->snap();
+    EXPECT_TRUE(recording);
+
+    skgpu::graphite::InsertRecordingInfo info = {};
+    info.fRecording = recording.get();
+
     EXPECT_TRUE(graphite_shared_context_->insertRecording(info));
   }
 }

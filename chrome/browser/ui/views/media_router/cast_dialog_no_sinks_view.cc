@@ -11,11 +11,10 @@
 #include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_helper.h"
@@ -23,33 +22,37 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/media_router/browser/media_router_metrics.h"
 #include "components/vector_icons/vector_icons.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/page_transition_types.h"
-#include "ui/color/color_id.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/image_view.h"
-#include "ui/views/controls/throbber.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view_class_properties.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
+#include "base/scoped_observation.h"
+#include "ui/views/bubble/info_bubble.h"
+#include "ui/views/focus/focus_manager.h"
 #endif
 
 namespace {
 
-class HoverButtonHandCursor : public HoverButton {
+// A HoverButton that uses a hand cursor. On Mac, it also shows an InfoBubble
+// when focused via keyboard traversal to provide visual feedback since tooltips
+// are not automatically shown on focus on that platform.
+class HoverButtonHandCursor : public HoverButton
+#if BUILDFLAG(IS_MAC)
+    ,
+                              public views::WidgetObserver
+#endif
+{
   METADATA_HEADER(HoverButtonHandCursor, HoverButton)
 
  public:
@@ -59,11 +62,58 @@ class HoverButtonHandCursor : public HoverButton {
   HoverButtonHandCursor(const HoverButtonHandCursor&) = delete;
   HoverButtonHandCursor& operator=(const HoverButtonHandCursor&) = delete;
 
-  ~HoverButtonHandCursor() override = default;
+  ~HoverButtonHandCursor() override {
+#if BUILDFLAG(IS_MAC)
+    if (bubble_) {
+      bubble_->GetWidget()->CloseNow();
+      bubble_ = nullptr;
+      observation_.Reset();
+    }
+#endif
+  }
 
   ui::Cursor GetCursor(const ui::MouseEvent& event) override {
     return ui::mojom::CursorType::kHand;
   }
+
+#if BUILDFLAG(IS_MAC)
+  void OnFocus() override {
+    HoverButton::OnFocus();
+    if (!GetFocusManager() || IsMouseHovered() || bubble_) {
+      return;
+    }
+
+    auto bubble = std::make_unique<views::InfoBubble>(
+        this, views::BubbleBorder::NONE, GetTooltipText());
+    bubble_ = bubble.get();
+    bubble_->SetBackgroundColor(ui::kColorTooltipBackground);
+    views::BubbleDialogDelegateView::CreateBubble(std::move(bubble))
+        ->ShowInactive();
+    observation_.Observe(bubble_->GetWidget());
+  }
+
+  void OnBlur() override {
+    HoverButton::OnBlur();
+    if (bubble_) {
+      observation_.Reset();
+      bubble_->GetWidget()->Close();
+      bubble_ = nullptr;
+    }
+  }
+
+  void OnWidgetDestroyed(views::Widget* widget) override {
+    DCHECK(observation_.IsObservingSource(widget));
+    observation_.Reset();
+    bubble_ = nullptr;
+  }
+#endif
+
+ private:
+#if BUILDFLAG(IS_MAC)
+  raw_ptr<views::InfoBubble> bubble_ = nullptr;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
+#endif
 };
 
 BEGIN_METADATA(HoverButtonHandCursor)
@@ -164,7 +214,9 @@ void CastDialogNoSinksView::SetHelpIcon() {
       AddChildViewAt(std::make_unique<HoverButtonHandCursor>(
                          base::BindRepeating(navigate, profile_),
                          ui::ImageModel::FromVectorIcon(
-                             vector_icons::kHelpOutlineIcon,
+                             features::IsRoundedIconsEnabled()
+                                 ? vector_icons::kHelpIcon
+                                 : vector_icons::kHelpOutlineOldIcon,
                              kColorCastDialogHelpIcon, kPrimaryIconSize)),
                      0);
   icon->SetInstallFocusRingOnFocus(true);
@@ -175,6 +227,7 @@ void CastDialogNoSinksView::SetHelpIcon() {
           : IDS_MEDIA_ROUTER_NO_DEVICES_FOUND_BUTTON);
   icon->GetViewAccessibility().SetName(a11y_text);
   icon->SetTooltipText(a11y_text);
+  icon->GetViewAccessibility().SetRole(ax::mojom::Role::kLink);
   views::InkDrop::Get(icon)->SetMode(views::InkDropHost::InkDropMode::OFF);
   icon_ = icon;
 }

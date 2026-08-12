@@ -11,6 +11,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <tuple>
 
 #include "base/auto_reset.h"
 #include "base/containers/flat_map.h"
@@ -29,13 +30,14 @@
 #include "components/services/storage/privileged/mojom/indexed_db_control_test.mojom.h"
 #include "components/services/storage/privileged/mojom/indexed_db_internals_types.mojom.h"
 #include "components/services/storage/public/cpp/buckets/bucket_info.h"
+#include "components/services/storage/public/cpp/inactivity_timer.h"
 #include "components/services/storage/public/cpp/quota_error_or.h"
 #include "components/services/storage/public/mojom/blob_storage_context.mojom.h"
 #include "components/services/storage/public/mojom/file_system_access_context.mojom.h"
-#include "content/browser/indexed_db/blob_reader.h"
 #include "content/browser/indexed_db/indexed_db_data_loss_info.h"
 #include "content/browser/indexed_db/indexed_db_database_error.h"
 #include "content/browser/indexed_db/indexed_db_external_object.h"
+#include "content/browser/indexed_db/instance/blob_reader.h"
 #include "content/browser/indexed_db/status.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -49,14 +51,33 @@ class QuotaManagerProxy;
 namespace content::indexed_db {
 
 class BackingStore;
-class BucketContextHandle;
 class Database;
+
+// Used as a feature param by `kIdbSqliteOnDiskRollout`. Adding, removing and
+// reordering values is fine; just make sure to update
+// `kIdbSqliteOnDiskRolloutStages` when adding new values.
+enum class SqliteRolloutStage {
+  // Use LevelDB exclusively; delete SQLite stores if found.
+  // All on-disk stores emit metrics to the "OnDisk" variant.
+  kUseLevelDbOnly,
+  // Functionally, the same as `kUseLevelDbOnly`.
+  // On-disk stores created during this stage emit metrics to the "Experimental"
+  // variant and previously existing stores emit to the "OnDisk" variant.
+  kUseLevelDbAsControl,
+  // Use SQLite for new stores and corrupted LevelDB stores.
+  // On-disk SQLite stores emit metrics to the "Experimental" variant and
+  // on-disk LevelDB stores emit to the "OnDisk" variant.
+  kUseSqliteForNewStores,
+  // Use SQLite exclusively; delete LevelDB stores if found.
+  // All on-disk stores emit metrics to the "OnDisk" variant.
+  kUseSqliteOnly,
+};
 
 // BucketContext manages the per-bucket IndexedDB state, and other important
 // context like the backing store and lock manager.
 //
 // BucketContext will keep its backing store around while any of these is true:
-// * There are handles referencing the bucket context,
+// * There are `Database` objects,
 // * There are outstanding blob references to this database's blob files, or
 // * The bucket context is in-memory (i.e. an incognito profile).
 //
@@ -145,8 +166,16 @@ class CONTENT_EXPORT BucketContext
 
   ~BucketContext() override;
 
+  // Calculate the usage of the bucket by directly examining the disk. Should be
+  // used in lieu of `GetUsage()` only when there is no live `BucketContext` for
+  // the given bucket.
+  static uint64_t ReadUsageFromDisk(
+      const storage::BucketLocator& bucket_locator,
+      const base::FilePath& data_path);
+
   // All `BucketContext` instances created during the lifetime of the returned
-  // object will use SQLite iff `use_sqlite` is true.
+  // object will use SQLite iff `use_sqlite` is true, unless overridden for a
+  // specific instance with `SetSqliteRolloutStageForTesting()`.
   static base::AutoReset<std::optional<bool>> OverrideShouldUseSqliteForTesting(
       bool use_sqlite);
 
@@ -154,7 +183,16 @@ class CONTENT_EXPORT BucketContext
   // crbug.com/340398745.
   static void InsertTeardownStepForTesting(base::OnceClosure on_teardown);
 
-  bool ShouldUseSqlite() const { return should_use_sqlite_; }
+  static base::TimeDelta GetBackingStoreGracePeriodForTesting();
+  static base::TimeDelta GetIdleTimeoutForTesting();
+
+  // Whether the backing store is using SQLite. `CHECK`s that the backing store
+  // exists.
+  bool IsUsingSqlite() const;
+
+  // Returns the suffix to append to histogram names based on the backing store
+  // type. `CHECK`s that the backing store exists.
+  std::string_view GetHistogramSuffix() const;
 
   void QueueRunTasks();
 
@@ -164,25 +202,24 @@ class CONTENT_EXPORT BucketContext
   // Closes the bucket context, i.e. closes the backing store and closes Mojo
   // connections to renderers. When `doom` is true, the directories containing
   // data will also be deleted. Normally, in-memory bucket contexts never close.
-  // If this is called with `doom` set to true, they will close.
-  void ForceClose(bool doom, const std::string& message);
+  // If this is called with `doom` set to true, they will close. Note that if
+  // `doom` is true, it's expected that `this` will be deleted soon after. To
+  // prevent races, `on_ready_for_destruction` is NOT called in this case.
+  void ForceClose(bool doom);
 
   // Starts capturing state data for indexeddb-internals. The data will be
   // returned the next time `StopMetadataRecording()` is invoked.
   void StartMetadataRecording();
   std::vector<storage::mojom::IdbBucketMetadataPtr> StopMetadataRecording();
 
-  int64_t GetInMemorySize();
+  // Returns the current usage of the bucket, in bytes. `write_in_progress` is
+  // true iff the last readwrite transaction did not flush changes to disk
+  // (i.e., had relaxed durability).
+  uint64_t GetUsage(bool write_in_progress);
 
-  bool IsClosing() const {
-    return closing_stage_ != ClosingState::kNotClosing;
-  }
+  bool IsClosing() const { return closing_stage_ != ClosingState::kNotClosing; }
 
-  ClosingState closing_stage() const {
-    return closing_stage_;
-  }
-
-  void ReportOutstandingBlobs(bool blobs_outstanding);
+  ClosingState closing_stage() const { return closing_stage_; }
 
   // Called when `space_requested` bytes are about to be used by committing a
   // transaction. Will invoke `disk_space_check_callback` if this usage is
@@ -206,23 +243,15 @@ class CONTENT_EXPORT BucketContext
     return bucket_info_.ToBucketLocator();
   }
   BackingStore* backing_store() {
-    return backing_store_.get();
+    return backing_store_ ? std::get<0>(*backing_store_).get() : nullptr;
   }
-  const DBMap& GetDatabasesForTesting() const {
-    return databases_;
-  }
-  PartitionedLockManager& lock_manager() {
-    return *lock_manager_;
-  }
-  const PartitionedLockManager& lock_manager() const {
-    return *lock_manager_;
-  }
+  const DBMap& GetDatabasesForTesting() const { return databases_; }
+  PartitionedLockManager& lock_manager() { return *lock_manager_; }
+  const PartitionedLockManager& lock_manager() const { return *lock_manager_; }
 
   Delegate& delegate() { return delegate_; }
 
-  base::OneShotTimer* close_timer() {
-    return &close_timer_;
-  }
+  base::OneShotTimer* close_timer() { return &close_timer_; }
 
   base::WeakPtr<BucketContext> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -256,7 +285,8 @@ class CONTENT_EXPORT BucketContext
             mojo::PendingAssociatedReceiver<blink::mojom::IDBTransaction>
                 transaction_receiver,
             int64_t transaction_id,
-            int scheduling_priority) override;
+            int scheduling_priority,
+            bool request_shared_connection) override;
   void DeleteDatabase(mojo::PendingAssociatedRemote<
                           blink::mojom::IDBFactoryClient> factory_client,
                       const std::u16string& name,
@@ -286,9 +316,6 @@ class CONTENT_EXPORT BucketContext
                        Status status,
                        const std::string& message);
 
-  // Called when the backing store has been corrupted.
-  void HandleBackingStoreCorruption(const std::string& error_message);
-
   // base::trace_event::MemoryDumpProvider:
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
@@ -296,17 +323,26 @@ class CONTENT_EXPORT BucketContext
   bool in_memory() const { return data_path_.empty(); }
 
  private:
-  friend BucketContextHandle;
   friend class BackingStoreTestBase;
   friend class DatabaseTest;
   friend class IndexedDBTest;
+  friend class IndexedDBTestBase;
+  friend class SqliteBackingStoreRolloutStageTest;
   friend class TransactionTestBase;
 
   FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, CompactionKillSwitchWorks);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, PreCloseTasksStart);
   FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, TooLongOrigin);
   FRIEND_TEST_ALL_PREFIXES(IndexedDBTest, BasicFactoryCreationAndTearDown);
+  FRIEND_TEST_ALL_PREFIXES(IndexedDBSqliteTest, BlobReadPutsOffIdleWork);
   FRIEND_TEST_ALL_PREFIXES(BucketContextTest, BucketSpaceDecay);
   FRIEND_TEST_ALL_PREFIXES(BucketContextTest, MetadataRecordingStateHistory);
+  FRIEND_TEST_ALL_PREFIXES(BucketContextTest,
+                           OverrideShouldUseSqliteForTesting);
+
+  // Overrides the rollout stage for this instance only. Must be called before
+  // backing store initialization.
+  void SetSqliteRolloutStageForTesting(SqliteRolloutStage stage);
 
   // The data structure that stores everything bound to the receiver. This will
   // be stored together with the receiver in the `mojo::ReceiverSet`.
@@ -328,21 +364,32 @@ class CONTENT_EXPORT BucketContext
         client_state_checker_remote;
   };
 
+  void DoForceClose(bool doom, const std::string& message);
+
   Database* CreateAndAddDatabase(const std::u16string& name);
 
-  void OnHandleCreated();
-  void OnHandleDestruction();
-
-  // Returns true if this bucket context can be closed (no references, no blobs,
+  // Returns true if the backing store can be closed (no references, no blobs,
   // and not persisting for incognito).
   bool CanClose();
 
-  void MaybeStartClosing();
-  void StartClosing();
-  void CloseNow();
-  void StartPreCloseTasks();
+  // This should be called any time `this` begins handling an `IDBFactory`
+  // message. It resets the backing store close timer and prevents the backing
+  // store from closing, then potentially initiates the pre-close period when
+  // the message handler completes.
+  [[nodiscard]] base::ScopedClosureRunner ScopedHandlingRequest();
 
+  // Starts the pre-close grace period for the backing store, if appropriate.
+  void MaybeStartClosing();
+  void MaybeStopClosing();
+  // Queues closing the backing store.
+  void CloseSoon();
+  void StartPreCloseTasks();
   void RunTasks();
+
+  // Called when there is any activity that should reset the idle timer.
+  void OnActivity();
+  // Called after a period of inactivity.
+  void RunIdleTasks(bool long_idle);
 
   void OnGotBucketSpaceRemaining(storage::QuotaErrorOr<int64_t> space_left);
 
@@ -375,36 +422,41 @@ class CONTENT_EXPORT BucketContext
 
   std::string SanitizeErrorMessage(const std::string& message);
 
+  // Called when the backing store has been corrupted.
+  void HandleBackingStoreCorruption(const std::string& error_message);
+
+  // Called when a Web Blob is being read from SQLite. `final_result` will hold
+  // a value IFF the read operation has completed.
+  void OnSqliteBlobActivity(std::optional<net::Error> final_result);
+
   const storage::BucketInfo bucket_info_;
 
   // Base directory for blobs and backing store files.
   const base::FilePath data_path_;
 
-  // True if the backing store is SQLite, or would be SQLite if it existed.
-  bool should_use_sqlite_ = false;
-
-  // True if there are blobs referencing this backing store that are still
-  // alive. This is used as closing criteria for this object, see CanClose.
-  bool has_blobs_outstanding_ = false;
-  bool skip_closing_sequence_ = false;
+  // Set at construction. Can be overridden by
+  // `SetSqliteRolloutStageForTesting()`.
+  SqliteRolloutStage sqlite_rollout_stage_;
 
   bool running_tasks_ = false;
 
   ClosingState closing_stage_ = ClosingState::kNotClosing;
+  storage::InactivityTimer idle_timer_;
+  storage::InactivityTimer long_idle_timer_;
+  std::optional<base::TimeTicks> last_idle_tasks_completion_time_;
   base::OneShotTimer close_timer_;
   std::unique_ptr<PartitionedLockManager> lock_manager_;
-  std::unique_ptr<BackingStore> backing_store_;
+  // <BackingStore, is_sqlite, histogram_suffix>. Set only after a successful
+  // call to `InitBackingStore()`.
+  std::optional<
+      std::tuple<std::unique_ptr<BackingStore>, bool, std::string_view>>
+      backing_store_;
   scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy_;
 
   // Databases in the backing store which are already loaded/represented by
   // Database objects. The backing store may have other databases which
   // have not yet been loaded.
-  uint32_t next_database_id_for_locks_ = 0;
   DBMap databases_;
-  // This is the refcount for the number of BucketContextHandle's given out for
-  // this bucket context using OpenReference. This is used as closing criteria
-  // for this object, see CanClose.
-  int64_t open_handles_ = 0;
 
   // A queue of callbacks representing `CheckCanUseDiskSpace()` requests.
   std::queue<std::tuple<int64_t /*space_requested*/,
@@ -432,9 +484,6 @@ class CONTENT_EXPORT BucketContext
       file_reader_map_;
 
   Delegate delegate_;
-
-  // In-memory contexts will not self-close until this bit is flipped to true.
-  bool is_doomed_ = false;
 
   // True if there's already a task queued to call `RunTasks()`.
   bool task_run_queued_ = false;

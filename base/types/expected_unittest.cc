@@ -4,12 +4,12 @@
 
 #include "base/types/expected.h"
 
+#include <concepts>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/strings/to_string.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/gtest_util.h"
@@ -25,6 +25,19 @@ namespace {
 // proposal.
 static_assert(!std::is_convertible_v<int, expected<int, int>>);
 static_assert(!std::is_convertible_v<long, expected<bool, long>>);
+
+// operator bool is conditionally enabled: only when the value type T is not
+// constructible from bool, to avoid bug-prone usage when the value type is
+// convertible to bool, see e.g. https://abseil.io/tips/141.
+//
+// Enabled cases (T is NOT constructible from bool):
+static_assert(std::constructible_from<bool, expected<std::string, int>>);
+static_assert(std::constructible_from<bool, expected<void, int>>);
+//
+// Disabled cases (T IS constructible from bool):
+static_assert(!std::constructible_from<bool, expected<int, int>>);
+static_assert(!std::constructible_from<bool, expected<bool, int>>);
+static_assert(!std::constructible_from<bool, expected<double, int>>);
 
 template <typename T>
 struct Strong {
@@ -65,6 +78,10 @@ struct WeakMoveOnly {
 enum class Error {
   kFail,
 };
+
+// Additional enabled cases that require locally-defined types:
+static_assert(std::is_constructible_v<bool, expected<Strong<int>, int>>);
+static_assert(std::is_constructible_v<bool, expected<Error, int>>);
 
 enum class CvRef {
   kNone,
@@ -602,6 +619,19 @@ TEST(Expected, HasValue) {
   static_assert(!unex.has_value());
 }
 
+TEST(Expected, OperatorBool) {
+  // Test with a type that is NOT constructible from bool, so operator bool is
+  // enabled.
+
+  constexpr expected<std::string, int> ex;
+  static_assert(ex.has_value());
+  static_assert(static_cast<bool>(ex));
+
+  constexpr expected<std::string, int> unex = unexpected(0);
+  static_assert(!unex.has_value());
+  static_assert(!static_cast<bool>(unex));
+}
+
 TEST(Expected, Value) {
   expected<int, int> ex;
   EXPECT_EQ(ex.value(), 0);
@@ -638,12 +668,12 @@ TEST(Expected, ToString) {
   // `expected` should have a custom string representation that prints the
   // contained value/error.
   const std::string value_str = ToString(expected<int, int>(123456));
-  EXPECT_FALSE(base::Contains(value_str, "-byte object at "));
-  EXPECT_TRUE(base::Contains(value_str, "123456"));
+  EXPECT_FALSE(value_str.contains("-byte object at "));
+  EXPECT_TRUE(value_str.contains("123456"));
   const std::string error_str =
       ToString(expected<int, int>(unexpected(123456)));
-  EXPECT_FALSE(base::Contains(error_str, "-byte object at "));
-  EXPECT_TRUE(base::Contains(error_str, "123456"));
+  EXPECT_FALSE(error_str.contains("-byte object at "));
+  EXPECT_TRUE(error_str.contains("123456"));
 }
 
 TEST(Expected, ValueOr) {
@@ -1176,6 +1206,16 @@ TEST(ExpectedVoid, HasValue) {
   static_assert(!unex.has_value());
 }
 
+TEST(ExpectedVoid, OperatorBool) {
+  constexpr expected<void, int> ex;
+  static_assert(ex.has_value());
+  static_assert(static_cast<bool>(ex));
+
+  constexpr expected<void, int> unex = unexpected(0);
+  static_assert(!unex.has_value());
+  static_assert(!static_cast<bool>(unex));
+}
+
 TEST(ExpectedVoid, Value) {
   expected<void, int> ex;
   ex.value();
@@ -1202,11 +1242,11 @@ TEST(ExpectedVoid, ToString) {
   // `expected<void, ...>` should have a custom string representation (that
   // prints the contained error, if applicable).
   const std::string value_str = ToString(expected<void, int>());
-  EXPECT_FALSE(base::Contains(value_str, "-byte object at "));
+  EXPECT_FALSE(value_str.contains("-byte object at "));
   const std::string error_str =
       ToString(expected<void, int>(unexpected(123456)));
-  EXPECT_FALSE(base::Contains(error_str, "-byte object at "));
-  EXPECT_TRUE(base::Contains(error_str, "123456"));
+  EXPECT_FALSE(error_str.contains("-byte object at "));
+  EXPECT_TRUE(error_str.contains("123456"));
 }
 
 TEST(ExpectedVoid, ErrorOr) {

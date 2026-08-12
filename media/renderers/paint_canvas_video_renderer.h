@@ -30,6 +30,7 @@ class RectF;
 }
 
 namespace gpu {
+class ContextSupport;
 struct Capabilities;
 
 namespace gles2 {
@@ -78,6 +79,10 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
     // If true, then reinterpret the video frame as being in sRGB color space
     // (though preserving the original YUV to RGB matrix) when drawing.
     bool reinterpret_as_srgb = false;
+    // If true, the texture backing for a video frame will not be bound to
+    // a viz::RasterContextProvider. This allows it to be passed to a different
+    // thread, to be bound and used on that thread.
+    bool acquire_texture_backing = false;
     // The transformation to apply to the video before the copy.
     VideoTransformation transformation = media::kNoTransformation;
   };
@@ -116,7 +121,7 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
   // |rgb_pixels|.
   static void ConvertVideoFrameToRGBPixels(
       const media::VideoFrame* video_frame,
-      void* rgb_pixels,
+      base::span<uint8_t> rgb_pixels,
       size_t row_bytes,
       SkColorType dst_color_type = kN32_SkColorType,
       bool premultiply_alpha = true,
@@ -126,21 +131,14 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
   // The output format that ConvertVideoFrameToRGBPixels will write.
   static viz::SharedImageFormat GetRGBPixelsOutputFormat();
 
-  // Copy the contents of |video_frame| to |texture| of |destination_gl|.
-  //
-  // The format of |video_frame| must be VideoFrame::NATIVE_TEXTURE.
-  bool CopyVideoFrameTexturesToGLTexture(
+  // Return true only if the shared image and texture formats for R and RG
+  // planes for `channel_format` are supported by `raster_context_provider`.
+  static bool MultiPlaneChannelFormatSupported(
       viz::RasterContextProvider* raster_context_provider,
-      gpu::gles2::GLES2Interface* destination_gl,
-      scoped_refptr<VideoFrame> video_frame,
-      unsigned int target,
-      unsigned int texture,
-      unsigned int internal_format,
-      unsigned int format,
-      unsigned int type,
-      int level,
-      SkAlphaType dst_alpha_type,
-      GrSurfaceOrigin dst_origin);
+      viz::SharedImageFormat::ChannelFormat channel_format);
+
+  static bool IsPixelFormatSupportedForYuvSharedImageConversion(
+      VideoPixelFormat video_format);
 
   // Copy the CPU-side YUV contents of |video_frame| to texture |texture| in
   // context |destination_gl|.
@@ -149,10 +147,12 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
   // |context_3d| has a GrContext that may be used during the copy.
   // CorrectLastImageDimensions() ensures that the source texture will be
   // cropped to |visible_rect|. Returns true on success.
-  bool CopyVideoFrameYUVDataToGLTexture(
+  static bool CopyVideoFrameYUVDataToGLTexture(
       viz::RasterContextProvider* raster_context_provider,
       gpu::gles2::GLES2Interface* destination_gl,
       scoped_refptr<VideoFrame> video_frame,
+      VideoFrameSharedImageCache* rgb_si_cache,
+      VideoFrameSharedImageCache* yuv_si_cache,
       unsigned int target,
       unsigned int texture,
       unsigned int internal_format,
@@ -202,20 +202,30 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
                             GrSurfaceOrigin dst_origin,
                             SkAlphaType dst_alpha_type);
 
+  // Ensures that the GPU has finished reading the video frame.
+  static void SynchronizeVideoFrameRead(
+      scoped_refptr<VideoFrame> video_frame,
+      gpu::gles2::GLES2Interface* gl,
+      gpu::ContextSupport* context_support,
+      base::OnceCallback<gpu::SyncToken()> sync_callback);
+
   // Copies VideoFrame contents to the `destination` shared image. if
   // `use_visible_rect` is set to true, only `VideoFrame::visible_rect()`
   // portion is copied, otherwise copies all underlying buffer.
-  [[nodiscard]] gpu::SyncToken CopyVideoFrameToSharedImage(
+  // If `video_frame` holds pixels and `yuv_shared_image_cache` is provided, the
+  // intermediate YUV SharedImage to which the pixels are uploaded will be
+  // obtained from and stored in the cache.
+  [[nodiscard]] static gpu::SyncToken CopyVideoFrameToSharedImage(
       viz::RasterContextProvider* raster_context_provider,
       scoped_refptr<VideoFrame> video_frame,
       scoped_refptr<gpu::ClientSharedImage> dest_shared_image,
       const gpu::SyncToken& dest_sync_token,
-      bool use_visible_rect);
+      bool use_visible_rect,
+      VideoFrameSharedImageCache* yuv_shared_image_cache = nullptr);
 
   // Check whether video frame can be uploaded through
-  // CopyVideoFrameToSharedImage(). The limitation comes from
-  // VideoFrameYUVConverter.
-  bool CanUseCopyVideoFrameToSharedImage(const VideoFrame& video_frame);
+  // CopyVideoFrameToSharedImage().
+  static bool CanUseCopyVideoFrameToSharedImage(const VideoFrame& video_frame);
 
   // In general, We hold the most recently painted frame to increase the
   // performance for the case that the same frame needs to be painted
@@ -232,7 +242,7 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
   // not keep a reference to the VideoFrame so necessary data is extracted out
   // of it.
   struct Cache {
-    explicit Cache(VideoFrame::ID frame_id);
+    Cache(VideoFrame::ID frame_id, base::RepeatingClosure on_expire);
     ~Cache();
 
     // VideoFrame::unique_id() of the videoframe used to generate the cache.
@@ -254,6 +264,8 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
     // no external users have access to this resource via SkImage. Returns true
     // if the existing resource can be recycled.
     bool Recycle();
+
+    base::RetainingOneShotTimer timer;
   };
 
   // Update the cache holding the most-recently-painted frame. Returns false
@@ -261,22 +273,15 @@ class MEDIA_EXPORT PaintCanvasVideoRenderer {
   bool UpdateLastImage(scoped_refptr<VideoFrame> video_frame,
                        viz::RasterContextProvider* raster_context_provider);
 
+  void OnCacheExpired();
+
   std::optional<Cache> cache_;
 
-  // If |cache_| is not used for a while, it's deleted to save memory.
-  base::DelayTimer cache_deleting_timer_;
   // Stable paint image id to provide to draw image calls.
   cc::PaintImage::Id renderer_stable_id_;
 
   // Used for DCHECKs to ensure method calls executed in the correct thread.
   SEQUENCE_CHECKER(sequence_checker_);
-
-  // The RGB shared image cache backing the texture.
-  std::unique_ptr<VideoFrameSharedImageCache> rgb_shared_image_cache_;
-
-  // Cache of YUV shared images that are created to upload CPU video frame
-  // data to the GPU.
-  std::unique_ptr<VideoFrameSharedImageCache> yuv_shared_image_cache_;
 };
 
 }  // namespace media

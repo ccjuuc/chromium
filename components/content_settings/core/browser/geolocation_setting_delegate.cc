@@ -12,6 +12,7 @@
 #include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/permission_settings_info.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 
 namespace content_settings {
 
@@ -64,7 +65,7 @@ PermissionSetting GeolocationSettingDelegate::InheritInIncognito(
 base::Value GeolocationSettingDelegate::ToValue(
     const PermissionSetting& setting) const {
   const GeolocationSetting& geo_setting = std::get<GeolocationSetting>(setting);
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("approximate", static_cast<int>(geo_setting.approximate));
   dict.Set("precise", static_cast<int>(geo_setting.precise));
   return base::Value(std::move(dict));
@@ -152,6 +153,30 @@ PermissionSetting GeolocationSettingDelegate::ApplyPermissionEmbargo(
     geo_setting.precise = PermissionOption::kDenied;
   }
   return geo_setting;
+}
+
+PermissionSetting
+GeolocationSettingDelegate::RemoveBlockedPermissionsForEphemeralGrant(
+    const PermissionSetting& setting,
+    const PermissionSetting& new_ephemeral_setting) const {
+  const GeolocationSetting& new_ephemeral_geo_setting =
+      std::get<GeolocationSetting>(new_ephemeral_setting);
+  GeolocationSetting geo_setting = std::get<GeolocationSetting>(setting);
+  if (new_ephemeral_geo_setting.approximate == PermissionOption::kAllowed &&
+      geo_setting.approximate == PermissionOption::kDenied) {
+    geo_setting.approximate = PermissionOption::kAsk;
+  }
+  if (new_ephemeral_geo_setting.precise == PermissionOption::kAllowed &&
+      geo_setting.precise == PermissionOption::kDenied) {
+    geo_setting.precise = PermissionOption::kAsk;
+  }
+  return geo_setting;
+}
+
+PermissionSetting GeolocationSettingDelegate::ToPermissionSetting(
+    ContentSetting setting) const {
+  return GeolocationSetting{ToPermissionOption(setting),
+                            ToPermissionOption(setting)};
 }
 
 }  // namespace content_settings

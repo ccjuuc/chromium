@@ -16,13 +16,11 @@ import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import {NewTabFooterDocumentProxy} from './browser_proxy.js';
-import type {CustomizeButtonsDocumentCallbackRouter, CustomizeButtonsHandlerRemote} from './customize_buttons.mojom-webui.js';
-import {SidePanelOpenTrigger} from './customize_buttons.mojom-webui.js';
-import {CustomizeButtonsProxy} from './customize_buttons_proxy.js';
+import type {BrowserProxy as CustomizeButtonsBrowserProxy} from './customize_buttons.mojom-webui.js';
+import {browserProxyFactory as customizeButtonsProxyFactory, SidePanelOpenTrigger} from './customize_buttons.mojom-webui.js';
 import {CustomizeChromeSection} from './customize_chrome.mojom-webui.js';
-import type {BackgroundAttribution, ManagementNotice, NewTabFooterDocumentCallbackRouter, NewTabFooterHandlerInterface} from './new_tab_footer.mojom-webui.js';
-import {NewTabPageType} from './new_tab_footer.mojom-webui.js';
+import type {BrowserProxy as NewTabFooterBrowserProxy, ManagementNotice} from './new_tab_footer.mojom-webui.js';
+import {browserProxyFactory as newTabFooterProxyFactory, NewTabPageType} from './new_tab_footer.mojom-webui.js';
 import {WindowProxy} from './window_proxy.js';
 
 // TODO(crbug.com/419144611) Move to a shared util as it's shared by both the
@@ -99,8 +97,8 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
       showCustomizeButtons_: {type: Boolean},
       showCustomizeText_: {type: Boolean},
       showExtension_: {type: Boolean},
-      ntpType_: {type: Object},
-      backgroundAttributionLink_: {type: Object},
+      ntpType_: {type: Number},
+      backgroundAttributionLink_: {type: String},
       backgroundAttributionText_: {type: String},
       showBackgroundAttribution_: {type: Boolean},
     };
@@ -119,10 +117,8 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
 
   private selectedCustomizeDialogPage_: string|null;
   private canCustomizeChrome_: boolean = false;
-  private callbackRouter_: NewTabFooterDocumentCallbackRouter;
-  private handler_: NewTabFooterHandlerInterface;
-  private customizeCallbackRouter_: CustomizeButtonsDocumentCallbackRouter;
-  private customizeHandler_: CustomizeButtonsHandlerRemote;
+  private browserProxy_: NewTabFooterBrowserProxy;
+  private customizeButtonsBrowserProxy_: CustomizeButtonsBrowserProxy;
   private setCustomizeChromeSidePanelVisibilityListener_: number|null = null;
   private setNtpExtensionNameListenerId_: number|null = null;
   private setBackgroundAttributionListener_: number|null = null;
@@ -131,12 +127,9 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
 
   constructor() {
     super();
-    this.callbackRouter_ =
-        NewTabFooterDocumentProxy.getInstance().callbackRouter;
-    this.handler_ = NewTabFooterDocumentProxy.getInstance().handler;
-    this.customizeCallbackRouter_ =
-        CustomizeButtonsProxy.getInstance().callbackRouter;
-    this.customizeHandler_ = CustomizeButtonsProxy.getInstance().handler;
+    this.browserProxy_ = newTabFooterProxyFactory.getInstance();
+    this.customizeButtonsBrowserProxy_ =
+        customizeButtonsProxyFactory.getInstance();
 
     this.isCustomizeActive_ =
         WindowProxy.getInstance().url.searchParams.has(CUSTOMIZE_URL_PARAM);
@@ -144,38 +137,35 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
         WindowProxy.getInstance().url.searchParams.get(CUSTOMIZE_URL_PARAM);
   }
 
-  override firstUpdated() {
-    ColorChangeUpdater.forDocument().start();
-  }
-
   override connectedCallback() {
     super.connectedCallback();
     this.setNtpExtensionNameListenerId_ =
-        this.callbackRouter_.setNtpExtensionName.addListener((name: string) => {
-          this.extensionName_ = name;
-        });
-    this.handler_.updateNtpExtensionName();
-    this.setManagementNoticeListener_ =
-        this.callbackRouter_.setManagementNotice.addListener(
-            (notice: ManagementNotice) => {
-                this.managementNotice_ = notice;
+        this.browserProxy_.callbackRouter.setNtpExtensionName.addListener(
+            name => {
+              this.extensionName_ = name;
             });
-    this.handler_.updateManagementNotice();
+    this.browserProxy_.handler.updateNtpExtensionName();
+    this.setManagementNoticeListener_ =
+        this.browserProxy_.callbackRouter.setManagementNotice.addListener(
+            notice => {
+              this.managementNotice_ = notice;
+            });
+    this.browserProxy_.handler.updateManagementNotice();
     this.setCustomizeChromeSidePanelVisibilityListener_ =
-        this.customizeCallbackRouter_.setCustomizeChromeSidePanelVisibility
-            .addListener((visible: boolean) => {
+        this.customizeButtonsBrowserProxy_.callbackRouter
+            .setCustomizeChromeSidePanelVisibility.addListener(visible => {
               this.isCustomizeActive_ = visible;
             });
     this.setAttachedTabStateUpdatedListener_ =
-        this.callbackRouter_.attachedTabStateUpdated.addListener(
-            (ntpType: NewTabPageType, canCustomizeChrome: boolean) => {
+        this.browserProxy_.callbackRouter.attachedTabStateUpdated.addListener(
+            (ntpType, canCustomizeChrome) => {
               this.ntpType_ = ntpType;
               this.canCustomizeChrome_ = canCustomizeChrome;
             });
-    this.handler_.updateAttachedTabState();
+    this.browserProxy_.handler.updateAttachedTabState();
     this.setBackgroundAttributionListener_ =
-        this.callbackRouter_.setBackgroundAttribution.addListener(
-            (attribution: BackgroundAttribution) => {
+        this.browserProxy_.callbackRouter.setBackgroundAttribution.addListener(
+            attribution => {
               if (attribution) {
                 this.backgroundAttributionText_ = attribution.name;
                 this.backgroundAttributionLink_ = attribution.url;
@@ -184,7 +174,7 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
                 this.backgroundAttributionLink_ = null;
               }
             });
-    this.handler_.updateBackgroundAttribution();
+    this.browserProxy_.handler.updateBackgroundAttribution();
     // Open Customize Chrome if there are Customize Chrome URL params.
     if (this.isCustomizeActive_) {
       this.setCustomizeChromeSidePanelVisible(this.isCustomizeActive_);
@@ -195,16 +185,19 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
   override disconnectedCallback() {
     super.disconnectedCallback();
     assert(this.setNtpExtensionNameListenerId_);
-    this.callbackRouter_.removeListener(this.setNtpExtensionNameListenerId_);
+    this.browserProxy_.callbackRouter.removeListener(
+        this.setNtpExtensionNameListenerId_);
     assert(this.setManagementNoticeListener_);
-    this.callbackRouter_.removeListener(this.setManagementNoticeListener_);
+    this.browserProxy_.callbackRouter.removeListener(
+        this.setManagementNoticeListener_);
     assert(this.setAttachedTabStateUpdatedListener_);
-    this.callbackRouter_.removeListener(
+    this.browserProxy_.callbackRouter.removeListener(
         this.setAttachedTabStateUpdatedListener_);
     assert(this.setBackgroundAttributionListener_);
-    this.callbackRouter_.removeListener(this.setBackgroundAttributionListener_);
+    this.browserProxy_.callbackRouter.removeListener(
+        this.setBackgroundAttributionListener_);
     assert(this.setCustomizeChromeSidePanelVisibilityListener_);
-    this.customizeCallbackRouter_.removeListener(
+    this.customizeButtonsBrowserProxy_.callbackRouter.removeListener(
         this.setCustomizeChromeSidePanelVisibilityListener_);
   }
 
@@ -230,6 +223,10 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
     }
   }
 
+  override firstUpdated() {
+    ColorChangeUpdater.forDocument().start();
+  }
+
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
 
@@ -246,8 +243,8 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
       // accordingly.
       this.registerHelpBubble(
           CUSTOMIZE_CHROME_BUTTON_ELEMENT_ID,
-          ['ntp-customize-buttons', '.customize-icon'], {anchorPaddingTop: 10});
-      this.handler_.notifyCustomizationButtonVisible();
+          ['ntp-customize-buttons', '.customize-icon'], {paddingTop: 10});
+      this.browserProxy_.handler.notifyCustomizationButtonVisible();
     }
   }
 
@@ -266,28 +263,29 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
         this.ntpType_ === NewTabPageType.kFirstPartyWebUI;
   }
 
-  protected onContextMenu_(e: MouseEvent) {
-    this.handler_.showContextMenu({x: e.clientX, y: e.clientY});
+  protected onContextmenu_(e: MouseEvent) {
+    this.browserProxy_.handler.showContextMenu({x: e.clientX, y: e.clientY});
     recordClick(FooterElement.CONTEXT_MENU);
   }
 
   protected onExtensionNameClick_(e: Event) {
     e.preventDefault();
     recordClick(FooterElement.EXTENSION_NAME);
-    this.handler_.openExtensionOptionsPageWithFallback();
+    this.browserProxy_.handler.openExtensionOptionsPageWithFallback();
   }
 
   protected onManagementNoticeClick_(e: Event) {
     e.preventDefault();
     recordClick(FooterElement.MANAGEMENT_NOTICE);
-    this.handler_.openManagementPage();
+    this.browserProxy_.handler.openManagementPage();
   }
 
   protected onBackgroundAttributionClick_(e: Event) {
     e.preventDefault();
     recordClick(FooterElement.BACKGROUND_ATTRIBUTION);
     assert(!!this.backgroundAttributionLink_);
-    this.handler_.openUrlInCurrentTab(this.backgroundAttributionLink_);
+    this.browserProxy_.handler.openUrlInCurrentTab(
+        this.backgroundAttributionLink_);
   }
 
   protected onCustomizeClick_() {
@@ -296,7 +294,8 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
     this.selectedCustomizeDialogPage_ = null;
     this.setCustomizeChromeSidePanelVisible(!this.isCustomizeActive_);
     if (!this.isCustomizeActive_) {
-      this.customizeHandler_.incrementCustomizeChromeButtonOpenCount();
+      this.customizeButtonsBrowserProxy_.handler
+          .incrementCustomizeChromeButtonOpenCount();
       recordCustomizeChromeOpen(
           FooterCustomizeChromeEntryPoint.CUSTOMIZE_BUTTON);
     }
@@ -322,8 +321,9 @@ export class NewTabFooterAppElement extends NewTabFooterAppElementBase {
       default:
         break;
     }
-    this.customizeHandler_.setCustomizeChromeSidePanelVisible(
-        visible, section, SidePanelOpenTrigger.kNewTabFooter);
+    this.customizeButtonsBrowserProxy_.handler
+        .setCustomizeChromeSidePanelVisible(
+            visible, section, SidePanelOpenTrigger.kNewTabFooter);
     return section;
   }
 

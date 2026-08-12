@@ -39,8 +39,8 @@ if (fuzzing_engine_supports_custom_main && !is_android) {
       deps += [ "//chrome:packed_resources" ]
     }
     public_deps = [
-      "//chrome/test:chrome_test_launcher",
       "//chrome/test:test_support",
+      "//chrome/test/base:chrome_test_launcher",
     ]
   }
 
@@ -49,9 +49,9 @@ if (fuzzing_engine_supports_custom_main && !is_android) {
     flags = [
       "IS_CENTIPEDE=$use_centipede",
       "IS_LIBFUZZER=$use_libfuzzer",
-      "IS_FUZZILLI=$use_fuzzilli",
+      "IS_FUZZILLI=$use_chromium_fuzzilli",
 
-      # crbug.com/1474421: remove these lines once the bug is fixed.
+      # crbug.com/40279313: remove these lines once the bug is fixed.
       "DEBUG_CLUSTERFUZZ_FAILURE=$use_libfuzzer",
     ]
   }
@@ -70,7 +70,17 @@ if (!is_android) {
   }
   in_process_fuzzer("js_in_process_fuzzer") {
     sources = [ "js_in_process_fuzzer.cc" ]
-    deps = [ ":in_process_fuzzer_buildflags" ]
+    deps = [
+      ":in_process_fuzzer_buildflags",
+      "//chrome/browser",
+    ]
+    data_deps = [
+      "//mojo/public/js:bindings_lite",
+      "//mojo/public/mojom/base:base_js_data_deps",
+      "//third_party/blink/public/mojom:mojom_platform_js_data_deps",
+      "//url/mojom:url_mojom_gurl_js_data_deps",
+      "//url/mojom:url_mojom_scheme_host_port_js_data_deps",
+    ]
     is_fuzzilli_compatible = true
   }
   in_process_proto_fuzzer("page_load_in_process_fuzzer") {
@@ -137,11 +147,31 @@ if (!is_android) {
         "//third_party/libprotobuf-mutator",
       ]
     }
+
+    domatolpm_fuzzer("geolocation_element_css_fuzzer_grammar") {
+      template_file = "//chrome/test/fuzzing/geolocation_element_css_fuzzer_data/geolocation_element_css_fuzzer.html"
+      grammars = [ "geocssfuzzer://third_party/domato/src/rules/css.txt" ]
+    }
+
+    in_process_fuzzer("geolocation_element_css_fuzzer") {
+      sources = [ "geolocation_element_css_fuzzer.cc" ]
+      deps = [
+        ":geolocation_element_css_fuzzer_grammar",
+        "//chrome/test/fuzzing:in_process_fuzzer_runner",
+        "//components/viz/common",
+        "//content/public/browser",
+        "//testing/libfuzzer/research/domatolpm:domatolpm_context",
+        "//third_party/libprotobuf-mutator",
+      ]
+    }
   }
 
   domatolpm_fuzzer("webcodecs_fuzzer_grammar") {
     template_file = "//chrome/test/fuzzing/webcodecs_in_process_fuzzer_grammar/template.html"
     grammars = [ "webcodecs_fuzzer://chrome/test/fuzzing/webcodecs_in_process_fuzzer_grammar/webcodecs.txt" ]
+    inputs = [
+      "//chrome/test/fuzzing/webcodecs_in_process_fuzzer_grammar/helpers.txt",
+    ]
   }
   in_process_fuzzer("webcodecs_in_process_fuzzer") {
     sources = [ "webcodecs_in_process_fuzzer.cc" ]

@@ -5,9 +5,12 @@
 #include "third_party/blink/renderer/core/route_matching/route_map.h"
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_union_urlpatterninit_usvstring.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/route_matching/navigation_state.h"
 #include "third_party/blink/renderer/core/route_matching/route.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/core/url_pattern/url_pattern.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
@@ -18,74 +21,101 @@ class RouteMapTest : public PageTestBase {
  public:
   RouteMap& GetRouteMap() const { return RouteMap::Ensure(GetDocument()); }
 
-  void SetURL(const String& url) {
-    GetDocument().SetURL(KURL(url));
-    GetRouteMap().UpdateActiveRoutes();
+  URLPattern* MakePattern(const String& pattern) {
+    auto* input = MakeGarbageCollected<V8URLPatternInput>(pattern);
+    return URLPattern::Create(GetDocument().GetExecutionContext()->GetIsolate(),
+                              input, GetDocument().Url(), ASSERT_NO_EXCEPTION);
   }
 };
 
-TEST_F(RouteMapTest, ParseAndMatch) {
-  SetURL("https://example.com/foo");
+TEST_F(RouteMapTest, AddAndMatch) {
+  KURL start_url("https://example.com/foo");
+  GetDocument().SetURL(start_url);
 
   RouteMap& route_map = GetRouteMap();
-  route_map.ParseAndApplyRoutes(R"({
-    "routes": [
-      {
-        "name": "route1",
-        "pattern": "/foo"
-      },
-      {
-        "name": "route2",
-        "pattern": ["/bar", "/baz"]
-      }
-    ]
-  })");
+  route_map.AddRouteFromRule("--route1", MakePattern("/foo"));
+  route_map.AddRouteFromRule("--route2", MakePattern("/bar"));
 
-  const Route* route1 = route_map.FindRoute("route1");
+  const Route* route1 = route_map.FindRoute(AtomicString("--route1"));
   ASSERT_TRUE(route1);
-  const Route* route2 = route_map.FindRoute("route2");
+  const Route* route2 = route_map.FindRoute(AtomicString("--route2"));
   ASSERT_TRUE(route2);
 
-  EXPECT_TRUE(route1->Matches(NavigationPreposition::kAt));
+  // Nothing should match when there's no active navigation.
+  EXPECT_FALSE(route1->Matches(NavigationPreposition::kAt));
   EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
 
-  SetURL("https://example.com/bar");
+  Element* source_element = nullptr;
+  KURL from = start_url;
+  KURL to = start_url;
+  NavigationState::Create(GetDocument(), from, to, source_element);
+  route_map.SetNavigationStarted();
+  EXPECT_TRUE(route1->Matches(NavigationPreposition::kAt));
+  EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
+  route_map.SetCommitted();
+  EXPECT_TRUE(route1->Matches(NavigationPreposition::kAt));
+  EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
+  route_map.AttemptSetNavigationFinished();
   EXPECT_FALSE(route1->Matches(NavigationPreposition::kAt));
-  EXPECT_TRUE(route2->Matches(NavigationPreposition::kAt));
+  EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
 
-  SetURL("https://example.com/baz");
+  to = KURL("https://example.com/bar");
+  NavigationState::Create(GetDocument(), from, to, source_element);
+  route_map.SetNavigationStarted();
+  EXPECT_TRUE(route1->Matches(NavigationPreposition::kAt));
+  EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
+  GetDocument().SetURL(to);
+  route_map.SetCommitted();
   EXPECT_FALSE(route1->Matches(NavigationPreposition::kAt));
   EXPECT_TRUE(route2->Matches(NavigationPreposition::kAt));
+  route_map.AttemptSetNavigationFinished();
+  EXPECT_FALSE(route1->Matches(NavigationPreposition::kAt));
+  EXPECT_FALSE(route2->Matches(NavigationPreposition::kAt));
 }
 
-TEST_F(RouteMapTest, GetActiveRoutes) {
-  SetURL("https://example.com/foo");
+TEST_F(RouteMapTest, GetActiveRoutesForTesting) {
+  KURL start_url("https://example.com/foo");
+  GetDocument().SetURL(start_url);
 
   RouteMap& route_map = GetRouteMap();
-  route_map.ParseAndApplyRoutes(R"({
-    "routes": [
-      {
-        "name": "route1",
-        "pattern": "/foo"
-      },
-      {
-        "name": "route2",
-        "pattern": ["/bar", "/baz"]
-      },
-      {
-        "name": "route3",
-        "pattern": "/foo"
-      }
-    ]
-  })");
+  route_map.AddRouteFromRule("--route1", MakePattern("/foo"));
+  route_map.AddRouteFromRule("--route2", MakePattern("/bar"));
+  route_map.AddRouteFromRule("--route3", MakePattern("/foo"));
 
-  RouteMatchState::MatchCollection collection;
-  route_map.GetActiveRoutes(NavigationPreposition::kAt, &collection);
+  RouteMap::MatchCollection collection;
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
+  // No active routes when there's no active navigation.
+  EXPECT_EQ(0u, collection.size());
+
+  KURL from = start_url;
+  KURL to = start_url;
+  Element* source_element = nullptr;
+  NavigationState::Create(GetDocument(), from, to, source_element);
+  route_map.SetNavigationStarted();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
   EXPECT_EQ(2u, collection.size());
+  GetDocument().SetURL(to);
+  route_map.SetCommitted();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
+  EXPECT_EQ(2u, collection.size());
+  route_map.AttemptSetNavigationFinished();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
+  // No active routes when there's no active navigation.
+  EXPECT_EQ(0u, collection.size());
 
-  SetURL("https://example.com/bar");
-  route_map.GetActiveRoutes(NavigationPreposition::kAt, &collection);
+  to = KURL("https://example.com/bar");
+  NavigationState::Create(GetDocument(), from, to, source_element);
+  route_map.SetNavigationStarted();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
+  EXPECT_EQ(2u, collection.size());
+  GetDocument().SetURL(to);
+  route_map.SetCommitted();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
   EXPECT_EQ(1u, collection.size());
+  route_map.AttemptSetNavigationFinished();
+  route_map.GetActiveRoutesForTesting(NavigationPreposition::kAt, &collection);
+  // No active routes when there's no active navigation.
+  EXPECT_EQ(0u, collection.size());
 }
 
 }  // anonymous namespace

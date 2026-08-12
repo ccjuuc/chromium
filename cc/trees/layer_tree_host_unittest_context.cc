@@ -16,19 +16,16 @@
 #include "cc/layers/picture_layer.h"
 #include "cc/layers/texture_layer.h"
 #include "cc/layers/texture_layer_impl.h"
-#include "cc/layers/video_layer.h"
-#include "cc/layers/video_layer_impl.h"
 #include "cc/paint/filter_operations.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/resources/ui_resource_manager.h"
 #include "cc/test/fake_content_layer_client.h"
-#include "cc/test/fake_layer_tree_host_client.h"
+#include "cc/test/fake_layer_tree_host_delegate.h"
 #include "cc/test/fake_picture_layer.h"
 #include "cc/test/fake_picture_layer_impl.h"
 #include "cc/test/fake_scoped_ui_resource.h"
 #include "cc/test/fake_scrollbar.h"
 #include "cc/test/fake_scrollbar_layer.h"
-#include "cc/test/fake_video_frame_provider.h"
 #include "cc/test/layer_tree_test.h"
 #include "cc/test/render_pass_test_utils.h"
 #include "cc/test/test_layer_tree_frame_sink.h"
@@ -383,12 +380,9 @@ class LayerTreeHostContextTestLostContextSucceeds
 // Disabled because of crbug.com/736392
 // SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostContextTestLostContextSucceeds);
 
-class LayerTreeHostClientNotVisibleDoesNotCreateLayerTreeFrameSink
+class LayerTreeHostDelegateNotVisibleDoesNotCreateLayerTreeFrameSink
     : public LayerTreeHostContextTest {
  public:
-  LayerTreeHostClientNotVisibleDoesNotCreateLayerTreeFrameSink()
-      : LayerTreeHostContextTest() {}
-
   void WillBeginTest() override {
     // Override to not become visible.
     DCHECK(!layer_tree_host()->IsVisible());
@@ -407,7 +401,7 @@ class LayerTreeHostClientNotVisibleDoesNotCreateLayerTreeFrameSink
 };
 
 SINGLE_AND_MULTI_THREAD_TEST_F(
-    LayerTreeHostClientNotVisibleDoesNotCreateLayerTreeFrameSink);
+    LayerTreeHostDelegateNotVisibleDoesNotCreateLayerTreeFrameSink);
 
 // This tests the LayerTreeFrameSink release logic in the following sequence.
 // SetUp LTH and create and init LayerTreeFrameSink.
@@ -416,18 +410,23 @@ SINGLE_AND_MULTI_THREAD_TEST_F(
 // ...
 // LTH::SetVisible(true);
 // Create and init new LayerTreeFrameSink
-class LayerTreeHostClientTakeAwayLayerTreeFrameSink
+class LayerTreeHostDelegateTakeAwayLayerTreeFrameSink
     : public LayerTreeHostContextTest {
  public:
-  LayerTreeHostClientTakeAwayLayerTreeFrameSink()
-      : LayerTreeHostContextTest(), setos_counter_(0) {}
+  LayerTreeHostDelegateTakeAwayLayerTreeFrameSink() : setos_counter_(0) {}
 
-  void BeginTest() override { PostSetNeedsCommitToMainThread(); }
+  void BeginTest() override {
+    // Defer main frame updates to prevent non-blocking commits from racing with
+    // ReleaseLayerTreeFrameSink.
+    defer_main_frame_update_ = layer_tree_host()->DeferMainFrameUpdate();
+  }
 
   void RequestNewLayerTreeFrameSink() override {
     if (layer_tree_host()->IsVisible()) {
       setos_counter_++;
       LayerTreeHostContextTest::RequestNewLayerTreeFrameSink();
+    } else {
+      request_buffered_ = true;
     }
   }
 
@@ -443,7 +442,7 @@ class LayerTreeHostClientTakeAwayLayerTreeFrameSink
     MainThreadTaskRunner()->PostTask(
         FROM_HERE,
         base::BindOnce(
-            &LayerTreeHostClientTakeAwayLayerTreeFrameSink::MakeVisible,
+            &LayerTreeHostDelegateTakeAwayLayerTreeFrameSink::MakeVisible,
             base::Unretained(this)));
   }
 
@@ -452,7 +451,7 @@ class LayerTreeHostClientTakeAwayLayerTreeFrameSink
     if (setos_counter_ == 1) {
       MainThreadTaskRunner()->PostTask(
           FROM_HERE,
-          base::BindOnce(&LayerTreeHostClientTakeAwayLayerTreeFrameSink::
+          base::BindOnce(&LayerTreeHostDelegateTakeAwayLayerTreeFrameSink::
                              HideAndReleaseLayerTreeFrameSink,
                          base::Unretained(this)));
     } else {
@@ -463,12 +462,25 @@ class LayerTreeHostClientTakeAwayLayerTreeFrameSink
   void MakeVisible() {
     EXPECT_TRUE(layer_tree_host()->GetTaskRunnerProvider()->IsMainThread());
     layer_tree_host()->SetVisible(true);
+    if (request_buffered_) {
+      request_buffered_ = false;
+      layer_tree_host()->DidFailToInitializeLayerTreeFrameSink();
+    }
+  }
+
+  void DidFailToInitializeLayerTreeFrameSink() override {
+    // Expected failure if the request was buffered due to visibility.
+    // We intentionally don't call the base class so `times_create_failed_`
+    // doesn't increment and fail the test in TearDown().
+    CHECK(request_buffered_);
   }
 
   int setos_counter_;
+  bool request_buffered_ = false;
+  std::unique_ptr<ScopedDeferMainFrameUpdate> defer_main_frame_update_;
 };
 
-SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostClientTakeAwayLayerTreeFrameSink);
+SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostDelegateTakeAwayLayerTreeFrameSink);
 
 class MultipleCompositeDoesNotCreateLayerTreeFrameSink
     : public LayerTreeHostContextTest {
@@ -901,42 +913,6 @@ class LayerTreeHostContextTestDontUseLostResources
     layer_with_mask->SetMaskLayer(mask);
     root->AddChild(layer_with_mask);
 
-    scoped_refptr<VideoLayer> video_color =
-        VideoLayer::Create(&color_frame_provider_, media::VIDEO_ROTATION_0);
-    video_color->SetBounds(gfx::Size(10, 10));
-    video_color->SetIsDrawable(true);
-    root->AddChild(video_color);
-
-    scoped_refptr<VideoLayer> video_hw =
-        VideoLayer::Create(&hw_frame_provider_, media::VIDEO_ROTATION_0);
-    video_hw->SetBounds(gfx::Size(10, 10));
-    video_hw->SetIsDrawable(true);
-    root->AddChild(video_hw);
-
-    scoped_refptr<VideoLayer> video_scaled_hw =
-        VideoLayer::Create(&scaled_hw_frame_provider_, media::VIDEO_ROTATION_0);
-    video_scaled_hw->SetBounds(gfx::Size(10, 10));
-    video_scaled_hw->SetIsDrawable(true);
-    root->AddChild(video_scaled_hw);
-
-    color_video_frame_ = VideoFrame::CreateColorFrame(si_size, 0x80, 0x80, 0x80,
-                                                      base::TimeDelta());
-    ASSERT_TRUE(color_video_frame_);
-    hw_video_frame_ = VideoFrame::WrapSharedImage(
-        media::PIXEL_FORMAT_ARGB, shared_image, sync_token,
-        media::VideoFrame::ReleaseMailboxCB(), si_size, gfx::Rect(si_size),
-        si_size, base::TimeDelta());
-    ASSERT_TRUE(hw_video_frame_);
-    scaled_hw_video_frame_ = VideoFrame::WrapSharedImage(
-        media::PIXEL_FORMAT_ARGB, shared_image, sync_token,
-        media::VideoFrame::ReleaseMailboxCB(), si_size, gfx::Rect(0, 0, 3, 2),
-        si_size, base::TimeDelta());
-    ASSERT_TRUE(scaled_hw_video_frame_);
-
-    color_frame_provider_.set_frame(color_video_frame_);
-    hw_frame_provider_.set_frame(hw_video_frame_);
-    scaled_hw_frame_provider_.set_frame(scaled_hw_video_frame_);
-
     // Enable the hud.
     LayerTreeDebugState debug_state;
     debug_state.show_property_changed_rects = true;
@@ -954,18 +930,6 @@ class LayerTreeHostContextTestDontUseLostResources
   }
 
   void BeginTest() override { PostSetNeedsCommitToMainThread(); }
-
-  void CommitCompleteOnThread(LayerTreeHostImpl* host_impl) override {
-    LayerTreeHostContextTest::CommitCompleteOnThread(host_impl);
-
-    if (host_impl->active_tree()->source_frame_number() == 3) {
-      // On the third commit we're recovering from context loss. Hardware
-      // video frames should not be reused by the VideoFrameProvider, but
-      // software frames can be.
-      hw_frame_provider_.set_frame(nullptr);
-      scaled_hw_frame_provider_.set_frame(nullptr);
-    }
-  }
 
   void DrawLayersOnThread(LayerTreeHostImpl* host_impl) override {
     if (host_impl->active_tree()->source_frame_number() == 2) {
@@ -1007,14 +971,6 @@ class LayerTreeHostContextTestDontUseLostResources
 
   scoped_refptr<viz::TestContextProvider> child_context_provider_;
   std::unique_ptr<viz::ClientResourceProvider> child_resource_provider_;
-
-  scoped_refptr<VideoFrame> color_video_frame_;
-  scoped_refptr<VideoFrame> hw_video_frame_;
-  scoped_refptr<VideoFrame> scaled_hw_video_frame_;
-
-  FakeVideoFrameProvider color_frame_provider_;
-  FakeVideoFrameProvider hw_frame_provider_;
-  FakeVideoFrameProvider scaled_hw_frame_provider_;
 };
 
 SINGLE_AND_MULTI_THREAD_TEST_F(LayerTreeHostContextTestDontUseLostResources);
@@ -1519,14 +1475,14 @@ class UIResourceLostEviction : public UIResourceLostTestSimple {
         break;
       case 3:
         // When renderer's visibility is set to false, it evicts all the UI
-        // resources. In TreesInViz mode, renderer does not delete the UI
-        // resource until it gets ack back from the viz on the deletion request
-        // it has sent.
-        if (TreesInViz()) {
-          ASSERT_EQ(4u, sii_->shared_image_count());
-        } else {
-          ASSERT_EQ(2u, sii_->shared_image_count());
-        }
+        // resources. In TreesInViz mode, the renderer now immediately flushes
+        // these deletions to Viz (via a synchronization-only update) to ensure
+        // memory is reclaimed immediately upon backgrounding.
+        //
+        // Thus, by the time we reach this step (after visibility is restored),
+        // the old resources should have already been returned and deleted,
+        // leaving only the 2 newly recreated resources.
+        ASSERT_EQ(2u, sii_->shared_image_count());
 
         // The first resource should have been recreated after visibility was
         // restored.

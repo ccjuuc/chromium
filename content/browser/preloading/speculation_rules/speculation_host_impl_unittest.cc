@@ -14,9 +14,9 @@
 #include "content/public/common/content_client.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "mojo/public/cpp/system/functions.h"
@@ -274,86 +274,50 @@ TEST_F(SpeculationHostImplTest, ReportEmptySpeculationRulesTags) {
   EXPECT_EQ("SH_EMPTY_TAGS", bad_message_error);
 }
 
-class SpeculationHostImplLinkPreviewTest : public SpeculationHostImplTest {
- public:
-  SpeculationHostImplLinkPreviewTest() {
-    feature_list_.InitAndEnableFeature(blink::features::kLinkPreview);
-  }
-
-  ~SpeculationHostImplLinkPreviewTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(SpeculationHostImplLinkPreviewTest, BasicLinkPreview) {
-  // Get the RenderFrameHost.
+// Tests that SpeculationHostImpl::OnLCPPredicted ignores messages from an
+// inactive frame.
+TEST_F(SpeculationHostImplTest, OnLCPPredictedInactiveFrame) {
   RenderFrameHostImpl* render_frame_host = GetRenderFrameHost();
   mojo::Remote<blink::mojom::SpeculationHost> remote;
   SpeculationHostImpl::Bind(render_frame_host,
                             remote.BindNewPipeAndPassReceiver());
 
-  StrictMock<test::MockLinkPreviewWebContentsDelegate> delegate;
-  WebContents::FromRenderFrameHost(render_frame_host)->SetDelegate(&delegate);
-  const GURL preview_url = GetSameOriginUrl("/empty.html");
+  // Set the frame to inactive.
+  render_frame_host->SetLifecycleState(
+      RenderFrameHostImpl::LifecycleStateImpl::kInBackForwardCache);
+  EXPECT_FALSE(render_frame_host->IsActive());
 
-  // Expect the delegate to receive one `InitiatePreview` call for
-  // `preview_url`.
-  EXPECT_CALL(delegate, InitiatePreview(_, preview_url)).Times(Exactly(1));
-
-  remote->InitiatePreview(preview_url);
+  // Call OnLCPPredicted. It should return early without creating a decider or
+  // calling its method.
+  EXPECT_FALSE(PreloadingDecider::GetForCurrentDocument(render_frame_host));
+  remote->OnLCPPredicted();
   remote.FlushForTesting();
+  EXPECT_FALSE(PreloadingDecider::GetForCurrentDocument(render_frame_host));
 }
 
-// Verify link preview works in fenced frame.
-TEST_F(SpeculationHostImplLinkPreviewTest, FencedFrameLinkPreview) {
-  // Add a fenced frame RenderFrameHost.
-  TestRenderFrameHost* fenced_frame_rfh =
-      static_cast<TestRenderFrameHost*>(GetRenderFrameHost())
-          ->AppendFencedFrame();
+// Tests that SpeculationHostImpl::OnLCPPredicted crashes the renderer process
+// if it receives a message from a subframe.
+TEST_F(SpeculationHostImplTest, OnLCPPredictedSubframe) {
+  // Add a subframe.
+  RenderFrameHostImpl* subframe_rfh = static_cast<RenderFrameHostImpl*>(
+      content::RenderFrameHostTester::For(GetRenderFrameHost())
+          ->AppendChild("subframe"));
+  EXPECT_TRUE(subframe_rfh->GetParent());
+
   mojo::Remote<blink::mojom::SpeculationHost> remote;
-  SpeculationHostImpl::Bind(fenced_frame_rfh,
-                            remote.BindNewPipeAndPassReceiver());
+  SpeculationHostImpl::Bind(subframe_rfh, remote.BindNewPipeAndPassReceiver());
 
-  StrictMock<test::MockLinkPreviewWebContentsDelegate> delegate;
-  WebContents::FromRenderFrameHost(fenced_frame_rfh)->SetDelegate(&delegate);
-  const GURL preview_url = GetSameOriginUrl("/empty.html");
+  // Set up the error handler for bad mojo messages.
+  std::string bad_message_error;
+  mojo::SetDefaultProcessErrorHandler(base::BindLambdaForTesting(
+      [&](const std::string& error) { bad_message_error = error; }));
 
-  // Expect the delegate to receive one `InitiatePreview` call for
-  // `preview_url`.
-  EXPECT_CALL(delegate, InitiatePreview(_, preview_url)).Times(Exactly(1));
-
-  remote->InitiatePreview(preview_url);
+  EXPECT_FALSE(PreloadingDecider::GetForCurrentDocument(subframe_rfh));
+  remote->OnLCPPredicted();
   remote.FlushForTesting();
-}
-
-// Verify link preview is disabled after fenced frame disables untrusted network
-// access.
-TEST_F(SpeculationHostImplLinkPreviewTest,
-       FencedFrameNetworkCutoffDisablesLinkPreview) {
-  // Add a fenced frame RenderFrameHost.
-  TestRenderFrameHost* fenced_frame_rfh =
-      static_cast<TestRenderFrameHost*>(GetRenderFrameHost())
-          ->AppendFencedFrame();
-  mojo::Remote<blink::mojom::SpeculationHost> remote;
-  SpeculationHostImpl::Bind(fenced_frame_rfh,
-                            remote.BindNewPipeAndPassReceiver());
-
-  // Disable fenced frame's network.
-  fenced_frame_rfh->frame_tree_node()
-      ->GetFencedFrameProperties(
-          FencedFramePropertiesNodeSource::kFrameTreeRoot)
-      ->MarkDisabledNetworkForCurrentAndDescendantFrameTrees();
-
-  StrictMock<test::MockLinkPreviewWebContentsDelegate> delegate;
-  WebContents::FromRenderFrameHost(fenced_frame_rfh)->SetDelegate(&delegate);
-
-  // Expect the delegate not to receive `InitiatePreview` call.
-  const GURL preview_url = GetSameOriginUrl("/empty.html");
-  EXPECT_CALL(delegate, InitiatePreview(_, preview_url)).Times(Exactly(0));
-
-  remote->InitiatePreview(preview_url);
-  remote.FlushForTesting();
+  EXPECT_FALSE(PreloadingDecider::GetForCurrentDocument(subframe_rfh));
+  EXPECT_EQ(bad_message_error,
+            "SpeculationHost mojo message is sent from a subframe.");
 }
 
 }  // namespace

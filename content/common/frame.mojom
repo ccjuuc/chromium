@@ -15,7 +15,6 @@ import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "skia/public/mojom/skcolor.mojom";
-import "services/network/public/mojom/attribution.mojom";
 import "services/network/public/mojom/content_security_policy.mojom";
 import "services/network/public/mojom/url_loader.mojom";
 import "services/network/public/mojom/url_loader_completion_status.mojom";
@@ -23,12 +22,12 @@ import "services/network/public/mojom/url_loader_factory.mojom";
 import "services/network/public/mojom/url_request.mojom";
 import "services/network/public/mojom/url_response_head.mojom";
 import "services/service_manager/public/mojom/interface_provider.mojom";
+import "services/viz/public/mojom/compositing/compositor_frame_sink.mojom";
 import "services/viz/public/mojom/compositing/surface_id.mojom";
 import "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom";
 import "third_party/blink/public/mojom/blob/blob_url_store.mojom";
 import "third_party/blink/public/mojom/browser_interface_broker.mojom";
 import "third_party/blink/public/mojom/commit_result/commit_result.mojom";
-import "third_party/blink/public/mojom/conversions/conversions.mojom";
 import "third_party/blink/public/mojom/devtools/console_message.mojom";
 import "third_party/blink/public/mojom/fenced_frame/fenced_frame.mojom";
 import "third_party/blink/public/mojom/fenced_frame/fenced_frame_config.mojom";
@@ -45,7 +44,6 @@ import "third_party/blink/public/mojom/loader/resource_load_info.mojom";
 import "third_party/blink/public/mojom/loader/url_loader_factory_bundle.mojom";
 import "third_party/blink/public/mojom/messaging/transferable_message.mojom";
 import "third_party/blink/public/mojom/navigation/navigation_params.mojom";
-import "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom";
 import "third_party/blink/public/mojom/page/page.mojom";
 import "third_party/blink/public/mojom/page/prerender_page_param.mojom";
 import "third_party/blink/public/mojom/picture_in_picture_window_options/picture_in_picture_window_options.mojom";
@@ -56,6 +54,7 @@ import "third_party/blink/public/mojom/service_worker/controller_service_worker.
 import "third_party/blink/public/mojom/service_worker/service_worker_container.mojom";
 import "third_party/blink/public/mojom/tokens/tokens.mojom";
 import "third_party/blink/public/mojom/webpreferences/web_preferences.mojom";
+import "third_party/blink/public/mojom/widget/platform_widget.mojom";
 import "third_party/blink/public/mojom/widget/visual_properties.mojom";
 import "third_party/blink/public/mojom/window_features/window_features.mojom";
 import "ui/accessibility/mojom/ax_tree_update.mojom";
@@ -165,10 +164,6 @@ struct CreateViewParams {
   // Indicates which browsing context group the page in this view belongs to.
   mojo_base.mojom.UnguessableToken browsing_context_group_token;
 
-  // Indicates whether web or OS-level Attribution Reporting is supported. See
-  // https://github.com/WICG/attribution-reporting-api/blob/main/app_to_web.md
-  network.mojom.AttributionSupport attribution_support;
-
   // Identifies the navigation that triggered this view creation, if any. Used
   // for collecting metrics.
   mojo_base.mojom.UnguessableToken? navigation_metrics_token;
@@ -214,6 +209,13 @@ struct CreateLocalMainFrameParams {
   // frame that is not yet swapped in.
   blink.mojom.DocumentToken document_token;
 
+  // Token used to deterministically generate the opaque origin for the initial
+  // empty document of a sandboxed main frame (e.g., via `window.open()` with
+  // sandbox flags). Generated in the browser by
+  // `SetOriginDependentStateOfNewFrame()` and sent here so both browser and
+  // renderer derive the same origin. Null if the frame is not sandboxed.
+  mojo_base.mojom.UnguessableToken? sandbox_origin_token;
+
   // Null when the main frame has no policy container yet (for example, because
   // it is a speculative RenderFrameHost), and the policy container will be
   // sent during CommitNavigation.
@@ -256,6 +258,11 @@ struct CreateFrameWidgetParams {
   pending_associated_receiver<blink.mojom.FrameWidget> frame_widget;
   pending_associated_remote<blink.mojom.WidgetHost> widget_host;
   pending_associated_receiver<blink.mojom.Widget> widget;
+
+  // The pipes needed for initial frame sink creation. This allows the renderer
+  // to communicate with the frame sink in the GPU process earlier, without
+  // having to request the browser process for it first.
+  blink.mojom.InitialFrameSinkParams? initial_frame_sink_params;
 
   // The initial visual properties of the widget.
   blink.mojom.VisualProperties visual_properties;
@@ -473,47 +480,6 @@ interface Frame {
   // and can not be deleted directly.
   Delete(FrameDeleteIntention intention);
 
-  // Requests that a speculative RenderFrameHost which the browser has already
-  // sent a `CommitNavigation()` to should swap itself back out for a
-  // RenderFrameProxy to effectively undo the `CommitNavigation()`.
-  //
-  // This is needed when discarding a speculative RenderFrameHost that's already
-  // been asked to commit a navigation, as the state between the browser and
-  // renderer would otherwise be out of sync:
-  //
-  // - from the perspective of the browser process, the speculative
-  //   RenderFrameHost has not yet committed as it has not yet acknowledged the
-  //   `CommitNavigation()` with `DidCommitNavigation()`.
-  // - but any IPCs sent from the browser to the renderer will see that the
-  //   provisional RenderFrame has already been swapped in and the
-  //   RenderFrameProxy it replaced destroyed.
-  //
-  // Note: This, of course, does not work for RenderDocument, since the
-  // provisional RenderFrame replaces *another* RenderFrame when it commits. The
-  // state associated with the replaced RenderFrame is already gone, and it's
-  // impossible to restore it. Fixing this issue for RenderDocument will
-  // require serious reworking of how navigations are committed.
-  //
-  // While this is very similar to `Unload()`, the renderer will not send any
-  // unload ACK back to the browser on completion. As a result, there is no
-  // special handling to ensure messages queued by Window.postMessage() are
-  // forwarded.
-  //
-  // `new_remote_frame_replication_state`, `new_remote_frame_token`, and
-  // `new_remote_main_frame_interfaces` are used to construct the new
-  // RenderFrameProxy. `is_loading` mirrors the loading state of the
-  // FrameTreeNode's current RenderFrameHost and determines whether
-  // the newly-constructed RenderFrameProxy is marked as loading or not.
-  //
-  // TODO(dcheng): It's unclear if `is_loading` is necessary; presently, it
-  // always seems to be true when this IPC is called.
-  UndoCommitNavigation(
-      bool is_loading,
-      blink.mojom.FrameReplicationState new_remote_frame_replication_state,
-      blink.mojom.RemoteFrameToken new_remote_frame_token,
-      blink.mojom.RemoteFrameInterfacesFromBrowser new_remote_frame_interfaces,
-      blink.mojom.RemoteMainFrameInterfaces new_remote_main_frame_interfaces);
-
   GetInterfaceProvider(
       pending_receiver<service_manager.mojom.InterfaceProvider> interfaces);
 
@@ -614,19 +580,19 @@ struct CreateNewWindowParams {
   // The window features to use for the new window.
   blink.mojom.WindowFeatures features;
 
-  // The impression associated with the navigation in the new window, if
-  // one is specified.
-  blink.mojom.Impression? impression;
-
   // Governs how downloads are handled if `target_url` results in a download.
   blink.mojom.NavigationDownloadPolicy download_policy;
 
   // Additional parameters for creating picture-in-picture windows.
   blink.mojom.PictureInPictureWindowOptions? pip_options;
 
-  // The navigation initiator's user activation and ad status.
-  blink.mojom.NavigationInitiatorActivationAndAdStatus
-      initiator_activation_and_ad_status;
+  // Whether this navigation started with a transient user activation.
+  bool started_with_transient_activation;
+
+  // Whether this navigation was started by an ad (i.e., an ad script was in the
+  // JavaScript stack at the time of the navigation, or the frame is an ad
+  // frame, as determined by Ad Tagging).
+  bool started_by_ad;
 
   // The pending mojo connection to the Frame implementation in the renderer.
   pending_associated_remote<content.mojom.Frame> frame_remote;
@@ -700,6 +666,14 @@ struct CreateNewWindowReply {
 
   blink.mojom.DocumentToken document_token;
 
+  // Token used to deterministically generate the opaque origin for the initial
+  // empty document of a sandboxed popup (e.g., `window.open()` with sandbox
+  // flags). Generated in the browser by `SetOriginDependentStateOfNewFrame()`
+  // and sent here so both browser and renderer derive the same origin.
+  // TODO(crbug.com/486082219): Once the fallback logic for popups escaping
+  // sandbox is removed, this will only be set for truly sandboxed cases.
+  mojo_base.mojom.UnguessableToken? sandbox_origin_token;
+
   // The policy container for the new frame that will be created by Blink in
   // response.
   blink.mojom.PolicyContainer policy_container;
@@ -726,6 +700,16 @@ interface NavigationRendererCancellationListener {
   // script (e.g. through calling window.stop() or document.open()) that runs
   // on the same task. See RendererCancellationThrottle for more details.
   RendererCancellationWindowEnded();
+};
+
+// A per-navigation interface used to track duplicate navigation attempts.
+// This is bound to a specific NavigationRequest in the browser process.
+interface NavigationRendererIgnoreDuplicateNavigationListener {
+  // Notifies the browser that a subsequent navigation attempt was treated
+  // as a duplicate and was ignored because this navigation was already
+  // in progress. This signal is used to flag the original navigation for
+  // performance metrics.
+  DidIgnoreDuplicateNavigation();
 };
 
 // Implemented by the frame server (i.e. the browser process). For messages that
@@ -832,7 +816,11 @@ interface FrameHost {
       pending_remote<blink.mojom.NavigationStateKeepAliveHandle>?
           initiator_navigation_state_keep_alive_handle,
       pending_receiver<NavigationRendererCancellationListener>
-          renderer_cancellation_listener);
+          renderer_cancellation_listener,
+      pending_receiver<NavigationRendererIgnoreDuplicateNavigationListener>
+          renderer_ignore_duplicate_navigation_listener,
+      pending_receiver<blink.mojom.NavigationResumeDeferredCommitListener>?
+          resume_deferred_commit_listener);
 
   // Sent when a subresource response has started.
   //

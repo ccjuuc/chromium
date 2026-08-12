@@ -7,7 +7,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/box_fragment_builder.h"
-#include "third_party/blink/renderer/core/layout/gap/gap_geometry.h"
+#include "third_party/blink/renderer/core/layout/column_gap_accumulator.h"
 #include "third_party/blink/renderer/core/layout/layout_algorithm.h"
 
 namespace blink {
@@ -126,19 +126,6 @@ class CORE_EXPORT ColumnLayoutAlgorithm
                             const BlockBreakToken* break_token,
                             MarginStrut*);
 
-  // Add another main gap, at the given offset. This is either the block-start
-  // of a row gap, or before or after a spanner.
-  void AddMainGap(LayoutUnit block_offset,
-                  SpannerMainGapType gap_type = SpannerMainGapType::kNone);
-
-  // Populates `range_of_cross_gaps_before_current_main_gap_` with
-  // `CrossGapRanges` for each group of `CrossGap`s before each `MainGap`.
-  // For each `MainGap` we say that the `CrossGaps` associated with it are any
-  // that start before that main gap (and after a spanner). This information is
-  // needed by Paint to calculate the intersection points of row gaps and column
-  // gaps.
-  void CommitRangeOfCrossGapsBeforeCurrentMainGap();
-
   // Attempt to position the list-item marker (if any) beside the child
   // fragment. This requires the fragment to have a baseline. If it doesn't,
   // we'll keep the unpositioned marker around, so that we can retry with a
@@ -211,6 +198,18 @@ class CORE_EXPORT ColumnLayoutAlgorithm
     return !Style().HasAutoColumnHeight();
   }
 
+  // Return true if overflowing columns are created in the inline direction.
+  // This is always the case if there's no column wrapping and no nested
+  // fragmentation.
+  //
+  // Return false if overflowing columns are created inside a new line / row.
+  // This happens when column wrapping is enabled, and also generally for nested
+  // fragmentation, except if the block-size of the column is non-auto and known
+  // to be less than or equal to the available space in the outer fragmentainer.
+  // This is specified via `column_known_to_fit_in_outer_fragmentainer`.
+  bool ColumnsOverflowInInlineDirection(
+      bool column_known_to_fit_in_outer_fragmentainer) const;
+
   ConstraintSpace CreateConstraintSpaceForBalancing(
       const LogicalSize& column_size) const;
   ConstraintSpace CreateConstraintSpaceForSpanner(
@@ -278,8 +277,6 @@ class CORE_EXPORT ColumnLayoutAlgorithm
   LayoutUnit tallest_unbreakable_block_size_;
   bool is_constrained_by_outer_fragmentation_context_ = false;
 
-  LayoutUnit column_gap_size_;
-
   // The offset from the inline-start of the first column in the fragment, to
   // the inline-start of the first (imaginary or real) column that has (or would
   // have) overflowed in the inline direction.
@@ -287,28 +284,14 @@ class CORE_EXPORT ColumnLayoutAlgorithm
 
   LayoutUnit row_gap_size_;
 
-  // One entry for each row gap, and one entry between column content and
-  // spanners. There is no gap between column content and spanners, but column
-  // gaps need to be interrupted, since they shouldn't necessarily overlap with
-  // spanners.
-  Vector<MainGap> main_gaps_;
-
-  // One entry for each column gap.
-  Vector<CrossGap> cross_gaps_;
-
-  // Index of the first column gap that gets terminated by any subsequent main
-  // gap (row gap or spanner).
-  std::optional<wtf_size_t> first_trailing_column_gap_idx_;
-
-  // Offset to the first column (in the first row), from the start border edge
-  // of the resulting multicol fragment. Will only be set if needed, i.e. for
-  // gap decorations.
-  std::optional<LogicalOffset> first_column_offset_;
-
   // This will be set during (outer) block fragmentation once we've processed
   // the first piece of content of the multicol container. It is used to check
   // if we're at a valid class A  breakpoint (between block-level siblings).
   bool has_processed_first_child_ = false;
+
+  // Accumulates gap-decoration state when CSS gap decorations are enabled and
+  // the style has a gap rule. Null otherwise.
+  std::optional<ColumnGapAccumulator> gap_accumulator_;
 };
 
 }  // namespace blink

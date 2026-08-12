@@ -353,8 +353,7 @@ Status ChromiumWritableFile::SyncParent() {
 
 Status ChromiumWritableFile::Append(const Slice& data) {
   DCHECK(file_.IsValid());
-  int bytes_written = file_.WriteAtCurrentPos(data.data(), data.size());
-  if (static_cast<size_t>(bytes_written) != data.size()) {
+  if (!file_.WriteAtCurrentPosAndCheck(base::as_byte_span(data))) {
     base::File::Error error = base::File::GetLastFileError();
     return MakeIOError(filename_, base::File::ErrorToString(error),
                        kWritableFileAppend, error);
@@ -482,7 +481,7 @@ Options::Options() {
 //
 // Currently log reuse is an experimental feature in leveldb. More info at:
 // https://github.com/google/leveldb/commit/251ebf5dc70129ad3
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Reusing logs on Chrome OS resulted in an unacceptably high leveldb
   // corruption rate (at least for Indexed DB). More info at
   // https://crbug.com/460568
@@ -1086,14 +1085,10 @@ class DBTracker::TrackedDBImpl : public base::LinkNode<TrackedDBImpl>,
   TrackedDBImpl(DBTracker* tracker,
                 const std::string& name,
                 leveldb::DB* db,
-                const leveldb::Cache* block_cache,
-                DatabaseErrorReportingCallback on_get_error,
-                DatabaseErrorReportingCallback on_write_error)
+                const leveldb::Cache* block_cache)
       : tracker_(tracker),
         name_(name),
-        db_(db),
-        on_get_error_(std::move(on_get_error)),
-        on_write_error_(std::move(on_write_error)) {
+        db_(db) {
     if (leveldb_chrome::GetSharedWebBlockCache() ==
         leveldb_chrome::GetSharedBrowserBlockCache()) {
       shared_read_cache_use_ = SharedReadCacheUse_Unified;
@@ -1136,25 +1131,13 @@ class DBTracker::TrackedDBImpl : public base::LinkNode<TrackedDBImpl>,
 
   leveldb::Status Write(const leveldb::WriteOptions& options,
                         leveldb::WriteBatch* updates) override {
-    leveldb::Status status = db_->Write(options, updates);
-    if (status.ok()) [[likely]] {
-      return status;
-    }
-    if (on_write_error_)
-      on_write_error_.Run(status);
-    return status;
+    return db_->Write(options, updates);
   }
 
   leveldb::Status Get(const leveldb::ReadOptions& options,
                       const leveldb::Slice& key,
                       std::string* value) override {
-    leveldb::Status status = db_->Get(options, key, value);
-    if (status.ok() || status.IsNotFound()) [[likely]] {
-      return status;
-    }
-    if (on_get_error_)
-      on_get_error_.Run(status);
-    return status;
+    return db_->Get(options, key, value);
   }
 
   const leveldb::Snapshot* GetSnapshot() override { return db_->GetSnapshot(); }
@@ -1188,8 +1171,6 @@ class DBTracker::TrackedDBImpl : public base::LinkNode<TrackedDBImpl>,
   std::string name_;
   std::unique_ptr<leveldb::DB> db_;
   SharedReadCacheUse shared_read_cache_use_;
-  const DatabaseErrorReportingCallback on_get_error_;
-  const DatabaseErrorReportingCallback on_write_error_;
 };
 
 // Reports live databases and in-memory env's to memory-infra. For each live
@@ -1354,9 +1335,7 @@ leveldb::Status DBTracker::OpenDatabase(const leveldb_env::Options& options,
   CHECK((status.ok() && db) || (!status.ok() && !db));
   if (status.ok()) {
     // TrackedDBImpl ctor adds the instance to the tracker.
-    *dbptr = new TrackedDBImpl(GetInstance(), name, db, options.block_cache,
-                               std::move(options.on_get_error),
-                               std::move(options.on_write_error));
+    *dbptr = new TrackedDBImpl(GetInstance(), name, db, options.block_cache);
   }
   return status;
 }
@@ -1483,6 +1462,11 @@ leveldb::Status RewriteDB(const leveldb_env::Options& options,
 }
 
 std::string_view MakeStringView(const leveldb::Slice& s) {
+  // Workaround for crbug.com/493304613. May be possible to remove this after
+  // LevelDB is patched.
+  if (s.data() == nullptr) {
+    return std::string_view();
+  }
   return std::string_view(s.data(), s.size());
 }
 

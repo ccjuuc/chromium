@@ -6,27 +6,27 @@
 
 #include <utility>
 
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
+#include "base/feature_list.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/browser_resources.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/styled_label.h"
 
 namespace autofill {
 
 SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews::
     SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews(
-        views::View* anchor_view,
+        views::BubbleAnchor anchor,
         content::WebContents* web_contents,
         base::OnceCallback<void(PaymentsUiClosedReason)>
             controller_hide_callback,
         SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams ui_params)
-    : AutofillLocationBarBubble(anchor_view, web_contents),
+    : AutofillLocationBarBubble(anchor, web_contents),
       controller_hide_callback_(std::move(controller_hide_callback)),
       ui_params_(std::move(ui_params)) {
   if (ui_params_.is_success) {
@@ -63,9 +63,28 @@ void SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews::
                                      .set_bottom(0)));
     GetBubbleFrameView()->SetHeaderView(std::move(image));
   }
-  GetBubbleFrameView()->SetTitleView(
-      std::make_unique<TitleWithIconAfterLabelView>(
-          GetWindowTitle(), TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+
+  bool is_wallet_branding_enabled =
+      base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding);
+  bool should_show_logo = ui_params_.is_success
+                              ? ui_params_.should_display_wallet_logo
+                              : !is_wallet_branding_enabled;
+  if (should_show_logo) {
+    GetBubbleFrameView()->SetTitleView(
+        std::make_unique<TitleWithIconAfterLabelView>(
+            GetWindowTitle(),
+            is_wallet_branding_enabled
+                ? TitleWithIconAfterLabelView::Icon::GOOGLE_WALLET
+                : TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
+  } else {
+    // The Google Wallet logo should not be shown for failed upload saves or for
+    // successful upload saves specifically made via the Save and Fill feature.
+    auto title_view = std::make_unique<views::Label>(
+        GetWindowTitle(), views::style::CONTEXT_DIALOG_TITLE);
+    title_view->SetHorizontalAlignment(gfx::ALIGN_TO_HEAD);
+    title_view->SetMultiLine(true);
+    GetBubbleFrameView()->SetTitleView(std::move(title_view));
+  }
 }
 
 std::u16string
@@ -82,26 +101,35 @@ void SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews::
   }
 }
 
-void SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews::
-    OnWidgetInitialized() {
-  if (auto* ok_button = GetOkButton()) {
-    ok_button->GetViewAccessibility().SetName(
-        ui_params_.failure_ok_button_accessible_name);
-  }
-}
-
 void SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews::Init() {
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
+  SetID(
+      DialogViewId::
+          SAVE_PAYMENT_METHOD_AND_VIRTUAL_CARD_ENROLL_CONFIRMATION_BUBBLE_VIEWS);
   set_margins(ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
       views::DialogContentType::kText, views::DialogContentType::kText));
-  auto description = std::make_unique<views::Label>(
-      ui_params_.description_text, views::style::CONTEXT_DIALOG_BODY_TEXT,
-      views::style::STYLE_SECONDARY);
+  auto description = std::make_unique<views::StyledLabel>();
+  description->SetText(ui_params_.description_text);
+  description->SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT);
+  description->SetDefaultTextStyle(views::style::STYLE_SECONDARY);
   description->SetID(DialogViewId::DESCRIPTION_LABEL);
   description->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  description->SetMultiLine(true);
   description->GetViewAccessibility().SetName(ui_params_.description_text);
+  if (ui_params_.description_text_link_range_and_callback.has_value()) {
+    views::StyledLabel::RangeStyleInfo style_info =
+        views::StyledLabel::RangeStyleInfo::CreateForLink(std::get<2>(
+            ui_params_.description_text_link_range_and_callback.value()));
+    description->AddStyleRange(
+        gfx::Range(
+            std::get<0>(
+                ui_params_.description_text_link_range_and_callback.value())
+                .value(),
+            std::get<1>(
+                ui_params_.description_text_link_range_and_callback.value())
+                .value()),
+        style_info);
+  }
   AddChildView(std::move(description));
 }
 

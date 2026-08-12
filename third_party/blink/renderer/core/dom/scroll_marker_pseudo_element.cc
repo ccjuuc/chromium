@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
+#include "third_party/blink/renderer/platform/text/writing_direction_mode.h"
 
 namespace blink {
 
@@ -61,30 +63,49 @@ void ScrollMarkerPseudoElement::DefaultEventHandler(Event& event) {
   bool is_enter_or_space =
       is_key_down && (To<KeyboardEvent>(event).keyCode() == VKEY_RETURN ||
                       To<KeyboardEvent>(event).keyCode() == VKEY_SPACE);
-  bool is_left_or_up_arrow_key =
-      is_key_down && (To<KeyboardEvent>(event).keyCode() == VKEY_LEFT ||
-                      To<KeyboardEvent>(event).keyCode() == VKEY_UP);
-  bool is_right_or_down_arrow_key =
-      is_key_down && (To<KeyboardEvent>(event).keyCode() == VKEY_RIGHT ||
-                      To<KeyboardEvent>(event).keyCode() == VKEY_DOWN);
+  bool is_left_arrow_key =
+      is_key_down && To<KeyboardEvent>(event).keyCode() == VKEY_LEFT;
+  bool is_right_arrow_key =
+      is_key_down && To<KeyboardEvent>(event).keyCode() == VKEY_RIGHT;
+  bool is_up_arrow_key =
+      is_key_down && To<KeyboardEvent>(event).keyCode() == VKEY_UP;
+  bool is_down_arrow_key =
+      is_key_down && To<KeyboardEvent>(event).keyCode() == VKEY_DOWN;
   bool should_intercept =
       event.RawTarget() == this &&
-      (is_click || is_enter_or_space || is_left_or_up_arrow_key ||
-       is_right_or_down_arrow_key);
+      (is_click || is_enter_or_space || is_left_arrow_key ||
+       is_right_arrow_key || is_up_arrow_key || is_down_arrow_key);
   if (should_intercept) {
-    if (scroll_marker_group_) {
-      if (is_right_or_down_arrow_key) {
-        scroll_marker_group_->ActivateNextScrollMarker();
-      } else if (is_left_or_up_arrow_key) {
-        scroll_marker_group_->ActivatePrevScrollMarker();
-      } else if (is_click || is_enter_or_space) {
-        // parentElement is ::column for column scroll marker and
-        // ultimate originating element for regular scroll marker.
-        //
-        // For a click, we want to minimize the active marker's movement away
-        // from the user's mouse. So, let the snap code pick the closest snap
-        // target that lets the active marker stay in view.
+    if (scroll_marker_group_ && scroll_marker_group_->parentElement()) {
+      // Use WritingDirectionMode of the scroll container to map physical arrow
+      // keys to logical.
+      WritingDirectionMode wdm = scroll_marker_group_->parentElement()
+                                     ->GetComputedStyle()
+                                     ->GetWritingDirection();
+
+      if (is_click || is_enter_or_space) {
         scroll_marker_group_->ActivateScrollMarker(this, !is_click);
+      } else {
+        LogicalDirection ld;
+        if (is_left_arrow_key) {
+          ld = wdm.Left();
+        } else if (is_right_arrow_key) {
+          ld = wdm.Right();
+        } else if (is_up_arrow_key) {
+          ld = wdm.Top();
+        } else {
+          CHECK(is_down_arrow_key);
+          ld = wdm.Bottom();
+        }
+
+        if (ld == LogicalDirection::kInlineEnd ||
+            ld == LogicalDirection::kBlockEnd) {
+          scroll_marker_group_->ActivateNextScrollMarker();
+        } else {
+          CHECK(ld == LogicalDirection::kInlineStart ||
+                ld == LogicalDirection::kBlockStart);
+          scroll_marker_group_->ActivatePrevScrollMarker();
+        }
       }
     }
     event.SetDefaultHandled();
@@ -119,7 +140,8 @@ void ScrollMarkerPseudoElement::SetSelected(bool value,
       // originating element and its content are in the tree, when in tabs mode.
       if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
         Element* scroller = ScrollMarkerGroup()->parentElement();
-        cache->HandleScrollMarkerTabSelectionChanged(scroller);
+        CHECK(scroller);
+        cache->HandleScrollMarkerTabSelectionChanged(*scroller);
       }
     }
   }
@@ -157,39 +179,39 @@ void ScrollMarkerPseudoElement::ScrollIntoView(bool apply_snap_alignment) {
       PhysicalRect rect =
           marker_object->AbsoluteBoundingBoxRectHandlingEmptyInline();
       PhysicalBoxStrut scroll_margin =
-          marker_object->Style()->ScrollMarginStrut();
+          marker_object->StyleRef().ScrollMarginStrut();
       // Default to bringing the scroll-marker just into view at the nearest
       // edge.
       auto align_x = ScrollAlignment::ToEdgeIfNeeded();
       auto align_y = ScrollAlignment::ToEdgeIfNeeded();
-      const auto group_snap_type = group_box->Style()->GetScrollSnapType();
+      const auto group_snap_type = group_box->StyleRef().GetScrollSnapType();
       // Update the alignment if the group is a snap container and the marker is
       // a snap area.
       if (apply_snap_alignment && !group_snap_type.is_none) {
         const auto marker_snap_align =
-            marker_object->Style()->GetScrollSnapAlign();
+            marker_object->StyleRef().GetScrollSnapAlign();
 
         if (ShouldSnapToAreaHorizontally(group_box, group_snap_type,
                                          marker_snap_align)) {
           align_x = scroll_into_view_util::PhysicalAlignmentFromSnapAlignStyle(
-              *marker_object, kHorizontalScroll);
+              *marker_object, PhysicalAxis::kHorizontal);
         }
         if (ShouldSnapToAreaVertically(group_box, group_snap_type,
                                        marker_snap_align)) {
           align_y = scroll_into_view_util::PhysicalAlignmentFromSnapAlignStyle(
-              *marker_object, kVerticalScroll);
+              *marker_object, PhysicalAxis::kVertical);
         }
       }
       mojom::blink::ScrollIntoViewParamsPtr params =
           scroll_into_view_util::CreateScrollIntoViewParams(align_x, align_y);
-      params->behavior = group_box->Style()->GetScrollBehavior();
+      params->behavior = group_box->StyleRef().GetScrollBehavior();
       // Indicate that this is for a scroll sequence so the ScrollIntoView uses
       // the requested behavior.
       // TODO(397989214): is_for_scroll_sequence might be obsolete as we no
       // longer perform ScrollIntoView in sequence. We should delete
       // or rename it.
       params->is_for_scroll_sequence = true;
-      group_scroller->ScrollIntoView(rect, scroll_margin, params);
+      group_scroller->ScrollIntoView(rect, scroll_margin, params, nullptr);
     }
   }
 }
@@ -234,14 +256,67 @@ void ScrollMarkerPseudoElement::SetHasFocusWithinUpToAncestor(
       has_focus_within, ancestor, need_snap_container_search);
 }
 
+void ScrollMarkerPseudoElement::SetHovered(bool hovered) {
+  if (hovered == IsHovered()) {
+    return;
+  }
+  PseudoElement::SetHovered(hovered);
+  if (scroll_marker_group_) {
+    scroll_marker_group_->SetHovered(hovered);
+  }
+}
+
+void ScrollMarkerPseudoElement::SetActive(bool active) {
+  if (active == IsActive()) {
+    return;
+  }
+  PseudoElement::SetActive(active);
+  if (scroll_marker_group_) {
+    scroll_marker_group_->SetActive(active);
+  }
+}
+
 void ScrollMarkerPseudoElement::Dispose() {
   SetScrollMarkerGroup(nullptr);
   PseudoElement::Dispose();
 }
 
+void ScrollMarkerPseudoElement::RemovedFrom(ContainerNode& insertion_point) {
+  SetScrollMarkerGroup(nullptr);
+  PseudoElement::RemovedFrom(insertion_point);
+}
+
 void ScrollMarkerPseudoElement::Trace(Visitor* v) const {
   v->Trace(scroll_marker_group_);
   PseudoElement::Trace(v);
+}
+
+const ComputedStyle* ScrollMarkerPseudoElement::AdjustedLayoutStyle(
+    const ComputedStyle& style,
+    const ComputedStyle& layout_parent_style) {
+  const ComputedStyle* adjusted_style =
+      PseudoElement::AdjustedLayoutStyle(style, layout_parent_style);
+  if (!adjusted_style) {
+    adjusted_style = &style;
+  }
+  ComputedStyleBuilder builder(*adjusted_style);
+  // The layout parent of a scroll marker is the scroll marker group, not
+  // the originating element of the scroll marker.
+  StyleAdjuster::AdjustStyleForDisplay(builder, layout_parent_style, this,
+                                       &GetDocument());
+  if (style.IsCSSInertIsInherited() &&
+      style.IsCSSInert() != layout_parent_style.IsCSSInert()) {
+    // A ::scroll-marker gets its inertness from its ::scroll-marker-group
+    // instead of its originating element unless the inertness is applied
+    // directly to the ::scroll-marker itself.
+    builder.SetIsCSSInert(layout_parent_style.IsCSSInert());
+    builder.SetIsCSSInertIsInherited(false);
+  }
+  if (style.IsHTMLInert() != layout_parent_style.IsHTMLInert()) {
+    builder.SetIsHTMLInert(layout_parent_style.IsHTMLInert());
+    builder.SetIsHTMLInertIsInherited(false);
+  }
+  return builder.TakeStyle();
 }
 
 }  // namespace blink

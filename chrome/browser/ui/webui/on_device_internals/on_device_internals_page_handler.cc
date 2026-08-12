@@ -4,10 +4,11 @@
 
 #include "chrome/browser/ui/webui/on_device_internals/on_device_internals_page_handler.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/values_util.h"
+#include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
@@ -26,7 +27,6 @@
 #include "components/optimization_guide/core/model_execution/on_device_model_component.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/prefs/pref_service.h"
@@ -66,6 +66,8 @@ on_device_model::ModelAssets LoadModelAssets(const base::FilePath& model_path) {
     model_paths.weights = model_path;
   }
 
+  // TODO(crbug.com/461547475): Determine whether weight caches should be used
+  // for GPU or just CPU only.
   if (base::FeatureList::IsEnabled(
           on_device_model::features::kOnDeviceModelForceCpuBackend)) {
     model_paths.cache =
@@ -91,6 +93,8 @@ base::flat_map<std::string, std::string> GetCriteria(
       base::ToString(criteria->enabled_by_feature);
   mojom_criteria["enabled by enterprise policy"] =
       base::ToString(criteria->enabled_by_enterprise_policy);
+  mojom_criteria["enabled by user setting"] =
+      base::ToString(criteria->enabled_by_user_setting);
   mojom_criteria["out of retention"] =
       base::ToString(criteria->out_of_retention);
   mojom_criteria["is already installing"] =
@@ -100,13 +104,13 @@ base::flat_map<std::string, std::string> GetCriteria(
   std::string disk_space_string =
       base::ToString(criteria->is_disk_space_available());
   if (!criteria->is_disk_space_available()) {
-    base::ByteCount disk_space_required = optimization_guide::features::
+    base::ByteSize disk_space_required = optimization_guide::features::
         GetDiskSpaceRequiredForOnDeviceModelInstall();
-    base::ByteCount disk_space_available = criteria->disk_space_free;
+    int64_t disk_space_available =
+        criteria->disk_space_free ? criteria->disk_space_free->InMiB() : -1;
     disk_space_string = base::StrCat(
-        {" (", base::NumberToString(disk_space_available.InMiB()),
-         " MiB available, ", base::NumberToString(disk_space_required.InMiB()),
-         " MiB required)"});
+        {" (", base::NumberToString(disk_space_available), " MiB available, ",
+         base::NumberToString(disk_space_required.InMiB()), " MiB required)"});
   }
   mojom_criteria["disk space available"] = disk_space_string;
   return mojom_criteria;
@@ -135,7 +139,8 @@ uint64_t GetMinimumVramRequired() {
 }
 
 mojom::BaseModelInfoPtr GetBaseModelInfo(
-    const optimization_guide::OnDeviceModelComponentState& state) {
+    const optimization_guide::OnDeviceModelComponentState& state,
+    optimization_guide::proto::OnDeviceModelPerformanceHint performance_hint) {
   auto info = mojom::BaseModelInfo::New();
   info->file_path = state.GetInstallDirectory().AsUTF8Unsafe();
   info->file_size = static_cast<uint64_t>(
@@ -144,13 +149,6 @@ mojom::BaseModelInfoPtr GetBaseModelInfo(
   info->version = state.GetBaseModelSpec().model_version;
   info->name = state.GetBaseModelSpec().model_name;
 
-  optimization_guide::proto::OnDeviceModelPerformanceHint performance_hint =
-      g_browser_process->GetFeatures()
-          ->optimization_guide_global_feature()
-          ->Get()
-          .model_broker_state()
-          .service_controller()
-          .GetPerformanceHint();
   switch (performance_hint) {
     case optimization_guide::proto::OnDeviceModelPerformanceHint::
         ON_DEVICE_MODEL_PERFORMANCE_HINT_HIGHEST_QUALITY:
@@ -254,6 +252,13 @@ PageHandler::PlatformService& PageHandler::GetPlatformService() {
 }
 #endif
 
+#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+optimization_guide::ModelBrokerState* PageHandler::GetModelBrokerState() {
+  return optimization_guide_keyed_service_->GetGlobalState()
+      .model_broker_state();
+}
+#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+
 void PageHandler::OnModelAssetsLoaded(
     mojo::PendingReceiver<on_device_model::mojom::OnDeviceModel> model,
     LoadModelCallback callback,
@@ -304,10 +309,14 @@ void PageHandler::GetDeviceAndPerformanceInfo(
 
 void PageHandler::GetDefaultModelPath(GetDefaultModelPathCallback callback) {
 #if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  auto debug_state = optimization_guide_keyed_service_->GetGlobalState()
-                         .model_broker_state()
-                         .component_state_manager()
-                         .GetDebugState(base::PassKey<PageHandler>());
+  auto* model_broker_state = GetModelBrokerState();
+  if (!model_broker_state) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  auto debug_state =
+      model_broker_state->component_state_manager().GetDebugState(
+          base::PassKey<PageHandler>());
 
   if (!debug_state.state_) {
     std::move(callback).Run(std::nullopt);
@@ -322,10 +331,10 @@ void PageHandler::GetDefaultModelPath(GetDefaultModelPathCallback callback) {
 
 void PageHandler::UninstallDefaultModel() {
 #if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  optimization_guide_keyed_service_->GetGlobalState()
-      .model_broker_state()
-      .component_state_manager()
-      .ForceUninstall();
+  auto* model_broker_state = GetModelBrokerState();
+  if (model_broker_state) {
+    model_broker_state->component_state_manager().ForceUninstall();
+  }
 #endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
 }
 
@@ -342,14 +351,28 @@ void PageHandler::OnLogMessageAdded(
 }
 
 void PageHandler::GetPageData(PageHandler::GetPageDataCallback callback) {
+  // Guarantee the callback runs even if the page handler is destroyed
+  // while the request is in flight.
+  auto default_page_data = mojom::PageData::New();
+  default_page_data->base_model = mojom::BaseModelState::New();
+  default_page_data->performance_info =
+      on_device_model::mojom::DevicePerformanceInfo::New();
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      std::move(callback), std::move(default_page_data));
+
   auto data = mojom::PageData::New();
   data->base_model = mojom::BaseModelState::New();
 
 #if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  auto& model_broker_state =
-      optimization_guide_keyed_service_->GetGlobalState().model_broker_state();
-  auto debug_state = model_broker_state.component_state_manager().GetDebugState(
-      base::PassKey<PageHandler>());
+  auto* model_broker_state = GetModelBrokerState();
+  if (!model_broker_state) {
+    OnReceivedModelInfoForPageData(std::move(callback), std::move(data),
+                                   /*model_info=*/nullptr);
+    return;
+  }
+  auto debug_state =
+      model_broker_state->component_state_manager().GetDebugState(
+          base::PassKey<PageHandler>());
 
   data->base_model->state =
       base::StrCat({base::ToString(debug_state.status_),
@@ -379,10 +402,10 @@ void PageHandler::GetPageData(PageHandler::GetPageDataCallback callback) {
     feature_adaptation_info->feature_name = base::ToString(feature);
     feature_adaptation_info->feature_key = static_cast<int32_t>(feature);
     feature_adaptation_info->is_recently_used =
-        model_broker_state.usage_tracker()
+        model_broker_state->usage_tracker()
             .WasOnDeviceEligibleFeatureRecentlyUsed(feature);
     feature_adaptation_info->version =
-        model_broker_state.service_controller()
+        model_broker_state->base_model_controller()
             .GetFeatureMetadata(feature)
             .transform(
                 &optimization_guide::OnDeviceModelAdaptationMetadata::version)
@@ -392,9 +415,12 @@ void PageHandler::GetPageData(PageHandler::GetPageDataCallback callback) {
   data->min_vram_mb = GetMinimumVramRequired();
 
   if (debug_state.state_) {
+    auto performance_hint =
+        model_broker_state->base_model_controller().GetPerformanceHint();
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock()},
-        base::BindOnce(&GetBaseModelInfo, *debug_state.state_),
+        base::BindOnce(&GetBaseModelInfo, *debug_state.state_,
+                       performance_hint),
         base::BindOnce(&PageHandler::OnReceivedModelInfoForPageData,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback),
                        std::move(data)));
@@ -454,6 +480,16 @@ void PageHandler::DecodeBitmap(mojo_base::BigBuffer image_buffer,
 void PageHandler::ResetModelCrashCount() {
   PrefService* prefs = g_browser_process->local_state();
   prefs->SetInteger(kOnDeviceModelCrashCount, 0);
+}
+
+void PageHandler::BindModelBrokerDebug(
+    mojo::PendingReceiver<optimization_guide::mojom::ModelBrokerDebug>
+        receiver) {
+#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+  optimization_guide_keyed_service_->GetGlobalState()
+      .on_device_capability()
+      .BindModelBrokerDebug(base::PassKey<PageHandler>(), std::move(receiver));
+#endif
 }
 
 void PageHandler::SendDownloadProgress(int64_t downloaded_bytes,

@@ -8,9 +8,10 @@
 #include <string_view>
 #include <utility>
 
+#include "ash/constants/webui_url_constants.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -21,11 +22,10 @@
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/extensions/api/echo_private.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
 #include "chromeos/ash/components/report/utils/time_utils.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -93,7 +93,7 @@ ExtensionFunction::ResponseAction EchoPrivateSetOfferInfoFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
 
   const std::string& service_id = params->id;
-  base::Value::Dict dict = params->offer_info.additional_properties.Clone();
+  base::DictValue dict = params->offer_info.additional_properties.Clone();
   chromeos::echo_offer::RemoveEmptyValueDicts(dict);
 
   PrefService* local_state = g_browser_process->local_state();
@@ -113,7 +113,7 @@ ExtensionFunction::ResponseAction EchoPrivateGetOfferInfoFunction::Run() {
 
   const std::string& service_id = params->id;
   PrefService* local_state = g_browser_process->local_state();
-  const base::Value::Dict& offer_infos =
+  const base::DictValue& offer_infos =
       local_state->GetDict(prefs::kEchoCheckedOffers);
 
   const base::Value* offer_info = offer_infos.Find("echo." + service_id);
@@ -141,8 +141,10 @@ ExtensionFunction::ResponseAction EchoPrivateGetOobeTimestampFunction::Run() {
     // Returns an empty string on error.
     return RespondNow(WithArguments(std::string()));
   }
-  std::string result = base::UnlocalizedTimeFormatWithPattern(
-      timestamp.value(), "y-M-d", icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  timestamp.value().UTCExplode(&exploded);
+  std::string result = base::StringPrintf(
+      "%d-%d-%d", exploded.year, exploded.month, exploded.day_of_month);
   return RespondNow(WithArguments(std::move(result)));
 }
 
@@ -249,7 +251,7 @@ void EchoPrivateGetUserConsentFunction::OnCancel() {
 
 void EchoPrivateGetUserConsentFunction::OnMoreInfoLinkClicked() {
   NavigateParams params(Profile::FromBrowserContext(browser_context()),
-                        GURL(chrome::kEchoLearnMoreURL),
+                        GURL(ash::kChromeUIEchoLearnMoreURL),
                         ui::PAGE_TRANSITION_LINK);
   // Open the link in a new window. The echo dialog is modal, so the current
   // window is useless until the dialog is closed.

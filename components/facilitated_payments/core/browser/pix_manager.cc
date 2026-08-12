@@ -31,6 +31,9 @@ namespace {
 static constexpr base::TimeDelta kProgressScreenDismissDelay = base::Seconds(2);
 static constexpr FacilitatedPaymentsType kPaymentsType =
     FacilitatedPaymentsType::kPix;
+// Experiment and control IDs for iframe.
+constexpr int64_t kIframeExperimentId = 3397365;
+constexpr int64_t kIframeControlId = 3397366;
 
 PixCodeValidationResult ConvertPixQrCodeTypeToValidationResult(
     base::expected<mojom::PixQrCodeType, std::string> pix_qr_code_type) {
@@ -68,21 +71,27 @@ PixManager::~PixManager() {
 
 void PixManager::Reset() {
   has_payflow_started_ = false;
+  pix_code_is_in_iframe_ = false;
   ukm_source_id_ = 0;
   initiate_payment_request_details_ =
       std::make_unique<FacilitatedPaymentsInitiatePaymentRequestDetails>();
   ui_state_ = UiState::kHidden;
-  pix_payment_page_origin_ = url::Origin();
+  pix_payment_page_main_frame_origin_ = url::Origin();
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
 void PixManager::OnPixCodeCopiedToClipboard(
-    const GURL& render_frame_host_url,
-    const url::Origin& render_frame_host_origin,
+    const GURL& main_frame_url,
+    const std::optional<GURL>& iframe_url,
+    const url::Origin& main_frame_origin,
+    bool is_same_origin,
     std::optional<PixCodeRustValidationResult> rust_validation_result,
     std::string pix_code,
     ukm::SourceId ukm_source_id) {
+  pix_code_is_in_iframe_ = iframe_url.has_value();
   if (has_payflow_started_) {
+    // Log that a new flow trigger was ignored because one is already active.
+    LogPixFlowExitedReason(PixFlowExitedReason::kFlowAlreadyStarted);
     return;
   }
   has_payflow_started_ = true;
@@ -90,16 +99,36 @@ void PixManager::OnPixCodeCopiedToClipboard(
       &PixManager::OnUiScreenEvent, weak_ptr_factory_.GetWeakPtr()));
   pix_code_copied_timestamp_ = base::TimeTicks::Now();
   ukm_source_id_ = ukm_source_id;
-  LogPixCodeCopied(ukm_source_id_);
-  // Check whether the domain for the render_frame_host_url is allowlisted.
-  if (!IsMerchantAllowlisted(render_frame_host_url)) {
+  LogPixCodeCopied(ukm_source_id_, pix_code_is_in_iframe_);
+  // TODO(crbug.com/479520609): Stop populating experiment IDs once backend
+  // experiment is fully enabled without the integrator trigger.
+  if (base::FeatureList::IsEnabled(kEnableIframeForPix)) {
+    initiate_payment_request_details_->chrome_experiment_ids_.push_back(
+        kIframeExperimentId);
+  } else {
+    initiate_payment_request_details_->chrome_experiment_ids_.push_back(
+        kIframeControlId);
+  }
+  // If the copy event happened inside an iframe, check whether the iframe URL
+  // is allowlisted. Otherwise, check whether the main frame URL is allowlisted.
+  if (pix_code_is_in_iframe_) {
+    LogPixCodeCopiedInIframe();
+    std::optional<PixFlowExitedReason> exited_reason = GetExitedReasonForIframe(
+        iframe_url.value(), main_frame_url, is_same_origin);
+    if (exited_reason.has_value()) {
+      LogPixFlowExitedReason(exited_reason.value());
+      return;
+    }
+    // Set psp hostname to initiate payment request details.
+    initiate_payment_request_details_->psp_hostname_ = iframe_url->GetHost();
+  } else if (!IsMerchantAllowlisted(main_frame_url)) {
     // The merchant is not part of the allowlist, ignore the copy event.
     LogPixFlowExitedReason(PixFlowExitedReason::kMerchantNotAllowlisted);
     return;
   }
   initiate_payment_request_details_->merchant_payment_page_hostname_ =
-      render_frame_host_url.GetHost();
-  pix_payment_page_origin_ = render_frame_host_origin;
+      main_frame_url.GetHost();
+  pix_payment_page_main_frame_origin_ = main_frame_origin;
   if (base::FeatureList::IsEnabled(kUseRustPixCodeValidator)) {
     // This logic is duplicated into faciliated_payments_metrics.h, but it's
     // temporary and will be cleaned up once the validator is fully switched
@@ -146,6 +175,27 @@ bool PixManager::IsMerchantAllowlisted(const GURL& url) const {
              url, optimization_guide::proto::PIX_MERCHANT_ORIGINS_ALLOWLIST,
              /*optimization_metadata=*/nullptr) ==
          optimization_guide::OptimizationGuideDecision::kTrue;
+}
+
+bool PixManager::IsIframeUrlAllowlisted(const GURL& url) const {
+  return optimization_guide_decider_->CanApplyOptimization(
+             url, optimization_guide::proto::PIX_PSP_ALLOWLIST,
+             /*optimization_metadata=*/nullptr) ==
+         optimization_guide::OptimizationGuideDecision::kTrue;
+}
+
+std::optional<PixFlowExitedReason> PixManager::GetExitedReasonForIframe(
+    const GURL& iframe_url,
+    const GURL& main_frame_url,
+    bool is_same_origin) const {
+  if (IsIframeUrlAllowlisted(iframe_url)) {
+    return std::nullopt;
+  }
+  if (is_same_origin && IsMerchantAllowlisted(main_frame_url)) {
+    return std::nullopt;
+  }
+  return is_same_origin ? PixFlowExitedReason::kSameOriginMerchantNotAllowlisted
+                        : PixFlowExitedReason::kIframeUrlNotAllowlisted;
 }
 
 void PixManager::OnPixCodeValidated(
@@ -208,8 +258,8 @@ void PixManager::OnValidPixCode(std::string pix_code,
   // flow.
   if (!payments_data_manager->HasMaskedBankAccounts()) {
     LogPixFlowExitedReason(PixFlowExitedReason::kNoLinkedAccount);
-    if (base::FeatureList::IsEnabled(kEnablePixAccountLinking)) {
-      client_->InitPixAccountLinkingFlow(pix_payment_page_origin_);
+    if (base::FeatureList::IsEnabled(kEnablePixAccountLinkingNative)) {
+      client_->InitPixAccountLinkingFlow(pix_payment_page_main_frame_origin_);
     }
     return;
   }
@@ -222,7 +272,8 @@ void PixManager::OnValidPixCode(std::string pix_code,
     return;
   }
 
-  if (client_->IsInChromeCustomTabMode() &&
+  if (!base::FeatureList::IsEnabled(kEnablePixInCct) &&
+      client_->IsInChromeCustomTabMode() &&
       client_->GetDeviceDelegate()->IsPixSupportAvailableViaGboard()) {
     LogPixFlowExitedReason(PixFlowExitedReason::kCctWithGboardAsDefaultIme);
     return;
@@ -390,6 +441,7 @@ void PixManager::OnPurchaseActionResult(base::TimeTicks start_time,
   LogInitiatePurchaseActionResultUkm(result, ukm_source_id_);
   LogPixTransactionResultAndLatency(
       result, base::TimeTicks::Now() - pix_code_copied_timestamp_);
+  LogPixTransactionResultPerFrameType(pix_code_is_in_iframe_, result);
 }
 
 void PixManager::OnUiScreenEvent(UiEvent ui_event_type) {

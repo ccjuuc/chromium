@@ -4,9 +4,17 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_unmask_details_request.h"
 
+#include <optional>
 #include <string>
+#include <utility>
 
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -35,13 +43,13 @@ std::string GetUnmaskDetailsRequest::GetRequestContentType() {
 }
 
 std::string GetUnmaskDetailsRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
+  base::DictValue request_dict;
+  base::DictValue context;
   context.Set("language_code", app_locale_);
   context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   request_dict.Set("context", std::move(context));
 
-  base::Value::Dict chrome_user_context;
+  base::DictValue chrome_user_context;
   chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
   request_dict.Set("chrome_user_context", std::move(chrome_user_context));
 
@@ -50,7 +58,7 @@ std::string GetUnmaskDetailsRequest::GetRequestContent() {
   return request_content;
 }
 
-void GetUnmaskDetailsRequest::ParseResponse(const base::Value::Dict& response) {
+void GetUnmaskDetailsRequest::ParseResponse(const base::DictValue& response) {
   const auto* method = response.FindString("authentication_method");
   if (method) {
     if (*method == "CVC") {
@@ -67,7 +75,7 @@ void GetUnmaskDetailsRequest::ParseResponse(const base::Value::Dict& response) {
   unmask_details_.server_denotes_fido_eligible_but_not_opted_in =
       server_denotes_fido_eligible_but_not_opted_in.value_or(false);
 
-  const base::Value::Dict* dictionary_value =
+  const base::DictValue* dictionary_value =
       response.FindDict("fido_request_options");
   if (dictionary_value)
     unmask_details_.fido_request_options = dictionary_value->Clone();

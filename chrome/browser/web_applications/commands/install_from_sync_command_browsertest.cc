@@ -13,9 +13,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
-#include "base/test/with_feature_override.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
@@ -23,11 +23,9 @@
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/services/app_service/public/cpp/icon_info.h"
 #include "content/public/browser/navigation_handle.h"
@@ -47,44 +45,37 @@ namespace {
 
 constexpr int kIconSize = 96;
 
-class InstallFromSyncCommandTest : public base::test::WithFeatureOverride,
-                                   public WebAppBrowserTestBase {
+class InstallFromSyncCommandTest : public WebAppBrowserTestBase {
  public:
-  InstallFromSyncCommandTest()
-      : base::test::WithFeatureOverride{features::kWebAppUsePrimaryIcon} {}
+  InstallFromSyncCommandTest() = default;
   ~InstallFromSyncCommandTest() override = default;
 
   GURL GetManifestIcon() {
-    return https_server()->GetURL("/banners/launcher-icon-2x.png");
+    return embedded_https_test_server().GetURL("/banners/launcher-icon-2x.png");
   }
 
   GURL GetTrustedIcon() {
-    return https_server()->GetURL("/banners/image-512px.png");
+    return embedded_https_test_server().GetURL("/banners/image-512px.png");
   }
 
   base::FilePath LoadImageFile() {
     base::FilePath path;
     base::PathService::Get(chrome::DIR_TEST_DATA, &path);
-    if (GetParam()) {
-      // This corresponds to the largest icon in
-      // chrome/test/data/banners/manifest.json, which will be used on ChromeOS
-      // always if trusted icons are enabled.
-      return path.AppendASCII("banners").Append(
-          FILE_PATH_LITERAL("image-512px.png"));
-    } else {
-      return path.AppendASCII("banners").Append(
-          FILE_PATH_LITERAL("launcher-icon-2x.png"));
-    }
+    // This corresponds to the largest icon in
+    // chrome/test/data/banners/manifest.json, which will be used on ChromeOS
+    // always since trusted icons are enabled.
+    return path.AppendASCII("banners").Append(
+        FILE_PATH_LITERAL("image-512px.png"));
   }
 
   // Get the primary icon for `app_id` of `size` from the disk.
   SkBitmap GetAppIconOfSize(const webapps::AppId& app_id, int size) {
     WebAppProvider* web_app_provider = WebAppProvider::GetForTest(profile());
-    base::test::TestFuture<SizeToBitmap> test_future;
+    base::test::TestFuture<OrderedSizeToBitmap> test_future;
     web_app_provider->icon_manager().ReadIconAndResize(
         app_id, IconPurpose::ANY, size, test_future.GetCallback());
-    SizeToBitmap bitmaps = test_future.Take();
-    CHECK(base::Contains(bitmaps, size));
+    OrderedSizeToBitmap bitmaps = test_future.Take();
+    CHECK(bitmaps.contains(size));
     return bitmaps[size];
   }
 
@@ -106,8 +97,8 @@ class InstallFromSyncCommandTest : public base::test::WithFeatureOverride,
   }
 };
 
-IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, SimpleInstall) {
-  GURL test_url = https_server()->GetURL(
+IN_PROC_BROWSER_TEST_F(InstallFromSyncCommandTest, SimpleInstall) {
+  GURL test_url = embedded_https_test_server().GetURL(
       "/banners/"
       "manifest_test_page.html");
   webapps::AppId id = GenerateAppId(std::nullopt, test_url);
@@ -117,10 +108,11 @@ IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, SimpleInstall) {
   InstallFromSyncCommand::Params params = InstallFromSyncCommand::Params(
       id, GenerateManifestIdFromStartUrlOnly(test_url), /*start_url=*/test_url,
       "Test Title",
-      /*scope=*/https_server()->GetURL("/banners/"),
+      /*scope=*/embedded_https_test_server().GetURL("/banners/"),
       /*theme_color=*/std::nullopt, mojom::UserDisplayMode::kStandalone,
       {apps::IconInfo(GetManifestIcon(), kIconSize)},
-      {apps::IconInfo(GetTrustedIcon(), kIconSize)});
+      {apps::IconInfo(GetTrustedIcon(), kIconSize)},
+      /*migrated_from_manifest_id=*/std::nullopt);
   provider->command_manager().ScheduleCommand(
       std::make_unique<InstallFromSyncCommand>(
           profile(), params,
@@ -141,12 +133,12 @@ IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, SimpleInstall) {
                                          /*max_deviation=*/3));
 }
 
-IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, TwoInstalls) {
-  GURL test_url = https_server()->GetURL(
+IN_PROC_BROWSER_TEST_F(InstallFromSyncCommandTest, TwoInstalls) {
+  GURL test_url = embedded_https_test_server().GetURL(
       "/banners/"
       "manifest_test_page.html");
   webapps::AppId id = GenerateAppId(std::nullopt, test_url);
-  GURL other_test_url = https_server()->GetURL(
+  GURL other_test_url = embedded_https_test_server().GetURL(
       "/banners/"
       "manifest_no_service_worker.html");
   webapps::AppId other_id = GenerateAppId(std::nullopt, other_test_url);
@@ -158,10 +150,11 @@ IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, TwoInstalls) {
     InstallFromSyncCommand::Params params = InstallFromSyncCommand::Params(
         id, GenerateManifestIdFromStartUrlOnly(test_url),
         /*start_url=*/test_url, "Test Title",
-        /*scope=*/https_server()->GetURL("/banners/"),
+        /*scope=*/embedded_https_test_server().GetURL("/banners/"),
         /*theme_color=*/std::nullopt, mojom::UserDisplayMode::kStandalone,
         {apps::IconInfo(GetManifestIcon(), kIconSize)},
-        {apps::IconInfo(GetTrustedIcon(), kIconSize)});
+        {apps::IconInfo(GetTrustedIcon(), kIconSize)},
+        /*migrated_from_manifest_id=*/std::nullopt);
     provider->command_manager().ScheduleCommand(
         std::make_unique<InstallFromSyncCommand>(
             profile(), params,
@@ -175,10 +168,11 @@ IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, TwoInstalls) {
     InstallFromSyncCommand::Params params = InstallFromSyncCommand::Params(
         other_id, GenerateManifestIdFromStartUrlOnly(other_test_url),
         /*start_url=*/other_test_url, "Test Title",
-        /*scope=*/https_server()->GetURL("/banners/"),
+        /*scope=*/embedded_https_test_server().GetURL("/banners/"),
         /*theme_color=*/std::nullopt, mojom::UserDisplayMode::kStandalone,
         {apps::IconInfo(GetManifestIcon(), other_icon_size)},
-        {apps::IconInfo(GetTrustedIcon(), other_icon_size)});
+        {apps::IconInfo(GetTrustedIcon(), other_icon_size)},
+        /*migrated_from_manifest_id=*/std::nullopt);
     provider->command_manager().ScheduleCommand(
         std::make_unique<InstallFromSyncCommand>(
             profile(), params,
@@ -214,8 +208,6 @@ IN_PROC_BROWSER_TEST_P(InstallFromSyncCommandTest, TwoInstalls) {
                                    /*max_deviation=*/3));
   }
 }
-
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(InstallFromSyncCommandTest);
 
 }  // namespace
 }  // namespace web_app

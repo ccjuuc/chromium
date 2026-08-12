@@ -14,12 +14,11 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/common/chrome_features.h"
 #include "components/gcm_driver/crypto/p256_key_util.h"
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/prefs/pref_service.h"
-#include "components/sharing_message/buildflags.h"
-#include "components/sharing_message/pref_names.h"
+#include "components/sharing_message/features.h"
 #include "components/sharing_message/sharing_constants.h"
 #include "components/sharing_message/sharing_device_registration_result.h"
 #include "components/sharing_message/sharing_sync_preference.h"
@@ -28,20 +27,15 @@
 #include "components/sync/service/sync_service.h"
 #include "components/sync_device_info/device_info.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "chrome/android/chrome_jni_headers/SharingJNIBridge_jni.h"
-#endif
 
 using instance_id::InstanceID;
-using sync_pb::SharingSpecificFields;
+using SharingFeature = syncer::DeviceInfo::SharingFeature;
 
 SharingDeviceRegistrationImpl::SharingDeviceRegistrationImpl(
-    PrefService* pref_service,
     SharingSyncPreference* sharing_sync_preference,
     instance_id::InstanceIDDriver* instance_id_driver,
     syncer::SyncService* sync_service)
-    : pref_service_(pref_service),
-      sharing_sync_preference_(sharing_sync_preference),
+    : sharing_sync_preference_(sharing_sync_preference),
       instance_id_driver_(instance_id_driver),
       sync_service_(sync_service) {}
 
@@ -132,8 +126,7 @@ void SharingDeviceRegistrationImpl::OnSharingTargetInfoRetrieved(
     return;
   }
 
-  std::set<SharingSpecificFields::EnabledFeatures> enabled_features =
-      GetEnabledFeatures();
+  std::set<SharingFeature> enabled_features = GetEnabledFeatures();
   syncer::DeviceInfo::SharingInfo sharing_info(
       sharing_target_info ? std::move(*sharing_target_info)
                           : syncer::DeviceInfo::SharingTargetInfo(),
@@ -195,53 +188,32 @@ void SharingDeviceRegistrationImpl::OnFCMTokenDeleted(
   NOTREACHED();
 }
 
-std::set<SharingSpecificFields::EnabledFeatures>
-SharingDeviceRegistrationImpl::GetEnabledFeatures() const {
+std::set<SharingFeature> SharingDeviceRegistrationImpl::GetEnabledFeatures()
+    const {
   // Used in tests
   if (enabled_features_testing_value_) {
     return enabled_features_testing_value_.value();
   }
 
-  std::set<SharingSpecificFields::EnabledFeatures> enabled_features;
-  if (IsClickToCallSupported()) {
-    enabled_features.insert(SharingSpecificFields::CLICK_TO_CALL_V2);
-  }
-  if (IsSharedClipboardSupported()) {
-    enabled_features.insert(SharingSpecificFields::SHARED_CLIPBOARD_V2);
-  }
+  std::set<SharingFeature> enabled_features;
+
   if (IsSmsFetcherSupported()) {
-    enabled_features.insert(SharingSpecificFields::SMS_FETCHER);
+    enabled_features.insert(SharingFeature::kSmsFetcher);
   }
   if (IsRemoteCopySupported()) {
-    enabled_features.insert(SharingSpecificFields::REMOTE_COPY);
+    enabled_features.insert(SharingFeature::kRemoteCopy);
   }
   if (IsOptimizationGuidePushNotificationSupported()) {
-    enabled_features.insert(
-        SharingSpecificFields::OPTIMIZATION_GUIDE_PUSH_NOTIFICATION);
+    enabled_features.insert(SharingFeature::kOptimizationGuidePushNotification);
   }
-#if BUILDFLAG(ENABLE_DISCOVERY)
-  enabled_features.insert(SharingSpecificFields::DISCOVERY);
-#endif
+  if (IsOneTimeTokenBackendNotificationSupported()) {
+    enabled_features.insert(SharingFeature::kOneTimeTokenBackendNotification);
+  }
+  if (IsGlicExperimentalTriggeringSupported()) {
+    enabled_features.insert(SharingFeature::kGlicExperimentalTriggering);
+  }
 
   return enabled_features;
-}
-
-bool SharingDeviceRegistrationImpl::IsClickToCallSupported() const {
-#if BUILDFLAG(IS_ANDROID)
-  JNIEnv* env = jni_zero::AttachCurrentThread();
-  return Java_SharingJNIBridge_isTelephonySupported(env);
-#else
-  return false;
-#endif
-}
-
-bool SharingDeviceRegistrationImpl::IsSharedClipboardSupported() const {
-  // Check the enterprise policy for Shared Clipboard.
-  if (pref_service_ &&
-      !pref_service_->GetBoolean(prefs::kSharedClipboardEnabled)) {
-    return false;
-  }
-  return true;
 }
 
 bool SharingDeviceRegistrationImpl::IsSmsFetcherSupported() const {
@@ -267,11 +239,18 @@ bool SharingDeviceRegistrationImpl::
          optimization_guide::features::IsPushNotificationsEnabled();
 }
 
+bool SharingDeviceRegistrationImpl::IsOneTimeTokenBackendNotificationSupported()
+    const {
+  return base::FeatureList::IsEnabled(kOneTimeTokenBackendNotification);
+}
+
+bool SharingDeviceRegistrationImpl::IsGlicExperimentalTriggeringSupported()
+    const {
+  return base::FeatureList::IsEnabled(features::kGlicExperimentalTriggering);
+}
+
 void SharingDeviceRegistrationImpl::SetEnabledFeaturesForTesting(
-    std::set<SharingSpecificFields::EnabledFeatures> enabled_features) {
+    std::set<SharingFeature> enabled_features) {
   enabled_features_testing_value_ = std::move(enabled_features);
 }
 
-#if BUILDFLAG(IS_ANDROID)
-DEFINE_JNI(SharingJNIBridge)
-#endif

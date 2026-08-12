@@ -25,6 +25,10 @@ namespace metrics {
 class MemoryMetricsLogger;
 }
 
+namespace performance_manager {
+class PerformanceManagerLifetime;
+}
+
 namespace android_webview {
 
 class AwBrowserProcess;
@@ -43,14 +47,13 @@ class AwBrowserMainParts : public content::BrowserMainParts {
   // Overriding methods from content::BrowserMainParts.
   int PreEarlyInitialization() override;
   int PreCreateThreads() override;
+  void PreCreateMainMessageLoop() override;
   int PreMainMessageLoopRun() override;
   void WillRunMainMessageLoop(
       std::unique_ptr<base::RunLoop>& run_loop) override;
   void PostCreateThreads() override;
 
-  static bool isWebViewStartupTasksExperimentEnabled();
-  static bool isWebViewStartupTasksExperimentEnabledP2();
-  static bool isStartupTaskYieldToNativeExperimentEnabled();
+  static bool runStartupTasksAsync();
 
  private:
   void RegisterSyntheticTrials();
@@ -63,6 +66,9 @@ class AwBrowserMainParts : public content::BrowserMainParts {
   std::unique_ptr<metrics::MemoryMetricsLogger> metrics_logger_;
 
   std::unique_ptr<content::SyntheticTrialSyncer> synthetic_trial_syncer_;
+
+  std::unique_ptr<performance_manager::PerformanceManagerLifetime>
+      performance_manager_lifetime_;
 
   std::unique_ptr<AwBrowserProcess> browser_process_;
   std::unique_ptr<crash_reporter::ChildExitObserver> child_exit_observer_;

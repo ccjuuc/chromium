@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,39 +11,28 @@
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_search_field/cr_search_field.js';
 import '//resources/cr_elements/icons.html.js';
-import '//resources/cr_elements/cr_shared_style.css.js';
-import '../settings_shared.css.js';
+import '//resources/cr_elements/cr_shared_style_lit.css.js';
+import '../settings_shared_lit.css.js';
 import '../site_favicon.js';
 
 import type {CrSearchFieldElement} from '//resources/cr_elements/cr_search_field/cr_search_field.js';
-import type {FindShortcutListener} from '//resources/cr_elements/find_shortcut_manager.js';
-import {FindShortcutMixin} from '//resources/cr_elements/find_shortcut_mixin.js';
-import type {I18nMixinInterface} from '//resources/cr_elements/i18n_mixin.js';
-import {I18nMixin} from '//resources/cr_elements/i18n_mixin.js';
+import {FindShortcutMixinLit} from '//resources/cr_elements/find_shortcut_mixin_lit.js';
 import {assert} from '//resources/js/assert.js';
 import {focusWithoutInk} from '//resources/js/focus_without_ink.js';
-import {listenOnce} from '//resources/js/util.js';
-import {IronResizableBehavior} from '//resources/polymer/v3_0/iron-resizable-behavior/iron-resizable-behavior.js';
-import {afterNextRender, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 
 import {loadTimeData} from '../i18n_setup.js';
-import type {Route, RouteObserverMixinInterface} from '../router.js';
-import {RouteObserverMixin, Router} from '../router.js';
+import type {Route} from '../router.js';
+import {RouteObserverMixinLit, Router} from '../router.js';
 
-import {getTemplate} from './settings_subpage.html.js';
+import {getCss} from './settings_subpage.css.js';
+import {getHtml} from './settings_subpage.html.js';
 
-
-const SETTING_ID_URL_PARAM_NAME: string = 'settingId';
-
-/**
- * Retrieves the setting ID saved in the URL's query parameter. Returns null if
- * setting ID is unavailable.
- */
-function getSettingIdParameter(): string|null {
-  return Router.getInstance().getQueryParameters().get(
-      SETTING_ID_URL_PARAM_NAME);
-}
+const SettingsSubpageElementBase =
+    RouteObserverMixinLit(FindShortcutMixinLit(I18nMixinLit(CrLitElement)));
 
 export interface SettingsSubpageElement {
   $: {
@@ -51,81 +40,59 @@ export interface SettingsSubpageElement {
   };
 }
 
-const SettingsSubpageElementBase =
-    mixinBehaviors(
-        [IronResizableBehavior],
-        RouteObserverMixin(FindShortcutMixin(I18nMixin(PolymerElement)))) as {
-      new (): PolymerElement & FindShortcutListener & I18nMixinInterface &
-          RouteObserverMixinInterface,
-    };
-
 export class SettingsSubpageElement extends SettingsSubpageElementBase {
   static get is() {
     return 'settings-subpage';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      pageTitle: String,
+      pageTitle: {type: String},
 
-      /** Setting this will display the icon at the given URL. */
-      titleIcon: String,
+      // Setting this will display the icon at the given URL.
+      titleIcon: {type: String},
 
-      /** Setting this will display the favicon of the website. */
-      faviconSiteUrl: String,
+      // Setting this will display the favicon of the website.
+      faviconSiteUrl: {type: String},
 
-      learnMoreUrl: String,
+      learnMoreUrl: {type: String},
 
-      /** Setting a |searchLabel| will enable search. */
-      searchLabel: String,
+      // Setting a |searchLabel| will enable search.
+      searchLabel: {type: String},
 
-      /** Setting a |searchIcon| will override the default search icon. */
-      searchIcon: String,
+      // Setting a |searchIcon| will override the default search icon.
+      searchIcon: {type: String},
 
       searchTerm: {
         type: String,
         notify: true,
-        value: '',
       },
 
-      /**
-       * Whether we should hide the "close" button to get to the previous page.
-       */
-      hideCloseButton: {
-        type: Boolean,
-        value: false,
-      },
+      // Whether the subpage search term should be preserved across navigations.
+      preserveSearchTerm: {type: Boolean},
 
-      /**
-       * Whether the subpage search term should be preserved across navigations.
-       */
-      preserveSearchTerm: {
-        type: Boolean,
-        value: false,
-      },
-
-      active_: {
-        type: Boolean,
-        value: false,
-        observer: 'onActiveChanged_',
-      },
+      active_: {type: Boolean},
     };
   }
 
-  declare pageTitle: string;
-  declare titleIcon: string;
-  declare faviconSiteUrl: string;
-  declare learnMoreUrl: string;
-  declare searchLabel: string;
-  declare searchIcon: string;
-  declare searchTerm: string;
-  declare hideCloseButton: boolean;
-  declare preserveSearchTerm: boolean;
-  declare private active_: boolean;
+  accessor pageTitle: string = '';
+  accessor titleIcon: string = '';
+  accessor faviconSiteUrl: string = '';
+  accessor learnMoreUrl: string = '';
+  accessor searchLabel: string = '';
+  accessor searchIcon: string = '';
+  accessor searchTerm: string = '';
+  accessor preserveSearchTerm: boolean = false;
+  protected accessor active_: boolean = false;
+
   private lastActiveValue_: boolean = false;
   private eventTracker_: EventTracker|null = null;
 
@@ -156,24 +123,32 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     }
   }
 
-  private getSearchField_(): Promise<CrSearchFieldElement> {
-    let searchField = this.shadowRoot!.querySelector('cr-search-field');
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+
+    if (changedPrivateProperties.has('active_')) {
+      this.onActiveChanged_();
+    }
+  }
+
+  private async getSearchField_(): Promise<CrSearchFieldElement> {
+    let searchField = this.shadowRoot.querySelector('cr-search-field');
     if (searchField) {
-      return Promise.resolve(searchField);
+      return searchField;
     }
 
-    return new Promise(resolve => {
-      listenOnce(this, 'dom-change', () => {
-        searchField = this.shadowRoot!.querySelector('cr-search-field');
-        assert(!!searchField);
-        resolve(searchField);
-      });
-    });
+    await this.updateComplete;
+    searchField = this.shadowRoot.querySelector('cr-search-field');
+    assert(searchField);
+    return searchField;
   }
 
   /** Restore search field value from URL search param */
   private restoreSearchInput_() {
-    const searchField = this.shadowRoot!.querySelector('cr-search-field')!;
+    const searchField = this.shadowRoot.querySelector('cr-search-field')!;
     const urlSearchQuery =
         Router.getInstance().getQueryParameters().get('searchSubpage') || '';
     this.searchTerm = urlSearchQuery;
@@ -191,11 +166,9 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
   }
 
   /** Focuses the back button when page is loaded. */
-  focusBackButton() {
-    if (this.hideCloseButton) {
-      return;
-    }
-    afterNextRender(this, () => focusWithoutInk(this.$.closeButton));
+  async focusBackButton() {
+    await this.updateComplete;
+    focusWithoutInk(this.$.closeButton);
   }
 
   override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
@@ -203,12 +176,11 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     if (this.active_ && this.searchLabel && this.preserveSearchTerm) {
       this.getSearchField_().then(() => this.restoreSearchInput_());
     }
-    if (!oldRoute && !getSettingIdParameter()) {
+    if (!oldRoute) {
       // If a settings subpage is opened directly (i.e the |oldRoute| is null,
-      // e.g via an OS settings search result that surfaces from the Chrome OS
-      // launcher, or linking from other places of Chrome UI), the back button
-      // should be focused since it's the first actionable element in the the
-      // subpage. An exception is when a setting is deep linked, focus that
+      // e.g via linking from other places of Chrome UI), the back button should
+      // be focused since it's the first actionable element in the the subpage.
+      // An exception is when a setting is deep linked, focus that
       // setting instead of back button.
       this.focusBackButton();
     }
@@ -229,7 +201,7 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
       return;
     }
 
-    const searchField = this.shadowRoot!.querySelector('cr-search-field');
+    const searchField = this.shadowRoot.querySelector('cr-search-field');
     if (searchField) {
       searchField.setValue('');
     }
@@ -244,18 +216,18 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
   /** Clear the value of the search field. */
   private onClearSubpageSearch_(e: Event) {
     e.stopPropagation();
-    this.shadowRoot!.querySelector('cr-search-field')!.setValue('');
+    this.shadowRoot.querySelector('cr-search-field')!.setValue('');
   }
 
-  private onBackClick_() {
+  protected onBackClick_() {
     Router.getInstance().navigateToPreviousRoute();
   }
 
-  private onHelpClick_() {
+  protected onHelpClick_() {
     window.open(this.learnMoreUrl);
   }
 
-  private onSearchChanged_(e: CustomEvent<string>) {
+  protected onSearchChanged_(e: CustomEvent<string>) {
     if (this.searchTerm === e.detail) {
       return;
     }
@@ -266,15 +238,15 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     }
   }
 
-  private getBackButtonAriaLabel_() {
+  protected getBackButtonAriaLabel_(): string {
     return this.i18n('subpageBackButtonAriaLabel', this.pageTitle);
   }
 
-  private getBackButtonAriaRoleDescription_() {
+  protected getBackButtonAriaRoleDescription_(): string {
     return this.i18n('subpageBackButtonAriaRoleDescription', this.pageTitle);
   }
 
-  private getLearnMoreAriaLabel_() {
+  protected getLearnMoreAriaLabel_(): string {
     return this.i18n('subpageLearnMoreAriaLabel', this.pageTitle);
   }
 
@@ -283,13 +255,13 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     if (modalContextOpen) {
       return false;
     }
-    this.shadowRoot!.querySelector('cr-search-field')!.getSearchInput().focus();
+    this.shadowRoot.querySelector('cr-search-field')!.getSearchInput().focus();
     return true;
   }
 
   // Override FindShortcutMixin methods.
   override searchInputHasFocus() {
-    const field = this.shadowRoot!.querySelector('cr-search-field')!;
+    const field = this.shadowRoot.querySelector('cr-search-field')!;
     return field.getSearchInput() === field.shadowRoot.activeElement;
   }
 }

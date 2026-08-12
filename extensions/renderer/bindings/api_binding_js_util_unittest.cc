@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "base/functional/bind.h"
+#include "base/strings/strcat.h"
 #include "extensions/renderer/bindings/api_binding_test_util.h"
 #include "extensions/renderer/bindings/api_bindings_system.h"
 #include "extensions/renderer/bindings/api_bindings_system_unittest.h"
@@ -217,13 +218,13 @@ TEST_F(APIBindingJSUtilUnittest, TestSendRequestWithOptions) {
   EXPECT_EQ("alpha.functionWithCallback", last_request()->method_name);
   EXPECT_EQ("[\"stringy\"]", ValueToString(last_request()->arguments_list));
   bindings_system()->CompleteRequest(last_request()->request_id,
-                                     base::Value::List(), std::string());
+                                     base::ListValue(), std::string());
   EXPECT_EQ("true", GetStringPropertyFromObject(context->Global(), context,
                                                 "callbackCalled"));
 }
 
 // Tests that arguments passed to sendRequest that won't serialize are
-// replaced with null. Regression test for https://crbug.com/924045.
+// replaced with null. Regression test for https://crbug.com/41436737.
 TEST_F(APIBindingJSUtilUnittest, TestSendRequestSerializationFailure) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -403,7 +404,7 @@ TEST_F(APIBindingJSUtilUnittest, TestValidateCustomSignature) {
 
   // Test a failing case (prop1 is supposed to be a string).
   std::string expected_error =
-      "Uncaught TypeError: " + api_errors::NoMatchingSignature();
+      base::StrCat({"Uncaught TypeError: ", api_errors::NoMatchingSignature()});
   call_validate_signature(
       R"((function(util) {
            util.validateCustomSignature('custom_signature', [1, 2]);

@@ -55,21 +55,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CookieAccessDelegateImpl
       const std::string_view domain) const override;
   bool ShouldIgnoreSameSiteRestrictions(
       const GURL& url,
-      const net::SiteForCookies& site_for_cookies) const override;
-  [[nodiscard]] std::optional<
-      std::pair<net::FirstPartySetMetadata,
-                net::FirstPartySetsCacheFilter::MatchInfo>>
-  ComputeFirstPartySetMetadataMaybeAsync(
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_level_origin) const override;
+  [[nodiscard]]
+  std::pair<net::FirstPartySetMetadata,
+            net::FirstPartySetsCacheFilter::MatchInfo>
+  ComputeFirstPartySetMetadata(
       const net::SchemefulSite& site,
-      const net::SchemefulSite* top_frame_site,
-      base::OnceCallback<void(net::FirstPartySetMetadata,
-                              net::FirstPartySetsCacheFilter::MatchInfo)>
-          callback) const override;
-  [[nodiscard]] std::optional<FirstPartySetsAccessDelegate::EntriesResult>
-  FindFirstPartySetEntries(
-      const base::flat_set<net::SchemefulSite>& sites,
-      base::OnceCallback<void(FirstPartySetsAccessDelegate::EntriesResult)>
-          callback) const override;
+      const net::SchemefulSite* top_frame_site) const override;
 
  private:
   const mojom::CookieAccessDelegateType type_;

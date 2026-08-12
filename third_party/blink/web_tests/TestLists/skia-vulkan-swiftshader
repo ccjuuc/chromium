@@ -72,7 +72,6 @@ css3/blending/mix-blend-mode-isolated-group-2.html
 css3/blending/mix-blend-mode-isolated-group-3.html
 css3/filters/blur-filter-page-scroll-parents.html
 css3/filters/blur-filter-page-scroll.html
-css3/filters/crash-filter-change.html
 css3/filters/effect-blur.html
 css3/filters/effect-brightness-clamping.html
 css3/filters/effect-combined.html
@@ -87,6 +86,7 @@ css3/masking/mask-repeat-round-border.html
 css3/masking/mask-repeat-round-content.html
 css3/masking/mask-repeat-round-padding.html
 css3/masking/mask-repeat-space-border.html
+external/wpt/css/filter-effects/crashtests/filter-change.html
 images/color-profile-animate-rotate.html
 images/color-profile-animate.html
 images/color-profile-background-image-cover.html
@@ -138,7 +138,6 @@ css3/filters/effect-combined-hw.html
 css3/filters/effect-drop-shadow-hw.html
 external/wpt/css/filter-effects/backdrop-filter-basic-blur.html
 images/yuv-decode-eligible/color-profile-layer-filter.html
-transforms/3d/point-mapping/3d-point-mapping-deep.html
 
 # No Video Rendering - crbug.com/935570
 compositing/geometry/video-fixed-scrolling.html
@@ -208,7 +207,6 @@ css3/filters/filter-repaint-composited-fallback-crash.html
 # Webplugin Failing to Create Promise SkImage - crbug.com/935648
 compositing/plugins/webplugin-alpha.html
 compositing/plugins/webplugin-no-alpha.html
-compositing/plugins/webplugin-reflection.html
 
 # Subframe not painting - crbug.com/935672
 compositing/overflow/border-radius-above-composited-subframe.html
@@ -408,11 +406,7 @@ animations/prefixed/string-keyframes-identifier-prefixed.html
 animations/responsive/responsive-neutral-keyframes.html
 animations/retain-zero-percent.html
 animations/some-keyframes-empty.html
-animations/stability/animation-transition-collision-crash.html
 animations/stability/empty-keyframes.html
-animations/stability/keyframe-timing-function-unset-crash.html
-animations/stability/keyframeeffect-no-target-crash.html
-animations/stability/option-opacity-inherit-crash.html
 animations/stability/zero-duration-infinite-iterations.html
 animations/timing/keyframe-timing-functions3.html
 animations/timing/longhand-timing-function.html
@@ -558,7 +552,7 @@ css3/blending/svg-isolation-add-masking.html
 css3/blending/svg-isolation-embed-isolate.html
 css3/calc/border.html
 css3/calc/calc-errors.html
-css3/calc/calc-numbers.html
+external/wpt/css/css-values/calc-numbers.html
 css3/calc/getComputedStyle-border-radius.html
 css3/calc/img-size.html
 css3/calc/letter-spacing.html
@@ -593,29 +587,19 @@ css3/masking/clip-path-reference-userSpaceOnUse.html
 css3/masking/parsing-clip-path-iri.html
 css3/motion-path/offset-anchor-rotation.html
 css3/motion-path/path-establishes-stacking-context.html
-css3/selectors3/html/css3-modsel-148.html
-css3/selectors3/html/css3-modsel-151.html
-css3/selectors3/html/css3-modsel-159.html
-css3/selectors3/html/css3-modsel-168.html
-css3/selectors3/html/css3-modsel-169a.html
-css3/selectors3/html/css3-modsel-175c.html
-css3/selectors3/html/css3-modsel-177a.html
-css3/selectors3/html/css3-modsel-184c.html
-css3/selectors3/html/css3-modsel-184e.html
-css3/selectors3/html/css3-modsel-21.html
-css3/selectors3/html/css3-modsel-36.html
-css3/selectors3/html/css3-modsel-39c.html
-css3/selectors3/html/css3-modsel-73.html
-css3/selectors3/html/css3-modsel-77b.html
-css3/selectors3/html/css3-modsel-81b.html
-css3/supports-crash.html
 css3/tab-size-span.html
 css3/viewport-percentage-lengths/css3-viewport-percentage-lengths-getStyle.html
 css3/viewport-percentage-lengths/css3-viewport-percentage-lengths-vmax-absolute.html
 css3/viewport-percentage-lengths/viewport-percentage-lengths-page-zoom.html
 cssom/elementfrompoint-scrolloffset.html
+external/wpt/css/css-animations/crashtests/animation-transition-collision-crash.html
+external/wpt/css/css-animations/crashtests/keyframe-timing-function-unset-crash.html
+external/wpt/css/css-animations/crashtests/option-opacity-inherit-crash.html
+external/wpt/css/css-conditional/crashtests/supports-malformed.html
 external/wpt/css/css-fonts/animations/font-size-composition.html
+external/wpt/css/css-transforms/crashtests/transformed-scroller-snapping-crash.html
 external/wpt/svg/geometry/animations/x-composition.html
+external/wpt/web-animations/crashtests/keyframeeffect-no-target-crash.html
 fast/canvas/2d.fillText.gradient.html
 fast/canvas/2d.text.draw.fill.maxWidth.gradient.html
 fast/canvas/OffscreenCanvas-2d-drawImage-no-context.html
@@ -648,7 +632,7 @@ fast/canvas/canvas-fillPath-pattern-shadow.html
 fast/canvas/canvas-filter-fill-liveness.html
 fast/canvas/canvas-filter-frameless-document.html
 fast/canvas/canvas-filter-liveness.html
-fast/canvas/canvas-filter-shadow.html
+external/wpt/html/canvas/element/manual/filters/canvas-filter-shadow.html
 fast/canvas/canvas-filter-stroke-paint-pattern.html
 fast/canvas/canvas-filter-units-ex.html
 fast/canvas/canvas-frameless-document-text.html
@@ -676,7 +660,6 @@ fast/canvas/canvas-transform-nan.html
 fast/canvas/canvas-transform-skewed.html
 fast/canvas/canvas-transforms-fillRect-shadow.html
 fast/canvas/canvas-unbalanced-save.html
-fast/canvas/color-space/ImageData-fidelity.html
 fast/canvas/color-space/canvas-getImageData-rec2020.html
 fast/canvas/color-space/transferFromImageBitmap.html
 fast/canvas/drawImage-with-globalAlpha.html
@@ -776,7 +759,6 @@ transforms/transform-hit-test-flipped.html
 transforms/transform-inside-overflow-scroll.html
 transforms/transform-style-parsing.html
 transforms/transformed-caret.html
-transforms/transformed-scroller-snapping-crash.html
 transforms/translate.html
 transforms/webkit-perspective-origin-csstext.html
 

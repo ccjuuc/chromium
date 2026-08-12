@@ -4,10 +4,12 @@
 
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 
+#include "base/test/scoped_feature_list.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/viz/public/mojom/hit_test/hit_test_region_list.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
@@ -20,6 +22,7 @@
 #include "third_party/blink/renderer/core/html/canvas/unique_font_selector.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
 #include "third_party/blink/renderer/modules/canvas/htmlcanvas/html_canvas_element_module.h"
+#include "third_party/blink/renderer/modules/canvas/imagebitmap/image_bitmap_rendering_context.h"
 #include "third_party/blink/renderer/modules/canvas/offscreencanvas2d/offscreen_canvas_rendering_context_2d.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_resource.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
@@ -28,9 +31,11 @@
 #include "third_party/blink/renderer/platform/graphics/test/mock_compositor_frame_sink.h"
 #include "third_party/blink/renderer/platform/graphics/test/mock_embedded_frame_sink_provider.h"
 #include "third_party/blink/renderer/platform/graphics/test/test_webgraphics_shared_image_interface_provider.h"
+#include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/skia/include/core/SkSurface.h"
 
 using ::testing::_;
 using ::testing::Combine;
@@ -137,7 +142,7 @@ void OffscreenCanvasTest::SetUp() {
       ScopedTestingPlatformSupport<AcceleratedCompositingTestPlatform>>();
 
   GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-      String::FromUTF8("<body><canvas id='c'></canvas></body>"));
+      "<body><canvas id='c'></canvas></body>");
 
   canvas_element_ =
       To<HTMLCanvasElement>(GetDocument().getElementById(AtomicString("c")));
@@ -148,7 +153,7 @@ void OffscreenCanvasTest::SetUp() {
       exception_state);
   // |offscreen_canvas_| should inherit the FrameSinkId from |canvas_element|s
   // SurfaceLayerBridge, but in tests this id is zero; fill it up by hand.
-  offscreen_canvas_->SetFrameSinkId(kClientId, kSinkId);
+  offscreen_canvas_->SetFrameSinkIdForTesting(kClientId, kSinkId);
 
   CanvasContextCreationAttributesCore attrs;
   if (testing::UnitTest::GetInstance()->current_test_info()->value_param()) {
@@ -190,7 +195,7 @@ TEST_F(OffscreenCanvasTest, AnimationUsesSyntheticTimerWhenHidden) {
 
   // Without capture, animation should be suspended.
   EXPECT_EQ(GetCanvasElement()->GetAnimationStateForTesting(),
-            CanvasResourceDispatcher::AnimationState::kSuspended);
+            OffscreenCanvasPlaceholder::AnimationState::kSuspended);
 
   // Cause the canvas to believe that it's being captured, and verify that we're
   // now using synthetic timing.
@@ -198,13 +203,12 @@ TEST_F(OffscreenCanvasTest, AnimationUsesSyntheticTimerWhenHidden) {
   GetCanvasElement()->AddListener(listener);
   EXPECT_EQ(
       GetCanvasElement()->GetAnimationStateForTesting(),
-      CanvasResourceDispatcher::AnimationState::kActiveWithSyntheticTiming);
+      OffscreenCanvasPlaceholder::AnimationState::kActiveWithSyntheticTiming);
   GetCanvasElement()->RemoveListener(listener);
 }
 
 TEST_F(OffscreenCanvasTest, SwitchFrameByCanvasImageSource) {
-  auto* canvas = MakeGarbageCollected<OffscreenCanvas>(
-      GetDocument().GetExecutionContext(), gfx::Size(100, 100));
+  auto* canvas = OffscreenCanvas::Create(GetScriptState(), 100, 100);
   // Make sure the canvas has the context.
   ASSERT_TRUE(canvas->GetCanvasRenderingContext(
       GetDocument().GetExecutionContext(),
@@ -219,8 +223,7 @@ TEST_F(OffscreenCanvasTest, SwitchFrameByCanvasImageSource) {
 }
 
 TEST_F(OffscreenCanvasTest, SwitchFrameByImageBitmapSource) {
-  auto* canvas = MakeGarbageCollected<OffscreenCanvas>(
-      GetDocument().GetExecutionContext(), gfx::Size(100, 100));
+  auto* canvas = OffscreenCanvas::Create(GetScriptState(), 100, 100);
   // Make sure the canvas has the context.
   ASSERT_TRUE(canvas->GetCanvasRenderingContext(
       GetDocument().GetExecutionContext(),
@@ -265,10 +268,13 @@ TEST_P(OffscreenCanvasTest, CompositorFrameOpacity) {
 
   const bool context_alpha = GetParam().alpha;
 
-  auto canvas_resource = CanvasResourceSharedImage::CreateSoftware(
+  auto canvas_resource = CanvasResourceSharedImage::CreateForTesting(
       offscreen_canvas().Size(), viz::SinglePlaneFormat::kBGRA_8888,
       kPremul_SkAlphaType, gfx::ColorSpace::CreateSRGB(),
-      /*provider=*/nullptr, shared_image_interface_provider());
+      gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY,
+      /*is_software=*/true,
+      /*is_accelerated=*/false, /*provider=*/nullptr,
+      /*context_provider_wrapper=*/nullptr, shared_image_interface_provider());
   EXPECT_TRUE(!!canvas_resource);
 
   EXPECT_CALL(mock_embedded_frame_sink_provider.mock_compositor_frame_sink(),
@@ -287,8 +293,7 @@ TEST_P(OffscreenCanvasTest, CompositorFrameOpacity) {
             EXPECT_NE(shared_quad_state_list.front()->are_contents_opaque,
                       context_alpha);
           }));
-  offscreen_canvas().PushFrame(std::move(canvas_resource),
-                               SkIRect::MakeWH(10, 10));
+  offscreen_canvas().PushFrame(std::move(canvas_resource));
   platform->RunUntilIdle();
 }
 
@@ -300,6 +305,65 @@ TEST_P(OffscreenCanvasTest, GetRasterModeAutoRecovery) {
   offscreen_canvas().SetPreferred2DRasterMode(RasterModeHint::kPreferGPU);
   EXPECT_EQ(offscreen_canvas().GetRasterModeForCanvas2D(), RasterMode::kGPU);
   EXPECT_TRUE(SharedGpuContext::IsValidWithoutRestoringForTesting());
+}
+
+TEST_F(OffscreenCanvasTest, BitmapRendererResizePreservesTaint) {
+  auto* canvas = OffscreenCanvas::Create(GetScriptState(), 100, 100);
+  CanvasContextCreationAttributesCore attrs;
+  auto* context = static_cast<ImageBitmapRenderingContext*>(
+      canvas->GetCanvasRenderingContext(
+          GetDocument().GetExecutionContext(),
+          CanvasRenderingContext::CanvasRenderingAPI::kBitmaprenderer, attrs));
+  ASSERT_NE(context, nullptr);
+
+  // Create a tainted ImageBitmap.
+  SkImageInfo info = SkImageInfo::MakeN32Premul(10, 10);
+  sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+  auto image =
+      UnacceleratedStaticBitmapImage::Create(surface->makeImageSnapshot());
+  image->SetOriginClean(false);
+  auto* bitmap = MakeGarbageCollected<ImageBitmap>(image);
+  EXPECT_FALSE(bitmap->OriginClean());
+
+  // Transfer tainted bitmap to canvas.
+  context->transferFromImageBitmap(bitmap, ASSERT_NO_EXCEPTION);
+  EXPECT_FALSE(canvas->OriginClean());
+  EXPECT_TRUE(context->IsPaintable());
+
+  // Resize the canvas.
+  canvas->setWidth(101);
+
+  // origin_clean_ should still be false.
+  EXPECT_FALSE(canvas->OriginClean());
+  EXPECT_TRUE(context->IsPaintable());
+  CanvasRenderingContext::GetCanvasPerformanceMonitor().ResetForTesting();
+}
+
+TEST_F(OffscreenCanvasTest, VisibilityPropagation) {
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        blink::features::kOffscreenCanvasPropagateVisibility);
+
+    EXPECT_TRUE(offscreen_canvas().IsPageVisible());
+    offscreen_canvas().SetParentVisibility(false);
+    // Should remain visible because the feature is disabled.
+    EXPECT_TRUE(offscreen_canvas().IsPageVisible());
+  }
+
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        blink::features::kOffscreenCanvasPropagateVisibility);
+
+    EXPECT_TRUE(offscreen_canvas().IsPageVisible());
+
+    offscreen_canvas().SetParentVisibility(false);
+    EXPECT_FALSE(offscreen_canvas().IsPageVisible());
+
+    offscreen_canvas().SetParentVisibility(true);
+    EXPECT_TRUE(offscreen_canvas().IsPageVisible());
+  }
 }
 
 const TestParams kTestCases[] = {

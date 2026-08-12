@@ -4,19 +4,23 @@
 
 package org.chromium.chrome.browser.customtabs;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.app.Activity;
 import android.view.ViewGroup;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,25 +35,25 @@ public class CustomTabCompositorContentInitializer implements NativeInitObserver
 
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
     private final Activity mActivity;
-    private final Supplier<CompositorViewHolder> mCompositorViewHolder;
-    private final ObservableSupplier<TabContentManager> mTabContentManagerSupplier;
+    private final Supplier<@Nullable CompositorViewHolder> mCompositorViewHolder;
+    private final MonotonicObservableSupplier<TabContentManager> mTabContentManagerSupplier;
     private final CompositorViewHolder.Initializer mCompositorViewHolderInitializer;
-    private final TopUiThemeColorProvider mTopUiThemeColorProvider;
+    private final ToolbarThemeColorProvider mToolbarThemeColorProvider;
 
     private boolean mInitialized;
 
     public CustomTabCompositorContentInitializer(
             Activity activity,
-            Supplier<CompositorViewHolder> compositorViewHolder,
-            ObservableSupplier<TabContentManager> tabContentManagerSupplier,
+            Supplier<@Nullable CompositorViewHolder> compositorViewHolder,
+            MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
             CompositorViewHolder.Initializer compositorViewHolderInitializer,
-            TopUiThemeColorProvider topUiThemeColorProvider,
+            ToolbarThemeColorProvider toolbarThemeColorProvider,
             ActivityLifecycleDispatcher lifecycleDispatcher) {
         mActivity = activity;
         mCompositorViewHolder = compositorViewHolder;
         mTabContentManagerSupplier = tabContentManagerSupplier;
         mCompositorViewHolderInitializer = compositorViewHolderInitializer;
-        mTopUiThemeColorProvider = topUiThemeColorProvider;
+        mToolbarThemeColorProvider = toolbarThemeColorProvider;
         mLifecycleDispatcher = lifecycleDispatcher;
 
         mLifecycleDispatcher.register(this);
@@ -61,7 +65,7 @@ public class CustomTabCompositorContentInitializer implements NativeInitObserver
      */
     public void addCallback(Callback<LayoutManagerImpl> callback) {
         if (mInitialized) {
-            callback.onResult(mCompositorViewHolder.get().getLayoutManager());
+            callback.onResult(assumeNonNull(mCompositorViewHolder.get()).getLayoutManager());
         } else {
             mListeners.add(callback);
         }
@@ -72,10 +76,10 @@ public class CustomTabCompositorContentInitializer implements NativeInitObserver
         ViewGroup contentContainer = mActivity.findViewById(android.R.id.content);
         LayoutManagerImpl layoutDriver =
                 new LayoutManagerImpl(
-                        mCompositorViewHolder.get(),
+                        assertNonNull(mCompositorViewHolder.get()),
                         contentContainer,
                         mTabContentManagerSupplier,
-                        () -> mTopUiThemeColorProvider);
+                        () -> mToolbarThemeColorProvider);
 
         mCompositorViewHolderInitializer.initializeCompositorContent(
                 layoutDriver,

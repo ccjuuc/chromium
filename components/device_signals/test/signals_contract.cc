@@ -17,7 +17,7 @@ namespace {
 
 // Only return false if the value is set to something other than a string.
 bool VerifyOptionalString(const std::string& signal_name,
-                          const base::Value::Dict& signals) {
+                          const base::DictValue& signals) {
   if (!signals.Find(signal_name)) {
     return true;
   }
@@ -26,12 +26,12 @@ bool VerifyOptionalString(const std::string& signal_name,
 }
 
 bool VerifyIsString(const std::string& signal_name,
-                    const base::Value::Dict& signals) {
+                    const base::DictValue& signals) {
   return signals.FindString(signal_name);
 }
 
 bool VerifyIsBoolean(const std::string& signal_name,
-                     const base::Value::Dict& signals) {
+                     const base::DictValue& signals) {
   return signals.FindBool(signal_name).has_value();
 }
 
@@ -39,7 +39,7 @@ bool VerifyIsBoolean(const std::string& signal_name,
 bool VerifyIsIntegerWithRange(const std::string& signal_name,
                               int32_t min_value,
                               int32_t max_value,
-                              const base::Value::Dict& signals) {
+                              const base::DictValue& signals) {
   auto int_value = signals.FindInt(signal_name);
   if (!int_value) {
     return false;
@@ -49,7 +49,7 @@ bool VerifyIsIntegerWithRange(const std::string& signal_name,
 }
 
 bool VerifyIsSettingInteger(const std::string& signal_name,
-                            const base::Value::Dict& signals) {
+                            const base::DictValue& signals) {
   // Verify the value is in the valid enum values range.
   // Enum defined at:
   // //components/device_signals/core/common/common_types.h
@@ -60,7 +60,7 @@ bool VerifyIsSettingInteger(const std::string& signal_name,
 // set in the array.
 bool VerifyIsStringArray(const std::string& signal_name,
                          bool enforce_value,
-                         const base::Value::Dict& signals) {
+                         const base::DictValue& signals) {
   const auto* list_value = signals.FindList(signal_name);
   if (!list_value) {
     return false;
@@ -80,14 +80,14 @@ bool VerifyIsStringArray(const std::string& signal_name,
 }
 
 bool VerifyUnset(const std::string& signal_name,
-                 const base::Value::Dict& signals) {
+                 const base::DictValue& signals) {
   return !signals.Find(signal_name);
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
 void ChangeContractForUnmanagedDevices(
     base::flat_map<std::string,
-                   base::RepeatingCallback<bool(const base::Value::Dict&)>>&
+                   base::RepeatingCallback<bool(const base::DictValue&)>>&
         contract) {
   contract[names::kDeviceAffiliationIds] =
       base::BindRepeating(VerifyIsStringArray, names::kDeviceAffiliationIds,
@@ -112,10 +112,10 @@ void ChangeContractForUnmanagedDevices(
 }  // namespace
 
 base::flat_map<std::string,
-               base::RepeatingCallback<bool(const base::Value::Dict&)>>
-GetSignalsContract(bool is_av_signal_enabled) {
+               base::RepeatingCallback<bool(const base::DictValue&)>>
+GetSignalsContract() {
   base::flat_map<std::string,
-                 base::RepeatingCallback<bool(const base::Value::Dict&)>>
+                 base::RepeatingCallback<bool(const base::DictValue&)>>
       contract;
 
   // Common signals.
@@ -171,13 +171,8 @@ GetSignalsContract(bool is_av_signal_enabled) {
       base::BindRepeating(VerifyIsSettingInteger, names::kScreenLockSecured);
 
 #if BUILDFLAG(IS_WIN)
-  if (is_av_signal_enabled) {
     contract[names::kAntivirusState] =
         base::BindRepeating(VerifyIsSettingInteger, names::kAntivirusState);
-  } else {
-    contract[names::kAntivirusState] =
-        base::BindRepeating(VerifyUnset, names::kAntivirusState);
-  }
   contract[names::kWindowsMachineDomain] =
       base::BindRepeating(VerifyOptionalString, names::kWindowsMachineDomain);
   contract[names::kWindowsUserDomain] =
@@ -186,7 +181,7 @@ GetSignalsContract(bool is_av_signal_enabled) {
       base::BindRepeating(VerifyIsSettingInteger, names::kSecureBootEnabled);
 
   contract[names::kCrowdStrike] =
-      base::BindLambdaForTesting([](const base::Value::Dict& signals) {
+      base::BindLambdaForTesting([](const base::DictValue& signals) {
         // CrowdStrike signals are optional. But if the object is set, then at
         // least one of the values must be present.
         auto* cs_value = signals.Find(device_signals::names::kCrowdStrike);
@@ -227,7 +222,7 @@ GetSignalsContract(bool is_av_signal_enabled) {
   contract[names::kImei] = base::BindRepeating(VerifyUnset, names::kImei);
   contract[names::kMeid] = base::BindRepeating(VerifyUnset, names::kMeid);
   contract[names::kTrigger] =
-      base::BindLambdaForTesting([](const base::Value::Dict& signals) {
+      base::BindLambdaForTesting([](const base::DictValue& signals) {
         return signals.FindInt(names::kTrigger) ==
                static_cast<int>(device_signals::Trigger::kBrowserNavigation);
       });
@@ -248,11 +243,11 @@ GetSignalsContract(bool is_av_signal_enabled) {
 
 #if BUILDFLAG(IS_CHROMEOS)
 base::flat_map<std::string,
-               base::RepeatingCallback<bool(const base::Value::Dict&)>>
-GetSignalsContractForUnmanagedDevices(bool is_av_signal_enabled) {
+               base::RepeatingCallback<bool(const base::DictValue&)>>
+GetSignalsContractForUnmanagedDevices() {
   base::flat_map<std::string,
-                 base::RepeatingCallback<bool(const base::Value::Dict&)>>
-      contract = GetSignalsContract(is_av_signal_enabled);
+                 base::RepeatingCallback<bool(const base::DictValue&)>>
+      contract = GetSignalsContract();
 
   ChangeContractForUnmanagedDevices(contract);
   return contract;

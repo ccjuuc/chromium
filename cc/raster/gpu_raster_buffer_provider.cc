@@ -14,7 +14,6 @@
 
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
@@ -116,10 +115,15 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
   DCHECK(compositor_context_provider);
   CHECK(worker_context_provider);
 
-#if BUILDFLAG(IS_ANDROID)
   {
-    std::optional<viz::RasterContextProvider::ScopedRasterContextLock> lock;
-    lock.emplace(worker_context_provider);
+    viz::RasterContextProvider::ScopedRasterContextLock lock(
+        worker_context_provider);
+
+    should_flush_tile_raster_commands_ =
+        worker_context_provider->ContextCapabilities()
+            .use_deferred_graphite_submit;
+
+#if BUILDFLAG(IS_ANDROID)
     auto is_using_vulkan =
         worker_context_provider->ContextCapabilities().using_vulkan_context;
 
@@ -127,8 +131,8 @@ GpuRasterBufferProvider::GpuRasterBufferProvider(
     // kUseDMSAAForTiles.
     is_using_dmsaa_ = !is_using_vulkan ||
                       base::FeatureList::IsEnabled(features::kUseDMSAAForTiles);
-  }
 #endif
+  }
 }
 
 GpuRasterBufferProvider::~GpuRasterBufferProvider() = default;
@@ -169,29 +173,41 @@ uint64_t GpuRasterBufferProvider::SetReadyToDrawCallback(
     base::OnceClosure callback,
     uint64_t pending_callback_id) {
   FlushIfNeeded();
-  gpu::SyncToken latest_sync_token;
+
+  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images;
+  std::vector<gpu::SyncToken> sync_tokens;
+
+  shared_images.reserve(resources.size());
+  sync_tokens.reserve(resources.size());
+
   for (const auto* in_use : resources) {
-    const gpu::SyncToken& sync_token = in_use->backing()->mailbox_sync_token;
-    if (sync_token.release_count() > latest_sync_token.release_count())
-      latest_sync_token = sync_token;
-  }
-  uint64_t callback_id = latest_sync_token.release_count();
-  DCHECK_NE(callback_id, 0u);
-
-  // If the callback is different from the one the caller is already waiting on,
-  // pass the callback through to SignalSyncToken. Otherwise the request is
-  // redundant.
-  if (callback_id != pending_callback_id) {
-    // Use the compositor context because we want this callback on the
-    // compositor thread.
-    compositor_context_provider_->ContextSupport()->SignalSyncToken(
-        latest_sync_token, std::move(callback));
+    shared_images.push_back(in_use->backing()->shared_image());
+    sync_tokens.push_back(in_use->backing()->mailbox_sync_token);
   }
 
+  uint64_t callback_id = gpu::ClientSharedImage::SignalLatestSyncToken(
+      std::move(shared_images), std::move(sync_tokens), std::move(callback),
+      compositor_context_provider_->ContextSupport(), pending_callback_id);
   return callback_id;
 }
 
 void GpuRasterBufferProvider::Shutdown() {}
+
+void GpuRasterBufferProvider::FlushTileRasterGraphiteCommands() {
+  if (!should_flush_tile_raster_commands_) {
+    return;
+  }
+
+  TRACE_EVENT0("cc",
+               "GpuRasterBufferProvider::FlushTileRasterGraphiteCommands");
+  viz::RasterContextProvider::ScopedRasterContextLock lock(
+      worker_context_provider_);
+  auto* ri = lock.RasterInterface();
+  ri->FlushTileRasterGraphiteCommandsCHROMIUM();
+  // This ensures that the next FlushPendingWork() will flush the
+  // FlushTileRasterGraphiteCommandsCHROMIUM command.
+  ri->OrderingBarrierCHROMIUM();
+}
 
 void GpuRasterBufferProvider::RasterBufferImpl::PlaybackOnWorkerThread(
     const RasterSource* raster_source,
@@ -231,8 +247,8 @@ void GpuRasterBufferProvider::RasterBufferImpl::PlaybackOnWorkerThreadInternal(
       client_->worker_context_provider_->RasterInterface();
   DCHECK(ri);
 
-  const bool measure_raster_metric = client_->metrics_subsampler_.ShouldSample(
-      client_->raster_metric_probability_);
+  const bool measure_raster_metric =
+      base::ShouldRecordSubsampledMetric(client_->raster_metric_probability_);
 
   gfx::Rect playback_rect = raster_full_rect;
   if (resource_has_previous_content_) {
@@ -288,7 +304,7 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
     backing_->CreateSharedImage(sii, flags, "GpuRasterTile");
     mailbox_needs_clear = true;
     ri_access = backing_->shared_image()->BeginRasterAccess(
-        ri, sii->GenUnverifiedSyncToken(),
+        ri, backing_->shared_image()->creation_sync_token(),
         /*readonly=*/false);
   } else {
     ri_access = backing_->shared_image()->BeginRasterAccess(
@@ -312,7 +328,7 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
   ri->BeginRasterCHROMIUM(
       raster_source->background_color(), mailbox_needs_clear,
       playback_settings.msaa_sample_count, msaa_mode, use_lcd_text,
-      playback_settings.visible, backing_->color_space(),
+      playback_settings.visible, backing_->shared_image()->color_space(),
       playback_settings.hdr_headroom, backing_->shared_image()->mailbox().name);
 
   gfx::Vector2dF recording_to_raster_scale = transform.scale();
@@ -328,7 +344,8 @@ void GpuRasterBufferProvider::RasterBufferImpl::RasterizeSource(
       playback_rect, transform.translation(), recording_to_raster_scale,
       raster_source->requires_clear(),
       playback_settings.raster_inducing_scroll_offsets,
-      const_cast<RasterSource*>(raster_source)->max_op_size_hint());
+      const_cast<RasterSource*>(raster_source)->max_op_size_hint(),
+      base::RepeatingCallback<void(SkCanvas*, uint32_t)>());
   ri->EndRasterCHROMIUM();
   backing_->mailbox_sync_token =
       gpu::RasterScopedAccess::EndAccess(std::move(ri_access));

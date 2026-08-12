@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 #include "components/os_crypt/async/common/encryptor.h"
 
@@ -18,6 +19,7 @@ class PrefHashCalculator {
     VALID,
     VALID_ENCRYPTED,
     INVALID_ENCRYPTED,
+    WEAK_HASH_ENCRYPTED,
   };
 
   // Constructs a PrefHashCalculator using |seed_|, |device_id_|.
@@ -35,7 +37,7 @@ class PrefHashCalculator {
   std::string Calculate(const std::string& path,
                         const base::Value* value) const;
   std::string Calculate(const std::string& path,
-                        const base::Value::Dict* dict) const;
+                        const base::DictValue* dict) const;
 
   // Validates the provided preference hash using current and legacy hashing
   // algorithms.
@@ -43,7 +45,7 @@ class PrefHashCalculator {
                             const base::Value* value,
                             const std::string& hash) const;
   ValidationResult Validate(const std::string& path,
-                            const base::Value::Dict* dict,
+                            const base::DictValue* dict,
                             const std::string& hash) const;
 
   // Calculates the OS-encrypted SHA256 hash of the preference's |path| and
@@ -59,7 +61,7 @@ class PrefHashCalculator {
   // on failure.
   std::optional<std::string> CalculateEncryptedHash(
       const std::string& path,
-      const base::Value::Dict* dict,
+      const base::DictValue* dict,
       const os_crypt_async::Encryptor* encryptor) const;
 
   // Validates the OS-encrypted SHA256 |stored_encrypted_hash| of the

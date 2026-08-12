@@ -12,12 +12,18 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/version_info/channel.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/optimization_guide/model_execution/optimization_guide_global_state.h"
+#include "components/optimization_guide/core/model_execution/manifest_broker/test/manifest_builder.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features_generated.h"
+
+// The AI Prompt API is not yet available on Android. Track status here:
+// https://developer.chrome.com/docs/ai/prompt-api
+static_assert(!BUILDFLAG(IS_ANDROID));
 
 namespace extensions {
 
@@ -42,16 +48,12 @@ static constexpr char kManifestTemplate[] =
 // The boolean tuple describing:
 // 1. if the `kAIPromptAPI` chrome://flag is explicitly enabled;
 // 2. if the `kAIPromptAPI` kill switch is triggered;
-// 3. if the `kAIPromptAPIForExtension` kill switch is triggered;
-using Variant = std::tuple<bool, bool, bool>;
+using Variant = std::tuple<bool, bool>;
 bool IsAPIFlagEnabled(Variant v) {
   return std::get<0>(v);
 }
 bool IsAPIKillSwitchTriggered(Variant v) {
   return std::get<1>(v);
-}
-bool IsExtensionKillSwitchTriggered(Variant v) {
-  return std::get<2>(v);
 }
 
 // Describes the test variants in a meaningful way in the parameterized tests.
@@ -61,11 +63,8 @@ std::string DescribeTestVariant(const testing::TestParamInfo<Variant> info) {
   std::string api_kill_switch = IsAPIKillSwitchTriggered(info.param)
                                     ? "WithAPIKillswitch"
                                     : "NoAPIKillswitch";
-  std::string extension_kill_switch = IsExtensionKillSwitchTriggered(info.param)
-                                          ? "WithExtensionKillswitch"
-                                          : "NoExtensionKillswitch";
   return base::JoinString(
-      {api_flag_enabled, api_kill_switch, extension_kill_switch}, "_");
+      {api_flag_enabled, api_kill_switch}, "_");
 }
 
 }  // namespace
@@ -93,20 +92,27 @@ class MAYBE_ExtensionAILanguageModelBrowserTest
     if (IsAPIKillSwitchTriggered(GetParam())) {
       feature_states[blink::features::kAIPromptAPI] = false;
     }
-    if (IsExtensionKillSwitchTriggered(GetParam())) {
-      feature_states[blink::features::kAIPromptAPIForExtension] = false;
-    }
+    feature_states[optimization_guide::kOptimizationGuideManifestBroker] = true;
     feature_list_.InitWithFeatureStates(feature_states);
+
+    command_line->AppendSwitchPath("optimization-guide-manifest-override",
+                                   manifest_override_.path());
   }
 
  private:
   base::test::ScopedFeatureList feature_list_;
+  optimization_guide::ManifestComponentDirectory manifest_component_dir_{
+      optimization_guide::ManifestBuilder().Build()};
+  optimization_guide::ManifestOverrideFile manifest_override_{
+      optimization_guide::ManifestOverrideBuilder()
+          .SetManifestPath(manifest_component_dir_.path())
+          .Build()};
 };
 
 INSTANTIATE_TEST_SUITE_P(
     /* no prefix */,
     MAYBE_ExtensionAILanguageModelBrowserTest,
-    testing::Combine(testing::Bool(), testing::Bool(), testing::Bool()),
+    testing::Combine(testing::Bool(), testing::Bool()),
     &DescribeTestVariant);
 
 // Check whether the API is exposed to the extension worker when expected.
@@ -123,10 +129,9 @@ IN_PROC_BROWSER_TEST_P(MAYBE_ExtensionAILanguageModelBrowserTest,
   )JS";
   TestExtensionDir test_dir;
   test_dir.WriteManifest(kManifestTemplate);
-  // Extension access is blocked by either kill switch.
-  const bool is_api_exposed = IsAPIFlagEnabled(GetParam()) ||
-                              (!IsAPIKillSwitchTriggered(GetParam()) &&
-                               !IsExtensionKillSwitchTriggered(GetParam()));
+  // Extension access is only fully blocked by the overall API kill switch.
+  const bool is_api_exposed =
+      IsAPIFlagEnabled(GetParam()) || !IsAPIKillSwitchTriggered(GetParam());
   test_dir.WriteFile(
       FILE_PATH_LITERAL("sw.js"),
       base::StringPrintf(kScript, base::ToString(is_api_exposed)));

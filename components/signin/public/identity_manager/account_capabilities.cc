@@ -11,7 +11,7 @@
 
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
@@ -36,13 +36,44 @@ AccountCapabilities& AccountCapabilities::operator=(
 AccountCapabilities& AccountCapabilities::operator=(
     AccountCapabilities&& other) noexcept = default;
 
+namespace {
+std::optional<std::vector<std::string_view>>& GetSupportedCapabilitiesCache() {
+  static base::NoDestructor<std::optional<std::vector<std::string_view>>> cache;
+  return *cache;
+}
+}  // namespace
+
 // static
 base::span<const std::string_view>
 AccountCapabilities::GetSupportedAccountCapabilityNames() {
-  static const base::NoDestructor<std::vector<std::string_view>>
-      supported_capabilities(GetSupportedAccountCapabilityNamesInternal());
+  auto& cache = GetSupportedCapabilitiesCache();
+  if (!cache.has_value()) {
+    cache = GetSupportedAccountCapabilityNamesInternal();
+  }
+  return *cache;
+}
 
-  return *supported_capabilities;
+// static
+std::string AccountCapabilities::GetCapabilityDisplayName(
+    std::string_view name) {
+  std::string label = std::string(name);
+#define ACCOUNT_CAPABILITY(cpp_label, java_label, value) \
+  if (name == value) {                                   \
+    return #cpp_label;                                   \
+  }
+#define ACCOUNT_CAPABILITY_F(cpp_label, java_label, value, feature) \
+  if (name == value) {                                              \
+    return #cpp_label;                                              \
+  }
+#include "components/signin/internal/identity_manager/account_capabilities_list.h"
+#undef ACCOUNT_CAPABILITY
+#undef ACCOUNT_CAPABILITY_F
+  NOTREACHED() << "Unknown capability: " << name;
+}
+
+// static
+void AccountCapabilities::ResetSupportedAccountCapabilityNamesForTesting() {
+  GetSupportedCapabilitiesCache().reset();
 }
 
 // static
@@ -83,6 +114,15 @@ bool AccountCapabilities::AreAllCapabilitiesKnown() const {
 
 signin::Tribool AccountCapabilities::GetCapabilityByName(
     std::string_view name) const {
+  if (auto it = capabilities_overrides_.find(name);
+      it != capabilities_overrides_.end()) {
+    return it->second;
+  }
+  return GetFetchedCapabilityByName(name);
+}
+
+signin::Tribool AccountCapabilities::GetFetchedCapabilityByName(
+    std::string_view name) const {
   const auto iterator = capabilities_map_.find(name);
   if (iterator == capabilities_map_.end()) {
     return signin::Tribool::kUnknown;
@@ -90,16 +130,23 @@ signin::Tribool AccountCapabilities::GetCapabilityByName(
   return iterator->second ? signin::Tribool::kTrue : signin::Tribool::kFalse;
 }
 
+const base::flat_map<std::string, signin::Tribool>&
+AccountCapabilities::GetCapabilityOverrides() const {
+  return capabilities_overrides_;
+}
+
 // clang-format off
-// keep-sorted start newline_separated=yes sticky_prefixes=#if group_prefixes=AccountCapabilities,#endif block=yes
+// keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=AccountCapabilities,#endif block=yes
 // clang-format on
 signin::Tribool AccountCapabilities::can_fetch_family_member_info() const {
   return GetCapabilityByName(kCanFetchFamilyMemberInfoCapabilityName);
 }
 
+#if !BUILDFLAG(IS_IOS)
 signin::Tribool AccountCapabilities::can_have_email_address_displayed() const {
   return GetCapabilityByName(kCanHaveEmailAddressDisplayedCapabilityName);
 }
+#endif
 
 #if !BUILDFLAG(IS_ANDROID)
 signin::Tribool
@@ -118,9 +165,38 @@ signin::Tribool AccountCapabilities::can_run_chrome_privacy_sandbox_trials()
 
 signin::Tribool AccountCapabilities::
     can_show_history_sync_opt_ins_without_minor_mode_restrictions() const {
+#if BUILDFLAG(IS_IOS)
+  // If the flag is enabled, read the contextual capability. If the contextual
+  // capability is unknown, fall back to the non-contextual capability - this
+  // is because when the flag is first enabled the new capability may not yet
+  // have been fetched.
+  // TODO(crbug.com/481654422): Remove the unknown fallback once contextual
+  // capabilities are fully rolled out.
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities) &&
+      GetCapabilityByName(
+          kCanContextuallyShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName) !=
+          signin::Tribool::kUnknown) {
+    return GetCapabilityByName(
+        kCanContextuallyShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName);
+  }
+#endif
   return GetCapabilityByName(
       kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName);
 }
+
+#if BUILDFLAG(IS_IOS)
+signin::Tribool AccountCapabilities::can_sign_in_to_chrome() const {
+  return GetCapabilityByName(kCanSignInToChromeCapabilityName);
+}
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+signin::Tribool AccountCapabilities::can_submit_feedback() const {
+  return GetCapabilityByName(kCanSubmitFeedbackInChromeCapabilityName);
+}
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 signin::Tribool AccountCapabilities::can_toggle_auto_updates() const {
@@ -134,10 +210,6 @@ signin::Tribool AccountCapabilities::can_use_chromeos_generative_ai() const {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-signin::Tribool AccountCapabilities::can_use_copyeditor_feature() const {
-  return GetCapabilityByName(kCanUseCopyEditorFeatureName);
-}
-
 #if !BUILDFLAG(IS_IOS)
 signin::Tribool AccountCapabilities::can_use_devtools_generative_ai_features()
     const {
@@ -145,31 +217,63 @@ signin::Tribool AccountCapabilities::can_use_devtools_generative_ai_features()
 }
 #endif
 
+#if !BUILDFLAG(IS_IOS)
 signin::Tribool AccountCapabilities::can_use_edu_features() const {
   return GetCapabilityByName(kCanUseEduFeaturesCapabilityName);
 }
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-signin::Tribool AccountCapabilities::can_use_gemini_in_chrome() const {
-  return GetCapabilityByName(kCanUseGeminiInChromeCapabilityName);
-}
 #endif
 
+signin::Tribool AccountCapabilities::can_use_gemini_in_chrome() const {
+#if BUILDFLAG(IS_IOS)
+  // If the flag is enabled, read the contextual capability. If the contextual
+  // capability is unknown, fall back to the non-contextual capability - this
+  // is because when the flag is first enabled the new capability may not yet
+  // have been fetched.
+  // TODO(crbug.com/489360851): Remove the unknown fallback once contextual
+  // capabilities are fully rolled out.
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities) &&
+      GetCapabilityByName(kCanContextuallyUseGeminiInChromeCapabilityName) !=
+          signin::Tribool::kUnknown) {
+    return GetCapabilityByName(kCanContextuallyUseGeminiInChromeCapabilityName);
+  }
+#endif
+  return GetCapabilityByName(kCanUseGeminiInChromeCapabilityName);
+}
+
+#if BUILDFLAG(IS_CHROMEOS)
 signin::Tribool AccountCapabilities::can_use_generative_ai_in_recorder_app()
     const {
   return GetCapabilityByName(kCanUseGenerativeAiInRecorderApp);
 }
+#endif
 
+#if BUILDFLAG(IS_CHROMEOS)
 signin::Tribool AccountCapabilities::can_use_generative_ai_photo_editing()
     const {
   return GetCapabilityByName(kCanUseGenerativeAiPhotoEditing);
 }
+#endif
 
 signin::Tribool AccountCapabilities::can_use_manta_service() const {
   return GetCapabilityByName(kCanUseMantaServiceName);
 }
 
 signin::Tribool AccountCapabilities::can_use_model_execution_features() const {
+#if BUILDFLAG(IS_IOS)
+  // If the flag is enabled, read the contextual capability. If the contextual
+  // capability is unknown, fall back to the non-contextual capability - this
+  // is because when the flag is first enabled the new capability may not yet
+  // have been fetched.
+  // TODO(crbug.com/481654422): Remove the unknown fallback once contextual
+  // capabilities are fully rolled out.
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities) &&
+      GetCapabilityByName(kCanContextuallyUseModelExecutionFeaturesName) !=
+          signin::Tribool::kUnknown) {
+    return GetCapabilityByName(kCanContextuallyUseModelExecutionFeaturesName);
+  }
+#endif
   return GetCapabilityByName(kCanUseModelExecutionFeaturesName);
 }
 
@@ -207,14 +311,38 @@ signin::Tribool AccountCapabilities::is_subject_to_parental_controls() const {
   return GetCapabilityByName(kIsSubjectToParentalControlsCapabilityName);
 }
 
+signin::Tribool AccountCapabilities::is_subject_to_universal_opt_out() const {
+  return GetCapabilityByName(kIsSubjectToUniversalOptOutCapabilityName);
+}
+
+#if BUILDFLAG(IS_IOS)
+signin::Tribool AccountCapabilities::must_fetch_apple_age_range_in_chrome()
+    const {
+  return GetCapabilityByName(kMustFetchAppleAgeRangeInChromeCapabilityName);
+}
+#endif
+
+#if BUILDFLAG(IS_IOS)
+signin::Tribool AccountCapabilities::must_skip_apple_age_range_in_chrome()
+    const {
+  return GetCapabilityByName(kMustSkipAppleAgeRangeInChromeCapabilityName);
+}
+#endif
+
+signin::Tribool
+AccountCapabilities::supports_wallet_private_passes_in_autofill() const {
+  return GetCapabilityByName(
+      kSupportsWalletPrivatePassesInAutofillCapabilityName);
+}
+
 // keep-sorted end
 
 bool AccountCapabilities::UpdateWith(const AccountCapabilities& other) {
   bool modified = false;
 
   for (std::string_view name : GetSupportedAccountCapabilityNames()) {
-    signin::Tribool other_capability = other.GetCapabilityByName(name);
-    signin::Tribool current_capability = GetCapabilityByName(name);
+    signin::Tribool other_capability = other.GetFetchedCapabilityByName(name);
+    signin::Tribool current_capability = GetFetchedCapabilityByName(name);
     if (other_capability != signin::Tribool::kUnknown &&
         other_capability != current_capability) {
       capabilities_map_[std::string(name)] =
@@ -223,16 +351,35 @@ bool AccountCapabilities::UpdateWith(const AccountCapabilities& other) {
     }
   }
 
+  for (const auto& [name, value] : other.capabilities_overrides_) {
+    auto iterator = capabilities_overrides_.find(name);
+    if (iterator == capabilities_overrides_.end() ||
+        iterator->second != value) {
+      capabilities_overrides_[name] = value;
+      modified = true;
+    }
+  }
+
   return modified;
+}
+
+void AccountCapabilities::SetCapabilityOverride(
+    std::string_view name,
+    std::optional<signin::Tribool> value) {
+  if (value.has_value()) {
+    capabilities_overrides_[std::string(name)] = *value;
+  } else {
+    capabilities_overrides_.erase(std::string(name));
+  }
 }
 
 bool AccountCapabilities::operator==(const AccountCapabilities& other) const {
   for (std::string_view name : GetSupportedAccountCapabilityNames()) {
-    if (GetCapabilityByName(name) != other.GetCapabilityByName(name)) {
+    if (GetFetchedCapabilityByName(name) != other.GetFetchedCapabilityByName(name)) {
       return false;
     }
   }
-  return true;
+  return capabilities_overrides_ == other.capabilities_overrides_;
 }
 
 #if BUILDFLAG(IS_ANDROID)

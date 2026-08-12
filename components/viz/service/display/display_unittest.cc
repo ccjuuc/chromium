@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "components/viz/service/display/display.h"
 
 #include <limits>
@@ -25,6 +24,7 @@
 #include "base/test/null_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "cc/base/features.h"
 #include "cc/base/math_util.h"
 #include "cc/test/scheduler_test_common.h"
@@ -107,7 +107,7 @@ class TestDisplayScheduler : public DisplayScheduler {
 
   ~TestDisplayScheduler() override = default;
 
-  void OnDisplayDamaged(SurfaceId surface_id) override {
+  void OnDisplayDamaged(SurfaceId surface_id, BeginFrameId frame_id) override {
     damaged_ = true;
     needs_draw_ = true;
   }
@@ -133,7 +133,7 @@ class StubDisplayClient : public DisplayClient {
       AggregatedRenderPassList* render_passes) override {}
   void DisplayDidDrawAndSwap() override {}
   void DisplayDidReceiveCALayerParams(
-      const gfx::CALayerParams& ca_layer_params) override {}
+      gfx::CALayerParams ca_layer_params) override {}
   void DisplayDidCompleteSwapWithSize(const gfx::Size& pixel_size) override {}
   void DisplayAddChildWindowToBrowser(
       gpu::SurfaceHandle child_window) override {}
@@ -145,11 +145,6 @@ void CopyCallback(bool* called,
                   std::unique_ptr<CopyOutputResult> result) {
   *called = true;
   std::move(finished).Run();
-}
-
-gfx::SwapTimings GetTestSwapTimings() {
-  base::TimeTicks now = base::TimeTicks::Now();
-  return gfx::SwapTimings{now, now};
 }
 
 }  // namespace
@@ -316,7 +311,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
   EXPECT_FALSE(scheduler_->swapped());
   EXPECT_EQ(0u, output_surface_->num_sent_frames());
   EXPECT_EQ(gfx::ColorSpace(), output_surface_->last_reshape_color_space());
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams params1;
+  params1.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(params1);
   EXPECT_EQ(color_space_1, output_surface_->last_reshape_color_space());
   EXPECT_TRUE(scheduler_->swapped());
   EXPECT_EQ(1u, output_surface_->num_sent_frames());
@@ -340,7 +337,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     scheduler_->reset_swapped_for_test();
     EXPECT_EQ(color_space_1, output_surface_->last_reshape_color_space());
     display_->SetDisplayColorSpaces(color_spaces_2);
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params2;
+    params2.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params2);
     EXPECT_EQ(color_space_2, output_surface_->last_reshape_color_space());
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(2u, output_surface_->num_sent_frames());
@@ -368,7 +367,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     scheduler_->reset_swapped_for_test();
     EXPECT_EQ(color_space_2, output_surface_->last_reshape_color_space());
     display_->SetDisplayColorSpaces(color_spaces_2);
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params3;
+    params3.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params3);
     EXPECT_EQ(color_space_2, output_surface_->last_reshape_color_space());
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(3u, output_surface_->num_sent_frames());
@@ -392,7 +393,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params4;
+    params4.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params4);
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(3u, output_surface_->num_sent_frames());
   }
@@ -417,7 +420,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params5;
+    params5.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params5);
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(3u, output_surface_->num_sent_frames());
   }
@@ -438,7 +443,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params6;
+    params6.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params6);
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(4u, output_surface_->num_sent_frames());
     EXPECT_EQ(gfx::Rect(0, 0, 100, 100),
@@ -467,7 +474,9 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params7;
+    params7.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params7);
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(5u, output_surface_->num_sent_frames());
     copy_run_loop.Run();
@@ -492,38 +501,11 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params8;
+    params8.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params8);
     EXPECT_TRUE(scheduler_->swapped());
     EXPECT_EQ(5u, output_surface_->num_sent_frames());
-  }
-
-  // DisableSwapUntilResize() should cause a swap if no frame was swapped at the
-  // previous size.
-  {
-    id_allocator_.GenerateId();
-    display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
-    scheduler_->reset_swapped_for_test();
-    display_->Resize(gfx::Size(200, 200));
-    EXPECT_FALSE(scheduler_->swapped());
-    EXPECT_EQ(5u, output_surface_->num_sent_frames());
-    ResetDamageForTest();
-
-    constexpr gfx::Rect kOutputRect(0, 0, 200, 200);
-    constexpr gfx::Rect kDamageRect(10, 10, 10, 10);
-    CompositorFrame frame = CompositorFrameBuilder()
-                                .AddRenderPass(kOutputRect, kDamageRect)
-                                .Build();
-
-    support_->SubmitCompositorFrame(id_allocator_.GetCurrentLocalSurfaceId(),
-                                    std::move(frame));
-    EXPECT_TRUE(scheduler_->damaged());
-
-    scheduler_->reset_swapped_for_test();
-    display_->DisableSwapUntilResize(base::OnceClosure());
-    display_->Resize(gfx::Size(100, 100));
-    EXPECT_TRUE(scheduler_->swapped());
-    EXPECT_EQ(6u, output_surface_->num_sent_frames());
-    EXPECT_EQ(0u, output_surface_->last_sent_frame()->latency_info.size());
   }
 
   // Surface that's damaged completely should be resized and swapped.
@@ -541,9 +523,11 @@ TEST_F(DisplayTest, DisplayDamaged) {
     EXPECT_TRUE(scheduler_->damaged());
 
     scheduler_->reset_swapped_for_test();
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams params9;
+    params9.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(params9);
     EXPECT_TRUE(scheduler_->swapped());
-    EXPECT_EQ(7u, output_surface_->num_sent_frames());
+    EXPECT_EQ(6u, output_surface_->num_sent_frames());
     EXPECT_EQ(gfx::Size(100, 100),
               software_output_device_->viewport_pixel_size());
     EXPECT_EQ(gfx::Rect(0, 0, 100, 100),
@@ -571,7 +555,9 @@ void DisplayTest::LatencyInfoCapTest(bool over_capacity) {
       CompositorFrameBuilder().AddRenderPass(kOutputRect, kDamageRect).Build();
   support_->SubmitCompositorFrame(local_surface_id, std::move(frame1));
 
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams cap_params1;
+  cap_params1.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(cap_params1);
   EXPECT_EQ(1u, output_surface_->num_sent_frames());
   EXPECT_EQ(0u, output_surface_->last_sent_frame()->latency_info.size());
 
@@ -592,8 +578,9 @@ void DisplayTest::LatencyInfoCapTest(bool over_capacity) {
                                .Build();
   support_->SubmitCompositorFrame(local_surface_id, std::move(frame2));
 
-  EXPECT_TRUE(
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()}));
+  DrawAndSwapParams cap_params2;
+  cap_params2.expected_display_time = base::TimeTicks::Now();
+  EXPECT_TRUE(display_->DrawAndSwap(cap_params2));
   EXPECT_EQ(1u, output_surface_->num_sent_frames());
   EXPECT_EQ(0u, output_surface_->last_sent_frame()->latency_info.size());
 
@@ -602,8 +589,9 @@ void DisplayTest::LatencyInfoCapTest(bool over_capacity) {
   CompositorFrame frame3 =
       CompositorFrameBuilder().AddRenderPass(kOutputRect, kDamageRect).Build();
   support_->SubmitCompositorFrame(local_surface_id, std::move(frame3));
-  EXPECT_TRUE(
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()}));
+  DrawAndSwapParams cap_params3;
+  cap_params3.expected_display_time = base::TimeTicks::Now();
+  EXPECT_TRUE(display_->DrawAndSwap(cap_params3));
 
   // Verify whether or not LatencyInfo was dropped.
   size_t expected_size = 0;
@@ -620,78 +608,6 @@ TEST_F(DisplayTest, UnderLatencyInfoCap) {
 
 TEST_F(DisplayTest, OverLatencyInfoCap) {
   LatencyInfoCapTest(true);
-}
-
-TEST_F(DisplayTest, DisableSwapUntilResize) {
-  id_allocator_.GenerateId();
-  LocalSurfaceId local_surface_id1(id_allocator_.GetCurrentLocalSurfaceId());
-  id_allocator_.GenerateId();
-  LocalSurfaceId local_surface_id2(id_allocator_.GetCurrentLocalSurfaceId());
-
-  RendererSettings settings;
-  settings.partial_swap_enabled = true;
-  SetUpGpuDisplay(settings);
-  display_->Initialize(client_.get(), manager_.surface_manager());
-  display_->SetLocalSurfaceId(local_surface_id1, 1.f);
-  display_->Resize(gfx::Size(100, 100));
-
-  {
-    CompositorRenderPassList pass_list;
-    auto pass = CompositorRenderPass::Create();
-    pass->output_rect = gfx::Rect(0, 0, 100, 100);
-    pass->damage_rect = gfx::Rect(10, 10, 1, 1);
-    pass->id = CompositorRenderPassId{1u};
-    pass_list.push_back(std::move(pass));
-
-    SubmitCompositorFrame(&pass_list, local_surface_id1);
-  }
-
-  EXPECT_FALSE(scheduler_->swapped());
-
-  // DisableSwapUntilResize() should trigger a swap because we have a frame of
-  // the correct size and haven't swapped at that size yet.
-  bool swap_callback_run = false;
-  display_->DisableSwapUntilResize(base::BindLambdaForTesting(
-      [&swap_callback_run]() { swap_callback_run = true; }));
-  EXPECT_TRUE(scheduler_->swapped());
-
-  gpu::SwapBuffersCompleteParams params;
-  params.swap_response.timings = GetTestSwapTimings();
-  params.swap_response.result = gfx::SwapResult::SWAP_ACK;
-  display_->DidReceiveSwapBuffersAck(params,
-                                     /*release_fence=*/gfx::GpuFenceHandle());
-  EXPECT_TRUE(swap_callback_run);
-
-  display_->Resize(gfx::Size(150, 150));
-  scheduler_->reset_swapped_for_test();
-
-  // DisableSwapUntilResize() won't trigger a swap because there is no frame
-  // of the correct size to draw.
-  display_->SetLocalSurfaceId(local_surface_id2, 1.f);
-  display_->DisableSwapUntilResize(base::OnceClosure());
-  EXPECT_FALSE(scheduler_->swapped());
-  display_->Resize(gfx::Size(200, 200));
-
-  {
-    CompositorRenderPassList pass_list;
-    auto pass = CompositorRenderPass::Create();
-    pass->output_rect = gfx::Rect(0, 0, 200, 200);
-    pass->damage_rect = gfx::Rect(10, 10, 1, 1);
-    pass->id = CompositorRenderPassId{1u};
-    pass_list.push_back(std::move(pass));
-
-    SubmitCompositorFrame(&pass_list, local_surface_id2);
-  }
-
-  // DrawAndSwap() should trigger a swap at current size.
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
-  EXPECT_TRUE(scheduler_->swapped());
-  scheduler_->reset_swapped_for_test();
-
-  // DisableSwapUntilResize() won't trigger another swap because we already
-  // swapped a frame at the current size.
-  display_->DisableSwapUntilResize(base::OnceClosure());
-  EXPECT_FALSE(scheduler_->swapped());
 }
 
 TEST_F(DisplayTest, BackdropFilterTest) {
@@ -728,28 +644,36 @@ TEST_F(DisplayTest, BackdropFilterTest) {
   //   |    |  D|  |
   //   |    +---+  |
   //   +-----------+
+  cc::FilterOperation backdrop_filter =
+      cc::FilterOperation::CreateBlurFilter(5.0);
   const gfx::Size display_size(100, 100);
-  const gfx::Rect damage_rect(20, 20, 40, 40);
+  const gfx::Rect isolated_damage_rect(20, 20, 40, 40);
   display_->Resize(display_size);
   const gfx::Rect sub_surface_rect(5, 5, 25, 25);
   const gfx::Rect no_damage;
+
+  // By this time, the compositor should have already calculated the damage rect
+  // taking into consideration backdrop filters. Therefore, to correctly
+  // simulate the compositor's behavior, we need to calculate the damage rect
+  // while taking the backdrop filters into account so that no damage expansion
+  // occurs during surface aggregation.
+  gfx::Rect intersection_damage_rect = isolated_damage_rect;
+  intersection_damage_rect.Intersect(sub_surface_rect);
+  gfx::Rect expanded_intersection_damage_rect =
+      backdrop_filter.MapRect(intersection_damage_rect, SkMatrix());
+  gfx::Rect damage_rect = expanded_intersection_damage_rect;
+  damage_rect.Union(isolated_damage_rect);
 
   CompositorRenderPassId::Generator render_pass_id_generator;
   for (size_t frame_num = 1; frame_num <= 2; ++frame_num) {
     bool first_frame = frame_num == 1;
     ResetDamageForTest();
     {
-      // Sub-surface with backdrop-filter.
+      // To-be-filtered sub-surface.
       CompositorRenderPassList pass_list;
       auto bd_pass = CompositorRenderPass::Create();
-      cc::FilterOperations backdrop_filters;
-      backdrop_filters.Append(cc::FilterOperation::CreateBlurFilter(5.0));
-      bd_pass->SetAll(
-          render_pass_id_generator.GenerateNextId(), sub_surface_rect,
-          no_damage, gfx::Transform(), cc::FilterOperations(), backdrop_filters,
-          SkPath::Rect(gfx::RectToSkRect(sub_surface_rect)), SubtreeCaptureId(),
-          sub_surface_rect.size(), ViewTransitionElementResourceId(), false,
-          false, false, false, false);
+      bd_pass->SetNew(render_pass_id_generator.GenerateNextId(),
+                      sub_surface_rect, no_damage, gfx::Transform());
       pass_list.push_back(std::move(bd_pass));
 
       CompositorFrame frame = CompositorFrameBuilder()
@@ -776,53 +700,33 @@ TEST_F(DisplayTest, BackdropFilterTest) {
     }
 
     {
-      CompositorRenderPassList pass_list;
-      auto pass = CompositorRenderPass::Create();
-      pass->output_rect = gfx::Rect(display_size);
-      pass->damage_rect = damage_rect;
-      pass->id = render_pass_id_generator.GenerateNextId();
+      // Child render pass embedding sub surface 1 via a SurfaceDrawQuad.
+      auto child_pass_id = render_pass_id_generator.GenerateNextId();
+      auto root_pass_id = render_pass_id_generator.GenerateNextId();
 
-      // Embed sub surface 1, with backdrop filter.
-      auto* shared_quad_state1 = pass->CreateAndAppendSharedQuadState();
-      shared_quad_state1->SetAll(
-          gfx::Transform(), /*quad_layer_rect=*/sub_surface_rect,
-          /*visible_quad_layer_rect=*/sub_surface_rect,
-          /*mask_filter_info=*/gfx::MaskFilterInfo(),
-          /*clip=*/std::nullopt, /*contents_opaque=*/true,
-          /*opacity=*/1.0f, SkBlendMode::kSrcOver, /*sorting_context=*/0,
-          /*layer_id=*/0u, /*fast_rounded_corner=*/false);
-      auto* quad1 = pass->quad_list.AllocateAndConstruct<SurfaceDrawQuad>();
-      quad1->SetNew(shared_quad_state1, /*rect=*/sub_surface_rect,
-                    /*visible_rect=*/sub_surface_rect,
-                    SurfaceRange(std::nullopt, sub_surface_id1),
-                    SkColors::kBlack,
-                    /*stretch_content_to_fill_bounds=*/false);
-      quad1->allow_merge = false;
-
-      // Embed sub surface 2, with damage.
-      auto* shared_quad_state2 = pass->CreateAndAppendSharedQuadState();
-      gfx::Rect rect1(display_size);
-      shared_quad_state2->SetAll(
-          gfx::Transform(), /*quad_layer_rect=*/rect1,
-          /*visible_quad_layer_rect=*/rect1,
-          /*mask_filter_info=*/gfx::MaskFilterInfo(),
-          /*clip_rect=*/std::nullopt,
-          /*are_contents_opaque=*/true, /*opacity=*/1.0f, SkBlendMode::kSrcOver,
-          /*sorting_context=*/0,
-          /*layer_id=*/0u, /*fast_rounded_corner=*/false);
-      auto* quad2 = pass->quad_list.AllocateAndConstruct<SurfaceDrawQuad>();
-      quad2->SetNew(shared_quad_state2, /*rect=*/rect1,
-                    /*visible_rect=*/rect1,
-                    SurfaceRange(std::nullopt, sub_surface_id2),
-                    SkColors::kBlack,
-                    /*stretch_content_to_fill_bounds=*/false);
-      quad2->allow_merge = false;
-
-      pass_list.push_back(std::move(pass));
-      SubmitCompositorFrame(&pass_list, local_surface_id);
+      auto frame =
+          CompositorFrameBuilder()
+              .AddRenderPass(RenderPassBuilder(child_pass_id, sub_surface_rect)
+                                 .AddBackdropFilter(backdrop_filter)
+                                 .AddSurfaceQuad(sub_surface_rect,
+                                                 SurfaceRange(std::nullopt,
+                                                              sub_surface_id1),
+                                                 {.allow_merge = false}))
+              .AddRenderPass(
+                  RenderPassBuilder(root_pass_id, gfx::Rect(display_size))
+                      .AddRenderPassQuad(sub_surface_rect, child_pass_id)
+                      .AddSurfaceQuad(
+                          gfx::Rect(display_size),
+                          SurfaceRange(std::nullopt, sub_surface_id2),
+                          {.allow_merge = false})
+                      .SetDamageRect(damage_rect))
+              .Build();
+      support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
       scheduler_->reset_swapped_for_test();
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+      DrawAndSwapParams backdrop_params;
+      backdrop_params.expected_display_time = base::TimeTicks::Now();
+      display_->DrawAndSwap(backdrop_params);
       EXPECT_TRUE(scheduler_->swapped());
       EXPECT_EQ(frame_num, output_surface_->num_sent_frames());
       EXPECT_EQ(display_size, software_output_device_->viewport_pixel_size());
@@ -830,7 +734,7 @@ TEST_F(DisplayTest, BackdropFilterTest) {
       // damaged surface rect, and is not expanded for the backdrop-filter
       // surface.
       auto expected_damage =
-          first_frame ? gfx::Rect(display_size) : gfx::Rect(20, 20, 40, 40);
+          first_frame ? gfx::Rect(display_size) : damage_rect;
       EXPECT_EQ(expected_damage, software_output_device_->damage_rect());
       // The scissor rect is expanded by direct_renderer to include the
       // overlapping pixel-moving backdrop filter surface.
@@ -974,7 +878,9 @@ TEST_F(DisplayTest, CompositorFrameWithPresentationToken) {
 
     pass_list.push_back(std::move(pass));
     SubmitCompositorFrame(&pass_list, local_surface_id);
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams presentation_params1;
+    presentation_params1.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(presentation_params1);
     RunUntilIdle();
   }
 
@@ -989,7 +895,9 @@ TEST_F(DisplayTest, CompositorFrameWithPresentationToken) {
     EXPECT_CALL(sub_client, DidReceiveCompositorFrameAck(_));
     sub_support->SubmitCompositorFrame(sub_local_surface_id, std::move(frame));
 
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams presentation_params2;
+    presentation_params2.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(presentation_params2);
     RunUntilIdle();
 
     // Both frames with frame-tokens 1 and 2 requested presentation-feedback.
@@ -1008,7 +916,9 @@ TEST_F(DisplayTest, CompositorFrameWithPresentationToken) {
     EXPECT_CALL(sub_client, DidReceiveCompositorFrameAck(_));
     sub_support->SubmitCompositorFrame(sub_local_surface_id, std::move(frame));
 
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams presentation_params3;
+    presentation_params3.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(presentation_params3);
     RunUntilIdle();
   }
 }
@@ -1057,7 +967,9 @@ TEST_F(DisplayTest, BeginFrameThrottling) {
   UpdateBeginFrameTime(support_.get(), frame_time);
 
   // Drawing should unthrottle begin-frames.
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams throttle_params;
+  throttle_params.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(throttle_params);
   frame_time = base::TimeTicks::Now();
   EXPECT_TRUE(ShouldSendBeginFrame(support_.get(), frame_time));
   UpdateBeginFrameTime(support_.get(), frame_time);
@@ -1129,7 +1041,9 @@ TEST_F(DisplayTest, BeginFrameThrottlingMultipleSurfaces) {
 
   // This only draws the first surface, so we should only be able to send one
   // more BeginFrame.
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams throttle_multi_params1;
+  throttle_multi_params1.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(throttle_multi_params1);
   frame_time = base::TimeTicks::Now();
   EXPECT_TRUE(ShouldSendBeginFrame(support_.get(), frame_time));
   UpdateBeginFrameTime(support_.get(), frame_time);
@@ -1143,7 +1057,9 @@ TEST_F(DisplayTest, BeginFrameThrottlingMultipleSurfaces) {
   // Now the last surface is drawn. This should unblock us to submit
   // kUndrawnFrameLimit+1 frames again.
   display_->SetLocalSurfaceId(id_allocator_.GetCurrentLocalSurfaceId(), 1.f);
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams throttle_multi_params2;
+  throttle_multi_params2.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(throttle_multi_params2);
   id_allocator_.GenerateId();
   for (uint32_t i = 0; i < CompositorFrameSinkSupport::kUndrawnFrameLimit + 1;
        ++i) {
@@ -1292,7 +1208,9 @@ TEST_F(DisplayTest, DisplayTransformHint) {
     frame.metadata.display_transform_hint = test.display_transform_hint;
     support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams transform_params;
+    transform_params.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(transform_params);
     EXPECT_EQ(++expected_frame_sent, output_surface_->num_sent_frames());
     EXPECT_EQ(test.expected_size,
               software_output_device_->viewport_pixel_size());
@@ -1331,7 +1249,9 @@ TEST_F(DisplayTest, DisplaySizeMismatch) {
     SubmitCompositorFrame(&pass_list, id_allocator_.GetCurrentLocalSurfaceId());
     EXPECT_TRUE(scheduler_->damaged());
 
-    display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+    DrawAndSwapParams mismatch_params;
+    mismatch_params.expected_display_time = base::TimeTicks::Now();
+    display_->DrawAndSwap(mismatch_params);
 
     copy_run_loop.Run();
 
@@ -1377,29 +1297,34 @@ TEST_F(DisplayTest, PixelMovingForegroundFilterTest) {
   //   |    +---+  |
   //   +-----------+
   const gfx::Size display_size(100, 100);
-  const gfx::Rect damage_rect(20, 20, 40, 40);
+  const gfx::Rect isolated_damage_rect(20, 20, 40, 40);
   display_->Resize(display_size);
   const gfx::Rect sub_surface_rect(5, 5, 25, 25);
   const gfx::Rect no_damage;
+
+  // By this time, the compositor should have already calculated the damage rect
+  // taking into consideration foreground filters. Therefore, to correctly
+  // simulate the compositor's behavior, we need to calculate the damage rect
+  // while taking the foreground filters into account so that no damage
+  // expansion occurs during surface aggregation.
+  cc::FilterOperation foreground_filter =
+      cc::FilterOperation::CreateDropShadowFilter(gfx::Point(5, 10), 2.f,
+                                                  SkColors::kTransparent);
+  gfx::Rect expanded_filter_rect = foreground_filter.MapRect(sub_surface_rect);
+  gfx::Rect damage_rect = isolated_damage_rect;
+  ASSERT_TRUE(expanded_filter_rect.Intersects(damage_rect));
+  damage_rect.Union(expanded_filter_rect);
 
   CompositorRenderPassId::Generator render_pass_id_generator;
   for (size_t frame_num = 1; frame_num <= 2; ++frame_num) {
     bool first_frame = frame_num == 1;
     ResetDamageForTest();
     {
-      // Sub-surface with pixel-moving foreground filter - drop shadow filter
+      // To-be-filtered Sub-surface.
       CompositorRenderPassList pass_list;
       auto bd_pass = CompositorRenderPass::Create();
-      cc::FilterOperations foreground_filters;
-      foreground_filters.Append(cc::FilterOperation::CreateDropShadowFilter(
-          gfx::Point(5, 10), 2.f, SkColors::kTransparent));
-      bd_pass->SetAll(render_pass_id_generator.GenerateNextId(),
-                      sub_surface_rect, no_damage, gfx::Transform(),
-                      foreground_filters, cc::FilterOperations(),
-                      SkPath::Rect(gfx::RectToSkRect(sub_surface_rect)),
-                      SubtreeCaptureId(), sub_surface_rect.size(),
-                      ViewTransitionElementResourceId(), false, false, false,
-                      false, false);
+      bd_pass->SetNew(render_pass_id_generator.GenerateNextId(),
+                      sub_surface_rect, no_damage, gfx::Transform());
       pass_list.push_back(std::move(bd_pass));
 
       CompositorFrame frame = CompositorFrameBuilder()
@@ -1426,23 +1351,33 @@ TEST_F(DisplayTest, PixelMovingForegroundFilterTest) {
     }
 
     {
-      auto frame = CompositorFrameBuilder()
-                       .AddRenderPass(
-                           RenderPassBuilder(display_size)
-                               .AddSurfaceQuad(
-                                   sub_surface_rect,
-                                   SurfaceRange(std::nullopt, sub_surface_id1),
-                                   {.allow_merge = false})
-                               .AddSurfaceQuad(
-                                   gfx::Rect(display_size),
-                                   SurfaceRange(std::nullopt, sub_surface_id2),
-                                   {.allow_merge = false})
-                               .SetDamageRect(damage_rect))
-                       .Build();
+      // Child render pass embedding sub surface 1 via a SurfaceDrawQuad.
+      auto child_pass_id = render_pass_id_generator.GenerateNextId();
+      auto root_pass_id = render_pass_id_generator.GenerateNextId();
+
+      auto frame =
+          CompositorFrameBuilder()
+              .AddRenderPass(RenderPassBuilder(child_pass_id, sub_surface_rect)
+                                 .AddFilter(foreground_filter)
+                                 .AddSurfaceQuad(sub_surface_rect,
+                                                 SurfaceRange(std::nullopt,
+                                                              sub_surface_id1),
+                                                 {.allow_merge = false}))
+              .AddRenderPass(
+                  RenderPassBuilder(root_pass_id, gfx::Rect(display_size))
+                      .AddRenderPassQuad(sub_surface_rect, child_pass_id)
+                      .AddSurfaceQuad(
+                          gfx::Rect(display_size),
+                          SurfaceRange(std::nullopt, sub_surface_id2),
+                          {.allow_merge = false})
+                      .SetDamageRect(damage_rect))
+              .Build();
       support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
       scheduler_->reset_swapped_for_test();
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+      DrawAndSwapParams pixel_params;
+      pixel_params.expected_display_time = base::TimeTicks::Now();
+      display_->DrawAndSwap(pixel_params);
       EXPECT_TRUE(scheduler_->swapped());
       EXPECT_EQ(frame_num, output_surface_->num_sent_frames());
       EXPECT_EQ(display_size, software_output_device_->viewport_pixel_size());
@@ -1525,7 +1460,9 @@ TEST_F(DisplayTest, CanSkipRenderPass) {
       support_->SubmitCompositorFrame(local_surface_id, std::move(frame));
 
       scheduler_->reset_swapped_for_test();
-      display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+      DrawAndSwapParams skip_params;
+      skip_params.expected_display_time = base::TimeTicks::Now();
+      display_->DrawAndSwap(skip_params);
       EXPECT_TRUE(scheduler_->swapped());
 
       // Number of skipped non-root render passes.
@@ -2269,7 +2206,9 @@ TEST_P(DelegatedInkDisplayTest, MetadataOnlySentToSkiaRendererOrOutputSurface) {
 
   SubmitCompositorFrameWithInkMetadata(
       &pass_list, id_allocator_.GetCurrentLocalSurfaceId(), metadata);
-  display_->DrawAndSwap({base::TimeTicks::Now(), base::TimeTicks::Now()});
+  DrawAndSwapParams ink_trail_params;
+  ink_trail_params.expected_display_time = base::TimeTicks::Now();
+  display_->DrawAndSwap(ink_trail_params);
 
   // Confirm that the metadata correctly made it to either the skia output
   // surface, or the delegated ink renderer.
@@ -2332,6 +2271,80 @@ TEST_F(UnsupportedRendererDelegatedInkTest,
   mojo::Remote<gfx::mojom::DelegatedInkPointRenderer> ink_renderer_remote;
   display_->InitDelegatedInkPointRendererReceiver(
       ink_renderer_remote.BindNewPipeAndPassReceiver());
+}
+
+class DisplayVisibilityTest : public DisplayTest {
+ public:
+  DisplayVisibilityTest() = default;
+};
+
+TEST_F(DisplayVisibilityTest, DiscardBuffersOnVisibilityChangeGated) {
+  if constexpr (!features::kAllowVizBufferQueueDiscardOnVisibilityChange) {
+    GTEST_SKIP() << "VizBufferQueueDiscardOnVisibilityChange is not available "
+                    "on this platform.";
+  }
+
+  SetUpGpuDisplay(RendererSettings());
+  skia_output_surface_->SetRendererAllocatesImagesForTesting(true);
+  display_->Initialize(client_.get(), manager_.surface_manager());
+
+  gfx::Size size(100, 100);
+  display_->Resize(size);
+
+  // Submit a frame to allocate some buffers in SkiaRenderer's BufferQueue
+  ParentLocalSurfaceIdAllocator allocator;
+  allocator.GenerateId();
+  LocalSurfaceId local_surface_id = allocator.GetCurrentLocalSurfaceId();
+
+  CompositorRenderPassList pass_list;
+  auto pass = CompositorRenderPass::Create();
+  pass->SetNew(CompositorRenderPassId{1}, gfx::Rect(size), gfx::Rect(size),
+               gfx::Transform());
+  pass_list.push_back(std::move(pass));
+
+  SubmitCompositorFrame(&pass_list, local_surface_id);
+  display_->SetLocalSurfaceId(local_surface_id, 1.f);
+
+  // Draw a frame to ensure resources are allocated
+  DrawAndSwapParams params;
+  params.expected_display_time = base::TimeTicks::Now();
+  EXPECT_TRUE(display_->DrawAndSwap(params));
+
+  // Verify we allocated some buffers (they are not destroyed yet)
+  EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
+
+  // Enabled, buffers are discarded.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(
+        features::kVizBufferQueueDiscardOnVisibilityChange);
+
+    display_->SetVisible(false);
+    EXPECT_FALSE(skia_output_surface_->destroyed_mailboxes().empty());
+  }
+
+  // Reset display and surface for next test
+  display_->SetVisible(true);
+  skia_output_surface_->clear_destroyed_mailboxes();
+
+  // Draw again to allocate buffers again
+  pass = CompositorRenderPass::Create();
+  pass->SetNew(CompositorRenderPassId{1}, gfx::Rect(size), gfx::Rect(size),
+               gfx::Transform());
+  pass_list.push_back(std::move(pass));
+  SubmitCompositorFrame(&pass_list, local_surface_id);
+  EXPECT_TRUE(display_->DrawAndSwap(params));
+  EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
+
+  // Disabled, buffers are not discarded.
+  {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(
+        features::kVizBufferQueueDiscardOnVisibilityChange);
+
+    display_->SetVisible(false);
+    EXPECT_TRUE(skia_output_surface_->destroyed_mailboxes().empty());
+  }
 }
 
 }  // namespace viz

@@ -22,7 +22,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_apply_update_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -57,7 +57,7 @@ IsolatedWebAppUpdateApplyTask::IsolatedWebAppUpdateApplyTask(
       optional_profile_keep_alive_(std::move(optional_profile_keep_alive)),
       command_scheduler_(command_scheduler),
       profile_(CHECK_DEREF(profile)) {
-  debug_log_ = base::Value::Dict()
+  debug_log_ = base::DictValue()
                    .Set("bundle_id", url_info_.web_bundle_id().id())
                    .Set("app_id", url_info_.app_id());
 #if BUILDFLAG(IS_CHROMEOS)

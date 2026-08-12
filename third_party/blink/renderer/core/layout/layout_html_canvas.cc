@@ -78,6 +78,9 @@ PhysicalNaturalSizingInfo LayoutHTMLCanvas::GetNaturalDimensions() const {
 bool LayoutHTMLCanvas::DrawsBackgroundOntoContentLayer() const {
   NOT_DESTROYED();
   auto* canvas = To<HTMLCanvasElement>(GetNode());
+  if (canvas->IsInCanvasSubtree() && canvas->layoutSubtree()) {
+    return false;
+  }
   if (canvas->SurfaceLayerBridge())
     return false;
   CanvasRenderingContext* context = canvas->RenderingContext();
@@ -97,8 +100,13 @@ void LayoutHTMLCanvas::InvalidatePaint(
     const PaintInvalidatorContext& context) const {
   NOT_DESTROYED();
   auto* element = To<HTMLCanvasElement>(GetNode());
-  if (element->IsDirty())
-    element->DoDeferredPaintInvalidation();
+  if (element->IsDirty()) {
+    if (element->DoDeferredPaintInvalidation() &&
+        !element->ShouldSkipPaintInvalidation()) {
+      GetMutableForPainting().SetShouldDoFullPaintInvalidation(
+          PaintInvalidationReason::kLayout);
+    }
+  }
 
   LayoutReplaced::InvalidatePaint(context);
 }
@@ -106,10 +114,12 @@ void LayoutHTMLCanvas::InvalidatePaint(
 void LayoutHTMLCanvas::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutReplaced::StyleDidChange(diff, old_style, style_change_context);
-  To<HTMLCanvasElement>(GetNode())->StyleDidChange(old_style, StyleRef());
+  LayoutReplaced::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
+  To<HTMLCanvasElement>(GetNode())->StyleDidChange(old_style, new_style);
 }
 
 void LayoutHTMLCanvas::WillBeDestroyed() {

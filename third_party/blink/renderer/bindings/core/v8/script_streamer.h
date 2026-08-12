@@ -30,6 +30,10 @@ namespace mojo {
 class SimpleWatcher;
 }
 
+namespace v8 {
+class WasmModuleCompilation;
+}  // namespace v8
+
 namespace blink {
 
 namespace v8_compile_hints {
@@ -37,6 +41,7 @@ class CompileHintsForStreaming;
 class V8LocalCompileHintsConsumer;
 }  // namespace v8_compile_hints
 
+class SegmentedBuffer;
 class ScriptResource;
 class SourceStream;
 class ResponseBodyLoaderClient;
@@ -96,6 +101,9 @@ class CORE_EXPORT ScriptStreamer : public GarbageCollected<ScriptStreamer> {
   virtual bool IsStreamingSuppressed() const = 0;
   virtual NotStreamingReason StreamingSuppressedReason() const = 0;
   virtual v8::ScriptType GetScriptType() const = 0;
+  virtual v8::WasmModuleCompilation* GetWasmModuleCompilation() const {
+    return nullptr;
+  }
   virtual void Trace(Visitor*) const {}
 
   static void RecordStreamingHistogram(ScriptSchedulingType type,
@@ -173,6 +181,7 @@ class CORE_EXPORT ResourceScriptStreamer final : public ScriptStreamer {
 
   v8_compile_hints::V8LocalCompileHintsConsumer*
   GetV8LocalCompileHintsConsumerForTest() const;
+  SegmentedBuffer TakeRawDataForTest();
 
  private:
   friend class SourceStream;
@@ -256,6 +265,11 @@ class CORE_EXPORT ResourceScriptStreamer final : public ScriptStreamer {
 
   ScriptDecoderWithClientPtr script_decoder_;
 
+  // Only set when kDecodeScriptsInBlink is enabled
+  std::unique_ptr<TextResourceDecoder> decoder_;
+  // Only set when kDecodeScriptsInBlink is enabled
+  scoped_refptr<base::SingleThreadTaskRunner> loading_task_runner_;
+
   // Fields active during asynchronous (non-streaming) reads.
   mojo::ScopedDataPipeConsumerHandle data_pipe_;
   std::unique_ptr<mojo::SimpleWatcher> watcher_;
@@ -291,7 +305,8 @@ class CORE_EXPORT BackgroundInlineScriptStreamer final
   BackgroundInlineScriptStreamer(
       v8::Isolate* isolate,
       const String& text,
-      v8::ScriptCompiler::CompileOptions compile_options);
+      v8::ScriptCompiler::CompileOptions compile_options,
+      base::TimeDelta wait_timeout);
 
   void Run();
   bool IsStarted() const { return started_.IsSet(); }
@@ -299,18 +314,33 @@ class CORE_EXPORT BackgroundInlineScriptStreamer final
 
   // This may return false if V8 failed to create a background streaming task.
   bool CanStream() const { return task_.get(); }
+  bool TimedOut() const { return timed_out_; }
 
   v8::ScriptCompiler::StreamedSource* Source(v8::ScriptType expected_type);
+
+  base::TimeDelta ElapsedTime() const {
+    CHECK(source_);
+    // This should only be accessed from the main thread after Run() has
+    // completed.
+    return base::Microseconds(
+        source_->compilation_details().background_time_in_microseconds);
+  }
+
+  uint64_t script_length() const { return script_length_; }
 
  private:
   friend class ThreadSafeRefCounted<BackgroundInlineScriptStreamer>;
   ~BackgroundInlineScriptStreamer() = default;
 
+  const uint64_t script_length_;
+  const base::TimeDelta wait_timeout_;
+  const std::string timeout_histogram_name_;
   std::unique_ptr<v8::ScriptCompiler::StreamedSource> source_;
   std::unique_ptr<v8::ScriptCompiler::ScriptStreamingTask> task_;
   base::WaitableEvent event_;
   base::AtomicFlag started_;
   base::AtomicFlag cancelled_;
+  bool timed_out_ = false;
 };
 
 // ScriptStreamer is garbage collected so must be created on the main thread.
@@ -352,16 +382,18 @@ class CORE_EXPORT InlineScriptStreamer final : public ScriptStreamer {
 // thread.
 class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
  public:
+  class BackgroundProcessor;
+
   // This is an utility structure to hold the decoded data and the streamed
   // source or consume code cache task which are passed from the background
   // thread to the main thread.
   class CORE_EXPORT Result {
    public:
     Result(String decoded_data,
-           std::unique_ptr<ParkableStringImpl::SecureDigest> digest,
+           std::unique_ptr<SecureStringDigest> digest,
            std::unique_ptr<v8::ScriptCompiler::StreamedSource> streamed_source);
     Result(String decoded_data,
-           std::unique_ptr<ParkableStringImpl::SecureDigest> digest,
+           std::unique_ptr<SecureStringDigest> digest,
            std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
                consume_code_cache_task);
     ~Result() = default;
@@ -373,7 +405,7 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
     Result& operator=(Result&&) = default;
 
     String decoded_data;
-    std::unique_ptr<ParkableStringImpl::SecureDigest> digest;
+    std::unique_ptr<SecureStringDigest> digest;
     std::unique_ptr<v8::ScriptCompiler::StreamedSource> streamed_source;
     std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
         consume_code_cache_task;
@@ -411,8 +443,16 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
   std::unique_ptr<v8::ScriptCompiler::ConsumeCodeCacheTask>
   TakeConsumeCodeCacheTask();
 
+  v8::WasmModuleCompilation* GetWasmModuleCompilation() const override {
+    return wasm_module_compilation_.get();
+  }
+
+  void SetWasmModuleCompilation(
+      std::unique_ptr<v8::WasmModuleCompilation> compilation) {
+    wasm_module_compilation_ = std::move(compilation);
+  }
+
  private:
-  class BackgroundProcessor;
   class BackgroundProcessorFactory;
 
   void OnResult(std::unique_ptr<Result> result,
@@ -422,6 +462,8 @@ class CORE_EXPORT BackgroundResourceScriptStreamer : public ScriptStreamer {
   const v8::ScriptType script_type_;
 
   std::unique_ptr<Result> result_;
+  std::unique_ptr<v8::WasmModuleCompilation> wasm_module_compilation_;
+
   // The reason that streaming is disabled
   NotStreamingReason suppressed_reason_ = NotStreamingReason::kInvalid;
 };

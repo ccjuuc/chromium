@@ -81,6 +81,7 @@ void FlingSchedulerAndroid::StartObservingBeginFrames() {
   if (GetBeginFrameSource()) {
     observing_begin_frame_source_ = true;
     GetBeginFrameSource()->AddObserver(this);
+    GetBeginFrameSource()->SetInputClient(this);
   }
 }
 
@@ -88,12 +89,12 @@ void FlingSchedulerAndroid::StopObservingBeginFrames() {
   if (!observing_begin_frame_source_) {
     return;
   }
+  GetBeginFrameSource()->SetInputClient(nullptr);
   GetBeginFrameSource()->RemoveObserver(this);
   observing_begin_frame_source_ = false;
 }
 
-bool FlingSchedulerAndroid::OnBeginFrameDerivedImpl(
-    const BeginFrameArgs& args) {
+bool FlingSchedulerAndroid::FlingProgress(const BeginFrameArgs& args) {
   DCHECK(observing_begin_frame_source_);
   if (!fling_controller_) {
     StopObservingBeginFrames();
@@ -106,6 +107,18 @@ bool FlingSchedulerAndroid::OnBeginFrameDerivedImpl(
 
   fling_controller_->ProgressFling(args.frame_time);
   return true;
+}
+
+bool FlingSchedulerAndroid::OnBeginFrameDerivedImpl(
+    const BeginFrameArgs& args) {
+  // We use `OnBeginFrameForInput` for fling progressing instead.
+  // We still register as a BeginFrameObserver to ensure the
+  // BeginFrameSource remains active while a fling is progressing.
+  return true;
+}
+
+void FlingSchedulerAndroid::OnBeginFrameForInput(const BeginFrameArgs& args) {
+  FlingProgress(args);
 }
 
 }  // namespace viz

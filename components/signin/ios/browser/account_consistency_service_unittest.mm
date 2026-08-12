@@ -18,6 +18,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
@@ -102,11 +103,12 @@ class FakeManageAccountsDelegate : public ManageAccountsDelegate {
   ~FakeManageAccountsDelegate() override = default;
 
   void OnRestoreGaiaCookies() override { restore_cookies_call_count_++; }
-  void OnManageAccounts(const GURL& url) override {
+  void OnManageAccounts(const GURL& url, web::WebState* web_state) override {
     manage_accounts_call_count_++;
   }
   void OnAddAccount(const GURL& url,
-                    const std::string& prefilled_email) override {
+                    const std::string& prefilled_email,
+                    web::WebState* web_state) override {
     add_account_call_count_++;
     add_account_email_ = prefilled_email;
   }
@@ -114,7 +116,10 @@ class FakeManageAccountsDelegate : public ManageAccountsDelegate {
                               web::WebState* webState) override {
     show_promo_call_count_++;
   }
-  void OnGoIncognito(const GURL& url) override { go_incognito_call_count_++; }
+  void OnGoIncognito(const GURL& url, web::WebState* web_state) override {
+    go_incognito_call_count_++;
+  }
+  bool SigninEnabled() const override { return true; }
 
   int total_call_count() {
     return restore_cookies_call_count_ + manage_accounts_call_count_ +
@@ -179,6 +184,9 @@ class AccountConsistencyServiceTest : public PlatformTest {
     PlatformTest::SetUp();
 
     HostContentSettingsMap::RegisterProfilePrefs(prefs_.registry());
+    prefs_.registry()->RegisterIntegerPref(
+        policy::policy_prefs::kIncognitoModeAvailability,
+        static_cast<int>(policy::IncognitoModeAvailability::kEnabled));
 
     signin_client_.reset(
         new TestSigninClient(&prefs_, &test_url_loader_factory_));
@@ -226,14 +234,14 @@ class AccountConsistencyServiceTest : public PlatformTest {
 
     account_consistency_service_ = std::make_unique<AccountConsistencyService>(
         std::move(cookie_manager_callback), account_reconcilor_.get(),
-        identity_test_env_->identity_manager());
+        identity_test_env_->identity_manager(), &prefs_);
   }
 
   // Identity APIs.
   void SignIn() {
     signin::MakePrimaryAccountAvailable(identity_test_env_->identity_manager(),
                                         kFakeEmail,
-                                        signin::ConsentLevel::kSync);
+                                        signin::ConsentLevel::kSignin);
     WaitUntilAllCookieRequestsAreApplied();
   }
 
@@ -824,4 +832,28 @@ TEST_F(AccountConsistencyServiceTest, ChromeAddSessionWithEmail) {
   EXPECT_EQ(1, delegate_.total_call_count());
   EXPECT_EQ(1, delegate_.add_account_call_count_);
   EXPECT_EQ("test@gmail.com", delegate_.add_account_email_);
+}
+
+// Tests that the X-Chrome-Manage-Accounts header is ignored in a subframe.
+TEST_F(AccountConsistencyServiceTest, ChromeManageAccountsIgnoredInSubframe) {
+  base::test::ScopedFeatureList feature_list(
+      switches::kIgnoreChromeManageAccountsInSubframes);
+
+  NSDictionary* headers =
+      [NSDictionary dictionaryWithObject:@"action=DEFAULT"
+                                  forKey:@"X-Chrome-Manage-Accounts"];
+  NSHTTPURLResponse* response = [[NSHTTPURLResponse alloc]
+       initWithURL:[NSURL URLWithString:@"https://accounts.google.com/"]
+        statusCode:200
+       HTTPVersion:@"HTTP/1.1"
+      headerFields:headers];
+
+  SetWebStateHandler(&delegate_);
+
+  // When feature is enabled, header is ignored and response is allowed.
+  EXPECT_TRUE(web_state_.ShouldAllowResponse(response,
+                                             /* for_main_frame = */ false));
+  web_state_.SetCurrentURL(net::GURLWithNSURL(response.URL));
+  web_state_.OnPageLoaded(web::PageLoadCompletionStatus::SUCCESS);
+  EXPECT_EQ(0, delegate_.total_call_count());
 }

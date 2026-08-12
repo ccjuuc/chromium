@@ -2,18 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../enterprise_policy_table/enterprise_policy_table.js';
+import '../icons.html.js';
+import '../scope_icon.js';
 import './raw_event_details.js';
 import '//resources/cr_elements/cr_collapse/cr_collapse.js';
 import '//resources/cr_elements/cr_expand_button/cr_expand_button.js';
+import '//resources/cr_elements/cr_icon/cr_icon.js';
 
+import {assert} from '//resources/js/assert.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
-import type {UpdaterProcessMap} from '../event_history.js';
-import {getAppId, isMergedHistoryEvent} from '../event_history.js';
+import type {PolicySet, Scope, UpdaterProcessMap} from '../event_history.js';
+import {getAppId, getUpdateOutcome, isMergedHistoryEvent} from '../event_history.js';
 import type {HistoryEvent, MergedActivateEvent, MergedAppCommandEvent, MergedHistoryEvent, MergedInstallEvent, MergedQualifyEvent, MergedUninstallEvent, MergedUpdateEvent, MergedUpdaterProcessEvent, PersistedDataEvent} from '../event_history.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {getKnownAppNamesById} from '../known_apps.js';
+import {formatDateLong, formatDuration} from '../tools.js';
+import {getUpdaterErrorDescription} from '../updater_errors.js';
 
 import {getCss} from './event_list_item.css.js';
 import {getHtml} from './event_list_item.html.js';
@@ -44,46 +51,72 @@ export class EventListItemElement extends CrLitElement {
       event: {type: Object},
       eventDate: {type: Object},
       processMap: {type: Object},
+      policies: {type: Object},
       expanded: {type: Boolean, notify: true},
-      error: {type: Boolean, reflect: true},
+      status: {type: String, reflect: true},
+      scope: {type: String, reflect: true},
+      appId: {type: String},
+      appLabel: {type: String},
+      formattedDate: {type: String},
+      formattedDuration: {type: String},
+      errors: {type: Array},
+      omahaRequest: {type: Object},
+      omahaResponse: {type: Object},
+      nextVersion: {type: String},
+      updaterVersion: {type: String},
+      commandLine: {type: String},
+      eventSummaryIcon: {type: String},
+      eventSummary: {type: String},
     };
   }
 
   accessor event: HistoryEvent|MergedHistoryEvent|undefined = undefined;
   accessor eventDate: Date|undefined = undefined;
   accessor processMap: UpdaterProcessMap|undefined = undefined;
+  accessor policies: PolicySet|undefined = undefined;
   accessor expanded = false;
-  accessor error = false;
+  accessor status: 'success'|'error'|'' = '';
+  accessor scope: Scope|undefined = undefined;
 
-  protected appId: string|undefined = undefined;
-  protected appLabel: string|undefined = undefined;
-  protected formattedDate: string|undefined = undefined;
-  protected formattedDuration: string|undefined = undefined;
-  protected errors: string[] = [];
-  protected omahaRequest: Record<string, unknown>|undefined = undefined;
-  protected omahaResponse: Record<string, unknown>|undefined = undefined;
-  protected nextVersion: string|undefined = undefined;
-  protected updaterVersion: string|undefined = undefined;
-  protected commandLine: string|undefined = undefined;
-  protected eventSummary: string|undefined = undefined;
+  protected accessor appId: string|undefined = undefined;
+  protected accessor appLabel: string|undefined = undefined;
+  protected accessor formattedDate: string|undefined = undefined;
+  protected accessor formattedDuration: string|undefined = undefined;
+  protected accessor errors: string[] = [];
+  protected accessor omahaRequest: Record<string, unknown>|undefined =
+      undefined;
+  protected accessor omahaResponse: Record<string, unknown>|undefined =
+      undefined;
+  protected accessor nextVersion: string|undefined = undefined;
+  protected accessor updaterVersion: string|undefined = undefined;
+  protected accessor commandLine: string|undefined = undefined;
+  protected accessor eventSummaryIcon: string|undefined = undefined;
+  protected accessor eventSummary: string|undefined = undefined;
 
   override willUpdate(changedProperties: PropertyValues<this>) {
-    if (changedProperties.has('event') && this.event !== undefined) {
-      this.appId = getAppId(this.event);
-      this.appLabel = this.computeAppLabel();
-      this.formattedDate = this.computeFormattedDate();
-      this.formattedDuration = this.computeFormattedDuration();
-      this.errors = this.computeErrors();
-      this.error = this.errors.length > 0;
-      this.omahaRequest = this.computeOmahaRequest();
-      this.omahaResponse = this.computeOmahaResponse();
-      this.nextVersion = this.computeNextVersion();
-      this.commandLine = this.computeCommandLine();
-      this.eventSummary = this.getEventSummary(this.event);
+    super.willUpdate(changedProperties);
+
+    if (changedProperties.has('event')) {
+      this.expanded = false;
+      if (this.event !== undefined) {
+        this.appId = getAppId(this.event);
+        this.appLabel = this.computeAppLabel();
+        this.formattedDate = this.computeFormattedDate();
+        this.formattedDuration = this.computeFormattedDuration();
+        this.errors = this.computeErrors();
+        this.status = this.computeStatus();
+        this.omahaRequest = this.computeOmahaRequest();
+        this.omahaResponse = this.computeOmahaResponse();
+        this.nextVersion = this.computeNextVersion();
+        this.commandLine = this.computeCommandLine();
+        this.eventSummaryIcon = this.computeEventSummaryIcon();
+        this.eventSummary = this.getEventSummary(this.event);
+      }
     }
 
     if (changedProperties.has('event') || changedProperties.has('processMap')) {
       this.updaterVersion = this.computeUpdaterVersion();
+      this.scope = this.computeScope();
     }
   }
 
@@ -115,6 +148,15 @@ export class EventListItemElement extends CrLitElement {
     }
   }
 
+  private computeScope(): Scope|undefined {
+    if (this.event === undefined || this.processMap === undefined) {
+      return undefined;
+    }
+    const process = this.processMap.getUpdaterProcessForEvent(this.event);
+    assert(process !== undefined);
+    return process.startEvent.scope;
+  }
+
   private computeAppLabel(): string {
     return this.appId !== undefined ?
         getKnownAppNamesById().get(this.appId.toLowerCase()) ??
@@ -123,48 +165,30 @@ export class EventListItemElement extends CrLitElement {
   }
 
   private computeFormattedDate(): string|undefined {
-    return this.eventDate ? new Intl
-                                .DateTimeFormat(undefined, {
-                                  month: 'numeric',
-                                  day: 'numeric',
-                                  hour: 'numeric',
-                                  minute: 'numeric',
-                                  second: 'numeric',
-                                })
-                                .format(this.eventDate) :
-                            undefined;
+    return this.eventDate ? formatDateLong(this.eventDate) : undefined;
   }
 
   private computeFormattedDuration(): string|undefined {
     if (this.event === undefined || !isMergedHistoryEvent(this.event)) {
       return undefined;
     }
-    let remainingUs =
-        this.event.endEvent.deviceUptime - this.event.startEvent.deviceUptime;
-    const microseconds = remainingUs % 1000;
-    remainingUs = Math.floor(remainingUs / 1000);
-    const milliseconds = remainingUs % 1000;
-    remainingUs = Math.floor(remainingUs / 1000);
-    const seconds = remainingUs % 60;
-    remainingUs = Math.floor(remainingUs / 60);
-    const minutes = remainingUs % 60;
-    remainingUs = Math.floor(remainingUs / 60);
-    const hours = remainingUs % 24;
-    remainingUs = Math.floor(remainingUs / 24);
-    const days = remainingUs;
+    let remaining = Math.floor(
+        (this.event.endEvent.deviceUptime -
+         this.event.startEvent.deviceUptime) /
+        1000000);
+    if (remaining === 0) {
+      return undefined;
+    }
+    const seconds = remaining % 60;
+    remaining = Math.floor(remaining / 60);
+    const minutes = remaining % 60;
+    remaining = Math.floor(remaining / 60);
+    const hours = remaining % 24;
+    remaining = Math.floor(remaining / 24);
+    const days = remaining;
 
-    return new Intl
-        .DurationFormat(undefined, {
-          style: 'narrow',
-        })
-        .format({
-          days,
-          hours,
-          minutes,
-          seconds,
-          milliseconds,
-          microseconds,
-        });
+    return loadTimeData.getStringF(
+        'duration', formatDuration(days, hours, minutes, seconds));
   }
 
   private computeErrors(): string[] {
@@ -174,9 +198,26 @@ export class EventListItemElement extends CrLitElement {
     const errors = isMergedHistoryEvent(this.event) ?
         [...this.event.startEvent.errors, ...this.event.endEvent.errors] :
         this.event.errors;
-    return errors.map(
-        error => loadTimeData.getStringF(
-            'errorDetails', error.category, error.code, error.extracode1));
+    return errors.map(error => getUpdaterErrorDescription(error));
+  }
+
+  private computeStatus(): 'success'|'error'|'' {
+    if (this.event === undefined) {
+      return '';
+    }
+    if (this.errors.length > 0) {
+      return 'error';
+    }
+    if (this.event.eventType === 'UPDATE' && isMergedHistoryEvent(this.event)) {
+      const updateOutcome = getUpdateOutcome(this.event.endEvent);
+      if (updateOutcome === 'UPDATED') {
+        return 'success';
+      }
+      if (updateOutcome === 'UPDATE_ERROR') {
+        return 'error';
+      }
+    }
+    return '';
   }
 
   private computeOmahaRequest(): Record<string, unknown>|undefined {
@@ -225,6 +266,27 @@ export class EventListItemElement extends CrLitElement {
     return this.event.startEvent.commandLine;
   }
 
+  private computeEventSummaryIcon(): string|undefined {
+    if (this.event === undefined || !isMergedHistoryEvent(this.event)) {
+      return undefined;
+    }
+    switch (this.event.eventType) {
+      case 'UPDATE':
+        switch (getUpdateOutcome(this.event)) {
+          case 'UPDATED':
+            return 'cr:check-circle';
+          case 'NO_UPDATE':
+            return 'cr:sync';
+          case 'UPDATE_ERROR':
+            return 'cr:warning-filled';
+          default:
+            return undefined;
+        }
+      default:
+        return undefined;
+    }
+  }
+
   private getInstallSummary(event: MergedInstallEvent): string|undefined {
     return event.endEvent.version !== undefined ?
         loadTimeData.getStringF('installSummary', event.endEvent.version) :
@@ -247,8 +309,16 @@ export class EventListItemElement extends CrLitElement {
         event.endEvent.activated ? 'activationSucceeded' : 'activationFailed');
   }
 
+  private getPostRequestSummary(): string|undefined {
+    return (this.omahaRequest !== undefined ||
+            this.omahaResponse !== undefined) ?
+        loadTimeData.getString('omahaRequest') :
+        undefined;
+  }
+
   private getUpdateSummary(event: MergedUpdateEvent): string|undefined {
-    switch (event.endEvent.outcome) {
+    const updateOutcome = getUpdateOutcome(event);
+    switch (updateOutcome) {
       case 'NO_UPDATE':
         return loadTimeData.getString('noUpdate');
       case 'UPDATED':
@@ -258,8 +328,8 @@ export class EventListItemElement extends CrLitElement {
       case 'UPDATE_ERROR':
         return loadTimeData.getString('updateError');
       default:
-        return event.endEvent.outcome ?
-            loadTimeData.getStringF('outcome', event.endEvent.outcome) :
+        return updateOutcome !== undefined ?
+            loadTimeData.getStringF('outcome', updateOutcome) :
             loadTimeData.getString('outcomeUnknown');
     }
   }
@@ -292,6 +362,10 @@ export class EventListItemElement extends CrLitElement {
       return undefined;
     }
 
+    if (this.errors.length > 0) {
+      return this.errors[0];
+    }
+
     if (isMergedHistoryEvent(event)) {
       switch (event.eventType) {
         case 'INSTALL':
@@ -302,6 +376,8 @@ export class EventListItemElement extends CrLitElement {
           return this.getQualifySummary(event);
         case 'ACTIVATE':
           return this.getActivateSummary(event);
+        case 'POST_REQUEST':
+          return this.getPostRequestSummary();
         case 'UPDATE':
           return this.getUpdateSummary(event);
         case 'UPDATER_PROCESS':
@@ -319,17 +395,6 @@ export class EventListItemElement extends CrLitElement {
           return undefined;
       }
     }
-  }
-
-  /**
-   * Returns whether a chip should be added before the event description
-   * indicating that the event is an HTTP POST likely containing an Omaha
-   * request/response pair.
-   */
-  protected shouldShowOmahaRequestChip() {
-    return this.event !== undefined && isMergedHistoryEvent(this.event) &&
-        this.event.eventType === 'POST_REQUEST' &&
-        (this.omahaRequest !== undefined || this.omahaResponse !== undefined);
   }
 }
 

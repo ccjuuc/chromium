@@ -19,8 +19,17 @@
 // The web view's frame rectangle.
 @property(readonly, assign) CGRect frame;
 
-// Web view's obscured insets.
+// Whether to ignore the value of `obscuredInsets`. If set to `YES` then
+// setting the `obscuredInsets` property will not have any effect.
+@property(nonatomic, assign) BOOL ignoreObscuredInsets;
+
+// Web view's obscured insets. If `ignoreObscuredInsets` is set to `YES` then
+// setting this property will not have any effect.
 @property(nonatomic, assign) UIEdgeInsets obscuredInsets;
+
+// Sets the web view's min and max viewport insets.
+- (void)setMinimumViewportInset:(UIEdgeInsets)minInset
+           maximumViewportInset:(UIEdgeInsets)maxInset;
 
 // Adds an offset to the scrollable content's frame.
 @property(nonatomic, assign) CGPoint contentOffset;

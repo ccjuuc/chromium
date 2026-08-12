@@ -14,6 +14,7 @@
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "components/viz/common/resources/shared_image_format.h"
@@ -191,17 +192,21 @@ class Buffer final : public ui::GbmBuffer {
   }
 
   bool SupportsZeroCopyWebGPUImport() const override {
+    bool supported = true;
     // NOT supported if the buffer is multi-planar and its planes are disjoint.
     size_t plane_count = GetNumPlanes();
     if (plane_count > 1) {
       uint32_t handle = GetPlaneHandle(0);
       for (size_t plane = 1; plane < plane_count; ++plane) {
         if (GetPlaneHandle(plane) != handle) {
-          return false;
+          supported = false;
+          break;
         }
       }
     }
-    return true;
+    base::UmaHistogramBoolean("Graphics.Gbm.SupportsZeroCopyWebGPUImport",
+                              supported);
+    return supported;
   }
 
   uint32_t GetPlaneStride(size_t plane) const override {
@@ -439,7 +444,11 @@ class Device final : public ui::GbmDevice {
     fd_data.num_fds = handle.planes.size();
     fd_data.modifier = handle.modifier;
 
-    DCHECK_LE(handle.planes.size(), 3u);
+    if (handle.planes.size() > 3u) {
+      LOG(ERROR) << "Importing handle with too many planes: "
+                 << handle.planes.size();
+      return nullptr;
+    }
 
     for (size_t i = 0; i < handle.planes.size(); ++i) {
       UNSAFE_TODO(fd_data.fds[i]) =

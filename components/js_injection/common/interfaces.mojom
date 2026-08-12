@@ -8,6 +8,7 @@ import "components/js_injection/common/enum.mojom";
 import "components/origin_matcher/origin_matcher.mojom";
 import "mojo/public/mojom/base/big_buffer.mojom";
 import "mojo/public/mojom/base/string16.mojom";
+import "mojo/public/mojom/base/values.mojom";
 import "third_party/blink/public/mojom/messaging/message_port_descriptor.mojom";
 
 // JsObject struct represents a JavaScript object we will inject in the main
@@ -18,12 +19,16 @@ import "third_party/blink/public/mojom/messaging/message_port_descriptor.mojom";
 // when the kLazyBindJsInjection feature is enabled to request a
 // BrowserToJsMessaging pipe from the renderer when needed. If this is not set,
 // SetBrowserToJsMessaging() must be called from the renderer to pass the pipe.
+// |js_world| is the enumerated world id for the JS script context. 0 is the
+// main page world. Values correspond to the underlying enumeration as defined
+// in DOMWrapperWorld::WorldId enum.
 struct JsObject {
   mojo_base.mojom.String16 js_object_name;
   pending_associated_remote<JsToBrowserMessaging> js_to_browser_messaging;
   pending_associated_receiver<BrowserToJsMessagingFactory>
       browser_to_js_factory;
   origin_matcher.mojom.OriginMatcher origin_matcher;
+  int32 js_world;
 };
 
 // JavaScriptExecutable struct contains the JavaScript snippet |script| and the
@@ -43,12 +48,10 @@ struct JavaScriptExecutable {
 // ArrayBuffer payload sent between JavaScript and browser.
 struct JsWebMessageArrayBufferValue {
   mojo_base.mojom.BigBuffer array_buffer_value;
-  // If is_resizable_by_user_javascript is false, then max_byte_length is
-  // unused.
-  //
-  // TODO(crbug.com/40489779): Use a wrapped uint64 or uint64? once supported.
-  bool is_resizable_by_user_javascript = false;
-  uint64 max_byte_length = 0;
+
+  // If the buffer is resizable via JavaScript, the limit to which it can be
+  // resized. If it is not resizable via JavaScript, this is not set.
+  uint64? javascript_resize_limit;
 };
 
 // JsWebMessage struct contains the message payload sent between
@@ -90,6 +93,13 @@ interface BrowserToJsMessagingFactory {
 interface BrowserToJsMessaging {
   // Called from browser, to send message to page.
   OnPostMessage(JsWebMessage message);
+
+  // Execute JavaScript code in the renderer using the same
+  // BrowserToJsMessaging pipe.
+  OnExecuteJavaScript(
+      mojo_base.mojom.BigString16 javascript,
+      bool wants_result) =>
+          result<mojo_base.mojom.Value, JavaScriptExecutionError>;
 };
 
 // For browser to configure renderer, implemented by renderer.

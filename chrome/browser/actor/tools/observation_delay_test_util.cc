@@ -96,7 +96,7 @@ TestObservationDelayController::TestObservationDelayController(
   // Ensure the monitor is created in the renderer before returning. This
   // ensures the PageStabilityMonitor captures the initial state at the
   // current point in the test.
-  page_stability_monitor_remote_.FlushForTesting();
+  page_settled_monitor_->page_stability_monitor_remote_.FlushForTesting();
 }
 
 TestObservationDelayController::~TestObservationDelayController() = default;
@@ -152,8 +152,8 @@ bool ObservationDelayTest::InitiateFetchRequest() {
   CHECK_EQ(web_contents()->GetURL(), GetPageStabilityTestURL());
   CHECK_EQ(GetOutputText(), "INITIAL");
 
-  const GURL hash_navigation_to_initiate_fetch =
-      embedded_test_server()->GetURL("/actor/page_stability.html#fetch");
+  const GURL hash_navigation_to_initiate_fetch = embedded_test_server()->GetURL(
+      "/page_content_annotations/page_stability.html#fetch");
 
   bool navigate_result =
       content::NavigateToURL(web_contents(), hash_navigation_to_initiate_fetch);

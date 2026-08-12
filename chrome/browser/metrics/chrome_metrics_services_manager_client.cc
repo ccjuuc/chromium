@@ -24,7 +24,6 @@
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/variations/chrome_variations_service_client.h"
-#include "chrome/browser/metrics/variations/ui_string_overrider_factory.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/ui/browser_otr_state.h"
 #include "chrome/common/chrome_paths.h"
@@ -33,6 +32,7 @@
 #include "components/metrics/enabled_state_provider.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/service/variations_service.h"
 #include "components/variations/synthetic_trial_registry.h"
@@ -77,7 +77,7 @@ BASE_FEATURE(kMetricsReportingFeature,
 // different trial, which has different sampling rates. This is due to a bug
 // in which the old sampling rate was not being applied correctly. In order for
 // the fix to not affect the overall sampling rate, this new feature was
-// created. See crbug/1306481.
+// created. See crbug.com/40218371.
 BASE_FEATURE(kPostFREFixMetricsReportingFeature,
              "PostFREFixMetricsReporting",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -141,9 +141,9 @@ bool IsClientInSampleImpl(PrefService* local_state) {
 // Callback to update the metrics reporting state when the Chrome OS metrics
 // reporting setting changes.
 void OnCrosMetricsReportingSettingChange(
-    ChangeMetricsReportingStateCalledFrom called_from) {
+    metrics::ChangeMetricsReportingStateCalledFrom called_from) {
   bool enable_metrics = ash::StatsReportingController::Get()->IsEnabled();
-  ChangeMetricsReportingState(enable_metrics, called_from);
+  metrics::ChangeMetricsReportingState(enable_metrics, called_from);
 }
 #endif
 
@@ -213,7 +213,7 @@ bool ChromeMetricsServicesManagerClient::IsClientInSampleForCrashes() {
   // On Android, there are two field trials that, together, drive metrics and
   // crash reporting. The determination of which trial to use is based on
   // whether the client went through the FRE before or after the fix to
-  // crbug.com/1306481 was deployed.
+  // crbug.com/40218371 was deployed.
   //
   // The PostFREFixSamplingTrial controls crash and metrics sampling for clients
   // which went through the FRE after the FRE fix was deployed. These clients
@@ -263,11 +263,13 @@ bool ChromeMetricsServicesManagerClient::GetSamplingRatePerMille(int* rate) {
 #endif  // BUILDFLAG(IS_ANDROID)
   std::string rate_str = base::GetFieldTrialParamValueByFeature(
       feature, metrics::internal::kRateParamName);
-  if (rate_str.empty())
+  if (rate_str.empty()) {
     return false;
+  }
 
-  if (!base::StringToInt(rate_str, rate) || *rate > 1000)
+  if (!base::StringToInt(rate_str, rate) || *rate > 1000) {
     return false;
+  }
 
   return true;
 }
@@ -276,12 +278,14 @@ bool ChromeMetricsServicesManagerClient::GetSamplingRatePerMille(int* rate) {
 void ChromeMetricsServicesManagerClient::OnCrosSettingsCreated() {
   // Listen for changes to metrics reporting state.
   reporting_setting_subscription_ =
-      ash::StatsReportingController::Get()->AddObserver(base::BindRepeating(
-          &OnCrosMetricsReportingSettingChange,
-          ChangeMetricsReportingStateCalledFrom::kCrosMetricsSettingsChange));
+      ash::StatsReportingController::Get()->AddObserver(
+          base::BindRepeating(&OnCrosMetricsReportingSettingChange,
+                              metrics::ChangeMetricsReportingStateCalledFrom::
+                                  kCrosMetricsSettingsChange));
   // Invoke the callback once initially to set the metrics reporting state.
   OnCrosMetricsReportingSettingChange(
-      ChangeMetricsReportingStateCalledFrom::kCrosMetricsSettingsCreated);
+      metrics::ChangeMetricsReportingStateCalledFrom::
+          kCrosMetricsSettingsCreated);
 }
 #endif
 
@@ -291,7 +295,6 @@ ChromeMetricsServicesManagerClient::CreateVariationsService() {
   return variations::VariationsService::Create(
       std::make_unique<ChromeVariationsServiceClient>(), local_state_,
       GetMetricsStateManager(), switches::kDisableBackgroundNetworking,
-      chrome_variations::CreateUIStringOverrider(),
       base::BindOnce(&content::GetNetworkConnectionTracker));
 }
 
@@ -357,8 +360,9 @@ bool ChromeMetricsServicesManagerClient::IsOffTheRecordSessionActive() {
   // TODO(crbug.com/40107157): This function should return true for Incognito
   // CCTs.
   for (const TabModel* model : TabModelList::models()) {
-    if (model->IsOffTheRecord())
+    if (model->IsOffTheRecord()) {
       return true;
+    }
   }
 
   return false;

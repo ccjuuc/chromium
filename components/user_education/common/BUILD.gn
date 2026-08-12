@@ -5,6 +5,10 @@
 import("//build/buildflag_header.gni")
 import("//build/config/ui.gni")
 
+if (is_android) {
+  import("//build/config/android/rules.gni")
+}
+
 source_set("common") {
   sources = [
     "anchor_element_provider.cc",
@@ -27,10 +31,8 @@ source_set("common") {
     "feature_promo/feature_promo_specification.h",
     "feature_promo/impl/common_preconditions.cc",
     "feature_promo/impl/common_preconditions.h",
-    "feature_promo/impl/feature_promo_controller_20.cc",
-    "feature_promo/impl/feature_promo_controller_20.h",
-    "feature_promo/impl/feature_promo_controller_25.cc",
-    "feature_promo/impl/feature_promo_controller_25.h",
+    "feature_promo/impl/feature_promo_controller_impl.cc",
+    "feature_promo/impl/feature_promo_controller_impl.h",
     "feature_promo/impl/feature_promo_queue.cc",
     "feature_promo/impl/feature_promo_queue.h",
     "feature_promo/impl/feature_promo_queue_set.cc",
@@ -39,6 +41,10 @@ source_set("common") {
     "feature_promo/impl/messaging_coordinator.h",
     "feature_promo/impl/precondition_list_provider.cc",
     "feature_promo/impl/precondition_list_provider.h",
+    "feature_promo/impl/scoped_typed_data.h",
+    "feature_promo/impl/typed_data.h",
+    "feature_promo/impl/typed_data_collection.cc",
+    "feature_promo/impl/typed_data_collection.h",
     "help_bubble/custom_help_bubble.cc",
     "help_bubble/custom_help_bubble.h",
     "help_bubble/help_bubble.cc",
@@ -60,21 +66,10 @@ source_set("common") {
     "new_badge/new_badge_specification.h",
     "ntp_promo/ntp_promo_controller.cc",
     "ntp_promo/ntp_promo_controller.h",
-    "ntp_promo/ntp_promo_identifier.h",
-    "ntp_promo/ntp_promo_order.cc",
-    "ntp_promo/ntp_promo_order.h",
     "ntp_promo/ntp_promo_registry.cc",
     "ntp_promo/ntp_promo_registry.h",
     "ntp_promo/ntp_promo_specification.cc",
     "ntp_promo/ntp_promo_specification.h",
-    "product_messaging_controller.cc",
-    "product_messaging_controller.h",
-    "session/user_education_idle_observer.cc",
-    "session/user_education_idle_observer.h",
-    "session/user_education_idle_policy.cc",
-    "session/user_education_idle_policy.h",
-    "session/user_education_session_manager.cc",
-    "session/user_education_session_manager.h",
     "tutorial/tutorial.cc",
     "tutorial/tutorial.h",
     "tutorial/tutorial_description.cc",
@@ -87,14 +82,16 @@ source_set("common") {
     "user_education_class_properties.cc",
     "user_education_class_properties.h",
     "user_education_context.h",
-    "user_education_data.cc",
-    "user_education_data.h",
-    "user_education_features.cc",
-    "user_education_features.h",
     "user_education_metadata.cc",
     "user_education_metadata.h",
-    "user_education_storage_service.cc",
-    "user_education_storage_service.h",
+  ]
+
+  public_deps = [
+    ":features",
+    ":ntp_promo_identifier",
+    ":session",
+    ":storage",
+    "//ui/base/interaction",
   ]
 
   deps = [
@@ -102,14 +99,57 @@ source_set("common") {
     "//base",
     "//components/feature_engagement/public",
     "//components/strings",
+    "//components/user_education/product_messaging",
     "//components/variations",
     "//components/vector_icons",
     "//skia",
     "//third_party/abseil-cpp:absl",
     "//ui/accessibility",
-    "//ui/base/interaction",
     "//ui/menus",
   ]
+}
+
+source_set("features") {
+  sources = [
+    "user_education_features.cc",
+    "user_education_features.h",
+  ]
+
+  deps = [ "//base" ]
+}
+
+source_set("ntp_promo_identifier") {
+  sources = [ "ntp_promo/ntp_promo_identifier.h" ]
+}
+
+source_set("session") {
+  sources = [
+    "session/user_education_idle_observer.cc",
+    "session/user_education_idle_observer.h",
+    "session/user_education_idle_policy.cc",
+    "session/user_education_idle_policy.h",
+    "session/user_education_session_manager.cc",
+    "session/user_education_session_manager.h",
+  ]
+
+  deps = [
+    ":features",
+    ":storage",
+    "//base",
+  ]
+}
+
+source_set("storage") {
+  sources = [
+    "user_education_data.cc",
+    "user_education_data.h",
+    "user_education_storage_service.cc",
+    "user_education_storage_service.h",
+  ]
+
+  public_deps = [ ":ntp_promo_identifier" ]
+
+  deps = [ "//base" ]
 }
 
 component("events") {
@@ -138,17 +178,16 @@ source_set("unit_tests") {
     "feature_promo/feature_promo_precondition_unittest.cc",
     "feature_promo/feature_promo_specification_unittest.cc",
     "feature_promo/impl/common_preconditions_unittest.cc",
-    "feature_promo/impl/feature_promo_controller_2x_unittest.cc",
+    "feature_promo/impl/feature_promo_controller_impl_unittest.cc",
     "feature_promo/impl/feature_promo_queue_set_unittest.cc",
     "feature_promo/impl/feature_promo_queue_unittest.cc",
     "feature_promo/impl/messaging_coordinator_unittest.cc",
     "feature_promo/impl/precondition_list_provider_unittest.cc",
+    "feature_promo/impl/typed_data_collection_unittest.cc",
     "help_bubble/help_bubble_factory_registry_unittest.cc",
     "new_badge/new_badge_controller_unittest.cc",
     "ntp_promo/ntp_promo_controller_unittest.cc",
-    "ntp_promo/ntp_promo_order_unittest.cc",
     "ntp_promo/ntp_promo_registry_unittest.cc",
-    "product_messaging_controller_unittest.cc",
     "session/user_education_session_manager_unittest.cc",
     "tutorial/tutorial_unittest.cc",
     "user_education_storage_service_unittest.cc",
@@ -157,11 +196,14 @@ source_set("unit_tests") {
   deps = [
     ":common",
     ":events",
+    ":session",
+    ":storage",
     "//base",
     "//base/test:test_support",
     "//components/feature_engagement/public",
     "//components/feature_engagement/test:test_support",
     "//components/strings",
+    "//components/user_education/product_messaging",
     "//components/user_education/test",
     "//components/variations",
     "//skia",
@@ -175,4 +217,15 @@ source_set("unit_tests") {
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
   # enable the diagnostic by removing this line.
   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
+}
+
+if (is_android) {
+  java_cpp_enum("user_education_closed_reason_javagen") {
+    sources = [ "user_education_data.h" ]
+  }
+
+  android_library("user_education_common_java") {
+    srcjar_deps = [ ":user_education_closed_reason_javagen" ]
+    deps = [ "//third_party/androidx:androidx_annotation_annotation_java" ]
+  }
 }

@@ -181,7 +181,7 @@ ThreadGroupProfiler::ActiveCollection::ActiveCollection(
     const flat_map<internal::WorkerThread*, WorkerThreadContext>&
         worker_thread_context_set,
     int64_t thread_group_type,
-    const TimeDelta& sampling_duration,
+    TimeDelta sampling_duration,
     SequencedTaskRunner* task_runner,
     ProfilerFactory factory,
     OnceClosure collection_complete_callback)
@@ -342,11 +342,9 @@ void ThreadGroupProfiler::OnWorkerThreadStartedTask(
     internal::WorkerThread* worker_thread,
     SamplingProfilerThreadToken token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(task_runner_sequence_checker_);
-  const bool inserted =
-      worker_thread_context_set_
-          .emplace(worker_thread, WorkerThreadContext{token,
-                                                      /*is_idle=*/true})
-          .second;
+  const bool inserted = worker_thread_context_set_
+                            .try_emplace(worker_thread, token, /*is_idle=*/true)
+                            .second;
   // Worker thread should not be present before this call.
   DCHECK(inserted);
 }

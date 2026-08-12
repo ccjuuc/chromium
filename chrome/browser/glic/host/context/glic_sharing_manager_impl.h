@@ -8,29 +8,27 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/glic/glic_metrics.h"
 #include "chrome/browser/glic/host/context/glic_focused_browser_manager.h"
-#include "chrome/browser/glic/host/context/glic_focused_tab_manager.h"
+#include "chrome/browser/glic/host/context/glic_focused_tab_manager_interface.h"
+#include "chrome/browser/glic/host/context/glic_pin_candidate_provider.h"
 #include "chrome/browser/glic/host/context/glic_pinned_tab_manager.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
 
 namespace glic {
 
 class GlicMetrics;
 class GlicStablePinningDelegatingSharingManager;
 
-// Implements GlicSharingManager and provides additional functionality needed
-// by chrome/browser/glic. It also provides some common sharing-related
+// Implements GlicSharingManagerInternal and provides additional functionality
+// needed by chrome/browser/glic. It also provides some common sharing-related
 // functionality.
-class GlicSharingManagerImpl : public GlicSharingManager {
+class GlicSharingManagerImpl : public GlicSharingManagerInternal,
+                               public GlicPinCandidateProvider {
  public:
-  GlicSharingManagerImpl(Profile* profile,
-                         GlicWindowControllerInterface* window_controller,
-                         GlicMetrics* metrics);
   GlicSharingManagerImpl(
       std::unique_ptr<GlicFocusedTabManagerInterface> focused_tab_manager,
-      std::unique_ptr<GlicFocusedBrowserManagerInterface>
-          focused_browser_manager,
+      std::unique_ptr<GlicFocusedBrowserManager> focused_browser_manager,
       GlicPinnedTabManager* pinned_tab_manager,
       Profile* profile,
       GlicMetrics* metrics);
@@ -43,7 +41,7 @@ class GlicSharingManagerImpl : public GlicSharingManager {
   // without exposing generally.
   friend class GlicStablePinningDelegatingSharingManager;
 
-  // GlicSharingManager implementation.
+  // GlicSharingManagerInternal implementation.
 
   using FocusedTabChangedCallback =
       base::RepeatingCallback<void(const FocusedTabData&)>;
@@ -68,7 +66,7 @@ class GlicSharingManagerImpl : public GlicSharingManager {
       TabPinningStatusChangedCallback callback) override;
 
   using PinnedTabsChangedCallback =
-      base::RepeatingCallback<void(const std::vector<content::WebContents*>&)>;
+      base::RepeatingCallback<void(const std::vector<tabs::TabInterface*>&)>;
   base::CallbackListSubscription AddPinnedTabsChangedCallback(
       PinnedTabsChangedCallback callback) override;
 
@@ -86,6 +84,9 @@ class GlicSharingManagerImpl : public GlicSharingManager {
   bool PinTabs(base::span<const tabs::TabHandle> tab_handles,
                GlicPinTrigger trigger) override;
 
+  void SetPinTrigger(tabs::TabHandle tab_handle,
+                     GlicPinTrigger trigger) override;
+
   bool UnpinTabs(base::span<const tabs::TabHandle> tab_handles,
                  GlicUnpinTrigger trigger) override;
 
@@ -99,20 +100,32 @@ class GlicSharingManagerImpl : public GlicSharingManager {
   int32_t GetNumPinnedTabs() const override;
 
   bool IsTabPinned(tabs::TabHandle tab_handle) const override;
+  bool IsTabShared(tabs::TabInterface* tab) const override;
+
+  bool IsTabFocused(tabs::TabHandle tab_handle) const override;
 
   int32_t SetMaxPinnedTabs(uint32_t max_pinned_tabs) override;
 
-  std::vector<content::WebContents*> GetPinnedTabs() const override;
+  std::vector<tabs::TabInterface*> GetPinnedTabs() const override;
+
+  std::optional<GlicGetContextError> CheckPreliminaryContextSharingEligibility(
+      tabs::TabHandle tab_handle) const override;
 
   void GetContextFromTab(
       tabs::TabHandle tab_handle,
-      const mojom::GetTabContextOptions& options,
+      const mojom::TabContextOptions& options,
       base::OnceCallback<void(GlicGetContextResult)> callback) override;
 
   void GetContextForActorFromTab(
       tabs::TabHandle tab_handle,
-      const mojom::GetTabContextOptions& options,
+      const mojom::TabContextOptions& options,
       base::OnceCallback<void(GlicGetContextResult)> callback) override;
+
+  void GetImageBytes(
+      tabs::TabHandle tab_handle,
+      const std::string& document_id,
+      int32_t dom_node_id,
+      base::OnceCallback<void(GlicGetImageBytesResult)> callback) override;
 
   void SubscribeToPinCandidates(
       mojom::GetPinCandidatesOptionsPtr options,
@@ -120,19 +133,17 @@ class GlicSharingManagerImpl : public GlicSharingManager {
 
   void OnConversationTurnSubmitted() override;
 
-  GlicFocusedBrowserManagerInterface& focused_browser_manager() override;
-
-  base::WeakPtr<GlicSharingManager> GetWeakPtr() override;
+  base::WeakPtr<GlicSharingManagerInternal> GetWeakPtr() override;
 
  private:
   void GetContextFromTabImpl(
       tabs::TabInterface* tab,
-      const mojom::GetTabContextOptions& options,
+      const mojom::TabContextOptions& options,
       base::OnceCallback<void(GlicGetContextResult)> callback);
 
   GlicPinnedTabManager* pinned_tab_manager() const;
 
-  std::unique_ptr<GlicFocusedBrowserManagerInterface> focused_browser_manager_;
+  std::unique_ptr<GlicFocusedBrowserManager> focused_browser_manager_;
   std::unique_ptr<GlicFocusedTabManagerInterface> focused_tab_manager_;
   std::variant<std::unique_ptr<GlicPinnedTabManager>,
                raw_ptr<GlicPinnedTabManager>>

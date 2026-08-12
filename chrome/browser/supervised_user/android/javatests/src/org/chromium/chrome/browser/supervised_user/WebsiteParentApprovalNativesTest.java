@@ -40,6 +40,7 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 
 import java.util.concurrent.TimeoutException;
@@ -101,7 +102,7 @@ public class WebsiteParentApprovalNativesTest {
         mSigninTestRule.addChildTestAccountThenWaitForSignin();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    SupervisedUserSettingsTestBridge.setFilteringBehavior(
+                    FamilyLinkSettingsTestBridge.setFilteringBehavior(
                             mTabbedActivityTestRule.getProfile(/* incognito= */ false),
                             FilteringBehavior.BLOCK);
                 });
@@ -120,7 +121,8 @@ public class WebsiteParentApprovalNativesTest {
                             return null;
                         })
                 .when(mParentAuthDelegateMock)
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
     }
 
     @Test
@@ -140,7 +142,8 @@ public class WebsiteParentApprovalNativesTest {
 
         // Delay to ensure the asynchronous code that records the histograms is executed.
         verify(mParentAuthDelegateMock, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
 
         histograms.pollInstrumentationThreadUntilSatisfied();
     }
@@ -162,7 +165,8 @@ public class WebsiteParentApprovalNativesTest {
 
         // Delay to ensure the asynchronous code that records the histograms is executed.
         verify(mParentAuthDelegateMock, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
 
         histograms.pollInstrumentationThreadUntilSatisfied();
     }
@@ -180,7 +184,8 @@ public class WebsiteParentApprovalNativesTest {
 
         // Delay to ensure the asynchronous code that records the histograms is executed.
         verify(mParentAuthDelegateMock, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
 
         histograms.pollInstrumentationThreadUntilSatisfied();
     }
@@ -190,12 +195,13 @@ public class WebsiteParentApprovalNativesTest {
     public void cancelApprovalRequestIfOneAlreadyInProgress() {
         mockParentAuthDelegateRequestLocalAuthResponse(true);
         mTabbedActivityTestRule.loadUrl(mBlockedUrl);
+        int[] expectedValues = {
+            0, // Approved
+            2, // Canceled
+        };
         var histograms =
                 HistogramWatcher.newBuilder()
-                        .expectIntRecords(
-                                "FamilyLinkUser.LocalWebApprovalResult",
-                                /* values...= */ 0,
-                                /* Cancelled */ 2)
+                        .expectIntRecords("FamilyLinkUser.LocalWebApprovalResult", expectedValues)
                         .build();
 
         WebsiteParentApprovalTestUtils.clickAskInPerson(mWebContents);
@@ -205,7 +211,8 @@ public class WebsiteParentApprovalNativesTest {
 
         // Delay to ensure the asynchronous code that records the histograms is executed.
         verify(mParentAuthDelegateMock, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL).times(1))
-                .requestLocalAuth(any(WindowAndroid.class), any(GURL.class), any(Callback.class));
+                .requestLocalAuth(
+                        any(WindowAndroid.class), any(GURL.class), MockitoHelper.anyCallback());
 
         histograms.pollInstrumentationThreadUntilSatisfied();
     }

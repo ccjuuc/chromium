@@ -192,8 +192,8 @@ export enum PrivacyGuideInteractions {
   SWAA_COMPLETION_LINK = 8,
   PRIVACY_SANDBOX_COMPLETION_LINK = 9,
   SEARCH_SUGGESTIONS_NEXT_BUTTON = 10,
-  TRACKING_PROTECTION_COMPLETION_LINK = 11,
-  AD_TOPICS_NEXT_BUTTON = 12,
+  // TRACKING_PROTECTION_COMPLETION_LINK = 11, // OBSOLETE
+  // AD_TOPICS_NEXT_BUTTON = 12, // OBSOLETE
   AI_SETTINGS_COMPLETION_LINK = 13,
   // Max value should be updated whenever new entries are added.
   MAX_VALUE = 14,
@@ -232,10 +232,10 @@ export enum PrivacyGuideSettingsStates {
   SEARCH_SUGGESTIONS_ON_TO_OFF = 17,
   SEARCH_SUGGESTIONS_OFF_TO_ON = 18,
   SEARCH_SUGGESTIONS_OFF_TO_OFF = 19,
-  AD_TOPICS_ON_TO_ON = 20,
-  AD_TOPICS_ON_TO_OFF = 21,
-  AD_TOPICS_OFF_TO_ON = 22,
-  AD_TOPICS_OFF_TO_OFF = 23,
+  // AD_TOPICS_ON_TO_ON = 20, // OBSOLETE
+  // AD_TOPICS_ON_TO_OFF = 21, // OBSOLETE
+  // AD_TOPICS_OFF_TO_ON = 22, // OBSOLETE
+  // AD_TOPICS_OFF_TO_OFF = 23, // OBSOLETE
   // Max value should be updated whenever new entries are added.
   MAX_VALUE = 24,
 }
@@ -264,8 +264,8 @@ export enum PrivacyGuideStepsEligibleAndReached {
   COMPLETION_REACHED = 9,
   SEARCH_SUGGESTIONS_ELIGIBLE = 10,
   SEARCH_SUGGESTIONS_REACHED = 11,
-  AD_TOPICS_ELIGIBLE = 12,
-  AD_TOPICS_REACHED = 13,
+  // AD_TOPICS_ELIGIBLE = 12, // OBSOLETE
+  // AD_TOPICS_REACHED = 13, // OBSOLETE
   // Leave this at the end.
   COUNT = 14,
 }
@@ -284,7 +284,8 @@ export enum DeleteBrowsingDataAction {
   HISTORY_PAGE_ENTRIES = 5,
   QUICK_DELETE = 6,
   PAGE_INFO_RESET_PERMISSIONS = 7,
-  MAX_VALUE = 8,
+  RWS_DELETE_ALL_DATA = 8,
+  MAX_VALUE = 9,
 }
 
 /**
@@ -331,13 +332,18 @@ export enum CardBenefitsUserAction {
 // LINT.IfChange(AiPageInteractions)
 export enum AiPageInteractions {
   HISTORY_SEARCH_CLICK = 0,
-  COMPARE_CLICK = 1,
+  // COMPARE_CLICK = 1, // DEPRECATED
   COMPOSE_CLICK = 2,
-  TAB_ORGANIZATION_CLICK = 3,
+  // TAB_ORGANIZATION_CLICK = 3, // DEPRECATED
   // WALLPAPER_SEARCH_CLICK = 4, // DEPRECATED
   AUTOFILL_AI_CLICK = 5,
   PASSWORD_CHANGE_CLICK = 6,
-  MAX_VALUE = 7,
+  AI_SUGGESTIONS_CLICK = 7,
+  SKILLS_CLICK = 8,
+  INDIGO_CLICK = 9,
+  GOOGLE_SEARCH_AI_MODE_WORKSPACE_CLICK = 10,
+  INLINE_CUE_MENU_CLICK = 11,
+  MAX_VALUE = 12,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageInteractions)
 
@@ -361,23 +367,6 @@ export enum AiPageHistorySearchInteractions {
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageHistorySearchInteractions)
 
 /**
- * Contains all recorded interactions in the AI Compare settings page.
- *
- * These values are persisted to logs. Entries should not be renumbered and
- * numeric values should never be reused.
- *
- * Must be kept in sync with the SettingsAiPageCompareInteractions enum in
- * histograms/metadata/settings/enums.xml
- */
-// LINT.IfChange(AiPageCompareInteractions)
-export enum AiPageCompareInteractions {
-  FEATURE_LINK_CLICKED = 0,
-  LEARN_MORE_LINK_CLICKED = 1,
-  MAX_VALUE = 2,
-}
-// LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageCompareInteractions)
-
-/**
  * Contains all recorded interactions in the AI Compose settings page.
  *
  * These values are persisted to logs. Entries should not be renumbered and
@@ -396,20 +385,23 @@ export enum AiPageComposeInteractions {
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageComposeInteractions)
 
 /**
- * Contains all recorded interactions in the AI Tab Organization settings page.
+ * Contains all recorded interactions in the AI Suggestions settings page.
  *
  * These values are persisted to logs. Entries should not be renumbered and
  * numeric values should never be reused.
  *
- * Must be kept in sync with the SettingsAiPageTabOrganizationInteractions enum
- * in histograms/metadata/settings/enums.xml
+ * Must be kept in sync with the SettingsAiPageSuggestionsInteractions enum in
+ * histograms/metadata/settings/enums.xml
  */
-// LINT.IfChange(AiPageTabOrganizationInteractions)
-export enum AiPageTabOrganizationInteractions {
-  LEARN_MORE_LINK_CLICKED = 0,
-  MAX_VALUE = 1,
+// LINT.IfChange(AiPageSuggestionsInteractions)
+export enum AiPageSuggestionsInteractions {
+  SUGGESTIONS_ENABLED = 0,
+  SUGGESTIONS_DISABLED = 1,
+  LEARN_MORE_LINK_CLICKED = 2,
+  SYNC_SETTINGS_LINK_CLICKED = 3,
+  MAX_VALUE = 4,
 }
-// LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageTabOrganizationInteractions)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageSuggestionsInteractions)
 
 /**
  * These values are persisted to logs. Entries should not be renumbered and
@@ -442,7 +434,8 @@ export enum YourSavedInfoDataCategory {
   CONTACT_INFO = 2,
   IDENTITY_DOCS = 3,
   TRAVEL = 4,
-  MAX_VALUE = 5,
+  SHOPPING = 5,
+  MAX_VALUE = 6,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoDataCategory)
 
@@ -470,7 +463,9 @@ export enum YourSavedInfoDataChip {
   FLIGHT_RESERVATIONS = 10,
   TRAVEL_INFO = 11,
   VEHICLES = 12,
-  MAX_VALUE = 13,
+  SHIPMENTS = 13,
+  ORDERS = 14,
+  MAX_VALUE = 15,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoDataChip)
 
@@ -489,6 +484,25 @@ export enum YourSavedInfoRelatedService {
   MAX_VALUE = 3,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoRelatedService)
+
+// LINT.IfChange(SuggestionsFromGeminiEntryPoint)
+export enum SuggestionsFromGeminiEntryPoint {
+  YOUR_SAVED_INFO = 0,
+  TRAVEL = 1,
+  SHOPPING = 2,
+  IDENTITY_DOCS = 3,
+  MAX_VALUE = 4,
+}
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SuggestionsFromGeminiEntryPoint)
+
+// LINT.IfChange(SuggestionsFromGeminiAction)
+export enum SuggestionsFromGeminiAction {
+  MANAGE_CONNECTED_APPS_CLICK = 0,
+  TOGGLE_ON = 1,
+  TOGGLE_OFF = 2,
+  MAX_VALUE = 3,
+}
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SuggestionsFromGeminiAction)
 
 export interface MetricsBrowserProxy {
   /**
@@ -583,6 +597,19 @@ export interface MetricsBrowserProxy {
       void;
 
   /**
+   * Records a click on the Suggestions from Gemini link across Your saved info
+   * and category subpages with a corresponding metric and user action.
+   */
+  recordSuggestionsFromGeminiEntryPointClick(
+      entryPoint: SuggestionsFromGeminiEntryPoint): void;
+
+  /**
+   * Records an action triggered inside the Suggestions from Gemini subpage
+   * with a corresponding metric and user action.
+   */
+  recordSuggestionsFromGeminiAction(action: SuggestionsFromGeminiAction): void;
+
+  /**
    * Helper function that calls recordHistogram for the
    * Settings.PrivacyGuide.NextNavigation histogram
    */
@@ -660,22 +687,16 @@ export interface MetricsBrowserProxy {
 
   /**
    * Helper function that calls recordHistogram for the
-   * Settings.AiPage.Compare.Interactions histogram
-   */
-  recordAiPageCompareInteractions(interaction: AiPageCompareInteractions): void;
-
-  /**
-   * Helper function that calls recordHistogram for the
    * Settings.AiPage.Compose.Interactions histogram
    */
   recordAiPageComposeInteractions(interaction: AiPageComposeInteractions): void;
 
   /**
    * Helper function that calls recordHistogram for the
-   * Settings.AiPage.TabOrganization.Interactions histogram
+   * Settings.AiPage.Suggestions.Interactions histogram
    */
-  recordAiPageTabOrganizationInteractions(
-      interaction: AiPageTabOrganizationInteractions): void;
+  recordAiPageSuggestionsInteractions(
+      interaction: AiPageSuggestionsInteractions): void;
 
   /**
    * Records a referrer to one of Autofill settings pages.
@@ -684,17 +705,20 @@ export interface MetricsBrowserProxy {
       histogramName: string, referrer: AutofillSettingsReferrer): void;
 
   /**
-   * Records a click on a category link on the Your saved info page.
+   * Records a click on a category link on the Your saved info page with
+   * a corresponding metric and user action.
    */
   recordYourSavedInfoCategoryClick(category: YourSavedInfoDataCategory): void;
 
   /**
-   * Records a click on a data chip on the Your saved info page.
+   * Records a click on a data chip on the Your saved info page with
+   * a corresponding metric and user action.
    */
   recordYourSavedInfoDataChipClick(chip: YourSavedInfoDataChip): void;
 
   /**
-   * Records a click on a related service link on the Your saved info page.
+   * Records a click on a related service link on the Your saved info page with
+   * a corresponding metric and user action.
    */
   recordYourSavedInfoRelatedServiceClick(service: YourSavedInfoRelatedService):
       void;
@@ -903,15 +927,6 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     ]);
   }
 
-  recordAiPageCompareInteractions(interaction: AiPageCompareInteractions):
-      void {
-    chrome.send('metricsHandler:recordInHistogram', [
-      'Settings.AiPage.Compare.Interactions',
-      interaction,
-      AiPageCompareInteractions.MAX_VALUE,
-    ]);
-  }
-
   recordAiPageComposeInteractions(interaction: AiPageComposeInteractions):
       void {
     chrome.send('metricsHandler:recordInHistogram', [
@@ -921,12 +936,12 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     ]);
   }
 
-  recordAiPageTabOrganizationInteractions(
-      interaction: AiPageTabOrganizationInteractions): void {
+  recordAiPageSuggestionsInteractions(
+      interaction: AiPageSuggestionsInteractions): void {
     chrome.send('metricsHandler:recordInHistogram', [
-      'Settings.AiPage.TabOrganization.Interactions',
+      'Settings.AiPage.Suggestions.Interactions',
       interaction,
-      AiPageTabOrganizationInteractions.MAX_VALUE,
+      AiPageSuggestionsInteractions.MAX_VALUE,
     ]);
   }
 
@@ -943,6 +958,10 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       category,
       YourSavedInfoDataCategory.MAX_VALUE,
     ]);
+    if (category !== YourSavedInfoDataCategory.MAX_VALUE) {
+      this.recordAction(`Settings.YourSavedInfo.CategoryClick.${
+          YourSavedInfoDataCategory[category]}`);
+    }
   }
 
   recordYourSavedInfoDataChipClick(chip: YourSavedInfoDataChip) {
@@ -951,6 +970,10 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       chip,
       YourSavedInfoDataChip.MAX_VALUE,
     ]);
+    if (chip !== YourSavedInfoDataChip.MAX_VALUE) {
+      this.recordAction(
+          `Settings.YourSavedInfo.ChipClick.${YourSavedInfoDataChip[chip]}`);
+    }
   }
 
   recordYourSavedInfoRelatedServiceClick(service: YourSavedInfoRelatedService) {
@@ -959,6 +982,51 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       service,
       YourSavedInfoRelatedService.MAX_VALUE,
     ]);
+    if (service !== YourSavedInfoRelatedService.MAX_VALUE) {
+      this.recordAction(`Settings.YourSavedInfo.RelatedServiceClick.${
+          YourSavedInfoRelatedService[service]}`);
+    }
+  }
+
+  recordSuggestionsFromGeminiEntryPointClick(
+      entryPoint: SuggestionsFromGeminiEntryPoint) {
+    chrome.send('metricsHandler:recordInHistogram', [
+      'Autofill.YourSavedInfoSettingsPage.SuggestionsFromGeminiLinkClick',
+      entryPoint,
+      SuggestionsFromGeminiEntryPoint.MAX_VALUE,
+    ]);
+    if (entryPoint !== SuggestionsFromGeminiEntryPoint.MAX_VALUE) {
+      const actionMap = {
+        [SuggestionsFromGeminiEntryPoint.YOUR_SAVED_INFO]:
+            'PersonalContext.Settings.EntryPoint.AutofillAndPasswordsSettings',
+        [SuggestionsFromGeminiEntryPoint.TRAVEL]:
+            'PersonalContext.Settings.EntryPoint.TravelSettings',
+        [SuggestionsFromGeminiEntryPoint.SHOPPING]:
+            'PersonalContext.Settings.EntryPoint.ShoppingSettings',
+        [SuggestionsFromGeminiEntryPoint.IDENTITY_DOCS]:
+            'PersonalContext.Settings.EntryPoint.IdentityDocsSettings',
+      };
+      this.recordAction(actionMap[entryPoint]);
+    }
+  }
+
+  recordSuggestionsFromGeminiAction(action: SuggestionsFromGeminiAction) {
+    chrome.send('metricsHandler:recordInHistogram', [
+      'Autofill.YourSavedInfoSettingsPage.SuggestionsFromGeminiAction',
+      action,
+      SuggestionsFromGeminiAction.MAX_VALUE,
+    ]);
+    if (action !== SuggestionsFromGeminiAction.MAX_VALUE) {
+      const actionMap = {
+        [SuggestionsFromGeminiAction.MANAGE_CONNECTED_APPS_CLICK]:
+            'PersonalContext.Settings.ManageConnectedAppsClick',
+        [SuggestionsFromGeminiAction.TOGGLE_ON]:
+            'PersonalContext.Settings.ToggledOn',
+        [SuggestionsFromGeminiAction.TOGGLE_OFF]:
+            'PersonalContext.Settings.ToggledOff',
+      };
+      this.recordAction(actionMap[action]);
+    }
   }
 
   static getInstance(): MetricsBrowserProxy {

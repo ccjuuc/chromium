@@ -5,22 +5,20 @@
 #include "chrome/browser/ui/views/download/bubble/download_bubble_contents_view.h"
 
 #include "base/strings/string_number_conversions.h"
-#include "base/test/gmock_expected_support.h"
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/mock_download_core_service.h"
 #include "chrome/browser/download/offline_item_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/download/download_bubble_info.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_navigation_handler.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_primary_view.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_row_view.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/views/chrome_views_test_base.h"
@@ -66,43 +64,24 @@ class MockDownloadBubbleNavigationHandler
   base::WeakPtrFactory<MockDownloadBubbleNavigationHandler> weak_factory_{this};
 };
 
-class MockDownloadCoreService : public DownloadCoreService {
- public:
-  MOCK_METHOD(ChromeDownloadManagerDelegate*, GetDownloadManagerDelegate, ());
-  MOCK_METHOD(DownloadUIController*, GetDownloadUIController, ());
-  MOCK_METHOD(DownloadHistory*, GetDownloadHistory, ());
-  MOCK_METHOD(extensions::ExtensionDownloadsEventRouter*,
-              GetExtensionEventRouter,
-              ());
-  MOCK_METHOD(bool, HasCreatedDownloadManager, ());
-  MOCK_METHOD(int, BlockingShutdownCount, (), (const));
-  MOCK_METHOD(void,
-              CancelDownloads,
-              (DownloadCoreService::CancelDownloadsTrigger));
-  MOCK_METHOD(void,
-              SetDownloadManagerDelegateForTesting,
-              (std::unique_ptr<ChromeDownloadManagerDelegate> delegate));
-  MOCK_METHOD(bool, IsDownloadUiEnabled, ());
-  MOCK_METHOD(bool, IsDownloadObservedByExtension, ());
-};
 
 std::unique_ptr<KeyedService> BuildMockDownloadCoreService(
     content::BrowserContext* browser_context) {
-  return std::make_unique<MockDownloadCoreService>();
+  return std::make_unique<testing::NiceMock<MockDownloadCoreService>>();
 }
 
 }  // namespace
 
 class DownloadBubbleContentsViewTest
     : public ChromeViewsTestBase,
-      public ::testing::WithParamInterface<bool> {
+      public ::testing::WithParamInterface<DownloadBubbleMode> {
  public:
   DownloadBubbleContentsViewTest()
       : testing_profile_manager_(TestingBrowserProcess::GetGlobal()),
         manager_(std::make_unique<
                  testing::NiceMock<content::MockDownloadManager>>()) {}
 
-  bool IsPrimaryPartialView() const { return GetParam(); }
+  DownloadBubbleMode GetDownloadBubbleMode() const { return GetParam(); }
 
   // Sets up `num_items` mock download items with GUID equal to their index in
   // `download_items_`.
@@ -153,11 +132,8 @@ class DownloadBubbleContentsViewTest
         .WillRepeatedly(Return(delegate_.get()));
     EXPECT_CALL(*manager_, GetBrowserContext())
         .WillRepeatedly(Return(profile_.get()));
-    auto window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(profile_, true);
-    params.type = Browser::TYPE_NORMAL;
-    params.window = window.release();
-    browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
+    EXPECT_CALL(mock_browser_window_interface_, GetProfile())
+        .WillRepeatedly(Return(profile_));
 
     anchor_widget_ =
         CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
@@ -169,20 +145,22 @@ class DownloadBubbleContentsViewTest
     bubble_delegate_ = bubble_delegate.get();
     navigation_handler_ =
         std::make_unique<MockDownloadBubbleNavigationHandler>();
-    bubble_controller_ =
-        std::make_unique<DownloadBubbleUIController>(browser_.get());
+    bubble_controller_ = std::make_unique<DownloadBubbleUIController>(
+        &mock_browser_window_interface_);
 
     // TODO(chlily): Parameterize test on one vs multiple items.
     InitItems(2);
     contents_view_ = std::make_unique<DownloadBubbleContentsView>(
-        browser_->AsWeakPtr(), bubble_controller_->GetWeakPtr(),
-        navigation_handler_->GetWeakPtr(), IsPrimaryPartialView(),
+        &mock_browser_window_interface_, bubble_controller_->GetWeakPtr(),
+        navigation_handler_->GetWeakPtr(), GetDownloadBubbleMode(),
         std::make_unique<DownloadBubbleContentsViewInfo>(GetModels()),
         bubble_delegate_);
     // The contents view has to be set up before the bubble is shown, because it
     // sets initially focused view on the delegate (which cannot be set after
     // the widget is shown).
-    views::BubbleDialogDelegate::CreateBubble(std::move(bubble_delegate));
+    views::BubbleDialogDelegate::CreateBubbleDeprecated(
+        std::move(bubble_delegate),
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
     bubble_delegate_->GetWidget()->Show();
   }
 
@@ -220,7 +198,7 @@ class DownloadBubbleContentsViewTest
   raw_ptr<MockDownloadCoreService> mock_download_core_service_;
   std::unique_ptr<ChromeDownloadManagerDelegate> delegate_;
   std::unique_ptr<testing::NiceMock<content::MockDownloadManager>> manager_;
-  std::unique_ptr<Browser> browser_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_interface_;
   std::vector<std::unique_ptr<NiceMock<download::MockDownloadItem>>>
       download_items_;
   raw_ptr<views::BubbleDialogDelegate> bubble_delegate_ = nullptr;
@@ -233,9 +211,11 @@ class DownloadBubbleContentsViewTest
 };
 
 // The test parameter is whether the primary view is the partial view.
-INSTANTIATE_TEST_SUITE_P(/* no label */,
-                         DownloadBubbleContentsViewTest,
-                         ::testing::Bool());
+INSTANTIATE_TEST_SUITE_P(
+    /* no label */,
+    DownloadBubbleContentsViewTest,
+    ::testing::Values(DownloadBubbleMode::kComplete,
+                      DownloadBubbleMode::kPartial));
 
 TEST_P(DownloadBubbleContentsViewTest, ShowSecurityPage) {
   // Download that doesn't exist in the row list view.

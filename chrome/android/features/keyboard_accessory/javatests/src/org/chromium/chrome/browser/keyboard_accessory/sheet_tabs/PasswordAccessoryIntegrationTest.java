@@ -18,7 +18,7 @@ import static org.hamcrest.Matchers.containsString;
 
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.isTransformed;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.scrollToLastElement;
-import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabAtPosition;
+import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabWithDescription;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.whenDisplayed;
 
 import android.os.Looper;
@@ -32,6 +32,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
@@ -59,6 +60,7 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, "show-autofill-signatures"})
 @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/463649037
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // crbug.com/463649037
+@Batch(Batch.PER_CLASS)
 public class PasswordAccessoryIntegrationTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -111,7 +113,7 @@ public class PasswordAccessoryIntegrationTest {
         mHelper.waitForKeyboardAccessoryToBeShown();
         mHelper.waitForKeyboardToShow();
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
 
         // Check that the provided elements are there.
         whenDisplayed(withText("mayapark@gmail.com"));
@@ -119,7 +121,9 @@ public class PasswordAccessoryIntegrationTest {
     }
 
     private void preparePasswordBridge() {
-        Looper.prepare();
+        if (Looper.myLooper() == null) {
+            Looper.prepare();
+        }
         mActivityTestRule.startOnBlankPage();
         mTestServer = mActivityTestRule.getTestServer();
         ThreadUtils.runOnUiThreadBlocking(
@@ -140,7 +144,7 @@ public class PasswordAccessoryIntegrationTest {
         mHelper.focusPasswordField();
         mHelper.waitForKeyboardAccessoryToBeShown();
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
 
         mHelper.waitForKeyboardToDisappear();
         whenDisplayed(withId(R.id.passwords_sheet), /* atLeast= */ 51)
@@ -150,7 +154,7 @@ public class PasswordAccessoryIntegrationTest {
 
     @Test
     @MediumTest
-    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/1111770
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/40142722
     public void testFillsPasswordOnTap() throws TimeoutException {
         preparePasswordBridge();
         ThreadUtils.runOnUiThreadBlocking(
@@ -166,7 +170,7 @@ public class PasswordAccessoryIntegrationTest {
         mHelper.waitForKeyboardAccessoryToBeShown();
         mHelper.waitForKeyboardToShow();
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
 
         // Click the suggestion.
         whenDisplayed(withText("ShorterPassword")).perform(click());
@@ -188,7 +192,7 @@ public class PasswordAccessoryIntegrationTest {
 
         // Click the tab to show the sheet and hide the keyboard.
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
         mHelper.waitForKeyboardToDisappear();
         whenDisplayed(withId(R.id.passwords_sheet), /* atLeast= */ 51);
         onView(withText(containsString("No saved passwords"))).check(matches(isDisplayed()));
@@ -196,7 +200,7 @@ public class PasswordAccessoryIntegrationTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1503085")
+    @DisabledTest(message = "https://crbug.com/40943503")
     public void testEnablesUndenylistingToggle() throws TimeoutException, InterruptedException {
         preparePasswordBridge();
         String url = mTestServer.getURL("/chrome/test/data/password/password_form.html");
@@ -209,7 +213,7 @@ public class PasswordAccessoryIntegrationTest {
         mHelper.waitForKeyboardAccessoryToBeShown();
         mHelper.waitForKeyboardToShow();
         whenDisplayed(isAssignableFrom(KeyboardAccessoryButtonGroupView.class))
-                .perform(selectTabAtPosition(0));
+                .perform(selectTabWithDescription(R.string.password_accessory_sheet_toggle));
 
         whenDisplayed(withId(R.id.option_toggle_switch)).check(matches(isNotChecked()));
         onView(withId(R.id.option_toggle_subtitle)).check(matches(withText(R.string.text_off)));

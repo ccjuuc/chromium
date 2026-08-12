@@ -43,6 +43,33 @@
 
 namespace {
 
+namespace {
+// Helper to grant write permission to the parent directory of a target file.
+void GrantParentDirectoryAccess(
+    content::FileSystemAccessPermissionContext* permission_context,
+    content::WebContents* web_contents,
+    const url::Origin& origin,
+    const base::FilePath& parent_dir) {
+  auto parent_grant = permission_context->GetWritePermissionGrant(
+      origin, content::PathInfo(parent_dir),
+      ChromeFileSystemAccessPermissionContext::HandleType::kDirectory,
+      ChromeFileSystemAccessPermissionContext::UserAction::kOpen);
+  base::test::TestFuture<
+      content::FileSystemAccessPermissionGrant::PermissionRequestOutcome>
+      parent_grant_future;
+  auto* rfh = web_contents->GetPrimaryMainFrame();
+  parent_grant->RequestPermission(
+      content::GlobalRenderFrameHostId(rfh->GetProcess()->GetDeprecatedID(),
+                                       rfh->GetRoutingID()),
+      content::FileSystemAccessPermissionGrant::UserActivationState::
+          kNotRequired,
+      parent_grant_future.GetCallback());
+  ASSERT_EQ(parent_grant_future.Get(),
+            content::FileSystemAccessPermissionGrant::PermissionRequestOutcome::
+                kUserGranted);
+}
+}  // namespace
+
 class TestFileSystemAccessPermissionContext
     : public ChromeFileSystemAccessPermissionContext {
  public:
@@ -134,8 +161,8 @@ class ChromeFileSystemAccessPermissionContextBrowserTestBase
     ASSERT_TRUE(embedded_test_server()->Start());
     permission_context_ =
         std::make_unique<ChromeFileSystemAccessPermissionContext>(
-            browser()->profile());
-    content::SetFileSystemAccessPermissionContext(browser()->profile(),
+            browser()->GetProfile());
+    content::SetFileSystemAccessPermissionContext(browser()->GetProfile(),
                                                   permission_context_.get());
   }
 
@@ -322,6 +349,10 @@ IN_PROC_BROWSER_TEST_F(ChromeFileSystemAccessPermissionContextBrowserTest,
   const base::FilePath test_file_path2 = CreateTestFile("test file contents 2");
   SetUpAndGetHandleWithInitialPermissions("handle2", test_file_path2);
 
+  // Grant write permission to the parent directory.
+  GrantParentDirectoryAccess(permission_context(), GetWebContents(),
+                             GetOrigin(), temp_dir().GetPath());
+
   // Rename the new file to the removed file path.
   ASSERT_TRUE(content::ExecJs(
       GetWebContents(),
@@ -460,6 +491,87 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ("denied", content::EvalJs(GetWebContents(), R"((async () => {
              return await self.handle.queryPermission({mode: 'read'});
             })())"));
+
+  ui::SelectFileDialog::SetFactory(nullptr);
+}
+
+// Tests that recreation of a removed file and calling createWritable with
+// keepExistingData fails and preserves read permission revocation.
+IN_PROC_BROWSER_TEST_F(
+    ChromeFileSystemAccessPermissionContextRevokeAndRestoreBrowserTest,
+    BypassRevocationViaCreateWritableWithKeepExistingData) {
+  const base::FilePath test_file = CreateTestFile("test file contents");
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<content::FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{test_file}));
+
+  // Auto-grant permissions.
+  FileSystemAccessPermissionRequestManager::FromWebContents(GetWebContents())
+      ->set_auto_response_for_test(permissions::PermissionAction::GRANTED);
+
+  // Navigate to a test page.
+  const GURL url = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  // Get a handle via showSaveFilePicker. This should grant read/write.
+  ASSERT_TRUE(content::ExecJs(GetWebContents(),
+                              "(async () => {"
+                              "  self.handle = await self.showSaveFilePicker();"
+                              "})()"));
+
+  // Verify initial permissions are granted, including extended permissions.
+  EXPECT_EQ("granted", content::EvalJs(GetWebContents(), R"((async () => {
+             return await self.handle.queryPermission({mode: 'readwrite'});
+            })())"));
+  const url::Origin origin = GetOrigin();
+  permission_context()->SetOriginHasExtendedPermissionForTesting(origin);
+  VerifyPermissions(origin, test_file,
+                    ChromeFileSystemAccessPermissionContext::HandleType::kFile,
+                    content::PermissionStatus::GRANTED,
+                    content::PermissionStatus::GRANTED,
+                    /*expected_extended_read=*/true,
+                    /*expected_extended_write=*/true);
+
+  // Remove the file via the handle.
+  ASSERT_TRUE(content::ExecJs(GetWebContents(), "self.handle.remove()"));
+
+  // Verify read permission is revoked, and it's in downgraded read paths.
+  VerifyPermissions(origin, test_file,
+                    ChromeFileSystemAccessPermissionContext::HandleType::kFile,
+                    content::PermissionStatus::DENIED,
+                    content::PermissionStatus::GRANTED,
+                    /*expected_extended_read=*/false,
+                    /*expected_extended_write=*/true);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      origin, test_file));
+
+  // Recreate the file on disk using base::WriteFile.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::WriteFile(test_file, "secret data"));
+  }
+
+  // Attempt to call self.handle.createWritable({keepExistingData: true}).
+  // It should fail with NotAllowedError DOMException.
+  auto result = content::EvalJs(GetWebContents(), R"((async () => {
+    try {
+      await self.handle.createWritable({keepExistingData: true});
+      return 'success';
+    } catch (e) {
+      return e.name;
+    }
+  })())");
+  EXPECT_EQ("NotAllowedError", result.ExtractString());
+
+  // Verify that the read permission remains denied and is in downgraded paths.
+  VerifyPermissions(origin, test_file,
+                    ChromeFileSystemAccessPermissionContext::HandleType::kFile,
+                    content::PermissionStatus::DENIED,
+                    content::PermissionStatus::GRANTED,
+                    /*expected_extended_read=*/false,
+                    /*expected_extended_write=*/true);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      origin, test_file));
 
   ui::SelectFileDialog::SetFactory(nullptr);
 }
@@ -847,8 +959,7 @@ IN_PROC_BROWSER_TEST_F(
   const url::Origin origin = GetOrigin();
 
   // Grant the origin Extended Permission at the start of the test.
-  // Unlike `RestoreReadOnWrite_Rename` test case which doesn't use
-  // `showDirectoryPicker()`, this step is necessary in this test to prevent the
+  // This step is necessary in this test to prevent the
   // subsequent `showDirectoryPicker()` call from wiping all pre-existing
   // "dormant" grants from the two files handles when it reaches
   // `UpdateGrantsOnPermissionRequestResult()`.
@@ -890,6 +1001,178 @@ IN_PROC_BROWSER_TEST_F(
   ui::SelectFileDialog::SetFactory(nullptr);
 }
 
+// Verifies that once remove() revokes a file handle's read grant, moving the
+// handle into a directory the site can read is denied. Otherwise the site could
+// read an externally-recreated file via the destination directory's read grant,
+// bypassing the revocation. Regression test for crbug.com/523741272.
+IN_PROC_BROWSER_TEST_F(
+    ChromeFileSystemAccessPermissionContextRevokeAndRestoreBrowserTest,
+    MoveOfRevokedHandleIntoReadableDirectoryIsDenied) {
+  // Navigate to a test page.
+  const GURL url = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  const url::Origin origin = GetOrigin();
+
+  // Grant the origin Extended Permission so the later showDirectoryPicker()
+  // call does not wipe the file handle's dormant write grant.
+  permission_context()->SetOriginHasExtendedPermissionForTesting(origin);
+
+  // Get a read/write handle to a file.
+  const base::FilePath test_file_path = CreateTestFile("test file contents");
+  SetUpAndGetHandleWithInitialPermissions("handle", test_file_path,
+                                          /*expect_extended_grants=*/true);
+
+  // Remove the file.
+  RemoveFileAndVerifyPermissionsRevoked("handle", origin, test_file_path,
+                                        /*expect_extended_write=*/true);
+
+  // Simulate an external application recreating the file with sensitive data
+  // that the site is no longer authorized to read.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::WriteFile(test_file_path, "sensitive external data"));
+  }
+
+  // Get a read/write handle to a separate directory the site controls. Moving
+  // the file here would expose it via this directory's read grant.
+  base::FilePath dest_dir_path;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateTemporaryDirInDir(
+        temp_dir().GetPath(), FILE_PATH_LITERAL("dest"), &dest_dir_path));
+  }
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<content::FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{dest_dir_path}));
+  ASSERT_TRUE(content::ExecJs(GetWebContents(), R"((async () => {
+        self.dirHandle = await self.showDirectoryPicker({mode: 'readwrite'});
+      })())"));
+
+  // Moving the revoked handle into that readable directory must be denied,
+  // since the source handle no longer has read permission.
+  EXPECT_EQ("NotAllowedError",
+            content::EvalJs(GetWebContents(), R"((async () => {
+        try {
+          await self.handle.move(self.dirHandle);
+          return 'moved';
+        } catch (e) {
+          return e.name;
+        }
+      })())"));
+
+  // The file must not have been relocated into the readable directory.
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    EXPECT_TRUE(base::PathExists(test_file_path));
+    EXPECT_FALSE(
+        base::PathExists(dest_dir_path.Append(test_file_path.BaseName())));
+  }
+
+  // Read permission for the removed path must remain revoked.
+  VerifyPermissions(origin, test_file_path,
+                    ChromeFileSystemAccessPermissionContext::HandleType::kFile,
+                    content::PermissionStatus::DENIED,
+                    content::PermissionStatus::GRANTED,
+                    /*expected_extended_read=*/false,
+                    /*expected_extended_write=*/true);
+
+  ui::SelectFileDialog::SetFactory(nullptr);
+}
+
+// Verifies that after remove() revokes a directory handle's read grant, an
+// external application recreating the directory (with contents) does not
+// restore read access. The site loses read access to both the directory and any
+// file inside it, while retaining only its write grant. See
+// crbug.com/523741272.
+IN_PROC_BROWSER_TEST_F(
+    ChromeFileSystemAccessPermissionContextRevokeAndRestoreBrowserTest,
+    RemovedDirectoryRecreatedExternallyKeepsReadRevoked) {
+  // Navigate to a test page.
+  const GURL url = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  const url::Origin origin = GetOrigin();
+
+  // Grant the origin Extended Permission so the picker call below does not wipe
+  // pre-existing grants. See `RestoreReadOnWrite_Move` for details.
+  permission_context()->SetOriginHasExtendedPermissionForTesting(origin);
+
+  // Create a directory with no readable ancestor grant (so removing it actually
+  // revokes read) and obtain a read/write handle to it.
+  base::FilePath test_dir_path;
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateTemporaryDirInDir(
+        temp_dir().GetPath(), FILE_PATH_LITERAL("target"), &test_dir_path));
+  }
+  ui::SelectFileDialog::SetFactory(
+      std::make_unique<content::FakeSelectFileDialogFactory>(
+          std::vector<base::FilePath>{test_dir_path}));
+  FileSystemAccessPermissionRequestManager::FromWebContents(GetWebContents())
+      ->set_auto_response_for_test(permissions::PermissionAction::GRANTED);
+  ASSERT_TRUE(content::ExecJs(GetWebContents(), R"((async () => {
+        self.dirHandle = await self.showDirectoryPicker({mode: 'readwrite'});
+      })())"));
+
+  // Verify initial read/write permissions are granted to the directory.
+  VerifyPermissions(
+      origin, test_dir_path,
+      ChromeFileSystemAccessPermissionContext::HandleType::kDirectory,
+      content::PermissionStatus::GRANTED, content::PermissionStatus::GRANTED,
+      /*expected_extended_read=*/true, /*expected_extended_write=*/true);
+
+  // Remove the directory. Read permission is revoked while write is retained.
+  ASSERT_TRUE(content::ExecJs(GetWebContents(), R"((async () => {
+        await self.dirHandle.remove({recursive: true});
+      })())"));
+  VerifyPermissions(
+      origin, test_dir_path,
+      ChromeFileSystemAccessPermissionContext::HandleType::kDirectory,
+      content::PermissionStatus::DENIED, content::PermissionStatus::GRANTED,
+      /*expected_extended_read=*/false, /*expected_extended_write=*/true);
+  ASSERT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      origin, test_dir_path));
+
+  // Simulate an external application recreating the directory with a file
+  // inside it that the site is not authorized to read.
+  const base::FilePath secret_file = test_dir_path.AppendASCII("secret.txt");
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::CreateDirectory(test_dir_path));
+    ASSERT_TRUE(base::WriteFile(secret_file, "secret contents"));
+  }
+
+  // External recreation must not restore read. It stays revoked and the path
+  // stays downgraded, while the write grant is retained.
+  VerifyPermissions(
+      origin, test_dir_path,
+      ChromeFileSystemAccessPermissionContext::HandleType::kDirectory,
+      content::PermissionStatus::DENIED, content::PermissionStatus::GRANTED,
+      /*expected_extended_read=*/false, /*expected_extended_write=*/true);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      origin, test_dir_path));
+
+  // The revocation is observable to the site via the existing handle.
+  EXPECT_EQ("denied", content::EvalJs(GetWebContents(), R"((async () => {
+             return await self.dirHandle.queryPermission({mode: 'read'});
+            })())"));
+
+  // The site also cannot reach the externally-planted file through the
+  // revoked directory handle. Obtaining a child handle requires read access.
+  EXPECT_EQ("NotAllowedError",
+            content::EvalJs(GetWebContents(), R"((async () => {
+        try {
+          await self.dirHandle.getFileHandle('secret.txt');
+          return 'got handle';
+        } catch (e) {
+          return e.name;
+        }
+      })())"));
+
+  ui::SelectFileDialog::SetFactory(nullptr);
+}
+
 // Tests that after a file is renamed to the removed file path, the read
 // permission for that file path is restored.
 IN_PROC_BROWSER_TEST_F(
@@ -899,17 +1182,37 @@ IN_PROC_BROWSER_TEST_F(
   const GURL url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
+  const url::Origin origin = GetOrigin();
+  // Granting parent directory permission implicitly activates the origin's
+  // persistent permission state. Grant the origin Extended Permission at the
+  // start of the test in order to avoid changing the expected persistent
+  // permission state in mid-test.
+  permission_context()->SetOriginHasExtendedPermissionForTesting(origin);
+
   // Create a file and get its handle.
   const base::FilePath test_file_path = CreateTestFile("test file contents");
-  SetUpAndGetHandleWithInitialPermissions("handle", test_file_path);
+  SetUpAndGetHandleWithInitialPermissions("handle", test_file_path,
+                                          /*expect_extended_grants=*/true);
 
   // Remove the file.
-  const url::Origin origin = GetOrigin();
-  RemoveFileAndVerifyPermissionsRevoked("handle", origin, test_file_path);
+  RemoveFileAndVerifyPermissionsRevoked("handle", origin, test_file_path,
+                                        /*expect_extended_write=*/true);
 
   // Create a new file handle at a different path.
   const base::FilePath test_file_path2 = CreateTestFile("test file contents 2");
-  SetUpAndGetHandleWithInitialPermissions("handle2", test_file_path2);
+  SetUpAndGetHandleWithInitialPermissions("handle2", test_file_path2,
+                                          /*expect_extended_grants=*/true);
+
+  // Grant write permission to the parent directory.
+  GrantParentDirectoryAccess(permission_context(), GetWebContents(), origin,
+                             temp_dir().GetPath());
+
+  // Wait for database write of handle2 to finish to avoid race condition
+  // between `ObjectPermissionContextBase::GrantObjectPermission()` called by
+  // `SetUpAndGetHandleWithInitialPermissions()` above and
+  // `ObjectPermissionContextBase::GetGrantedObject()` called by
+  // `handle2.move()` below.
+  content::RunAllTasksUntilIdle();
 
   // Rename the new file to the removed file path.
   ASSERT_TRUE(content::ExecJs(
@@ -921,7 +1224,8 @@ IN_PROC_BROWSER_TEST_F(
 
   // After renaming, read permission should be restored for the previously
   // removed file path.
-  VerifyPermissionsRestored(origin, test_file_path);
+  VerifyPermissionsRestored(origin, test_file_path,
+                            /*expect_extended_grants=*/true);
 
   ui::SelectFileDialog::SetFactory(nullptr);
 }
@@ -994,7 +1298,7 @@ IN_PROC_BROWSER_TEST_F(
           std::vector<base::FilePath>{expected_file_path}));
 
   // Initialize permission context.
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   TestFileSystemAccessPermissionContext permission_context(profile);
   content::SetFileSystemAccessPermissionContext(profile, &permission_context);
   FileSystemAccessPermissionRequestManager::FromWebContents(GetWebContents())
@@ -1041,8 +1345,8 @@ IN_PROC_BROWSER_TEST_F(
           std::vector<base::FilePath>{test_file}));
 
   TestFileSystemAccessPermissionContext permission_context(
-      browser()->profile());
-  content::SetFileSystemAccessPermissionContext(browser()->profile(),
+      browser()->GetProfile());
+  content::SetFileSystemAccessPermissionContext(browser()->GetProfile(),
                                                 &permission_context);
   FileSystemAccessPermissionRequestManager::FromWebContents(GetWebContents())
       ->set_auto_response_for_test(permissions::PermissionAction::GRANTED);
@@ -1053,7 +1357,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Add prerendering.
   GURL prerender_url = embedded_test_server()->GetURL("/title1.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().AddPrerender(prerender_url);
   content::RenderFrameHost* prerendered_frame_host =
       prerender_helper().GetPrerenderedMainFrameHost(host_id);
@@ -1116,8 +1420,8 @@ IN_PROC_BROWSER_TEST_F(
           std::vector<base::FilePath>{test_file}));
 
   TestFileSystemAccessPermissionContext permission_context(
-      browser()->profile());
-  content::SetFileSystemAccessPermissionContext(browser()->profile(),
+      browser()->GetProfile());
+  content::SetFileSystemAccessPermissionContext(browser()->GetProfile(),
                                                 &permission_context);
   FileSystemAccessPermissionRequestManager::FromWebContents(GetWebContents())
       ->set_auto_response_for_test(permissions::PermissionAction::GRANTED);
@@ -1157,6 +1461,12 @@ IN_PROC_BROWSER_TEST_F(
   // Commenting this out will bring up the dialog and fail the test without a
   // manual click.
   permission_context.set_auto_abort_on_confirm_sensitive_entry_access();
+
+  // Grant write permission to the parent directory.
+  GrantParentDirectoryAccess(
+      &permission_context, GetWebContents(),
+      GetWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
+      test_file.DirName());
 
   EXPECT_THAT(
       EvalJs(GetWebContents(),
@@ -1235,7 +1545,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemChromeAppTest,
 
   // Initialize permission context.
   content::WebContents* web_contents = GetFirstAppWindowWebContents();
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   TestFileSystemAccessPermissionContext permission_context(profile);
   content::SetFileSystemAccessPermissionContext(profile, &permission_context);
   FileSystemAccessPermissionRequestManager::FromWebContents(web_contents)
@@ -1273,4 +1583,50 @@ IN_PROC_BROWSER_TEST_F(FileSystemChromeAppTest,
   auto result = future.Get();
   EXPECT_NE(result, content::FileSystemAccessPermissionGrant::
                         PermissionRequestOutcome::kGrantedByRestorePrompt);
+}
+
+class ChromeFileSystemAccessPermissionContextParentWriteRequiredBrowserTest
+    : public ChromeFileSystemAccessPermissionContextBrowserTestBase {
+ public:
+  ChromeFileSystemAccessPermissionContextParentWriteRequiredBrowserTest() {
+    // On some bots, a temporary directory and the home directory are the same,
+    // and on others they are not. Enable the feature and set `OnlyInHomedir` to
+    // false so the test always blocks renaming.
+    scoped_feature_list_.InitFromCommandLine(
+        "FileSystemAccessRenameRequiresParentWritePermission:OnlyInHomedir/"
+        "false",
+        "");
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Verify that renaming a local file fails with NotAllowedError when the website
+// does not have write access to the parent directory.
+IN_PROC_BROWSER_TEST_F(
+    ChromeFileSystemAccessPermissionContextParentWriteRequiredBrowserTest,
+    Rename_NoParentWriteAccessFails) {
+  // Navigate to a test page.
+  const GURL url = embedded_test_server()->GetURL("/empty.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+  // Create a file and get its handle.
+  const base::FilePath test_file_path = CreateTestFile("test file contents");
+  SetUpAndGetHandleWithInitialPermissions("handle", test_file_path);
+  // We do not grant write permission to the parent directory.
+  // Rename the file. It should fail with NotAllowedError.
+  EXPECT_EQ(
+      "NotAllowedError",
+      content::EvalJs(GetWebContents(), content::JsReplace(R"((async () => {
+                              try {
+                                await self.handle.move($1);
+                                return "success";
+                              } catch (e) {
+                                return e.name;
+                              }
+                            })())",
+                                                           "new_name.txt")));
+  // Verify the file was not renamed and old file still exists on disk.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  EXPECT_TRUE(base::PathExists(test_file_path));
 }

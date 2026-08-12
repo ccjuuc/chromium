@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/hash/hash.h"
+#include "base/values.h"
 
 namespace policy {
 
@@ -45,7 +46,7 @@ size_t PolicyValueHash(const base::Value& value) {
     case base::Value::Type::DICT: {
       // Mix type_val with the original seed.
       size_t hash = base::HashInts(type_val, 0x3e530635677611c0ULL);
-      const base::Value::Dict& policy_dict = value.GetDict();
+      const base::DictValue& policy_dict = value.GetDict();
       for (const auto [key, dict_val] : policy_dict) {
         hash = base::HashInts(hash, base::FastHash(key));
         hash = base::HashInts(hash, PolicyValueHash(dict_val));

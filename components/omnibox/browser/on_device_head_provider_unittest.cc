@@ -5,6 +5,7 @@
 #include "components/omnibox/browser/on_device_head_provider.h"
 
 #include <memory>
+#include <vector>
 
 #include "base/files/file_util.h"
 #include "base/path_service.h"
@@ -20,13 +21,10 @@
 #include "components/omnibox/browser/on_device_model_update_listener.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
-
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 
 using testing::_;
 using testing::NiceMock;
@@ -66,7 +64,6 @@ class OnDeviceHeadProviderTest : public testing::Test,
     task_environment_.RunUntilIdle();
   }
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   void SetupTestOnDeviceTailModel() {
     base::FilePath dir_path, tail_model_path, vocab_path;
     base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &dir_path);
@@ -78,8 +75,7 @@ class OnDeviceHeadProviderTest : public testing::Test,
     vocab_path = dir_path.AppendASCII("vocab_test.txt");
     ASSERT_TRUE(base::PathExists(vocab_path));
 
-    base::flat_set<base::FilePath> additional_files;
-    additional_files.insert(vocab_path);
+    std::vector<base::FilePath> additional_files = {vocab_path};
 
     OnDeviceTailModelExecutor::ModelMetadata metadata;
     metadata.mutable_lstm_model_params()->set_num_layer(1);
@@ -91,22 +87,20 @@ class OnDeviceHeadProviderTest : public testing::Test,
         "type.googleapis.com/com.foo.OnDeviceTailSuggestModelMetadata");
     metadata.SerializeToString(any_metadata.mutable_value());
 
-    std::unique_ptr<optimization_guide::ModelInfo> model_info =
-        optimization_guide::TestModelInfoBuilder()
-            .SetModelFilePath(tail_model_path)
-            .SetAdditionalFiles(additional_files)
-            .SetVersion(123)
-            .SetModelMetadata(any_metadata)
-            .Build();
+    optimization_guide::ModelInfo model_info = {
+        .model_file_path = tail_model_path,
+        .additional_files = additional_files,
+        .version = 123,
+        .model_metadata = any_metadata,
+    };
 
     client_->GetOnDeviceTailModelService()->OnModelUpdated(
         optimization_guide::proto::OptimizationTarget::
             OPTIMIZATION_TARGET_OMNIBOX_ON_DEVICE_TAIL_SUGGEST,
-        *model_info);
+        model_info);
 
     task_environment_.RunUntilIdle();
   }
-#endif
 
   void ResetModelInstance() {
     auto* update_listener = OnDeviceModelUpdateListener::GetInstance();
@@ -215,7 +209,6 @@ TEST_F(OnDeviceHeadProviderTest, HasHeadMatches) {
   EXPECT_EQ(u"map", provider_->matches()[2].contents);
 }
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 TEST_F(OnDeviceHeadProviderTest, HasTailMatches) {
   SetupTestOnDeviceTailModel();
   AutocompleteInput input(u"Faceb", metrics::OmniboxEventProto::OTHER,
@@ -261,7 +254,7 @@ TEST_F(OnDeviceHeadProviderTest, HasTailMatches) {
   }
 }
 
-#if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 TEST_F(OnDeviceHeadProviderTest, LaunchEnglishTailModel) {
   SetupTestOnDeviceTailModel();
   AutocompleteInput input(u"Facebook l", metrics::OmniboxEventProto::OTHER,
@@ -299,9 +292,7 @@ TEST_F(OnDeviceHeadProviderTest, LaunchEnglishTailModel) {
     EXPECT_TRUE(provider_->matches().empty());
   }
 }
-#endif  // !BUILDFLAG(IS_IOS)
-
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 TEST_F(OnDeviceHeadProviderTest, CancelInProgressRequest) {
   AutocompleteInput input1(u"g", metrics::OmniboxEventProto::OTHER,

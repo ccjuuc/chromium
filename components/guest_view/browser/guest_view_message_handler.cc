@@ -99,7 +99,7 @@ void GuestViewMessageHandler::ViewCreated(
 void GuestViewMessageHandler::AttachToEmbedderFrame(
     int element_instance_id,
     int guest_instance_id,
-    base::Value::Dict params,
+    base::DictValue params,
     AttachToEmbedderFrameCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (!GetBrowserContext()) {
@@ -126,7 +126,13 @@ void GuestViewMessageHandler::AttachToEmbedderFrame(
 
   std::unique_ptr<GuestViewBase> owned_guest =
       manager->TransferOwnership(guest);
-  DCHECK_EQ(owned_guest.get(), guest);
+  if (!owned_guest) {
+    bad_message::ReceivedBadMessage(
+        render_process_id(), bad_message::GVMH_GUEST_NOT_AVAILABLE_TO_ATTACH);
+    std::move(callback).Run();
+    return;
+  }
+  CHECK_EQ(owned_guest.get(), guest);
 
   content::WebContents* owner_web_contents = guest->owner_web_contents();
   DCHECK(owner_web_contents);

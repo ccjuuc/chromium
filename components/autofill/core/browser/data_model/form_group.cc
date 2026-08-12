@@ -6,11 +6,10 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "base/containers/flat_map.h"
-#include "base/notreached.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
@@ -18,7 +17,6 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/common/autofill_l10n_util.h"
 #include "components/autofill/core/common/logging/log_buffer.h"
 
 namespace autofill {
@@ -37,6 +35,10 @@ void FormGroup::GetMatchingTypes(std::u16string_view text,
 
   std::u16string canonicalized_text =
       normalization::NormalizeForComparison(text);
+  if (canonicalized_text.empty()) {
+    return;
+  }
+
   for (FieldType type : GetSupportedTypes()) {
     if (AutofillProfileComparator::Compare(
             canonicalized_text, GetInfo(type, app_locale),
@@ -114,11 +116,10 @@ LogBuffer& operator<<(LogBuffer& buffer, const FormGroup& form_group) {
     }
     LogBuffer rendered_value;
     rendered_value << Tag{"span"} << Attrib{"style", "white-space: pre"}
-                   << base::StrCat(
-                          {base::UTF16ToUTF8(value), " (",
-                           std::string(VerificationStatusToStringView(
-                               form_group.GetVerificationStatus(type))),
-                           ")"})
+                   << base::StrCat({base::UTF16ToUTF8(value), " (",
+                                    VerificationStatusToStringView(
+                                        form_group.GetVerificationStatus(type)),
+                                    ")"})
                    << CTag{"span"};
     buffer << Tr{} << type_string << std::move(rendered_value);
   }

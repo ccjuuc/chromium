@@ -32,11 +32,17 @@ void AndroidDataControlsDialogFactory::ShowDialogIfNeeded(
   if (type == DataControlsDialog::Type::kClipboardPasteBlock ||
       type == DataControlsDialog::Type::kClipboardCopyBlock ||
       type == DataControlsDialog::Type::kClipboardShareBlock ||
-      type == DataControlsDialog::Type::kClipboardActionBlock) {
+      type == DataControlsDialog::Type::kClipboardActionBlock ||
+      type == DataControlsDialog::Type::kClipboardDragBlock) {
     // Show a toast on Clank for blocked actions instead of a dialog to be less
     // disruptive.
-    web_contents->GetTopLevelNativeWindow()->ShowToast(
-        l10n_util::GetStringUTF8(IDS_POLICY_ACTION_BLOCKED_BY_ORGANIZATION));
+    if (auto* window = web_contents->GetTopLevelNativeWindow()) {
+      window->ShowToast(
+          l10n_util::GetStringUTF8(IDS_POLICY_ACTION_BLOCKED_BY_ORGANIZATION));
+    }
+    if (callback) {
+      std::move(callback).Run(/*bypassed=*/false);
+    }
     return;
   }
   DataControlsDialogFactory::ShowDialogIfNeeded(web_contents, type,

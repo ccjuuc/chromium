@@ -61,11 +61,11 @@ using DownloadVector = DownloadManager::DownloadVector;
 namespace {
 
 // Character limit for URL/origin strings displayed in the downloads page, to
-// avoid surpassing mojo data limit (c.f. crbug.com/1070451). If it's really
+// avoid surpassing mojo data limit (c.f. crbug.com/40684561). If it's really
 // this long, the user won't be able to see the whole thing anyway.
 // Use a much smaller limit than url::kMaxURLChars (2M) since this is for
 // display only, and long URLs will affect page load speed and may cause
-// JavaScript errors (https://crbug.com/1522764).
+// JavaScript errors (https://crbug.com/41495722).
 const size_t kMaxDisplayURLChars = 16 * 1024;
 
 // Returns an enum value to be used as the |danger_type| value in
@@ -99,6 +99,8 @@ downloads::mojom::DangerType GetDangerType(
       return downloads::mojom::DangerType::kSensitiveContentWarning;
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
       return downloads::mojom::DangerType::kForcedSaveToGdrive;
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
+      return downloads::mojom::DangerType::kForcedSaveToOnedrive;
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK:
       return downloads::mojom::DangerType::kSensitiveContentBlock;
     case download::DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED:
@@ -161,27 +163,7 @@ std::string TimeFormatLongDate(const base::Time& time) {
   return base::UTF16ToUTF8(base::i18n::UnicodeStringToString16(date_string));
 }
 
-std::u16string GetFormattedDisplayUrl(const GURL& url) {
-  std::u16string result = url_formatter::FormatUrlForSecurityDisplay(url);
-  // Truncate long URL. We truncate the beginning so that the end of it is
-  // shown, which typically contains the eTLD+1. This may truncate the scheme
-  // part of the URL.
-  if (result.size() > kMaxDisplayURLChars) {
-    result = result.substr(result.size() - kMaxDisplayURLChars);
-  }
-  return result;
-}
 
-void FillUrlFields(const GURL& url,
-                   std::optional<GURL>& data_url,
-                   std::u16string& display_url_out) {
-  // If URL is too long, don't make it clickable.
-  if (url.is_valid() && url.spec().length() <= url::kMaxURLChars) {
-    data_url = std::make_optional<GURL>(url);
-  }
-
-  display_url_out = GetFormattedDisplayUrl(url);
-}
 
 // Returns a formatted string representing the initiator origin of the download
 // request. May return empty string if there is no suitable origin to display.
@@ -231,7 +213,7 @@ void DownloadsListTracker::Reset() {
 bool DownloadsListTracker::SetSearchTerms(
     const std::vector<std::string>& search_terms) {
   std::vector<std::u16string> new_terms;
-  new_terms.resize(search_terms.size());
+  new_terms.reserve(search_terms.size());
 
   for (const auto& t : search_terms) {
     new_terms.push_back(base::UTF8ToUTF16(t));
@@ -399,8 +381,11 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   file_name = base::i18n::GetDisplayStringInLTRDirectionality(file_name);
 
   file_value->file_name = base::UTF16ToUTF8(file_name);
-  FillUrlFields(download_item->GetURL(), file_value->url,
-                file_value->display_url);
+  // Include URL unless it is too long.
+  if (download_item->GetURL().is_valid() &&
+      download_item->GetURL().spec().length() <= url::kMaxURLChars) {
+    file_value->url = std::make_optional<GURL>(download_item->GetURL());
+  }
   file_value->display_initiator_origin =
       GetFormattedInitiatorOrigin(download_item);
   file_value->total = download_item->GetTotalBytes();
@@ -415,7 +400,7 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   std::u16string progress_status_text;
   bool retry = false;
   // This will always be populated, but we set a null value to start with.
-  std::optional<downloads::mojom::State> state = std::nullopt;
+  std::optional<downloads::mojom::State> state;
 
   switch (download_item->GetState()) {
     case download::DownloadItem::IN_PROGRESS: {
@@ -513,7 +498,9 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   file_value->has_safe_browsing_verdict =
       WasSafeBrowsingVerdictObtained(download_item);
 
-  MaybeRecordDangerousDownloadWarningShown(download_model);
+  if (download_model.IsDangerous()) {
+    MaybeRecordDangerousDownloadWarningShown(download_model);
+  }
 
   if (download_item->IsDangerous()) {
     // It's likely that SHOWN has already been logged from the download bubble,

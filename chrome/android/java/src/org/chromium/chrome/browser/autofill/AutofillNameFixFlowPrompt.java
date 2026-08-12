@@ -59,7 +59,7 @@ public class AutofillNameFixFlowPrompt extends AutofillSaveCardPromptBase
      * @param confirmButtonLabel Label for the confirm button.
      * @return A {@link AutofillNameFixFlowPrompt} to confirm name.
      */
-    public static AutofillNameFixFlowPrompt createAsInfobarFixFlowPrompt(
+    public static AutofillNameFixFlowPrompt createAsMessageFixFlowPrompt(
             Context context,
             AutofillNameFixFlowPromptDelegate delegate,
             String inferredName,
@@ -106,15 +106,15 @@ public class AutofillNameFixFlowPrompt extends AutofillSaveCardPromptBase
         if (TextUtils.isEmpty(inferredName)) {
             mNameFixFlowTooltipIcon.setVisibility(View.GONE);
         } else {
-            mNameFixFlowTooltipIcon.setOnClickListener((view) -> onTooltipIconClicked());
+            mNameFixFlowTooltipIcon.setOnClickListener(_ -> onTooltipIconClicked());
         }
 
         // Hitting the "submit" button on the software keyboard should submit, unless the name field
         // is empty.
         mUserNameInput.setOnEditorActionListener(
-                (view, actionId, event) -> {
+                (_, actionId, _) -> {
                     if (actionId == EditorInfo.IME_ACTION_DONE) {
-                        if (mUserNameInput.getText().toString().trim().length() != 0) {
+                        if (!mUserNameInput.getText().toString().trim().isEmpty()) {
                             onClick(mDialogModel, ModalDialogProperties.ButtonType.POSITIVE);
                         }
                         return true;
@@ -139,10 +139,7 @@ public class AutofillNameFixFlowPrompt extends AutofillSaveCardPromptBase
         if (mNameFixFlowTooltipPopup != null) return;
 
         mNameFixFlowTooltipPopup = new PopupWindow(mContext);
-        Runnable dismissAction =
-                () -> {
-                    mNameFixFlowTooltipPopup = null;
-                };
+        Runnable dismissAction = () -> mNameFixFlowTooltipPopup = null;
         boolean isLeftToRight =
                 TextUtilsCompat.getLayoutDirectionFromLocale(Locale.getDefault())
                         == ViewCompat.LAYOUT_DIRECTION_LTR;

@@ -10,8 +10,10 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "media/base/audio_buffer.h"
@@ -27,29 +29,51 @@
 #include "media/ffmpeg/ffmpeg_decoding_loop.h"
 #include "media/filters/ffmpeg_glue.h"
 
+// Used to check static IsCodecSupported().
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+#include "media/filters/symphonia_audio_decoder.h"
+#endif
+
 namespace media {
 
+namespace {
+
 // Return the number of channels from the data in |frame|.
-static inline int DetermineChannels(AVFrame* frame) {
+inline int DetermineChannels(AVFrame* frame) {
   return frame->ch_layout.nb_channels;
 }
 
 // Called by FFmpeg's allocation routine to allocate a buffer. Uses
 // AVCodecContext.opaque to get the object reference in order to call
 // GetAudioBuffer() to do the actual allocation.
-static int GetAudioBufferImpl(struct AVCodecContext* s,
-                              AVFrame* frame,
-                              int flags) {
+int GetAudioBufferImpl(struct AVCodecContext* s, AVFrame* frame, int flags) {
   FFmpegAudioDecoder* decoder = static_cast<FFmpegAudioDecoder*>(s->opaque);
   return decoder->GetAudioBuffer(s, frame, flags);
 }
 
 // Called by FFmpeg's allocation routine to free a buffer. |opaque| is the
 // AudioBuffer allocated, so unref it.
-static void ReleaseAudioBufferImpl(void* opaque, uint8_t* data) {
+void ReleaseAudioBufferImpl(void* opaque, uint8_t* data) {
   if (opaque)
     static_cast<AudioBuffer*>(opaque)->Release();
 }
+
+// Returns true iff the FFmpegAudioDecoder should be disabled because current
+// base::Features have a different decoder enabled.
+bool IsCodecDisabledByFeatures(AudioCodec codec) {
+  // FFmpegAudioDecoder does not support Opus when this flag is enabled.
+  // OpusAudioDecoder should be used instead.
+  if (codec == AudioCodec::kOpus) {
+    return base::FeatureList::IsEnabled(kDirectOpusAudioDecoding);
+  }
+
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+  return SymphoniaAudioDecoder::IsCodecSupported(codec);
+#else
+  return false;
+#endif
+}
+}  // namespace
 
 FFmpegAudioDecoder::FFmpegAudioDecoder(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
@@ -59,7 +83,7 @@ FFmpegAudioDecoder::FFmpegAudioDecoder(
       media_log_(media_log),
       mode_(mode),
       pool_(base::MakeRefCounted<AudioBufferMemoryPool>(
-          kFFmpegBufferAddressAlignment)) {
+          limits::kFFmpegBufferAddressAlignment)) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   CHECK(media_log_);
   if (mode_ == ExecutionMode::kAsynchronous) {
@@ -88,11 +112,19 @@ void FFmpegAudioDecoder::Initialize(const AudioDecoderConfig& config,
 
   InitCB bound_init_cb = BindCallbackIfNeeded(std::move(init_cb));
 
+  // This decoder does not support encrypted content.
   if (config.is_encrypted()) {
+    // FFmpegAudioDecoder does not support encrypted content.
     std::move(bound_init_cb)
-        .Run(DecoderStatus(
-            DecoderStatus::Codes::kUnsupportedEncryptionMode,
-            "FFmpegAudioDecoder does not support encrypted content"));
+        .Run(DecoderStatus(DecoderStatus::Codes::kUnsupportedEncryptionMode));
+    return;
+  }
+
+  // If another decoder is enabled in features for this codec, FFmpeg should
+  // not be enabled.
+  if (IsCodecDisabledByFeatures(config.codec())) {
+    std::move(bound_init_cb)
+        .Run(DecoderStatus(DecoderStatus::Codes::kUnsupportedCodec));
     return;
   }
 
@@ -194,7 +226,7 @@ bool FFmpegAudioDecoder::FFmpegDecode(const DecoderBuffer& buffer) {
   } else {
     auto buffer_span = base::span(buffer);
     packet->data = const_cast<uint8_t*>(buffer_span.data());
-    packet->size = buffer_span.size();
+    packet->size = base::checked_cast<int>(buffer_span.size());
     packet->pts =
         ConvertToTimeBase(codec_context_->time_base, buffer.timestamp());
 
@@ -252,8 +284,8 @@ bool FFmpegAudioDecoder::OnNewFrame(const DecoderBuffer& buffer,
 
   // Translate unsupported into discrete layouts for discrete configurations;
   // ffmpeg does not have a labeled discrete configuration internally.
-  ChannelLayout channel_layout = ChannelLayoutToChromeChannelLayout(
-      codec_context_->ch_layout.u.mask, codec_context_->ch_layout.nb_channels);
+  ChannelLayout channel_layout =
+      ChannelLayoutToChromeChannelLayout(codec_context_->ch_layout);
   if (channel_layout == CHANNEL_LAYOUT_UNSUPPORTED &&
       config_.channel_layout() == CHANNEL_LAYOUT_DISCRETE) {
     channel_layout = CHANNEL_LAYOUT_DISCRETE;
@@ -286,16 +318,14 @@ bool FFmpegAudioDecoder::OnNewFrame(const DecoderBuffer& buffer,
         << config_.samples_per_second() << ", ChannelLayout: " << channel_layout
         << " vs " << config_.channel_layout() << ", Channels: " << channels
         << " vs " << config_.channels();
-    config_.Initialize(config_.codec(), config_.sample_format(), channel_layout,
-                       frame->sample_rate, config_.extra_data(),
-                       config_.encryption_scheme(), config_.seek_preroll(),
-                       config_.codec_delay());
-
-    // If the channel layout is discrete, then the decoder config is not
-    // capable of deriving the channel count from the layout and the channel
-    // count must be set manually.
-    if (channel_layout == CHANNEL_LAYOUT_DISCRETE) {
-      config_.SetChannelsForDiscrete(channels);
+    const bool should_discard_decoder_delay =
+        config_.should_discard_decoder_delay();
+    config_.Initialize(config_.codec(), config_.sample_format(),
+                       {channel_layout, channels}, frame->sample_rate,
+                       config_.extra_data(), config_.encryption_scheme(),
+                       config_.seek_preroll(), config_.codec_delay());
+    if (!should_discard_decoder_delay) {
+      config_.disable_discard_decoder_delay();
     }
 
     if (is_sample_rate_change)
@@ -358,7 +388,7 @@ bool FFmpegAudioDecoder::ConfigureDecoder(const AudioDecoderConfig& config) {
 
     // Disable phase inversion to avoid artifacts in mono downmix. See
     // http://crbug.com/806219
-    if (config.target_output_channel_layout() == CHANNEL_LAYOUT_MONO) {
+    if (config.target_output_channel_layout() == ChannelLayoutConfig::Mono()) {
       int result = av_dict_set(&codec_options, "apply_phase_inv", "0", 0);
       DCHECK_GE(result, 0);
     }
@@ -394,9 +424,10 @@ void FFmpegAudioDecoder::ResetTimestampState(const AudioDecoderConfig& config) {
   // Opus codec delay is handled by ffmpeg.
   const int codec_delay =
       config.codec() == AudioCodec::kOpus ? 0 : config.codec_delay();
+  // TODO(crbug.com/498560799): Remove delayed discard functionality now that
+  // it's no loner used.
   discard_helper_ = std::make_unique<AudioDiscardHelper>(
-      config.samples_per_second(), codec_delay,
-      config.codec() == AudioCodec::kVorbis);
+      config.samples_per_second(), codec_delay, /*delayed_discard=*/false);
   discard_helper_->Reset(codec_delay);
 }
 
@@ -461,8 +492,7 @@ int FFmpegAudioDecoder::GetAudioBuffer(struct AVCodecContext* s,
   ChannelLayout channel_layout =
       config_.channel_layout() == CHANNEL_LAYOUT_DISCRETE
           ? CHANNEL_LAYOUT_DISCRETE
-          : ChannelLayoutToChromeChannelLayout(s->ch_layout.u.mask,
-                                               s->ch_layout.nb_channels);
+          : ChannelLayoutToChromeChannelLayout(s->ch_layout);
 
   if (channel_layout == CHANNEL_LAYOUT_UNSUPPORTED) {
     DLOG(ERROR) << "Unsupported channel layout.";

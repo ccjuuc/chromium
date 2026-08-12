@@ -51,10 +51,10 @@ class StringImpl;
 // Use either one of static methods to convert ASCII, Latin1, UTF-8 or
 // UTF-16 string into WebString:
 //
-// * WebString::FromASCII(std::string_view ascii)
+// * WebString::FromAscii(std::string_view ascii)
 // * WebString::FromLatin1(std::string_view latin1)
-// * WebString::FromUTF8(std::string_view utf8)
-// * WebString::FromUTF16(std::optional<std::u16string_view> utf16)
+// * WebString::FromUtf8(std::string_view utf8)
+// * WebString::FromUtf16(std::optional<std::u16string_view> utf16)
 //
 // Similarly, use either of following methods to convert WebString to
 // ASCII, Latin1, UTF-8 or UTF-16:
@@ -66,8 +66,8 @@ class StringImpl;
 // * WebString::ToOptionalString16(webstring)
 //
 // Note that if you need to convert the UTF8 string converted from WebString
-// back to WebString with FromUTF8() you may want to specify Strict
-// UTF8ConversionMode when you call Utf8(), as FromUTF8 rejects strings
+// back to WebString with FromUtf8() you may want to specify Strict
+// UTF8ConversionMode when you call Utf8(), as FromUtf8 rejects strings
 // with invalid UTF8 characters.
 //
 // Some types like GURL and base::FilePath can directly take either utf-8 or
@@ -82,14 +82,14 @@ class StringImpl;
 //
 class BLINK_PLATFORM_EXPORT WebString {
  public:
-  enum class UTF8ConversionMode {
+  enum class Utf8ConversionMode {
     // Ignores errors for invalid characters.
     kLenient,
     // Errors out on invalid characters, returns null string.
     kStrict,
     // Replace invalid characters with 0xFFFD.
     // (This is the same conversion mode as base::UTF16ToUTF8)
-    kStrictReplacingErrorsWithFFFD,
+    kStrictReplacingErrors,
   };
 
   ~WebString();
@@ -119,16 +119,19 @@ class BLINK_PLATFORM_EXPORT WebString {
   bool IsEmpty() const { return !length(); }
   bool IsNull() const { return !impl_; }
 
-  std::string Utf8(UTF8ConversionMode = UTF8ConversionMode::kLenient) const;
+  std::string Utf8(Utf8ConversionMode = Utf8ConversionMode::kLenient) const;
 
   WebString Substring(size_t pos,
                       size_t len = std::numeric_limits<size_t>::max()) const;
 
-  static WebString FromUTF8(std::string_view s);
+  // Create a WebString instance from a UTF-8 string.
+  // This returns a null WebString if the input data contains invalid
+  // UTF-8 sequences.
+  static WebString FromUtf8(std::string_view s);
 
   std::u16string Utf16() const;
 
-  static WebString FromUTF16(std::optional<std::u16string_view>);
+  static WebString FromUtf16(std::optional<std::u16string_view>);
 
   static std::optional<std::u16string> ToOptionalString16(const WebString& s) {
     return s.IsNull() ? std::nullopt : std::make_optional(s.Utf16());
@@ -144,18 +147,18 @@ class BLINK_PLATFORM_EXPORT WebString {
   std::string Ascii() const;
 
   // Use this rather than calling base::IsStringASCII().
-  bool ContainsOnlyASCII() const;
+  bool ContainsOnlyAscii() const;
 
   // Does same as FromLatin1 but asserts if the given string has non-ascii char.
-  static WebString FromASCII(std::string_view);
+  static WebString FromAscii(std::string_view);
 
   template <int N>
   WebString(const char (&data)[N])
-      : WebString(FromUTF8(std::string_view(data, N - 1))) {}
+      : WebString(FromUtf8(std::string_view(data, N - 1))) {}
 
   template <int N>
   WebString& operator=(const char (&data)[N]) {
-    *this = FromUTF8(std::string_view(data, N - 1));
+    *this = FromUtf8(std::string_view(data, N - 1));
     return *this;
   }
 

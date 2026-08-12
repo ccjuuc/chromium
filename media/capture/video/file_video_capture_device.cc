@@ -267,12 +267,12 @@ bool MjpegFileParser::Initialize(VideoCaptureFormat* capture_format) {
   }
 
   JpegParseResult result;
-  if (!ParseJpegStream(mapped_file_->bytes(), &result)) {
+  if (!ParseJpegPicture(mapped_file_->bytes(), &result)) {
     return false;
   }
 
   frame_size_ = result.image_size;
-  if (frame_size_ > mapped_file_->length()) {
+  if (frame_size_ > mapped_file_->bytes().size()) {
     LOG(ERROR) << "File is incomplete";
     return false;
   }
@@ -294,13 +294,13 @@ base::span<const uint8_t> MjpegFileParser::GetNextFrame() {
       mapped_file_->bytes().subspan(current_byte_index_);
 
   JpegParseResult result;
-  if (!ParseJpegStream(buf_span, &result)) {
+  if (!ParseJpegPicture(buf_span, &result)) {
     return base::span<const uint8_t>();
   }
   int frame_size = frame_size_ = result.image_size;
   current_byte_index_ += frame_size_;
   // Reset the pointer to play repeatedly.
-  if (current_byte_index_ >= mapped_file_->length()) {
+  if (current_byte_index_ >= mapped_file_->bytes().size()) {
     current_byte_index_ = first_frame_byte_index_;
   }
   return buf_span.first(base::checked_cast<size_t>(frame_size));
@@ -725,9 +725,8 @@ void FileVideoCaptureDevice::OnCaptureTask() {
     // Leave the color space unset for compatibility purposes but this
     // information should be retrieved from the container when possible.
     client_->OnIncomingCapturedData(
-        ptz_frame.data(), ptz_frame.size(), ptz_format, gfx::ColorSpace(),
-        0 /* clockwise_rotation */, false /* flip_y */, current_time,
-        current_time - first_ref_time_,
+        ptz_frame, ptz_format, gfx::ColorSpace(), 0 /* clockwise_rotation */,
+        false /* flip_y */, current_time, current_time - first_ref_time_,
         /*capture_begin_timestamp=*/std::nullopt, VideoFrameMetadata{});
   }
 

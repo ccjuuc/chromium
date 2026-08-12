@@ -6,6 +6,7 @@
 #include "base/feature_list.h"
 #include "base/run_loop.h"
 #include "base/test/gtest_tags.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/test/base/ash/interactive/interactive_ash_test.h"
@@ -117,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(OsFeedbackInteractiveUiTest,
       WaitForFeedbackSWAReady(kOsFeedbackWebContentsId));
 }
 
-// crbug.com/1517839
+// crbug.com/41490816
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_SubmitFeedbackThenExit DISABLED_SubmitFeedbackThenExit
 #else

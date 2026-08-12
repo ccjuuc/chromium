@@ -162,7 +162,7 @@ class TabGroupsPanelMediatorTest : public PlatformTest {
     browser_ = std::make_unique<TestBrowser>(profile_.get());
     browser_list_ = BrowserListFactory::GetForProfile(profile_.get());
     browser_list_->AddBrowser(browser_.get());
-    mode_holder_ = [[TabGridModeHolder alloc] init];
+    mode_holder_ = [[TabGridModeHolder alloc] initWithTabGridState:nil];
     tab_group_service_ = std::make_unique<TabGroupService>(
         profile_.get(), &tab_group_sync_service_);
     share_kit_service_ = std::make_unique<TestShareKitService>(
@@ -315,7 +315,7 @@ TEST_F(TabGroupsPanelMediatorTest, DisabledByPolicy_DisabledToolbarsConfig) {
   EXPECT_EQ(TabGridPageTabGroups, toolbars_mutator.configuration.page);
 
   // All buttons are disabled.
-  EXPECT_FALSE(toolbars_mutator.configuration.doneButton);
+  EXPECT_FALSE(toolbars_mutator.configuration.exitTabGridButton);
 
   EXPECT_FALSE(toolbars_mutator.configuration.selectAllButton);
   EXPECT_EQ(0u, toolbars_mutator.configuration.selectedItemsCount);
@@ -327,7 +327,6 @@ TEST_F(TabGroupsPanelMediatorTest, DisabledByPolicy_DisabledToolbarsConfig) {
   EXPECT_FALSE(toolbars_mutator.configuration.newTabButton);
   EXPECT_FALSE(toolbars_mutator.configuration.searchButton);
   EXPECT_FALSE(toolbars_mutator.configuration.selectTabsButton);
-  EXPECT_FALSE(toolbars_mutator.configuration.undoButton);
   EXPECT_FALSE(toolbars_mutator.configuration.deselectAllButton);
   EXPECT_FALSE(toolbars_mutator.configuration.cancelSearchButton);
 }
@@ -359,7 +358,7 @@ TEST_F(TabGroupsPanelMediatorTest,
   EXPECT_EQ(TabGridPageTabGroups, toolbars_mutator.configuration.page);
 
   // Done button is disabled.
-  EXPECT_FALSE(toolbars_mutator.configuration.doneButton);
+  EXPECT_FALSE(toolbars_mutator.configuration.exitTabGridButton);
 
   // All other buttons are disabled.
   EXPECT_FALSE(toolbars_mutator.configuration.selectAllButton);
@@ -369,14 +368,9 @@ TEST_F(TabGroupsPanelMediatorTest,
   EXPECT_FALSE(toolbars_mutator.configuration.addToButton);
 
   EXPECT_FALSE(toolbars_mutator.configuration.closeAllButton);
-  if (base::FeatureList::IsEnabled(kTabRecallNewTabGroupButton)) {
-    EXPECT_TRUE(toolbars_mutator.configuration.newTabButton);
-  } else {
-    EXPECT_FALSE(toolbars_mutator.configuration.newTabButton);
-  }
+  EXPECT_TRUE(toolbars_mutator.configuration.newTabButton);
   EXPECT_FALSE(toolbars_mutator.configuration.searchButton);
   EXPECT_FALSE(toolbars_mutator.configuration.selectTabsButton);
-  EXPECT_FALSE(toolbars_mutator.configuration.undoButton);
   EXPECT_FALSE(toolbars_mutator.configuration.deselectAllButton);
   EXPECT_FALSE(toolbars_mutator.configuration.cancelSearchButton);
 }
@@ -414,7 +408,7 @@ TEST_F(TabGroupsPanelMediatorTest,
   EXPECT_EQ(TabGridPageTabGroups, toolbars_mutator.configuration.page);
 
   // Done button is enabled.
-  EXPECT_TRUE(toolbars_mutator.configuration.doneButton);
+  EXPECT_TRUE(toolbars_mutator.configuration.exitTabGridButton);
 
   // All other buttons are disabled.
   EXPECT_FALSE(toolbars_mutator.configuration.selectAllButton);
@@ -424,14 +418,9 @@ TEST_F(TabGroupsPanelMediatorTest,
   EXPECT_FALSE(toolbars_mutator.configuration.addToButton);
 
   EXPECT_FALSE(toolbars_mutator.configuration.closeAllButton);
-  if (base::FeatureList::IsEnabled(kTabRecallNewTabGroupButton)) {
-    EXPECT_TRUE(toolbars_mutator.configuration.newTabButton);
-  } else {
-    EXPECT_FALSE(toolbars_mutator.configuration.newTabButton);
-  }
+  EXPECT_TRUE(toolbars_mutator.configuration.newTabButton);
   EXPECT_FALSE(toolbars_mutator.configuration.searchButton);
   EXPECT_FALSE(toolbars_mutator.configuration.selectTabsButton);
-  EXPECT_FALSE(toolbars_mutator.configuration.undoButton);
   EXPECT_FALSE(toolbars_mutator.configuration.deselectAllButton);
   EXPECT_FALSE(toolbars_mutator.configuration.cancelSearchButton);
 }

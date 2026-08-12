@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_utils.h"
 
 #import "base/time/time.h"
+#import "components/lens/lens_overlay_invocation_source.h"
 #import "components/search_engines/util.h"
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
@@ -13,6 +14,7 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
+#import "third_party/omnibox_proto/model_mode.pb.h"
 
 bool ShouldShowTopOfFeedSyncPromo() {
   // Checks the flag and ensures that the user is not in first run.
@@ -21,10 +23,12 @@ bool ShouldShowTopOfFeedSyncPromo() {
 }
 
 GURL GetUrlForAim(TemplateURLService* turl_service,
-                  const base::Time& query_start_time) {
+                  base::Time query_start_time) {
   return GetUrlForAim(turl_service,
                       omnibox::IOS_CHROME_NTP_FAKE_OMNIBOX_ENTRY_POINT,
-                      query_start_time);
+                      query_start_time, /*query_text=*/u"",
+                      lens::LensOverlayInvocationSource::kNtpContextualQuery,
+                      /*additional_params=*/{});
 }
 
 UIButtonConfigurationUpdateHandler CreateThemedButtonConfigurationUpdateHandler(

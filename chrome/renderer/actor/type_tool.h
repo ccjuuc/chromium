@@ -14,10 +14,10 @@
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/renderer/actor/click_dispatcher.h"
 #include "chrome/renderer/actor/key_dispatcher.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/public/web/web_element.h"
@@ -46,6 +46,7 @@ class TypeTool : public ToolBase {
   ~TypeTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   void Cancel() override;
   std::string DebugString() const override;
@@ -53,10 +54,6 @@ class TypeTool : public ToolBase {
   bool SupportsPaintStability() const override;
 
  private:
-  using ValidatedResult =
-      base::expected<ResolvedTarget, mojom::ActionResultPtr>;
-  ValidatedResult Validate() const;
-
   // Return true if input text can be procssed into a series of keypresses.
   bool ProcessInputText(
       std::vector<KeyDispatcher::KeyParams>& key_sequence) const;

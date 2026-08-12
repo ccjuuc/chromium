@@ -87,12 +87,11 @@ void SurfaceTexture::UpdateTexImage() {
 void SurfaceTexture::GetTransformMatrix(base::span<float, 16> mtx) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  auto jmatrix = base::android::ScopedJavaLocalRef<jfloatArray>::Adopt(
-      env, env->NewFloatArray(16));
+  auto jmatrix = jni_zero::AdoptRef(env, env->NewFloatArray(16));
   Java_ChromeSurfaceTexture_getTransformMatrix(env, j_surface_texture_,
                                                jmatrix);
 
-  jfloat* elements = env->GetFloatArrayElements(jmatrix.obj(), nullptr);
+  float* elements = env->GetFloatArrayElements(jmatrix.obj(), nullptr);
   for (int i = 0; i < 16; ++i) {
     // SAFETY: required from Android API.
     mtx[i] = static_cast<float>(UNSAFE_BUFFERS(elements[i]));

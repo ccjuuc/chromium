@@ -11,13 +11,8 @@
 #include "ash/multi_user/multi_user_window_manager_observer.h"
 #include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "components/account_id/account_id.h"
-
-class Browser;
-
-namespace ash {
-}  // namespace ash
 
 namespace aura {
 class Window;
@@ -34,12 +29,14 @@ class MultiUserWindowManagerBrowserAdaptorTest;
 // created if SessionControllerClient::IsMultiProfileAvailable() returns true.
 class MultiUserWindowManagerBrowserAdaptor
     : public MultiUserWindowManagerObserver,
-      public BrowserListObserver {
+      public BrowserController::Observer {
  public:
   // Constructs the adaptor for the given MultiUserWindowManager.
-  // `multi_user_window_manager` must not be nullptr, and outlive this instance.
-  explicit MultiUserWindowManagerBrowserAdaptor(
-      MultiUserWindowManager* multi_user_window_manager);
+  // `multi_user_window_manager` and `browser_controller` must not be nullptr,
+  // and outlive this instance.
+  MultiUserWindowManagerBrowserAdaptor(
+      MultiUserWindowManager* multi_user_window_manager,
+      BrowserController* browser_controller);
 
   MultiUserWindowManagerBrowserAdaptor(
       const MultiUserWindowManagerBrowserAdaptor&) = delete;
@@ -50,8 +47,8 @@ class MultiUserWindowManagerBrowserAdaptor
 
   void AddUser(const AccountId& account_id);
 
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override;
+  // BrowserController::Observer:
+  void OnBrowserCreated(BrowserDelegate* browser) override;
 
  private:
   class AppObserver;
@@ -69,9 +66,14 @@ class MultiUserWindowManagerBrowserAdaptor
   void OnTransitionUserShelfToNewAccount() override;
 
   const raw_ref<MultiUserWindowManager> multi_user_window_manager_;
+  const raw_ref<BrowserController> browser_controller_;
+
   base::ScopedObservation<MultiUserWindowManager,
                           MultiUserWindowManagerObserver>
       multi_user_window_manager_observation_{this};
+
+  base::ScopedObservation<BrowserController, BrowserController::Observer>
+      browser_controller_observation_{this};
 
   // A list of all known users and their app window observers.
   AccountIdToAppWindowObserver account_id_to_app_observer_;

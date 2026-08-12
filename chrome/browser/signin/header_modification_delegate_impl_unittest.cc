@@ -316,8 +316,12 @@ TEST(BoundSessionDisabledHeaderModificationDelegateImplTest,
 
 TEST_F(BoundSessionHeaderModificationDelegateImplTest,
        StandardRegistrationBlocksGoogleRegistration) {
-  base::test::ScopedFeatureList feature_list(
-      net::features::kDeviceBoundSessions);
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{net::features::kDeviceBoundSessions,
+                            net::features::
+                                kDeviceBoundSessionsForRestrictedSites},
+      /*disabled_features=*/{});
   const GURL response_url("https://accounts.google.com");
   const std::string registration_path = "startsession";
   TestResponseAdapter gaia_response_adapter(response_url);
@@ -337,9 +341,35 @@ TEST_F(BoundSessionHeaderModificationDelegateImplTest,
 }
 
 TEST_F(BoundSessionHeaderModificationDelegateImplTest,
-       StandardRegistrationPartiallyBlocksGoogleRegistration) {
+       StandardRegistrationAllowsGoogleRegistration) {
   base::test::ScopedFeatureList feature_list(
       net::features::kDeviceBoundSessions);
+  const GURL response_url("https://accounts.google.com");
+  const std::string registration_path = "startsession";
+  TestResponseAdapter gaia_response_adapter(response_url);
+  AddValidGoogleRegistrationHeader(&gaia_response_adapter, registration_path);
+  AddValidStandardRegistrationHeader(&gaia_response_adapter, registration_path);
+
+  MockBoundSessionCookieRefreshService* mock_service =
+      GetMockBoundSessionCookieRefreshService(testing_profile());
+  ASSERT_TRUE(mock_service);
+
+  // Session terminations are still processed.
+  EXPECT_CALL(*mock_service, MaybeTerminateSession(response_url, _));
+  // New session registration should be allowed.
+  EXPECT_CALL(*mock_service, CreateRegistrationRequest).Times(1);
+  header_modification_delegate().ProcessResponse(&gaia_response_adapter,
+                                                 GURL());
+}
+
+TEST_F(BoundSessionHeaderModificationDelegateImplTest,
+       StandardRegistrationPartiallyBlocksGoogleRegistration) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{net::features::kDeviceBoundSessions,
+                            net::features::
+                                kDeviceBoundSessionsForRestrictedSites},
+      /*disabled_features=*/{});
   const GURL response_url("https://accounts.google.com");
   const std::string common_registration_path = "common_startsession";
   const std::string google_registration_path = "google_startsession";
@@ -371,8 +401,12 @@ TEST_F(BoundSessionHeaderModificationDelegateImplTest,
 
 TEST_F(BoundSessionHeaderModificationDelegateImplTest,
        StandardFeatureIgnoredWithoutStandardRegistration) {
-  base::test::ScopedFeatureList feature_list(
-      net::features::kDeviceBoundSessions);
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{net::features::kDeviceBoundSessions,
+                            net::features::
+                                kDeviceBoundSessionsForRestrictedSites},
+      /*disabled_features=*/{});
   const GURL response_url("https://accounts.google.com");
   TestResponseAdapter gaia_response_adapter(response_url);
   // Only the Google registration is provided.
@@ -394,8 +428,12 @@ TEST_F(BoundSessionHeaderModificationDelegateImplTest,
 
 TEST_F(BoundSessionHeaderModificationDelegateImplTest,
        StandardRegistrationIgnoredWhenPathsDontMatch) {
-  base::test::ScopedFeatureList feature_list(
-      net::features::kDeviceBoundSessions);
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{net::features::kDeviceBoundSessions,
+                            net::features::
+                                kDeviceBoundSessionsForRestrictedSites},
+      /*disabled_features=*/{});
   const GURL response_url("https://accounts.google.com");
   TestResponseAdapter gaia_response_adapter(response_url);
   AddValidGoogleRegistrationHeader(&gaia_response_adapter,

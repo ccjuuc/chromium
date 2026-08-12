@@ -5,6 +5,7 @@
 #include "ash/wm/toplevel_window_event_handler.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/multi_display/multi_display_metrics_controller.h"
@@ -25,13 +26,14 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_event_dispatcher.h"
-#include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/base/hit_test.h"
 #include "ui/display/manager/display_manager_observer.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
@@ -332,6 +334,8 @@ void ToplevelWindowEventHandler::OnGestureEvent(ui::GestureEvent* event) {
       DCHECK_EQ(ui::EventType::kGestureScrollBegin, event->type());
       aura::Window::ConvertPointToTarget(target, new_target, &event_location);
 
+      // `new_target` should not be deleted while transferring gesture.
+      aura::Window::ScopedDeleteBlocker blocker(new_target);
       aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
           original_target, new_target, ui::TransferTouchesBehavior::kCancel);
       UpdateGestureTarget(new_target, event_location);
@@ -606,21 +610,15 @@ wm::WindowMoveResult ToplevelWindowEventHandler::RunMoveLoop(
   DCHECK(!in_move_loop_);  // Can only handle one nested loop at a time.
   aura::Window* root_window = source->GetRootWindow();
   DCHECK(root_window);
-  gfx::PointF drag_location;
-  if (move_source == ::wm::WINDOW_MOVE_SOURCE_TOUCH &&
-      aura::Env::GetInstance()->is_touch_down()) {
-    gfx::PointF drag_location_f;
-    bool has_point = aura::Env::GetInstance()
-                         ->gesture_recognizer()
-                         ->GetLastTouchPointForTarget(source, &drag_location_f);
-    drag_location = drag_location_f;
-    DCHECK(has_point);
-  } else {
-    drag_location = gfx::PointF(
-        root_window->GetHost()->dispatcher()->GetLastMouseLocationInRoot());
-    aura::Window::ConvertPointToTarget(root_window, source->parent(),
-                                       &drag_location);
-  }
+
+  // Calculate the drag location by using the drag_offset. `drag_offset` is the
+  // mouse position's offset from the source window's origin when drag is
+  // initiated.
+  gfx::PointF location_in_source =
+      gfx::PointF(drag_offset.x(), drag_offset.y());
+  gfx::PointF drag_location = location_in_source;
+  aura::Window::ConvertPointToTarget(source, source->parent(), &drag_location);
+
   // Set the cursor before calling AttemptToStartDrag(), as that will
   // eventually call LockCursor() and prevent the cursor from changing.
   aura::client::CursorClient* cursor_client =
@@ -646,7 +644,7 @@ wm::WindowMoveResult ToplevelWindowEventHandler::RunMoveLoop(
   WindowState* window_state = WindowState::Get(source);
   const bool window_position_managed = window_state->GetWindowPositionManaged();
   window_state->SetWindowPositionManaged(false);
-  aura::WindowTracker tracker({source});
+  base::WeakPtr<aura::Window> source_weak = source->GetWeakPtrAsWindow();
 
   run_loop.Run();
 
@@ -654,8 +652,9 @@ wm::WindowMoveResult ToplevelWindowEventHandler::RunMoveLoop(
     return ::wm::MOVE_CANCELED;
 
   // Make sure the window hasn't been deleted.
-  if (tracker.Contains(source))
+  if (source_weak) {
     window_state->SetWindowPositionManaged(window_position_managed);
+  }
 
   in_move_loop_ = false;
   return result == DragResult::SUCCESS ? ::wm::MOVE_SUCCESSFUL
@@ -714,7 +713,9 @@ bool ToplevelWindowEventHandler::AttemptToStartDrag(
 
   if (gesture_target_ != nullptr && update_gesture_target) {
     DCHECK_EQ(source, ::wm::WINDOW_MOVE_SOURCE_TOUCH);
-    // Transfer events for gesture if switching to new target.
+    // Transfer events for gesture if switching to new target. `window` should
+    // not be deleted during transfer.
+    aura::Window::ScopedDeleteBlocker blocker(window);
     aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
         gesture_target_, window, ui::TransferTouchesBehavior::kDontCancel);
   }
@@ -760,7 +761,9 @@ bool ToplevelWindowEventHandler::AttemptToStartPinch(
     int window_component,
     bool update_gesture_target) {
   if (gesture_target_ != nullptr && update_gesture_target) {
-    // Transfer events for gesture if switching to new target.
+    // Transfer events for gesture if switching to new target. `window` should
+    // not be deleted during transfer.
+    aura::Window::ScopedDeleteBlocker blocker(window);
     aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
         gesture_target_, window, ui::TransferTouchesBehavior::kDontCancel);
   }
@@ -820,7 +823,8 @@ bool ToplevelWindowEventHandler::PrepareForPinch(
   }
 
   std::unique_ptr<WindowResizer> resizer(CreateWindowResizer(
-      window, point_in_parent, window_component, wm::WINDOW_MOVE_SOURCE_TOUCH));
+      window, point_in_parent, window_component, wm::WINDOW_MOVE_SOURCE_TOUCH,
+      /*pinch=*/true));
   if (!resizer) {
     return false;
   }
@@ -1105,7 +1109,14 @@ void ToplevelWindowEventHandler::HandleCaptureLost(ui::LocatedEvent* event) {
     // We complete the drag instead of reverting it, as reverting it will result
     // in a weird behavior when a dragged tab produces a modal dialog while the
     // drag is in progress. crbug.com/558201.
-    CompleteDrag(DragResult::SUCCESS);
+    // However, if the capture is lost because of display configuration change,
+    // we should revert the drag.
+    auto* manager = Shell::Get()->window_tree_host_manager();
+    if (manager->in_display_configuration_change()) {
+      CompleteDrag(DragResult::REVERT);
+    } else {
+      CompleteDrag(DragResult::SUCCESS);
+    }
   }
 }
 

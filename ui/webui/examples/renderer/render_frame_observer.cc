@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/logging.h"
 #include "components/guest_contents/renderer/swap_render_frame.h"
+#include "components/surface_embed/common/features.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "content/public/renderer/render_thread.h"
@@ -43,7 +44,24 @@ void AllowCustomElementNameRegistration(v8::Local<v8::Function> callback) {
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
   blink::WebCustomElement::EmbedderNamesAllowedScope embedder_names_scope;
-  callback->Call(context, context->Global(), 0, nullptr).ToLocalChecked();
+  v8::TryCatch try_catch(isolate);
+  v8::MaybeLocal<v8::Value> result =
+      callback->Call(context, context->Global(), 0, nullptr);
+
+  if (result.IsEmpty()) {
+    v8::String::Utf8Value exception(isolate, try_catch.Exception());
+    LOG(ERROR) << "AllowCustomElementNameRegistration failed:" << *exception;
+
+    v8::Local<v8::Value> stack_trace_as_local;
+    if (try_catch.StackTrace(context).ToLocal(&stack_trace_as_local) &&
+        stack_trace_as_local->IsString() &&
+        stack_trace_as_local.As<v8::String>()->Length() > 0) {
+      v8::String::Utf8Value stack_trace_as_string(isolate,
+                                                  stack_trace_as_local);
+      LOG(ERROR) << "AllowCustomElementNameRegistration failure stack trace: "
+                 << *stack_trace_as_string;
+    }
+  }
 }
 
 content::RenderFrame* GetRenderFrame(v8::Local<v8::Value> value) {
@@ -61,7 +79,7 @@ content::RenderFrame* GetRenderFrame(v8::Local<v8::Value> value) {
   return content::RenderFrame::FromWebFrame(frame);
 }
 
-void AttachIframeGuest(int guest_contents_id,
+void AttachIframeGuest(const std::string& guest_contents_id,
                        v8::Local<v8::Object> content_window) {
   // attachIframeGuest(guestInstanceId, contentWindow)
   // Getting the attach params could destroy the frame while it executes JS,
@@ -77,7 +95,12 @@ void AttachIframeGuest(int guest_contents_id,
   CHECK(parent_frame);
   CHECK(parent_frame->IsWebLocalFrame());
 
-  guest_contents::renderer::SwapRenderFrame(render_frame, guest_contents_id);
+  auto parsed_guest_contents_id =
+      base::UnguessableToken::DeserializeFromString(guest_contents_id);
+  CHECK(parsed_guest_contents_id.has_value());
+
+  guest_contents::renderer::SwapRenderFrame(render_frame,
+                                            *parsed_guest_contents_id);
 }
 
 }  // namespace
@@ -115,11 +138,15 @@ void RenderFrameObserver::ReadyToCommitNavigation(
       render_frame()->GetWebFrame()->MainWorldScriptContext();
   v8::Context::Scope context_scope(context);
 
+  const bool surface_embed_enabled =
+      base::FeatureList::IsEnabled(surface_embed::features::kSurfaceEmbed);
+
   v8::Local<v8::ObjectTemplate> webshell_template =
       gin::ObjectTemplateBuilder(isolate)
           .SetMethod("allowWebviewElementRegistration",
                      &AllowCustomElementNameRegistration)
           .SetMethod("attachIframeGuest", &AttachIframeGuest)
+          .SetValue("surfaceEmbedEnabled", surface_embed_enabled)
           .Build();
 
   context->Global()

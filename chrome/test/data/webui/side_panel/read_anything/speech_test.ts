@@ -71,16 +71,19 @@ suite('Speech', () => {
     return speech.getArgs('speak')[0].text.trim();
   }
 
-  setup(() => {
+  setup(async () => {
     // Clearing the DOM should always be done first.
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    // Due to timing issues in tests, we need to explicitly set checkVisibility
+    // of the elements to true to ensure they're considered visible and
+    // included in the speech tree.
+    HTMLElement.prototype.checkVisibility = () => true;
     // Do not call the real `onConnected()`. As defined in
     // ReadAnythingAppController, onConnected creates mojo pipes to connect to
     // the rest of the Read Anything feature, which we are not testing here.
     chrome.readingMode.onConnected = () => {};
-    if (chrome.readingMode.isTsTextSegmentationEnabled) {
-      stubAnimationFrame();
-    }
+    stubAnimationFrame();
+
     // Ensure the ReadAloudModel is not shared between tests.
     setInstance(null);
     speech = new TestSpeechBrowserProxy();
@@ -90,6 +93,10 @@ suite('Speech', () => {
     chrome.readingMode.restoreSettingsFromPrefs = () => {};
     chrome.readingMode.languageChanged = () => {};
     chrome.readingMode.onTtsEngineInstalled = () => {};
+    // This test isn't testing engine stall behavior, so these
+    // methods should be mocked to reduce flakiness from test timing.
+    chrome.readingMode.onSpeechEngineFirstStall = () => {};
+    chrome.readingMode.onSpeechEngineStalled = () => {};
     mockMetrics();
     voiceLanguageController = new VoiceLanguageController();
     VoiceLanguageController.setInstance(voiceLanguageController);
@@ -99,13 +106,16 @@ suite('Speech', () => {
 
     app = document.createElement('read-anything-app');
     document.body.appendChild(app);
+    await microtasksFinished();
     setupBasicSpeech(speech);
     chrome.readingMode.setContentForTesting(axTree, leafIds);
+    await microtasksFinished();
     speech.reset();
   });
 
-  test('speaks all text by sentences', () => {
+  test('speaks all text by sentences', async () => {
     emitEvent(app, ToolbarEvent.PLAY_PAUSE);
+    await microtasksFinished();
     assertEquals(1, speech.getCallCount('speak'));
     const spoken1 = speech.getArgs('speak')[0];
     assertEquals(paragraph1[0], spoken1.text.trim());
@@ -189,16 +199,18 @@ suite('Speech', () => {
     let mockTimer: MockTimer;
 
     function selectAndPlay(
-        baseTree: any, anchorId: number, anchorOffset: number, focusId: number,
-        focusOffset: number, isBackward: boolean = false): void {
+        baseTree: Object, anchorId: number, anchorOffset: number,
+        focusId: number, focusOffset: number,
+        isBackward: boolean = false): void {
       select(
           baseTree, anchorId, anchorOffset, focusId, focusOffset, isBackward);
       playFromSelection();
     }
 
     function select(
-        baseTree: any, anchorId: number, anchorOffset: number, focusId: number,
-        focusOffset: number, isBackward: boolean = false): void {
+        baseTree: Object, anchorId: number, anchorOffset: number,
+        focusId: number, focusOffset: number,
+        isBackward: boolean = false): void {
       mockTimer.install();
       stubAnimationFrame();
       const selectedTree = Object.assign(
@@ -216,6 +228,8 @@ suite('Speech', () => {
       const selectionController = SelectionController.getInstance();
       selectionController.updateSelection(app.getSelection(), app.$.container);
       selectionController.onSelectionChange(app.getSelection());
+      speechController.onSelectionChange(
+          selectionController.getCurrentSelectionStart());
     }
 
     function playFromSelection() {

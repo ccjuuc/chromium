@@ -57,11 +57,12 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBufferDXGI
   bool Map() override;
   void MapAsync(base::OnceCallback<void(bool)> result_cb) override;
   bool AsyncMappingIsNonBlocking() const override;
-  void* memory(size_t plane) override;
+  base::span<uint8_t> memory(size_t plane) override;
   void Unmap() override;
   int stride(size_t plane) const override;
   gfx::GpuMemoryBufferType GetType() const override;
   gfx::GpuMemoryBufferHandle CloneHandle() const override;
+  bool SupportsZeroCopyWebGPUImport() const override;
 
   // This method allows clients to explicitly specify that it wants to use the
   // |premapped_memory_| which is internally created by this class from the GMB
@@ -99,8 +100,7 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBufferDXGI
 
   // Returns callback for reporting early result.
   // `DoMapAsync` can't invoke it directly as it holds a mapping lock.
-  std::optional<base::OnceCallback<void(void)>> DoMapAsync(
-      base::OnceCallback<void(bool)>);
+  std::optional<base::OnceClosure> DoMapAsync(base::OnceCallback<void(bool)>);
   void CheckAsyncMapResult(bool result);
   void AssertMapped();
 

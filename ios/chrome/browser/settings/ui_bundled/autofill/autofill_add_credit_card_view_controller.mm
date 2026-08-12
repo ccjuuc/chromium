@@ -10,9 +10,9 @@
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type.h"
 #import "ios/chrome/browser/autofill/ui_bundled/cells/autofill_credit_card_edit_item.h"
+#import "ios/chrome/browser/autofill/ui_bundled/util/autofill_settings_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_add_credit_card_view_controller_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_add_credit_card_view_controller_presentation_delegate.h"
-#import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_settings_util.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item_delegate.h"
@@ -100,10 +100,9 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
   // Adds 'Cancel' and 'Add' buttons to Navigation bar.
   self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
-      initWithTitle:l10n_util::GetNSString(IDS_IOS_NAVIGATION_BAR_CANCEL_BUTTON)
-              style:UIBarButtonItemStylePlain
-             target:self
-             action:@selector(handleCancelButton:)];
+      initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+                           target:self
+                           action:@selector(handleCancelButton:)];
   self.navigationItem.leftBarButtonItem.accessibilityIdentifier =
       kSettingsAddCreditCardCancelButtonID;
 
@@ -156,11 +155,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
       toSectionWithIdentifier:SectionIdentifierCreditCardDetails];
   [model addItem:[self cardNicknameItem]
       toSectionWithIdentifier:SectionIdentifierCreditCardDetails];
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    [model addItem:cardCvcItem
-        toSectionWithIdentifier:SectionIdentifierCreditCardDetails];
-  }
+  [model addItem:cardCvcItem
+      toSectionWithIdentifier:SectionIdentifierCreditCardDetails];
 
   if (base::FeatureList::IsEnabled(
           autofill::features::kAutofillCreditCardScannerIos)) {
@@ -359,11 +355,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
       [self readTextFromItemtype:ItemTypeCardNickname
                sectionIdentifier:SectionIdentifierCreditCardDetails];
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    _cardCvc = [self readTextFromItemtype:ItemTypeCardCvc
-                        sectionIdentifier:SectionIdentifierCreditCardDetails];
-  }
+  _cardCvc = [self readTextFromItemtype:ItemTypeCardCvc
+                      sectionIdentifier:SectionIdentifierCreditCardDetails];
 }
 
 // Reads and returns the data from the item with passed `itemType` and
@@ -499,7 +492,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
                    textFieldValue:_cardCvc
              textFieldPlaceholder:
                  l10n_util::GetNSString(
-                     IDS_IOS_AUTOFILL_DIALOG_PLACEHOLDER_CVC_OPTIONAL)
+                     IDS_IOS_AUTOFILL_DIALOG_PLACEHOLDER_OPTIONAL)
                      keyboardType:UIKeyboardTypeNumberPad
          autofillCreditCardUIType:AutofillCreditCardUIType::kSecurityCode];
   return cardCvcItem;

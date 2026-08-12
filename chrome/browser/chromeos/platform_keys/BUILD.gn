@@ -20,11 +20,9 @@ static_library("platform_keys") {
 
   deps = [
     "//base",
-    "//chrome/browser/ash/profiles",
     "//chrome/browser/profiles:profile",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/platform_keys",
-    "//chromeos/crosapi/cpp",
-    "//chromeos/crosapi/mojom",
     "//components/keyed_service/core",
     "//components/policy:generated",
     "//components/policy/core/common",

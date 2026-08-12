@@ -89,7 +89,7 @@ AudioDecoderConfig* CopyConfig(const AudioDecoderConfig& config) {
 }
 
 std::optional<media::AudioCodec> TryGetPcmCodec(const String& codec) {
-  String codecs_str = codec.LowerASCII();
+  String codecs_str = codec.ToAsciiLower();
   if (codecs_str == "ulaw") {
     return media::AudioCodec::kPCM_MULAW;
   }
@@ -108,7 +108,7 @@ std::optional<media::AudioCodec> TryGetPcmCodec(const String& codec) {
 }
 
 media::SampleFormat PcmCodecToSampleFormat(const String& codec) {
-  String codecs_str = codec.LowerASCII();
+  String codecs_str = codec.ToAsciiLower();
 
   if (codecs_str == "pcm-u8") {
     return media::SampleFormat::kSampleFormatU8;
@@ -277,17 +277,24 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
       return std::nullopt;
     }
 
+    if (config.codec() == "opus") {
+      // A size of 19 bytes corresponds to the minimum length of an Opus
+      // Identification Header for a standard mono or stereo stream.
+      constexpr size_t kMinDescriptionSize = 19;
+      if (desc_wrapper.size() < kMinDescriptionSize) {
+        *js_error_message = "Invalid config; description is too short.";
+        return std::nullopt;
+      }
+    }
+
     if (!desc_wrapper.empty()) {
       extra_data.assign(base::to_address(desc_wrapper.begin()),
                         base::to_address(desc_wrapper.end()));
     }
   }
 
-  media::ChannelLayout channel_layout =
-      config.numberOfChannels() > 8
-          // GuesschannelLayout() doesn't know how to guess above 8 channels.
-          ? media::CHANNEL_LAYOUT_DISCRETE
-          : media::GuessChannelLayout(config.numberOfChannels());
+  media::ChannelLayoutConfig channel_layout =
+      media::ChannelLayoutConfig::Guess(config.numberOfChannels());
 
   auto encryption_scheme = media::EncryptionScheme::kUnencrypted;
   if (config.hasEncryptionScheme()) {
@@ -311,12 +318,18 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
       return std::nullopt;
     }
     format = PcmCodecToSampleFormat(config.codec());
+
+    // Both FFmpeg and Symphonia exclusively output S16 decoded buffers for ALAW
+    // and MULAW.
+  } else if (audio_type->codec == media::AudioCodec::kPCM_ALAW ||
+             audio_type->codec == media::AudioCodec::kPCM_MULAW) {
+    format = media::SampleFormat::kSampleFormatS16;
   }
 
   media_config.Initialize(audio_type->codec, format, channel_layout,
                           config.sampleRate(), extra_data, encryption_scheme,
-                          base::TimeDelta() /* seek preroll */,
-                          0 /* codec delay */);
+                          /*seek_preroll=*/base::TimeDelta(),
+                          /*codec_delay=*/0);
   if (!media_config.IsValidConfig()) {
     *js_error_message = "Unsupported config.";
     return std::nullopt;

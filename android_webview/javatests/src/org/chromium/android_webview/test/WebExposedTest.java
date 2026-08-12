@@ -26,6 +26,7 @@ import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 import org.chromium.android_webview.AwConsoleMessage;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwSettings;
+import org.chromium.android_webview.AwWebResourceError;
 import org.chromium.android_webview.AwWebResourceRequest;
 import org.chromium.android_webview.test.AwActivityTestRule.TestDependencyFactory;
 import org.chromium.base.Log;
@@ -106,7 +107,7 @@ public class WebExposedTest extends AwParameterizedTest {
                         mResultFuture.setException(
                                 new AssertionError(
                                         "onReceivedError: "
-                                                + error.description
+                                                + error.getDescription()
                                                 + ", "
                                                 + request.getUrl()
                                                 + "\n"));
@@ -129,10 +130,10 @@ public class WebExposedTest extends AwParameterizedTest {
                     }
                 };
 
-        AwTestContainerView mTestContainerView =
+        AwTestContainerView testContainerView =
                 mRule.createAwTestContainerViewOnMainSync(
                         mContentsClient, false, new TestDependencyFactory());
-        mAwContents = mTestContainerView.getAwContents();
+        mAwContents = testContainerView.getAwContents();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

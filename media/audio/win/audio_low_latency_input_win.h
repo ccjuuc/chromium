@@ -69,11 +69,13 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/simple_thread.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
@@ -123,12 +125,27 @@ class MEDIA_EXPORT WASAPIAudioInputStream
     OPEN_RESULT_MAX = OPEN_RESULT_OK_WITH_RESAMPLING
   };
 
+  // LINT.IfChange(WASAPIInputDeviceInUseRetryOutcome)
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class WASAPIInputDeviceInUseRetryOutcome {
+    kFailedNoRetry = 0,
+    kSucceededOnFirstRetry = 1,
+    kSucceededOnSecondRetry = 2,
+    kFailedAfterRetries = 3,
+    kMaxValue = kFailedAfterRetries
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:WASAPIInputDeviceInUseRetryOutcome)
+
   using ActivateAudioInterfaceAsyncCallback =
       base::RepeatingCallback<HRESULT(LPCWSTR,
                                       REFIID,
                                       PROPVARIANT*,
                                       IActivateAudioInterfaceCompletionHandler*,
                                       IActivateAudioInterfaceAsyncOperation**)>;
+
+  using AudioClientStartCallback =
+      base::RepeatingCallback<HRESULT(IAudioClient*)>;
 
   // The ctor takes all the usual parameters, plus |manager| which is the
   // the audio manager who is creating this object.
@@ -170,6 +187,17 @@ class MEDIA_EXPORT WASAPIAudioInputStream
     async_activation_timeout_ms_ = async_activation_timeout_ms;
   }
 
+  // Overrides the Start() call used for `audio_client_`. Intended for tests
+  // that need to inject failures when starting the capture stream.
+  void OverrideAudioClientStartCallbackForTesting(
+      AudioClientStartCallback&& callback) {
+    audio_client_start_callback_for_testing_ = std::move(callback);
+  }
+
+  // Returns whether the capture thread has been created. This is used for
+  // testing purposes only.
+  bool HasCaptureThreadForTesting() const { return capture_thread_ != nullptr; }
+
   // Triggers a call to OnError() on the sink to simulate a stream error.
   // This method is for testing purposes only.
   void SimulateErrorForTesting();
@@ -178,8 +206,6 @@ class MEDIA_EXPORT WASAPIAudioInputStream
   class DataDiscontinuityReporter;
   class EchoCancellationConfig;
   class AudioClientActivationHandler;
-
-  PRINTF_FORMAT(2, 3) void SendLogMessage(const char* format, ...);
 
   // DelegateSimpleThread::Delegate implementation.
   void Run() override;
@@ -207,7 +233,7 @@ class MEDIA_EXPORT WASAPIAudioInputStream
   // Sets communications policy and excludes any built-in audio processing,
   // i.e., activates raw capture mode.
   // Raw capture mode is only enabled if the native number of input channels is
-  // less than |media::kMaxConcurrentChannels| (8).
+  // less than `kMaxRawCaptureChannels` (8).
   HRESULT SetCommunicationsCategoryAndMaybeRawCaptureMode(WORD channels);
   // Returns whether the desired format is supported or not and writes the
   // result of a failing system call to |*hr|, or S_OK if successful. If this
@@ -237,6 +263,8 @@ class MEDIA_EXPORT WASAPIAudioInputStream
 
   // Sets up `input_format_` and `output_format_` based on `params_`.
   bool UpdateFormats();
+
+  const base::UnguessableToken id_;
 
   // Our creator, the audio manager needs to be notified when we close.
   const raw_ptr<AudioManagerWin> manager_;
@@ -417,6 +445,8 @@ class MEDIA_EXPORT WASAPIAudioInputStream
   bool simulate_error_for_testing_ = false;
 
   bool use_device_sample_format_;
+
+  AudioClientStartCallback audio_client_start_callback_for_testing_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

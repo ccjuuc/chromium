@@ -4,6 +4,7 @@
 
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 
+#include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -32,6 +33,7 @@
 #include "components/policy/core/common/features.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
+namespace metrics {
 namespace {
 
 enum MetricsReportingChangeHistogramValue {
@@ -64,6 +66,7 @@ bool SetGoogleUpdateSettings(bool enabled) {
 //  |to_update_pref| which indicates what the desired update should be,
 //  |callback_fn| is the callback function to be called in the end,
 //  |called_from| is from where the call was made,
+
 //  |updated_pref| is the result of attempted update.
 // Update considers to be successful if |to_update_pref| and |updated_pref| are
 // the same.
@@ -117,7 +120,7 @@ void ChangeMetricsReportingStateWithReply(
       (called_from ==
        ChangeMetricsReportingStateCalledFrom::kCrosMetricsSettingsCreated) ||
       (called_from ==
-       ChangeMetricsReportingStateCalledFrom::kCrosMetricsPreConsent);
+       ChangeMetricsReportingStateCalledFrom::kCrosMetricsPreChoice);
   if (IsMetricsReportingPolicyManaged() && !is_chrome_os) {
     if (!callback_fn.is_null()) {
       const bool metrics_enabled =
@@ -166,8 +169,8 @@ void UpdateMetricsPrefsOnPermissionChange(
   // MetricsAndCrashSampling. However, if such a user disables metrics
   // reporting and later re-enables it, they will start using the new trial.
   //
-  // See crbug/1306481 and the comment above |kUsePostFREFixSamplingTrial| in
-  // components/metrics/metrics_pref_names.cc for more details.
+  // See crbug.com/40218371 and the comment above |kUsePostFREFixSamplingTrial|
+  // in components/metrics/metrics_pref_names.cc for more details.
   g_browser_process->local_state()->SetBoolean(
       metrics::prefs::kUsePostFREFixSamplingTrial, true);
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -190,9 +193,9 @@ void UpdateMetricsPrefsOnPermissionChange(
   // prevent experiments that have been randomized based on the low-entropy
   // source from having their state re-rolled on a subsequent session.
   if (called_from != ChangeMetricsReportingStateCalledFrom::kUiFirstRun) {
-    metrics::EntropyState::ClearPrefs(local_state);
+    EntropyState::ClearPrefs(local_state);
   }
-  metrics::ClonedInstallDetector::ClearClonedInstallInfo(local_state);
+  ClonedInstallDetector::ClearClonedInstallInfo(local_state);
   local_state->ClearPref(metrics::prefs::kMetricsReportingEnabledTimestamp);
   crash_keys::ClearMetricsClientId();
 }
@@ -225,3 +228,5 @@ void ClearPreviouslyCollectedMetricsData() {
   // Note: There is no need to clear User Actions as they do not get recorded
   // when metrics reporting is disabled.
 }
+
+}  // namespace metrics

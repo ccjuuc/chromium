@@ -165,6 +165,11 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Failed to set shill properties"/>
 </enum>
 
+<enum name="ConnectionAllowlistType">
+  <int value="0" label="Enforced"/>
+  <int value="1" label="Report Only"/>
+</enum>
+
 <enum name="ConnectionDiagnosticsIssue">
   <int value="0" label="IP collision detected."/>
   <int value="1" label="Routing problem detected."/>
@@ -426,6 +431,17 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Success"/>
   <int value="1" label="Failure"/>
 </enum>
+
+<!-- LINT.IfChange(GPCSignalSourceType) -->
+
+<enum name="GPCSignalSourceType">
+  <int value="0" label="WorkerNavigation"/>
+  <int value="1" label="FrameNavigation"/>
+  <int value="2" label="SubresourceFetch"/>
+  <int value="3" label="WorkerSubresourceFetch"/>
+</enum>
+
+<!-- LINT.ThenChange(//third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h:GPCSignalSourceType) -->
 
 <enum name="HermesResponseStatus">
   <summary>
@@ -1435,8 +1451,8 @@ chromium-metrics-reviews@google.com.
   <int value="26" label="request_body"/>
   <int value="27" label="keepalive"/>
   <int value="28" label="browsing_topics"/>
-  <int value="29" label="ad_auction_headers"/>
-  <int value="30" label="shared_storage_writable_eligible"/>
+  <int value="29" label="ad_auction_headers (deprecated)"/>
+  <int value="30" label="shared_storage_writable_eligible (deprecated)"/>
   <int value="31" label="has_user_gesture"/>
   <int value="32" label="enable_load_timing"/>
   <int value="33" label="enable_upload_progress"/>
@@ -1464,15 +1480,19 @@ chromium-metrics-reviews@google.com.
   <int value="55" label="net_log_reference_info"/>
   <int value="56" label="target_ip_address_space (deprecated)"/>
   <int value="57" label="storage_access_api_status"/>
-  <int value="58" label="attribution_reporting_support"/>
-  <int value="59" label="attribution_reporting_eligibility"/>
+  <int value="58" label="attribution_reporting_support (deprecated)"/>
+  <int value="59" label="attribution_reporting_eligibility (deprecated)"/>
   <int value="60" label="shared_dictionary_writer_enabled"/>
-  <int value="61" label="attribution_reporting_src_token"/>
+  <int value="61" label="attribution_reporting_src_token (deprecated)"/>
   <int value="62" label="is_ad_tagged"/>
   <int value="63" label="keepalive_token"/>
   <int value="64" label="expected_public_keys"/>
   <int value="65" label="permissions_policy"/>
   <int value="66" label="client_side_content_decoding_enabled"/>
+  <int value="67" label="allow_unsafe_redirect_schemes (deprecated)"/>
+  <int value="68" label="is_reload_navigation"/>
+  <int value="69" label="revalidation_etag"/>
+  <int value="70" label="revalidation_last_modified"/>
 </enum>
 
 <!-- LINT.ThenChange(//services/network/prefetch_matches.cc:FieldsForUma) -->
@@ -2242,7 +2262,7 @@ chromium-metrics-reviews@google.com.
   <int value="63" label="x-webchannel-content-type"/>
 </enum>
 
-<!-- LINT.ThenChange(//services/network/request_header_to_enum.h:RequestHeader) -->
+<!-- LINT.ThenChange(//services/network/public/cpp/request_header_to_enum.h:RequestHeader) -->
 
 <enum name="SharedDictionaryDocumentRequestCacheResult">
   <int value="0" label="Cache Miss"/>
@@ -2866,16 +2886,6 @@ chromium-metrics-reviews@google.com.
   <int value="5" label="FullScan didn't connect"/>
   <int value="6" label="FullScan connected"/>
   <int value="7" label="Internal error"/>
-</enum>
-
-<enum name="WiFiSecurityType">
-  <int value="0" label="Unmanaged Open"/>
-  <int value="1" label="Managed Open"/>
-  <int value="2" label="Unmanaged PSK"/>
-  <int value="3" label="Managed PSK"/>
-  <int value="4" label="Unmanaged Certificate"/>
-  <int value="5" label="Managed Certificate"/>
-  <int value="6" label="Unknown"/>
 </enum>
 
 <enum name="WiFiSessionTagState">

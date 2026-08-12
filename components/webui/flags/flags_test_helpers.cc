@@ -6,13 +6,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
@@ -59,10 +59,10 @@ FlagMetadataMap LoadFlagMetadata() {
 
   FlagMetadataMap metadata;
   for (const auto& entry_val : metadata_json.GetList()) {
-    const base::Value::Dict& entry = entry_val.GetDict();
+    const base::DictValue& entry = entry_val.GetDict();
     std::string name = *entry.FindString("name");
     std::vector<std::string> owners;
-    if (const base::Value::List* e = entry.FindList("owners")) {
+    if (const base::ListValue* e = entry.FindList("owners")) {
       for (const auto& owner : *e) {
         owners.push_back(owner.GetString());
       }
@@ -273,7 +273,7 @@ void EnsureOnlyPermittedFlagsNeverExpire() {
 
   for (const auto& entry : metadata) {
     if (entry.second.expiry_milestone == -1 &&
-        !base::Contains(listed_flags, entry.first)) {
+        !std::ranges::contains(listed_flags, entry.first)) {
       missing_flags.push_back(entry.first);
     }
   }
@@ -322,6 +322,23 @@ void EnsureOwnersLookValid() {
       << " have invalid-looking owners.\n"
       << "Owners must be valid emails or paths to OWNERS files.\n"
       << "Flags with invalid owners: " << base::JoinString(sad_flags, "\n");
+}
+
+void EnsureNeverExpireFlagsExist() {
+  FlagMetadataMap metadata = LoadFlagMetadata();
+  std::vector<std::string> sad_flags;
+
+  for (const auto& flag : LoadFlagNeverExpireList()) {
+    if (!metadata.contains(flag)) {
+      sad_flags.push_back(flag);
+    }
+  }
+
+  EXPECT_EQ(0u, sad_flags.size())
+      << "Flags in chrome/browser/" << kNeverExpireFileName
+      << " must have matching entries in chrome/browser/" << kMetadataFileName
+      << ".\n"
+      << "Flags missing metadata: " << base::JoinString(sad_flags, "\n  ");
 }
 
 void EnsureFlagsAreListedInAlphabeticalOrder() {

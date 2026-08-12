@@ -231,6 +231,24 @@ TEST(SimpleMenuModelTest, SetIsNewFeatureAt) {
   ASSERT_TRUE(simple_menu_model.IsNewFeatureAt(1));
 }
 
+TEST(SimpleMenuModelTest, SetPreviewFeatureAt) {
+  SimpleMenuModel simple_menu_model(nullptr);
+  simple_menu_model.AddItem(/*command_id*/ 5, u"menu item 0");
+  simple_menu_model.AddItem(/*command_id*/ 6, u"menu item 1");
+
+  simple_menu_model.SetIsNewFeatureAt(
+      /*index*/ 0, IsNewFeatureAtValue::create_for_test(false),
+      NewBadgeType::kPreview);
+  simple_menu_model.SetIsNewFeatureAt(
+      /*index*/ 1, IsNewFeatureAtValue::create_for_test(true),
+      NewBadgeType::kPreview);
+
+  EXPECT_FALSE(simple_menu_model.GetNewBadgeTypeAt(0).has_value());
+  ASSERT_TRUE(simple_menu_model.GetNewBadgeTypeAt(1).has_value());
+  EXPECT_EQ(simple_menu_model.GetNewBadgeTypeAt(1).value(),
+            NewBadgeType::kPreview);
+}
+
 TEST(SimpleMenuModelTest, SetElementIdentifierAt) {
   SimpleMenuModel simple_menu_model(nullptr);
   simple_menu_model.AddItem(/*command_id*/ 5, u"menu item 0");
@@ -280,6 +298,22 @@ TEST(SimpleMenuModelTest, HasIconsViaVectorIcon) {
       /*command_id*/ 11, u"menu item",
       ui::ImageModel::FromVectorIcon(circle_icon, ui::kColorMenuIcon, 16));
   EXPECT_FALSE(simple_menu_model.GetIconAt(1).IsEmpty());
+}
+
+TEST(SimpleMenuModelTest, SetIconForCommandId) {
+  SimpleMenuModel simple_menu_model(nullptr);
+  simple_menu_model.AddItem(/*command_id*/ 5, u"menu item 0");
+  simple_menu_model.AddItem(/*command_id*/ 6, u"menu item 1");
+
+  EXPECT_TRUE(simple_menu_model.GetIconAt(0).IsEmpty());
+  EXPECT_TRUE(simple_menu_model.GetIconAt(1).IsEmpty());
+
+  const ui::ImageModel icon =
+      ui::ImageModel::FromImage(gfx::test::CreateImage(16, 16));
+  simple_menu_model.SetIconForCommandId(5, icon);
+
+  EXPECT_FALSE(simple_menu_model.GetIconAt(0).IsEmpty());
+  EXPECT_TRUE(simple_menu_model.GetIconAt(1).IsEmpty());
 }
 
 TEST(SimpleMenuModelTest, InheritsSubMenuAlert) {

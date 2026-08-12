@@ -7,11 +7,13 @@ package org.chromium.chrome.test.util;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.withEffectiveVisibility;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.anyOf;
 
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.espresso.ViewInteraction;
@@ -156,6 +158,19 @@ public class BookmarkTestUtil {
             throw new RuntimeException(ex);
         }
         BookmarkTestUtil.waitForBookmarkModelLoaded();
+    }
+
+    public static ViewInteraction getSearchBoxViewInteraction() {
+        return onView(
+                allOf(
+                        withId(R.id.search_text),
+                        isDescendantOfA(
+                                allOf(
+                                        withId(R.id.search_view),
+                                        anyOf(
+                                                isDescendantOfA(withId(R.id.bookmark_toolbar)),
+                                                isDescendantOfA(
+                                                        withId(R.id.desktop_search_box_row)))))));
     }
 
     public static ChromeTabbedActivity waitForTabbedActivity() {

@@ -133,7 +133,7 @@ Notification* Notification::Create(ExecutionContext* context,
   // once persistent notifications have been mojofied too.
   if (notification->tag().IsNull() || notification->tag().empty()) {
     auto unguessable_token = base::UnguessableToken::Create();
-    notification->SetToken(unguessable_token.ToString().c_str());
+    notification->SetToken(String(unguessable_token.ToString()));
   } else {
     notification->SetToken(notification->tag());
   }
@@ -321,8 +321,7 @@ String Notification::badge() const {
 VibrationController::VibrationPattern Notification::vibrate() const {
   VibrationController::VibrationPattern pattern;
   if (data_->vibration_pattern.has_value()) {
-    pattern.AppendRange(data_->vibration_pattern->begin(),
-                        data_->vibration_pattern->end());
+    pattern.append_range(*data_->vibration_pattern);
   }
 
   return pattern;

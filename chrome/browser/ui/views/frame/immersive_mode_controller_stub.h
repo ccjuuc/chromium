@@ -6,19 +6,18 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_IMMERSIVE_MODE_CONTROLLER_STUB_H_
 
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 
 // Stub implementation of ImmersiveModeController for platforms which do not
 // support immersive mode yet.
 class ImmersiveModeControllerStub : public ImmersiveModeController {
  public:
-  explicit ImmersiveModeControllerStub(BrowserWindowInterface* browser);
+  explicit ImmersiveModeControllerStub(ui::UnownedUserDataHost& host);
 
   // ImmersiveModeController overrides:
   void Init(BrowserView* browser_view) override;
   void SetEnabled(bool enabled) override;
   bool IsEnabled() const override;
-  bool ShouldHideTopViews() const override;
   bool IsRevealed() const override;
   int GetTopContainerVerticalOffset(
       const gfx::Size& top_container_size) const override;

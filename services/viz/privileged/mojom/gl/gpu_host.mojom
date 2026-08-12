@@ -16,7 +16,22 @@ import "ui/gfx/mojom/gpu_extra_info.mojom";
 import "url/mojom/url.mojom";
 
 [EnableIf=is_win]
+import "services/webnn/public/mojom/ep_device_info.mojom";
+
+[EnableIf=is_win]
 import "services/webnn/public/mojom/ep_package_info.mojom";
+
+[EnableIf=is_win]
+import "services/webnn/public/mojom/webnn_model_loader.mojom";
+
+[EnableIf=is_win]
+import "services/webnn/public/mojom/webnn_compiler_context.mojom";
+
+[EnableIf=is_win]
+import "services/webnn/public/mojom/webnn_context_properties.mojom";
+
+[EnableIf=is_win]
+import "services/webnn/public/mojom/webnn_context_provider.mojom";
 
 [EnableIf=is_win]
 import "ui/gfx/mojom/dxgi_info.mojom";
@@ -87,9 +102,29 @@ interface GpuHost {
   EnsureWebNNExecutionProvidersReady()
       => (map<string, webnn.mojom.EpPackageInfo> ep_package_info);
 
+  // Requests a CompilerContext in the Compiler process for a specific EP
+  // device. Each EP device has its own dedicated Compiler process and the
+  // Browser launches one on first use for that device.
+  //
+  // The caller (GPU process) creates both pipes and passes the endpoints
+  // here. The Browser forwards them to the Compiler process. If the Compiler
+  // cannot be launched, the pipes are simply dropped (disconnecting the
+  // peer endpoints).
+  [EnableIf=is_win]
+  RequestWebNNCompilerContext(
+      webnn.mojom.CreateContextOptions context_options,
+      webnn.mojom.ContextProperties context_properties,
+      webnn.mojom.EpDeviceInfo target_device,
+      pending_receiver<webnn.mojom.WebNNCompilerContext>
+          compiler_context_receiver,
+      pending_remote<webnn.mojom.WebNNModelLoader> model_loader_remote);
+
   // Tells the GPU host to create a temporary file that can be used to save all
   // weights in the WebNN graph. Returns the open file handle if the file was
   // successfully created, otherwise return invalid file handle that will be
   // caught and prevent the graph from being built.
+  //
+  // TODO(crbug.com/364445586): Once the LiteRT MLDrift delegate moves from GPU
+  // to the renderer process, this interface can be removed entirely.
   CreateWebNNWeightsFile() => (mojo_base.mojom.File? file);
 };

@@ -5,9 +5,11 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_STRUCTURED_ADDRESS_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/field_types.h"
 
@@ -26,10 +28,6 @@ class HouseNumberNode : public AddressComponent {
  public:
   explicit HouseNumberNode(SubcomponentsList children);
   ~HouseNumberNode() override;
-
-  std::u16string GetValueForComparison(
-      const std::u16string& value,
-      const AddressCountryCode& common_country_code) const override;
 };
 
 // A node that represents the house number and apartment.
@@ -127,6 +125,12 @@ class BetweenStreetsOrLandmarkNode : public AddressComponent {
  public:
   explicit BetweenStreetsOrLandmarkNode(SubcomponentsList children);
   ~BetweenStreetsOrLandmarkNode() override;
+};
+
+class StreetLocationAndLocalityNode : public AddressComponent {
+ public:
+  explicit StreetLocationAndLocalityNode(SubcomponentsList children);
+  ~StreetLocationAndLocalityNode() override;
 };
 
 // The StreetAddress incorporates all the information specifically related to

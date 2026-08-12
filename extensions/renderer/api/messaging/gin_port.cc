@@ -49,11 +49,18 @@ GinPort::GinPort(v8::Local<v8::Context> context,
       delegate_(delegate),
       accessed_sender_(false) {
   context_invalidation_listener_.emplace(
-      context, base::BindOnce(&GinPort::OnContextInvalidated,
-                              weak_factory_.GetWeakPtr()));
+      context,
+      base::BindOnce(&GinPort::OnContextInvalidated, base::Unretained(this)));
 }
 
 GinPort::~GinPort() = default;
+
+void GinPort::Dispose() {
+  // Destruct the listener synchronously on the main thread to prevent its
+  // CheckedObserver (WeakPtrFactory) from being destroyed during background
+  // GC sweeping, which is not thread-safe.
+  context_invalidation_listener_.reset();
+}
 
 gin::ObjectTemplateBuilder GinPort::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
@@ -75,7 +82,7 @@ const char* GinPort::GetHumanReadableName() const {
 }
 
 void GinPort::DispatchOnMessage(v8::Local<v8::Context> context,
-                                const Message& message) {
+                                Message message) {
   DCHECK_EQ(State::kActive, state_);
 
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
@@ -86,7 +93,8 @@ void GinPort::DispatchOnMessage(v8::Local<v8::Context> context,
   // hosts can send malformed messages.
   std::string error;
   v8::Local<v8::Value> parsed_message = messaging_util::MessageToV8(
-      context, message, channel_type_ == mojom::ChannelType::kNative, &error);
+      context, std::move(message), channel_type_ == mojom::ChannelType::kNative,
+      &error);
 
   v8::Local<v8::Object> self = GetWrapper(isolate).ToLocalChecked();
   v8::LocalVector<v8::Value> args(isolate, {parsed_message, self});
@@ -117,6 +125,7 @@ void GinPort::DispatchOnDisconnect(v8::Local<v8::Context> context) {
   DispatchEvent(context, &args, kOnDisconnectEvent);
 
   InvalidateEvents(context);
+  ClearContextPointers();
 
   DCHECK_NE(state_, State::kActive);
 }
@@ -155,6 +164,7 @@ void GinPort::DisconnectHandler(gin::Arguments* arguments) {
     delegate_->ClosePort(context, port_id_);
   }
   state_ = State::kDisconnected;
+  ClearContextPointers();
 }
 
 void GinPort::PostMessageHandler(gin::Arguments* arguments,
@@ -173,7 +183,7 @@ void GinPort::PostMessageHandler(gin::Arguments* arguments,
   }
 
   std::string error;
-  std::unique_ptr<Message> message = messaging_util::MessageFromV8(
+  std::optional<Message> message = messaging_util::MessageFromV8(
       context, v8_message, port_id_.serialization_format, &error);
   // NOTE(devlin): JS-based bindings just log to the console here and return,
   // rather than throwing an error. But it really seems like it should be an
@@ -184,13 +194,12 @@ void GinPort::PostMessageHandler(gin::Arguments* arguments,
   }
 
   if (delegate_) {
-    delegate_->PostMessageToPort(context, port_id_, std::move(message));
+    delegate_->PostMessageToPort(context, port_id_, std::move(*message));
   }
 }
 
 void GinPort::OnContextDestroyed() {
-  event_handler_ = nullptr;
-  delegate_ = nullptr;
+  ClearContextPointers();
 }
 
 std::string GinPort::GetName() {
@@ -288,6 +297,15 @@ void GinPort::InvalidateEvents(v8::Local<v8::Context> context) {
                                         GetEvent(context, kOnMessageEvent));
   event_handler_->InvalidateCustomEvent(context,
                                         GetEvent(context, kOnDisconnectEvent));
+}
+
+void GinPort::ClearContextPointers() {
+  // The port is disconnected, so it's no longer tracked in the
+  // `MessagingPerContextData`. This means `OnContextDestroyed()` won't be
+  // called for this port. Clear the pointers now to avoid dangling pointers
+  // if the context is destroyed later.
+  delegate_ = nullptr;
+  event_handler_ = nullptr;
 }
 
 void GinPort::ThrowError(v8::Isolate* isolate, std::string_view error) {

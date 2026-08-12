@@ -9,7 +9,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/extension_settings_helper.h"
 #include "chrome/browser/sync/test/integration/extensions_helper.h"
-#include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/sync/base/features.h"
 #include "components/sync/service/sync_service_impl.h"
@@ -21,48 +20,10 @@
 
 namespace {
 
-using extension_settings_helper::AllExtensionSettingsSameAsVerifier;
+using extension_settings_helper::AllExtensionSettingsSameChecker;
+using extension_settings_helper::GetExtensionSettings;
 using extension_settings_helper::SetExtensionSettings;
-using extension_settings_helper::SetExtensionSettingsForAllProfiles;
 using extensions_helper::InstallExtensionForAllProfiles;
-using sync_datatype_helper::test;
-
-// Generic mutations done after the initial setup of all tests. Note that
-// unfortuately we can't test existing configurations of the sync server since
-// the tests don't support that.
-void MutateSomeSettings(
-    int seed,  // used to modify the mutation values, not keys.
-    const std::string& extension0,
-    const std::string& extension1,
-    const std::string& extension2) {
-  {
-    // Write to extension0 from profile 0 but not profile 1.
-    base::Value::Dict settings;
-    settings.Set("asdf", base::StringPrintf("asdfasdf-%d", seed));
-    SetExtensionSettings(test()->verifier(), extension0, settings);
-    SetExtensionSettings(test()->GetProfile(0), extension0, settings);
-  }
-  {
-    // Write the same data to extension1 from both profiles.
-    base::Value::Dict settings;
-    settings.Set("asdf", base::StringPrintf("asdfasdf-%d", seed));
-    settings.Set("qwer", base::StringPrintf("qwerqwer-%d", seed));
-    SetExtensionSettingsForAllProfiles(extension1, settings);
-  }
-  {
-    // Write different data to extension2 from each profile.
-    base::Value::Dict settings0;
-    settings0.Set("zxcv", base::StringPrintf("zxcvzxcv-%d", seed));
-    SetExtensionSettings(test()->verifier(), extension2, settings0);
-    SetExtensionSettings(test()->GetProfile(0), extension2, settings0);
-
-    base::Value::Dict settings1;
-    settings1.Set("1324", base::StringPrintf("12341234-%d", seed));
-    settings1.Set("5687", base::StringPrintf("56785678-%d", seed));
-    SetExtensionSettings(test()->verifier(), extension2, settings1);
-    SetExtensionSettings(test()->GetProfile(1), extension2, settings1);
-  }
-}
 
 class TwoClientExtensionSettingsSyncTest
     : public SyncTest,
@@ -76,13 +37,49 @@ class TwoClientExtensionSettingsSyncTest
   }
   ~TwoClientExtensionSettingsSyncTest() override = default;
 
-  bool UseVerifier() override {
-    // TODO(crbug.com/40724949): rewrite tests to not use verifier.
-    return true;
-  }
-
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
     return GetParam();
+  }
+
+  struct ExpectedSettings {
+    base::DictValue extension0;
+    base::DictValue extension1;
+    base::DictValue extension2;
+  };
+
+  // Generic mutations done after the initial setup of all tests. Note that
+  // existing configurations of the sync server cannot be tested since the
+  // test infrastructure does not support that.
+  ExpectedSettings MutateSettingsAcrossProfiles(
+      int seed,  // used to modify the mutation values, not keys.
+      const std::string& extension0,
+      const std::string& extension1,
+      const std::string& extension2) {
+    ExpectedSettings expected;
+
+    // Write to extension0 from profile 0 but not profile 1.
+    expected.extension0.Set("asdf", base::StringPrintf("asdfasdf-%d", seed));
+    SetExtensionSettings(GetProfile(0), extension0, expected.extension0);
+
+    // Write the same data to extension1 from both profiles.
+    expected.extension1.Set("asdf", base::StringPrintf("asdfasdf-%d", seed));
+    expected.extension1.Set("qwer", base::StringPrintf("qwerqwer-%d", seed));
+    SetExtensionSettings(GetAllProfiles(), extension1, expected.extension1);
+
+    // Write different data to extension2 from each profile.
+    base::DictValue settings0;
+    settings0.Set("zxcv", base::StringPrintf("zxcvzxcv-%d", seed));
+    SetExtensionSettings(GetProfile(0), extension2, settings0);
+
+    base::DictValue settings1;
+    settings1.Set("1324", base::StringPrintf("12341234-%d", seed));
+    settings1.Set("5687", base::StringPrintf("56785678-%d", seed));
+    SetExtensionSettings(GetProfile(1), extension2, settings1);
+
+    expected.extension2.Merge(settings0.Clone());
+    expected.extension2.Merge(settings1.Clone());
+
+    return expected;
   }
 
  private:
@@ -110,21 +107,40 @@ IN_PROC_BROWSER_TEST_P(TwoClientExtensionSettingsSyncTest,
   // for all profiles, start syncing, add some new settings, sync, mutate those
   // settings, sync.
   // Leave extension0 empty.
-  SetExtensionSettingsForAllProfiles(extension1,
-                                     base::Value::Dict().Set("foo", "bar"));
-  SetExtensionSettingsForAllProfiles(
-      extension2, base::Value::Dict().Set("foo", "bar").Set("baz", "qux"));
+  base::DictValue base_settings1;
+  base_settings1.Set("foo", "bar");
+  SetExtensionSettings(GetAllProfiles(), extension1, base_settings1);
+  base::DictValue base_settings2;
+  base_settings2.Set("foo", "bar");
+  base_settings2.Set("baz", "qux");
+  SetExtensionSettings(GetAllProfiles(), extension2, base_settings2);
 
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
+  ASSERT_TRUE(
+      AllExtensionSettingsSameChecker(GetSyncServices(), GetAllProfiles())
+          .Wait());
+  EXPECT_EQ(base::DictValue(), GetExtensionSettings(GetProfile(0), extension0));
+  EXPECT_EQ(base_settings1, GetExtensionSettings(GetProfile(0), extension1));
+  EXPECT_EQ(base_settings2, GetExtensionSettings(GetProfile(0), extension2));
 
-  MutateSomeSettings(0, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
-
-  MutateSomeSettings(1, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
+  for (int seed : {0, 1}) {
+    ExpectedSettings expected =
+        MutateSettingsAcrossProfiles(seed, extension0, extension1, extension2);
+    expected.extension1.Merge(base_settings1.Clone());
+    expected.extension2.Merge(base_settings2.Clone());
+    ASSERT_TRUE(
+        AllExtensionSettingsSameChecker(GetSyncServices(), GetAllProfiles())
+            .Wait());
+    EXPECT_EQ(expected.extension0,
+              GetExtensionSettings(GetProfile(0), extension0))
+        << "For seed=" << seed;
+    EXPECT_EQ(expected.extension1,
+              GetExtensionSettings(GetProfile(0), extension1))
+        << "For seed=" << seed;
+    EXPECT_EQ(expected.extension2,
+              GetExtensionSettings(GetProfile(0), extension2))
+        << "For seed=" << seed;
+  }
 }
 
 IN_PROC_BROWSER_TEST_P(TwoClientExtensionSettingsSyncTest,
@@ -140,39 +156,46 @@ IN_PROC_BROWSER_TEST_P(TwoClientExtensionSettingsSyncTest,
   // (non-)change to those settings, sync, mutate again, sync.
   // Leave extension0 empty again for no particular reason other than it's
   // the only remaining unique combination given the other 2 tests have
-  // (empty, nonempty) and (nonempty, nonempty) configurations. We can't
-  // test (nonempty, nonempty) because the merging will provide
-  // unpredictable results, so test (empty, empty).
-  base::Value::Dict settings1;
-  settings1.Set("foo", "bar");
-  SetExtensionSettings(test()->verifier(), extension1, settings1);
-  SetExtensionSettings(test()->GetProfile(0), extension1, settings1);
-  base::Value::Dict settings2;
-  settings2.Set("foo", "bar");
-  settings2.Set("baz", "qux");
-  SetExtensionSettings(test()->verifier(), extension2, settings2);
-  SetExtensionSettings(test()->GetProfile(1), extension2, settings2);
+  // (empty, nonempty) and (nonempty, nonempty) configurations. Testing
+  // (nonempty, nonempty) cannot be done because the merging will provide
+  // unpredictable results, so (empty, empty) is tested.
+  base::DictValue base_settings1;
+  base_settings1.Set("foo", "bar");
+  SetExtensionSettings(GetProfile(0), extension1, base_settings1);
+  base::DictValue base_settings2;
+  base_settings2.Set("foo", "bar");
+  base_settings2.Set("baz", "qux");
+  SetExtensionSettings(GetProfile(1), extension2, base_settings2);
 
   ASSERT_TRUE(SetupSync());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
+  ASSERT_TRUE(
+      AllExtensionSettingsSameChecker(GetSyncServices(), GetAllProfiles())
+          .Wait());
+  EXPECT_EQ(base::DictValue(), GetExtensionSettings(GetProfile(0), extension0));
+  EXPECT_EQ(base_settings1, GetExtensionSettings(GetProfile(0), extension1));
+  EXPECT_EQ(base_settings2, GetExtensionSettings(GetProfile(0), extension2));
 
-  MutateSomeSettings(2, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
-
-  MutateSomeSettings(3, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
-
-  // Test a round of no-ops once, for sanity. Ideally we'd want to assert that
-  // this causes no sync activity, but that sounds tricky.
-  MutateSomeSettings(3, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
-
-  MutateSomeSettings(4, extension0, extension1, extension2);
-  ASSERT_TRUE(AwaitQuiescence());
-  ASSERT_TRUE(AllExtensionSettingsSameAsVerifier());
+  // The second seed=3 iteration tests a round of no-ops once, for sanity.
+  // Ideally this would assert that this causes no sync activity, but that
+  // is difficult to verify in integration tests.
+  for (int seed : {2, 3, 3, 4}) {
+    ExpectedSettings expected =
+        MutateSettingsAcrossProfiles(seed, extension0, extension1, extension2);
+    expected.extension1.Merge(base_settings1.Clone());
+    expected.extension2.Merge(base_settings2.Clone());
+    ASSERT_TRUE(
+        AllExtensionSettingsSameChecker(GetSyncServices(), GetAllProfiles())
+            .Wait());
+    EXPECT_EQ(expected.extension0,
+              GetExtensionSettings(GetProfile(0), extension0))
+        << "For seed=" << seed;
+    EXPECT_EQ(expected.extension1,
+              GetExtensionSettings(GetProfile(0), extension1))
+        << "For seed=" << seed;
+    EXPECT_EQ(expected.extension2,
+              GetExtensionSettings(GetProfile(0), extension2))
+        << "For seed=" << seed;
+  }
 }
 
 }  // namespace

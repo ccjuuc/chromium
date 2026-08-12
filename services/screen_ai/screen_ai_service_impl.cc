@@ -17,11 +17,9 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process.h"
-#include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/sequence_bound.h"
-#include "components/crash/core/common/crash_key.h"
 #include "services/screen_ai/buildflags/buildflags.h"
 #include "services/screen_ai/proto/chrome_screen_ai.pb.h"
 #include "services/screen_ai/proto/main_content_extractor_proto_convertor.h"
@@ -37,9 +35,8 @@
 #if BUILDFLAG(IS_LINUX)
 #include "partition_alloc/buildflags.h"
 
-#if PA_BUILDFLAG( \
-    ENABLE_ALLOCATOR_SHIM_PARTITION_ALLOC_DISPATCH_WITH_ADVANCED_CHECKS_SUPPORT)
-#include "base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc_with_advanced_checks.h"
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#include "base/allocator/partition_allocator/src/partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #endif
 #endif
 
@@ -65,31 +62,19 @@ constexpr base::TimeDelta kMaxWaitForResponseTime = base::Seconds(10);
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 // See `screen_ai_service.mojom` for more info.
-// LINT.IfChange(OcrClientType)
+// LINT.IfChange(OCRClientType)
 enum class OcrClientTypeForMetrics {
   kTest = 0,
   kPdfViewer = 1,
   kLocalSearch = 2,
   kCameraApp = 3,
-  kNotUsed = 4,  // Can be used for a new client.
+  kNotUsed = 4,
   kMediaApp = 5,
-  kScreenshotTextDetection,
-  kMaxValue = kScreenshotTextDetection
+  kScreenshotTextDetection = 6,
+  kCanvas = 7,
+  kMaxValue = kCanvas
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:OcrClientType)
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// See `screen_ai_service.mojom` for more info.
-// LINT.IfChange(MainContentExtractionClientType)
-enum class MainContentExtractionClientTypeForMetrics {
-  kTest = 0,
-  kReadingMode = 1,
-  kMainNode = 2,
-  kMahi = 3,
-  kMaxValue = kMahi
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:MainContentExtractionClientType)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:OCRClientType)
 
 OcrClientTypeForMetrics GetClientType(mojom::OcrClientType client_type) {
   switch (client_type) {
@@ -102,25 +87,12 @@ OcrClientTypeForMetrics GetClientType(mojom::OcrClientType client_type) {
       return OcrClientTypeForMetrics::kLocalSearch;
     case mojom::OcrClientType::kCameraApp:
       return OcrClientTypeForMetrics::kCameraApp;
+    case mojom::OcrClientType::kCanvas:
+      return OcrClientTypeForMetrics::kCanvas;
     case mojom::OcrClientType::kMediaApp:
       return OcrClientTypeForMetrics::kMediaApp;
     case mojom::OcrClientType::kScreenshotTextDetection:
       return OcrClientTypeForMetrics::kScreenshotTextDetection;
-  }
-}
-
-MainContentExtractionClientTypeForMetrics GetClientType(
-    mojom::MceClientType client_type) {
-  switch (client_type) {
-    case mojom::MceClientType::kTest:
-      CHECK_IS_TEST();
-      return MainContentExtractionClientTypeForMetrics::kTest;
-    case mojom::MceClientType::kReadingMode:
-      return MainContentExtractionClientTypeForMetrics::kReadingMode;
-    case mojom::MceClientType::kMainNode:
-      return MainContentExtractionClientTypeForMetrics::kMainNode;
-    case mojom::MceClientType::kMahi:
-      return MainContentExtractionClientTypeForMetrics::kMahi;
   }
 }
 
@@ -225,7 +197,7 @@ class ModelDataHolder {
 
   // Returns the file handle for `relative_file_path` if it exists.
   base::File* GetModelFile(const char* relative_file_path) {
-    if (!base::Contains(model_files_, relative_file_path)) {
+    if (!model_files_.contains(relative_file_path)) {
       return nullptr;
     }
     return &model_files_[relative_file_path];
@@ -240,13 +212,11 @@ ScreenAIService::ScreenAIService(
     : factory_receiver_(this, std::move(receiver)),
       ocr_receiver_(this),
       main_content_extraction_receiver_(this) {
-#if BUILDFLAG(IS_LINUX) && \
-    PA_BUILDFLAG(          \
-        ENABLE_ALLOCATOR_SHIM_PARTITION_ALLOC_DISPATCH_WITH_ADVANCED_CHECKS_SUPPORT)
+#if BUILDFLAG(IS_LINUX) && PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   // TODO(crbug.com/418199684): Remove when the bug is fixed.
   if (base::FeatureList::IsEnabled(
           ::features::kScreenAIPartitionAllocAdvancedChecksEnabled)) {
-    allocator_shim::InstallCustomDispatchForPartitionAllocWithAdvancedChecks();
+    allocator_shim::InstallPartitionAllocWithAdvancedChecks();
   }
 #endif
 
@@ -292,10 +262,6 @@ void ScreenAIService::LoadLibrary(const base::FilePath& library_path) {
 #if BUILDFLAG(IS_CHROMEOS)
   library_->SetLogger();
 #endif
-
-  if (features::IsScreenAIDebugModeEnabled()) {
-    library_->EnableDebugMode();
-  }
 
   library_->SetFileContentFunctions(&ModelDataHolder::GetDataSize,
                                     &ModelDataHolder::CopyData);
@@ -397,15 +363,19 @@ void ScreenAIService::BindMainContentExtractor(
 
 std::optional<chrome_screen_ai::VisualAnnotation>
 ScreenAIService::PerformOcrAndRecordMetrics(const SkBitmap& image) {
-  CHECK(base::Contains(ocr_client_types_,
-                       screen_ai_annotators_.current_receiver()));
+  CHECK(ocr_client_types_.contains(screen_ai_annotators_.current_receiver()));
   OcrClientTypeForMetrics client_type = GetClientType(
       ocr_client_types_.find(screen_ai_annotators_.current_receiver())->second);
   base::UmaHistogramEnumeration("Accessibility.ScreenAI.OCR.ClientType",
                                 client_type);
 
-  bool light_client = base::Contains(light_ocr_clients_,
-                                     screen_ai_annotators_.current_receiver());
+  if (image.drawsNothing()) {
+    VLOG(1) << "Skipping OCR because image is empty.";
+    return std::nullopt;
+  }
+
+  bool light_client =
+      light_ocr_clients_.contains(screen_ai_annotators_.current_receiver());
   if (light_client != last_ocr_light_) {
     library_->SetOCRLightMode(light_client);
     last_ocr_light_ = light_client;
@@ -597,39 +567,21 @@ bool ScreenAIService::ExtractMainContentInternalAndRecordMetrics(
     const ui::AXTreeUpdate& snapshot,
     ui::AXTree& tree,
     std::optional<std::vector<int32_t>>& content_node_ids) {
-  CHECK(base::Contains(mce_client_types_,
-                       screen2x_main_content_extractors_.current_receiver()));
   mce_last_used_ = base::TimeTicks::Now();
-  MainContentExtractionClientTypeForMetrics client_type = GetClientType(
-      mce_client_types_[screen2x_main_content_extractors_.current_receiver()]);
-
-  static crash_reporter::CrashKeyString<2> mce_client(
-      "main_content_extraction_client");
-  mce_client.Set(base::StringPrintf("%i", static_cast<int>(client_type)));
 
   // Early return if input is empty.
   if (snapshot.nodes.empty()) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ScreenAI.MainContentExtraction.Error.SnapshotEmpty",
-        client_type);
     return false;
   }
 
   // Deserialize the snapshot and reserialize it to a view hierarchy proto.
   if (!tree.Unserialize(snapshot)) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ScreenAI.MainContentExtraction.Error."
-        "SnapshotUnserialize",
-        client_type);
     return false;
   }
 
   std::optional<ViewHierarchyAndTreeSize> converted_snapshot =
       SnapshotToViewHierarchy(tree);
   if (!converted_snapshot) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ScreenAI.MainContentExtraction.Error.SnapshotProto",
-        client_type);
     return false;
   }
 
@@ -646,16 +598,6 @@ bool ScreenAIService::ExtractMainContentInternalAndRecordMetrics(
       content_node_ids.has_value() && content_node_ids->size() > 0;
   base::UmaHistogramBoolean(
       "Accessibility.ScreenAI.MainContentExtraction.Successful2", successful);
-
-  if (!content_node_ids.has_value()) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ScreenAI.MainContentExtraction.Error.ResultNull",
-        client_type);
-  } else if (content_node_ids->empty()) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.ScreenAI.MainContentExtraction.Error.ResultEmpty",
-        client_type);
-  }
 
   mce_last_used_ = base::TimeTicks::Now();
   if (successful) {

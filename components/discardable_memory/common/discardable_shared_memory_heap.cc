@@ -12,13 +12,11 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/discardable_shared_memory.h"
 #include "base/memory/page_size.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/memory_dump_manager.h"
 
@@ -115,7 +113,8 @@ DiscardableSharedMemoryHeap::~DiscardableSharedMemoryHeap() {
   memory_segments_.clear();
   DCHECK_EQ(num_blocks_, 0u);
   DCHECK_EQ(num_free_blocks_, 0u);
-  DCHECK(!base::Contains(free_spans_, false, &base::LinkedList<Span>::empty));
+  DCHECK(!std::ranges::contains(free_spans_, false,
+                                &base::LinkedList<Span>::empty));
 }
 
 std::unique_ptr<DiscardableSharedMemoryHeap::Span>

@@ -9,7 +9,6 @@
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/notreached.h"
-#import "components/send_tab_to_self/features.h"
 #import "ios/chrome/browser/settings/ui_bundled/notifications/notifications_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/notifications/notifications_item_identifier.h"
 #import "ios/chrome/browser/settings/ui_bundled/notifications/notifications_view_controller_delegate.h"
@@ -20,7 +19,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_multi_detail_text_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_switch_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -244,23 +242,14 @@ bool TooNarrowForBanner(UIView* view) {
         @(NotificationsItemIdentifier::ItemIdentifierContent)
       ]];
     }
-    if (base::FeatureList::IsEnabled(
-            send_tab_to_self::kSendTabToSelfIOSPushNotifications)) {
       [_snapshot appendItemsWithIdentifiers:@[
         @(NotificationsItemIdentifier::ItemIdentifierSendTab)
       ]];
-    }
     [_snapshot appendItemsWithIdentifiers:@[
-      @(NotificationsItemIdentifier::ItemIdentifierTips)
+      @(NotificationsItemIdentifier::ItemIdentifierTips),
+      @(NotificationsItemIdentifier::ItemIdentifierPriceTracking),
+      @(NotificationsItemIdentifier::ItemIdentifierSafetyCheck)
     ]];
-    [_snapshot appendItemsWithIdentifiers:@[
-      @(NotificationsItemIdentifier::ItemIdentifierPriceTracking)
-    ]];
-    if (IsSafetyCheckNotificationsEnabled()) {
-      [_snapshot appendItemsWithIdentifiers:@[
-        @(NotificationsItemIdentifier::ItemIdentifierSafetyCheck)
-      ]];
-    }
   }
   return _snapshot;
 }
@@ -378,8 +367,7 @@ bool TooNarrowForBanner(UIView* view) {
       [TableViewCellContentConfiguration legacyDequeueTableViewCell:_tableView];
   TableViewMultiDetailTextItem* detailItem =
       base::apple::ObjCCastStrict<TableViewMultiDetailTextItem>(item);
-  [detailItem configureCell:cell
-                 withStyler:[[ChromeTableViewStyler alloc] init]];
+  [detailItem configureCell:cell];
   cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
   cell.accessibilityTraits |= UIAccessibilityTraitButton;
   return cell;
@@ -410,13 +398,11 @@ bool TooNarrowForBanner(UIView* view) {
       self.shouldHideBanner ? nil : UIColor.whiteColor;
 }
 
-// Configures the `cell` for the `item` with the given `identifier`. A styler
-// is chosed depending on whether the item should be highlighted or not.
+// Configures the `cell` for the `item` with the given `identifier`.
 - (void)configureCell:(LegacyTableViewCell*)cell
                  item:(TableViewItem*)item
            identifier:(NotificationsItemIdentifier)identifier {
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
   cell.backgroundColor =
       (identifier == self.highlightedItem)
           ? [UIColor colorNamed:kBlueHaloColor]

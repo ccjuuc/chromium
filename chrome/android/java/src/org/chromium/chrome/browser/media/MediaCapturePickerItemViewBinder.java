@@ -19,13 +19,13 @@ public class MediaCapturePickerItemViewBinder {
         if (MediaCapturePickerItemProperties.CLICK_LISTENER == propertyKey) {
             view.setOnClickListener(model.get(MediaCapturePickerItemProperties.CLICK_LISTENER));
         } else if (MediaCapturePickerItemProperties.TAB_NAME == propertyKey) {
-            TextView titleView = (TextView) view.findViewById(R.id.tab_title);
+            TextView titleView = view.findViewById(R.id.tab_title);
             String text = model.get(MediaCapturePickerItemProperties.TAB_NAME);
             titleView.setText(text);
         } else if (MediaCapturePickerItemProperties.SELECTED == propertyKey) {
             if (model.get(MediaCapturePickerItemProperties.SELECTED)) {
                 view.setBackgroundColor(
-                        SemanticColorUtils.getColorSurfaceContainerHigh(view.getContext()));
+                        SemanticColorUtils.getColorPrimaryContainer(view.getContext()));
             } else {
                 view.setBackgroundResource(android.R.color.transparent);
             }

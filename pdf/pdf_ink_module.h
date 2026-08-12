@@ -73,18 +73,11 @@ class PdfInkModule {
   // `drawing_stroke_state().inputs`.
   void Draw(SkCanvas& canvas);
 
-  // Generates a thumbnail of `thumbnail_size` for the page at `page_index`
-  // using DrawThumbnail(). Sends the result to the WebUI if successful.
-  // Otherwise, do not send anything to the WebUI.
-  // `thumbnail_size` must be non-empty.
-  void GenerateAndSendInkThumbnail(int page_index,
-                                   const gfx::Size& thumbnail_size);
-
   // Returns whether the event was handled or not.
   bool HandleInputEvent(const blink::WebInputEvent& event);
 
   // Returns whether the message was handled or not.
-  bool OnMessage(const base::Value::Dict& message);
+  bool OnMessage(const base::DictValue& message);
 
   // Informs PdfInkModule that the plugin geometry changed.
   void OnGeometryChanged();
@@ -193,19 +186,33 @@ class PdfInkModule {
     std::vector<ink::StrokeInputBatch> inputs;
   };
 
-  class StrokeIdGenerator {
+  // Generates globally unique, monotonically increasing IDs for all user-added
+  // annotations (e.g., strokes and text).
+  //
+  // All user-added annotation types must share this single ID sequence.
+  // `PdfInkUndoRedoModel` relies on the underlying numerical value representing
+  // the chronological order of creation across all types to efficiently
+  // truncate the redo stack.
+  class IdGenerator {
    public:
-    StrokeIdGenerator();
-    ~StrokeIdGenerator();
+    IdGenerator();
+    ~IdGenerator();
 
-    // Returns an available ID and advance the next available ID internally.
-    InkStrokeId GetIdAndAdvance();
+    // Returns an available stroke ID and advance the next available ID
+    // internally.
+    InkStrokeId GetStrokeIdAndAdvance();
 
-    void ResetIdTo(InkStrokeId id);
+    // Returns an available text ID and advance the next available ID
+    // internally.
+    InkTextId GetTextIdAndAdvance();
+
+    void ResetIdTo(size_t id);
 
    private:
-    // The next available ID for use in FinishedStrokeState.
-    InkStrokeId next_stroke_id_ = InkStrokeId(0);
+    size_t GetIdAndAdvance();
+
+    // The next available ID.
+    size_t next_id_ = 0;
   };
 
   struct EraserState {
@@ -215,8 +222,7 @@ class PdfInkModule {
     ~EraserState();
 
     bool erasing = false;
-    base::flat_set<int> page_indices_with_stroke_erasures;
-    base::flat_set<int> page_indices_with_partitioned_mesh_erasures;
+    base::flat_set<int> page_indices_to_update;
 
     // The event position for the last input, similar to what is stored in
     // `DrawingStrokeState` for compensating for missed input events.
@@ -294,6 +300,11 @@ class PdfInkModule {
   bool OnTouchEnd(const blink::WebTouchEvent& event);
   bool OnTouchMove(const blink::WebTouchEvent& event);
 
+  // Dedicated handlers for eraser tip events from stylus devices.
+  bool OnEraserTipTouchStart(const blink::WebTouchEvent& event);
+  bool OnEraserTipTouchEnd(const blink::WebTouchEvent& event);
+  bool OnEraserTipTouchMove(const blink::WebTouchEvent& event);
+
   // Helper for event handlers above that deals with potentially missing events.
   // Can only be called when is_drawing_stroke() returns true.
   void MaybeFinishStrokeForMissingMouseUpEvent();
@@ -364,14 +375,14 @@ class PdfInkModule {
   // `ink::StrokeInput::ToolType::kTouch`.
   bool ShouldIgnoreTouchInput(ink::StrokeInput::ToolType tool_type);
 
-  void HandleAnnotationRedoMessage(const base::Value::Dict& message);
-  void HandleAnnotationUndoMessage(const base::Value::Dict& message);
-  void HandleFinishTextAnnotationMessage(const base::Value::Dict& message);
-  void HandleGetAllTextAnnotationsMessage(const base::Value::Dict& message);
-  void HandleGetAnnotationBrushMessage(const base::Value::Dict& message);
-  void HandleSetAnnotationBrushMessage(const base::Value::Dict& message);
-  void HandleSetAnnotationModeMessage(const base::Value::Dict& message);
-  void HandleStartTextAnnotationMessage(const base::Value::Dict& message);
+  void HandleAnnotationRedoMessage(const base::DictValue& message);
+  void HandleAnnotationUndoMessage(const base::DictValue& message);
+  void HandleEditTextAnnotationMessage(const base::DictValue& message);
+  void HandleFinishTextAnnotationMessage(const base::DictValue& message);
+  void HandleGetAllTextAnnotationsMessage(const base::DictValue& message);
+  void HandleGetAnnotationBrushMessage(const base::DictValue& message);
+  void HandleSetAnnotationBrushMessage(const base::DictValue& message);
+  void HandleSetAnnotationModeMessage(const base::DictValue& message);
 
   bool is_drawing_stroke() const {
     return std::holds_alternative<DrawingStrokeState>(current_tool_state_);
@@ -438,11 +449,13 @@ class PdfInkModule {
                             const blink::WebPointerProperties* properties);
 
   void ApplyUndoRedoCommands(const PdfInkUndoRedoModel::Commands& commands);
-  void ApplyUndoRedoCommandsHelper(std::set<PdfInkUndoRedoModel::IdType> ids,
+  void ApplyUndoRedoCommandsHelper(const PdfInkUndoRedoModel::IdSet& ids,
                                    bool should_draw);
 
-  void ApplyUndoRedoDiscards(
-      const PdfInkUndoRedoModel::DiscardedDrawCommands& discards);
+  // Discards annotations with IDs >= `lowest_discard` and resets the ID
+  // generator so those IDs can be reused. Does nothing if `lowest_discard` is
+  // nullopt.
+  void ApplyUndoRedoDiscards(std::optional<IdType> lowest_discard);
 
   // Sets the cursor to a drawing/erasing brush cursor when necessary.
   void MaybeSetCursor();
@@ -469,21 +482,9 @@ class PdfInkModule {
   // page `page_index`.
   TransformAndClipRect GetTransformAndClipRect(int page_index);
 
-  // Helper that calls GenerateAndSendInkThumbnail() without needing to specify
-  // the thumbnail size. This helper determines the size by asking
-  // PdfInkModuleClient.
-  void GenerateAndSendInkThumbnailInternal(int page_index);
-
-  // Draws `strokes_` for `page_index` into `canvas`. Here, `canvas` only covers
-  // the region for the page at `page_index`, so this only draws strokes for
-  // that page, regardless of page visibility.
-  bool DrawThumbnail(SkCanvas& canvas, int page_index);
-
-  // Updates the page indices in `ink_updates` using
-  // GenerateAndSendInkThumbnailInternal(), and updates the page indices in
-  // `pdf_updates` using PdfInkModuleClient::RequestThumbnail().
-  void RequestThumbnailUpdates(const base::flat_set<int>& ink_updates,
-                               const base::flat_set<int>& pdf_updates);
+  // Updates the page indices in `page_indices` using
+  // PdfInkModuleClient::RequestThumbnail().
+  void RequestThumbnailUpdates(const base::flat_set<int>& page_indices);
 
   // Handles the callback for PDF thumbnail generation requests. Sends
   // `thumbnail` to the WebUI.
@@ -500,8 +501,9 @@ class PdfInkModule {
   // Shapes loaded from the PDF.
   DocumentV2InkPathShapesMap loaded_v2_shapes_;
 
-  // Generates IDs for use in FinishedStrokeState and PdfInkUndoRedoModel.
-  StrokeIdGenerator stroke_id_generator_;
+  // Generates InkStrokeIds and InkTextIds for use in FinishedStrokeState and
+  // PdfInkUndoRedoModel.
+  IdGenerator id_generator_;
 
   // Store a PdfInkBrush for each brush type so that the brush parameters are
   // saved when swapping between brushes.  The PdfInkBrushes should not be
@@ -518,6 +520,9 @@ class PdfInkModule {
   std::variant<DrawingStrokeState, EraserState, TextHighlightState>
       current_tool_state_;
 
+  // Brush type to restore after eraser tip interaction ends.
+  std::optional<PdfInkBrush::Type> saved_brush_type_for_eraser_tip_;
+
   // The state of the strokes that have been completed.
   DocumentStrokesMap strokes_;
 
@@ -525,6 +530,10 @@ class PdfInkModule {
 
   // A timer used for reporting metrics during multi-click text selection.
   base::OneShotTimer text_selection_click_timer_;
+
+  // Key: Frontend text annotation ID.
+  // Value: Backend text annotation ID.
+  std::map<int, TextId> text_id_map_;
 
   base::WeakPtrFactory<PdfInkModule> weak_factory_{this};
 };

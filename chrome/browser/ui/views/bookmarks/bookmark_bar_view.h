@@ -14,6 +14,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
 #include "chrome/browser/bookmarks/bookmark_merged_surface_service_observer.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
@@ -22,9 +23,9 @@
 #include "chrome/browser/ui/views/bookmarks/bookmark_context_menu.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_controller_observer.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_menu_controller_views.h"
-#include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_bar.h"
 #include "components/bookmarks/browser/bookmark_node_data.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "ui/accessibility/ax_action_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/compositor/layer_tree_owner.h"
@@ -32,6 +33,7 @@
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/context_menu_controller.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/menu/menu_types.h"
 #include "ui/views/drag_controller.h"
 #include "ui/views/view.h"
@@ -42,8 +44,8 @@ class BookmarkBarViewTestHelper;
 class BookmarkContextMenu;
 class BookmarkMergedSurfaceService;
 struct BookmarkParentFolder;
-class Browser;
 class BrowserView;
+class BrowserWindowInterface;
 class Profile;
 
 namespace bookmarks {
@@ -90,7 +92,7 @@ class BookmarkBarView : public views::AccessiblePaneView,
   class ButtonSeparatorView;
 
   // |browser_view| can be NULL during tests.
-  BookmarkBarView(Browser* browser, BrowserView* browser_view);
+  BookmarkBarView(BrowserWindowInterface* browser, BrowserView* browser_view);
   BookmarkBarView(const BookmarkBarView&) = delete;
   BookmarkBarView& operator=(const BookmarkBarView&) = delete;
   ~BookmarkBarView() override;
@@ -100,7 +102,7 @@ class BookmarkBarView : public views::AccessiblePaneView,
   static void DisableAnimationsForTesting(bool disabled);
 
   // Returns the current browser.
-  Browser* browser() const { return browser_; }
+  BrowserWindowInterface* browser() const { return browser_; }
 
   void AddObserver(BookmarkBarViewObserver* observer);
   void RemoveObserver(BookmarkBarViewObserver* observer);
@@ -241,6 +243,11 @@ class BookmarkBarView : public views::AccessiblePaneView,
       const gfx::Point& point,
       ui::mojom::MenuSourceType source_type) override;
 
+  void RunContextMenuAt(std::vector<int64_t> node_ids,
+                        const gfx::Point& point,
+                        ui::mojom::MenuSourceType source_type,
+                        bool can_paste);
+
   // BookmarkContextMenuObserver:
   void WillRemoveBookmarks(
       const std::vector<raw_ptr<const bookmarks::BookmarkNode,
@@ -282,6 +289,8 @@ class BookmarkBarView : public views::AccessiblePaneView,
                        const ui::Event& event);
   void OnMenuButtonPressed(const BookmarkParentFolder& folder,
                            const ui::Event& event);
+  bool OnMenuButtonAccessibleAction(const BookmarkParentFolder& folder,
+                                    const ui::AXActionData& action_data);
 
   // NOTE: unless otherwise stated all methods that take an index are in terms
   // of the bookmark bar view. Typically the view index and model index are the
@@ -311,6 +320,11 @@ class BookmarkBarView : public views::AccessiblePaneView,
   std::unique_ptr<views::View> CreateBookmarkButton(
       const bookmarks::BookmarkNode* node,
       size_t index);
+
+  // Creates a MenuButton for a Bookmark Folder with an optional title.
+  std::unique_ptr<views::MenuButton> CreateMenuButtonForFolder(
+      const BookmarkParentFolder& folder,
+      std::u16string_view title = {});
 
   // Removes the bookmark button at the given index.
   void RemoveBookmarkButton(size_t index);
@@ -357,6 +371,12 @@ class BookmarkBarView : public views::AccessiblePaneView,
   // Marks the current drop as invalid and cancels the menu. Used when the
   // model is mutated and a drop is in progress.
   void InvalidateDrop();
+
+  // Shows a menu for the provided folder.
+  void ShowFolderMenuForFolder(const BookmarkParentFolder& folder);
+
+  // Hides the folder menu for the provided folder (idempotent).
+  void HideFolderMenuForFolder(const BookmarkParentFolder& folder);
 
   // Returns the node corresponding to |sender|, which is one of the
   // |bookmark_buttons_|.
@@ -417,6 +437,10 @@ class BookmarkBarView : public views::AccessiblePaneView,
   const views::View* GetSavedTabGroupsSeparatorViewForTesting() const;
 
   void MaybeShowSavedTabGroupsIntroPromo() const;
+
+  // Return true when `drop_info_` is not null, as it indicates that a drag
+  // action is being performed.
+  bool HasDropInfo() const;
 
   // True if BookmarkMergedSurfaceServiceLoaded() has been invoked,
   // either by manually checking `bookmark_service_->loaded()` or by
@@ -494,7 +518,7 @@ class BookmarkBarView : public views::AccessiblePaneView,
   raw_ptr<ButtonSeparatorView> bookmarks_separator_view_ = nullptr;
   raw_ptr<ButtonSeparatorView> saved_tab_groups_separator_view_ = nullptr;
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<BrowserView> browser_view_;
 
   // True if the owning browser is showing an infobar.

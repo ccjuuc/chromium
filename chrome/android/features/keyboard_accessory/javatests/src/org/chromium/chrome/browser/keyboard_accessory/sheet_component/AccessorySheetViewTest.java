@@ -21,6 +21,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import static org.chromium.base.test.transit.ViewElement.expectInvisibleOption;
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.chrome.browser.autofill.AutofillTestHelper.createClickActionWithFlags;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetProperties.ACTIVE_TAB_INDEX;
 import static org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetProperties.BACKGROUND;
@@ -58,6 +60,7 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -72,9 +75,9 @@ import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.ui.AsyncViewProvider;
 import org.chromium.ui.AsyncViewStub;
 import org.chromium.ui.ViewProvider;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.LazyConstructionPropertyMcp;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.test.util.ViewUtils;
 
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -150,7 +153,7 @@ public class AccessorySheetViewTest {
                             .add(
                                     new Tab(
                                             "Passwords",
-                                            null,
+                                            0,
                                             null,
                                             R.layout.empty_accessory_sheet,
                                             AccessoryTabType.PASSWORDS,
@@ -265,15 +268,13 @@ public class AccessorySheetViewTest {
                     mModel.set(TOP_SHADOW_VISIBLE, false);
                     mModel.set(VISIBLE, true);
                 }); // Render view.
-        ViewUtils.waitForViewCheckingState(
-                withId(R.id.accessory_sheet_shadow), ViewUtils.VIEW_INVISIBLE);
+        waitForView(withId(R.id.accessory_sheet_shadow), expectInvisibleOption());
 
         ThreadUtils.runOnUiThreadBlocking(() -> mModel.set(TOP_SHADOW_VISIBLE, true));
         onView(withId(R.id.accessory_sheet_shadow)).check(matches(isDisplayed()));
 
         ThreadUtils.runOnUiThreadBlocking(() -> mModel.set(TOP_SHADOW_VISIBLE, false));
-        ViewUtils.waitForViewCheckingState(
-                withId(R.id.accessory_sheet_shadow), ViewUtils.VIEW_INVISIBLE);
+        waitForView(withId(R.id.accessory_sheet_shadow), expectInvisibleOption());
     }
 
     @Test
@@ -299,8 +300,7 @@ public class AccessorySheetViewTest {
                 }); // Render view.
         AccessorySheetView view = mViewPager.take();
 
-        ViewUtils.waitForViewCheckingState(
-                withId(R.id.sheet_header_shadow), ViewUtils.VIEW_INVISIBLE);
+        waitForView(withId(R.id.sheet_header_shadow), expectInvisibleOption());
 
         assertEquals(kMaxWidth, view.getWidth());
         assertEquals(kPadding, view.getPaddingStart());
@@ -323,6 +323,7 @@ public class AccessorySheetViewTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287120
     public void testHeader() {
         Runnable runnable = mock(Runnable.class);
 
@@ -364,6 +365,7 @@ public class AccessorySheetViewTest {
     @Test
     @MediumTest
     @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_SECURITY_TOUCH_EVENT_FILTERING_ANDROID})
+    @DisableFeatures({ChromeFeatureList.HOME_BUTTON_REMOVAL})
     public void testFiltersTouchesWhenObscured() {
         Runnable runnable = mock(Runnable.class);
 
@@ -388,7 +390,7 @@ public class AccessorySheetViewTest {
     private Tab createTestTabWithTextView(String textViewCaption) {
         return new Tab(
                 "Passwords",
-                null,
+                0,
                 null,
                 R.layout.empty_accessory_sheet,
                 AccessoryTabType.PASSWORDS,

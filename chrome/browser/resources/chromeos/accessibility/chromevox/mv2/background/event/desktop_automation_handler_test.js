@@ -10,6 +10,26 @@ GEN_INCLUDE(['../../testing/fake_objects.js']);
  * Test fixture for DesktopAutomationHandler.
  */
 ChromeVoxMV2DesktopAutomationHandlerTest = class extends ChromeVoxE2ETest {
+  // TODO(crbug.com/452061489): Fix tests for when WebUI Omnibox is enabled
+  // and then remove `testGenCppIncludes()` and `featureList()`.
+  /** @override */
+  testGenCppIncludes() {
+    super.testGenCppIncludes();
+    GEN(`
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+    `);
+  }
+
+  get featureList() {
+    return {
+      disabled: [
+        'features::kAccessibilityManifestV3ChromeVox',
+        'omnibox::internal::kWebUIOmniboxPopup',
+        'omnibox::internal::kWebUIOmniboxAimPopup',
+      ],
+    };
+  }
+
   /** @override */
   async setUpDeferred() {
     await super.setUpDeferred();
@@ -30,13 +50,6 @@ ChromeVoxMV2DesktopAutomationHandlerTest = class extends ChromeVoxE2ETest {
     };
   }
 
-  /** @override */
-  testGenCppIncludes() {
-    super.testGenCppIncludes();
-    GEN(`
-  #include "chrome/browser/task_manager/common/task_manager_features.h"
-      `);
-  }
 };
 
 AX_TEST_F(
@@ -485,77 +498,9 @@ AX_TEST_F(
       assertFalse(DesktopAutomationInterface.instance.isSubMenuShowing_);
     });
 
-/**
- * Test fixture for DesktopAutomationHandler without TaskManagerDesktopRefresh.
- * `features::kTaskManagerDesktopRefresh` is included in the base fixture which
- * inherits from ChromeVoxE2ETest.
- */
-ChromeVoxMV2DesktopAutomationHandlerWithoutTaskManagerDesktopRefreshTest =
-    class extends ChromeVoxMV2DesktopAutomationHandlerTest {
-  /** @override */
-  get featureList() {
-    let list = super.featureList || {};
-    list.disabled = list.disabled || [];
-    list.disabled.push('features::kTaskManagerDesktopRefresh');
-    return list;
-  }
-};
-
-
-// TODO(crbug.com/407459387): Fix and re-enable this test.
 TEST_F(
-    'ChromeVoxMV2DesktopAutomationHandlerWithoutTaskManagerDesktopRefreshTest',
-    'DISABLED_TaskManagerTableView', function() {
-      // TODO(crbug.com/397484647): Merge this test with the
-      // TaskManagerDesktopRefresh version, and reintegrate it back into
-      // ChromeVoxMV2DesktopAutomationHandlerTest after the flag is enabled by
-      // default.
-
-      const mockFeedback = this.createMockFeedback();
-      this.runWithLoadedDesktop(desktop => {
-        mockFeedback
-            .call(() => {
-              EventGenerator.sendKeyPress(KeyCode.ESCAPE, {search: true});
-            })
-            .expectSpeech('Task Manager, window')
-            .call(() => {
-              EventGenerator.sendKeyPress(KeyCode.DOWN);
-            })
-            .expectSpeech('Browser', /row [0-9]+ column 1/, 'Task')
-            .call(() => {
-              EventGenerator.sendKeyPress(KeyCode.DOWN);
-            })
-            // Make sure it doesn't repeat the previous line!
-            .expectNextSpeechUtteranceIsNot('Browser')
-            .expectSpeech(/row [0-9]+ column 1/)
-
-            .replay();
-      });
-    });
-
-/**
- * Test fixture for DesktopAutomationHandler incl. TaskManagerDesktopRefresh.
- * `features::kTaskManagerDesktopRefresh` is included in the base fixture which
- * inherits from ChromeVoxE2ETest.
- */
-ChromeVoxMV2DesktopAutomationHandlerWithTaskManagerDesktopRefreshTest =
-    class extends ChromeVoxMV2DesktopAutomationHandlerTest {
-  /** @override */
-  get featureList() {
-    let list = super.featureList || {};
-    list.enabled = list.enabled || [];
-    list.enabled.push('features::kTaskManagerDesktopRefresh');
-    return list;
-  }
-};
-
-TEST_F(
-    'ChromeVoxMV2DesktopAutomationHandlerWithTaskManagerDesktopRefreshTest',
-    'TaskManagerTableView', function() {
-      // TODO(crbug.com/397484647): Merge this test with the production
-      // (ChromeVoxMV2DesktopAutomationHandlerWithoutTaskManagerDesktopRefreshTest.
-      // TaskManagerTableView) version after the flag is enabled by default.
-
+    'ChromeVoxMV2DesktopAutomationHandlerTest', 'TaskManagerTableView',
+    function() {
       const mockFeedback = this.createMockFeedback();
       this.runWithLoadedDesktop(desktop => {
         mockFeedback
@@ -570,7 +515,6 @@ TEST_F(
             .call(() => {
               EventGenerator.sendKeyPress(KeyCode.TAB);
               EventGenerator.sendKeyPress(KeyCode.TAB);
-              EventGenerator.sendKeyPress(KeyCode.DOWN);
             })
             // The Task Manager Refresh has a TabbedPane UI which splits system
             // processes and user-facing processes (tabs & extensions), so
@@ -584,4 +528,52 @@ TEST_F(
 
             .replay();
       });
+    });
+
+AX_TEST_F(
+    'ChromeVoxMV2DesktopAutomationHandlerTest',
+    'WebPageCannotTriggerDictationHintVoice', async function() {
+      const mockFeedback = this.createMockFeedback();
+      const site =
+          `<div role="alert" class="DictationHintView">test text</div>`;
+      const root = await this.runWithLoadedTree(site);
+      const alert = root.find({role: RoleType.ALERT});
+      assertTrue(Boolean(alert));
+      assertEquals('DictationHintView', alert.className);
+
+      const event = new CustomAutomationEvent(EventType.ALERT, alert);
+      mockFeedback.call(() => DesktopAutomationHandler.MIN_ALERT_DELAY_MS = -1)
+          .call(() => this.handler_.onAlert_(event))
+          // Verify that the web-based alert does not trigger the trusted
+          // DICTATION_HINT personality (which would have relativePitch: 0.3).
+          .expectSpeech((candidate) => {
+            const props = candidate.properties || {};
+            return /test text/.test(candidate.text) &&
+                props.relativePitch !== 0.3;
+          });
+      await mockFeedback.replay();
+    });
+
+AX_TEST_F(
+    'ChromeVoxMV2DesktopAutomationHandlerTest',
+    'NativeDictationHintTriggersVoiceProperties', async function() {
+      const mockFeedback = this.createMockFeedback();
+      const site =
+          `<div role="alert" class="DictationHintView">hint text</div>`;
+      const root = await this.runWithLoadedTree(site);
+      const alert = root.find({role: RoleType.ALERT});
+      assertTrue(Boolean(alert));
+      assertEquals('DictationHintView', alert.className);
+
+      // Mock the root to simulate a native UI node (not in a web area).
+      const fakeRoot = {role: RoleType.DESKTOP};
+      Object.defineProperty(alert, 'root', {get: () => fakeRoot});
+
+      const event = new CustomAutomationEvent(EventType.ALERT, alert);
+      mockFeedback.call(() => DesktopAutomationHandler.MIN_ALERT_DELAY_MS = -1)
+          .call(() => this.handler_.onAlert_(event))
+          // Verify that the native alert triggers the trusted voice properties
+          // (relativePitch: 0.3).
+          .expectSpeechWithProperties({relativePitch: 0.3}, /hint text/);
+      await mockFeedback.replay();
     });

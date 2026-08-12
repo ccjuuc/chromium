@@ -4,9 +4,10 @@
 
 #include "chrome/updater/ipc/ipc_security.h"
 
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "components/named_mojo_ipc_server/connection_info.h"
 #include "components/named_mojo_ipc_server/endpoint_options.h"
+#include "mojo/public/c/system/invitation.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 
 namespace updater {
@@ -25,7 +26,8 @@ named_mojo_ipc_server::EndpointOptions CreateServerEndpointOptions(
     const mojo::NamedPlatformChannel::ServerName& server_name) {
   named_mojo_ipc_server::EndpointOptions options{
       server_name,
-      named_mojo_ipc_server::EndpointOptions::kUseIsolatedConnection};
+      named_mojo_ipc_server::EndpointOptions::kUseIsolatedConnection,
+      MOJO_SEND_INVITATION_FLAG_UNTRUSTED_PROCESS};
 
   if (IsSystemInstall()) {
     // A DACL to grant:

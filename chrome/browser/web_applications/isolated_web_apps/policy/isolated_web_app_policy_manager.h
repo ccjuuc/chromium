@@ -16,13 +16,12 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_external_install_options.h"
 #include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_installer.h"
-#include "chrome/browser/web_applications/isolated_web_apps/runtime_data/chrome_iwa_runtime_data_provider.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/webapps/isolated_web_apps/public/iwa_runtime_data_provider.h"
 #include "net/base/backoff_entry.h"
 
 namespace web_app {
@@ -44,9 +43,6 @@ class IsolatedWebAppPolicyManager {
   static void SetOnPolicyFullyProcessedCallbackForTesting(
       base::RepeatingClosure callback);
 
-  static std::vector<IsolatedWebAppExternalInstallOptions>
-  GetIwaInstallForceList(const Profile& profile);
-
   explicit IsolatedWebAppPolicyManager(Profile* profile);
 
   IsolatedWebAppPolicyManager(const IsolatedWebAppPolicyManager&) = delete;
@@ -67,7 +63,7 @@ class IsolatedWebAppPolicyManager {
   void ConfigureObserversOnSessionStart();
   void CleanupAndProcessPolicyOnSessionStart();
   void ProcessPolicy();
-  void DoProcessPolicy(AllAppsLock& lock, base::Value::Dict& debug_info);
+  void DoProcessPolicy(AllAppsLock& lock, base::DictValue& debug_info);
   void OnPolicyProcessed();
 
   void LogAddPolicyInstallSourceResult(
@@ -102,12 +98,12 @@ class IsolatedWebAppPolicyManager {
     ProcessLogs();
     ~ProcessLogs();
 
-    void AppendCompletedStep(base::Value::Dict log);
+    void AppendCompletedStep(base::DictValue log);
 
     base::Value ToDebugValue() const;
 
    private:
-    base::circular_deque<base::Value::Dict> logs_;
+    base::circular_deque<base::DictValue> logs_;
   };
 
   raw_ptr<Profile> profile_ = nullptr;
@@ -117,7 +113,7 @@ class IsolatedWebAppPolicyManager {
 
   bool reprocess_policy_needed_ = false;
   bool policy_is_being_processed_ = false;
-  base::Value::Dict current_process_log_;
+  base::DictValue current_process_log_;
 
   net::BackoffEntry install_retry_backoff_entry_;
 

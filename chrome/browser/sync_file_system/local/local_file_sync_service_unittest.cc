@@ -7,7 +7,6 @@
 #include <memory>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -55,7 +54,7 @@ namespace sync_file_system {
 
 namespace {
 
-const char kOrigin[] = "http://example.com";
+const char kOrigin[] = "chrome-extension://example";
 
 void DidPrepareForProcessRemoteChange(const base::Location& where,
                                       base::OnceClosure oncompleted,
@@ -306,7 +305,7 @@ TEST_F(LocalFileSyncServiceTest, LocalChangeObserver) {
 }
 
 #if BUILDFLAG(IS_WIN)
-// Flaky: http://crbug.com/171487
+// Flaky: http://crbug.com/40960777
 #define MAYBE_LocalChangeObserverMultipleContexts\
     DISABLED_LocalChangeObserverMultipleContexts
 #else
@@ -315,7 +314,7 @@ TEST_F(LocalFileSyncServiceTest, LocalChangeObserver) {
 #endif
 
 TEST_F(LocalFileSyncServiceTest, MAYBE_LocalChangeObserverMultipleContexts) {
-  const char kOrigin2[] = "http://foo";
+  const char kOrigin2[] = "chrome-extension://foo";
   CannedSyncableFileSystem file_system2(
       GURL(kOrigin2), in_memory_env_.get(), content::GetIOThreadTaskRunner({}),
       base::ThreadPool::CreateSingleThreadTaskRunner({base::MayBlock()}));
@@ -657,7 +656,7 @@ TEST_F(OriginChangeMapTest, Basic) {
   GURL origin;
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 
@@ -670,7 +669,7 @@ TEST_F(OriginChangeMapTest, Basic) {
   all_origins.insert(kOrigin3);
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 
@@ -681,7 +680,7 @@ TEST_F(OriginChangeMapTest, Basic) {
   all_origins.insert(kOrigin3);
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 
@@ -692,7 +691,7 @@ TEST_F(OriginChangeMapTest, Basic) {
   all_origins.insert(std::begin(kOrigins), std::end(kOrigins));
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 }
@@ -716,7 +715,7 @@ TEST_F(OriginChangeMapTest, WithDisabled) {
   GURL origin;
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 
@@ -728,7 +727,7 @@ TEST_F(OriginChangeMapTest, WithDisabled) {
   all_origins.insert(kOrigin3);
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 
@@ -748,7 +747,7 @@ TEST_F(OriginChangeMapTest, WithDisabled) {
   all_origins.insert(kOrigin3);
   while (!all_origins.empty()) {
     ASSERT_TRUE(NextOriginToProcess(&origin));
-    ASSERT_TRUE(base::Contains(all_origins, origin));
+    ASSERT_TRUE(all_origins.contains(origin));
     all_origins.erase(origin);
   }
 }

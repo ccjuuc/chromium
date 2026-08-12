@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/adaptive_toolbar_mediator.h"
 
-#import "base/containers/contains.h"
 #import "base/memory/ptr_util.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
@@ -16,6 +15,7 @@
 #import "ios/chrome/browser/collaboration/model/messaging/messaging_backend_service_bridge.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
 #import "ios/chrome/browser/menu/ui_bundled/browser_action_factory.h"
+#import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter_observer_bridge.h"
@@ -25,16 +25,11 @@
 #import "ios/chrome/browser/shared/model/url/url_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
-#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/load_query_commands.h"
-#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_tab_group_state.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/toolbar_consumer.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/legacy_toolbar_consumer.h"
 #import "ios/chrome/browser/url_loading/model/image_search_param_generator.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
@@ -355,7 +350,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
   }
 }
 
-- (void)setConsumer:(id<ToolbarConsumer>)consumer {
+- (void)setConsumer:(id<LegacyToolbarConsumer>)consumer {
   _consumer = consumer;
   [_consumer setVoiceSearchEnabled:ios::provider::IsVoiceSearchEnabled()];
   if (self.webState) {
@@ -428,6 +423,14 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
 
   BOOL isNTP = IsVisibleURLNewTabPage(self.webState);
   [self.consumer setIsNTP:isNTP];
+
+  BOOL isStartSurface = NO;
+  if (isNTP) {
+    NewTabPageTabHelper* NTPHelper =
+        NewTabPageTabHelper::FromWebState(self.webState);
+    isStartSurface = NTPHelper && NTPHelper->ShouldShowStartSurface();
+  }
+  [self.consumer setIsStartSurface:isStartSurface];
   // Never show the loading UI for an NTP.
   BOOL isLoading = self.webState->IsLoading() && !isNTP;
   [self.consumer setLoadingState:isLoading];
@@ -442,7 +445,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
 - (void)updateNavigationBackAndForwardStateForWebState:
     (web::WebState*)webState {
   DCHECK(webState);
-  const id<ToolbarConsumer> consumer = self.consumer;
+  const id<LegacyToolbarConsumer> consumer = self.consumer;
   WebNavigationBrowserAgent* navigationBrowserAgent =
       self.navigationBrowserAgent;
   if (navigationBrowserAgent) {
@@ -503,7 +506,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
                                                        ->GetVirtualURL()]) {
       title = l10n_util::GetNSStringWithFixup(IDS_IOS_NEW_INCOGNITO_TAB);
       image = SymbolWithPalette(
-          CustomSymbolWithPointSize(kIncognitoSymbol, kInfobarSymbolPointSize),
+          SymbolWithPointSize(SymbolIncognito, kInfobarSymbolPointSize),
           @[ UIColor.whiteColor ]);
     } else {
       title = base::SysUTF16ToNSString(navigationItem->GetTitleForDisplay());
@@ -511,7 +514,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
       if (!gfxImage.IsEmpty()) {
         image = gfxImage.ToUIImage();
       } else {
-        image = DefaultSymbolWithPointSize(kDocSymbol, kInfobarSymbolPointSize);
+        image = SymbolWithPointSize(SymbolDoc, kInfobarSymbolPointSize);
       }
     }
 
@@ -542,7 +545,6 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
   UIAction* newIncognitoSearch =
       [self.actionFactory actionToStartNewIncognitoSearch];
   UIAction* cameraSearch;
-  UIMenuElement* tabGroupMenu;
 
   NSMutableArray* staticActions = [[NSMutableArray alloc] init];
 
@@ -558,44 +560,13 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
   }
 
   [staticActions addObjectsFromArray:@[
-    cameraSearch, voiceSearch, newIncognitoSearch, newSearch
+    newSearch, newIncognitoSearch, voiceSearch, cameraSearch
   ]];
 
   if (experimental_flags::EnableAIPrototypingMenu()) {
     UIAction* openAIMenu = [self.actionFactory actionToOpenAIMenu];
     [staticActions addObject:openAIMenu];
   }
-
-  if (base::FeatureList::IsEnabled(kTabGroupInTabIconContextMenu)) {
-    std::set<const TabGroup*> groups = self.webStateList->GetGroups();
-    const TabGroup* currentGroup = self.webStateList->GetGroupOfWebStateAt(
-        self.webStateList->GetIndexOfWebState(self.webState));
-
-    __weak __typeof(self) weakSelf = self;
-    /// If the current tab is in a group, display the "Move Tab to Group" menu.
-    /// Otherwise, display the "Add Tab to Group" menu. If a user doesn't have
-    /// any Tab Groups, the "Add Tab to Group" menu will just be a "Add Tab to
-    /// New Group" button.
-    if (currentGroup) {
-      tabGroupMenu = [self.actionFactory menuToMoveTabToGroupWithGroups:groups
-          currentGroup:currentGroup
-          moveBlock:^(const TabGroup* group) {
-            [weakSelf moveTabToGroupBlock:group];
-          }
-          removeBlock:^{
-            [weakSelf removeTabFromGroupBlock];
-          }];
-    } else {
-      tabGroupMenu = [self.actionFactory
-          menuToAddTabToGroupWithGroups:groups
-                           numberOfTabs:1
-                                  block:^(const TabGroup* group) {
-                                    [weakSelf addTabToGroupBlock:group];
-                                  }];
-    }
-    [staticActions addObject:tabGroupMenu];
-  }
-
   UIMenuElement* clipboardAction = [self menuElementForPasteboard];
   if (clipboardAction) {
     UIMenu* staticMenu = [UIMenu menuWithTitle:@""
@@ -604,13 +575,14 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
                                        options:UIMenuOptionsDisplayInline
                                       children:staticActions];
 
-    return [UIMenu menuWithTitle:@"" children:@[ clipboardAction, staticMenu ]];
+    return [UIMenu menuWithTitle:@"" children:@[ staticMenu, clipboardAction ]];
   }
   return [UIMenu menuWithTitle:@"" children:staticActions];
 }
 
 /// Returns the menu for the TabGrid button.
 - (UIMenu*)menuForTabGridButton {
+  NSMutableArray* staticActions = [[NSMutableArray alloc] init];
   UIAction* openNewTab = [self.actionFactory actionToOpenNewTab];
 
   UIAction* openNewIncognitoTab =
@@ -618,8 +590,9 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
 
   UIAction* closeTab = [self.actionFactory actionToCloseCurrentTab];
 
-  return [UIMenu menuWithTitle:@""
-                      children:@[ closeTab, openNewTab, openNewIncognitoTab ]];
+  [staticActions
+      addObjectsFromArray:@[ closeTab, openNewTab, openNewIncognitoTab ]];
+  return [UIMenu menuWithTitle:@"" children:staticActions];
 }
 
 /// Returns the UIMenuElement for the content of the pasteboard. Can return nil.
@@ -631,8 +604,7 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
     std::set<ClipboardContentType> clipboardContentTypeValues =
         clipboardContentType.value();
 
-    if (base::Contains(clipboardContentTypeValues,
-                       ClipboardContentType::Image)) {
+    if (clipboardContentTypeValues.contains(ClipboardContentType::Image)) {
       if (base::FeatureList::IsEnabled(kEnableLensInOmniboxCopiedImage)) {
         if (search_engines::SupportsSearchImageWithLens(
                 self.templateURLService) &&
@@ -644,11 +616,10 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
           return [self.actionFactory actionToSearchCopiedImage];
         }
       }
-    } else if (base::Contains(clipboardContentTypeValues,
-                              ClipboardContentType::URL)) {
+    } else if (clipboardContentTypeValues.contains(ClipboardContentType::URL)) {
       return [self.actionFactory actionToSearchCopiedURL];
-    } else if (base::Contains(clipboardContentTypeValues,
-                              ClipboardContentType::Text)) {
+    } else if (clipboardContentTypeValues.contains(
+                   ClipboardContentType::Text)) {
       return [self.actionFactory actionToSearchCopiedText];
     }
   }
@@ -720,56 +691,6 @@ std::optional<tab_groups::LocalTabGroupID> LocalTabGroupID(
   const TabGroup* activeGroup = [self activeWebStateTabGroup];
   [self.consumer setTabGridButtonBlueDot:_dirtyGroups.contains(
                                              activeGroup->tab_group_id())];
-}
-
-/// Triggers the creation of a New Tab Group.
-- (void)createNewTabGroup {
-  if (!self.webState) {
-    return;
-  }
-
-  std::set<web::WebStateID> identifiers;
-  identifiers.insert(self.webState->GetUniqueIdentifier());
-  id<TabGroupsCommands> handler =
-      HandlerForProtocol(self.commandDispatcher, TabGroupsCommands);
-
-  [handler showTabGroupCreationForTabs:identifiers];
-}
-
-/// Creates a Move Tab to Group block for the Move Tab to Group menu.
-- (void)moveTabToGroupBlock:(const TabGroup*)group {
-  int tabIndex = self.webStateList->GetIndexOfWebState(self.webState);
-  if (tabIndex == WebStateList::kInvalidIndex) {
-    return;
-  }
-  std::set<int> tabIndices = {tabIndex};
-  self.webStateList->MoveToGroup(tabIndices, group);
-}
-
-/// Creates a Remove Tab from Group block for the Move Tab to Group menu.
-- (void)removeTabFromGroupBlock {
-  int tabIndex = self.webStateList->GetIndexOfWebState(self.webState);
-  if (tabIndex == WebStateList::kInvalidIndex) {
-    return;
-  }
-  std::set<int> tabIndices = {tabIndex};
-  self.webStateList->RemoveFromGroups(tabIndices);
-}
-
-/// Creates an Add Tab to Group block for the Add Tab to Group menu.
-- (void)addTabToGroupBlock:(const TabGroup*)group {
-  int tabIndex = self.webStateList->GetIndexOfWebState(self.webState);
-  if (tabIndex == WebStateList::kInvalidIndex) {
-    return;
-  }
-
-  std::set<int> tabIndices = {tabIndex};
-
-  if (group) {
-    self.webStateList->MoveToGroup(tabIndices, group);
-  } else {
-    [self createNewTabGroup];
-  }
 }
 
 // Gets messages to indicate that a shared tab group has been changed.

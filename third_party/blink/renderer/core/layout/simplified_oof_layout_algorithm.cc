@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/layout/simplified_oof_layout_algorithm.h"
 
+#include "third_party/blink/renderer/core/layout/fragmentation_utils.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -19,7 +20,8 @@ SimplifiedOofLayoutAlgorithm::SimplifiedOofLayoutAlgorithm(
   DCHECK(params.space.HasKnownFragmentainerBlockSize());
 
   container_builder_.SetBoxType(last_fragmentainer.GetBoxType());
-  container_builder_.SetPageNameIfNeeded(last_fragmentainer.PageName());
+  container_builder_.SetPageNameIfNeeded(
+      PageNameForChildFragment(container_builder_, last_fragmentainer));
   container_builder_.SetFragmentBlockSize(
       params.space.FragmentainerBlockSize());
   container_builder_.SetHasOutOfFlowFragmentChild(true);
@@ -40,13 +42,15 @@ void SimplifiedOofLayoutAlgorithm::ResumeColumnLayout(
   // points at the content that we're supposed to resume at after the spanner.
   for (const auto& child_break_token :
        old_fragment_break_token->ChildBreakTokens()) {
-    if (!child_break_token->InputNode().IsOutOfFlowPositioned()) {
+    if (!To<BlockBreakToken>(child_break_token.Get())
+             ->InputNode()
+             .IsOutOfFlowPositioned()) {
       container_builder_.AddBreakToken(child_break_token);
     }
   }
 
   // Carry over the IsCausedByColumnSpanner flag (stored in the break token).
-  container_builder_.SetHasColumnSpanner(true);
+  container_builder_.SetHasColumnSpanner();
 }
 
 const LayoutResult* SimplifiedOofLayoutAlgorithm::Layout() {

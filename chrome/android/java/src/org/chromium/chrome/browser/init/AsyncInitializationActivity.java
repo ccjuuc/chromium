@@ -27,6 +27,7 @@ import org.chromium.base.library_loader.LoaderErrors;
 import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.BuildConfig;
+import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
@@ -39,12 +40,16 @@ import org.chromium.chrome.browser.WarmupManager;
 import org.chromium.chrome.browser.base.ColdStartTracker;
 import org.chromium.chrome.browser.firstrun.FirstRunFlowSequencer;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcherProvider;
 import org.chromium.chrome.browser.metrics.SimpleStartupForegroundSessionDetector;
 import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
 import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcherImpl;
+import org.chromium.chrome.browser.multiwindow.WindowOcclusionTracker;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.components.browser_ui.share.ShareHelper;
 import org.chromium.components.browser_ui.util.FirstDrawDetector;
@@ -55,6 +60,7 @@ import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.base.UiAndroidFeatureList;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.display.DisplayUtil;
+import org.chromium.ui.widget.Toast;
 
 /**
  * An activity that talks with application and activity level delegates for async initialization.
@@ -65,6 +71,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     @VisibleForTesting
     public static final String FIRST_DRAW_COMPLETED_TIME_MS_UMA = "FirstDrawCompletedTime";
 
+    public static final String TAG_PERSIST_ACROSS_REBOOTS = "PersistAcrossReboots";
     public static final String TAG_MULTI_INSTANCE = "MultiInstance";
 
     protected final Handler mHandler;
@@ -96,6 +103,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     private @Nullable ActivityWindowAndroid mWindowAndroid;
     private @MonotonicNonNull OneshotSupplier<ProfileProvider> mProfileProviderSupplier;
     private @Nullable Bundle mSavedInstanceState;
+    private boolean mReceivedPersistentState;
     private @Nullable PersistableBundle mPersistentInstanceState;
     private int mCurrentOrientation;
     private boolean mDestroyed;
@@ -148,6 +156,9 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         // mLifecycleDispatcher.dispatchOnDestroy() because objects subscribing to
         // mLifecycleDispatcher's onDestroy events may have references to ActivityWindowAndroid.
         if (mWindowAndroid != null) {
+            if (isSelfOcclusionTrackingEnabled()) {
+                WindowOcclusionTracker.getInstance().untrack(mWindowAndroid);
+            }
             mWindowAndroid.destroy();
             mWindowAndroid = null;
         }
@@ -165,7 +176,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
             // 1. To prevent multi-window from hiding the tabstrip when on a tablet.
             // 2. To ensure mIsTablet only needs to be set once. Since the override lasts for the
             //    life of the activity, it will never change via onConfigurationUpdated().
-            // See crbug.com/588838, crbug.com/662338, crbug.com/780593.
+            // See crbug.com/40457992, crbug.com/40492108, crbug.com/41353023.
             overrideConfig.smallestScreenWidthDp =
                     DisplayUtil.getCurrentSmallestScreenWidth(baseContext);
             return true;
@@ -204,7 +215,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
 
         // Start loading libraries. It happens before triggerLayoutInflation(). This "hides" library
         // loading behind UI inflation and prevents stalling UI thread.
-        // See https://crbug.com/796957 for details. Note that for optimal performance
+        // See https://crbug.com/41361935 for details. Note that for optimal performance
         // AsyncInitTaskRunner.startBackgroundTasks() needs to start warm up renderer only after
         // library is loaded.
 
@@ -296,20 +307,8 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         checkOrientation();
         findViewById(android.R.id.content)
                 .addOnLayoutChangeListener(
-                        new View.OnLayoutChangeListener() {
-                            @Override
-                            public void onLayoutChange(
-                                    View v,
-                                    int left,
-                                    int top,
-                                    int right,
-                                    int bottom,
-                                    int oldLeft,
-                                    int oldTop,
-                                    int oldRight,
-                                    int oldBottom) {
-                                checkOrientation();
-                            }
+                        (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                            checkOrientation();
                         });
         mNativeInitializationController.onNativeInitializationComplete();
         mLifecycleDispatcher.dispatchNativeInitializationFinished();
@@ -353,11 +352,27 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     @Override
     public void onCreate(
             @Nullable Bundle savedInstanceState, @Nullable PersistableBundle outPersistentState) {
+        if (ChromeFeatureList.sPersistAcrossRebootsDebugLogs.isEnabled()) {
+            Log.i(TAG_PERSIST_ACROSS_REBOOTS, "onCreate()");
+        }
         if (shouldPersistAcrossReboots()) {
+            mReceivedPersistentState = outPersistentState != null;
+            if (ChromeFeatureList.sPersistAcrossRebootsDebugLogs.isEnabled()) {
+                Log.i(
+                        TAG_PERSIST_ACROSS_REBOOTS,
+                        mReceivedPersistentState ? "Has persistent state" : "No persistent state");
+            }
             mPersistentInstanceState = outPersistentState;
+            verifyPersistentState(outPersistentState);
         }
         super.onCreate(savedInstanceState, outPersistentState);
     }
+
+    /**
+     * Verify that the persistent state received matches the latest state that was saved, if
+     * applicable.
+     */
+    protected void verifyPersistentState(@Nullable PersistableBundle outPersistentState) {}
 
     /**
      * Override to perform operations in the first opportunity after the framework calls {@link
@@ -425,8 +440,25 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         mSavedInstanceState = savedInstanceState;
 
         mWindowAndroid = createWindowAndroid();
+        if (isSelfOcclusionTrackingEnabled()) {
+            WindowOcclusionTracker.getInstance().track(mWindowAndroid);
+        }
         mIntentRequestTracker.restoreInstanceState(getSavedInstanceState());
         mProfileProviderSupplier = createProfileProvider();
+        if (getSupportedProfileType() == SupportedProfileType.OFF_THE_RECORD) {
+            mProfileProviderSupplier.runSyncOrOnAvailable(
+                    (profileProvider) -> {
+                        Profile profile = profileProvider.getOriginalProfile();
+                        if (profile != null && !IncognitoUtils.isIncognitoModeEnabled(profile)) {
+                            Toast.makeText(
+                                            AsyncInitializationActivity.this,
+                                            R.string.incognito_not_available_message,
+                                            Toast.LENGTH_LONG)
+                                    .show();
+                            finishAndRemoveTask();
+                        }
+                    });
+        }
 
         mStartupDelayed = shouldDelayBrowserStartup();
 
@@ -517,6 +549,13 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
     }
 
     /**
+     * @return The supported profile type for this activity.
+     */
+    protected @SupportedProfileType int getSupportedProfileType() {
+        return SupportedProfileType.UNSET;
+    }
+
+    /**
      * @return The uptime for the activity creation in ms.
      */
     protected long getOnCreateTimestampMs() {
@@ -570,6 +609,14 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
         return mPersistentInstanceState;
     }
 
+    /**
+     * @return Whether persistent state was restored during this session, i.e. whether a non-null
+     *     {@link PersistableBundle} was received from the OS in this Activity's #onCreate().
+     */
+    public boolean wasPersistentStateRestored() {
+        return mReceivedPersistentState;
+    }
+
     /** Resets the saved state and makes it unavailable for the rest of the activity lifecycle. */
     protected void resetSavedInstanceState() {
         mSavedInstanceState = null;
@@ -599,6 +646,17 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
                             + getClass().getName()
                             + " is trying to start.");
         }
+    }
+
+    @EnsuresNonNullIf("mWindowAndroid")
+    private boolean isSelfOcclusionTrackingEnabled() {
+        return mWindowAndroid != null
+                && mWindowAndroid.isOcclusionTrackingAllowed()
+                && UiAndroidFeatureList.sAndroidWindowOcclusion.isEnabled()
+                && "self_occlusion"
+                        .equals(
+                                UiAndroidFeatureList.sAndroidWindowOcclusionTrackingMode
+                                        .getValue());
     }
 
     @CallSuper
@@ -833,7 +891,7 @@ public abstract class AsyncInitializationActivity extends ChromeBaseAppCompatAct
 
         // TODO(crbug.com/40793204): Remove stack trace logging once root cause of bug is
         // identified & fixed.
-        // Piggybacking for multi-instance bug crbug.com/1484026.
+        // Piggybacking for multi-instance bug crbug.com/40282134.
         Log.i(TAG_MULTI_INSTANCE, "Tracing recreate().");
         Thread.dumpStack();
     }

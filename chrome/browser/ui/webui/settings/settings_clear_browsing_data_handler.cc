@@ -24,18 +24,16 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/sync_ui_util.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/toasts/toast_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/cookie_or_cache_deletion_choice.h"
@@ -48,10 +46,13 @@
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
 
@@ -62,37 +63,15 @@ namespace {
 const int kMaxTimesHistoryNoticeShown = 1;
 
 // TODO(msramek): Get the list of deletion preferences from the JS side.
-// TODO(crbug.com/397187800): Remove basic and password counters when
-// kDbdRevampDesktop is launched.
-std::vector<std::string> GetAdvancedCounterPrefs() {
-  std::vector<std::string> counter_prefs_advanced = {
-      browsing_data::prefs::kDeleteBrowsingHistory,
-      browsing_data::prefs::kDeleteCache,
-      browsing_data::prefs::kDeleteCookies,
-      browsing_data::prefs::kDeleteDownloadHistory,
-      browsing_data::prefs::kDeleteFormData,
-      browsing_data::prefs::kDeleteHostedAppsData,
-      browsing_data::prefs::kDeleteSiteSettings,
-  };
-
-  if (!base::FeatureList::IsEnabled(
-          browsing_data::features::kDbdRevampDesktop)) {
-    counter_prefs_advanced.push_back(browsing_data::prefs::kDeletePasswords);
-  }
-
-  return counter_prefs_advanced;
-}
-
-std::vector<std::string> GetBasicCounterPrefs() {
-  std::vector<std::string> counter_prefs_basic = {};
-
-  if (!base::FeatureList::IsEnabled(
-          browsing_data::features::kDbdRevampDesktop)) {
-    counter_prefs_basic.push_back(browsing_data::prefs::kDeleteCacheBasic);
-  }
-
-  return counter_prefs_basic;
-}
+const char* kCounterPrefs[] = {
+    browsing_data::prefs::kDeleteBrowsingHistory,
+    browsing_data::prefs::kDeleteCache,
+    browsing_data::prefs::kDeleteCookies,
+    browsing_data::prefs::kDeleteDownloadHistory,
+    browsing_data::prefs::kDeleteFormData,
+    browsing_data::prefs::kDeleteHostedAppsData,
+    browsing_data::prefs::kDeleteSiteSettings,
+};
 
 }  // namespace
 
@@ -136,15 +115,11 @@ void ClearBrowsingDataHandler::OnJavascriptAllowed() {
   dse_service_observation_.Observe(
       TemplateURLServiceFactory::GetForProfile(profile_));
 
-  DCHECK(counters_basic_.empty());
-  DCHECK(counters_advanced_.empty());
-  for (const std::string& pref : GetBasicCounterPrefs()) {
-    AddCounter(BrowsingDataCounterFactory::GetForProfileAndPref(profile_, pref),
-               browsing_data::ClearBrowsingDataTab::BASIC);
-  }
-  for (const std::string& pref : GetAdvancedCounterPrefs()) {
-    AddCounter(BrowsingDataCounterFactory::GetForProfileAndPref(profile_, pref),
-               browsing_data::ClearBrowsingDataTab::ADVANCED);
+  DCHECK(counters_.empty());
+
+  for (const std::string& pref : kCounterPrefs) {
+    AddCounter(
+        BrowsingDataCounterFactory::GetForProfileAndPref(profile_, pref));
   }
 }
 
@@ -152,8 +127,7 @@ void ClearBrowsingDataHandler::OnJavascriptDisallowed() {
   dse_service_observation_.Reset();
   sync_service_observation_.Reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
-  counters_basic_.clear();
-  counters_advanced_.clear();
+  counters_.clear();
 }
 
 void ClearBrowsingDataHandler::HandleClearBrowsingDataForTest() {
@@ -162,10 +136,10 @@ void ClearBrowsingDataHandler::HandleClearBrowsingDataForTest() {
   // types that the user cleared from the clear browsing data UI and time period
   // of the data to be cleared.
 
-  base::Value::List data_types;
+  base::ListValue data_types;
   data_types.Append("browser.clear_data.browsing_history");
 
-  base::Value::List list_args;
+  base::ListValue list_args;
   list_args.Append("webui_callback_id");
   list_args.Append(std::move(data_types));
   list_args.Append(1);
@@ -173,7 +147,7 @@ void ClearBrowsingDataHandler::HandleClearBrowsingDataForTest() {
 }
 
 void ClearBrowsingDataHandler::HandleClearBrowsingData(
-    const base::Value::List& args_list) {
+    const base::ListValue& args_list) {
   CHECK_EQ(3U, args_list.size());
   const std::string& webui_callback_id = args_list[0].GetString();
 
@@ -183,7 +157,7 @@ void ClearBrowsingDataHandler::HandleClearBrowsingData(
   std::vector<BrowsingDataType> data_type_vector;
 
   CHECK(args_list[1].is_list());
-  const base::Value::List& data_type_list = args_list[1].GetList();
+  const base::ListValue& data_type_list = args_list[1].GetList();
   auto* sentiment_service = TrustSafetySentimentServiceFactory::GetForProfile(
       Profile::FromWebUI(web_ui()));
   for (const base::Value& type : data_type_list) {
@@ -213,12 +187,9 @@ void ClearBrowsingDataHandler::HandleClearBrowsingData(
             content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB;
         break;
       case BrowsingDataType::PASSWORDS:
-        CHECK(!base::FeatureList::IsEnabled(
-            browsing_data::features::kDbdRevampDesktop));
-        remove_mask |= chrome_browsing_data_remover::DATA_TYPE_PASSWORDS;
-        remove_mask |=
-            chrome_browsing_data_remover::DATA_TYPE_ACCOUNT_PASSWORDS;
-        break;
+        // Passwords are no longer deletable via DBD modal
+        // (crbug.com/397187800).
+        NOTREACHED();
       case BrowsingDataType::FORM_DATA:
         remove_mask |= chrome_browsing_data_remover::DATA_TYPE_FORM_DATA;
         break;
@@ -306,13 +277,13 @@ void ClearBrowsingDataHandler::OnClearingTaskFinished(
   bool show_passwords_notice =
       (failed_data_types & chrome_browsing_data_remover::DATA_TYPE_PASSWORDS);
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("showHistoryNotice", show_history_notice);
   result.Set("showPasswordsNotice", show_passwords_notice);
 
+  tabs::TabInterface* const tab =
+      tabs::TabInterface::MaybeGetFromContents(web_ui()->GetWebContents());
   if (toast_features::IsEnabled(toast_features::kClearBrowsingDataToast)) {
-    tabs::TabInterface* tab =
-        tabs::TabInterface::MaybeGetFromContents(web_ui()->GetWebContents());
     if (tab && tab->IsActivated()) {
       CHECK(tab->GetBrowserWindowInterface());
       ToastController* const toast_controller =
@@ -324,14 +295,27 @@ void ClearBrowsingDataHandler::OnClearingTaskFinished(
     }
   }
 
+  if (tab && data_types.find(BrowsingDataType::HISTORY) != data_types.end()) {
+    ui::ElementContext context =
+        BrowserElements::From(tab->GetBrowserWindowInterface())->GetContext();
+    ui::TrackedElement* const browser_element =
+        ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+            kBrowserViewElementId, context);
+    CHECK(browser_element);
+    ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+        browser_element,
+        browsing_data_important_sites_util::kClearBrowsingDataHistoryEventId);
+  }
+
   ResolveJavascriptCallback(base::Value(webui_callback_id), result);
 }
 
-void ClearBrowsingDataHandler::HandleInitialize(const base::Value::List& args) {
+void ClearBrowsingDataHandler::HandleInitialize(const base::ListValue& args) {
   AllowJavascript();
   const base::Value& callback_id = args[0];
 
-  // Needed because WebUI doesn't handle renderer crashes. See crbug.com/610450.
+  // Needed because WebUI doesn't handle renderer crashes. See
+  // crbug.com/41253133.
   weak_ptr_factory_.InvalidateWeakPtrs();
 
   UpdateSyncState();
@@ -344,29 +328,24 @@ void ClearBrowsingDataHandler::HandleInitialize(const base::Value::List& args) {
   // However, it would be safer if the "initializeClearBrowsingData" delivered
   // the actual initial selection from the UI.
   PrefService* prefs = profile_->GetPrefs();
-  auto initial_period_basic = static_cast<browsing_data::TimePeriod>(
-      prefs->GetInteger(browsing_data::prefs::kDeleteTimePeriodBasic));
-  auto initial_period_advanced = static_cast<browsing_data::TimePeriod>(
+  auto initial_period = static_cast<browsing_data::TimePeriod>(
       prefs->GetInteger(browsing_data::prefs::kDeleteTimePeriod));
-  RestartCounters(true /* basic */, initial_period_basic);
-  RestartCounters(false /* basic */, initial_period_advanced);
+  RestartCounters(initial_period);
 
   ResolveJavascriptCallback(callback_id, base::Value() /* Promise<void> */);
 }
 
-void ClearBrowsingDataHandler::HandleGetSyncState(
-    const base::Value::List& args) {
+void ClearBrowsingDataHandler::HandleGetSyncState(const base::ListValue& args) {
   AllowJavascript();
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, CreateSyncStateEvent());
 }
 
 void ClearBrowsingDataHandler::HandleRestartCounters(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
-  CHECK_EQ(2U, args.size());
-  RestartCounters(args[0].GetBool() /* basic */,
-                  static_cast<browsing_data::TimePeriod>(args[1].GetInt()));
+  CHECK_EQ(1U, args.size());
+  RestartCounters(static_cast<browsing_data::TimePeriod>(args[0].GetInt()));
 }
 
 void ClearBrowsingDataHandler::OnStateChanged(syncer::SyncService* sync) {
@@ -383,10 +362,10 @@ void ClearBrowsingDataHandler::UpdateSyncState() {
   FireWebUIListener("update-sync-state", CreateSyncStateEvent());
 }
 
-base::Value::Dict ClearBrowsingDataHandler::CreateSyncStateEvent() {
+base::DictValue ClearBrowsingDataHandler::CreateSyncStateEvent() {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile_);
-  base::Value::Dict event;
+  base::DictValue event;
   event.Set("signedIn", identity_manager && identity_manager->HasPrimaryAccount(
                                                 signin::ConsentLevel::kSignin));
   event.Set("syncingHistory", sync_service_ &&
@@ -438,17 +417,14 @@ void ClearBrowsingDataHandler::UpdateHistoryDeletionDialog(bool show) {
 }
 
 void ClearBrowsingDataHandler::AddCounter(
-    std::unique_ptr<browsing_data::BrowsingDataCounter> counter,
-    browsing_data::ClearBrowsingDataTab tab) {
+    std::unique_ptr<browsing_data::BrowsingDataCounter> counter) {
   DCHECK(counter);
   counter->InitWithoutPeriodPref(
-      profile_->GetPrefs(), tab, base::Time(),
+      profile_->GetPrefs(), base::Time(),
       base::BindRepeating(&ClearBrowsingDataHandler::UpdateCounterText,
                           base::Unretained(this)));
 
-  ((tab == browsing_data::ClearBrowsingDataTab::BASIC) ? counters_basic_
-                                                       : counters_advanced_)
-      .push_back(std::move(counter));
+  counters_.push_back(std::move(counter));
 }
 
 void ClearBrowsingDataHandler::UpdateCounterText(
@@ -461,10 +437,9 @@ void ClearBrowsingDataHandler::UpdateCounterText(
 }
 
 void ClearBrowsingDataHandler::RestartCounters(
-    bool basic,
     browsing_data::TimePeriod time_period) {
   // Updating the begin time of a counter automatically forces a restart.
-  for (const auto& counter : (basic ? counters_basic_ : counters_advanced_)) {
+  for (const auto& counter : counters_) {
     counter->SetBeginTime(browsing_data::CalculateBeginDeleteTime(time_period));
   }
 }

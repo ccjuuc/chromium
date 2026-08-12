@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/webui/whats_new/whats_new_registrar.h"
 
-#include "base/containers/contains.h"
 #include "base/strings/string_util.h"
 #include "base/test/metrics/action_variants_reader.h"
 #include "base/test/metrics/histogram_variants_reader.h"
@@ -19,10 +18,10 @@ namespace {
 using BrowserCommand = browser_command::mojom::Command;
 
 // Modules
-BASE_FEATURE(kTestModule, "TestModule", base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kTestModule, base::FEATURE_DISABLED_BY_DEFAULT);
 
 /// Editions
-BASE_FEATURE(kTestEdition, "TestEdition", base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kTestEdition, base::FEATURE_DISABLED_BY_DEFAULT);
 
 void RegisterWhatsNewModulesForTests(whats_new::WhatsNewRegistry* registry) {
   // Test Module
@@ -58,7 +57,7 @@ TEST(WhatsNewRegistrarTest, CheckModuleHistograms) {
   const auto& modules = registry.modules();
   for (const auto& [key, module] : modules) {
     const auto metric_name = module.unique_name();
-    if (!base::Contains(*variants, metric_name)) {
+    if (!variants->contains(metric_name)) {
       missing_modules.emplace_back(metric_name);
     }
   }
@@ -88,7 +87,7 @@ TEST(WhatsNewRegistrarTest, CheckModuleActions) {
   const auto& modules = registry.modules();
   for (const auto& [key, module] : modules) {
     const auto metric_name = module.unique_name();
-    if (!base::Contains(variants[0], metric_name)) {
+    if (!variants[0].contains(metric_name)) {
       missing_modules.emplace_back(metric_name);
     }
   }
@@ -116,7 +115,7 @@ TEST(WhatsNewRegistrarTest, CheckEditionActions) {
   RegisterWhatsNewEditionsForTests(&registry);
   for (const auto& [key, edition] : registry.editions()) {
     const auto metric_name = edition.unique_name();
-    if (!base::Contains(variants[0], metric_name)) {
+    if (!variants[0].contains(metric_name)) {
       missing_editions.emplace_back(metric_name);
     }
   }

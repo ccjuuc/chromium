@@ -7,6 +7,7 @@ import collections
 import functools
 import hashlib
 import itertools
+import json
 import multiprocessing
 import os
 import pathlib
@@ -30,48 +31,52 @@ import proxy
 _THIS_DIR = os.path.dirname(__file__)
 
 
-def _ParseHelper(package_prefix, package_prefix_filter, enable_legacy_natives,
-                 path):
-  return parse.parse_java_file(path,
-                               package_prefix=package_prefix,
-                               package_prefix_filter=package_prefix_filter,
-                               enable_legacy_natives=enable_legacy_natives,
-                               allow_private_called_by_natives=True)
+def _ParseHelper(package_prefix, package_prefix_filter, path):
+  try:
+    return parse.parse_java_file(path,
+                                 package_prefix=package_prefix,
+                                 package_prefix_filter=package_prefix_filter,
+                                 allow_private_called_by_natives=True)
+  except Exception as e:
+    return e
 
 
-def _LoadJniObjs(paths, namespace, package_prefix, package_prefix_filter, *,
-                 enable_legacy_natives):
+def _LoadJniObjs(paths, namespace, package_prefix, package_prefix_filter):
   ret = {}
   if all(p.endswith('.jni.pickle') for p in paths):
     for pickle_path in paths:
       with open(pickle_path, 'rb') as f:
-        parsed_files = pickle.load(f)
+        module_name, parsed_files = pickle.load(f)
       ret[pickle_path] = [
           jni_generator.JniObject(pf,
                                   from_javap=False,
-                                  default_namespace=namespace)
+                                  default_namespace=namespace,
+                                  module_name=module_name)
           for pf in parsed_files
       ]
   else:
     func = functools.partial(_ParseHelper, package_prefix,
-                             package_prefix_filter, enable_legacy_natives)
+                             package_prefix_filter)
     with multiprocessing.Pool() as pool:
-      for pf in pool.imap_unordered(func, paths):
-        ret[pf.filename] = [
-            jni_generator.JniObject(pf,
-                                    from_javap=False,
-                                    default_namespace=namespace)
-        ]
+      errors = []
+      for res in pool.imap_unordered(func, paths):
+        if isinstance(res, Exception):
+          errors.append(res)
+        else:
+          ret[res.filename] = [
+              jni_generator.JniObject(res,
+                                      from_javap=False,
+                                      default_namespace=namespace)
+          ]
+      if errors:
+        for e in errors:
+          sys.stderr.write(f"\n--- JNI Parsing Error ---\n{e}\n")
+        sys.exit(1)
 
   return ret
 
 
-def _FilterJniObjs(jni_objs_by_path, module_name):
-  for jni_objs in jni_objs_by_path.values():
-    # Ignore non-active modules and empty natives lists.
-    jni_objs[:] = [
-        o for o in jni_objs if o.natives and o.module_name == module_name
-    ]
+
 
 
 def _Flatten(jni_objs_by_path, paths):
@@ -118,25 +123,23 @@ def _Generate(args,
         native library must be interchangeable with another that uses
         priority_java_sources (aka, webview).
   """
-  native_sources_set = set(native_sources)
-  java_sources_set = set(java_sources)
+  native_sources_list = native_sources.get(args.module_name, [])
+  java_sources_list = java_sources.get(args.module_name, [])
 
-  jni_objs_by_path = _LoadJniObjs(
-      native_sources_set | java_sources_set,
-      args.namespace,
-      args.package_prefix,
-      args.package_prefix_filter,
-      enable_legacy_natives=args.enable_legacy_natives)
-  _FilterJniObjs(jni_objs_by_path, args.module_name)
+  native_sources_set = set(native_sources_list)
+  java_sources_set = set(java_sources_list)
+
+  jni_objs_by_path = _LoadJniObjs(native_sources_set | java_sources_set,
+                                  args.namespace, args.package_prefix,
+                                  args.package_prefix_filter)
 
   present_jni_objs = list(
       _Flatten(jni_objs_by_path, native_sources_set & java_sources_set))
 
-  def RemoveTestOnlyNatives(self):
-    self.natives = [n for n in self.natives if not n.is_test_only]
-
   # Can contain path not in present_jni_objs.
-  priority_set = set(priority_java_sources or [])
+  priority_sources_list = priority_java_sources.get(
+      args.module_name, []) if priority_java_sources else []
+  priority_set = set(priority_sources_list)
   # Sort for determinism and to put priority_java_sources first.
   present_jni_objs.sort(
       key=lambda o: (o.filename not in priority_set, o.java_class))
@@ -185,19 +188,24 @@ def _Generate(args,
       package_prefix=args.package_prefix,
       package_prefix_filter=args.package_prefix_filter)
 
-  if args.header_path:
-    if not args.include_test_only:
-      for jni_obj in present_jni_objs:
-        jni_obj.RemoveTestOnlyNatives()
+  if not args.include_test_only:
+    for jni_obj in present_jni_objs:
+      jni_obj.RemoveTestOnlyNatives()
 
-    if jni_mode.is_hashing or jni_mode.is_muxing:
-      gen_jni_class = short_gen_jni_class
-    else:
-      gen_jni_class = full_gen_jni_class
-    header_content = _CreateHeader(jni_mode, present_jni_objs,
-                                   boundary_proxy_natives, gen_jni_class, args,
-                                   muxed_aliases_by_sig, whole_hash,
-                                   priority_hash)
+  if jni_mode.is_hashing or jni_mode.is_muxing:
+    gen_jni_class = short_gen_jni_class
+  else:
+    gen_jni_class = full_gen_jni_class
+
+  if args.impl_path:
+    impl_content = _CreateImpl(jni_mode, present_jni_objs,
+                               boundary_proxy_natives, gen_jni_class, args,
+                               muxed_aliases_by_sig, whole_hash, priority_hash)
+    with common.atomic_output(args.impl_path, mode='w') as f:
+      f.write(impl_content)
+
+  if args.header_path:
+    header_content = _CreateHeader(args)
     with common.atomic_output(args.header_path, mode='w') as f:
       f.write(header_content)
 
@@ -245,6 +253,12 @@ def _CheckForJavaNativeMismatch(args, jni_objs_by_path, native_sources_set,
                               key=lambda jni_obj: jni_obj.filename)
   native_only_jni_objs = sorted(_Flatten(jni_objs_by_path, native_only),
                                 key=lambda jni_obj: jni_obj.filename)
+
+  # Ignore files that have only @CalledByNatives in them, since they do not
+  # effect GEN_JNI.
+  java_only_jni_objs = [o for o in java_only_jni_objs if o.natives]
+  native_only_jni_objs = [o for o in native_only_jni_objs if o.natives]
+
   failed = False
   if not args.add_stubs_for_missing_native and java_only_jni_objs:
     failed = True
@@ -304,27 +318,46 @@ def _GenerateHashes(jni_objs, priority_set, *, never_omit_switch_num):
   return whole_ret, priority_ret
 
 
-def _CreateHeader(jni_mode, jni_objs, boundary_proxy_natives, gen_jni_class,
-                  args, muxed_aliases_by_sig, whole_hash, priority_hash):
+def _CreateHeader(args):
   """Returns the content of the header file."""
   header_guard = os.path.splitext(args.header_path)[0].upper() + '_'
   header_guard = re.sub(r'[/.-]', '_', header_guard)
 
+  preamble, epilogue = header_common.header_preamble(
+      jni_generator.GetScriptName(),
+      system_includes=['jni.h'],
+      header_guard=header_guard,
+      is_shared_header=True)
+
+  sb = common.StringBuilder()
+  sb(preamble)
+  with sb.namespace(args.namespace):
+    sb(f'bool {args.register_natives_name}(JNIEnv* env);\n')
+  sb(epilogue)
+  return sb.to_string()
+
+
+def _CreateImpl(jni_mode, jni_objs, boundary_proxy_natives, gen_jni_class, args,
+                muxed_aliases_by_sig, whole_hash, priority_hash):
+  """Returns the content of the implementation file (.cc)."""
   user_includes = [f'{args.include_path_prefix}jni_zero_internal.h']
+  if args.header_path:
+    user_includes.append(os.path.basename(args.header_path))
   if args.extra_includes:
     user_includes += args.extra_includes
 
   preamble, epilogue = header_common.header_preamble(
       jni_generator.GetScriptName(),
-      gen_jni_class,
+      java_class=gen_jni_class,
       system_includes=['iterator'],  # For std::size().
       user_includes=user_includes,
-      header_guard=header_guard)
+      header_guard=False,
+      is_shared_header=True)
 
   module_name = args.module_name or ''
 
   sb = common.StringBuilder()
-  sb.line(preamble)
+  sb(preamble)
   if jni_mode.is_muxing:
     sb(f"""\
 extern const int64_t kJniZeroHash{module_name}Whole = {whole_hash}LL;
@@ -336,17 +369,19 @@ extern const int64_t kJniZeroHash{module_name}Priority = {priority_hash}LL;
   ]
   non_proxy_natives_java_classes.sort()
 
-  if non_proxy_natives_java_classes:
+  if args.manual_jni_registration and non_proxy_natives_java_classes:
     with sb.section('Class Accessors.'):
-      header_common.class_accessors(sb, non_proxy_natives_java_classes,
-                                    module_name)
+      header_common.class_accessors(sb, non_proxy_natives_java_classes)
 
-  with sb.section('Forward Declarations.'):
-    for jni_obj in jni_objs:
-      for native in jni_obj.natives:
-        with sb.statement():
-          natives_header.entry_point_declaration(sb, jni_mode, jni_obj, native,
-                                                 gen_jni_class)
+  if jni_mode.is_muxing or args.manual_jni_registration:
+    with sb.section('Forward Declarations.'):
+      for jni_obj in jni_objs:
+        natives = (jni_obj.natives
+                   if args.manual_jni_registration else jni_obj.proxy_natives)
+        for native in natives:
+          with sb.statement():
+            natives_header.entry_point_declaration(sb, jni_mode, jni_obj,
+                                                   native, gen_jni_class)
 
   if jni_mode.is_muxing and boundary_proxy_natives:
     with sb.section('Multiplexing Methods.'):
@@ -356,7 +391,7 @@ extern const int64_t kJniZeroHash{module_name}Priority = {priority_hash}LL;
                                                     gen_jni_class)
 
   if args.manual_jni_registration:
-    # Helper methods use presence of gen_jni_class to denote presense of proxy
+    # Helper methods use presence of gen_jni_class to denote presence of proxy
     # methods.
     if not boundary_proxy_natives:
       gen_jni_class = None
@@ -373,16 +408,25 @@ extern const int64_t kJniZeroHash{module_name}Priority = {priority_hash}LL;
             register_natives.non_proxy_register_function(sb, jni_obj)
 
     with sb.section('Main Register Function.'):
-      register_natives.main_register_function(sb, jni_objs, args.namespace,
-                                              gen_jni_class)
+      register_natives.main_register_function(
+          sb,
+          jni_objs,
+          args.namespace,
+          gen_jni_class,
+          register_natives_name=args.register_natives_name)
   sb(epilogue)
   return sb.to_string()
 
 
-def _ParseSourceList(path):
-  # Path can have duplicates.
+def _ParseMetadataJson(path):
   with open(path) as f:
-    return sorted(set(f.read().splitlines()))
+    data = json.load(f)
+  ret = collections.defaultdict(list)
+  for item in data:
+    module_name = item.get('module_name') or ''
+    for src in item['java_files']:
+      ret[module_name].append(src)
+  return ret
 
 
 def _write_depfile(depfile_path, first_gn_output, inputs):
@@ -408,10 +452,14 @@ def _write_depfile(depfile_path, first_gn_output, inputs):
 
 
 def main(parser, args, jni_mode):
-  if not args.header_path and args.manual_jni_registration:
+  if args.header_path and not args.manual_jni_registration:
+    parser.error('--header-path requires --manual-jni-registration.')
+  if args.manual_jni_registration and not args.header_path:
     parser.error('--manual-jni-registration requires --header-path.')
-  if not args.header_path and jni_mode.is_muxing:
-    parser.error('--enable-jni-multiplexing requires --header-path.')
+  if args.manual_jni_registration and not args.impl_path:
+    parser.error('--manual-jni-registration requires --impl-path.')
+  if jni_mode.is_muxing and not args.impl_path:
+    parser.error('--enable-jni-multiplexing requires --impl-path.')
   if args.remove_uncalled_methods and not args.native_sources_file:
     parser.error('--remove-uncalled-methods requires --native-sources-file.')
   if args.priority_java_sources_file:
@@ -423,19 +471,19 @@ def main(parser, args, jni_mode):
       # --priority-java-sources.
       parser.error('--priority-java-sources requires --never-omit-switch-num.')
 
-  java_sources = _ParseSourceList(args.java_sources_file)
+  java_sources = _ParseMetadataJson(args.java_sources_file)
   if args.native_sources_file:
-    native_sources = _ParseSourceList(args.native_sources_file)
+    native_sources = _ParseMetadataJson(args.native_sources_file)
   else:
     if args.add_stubs_for_missing_native:
       # This will create a fully stubbed out GEN_JNI.
-      native_sources = []
+      native_sources = {}
     else:
       # Just treating it like we have perfect alignment between native and java
       # when only looking at java.
       native_sources = java_sources
   if args.priority_java_sources_file:
-    priority_java_sources = _ParseSourceList(args.priority_java_sources_file)
+    priority_java_sources = _ParseMetadataJson(args.priority_java_sources_file)
   else:
     priority_java_sources = None
 
@@ -449,7 +497,10 @@ def main(parser, args, jni_mode):
   if args.depfile:
     # GN does not declare a dep on the sources files to avoid circular
     # dependencies, so they need to be listed here.
-    all_inputs = native_sources + java_sources + [args.java_sources_file]
+    all_inputs = []
+    all_inputs.extend(native_sources.get(args.module_name, []))
+    all_inputs.extend(java_sources.get(args.module_name, []))
+    all_inputs.append(args.java_sources_file)
     if args.native_sources_file:
       all_inputs.append(args.native_sources_file)
     _write_depfile(args.depfile, args.srcjar_path, all_inputs)

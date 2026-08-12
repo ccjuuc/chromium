@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.offlinepages;
 import androidx.annotation.Nullable;
 
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 import org.junit.Assert;
 
@@ -195,18 +196,21 @@ public class OfflineTestUtil {
         void getRequestsInQueue(Callback<SavePageRequest[]> callback);
 
         void getAllPages(
-                List<OfflinePageItem> offlinePages, final Callback<List<OfflinePageItem>> callback);
+                List<OfflinePageItem> offlinePages, Callback<List<OfflinePageItem>> callback);
 
         void getRawThumbnail(long offlineId, Callback<byte[]> callback);
 
         void startRequestCoordinatorProcessing();
 
-        void interceptWithOfflineError(String url, Runnable readyRunnable);
+        void interceptWithOfflineError(
+                @JniType("std::string") String url,
+                @JniType("base::OnceClosure") Runnable readyRunnable);
 
         void clearIntercepts();
 
         void dumpRequestCoordinatorState(Callback<String> callback);
 
-        void waitForConnectivityState(boolean connected, Runnable callback);
+        void waitForConnectivityState(
+                boolean connected, @JniType("base::OnceClosure") Runnable callback);
     }
 }

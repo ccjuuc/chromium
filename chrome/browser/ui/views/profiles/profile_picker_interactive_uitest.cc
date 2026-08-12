@@ -12,7 +12,6 @@
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
-#include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_interactive_uitest_base.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_test_base.h"
@@ -23,6 +22,7 @@
 #include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_switches.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/variations/variations_switches.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -30,7 +30,6 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
@@ -222,15 +221,35 @@ class ProfilePickerInteractiveUiTest
                        ExecuteJsMode::kFireAndForget);
   }
 
-  auto CompleteSearchEngineChoiceStep() {
-    const WebContentsInteractionTestUtil::DeepQuery
-        kSearchEngineChoiceActionButton{"search-engine-choice-app",
-                                        "#actionButton"};
-    const DeepQuery first_search_engine = {"search-engine-choice-app",
-                                           "cr-radio-button"};
-    const DeepQuery searchEngineChoiceList{"search-engine-choice-app",
-                                           "#choiceList"};
+  const DeepQuery& GetSearchEngineChoiceActionButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+        base::FeatureList::IsEnabled(
+            switches::kFirstRunDesktopChoiceScreenRefresh)) {
+      static const base::NoDestructor<DeepQuery> kQuery(
+          {"search-engine-choice-app-refresh", "#actionButton"});
+      return *kQuery;
+    }
 
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app", "#actionButton"});
+    return *kQuery;
+  }
+
+  const DeepQuery& GetSearchEngineChoiceCrRadioButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+        base::FeatureList::IsEnabled(
+            switches::kFirstRunDesktopChoiceScreenRefresh)) {
+      static const base::NoDestructor<DeepQuery> kQuery(
+          {"search-engine-choice-app-refresh", "cr-radio-button"});
+      return *kQuery;
+    }
+
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app", "cr-radio-button"});
+    return *kQuery;
+  }
+
+  auto CompleteSearchEngineChoiceStep() {
     return Steps(
         WaitForWebContentsNavigation(
             kPickerWebContentsId, GURL(chrome::kChromeUISearchEngineChoiceURL)),
@@ -247,16 +266,19 @@ class ProfilePickerInteractiveUiTest
         }),
 
         // Click on "More" to scroll to the bottom of the search engine list.
-        PressJsButton(kPickerWebContentsId, kSearchEngineChoiceActionButton),
+        PressJsButton(kPickerWebContentsId,
+                      GetSearchEngineChoiceActionButtonQuery()),
 
         // The button should become disabled because we didn't make a choice.
         WaitForButtonDisabled(kPickerWebContentsId,
-                              kSearchEngineChoiceActionButton),
+                              GetSearchEngineChoiceActionButtonQuery()),
 
-        PressJsButton(kPickerWebContentsId, first_search_engine),
+        PressJsButton(kPickerWebContentsId,
+                      GetSearchEngineChoiceCrRadioButtonQuery()),
         WaitForButtonEnabled(kPickerWebContentsId,
-                             kSearchEngineChoiceActionButton),
-        PressJsButton(kPickerWebContentsId, kSearchEngineChoiceActionButton));
+                             GetSearchEngineChoiceActionButtonQuery()),
+        PressJsButton(kPickerWebContentsId,
+                      GetSearchEngineChoiceActionButtonQuery()));
   }
 
  private:

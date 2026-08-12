@@ -4,6 +4,7 @@
 
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/with_feature_override.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -13,6 +14,7 @@
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -64,6 +66,18 @@ class PDFExtensionInteractiveUITest : public base::test::WithFeatureOverride,
   PDFExtensionInteractiveUITest()
       : base::test::WithFeatureOverride(chrome_pdf::features::kPdfOopif) {}
 
+  void SetUpInProcessBrowserTestFixture() override {
+    PDFExtensionTestBase::SetUpInProcessBrowserTestFixture();
+
+    // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox is
+    // enabled and then remove this.
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+  }
+
   void SetUpCommandLine(base::CommandLine* command_line) override {
     PDFExtensionTestBase::SetUpCommandLine(command_line);
 
@@ -85,6 +99,9 @@ class PDFExtensionInteractiveUITest : public base::test::WithFeatureOverride,
   }
 
   bool UseOopif() const override { return GetParam(); }
+
+ private:
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
 
 class TabChangedWaiter : public TabStripModelObserver {
@@ -114,7 +131,7 @@ class TabChangedWaiter : public TabStripModelObserver {
 }  // namespace
 
 // TODO(crbug.com/333802743): re-enable the test
-// For crbug.com/1038918
+// For crbug.com/40113375
 IN_PROC_BROWSER_TEST_P(PDFExtensionInteractiveUITest,
                        DISABLED_CtrlPageUpDownSwitchesTabs) {
   content::RenderFrameHost* extension_host = LoadPdfInNewTabGetExtensionHost(
@@ -366,14 +383,14 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionInteractiveUITest,
 
   gfx::SelectionBound start_bound = touch_selection_controller->start();
   EXPECT_EQ(gfx::SelectionBound::LEFT, start_bound.type());
-  EXPECT_POINTF_NEAR(gfx::PointF(454.0f, 152.0f), start_bound.edge_start(),
+  EXPECT_POINTF_NEAR(gfx::PointF(454.0f, 157.0f), start_bound.edge_start(),
                      1.0f);
-  EXPECT_POINTF_NEAR(gfx::PointF(454.0f, 178.0f), start_bound.edge_end(), 1.0f);
+  EXPECT_POINTF_NEAR(gfx::PointF(454.0f, 174.0f), start_bound.edge_end(), 1.0f);
 
   gfx::SelectionBound end_bound = touch_selection_controller->end();
   EXPECT_EQ(gfx::SelectionBound::RIGHT, end_bound.type());
-  EXPECT_POINTF_NEAR(gfx::PointF(494.0f, 152.0f), end_bound.edge_start(), 1.0f);
-  EXPECT_POINTF_NEAR(gfx::PointF(494.0f, 178.0f), end_bound.edge_end(), 1.0f);
+  EXPECT_POINTF_NEAR(gfx::PointF(494.0f, 157.0f), end_bound.edge_start(), 1.0f);
+  EXPECT_POINTF_NEAR(gfx::PointF(494.0f, 174.0f), end_bound.edge_end(), 1.0f);
 }
 #endif  // defined(TOOLKIT_VIEWS) && defined(USE_AURA)
 

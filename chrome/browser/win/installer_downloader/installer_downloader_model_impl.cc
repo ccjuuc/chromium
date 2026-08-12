@@ -4,10 +4,12 @@
 
 #include "chrome/browser/win/installer_downloader/installer_downloader_model_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -18,6 +20,7 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/win/cloud_synced_folder_checker.h"
+#include "chrome/browser/win/installer_downloader/installer_downloader_feature.h"
 #include "chrome/browser/win/installer_downloader/installer_downloader_pref_names.h"
 #include "chrome/browser/win/installer_downloader/system_info_provider.h"
 #include "chrome/browser/win/installer_downloader/system_info_provider_impl.h"
@@ -169,23 +172,27 @@ void InstallerDownloaderModelImpl::StartDownload(
                                           R"(semantics {
           sender: "Windows Installer Downloader"
           description:
-            "Download Chrome installer to the user OneDrive folder on "
+            "Download Chrome installer to the user's OneDrive folder on "
             "their consent."
-          trigger: "Once, when the user accept the download request."
+          trigger: "Once, when the user accepts the download request."
           data: "None."
           destination: GOOGLE_OWNED_SERVICE
           internal {
             contacts {
-            owners: "//chrome/browser/win/installer_downloader/OWNERS"
+              owners: "//chrome/browser/win/installer_downloader/OWNERS"
+            }
           }
-        }
-        last_reviewed: "2025-05-01
+          user_data {
+            type: NONE
+          }
+          last_reviewed: "2026-02-10"
       }
       policy {
         cookies_allowed: NO
         setting:
-          "Users can controller this feature by closing the Installer"
+          "Users can control this feature by closing the Installer "
           "Downloader Infobar."
+        policy_exception_justification: "Not implemented."
     })");
 
   auto params = std::make_unique<download::DownloadUrlParameters>(
@@ -206,19 +213,59 @@ void InstallerDownloaderModelImpl::StartDownload(
 bool InstallerDownloaderModelImpl::CanShowInfobar() const {
   const PrefService* local_state = g_browser_process->local_state();
   if (local_state->GetBoolean(
-          prefs::kInstallerDownloaderPreventFutureDisplay)) {
+          prefs::kInstallerDownloaderDownloadCompleted)) {
     return false;
   }
 
-  return local_state->GetInteger(prefs::kInstallerDownloaderInfobarShowCount) <
-         kMaxShowCount;
+  // 1. If the current cycle is still in progress, the infobar can be shown.
+  if (!IsCurrentCycleFinished()) {
+    return true;
+  }
+
+  // 2. If re-engagement is disabled, finish after one cycle.
+  if (!base::FeatureList::IsEnabled(kInstallerDownloaderReengagement)) {
+    return false;
+  }
+
+  // 3. Stop once all allowed campaign cycles are completed.
+  if (GetCurrentCycle() >= installer_downloader::kMaxCycleCount.Get()) {
+    return false;
+  }
+
+  // 4. Check if the cooldown period between cycles has elapsed.
+  const base::Time last_show_time =
+      local_state->GetTime(prefs::kInstallerDownloaderInfobarLastShowTime);
+  return base::Time::Now() - last_show_time >=
+         base::Days(installer_downloader::kReengagementCooldownDays.Get());
 }
 
 void InstallerDownloaderModelImpl::IncrementShowCount() {
   PrefService* local_state = g_browser_process->local_state();
+  const bool cycle_finished = IsCurrentCycleFinished();
+
+  if (base::FeatureList::IsEnabled(kInstallerDownloaderReengagement) &&
+      cycle_finished) {
+    // Starting a new cycle: advance cycle count, reset show count and dismissal
+    // flag.
+    local_state->SetInteger(prefs::kInstallerDownloaderCycleCount,
+                            GetCurrentCycle() + 1);
+    local_state->SetInteger(prefs::kInstallerDownloaderInfobarShowCount, 1);
+    local_state->SetBoolean(prefs::kInstallerDownloaderPreventFutureDisplay,
+                            false);
+  } else {
+    // Advancing within the current cycle.
+    local_state->SetInteger(prefs::kInstallerDownloaderCycleCount,
+                            GetCurrentCycle());
+    local_state->SetInteger(
+        prefs::kInstallerDownloaderInfobarShowCount,
+        local_state->GetInteger(prefs::kInstallerDownloaderInfobarShowCount) +
+            1);
+  }
+
   local_state->SetInteger(
-      prefs::kInstallerDownloaderInfobarShowCount,
-      local_state->GetInteger(prefs::kInstallerDownloaderInfobarShowCount) + 1);
+      prefs::kInstallerDownloaderTotalShowCount,
+      local_state->GetInteger(prefs::kInstallerDownloaderTotalShowCount) + 1);
+
   local_state->SetTime(prefs::kInstallerDownloaderInfobarLastShowTime,
                        base::Time::Now());
 }
@@ -228,9 +275,27 @@ void InstallerDownloaderModelImpl::PreventFutureDisplay() {
       prefs::kInstallerDownloaderPreventFutureDisplay, true);
 }
 
+void InstallerDownloaderModelImpl::RecordDownloadCompleted() {
+  g_browser_process->local_state()->SetBoolean(
+      prefs::kInstallerDownloaderDownloadCompleted, true);
+}
+
 bool InstallerDownloaderModelImpl::ShouldByPassEligibilityCheck() const {
   return g_browser_process->local_state()->GetBoolean(
       prefs::kInstallerDownloaderBypassEligibilityCheck);
+}
+
+bool InstallerDownloaderModelImpl::IsCurrentCycleFinished() const {
+  const PrefService* local_state = g_browser_process->local_state();
+  return local_state->GetBoolean(
+             prefs::kInstallerDownloaderPreventFutureDisplay) ||
+         local_state->GetInteger(prefs::kInstallerDownloaderInfobarShowCount) >=
+             kMaxShowCount;
+}
+
+int InstallerDownloaderModelImpl::GetCurrentCycle() const {
+  return std::max(1, g_browser_process->local_state()->GetInteger(
+                         prefs::kInstallerDownloaderCycleCount));
 }
 
 void InstallerDownloaderModelImpl::OnInstallerDownloadCreated(

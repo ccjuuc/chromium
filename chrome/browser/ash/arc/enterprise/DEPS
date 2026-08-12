@@ -25,12 +25,10 @@ include_rules = [
   "+chrome/browser/ash/platform_keys",
   "+chrome/browser/ash/policy/affiliation",
   "+chrome/browser/ash/policy/remote_commands",
-  "+chrome/browser/ash/profiles",
   "+chrome/browser/chromeos/platform_keys",
   "+chrome/browser/net",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/browser.h",
   "+chrome/common/net",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]

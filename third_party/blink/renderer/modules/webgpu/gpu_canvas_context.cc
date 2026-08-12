@@ -8,9 +8,9 @@
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_tone_mapping.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_tone_mapping_mode.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_htmlcanvaselement_offscreencanvas.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_tone_mapping.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_tone_mapping_mode.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_canvas_alpha_mode.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_canvas_configuration.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_offscreen_rendering_context.h"
@@ -27,9 +27,11 @@
 #include "third_party/blink/renderer/modules/webgpu/gpu_supported_features.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_texture.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_non_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_resource.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_mailbox_texture.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_texture_alpha_clearer.h"
@@ -107,6 +109,10 @@ V8OffscreenRenderingContext* GPUCanvasContext::AsV8OffscreenRenderingContext() {
   return MakeGarbageCollected<V8OffscreenRenderingContext>(this);
 }
 
+bool GPUCanvasContext::IsOpaque() const {
+  return GetAlphaType() == kOpaque_SkAlphaType;
+}
+
 SkAlphaType GPUCanvasContext::GetAlphaType() const {
   if (!swap_buffers_) {
     return kPremul_SkAlphaType;
@@ -119,9 +125,19 @@ SkAlphaType GPUCanvasContext::GetAlphaType() const {
 viz::SharedImageFormat GPUCanvasContext::GetSharedImageFormat() const {
   if (!swap_buffers_) {
     return GetN32FormatForCanvas();
-    ;
   }
   return swap_buffers_->Format();
+}
+
+base::ByteSize GPUCanvasContext::AllocatedBufferSize() const {
+  base::ByteSize result;
+  if (resource_provider_) {
+    result += resource_provider_->EstimatedSizeInBytes();
+  }
+  if (swap_buffers_) {
+    result += swap_buffers_->EstimatedSizeInBytes();
+  }
+  return result;
 }
 
 gfx::ColorSpace GPUCanvasContext::GetColorSpace() const {
@@ -151,6 +167,8 @@ void GPUCanvasContext::Reshape(int width, int height) {
   // Steps for canvas context resizing:
   // 1. Replace the drawing buffer of context.
   ReplaceDrawingBuffer(/* destroy_swap_buffers */ false);
+
+  Host()->UpdateMemoryUsage();
 
   // 2. Let configuration be context.[[configuration]]
   // 3. If configuration is not null:
@@ -197,39 +215,39 @@ scoped_refptr<StaticBitmapImage> GPUCanvasContext::GetImage() {
   return SnapshotInternal(front_buffer_texture->GetTexture());
 }
 
-CanvasResourceProviderSharedImage*
-GPUCanvasContext::GetOrCreateCanvasResourceProvider() {
+CanvasNon2DResourceProvider*
+GPUCanvasContext::GetOrCreateCanvasNon2DResourceProvider() {
   auto* provider = resource_provider_.get();
   if (!provider && !did_fail_to_create_resource_provider_) {
     if (Host()->IsValidImageSize()) {
       if (SharedGpuContext::IsGpuCompositingEnabled()) {
         // This code path could be used for compositing so add the necessary
         // shared image usage flags.
-        resource_provider_ = CanvasResourceProvider::CreateWebGPUImageProvider(
+        resource_provider_ = CanvasNon2DResourceProvider::CreateForWebGPU(
             Host()->Size(), GetSharedImageFormat(), GetAlphaType(),
-            GetColorSpace(), swap_buffers_->GetSharedImageUsagesForDisplay(),
-            Host());
+            GetColorSpace(), swap_buffers_->GetHDRMetadata(),
+            swap_buffers_->GetSharedImageUsagesForDisplay(), Host());
       }
       Host()->UpdateMemoryUsage();
       provider = resource_provider_.get();
     }
     if (!provider) {
       did_fail_to_create_resource_provider_ = true;
-    } else if (provider->IsValid()) {
+    } else {
       base::UmaHistogramBoolean("Blink.Canvas.ResourceProviderIsAccelerated",
-                                provider->IsAccelerated());
+                                true);
       base::UmaHistogramEnumeration("Blink.Canvas.ResourceProviderType",
-                                    provider->GetType());
+                                    CanvasResourceProviderType::kSharedImage);
     }
   }
   return provider;
 }
 
-CanvasResourceProviderSharedImage*
-GPUCanvasContext::PaintRenderingResultsToCanvas(
+scoped_refptr<StaticBitmapImage>
+GPUCanvasContext::PaintRenderingResultsToSnapshot(
     SourceDrawingBuffer source_buffer) {
   if (!swap_buffers_) {
-    return resource_provider_.get();
+    return resource_provider_ ? resource_provider_->Snapshot() : nullptr;
   }
 
   if (resource_provider_.get() &&
@@ -238,7 +256,7 @@ GPUCanvasContext::PaintRenderingResultsToCanvas(
     Host()->DiscardResources();
   }
 
-  auto* resource_provider = GetOrCreateCanvasResourceProvider();
+  auto* resource_provider = GetOrCreateCanvasNon2DResourceProvider();
   if (!resource_provider) {
     return nullptr;
   }
@@ -247,9 +265,9 @@ GPUCanvasContext::PaintRenderingResultsToCanvas(
     SkColor4f color = alpha_mode_ == V8GPUCanvasAlphaMode::Enum::kOpaque
                           ? SkColors::kBlack
                           : SkColors::kTransparent;
-    resource_provider->Canvas().clear(color);
-    resource_provider->FlushCanvas(FlushReason::kClear);
-    return resource_provider;
+    return resource_provider->DoExternalOverdrawAndSnapshot(
+        [color](cc::PaintCanvas& canvas) { canvas.clear(color); },
+        ImageOrientationEnum::kDefault);
   }
 
   wgpu::Texture texture;
@@ -266,29 +284,21 @@ GPUCanvasContext::PaintRenderingResultsToCanvas(
     // Create a WebGPU texture backed by the front buffer's SharedImage.
     front_buffer_texture = GetFrontBufferMailboxTexture();
     if (!front_buffer_texture) {
-      return resource_provider;
+      return resource_provider->Snapshot();
     }
 
     texture = front_buffer_texture->GetTexture();
 #endif
   } else {
     if (!texture_) {
-      return resource_provider;
+      return resource_provider->Snapshot();
     }
     texture = texture_->GetHandle();
   }
 
   CopyTextureToResourceProvider(texture, resource_provider);
-  return resource_provider;
-}
 
-scoped_refptr<StaticBitmapImage>
-GPUCanvasContext::PaintRenderingResultsToSnapshot(
-    SourceDrawingBuffer source_buffer) {
-  CanvasResourceProviderSharedImage* provider =
-      PaintRenderingResultsToCanvas(source_buffer);
-
-  return provider ? provider->Snapshot() : nullptr;
+  return resource_provider->Snapshot();
 }
 
 bool GPUCanvasContext::CopyRenderingResultsToVideoFrame(
@@ -309,12 +319,14 @@ void GPUCanvasContext::SizeChanged() {
   resource_provider_.reset();
 }
 
-bool GPUCanvasContext::PushFrame() {
+scoped_refptr<CanvasResource> GPUCanvasContext::GetResourceForPushFrame(
+    bool& should_call_push_frame) {
+  should_call_push_frame = false;
   DCHECK(Host());
   DCHECK(Host()->IsOffscreenCanvas());
 
   if (!swap_buffers_) {
-    return false;
+    return nullptr;
   }
 
   gpu::SyncToken sync_token;
@@ -322,7 +334,7 @@ bool GPUCanvasContext::PushFrame() {
   auto client_si =
       swap_buffers_->ExportCurrentSharedImage(sync_token, &release_callback);
   if (!client_si) {
-    return false;
+    return nullptr;
   }
 
   auto canvas_resource = ExternalCanvasResource::Create(
@@ -330,13 +342,12 @@ bool GPUCanvasContext::PushFrame() {
       viz::TransferableResource::ResourceSource::kWebGPUSwapBuffer,
       swap_buffers_->GetHDRMetadata(), std::move(release_callback),
       GetContextProviderWeakPtr());
-  if (!canvas_resource)
-    return false;
+  if (!canvas_resource) {
+    return nullptr;
+  }
 
-  const int width = canvas_resource->Size().width();
-  const int height = canvas_resource->Size().height();
-  return Host()->PushFrame(std::move(canvas_resource),
-                           SkIRect::MakeWH(width, height));
+  should_call_push_frame = true;
+  return canvas_resource;
 }
 
 ImageBitmap* GPUCanvasContext::TransferToImageBitmap(
@@ -371,19 +382,20 @@ ImageBitmap* GPUCanvasContext::TransferToImageBitmap(
   return MakeGarbageCollected<ImageBitmap>(
       AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
           std::move(client_si), sk_image_sync_token, kPremul_SkAlphaType,
-          GetContextProviderWeakPtr(), base::PlatformThread::CurrentRef(),
+          swap_buffers_->GetHDRMetadata(), GetContextProviderWeakPtr(),
+          base::PlatformThread::CurrentRef(),
           ThreadScheduler::Current()->CleanupTaskRunner(),
           std::move(release_callback)));
 }
 
-V8UnionHTMLCanvasElementOrOffscreenCanvas*
-GPUCanvasContext::getHTMLOrOffscreenCanvas() const {
+V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret
+GPUCanvasContext::getHTMLOrOffscreenCanvas(ScriptState* script_state) const {
   if (Host()->IsOffscreenCanvas()) {
-    return MakeGarbageCollected<V8UnionHTMLCanvasElementOrOffscreenCanvas>(
-        static_cast<OffscreenCanvas*>(Host()));
+    return V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret(
+        script_state, static_cast<OffscreenCanvas*>(Host()));
   }
-  return MakeGarbageCollected<V8UnionHTMLCanvasElementOrOffscreenCanvas>(
-      static_cast<HTMLCanvasElement*>(Host()));
+  return V8UnionHTMLCanvasElementOrOffscreenCanvas::Ret(
+      script_state, static_cast<HTMLCanvasElement*>(Host()));
 }
 
 void GPUCanvasContext::configure(const GPUCanvasConfiguration* descriptor,
@@ -411,15 +423,15 @@ void GPUCanvasContext::configure(const GPUCanvasConfiguration* descriptor,
   }
 
   if (!IsContextFormatSupported(descriptor->format().AsEnum())) {
-    exception_state.ThrowTypeError(
+    exception_state.ThrowTypeError(UNSAFE_TODO(
         String::Format("Unsupported canvas context format '%s'.",
-                       V8GPUTextureFormat(descriptor->format()).AsCStr()));
+                       V8GPUTextureFormat(descriptor->format()).AsCStr())));
     return;
   }
 
   const wgpu::TextureUsage usage =
       AsDawnFlags<wgpu::TextureUsage>(descriptor->usage());
-  if (RuntimeEnabledFeatures::WebGPUExperimentalFeaturesEnabled() &&
+  if (RuntimeEnabledFeatures::WebGPUTransientAttachmentEnabled() &&
       usage & wgpu::TextureUsage::TransientAttachment) {
     exception_state.ThrowTypeError(
         String::Format("Unsupported TransientAttachment texture usage"));
@@ -714,6 +726,7 @@ GPUTexture* GPUCanvasContext::getCurrentTexture(
   SkAlphaType alpha_type = GetAlphaType();
   scoped_refptr<WebGPUMailboxTexture> mailbox_texture =
       swap_buffers_->GetNewTexture(swap_texture_descriptor_, alpha_type);
+  Host()->UpdateMemoryUsage();
   if (!mailbox_texture) {
     // Try to give a helpful message for the most common cause for mailbox
     // texture creation failure.
@@ -737,12 +750,12 @@ GPUTexture* GPUCanvasContext::getCurrentTexture(
       device_, swap_texture_descriptor_.format,
       static_cast<wgpu::TextureUsage>(swap_texture_descriptor_.usage),
       std::move(mailbox_texture),
-      String::FromUTF8(swap_texture_descriptor_.label));
+      String::FromUtf8(swap_texture_descriptor_.label));
 
   if (copy_to_swap_texture_required_) {
     texture_ = MakeGarbageCollected<GPUTexture>(
         device_, device_->GetHandle().CreateTexture(&texture_descriptor_),
-        String::FromUTF8(texture_descriptor_.label));
+        String::FromUtf8(texture_descriptor_.label));
     // If the user manually destroys the texture before yielding control back
     // to the browser, do the copy just prior to the texture destruction.
     texture_->SetBeforeDestroyCallback(blink::BindOnce(
@@ -773,7 +786,11 @@ GPUCanvasContext::GetFrontBufferMailboxTexture() {
   wgpu::DawnTextureInternalUsageDescriptor front_buffer_usage_desc = {{
       .internalUsage = front_buffer_usage,
   }};
+
+  // Note: By spec all WebGPU textures must have some usage (i.e. can't have
+  // only internal usages), so specify the internal usages in `usage` as well.
   wgpu::TextureDescriptor desc = {
+      .usage = front_buffer_usage,
       .size = {base::checked_cast<uint32_t>(front_buffer_si->size().width()),
                base::checked_cast<uint32_t>(front_buffer_si->size().height())},
       .format = swap_buffers_->TextureFormat(),
@@ -889,7 +906,7 @@ void GPUCanvasContext::CopyToSwapTexture() {
 
 bool GPUCanvasContext::CopyTextureToResourceProvider(
     const wgpu::Texture& texture,
-    CanvasResourceProviderSharedImage* resource_provider) const {
+    CanvasNon2DResourceProvider* resource_provider) const {
 #if BUILDFLAG(USE_DAWN)
   DCHECK(resource_provider);
 
@@ -909,9 +926,7 @@ bool GPUCanvasContext::CopyTextureToResourceProvider(
   }
 
   gpu::SyncToken sync_token;
-  auto dst_client_si =
-      resource_provider->GetBackingClientSharedImageForExternalWrite(
-          gpu::SharedImageUsageSet(), sync_token);
+  auto dst_client_si = resource_provider->BeginExternalOverwrite(sync_token);
   if (!dst_client_si) {
     return false;
   }
@@ -1022,8 +1037,9 @@ scoped_refptr<StaticBitmapImage> GPUCanvasContext::SnapshotInternal(
   // These paths are usually related to either printing or either video and
   // usually related to OffscreenCanvas; in cases where the image created from
   // this Snapshot will be sent eventually to the Display Compositor.
-  auto resource_provider = CanvasResourceProvider::CreateWebGPUImageProvider(
+  auto resource_provider = CanvasNon2DResourceProvider::CreateForWebGPU(
       size, GetSharedImageFormat(), GetAlphaType(), GetColorSpace(),
+      swap_buffers_->GetHDRMetadata(),
       swap_buffers_->GetSharedImageUsagesForDisplay());
   if (!resource_provider)
     return nullptr;

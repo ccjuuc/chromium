@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.omaha;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -16,7 +15,6 @@ import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.omaha.MockRequestGenerator.DeviceType;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
@@ -28,7 +26,6 @@ import org.chromium.components.signin.identitymanager.IdentityManager;
 
 /** Unit tests for the RequestGenerator class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 @Config(manifest = Config.NONE)
 public class RequestGeneratorTest {
     private static final String INSTALL_SOURCE = "install_source";
@@ -105,11 +102,12 @@ public class RequestGeneratorTest {
     }
 
     /** Checks that the XML is being created properly. */
-    private RequestGenerator createAndCheckXML(DeviceType deviceType, boolean sendInstallEvent) {
+    private RequestGenerator createAndCheckXML(
+            @DeviceType int deviceType, boolean sendInstallEvent) {
         IdentityServicesProvider.setInstanceForTests(mock(IdentityServicesProvider.class));
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mock(IdentityManager.class));
-        when(IdentityServicesProvider.get().getIdentityManager(any()).hasPrimaryAccount(anyInt()))
+        when(IdentityServicesProvider.get().getIdentityManager(any()).hasPrimaryAccount())
                 .thenReturn(true);
 
         String sessionId = "random_session_id";

@@ -5,13 +5,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/app_service_test.h"
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -23,6 +21,7 @@
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
@@ -45,32 +44,23 @@ class WebAppIconManagerBrowserTest : public WebAppBrowserTestBase {
 
   ~WebAppIconManagerBrowserTest() override = default;
 
- protected:
-  net::EmbeddedTestServer* https_server() { return &https_server_; }
-
   void SetUpOnMainThread() override {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     app_service_test_.SetUp(profile);
     web_app::test::WaitUntilReady(WebAppProvider::GetForTest(profile));
+    WebAppBrowserTestBase::SetUpOnMainThread();
   }
 
-  // WebAppBrowserTestBase:
-  void SetUp() override {
-    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
-    WebAppBrowserTestBase::SetUp();
-  }
-
+ protected:
   apps::AppServiceTest& app_service_test() { return app_service_test_; }
 
  private:
-  net::EmbeddedTestServer https_server_;
   apps::AppServiceTest app_service_test_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
-  ASSERT_TRUE(https_server()->Start());
-  const GURL start_url =
-      https_server()->GetURL("/banners/manifest_test_page.html");
+  const GURL start_url = embedded_https_test_server().GetURL(
+      "/banners/no_manifest_test_page.html");
 
   webapps::AppId app_id;
   {
@@ -89,7 +79,7 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
 
     base::RunLoop run_loop;
 
-    auto* provider = WebAppProvider::GetForTest(browser()->profile());
+    auto* provider = WebAppProvider::GetForTest(browser()->GetProfile());
     provider->scheduler().InstallFromInfoNoIntegrationForTesting(
         std::move(install_info),
         /*overwrite_existing_manifest_fields=*/false,
@@ -111,8 +101,9 @@ IN_PROC_BROWSER_TEST_F(WebAppIconManagerBrowserTest, SingleIcon) {
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   run_loop.Run();
 
-  gfx::ImageSkia app_icon =
-      app_browser->app_controller()->GetWindowAppIcon().Rasterize(nullptr);
+  gfx::ImageSkia app_icon = web_app::AppBrowserController::From(app_browser)
+                                ->GetWindowAppIcon()
+                                .Rasterize(nullptr);
 
 #if BUILDFLAG(IS_CHROMEOS)
   gfx::ImageSkia image_skia =

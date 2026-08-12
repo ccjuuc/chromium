@@ -36,13 +36,14 @@
 #include <limits>
 
 #include "base/check_op.h"
+#include "base/no_destructor.h"
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/font_fallback_priority.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/icu_error.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkTypeface.h"
 
@@ -93,19 +94,18 @@ class ScriptToFontMap {
  public:
   static constexpr UScriptCode kSize = USCRIPT_CODE_LIMIT;
 
-  FontMapping& operator[](UScriptCode script) {
-    return UNSAFE_TODO(mappings_[script]);
-  }
+  ScriptToFontMap() : mappings_(kSize) {}
+
+  FontMapping& operator[](UScriptCode script) { return mappings_[script]; }
 
   void Set(base::span<const ScriptToFontFamilies> families) {
     for (const auto& family : families) {
-      UNSAFE_TODO(mappings_[family.script]).candidate_family_names =
-          family.families;
+      mappings_[family.script].candidate_family_names = family.families;
     }
   }
 
  private:
-  FontMapping mappings_[kSize];
+  Vector<FontMapping> mappings_;
 };
 
 const AtomicString& FindMonospaceFontForScript(UScriptCode script) {
@@ -320,7 +320,7 @@ void InitializeScriptFontMap(ScriptToFontMap& script_font_map) {
 }
 
 UScriptCode GetScript(int ucs4) {
-  ICUError err;
+  IcuError err;
   UScriptCode script = uscript_getScript(ucs4, &err);
   // If script is invalid, common or inherited or there's an error,
   // infer a script based on the unicode block of a character.
@@ -473,18 +473,19 @@ const AtomicString& GetFontFamilyForScript(
   // Try the `AtomicString` cache first. `AtomicString` must be per thread, and
   // thus it can't be added to `ScriptToFontMap`.
   struct AtomicFamilies {
-    std::optional<AtomicString> families[ScriptToFontMap::kSize];
+    AtomicFamilies() : families(ScriptToFontMap::kSize) {}
+    Vector<std::optional<AtomicString>> families;
   };
   DEFINE_THREAD_SAFE_STATIC_LOCAL(AtomicFamilies, families, ());
-  std::optional<AtomicString>& family = UNSAFE_TODO(families.families[script]);
+  std::optional<AtomicString>& family = families.families[script];
   if (family) {
     return *family;
   }
 
-  static ScriptToFontMap script_font_map;
+  static base::NoDestructor<ScriptToFontMap> script_font_map;
   static std::once_flag once_flag;
-  std::call_once(once_flag, [] { InitializeScriptFontMap(script_font_map); });
-  family.emplace(script_font_map[script].FirstAvailableFont(font_manager));
+  std::call_once(once_flag, [] { InitializeScriptFontMap(*script_font_map); });
+  family.emplace((*script_font_map)[script].FirstAvailableFont(font_manager));
   return *family;
 }
 

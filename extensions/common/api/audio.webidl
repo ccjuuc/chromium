@@ -132,7 +132,7 @@ interface Audio {
   //     returned device list will contain all available audio devices.
   // |Returns|: Reports the requested list of audio devices.
   // |PromiseValue|: devices
-  [requiredCallback] static Promise<sequence<AudioDeviceInfo>> getDevices(
+  static Promise<sequence<AudioDeviceInfo>> getDevices(
       optional DeviceFilter filter);
 
   // Sets lists of active input and/or output devices.
@@ -141,28 +141,25 @@ interface Audio {
   //     unaffected.
   //     </p>
   //     <p>It is an error to pass in a non-existent device ID.</p>
-  [requiredCallback] static Promise<undefined> setActiveDevices(
-      DeviceIdLists ids);
+  static Promise<undefined> setActiveDevices(DeviceIdLists ids);
 
   // Sets the properties for the input or output device.
-  [requiredCallback] static Promise<undefined> setProperties(
+  static Promise<undefined> setProperties(
       DOMString id,
       DeviceProperties properties);
 
   // Gets the system-wide mute state for the specified stream type.
   // |streamType|: Stream type for which mute state should be fetched.
-  // |Returns|: Callback reporting whether mute is set or not for specified
-  // stream type.
+  // |Returns|: Promise that resolves with a boolean indicating whether mute is
+  // set or not for specified stream type.
   // |PromiseValue|: value
-  [requiredCallback] static Promise<boolean> getMute(StreamType streamType);
+  static Promise<boolean> getMute(StreamType streamType);
 
   // Sets mute state for a stream type. The mute state will apply to all audio
   // devices with the specified audio stream type.
   // |streamType|: Stream type for which mute state should be set.
   // |isMuted|: New mute value.
-  static Promise<undefined> setMute(
-      StreamType streamType,
-      boolean isMuted);
+  static Promise<undefined> setMute(StreamType streamType, boolean isMuted);
 
   // Fired when sound level changes for an active audio device.
   static attribute OnLevelChangedEvent onLevelChanged;

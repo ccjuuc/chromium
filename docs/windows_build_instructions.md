@@ -23,8 +23,8 @@ Are you a Google employee? See
 
 ### Visual Studio
 
-Chromium requires [Visual Studio 2022](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-notes)
-(>=17.0.0) to build. Visual Studio can also be used to debug Chromium.
+Chromium requires [Visual Studio 2026](https://learn.microsoft.com/en-us/visualstudio/releases/2026/release-notes)
+(>=18.0.0) to build. Visual Studio can also be used to debug Chromium.
 The clang-cl compiler is used but Visual Studio's header files, libraries, and
 some tools are required. Visual Studio Community Edition should work if its
 license is appropriate for you. You must install the "Desktop development with
@@ -52,7 +52,7 @@ $ PATH_TO_INSTALLER.EXE ^
 Required
 
 * [Windows 11 SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
-version 10.0.26100.4654. This can be installed separately or by checking the
+version 10.0.28000.2270. This can be installed separately or by checking the
 appropriate box in the Visual Studio Installer.
 * (Windows 11) SDK Debugging Tools 10.0.26100.3323 or higher. This version of the
 Debugging tools is needed in order to support reading the large-page PDBs that
@@ -65,7 +65,7 @@ it does not get installed on ARM64 and is needed, whether you are building Chrom
 for x64 or ARM64 on ARM64.
 
 WARNING: On sufficiently old versions of Windows (1909 or earlier), dawn or
-related components may fail with a D3d-related error when using the 26100 SDK.
+related components may fail with a D3d-related error when using an >=26100 SDK.
 This is because the d3dcompiler_47.dll file in the new SDK attempts to
 dynamically link versions of the Universal C Runtime which are not present by
 default on older systems. If you experience these errors, you can either update
@@ -128,19 +128,19 @@ Python. Note that environment variable names are case insensitive).
   * If you don't have Administrator access, you can edit your **user-level**
   PATH. Search for "Edit environment variables for your account". Under "User
   variables for %USER%", select the Path variable for editing.
-* Modify the Path variable by adding `C:\src\depot_tools` at the front (or at
-  least in front of any directory that might already have a copy of Python).
-  Note: If you can only modify your user-level PATH and the system PATH has a
-  Python in it, you will be out of luck.
+* Modify the Path variable by adding `C:\src\depot_tools` at the **front** (or
+  at least in front of any directory that might already have a copy of Python
+  or git). Note: If you can only modify your user-level PATH and the system
+  PATH has a Python or git in it, you will be out of luck.
 
 Also, add a DEPOT_TOOLS_WIN_TOOLCHAIN environment variable in the same way, and
 set it to 0. This tells depot_tools to use your locally installed version of
 Visual Studio (by default, depot_tools will try to use a google-internal
 version).
 
-You may also have to set variable `vs2022_install` to your installation path of
-Visual Studio 2022, like
-`set vs2022_install=C:\Program Files\Microsoft Visual Studio\2022\Professional`.
+You may also have to set variable `vs2026_install` to your installation path of
+Visual Studio 2026, like
+`set vs2026_install=C:\Program Files\Microsoft Visual Studio\2026\Professional`.
 
 From a cmd.exe shell, run:
 ```shell
@@ -214,6 +214,19 @@ $ fetch chromium
 
 If you don't want the full repo history, you can save a lot of time by
 adding the `--no-history` flag to `fetch`.
+
+You can make this much faster by passing `--git-cache` to `fetch`, which
+seeds the checkout from a shared, prebuilt snapshot instead of cloning from
+scratch (and, unlike `--no-history`, keeps the full history):
+
+```shell
+$ fetch --git-cache chromium
+```
+
+The cache directory is chosen automatically (override with `$GIT_CACHE_PATH`).
+It mirrors every repo it fetches (~30 GB for Chromium) and is shared by all
+checkouts on the machine: working trees reference it instead of copying the
+objects, so the per-checkout `.git` stays small.
 
 Expect the command to take over an hour on even a fast connection, and many
 hours on slower ones. You should configure your PC so that it doesn't sleep
@@ -401,7 +414,7 @@ You can get a list of all of the other build targets from GN by running
 the GN label with no preceding "//" (so for `//chrome/test:unit_tests`
 use `autoninja -C out\Default chrome/test:unit_tests`).
 
-Tips: See [Siso tips](../siso_tips.md).
+Tips: See [Siso tips](siso_tips.md).
 
 ## Run Chromium
 
@@ -420,7 +433,7 @@ exist in the directory structure. To see what target a given unit test or
 browser test file corresponds to, the following command can be used:
 
 ```shell
-$ gn refs out\Default --testonly=true --type=executable --all chrome\browser\ui\browser_list_unittest.cc
+$ gn refs out\Default --testonly=true --type=executable --all chrome\browser\ui\browser_unittest.cc
 //chrome/test:unit_tests
 ```
 
@@ -555,7 +568,7 @@ $ git config core.untrackedCache true
 
 #### Configure git to use fsmonitor
 
-You can significantly speed up git by using [fsmonitor.](https://github.blog/2022-06-29-improve-git-monorepo-performance-with-a-file-system-monitor/)
+You can significantly speed up git by using [fsmonitor.](https://github.blog/2026-06-29-improve-git-monorepo-performance-with-a-file-system-monitor/)
 You should enable fsmonitor in large repos, such as Chromium and v8. Enabling
 it globally will launch many processes and consume excess commit/memory and
 probably isn't worthwhile. The command to enable fsmonitor in the current repo

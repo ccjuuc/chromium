@@ -90,8 +90,8 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
   // Return true if this control can submit a form.
   // i.e. canBeSuccessfulSubmitButton() && !isDisabledFormControl().
   bool IsSuccessfulSubmitButton() const;
-  virtual bool IsActivatedSubmit() const { return false; }
-  virtual void SetActivatedSubmit(bool) {}
+  bool IsActivatedSubmit() const override { return false; }
+  void SetActivatedSubmit(bool) override {}
 
   struct PopoverTargetElement final {
    public:
@@ -101,22 +101,23 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
     void Trace(Visitor* visitor) const { visitor->Trace(popover); }
   };
 
-  // Returns the popover target element and triggering behavior.
-  static PopoverTargetElement popoverTargetElement(HTMLElement& element);
+  enum class PopoverTriggerSupport {
+    kNone,
+    kSupported,
+  };
 
   // Retrieves the popover target element and triggering behavior.
   PopoverTargetElement popoverTargetElement();
-
-  bool IsValidInterestInvoker(Element& target) const override;
-
-  // Handles popover activation for the given event and element.
-  static void HandlePopoverActivation(Event& event, HTMLElement& element);
+  virtual PopoverTriggerSupport SupportsPopoverTriggering() const {
+    return PopoverTriggerSupport::kNone;
+  }
 
   void DefaultEventHandler(Event&) override;
 
   bool willValidate() const override;
 
   bool IsReadOnly() const;
+  virtual bool SupportsReadOnly() const { return false; }
   bool IsDisabledOrReadOnly() const;
 
   bool MayTriggerVirtualKeyboard() const override;
@@ -129,6 +130,11 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
     return autofill_state_ == WebAutofillState::kPreviewed;
   }
   void SetAutofillState(WebAutofillState = WebAutofillState::kAutofilled);
+  // Returns true if this element can be autofilled by the embedder's Autofill
+  // agent.
+  bool IsAutofillable() const;
+
+  bool MatchesToolSubmitActivePseudoClass() const;
 
   bool IsAutocompleteEmailUrlOrPassword() const;
 
@@ -151,13 +157,15 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
 
   bool MatchesValidityPseudoClasses() const override;
 
+  String GetWebMCPParameterName() const;
+
  protected:
   HTMLFormControlElement(const QualifiedName& tag_name, Document&);
 
   void AttributeChanged(const AttributeModificationParams&) override;
   void ParseAttribute(const AttributeModificationParams&) override;
   virtual void RequiredAttributeChanged();
-  void DisabledAttributeChanged() override;
+  void DisabledAttributeChanged(DisabledChangedReason) override;
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void RemovedFrom(ContainerNode&) override;
   void WillChangeForm() override;
@@ -180,9 +188,9 @@ class CORE_EXPORT HTMLFormControlElement : public HTMLElement,
 
   void HandlePopoverTriggering(HTMLElement* popover,
                                PopoverTriggerAction action);
-  // Checks if the element exists, is a valid Popover element, and (if it's a
-  // form control) supports popover triggering.
-  static bool IsValidPopoverTrigger(const HTMLElement& element);
+  // Checks if the element exists, is a valid Popover element, and supports
+  // popover triggering.
+  bool IsValidPopoverTrigger();
 
   enum WebAutofillState autofill_state_;
 

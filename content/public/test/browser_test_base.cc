@@ -56,7 +56,6 @@
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/tracing/background_tracing_manager_impl.h"
 #include "content/browser/tracing/memory_instrumentation_util.h"
-#include "content/browser/tracing/startup_tracing_controller.h"
 #include "content/browser/tracing/tracing_controller_impl.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/initialize_mojo_core.h"
@@ -89,6 +88,7 @@
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
+#include "services/tracing/public/cpp/startup_tracing_controller.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/base/ui_base_features.h"
@@ -114,7 +114,7 @@
 #include "content/app/content_main_runner_impl.h"
 #include "content/app/mojo/mojo_init.h"
 #include "content/app/mojo_ipc_support.h"
-#include "content/browser/memory_coordinator/browser_memory_consumer_registry.h"
+#include "content/browser/memory_coordinator/browser_memory_coordinator.h"
 #include "content/public/app/content_main_delegate.h"
 #include "content/public/common/content_paths.h"
 #include "testing/android/native_test/native_browser_test_support.h"
@@ -227,7 +227,7 @@ std::string GetDefaultTraceBasename(TraceBasenameType type) {
   // - the second time, if test execution finishes normally, to calculate the
   // resulting name of the file, including test result.
   static std::string random_seed =
-      base::NumberToString(base::RandInt(1e7, 1e8 - 1));
+      base::NumberToString(base::RandIntInclusive(1e7, 1e8 - 1));
   std::string status;
   if (type == TraceBasenameType::kWithTestStatus) {
     if (test_info) {
@@ -334,11 +334,9 @@ void BrowserTestBase::SetUp() {
   if (!UseProductionQuotaSettings()) {
     // By default use hardcoded quota settings to have a consistent testing
     // environment.
-    const int kQuota = 5 * 1024 * 1024;
-    quota_settings_ =
-        std::make_unique<storage::QuotaSettings>(kQuota * 5, kQuota, 0, 0);
-    StoragePartitionImpl::SetDefaultQuotaSettingsForTesting(
-        quota_settings_.get());
+    static storage::QuotaSettings quota_settings(
+        storage::GetHardCodedSettings(1024 * 1024 * 1024));
+    StoragePartition::SetDefaultQuotaSettingsForTesting(&quota_settings);
   }
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -576,13 +574,13 @@ void BrowserTestBase::SetUp() {
 
   // If tracing is enabled, customise the output filename based on the name of
   // the test.
-  StartupTracingController::GetInstance().SetDefaultBasename(
+  tracing::StartupTracingController::SetDefaultBasename(
       GetDefaultTraceBasename(TraceBasenameType::kWithoutTestStatus),
-      StartupTracingController::ExtensionType::kAppendAppropriate);
+      tracing::StartupTracingController::ExtensionType::kAppendAppropriate);
   // Write to the provided file directly to recover at least some data when the
   // test crashes or times out.
-  StartupTracingController::GetInstance().SetUsingTemporaryFile(
-      StartupTracingController::TempFilePolicy::kWriteDirectly);
+  tracing::StartupTracingController::SetUsingTemporaryFile(
+      tracing::StartupTracingController::TempFilePolicy::kWriteDirectly);
   // Set a logging handler to flush a trace before crashing the test when
   // hitting a DCHECK / LOG(FATAL).
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -595,7 +593,7 @@ void BrowserTestBase::SetUp() {
       // calling this to ensure that the message is still printed if something
       // goes wrong.
       if (severity == logging::LOGGING_FATAL)
-        StartupTracingController::EmergencyStop();
+        tracing::StartupTracingController::EmergencyStop();
       return false;
     });
   }
@@ -621,7 +619,7 @@ void BrowserTestBase::SetUp() {
   // follows.
 
   base::MemoryPressureListenerRegistry memory_pressure_listener_registry;
-  base::ScopedMemoryConsumerRegistry<BrowserMemoryConsumerRegistry> registry;
+  BrowserMemoryCoordinator memory_coordinator;
 
   // Unlike other platforms, android_browsertests can reuse the same process for
   // multiple tests. Need to reset startup metrics to allow recording them
@@ -1043,14 +1041,18 @@ void BrowserTestBase::ProxyRunTestOnMainThreadLoop() {
   content::RunAllPendingInMessageLoop();
 
   // Update the trace output filename to include the test result.
-  StartupTracingController::GetInstance().SetDefaultBasename(
+  tracing::StartupTracingController::SetDefaultBasename(
       GetDefaultTraceBasename(TraceBasenameType::kWithTestStatus),
-      StartupTracingController::ExtensionType::kAppendAppropriate);
+      tracing::StartupTracingController::ExtensionType::kAppendAppropriate);
 
 #if BUILDFLAG(IS_ANDROID)
   // On Android, browser main runner is not shut down, so stop trace recording
   // here.
-  StartupTracingController::GetInstance().WaitUntilStopped();
+  CHECK(BrowserMainLoop::GetInstance());
+  CHECK(BrowserMainLoop::GetInstance()->startup_tracing_controller());
+  BrowserMainLoop::GetInstance()
+      ->startup_tracing_controller()
+      ->ShutdownAndWaitForStopIfNeeded();
 #endif
 }
 

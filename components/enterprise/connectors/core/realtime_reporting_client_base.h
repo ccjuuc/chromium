@@ -60,14 +60,30 @@ class RealtimeReportingClientBase : public KeyedService,
   virtual void ReportEvent(::chrome::cros::reporting::proto::Event event,
                            const ReportingSettings& settings);
 
-  // Function that uploads security events, parameterized with the time. We
-  // should stop using this once the migration for the reporting events from
-  // dictionary to proto is done.
-  void ReportEventWithTimestampDeprecated(const std::string& name,
-                                          const ReportingSettings& settings,
-                                          base::Value::Dict event,
-                                          const base::Time& time,
-                                          bool include_profile_user_name);
+
+  // Report a SaaS usage event to the reporting server. The `per_profile`
+  // parameter determines if the browser or profile client will be used. The
+  // `dm_token` parameter is used to validate and initialize the client if it
+  // is not already initialized. The `upload_callback` will be called with the
+  // upload result.
+  virtual void ReportSaasUsageEvent(
+      ::chrome::cros::reporting::proto::Event event,
+      bool per_profile,
+      const std::string& dm_token,
+      base::OnceCallback<void(policy::CloudPolicyClient::Result)>
+          upload_callback);
+
+  // Report a browser launch event to the reporting server. The `per_profile`
+  // parameter determines if the browser or profile client will be used. The
+  // `dm_token` parameter is used to validate and initialize the client if it
+  // is not already initialized. The `upload_callback` will be called with the
+  // upload result.
+  virtual void ReportBrowserLaunchEvent(
+      ::chrome::cros::reporting::proto::Event event,
+      bool per_profile,
+      const std::string& dm_token,
+      base::OnceCallback<void(policy::CloudPolicyClient::Result)>
+          upload_callback);
 
   // Return the user name associated with the profile.
   virtual std::string GetProfileUserName() = 0;
@@ -99,43 +115,25 @@ class RealtimeReportingClientBase : public KeyedService,
 
   // Sub-method called by ReportEventWithTimestamp() to collect device signals
   // on Windows/Mac/Linux platforms. Regardless of collecting device signals or
-  // not, this method is expected to call `UploadSecurityEventReport()` in the
+  // not, this method is expected to call `UploadSecurityEvent()` in the
   // end.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  virtual void MaybeCollectDeviceSignalsAndReportEventDeprecated(
-      base::Value::Dict event,
-      policy::CloudPolicyClient* client,
-      std::string name,
-      const ReportingSettings& settings,
-      base::Time time) = 0;
+
   virtual void MaybeCollectDeviceSignalsAndReportEvent(
       ::chrome::cros::reporting::proto::Event event,
       policy::CloudPolicyClient* client,
       const ReportingSettings& settings) = 0;
 #endif
 
-  // Callback used with UploadSecurityEventReport() to upload events to the
-  // reporting server.
-  virtual void UploadCallbackDeprecated(
-      base::Value::Dict event_wrapper,
-      bool per_profile,
-      policy::CloudPolicyClient* client,
-      EnterpriseReportingEventType event_type,
-      base::TimeTicks upload_started_at,
-      policy::CloudPolicyClient::Result upload_result) = 0;
-
+  // Callback used in FinishUploadSecurityEvent() to log UMA metrics and add
+  // events with response to chrome://safe-browsing#tab-reporting page.
   virtual void UploadCallback(
-      ::chrome::cros::reporting::proto::UploadEventsRequest request,
       bool per_profile,
       policy::CloudPolicyClient* client,
       EnterpriseReportingEventType event_type,
       base::TimeTicks upload_started_at,
       policy::CloudPolicyClient::Result upload_result) = 0;
 
-  // Returns a dictionary of information added to reporting events,
-  // corresponding to the Device, Browser and Profile protos defined in
-  // google3/google/internal/chrome/reporting/v1/chromereporting.proto.
-  virtual base::Value::Dict GetContext() = 0;
 
   // Creates and returns an UploadEventsRequest proto with the Device, Browser
   // and Profile protos set.
@@ -145,13 +143,13 @@ class RealtimeReportingClientBase : public KeyedService,
   // Initialize a real-time report client if needed.  This client is used only
   // if real-time reporting is enabled, the machine is properly reigistered
   // with CBCM and the appropriate policies are enabled.
-  void InitRealtimeReportingClient(const ReportingSettings& settings);
+  void InitRealtimeReportingClient(bool per_profile,
+                                   const std::string& dm_token);
 
-  void OnIpAddressesFetched(
-      ::chrome::cros::reporting::proto::Event event,
-      policy::CloudPolicyClient* client,
-      const ReportingSettings& settings,
-      std::vector<std::string> ip_addresses);
+  void OnIpAddressesFetched(::chrome::cros::reporting::proto::Event event,
+                            policy::CloudPolicyClient* client,
+                            const ReportingSettings& settings,
+                            std::vector<std::string> ip_addresses);
 
   // Prepares information required by CloudPolicyClient::UploadSecurityEvent()
   // and calls it.
@@ -163,30 +161,23 @@ class RealtimeReportingClientBase : public KeyedService,
                                  policy::CloudPolicyClient* client,
                                  const ReportingSettings& settings);
 
-  void OnIpAddressesFetchedDeprecated(
-      base::Value::Dict event,
-      policy::CloudPolicyClient* client,
-      std::string name,
-      const ReportingSettings& settings,
-      base::Time time,
-      std::vector<std::string> ip_addresses);
-
-  // Prepares information required by
-  // CloudPolicyClient::UploadSecurityEventReportDeprecated() and calls it.
-  // DEPRECATED: Use UploadSecurityEvent() instead.
-  void UploadSecurityEventReportDeprecated(base::Value::Dict event,
-                                           policy::CloudPolicyClient* client,
-                                           std::string name,
-                                           const ReportingSettings& settings,
-                                           base::Time time);
-
-  void FinishUploadSecurityEventReportDeprecated(
-      base::Value::Dict event,
-      policy::CloudPolicyClient* client,
-      std::string name,
-      const ReportingSettings& settings);
 
   const std::string GetProfilePolicyClientDescription();
+
+  // Helper method to report an event that is independent of the reporting
+  // connector policy.
+  void ReportStandaloneEvent(
+      ::chrome::cros::reporting::proto::Event event,
+      EnterpriseReportingEventType event_type,
+      bool per_profile,
+      const std::string& dm_token,
+      base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback);
+
+  void OnStandaloneEventUploadCompleted(
+      base::OnceCallback<void(policy::CloudPolicyClient::Result)> callback,
+      EnterpriseReportingEventType event_type,
+      base::TimeTicks upload_started_at,
+      policy::CloudPolicyClient::Result upload_result);
 
   raw_ptr<signin::IdentityManager, DanglingUntriaged> identity_manager_ =
       nullptr;
@@ -216,6 +207,12 @@ class RealtimeReportingClientBase : public KeyedService,
   // initialized.
   std::pair<std::string, policy::CloudPolicyClient*> InitBrowserReportingClient(
       const std::string& dm_token);
+
+  // Helper method to get the reporting client. If the client is not
+  // initialized, it will attempt to initialize it. If initialization fails or
+  // the DM token is rejected, it returns nullptr.
+  policy::CloudPolicyClient* GetReportingClient(const std::string& dm_token,
+                                                bool per_profile);
 
   // Handle the availability of a cloud policy client.
   void OnCloudPolicyClientAvailable(const std::string& policy_client_desc,

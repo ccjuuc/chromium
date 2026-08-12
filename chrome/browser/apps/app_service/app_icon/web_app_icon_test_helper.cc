@@ -4,10 +4,10 @@
 
 #include "chrome/browser/apps/app_service/app_icon/web_app_icon_test_helper.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_test_util.h"
 #include "chrome/browser/apps/icon_standardizer.h"
@@ -44,10 +44,10 @@ void WebAppIconTestHelper::WriteIcons(const std::string& app_id,
 
   web_app::IconBitmaps icon_bitmaps;
   for (size_t i = 0; i < sizes_px.size(); ++i) {
-    if (base::Contains(purposes, IconPurpose::ANY)) {
+    if (std::ranges::contains(purposes, IconPurpose::ANY)) {
       web_app::AddGeneratedIcon(&icon_bitmaps.any, sizes_px[i], colors[i]);
     }
-    if (base::Contains(purposes, IconPurpose::MASKABLE)) {
+    if (std::ranges::contains(purposes, IconPurpose::MASKABLE)) {
       web_app::AddGeneratedIcon(&icon_bitmaps.maskable, sizes_px[i], colors[i]);
     }
   }
@@ -68,7 +68,8 @@ gfx::ImageSkia WebAppIconTestHelper::GenerateWebAppIcon(
   base::test::TestFuture<web_app::IconMetadataFromDisk> future;
   icon_manager().ReadTrustedIconsWithFallbackToManifestIcons(
       app_id, sizes_px, purpose, future.GetCallback());
-  web_app::SizeToBitmap icon_bitmaps = std::move(future.Take().icons_map);
+  web_app::OrderedSizeToBitmap icon_bitmaps =
+      std::move(future.Take().icons_map);
 
   gfx::ImageSkia output_image_skia;
 

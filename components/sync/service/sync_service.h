@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/containers/enum_set.h"
+#include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/time/time.h"
@@ -221,7 +222,9 @@ class SyncService : public KeyedService {
     // Same as above, but for the case where data loss may affect all
     // encryptable datatypes.
     kTrustedVaultRecoverabilityDegradedForEverything = 6,
+// This enum is parsed by java_cpp_enum.py, which doesn't accept &&ing flags.
 #if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID)
     // Sync settings dialog not confirmed yet.
     kNeedsSettingsConfirmation = 7,
     // Sync has encountered an unrecoverable error. It won't attempt to start
@@ -229,6 +232,7 @@ class SyncService : public KeyedService {
     // and back in again. This error is only shown for syncing users, and will
     // be removed with "Sync The Feature" deprecation.
     kUnrecoverableError = 8,
+#endif  // !BUILDFLAG(IS_ANDROID)
 #endif  // !BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -241,7 +245,16 @@ class SyncService : public KeyedService {
     kNeedsClientUpgrade = 10,
     // The number of bookmarks has exceeded the limit.
     kBookmarksLimitExceeded = 11,
+
+#if BUILDFLAG(IS_IOS)
+    // Sync has encountered a Device Management error. The user should be
+    // notified and depending on the type of error, may need to take action to
+    // resolve it.
+    kDeviceManagementError = 12,
+    kMaxValue = kDeviceManagementError,
+#else
     kMaxValue = kBookmarksLimitExceeded,
+#endif  // BUILDFLAG(IS_IOS)
   };
   // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:UserActionableError)
 
@@ -479,11 +492,26 @@ class SyncService : public KeyedService {
   virtual void TriggerLocalDataMigrationForItems(
       std::map<DataType, std::vector<LocalDataItemModel::DataId>> items) = 0;
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(BookmarksLimitExceededHelpClickedSource)
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync
+  enum class BookmarksLimitExceededHelpClickedSource {
+    kSettings = 0,
+    kSyncErrorMessage = 1,
+    kProfileMenu = 2,
+    kIdentityErrorInfoPill = 3,
+    kAccountMenu = 4,
+    kMaxValue = kAccountMenu,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:BookmarksLimitExceededHelpClickedSource)
+
   // Acknowledges the `kBookmarksLimitExceeded` user-actionable error. Once
   // acknowledged, `GetUserActionableError()` will no longer report this error
   // until the next browser restart. This is used to hide the error UI
   // after the user has interacted with it.
-  virtual void AcknowledgeBookmarksLimitExceededError() = 0;
+  virtual void AcknowledgeBookmarksLimitExceededError(
+      BookmarksLimitExceededHelpClickedSource source) = 0;
 
   // Requests sync service to first enable account storage for the `data_type`
   // and then asynchronously move the specified local data `items` to account.
@@ -500,6 +528,10 @@ class SyncService : public KeyedService {
   // SyncServiceObserver::OnStateChanged() to track status changes. Must be
   // called for real data types only.
   virtual DataTypeDownloadStatus GetDownloadStatusFor(DataType type) const = 0;
+
+  // Returns the cache GUIDs for the current device across all Gaia IDs.
+  virtual base::flat_set<std::string> GetCurrentDeviceCacheGuidsForAllGaiaIds()
+      const = 0;
 
   //////////////////////////////////////////////////////////////////////////////
   // ACTIONS / STATE CHANGE REQUESTS
@@ -615,7 +647,7 @@ class SyncService : public KeyedService {
   // Asynchronously fetches base::Value representations of all sync nodes and
   // returns them to the specified callback on this thread.
   virtual void GetAllNodesForDebugging(
-      base::OnceCallback<void(base::Value::List)> callback) = 0;
+      base::OnceCallback<void(base::ListValue)> callback) = 0;
 };
 
 }  // namespace syncer

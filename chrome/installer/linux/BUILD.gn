@@ -10,8 +10,10 @@ import("//build/linux/strip_binary.gni")
 import("//build/timestamp.gni")
 import("//build/util/lastchange.gni")
 import("//build/util/process_version.gni")
+import("//chrome/installer/installers.gni")
 import("//chrome/version.gni")
 import("//components/optimization_guide/features.gni")
+import("//services/on_device_model/on_device_model.gni")
 import("//third_party/angle/gni/angle.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 import("//ui/gl/features.gni")
@@ -29,6 +31,34 @@ declare_args() {
 
 assert(is_linux)
 
+if (current_cpu == "x86") {
+  deb_arch = "i386"
+  rpm_arch = "i386"
+} else if (current_cpu == "x64") {
+  deb_arch = "amd64"
+  rpm_arch = "x86_64"
+} else if (current_cpu == "arm") {
+  deb_arch = "armhf"
+  rpm_arch = "armhf"
+} else if (current_cpu == "arm64") {
+  deb_arch = "arm64"
+  rpm_arch = "aarch64"
+} else if (current_cpu == "mipsel") {
+  deb_arch = "mipsel"
+  rpm_arch = "mipsel"
+} else if (current_cpu == "mips64el") {
+  deb_arch = "mips64el"
+  rpm_arch = "mips64el"
+} else if (current_cpu == "loong64") {
+  deb_arch = "loong64"
+  rpm_arch = "loongarch64"
+} else if (current_cpu == "riscv64") {
+  deb_arch = "riscv64"
+  rpm_arch = "riscv64"
+} else {
+  assert(false, "Linux installer not configured for this architecture.")
+}
+
 packaging_files_executables = [
   "$root_out_dir/${chrome_exe_filename_base}",
   "$root_out_dir/chrome_crashpad_handler",
@@ -38,12 +68,10 @@ packaging_files_executables = [
 
 packaging_files_shlibs = []
 
-if (!use_static_angle) {
-  packaging_files_shlibs += [
-    "$root_out_dir/libEGL.so",
-    "$root_out_dir/libGLESv2.so",
-  ]
-}
+packaging_files_shlibs += [
+  "$root_out_dir/libEGL.so",
+  "$root_out_dir/libGLESv2.so",
+]
 
 if (bundle_widevine_cdm) {
   packaging_files_shlibs +=
@@ -61,6 +89,9 @@ if (enable_swiftshader) {
 if (build_with_internal_optimization_guide) {
   packaging_files_shlibs +=
       [ "$root_out_dir/liboptimization_guide_internal.so" ]
+  if (enable_ml_internal) {
+    packaging_files_shlibs += [ "$root_out_dir/libLiteRtWebGpuAccelerator.so" ]
+  }
 }
 
 packaging_files_binaries = packaging_files_executables + packaging_files_shlibs
@@ -69,8 +100,6 @@ packaging_files_binaries = packaging_files_executables + packaging_files_shlibs
 # (e.g. all locales, resources, etc.)
 packaging_files = packaging_files_binaries + [
                     "common/installer.py",
-                    "$root_out_dir/xdg-mime",
-                    "$root_out_dir/xdg-settings",
                     "$root_out_dir/locales/en-US.pak",
                     "$root_out_dir/MEIPreload/manifest.json",
                     "$root_out_dir/MEIPreload/preloaded_data.pb",
@@ -189,14 +218,25 @@ strip_binary("strip_chrome_sandbox") {
   deps = [ "//sandbox/linux:chrome_sandbox" ]
 }
 
+# On ChromeOS, system services depend on real ANGLE libraries rather than dummy
+# stubs, so we route strip_binary dependencies to //third_party/angle even when
+# use_static_angle is true.
 strip_binary("strip_libEGL_shlib") {
   binary_input = "$root_out_dir/libEGL.so"
-  deps = [ "//third_party/angle:libEGL" ]
+  if (use_static_angle && !is_chromeos) {
+    deps = [ "//ui/gl:dummy_libEGL" ]
+  } else {
+    deps = [ "//third_party/angle:libEGL" ]
+  }
 }
 
 strip_binary("strip_libGLESv2_shlib") {
   binary_input = "$root_out_dir/libGLESv2.so"
-  deps = [ "//third_party/angle:libGLESv2" ]
+  if (use_static_angle && !is_chromeos) {
+    deps = [ "//ui/gl:dummy_libGLESv2" ]
+  } else {
+    deps = [ "//third_party/angle:libGLESv2" ]
+  }
 }
 
 if (angle_shared_libvulkan && !is_chromeos) {
@@ -217,6 +257,12 @@ if (build_with_internal_optimization_guide) {
     deps = [
       "//components/optimization_guide/internal:optimization_guide_internal",
     ]
+  }
+  if (enable_ml_internal) {
+    strip_binary("strip_ml_drift_webgpu_accelerator") {
+      binary_input = "$root_out_dir/libLiteRtWebGpuAccelerator.so"
+      deps = [ "//components/optimization_guide/internal/third_party/odml:ml_drift_webgpu_accelerator_so" ]
+    }
   }
 }
 
@@ -239,8 +285,54 @@ group("linux") {
   deps = [
     ":beta",
     ":canary",
+    ":deb_repo_package",
     ":stable",
     ":unstable",
+  ]
+}
+
+action("deb_repo_package") {
+  visibility = [ ":*" ]
+  script = "debian/build_repo_package.py"
+
+  inputs = [
+    "common/installer.py",
+    "common/apt.include",
+    "common/key.include",
+    "common/repo_variables.include",
+    "common/variables.include",
+    "debian/build_repo_package.py",
+    "debian/control_repo.template",
+    "debian/postinst_repo",
+    "debian/postrm_repo",
+    "debian/repo_package.include",
+  ]
+
+  deps = [ ":installer_deps" ]
+
+  if (is_chrome_branded) {
+    package = "google-chrome-repo"
+  } else {
+    package = "chromium-browser-repo"
+  }
+
+  outputs = [ "$root_out_dir/${package}_${deb_arch}.deb" ]
+
+  args = [
+    "-a",
+    deb_arch,
+    "-b",
+    build_timestamp,
+    "-c",
+    "stable",
+    "-d",
+    branding_path_component,
+    "-o",
+    rebase_path(root_out_dir, root_build_dir),
+    "-s",
+    rebase_path(sysroot, root_build_dir),
+    "-t",
+    target_os,
   ]
 }
 
@@ -252,6 +344,7 @@ copy("common_packaging_files") {
   visibility = [ ":*" ]
   sources = [
     "//chrome/app/resources/manpage.1.in",
+    "common/apparmor.template",
     "common/appdata.xml.template",
     "common/apt.include",
     "common/default-app-block.template",
@@ -283,8 +376,11 @@ copy("deb_packaging_files") {
   sources = [
     "debian/changelog.template",
     "debian/control.template",
+    "debian/control_repo.template",
     "debian/postinst",
+    "debian/postinst_repo",
     "debian/postrm",
+    "debian/postrm_repo",
     "debian/prerm",
   ]
   outputs = [ "$root_out_dir/installer/debian/{{source_file_part}}" ]
@@ -377,10 +473,17 @@ group("installer_deps") {
   if (bundle_widevine_cdm) {
     public_deps += [ "//third_party/widevine/cdm" ]
   }
-  if (!use_static_angle) {
+  public_deps += [
+    ":strip_libEGL_shlib",
+    ":strip_libGLESv2_shlib",
+  ]
+  if (use_static_angle && !is_chromeos) {
     public_deps += [
-      ":strip_libEGL_shlib",
-      ":strip_libGLESv2_shlib",
+      "//ui/gl:dummy_libEGL",
+      "//ui/gl:dummy_libGLESv2",
+    ]
+  } else {
+    public_deps += [
       "//third_party/angle:libEGL",
       "//third_party/angle:libGLESv2",
     ]
@@ -406,6 +509,12 @@ group("installer_deps") {
       ":strip_optimization_guide",
       "//components/optimization_guide/internal:optimization_guide_internal",
     ]
+    if (enable_ml_internal) {
+      public_deps += [
+        ":strip_ml_drift_webgpu_accelerator",
+        "//components/optimization_guide/internal/third_party/odml:ml_drift_webgpu_accelerator_so",
+      ]
+    }
   }
   if (use_qt5) {
     public_deps += [
@@ -440,26 +549,6 @@ template("linux_package") {
     visibility = [ ":*" ]
     script = "debian/build.py"
 
-    if (current_cpu == "x86") {
-      deb_arch = "i386"
-    } else if (current_cpu == "x64") {
-      deb_arch = "amd64"
-    } else if (current_cpu == "arm") {
-      deb_arch = "armhf"
-    } else if (current_cpu == "arm64") {
-      deb_arch = "arm64"
-    } else if (current_cpu == "mipsel") {
-      deb_arch = "mipsel"
-    } else if (current_cpu == "mips64el") {
-      deb_arch = "mips64el"
-    } else if (current_cpu == "loong64") {
-      deb_arch = "loong64"
-    } else if (current_cpu == "riscv64") {
-      deb_arch = "riscv64"
-    } else {
-      assert(false, "Linux installer not configured for this architecture.")
-    }
-
     inputs = packaging_files
     outputs = [ "$root_out_dir/${package}-${channel}_${resolved_version}-1_${deb_arch}.deb" ]
 
@@ -478,6 +567,9 @@ template("linux_package") {
       rebase_path(sysroot, root_build_dir),
       "-t",
       target_os,
+      "--xz-nthreads",
+      "$linux_debian_pkg_xz_nthreads",
+      "--use-static-angle=$use_static_angle",
     ]
     if (is_official_build) {
       args += [ "-f" ]
@@ -503,26 +595,6 @@ template("linux_package") {
       visibility = [ ":*" ]
       script = "rpm/build.py"
 
-      if (current_cpu == "x86") {
-        rpm_arch = "i386"
-      } else if (current_cpu == "x64") {
-        rpm_arch = "x86_64"
-      } else if (current_cpu == "arm") {
-        rpm_arch = "armhf"
-      } else if (current_cpu == "arm64") {
-        rpm_arch = "aarch64"
-      } else if (current_cpu == "mipsel") {
-        rpm_arch = "mipsel"
-      } else if (current_cpu == "mips64el") {
-        rpm_arch = "mips64el"
-      } else if (current_cpu == "loong64") {
-        rpm_arch = "loongarch64"
-      } else if (current_cpu == "riscv64") {
-        rpm_arch = "riscv64"
-      } else {
-        assert(false, "Linux installer not configured for this architecture.")
-      }
-
       inputs = packaging_files
       outputs = [ "$root_out_dir/${package}-${channel}-${resolved_version}-1.${rpm_arch}.rpm" ]
 
@@ -539,6 +611,7 @@ template("linux_package") {
         rebase_path(root_out_dir, root_build_dir),
         "-t",
         target_os,
+        "--use-static-angle=$use_static_angle",
       ]
       if (is_official_build) {
         args += [ "-f" ]

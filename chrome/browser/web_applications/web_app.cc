@@ -20,6 +20,7 @@
 #include "base/containers/flat_set.h"
 #include "base/containers/to_value_list.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -27,11 +28,14 @@
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/generated_icon_fix_util.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
-#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-data-view.h"
+#include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
+#include "chrome/browser/web_applications/model/safe_url_pattern_to_value.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/proto/web_app.equal.h"
 #include "chrome/browser/web_applications/proto/web_app.ostream.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
@@ -51,6 +55,7 @@
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_proto_utils.h"
 #include "chrome/browser/web_applications/web_app_scope.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/services/app_service/public/cpp/protocol_handler_info.h"
@@ -63,13 +68,8 @@
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
-#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
-#include "third_party/blink/public/common/permissions_policy/policy_helper_public.h"
-#include "third_party/blink/public/common/safe_url_pattern.h"
-#include "third_party/liburlpattern/options.h"
-#include "third_party/liburlpattern/pattern.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/size.h"
@@ -120,16 +120,16 @@ std::string ApiApprovalStateToString(ApiApprovalState state) {
   }
 }
 
-base::Value::Dict ImageResourceDebugDict(
+base::DictValue ImageResourceDebugDict(
     const blink::Manifest::ImageResource& icon) {
   const auto kPurposeStrings =
       std::to_array<const char*>({"Any", "Monochrome", "Maskable"});
 
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set("src", icon.src.spec());
   root.Set("type", icon.type);
 
-  base::Value::List sizes_json;
+  base::ListValue sizes_json;
   for (const auto& size : icon.sizes) {
     std::string size_formatted = base::NumberToString(size.width()) + "x" +
                                  base::NumberToString(size.height());
@@ -137,24 +137,12 @@ base::Value::Dict ImageResourceDebugDict(
   }
   root.Set("sizes", std::move(sizes_json));
 
-  base::Value::List purpose_json;
+  base::ListValue purpose_json;
   for (const auto& purpose : icon.purpose) {
     purpose_json.Append(kPurposeStrings[static_cast<int>(purpose)]);
   }
   root.Set("purpose", std::move(purpose_json));
   return root;
-}
-
-base::Value::Dict UrlPatternDebugValue(const blink::SafeUrlPattern& pattern) {
-  liburlpattern::Options options = {.delimiter_list = "/",
-                                    .prefix_list = "/",
-                                    .sensitive = true,
-                                    .strict = false};
-  liburlpattern::Pattern pathname(pattern.pathname, options, "[^/]+?");
-
-  base::Value::Dict pattern_dict;
-  pattern_dict.Set("pathname", pathname.GeneratePatternString());
-  return pattern_dict;
 }
 
 base::Value OptTabStripToDebugValue(
@@ -163,9 +151,9 @@ base::Value OptTabStripToDebugValue(
     return base::Value();
   }
 
-  base::Value::Dict result;
+  base::DictValue result;
 
-  base::Value::Dict new_tab_button_json;
+  base::DictValue new_tab_button_json;
   new_tab_button_json.Set(
       "url", base::ToString(tab_strip->new_tab_button.url.value_or(GURL(""))));
   result.Set("new_tab_button", std::move(new_tab_button_json));
@@ -175,11 +163,11 @@ base::Value OptTabStripToDebugValue(
         "home_tab",
         base::ToString(std::get<TabStrip::Visibility>(tab_strip->home_tab)));
   } else {
-    base::Value::Dict home_tab_json;
+    base::DictValue home_tab_json;
     const blink::Manifest::HomeTabParams& home_tab_params =
         std::get<blink::Manifest::HomeTabParams>(tab_strip->home_tab);
 
-    base::Value::List icons_json;
+    base::ListValue icons_json;
     std::optional<std::vector<blink::Manifest::ImageResource>> icons =
         home_tab_params.icons;
 
@@ -188,9 +176,9 @@ base::Value OptTabStripToDebugValue(
     }
 
     home_tab_json.Set("icons", std::move(icons_json));
-    home_tab_json.Set("scope_patterns",
-                      base::ToValueList(home_tab_params.scope_patterns,
-                                        UrlPatternDebugValue));
+    home_tab_json.Set(
+        "scope_patterns",
+        base::ToValueList(home_tab_params.scope_patterns, ToValue));
     result.Set("home_tab", std::move(home_tab_json));
   }
   return base::Value(std::move(result));
@@ -199,9 +187,9 @@ base::Value OptTabStripToDebugValue(
 base::Value RelatedApplicationsToDebugValue(
     const std::vector<blink::Manifest::RelatedApplication>&
         related_applications) {
-  base::Value::List related_applications_json;
+  base::ListValue related_applications_json;
   for (const auto& related_application : related_applications) {
-    base::Value::Dict related_application_json;
+    base::DictValue related_application_json;
     related_application_json.Set("platform",
                                  related_application.platform.value());
     if (related_application.url.is_valid()) {
@@ -236,6 +224,22 @@ void CheckValidPendingUpdateInfo(
   }
 }
 
+// Validate all constraints during construction of a web app.
+void RunWebAppConstructionValidations(const webapps::ManifestId& manifest_id,
+                                      const GURL& start_url,
+                                      const GURL& scope) {
+  CHECK(start_url.is_valid());
+  CHECK(scope.is_valid());
+  CHECK(url::IsSameOriginWith(manifest_id.value(), start_url))
+      << manifest_id.spec() << " vs " << start_url.spec();
+  CHECK(url::IsSameOriginWith(start_url, scope))
+      << start_url.spec() << " vs " << scope.spec();
+  CHECK(!scope.has_ref() && !scope.has_query());
+  CHECK(base::StartsWith(start_url.spec(), scope.spec(),
+                         base::CompareCase::SENSITIVE))
+      << "Start URL " << start_url << " must be nested in scope " << scope;
+}
+
 }  // namespace
 
 WebApp::CachedDerivedData::CachedDerivedData() = default;
@@ -249,18 +253,11 @@ WebApp::CachedDerivedData& WebApp::CachedDerivedData::operator=(
   return *this;
 }
 
-WebApp::WebApp(const webapps::AppId& app_id)
-    : app_id_(app_id),
-      chromeos_data_(IsChromeOsDataMandatory()
-                         ? std::make_optional<WebAppChromeOsData>()
-                         : std::nullopt) {}
-
 WebApp::WebApp(const webapps::ManifestId& manifest_id,
                const GURL& start_url,
                const GURL& scope,
-               std::optional<webapps::AppId> parent_app_id,
-               std::optional<webapps::ManifestId> parent_manifest_id)
-    : app_id_(GenerateAppIdFromManifestId(manifest_id, parent_manifest_id)),
+               std::optional<webapps::AppId> parent_app_id)
+    : app_id_(GenerateAppIdFromManifestId(manifest_id)),
       start_url_(start_url),
       scope_(scope),
       chromeos_data_(IsChromeOsDataMandatory()
@@ -268,24 +265,53 @@ WebApp::WebApp(const webapps::ManifestId& manifest_id,
                          : std::nullopt),
       manifest_id_(manifest_id),
       parent_app_id_(parent_app_id) {
-  CHECK(manifest_id.is_valid());
-  CHECK(start_url.is_valid());
-  CHECK(scope.is_valid());
-  CHECK(url::IsSameOriginWith(manifest_id_, start_url_))
-      << manifest_id_.spec() << " vs " << start_url_.spec();
-  CHECK(url::IsSameOriginWith(start_url_, scope_))
-      << start_url_.spec() << " vs " << scope_.spec();
-  CHECK(!scope_.has_ref() && !scope_.has_query());
-  CHECK(!manifest_id_.has_ref());
-  CHECK(base::StartsWith(start_url_.spec(), scope_.spec(),
-                         base::CompareCase::SENSITIVE))
-      << "Start URL " << start_url_ << " must be nested in scope " << scope_;
-  if (parent_app_id_.has_value()) {
-    CHECK(!parent_app_id_->empty());
+  // Fix invalid scope values.
+  if (!scope_.is_valid() || !url::IsSameOriginWith(scope_, start_url_) ||
+      !base::StartsWith(start_url_.spec(), scope_.spec(),
+                        base::CompareCase::SENSITIVE)) {
+    DLOG(ERROR) << "Invalid scope " << scope_.possibly_invalid_spec()
+                << " for start_url " << start_url_;
+    scope_ = start_url_.GetWithoutFilename();
   }
-  CHECK(!!parent_app_id == !!parent_manifest_id);
-  // Ensure sync proto is initialized.
-  SetSyncProto(sync_proto_);
+  // Must drop the fragments and queries per `scope` rules
+  // https://w3c.github.io/manifest/#scope-member
+  GURL::Replacements replacements;
+  replacements.ClearRef();
+  replacements.ClearQuery();
+  scope_ = scope_.ReplaceComponents(replacements);
+
+  RunWebAppConstructionValidations(manifest_id, start_url, scope_);
+  // Set the correct metadata so that the appropriate fields in the
+  // `sync_proto_` can be initialized accordingly.
+  SetManifestId(manifest_id_);
+  SetStartUrlAndScope(start_url_, scope_);
+}
+
+WebApp::WebApp(const sync_pb::WebAppSpecifics& sync_proto)
+    : chromeos_data_(IsChromeOsDataMandatory()
+                         ? std::make_optional<WebAppChromeOsData>()
+                         : std::nullopt),
+      sync_proto_(sync_proto),
+      manifest_id_(sync_proto.has_relative_manifest_id()
+                       ? GenerateManifestId(sync_proto.relative_manifest_id(),
+                                            GURL(sync_proto.start_url()))
+                       : GenerateManifestIdFromStartUrlOnly(
+                             GURL(sync_proto.start_url()))) {
+  CHECK(sync_proto_.has_start_url() && GURL(sync_proto_.start_url()).is_valid())
+      << "Invalid start_url in sync proto: " << sync_proto_.start_url();
+  CHECK(sync_proto_.has_scope() && GURL(sync_proto_.scope()).is_valid())
+      << "Invalid scope in sync proto: " << sync_proto_.scope();
+  GURL start_url = GURL(sync_proto_.start_url());
+
+  SetManifestId(manifest_id_);
+  app_id_ = GenerateAppIdFromManifestId(manifest_id_);
+
+  SetStartUrlAndScope(start_url, GURL(sync_proto_.scope()));
+
+  // All other fields of the web app are set by the `Set<Field>()` methods. They
+  // should be sanitizing the fields, but still good to check it here just in
+  // case.
+  RunWebAppConstructionValidations(manifest_id_, start_url_, scope_);
 }
 
 WebApp::~WebApp() = default;
@@ -311,16 +337,6 @@ WebAppScope WebApp::GetScope() const {
 }
 
 webapps::ManifestId WebApp::manifest_id() const {
-  // Almost all production use-cases should have the manifest_id set, but in
-  // some test it is not. If the manifest id is not set, then fall back to the
-  // start_url, as per the algorithm in
-  // https://www.w3.org/TR/appmanifest/#id-member.
-  if (manifest_id_.is_empty()) {
-    CHECK_IS_TEST();
-    // This is why the function must return a value instead of a const ref, as
-    // this object would be temporary.
-    return GenerateManifestIdFromStartUrlOnly(start_url_);
-  }
   return manifest_id_;
 }
 
@@ -337,6 +353,11 @@ const SortedSizesPx& WebApp::stored_trusted_icon_sizes(
 }
 
 void WebApp::AddSource(WebAppManagement::Type source) {
+  if (source == WebAppManagement::kSync) {
+    CHECK_NE(proto::SUGGESTED_FROM_MIGRATION, install_state_)
+        << "Synced apps should not have an install state suggested from "
+           "migration";
+  }
   sources_.Put(source);
 }
 
@@ -435,50 +456,50 @@ WebAppManagement::Type WebApp::GetHighestPrioritySource() const {
 
 void WebApp::SetName(const std::string& name) {
   name_ = name;
+  sync_proto_.set_name(name);
 }
 
 void WebApp::SetDescription(const std::string& description) {
   description_ = description;
 }
 
-void WebApp::SetStartUrl(const GURL& start_url) {
+void WebApp::SetStartUrlAndScope(const GURL& start_url, const GURL& scope) {
   CHECK(start_url.is_valid());
-  if (manifest_id_.is_empty()) {
-    manifest_id_ = GenerateManifestIdFromStartUrlOnly(start_url);
-  }
-  CHECK(url::IsSameOriginWith(manifest_id(), start_url))
+  CHECK(manifest_id_.is_valid());
+  CHECK(url::IsSameOriginWith(manifest_id().value(), start_url))
       << manifest_id().spec() << " " << start_url.spec();
+  CHECK(scope.is_valid());
+  CHECK(base::StartsWith(start_url.spec(), scope.spec(),
+                         base::CompareCase::SENSITIVE));
+
   start_url_ = start_url;
 
-  // Ensure sync proto is initialized and remains consistent. Logic in
-  // `SetSyncProto` will populate an unset `start_url` on the proto.
-  sync_proto_.clear_start_url();
-  SetSyncProto(sync_proto_);
-  // Ensure that scope is always set.
-  if (scope_.is_empty()) {
-    scope_ = start_url_.GetWithoutFilename();
-  }
-}
-
-void WebApp::SetScope(const GURL& scope) {
-  GURL scope_for_app = scope;
-  // If the given scope is empty, populate the scope from the `start_url_`.
-  if (scope.is_empty()) {
-    CHECK(start_url_.is_valid());
-    scope_for_app = start_url_.GetWithoutFilename();
-  }
-  CHECK(scope_for_app.is_valid());
   // Ensure that the scope can never include queries or fragments, as per spec.
   GURL::Replacements scope_replacements;
   scope_replacements.ClearRef();
   scope_replacements.ClearQuery();
-  scope_ = scope_for_app.ReplaceComponents(scope_replacements);
+  scope_ = scope.ReplaceComponents(scope_replacements);
+
   // Post-migration check: Scope should never be empty after setting.
   CHECK(!scope_.is_empty());
+
+  // Ensure that the start_url and scope in the sync proto is set correctly and
+  // consistently.
+  sync_proto_.clear_start_url();
+  sync_proto_.clear_scope();
+  sync_proto_.set_start_url(start_url_.spec());
+  sync_proto_.set_scope(scope_.spec());
 }
 
 void WebApp::SetThemeColor(std::optional<SkColor> theme_color) {
   theme_color_ = theme_color;
+
+  // Set up theme color for syncing.
+  if (theme_color) {
+    sync_proto_.set_theme_color(*theme_color);
+  } else {
+    sync_proto_.clear_theme_color();
+  }
 }
 
 void WebApp::SetDarkModeThemeColor(
@@ -507,13 +528,8 @@ void WebApp::SetUserDisplayMode(mojom::UserDisplayMode user_display_mode) {
 }
 
 void WebApp::SetDisplayModeOverride(
-    std::vector<DisplayMode> display_mode_override) {
+    std::vector<DisplayOverride> display_mode_override) {
   display_mode_override_ = std::move(display_mode_override);
-}
-
-void WebApp::SetBorderlessUrlPatterns(
-    std::vector<blink::SafeUrlPattern> borderless_url_patterns) {
-  borderless_url_patterns_ = std::move(borderless_url_patterns);
 }
 
 void WebApp::SetWebAppChromeOsData(
@@ -522,6 +538,11 @@ void WebApp::SetWebAppChromeOsData(
 }
 
 void WebApp::SetInstallState(proto::InstallState install_state) {
+  if (install_state == proto::SUGGESTED_FROM_MIGRATION) {
+    CHECK(!IsSynced())
+        << " Attempted to set an install state of suggested from migration "
+           "from an app that has been sync installed";
+  }
   install_state_ = install_state;
 }
 
@@ -537,6 +558,12 @@ void WebApp::SetIsUninstalling(bool is_uninstalling) {
 
 void WebApp::SetManifestIcons(std::vector<apps::IconInfo> manifest_icons) {
   manifest_icons_ = std::move(manifest_icons);
+
+  // Set up manifest icons for syncing.
+  sync_proto_.clear_icon_infos();
+  for (const apps::IconInfo& icon_info : manifest_icons_) {
+    *(sync_proto_.add_icon_infos()) = AppIconInfoToSyncProto(icon_info);
+  }
 }
 
 void WebApp::SetDownloadedIconSizes(IconPurpose purpose, SortedSizesPx sizes) {
@@ -599,6 +626,11 @@ void WebApp::SetValidatedScopeExtensions(
   validated_scope_extensions_ = std::move(validated_scope_extensions);
 }
 
+void WebApp::SetOriginAssociationLastValidationCheckTime(
+    const std::optional<base::Time>& time) {
+  origin_association_last_validation_check_time_ = time;
+}
+
 void WebApp::SetLockScreenStartUrl(const GURL& lock_screen_start_url) {
   DCHECK(lock_screen_start_url.is_empty() || lock_screen_start_url.is_valid());
   lock_screen_start_url_ = lock_screen_start_url;
@@ -619,8 +651,13 @@ void WebApp::SetLastBadgingTime(const base::Time& time) {
   last_badging_time_ = time;
 }
 
-void WebApp::SetLastLaunchTime(const base::Time& time) {
-  last_launch_time_ = time;
+void WebApp::SetLastLaunchTime(
+    const std::optional<base::Time>& last_launch_time) {
+  if (last_launch_time.has_value()) {
+    CHECK(!last_launch_time->is_null())
+        << "Set last_launch_time to std::nullopt instead of a null time";
+  }
+  last_launch_time_ = last_launch_time;
 }
 
 void WebApp::SetFirstInstallTime(const base::Time& time) {
@@ -635,51 +672,6 @@ void WebApp::SetRunOnOsLoginMode(RunOnOsLoginMode mode) {
   run_on_os_login_mode_ = mode;
 }
 
-void WebApp::SetSyncProto(sync_pb::WebAppSpecifics sync_proto) {
-  // Populate sync_proto's start_url from this WebApp if missing.
-  if (!start_url().is_empty()) {
-    CHECK(start_url().is_valid());
-    // Note: sync data may have a start_url that does not match the `WebApp`
-    // start_url, but it does not update the app (matching pre-M125 behaviour).
-    if (!sync_proto.has_start_url()) {
-      sync_proto.set_start_url(start_url().spec());
-    }
-  }
-
-  // Sync data must never be set on an app with mismatching manifest_id.
-  CHECK(manifest_id().is_valid());
-  std::string relative_manifest_id_path = RelativeManifestIdPath(manifest_id());
-  if (sync_proto.has_relative_manifest_id()) {
-    CHECK_EQ(sync_proto.relative_manifest_id(), relative_manifest_id_path);
-  } else {
-    sync_proto.set_relative_manifest_id(relative_manifest_id_path);
-  }
-
-  // Clear any invalid less-important fields.
-  if (sync_proto.has_scope() && !GURL(sync_proto.scope()).is_valid()) {
-    DLOG(ERROR) << "SetSyncProto: scope has invalid url: "
-                << sync_proto.scope();
-    sync_proto.clear_scope();
-  }
-  if (!ParseAppIconInfos("SetSyncProto", sync_proto.icon_infos()).has_value()) {
-    sync_proto.clear_icon_infos();
-  }
-  if (sync_proto.has_user_launch_ordinal() &&
-      !syncer::StringOrdinal(sync_proto.user_launch_ordinal()).IsValid()) {
-    sync_proto.clear_user_launch_ordinal();
-  }
-  if (sync_proto.has_user_page_ordinal() &&
-      !syncer::StringOrdinal(sync_proto.user_page_ordinal()).IsValid()) {
-    sync_proto.clear_user_page_ordinal();
-  }
-  if (!ParseAppIconInfos("SetSyncProtoTrustedIcons", sync_proto.trusted_icons())
-           .has_value()) {
-    sync_proto.clear_trusted_icons();
-  }
-
-  sync_proto_ = std::move(sync_proto);
-}
-
 void WebApp::SetLaunchQueryParams(
     std::optional<std::string> launch_query_params) {
   launch_query_params_ = std::move(launch_query_params);
@@ -689,19 +681,6 @@ void WebApp::SetManifestUrl(const GURL& manifest_url) {
   CHECK(manifest_url.is_valid() || manifest_url.is_empty(),
         base::NotFatalUntil::M138);
   manifest_url_ = manifest_url;
-}
-
-void WebApp::SetManifestId(const webapps::ManifestId& manifest_id) {
-  CHECK(manifest_id.is_valid());
-  CHECK(start_url_.is_empty() || url::IsSameOriginWith(start_url_, manifest_id))
-      << start_url_.spec() << " vs " << manifest_id.spec();
-  CHECK(!manifest_id.has_ref());
-  manifest_id_ = manifest_id;
-
-  // Ensure sync proto is initialized and remains consistent. Logic in
-  // `SetSyncProto` will populate an unset `relative_manifest_id` on the proto.
-  sync_proto_.clear_relative_manifest_id();
-  SetSyncProto(sync_proto_);
 }
 
 void WebApp::SetWindowControlsOverlayEnabled(bool enabled) {
@@ -715,11 +694,6 @@ void WebApp::SetLaunchHandler(std::optional<LaunchHandler> launch_handler) {
 void WebApp::SetParentAppId(
     const std::optional<webapps::AppId>& parent_app_id) {
   parent_app_id_ = parent_app_id;
-}
-
-void WebApp::SetPermissionsPolicy(
-    network::ParsedPermissionsPolicy permissions_policy) {
-  permissions_policy_ = std::move(permissions_policy);
 }
 
 void WebApp::SetLatestInstallSource(
@@ -755,7 +729,7 @@ void WebApp::SetIsolationData(IsolationData isolation_data) {
   CHECK(manifest_id_.is_valid()
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
-        && manifest_id_.SchemeIs(webapps::kIsolatedAppScheme))
+        && manifest_id_.value().SchemeIs(webapps::kIsolatedAppScheme))
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
       ;
@@ -873,6 +847,12 @@ void WebApp::SetPendingUpdateInfo(
 
 void WebApp::SetTrustedIcons(std::vector<apps::IconInfo> trusted_icons) {
   trusted_icons_ = std::move(trusted_icons);
+
+  // Set up trusted icons for syncing.
+  sync_proto_.clear_trusted_icons();
+  for (const apps::IconInfo& trusted_icon : trusted_icons_) {
+    *(sync_proto_.add_trusted_icons()) = AppIconInfoToSyncProto(trusted_icon);
+  }
 }
 
 void WebApp::SetStoredTrustedIconSizes(IconPurpose purpose,
@@ -890,17 +870,19 @@ void WebApp::SetStoredTrustedIconSizes(IconPurpose purpose,
 }
 
 void WebApp::SetUnvalidatedMigrationSources(
-    std::vector<proto::WebAppMigrationSource> sources) {
+    std::vector<MigrationSource> sources) {
   unvalidated_migration_sources_ = std::move(sources);
 }
 
 void WebApp::SetValidatedMigrationSources(
-    std::vector<proto::WebAppMigrationSource> sources) {
+    std::vector<MigrationSource> sources) {
   validated_migration_sources_ = std::move(sources);
 }
 
-void WebApp::SetPendingMigrationInfo(
-    std::vector<proto::PendingMigrationInfo> info) {
+void WebApp::SetPendingMigrationInfo(std::optional<PendingMigrationInfo> info) {
+  if (info.has_value()) {
+    CHECK(!url::Origin::Create(info->manifest_id().value()).opaque());
+  }
   pending_migration_info_ = std::move(info);
 }
 
@@ -936,6 +918,109 @@ void WebApp::AddInstalledByInfo(AppInstalledBy installed_by_info) {
   CHECK(installed_by_.size() <= kMaxInstalledBySize);
 }
 
+void WebApp::SetMigratedFromManifestIdInSyncProto(
+    const webapps::ManifestId& migrated_from_manifest_id) {
+  if (sync_proto_.has_migrated_from_manifest_id() &&
+      !!GURL(sync_proto_.migrated_from_manifest_id()).is_valid()) {
+    sync_proto_.clear_migrated_from_manifest_id();
+  }
+  CHECK(migrated_from_manifest_id.is_valid());
+  sync_proto_.set_migrated_from_manifest_id(migrated_from_manifest_id.spec());
+}
+
+void WebApp::UpdateDefaultUserDisplayModeInSyncProto(
+    sync_pb::WebAppSpecifics::UserDisplayMode display_mode) {
+  sync_proto_.clear_user_display_mode_default();
+  sync_proto_.set_user_display_mode_default(display_mode);
+}
+
+void WebApp::UpdateCrOsUserDisplayModeInSyncProto(
+    sync_pb::WebAppSpecifics::UserDisplayMode display_mode) {
+  sync_proto_.clear_user_display_mode_cros();
+  sync_proto_.set_user_display_mode_cros(display_mode);
+}
+
+void WebApp::SetUserPageOrdinal(syncer::StringOrdinal page_ordinal) {
+  sync_proto_.clear_user_page_ordinal();
+  if (!page_ordinal.IsValid()) {
+    return;
+  }
+  sync_proto_.set_user_page_ordinal(page_ordinal.ToInternalValue());
+}
+
+void WebApp::SetUserLaunchOrdinal(syncer::StringOrdinal launch_ordinal) {
+  sync_proto_.clear_user_launch_ordinal();
+  if (!launch_ordinal.IsValid()) {
+    return;
+  }
+  sync_proto_.set_user_launch_ordinal(launch_ordinal.ToInternalValue());
+}
+
+void WebApp::MergeDataFromSyncSystem(
+    const sync_pb::WebAppSpecifics& incoming_sync,
+    base::PassKey<WebAppSyncBridge>) {
+  AddSource(WebAppManagement::kSync);
+
+  sync_pb::WebAppSpecifics modified_sync_proto = incoming_sync;
+
+  // Verify that the start_url is properly set.
+  CHECK(modified_sync_proto.has_start_url() &&
+        GURL(modified_sync_proto.start_url()).is_valid());
+
+  CHECK(manifest_id().is_valid());
+  std::string relative_manifest_id_path = RelativeManifestIdPath(manifest_id());
+
+  // This should be already set by the WebAppSyncBridge.
+  CHECK(modified_sync_proto.has_relative_manifest_id());
+  if (modified_sync_proto.relative_manifest_id() != relative_manifest_id_path) {
+    modified_sync_proto.set_relative_manifest_id(relative_manifest_id_path);
+    // Record when this happens. When it is rare enough we could remove the
+    // logic here and instead drop incoming sync data with fragment parts in
+    // the manifest_id_path.
+    base::UmaHistogramBoolean("WebApp.ApplySyncDataToApp.ManifestIdMatch",
+                              false);
+  } else {
+    // Record success for comparison.
+    base::UmaHistogramBoolean("WebApp.ApplySyncDataToApp.ManifestIdMatch",
+                              true);
+  }
+
+  // Prevent incoming sync data from clearing recently-added fields in our local
+  // copy. This ensures new sync fields are preserved despite old (pre-M125)
+  // clients incorrectly clearing unknown fields. Any new fields added to the
+  // sync proto should also be added here (if we don't want them to be cleared
+  // by old clients) until this block can be removed. This can be removed when
+  // there are few <M125 clients remaining.
+  if (sync_proto_.has_user_display_mode_cros() &&
+      !modified_sync_proto.has_user_display_mode_cros()) {
+    modified_sync_proto.set_user_display_mode_cros(
+        sync_proto_.user_display_mode_cros());
+  }
+  if (sync_proto_.has_user_display_mode_default() &&
+      !modified_sync_proto.has_user_display_mode_default()) {
+    modified_sync_proto.set_user_display_mode_default(
+        sync_proto_.user_display_mode_default());
+  }
+
+  // Ensure the current platform's UserDisplayMode is set.
+  // Conditional to avoid clobbering an unknown new UDM with a fallback one.
+  if (!HasCurrentPlatformUserDisplayMode(modified_sync_proto)) {
+    auto udm = ResolvePlatformSpecificUserDisplayMode(modified_sync_proto);
+    SetPlatformSpecificUserDisplayMode(udm, &modified_sync_proto);
+  }
+
+  // Ensure that incoming sync proto that does not have the manifest id of the
+  // source app set does not clear the existing metadata stored on disk.
+  if (sync_proto_.has_migrated_from_manifest_id() &&
+      !modified_sync_proto.has_migrated_from_manifest_id()) {
+    modified_sync_proto.set_migrated_from_manifest_id(
+        sync_proto_.migrated_from_manifest_id());
+  }
+
+  sync_proto_ = std::move(modified_sync_proto);
+  CHECK(HasCurrentPlatformUserDisplayMode(sync_proto_));
+}
+
 WebApp::ClientData::ClientData() = default;
 
 WebApp::ClientData::~ClientData() = default;
@@ -943,7 +1028,7 @@ WebApp::ClientData::~ClientData() = default;
 WebApp::ClientData::ClientData(const ClientData& client_data) = default;
 
 base::Value WebApp::ClientData::AsDebugValue() const {
-  base::Value::Dict root;
+  base::DictValue root;
 #if BUILDFLAG(IS_CHROMEOS)
   root.Set("system_web_app_data", OptionalAsDebugValue(system_web_app_data));
 #endif
@@ -968,13 +1053,13 @@ WebApp::ExternalManagementConfig& WebApp::ExternalManagementConfig::operator=(
 WebApp::ExternalManagementConfig& WebApp::ExternalManagementConfig::operator=(
     ExternalManagementConfig&& external_management_config) = default;
 
-base::Value::Dict WebApp::ExternalManagementConfig::AsDebugValue() const {
-  base::Value::Dict root;
-  base::Value::List urls;
+base::DictValue WebApp::ExternalManagementConfig::AsDebugValue() const {
+  base::DictValue root;
+  base::ListValue urls;
   for (const auto& install_url : install_urls) {
     urls.Append(install_url.spec());
   }
-  base::Value::List policy_ids;
+  base::ListValue policy_ids;
   for (const auto& policy_id : additional_policy_ids) {
     policy_ids.Append(policy_id);
   }
@@ -1026,7 +1111,6 @@ bool WebApp::operator==(const WebApp& other) const {
         app.dark_mode_background_color_,
         app.display_mode_,
         app.display_mode_override_,
-        app.borderless_url_patterns_,
         app.chromeos_data_,
         app.install_state_,
         app.is_from_sync_and_pending_installation_,
@@ -1045,6 +1129,7 @@ bool WebApp::operator==(const WebApp& other) const {
         app.disallowed_launch_protocols_,
         app.scope_extensions_,
         app.validated_scope_extensions_,
+        app.origin_association_last_validation_check_time_,
         app.lock_screen_start_url_,
         app.note_taking_new_note_url_,
         app.last_badging_time_,
@@ -1062,7 +1147,6 @@ bool WebApp::operator==(const WebApp& other) const {
         app.window_controls_overlay_enabled_,
         app.launch_handler_,
         app.parent_app_id_,
-        app.permissions_policy_,
         app.latest_install_source_,
         app.app_size_in_bytes_,
         app.data_size_in_bytes_,
@@ -1095,10 +1179,10 @@ bool WebApp::operator==(const WebApp& other) const {
 }
 
 base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
-  base::Value::Dict root;
+  base::DictValue root;
 
   auto ConvertList = [](const auto& list) {
-    base::Value::List list_json;
+    base::ListValue list_json;
     for (const auto& item : list) {
       list_json.Append(item);
     }
@@ -1106,7 +1190,7 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
   };
 
   auto ConvertDebugValueList = [](const auto& list) {
-    base::Value::List list_json;
+    base::ListValue list_json;
     for (const auto& item : list) {
       list_json.Append(item.AsDebugValue());
     }
@@ -1147,13 +1231,11 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
 
   root.Set("display_mode", blink::DisplayModeToString(display_mode_));
 
-  base::Value::List display_override;
-  for (const DisplayMode& mode : display_mode_override_) {
-    display_override.Append(blink::DisplayModeToString(mode));
-  }
-  root.Set("display_override", std::move(display_override));
+  root.Set("display_override",
+           base::ToValueList(display_mode_override_,
+                             &DisplayOverride::ToDebugValue));
 
-  base::Value::Dict downloaded_icon_sizes_json;
+  base::DictValue downloaded_icon_sizes_json;
   for (IconPurpose purpose : kIconPurposes) {
     downloaded_icon_sizes_json.Set(base::ToString(purpose),
                                    ConvertList(downloaded_icon_sizes(purpose)));
@@ -1170,7 +1252,7 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
   root.Set("latest_install_source",
            OptionalToStringValue(latest_install_source_));
 
-  base::Value::Dict external_map;
+  base::DictValue external_map;
   for (const auto& it : management_to_external_config_map_) {
     external_map.Set(base::ToString(it.first), it.second.AsDebugValue());
   }
@@ -1191,10 +1273,14 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
 
   root.Set("last_badging_time", base::ToString(last_badging_time_));
 
-  root.Set("last_launch_time", base::ToString(last_launch_time_));
+  if (last_launch_time_.has_value()) {
+    root.Set("last_launch_time", base::ToString(*last_launch_time_));
+  } else {
+    root.Set("last_launch_time", base::Value());
+  }
 
   if (launch_handler_) {
-    base::Value::Dict launch_handler_json;
+    base::DictValue launch_handler_json;
     launch_handler_json.Set(
         "client_mode", base::ToString(launch_handler_->parsed_client_mode()));
     launch_handler_json.Set("client_mode_valid_and_specified",
@@ -1217,29 +1303,6 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
 
   root.Set("parent_app_id", OptionalToStringValue(parent_app_id_));
 
-  if (!permissions_policy_.empty()) {
-    base::Value::List policy_list;
-    const auto& feature_to_name_map =
-        blink::GetPermissionsPolicyFeatureToNameMap();
-    for (const auto& decl : permissions_policy_) {
-      base::Value::Dict json_decl;
-      const auto& feature_name = feature_to_name_map.find(decl.feature);
-      if (feature_name == feature_to_name_map.end()) {
-        continue;
-      }
-      json_decl.Set("feature", feature_name->second);
-      base::Value::List allowlist_json;
-      for (const auto& allowlist_item : GetSerializedAllowedOrigins(decl)) {
-        allowlist_json.Append(allowlist_item);
-      }
-      json_decl.Set("allowed_origins", std::move(allowlist_json));
-      json_decl.Set("matches_all_origins", decl.matches_all_origins);
-      json_decl.Set("matches_opaque_src", decl.matches_opaque_src);
-      policy_list.Append(std::move(json_decl));
-    }
-    root.Set("permissions_policy", std::move(policy_list));
-  }
-
   root.Set("protocol_handlers", ConvertDebugValueList(protocol_handlers_));
 
   root.Set("run_on_os_login_mode", base::ToString(run_on_os_login_mode_));
@@ -1251,7 +1314,7 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
   root.Set("shortcuts_menu_item_infos",
            ConvertDebugValueList(shortcuts_menu_item_infos_));
 
-  base::Value::List sources;
+  base::ListValue sources;
   for (WebAppManagement::Type source : WebAppManagementTypes::All()) {
     if (sources_.Has(source)) {
       sources.Append(base::ToString(source));
@@ -1269,6 +1332,13 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
 
   root.Set("scope_extensions_validated",
            ConvertDebugValueList(validated_scope_extensions_));
+
+  if (origin_association_last_validation_check_time_.has_value()) {
+    root.Set("origin_association_last_validation_check_time",
+             base::ToString(*origin_association_last_validation_check_time_));
+  } else {
+    root.Set("origin_association_last_validation_check_time", base::Value());
+  }
 
   root.Set("window_controls_overlay_enabled", window_controls_overlay_enabled_);
 
@@ -1307,29 +1377,20 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
 
   root.Set("trusted_icons", ConvertDebugValueList(trusted_icons_));
 
-  base::Value::List installed_by_list;
+  base::ListValue installed_by_list;
   for (const auto& installed_by_data : installed_by_) {
     installed_by_list.Append(installed_by_data.InstalledByToDebugValue());
   }
   root.Set("installed_by", std::move(installed_by_list));
 
   root.Set("unvalidated_migration_sources",
-           base::ToValueList(unvalidated_migration_sources_,
-                             [](const proto::WebAppMigrationSource& source) {
-                               return proto::ToValue(source);
-                             }));
+           ConvertDebugValueList(unvalidated_migration_sources_));
   root.Set("validated_migration_sources",
-           base::ToValueList(validated_migration_sources_,
-                             [](const proto::WebAppMigrationSource& source) {
-                               return proto::ToValue(source);
-                             }));
+           ConvertDebugValueList(validated_migration_sources_));
   root.Set("pending_migration_info",
-           base::ToValueList(pending_migration_info_,
-                             [](const proto::PendingMigrationInfo& info) {
-                               return proto::ToValue(info);
-                             }));
+           OptionalAsDebugValue(pending_migration_info_));
 
-  base::Value::Dict stored_trusted_icon_sizes_json;
+  base::DictValue stored_trusted_icon_sizes_json;
   for (IconPurpose purpose : kIconPurposes) {
     // There can never be trusted monochrome icons.
     if (purpose == IconPurpose::MONOCHROME) {
@@ -1341,9 +1402,6 @@ base::Value WebApp::AsDebugValueWithOnlyPlatformAgnosticFields() const {
   }
   root.Set("stored_trusted_icon_sizes",
            std::move(stored_trusted_icon_sizes_json));
-
-  root.Set("borderless_url_patterns",
-           base::ToValueList(borderless_url_patterns_, UrlPatternDebugValue));
 
   return base::Value(std::move(root));
 }
@@ -1366,6 +1424,21 @@ base::Value WebApp::AsDebugValue() const {
   return value;
 }
 
+void WebApp::SetManifestId(const webapps::ManifestId& manifest_id) {
+  CHECK(start_url_.is_empty() ||
+        url::IsSameOriginWith(start_url_, manifest_id.value()))
+      << start_url_.spec() << " vs " << manifest_id.spec();
+  manifest_id_ = manifest_id;
+
+  // Ensure sync proto is initialized and remains consistent.
+  std::string relative_manifest_id_path = RelativeManifestIdPath(manifest_id_);
+  if (sync_proto_.has_relative_manifest_id()) {
+    CHECK_EQ(sync_proto_.relative_manifest_id(), relative_manifest_id_path);
+  } else {
+    sync_proto_.set_relative_manifest_id(relative_manifest_id_path);
+  }
+}
+
 std::ostream& operator<<(std::ostream& out, const WebApp& app) {
   return out << app.AsDebugValue();
 }
@@ -1374,22 +1447,6 @@ std::ostream& operator<<(
     std::ostream& out,
     const WebApp::ExternalManagementConfig& management_config) {
   return out << management_config.AsDebugValue().DebugString();
-}
-
-std::vector<std::string> GetSerializedAllowedOrigins(
-    const network::ParsedPermissionsPolicyDeclaration
-        permissions_policy_declaration) {
-  std::vector<std::string> allowed_origins;
-  if (permissions_policy_declaration.self_if_matches) {
-    CHECK(!permissions_policy_declaration.self_if_matches->opaque());
-    allowed_origins.push_back(
-        permissions_policy_declaration.self_if_matches->Serialize());
-  }
-  for (const auto& origin_with_possible_wildcards :
-       permissions_policy_declaration.allowed_origins) {
-    allowed_origins.push_back(origin_with_possible_wildcards.Serialize());
-  }
-  return allowed_origins;
 }
 
 }  // namespace web_app

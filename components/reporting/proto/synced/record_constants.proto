@@ -146,8 +146,11 @@ enum Destination {
   // |DATA_LOST_ACTIVITY| is for reporting data lost activity.
   DATA_LOST_ACTIVITY = 38;
 
-  // |SAAS_DOMAIN| is for reporting SaaS domain usage.
-  SAAS_DOMAIN = 39;
+  // |SAAS_USAGE| is for reporting SaaS domain usage.
+  SAAS_USAGE = 39;
+
+  // |BROWSER_LAUNCH| is for reporting browser launch events.
+  BROWSER_LAUNCH = 40;
 
   reserved 8;
 }

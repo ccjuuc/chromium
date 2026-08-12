@@ -20,6 +20,7 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -30,7 +31,7 @@ namespace safe_browsing {
 namespace {
 using optimization_guide::mojom::OnDeviceFeature::kScamDetection;
 using ScamDetectionRequest = optimization_guide::proto::ScamDetectionRequest;
-using ModelType = ClientSideDetectionHost::IntelligentScanDelegate::ModelType;
+using ModelType = IntelligentScanDelegate::ModelType;
 }  // namespace
 
 class ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry {
@@ -111,7 +112,17 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::Start(
 void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::
     OnSessionCreated(base::TimeTicks session_creation_start_time,
                      std::unique_ptr<ModelExecutorSession> session) {
-  CHECK(session) << "model broker client should not create a null session.";
+  bool is_model_available = session != nullptr;
+  base::UmaHistogramBoolean(
+      "SBClientPhishing.IsOnDeviceModelAvailableOnSessionCreation",
+      is_model_available);
+  if (!is_model_available) {
+    std::move(callback_).Run(IntelligentScanResult::Failure(
+        IntelligentScanResult::kModelVersionUnavailable,
+        ModelType::kNotSupportedOnDevice,
+        IntelligentScanInfo::ON_DEVICE_MODEL_UNAVAILABLE));
+    return;
+  }
   client_side_detection::LogOnDeviceModelSessionCreationTime(
       session_creation_start_time);
   session_ = std::move(session);
@@ -147,8 +158,9 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::
   if (!result.response.has_value()) {
     client_side_detection::LogOnDeviceModelExecutionSuccessAndTime(
         /*success=*/false, session_execution_start_time);
-    std::move(callback_).Run(
-        IntelligentScanResult::Failure(model_version, ModelType::kOnDevice));
+    std::move(callback_).Run(IntelligentScanResult::Failure(
+        model_version, ModelType::kOnDevice,
+        IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING));
     return;
   }
 
@@ -167,16 +179,19 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::
 
   if (!scam_detection_response) {
     base::debug::DumpWithoutCrashing();
-    std::move(callback_).Run(
-        IntelligentScanResult::Failure(model_version, ModelType::kOnDevice));
+    std::move(callback_).Run(IntelligentScanResult::Failure(
+        model_version, ModelType::kOnDevice,
+        IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING));
     return;
   }
 
-  std::move(callback_).Run({.brand = scam_detection_response->brand(),
-                            .intent = scam_detection_response->intent(),
-                            .model_version = model_version,
-                            .execution_success = true,
-                            .model_type = ModelType::kOnDevice});
+  std::optional<float> scam_score;
+  if (scam_detection_response->has_scam_score()) {
+    scam_score = scam_detection_response->scam_score();
+  }
+  std::move(callback_).Run(IntelligentScanResult::Success(
+      scam_detection_response->brand(), scam_detection_response->intent(),
+      model_version, ModelType::kOnDevice, scam_score));
 
   // Reset this inquiry immediately so that future inference is not affected by
   // the old context.
@@ -195,14 +210,20 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::
   base::UmaHistogramMediumTimes(
       "SBClientPhishing.ServerSideModelExecutionDuration",
       base::TimeTicks::Now() - remote_execution_start_time);
-  // Server model does not return model version.
-  int model_version = IntelligentScanResult::kModelVersionUnavailable;
+  // Server model does not return model version. Check the rollout feature flag
+  // to set the model version.
+  int model_version =
+      base::FeatureList::IsEnabled(
+          kClientSideDetectionServerModelRolloutAndroid)
+          ? kClientSideDetectionServerModelRolloutVersionAndroid.Get()
+          : IntelligentScanResult::kDefaultServerModelVersion;
   if (!execution_success) {
     base::UmaHistogramEnumeration(
         "SBClientPhishing.ServerSideModelExecutionError",
         result.response.error().error());
-    std::move(callback_).Run(
-        IntelligentScanResult::Failure(model_version, ModelType::kServerSide));
+    std::move(callback_).Run(IntelligentScanResult::Failure(
+        model_version, ModelType::kServerSide,
+        IntelligentScanInfo::SERVER_SIDE_MODEL_OUTPUT_MISSING));
     return;
   }
 
@@ -211,16 +232,18 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::Inquiry::
       result.response.value());
 
   if (!scam_detection_response) {
-    std::move(callback_).Run(
-        IntelligentScanResult::Failure(model_version, ModelType::kServerSide));
+    std::move(callback_).Run(IntelligentScanResult::Failure(
+        model_version, ModelType::kServerSide,
+        IntelligentScanInfo::SERVER_SIDE_MODEL_OUTPUT_MISSING));
     return;
   }
-
-  std::move(callback_).Run({.brand = scam_detection_response->brand(),
-                            .intent = scam_detection_response->intent(),
-                            .model_version = model_version,
-                            .execution_success = true,
-                            .model_type = ModelType::kServerSide});
+  std::optional<float> scam_score;
+  if (scam_detection_response->has_scam_score()) {
+    scam_score = scam_detection_response->scam_score();
+  }
+  std::move(callback_).Run(IntelligentScanResult::Success(
+      scam_detection_response->brand(), scam_detection_response->intent(),
+      model_version, ModelType::kServerSide, scam_score));
 
   // Reset this inquiry immediately so that future inference is not affected by
   // the old context.
@@ -237,12 +260,7 @@ ClientSideDetectionIntelligentScanDelegateAndroid::
       model_broker_client_(std::move(model_broker_client)),
       remote_model_executor_(remote_model_executor),
       is_feature_enabled_(
-          !base::FeatureList::IsEnabled(kClientSideDetectionKillswitch) &&
-          (base::FeatureList::IsEnabled(
-               kClientSideDetectionSendIntelligentScanInfoAndroid) ||
-           kCsdImageEmbeddingMatchWithIntelligentScan.Get() ||
-           base::FeatureList::IsEnabled(
-               kClientSideDetectionServerModelForScamDetectionAndroid))),
+          !base::FeatureList::IsEnabled(kClientSideDetectionKillswitch)),
       is_server_model_enabled_(base::FeatureList::IsEnabled(
           kClientSideDetectionServerModelForScamDetectionAndroid)) {
   if (!is_feature_enabled_) {
@@ -287,21 +305,30 @@ bool ClientSideDetectionIntelligentScanDelegateAndroid::
          verdict->llama_forced_trigger_info().intelligent_scan();
 }
 
-bool ClientSideDetectionIntelligentScanDelegateAndroid::
-    IsIntelligentScanAvailable(bool log_failed_eligibility_reason) {
+ModelType
+ClientSideDetectionIntelligentScanDelegateAndroid::GetIntelligentScanModelType(
+    bool log_failed_eligibility_reason) {
   if (!is_feature_enabled_) {
-    return false;
+    return is_server_model_enabled_ ? ModelType::kNotSupportedServerSide
+                                    : ModelType::kNotSupportedOnDevice;
   }
   if (is_server_model_enabled_) {
-    return !!remote_model_executor_;
+    return !!remote_model_executor_ ? ModelType::kServerSide
+                                    : ModelType::kNotSupportedServerSide;
   }
   if (!model_broker_client_) {
-    return false;
+    return ModelType::kNotSupportedOnDevice;
   }
-  // The HasSubscriber check is required because GetSubscriber may start model
-  // download.
+  if (base::FeatureList::IsEnabled(
+          kClientSideDetectionOnDeviceModelLazyDownloadAndroid)) {
+    // When the lazy download flag is enabled, we will check model availability
+    // at inquiry time.
+    return ModelType::kOnDevice;
+  }
+  // The HasSubscriber check is required because GetSubscriber will start model
+  // download if this is the first time the subscriber is requested.
   if (!model_broker_client_->HasSubscriber(kScamDetection)) {
-    return false;
+    return ModelType::kNotSupportedOnDevice;
   }
 
   auto reason =
@@ -312,10 +339,10 @@ bool ClientSideDetectionIntelligentScanDelegateAndroid::
           "SBClientPhishing.OnDeviceModelUnavailableReasonAtInquiry.Android",
           reason.value());
     }
-    return false;
+    return ModelType::kNotSupportedOnDevice;
   }
 
-  return true;
+  return ModelType::kOnDevice;
 }
 
 std::optional<base::UnguessableToken>
@@ -323,10 +350,13 @@ ClientSideDetectionIntelligentScanDelegateAndroid::StartIntelligentScan(
     std::string rendered_texts,
     IntelligentScanDoneCallback callback) {
   ModelType model_type =
-      is_server_model_enabled_ ? ModelType::kServerSide : ModelType::kOnDevice;
-  if (!IsIntelligentScanAvailable(/*log_failed_eligibility_reason=*/false)) {
+      GetIntelligentScanModelType(/*log_failed_eligibility_reason=*/false);
+  if (!IntelligentScanDelegate::IsIntelligentScanAvailable(model_type)) {
     std::move(callback).Run(IntelligentScanResult::Failure(
-        IntelligentScanResult::kModelVersionUnavailable, model_type));
+        IntelligentScanResult::kModelVersionUnavailable, model_type,
+        is_server_model_enabled_
+            ? IntelligentScanInfo::SERVER_SIDE_MODEL_UNAVAILABLE
+            : IntelligentScanInfo::ON_DEVICE_MODEL_UNAVAILABLE));
     return std::nullopt;
   }
   bool is_at_quota = IsAtIntelligentScanQuota();
@@ -336,10 +366,9 @@ ClientSideDetectionIntelligentScanDelegateAndroid::StartIntelligentScan(
         "SBClientPhishing.ServerSideModelHitQuotaAtInquiryTime", is_at_quota);
   }
   if (is_at_quota) {
-    // TODO(crbug.com/462643935): Add a new IntelligentScanResult for quota
-    // exceeded.
     std::move(callback).Run(IntelligentScanResult::Failure(
-        IntelligentScanResult::kModelVersionUnavailable, model_type));
+        IntelligentScanResult::kModelVersionUnavailable, ModelType::kServerSide,
+        IntelligentScanInfo::SERVER_SIDE_MODEL_EXCEED_QUOTA));
     return std::nullopt;
   }
 
@@ -371,19 +400,15 @@ bool ClientSideDetectionIntelligentScanDelegateAndroid::ShouldShowScamWarning(
   if (!verdict.has_value() ||
       *verdict ==
           IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_UNSPECIFIED ||
-      *verdict == IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE) {
-    return false;
-  }
-
-  if (!base::FeatureList::IsEnabled(
-          kClientSideDetectionShowScamVerdictWarningAndroid) &&
-      !base::FeatureList::IsEnabled(
-          kClientSideDetectionServerModelForScamDetectionAndroid)) {
+      *verdict == IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE ||
+      *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_TELEMETRY) {
     return false;
   }
 
   return *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_1 ||
          *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2 ||
+         *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_3 ||
+         *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_4 ||
          *verdict ==
              IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT;
 }
@@ -392,6 +417,10 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::OnScamWarningShown() {
   if (!is_server_model_enabled_) {
     return;
   }
+
+  base::UmaHistogramCounts100(
+      "SBClientPhishing.ServerSideModelQuotaCountOnScamWarningShown",
+      pref_->GetList(prefs::kSafeBrowsingCsdIntelligentScanTimestamps).size());
 
   // The scan shows a warning and is effective, so we refund the quota.
   RemoveLastIntelligentScanQuota();
@@ -414,9 +443,11 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::OnPrefsUpdated() {
     ResetAllInquiries();
     return;
   }
-  // No need to download the on-device model if we are using the server
-  // model.
-  if (!is_server_model_enabled_) {
+  // No need to download the on-device model at startup if we are using the
+  // server model or the lazy download flag is enabled.
+  if (!is_server_model_enabled_ &&
+      !base::FeatureList::IsEnabled(
+          kClientSideDetectionOnDeviceModelLazyDownloadAndroid)) {
     StartModelDownload();
   }
 }
@@ -425,6 +456,10 @@ void ClientSideDetectionIntelligentScanDelegateAndroid::StartModelDownload() {
   if (!model_broker_client_) {
     return;
   }
+  base::ScopedUmaHistogramTimer scoped_timer(
+      "SBClientPhishing.OnDeviceModelStartModelDownloadFunctionRunTime."
+      "Android");
+  model_broker_client_->RequestAssetsFor(kScamDetection);
   model_broker_client_->GetSubscriber(kScamDetection)
       .WaitForClient(base::BindOnce(
           [](base::TimeTicks download_start_time,

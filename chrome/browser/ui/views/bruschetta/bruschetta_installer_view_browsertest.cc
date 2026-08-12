@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ash/strings/grit/ash_strings.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
@@ -17,15 +18,17 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/views/accessibility/ax_update_notifier.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/test/ax_event_counter.h"
 
 using testing::AnyNumber;
 using testing::AtLeast;
@@ -52,20 +55,20 @@ class BruschettaInstallerViewBrowserTest : public DialogBrowserTest {
       const BruschettaInstallerViewBrowserTest&) = delete;
 
   void SetBruschettaVMConfigurationPref() {
-    base::Value::Dict pref;
+    base::DictValue pref;
 
-    base::Value::Dict config;
+    base::DictValue config;
     config.Set(prefs::kPolicyEnabledKey,
                static_cast<int>(prefs::PolicyEnabledState::INSTALL_ALLOWED));
     config.Set(prefs::kPolicyNameKey, "Config name");
 
     pref.Set("test-config", std::move(config));
-    browser()->profile()->GetPrefs()->SetDict(prefs::kBruschettaVMConfiguration,
-                                              std::move(pref));
+    browser()->GetProfile()->GetPrefs()->SetDict(
+        prefs::kBruschettaVMConfiguration, std::move(pref));
   }
 
   void SetBruschettaInstallerConfigurationPref() {
-    browser()->profile()->GetPrefs()->SetDict(
+    browser()->GetProfile()->GetPrefs()->SetDict(
         prefs::kBruschettaInstallerConfiguration, base::test::ParseJsonDict(R"(
       {
         "display_name": "Display name",
@@ -80,7 +83,7 @@ class BruschettaInstallerViewBrowserTest : public DialogBrowserTest {
   }
 
   void ShowUi(const std::string& name) override {
-    BruschettaInstallerView::Show(browser()->profile(),
+    BruschettaInstallerView::Show(browser()->GetProfile(),
                                   *g_browser_process->local_state(),
                                   GetBruschettaAlphaId());
     view_ = BruschettaInstallerView::GetActiveViewForTesting();
@@ -127,8 +130,8 @@ IN_PROC_BROWSER_TEST_F(BruschettaInstallerViewBrowserTest,
                        ShowWithNoLearnMoreUrl) {
   // We set the learn_more link for test cases by default as that's the most
   // common case, but unset it here for this specific test.
-  browser()->profile()->GetPrefs()->SetDict(
-      prefs::kBruschettaInstallerConfiguration, base::Value::Dict());
+  browser()->GetProfile()->GetPrefs()->SetDict(
+      prefs::kBruschettaInstallerConfiguration, base::DictValue());
   ShowUi("default");
   EXPECT_NE(nullptr, view_->GetOkButton());
   EXPECT_NE(nullptr, view_->GetCancelButton());
@@ -287,6 +290,42 @@ IN_PROC_BROWSER_TEST_F(BruschettaInstallerViewBrowserTest,
                 ->GetViewAccessibility()
                 .GetCachedDescription(),
             view_->GetSecondaryMessage());
+}
+
+IN_PROC_BROWSER_TEST_F(BruschettaInstallerViewBrowserTest,
+                       A11yPrimaryMessageLabelLiveRegionAttributes) {
+  ShowUi("default");
+
+  auto* label = view_->primary_message_label_for_testing();
+  ASSERT_NE(label, nullptr);
+
+  ui::AXNodeData data;
+  label->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ("polite",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kLiveStatus));
+  EXPECT_EQ("polite", data.GetStringAttribute(
+                          ax::mojom::StringAttribute::kContainerLiveStatus));
+  EXPECT_EQ("additions text",
+            data.GetStringAttribute(ax::mojom::StringAttribute::kLiveRelevant));
+  EXPECT_TRUE(data.GetBoolAttribute(ax::mojom::BoolAttribute::kLiveAtomic));
+}
+
+IN_PROC_BROWSER_TEST_F(BruschettaInstallerViewBrowserTest,
+                       A11yLiveRegionChangedOnStateChange) {
+  ShowUi("default");
+  EXPECT_CALL(*installer_, Install);
+  EXPECT_CALL(*installer_, Cancel).Times(AtLeast(1));
+
+  auto* label = view_->primary_message_label_for_testing();
+  ASSERT_NE(label, nullptr);
+
+  views::test::AXEventCounter counter(views::AXUpdateNotifier::Get());
+
+  // Accept to start installing, which changes the primary message text and
+  // should trigger a kLiveRegionChanged event on the live region root.
+  view_->AcceptDialog();
+
+  EXPECT_GE(counter.GetCount(ax::mojom::Event::kLiveRegionChanged, label), 1);
 }
 
 }  // namespace

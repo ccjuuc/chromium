@@ -30,22 +30,28 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ShareContentTypeHelper;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
@@ -58,7 +64,6 @@ import java.util.function.Supplier;
 
 /** Tests {@link ShareSheetCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
 public final class ShareSheetCoordinatorTest {
     private static final String MOCK_URL = JUnitTestGURLs.EXAMPLE_URL.getSpec();
 
@@ -71,11 +76,17 @@ public final class ShareSheetCoordinatorTest {
     @Mock private WindowAndroid mWindow;
     @Mock private Profile mProfile;
     @Mock Tracker mTracker;
+    @Mock private SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    @Mock private ActivityResultTracker mActivityResultTracker;
+    @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private SnackbarManager mSnackbarManager;
 
     private Activity mActivity;
     private ShareParams mParams;
     private ShareSheetCoordinator mShareSheetCoordinator;
     private ShadowPackageManager mShadowPackageManager;
+    private final SettableMonotonicObservableSupplier<ModalDialogManager>
+            mModalDialogManagerSupplier = ObservableSuppliers.createMonotonic(mModalDialogManager);
 
     @Before
     public void setUp() {
@@ -121,7 +132,11 @@ public final class ShareSheetCoordinatorTest {
                         false,
                         null,
                         mProfile,
-                        null);
+                        null,
+                        mSigninAndHistorySyncActivityLauncher,
+                        mActivityResultTracker,
+                        mModalDialogManagerSupplier,
+                        mSnackbarManager);
     }
 
     @Test
@@ -149,6 +164,7 @@ public final class ShareSheetCoordinatorTest {
         doNothing().when(spyShareSheet).finishUpdateShareSheet(any(), any(), any());
 
         spyShareSheet.updateShareSheet(/* saveLastUsed= */ false, () -> {});
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(spyShareSheet, never())
                 .createThirdPartyPropertyModels(any(), any(), any(), anyBoolean(), any());
@@ -166,6 +182,7 @@ public final class ShareSheetCoordinatorTest {
         doNothing().when(spyShareSheet).finishUpdateShareSheet(any(), any(), any());
 
         spyShareSheet.updateShareSheet(/* saveLastUsed= */ false, () -> {});
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(spyShareSheet, atLeastOnce())
                 .createThirdPartyPropertyModels(any(), any(), any(), anyBoolean(), any());

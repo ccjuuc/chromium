@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/core/css/style_recalc_context.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
+#include "third_party/blink/renderer/core/dom/node-inl.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 
@@ -53,29 +54,7 @@ bool NameMatches(const ComputedStyle& style,
         container_name->GetNames();
     for (const auto& scoped_name : names) {
       if (scoped_name->GetName() == name) {
-        const TreeScope* name_tree_scope = scoped_name->GetTreeScope();
-        if (!name_tree_scope || !selector_tree_scope) {
-          // Either the container-name or @container have a UA or User origin.
-          // In that case always match the name regardless of the other one's
-          // origin.
-          return true;
-        }
-        // Match a tree-scoped container name if the container-name
-        // declaration's tree scope is an inclusive ancestor of the @container
-        // rule's tree scope.
-        for (const TreeScope* match_scope = selector_tree_scope; match_scope;
-             match_scope = match_scope->ParentTreeScope()) {
-          if (match_scope == name_tree_scope) {
-            return true;
-          }
-        }
-        // Keeping the TreeScope matching above to be able to count when this
-        // is a behavioral change.
-        selector_tree_scope->GetDocument().CountUse(
-            WebFeature::kContainerNameQueryFailedTreeScope);
-        if (RuntimeEnabledFeatures::CSSContainerNameNotTreeScopedEnabled()) {
-          return true;
-        }
+        return true;
       }
     }
   }
@@ -86,7 +65,7 @@ bool TypeMatches(const ComputedStyle& style,
                  const ContainerSelector& container_selector) {
   DCHECK(!container_selector.HasUnknownFeature());
   unsigned type = container_selector.Type(style.GetWritingMode());
-  return !type || ((style.ContainerType() & type) == type);
+  return type == kContainerTypeNormal || (style.ContainerType() & type) == type;
 }
 
 bool Matches(const ComputedStyle& style,
@@ -211,6 +190,10 @@ bool ContainerQueryEvaluator::EvalAndAdd(
   if (Element* container = CachedContainer(starting_element, selector,
                                            match_result.CurrentTreeScope(),
                                            container_selector_cache)) {
+    if (!query.Query()) {
+      // Querying name only, which is already matched in FindContainer.
+      return true;
+    }
     Change change = starting_element == container
                         ? Change::kNearestContainer
                         : Change::kDescendantContainers;
@@ -226,7 +209,7 @@ void ContainerQueryEvaluator::SetDependencyFlags(const ContainerQuery& query,
   if (selector.SelectsSizeContainers()) {
     match_result.SetDependsOnSizeContainerQueries();
   }
-  if (selector.SelectsStyleContainers()) {
+  if (selector.SelectsStyleOrNameOnlyContainers()) {
     match_result.SetDependsOnStyleContainerQueries();
   }
   if (selector.SelectsScrollStateContainers()) {
@@ -281,7 +264,7 @@ bool ContainerQueryEvaluator::EvalAndAdd(const ContainerQuery& query,
   // represents dependencies on external circumstance that can change without
   // ContainerQueryEvaluator being notified.
   bool use_cached =
-      (result.unit_flags & (MediaQueryExpValue::UnitFlags::kRootFontRelative |
+      (result.unit_flags & (MediaQueryExpValue::UnitFlags::kRootRelative |
                             MediaQueryExpValue::UnitFlags::kDynamicViewport |
                             MediaQueryExpValue::UnitFlags::kStaticViewport |
                             MediaQueryExpValue::UnitFlags::kContainer)) == 0;
@@ -313,14 +296,14 @@ bool ContainerQueryEvaluator::EvalAndAdd(const ContainerQuery& query,
                            MediaQueryExpValue::UnitFlags::kContainer)) {
     match_result.SetDependsOnStaticViewportUnits();
   }
-  if (result.unit_flags & MediaQueryExpValue::UnitFlags::kRootFontRelative) {
-    match_result.SetDependsOnRootFontContainerQueries();
+  if (result.unit_flags & MediaQueryExpValue::UnitFlags::kRootRelative) {
+    match_result.SetDependsOnRootUnitContainerQueries();
   }
   if (!depends_on_size_) {
     depends_on_size_ = query.Selector().SelectsSizeContainers();
   }
   if (!depends_on_style_) {
-    depends_on_style_ = query.Selector().SelectsStyleContainers();
+    depends_on_style_ = query.Selector().SelectsStyleOrNameOnlyContainers();
   }
   if (!depends_on_stuck_) {
     depends_on_stuck_ = query.Selector().SelectsStickyContainers();
@@ -370,6 +353,15 @@ bool ContainerQueryEvaluator::EvalAndAdd(const ContainerQuery& query,
       parent->SetChildrenAffectedByBackwardPositionalRules();
       container->GetDocument().GetStyleEngine().SetUsesTreeCountingFunctions();
     }
+  }
+  if ((result.unit_flags & MediaQueryExpValue::UnitFlags::kRootRelative) != 0) {
+    Element* container = ContainerElement();
+    container->GetDocument().GetStyleEngine().SetUsesRootRelativeUnits(true);
+  }
+  if ((result.unit_flags &
+       MediaQueryExpValue::UnitFlags::kLineHeightRelative) != 0) {
+    Element* container = ContainerElement();
+    container->GetDocument().GetStyleEngine().SetUsesLineHeightUnits(true);
   }
   unit_flags_ |= result.unit_flags;
 
@@ -776,7 +768,7 @@ void ContainerQueryEvaluator::ClearResults(Change change,
          (container_type == kAnchoredContainer &&
           pair.key->Selector().SelectsAnchoredContainers()) ||
          (container_type == kStyleContainer &&
-          pair.key->Selector().SelectsStyleContainers()))) {
+          pair.key->Selector().SelectsStyleOrNameOnlyContainers()))) {
       continue;
     }
     new_results.Set(pair.key, pair.value);
@@ -809,7 +801,7 @@ ContainerQueryEvaluator::Change ContainerQueryEvaluator::ComputeStyleChange()
 
   for (const auto& result : results_) {
     const ContainerQuery& query = *result.key;
-    if (!query.Selector().SelectsStyleContainers()) {
+    if (!query.Selector().SelectsStyleOrNameOnlyContainers()) {
       continue;
     }
     if (Eval(query).value == result.value.value) {
@@ -915,8 +907,8 @@ void ContainerQueryEvaluator::UpdateContainerValuesFromUnitChanges(
     StyleRecalcChange change) {
   CHECK(media_query_evaluator_);
   unsigned changed_flags = 0;
-  if (change.RemUnitsMaybeChanged()) {
-    changed_flags |= MediaQueryExpValue::kRootFontRelative;
+  if (change.RootRelativeUnitsMaybeChanged()) {
+    changed_flags |= MediaQueryExpValue::kRootRelative;
   }
   if (change.ContainerRelativeUnitsMaybeChanged()) {
     changed_flags |= MediaQueryExpValue::kContainer;
@@ -970,16 +962,19 @@ StyleRecalcChange ContainerQueryEvaluator::ApplyScrollStateAndStyleChanges(
     return recalc_change;
   }
 
-  // If size container queries are expressed in font-relative units, the query
+  // If size container queries are expressed in relative units, the query
   // evaluation may change even if the size of the container in pixels did not
   // change. If the old and new style use different font properties, and there
   // are existing queries that depend on font relative units, we need to update
   // the container values and invalidate style for any changed queries.
-  bool invalidate_for_font =
-      (unit_flags_ & MediaQueryExpValue::kFontRelative) &&
-      (base::FeatureList::IsEnabled(blink::features::kCSSFontComparisonFix)
-           ? !base::ValuesEquivalent(old_style.GetFont(), new_style.GetFont())
-           : old_style.GetFont() != new_style.GetFont());
+  // Similarly for line-height and the lh unit.
+  bool invalidate_for_relative_units =
+      ((unit_flags_ & MediaQueryExpValue::kFontRelative) &&
+       (base::FeatureList::IsEnabled(blink::features::kCSSFontComparisonFix)
+            ? !base::ValuesEquivalent(old_style.GetFont(), new_style.GetFont())
+            : old_style.GetFont() != new_style.GetFont())) ||
+      ((unit_flags_ & MediaQueryExpValue::kLineHeightRelative) &&
+       old_style.ComputedLineHeight() != new_style.ComputedLineHeight());
 
   // Writing direction changes may affect how logical queries match for size and
   // scroll-state() queries even when the physical size or scroll-state do not
@@ -988,14 +983,14 @@ StyleRecalcChange ContainerQueryEvaluator::ApplyScrollStateAndStyleChanges(
       MayDependOnWritingDirection() &&
       old_style.GetWritingDirection() != new_style.GetWritingDirection();
 
-  if (invalidate_for_writing_direction || invalidate_for_font ||
+  if (invalidate_for_writing_direction || invalidate_for_relative_units ||
       DependsOnTreeCounting()) {
     // Writing direction and font sizing are cached on CSSContainerValues. Need
     // to recreate the values based on the current ComputedStyle.
     UpdateContainerValues();
   }
 
-  if (invalidate_for_writing_direction || invalidate_for_font ||
+  if (invalidate_for_writing_direction || invalidate_for_relative_units ||
       DependsOnTreeCounting()) {
     switch (StyleAffectingSizeChanged()) {
       case ContainerQueryEvaluator::Change::kNone:
@@ -1021,9 +1016,10 @@ StyleRecalcChange ContainerQueryEvaluator::ApplyScrollStateAndStyleChanges(
         break;
     }
   }
-  if (old_style.InheritedVariables() != new_style.InheritedVariables() ||
+  if (invalidate_for_relative_units || DependsOnTreeCounting() ||
+      old_style.InheritedVariables() != new_style.InheritedVariables() ||
       old_style.NonInheritedVariables() != new_style.NonInheritedVariables() ||
-      DependsOnTreeCounting()) {
+      old_style.InitialData() != new_style.InitialData()) {
     switch (StyleContainerChanged()) {
       case ContainerQueryEvaluator::Change::kNone:
         break;

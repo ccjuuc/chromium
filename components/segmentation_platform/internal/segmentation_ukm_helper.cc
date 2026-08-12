@@ -6,6 +6,7 @@
 
 #include "base/bit_cast.h"
 #include "base/compiler_specific.h"
+#include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -191,7 +192,7 @@ ukm::SourceId SegmentationUkmHelper::RecordModelExecutionResult(
     return source_id;
   }
 
-  if (base::RandInt(1, sampling_rate_) > 1) {
+  if (base::RandIntInclusive(1, sampling_rate_) > 1) {
     return source_id;
   }
   ukm::builders::Segmentation_ModelExecution execution_result(source_id);

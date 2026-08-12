@@ -59,10 +59,24 @@ class ChromiumSystemIdentityManager final : public SystemIdentityManager {
   void FetchCapabilities(id<SystemIdentity> identity,
                          const std::vector<std::string>& names,
                          FetchCapabilitiesCallback callback) final;
+  void FetchCapabilitiesWithPartial(
+      id<SystemIdentity> identity,
+      const std::vector<std::string>& names,
+      FetchCapabilitiesCompletion completion,
+      FetchPartialCapabilitiesCallback partial_callback) final;
+  void RegisterExternalPrivacyContextProvider(
+      id<ExternalPrivacyContextUIProvider> provider) final;
+  void UnregisterExternalPrivacyContextProvider(
+      id<ExternalPrivacyContextUIProvider> provider) final;
+  void ExternalPrivacyContextProviderReady(
+      id<ExternalPrivacyContextUIProvider> provider) final;
   bool HandleMDMNotification(id<SystemIdentity> identity,
                              NSArray<id<SystemIdentity>>* active_identities,
                              id<RefreshAccessTokenError> error,
                              HandleMDMCallback callback) final;
+  bool DisplayMDMNotification(id<SystemIdentity> identity,
+                              const GoogleServiceAuthError& error,
+                              HandleMDMCallback callback) final;
   bool IsScopeLimitedError(id<RefreshAccessTokenError> error) final;
   bool IsMDMError(id<SystemIdentity> identity, NSError* error) final;
   void FetchTokenAuthURL(id<SystemIdentity> identity,
@@ -182,10 +196,43 @@ void ChromiumSystemIdentityManager::FetchCapabilities(
   NOTREACHED();
 }
 
+void ChromiumSystemIdentityManager::FetchCapabilitiesWithPartial(
+    id<SystemIdentity> identity,
+    const std::vector<std::string>& names,
+    FetchCapabilitiesCompletion completion,
+    FetchPartialCapabilitiesCallback partial_callback) {
+  NOTREACHED();
+}
+
+void ChromiumSystemIdentityManager::RegisterExternalPrivacyContextProvider(
+    id<ExternalPrivacyContextUIProvider> provider) {
+  // Nothing to do.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+void ChromiumSystemIdentityManager::UnregisterExternalPrivacyContextProvider(
+    id<ExternalPrivacyContextUIProvider> provider) {
+  // Nothing to do.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
+void ChromiumSystemIdentityManager::ExternalPrivacyContextProviderReady(
+    id<ExternalPrivacyContextUIProvider> provider) {
+  // Nothing to do.
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+}
+
 bool ChromiumSystemIdentityManager::HandleMDMNotification(
     id<SystemIdentity> identity,
     NSArray<id<SystemIdentity>>* active_identities,
     id<RefreshAccessTokenError> error,
+    HandleMDMCallback callback) {
+  NOTREACHED();
+}
+
+bool ChromiumSystemIdentityManager::DisplayMDMNotification(
+    id<SystemIdentity> identity,
+    const GoogleServiceAuthError& error,
     HandleMDMCallback callback) {
   NOTREACHED();
 }

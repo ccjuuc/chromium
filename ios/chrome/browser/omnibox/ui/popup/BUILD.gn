@@ -21,7 +21,6 @@ source_set("popup") {
     "//ios/chrome/common/ui/colors",
     "//ios/chrome/common/ui/util",
     "//ui/base",
-    "//ui/gfx/ios:uikit_util",
   ]
 }
 
@@ -45,6 +44,7 @@ source_set("popup_ui") {
     "//ios/chrome/browser/omnibox/ui/popup/carousel",
     "//ios/chrome/browser/omnibox/ui/popup/row",
     "//ios/chrome/browser/omnibox/ui/popup/row/actions",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/public/features:system_flags",
     "//ios/chrome/browser/shared/ui/elements",
     "//ios/chrome/browser/shared/ui/symbols",
@@ -86,13 +86,18 @@ source_set("popup_ui_protocols") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "omnibox_popup_view_controller_unittest.mm" ]
+  sources = [
+    "omnibox_popup_presenter_unittest.mm",
+    "omnibox_popup_view_controller_unittest.mm",
+  ]
   deps = [
+    ":popup",
     ":popup_ui",
     ":popup_ui_protocols",
     "//base/test:test_support",
     "//ios/chrome/browser/omnibox/model/suggestions:omnibox_pedal_swift",
     "//ios/chrome/browser/omnibox/model/suggestions:ui_interface",
+    "//ios/chrome/common/ui/colors",
     "//testing/gtest",
     "//third_party/ocmock",
   ]

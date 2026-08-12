@@ -118,11 +118,18 @@ std::optional<RelocUnitWin32> RelocRvaReaderWin32::GetNext() {
 
 bool RelocRvaReaderWin32::LoadRelocBlock(
     ConstBufferView::const_iterator block_begin) {
-  ConstBufferView header_buf(block_begin, sizeof(pe::RelocHeader));
-  if (header_buf.end() >= end_it_ ||
-      end_it_ - header_buf.end() < kRelocUnitSize) {
+  if (!block_begin) {
     return false;
   }
+
+  // Need enough data for `pe::RelocHeader` and at least one reloc
+  // unit.
+  size_t remaining = base::checked_cast<size_t>(end_it_ - block_begin);
+  if (remaining < sizeof(pe::RelocHeader) + kRelocUnitSize) {
+    return false;
+  }
+
+  ConstBufferView header_buf(block_begin, sizeof(pe::RelocHeader));
   const auto& header = header_buf.read<pe::RelocHeader>(0);
   rva_hi_bits_ = header.rva_hi;
   uint32_t block_size = header.size;

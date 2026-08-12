@@ -10,10 +10,8 @@
 #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
 #include "chrome/browser/ui/page_info/merchant_trust_side_panel.h"
 #include "chrome/browser/ui/views/page_info/page_info_merchant_trust_content_view.h"
-#include "components/page_info/core/features.h"
 #include "components/page_info/core/merchant_trust_service.h"
 #include "components/page_info/core/page_info_types.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 
 PageInfoMerchantTrustController::PageInfoMerchantTrustController(
@@ -34,13 +32,9 @@ PageInfoMerchantTrustController::PageInfoMerchantTrustController(
 
 PageInfoMerchantTrustController::~PageInfoMerchantTrustController() = default;
 
-void PageInfoMerchantTrustController::MerchantBubbleOpened(
-    page_info::MerchantBubbleOpenReferrer referrer) {
+void PageInfoMerchantTrustController::MerchantBubbleOpened() {
   RecordInteraction(
-      referrer == page_info::MerchantBubbleOpenReferrer::kPageInfo
-          ? page_info::MerchantTrustInteraction::kBubbleOpenedFromPageInfo
-          : page_info::MerchantTrustInteraction::
-                kBubbleOpenedFromLocationBarChip);
+      page_info::MerchantTrustInteraction::kBubbleOpenedFromPageInfo);
 }
 
 void PageInfoMerchantTrustController::MerchantBubbleClosed() {

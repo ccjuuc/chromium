@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ui/webui/watermark/watermark_page_handler.h"
 
+#include "base/strings/string_util.h"
 #include "base/types/to_address.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_clipboard_utils.h"
 #include "chrome/browser/enterprise/data_protection/data_protection_ui_controller.h"
 #include "chrome/browser/enterprise/watermark/settings.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -22,8 +24,8 @@ WatermarkPageHandler::WatermarkPageHandler(
 
 WatermarkPageHandler::~WatermarkPageHandler() = default;
 
-void WatermarkPageHandler::SetWatermarkStyle(
-    watermark::mojom::WatermarkStylePtr style) {
+void WatermarkPageHandler::SetWatermarkSettings(
+    watermark::mojom::WatermarkSettingsPtr settings) {
   auto* bwi =
       webui::GetBrowserWindowInterface(base::to_address(host_contents_));
   // The Watermark WebUI loads only in browser-associated contexts.
@@ -33,15 +35,17 @@ void WatermarkPageHandler::SetWatermarkStyle(
       enterprise_data_protection::DataProtectionUIController::From(bwi);
   CHECK(data_protection_ui_controller);
 
+  CHECK(base::IsStringUTF8(settings->watermark_text));
+
   data_protection_ui_controller->ApplyWatermarkSettings(
-      "Watermark Test Page",
+      settings->watermark_text,
       SkColorSetA(
           enterprise_watermark::kBaseFillRGB,
-          enterprise_watermark::PercentageToSkAlpha(style->fill_opacity)),
+          enterprise_watermark::PercentageToSkAlpha(settings->fill_opacity)),
       SkColorSetA(
           enterprise_watermark::kBaseOutlineRGB,
-          enterprise_watermark::PercentageToSkAlpha(style->outline_opacity)),
-      style->font_size);
+          enterprise_watermark::PercentageToSkAlpha(settings->outline_opacity)),
+      settings->font_size);
 }
 
 void WatermarkPageHandler::ShowNotificationToast() {
@@ -53,7 +57,9 @@ void WatermarkPageHandler::ShowNotificationToast() {
 
   BrowserWindowFeatures& features = bwi->GetFeatures();
   ToastController* const toast_controller = features.toast_controller();
-  if (toast_controller) {
+  if (toast_controller &&
+      enterprise_data_protection::IsClipboardCopyAllowedByPolicyForUI(
+          base::to_address(host_contents_))) {
     ToastParams params(ToastId::kCopiedToClipboard);
     toast_controller->MaybeShowToast(std::move(params));
   }

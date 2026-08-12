@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="mn">
-<translation id="1028699632127661925"><ph name="DEVICE_NAME" />-д илгээж байна...</translation>
 <translation id="111910763555783249">Мэдэгдлийн тохиргоо</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 өдрийн өмнө}other{# өдрийн өмнө}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 минутын өмнө}other{# минутын өмнө}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Хүрэх талбайг баруун дээш зөөсөн. Энд товшино уу.</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" />-г хуваалцаж чадсангүй</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Текстийг жижиг хэсгээр хуваалцахыг оролдоно уу.</translation>
 <translation id="1293699935367580298">Esc товч</translation>
 <translation id="1368832886055348810">Зүүнээс баруун тийш</translation>
 <translation id="1383876407941801731">Хайлт</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 минутын өмнө}other{# минутын өмнө}}</translation>
 <translation id="1450753235335490080"><ph name="CONTENT_TYPE" />-г хуваалцах боломжгүй байна</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 сарын өмнө}other{# сарын өмнө}}</translation>
+<translation id="1591017414891297549">УРЬДЧИЛАН ҮЗЭХ</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 минут }other{# минут }}</translation>
 <translation id="1643823602425662293">Мэдэгдэл</translation>
 <translation id="169515659049020177">Солих</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Өнөөдөр</translation>
 <translation id="2168039046890040389">Хуудас дээшлүүлэх</translation>
 <translation id="2190355936436201913">(Хоосон)</translation>
-<translation id="2192232475740621500">Бага нягтралыг ашиглах</translation>
 <translation id="2267918077332197517">Энэ сайтын бүх мэдэгдлийг блоклох</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Дэлгэцийнхээ хүрэх хэсгийг товшино уу.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Таны утаснаас энэ дугаар луу залгах уу?</translation>
 <translation id="2435457462613246316">Нууц үг харуулах</translation>
 <translation id="24452542372838207">Мэдэгдлийг дэлгэх</translation>
-<translation id="2445449901874883781">Өндөр нягтралыг ашиглах</translation>
 <translation id="2448407890032181691">Хүрэх талбайг баруун доош зөөсөн. Энд товшино уу.</translation>
 <translation id="2482878487686419369">Мэдэгдэл</translation>
 <translation id="2497284189126895209">Бүх файлууд</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Түр санах ой</translation>
 <translation id="2653844658857826081">ШИНЭ</translation>
 <translation id="2666092431469916601">Дээд</translation>
-<translation id="2701330563083355633"><ph name="DEVICE_NAME" />-с хуваалцсан</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 жилийн өмнө}other{# жилийн өмнө}}</translation>
 <translation id="2878511608894704031">Бүгдийг нь устгах</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 хоногийн дараа}other{# хоногийн дараа}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Суурилагдсан дэлгэц</translation>
 <translation id="335581015389089642">Хэлсэн үг</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />Дэлгэрэнгүйг<ph name="END_BOLD" /> товшино уу</translation>
-<translation id="3389286852084373014">Текст хэт том байна</translation>
 <translation id="3406306243914553062">HTML контент</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 өдөр үлдсэн}other{# өдөр үлдсэн}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> Файл</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{Уншаагүй 1 мэдэгдэл}other{Уншаагүй # мэдэгдэл}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Нууцлалтай горимд дараах өргөтгөлийг асаана уу:}other{Нууцлалтай горимд дараах өргөтгөлүүдийг асаана уу:}}</translation>
+<translation id="4230098358142093034">Нүүр хуудас</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 сарын өмнө}other{# сарын өмнө}}</translation>
 <translation id="4277033906326892359"><ph name="COLUMN_NAME" /> баганыг өсөх дарааллаар эрэмбэлсэн</translation>
 <translation id="4289300219472526559">Ярьж эхлэх</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">OK</translation>
 <translation id="6974053822202609517">Баруунаас зүүн тал руу</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Таны аппликэйшнийг дараагийн удаа дахин эхлүүлэхэд түүний дэлгэцийн тохиргоог хэрэгжүүлнэ.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 мин үлдсэн}other{# мин үлдсэн }}</translation>
 <translation id="7252604552361840748">Дээрх өргөтгөлийг олно уу</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 минут үлдсэн }other{# минут үлдсэн}}</translation>
 <translation id="7437971918971306061"><ph name="COLUMN_NAME" /> баганын эрэмбийг болиулсан.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> ТБ</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Эможи</translation>
 <translation id="7620655452534002301">Хассан.</translation>
 <translation id="7658239707568436148">Болих</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> КБ/с</translation>
 <translation id="8725488761726303204">бусад +<ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">хийсэн</translation>
+<translation id="8741385002816058621">Энэ бол урьдчилан үзэж буй онцлог</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 цаг}other{# цаг}}</translation>
 <translation id="8798099450830957504">Гэрээ үл биелүүлэх</translation>
 <translation id="8841375032071747811">Буцах товчлуур</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp; Буцаах</translation>
 <translation id="9195990613383871904">Маргааш</translation>
 <translation id="928628199082367701">Супер</translation>
-<translation id="932327136139879170">Нүүр хуудас</translation>
 <translation id="944069440740578670">Уншаагүй мэдэгдэл</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 секундийн өмнө}other{# секундийн өмнө}}</translation>
 </translationbundle>

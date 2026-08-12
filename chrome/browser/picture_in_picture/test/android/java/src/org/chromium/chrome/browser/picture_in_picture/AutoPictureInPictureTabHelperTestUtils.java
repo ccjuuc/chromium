@@ -14,13 +14,14 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.site_settings.PermissionInfo;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.content_settings.SessionModel;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
 /** Utility class for testing AutoPictureInPictureTabHelper C++ logic via JNI. */
 @JNINamespace("picture_in_picture")
 public class AutoPictureInPictureTabHelperTestUtils {
+    private static final long PIP_TIMEOUT_MS = 10000L;
+
     private AutoPictureInPictureTabHelperTestUtils() {}
 
     /**
@@ -32,6 +33,13 @@ public class AutoPictureInPictureTabHelperTestUtils {
                 () ->
                         AutoPictureInPictureTabHelperTestUtilsJni.get()
                                 .initializeForTesting(webContents));
+    }
+
+    public static boolean isCurrentlyAudible(WebContents webContents) {
+        return ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        AutoPictureInPictureTabHelperTestUtilsJni.get()
+                                .isCurrentlyAudible(webContents));
     }
 
     /**
@@ -60,7 +68,9 @@ public class AutoPictureInPictureTabHelperTestUtils {
 
                     return isInAutoPip == expectedInPip;
                 },
-                failureMessage);
+                failureMessage,
+                PIP_TIMEOUT_MS,
+                CriteriaHelper.DEFAULT_POLLING_INTERVAL);
     }
 
     /**
@@ -137,11 +147,7 @@ public class AutoPictureInPictureTabHelperTestUtils {
             @ContentSetting int value) {
         PermissionInfo info =
                 new PermissionInfo(
-                        contentSettingsType,
-                        url,
-                        /* embedder= */ null,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE);
+                        contentSettingsType, url, /* embedder= */ null, /* isEmbargoed= */ false);
         ThreadUtils.runOnUiThreadBlocking(() -> info.setContentSetting(profile, value));
 
         // Wait for the setting to be updated.
@@ -165,6 +171,8 @@ public class AutoPictureInPictureTabHelperTestUtils {
     @NativeMethods
     interface Natives {
         void initializeForTesting(@JniType("content::WebContents*") WebContents webContents);
+
+        boolean isCurrentlyAudible(@JniType("content::WebContents*") WebContents webContents);
 
         boolean isInAutoPictureInPicture(@JniType("content::WebContents*") WebContents webContents);
 

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "mojo/core/channel_posix.h"
 
 #include <errno.h>
@@ -20,11 +15,13 @@
 #include <tuple>
 
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_for_io.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/synchronization/lock.h"
 #include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
@@ -33,6 +30,7 @@
 #include "base/types/fixed_array.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/platform/socket_utils_posix.h"
+#include "mojo/core/configuration.h"
 
 #if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID))
 #include "mojo/core/channel_linux.h"
@@ -50,10 +48,13 @@ const size_t kMaxBatchReadCapacity = 256 * 1024;
 class MessageView {
  public:
   // Owns |message|. |offset| indexes the first unsent byte in the message.
-  MessageView(Channel::MessagePtr message, size_t offset)
+  MessageView(Channel::MessagePtr message,
+              size_t offset,
+              base::TimeTicks start_time = base::TimeTicks::Now())
       : message_(std::move(message)),
         offset_(offset),
-        handles_(message_->TakeHandles()) {
+        handles_(message_->TakeHandles()),
+        start_time_(start_time) {
     DCHECK(!message_->data_num_bytes() || message_->data_num_bytes() > offset_);
   }
 
@@ -65,14 +66,17 @@ class MessageView {
   MessageView& operator=(const MessageView&) = delete;
 
   ~MessageView() {
-    if (message_ && base::ShouldRecordSubsampledMetric(0.001)) {
-      UMA_HISTOGRAM_TIMES("Mojo.Channel.WriteMessageLatency",
-                          base::TimeTicks::Now() - start_time_);
+    if (message_ && base::ShouldRecordSubsampledMetric(
+                        Channel::kMetricSubsamplingProbability)) {
+      base::TimeDelta latency = base::TimeTicks::Now() - start_time_;
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES("Mojo.Channel.WriteLatencyUs",
+                                              latency, base::Microseconds(1),
+                                              base::Seconds(1), 100);
     }
   }
 
   const void* data() const {
-    return static_cast<const char*>(message_->data()) + offset_;
+    return UNSAFE_TODO(static_cast<const char*>(message_->data()) + offset_);
   }
 
   size_t data_num_bytes() const { return message_->data_num_bytes() - offset_; }
@@ -109,7 +113,7 @@ class MessageView {
   std::vector<PlatformHandleInTransit> handles_;
   size_t num_handles_sent_ = 0;
 
-  base::TimeTicks start_time_ = base::TimeTicks::Now();
+  base::TimeTicks start_time_;
 };
 
 ChannelPosix::ChannelPosix(
@@ -145,7 +149,9 @@ void ChannelPosix::ShutDownImpl() {
 }
 
 void ChannelPosix::Write(MessagePtr message) {
-  RecordSentMessageMetrics(message->data_num_bytes());
+  RecordSentMessageMetricsSubsampled(message->data_num_bytes());
+
+  base::TimeTicks start_time = base::TimeTicks::Now();
 
   bool write_error = false;
   {
@@ -154,11 +160,11 @@ void ChannelPosix::Write(MessagePtr message) {
       return;
     }
     if (outgoing_messages_.empty()) {
-      if (!WriteNoLock(MessageView(std::move(message), 0))) {
+      if (!WriteNoLock(MessageView(std::move(message), 0, start_time))) {
         reject_writes_ = write_error = true;
       }
     } else {
-      outgoing_messages_.emplace_back(std::move(message), 0);
+      outgoing_messages_.emplace_back(std::move(message), 0, start_time);
     }
   }
   if (write_error) {
@@ -247,6 +253,10 @@ void ChannelPosix::WaitForWriteOnIOThreadNoLock() {
 void ChannelPosix::ShutDownOnIOThread() {
   base::CurrentThread::Get()->RemoveDestructionObserver(this);
 
+  if (socket_.is_valid() && mojo::core::GetConfiguration().is_broker_process) {
+    std::ignore = HANDLE_EINTR(shutdown(socket_.get(), SHUT_RDWR));
+  }
+
   {
     base::AutoLock lock(write_lock_);
     reject_writes_ = true;
@@ -286,6 +296,13 @@ void ChannelPosix::OnFdReadable(int fd) {
   do {
     buffer_capacity = next_read_size;
     char* buffer = GetReadBuffer(&buffer_capacity);
+    // A null buffer means that computing the read size overflowed, which means
+    // we received a malformed message; bail.
+    if (!buffer) {
+      read_error = true;
+      validation_error = true;
+      break;
+    }
     DCHECK_GT(buffer_capacity, 0u);
 
     std::vector<base::ScopedFD> incoming_fds;
@@ -382,7 +399,7 @@ bool ChannelPosix::WriteNoLock(MessageView message_view) {
             sizeof(int) * fds.size(), 0, Message::MessageType::HANDLES_SENT);
         int* fd_data = reinterpret_cast<int*>(fds_message->mutable_payload());
         for (size_t i = 0; i < fds.size(); ++i) {
-          fd_data[i] = fds[i].get();
+          UNSAFE_TODO(fd_data[i]) = fds[i].get();
         }
         outgoing_messages_.emplace_back(std::move(fds_message), 0);
         {
@@ -520,7 +537,7 @@ bool ChannelPosix::OnControlMessage(Message::MessageType message_type,
       }
       MessagePtr message = Message::CreateMessage(
           payload_size, 0, Message::MessageType::HANDLES_SENT_ACK);
-      memcpy(message->mutable_payload(), payload, payload_size);
+      UNSAFE_TODO(memcpy(message->mutable_payload(), payload, payload_size));
       Write(std::move(message));
       return true;
     }
@@ -568,7 +585,7 @@ bool ChannelPosix::CloseHandles(const int* fds, size_t num_fds) {
   // message, and map that to a vector of FDs to close, to avoid the
   // need for this traversal? Id could even be the first FD in the message.
   for (; i < num_fds && it != fds_to_close_.end(); i++, ++it) {
-    if (it->get() != fds[i]) {
+    if (it->get() != UNSAFE_TODO(fds[i])) {
       return false;
     }
   }

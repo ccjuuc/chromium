@@ -10,21 +10,20 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
-#include "components/permissions/features.h"
 #include "components/permissions/request_type.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/base_event_utils.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_utils.h"
 #include "ui/views/test/widget_activation_waiter.h"
@@ -89,7 +88,7 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
                                     ->GetPrimaryMainFrame(),
                                 permissions::RequestType::kGeolocation);
 
-    EXPECT_TRUE(browser()->window()->IsActive());
+    EXPECT_TRUE(browser()->GetWindow()->IsActive());
 
     // The permission prompt is shown asynchronously.
     base::RunLoop().RunUntilIdle();
@@ -121,10 +120,14 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
     // click on the chip to trigger showing the prompt.
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(browser());
-    LocationBarView* lbv = browser_view->toolbar()->location_bar();
-    if (lbv->GetChipController()->IsPermissionPromptChipVisible() &&
-        !lbv->GetChipController()->IsBubbleShowing()) {
-      views::test::ButtonTestApi(lbv->GetChipController()->chip())
+    LocationBar* lb = browser_view->toolbar()->location_bar();
+    if (lb->GetChipController()->IsPermissionPromptChipVisible() &&
+        !lb->GetChipController()->IsBubbleShowing()) {
+      views::test::ButtonTestApi(
+          views::AsViewClass<views::Button>(
+              views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+                  PermissionChipView::kPermissionRequestChipElementId,
+                  views::ElementTrackerViews::GetContextForView(browser_view))))
           .NotifyClick(ui::MouseEvent(
               ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
               ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
@@ -147,8 +150,8 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
 
     SendAcceleratorSync(ui::VKEY_OEM_4, true, false);
     EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
-    browser()->window()->Activate();
-    EnsureWindowActive(browser()->window(), "switch away with curly brace");
+    browser()->GetWindow()->Activate();
+    EnsureWindowActive(browser()->GetWindow(), "switch away with curly brace");
     EXPECT_FALSE(test_api_->GetPromptWindow());
   }
 
@@ -168,7 +171,7 @@ class PermissionBubbleInteractiveUITest : public InProcessBrowserTest {
 // window.
 IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest,
                        MAYBE_CmdWClosesWindow) {
-  EXPECT_TRUE(browser()->window()->IsVisible());
+  EXPECT_TRUE(browser()->GetWindow()->IsVisible());
 
   // On Windows, the WM_NCDESTROY message triggering Widget destruction may not
   // have been processed by the time `SendAcceleratorSync` returns (only waits
@@ -203,8 +206,8 @@ IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest, MAYBE_SwitchTabs) {
   // test environment can't guarantee that macOS decides that the Browser window
   // is actually the "best" window to activate upon closing the current key
   // window. So activate it manually.
-  browser()->window()->Activate();
-  EnsureWindowActive(browser()->window(), "tab added");
+  browser()->GetWindow()->Activate();
+  EnsureWindowActive(browser()->GetWindow(), "tab added");
 #endif
 
   // Prompt is hidden while its tab is not active.
@@ -231,8 +234,8 @@ IN_PROC_BROWSER_TEST_F(PermissionBubbleInteractiveUITest, MAYBE_SwitchTabs) {
   JumpToNextOpenTab();
   EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
 
-  browser()->window()->Activate();
-  EnsureWindowActive(browser()->window(),
+  browser()->GetWindow()->Activate();
+  EnsureWindowActive(browser()->GetWindow(),
                      "switch away with ctrl+tab or arrow at mac os");
   EXPECT_FALSE(test_api_->GetPromptWindow());
 

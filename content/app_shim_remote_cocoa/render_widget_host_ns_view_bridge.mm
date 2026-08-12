@@ -162,10 +162,10 @@ void RenderWidgetHostNSViewBridge::SetBounds(const gfx::Rect& rect) {
 }
 
 void RenderWidgetHostNSViewBridge::SetCALayerParams(
-    const gfx::CALayerParams& ca_layer_params) {
+    gfx::CALayerParams ca_layer_params) {
   if (display_disabled_)
     return;
-  display_ca_layer_tree_->UpdateCALayerTree(ca_layer_params);
+  display_ca_layer_tree_->UpdateCALayerTree(std::move(ca_layer_params));
 }
 
 void RenderWidgetHostNSViewBridge::SetBackgroundColor(SkColor color) {
@@ -249,6 +249,10 @@ void RenderWidgetHostNSViewBridge::SetShowingContextMenu(bool showing) {
   [cocoa_view_ setShowingContextMenu:showing];
 }
 
+void RenderWidgetHostNSViewBridge::SetSupportsAutoFill(bool supports) {
+  [cocoa_view_ setSupportsAutoFill:supports];
+}
+
 void RenderWidgetHostNSViewBridge::OnDisplayAdded(const display::Display&) {
   [cocoa_view_ updateScreenProperties];
 }
@@ -324,19 +328,14 @@ void RenderWidgetHostNSViewBridge::ShowSharingServicePicker(
     ShowSharingServicePickerCallback callback) {
   NSMutableArray* items = [[NSMutableArray alloc] init];
   if (url.is_valid()) {
-    if (@available(macOS 13.0, *)) {
-      NSString* ns_title =
-          base::SysUTF8ToNSString(title.empty() ? url.spec() : title);
-      NSURL* ns_url = net::NSURLWithGURL(url);
-      [items addObject:[[NSPreviewRepresentingActivityItem alloc]
-                           initWithItem:ns_url
-                                  title:ns_title
-                                  image:nil
-                                   icon:nil]];
-    } else {
-      [items addObject:base::SysUTF8ToNSString(url.spec())];
-      [items addObject:base::SysUTF8ToNSString(title)];
-    }
+    NSString* ns_title =
+        base::SysUTF8ToNSString(title.empty() ? url.spec() : title);
+    NSURL* ns_url = net::NSURLWithGURL(url);
+    [items addObject:[[NSPreviewRepresentingActivityItem alloc]
+                         initWithItem:ns_url
+                                title:ns_title
+                                image:nil
+                                 icon:nil]];
   } else if (!title.empty()) {
     [items addObject:base::SysUTF8ToNSString(title)];
   }
@@ -481,9 +480,6 @@ void RenderWidgetHostNSViewBridge::DisplayPopupMenu(
     // web-content menus are initiated by IPC message the setup has to
     // be done manually.
     base::mac::ScopedSendingEvent sending_event_scoper;
-
-    // Ensure the UI can update while the menu is fading out.
-    base::ScopedPumpMessagesInPrivateModes pump_in_fade;
 
     // Now run a NESTED EVENT LOOP until the pop-up is finished.
     [runner runMenuInView:cocoa_view

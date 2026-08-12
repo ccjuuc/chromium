@@ -8,11 +8,11 @@
 
 #include <algorithm>
 #include <utility>
-#include <vector>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
 #include "base/functional/bind.h"
 #include "base/memory/free_deleter.h"
 #include "base/notimplemented.h"
@@ -30,7 +30,6 @@
 #include "printing/printed_document.h"
 #include "printing/printed_page_win.h"
 #include "printing/printing_context_system_dialog_win.h"
-#include "printing/printing_features.h"
 #include "printing/printing_utils.h"
 #include "printing/units.h"
 #include "skia/ext/skia_utils_win.h"
@@ -147,35 +146,37 @@ mojom::ResultCode PrintingContextWin::UseDefaultSettings() {
     return GetResultCodeFromSystemErrorCode(code);
   }
 
-  DCHECK_GE(bytes_needed, count_returned * sizeof(PRINTER_INFO_2));
-  std::vector<BYTE> printer_info_buffer(bytes_needed);
+  CHECK_GE(bytes_needed, count_returned * sizeof(PRINTER_INFO_2));
+  auto printer_info_buffer = base::HeapArray<uint8_t>::Uninit(bytes_needed);
   BOOL ret = ::EnumPrinters(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
                             nullptr, 2, printer_info_buffer.data(),
                             bytes_needed, &bytes_needed, &count_returned);
   if (ret && count_returned) {  // have printers
-    UNSAFE_TODO({
-      // Open the first successfully found printer.
-      const PRINTER_INFO_2* info_2 =
-          reinterpret_cast<PRINTER_INFO_2*>(printer_info_buffer.data());
-      const PRINTER_INFO_2* info_2_end = info_2 + count_returned;
-      for (; info_2 < info_2_end; ++info_2) {
-        ScopedPrinterHandle printer;
-        if (!printer.OpenPrinterWithName(info_2->pPrinterName)) {
-          continue;
-        }
-        std::unique_ptr<DEVMODE, base::FreeDeleter> dev_mode =
-            CreateDevMode(printer.Get(), nullptr);
-        if (InitializeSettings(info_2->pPrinterName, dev_mode.get()) ==
-            mojom::ResultCode::kSuccess) {
-          return mojom::ResultCode::kSuccess;
-        }
+    // SAFETY: printer_info_buffer contains room for `count_returned`
+    // PRINTER_INFO_2 structs, per CHECK_GE above.
+    auto printer_infos = UNSAFE_BUFFERS(base::span(
+        reinterpret_cast<const PRINTER_INFO_2*>(printer_info_buffer.data()),
+        count_returned));
+
+    for (const PRINTER_INFO_2& info : printer_infos) {
+      ScopedPrinterHandle printer;
+      if (!printer.OpenPrinterWithName(info.pPrinterName)) {
+        continue;
       }
-    });
+
+      std::unique_ptr<DEVMODE, base::FreeDeleter> dev_mode =
+          CreateDevMode(printer.Get(), nullptr);
+
+      if (InitializeSettings(info.pPrinterName, dev_mode.get()) ==
+          mojom::ResultCode::kSuccess) {
+        return mojom::ResultCode::kSuccess;
+      }
+    }
+
     if (context_) {
       return mojom::ResultCode::kSuccess;
     }
   }
-
   return OnError();
 }
 
@@ -186,10 +187,12 @@ gfx::Size PrintingContextWin::GetPdfPaperSizeDeviceUnits() {
   // Get settings from locale. Paper type buffer length is at most 4.
   const int paper_type_buffer_len = 4;
   wchar_t paper_type_buffer[paper_type_buffer_len] = {};
-  GetLocaleInfo(LOCALE_USER_DEFAULT, LOCALE_IPAPERSIZE, paper_type_buffer,
-                paper_type_buffer_len);
-  if (UNSAFE_TODO(wcslen(paper_type_buffer))) {  // The call succeeded.
-    int paper_code = _wtoi(paper_type_buffer);
+  int chars_written = ::GetLocaleInfo(LOCALE_USER_DEFAULT, LOCALE_IPAPERSIZE,
+                                      paper_type_buffer, paper_type_buffer_len);
+  // If the call succeeded and returned at least one character, in addition to
+  // the null terminator.
+  int paper_code;
+  if (chars_written > 1 && base::StringToInt(paper_type_buffer, &paper_code)) {
     switch (paper_code) {
       case DMPAPER_LEGAL:
         paper_size.SetSize(kLegalWidthInch, kLegalHeightInch);
@@ -349,11 +352,6 @@ mojom::ResultCode PrintingContextWin::NewDocument(
   }
 #endif
 
-  if (base::FeatureList::IsEnabled(printing::features::kUseXpsForPrinting)) {
-    // This is all the new document context needed when using XPS.
-    return mojom::ResultCode::kSuccess;
-  }
-
   // Need more context setup when using GDI.
 
   // Register the application's AbortProc function with GDI.
@@ -413,12 +411,15 @@ mojom::ResultCode PrintingContextWin::RenderPage(const PrintedPage& page,
         content_area.y() - page_setup.printable_area().y(),
         page.shrink_factor());
 
-    if (::StartPage(context_) <= 0)
+    if (::StartPage(context_) <= 0) {
       return mojom::ResultCode::kFailed;
-    bool played_back = page.metafile()->SafePlayback(context_);
-    DCHECK(played_back);
-    if (::EndPage(context_) <= 0)
+    }
+    if (!page.metafile()->SafePlayback(context_)) {
       return mojom::ResultCode::kFailed;
+    }
+    if (::EndPage(context_) <= 0) {
+      return mojom::ResultCode::kFailed;
+    }
   }
 
   return mojom::ResultCode::kSuccess;
@@ -428,8 +429,6 @@ mojom::ResultCode PrintingContextWin::PrintDocument(
     const MetafilePlayer& metafile,
     const PrintSettings& settings,
     uint32_t num_pages) {
-  // TODO(crbug.com/40100562)
-  NOTIMPLEMENTED();
   return mojom::ResultCode::kFailed;
 }
 

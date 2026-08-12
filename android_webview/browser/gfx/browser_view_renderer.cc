@@ -4,6 +4,7 @@
 
 #include "android_webview/browser/gfx/browser_view_renderer.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -12,6 +13,7 @@
 #include "android_webview/browser/gfx/root_frame_sink.h"
 #include "android_webview/browser/gfx/root_frame_sink_proxy.h"
 #include "android_webview/common/aw_features.h"
+#include "cc/base/features.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
 #include "base/memory/raw_ptr.h"
@@ -45,7 +47,7 @@ namespace {
 constexpr double kEpsilon = 1e-8;
 
 // Used to calculate memory allocation. Determined experimentally.
-constexpr size_t kMemoryMultiplier = 20;
+constexpr size_t kMinMemoryMultiplier = 20;
 constexpr size_t kBytesPerPixel = 4;
 constexpr size_t kMemoryAllocationStep = 5 * 1024 * 1024;
 
@@ -222,7 +224,10 @@ gfx::Rect BrowserViewRenderer::ComputeTileRectAndUpdateMemoryPolicy() {
 
   size_t width = interest_rect.width();
   size_t height = interest_rect.height();
-  size_t bytes_limit = kMemoryMultiplier * kBytesPerPixel * width * height;
+  size_t memory_multiplier = static_cast<size_t>(
+      std::max(kMinMemoryMultiplier,
+               static_cast<size_t>(::features::kWebViewMemoryMultiplierParam.Get())));
+  size_t bytes_limit = memory_multiplier * kBytesPerPixel * width * height;
   // Round up to a multiple of kMemoryAllocationStep.
   bytes_limit =
       (bytes_limit / kMemoryAllocationStep + 1) * kMemoryAllocationStep;
@@ -248,13 +253,11 @@ void BrowserViewRenderer::PrepareToDraw(const gfx::Point& scroll,
 
 bool BrowserViewRenderer::CanOnDraw() {
   if (!compositor_) {
-    TRACE_EVENT_INSTANT0("android_webview", "EarlyOut_NoCompositor",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("android_webview", "EarlyOut_NoCompositor");
     return false;
   }
   if (clear_view_) {
-    TRACE_EVENT_INSTANT0("android_webview", "EarlyOut_ClearView",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("android_webview", "EarlyOut_ClearView");
     return false;
   }
 
@@ -341,16 +344,13 @@ bool BrowserViewRenderer::DoUpdateParentDrawData() {
   ParentCompositorDrawConstraints new_constraints;
   viz::FrameTimingDetailsMap new_timing_details;
   viz::FrameSinkId id;
-  uint32_t frame_token = 0u;
   base::TimeDelta preferred_frame_interval;
   current_compositor_frame_consumer_->TakeParentDrawDataOnUI(
-      &new_constraints, &id, &new_timing_details, &frame_token,
-      &preferred_frame_interval);
+      &new_constraints, &id, &new_timing_details, &preferred_frame_interval);
 
   content::SynchronousCompositor* compositor = FindCompositor(id);
   if (compositor) {
-    compositor->DidPresentCompositorFrames(std::move(new_timing_details),
-                                           frame_token);
+    compositor->DidPresentCompositorFrames(std::move(new_timing_details));
   }
 
   client_->SetPreferredFrameInterval(preferred_frame_interval);
@@ -457,9 +457,7 @@ void BrowserViewRenderer::EnableOnNewPicture(bool enabled) {
 }
 
 void BrowserViewRenderer::ClearView() {
-  TRACE_EVENT_INSTANT0("android_webview",
-                       "BrowserViewRenderer::ClearView",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("android_webview", "BrowserViewRenderer::ClearView");
   if (clear_view_)
     return;
 
@@ -476,43 +474,31 @@ void BrowserViewRenderer::SetOffscreenPreRaster(bool enable) {
 }
 
 void BrowserViewRenderer::SetIsPaused(bool paused) {
-  TRACE_EVENT_INSTANT1("android_webview",
-                       "BrowserViewRenderer::SetIsPaused",
-                       TRACE_EVENT_SCOPE_THREAD,
-                       "paused",
-                       paused);
+  TRACE_EVENT_INSTANT("android_webview", "BrowserViewRenderer::SetIsPaused",
+                      "paused", paused);
   is_paused_ = paused;
   UpdateBeginFrameSource();
 }
 
 void BrowserViewRenderer::SetViewVisibility(bool view_visible) {
-  TRACE_EVENT_INSTANT1("android_webview",
-                       "BrowserViewRenderer::SetViewVisibility",
-                       TRACE_EVENT_SCOPE_THREAD,
-                       "view_visible",
-                       view_visible);
+  TRACE_EVENT_INSTANT("android_webview",
+                      "BrowserViewRenderer::SetViewVisibility", "view_visible",
+                      view_visible);
   view_visible_ = view_visible;
 }
 
 void BrowserViewRenderer::SetWindowVisibility(bool window_visible) {
-  TRACE_EVENT_INSTANT1("android_webview",
-                       "BrowserViewRenderer::SetWindowVisibility",
-                       TRACE_EVENT_SCOPE_THREAD,
-                       "window_visible",
-                       window_visible);
+  TRACE_EVENT_INSTANT("android_webview",
+                      "BrowserViewRenderer::SetWindowVisibility",
+                      "window_visible", window_visible);
   window_visible_ = window_visible;
   UpdateBeginFrameSource();
   UpdateForegroundForGpuResources();
 }
 
 void BrowserViewRenderer::OnSizeChanged(int width, int height) {
-  TRACE_EVENT_INSTANT2("android_webview",
-                       "BrowserViewRenderer::OnSizeChanged",
-                       TRACE_EVENT_SCOPE_THREAD,
-                       "width",
-                       width,
-                       "height",
-                       height);
+  TRACE_EVENT_INSTANT("android_webview", "BrowserViewRenderer::OnSizeChanged",
+                      "width", width, "height", height);
   size_.SetSize(width, height);
   if (offscreen_pre_raster_)
     ComputeTileRectAndUpdateMemoryPolicy();
@@ -613,9 +599,8 @@ gfx::Rect BrowserViewRenderer::GetScreenRect() const {
 void BrowserViewRenderer::DidInitializeCompositor(
     content::SynchronousCompositor* compositor,
     const viz::FrameSinkId& frame_sink_id) {
-  TRACE_EVENT_INSTANT0("android_webview",
-                       "BrowserViewRenderer::DidInitializeCompositor",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("android_webview",
+                      "BrowserViewRenderer::DidInitializeCompositor");
   DCHECK(compositor);
   // This assumes that a RenderViewHost has at most 1 synchronous compositor
   // througout its lifetime.
@@ -636,9 +621,8 @@ void BrowserViewRenderer::DidInitializeCompositor(
 void BrowserViewRenderer::DidDestroyCompositor(
     content::SynchronousCompositor* compositor,
     const viz::FrameSinkId& frame_sink_id) {
-  TRACE_EVENT_INSTANT0("android_webview",
-                       "BrowserViewRenderer::DidDestroyCompositor",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("android_webview",
+                      "BrowserViewRenderer::DidDestroyCompositor");
   DCHECK(compositor_map_.count(frame_sink_id));
   if (compositor_ == compositor) {
     if (compositor_ && foreground_for_gpu_resources_) {
@@ -727,10 +711,9 @@ void BrowserViewRenderer::ScrollTo(const gfx::Point& scroll_offset) {
 
   scroll_offset_unscaled_ = scroll_offset_unscaled;
 
-  TRACE_EVENT_INSTANT2("android_webview", "BrowserViewRenderer::ScrollTo",
-                       TRACE_EVENT_SCOPE_THREAD, "x",
-                       scroll_offset_unscaled.x(), "y",
-                       scroll_offset_unscaled.y());
+  TRACE_EVENT_INSTANT("android_webview", "BrowserViewRenderer::ScrollTo", "x",
+                      scroll_offset_unscaled.x(), "y",
+                      scroll_offset_unscaled.y());
 
   if (compositor_)
     compositor_->DidChangeRootLayerScrollOffset(scroll_offset_unscaled);
@@ -756,9 +739,8 @@ void BrowserViewRenderer::RestoreScrollAfterTransition(
 
 void BrowserViewRenderer::DidUpdateContent(
     content::SynchronousCompositor* compositor) {
-  TRACE_EVENT_INSTANT0("android_webview",
-                       "BrowserViewRenderer::DidUpdateContent",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("android_webview",
+                      "BrowserViewRenderer::DidUpdateContent");
   if (compositor != compositor_)
     return;
 
@@ -811,9 +793,8 @@ void BrowserViewRenderer::UpdateRootLayerState(
   gfx::SizeF scrollable_size_dip = scrollable_size;
   scrollable_size_dip.Scale(1 / dip_scale_);
 
-  TRACE_EVENT_INSTANT1(
-      "android_webview", "BrowserViewRenderer::UpdateRootLayerState",
-      TRACE_EVENT_SCOPE_THREAD, "state",
+  TRACE_EVENT_INSTANT(
+      "android_webview", "BrowserViewRenderer::UpdateRootLayerState", "state",
       RootLayerStateAsValue(total_scroll_offset, scrollable_size_dip));
 
   DCHECK_GE(total_max_scroll_offset.x(), 0.f);
@@ -948,8 +929,7 @@ void BrowserViewRenderer::SetThreads(const std::vector<viz::Thread>& threads) {
 
 void BrowserViewRenderer::PostInvalidate(
     content::SynchronousCompositor* compositor) {
-  TRACE_EVENT_INSTANT0("android_webview", "BrowserViewRenderer::PostInvalidate",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("android_webview", "BrowserViewRenderer::PostInvalidate");
   if (compositor != compositor_)
     return;
 

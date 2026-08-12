@@ -10,18 +10,16 @@
 #include <utility>
 
 #include "ash/public/cpp/app_menu_constants.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "chrome/browser/apps/app_service/app_icon/dip_px_util.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/file_utils.h"
@@ -40,9 +38,9 @@
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/component_extension_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
@@ -60,6 +58,7 @@
 #include "components/app_restore/full_restore_utils.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/capability_access.h"
@@ -253,6 +252,7 @@ std::optional<arc::UserInteractionType> GetUserInterationType(
     case apps::LaunchSource::kFromSparky:
     case apps::LaunchSource::kFromNavigationCapturing:
     case apps::LaunchSource::kFromWebInstallApi:
+    case apps::LaunchSource::kFromMigration:
       // These LaunchSources do not launch ARC apps. When adding a new
       // LaunchSource, if it is expected to launch ARC apps, add a new
       // UserInteractionType above. Otherwise, add it here.
@@ -702,7 +702,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
                                   LaunchCallback callback) {
   auto user_interaction_type = GetUserInterationType(launch_source);
   if (!user_interaction_type.has_value()) {
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
 
@@ -717,14 +717,14 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
 
   ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_);
   if (!prefs) {
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
   const std::unique_ptr<ArcAppListPrefs::AppInfo> app_info =
       prefs->GetApp(app_id);
   if (!app_info) {
     LOG(ERROR) << "Launch App failed, could not find app with id " << app_id;
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
 
@@ -752,12 +752,10 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
           base::BindOnce(&OnContentUrlResolved, profile_->GetPath(), app_id,
                          event_flags, std::move(intent), std::move(activity),
                          std::move(new_window_info),
-                         base::BindOnce(
-                             [](LaunchCallback callback, bool success) {
-                               std::move(callback).Run(
-                                   ConvertBoolToLaunchResult(success));
-                             },
-                             std::move(callback))));
+                         base::BindOnce([](bool success) {
+                           return success ? apps::LaunchResult::kSuccess
+                                          : apps::LaunchResult::kFailed;
+                         }).Then(std::move(callback))));
       return;
     }
   } else {
@@ -768,7 +766,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
             user_interaction_type.value(),
             MakeArcWindowInfo(std::move(new_window_info)))) {
       VLOG(2) << "Failed to launch app: " + app_id + ".";
-      std::move(callback).Run(LaunchResult(State::kFailed));
+      std::move(callback).Run(LaunchResult::kFailed);
       return;
     }
 
@@ -777,7 +775,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
         std::make_unique<app_restore::AppLaunchInfo>(
             app_id, event_flags, std::move(intent_for_full_restore), session_id,
             display_id));
-    std::move(callback).Run(LaunchResult(State::kSuccess));
+    std::move(callback).Run(LaunchResult::kSuccess);
     return;
   }
 
@@ -793,7 +791,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
       // Store.
       if (app_id == arc::kPlayStoreAppId) {
         prefs->SetLastLaunchTime(app_id);
-        std::move(callback).Run(LaunchResult(State::kSuccess));
+        std::move(callback).Run(LaunchResult::kSuccess);
         return;
       }
     }
@@ -803,7 +801,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
       // caller is responsible to not call this function in such case.  DCHECK
       // is here to prevent possible mistake.
       if (!arc::SetArcPlayStoreEnabledForProfile(profile_, true)) {
-        std::move(callback).Run(LaunchResult(State::kFailed));
+        std::move(callback).Run(LaunchResult::kFailed);
         return;
       }
       DCHECK(arc::IsArcPlayStoreEnabledForProfile(profile_));
@@ -814,7 +812,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
       // Store.
       if (app_id == arc::kPlayStoreAppId) {
         prefs->SetLastLaunchTime(app_id);
-        std::move(callback).Run(LaunchResult(State::kFailed));
+        std::move(callback).Run(LaunchResult::kFailed);
         return;
       }
     } else {
@@ -822,7 +820,7 @@ void ArcApps::LaunchAppWithIntent(const std::string& app_id,
       DCHECK(arc::ShouldArcAlwaysStart());
     }
   }
-  std::move(callback).Run(LaunchResult(State::kSuccess));
+  std::move(callback).Run(LaunchResult::kSuccess);
 }
 
 void ArcApps::LaunchAppWithParams(AppLaunchParams&& params,
@@ -838,7 +836,7 @@ void ArcApps::LaunchAppWithParams(AppLaunchParams&& params,
     Launch(params.app_id, event_flags, params.launch_source,
            std::make_unique<WindowInfo>(params.display_id));
     // TODO(crbug.com/40787924): Add launch return value.
-    std::move(callback).Run(LaunchResult());
+    std::move(callback).Run(LaunchResult::kFailed);
   }
 }
 
@@ -914,7 +912,7 @@ void ArcApps::GetMenuModel(const std::string& app_id,
   MenuItems menu_items;
 
   // Add Open item if the app is not opened and not suspended.
-  if (!base::Contains(app_id_to_task_ids_, app_id) && !app_info->suspended) {
+  if (!app_id_to_task_ids_.contains(app_id) && !app_info->suspended) {
     AddCommandItem(ash::LAUNCH_NEW, IDS_APP_CONTEXT_MENU_ACTIVATE_ARC,
                    menu_items);
   }
@@ -931,8 +929,7 @@ void ArcApps::GetMenuModel(const std::string& app_id,
                    menu_items);
   }
 
-  if (menu_type == MenuType::kShelf &&
-      base::Contains(app_id_to_task_ids_, app_id)) {
+  if (menu_type == MenuType::kShelf && app_id_to_task_ids_.contains(app_id)) {
     AddCommandItem(ash::MENU_CLOSE, IDS_SHELF_CONTEXT_MENU_CLOSE, menu_items);
   }
 
@@ -1011,7 +1008,7 @@ void ArcApps::UnpauseApp(const std::string& app_id) {
 }
 
 void ArcApps::BlockApp(const std::string& app_id) {
-  if (base::Contains(blocked_app_ids_, app_id)) {
+  if (blocked_app_ids_.contains(app_id)) {
     return;
   }
 
@@ -1033,7 +1030,7 @@ void ArcApps::BlockApp(const std::string& app_id) {
 }
 
 void ArcApps::UnblockApp(const std::string& app_id) {
-  if (!base::Contains(blocked_app_ids_, app_id)) {
+  if (!blocked_app_ids_.contains(app_id)) {
     return;
   }
 
@@ -1160,7 +1157,7 @@ void ArcApps::OnAppRemoved(const std::string& app_id) {
   paused_apps_.MaybeRemoveApp(app_id);
   blocked_app_ids_.erase(app_id);
 
-  if (base::Contains(app_id_to_task_ids_, app_id)) {
+  if (app_id_to_task_ids_.contains(app_id)) {
     for (int task_id : app_id_to_task_ids_[app_id]) {
       task_id_to_app_id_.erase(task_id);
     }
@@ -1240,7 +1237,7 @@ void ArcApps::OnTaskDestroyed(int32_t task_id) {
 
   const std::string app_id = it->second;
   task_id_to_app_id_.erase(it);
-  DCHECK(base::Contains(app_id_to_task_ids_, app_id));
+  DCHECK(app_id_to_task_ids_.contains(app_id));
   app_id_to_task_ids_[app_id].erase(task_id);
   if (app_id_to_task_ids_[app_id].empty()) {
     app_id_to_task_ids_.erase(app_id);
@@ -1608,7 +1605,7 @@ void ArcApps::SetIconEffect(const std::string& app_id) {
 }
 
 void ArcApps::CloseTasks(const std::string& app_id) {
-  if (!base::Contains(app_id_to_task_ids_, app_id)) {
+  if (!app_id_to_task_ids_.contains(app_id)) {
     return;
   }
 
@@ -1767,7 +1764,7 @@ void ArcApps::OnDisableListPolicyChanged() {
     return;
   }
 
-  const base::Value::List& disabled_system_features_pref =
+  const base::ListValue& disabled_system_features_pref =
       local_state->GetList(policy::policy_prefs::kSystemFeaturesDisableList);
   bool disable_arc_settings = false;
   for (const auto& entry : disabled_system_features_pref) {
@@ -1830,7 +1827,7 @@ Readiness ArcApps::GetReadiness(const std::string& app_id,
     return Readiness::kDisabledByPolicy;
   }
 
-  if (base::Contains(blocked_app_ids_, app_id)) {
+  if (blocked_app_ids_.contains(app_id)) {
     return Readiness::kDisabledByLocalSettings;
   }
 

@@ -12,6 +12,7 @@
 #include "base/containers/span.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -20,6 +21,7 @@
 #include "content/common/web_ui_loading_util.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/common/url_utils.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/mime_util.h"
@@ -45,17 +47,27 @@ ConvertConfigToSourcesMap(blink::mojom::LocalResourceLoaderConfigPtr config) {
   // TODO(https://crbug.com/384765582) This manual copy is only necessary
   // because ui::ReplaceTemplateExpressions uses an unconventional map type.
   // Remove this when that is fixed.
-  for (const auto& source : config->sources) {
-    const url::Origin origin = source.first;
-    const blink::mojom::LocalResourceSourcePtr& mojo_source = source.second;
-    const std::map<std::string, std::string> replacement_strings(
+  for (auto& [origin, mojo_source] : config->sources) {
+    std::map<std::string, std::string> replacement_strings(
         mojo_source->replacement_strings.begin(),
         mojo_source->replacement_strings.end());
-    LocalResourceURLLoaderFactory::Source local_source(
-        mojo_source.Clone(), std::move(replacement_strings));
-    sources.insert({std::move(origin), std::move(local_source)});
+    // Since we're iterating over a base::flat_map, the keys are already sorted
+    // and unique, so we can use end() as a hint for efficient insertion.
+    sources.try_emplace(sources.end(), std::move(origin),
+                        std::move(mojo_source), std::move(replacement_strings));
   }
   return sources;
+}
+
+// Returns a Web UI resource path from the given URL, which is the URL path
+// (without the leading slash) with the canonicalized query appended (if any).
+std::string GetWebUIResourcePath(const GURL& url) {
+  std::string path = std::string(url.path().substr(1));
+  std::string canonical_query = GetCanonicalQuery(url);
+  if (!canonical_query.empty()) {
+    base::StrAppend(&path, {"?", canonical_query});
+  }
+  return path;
 }
 
 // Returns the mime type of the given URL. If the mime type cannot be
@@ -94,8 +106,8 @@ std::optional<std::pair<std::string_view, std::string_view>> FindResponse(
   // Check if the source corresponding to `origin` has the URL path in its
   // path_to_response_map.
   if (auto it = sources.find(origin); it != sources.end()) {
-    if (auto response_opt =
-            FindResponseInSource(it->second, url.path().substr(1))) {
+    std::string path_key = GetWebUIResourcePath(url);
+    if (auto response_opt = FindResponseInSource(it->second, path_key)) {
       return std::make_pair(*response_opt,
                             std::string_view(it->second.source->headers));
     }
@@ -116,6 +128,12 @@ void SendResponse(mojo::PendingRemote<network::mojom::URLLoaderClient> client,
   headers->SetHeader(net::HttpRequestHeaders::kContentType,
                      url_response_head->mime_type);
   url_response_head->headers = headers;
+  auto now_time = base::Time::Now();
+  auto now_ticks = base::TimeTicks::Now();
+  url_response_head->request_time = now_time;
+  url_response_head->request_start = now_ticks;
+  url_response_head->load_timing.request_start_time = now_time;
+  url_response_head->load_timing.request_start = now_ticks;
 
   scoped_refptr<base::RefCountedString> bytes =
       base::MakeRefCounted<base::RefCountedString>(std::string(content));
@@ -176,8 +194,8 @@ bool LocalResourceURLLoaderFactory::CanServe(
 
   // Get the resource ID corresponding to the URL path.
   const blink::mojom::LocalResourceSourcePtr& source = it->second.source;
-  std::string_view path = request.url.path().substr(1);
-  auto resource_it = source->path_to_resource_map.find(std::string(path));
+  std::string path_key = GetWebUIResourcePath(request.url);
+  auto resource_it = source->path_to_resource_map.find(path_key);
   // The path-to-ID map may not have an entry for the given path. This can
   // happen for resources that are generated on-the-fly in the browser process.
   // Example: chrome://my-webui/strings.m.js
@@ -259,6 +277,12 @@ void LocalResourceURLLoaderFactory::GetResourceAndRespond(
   url_response_head->headers = headers;
   url_response_head->parsed_headers = network::PopulateParsedHeaders(
       url_response_head->headers.get(), request.url);
+  auto now_time = base::Time::Now();
+  auto now_ticks = base::TimeTicks::Now();
+  url_response_head->request_time = now_time;
+  url_response_head->request_start = now_ticks;
+  url_response_head->load_timing.request_start_time = now_time;
+  url_response_head->load_timing.request_start = now_ticks;
 
   // Handle Range header if request.
   std::optional<net::HttpByteRange> maybe_range = std::nullopt;
@@ -289,11 +313,17 @@ LocalResourceURLLoaderFactory::GetResource(
     const std::map<std::string, std::string>& replacement_strings,
     const std::string& mime_type) {
   // Get resource.
-  std::string_view path = url.path().substr(1);
-  auto resource_it = source->path_to_resource_map.find(std::string(path));
+  std::string path_key = GetWebUIResourcePath(url);
+  auto resource_it = source->path_to_resource_map.find(path_key);
   // CanServe should have been called before this point, which would have
   // confirmed that there exists a resource corresponding to the URL path.
-  CHECK(resource_it != source->path_to_resource_map.end());
+  if (resource_it == source->path_to_resource_map.end()) {
+    SCOPED_CRASH_KEY_STRING256("Bug470579309", "url", url.spec());
+    SCOPED_CRASH_KEY_STRING256("Bug470579309", "path", path_key);
+    SCOPED_CRASH_KEY_NUMBER("Bug470579309", "resource_map_size",
+                            source->path_to_resource_map.size());
+    NOTREACHED();
+  }
   if (resource_it->second->is_response_body()) {
     // The resource is a direct response. Note that this should already be
     // handled earlier for callers from `GetResourceAndRespond()`, so this path

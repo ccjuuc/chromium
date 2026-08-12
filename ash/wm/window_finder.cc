@@ -4,14 +4,14 @@
 
 #include "ash/public/cpp/window_finder.h"
 
+#include <ranges>
+
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_session.h"
 #include "ash/wm/window_util.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
@@ -72,12 +72,12 @@ aura::Window* GetTopmostWindowAtPointWithinWindow(
 
   if (IsTopLevelWindow(window)) {
     if (IsWindowTargeted(window, screen_point, targeter)) {
-      return base::Contains(ignore, window) ? nullptr : window;
+      return ignore.contains(window) ? nullptr : window;
     }
     return nullptr;
   }
 
-  for (aura::Window* child : base::Reversed(window->children())) {
+  for (aura::Window* child : std::views::reverse(window->children())) {
     aura::WindowTargeter* child_targeter =
         child->targeter() ? child->targeter() : targeter;
     aura::Window* result = GetTopmostWindowAtPointWithinWindow(
@@ -115,7 +115,7 @@ aura::Window* GetToplevelWindowInOverviewAtPoint(
   }
 
   window = window->GetToplevelWindow();
-  return base::Contains(ignore, window) ? nullptr : window;
+  return ignore.contains(window) ? nullptr : window;
 }
 
 }  // namespace

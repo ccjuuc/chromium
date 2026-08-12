@@ -3,9 +3,8 @@
 # found in the LICENSE file.
 
 import("//components/signin/features.gni")
+import("//ui/webui/webui_features.gni")
 import("../tools/build_webui.gni")
-
-include_polymer = !is_android && !is_ios
 
 build_webui("build") {
   grd_prefix = "webui_js"
@@ -29,7 +28,6 @@ build_webui("build") {
     "load_time_data_deprecated.js",
     "metrics_reporter/browser_proxy.ts",
     "metrics_reporter/metrics_reporter.ts",
-    "mojo_type_util.ts",
     "open_window_proxy.ts",
     "parse_html_subset.ts",
     "platform.ts",
@@ -38,10 +36,10 @@ build_webui("build") {
     "search_highlight_utils.ts",
     "static_types.ts",
     "store.ts",
-    "tracked_element/tracked_element_manager.ts",
-    "tracked_element/tracked_element_proxy.ts",
     "test_loader.ts",
     "test_loader_util.ts",
+    "tracked_element/tracked_element_manager.ts",
+    "tracked_element/tracked_element_proxy.ts",
     "util.ts",
   ]
 
@@ -52,34 +50,27 @@ build_webui("build") {
     ]
   }
 
-  if (is_chromeos || is_ios) {
-    # Used by ChromeOS UIs and ios inspect and omaha UIs
-    ts_files += [ "util_deprecated.js" ]
-  }
-
-  if (include_polymer) {
-    ts_files += [ "browser_command/browser_command_proxy.ts" ]
-  }
-
-  if (enable_dice_support) {
+  if (enable_dice_support || is_chromeos) {
     ts_files += [ "batch_upload_promo/batch_upload_promo_proxy.ts" ]
   }
 
   mojo_files_deps = [ "./metrics_reporter:mojo_bindings_ts__generator" ]
   mojo_files = [ "$root_gen_dir/ui/webui/resources/js/metrics_reporter/metrics_reporter.mojom-webui.ts" ]
 
-  if (include_polymer) {
+  if ((!is_android && !is_ios) || is_desktop_android) {
+    ts_files += [ "browser_command/browser_command_proxy.ts" ]
     mojo_files_deps += [ "./browser_command:mojo_bindings_ts__generator" ]
     mojo_files += [ "$root_gen_dir/ui/webui/resources/js/browser_command/browser_command.mojom-webui.ts" ]
   }
 
-  if (enable_dice_support) {
+  if (enable_dice_support || is_chromeos) {
     mojo_files_deps += [ "./batch_upload_promo:mojo_bindings_ts__generator" ]
     mojo_files += [ "$root_gen_dir/ui/webui/resources/js/batch_upload_promo/batch_upload_promo.mojom-webui.ts" ]
   }
 
   ts_out_dir = "$root_gen_dir/ui/webui/resources/tsc/js"
   ts_composite = true
+  ts_tsconfig_base = "tsconfig_base.json"
   ts_deps = [ "../mojo:build_ts" ]
   ts_definitions = [
     "//tools/typescript/definitions/chrome_send.d.ts",

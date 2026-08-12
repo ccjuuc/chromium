@@ -67,8 +67,9 @@ class DataTypeSyncBridge {
   virtual void OnSyncStarting(const DataTypeActivationRequest& request);
 
   // Creates an object used to communicate changes in the sync metadata to the
-  // data type store.
-  virtual std::unique_ptr<MetadataChangeList> CreateMetadataChangeList() = 0;
+  // data type store. By default, an in-memory change list is created which
+  // should be persisted explicitly by the bridge.
+  virtual std::unique_ptr<MetadataChangeList> CreateMetadataChangeList();
 
   // Perform the initial merge between local and sync data.
   //
@@ -238,13 +239,15 @@ class DataTypeSyncBridge {
   // * Known fields that are just defined in the proto and not actively used
   // (e.g. a partially-implemented functionality or a functionality guarded by a
   // feature toggle).
-  // TODO(crbug.com/40253395): Consider changing the default to preserve unknown
-  // fields at least.
-  // By default, empty EntitySpecifics is returned.
+  //
+  // Note that implementing this method is not enough to support unknown fields,
+  // the bridge must also use GetPossiblyTrimmedRemoteSpecifics() from the
+  // processor before calling Put() to preserve them.
+  //
   // Refer to the following documentation before implementing this method:
   // https://www.chromium.org/developers/design-documents/sync/old-sync-clients-data-override-protection/
   virtual sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
-      const sync_pb::EntitySpecifics& entity_specifics) const;
+      const sync_pb::EntitySpecifics& entity_specifics) const = 0;
 
   // Returns true if the provided `entity_data` is valid. This method should be
   // implemented by the bridges and can be used to validate the incoming remote

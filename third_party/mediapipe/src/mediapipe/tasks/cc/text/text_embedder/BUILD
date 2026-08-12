@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-package(default_visibility = ["//mediapipe/tasks:internal"])
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])
 
@@ -22,7 +25,6 @@ cc_library(
     name = "text_embedder",
     srcs = ["text_embedder.cc"],
     hdrs = ["text_embedder.h"],
-    visibility = ["//visibility:public"],
     deps = [
         ":text_embedder_graph",
         "//mediapipe/calculators/tensor:inference_calculator_cc_proto",
@@ -36,6 +38,7 @@ cc_library(
         "//mediapipe/tasks/cc/core:base_options",
         "//mediapipe/tasks/cc/core:base_task_api",
         "//mediapipe/tasks/cc/core:task_api_factory",
+        "//mediapipe/tasks/cc/core:task_runner",
         "//mediapipe/tasks/cc/core/proto:base_options_cc_proto",
         "//mediapipe/tasks/cc/text/text_embedder/proto:text_embedder_graph_options_cc_proto",
         "@com_google_absl//absl/status",

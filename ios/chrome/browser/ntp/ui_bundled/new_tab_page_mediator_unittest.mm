@@ -14,8 +14,11 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/feature_engagement/test/mock_tracker.h"
 #import "components/feed/core/v2/public/common_enums.h"
+#import "components/image_fetcher/core/mock_image_fetcher.h"
 #import "components/omnibox/browser/mock_aim_eligibility_service.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
+#import "components/sync/protocol/theme_types.pb.h"
 #import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/browser_view/public/browser_view_visibility_state.h"
@@ -27,9 +30,12 @@
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_observer.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
+#import "ios/chrome/browser/home_customization/model/home_background_image_service_factory.h"
 #import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
 #import "ios/chrome/browser/image_fetcher/model/image_fetcher_service_factory.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
+#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service.h"
+#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service_factory.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/ui/search_engine_logo_state.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_constants.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_recorder.h"
@@ -50,6 +56,9 @@
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/test/toolbar_test_navigation_manager.h"
 #import "ios/chrome/browser/url_loading/model/fake_url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_notifier_browser_agent.h"
@@ -64,6 +73,28 @@
 #import "third_party/ocmock/gtest_support.h"
 
 using feed::FeedUserActionType;
+
+class MockImageFetcherService : public image_fetcher::ImageFetcherService {
+ public:
+  MockImageFetcherService() : image_fetcher::ImageFetcherService() {
+    mock_image_fetcher_ = std::make_unique<image_fetcher::MockImageFetcher>();
+  }
+  MOCK_METHOD(image_fetcher::ImageFetcher*,
+              GetImageFetcher,
+              (image_fetcher::ImageFetcherConfig),
+              (override));
+
+  image_fetcher::MockImageFetcher* mock_image_fetcher() {
+    return mock_image_fetcher_.get();
+  }
+
+ private:
+  std::unique_ptr<image_fetcher::MockImageFetcher> mock_image_fetcher_;
+};
+
+@interface NewTabPageMediator (Testing)
+- (void)fetchCustomBackground:(sync_pb::NtpCustomBackground)background;
+@end
 
 // Expects a URL to start with a prefix.
 #define EXPECT_URL_PREFIX(url, prefix) \
@@ -82,14 +113,37 @@ class NewTabPageMediatorTest : public PlatformTest {
         ios::TemplateURLServiceFactory::GetDefaultFactory());
     test_profile_builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    test_profile_builder.AddTestingFactory(
+        SyncServiceFactory::GetInstance(),
+        base::BindRepeating(&CreateTestSyncService));
+    test_profile_builder.AddTestingFactory(
+        HomeBackgroundCustomizationServiceFactory::GetInstance(),
+        base::BindRepeating(
+            [](ProfileIOS* profile) -> std::unique_ptr<KeyedService> {
+              return std::make_unique<HomeBackgroundCustomizationService>(
+                  profile->GetPrefs(),
+                  UserUploadedImageManagerFactory::GetForProfile(profile),
+                  HomeBackgroundImageServiceFactory::GetForProfile(profile));
+            }));
+    test_profile_builder.AddTestingFactory(
+        NTPBackgroundImageCacheServiceFactory::GetInstance(),
+        base::BindRepeating(
+            [](ProfileIOS* profile) -> std::unique_ptr<KeyedService> {
+              return std::make_unique<NTPBackgroundImageCacheService>(
+                  HomeBackgroundCustomizationServiceFactory::GetForProfile(
+                      profile));
+            }));
+    test_profile_builder.AddTestingFactory(
+        ImageFetcherServiceFactory::GetInstance(),
+        base::BindRepeating(
+            [](ProfileIOS* profile) -> std::unique_ptr<KeyedService> {
+              return std::make_unique<MockImageFetcherService>();
+            }));
     profile_ = std::move(test_profile_builder).Build();
     browser_ = std::make_unique<TestBrowser>(profile_.get());
 
-    std::unique_ptr<ToolbarTestNavigationManager> navigation_manager =
-        std::make_unique<ToolbarTestNavigationManager>();
-    navigation_manager_ = navigation_manager.get();
     initial_web_state_ = CreateWebStateWithURL(GURL("chrome://newtab"), 0.0);
 
     UrlLoadingNotifierBrowserAgent::CreateForBrowser(browser_.get());
@@ -131,6 +185,8 @@ class NewTabPageMediatorTest : public PlatformTest {
     HomeBackgroundCustomizationService* background_customization_service =
         HomeBackgroundCustomizationServiceFactory::GetForProfile(
             profile_.get());
+    NTPBackgroundImageCacheService* background_image_cache_service =
+        NTPBackgroundImageCacheServiceFactory::GetForProfile(profile_.get());
     image_fetcher::ImageFetcherService* image_fetcher_service =
         ImageFetcherServiceFactory::GetForProfile(profile_.get());
     UserUploadedImageManager* user_uploaded_image_manager =
@@ -146,11 +202,15 @@ class NewTabPageMediatorTest : public PlatformTest {
                   identityDiscImageUpdater:image_updater_
                        discoverFeedService:test_discover_feed_service_
                                prefService:prefs_
+            subscriptionEligibilityService:
+                SubscriptionEligibilityServiceFactory::GetForProfile(
+                    profile_.get())
                                syncService:&test_sync_service_
                regionalCapabilitiesService:
                    ios::RegionalCapabilitiesServiceFactory::GetForProfile(
                        profile_.get())
             backgroundCustomizationService:background_customization_service
+               backgroundImageCacheService:background_image_cache_service
                        imageFetcherService:image_fetcher_service
                   userUploadedImageManager:user_uploaded_image_manager
              browserViewVisibilityNotifier:browser_view_visibility_notifier_
@@ -199,6 +259,11 @@ class NewTabPageMediatorTest : public PlatformTest {
     return ntp_consumer;
   }
 
+  void SetFuseboxEligible(bool eligible) {
+    EXPECT_CALL(*aim_eligibility_service_, IsFuseboxEligible())
+        .WillRepeatedly([eligible]() { return eligible; });
+  }
+
  protected:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
@@ -215,7 +280,6 @@ class NewTabPageMediatorTest : public PlatformTest {
       discover_feed_visibility_browser_agent_;
   FakeDiscoverFeedEligibilityHandler* eligibility_handler_;
   NewTabPageMediator* mediator_;
-  raw_ptr<ToolbarTestNavigationManager, DanglingUntriaged> navigation_manager_;
   raw_ptr<FakeUrlLoadingBrowserAgent> url_loader_;
   raw_ptr<BrowserViewVisibilityNotifierBrowserAgent>
       browser_view_visibility_notifier_;
@@ -350,6 +414,7 @@ TEST_F(NewTabPageMediatorTest,
 
 // Tests that the AIM is disabled if the user is not eligible.
 TEST_F(NewTabPageMediatorTest, TestAIMNotEligible) {
+  SetFuseboxEligible(true);
   scoped_feature_list_.InitAndEnableFeature(kAIMNTPEntrypointTablet);
   // Setup with non eligible.
   EXPECT_CALL(*aim_eligibility_service_,
@@ -372,6 +437,8 @@ TEST_F(NewTabPageMediatorTest, TestAIMNotEligible) {
 
 // Tests that the AIM is enabled if the user is eligible.
 TEST_F(NewTabPageMediatorTest, TestAIMEligible) {
+  SetFuseboxEligible(true);
+
   scoped_feature_list_.InitAndEnableFeature(kAIMNTPEntrypointTablet);
   // Setup with eligible.
   EXPECT_CALL(*aim_eligibility_service_,
@@ -395,6 +462,8 @@ TEST_F(NewTabPageMediatorTest, TestAIMEligible) {
 // Tests that NTP modules are not updated if AIM eligibility changes before
 // setup.
 TEST_F(NewTabPageMediatorTest, TestAIMBecomeEligibleBeforeSetUp) {
+  SetFuseboxEligible(true);
+
   scoped_feature_list_.InitWithFeatures(
       /*enabled_featured=*/{kAIMEligibilityRefreshNTPModules,
                             kAIMNTPEntrypointTablet},
@@ -441,6 +510,8 @@ TEST_F(NewTabPageMediatorTest, TestAIMBecomeEligibleBeforeSetUp) {
 
 // Tests that NTP modules are updated if AIM eligibility changes after setup.
 TEST_F(NewTabPageMediatorTest, TestAIMBecomeEligibleAfterSetUp) {
+  SetFuseboxEligible(true);
+
   scoped_feature_list_.InitWithFeatures(
       /*enabled_featured=*/{kAIMEligibilityRefreshNTPModules,
                             kAIMNTPEntrypointTablet},
@@ -479,4 +550,59 @@ TEST_F(NewTabPageMediatorTest, TestAIMBecomeEligibleAfterSetUp) {
   EXPECT_OCMOCK_VERIFY(header_consumer_);
   EXPECT_OCMOCK_VERIFY(ntp_consumer);
   EXPECT_OCMOCK_VERIFY(ntp_content_delegate);
+}
+
+// Tests that fetchCustomBackground ignores duplicate requests for the same URL.
+TEST_F(NewTabPageMediatorTest, TestFetchCustomBackground_DuplicateRequest) {
+  CreateMediator();
+  [mediator_ setUp];
+
+  sync_pb::NtpCustomBackground background;
+  background.set_url("https://example.com/image.jpg");
+
+  MockImageFetcherService* mock_image_fetcher_service =
+      static_cast<MockImageFetcherService*>(
+          ImageFetcherServiceFactory::GetForProfile(profile_.get()));
+
+  image_fetcher::MockImageFetcher* mock_image_fetcher =
+      mock_image_fetcher_service->mock_image_fetcher();
+
+  EXPECT_CALL(*mock_image_fetcher_service, GetImageFetcher(testing::_))
+      .WillRepeatedly(testing::Return(mock_image_fetcher));
+
+  EXPECT_CALL(*mock_image_fetcher, FetchImageAndData_(testing::_, testing::_,
+                                                      testing::_, testing::_))
+      .Times(2);  // Once for full image, once for thumbnail.
+
+  [mediator_ fetchCustomBackground:background];
+  [mediator_ fetchCustomBackground:background];
+}
+
+// Tests that fetchCustomBackground reinitiates fetches when a new URL is
+// requested.
+TEST_F(NewTabPageMediatorTest, TestFetchCustomBackground_NewURL) {
+  CreateMediator();
+  [mediator_ setUp];
+
+  sync_pb::NtpCustomBackground background1;
+  background1.set_url("https://example.com/image1.jpg");
+  sync_pb::NtpCustomBackground background2;
+  background2.set_url("https://example.com/image2.jpg");
+
+  MockImageFetcherService* mock_image_fetcher_service =
+      static_cast<MockImageFetcherService*>(
+          ImageFetcherServiceFactory::GetForProfile(profile_.get()));
+
+  image_fetcher::MockImageFetcher* mock_image_fetcher =
+      mock_image_fetcher_service->mock_image_fetcher();
+
+  EXPECT_CALL(*mock_image_fetcher_service, GetImageFetcher(testing::_))
+      .WillRepeatedly(testing::Return(mock_image_fetcher));
+
+  EXPECT_CALL(*mock_image_fetcher, FetchImageAndData_(testing::_, testing::_,
+                                                      testing::_, testing::_))
+      .Times(4);  // Once for full image, once for thumbnail for each URL.
+
+  [mediator_ fetchCustomBackground:background1];
+  [mediator_ fetchCustomBackground:background2];
 }

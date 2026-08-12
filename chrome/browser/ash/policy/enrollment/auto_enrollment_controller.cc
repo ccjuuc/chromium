@@ -6,8 +6,10 @@
 
 #include <memory>
 
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
@@ -19,9 +21,8 @@
 #include "chrome/browser/ash/policy/enrollment/psm/rlwe_dmserver_client_impl.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -80,36 +81,43 @@ bool IsFinalAutoEnrollmentState(AutoEnrollmentState state) {
 }  // namespace
 
 AutoEnrollmentController::AutoEnrollmentController(
-    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory)
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    DeviceManagementService* device_management_service,
+    ServerBackedStateKeysBroker* state_keys_broker)
     : AutoEnrollmentController(
+          local_state,
+          std::move(shared_url_loader_factory),
           ash::DeviceSettingsService::Get(),
-          g_browser_process->platform_part()
-              ->browser_policy_connector_ash()
-              ->device_management_service(),
-          g_browser_process->platform_part()
-              ->browser_policy_connector_ash()
-              ->GetStateKeysBroker(),
+          device_management_service,
+          state_keys_broker,
           ash::NetworkHandler::Get()->network_state_handler(),
           base::BindRepeating(&policy::psm::RlweDmserverClientImpl::Create),
-          base::BindRepeating(EnrollmentStateFetcher::Create),
-          shared_url_loader_factory) {}
+          base::BindRepeating(EnrollmentStateFetcher::Create)) {}
 
 AutoEnrollmentController::AutoEnrollmentController(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     ash::DeviceSettingsService* device_settings_service,
     DeviceManagementService* device_management_service,
     ServerBackedStateKeysBroker* state_keys_broker,
     ash::NetworkStateHandler* network_state_handler,
     RlweClientFactory psm_rlwe_client_factory,
-    EnrollmentStateFetcher::Factory enrollment_state_fetcher_factory,
-    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory)
-    : device_settings_service_(device_settings_service),
+    EnrollmentStateFetcher::Factory enrollment_state_fetcher_factory)
+    : local_state_(CHECK_DEREF(local_state)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      device_settings_service_(device_settings_service),
       device_management_service_(device_management_service),
       state_keys_broker_(state_keys_broker),
       psm_rlwe_client_factory_(std::move(psm_rlwe_client_factory)),
       enrollment_state_fetcher_factory_(
           std::move(enrollment_state_fetcher_factory)),
-      shared_url_loader_factory_(shared_url_loader_factory),
-      network_state_handler_(network_state_handler) {}
+      network_state_handler_(network_state_handler) {
+  CHECK(shared_url_loader_factory_);
+  if (!device_management_service_ || !state_keys_broker_) {
+    CHECK_IS_TEST();
+  }
+}
 
 AutoEnrollmentController::~AutoEnrollmentController() = default;
 
@@ -152,9 +160,8 @@ void AutoEnrollmentController::Start() {
   enrollment_state_fetcher_ = enrollment_state_fetcher_factory_.Run(
       base::BindRepeating(&AutoEnrollmentController::UpdateState,
                           weak_ptr_factory_.GetWeakPtr()),
-      g_browser_process->local_state(), psm_rlwe_client_factory_,
-      device_management_service_, shared_url_loader_factory_,
-      state_keys_broker_, device_settings_service_,
+      &local_state_.get(), psm_rlwe_client_factory_, device_management_service_,
+      shared_url_loader_factory_, state_keys_broker_, device_settings_service_,
       ash::OobeConfiguration::Get());
 
   enrollment_state_fetcher_->Start();
@@ -193,6 +200,15 @@ void AutoEnrollmentController::UpdateState(AutoEnrollmentState new_state) {
                << AutoEnrollmentStateToString(new_state);
   state_ = new_state;
 
+  if (state_ == AutoEnrollmentResult::kDeviceAlreadyOwned) {
+    LOG(ERROR) << "Device already owned. Powerwash required.";
+    ash::SessionManagerClient::Get()->StartDeviceWipe(base::DoNothing());
+
+    // Will trigger timeout after a while in case powerwash should fail for
+    // whatever reason.
+    return;
+  }
+
   if (IsFinalAutoEnrollmentState(state_.value())) {
     network_state_observation_.Reset();
   }
@@ -225,7 +241,7 @@ void AutoEnrollmentController::UpdateState(AutoEnrollmentState new_state) {
 
 void AutoEnrollmentController::StartCleanupForcedReEnrollment() {
   // D-Bus services may not be available yet, so we call
-  // WaitForServiceToBeAvailable. See https://crbug.com/841627.
+  // WaitForServiceToBeAvailable. See https://crbug.com/40575725.
   ash::InstallAttributesClient::Get()->WaitForServiceToBeAvailable(
       base::BindOnce(
           &AutoEnrollmentController::StartRemoveFirmwareManagementParameters,
@@ -260,7 +276,7 @@ void AutoEnrollmentController::OnFirmwareManagementParametersRemoved(
   }
 
   // D-Bus services may not be available yet, so we call
-  // WaitForServiceToBeAvailable. See https://crbug.com/841627.
+  // WaitForServiceToBeAvailable. See https://crbug.com/40575725.
   ash::SessionManagerClient::Get()->WaitForServiceToBeAvailable(
       base::BindOnce(&AutoEnrollmentController::StartClearBlockDevmodeVpd,
                      weak_ptr_factory_.GetWeakPtr()));

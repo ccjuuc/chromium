@@ -127,7 +127,7 @@ class COMPONENT_EXPORT(PRINTING) PrintingContext {
 
   // Updates Print Settings. `job_settings` contains all print job settings
   // information.
-  mojom::ResultCode UpdatePrintSettings(base::Value::Dict job_settings);
+  mojom::ResultCode UpdatePrintSettings(base::DictValue job_settings);
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Updates Print Settings.
@@ -239,6 +239,8 @@ class COMPONENT_EXPORT(PRINTING) PrintingContext {
   // Printing context delegate.
   const raw_ptr<Delegate> delegate_;
 
+  // TODO(crbug.com/516913808): Re-architect this to avoid race issues between
+  // UI and print worker thread.
   // Is a print job being done.
   volatile bool in_print_job_;
 

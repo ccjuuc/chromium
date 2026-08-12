@@ -9,8 +9,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -186,7 +187,7 @@ void TestMediaRouteProvider::SendRouteBinaryMessage(
 
 void TestMediaRouteProvider::StartObservingMediaSinks(
     const std::string& media_source) {
-  if (base::Contains(unsupported_media_sources_, media_source)) {
+  if (std::ranges::contains(unsupported_media_sources_, media_source)) {
     sinks_ = {};
   }
   media_router_->OnSinksReceived(kProviderId, media_source, sinks_, {});

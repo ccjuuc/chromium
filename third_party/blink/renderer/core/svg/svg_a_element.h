@@ -37,11 +37,13 @@ class CORE_EXPORT SVGAElement final : public SVGGraphicsElement,
   SVGAnimatedString* svgTarget() { return svg_target_.Get(); }
 
   explicit SVGAElement(Document&);
+  ElementType GetElementType() const final { return ElementType::kSVGAElement; }
 
   bool IsValidInterestInvoker(Element& target) const override;
 
   void Trace(Visitor*) const override;
 
+  KURL Url() const;
   uint32_t GetLinkRelations() const { return link_relations_; }
   DOMTokenList& relList() const { return *rel_list_; }
 

@@ -85,6 +85,7 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionFormatMap {
   const_iterator begin() const { return data_.begin(); }
   const_iterator end() const { return data_.end(); }
   const_iterator find(x11::Atom atom) const { return data_.find(atom); }
+  bool contains(x11::Atom atom) const { return find(atom) != end(); }
   size_t size() const { return data_.size(); }
 
  private:
@@ -118,6 +119,9 @@ class COMPONENT_EXPORT(UI_BASE_X) SelectionData {
   // Assigns the raw data to the string.
   void AssignTo(std::string* result) const;
   void AssignTo(std::u16string* result) const;
+
+  // Assigns the raw data to the vector.
+  void AssignTo(std::vector<uint8_t>* result) const;
 
   // Transfers ownership of |memory_| to the caller.
   scoped_refptr<base::RefCountedBytes> TakeBytes();

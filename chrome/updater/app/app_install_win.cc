@@ -23,17 +23,16 @@
 
 #include "base/check_op.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
@@ -47,18 +46,20 @@
 #include "base/win/elevation_util.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_com_initializer.h"
+#include "base/win/scoped_gdi_object.h"
+#include "base/win/win_util.h"
 #include "chrome/updater/app/app_install_progress.h"
 #include "chrome/updater/app/app_install_util_win.h"
 #include "chrome/updater/app/app_install_win_internal.h"
 #include "chrome/updater/branded_constants.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/external_constants.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/service_proxy_factory.h"
 #include "chrome/updater/update_service.h"
 #include "chrome/updater/update_service_internal.h"
 #include "chrome/updater/updater_branding.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/progress_sampler.h"
 #include "chrome/updater/util/util.h"
 #include "chrome/updater/util/win_util.h"
@@ -67,11 +68,14 @@
 #include "chrome/updater/win/manifest_util.h"
 #include "chrome/updater/win/protocol_parser_xml.h"
 #include "chrome/updater/win/ui/l10n_util.h"
+#include "chrome/updater/win/ui/message_loop.h"
 #include "chrome/updater/win/ui/progress_wnd.h"
 #include "chrome/updater/win/ui/resources/resources.grh"
 #include "chrome/updater/win/ui/resources/updater_installer_strings.h"
+#include "chrome/updater/win/ui/webview2_progress_wnd.h"
 #include "chrome/updater/win/win_constants.h"
 #include "components/update_client/update_client_errors.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "url/gurl.h"
 
 namespace updater {
@@ -336,12 +340,11 @@ void SetUsageStats(UpdaterScope scope,
 //
 // The UI code can't run in a thread where the message loop is an instance of
 // |base::MessageLoop|. |base::MessageLoop| does not handle all the messages
-// needed by the UI, since the UI is written in terms of WTL, and it requires
-// a |WTL::MessageLoop| to work, for example, accelerators, dialog messages,
-// TAB key, etc are all handled by WTL. Therefore, the UI code runs on its own
-// thread. This thread owns all the UI objects, which must be created and
-// destroyed on this thread. The rest of the code in this class runs on
-// the updater main thread.
+// needed by the UI, since the UI uses custom |ui::MessageLoop| with filters
+// for accelerators, dialog messages, TAB key, etc. Therefore, the UI code
+// runs on its own thread. This thread owns all the UI objects, which must be
+// created and destroyed on this thread. The rest of the code in this class
+// runs on the updater main thread.
 //
 // This class controls the lifetime of the UI thread. Once the UI thread is
 // created, it is going to run a message loop until the main thread initiates
@@ -353,7 +356,7 @@ void SetUsageStats(UpdaterScope scope,
 // and destructs its class members.
 class AppInstallControllerImpl : public AppInstallController,
                                  public ui::ProgressWndEvents,
-                                 public WTL::CMessageFilter {
+                                 public ui::MessageFilter {
  public:
   explicit AppInstallControllerImpl(bool is_silent_install);
   AppInstallControllerImpl();
@@ -379,8 +382,6 @@ class AppInstallControllerImpl : public AppInstallController,
   }
 
  private:
-  friend class base::RefCountedThreadSafe<AppInstallControllerImpl>;
-
   ~AppInstallControllerImpl() override;
 
   // Overrides for OmahaWndEvents. These functions are called on the UI thread.
@@ -397,7 +398,7 @@ class AppInstallControllerImpl : public AppInstallController,
   bool DoReboot() override;
   void DoCancel() override;
 
-  // Overrides for WTL::CMessageFilter.
+  // Overrides for ui::MessageFilter.
   BOOL PreTranslateMessage(MSG* msg) override;
 
   // This function is called on a dedicated COM STA thread.
@@ -444,7 +445,7 @@ class AppInstallControllerImpl : public AppInstallController,
   scoped_refptr<UpdateService> update_service_;
 
   // The message loop associated with the UI.
-  std::unique_ptr<WTL::CMessageLoop> ui_message_loop_;
+  std::unique_ptr<ui::MessageLoop> ui_message_loop_;
 
   std::unique_ptr<AppInstallProgress> observer_;
   HWND observer_hwnd_ = nullptr;
@@ -607,18 +608,8 @@ void AppInstallControllerImpl::InstallAppOffline(
                                             : client_install_data);
           },
           app_id_),
-      base::BindOnce(
-          [](scoped_refptr<AppInstallControllerImpl> self,
-             const std::tuple<
-                 OfflineManifestSystemRequirements /*requirements*/,
-                 std::string /*installer_version*/,
-                 base::FilePath /*installer_path*/, std::string /*arguments*/,
-                 std::string /*install_data*/>& result) {
-            self->DoInstallAppOffline(std::get<0>(result), std::get<1>(result),
-                                      std::get<2>(result), std::get<3>(result),
-                                      std::get<4>(result));
-          },
-          base::WrapRefCounted(this)));
+      base::BindOnce(&AppInstallControllerImpl::DoInstallAppOffline,
+                     base::WrapRefCounted(this)));
 }
 
 void AppInstallControllerImpl::DoInstallAppOffline(
@@ -634,7 +625,7 @@ void AppInstallControllerImpl::DoInstallAppOffline(
     return;
   }
 
-  base::Value::Dict install_settings_dict;
+  base::DictValue install_settings_dict;
   install_settings_dict.Set(kInstallerVersion, installer_version);
 
   const base::CommandLine cmd_line(*base::CommandLine::ForCurrentProcess());
@@ -642,6 +633,8 @@ void AppInstallControllerImpl::DoInstallAppOffline(
                             cmd_line.HasSwitch(kEnterpriseSwitch));
   install_settings_dict.Set(kSessionIdSwitch,
                             cmd_line.GetSwitchValueUTF8(kSessionIdSwitch));
+  install_settings_dict.Set(kInstallSourceSwitch,
+                            cmd_line.GetSwitchValueUTF8(kInstallSourceSwitch));
 
   std::string install_settings;
   if (!JSONStringValueSerializer(&install_settings)
@@ -732,7 +725,7 @@ void AppInstallControllerImpl::InstallComplete(UpdateService::Result result) {
     UpdateService::UpdateState update_state;
     update_state.app_id = app_id_;
     update_state.state = UpdateService::UpdateState::State::kUpdateError;
-    update_state.error_code = static_cast<int>(result);
+    update_state.error_code = std::to_underlying(result);
     update_state.error_category = [result] {
       switch (result) {
         case UpdateService::Result::kUpdateCheckFailed:
@@ -796,6 +789,8 @@ void AppInstallControllerImpl::StateChange(
                 update_state.total_bytes),
             pos >= 0 ? pos : 0);
       } else {
+        install_progress_observer_ipc_->OnDownloading(app_id_, app_name_,
+                                                      base::Seconds(0), pos);
         install_progress_observer_ipc_->OnWaitingToInstall(app_id_, app_name_);
       }
       break;
@@ -838,11 +833,11 @@ void AppInstallControllerImpl::StateChange(
 // the resultant image onto the app bitmap for the progress window.
 void AppInstallControllerImpl::LoadLogo(const std::string& app_id,
                                         HWND progress_hwnd) {
-  std::wstring url = base::UTF8ToWide(base::StringPrintf(
+  std::wstring url = base::UTF8ToWide(absl::StrFormat(
       "%s%s.bmp?lang=%s",
-      CreateExternalConstants()->AppLogoURL().possibly_invalid_spec().c_str(),
-      base::EscapeUrlEncodedData(app_id, false).c_str(),
-      base::WideToUTF8(GetPreferredLanguage()).c_str()));
+      CreateExternalConstants()->AppLogoURL().possibly_invalid_spec(),
+      base::EscapeUrlEncodedData(app_id, false),
+      base::WideToUTF8(GetPreferredLanguage())));
   if (url.empty()) {
     VLOG(1) << __func__ << "No url specified";
     return;
@@ -865,15 +860,21 @@ void AppInstallControllerImpl::LoadLogo(const std::string& app_id,
     return;
   }
 
-  if (!::IsWindow(progress_hwnd)) {
-    VLOG(1) << __func__ << "progress_hwnd not valid anymore";
+  // Copy the bitmap on the background thread so it remains valid when the
+  // IPicture goes out of scope.
+  base::win::ScopedGDIObject<HBITMAP> standalone_bitmap(
+      reinterpret_cast<HBITMAP>(::CopyImage(bitmap, IMAGE_BITMAP, 0, 0, 0)));
+  if (!standalone_bitmap.is_valid()) {
+    VLOG(1) << __func__ << "::CopyImage failed";
     return;
   }
 
-  ::SendDlgItemMessage(progress_hwnd, IDC_APP_BITMAP, STM_SETIMAGE,
-                       IMAGE_BITMAP,
-                       reinterpret_cast<LPARAM>(::CopyImage(
-                           bitmap, IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG)));
+  if (::PostMessage(progress_hwnd, ui::WM_SET_APP_LOGO,
+                    reinterpret_cast<WPARAM>(standalone_bitmap.get()), 0)) {
+    std::ignore = standalone_bitmap.release();
+  } else {
+    VLOG(1) << __func__ << "::PostMessage failed";
+  }
 }
 
 // Creates the install progress observer. The observer has thread affinity. It
@@ -883,26 +884,35 @@ void AppInstallControllerImpl::InitializeUI() {
 
   base::ScopedDisallowBlocking no_blocking_allowed_on_ui_thread;
 
-  ui_message_loop_ = std::make_unique<WTL::CMessageLoop>();
+  ui_message_loop_ = std::make_unique<ui::MessageLoop>();
   ui_message_loop_->AddMessageFilter(this);
   ui_thread_id_ = ::GetCurrentThreadId();
 
   if (is_silent_install_) {
     observer_ = std::make_unique<InstallProgressSilentObserver>(this);
   } else {
-    auto progress_wnd =
-        std::make_unique<ui::ProgressWnd>(ui_message_loop_.get(), nullptr);
+#define VISIT_PROGRESS_WND(progress_wnd)                                     \
+  std::optional<tagging::TagArgs> tag_args = GetTagArgs().tag_args;          \
+  if (tag_args) {                                                            \
+    progress_wnd->set_bundle_name(base::UTF8ToUTF16(tag_args->bundle_name)); \
+  }                                                                          \
+  progress_wnd->SetEventSink(this);                                          \
+  progress_wnd->Initialize();                                                \
+  progress_wnd->Show();                                                      \
+                                                                             \
+  observer_hwnd_ = progress_wnd->hwnd();                                     \
+  observer_.reset(progress_wnd.release());
 
-    std::optional<tagging::TagArgs> tag_args = GetTagArgs().tag_args;
-    if (tag_args) {
-      progress_wnd->set_bundle_name(base::UTF8ToUTF16(tag_args->bundle_name));
+    if (base::CommandLine::ForCurrentProcess()->HasSwitch(kWebViewUISwitch)) {
+      auto wnd = std::make_unique<ui::WebView2ProgressWnd>();
+      VISIT_PROGRESS_WND(wnd);
+      return;
     }
-    progress_wnd->SetEventSink(this);
-    progress_wnd->Initialize();
-    progress_wnd->Show();
-
-    observer_hwnd_ = progress_wnd->m_hWnd;
-    observer_.reset(progress_wnd.release());
+    auto wnd =
+        std::make_unique<ui::ProgressWnd>(ui_message_loop_.get(), nullptr);
+    VISIT_PROGRESS_WND(wnd);
+    return;
+#undef VISIT_PROGRESS_WND
   }
 }
 
@@ -1048,10 +1058,10 @@ std::wstring GetTextForStartupError(int error_code, const std::wstring& lang) {
   ObserverCompletionInfo observer_info;
   observer_info.completion_code = completion_code;
   observer_info.completion_text = base::WideToUTF16(completion_text);
-  observer_info.help_url = GURL(base::StringPrintf(
-      "%s?product=%s&error=%d", HELP_CENTER_URL,
-      base::EscapeUrlEncodedData(update_state.app_id, false).c_str(),
-      update_state.error_code));
+  observer_info.help_url = GURL(
+      absl::StrFormat("%s?product=%s&error=%d", HELP_CENTER_URL,
+                      base::EscapeUrlEncodedData(update_state.app_id, false),
+                      update_state.error_code));
 
   AppCompletionInfo app_info;
   if (update_state.state == UpdateService::UpdateState::State::kNotStarted) {
@@ -1096,6 +1106,10 @@ std::wstring GetTextForStartupError(int error_code, const std::wstring& lang) {
 }
 
 scoped_refptr<App> MakeAppInstall(bool is_silent_install) {
+  if (!is_silent_install) {
+    base::win::EnableHighDPISupport();
+  }
+
   if (IsSystemInstall()) {
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(kOemSwitch)) {
       const bool success = SetOemInstallState();

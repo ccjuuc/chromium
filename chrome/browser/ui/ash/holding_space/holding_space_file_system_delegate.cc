@@ -13,7 +13,6 @@
 #include "ash/public/cpp/holding_space/holding_space_file.h"
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 #include "ash/public/cpp/holding_space/holding_space_model.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
 #include "base/files/file_util.h"
@@ -34,6 +33,7 @@
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "mojo/public/cpp/bindings/message.h"
 #include "url/gurl.h"
 
 namespace ash {
@@ -187,6 +187,14 @@ void HoldingSpaceFileSystemDelegate::OnConnectionReady() {
 void HoldingSpaceFileSystemDelegate::OnFilesChanged(
     const std::vector<drivefs::mojom::FileChange>& changes) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // Validate all changes before applying any of them.
+  for (const auto& change : changes) {
+    if (change.path.ReferencesParent()) {
+      mojo::ReportBadMessage("File paths must be canonicalized");
+      return;
+    }
+  }
 
   // When a file is moved, a `kDelete` change will be followed by a `kCreate`
   // change with the same `stable_id` in the same set of `changes`. In some
@@ -630,7 +638,7 @@ void HoldingSpaceFileSystemDelegate::OnFilePathValidityChecksComplete(
           return false;
         }
 
-        return base::Contains(*invalid_paths, item->file().file_path);
+        return std::ranges::contains(*invalid_paths, item->file().file_path);
       },
       arc_file_system_disconnected, &invalid_paths));
 
@@ -643,7 +651,7 @@ void HoldingSpaceFileSystemDelegate::OnFilePathValidityChecksComplete(
     }
 
     if (!item->IsInitialized() &&
-        base::Contains(valid_paths, item->file().file_path)) {
+        std::ranges::contains(valid_paths, item->file().file_path)) {
       items_to_initialize.push_back(item.get());
     }
   }

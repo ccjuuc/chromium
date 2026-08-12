@@ -17,7 +17,7 @@ class WebAppDarkModeBrowserTest : public WebAppBrowserTestBase {
  public:
   webapps::AppId InstallWebAppFromInfo() {
     // We want to hang so WebContents does not update the background color.
-    GURL start_url = https_server()->GetURL("/hung");
+    GURL start_url = embedded_https_test_server().GetURL("/hung");
     auto web_app_info =
         WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->title = u"A Web App";
@@ -38,7 +38,8 @@ IN_PROC_BROWSER_TEST_F(WebAppDarkModeBrowserTest, DarkColors) {
 
   WebAppBrowserController* controller;
   Browser* app_browser = LaunchWebAppBrowser(app_id);
-  controller = app_browser->app_controller()->AsWebAppBrowserController();
+  controller = web_app::AppBrowserController::From(app_browser)
+                   ->AsWebAppBrowserController();
 
   EXPECT_EQ(controller->GetThemeColor().value(), SK_ColorBLUE);
   EXPECT_EQ(controller->GetBackgroundColor().value(), SK_ColorBLUE);

@@ -112,9 +112,11 @@ TEST_F(TextareaTest, PasteNewlineTest) {
   const std::u16string kText = u"abc\n   \n";
   textarea_->SetText(kText);
   textarea_->SelectAll(false);
-  textarea_->ExecuteCommand(Textfield::kCopy, 0);
+  textarea_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kCopy), 0);
   textarea_->SetText(std::u16string());
-  textarea_->ExecuteCommand(Textfield::kPaste, 0);
+  textarea_->ExecuteCommand(
+      std::to_underlying(ui::TouchEditable::MenuCommands::kPaste), 0);
   EXPECT_EQ(kText, textarea_->GetText());
 }
 
@@ -196,7 +198,11 @@ TEST_F(TextareaTest, LineSelection) {
   SendEndEvent(true);
 
   if (Textarea::kLineSelectionBehavior == gfx::SELECTION_EXTEND) {
+#if BUILDFLAG(IS_MAC)
+    EXPECT_EQ(u"", textarea_->GetSelectedText());
+#else
     EXPECT_EQ(u"34567 89", textarea_->GetSelectedText());
+#endif  // BUILDFLAG(IS_MAC)
   } else {
     EXPECT_EQ(u"67 89", textarea_->GetSelectedText());
   }

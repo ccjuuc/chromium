@@ -11,6 +11,7 @@ import androidx.annotation.IntDef;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.lang.annotation.Retention;
@@ -22,10 +23,22 @@ public class ExtensionActionButtonProperties {
     @IntDef({ListItemType.EXTENSION_ACTION})
     @Retention(RetentionPolicy.SOURCE)
     public @interface ListItemType {
+        /** The draggable extension icon. */
         int EXTENSION_ACTION = 0;
+
+        /** A non-visible placeholder item used for animations. */
+        int ANCHOR = 1;
     }
 
     // Keep the entries sorted by name.
+
+    /** The accessible name of the action. */
+    public static final WritableObjectPropertyKey<String> ACCESSIBLE_NAME =
+            new WritableObjectPropertyKey<>();
+
+    /** The {@link ExtensionActionDragHelper} to distinguish input events. */
+    public static final WritableObjectPropertyKey<ExtensionActionDragHelper> DRAG_HELPER =
+            new WritableObjectPropertyKey<>();
 
     /** The icon of the action. */
     public static final WritableObjectPropertyKey<Bitmap> ICON = new WritableObjectPropertyKey<>();
@@ -33,21 +46,36 @@ public class ExtensionActionButtonProperties {
     /** The action ID (i.e. extension ID). */
     public static final WritableObjectPropertyKey<String> ID = new WritableObjectPropertyKey<>();
 
+    /** Whether the action can be dragged. */
+    public static final WritableBooleanPropertyKey IS_DRAGGABLE = new WritableBooleanPropertyKey();
+
     /** The primary-click listener. */
     public static final WritableObjectPropertyKey<View.OnClickListener> ON_CLICK_LISTENER =
             new WritableObjectPropertyKey<>();
 
-    /** The context-click listener. */
-    public static final WritableObjectPropertyKey<View.OnContextClickListener>
-            ON_CONTEXT_CLICK_LISTENER = new WritableObjectPropertyKey<>();
+    /** The hover listener. */
+    public static final WritableObjectPropertyKey<View.OnHoverListener> ON_HOVER_LISTENER =
+            new WritableObjectPropertyKey<>();
 
-    /**
-     * The title of the action. It is the name of the extension by default, but an extension can
-     * update it programmatically.
-     */
-    public static final WritableObjectPropertyKey<String> TITLE = new WritableObjectPropertyKey<>();
+    /** The context-click listener. */
+    public static final WritableObjectPropertyKey<View.OnLongClickListener> ON_LONG_CLICK_LISTENER =
+            new WritableObjectPropertyKey<>();
+
+    /* The touch listener. */
+    public static final WritableObjectPropertyKey<View.OnTouchListener> TOUCH_LISTENER =
+            new WritableObjectPropertyKey<>();
 
     /** The list of all keys defined here. */
     public static final PropertyKey[] ALL_KEYS =
-            new PropertyKey[] {ICON, ID, ON_CLICK_LISTENER, ON_CONTEXT_CLICK_LISTENER, TITLE};
+            new PropertyKey[] {
+                ACCESSIBLE_NAME,
+                DRAG_HELPER,
+                ICON,
+                ID,
+                IS_DRAGGABLE,
+                ON_CLICK_LISTENER,
+                ON_HOVER_LISTENER,
+                ON_LONG_CLICK_LISTENER,
+                TOUCH_LISTENER
+            };
 }

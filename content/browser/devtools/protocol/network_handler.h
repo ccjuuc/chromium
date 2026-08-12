@@ -32,11 +32,16 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
 
 #if BUILDFLAG(ENABLE_REPORTING)
 #include "services/network/public/mojom/reporting_service.mojom.h"
 #endif  // BUILDFLAG(ENABLE_REPORTING)
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+#include "services/network/public/mojom/device_bound_sessions.mojom.h"
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
 namespace net {
 class HttpRequestHeaders;
@@ -48,10 +53,7 @@ namespace network {
 struct CorsErrorStatus;
 struct ResourceRequest;
 struct URLLoaderCompletionStatus;
-namespace mojom {
-class URLLoaderFactoryOverride;
-class TrustedURLLoaderHeaderClient;
-}
+namespace mojom {}
 }  // namespace network
 
 namespace content {
@@ -59,12 +61,10 @@ class BrowserContext;
 class DevToolsAgentHostClient;
 class DevToolsAgentHostImpl;
 class DevToolsIOContext;
-class DevToolsURLLoaderInterceptor;
 class RenderFrameHostImpl;
 class NavigationRequest;
 class SignedExchangeEnvelope;
 class StoragePartition;
-struct InterceptedRequestInfo;
 struct SignedExchangeError;
 
 namespace protocol {
@@ -75,6 +75,9 @@ class NetworkHandler : public DevToolsDomainHandler,
 #if BUILDFLAG(ENABLE_REPORTING)
                        public network::mojom::ReportingApiObserver,
 #endif  // BUILDFLAG(ENABLE_REPORTING)
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+                       public network::mojom::DeviceBoundSessionEventObserver,
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
                        public Network::Backend {
  public:
   NetworkHandler(const std::string& host_id,
@@ -82,7 +85,6 @@ class NetworkHandler : public DevToolsDomainHandler,
                  DevToolsIOContext* io_context,
                  DevToolsSession* session,
                  StoragePartition* maybe_storage_partition,
-                 base::RepeatingClosure update_loader_factories_callback,
                  DevToolsAgentHostClient* client,
                  base::OnceClosure cleanup_after_modifications_callback =
                      base::OnceClosure());
@@ -94,21 +96,29 @@ class NetworkHandler : public DevToolsDomainHandler,
 
   static std::vector<NetworkHandler*> ForAgentHost(DevToolsAgentHostImpl* host);
 
-  // static helpers used by other agents that depend on types defined
-  // in network domain.
-  static net::Error NetErrorFromString(const std::string& error, bool* ok);
   static std::string NetErrorToString(int net_error);
   static const char* ResourceTypeToString(
       blink::mojom::ResourceType resource_type);
-  static bool AddInterceptedResourceType(
-      const std::string& resource_type,
-      base::flat_set<blink::mojom::ResourceType>* intercepted_resource_types);
   static std::unique_ptr<Array<Network::Cookie>> BuildCookieArray(
       const std::vector<net::CanonicalCookie>& cookie_list);
   static void SetCookies(
       StoragePartition* storage_partition,
       std::unique_ptr<protocol::Array<Network::CookieParam>> cookies,
+      DevToolsAgentHostClient& client,
+      bool is_webui,
       base::OnceCallback<void(bool)> callback);
+
+  static void ClearCookies(
+      StoragePartition* storage_partition,
+      DevToolsAgentHostClient& client,
+      base::RepeatingCallback<bool(const net::CanonicalCookie&)> filter,
+      base::OnceClosure callback);
+
+  static bool CanAccessCookie(DevToolsAgentHostClient& client,
+                              bool is_webui,
+                              const net::CanonicalCookie& cookie);
+
+  bool CanAccessCookie(const net::CanonicalCookie& cookie) const;
 
   void Wire(UberDispatcher* dispatcher) override;
   void SetRenderer(int render_process_id,
@@ -120,6 +130,11 @@ class NetworkHandler : public DevToolsDomainHandler,
                   std::optional<bool> report_direct_socket_traffic,
                   std::optional<bool> enable_durable_messages) override;
   Response Disable() override;
+
+  // Used to set a storage partition for a service worker agent host
+  // before the service worker agent host has a renderer. The storage
+  // partition will be updated via SetRenderer once the renderer is available.
+  void SetStoragePartition(StoragePartition* storage_partition);
 
 #if BUILDFLAG(ENABLE_REPORTING)
   void OnReportAdded(const net::ReportingReport& report) override;
@@ -133,6 +148,21 @@ class NetworkHandler : public DevToolsDomainHandler,
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 
   Response EnableReportingApi(bool enable) override;
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  void AddDeviceBoundSessionDisplays(
+      const std::vector<::net::device_bound_sessions::SessionDisplay>&
+          session_displays) override;
+  void OnDeviceBoundSessionEventReceived(
+      const ::net::device_bound_sessions::SessionEvent& event) override;
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+
+  Response EnableDeviceBoundSessions(bool enable) override;
+  Response DeleteDeviceBoundSession(
+      std::unique_ptr<protocol::Network::DeviceBoundSessionKey> key) override;
+
+  Response FetchSchemefulSite(const std::string& origin,
+                              std::string* schemeful_site) override;
 
   void ConfigureDurableMessages(
       std::optional<int> max_total_size,
@@ -171,7 +201,6 @@ class NetworkHandler : public DevToolsDomainHandler,
                  std::optional<std::string> same_site,
                  std::optional<double> expires,
                  std::optional<std::string> priority,
-                 std::optional<bool> same_party,
                  std::optional<std::string> source_scheme,
                  std::optional<int> source_port,
                  std::unique_ptr<Network::CookiePartitionKey> partition_key,
@@ -193,52 +222,16 @@ class NetworkHandler : public DevToolsDomainHandler,
       std::optional<int> packet_queue_length,
       std::optional<bool> packet_reordering) override;
   Response EmulateNetworkConditionsByRule(
-      bool offline,
+      std::optional<bool> offline,
+      std::optional<bool> emulate_offline_service_worker,
       std::unique_ptr<protocol::Array<protocol::Network::NetworkConditions>>
           matched_network_conditions,
       std::unique_ptr<protocol::Array<String>>* rule_ids_result) override;
   Response SetBypassServiceWorker(bool bypass) override;
 
-  DispatchResponse SetRequestInterception(
-      std::unique_ptr<protocol::Array<protocol::Network::RequestPattern>>
-          patterns) override;
-  void ContinueInterceptedRequest(
-      const std::string& request_id,
-      std::optional<std::string> error_reason,
-      std::optional<protocol::Binary> raw_response,
-      std::optional<std::string> url,
-      std::optional<std::string> method,
-      std::optional<std::string> post_data,
-      std::unique_ptr<protocol::Network::Headers> headers,
-      std::unique_ptr<protocol::Network::AuthChallengeResponse>
-          auth_challenge_response,
-      std::unique_ptr<ContinueInterceptedRequestCallback> callback) override;
-
-  void GetResponseBodyForInterception(
-      const String& interception_id,
-      std::unique_ptr<GetResponseBodyForInterceptionCallback> callback)
-      override;
   void GetResponseBody(
       const String& request_id,
       std::unique_ptr<GetResponseBodyCallback> callback) override;
-  void TakeResponseBodyForInterceptionAsStream(
-      const String& interception_id,
-      std::unique_ptr<TakeResponseBodyForInterceptionAsStreamCallback> callback)
-      override;
-
-  // Note that |frame_token| below is for the frame that is associated with the
-  // factory being created, and is therefore not necessarily the same as one
-  // associated with the NetworkHandler itself (which is the token of the local
-  // root frame).
-  bool MaybeCreateProxyForInterception(
-      int process_id,
-      StoragePartition* storage_partition,
-      const base::UnguessableToken& frame_token,
-      bool is_navigation,
-      bool is_download,
-      network::mojom::URLLoaderFactoryOverride* intercepting_factory,
-      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>*
-          header_client);
 
   void ApplyOverrides(
       net::HttpRequestHeaders* headers,
@@ -295,6 +288,17 @@ class NetworkHandler : public DevToolsDomainHandler,
                     const network::mojom::URLResponseHeadDevToolsInfo&>>
           redirect_info);
 
+  void PrefetchActivationBeaconWillBeSent(
+      const std::string& request_id,
+      const network::ResourceRequest& request,
+      const GURL& initiator_url,
+      std::optional<std::string> frame_token,
+      base::TimeTicks timestamp,
+      std::optional<
+          std::pair<const GURL&,
+                    const network::mojom::URLResponseHeadDevToolsInfo&>>
+          redirect_info);
+
   void OnSignedExchangeReceived(
       std::optional<const base::UnguessableToken> devtools_navigation_token,
       const GURL& outer_request_url,
@@ -314,6 +318,8 @@ class NetworkHandler : public DevToolsDomainHandler,
       const net::CookieAccessResultList& request_cookie_list,
       const std::vector<network::mojom::HttpRawHeaderPairPtr>& request_headers,
       const base::TimeTicks timestamp,
+      const std::vector<network::mojom::DeviceBoundSessionWithUsagePtr>&
+          device_bound_session_usages,
       const network::mojom::ClientSecurityStatePtr& security_state,
       const network::mojom::OtherPartitionInfoPtr& other_partition_info,
       std::optional<base::UnguessableToken> applied_network_conditions_id);
@@ -352,13 +358,11 @@ class NetworkHandler : public DevToolsDomainHandler,
       std::unique_ptr<LoadNetworkResourceCallback> callback) override;
 
   DispatchResponse SetCookieControls(
-      bool enable_third_party_cookie_restriction,
-      bool disable_third_party_cookie_metadata,
-      bool disable_third_party_cookie_heuristics) override;
+      bool enable_third_party_cookie_restriction) override;
 
   // Protocol builders.
-  static String BuildPrivateNetworkRequestPolicy(
-      network::mojom::PrivateNetworkRequestPolicy policy);
+  static String BuildLocalNetworkAccessRequestPolicy(
+      network::mojom::LocalNetworkAccessRequestPolicy policy);
   static protocol::Network::IPAddressSpace BuildIpAddressSpace(
       network::mojom::IPAddressSpace space);
   static std::unique_ptr<protocol::Network::ClientSecurityState>
@@ -381,12 +385,29 @@ class NetworkHandler : public DevToolsDomainHandler,
       base::TimeTicks timestamp);
 
  private:
+  void RequestWillBeSent(
+      const std::string& request_id,
+      const std::string& loader_id,
+      const network::ResourceRequest& request,
+      const GURL& initiator_url,
+      const std::string& initiator_type,
+      const std::string& resource_type,
+      std::optional<std::string> frame_token,
+      base::TimeTicks timestamp,
+      std::optional<
+          std::pair<const GURL&,
+                    const network::mojom::URLResponseHeadDevToolsInfo&>>
+          redirect_info = std::nullopt,
+      const std::string& initiator_devtools_request_id = "",
+      std::vector<base::expected<std::vector<uint8_t>, std::string>>
+          request_bodies = {},
+      std::optional<std::string> mixed_content_type = std::nullopt);
+
   void OnLoadNetworkResourceFinished(DevToolsNetworkResourceLoader* loader,
                                      const net::HttpResponseHeaders* rh,
                                      bool success,
                                      int net_error,
                                      std::string content);
-  void RequestIntercepted(std::unique_ptr<InterceptedRequestInfo> request_info);
   void SetNetworkConditions(
       std::vector<network::mojom::MatchedNetworkConditionsPtr>
           matched_conditions,
@@ -395,11 +416,6 @@ class NetworkHandler : public DevToolsDomainHandler,
       const String& request_id,
       std::unique_ptr<GetResponseBodyCallback> callback,
       std::optional<mojo_base::BigBuffer> durable_message);
-  void OnResponseBodyPipeTaken(
-      std::unique_ptr<TakeResponseBodyForInterceptionAsStreamCallback> callback,
-      Response response,
-      mojo::ScopedDataPipeConsumerHandle pipe,
-      const std::string& mime_type);
 
   void GotAllCookies(std::unique_ptr<GetAllCookiesCallback> callback,
                      const std::vector<net::CanonicalCookie>& cookies);
@@ -419,29 +435,31 @@ class NetworkHandler : public DevToolsDomainHandler,
   raw_ptr<RenderFrameHostImpl> host_;
   bool enabled_ = false;
   bool enable_third_party_cookie_restriction_ = false;
-  bool disable_third_party_cookie_metadata_ = false;
-  bool disable_third_party_cookie_heuristics_ = false;
   bool enable_durable_messages_ = false;
   int durable_message_max_total_size_ = 0;
 
 #if BUILDFLAG(ENABLE_REPORTING)
   mojo::Receiver<network::mojom::ReportingApiObserver> reporting_receiver_;
 #endif  // BUILDFLAG(ENABLE_REPORTING)
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  mojo::Receiver<network::mojom::DeviceBoundSessionEventObserver>
+      device_bound_session_receiver_;
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
   std::vector<std::pair<std::string, std::string>> extra_headers_;
-  std::unique_ptr<DevToolsURLLoaderInterceptor> url_loader_interceptor_;
   bool bypass_service_worker_;
   bool cache_disabled_;
   std::unique_ptr<BackgroundSyncRestorer> background_sync_restorer_;
-  base::RepeatingClosure update_loader_factories_callback_;
   std::map<std::unique_ptr<DevToolsNetworkResourceLoader>,
            std::unique_ptr<LoadNetworkResourceCallback>,
            base::UniquePtrComparator>
       loaders_;
   std::optional<std::set<net::SourceStreamType>> accepted_stream_types_;
-  std::unordered_map<String, std::pair<String, bool>> received_body_data_;
+  absl::flat_hash_map<String, std::pair<String, bool>> received_body_data_;
   bool did_modifications_ = false;
   base::OnceClosure cleanup_after_modifications_callback_;
   const raw_ref<DevToolsSession> root_session_;
+  const base::UnguessableToken throttling_client_id_;
+  bool network_conditions_configured_ = false;
   base::WeakPtrFactory<NetworkHandler> weak_factory_{this};
 };
 

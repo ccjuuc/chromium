@@ -14,6 +14,7 @@
 #include "content/public/browser/preconnect_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/isolation_info.h"
 
@@ -59,9 +60,14 @@ void NetworkHintsHandlerImpl::PrefetchDNS(
   for (const auto& url : urls) {
     gurls.emplace_back(url.GetURL());
   }
+  base::UnguessableToken network_restrictions_id =
+      render_frame_host->GetNetworkRestrictionsID();
+  const content::StoragePartitionConfig& storage_partition_config =
+      render_frame_host->GetStoragePartition()->GetConfig();
   preconnect_manager_->StartPreresolveHosts(
       gurls, GetPendingNetworkAnonymizationKey(render_frame_host),
-      kNetworkHintsTrafficAnnotation, /*storage_partition_config=*/nullptr);
+      kNetworkHintsTrafficAnnotation, &storage_partition_config,
+      network_restrictions_id);
 }
 
 void NetworkHintsHandlerImpl::Preconnect(const url::SchemeHostPort& url,
@@ -81,10 +87,15 @@ void NetworkHintsHandlerImpl::Preconnect(const url::SchemeHostPort& url,
   if (!render_frame_host)
     return;
 
+  base::UnguessableToken network_restrictions_id =
+      render_frame_host->GetNetworkRestrictionsID();
+  const content::StoragePartitionConfig& storage_partition_config =
+      render_frame_host->GetStoragePartition()->GetConfig();
   preconnect_manager_->StartPreconnectUrl(
       url.GetURL(), allow_credentials,
       GetPendingNetworkAnonymizationKey(render_frame_host),
-      kNetworkHintsTrafficAnnotation, /*storage_partition_config=*/nullptr,
+      kNetworkHintsTrafficAnnotation, &storage_partition_config,
+      network_restrictions_id,
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 

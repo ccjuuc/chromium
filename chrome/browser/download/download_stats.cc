@@ -10,7 +10,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/download/public/common/download_content.h"
 #include "components/download/public/common/download_stats.h"
 #include "components/profile_metrics/browser_profile_type.h"
 #include "components/safe_browsing/buildflags.h"
@@ -25,8 +24,7 @@ void RecordDownloadSource(ChromeDownloadSource source) {
 }
 
 void MaybeRecordDangerousDownloadWarningShown(DownloadUIModel& model) {
-  if (!model.IsDangerous() ||
-      model.GetState() == download::DownloadItem::DownloadState::CANCELLED) {
+  if (model.GetState() == download::DownloadItem::DownloadState::CANCELLED) {
     return;
   }
   if (model.WasUIWarningShown()) {
@@ -53,10 +51,6 @@ void RecordDownloadOpen(ChromeDownloadOpenMethod open_method,
   base::RecordAction(base::UserMetricsAction("Download.Open"));
   base::UmaHistogramEnumeration("Download.OpenMethod", open_method,
                                 DOWNLOAD_OPEN_METHOD_LAST_ENTRY);
-  download::DownloadContent download_content =
-      download::DownloadContentFromMimeType(
-          mime_type_string, /*record_content_subcategory=*/false);
-  base::UmaHistogramEnumeration("Download.Open.ContentType", download_content);
 }
 
 void RecordDatabaseAvailability(bool is_available) {

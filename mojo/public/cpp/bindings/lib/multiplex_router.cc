@@ -6,12 +6,12 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <atomic>
 #include <utility>
 
 #include "base/auto_reset.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -28,8 +28,7 @@
 #include "mojo/public/cpp/bindings/lib/may_auto_lock.h"
 #include "mojo/public/cpp/bindings/sequence_local_sync_event_watcher.h"
 
-namespace mojo {
-namespace internal {
+namespace mojo::internal {
 
 // InterfaceEndpoint stores the information of an interface endpoint registered
 // with the router.
@@ -404,9 +403,9 @@ MultiplexRouter::MultiplexRouter(
     bool set_interface_id_namespace_bit,
     scoped_refptr<base::SequencedTaskRunner> runner,
     const char* primary_interface_name)
-    : config_(config),
+    : AssociatedGroupController(runner),
+      config_(config),
       set_interface_id_namespace_bit_(set_interface_id_namespace_bit),
-      task_runner_(runner),
       dispatcher_(this),
       connector_(std::move(message_pipe),
                  config == MULTI_INTERFACE ? Connector::MULTI_THREADED_SEND
@@ -426,7 +425,27 @@ MultiplexRouter::MultiplexRouter(
   }
 }
 
+MultiplexRouter::MultiplexRouter(
+    base::PassKey<test::TestableMultiplexRouter>,
+    ScopedMessagePipeHandle message_pipe,
+    Config config,
+    bool set_interface_id_namespace_bit,
+    scoped_refptr<base::SequencedTaskRunner> runner,
+    const char* primary_interface_name)
+    : MultiplexRouter(base::PassKey<MultiplexRouter>(),
+                      std::move(message_pipe),
+                      config,
+                      set_interface_id_namespace_bit,
+                      std::move(runner),
+                      primary_interface_name) {}
+
 void MultiplexRouter::StartReceiving() {
+  // Safe to use Unretained: this callback is stored inside |connector_|,
+  // which is a member of this MultiplexRouter. The callback is only invoked
+  // synchronously from Connector::HandleError on the bound sequence. When
+  // ~MultiplexRouter destroys the connector, the callback is destroyed with
+  // it. A ref-counted pointer can't be used here because MultiplexRouter
+  // owns the Connector — holding a scoped_refptr would create a ref cycle.
   connector_.set_connection_error_handler(
       base::BindOnce(&MultiplexRouter::OnPipeConnectionError,
                      base::Unretained(this), false /* force_async_dispatch */));
@@ -440,7 +459,7 @@ void MultiplexRouter::StartReceiving() {
       config_ == MULTI_INTERFACE;
 
   DETACH_FROM_SEQUENCE(sequence_checker_);
-  connector_.StartReceiving(task_runner_, allow_woken_up_by_others);
+  connector_.StartReceiving(task_runner(), allow_woken_up_by_others);
 }
 
 MultiplexRouter::~MultiplexRouter() {
@@ -479,7 +498,7 @@ InterfaceId MultiplexRouter::AssociateInterface(
       if (set_interface_id_namespace_bit_) {
         id |= kInterfaceIdNamespaceMask;
       }
-    } while (base::Contains(endpoints_, id));
+    } while (endpoints_.contains(id));
 
     auto endpoint_ref = base::MakeRefCounted<InterfaceEndpoint>(this, id);
     // Raw pointer use is safe because the InterfaceEndpoint will remain alive
@@ -540,7 +559,7 @@ void MultiplexRouter::CloseEndpointHandle(
   }
 
   MayAutoLock locker(&lock_);
-  DCHECK(base::Contains(endpoints_, id));
+  DCHECK(endpoints_.contains(id));
   InterfaceEndpoint* endpoint = endpoints_[id].get();
   DCHECK(!endpoint->client());
   DCHECK(!endpoint->closed());
@@ -555,8 +574,8 @@ void MultiplexRouter::CloseEndpointHandle(
 }
 
 void MultiplexRouter::NotifyLocalEndpointOfPeerClosure(InterfaceId id) {
-  if (!task_runner_->RunsTasksInCurrentSequence()) {
-    task_runner_->PostTask(
+  if (!task_runner()->RunsTasksInCurrentSequence()) {
+    task_runner()->PostTask(
         FROM_HERE,
         base::BindOnce(&MultiplexRouter::NotifyLocalEndpointOfPeerClosure,
                        base::WrapRefCounted(this), id));
@@ -578,7 +597,7 @@ InterfaceEndpointController* MultiplexRouter::AttachEndpointClient(
   DCHECK(client);
 
   MayAutoLock locker(&lock_);
-  DCHECK(base::Contains(endpoints_, id));
+  DCHECK(endpoints_.contains(id));
 
   InterfaceEndpoint* endpoint = endpoints_[id].get();
   endpoint->AttachClient(client, std::move(runner));
@@ -598,19 +617,19 @@ void MultiplexRouter::DetachEndpointClient(
   DCHECK(IsValidInterfaceId(id));
 
   MayAutoLock locker(&lock_);
-  DCHECK(base::Contains(endpoints_, id));
+  DCHECK(endpoints_.contains(id));
 
   InterfaceEndpoint* endpoint = endpoints_[id].get();
   endpoint->DetachClient();
 }
 
 void MultiplexRouter::RaiseError() {
-  if (task_runner_->RunsTasksInCurrentSequence()) {
+  if (task_runner()->RunsTasksInCurrentSequence()) {
     connector_.RaiseError();
   } else {
-    task_runner_->PostTask(FROM_HERE,
-                           base::BindOnce(&MultiplexRouter::RaiseError,
-                                          base::WrapRefCounted(this)));
+    task_runner()->PostTask(FROM_HERE,
+                            base::BindOnce(&MultiplexRouter::RaiseError,
+                                           base::WrapRefCounted(this)));
   }
 }
 
@@ -685,7 +704,7 @@ bool MultiplexRouter::HasAssociatedEndpoints() const {
     return false;
   }
 
-  return !base::Contains(endpoints_, kPrimaryInterfaceId);
+  return !endpoints_.contains(kPrimaryInterfaceId);
 }
 
 void MultiplexRouter::EnableBatchDispatch() {
@@ -864,12 +883,12 @@ bool MultiplexRouter::WaitForFlushToComplete(ScopedMessagePipeHandle pipe) {
   // other than the primary interface's task runner, it is possible to process
   // incoming control messages on that task runner. We don't support this
   // control message on anything but the main interface though.
-  if (!task_runner_->RunsTasksInCurrentSequence()) {
+  if (!task_runner()->RunsTasksInCurrentSequence()) {
     return false;
   }
 
   flush_pipe_watcher_.emplace(FROM_HERE, SimpleWatcher::ArmingPolicy::MANUAL,
-                              task_runner_);
+                              task_runner());
   flush_pipe_watcher_->Watch(
       pipe.get(), MOJO_HANDLE_SIGNAL_PEER_CLOSED,
       MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
@@ -1170,8 +1189,8 @@ bool MultiplexRouter::ProcessIncomingMessage(
   bool can_direct_call;
   if (message->has_flag(Message::kFlagIsSync)) {
     if (!message->has_flag(Message::kFlagIsResponse) &&
-        !base::Contains(endpoint->client()->sync_method_ordinals(),
-                        message->name())) {
+        !std::ranges::contains(endpoint->client()->sync_method_ordinals(),
+                               message->name())) {
       RaiseErrorInNonTestingMode();
       return true;
     }
@@ -1364,5 +1383,4 @@ void MultiplexRouter::CloseEndpointsForMessage(const Message& message) {
   ProcessTasks(NO_DIRECT_CLIENT_CALLS, nullptr);
 }
 
-}  // namespace internal
-}  // namespace mojo
+}  // namespace mojo::internal

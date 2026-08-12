@@ -82,7 +82,8 @@ class VaapiVideoDecoder : public VideoDecoderMixin,
   void SurfaceReady(VASurfaceID va_surface_id,
                     int32_t buffer_id,
                     const gfx::Rect& visible_rect,
-                    const VideoColorSpace& color_space) override;
+                    const VideoColorSpace& color_space,
+                    const gfx::HDRMetadata& dynamic_hdr_metadata) override;
 
   // Must be called before Initialize().
   void set_ignore_resolution_changes_to_smaller_vp9_for_testing(bool value);
@@ -158,14 +159,11 @@ class VaapiVideoDecoder : public VideoDecoderMixin,
   void ResetDone(base::OnceClosure reset_cb);
 
   // Create codec-specific AcceleratedVideoDecoder and reset related variables.
-  VaapiStatus CreateAcceleratedVideoDecoder();
+  VaapiStatus::Or<std::monostate> CreateAcceleratedVideoDecoder();
 
-  // Change the current |state_| to the specified |state|.
-  void SetState(State state);
-
-  // Tell SetState() to change the |state_| to kError and send |message| to
-  // MediaLog and to LOG(ERROR).
-  void SetErrorState(std::string message);
+  // Change the current `state_` to the specified `state`. Iff the new state is
+  // an error, report the error to all pending decode and init tasks.
+  void SetState(DecoderStatus::Or<State> state);
 
   // Callback for the CDM to notify |this|.
   void OnCdmContextEvent(CdmContext::Event event);
@@ -207,6 +205,9 @@ class VaapiVideoDecoder : public VideoDecoderMixin,
     return !!vaapi_wrapper_ && !!decoder_;
   }
 
+  // We can cancel the pending init during error handling if need be.
+  InitCB pending_init_cb_ GUARDED_BY_CONTEXT(sequence_checker_);
+
   // The video decoder's state.
   State state_ GUARDED_BY_CONTEXT(sequence_checker_) = State::kUninitialized;
 
@@ -221,7 +222,7 @@ class VaapiVideoDecoder : public VideoDecoderMixin,
   VideoCodecProfile profile_ GUARDED_BY_CONTEXT(sequence_checker_) =
       VIDEO_CODEC_PROFILE_UNKNOWN;
   VideoColorSpace color_space_ GUARDED_BY_CONTEXT(sequence_checker_);
-  gfx::HDRMetadata hdr_metadata_ GUARDED_BY_CONTEXT(sequence_checker_);
+  gfx::HDRMetadata static_hdr_metadata_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Aspect ratio from the config.
   VideoAspectRatio aspect_ratio_ GUARDED_BY_CONTEXT(sequence_checker_);

@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_DATABASE_SERIALIZATION_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "components/webapps/common/web_app_id.h"
@@ -45,7 +46,7 @@ enum class ProtoParseResult {
   kInvalidFileHandlerNoActionOrLaunchType = 20,
   kInvalidFileHandlerAction = 21,
   kInvalidFileHandlerAcceptEntry = 22,
-  kInvalidIconsInFileHandler = 23,
+  kObsolete_InvalidIconsInFileHandler = 23,
   kInvalidShareTarget = 24,
   kInvalidShareTargetAction = 25,
   kInvalidShareTargetFile = 26,
@@ -86,18 +87,24 @@ enum class ProtoParseResult {
   kInvalidDownloadedTrustedIconForPendingUpdate = 61,
   kMissingWasIgnoredForPendingUpdate = 62,
   kInvalidParsedTrustedIcons = 63,
-  kInvalidBorderlessUrlPatterns = 64,
+  kObsolete_InvalidBorderlessUrlPatterns = 64,
   kInvalidInstalledBy = 65,
   kInvalidWebAppUnvalidatedMigrationSource = 66,
   kInvalidPendingMigrationInfo = 67,
   kInvalidWebAppValidatedMigrationSource = 68,
-  kMaxValue = kInvalidWebAppValidatedMigrationSource,
+  kInvalidDisplayOverrideUrlPatterns = 69,
+  kStartUrlNotInScope = 70,
+  kMigratedFromManifestIdInvalid = 71,
+  kAppIdMismatch = 72,
+  kAppIdMismatchForSubApp = 73,
+  kMaxValue = kAppIdMismatchForSubApp,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/webapps/enums.xml:WebAppProtoParseResult)
 
 std::unique_ptr<WebApp> ParseWebAppProtoForTesting(const webapps::AppId& app_id,
                                                    const std::string& value);
-std::unique_ptr<WebApp> ParseWebAppProto(const proto::WebApp& proto);
+std::unique_ptr<WebApp> ParseWebAppProto(const proto::WebApp& proto,
+                                         const webapps::AppId& expected_app_id);
 std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app);
 
 }  // namespace web_app

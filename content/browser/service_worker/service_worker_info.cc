@@ -4,7 +4,9 @@
 
 #include "content/browser/service_worker/service_worker_info.h"
 
+#include "base/byte_size.h"
 #include "content/browser/service_worker/service_worker_consts.h"
+#include "content/common/service_worker/service_worker_router_evaluator.h"
 #include "content/public/browser/child_process_host.h"
 #include "ipc/constants.mojom.h"
 #include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
@@ -24,17 +26,19 @@ ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
     blink::EmbeddedWorkerStatus running_status,
     ServiceWorkerVersion::Status status,
     std::optional<ServiceWorkerVersion::FetchHandlerType> fetch_handler_type,
+    blink::mojom::NavigationPreloadState navigation_preload_state,
     const GURL& script_url,
     const GURL& scope,
     const blink::StorageKey& storage_key,
     int64_t registration_id,
     int64_t version_id,
-    int process_id,
+    ChildProcessId process_id,
     int thread_id,
     int devtools_agent_route_id,
     ukm::SourceId ukm_source_id,
     blink::mojom::AncestorFrameType ancestor_frame_type,
-    std::optional<std::string> router_rules)
+    std::optional<std::string> router_rules,
+    std::vector<ServiceWorkerRouterRule> typed_router_rules)
     : ServiceWorkerVersionBaseInfo(script_url,
                                    scope,
                                    storage_key,
@@ -45,22 +49,19 @@ ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
       running_status(running_status),
       status(status),
       fetch_handler_type(fetch_handler_type),
+      navigation_preload_state(std::move(navigation_preload_state)),
       thread_id(thread_id),
       devtools_agent_route_id(devtools_agent_route_id),
       ukm_source_id(ukm_source_id),
-      router_rules(router_rules) {}
+      router_rules(std::move(router_rules)),
+      typed_router_rules(std::move(typed_router_rules)) {}
 
 ServiceWorkerVersionInfo::ServiceWorkerVersionInfo(
     const ServiceWorkerVersionInfo& other) = default;
 
 ServiceWorkerVersionInfo::~ServiceWorkerVersionInfo() {}
 
-ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo()
-    : registration_id(blink::mojom::kInvalidServiceWorkerRegistrationId),
-      delete_flag(IS_NOT_DELETED),
-      stored_version_size_bytes(0),
-      navigation_preload_enabled(false),
-      navigation_preload_header_length(0) {}
+ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo() = default;
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     const GURL& scope,
@@ -70,10 +71,7 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     : scope(scope),
       key(key),
       registration_id(registration_id),
-      delete_flag(delete_flag),
-      stored_version_size_bytes(0),
-      navigation_preload_enabled(false),
-      navigation_preload_header_length(0) {}
+      delete_flag(delete_flag) {}
 
 ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     const GURL& scope,
@@ -84,7 +82,7 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
     const ServiceWorkerVersionInfo& active_version,
     const ServiceWorkerVersionInfo& waiting_version,
     const ServiceWorkerVersionInfo& installing_version,
-    int64_t stored_version_size_bytes,
+    base::ByteSize stored_version_size,
     bool navigation_preload_enabled,
     size_t navigation_preload_header_length)
     : scope(scope),
@@ -95,7 +93,7 @@ ServiceWorkerRegistrationInfo::ServiceWorkerRegistrationInfo(
       active_version(active_version),
       waiting_version(waiting_version),
       installing_version(installing_version),
-      stored_version_size_bytes(stored_version_size_bytes),
+      stored_version_size(stored_version_size),
       navigation_preload_enabled(navigation_preload_enabled),
       navigation_preload_header_length(navigation_preload_header_length) {}
 

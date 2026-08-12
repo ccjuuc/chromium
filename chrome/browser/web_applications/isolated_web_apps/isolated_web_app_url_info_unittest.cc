@@ -202,9 +202,8 @@ TEST_F(IsolatedWebAppUrlInfoFromIsolatedWebAppLocationTest,
       source, test_future.GetCallback());
   EXPECT_THAT(
       test_future.Get(),
-      ErrorIs(HasSubstr(
-          "Failed to read the integrity block of the signed web "
-          "bundle: Error reading the integrity block array structure.")));
+      ErrorIs(HasSubstr("Failed to read the integrity block of the signed web "
+                        "bundle: Integrity block is not a CBOR array.")));
 }
 
 TEST_F(IsolatedWebAppUrlInfoFromIsolatedWebAppLocationTest,
@@ -277,9 +276,9 @@ TEST_F(IsolatedWebAppStoragePartitionTest, BackwardsCompatible) {
           &testing_profile, partition_domain, /*partition_name=*/"",
           /*in_memory=*/false);
 
-  // Invoke the new impl from the components/ layer.
   content::StoragePartitionConfig new_config =
-      IwaOrigin(test::GetDefaultEd25519WebBundleId())
+      IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
+          test::GetDefaultEd25519WebBundleId())
           .storage_partition_config(&testing_profile);
 
   ASSERT_EQ(old_config, new_config);

@@ -5,8 +5,10 @@
 package org.chromium.media;
 
 import android.annotation.SuppressLint;
+import android.graphics.Rect;
 import android.media.MediaCodec;
 import android.media.MediaCodec.CryptoInfo;
+import android.media.MediaCodec.LinearBlock;
 import android.media.MediaCrypto;
 import android.media.MediaDrm;
 import android.media.MediaFormat;
@@ -36,12 +38,6 @@ class MediaCodecBridge {
     private static final String TAG = "MediaCodecBridge";
 
     private static final int MEDIA_CODEC_UNKNOWN_CIPHER_MODE = -1;
-
-    // TODO(qinmin): Use MediaFormat constants when part of the public API.
-    private static final String KEY_CROP_LEFT = "crop-left";
-    private static final String KEY_CROP_RIGHT = "crop-right";
-    private static final String KEY_CROP_BOTTOM = "crop-bottom";
-    private static final String KEY_CROP_TOP = "crop-top";
 
     protected MediaCodec mMediaCodec;
 
@@ -190,39 +186,38 @@ class MediaCodecBridge {
             mIndex = index;
         }
 
-        @CalledByNative("DequeueInputResult")
+        @CalledByNative
         private int status() {
             return mStatus;
         }
 
-        @CalledByNative("DequeueInputResult")
+        @CalledByNative
         private int index() {
             return mIndex;
         }
     }
 
     private static class ObtainBlockResult {
-        private MediaCodec.@Nullable LinearBlock mBlock;
+        private @Nullable LinearBlock mBlock;
         private @Nullable ByteBuffer mBuffer;
 
-        private ObtainBlockResult(
-                MediaCodec.@Nullable LinearBlock block, @Nullable ByteBuffer buffer) {
+        private ObtainBlockResult(@Nullable LinearBlock block, @Nullable ByteBuffer buffer) {
             mBlock = block;
             mBuffer = buffer;
             assert (mBlock == null && mBuffer == null) || (mBlock != null && mBuffer != null);
         }
 
-        @CalledByNative("ObtainBlockResult")
-        private MediaCodec.@Nullable LinearBlock block() {
+        @CalledByNative
+        private @Nullable LinearBlock block() {
             return mBlock;
         }
 
-        @CalledByNative("ObtainBlockResult")
+        @CalledByNative
         private @Nullable ByteBuffer buffer() {
             return mBuffer;
         }
 
-        @CalledByNative("ObtainBlockResult")
+        @CalledByNative
         @SuppressLint("NewApi")
         private void recycle() {
             if (mBlock != null) {
@@ -260,32 +255,32 @@ class MediaCodecBridge {
             mNumBytes = numBytes;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private int status() {
             return mStatus;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private int index() {
             return mIndex;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private int flags() {
             return mFlags;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private int offset() {
             return mOffset;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private long presentationTimeMicroseconds() {
             return mPresentationTimeMicroseconds;
         }
 
-        @CalledByNative("DequeueOutputResult")
+        @CalledByNative
         private int numBytes() {
             return mNumBytes;
         }
@@ -299,50 +294,56 @@ class MediaCodecBridge {
             mFormat = format;
         }
 
-        private boolean formatHasCropValues() {
-            return mFormat.containsKey(KEY_CROP_RIGHT)
-                    && mFormat.containsKey(KEY_CROP_LEFT)
-                    && mFormat.containsKey(KEY_CROP_BOTTOM)
-                    && mFormat.containsKey(KEY_CROP_TOP);
-        }
-
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int width() {
-            return formatHasCropValues()
-                    ? mFormat.getInteger(KEY_CROP_RIGHT) - mFormat.getInteger(KEY_CROP_LEFT) + 1
-                    : mFormat.getInteger(MediaFormat.KEY_WIDTH);
+            return mFormat.getInteger(MediaFormat.KEY_WIDTH);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int height() {
-            return formatHasCropValues()
-                    ? mFormat.getInteger(KEY_CROP_BOTTOM) - mFormat.getInteger(KEY_CROP_TOP) + 1
-                    : mFormat.getInteger(MediaFormat.KEY_HEIGHT);
+            return mFormat.getInteger(MediaFormat.KEY_HEIGHT);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
+        private Rect cropRect() {
+            if (mFormat.containsKey(MediaFormat.KEY_CROP_RIGHT)
+                    && mFormat.containsKey(MediaFormat.KEY_CROP_LEFT)
+                    && mFormat.containsKey(MediaFormat.KEY_CROP_BOTTOM)
+                    && mFormat.containsKey(MediaFormat.KEY_CROP_TOP)) {
+                // KEY_CROP_RIGHT/KEY_CROP_BOTTOM is inclusive, while Rect's right/bottom is
+                // exclusive, so we add 1 pixel.
+                return new Rect(
+                        mFormat.getInteger(MediaFormat.KEY_CROP_LEFT),
+                        mFormat.getInteger(MediaFormat.KEY_CROP_TOP),
+                        mFormat.getInteger(MediaFormat.KEY_CROP_RIGHT) + 1,
+                        mFormat.getInteger(MediaFormat.KEY_CROP_BOTTOM) + 1);
+            }
+            return new Rect(0, 0, width(), height());
+        }
+
+        @CalledByNative
         private int sampleRate() {
             return mFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int channelCount() {
             return mFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int colorStandard() {
             if (!mFormat.containsKey(MediaFormat.KEY_COLOR_STANDARD)) return -1;
             return mFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int colorRange() {
             if (!mFormat.containsKey(MediaFormat.KEY_COLOR_RANGE)) return -1;
             return mFormat.getInteger(MediaFormat.KEY_COLOR_RANGE);
         }
 
-        @CalledByNative("MediaFormatWrapper")
+        @CalledByNative
         private int colorTransfer() {
             if (!mFormat.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) return -1;
             return mFormat.getInteger(MediaFormat.KEY_COLOR_TRANSFER);

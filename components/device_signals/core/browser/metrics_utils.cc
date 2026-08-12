@@ -55,6 +55,8 @@ std::string GetHistogramVariant(SignalName signal_name) {
       return "OsSignals";
     case SignalName::kBrowserContextSignals:
       return "BrowserContextSignals";
+    case SignalName::kCertificates:
+      return "Certificates";
   }
 }
 
@@ -137,6 +139,12 @@ void LogCrowdStrikeParsingError(SignalsParsingError error) {
   static constexpr char kCrowdStrikeErrorHistogram[] =
       "Enterprise.DeviceSignals.Collection.CrowdStrike.Error";
   base::UmaHistogramEnumeration(kCrowdStrikeErrorHistogram, error);
+}
+
+void LogCertificateCollectionError(CertificateCollectionError error) {
+  static constexpr char kCertErrorHistogram[] =
+      "Enterprise.DeviceSignals.Collection.Certificates.Error";
+  base::UmaHistogramEnumeration(kCertErrorHistogram, error);
 }
 
 void LogSystemSignalCollectionDisconnect(size_t pending_requests) {

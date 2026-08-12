@@ -795,6 +795,8 @@ IN_PROC_BROWSER_TEST_F(StatefulSSLHostStateDelegateTest,
                          tab->GetPrimaryMainFrame()->GetStoragePartition()));
 }
 
+// TODO(crbug.com/507733133): Add tests for non-extension <webview> usage.
+#if BUILDFLAG(IS_CHROMEOS)
 class StatefulSSLHostStateDelegateExtensionTest
     : public extensions::ExtensionBrowserTest {
  public:
@@ -813,7 +815,7 @@ class StatefulSSLHostStateDelegateExtensionTest
 
 // Tests that certificate decisions are isolated by storage partition. In
 // particular, clicking through a certificate error in a <webview> in a Chrome
-// App shouldn't affect normal browsing. See https://crbug.com/639173.
+// App shouldn't affect normal browsing. See https://crbug.com/40085151.
 IN_PROC_BROWSER_TEST_F(StatefulSSLHostStateDelegateExtensionTest,
                        StoragePartitionIsolation) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -920,3 +922,4 @@ IN_PROC_BROWSER_TEST_F(StatefulSSLHostStateDelegateExtensionTest,
   EXPECT_FALSE(state->HasAllowException(
       kWWWGoogleHost, tab->GetPrimaryMainFrame()->GetStoragePartition()));
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)

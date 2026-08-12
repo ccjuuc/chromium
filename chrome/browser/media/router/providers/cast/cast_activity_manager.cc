@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -21,7 +20,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/expected_macros.h"
-#include "chrome/browser/media/router/data_decoder_util.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/media/router/providers/cast/app_activity.h"
 #include "chrome/browser/media/router/providers/cast/cast_media_route_provider_metrics.h"
@@ -135,38 +133,26 @@ void CastActivityManager::LaunchSession(
     content::FrameTreeNodeId frame_tree_node_id,
     mojom::MediaRouteProvider::CreateRouteCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (cast_source.app_params().empty()) {
-    LaunchSessionParsed(cast_source, sink, presentation_id, origin,
-                        frame_tree_node_id, std::move(callback),
-                        data_decoder::DataDecoder::ValueOrError());
-  } else {
-    GetDataDecoder().ParseJson(
-        cast_source.app_params(),
-        base::BindOnce(&CastActivityManager::LaunchSessionParsed,
-                       weak_ptr_factory_.GetWeakPtr(), cast_source, sink,
-                       presentation_id, origin, frame_tree_node_id,
-                       std::move(callback)));
-  }
-}
 
-void CastActivityManager::LaunchSessionParsed(
-    const CastMediaSource& cast_source,
-    const MediaSinkInternal& sink,
-    const std::string& presentation_id,
-    const url::Origin& origin,
-    content::FrameTreeNodeId frame_tree_node_id,
-    mojom::MediaRouteProvider::CreateRouteCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!cast_source.app_params().empty() && !result.has_value()) {
-    logger_.get()->LogError(
-        mojom::LogCategory::kRoute, kLoggerComponent,
-        base::StrCat(
-            {"Error parsing JSON data in appParams: ", result.error()}),
-        sink.id(), cast_source.source_id(), presentation_id);
-    std::move(callback).Run(
-        std::nullopt, nullptr, std::string("Invalid JSON Format of appParams"),
-        mojom::RouteRequestResultCode::NO_SUPPORTED_PROVIDER);
-    return;
+  std::optional<base::Value> app_params;
+  if (!cast_source.app_params().empty()) {
+    auto result = base::JSONReader::ReadAndReturnValueWithError(
+        cast_source.app_params(), base::JSON_PARSE_RFC);
+    if (!result.has_value()) {
+      logger_.get()->LogError(
+          mojom::LogCategory::kRoute, kLoggerComponent,
+          base::StrCat({"Error parsing JSON data in appParams: ",
+                        result.error().message}),
+          sink.id(), cast_source.source_id(), presentation_id);
+      std::move(callback).Run(
+          std::nullopt, nullptr,
+          std::string("Invalid JSON Format of appParams"),
+          mojom::RouteRequestResultCode::NO_SUPPORTED_PROVIDER);
+      return;
+    }
+    if (!result->is_none()) {
+      app_params = std::move(*result);
+    }
   }
 
   // If the sink is already associated with a route, then it will be removed
@@ -187,16 +173,8 @@ void CastActivityManager::LaunchSessionParsed(
   route.set_media_sink_name(sink.sink().name());
   route.set_is_connecting(true);
 
-  // We either have a value, or an error, however `LaunchSession` calls this
-  // function is a default constructed `result`, which is supposed to be
-  // ignored.
-  std::optional<base::Value> opt_result = std::nullopt;
-  if (result.has_value() && !result->is_none()) {
-    opt_result = std::move(*result);
-  }
-
   DoLaunchSessionParams params(route, cast_source, sink, origin,
-                               frame_tree_node_id, std::move(opt_result),
+                               frame_tree_node_id, std::move(app_params),
                                std::move(callback));
 
   auto activity_it = FindActivityBySink(sink);
@@ -468,7 +446,7 @@ void CastActivityManager::TerminateSession(
   CHECK(sink);
 
   // TODO(crbug.com/1291748): Get the real client ID.
-  std::optional<std::string> client_id = std::nullopt;
+  std::optional<std::string> client_id;
 
   activity->SendStopSessionMessageToClients(hash_token_);
   message_handler_->StopSession(
@@ -528,7 +506,9 @@ AppActivity* CastActivityManager::AddAppActivity(const MediaRoute& route,
                                           session_tracker_, logger_.get(),
                                           debugger_.get()));
   auto* const activity_ptr = activity.get();
-  activities_.emplace(route.media_route_id(), std::move(activity));
+  // Use insert_or_assign to avoid Use-After-Free on route ID collision.
+  // See crbug.com/500091052.
+  activities_.insert_or_assign(route.media_route_id(), std::move(activity));
   app_activities_[route.media_route_id()] = activity_ptr;
   return activity_ptr;
 }
@@ -557,7 +537,10 @@ CastActivity* CastActivityManager::AddMirroringActivity(
   activity->BindChannelToServiceReceiver();
   activity->CreateMirroringServiceHost();
   auto* const activity_ptr = activity.get();
-  activities_.emplace(route.media_route_id(), std::move(activity));
+  // Use insert_or_assign to avoid Use-After-Free on route ID collision.
+  // See crbug.com/500091052.
+  activities_.insert_or_assign(route.media_route_id(), std::move(activity));
+  app_activities_.erase(route.media_route_id());
   return activity_ptr;
 }
 
@@ -687,7 +670,7 @@ void CastActivityManager::OnSessionRemoved(const MediaSinkInternal& sink) {
 
 void CastActivityManager::OnMediaStatusUpdated(
     const MediaSinkInternal& sink,
-    const base::Value::Dict& media_status,
+    const base::DictValue& media_status,
     std::optional<int> request_id) {
   auto it = FindActivityBySink(sink);
   if (it != activities_.end()) {
@@ -728,29 +711,22 @@ cast_channel::ResultCallback CastActivityManager::MakeResultCallbackForRoute(
 
 void CastActivityManager::SendRouteMessage(const std::string& media_route_id,
                                            const std::string& message) {
-  GetDataDecoder().ParseJson(
-      message,
-      base::BindOnce(&CastActivityManager::SendRouteJsonMessage,
-                     weak_ptr_factory_.GetWeakPtr(), media_route_id, message));
-}
+  auto result = base::JSONReader::ReadAndReturnValueWithError(
+      message, base::JSON_PARSE_RFC);
 
-void CastActivityManager::SendRouteJsonMessage(
-    const std::string& media_route_id,
-    const std::string& message,
-    data_decoder::DataDecoder::ValueOrError result) {
   const auto get_activity = [&]()
       -> base::expected<std::pair<CastActivity*, std::string>, std::string> {
     if (!result.has_value()) {
       return base::unexpected(
           "Error parsing JSON data when sending route JSON message: " +
-          result.error());
+          result.error().message);
     }
 
     auto* dict = result->GetIfDict();
     if (!dict) {
       return base::unexpected(
-          "Error parsing JSON data when sending route JSON message: " +
-          result.error());
+          "Error parsing JSON data when sending route JSON message: Not a "
+          "dictionary");
     }
 
     const std::string* const client_id = dict->FindString("clientId");
@@ -954,10 +930,10 @@ void CastActivityManager::HandleLaunchSessionResponse(
 
   activity_it->second->SetOrUpdateSession(*session, sink, hash_token_);
 
-  if (!client_id.empty() && base::Contains(session->message_namespaces(),
-                                           cast_channel::kMediaNamespace)) {
+  if (!client_id.empty() &&
+      session->message_namespaces().contains(cast_channel::kMediaNamespace)) {
     // Request media status from the receiver.
-    base::Value::Dict request;
+    base::DictValue request;
     request.Set("type", cast_util::EnumToString<
                             cast_channel::V2MessageType,
                             cast_channel::V2MessageType::kMediaGetStatus>());
@@ -1180,12 +1156,6 @@ CastActivityManager::DoLaunchSessionParams::DoLaunchSessionParams(
   }
 }
 
-void CastActivityManager::AddMirroringActivityForTest(
-    const MediaRoute::Id& route_id,
-    std::unique_ptr<MirroringActivity> mirroring_activity) {
-  activities_.emplace(route_id, std::move(mirroring_activity));
-}
-
 void CastActivityManager::HandleMissingSinkOnJoin(
     mojom::MediaRouteProvider::JoinRouteCallback callback,
     const std::string& sink_id,
@@ -1201,7 +1171,7 @@ void CastActivityManager::HandleMissingSinkOnJoin(
 void CastActivityManager::HandleMissingSessionIdOnJoin(
     mojom::MediaRouteProvider::JoinRouteCallback callback) {
   // This should never happen, but it looks like maybe it does.  See
-  // crbug.com/1114067.
+  // crbug.com/40710607.
   NOTREACHED();
 }
 

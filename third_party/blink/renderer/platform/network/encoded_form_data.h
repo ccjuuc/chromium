@@ -91,7 +91,7 @@ class PLATFORM_EXPORT EncodedFormData : public RefCounted<EncodedFormData> {
 
  public:
   enum EncodingType {
-    kFormURLEncoded,    // for application/x-www-form-urlencoded
+    kFormUrlEncoded,    // for application/x-www-form-urlencoded
     kTextPlain,         // for text/plain
     kMultipartFormData  // for multipart/form-data
   };
@@ -128,11 +128,11 @@ class PLATFORM_EXPORT EncodedFormData : public RefCounted<EncodedFormData> {
   const Vector<FormDataElement>& Elements() const { return elements_; }
   Vector<FormDataElement>& MutableElements() { return elements_; }
 
-  const Vector<char>& Boundary() const { return boundary_; }
+  const String& Boundary() const { return boundary_; }
   // Returns a string concatenating "multipart/form-data; boundary=" and the
   // boundary.
   String FormatContentTypeWithBoundary() const;
-  void SetBoundary(Vector<char> boundary) { boundary_ = boundary; }
+  void SetBoundary(String boundary) { boundary_ = std::move(boundary); }
 
   // Identifies a particular form submission instance.  A value of 0 is used
   // to indicate an unspecified identifier.
@@ -145,11 +145,13 @@ class PLATFORM_EXPORT EncodedFormData : public RefCounted<EncodedFormData> {
   }
 
   static EncodingType ParseEncodingType(const String& type) {
-    if (EqualIgnoringASCIICase(type, "text/plain"))
+    if (EqualIgnoringAsciiCase(type, "text/plain")) {
       return kTextPlain;
-    if (EqualIgnoringASCIICase(type, "multipart/form-data"))
+    }
+    if (EqualIgnoringAsciiCase(type, "multipart/form-data")) {
       return kMultipartFormData;
-    return kFormURLEncoded;
+    }
+    return kFormUrlEncoded;
   }
 
   // Size of the elements making up the EncodedFormData.
@@ -166,7 +168,7 @@ class PLATFORM_EXPORT EncodedFormData : public RefCounted<EncodedFormData> {
   Vector<FormDataElement> elements_;
 
   int64_t identifier_;
-  Vector<char> boundary_;
+  String boundary_;
   bool contains_password_data_;
 };
 

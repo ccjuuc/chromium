@@ -12,7 +12,6 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/memory_usage_estimator.h"
@@ -42,7 +41,7 @@ namespace {
 BASE_FEATURE(kEnforceStorageGetSizeLimit, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Returns a vector of any strings within the given list.
-std::vector<std::string> GetKeysFromList(const base::Value::List& list) {
+std::vector<std::string> GetKeysFromList(const base::ListValue& list) {
   std::vector<std::string> keys;
   keys.reserve(list.size());
   for (const auto& value : list) {
@@ -55,7 +54,7 @@ std::vector<std::string> GetKeysFromList(const base::Value::List& list) {
 }
 
 // Returns a vector of keys within the given dict.
-std::vector<std::string> GetKeysFromDict(const base::Value::Dict& dict) {
+std::vector<std::string> GetKeysFromDict(const base::DictValue& dict) {
   std::vector<std::string> keys;
   keys.reserve(dict.size());
   for (auto value : dict) {
@@ -141,7 +140,7 @@ bool SettingsFunction::PreRunValidation(std::string* error) {
   if (extension()->is_login_screen_extension() &&
       storage_area_ != StorageAreaNamespace::kManaged) {
     // Login screen extensions are not allowed to use local/sync storage for
-    // security reasons (see crbug.com/978443).
+    // security reasons (see crbug.com/40633613).
     *error = base::StringPrintf(
         "\"%s\" is not available for login screen extensions",
         storage_area_string.c_str());
@@ -203,7 +202,7 @@ ExtensionFunction::ResponseAction StorageStorageAreaGetFunction::Run() {
   mutable_args.erase(args().begin());
 
   std::optional<std::vector<std::string>> keys;
-  std::optional<base::Value::Dict> defaults;
+  std::optional<base::DictValue> defaults;
 
   switch (input.type()) {
     case base::Value::Type::NONE:
@@ -246,7 +245,7 @@ ExtensionFunction::ResponseAction StorageStorageAreaGetFunction::Run() {
 constexpr size_t kMaxSingleGetSizeBytes = 25 * 1024 * 1024;
 
 void StorageStorageAreaGetFunction::OnGetOperationFinished(
-    std::optional<base::Value::Dict> defaults,
+    std::optional<base::DictValue> defaults,
     StorageFrontend::GetResult result) {
   // Since the storage access happens asynchronously, the browser context can
   // be torn down in the interim. If this happens, early-out.
@@ -277,8 +276,7 @@ void StorageStorageAreaGetFunction::OnGetOperationFinished(
     return;
   }
 
-  base::Value::Dict values =
-      defaults ? std::move(*defaults) : base::Value::Dict();
+  base::DictValue values = defaults ? std::move(*defaults) : base::DictValue();
 
   // It's important that we merge the values into the defaults, and not the
   // other way around, to avoid the defaults overwriting any existing values.

@@ -13,13 +13,13 @@
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/task_runner.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/user_prefs/user_prefs.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/color_chooser.h"
@@ -79,7 +79,7 @@ const int kDefaultHeight = 384;
 
 void SetConstraintProperty(const std::string& name,
                            int value,
-                           base::Value::Dict* bounds_properties) {
+                           base::DictValue* bounds_properties) {
   DCHECK(bounds_properties);
   if (value != SizeConstraints::kUnboundedSize)
     bounds_properties->Set(name, value);
@@ -91,9 +91,9 @@ void SetBoundsProperties(const gfx::Rect& bounds,
                          const gfx::Size& min_size,
                          const gfx::Size& max_size,
                          const std::string& bounds_name,
-                         base::Value::Dict* window_properties) {
+                         base::DictValue* window_properties) {
   DCHECK(window_properties);
-  base::Value::Dict bounds_properties;
+  base::DictValue bounds_properties;
 
   bounds_properties.Set("left", bounds.x());
   bounds_properties.Set("top", bounds.y());
@@ -301,6 +301,7 @@ void AppWindow::Init(const GURL& url,
   WebContentsModalDialogManager::CreateForWebContents(web_contents());
 
   web_contents()->SetDelegate(this);
+  web_contents()->SetIgnoreZoomGestures(true);
   WebContentsModalDialogManager::FromWebContents(web_contents())
       ->SetDelegate(this);
 
@@ -396,6 +397,11 @@ WebContents* AppWindow::OpenURLFromTab(
   return helper_->OpenURLFromTab(params, std::move(navigation_handle_callback));
 }
 
+bool AppWindow::ShouldAllowRendererInitiatedCrossProcessNavigation(
+    bool is_outermost_main_frame_navigation) {
+  return !is_outermost_main_frame_navigation;
+}
+
 content::WebContents* AppWindow::AddNewContents(
     WebContents* source,
     std::unique_ptr<WebContents> new_contents,
@@ -457,11 +463,6 @@ void AppWindow::RequestPointerLock(WebContents* web_contents,
                                    bool last_unlocked_by_target) {
   DCHECK_EQ(AppWindow::web_contents(), web_contents);
   helper_->RequestPointerLock();
-}
-
-bool AppWindow::PreHandleGestureEvent(WebContents* source,
-                                      const blink::WebGestureEvent& event) {
-  return AppWebContentsHelper::ShouldSuppressGestureEvent(event);
 }
 
 content::PictureInPictureResult AppWindow::EnterPictureInPicture(
@@ -608,7 +609,7 @@ void AppWindow::SetAppIconUrl(const GURL& url) {
   app_icon_url_ = url;
 
   // Don't start custom app icon loading in the case window is not ready yet.
-  // see crbug.com/788531.
+  // see crbug.com/41357416.
   if (!window_ready_)
     return;
 
@@ -647,11 +648,9 @@ void AppWindow::SetFullscreen(FullscreenType type, bool enable) {
 #if !BUILDFLAG(IS_MAC)
     // Do not enter fullscreen mode if disallowed by pref.
     // TODO(bartfab): Add a test once it becomes possible to simulate a user
-    // gesture. http://crbug.com/174178
+    // gesture. http://crbug.com/40300937
     if (type != FULLSCREEN_TYPE_FORCED) {
-      PrefService* prefs =
-          ExtensionsBrowserClient::Get()->GetPrefServiceForContext(
-              browser_context());
+      PrefService* prefs = user_prefs::UserPrefs::Get(browser_context());
       if (!prefs->GetBoolean(pref_names::kAppFullscreenAllowed))
         return;
     }
@@ -778,7 +777,7 @@ void AppWindow::RestoreAlwaysOnTop() {
     UpdateNativeAlwaysOnTop();
 }
 
-void AppWindow::GetSerializedState(base::Value::Dict* properties) const {
+void AppWindow::GetSerializedState(base::DictValue* properties) const {
   DCHECK(properties);
 
   properties->Set("fullscreen", native_app_window_->IsFullscreenOrPending());
@@ -859,7 +858,14 @@ void AppWindow::DidDownloadFavicon(
 }
 
 void AppWindow::SetNativeWindowFullscreen() {
+  // `SetFullscreen()` can trigger window closure (e.g. on macOS when spinning a
+  // nested run loop), destroying `this`. Use a WeakPtr to avoid Use-After-Free
+  // when calling RestoreAlwaysOnTop(). See crbug.com/516948486.
+  base::WeakPtr<AppWindow> weak_this = weak_ptr_factory_.GetWeakPtr();
   native_app_window_->SetFullscreen(fullscreen_types_);
+  if (!weak_this) {
+    return;
+  }
 
   RestoreAlwaysOnTop();
 }

@@ -67,8 +67,8 @@ class DownloadTestHelper {
                     mDownloadManagerServiceObserver = new TestDownloadManagerServiceObserver();
                     DownloadManagerService.getDownloadManagerService()
                             .addDownloadObserver(mDownloadManagerServiceObserver);
-                    OfflineContentAggregatorFactory.get()
-                            .addObserver(new TestDownloadBackendObserver());
+                    mDownloadBackendObserver = new TestDownloadBackendObserver();
+                    OfflineContentAggregatorFactory.get().addObserver(mDownloadBackendObserver);
                 });
     }
 
@@ -78,6 +78,7 @@ class DownloadTestHelper {
                 () -> {
                     DownloadManagerService.getDownloadManagerService()
                             .removeDownloadObserver(mDownloadManagerServiceObserver);
+                    OfflineContentAggregatorFactory.get().removeObserver(mDownloadBackendObserver);
                 });
     }
 
@@ -145,7 +146,7 @@ class DownloadTestHelper {
     private static File getDownloadedPath(String fileName) {
         File downloadedFile = new File(DOWNLOAD_DIRECTORY, fileName);
         if (!downloadedFile.exists()) {
-            Log.d(TAG, "The file " + fileName + " does not exist");
+            Log.d(TAG, "The file %s does not exist", fileName);
         }
         return downloadedFile;
     }
@@ -198,7 +199,9 @@ class DownloadTestHelper {
 
     private String mLastDownloadFilePath;
     private CallbackHelper mHttpDownloadFinished = new CallbackHelper();
+    private final CallbackHelper mAllDownloadsRetrieved = new CallbackHelper();
     private TestDownloadManagerServiceObserver mDownloadManagerServiceObserver;
+    private TestDownloadBackendObserver mDownloadBackendObserver;
 
     int getChromeDownloadCallCount() {
         return mHttpDownloadFinished.getCallCount();
@@ -219,10 +222,16 @@ class DownloadTestHelper {
     }
 
     List<DownloadItem> getAllDownloads() {
+        int callCount = mAllDownloadsRetrieved.getCallCount();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     DownloadManagerService.getDownloadManagerService().getAllDownloads(null);
                 });
+        try {
+            mAllDownloadsRetrieved.waitForCallback(callCount, 1, 10, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new AssertionError("Timed out waiting for downloads to be retrieved", e);
+        }
         return mAllDownloads;
     }
 
@@ -231,6 +240,7 @@ class DownloadTestHelper {
         @Override
         public void onAllDownloadsRetrieved(final List<DownloadItem> list, ProfileKey profileKey) {
             mAllDownloads = list;
+            mAllDownloadsRetrieved.notifyCalled();
         }
 
         @Override

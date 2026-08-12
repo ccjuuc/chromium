@@ -10,6 +10,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -17,7 +18,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
-#include "ui/gfx/buffer_format_util.h"
 
 namespace gpu {
 
@@ -145,19 +145,19 @@ bool MappableBufferAHB::AsyncMappingIsNonBlocking() const {
   return true;
 }
 
-void* MappableBufferAHB::memory(size_t plane) {
+base::span<uint8_t> MappableBufferAHB::memory(size_t plane) {
   AssertMapped();
 
   if (static_cast<int>(plane) > format_.NumberOfPlanes() ||
       !shared_memory_handle_) {
-    return nullptr;
+    return {};
   }
 
   base::span<uint8_t> mapping =
       shared_memory_handle_->GetMapping().GetMemoryAsSpan<uint8_t>();
   size_t offset =
       viz::SharedMemoryOffsetForSharedImageFormat(format_, plane, size_);
-  return mapping.subspan(offset).data();
+  return mapping.subspan(offset);
 }
 
 void MappableBufferAHB::Unmap() {
@@ -186,6 +186,10 @@ gfx::GpuMemoryBufferType MappableBufferAHB::GetType() const {
 
 gfx::GpuMemoryBufferHandle MappableBufferAHB::CloneHandle() const {
   return handle_.Clone();
+}
+
+bool MappableBufferAHB::SupportsZeroCopyWebGPUImport() const {
+  return false;
 }
 
 void MappableBufferAHB::AssertMapped() {

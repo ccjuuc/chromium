@@ -7,9 +7,10 @@
 
 // Interface to the glic web client, provided by the glic WebUI.
 #include "base/functional/callback_forward.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/actor/actor_task_delegate.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
-#include "components/autofill/core/browser/integrators/glic/actor_form_filling_types.h"
+#include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 #include "url/origin.h"
 
 namespace glic {
@@ -17,6 +18,10 @@ namespace glic {
 // Access to the glic web client, from outside of the WebUI handler.
 class GlicWebClientAccess {
  public:
+  virtual ~GlicWebClientAccess() = default;
+  virtual mojom::WebClient* web_client() = 0;
+  virtual mojom::WebClientState web_client_state() const = 0;
+
   using PanelWillOpenCallback = mojom::WebClient::NotifyPanelWillOpenCallback;
 
   // Informs the web client that the panel will open. The panel should not be
@@ -28,6 +33,9 @@ class GlicWebClientAccess {
   // client should not be destroyed until after `done` is called.
   virtual void PanelWasClosed(base::OnceClosure done) = 0;
 
+  // Requests the web client to stop microphone recording.
+  virtual void StopMicrophone(base::OnceClosure done) = 0;
+
   // Informs the client that the state of the panel has changed.
   virtual void PanelStateChanged(
       const glic::mojom::PanelState& panel_state) = 0;
@@ -38,35 +46,20 @@ class GlicWebClientAccess {
   // the panel.
   virtual void ManualResizeChanged(bool resizing) = 0;
 
-  // Called when the browser wants the web client to change its view to match
-  // the requested change (e.g., because the user clicked a UI element to toggle
-  // to a different view).
-  virtual void RequestViewChange(mojom::ViewChangeRequestPtr request) = 0;
-
   // Informs the web client that additional context is available.
   virtual void NotifyAdditionalContext(mojom::AdditionalContextPtr context) = 0;
 
-  virtual void RequestToShowCredentialSelectionDialog(
-      actor::TaskId task_id,
-      const base::flat_map<std::string, gfx::Image>& icons,
-      const std::vector<actor_login::Credential>& credentials,
-      actor::ActorTaskDelegate::CredentialSelectedCallback callback) = 0;
-  virtual void RequestToShowUserConfirmationDialog(
-      actor::TaskId task_id,
-      const url::Origin& navigation_origin,
-      bool for_blocklisted_origin,
-      actor::ActorTaskDelegate::UserConfirmationDialogCallback callback) = 0;
-  virtual void RequestToConfirmNavigation(
-      actor::TaskId task_id,
-      const url::Origin& navigation_origin,
-      actor::ActorTaskDelegate::NavigationConfirmationCallback callback) = 0;
-  virtual void RequestToShowAutofillSuggestionsDialog(
-      actor::TaskId task_id,
-      std::vector<autofill::ActorFormFillingRequest> requests,
-      actor::ActorTaskDelegate::AutofillSuggestionSelectedCallback
-          callback) = 0;
-
   virtual void FloatingPanelCanAttachChanged(bool can_attach) = 0;
+
+  // Informs the web client that an actor task list row was clicked.
+  virtual void NotifyActorTaskListRowClicked(int32_t task_id) = 0;
+
+  // Informs the web client that the browser wants to invoke Glic.
+  virtual void Invoke(mojom::InvokeOptionsPtr options,
+                      base::OnceClosure callback) = 0;
+
+  // Simulates a user input submission.
+  virtual void OnUserInputSubmittedForTesting(mojom::WebClientMode mode) = 0;
 };
 
 }  // namespace glic

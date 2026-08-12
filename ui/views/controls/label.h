@@ -241,6 +241,10 @@ class VIEWS_EXPORT Label : public View,
   gfx::ElideBehavior GetElideBehavior() const;
   void SetElideBehavior(gfx::ElideBehavior elide_behavior);
 
+  // Sets the directionality mode of the label.
+  void SetDirectionalityMode(gfx::DirectionalityMode mode);
+  gfx::DirectionalityMode GetDirectionalityMode() const;
+
   // Sets the custom local tooltip text.  Default behavior for a label
   // (single-line) is to show the full text if it is wider than its bounds.
   // Calling this overrides the default behavior and lets you set a custom
@@ -428,7 +432,8 @@ class VIEWS_EXPORT Label : public View,
   int GetDragSelectionDelay() const override;
   void OnBeforePointerAction() override;
   void OnAfterPointerAction(bool text_changed, bool selection_changed) override;
-  bool PasteSelectionClipboard() override;
+  void PasteSelectionClipboard(
+      base::OnceCallback<void(bool)> callback) override;
   void UpdateSelectionClipboard() override;
 
   // ui::SimpleMenuModel::Delegate overrides:

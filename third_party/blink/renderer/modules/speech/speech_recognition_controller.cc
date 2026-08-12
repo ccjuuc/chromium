@@ -75,13 +75,16 @@ SpeechRecognitionController::BuildStartSpeechRecognitionRequestParams(
     bool continuous,
     bool interim_results,
     uint32_t max_alternatives,
+    bool unspoken_punctuation,
     bool on_device,
     bool allow_cloud_fallback,
+    media::mojom::blink::SpeechRecognitionQuality quality,
     mojo::PendingReceiver<media::mojom::blink::SpeechRecognitionAudioForwarder>
         audio_forwarder,
     std::optional<media::AudioParameters> audio_parameters) {
   media::mojom::blink::StartSpeechRecognitionRequestParamsPtr params =
       media::mojom::blink::StartSpeechRecognitionRequestParams::New();
+  params->quality = quality;
   for (unsigned i = 0; i < grammars.length(); i++) {
     SpeechGrammar* grammar = grammars.item(i);
     params->grammars.push_back(
@@ -101,6 +104,7 @@ SpeechRecognitionController::BuildStartSpeechRecognitionRequestParams(
   params->max_hypotheses = max_alternatives;
   params->continuous = continuous;
   params->interim_results = interim_results;
+  params->unspoken_punctuation = unspoken_punctuation;
   params->on_device = on_device;
   params->allow_cloud_fallback = allow_cloud_fallback;
   params->client = std::move(session_client);
@@ -122,15 +126,19 @@ void SpeechRecognitionController::Start(
 
 void SpeechRecognitionController::AvailableOnDevice(
     const Vector<String>& languages,
+    media::mojom::blink::SpeechRecognitionQuality quality,
     base::OnceCallback<void(media::mojom::blink::AvailabilityStatus)>
         callback) {
-  GetOnDeviceSpeechRecognition()->Available(languages, std::move(callback));
+  GetOnDeviceSpeechRecognition()->Available(languages, quality,
+                                            std::move(callback));
 }
 
 void SpeechRecognitionController::Install(
     const Vector<String>& languages,
+    media::mojom::blink::SpeechRecognitionQuality quality,
     base::OnceCallback<void(bool)> callback) {
-  GetOnDeviceSpeechRecognition()->Install(languages, std::move(callback));
+  GetOnDeviceSpeechRecognition()->Install(languages, quality,
+                                          std::move(callback));
 }
 
 void SpeechRecognitionController::Trace(Visitor* visitor) const {

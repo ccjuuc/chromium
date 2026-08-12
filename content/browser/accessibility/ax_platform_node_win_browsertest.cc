@@ -172,9 +172,6 @@ class AXPlatformNodeWinBrowserTest : public AccessibilityContentBrowserTest {
     }
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kEnableAccessibilityAriaVirtualContent};
 };
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
@@ -215,10 +212,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
   ASSERT_EQ(iframe_screen_bounds.y(), bounds.y());
 }
 
-class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
-};
+class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
                        UIAGetPropertyValueFlowsFromNone) {
@@ -700,34 +694,6 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
   EXPECT_UIA_INT_EQ(empty_lang_node_com_win, UIA_CulturePropertyId, en_us_lcid);
 }
 
-IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
-                       UIAGetPropertyValueVirtualContent) {
-  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
-      <!DOCTYPE html>
-      <html>
-        <body>
-          <div role="group" aria-virtualcontent="block-end"
-               aria-label="vc">Hello World</div>
-        </body>
-      </html>
-  )HTML"));
-
-  ui::BrowserAccessibility* root_node = GetRootAndAssertNonNull();
-  ui::BrowserAccessibility* body_node = root_node->PlatformGetFirstChild();
-  ASSERT_NE(nullptr, body_node);
-
-  ui::BrowserAccessibility* node = FindNode(ax::mojom::Role::kGroup, "vc");
-  ASSERT_NE(nullptr, node);
-  ui::BrowserAccessibilityComWin* node_com_win =
-      ToBrowserAccessibilityWin(node)->GetCOM();
-  ASSERT_NE(nullptr, node_com_win);
-
-  EXPECT_UIA_BSTR_EQ(
-      node_com_win,
-      ui::UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
-      L"block-end");
-}
-
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
                        HitTestOnAncestorOfWebRoot) {
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
@@ -893,6 +859,250 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest, IFrameTraversal) {
   EXPECT_EQ(before_iframe_node->node(), tree_position->GetAnchor());
   tree_position = tree_position->CreatePreviousLeafTreePosition();
   EXPECT_TRUE(tree_position->IsNullPosition());
+}
+
+// Test fixture for MathML UIA property tests.
+class AXPlatformNodeWinMathMLBrowserTest : public AXPlatformNodeWinBrowserTest {
+ public:
+  AXPlatformNodeWinMathMLBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(::features::kUiaMathMlSupport);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathMLFeatureFlagEnabled) {
+  // Verify the MathML feature flag is enabled and property ID is registered.
+  EXPECT_TRUE(base::FeatureList::IsEnabled(features::kUiaMathMlSupport));
+  PROPERTYID mathml_property_id =
+      ui::UiaRegistrarWin::GetInstance().GetMathMLPropertyId();
+  EXPECT_NE(0, mathml_property_id);
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathMLPropertyReturnsMathMLForMathElement) {
+  // Load a page with MathML content.
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <mi>A</mi><mo>=</mo><mi>π</mi><msup><mi>r</mi><mn>2</mn></msup>
+          </math>
+        </body>
+      </html>
+  )HTML"));
+
+  // Find the math element.
+  ui::BrowserAccessibility* math_node =
+      FindNode(ax::mojom::Role::kMathMLMath, "");
+  ASSERT_NE(nullptr, math_node);
+
+  ui::BrowserAccessibilityComWin* math_com_win =
+      ToBrowserAccessibilityWin(math_node)->GetCOM();
+  ASSERT_NE(nullptr, math_com_win);
+
+  // Get the MathML property value.
+  PROPERTYID mathml_property_id =
+      ui::UiaRegistrarWin::GetInstance().GetMathMLPropertyId();
+  ASSERT_NE(0, mathml_property_id);
+
+  ScopedVariant mathml_variant;
+  EXPECT_HRESULT_SUCCEEDED(math_com_win->GetPropertyValue(
+      mathml_property_id, mathml_variant.Receive()));
+
+  // Verify we got a BSTR (string) result with MathML content.
+  ASSERT_EQ(VT_BSTR, mathml_variant.type());
+  ASSERT_NE(nullptr, mathml_variant.ptr()->bstrVal);
+
+  std::wstring mathml(mathml_variant.ptr()->bstrVal);
+  // The MathML content should be wrapped with <math> tags.
+  // Verify the structure contains all expected elements.
+  EXPECT_TRUE(mathml.find(L"<math>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mi>A</mi>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mo>=</mo>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<msup>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mi>r</mi>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mn>2</mn>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"</msup>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"</math>") != std::wstring::npos);
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathMLPropertyReturnsEmptyForNonMathElement) {
+  // Load a page with a button (non-math element).
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <button>Click me</button>
+        </body>
+      </html>
+  )HTML"));
+
+  // Find the button element.
+  ui::BrowserAccessibility* button_node =
+      FindNode(ax::mojom::Role::kButton, "Click me");
+  ASSERT_NE(nullptr, button_node);
+
+  ui::BrowserAccessibilityComWin* button_com_win =
+      ToBrowserAccessibilityWin(button_node)->GetCOM();
+  ASSERT_NE(nullptr, button_com_win);
+
+  // Get the MathML property value.
+  PROPERTYID mathml_property_id =
+      ui::UiaRegistrarWin::GetInstance().GetMathMLPropertyId();
+  ASSERT_NE(0, mathml_property_id);
+
+  ScopedVariant mathml_variant;
+  EXPECT_HRESULT_SUCCEEDED(button_com_win->GetPropertyValue(
+      mathml_property_id, mathml_variant.Receive()));
+
+  // We shouldn't get a MathML property for non-root math elements.
+  ASSERT_EQ(VT_EMPTY, mathml_variant.type());
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathElementHasMathematicsAnnotationType) {
+  // Load a page with MathML content.
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+      <body>
+        before
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <mfrac><mi>x</mi><mn>2</mn></mfrac>
+        </math>
+        after
+      </body>
+      </html>
+    )HTML"));
+
+  ui::BrowserAccessibility* root_node =
+      FindNode(ax::mojom::Role::kRootWebArea, "");
+  ASSERT_NE(nullptr, root_node);
+
+  ui::BrowserAccessibility* math_node =
+      FindNode(ax::mojom::Role::kMathMLMath, "");
+  ASSERT_NE(nullptr, math_node);
+
+  ui::BrowserAccessibilityComWin* root_com_win =
+      ToBrowserAccessibilityWin(root_node)->GetCOM();
+  ASSERT_NE(nullptr, root_com_win);
+
+  ui::BrowserAccessibilityComWin* math_com_win =
+      ToBrowserAccessibilityWin(math_node)->GetCOM();
+  ASSERT_NE(nullptr, math_com_win);
+
+  // Get the wrapping text range for the math element from the document's text
+  // provider.
+  ComPtr<ITextProvider> text_provider;
+  ASSERT_HRESULT_SUCCEEDED(
+      root_com_win->GetPatternProvider(UIA_TextPatternId, &text_provider));
+  ASSERT_NE(nullptr, text_provider.Get());
+
+  ComPtr<IRawElementProviderSimple> math_provider;
+  ASSERT_HRESULT_SUCCEEDED(
+      math_com_win->QueryInterface(IID_PPV_ARGS(&math_provider)));
+  ASSERT_NE(nullptr, math_provider.Get());
+
+  ComPtr<ITextRangeProvider> math_range;
+  ASSERT_HRESULT_SUCCEEDED(
+      text_provider->RangeFromChild(math_provider.Get(), &math_range));
+  ASSERT_NE(nullptr, math_range.Get());
+
+  base::win::ScopedVariant annotation_types_variant;
+  ASSERT_HRESULT_SUCCEEDED(math_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, annotation_types_variant.Receive()));
+
+  ASSERT_EQ(VT_ARRAY | VT_I4, annotation_types_variant.type());
+  ASSERT_EQ(1u, SafeArrayGetDim(V_ARRAY(annotation_types_variant.ptr())));
+
+  LONG lower_bound = 0;
+  LONG upper_bound = -1;
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetLBound(
+      V_ARRAY(annotation_types_variant.ptr()), 1, &lower_bound));
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetUBound(
+      V_ARRAY(annotation_types_variant.ptr()), 1, &upper_bound));
+  ASSERT_EQ(1, upper_bound - lower_bound + 1);
+
+  LONG index = lower_bound;
+  int annotation_type = 0;
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetElement(
+      V_ARRAY(annotation_types_variant.ptr()), &index, &annotation_type));
+  EXPECT_EQ(AnnotationType_Mathematics, annotation_type);
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathMLSerializesSuperscript) {
+  // Load a page with MathML content (superscript: x^2).
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+             <msup><mi>x</mi><mn>2</mn></msup>
+          </math>
+        </body>
+      </html>
+  )HTML"));
+
+  // Find the math element.
+  ui::BrowserAccessibility* math_node =
+      FindNode(ax::mojom::Role::kMathMLMath, "");
+  ASSERT_NE(nullptr, math_node);
+
+  ui::BrowserAccessibilityComWin* math_com_win =
+      ToBrowserAccessibilityWin(math_node)->GetCOM();
+  ASSERT_NE(nullptr, math_com_win);
+
+  PROPERTYID mathml_property_id =
+      ui::UiaRegistrarWin::GetInstance().GetMathMLPropertyId();
+  ASSERT_NE(0, mathml_property_id);
+
+  ScopedVariant mathml_variant;
+  EXPECT_HRESULT_SUCCEEDED(math_com_win->GetPropertyValue(
+      mathml_property_id, mathml_variant.Receive()));
+
+  ASSERT_EQ(VT_BSTR, mathml_variant.type());
+  std::wstring mathml(mathml_variant.ptr()->bstrVal);
+  // The MathML content should be wrapped with <math> tags and contain the
+  // complete superscript structure.
+  EXPECT_TRUE(mathml.find(L"<math>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<msup>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mi>x</mi>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"<mn>2</mn>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"</msup>") != std::wstring::npos);
+  EXPECT_TRUE(mathml.find(L"</math>") != std::wstring::npos);
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinMathMLBrowserTest,
+                       UIAMathMLTreeIsFlattenedForChildren) {
+  // Verify that the tree is flattened - children of math elements should be
+  // hidden from UIA navigation.
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <div>Before</div>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <mi>A</mi><mo>=</mo><msup><mi>r</mi><mn>2</mn></msup>
+          </math>
+          <div>After</div>
+        </body>
+      </html>
+  )HTML"));
+
+  // Find the math element.
+  ui::BrowserAccessibility* math_node =
+      FindNode(ax::mojom::Role::kMathMLMath, "");
+  ASSERT_NE(nullptr, math_node);
+
+  ui::BrowserAccessibilityComWin* math_com_win =
+      ToBrowserAccessibilityWin(math_node)->GetCOM();
+  ASSERT_NE(nullptr, math_com_win);
 }
 
 }  // namespace content

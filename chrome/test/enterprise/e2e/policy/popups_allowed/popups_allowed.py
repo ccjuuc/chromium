@@ -18,7 +18,7 @@ FLAGS = flags.FLAGS
 class PopupsAllowedForUrlsTest(ChromeEnterpriseTestCase):
   """Test the PopupsAllowedForUrls
 
-    https://cloud.google.com/docs/chrome-enterprise/policies/?policy=PopupsAllowedForUrls.
+    https://chromeenterprise.google/policies/?policy=PopupsAllowedForUrls.
     """
 
   @before_all
@@ -29,7 +29,7 @@ class PopupsAllowedForUrlsTest(ChromeEnterpriseTestCase):
   @test
   def test_popup_allow_for_url(self):
     # Enable "Allow popups on these sites" with testing URL
-    # TODO(jxiang, crbug/1020231)
+    # TODO(jxiang, crbug.com/40105681)
     test_site = 'www.dummysoftware.com'
     self.SetPolicy(self.win_config['dc'], r'PopupsAllowedForUrls\1', test_site,
                    'String')

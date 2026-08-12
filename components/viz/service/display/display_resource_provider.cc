@@ -122,7 +122,7 @@ bool DisplayResourceProvider::IsBackedBySurfaceView(ResourceId id) const {
 }
 #endif
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_ANDROID)
 bool DisplayResourceProvider::DoesResourceWantPromotionHint(
     ResourceId id) const {
   const ChildResource* resource = TryGetResource(id);
@@ -147,7 +147,7 @@ bool DisplayResourceProvider::IsOverlayCandidate(ResourceId id) const {
   // on all platforms.
   // https://crbug.com/395659818
   if (gfx::HdrMetadataAgtm::IsEnabled()) {
-    if (resource->transferable.hdr_metadata.getSerializedAgtm()) {
+    if (resource->transferable.hdr_metadata.HasAgtm()) {
       return false;
     }
   }
@@ -156,14 +156,17 @@ bool DisplayResourceProvider::IsOverlayCandidate(ResourceId id) const {
 
 bool DisplayResourceProvider::IsLowLatencyRendering(ResourceId id) const {
   const ChildResource* resource = TryGetResource(id);
-  return resource && resource->transferable.is_low_latency_rendering;
+  return resource && !resource->transferable.is_empty() &&
+         resource->transferable.shared_image()->usage().Has(
+             gpu::SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE);
 }
 
 SurfaceId DisplayResourceProvider::GetSurfaceId(ResourceId id) const {
   const ChildResource* resource = GetResource(id);
-  return children_.contains(resource->child_id)
-             ? children_.at(resource->child_id).surface_id
-             : SurfaceId();
+  if (auto it = children_.find(resource->child_id); it != children_.end()) {
+    return it->second.surface_id;
+  }
+  return SurfaceId();
 }
 
 int DisplayResourceProvider::GetChildId(ResourceId id) const {
@@ -262,8 +265,13 @@ void DisplayResourceProvider::ReceiveFromChild(
     }
 
     ResourceId local_id = resource_id_generator_.GenerateNextId();
-    resources_.emplace(local_id,
-                       ChildResource(child_id, transferable_resource));
+    bool inserted =
+        resources_
+            .emplace(local_id, ChildResource(child_id, transferable_resource))
+            .second;
+    // Verify there wasn't a ResourceId collision. A collision is only possible
+    // after `resource_id_generator_` hit the max ID and wrapped around.
+    CHECK(inserted);
     child_info.child_to_parent_map[transferable_resource.id] = local_id;
   }
 }
@@ -537,7 +545,9 @@ void DisplayResourceProvider::ScopedReadLockSharedImage::Reset() {
     return;
   DCHECK(resource_->lock_for_overlay_count);
   resource_->lock_for_overlay_count--;
-  resource_provider_->TryReleaseResource(resource_id_, resource_);
+  ChildResource* resource = resource_;
+  resource_ = nullptr;
+  resource_provider_->TryReleaseResource(resource_id_, resource);
   resource_provider_ = nullptr;
   resource_id_ = kInvalidResourceId;
 }

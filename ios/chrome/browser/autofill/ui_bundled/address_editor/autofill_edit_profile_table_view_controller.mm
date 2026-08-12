@@ -9,7 +9,6 @@
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/ui_bundled/address_editor/autofill_constants.h"
 #import "ios/chrome/browser/autofill/ui_bundled/bottom_sheet/bottom_sheet_constants.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -17,16 +16,6 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
-
-// Custom radius for the half sheet presentation.
-CGFloat const kHalfSheetCornerRadius = 20;
-
-// Custom detent identifier for when the bottom sheet is minimized.
-NSString* const kCustomMinimizedDetentIdentifier = @"customMinimizedDetent";
-
-// Custom detent identifier for when the bottom sheet is expanded.
-NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
-
 // Deafult height of the header/footer, used to speed the constraints.
 const CGFloat kDefaultHeaderFooterHeight = 10;
 }  // namespace
@@ -59,8 +48,10 @@ const CGFloat kDefaultHeaderFooterHeight = 10;
 - (void)viewDidLoad {
   [super viewDidLoad];
 
-  [self setUpBottomSheetPresentationController];
-  [self setUpBottomSheetDetents];
+  UISheetPresentationController* presentationController =
+      self.sheetPresentationController;
+  presentationController.prefersEdgeAttachedInCompactHeight = YES;
+  presentationController.widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
 
   [self.tableView
       setSeparatorInset:UIEdgeInsetsMake(0, kTableViewHorizontalSpacing, 0, 0)];
@@ -107,33 +98,6 @@ const CGFloat kDefaultHeaderFooterHeight = 10;
   [self.handler
       loadMessageAndButtonForModalIfSaveOrUpdate:
           (_editSheetMode == AutofillSaveProfilePromptMode::kUpdateProfile)];
-}
-
-- (void)expandBottomSheet {
-  UISheetPresentationController* presentationController =
-      self.sheetPresentationController;
-  // Expand to large detent.
-  [presentationController animateChanges:^{
-    presentationController.selectedDetentIdentifier =
-        UISheetPresentationControllerDetentIdentifierLarge;
-  }];
-}
-
-- (void)setUpBottomSheetPresentationController {
-  UISheetPresentationController* presentationController =
-      self.sheetPresentationController;
-  presentationController.prefersEdgeAttachedInCompactHeight = YES;
-  presentationController.widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
-  presentationController.preferredCornerRadius = kHalfSheetCornerRadius;
-}
-
-- (void)setUpBottomSheetDetents {
-  UISheetPresentationController* presentationController =
-      self.sheetPresentationController;
-  presentationController.detents =
-      @[ [UISheetPresentationControllerDetent largeDetent] ];
-  presentationController.selectedDetentIdentifier =
-      UISheetPresentationControllerDetentIdentifierLarge;
 }
 
 #pragma mark - UITableViewDataSource

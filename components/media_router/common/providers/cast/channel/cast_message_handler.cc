@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/observer_list.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
@@ -66,7 +66,7 @@ InternalMessage::InternalMessage(CastMessageType type,
                                  std::string_view source_id,
                                  std::string_view destination_id,
                                  std::string_view message_namespace,
-                                 base::Value::Dict message)
+                                 base::DictValue message)
     : type(type),
       source_id(source_id),
       destination_id(destination_id),
@@ -79,12 +79,11 @@ CastMessageHandler::Observer::~Observer() {
 }
 
 CastMessageHandler::CastMessageHandler(CastSocketService* socket_service,
-                                       ParseJsonCallback parse_json,
                                        std::string_view user_agent,
                                        std::string_view browser_version,
                                        std::string_view locale)
-    : source_id_(base::StringPrintf("sender-%d", base::RandInt(0, 1000000))),
-      parse_json_(std::move(parse_json)),
+    : source_id_(
+          base::StringPrintf("sender-%d", base::RandIntInclusive(0, 1000000))),
       user_agent_(user_agent),
       browser_version_(browser_version),
       locale_(locale),
@@ -278,8 +277,10 @@ Result CastMessageHandler::SendCastMessage(int channel_id,
 
 Result CastMessageHandler::SendAppMessage(int channel_id,
                                           const CastMessage& message) {
-  DCHECK(!IsCastReservedNamespace(message.namespace_()))
-      << ": unexpected app message namespace: " << message.namespace_();
+  if (IsCastReservedNamespace(message.namespace_()) &&
+      message.namespace_() != cast_channel::kMediaNamespace) {
+    return Result::kFailed;
+  }
   if (message.ByteSizeLong() > kMaxCastMessagePayload) {
     return Result::kFailed;
   }
@@ -288,7 +289,7 @@ Result CastMessageHandler::SendAppMessage(int channel_id,
 
 std::optional<int> CastMessageHandler::SendMediaRequest(
     int channel_id,
-    const base::Value::Dict& body,
+    const base::DictValue& body,
     const std::string& source_id,
     const std::string& destination_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -306,7 +307,7 @@ std::optional<int> CastMessageHandler::SendMediaRequest(
 }
 
 void CastMessageHandler::SendSetVolumeRequest(int channel_id,
-                                              const base::Value::Dict& body,
+                                              const base::DictValue& body,
                                               const std::string& source_id,
                                               ResultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -358,12 +359,13 @@ void CastMessageHandler::OnMessage(const CastSocket& socket,
   if (IsCastReservedNamespace(message.namespace_())) {
     if (message.payload_type() ==
         openscreen::cast::proto::CastMessage_PayloadType_STRING) {
-      parse_json_.Run(
-          message.payload_utf8(),
-          base::BindOnce(&CastMessageHandler::HandleCastInternalMessage,
-                         weak_ptr_factory_.GetWeakPtr(), socket.id(),
-                         message.source_id(), message.destination_id(),
-                         message.namespace_()));
+      HandleCastInternalMessage(
+          socket.id(), message.source_id(), message.destination_id(),
+          message.namespace_(),
+          base::JSONReader::ReadAndReturnValueWithError(message.payload_utf8(),
+                                                        base::JSON_PARSE_RFC)
+              .transform_error(
+                  [](auto&& error) { return std::move(error.message); }));
     } else {
       DLOG(ERROR) << "Dropping internal message with binary payload: "
                   << message.namespace_();
@@ -386,11 +388,11 @@ void CastMessageHandler::HandleCastInternalMessage(
     const std::string& source_id,
     const std::string& destination_id,
     const std::string& namespace_,
-    data_decoder::DataDecoder::ValueOrError parse_result) {
+    base::expected<base::Value, std::string> parse_result) {
   ASSIGN_OR_RETURN(base::Value value, std::move(parse_result),
                    ReportParseError);
 
-  base::Value::Dict* payload = value.GetIfDict();
+  base::DictValue* payload = value.GetIfDict();
   if (!payload) {
     ReportParseError("Parsed message not a dictionary");
     return;
@@ -517,8 +519,8 @@ bool CastMessageHandler::PendingRequests::AddAppAvailabilityRequest(
           base::Unretained(this), request_id));
 
   // Look for a request with the given app ID.
-  bool found = base::Contains(pending_app_availability_requests_, app_id,
-                              &GetAppAvailabilityRequest::app_id);
+  bool found = std::ranges::contains(pending_app_availability_requests_, app_id,
+                                     &GetAppAvailabilityRequest::app_id);
   pending_app_availability_requests_.emplace_back(std::move(request));
   return !found;
 }
@@ -572,7 +574,7 @@ void CastMessageHandler::PendingRequests::AddVolumeRequest(
 
 void CastMessageHandler::PendingRequests::HandlePendingRequest(
     int request_id,
-    const base::Value::Dict& response) {
+    const base::DictValue& response) {
   // Look up an app availability request by its |request_id|.
   auto app_availability_it =
       std::ranges::find(pending_app_availability_requests_, request_id,

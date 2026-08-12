@@ -60,7 +60,6 @@
 #include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/runtime_call_stats.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
 #include "third_party/blink/renderer/platform/scheduler/public/event_loop.h"
@@ -582,7 +581,7 @@ String ReplaceUnmatchedSurrogates(String string) {
   size_t i = 0;
 
   // 4. Initialize U to be an empty sequence of Unicode characters.
-  StringBuffer<UChar> result(n);
+  StringBuffer<UChar> result(static_cast<wtf_size_t>(n));
   auto u = result.Span();
 
   // 5. While i < n:

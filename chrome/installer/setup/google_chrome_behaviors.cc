@@ -12,7 +12,6 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/logging.h"
-#include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/strcat_win.h"
 #include "base/strings/string_number_conversions.h"
@@ -21,13 +20,11 @@
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
-#include "base/win/wmi.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/install_static/install_util.h"
 #include "chrome/installer/setup/brand_behaviors.h"
 #include "chrome/installer/util/google_update_constants.h"
 #include "chrome/installer/util/google_update_settings.h"
-#include "chrome/installer/util/install_util.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "third_party/crashpad/crashpad/client/crash_report_database.h"
 #include "third_party/crashpad/crashpad/client/settings.h"
@@ -53,27 +50,9 @@ bool NavigateToUrlWithHttps(const std::wstring& url) {
   return false;
 }
 
-void NavigateToUrlWithIExplore(const std::wstring& url) {
-  base::FilePath iexplore;
-  if (!base::PathService::Get(base::DIR_PROGRAM_FILES, &iexplore))
-    return;
-
-  iexplore = iexplore.AppendASCII("Internet Explorer");
-  iexplore = iexplore.AppendASCII("iexplore.exe");
-
-  std::wstring command = L"\"" + iexplore.value() + L"\" " + url;
-
-  int pid = 0;
-  // The reason we use WMI to launch the process is because the uninstall
-  // process runs inside a Job object controlled by the shell. As long as there
-  // are processes running, the shell will not close the uninstall applet. WMI
-  // allows us to escape from the Job object so the applet will close.
-  base::win::WmiLaunchProcess(command, &pid);
-}
-
 // Returns true if the prefs dictionary located at |local_data_path| contains
 // an enabled metrics pref.
-// Note: Due to crbug.com/1052816, it is possible a subset of users may return
+// Note: Due to crbug.com/40674549, it is possible a subset of users may return
 // false here even though they send UMA, as UMA can also check the registry.
 bool IsMetricsEnabled(const base::FilePath& file_path) {
   JSONFileValueDeserializer json_deserializer(file_path);
@@ -156,8 +135,8 @@ std::wstring GetDistributionData() {
   return result;
 }
 
-// Launches Edge or IE to show the uninstall survey. The following URL query
-// params are included unconditionally in the survey URL:
+// Launches the uninstall survey with the user's default HTTPS handler. The
+// following URL query params are included unconditionally in the survey URL:
 // - crversion: the version of Chrome being uninstalled
 // - os: Major.Minor.Build of the OS version
 // If the user is sending crash reports and usage statistics to Google, the
@@ -195,10 +174,7 @@ void DoPostUninstallOperations(const base::Version& version,
     url += distribution_data;
   }
 
-  if (os_info->version() < base::win::Version::WIN10 ||
-      !NavigateToUrlWithHttps(url)) {
-    NavigateToUrlWithIExplore(url);
-  }
+  NavigateToUrlWithHttps(url);
 }
 
 }  // namespace installer

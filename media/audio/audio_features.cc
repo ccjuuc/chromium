@@ -11,12 +11,6 @@
 
 namespace features {
 
-#if BUILDFLAG(IS_WIN)
-// Enables application audio capture for getDisplayMedia (gDM) window capture in
-// Windows.
-BASE_FEATURE(kApplicationAudioCaptureWin, base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
 #if BUILDFLAG(IS_ANDROID)
 // Enables loading and using AAudio instead of OpenSLES on compatible devices,
 // for audio output streams. This feature is disabled on ATV HDMI dongle devices
@@ -35,24 +29,26 @@ BASE_FEATURE(kUseAAudioInput, base::FEATURE_ENABLED_BY_DEFAULT);
 //
 // Requires `UseAAudioDriver` and `UseAAudioInput`, otherwise it will have no
 // effect.
-BASE_FEATURE(kAAudioPerStreamDeviceSelection,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAAudioPerStreamDeviceSelection, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Use buffer size from AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER for
 // optimal output frame size.
 BASE_FEATURE(kAlwaysUseAudioManagerOutputFramesPerBuffer,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables the AudioDeviceListener, which listens for changes to the list of
-// audio devices exposed by the OS.
-//
-// TODO(crbug.com/468998638): Remove after successful launch.
-BASE_FEATURE(kAndroidAudioDeviceListener, base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Use stereo channel layout for input stream parameters.
 // TODO(crbug.com/440210010): Remove when the experiment is done.
 BASE_FEATURE(kAudioStereoInputStreamParameters,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables support for variable sized callbacks in AAudio.
+BASE_FEATURE(kAAudioVariableSizedCallbacks, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+#if BUILDFLAG(IS_WIN)
+// Enable retry loop for WASAPI input stream initialization when the device
+// is in use.
+BASE_FEATURE(kWasapiInputDeviceInUseRetry, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
 // This feature flag controls whether the WebAudio destination resampler is
@@ -84,26 +80,12 @@ BASE_FEATURE(kMacAVFoundationPlayback, base::FEATURE_DISABLED_BY_DEFAULT);
 // will report an error if the sample rate is changed.
 BASE_FEATURE(kMacCatapRestartOnDeviceChange, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enables application audio capture for getDisplayMedia (gDM) window capture in
-// macOS.
-BASE_FEATURE(kApplicationAudioCaptureMac, base::FEATURE_DISABLED_BY_DEFAULT);
+// If this feature is enabled, the audio process is restarted if the
+// AudioDeviceCreateIOProcID call times out. This is used to recover from
+// permission dialogs that are not responded to.
+BASE_FEATURE(kMacCatapRestartAudioProcessOnTimeout,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 #endif
 
 }  // namespace features
-
-namespace media {
-
-bool IsApplicationAudioCaptureSupported() {
-#if BUILDFLAG(IS_WIN)
-  return base::FeatureList::IsEnabled(features::kApplicationAudioCaptureWin);
-#elif BUILDFLAG(IS_MAC)
-  return base::FeatureList::IsEnabled(features::kApplicationAudioCaptureMac) &&
-         media::IsMacCatapSystemLoopbackCaptureSupported() &&
-         base::FeatureList::IsEnabled(
-             media::kMacCatapLoopbackAudioForScreenShare);
-#else
-  return false;
-#endif  // BUILDFLAG(IS_WIN)
-}
-
-}  // namespace media

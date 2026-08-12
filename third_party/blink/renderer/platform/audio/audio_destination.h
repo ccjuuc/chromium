@@ -29,9 +29,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_AUDIO_DESTINATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_AUDIO_DESTINATION_H_
 
+#include <atomic>
 #include <memory>
 #include <optional>
-#include <vector>
 
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
@@ -52,11 +52,22 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 
+namespace base {
+template <typename T>
+class DeleteHelper;
+}
+
 namespace media {
 struct AudioGlitchInfo;
 }
 
 namespace blink {
+
+class AudioDestination;
+
+struct PLATFORM_EXPORT AudioDestinationTraits {
+  static void Destruct(const AudioDestination* destination);
+};
 
 class PushPullFIFO;
 class WebAudioLatencyHint;
@@ -70,10 +81,8 @@ class WebAudioSinkDescriptor;
 // For a detailed architectural overview of this class, see the documentation at
 // `docs/audio_destination_lifetime_threading.md`.
 class PLATFORM_EXPORT AudioDestination final
-    : public ThreadSafeRefCounted<AudioDestination>,
+    : public ThreadSafeRefCounted<AudioDestination, AudioDestinationTraits>,
       public media::AudioRendererSink::RenderCallback {
-  USING_FAST_MALLOC(AudioDestination);
-
  public:
   // Represents the current state of the underlying `WebAudioDevice` object
   // (RendererWebAudioDeviceImpl).
@@ -93,7 +102,6 @@ class PLATFORM_EXPORT AudioDestination final
 
   AudioDestination(const AudioDestination&) = delete;
   AudioDestination& operator=(const AudioDestination&) = delete;
-  ~AudioDestination() override;
 
   // The actual render function isochronously invoked by the media
   // renderer. This is never called after Stop() is called.
@@ -157,7 +165,7 @@ class PLATFORM_EXPORT AudioDestination final
       const scoped_refptr<AudioDestination> previous_platform_destination);
 
   const PushPullFIFOStateForTest GetPushPullFIFOStateForTest() {
-    return fifo_->GetStateForTest();
+    return fifo_->StateForTest();
   }
 
   MediaMultiChannelResampler* GetResamplerForTesting() {
@@ -165,12 +173,21 @@ class PLATFORM_EXPORT AudioDestination final
   }
 
  private:
+  friend struct AudioDestinationTraits;
+  friend class base::DeleteHelper<AudioDestination>;
+
+  ~AudioDestination() override;
+
   explicit AudioDestination(AudioIOCallback&,
                             const WebAudioSinkDescriptor& sink_descriptor,
                             unsigned number_of_output_channels,
                             const WebAudioLatencyHint&,
                             std::optional<float> context_sample_rate,
                             unsigned render_quantum_frames);
+
+  bool IsBusAllocationFailed() const {
+    return !fifo_ || !render_bus_ || !output_bus_;
+  }
 
   void SetDeviceState(DeviceState);
 
@@ -182,7 +199,9 @@ class PLATFORM_EXPORT AudioDestination final
                          base::TimeDelta delay,
                          base::TimeTicks delay_timestamp,
                          const media::AudioGlitchInfo& glitch_info,
-                         base::TimeTicks request_timestamp);
+                         base::TimeTicks request_timestamp,
+                         uint32_t session_id,
+                         bool has_unexpected_fifo_underrun_occurred);
 
   // Returns true if it was able to provide audio, false otherwise (this would
   // happen if and only if rendering is stopping or stopped.
@@ -192,6 +211,8 @@ class PLATFORM_EXPORT AudioDestination final
                      base::TimeTicks delay_timestamp,
                      const media::AudioGlitchInfo& glitch_info,
                      base::TimeTicks request_timestamp,
+                     uint32_t session_id,
+                     bool has_unexpected_fifo_underrun_occurred = false,
                      bool has_fifo_underrun_occurred = false);
 
   // Provide input to the resampler (if used).
@@ -202,8 +223,7 @@ class PLATFORM_EXPORT AudioDestination final
   void PullFromCallback(AudioBus* destination_bus, base::TimeDelta delay);
 
   // https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/media/capture/README.md#logs
-  void SendLogMessage(const char* const function_name,
-                      const String& message) const;
+  void SendLogMessage(const String& function_name, const String& message) const;
 
   // Accessed by the main thread.
   std::unique_ptr<WebAudioDevice> web_audio_device_;
@@ -266,12 +286,29 @@ class PLATFORM_EXPORT AudioDestination final
   // Collect the device latency metric only from the initial callback.
   bool is_latency_metric_collected_ = false;
 
-  // This WaitableEvent is only for use with the kWebAudioBypassOutputBuffering
-  // flag enabled. No other WaitableEvents may be used in this class.
+  // These WaitableEvents are only for use with the kWebAudioBypassOutputBuffering
+  // flag enabled.
   base::WaitableEvent output_buffer_bypass_wait_event_;
 
+  // Signaled by Stop() and Pause() to unblock any Render() callback already
+  // waiting on output_buffer_bypass_wait_event_ via WaitMany(). Uses manual
+  // reset so the stop/pause wakeup cannot be lost to a concurrent Reset() of
+  // output_buffer_bypass_wait_event_. Reset during Start(), Resume(), and
+  // Stop() after the device has been torn down.
+  base::WaitableEvent output_buffer_bypass_stop_event_{
+      base::WaitableEvent::ResetPolicy::MANUAL,
+      base::WaitableEvent::InitialState::NOT_SIGNALED};
+
   const bool is_output_buffer_bypassed_ = false;
-  bool state_change_underrun_in_bypass_mode_ = false;
+  std::atomic<bool> is_state_change_underrun_in_bypass_mode_ = false;
+  bool has_unexpected_fifo_underrun_occurred_ = false;
+
+  // Incremented on every Start() to identify tasks from the current session.
+  // uint32 is safe because overflow requires over 100,000 years of typical
+  // usage.
+  std::atomic<uint32_t> session_id_ = 0;
+
+  scoped_refptr<base::SingleThreadTaskRunner> main_thread_task_runner_;
 };
 
 }  // namespace blink

@@ -22,6 +22,7 @@ include_rules = [
   "+chrome/browser/ash/login",
   "+chrome/browser/ash/policy/core",
   "+chrome/browser/ash/policy/scheduled_task_handler",
+  "+chrome/browser/ash/policy/server_backed_state",
   "+chrome/browser/ash/policy/test_support",
   "+chrome/browser/ash/policy/uploading",
   "+chrome/browser/ash/profiles",
@@ -37,7 +38,5 @@ include_rules = [
   "+chrome/browser/profiles",
   "+chrome/browser/support_tool",
   "+chrome/browser/ui/ash/login",
-  "+chrome/browser/ui/webui/support_tool",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]

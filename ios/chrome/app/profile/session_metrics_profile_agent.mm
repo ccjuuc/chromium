@@ -6,16 +6,24 @@
 
 #import "base/check.h"
 #import "base/metrics/histogram_functions.h"
-#import "base/metrics/puma_histogram_functions.h"
 #import "base/time/time.h"
+#import "components/activity_reporter/activity_reporter.h"
+#import "components/feature_engagement/public/event_constants.h"
+#import "components/feature_engagement/public/tracker.h"
+#import "components/metrics/private_metrics/puma_histogram_functions.h"
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/metrics/model/ios_profile_session_durations_service.h"
 #import "ios/chrome/browser/metrics/model/ios_profile_session_durations_service_factory.h"
 #import "ios/chrome/browser/metrics/model/tab_usage_recorder_service.h"
 #import "ios/chrome/browser/metrics/model/tab_usage_recorder_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 
 @implementation SessionMetricsProfileAgent {
   // Timestamp recording the start of the active session. Null if the session
@@ -98,6 +106,8 @@
   _sessionStartTimestamp = base::TimeTicks::Now();
   IOSProfileSessionDurationsServiceFactory::GetForProfile(profile)
       ->OnSessionStarted(_sessionStartTimestamp);
+
+  [self maybeRecordActiveDay];
 }
 
 - (void)handleSessionEnd {
@@ -116,8 +126,8 @@
 
   // Records true each time Session.TotalDuration is supposed to be recorded
   // in a PUMA histogram. Allowing for the count to be collected.
-  base::PumaHistogramBoolean(
-      base::PumaType::kRc,
+  metrics::private_metrics::PumaHistogramBoolean(
+      metrics::private_metrics::PumaType::kRc,
       "PUMA.RegionalCapabilities.Session.TotalDuration.Recorded", true);
 
   _sessionStartTimestamp = base::TimeTicks();
@@ -128,6 +138,82 @@
   if (auto* service = TabUsageRecorderServiceFactory::GetForProfile(profile)) {
     service->RecordSessionMetrics();
   }
+
+  [self maybeRecordActiveDay];
+
+  GetApplicationContext()->GetActivityReporter()->ReportActive();
+}
+
+- (void)maybeRecordActiveDay {
+  DCHECK(self.profileState.profile);
+
+  if (!IsRecordRecentActiveDaysEnabled()) {
+    return;
+  }
+
+  feature_engagement::Tracker* tracker =
+      feature_engagement::TrackerFactory::GetForProfile(
+          self.profileState.profile);
+  if (!tracker) {
+    return;
+  }
+
+  __weak SessionMetricsProfileAgent* weakSelf = self;
+  tracker->AddOnInitializedCallback(base::BindOnce(^(BOOL success) {
+    [weakSelf onFeatureEngagementTrackerInitialized:success];
+  }));
+}
+
+- (void)onFeatureEngagementTrackerInitialized:(BOOL)success {
+  if (!IsRecordRecentActiveDaysEnabled() || !self.profileState.profile ||
+      !success) {
+    return;
+  }
+
+  PrefService* localState = GetApplicationContext()->GetLocalState();
+  if (!localState) {
+    return;
+  }
+  base::Time nowMidnight = base::Time::Now().LocalMidnight();
+  base::Time lastActiveDay = localState->GetTime(prefs::kLastRecordedActiveDay);
+  // The active day event and metrics must only be emitted at most once per day.
+  // When checking the difference between now and the last emission time, use 23
+  // hours as the threshold instead of 24 to account for daylight saving change
+  // days where local midnight can be 01:00 instead of 00:00.
+  if (nowMidnight - lastActiveDay < base::Hours(23)) {
+    return;
+  }
+
+  feature_engagement::Tracker* tracker =
+      feature_engagement::TrackerFactory::GetForProfile(
+          self.profileState.profile);
+  if (!tracker) {
+    return;
+  }
+
+  localState->SetTime(prefs::kLastRecordedActiveDay, nowMidnight);
+
+  int activeDays28Count = -1;
+  for (const auto& [config, count] : tracker->ListEvents(
+           feature_engagement::kIPHiOSActiveDaysTrackingFeature)) {
+    if (config.name == feature_engagement::events::kChromeActiveSessionDay) {
+      if (config.window == 8) {
+        base::UmaHistogramCounts100("IOS.PreviousActiveDays7", count);
+      } else if (config.window == 15) {
+        base::UmaHistogramCounts100("IOS.PreviousActiveDays14", count);
+      } else if (config.window == 29) {
+        activeDays28Count = count;
+        base::UmaHistogramCounts100("IOS.PreviousActiveDays28", count);
+      }
+    }
+  }
+
+  if (activeDays28Count >= 0) {
+    localState->SetInteger(prefs::kLastRecordedActiveDaysInPast28Days,
+                           activeDays28Count);
+  }
+
+  tracker->NotifyEvent(feature_engagement::events::kChromeActiveSessionDay);
 }
 
 @end

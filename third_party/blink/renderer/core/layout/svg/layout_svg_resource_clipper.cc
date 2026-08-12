@@ -175,9 +175,14 @@ std::optional<Path> LayoutSVGResourceClipper::AsPath() {
   return std::optional<Path>(clip_content_path_);
 }
 
-PaintRecord LayoutSVGResourceClipper::CreatePaintRecord() {
+PaintRecord LayoutSVGResourceClipper::CreatePaintRecord(
+    PaintFlags paint_flags) {
   NOT_DESTROYED();
   DCHECK(GetFrame());
+  if (cached_paint_record_ && cached_paint_flags_ != paint_flags) {
+    cached_paint_record_ = std::nullopt;
+  }
+
   if (cached_paint_record_)
     return *cached_paint_record_;
 
@@ -188,10 +193,10 @@ PaintRecord LayoutSVGResourceClipper::CreatePaintRecord() {
   // - masker/filter not applied when laying out the children
   // - fill is set to the initial fill paint server (solid, black)
   // - stroke is set to the initial stroke paint server (none)
-  PaintInfo info(
-      builder.Context(), CullRect::Infinite(), PaintPhase::kForeground,
-      ChildPaintBlockedByDisplayLock(),
-      PaintFlag::kPaintingClipPathAsMask | PaintFlag::kPaintingResourceSubtree);
+  PaintInfo info(builder.Context(), CullRect::Infinite(),
+                 PaintPhase::kForeground, ChildPaintBlockedByDisplayLock(),
+                 PaintFlag::kPaintingClipPathAsMask |
+                     PaintFlag::kPaintingResourceSubtree | paint_flags);
 
   for (const SVGElement& child_element :
        Traversal<SVGElement>::ChildrenOf(*GetElement())) {
@@ -204,6 +209,7 @@ PaintRecord LayoutSVGResourceClipper::CreatePaintRecord() {
   }
 
   cached_paint_record_ = builder.EndRecording();
+  cached_paint_flags_ = paint_flags;
   return *cached_paint_record_;
 }
 
@@ -303,12 +309,14 @@ bool LayoutSVGResourceClipper::FindCycleFromSelf() const {
 void LayoutSVGResourceClipper::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGResourceContainer::StyleDidChange(diff, old_style,
+  LayoutSVGResourceContainer::StyleDidChange(diff, old_style, new_style,
                                              style_change_context);
-  if (diff.TransformChanged())
+  if (diff.transform_changed) {
     MarkAllClientsForInvalidation(kClipCacheInvalidation | kPaintInvalidation);
+  }
 }
 
 }  // namespace blink

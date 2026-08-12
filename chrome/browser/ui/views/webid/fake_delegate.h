@@ -29,6 +29,7 @@ class FakeDelegate : public AccountSelectionView::Delegate {
                     const GURL& idp_login_url) override {}
   void OnMoreDetails() override {}
   void OnAccountsDisplayed() override {}
+  void OnNativeAppResult(const std::string& token) override {}
 
   using AccountSelectedCallback = base::OnceClosure;
   void SetAccountSelectedCallback(AccountSelectedCallback cb) {
@@ -38,6 +39,8 @@ class FakeDelegate : public AccountSelectionView::Delegate {
   // AccountSelectionView::Delegate
   gfx::NativeView GetNativeView() override;
   content::WebContents* GetWebContents() override;
+  content::IdentityRequestDialogController::PassiveDialogVolume
+  GetPassiveDialogVolume() const override;
 
  private:
   raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> web_contents_;

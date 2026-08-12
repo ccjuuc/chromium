@@ -10,9 +10,7 @@ import static org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.Accessor
 import androidx.annotation.CallSuper;
 
 import org.chromium.base.TraceEvent;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryAction;
-import org.chromium.chrome.browser.keyboard_accessory.AccessoryTabType;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryToggleType;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.AccessorySheetData;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.FooterCommand;
@@ -20,7 +18,6 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.LoyaltyCardInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.OptionToggle;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PasskeySection;
-import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PlusAddressInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.PromoCodeInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
@@ -43,23 +40,6 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
     private final PropertyModel mModel;
     private final @Type int mUserInfoType;
     private final @AccessoryAction int mManageActionToRecord;
-    private final ToggleChangeDelegate mToggleChangeDelegate;
-
-    /**
-     * Can be used to handle changes coming from the {@link OptionToggle}.
-     *
-     * <p>TODO(crbug.com/40702406): Remove the interface and the delegate field from this class and
-     * handle the toggle changes via the PasswordAccessorySheetMediator.
-     */
-    public interface ToggleChangeDelegate {
-        /**
-         * Is triggered when the toggle state changes, either on tap or when it is
-         * first initialized.
-         *
-         * @param enabled The new state of the toggle.
-         */
-        void onToggleChanged(boolean enabled);
-    }
 
     @Override
     public void onItemAvailable(int typeId, AccessorySheetData accessorySheetData) {
@@ -71,12 +51,10 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
     AccessorySheetTabMediator(
             PropertyModel model,
             @Type int userInfoType,
-            @AccessoryAction int manageActionToRecord,
-            @Nullable ToggleChangeDelegate toggleChangeDelegate) {
+            @AccessoryAction int manageActionToRecord) {
         mModel = model;
         mUserInfoType = userInfoType;
         mManageActionToRecord = manageActionToRecord;
-        mToggleChangeDelegate = toggleChangeDelegate;
     }
 
     @CallSuper
@@ -101,6 +79,13 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
         mModel.set(IS_DEFAULT_A11Y_FOCUS_REQUESTED, true);
     }
 
+    /**
+     * Notification that the toggle state changed.
+     *
+     * @param enabled The new state of the toggle.
+     */
+    protected void onToggleChanged(boolean enabled) {}
+
     private AccessorySheetDataPiece[] splitIntoDataPieces(AccessorySheetData accessorySheetData) {
         if (accessorySheetData == null) return new AccessorySheetDataPiece[0];
 
@@ -118,19 +103,11 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
         if (!accessorySheetData.getWarning().isEmpty()) {
             items.add(new AccessorySheetDataPiece(accessorySheetData.getWarning(), Type.WARNING));
         }
-        if (accessorySheetData.getSheetType() == AccessoryTabType.ADDRESSES) {
-            // Plus address section is displayed at the top for addresses tab.
-            addPlusAddressSection(accessorySheetData, items);
-        }
         for (PasskeySection passkey : accessorySheetData.getPasskeySectionList()) {
             items.add(new AccessorySheetDataPiece(passkey, Type.PASSKEY_SECTION));
         }
         for (UserInfo userInfo : accessorySheetData.getUserInfoList()) {
             items.add(new AccessorySheetDataPiece(userInfo, mUserInfoType));
-        }
-        if (accessorySheetData.getSheetType() == AccessoryTabType.PASSWORDS) {
-            // Plus address section is displayed at the bottom for passwords tab.
-            addPlusAddressSection(accessorySheetData, items);
         }
         for (IbanInfo ibanInfo : accessorySheetData.getIbanInfoList()) {
             items.add(new AccessorySheetDataPiece(ibanInfo, Type.IBAN_INFO));
@@ -148,21 +125,9 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
         return items.toArray(new AccessorySheetDataPiece[0]);
     }
 
-    private void addPlusAddressSection(
-            AccessorySheetData data, List<AccessorySheetDataPiece> items) {
-        if (!data.getPlusAddressSectionTitle().isEmpty()) {
-            items.add(new AccessorySheetDataPiece(data.getPlusAddressSectionTitle(), Type.TITLE));
-        }
-        for (PlusAddressInfo plusAddress : data.getPlusAddressInfoList()) {
-            items.add(new AccessorySheetDataPiece(plusAddress, Type.PLUS_ADDRESS_SECTION));
-        }
-    }
-
     private AccessorySheetDataPiece createDataPieceForToggle(OptionToggle toggle) {
-        assert mToggleChangeDelegate != null
-                : "Toggles added in an accessory sheet should have a" + "toggle change delegate.";
         // Make sure the delegate knows the initial state of the toggle.
-        mToggleChangeDelegate.onToggleChanged(toggle.isEnabled());
+        onToggleChanged(toggle.isEnabled());
         OptionToggle toggleWithAddedCallback =
                 new OptionToggle(
                         toggle.getDisplayText(),
@@ -172,7 +137,7 @@ class AccessorySheetTabMediator implements Provider.Observer<AccessorySheetData>
                             ManualFillingMetricsRecorder.recordToggleClicked(
                                     getRecordingTypeForToggle(toggle));
                             updateOptionToggleEnabled();
-                            mToggleChangeDelegate.onToggleChanged(enabled);
+                            onToggleChanged(enabled);
                             toggle.getCallback().onResult(enabled);
                         });
         return new AccessorySheetDataPiece(toggleWithAddedCallback, Type.OPTION_TOGGLE);

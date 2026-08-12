@@ -24,7 +24,7 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/** Tests for {@link SimpleVerticalLayoutView}. */
+/** Tests for {@link SpacingRecyclerViewItemDecoration}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SpacingRecyclerViewItemDecorationUnitTest {
     private static final int LEAD_IN_SPACE = 10;
@@ -34,10 +34,10 @@ public class SpacingRecyclerViewItemDecorationUnitTest {
     private static final int ITEM_LAST = 2;
     private static final int ITEM_COUNT = ITEM_LAST + 1;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock RecyclerView mRecyclerView;
-    private @Mock RecyclerView.Adapter mAdapter;
-    private @Mock View mChildView;
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private RecyclerView mRecyclerView;
+    @Mock private RecyclerView.Adapter mAdapter;
+    @Mock private View mChildView;
     private SpacingRecyclerViewItemDecoration mDecoration;
     private Rect mOffsets;
 

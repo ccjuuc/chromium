@@ -4,13 +4,21 @@
 
 #include "components/autofill/core/browser/metrics/quality_metrics_filling.h"
 
-#include <algorithm>
+#include <stddef.h>
+#include <stdint.h>
 
-#include "base/containers/fixed_flat_set.h"
+#include <memory>
+#include <string_view>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/form_types.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
 
 namespace autofill::autofill_metrics {
 
@@ -45,10 +53,12 @@ constexpr FieldTypeSet kFieldTypesRepresentingSmallNumbers = {
     ADDRESS_HOME_FLOOR};
 
 // Records the percentage of input text field characters that were autofilled.
-void LogAutomationRate(const FormStructure& form) {
+void LogAutomationRate(
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
   size_t total_length_autofilled_fields = 0;
   size_t total_length = 0;
-  for (const auto& field : form.fields()) {
+  for (const std::unique_ptr<AutofillField>& field : form.fields()) {
     if (!field->IsTextInputElement()) {
       continue;
     }
@@ -62,13 +72,14 @@ void LogAutomationRate(const FormStructure& form) {
     if (field_size > kAutomationRateFieldSizeThreshold) {
       continue;
     }
-    if (field->is_autofilled()) {
+    if (field->last_modifier() == FieldModifier::kAutofill) {
       total_length_autofilled_fields += field_size;
     }
     total_length += field_size;
   }
   if (total_length > 0) {
-    for (const auto form_type : GetFormTypesForLogging(form)) {
+    for (const auto form_type :
+         GetFormTypesForLogging(form, ac_unrecognized_behavior)) {
       base::UmaHistogramPercentage(
           base::StrCat({"Autofill.AutomationRate.",
                         FormTypeNameForLoggingToStringView(form_type)}),
@@ -99,7 +110,7 @@ int GetFieldTypeAutofillDataUtilization(
 // entered". Note that fields that were submitted with a prefilled value
 // don't get recorded. Emitted on form submission.
 void LogDataUtilization(const FormStructure& form) {
-  for (const auto& field : form.fields()) {
+  for (const std::unique_ptr<AutofillField>& field : form.fields()) {
     // A pre-filled field value should have changed since page load. Otherwise,
     // no reporting is necessary.
     if (field->initial_value() == field->value()) {
@@ -120,8 +131,9 @@ void LogDataUtilization(const FormStructure& form) {
         kFieldTypesRepresentingSmallNumbers);
 
     const AutofillDataUtilization sample =
-        field->is_autofilled() ? AutofillDataUtilization::kAutofilled
-                               : AutofillDataUtilization::kNotAutofilled;
+        field->last_modifier() == FieldModifier::kAutofill
+            ? AutofillDataUtilization::kAutofilled
+            : AutofillDataUtilization::kNotAutofilled;
 
     const bool autocomplete_state_is_garbage =
         AutofillMetrics::AutocompleteStateForSubmittedField(*field) ==
@@ -190,8 +202,10 @@ void LogDataUtilization(const FormStructure& form) {
 
 }  // namespace
 
-void LogFillingQualityMetrics(const FormStructure& form) {
-  LogAutomationRate(form);
+void LogFillingQualityMetrics(
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  LogAutomationRate(form, ac_unrecognized_behavior);
   LogDataUtilization(form);
 }
 

@@ -19,6 +19,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/base/features.h"
 #include "net/cookies/canonical_cookie_test_helpers.h"
 #include "net/device_bound_sessions/session_access.h"
@@ -28,6 +29,13 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
+#include "chrome/browser/profiles/profile.h"
+#include "extensions/browser/browsertest_util.h"
+#include "extensions/test/test_extension_dir.h"
+#endif
 
 using net::device_bound_sessions::SessionAccess;
 using net::device_bound_sessions::SessionKey;
@@ -60,6 +68,7 @@ class DeviceBoundSessionBrowserTest : public InProcessBrowserTest {
   DeviceBoundSessionBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
         {net::features::kDeviceBoundSessions,
+         net::features::kDeviceBoundSessionsBypassDeferralsForRefreshRequests,
          unexportable_keys::
              kEnableBoundSessionCredentialsSoftwareKeysForManualTesting},
         {});
@@ -310,8 +319,9 @@ IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest, NotDeferredLogs) {
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
   histogram_tester.ExpectBucketCount(
-      "Net.DeviceBoundSessions.RequestDeferralDecision2",
-      /*sample=*/net::device_bound_sessions::SessionUsage::kInScopeNotDeferred,
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
+      /*sample=*/
+      net::device_bound_sessions::SessionUsage::kInScopeRefreshNotYetNeeded,
       /*expected_count=*/1);
 }
 
@@ -335,8 +345,76 @@ IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest, DeferredLogs) {
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
   histogram_tester.ExpectBucketCount(
-      "Net.DeviceBoundSessions.RequestDeferralDecision2",
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
       /*sample=*/net::device_bound_sessions::SessionUsage::kDeferred,
+      /*expected_count=*/1);
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
+                       OneSessionDeferredOneNot) {
+  base::HistogramTester histogram_tester;
+
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+  // Create session 1.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(NavigateToUrl(GetURL("/resource_triggered_dbsc_registration")));
+    ASSERT_TRUE(future.Wait());
+  }
+  // Create session 2.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(
+        NavigateToUrl(GetURL("/resource_triggered_dbsc_registration?session_id="
+                             "session2&cookie_name=cookie2")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Set up proactive refresh for session 2.
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      "cookieStore.set({name: 'cookie2', value: 'abcdef0123', expires: "
+      "Date.now() + 60000, sameSite: 'strict', secure: true})"));
+  ASSERT_TRUE(NavigateToUrl(GetURL("/ensure_authenticated")));
+  // We get a proactive refresh attempted log.
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histogram_tester.ExpectBucketCount(
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
+      /*sample=*/net::device_bound_sessions::SessionUsage::kDeferred,
+      /*expected_count=*/0);
+  histogram_tester.ExpectBucketCount(
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
+      /*sample=*/
+      net::device_bound_sessions::SessionUsage::
+          kInScopeProactiveRefreshAttempted,
+      /*expected_count=*/1);
+
+  // Set up proactive refresh for session 2 and force a deferred refresh for
+  // session 1.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents, "cookieStore.delete('auth_cookie')"));
+  ASSERT_TRUE(content::ExecJs(
+      web_contents,
+      "cookieStore.set({name: 'cookie2', value: 'abcdef0123', expires: "
+      "Date.now() + 60000, sameSite: 'none', secure: true})"));
+  ASSERT_TRUE(NavigateToUrl(GetURL("/ensure_authenticated")));
+  // We get a deferred log but no additional proactive refresh log because the
+  // deferred log takes precedence.
+  metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  histogram_tester.ExpectBucketCount(
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
+      /*sample=*/net::device_bound_sessions::SessionUsage::kDeferred,
+      /*expected_count=*/1);
+  histogram_tester.ExpectBucketCount(
+      "Net.DeviceBoundSessions.RequestDeferralDecision3",
+      /*sample=*/
+      net::device_bound_sessions::SessionUsage::
+          kInScopeProactiveRefreshAttempted,
       /*expected_count=*/1);
 }
 
@@ -406,5 +484,183 @@ IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
   ASSERT_FALSE(NavigateToUrl(GetURL("/ensure_authenticated?debug_header=" +
                                     signing_quota_query_param)));
 }
+
+IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
+                       RefreshRequestPassesChallenge) {
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+
+  // Register session.
+  // We use a query param that will trigger a challenge on refresh.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(
+        NavigateToUrl(GetURL("/resource_triggered_dbsc_registration?trigger_"
+                             "challenge=test_challenge")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Force a refresh that will require signing a challenge.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents, "cookieStore.delete('auth_cookie')"));
+  ASSERT_TRUE(NavigateToUrl(GetURL("/ensure_authenticated")));
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
+                       InterlockedDeviceBoundSessions) {
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+
+  // Register session 1.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(NavigateToUrl(GetURL(
+        "/resource_triggered_dbsc_registration?trigger_challenge=challenge1")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Register session 2.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    // It's important to pass a different refresh path for the second session
+    // for it to be in scope of the first session.
+    ASSERT_TRUE(NavigateToUrl(
+        GetURL("/resource_triggered_dbsc_registration?session_id="
+               "session2&cookie_name=cookie2&refresh_path=/"
+               "dbsc_refresh_session_2&trigger_challenge=challenge2")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Delete both cookies to require refresh on next access.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents, "cookieStore.delete('auth_cookie')"));
+  ASSERT_TRUE(content::ExecJs(web_contents, "cookieStore.delete('cookie2')"));
+
+  // Trigger refresh for both sessions.
+  ASSERT_TRUE(NavigateToUrl(GetURL("/ensure_authenticated")));
+}
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
+                       ExtensionTriggersRefresh) {
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+
+  // Register a session.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(NavigateToUrl(GetURL("/resource_triggered_dbsc_registration")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Set an early challenge.
+  ASSERT_TRUE(
+      NavigateToUrl(GetURL("/set_early_challenge?consistent_challenge")));
+
+  // Load an extension.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+  extensions::TestExtensionDir extension_dir;
+  extension_dir.WriteManifest(R"({
+    "name": "DBSC Test",
+    "manifest_version": 2,
+    "version": "1.0",
+    "background": {
+      "scripts": ["background.js"]
+    },
+    "incognito": "split",
+    "permissions": ["<all_urls>"]
+   })");
+  extension_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
+  scoped_refptr<const extensions::Extension> extension =
+      loader.LoadExtension(extension_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  // Delete auth cookie to trigger refresh.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents, "cookieStore.delete('auth_cookie')"));
+
+  GURL url = GetURL("/ensure_authenticated");
+
+  std::string script = R"((url => {
+  fetch(url, {method: 'GET', credentials: 'include'})
+    .then(response => chrome.test.sendScriptResult(response.status))
+    .catch(err => chrome.test.sendScriptResult(err.message));
+    }))";
+  base::Value result =
+      extensions::browsertest_util::ExecuteScriptInBackgroundPage(
+          browser()->GetProfile(), extension->id(),
+          script + "('" + url.spec() + "')");
+
+  // DBSC cookie was set successfully because force_ignore_site_for_cookies
+  // was correctly threaded to the refresh request.
+  EXPECT_EQ(200, result.GetInt());
+}
+
+IN_PROC_BROWSER_TEST_F(DeviceBoundSessionBrowserTest,
+                       ExtensionWithoutPermissionFailsRefresh) {
+  content::WebContents* web_contents =
+      chrome_test_utils::GetActiveWebContents(this);
+
+  // Register a session.
+  {
+    base::test::TestFuture<SessionAccess> future;
+    DeviceBoundSessionAccessObserver observer(
+        web_contents, future.GetRepeatingCallback<const SessionAccess&>());
+    ASSERT_TRUE(NavigateToUrl(GetURL("/resource_triggered_dbsc_registration")));
+    ASSERT_TRUE(future.Wait());
+  }
+
+  // Set an early challenge.
+  ASSERT_TRUE(
+      NavigateToUrl(GetURL("/set_early_challenge?consistent_challenge")));
+
+  // Load an extension without <all_urls> permission.
+  extensions::ScopedTestMV2Enabler mv2_enabler;
+  extensions::TestExtensionDir extension_dir;
+  extension_dir.WriteManifest(R"({
+    "name": "DBSC Test",
+    "manifest_version": 2,
+    "version": "1.0",
+    "background": {
+      "scripts": ["background.js"]
+    },
+    "incognito": "split"
+   })");
+  extension_dir.WriteFile(FILE_PATH_LITERAL("background.js"), "");
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
+  scoped_refptr<const extensions::Extension> extension =
+      loader.LoadExtension(extension_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  // Delete auth cookie to trigger refresh.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents, "cookieStore.delete('auth_cookie')"));
+
+  GURL url = GetURL("/ensure_authenticated");
+
+  std::string script = R"((url => {
+  fetch(url, {method: 'GET', credentials: 'include'})
+    .then(response => chrome.test.sendScriptResult(response.status))
+    .catch(err => chrome.test.sendScriptResult(err.message));
+    }))";
+  base::Value result =
+      extensions::browsertest_util::ExecuteScriptInBackgroundPage(
+          browser()->GetProfile(), extension->id(),
+          script + "('" + url.spec() + "')");
+
+  // Fetch should fail due to missing permissions.
+  EXPECT_TRUE(result.is_string());
+  EXPECT_EQ("Failed to fetch", result.GetString());
+}
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 }  // namespace

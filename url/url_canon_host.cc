@@ -22,7 +22,7 @@ namespace {
 // https://crbug.com/1416013 for details.
 const unsigned char kEsc = 0xff;
 // clang-format off
-const unsigned char kHostCharLookup[0x80] = {
+constexpr std::array<unsigned char, 0x80> kHostCharLookup = {
 // 00-1f: all are invalid
      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -47,7 +47,7 @@ const uint8_t kForbiddenHost = 0x1;
 // be probably done after https://crbug.com/1416013 is resolved.
 //
 // This table is currently only used for an opaque-host in non-special URLs.
-const uint8_t kHostCharacterTable[128] = {
+constexpr std::array<uint8_t, 128> kHostCharacterTable = {
     kForbiddenHost,  // 0x00 (NUL)
     0,               // 0x01
     0,               // 0x02
@@ -180,7 +180,7 @@ const uint8_t kHostCharacterTable[128] = {
 // clang-format on
 
 bool IsForbiddenHostCodePoint(uint8_t ch) {
-  return ch <= 0x7F && (UNSAFE_TODO(kHostCharacterTable[ch]) & kForbiddenHost);
+  return ch <= 0x7F && (kHostCharacterTable[ch] & kForbiddenHost);
 }
 
 // RFC1034 maximum FQDN length.
@@ -261,7 +261,7 @@ bool DoSimpleHost(std::basic_string_view<INCHAR> host,
 
     if (source < 0x80) {
       // We have ASCII input, we can use our lookup table.
-      unsigned char replacement = UNSAFE_TODO(kHostCharLookup[source]);
+      unsigned char replacement = kHostCharLookup[source];
       if (!replacement) {
         // Invalid character, add it as percent-escaped and mark as failed.
         AppendEscapedChar(source, output);
@@ -391,7 +391,7 @@ bool DoComplexHost(std::string_view host,
   // Above, we may have used the output to write the unescaped values to, so
   // we have to rewind it to where we started after we convert it to UTF-16.
   StackBufferW utf16;
-  if (!ConvertUTF8ToUTF16(utf8_source, &utf16)) {
+  if (!ConvertUtf8ToUtf16(utf8_source, &utf16)) {
     // In this error case, the input may or may not be the output.
     StackBuffer utf8;
     for (size_t i = 0; i < utf8_source.length(); i++) {
@@ -426,7 +426,7 @@ bool DoComplexHost(std::u16string_view host,
     // very rare that host names have escaped characters, and it is relatively
     // fast to do the conversion anyway.
     StackBuffer utf8;
-    if (!ConvertUTF16ToUTF8(host, &utf8)) {
+    if (!ConvertUtf16ToUtf8(host, &utf8)) {
       AppendInvalidNarrowString(host, output);
       return false;
     }

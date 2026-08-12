@@ -17,13 +17,14 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
 import org.chromium.chrome.browser.autofill.AutofillClientProviderUtils;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.components.autofill.AndroidAutofillFeatures;
 import org.chromium.components.browser_ui.http_auth.LoginPrompt;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.url.GURL;
 
 /**
  * Represents an HTTP authentication request to be handled by the UI.
@@ -93,7 +94,8 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
     }
 
     @CalledByNative
-    private void showDialog(Tab tab, WindowAndroid windowAndroid) {
+    private void showDialog(
+            Tab tab, WindowAndroid windowAndroid, @JniType("GURL") GURL challengerUrl) {
         if (tab == null || tab.isHidden() || windowAndroid == null) {
             cancel();
             return;
@@ -111,12 +113,17 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
         mTab.addObserver(this);
         String messageBody =
                 ChromeHttpAuthHandlerJni.get().getMessageBody(mNativeChromeHttpAuthHandler);
-        mLoginPrompt =
-                new LoginPrompt(
-                        activity,
-                        messageBody,
-                        shouldProvideAutofillUrl() ? mTab.getUrl() : null,
-                        this);
+
+        GURL autofillUrl = null;
+        if (shouldProvideAutofillUrl()) {
+            if (AndroidAutofillFeatures.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH_ORIGIN.isEnabled()) {
+                autofillUrl = challengerUrl;
+            } else {
+                autofillUrl = mTab.getUrl();
+            }
+        }
+
+        mLoginPrompt = new LoginPrompt(activity, messageBody, autofillUrl, this);
         // In case the autofill data arrives before the prompt is created.
 
         if (mAutofillUsername != null && mAutofillPassword != null) {
@@ -164,10 +171,9 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
 
     private boolean shouldProvideAutofillUrl() {
         if (mTab == null) return false;
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH)
-                && (AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
-                                UserPrefs.get(mTab.getProfile()))
-                        == AndroidAutofillAvailabilityStatus.AVAILABLE);
+        return AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
+                        UserPrefs.get(mTab.getProfile()))
+                == AndroidAutofillAvailabilityStatus.AVAILABLE;
     }
 
     @NativeMethods

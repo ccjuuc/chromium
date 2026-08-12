@@ -5,6 +5,7 @@
 #import "ios/chrome/app/profile/post_restore_profile_agent.h"
 
 #import "base/memory/raw_ptr.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "ios/chrome/app/profile/profile_init_stage.h"
@@ -19,7 +20,7 @@
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/signin_util.h"
 
-@interface PostRestoreProfileAgent () <IdentityManagerObserverBridgeDelegate>
+@interface PostRestoreProfileAgent () <IdentityManagerObserving>
 @end
 
 @implementation PostRestoreProfileAgent {
@@ -65,10 +66,10 @@
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user adds a primary account.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
@@ -85,7 +86,7 @@
   }
 }
 
-- (void)onIdentityManagerShutdown:(signin::IdentityManager*)identityManager {
+- (void)identityManagerDidShutdown:(signin::IdentityManager*)identityManager {
   [self shutdown];
 }
 

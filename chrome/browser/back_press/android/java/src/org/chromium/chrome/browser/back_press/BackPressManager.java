@@ -23,12 +23,14 @@ import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler.BackPressResult;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler.Type;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandlerRegistry;
 import org.chromium.components.browser_ui.widget.gesture.OnSystemNavigationObserver;
+import org.chromium.components.feature_engagement.EventConstants;
 
 import java.util.function.Supplier;
 
@@ -51,8 +53,8 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     private static final int sMetricsMaxValue;
 
     static {
-        // Max value is 26 - 1 obsolete value +1 for 0 indexing = 26 elements.
-        SparseIntArray map = new SparseIntArray(26);
+        // Max value is 30 - 1 obsolete value +1 for 0 indexing = 30 elements.
+        SparseIntArray map = new SparseIntArray(30);
         map.put(Type.TEXT_BUBBLE, 0);
         // map.put(Type.VR_DELEGATE, 1);
         // map.put(Type.AR_DELEGATE, 2);
@@ -78,9 +80,13 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
         map.put(Type.NATIVE_PAGE, 23);
         map.put(Type.CANCEL_TAB_STRIP_DRAG, 24);
         map.put(Type.CANCEL_TAB_SWITCHER_DRAG, 25);
+        map.put(Type.ACTOR_OVERLAY, 26);
+        map.put(Type.FUSEBOX_POPUP, 27);
+        map.put(Type.REALBOX, 28);
+        map.put(Type.TAB_SEARCH_OVERLAY, 29);
 
         // Add new one here and update array size.
-        sMetricsMaxValue = 26;
+        sMetricsMaxValue = 30;
         sMetricsMap = map;
     }
 
@@ -99,7 +105,6 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
                     case BackPressResult.SUCCESS:
                         return true;
                     case BackPressResult.UNKNOWN:
-                    case BackPressResult.IGNORED:
                         return null;
                 }
             } else {
@@ -131,10 +136,8 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
         @SuppressLint("WrongConstant") // Suppress mLastCalledHandlerType assignment warning
         @Override
         public void handleOnBackPressed() {
-            if (mOnBackPressed != null) mOnBackPressed.run();
             mLastCalledHandlerType = -1;
-            if (ChromeFeatureList.sLockBackPressHandlerAtStart.isEnabled()
-                    && mActiveHandler != null) {
+            if (mActiveHandler != null) {
                 Boolean enabled = mActiveHandler.getHandleBackPressChangedSupplier().get();
                 if (enabled != null && enabled) {
                     int result = mActiveHandler.handleBackPress();
@@ -142,13 +145,15 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
                     mLastCalledHandlerType = index;
                     if (result == BackPressResult.FAILURE) {
                         BackPressManager.this.handleBackPress();
-                    } else if (result != BackPressResult.IGNORED) {
+                    } else {
                         record(index);
                     }
                 } else {
                     BackPressManager.this.handleBackPress();
                 }
             } else {
+                // mActiveHandler is always null on lower versions which do not support
+                // handleOnBackStarted
                 BackPressManager.this.handleBackPress();
             }
 
@@ -162,6 +167,16 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
                 if (mLastCalledHandlerType == Type.TAB_HISTORY) {
                     BackPressMetrics.recordTabNavigationSwipedFromEdge(
                             mLastBackEvent.getSwipeEdge());
+
+                    // Tracks back swipes
+                    if (mProfileSupplier != null) {
+                        Profile profile = mProfileSupplier.get();
+                        if (profile != null) {
+                            TrackerFactory.getTrackerForProfile(profile)
+                                    .notifyEvent(
+                                            EventConstants.SWIPE_ON_LEFT_EDGE_FOR_NAVIGATION_USED);
+                        }
+                    }
                 }
             }
             mActiveHandler = null;
@@ -195,22 +210,21 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     private final OnBackPressedCallbackImpl mCallback = new OnBackPressedCallbackImpl(false);
 
     static final String HISTOGRAM = "Android.BackPress.Intercept";
-    static final String HISTOGRAM_CUSTOM_TAB_SAME_TASK =
-            "Android.BackPress.Intercept.CustomTab.SameTask";
-    static final String HISTOGRAM_CUSTOM_TAB_SEPARATE_TASK =
-            "Android.BackPress.Intercept.CustomTab.SeparateTask";
     static final String FAILURE_HISTOGRAM = "Android.BackPress.Failure";
 
     private final @Nullable BackPressHandler[] mHandlers = new BackPressHandler[Type.NUM_TYPES];
     private final boolean mUseSystemBack;
     private boolean mHasSystemBackArm;
 
+    // Generic array creation is not supported in Java.
+    @SuppressWarnings("unchecked")
     private final @Nullable Callback<Boolean>[] mObserverCallbacks = new Callback[Type.NUM_TYPES];
+
     private @Nullable OnBackInvokedCallback mOnSystemNavigationCallback;
     private Runnable mFallbackOnBackPressed;
     private int mLastCalledHandlerType = -1;
-    private @Nullable Runnable mOnBackPressed;
     private Supplier<Boolean> mIsGestureNavEnabledSupplier = () -> false;
+    private @Nullable Supplier<Profile> mProfileSupplier;
     private final ObserverList<OnSystemNavigationObserver> mOnSystemNavigationObservers =
             new ObserverList<>();
 
@@ -225,24 +239,21 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     }
 
     /**
-     * Record when the back press is consumed by a custom tab.
-     *
-     * @param type The {@link Type} which consumes the back press event.
-     * @param separateTask Whether the custom tab runs in a separate task.
-     */
-    public static void recordForCustomTab(@Type int type, boolean separateTask) {
-        RecordHistogram.recordEnumeratedHistogram(
-                separateTask ? HISTOGRAM_CUSTOM_TAB_SEPARATE_TASK : HISTOGRAM_CUSTOM_TAB_SAME_TASK,
-                sMetricsMap.get(type),
-                sMetricsMaxValue);
-    }
-
-    /**
      * @param type The {@link Type} of the back press handler.
      * @return The corresponding histogram value.
      */
     public static int getHistogramValue(@Type int type) {
         return sMetricsMap.get(type);
+    }
+
+    /**
+     * Returns the maximum value for BackPressConsumer histograms. This includes deprecated values
+     * to ensure historical consistency.
+     *
+     * @return The maximum value of the metrics.
+     */
+    public static int getMetricsMaxValue() {
+        return sMetricsMaxValue;
     }
 
     private static void recordFailure(@Type int type) {
@@ -273,7 +284,8 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
         mHandlers[type] = handler;
         Callback<Boolean> observerCallback = (t) -> backPressStateChanged();
         mObserverCallbacks[type] = observerCallback;
-        handler.getHandleBackPressChangedSupplier().addObserver(observerCallback);
+        handler.getHandleBackPressChangedSupplier()
+                .addSyncObserverAndPostIfNonNull(observerCallback);
         backPressStateChanged();
     }
 
@@ -318,6 +330,22 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     }
 
     /**
+     * @param type The {@link Type} which needs to check.
+     * @return True if a handler of this type is the enabled handler that consumes the back event.
+     */
+    public boolean isBackPressHandlerConsumingBackEvent(@Type int type) {
+        boolean isEnabled =
+                mHandlers[type] != null
+                        ? mHandlers[type].getHandleBackPressChangedSupplier().get()
+                        : false;
+        if (!isEnabled) {
+            return false;
+        }
+        // Check if type is the highest priority enabled handler.
+        return getEnabledBackPressHandler() == mHandlers[type];
+    }
+
+    /**
      * @return A {@link OnBackPressedCallback} which should be added to {@link
      *     androidx.activity.OnBackPressedDispatcher}.
      */
@@ -346,16 +374,9 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     }
 
     /**
-     * Set a callback fired when a back press is triggered. This is introduced to investigate data
-     * inconsistency between experimental groups. and is not intended to be re-used.
-     */
-    public void setOnBackPressedListener(Runnable callback) {
-        mOnBackPressed = callback;
-    }
-
-    /**
      * Turn on more checks if a system back arm is available, such as when running on tabbed
      * activity.
+     *
      * @param hasSystemBackArm True if system back arm is feasible.
      */
     public void setHasSystemBackArm(boolean hasSystemBackArm) {
@@ -365,6 +386,11 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     /** Set a supplier to provide whether gesture nav mode is on when called. */
     public void setIsGestureNavEnabledSupplier(Supplier<Boolean> supplier) {
         mIsGestureNavEnabledSupplier = supplier;
+    }
+
+    /** Set a supplier to provide the current Profile. */
+    public void setProfileSupplier(Supplier<Profile> supplier) {
+        mProfileSupplier = supplier;
     }
 
     /**
@@ -438,7 +464,7 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
                 if (res == BackPressResult.FAILURE) {
                     failed = true;
                     recordFailure(i);
-                } else if (res != BackPressResult.IGNORED) {
+                } else {
                     record(i);
                     return;
                 }
@@ -455,13 +481,7 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
     @VisibleForTesting
     @RequiresApi(api = Build.VERSION_CODES.TIRAMISU)
     void createOnSystemNavigationCallback() {
-        mOnSystemNavigationCallback =
-                new OnBackInvokedCallback() {
-                    @Override
-                    public void onBackInvoked() {
-                        onSystemNavigationInternal();
-                    }
-                };
+        mOnSystemNavigationCallback = this::onSystemNavigationInternal;
     }
 
     @Override
@@ -502,13 +522,5 @@ public class BackPressManager implements Destroyable, BackPressHandlerRegistry {
 
     public static String getHistogramForTesting() {
         return HISTOGRAM;
-    }
-
-    public static String getCustomTabSameTaskHistogramForTesting() {
-        return HISTOGRAM_CUSTOM_TAB_SAME_TASK;
-    }
-
-    public static String getCustomTabSeparateTaskHistogramForTesting() {
-        return HISTOGRAM_CUSTOM_TAB_SEPARATE_TASK;
     }
 }

@@ -4,16 +4,26 @@
 
 #include "components/autofill/core/browser/metrics/payments/iban_metrics.h"
 
+#include <stddef.h>
+
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/check.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/common/autofill_clock.h"
 
 namespace autofill::autofill_metrics {
+
+void LogIbanFormEvent(IbanFormEvent event) {
+  base::UmaHistogramEnumeration("Autofill.FormEvents.Iban", event);
+}
 
 void LogStoredIbanMetrics(
     const std::vector<std::unique_ptr<Iban>>& local_ibans,

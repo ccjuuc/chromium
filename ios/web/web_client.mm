@@ -8,6 +8,7 @@
 
 #import <string_view>
 
+#import "base/memory/ref_counted_memory.h"
 #import "base/notimplemented.h"
 #import "ios/web/common/features.h"
 #import "ios/web/public/init/web_main_parts.h"
@@ -62,7 +63,8 @@ std::string_view WebClient::GetDataResource(
   return std::string_view();
 }
 
-base::RefCountedMemory* WebClient::GetDataResourceBytes(int resource_id) const {
+scoped_refptr<base::RefCountedMemory> WebClient::GetDataResourceBytes(
+    int resource_id) const {
   return nullptr;
 }
 
@@ -145,6 +147,20 @@ void WebClient::RunOpenPanel(
   NOTIMPLEMENTED() << "WebClient::RunOpenPanel() is not implemented.\n"
                       "If a subclass returns true from CanRunOpenPanel(),"
                       "then it must override RunOpenPanel().";
+}
+
+JSErrorReportLoggingLevel WebClient::GetJSErrorReportLoggingLevel(
+    BrowserState* browser_state) const {
+  return JSErrorReportLoggingLevel::NONE;
+}
+
+CobaltController* WebClient::GetCobaltController(
+    BrowserState* browser_state) const {
+  return nullptr;
+}
+
+bool WebClient::IsSmoothScrollingSupported() const {
+  return false;
 }
 
 }  // namespace web

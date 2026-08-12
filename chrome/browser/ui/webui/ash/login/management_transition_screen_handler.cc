@@ -4,11 +4,10 @@
 
 #include "chrome/browser/ui/webui/ash/login/management_transition_screen_handler.h"
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/management_transition_screen.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/experiences/arc/session/arc_management_transition.h"
 #include "components/login/localized_values_builder.h"
 
@@ -40,7 +39,7 @@ void ManagementTransitionScreenHandler::DeclareLocalizedValues(
 void ManagementTransitionScreenHandler::Show(
     arc::ArcManagementTransition arc_management_transition,
     std::string management_entity) {
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set("arcTransition", static_cast<int>(arc_management_transition));
   data.Set("managementEntity", management_entity);
 

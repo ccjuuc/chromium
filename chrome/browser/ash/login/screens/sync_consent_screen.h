@@ -51,7 +51,7 @@ class SyncConsentScreen : public BaseScreen,
 
   enum ConsentGiven { CONSENT_NOT_GIVEN, CONSENT_GIVEN };
 
-  enum class Result { NEXT, DECLINE, NOT_APPLICABLE };
+  enum class Result { NEXT, NOT_APPLICABLE };
 
   static std::string GetResultString(Result result);
 
@@ -121,14 +121,11 @@ class SyncConsentScreen : public BaseScreen,
 
   void OnAshContinue(const bool opted_in,
                      const bool review_sync,
-                     const base::Value::List& consent_description_list,
+                     const base::ListValue& consent_description_list,
                      const std::string& consent_confirmation);
 
-  void OnLacrosContinue(const base::Value::List& consent_description_list,
-                        const std::string& consent_confirmation);
-
   void RecordAllConsents(const bool opted_in,
-                         const base::Value::List& consent_description_list,
+                         const base::ListValue& consent_description_list,
                          const std::string& consent_confirmation);
 
   // Sets internal condition "Sync disabled by policy" for tests.
@@ -154,7 +151,7 @@ class SyncConsentScreen : public BaseScreen,
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   // Returns new SyncScreenBehavior value.
   SyncScreenBehavior GetSyncScreenBehavior(const WizardContext& context) const;

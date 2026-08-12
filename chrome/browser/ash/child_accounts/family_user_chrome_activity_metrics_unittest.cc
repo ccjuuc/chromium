@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
@@ -21,8 +22,8 @@
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/common/pref_names.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/test_browser_window_aura.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -90,13 +91,13 @@ class FamilyUserChromeActivityMetricsTest
         chrome.get());
 
     // Expect no Browsers at the beginning.
-    EXPECT_EQ(0U, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(0U, GlobalBrowserCollection::GetInstance()->GetSize());
     InitTestBrowserWithAuraWindow();
-    EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
     // Set the app active. If the app is active, it should be started, running,
     // and visible.
-    PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+    PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                           kActiveInstanceState);
   }
 
@@ -140,11 +141,12 @@ class FamilyUserChromeActivityMetricsTest
         nullptr, aura::client::WINDOW_TYPE_NORMAL);
     window->SetId(0);
     window->Init(ui::LAYER_TEXTURED);
-    Browser::CreateParams params(profile(), true);
+    BrowserWindowCreateParams params(profile(), true);
     auto browser_window =
         std::make_unique<TestBrowserWindowAura>(std::move(window));
     params.window = browser_window.release();
-    test_browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
+    test_browser_ =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
   }
 
   void SetSessionState(session_manager::SessionState state) {
@@ -170,34 +172,35 @@ TEST_F(FamilyUserChromeActivityMetricsTest, Basic) {
   task_environment()->FastForwardBy(kHalfHour);
 
   // Set the app running in the background.
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
 
   EXPECT_EQ(kHalfHour,
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 
   // Test multiple browsers.
   std::unique_ptr<aura::Window> window =
       std::make_unique<aura::Window>(nullptr, aura::client::WINDOW_TYPE_NORMAL);
   window->SetId(0);
   window->Init(ui::LAYER_TEXTURED);
-  Browser::CreateParams params(profile(), true);
+  BrowserWindowCreateParams params(profile(), true);
   auto another_browser_window =
       std::make_unique<TestBrowserWindowAura>(std::move(window));
   params.window = another_browser_window.release();
-  auto another_browser = Browser::DeprecatedCreateOwnedForTesting(params);
+  auto another_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
 
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  PushChromeAppInstance(another_browser->window()->GetNativeWindow(),
+  PushChromeAppInstance(another_browser->GetWindow()->GetNativeWindow(),
                         apps::InstanceState::kActive);
   task_environment()->FastForwardBy(kHalfHour);
-  PushChromeAppInstance(another_browser->window()->GetNativeWindow(),
+  PushChromeAppInstance(another_browser->GetWindow()->GetNativeWindow(),
                         apps::InstanceState::kDestroyed);
   EXPECT_EQ(base::Hours(1),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 
   // Test date change.
   task_environment()->FastForwardBy(base::Days(1));
@@ -205,7 +208,7 @@ TEST_F(FamilyUserChromeActivityMetricsTest, Basic) {
 
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
   histogram_tester.ExpectTimeBucketCount(
       FamilyUserChromeActivityMetrics::
           kChromeBrowserEngagementDurationHistogramName,
@@ -220,7 +223,7 @@ TEST_F(FamilyUserChromeActivityMetricsTest, ClockBackward) {
   // Mock a state that start time > end time.
   SetActiveSessionStartTime(mock_session_start);
 
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
 
   histogram_tester.ExpectTotalCount(
@@ -229,7 +232,7 @@ TEST_F(FamilyUserChromeActivityMetricsTest, ClockBackward) {
       0);
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 }
 
 // Tests destroying FamilyUserChromeActivityMetrics. OnAppInactive() will be
@@ -240,10 +243,10 @@ TEST_F(FamilyUserChromeActivityMetricsTest,
 
   task_environment()->FastForwardBy(kHalfHour);
 
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         apps::InstanceState::kDestroyed);
   test_browser_.reset();
-  EXPECT_EQ(0U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0U, GlobalBrowserCollection::GetInstance()->GetSize());
   DestroyFamilyUserChromeActivityMetrics();
 
   histogram_tester.ExpectTotalCount(
@@ -252,17 +255,17 @@ TEST_F(FamilyUserChromeActivityMetricsTest,
       0);
   EXPECT_EQ(kHalfHour,
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 
   // Test restart.
   InitiateFamilyUserChromeActivityMetrics();
   InitTestBrowserWithAuraWindow();
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kActiveInstanceState);
   task_environment()->FastForwardBy(kHalfHour);
 
   // Set the app running background.
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
 
   histogram_tester.ExpectTotalCount(
@@ -271,7 +274,7 @@ TEST_F(FamilyUserChromeActivityMetricsTest,
       0);
   EXPECT_EQ(base::Hours(1),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 }
 
 TEST_F(FamilyUserChromeActivityMetricsTest, ScreenStateChange) {
@@ -286,11 +289,11 @@ TEST_F(FamilyUserChromeActivityMetricsTest, ScreenStateChange) {
   // Set the screen on. Set the app inactive after 1 minute.
   SetScreenOff(false);
   task_environment()->FastForwardBy(kOneMinute);
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
   EXPECT_EQ(kOneMinute,
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 
   // Test the screen off for 1 day.
   SetScreenOff(true);
@@ -300,7 +303,7 @@ TEST_F(FamilyUserChromeActivityMetricsTest, ScreenStateChange) {
 
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
   histogram_tester.ExpectTimeBucketCount(
       FamilyUserChromeActivityMetrics::
           kChromeBrowserEngagementDurationHistogramName,
@@ -320,30 +323,30 @@ TEST_F(FamilyUserChromeActivityMetricsTest, MockLockAndUnclockScreen) {
 
   // Mock screen locked for half an hour.
   SetSessionState(session_manager::SessionState::LOCKED);
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
   task_environment()->FastForwardBy(kHalfHour);
 
   // Mock unlocking screen.
   SetSessionState(session_manager::SessionState::ACTIVE);
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kActiveInstanceState);
 
   // Set the app inactive after 1 minute.
   task_environment()->FastForwardBy(kOneMinute);
-  PushChromeAppInstance(test_browser_->window()->GetNativeWindow(),
+  PushChromeAppInstance(test_browser_->GetWindow()->GetNativeWindow(),
                         kInactiveInstanceState);
 
   EXPECT_EQ(base::Minutes(2),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
 
   task_environment()->FastForwardBy(base::Days(1));
   OnNewDay();
 
   EXPECT_EQ(base::TimeDelta(),
             pref_service()->GetTimeDelta(
-                prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
+                ash::prefs::kFamilyUserMetricsChromeBrowserEngagementDuration));
   histogram_tester.ExpectTimeBucketCount(
       FamilyUserChromeActivityMetrics::
           kChromeBrowserEngagementDurationHistogramName,

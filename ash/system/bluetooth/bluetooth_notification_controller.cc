@@ -18,10 +18,10 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/toast/toast_manager_impl.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
@@ -139,9 +139,16 @@ const char
     BluetoothNotificationController::kBluetoothDeviceDiscoverableToastId[] =
         "cros_bluetooth_device_discoverable_toast_id";
 
-const char
-    BluetoothNotificationController::kBluetoothDevicePairingNotificationId[] =
-        "cros_bluetooth_device_pairing_notification_id";
+const char BluetoothNotificationController::
+    kBluetoothDevicePairingNotificationIdPrefix[] =
+        "cros_bluetooth_device_pairing_notification_id_";
+
+// static
+std::string BluetoothNotificationController::GetPairingNotificationId(
+    const std::string& address) {
+  DCHECK(!address.empty());
+  return base::StrCat({kBluetoothDevicePairingNotificationIdPrefix, address});
+}
 
 BluetoothNotificationController::BluetoothNotificationController(
     message_center::MessageCenter* message_center)
@@ -179,7 +186,7 @@ void BluetoothNotificationController::DeviceChanged(BluetoothAdapter* adapter,
                                                     BluetoothDevice* device) {
   // If the device is already in the list of bonded devices, then don't
   // notify.
-  if (base::Contains(bonded_devices_, device->GetAddress())) {
+  if (bonded_devices_.contains(device->GetAddress())) {
     return;
   }
 
@@ -193,7 +200,13 @@ void BluetoothNotificationController::DeviceChanged(BluetoothAdapter* adapter,
 
 void BluetoothNotificationController::DeviceRemoved(BluetoothAdapter* adapter,
                                                     BluetoothDevice* device) {
+  DCHECK(device);
+  if (!device) {
+    return;
+  }
   bonded_devices_.erase(device->GetAddress());
+  message_center_->RemoveNotification(
+      GetPairingNotificationId(device->GetAddress()), false /* by_user */);
 }
 
 void BluetoothNotificationController::RequestPinCode(BluetoothDevice* device) {
@@ -308,6 +321,11 @@ void BluetoothNotificationController::NotifyPairing(
     BluetoothDevice* device,
     const std::u16string& message,
     bool with_buttons) {
+  DCHECK(device);
+  if (!device || device->GetAddress().empty()) {
+    return;
+  }
+
   message_center::RichNotificationData optional;
   if (with_buttons) {
     optional.buttons.push_back(message_center::ButtonInfo(
@@ -316,17 +334,19 @@ void BluetoothNotificationController::NotifyPairing(
         l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_BLUETOOTH_REJECT)));
   }
 
+  const std::string notification_id =
+      GetPairingNotificationId(device->GetAddress());
+
   std::unique_ptr<Notification> notification = CreateSystemNotificationPtr(
-      message_center::NOTIFICATION_TYPE_SIMPLE,
-      kBluetoothDevicePairingNotificationId, std::u16string() /* title */,
-      message, std::u16string() /* display source */, GURL(),
+      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
+      std::u16string() /* title */, message,
+      std::u16string() /* display source */, GURL(),
       message_center::NotifierId(
           message_center::NotifierType::SYSTEM_COMPONENT, kNotifierBluetooth,
           NotificationCatalogName::kBluetoothPairingRequest),
       optional,
       base::MakeRefCounted<BluetoothPairingNotificationDelegate>(
-          adapter_, device->GetAddress(),
-          kBluetoothDevicePairingNotificationId),
+          adapter_, device->GetAddress(), notification_id),
       kNotificationBluetoothIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
   message_center_->AddNotification(std::move(notification));
@@ -334,14 +354,17 @@ void BluetoothNotificationController::NotifyPairing(
 
 void BluetoothNotificationController::NotifyBondedDevice(
     BluetoothDevice* device) {
-  // Remove the currently presented pairing notification; since only one
-  // pairing request is queued at a time, this is guaranteed to be the device
-  // that just became bonded. The notification will be handled by
-  // BluetoothDeviceStatusUiHandler.
-  if (message_center_->FindVisibleNotificationById(
-          kBluetoothDevicePairingNotificationId)) {
-    message_center_->RemoveNotification(kBluetoothDevicePairingNotificationId,
-                                        false /* by_user */);
+  DCHECK(device);
+  if (!device) {
+    return;
+  }
+
+  // Remove the currently presented pairing notification for this specific
+  // device.
+  const std::string notification_id =
+      GetPairingNotificationId(device->GetAddress());
+  if (message_center_->FindVisibleNotificationById(notification_id)) {
+    message_center_->RemoveNotification(notification_id, false /* by_user */);
   }
 }
 

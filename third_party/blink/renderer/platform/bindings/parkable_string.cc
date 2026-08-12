@@ -46,7 +46,6 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
-#include "third_party/snappy/src/snappy.h"
 #include "third_party/zlib/google/compression_utils.h"
 
 #if BUILDFLAG(HAS_ZSTD_COMPRESSION)
@@ -150,7 +149,7 @@ class NullableCharBuffer final {
   explicit NullableCharBuffer(size_t size) {
     data_ = reinterpret_cast<char*>(
         Partitions::BufferPartition()
-            ->AllocInline<partition_alloc::AllocFlags::kReturnNull>(
+            ->Alloc<partition_alloc::AllocFlags::kReturnNull>(
                 size, "NullableCharBuffer"));
     size_ = size;
   }
@@ -259,7 +258,7 @@ enum class ParkableStringImpl::Status : uint8_t {
 
 ParkableStringImpl::ParkableMetadata::ParkableMetadata(
     String string,
-    std::unique_ptr<SecureDigest> digest)
+    std::unique_ptr<SecureStringDigest> digest)
     : lock_(),
       lock_depth_(0),
       state_(State::kUnparked),
@@ -271,8 +270,8 @@ ParkableStringImpl::ParkableMetadata::ParkableMetadata(
       length_(string.length()) {}
 
 // static
-std::unique_ptr<ParkableStringImpl::SecureDigest>
-ParkableStringImpl::HashString(StringImpl* string) {
+std::unique_ptr<SecureStringDigest> ParkableStringImpl::HashString(
+    StringImpl* string) {
   DigestValue digest_result;
 
   Digestor digestor(kHashAlgorithmSha256);
@@ -289,11 +288,11 @@ ParkableStringImpl::HashString(StringImpl* string) {
   if (digestor.has_failed()) {
     // Don't know the exact size, the SHA256 spec hints at ~64 (block size)
     // + 32 (digest) bytes.
-    base::TerminateBecauseOutOfMemory(64 + kDigestSize);
+    base::TerminateBecauseOutOfMemory(64 + kSha256Bytes);
   }
   // Unless SHA256 is... not 256 bits?
-  DCHECK(digest_result.size() == kDigestSize);
-  return std::make_unique<SecureDigest>(digest_result);
+  DCHECK(digest_result.size() == kSha256Bytes);
+  return std::make_unique<SecureStringDigest>(digest_result);
 }
 
 // static
@@ -313,7 +312,7 @@ scoped_refptr<ParkableStringImpl> ParkableStringImpl::MakeNonParkable(
 // static
 scoped_refptr<ParkableStringImpl> ParkableStringImpl::MakeParkable(
     scoped_refptr<StringImpl>&& impl,
-    std::unique_ptr<SecureDigest> digest) {
+    std::unique_ptr<SecureStringDigest> digest) {
   DCHECK(!!digest);
   return base::AdoptRef(
       new ParkableStringImpl(std::move(impl), std::move(digest)));
@@ -327,14 +326,12 @@ ParkableStringImpl::GetCompressionAlgorithm() {
     return CompressionAlgorithm::kZstd;
   }
 #endif  // BUILDFLAG(HAS_ZSTD_COMPRESSION)
-  if (features::ParkableStringsUseSnappy()) {
-    return CompressionAlgorithm::kSnappy;
-  }
   return CompressionAlgorithm::kZlib;
 }
 
-ParkableStringImpl::ParkableStringImpl(scoped_refptr<StringImpl>&& impl,
-                                       std::unique_ptr<SecureDigest> digest)
+ParkableStringImpl::ParkableStringImpl(
+    scoped_refptr<StringImpl>&& impl,
+    std::unique_ptr<SecureStringDigest> digest)
     : string_(std::move(impl)),
       metadata_(digest ? std::make_unique<ParkableMetadata>(string_,
                                                             std::move(digest))
@@ -727,20 +724,7 @@ String ParkableStringImpl::UnparkInternal() {
       }
       break;
     }
-    case CompressionAlgorithm::kSnappy: {
-      size_t uncompressed_size;
 
-      // As above, if size is incorrect, or if data is corrupted, prefer
-      // crashing.
-      CHECK(snappy::GetUncompressedLength(compressed_string_piece.data(),
-                                          compressed_string_piece.size(),
-                                          &uncompressed_size));
-      CHECK_EQ(uncompressed_size, chars.size());
-      CHECK(snappy::RawUncompress(compressed_string_piece.data(),
-                                  compressed_string_piece.size(), chars.data()))
-          << "Decompression failed, corrupted data?";
-      break;
-    }
 #if BUILDFLAG(HAS_ZSTD_COMPRESSION)
     case CompressionAlgorithm::kZstd: {
       uint64_t content_size = ZSTD_getFrameContentSize(
@@ -845,12 +829,7 @@ void ParkableStringImpl::CompressInBackground(
       case CompressionAlgorithm::kZlib:
         buffer_size = data.size();
         break;
-      case CompressionAlgorithm::kSnappy:
-        // Contrary to other compression algorithms, snappy requires the buffer
-        // to be at least this size, rather than aborting if the provided buffer
-        // is too small.
-        buffer_size = snappy::MaxCompressedLength(data.size());
-        break;
+
 #if BUILDFLAG(HAS_ZSTD_COMPRESSION)
       case CompressionAlgorithm::kZstd:
         buffer_size = ZSTD_compressBound(data.size());
@@ -867,13 +846,7 @@ void ParkableStringImpl::CompressInBackground(
           ok = compression::GzipCompress(data, buffer.data(), buffer.size(),
                                          &compressed_size, nullptr, nullptr);
           break;
-        case CompressionAlgorithm::kSnappy:
-          snappy::RawCompress(data.data(), data.size(), buffer.data(),
-                              &compressed_size);
-          if (compressed_size > data.size()) {
-            ok = false;
-          }
-          break;
+
 #if BUILDFLAG(HAS_ZSTD_COMPRESSION)
         case CompressionAlgorithm::kZstd:
           compressed_size =
@@ -894,7 +867,8 @@ void ParkableStringImpl::CompressInBackground(
       compressed = std::make_unique<Vector<uint8_t>>();
       // Not using realloc() as we want the compressed data to be a regular
       // blink::Vector.
-      compressed->AppendSpan(base::as_byte_span(buffer).first(compressed_size));
+      compressed->append_range(
+          base::as_byte_span(buffer).first(compressed_size));
     }
   }
   base::TimeDelta thread_elapsed = thread_timer.Elapsed();
@@ -1039,9 +1013,8 @@ void ParkableStringImpl::OnWritingCompleteOnMainThread(
 ParkableString::ParkableString(scoped_refptr<StringImpl>&& impl)
     : ParkableString(std::move(impl), nullptr) {}
 
-ParkableString::ParkableString(
-    scoped_refptr<StringImpl>&& impl,
-    std::unique_ptr<ParkableStringImpl::SecureDigest> digest) {
+ParkableString::ParkableString(scoped_refptr<StringImpl>&& impl,
+                               std::unique_ptr<SecureStringDigest> digest) {
   if (!impl) {
     impl_ = nullptr;
     return;
@@ -1084,6 +1057,18 @@ void ParkableString::OnMemoryDump(WebProcessMemoryDump* pmd,
 
 bool ParkableString::Is8Bit() const {
   return impl_->is_8bit();
+}
+
+ParkableString::DigestHolder ParkableString::Digest() const {
+  // If `may_be_parked()` is true, `impl_` must have its pre-computed digest.
+  // In this case, the raw pointer to the `SecureStringDigest` is available,
+  // and we don't have to release it. Otherwise, the digest should be computed
+  // by `ParkableStringImpl::HashString()`. In this case, the function returns
+  // `std::unique_ptr`, meaning that we have obligation to call its destructor
+  // properly. `DigestHoler` is a wrapper to veil this difference.
+  return impl_ && may_be_parked()
+             ? DigestHolder(impl_->digest())
+             : DigestHolder(ParkableStringImpl::HashString(ToString().Impl()));
 }
 
 const String& ParkableString::ToString() const {

@@ -9,6 +9,8 @@
 
 #include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/shelf_model.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/metrics/user_metrics.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -32,6 +34,7 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/display/screen.h"
 #include "ui/display/types/display_constants.h"
@@ -205,27 +208,41 @@ const gfx::VectorIcon& ShelfContextMenu::GetCommandIdVectorIcon(
   switch (type) {
     case ash::LAUNCH_NEW:
       if (string_id == IDS_APP_LIST_CONTEXT_MENU_NEW_TAB) {
-        return views::kNewTabIcon;
+        return features::IsRoundedIconsEnabled() ? views::kTabIcon
+                                                 : views::kNewTabOldIcon;
       }
       if (string_id == IDS_APP_LIST_CONTEXT_MENU_NEW_WINDOW) {
-        return views::kNewWindowIcon;
+        return features::IsRoundedIconsEnabled() ? views::kNewWindowIcon
+                                                 : views::kNewWindowOldIcon;
       }
-      return views::kOpenIcon;
+      return features::IsRoundedIconsEnabled() ? views::kArrowOutwardIcon
+                                               : views::kOpenOldIcon;
     case ash::MENU_CLOSE:
-      return views::kCloseIcon;
+      return features::IsRoundedIconsEnabled()   ? views::kCancelIcon
+                                                 : views::kCloseOldIcon;
     case ash::SHOW_APP_INFO:
-      return views::kInfoIcon;
+      return features::IsRoundedIconsEnabled() ? views::kInfoIcon
+                                               : views::kInfoOldIcon;
     case ash::UNINSTALL:
-      return views::kUninstallIcon;
+      return features::IsRoundedIconsEnabled() ? views::kDeleteIcon
+                                               : views::kUninstallOldIcon;
     case ash::SETTINGS:
-      return vector_icons::kSettingsIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kSettingsFilledIcon
+                 : vector_icons::kSettingsOldIcon;
     case ash::TOGGLE_PIN:
-      return controller_->IsPinned(item_.id) ? views::kUnpinIcon
-                                             : views::kPinIcon;
+      return controller_->IsPinned(item_.id) ? features::IsRoundedIconsEnabled()
+                                                   ? views::kKeepFilledIcon
+                                                   : views::kUnpinOldIcon
+             : features::IsRoundedIconsEnabled() ? views::kKeepIcon
+                                                 : views::kPinOldIcon;
     case ash::APP_CONTEXT_MENU_NEW_WINDOW:
-      return views::kNewWindowIcon;
+      return features::IsRoundedIconsEnabled() ? views::kNewWindowIcon
+                                               : views::kNewWindowOldIcon;
     case ash::APP_CONTEXT_MENU_NEW_INCOGNITO_WINDOW:
-      return views::kNewIncognitoWindowIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? views::kIncognitoIcon
+                 : views::kNewIncognitoWindowOldIcon;
     case ash::USE_LAUNCH_TYPE_REGULAR:
     case ash::USE_LAUNCH_TYPE_WINDOW:
     case ash::USE_LAUNCH_TYPE_TABBED_WINDOW:
@@ -238,13 +255,16 @@ const gfx::VectorIcon& ShelfContextMenu::GetCommandIdVectorIcon(
       NOTREACHED() << "NOTIFICATION_CONTAINER does not have an icon, and it is "
                       "added to the model by NotificationMenuController.";
     case ash::SHUTDOWN_GUEST_OS:
-      return kShutdownGuestOsIcon;
+      return ash::kShutdownGuestOsIcon;
     case ash::SHUTDOWN_BRUSCHETTA_OS:
-      return kShutdownGuestOsIcon;
+      return ash::kShutdownGuestOsIcon;
     case ash::CROSTINI_USE_HIGH_DENSITY:
-      return views::kLinuxHighDensityIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? views::kHighDensityIcon
+                 : views::kLinuxHighDensityOldIcon;
     case ash::CROSTINI_USE_LOW_DENSITY:
-      return views::kLinuxLowDensityIcon;
+      return features::IsRoundedIconsEnabled() ? views::kLowDensityIcon
+                                               : views::kLinuxLowDensityOldIcon;
     case ash::SWAP_WITH_NEXT:
     case ash::SWAP_WITH_PREVIOUS:
       return gfx::VectorIcon::EmptyIcon();

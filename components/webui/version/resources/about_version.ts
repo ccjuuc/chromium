@@ -50,6 +50,10 @@ function handleVariationInfo(
     getRequiredElement('variations-list')
         .appendChild(document.createElement('br'));
   }
+  if (variationsList.length) {
+    getRequiredElement('copy-active-variations-to-clipboard').dataset['value'] =
+        variationsList.join('\n');
+  }
 
   const includeVariationsCmd = location.search.includes('show-variations-cmd');
   if (variationsCmd !== '') {
@@ -117,13 +121,13 @@ function returnArcAndArcAndroidSdkVersions(arcAndroidSdkVersion: string) {
 /**
  * Callback from chromeosInfoPrivate with the value of the customization ID.
  */
-function returnCustomizationId(response: {[customizationId: string]: any}) {
+function returnCustomizationId(response: {[customizationId: string]: unknown}) {
   if (!response['customizationId']) {
     return;
   }
   getRequiredElement('customization_id_holder').hidden = false;
   getRequiredElement('customization_id').textContent =
-      response['customizationId'];
+      response['customizationId'] as string;
 }
 
 // </if>
@@ -138,6 +142,14 @@ async function copyVariationsToClipboard() {
   const cmdLine =
       getRequiredElement('variations-cmd').dataset['value'] as string;
   await navigator.clipboard.writeText(cmdLine);
+  announceCopy('copy_variations_notice');
+}
+
+async function copyActiveVariationsToClipboard() {
+  const variations =
+      getRequiredElement('copy-active-variations-to-clipboard')
+          .dataset['value'] as string;
+  await navigator.clipboard.writeText(variations);
   announceCopy('copy_variations_notice');
 }
 
@@ -181,9 +193,15 @@ function initialize() {
 
   chrome.send('requestVersionInfo');
   const includeVariationsCmd = location.search.includes('show-variations-cmd');
-  sendWithPromise('requestVariationInfo', includeVariationsCmd)
+  sendWithPromise<{variationsList: string[], variationsCmd: string}>(
+      'requestVariationInfo', includeVariationsCmd)
       .then(handleVariationInfo);
-  sendWithPromise('requestPathInfo').then(handlePathInfo);
+  sendWithPromise<{execPath: string, profilePath: string}>('requestPathInfo')
+      .then(handlePathInfo);
+
+  if (getRequiredElement('variations-source').textContent !== '') {
+    getRequiredElement('variations-source-section').hidden = false;
+  }
 
   if (getRequiredElement('variations-seed').textContent !== '') {
     getRequiredElement('variations-seed-section').hidden = false;
@@ -198,6 +216,9 @@ function initialize() {
 
   getRequiredElement('copy-variations-to-clipboard')
       .addEventListener('click', copyVariationsToClipboard);
+
+  getRequiredElement('copy-active-variations-to-clipboard')
+      .addEventListener('click', copyActiveVariationsToClipboard);
 }
 
 document.addEventListener('DOMContentLoaded', initialize);

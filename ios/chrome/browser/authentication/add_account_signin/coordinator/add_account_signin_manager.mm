@@ -9,6 +9,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -86,10 +87,10 @@ void LogAddAccountToDeviceHistograms(SigninAddAccountToDeviceResult result,
                 prefilledEmail:(NSString*)email {
   self = [super init];
   if (self) {
-    CHECK(baseViewController, base::NotFatalUntil::M140);
-    CHECK(prefService, base::NotFatalUntil::M140);
-    CHECK(identityManager, base::NotFatalUntil::M140);
-    CHECK(identityInteractionManager, base::NotFatalUntil::M140);
+    CHECK(baseViewController);
+    CHECK(prefService);
+    CHECK(identityManager);
+    CHECK(identityInteractionManager);
     _baseViewController = baseViewController;
     _prefService = prefService;
     _identityManager = identityManager;

@@ -13,29 +13,12 @@
 #include "third_party/blink/renderer/core/loader/history_item.h"
 #include "third_party/blink/renderer/core/navigation_api/navigation_activation.h"
 #include "third_party/blink/renderer/core/navigation_api/navigation_api.h"
+#include "third_party/blink/renderer/core/navigation_api/navigation_type_util.h"
 #include "third_party/blink/renderer/core/view_transition/dom_view_transition.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/uuid.h"
 
 namespace blink {
-namespace {
-
-V8NavigationType::Enum TypeToEnum(
-    mojom::blink::NavigationTypeForNavigationApi type) {
-  switch (type) {
-    case mojom::blink::NavigationTypeForNavigationApi::kPush:
-      return V8NavigationType::Enum::kPush;
-    case mojom::blink::NavigationTypeForNavigationApi::kTraverse:
-      return V8NavigationType::Enum::kTraverse;
-    case mojom::blink::NavigationTypeForNavigationApi::kReplace:
-      return V8NavigationType::Enum::kReplace;
-    case mojom::blink::NavigationTypeForNavigationApi::kReload:
-      return V8NavigationType::Enum::kReload;
-  }
-  NOTREACHED();
-}
-
-}  // namespace
 
 PageSwapEvent::PageSwapEvent(
     Document& document,
@@ -64,7 +47,7 @@ PageSwapEvent::PageSwapEvent(
         // rare race conditions.
         Member<HistoryItem> destination_item =
             HistoryItem::Create(PageState::CreateFromEncodedData(
-                page_swap_event_params->page_state));
+                std::move(page_swap_event_params->page_state)));
         entry = navigation->GetExistingEntryFor(
             destination_item->GetNavigationApiKey(),
             destination_item->GetNavigationApiId());
@@ -73,16 +56,17 @@ PageSwapEvent::PageSwapEvent(
       case mojom::blink::NavigationTypeForNavigationApi::kReplace:
         entry = MakeGarbageCollected<NavigationHistoryEntry>(
             document.domWindow(),
-            /*key=*/CreateCanonicalUUIDString(),
-            /*id=*/CreateCanonicalUUIDString(),
+            /*key=*/CreateCanonicalUuidString(),
+            /*id=*/CreateCanonicalUuidString(),
             /*url=*/page_swap_event_params->url,
             /*document_sequence_number=*/0,
             /*state=*/nullptr);
     }
 
     activation_ = MakeGarbageCollected<NavigationActivation>();
-    activation_->Update(entry, from,
-                        TypeToEnum(page_swap_event_params->navigation_type));
+    activation_->Update(
+        entry, from,
+        ToV8NavigationType(page_swap_event_params->navigation_type));
   }
 }
 

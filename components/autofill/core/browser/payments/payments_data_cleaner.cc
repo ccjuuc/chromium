@@ -4,7 +4,13 @@
 
 #include "components/autofill/core/browser/payments/payments_data_cleaner.h"
 
+#include <stddef.h>
+
+#include <string>
+#include <vector>
+
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/common/autofill_constants.h"
 
@@ -18,32 +24,12 @@ PaymentsDataCleaner::~PaymentsDataCleaner() = default;
 
 void PaymentsDataCleaner::CleanupPaymentsData() {
   DeleteDisusedCreditCards();
-  ClearCreditCardNonSettingsOrigins();
-}
-
-void PaymentsDataCleaner::ClearCreditCardNonSettingsOrigins() {
-  bool has_updated = false;
-
-  for (const CreditCard* card : payments_data_manager_->GetLocalCreditCards()) {
-    if (card->origin() != kSettingsOrigin && !card->origin().empty()) {
-      CreditCard mutable_card = *card;
-      mutable_card.set_origin(std::string());
-      payments_data_manager_->GetLocalDatabase()->UpdateCreditCard(
-          mutable_card);
-      has_updated = true;
-    }
-  }
-
-  // Refresh the local cache and send notifications to observers if a changed
-  // was made.
-  if (has_updated) {
-    payments_data_manager_->Refresh();
-  }
 }
 
 bool PaymentsDataCleaner::DeleteDisusedCreditCards() {
   // Only delete local cards, as server cards are managed by Payments.
-  auto cards = payments_data_manager_->GetLocalCreditCards();
+  std::vector<const CreditCard*> cards =
+      payments_data_manager_->GetLocalCreditCards();
 
   // Early exit when there is no local cards.
   if (cards.empty()) {

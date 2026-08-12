@@ -15,15 +15,19 @@ WebUIController::~WebUIController() {
   RemoveWebUIManagedInterfaces(this);
 }
 
-bool WebUIController::OverrideHandleWebUIMessage(
-    const GURL& source_url,
-    const std::string& message,
-    const base::Value::List& args) {
+bool WebUIController::OverrideHandleWebUIMessage(const GURL& source_url,
+                                                 const std::string& message,
+                                                 const base::ListValue& args) {
   return false;
 }
 
 WebUIController::Type WebUIController::GetType() {
   return nullptr;
+}
+
+WebUIController::DisplayDisposition WebUIController::GetDisplayDisposition()
+    const {
+  return DisplayDisposition::kRegularPage;
 }
 
 WebUIController::TrustPolicy WebUIController::GetTrustPolicy() {

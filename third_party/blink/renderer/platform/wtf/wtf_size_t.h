@@ -8,6 +8,10 @@
 #include <limits.h>
 #include <stdint.h>
 
+#include <iterator>
+
+#include "base/numerics/safe_conversions.h"
+
 namespace blink {
 
 // TLDR: size_t != wtf_size_t
@@ -34,6 +38,11 @@ namespace blink {
 // type matches the external type.
 using wtf_size_t = uint32_t;
 const wtf_size_t kNotFound = UINT_MAX;
+
+template <typename Iter>
+inline wtf_size_t CheckedDistance(Iter begin, Iter end) {
+  return base::checked_cast<wtf_size_t>(std::distance(begin, end));
+}
 
 }  // namespace blink
 

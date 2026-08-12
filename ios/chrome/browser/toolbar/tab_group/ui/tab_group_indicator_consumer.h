@@ -9,13 +9,16 @@
 
 #import "ios/chrome/browser/share_kit/model/sharing_state.h"
 
+@class TabGroupColorPalette;
 @protocol FacePileProviding;
 
 // TabGroupIndicator Consumer interface.
 @protocol TabGroupIndicatorConsumer <NSObject>
 
-// Sets the `groupTitle` and the `groupColor` to be displayed in the view.
-- (void)setTabGroupTitle:(NSString*)groupTitle groupColor:(UIColor*)groupColor;
+// Sets the `groupTitle` and the `tabGroupColorPalette` to be displayed in the
+// view.
+- (void)setTabGroupTitle:(NSString*)groupTitle
+    tabGroupColorPalette:(TabGroupColorPalette*)tabGroupColorPalette;
 
 // Sets whether the group can be shared or not.
 - (void)setShareAvailable:(BOOL)shareAvailable;

@@ -12,6 +12,8 @@ import org.jni_zero.NativeMethods;
 import org.chromium.android_webview.common.AwFeatureMap;
 import org.chromium.android_webview.common.AwFeatures;
 import org.chromium.android_webview.common.AwSwitches;
+import org.chromium.android_webview.common.SafeModeActionIds;
+import org.chromium.android_webview.common.SafeModeController;
 import org.chromium.base.CommandLine;
 import org.chromium.build.annotations.NullMarked;
 
@@ -30,11 +32,15 @@ public final class AwCrashyClassUtils {
 
     @VisibleForTesting
     public static boolean shouldCrashJava() {
+        if (SafeModeController.getInstance()
+                .isActionEnabled(SafeModeActionIds.DISABLE_CRASHY_CLASS)) return false;
         return AwFeatureMap.isEnabled(AwFeatures.WEBVIEW_ENABLE_CRASH)
                 && CommandLine.getInstance().hasSwitch(AwSwitches.WEBVIEW_FORCE_CRASH_JAVA);
     }
 
     public static boolean shouldCrashNative() {
+        if (SafeModeController.getInstance()
+                .isActionEnabled(SafeModeActionIds.DISABLE_CRASHY_CLASS)) return false;
         return AwFeatureMap.isEnabled(AwFeatures.WEBVIEW_ENABLE_CRASH)
                 && CommandLine.getInstance().hasSwitch(AwSwitches.WEBVIEW_FORCE_CRASH_NATIVE);
     }

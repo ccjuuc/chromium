@@ -79,7 +79,7 @@ class AccessibilityFeaturesApiTest
  protected:
   // Returns pref service to be used to initialize and later verify
   // accessibility preference values.
-  PrefService* GetPrefs() { return browser()->profile()->GetPrefs(); }
+  PrefService* GetPrefs() { return browser()->GetProfile()->GetPrefs(); }
 
   // Returns the path of the extension that should be used in a parameterized
   // test.
@@ -204,15 +204,15 @@ class AccessibilityFeaturesApiTest
                        const std::vector<std::string>& enabled_features,
                        const std::vector<std::string>& disabled_features,
                        std::string* result) {
-    base::Value::Dict test_arg;
+    base::DictValue test_arg;
     test_arg.Set(kTestNameKey, test_name);
 
-    base::Value::List enabled_list;
+    base::ListValue enabled_list;
     for (const auto& feature : enabled_features)
       enabled_list.Append(feature);
     test_arg.Set(kEnabledFeaturesKey, std::move(enabled_list));
 
-    base::Value::List disabled_list;
+    base::ListValue disabled_list;
     for (const auto& feature : disabled_features)
       disabled_list.Append(feature);
     test_arg.Set(kDisabledFeaturesKey, std::move(disabled_list));
@@ -286,7 +286,7 @@ IN_PROC_BROWSER_TEST_P(AccessibilityFeaturesApiTest, PRE_Get_ComponentApp) {
       << message_;
 }
 
-// A regression test for https://crbug.com/454513. Ensure that loading a
+// A regression test for https://crbug.com/40403830. Ensure that loading a
 // component extension with the same version as has previously loaded, correctly
 // sets up access to accessibility prefs. Otherwise,this is the same as the
 // |Get| test.

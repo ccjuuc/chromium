@@ -14,11 +14,12 @@ import androidx.annotation.StringRes;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.user_education.IphCommand;
+import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.base.LocalizationUtils;
 
 import java.lang.annotation.Retention;
@@ -35,7 +36,9 @@ public class TabStripIphController {
         IphType.TAB_GROUP_SYNC,
         IphType.GROUP_TITLE_NOTIFICATION_BUBBLE,
         IphType.TAB_NOTIFICATION_BUBBLE,
-        IphType.TAB_TEARING_XR
+        IphType.TAB_TEARING_XR,
+        IphType.GLIC_PROMO,
+        IphType.VERTICAL_TABS_PROMO
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface IphType {
@@ -52,6 +55,12 @@ public class TabStripIphController {
 
         /** Indicates the IPH is triggered for tab tearing on XR. */
         int TAB_TEARING_XR = 3;
+
+        /** Indicates the IPH is triggered for the Glic entry point. */
+        int GLIC_PROMO = 4;
+
+        /** Indicates the IPH is triggered for promoting Vertical Tabs. */
+        int VERTICAL_TABS_PROMO = 5;
     }
 
     private static final int IPH_AUTO_DISMISS_WAIT_TIME_MS = 5 * 1000;
@@ -59,6 +68,7 @@ public class TabStripIphController {
     private final Resources mResources;
     private final UserEducationHelper mUserEducationHelper;
     private final Tracker mTracker;
+    private boolean mGlicIphShowing;
 
     /**
      * Constructs the controller.
@@ -94,19 +104,54 @@ public class TabStripIphController {
             boolean enableSnoozeMode) {
         Rect anchorRect =
                 calculateAnchorRect(toolbarContainerView, groupTitle, tab, iphType, tabStripHeight);
-        IphCommand iphCommand =
+
+        showIph(toolbarContainerView, anchorRect, iphType, enableSnoozeMode);
+    }
+
+    /**
+     * Calculates the anchor rect and display an In-Product Help (IPH) on the tab strip. Overload
+     * for CompositorButtons.
+     *
+     * @param button The compositor button where the IPH should be anchored.
+     * @param toolbarContainerView Used to get the anchor view for the IPH.
+     * @param iphType The type of IPH to display.
+     * @param enableSnoozeMode Whether to enable snooze mode on the IPH.
+     */
+    public void showIphOnCompositorButton(
+            CompositorButton button,
+            View toolbarContainerView,
+            @IphType int iphType,
+            boolean enableSnoozeMode) {
+        Rect anchorRect = new Rect();
+        button.getAnchorRect(anchorRect);
+        int[] toolbarCoordinates = new int[2];
+        toolbarContainerView.getLocationInWindow(toolbarCoordinates);
+        anchorRect.offset(toolbarCoordinates[0], toolbarCoordinates[1]);
+
+        showIph(toolbarContainerView, anchorRect, iphType, enableSnoozeMode);
+    }
+
+    private void showIph(
+            View anchorView, Rect anchorRect, @IphType int iphType, boolean enableSnoozeMode) {
+        IphCommandBuilder iphCommandBuilder =
                 new IphCommandBuilder(
                                 mResources,
                                 getIphFeature(iphType),
                                 getIphString(iphType),
                                 getIphString(iphType))
-                        .setAnchorView(toolbarContainerView)
+                        .setAnchorView(anchorView)
                         .setAnchorRect(anchorRect)
                         .setDismissOnTouch(true)
                         .setAutoDismissTimeout(IPH_AUTO_DISMISS_WAIT_TIME_MS)
-                        .setEnableSnoozeMode(enableSnoozeMode)
-                        .build();
-        mUserEducationHelper.requestShowIph(iphCommand);
+                        .setEnableSnoozeMode(enableSnoozeMode);
+
+        if (iphType == IphType.GLIC_PROMO) {
+            iphCommandBuilder
+                    .setOnShowCallback(() -> mGlicIphShowing = true)
+                    .setOnDismissCallback(() -> mGlicIphShowing = false);
+        }
+
+        mUserEducationHelper.requestShowIph(iphCommandBuilder.build());
     }
 
     /** Dismisses any currently visible IPH text bubble. */
@@ -124,6 +169,11 @@ public class TabStripIphController {
      */
     public boolean wouldTriggerIph(@IphType int iphType) {
         return mTracker != null && mTracker.wouldTriggerHelpUi(getIphFeature(iphType));
+    }
+
+    /** Returns whether Glic IPH is currently showing on the tab strip. */
+    public boolean isGlicIphShowing() {
+        return mGlicIphShowing;
     }
 
     /**
@@ -160,6 +210,7 @@ public class TabStripIphController {
 
         switch (iphType) {
             case IphType.TAB_GROUP_SYNC:
+            case IphType.VERTICAL_TABS_PROMO:
                 // Adjust the bottom boundary to match the tab strip's lower edge.
                 anchorRect.bottom = (int) (tabStripHeight * dpToPx);
                 break;
@@ -200,6 +251,10 @@ public class TabStripIphController {
                 return FeatureConstants.TAB_GROUP_SHARE_NOTIFICATION_BUBBLE_ON_STRIP_FEATURE;
             case IphType.TAB_TEARING_XR:
                 return FeatureConstants.IPH_TAB_TEARING_XR;
+            case IphType.GLIC_PROMO:
+                return FeatureConstants.GLIC_PROMO_ANDROID_FEATURE;
+            case IphType.VERTICAL_TABS_PROMO:
+                return FeatureConstants.ANDROID_VERTICAL_TABS_PROMO_FEATURE;
             default:
                 throw new IllegalArgumentException("Invalid IPH type");
         }
@@ -214,6 +269,12 @@ public class TabStripIphController {
                 return R.string.tab_group_share_notification_bubble_iph;
             case IphType.TAB_TEARING_XR:
                 return R.string.iph_tab_tearing_xr;
+            case IphType.GLIC_PROMO:
+                return R.string.iph_glic_promo_text;
+            case IphType.VERTICAL_TABS_PROMO:
+                return DeviceInput.supportsPrecisionPointer()
+                        ? R.string.iph_android_vertical_tabs_promo_mouse
+                        : R.string.iph_android_vertical_tabs_promo_touch;
             default:
                 throw new IllegalArgumentException("Invalid IPH type");
         }

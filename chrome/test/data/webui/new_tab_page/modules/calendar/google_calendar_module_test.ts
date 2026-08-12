@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {GoogleCalendarPageHandlerRemote} from 'chrome://new-tab-page/google_calendar.mojom-webui.js';
 import type {DisableModuleEvent, DismissModuleInstanceEvent, GoogleCalendarModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {googleCalendarDescriptor, GoogleCalendarProxyImpl} from 'chrome://new-tab-page/lazy_load.js';
-import {$$} from 'chrome://new-tab-page/new_tab_page.js';
+import {$$, GoogleCalendarPageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {TestMock} from 'chrome://webui-test/test_mock.js';
@@ -25,8 +24,8 @@ suite('NewTabPageModulesGoogleCalendarModuleTest', () => {
   const title = 'Google Calendar';
 
   async function initializeModule(numEvents: number = 0) {
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(numEvents)}));
+    handler.setPromiseResolveFor(
+        'getEvents', {events: createEvents(numEvents)});
     module = await googleCalendarDescriptor.initialize(0) as
         GoogleCalendarModuleElement;
     document.body.append(module);
@@ -53,8 +52,8 @@ suite('NewTabPageModulesGoogleCalendarModuleTest', () => {
     assertTrue(!!module);
 
     // Assert.
-    assertTrue(isVisible(module.$.moduleHeaderElementV2));
-    assertEquals(module.$.moduleHeaderElementV2.headerText, title);
+    assertTrue(isVisible(module.$.moduleHeader));
+    assertEquals(module.$.moduleHeader.headerText, title);
   });
 
   test('does not creates module if no data', async () => {
@@ -94,8 +93,9 @@ suite('NewTabPageModulesGoogleCalendarModuleTest', () => {
 
         // Act.
         const whenFired = eventToPromise('disable-module', module);
-        const disableButton = module.$.moduleHeaderElementV2.shadowRoot
-                                  .querySelector<HTMLElement>('#disable');
+        const disableButton =
+            module.$.moduleHeader.shadowRoot.querySelector<HTMLElement>(
+                '#disable');
         assertTrue(!!disableButton);
         disableButton.click();
 
@@ -131,7 +131,7 @@ suite('NewTabPageModulesGoogleCalendarModuleTest', () => {
     assertTrue(!!module);
 
     // Assert.
-    const dismissButton = $$(module.$.moduleHeaderElementV2, '#dismiss');
+    const dismissButton = $$(module.$.moduleHeader, '#dismiss');
     assertTrue(!!dismissButton);
     assertTrue(!!dismissButton.textContent);
     assertEquals(

@@ -6,10 +6,9 @@
 #include "build/build_config.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,8 +39,7 @@ MultiStep GlicActorWindowManagementUiTest::CreateWindowAction(
     ExpectedErrorResult expected_result) {
   auto create_window_provider = base::BindLambdaForTesting([&task_id]() {
     optimization_guide::proto::Actions create_window =
-        actor::MakeCreateWindow();
-    create_window.set_task_id(task_id.value());
+        actor::MakeCreateWindow(task_id);
     return EncodeActionProto(create_window);
   });
   return ExecuteAction(std::move(create_window_provider),
@@ -55,8 +53,7 @@ MultiStep GlicActorWindowManagementUiTest::ActivateWindowAction(
   auto activate_window_provider =
       base::BindLambdaForTesting([&task_id, &window_id]() {
         optimization_guide::proto::Actions activate_window =
-            actor::MakeActivateWindow(window_id);
-        activate_window.set_task_id(task_id.value());
+            actor::MakeActivateWindow(window_id, task_id);
         return EncodeActionProto(activate_window);
       });
   return ExecuteAction(std::move(activate_window_provider),
@@ -70,8 +67,7 @@ MultiStep GlicActorWindowManagementUiTest::CloseWindowAction(
   auto close_window_provider =
       base::BindLambdaForTesting([&task_id, &window_id]() {
         optimization_guide::proto::Actions close_window =
-            actor::MakeCloseWindow(window_id);
-        close_window.set_task_id(task_id.value());
+            actor::MakeCloseWindow(window_id, task_id);
         return EncodeActionProto(close_window);
       });
   return ExecuteAction(std::move(close_window_provider),
@@ -82,7 +78,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorWindowManagementUiTest, WindowManagementTools) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
 
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE)
-  if (ui::OzonePlatform::GetPlatformNameForTest() == "wayland") {
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
     GTEST_SKIP() << "Programmatic window activation doesn't work on wayland and"
                  << "this test checks window activation.";
   }
@@ -111,13 +107,13 @@ IN_PROC_BROWSER_TEST_F(GlicActorWindowManagementUiTest, WindowManagementTools) {
       Do([&]() {
         initial_window = GetLastActiveBrowserWindowInterfaceWithAnyProfile();
         initial_window_session_id = initial_window->GetSessionID();
-        initial_window_count = chrome::GetTotalBrowserCount();
+        initial_window_count = GlobalBrowserCollection::GetInstance()->GetSize();
       }),
 
       // Create a new window
       CreateWindowAction(task_id_),
       Check([&]() {
-              return chrome::GetTotalBrowserCount() ==
+              return GlobalBrowserCollection::GetInstance()->GetSize() ==
                   initial_window_count + 1;
           },
           "New window was created"),
@@ -153,7 +149,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorWindowManagementUiTest, WindowManagementTools) {
       // Close the new window
       CloseWindowAction(task_id_, created_window_session_id),
       Check([&]() {
-              return chrome::GetTotalBrowserCount() == initial_window_count;
+              return GlobalBrowserCollection::GetInstance()->GetSize() == initial_window_count;
           },
           "Created window was closed"),
       CheckResult(

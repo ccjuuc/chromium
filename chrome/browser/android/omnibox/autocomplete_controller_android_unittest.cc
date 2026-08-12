@@ -10,16 +10,23 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_controller_config.h"
 #include "components/omnibox/browser/autocomplete_input.h"
+#include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
+#include "components/search_engines/template_url.h"
+#include "components/search_engines/template_url_service.h"
+#include "content/public/test/mock_navigation_handle.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
-#include "third_party/omnibox_proto/aim_tools_and_models.pb.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 #include "url/gurl.h"
 
 namespace {
@@ -81,48 +88,105 @@ TEST_F(AutocompleteControllerAndroidTest, OnOmniboxFocused_NTP) {
   using OEP = metrics::OmniboxEventProto;
   using OFT = metrics::OmniboxFocusType;
 
-  std::u16string url = u"chrome://newtab";
+  GURL url("chrome://newtab");
 
   JNIEnv* env = base::android::AttachCurrentThread();
-  auto j_omnibox_text = base::android::ConvertUTF16ToJavaString(env, u"");
-  auto j_current_url = base::android::ConvertUTF16ToJavaString(env, url);
-  auto j_current_title = base::android::ConvertUTF16ToJavaString(env, u"title");
   auto page_classification = OEP::NTP;
 
   EXPECT_CALL(
       *mock(),
       Start(AllOf(Property(&AutocompleteInput::text, IsEmpty()),
-                  Property(&AutocompleteInput::current_url, Eq(GURL(url))),
+                  Property(&AutocompleteInput::current_url, Eq(url)),
                   Property(&AutocompleteInput::current_title, Eq(u"title")),
                   Property(&AutocompleteInput::focus_type,
                            Eq(OFT::INTERACTION_FOCUS)))));
 
-  controller()->OnOmniboxFocused(
-      env, j_omnibox_text, j_current_url, page_classification,
-      omnibox::TOOL_MODE_UNSPECIFIED, j_current_title);
+  controller()->OnOmniboxFocused(env, nullptr, u"", url, page_classification,
+                                 omnibox::TOOL_MODE_UNSPECIFIED, u"title");
 }
 
 TEST_F(AutocompleteControllerAndroidTest, OnOmniboxFocused_OTHER) {
   using OEP = metrics::OmniboxEventProto;
   using OFT = metrics::OmniboxFocusType;
 
-  std::u16string url = u"https://site.biz/";
+  GURL url("https://site.biz/");
 
   JNIEnv* env = base::android::AttachCurrentThread();
-  auto j_omnibox_text = base::android::ConvertUTF16ToJavaString(env, u"text");
-  auto j_current_url = base::android::ConvertUTF16ToJavaString(env, url);
-  auto j_current_title = base::android::ConvertUTF16ToJavaString(env, u"title");
   auto page_classification = OEP::OTHER;
 
   EXPECT_CALL(
       *mock(),
       Start(AllOf(Property(&AutocompleteInput::text, IsEmpty()),
-                  Property(&AutocompleteInput::current_url, Eq(GURL(url))),
+                  Property(&AutocompleteInput::current_url, Eq(url)),
                   Property(&AutocompleteInput::current_title, Eq(u"title")),
                   Property(&AutocompleteInput::focus_type,
                            Eq(OFT::INTERACTION_FOCUS)))));
 
-  controller()->OnOmniboxFocused(
-      env, j_omnibox_text, j_current_url, page_classification,
-      omnibox::TOOL_MODE_UNSPECIFIED, j_current_title);
+  controller()->OnOmniboxFocused(env, nullptr, u"text", url,
+                                 page_classification,
+                                 omnibox::TOOL_MODE_UNSPECIFIED, u"title");
+}
+
+TEST_F(AutocompleteControllerAndroidTest, GetTemplateUrlForText_NotFound) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  auto result =
+      controller()->GetTemplateUrlForText(env, u"nonexistent_keyword");
+  EXPECT_TRUE(result.is_null());
+}
+
+TEST_F(AutocompleteControllerAndroidTest, Start_InKeywordMode) {
+  using OEP = metrics::OmniboxEventProto;
+
+  GURL url("https://site.biz/");
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  EXPECT_CALL(
+      *mock(),
+      Start(AllOf(Property(&AutocompleteInput::text, Eq(u"query")),
+                  Property(&AutocompleteInput::current_url, Eq(url)),
+                  Property(&AutocompleteInput::in_keyword_mode, Eq(true)))));
+
+  controller()->Start(env, nullptr, u"query", -1, "", url, OEP::OTHER,
+                      omnibox::TOOL_MODE_UNSPECIFIED, false, true, false,
+                      true);
+}
+
+TEST_F(AutocompleteControllerAndroidTest,
+       CreateNavigationObserver_OmniboxDirectUrlInput_AttachesUserData) {
+  content::MockNavigationHandle navigation_handle(web_contents());
+  AutocompleteMatch match;
+  match.transition = ui::PAGE_TRANSITION_TYPED;
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+  controller()->CreateNavigationObserver(
+      env, reinterpret_cast<uintptr_t>(&navigation_handle),
+      reinterpret_cast<uintptr_t>(&match));
+
+  auto* user_data =
+      page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
+          navigation_handle);
+  ASSERT_TRUE(user_data);
+  EXPECT_EQ(
+      user_data->navigation_type(),
+      GetInitiatorLocation(ChromeInitiatorLocation::kOmniboxDirectUrlInput));
+}
+
+TEST_F(AutocompleteControllerAndroidTest,
+       CreateNavigationObserver_OmniboxDefaultSearchEngine_AttachesUserData) {
+  content::MockNavigationHandle navigation_handle(web_contents());
+  AutocompleteMatch match;
+  match.transition = ui::PAGE_TRANSITION_GENERATED;
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+  controller()->CreateNavigationObserver(
+      env, reinterpret_cast<uintptr_t>(&navigation_handle),
+      reinterpret_cast<uintptr_t>(&match));
+
+  auto* user_data =
+      page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
+          navigation_handle);
+  ASSERT_TRUE(user_data);
+  EXPECT_EQ(user_data->navigation_type(),
+            GetInitiatorLocation(
+                ChromeInitiatorLocation::kOmniboxDefaultSearchEngine));
 }

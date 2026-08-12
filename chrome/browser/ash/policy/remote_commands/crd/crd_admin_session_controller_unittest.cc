@@ -9,6 +9,7 @@
 #include <string>
 #include <tuple>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/curtain/security_curtain_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -28,13 +29,11 @@
 #include "chrome/browser/ash/policy/remote_commands/crd/public/crd_session_result_codes.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/start_crd_session_job_delegate.h"
 #include "chrome/browser/ui/ash/login/mock_login_display_host.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
-#include "chromeos/crosapi/mojom/remoting.mojom.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/session_manager/core/session_manager.h"
@@ -57,7 +56,7 @@ namespace {
 
 using SessionParameters = StartCrdSessionJobDelegate::SessionParameters;
 using StartSupportSessionCallback =
-    crosapi::mojom::Remoting::StartSupportSessionCallback;
+    CrdAdminSessionController::RemotingServiceProxy::StartSessionCallback;
 
 using base::test::TestFuture;
 using remoting::ErrorCode;
@@ -377,7 +376,9 @@ class CrdAdminSessionControllerTest : public ChromeAshTestBase {
     local_state().SetBoolean(pref_name, value);
   }
 
-  void DismissNotification() { SetPref(prefs::kRemoteAdminWasPresent, false); }
+  void DismissNotification() {
+    SetPref(ash::prefs::kRemoteAdminWasPresent, false);
+  }
 
   TestingPrefServiceSimple& local_state() {
     return CHECK_DEREF(

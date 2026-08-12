@@ -17,8 +17,6 @@ export class TestManageProfilesBrowserProxy extends TestBrowserProxy implements
       'launchGuestProfile',
       'openManageProfileSettingsSubPage',
       'launchSelectedProfile',
-      'launchAllProfiles',
-      'recordOpenAllProfilesButtonShown',
       'askOnStartupChanged',
       'getNewProfileSuggestedThemeInfo',
       'getProfileThemeInfo',
@@ -57,6 +55,7 @@ export class TestManageProfilesBrowserProxy extends TestBrowserProxy implements
       profileCardButtonLabel: '',
       avatarBadge: '',
       hasEnterpriseLabel: false,
+      hasAvatarRing: false,
     };
 
     /**
@@ -87,14 +86,6 @@ export class TestManageProfilesBrowserProxy extends TestBrowserProxy implements
 
   launchSelectedProfile(profilePath: string) {
     this.methodCalled('launchSelectedProfile', profilePath);
-  }
-
-  launchAllProfiles() {
-    this.methodCalled('launchAllProfiles');
-  }
-
-  recordOpenAllProfilesButtonShown() {
-    this.methodCalled('recordOpenAllProfilesButtonShown');
   }
 
   askOnStartupChanged(shouldShow: boolean) {

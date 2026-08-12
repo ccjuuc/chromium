@@ -53,6 +53,10 @@ signin::IdentityManager* WebViewSyncClient::GetIdentityManager() {
   return identity_manager_;
 }
 
+network_time::NetworkTimeTracker* WebViewSyncClient::GetNetworkTimeTracker() {
+  return nullptr;
+}
+
 base::FilePath WebViewSyncClient::GetLocalSyncBackendFolder() {
   return base::FilePath();
 }
@@ -84,4 +88,10 @@ void WebViewSyncClient::RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial(
   // This code might be reached but synthetic field trials are not supported on
   // iOS webview.
 }
+
+bool WebViewSyncClient::IsMetricsAndCrashReportingEnabled() {
+  // iOS webview doesn't use Chromium's metrics and crash reporting.
+  return false;
+}
+
 }  // namespace ios_web_view

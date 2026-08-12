@@ -108,14 +108,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionInstalledWatcherBrowserTest,
   EXPECT_FALSE(install_success_.has_value());  // Callback was never run
 }
 
-// Regression test for https://crbug.com/1049190.
+// Regression test for https://crbug.com/40672408.
 IN_PROC_BROWSER_TEST_F(ExtensionInstalledWatcherBrowserTest,
                        BrowserShutdownWhileWaitingDoesntCrash) {
   auto foo = MakeExtensionNamed("foo");
   WaitFor(foo);
 
-  // If the fix for https://crbug.com/1049190 regresses, this will crash:
+  // If the fix for https://crbug.com/40672408 regresses, this will crash:
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   chrome::CloseWindow(browser());
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
   EXPECT_EQ(0, done_called_);
 }

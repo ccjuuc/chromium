@@ -24,8 +24,6 @@
 #include "components/media_router/common/providers/cast/channel/cast_message_util.h"
 #include "components/media_router/common/providers/cast/channel/cast_test_util.h"
 #include "content/public/test/browser_task_environment.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -64,19 +62,14 @@ constexpr char kAppParams[] = R"(
 )";
 constexpr int kMaxProtocolMessageSize = 64 * 1024;
 
-data_decoder::DataDecoder::ValueOrError ParseJsonLikeDataDecoder(
-    std::string_view json) {
-  return ParseJson(json);
-}
-
-std::optional<base::Value::Dict> GetDictionaryFromCastMessage(
+std::optional<base::DictValue> GetDictionaryFromCastMessage(
     const CastMessage& message) {
   if (!message.has_payload_utf8()) {
     return std::nullopt;
   }
 
-  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
-      message.payload_utf8(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  std::optional<base::DictValue> value =
+      base::JSONReader::ReadDict(message.payload_utf8(), base::JSON_PARSE_RFC);
   if (!value) {
     return std::nullopt;
   }
@@ -84,7 +77,7 @@ std::optional<base::Value::Dict> GetDictionaryFromCastMessage(
 }
 
 CastMessageType GetMessageType(const CastMessage& message) {
-  std::optional<base::Value::Dict> dict = GetDictionaryFromCastMessage(message);
+  std::optional<base::DictValue> dict = GetDictionaryFromCastMessage(message);
   if (!dict) {
     return CastMessageType::kOther;
   }
@@ -112,12 +105,10 @@ class CastMessageHandlerTest : public testing::Test {
   CastMessageHandlerTest()
       : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
         cast_socket_service_(new base::TestSimpleTaskRunner()),
-        handler_(
-            &cast_socket_service_,
-            base::BindRepeating(&data_decoder::DataDecoder::ParseJsonIsolated),
-            kTestUserAgentString,
-            "66.0.3331.0",
-            "en-US") {
+        handler_(&cast_socket_service_,
+                 kTestUserAgentString,
+                 "66.0.3331.0",
+                 "en-US") {
     ON_CALL(cast_socket_service_, GetSocket(testing::Matcher<int>(_)))
         .WillByDefault(testing::Return(&cast_socket_));
   }
@@ -192,16 +183,15 @@ class CastMessageHandlerTest : public testing::Test {
 
   void SendMessageAndExpectConnection(const std::string& destination_id,
                                       VirtualConnectionType connection_type) {
-    CastMessage message =
-        CreateCastMessage("namespace", base::Value(base::Value::Dict()),
-                          kSourceId, destination_id);
+    CastMessage message = CreateCastMessage(
+        "namespace", base::Value(base::DictValue()), kSourceId, destination_id);
     {
       InSequence dummy;
       // We should first send a CONNECT request to ensure a connection.
       EXPECT_CALL(*transport_,
                   SendMessage_(HasMessageType(CastMessageType::kConnect), _))
           .WillOnce(WithArg<0>([&](const CastMessage& message) {
-            std::optional<base::Value::Dict> dict =
+            std::optional<base::DictValue> dict =
                 GetDictionaryFromCastMessage(message);
             EXPECT_EQ(connection_type, dict->FindInt("connType").value());
           }));
@@ -213,8 +203,7 @@ class CastMessageHandlerTest : public testing::Test {
 
   void HandlePendingLaunchSessionRequest(int request_id) {
     handler_.HandleCastInternalMessage(channel_id_, kSourceId, kDestinationId,
-                                       "theNamespace",
-                                       ParseJsonLikeDataDecoder(R"(
+                                       "theNamespace", ParseJson(R"(
       {
         "requestId": )" + base::NumberToString(request_id) + R"(,
         "type": "RECEIVER_STATUS",
@@ -224,8 +213,7 @@ class CastMessageHandlerTest : public testing::Test {
 
   void HandleLaunchStatusResponse(int request_id, std::string message_status) {
     handler_.HandleCastInternalMessage(
-        channel_id_,
-        kSourceId, kDestinationId, "theNamespace", ParseJsonLikeDataDecoder(R"(
+        channel_id_, kSourceId, kDestinationId, "theNamespace", ParseJson(R"(
       {
         "launchRequestId": )" + base::NumberToString(request_id) + R"(,
         "type": "LAUNCH_STATUS",
@@ -235,8 +223,7 @@ class CastMessageHandlerTest : public testing::Test {
 
   void HandleLaunchErrorResponse(int request_id, std::string extended_error) {
     handler_.HandleCastInternalMessage(channel_id_, kSourceId, kDestinationId,
-                                       "theNamespace",
-                                       ParseJsonLikeDataDecoder(R"(
+                                       "theNamespace", ParseJson(R"(
       {
         "requestId": )" + base::NumberToString(request_id) + R"(,
         "type": "LAUNCH_ERROR",
@@ -246,8 +233,7 @@ class CastMessageHandlerTest : public testing::Test {
 
   void HandlePendingGeneralRequest(int request_id) {
     handler_.HandleCastInternalMessage(channel_id_, kSourceId, kDestinationId,
-                                       "theNamespace",
-                                       ParseJsonLikeDataDecoder(R"(
+                                       "theNamespace", ParseJson(R"(
       {
         "requestId": )" + base::NumberToString(request_id) + R"(
       })"));
@@ -255,8 +241,7 @@ class CastMessageHandlerTest : public testing::Test {
 
   void HandleAppAvailabilityRequest(int request_id) {
     handler_.HandleCastInternalMessage(channel_id_, kSourceId, kDestinationId,
-                                       "theNamespace",
-                                       ParseJsonLikeDataDecoder(R"(
+                                       "theNamespace", ParseJson(R"(
       {
         "requestId": )" + base::NumberToString(request_id) + R"(,
         "availability": {")" + kAppId1 + R"(": "APP_AVAILABLE"},
@@ -267,7 +252,6 @@ class CastMessageHandlerTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<base::RunLoop> run_loop_;
   testing::NiceMock<MockCastSocketService> cast_socket_service_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   CastMessageHandler handler_;
   MockCastSocket cast_socket_;
   const int channel_id_ = cast_socket_.id();
@@ -326,7 +310,7 @@ TEST_F(CastMessageHandlerTest, RequestAppAvailability) {
       base::BindOnce(&CastMessageHandlerTest::OnAppAvailability,
                      base::Unretained(this)));
 
-  std::optional<base::Value::Dict> dict =
+  std::optional<base::DictValue> dict =
       GetDictionaryFromCastMessage(last_request_);
   ASSERT_TRUE(dict);
   const std::optional<int> request_id_value = dict->FindInt("requestId");
@@ -335,7 +319,7 @@ TEST_F(CastMessageHandlerTest, RequestAppAvailability) {
   EXPECT_GT(request_id, 0);
 
   CastMessage response;
-  response.set_namespace_("urn:x-cast:com.google.cast.receiver");
+  response.set_namespace_(kReceiverNamespace);
   response.set_source_id("receiver-0");
   response.set_destination_id(handler_.source_id());
   response.set_payload_type(
@@ -449,8 +433,8 @@ TEST_F(CastMessageHandlerTest, LaunchSession) {
       static_cast<CastChannelFlags>(CastChannelFlag::kCRLMissing));
   ExpectEnsureConnectionThen(CastMessageType::kLaunch);
 
-  const std::optional<base::Value::Dict> json = base::JSONReader::ReadDict(
-      kAppParams, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  const std::optional<base::DictValue> json =
+      base::JSONReader::ReadDict(kAppParams, base::JSON_PARSE_RFC);
 
   handler_.LaunchSession(
       channel_id_, kAppId1, base::Seconds(30), {"WEB"},
@@ -459,7 +443,7 @@ TEST_F(CastMessageHandlerTest, LaunchSession) {
                      base::Unretained(this),
                      LaunchSessionResponse::Result::kOk));
 
-  std::optional<base::Value::Dict> dict =
+  std::optional<base::DictValue> dict =
       GetDictionaryFromCastMessage(last_request_);
   ASSERT_TRUE(dict);
   const std::optional<int> request_id_value = dict->FindInt("requestId");
@@ -470,7 +454,7 @@ TEST_F(CastMessageHandlerTest, LaunchSession) {
   EXPECT_EQ(*json, *app_params);
 
   CastMessage response;
-  response.set_namespace_("urn:x-cast:com.google.cast.receiver");
+  response.set_namespace_(kReceiverNamespace);
   response.set_source_id("receiver-0");
   response.set_destination_id(handler_.source_id());
   response.set_payload_type(
@@ -512,7 +496,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionTimedOut) {
 
 TEST_F(CastMessageHandlerTest, LaunchSessionMessageExceedsSizeLimit) {
   std::string invalid_url(kMaxProtocolMessageSize, 'a');
-  base::Value::Dict json;
+  base::DictValue json;
   json.Set("key", invalid_url);
   handler_.LaunchSession(
       channel_id_, kAppId1, base::Seconds(30), {"WEB"},
@@ -524,7 +508,7 @@ TEST_F(CastMessageHandlerTest, LaunchSessionMessageExceedsSizeLimit) {
 }
 
 TEST_F(CastMessageHandlerTest, SendAppMessage) {
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set("foo", "bar");
   CastMessage message = CreateCastMessage(
       "namespace", base::Value(std::move(body)), kSourceId, kDestinationId);
@@ -536,6 +520,19 @@ TEST_F(CastMessageHandlerTest, SendAppMessage) {
   }
 
   EXPECT_EQ(Result::kOk, handler_.SendAppMessage(channel_id_, message));
+}
+
+TEST_F(CastMessageHandlerTest, SendAppMessageWithReservedNamespace) {
+  base::DictValue body;
+  body.Set("foo", "bar");
+  CastMessage message =
+      CreateCastMessage(kReceiverNamespace, base::Value(std::move(body)),
+                        kSourceId, kDestinationId);
+
+  // Expect no message to be sent.
+  EXPECT_CALL(*transport_, SendMessage_(_, _)).Times(0);
+
+  EXPECT_EQ(Result::kFailed, handler_.SendAppMessage(channel_id_, message));
 }
 
 TEST_F(CastMessageHandlerTest, SendMessageOnInvisibleConnection) {
@@ -553,7 +550,7 @@ TEST_F(CastMessageHandlerTest, SendMessageToPlatformReceiver) {
 
 TEST_F(CastMessageHandlerTest, SendAppMessageExceedsSizeLimit) {
   std::string invalid_msg(kMaxProtocolMessageSize, 'a');
-  base::Value::Dict body;
+  base::DictValue body;
   body.Set("foo", invalid_msg);
   CastMessage message = CreateCastMessage(
       "namespace", base::Value(std::move(body)), kSourceId, kDestinationId);

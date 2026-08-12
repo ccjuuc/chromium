@@ -7,40 +7,11 @@ import {reportError} from '../error.js';
 import {Point} from '../geometry.js';
 import * as localDev from '../local_dev.js';
 import {getCanUseBigBuffer} from '../models/load_time_data.js';
-import {
-  ErrorLevel,
-  ErrorType,
-  MimeType,
-} from '../type.js';
+import {ErrorLevel, ErrorType, MimeType} from '../type.js';
 import {windowController} from '../window_controller.js';
 
-import {
-  AspectRatio,
-  BigBuffer,
-  CameraAppHelper,
-  CameraAppHelperRemote,
-  CameraIntentAction,
-  CaptureDestination,
-  CloudUpload,
-  EventsSenderRemote,
-  ExternalScreenMonitorCallbackRouter,
-  FileMonitorResult,
-  FileType,
-  LidState,
-  LidStateMonitorCallbackRouter,
-  LocalFile,
-  OcrResult,
-  PdfBuilderRemote,
-  Rotation,
-  ScreenLockedMonitorCallbackRouter,
-  ScreenState,
-  ScreenStateMonitorCallbackRouter,
-  StorageMonitorCallbackRouter,
-  StorageMonitorStatus,
-  SWPrivacySwitchMonitorCallbackRouter,
-  TabletModeMonitorCallbackRouter,
-  WifiConfig,
-} from './type.js';
+import type {AspectRatio, BigBuffer, CameraAppHelperRemote, CaptureDestination, CloudUpload, EventsSenderRemote, FileType, LidState, LocalFile, OcrResult, ScreenState, WifiConfig} from './type.js';
+import {CameraAppHelper, CameraIntentAction, ExternalScreenMonitorCallbackRouter, FileMonitorResult, LidStateMonitorCallbackRouter, PdfBuilderRemote, Rotation, ScreenLockedMonitorCallbackRouter, ScreenStateMonitorCallbackRouter, StorageMonitorCallbackRouter, StorageMonitorStatus, SWPrivacySwitchMonitorCallbackRouter, TabletModeMonitorCallbackRouter} from './type.js';
 import {wrapEndpoint} from './util.js';
 
 /**
@@ -56,7 +27,7 @@ function castToNumberArray(data: Uint8Array): number[] {
   // This cast is to workaround that the generated mojo binding only accepts
   // number[], but actually can be passed Uint8Array (which also supports
   // indexing via [] and length).
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
+
   return data as unknown as number[];
 }
 
@@ -404,7 +375,7 @@ class ChromeHelperImpl extends ChromeHelper {
   }
 
   override openUrlInBrowser(url: string): void {
-    this.remote.openUrlInBrowser({url: url});
+    this.remote.openUrlInBrowser(url);
   }
 
   private async checkReturn(

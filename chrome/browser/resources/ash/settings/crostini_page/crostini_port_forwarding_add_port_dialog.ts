@@ -23,7 +23,8 @@ import {microTask, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer
 import {cast} from '../assert_extras.js';
 import type {ContainerInfo, GuestId} from '../guest_os/guest_os_browser_proxy.js';
 
-import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl, type CrostiniPortProtocol, type CrostiniPortSetting, DEFAULT_CROSTINI_GUEST_ID, DEFAULT_CROSTINI_VM, MAX_VALID_PORT_NUMBER, MIN_VALID_PORT_NUMBER, PortState} from './crostini_browser_proxy.js';
+import {CrostiniBrowserProxyImpl, DEFAULT_CROSTINI_GUEST_ID, DEFAULT_CROSTINI_VM, MAX_VALID_PORT_NUMBER, MIN_VALID_PORT_NUMBER, PortState} from './crostini_browser_proxy.js';
+import type {CrostiniBrowserProxy, CrostiniPortProtocol, CrostiniPortSetting} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_port_forwarding_add_port_dialog.html.js';
 
 interface CrostiniPortForwardingAddPortDialog {
@@ -104,15 +105,15 @@ class CrostiniPortForwardingAddPortDialog extends PolymerElement {
     ];
   }
 
-  allContainers: ContainerInfo[];
-  allPorts: CrostiniPortSetting[];
+  declare allContainers: ContainerInfo[];
+  declare allPorts: CrostiniPortSetting[];
   private browserProxy_: CrostiniBrowserProxy;
-  private containerId_: GuestId;
-  private defaultVmName_: string;
-  private inputPortLabel_: string;
-  private inputPortNumber_: number|null;
-  private inputProtocolIndex_: number;
-  private portState_: string;
+  declare private containerId_: GuestId;
+  declare private defaultVmName_: string;
+  declare private inputPortLabel_: string;
+  declare private inputPortNumber_: number|null;
+  declare private inputProtocolIndex_: number;
+  declare private portState_: string;
 
   constructor() {
     super();

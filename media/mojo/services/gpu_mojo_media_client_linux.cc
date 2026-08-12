@@ -4,12 +4,15 @@
 
 #include "media/mojo/services/gpu_mojo_media_client.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/audio_encoder.h"
+#include "media/base/decoder.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
 #include "media/gpu/chromeos/mailbox_video_frame_converter.h"
@@ -36,11 +39,7 @@ VideoDecoderType GetPreferredLinuxDecoderImplementation() {
     return VideoDecoderType::kOutOfProcess;
   }
 
-#if BUILDFLAG(USE_VAAPI)
-  return VideoDecoderType::kVaapi;
-#elif BUILDFLAG(USE_V4L2_CODEC)
-  return VideoDecoderType::kV4L2;
-#endif
+  return ActiveLinuxVideoDecoderType();
 }
 
 std::vector<Fourcc> GetPreferredRenderableFourccs(
@@ -63,17 +62,13 @@ std::vector<Fourcc> GetPreferredRenderableFourccs(
       // GLX can only import native pixmap of format AR24. Ozone expose this
       // capability through gpu_feature_info so we can selectively allow hw
       // accelerated formats.
-      if (base::Contains(
-              gpu_feature_info.supported_formats_for_gl_native_pixmap_import,
-              viz::MultiPlaneFormat::kNV12)) {
+      if (gpu_feature_info.supports_nv12_gl_native_pixmap) {
         if (base::FeatureList::IsEnabled(kRenderableMM21)) {
           renderable_fourccs.emplace_back(Fourcc::MM21);
         }
         renderable_fourccs.emplace_back(Fourcc::NV12);
       }
-      if (base::Contains(
-              gpu_feature_info.supported_formats_for_gl_native_pixmap_import,
-              viz::MultiPlaneFormat::kP010)) {
+      if (gpu_feature_info.supports_p010_gl_native_pixmap) {
         renderable_fourccs.emplace_back(Fourcc::P010);
       }
     }
@@ -87,6 +82,7 @@ std::vector<Fourcc> GetPreferredRenderableFourccs(
   // color depth (P010 -> AR24), it should be optimized for zero-copy path in
   // the future.
   renderable_fourccs.emplace_back(Fourcc::AR24);
+  renderable_fourccs.emplace_back(Fourcc::BGR4);
 
   return renderable_fourccs;
 }

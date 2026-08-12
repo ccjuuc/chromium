@@ -7,21 +7,23 @@
 
 #include <map>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "components/user_education/common/feature_promo/feature_promo_precondition.h"
 #include "components/user_education/common/user_education_context.h"
 #include "components/user_education/common/user_education_storage_service.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 
+class BrowserView;
 class BrowserUserEducationInterfaceImpl;
 
 // Specialization for UserEducationContext that is tied to a Browser window.
 class BrowserUserEducationContext
     : public user_education::UserEducationContext {
  public:
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
   BrowserUserEducationContext(
       BrowserView& browser_view,
@@ -35,12 +37,16 @@ class BrowserUserEducationContext
   ui::ElementContext GetElementContext() const override;
   const ui::AcceleratorProvider* GetAcceleratorProvider() const override;
 
+  // Retrieves the browser window interface. Requires that `IsValid()` is true.
+  BrowserWindowInterface* GetBrowser() const;
+
   // Retrieves the browser view. Requires that `IsValid()` is true.
   BrowserView& GetBrowserView() const;
 
   using PreconditionPtr =
       std::unique_ptr<user_education::FeaturePromoPrecondition>;
-  using PreconditionId = user_education::FeaturePromoPrecondition::Identifier;
+  using PreconditionId =
+      user_education::FeaturePromoPrecondition::PreconditionIdentifier;
 
   // A number of preconditions are shared across all promos in the same context.
   // This returns the shared precondition with identifier `id`.

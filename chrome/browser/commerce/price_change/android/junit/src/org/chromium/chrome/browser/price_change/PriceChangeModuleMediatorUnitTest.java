@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -59,19 +60,17 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper.FaviconImageCallback;
-import org.chromium.components.embedder_support.util.UrlUtilities;
-import org.chromium.components.embedder_support.util.UrlUtilitiesJni;
 import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.components.image_fetcher.ImageFetcher.Params;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.shadows.ShadowAppCompatResources;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /** Test relating to {@link PriceChangeModuleMediator} */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -88,7 +87,6 @@ public class PriceChangeModuleMediatorUnitTest {
     @Mock private TabModel mTabModel;
     @Mock private ShoppingPersistedTabDataService mService;
     @Mock private FaviconHelper mFaviconHelper;
-    @Mock private UrlUtilities.Natives mUrlUtilitiesJniMock;
     @Mock private Bitmap mFaviconBitmap;
     @Mock private Bitmap mProductImageBitmap;
     @Mock private ImageFetcher mImageFetcher;
@@ -110,7 +108,6 @@ public class PriceChangeModuleMediatorUnitTest {
 
     @Before
     public void setUp() {
-        UrlUtilitiesJni.setInstanceForTesting(mUrlUtilitiesJniMock);
         mTab = new MockTab(123, mProfile);
         doReturn(mTabModel).when(mTabModelSelector).getModel(false);
         doReturn(1).when(mTabModel).getCount();
@@ -167,7 +164,7 @@ public class PriceChangeModuleMediatorUnitTest {
         mMediator.showModule();
 
         verify(mService).initialize(eq(new HashSet<>(Arrays.asList(tab1, tab2))));
-        verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(any(Callback.class));
+        verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(MockitoHelper.anyCallback());
     }
 
     @Test
@@ -176,11 +173,7 @@ public class PriceChangeModuleMediatorUnitTest {
         showModuleWithInitializedService();
 
         assertEquals(
-                mContext.getResources()
-                        .getQuantityString(
-                                org.chromium.chrome.browser.price_change.R.plurals
-                                        .price_change_module_title,
-                                1),
+                mContext.getResources().getQuantityString(R.plurals.price_change_module_title, 1),
                 mModel.get(PriceChangeModuleProperties.MODULE_TITLE));
         assertEquals(
                 PRODUCT_TITLE, mModel.get(PriceChangeModuleProperties.MODULE_PRODUCT_NAME_STRING));
@@ -210,6 +203,7 @@ public class PriceChangeModuleMediatorUnitTest {
                         eq(mProfile),
                         eq(PRODUCT_URL),
                         eq(mFaviconSize),
+                        anyBoolean(),
                         faviconCallbackCaptor.capture());
         faviconCallbackCaptor.getValue().onFaviconAvailable(mFaviconBitmap, new GURL(""));
 
@@ -217,7 +211,7 @@ public class PriceChangeModuleMediatorUnitTest {
 
         // Mock return value of ImageFetcher.
         ArgumentCaptor<Callback<Bitmap>> productImageCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         verify(mImageFetcher).fetchImage(any(Params.class), productImageCallbackCaptor.capture());
         productImageCallbackCaptor.getValue().onResult(mProductImageBitmap);
 
@@ -244,6 +238,7 @@ public class PriceChangeModuleMediatorUnitTest {
                         eq(mProfile),
                         eq(PRODUCT_URL),
                         eq(mFaviconSize),
+                        anyBoolean(),
                         faviconCallbackCaptor.capture());
         faviconCallbackCaptor.getValue().onFaviconAvailable(null, new GURL(""));
 
@@ -259,10 +254,10 @@ public class PriceChangeModuleMediatorUnitTest {
         mMediator.showModule();
 
         ArgumentCaptor<Callback<List<PriceChangeItem>>> dataCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(dataCallbackCaptor.capture());
         dataCallbackCaptor.getValue().onResult(new ArrayList<>());
-        verify(mService, times(0)).initialize(any(Set.class));
+        verify(mService, times(0)).initialize(anySet());
         verify(mModuleDelegate).onDataFetchFailed(eq(ModuleType.PRICE_CHANGE));
     }
 
@@ -319,10 +314,10 @@ public class PriceChangeModuleMediatorUnitTest {
         ShoppingPersistedTabData data = mock(ShoppingPersistedTabData.class);
         PriceChangeItem item = new PriceChangeItem(null, data);
         ArgumentCaptor<Callback<List<PriceChangeItem>>> dataCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(dataCallbackCaptor.capture());
         dataCallbackCaptor.getValue().onResult(new ArrayList<>(Arrays.asList(item)));
-        verify(mService, times(0)).initialize(any(Set.class));
+        verify(mService, times(0)).initialize(anySet());
         verify(mModuleDelegate).onDataFetchFailed(eq(ModuleType.PRICE_CHANGE));
     }
 
@@ -339,10 +334,10 @@ public class PriceChangeModuleMediatorUnitTest {
         doReturn(0).when(mTabModel).getCount();
         doReturn(null).when(mTabModel).getTabById(mTab.getId());
         ArgumentCaptor<Callback<List<PriceChangeItem>>> dataCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(dataCallbackCaptor.capture());
         dataCallbackCaptor.getValue().onResult(new ArrayList<>(Arrays.asList(item)));
-        verify(mService, times(0)).initialize(any(Set.class));
+        verify(mService, times(0)).initialize(anySet());
         verify(mModuleDelegate).onDataFetchFailed(eq(ModuleType.PRICE_CHANGE));
     }
 
@@ -369,13 +364,11 @@ public class PriceChangeModuleMediatorUnitTest {
 
         verify(mTabModelSelector).removeObserver(eq(mMediator));
         verify(mService).initialize(eq(new HashSet<>(Arrays.asList(tab1, tab2))));
-        verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(any(Callback.class));
+        verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(MockitoHelper.anyCallback());
     }
 
     public void showModuleWithInitializedService() {
         doReturn(true).when(mService).isInitialized();
-        when(mUrlUtilitiesJniMock.getDomainAndRegistry(eq(PRODUCT_URL.getSpec()), anyBoolean()))
-                .then(inv -> PRODUCT_URL_DOMAIN);
         mTab.setGurlOverrideForTesting(PRODUCT_URL);
         // Set up ShoppingPersistedTabData to be returned from service.
         ShoppingPersistedTabData data = mock(ShoppingPersistedTabData.class);
@@ -388,10 +381,10 @@ public class PriceChangeModuleMediatorUnitTest {
 
         // Mock return value of ShoppingPersistedTabDataService.
         ArgumentCaptor<Callback<List<PriceChangeItem>>> dataCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         verify(mService).getAllShoppingPersistedTabDataWithPriceDrop(dataCallbackCaptor.capture());
         PriceChangeItem item = new PriceChangeItem(mTab, data);
         dataCallbackCaptor.getValue().onResult(new ArrayList<>(Arrays.asList(item)));
-        verify(mService, times(0)).initialize(any(Set.class));
+        verify(mService, times(0)).initialize(anySet());
     }
 }

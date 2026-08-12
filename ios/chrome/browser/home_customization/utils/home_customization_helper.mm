@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/home_customization/utils/home_customization_helper.h"
 
-#import "base/containers/contains.h"
 #import "base/notreached.h"
 #import "components/commerce/core/commerce_feature_list.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -74,30 +73,25 @@
   switch (type) {
       // Main page toggles.
     case CustomizationToggleType::kMostVisited:
-      return DefaultSymbolWithPointSize(kHistorySymbol, kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolHistory, kToggleIconPointSize);
     case CustomizationToggleType::kMagicStack:
-      return DefaultSymbolWithPointSize(kMagicStackSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolMagicStack, kToggleIconPointSize);
     case CustomizationToggleType::kDiscover:
-      return DefaultSymbolWithPointSize(kDiscoverFeedSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolDiscoverFeed, kToggleIconPointSize);
 
       // Magic Stack page toggles.
     case CustomizationToggleType::kSafetyCheck:
-      return DefaultSymbolWithPointSize(kCheckmarkShieldSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolCheckmarkShield, kToggleIconPointSize);
     case CustomizationToggleType::kTapResumption:
-      return DefaultSymbolWithPointSize(kMacbookAndIPhoneSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolMacbookAndIPhone, kToggleIconPointSize);
     case CustomizationToggleType::kTips:
-      return DefaultSymbolWithPointSize(kListBulletClipboardSymbol,
-                                        kToggleIconPointSize);
+      return SymbolWithPointSize(SymbolListBulletClipboard,
+                                 kToggleIconPointSize);
     case CustomizationToggleType::kShopCard: {
       UIImageSymbolConfiguration* fallbackImageConfig =
           [UIImageSymbolConfiguration
               configurationWithWeight:UIImageSymbolWeightLight];
-      return CustomSymbolWithConfiguration(kDownTrendSymbol,
-                                           fallbackImageConfig);
+      return SymbolWithConfiguration(SymbolDownTrend, fallbackImageConfig);
       NOTREACHED();
     }
   }

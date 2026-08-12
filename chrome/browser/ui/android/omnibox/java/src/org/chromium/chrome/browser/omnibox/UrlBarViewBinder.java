@@ -17,11 +17,11 @@ import androidx.constraintlayout.widget.ConstraintLayout.LayoutParams;
 
 import com.google.android.material.color.MaterialColors;
 
-import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.UrlBarProperties.AutocompleteText;
 import org.chromium.chrome.browser.omnibox.UrlBarProperties.UrlBarTextState;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -32,56 +32,61 @@ class UrlBarViewBinder {
      * @see PropertyModelChangeProcfessor.ViewBinder#bind(Object, Object, Object)
      */
     public static void bind(PropertyModel model, UrlBar view, PropertyKey propertyKey) {
-        if (UrlBarProperties.ACTION_MODE_CALLBACK.equals(propertyKey)) {
+        if (UrlBarProperties.ACCESSIBILITY_WARNING.equals(propertyKey)) {
+            view.setAccessibilityWarning(model.get(UrlBarProperties.ACCESSIBILITY_WARNING));
+        } else if (UrlBarProperties.ACTION_MODE_CALLBACK.equals(propertyKey)) {
             ActionMode.Callback callback = model.get(UrlBarProperties.ACTION_MODE_CALLBACK);
             if (callback == null && view.getCustomSelectionActionModeCallback() == null) return;
             view.setCustomSelectionActionModeCallback(callback);
         } else if (UrlBarProperties.ALLOW_FOCUS.equals(propertyKey)) {
             view.setAllowFocus(model.get(UrlBarProperties.ALLOW_FOCUS));
-        } else if (UrlBarProperties.IS_IN_CCT.equals(propertyKey)) {
-            view.setIsInCct(model.get(UrlBarProperties.IS_IN_CCT));
+        } else if (UrlBarProperties.ALLOW_MULTILINE_INPUT.equals(propertyKey)) {
+            view.setAllowMultilineInput(model.get(UrlBarProperties.ALLOW_MULTILINE_INPUT));
         } else if (UrlBarProperties.AUTOCOMPLETE_TEXT.equals(propertyKey)) {
             AutocompleteText autocomplete = model.get(UrlBarProperties.AUTOCOMPLETE_TEXT);
-            if (view.shouldAutocomplete()) {
-                view.setAutocompleteText(
-                        autocomplete.userText,
-                        autocomplete.autocompleteText,
-                        TextUtils.isEmpty(autocomplete.additionalText)
-                                ? null
-                                : autocomplete.additionalText);
-            }
+            boolean shouldAutocomplete = view.shouldAutocomplete();
+            view.setAutocompleteText(
+                    autocomplete.userText,
+                    shouldAutocomplete ? autocomplete.autocompleteText : null,
+                    shouldAutocomplete && !TextUtils.isEmpty(autocomplete.additionalText)
+                            ? autocomplete.additionalText
+                            : null,
+                    autocomplete.siteSearchLabel);
         } else if (UrlBarProperties.DELEGATE.equals(propertyKey)) {
             view.setDelegate(model.get(UrlBarProperties.DELEGATE));
         } else if (UrlBarProperties.FOCUS_CHANGE_CALLBACK.equals(propertyKey)) {
-            final Callback<Boolean> focusChangeCallback =
-                    model.get(UrlBarProperties.FOCUS_CHANGE_CALLBACK);
-            view.setOnFocusChangeListener(
-                    (v, focused) -> {
-                        if (focused) view.setIgnoreTextChangesForAutocomplete(false);
-                        if (focusChangeCallback != null) {
-                            focusChangeCallback.onResult(focused);
-                        }
-                    });
-        } else if (UrlBarProperties.SHOW_CURSOR.equals(propertyKey)) {
-            view.setCursorVisible(model.get(UrlBarProperties.SHOW_CURSOR));
+            view.setFocusChangeCallback(model.get(UrlBarProperties.FOCUS_CHANGE_CALLBACK));
         } else if (UrlBarProperties.TEXT_CONTEXT_MENU_DELEGATE.equals(propertyKey)) {
             view.setTextContextMenuDelegate(model.get(UrlBarProperties.TEXT_CONTEXT_MENU_DELEGATE));
+        } else if (UrlBarProperties.MANAGE_SEARCH_ENGINES_CALLBACK.equals(propertyKey)) {
+            view.setManageSearchEnginesCallback(
+                    model.get(UrlBarProperties.MANAGE_SEARCH_ENGINES_CALLBACK));
+        } else if (UrlBarProperties.IS_AI_MODE_PREF_ENABLED.equals(propertyKey)) {
+            view.setShowAiMode(model.get(UrlBarProperties.IS_AI_MODE_PREF_ENABLED));
+        } else if (UrlBarProperties.AI_MODE_PREF_TOGGLE_CALLBACK.equals(propertyKey)) {
+            view.setShowAiModeCallback(model.get(UrlBarProperties.AI_MODE_PREF_TOGGLE_CALLBACK));
         } else if (UrlBarProperties.TEXT_STATE.equals(propertyKey)) {
             UrlBarTextState state = model.get(UrlBarProperties.TEXT_STATE);
             view.setIgnoreTextChangesForAutocomplete(true);
             view.setTextWithTruncation(state.text, state.scrollType, state.scrollToIndex);
             view.setTextForAutofillServices(state.textForAutofillServices);
-            view.setScrollState(state.scrollType, state.scrollToIndex);
+            view.setScrollState(state.scrollType, state.scrollToIndex, state.originChanged);
             view.setIgnoreTextChangesForAutocomplete(false);
             if (view.hasFocus()) {
-                if (state.selectionState == UrlBarCoordinator.SelectionState.SELECT_ALL) {
-                    view.selectAll();
-                } else if (state.selectionState == UrlBarCoordinator.SelectionState.SELECT_END) {
-                    view.setSelection(view.getText().length());
-                }
-                // Move the accessibility focus to the Omnibox.
-                // This ensures the updated field is announced to the user, especially when the user
-                // recently interacted with Refine button.
+                // NOTE: Selection applied from here MAY be overridden by the OS if the focus came
+                // from the user (and not from software, i.e. requestFocus()).
+                //
+                // When the user focuses the editable field, the OS forcibly takes one of the two
+                // actions:
+                // 1. forcibly places the cursor at the point of click, or
+                // 2. selecting all content (if selectAllOnFocus is set to true)
+                // in both cases overriding the selection supplied by software.
+                //
+                // Be careful when extending selection to override OS settings - Android 12 is
+                // particularly sensitive here.
+                int textLength = view.getText().length();
+                TextSelection selection = state.selection.trimTo(textLength);
+                view.setSelection(selection.from, selection.to);
                 view.requestAccessibilityFocus();
             }
         } else if (UrlBarProperties.TEXT_COLOR.equals(propertyKey)) {
@@ -115,11 +120,11 @@ class UrlBarViewBinder {
             view.setUrlDirectionListener(model.get(UrlBarProperties.URL_DIRECTION_LISTENER));
         } else if (UrlBarProperties.TEXT_CHANGE_LISTENER.equals(propertyKey)) {
             view.setTextChangeListener(model.get(UrlBarProperties.TEXT_CHANGE_LISTENER));
+        } else if (UrlBarProperties.RICH_TEXT_CHANGE_LISTENER.equals(propertyKey)) {
+            view.setRichTextChangeListener(model.get(UrlBarProperties.RICH_TEXT_CHANGE_LISTENER));
         } else if (UrlBarProperties.TEXT_WRAPPED_CALLBACK.equals(propertyKey)) {
             view.setUrlTextWrappingChangeListener(
                     model.get(UrlBarProperties.TEXT_WRAPPED_CALLBACK));
-        } else if (UrlBarProperties.TYPING_STARTED_LISTENER.equals(propertyKey)) {
-            view.setTypingStartedListener(model.get(UrlBarProperties.TYPING_STARTED_LISTENER));
         } else if (UrlBarProperties.KEY_DOWN_LISTENER.equals(propertyKey)) {
             view.setKeyDownListener(model.get(UrlBarProperties.KEY_DOWN_LISTENER));
         } else if (UrlBarProperties.HAS_URL_SUGGESTIONS.equals(propertyKey)) {
@@ -164,13 +169,13 @@ class UrlBarViewBinder {
 
     private static void updateCursorAndSelectHandleColor(UrlBar view, boolean useIncognitoColors) {
         // These get* methods may fail on some devices, so we're calling all of them before
-        // applying tint to any of the drawables. See https://crbug.com/1263630.
+        // applying tint to any of the drawables. See https://crbug.com/40800314.
         final Drawable textCursor = assumeNonNull(view.getTextCursorDrawable());
         final Drawable textSelectHandle = assumeNonNull(view.getTextSelectHandle());
         final Drawable textSelectHandleLeft = assumeNonNull(view.getTextSelectHandleLeft());
         final Drawable textSelectHandleRight = assumeNonNull(view.getTextSelectHandleRight());
 
-        final int color =
+        final @ColorInt int color =
                 useIncognitoColors
                         ? view.getContext().getColor(R.color.default_control_color_active_dark)
                         : MaterialColors.getColor(view, R.attr.colorPrimary);

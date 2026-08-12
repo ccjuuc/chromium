@@ -15,7 +15,7 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
@@ -23,7 +23,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_span.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/synchronization/lock.h"
+#include "base/threading/platform_thread.h"
 #include "base/types/expected_macros.h"
 #include "build/build_config.h"
 #include "net/filter/gzip_header.h"
@@ -68,7 +70,7 @@ void MaybePrintResourceId(uint16_t resource_id) {
   // DataPack doesn't require single-threaded access, so use a lock.
   static base::Lock* lock = new base::Lock;
   base::AutoLock auto_lock(*lock);
-  if (!base::Contains(*resource_ids_logged, resource_id)) {
+  if (!resource_ids_logged->contains(resource_id)) {
     printf("Resource=%d\n", resource_id);
     resource_ids_logged->insert(resource_id);
   }
@@ -120,8 +122,7 @@ class DataPack::MemoryMappedDataSource : public DataPack::DataSource {
   ~MemoryMappedDataSource() override {}
 
   // DataPack::DataSource:
-  size_t GetLength() const override { return mmap_->length(); }
-  const uint8_t* GetData() const override { return mmap_->data(); }
+  base::span<const uint8_t> bytes() const override { return mmap_->bytes(); }
 
  private:
   std::unique_ptr<base::MemoryMappedFile> mmap_;
@@ -138,9 +139,8 @@ class DataPack::StringDataSource : public DataPack::DataSource {
   ~StringDataSource() override {}
 
   // DataPack::DataSource:
-  size_t GetLength() const override { return data_.size(); }
-  const uint8_t* GetData() const override {
-    return reinterpret_cast<const uint8_t*>(data_.c_str());
+  base::span<const uint8_t> bytes() const override {
+    return base::as_byte_span(data_);
   }
 
  private:
@@ -158,8 +158,7 @@ class DataPack::BufferDataSource : public DataPack::DataSource {
   ~BufferDataSource() override {}
 
   // DataPack::DataSource:
-  size_t GetLength() const override { return buffer_.size(); }
-  const uint8_t* GetData() const override { return buffer_.data(); }
+  base::span<const uint8_t> bytes() const override { return buffer_; }
 
  private:
   base::raw_span<const uint8_t> buffer_;
@@ -192,32 +191,72 @@ inline int GetLastErrorOrErrno() {
 }
 #endif
 
+// Opens `path`, retrying after a short delay at most three extra times (four
+// attempts in total) if the file cannot be opened due to it being in use.
+base::expected<base::File, DataPack::ErrorState> OpenDataPack(
+    const base::FilePath& path) {
+  // Retry until at most 300ms has passed.
+  static constexpr base::TimeDelta kMaxRetryDelay = base::Milliseconds(300);
+  // Sleep 100ms between retries.
+  static constexpr base::TimeDelta kRetryPause = base::Milliseconds(100);
+  // The total number of attempts, including the first without delay.
+  static constexpr int kFileSystemAttempts = kMaxRetryDelay / kRetryPause + 1;
+  int i = 0;
+  while (true) {
+    // Open the file for reading; allowing other consumers to also open it for
+    // reading and deleting. Do not allow others to write to it.
+    base::File data_file(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
+                                   base::File::FLAG_WIN_EXCLUSIVE_WRITE |
+                                   base::File::FLAG_WIN_SHARE_DELETE);
+    if (data_file.IsValid()) {
+      if (i > 0) {
+        // Record the number of retries if the file wasn't opened on the first
+        // attempt.
+        base::UmaHistogramExactLinear("DataPack.BusyOpenRetryCount", i,
+                                      kFileSystemAttempts);
+      }
+      return data_file;
+    }
+
+    const auto error = GetLastErrorOrErrno();
+    if (data_file.error_details() == base::File::FILE_ERROR_IN_USE) {
+      // crbug.com/394631579: On Windows, it is not uncommon to get
+      // ERROR_SHARING_VIOLATION due to some other program holding the file
+      // open. Retry up to three more times in this case in the hope that this
+      // is a transient issue.
+      if (++i < kFileSystemAttempts) {
+        base::PlatformThread::Sleep(kRetryPause);
+        continue;
+      }
+      // Otherwise, record that all retries failed.
+      base::UmaHistogramBoolean("DataPack.BusyOpenRetriesFailed", true);
+    }
+
+    DPLOG(ERROR) << "Failed to open datapack";
+    return base::unexpected(DataPack::ErrorState{
+        DataPack::FailureReason::kOpenFile, error, data_file.error_details()});
+  }
+}
+
 }  // namespace
 
 // static
 base::expected<std::unique_ptr<DataPack::DataSource>, DataPack::ErrorState>
 DataPack::LoadFromPathInternal(const base::FilePath& path) {
+  ASSIGN_OR_RETURN(base::File data_file, OpenDataPack(path));
+  if (data_file.GetLength() == 0) {
+    // A zero-length file cannot be mapped as read-only.
+    return base::unexpected(ErrorState{FailureReason::kEmptyFile});
+  }
   std::unique_ptr<base::MemoryMappedFile> mmap =
       std::make_unique<base::MemoryMappedFile>();
-  // Open the file for reading; allowing other consumers to also open it for
-  // reading and deleting. Do not allow others to write to it.
-  base::File data_file(path, base::File::FLAG_OPEN | base::File::FLAG_READ |
-                                 base::File::FLAG_WIN_EXCLUSIVE_WRITE |
-                                 base::File::FLAG_WIN_SHARE_DELETE);
-  if (!data_file.IsValid()) {
-    const auto error = GetLastErrorOrErrno();
-    DPLOG(ERROR) << "Failed to open datapack";
-    return base::unexpected(
-        ErrorState{FailureReason::kOpenFile, error, data_file.error_details()});
-  }
   if (!mmap->Initialize(std::move(data_file))) {
     const auto error = GetLastErrorOrErrno();
     DPLOG(ERROR) << "Failed to mmap datapack";
     return base::unexpected(ErrorState{FailureReason::kMapFile, error});
   }
   if (net::GZipHeader::HasGZipHeader(mmap->bytes())) {
-    std::string_view compressed(reinterpret_cast<char*>(mmap->data()),
-                                mmap->length());
+    std::string_view compressed = base::as_string_view(mmap->bytes());
     std::string data;
     if (!compression::GzipUncompress(compressed, &data)) {
       const auto error = GetLastErrorOrErrno();
@@ -435,10 +474,11 @@ std::optional<std::string_view> DataPack::GetStringView(
                                  data_source_->GetData());
 }
 
-base::RefCountedStaticMemory* DataPack::GetStaticMemory(
+scoped_refptr<base::RefCountedStaticMemory> DataPack::GetStaticMemory(
     uint16_t resource_id) const {
   if (auto view = GetStringView(resource_id); view.has_value()) {
-    return new base::RefCountedStaticMemory(base::as_byte_span(*view));
+    return base::MakeRefCounted<base::RefCountedStaticMemory>(
+        base::as_byte_span(*view));
   }
   return nullptr;
 }
@@ -523,10 +563,10 @@ bool DataPack::WritePack(const base::FilePath& path,
   DCHECK_EQ(static_cast<size_t>(entry_count) + static_cast<size_t>(alias_count),
             resources_count);
 
-  file.Write(&kFileFormatV5, sizeof(kFileFormatV5));
-  file.Write(&encoding, sizeof(uint32_t));
-  file.Write(&entry_count, sizeof(entry_count));
-  file.Write(&alias_count, sizeof(alias_count));
+  file.Write(base::byte_span_from_ref(kFileFormatV5));
+  file.Write(base::byte_span_from_ref(encoding));
+  file.Write(base::byte_span_from_ref(entry_count));
+  file.Write(base::byte_span_from_ref(alias_count));
 
   // Each entry is a uint16_t + a uint32_t. We have an extra entry after the
   // last item so we can compute the size of the list item.
@@ -534,26 +574,26 @@ bool DataPack::WritePack(const base::FilePath& path,
   const uint32_t alias_table_length = alias_count * sizeof(Alias);
   uint32_t data_offset = kHeaderLengthV5 + index_length + alias_table_length;
   for (const uint16_t resource_id : resource_ids) {
-    file.Write(&resource_id, sizeof(resource_id));
-    file.Write(&data_offset, sizeof(data_offset));
+    file.Write(base::byte_span_from_ref(resource_id));
+    file.Write(base::byte_span_from_ref(data_offset));
     data_offset += resources.find(resource_id)->second.length();
   }
 
   // We place an extra entry after the last item that allows us to read the
   // size of the last item.
   const uint16_t extra_resource_id = 0;
-  file.Write(&extra_resource_id, sizeof(extra_resource_id));
-  file.Write(&data_offset, sizeof(data_offset));
+  file.Write(base::byte_span_from_ref(extra_resource_id));
+  file.Write(base::byte_span_from_ref(data_offset));
 
   // Write the aliases table, if any. Note: |aliases| is an std::map,
   // ensuring values are written in increasing order.
   for (const std::pair<const uint16_t, uint16_t>& alias : aliases) {
-    file.Write(&alias, sizeof(alias));
+    file.Write(base::byte_span_from_ref(alias));
   }
 
   for (const auto& resource_id : resource_ids) {
     const std::string_view data = resources.find(resource_id)->second;
-    file.Write(data.data(), data.length());
+    file.Write(base::as_byte_span(data));
   }
 
   return file.Close();

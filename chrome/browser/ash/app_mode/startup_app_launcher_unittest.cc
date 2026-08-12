@@ -414,7 +414,7 @@ class ScopedKioskAppManagerOverrides : public KioskChromeAppManager::Overrides {
         /*create_service=*/false);
     accounts_settings_helper_->ReplaceDeviceSettingsProviderWithStub();
 
-    base::Value::Dict account;
+    base::DictValue account;
     account.Set(kAccountsPrefDeviceLocalAccountsKeyId, kTestUserAccount);
     account.Set(kAccountsPrefDeviceLocalAccountsKeyType,
                 static_cast<int>(policy::DeviceLocalAccountType::kKioskApp));
@@ -423,7 +423,7 @@ class ScopedKioskAppManagerOverrides : public KioskChromeAppManager::Overrides {
         static_cast<int>(policy::DeviceLocalAccount::EphemeralMode::kUnset));
     account.Set(kAccountsPrefDeviceLocalAccountsKeyKioskAppId,
                 kTestPrimaryAppId);
-    base::Value::List accounts;
+    base::ListValue accounts;
     accounts.Append(std::move(account));
 
     accounts_settings_helper_->Set(kAccountsPrefDeviceLocalAccounts,
@@ -502,18 +502,19 @@ class ScopedKioskAppManagerOverrides : public KioskChromeAppManager::Overrides {
 
 TestKioskExtensionBuilder PrimaryAppBuilder() {
   return std::move(
-      TestKioskExtensionBuilder(extensions::Manifest::TYPE_PLATFORM_APP,
+      TestKioskExtensionBuilder(extensions::Manifest::Type::kPlatformApp,
                                 kTestPrimaryAppId)
           .set_version("1.0"));
 }
 
 TestKioskExtensionBuilder ExtensionBuilder() {
-  return TestKioskExtensionBuilder(extensions::Manifest::TYPE_EXTENSION,
+  return TestKioskExtensionBuilder(extensions::Manifest::Type::kExtension,
                                    kTestPrimaryAppId);
 }
 
 TestKioskExtensionBuilder SecondaryAppBuilder(const std::string& id) {
-  return TestKioskExtensionBuilder(extensions::Manifest::TYPE_PLATFORM_APP, id);
+  return TestKioskExtensionBuilder(extensions::Manifest::Type::kPlatformApp,
+                                   id);
 }
 
 }  // namespace

@@ -39,26 +39,15 @@ __attribute__((visibility("default"))) int ChromeMain(int argc, char* argv[]);
 
 namespace {
 
-// Kill switch to disable adding memory ranges to crash data when heap
-// corruption or double free is detected by PA-E.
-BASE_FEATURE(kIOSCorruptionDetectedMemoryRangesKillSwitch,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // The number of times a PA-E double free or corruption has been detected.
 int g_double_free_or_corruption_detected_count = 0;
 
 NSString* const kUIApplicationDelegateInfoKey = @"UIApplicationDelegate";
 
 void StartCrashController() {
-// TODO(crbug.com/399131917): Disable CrashHelper for blink for now. The
-// chromium binary is loaded via a framework with blink and that appears to
-// cause the task_set_exception_ports/task_swap_exception_port to fail. It may
-// be that setting the exception ports from a framework library isn't allowed.
-#if !BUILDFLAG(USE_BLINK)
   @autoreleasepool {
     crash_helper::Start();
   }
-#endif
 }
 
 void SetTextDirectionIfPseudoRTLEnabled() {
@@ -91,9 +80,9 @@ void RegisterPathProviders() {
     ios::RegisterPathProvider();
 
     // Bundled components are not supported on ios, so DIR_USER_DATA is passed
-    // for all three arguments.
-    component_updater::RegisterPathProvider(
-        ios::DIR_USER_DATA, ios::DIR_USER_DATA, ios::DIR_USER_DATA);
+    // for both arguments.
+    component_updater::RegisterPathProvider(ios::DIR_USER_DATA,
+                                            ios::DIR_USER_DATA);
   }
 }
 
@@ -145,8 +134,7 @@ int ChromeMain(int argc, char* argv[]) {
         base::NumberToString(g_double_free_or_corruption_detected_count));
 
     // If the kill switch is enabled, skip adding memory ranges.
-    if (base::FeatureList::IsEnabled(
-            kIOSCorruptionDetectedMemoryRangesKillSwitch)) {
+    if (crash_helper::IsCorruptionDetectedMemoryRangesKillSwitchEnabled()) {
       return;
     }
 

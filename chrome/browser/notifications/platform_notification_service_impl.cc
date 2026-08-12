@@ -65,12 +65,11 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"  // nogncheck
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -78,7 +77,7 @@
 #include "chrome/browser/safe_browsing/android/notification_content_detection_manager_android.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
 #endif
@@ -599,7 +598,7 @@ PlatformNotificationServiceImpl::CreateNotificationFromData(
       web_app_id);
 
   // TODO(peter): Handle different screen densities instead of always using the
-  // 1x bitmap - crbug.com/585815.
+  // 1x bitmap - crbug.com/41238973.
   message_center::Notification notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
       notification_data.title, notification_data.body,
@@ -632,7 +631,7 @@ PlatformNotificationServiceImpl::CreateNotificationFromData(
     notification.SetSmallImage(gfx::Image(web_app_icon_and_title->icon));
 
   // TODO(peter): Handle different screen densities instead of always using the
-  // 1x bitmap - crbug.com/585815.
+  // 1x bitmap - crbug.com/41238973.
   if (const SkBitmap& badge = notification_resources.badge; !badge.isNull()) {
     notification.SetSmallImage(gfx::Image::CreateFrom1xBitmap(badge));
 #if BUILDFLAG(IS_CHROMEOS)
@@ -647,7 +646,7 @@ PlatformNotificationServiceImpl::CreateNotificationFromData(
     const auto& action = notification_data.actions[i];
     message_center::ButtonInfo button(action->title);
     // TODO(peter): Handle different screen densities instead of always using
-    // the 1x bitmap - crbug.com/585815.
+    // the 1x bitmap - crbug.com/41238973.
     const SkBitmap& action_icon = notification_resources.action_icons[i];
     button.icon = gfx::Image::CreateFrom1xBitmap(action_icon);
 #if BUILDFLAG(IS_CHROMEOS)
@@ -703,7 +702,7 @@ PlatformNotificationServiceImpl::CreateNotificationFromData(
 
 std::u16string PlatformNotificationServiceImpl::DisplayNameForContextMessage(
     const GURL& origin) const {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // If the source is an extension, lookup the display name.
   if (origin.SchemeIs(extensions::kExtensionScheme)) {
     const extensions::Extension* extension =

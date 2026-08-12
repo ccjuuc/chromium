@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -133,6 +134,7 @@ class FakeSchedulerClient : public SchedulerClient,
     base::AutoReset<bool> mark_inside(&inside_action_, true);
     inside_begin_impl_frame_ = true;
     PushAction("WillBeginImplFrame");
+    last_begin_impl_frame_args_ = args;
     if (will_begin_impl_frame_requests_one_begin_impl_frame_)
       scheduler_->SetNeedsOneBeginImplFrame();
     if (will_begin_impl_frame_causes_redraw_)
@@ -169,6 +171,10 @@ class FakeSchedulerClient : public SchedulerClient,
 
   void OnBeginImplFrameDeadline() override {}
   void DidChangeBeginFrameSourcePaused(bool paused) override {}
+
+  const viz::BeginFrameArgs& last_begin_impl_frame_args() {
+    return last_begin_impl_frame_args_;
+  }
 
   const viz::BeginFrameArgs& last_begin_main_frame_args() {
     return last_begin_main_frame_args_;
@@ -247,19 +253,6 @@ class FakeSchedulerClient : public SchedulerClient,
     PushAction("ScheduledActionPerformImplSideInvalidation");
   }
 
-  void SendBeginMainFrameNotExpectedSoon() override {
-    EXPECT_FALSE(inside_action_);
-    base::AutoReset<bool> mark_inside(&inside_action_, true);
-    PushAction("SendBeginMainFrameNotExpectedSoon");
-  }
-
-  void ScheduledActionBeginMainFrameNotExpectedUntil(
-      base::TimeTicks time) override {
-    EXPECT_FALSE(inside_action_);
-    base::AutoReset<bool> mark_inside(&inside_action_, true);
-    PushAction("ScheduledActionBeginMainFrameNotExpectedUntil");
-  }
-
   bool IsInsideBeginImplFrame() const { return inside_begin_impl_frame_; }
 
   base::RepeatingCallback<bool(void)> InsideBeginImplFrame(bool state) {
@@ -305,6 +298,7 @@ class FakeSchedulerClient : public SchedulerClient,
   bool automatic_ack_ = true;
   bool will_begin_impl_frame_might_have_damage_ = true;
   int num_draws_;
+  viz::BeginFrameArgs last_begin_impl_frame_args_;
   viz::BeginFrameArgs last_begin_main_frame_args_;
   viz::BeginFrameAck last_begin_frame_ack_;
   base::TimeTicks posted_begin_impl_frame_deadline_;
@@ -639,7 +633,7 @@ class SchedulerTest
   void BeginFramesNotFromClient(BeginFrameSourceType bfs_type);
   void BeginFramesNotFromClient_IsDrawThrottled(BeginFrameSourceType bfs_type);
   bool BeginMainFrameOnCriticalPath(TreePriority tree_priority,
-                                    ScrollHandlerState scroll_handler_state,
+                                    bool is_current_scroll_main_painted,
                                     base::TimeDelta durations);
 
   scoped_refptr<SchedulerTestTaskRunner> task_runner_;
@@ -675,6 +669,249 @@ TEST_P(SchedulerTest, InitializeLayerTreeFrameSinkDoesNotBeginImplFrame) {
   EXPECT_NO_ACTION();
 }
 
+TEST_P(SchedulerTest, SendEarlyFinalBeginMainFrame_DuringIdle) {
+  SetUpScheduler(EXTERNAL_BFS);
+
+  // Simulate basic standard frame cycle passing cleanly.
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_ACTIONS("AddObserver(this)");
+  client_->Reset();
+
+  EXPECT_SCOPED(AdvanceFrame());
+  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame");
+  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
+  client_->Reset();
+
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+  scheduler_->NotifyReadyToActivate();
+  EXPECT_ACTIONS("ScheduledActionCommit", "ScheduledActionPostCommit",
+                 "ScheduledActionActivateSyncTree");
+  client_->Reset();
+
+  task_runner_->RunPendingTasks();
+  EXPECT_ACTIONS("ScheduledActionDrawIfPossible");
+  client_->Reset();
+
+  EXPECT_SCOPED(AdvanceFrame());
+  task_runner_->RunPendingTasks();
+  EXPECT_ACTIONS("WillBeginImplFrame", "RemoveObserver(this)");
+  client_->Reset();
+
+  // Send immediate last frame synthetically.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
+  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame");
+}
+
+TEST_P(SchedulerTest, SendEarlyFinalBeginMainFrame_HalfInterval) {
+  SetUpScheduler(EXTERNAL_BFS);
+
+  base::TimeDelta default_interval = viz::BeginFrameArgs::DefaultInterval();
+
+  // Send a few BeginMainFrames with the default interval.
+  // Frame 1
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+  scheduler_->NotifyReadyToActivate();
+  task_runner_->RunPendingTasks();
+  client_->Reset();
+
+  // Frame 2
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+  scheduler_->NotifyReadyToActivate();
+  task_runner_->RunPendingTasks();
+
+  uint64_t base_seq =
+      client_->last_begin_main_frame_args().frame_id.sequence_number;
+  client_->Reset();
+
+  // Send the early last frame signal.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  // Wait for half the default interval amount of time.
+  task_runner_->AdvanceMockTickClock(default_interval * 0.5);
+
+  // Check if the last BeginMainFrame sequence number had advanced.
+  EXPECT_EQ(client_->last_begin_main_frame_args().frame_id.sequence_number,
+            base_seq + 1);
+}
+
+
+TEST_P(SchedulerTest, SendEarlyFinalBeginMainFrame_DuringCommit) {
+  // This is always set in proxy_impl.
+  scheduler_settings_.main_frame_before_commit_enabled = true;
+  SetUpScheduler(EXTERNAL_BFS);
+
+  // Start a frame and leave it pending commit.
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+
+  uint64_t base_seq =
+      client_->last_begin_main_frame_args().frame_id.sequence_number;
+
+  // Send the early last frame signal while the previous frame is pending
+  // commit.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  // Frame should not be sent immediately because the previous one hasn't
+  // committed.
+  EXPECT_EQ(client_->last_begin_main_frame_args().frame_id.sequence_number,
+            base_seq);
+
+  // Notify ready to commit.
+  scheduler_->NotifyReadyToCommit(nullptr);
+
+  // This should have triggered the next BeginMainFrame.
+  EXPECT_EQ(client_->last_begin_main_frame_args().frame_id.sequence_number,
+            base_seq + 1);
+}
+
+TEST_P(SchedulerTest, SendEarlyFinalBeginMainFrame_DuringActivate) {
+  SetUpScheduler(EXTERNAL_BFS);
+
+  // Start a frame, complete the commit, and leave it pending activation.
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+
+  uint64_t base_seq =
+      client_->last_begin_main_frame_args().frame_id.sequence_number;
+
+  // Send the early last frame signal while the previous frame is pending
+  // activate.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  // Frame should not be sent immediately because we are awaiting activation.
+  EXPECT_EQ(client_->last_begin_main_frame_args().frame_id.sequence_number,
+            base_seq);
+
+  // Notify ready to activate.
+  scheduler_->NotifyReadyToActivate();
+
+  // This should have triggered the next BeginMainFrame.
+  EXPECT_EQ(client_->last_begin_main_frame_args().frame_id.sequence_number,
+            base_seq + 1);
+}
+
+TEST_P(SchedulerTest,
+       SendEarlyFinalBeginMainFrame_MonotonicityAndDuplicateDropping) {
+  SetUpScheduler(EXTERNAL_BFS);
+
+  // 1. Start with a regular frame to initialize
+  // last_dispatched_begin_main_frame_args_.
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+  scheduler_->NotifyReadyToActivate();
+  task_runner_->RunPendingTasks();
+
+  uint64_t base_seq =
+      client_->last_begin_main_frame_args().frame_id.sequence_number;
+  client_->Reset();
+
+  // 2. Start an Impl-only frame.
+  scheduler_->SetNeedsRedraw();
+  EXPECT_SCOPED(AdvanceFrame());
+  EXPECT_ACTIONS("WillBeginImplFrame");
+  uint64_t impl_only_seq =
+      client_->last_begin_impl_frame_args().frame_id.sequence_number;
+  EXPECT_GT(impl_only_seq, base_seq);
+  client_->Reset();
+
+  // 3. Send early last BeginMainFrame signal.
+  // This should advance beyond impl_only_seq.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  uint64_t spoofed_seq =
+      client_->last_begin_impl_frame_args().frame_id.sequence_number;
+  EXPECT_GT(spoofed_seq, impl_only_seq);
+  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame");
+  client_->Reset();
+
+  // 4. Now simulate Viz sending a BeginFrame that clashes with our spoofed one.
+  // Since we already started spoofed_seq, this should be dropped.
+  viz::BeginFrameArgs clashing_args =
+      fake_external_begin_frame_source_->CreateBeginFrameArgs(
+          BEGINFRAME_FROM_HERE, task_runner_->GetMockTickClock());
+  clashing_args.frame_id.sequence_number = spoofed_seq;
+  // Satisfy monotonicity check in BeginFrameObserverBase.
+  clashing_args.frame_time =
+      std::max(clashing_args.frame_time,
+               client_->last_begin_impl_frame_args().frame_time);
+
+  scheduler_->OnBeginFrame(clashing_args);
+  EXPECT_NO_ACTION();
+}
+
+TEST_P(SchedulerTest, SendEarlyFinalBeginMainFrame_ClearsPendingRetroFrame) {
+  SetUpScheduler(EXTERNAL_BFS);
+
+  // Initialize last_dispatched_begin_main_frame_args_.
+  scheduler_->SetNeedsBeginMainFrame();
+  EXPECT_SCOPED(AdvanceFrame());
+  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
+  scheduler_->NotifyReadyToCommit(nullptr);
+  scheduler_->NotifyReadyToActivate();
+  task_runner_->RunPendingTasks();
+  client_->Reset();
+
+  // 1. Start a frame and stay inside it. Use an Impl-only frame so no main
+  // frame is in flight.
+  scheduler_->SetNeedsRedraw();
+  EXPECT_SCOPED(AdvanceFrame());
+  EXPECT_ACTIONS("WillBeginImplFrame");
+  // INSIDE_BEGIN_FRAME state.
+
+  // 2. Receive another BeginFrame from Viz. It should become pending because we
+  // are busy.
+  viz::BeginFrameArgs pending_args =
+      fake_external_begin_frame_source_->CreateBeginFrameArgs(
+          BEGINFRAME_FROM_HERE, task_runner_->GetMockTickClock());
+  scheduler_->OnBeginFrame(pending_args);
+  // pending_args is now in pending_begin_frame_args_.
+
+  client_->Reset();
+
+  // 3. Send early last BeginMainFrame.
+  // It should take the max(last_started, pending) and advance.
+  scheduler_->SendEarlyFinalBeginMainFrame();
+
+  uint64_t spoofed_seq =
+      client_->last_begin_impl_frame_args().frame_id.sequence_number;
+  EXPECT_GT(spoofed_seq, pending_args.frame_id.sequence_number);
+  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame");
+  client_->Reset();
+
+  // 4. Now simulate Viz sending a BeginFrame that clashes with our spoofed one.
+  // It should be dropped.
+  viz::BeginFrameArgs clashing_args =
+      fake_external_begin_frame_source_->CreateBeginFrameArgs(
+          BEGINFRAME_FROM_HERE, task_runner_->GetMockTickClock());
+  clashing_args.frame_id.sequence_number = spoofed_seq;
+  clashing_args.frame_time =
+      std::max(clashing_args.frame_time,
+               client_->last_begin_impl_frame_args().frame_time);
+
+  scheduler_->OnBeginFrame(clashing_args);
+  EXPECT_NO_ACTION();
+
+  // 5. Finish the current spoofed frame.
+  task_runner_->RunPendingTasks();
+  client_->Reset();
+
+  // 6. Verify no more frames are started (pending retro frame was cleared).
+  EXPECT_NO_ACTION();
+}
 TEST_P(SchedulerTest, Stop) {
   SetUpScheduler(EXTERNAL_BFS);
 
@@ -1735,9 +1972,7 @@ TEST_P(SchedulerTest,
 TEST_P(SchedulerTest,
        MainFrameNotSkippedAfterLateCommitInPreferImplLatencyMode) {
   SetUpScheduler(EXTERNAL_BFS);
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER, false);
+  scheduler_->SetTreePrioritiesAndScrollState(SMOOTHNESS_TAKES_PRIORITY, false);
   fake_compositor_timing_history_->SetAllEstimatesTo(kFastDuration);
 
   EXPECT_SCOPED(CheckMainFrameNotSkippedAfterLateCommit());
@@ -2634,270 +2869,6 @@ TEST_P(SchedulerTest, SwitchFrameSourceWhenNotObserving) {
   EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame");
 }
 
-// Tests to ensure that we send a ScheduledActionBeginMainFrameNotExpectedUntil
-// when expected.
-TEST_P(SchedulerTest, ScheduledActionBeginMainFrameNotExpectedUntil) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  scheduler_->SetNeedsRedraw();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame",
-                 "ScheduledActionBeginMainFrameNotExpectedUntil",
-                 "ScheduledActionDrawIfPossible");
-}
-
-// Tests to ensure that BeginMainFrameNotExpectedUntil is only sent once within
-// the same frame.
-TEST_P(SchedulerTest,
-       ScheduledActionBeginMainFrameNotExpectedUntilSentOnlyOncePerFrame) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  scheduler_->SetNeedsRedraw();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame",
-                 "ScheduledActionBeginMainFrameNotExpectedUntil",
-                 "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(false);
-  task_runner_->RunPendingTasks();
-  EXPECT_NO_ACTION();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  task_runner_->RunPendingTasks();
-  EXPECT_NO_ACTION();
-}
-
-// Tests to ensure that we send a BeginMainFrameNotExpectedSoon when expected.
-TEST_P(SchedulerTest, SendBeginMainFrameNotExpectedSoon_Requested) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  // SetNeedsBeginMainFrame should begin the frame on the next BeginImplFrame.
-  scheduler_->SetNeedsBeginMainFrame();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  // Trigger a frame draw.
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
-  scheduler_->NotifyReadyToCommit(nullptr);
-  scheduler_->NotifyReadyToActivate();
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame",
-                 "ScheduledActionCommit", "ScheduledActionPostCommit",
-                 "ScheduledActionActivateSyncTree",
-                 "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-
-  EXPECT_SCOPED(AdvanceFrame());
-  EXPECT_ACTIONS("WillBeginImplFrame",
-                 "ScheduledActionBeginMainFrameNotExpectedUntil");
-  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  // The BeginImplFrame deadline should SetNeedsBeginFrame(false) and send a
-  // SendBeginMainFrameNotExpectedSoon.
-  task_runner_->RunPendingTasks();  // Run posted deadline.
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon", "RemoveObserver(this)");
-  client_->Reset();
-}
-
-// Tests to ensure that we dont't send a BeginMainFrameNotExpectedSoon when
-// possible but not requested.
-TEST_P(SchedulerTest, SendBeginMainFrameNotExpectedSoon_Unrequested) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  // SetNeedsBeginMainFrame should begin the frame on the next BeginImplFrame.
-  scheduler_->SetNeedsBeginMainFrame();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  // Trigger a frame draw.
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
-  scheduler_->NotifyReadyToCommit(nullptr);
-  scheduler_->NotifyReadyToActivate();
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame",
-                 "ScheduledActionCommit", "ScheduledActionPostCommit",
-                 "ScheduledActionActivateSyncTree",
-                 "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  EXPECT_ACTIONS("WillBeginImplFrame");
-  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  // The BeginImplFrame deadline should SetNeedsBeginFrame(false), but doesn't
-  // send a SendBeginMainFrameNotExpectedSoon as it's not been requested by the
-  // main thread.
-  task_runner_->RunPendingTasks();  // Run posted deadline.
-  EXPECT_ACTIONS("RemoveObserver(this)");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon");
-}
-
-// Tests to ensure that we send a BeginMainFrameNotExpectedSoon only once per
-// frame.
-TEST_P(SchedulerTest, SendBeginMainFrameNotExpectedSoonOnlyOncePerFrame) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  // SetNeedsBeginMainFrame should begin the frame on the next BeginImplFrame.
-  scheduler_->SetNeedsBeginMainFrame();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  // Trigger a frame draw.
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
-  scheduler_->NotifyReadyToCommit(nullptr);
-  scheduler_->NotifyReadyToActivate();
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame",
-                 "ScheduledActionCommit", "ScheduledActionPostCommit",
-                 "ScheduledActionActivateSyncTree",
-                 "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-
-  EXPECT_SCOPED(AdvanceFrame());
-  EXPECT_ACTIONS("WillBeginImplFrame",
-                 "ScheduledActionBeginMainFrameNotExpectedUntil");
-  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  task_runner_->RunPendingTasks();  // Run posted deadline.
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon", "RemoveObserver(this)");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(false);
-  EXPECT_NO_ACTION();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  EXPECT_NO_ACTION();
-}
-
-// Tests to ensure that we send a BeginMainFrameNotExpectedSoon in situations
-// where the client doesn't want messages when we first stopped observing
-// BeginFrames but later does.
-TEST_P(SchedulerTest, SendBeginMainFrameNotExpectedSoon_AlreadyIdle) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  // SetNeedsBeginMainFrame should begin the frame on the next BeginImplFrame.
-  scheduler_->SetNeedsBeginMainFrame();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  // Trigger a frame draw.
-  EXPECT_SCOPED(AdvanceFrame());
-  scheduler_->NotifyBeginMainFrameStarted(task_runner_->NowTicks());
-  scheduler_->NotifyReadyToCommit(nullptr);
-  scheduler_->NotifyReadyToActivate();
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionSendBeginMainFrame",
-                 "ScheduledActionCommit", "ScheduledActionPostCommit",
-                 "ScheduledActionActivateSyncTree",
-                 "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  task_runner_->RunPendingTasks();  // Run posted deadline.
-  EXPECT_ACTIONS("WillBeginImplFrame", "RemoveObserver(this)");
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon");
-}
-
-// This tests to ensure BeginMainFrameNotExpectedSoon is sent during idle
-// periods if (1) it initially wasn't sent because the message wasn't needed at
-// the time, and (2) the BeginMainFrameNotExpectedUntil was already sent in the
-// frame (crbug.com/893653).
-TEST_P(SchedulerTest, SendBeginMainFrameNotExpectedSoonDuringIdleIfNeeded) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  scheduler_->SetNeedsRedraw();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  EXPECT_ACTIONS("WillBeginImplFrame");
-  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  // Toggle WantsBeginMainFrameNotExpected while inside BeginImplFrame. This
-  // causes the BeginMainFrameNotExpectedUntil message to get sent and the
-  // BeginMainFrameNotExpectedSoon message to be withheld.
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  EXPECT_ACTIONS("ScheduledActionBeginMainFrameNotExpectedUntil");
-  client_->Reset();
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(false);
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("RemoveObserver(this)");
-  EXPECT_FALSE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon");
-}
-
-// This tests to ensure BeginMainFrameNotExpectedSoon is sent during idle
-// periods if (1) it initially wasn't sent because the message wasn't needed at
-// the time, and (2) |scheduler_|.visible() is false.
-TEST_P(SchedulerTest,
-       ScheduledActionBeginMainFrameNotSoonSentDuringIdleIfNeededNotVisible) {
-  SetUpScheduler(EXTERNAL_BFS);
-
-  scheduler_->SetNeedsRedraw();
-  EXPECT_ACTIONS("AddObserver(this)");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("WillBeginImplFrame", "ScheduledActionDrawIfPossible");
-  client_->Reset();
-
-  EXPECT_SCOPED(AdvanceFrame());
-  EXPECT_ACTIONS("WillBeginImplFrame");
-  EXPECT_TRUE(client_->IsInsideBeginImplFrame());
-  client_->Reset();
-
-  scheduler_->SetVisible(false);
-
-  task_runner_->RunPendingTasks();
-  EXPECT_ACTIONS("RemoveObserver(this)");
-  EXPECT_FALSE(client_->IsInsideBeginImplFrame());
-
-  // The scheduler won't send BeginMainFrameNotExpectedUntil messages while not
-  // visible, but it needs to send a BeginMainFrameNotExpectedSoon to let the
-  // client know it's gone idle.
-  client_->Reset();
-  scheduler_->SetMainThreadWantsBeginMainFrameNotExpected(true);
-  EXPECT_ACTIONS("SendBeginMainFrameNotExpectedSoon");
-}
-
 TEST_P(SchedulerTest, SynchronousCompositorAnimation) {
   scheduler_settings_.using_synchronous_renderer_compositor = true;
   SetUpScheduler(EXTERNAL_BFS);
@@ -3441,36 +3412,18 @@ TEST_P(SchedulerTest, AuthoritativeVSyncInterval) {
 TEST_P(SchedulerTest, ImplLatencyTakesPriority) {
   SetUpScheduler(THROTTLED_BFS);
 
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER, false);
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(true);
-  EXPECT_TRUE(scheduler_->ImplLatencyTakesPriority());
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(false);
+  scheduler_->SetTreePrioritiesAndScrollState(SMOOTHNESS_TAKES_PRIORITY, false);
   EXPECT_TRUE(scheduler_->ImplLatencyTakesPriority());
 
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, true);
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(true);
-  EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(false);
+  scheduler_->SetTreePrioritiesAndScrollState(SMOOTHNESS_TAKES_PRIORITY, true);
   EXPECT_TRUE(scheduler_->ImplLatencyTakesPriority());
 
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER, false);
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(true);
-  EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(false);
+  scheduler_->SetTreePrioritiesAndScrollState(SAME_PRIORITY_FOR_BOTH_TREES,
+                                              false);
   EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
 
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, true);
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(true);
-  EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
-  scheduler_->SetCriticalBeginMainFrameToActivateIsFast(false);
+  scheduler_->SetTreePrioritiesAndScrollState(SAME_PRIORITY_FOR_BOTH_TREES,
+                                              true);
   EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
 }
 
@@ -3582,15 +3535,13 @@ TEST_P(SchedulerTest, InvalidationNotBlockedOnMainFrame) {
 // durations: F = fast durations; S = slow durations
 bool SchedulerTest::BeginMainFrameOnCriticalPath(
     TreePriority tree_priority,
-    ScrollHandlerState scroll_handler_state,
+    bool is_current_scroll_main_painted,
     base::TimeDelta durations) {
   SetUpScheduler(EXTERNAL_BFS);
   fake_compositor_timing_history_->SetAllEstimatesTo(durations);
   client_->Reset();
-  scheduler_->SetTreePrioritiesAndScrollState(
-      tree_priority, scroll_handler_state,
-      scroll_handler_state ==
-          ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER);
+  scheduler_->SetTreePrioritiesAndScrollState(tree_priority,
+                                              is_current_scroll_main_painted);
   scheduler_->SetNeedsBeginMainFrame();
   EXPECT_FALSE(client_->last_begin_main_frame_args().IsValid());
   EXPECT_SCOPED(AdvanceFrame());
@@ -3599,55 +3550,43 @@ bool SchedulerTest::BeginMainFrameOnCriticalPath(
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_BNF) {
-  EXPECT_TRUE(BeginMainFrameOnCriticalPath(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER,
-      kFastDuration));
+  EXPECT_TRUE(BeginMainFrameOnCriticalPath(SAME_PRIORITY_FOR_BOTH_TREES, false,
+                                           kFastDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_BNS) {
-  EXPECT_TRUE(BeginMainFrameOnCriticalPath(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER,
-      kSlowDuration));
+  EXPECT_TRUE(BeginMainFrameOnCriticalPath(SAME_PRIORITY_FOR_BOTH_TREES, false,
+                                           kSlowDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_BHF) {
-  EXPECT_TRUE(BeginMainFrameOnCriticalPath(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, kFastDuration));
+  EXPECT_TRUE(BeginMainFrameOnCriticalPath(SAME_PRIORITY_FOR_BOTH_TREES, true,
+                                           kFastDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_BHS) {
-  EXPECT_TRUE(BeginMainFrameOnCriticalPath(
-      SAME_PRIORITY_FOR_BOTH_TREES,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, kSlowDuration));
+  EXPECT_TRUE(BeginMainFrameOnCriticalPath(SAME_PRIORITY_FOR_BOTH_TREES, true,
+                                           kSlowDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_ANF) {
-  EXPECT_FALSE(BeginMainFrameOnCriticalPath(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER,
-      kFastDuration));
+  EXPECT_FALSE(BeginMainFrameOnCriticalPath(SMOOTHNESS_TAKES_PRIORITY, false,
+                                            kFastDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_ANS) {
-  EXPECT_FALSE(BeginMainFrameOnCriticalPath(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER,
-      kSlowDuration));
+  EXPECT_FALSE(BeginMainFrameOnCriticalPath(SMOOTHNESS_TAKES_PRIORITY, false,
+                                            kSlowDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_AHF) {
-  EXPECT_TRUE(BeginMainFrameOnCriticalPath(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, kFastDuration));
+  EXPECT_FALSE(BeginMainFrameOnCriticalPath(SMOOTHNESS_TAKES_PRIORITY, true,
+                                            kFastDuration));
 }
 
 TEST_P(SchedulerTest, BeginMainFrameOnCriticalPath_AHS) {
-  EXPECT_FALSE(BeginMainFrameOnCriticalPath(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, kSlowDuration));
+  EXPECT_FALSE(BeginMainFrameOnCriticalPath(SMOOTHNESS_TAKES_PRIORITY, true,
+                                            kSlowDuration));
 }
 
 TEST_P(SchedulerTest, BeginFrameAckForFinishedImplFrame) {
@@ -3858,9 +3797,7 @@ TEST_P(SchedulerTest, CriticalBeginMainFrameToActivateIsFast) {
 
   // If we have a scroll handler but the critical main frame is slow, we should
   // still prioritize impl thread latency.
-  scheduler_->SetTreePrioritiesAndScrollState(
-      SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_AFFECTS_SCROLL_HANDLER, true);
+  scheduler_->SetTreePrioritiesAndScrollState(SMOOTHNESS_TAKES_PRIORITY, true);
   scheduler_->SetNeedsRedraw();
   // An interval of 2ms makes sure that the main frame is considered slow.
   base::TimeDelta interval = base::Milliseconds(2);
@@ -3878,7 +3815,8 @@ TEST_P(SchedulerTest, CriticalBeginMainFrameToActivateIsFast) {
   // Set an interval of 10ms. The bmf_to_activate_interval should be 1*4 = 4ms,
   // to account for queue + main_frame + pending_tree + activation durations.
   // With a draw time of 1ms and fudge factor of 1ms, the interval available for
-  // the main frame to be activated is 8ms, so it should be considered fast.
+  // the main frame to be activated is 8ms, but it should still be considered
+  // slow because we prioritize impl latency during smoothness.
   scheduler_->SetNeedsRedraw();
   interval = base::Milliseconds(10);
   task_runner_->AdvanceMockTickClock(interval);
@@ -3887,7 +3825,7 @@ TEST_P(SchedulerTest, CriticalBeginMainFrameToActivateIsFast) {
                                      task_runner_->NowTicks() + interval,
                                      interval, viz::BeginFrameArgs::NORMAL);
   fake_external_begin_frame_source_->TestOnBeginFrame(args);
-  EXPECT_FALSE(scheduler_->ImplLatencyTakesPriority());
+  EXPECT_TRUE(scheduler_->ImplLatencyTakesPriority());
 
   task_runner_->RunPendingTasks();  // Run posted deadline to finish the frame.
   ASSERT_FALSE(client_->IsInsideBeginImplFrame());
@@ -4031,8 +3969,7 @@ TEST_P(SchedulerTest, ShouldDeferInvalidation_BMFQueueDurationNotCriticalSlow) {
   SetUpScheduler(EXTERNAL_BFS);
   scheduler_->SetNeedsBeginMainFrame();
   scheduler_->SetTreePrioritiesAndScrollState(
-      TreePriority::SMOOTHNESS_TAKES_PRIORITY,
-      ScrollHandlerState::SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER, false);
+      TreePriority::SMOOTHNESS_TAKES_PRIORITY, false);
   fake_compositor_timing_history_->SetAllEstimatesTo(kFastDuration);
   fake_compositor_timing_history_
       ->SetBeginMainFrameQueueDurationNotCriticalEstimate(kSlowDuration);
@@ -4192,53 +4129,6 @@ TEST_P(SchedulerTest,
   EXPECT_ACTIONS("WillBeginImplFrame");
 }
 
-TEST_P(SchedulerTest, ProactiveThrottling) {
-  // Verify that the SchedulerClient gets updates when the begin frame interval
-  // changes.
-  SetUpScheduler(EXTERNAL_BFS);
-  constexpr uint64_t kSourceId = viz::BeginFrameArgs::kStartingSourceId;
-  uint64_t sequence_number = viz::BeginFrameArgs::kStartingFrameNumber;
-
-  // Enable the proactive throttling feature.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kRenderThrottleFrameRate,
-      {{"render-throttled-frame-interval-hz", "30"}});
-  base::TimeDelta throttled_interval =
-      base::Hertz(features::kRenderThrottledFrameIntervalHz.Get());
-
-  // No throttling by default.
-  base::TimeDelta interval = base::Hertz(120);
-  SendTestBeginFrameAfterInterval(interval, kSourceId, sequence_number++);
-  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
-    EXPECT_GT(scheduler_->state_machine().MainFrameThrottledInterval(),
-              base::Hertz(120));
-  } else {
-    EXPECT_TRUE(
-        scheduler_->state_machine().MainFrameThrottledInterval().is_zero());
-  }
-
-  scheduler_->SetShouldThrottleFrameRate(true);
-
-  // Throttling at 60fps.
-  interval = base::Hertz(60);
-  SendTestBeginFrameAfterInterval(interval, kSourceId, sequence_number++);
-  EXPECT_EQ(scheduler_->state_machine().MainFrameThrottledInterval(),
-            throttled_interval);
-
-  // Not at 10fps.
-  interval = base::Hertz(10);
-  SendTestBeginFrameAfterInterval(interval, kSourceId, sequence_number++);
-  EXPECT_TRUE(
-      scheduler_->state_machine().MainFrameThrottledInterval().is_zero());
-
-  // Not throttling after stopping the throttle.
-  scheduler_->SetShouldThrottleFrameRate(false);
-  interval = base::Hertz(60);
-  SendTestBeginFrameAfterInterval(interval, kSourceId, sequence_number++);
-  EXPECT_TRUE(
-      scheduler_->state_machine().MainFrameThrottledInterval().is_zero());
-}
 
 // Tests that `SetShouldWarmUp()` will start initial `LayerTreeFrameSink`
 // creation even if invisible.

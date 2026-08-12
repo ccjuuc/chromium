@@ -31,7 +31,7 @@
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 namespace content {
@@ -45,6 +45,8 @@ enum class WebAppUrlLoaderResult;
 
 namespace web_app {
 
+class CustomIconFetcher;
+class FinalizeInstallOrUpdateJob;
 class InstallPlaceholderJob;
 class WebAppDataRetriever;
 class WebAppUninstallAndReplaceJob;
@@ -121,6 +123,8 @@ class ExternalAppResolutionCommand
       DownloadedIconsHttpResults icons_http_results);
 
   void UpdateInfoWithParamsAndUpgradeLock(bool icon_download_failed);
+  void OnCustomIconDecodedPopulateBitmaps(std::optional<SkBitmap> bitmap);
+  void ContinueUpdateInfoWithParamsAndUpgradeLock(bool icon_download_failed);
 
   void OnLockUpgradedFinalizeInstall(bool icon_download_failed);
   void OnInstallFinalized(const webapps::AppId& app_id,
@@ -131,7 +135,7 @@ class ExternalAppResolutionCommand
   void OnPlaceholderUninstalledMaybeRelaunch(
       webapps::UninstallResultCode result);
 
-  void OnLaunch(base::WeakPtr<Browser> browser,
+  void OnLaunch(base::WeakPtr<BrowserWindowInterface> browser,
                 base::WeakPtr<content::WebContents> web_contents,
                 apps::LaunchContainer container,
                 base::Value debug_value);
@@ -194,6 +198,8 @@ class ExternalAppResolutionCommand
   std::optional<InstallPlaceholderJob> install_placeholder_job_;
   std::optional<InstallFromInfoJob> install_from_info_job_;
   std::optional<RemoveInstallSourceJob> remove_placeholder_job_;
+  std::optional<FinalizeInstallOrUpdateJob> install_job_;
+  std::unique_ptr<CustomIconFetcher> custom_icon_fetcher_;
 
   base::OnceClosure on_lock_upgraded_callback_for_testing_;
 

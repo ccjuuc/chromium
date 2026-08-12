@@ -16,16 +16,17 @@
 #include "build/build_config.h"
 #include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -37,6 +38,7 @@
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/image/image.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_state.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -57,11 +59,9 @@
 
 using AppInfo = apps::IntentPickerAppInfo;
 using BubbleType = apps::IntentPickerBubbleType;
-using content::OpenURLParams;
-using content::Referrer;
 using content::WebContents;
 
-class IntentPickerBubbleViewTest : public TestWithBrowserView {
+class IntentPickerBubbleViewTest : public ChromeViewsTestBase {
  public:
   IntentPickerBubbleViewTest() = default;
   IntentPickerBubbleViewTest(const IntentPickerBubbleViewTest&) = delete;
@@ -69,16 +69,28 @@ class IntentPickerBubbleViewTest : public TestWithBrowserView {
       delete;
 
  protected:
+  void SetUp() override {
+    ChromeViewsTestBase::SetUp();
+    anchor_widget_ =
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+    anchor_view_ =
+        anchor_widget_->SetContentsView(std::make_unique<views::View>());
+    anchor_widget_->Show();
+  }
+
+  void TearDown() override {
+    anchor_view_ = nullptr;
+    anchor_widget_.reset();
+    web_contents_.reset();
+    ChromeViewsTestBase::TearDown();
+  }
+
   ChromeViewsTestBase::WidgetAutoclosePtr CreateBubbleView(
       bool use_icons,
       bool show_stay_in_chrome,
       BubbleType bubble_type,
       const std::optional<url::Origin>& initiating_origin) {
     DCHECK(!app_info_.empty());
-    BrowserView* browser_view =
-        BrowserView::GetBrowserViewForBrowser(browser());
-    anchor_view_ =
-        browser_view->toolbar()->AddChildView(std::make_unique<views::View>());
 
     if (use_icons) {
       FillAppListWithDummyIcons();
@@ -86,22 +98,27 @@ class IntentPickerBubbleViewTest : public TestWithBrowserView {
 
     // We create |web_contents| since the Bubble UI has an Observer that
     // depends on this, otherwise it wouldn't work.
-    GURL url("http://www.google.com");
-    WebContents* web_contents = browser()->OpenURL(
-        OpenURLParams(url, Referrer(), WindowOpenDisposition::CURRENT_TAB,
-                      ui::PAGE_TRANSITION_TYPED, false),
-        /*navigation_handle_callback=*/{});
-    CommitPendingLoad(&web_contents->GetController());
+    web_contents_ =
+        content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
+    content::WebContentsTester::For(web_contents_.get())
+        ->NavigateAndCommit(GURL("http://www.google.com"));
 
     auto* widget = IntentPickerBubbleView::ShowBubble(
-        anchor_view_, /*highlighted_button=*/nullptr, bubble_type, web_contents,
-        app_info_, show_stay_in_chrome,
+        views::BubbleAnchor(anchor_view_), /*highlighted_element=*/std::nullopt,
+        bubble_type, web_contents_.get(), app_info_, show_stay_in_chrome,
         /*show_remember_selection=*/true, initiating_origin,
         base::BindOnce(&IntentPickerBubbleViewTest::OnBubbleClosed,
                        base::Unretained(this)));
+    widget->Activate();
     event_generator_.reset();  // Mac only allows one EventGenerator at a time.
+#if defined(USE_AURA)
+    widget->GetNativeWindow()->Focus();
+    event_generator_ = std::make_unique<ui::test::EventGenerator>(
+        GetContext(), widget->GetNativeWindow());
+#else
     event_generator_ = std::make_unique<ui::test::EventGenerator>(
         views::GetRootWindow(widget));
+#endif
     return ChromeViewsTestBase::WidgetAutoclosePtr(widget);
   }
 
@@ -192,7 +209,11 @@ class IntentPickerBubbleViewTest : public TestWithBrowserView {
   }
 
  private:
-  raw_ptr<views::View, DanglingUntriaged> anchor_view_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+  TestingProfile profile_;
+  std::unique_ptr<views::Widget> anchor_widget_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  raw_ptr<views::View, DanglingUntriaged> anchor_view_ = nullptr;
   std::vector<AppInfo> app_info_;
   std::unique_ptr<ui::test::EventGenerator> event_generator_;
 
@@ -332,13 +353,6 @@ TEST_F(IntentPickerBubbleViewListTest, WindowTitle) {
   EXPECT_EQ(l10n_util::GetStringUTF16(IDS_INTENT_PICKER_BUBBLE_VIEW_OPEN_WITH),
             bubble()->GetWindowTitle());
 
-  bubble_widget =
-      CreateBubbleView(/*use_icons=*/false, /*show_stay_in_chrome=*/false,
-                       BubbleType::kClickToCall,
-                       /*initiating_origin=*/std::nullopt);
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_TITLE_LABEL),
-            bubble()->GetWindowTitle());
 }
 
 // Check that that the correct button labels are used.
@@ -354,16 +368,6 @@ TEST_F(IntentPickerBubbleViewListTest, ButtonLabels) {
       l10n_util::GetStringUTF16(IDS_INTENT_PICKER_BUBBLE_VIEW_STAY_IN_CHROME),
       bubble()->GetDialogButtonLabel(ui::mojom::DialogButton::kCancel));
 
-  bubble_widget =
-      CreateBubbleView(/*use_icons=*/false, /*show_stay_in_chrome=*/false,
-                       BubbleType::kClickToCall,
-                       /*initiating_origin=*/std::nullopt);
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_BROWSER_SHARING_CLICK_TO_CALL_DIALOG_CALL_BUTTON_LABEL),
-            bubble()->GetDialogButtonLabel(ui::mojom::DialogButton::kOk));
-  EXPECT_EQ(
-      l10n_util::GetStringUTF16(IDS_INTENT_PICKER_BUBBLE_VIEW_STAY_IN_CHROME),
-      bubble()->GetDialogButtonLabel(ui::mojom::DialogButton::kCancel));
 }
 
 TEST_F(IntentPickerBubbleViewListTest, InitiatingOriginView) {
@@ -551,14 +555,8 @@ TEST_P(IntentPickerBubbleViewLayoutTest, DoubleClickToAccept) {
 INSTANTIATE_TEST_SUITE_P(
     All,
     IntentPickerBubbleViewLayoutTest,
-#if BUILDFLAG(IS_CHROMEOS)
-    testing::Values(apps::test::LinkCapturingFeatureVersion::kV1DefaultOff,
-                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOff)
-#else
     testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
-                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-        ,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
     apps::test::LinkCapturingVersionToString);
 
 class IntentPickerBubbleViewGridLayoutTest
@@ -646,13 +644,6 @@ TEST_P(IntentPickerBubbleViewGridLayoutTest, MAYBE_OpenWithReturnKey) {
 INSTANTIATE_TEST_SUITE_P(
     ,
     IntentPickerBubbleViewGridLayoutTest,
-#if BUILDFLAG(IS_CHROMEOS)
-    // BUG(370548596): Enable test coverage for kV2DefaultOff once we figure
-    // out the test failures (listed in the bug).
-    testing::Values(apps::test::LinkCapturingFeatureVersion::kV1DefaultOff)
-#else
     testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
-                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn)
-#endif  // BUILDFLAG(IS_CHROMEOS)
-        ,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
     apps::test::LinkCapturingVersionToString);

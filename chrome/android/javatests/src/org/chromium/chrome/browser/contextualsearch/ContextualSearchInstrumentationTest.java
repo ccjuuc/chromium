@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.contextualsearch;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
-
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
@@ -19,9 +17,9 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.ui.base.DeviceFormFactor;
 
@@ -30,8 +28,8 @@ import org.chromium.ui.base.DeviceFormFactor;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures(ChromeFeatureList.CONTEXTUAL_SEARCH_DISABLE_ONLINE_DETECTION)
-@Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
 @Batch(Batch.PER_CLASS)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // Explicitly not supported.
 public class ContextualSearchInstrumentationTest extends ContextualSearchInstrumentationBase {
     @Override
     @Before
@@ -84,7 +82,7 @@ public class ContextualSearchInstrumentationTest extends ContextualSearchInstrum
         assertPeekingPanelNonResolve();
         fakeResponse(mFakeServer.buildResolvedSearchTermWithRelatedSearches(SEARCH_NODE_TERM));
         expandPanelAndAssert();
-        mPanel.updatePanelToStateForTest(OverlayPanel.PanelState.EXPANDED);
+        mPanel.updatePanelToStateForTest(PanelState.EXPANDED);
         assertExpandedPanelNonResolve();
         maximizePanel();
         // TODO(donnd): consider asserting that no caption or other intelligent UI is showing.

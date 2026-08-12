@@ -2,9 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//chrome/common/features.gni")
-import("//third_party/closure_compiler/compile_js.gni")
 import("//tools/grit/grit_rule.gni")
 
 assert(is_chromeos, "Only ChromeOS resources in //c/b/resources/chromeos.")
@@ -14,14 +12,15 @@ group("resources") {
     ":app_icon_resources",
     ":multidevice_setup_resources",
     "accessibility:build",
+    "account_manager:resources",
     "add_supervision:resources",
     "app_install:resources",
     "bluetooth_pairing_dialog:resources",
-    "borealis_installer:resources",
     "cloud_upload:resources",
     "crostini_installer:resources",
-    "crostini_upgrader:resources",
+    "cryptohome:resources",
     "desk_api:resources",
+    "drive_internals:resources",
     "edu_coexistence:resources",
     "emoji_picker:resources",
     "enterprise_reporting:resources",
@@ -43,17 +42,32 @@ group("resources") {
     "notification_tester:resources",
     "parent_access:resources",
     "password_change:resources",
+    "power:resources",
     "remote_maintenance_curtain:resources",
     "sensor_info:resources",
     "set_time_dialog:resources",
     "skyvault:resources",
+    "slow:resources",
+    "smb_shares:resources",
     "supervision:resources",
-    "vm:resources",
+    "sys_internals:resources",
   ]
 }
 
 grit("app_icon_resources") {
   source = "app_icon/app_icon_resources.grd"
+  inputs = [
+    "app_icon/default_100_percent/badges/block-icon-badge.png",
+    "app_icon/default_100_percent/badges/chrome-icon-badge.png",
+    "app_icon/default_100_percent/badges/hourglass-icon-badge.png",
+    "app_icon/default_100_percent/mask/badge-mask.png",
+    "app_icon/default_200_percent/badges/block-icon-badge.png",
+    "app_icon/default_200_percent/badges/chrome-icon-badge.png",
+    "app_icon/default_200_percent/badges/hourglass-icon-badge.png",
+    "app_icon/default_200_percent/mask/badge-mask.png",
+    "app_icon/default_200_percent/badges/hourglass-icon-badge.png",
+    "app_icon/default_200_percent/mask/badge-mask.png",
+  ]
   defines = chrome_grit_defines
   outputs = [
     "grit/chromeos_app_icon_resources.h",
@@ -80,39 +94,4 @@ grit("multidevice_setup_resources") {
   deps = [ "//chrome/browser/resources/chromeos/multidevice_setup:build_grd" ]
   enable_input_discovery_for_gn_analyze = false
   output_dir = "$root_gen_dir/chrome"
-}
-
-group("closure_compile") {
-  deps = [
-    ":closure_compile_local",
-    "account_manager:closure_compile",
-    "account_manager/components:closure_compile",
-    "emulator:closure_compile",
-    "multidevice_internals:closure_compile",
-    "smb_shares:closure_compile",
-    "sys_internals:closure_compile",
-  ]
-}
-
-js_type_check("closure_compile_local") {
-  deps = [
-    ":power",
-    ":slow",
-  ]
-}
-
-js_library("power") {
-  deps = [
-    "//ash/webui/common/resources:cr.m",
-    "//ash/webui/common/resources:load_time_data.m",
-    "//ash/webui/common/resources:util",
-  ]
-}
-
-js_library("slow") {
-  deps = [
-    "//ash/webui/common/resources:cr.m",
-    "//ash/webui/common/resources:util",
-  ]
-  externs_list = [ "$externs_path/chrome_send.js" ]
 }

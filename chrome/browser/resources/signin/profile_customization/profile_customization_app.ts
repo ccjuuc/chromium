@@ -14,6 +14,7 @@ import 'chrome://resources/cr_elements/icons.html.js';
 import 'chrome://resources/cr_elements/policy/cr_policy_indicator.js';
 import '/strings.m.js';
 
+import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import type {CrInputElement} from 'chrome://resources/cr_elements/cr_input/cr_input.js';
 import type {AvatarIcon} from 'chrome://resources/cr_elements/cr_profile_avatar_selector/cr_profile_avatar_selector.js';
@@ -82,12 +83,15 @@ export class ProfileCustomizationAppElement extends
 
       isLocalProfileCreation_: {type: Boolean},
 
-      shouldShowDefaultProfileName_: {type: Boolean},
+      /** Exposed to CSS as 'is-refreshed-ui_'. */
+      isRefreshedUI_: {type: Boolean, reflect: true},
+
+      hasEnterpriseLabel: {type: Boolean},
     };
   }
 
   protected accessor isManaged_: boolean = false;
-  protected hasEnterpriseLabel: boolean = false;
+  protected accessor hasEnterpriseLabel: boolean = false;
   protected accessor profileName_: string = '';
   protected accessor pictureUrl_: string = '';
   protected accessor welcomeTitle_: string = '';
@@ -96,16 +100,16 @@ export class ProfileCustomizationAppElement extends
   private confirmedAvatar_: AvatarIcon|null = null;
   protected accessor isLocalProfileCreation_: boolean =
       loadTimeData.getBoolean('isLocalProfileCreation');
-  protected accessor shouldShowDefaultProfileName_: boolean =
-      loadTimeData.getBoolean('shouldShowDefaultProfileName');
+  protected accessor isRefreshedUI_: boolean =
+      loadTimeData.getBoolean('isRefreshedUI');
   private profileCustomizationBrowserProxy_: ProfileCustomizationBrowserProxy =
       ProfileCustomizationBrowserProxyImpl.getInstance();
 
   override firstUpdated() {
+    ColorChangeUpdater.forDocument().start();
     // profileName_ is only set now, because it triggers a validation of the
     // input which crashes if it's done too early.
-    // set profileName_ for local profiles in friction reduction experiment.
-    if (!this.isLocalProfileCreation_ || this.shouldShowDefaultProfileName_) {
+    if (!this.isLocalProfileCreation_) {
       this.profileName_ = loadTimeData.getString('profileName');
     }
     this.addWebUiListener(
@@ -126,7 +130,7 @@ export class ProfileCustomizationAppElement extends
    * Called when the Done button is clicked. Sends the profile name back to
    * native.
    */
-  protected onDoneCustomizationClicked_() {
+  protected onDoneCustomizationClick_() {
     this.profileCustomizationBrowserProxy_.done(this.profileName_);
   }
 
@@ -146,7 +150,7 @@ export class ProfileCustomizationAppElement extends
   }
 
   protected getNameInputPlaceHolder_(): string {
-    return this.shouldShowDefaultProfileName_ ?
+    return this.isRefreshedUI_ ?
         '' :
         this.i18n('profileCustomizationInputPlaceholder');
   }
@@ -155,17 +159,17 @@ export class ProfileCustomizationAppElement extends
     return !this.isLocalProfileCreation_;
   }
 
-  protected onSkipCustomizationClicked_() {
+  protected onSkipCustomizationClick_() {
     this.profileCustomizationBrowserProxy_.skip();
   }
 
-  protected onDeleteProfileClicked_() {
+  protected onDeleteProfileClick_() {
     this.profileCustomizationBrowserProxy_.deleteProfile();
   }
 
   protected onCustomizeAvatarClick_() {
     assert(this.isLocalProfileCreation_);
-    this.$.viewManager.switchView('selectAvatarDialog', 'fade-in', 'fade-out');
+    this.$.viewManager.switchView('selectAvatarDialog');
   }
 
   private setAvailableIcons_(icons: AvatarIcon[]) {
@@ -185,7 +189,7 @@ export class ProfileCustomizationAppElement extends
     this.availableIcons_ = icons;
   }
 
-  protected onSelectAvatarConfirmClicked_() {
+  protected onSelectAvatarConfirmClick_() {
     assert(this.isLocalProfileCreation_);
     assert(this.selectedAvatar_);
     this.profileCustomizationBrowserProxy_.setAvatarIcon(
@@ -194,21 +198,21 @@ export class ProfileCustomizationAppElement extends
     this.closeSelectAvatar_();
   }
 
-  protected onSelectAvatarBackClicked_() {
+  protected onSelectAvatarBackClick_() {
     assert(this.isLocalProfileCreation_);
     this.closeSelectAvatar_();
     this.selectedAvatar_ = this.confirmedAvatar_;
   }
 
   private closeSelectAvatar_() {
-    this.$.viewManager.switchView('customizeDialog', 'fade-in', 'fade-out');
+    this.$.viewManager.switchView('customizeDialog');
   }
 
-  protected validateInputOnBlur_() {
+  protected onNameInputBlur_() {
     this.$.nameInput.validate();
   }
 
-  protected onProfileNameChanged_(e: CustomEvent<{value: string}>) {
+  protected onProfileNameValueChanged_(e: CustomEvent<{value: string}>) {
     this.profileName_ = e.detail.value;
   }
 

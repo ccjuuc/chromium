@@ -12,13 +12,13 @@
 #include <string>
 #include <utility>
 
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
+#include "media/base/data_source.h"
 #include "third_party/blink/renderer/platform/media/multi_buffer.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -73,7 +73,8 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
   // Keep in sync with WebMediaPlayer::CorsMode.
   enum CorsMode { CORS_UNSPECIFIED, CORS_ANONYMOUS, CORS_USE_CREDENTIALS };
   enum CacheMode { kNormal, kCacheDisabled };
-  using KeyType = std::pair<KURL, CorsMode>;
+  using KeyType =
+      std::pair<KURL, std::pair<CorsMode, media::DataSource::EncodingMode>>;
 
   // `url_index` is a WeakPtr since while UrlData objects are created by the
   // UrlIndex they are not owned by the UrlIndex until after the network load
@@ -82,6 +83,7 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
   UrlData(base::PassKey<UrlIndex>,
           const KURL& url,
           CorsMode cors_mode,
+          media::DataSource::EncodingMode encoding_mode,
           base::WeakPtr<UrlIndex> url_index,
           CacheMode cache_lookup_mode,
           scoped_refptr<base::SingleThreadTaskRunner> task_runner);
@@ -112,6 +114,10 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
   // True if this UrlData and any it might redirect to should bypass cache
   // lookups, regardless of disk cache or response status.
   CacheMode cache_lookup_mode() const { return cache_lookup_mode_; }
+
+  media::DataSource::EncodingMode encoding_mode() const {
+    return encoding_mode_;
+  }
 
   // Last used time.
   base::Time last_used() const { return last_used_; }
@@ -194,6 +200,7 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
  protected:
   UrlData(const KURL& url,
           CorsMode cors_mode,
+          media::DataSource::EncodingMode encoding_mode,
           base::WeakPtr<UrlIndex> url_index,
           CacheMode cache_lookup_mode,
           scoped_refptr<base::SingleThreadTaskRunner> task_runner);
@@ -245,6 +252,8 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
   // UrlData should use existing underlying cached data.
   CacheMode cache_lookup_mode_;
 
+  media::DataSource::EncodingMode encoding_mode_;
+
   // https://html.spec.whatwg.org/#cors-cross-origin
   bool is_cors_cross_origin_ = false;
 
@@ -272,14 +281,14 @@ class PLATFORM_EXPORT UrlData : public RefCounted<UrlData> {
 };
 
 // The UrlIndex lets you look up UrlData instances by url.
-class PLATFORM_EXPORT UrlIndex : public base::MemoryPressureListener {
+class PLATFORM_EXPORT UrlIndex {
  public:
   UrlIndex(ResourceFetchContext* fetch_context,
            scoped_refptr<base::SingleThreadTaskRunner> task_runner);
   UrlIndex(ResourceFetchContext* fetch_context,
            int block_shift,
            scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-  ~UrlIndex() override;
+  virtual ~UrlIndex();
 
   // Look up an UrlData in the index and return it. If none is found,
   // create a new one. Note that newly created UrlData entries are NOT
@@ -288,9 +297,12 @@ class PLATFORM_EXPORT UrlIndex : public base::MemoryPressureListener {
   // ranges and it's last modified time.
   // Because the returned UrlData has a raw reference to |this|, it must be
   // released before |this| is destroyed.
-  scoped_refptr<UrlData> GetByUrl(const KURL& url,
-                                  UrlData::CorsMode cors_mode,
-                                  UrlData::CacheMode cache_mode);
+  scoped_refptr<UrlData> GetByUrl(
+      const KURL& url,
+      UrlData::CorsMode cors_mode,
+      UrlData::CacheMode cache_mode,
+      media::DataSource::EncodingMode encoding_mode =
+          media::DataSource::EncodingMode::kIdentity);
 
   // Add the given UrlData to the index if possible. If a better UrlData
   // is already present in the index, return it instead. (If not, we just
@@ -326,9 +338,8 @@ class PLATFORM_EXPORT UrlIndex : public base::MemoryPressureListener {
   virtual scoped_refptr<UrlData> NewUrlData(
       const KURL& url,
       UrlData::CorsMode cors_mode,
-      UrlData::CacheMode cache_lookup_mode);
-
-  void OnMemoryPressure(base::MemoryPressureLevel) override;
+      UrlData::CacheMode cache_lookup_mode,
+      media::DataSource::EncodingMode encoding_mode);
 
   raw_ptr<ResourceFetchContext> fetch_context_;
   using UrlDataMap = HashMap<UrlData::KeyType, scoped_refptr<UrlData>>;
@@ -339,10 +350,6 @@ class PLATFORM_EXPORT UrlIndex : public base::MemoryPressureListener {
   // Currently only changed for testing purposes.
   const int block_shift_;
 
-  // Must be async, because it runs on the renderer's main thread, which is not
-  // the process's main thread in --single-process mode.
-  base::AsyncMemoryPressureListenerRegistration
-      memory_pressure_listener_registration_;
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 
   base::WeakPtrFactory<UrlIndex> weak_factory_{this};

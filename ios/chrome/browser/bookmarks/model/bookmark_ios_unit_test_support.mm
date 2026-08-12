@@ -11,12 +11,15 @@
 #import "components/bookmarks/common/bookmark_features.h"
 #import "components/bookmarks/common/bookmark_metrics.h"
 #import "components/bookmarks/test/bookmark_test_helpers.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/bookmarks/model/managed_bookmark_service_factory.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "url/gurl.h"
 
 using bookmarks::BookmarkNode;
@@ -32,8 +35,11 @@ void BookmarkIOSUnitTestSupport::SetUp() {
   TestProfileIOS::Builder test_profile_builder;
   test_profile_builder.AddTestingFactory(
       AuthenticationServiceFactory::GetInstance(),
-      AuthenticationServiceFactory::GetFactoryWithDelegate(
+      AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
           std::make_unique<FakeAuthenticationServiceDelegate>()));
+  test_profile_builder.AddTestingFactory(
+      SyncServiceFactory::GetInstance(),
+      base::BindRepeating(&CreateTestSyncService));
   test_profile_builder.AddTestingFactory(
       ios::BookmarkModelFactory::GetInstance(),
       ios::BookmarkModelFactory::GetDefaultFactory());

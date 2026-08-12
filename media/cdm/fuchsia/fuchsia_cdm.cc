@@ -11,7 +11,6 @@
 #include "base/fuchsia/mem_buffer_util.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/not_fatal_until.h"
 #include "media/base/callback_registry.h"
 #include "media/base/cdm_factory.h"
 #include "media/base/cdm_promise.h"
@@ -235,7 +234,7 @@ class FuchsiaCdm::CdmSession {
       CdmKeyInformation::KeyStatus status = ToCdmKeyStatus(key_state.status());
       has_additional_usable_key |= (status == CdmKeyInformation::USABLE);
       keys_info.emplace_back(
-          new CdmKeyInformation(key_state.key_id(), status, 0));
+          std::make_unique<CdmKeyInformation>(key_state.key_id(), status, 0));
     }
 
     session_callbacks_->keys_change_cb.Run(

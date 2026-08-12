@@ -7,9 +7,12 @@
 #include <text-input-unstable-v3-client-protocol.h>
 #include <text-input-unstable-v3-server-protocol.h>
 
+#include <algorithm>
 #include <memory>
 #include <string_view>
 
+#include "base/check.h"
+#include "base/logging.h"
 #include "base/strings/utf_offset_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -51,15 +54,23 @@ class ZwpTextInputV3Test : public WaylandTestSimple {
   raw_ptr<ZwpTextInputV3> text_input_v3_;
 };
 
+void ExpectEnableWithDefaultContentType(
+    wl::MockZwpTextInputV3* zwp_text_input) {
+  EXPECT_CALL(*zwp_text_input, Enable()).Times(1);
+  EXPECT_CALL(*zwp_text_input,
+              SetContentType(ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+                             ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL))
+      .Times(1);
+  EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+}
+
 TEST_F(ZwpTextInputV3Test, Enable) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     InSequence s;
-    EXPECT_CALL(*server->text_input_manager_v3()->text_input(), Enable())
-        .Times(1);
-    EXPECT_CALL(*server->text_input_manager_v3()->text_input(), Commit())
-        .Times(1);
+    ExpectEnableWithDefaultContentType(
+        server->text_input_manager_v3()->text_input());
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
 }
 
 TEST_F(ZwpTextInputV3Test, Disable) {
@@ -353,18 +364,16 @@ TEST_F(ZwpTextInputV3Test, PendingRequestsSentOnDone) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
 
   // Now if commit number doesn't match done serial it shouldn't send a request.
@@ -416,10 +425,9 @@ TEST_F(ZwpTextInputV3Test, PendingRequestsClearedOnEnable) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
 
   // Pending set requests should not be sent without matching done event.
@@ -440,10 +448,9 @@ TEST_F(ZwpTextInputV3Test, PendingRequestsClearedOnEnable) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
 
   // Since there are no more pending requests nothing should be sent even if
@@ -470,10 +477,9 @@ TEST_F(ZwpTextInputV3Test, PendingRequestsClearedOnDisable) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
 
   // Pending set requests should not be sent without matching done event.
@@ -524,10 +530,9 @@ TEST_F(ZwpTextInputV3Test, PendingRequestsClearedOnReset) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
 
   // Pending set requests should not be sent without matching done event.
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
@@ -845,10 +850,9 @@ TEST_F(ZwpTextInputV3Test, PendingInputEventsClearedOnEnable) {
   PostToServerAndWait([](wl::TestWaylandServerThread* server) {
     auto* zwp_text_input = server->text_input_manager_v3()->text_input();
     InSequence s;
-    EXPECT_CALL(*zwp_text_input, Enable());
-    EXPECT_CALL(*zwp_text_input, Commit()).Times(1);
+    ExpectEnableWithDefaultContentType(zwp_text_input);
   });
-  text_input_v3_->Enable();
+  text_input_v3_->Enable(TEXT_INPUT_TYPE_TEXT, TEXT_INPUT_FLAG_NONE, true);
   VerifyAndClearExpectations();
 
   // Sending done should have no effect.
@@ -995,7 +999,7 @@ class ZwpTextInputV3TestWithCustomClient : public WaylandTestSimple {
       };
       base::UTF8ToUTF16AndAdjustOffsets(base::UTF16ToUTF8(surrounding_text),
                                         &offsets_for_adjustment);
-      if (base::Contains(offsets_for_adjustment, std::u16string::npos)) {
+      if (std::ranges::contains(offsets_for_adjustment, std::u16string::npos)) {
         LOG(DFATAL) << "The selection range for surrounding text is invalid.";
         return;
       }

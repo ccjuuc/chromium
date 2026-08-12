@@ -6,9 +6,12 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/numerics/safe_conversions.h"
+#include "build/build_config.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gfx/buffer_usage_util.h"
@@ -27,12 +30,15 @@ void FreeNativePixmapForTesting(
 }
 
 }  // namespace
-
 MappableBufferNativePixmap::MappableBufferNativePixmap(
     const gfx::Size& size,
     viz::SharedImageFormat format,
-    std::unique_ptr<gfx::ClientNativePixmap> pixmap)
-    : size_(size), format_(format), pixmap_(std::move(pixmap)) {}
+    std::unique_ptr<gfx::ClientNativePixmap> pixmap,
+    bool supports_zero_copy_webgpu_import)
+    : size_(size),
+      format_(format),
+      pixmap_(std::move(pixmap)),
+      supports_zero_copy_webgpu_import_(supports_zero_copy_webgpu_import) {}
 
 MappableBufferNativePixmap::~MappableBufferNativePixmap() {
 #if DCHECK_IS_ON()
@@ -50,7 +56,6 @@ void MappableBufferNativePixmap::AssertMapped() {
 #endif
 }
 
-// static
 std::unique_ptr<MappableBufferNativePixmap>
 MappableBufferNativePixmap::CreateFromHandle(
     gfx::ClientNativePixmapFactory* client_native_pixmap_factory,
@@ -58,7 +63,12 @@ MappableBufferNativePixmap::CreateFromHandle(
     const gfx::Size& size,
     viz::SharedImageFormat format,
     gfx::BufferUsage usage) {
-  CHECK(viz::HasEquivalentBufferFormat(format));
+  const bool supports_zero_copy_webgpu_import =
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+      handle.native_pixmap_handle().supports_zero_copy_webgpu_import;
+#else
+      false;
+#endif
   std::unique_ptr<gfx::ClientNativePixmap> native_pixmap =
       client_native_pixmap_factory->ImportFromHandle(
           std::move(handle).native_pixmap_handle(), size, format, usage);
@@ -67,7 +77,8 @@ MappableBufferNativePixmap::CreateFromHandle(
   }
 
   return base::WrapUnique(
-      new MappableBufferNativePixmap(size, format, std::move(native_pixmap)));
+      new MappableBufferNativePixmap(size, format, std::move(native_pixmap),
+                                     supports_zero_copy_webgpu_import));
 }
 
 // static
@@ -119,9 +130,11 @@ bool MappableBufferNativePixmap::Map() {
   return true;
 }
 
-void* MappableBufferNativePixmap::memory(size_t plane) {
+base::span<uint8_t> MappableBufferNativePixmap::memory(size_t plane) {
   AssertMapped();
-  return pixmap_->GetMemoryAddress(plane);
+  return UNSAFE_BUFFERS(base::span<uint8_t>(
+      static_cast<uint8_t*>(pixmap_->GetMemoryAddress(plane)),
+      base::saturated_cast<size_t>(pixmap_->GetPlaneSize(plane))));
 }
 
 void MappableBufferNativePixmap::Unmap() {
@@ -156,6 +169,10 @@ void MappableBufferNativePixmap::MapAsync(
 
 bool MappableBufferNativePixmap::AsyncMappingIsNonBlocking() const {
   return false;
+}
+
+bool MappableBufferNativePixmap::SupportsZeroCopyWebGPUImport() const {
+  return supports_zero_copy_webgpu_import_;
 }
 
 }  // namespace gpu

@@ -8,9 +8,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "build/android_buildflags.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_usb_delegate_observer.h"
@@ -26,6 +27,8 @@
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
 #include "services/device/public/mojom/usb_manager_client.mojom.h"
 #include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 
 namespace content {
 
@@ -142,9 +145,10 @@ WebUsbServiceImpl::WebUsbServiceImpl(
   if (delegate && render_frame_host_) {
     delegate->AddObserver(GetBrowserContext(), this);
   } else if (service_worker_version_) {
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
     // For service worker case, it relies on ServiceWorkerUsbDelegateObserver to
-    // be the broker between UsbDelegate and UsbService.
+    // be the broker between UsbDelegate and UsbService. This is limited to
+    // platforms that support extensions.
     auto context = service_worker_version_->context();
     if (context) {
       context->usb_delegate_observer()->RegisterUsbService(
@@ -153,7 +157,7 @@ WebUsbServiceImpl::WebUsbServiceImpl(
     }
 #else
     NOTREACHED();
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   }
 }
 
@@ -338,6 +342,22 @@ void WebUsbServiceImpl::GetPermission(
     return;
   }
 
+  if (!render_frame_host_) {
+    mojo::ReportBadMessage(
+        "GetPermission is not allowed from a service worker.");
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  if (!FrameTreeNode::From(render_frame_host_)
+           ->UpdateUserActivationState(
+               blink::mojom::UserActivationUpdateType::
+                   kConsumeTransientActivation,
+               blink::mojom::UserActivationNotificationType::kNone)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
   usb_chooser_ = delegate->RunChooser(*render_frame_host_, std::move(options),
                                       std::move(callback));
 }
@@ -363,7 +383,7 @@ void WebUsbServiceImpl::SetClient(
         client) {
   DCHECK(client);
   clients_.Add(std::move(client));
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   if (service_worker_version_ && service_worker_version_->context()) {
     // WebUsbService is expected to have only one DeviceManagerClient when it is
     // for a service worker. One renderer side of a service worker has its own
@@ -381,7 +401,7 @@ void WebUsbServiceImpl::SetClient(
         ->usb_delegate_observer()
         ->ProcessPendingCallbacks(service_worker_version_.get());
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 }
 
 void WebUsbServiceImpl::OnPermissionRevoked(const url::Origin& origin) {

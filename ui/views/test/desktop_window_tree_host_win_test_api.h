@@ -38,11 +38,15 @@ class DesktopWindowTreeHostWinTestApi {
 
   HWNDMessageHandler* GetHwndMessageHandler();
 
+  HWND GetHWND() const;
+
   LRESULT SimulatePenEventForTesting(UINT message,
                                      UINT32 pointer_id,
                                      POINTER_PEN_INFO pointer_pen_info);
 
   void SetMockCursorPositionForTesting(const gfx::Point& position);
+
+  void SetRemoteSessionForTesting(bool is_remote);
 
  private:
   raw_ptr<DesktopWindowTreeHostWin> host_;

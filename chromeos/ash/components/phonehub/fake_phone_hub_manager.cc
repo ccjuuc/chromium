@@ -19,8 +19,7 @@ BrowserTabsModelProvider* FakePhoneHubManager::GetBrowserTabsModelProvider() {
 }
 
 CameraRollManager* FakePhoneHubManager::GetCameraRollManager() {
-  return features::IsPhoneHubCameraRollEnabled() ? &fake_camera_roll_manager_
-                                                 : nullptr;
+  return &fake_camera_roll_manager_;
 }
 
 DoNotDisturbController* FakePhoneHubManager::GetDoNotDisturbController() {
@@ -86,8 +85,7 @@ UserActionRecorder* FakePhoneHubManager::GetUserActionRecorder() {
 }
 
 FakePingManager* FakePhoneHubManager::GetPingManager() {
-  return features::IsPhoneHubPingOnBubbleOpenEnabled() ? &fake_ping_manager_
-                                                       : nullptr;
+  return &fake_ping_manager_;
 }
 
 void FakePhoneHubManager::GetHostLastSeenTimestamp(

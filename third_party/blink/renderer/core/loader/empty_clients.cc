@@ -96,10 +96,6 @@ void EmptyChromeClient::OpenFileChooser(LocalFrame*,
 void EmptyChromeClient::AttachRootLayer(scoped_refptr<cc::Layer>, LocalFrame*) {
 }
 
-String EmptyChromeClient::AcceptLanguages() {
-  return String();
-}
-
 bool EmptyChromeClient::StartDeferringCommits(LocalFrame& main_frame,
                                               base::TimeDelta timeout,
                                               cc::PaintHoldingReason reason) {
@@ -126,12 +122,15 @@ void EmptyLocalFrameClient::BeginNavigation(
     base::TimeTicks,
     base::TimeTicks,
     const String&,
-    const std::optional<Impression>&,
     const LocalFrameToken* initiator_frame_token,
+    const base::UnguessableToken& initiator_state_token,
+    const DocumentToken& initiator_document_token,
     SourceLocation*,
     mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>,
     bool is_container_initiated,
-    bool has_rel_opener) {}
+    bool has_rel_opener,
+    mojo::PendingReceiver<mojom::blink::NavigationResumeDeferredCommitListener>,
+    std::optional<base::UnguessableToken> script_tool_invocation_id) {}
 
 void EmptyLocalFrameClient::DispatchWillSendSubmitEvent(HTMLFormElement*) {}
 

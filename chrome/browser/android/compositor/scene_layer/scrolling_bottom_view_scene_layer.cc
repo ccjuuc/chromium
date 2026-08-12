@@ -41,12 +41,13 @@ ScrollingBottomViewSceneLayer::~ScrollingBottomViewSceneLayer() = default;
 void ScrollingBottomViewSceneLayer::UpdateScrollingBottomViewLayer(
     JNIEnv* env,
     const JavaRef<jobject>& jresource_manager,
-    jint view_resource_id,
-    jint shadow_height,
-    jfloat x_offset,
-    jfloat y_offset,
+    int32_t view_resource_id,
+    int32_t shadow_height,
+    float x_offset,
+    float y_offset,
     bool show_shadow,
-    const JavaRef<jobject>& joffset_tag) {
+    const JavaRef<jobject>& joffset_tag,
+    int32_t bottom_padding) {
   ui::ResourceManager* resource_manager =
       ui::ResourceManagerImpl::FromJavaObject(jresource_manager);
   ui::Resource* bottom_view_resource = resource_manager->GetResource(
@@ -71,7 +72,8 @@ void ScrollingBottomViewSceneLayer::UpdateScrollingBottomViewLayer(
 
   view_container_->SetBounds(
       gfx::Size(bottom_view_resource->size().width(), container_height));
-  view_container_->SetPosition(gfx::PointF(0, y_offset - container_height));
+  view_container_->SetPosition(
+      gfx::PointF(0, y_offset - container_height + bottom_padding));
 
   viz::OffsetTag offset_tag = cc::android::FromJavaOffsetTag(env, joffset_tag);
   view_container_->SetOffsetTag(offset_tag);
@@ -108,7 +110,7 @@ bool ScrollingBottomViewSceneLayer::ShouldShowBackground() {
   return should_show_background_;
 }
 
-static jlong JNI_ScrollingBottomViewSceneLayer_Init(
+static int64_t JNI_ScrollingBottomViewSceneLayer_Init(
     JNIEnv* env,
     const JavaRef<jobject>& jobj) {
   // This will automatically bind to the Java object and pass ownership there.

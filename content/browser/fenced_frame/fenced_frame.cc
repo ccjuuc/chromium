@@ -5,7 +5,9 @@
 #include "content/browser/fenced_frame/fenced_frame.h"
 
 #include "base/notreached.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -13,7 +15,6 @@
 #include "third_party/blink/public/common/fenced_frame/fenced_frame_utils.h"
 #include "third_party/blink/public/common/frame/fenced_frame_sandbox_flags.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
-#include "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -110,31 +111,6 @@ void FencedFrame::Navigate(
     }
   }
 
-  // In fenced frames with network disabled, embedder-initiated navigations of
-  // nested fenced frames are not allowed. (This is automatically handled for
-  // nested iframes but not nested fenced frames, because nested fenced frames
-  // have their own partition nonce.)
-  // Note the kFrameTreeRoot traversal, because urn iframes cannot disable
-  // network, so the properties of urn iframes nested inside fenced frames
-  // should be ignored.
-  if (base::FeatureList::IsEnabled(
-          blink::features::kFencedFramesLocalUnpartitionedDataAccess)) {
-    const std::optional<
-        FencedFrameProperties>& embedder_fenced_frame_properties =
-        owner_render_frame_host_->frame_tree_node()->GetFencedFrameProperties(
-            FencedFramePropertiesNodeSource::kFrameTreeRoot);
-    if (embedder_fenced_frame_properties.has_value() &&
-        embedder_fenced_frame_properties
-            ->HasDisabledNetworkForCurrentFrameTree()) {
-      owner_render_frame_host_->AddMessageToConsole(
-          blink::mojom::ConsoleMessageLevel::kError,
-          "Embedder-initiated navigations of fenced frames are not allowed "
-          "after"
-          " the embedder's network has been disabled.");
-      return;
-    }
-  }
-
   GURL validated_url = url;
   owner_render_frame_host_->GetSiteInstance()->GetProcess()->FilterURL(
       /*empty_allowed=*/false, &validated_url);
@@ -157,13 +133,11 @@ void FencedFrame::Navigate(
   // base url, so we pass nullopt for `initiator_base_url` to
   // NavigateFromFrameProxy.
 
-  // TODO(yaoxia): implement this. This information will be propagated to the
-  // `NavigationHandle`. Skip propagating here is fine for now, because we are
-  // currently only interested navigation that occurs in the outermost RFH.
-  blink::mojom::NavigationInitiatorActivationAndAdStatus
-      initiator_activation_and_ad_status =
-          blink::mojom::NavigationInitiatorActivationAndAdStatus::
-              kDidNotStartWithTransientActivation;
+  // TODO(crbug.com/470115250): Implement `started_by_ad` and
+  // `has_user_gesture`. This information will be propagated to the
+  // `NavigationHandle`. Skipping propagation here is fine for now, because we
+  // are currently only interested in navigation that occurs in the outermost
+  // RFH.
 
   // Embedder initiated fenced frame navigation should force a new browsing
   // instance.
@@ -172,25 +146,23 @@ void FencedFrame::Navigate(
   // necessary to record a different `actual_navigation_start_time`.
   inner_root->navigator().NavigateFromFrameProxy(
       inner_root->current_frame_host(), validated_url,
-      /*initiator_frame_token=*/nullptr,
-      content::ChildProcessHost::kInvalidUniqueID, initiator_origin,
+      /*initiator_frame_token=*/nullptr, content::ChildProcessId(),
+      initiator_origin,
       /*initiator_base_url=*/std::nullopt,
-      /*source_site_instance=*/nullptr, content::Referrer(),
+      /*initiator_navigation_state=*/nullptr, content::Referrer(),
       ui::PAGE_TRANSITION_AUTO_SUBFRAME,
       /*should_replace_current_entry=*/true, download_policy, "GET",
       /*post_body=*/nullptr, /*extra_headers=*/"",
       /*blob_url_loader_factory=*/nullptr,
       network::mojom::SourceLocation::New(), /*has_user_gesture=*/false,
       /*is_form_submission=*/false,
-      /*impression=*/std::nullopt, initiator_activation_and_ad_status,
+      /*started_by_ad=*/false,
       /*actual_navigation_start_time=*/navigation_start_time,
       navigation_start_time,
       /*is_embedder_initiated_fenced_frame_navigation=*/true,
       /*is_unfenced_top_navigation=*/false,
       /*force_new_browsing_instance=*/true, /*is_container_initiated=*/false,
-      /*has_rel_opener=*/false,
-      /*storage_access_api_status=*/net::StorageAccessApiStatus::kNone,
-      embedder_shared_storage_context);
+      /*has_rel_opener=*/false, embedder_shared_storage_context);
 }
 
 bool FencedFrame::IsHidden() {
@@ -227,6 +199,10 @@ bool FencedFrame::OnRenderFrameProxyVisibilityChanged(
     RenderFrameProxyHost* render_frame_proxy_host,
     blink::mojom::FrameVisibility visibility) {
   return false;
+}
+
+PrerenderHostId FencedFrame::GetPrerenderHostId() {
+  return PrerenderHostId();
 }
 
 FrameTree* FencedFrame::GetDocumentPictureInPictureOpenerFrameTree() {
@@ -334,6 +310,10 @@ FencedFrame::InitInnerFrameTreeAndReturnProxyToOuterFrameTree(
 const base::UnguessableToken& FencedFrame::GetDevToolsFrameToken() const {
   DCHECK(frame_tree_);
   return frame_tree_->GetMainFrame()->GetDevToolsFrameToken();
+}
+
+BackForwardCacheImpl& FencedFrame::GetBackForwardCache() {
+  NOTREACHED();
 }
 
 void FencedFrame::NotifyBeforeFormRepostWarningShow() {}

@@ -100,8 +100,11 @@ class AverageLagTrackingManagerTest : public testing::Test {
     return ScrollUpdateEventMetrics::Create(
         ui::EventType::kGestureScrollUpdate, scroll_input_type,
         kScrollIsNotInertial, scroll_update_type, delta, event_time,
-        arrived_in_browser_main_timestamp, base::TimeTicks(),
-        base::IdType64<class ui::LatencyInfo>(trace_id));
+        arrived_in_browser_main_timestamp,
+        /*blocking_touch_dispatched_to_renderer=*/base::TimeTicks(),
+        base::IdType64<class ui::LatencyInfo>(trace_id),
+        /*scroll_begin_generated_timestamp=*/MillisecondsToTimeTicks(1),
+        /*scroll_begin_arrival_timestamp=*/MillisecondsToTimeTicks(2));
   }
 
   AverageLagTrackingManager average_lag_tracking_manager_;

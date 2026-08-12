@@ -25,6 +25,7 @@ enum class UnitType {
   kSavePayload = 1,
   kSaveChildren = 2,
   kRemoveNode = 3,
+  kSaveDivergentChildren = 4,
 };
 
 class StorageUpdateUnit;
@@ -36,7 +37,7 @@ class StoragePendingUpdate {
   explicit StoragePendingUpdate(StorageId id);
   virtual ~StoragePendingUpdate();
 
-  // This must only be called on the UI Thread.
+  // This must only be called on the UI Thread. Called only once per-instance.
   virtual std::unique_ptr<StorageUpdateUnit> CreateUnit() = 0;
   virtual UnitType type() const = 0;
 
@@ -72,6 +73,8 @@ class SaveNodePendingUpdate : public StoragePendingUpdate {
 class SavePayloadPendingUpdate : public StoragePendingUpdate {
  public:
   SavePayloadPendingUpdate(StorageId id,
+                           std::string window_tag,
+                           bool is_off_the_record,
                            TabStoragePackager* packager,
                            StorageIdMapping& mapping,
                            TabCollectionNodeHandle handle);
@@ -81,6 +84,8 @@ class SavePayloadPendingUpdate : public StoragePendingUpdate {
   UnitType type() const override;
 
  private:
+  std::string window_tag_;
+  const bool is_off_the_record_;
   raw_ref<StorageIdMapping> mapping_;
   raw_ptr<TabStoragePackager> packager_;
   const TabCollectionNodeHandle handle_;
@@ -99,6 +104,28 @@ class SaveChildrenPendingUpdate : public StoragePendingUpdate {
   UnitType type() const override;
 
  private:
+  raw_ptr<TabStoragePackager> packager_;
+  raw_ref<StorageIdMapping> mapping_;
+  const TabCollectionHandle handle_;
+};
+
+// StoragePendingUpdate to save divergent children.
+class SaveDivergentChildrenPendingUpdate : public StoragePendingUpdate {
+ public:
+  SaveDivergentChildrenPendingUpdate(StorageId id,
+                                     std::string window_tag,
+                                     bool is_off_the_record,
+                                     TabStoragePackager* packager,
+                                     StorageIdMapping& mapping,
+                                     TabCollectionHandle handle);
+  ~SaveDivergentChildrenPendingUpdate() override;
+
+  std::unique_ptr<StorageUpdateUnit> CreateUnit() override;
+  UnitType type() const override;
+
+ private:
+  std::string window_tag_;
+  const bool is_off_the_record_;
   raw_ptr<TabStoragePackager> packager_;
   raw_ref<StorageIdMapping> mapping_;
   const TabCollectionHandle handle_;

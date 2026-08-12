@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/core/script_tools/model_context_supplement.h"
 
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/frame/navigator.h"
 
 namespace blink {
 
@@ -13,59 +12,43 @@ namespace blink {
 const char ModelContextSupplement::kSupplementName[] = "ModelContextSupplement";
 
 // static
-ModelContextSupplement& ModelContextSupplement::From(Navigator& navigator) {
+ModelContextSupplement& ModelContextSupplement::From(Document& document) {
   ModelContextSupplement* supplement =
-      Supplement<Navigator>::From<ModelContextSupplement>(navigator);
+      Supplement<Document>::From<ModelContextSupplement>(document);
   if (!supplement) {
-    supplement = MakeGarbageCollected<ModelContextSupplement>(navigator);
-    ProvideTo(navigator, supplement);
+    supplement = MakeGarbageCollected<ModelContextSupplement>(document);
+    ProvideTo(document, supplement);
   }
   return *supplement;
 }
 
 // static
-ModelContext* ModelContextSupplement::GetIfExists(Navigator& navigator) {
+ModelContext* ModelContextSupplement::GetIfExists(Document& document) {
   ModelContextSupplement* supplement =
-      Supplement<Navigator>::From<ModelContextSupplement>(navigator);
-  return supplement ? supplement->modelContext() : nullptr;
+      Supplement<Document>::From<ModelContextSupplement>(document);
+  return supplement ? supplement->model_context_.Get() : nullptr;
 }
 
 // static
-ModelContext* ModelContextSupplement::modelContext(Navigator& navigator) {
-  return From(navigator).modelContext();
+ModelContext* ModelContextSupplement::modelContext(Document& document) {
+  return From(document).modelContext();
 }
 
-// static
-ModelContextTesting* ModelContextSupplement::modelContextTesting(
-    Navigator& navigator) {
-  return From(navigator).modelContextTesting();
-}
-
-ModelContextSupplement::ModelContextSupplement(Navigator& navigator)
-    : Supplement<Navigator>(navigator) {}
+ModelContextSupplement::ModelContextSupplement(Document& document)
+    : Supplement<Document>(document) {}
 
 void ModelContextSupplement::Trace(Visitor* visitor) const {
   visitor->Trace(model_context_);
-  visitor->Trace(model_context_testing_);
-  Supplement<Navigator>::Trace(visitor);
+  Supplement<Document>::Trace(visitor);
 }
 
 ModelContext* ModelContextSupplement::modelContext() {
   if (!model_context_) {
-    if (auto* window = GetSupplementable()->DomWindow()) {
-      model_context_ = MakeGarbageCollected<ModelContext>(
-          window->GetTaskRunner(TaskType::kUserInteraction));
-    }
+    Document* document = GetSupplementable();
+    CHECK(document);
+    model_context_ = MakeGarbageCollected<ModelContext>(*document);
   }
   return model_context_.Get();
-}
-
-ModelContextTesting* ModelContextSupplement::modelContextTesting() {
-  if (!model_context_testing_ && modelContext()) {
-    model_context_testing_ =
-        MakeGarbageCollected<ModelContextTesting>(modelContext());
-  }
-  return model_context_testing_.Get();
 }
 
 }  // namespace blink

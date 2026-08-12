@@ -7,6 +7,7 @@ import './composebox_match.js';
 import {assert} from '//resources/js/assert.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AutocompleteMatch, AutocompleteResult} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {ToolMode} from '//resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 
 import {getCss} from './composebox_dropdown.css.js';
 import {getHtml} from './composebox_dropdown.html.js';
@@ -52,9 +53,10 @@ export class ComposeboxDropdownElement extends CrLitElement {
       maxSuggestions: {
         type: Number,
       },
-      inDeepSearchMode: {
-        type: Boolean,
+      toolMode: {
+        type: Number,
       },
+      overrideClampLineNum: {type: Number},
     };
   }
 
@@ -66,7 +68,8 @@ export class ComposeboxDropdownElement extends CrLitElement {
   // height. A value of 0 indicates that no suggestions should be shown.
   // A value of null or -1 indicates that all suggestions should be shown.
   accessor maxSuggestions: number|null = null;
-  accessor inDeepSearchMode: boolean = false;
+  accessor toolMode: ToolMode = ToolMode.kUnspecified;
+  accessor overrideClampLineNum: number = -1;
 
   //============================================================================
   // Public methods
@@ -201,15 +204,23 @@ export class ComposeboxDropdownElement extends CrLitElement {
    * Hides the match if its a verbatim match. This match should be hidden
    * for all typed suggestions. It will still be "selected" when the
    * autocomplete result changes, and the user can still navigate to this
-   * verbatim match by navigating to the input text. Zero suggest does not
-   * have verbatim matches.
+   * verbatim match by navigating to the input text. Zero suggest only has
+   * verbatim matches when context is uploaded. In this case the verbatim
+   * match is "empty" and allows for navigation to context with no text.
    */
   protected hideVerbatimMatch_(index: number): boolean {
     assert(this.result);
-    if (!this.result.input) {
+
+    // Only matches at index 0 can be verbatim matches.
+    if (index !== 0) {
       return false;
     }
-    return index === 0;
+
+    // The only match allowed to be default in zero suggest is the verbatim
+    // match.
+    return this.result.input ?
+        true :
+        !!this.result.matches[index]?.allowedToBeDefaultMatch;
   }
 
   protected computeAriaLabel_(match: AutocompleteMatch): string {

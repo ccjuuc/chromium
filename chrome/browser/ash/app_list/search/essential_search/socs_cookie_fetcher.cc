@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 
+#include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "components/version_info/version_info.h"
@@ -16,7 +17,6 @@
 #include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -54,8 +54,8 @@ SocsCookieFetcher::Consumer::Consumer() = default;
 SocsCookieFetcher::Consumer::~Consumer() = default;
 
 void SocsCookieFetcher::StartFetching() {
-  auto request_data = base::Value::Dict().Set(kChromeVersionKey,
-                                              version_info::GetVersionNumber());
+  auto request_data = base::DictValue().Set(kChromeVersionKey,
+                                            version_info::GetVersionNumber());
   std::string request_string;
   if (!base::JSONWriter::Write(request_data, &request_string)) {
     LOG(ERROR) << "Not able to serialize token request body.";
@@ -129,30 +129,26 @@ void SocsCookieFetcher::OnSimpleLoaderComplete(
   }
   simple_url_loader_.reset();
 
-  // Parse the JSON response.
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      *json_response, base::BindOnce(&SocsCookieFetcher::OnJsonParsed,
-                                     weak_ptr_factory_.GetWeakPtr()));
-}
-
-void SocsCookieFetcher::OnJsonParsed(
-    data_decoder::DataDecoder::ValueOrError result) {
+  // JSONReader is now safe for rule of 2.
+  std::optional<base::Value> result =
+      base::JSONReader::Read(*json_response, base::JSON_PARSE_RFC);
   if (!result.has_value()) {
     consumer_->OnApiCallFailed(Status::kJsonParseFailure);
     return;
   }
 
-  if (!result->is_dict()) {
+  base::DictValue* dict = result->GetIfDict();
+  if (!dict) {
     LOG(WARNING) << "Response is not a JSON dictionary.";
     consumer_->OnApiCallFailed(Status::kNotJsonDict);
     return;
   }
 
-  ProcessValidTokenResponse(std::move(result->GetDict()));
+  ProcessValidTokenResponse(std::move(*dict));
 }
 
 void SocsCookieFetcher::ProcessValidTokenResponse(
-    base::Value::Dict json_response) {
+    base::DictValue json_response) {
   const std::string* cookie_header =
       json_response.FindString(kCookieHeaderEntry);
   if (!cookie_header) {

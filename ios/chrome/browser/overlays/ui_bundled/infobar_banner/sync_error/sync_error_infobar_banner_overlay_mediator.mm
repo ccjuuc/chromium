@@ -51,9 +51,9 @@
     return;
   }
 
-  self.syncErrorDelegate->Accept();
-
-  [self dismissOverlay];
+  if (self.syncErrorDelegate->Accept()) {
+    [self dismissOverlay];
+  }
 }
 
 - (void)dismissInfobarBannerForUserInteraction:(BOOL)userInitiated {
@@ -77,10 +77,10 @@
   [consumer setButtonText:base::SysUTF16ToNSString(delegate->GetButtonLabel(
                               SyncErrorInfoBarDelegate::BUTTON_OK))];
 
-  // TODO(crbug.com/408165259): Use a dedicated icon in case when
+  // TODO(crbug.com/509894544): Use a dedicated icon in case when
   // `delegate->DisplayPasswordErrorIcon()` is true.
-  [consumer setIconImage:DefaultSymbolTemplateWithPointSize(
-                             kSyncErrorSymbol, kInfobarSymbolPointSize)];
+  [consumer setIconImage:SymbolTemplateWithPointSize(SymbolSyncError,
+                                                     kInfobarSymbolPointSize)];
   [consumer setIconBackgroundColor:[UIColor colorNamed:kRed500Color]];
   [consumer setIconImageTintColor:[UIColor colorNamed:kPrimaryBackgroundColor]];
   [consumer setUseIconBackgroundTint:YES];

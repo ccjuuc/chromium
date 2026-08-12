@@ -12,13 +12,21 @@
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/label.h"
 
+enum class AudioSharingToggleStyle {
+  // A simple checkbox/toggle with text.
+  kDefault,
+  // A boxed view with background and border.
+  kBoxed,
+};
+
 class ShareAudioView : public views::View {
   METADATA_HEADER(ShareAudioView, views::View)
 
  public:
   ShareAudioView(const std::u16string& label_text,
                  bool audio_offered,
-                 base::RepeatingCallback<void(void)> audio_check_callback);
+                 AudioSharingToggleStyle style,
+                 base::RepeatingClosure audio_check_callback);
   ShareAudioView(const ShareAudioView&) = delete;
   ShareAudioView& operator=(const ShareAudioView&) = delete;
   ~ShareAudioView() override;
@@ -33,9 +41,14 @@ class ShareAudioView : public views::View {
   // returns the empty string otherwise.
   std::u16string_view GetAudioLabelText() const;
 
+  // Returns the toggle button used for audio sharing.
+  views::ToggleButton* GetToggleButtonForTesting() const {
+    return audio_toggle_button_;
+  }
+
  private:
   void OnAudioToggleButtonPressed();
-  base::RepeatingCallback<void(void)> audio_check_callback_;
+  base::RepeatingClosure audio_check_callback_;
   raw_ptr<views::Label> audio_toggle_label_ = nullptr;
   raw_ptr<views::ToggleButton> audio_toggle_button_ = nullptr;
 };

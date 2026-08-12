@@ -11,12 +11,18 @@
 #include "base/strings/string_view_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
+#include "content/common/features.h"
 #include "content/common/service_worker/race_network_request_write_buffer_manager.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+#include "net/base/load_timing_internal_info.h"
 #include "net/base/net_errors.h"
+#include "net/ssl/ssl_info.h"
+#include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/loading_params.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/mojom/load_timing_internal_info.mojom.h"
+#include "services/network/public/mojom/ssl_info.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -68,7 +74,11 @@ class MockServiceWorkerResourceLoader : public ServiceWorkerResourceLoader {
       const network::mojom::URLResponseHeadPtr& response_head,
       mojo::ScopedDataPipeConsumerHandle response_body,
       std::optional<mojo_base::BigBuffer> cached_metadata) override {
-    std::move(on_commit_response_).Run(response_head, std::move(response_body));
+    committed_response_head_ = response_head->Clone();
+    if (on_commit_response_) {
+      std::move(on_commit_response_)
+          .Run(response_head, std::move(response_body));
+    }
   }
   void CommitEmptyResponseAndComplete() override {}
   void CommitCompleted(int error_code, const char* reason) override {
@@ -76,7 +86,17 @@ class MockServiceWorkerResourceLoader : public ServiceWorkerResourceLoader {
   }
   void HandleRedirect(
       const net::RedirectInfo& redirect_info,
-      const network::mojom::URLResponseHeadPtr& response_head) override {}
+      const network::mojom::URLResponseHeadPtr& response_head) override {
+    received_redirect_info_ = redirect_info;
+  }
+
+  const std::optional<net::RedirectInfo>& received_redirect_info() const {
+    return received_redirect_info_;
+  }
+
+  const network::mojom::URLResponseHeadPtr& committed_response_head() const {
+    return committed_response_head_;
+  }
 
   base::WeakPtr<MockServiceWorkerResourceLoader> GetWeakPtr() {
     return weak_factory_.GetWeakPtr();
@@ -91,8 +111,10 @@ class MockServiceWorkerResourceLoader : public ServiceWorkerResourceLoader {
   }
 
  private:
+  network::mojom::URLResponseHeadPtr committed_response_head_;
   OnCommitResponseCallback on_commit_response_;
   OnCompletedCallback on_commit_completed_;
+  std::optional<net::RedirectInfo> received_redirect_info_;
   base::WeakPtrFactory<MockServiceWorkerResourceLoader> weak_factory_{this};
 };
 
@@ -144,6 +166,9 @@ class ResponseBodyDataPipeReader {
       default:
         break;
     }
+    if (quit_closure_) {
+      std::move(quit_closure_).Run();
+    }
   }
 
   std::string ConsumeChunk() {
@@ -161,12 +186,12 @@ class ResponseBodyDataPipeReader {
       state_ = State::kWaiting;
       body_watcher_->ArmOrNotify();
     }
-    while (true) {
-      if (state() != State::kWaiting) {
-        break;
-      }
-      base::RunLoop().RunUntilIdle();
+    if (state_ != State::kWaiting) {
+      return;
     }
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
   }
 
   void AbortBodyConsumerHandle() { body_.reset(); }
@@ -180,6 +205,7 @@ class ResponseBodyDataPipeReader {
   mojo::ScopedDataPipeConsumerHandle body_;
   std::string chunk_;
   State state_ = State::kWaiting;
+  base::OnceClosure quit_closure_;
 };
 
 class URLLoaderClientForFetchHandler : public network::mojom::URLLoaderClient,
@@ -196,18 +222,53 @@ class URLLoaderClientForFetchHandler : public network::mojom::URLLoaderClient,
       network::mojom::URLResponseHeadPtr head,
       mojo::ScopedDataPipeConsumerHandle body,
       std::optional<mojo_base::BigBuffer> cached_metadata) override {
+    received_response_head_ = head->Clone();
+    if (on_receive_response_callback_) {
+      std::move(on_receive_response_callback_).Run();
+    }
     WatchResponseBody(head, std::move(body));
   }
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
-                         network::mojom::URLResponseHeadPtr head) override {}
+                         network::mojom::URLResponseHeadPtr head) override {
+    received_redirect_info_ = redirect_info;
+    received_redirect_head_ = head->Clone();
+    if (on_receive_redirect_callback_) {
+      std::move(on_receive_redirect_callback_).Run();
+    }
+  }
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         base::OnceCallback<void()> callback) override {}
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override {}
   void OnComplete(const network::URLLoaderCompletionStatus& status) override {}
 
+  void SetOnReceiveResponseCallback(base::OnceClosure callback) {
+    on_receive_response_callback_ = std::move(callback);
+  }
+
+  void SetOnReceiveRedirectCallback(base::OnceClosure callback) {
+    on_receive_redirect_callback_ = std::move(callback);
+  }
+
+  const std::optional<net::RedirectInfo>& received_redirect_info() const {
+    return received_redirect_info_;
+  }
+
+  const network::mojom::URLResponseHeadPtr& received_response_head() const {
+    return received_response_head_;
+  }
+
+  const network::mojom::URLResponseHeadPtr& received_redirect_head() const {
+    return received_redirect_head_;
+  }
+
  private:
   mojo::Receiver<network::mojom::URLLoaderClient> receiver_{this};
+  std::optional<net::RedirectInfo> received_redirect_info_;
+  network::mojom::URLResponseHeadPtr received_response_head_;
+  network::mojom::URLResponseHeadPtr received_redirect_head_;
+  base::OnceClosure on_receive_response_callback_;
+  base::OnceClosure on_receive_redirect_callback_;
 };
 
 class ServiceWorkerRaceNetworkRequestURLLoaderClientTest
@@ -247,6 +308,14 @@ class ServiceWorkerRaceNetworkRequestURLLoaderClientTest
 
   URLLoaderClientForFetchHandler* client_for_fetch_handler() {
     return client_for_fetch_handler_.get();
+  }
+
+  ServiceWorkerRaceNetworkRequestURLLoaderClient* client() {
+    return client_.get();
+  }
+
+  mojo::ScopedDataPipeConsumerHandle ReleaseConsumerHandle() {
+    return std::move(consumer_);
   }
 
  protected:
@@ -294,7 +363,6 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest, Basic) {
   SetUpURLLoaderClient(network::GetDataPipeDefaultAllocationSize());
 
   const std::string kExpectedBody = "abc";
-  WriteData(kExpectedBody);
 
   base::RunLoop run_loop;
   SetOnCommitResponseCallback(base::BindOnce(
@@ -302,6 +370,7 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest, Basic) {
          const network::mojom::URLResponseHeadPtr& response_head,
          mojo::ScopedDataPipeConsumerHandle body) {
         base::span<const uint8_t> buffer;
+        base::RunLoop().RunUntilIdle();
         MojoResult result =
             body->BeginReadData(MOJO_BEGIN_READ_DATA_FLAG_NONE, buffer);
         ASSERT_EQ(result, MOJO_RESULT_OK);
@@ -318,6 +387,8 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest, Basic) {
         task_runner->PostTask(FROM_HERE, std::move(done));
       },
       run_loop.QuitClosure(), base::SequencedTaskRunner::GetCurrentDefault()));
+
+  WriteData(kExpectedBody);
   CompleteResponse(net::OK);
   run_loop.Run();
 
@@ -334,7 +405,6 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   // Expected input size should be larger than the data pipe size.
   const std::string kExpectedBody = "abcdefghijklmnop";
   ASSERT_GT(kExpectedBody.size(), data_pipe_capacity_num_bytes);
-  WriteData(kExpectedBody);
 
   // Set the callback for OnCommitResponse. This callback start watching the
   // response body data pipe.
@@ -346,6 +416,8 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   SetOnCompletedCallback(base::BindOnce([](int error_code, const char* reason) {
     EXPECT_EQ(error_code, net::OK);
   }));
+
+  WriteData(kExpectedBody);
   CompleteResponse(net::OK);
 
   // Waiting for the first data chunk is received. The first chunk is the
@@ -381,13 +453,12 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
 
 TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
        LargeDataOverBufferSize_SlowConsuming) {
-  const uint32_t data_pipe_capacity_num_bytes = 4;
+  const uint32_t data_pipe_capacity_num_bytes = 8;
   SetUpURLLoaderClient(data_pipe_capacity_num_bytes);
 
   // Expected input size should be larger than the data pipe size.
   const std::string kExpectedBody = "abcdefghijklmnop";
   ASSERT_GT(kExpectedBody.size(), data_pipe_capacity_num_bytes);
-  WriteData(kExpectedBody);
 
   // Set the callback for OnCommitResponse. This callback start watching the
   // response body data pipe.
@@ -399,6 +470,8 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   SetOnCompletedCallback(base::BindOnce([](int error_code, const char* reason) {
     EXPECT_EQ(error_code, net::OK);
   }));
+
+  WriteData(kExpectedBody);
   CompleteResponse(net::OK);
 
   // Waiting for the first data chunk is received. The first chunk is the
@@ -407,25 +480,31 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
       kExpectedBody.substr(0, data_pipe_capacity_num_bytes);
   RunUntilStateChange(/*resume_state=*/false);
   EXPECT_EQ(state(), State::kChunkReceived);
-  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/false);
-  EXPECT_EQ(client_for_fetch_handler()->state(), State::kChunkReceived);
-
-  // Consume the chunk in the data pipe for the fetch handler first to let
-  // ServiceWorkerRaceNetworkRequestURLLoaderClient retry writing to data pipes
-  // by getting |MOJO_RESULT_SHOULD_WAIT|.
-  EXPECT_EQ(client_for_fetch_handler()->ConsumeChunk(), first_chunk);
-  base::RunLoop().RunUntilIdle();
   EXPECT_EQ(ConsumeChunk(), first_chunk);
 
-  // Consume the second chunk.
+  // The response body processing is sequential, starting from the network
+  // request side. So the client for fetch handler is not notified for the data
+  // chunk reception yet.
+  EXPECT_EQ(client_for_fetch_handler()->state(), State::kWaiting);
+
+  // Consume all data for the network request side.
   const std::string second_chunk = kExpectedBody.substr(
       data_pipe_capacity_num_bytes, data_pipe_capacity_num_bytes);
   RunUntilStateChange(/*resume_state=*/true);
   EXPECT_EQ(state(), State::kChunkReceived);
   EXPECT_EQ(ConsumeChunk(), second_chunk);
-  base::RunLoop().RunUntilIdle();
+  RunUntilStateChange(/*resume_state=*/true);
+  EXPECT_EQ(state(), State::kAllChunkReceived);
+
+  // Once all data is consumed for the network request side, the fetch handler
+  // side is notified for the data chunk reception.
+  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/false);
+  EXPECT_EQ(client_for_fetch_handler()->state(), State::kChunkReceived);
+  EXPECT_EQ(client_for_fetch_handler()->ConsumeChunk(), first_chunk);
   client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/true);
   EXPECT_EQ(client_for_fetch_handler()->ConsumeChunk(), second_chunk);
+  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/true);
+  EXPECT_EQ(client_for_fetch_handler()->state(), State::kAllChunkReceived);
 }
 
 TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
@@ -436,7 +515,6 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   // Expected input size should be larger than the data pipe size.
   const std::string kExpectedBody = "abcdefghijklmnopqrstu";
   ASSERT_GT(kExpectedBody.size(), data_pipe_capacity_num_bytes);
-  WriteData(kExpectedBody);
 
   // Set the callback for OnCommitResponse. This callback start watching the
   // response body data pipe.
@@ -448,22 +526,24 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   SetOnCompletedCallback(base::BindOnce([](int error_code, const char* reason) {
     EXPECT_EQ(error_code, net::OK);
   }));
+
+  WriteData(kExpectedBody);
   CompleteResponse(net::OK);
 
   // Waiting for the first data chunk is received.
   RunUntilStateChange(/*resume_state=*/false);
   EXPECT_EQ(state(), State::kChunkReceived);
-  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/false);
-  EXPECT_EQ(client_for_fetch_handler()->state(), State::kChunkReceived);
 
   // Abort the consumer handle after the first data chunk has arrived.
   AbortBodyConsumerHandle();
 
   // Once the data pipe for RaceNetworkRequest is closed, the fetch handler side
-  // data pipe is also closed.
-  client_for_fetch_handler()->ConsumeChunk();
+  // data pipe is NOT affected in the sequential case because it hasn't even
+  // started yet, or it proceeds independently.
+  // Actually, in the current implementation of SimpleBufferManager, if the
+  // network clone fails, the fetch handler clone never starts.
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(client_for_fetch_handler()->IsDisconnected());
+  EXPECT_EQ(client_for_fetch_handler()->state(), State::kWaiting);
 }
 
 TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
@@ -472,9 +552,8 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   SetUpURLLoaderClient(data_pipe_capacity_num_bytes);
 
   // Expected input size should be larger than the data pipe size.
-  const std::string kExpectedBody = "abcdefghijklmnopqrstu";
+  const std::string kExpectedBody = "abcdefghijklmnop";
   ASSERT_GT(kExpectedBody.size(), data_pipe_capacity_num_bytes);
-  WriteData(kExpectedBody);
 
   // Set the callback for OnCommitResponse. This callback start watching the
   // response body data pipe.
@@ -486,21 +565,30 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
   SetOnCompletedCallback(base::BindOnce([](int error_code, const char* reason) {
     EXPECT_EQ(error_code, net::OK);
   }));
+
+  WriteData(kExpectedBody);
   CompleteResponse(net::OK);
 
-  // Waiting for the first data chunk is received.
-  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/false);
-  EXPECT_EQ(client_for_fetch_handler()->state(), State::kChunkReceived);
+  // In the sequential case, the network side must be processed first.
   RunUntilStateChange(/*resume_state=*/false);
   EXPECT_EQ(state(), State::kChunkReceived);
+  ConsumeChunk();
+  RunUntilStateChange(/*resume_state=*/true);
+  EXPECT_EQ(state(), State::kChunkReceived);
+  ConsumeChunk();
+  RunUntilStateChange(/*resume_state=*/true);
+  EXPECT_EQ(state(), State::kAllChunkReceived);
+
+  // Now the fetch handler side should receive the data.
+  client_for_fetch_handler()->RunUntilStateChange(/*resume_state=*/false);
+  EXPECT_EQ(client_for_fetch_handler()->state(), State::kChunkReceived);
 
   // Abort the consumer handle after the first data chunk has arrived.
   client_for_fetch_handler()->AbortBodyConsumerHandle();
 
-  // Once the data pipe for RaceNetworkRequest is closed, the fetch handler side
-  // data pipe is also closed.
-  ConsumeChunk();
-  EXPECT_TRUE(IsDisconnected());
+  // Once the data pipe for fetch handler is closed, the network side
+  // is already finished.
+  EXPECT_EQ(state(), State::kAllChunkReceived);
 }
 
 TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
@@ -516,22 +604,159 @@ TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
     EXPECT_EQ(error_code, net::ERR_FAILED);
   }));
 
-  // |client_| receives the response and expect |state_| is changed to
-  // kResponseReceived.
-  WriteData(kExpectedBody);
-  EXPECT_EQ(
-      client_state(),
-      ServiceWorkerRaceNetworkRequestURLLoaderClient::State::kResponseReceived);
+  // Set a dummy callback for OnCommitResponse as it's triggered by
+  // OnReceiveResponse in the performance improvement mode.
+  SetOnCommitResponseCallback(base::BindOnce(
+      [](const network::mojom::URLResponseHeadPtr& response_head,
+         mojo::ScopedDataPipeConsumerHandle body) {}));
 
-  // Set kWithoutServiceWorker. This imitates the fetch handler fallback case.
-  owner()->SetCommitResponsibility(
-      ServiceWorkerRaceNetworkRequestURLLoaderClient::FetchResponseFrom::
-          kWithoutServiceWorker);
+  // |client_| receives the response.
+  WriteData(kExpectedBody);
+
+  // In the performance improvement mode, the client state moves to
+  // kResponseCommitted (or kDataTransferStarted depending on the flow)
+  // because CommitResponse() is called within OnReceiveResponse().
+  EXPECT_EQ(client_state(), ServiceWorkerRaceNetworkRequestURLLoaderClient::
+                                State::kResponseCommitted);
 
   // |client_| suddenly receives the network error, and expect |state_| is
-  // changed to kCompleted directly from kResponseReceived.
+  // changed to kCompleted.
   CompleteResponse(net::ERR_FAILED);
   EXPECT_EQ(client_state(),
             ServiceWorkerRaceNetworkRequestURLLoaderClient::State::kCompleted);
+}
+
+TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
+       RedirectForwardedToFetchHandlerForNonHttpScheme) {
+  const uint32_t data_pipe_capacity_num_bytes = 8;
+  SetUpURLLoaderClient(data_pipe_capacity_num_bytes);
+
+  base::RunLoop run_loop;
+  client_for_fetch_handler()->SetOnReceiveRedirectCallback(
+      run_loop.QuitClosure());
+
+  net::RedirectInfo redirect_info;
+  redirect_info.new_url = GURL("filesystem:http://example.com/temporary/test");
+  redirect_info.status_code = 302;
+  redirect_info.new_method = "GET";
+
+  network::mojom::URLResponseHeadPtr head(
+      network::CreateURLResponseHead(net::HTTP_FOUND));
+
+  client()->OnReceiveRedirect(redirect_info, std::move(head));
+  run_loop.Run();
+
+  ASSERT_TRUE(client_for_fetch_handler()->received_redirect_info().has_value());
+  EXPECT_EQ(client_for_fetch_handler()->received_redirect_info()->new_url,
+            GURL("data:,"));
+}
+
+TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
+       RedirectForwardedToFetchHandlerForHttpScheme) {
+  const uint32_t data_pipe_capacity_num_bytes = 8;
+  SetUpURLLoaderClient(data_pipe_capacity_num_bytes);
+
+  base::RunLoop run_loop;
+  client_for_fetch_handler()->SetOnReceiveRedirectCallback(
+      run_loop.QuitClosure());
+
+  net::RedirectInfo redirect_info;
+  redirect_info.new_url = GURL("https://example.com/redirected");
+  redirect_info.status_code = 302;
+  redirect_info.new_method = "GET";
+
+  network::mojom::URLResponseHeadPtr head(
+      network::CreateURLResponseHead(net::HTTP_FOUND));
+
+  client()->OnReceiveRedirect(redirect_info, std::move(head));
+  run_loop.Run();
+
+  ASSERT_TRUE(client_for_fetch_handler()->received_redirect_info().has_value());
+  EXPECT_EQ(client_for_fetch_handler()->received_redirect_info()->new_url,
+            GURL("https://example.com/redirected"));
+}
+
+TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
+       RedirectHandledByOwnerForNonHttpScheme) {
+  const uint32_t data_pipe_capacity_num_bytes = 8;
+  SetUpURLLoaderClient(data_pipe_capacity_num_bytes);
+
+  owner()->SetCommitResponsibility(
+      ServiceWorkerResourceLoader::FetchResponseFrom::kWithoutServiceWorker);
+
+  net::RedirectInfo redirect_info;
+  redirect_info.new_url = GURL("filesystem:http://example.com/temporary/test");
+  redirect_info.status_code = 302;
+  redirect_info.new_method = "GET";
+
+  network::mojom::URLResponseHeadPtr head(
+      network::CreateURLResponseHead(net::HTTP_FOUND));
+
+  client()->OnReceiveRedirect(redirect_info, std::move(head));
+
+  ASSERT_TRUE(owner()->received_redirect_info().has_value());
+  EXPECT_EQ(owner()->received_redirect_info()->new_url,
+            GURL("filesystem:http://example.com/temporary/test"));
+}
+TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
+       ForwardedResponseHeadOmitsNavigationOnlyFields) {
+  SetUpURLLoaderClient(network::GetDataPipeDefaultAllocationSize());
+
+  network::mojom::URLResponseHeadPtr head(
+      network::CreateURLResponseHead(net::HTTP_OK));
+  head->load_timing_internal_info.emplace();
+  head->ssl_info.emplace();
+
+  base::RunLoop run_loop;
+  client_for_fetch_handler()->SetOnReceiveResponseCallback(
+      run_loop.QuitClosure());
+
+  client()->OnReceiveResponse(std::move(head), ReleaseConsumerHandle(),
+                              std::nullopt);
+  CloseConnection();
+  run_loop.Run();
+
+  ASSERT_TRUE(owner()->committed_response_head());
+  EXPECT_TRUE(owner()
+                  ->committed_response_head()
+                  ->load_timing_internal_info.has_value());
+  EXPECT_TRUE(owner()->committed_response_head()->ssl_info.has_value());
+
+  ASSERT_TRUE(client_for_fetch_handler()->received_response_head());
+  EXPECT_FALSE(client_for_fetch_handler()
+                   ->received_response_head()
+                   ->load_timing_internal_info.has_value());
+  EXPECT_FALSE(client_for_fetch_handler()
+                   ->received_response_head()
+                   ->ssl_info.has_value());
+}
+
+TEST_F(ServiceWorkerRaceNetworkRequestURLLoaderClientTest,
+       ForwardedRedirectHeadOmitsNavigationOnlyFields) {
+  SetUpURLLoaderClient(network::GetDataPipeDefaultAllocationSize());
+
+  net::RedirectInfo redirect_info;
+  redirect_info.new_url = GURL("https://example.com/redirected");
+  redirect_info.new_method = "GET";
+
+  network::mojom::URLResponseHeadPtr head(
+      network::CreateURLResponseHead(net::HTTP_MOVED_PERMANENTLY));
+  head->load_timing_internal_info.emplace();
+  head->ssl_info.emplace();
+
+  base::RunLoop run_loop;
+  client_for_fetch_handler()->SetOnReceiveRedirectCallback(
+      run_loop.QuitClosure());
+
+  client()->OnReceiveRedirect(redirect_info, std::move(head));
+  run_loop.Run();
+
+  ASSERT_TRUE(client_for_fetch_handler()->received_redirect_head());
+  EXPECT_FALSE(client_for_fetch_handler()
+                   ->received_redirect_head()
+                   ->load_timing_internal_info.has_value());
+  EXPECT_FALSE(client_for_fetch_handler()
+                   ->received_redirect_head()
+                   ->ssl_info.has_value());
 }
 }  // namespace content

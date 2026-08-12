@@ -14,10 +14,8 @@ import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserv
 import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.components.tab_group_sync.TabGroupUiActionHandler;
@@ -34,7 +32,7 @@ public class TabSwitcherUtils {
      */
     public static void navigateToTabSwitcher(
             LayoutManager layoutManager, boolean animate, @Nullable Runnable onNavigationFinished) {
-        if (layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+        if (layoutManager.isLayoutVisible(LayoutType.HUB)) {
             if (onNavigationFinished != null) {
                 onNavigationFinished.run();
             }
@@ -45,7 +43,7 @@ public class TabSwitcherUtils {
                 new LayoutStateObserver() {
                     @Override
                     public void onFinishedShowing(int layoutType) {
-                        if (layoutType == LayoutType.TAB_SWITCHER) {
+                        if (layoutType == LayoutType.HUB) {
                             layoutManager.removeObserver(this);
                             if (onNavigationFinished != null) {
                                 onNavigationFinished.run();
@@ -54,7 +52,7 @@ public class TabSwitcherUtils {
                     }
                 });
 
-        layoutManager.showLayout(LayoutType.TAB_SWITCHER, animate);
+        layoutManager.showLayout(LayoutType.HUB, animate);
     }
 
     /**
@@ -63,14 +61,14 @@ public class TabSwitcherUtils {
      * @param syncId The id of the tab group, might or might not correspond to an open group.
      * @param tabGroupSyncService Used to open closed groups and convert to local ids.
      * @param tabGroupUiActionHandler Used to open a closed group.
-     * @param tabGroupModelFilter Used to get root id.
+     * @param tabModel Used to get root id.
      * @param requestOpenTabGroupDialog Callback to actually open a group dialog.
      */
     public static void openTabGroupDialog(
             String syncId,
             TabGroupSyncService tabGroupSyncService,
             TabGroupUiActionHandler tabGroupUiActionHandler,
-            TabGroupModelFilter tabGroupModelFilter,
+            TabModel tabModel,
             Callback<Integer> requestOpenTabGroupDialog) {
         SavedTabGroup syncGroup = tabGroupSyncService.getGroup(syncId);
         if (syncGroup == null) return;
@@ -82,7 +80,7 @@ public class TabSwitcherUtils {
             assert syncGroup.localId != null;
         }
 
-        int tabId = tabGroupModelFilter.getGroupLastShownTabId(syncGroup.localId.tabGroupId);
+        int tabId = tabModel.getGroupLastShownTabId(syncGroup.localId.tabGroupId);
         if (tabId == Tab.INVALID_TAB_ID) return;
         requestOpenTabGroupDialog.onResult(tabId);
     }
@@ -94,19 +92,21 @@ public class TabSwitcherUtils {
      * @param tabId The ID of the tab that it should switch to.
      */
     public static void hideTabSwitcherAndShowTab(
-            int tabId, TabModelSelector tabModelSelector, LayoutManager layoutManager) {
+            int tabId,
+            @Nullable TabModelSelector tabModelSelector,
+            @Nullable LayoutManager layoutManager) {
         if (tabModelSelector == null) return;
 
         TabModel tabModel = tabModelSelector.getModel(/* incognito= */ false);
-        int tabIndex = TabModelUtils.getTabIndexById(tabModel, tabId);
+        Tab tab = tabModel.getTabById(tabId);
         // If the backend sends us a non-existent tab ID, we should safely ignore.
-        if (tabIndex == TabModel.INVALID_TAB_INDEX) return;
+        if (tab == null) return;
 
         tabModelSelector.selectModel(/* incognito= */ false);
-        tabModel.setIndex(tabIndex, TabSelectionType.FROM_USER);
+        tabModel.setIndex(tabModel.indexOf(tab), TabSelectionType.FROM_USER);
 
         // If the tab-switcher is displayed, hide it to show the tab.
-        if (layoutManager != null && layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+        if (layoutManager != null && layoutManager.isLayoutVisible(LayoutType.HUB)) {
             layoutManager.showLayout(LayoutType.BROWSING, /* animate= */ false);
         }
     }

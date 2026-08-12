@@ -50,6 +50,16 @@ class OobeScreensHandlerFactory
       mojo::PendingReceiver<screens_common::mojom::FjordStationSetupPageHandler>
           receiver) override;
 
+  void EstablishFjordTouchControllerScreenPipe(
+      mojo::PendingReceiver<
+          screens_common::mojom::FjordTouchControllerPageHandler> receiver)
+      override;
+
+  void EstablishFjordImageSelectionScreenPipe(
+      mojo::PendingReceiver<
+          screens_common::mojom::FjordImageSelectionPageHandler> receiver)
+      override;
+
   void EstablishGaiaInfoScreenPipe(
       mojo::PendingReceiver<screens_common::mojom::GaiaInfoPageHandler>
           receiver,
@@ -72,10 +82,6 @@ class OobeScreensHandlerFactory
       mojo::PendingReceiver<screens_oobe::mojom::PackagedLicensePageHandler>
           receiver) override;
 
-  void EstablishArcVmDataMigrationScreenPipe(
-      mojo::PendingReceiver<screens_login::mojom::ArcVmDataMigrationPageHandler>
-          receiver,
-      EstablishArcVmDataMigrationScreenPipeCallback callback) override;
 
   void EstablishEncryptionMigrationScreenPipe(
       mojo::PendingReceiver<

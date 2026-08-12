@@ -23,8 +23,8 @@ struct EnumTraits<unexportable_keys::mojom::SignatureAlgorithm,
   static unexportable_keys::mojom::SignatureAlgorithm ToMojom(
       crypto::SignatureVerifier::SignatureAlgorithm algo);
 
-  static bool FromMojom(unexportable_keys::mojom::SignatureAlgorithm mojo_algo,
-                        crypto::SignatureVerifier::SignatureAlgorithm* out);
+  static crypto::SignatureVerifier::SignatureAlgorithm FromMojom(
+      unexportable_keys::mojom::SignatureAlgorithm mojo_algo);
 };
 
 template <>
@@ -33,9 +33,8 @@ struct EnumTraits<unexportable_keys::mojom::BackgroundTaskPriority,
   static unexportable_keys::mojom::BackgroundTaskPriority ToMojom(
       unexportable_keys::BackgroundTaskPriority priority);
 
-  static bool FromMojom(
-      unexportable_keys::mojom::BackgroundTaskPriority mojo_priority,
-      unexportable_keys::BackgroundTaskPriority* out);
+  static unexportable_keys::BackgroundTaskPriority FromMojom(
+      unexportable_keys::mojom::BackgroundTaskPriority mojo_priority);
 };
 
 template <>
@@ -44,20 +43,67 @@ struct EnumTraits<unexportable_keys::mojom::ServiceError,
   static unexportable_keys::mojom::ServiceError ToMojom(
       unexportable_keys::ServiceError error);
 
-  static bool FromMojom(unexportable_keys::mojom::ServiceError mojo_error,
-                        unexportable_keys::ServiceError* out);
+  static unexportable_keys::ServiceError FromMojom(
+      unexportable_keys::mojom::ServiceError mojo_error);
 };
 
 template <>
-struct StructTraits<unexportable_keys::mojom::UnexportableKeyIdDataView,
-                    unexportable_keys::UnexportableKeyId> {
+struct StructTraits<unexportable_keys::mojom::UnexportableSigningKeyIdDataView,
+                    unexportable_keys::UnexportableSigningKeyId> {
   static const base::UnguessableToken& key_id(
-      const unexportable_keys::UnexportableKeyId& input) {
+      const unexportable_keys::UnexportableSigningKeyId& input) {
     return input.value();
   }
 
-  static bool Read(unexportable_keys::mojom::UnexportableKeyIdDataView data,
-                   unexportable_keys::UnexportableKeyId* output);
+  static bool Read(
+      unexportable_keys::mojom::UnexportableSigningKeyIdDataView data,
+      unexportable_keys::UnexportableSigningKeyId* output);
+};
+
+template <>
+struct StructTraits<
+    unexportable_keys::mojom::UnexportableAttestationKeyIdDataView,
+    unexportable_keys::UnexportableAttestationKeyId> {
+  static const base::UnguessableToken& key_id(
+      const unexportable_keys::UnexportableAttestationKeyId& input) {
+    return input.value();
+  }
+
+  static bool Read(
+      unexportable_keys::mojom::UnexportableAttestationKeyIdDataView data,
+      unexportable_keys::UnexportableAttestationKeyId* output);
+};
+
+template <>
+struct EnumTraits<unexportable_keys::mojom::AttestationFormat,
+                  crypto::AttestationStatement::Format> {
+  static unexportable_keys::mojom::AttestationFormat ToMojom(
+      crypto::AttestationStatement::Format format);
+
+  static crypto::AttestationStatement::Format FromMojom(
+      unexportable_keys::mojom::AttestationFormat mojo_format);
+};
+
+template <>
+struct StructTraits<unexportable_keys::mojom::AttestationStatementDataView,
+                    crypto::AttestationStatement> {
+  static crypto::AttestationStatement::Format format(
+      const crypto::AttestationStatement& input) {
+    return input.format;
+  }
+
+  static const std::vector<uint8_t>& statement(
+      const crypto::AttestationStatement& input) {
+    return input.statement;
+  }
+
+  static const std::vector<uint8_t>& signature(
+      const crypto::AttestationStatement& input) {
+    return input.signature;
+  }
+
+  static bool Read(unexportable_keys::mojom::AttestationStatementDataView data,
+                   crypto::AttestationStatement* output);
 };
 }  // namespace mojo
 

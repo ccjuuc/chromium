@@ -5,18 +5,22 @@
 #include "chrome/browser/ui/android/autofill/autofill_ai_save_update_entity_flow_manager.h"
 
 #include <optional>
+#include <string>
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/autofill/android/save_update_address_profile_prompt_mode.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "chrome/browser/ui/autofill/autofill_message_model_test_api.h"
+#include "chrome/browser/ui/autofill/mock_autofill_dialog_controller.h"
 #include "chrome/browser/ui/autofill/mock_autofill_message_controller.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/strings/grit/components_strings.h"
@@ -26,6 +30,8 @@
 namespace autofill {
 
 using ::testing::_;
+using ::testing::Eq;
+using ::testing::NiceMock;
 using ::testing::SaveArgByMove;
 
 // TODO: crbug.com/460410690 - Cover different entity types.
@@ -38,7 +44,8 @@ class AutofillAiSaveUpdateEntityFlowManagerTest
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
             ChromeRenderViewHostTestHarness::profile());
     flow_manager_ = std::make_unique<AutofillAiSaveUpdateEntityFlowManager>(
-        web_contents(), &autofill_message_controller_);
+        web_contents(), &autofill_message_controller_,
+        &autofill_dialog_controller_, "en-US");
   }
 
   void TearDown() override {
@@ -53,6 +60,10 @@ class AutofillAiSaveUpdateEntityFlowManagerTest
 
   AutofillAiSaveUpdateEntityFlowManager& flow_manager() {
     return *flow_manager_;
+  }
+
+  MockAutofillDialogController& autofill_dialog_controller() {
+    return autofill_dialog_controller_;
   }
 
   base::MockCallback<AutofillClient::EntityImportPromptResultCallback>&
@@ -87,6 +98,7 @@ class AutofillAiSaveUpdateEntityFlowManagerTest
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_adaptor_;
   MockAutofillMessageController autofill_message_controller_;
+  MockAutofillDialogController autofill_dialog_controller_;
   base::MockCallback<AutofillClient::EntityImportPromptResultCallback>
       prompt_closed_callback_;
   std::unique_ptr<AutofillAiSaveUpdateEntityFlowManager> flow_manager_;
@@ -102,7 +114,7 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowSaveMessage) {
 
   EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
             l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE));
+                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
   EXPECT_EQ(
       test_api(*message_model).GetMessage().GetDescription(),
       l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_SAVE_ENTITY_MESSAGE_SUBTITLE));
@@ -121,7 +133,7 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowUpdateMessage) {
 
   EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
             l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE));
+                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
   EXPECT_EQ(
       test_api(*message_model).GetMessage().GetDescription(),
       l10n_util::GetStringUTF16(IDS_AUTOFILL_AI_SAVE_ENTITY_MESSAGE_SUBTITLE));
@@ -146,7 +158,7 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowSaveToWalletMessage) {
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
             l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE));
+                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
   EXPECT_EQ(
       test_api(*message_model).GetMessage().GetDescription(),
       l10n_util::GetStringFUTF16(
@@ -173,7 +185,7 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowUpdateInWalletMessage) {
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
             l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE));
+                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
   EXPECT_EQ(
       test_api(*message_model).GetMessage().GetDescription(),
       l10n_util::GetStringFUTF16(
@@ -185,6 +197,49 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowUpdateInWalletMessage) {
           IDS_AUTOFILL_PREDICTION_IMPROVEMENTS_UPDATE_DIALOG_UPDATE_BUTTON));
 }
 
+TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest,
+       ShowSaveToWalletMessage_Branding2026) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAiWalletPassBranding2026};
+  SigninUser(TestingProfile::kDefaultProfileUserName,
+             signin::ConsentLevel::kSignin);
+  std::unique_ptr<AutofillMessageModel> message_model;
+  // Show the message and save the message model.
+  EXPECT_CALL(message_controller(), Show(_))
+      .WillOnce(SaveArgByMove<0>(&message_model));
+  flow_manager().OfferSave(
+      new_entity(EntityInstance::RecordType::kServerWallet),
+      /*old_entity=*/std::nullopt, prompt_closed_callback().Get());
+
+  // Message title should STILL be unbranded because it is a banner prompt
+  // (is_banner_prompt is true).
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_AI_SAVE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
+}
+
+TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest,
+       ShowUpdateInWalletMessage_Branding2026) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAiWalletPassBranding2026};
+  SigninUser(TestingProfile::kDefaultProfileUserName,
+             signin::ConsentLevel::kSignin);
+  std::unique_ptr<AutofillMessageModel> message_model;
+  // Show the message and save the message model.
+  EXPECT_CALL(message_controller(), Show(_))
+      .WillOnce(SaveArgByMove<0>(&message_model));
+  flow_manager().OfferSave(
+      new_entity(EntityInstance::RecordType::kServerWallet),
+      old_entity(EntityInstance::RecordType::kServerWallet),
+      prompt_closed_callback().Get());
+
+  // Message title should STILL be unbranded because it is a banner prompt
+  // (is_banner_prompt is true).
+  EXPECT_EQ(test_api(*message_model).GetMessage().GetTitle(),
+            l10n_util::GetStringUTF16(
+                IDS_AUTOFILL_AI_UPDATE_PASSPORT_ENTITY_DIALOG_TITLE_ANDROID));
+}
+
 TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowsMessage_MessageIngored) {
   std::unique_ptr<AutofillMessageModel> message_model;
   // Show the message and save the message model.
@@ -194,9 +249,9 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowsMessage_MessageIngored) {
                            prompt_closed_callback().Get());
 
   // Simulate the user ignoring the message which dismisses it.
-  EXPECT_CALL(
-      prompt_closed_callback(),
-      Run(AutofillClient::AutofillAiBubbleClosedReason::kNotInteracted));
+  EXPECT_CALL(prompt_closed_callback(),
+              Run(AutofillClient::AutofillAiBubbleResult::kNotInteracted,
+                  Eq(std::nullopt), _));
   message_model->OnDismissed(messages::DismissReason::TIMER);
 }
 
@@ -210,8 +265,61 @@ TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowsMessage_MessageClosed) {
 
   // Simulate the swipe on the message that closes it.
   EXPECT_CALL(prompt_closed_callback(),
-              Run(AutofillClient::AutofillAiBubbleClosedReason::kClosed));
+              Run(AutofillClient::AutofillAiBubbleResult::kClosed,
+                  Eq(std::nullopt), _));
   message_model->OnDismissed(messages::DismissReason::GESTURE);
+}
+
+TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest,
+       StartSecondFlowBeforePreviousIsFinished) {
+  std::unique_ptr<AutofillMessageModel> message_model;
+  // The message should be shown only once because the second flow is started
+  // before the previous one is aborted.
+  EXPECT_CALL(message_controller(), Show(_));
+  flow_manager().OfferSave(new_entity(), /*old_entity=*/std::nullopt,
+                           prompt_closed_callback().Get());
+  flow_manager().OfferSave(new_entity(), /*old_entity=*/std::nullopt,
+                           prompt_closed_callback().Get());
+}
+
+TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest,
+       StartSecondFlowAfterPreviousIsFinished) {
+  std::unique_ptr<AutofillMessageModel> message_model;
+  // The message should be shown twice because the second flow is started after
+  // the previous one is aborted by the user.
+  EXPECT_CALL(message_controller(), Show(_))
+      .Times(2)
+      .WillRepeatedly(SaveArgByMove<0>(&message_model));
+  EXPECT_CALL(
+      prompt_closed_callback(),
+      Run(AutofillClient::AutofillAiBubbleResult::kClosed, Eq(std::nullopt), _))
+      .Times(2);
+
+  flow_manager().OfferSave(new_entity(), /*old_entity=*/std::nullopt,
+                           prompt_closed_callback().Get());
+  // Dismiss the message first time.
+  message_model->OnDismissed(messages::DismissReason::GESTURE);
+
+  flow_manager().OfferSave(new_entity(), /*old_entity=*/std::nullopt,
+                           prompt_closed_callback().Get());
+  // Dismiss the message second time.
+  message_model->OnDismissed(messages::DismissReason::GESTURE);
+}
+
+TEST_F(AutofillAiSaveUpdateEntityFlowManagerTest, ShowLocalSaveNotification) {
+  const std::u16string title = l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_TITLE);
+  const std::u16string google_wallet =
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
+  const std::u16string description = l10n_util::GetStringFUTF16(
+      IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_DESCRIPTION,
+      google_wallet);
+  const std::u16string button = l10n_util::GetStringUTF16(
+      IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL);
+
+  EXPECT_CALL(autofill_dialog_controller(),
+              Show(title, description, button, _));
+  flow_manager().ShowLocalSaveNotification();
 }
 
 }  // namespace autofill

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 
-#include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -13,13 +12,15 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notimplemented.h"
-#include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmark_bar_controller.h"
+#include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_tab_params.h"
@@ -70,22 +71,25 @@ bool IsAnotherScreen(const WebContents& web_contents,
 
 }  // namespace
 
-FullscreenController::FullscreenController(ExclusiveAccessManager* manager)
-    : ExclusiveAccessControllerBase(manager) {}
+FullscreenController::FullscreenController(
+    ExclusiveAccessManager* manager,
+    chrome::BrowserCommandController* browser_command_controller,
+    BookmarkBarController* bookmark_bar_controller)
+    : ExclusiveAccessControllerBase(manager),
+      browser_command_controller_(browser_command_controller),
+      bookmark_bar_controller_(bookmark_bar_controller) {}
 
 FullscreenController::~FullscreenController() = default;
 
-void FullscreenController::AddObserver(FullscreenObserver* observer) {
-  observer_list_.AddObserver(observer);
-}
-
-void FullscreenController::RemoveObserver(FullscreenObserver* observer) {
-  observer_list_.RemoveObserver(observer);
+base::CallbackListSubscription
+FullscreenController::RegisterOnFullscreenStateChanged(
+    base::RepeatingClosure callback) {
+  return fullscreen_state_changed_callbacks_.Add(std::move(callback));
 }
 
 int64_t FullscreenController::GetDisplayId(const WebContents& web_contents) {
   if (auto* screen = display::Screen::Get()) {
-    // crbug.com/1347558 WebContents::GetNativeView is const-incorrect.
+    // crbug.com/40233000 WebContents::GetNativeView is const-incorrect.
     // const_cast is used to access GetNativeView(). Also GetDisplayNearestView
     // should accept const gfx::NativeView, but there is other const
     // incorrectness down the call chain in some implementations.
@@ -213,9 +217,9 @@ void FullscreenController::EnterFullscreenModeForTab(
       !requesting_another_screen && IsWindowFullscreenForTabOrPending();
 
   if (exclusive_access_tab() && exclusive_access_tab() != web_contents) {
-    // This unexpected condition may be hit in practice; see crbug.com/1456875.
+    // This unexpected condition may be hit in practice; see crbug.com/40918158.
     // In known circumstances it is safe to just clear the exclusive_access_tab,
-    // but behavior and assumptions should be rectified; see crbug.com/1244121.
+    // but behavior and assumptions should be rectified; see crbug.com/40787691.
     NOTIMPLEMENTED() << "Conflicting exclusive access tab assignment detected";
     SetTabWithExclusiveAccess(nullptr);
   }
@@ -308,7 +312,7 @@ void FullscreenController::ExitFullscreenModeForTab(WebContents* web_contents) {
 
   // For Tab Fullscreen -> Browser Fullscreen, enter browser fullscreen on the
   // display that originated the browser fullscreen prior to the tab fullscreen.
-  // crbug.com/1313606.
+  // crbug.com/40832401.
   if (was_browser_fullscreen && web_contents &&
       display_id_prior_to_tab_fullscreen_ != display::kInvalidDisplayId &&
       display_id_prior_to_tab_fullscreen_ != GetDisplayId(*web_contents)) {
@@ -337,13 +341,6 @@ void FullscreenController::FullscreenTabOpeningPopup(
   popunder_preventer_->AddPotentialPopunder(popup);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
-
-void FullscreenController::OnTabDeactivated(
-    content::WebContents* web_contents) {
-  base::AutoReset<raw_ptr<content::WebContents>> auto_resetter(
-      &deactivated_contents_, web_contents);
-  ExclusiveAccessControllerBase::OnTabDeactivated(web_contents);
-}
 
 void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
   if (!IsFullscreenWithinTab(old_contents)) {
@@ -403,9 +400,7 @@ void FullscreenController::WindowFullscreenStateChanged() {
       fullscreen_start_time_ = base::TimeTicks::Now();
     }
   }
-}
 
-void FullscreenController::FullscreenTransitionCompleted() {
   if (fullscreen_transition_complete_callback_) {
     std::move(fullscreen_transition_complete_callback_).Run();
   }
@@ -425,6 +420,24 @@ void FullscreenController::FullscreenTransitionCompleted() {
     popunder_preventer_.reset();
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+  if (browser_command_controller_) {
+    browser_command_controller_->FullscreenStateChanged();
+  }
+  if (bookmark_bar_controller_) {
+    bookmark_bar_controller_->UpdateBookmarkBarState(
+        BookmarkBarController::StateChangeReason::kToggleFullscreen);
+  }
+}
+
+void FullscreenController::FullscreenTopUIStateChanged() {
+  if (browser_command_controller_) {
+    browser_command_controller_->FullscreenStateChanged();
+  }
+  if (bookmark_bar_controller_) {
+    bookmark_bar_controller_->UpdateBookmarkBarState(
+        BookmarkBarController::StateChangeReason::kToolbarOptionChange);
+  }
 }
 
 void FullscreenController::RunOrDeferUntilTransitionIsComplete(
@@ -504,13 +517,11 @@ void FullscreenController::ExitExclusiveAccessIfNecessary() {
 void FullscreenController::PostFullscreenChangeNotification() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&FullscreenController::NotifyFullscreenChange,
-                                ptr_factory_.GetWeakPtr()));
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
 void FullscreenController::NotifyFullscreenChange() {
-  for (auto& observer : observer_list_) {
-    observer.OnFullscreenStateChanged();
-  }
+  fullscreen_state_changed_callbacks_.Notify();
 }
 
 void FullscreenController::NotifyTabExclusiveAccessLost() {
@@ -640,6 +651,7 @@ void FullscreenController::ExitFullscreenModeInternal() {
   fullscreen_parameters_.reset();
   toggled_into_fullscreen_ = false;
   started_fullscreen_transition_ = true;
+  auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
   // Mac windows report a state change instantly, and so we must also clear
   // state_prior_to_tab_fullscreen_ to match them else other logic using
@@ -648,8 +660,14 @@ void FullscreenController::ExitFullscreenModeInternal() {
   // Controller. The change is instant so we notify about access lost to
   // keep the state coherent.
   NotifyTabExclusiveAccessLost();
+  if (!weak_ptr) {
+    return;
+  }
 #endif
   exclusive_access_manager()->context()->ExitFullscreen();
+  if (!weak_ptr) {
+    return;
+  }
   extension_url_.reset();
   exclusive_access_manager()->UpdateBubble(base::NullCallback());
 }
@@ -657,6 +675,10 @@ void FullscreenController::ExitFullscreenModeInternal() {
 bool FullscreenController::MaybeToggleFullscreenWithinTab(
     WebContents* web_contents,
     bool enter_fullscreen) {
+  if (disable_entering_fullscreen_within_tab_for_testing_) {
+    return false;
+  }
+
   if (enter_fullscreen) {
     if (web_contents->IsBeingVisiblyCaptured()) {
       FullscreenWithinTabHelper::CreateForWebContents(web_contents);

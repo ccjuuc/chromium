@@ -11,8 +11,9 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/notreached.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_features_util.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
@@ -144,12 +144,12 @@ void StorageHandler::OnJavascriptDisallowed() {
 }
 
 void StorageHandler::HandleUpdateAndroidEnabled(
-    const base::Value::List& unused_args) {
+    const base::ListValue& unused_args) {
   // OnJavascriptAllowed() calls ArcSessionManager::AddObserver() later.
   AllowJavascript();
 }
 
-void StorageHandler::HandleUpdateStorageInfo(const base::Value::List& args) {
+void StorageHandler::HandleUpdateStorageInfo(const base::ListValue& args) {
   AllowJavascript();
   total_disk_space_calculator_.StartCalculation();
   free_disk_space_calculator_.StartCalculation();
@@ -161,7 +161,7 @@ void StorageHandler::HandleUpdateStorageInfo(const base::Value::List& args) {
   other_users_size_calculator_.StartCalculation();
 }
 
-void StorageHandler::HandleGetStorageEncryption(const base::Value::List& args) {
+void StorageHandler::HandleGetStorageEncryption(const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
   const std::string& callback_id = args[0].GetString();
@@ -200,7 +200,7 @@ void StorageHandler::OnGetVaultProperties(
                             base::Value(encryption_type));
 }
 
-void StorageHandler::HandleOpenMyFiles(const base::Value::List& unused_args) {
+void StorageHandler::HandleOpenMyFiles(const base::ListValue& unused_args) {
   const base::FilePath my_files_path =
       file_manager::util::GetMyFilesFolderForProfile(profile_);
   platform_util::OpenItem(profile_, my_files_path, platform_util::OPEN_FOLDER,
@@ -208,21 +208,21 @@ void StorageHandler::HandleOpenMyFiles(const base::Value::List& unused_args) {
 }
 
 void StorageHandler::HandleOpenBrowsingDataSettings(
-    const base::Value::List& unused_args) {
+    const base::ListValue& unused_args) {
   ash::NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(chrome::kChromeUISettingsURL)
-          .Resolve(chrome::kClearBrowserDataSubPage),
+      GURL(ash::chrome_urls::kChromeUISettingsURL)
+          .Resolve(ash::chrome_urls::kClearBrowserDataSubPage),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
 
 void StorageHandler::HandleUpdateExternalStorages(
-    const base::Value::List& unused_args) {
+    const base::ListValue& unused_args) {
   UpdateExternalStorages();
 }
 
 void StorageHandler::UpdateExternalStorages() {
-  base::Value::List devices;
+  base::ListValue devices;
   for (const auto& mount_point :
        DiskMountManager::GetInstance()->mount_points()) {
     if (!IsEligibleForAndroidStorage(mount_point)) {
@@ -243,7 +243,7 @@ void StorageHandler::UpdateExternalStorages() {
       // Files app. crbug.com/1002535.
       label = base::FilePath(mount_point.mount_path).BaseName().AsUTF8Unsafe();
     }
-    base::Value::Dict device;
+    base::DictValue device;
     device.Set("uuid", uuid);
     device.Set("label", label);
     devices.Append(std::move(device));
@@ -252,7 +252,7 @@ void StorageHandler::UpdateExternalStorages() {
 }
 
 void StorageHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
-  base::Value::Dict update;
+  base::DictValue update;
   update.Set(kIsExternalStorageEnabled, IsExternalStorageEnabled(profile_));
   content::WebUIDataSource::Update(profile_, source_name_, std::move(update));
 }
@@ -380,7 +380,7 @@ void StorageHandler::UpdateOverallStatistics() {
     return;
   }
 
-  base::Value::Dict size_stat;
+  base::DictValue size_stat;
   size_stat.Set("availableSize",
                 ui::FormatBytes(base::ByteSize(
                     base::checked_cast<uint64_t>(available_bytes))));

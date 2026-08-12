@@ -10,11 +10,11 @@
 #include "chrome/browser/extensions/api/settings_private/generated_pref.h"
 #include "chrome/common/extensions/api/settings_private.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/content_settings/browser/ui/javascript_optimizer_setting.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -112,9 +112,7 @@ class GeneratedJavascriptOptimizerPrefTest : public testing::Test {
 void EnableFeature(base::test::ScopedFeatureList* feature_list) {
   feature_list
       ->InitWithFeatures(/*enabled_features=*/
-                         {content_settings::features::
-                              kBlockV8OptimizerOnUnfamiliarSitesSetting,
-                          ::features::kProcessSelectionDeferringConditions},
+                         {::features::kProcessSelectionDeferringConditions},
                          /*disabled_features=*/{});
 }
 
@@ -154,15 +152,11 @@ TEST_F(GeneratedJavascriptOptimizerPrefTest, GetPrefObject_FeatureDisabled) {
   prefs()->SetBoolean(prefs::kJavascriptOptimizerBlockedForUnfamiliarSites,
                       true);
 
-  std::vector<base::test::FeatureRef> test_cases = {
-      content_settings::features::kBlockV8OptimizerOnUnfamiliarSitesSetting,
-      ::features::kProcessSelectionDeferringConditions};
-  for (const base::test::FeatureRef& feature : test_cases) {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndDisableFeature(*feature);
-    EXPECT_EQ(static_cast<int>(JavascriptOptimizerSetting::kAllowed),
-              GetGeneratedPrefValue(profile()));
-  }
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      ::features::kProcessSelectionDeferringConditions);
+  EXPECT_EQ(static_cast<int>(JavascriptOptimizerSetting::kAllowed),
+            GetGeneratedPrefValue(profile()));
 }
 
 // Test potential future scenario where
@@ -304,6 +298,47 @@ TEST_F(GeneratedJavascriptOptimizerPrefTest, SetPref_OutOfRange) {
   GeneratedJavascriptOptimizerPref pref(profile());
   SetPrefResult result = SetPref(pref, base::Value(100));
   EXPECT_EQ(result, SetPrefResult::PREF_TYPE_MISMATCH);
+}
+
+TEST_F(GeneratedJavascriptOptimizerPrefTest,
+       OnSettingsBundleChanged_PrefChangedExternally) {
+  // Verify initial preference state.
+  EXPECT_EQ(static_cast<int>(JavascriptOptimizerSetting::kAllowed),
+            GetGeneratedPrefValue(profile()));
+  EXPECT_EQ(safe_browsing::GetSecurityBundleSetting(*prefs()),
+            safe_browsing::SecuritySettingsBundleSetting::STANDARD);
+
+  // Set up an observer for generated Javascript Optimizer preferences.
+  GeneratedJavascriptOptimizerPref pref(profile());
+  TestObserver observer;
+  pref.AddObserver(&observer);
+
+  // Set bundled settings state to ENHANCED programmatically.
+  prefs()->SetDefaultPrefValue(
+      prefs::kSecuritySettingsBundle,
+      base::Value(static_cast<int>(
+          safe_browsing::SecuritySettingsBundleSetting::ENHANCED)));
+
+  // Validate that the JavaScript Optimizer preferences are correctly set.
+  observer.WaitForGeneratedPrefChange();
+  EXPECT_EQ(
+      static_cast<int>(JavascriptOptimizerSetting::kBlockedForUnfamiliarSites),
+      GetGeneratedPrefValue(profile()));
+  EXPECT_EQ(safe_browsing::GetSecurityBundleSetting(*prefs()),
+            safe_browsing::SecuritySettingsBundleSetting::ENHANCED);
+
+  // Set bundled settings state to STANDARD programmatically.
+  prefs()->SetDefaultPrefValue(
+      prefs::kSecuritySettingsBundle,
+      base::Value(static_cast<int>(
+          safe_browsing::SecuritySettingsBundleSetting::STANDARD)));
+
+  // Validate that the JavaScript Optimizer preferences are correctly set.
+  observer.WaitForGeneratedPrefChange();
+  EXPECT_EQ(static_cast<int>(JavascriptOptimizerSetting::kAllowed),
+            GetGeneratedPrefValue(profile()));
+  EXPECT_EQ(safe_browsing::GetSecurityBundleSetting(*prefs()),
+            safe_browsing::SecuritySettingsBundleSetting::STANDARD);
 }
 
 }  // namespace content_settings

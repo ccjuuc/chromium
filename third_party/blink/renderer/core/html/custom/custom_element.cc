@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_factory.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_unknown_element.h"
 #include "third_party/blink/renderer/core/html_element_factory.h"
@@ -42,7 +43,7 @@ Vector<AtomicString>& CustomElement::EmbedderCustomElementNames() {
 }
 
 void CustomElement::AddEmbedderCustomElementName(const AtomicString& name) {
-  DCHECK_EQ(name, name.LowerASCII());
+  DCHECK(name.ContainsNoAsciiUpper());
   DCHECK(Document::IsValidName(name)) << name;
   DCHECK(!IsKnownBuiltinTagName(name)) << name;
   DCHECK(!IsValidName(name, false)) << name;
@@ -55,7 +56,7 @@ void CustomElement::AddEmbedderCustomElementName(const AtomicString& name) {
 void CustomElement::AddEmbedderCustomElementNameForTesting(
     const AtomicString& name,
     ExceptionState& exception_state) {
-  if (name != name.LowerASCII() || !Document::IsValidName(name) ||
+  if (!name.ContainsNoAsciiUpper() || !Document::IsValidName(name) ||
       IsKnownBuiltinTagName(name) || IsValidName(name, false)) {
     exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
                                       "Name cannot be used");
@@ -97,7 +98,7 @@ bool CustomElement::ShouldCreateCustomizedBuiltinElement(
     const AtomicString& local_name,
     const Document& document) {
   return HtmlElementTypeForTag(local_name, &document) !=
-         HTMLElementType::kHTMLUnknownElement;
+         ElementType::kHTMLUnknownElement;
 }
 
 bool CustomElement::ShouldCreateCustomizedBuiltinElement(
@@ -133,22 +134,18 @@ HTMLElement* CustomElement::CreateCustomElement(Document& document,
   // 7. Otherwise:
   return To<HTMLElement>(
       CreateUncustomizedOrUndefinedElementTemplate<kQNameIsValid>(
-          document, tag_name, flags, g_null_atom, /*registry*/ nullptr,
-          /*wait_for_registry=*/false));
+          document, tag_name, flags, g_null_atom,
+          CustomElementRegistryAssignment::Inherit()));
 }
 
 // Step 6 of https://dom.spec.whatwg.org/#concept-create-element
-// wait_for_registry flag indicates whether we want to ignore a passed
-// in null registry and let element implicitly pick up the tree scope's
-// registry or keep it null and wait for a registry to be set later.
 template <CustomElement::CreateUUCheckLevel level>
 Element* CustomElement::CreateUncustomizedOrUndefinedElementTemplate(
     Document& document,
     const QualifiedName& tag_name,
     const CreateElementFlags flags,
     const AtomicString& is_value,
-    CustomElementRegistry* registry,
-    const bool wait_for_registry) {
+    CustomElementRegistryAssignment registry_assignment) {
   if (level == kQNameIsValid) {
     DCHECK(is_value.IsNull());
     DCHECK(ShouldCreateCustomElement(tag_name)) << tag_name;
@@ -169,11 +166,7 @@ Element* CustomElement::CreateUncustomizedOrUndefinedElementTemplate(
            (CustomElement::IsValidName(tag_name.LocalName()) ||
             !is_value.IsNull()))
     element->SetCustomElementState(CustomElementState::kUndefined);
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
-      (registry || wait_for_registry)) {
-    DCHECK(!registry || !wait_for_registry);
-    element->SetCustomElementRegistry(registry);
-  }
+  element->SetCustomElementRegistry(registry_assignment);
 
   return element;
 }
@@ -183,10 +176,9 @@ Element* CustomElement::CreateUncustomizedOrUndefinedElement(
     const QualifiedName& tag_name,
     const CreateElementFlags flags,
     const AtomicString& is_value,
-    CustomElementRegistry* registry,
-    const bool wait_for_registry) {
+    CustomElementRegistryAssignment registry_assignment) {
   return CreateUncustomizedOrUndefinedElementTemplate<kCheckAll>(
-      document, tag_name, flags, is_value, registry, wait_for_registry);
+      document, tag_name, flags, is_value, registry_assignment);
 }
 
 HTMLElement* CustomElement::CreateFailedElement(
@@ -206,9 +198,9 @@ HTMLElement* CustomElement::CreateFailedElement(
 
   auto* element = MakeGarbageCollected<HTMLUnknownElement>(tag_name, document);
   element->SetCustomElementState(CustomElementState::kFailed);
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() &&
-      registry) {
-    element->SetCustomElementRegistry(registry);
+  if (registry) {
+    element->SetCustomElementRegistry(
+        CustomElementRegistryAssignment::Explicit(registry));
   }
   return element;
 }
@@ -308,16 +300,22 @@ void CustomElement::EnqueueFormStateRestoreCallback(Element& element,
   }
 }
 
+void CustomElement::EnqueueToolFillCallback(Element& element,
+                                            const String& value) {
+  auto& definition = *DefinitionForElementWithoutCheck(element);
+  if (definition.HasToolFillCallback()) {
+    Enqueue(element, CustomElementReactionFactory::CreateToolFillCallback(
+                         definition, value));
+  }
+}
+
 void CustomElement::TryToUpgrade(Element& element) {
   // Try to upgrade an element
   // https://html.spec.whatwg.org/C/#concept-try-upgrade
 
   DCHECK_EQ(element.GetCustomElementState(), CustomElementState::kUndefined);
 
-  CustomElementRegistry* registry =
-      RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()
-          ? element.customElementRegistry()
-          : element.GetTreeScope().customElementRegistry();
+  CustomElementRegistry* registry = element.customElementRegistry();
 
   if (!registry)
     return;
@@ -325,10 +323,15 @@ void CustomElement::TryToUpgrade(Element& element) {
   if (CustomElementDefinition* definition =
           registry->DefinitionFor(CustomElementDescriptor(
               is_value.IsNull() ? element.localName() : is_value,
-              element.localName())))
+              element.localName()))) {
     definition->EnqueueUpgradeReaction(element);
-  else
+  } else {
+    // Ensure the element's document is in the registry's associated document
+    // set so that CollectCandidates can find these candidates later when a
+    // definition is registered.
+    registry->AssociatedWith(element.GetDocument());
     registry->AddCandidate(element);
+  }
 }
 
 }  // namespace blink

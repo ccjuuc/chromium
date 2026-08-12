@@ -12,6 +12,7 @@
 #include "services/network/public/mojom/blocked_by_response_reason.mojom-forward.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
+#include "third_party/blink/renderer/core/ad_tracker/ad_tracker.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy_violation_type.h"
 #include "third_party/blink/renderer/core/inspector/protocol/audits.h"
@@ -106,20 +107,15 @@ class CORE_EXPORT AuditsIssue {
                                     String frame_id,
                                     String loader_id);
 
+  static void ReportDocumentCookiePerformanceIssue(
+      ExecutionContext* execution_context);
+
   static void ReportCorsIssue(ExecutionContext* execution_context,
                               RendererCorsIssueCode code,
                               String url,
                               String initiator_origin,
                               String failedParameter,
                               std::optional<base::UnguessableToken> issue_id);
-
-  static void ReportAttributionIssue(
-      ExecutionContext* execution_context,
-      mojom::blink::AttributionReportingIssueType type,
-      Element* element,
-      const String& request_url,
-      const String& request_id,
-      const String& invalid_parameter);
 
   static void ReportSharedArrayBufferIssue(
       ExecutionContext* execution_context,
@@ -222,8 +218,17 @@ class CORE_EXPORT AuditsIssue {
       const String& occluderParentNodeInfo = String(),
       const String& disableReason = String());
 
- private:
+  static void ReportSelectivePermissionsInterventionIssue(
+      ExecutionContext* execution_context,
+      const String& api_name,
+      const AdTracker::AdScriptAncestry& ad_ancestry,
+      const SourceLocation& source_location);
 
+  static void ReportLazyLoadImageIssue(ExecutionContext* execution_context,
+                                       Element* element,
+                                       const String& url);
+
+ private:
   std::unique_ptr<protocol::Audits::InspectorIssue> issue_;
 };
 

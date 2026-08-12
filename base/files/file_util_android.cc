@@ -15,8 +15,9 @@
 namespace base {
 namespace android {
 
-static std::string JNI_FileUtils_GetAbsoluteFilePath(JNIEnv* env,
-                                                     std::string& file_path) {
+static std::string JNI_FileUtils_GetAbsoluteFilePath(
+    JNIEnv* env,
+    const std::string& file_path) {
   return MakeAbsoluteFilePath(base::FilePath(file_path)).value();
 }
 
@@ -55,6 +56,14 @@ std::optional<FilePath> ResolveToVirtualDocumentPath(const FilePath& path) {
     return std::nullopt;
   }
   return FilePath(vp->ToString());
+}
+
+std::optional<std::string> CopyFileToDownloadsCollection(
+    const FilePath& file_path,
+    const std::string& mime_type) {
+  JNIEnv* env = jni_zero::AttachCurrentThread();
+  return android::Java_FileUtils_copyFileToDownloadsCollection(
+      env, file_path.value(), mime_type);
 }
 
 }  // namespace base

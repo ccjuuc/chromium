@@ -6,23 +6,27 @@
 
 #include <string_view>
 
-#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_resource.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_resource_client.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/scheduler/test/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 
 namespace blink {
 
 class ResourceTest : public testing::Test {
- private:
-  base::test::TaskEnvironment task_environment_;
+ protected:
+  test::TaskEnvironmentWithMainThreadScheduler task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
 TEST_F(ResourceTest, RevalidateWithFragment) {
@@ -105,8 +109,7 @@ TEST_F(ResourceTest, Vary) {
 }
 
 TEST_F(ResourceTest, RevalidationFailed) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
   const KURL url("http://test.example.com/");
   auto* resource = MakeGarbageCollected<MockResource>(url);
   ResourceResponse response(url);
@@ -147,8 +150,7 @@ TEST_F(ResourceTest, RevalidationFailed) {
 }
 
 TEST_F(ResourceTest, RevalidationSucceeded) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
   const KURL url("http://test.example.com/");
   auto* resource = MakeGarbageCollected<MockResource>(url);
   ResourceResponse response(url);
@@ -184,8 +186,7 @@ TEST_F(ResourceTest, RevalidationSucceeded) {
 }
 
 TEST_F(ResourceTest, RevalidationSucceededForResourceWithoutBody) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
   const KURL url("http://test.example.com/");
   auto* resource = MakeGarbageCollected<MockResource>(url);
   ResourceResponse response(url);
@@ -217,8 +218,7 @@ TEST_F(ResourceTest, RevalidationSucceededForResourceWithoutBody) {
 }
 
 TEST_F(ResourceTest, RevalidationSucceededUpdateHeaders) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
   const KURL url("http://test.example.com/");
   auto* resource = MakeGarbageCollected<MockResource>(url);
   ResourceResponse response(url);
@@ -311,8 +311,7 @@ TEST_F(ResourceTest, RevalidationSucceededUpdateHeaders) {
 }
 
 TEST_F(ResourceTest, RedirectDuringRevalidation) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
   const KURL url("http://test.example.com/1");
   const KURL redirect_target_url("http://test.example.com/2");
 
@@ -375,11 +374,12 @@ TEST_F(ResourceTest, RedirectDuringRevalidation) {
   // Test the case where a client is added after revalidation is completed.
   Persistent<MockResourceClient> client2 =
       MakeGarbageCollected<MockResourceClient>();
-  resource->AddClient(client2, platform->test_task_runner().get());
+  resource->AddClient(client2,
+                      task_environment_.GetMainThreadTaskRunner().get());
 
   // Because the client is added asynchronously,
   // |runUntilIdle()| is called to make |client2| to be notified.
-  platform->RunUntilIdle();
+  task_environment_.RunUntilIdle();
 
   EXPECT_TRUE(client2->NotifyFinishedCalled());
 
@@ -399,8 +399,8 @@ class ScopedResourceMockClock {
 };
 
 TEST_F(ResourceTest, StaleWhileRevalidateCacheControl) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler> mock;
-  ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
+  ScopedTestingPlatformSupport<TestingPlatformSupport> mock;
+  ScopedResourceMockClock clock(task_environment_.GetMockClock());
   const KURL url("http://127.0.0.1:8000/foo.html");
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
@@ -416,20 +416,20 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControl) {
   EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
   EXPECT_FALSE(resource->ShouldRevalidateStaleResponse());
 
-  mock->AdvanceClockSeconds(1);
+  task_environment_.AdvanceClock(base::Seconds(1));
   EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false));
   EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
   EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
 
-  mock->AdvanceClockSeconds(40);
+  task_environment_.AdvanceClock(base::Seconds(40));
   EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(false));
   EXPECT_TRUE(resource->MustRevalidateDueToCacheHeaders(true));
   EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
 }
 
 TEST_F(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler> mock;
-  ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
+  ScopedTestingPlatformSupport<TestingPlatformSupport> mock;
+  ScopedResourceMockClock clock(task_environment_.GetMockClock());
   const KURL url("http://127.0.0.1:8000/foo.html");
   const KURL redirect_target_url("http://127.0.0.1:8000/food.html");
   ResourceResponse response(url);
@@ -458,7 +458,7 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
   EXPECT_FALSE(resource->ShouldRevalidateStaleResponse());
 
-  mock->AdvanceClockSeconds(41);
+  task_environment_.AdvanceClock(base::Seconds(41));
 
   // MustRevalidateDueToCacheHeaders only looks at the stored response not
   // any redirects but ShouldRevalidate and AsyncRevalidationRequest look
@@ -512,13 +512,12 @@ TEST_F(ResourceTest, SetIsAdResource) {
   const KURL url("http://127.0.0.1:8000/foo.html");
   auto* resource = MakeGarbageCollected<MockResource>(url);
   EXPECT_FALSE(resource->GetResourceRequest().IsAdResource());
-  resource->SetIsAdResource();
+  resource->SetIsAdResource(NoProvenance{});
   EXPECT_TRUE(resource->GetResourceRequest().IsAdResource());
 }
 
 TEST_F(ResourceTest, GarbageCollection) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
   const KURL url("http://test.example.com/");
   Persistent<MockResource> resource = MakeGarbageCollected<MockResource>(url);
   ResourceResponse response(url);
@@ -529,7 +528,8 @@ TEST_F(ResourceTest, GarbageCollection) {
   // Add a client.
   Persistent<MockResourceClient> client =
       MakeGarbageCollected<MockResourceClient>();
-  client->SetResource(resource, platform->test_task_runner().get());
+  client->SetResource(resource,
+                      task_environment_.GetMainThreadTaskRunner().get());
 
   EXPECT_TRUE(resource->IsAlive());
 
@@ -545,7 +545,8 @@ TEST_F(ResourceTest, GarbageCollection) {
 
   // Add a client again.
   client = MakeGarbageCollected<MockResourceClient>();
-  client->SetResource(resource, platform->test_task_runner().get());
+  client->SetResource(resource,
+                      task_environment_.GetMainThreadTaskRunner().get());
 
   EXPECT_TRUE(resource->IsAlive());
 
@@ -559,6 +560,50 @@ TEST_F(ResourceTest, GarbageCollection) {
 
   EXPECT_FALSE(weak_client);
   EXPECT_FALSE(weak_resource);
+}
+
+// Tests that resources fetched via a Service Worker are only reused if the
+// requesting world matches the world that fetched the resource. This prevents
+// unexpected cross-world resource reuse.
+TEST_F(ResourceTest, CanReuseServiceWorkerResource) {
+  KURL url("http://127.0.0.1:8000/foo.html");
+  scoped_refptr<const SecurityOrigin> origin = SecurityOrigin::Create(url);
+
+  // Set up the cached resource which was fetched via a Service Worker.
+  ResourceRequest cache_request(url);
+  cache_request.SetRequestorOrigin(origin);
+
+  ResourceResponse response(url);
+  response.SetHttpStatusCode(200);
+  response.SetWasFetchedViaServiceWorker(true);
+
+  auto* resource = MakeGarbageCollected<MockResource>(cache_request);
+  resource->ResponseReceived(response);
+  resource->FinishForTest();
+
+  // Verify that a request from the same world (both have null `world_for_csp`
+  // which represents the main world) can reuse the cached resource.
+  {
+    ResourceRequest request(url);
+    request.SetRequestorOrigin(origin);
+    FetchParameters params = FetchParameters::CreateForTest(std::move(request));
+    EXPECT_EQ(Resource::MatchStatus::kOk, resource->CanReuse(params));
+  }
+
+  // Verify that a request from a different isolated world (e.g., an extension
+  // or devtools) cannot reuse the cached resource, returning
+  // `Resource::MatchStatus::kCrossWorldServiceWorkerResourceMismatch`.
+  {
+    ResourceRequest request(url);
+    request.SetRequestorOrigin(origin);
+    FetchParameters params = FetchParameters::CreateForTest(std::move(request));
+    DOMWrapperWorld* isolated_world = DOMWrapperWorld::EnsureIsolatedWorld(
+        /*v8::Isolate=*/nullptr, blink::kIsolatedWorldIdLimit - 1);
+    params.MutableOptions().world_for_csp = isolated_world;
+
+    EXPECT_EQ(Resource::MatchStatus::kCrossWorldServiceWorkerResourceMismatch,
+              resource->CanReuse(params));
+  }
 }
 
 }  // namespace blink

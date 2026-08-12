@@ -8,16 +8,14 @@ namespace blink {
 
 MemoryConsumerRegistration::MemoryConsumerRegistration(
     std::string_view consumer_id,
-    base::MemoryConsumerTraits traits,
+    std::optional<base::MemoryConsumerTraits> traits,
     base::MemoryConsumer* consumer,
-    CheckUnregister check_unregister,
-    CheckRegistryExists check_registry_exists)
+    CheckUnregister check_unregister)
     : registration_(std::in_place,
                     consumer_id,
                     traits,
                     consumer,
-                    check_unregister,
-                    check_registry_exists) {}
+                    check_unregister) {}
 
 MemoryConsumerRegistration::~MemoryConsumerRegistration() {
   CHECK(!registration_);

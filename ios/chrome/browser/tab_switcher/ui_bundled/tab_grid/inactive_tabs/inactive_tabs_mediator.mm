@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_mediator.h"
 
+#import "base/apple/foundation_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/notreached.h"
 #import "base/scoped_multi_source_observation.h"
@@ -15,17 +16,19 @@
 #import "ios/chrome/browser/shared/model/url/url_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/snapshots/model/model_swift.h"
+#import "ios/chrome/browser/snapshots/model/snapshot_browser_agent.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_id.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_id_wrapper.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_collection_consumer.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_item_identifier.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_info_consumer.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars/tab_grid_toolbars_configuration.h"
+#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_snapshot_and_favicon_configurator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_utils.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/web_state_tab_switcher_item.h"
 #import "ios/chrome/browser/tabs/model/inactive_tabs/features.h"
-#import "ios/chrome/browser/tabs/model/tabs_closer.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_observer_bridge.h"
 #import "ui/base/device_form_factor.h"
@@ -98,6 +101,8 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
   raw_ptr<WebStateList> _webStateList;
   // The snapshot storage of _webStateList.
   __weak id<SnapshotStorage> _snapshotStorage;
+  // Configures the tab snapshots and favicons.
+  std::unique_ptr<TabSnapshotAndFaviconConfigurator> _tabImagesConfigurator;
   // The observers of _webStateList.
   std::unique_ptr<WebStateListObserverBridge> _webStateListObserverBridge;
   std::unique_ptr<ScopedWebStateListObservation> _scopedWebStateListObservation;
@@ -110,9 +115,6 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
   std::unique_ptr<PrefObserverBridge> _prefObserverBridge;
   // Registrar for pref changes notifications.
   PrefChangeRegistrar _prefChangeRegistrar;
-  // TabsClosed used to implement the "close all tabs" operation with support
-  // for undoing the operation.
-  std::unique_ptr<TabsCloser> _tabsCloser;
 }
 
 @end
@@ -121,14 +123,18 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
 
 - (instancetype)initWithWebStateList:(WebStateList*)webStateList
                   profilePrefService:(PrefService*)prefService
-                     snapshotStorage:(id<SnapshotStorage>)snapshotStorage
-                          tabsCloser:(std::unique_ptr<TabsCloser>)tabsCloser {
+                       faviconLoader:(FaviconLoader*)faviconLoader
+                snapshotBrowserAgent:(SnapshotBrowserAgent*)snapshotBrowserAgent {
   CHECK(webStateList);
   CHECK(prefService);
-  CHECK(snapshotStorage);
+  CHECK(snapshotBrowserAgent);
   self = [super init];
   if (self) {
     _webStateList = webStateList;
+
+    _tabImagesConfigurator =
+        std::make_unique<TabSnapshotAndFaviconConfigurator>(
+            faviconLoader, snapshotBrowserAgent);
 
     // Observe the web state list.
     _webStateListObserverBridge =
@@ -154,10 +160,8 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
     _prefObserverBridge->ObserveChangesForPreference(
         prefs::kInactiveTabsTimeThreshold, &_prefChangeRegistrar);
 
-    _snapshotStorage = snapshotStorage;
+    _snapshotStorage = snapshotBrowserAgent->snapshot_storage();
     [_snapshotStorage addObserver:self];
-
-    _tabsCloser = std::move(tabsCloser);
   }
   return self;
 }
@@ -195,9 +199,9 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
   _prefChangeRegistrar.RemoveAll();
   _prefObserverBridge.reset();
   _prefService = nullptr;
+  _tabImagesConfigurator.reset();
   [_snapshotStorage removeObserver:self];
   _snapshotStorage = nil;
-  _tabsCloser.reset();
 }
 
 #pragma mark - CRWWebStateObserver
@@ -234,6 +238,10 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
 #pragma mark - SnapshotStorageObserver
 
 - (void)didUpdateSnapshotStorageWithSnapshotID:(SnapshotIDWrapper*)snapshotID {
+  if (IsGridMediatorSnapshotUpdateBatchGuardEnabled() && _webStateList &&
+      _webStateList->IsBatchInProgress()) {
+    return;
+  }
   web::WebState* webState =
       WebStateWithSnapshotID(*_webStateList, snapshotID.snapshot_id);
   if (webState) {
@@ -358,32 +366,6 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
   [_snapshotStorage removeAllImages];
 }
 
-- (void)saveAndCloseAllItems {
-  if (![self canCloseTabs]) {
-    return;
-  }
-
-  // TODO(crbug.com/40257500): Add metrics when the user closes all inactive
-  // tabs from regular tab grid.
-  _tabsCloser->CloseTabs();
-}
-
-- (void)undoCloseAllItems {
-  if (![self canUndoCloseAllTabs]) {
-    return;
-  }
-  // TODO(crbug.com/40257500): Add metrics when the user restores all inactive
-  // tabs from regular tab grid.
-  _tabsCloser->UndoCloseTabs();
-}
-
-- (void)discardSavedClosedItems {
-  if (![self canUndoCloseAllTabs]) {
-    return;
-  }
-  _tabsCloser->ConfirmDeletion();
-}
-
 - (void)showCloseItemsConfirmationActionSheetWithItems:
             (const std::set<web::WebStateID>&)itemIDs
                                                 anchor:(UIBarButtonItem*)
@@ -465,22 +447,13 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
           initWithPage:TabGridPageRegularTabs];
   toolbarsConfiguration.closeAllButton = [self canCloseTabs];
   toolbarsConfiguration.searchButton = YES;
-  toolbarsConfiguration.undoButton = [self canUndoCloseAllTabs];
   return toolbarsConfiguration;
-}
-
-- (BOOL)didSavedClosedTabs {
-  return [self canUndoCloseAllTabs];
 }
 
 #pragma mark - Internal
 
 - (BOOL)canCloseTabs {
-  return _tabsCloser && _tabsCloser->CanCloseTabs();
-}
-
-- (BOOL)canUndoCloseAllTabs {
-  return _tabsCloser && _tabsCloser->CanUndoCloseTabs();
+  return _webStateList && _webStateList->regular_tabs_count() != 0;
 }
 
 #pragma mark - GridViewControllerMutator
@@ -515,9 +488,16 @@ web::WebState* WebStateWithSnapshotID(WebStateList& web_state_list,
   // No-op
 }
 
-- (void)mergeGroup:(TabGroupInfo*)droppedGroup
-    intoDestinationItem:(GridItemIdentifier*)destinationItem {
-  // No-op
+#pragma mark - TabSwitcherItemSnapShotAndFaviconDataSource
+
+- (void)fetchTabSnapshotAndFavicon:(TabSwitcherItem*)item
+                        completion:
+                            (TabSnapshotAndFaviconFetchingCompletionBlock)
+                                completion {
+  WebStateTabSwitcherItem* tabSwitcherItem =
+      base::apple::ObjCCastStrict<WebStateTabSwitcherItem>(item);
+  _tabImagesConfigurator->FetchSnapshotAndFaviconForTabSwitcherItem(
+      tabSwitcherItem, completion);
 }
 
 @end

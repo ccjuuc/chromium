@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/borealis/borealis_service_fake.h"
 
-#include "chrome/browser/ash/borealis/borealis_install_url_handler.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
 
@@ -34,11 +33,6 @@ BorealisAppUninstaller& BorealisServiceFake::AppUninstaller() {
   return *app_uninstaller_;
 }
 
-BorealisContextManager& BorealisServiceFake::ContextManager() {
-  CHECK(context_manager_);
-  return *context_manager_;
-}
-
 BorealisFeatures& BorealisServiceFake::Features() {
   CHECK(features_);
   return *features_;
@@ -47,11 +41,6 @@ BorealisFeatures& BorealisServiceFake::Features() {
 BorealisInstaller& BorealisServiceFake::Installer() {
   CHECK(installer_);
   return *installer_;
-}
-
-BorealisInstallUrlHandler& BorealisServiceFake::InstallUrlHandler() {
-  CHECK(install_url_handler_);
-  return *install_url_handler_;
 }
 
 BorealisLaunchOptions& BorealisServiceFake::LaunchOptions() {
@@ -84,22 +73,12 @@ void BorealisServiceFake::SetAppUninstallerForTesting(
   app_uninstaller_ = app_uninstaller;
 }
 
-void BorealisServiceFake::SetContextManagerForTesting(
-    BorealisContextManager* context_manager) {
-  context_manager_ = context_manager;
-}
-
 void BorealisServiceFake::SetFeaturesForTesting(BorealisFeatures* features) {
   features_ = features;
 }
 
 void BorealisServiceFake::SetInstallerForTesting(BorealisInstaller* installer) {
   installer_ = installer;
-}
-
-void BorealisServiceFake::SetInstallUrlHandlerForTesting(
-    BorealisInstallUrlHandler* install_url_handler) {
-  install_url_handler_ = install_url_handler;
 }
 
 void BorealisServiceFake::SetShutdownMonitorForTesting(

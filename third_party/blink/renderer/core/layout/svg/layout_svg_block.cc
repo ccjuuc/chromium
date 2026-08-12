@@ -35,10 +35,7 @@
 
 namespace blink {
 
-LayoutSVGBlock::LayoutSVGBlock(ContainerNode* node)
-    : LayoutBlockFlow(node),
-      needs_transform_update_(true),
-      transform_uses_reference_box_(false) {
+LayoutSVGBlock::LayoutSVGBlock(ContainerNode* node) : LayoutBlockFlow(node) {
   DCHECK(IsA<SVGElement>(node));
 }
 
@@ -121,23 +118,25 @@ bool LayoutSVGBlock::UpdateTransformAfterLayout(
 void LayoutSVGBlock::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutBlockFlow::StyleDidChange(diff, old_style, style_change_context);
-
-  const ComputedStyle& style = StyleRef();
+  LayoutBlockFlow::StyleDidChange(diff, old_style, new_style,
+                                  style_change_context);
 
   // |HasTransformRelatedProperty| is used for compositing so ensure it was
   // correctly set by the call to |StyleDidChange|.
   DCHECK_EQ(HasTransformRelatedProperty(),
-            style.HasTransformRelatedPropertyForSVG());
+            new_style.HasTransformRelatedPropertyForSVG());
 
   TransformHelper::UpdateOffsetPath(*GetElement(), old_style);
-  transform_uses_reference_box_ = TransformHelper::DependsOnReferenceBox(style);
+  transform_uses_reference_box_ =
+      TransformHelper::DependsOnReferenceBox(new_style);
 
   if (diff.NeedsFullLayout()) {
-    if (diff.TransformChanged())
+    if (diff.transform_changed) {
       SetNeedsTransformUpdate();
+    }
   }
 
   SVGResources::UpdateEffects(*this, diff, old_style);
@@ -145,18 +144,16 @@ void LayoutSVGBlock::StyleDidChange(
   if (!Parent())
     return;
 
-  if (diff.BlendModeChanged()) {
+  if (diff.blend_mode_changed) {
     DCHECK(IsBlendingAllowed());
     Parent()->DescendantIsolationRequirementsChanged(
-        style.HasBlendMode() ? kDescendantIsolationRequired
-                             : kDescendantIsolationNeedsUpdate);
+        new_style.HasBlendMode() ? kDescendantIsolationRequired
+                                 : kDescendantIsolationNeedsUpdate);
   }
 
-  if ((style.HasCurrentTransformRelatedAnimation() &&
+  if ((new_style.HasCurrentTransformRelatedAnimation() &&
        !old_style->HasCurrentTransformRelatedAnimation()) ||
-      (RuntimeEnabledFeatures::
-           SvgAvoidCullingElementsWithTransformOperationsEnabled() &&
-       style.HasNonIdentityTransformOperation() &&
+      (new_style.HasNonIdentityTransformOperation() &&
        !old_style->HasNonIdentityTransformOperation())) {
     Parent()->SetSVGDescendantMayHaveTransformRelatedOperations();
   }
@@ -194,7 +191,7 @@ void LayoutSVGBlock::MapAncestorToLocal(const LayoutBoxModelObject* ancestor,
 bool LayoutSVGBlock::MapToVisualRectInAncestorSpaceInternal(
     const LayoutBoxModelObject* ancestor,
     TransformState& transform_state,
-    VisualRectFlags) const {
+    VisualRectFlags visual_rect_flags) const {
   NOT_DESTROYED();
   transform_state.Flatten();
   PhysicalRect rect = PhysicalRect::FastAndLossyFromRectF(
@@ -203,7 +200,7 @@ bool LayoutSVGBlock::MapToVisualRectInAncestorSpaceInternal(
   rect.Move(PhysicalLocation());
   // Apply other mappings on local SVG coordinates.
   bool retval = SVGLayoutSupport::MapToVisualRectInAncestorSpace(
-      *this, ancestor, gfx::RectF(rect), rect);
+      *this, ancestor, gfx::RectF(rect), rect, visual_rect_flags);
   transform_state.SetQuad(gfx::QuadF(gfx::RectF(rect)));
   return retval;
 }

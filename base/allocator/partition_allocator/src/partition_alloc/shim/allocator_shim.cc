@@ -30,6 +30,9 @@
 // avoid crashes in case of operator new() noexcept.  Thus, operator new()
 // noexcept needs to be routed to
 // allocator_shim::internal::PartitionMallocUnchecked through the shim layer.
+#if PA_BUILDFLAG(SHIM_SUPPORTS_ALLOC_TOKEN)
+#include "partition_alloc/shim/allocator_shim_alloc_token_symbols.h"
+#endif
 #include "partition_alloc/shim/allocator_shim_override_cpp_symbols.h"
 #include "partition_alloc/shim/allocator_shim_override_libc_symbols.h"
 
@@ -53,7 +56,7 @@
 
 // Cross-checks.
 
-#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 #error The allocator shim should not be compiled when building for memory tools.
 #endif
 

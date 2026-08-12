@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/user_image/user_image_source.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/notimplemented.h"
 #include "base/strings/escape.h"
@@ -12,7 +13,6 @@
 #include "base/strings/string_split.h"
 #include "chrome/browser/ash/login/users/default_user_image/default_user_images.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/common/url_constants.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
@@ -78,7 +78,7 @@ scoped_refptr<base::RefCountedMemory> LoadUserImageFrameForScaleFactor(
     return ui::ResourceBundle::GetSharedInstance()
         .LoadDataResourceBytesForScale(resource_id, scale_factor);
   }
-  // TODO(reveman): Add support for frames beyond 0 (crbug.com/750064).
+  // TODO(reveman): Add support for frames beyond 0 (crbug.com/40532347).
   if (frame) {
     NOTIMPLEMENTED() << "Unsupported frame: " << frame;
     return nullptr;
@@ -102,7 +102,7 @@ scoped_refptr<base::RefCountedMemory> GetUserImageFrame(
   if (frame == -1) {
     return image_bytes;
   }
-  // TODO(reveman): Add support for frames beyond 0 (crbug.com/750064).
+  // TODO(reveman): Add support for frames beyond 0 (crbug.com/40532347).
   if (frame) {
     NOTIMPLEMENTED() << "Unsupported frame: " << frame;
     return nullptr;
@@ -177,7 +177,7 @@ UserImageSource::UserImageSource() = default;
 UserImageSource::~UserImageSource() = default;
 
 std::string UserImageSource::GetSource() {
-  return chrome::kChromeUIUserImageHost;
+  return ash::kChromeUIUserImageHost;
 }
 
 void UserImageSource::StartDataRequest(
@@ -185,7 +185,7 @@ void UserImageSource::StartDataRequest(
     const content::WebContents::Getter& wc_getter,
     content::URLDataSource::GotDataCallback callback) {
   // TODO(crbug.com/40050262): Make sure |url| matches
-  // |chrome::kChromeUIUserImageURL| now that |url| is available.
+  // |ash::kChromeUIUserImageURL| now that |url| is available.
   const std::string path = content::URLDataSource::URLToRequestPath(url);
   std::string email;
   int frame = -1;

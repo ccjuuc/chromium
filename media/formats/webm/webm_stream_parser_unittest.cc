@@ -14,6 +14,7 @@
 #include "media/base/stream_parser.h"
 #include "media/base/test_data_util.h"
 #include "media/base/test_helpers.h"
+#include "media/base/video_spatial_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using testing::SaveArg;
@@ -194,21 +195,20 @@ TEST_F(WebMStreamParserTest, ColourElement) {
   EXPECT_EQ(video_config.color_space_info(), expected_color_space);
 
   gfx::HDRMetadata hdr_metadata = video_config.hdr_metadata();
-  EXPECT_EQ(hdr_metadata.cta_861_3->max_content_light_level, 11u);
-  EXPECT_EQ(hdr_metadata.cta_861_3->max_frame_average_light_level, 12u);
+  EXPECT_EQ(hdr_metadata.GetCLLI().fMaxCLL, 11u);
+  EXPECT_EQ(hdr_metadata.GetCLLI().fMaxFALL, 12u);
 
-  const gfx::HdrMetadataSmpteSt2086& mmdata =
-      hdr_metadata.smpte_st_2086.value();
-  EXPECT_FLOAT_EQ(mmdata.primaries.fRX, 0.1f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fRY, 0.2f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fGX, 0.1f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fGY, 0.2f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fBX, 0.1f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fBY, 0.2f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fWX, 0.1f);
-  EXPECT_FLOAT_EQ(mmdata.primaries.fWY, 0.2f);
-  EXPECT_EQ(mmdata.luminance_max, 40);
-  EXPECT_EQ(mmdata.luminance_min, 30);
+  const auto& mmdata = hdr_metadata.GetMDCV();
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fRX, 0.1f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fRY, 0.2f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fGX, 0.1f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fGY, 0.2f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fBX, 0.1f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fBY, 0.2f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fWX, 0.1f);
+  EXPECT_FLOAT_EQ(mmdata.fDisplayPrimaries.fWY, 0.2f);
+  EXPECT_EQ(mmdata.fMaximumDisplayMasteringLuminance, 40);
+  EXPECT_EQ(mmdata.fMinimumDisplayMasteringLuminance, 30);
 }
 
 TEST_F(WebMStreamParserTest, ColourElementWithUnspecifiedRange) {
@@ -244,5 +244,14 @@ TEST_F(WebMStreamParserTest, ParseVideoWithSphericalMetadata) {
 
   const auto& video_track = media_tracks_->tracks()[0];
   EXPECT_EQ(video_track->type(), MediaTrack::Type::kVideo);
+
+  const VideoDecoderConfig& video_config =
+      media_tracks_->getVideoConfig(video_track->stream_id());
+
+  EXPECT_EQ(video_config.spatial_format().stereo_mode,
+            VideoStereoMode::kSideBySideLeftFirst);
+  EXPECT_EQ(video_config.spatial_format().projection_type,
+            VideoProjectionType::kEquirect360);
 }
+
 }  // namespace media

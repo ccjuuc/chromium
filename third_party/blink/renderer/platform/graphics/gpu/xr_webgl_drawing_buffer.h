@@ -19,7 +19,7 @@
 namespace blink {
 
 class DrawingBuffer;
-class StaticBitmapImage;
+struct SharedImageHolder;
 
 class PLATFORM_EXPORT XRWebGLDrawingBuffer
     : public RefCounted<XRWebGLDrawingBuffer> {
@@ -44,12 +44,12 @@ class PLATFORM_EXPORT XRWebGLDrawingBuffer
 
   void Resize(const gfx::Size&);
 
-  scoped_refptr<StaticBitmapImage> TransferToStaticBitmapImage();
+  std::unique_ptr<SharedImageHolder> TransferToSharedImageHolder();
 
   void UseSharedBuffer(
       const scoped_refptr<gpu::ClientSharedImage>& buffer_shared_image,
       const gpu::SyncToken& buffer_sync_token);
-  void DoneWithSharedBuffer();
+  std::unique_ptr<SharedImageHolder> DoneWithSharedBuffer();
 
   GLuint GetCurrentColorBufferTextureId();
 
@@ -62,7 +62,6 @@ class PLATFORM_EXPORT XRWebGLDrawingBuffer
   struct PLATFORM_EXPORT ColorBuffer
       : public ThreadSafeRefCounted<ColorBuffer> {
     ColorBuffer(base::WeakPtr<XRWebGLDrawingBuffer>,
-                const gfx::Size&,
                 scoped_refptr<gpu::ClientSharedImage> shared_image,
                 std::unique_ptr<gpu::SharedImageTexture> texture);
     ColorBuffer(const ColorBuffer&) = delete;
@@ -84,7 +83,6 @@ class PLATFORM_EXPORT XRWebGLDrawingBuffer
     // destroyed by the BeginDestruction method, which will eventually drain all
     // of its ColorBuffers.
     base::WeakPtr<XRWebGLDrawingBuffer> drawing_buffer;
-    const gfx::Size size;
 
     // The client shared image backing this color buffer.
     scoped_refptr<gpu::ClientSharedImage> shared_image;
@@ -142,6 +140,8 @@ class PLATFORM_EXPORT XRWebGLDrawingBuffer
   GLuint depth_stencil_buffer_ = 0;
   gfx::Size size_;
 
+  scoped_refptr<gpu::ClientSharedImage> buffer_shared_image_;
+
   // Valid for shared buffer mode from UseSharedBuffer until
   // DoneWithSharedBuffer.
   std::unique_ptr<gpu::SharedImageTexture> shared_buffer_texture_;
@@ -177,6 +177,17 @@ class PLATFORM_EXPORT XRWebGLDrawingBuffer
   base::flat_set<scoped_refptr<ColorBuffer>> exported_color_buffers_;
 
   base::WeakPtrFactory<XRWebGLDrawingBuffer> weak_factory_;
+};
+
+struct PLATFORM_EXPORT SharedImageHolder {
+  SharedImageHolder(scoped_refptr<gpu::ClientSharedImage> shared_image,
+                    const gpu::SyncToken& sync_token,
+                    viz::ReleaseCallback release_callback);
+  ~SharedImageHolder();
+
+  scoped_refptr<gpu::ClientSharedImage> shared_image;
+  gpu::SyncToken sync_token;
+  viz::ReleaseCallback release_callback;
 };
 
 }  // namespace blink

@@ -9,7 +9,6 @@
 #import <utility>
 #import <vector>
 
-#import "base/containers/contains.h"
 #import "base/containers/flat_set.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/sys_string_conversions.h"
@@ -18,6 +17,7 @@
 #import "components/password_manager/core/browser/features/password_manager_features_util.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_manager_metrics_util.h"
+#import "components/password_manager/core/browser/password_store/stored_credential.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/prefs/pref_service.h"
@@ -50,8 +50,8 @@ base::Time GetLastUsedModifiedOrCreatedTime(
     password_manager::SavedPasswordsPresenter* saved_passwords_presenter,
     const CredentialUIEntry& entry) {
   base::Time time = entry.last_used_time;
-  for (const password_manager::PasswordForm& form :
-       saved_passwords_presenter->GetCorrespondingPasswordForms(entry)) {
+  for (const password_manager::StoredCredential& form :
+       saved_passwords_presenter->GetCorrespondingStoredCredentials(entry)) {
     time = std::max(time, form.date_last_used);
     time = std::max(time, form.date_password_modified);
     time = std::max(time, form.date_created);
@@ -323,9 +323,12 @@ bool AreMatchingCredentials(const CredentialUIEntry& credential,
   }
 
   it->stored_in = {password_manager::PasswordForm::Store::kAccountStore};
-  self.savedPasswordsPresenter->MoveCredentialsToAccount(
-      {*it}, password_manager::metrics_util::MoveToAccountStoreTrigger::
-                 kExplicitlyTriggeredInSettings);
+  self.savedPasswordsPresenter->MoveCredentialsToAccount({*it});
+
+  base::UmaHistogramEnumeration(
+      "PasswordManager.AccountStorage.MoveToAccountStoreFlowAccepted2",
+      password_manager::metrics_util::MoveToAccountStoreTrigger::
+          kExplicitlyTriggeredInSettings);
   [self providePasswordsToConsumer];
 }
 
@@ -573,8 +576,7 @@ bool AreMatchingCredentials(const CredentialUIEntry& credential,
     // storage is enabled.
     credentialDetails.shouldOfferToMoveToAccount =
         self.context == DetailsContext::kPasswordSettings &&
-        password_manager::features_util::IsAccountStorageEnabled(
-            _syncService) &&
+        password_manager::features_util::IsAccountStorageActive(_syncService) &&
         ShouldShowLocalOnlyIcon(credential, _syncService);
     [passwords addObject:credentialDetails];
   }
@@ -633,7 +635,7 @@ bool AreMatchingCredentials(const CredentialUIEntry& credential,
   }
 #endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
-  return password_manager::features_util::IsAccountStorageEnabled(_syncService);
+  return password_manager::features_util::IsAccountStorageActive(_syncService);
 }
 
 @end

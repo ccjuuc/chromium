@@ -13,7 +13,7 @@
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import {androidAppsVisible, isAppParentalControlsFeatureAvailable, isArcVmEnabled, isCrostiniSupported, isGuest, isKerberosEnabled, isPluginVmAvailable} from './common/load_time_booleans.js';
+import {androidAppsVisible, isAppParentalControlsFeatureAvailable, isArcVmEnabled, isCrostiniSupported, isGuest, isKerberosEnabled} from './common/load_time_booleans.js';
 import * as routesMojom from './mojom-webui/routes.mojom-webui.js';
 
 /**
@@ -148,17 +148,15 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   APP_NOTIFICATIONS_MANAGER: Route;
   APP_MANAGEMENT: Route;
   APP_MANAGEMENT_DETAIL: Route;
-  APP_MANAGEMENT_PLUGIN_VM_SHARED_PATHS: Route;
-  APP_MANAGEMENT_PLUGIN_VM_SHARED_USB_DEVICES: Route;
   APP_PARENTAL_CONTROLS: Route;
   APPS: Route;
   ANDROID_APPS_DETAILS: Route;
   ANDROID_APPS_DETAILS_ARC_VM_SHARED_USB_DEVICES: Route;
   AUDIO: Route;
+  CROSTINI_ANDROID_ADB: Route;
   CROSTINI_DETAILS: Route;
   CROSTINI_DISK_RESIZE: Route;
   CROSTINI_EXPORT_IMPORT: Route;
-  CROSTINI_EXTRA_CONTAINERS: Route;
   CROSTINI_PORT_FORWARDING: Route;
   CROSTINI_SHARED_PATHS: Route;
   CROSTINI_SHARED_USB_DEVICES: Route;
@@ -191,7 +189,7 @@ export interface OsSettingsRoutes extends MinimumRoutes {
   LOCK_SCREEN: Route;
   MANAGE_ACCESSIBILITY: Route;
   MANAGE_FACEGAZE_SETTINGS: Route;
-  MANAGE_ISOLATED_WEB_APPS: Route;
+
   MANAGE_MOUSE_KEYS_SETTINGS: Route;
   MANAGE_SWITCH_ACCESS_SETTINGS: Route;
   MANAGE_TTS_SETTINGS: Route;
@@ -419,17 +417,7 @@ export function createRoutes(): OsSettingsRoutes {
           Subpage.kArcVmUsbPreferences);
     }
   }
-  if (isPluginVmAvailable()) {
-    r.APP_MANAGEMENT_PLUGIN_VM_SHARED_PATHS = createSubpage(
-        r.APP_MANAGEMENT, routesMojom.PLUGIN_VM_SHARED_PATHS_SUBPAGE_PATH,
-        Subpage.kPluginVmSharedPaths);
-    r.APP_MANAGEMENT_PLUGIN_VM_SHARED_USB_DEVICES = createSubpage(
-        r.APP_MANAGEMENT, routesMojom.PLUGIN_VM_USB_PREFERENCES_SUBPAGE_PATH,
-        Subpage.kPluginVmUsbPreferences);
-  }
-  r.MANAGE_ISOLATED_WEB_APPS = createSubpage(
-      r.APPS, routesMojom.MANAGE_ISOLATED_WEB_APPS_SUBPAGE_PATH,
-      Subpage.kManageIsolatedWebApps);
+
   if (isAppParentalControlsFeatureAvailable()) {
     r.APP_PARENTAL_CONTROLS = createSubpage(
         r.APPS, routesMojom.APP_PARENTAL_CONTROLS_SUBPAGE_PATH,
@@ -636,14 +624,11 @@ export function createRoutes(): OsSettingsRoutes {
           routesMojom.CROSTINI_BACKUP_AND_RESTORE_SUBPAGE_PATH,
           Subpage.kCrostiniBackupAndRestore);
     }
-    if (loadTimeData.valueExists('showCrostiniExtraContainers') &&
-        loadTimeData.getBoolean('showCrostiniExtraContainers')) {
-      r.CROSTINI_EXTRA_CONTAINERS = createSubpage(
-          r.CROSTINI_DETAILS,
-          routesMojom.CROSTINI_EXTRA_CONTAINERS_SUBPAGE_PATH,
-          Subpage.kCrostiniExtraContainers);
-    }
 
+    r.CROSTINI_ANDROID_ADB = createSubpage(
+        r.CROSTINI_DETAILS,
+        routesMojom.CROSTINI_DEVELOP_ANDROID_APPS_SUBPAGE_PATH,
+        Subpage.kCrostiniDevelopAndroidApps);
     r.CROSTINI_PORT_FORWARDING = createSubpage(
         r.CROSTINI_DETAILS, routesMojom.CROSTINI_PORT_FORWARDING_SUBPAGE_PATH,
         Subpage.kCrostiniPortForwarding);

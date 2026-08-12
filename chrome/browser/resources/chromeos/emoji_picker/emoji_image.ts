@@ -31,15 +31,15 @@ export class EmojiImageComponent extends PolymerElement {
     };
   }
 
-  index: number;
-  item: EmojiVariants;
+  declare index: number;
+  declare item: EmojiVariants;
   loading: boolean = true;
 
-  showTooltip: (e: MouseEvent|FocusEvent) => void;
-  emojiClick: (e: MouseEvent) => void;
+  declare showTooltip: (e: MouseEvent|FocusEvent) => void;
+  declare emojiClick: (e: MouseEvent) => void;
 
-  clearable: boolean;
-  showClearButton: boolean;
+  declare clearable: boolean;
+  declare showClearButton: boolean;
 
   private handleMouseEnter(event: MouseEvent): void {
     this.showTooltip(event);
@@ -80,7 +80,7 @@ export class EmojiImageComponent extends PolymerElement {
 
     // Moves focus to the correct sibling.
     if (event.code === 'Tab') {
-      const siblingIndex = this.index + (event.shiftKey ? -1 : +1);
+      const siblingIndex = this.index + (event.shiftKey ? -1 : 1);
       const sibling = this.findSiblingEmojiImageByIndex(siblingIndex);
 
       if (sibling !== null) {
@@ -134,7 +134,7 @@ export class EmojiImageComponent extends PolymerElement {
    * Returns visual content preview url.
    */
   private getUrl(item: EmojiVariants) {
-    return item.base.visualContent?.url.preview.url;
+    return item.base.visualContent?.url.preview;
   }
 
   private getStyles(item: EmojiVariants) {

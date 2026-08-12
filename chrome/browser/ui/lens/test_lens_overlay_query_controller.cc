@@ -98,6 +98,7 @@ TestLensOverlayQueryController::~TestLensOverlayQueryController() = default;
 
 void TestLensOverlayQueryController::StartQueryFlow(
     const SkBitmap& screenshot,
+    const SkBitmap& initial_image,
     GURL page_url,
     std::optional<std::string> page_title,
     std::vector<lens::mojom::CenterRotatedBoxPtr> significant_region_boxes,
@@ -114,9 +115,9 @@ void TestLensOverlayQueryController::StartQueryFlow(
   }
 
   LensOverlayQueryController::StartQueryFlow(
-      screenshot, page_url, page_title, std::move(significant_region_boxes),
-      underlying_page_contents, primary_content_type, pdf_current_page,
-      ui_scale_factor, invocation_time);
+      screenshot, initial_image, page_url, page_title,
+      std::move(significant_region_boxes), underlying_page_contents,
+      primary_content_type, pdf_current_page, ui_scale_factor, invocation_time);
 }
 
 void TestLensOverlayQueryController::SendRegionSearch(
@@ -422,7 +423,9 @@ void TestLensOverlayQueryController::RunSuggestInputsCallback() {
   current_request_id->set_time_usec(0);
   // Since the media type is not stored in the current request id, manually
   // set it here to compare the two request ids.
-  current_request_id->set_media_type(latest_request_id.media_type());
+  if (latest_request_id.has_media_type()) {
+    current_request_id->set_media_type(latest_request_id.media_type());
+  }
 
   // Verifies that the last request ids passed in the SuggestInputs callback are
   // the same as current request id in the request id generator.

@@ -1,4 +1,4 @@
-// Copyright 2025 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -299,6 +299,7 @@ chrome.accessibilityPrivate.AccessibilityFeature = {
   DICTATION_CONTEXT_CHECKING: 'dictationContextChecking',
   GOOGLE_TTS_HIGH_QUALITY_VOICES: 'googleTtsHighQualityVoices',
   CAPTIONS_ON_BRAILLE_DISPLAY: 'captionsOnBrailleDisplay',
+  GOOGLE_TTS_AUTOMATIC_RECONNECT: 'googleTtsAutomaticReconnect',
 };
 
 /**
@@ -454,6 +455,14 @@ chrome.accessibilityPrivate.ScrollDirection = {
 };
 
 /**
+ * @typedef {{
+ *   wasm: ArrayBuffer,
+ *   wrapperJs: ArrayBuffer
+ * }}
+ */
+chrome.accessibilityPrivate.TenjiData;
+
+/**
  * @enum {string}
  */
 chrome.accessibilityPrivate.FacialGesture = {
@@ -503,14 +512,14 @@ chrome.accessibilityPrivate.getDisplayNameForLocale = function(localeCodeToTrans
 
 /**
  * Called to request battery status from Chrome OS system.
- * @param {function(string): void} callback Resolves with battery description as
- *     a string.
+ * @param {function(string): void=} callback Resolves with battery description
+ *     as a string.
  */
 chrome.accessibilityPrivate.getBatteryDescription = function(callback) {};
 
 /**
  * Called to request an install of the Pumpkin semantic parser for Dictation.
- * @param {function(!chrome.accessibilityPrivate.PumpkinData): void} callback
+ * @param {function(!chrome.accessibilityPrivate.PumpkinData): void=} callback
  *     Resolves when Pumpkin download finishes.
  */
 chrome.accessibilityPrivate.installPumpkinForDictation = function(callback) {};
@@ -518,10 +527,17 @@ chrome.accessibilityPrivate.installPumpkinForDictation = function(callback) {};
 /**
  * Called to request an install of the FaceGaze assets DLC, which contains files
  * (e.g. the FaceLandmarker model) required for FaceGaze to work.
- * @param {function(!chrome.accessibilityPrivate.FaceGazeAssets): void} callback
- *     Resolves when the DLC download finishes.
+ * @param {function(!chrome.accessibilityPrivate.FaceGazeAssets): void=}
+ *     callback Resolves when the DLC download finishes.
  */
 chrome.accessibilityPrivate.installFaceGazeAssets = function(callback) {};
+
+/**
+ * Installs the Tenji Braille DLC
+ * @param {function(!chrome.accessibilityPrivate.TenjiData): void=} callback
+ *     Resolves when Tenji download finishes.
+ */
+chrome.accessibilityPrivate.installTenji = function(callback) {};
 
 /**
  * Enables or disables native accessibility support. Once disabled, it is up to
@@ -618,7 +634,7 @@ chrome.accessibilityPrivate.setPointScanState = function(state) {};
 /**
  * Sets current ARC app to use native ARC support.
  * @param {boolean} enabled True for ChromeVox (native), false for TalkBack.
- * @param {function(!chrome.accessibilityPrivate.SetNativeChromeVoxResponse): void}
+ * @param {function(!chrome.accessibilityPrivate.SetNativeChromeVoxResponse): void=}
  *     callback Resolves with the response.
  */
 chrome.accessibilityPrivate.setNativeChromeVoxArcSupportForCurrentApp = function(enabled, callback) {};
@@ -727,7 +743,7 @@ chrome.accessibilityPrivate.performAcceleratorAction = function(acceleratorActio
 /**
  * Checks to see if an accessibility feature is enabled.
  * @param {!chrome.accessibilityPrivate.AccessibilityFeature} feature
- * @param {function(boolean): void} callback Resolves with whether the feature
+ * @param {function(boolean): void=} callback Resolves with whether the feature
  *     is enabled.
  */
 chrome.accessibilityPrivate.isFeatureEnabled = function(feature, callback) {};
@@ -748,9 +764,8 @@ chrome.accessibilityPrivate.updateSelectToSpeakPanel = function(show, anchor, is
  * @param {string} title The title of the confirmation dialog.
  * @param {string} description The description to show within the confirmation
  *     dialog.
- * @param {?string|undefined} cancelName The human-readable name of the cancel
- *     button.
- * @param {function(boolean): void} callback Resolves when the dialog is
+ * @param {string=} cancelName The human-readable name of the cancel button.
+ * @param {function(boolean): void=} callback Resolves when the dialog is
  *     confirmed or cancelled.
  */
 chrome.accessibilityPrivate.showConfirmationDialog = function(title, description, cancelName, callback) {};
@@ -761,7 +776,7 @@ chrome.accessibilityPrivate.showConfirmationDialog = function(title, description
  * example, the key code for '/' would return the string '!' if the current
  * input method is French.
  * @param {number} keyCode
- * @param {function(string): void} callback Resolves with the resulting Dom key
+ * @param {function(string): void=} callback Resolves with the resulting Dom key
  *     string.
  */
 chrome.accessibilityPrivate.getLocalizedDomKeyStringForKeyCode = function(keyCode, callback) {};
@@ -781,7 +796,7 @@ chrome.accessibilityPrivate.silenceSpokenFeedback = function() {};
 /**
  * Returns the contents of a DLC.
  * @param {!chrome.accessibilityPrivate.DlcType} dlc The DLC of interest.
- * @param {function(ArrayBuffer): void} callback A promise that resolves when
+ * @param {function(ArrayBuffer): void=} callback A promise that resolves when
  *     the contents are returned.
  */
 chrome.accessibilityPrivate.getDlcContents = function(dlc, callback) {};
@@ -791,7 +806,7 @@ chrome.accessibilityPrivate.getDlcContents = function(dlc, callback) {};
  * @param {!chrome.accessibilityPrivate.DlcType} dlc The DLC of interest.
  * @param {!chrome.accessibilityPrivate.TtsVariant} variant The TTS voice
  *     variant.
- * @param {function(ArrayBuffer): void} callback A promise that resolves when
+ * @param {function(ArrayBuffer): void=} callback A promise that resolves when
  *     the contents are returned.
  */
 chrome.accessibilityPrivate.getTtsDlcContents = function(dlc, variant, callback) {};
@@ -799,7 +814,7 @@ chrome.accessibilityPrivate.getTtsDlcContents = function(dlc, variant, callback)
 /**
  * Returns the bounds of the displays in density-independent pixels in screen
  * coordinates.
- * @param {function(!Array<!chrome.accessibilityPrivate.ScreenRect>): void}
+ * @param {function(!Array<!chrome.accessibilityPrivate.ScreenRect>): void=}
  *     callback A promise that resolves when the result is returned.
  */
 chrome.accessibilityPrivate.getDisplayBounds = function(callback) {};
@@ -846,15 +861,17 @@ chrome.accessibilityPrivate.enableDragEventRewriter = function(enabled) {};
 /**
  * Used by the ChromeVox extension to enable key handling for the Manifest V3
  * version of the extension.
+ * @param {number} sessionId The session ID of the ChromeVox instance.
  */
-chrome.accessibilityPrivate.enableSpokenFeedbackMv3KeyHandling = function() {};
+chrome.accessibilityPrivate.enableSpokenFeedbackMv3KeyHandling = function(sessionId) {};
 
 /**
  * Used by the ChromeVox extension to process a pending spoken feedback event.
  * @param {number} id The ID of the key event.
  * @param {boolean} propagate Whether or not to propagate the key.
+ * @param {number} sessionId The session ID of the ChromeVox instance.
  */
-chrome.accessibilityPrivate.processPendingSpokenFeedbackEvent = function(id, propagate) {};
+chrome.accessibilityPrivate.processPendingSpokenFeedbackEvent = function(id, propagate, sessionId) {};
 
 /**
  * Fired whenever ChromeVox should output introduction.
@@ -874,6 +891,20 @@ chrome.accessibilityPrivate.onChromeVoxFocusChanged;
  * @type {!ChromeEvent}
  */
 chrome.accessibilityPrivate.onAccessibilityGesture;
+
+/**
+ * Fired when we first detect two fingers are held down, which can be used to
+ * toggle spoken feedback on some touch-only devices.
+ * @type {!ChromeEvent}
+ */
+chrome.accessibilityPrivate.onTwoFingerTouchStart;
+
+/**
+ * Fired when the user is no longer holding down two fingers (including
+ * releasing one, holding down three, or moving them).
+ * @type {!ChromeEvent}
+ */
+chrome.accessibilityPrivate.onTwoFingerTouchStop;
 
 /**
  * Fired when the Select to Speak context menu is clicked from outside the

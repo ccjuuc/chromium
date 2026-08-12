@@ -62,8 +62,6 @@ namespace {
 
 using WebUIImplBrowserTest = ContentBrowserTest;
 
-// TODO(crbug.com/40290702): Shared workers are not available on Android.
-#if !BUILDFLAG(IS_ANDROID)
 const char kLoadSharedWorkerScript[] = R"(
     new Promise((resolve) => {
       const sharedWorker = new SharedWorker($1);
@@ -73,7 +71,6 @@ const char kLoadSharedWorkerScript[] = R"(
       sharedWorker.port.postMessage('ping');
     });
   )";
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 const char kLoadDedicatedWorkerScript[] = R"(
     new Promise((resolve) => {
@@ -115,16 +112,16 @@ class TestWebUIMessageHandler : public WebUIMessageHandler {
   }
 
  private:
-  void OnMessageRequiringGesture(const base::Value::List& args) {
+  void OnMessageRequiringGesture(const base::ListValue& args) {
     ++message_requiring_gesture_count_;
   }
 
-  void OnNotifyFinish(const base::Value::List& args) {
+  void OnNotifyFinish(const base::ListValue& args) {
     if (finish_closure_)
       finish_closure_.Run();
   }
 
-  void OnSendMessage(const base::Value::List& args) {
+  void OnSendMessage(const base::ListValue& args) {
     // This message will be invoked when WebContents changes the main RFH
     // and the old main RFH is still alive during navigating from WebUI page
     // to cross-site. WebUI message should be handled with old main RFH.
@@ -1099,8 +1096,6 @@ class WebUIWorkerTest : public ContentBrowserTest {
       &factory_};
 };
 
-// TODO(crbug.com/40290702): Shared workers are not available on Android.
-#if !BUILDFLAG(IS_ANDROID)
 // Verify that we can create SharedWorker with scheme "chrome://" under
 // WebUI page.
 IN_PROC_BROWSER_TEST_F(WebUIWorkerTest, CanCreateWebUISharedWorkerForWebUI) {
@@ -1243,8 +1238,6 @@ IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,
   EXPECT_THAT(result,
               EvalJsResult::ErrorIs(::testing::StartsWith(expected_failure)));
 }
-
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Verify that we can create a Worker with scheme "chrome://" under WebUI page.
 IN_PROC_BROWSER_TEST_F(WebUIWorkerTest,

@@ -9,7 +9,7 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 #include "media/base/data_source.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -38,10 +38,10 @@ class IPCDataSource : public media::DataSource {
             base::span<uint8_t> destination,
             ReadCB callback) override;
   [[nodiscard]] bool GetSize(int64_t* size_out) override;
-  bool IsStreaming() override;
+  bool IsStreaming() const override;
   void SetBitrate(int bitrate) override;
   bool PassedTimingAllowOriginCheck() override;
-  bool WouldTaintOrigin() override;
+  bool WouldTaintOrigin() const override;
 
  private:
   // Media data read helpers: must be run on the utility thread.

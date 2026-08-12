@@ -83,11 +83,15 @@ class HideAnimationObserver : public ui::ImplicitAnimationObserver {
   // ui::ImplicitAnimationObserver:
   void OnImplicitAnimationsScheduled() override {}
 
-  void OnImplicitAnimationsCompleted() override { layer_->SetOpacity(0); }
+  void OnImplicitAnimationsCompleted() override {
+    CHECK(layer_);
+    layer_->SetOpacity(0);
+    layer_ = nullptr;
+  }
 
  private:
   // Unowned.
-  const raw_ptr<ui::Layer, DanglingUntriaged> layer_;
+  raw_ptr<ui::Layer> layer_;
 };
 
 class ShelfBackgroundLayerDelegate : public ui::LayerOwner,
@@ -102,7 +106,7 @@ class ShelfBackgroundLayerDelegate : public ui::LayerOwner,
   ~ShelfBackgroundLayerDelegate() override {}
 
   void Initialize() {
-    auto layer = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
+    auto layer = std::make_unique<ui::LayerTextured>();
     layer->SetName("shelf/Background");
     layer->set_delegate(this);
     layer->SetFillsBoundsOpaquely(false);
@@ -344,10 +348,10 @@ class ShelfWidgetDelegateView
   ShelfBackgroundLayerDelegate opaque_background_;
 
   // A background layer used to animate hotseat transitions.
-  ui::Layer animating_background_;
+  ui::LayerSolidColor animating_background_;
 
   // A layer to animate the drag handle during hotseat transitions.
-  ui::Layer animating_drag_handle_;
+  ui::LayerSolidColor animating_drag_handle_;
 
   // A drag handle shown in tablet mode when we are not on the home screen.
   // Owned by the view hierarchy.
@@ -360,11 +364,10 @@ class ShelfWidgetDelegateView
 
 ShelfWidgetDelegateView::ShelfWidgetDelegateView(ShelfWidget* shelf_widget,
                                                  Shelf* shelf)
-    : shelf_widget_(shelf_widget),
-      opaque_background_(shelf, this),
-      animating_background_(ui::LAYER_SOLID_COLOR),
-      animating_drag_handle_(ui::LAYER_SOLID_COLOR) {
-  animating_background_.SetName("shelf/Animation");
+    : shelf_widget_(shelf_widget), opaque_background_(shelf, this) {
+  animating_background_.SetName("shelf/AnimatingBackground");
+  animating_drag_handle_.SetName("shelf/AnimatingDragHandle");
+
   animating_background_.Add(&animating_drag_handle_);
 
   opaque_background_.Initialize();
@@ -417,10 +420,10 @@ void ShelfWidgetDelegateView::OnThemeChanged() {
   shelf_widget_->background_animator_.PaintBackground(
       shelf_widget_->shelf_layout_manager()->ComputeShelfBackgroundType(),
       AnimationChangeType::IMMEDIATE);
-  animating_background_.SetColor(
-      GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemBase));
-  animating_drag_handle_.SetColor(
-      GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurface));
+  animating_background_.SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemBase)));
+  animating_drag_handle_.SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurface)));
 }
 
 bool ShelfWidgetDelegateView::CanActivate() const {
@@ -991,6 +994,11 @@ void ShelfWidget::ShowIfHidden() {
 
 ui::Layer* ShelfWidget::GetDelegateViewOpaqueBackgroundLayerForTesting() {
   return delegate_view_->opaque_background_layer();
+}
+
+void ShelfWidget::OnNativeWidgetDestroyed() {
+  delegate_view_ = nullptr;
+  views::Widget::OnNativeWidgetDestroyed();
 }
 
 void ShelfWidget::OnMouseEvent(ui::MouseEvent* event) {

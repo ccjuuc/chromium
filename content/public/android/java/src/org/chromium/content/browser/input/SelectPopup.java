@@ -96,11 +96,6 @@ public class SelectPopup
         WindowEventObserverManager.from(mWebContents).addObserver(this);
     }
 
-    /** Close popup. Called when {@link WindowAndroid} is updated. */
-    public void close() {
-        mPopupView = null;
-    }
-
     // HideablePopup
 
     @Override
@@ -122,17 +117,24 @@ public class SelectPopup
 
     @Override
     public void onWindowAndroidChanged(@Nullable WindowAndroid windowAndroid) {
-        close();
+        if (mPopupView == null) return;
+        mPopupView.hide(true);
+        mPopupView = null;
+        assert mNativeSelectPopupSourceFrame == 0;
     }
 
     /**
-     * Called (from native) when the lt&;select&gt; popup needs to be shown.
+     * Called (from native) when the &lt;select&gt; popup needs to be shown.
+     *
      * @param anchorView View anchored for popup.
      * @param nativeSelectPopupSourceFrame The native RenderFrameHost that owns the popup.
-     * @param items           Items to show.
-     * @param enabled         POPUP_ITEM_TYPEs for items.
-     * @param multiple        Whether the popup menu should support multi-select.
+     * @param items Items to show.
+     * @param enabled POPUP_ITEM_TYPEs for items.
+     * @param multiple Whether the popup menu should support multi-select.
      * @param selectedIndices Indices of selected items.
+     * @param rightAligned Whether the popup menu should be right aligned.
+     * @param itemHeight The height of each item in the dropdown in pixels.
+     * @param fontSize The font size of the label text in pixels.
      */
     @SuppressWarnings("unused")
     @CalledByNative
@@ -143,7 +145,9 @@ public class SelectPopup
             int[] enabled,
             boolean multiple,
             int[] selectedIndices,
-            boolean rightAligned) {
+            boolean rightAligned,
+            int itemHeight,
+            double fontSize) {
         if (mContainerView == null
                 || mContainerView.getParent() == null
                 || mContainerView.getVisibility() != View.VISIBLE) {
@@ -174,6 +178,8 @@ public class SelectPopup
                             popupItems,
                             selectedIndices,
                             rightAligned,
+                            itemHeight,
+                            fontSize,
                             mWebContents);
         } else {
             mPopupView =

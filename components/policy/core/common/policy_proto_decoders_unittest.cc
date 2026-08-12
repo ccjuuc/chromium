@@ -80,7 +80,7 @@ TEST_F(PolicyProtoDecodersTest, StringPolicy) {
 }
 
 TEST_F(PolicyProtoDecodersTest, StringListPolicy) {
-  base::Value::List expected_disabled_sync_types;
+  base::ListValue expected_disabled_sync_types;
   expected_disabled_sync_types.Append("bookmarks");
   expected_disabled_sync_types.Append("readingList");
   expected_policy_map_.Set(key::kSyncTypesListDisabled, POLICY_LEVEL_MANDATORY,
@@ -178,7 +178,7 @@ TEST_F(PolicyProtoDecodersTest, IntegerPolicyWithValueUpperThanMaxLimit) {
 }
 
 TEST_F(PolicyProtoDecodersTest, JsonPolicy) {
-  base::Value::Dict jsonPolicy;
+  base::DictValue jsonPolicy;
   jsonPolicy.Set("key", "value");
 
   expected_policy_map_.Set(key::kManagedBookmarks, POLICY_LEVEL_MANDATORY,
@@ -273,35 +273,41 @@ TEST_F(PolicyProtoDecodersTest, PolicyWithFalseFilter) {
 }
 
 TEST_F(PolicyProtoDecodersTest, ExtensionInstallPolicies) {
-  base::Value::Dict expected_policy_value1;
-  base::Value::Dict& version_dict =
-      expected_policy_value1.Set(kExtension1Version1, base::Value::Dict())
+  base::DictValue expected_policy_value1;
+  base::DictValue& version_dict =
+      expected_policy_value1.Set(kExtension1Version1, base::DictValue())
           ->GetDict();
   version_dict.Set("action", 0);
-  version_dict.Set("reasons", base::Value::List());
+  version_dict.Set("reasons", base::ListValue());
+  version_dict.Set("evaluated_risk_levels", base::DictValue());
 
-  base::Value::Dict expected_policy_value2;
-  base::Value::Dict& version_dict2 =
-      expected_policy_value2.Set(kExtension2Version2, base::Value::Dict())
+  base::DictValue expected_policy_value2;
+  base::DictValue& version_dict2 =
+      expected_policy_value2.Set(kExtension2Version2, base::DictValue())
           ->GetDict();
   version_dict2.Set("action", 1);
-  version_dict2.Set("reasons", base::Value::List());
+  version_dict2.Set("reasons", base::ListValue());
+  version_dict2.Set("evaluated_risk_levels", base::DictValue());
 
-  base::Value::Dict expected_policy_value3;
-  base::Value::Dict& version_dict3 =
-      expected_policy_value3.Set(kExtension3Version3, base::Value::Dict())
+  base::DictValue expected_policy_value3;
+  base::DictValue& version_dict3 =
+      expected_policy_value3.Set(kExtension3Version3, base::DictValue())
           ->GetDict();
   version_dict3.Set("action", 2);
-  base::Value::List expected_reasons;
+  base::ListValue expected_reasons;
   expected_reasons.Append(1);
   expected_reasons.Append(2);
   version_dict3.Set("reasons", std::move(expected_reasons));
+  version_dict3.Set(
+      "evaluated_risk_levels",
+      base::DictValue().Set("acme", em::RiskLevel::RISK_LEVEL_HIGH));
 
-  base::Value::Dict& version_dict4 =
-      expected_policy_value1.Set(kExtension1Version2, base::Value::Dict())
+  base::DictValue& version_dict4 =
+      expected_policy_value1.Set(kExtension1Version2, base::DictValue())
           ->GetDict();
   version_dict4.Set("action", 0);
-  version_dict4.Set("reasons", base::Value::List());
+  version_dict4.Set("reasons", base::ListValue());
+  version_dict4.Set("evaluated_risk_levels", base::DictValue());
 
   expected_policy_map_.Set(kExtensionId1, POLICY_LEVEL_MANDATORY,
                            POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD,
@@ -338,6 +344,9 @@ TEST_F(PolicyProtoDecodersTest, ExtensionInstallPolicies) {
     policy->set_action(em::ExtensionInstallPolicy::ACTION_BLOCK);
     policy->add_reasons(em::ExtensionInstallPolicy::REASON_BLOCKED_CATEGORY);
     policy->add_reasons(em::ExtensionInstallPolicy::REASON_RISK_SCORE);
+    em::ProviderRiskLevel* risk_level = policy->add_risk_levels();
+    risk_level->set_provider("acme");
+    risk_level->set_risk_level(em::RiskLevel::RISK_LEVEL_HIGH);
   }
   {
     em::ExtensionInstallPolicy* policy =
@@ -346,8 +355,10 @@ TEST_F(PolicyProtoDecodersTest, ExtensionInstallPolicies) {
     policy->set_extension_version(kExtension1Version2);
     policy->set_action(em::ExtensionInstallPolicy::ACTION_UNSPECIFIED);
   }
-  DecodeProtoFields(extension_install_policies_.payload(), POLICY_SOURCE_CLOUD,
-                    POLICY_SCOPE_USER, &policy_map_);
+  DecodeProtoFields(extension_install_policies_.payload(),
+                    /*external_data_manager=*/nullptr, POLICY_SOURCE_CLOUD,
+                    POLICY_SCOPE_USER, &policy_map_,
+                    PolicyPerProfileFilter::kAny);
   EXPECT_TRUE(expected_policy_map_.Equals(policy_map_));
 }
 
@@ -375,8 +386,10 @@ TEST_F(PolicyProtoDecodersTest, ExtensionInstallPoliciesMalformedNotSet) {
     policy->add_reasons(em::ExtensionInstallPolicy::REASON_BLOCKED_CATEGORY);
     policy->add_reasons(em::ExtensionInstallPolicy::REASON_RISK_SCORE);
   }
-  DecodeProtoFields(extension_install_policies_.payload(), POLICY_SOURCE_CLOUD,
-                    POLICY_SCOPE_USER, &policy_map_);
+  DecodeProtoFields(extension_install_policies_.payload(),
+                    /*external_data_manager=*/nullptr, POLICY_SOURCE_CLOUD,
+                    POLICY_SCOPE_USER, &policy_map_,
+                    PolicyPerProfileFilter::kAny);
   EXPECT_TRUE(expected_policy_map_.Equals(policy_map_));
 }
 }  // namespace policy

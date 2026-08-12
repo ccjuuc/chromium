@@ -10,14 +10,13 @@
 
 #import <Foundation/Foundation.h>
 #include <stdint.h>
-#include "base/time/time.h"
 
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#import "media/capture/video/apple/video_capture_device_avfoundation.h"
+#include "base/time/time.h"
+#include "media/capture/video/apple/video_capture_device_frame_receiver.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video_capture_types.h"
 
@@ -28,6 +27,8 @@ class SingleThreadTaskRunner;
 namespace base {
 class Location;
 }  // namespace base
+
+@class VideoCaptureDeviceAVFoundation;
 
 // Small class to bundle device name and connection type into a dictionary.
 CAPTURE_EXPORT
@@ -68,8 +69,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceApple
   bool Init(VideoCaptureApi capture_api_type);
 
   // VideoCaptureDeviceAVFoundationFrameReceiver:
-  void ReceiveFrame(const uint8_t* video_frame,
-                    int video_frame_length,
+  void ReceiveFrame(base::span<const uint8_t> sample,
                     const VideoCaptureFormat& frame_format,
                     const gfx::ColorSpace color_space,
                     int aspect_numerator,
@@ -112,6 +112,8 @@ class CAPTURE_EXPORT VideoCaptureDeviceApple
   void OnCaptureConfigurationChanged();
 
   VideoFrameMetadata GetVideoFrameMetadata();
+
+  void OnPhotoResultOnMainThread(mojom::BlobPtr blob);
 
   // Flag indicating the internal state.
   enum InternalState { kNotInitialized, kIdle, kCapturing, kError };

@@ -24,7 +24,11 @@ class PrefRegistrySimple;
 
 namespace ash {
 class WindowState;
-}
+}  // namespace ash
+
+namespace chromeos {
+class ImmersiveFullscreenController;
+}  // namespace chromeos
 
 namespace gfx {
 class Point;
@@ -100,6 +104,11 @@ ASH_EXPORT void PinWindow(aura::Window* window, bool trusted);
 // window.
 ASH_EXPORT void SetAutoHideShelf(aura::Window* window, bool autohide);
 
+// Updates the shelf's visibility to hide when entering immersive fullscreen.
+ASH_EXPORT void UpdateUiForImmersiveFullscreen(
+    chromeos::ImmersiveFullscreenController* controller,
+    bool entering);
+
 // Moves |window| to the root window for the given |display_id|, if it is not
 // already in the same root window. Returns true if |window| was moved.
 ASH_EXPORT bool MoveWindowToDisplay(aura::Window* window, int64_t display_id);
@@ -116,13 +125,6 @@ ASH_EXPORT void SetChildrenUseExtendedHitRegionForWindow(aura::Window* window);
 // Requests the |window| to close and destroy itself. This is intended to
 // forward to an associated widget.
 ASH_EXPORT void CloseWidgetForWindow(aura::Window* window);
-
-// Installs a resize handler on the window that makes it easier to resize
-// the window.
-ASH_EXPORT void InstallResizeHandleWindowTargeterForWindow(
-    aura::Window* window,
-    chromeos::ResizeBorderInsets border_insets =
-        chromeos::ResizeBorderInsets());
 
 // Returns true if `window` is currently in tab-dragging process.
 ASH_EXPORT bool IsDraggingTabs(const aura::Window* window);

@@ -7,11 +7,9 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
-#include "base/trace_event/trace_event.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
-#include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "components/tabs/public/tab_group.h"
@@ -33,15 +31,20 @@ TabDragData::TabDragData(TabDragContext* source_context, TabSlotView* view)
       view_type(view->GetTabSlotViewType()) {
   if (source_model_index.has_value()) {
     contents = source_context->GetContentsForTab(view);
-    pinned = source_context->IsTabPinned(view);
+    pinned = source_context->GetTabStripModel()->IsTabPinned(
+        source_model_index.value());
   }
   std::optional<tab_groups::TabGroupId> tab_group_id = view->group();
   if (tab_group_id.has_value()) {
+    const TabGroup* group =
+        source_context->GetTabStripModel()->group_model()->GetTabGroup(
+            tab_group_id.value());
+    int index_in_group = source_model_index.has_value()
+                             ? source_model_index.value() -
+                                   static_cast<int>(group->ListTabs().start())
+                             : 0;
     tab_group_data = TabDragData::TabGroupData{
-        tab_group_id.value(), *source_context->GetTabStripModel()
-                                   ->group_model()
-                                   ->GetTabGroup(tab_group_id.value())
-                                   ->visual_data()};
+        tab_group_id.value(), *group->visual_data(), index_in_group};
   }
 }
 

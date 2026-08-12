@@ -51,8 +51,8 @@ void FillTextWithAutofill(base::WeakPtr<autofill::AutofillManager> manager,
   static_cast<autofill::BrowserAutofillManager*>(manager.get())
       ->FillOrPreviewField(autofill::mojom::ActionPersistence::kFill,
                            autofill::mojom::FieldActionType::kReplaceSelection,
-                           form, field, trimmed_text,
-                           SuggestionType::kComposeResumeNudge,
+                           form.global_id(), field.global_id(), trimmed_text,
+                           autofill::FillingProduct::kCompose,
                            /*field_type_used=*/std::nullopt);
 }
 
@@ -167,7 +167,7 @@ void ComposeManagerImpl::OpenComposeWithFormFieldData(
 Suggestion ComposeManagerImpl::GetSuggestion(
     const autofill::FormData& form,
     const autofill::FormFieldData& field,
-    AutofillSuggestionTriggerSource trigger_source) {
+    AutofillSuggestionTriggerSource trigger_source) const {
   std::u16string suggestion_text;
   std::u16string label_text;
   Suggestion suggestion(

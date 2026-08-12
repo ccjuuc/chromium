@@ -87,7 +87,7 @@ class MEDIA_EXPORT HlsRenditionImpl : public HlsRendition {
   // the delay between fetching new playlists for live content.
   void FetchManifestUpdates(ManifestDemuxer::DelayCallback, base::TimeDelta);
   void MaybeFetchManifestUpdates(ManifestDemuxer::DelayCallback,
-                                 base::TimeDelta);
+                                 std::optional<base::TimeDelta>);
 
   // Callback helper to receive notice when a new manifest has been updated.
   void OnManifestUpdate(ManifestDemuxer::DelayCallback cb,
@@ -123,11 +123,6 @@ class MEDIA_EXPORT HlsRenditionImpl : public HlsRendition {
 
   // The time that a livestream was paused at.
   std::optional<base::TimeTicks> livestream_pause_time_ = std::nullopt;
-
-  // Decrypt full segments if using AES128 or AES256.
-  scoped_refptr<hls::MediaSegment> segment_with_key_;
-  std::vector<uint8_t> key_;
-  std::array<uint8_t, crypto::aes_cbc::kBlockSize> iv_;
 
   std::unique_ptr<MediaLog> media_log_;
 

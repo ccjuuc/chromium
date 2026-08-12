@@ -8,7 +8,6 @@
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
@@ -50,7 +49,7 @@ const absl::flat_hash_set<std::string>& GetAllowedCountries() {
   static const base::NoDestructor<absl::flat_hash_set<std::string>>
       allowed_countries([] {
         const std::string& allowlist =
-            kWalletablePassDetectionCountryAllowlist.Get();
+            features::kWalletablePassDetectionCountryAllowlist.Get();
         std::vector<std::string> countries_vector = base::SplitString(
             allowlist, ",", base::WhitespaceHandling::TRIM_WHITESPACE,
             base::SplitResult::SPLIT_WANT_NONEMPTY);
@@ -64,7 +63,7 @@ const absl::flat_hash_set<std::string>& GetAllowedCountries() {
 // Checks whether `country_code` belongs to a country where Wallet is
 // supported.
 bool IsWalletSupportedCountry(const GeoIpCountryCode& country_code) {
-  if (!base::FeatureList::IsEnabled(kWalletablePassDetection)) {
+  if (!base::FeatureList::IsEnabled(features::kWalletablePassDetection)) {
     // If the allowlist feature is disabled, no country is considered supported.
     return false;
   }
@@ -74,7 +73,7 @@ bool IsWalletSupportedCountry(const GeoIpCountryCode& country_code) {
   }
 
   // Returns whether the allowlist contains `country_code` (case-insensitive).
-  return base::Contains(GetAllowedCountries(), country_code.value());
+  return GetAllowedCountries().contains(country_code.value());
 }
 
 }  // namespace
@@ -82,7 +81,7 @@ bool IsWalletSupportedCountry(const GeoIpCountryCode& country_code) {
 bool IsEligibleForWalletablePassDetection(
     const IdentityManager* identity_manager,
     const GeoIpCountryCode& country_code) {
-  return base::FeatureList::IsEnabled(kWalletablePassDetection) &&
+  return base::FeatureList::IsEnabled(features::kWalletablePassDetection) &&
          GetAccountGaiaIdHash(identity_manager).has_value() &&
          IsWalletSupportedCountry(country_code);
 }

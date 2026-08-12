@@ -200,13 +200,6 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
         },
       },
 
-      excludeDisplayInMirrorModeEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('excludeDisplayInMirrorModeEnabled');
-        },
-      },
-
       opsDisplayScaleFactorEnabled_: {
         type: Boolean,
         value() {
@@ -289,14 +282,14 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
     ];
   }
 
-  displayIds: string;
-  displays: DisplayUnitInfo[];
-  layouts: DisplayLayout[];
-  mirroringDestinationIds: string[];
-  overscanDisplayId: string;
-  primaryDisplayId: string;
-  primaryDisplay?: DisplayUnitInfo;
-  selectedDisplay?: DisplayUnitInfo;
+  declare displayIds: string;
+  declare displays: DisplayUnitInfo[];
+  declare layouts: DisplayLayout[];
+  declare mirroringDestinationIds: string[];
+  declare overscanDisplayId: string;
+  declare primaryDisplayId: string;
+  declare primaryDisplay?: DisplayUnitInfo;
+  declare selectedDisplay?: DisplayUnitInfo;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -312,40 +305,39 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
     Setting.kDisplayOverscan,
   ]);
 
-  private readonly ambientColorAvailable_: boolean;
+  declare private readonly ambientColorAvailable_: boolean;
   private browserProxy_: DevicePageBrowserProxy;
-  private brightnessSliderMax_: number;
-  private brightnessSliderMin_: number;
-  private currentInternalScreenBrightness_: number;
+  declare private brightnessSliderMax_: number;
+  declare private brightnessSliderMin_: number;
+  declare private currentInternalScreenBrightness_: number;
   private currentRoute_: Route|null;
   private currentSelectedModeIndex_: number;
   private currentSelectedParentModeIndex_: number;
   private displayChangedListener_: (() => void)|null;
-  private displayModeList_: DropdownMenuOptionList;
+  declare private displayModeList_: DropdownMenuOptionList;
   private displaySettingsProvider: DisplaySettingsProviderInterface;
-  private displayTabNames_: string[];
-  private readonly excludeDisplayInMirrorModeEnabled_: boolean;
-  private hasAmbientLightSensor_: boolean;
+  declare private displayTabNames_: string[];
+  declare private hasAmbientLightSensor_: boolean;
   private invalidDisplayId_: string;
-  private isAmbientLightSensorEnabled_: boolean;
-  private isDisplayPerformanceEnabled_: boolean;
-  private readonly isDisplayPerformanceSupported_: boolean;
-  private isTabletMode_: boolean;
-  private logicalResolutionText_: string;
+  declare private isAmbientLightSensorEnabled_: boolean;
+  declare private isDisplayPerformanceEnabled_: boolean;
+  declare private readonly isDisplayPerformanceSupported_: boolean;
+  declare private isTabletMode_: boolean;
+  declare private logicalResolutionText_: string;
   private mirroringExcludedId_: string;
   private modeToParentModeMap_: Map<number, number>;
-  private modeValues_: number[];
-  private opsDisplayScaleFactorEnabled_: boolean;
+  declare private modeValues_: number[];
+  declare private opsDisplayScaleFactorEnabled_: boolean;
   private parentModeToRefreshRateMap_: Map<number, DropdownMenuOptionList>;
-  private pendingSettingId_: Setting|null;
-  private refreshRateList_: DropdownMenuOptionList;
-  private selectedModePref_: chrome.settingsPrivate.PrefObject;
-  private selectedParentModePref_: chrome.settingsPrivate.PrefObject;
-  private selectedTab_: number;
-  private selectedZoomPref_: chrome.settingsPrivate.PrefObject;
-  private readonly unifiedDesktopAvailable_: boolean;
-  private unifiedDesktopMode_: boolean;
-  private zoomValues_: SliderTick[];
+  declare private pendingSettingId_: Setting|null;
+  declare private refreshRateList_: DropdownMenuOptionList;
+  declare private selectedModePref_: chrome.settingsPrivate.PrefObject;
+  declare private selectedParentModePref_: chrome.settingsPrivate.PrefObject;
+  declare private selectedTab_: number;
+  declare private selectedZoomPref_: chrome.settingsPrivate.PrefObject;
+  declare private readonly unifiedDesktopAvailable_: boolean;
+  declare private unifiedDesktopMode_: boolean;
+  declare private zoomValues_: SliderTick[];
 
   constructor() {
     super();
@@ -789,7 +781,7 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
       isInterlaced?: boolean): void {
     // Truncate at two decimal places for display. If the refresh rate
     // is a whole number, remove the mantissa.
-    let refreshRate = Number(rate).toFixed(2);
+    let refreshRate = rate.toFixed(2);
     if (refreshRate.endsWith('.00')) {
       refreshRate = refreshRate.substring(0, refreshRate.length - 3);
     }
@@ -797,7 +789,7 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
     const id = isInterlaced ? 'displayRefreshRateInterlacedMenuItem' :
                               'displayRefreshRateMenuItem';
 
-    const refreshRateOption = this.i18n(id, refreshRate.toString());
+    const refreshRateOption = this.i18n(id, refreshRate);
 
     this.parentModeToRefreshRateMap_.get(parentModeIndex)!.push({
       name: refreshRateOption,
@@ -1056,19 +1048,15 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
   }
 
   private showExcludeInMirror_(
-      unifiedDesktopMode: boolean,
-      excludeDisplayInMirrorModeEnabled: boolean,
-      allowExcludeDisplayInMirrorModePref: boolean,
-      displays: DisplayUnitInfo[],
-      selectedDisplay: DisplayUnitInfo): boolean {
+      unifiedDesktopMode: boolean, allowExcludeDisplayInMirrorModePref: boolean,
+      displays: DisplayUnitInfo[], selectedDisplay: DisplayUnitInfo): boolean {
     if (!selectedDisplay) {
       return false;
     }
     if (this.isMirrored(displays)) {
       return selectedDisplay.id === this.mirroringExcludedId_;
     }
-    if (!excludeDisplayInMirrorModeEnabled &&
-        !allowExcludeDisplayInMirrorModePref) {
+    if (!allowExcludeDisplayInMirrorModePref) {
       return false;
     }
     if (displays.length < 3) {
@@ -1353,7 +1341,7 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
    */
   private onSelectedModeChange_(newModeIndex: number): void {
     // We want to ignore all value changes to the pref due to the slider being
-    // dragged. See http://crbug/845712 for more info.
+    // dragged. See http://crbug.com/40577551 for more info.
     if (this.currentSelectedModeIndex_ === newModeIndex) {
       return;
     }
@@ -1457,7 +1445,7 @@ export class SettingsDisplayElement extends SettingsDisplayElementBase {
 
   private onMirroredClick_(event: Event): void {
     // Blur the control so that when the transition animation completes and
-    // the UI is focused, the control does not receive focus. crbug.com/785070
+    // the UI is focused, the control does not receive focus. crbug.com/41355419
     (event.currentTarget as CrCheckboxElement).blur();
 
     const mirrorModeInfo: MirrorModeInfo = {

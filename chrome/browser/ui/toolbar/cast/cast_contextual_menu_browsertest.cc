@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
@@ -31,7 +31,7 @@ class CastContextualMenuBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     // Pin the Cast icon to the toolbar.
-    PinnedToolbarActionsModel::Get(browser()->profile())
+    PinnedToolbarActionsModel::Get(browser()->GetProfile())
         ->UpdatePinnedState(kActionRouteMedia, true);
   }
 
@@ -86,10 +86,10 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest,
   for (size_t index = 0; index < model.GetItemCount(); index++) {
     model_actions.push_back(model.GetActionIdAtForTesting(index));
   }
-  EXPECT_TRUE(
-      base::Contains(model_actions, kActionMediaToolbarContextReportCastIssue));
+  EXPECT_TRUE(std::ranges::contains(model_actions,
+                                    kActionMediaToolbarContextReportCastIssue));
 
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  Browser* incognito_browser = CreateIncognitoBrowser(browser()->GetProfile());
 
   PinnedActionToolbarButtonMenuModel incognito_menu(incognito_browser,
                                                     kActionRouteMedia);
@@ -97,8 +97,8 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest,
   for (size_t index = 0; index < model.GetItemCount(); index++) {
     incognito_model_actions.push_back(model.GetActionIdAtForTesting(index));
   }
-  EXPECT_TRUE(base::Contains(incognito_model_actions,
-                             kActionMediaToolbarContextReportCastIssue));
+  EXPECT_TRUE(std::ranges::contains(incognito_model_actions,
+                                    kActionMediaToolbarContextReportCastIssue));
 }
 #endif
 
@@ -113,7 +113,7 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest, ToggleMediaRemotingItem) {
   }
   EXPECT_NE(remoting_index, -1);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = browser()->GetProfile()->GetPrefs();
   pref_service->SetBoolean(
       media_router::prefs::kMediaRouterMediaRemotingEnabled, false);
   EXPECT_FALSE(model.IsItemCheckedAt(remoting_index));
@@ -131,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest, ToggleMediaRemotingItem) {
 
 IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest,
                        PinUnpinItemRespectsPolicyPref) {
-  PinnedToolbarActionsModel::Get(browser()->profile())
+  PinnedToolbarActionsModel::Get(browser()->GetProfile())
       ->UpdatePinnedState(kActionRouteMedia, false);
   // Set cast to be pinned based on policy.
   policy::PolicyMap policy_map;

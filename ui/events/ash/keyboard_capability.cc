@@ -19,11 +19,9 @@
 #include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_set.h"
-#include "base/feature_list.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
@@ -401,15 +399,12 @@ IdentifyKeyboardInfo(const KeyboardDevice& keyboard) {
   bool null_top_row = false;
   // Top row scancode vectors which are all null should empty the array so it is
   // not considered a custom top row keyboard.
-  if (!top_row_scan_codes.empty()) {
-    null_top_row =
-        std::ranges::all_of(top_row_scan_codes, [](const uint32_t scancode) {
-          return scancode == kCustomNullScanCode;
-        });
-    if (base::FeatureList::IsEnabled(ash::features::kNullTopRowFix) &&
-        null_top_row) {
-      top_row_scan_codes.clear();
-    }
+  if (!top_row_scan_codes.empty() &&
+      std::ranges::all_of(top_row_scan_codes, [](const uint32_t scancode) {
+        return scancode == kCustomNullScanCode;
+      })) {
+    null_top_row = true;
+    top_row_scan_codes.clear();
   }
 
   if (!top_row_scan_codes.empty()) {
@@ -593,7 +588,7 @@ std::optional<KeyboardCode> KeyboardCapability::ConvertToKeyboardCode(
 
 // static
 bool KeyboardCapability::IsSixPackKey(const KeyboardCode& key_code) {
-  return base::Contains(kSixPackKeyToSearchSystemKeyMap, key_code);
+  return kSixPackKeyToSearchSystemKeyMap.contains(key_code);
 }
 
 std::optional<KeyboardCode> KeyboardCapability::GetMappedFKeyIfExists(
@@ -1058,8 +1053,7 @@ bool KeyboardCapability::HasFunctionKey(const KeyboardDevice& keyboard) const {
     return false;
   }
 
-  return ash::features::IsModifierSplitEnabled() &&
-         keyboard.type == InputDeviceType::INPUT_DEVICE_INTERNAL &&
+  return keyboard.type == InputDeviceType::INPUT_DEVICE_INTERNAL &&
          keyboard.has_function_key;
 }
 
@@ -1084,9 +1078,6 @@ bool KeyboardCapability::HasFunctionKeyOnAnyKeyboard() const {
 
 bool KeyboardCapability::HasQuickInsertKey(
     const KeyboardDevice& keyboard) const {
-  if (!ash::features::IsModifierSplitEnabled()) {
-    return false;
-  }
 
   if (ash::features::IsSplitKeyboardRefactorEnabled()) {
     return true;
@@ -1113,41 +1104,13 @@ bool KeyboardCapability::HasQuickInsertKey(int device_id) const {
   return HasQuickInsertKey(*keyboard);
 }
 
-bool KeyboardCapability::HasQuickInsertKeyForOobe(
-    const KeyboardDevice& keyboard) const {
-  if (ash::features::IsModifierSplitEnabled()) {
-    return false;
-  }
-
-  if (ash::features::IsSplitKeyboardRefactorEnabled()) {
-    return true;
-  }
-
-  if (kQuickInsertBlocklist.contains(board_name_)) {
-    return false;
-  }
-
-  return keyboard.type == InputDeviceType::INPUT_DEVICE_INTERNAL &&
-         keyboard.has_assistant_key;
-}
-
-bool KeyboardCapability::HasQuickInsertKeyForOobe(int device_id) const {
-  auto keyboard = FindKeyboardWithId(device_id);
-  if (!keyboard) {
-    return false;
-  }
-
-  return HasQuickInsertKeyForOobe(*keyboard);
-}
-
 bool KeyboardCapability::IsSplitModifierKeyboardForOverride(
     const KeyboardDevice& keyboard) const {
   if (kQuickInsertBlocklist.contains(board_name_)) {
     return false;
   }
 
-  return ash::features::IsModifierSplitEnabled() &&
-         keyboard.type == InputDeviceType::INPUT_DEVICE_INTERNAL &&
+  return keyboard.type == InputDeviceType::INPUT_DEVICE_INTERNAL &&
          keyboard.has_function_key && keyboard.has_assistant_key;
 }
 
@@ -1234,11 +1197,7 @@ ui::mojom::MetaKey KeyboardCapability::GetMetaKeyToDisplay() const {
 
   // Override meta key icon for external keyboards to be the highest priority
   // icon.
-  if (ash::features::IsModifierSplitEnabled()) {
     return mojom::MetaKey::kLauncherRefresh;
-  } else {
-    return mojom::MetaKey::kLauncher;
-  }
 }
 
 bool KeyboardCapability::UseRefreshedIcons() const {
@@ -1333,10 +1292,10 @@ bool KeyboardCapability::HasTopRowActionKey(const KeyboardDevice& keyboard,
                                             TopRowActionKey action_key) const {
   const auto* keyboard_info = GetKeyboardInfo(keyboard);
   if (!keyboard_info) {
-    return base::Contains(kLayout1TopRowActionKeys, action_key);
+    return std::ranges::contains(kLayout1TopRowActionKeys, action_key);
   }
 
-  return base::Contains(keyboard_info->top_row_action_keys, action_key);
+  return std::ranges::contains(keyboard_info->top_row_action_keys, action_key);
 }
 
 bool KeyboardCapability::HasTopRowActionKey(int device_id,

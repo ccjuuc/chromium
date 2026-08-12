@@ -31,7 +31,7 @@ import org.chromium.build.annotations.Nullable;
  * PixelFormat.
  *
  * <p>Internally, we maintain two SurfaceViews, since calling setFormat() to change the PixelFormat
- * results in a visual glitch as the surface is torn down. crbug.com/679902
+ * results in a visual glitch as the surface is torn down. crbug.com/41294400
  *
  * <p>The client has the responsibility to call doneWithUnownedSurface() at some point between when
  * we call back its surfaceCreated, when it is safe for us to hide the SurfaceView with the wrong
@@ -251,15 +251,12 @@ class CompositorSurfaceManagerImpl implements SurfaceHolder.Callback2, Composito
         // initiated the destruction, and wait for Android to recreate it.
 
         mParentView.post(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        if (mOwnedByClient == null) return;
-                        SurfaceState owned = mOwnedByClient;
-                        mClient.surfaceDestroyed(owned.surfaceHolder().getSurface(), true);
-                        mOwnedByClient = null;
-                        detachSurfaceNow(owned);
-                    }
+                () -> {
+                    if (mOwnedByClient == null) return;
+                    SurfaceState owned = mOwnedByClient;
+                    mClient.surfaceDestroyed(owned.surfaceHolder().getSurface(), true);
+                    mOwnedByClient = null;
+                    detachSurfaceNow(owned);
                 });
     }
 
@@ -433,13 +430,7 @@ class CompositorSurfaceManagerImpl implements SurfaceHolder.Callback2, Composito
         assert !state.destroyPending;
         state.createPending = true;
 
-        mParentView.post(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        attachSurfaceNow(state);
-                    }
-                });
+        mParentView.post(() -> attachSurfaceNow(state));
     }
 
     /**
@@ -493,12 +484,6 @@ class CompositorSurfaceManagerImpl implements SurfaceHolder.Callback2, Composito
         if (!state.isAttached()) return;
 
         state.destroyPending = true;
-        mParentView.post(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        detachSurfaceNow(state);
-                    }
-                });
+        mParentView.post(() -> detachSurfaceNow(state));
     }
 }

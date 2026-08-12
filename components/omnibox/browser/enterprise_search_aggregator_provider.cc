@@ -18,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
@@ -47,7 +46,6 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_formatter.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -168,7 +166,7 @@ int kLowQualityThreshold() {
       .scoring_low_quality_threshold;
 }
 
-// Helper for reading possibly null paths from `base::Value::Dict`.
+// Helper for reading possibly null paths from `base::DictValue`.
 std::string ptr_to_string(const std::string* ptr) {
   return ptr ? *ptr : "";
 }
@@ -276,14 +274,14 @@ const std::u16string UpdateTimeToString(std::optional<int> time) {
 const TemplateURL* AdjustTemplateURL(AutocompleteInput* input,
                                      TemplateURLService* turl_service) {
   DCHECK(turl_service);
-  return input->InKeywordMode()
+  return input->in_keyword_mode()
              ? AutocompleteInput::GetSubstitutingTemplateURLForInput(
                    turl_service, input)
              : turl_service->GetEnterpriseSearchAggregatorEngine();
 }
 
 EnterpriseSearchAggregatorProvider::RelevanceData GetServerRelevanceData(
-    const base::Value::Dict& result) {
+    const base::DictValue& result) {
   return {static_cast<int>(result.FindDouble("score").value_or(0) * 1000), 0, 0,
           "server"};
 }
@@ -310,9 +308,9 @@ std::set<std::u16string> GetWords(std::vector<std::string> strings) {
 // Helper for getting a list of lowercase email usernames from the result
 // dictionary.
 const std::vector<std::u16string> GetEmailUsernames(
-    const base::Value::Dict& result) {
+    const base::DictValue& result) {
   std::vector<std::u16string> usernames;
-  const base::Value::List* emails =
+  const base::ListValue* emails =
       result.FindListByDottedPath("document.derivedStructData.emails");
   if (!emails) {
     return usernames;
@@ -497,7 +495,8 @@ EnterpriseSearchAggregatorProvider::Request::Request(Request&&) = default;
 bool EnterpriseSearchAggregatorProvider::Request::Allowed(
     bool in_keyword_mode) const {
   // Query requests are only allowed in keyword mode.
-  return !base::Contains(types_, SuggestionType::QUERY) || in_keyword_mode;
+  return !std::ranges::contains(types_, SuggestionType::QUERY) ||
+         in_keyword_mode;
 }
 
 void EnterpriseSearchAggregatorProvider::Request::Reset(
@@ -772,7 +771,7 @@ bool EnterpriseSearchAggregatorProvider::IsProviderAllowed(
 
   // Don't run provider in non-keyword mode if query length is less than
   // the minimum length.
-  if (!input.InKeywordMode() &&
+  if (!input.in_keyword_mode() &&
       static_cast<int>(input.text().length()) <
           omnibox_feature_configs::SearchAggregatorProvider::Get()
               .min_query_length) {
@@ -799,7 +798,7 @@ void EnterpriseSearchAggregatorProvider::Run() {
   std::vector<int> request_indexes = {};
   std::vector<std::vector<int>> backend_suggestion_types = {};
   for (size_t i = 0; i < requests_.size(); ++i) {
-    bool allowed = requests_[i].Allowed(adjusted_input_.InKeywordMode());
+    bool allowed = requests_[i].Allowed(adjusted_input_.in_keyword_mode());
     requests_[i].Reset(!allowed);
     if (allowed) {
       request_indexes.push_back(i);
@@ -839,39 +838,19 @@ void EnterpriseSearchAggregatorProvider::RequestCompleted(
   DCHECK_GE(requests_.size(), static_cast<size_t>(request_index));
 
   if (response_code == 200) {
-    // Parse `response_body` in utility process if feature param is true.
     std::string json_data = SearchSuggestionParser::ExtractJsonData(
         source, std::move(response_body));
-    if (omnibox_feature_configs::SearchAggregatorProvider::Get()
-            .parse_response_in_utility_process) {
-      data_decoder::DataDecoder::ParseJsonIsolated(
-          json_data,
-          base::BindOnce(
-              &EnterpriseSearchAggregatorProvider::OnJsonParsedIsolated,
-              base::Unretained(this), request_index));
-    } else {
-      std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
-          json_data, base::JSON_ALLOW_TRAILING_COMMAS);
-      HandleParsedJson(request_index, value);
-    }
+    std::optional<base::DictValue> value =
+        base::JSONReader::ReadDict(json_data, base::JSON_ALLOW_TRAILING_COMMAS);
+    HandleParsedJson(request_index, value);
   } else {
     HandleParsedJson(request_index, std::nullopt);
   }
 }
 
-void EnterpriseSearchAggregatorProvider::OnJsonParsedIsolated(
-    int request_index,
-    base::expected<base::Value, std::string> result) {
-  std::optional<base::Value::Dict> value = std::nullopt;
-  if (result.has_value() && result.value().is_dict()) {
-    value = std::move(result.value().GetDict());
-  }
-  HandleParsedJson(request_index, value);
-}
-
 void EnterpriseSearchAggregatorProvider::HandleParsedJson(
     int request_index,
-    const std::optional<base::Value::Dict>& response_value) {
+    const std::optional<base::DictValue>& response_value) {
   RequestParsed parsed =
       response_value.has_value()
           ? ParseEnterpriseSearchAggregatorSearchResults(
@@ -886,28 +865,27 @@ EnterpriseSearchAggregatorProvider::RequestParsed
 EnterpriseSearchAggregatorProvider::
     ParseEnterpriseSearchAggregatorSearchResults(
         const std::vector<SuggestionType>& suggestion_types,
-        const base::Value::Dict& root_val) {
+        const base::DictValue& root_val) {
   // Break the input into words to avoid redoing this for every match.
   std::set<std::u16string> input_words = GetWords({adjusted_input_.text()});
 
   // Parse the results.
-  const base::Value::List* queryResults = root_val.FindList("querySuggestions");
-  const base::Value::List* peopleResults =
-      root_val.FindList("peopleSuggestions");
-  const base::Value::List* contentResults =
+  const base::ListValue* queryResults = root_val.FindList("querySuggestions");
+  const base::ListValue* peopleResults = root_val.FindList("peopleSuggestions");
+  const base::ListValue* contentResults =
       root_val.FindList("contentSuggestions");
   RequestParsed parsed{};
-  if (base::Contains(suggestion_types, SuggestionType::QUERY)) {
+  if (std::ranges::contains(suggestion_types, SuggestionType::QUERY)) {
     parsed.Append(ParseResultList(input_words, queryResults,
                                   /*suggestion_type=*/SuggestionType::QUERY,
                                   /*is_navigation=*/false));
   }
-  if (base::Contains(suggestion_types, SuggestionType::PEOPLE)) {
+  if (std::ranges::contains(suggestion_types, SuggestionType::PEOPLE)) {
     parsed.Append(ParseResultList(input_words, peopleResults,
                                   /*suggestion_type=*/SuggestionType::PEOPLE,
                                   /*is_navigation=*/true));
   }
-  if (base::Contains(suggestion_types, SuggestionType::CONTENT)) {
+  if (std::ranges::contains(suggestion_types, SuggestionType::CONTENT)) {
     parsed.Append(ParseResultList(input_words, contentResults,
                                   /*suggestion_type=*/SuggestionType::CONTENT,
                                   /*is_navigation=*/true));
@@ -918,7 +896,7 @@ EnterpriseSearchAggregatorProvider::
 EnterpriseSearchAggregatorProvider::RequestParsed
 EnterpriseSearchAggregatorProvider::ParseResultList(
     std::set<std::u16string> input_words,
-    const base::Value::List* results,
+    const base::ListValue* results,
     SuggestionType suggestion_type,
     bool is_navigation) {
   if (!results) {
@@ -935,7 +913,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
       continue;
     }
 
-    const base::Value::Dict& result = result_value.GetDict();
+    const base::DictValue& result = result_value.GetDict();
 
     auto url = GetMatchDestinationUrl(result, suggestion_type);
     // All matches must have a URL.
@@ -958,14 +936,14 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
         // Check for existing size parameters (e.g., -s128, =w256, -h64).
         RE2 size_regex("=(?:[swh]\\d+|[^=]*?-[swh]\\d+)");
         if (!RE2::PartialMatch(image_url, size_regex)) {
-          image_url += base::Contains(image_url, "=") ? "-s64" : "=s64";
+          image_url += image_url.contains("=") ? "-s64" : "=s64";
         }
       }
       icon_url = template_url_->favicon_url().spec();
     } else if (suggestion_type == SuggestionType::CONTENT) {
       icon_url = ptr_to_string(result.FindString("iconUri"));
     } else if (suggestion_type == SuggestionType::QUERY &&
-               !adjusted_input_.InKeywordMode()) {
+               !adjusted_input_.in_keyword_mode()) {
       icon_url = template_url_->favicon_url().spec();
     }
 
@@ -989,7 +967,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
     // use server scoring in scoped mode, and client scoring in unscoped mode.
     if (relevance_scoring_mode == "server" ||
         (relevance_scoring_mode != "client" &&
-         adjusted_input_.InKeywordMode())) {
+         adjusted_input_.in_keyword_mode())) {
       relevance_data = GetServerRelevanceData(result);
     } else {
       const std::vector<std::u16string> email_usernames =
@@ -998,7 +976,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
           result, suggestion_type, contents, description, email_usernames);
       auto weak_scoring_fields = GetWeakScoringFields(result, suggestion_type);
       relevance_data = CalculateRelevanceData(
-          input_words, adjusted_input_.InKeywordMode(), suggestion_type,
+          input_words, adjusted_input_.in_keyword_mode(), suggestion_type,
           strong_scoring_fields, weak_scoring_fields, email_usernames);
     }
     if (relevance_data.relevance) {
@@ -1009,7 +987,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
     }
 
     std::u16string fill_into_edit;
-    if (adjusted_input_.InKeywordMode()) {
+    if (adjusted_input_.in_keyword_mode()) {
       fill_into_edit.append(template_url_->keyword() + u' ');
     }
     fill_into_edit.append(base::UTF8ToUTF16(is_navigation ? url : contents));
@@ -1022,7 +1000,7 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
 
   // Limit # of matches added. See comment for
   // `kMaxScopedMatchesShownPerType`.
-  size_t matches_to_add = adjusted_input_.InKeywordMode()
+  size_t matches_to_add = adjusted_input_.in_keyword_mode()
                               ? kMaxScopedMatchesShownPerType()
                               : kMaxUnscopedMatchesShownPerType();
   if (matches_to_add < matches.size()) {
@@ -1036,12 +1014,16 @@ EnterpriseSearchAggregatorProvider::ParseResultList(
 }
 
 std::string EnterpriseSearchAggregatorProvider::GetMatchDestinationUrl(
-    const base::Value::Dict& result,
+    const base::DictValue& result,
     SuggestionType suggestion_type) const {
   std::string destination_uri =
       ptr_to_string(result.FindString("destinationUri"));
   if (suggestion_type == SuggestionType::CONTENT ||
       suggestion_type == SuggestionType::PEOPLE) {
+    GURL gurl(destination_uri);
+    if (!gurl.is_valid() || !gurl.SchemeIsHTTPOrHTTPS()) {
+      return "";
+    }
     return destination_uri;
   }
 
@@ -1056,7 +1038,7 @@ std::string EnterpriseSearchAggregatorProvider::GetMatchDestinationUrl(
 }
 
 std::string EnterpriseSearchAggregatorProvider::GetMatchDescription(
-    const base::Value::Dict& result,
+    const base::DictValue& result,
     SuggestionType suggestion_type) const {
   if (suggestion_type == SuggestionType::PEOPLE) {
     return ptr_to_string(result.FindStringByDottedPath(
@@ -1069,7 +1051,7 @@ std::string EnterpriseSearchAggregatorProvider::GetMatchDescription(
 }
 
 std::string EnterpriseSearchAggregatorProvider::GetMatchContents(
-    const base::Value::Dict& result,
+    const base::DictValue& result,
     SuggestionType suggestion_type) const {
   if (suggestion_type == SuggestionType::QUERY) {
     return ptr_to_string(result.FindString("suggestion"));
@@ -1130,7 +1112,7 @@ std::u16string EnterpriseSearchAggregatorProvider::GetLocalizedContentMetadata(
 
 std::vector<std::string>
 EnterpriseSearchAggregatorProvider::GetStrongScoringFields(
-    const base::Value::Dict& result,
+    const base::DictValue& result,
     SuggestionType suggestion_type,
     const std::string& contents,
     const std::string& description,
@@ -1153,7 +1135,7 @@ EnterpriseSearchAggregatorProvider::GetStrongScoringFields(
 
 std::vector<std::string>
 EnterpriseSearchAggregatorProvider::GetWeakScoringFields(
-    const base::Value::Dict& result,
+    const base::DictValue& result,
     SuggestionType suggestion_type) const {
   // Should not return any fields already included in `GetMatchDescription()` &
   // `GetMatchContents()`.
@@ -1229,11 +1211,11 @@ AutocompleteMatch EnterpriseSearchAggregatorProvider::CreateMatch(
   match.fill_into_edit = fill_into_edit;
 
   match.keyword = template_url_->keyword();
-  match.transition = adjusted_input_.InKeywordMode()
+  match.transition = adjusted_input_.in_keyword_mode()
                          ? ui::PAGE_TRANSITION_KEYWORD
                          : ui::PAGE_TRANSITION_GENERATED;
 
-  if (adjusted_input_.InKeywordMode()) {
+  if (adjusted_input_.in_keyword_mode()) {
     match.from_keyword = true;
   }
 
@@ -1261,7 +1243,7 @@ void EnterpriseSearchAggregatorProvider::AggregateMatches() {
   // `kScopedMaxLowQualityMatches`.
   std::ranges::sort(matches_, std::ranges::greater{},
                     &AutocompleteMatch::relevance);
-  size_t matches_to_keep = adjusted_input_.InKeywordMode()
+  size_t matches_to_keep = adjusted_input_.in_keyword_mode()
                                ? kScopedMaxLowQualityMatches()
                                : kUnscopedMaxLowQualityMatches();
   if (matches_.size() > matches_to_keep) {

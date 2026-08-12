@@ -6,13 +6,15 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 
 #include "base/containers/span.h"
 #include "base/memory/raw_span.h"
 #include "base/strings/stringprintf.h"
-#include "base/types/zip.h"
+#include "base/test/scoped_feature_list.h"
 #include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
+#include "media/base/media_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -22,6 +24,8 @@ enum { kFrames = 16 };
 
 // Test all possible layout conversions can be constructed and mixed.
 TEST(ChannelMixerTest, ConstructAllPossibleLayouts) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kEnableHighChannelLayouts);
   for (ChannelLayout input_layout = CHANNEL_LAYOUT_MONO;
        input_layout <= CHANNEL_LAYOUT_MAX;
        input_layout = static_cast<ChannelLayout>(input_layout + 1)) {
@@ -43,9 +47,8 @@ TEST(ChannelMixerTest, ConstructAllPossibleLayouts) {
 
       SCOPED_TRACE(base::StringPrintf(
           "Input Layout: %d, Output Layout: %d", input_layout, output_layout));
-      ChannelMixer mixer(
-          input_layout, ChannelLayoutToChannelCount(input_layout),
-          output_layout, ChannelLayoutToChannelCount(output_layout));
+      ChannelMixer mixer(ChannelLayoutConfig::FromLayout(input_layout),
+                         ChannelLayoutConfig::FromLayout(output_layout));
       std::unique_ptr<AudioBus> input_bus =
           AudioBus::Create(ChannelLayoutToChannelCount(input_layout), kFrames);
       std::unique_ptr<AudioBus> output_bus =
@@ -129,7 +132,7 @@ TEST_P(ChannelMixerTest, Mixing) {
   float expected_value = 0;
   float scale = GetParam().scale;
   for (auto [channel, value] :
-       base::zip(input_bus->AllChannels(), channel_values)) {
+       std::views::zip(input_bus->AllChannels(), channel_values)) {
     std::ranges::fill(channel, value);
     expected_value += value * scale;
   }

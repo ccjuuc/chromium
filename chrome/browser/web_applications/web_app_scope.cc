@@ -43,9 +43,10 @@ int GetScopeExtensionsScore(
   }
 
   int score = 0;
-  std::string origin_string = origin.Serialize();
   for (const ScopeExtensionInfo& scope_extension : validated_scope_extensions) {
     CHECK(scope_extension.scope.is_valid());
+    // SENSITIVE is safe: GURL::spec() returns a canonicalized URL with a
+    // lowercase host.
     if (base::StartsWith(url.spec(), scope_extension.scope.spec(),
                          base::CompareCase::SENSITIVE)) {
       if (behavior == ScoreBehavior::kExitEarlyPositiveNumberFirstMatch) {
@@ -56,13 +57,18 @@ int GetScopeExtensionsScore(
     }
 
     // Origins with wildcard e.g. *.foo are saved as https://foo.
-    // Ensure while matching that the origin ends with '.foo' and not 'foo'.
+    // Ensure while matching that the origin ends with '.foo' and not 'foo',
+    // and that the ports match (scheme is already guaranteed to be https).
     if (scope_extension.has_origin_wildcard) {
-      if (base::EndsWith(origin_string, scope_extension.origin.host(),
+      const std::string& target_host = origin.host();
+      const std::string& extension_host = scope_extension.origin.host();
+      // SENSITIVE is safe: url::Origin canonicalizes the host to lowercase
+      // for https schemes (enforced by the scheme check above).
+      if (origin.port() == scope_extension.origin.port() &&
+          base::EndsWith(target_host, extension_host,
                          base::CompareCase::SENSITIVE) &&
-          origin_string.size() > scope_extension.origin.host().size() &&
-          origin_string[origin_string.size() -
-                        scope_extension.origin.host().size() - 1] == '.') {
+          target_host.size() > extension_host.size() &&
+          target_host[target_host.size() - extension_host.size() - 1] == '.') {
         if (behavior == ScoreBehavior::kExitEarlyPositiveNumberFirstMatch) {
           return 1;
         }
@@ -150,6 +156,14 @@ int WebAppScope::GetScopeScore(const GURL& url,
                                WebAppScopeScoreOptions options) const {
   if (!url.is_valid()) {
     return 0;
+  }
+  CHECK(!(options.only_consider_scope_extensions &&
+          options.exclude_scope_extensions))
+      << "Both exclude_scope_extensions && only_consider_scope_extensions set "
+         "to true. Both being set at the same time is contradictory";
+  if (options.only_consider_scope_extensions) {
+    return GetScopeExtensionsScore(app_id_, url, validated_scope_extensions_,
+                                   ScoreBehavior::kMaximumScore);
   }
   // Note: This code does not do same-origin checks to be compabible with urls
   // like about:blank or blobs, unlike in the IsInScope method above. We could

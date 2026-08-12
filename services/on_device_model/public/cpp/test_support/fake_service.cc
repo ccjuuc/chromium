@@ -10,12 +10,15 @@
 #include "base/check.h"
 #include "base/containers/span.h"
 #include "base/files/memory_mapped_file.h"
+#include "base/json/json_writer.h"
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
+#include "base/trace_event/trace_event.h"
 #include "services/on_device_model/ml/chrome_ml_audio_buffer.h"
 #include "services/on_device_model/ml/chrome_ml_types.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom-shared.h"
@@ -55,29 +58,57 @@ std::string Placeholder(ml::Token token) {
 
 std::string OnDeviceInputToString(const mojom::Input& input,
                                   const Capabilities& capabilities) {
-  std::ostringstream oss;
+  std::string result;
+  using Tag = mojom::InputPiece::Tag;
   for (const auto& piece : input.pieces) {
-    if (std::holds_alternative<ml::Token>(piece)) {
-      oss << Placeholder(std::get<ml::Token>(piece));
-    } else if (std::holds_alternative<std::string>(piece)) {
-      oss << std::get<std::string>(piece);
-    } else if (std::holds_alternative<SkBitmap>(piece)) {
-      if (capabilities.Has(CapabilityFlags::kImageInput)) {
-        oss << "<image>";
-      } else {
-        oss << "<unsupported>";
+    switch (piece->which()) {
+      case Tag::kToken:
+        result += Placeholder(piece->get_token());
+        break;
+      case Tag::kText:
+        result += piece->get_text();
+        break;
+      case Tag::kBitmap:
+        if (capabilities.Has(CapabilityFlags::kImageInput)) {
+          result += "<image>";
+        } else {
+          result += "<unsupported>";
+        }
+        break;
+      case Tag::kAudio:
+        if (capabilities.Has(CapabilityFlags::kAudioInput)) {
+          result += "<audio>";
+        } else {
+          result += "<unsupported>";
+        }
+        break;
+      case Tag::kToolResponse: {
+        const auto& response = piece->get_tool_response();
+        base::StrAppend(&result, {"<tool-response id=", response->call_id,
+                                  " name=", response->name});
+        if (response->result) {
+          std::string result_json;
+          base::JSONWriter::Write(*response->result, &result_json);
+          base::StrAppend(&result, {" result=", result_json});
+        }
+        if (response->error_message) {
+          base::StrAppend(&result,
+                          {" error=\"", *response->error_message, "\""});
+        }
+        result += ">";
+        break;
       }
-    } else if (std::holds_alternative<ml::AudioBuffer>(piece)) {
-      if (capabilities.Has(CapabilityFlags::kAudioInput)) {
-        oss << "<audio>";
-      } else {
-        oss << "<unsupported>";
+      case Tag::kToolDeclaration: {
+        const auto& decl = piece->get_tool_declaration();
+        base::StrAppend(&result, {"<tool name=", decl->name, ">"});
+        break;
       }
-    } else {
-      oss << "<unknown>";
+      case Tag::kUnknownType:
+        result += "<unknown>";
+        break;
     }
   }
-  return oss.str();
+  return result;
 }
 
 std::string CtxToString(const mojom::AppendOptions& input,
@@ -122,29 +153,34 @@ FakeOnDeviceSession::FakeOnDeviceSession(FakeOnDeviceServiceSettings* settings,
                                          mojom::SessionParamsPtr params)
     : settings_(settings), model_(model), params_(std::move(params)) {}
 
-FakeOnDeviceSession::~FakeOnDeviceSession() = default;
+FakeOnDeviceSession::~FakeOnDeviceSession() {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::~FakeOnDeviceSession",
+              perfetto::TerminatingFlow::FromPointer(this));
+}
 
 void FakeOnDeviceSession::Append(
     mojom::AppendOptionsPtr options,
     mojo::PendingRemote<mojom::ContextClient> client) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::Append",
+              perfetto::Flow::FromPointer(this));
   mojo::Remote<mojom::ContextClient> remote;
   if (client) {
     // Bind now to catch disconnects.
     remote.Bind(std::move(client));
   }
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&FakeOnDeviceSession::AppendImpl,
-                                weak_factory_.GetWeakPtr(), std::move(options),
-                                std::move(remote)));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&FakeOnDeviceSession::AppendImpl,
+                     weak_factory_.GetWeakPtr(), std::move(options),
+                     std::move(remote)),
+      settings_->append_delay);
 }
 
 void FakeOnDeviceSession::Generate(
     mojom::GenerateOptionsPtr options,
     mojo::PendingRemote<mojom::StreamingResponder> responder) {
-  if (settings_->execute_delay.is_zero()) {
-    GenerateImpl(std::move(options), std::move(responder));
-    return;
-  }
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::Generate",
+              perfetto::Flow::FromPointer(this));
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&FakeOnDeviceSession::GenerateImpl,
@@ -155,6 +191,8 @@ void FakeOnDeviceSession::Generate(
 
 void FakeOnDeviceSession::GetSizeInTokens(mojom::InputPtr input,
                                           GetSizeInTokensCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::GetSizeInTokens",
+              perfetto::Flow::FromPointer(this));
   if (settings_->size_in_tokens != 0) {
     std::move(callback).Run(settings_->size_in_tokens);
     return;
@@ -166,17 +204,23 @@ void FakeOnDeviceSession::GetSizeInTokens(mojom::InputPtr input,
 
 void FakeOnDeviceSession::Score(const std::string& text,
                                 ScoreCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::Score");
   std::move(callback).Run(0.5);
 }
 
 void FakeOnDeviceSession::GetProbabilitiesBlocking(
     const std::string& text,
     GetProbabilitiesBlockingCallback callback) {
+  TRACE_EVENT("optimization_guide",
+              "FakeOnDeviceSession::GetProbabilitiesBlocking",
+              perfetto::Flow::FromPointer(this));
   std::move(callback).Run({0.5});
 }
 
 void FakeOnDeviceSession::Clone(
     mojo::PendingReceiver<on_device_model::mojom::Session> session) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::Clone",
+              perfetto::Flow::FromPointer(this));
   // Post a task to sequence with calls to Append.
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
@@ -188,6 +232,8 @@ void FakeOnDeviceSession::AsrStream(
     on_device_model::mojom::AsrStreamOptionsPtr options,
     mojo::PendingReceiver<on_device_model::mojom::AsrStreamInput> stream,
     mojo::PendingRemote<on_device_model::mojom::AsrStreamResponder> responder) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::AsrStream",
+              perfetto::Flow::FromPointer(this));
   if (settings_->execute_delay.is_zero()) {
     AsrStreamImpl(std::move(options), std::move(stream), std::move(responder));
     return;
@@ -203,10 +249,23 @@ void FakeOnDeviceSession::SetPriority(mojom::Priority priority) {
   priority_ = priority;
 }
 
+void FakeOnDeviceSession::Hint(mojom::HintOptionsPtr options) {
+  hint_options_ = std::move(options);
+}
+
 void FakeOnDeviceSession::GenerateImpl(
     mojom::GenerateOptionsPtr options,
     mojo::PendingRemote<mojom::StreamingResponder> responder) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::GenerateImpl",
+              perfetto::Flow::FromPointer(this));
   mojo::Remote<mojom::StreamingResponder> remote(std::move(responder));
+
+  if (settings_->execute_error) {
+    remote.ResetWithReason(static_cast<uint32_t>(*settings_->execute_error),
+                           "Test error");
+    return;
+  }
+
   if (model_->backend_type() == ml::ModelBackendType::kCpuBackend) {
     auto chunk = mojom::ResponseChunk::New();
     chunk->text = "CPU backend";
@@ -245,10 +304,21 @@ void FakeOnDeviceSession::GenerateImpl(
         "Adapter cache weight: " + model_->data().adapter_cache_weight;
     remote->OnResponse(std::move(chunk));
   }
+  if (!model_->data().shader_cache_data.empty()) {
+    auto chunk = mojom::ResponseChunk::New();
+    chunk->text = "Shader cache data: " + model_->data().shader_cache_data;
+    remote->OnResponse(std::move(chunk));
+  }
 
   if (priority_ == on_device_model::mojom::Priority::kBackground) {
     auto chunk = mojom::ResponseChunk::New();
     chunk->text = "Priority: background";
+    remote->OnResponse(std::move(chunk));
+  }
+
+  if (hint_options_ && hint_options_->constrained_decoding_hint) {
+    auto chunk = mojom::ResponseChunk::New();
+    chunk->text = "Hint: constrained_decoding ";
     remote->OnResponse(std::move(chunk));
   }
 
@@ -269,6 +339,9 @@ void FakeOnDeviceSession::GenerateImpl(
   if (settings_->model_execute_result.empty()) {
     for (const auto& context : context_) {
       std::string text = CtxToString(*context, params_->capabilities);
+      if (text.empty()) {
+        continue;
+      }
       output_token_count += text.size();
       auto chunk = mojom::ResponseChunk::New();
       chunk->text = text;
@@ -289,6 +362,16 @@ void FakeOnDeviceSession::GenerateImpl(
       remote->OnResponse(std::move(chunk));
     }
   }
+
+  // Simulate tool calls if configured.
+  if (!settings_->simulated_tool_calls.empty()) {
+    std::vector<mojom::ToolCallPtr> tool_calls;
+    for (const auto& tc : settings_->simulated_tool_calls) {
+      tool_calls.push_back(tc->Clone());
+    }
+    remote->OnToolCalls(std::move(tool_calls));
+  }
+
   if (options->max_output_tokens &&
       output_token_count > options->max_output_tokens) {
     output_token_count = options->max_output_tokens;
@@ -301,6 +384,8 @@ void FakeOnDeviceSession::GenerateImpl(
 void FakeOnDeviceSession::AppendImpl(
     mojom::AppendOptionsPtr options,
     mojo::Remote<mojom::ContextClient> client) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::AppendImpl",
+              perfetto::Flow::FromPointer(this));
   // If the client was bound but is now disconnected, cancel the request.
   if (client && !client.is_connected()) {
     return;
@@ -318,6 +403,8 @@ void FakeOnDeviceSession::AppendImpl(
 
 void FakeOnDeviceSession::CloneImpl(
     mojo::PendingReceiver<on_device_model::mojom::Session> session) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceSession::CloneImpl",
+              perfetto::Flow::FromPointer(this));
   auto new_session =
       std::make_unique<FakeOnDeviceSession>(settings_, model_, params_.Clone());
   for (const auto& c : context_) {
@@ -352,6 +439,8 @@ FakeOnDeviceModel::~FakeOnDeviceModel() = default;
 void FakeOnDeviceModel::StartSession(
     mojo::PendingReceiver<mojom::Session> session,
     mojom::SessionParamsPtr params) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceModel::StartSession",
+              perfetto::Flow::FromPointer(this));
   if (!params) {
     params = mojom::SessionParams::New();
   }
@@ -380,6 +469,8 @@ void FakeOnDeviceModel::LoadAdaptation(
     mojom::LoadAdaptationParamsPtr params,
     mojo::PendingReceiver<mojom::OnDeviceModel> model,
     LoadAdaptationCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceModel::LoadAdaptation",
+              perfetto::Flow::FromPointer(this));
   Data data = data_;
   data.adaptation_model_weight = ReadFile(params->assets.weights);
   auto test_model = std::make_unique<FakeOnDeviceModel>(
@@ -388,29 +479,32 @@ void FakeOnDeviceModel::LoadAdaptation(
   std::move(callback).Run(mojom::LoadModelResult::kSuccess);
 }
 
-FakeTsModel::FakeTsModel(
+FakeTextSafetyModel::FakeTextSafetyModel(
     on_device_model::mojom::TextSafetyModelParamsPtr params) {
-  if (params->safety_assets) {
-    CHECK_EQ(ReadFile(params->safety_assets->get_ts_assets()->data),
-             FakeTsData());
-    CHECK_EQ(ReadFile(params->safety_assets->get_ts_assets()->sp_model),
-             FakeTsSpModel());
+  if (params->safety_model.IsValid()) {
+    CHECK_EQ(ReadFile(params->safety_model), FakeTsData());
     has_safety_model_ = true;
   }
-  if (params->language_assets) {
-    CHECK_EQ(ReadFile(params->language_assets->model), FakeLanguageModel());
+  if (params->language_model.IsValid()) {
+    CHECK_EQ(ReadFile(params->language_model), FakeLanguageModel());
     has_language_model_ = true;
   }
 }
-FakeTsModel::~FakeTsModel() = default;
+FakeTextSafetyModel::~FakeTextSafetyModel() {
+  TRACE_EVENT("optimization_guide", "FakeTextSafetyModel::~FakeTextSafetyModel",
+              perfetto::TerminatingFlow::FromPointer(this));
+}
 
-void FakeTsModel::StartSession(
+void FakeTextSafetyModel::StartSession(
     mojo::PendingReceiver<mojom::TextSafetySession> session) {
   sessions_.Add(this, std::move(session));
 }
 
-void FakeTsModel::ClassifyTextSafety(const std::string& text,
-                                     ClassifyTextSafetyCallback callback) {
+void FakeTextSafetyModel::ClassifyTextSafety(
+    const std::string& text,
+    ClassifyTextSafetyCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeTextSafetyModel::ClassifyTextSafety",
+              perfetto::Flow::FromPointer(this), "text", text);
   CHECK(has_safety_model_);
   auto safety_info = mojom::SafetyInfo::New();
   // Text is unsafe if it contains "unsafe".
@@ -426,26 +520,29 @@ void FakeTsModel::ClassifyTextSafety(const std::string& text,
   std::move(callback).Run(std::move(safety_info));
 }
 
-void FakeTsModel::DetectLanguage(const std::string& text,
-                                 DetectLanguageCallback callback) {
+void FakeTextSafetyModel::DetectLanguage(const std::string& text,
+                                         DetectLanguageCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeTextSafetyModel::DetectLanguage",
+              perfetto::Flow::FromPointer(this), "text", text);
   CHECK(has_language_model_);
   std::move(callback).Run(DummyDetectLanguage(text));
 }
 
-void FakeTsModel::Clone(
+void FakeTextSafetyModel::Clone(
     mojo::PendingReceiver<mojom::TextSafetySession> session) {
+  TRACE_EVENT("optimization_guide", "FakeTextSafetyModel::Clone",
+              perfetto::Flow::FromPointer(this));
   StartSession(std::move(session));
 }
 
-FakeTsHolder::FakeTsHolder() = default;
-FakeTsHolder::~FakeTsHolder() = default;
+FakeSafetyModelHolder::FakeSafetyModelHolder() = default;
+FakeSafetyModelHolder::~FakeSafetyModelHolder() = default;
 
-void FakeTsHolder::Reset(
-    on_device_model::mojom::TextSafetyModelParamsPtr params,
-    mojo::PendingReceiver<on_device_model::mojom::TextSafetyModel>
-        model_receiver) {
+void FakeSafetyModelHolder::Reset(
+    mojom::TextSafetyModelParamsPtr params,
+    mojo::PendingReceiver<mojom::TextSafetyModel> model_receiver) {
   model_.Clear();
-  model_.Add(std::make_unique<FakeTsModel>(std::move(params)),
+  model_.Add(std::make_unique<FakeTextSafetyModel>(std::move(params)),
              std::move(model_receiver));
 }
 
@@ -453,12 +550,18 @@ FakeOnDeviceModelService::FakeOnDeviceModelService(
     FakeOnDeviceServiceSettings* settings)
     : settings_(settings) {}
 
-FakeOnDeviceModelService::~FakeOnDeviceModelService() = default;
+FakeOnDeviceModelService::~FakeOnDeviceModelService() {
+  TRACE_EVENT("optimization_guide",
+              "FakeOnDeviceModelService::~FakeOnDeviceModelService",
+              perfetto::TerminatingFlow::FromPointer(this));
+}
 
 void FakeOnDeviceModelService::LoadModel(
     mojom::LoadModelParamsPtr params,
     mojo::PendingReceiver<mojom::OnDeviceModel> model,
     LoadModelCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceModelService::LoadModel",
+              perfetto::Flow::FromPointer(this));
   FakeOnDeviceModel::Data data;
   data.base_weight = ReadFile(params->assets.weights.file());
   if (params->assets.cache.IsValid()) {
@@ -469,6 +572,9 @@ void FakeOnDeviceModelService::LoadModel(
   }
   if (params->assets.adapter_cache.IsValid()) {
     data.adapter_cache_weight = ReadFile(params->assets.adapter_cache);
+  }
+  if (params->assets.program_cache.IsValid()) {
+    data.shader_cache_data = ReadFile(params->assets.program_cache);
   }
   data.adaptation_ranks = params->adaptation_ranks;
   auto test_model = std::make_unique<FakeOnDeviceModel>(
@@ -489,6 +595,8 @@ void FakeOnDeviceModelService::LoadModel(
 void FakeOnDeviceModelService::GetCapabilities(
     ModelFile model_file,
     GetCapabilitiesCallback callback) {
+  TRACE_EVENT("optimization_guide", "FakeOnDeviceModelService::GetCapabilities",
+              perfetto::Flow::FromPointer(this));
   std::string contents = ReadFile(model_file.file());
   Capabilities capabilities;
   if (contents.find("image") != std::string::npos) {
@@ -503,13 +611,22 @@ void FakeOnDeviceModelService::GetCapabilities(
 void FakeOnDeviceModelService::LoadTextSafetyModel(
     mojom::TextSafetyModelParamsPtr params,
     mojo::PendingReceiver<mojom::TextSafetyModel> model) {
-  ts_holder_.Reset(std::move(params), std::move(model));
+#if !BUILDFLAG(IS_FUCHSIA)
+  TRACE_EVENT("optimization_guide",
+              "FakeOnDeviceModelService::LoadTextSafetyModel",
+              perfetto::Flow::FromPointer(this));
+  safety_model_holder_.Reset(std::move(params), std::move(model));
+#endif
 }
 
 void FakeOnDeviceModelService::GetDeviceAndPerformanceInfo(
     GetDeviceAndPerformanceInfoCallback callback) {
+  TRACE_EVENT("optimization_guide",
+              "FakeOnDeviceModelService::GetDeviceAndPerformanceInfo",
+              perfetto::Flow::FromPointer(this));
   auto performance_info = mojom::DevicePerformanceInfo::New();
   performance_info->performance_class = settings_->performance_class;
+  performance_info->vram_mb = settings_->vram_mb;
   auto device_info = mojom::DeviceInfo::New();
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,

@@ -216,8 +216,9 @@ void BrowserTaskExecutor::ResetForTesting() {
 
 // static
 void BrowserTaskExecutor::Shutdown() {
-  if (!g_browser_task_executor)
+  if (!g_browser_task_executor) {
     return;
+  }
 
   DCHECK(Get()->browser_ui_thread_scheduler_);
   // We don't delete |g_browser_task_executor| because other threads may
@@ -259,7 +260,6 @@ void BrowserTaskExecutor::RunAllPendingTasksOnThreadForTesting(
 void BrowserTaskExecutor::OnStartupComplete() {
   Get()->browser_ui_thread_handle_->OnStartupComplete();
   Get()->browser_io_thread_handle_->OnStartupComplete();
-  Get()->browser_ui_thread_scheduler_->OnStartupComplete();
 }
 
 // static
@@ -284,26 +284,23 @@ std::unique_ptr<BrowserProcessIOThread> BrowserTaskExecutor::CreateIOThread() {
 
   TRACE_EVENT0("startup", "BrowserTaskExecutor::CreateIOThread");
 
-  auto io_thread = std::make_unique<BrowserProcessIOThread>();
+  bool allow_blocking_for_testing =
+      Get()->browser_io_thread_delegate_->allow_blocking_for_testing();
+  auto io_thread = std::make_unique<BrowserProcessIOThread>(
+      std::move(Get()->browser_io_thread_delegate_));
 
-  if (Get()->browser_io_thread_delegate_->allow_blocking_for_testing()) {
+  if (allow_blocking_for_testing) {
     io_thread->AllowBlockingForTesting();
   }
 
   base::Thread::Options options;
   options.message_pump_type = base::MessagePumpType::IO;
-  if (base::FeatureList::IsEnabled(
-          features::kBoostThreadsPriorityDuringInputScenario)) {
-    options.task_observer =
-        Get()->browser_io_thread_delegate_->GetTaskObserver();
-  }
-  options.delegate = std::move(Get()->browser_io_thread_delegate_);
   // Up the priority of the |io_thread_| as some of its IPCs relate to
   // display tasks, or use |kInteractive| for experiments.
   options.thread_type =
       base::FeatureList::IsEnabled(features::kIOThreadInteractiveThreadType)
-          ? base::ThreadType::kInteractive
-          : base::ThreadType::kDisplayCritical;
+          ? base::ThreadType::kAudioProcessing
+          : base::ThreadType::kPresentation;
   if (!io_thread->StartWithOptions(std::move(options)))
     LOG(FATAL) << "Failed to start BrowserThread:IO";
   return io_thread;

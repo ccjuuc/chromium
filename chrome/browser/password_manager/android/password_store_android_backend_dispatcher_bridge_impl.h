@@ -9,6 +9,7 @@
 #include "base/thread_annotations.h"
 #include "base/threading/thread_checker.h"
 #include "chrome/browser/password_manager/android/password_store_android_backend_dispatcher_bridge.h"
+#include "components/sync/protocol/deletion_origin.pb.h"
 
 namespace password_manager {
 
@@ -50,14 +51,18 @@ class PasswordStoreAndroidBackendDispatcherBridgeImpl
                                          const std::string& signon_realm,
                                          std::string account) override;
   void AddLogin(JobId job_id,
-                const password_manager::PasswordForm& form,
+                const StoredCredential& credential,
                 std::string account) override;
   void UpdateLogin(JobId job_id,
-                   const password_manager::PasswordForm& form,
+                   const StoredCredential& credential,
                    std::string account) override;
   void RemoveLogin(JobId job_id,
-                   const password_manager::PasswordForm& form,
+                   const StoredCredential& credential,
                    std::string account) override;
+  void RemoveLogin(JobId job_id,
+                   const StoredCredential& credential,
+                   std::string account,
+                   sync_pb::DeletionOrigin deletion_origin) override;
 
   // This member stores the unique ID last used for an API request.
   JobId last_job_id_{0};

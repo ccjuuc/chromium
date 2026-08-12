@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <optional>
+#include <string_view>
 
 #include "base/containers/flat_set.h"
 #include "base/containers/queue.h"
@@ -16,7 +17,7 @@
 #include "base/types/expected.h"
 #include "chrome/browser/ai/ai_context_bound_object.h"
 #include "chrome/browser/ai/ai_context_bound_object_set.h"
-#include "chrome/browser/ai/ai_utils.h"
+#include "components/on_device_ai/ai_utils.h"
 #include "components/optimization_guide/core/model_execution/model_broker_client.h"
 #include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
@@ -38,7 +39,8 @@
 // for model execution.
 class AILanguageModel : public AIContextBoundObject,
                         public blink::mojom::AILanguageModel,
-                        public optimization_guide::TextSafetyClient {
+                        public optimization_guide::TextSafetyClient,
+                        public on_device_model::mojom::ContextClient {
  public:
   using PromptApiMetadata = optimization_guide::proto::PromptApiMetadata;
 
@@ -62,8 +64,7 @@ class AILanguageModel : public AIContextBoundObject,
       uint32_t tokens = 0;
     };
 
-    // `max_tokens` is the number of tokens remaining after the initial prompts.
-    explicit Context(uint32_t max_tokens);
+    explicit Context(uint32_t total_model_tokens);
     Context(const Context&);
     ~Context();
 
@@ -93,24 +94,39 @@ class AILanguageModel : public AIContextBoundObject,
     // overflow handling.
     on_device_model::mojom::InputPtr GetNonInitialPrompts();
 
-    // The number of tokens remaining after the initial prompts.
-    uint32_t max_tokens() const { return max_tokens_; }
-    uint32_t current_tokens() const { return current_tokens_; }
-    uint32_t available_tokens() const { return max_tokens_ - current_tokens_; }
-    uint32_t initial_tokens() const { return initial_tokens_; }
-    void set_initial_tokens(uint32_t initial_tokens) {
-      initial_tokens_ = initial_tokens;
+    // Returns the number of tokens that can be evicted from the context. This
+    // is calculated as the total number of tokens the model can hold minus the
+    // number of tokens used by the initial prompts.
+    uint32_t GetEvictableTokensCapacity() const {
+      return total_model_tokens_ > non_evictable_tokens_
+                 ? total_model_tokens_ - non_evictable_tokens_
+                 : 0;
+    }
+    // Returns the number of tokens that can be added to the evictable context.
+    uint32_t GetAvailableTokens() const {
+      const uint32_t used = current_tokens();
+      return total_model_tokens_ > used ? total_model_tokens_ - used : 0;
+    }
+
+    // Returns the total number of tokens currently in the context.
+    uint32_t current_tokens() const {
+      return non_evictable_tokens_ + evictable_tokens_;
+    }
+    // Returns the number of tokens currently in the evictable context.
+    uint32_t evictable_tokens() const { return evictable_tokens_; }
+    // Returns the number of tokens used by the initial prompts.
+    uint32_t non_evictable_tokens() const { return non_evictable_tokens_; }
+    void set_non_evictable_tokens(uint32_t non_evictable_tokens) {
+      non_evictable_tokens_ = non_evictable_tokens;
     }
 
    private:
-    // TODO(crbug.com/463746724): Explore if this field can be removed.
-    // Max tokens for evictable context (max number of tokens supported by the
-    // model - initial_tokens_).
-    uint32_t max_tokens_;
-    // Size of the evictable context, excluding initial_tokens_.
-    uint32_t current_tokens_ = 0;
-    // Tokens used by the non-evictable initial prompts.
-    uint32_t initial_tokens_ = 0;
+    // The total number of tokens that the model can hold.
+    uint32_t total_model_tokens_;
+    // Number of tokens currently in the evictable context.
+    uint32_t evictable_tokens_ = 0;
+    // Number of tokens used by the non-evictable initial prompts.
+    uint32_t non_evictable_tokens_ = 0;
     std::deque<ContextItem> context_items_;
   };
 
@@ -124,17 +140,22 @@ class AILanguageModel : public AIContextBoundObject,
 
   ~AILanguageModel() override;
 
-  // Returns the the metadata parsed to the `PromptApiMetadata` from `any`.
+  // Returns the metadata parsed to the `PromptApiMetadata` from `any`.
   static PromptApiMetadata ParseMetadata(
       const optimization_guide::proto::Any& any);
 
-  // Returns a set of BCP 47 base language codes that are supported and enabled.
-  static base::flat_set<std::string_view> GetSupportedLanguageBaseCodes();
+  // Returns a set of BCP 47 base language codes that are supported and enabled,
+  // or nullopt if all languages are enabled (e.g. via local flags).
+  static std::optional<base::flat_set<std::string>>
+  GetEnabledLanguageBaseCodes();
+  // Returns a set of BCP 47 base language codes that are supported by default.
+  static base::flat_set<std::string> GetDefaultSupportedLanguageBaseCodes();
 
   // Format the initial prompts, gets the token count, updates the session,
   // and reports to `create_client`.
   void Initialize(
       std::vector<blink::mojom::AILanguageModelPromptPtr> initial_prompts,
+      std::vector<blink::mojom::AILanguageModelToolDeclarationPtr> tools,
       mojo::PendingRemote<blink::mojom::AIManagerCreateLanguageModelClient>
           create_client);
 
@@ -162,7 +183,13 @@ class AILanguageModel : public AIContextBoundObject,
       mojo::PendingReceiver<on_device_model::mojom::TextSafetySession> session)
       override;
 
+  // on_device_model::mojom::ContextClient:
+  void OnComplete(uint32_t tokens_processed) override;
+
   blink::mojom::AILanguageModelInstanceInfoPtr GetLanguageModelInstanceInfo();
+
+  // Returns the total number of tokens that the model can hold.
+  uint32_t GetTotalModelTokens() const;
 
  private:
   mojo::PendingRemote<blink::mojom::AILanguageModel> BindRemote();
@@ -194,6 +221,11 @@ class AILanguageModel : public AIContextBoundObject,
                                   std::optional<uint32_t> result);
   void OnPromptOutputComplete();
 
+  // Called if the create client disconnects while appending initial prompts.
+  void OnCreateClientDisconnected();
+  // Called if the receiver for initial prompt appending is disconnected.
+  void OnInitialAppendDisconnected();
+
   void AppendInternal(
       std::vector<blink::mojom::AILanguageModelPromptPtr> prompts,
       mojo::PendingRemote<blink::mojom::ModelStreamingResponder>
@@ -218,6 +250,8 @@ class AILanguageModel : public AIContextBoundObject,
   // remotes (e.g. a service crash).
   mojo::Remote<on_device_model::mojom::Session> initial_session_;
   on_device_model::mojom::InputPtr initial_input_;
+  // The tools declared for this session.
+  std::vector<blink::mojom::AILanguageModelToolDeclarationPtr> tools_;
 
   // Contains the current committed session state. This will be replaced after a
   // successful prompt with the latest session state.
@@ -247,6 +281,12 @@ class AILanguageModel : public AIContextBoundObject,
   base::WeakPtr<OptimizationGuideLogger> logger_;
 
   mojo::Receiver<blink::mojom::AILanguageModel> receiver_{this};
+
+  // Held while processing initial prompts, before resolving session creation.
+  mojo::Remote<blink::mojom::AIManagerCreateLanguageModelClient> create_client_;
+  // Handles results from appending initial prompts to the session.
+  mojo::Receiver<on_device_model::mojom::ContextClient>
+      initial_append_receiver_{this};
 
   base::WeakPtrFactory<AILanguageModel> weak_ptr_factory_{this};
 };

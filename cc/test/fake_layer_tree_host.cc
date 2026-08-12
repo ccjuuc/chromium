@@ -17,7 +17,7 @@
 
 namespace cc {
 
-FakeLayerTreeHost::FakeLayerTreeHost(FakeLayerTreeHostClient* client,
+FakeLayerTreeHost::FakeLayerTreeHost(FakeLayerTreeHostDelegate* client,
                                      LayerTreeHost::InitParams params,
                                      CompositorMode mode)
     : LayerTreeHost(std::move(params), mode),
@@ -33,15 +33,15 @@ FakeLayerTreeHost::FakeLayerTreeHost(FakeLayerTreeHostClient* client,
 }
 
 void FakeLayerTreeHost::ClearPendingLayerCommitStates() {
-  for (auto layer :
-       pending_commit_state()->layers_that_should_push_properties) {
-    layer->ClearChangedPushPropertiesForTesting();
+  for (auto layer_id :
+       pending_commit_state()->layer_ids_that_should_push_properties) {
+    LayerById(layer_id)->ClearChangedPushPropertiesForTesting();
   }
-  pending_commit_state()->layers_that_should_push_properties.clear();
+  pending_commit_state()->layer_ids_that_should_push_properties.clear();
 }
 
 std::unique_ptr<FakeLayerTreeHost> FakeLayerTreeHost::Create(
-    FakeLayerTreeHostClient* client,
+    FakeLayerTreeHostDelegate* client,
     TestTaskGraphRunner* task_graph_runner,
     MutatorHost* mutator_host) {
   LayerTreeSettings settings;
@@ -49,7 +49,7 @@ std::unique_ptr<FakeLayerTreeHost> FakeLayerTreeHost::Create(
 }
 
 std::unique_ptr<FakeLayerTreeHost> FakeLayerTreeHost::Create(
-    FakeLayerTreeHostClient* client,
+    FakeLayerTreeHostDelegate* client,
     TestTaskGraphRunner* task_graph_runner,
     MutatorHost* mutator_host,
     const LayerTreeSettings& settings) {
@@ -58,7 +58,7 @@ std::unique_ptr<FakeLayerTreeHost> FakeLayerTreeHost::Create(
 }
 
 std::unique_ptr<FakeLayerTreeHost> FakeLayerTreeHost::Create(
-    FakeLayerTreeHostClient* client,
+    FakeLayerTreeHostDelegate* client,
     TestTaskGraphRunner* task_graph_runner,
     MutatorHost* mutator_host,
     const LayerTreeSettings& settings,
@@ -76,11 +76,13 @@ FakeLayerTreeHost::~FakeLayerTreeHost() {
   client_->SetLayerTreeHost(nullptr);
 }
 
-void FakeLayerTreeHost::SetNeedsCommit() { needs_commit_ = true; }
+void FakeLayerTreeHost::SetNeedsCommit(bool urgent) {
+  needs_commit_ = true;
+}
 
-std::unique_ptr<LayerTreeHostImpl>
+std::unique_ptr<ClientLayerTreeHostImpl>
 FakeLayerTreeHost::CreateLayerTreeHostImplInternal(
-    LayerTreeHostImplClient*,
+    LayerTreeHostImplDelegate*,
     MutatorHost*,
     const LayerTreeSettings& settings,
     TaskRunnerProvider* task_runner_provider,
@@ -88,9 +90,8 @@ FakeLayerTreeHost::CreateLayerTreeHostImplInternal(
     int,
     raw_ptr<TaskGraphRunner>& task_graph_runner,
     scoped_refptr<base::SequencedTaskRunner>,
-    LayerTreeHostSchedulingClient*,
+    LayerTreeHostSchedulingDelegate*,
     RenderingStatsInstrumentation*,
-    std::unique_ptr<UkmRecorderFactory>&,
     base::WeakPtr<CompositorDelegateForInput>&) {
   DCHECK(!host_impl_);
   auto host_impl = std::make_unique<FakeLayerTreeHostImpl>(
@@ -124,12 +125,10 @@ LayerImpl* FakeLayerTreeHost::CommitToTree(LayerTreeImpl* tree) {
   // pending_commit_state() is used in this function because this is a phony
   // commit that doesn't actually call WillCommit() or ActivateCommitState().
   tree->set_source_frame_number(SourceFrameNumber());
-  PropertyTreesChangeState change_state;
-  property_trees()->GetChangeState(change_state);
-  std::swap(change_state, pending_commit_state()->property_trees_change_state);
+  pending_commit_state()->property_trees = *property_trees();
   host_impl_->FinishCommit(*pending_commit_state(),
                            thread_unsafe_commit_state());
-  std::swap(change_state, pending_commit_state()->property_trees_change_state);
+  pending_commit_state()->picture_layer_ids_with_new_raster_source.clear();
   return tree->root_layer();
 }
 

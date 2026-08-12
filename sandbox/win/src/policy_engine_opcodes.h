@@ -60,19 +60,18 @@ enum EvalResult {
   EVAL_FALSE,  // Opcode condition evaluated false.
   EVAL_ERROR,  // Opcode condition generated an error while evaluating.
   // Action opcode values:
-  ASK_BROKER,   // The target must generate an IPC to the broker. On the broker
-                // side, this means grant access to the resource.
-  DENY_ACCESS,  // No access granted to the resource.
-  SIGNAL_ALARM,    // Unusual activity. Generate an alarm.
-  FAKE_SUCCESS,    // Do not call original function. Just return 'success'.
+  ASK_BROKER,    // The target must generate an IPC to the broker. On the broker
+                 // side, this means grant access to the resource.
+  DENY_ACCESS,   // No access granted to the resource.
+  SIGNAL_ALARM,  // Unusual activity. Generate an alarm.
+  FAKE_SUCCESS,  // Do not call original function. Just return 'success'.
   FAKE_ACCESS_DENIED,  // Do not call original function. Just return 'denied'
                        // and do not do IPC.
+  RETURN_CONST,        // Return a constant value.
 };
 
 // The following are the implemented opcodes. uint16_t purely to pack nicely.
 enum OpcodeID : uint16_t {
-  OP_ALWAYS_FALSE,        // Evaluates to false (EVAL_FALSE).
-  OP_ALWAYS_TRUE,         // Evaluates to true (EVAL_TRUE).
   OP_NUMBER_MATCH,        // Match a 32-bit integer as n == a.
   OP_NUMBER_AND_MATCH,    // Match using bitwise AND; as in: n & a != 0.
   OP_WSTRING_MATCH,       // Match a string for equality.
@@ -146,7 +145,7 @@ class PolicyOpcode {
   // sequence.
   EvalResult Evaluate(const ParameterSet* parameters,
                       size_t count,
-                      MatchContext* match);
+                      MatchContext* match) const;
 
   // Retrieves a stored argument by index. Valid index values are
   // from 0 to < kArgumentCount.
@@ -208,7 +207,7 @@ class PolicyOpcode {
   // Helper function to evaluate the opcode. The parameters have the same
   // meaning that in Evaluate().
   EvalResult EvaluateHelper(const ParameterSet* parameters,
-                            MatchContext* match);
+                            MatchContext* match) const;
   OpcodeID opcode_id_;
   // Used a boolean field but provided as a uint8_t to maintain packing.
   uint8_t has_param_;
@@ -281,15 +280,10 @@ class OpcodeFactory {
   // Returns the available memory to make opcodes.
   size_t memory_size() const;
 
-  // Creates an OpAlwaysFalse opcode.
-  PolicyOpcode* MakeOpAlwaysFalse(uint32_t options);
-
-  // Creates an OpAlwaysFalse opcode.
-  PolicyOpcode* MakeOpAlwaysTrue(uint32_t options);
-
   // Creates an OpAction opcode.
   // action: The action to return when Evaluate() is called.
-  PolicyOpcode* MakeOpAction(EvalResult action, uint32_t options);
+  // constant: The constant to return if action is RETURN_CONST.
+  PolicyOpcode* MakeOpAction(EvalResult action, uintptr_t constant);
 
   // Creates an OpNumberMatch opcode.
   // selected_param: index of the input argument. It must be a uint32_t or the
@@ -298,14 +292,6 @@ class OpcodeFactory {
   PolicyOpcode* MakeOpNumberMatch(uint8_t selected_param,
                                   uint32_t match,
                                   uint32_t options);
-
-  // Creates an OpNumberMatch opcode (void pointers are cast to numbers).
-  // selected_param: index of the input argument. It must be an void* or the
-  // evaluation result will generate a EVAL_ERROR.
-  // match: the pointer numeric value to compare against selected_param.
-  PolicyOpcode* MakeOpVoidPtrMatch(uint8_t selected_param,
-                                   const void* match,
-                                   uint32_t options);
 
   // Creates an OpWStringMatch opcode using the raw memory passed in the ctor.
   // selected_param: index of the input argument. It must be a wide string

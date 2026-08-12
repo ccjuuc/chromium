@@ -86,6 +86,7 @@ class ANIMATION_EXPORT Tween {
     ACCEL_20_DECEL_60,  // Moving a small, low emphasis or responsive elements.
     ACCEL_20_DECEL_100,
     ACCEL_30_DECEL_20_85,
+    ACCEL_30_DECEL_LIN,  // Used for browser controls snap animation.
     ACCEL_40_DECEL_20,
     // Moderate acceleration and soft deceleration. Used for elements that are
     // visible at the beginning and end of a transition.
@@ -121,11 +122,13 @@ class ANIMATION_EXPORT Tween {
   static SkColor ColorValueBetween(double value, SkColor start, SkColor target);
   static double DoubleValueBetween(double value, double start, double target);
   static float FloatValueBetween(double value, float start, float target);
-  static float ClampedFloatValueBetween(const base::TimeTicks& time,
-                                        const base::TimeTicks& start_time,
-                                        float start,
-                                        const base::TimeTicks& target_time,
-                                        float target);
+  static float ClampedFloatValueBetween(
+      const base::TimeTicks& time,
+      const base::TimeTicks& start_time,
+      float start,
+      const base::TimeTicks& target_time,
+      float target,
+      gfx::Tween::Type type = gfx::Tween::LINEAR);
 
   // Interpolated between start and target, with every integer in this range
   // given equal weight.

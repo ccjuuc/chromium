@@ -84,7 +84,8 @@ AppDragIconProxy::AppDragIconProxy(
   const gfx::Point shadow_offset(
       (size.width() - scaled_shadow_size.width()) / 2,
       (size.height() - scaled_shadow_size.height()) / 2);
-  shadow_ = SystemShadow::CreateShadowOnTextureLayer(kShadowType);
+  shadow_ = SystemShadow::CreateShadowOnNinePatchLayer(
+      kShadowType, SystemShadow::LayerRecreatedCallback());
   shadow_->SetRoundedCornerRadius(scaled_shadow_size.width() / 2);
   drag_image->AddLayerToRegion(shadow_->GetLayer(), views::LayerRegion::kBelow);
 
@@ -97,7 +98,7 @@ AppDragIconProxy::AppDragIconProxy(
     // Therefore, the `blurred_background_layer_` is needed here to explicitly
     // blur the background of the icon.
     blurred_background_layer_ =
-        std::make_unique<ui::LayerOwner>(std::make_unique<ui::Layer>());
+        std::make_unique<ui::LayerOwner>(std::make_unique<ui::LayerTextured>());
     ui::Layer* const blurred_layer = blurred_background_layer_->layer();
     drag_image->AddLayerToRegion(blurred_layer, views::LayerRegion::kBelow);
     blurred_layer->SetBounds(shadow_->GetContentBounds());

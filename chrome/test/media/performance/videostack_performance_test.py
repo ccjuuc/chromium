@@ -74,10 +74,16 @@ def setup_test_environment(args, chrome_version):
     connects a WebDriver instance to the tunnel and enables Cast discovery.
 
     Returns:
-        tuple: A tuple containing the WebDriver and the tunnel process.
+        tuple: A tuple containing the WebDriver, the tunnel process, and the
+               actual chrome version used.
     """
+    if args.sender_os == 'cros':
+        return common.setup_cros_environment(
+            args, chrome_version, CHROME_OPTIONS)
+
     common.terminate_old_chromedriver(args)
-    remote_app_path = common.install_and_setup_chrome(args, chrome_version)
+    remote_app_path, actual_version = common.install_and_setup_chrome(
+        args, chrome_version)
     common.wait_for_chromedriver(args)
     tunnel_proc = common.start_ssh_tunnel(args)
 
@@ -101,10 +107,10 @@ def setup_test_environment(args, chrome_version):
     chrome_options.binary_location = binary_path
     driver = connect_to_remote_driver(chrome_options, binary_path)
 
-    return driver, tunnel_proc
+    return driver, tunnel_proc, actual_version
 
 # pylint: disable=too-many-locals
-def run_performance_test(video_file: str, driver: webdriver):
+def run_performance_test(video_file: str, driver: webdriver, args):
     """
     Runs a single video performance test by playing and recording the video.
 
@@ -115,6 +121,7 @@ def run_performance_test(video_file: str, driver: webdriver):
     Args:
         video_file (str): The name of the video file to be tested.
         driver (webdriver.Remote): The Selenium WebDriver instance.
+        args: The parsed command-line arguments.
 
     Returns:
         subprocess.Popen: The Popen object for the ffmpeg recording process.
@@ -129,6 +136,8 @@ def run_performance_test(video_file: str, driver: webdriver):
         '-y',
         # Set the input format to Video4Linux2.
         '-f', 'video4linux2',
+        # Force V4L2 capture framerate to 60fps.
+        '-framerate', '60',
         # Set the input pixel format.
         '-input_format', 'yuyv422',
         # Specify the input file (video device).
@@ -155,75 +164,100 @@ def run_performance_test(video_file: str, driver: webdriver):
                f'{common.SERVER_PORT}/video.html?file={video_file}')
     wait.until(ec.presence_of_element_located((By.ID, "video")))
 
-    # pylint: disable=consider-using-with
-    rec_proc_local = subprocess.Popen(
-        host_recording_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True)
+    glances_proc = None
+    if args.sender_os == 'win':
+        csv_remote_path = f"C:/Users/Public/glances_{video_file}.csv"
+    else:
+        csv_remote_path = f"/tmp/glances_{video_file}.csv"
+    csv_local_path = os.path.join(
+        common.TRACES_DIR, f"glances_{video_file}.csv")
 
-    logging.info("ffmpeg recording process started. Waiting for 'Stream "
-                 "mapping:' confirmation...")
+    try:
+        glances_proc = common.start_glances_monitoring(
+            args, csv_remote_path)
 
-    while True:
-        line = rec_proc_local.stderr.readline() # Use local variable
-        if line:
-            line = line.strip()
-            logging.info("FFMPEG STARTUP: %s", line)
-            if "Stream mapping:" in line:
-                logging.info("Started recording.")
-                break
+        # pylint: disable=consider-using-with
+        rec_proc_local = subprocess.Popen(
+            host_recording_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True)
 
-    def _wait_js_condition(driver, element, condition: str) -> bool:
-        """Waits a condition on the element once a second for at most 30
-        seconds, returns True if the condition met."""
-        start = time.time()
-        while not driver.execute_script(f'return arguments[0].{condition};',
-                                        element):
-            if time.time() - start >= 30:
-                return False
-            time.sleep(1)
-        return True
+        logging.info("ffmpeg recording process started. Waiting for 'Stream "
+                     "mapping:' confirmation...")
 
-    video = driver.find_element(By.ID, 'video')
+        while True:
+            line = rec_proc_local.stderr.readline() # Use local variable
+            if line:
+                line = line.strip()
+                logging.info("FFMPEG STARTUP: %s", line)
+                if "Stream mapping:" in line:
+                    logging.info("Started recording.")
+                    break
 
-    with common.measures.time_consumption(video_file, 'video_perf', 'playback',
-                                   'loading'), \
-         RepeatingLog(f'Waiting for video {video_file} to be loaded.'):
-        if not _wait_js_condition(driver, video, 'readyState >= 2'):
-            logging.warning(
-                '%s may never be loaded, still go ahead to play it.',
-                video_file)
-            common.measures.average(video_file, 'video_perf', 'playback',
-                             'failed_to_load').record(1)
+        def _wait_js_condition(driver, element, condition: str) -> bool:
+            """Waits a condition on the element once a second for at most 30
+            seconds, returns True if the condition met."""
+            start = time.time()
+            while not driver.execute_script(f'return arguments[0].{condition};',
+                                            element):
+                if time.time() - start >= 30:
+                    return False
+                time.sleep(1)
+            return True
 
-    video.click()
-    logging.info("Started playing video.")
+        video = driver.find_element(By.ID, 'video')
 
-    logging.info("Playing media for 30 seconds (script will then quit)...")
-    time.sleep(30)
+        with common.measures.time_consumption(
+            video_file, 'video_perf', 'playback', 'loading'), \
+             RepeatingLog(f'Waiting for video {video_file} to be loaded.'):
+            if not _wait_js_condition(driver, video, 'readyState >= 2'):
+                logging.warning(
+                    '%s may never be loaded, still go ahead to play it.',
+                    video_file)
+                common.measures.average(video_file, 'video_perf', 'playback',
+                                 'failed_to_load').record(1)
 
-    rec_proc_local.communicate()
-    logging.info("recording finished.")
+        video.click()
+        logging.info("Started playing video.")
 
-    results = common.video_analyzer.from_original_video(
-        output_file, f"/usr/local/cipd/videostack_videos_30s/{video_file}")
+        logging.info("Playing media for 30 seconds (script will then quit)...")
+        time.sleep(30)
 
-    if not results:
-        raise RuntimeError("Missing video analyzer results. See log for "
-                           "further details.")
+        rec_proc_local.communicate()
+        logging.info("recording finished.")
 
-    def record(key: str) -> None:
-        # If the video_analyzer does not generate any result, treat it as an
-        # error and use the default value to filter them out instead of
-        # failing the tests.
-        common.measures.average(video_file, 'video_perf', key).record(
-            results.get(key, common.FAIL_CODE))
+        results = common.video_analyzer.from_original_video(
+            output_file, f"/usr/local/cipd/videostack_videos_30s/{video_file}")
 
-    for metric in common.METRICS:
-        record(metric)
+        if not results:
+            raise RuntimeError("Missing video analyzer results. See log for "
+                               "further details.")
 
-    logging.warning('Video analysis result of %s: %s', video_file, results)
+        def record(key: str) -> None:
+            # If the video_analyzer does not generate any result, treat it as an
+            # error and use the default value to filter them out instead of
+            # failing the tests.
+            common.measures.average(video_file, 'video_perf', key).record(
+                results.get(key, common.FAIL_CODE))
+
+        for metric in common.METRICS:
+            record(metric)
+
+        original_video = f"/usr/local/cipd/videostack_videos_30s/{video_file}"
+        common.calculate_psnr_ssim(video_file, output_file, original_video)
+
+        logging.warning('Video analysis result of %s: %s', video_file, results)
+    finally:
+        if glances_proc:
+            try:
+                common.stop_glances_monitoring(
+                    args, glances_proc, csv_remote_path, csv_local_path)
+                common.parse_glances_csv_and_record(
+                    video_file, csv_local_path, args.sender_os)
+            except Exception as e:
+                logging.error(
+                    "Failed to stop or parse glances monitoring: %s", e)
     return rec_proc_local
 
 def main():
@@ -251,7 +285,9 @@ def main():
         default=None,
         help='Chrome for Testing version to use. Defaults to the latest '
     'known good version.')
-    parser.add_argument('--sender-os', help='OS of the sender device.')
+    parser.add_argument('--sender-os',
+                        choices=['mac', 'win', 'linux', 'cros'],
+                        help='OS of the sender device.')
     args, _ = parser.parse_known_args()
     cv = args.chrome_version
 
@@ -261,20 +297,28 @@ def main():
 
     driver = None
     tunnel_proc = None
+    actual_version = None
 
     try:
-        driver, tunnel_proc = setup_test_environment(args, cv)
+        driver, tunnel_proc, actual_version = setup_test_environment(args, cv)
         for video in common.VIDEOS:
+            # TODO(b/512198717): Enable HEVC tests on ChromeOS.
+            # Currently these tests are rendering a blank white screen, so we
+            # skip them to bring up the other cros tests.
+            if args.sender_os == 'cros' and 'HEVC' in video['name']:
+                logging.info("Skipping HEVC on ChromeOS: %s", video['name'])
+                continue
             logging.info("Starting test for video: %s", video['name'])
             rec_proc = None
             try:
-                rec_proc = run_performance_test(video['name'], driver)
+                rec_proc = run_performance_test(video['name'], driver, args)
             except Exception: # pylint: disable=broad-exception-caught
                 logging.exception("Error during video %s test", video['name'])
                 raise
             finally:
                 common.teardown_recording_process(rec_proc)
     finally:
+        common.finalize_results(actual_version)
         common.teardown_test_environment(driver, tunnel_proc, args)
 
 if __name__ == '__main__':

@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.omnibox.suggestions;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.MathUtils;
 import org.chromium.build.annotations.NullMarked;
@@ -33,18 +32,42 @@ public abstract class SelectionController {
      *         <li>forward: ∅- -> A -> B -> C -> ∅+ -> ∅+
      *         <li>backward: ∅+ -> C -> B -> A -> ∅- -> ∅-
      *       </ul>
+     *   <li>WRAPPING:
+     *       <ul>
+     *         <li>forward: A -> B -> C -> A -> B
+     *         <li>backward: C -> B -> A -> C -> B
+     *       </ul>
+     *   <li>WRAPPING_WITH_SENTINEL:
+     *       <ul>
+     *         <li>forward: ∅- -> A -> B -> C -> ∅- -> A
+     *         <li>backward: ∅- -> C -> B -> A -> ∅- -> C
+     *       </ul>
+     *   <li>SENTINEL_THEN_WRAPPING:
+     *       <ul>
+     *         <li>forward: ∅- -> A -> B -> C -> A -> B
+     *         <li>backward: ∅- -> C -> B -> A -> C -> B
+     *       </ul>
      * </ul>
      */
-    @IntDef({Mode.SATURATING, Mode.SATURATING_WITH_SENTINEL})
+    @IntDef({
+        Mode.SATURATING,
+        Mode.SATURATING_WITH_SENTINEL,
+        Mode.WRAPPING,
+        Mode.WRAPPING_WITH_SENTINEL,
+        Mode.SENTINEL_THEN_WRAPPING
+    })
     @Retention(RetentionPolicy.SOURCE)
     @Target(ElementType.TYPE_USE)
     public @interface Mode {
         int SATURATING = 0;
         int SATURATING_WITH_SENTINEL = 1;
+        int WRAPPING = 2;
+        int WRAPPING_WITH_SENTINEL = 3;
+        int SENTINEL_THEN_WRAPPING = 4;
     }
 
-    protected final @Mode int mMode;
-    protected final int mDefaultPosition;
+    protected @Mode int mMode;
+    protected int mDefaultPosition;
 
     private int mPosition;
 
@@ -54,24 +77,39 @@ public abstract class SelectionController {
      * @param mode Selection mode that defines how the controller will behave
      */
     public SelectionController(@Mode int mode) {
+        mPosition = Integer.MIN_VALUE;
+        setSelectionMode(mode);
+    }
+
+    /** Sets the selection mode that defines how the controller will behave. */
+    public void setSelectionMode(@Mode int mode) {
+        mMode = mode;
         switch (mode) {
             case Mode.SATURATING:
+            case Mode.WRAPPING:
                 mDefaultPosition = 0;
                 break;
 
             case Mode.SATURATING_WITH_SENTINEL:
+            case Mode.WRAPPING_WITH_SENTINEL:
+            case Mode.SENTINEL_THEN_WRAPPING:
             default:
                 mDefaultPosition = Integer.MIN_VALUE; // Lower-end sentinel.
                 break;
         }
-
-        mPosition = Integer.MIN_VALUE;
-        mMode = mode;
     }
 
     /** Resets the controller, making the current position point to default item. */
     public void reset() {
         setPosition(mDefaultPosition);
+    }
+
+    public void selectFirstItem() {
+        setPosition(0);
+    }
+
+    public void selectLastItem() {
+        setPosition(getItemCount() - 1);
     }
 
     /** Returns the maximum valid position the SelectionController can assume. */
@@ -84,23 +122,49 @@ public abstract class SelectionController {
      * @return whether selection was applied to the new element.
      */
     public boolean selectNextItem() {
-        // If parked at upper sentinel, bail.
-        if (mPosition == Integer.MAX_VALUE) return false;
+        int itemCount = getItemCount();
+        if (itemCount == 0) return false;
 
-        // If parked at lower sentinel, resume from 0.
         Integer position = getPosition();
         int newPosition = (position == null ? -1 : position) + 1;
-        int itemCount = getItemCount();
-        while (newPosition < itemCount) {
-            if (isSelectableItem(newPosition)) {
-                return setPosition(newPosition);
-            }
-            newPosition++;
-        }
 
-        // Don't touch selection if we can't advance. Otherwise, park at sentinel.
-        if (mMode == Mode.SATURATING_WITH_SENTINEL) {
-            setPosition(Integer.MAX_VALUE);
+        if (mMode == Mode.SATURATING || mMode == Mode.SATURATING_WITH_SENTINEL) {
+            if (mPosition == Integer.MAX_VALUE) return false;
+
+            while (newPosition < itemCount) {
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition++;
+            }
+
+            if (mMode == Mode.SATURATING_WITH_SENTINEL) {
+                setPosition(Integer.MAX_VALUE);
+            }
+            return false;
+        } else if (mMode == Mode.WRAPPING || mMode == Mode.SENTINEL_THEN_WRAPPING) {
+            // Check full list once, with wrapping, to find the next selectable item.
+            for (int i = 0; i < itemCount; i++) {
+                if (newPosition >= itemCount) {
+                    // Wrap around to the beginning of the list.
+                    newPosition -= itemCount;
+                }
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition++;
+            }
+            return false;
+        } else if (mMode == Mode.WRAPPING_WITH_SENTINEL) {
+            while (newPosition < itemCount) {
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition++;
+            }
+            // WRAPPING_WITH_SENTINEL supports only one sentinel state Integer.MIN_VALUE.
+            setPosition(Integer.MIN_VALUE);
+            return false;
         }
         return false;
     }
@@ -112,22 +176,49 @@ public abstract class SelectionController {
      * @return whether selection was applied to the new element.
      */
     public boolean selectPreviousItem() {
-        // If parked at lower sentinel, bail.
-        if (mPosition == Integer.MIN_VALUE) return false;
+        int itemCount = getItemCount();
+        if (itemCount == 0) return false;
 
-        // If parked at upper sentinel, resume from getItemCount() - 1.
         Integer position = getPosition();
-        int newPosition = (position == null ? getItemCount() : position) - 1;
-        while (newPosition >= 0) {
-            if (isSelectableItem(newPosition)) {
-                return setPosition(newPosition);
-            }
-            newPosition--;
-        }
+        int newPosition = (position == null ? itemCount : position) - 1;
 
-        // Don't touch selection if we can't advance. Otherwise, park at sentinel.
-        if (mMode == Mode.SATURATING_WITH_SENTINEL) {
+        if (mMode == Mode.SATURATING || mMode == Mode.SATURATING_WITH_SENTINEL) {
+            if (mPosition == Integer.MIN_VALUE) return false;
+
+            while (newPosition >= 0) {
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition--;
+            }
+
+            if (mMode == Mode.SATURATING_WITH_SENTINEL) {
+                setPosition(Integer.MIN_VALUE);
+            }
+            return false;
+        } else if (mMode == Mode.WRAPPING || mMode == Mode.SENTINEL_THEN_WRAPPING) {
+            // Check full list once, with wrapping, to find the previous selectable item.
+            for (int i = 0; i < itemCount; i++) {
+                if (newPosition < 0) {
+                    // Wrap around to the end of the list.
+                    newPosition += itemCount;
+                }
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition--;
+            }
+            return false;
+        } else if (mMode == Mode.WRAPPING_WITH_SENTINEL) {
+            while (newPosition >= 0) {
+                if (isSelectableItem(newPosition)) {
+                    return setPosition(newPosition);
+                }
+                newPosition--;
+            }
+
             setPosition(Integer.MIN_VALUE);
+            return false;
         }
         return false;
     }
@@ -154,12 +245,12 @@ public abstract class SelectionController {
      * @param newPosition - new value to apply to the mPosition
      * @return whether selection was applied to the new element.
      */
-    @VisibleForTesting
-    boolean setPosition(int newPosition) {
+    protected boolean setPosition(int newPosition) {
         // Compute new position.
         int itemCount = getItemCount();
         switch (mMode) {
             case Mode.SATURATING:
+            case Mode.WRAPPING:
                 if (itemCount == 0) {
                     newPosition = Integer.MIN_VALUE;
                 } else {
@@ -173,6 +264,20 @@ public abstract class SelectionController {
                     newPosition = Integer.MIN_VALUE;
                 } else if (newPosition >= itemCount) {
                     newPosition = Integer.MAX_VALUE;
+                }
+                break;
+
+            case Mode.WRAPPING_WITH_SENTINEL:
+                if (newPosition < 0 || newPosition >= itemCount) {
+                    newPosition = Integer.MIN_VALUE;
+                }
+                break;
+
+            case Mode.SENTINEL_THEN_WRAPPING:
+                if (newPosition == Integer.MIN_VALUE || itemCount == 0) {
+                    newPosition = Integer.MIN_VALUE;
+                } else {
+                    newPosition = MathUtils.clamp(newPosition, 0, itemCount - 1);
                 }
                 break;
         }

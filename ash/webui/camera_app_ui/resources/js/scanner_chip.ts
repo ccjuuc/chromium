@@ -7,34 +7,18 @@ import {showPreviewOCRToast} from './custom_effect.js';
 import * as dom from './dom.js';
 import {reportError} from './error.js';
 import {I18nString} from './i18n_string.js';
-import {
-  BarcodeContentType,
-  OcrEventType,
-  sendBarcodeDetectedEvent,
-  sendOcrEvent,
-  sendUnsupportedProtocolEvent,
-} from './metrics.js';
+import {BarcodeContentType, OcrEventType, sendBarcodeDetectedEvent, sendOcrEvent, sendUnsupportedProtocolEvent} from './metrics.js';
 import * as loadTimeData from './models/load_time_data.js';
 import * as localStorage from './models/local_storage.js';
 import {ChromeHelper} from './mojo/chrome_helper.js';
-import {
-  OcrResult,
-  WifiConfig,
-  WifiEapMethod,
-  WifiEapPhase2Method,
-  WifiSecurityType,
-} from './mojo/type.js';
+import type {OcrResult, WifiConfig} from './mojo/type.js';
+import {WifiEapMethod, WifiEapPhase2Method, WifiSecurityType} from './mojo/type.js';
 import {isTopMostView} from './nav.js';
 import * as snackbar from './snackbar.js';
 import {speak} from './spoken_msg.js';
 import * as state from './state.js';
 import {OneShotTimer} from './timer.js';
-import {
-  ErrorLevel,
-  ErrorType,
-  LocalStorageKey,
-  ViewName,
-} from './type.js';
+import {ErrorLevel, ErrorType, LocalStorageKey, ViewName} from './type.js';
 import {getKeyboardShortcut} from './util.js';
 
 // Supported source types.
@@ -450,7 +434,7 @@ function showWifi(wifiConfig: WifiConfig): ChipMethods {
  */
 export function showBarcodeContent(content: string): void {
   function setupChip() {
-    let chipMethods: ChipMethods|null = null;
+    let chipMethods: ChipMethods|undefined;
     const wifiConfig = parseWifi(content);
     if (wifiConfig !== null) {
       chipMethods = showWifi(wifiConfig);

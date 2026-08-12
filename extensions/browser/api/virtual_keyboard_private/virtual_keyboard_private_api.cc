@@ -8,25 +8,21 @@
 #include <string>
 #include <utility>
 
+#include "ash/clipboard/clipboard_history_item.h"
+#include "base/barrier_closure.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/chromeos_buildflags.h"
+#include "base/task/thread_pool.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/virtual_keyboard_private/virtual_keyboard_delegate.h"
 #include "extensions/common/api/virtual_keyboard_private.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "ash/clipboard/clipboard_history_item.h"
-#include "base/barrier_closure.h"
-#include "base/task/thread_pool.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
-#include "content/public/browser/web_contents.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/image/image_skia.h"
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
 
@@ -44,12 +40,10 @@ const char kSetWindowBoundsInScreenFailed[] =
     "Setting bounds of the virtual keyboard failed";
 const char kUnknownError[] = "Unknown error.";
 
-#if BUILDFLAG(IS_CHROMEOS)
 const char kGetClipboardHistoryFailed[] =
     "Getting the clipboard history failed";
 const char kPasteClipboardItemFailed[] = "Pasting the clipboard item failed";
 const char kDeleteClipboardItemFailed[] = "Deleting the clipboard item failed";
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace keyboard = api::virtual_keyboard_private;
 
@@ -57,7 +51,6 @@ gfx::Rect KeyboardBoundsToRect(const keyboard::Bounds& bounds) {
   return {bounds.left, bounds.top, bounds.width, bounds.height};
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
 using extensions::api::virtual_keyboard_private::ClipboardItem;
 using extensions::api::virtual_keyboard_private::DisplayFormat;
 
@@ -77,19 +70,19 @@ void ConvertClipboardHistoryItemToClipboardItem(
       history_item.time_copied().InMillisecondsFSinceUnixEpochIgnoringNull();
 
   switch (history_item.display_format()) {
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kUnknown:
+    case chromeos::clipboard_history::DisplayFormat::kUnknown:
       NOTREACHED();
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kText:
+    case chromeos::clipboard_history::DisplayFormat::kText:
       item.text_data = base::UTF16ToUTF8(history_item.display_text());
       item.display_format = DisplayFormat::kText;
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kPng:
+    case chromeos::clipboard_history::DisplayFormat::kPng:
       item.display_format = DisplayFormat::kPng;
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml:
+    case chromeos::clipboard_history::DisplayFormat::kHtml:
       item.display_format = DisplayFormat::kHtml;
       break;
-    case crosapi::mojom::ClipboardHistoryDisplayFormat::kFile:
+    case chromeos::clipboard_history::DisplayFormat::kFile:
       DCHECK(!item.image_data.has_value());
 
       const auto& icon = history_item.icon();
@@ -125,8 +118,6 @@ void ConvertClipboardHistoryItemToClipboardItem(
     std::move(barrier_callback).Run();
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 }  // namespace
 
 bool VirtualKeyboardPrivateFunction::PreRunValidation(std::string* error) {
@@ -211,7 +202,7 @@ VirtualKeyboardPrivateGetKeyboardConfigFunction::Run() {
 }
 
 void VirtualKeyboardPrivateGetKeyboardConfigFunction::OnKeyboardConfig(
-    std::optional<base::Value::Dict> results) {
+    std::optional<base::DictValue> results) {
   Respond(results ? WithArguments(std::move(*results)) : Error(kUnknownError));
 }
 
@@ -334,7 +325,6 @@ VirtualKeyboardPrivateSetWindowBoundsInScreenFunction::Run() {
 VirtualKeyboardPrivateSetWindowBoundsInScreenFunction ::
     ~VirtualKeyboardPrivateSetWindowBoundsInScreenFunction() = default;
 
-#if BUILDFLAG(IS_CHROMEOS)
 ExtensionFunction::ResponseAction
 VirtualKeyboardPrivateGetClipboardHistoryFunction::Run() {
   std::optional<keyboard::GetClipboardHistory::Params> params =
@@ -380,7 +370,7 @@ void VirtualKeyboardPrivateGetClipboardHistoryFunction::OnGetClipboardHistory(
 
 void VirtualKeyboardPrivateGetClipboardHistoryFunction::
     OnClipboardHistoryItemsConverted(std::unique_ptr<ClipboardItems> items) {
-  base::Value::List results;
+  base::ListValue results;
   for (const auto& item : *items) {
     results.Append(item.ToValue());
   }
@@ -415,9 +405,8 @@ VirtualKeyboardPrivateDeleteClipboardItemFunction::Run() {
   return RespondNow(NoArguments());
 }
 
-VirtualKeyboardPrivateDeleteClipboardItemFunction ::
+VirtualKeyboardPrivateDeleteClipboardItemFunction::
     ~VirtualKeyboardPrivateDeleteClipboardItemFunction() = default;
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 VirtualKeyboardAPI::VirtualKeyboardAPI(content::BrowserContext* context) {
   delegate_ =

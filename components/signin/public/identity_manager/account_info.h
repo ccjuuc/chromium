@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "build/build_config.h"
 #include "components/signin/internal/identity_manager/account_info_util.h"
@@ -80,7 +81,7 @@ struct AccountInfo : public CoreAccountInfo {
   // `AccountInfo`s with `std::optional<AccountInfo>`.
   // TODO(crbug.com/40268200): eliminate case 2 when migration to Gaia ID
   // completes and we always can create `CoreAccountId` from `GaiaId`.
-  const CoreAccountId& GetAccountId() const;
+  const CoreAccountId& GetAccountId() const LIFETIME_BOUND;
 
   // Returns Gaia ID of the account.
   //
@@ -99,7 +100,7 @@ struct AccountInfo : public CoreAccountInfo {
   // completes and all accounts have populated Gaia ID.
   // TODO(crbug.com/40283608): eliminate case 3 when the account tracker stops
   // tracking new incomplete accounts.
-  const GaiaId& GetGaiaId() const;
+  const GaiaId& GetGaiaId() const LIFETIME_BOUND;
 
   // Returns email address of the account.
   //
@@ -117,32 +118,33 @@ struct AccountInfo : public CoreAccountInfo {
   // `AccountInfo`s with `std::optional<AccountInfo>`.
   // TODO(crbug.com/40283608): eliminate case 2 when the account tracker stops
   // tracking new incomplete accounts.
-  std::string_view GetEmail() const;
+  std::string_view GetEmail() const LIFETIME_BOUND;
 
   // Returns whether the account is under advanced protection.
   bool IsUnderAdvancedProtection() const;
 
   // Returns the full name of the account.
   // Returns std::nullopt if the value is unknown yet.
-  std::optional<std::string_view> GetFullName() const;
+  std::optional<std::string_view> GetFullName() const LIFETIME_BOUND;
 
   // Returns the given name of the account.
   // Returns std::nullopt if the value is unknown yet.
-  std::optional<std::string_view> GetGivenName() const;
+  std::optional<std::string_view> GetGivenName() const LIFETIME_BOUND;
 
   // Returns the hosted domain of the account. Might be empty if an account
   // doesn't have a hosted domain.
   // Returns std::nullopt if the value is unknown yet.
-  std::optional<std::string_view> GetHostedDomain() const;
+  std::optional<std::string_view> GetHostedDomain() const LIFETIME_BOUND;
 
   // Returns the URL of the account avatar. Might be empty if the account
   // doesn't have a usable avatar.
   // Returns std::nullopt if the value is unknown yet.
-  std::optional<std::string_view> GetAvatarUrl() const;
+  std::optional<std::string_view> GetAvatarUrl() const LIFETIME_BOUND;
 
   // Returns the last downloaded account avatar URL with size.
   // Returns std::nullopt if the avatar image hasn't been downloaded yet.
-  std::optional<std::string_view> GetLastDownloadedAvatarUrlWithSize() const;
+  std::optional<std::string_view> GetLastDownloadedAvatarUrlWithSize() const
+      LIFETIME_BOUND;
 
   // Returns the account avatar image.
   // Returns std::nullopt if the avatar image hasn't been downloaded yet.
@@ -152,18 +154,19 @@ struct AccountInfo : public CoreAccountInfo {
   // Returns access point used to add the account, which is also updated on
   // reauth. The access point is not updated when signing in to Chrome, only
   // when the token is updated or refreshed.
-  signin_metrics::AccessPoint GetLastAuthenticationAccessPoint() const;
+  std::optional<signin_metrics::AccessPoint> GetLastAuthenticationAccessPoint()
+      const;
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Returns the account capabilities.
-  const AccountCapabilities& GetAccountCapabilities() const;
+  const AccountCapabilities& GetAccountCapabilities() const LIFETIME_BOUND;
 
   // Returns whether this is a child account.
   signin::Tribool IsChildAccount() const;
 
   // Returns the locale of the account.
   // Returns std::nullopt if the value is unknown yet.
-  std::optional<std::string_view> GetLocale() const;
+  std::optional<std::string_view> GetLocale() const LIFETIME_BOUND;
 
   // Returns true if all fields in the account info are empty.
   bool IsEmpty() const;
@@ -199,43 +202,43 @@ struct AccountInfo : public CoreAccountInfo {
   // Returns `kUnknown` the value is unknown.
   signin::Tribool CanApplyAccountLevelEnterprisePolicies() const;
 
+#if !BUILDFLAG(IS_IOS)
   bool IsEduAccount() const;
 
   // Returns true if the account email can be used in display fields.
   // If `capabilities.can_have_email_address_displayed()` is unknown at the time
   // this function is called, the email address will be considered displayable.
   bool CanHaveEmailAddressDisplayed() const;
+#endif
 
   // The following struct members are going to be moved to the private section
   // soon, do not use them directly.
   // TODO(crbug.com/458409080): move all struct members to the private section.
 
-  // Mandatory fields for `IsValid()` to return true:
-  // Deprecated: Use GetFullName() instead.
-  std::string full_name;
-  // Deprecated: Use GetGivenName() instead.
-  std::string given_name;
 
   // Deprecated: Use GetAvatarImage() instead.
   gfx::Image account_image;
 
   // Deprecated: Use GetLastAuthenticationAccessPoint() instead.
   // The value is set consistently only on DICE platforms.
-  signin_metrics::AccessPoint access_point =
-      signin_metrics::AccessPoint::kUnknown;
+  std::optional<signin_metrics::AccessPoint> access_point;
 
-  // Deprecated: Use GetAccountCapabilities() instead.
-  AccountCapabilities capabilities;
   // Deprecated: Use GetLocale() instead.
   std::string locale;
 
  private:
   friend class Builder;
+  friend class AccountCapabilitiesTestMutator;
 
+  // Mandatory fields for `IsValid()` to return true:
+  std::string full_name_;
+  std::string given_name_;
   std::string hosted_domain_;
   std::string picture_url_;
+
   std::string last_downloaded_image_url_with_size_;
   signin::Tribool is_child_account_ = signin::Tribool::kUnknown;
+  AccountCapabilities capabilities_;
 };
 
 // Builder class for constructing AccountInfo objects.
@@ -266,7 +269,12 @@ class AccountInfo::Builder {
 
   // Setters for CoreAccountInfo members.
   Builder& SetEmail(std::string_view email);
+
+  // Note: This method is a no-op if `kGaiaAccountIdEnforcement` is enabled,
+  // as the account id is derived from the gaia id instead.
+  // TODO(crbug.com/502237328): Remove the method.
   Builder& SetAccountId(const CoreAccountId& account_id);
+
   Builder& SetIsUnderAdvancedProtection(bool is_under_advanced_protection);
 
   // The following AccountInfo class members are never supposed to contain empty
@@ -296,18 +304,21 @@ class AccountInfo::Builder {
   Builder& SetIsChildAccount(signin::Tribool is_child_account);
 
   Builder& UpdateAccountCapabilitiesWith(const AccountCapabilities& other);
+  Builder& SetAccountCapabilities(const AccountCapabilities& capabilities);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(AccountInfoTest, CreateWithPossiblyEmptyGaiaId);
   friend std::optional<AccountInfo> signin::DeserializeAccountInfo(
-      const base::Value::Dict& dict);
+      const base::DictValue& dict);
   // Default constructor is only available to support ongoing migrations.
   // TODO(crbug.com/40268200): remove this after the migration is done.
   Builder();
   // Factory function that permits creating `AccountInfo` with an empty Gaia ID.
   // It exists only to support an ongoing migration and shouldn't be used for
   // other purposes.
-  // TODO(crbug.com/40268200): remove this after the migration is done.
+  // Please note that despite the name, this method still requires a non-empty
+  // gaia id if kGaiaAccountIdEnforcement is enabled.
+  // TODO(crbug.com/502237328): Remove after kGaiaAccountIdEnforcement launch.
   static AccountInfo::Builder CreateWithPossiblyEmptyGaiaId(
       const GaiaId& gaia_id,
       std::string_view email);

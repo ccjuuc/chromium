@@ -5,9 +5,10 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_GRAPH_PROCESS_NODE_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_PUBLIC_GRAPH_PROCESS_NODE_H_
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/enum_set.h"
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_types.h"
 #include "base/process/process.h"
 #include "base/task/task_traits.h"
@@ -43,7 +44,7 @@ class BrowserChildProcessHostProxy;
 // it.
 class ProcessNode : public TypedNode<ProcessNode> {
  public:
-  using NodeSet = base::flat_set<const Node*>;
+  using NodeSet = base::flat_set<raw_ptr<const Node>>;
   template <class ReturnType>
   using NodeSetView = NodeSetView<NodeSet, ReturnType>;
 
@@ -124,14 +125,14 @@ class ProcessNode : public TypedNode<ProcessNode> {
   // Note: This is only valid if at least one component has expressed interest
   // for process memory metrics by calling
   // ProcessMetricsDecorator::RegisterInterestForProcessMetrics.
-  virtual base::ByteCount GetPrivateFootprint() const = 0;
+  virtual base::ByteSize GetPrivateFootprint() const = 0;
 
   // Returns the most recently measured resident set of the process.
-  virtual base::ByteCount GetResidentSet() const = 0;
+  virtual base::ByteSize GetResidentSet() const = 0;
 
   // Returns the most recently measured size of private swap. Will only be
   // non-zero on Linux, ChromeOS, and Android.
-  virtual base::ByteCount GetPrivateSwap() const = 0;
+  virtual base::ByteSize GetPrivateSwap() const = 0;
 
   // Returns the render process id (equivalent to RenderProcessHost::GetID()),
   // or kInvalidChildProcessUniqueId if this is not a renderer.
@@ -149,7 +150,7 @@ class ProcessNode : public TypedNode<ProcessNode> {
       const = 0;
 
   // Returns the current priority of the process.
-  virtual base::TaskPriority GetPriority() const = 0;
+  virtual base::Process::Priority GetPriority() const = 0;
 
   // Returns a bit field indicating what type of content this process has
   // hosted, either currently or in the past.
@@ -216,7 +217,7 @@ class ProcessNodeObserver : public base::CheckedObserver {
 
   // Invoked when the process priority changes.
   virtual void OnPriorityChanged(const ProcessNode* process_node,
-                                 base::TaskPriority previous_value) {}
+                                 base::Process::Priority previous_value) {}
 
   // Events with no property changes.
 

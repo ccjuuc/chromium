@@ -5,19 +5,30 @@
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 
 #include "base/notreached.h"
+#include "components/omnibox/browser/omnibox_field_trial.h"
 
 history_clusters::HistoryClustersService*
 AutocompleteProviderClient::GetHistoryClustersService() {
   return nullptr;
 }
 
-history_embeddings::HistoryEmbeddingsService*
-AutocompleteProviderClient::GetHistoryEmbeddingsService() {
+history_embeddings::HistoryEmbeddingsSearch*
+AutocompleteProviderClient::GetHistoryEmbeddingsSearch() {
+  return nullptr;
+}
+
+GeolocationHeaderService*
+AutocompleteProviderClient::GetGeolocationHeaderService() const {
   return nullptr;
 }
 
 DocumentSuggestionsService*
 AutocompleteProviderClient::GetDocumentSuggestionsService() const {
+  return nullptr;
+}
+
+AiModeButtonService* AutocompleteProviderClient::GetAiModeButtonService()
+    const {
   return nullptr;
 }
 
@@ -73,7 +84,31 @@ bool AutocompleteProviderClient::IsOmniboxNextLensSearchChipEnabled() const {
   return false;
 }
 
+bool AutocompleteProviderClient::IsOmniboxNextAimPopupEnabled() const {
+  return false;
+}
+
+bool AutocompleteProviderClient::IsGeminiStarterPackEnabled() const {
+  return OmniboxFieldTrial::IsStarterPackExpansionEnabled();
+}
+
 base::WeakPtr<AutocompleteProviderClient>
 AutocompleteProviderClient::GetWeakPtr() {
   return nullptr;
 }
+
+bool AutocompleteProviderClient::IsWebUiNtpEnabledForDesktopAndroid() const {
+  return false;
+}
+
+bool AutocompleteProviderClient::ShouldOpenCoBrowsePanel() const {
+  return false;
+}
+
+void AutocompleteProviderClient::OpenCoBrowsePanel() {}
+
+bool AutocompleteProviderClient::ShouldOpenComposeboxForAskG() const {
+  return false;
+}
+
+void AutocompleteProviderClient::OpenComposeboxForAskG() {}

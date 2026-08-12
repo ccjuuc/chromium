@@ -102,6 +102,10 @@ class PLATFORM_EXPORT Font : public GarbageCollected<Font> {
     float begin_, end_;
   };
 
+  // Controls whether CJK characters are excluded from or included in text
+  // intercept computation for ink skip decoration line clipping.
+  enum class InkSkipCJKHandling { kExcludeCJK, kIncludeCJK };
+
   // Compute the text intercepts along the axis of the advance and write them
   // into the specified Vector of TextIntercepts. The number of those is zero or
   // a multiple of two, and is at most the number of glyphs * 2 in the text part
@@ -109,6 +113,7 @@ class PLATFORM_EXPORT Font : public GarbageCollected<Font> {
   // a line crossing through the text, parallel to the baseline.
   // TODO(drott): crbug.com/655154 Fix this for upright in vertical.
   void GetTextIntercepts(const TextFragmentPaintInfo&,
+                         InkSkipCJKHandling,
                          const cc::PaintFlags&,
                          const std::tuple<float, float>& bounds,
                          Vector<TextIntercept>&) const;
@@ -129,9 +134,9 @@ class PLATFORM_EXPORT Font : public GarbageCollected<Font> {
   }
   LayoutUnit TabWidth(const TabSize&, LayoutUnit position) const;
 
-  int EmphasisMarkAscent(const AtomicString&) const;
-  int EmphasisMarkDescent(const AtomicString&) const;
-  int EmphasisMarkHeight(const AtomicString&) const;
+  LayoutUnit EmphasisMarkAscent(const AtomicString&) const;
+  LayoutUnit EmphasisMarkDescent(const AtomicString&) const;
+  LayoutUnit EmphasisMarkHeight(const AtomicString&) const;
 
   // The inter-script spacing by the CSS `text-autospace` property.
   // https://drafts.csswg.org/css-text-4/#inter-script-spacing
@@ -155,9 +160,8 @@ class PLATFORM_EXPORT Font : public GarbageCollected<Font> {
   // list is common for all `SimpleFontData` for `this`.
   base::span<const FontFeatureRange> GetFontFeatures() const;
 
-  // True if `this` has any non-initial font features. This includes not only
-  // `GetFontFeatures()` but also features computed in later stages.
-  bool HasNonInitialFontFeatures() const;
+  // True if `this` has font-features which encompass the entire range.
+  bool HasSimpleFontFeatures() const;
 
   // Access the NG shape cache associated with this particular font object.
   // Should *not* be retained across layout calls as it may become invalid.

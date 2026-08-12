@@ -35,6 +35,14 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                    "inactive_interval",
                    base::Days(7));
 
+// Controls how long of inactivity are allowed before ARC on Demand is
+// triggered for 4GiB devices.
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kArcOnDemandInactiveIntervalFor4GiB,
+                   &kArcOnDemandV2,
+                   "inactive_interval_4gib",
+                   base::Days(0));
+
 // Controls whether to start ARC with the GKI kernel.
 BASE_FEATURE(kArcVmGki, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -49,12 +57,6 @@ BASE_FEATURE_PARAM(bool,
                    &kBlockIoScheduler,
                    "data_block_io_scheduler",
                    true);
-
-// Controls ACTION_BOOT_COMPLETED broadcast for third party applications on ARC.
-// When disabled, third party apps will not receive this broadcast.
-BASE_FEATURE(kBootCompletedBroadcastFeature,
-             "ArcBootCompletedBroadcast",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Defers the ARC actvation until the user session start up tasks
 // are completed to give more resources to critical tasks for user session
@@ -205,12 +207,6 @@ BASE_FEATURE(kArcVmPvclock,
              "ArcEnablePvclock",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enables/disables mlock() of guest memory for ARCVM.
-// Often used in combination with kGuestZram.
-BASE_FEATURE(kLockGuestMemory,
-             "ArcLockGuestMemory",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // Toggles between native bridge implementations for ARC.
 // Note, that we keep the original feature name to preserve
 // corresponding metrics.
@@ -230,38 +226,19 @@ BASE_FEATURE(kResizeCompat,
              "ArcResizeCompat",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Controls ARCVM real time vcpu feature on a device with 2 logical cores
-// online.
-// When you change the default, you also need to change the chromeExtraAgas
-// in tast-tests/src/chromiumos/tast/local/bundles/cros/arc/cpu_set.go to
-// match it to the new default.
-BASE_FEATURE(kRtVcpuDualCore,
-             "ArcRtVcpuDualCore",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Controls ARCVM real time vcpu feature on a device with 3+ logical cores
-// online.
-// When you change the default, you also need to modify the chromeExtraAgas
-// in tast-tests/src/chromiumos/tast/local/bundles/cros/arc/cpu_set.go to
-// add ArcRtVcpuQuadCore there. Otherwise, the test will start failing.
-BASE_FEATURE(kRtVcpuQuadCore,
-             "ArcRtVcpuQuadCore",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // When enabled, tracing raw files are saved in order to help debug failures.
 BASE_FEATURE(kSaveRawFilesOnTracing,
              "ArcSaveRawFilesOnTracing",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Controls whether to shut down ARCVM after post-OOBE provisioning on 4GB
+// devices.
+BASE_FEATURE(kShutDownArcPostOobeProvisioning,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 // When enabled, skip dropping ARCVM page cache after boot.
 BASE_FEATURE(kSkipDropCaches,
              "ArcSkipDropPageCache",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// When enabled, ARC will pass install priority to Play in sync install
-// requests.
-BASE_FEATURE(kSyncInstallPriority,
-             "ArcSyncInstallPriority",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // When enabled, ARC will not be throttled when there is active audio stream

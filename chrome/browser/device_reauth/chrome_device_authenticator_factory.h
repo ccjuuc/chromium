@@ -6,15 +6,19 @@
 #define CHROME_BROWSER_DEVICE_REAUTH_CHROME_DEVICE_AUTHENTICATOR_FACTORY_H_
 
 #include "base/no_destructor.h"
-#include "base/time/time.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
-#include "components/device_reauth/device_authenticator.h"
 #include "ui/gfx/native_ui_types.h"
+
+class Profile;
 
 namespace content {
 class BrowserContext;
 }
+
+namespace device_reauth {
+class DeviceAuthenticator;
+class DeviceAuthParams;
+}  // namespace device_reauth
 
 // Implementation for every OS will be in the same file, as the only thing
 // different will be the way of creating a DeviceAuthenticator object, and
@@ -43,6 +47,10 @@ class ChromeDeviceAuthenticatorFactory : public ProfileKeyedServiceFactory {
   static std::unique_ptr<device_reauth::DeviceAuthenticator> GetForProfile(
       Profile* profile,
       const base::android::JavaRef<jobject>& activity,
+      const device_reauth::DeviceAuthParams& params);
+#else
+  static std::unique_ptr<device_reauth::DeviceAuthenticator> GetForProfile(
+      Profile* profile,
       const device_reauth::DeviceAuthParams& params);
 #endif
 

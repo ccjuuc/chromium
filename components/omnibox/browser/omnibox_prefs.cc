@@ -59,19 +59,25 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kIsOmniboxInBottomPosition, false);
+  registry->RegisterIntegerPref(kIntranetRedirectBehavior, 0);
 }
 
-void SetUserPreferenceForZeroSuggestCachedResponse(
-    PrefService* prefs,
-    const std::string& page_url,
-    const std::string& response) {
+void SetUserPreferenceForZeroSuggestCachedResponse(PrefService* prefs,
+                                                   const std::string& page_url,
+                                                   const std::string& response,
+                                                   bool is_composebox) {
   DCHECK(prefs);
+
+  if (is_composebox) {
+    prefs->SetString(omnibox::kZeroSuggestCachedResultsComposebox, response);
+    return;
+  }
 
   if (page_url.empty()) {
     prefs->SetString(kZeroSuggestCachedResults, response);
   } else {
     // Constrain the cache to a single entry by overwriting the existing value.
-    base::Value::Dict new_dict;
+    base::DictValue new_dict;
     new_dict.Set(page_url, response);
     prefs->SetDict(kZeroSuggestCachedResultsWithURL, std::move(new_dict));
   }
@@ -79,14 +85,19 @@ void SetUserPreferenceForZeroSuggestCachedResponse(
 
 std::string GetUserPreferenceForZeroSuggestCachedResponse(
     PrefService* prefs,
-    const std::string& page_url) {
+    const std::string& page_url,
+    bool is_composebox) {
   DCHECK(prefs);
+
+  if (is_composebox) {
+    return prefs->GetString(omnibox::kZeroSuggestCachedResultsComposebox);
+  }
 
   if (page_url.empty()) {
     return prefs->GetString(omnibox::kZeroSuggestCachedResults);
   }
 
-  const base::Value::Dict& dictionary =
+  const base::DictValue& dictionary =
       prefs->GetDict(omnibox::kZeroSuggestCachedResultsWithURL);
   auto* value_ptr = dictionary.FindString(page_url);
   return value_ptr ? *value_ptr : std::string();

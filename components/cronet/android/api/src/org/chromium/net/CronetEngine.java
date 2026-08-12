@@ -8,14 +8,15 @@ import android.content.Context;
 import android.net.http.HttpResponseCache;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
 
-import androidx.annotation.Nullable;
+import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import org.json.JSONObject;
 
+import org.chromium.base.Log;
 import org.chromium.base.metrics.ScopedSysTraceEvent;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.net.impl.CronetLogger;
 import org.chromium.net.impl.CronetLoggerFactory;
 
@@ -30,6 +31,7 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
 
@@ -106,17 +108,25 @@ public abstract class CronetEngine {
         /**
          * A class which provides a method for loading the cronet native library. Apps needing to
          * implement custom library loading logic can inherit from this class and pass an instance
-         * to
-         * {@link CronetEngine.Builder#setLibraryLoader}. For example, this might be required to
+         * to {@link CronetEngine.Builder#setLibraryLoader}. For example, this might be required to
          * work around {@code UnsatisfiedLinkError}s caused by flaky installation on certain older
          * devices.
+         *
+         * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was used
+         *     to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24 this
+         *     method is obsolete and is a no-op.
          */
+        @Deprecated
         public abstract static class LibraryLoader {
             /**
              * Loads the native library.
              *
              * @param libName name of the library to load
+             * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was
+             *     used to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24
+             *     this method is obsolete and is a no-op.
              */
+            @Deprecated
             public abstract void loadLibrary(String libName);
         }
 
@@ -134,7 +144,11 @@ public abstract class CronetEngine {
         private final List<ExperimentalOptionsTranslator.JsonPatch> mExperimentalOptionsPatches =
                 new ArrayList<>();
 
-        /** Reference to the actual builder implementation. {@hide exclude from JavaDoc}. */
+        /**
+         * Reference to the actual builder implementation.
+         *
+         * @hide
+         */
         protected final ICronetEngineBuilder mBuilderDelegate;
 
         /**
@@ -155,7 +169,7 @@ public abstract class CronetEngine {
          * implementation.
          *
          * @param builderDelegate delegate that provides the actual implementation.
-         *     <p>{@hide}
+         * @hide
          */
         public Builder(ICronetEngineBuilder builderDelegate) {
             mBuilderDelegate = builderDelegate;
@@ -205,9 +219,12 @@ public abstract class CronetEngine {
          *
          * @param loader {@code LibraryLoader} to be used to load the native library.
          * @return the builder to facilitate chaining.
+         * @deprecated System.loadLibrary was unreliable on minSDK <= 23, and this method was used
+         *     to provide alternative, more reliable loaders. Now that Cronet's minSDK = 24 this
+         *     method is obsolete and is a no-op.
          */
+        @Deprecated
         public Builder setLibraryLoader(LibraryLoader loader) {
-            mBuilderDelegate.setLibraryLoader(loader);
             return this;
         }
 
@@ -237,8 +254,8 @@ public abstract class CronetEngine {
         }
 
         /**
-         * @deprecated SDCH is deprecated in Cronet M63. This method is a no-op. {@hide exclude from
-         * JavaDoc}.
+         * @deprecated SDCH is deprecated in Cronet M63. This method is a no-op.
+         * @hide
          */
         @Deprecated
         public Builder enableSdch(boolean value) {
@@ -516,8 +533,8 @@ public abstract class CronetEngine {
          * user; or some enterprise profile configuration, or (most likely) some network
          * autoconfiguration (e.g., Web Proxy Auto-Discovery Protocol). This is usually referred to
          * as "system" proxy configuration. If present, respecting the system proxy configuration is
-         * often a requirement to obtain local and/or internet connectivity. Cronet already handles
-         * the system proxy configuration internally.
+         * often a requirement to obtain local and/or internet connectivity. CronetEngine already
+         * handles the system proxy configuration internally.
          *
          * <p>A proxy configuration defined via this API are refererred to as "app" proxy
          * configuration. App and system proxy configuration are separate and, most importantly,
@@ -532,19 +549,15 @@ public abstract class CronetEngine {
          *     BiridirectionalStream} and connections established by the {@link CronetEngine}
          *     created by this builder.
          * @return the builder to facilitate chaining.
+         * @throws UnsupportedOperationException if the Cronet implementation being used is too old
+         *     to support ProxyOptions.
          */
-        @ProxyOptions.Experimental
-        public Builder setProxyOptions(@Nullable ProxyOptions proxyOptions) {
-            if (!mBuilderDelegate
-                    .getSupportedConfigOptions()
-                    .contains(ICronetEngineBuilder.PROXY_OPTIONS)) {
-                throw new UnsupportedOperationException(
-                        "This Cronet implementation does not support ProxyOptions");
-            }
-            mBuilderDelegate.setProxyOptions(proxyOptions);
+        public Builder setProxyOptions(@NonNull ProxyOptions proxyOptions) {
+            mBuilderDelegate.setProxyOptionsV2(Objects.requireNonNull(proxyOptions));
             return this;
         }
 
+        /** @hide */
         protected ExperimentalCronetEngine buildExperimental() {
             int implLevel = getImplApiLevel(mBuilderDelegate);
             if (implLevel != -1 && implLevel < getMaximumApiLevel()) {
@@ -593,11 +606,9 @@ public abstract class CronetEngine {
                     ScopedSysTraceEvent.scoped("CronetEngine#createBuilderDelegate")) {
                 var startUptimeMillis = SystemClock.uptimeMillis();
                 CronetProvider.ProviderInfo providerInfo =
-                        getEnabledCronetProviders(
-                                        context,
-                                        new ArrayList<>(
-                                                CronetProvider.getAllProviderInfos(context)))
-                                .get(0);
+                        getPreferredCronetProvider(
+                                context,
+                                new ArrayList<>(CronetProvider.getAllProviderInfos(context)));
                 var logger = CronetLoggerFactory.createLogger(context, providerInfo.logSource);
                 var logInfo = new CronetLogger.CronetEngineBuilderInitializedInfo();
                 try {
@@ -631,18 +642,45 @@ public abstract class CronetEngine {
             }
         }
 
+        private static CronetProvider.@Nullable ProviderInfo getPreferredCronetProviderUsingScore(
+                List<CronetProvider.ProviderInfo> providers) {
+            // We don't need to check isEnabled() to get the score, therefore we can sort first
+            // and then return the first provider for which isEnabled() returns true. This
+            // matters a lot for performance, because checking isEnabled() can be expensive for
+            // some providers (e.g. Play Services).
+            Collections.sort(
+                    providers,
+                    new Comparator<CronetProvider.ProviderInfo>() {
+                        @Override
+                        public int compare(
+                                CronetProvider.ProviderInfo p1, CronetProvider.ProviderInfo p2) {
+                            // A provider with higher score should go first.
+                            return -Integer.compare(p1.providerScore, p2.providerScore);
+                        }
+                    });
+            for (Iterator<CronetProvider.ProviderInfo> i = providers.iterator(); i.hasNext(); ) {
+                CronetProvider.ProviderInfo providerInfo = i.next();
+                if (providerInfo.provider.isEnabled()) {
+                    return providerInfo;
+                }
+            }
+            return null;
+        }
+
         /**
-         * Returns the list of available and enabled {@link CronetProvider}. The returned list is
-         * sorted based on the provider versions and types.
+         * Returns a single provider which the sorting mechanism thinks is the best. The returned
+         * provider is always guaranteed to be usable.
+         *
+         * <p>Sorts providers based on {@link providerInfo.score}.
          *
          * @param context Android Context to use.
          * @param providers the list of enabled and disabled providers to filter out and sort.
-         * @return the sorted list of enabled providers. The list contains at least one provider.
-         * @throws RuntimeException is the list of providers is empty or all of the providers are
+         * @return The single most preferred and enabled provider.
+         * @throws RuntimeException if the list of providers is empty or all of the providers are
          *     disabled.
          */
         @VisibleForTesting
-        static List<CronetProvider.ProviderInfo> getEnabledCronetProviders(
+        static @NonNull CronetProvider.ProviderInfo getPreferredCronetProvider(
                 Context context, List<CronetProvider.ProviderInfo> providers) {
             // Check that there is at least one available provider.
             if (providers.isEmpty()) {
@@ -650,83 +688,14 @@ public abstract class CronetEngine {
                         "Unable to find any Cronet provider."
                                 + " Have you included all necessary jars?");
             }
-
-            // Exclude disabled providers from the list.
-            for (Iterator<CronetProvider.ProviderInfo> i = providers.iterator(); i.hasNext(); ) {
-                CronetProvider.ProviderInfo providerInfo = i.next();
-                if (!providerInfo.provider.isEnabled()) {
-                    i.remove();
-                }
-            }
-
-            // Check that there is at least one enabled provider.
-            if (providers.isEmpty()) {
+            CronetProvider.ProviderInfo cronetProvider =
+                    getPreferredCronetProviderUsingScore(providers);
+            if (cronetProvider == null) {
                 throw new RuntimeException(
                         "All available Cronet providers are disabled."
                                 + " A provider should be enabled before it can be used.");
             }
-
-            // Sort providers based on version and type.
-            Collections.sort(
-                    providers,
-                    new Comparator<CronetProvider.ProviderInfo>() {
-                        @Override
-                        public int compare(
-                                CronetProvider.ProviderInfo p1, CronetProvider.ProviderInfo p2) {
-                            // The fallback provider should always be at the end of the list.
-                            if (CronetProvider.PROVIDER_NAME_FALLBACK.equals(
-                                    p1.provider.getName())) {
-                                return 1;
-                            }
-                            if (CronetProvider.PROVIDER_NAME_FALLBACK.equals(
-                                    p2.provider.getName())) {
-                                return -1;
-                            }
-                            // A provider with higher version should go first.
-                            return -compareVersions(
-                                    p1.provider.getVersion(), p2.provider.getVersion());
-                        }
-                    });
-            return providers;
-        }
-
-        /**
-         * Compares two strings that contain versions. The string should only contain dot-separated
-         * segments that contain an arbitrary number of digits digits [0-9].
-         *
-         * @param s1 the first string.
-         * @param s2 the second string.
-         * @return -1 if s1<s2, +1 if s1>s2 and 0 if s1=s2. If two versions are equal, the version
-         *         with
-         * the higher number of segments is considered to be higher.
-         * @throws IllegalArgumentException if any of the strings contains an illegal version
-         *         number.
-         */
-        @VisibleForTesting
-        static int compareVersions(String s1, String s2) {
-            if (s1 == null || s2 == null) {
-                throw new IllegalArgumentException("The input values cannot be null");
-            }
-            String[] s1segments = s1.split("\\.");
-            String[] s2segments = s2.split("\\.");
-            for (int i = 0; i < s1segments.length && i < s2segments.length; i++) {
-                try {
-                    int s1segment = Integer.parseInt(s1segments[i]);
-                    int s2segment = Integer.parseInt(s2segments[i]);
-                    if (s1segment != s2segment) {
-                        return Integer.signum(s1segment - s2segment);
-                    }
-                } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException(
-                            "Unable to convert version segments into"
-                                    + " integers: "
-                                    + s1segments[i]
-                                    + " & "
-                                    + s2segments[i],
-                            e);
-                }
-            }
-            return Integer.signum(s1segments.length - s2segments.length);
+            return cronetProvider;
         }
 
         private int getMaximumApiLevel() {
@@ -897,11 +866,10 @@ public abstract class CronetEngine {
      *
      * @param url URL for the generated streams.
      * @param callback the {@link BidirectionalStream.Callback} object that gets invoked upon
-     * different events occurring.
+     *     different events occurring.
      * @param executor the {@link Executor} on which {@code callback} methods will be invoked.
      * @return the created builder.
-     *
-     * {@hide}
+     * @hide
      */
     public BidirectionalStream.Builder newBidirectionalStreamBuilder(
             String url, BidirectionalStream.Callback callback, Executor executor) {

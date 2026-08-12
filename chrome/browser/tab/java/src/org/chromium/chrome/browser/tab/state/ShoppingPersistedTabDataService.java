@@ -89,10 +89,10 @@ public class ShoppingPersistedTabDataService {
         }
         if (sProfileToPriceDropService == null) {
             sProfileToPriceDropService =
-                    new ProfileKeyedMap<>(ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+                    new ProfileKeyedMap<>(ProfileKeyedMap.noRequiredCleanupAction());
         }
         return sProfileToPriceDropService.getForProfile(
-                profile, (unused) -> new ShoppingPersistedTabDataService());
+                profile, _ -> new ShoppingPersistedTabDataService());
     }
 
     /**
@@ -179,8 +179,12 @@ public class ShoppingPersistedTabDataService {
             ShoppingPersistedTabData.from(
                     tab,
                     result -> {
-                        if (isDataEligibleForPriceDrop(result) && !tab.isDestroyed()) {
-                            results.add(new PriceChangeItem(tab, result));
+                        if (isDataEligibleForPriceDrop(result)) {
+                            // Do not reuse Tab from outer scope to avoid blocking GC of it.
+                            Tab t = result.getTab();
+                            if (!t.isDestroyed()) {
+                                results.add(new PriceChangeItem(t, result));
+                            }
                         }
                         // Return when all the data fetching has finished.
                         if (counter.incrementAndGet() == currentTabsWithPriceDrop.size()) {

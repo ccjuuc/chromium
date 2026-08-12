@@ -5,6 +5,9 @@
   <message name="IDS_HISTORY_ACTION_MENU_DESCRIPTION" desc="Text used to identify the history entry drop-down menu for screen readers">
     Actions
   </message>
+  <message name="IDS_HISTORY_ACTOR_TASK_TOOLTIP" desc="This string indicates entries in Chrome history that are the result of Gemini in Chrome browsing while performing an auto browse task for the user. When users view their Chrome history, this string appears as a tooltip on an auto browse history entry. This is a shortened version of the sentence: 'Auto browse worked on this task for you'. The tone should be short and telegraphic.">
+    Auto browse task
+  </message>
   <message name="IDS_HISTORY_ARIA_ROLE_DESCRIPTION" desc="Text used for accessibility to describe the list of history entries.">
     List of history entries
   </message>
@@ -121,12 +124,12 @@
   </message>
   <if expr="not use_titlecase">
     <message name="IDS_HISTORY_SHOW_HISTORY" desc="The show history menu in the app menu">
-      &amp;History
+      &amp;Open history page
     </message>
   </if>
   <if expr="use_titlecase">
     <message name="IDS_HISTORY_SHOW_HISTORY" desc="In Title Case: The show history menu in the app menu">
-      &amp;History
+      &amp;Open History Page
     </message>
   </if>
   <message name="IDS_HISTORY_SHOW_SIDE_PANEL" desc="Label of the item in drop-down menu that allows user to open the history in the side panel.">
@@ -134,6 +137,18 @@
   </message>
   <message name="IDS_HISTORY_SHOWFULLHISTORY_LINK" desc="The label of the Show Full History link at the bottom of the back/forward menu.">
     Show Full History
+  </message>
+  <message name="IDS_HISTORY_SOURCE_FILTER_CHIPS_ARIA_LABEL" desc="This string is the ARIA label of the filter chips that filter the history results when the user selects them; they sit next to each other on top of the Chrome history page, where users can see their browsing history.">
+    Auto browse filters
+  </message>
+  <message name="IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR" desc="This string is found on a chip that filters the history results when the user selects it; it sits next to its opposite filter: 'You' (the user's browsing activity). It is at the top of the Chrome history page, where users can see their browsing history. This text is a noun and is short for the longer phrase 'Browsing history that AUTO BROWSE performed.' The users will then see entries in Chrome history that are the result of Gemini in Chrome browsing while performing an auto browse task for the user. The tone should be short and telegraphic.">
+    Auto browse
+  </message>
+  <message name="IDS_HISTORY_SOURCE_FILTER_CHIP_USER" desc="This string is found on a chip that filters the history results when the user selects it; it sits next to its opposite filter: 'Auto browse' (browsing activity from an auto browse task). It is at the top of the Chrome history page, where users can see their browsing history. This text is a noun and is short for the longer phrase 'Browsing history that YOU performed.' The tone should be short and telegraphic.">
+    You
+  </message>
+  <message name="IDS_HISTORY_CLOSE_AND_RETURN_TO_PREFIX" desc="Text for the back-to-opener menu item. Format: Close and go back to &quot;[tab title]&quot;.">
+    Close and go back to "<ph name="TAB_TITLE">$1</ph>"
   </message>
   <message name="IDS_HISTORY_START_EDITING_BUTTON" desc="Text for the button to enter editing mode, which allows the user to delete one or more history entries [Length: 7em].">
     Edit
@@ -143,9 +158,6 @@
   </message>
   <message name="IDS_HISTORY_UNKNOWN_DEVICE" desc="On the dropdown menu for a history entry, the text that is shown instead of a device name, when the device name is not known.">
     Unknown device
-  </message>
-  <message name="IDS_ACTOR_TASK" translateable="false">
-    Gemini task
   </message>
 
   <message name="IDS_HISTORY_SYNC_PROMO_TITLE" desc="The title of the history sync promo.">
@@ -295,4 +307,23 @@
   <message name="IDS_COMPARE_HISTORY_ROW" desc="Text for a single row in tab compare history">
     Compare <ph name="COMPARE_SET_NAME"><ex>e-bikes</ex>$1</ph> &#183; <ph name="ITEMS"><ex>3</ex>$2</ph> items
   </message>
+
+  <!-- Critical actions -->
+  <!-- TODO(b/538113758): Make translatable when strings are finalized. -->
+  <message name="IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR_GEMINI" desc="This string is found on a chip that filters the history results when the user selects it; it sits next to its opposite filter: 'You' (the user's browsing activity). It is at the top of the Chrome history page, where users can see their browsing history when Gemini performs tasks." translateable="false">
+    Gemini
+  </message>
+  <message name="IDS_HISTORY_ACTOR_TASK_TOOLTIP_GEMINI" desc="This string indicates entries in Chrome history that are the result of Gemini in Chrome browsing while performing a task for the user. When users view their Chrome history, this string appears as a tooltip on a Gemini history entry." translateable="false">
+    Gemini task
+  </message>
+  <message name="IDS_HISTORY_REVIEW_GEMINI_ACTIVITY" desc="Command in the history entry drop-down menu. Opens Gemini Apps Activity page." translateable="false">
+    Review Gemini activity
+  </message>
+  <message name="IDS_HISTORY_OTHER_FORMS_OF_HISTORY_GMA_AND_GAA_CRITICAL_ACTIONS" desc="The notification at the bottom of the history page indicating that deleting Chrome browsing history will not delete other forms of history stored at Google My Activity and Gemini Apps Activity, shown when critical actions are enabled." translateable="false">
+    Your Google Account may have other forms of browsing history at <ph name="BEGIN_LINK_GMA">&lt;a target="_blank" id="footerGoogleMyActivityLink" href="$1"&gt;</ph>myactivity.google.com<ph name="END_LINK_GMA">&lt;/a&gt;</ph>, such as auto browse visits in your <ph name="BEGIN_LINK_GAA">&lt;a target="_blank" id="footerGeminiAppsActivityLink" href="$2"&gt;</ph>Gemini Apps Activity<ph name="END_LINK_GAA">&lt;/a&gt;</ph>
+  </message>
+  <message name="IDS_HISTORY_GEMINI_KEY_BROWSING_ACTIONS_TITLE" desc="Tooltip text for the expand button on history items for Gemini actor visits." translateable="false">
+    Gemini key browsing actions
+  </message>
+
 </grit-part>

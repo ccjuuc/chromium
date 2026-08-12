@@ -7,6 +7,9 @@ source_set("ui_bundled") {
     "account_picker_coordinator.h",
     "account_picker_coordinator.mm",
     "account_picker_coordinator_delegate.h",
+    "account_picker_mediator.h",
+    "account_picker_mediator.mm",
+    "account_picker_mediator_delegate.h",
   ]
   deps = [
     ":account_picker_configuration",
@@ -20,16 +23,17 @@ source_set("ui_bundled") {
     "//ios/chrome/browser/account_picker/ui_bundled/account_picker_confirmation",
     "//ios/chrome/browser/account_picker/ui_bundled/account_picker_screen",
     "//ios/chrome/browser/account_picker/ui_bundled/account_picker_selection",
+    "//ios/chrome/browser/authentication/signin/reauth/coordinator",
     "//ios/chrome/browser/authentication/ui_bundled",
     "//ios/chrome/browser/authentication/ui_bundled/signin:signin_headers",
     "//ios/chrome/browser/authentication/ui_bundled/signin:signin_protected",
-    "//ios/chrome/browser/authentication/ui_bundled/signin/reauth",
     "//ios/chrome/browser/shared/coordinator/alert",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/signin/model",
+    "//ios/chrome/browser/signin/model:authentication_service",
     "//ios/chrome/browser/signin/model:authentication_service_factory",
     "//ios/chrome/browser/signin/model:constants",
     "//ios/chrome/browser/signin/model:system_identity",
@@ -47,6 +51,7 @@ source_set("account_picker_configuration") {
     "account_picker_configuration.h",
     "account_picker_configuration.mm",
   ]
+  deps = [ "//ios/chrome/browser/shared/ui/symbols" ]
 }
 
 source_set("account_picker_layout") {
@@ -68,11 +73,18 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//components/signin/public/base",
+    "//components/sync:test_support",
     "//components/variations:test_support",
     "//ios/chrome/browser/account_picker/ui_bundled/account_picker_confirmation",
     "//ios/chrome/browser/account_picker/ui_bundled/account_picker_screen",
+    "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser/test:test_support",
     "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/signin/model:authentication_service",
+    "//ios/chrome/browser/signin/model:authentication_service_factory",
+    "//ios/chrome/browser/signin/model:test_support",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/test:test_support",
     "//ios/chrome/test/fakes",
     "//ios/web/public/test",

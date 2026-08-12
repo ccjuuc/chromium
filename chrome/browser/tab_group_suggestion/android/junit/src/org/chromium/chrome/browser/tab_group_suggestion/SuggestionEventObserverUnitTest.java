@@ -28,9 +28,10 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.hub.HubManager;
@@ -46,6 +47,7 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestionsService;
+import org.chromium.components.visited_url_ranking.url_grouping.TabSelectionCause;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHandle;
@@ -79,13 +81,20 @@ public class SuggestionEventObserverUnitTest {
     @Captor ArgumentCaptor<TabModelObserver> mTabModelObserverCaptor;
 
     private SuggestionEventObserver mSuggestionEventObserver;
-    private ObservableSupplierImpl<Boolean> mHubVisibilitySupplier;
-    private ObservableSupplierImpl<Pane> mFocusedPaneSupplier;
+    private final SettableNonNullObservableSupplier<Boolean> mHubVisibilitySupplier =
+            ObservableSuppliers.createNonNull(false);
+    private final SettableMonotonicObservableSupplier<Pane> mFocusedPaneSupplier =
+            ObservableSuppliers.createMonotonic();
     private OneshotSupplierImpl<HubManager> mHubManagerSupplier;
 
     @Before
     public void setup() {
+        mFocusedPaneSupplier.set(mPane);
+
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
+        doReturn(ObservableSuppliers.createMonotonic(mTabModel))
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
         when(mTabModel.getProfile()).thenReturn(mProfile);
         SettableNullableObservableSupplier<Tab> currentTabSupplier =
                 ObservableSuppliers.createNullable(mTab);
@@ -93,11 +102,8 @@ public class SuggestionEventObserverUnitTest {
         doNothing().when(mTabModel).addObserver(mTabModelObserverCaptor.capture());
         when(mTab.getId()).thenReturn(TAB_ID);
         when(mTab.getUrl()).thenReturn(TEST_URL);
-        mHubVisibilitySupplier = new ObservableSupplierImpl<>();
         when(mHubManager.getHubVisibilitySupplier()).thenReturn(mHubVisibilitySupplier);
         when(mHubManager.getPaneManager()).thenReturn(mPaneManager);
-        mFocusedPaneSupplier = new ObservableSupplierImpl<>();
-        mFocusedPaneSupplier.set(mPane);
         when(mPaneManager.getFocusedPaneSupplier()).thenReturn(mFocusedPaneSupplier);
         mHubManagerSupplier = new OneshotSupplierImpl<>();
         mHubManagerSupplier.set(mHubManager);
@@ -188,9 +194,7 @@ public class SuggestionEventObserverUnitTest {
                 .didSelectTab(
                         eq(TAB_ID),
                         eq(TEST_URL),
-                        eq(
-                                org.chromium.components.visited_url_ranking.url_grouping
-                                        .TabSelectionCause.FROM_NEW_TAB),
+                        eq(TabSelectionCause.FROM_NEW_TAB),
                         eq(Tab.INVALID_TAB_ID));
     }
 
@@ -206,15 +210,6 @@ public class SuggestionEventObserverUnitTest {
     @Test
     public void testEnterPane_NotFocusTabSwitcher() {
         doReturn(PaneId.INCOGNITO_TAB_SWITCHER).when(mPane).getPaneId();
-
-        mHubVisibilitySupplier.set(true);
-
-        verify(mGroupSuggestionsService, never()).didEnterTabSwitcher();
-    }
-
-    @Test
-    public void testEnterPane_InvalidFocusedPane() {
-        mFocusedPaneSupplier.set(null);
 
         mHubVisibilitySupplier.set(true);
 

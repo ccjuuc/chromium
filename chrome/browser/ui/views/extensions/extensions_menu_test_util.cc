@@ -8,11 +8,10 @@
 
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
+#include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
@@ -22,17 +21,14 @@
 #include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_coordinator.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "extensions/common/extension_features.h"
-#include "ui/events/base_event_utils.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/button_test_api.h"
@@ -47,9 +43,9 @@ ExtensionsMenuTestUtil::ExtensionsMenuTestUtil(Browser* browser)
     : scoped_allow_extensions_menu_instances_(
           ExtensionsMenuView::AllowInstancesForTesting()),
       browser_(browser) {
-  extensions_container_ = BrowserView::GetBrowserViewForBrowser(browser_)
-                              ->toolbar()
-                              ->extensions_container();
+  extensions_toolbar_ = BrowserView::GetBrowserViewForBrowser(browser_)
+                            ->toolbar()
+                            ->extensions_container();
 }
 
 ExtensionsMenuTestUtil::~ExtensionsMenuTestUtil() {
@@ -59,7 +55,7 @@ ExtensionsMenuTestUtil::~ExtensionsMenuTestUtil() {
 
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
-    extensions_container_->GetExtensionsMenuCoordinatorForTesting()->Hide();
+    extensions_toolbar_->GetExtensionsMenuCoordinatorForTesting()->Hide();
   } else {
     menu_view_->GetWidget()->CloseNow();
   }
@@ -71,22 +67,23 @@ void ExtensionsMenuTestUtil::OnViewIsDeleting(views::View* observed_view) {
 }
 
 int ExtensionsMenuTestUtil::NumberOfBrowserActions() {
-  return extensions_container_->GetNumberOfActionsForTesting();
+  return extensions_toolbar_->GetNumberOfActionsForTesting();
 }
 
 bool ExtensionsMenuTestUtil::HasAction(const extensions::ExtensionId& id) {
-  return extensions_container_->GetActionForId(id) != nullptr;
+  return extensions_toolbar_->GetToolbarViewModel()->GetActionForId(id) !=
+         nullptr;
 }
 
 void ExtensionsMenuTestUtil::InspectPopup(const extensions::ExtensionId& id) {
   auto* view_model = static_cast<ExtensionActionViewModel*>(
-      extensions_container_->GetActionForId(id));
+      extensions_toolbar_->GetToolbarViewModel()->GetActionForId(id));
   DCHECK(view_model);
   view_model->InspectPopup();
 }
 
 gfx::Image ExtensionsMenuTestUtil::GetIcon(const extensions::ExtensionId& id) {
-  ToolbarActionView* action_view = extensions_container_->GetViewForId(id);
+  ToolbarActionView* action_view = extensions_toolbar_->GetViewForId(id);
   DCHECK(action_view);
   return gfx::Image(action_view->GetIconForTest());
 }
@@ -94,16 +91,17 @@ gfx::Image ExtensionsMenuTestUtil::GetIcon(const extensions::ExtensionId& id) {
 void ExtensionsMenuTestUtil::Press(const extensions::ExtensionId& id) {
   OpenExtensionsMenu();
 
-  ExtensionsMenuButton* primary_button = GetPrimaryButton(id);
-  CHECK(primary_button);
+  HoverButton* action_button = GetActionButton(id);
+  CHECK(action_button);
 
-  views::test::ButtonTestApi(primary_button).NotifyDefaultMouseClick();
+  views::test::ButtonTestApi(action_button).NotifyDefaultMouseClick();
 }
 
 gfx::NativeView ExtensionsMenuTestUtil::GetPopupNativeView() {
   ToolbarActionViewModel* popup_owner =
-      extensions_container_->popup_owner_for_testing();
-  return popup_owner ? popup_owner->GetPopupNativeView() : gfx::NativeView();
+      extensions_toolbar_->popup_owner_for_testing();
+  return popup_owner ? popup_owner->GetPopupNativeViewForTesting()
+                     : gfx::NativeView();
 }
 
 bool ExtensionsMenuTestUtil::HasPopup() {
@@ -111,15 +109,16 @@ bool ExtensionsMenuTestUtil::HasPopup() {
 }
 
 bool ExtensionsMenuTestUtil::HidePopup() {
-  // ExtensionsToolbarContainer::HideActivePopup() is private. Get around it by
+  // ExtensionsToolbarDesktop::HideActivePopup() is private. Get around it by
   // casting to an ExtensionsContainer.
-  static_cast<ExtensionsContainer*>(extensions_container_)->HideActivePopup();
+  static_cast<ExtensionsContainer*>(extensions_toolbar_->GetToolbarViewModel())
+      ->HideActivePopup();
   return !HasPopup();
 }
 
 void ExtensionsMenuTestUtil::WaitForExtensionsContainerLayout() {
   views::test::WaitForAnimatingLayoutManager(
-      static_cast<views::View*>(extensions_container_));
+      static_cast<views::View*>(extensions_toolbar_));
 }
 
 gfx::Size ExtensionsMenuTestUtil::GetMinPopupSize() {
@@ -140,7 +139,7 @@ gfx::Size ExtensionsMenuTestUtil::GetMaxAvailableSizeToFitBubbleOnScreen(
   }
 #endif
   return views::BubbleDialogDelegate::GetMaxAvailableScreenSpaceToPlaceBubble(
-      extensions_container_->GetReferenceButtonForPopup(id),
+      extensions_toolbar_->GetReferenceButtonForPopup(id),
       views::BubbleBorder::TOP_RIGHT,
       views::PlatformStyle::kAdjustBubbleIfOffscreen,
       views::BubbleFrameView::PreferredArrowAdjustment::kMirror);
@@ -155,37 +154,39 @@ void ExtensionsMenuTestUtil::OpenExtensionsMenu() {
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
     bubble_dialog =
-        extensions_container_->GetExtensionsMenuCoordinatorForTesting()
+        extensions_toolbar_->GetExtensionsMenuCoordinatorForTesting()
             ->CreateExtensionsMenuBubbleDialogDelegateForTesting(
-                extensions_container_->GetExtensionsButton(),
-                extensions_container_);
+                views::BubbleAnchor(extensions_toolbar_->GetExtensionsButton()),
+                extensions_toolbar_);
   } else {
     bubble_dialog = std::make_unique<ExtensionsMenuView>(
-        extensions_container_->GetExtensionsButton(), browser_,
-        extensions_container_);
+        extensions_toolbar_->GetExtensionsButton(), browser_,
+        extensions_toolbar_->GetToolbarViewModel(), extensions_toolbar_);
     menu_view_ = views::AsViewClass<ExtensionsMenuView>(
         bubble_dialog->GetContentsView());
 
     menu_view_->View::AddObserver(this);
   }
 
-  views::BubbleDialogDelegate::CreateBubble(std::move(bubble_dialog));
+  views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(bubble_dialog),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
 }
 
 bool ExtensionsMenuTestUtil::IsExtensionsMenuShowing() {
   return base::FeatureList::IsEnabled(
              extensions_features::kExtensionsMenuAccessControl)
-             ? extensions_container_->GetExtensionsMenuCoordinatorForTesting()
+             ? extensions_toolbar_->GetExtensionsMenuCoordinatorForTesting()
                    ->IsShowing()
              : menu_view_;
 }
 
-ExtensionsMenuButton* ExtensionsMenuTestUtil::GetPrimaryButton(
+HoverButton* ExtensionsMenuTestUtil::GetActionButton(
     const extensions::ExtensionId& id) {
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
     ExtensionsMenuMainPageView* main_page =
-        extensions_container_->GetExtensionsMenuCoordinatorForTesting()
+        extensions_toolbar_->GetExtensionsMenuCoordinatorForTesting()
             ->GetDelegateForTesting()
             ->GetMainPageViewForTesting();
     DCHECK(main_page);
@@ -197,9 +198,8 @@ ExtensionsMenuButton* ExtensionsMenuTestUtil::GetPrimaryButton(
                                return entry->extension_id() == id;
                              });
 
-    return (iter == menu_entries.end())
-               ? nullptr
-               : (*iter)->primary_action_button_for_testing();
+    return (iter == menu_entries.end()) ? nullptr
+                                        : (*iter)->action_button_for_testing();
   }
 
   base::flat_set<raw_ptr<ExtensionMenuItemView, CtnExperimental>> menu_items =

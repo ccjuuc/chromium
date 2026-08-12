@@ -22,8 +22,7 @@ class COMPONENT_EXPORT(UI_BASE) TouchEditable
     : public ui::SimpleMenuModel::Delegate {
  public:
   // Commands that all TouchEditables support:
-  // TODO(b/263419885): Rewrite MenuCommands as an enum class.
-  enum MenuCommands {
+  enum class MenuCommands {
     // Don't use command ID 0 - a lot of tests use 0 for "no command".
     kCut = 1,
     kCopy,
@@ -106,6 +105,12 @@ class COMPONENT_EXPORT(UI_BASE) TouchEditable
   // Tells the editable to end touch editing and destroy touch selection
   // controller it owns.
   virtual void DestroyTouchSelection() = 0;
+
+  using ui::SimpleMenuModel::Delegate::IsCommandIdEnabled;
+
+  // Checks if the command is enabled. |can_paste| is provided by the caller
+  // based on the async clipboard read state.
+  virtual bool IsCommandIdEnabled(int command_id, bool can_paste) const = 0;
 
  protected:
   ~TouchEditable() override {}

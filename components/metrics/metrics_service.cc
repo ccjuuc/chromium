@@ -133,8 +133,8 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
-#include "base/metrics/histogram_flattener.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_macros_local.h"
@@ -152,6 +152,7 @@
 #include "base/trace_event/named_trigger.h"
 #include "build/build_config.h"
 #include "components/metrics/clean_exit_beacon.h"
+#include "components/metrics/drive_metrics_provider.h"
 #include "components/metrics/environment_recorder.h"
 #include "components/metrics/field_trials_provider.h"
 #include "components/metrics/metrics_features.h"
@@ -181,16 +182,19 @@ namespace metrics {
 namespace {
 
 // Used to write histogram data to a log. Does not take ownership of the log.
-class IndependentFlattener : public base::HistogramFlattener {
+class IndependentHistogramSnapshotManager
+    : public base::HistogramSnapshotManager {
  public:
-  explicit IndependentFlattener(MetricsLog* log) : log_(log) {}
+  explicit IndependentHistogramSnapshotManager(MetricsLog* log) : log_(log) {}
 
-  IndependentFlattener(const IndependentFlattener&) = delete;
-  IndependentFlattener& operator=(const IndependentFlattener&) = delete;
+  IndependentHistogramSnapshotManager(
+      const IndependentHistogramSnapshotManager&) = delete;
+  IndependentHistogramSnapshotManager& operator=(
+      const IndependentHistogramSnapshotManager&) = delete;
 
-  ~IndependentFlattener() override = default;
+  ~IndependentHistogramSnapshotManager() override = default;
 
-  // base::HistogramFlattener:
+  // base::HistogramSnapshotManager:
   void RecordDelta(const base::HistogramBase& histogram,
                    const base::HistogramSamples& snapshot) override {
     CHECK(histogram.HasFlags(base::HistogramBase::kUmaTargetedHistogramFlag));
@@ -203,15 +207,18 @@ class IndependentFlattener : public base::HistogramFlattener {
 
 // Used to mark histogram samples as reported so that they are not included in
 // the next log. A histogram's snapshot samples are simply discarded/ignored
-// when attempting to record them through this |HistogramFlattener|.
-class DiscardingFlattener : public base::HistogramFlattener {
+// when attempting to record them through this manager.
+class DiscardingHistogramSnapshotManager
+    : public base::HistogramSnapshotManager {
  public:
-  DiscardingFlattener() = default;
+  DiscardingHistogramSnapshotManager() = default;
 
-  DiscardingFlattener(const DiscardingFlattener&) = delete;
-  DiscardingFlattener& operator=(const DiscardingFlattener&) = delete;
+  DiscardingHistogramSnapshotManager(
+      const DiscardingHistogramSnapshotManager&) = delete;
+  DiscardingHistogramSnapshotManager& operator=(
+      const DiscardingHistogramSnapshotManager&) = delete;
 
-  ~DiscardingFlattener() override = default;
+  ~DiscardingHistogramSnapshotManager() override = default;
 
   void RecordDelta(const base::HistogramBase& histogram,
                    const base::HistogramSamples& snapshot) override {
@@ -315,6 +322,7 @@ void RecordUserLogStoreState(UserLogStoreState state) {
 void MetricsService::RegisterPrefs(PrefRegistrySimple* registry) {
   MetricsStateManager::RegisterPrefs(registry);
   MetricsLog::RegisterPrefs(registry);
+  DriveMetricsProvider::RegisterPrefs(registry);
   StabilityMetricsProvider::RegisterPrefs(registry);
   MetricsReportingService::RegisterPrefs(registry);
 
@@ -473,6 +481,11 @@ int MetricsService::GetLowEntropySource() {
   return state_manager_->GetLowEntropySource();
 }
 
+void MetricsService::Purge() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  reporting_service_.metrics_log_store()->Purge();
+}
+
 int MetricsService::GetOldLowEntropySource() {
   return state_manager_->GetOldLowEntropySource();
 }
@@ -611,8 +624,11 @@ void MetricsService::ClearFgBgIdIfNeeded(
   current_log_->ClearFgBgId();
 }
 
-void MetricsService::OnAppEnterBackground(bool keep_recording_in_background) {
-  base::RecordAction(base::UserMetricsAction("UMA_OnBackgrounded"));
+void MetricsService::OnAppEnterBackground(bool keep_recording_in_background,
+                                          bool emit_uma_action) {
+  if (emit_uma_action) {
+    base::RecordAction(base::UserMetricsAction("UMA_OnBackgrounded"));
+  }
   std::optional<bool> previous_is_in_foreground = is_in_foreground_;
   is_in_foreground_ = false;
   reporting_service_.OnAppEnterBackground();
@@ -665,8 +681,11 @@ void MetricsService::OnAppEnterBackground(bool keep_recording_in_background) {
   }
 }
 
-void MetricsService::OnAppEnterForeground(bool force_open_new_log) {
-  base::RecordAction(base::UserMetricsAction("UMA_OnForegrounded"));
+void MetricsService::OnAppEnterForeground(bool force_open_new_log,
+                                          bool emit_uma_action) {
+  if (emit_uma_action) {
+    base::RecordAction(base::UserMetricsAction("UMA_OnForegrounded"));
+  }
   std::optional<bool> previous_is_in_foreground = is_in_foreground_;
   is_in_foreground_ = true;
   reporting_service_.OnAppEnterForeground();
@@ -705,26 +724,6 @@ void MetricsService::OnAppEnterForeground(bool force_open_new_log) {
 }
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 
-void MetricsService::Flush() {
-  if (recording_active() && !IsTooEarlyToCloseLog()) {
-#if BUILDFLAG(IS_ANDROID)
-    client_->MergeSubprocessHistograms();
-#endif  // BUILDFLAG(IS_ANDROID)
-    {
-      ScopedTerminationChecker scoped_termination_checker(
-          "UMA.MetricsService.OnFlushScopedTerminationChecker");
-      // Trim and store unsent logs so that they're not lost in case of a crash
-      // before upload time. However, the in-memory log store is unchanged.
-      // I.e., logs that are trimmed will still be available in memory. After
-      // uploading (whether successful or not), the log store is trimmed and
-      // stored again, and at that time, the in-memory log store will be
-      // updated.
-      log_store()->TrimAndPersistUnsentLogs(
-          /*overwrite_in_memory_store=*/false);
-    }
-  }
-}
-
 void MetricsService::OnPageLoadStarted() {
   delegating_provider_.OnPageLoadStarted();
 }
@@ -742,8 +741,7 @@ void MetricsService::ClearSavedStabilityMetrics() {
 }
 
 void MetricsService::MarkCurrentHistogramsAsReported() {
-  DiscardingFlattener flattener;
-  base::HistogramSnapshotManager snapshot_manager(&flattener);
+  DiscardingHistogramSnapshotManager snapshot_manager;
   base::StatisticsRecorder::PrepareDeltas(
       /*include_persistent=*/true, /*flags_to_set=*/base::Histogram::kNoFlags,
       /*required_flags=*/base::Histogram::kUmaTargetedHistogramFlag,
@@ -799,8 +797,7 @@ void MetricsService::UnsetUserLogStore() {
   // TODO(crbug.com/40245274): Consider not flushing histograms here.
 
   // Discard histograms.
-  DiscardingFlattener flattener;
-  base::HistogramSnapshotManager histogram_snapshot_manager(&flattener);
+  DiscardingHistogramSnapshotManager histogram_snapshot_manager;
   delegating_provider_.RecordHistogramSnapshots(&histogram_snapshot_manager);
   base::StatisticsRecorder::PrepareDeltas(
       /*include_persistent=*/true, /*flags_to_set=*/base::Histogram::kNoFlags,
@@ -824,17 +821,16 @@ void MetricsService::InitPerUserMetrics() {
   client_->InitPerUserMetrics();
 }
 
-std::optional<bool> MetricsService::GetCurrentUserMetricsConsent() const {
-  return client_->GetCurrentUserMetricsConsent();
+std::optional<bool> MetricsService::GetCurrentUserMetricsChoice() const {
+  return client_->GetCurrentUserMetricsChoice();
 }
 
 std::optional<std::string> MetricsService::GetCurrentUserId() const {
   return client_->GetCurrentUserId();
 }
 
-void MetricsService::UpdateCurrentUserMetricsConsent(
-    bool user_metrics_consent) {
-  client_->UpdateCurrentUserMetricsConsent(user_metrics_consent);
+void MetricsService::UpdateCurrentUserMetricsChoice(bool user_choice) {
+  client_->UpdateCurrentUserMetricsChoice(user_choice);
 }
 
 void MetricsService::ResetClientId() {
@@ -1025,9 +1021,8 @@ MetricsService::MetricsLogHistogramWriter::MetricsLogHistogramWriter(
     MetricsLog* log,
     base::HistogramBase::Flags required_flags)
     : required_flags_(required_flags),
-      flattener_(std::make_unique<IndependentFlattener>(log)),
       histogram_snapshot_manager_(
-          std::make_unique<base::HistogramSnapshotManager>(flattener_.get())) {}
+          std::make_unique<IndependentHistogramSnapshotManager>(log)) {}
 
 MetricsService::MetricsLogHistogramWriter::~MetricsLogHistogramWriter() =
     default;
@@ -1042,10 +1037,7 @@ void MetricsService::MetricsLogHistogramWriter::
 }
 
 void MetricsService::MetricsLogHistogramWriter::NotifyLogBeingFinalized() {
-  // Since the `flattener_` references the `log`, make sure it is destroyed so
-  // the pointer doesn't become dangling.
-  histogram_snapshot_manager()->ResetFlattener();
-  flattener_.reset();
+  histogram_snapshot_manager_.reset();
 }
 
 MetricsService::IndependentMetricsLoader::IndependentMetricsLoader(
@@ -1053,9 +1045,8 @@ MetricsService::IndependentMetricsLoader::IndependentMetricsLoader(
     std::string app_version,
     std::string signing_key)
     : log_(std::move(log)),
-      flattener_(std::make_unique<IndependentFlattener>(log_.get())),
       snapshot_manager_(
-          std::make_unique<base::HistogramSnapshotManager>(flattener_.get())),
+          std::make_unique<IndependentHistogramSnapshotManager>(log_.get())),
       app_version_(std::move(app_version)),
       signing_key_(std::move(signing_key)) {
   CHECK(log_);
@@ -1084,10 +1075,9 @@ void MetricsService::IndependentMetricsLoader::FinalizeLog() {
   CHECK(!finalize_log_called_);
   finalize_log_called_ = true;
 
-  // Release |snapshot_manager_| and then |flattener_| to prevent dangling
-  // pointers, since |log_| will be released in MetricsService::FinalizeLog().
+  // Release |snapshot_manager_| since |log_| will be released in
+  // MetricsService::FinalizeLog().
   snapshot_manager_.reset();
-  flattener_.reset();
 
   // Note that the close_time param must not be set for independent logs.
   finalized_log_ = MetricsService::FinalizeLog(
@@ -1631,7 +1621,7 @@ void MetricsService::OnClonedInstallDetected() {
   // since the cloned install detector works asynchronously, it is possible that
   // this is called after logs were already sent. However, practically speaking,
   // this should not happen, since logs are only sent late into the session.
-  reporting_service_.metrics_log_store()->Purge();
+  Purge();
 }
 
 // static

@@ -11,7 +11,6 @@
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/scoped_user_pref_update.h"
 #import "components/prefs/testing_pref_service.h"
-#import "ios/chrome/browser/popup_menu/overflow_menu/public/feature_flags.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -71,9 +70,9 @@ class DestinationUsageHistoryTest : public PlatformTest {
   // returns the new ranking.
   DestinationRanking InitializeDestinationUsageHistoryWithData(
       DestinationRanking& ranking,
-      base::Value::Dict& history,
+      base::DictValue& history,
       DestinationRanking default_destinations) {
-    base::Value::List previous_ranking;
+    base::ListValue previous_ranking;
 
     for (overflow_menu::Destination destination : ranking) {
       previous_ranking.Append(
@@ -108,18 +107,18 @@ class DestinationUsageHistoryTest : public PlatformTest {
 
   // Helper for CreateDestinationUsageHistoryWithData(), inserts day history
   // data and `ranking` for testing pref service.
-  void CreatePrefsWithData(base::Value::List& stored_ranking,
-                           base::Value::Dict& stored_history) {
+  void CreatePrefsWithData(base::ListValue& stored_ranking,
+                           base::DictValue& stored_history) {
     CreatePrefs();
 
     // Set the passed in `stored_history`.
-    base::Value::Dict history = stored_history.Clone();
+    base::DictValue history = stored_history.Clone();
 
     prefs_->SetDict(prefs::kOverflowMenuDestinationUsageHistory,
                     std::move(history));
   }
 
-  // Constructs '<day>.<destination>' dotted-path key for base::Value::Dict
+  // Constructs '<day>.<destination>' dotted-path key for base::DictValue
   // searching.
   std::string DottedPath(std::string day,
                          overflow_menu::Destination destination) {
@@ -181,8 +180,8 @@ TEST_F(DestinationUsageHistoryTest, InitWithPrefServiceForDirtyPrefs) {
       overflow_menu::Destination::Settings,
   };
 
-  base::Value::Dict history;
-  base::Value::Dict day_history;
+  base::DictValue history;
+  base::DictValue day_history;
   history.SetByDottedPath(
       DottedPath(TodaysDay().InDays(), overflow_menu::Destination::Bookmarks),
       std::move(day_history));
@@ -264,8 +263,8 @@ TEST_F(DestinationUsageHistoryTest,
       overflow_menu::Destination::SiteInfo,
       overflow_menu::Destination::Settings,
   };
-  base::Value::Dict history;
-  base::Value::Dict day_history;
+  base::DictValue history;
+  base::DictValue day_history;
   day_history.Set(overflow_menu::StringNameForDestination(
                       overflow_menu::Destination::Bookmarks),
                   5);
@@ -307,7 +306,7 @@ TEST_F(DestinationUsageHistoryTest, DoesNotSwapTwoShownDestinations) {
       overflow_menu::Destination::SiteInfo,
       overflow_menu::Destination::Settings,
   };
-  base::Value::Dict history;
+  base::DictValue history;
 
   DestinationRanking initial_ranking =
       InitializeDestinationUsageHistoryWithData(ranking, history,
@@ -345,8 +344,8 @@ TEST_F(DestinationUsageHistoryTest, DoesNotSwapTwoUnshownDestinations) {
       overflow_menu::Destination::SiteInfo,
       overflow_menu::Destination::Settings,
   };
-  base::Value::Dict history;
-  base::Value::Dict day_history;
+  base::DictValue history;
+  base::DictValue day_history;
   day_history.Set(overflow_menu::StringNameForDestination(
                       overflow_menu::Destination::Bookmarks),
                   3);
@@ -412,11 +411,11 @@ TEST_F(DestinationUsageHistoryTest, DeletesExpiredUsageData) {
       overflow_menu::Destination::Settings,
   };
 
-  base::Value::Dict history;
+  base::DictValue history;
 
   // Usage data just a bit older than 1 year.
   base::TimeDelta recently_expired_day = TodaysDay() - base::Days(366);
-  base::Value::Dict recently_expired_day_history;
+  base::DictValue recently_expired_day_history;
   recently_expired_day_history.Set(overflow_menu::StringNameForDestination(
                                        overflow_menu::Destination::Bookmarks),
                                    1);
@@ -425,7 +424,7 @@ TEST_F(DestinationUsageHistoryTest, DeletesExpiredUsageData) {
 
   // Usage data almost 3 years old.
   base::TimeDelta expired_day = TodaysDay() - base::Days(1000);
-  base::Value::Dict expired_day_history;
+  base::DictValue expired_day_history;
   expired_day_history.Set(overflow_menu::StringNameForDestination(
                               overflow_menu::Destination::Bookmarks),
                           1);
@@ -451,11 +450,11 @@ TEST_F(DestinationUsageHistoryTest, DeletesExpiredUsageData) {
 }
 
 TEST_F(DestinationUsageHistoryTest, ClearsUsageData) {
-  base::Value::Dict history;
+  base::DictValue history;
 
   // Usage data for yesterday.
   base::TimeDelta day = TodaysDay() - base::Days(1);
-  base::Value::Dict day_history;
+  base::DictValue day_history;
   day_history.Set(overflow_menu::StringNameForDestination(
                       overflow_menu::Destination::Bookmarks),
                   1);
@@ -466,7 +465,7 @@ TEST_F(DestinationUsageHistoryTest, ClearsUsageData) {
 
   [destination_usage_history_ clearStoredClickData];
 
-  const base::Value::Dict& new_history =
+  const base::DictValue& new_history =
       prefs_->GetDict(prefs::kOverflowMenuDestinationUsageHistory);
   EXPECT_EQ(new_history.size(), 0u);
 }

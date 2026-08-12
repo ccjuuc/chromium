@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 
+#include "base/numerics/safe_conversions.h"
 #include "cc/layers/layer.h"
 #include "cc/paint/display_item_list.h"
 #include "cc/paint/paint_filter.h"
@@ -1107,7 +1108,8 @@ TEST_P(PaintChunksToCcLayerTest, ReferenceFilterOnEmptyChunk) {
   gfx::Rect expected_visual_rect(7, 16, 93, 84);
   for (size_t i = 0; i < cc_list->TotalOpCount(); i++) {
     SCOPED_TRACE(testing::Message() << "Visual rect of op " << i);
-    EXPECT_EQ(expected_visual_rect, cc_list->VisualRectForTesting(i));
+    EXPECT_EQ(expected_visual_rect,
+              cc_list->VisualRectForTesting(base::checked_cast<int>(i)));
   }
 
   auto output = cc_list->FinalizeAndReleaseAsRecordForTesting();
@@ -1147,7 +1149,8 @@ TEST_P(PaintChunksToCcLayerTest, ReferenceFilterOnChunkWithDrawingDisplayItem) {
   // TotalOpCount() - 1 because the DrawRecord op has a sub operation.
   for (size_t i = 0; i < cc_list->TotalOpCount() - 1; i++) {
     SCOPED_TRACE(testing::Message() << "Visual rect of op " << i);
-    EXPECT_EQ(expected_filter_visual_rect, cc_list->VisualRectForTesting(i));
+    EXPECT_EQ(expected_filter_visual_rect,
+              cc_list->VisualRectForTesting(base::checked_cast<int>(i)));
   }
 
   auto output = cc_list->FinalizeAndReleaseAsRecordForTesting();
@@ -1270,6 +1273,52 @@ TEST_P(PaintChunksToCcLayerTest, ScrollingContentsIntoDisplayItemList) {
             PaintOpIs<cc::DrawRecordOp>(),         // chunk 1
             PaintOpIs<cc::RestoreOp>(),            // </scroll-translation>
             PaintOpIs<cc::RestoreOp>(),            // </overflow-clip>
+            PaintOpIs<cc::DrawRecordOp>()));       // chunk 2
+  }
+}
+
+TEST_P(PaintChunksToCcLayerTest,
+       ScrollingContentsWithoutOverflowClipIntoDisplayItemList) {
+  auto* scroll_translation = CreateScrollTranslation(
+      t0(), *t0().ScrollNode(), -50, -60, gfx::Rect(5, 5, 20, 30),
+      gfx::Size(100, 200), /*overflow_clip=*/nullptr);
+  PropertyTreeState scroll_state(*scroll_translation, c0(), e0());
+
+  TestChunks chunks;
+  chunks.AddChunk(t0(), c0(), e0());
+  chunks.AddChunk(scroll_state);
+  chunks.AddChunk(t0(), c0(), e0());
+
+  auto cc_list = base::MakeRefCounted<cc::DisplayItemList>();
+  PaintChunksToCcLayer::ConvertInto(chunks.Build(), PropertyTreeState::Root(),
+                                    gfx::Vector2dF(), nullptr, *cc_list);
+
+  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled()) {
+    EXPECT_THAT(cc_list->paint_op_buffer(),
+                ElementsAre(PaintOpIs<cc::DrawRecordOp>(),  // chunk 0
+                            PaintOpIs<cc::DrawScrollingContentsOp>(),
+                            PaintOpIs<cc::DrawRecordOp>()));  // chunk 2
+    EXPECT_EQ(
+        InfiniteIntRect(),
+        cc_list->raster_inducing_scrolls()
+            .at(scroll_translation->ScrollNode()->GetCompositorElementId())
+            .visual_rect);
+    const auto& scrolling_contents_op =
+        static_cast<const cc::DrawScrollingContentsOp&>(
+            cc_list->paint_op_buffer().GetOpAtForTesting(1));
+    ASSERT_EQ(cc::PaintOpType::kDrawScrollingContents,
+              scrolling_contents_op.GetType());
+    EXPECT_THAT(scrolling_contents_op.display_item_list->paint_op_buffer(),
+                ElementsAre(PaintOpIs<cc::DrawRecordOp>()));  // chunk 1
+  } else {
+    EXPECT_THAT(
+        cc_list->paint_op_buffer(),
+        ElementsAre(
+            PaintOpIs<cc::DrawRecordOp>(),  // chunk 0
+            PaintOpIs<cc::SaveOp>(),
+            PaintOpEq<cc::TranslateOp>(-50, -60),  // <scroll-translation>
+            PaintOpIs<cc::DrawRecordOp>(),         // chunk 1
+            PaintOpIs<cc::RestoreOp>(),            // </scroll-translation>
             PaintOpIs<cc::DrawRecordOp>()));       // chunk 2
   }
 }
@@ -2000,9 +2049,13 @@ TEST_P(PaintChunksToCcLayerTest, NonCompositedBackdropFilter) {
 
   PaintRecord output =
       PaintChunksToCcLayer::Convert(chunks.Build(), PropertyTreeState::Root());
-  EXPECT_THAT(output, ElementsAre(PaintOpIs<cc::SaveLayerFiltersOp>(),
-                                  PaintOpIs<cc::DrawRecordOp>(),
-                                  PaintOpIs<cc::RestoreOp>()));
+  EXPECT_THAT(
+      output,
+      ElementsAre(PaintOpIs<cc::SaveLayerFiltersOp>(), PaintOpIs<cc::SaveOp>(),
+                  PaintOpIs<cc::ClipPathOp>(), PaintOpIs<cc::DrawColorOp>(),
+                  PaintOpIs<cc::RestoreOp>(), PaintOpIs<cc::SaveLayerAlphaOp>(),
+                  PaintOpIs<cc::DrawRecordOp>(), PaintOpIs<cc::RestoreOp>(),
+                  PaintOpIs<cc::RestoreOp>()));
 }
 
 }  // namespace

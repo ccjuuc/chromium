@@ -11,7 +11,9 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
+#include "base/byte_size.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -43,6 +45,7 @@
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_host.h"
@@ -58,6 +61,8 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 #include "third_party/blink/public/common/service_worker/service_worker_scope_match.h"
+#include "third_party/blink/public/mojom/frame/policy_container.mojom.h"
+#include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration_options.mojom.h"
@@ -296,7 +301,9 @@ ServiceWorkerClientOwner::ServiceWorkerClientOwner(
       base::Unretained(this)));
 }
 
-ServiceWorkerClientOwner::~ServiceWorkerClientOwner() = default;
+ServiceWorkerClientOwner::~ServiceWorkerClientOwner() {
+  in_dtor_ = true;
+}
 
 void ServiceWorkerClientOwner::ResetContext(
     ServiceWorkerContextCore& new_context) {
@@ -456,7 +463,7 @@ ServiceWorkerClientOwner::CreateServiceWorkerClientForPrefetch(
 
 ScopedServiceWorkerClient
 ServiceWorkerClientOwner::CreateServiceWorkerClientForWorker(
-    int process_id,
+    ChildProcessId process_id,
     ServiceWorkerClientInfo client_info) {
   auto client = std::make_unique<ServiceWorkerClient>(context_->AsWeakPtr(),
                                                       process_id, client_info);
@@ -531,7 +538,10 @@ void ServiceWorkerContextCore::OnClientDestroyed(
 
 void ServiceWorkerClientOwner::DestroyServiceWorkerClient(
     base::WeakPtr<ServiceWorkerClient> service_worker_client) {
-  if (!service_worker_client) {
+  if (!service_worker_client || in_dtor_) {
+    // During `ServiceWorkerClientOwner` destruction, remaining clients are
+    // already owned by `service_worker_clients_by_uuid_` and will be destroyed
+    // as that map is torn down.
     return;
   }
 
@@ -580,9 +590,13 @@ void ServiceWorkerContextCore::UpdateServiceWorkerWithoutExecutionContext(
     bool force_bypass_cache) {
   // Use an empty fetch client settings object because this method is for
   // browser-initiated update and there is no associated execution context.
+  auto fetch_client_settings_object =
+      blink::mojom::FetchClientSettingsObject::New();
+  fetch_client_settings_object->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
   UpdateServiceWorkerImpl(
       registration, force_bypass_cache, /*skip_script_comparison=*/false,
-      blink::mojom::FetchClientSettingsObject::New(), base::NullCallback());
+      std::move(fetch_client_settings_object), base::NullCallback());
 }
 
 void ServiceWorkerContextCore::UpdateServiceWorker(
@@ -861,6 +875,12 @@ void ServiceWorkerContextCore::UnregistrationComplete(
     ServiceWorkerContextCore::UnregistrationCallback callback,
     int64_t registration_id,
     blink::ServiceWorkerStatusCode status) {
+  if (status == blink::ServiceWorkerStatusCode::kOk) {
+    for (auto& observer : sync_observer_list_->observers) {
+      observer.OnRegistrationDeletedSync(registration_id, scope);
+    }
+  }
+
   std::move(callback).Run(status);
   if (status == blink::ServiceWorkerStatusCode::kOk) {
     observer_list_->Notify(
@@ -942,15 +962,18 @@ void ServiceWorkerContextCore::RemoveLiveVersion(int64_t id) {
   auto it = live_versions_.find(id);
   CHECK(it != live_versions_.end());
   ServiceWorkerVersion* version = it->second;
+  // Erase from the map before notifying observers to prevent re-entrancy:
+  // synchronous observers could otherwise look up this version via
+  // `GetLiveVersion()` and resurrect it with a new `scoped_refptr`.
+  live_versions_.erase(it);
 
-  if (version->running_status() != blink::EmbeddedWorkerStatus::kStopped) {
-    // Notify all observers that this live version is stopped, as it will
-    // be removed from |live_versions_|.
+  const bool notify_stopped =
+      version->running_status() != blink::EmbeddedWorkerStatus::kStopped;
+
+  // Notify all observers that this live version is stopped.
+  if (notify_stopped) {
     observer_list_->Notify(FROM_HERE,
                            &ServiceWorkerContextCoreObserver::OnStopped, id);
-    for (auto& observer : sync_observer_list_->observers) {
-      observer.OnStoppedSync(id, version->scope());
-    }
   }
 
   // Send any final reports and allow the reporting configuration to be
@@ -964,7 +987,21 @@ void ServiceWorkerContextCore::RemoveLiveVersion(int64_t id) {
   observer_list_->Notify(
       FROM_HERE, &ServiceWorkerContextCoreObserver::OnLiveVersionDestroyed, id);
 
-  live_versions_.erase(it);
+  // The synchronous observers are notified last: their callbacks can destroy
+  // the `ServiceWorkerContextWrapper`, which owns `this`, so nothing should
+  // touch `this` after the loop.
+  if (notify_stopped) {
+    std::optional<blink::ServiceWorkerToken> start_worker_token =
+        version->start_worker_token();
+    if (start_worker_token.has_value()) {
+      // Protect `sync_observer_list_` from being destroyed during the loop.
+      scoped_refptr<ServiceWorkerContextSynchronousObserverList>
+          safe_sync_observer_list = sync_observer_list_;
+      for (auto& observer : safe_sync_observer_list->observers) {
+        observer.OnStoppedSync(id, version->scope(), *start_worker_token);
+      }
+    }
+  }
 }
 
 std::vector<ServiceWorkerRegistrationInfo>
@@ -1021,7 +1058,8 @@ void ServiceWorkerContextCore::DeleteAndStartOver(StatusCallback callback) {
         blink::EmbeddedWorkerStatus::kStopped) {
       for (auto& observer : sync_observer_list_->observers) {
         observer.OnStoppedSync(live_version->version_id(),
-                               live_version->scope());
+                               live_version->scope(),
+                               *live_version->start_worker_token());
       }
     }
   }
@@ -1106,7 +1144,7 @@ void ServiceWorkerContextCore::NotifyRegistrationStored(
     const int64_t registration_id,
     const GURL& scope,
     const blink::StorageKey& key,
-    uint64_t stored_resources_total_size_bytes) {
+    base::ByteSize stored_resources_total_size) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   ServiceWorkerRegistrationInformation service_worker_info;
@@ -1115,8 +1153,7 @@ void ServiceWorkerContextCore::NotifyRegistrationStored(
           GetLiveRegistration(registration_id);
       registration) {
     registration->SetStored();
-    registration->set_resources_total_size_bytes(
-        stored_resources_total_size_bytes);
+    registration->set_resources_total_size(stored_resources_total_size);
 
     ServiceWorkerRegistry::ResourceList resources;
     if (ServiceWorkerVersion* version = registration->GetNewestVersion();
@@ -1242,13 +1279,31 @@ void ServiceWorkerContextCore::OnRunningStateChanged(
     ServiceWorkerVersion* version) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_EQ(this, version->context().get());
+
+  // Protect `sync_observer_list_` and `version` from being destroyed during the
+  // synchronous observer loop.
+  scoped_refptr<ServiceWorkerContextSynchronousObserverList>
+      safe_sync_observer_list = sync_observer_list_;
+  scoped_refptr<ServiceWorkerVersion> protect_version =
+      base::WrapRefCounted(version);
+  std::optional<blink::ServiceWorkerToken> start_worker_token =
+      version->start_worker_token();
+
   switch (version->running_status()) {
     case blink::EmbeddedWorkerStatus::kStopped:
       observer_list_->Notify(FROM_HERE,
                              &ServiceWorkerContextCoreObserver::OnStopped,
                              version->version_id());
-      for (auto& observer : sync_observer_list_->observers) {
-        observer.OnStoppedSync(version->version_id(), version->scope());
+      // It appears `start_worker_token` can sometimes be null here, which is
+      // unexpected. That can theoretically happen due to a race between a
+      // timeout and a late IPC stop/stopping message. The first call clears the
+      // token, and the second call crashes when it tries to access it.
+      // See https://crbug.com/496389117.
+      if (start_worker_token.has_value()) {
+        for (auto& observer : safe_sync_observer_list->observers) {
+          observer.OnStoppedSync(version->version_id(), version->scope(),
+                                 *start_worker_token);
+        }
       }
       break;
     case blink::EmbeddedWorkerStatus::kStarting:
@@ -1267,8 +1322,11 @@ void ServiceWorkerContextCore::OnRunningStateChanged(
       observer_list_->Notify(FROM_HERE,
                              &ServiceWorkerContextCoreObserver::OnStopping,
                              version->version_id());
-      for (auto& observer : sync_observer_list_->observers) {
-        observer.OnStoppingSync(version->version_id(), version->scope());
+      if (start_worker_token.has_value()) {
+        for (auto& observer : safe_sync_observer_list->observers) {
+          observer.OnStoppingSync(version->version_id(), version->scope(),
+                                  *start_worker_token);
+        }
       }
       break;
   }
@@ -1279,10 +1337,12 @@ void ServiceWorkerContextCore::OnVersionStateChanged(
   DCHECK_EQ(this, version->context().get());
   if (version->status() == ServiceWorkerVersion::INSTALLED &&
       version->router_evaluator()) {
+    ServiceWorkerVersion::RouterRulesForDevTools rules =
+        version->CalculateRouterRulesForDevTools();
     observer_list_->Notify(
         FROM_HERE,
         &ServiceWorkerContextCoreObserver::OnVersionRouterRulesChanged,
-        version->version_id(), version->router_evaluator()->ToString());
+        version->version_id(), std::move(rules));
   }
   observer_list_->Notify(
       FROM_HERE, &ServiceWorkerContextCoreObserver::OnVersionStateChanged,
@@ -1329,9 +1389,9 @@ void ServiceWorkerContextCore::OnReportConsoleMessage(
   DCHECK(browser_context);
   DCHECK_EQ(this, version->context().get());
   const bool is_builtin_component =
-      HasWebUIScheme(source_url) ||
+      HasWebUIScheme(version->script_url()) ||
       GetContentClient()->browser()->IsBuiltinComponent(
-          browser_context, url::Origin::Create(source_url));
+          browser_context, version->key().origin());
 
   LogConsoleMessage(message_level, message, line_number, is_builtin_component,
                     wrapper_->is_incognito(),
@@ -1346,7 +1406,7 @@ void ServiceWorkerContextCore::OnReportConsoleMessage(
   for (auto& observer : sync_observer_list_->observers) {
     observer.OnReportConsoleMessageSync(
         version->embedded_worker() ? version->embedded_worker()->process_id()
-                                   : ChildProcessHost::kInvalidUniqueID,
+                                   : ChildProcessId(),
         version->version_id(), version->scope(), console_message);
   }
 }
@@ -1460,7 +1520,9 @@ void ServiceWorkerContextCore::SetServiceWorkerHidDelegateObserverForTesting(
     std::unique_ptr<ServiceWorkerHidDelegateObserver> hid_delegate_observer) {
   hid_delegate_observer_ = std::move(hid_delegate_observer);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 ServiceWorkerUsbDelegateObserver*
 ServiceWorkerContextCore::usb_delegate_observer() {
   if (!usb_delegate_observer_) {
@@ -1474,5 +1536,6 @@ void ServiceWorkerContextCore::SetServiceWorkerUsbDelegateObserverForTesting(
     std::unique_ptr<ServiceWorkerUsbDelegateObserver> usb_delegate_observer) {
   usb_delegate_observer_ = std::move(usb_delegate_observer);
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+
 }  // namespace content

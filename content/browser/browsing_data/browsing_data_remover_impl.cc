@@ -4,18 +4,19 @@
 
 #include "content/browser/browsing_data/browsing_data_remover_impl.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
@@ -94,7 +95,8 @@ bool DoesStorageKeyMatchMask(
     const blink::StorageKey& storage_key,
     storage::SpecialStoragePolicy* policy) {
   const std::vector<std::string>& schemes = url::GetWebStorageSchemes();
-  bool is_web_scheme = base::Contains(schemes, storage_key.origin().scheme());
+  bool is_web_scheme =
+      std::ranges::contains(schemes, storage_key.origin().scheme());
 
   // If a websafe origin is unprotected, it matches iff UNPROTECTED_WEB.
   if ((origin_type_mask & BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB) &&
@@ -395,8 +397,11 @@ void BrowsingDataRemoverImpl::RemoveImpl(
       (!embedder_delegate_ || embedder_delegate_->MayRemoveDownloadHistory())) {
     base::RecordAction(UserMetricsAction("ClearBrowsingData_Downloads"));
     DownloadManager* download_manager = browser_context_->GetDownloadManager();
-    download_manager->RemoveDownloadsByURLAndTime(url_filter, delete_begin_,
-                                                  delete_end_);
+    if (download_manager) {
+      download_manager->RemoveDownloadsByURLAndTime(
+          url_filter, delete_begin_, delete_end_,
+          CreateTaskCompletionClosureForMojo(TracingDataType::kDownloads));
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -462,14 +467,6 @@ void BrowsingDataRemoverImpl::RemoveImpl(
     storage_partition_remove_mask |=
         StoragePartition::REMOVE_DATA_MASK_MEDIA_LICENSES;
   }
-  if (remove_mask & DATA_TYPE_ATTRIBUTION_REPORTING_SITE_CREATED) {
-    storage_partition_remove_mask |=
-        StoragePartition::REMOVE_DATA_MASK_ATTRIBUTION_REPORTING_SITE_CREATED;
-  }
-  if (remove_mask & DATA_TYPE_ATTRIBUTION_REPORTING_INTERNAL) {
-    storage_partition_remove_mask |=
-        StoragePartition::REMOVE_DATA_MASK_ATTRIBUTION_REPORTING_INTERNAL;
-  }
   if (remove_mask & DATA_TYPE_AGGREGATION_SERVICE) {
     storage_partition_remove_mask |=
         StoragePartition::REMOVE_DATA_MASK_AGGREGATION_SERVICE;
@@ -528,8 +525,7 @@ void BrowsingDataRemoverImpl::RemoveImpl(
         filter_builder->MatchesMostOriginsAndDomains();
 
     storage_partition->ClearData(
-        storage_partition_remove_mask,
-        StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL, filter_builder,
+        storage_partition_remove_mask, filter_builder,
         base::BindRepeating(&DoesStorageKeyMatchMask, origin_type_mask_,
                             std::move(embedder_matcher)),
         std::move(deletion_filter), perform_storage_cleanup, delete_begin_,
@@ -554,9 +550,15 @@ void BrowsingDataRemoverImpl::RemoveImpl(
     // The clearing of the HTTP cache happens in the network service process
     // when enabled. Note that we've deprecated the concept of a media cache,
     // and are now using a single cache for both purposes.
-    network_context->ClearHttpCache(
-        delete_begin, delete_end, filter_builder->BuildNetworkServiceFilter(),
-        CreateTaskCompletionClosureForMojo(TracingDataType::kHttpCache));
+    if (remove_mask & DATA_TYPE_LOGICAL_CLEAR) {
+      network_context->ClearHttpCacheLogically(
+          delete_begin, delete_end, filter_builder->BuildNetworkServiceFilter(),
+          CreateTaskCompletionClosureForMojo(TracingDataType::kHttpCache));
+    } else {
+      network_context->ClearHttpCache(
+          delete_begin, delete_end, filter_builder->BuildNetworkServiceFilter(),
+          CreateTaskCompletionClosureForMojo(TracingDataType::kHttpCache));
+    }
 
     if (base::FeatureList::IsEnabled(
             features::kCodeCacheDeletionWithoutFilter)) {
@@ -608,7 +610,8 @@ void BrowsingDataRemoverImpl::RemoveImpl(
   // and Browsing Data Cache Removal.
   if (remove_mask & (DATA_TYPE_PRERENDER_CACHE | DATA_TYPE_CACHE)) {
     auto storage_key_filter = filter_builder->BuildStorageKeyFilter();
-    for (WebContentsImpl* web_contents : WebContentsImpl::GetAllWebContents()) {
+    for (raw_ptr<WebContentsImpl> web_contents :
+         WebContentsImpl::GetAllWebContents()) {
       if (web_contents->GetBrowserContext() == browser_context_) {
         PrerenderHostRegistry* prerender_host_registry =
             web_contents->GetPrerenderHostRegistry();
@@ -950,8 +953,6 @@ const char* BrowsingDataRemoverImpl::GetHistogramSuffix(TracingDataType task) {
       return "NetworkErrorLogging";
     case TracingDataType::kTrustTokens:
       return "TrustTokens";
-    case TracingDataType::kConversions:
-      return "Conversions";
     case TracingDataType::kSharedStorage:
       return "SharedStorage";
     case TracingDataType::kPreflightCache:
@@ -962,6 +963,8 @@ const char* BrowsingDataRemoverImpl::GetHistogramSuffix(TracingDataType task) {
       return "PrefetchCache";
     case TracingDataType::kPrerenderCache:
       return "PrerenderCache";
+    case TracingDataType::kDownloads:
+      return "Downloads";
   }
 }
 

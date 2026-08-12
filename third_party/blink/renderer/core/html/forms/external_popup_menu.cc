@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/forms/html_opt_group_element.h"
@@ -59,12 +60,9 @@
 
 namespace blink {
 
-namespace {
-
-float GetDprForSizeAdjustment(const Element& owner_element) {
+// static
+float ExternalPopupMenu::GetDprForSizeAdjustment(const Element& owner_element) {
   float dpr = 1.0f;
-  // Android doesn't need these adjustments and it makes tests fail.
-#ifndef OS_ANDROID
   LocalFrame* frame = owner_element.GetDocument().GetFrame();
   const Page* page = frame ? frame->GetPage() : nullptr;
   // DevTools devicePixelRatio emulation only applies to the outermost
@@ -79,11 +77,8 @@ float GetDprForSizeAdjustment(const Element& owner_element) {
   } else {
     dpr = page->GetChromeClient().GetScreenInfo(*frame).device_scale_factor;
   }
-#endif
   return dpr;
 }
-
-}  // namespace
 
 ExternalPopupMenu::ExternalPopupMenu(LocalFrame& frame,
                                      HTMLSelectElement& owner_element)
@@ -136,7 +131,29 @@ bool ExternalPopupMenu::ShowInternal() {
                                     ->LocalRootFrameWidget()
                                     ->GetEmulatorScale();
 
-    // rect_in_viewport needs to be in CSS pixels.
+    // Adjust anchor position to stay within web contents, otherwise the popup
+    // could be rendered entirely outside of the web contents. If this select
+    // is in a cross-origin iframe, then the anchor will be confined to the
+    // bounds of the iframe rather than the entire web contents. If the select
+    // doesn't intersect with the viewport, which can happen with oopifs, then
+    // the picker won't be opened.
+    if (RuntimeEnabledFeatures::SelectAnchorInViewportEnabled() &&
+        local_frame_->GetPage()) {
+      gfx::Rect viewport_rect =
+          local_frame_->LocalFrameRoot().IsOutermostMainFrame()
+              ? gfx::Rect(local_frame_->GetPage()->GetVisualViewport().Size())
+              : local_frame_->LocalFrameRoot().RemoteViewportIntersection();
+      if (!viewport_rect.Intersects(rect_in_viewport)) {
+        DidCancel();
+        return false;
+      }
+      rect_in_viewport.Intersect(viewport_rect);
+    }
+
+    // The browser process expects the popup bounds in DIPs, so convert
+    // rect_in_viewport here. This must happen after the viewport intersection
+    // check above because viewport_rect and rect_in_viewport are both in Blink
+    // visual viewport CSS pixels before DPR scaling.
     float dpr = GetDprForSizeAdjustment(*owner_element_);
     if (dpr != 1.0) {
       rect_in_viewport = gfx::ScaleToRoundedRect(rect_in_viewport, 1 / dpr);
@@ -262,7 +279,7 @@ void ExternalPopupMenu::DidAcceptIndices(const Vector<int32_t>& indices) {
     list_indices.reserve(list_count);
     for (wtf_size_t i = 0; i < list_count; ++i)
       list_indices.push_back(ToPopupMenuItemIndex(indices[i], *owner_element));
-    owner_element->SelectMultipleOptionsByPopup(list_indices);
+    owner_element->SelectMultipleOptions(list_indices);
   }
 
   if (RuntimeEnabledFeatures::ExternalPopupMenuClickEventEnabled()) {

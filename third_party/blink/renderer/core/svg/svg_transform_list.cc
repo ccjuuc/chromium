@@ -35,7 +35,6 @@
 #include "third_party/blink/renderer/core/svg/svg_parser_utilities.h"
 #include "third_party/blink/renderer/core/svg/svg_transform_distance.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/parsing_utilities.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -359,8 +358,6 @@ template <typename CharType>
 SVGParsingError SVGTransformList::ParseInternal(
     const base::span<const CharType> chars,
     size_t& position) {
-  Clear();
-
   bool delim_parsed = false;
   while (SkipOptionalSVGSpaces(chars, position)) {
     delim_parsed = false;
@@ -407,11 +404,13 @@ SVGParsingError SVGTransformList::ParseInternal(
 
 bool SVGTransformList::Parse(const base::span<const UChar> chars,
                              size_t& position) {
+  CHECK(IsEmpty());
   return ParseInternal(chars, position) == SVGParseStatus::kNoError;
 }
 
 bool SVGTransformList::Parse(const base::span<const LChar> chars,
                              size_t& position) {
+  CHECK(IsEmpty());
   return ParseInternal(chars, position) == SVGParseStatus::kNoError;
 }
 
@@ -425,26 +424,28 @@ SVGTransformType ParseTransformType(const String& string) {
 }
 
 SVGParsingError SVGTransformList::SetValueAsString(const String& value) {
+  Clear();
+
   if (value.empty()) {
-    Clear();
     return SVGParseStatus::kNoError;
   }
   size_t position = 0;
   SVGParsingError parse_error = VisitCharacters(
       value, [&](auto chars) { return ParseInternal(chars, position); });
-  if (parse_error != SVGParseStatus::kNoError)
+  if (parse_error != SVGParseStatus::kNoError) {
     Clear();
+  }
   return parse_error;
 }
 
-void SVGTransformList::Add(const SVGPropertyBase* other,
+bool SVGTransformList::Add(const SVGPropertyBase* other,
                            const SVGElement* context_element) {
   if (IsEmpty())
-    return;
+    return true;
 
   auto* other_list = To<SVGTransformList>(other);
   if (length() != other_list->length())
-    return;
+    return true;
 
   DCHECK_EQ(length(), 1u);
   const SVGTransform* from_transform = at(0);
@@ -453,6 +454,7 @@ void SVGTransformList::Add(const SVGPropertyBase* other,
   DCHECK_EQ(from_transform->TransformType(), to_transform->TransformType());
   Clear();
   Append(SVGTransformDistance::AddSVGTransforms(from_transform, to_transform));
+  return true;
 }
 
 void SVGTransformList::CalculateAnimatedValue(

@@ -16,8 +16,9 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/manifest_update_utils.h"
-#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-data-view.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
+#include "chrome/browser/web_applications/proto/web_app.pb.h"
+#include "chrome/browser/web_applications/scheduler/manifest_silent_update_result.h"
 #include "chrome/browser/web_applications/test/fake_web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
@@ -29,11 +30,16 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
+#include "components/sync/protocol/web_app_specifics.equal.h"
+#include "components/sync/protocol/web_app_specifics.ostream.h"
+#include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -62,14 +68,10 @@ class ManifestSilentUpdateCommandTest : public WebAppTest {
   ~ManifestSilentUpdateCommandTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kWebAppUsePrimaryIcon,
-         features::kSilentPolicyAndDefaultAppUpdating},
-        {});
     WebAppTest::SetUp();
     FakeWebAppProvider* provider = FakeWebAppProvider::Get(profile());
     provider->SetOriginAssociationManager(
-        std::make_unique<FakeWebAppOriginAssociationManager>());
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile()));
     provider->StartWithSubsystems();
     test::WaitUntilWebAppProviderAndSubsystemsReady(provider);
 
@@ -99,14 +101,12 @@ class ManifestSilentUpdateCommandTest : public WebAppTest {
     // Set up manifest.
     auto manifest = blink::mojom::Manifest::New();
     manifest->start_url = kAppUrl;
-    manifest->id = GenerateManifestIdFromStartUrlOnly(kAppUrl);
+    manifest->id = GenerateManifestIdFromStartUrlOnly(kAppUrl).value();
     manifest->scope = kAppUrl.GetWithoutFilename();
     manifest->display = DisplayMode::kStandalone;
     manifest->name = u"Foo App";
     manifest->icons = {icon};
-    manifest->has_background_color = true;
     manifest->background_color = kManifestIconColor;
-    manifest->has_theme_color = true;
     manifest->theme_color = kManifestIconColor;
     manifest->has_valid_specified_start_url = true;
     auto note_taking = blink::mojom::ManifestNoteTaking::New();
@@ -183,7 +183,6 @@ class ManifestSilentUpdateCommandTest : public WebAppTest {
     return {};
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_;
   base::HistogramTester histogram_tester_;
 };
 
@@ -224,7 +223,7 @@ TEST_F(ManifestSilentUpdateCommandTest, StartUrlUpdatedSilently) {
             "https://www.foo.bar/web_apps/basic.html");
 
   auto& new_manifest = GetPageManifest();
-  const GURL new_start_url("https://www.foo.bar/new_scope/new_basic.html");
+  const GURL new_start_url("https://www.foo.bar/web_apps/new_basic.html");
   new_manifest->start_url = new_start_url;
 
   EXPECT_EQ(RunManifestUpdateAndGetResult(),
@@ -348,7 +347,9 @@ TEST_F(ManifestSilentUpdateCommandTest, ScopeUpdatedSilently) {
 
   auto& new_manifest = GetPageManifest();
   const GURL new_scope("https://www.foo.bar/new_scope/");
+  const GURL new_start_url("https://www.foo.bar/new_scope/new_basic.html");
   new_manifest->scope = new_scope;
+  new_manifest->start_url = new_start_url;
 
   EXPECT_EQ(RunManifestUpdateAndGetResult(),
             ManifestSilentUpdateCheckResult::kAppSilentlyUpdated);
@@ -441,7 +442,7 @@ TEST_F(ManifestSilentUpdateCommandTest, ShortcutsMenuItemInfosUpdatedSilently) {
   {
     blink::Manifest::ShortcutItem shortcut;
     shortcut.name = u"New Shortcut";
-    shortcut.url = GURL("https://www.foo.bar/new_shortcut");
+    shortcut.url = GURL("https://www.foo.bar/web_apps/new_shortcut");
     new_manifest->shortcuts.push_back(std::move(shortcut));
   }
 
@@ -451,12 +452,13 @@ TEST_F(ManifestSilentUpdateCommandTest, ShortcutsMenuItemInfosUpdatedSilently) {
 
   const auto& new_shortcuts =
       provider().registrar_unsafe().GetAppShortcutsMenuItemInfos(app_id);
-  EXPECT_THAT(new_shortcuts,
-              testing::ElementsAre(testing::AllOf(
-                  testing::Field(&web_app::WebAppShortcutsMenuItemInfo::name,
-                                 u"New Shortcut"),
-                  testing::Field(&web_app::WebAppShortcutsMenuItemInfo::url,
-                                 GURL("https://www.foo.bar/new_shortcut")))));
+  EXPECT_THAT(
+      new_shortcuts,
+      testing::ElementsAre(testing::AllOf(
+          testing::Field(&web_app::WebAppShortcutsMenuItemInfo::name,
+                         u"New Shortcut"),
+          testing::Field(&web_app::WebAppShortcutsMenuItemInfo::url,
+                         GURL("https://www.foo.bar/web_apps/new_shortcut")))));
   EXPECT_THAT(histogram_tester_.GetAllSamples(
                   "Webapp.Update.ManifestSilentUpdateCheckResult"),
               BucketsAre(base::Bucket(
@@ -553,13 +555,6 @@ TEST_F(ManifestSilentUpdateCommandTest, FileHandlersUpdatedSilently) {
     handler->action = GURL("http://example.com/open-files");
     handler->accept[u"image/png"].push_back(u".png");
     handler->name = u"Images";
-    {
-      blink::Manifest::ImageResource icon;
-      icon.src = GURL("fav1.png");
-      icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY,
-                      blink::mojom::ManifestImageResource_Purpose::MASKABLE};
-      handler->icons.push_back(icon);
-    }
     new_manifest->file_handlers.push_back(std::move(handler));
   }
 
@@ -739,7 +734,7 @@ TEST_F(ManifestSilentUpdateCommandTest,
 
   auto& new_manifest = GetPageManifest();
   new_manifest->name = u"New Name";
-  const GURL new_start_url("https://www.foo.bar/new_scope/new_basic.html");
+  const GURL new_start_url("https://www.foo.bar/web_apps/new_basic.html");
   new_manifest->start_url = new_start_url;
 
   EXPECT_EQ(
@@ -796,7 +791,8 @@ TEST_F(ManifestSilentUpdateCommandTest,
       .bitmaps = {changed_bitmap};
 
   EXPECT_EQ(RunManifestUpdateAndGetResult(),
-            ManifestSilentUpdateCheckResult::kAppSilentlyUpdated);
+            ManifestSilentUpdateCheckResult::
+                kAppSilentlyUpdatedDueToSmallIconComparison);
 
   ASSERT_FALSE(AppHasPendingUpdateInfo(app_id));
   EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
@@ -808,11 +804,12 @@ TEST_F(ManifestSilentUpdateCommandTest,
   EXPECT_FALSE(
       base::PathExists(GetAppPendingManifestIconsDir(profile(), app_id)));
 
-  EXPECT_THAT(histogram_tester_.GetAllSamples(
-                  "Webapp.Update.ManifestSilentUpdateCheckResult"),
-              BucketsAre(base::Bucket(
-                  ManifestSilentUpdateCheckResult::kAppSilentlyUpdated,
-                  /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(
+          "Webapp.Update.ManifestSilentUpdateCheckResult"),
+      BucketsAre(base::Bucket(ManifestSilentUpdateCheckResult::
+                                  kAppSilentlyUpdatedDueToSmallIconComparison,
+                              /*count=*/1)));
 }
 
 TEST_F(ManifestSilentUpdateCommandTest,
@@ -849,7 +846,8 @@ TEST_F(ManifestSilentUpdateCommandTest,
   new_manifest->icons = {first_update_icon};
   web_contents_manager().GetOrCreateIconState(bitmap_url1).bitmaps = {bitmap1};
   EXPECT_EQ(RunManifestUpdateAndGetResult(),
-            ManifestSilentUpdateCheckResult::kAppSilentlyUpdated);
+            ManifestSilentUpdateCheckResult::
+                kAppSilentlyUpdatedDueToSmallIconComparison);
 
   ASSERT_FALSE(AppHasPendingUpdateInfo(app_id));
   EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
@@ -883,12 +881,12 @@ TEST_F(ManifestSilentUpdateCommandTest,
   EXPECT_THAT(
       histogram_tester_.GetAllSamples(
           "Webapp.Update.ManifestSilentUpdateCheckResult"),
-      BucketsAre(
-          base::Bucket(ManifestSilentUpdateCheckResult::kAppSilentlyUpdated,
-                       /*count=*/1),
-          base::Bucket(ManifestSilentUpdateCheckResult::
-                           kAppHasSecurityUpdateDueToThrottle,
-                       /*count=*/1)));
+      BucketsAre(base::Bucket(ManifestSilentUpdateCheckResult::
+                                  kAppSilentlyUpdatedDueToSmallIconComparison,
+                              /*count=*/1),
+                 base::Bucket(ManifestSilentUpdateCheckResult::
+                                  kAppHasSecurityUpdateDueToThrottle,
+                              /*count=*/1)));
 }
 
 TEST_F(ManifestSilentUpdateCommandTest,
@@ -928,7 +926,8 @@ TEST_F(ManifestSilentUpdateCommandTest,
       .bitmaps = {changed_bitmap};
 
   EXPECT_EQ(RunManifestUpdateAndGetResult(),
-            ManifestSilentUpdateCheckResult::kAppSilentlyUpdated);
+            ManifestSilentUpdateCheckResult::
+                kAppSilentlyUpdatedDueToSmallIconComparison);
 
   ASSERT_FALSE(AppHasPendingUpdateInfo(app_id));
   EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
@@ -942,11 +941,12 @@ TEST_F(ManifestSilentUpdateCommandTest,
   EXPECT_FALSE(
       base::PathExists(GetAppPendingManifestIconsDir(profile(), app_id)));
 
-  EXPECT_THAT(histogram_tester_.GetAllSamples(
-                  "Webapp.Update.ManifestSilentUpdateCheckResult"),
-              BucketsAre(base::Bucket(
-                  ManifestSilentUpdateCheckResult::kAppSilentlyUpdated,
-                  /*count=*/1)));
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(
+          "Webapp.Update.ManifestSilentUpdateCheckResult"),
+      BucketsAre(base::Bucket(ManifestSilentUpdateCheckResult::
+                                  kAppSilentlyUpdatedDueToSmallIconComparison,
+                              /*count=*/1)));
 }
 
 TEST_F(ManifestSilentUpdateCommandTest,
@@ -1069,19 +1069,21 @@ TEST_F(ManifestSilentUpdateCommandTest,
   std::optional<proto::PendingUpdateInfo> pending_update_info =
       provider().registrar_unsafe().GetAppById(app_id)->pending_update_info();
   ASSERT_TRUE(AppHasPendingUpdateInfo(app_id));
-  EXPECT_EQ(pending_update_info->manifest_icons_size(), 1);
-  EXPECT_EQ(pending_update_info->manifest_icons().begin()->url(),
-            GURL("https://example2.com/path/def_icon.png"));
-  EXPECT_EQ(pending_update_info->manifest_icons().begin()->purpose(),
-            sync_pb::WebAppIconInfo_Purpose_ANY);
-  EXPECT_EQ(pending_update_info->manifest_icons().begin()->size_in_px(), 96);
+  sync_pb::WebAppIconInfo expected_icon_info;
+  expected_icon_info.set_url(
+      GURL("https://example2.com/path/def_icon.png").spec());
+  expected_icon_info.set_purpose(sync_pb::WebAppIconInfo_Purpose_ANY);
+  expected_icon_info.set_size_in_px(96);
+  EXPECT_THAT(pending_update_info->manifest_icons(),
+              testing::ElementsAre(expected_icon_info));
 
-  EXPECT_EQ(pending_update_info->trusted_icons_size(), 1);
-  EXPECT_EQ(pending_update_info->trusted_icons().begin()->url(),
-            GURL("https://example2.com/path/def_icon.png"));
-  EXPECT_EQ(pending_update_info->trusted_icons().begin()->purpose(),
-            sync_pb::WebAppIconInfo_Purpose_ANY);
-  EXPECT_EQ(pending_update_info->trusted_icons().begin()->size_in_px(), 96);
+  sync_pb::WebAppIconInfo expected_trusted_icon_info;
+  expected_trusted_icon_info.set_url(
+      GURL("https://example2.com/path/def_icon.png").spec());
+  expected_trusted_icon_info.set_purpose(sync_pb::WebAppIconInfo_Purpose_ANY);
+  expected_trusted_icon_info.set_size_in_px(96);
+  EXPECT_THAT(pending_update_info->trusted_icons(),
+              testing::ElementsAre(expected_trusted_icon_info));
 
   EXPECT_TRUE(pending_update_info->has_was_ignored());
   EXPECT_FALSE(pending_update_info->was_ignored());
@@ -1104,6 +1106,74 @@ TEST_F(ManifestSilentUpdateCommandTest,
               BucketsAre(base::Bucket(
                   ManifestSilentUpdateCheckResult::kAppOnlyHasSecurityUpdate,
                   /*count=*/1)));
+}
+
+TEST_F(ManifestSilentUpdateCommandTest,
+       WebAppWithoutTrustedIconsCanUpdateSilently) {
+  SetupBasicInstallablePageState();
+  webapps::AppId app_id = test::InstallForWebContents(
+      profile(), web_contents(),
+      webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON);
+
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
+            GURL("https://example.com/path/def_icon.png"));
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).size(), 1u);
+  EXPECT_EQ(provider().registrar_unsafe().GetAppStartUrl(app_id),
+            "https://www.foo.bar/web_apps/basic.html");
+
+  // Remove trusted icons information from the app, to simulate an app that was
+  // installed before trusted icons were supported.
+  {
+    ScopedRegistryUpdate update =
+        fake_provider().sync_bridge_unsafe().BeginUpdate();
+    update->UpdateApp(app_id)->SetStoredTrustedIconSizes(IconPurpose::ANY, {});
+  }
+
+  auto& new_manifest = GetPageManifest();
+
+  // Set up manifest icon.
+  blink::Manifest::ImageResource new_icon;
+  new_icon.src = GURL("https://example2.com/path/def_icon.png");
+  new_icon.sizes = {{96, 96}};
+  new_icon.purpose = {blink::mojom::ManifestImageResource_Purpose::ANY};
+
+  new_manifest->icons = {new_icon};
+  new_manifest->start_url = GURL("https://www.foo.bar/web_apps/new_basic.html");
+
+  SkBitmap changed_bitmap = gfx::test::CreateBitmap(96, SK_ColorCYAN);
+  // For a 96x96 image, total pixels = 9216.
+  // 10% of 9216 = 921.6 pixels.
+  // We'll change a small area, for example, the first 9 rows, to a different
+  // color. 9 rows * 96 columns = 864 pixels changed. This is < 10%.
+  changed_bitmap.eraseArea(SkIRect::MakeXYWH(0, 0, 96, 9), SK_ColorRED);
+
+  // Set icon in content.
+  web_contents_manager()
+      .GetOrCreateIconState(GURL("https://example2.com/path/def_icon.png"))
+      .bitmaps = {changed_bitmap};
+
+  EXPECT_EQ(RunManifestUpdateAndGetResult(),
+            ManifestSilentUpdateCheckResult::
+                kAppSilentlyUpdatedDueToSmallIconComparison);
+
+  ASSERT_FALSE(AppHasPendingUpdateInfo(app_id));
+  EXPECT_EQ(provider().registrar_unsafe().GetAppIconInfos(app_id).begin()->url,
+            GURL("https://example2.com/path/def_icon.png"));
+  EXPECT_EQ(provider().registrar_unsafe().GetAppStartUrl(app_id),
+            "https://www.foo.bar/web_apps/new_basic.html");
+
+  // Verify pending update icon bitmaps are not saved to disk.
+  EXPECT_FALSE(
+      base::PathExists(GetAppPendingTrustedIconsDir(profile(), app_id)));
+  EXPECT_FALSE(
+      base::PathExists(GetAppPendingManifestIconsDir(profile(), app_id)));
+
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(
+          "Webapp.Update.ManifestSilentUpdateCheckResult"),
+      BucketsAre(base::Bucket(ManifestSilentUpdateCheckResult::
+                                  kAppSilentlyUpdatedDueToSmallIconComparison,
+                              /*count=*/1)));
 }
 
 TEST_F(ManifestSilentUpdateCommandTest,
@@ -1174,6 +1244,39 @@ TEST_F(ManifestSilentUpdateCommandTest,
 
   EXPECT_EQ(provider().registrar_unsafe().GetAppStartUrl(app_id),
             "https://www.foo.bar/web_apps/new_basic.html");
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(
+          "Webapp.Update.ManifestSilentUpdateCheckResult"),
+      BucketsAre(base::Bucket(
+          ManifestSilentUpdateCheckResult::kAppHasNonSecurityAndSecurityChanges,
+          /*count=*/1)));
+}
+
+TEST_F(ManifestSilentUpdateCommandTest, SyncInstalledAppUpdated) {
+  webapps::AppId app_id = test::InstallDummyWebApp(
+      profile(), "Name", GURL("https://www.foo.bar/web_apps/basic.html"),
+      webapps::WebappInstallSource::SYNC);
+  SetupBasicInstallablePageState();
+
+  auto& new_manifest = GetPageManifest();
+  new_manifest->name = u"New Name";
+  new_manifest->theme_color = SK_ColorYELLOW;
+
+  // Sync installed apps should allow updates, but security sensitive updates
+  // (like name) should still be pending. Non-sensitive updates (like theme
+  // color) should be applied.
+  EXPECT_EQ(
+      RunManifestUpdateAndGetResult(),
+      ManifestSilentUpdateCheckResult::kAppHasNonSecurityAndSecurityChanges);
+
+  EXPECT_EQ(provider().registrar_unsafe().GetAppThemeColor(app_id),
+            SK_ColorYELLOW);
+
+  std::optional<proto::PendingUpdateInfo> pending_update_info =
+      provider().registrar_unsafe().GetAppById(app_id)->pending_update_info();
+  ASSERT_TRUE(pending_update_info.has_value());
+  EXPECT_EQ(pending_update_info->name(), "New Name");
+
   EXPECT_THAT(
       histogram_tester_.GetAllSamples(
           "Webapp.Update.ManifestSilentUpdateCheckResult"),

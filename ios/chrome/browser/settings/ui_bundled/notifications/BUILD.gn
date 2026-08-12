@@ -103,7 +103,6 @@ source_set("utils") {
     "//ios/chrome/browser/push_notification/model:push_notification_client",
     "//ios/chrome/browser/push_notification/model:push_notification_client_id",
     "//ios/chrome/browser/shared/model/application_context",
-    "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
   ]
 }
@@ -134,11 +133,12 @@ source_set("eg2_tests") {
   deps = [
     ":constants",
     "//base",
-    "//base/test:test_support",
-    "//components/commerce/core:feature_list",
-    "//components/variations",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
     "//ios/chrome/browser/push_notification/test:test_support",
+    "//ios/chrome/browser/settings/ui_bundled/notifications/content_notifications:constants",
+    "//ios/chrome/browser/shared/public/features",
+    "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/test/earl_grey:eg_test_support+eg2",
     "//ios/testing/earl_grey:eg_test_support+eg2",
     "//ui/base",

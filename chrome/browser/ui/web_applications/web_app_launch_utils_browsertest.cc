@@ -9,6 +9,7 @@
 
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -45,10 +46,10 @@ class ReparentWebContentsTest
   ReparentingUrl GetReparentingUrlType() { return GetParam(); }
 
   GURL GetNonInstalledUrl() {
-    return https_server()->GetURL("/web_apps/no_manifest.html");
+    return embedded_https_test_server().GetURL("/web_apps/no_manifest.html");
   }
   GURL GetInstalledUrl() {
-    return https_server()->GetURL("/web_apps/simple/index.html");
+    return embedded_https_test_server().GetURL("/web_apps/simple/index.html");
   }
   GURL GetReparentingUrl() {
     return GetReparentingUrlType() == ReparentingUrl::kNonAppUrl
@@ -62,7 +63,7 @@ IN_PROC_BROWSER_TEST_P(ReparentWebContentsTest, ReparentToAppAndBack) {
   // browser window.
 
   webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), GetInstalledUrl());
+      InstallWebAppInNewTabAndClose(browser(), GetInstalledUrl());
 
   content::WebContents* to_reparent =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -84,18 +85,22 @@ IN_PROC_BROWSER_TEST_P(ReparentWebContentsTest, ReparentToAppAndBack) {
 
   // Create a second tab in the source browser to ensure it doesn't close when
   // we reparent.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
   // Reparent into the app browser.
   Browser* app_browser;
   {
-    app_browser = Browser::Create(Browser::CreateParams::CreateForApp(
-        GenerateApplicationNameFromAppId(app_id), true /* trusted_source */,
-        gfx::Rect(), profile(), true /* user_gesture */));
+    app_browser =
+        CreateBrowserWindow(BrowserWindowCreateParams::CreateForApp(
+                                GenerateApplicationNameFromAppId(app_id),
+                                /*trusted_source=*/true, gfx::Rect(), profile(),
+                                /*user_gesture=*/true))
+            ->GetBrowserForMigrationOnly();
     // If the current url isn't in scope, then set the initial url on the
     // AppBrowserController so that the 'x' button still shows up.
-    CHECK(app_browser->app_controller());
-    app_browser->app_controller()->MaybeSetInitialUrlOnReparentTab();
+    CHECK(web_app::AppBrowserController::From(app_browser));
+    web_app::AppBrowserController::From(app_browser)
+        ->MaybeSetInitialUrlOnReparentTab();
   }
   ReparentWebContentsIntoBrowserImpl(browser(), to_reparent, app_browser);
 
@@ -106,15 +111,19 @@ IN_PROC_BROWSER_TEST_P(ReparentWebContentsTest, ReparentToAppAndBack) {
 
   switch (GetReparentingUrlType()) {
     case ReparentingUrl::kAppUrl:
-      EXPECT_FALSE(app_browser->app_controller()->ShouldShowCustomTabBar());
+      EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
+                       ->ShouldShowCustomTabBar());
       break;
     case ReparentingUrl::kNonAppUrl:
-      EXPECT_TRUE(app_browser->app_controller()->ShouldShowCustomTabBar());
+      EXPECT_TRUE(web_app::AppBrowserController::From(app_browser)
+                      ->ShouldShowCustomTabBar());
       break;
     case ReparentingUrl::kAppUrlLoading:
-      EXPECT_TRUE(app_browser->app_controller()->ShouldShowCustomTabBar());
+      EXPECT_TRUE(web_app::AppBrowserController::From(app_browser)
+                      ->ShouldShowCustomTabBar());
       content::WaitForLoadStop(to_reparent);
-      EXPECT_FALSE(app_browser->app_controller()->ShouldShowCustomTabBar());
+      EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
+                       ->ShouldShowCustomTabBar());
       break;
   }
 

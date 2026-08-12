@@ -7,7 +7,6 @@
 #include <cstddef>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -16,25 +15,25 @@
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_error_controller.h"
 #include "chrome/browser/extensions/external_install_manager.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/external_provider_manager_factory.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
+#include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/browser/extensions/installed_loader.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/external_install_info.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/management_policy.h"
 #include "extensions/browser/pending_extension_manager.h"
 #include "extensions/browser/updater/extension_cache.h"
@@ -153,7 +152,7 @@ void ExternalProviderManager::OnAllExternalProvidersReady() {
   }
 
   // Uninstall all the unclaimed extensions.
-  ExtensionPrefs::ExtensionsInfo extensions_info =
+  ExtensionPrefs::InstallRecords extensions_info =
       extension_prefs_->GetInstalledExtensionsInfo();
   for (const auto& info : extensions_info) {
     if (Manifest::IsExternalLocation(info.extension_location)) {
@@ -334,7 +333,7 @@ bool ExternalProviderManager::OnExternalExtensionUpdateUrlFound(
   }
 
   InstallStageTracker* install_stage_tracker =
-      InstallStageTracker::Get(context_);
+      InstallStageTrackerFactory::GetForBrowserContext(context_);
 
   const Extension* extension = registry_->GetExtensionById(
       info.extension_id, ExtensionRegistry::EVERYTHING);
@@ -361,7 +360,7 @@ bool ExternalProviderManager::OnExternalExtensionUpdateUrlFound(
 
       // Fetch the installation info from the prefs, and reload the extension
       // with a modified install location.
-      std::optional<ExtensionInfo> installed_extension(
+      std::optional<ExtensionPrefs::InstallRecord> installed_extension(
           extension_prefs_->GetInstalledExtensionInfo(info.extension_id));
       installed_extension->extension_location = info.download_location;
 

@@ -16,6 +16,55 @@
 
 namespace content {
 
+// Used for UMA. Append-only.
+enum class ServiceWorkerMainScriptRequestValidationResult {
+  kOk = 0,
+  kForgedUrl = 1,
+  kForgedDestination = 2,
+  kForgedMode = 3,
+  kMaxValue = kForgedMode,
+};
+
+// LINT.IfChange(ServiceWorkerMessageDispatchContextValidationResult)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerMessageDispatchContextValidationResult {
+  kAllowed = 0,
+  kDisallowed = 1,
+  kMaxValue = kDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerMessageDispatchContextValidationResult)
+
+// LINT.IfChange(ServiceWorkerStartWorkerContextValidationDifference)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerStartWorkerContextValidationDifference {
+  kBothAllowed = 0,
+  kOldAllowedNewDisallowed = 1,
+  kOldDisallowedNewAllowed = 2,
+  kBothDisallowed = 3,
+  kMaxValue = kBothDisallowed,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerStartWorkerContextValidationDifference)
+
+// LINT.IfChange(ServiceWorkerAutoPreloadDispatchResult)
+
+// Used for UMA. Append-only.
+enum class ServiceWorkerAutoPreloadDispatchResult {
+  kDispatched = 0,
+  kFeatureDisabled = 1,
+  kNotAllowedByBrowser = 2,
+  kNotOutermostMainFrame = 3,
+  kGuestStoragePartition = 4,
+  kWebRequestAPIProxy = 5,
+  kStartFailed = 6,
+  kMaxValue = kStartFailed,
+};
+
+// LINT.ThenChange(/tools/metrics/histograms/enums.xml:ServiceWorkerAutoPreloadDispatchResult)
+
 class ServiceWorkerMetrics {
  public:
   // Used for UMA. Append-only.
@@ -35,6 +84,9 @@ class ServiceWorkerMetrics {
   };
 
   // Used for UMA. Append-only.
+  // Note: This enum is also used for behavioral checks, such as verifying
+  // if a service worker has a pending event that allows window interaction.
+  //
   // This class is used to indicate which event is fired/finished. Most events
   // have only one request that starts the event and one response that finishes
   // the event, but the fetch event has two responses, so there are two types of
@@ -90,6 +142,13 @@ class ServiceWorkerMetrics {
     kMaxValue = STATIC_ROUTER,
   };
 
+  static void RecordMainScriptRequestValidationResult(
+      ServiceWorkerMainScriptRequestValidationResult result);
+  static void RecordMessageDispatchContextValidationResult(
+      ServiceWorkerMessageDispatchContextValidationResult result);
+  static void RecordStartWorkerContextValidationDifference(
+      ServiceWorkerStartWorkerContextValidationDifference result);
+
   // Not used for UMA.
   enum class StartSituation {
     // Failed to allocate a process.
@@ -124,7 +183,8 @@ class ServiceWorkerMetrics {
     kEligible = 0,
     kNotEligibleByReload = 1,
     kNotEligibleByNoHeaderStored = 2,
-    kMaxValue = kNotEligibleByNoHeaderStored,
+    kNotEligibleByIntercepted = 3,
+    kMaxValue = kNotEligibleByIntercepted,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:SyntheticResponseEligibility)
 

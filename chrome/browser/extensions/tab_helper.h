@@ -11,7 +11,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/common/extensions/webstore_install_result.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "extensions/browser/api/declarative_net_request/web_contents_helper.h"
@@ -20,6 +19,7 @@
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/script_executor.h"
+#include "extensions/browser/webstore_install_result.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/stack_frame.h"
@@ -49,6 +49,10 @@ class TabHelper : public content::WebContentsObserver,
   // Sets whether the tab will require a page reload for applying
   // `site_setting`.
   void SetReloadRequired(PermissionsManager::UserSiteSetting site_setting);
+
+  // Sets whether the tab requires a page reload for applying site access
+  // changes for the given extensions.
+  void SetReloadRequired(const std::vector<const Extension*>& extensions);
 
   // Returns whether a page reload is required to apply the user site settings
   // in the tab.
@@ -81,6 +85,7 @@ class TabHelper : public content::WebContentsObserver,
   void DidCloneToNewWebContents(
       content::WebContents* old_web_contents,
       content::WebContents* new_web_contents) override;
+  void OnVisibilityChanged(content::Visibility visibility) override;
   void WebContentsDestroyed() override;
 
   // ExtensionFunctionDispatcher::Delegate overrides.
@@ -96,6 +101,10 @@ class TabHelper : public content::WebContentsObserver,
   // Sends our tab ID to `render_frame_host`.
   void SetTabId(content::RenderFrameHost* render_frame_host);
 
+  // Displays the reload page bubble if the tab is visible and reload extensions
+  // are pending.
+  void ShowReloadBubbleIfVisible();
+
   raw_ptr<Profile> profile_;
 
   std::unique_ptr<ScriptExecutor> script_executor_;
@@ -106,6 +115,9 @@ class TabHelper : public content::WebContentsObserver,
 
   // Whether the tab needs a page reload to apply the user site settings.
   bool reload_required_ = false;
+
+  // Extensions that require a page reload to apply changes.
+  std::vector<scoped_refptr<const Extension>> reload_extensions_;
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       registry_observation_{this};

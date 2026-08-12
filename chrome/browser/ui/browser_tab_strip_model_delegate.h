@@ -10,13 +10,9 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/common/chrome_features.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
 #include "chrome/browser/glic/host/glic.mojom.h"                    // nogncheck
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"  // nogncheck
-#endif
+#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 
 class GURL;
 
@@ -64,9 +60,13 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   std::optional<SessionID> CreateHistoricalTab(
       content::WebContents* contents) override;
   void CreateHistoricalGroup(const tab_groups::TabGroupId& group) override;
+  void CreateHistoricalSplit(const split_tabs::SplitTabId& split_id) override;
   void GroupAdded(const tab_groups::TabGroupId& group) override;
   void WillCloseGroup(const tab_groups::TabGroupId& group) override;
+  void WillCloseSplit(const split_tabs::SplitTabId& split_id) override;
   void GroupCloseStopped(const tab_groups::TabGroupId& group) override;
+  void SplitClosed(const split_tabs::SplitTabId& split_id) override;
+  void SplitCloseStopped(const split_tabs::SplitTabId& split_id) override;
   bool RunUnloadListenerBeforeClosing(content::WebContents* contents) override;
   bool ShouldRunUnloadListenerBeforeClosing(
       content::WebContents* contents) override;
@@ -81,6 +81,7 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   bool IsNormalWindow() override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
   void NewSplitTab(std::vector<int> indices,
+                   split_tabs::SplitTabLayout layout,
                    split_tabs::SplitTabCreatedSource source) override;
   void OnGroupsDestruction(const std::vector<tab_groups::TabGroupId>& group_ids,
                            base::OnceCallback<void()> close_callback,
@@ -88,12 +89,11 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   void OnRemovingAllTabsFromGroups(
       const std::vector<tab_groups::TabGroupId>& group_ids,
       base::OnceCallback<void()> callback) override;
-#if BUILDFLAG(ENABLE_GLIC)
-  bool IsTabGlicPinned(tabs::TabHandle tab_handle) override;
-  bool GlicPinTabs(base::span<const tabs::TabHandle> tab_handles) override;
-  bool GlicUnpinTabs(base::span<const tabs::TabHandle> tab_handles) override;
-  void OpenGlicWindowFromSharedTab() override;
-#endif
+  void GlicUnpinTabsFromAllConversations(
+      base::span<const tabs::TabHandle> tab_handles) override;
+  void CloseTab(const tabs::TabInterface* tab,
+                CloseTabSource source,
+                base::OnceCallback<void(CloseTabSource)> on_approved) override;
 
   void CloseFrame();
 

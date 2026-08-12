@@ -25,6 +25,7 @@ namespace remoting {
 
 class ChromotingHostContext;
 class It2MeHostFactory;
+class It2MeNativeMessagingHost;
 class PolicyWatcher;
 struct ChromeOsEnterpriseParams;
 struct ReconnectParams;
@@ -76,10 +77,10 @@ class It2MeNativeMessageHostAsh : public extensions::NativeMessageHost::Client {
   // Handlers for messages received from the wrapped native message host.
   void HandleConnectResponse();
   void HandleDisconnectResponse();
-  void HandleHostStateChangeMessage(base::Value::Dict message);
-  void HandleNatPolicyChangedMessage(base::Value::Dict message);
-  void HandlePolicyErrorMessage(base::Value::Dict message);
-  void HandleErrorMessage(base::Value::Dict message);
+  void HandleHostStateChangeMessage(base::DictValue message);
+  void HandleNatPolicyChangedMessage(base::DictValue message);
+  void HandlePolicyErrorMessage(base::DictValue message);
+  void HandleErrorMessage(base::DictValue message);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -94,7 +95,7 @@ class It2MeNativeMessageHostAsh : public extensions::NativeMessageHost::Client {
   base::OnceClosure disconnected_callback_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
-  std::unique_ptr<extensions::NativeMessageHost> native_message_host_
+  std::unique_ptr<It2MeNativeMessagingHost> native_message_host_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
   mojo::Remote<mojom::SupportHostObserver> remote_

@@ -20,12 +20,11 @@ import static org.junit.Assert.assertTrue;
 import static org.chromium.base.test.util.ViewActionOnDescendant.performOnRecyclerViewNthItem;
 import static org.chromium.chrome.browser.autofill.AutofillTestHelper.createClickActionWithFlags;
 import static org.chromium.chrome.browser.autofill.AutofillTestHelper.singleMouseClickView;
-import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabAtPosition;
+import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.selectTabWithDescription;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.waitToBeHidden;
 import static org.chromium.chrome.browser.keyboard_accessory.ManualFillingTestHelper.whenDisplayed;
 
 import android.app.Activity;
-import android.os.Build;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -60,7 +59,6 @@ import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.lang.ref.WeakReference;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
@@ -71,6 +69,7 @@ import java.util.function.Supplier;
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableFeatures(ChromeFeatureList.AUTOFILL_ANDROID_KEYBOARD_ACCESSORY_DYNAMIC_POSITIONING)
+@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511284601
 public class AutofillKeyboardAccessoryIntegrationTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -133,7 +132,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
     /** Switching fields should re-scroll the keyboard accessory to the left. */
     @Test
     @MediumTest
-    @DisabledTest(message = "crbug.com/377939398, crbug.com/453679696")
+    @DisabledTest(message = "crbug.com/377939398, crbug.com/453679696, crbug.com/481444791")
     public void testSwitchFieldsRescrollsKeyboardAccessory() throws TimeoutException {
         startAtTestPage(FakeKeyboard::new);
         mHelper.clickNodeAndShowKeyboard("EMAIL_ADDRESS", 8);
@@ -165,8 +164,8 @@ public class AutofillKeyboardAccessoryIntegrationTest {
     @Test
     @MediumTest
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
-    public void testSelectSuggestionHidesKeyboardAccessory()
-            throws ExecutionException, TimeoutException {
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481444791
+    public void testSelectSuggestionHidesKeyboardAccessory() throws TimeoutException {
         startAtTestPage(FakeKeyboard::new);
         HistogramWatcher histogramExpectation =
                 HistogramWatcher.newSingleRecordWatcher(
@@ -181,8 +180,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
 
     @Test
     @MediumTest
-    public void testSuggestionsCloseAccessoryWhenClicked()
-            throws ExecutionException, TimeoutException {
+    public void testSuggestionsCloseAccessoryWhenClicked() throws TimeoutException {
         MultiWindowUtils.getInstance().setIsInMultiWindowModeForTesting(true);
         startAtTestPage(MultiWindowKeyboard::new);
         mHelper.clickNode("NAME_FIRST", 1, FocusedFieldType.FILLABLE_NON_SEARCH_FIELD);
@@ -195,12 +193,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
     @Test
     @MediumTest
     @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_SECURITY_TOUCH_EVENT_FILTERING_ANDROID})
-    @DisableIf.Build(
-            sdk_is_less_than = Build.VERSION_CODES.S,
-            supported_abis_includes = "x86",
-            message = "crbug.com/455491374")
-    public void testClicksThroughOtherSurfaceAreAreProcessed()
-            throws ExecutionException, TimeoutException, InterruptedException {
+    public void testClicksThroughOtherSurfaceAreAreProcessed() throws TimeoutException {
         MultiWindowUtils.getInstance().setIsInMultiWindowModeForTesting(true);
         startAtTestPage(MultiWindowKeyboard::new);
         HistogramWatcher histogramExpectation =
@@ -221,12 +214,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
     @Test
     @MediumTest
     @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_SECURITY_TOUCH_EVENT_FILTERING_ANDROID})
-    @DisableIf.Build(
-            sdk_is_less_than = Build.VERSION_CODES.S,
-            supported_abis_includes = "x86",
-            message = "crbug.com/455491374")
-    public void testClicksThroughOtherSurfaceAreIgnored()
-            throws ExecutionException, TimeoutException, InterruptedException {
+    public void testClicksThroughOtherSurfaceAreIgnored() throws TimeoutException {
         MultiWindowUtils.getInstance().setIsInMultiWindowModeForTesting(true);
         startAtTestPage(MultiWindowKeyboard::new);
         // The metric logs potentially filtered events as well, so it doesn't depend on the feature
@@ -256,11 +244,7 @@ public class AutofillKeyboardAccessoryIntegrationTest {
 
     @Test
     @MediumTest
-    @DisableIf.Build(
-            sdk_equals = Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
-            message = "crbug.com/377939398")
-    public void testMouseClicksConsumedByAccessoryBar()
-            throws ExecutionException, TimeoutException, InterruptedException {
+    public void testMouseClicksConsumedByAccessoryBar() throws TimeoutException {
         mHelper.startAtTestPage(/* isRtl= */ false);
         mHelper.registerSheetDataProvider(AccessoryTabType.CREDIT_CARDS);
         // Register a sheet data provider so that sheet is available when needed.
@@ -276,11 +260,8 @@ public class AutofillKeyboardAccessoryIntegrationTest {
     @Test
     @SmallTest
     @DisableFeatures({ChromeFeatureList.AUTOFILL_ANDROID_DESKTOP_KEYBOARD_ACCESSORY_REVAMP})
-    @DisableIf.Build(
-            sdk_equals = Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
-            message = "crbug.com/377939398")
     public void testPressingBackButtonHidesAccessoryWithAutofillSuggestions()
-            throws TimeoutException, ExecutionException {
+            throws TimeoutException {
         startAtTestPage(MultiWindowKeyboard::new);
         mHelper.clickNodeAndShowKeyboard("NAME_FIRST", 1);
         mHelper.waitForKeyboardAccessoryToBeShown(true);
@@ -290,7 +271,8 @@ public class AutofillKeyboardAccessoryIntegrationTest {
                 .perform(
                         actionOnItem(
                                 isAssignableFrom(KeyboardAccessoryButtonGroupView.class),
-                                selectTabAtPosition(0)));
+                                selectTabWithDescription(
+                                        R.string.address_accessory_sheet_toggle)));
 
         whenDisplayed(withChild(withId(R.id.keyboard_accessory_sheet_frame)));
 
@@ -324,7 +306,8 @@ public class AutofillKeyboardAccessoryIntegrationTest {
                         scrollTo(isAssignableFrom(KeyboardAccessoryButtonGroupView.class)),
                         actionOnItem(
                                 isAssignableFrom(KeyboardAccessoryButtonGroupView.class),
-                                selectTabAtPosition(0)));
+                                selectTabWithDescription(
+                                        R.string.address_accessory_sheet_toggle)));
 
         whenDisplayed(withId(R.id.keyboard_accessory_sheet_frame), /* atLeast= */ 51)
                 .check(

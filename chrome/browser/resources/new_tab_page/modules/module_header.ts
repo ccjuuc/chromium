@@ -61,7 +61,7 @@ export class ModuleHeaderElement extends CrLitElement {
   private hideDismissAction_: boolean =
       loadTimeData.getBoolean('hideDismissModules');
 
-  protected get visibleMenuItems_(): MenuItem[] {
+  protected visibleMenuItems_(): MenuItem[] {
     if (this.hideDismissAction_) {
       return this.menuItems.filter(item => item.action !== 'dismiss');
     }
@@ -88,6 +88,12 @@ export class ModuleHeaderElement extends CrLitElement {
 
   protected showDivider_(): boolean {
     return this.menuItems?.length > 0;
+  }
+
+  protected getTuneIcon_(): string {
+    return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'modules:tune' :
+        'modules:tune-old';
   }
 }
 

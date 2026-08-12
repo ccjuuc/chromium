@@ -32,11 +32,6 @@ struct InstallParams;
 void AddUninstallShortcutWorkItems(const InstallParams& install_params,
                                    WorkItemList* install_list);
 
-// Creates Chrome's Clients key (if not already present) and sets the new
-// product version as the last step.  Also set "lang" for user-level installs.
-void AddVersionKeyWorkItems(const InstallParams& install_params,
-                            WorkItemList* list);
-
 // Updates the RLZ brand code or distribution tag.  This is called by the
 // installer to update deprecated, organic enterprise brand codes.
 void AddUpdateBrandCodeWorkItem(const InstallerState& installer_state,
@@ -83,15 +78,16 @@ void AddNativeNotificationWorkItems(
     const base::FilePath& notification_helper_path,
     WorkItemList* list);
 
-// Adds work items to `list` to delete all previous WER runtime exception helper
-// module registrations. Registry values that fit the following pattern are
-// deleted: target_path.value()\<valid version>\kWerDll
+// Adds best-effort work items to `list` to delete all previous WER runtime
+// exception helper module registrations. Registry values that fit the following
+// pattern are deleted: target_path.value()\<valid version>\kWerDll
 void AddOldWerHelperRegistrationCleanupItems(HKEY root,
                                              const base::FilePath& target_path,
                                              WorkItemList* list);
 
-// Adds work items to `list` to register a WER runtime exception helper module
-// in the registry. The wer module should be located at `wer_helper_path`.
+// Adds best-effort work items to `list` to register a WER runtime exception
+// helper module in the registry. The wer module should be located at
+// `wer_helper_path`.
 void AddWerHelperRegistration(HKEY root,
                               const base::FilePath& wer_helper_path,
                               WorkItemList* list);
@@ -100,10 +96,7 @@ void AddSetMsiMarkerWorkItem(const InstallerState& installer_state,
                              bool set,
                              WorkItemList* work_item_list);
 
-// Adds work items to cleanup deprecated per-user registrations.
-void AddCleanupDeprecatedPerUserRegistrationsWorkItems(WorkItemList* list);
-
-// Adds Active Setup registration for sytem-level setup to be called by Windows
+// Adds Active Setup registration for system-level setup to be called by Windows
 // on user-login post-install/update. This method should be called for
 // installation only.
 void AddActiveSetupWorkItems(const InstallerState& installer_state,

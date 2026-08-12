@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "components/affiliations/core/browser/affiliation_api.pb.h"
 #include "components/affiliations/core/browser/affiliation_fetcher_interface.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
@@ -109,6 +109,10 @@ affiliation_pb::LookupAffiliationMask CreateLookupMask(
   mask.set_group_branding_info(true);
   mask.set_change_password_info(request_info.change_password_info);
   mask.set_psl_extension_list(request_info.psl_extension_list);
+  if (request_info.fetch_patterns) {
+    mask.set_change_password_format(
+        affiliation_pb::LookupAffiliationMask::PATTERNS_PER_MAIN_DOMAIN);
+  }
   return mask;
 }
 

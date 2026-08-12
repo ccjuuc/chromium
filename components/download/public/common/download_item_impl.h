@@ -129,6 +129,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
     // content.
     int64_t range_request_from = kInvalidRange;
     int64_t range_request_to = kInvalidRange;
+
+    // True if a Service Worker fetch handler produced the original response.
+    // On resume such downloads cannot be range-continued (SW responses are
+    // one-shot full bodies), so resumption forces a restart and re-dispatches
+    // the fetch event from offset 0.
+    bool fetched_via_service_worker = false;
   };
 
   // Information about the current state of the download destination.
@@ -256,6 +262,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   void UpdateObservers() override;
   void ValidateDangerousDownload() override;
   void ValidateInsecureDownload() override;
+  void ConfirmNonDangerousDownload() override;
   void CopyDownload(AcquireFileCallback callback) override;
   void Pause() override;
   void Resume(bool user_resume) override;
@@ -280,6 +287,9 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   int32_t GetAutoResumeCount() const override;
   const GURL& GetURL() const override;
   const std::vector<GURL>& GetUrlChain() const override;
+  void SetURLLoaderFactory(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+      override;
   const GURL& GetOriginalUrl() const override;
   const GURL& GetReferrerUrl() const override;
   const std::string& GetSerializedEmbedderDownloadData() const override;
@@ -316,6 +326,7 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
 #endif  // BUILDFLAG(IS_ANDROID)
   bool IsDangerous() const override;
   bool IsInsecure() const override;
+  bool IsUserConfirmed() const override;
   DownloadDangerType GetDangerType() const override;
   InsecureDownloadStatus GetInsecureDownloadStatus() const override;
   bool TimeRemaining(base::TimeDelta* remaining) const override;
@@ -423,6 +434,10 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   }
 
   bool fetch_error_body() const { return fetch_error_body_; }
+
+  bool fetched_via_service_worker() const {
+    return request_info_.fetched_via_service_worker;
+  }
 
   uint64_t ukm_download_id() const { return ukm_download_id_; }
 
@@ -903,12 +918,17 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadItemImpl
   // Whether renaming is in progress.
   bool renaming_ = false;
 
+  // Whether user has confirmed dialog.
+  bool is_user_confirmed_ = false;
+
 #if BUILDFLAG(IS_ANDROID)
   bool is_from_external_app_ = false;
   bool allow_auto_open_after_completion_ = true;
 #endif  // BUILDFLAG(IS_ANDROID)
 
   THREAD_CHECKER(thread_checker_);
+
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
   base::WeakPtrFactory<DownloadItemImpl> weak_ptr_factory_{this};
 };

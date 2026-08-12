@@ -5,19 +5,33 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_AUTOFILL_AI_AUTOFILL_AI_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_AUTOFILL_AI_AUTOFILL_AI_MANAGER_H_
 
+#include <stddef.h>
+
+#include <memory>
+#include <optional>
+#include <vector>
+
 #include "base/containers/lru_cache.h"
-#include "base/functional/callback_forward.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
+#include "components/autofill/core/browser/foundations/scoped_autofill_managers_observation.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_logger.h"
+#include "components/autofill/core/browser/network/autofill_ai/autofill_ai_personal_context_access_manager.h"
 #include "components/autofill/core/browser/strike_databases/autofill_ai/autofill_ai_save_strike_database_by_attribute.h"
 #include "components/autofill/core/browser/strike_databases/autofill_ai/autofill_ai_save_strike_database_by_host.h"
 #include "components/autofill/core/browser/strike_databases/autofill_ai/autofill_ai_update_strike_database.h"
-#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "components/strike_database/strike_database_base.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/gurl.h"
 
@@ -30,14 +44,19 @@ class FormStructure;
 struct Suggestion;
 
 // The class for embedder-independent, tab-specific Autofill AI logic. This
-// class is an interface.
-class AutofillAiManager {
+// class is owned by the AutofillClient.
+class AutofillAiManager
+    : public AutofillManager::Observer,
+      public AutofillAiPersonalContextAccessManager::Observer {
  public:
+  using UpdateSuggestionsCallback =
+      base::RepeatingCallback<void(std::vector<Suggestion>)>;
+
   AutofillAiManager(AutofillClient* client,
                     strike_database::StrikeDatabaseBase* strike_database);
   AutofillAiManager(const AutofillAiManager&) = delete;
   AutofillAiManager& operator=(const AutofillAiManager&) = delete;
-  virtual ~AutofillAiManager();
+  ~AutofillAiManager() override;
 
   // Generates AutofillAi suggestions.
   virtual std::vector<Suggestion> GetSuggestions(
@@ -63,12 +82,16 @@ class AutofillAiManager {
   // TODO(crbug.com/389629573): The "On*" methods below are used only for
   // logging purposes. Explore different approaches.
 
-  virtual void OnSuggestionsShown(
+  virtual void OnAutofillAiSuggestionsShown(
       const FormStructure& form,
       const AutofillField& field,
       base::span<const Suggestion> shown_suggestions,
-      ukm::SourceId ukm_source_id);
+      ukm::SourceId ukm_source_id,
+      UpdateSuggestionsCallback update_suggestions_callback);
   virtual void OnFormSeen(const FormStructure& form);
+  virtual void OnFormInteracted(const FormStructure& form,
+                                const AutofillField& field,
+                                ukm::SourceId ukm_source_id);
   virtual void OnDidFillSuggestion(
       const EntityInstance& entity,
       const FormStructure& form,
@@ -79,6 +102,16 @@ class AutofillAiManager {
                                        const AutofillField& field,
                                        ukm::SourceId ukm_source_id);
 
+  // AutofillManager::Observer:
+  void OnAfterLoadedServerPredictions(
+      AutofillManager& manager,
+      base::span<const FormGlobalId> forms) override;
+
+  // AutofillAiPersonalContextAccessManager::Observer:
+  void OnPrefetchContextComplete(
+      const AutofillAiPersonalContextAccessManager& manager,
+      std::optional<base::span<const EntityInstance>> entities) override;
+
   // Updates `logger_`'s information about data stored for AutofillAi for
   // `form`.
   void UpdateLoggerReadinessData(const FormStructure& form);
@@ -88,10 +121,8 @@ class AutofillAiManager {
  private:
   friend class AutofillAiManagerTestApi;
   struct UserSuggestionInteractionDetails {
-    // Upon clicking a field, stores the different entity types used to
-    // generate the suggestions shown.
-    DenseSet<EntityType> suggested_entity_types;
     std::optional<EntityType> entity_type_accepted;
+    std::optional<EntityInstance::RecordType> accepted_entity_record_type;
     // The types of the field where the suggestion was shown or accepted.
     FieldTypeSet autofill_ai_field_types;
   };
@@ -100,7 +131,7 @@ class AutofillAiManager {
   // Strike database related methods:
   void AddOrClearImportPromptStrikes(
       AutofillClient::AutofillAiImportPromptType prompt_type,
-      AutofillClient::AutofillAiBubbleClosedReason close_reason,
+      AutofillClient::AutofillAiBubbleResult result,
       const GURL& url,
       const EntityInstance& entity);
   void AddStrikeForSaveAttempt(const GURL& url, const EntityInstance& entity);
@@ -190,9 +221,29 @@ class AutofillAiManager {
       EntityInstance entity,
       ukm::SourceId ukm_source_id,
       AutofillClient::AutofillAiImportPromptType prompt_type,
-      AutofillClient::AutofillAiBubbleClosedReason close_reason);
+      AutofillClient::AutofillAiBubbleResult result,
+      std::optional<EntityInstance> edited_entity,
+      const AutofillClient::EntityImportUIContext& ui_context);
+
+  // Handles the fallback UI and storage logic when a Wallet save is
+  // accepted but the user is no longer eligible. This can happen if eligibility
+  // changes between the time the prompt is shown and when the user accepts it
+  // (e.g., if the user disables Payments Sync in another window).
+  void HandleIneligibleWalletFallback(
+      AutofillClient::AutofillAiImportPromptType prompt_type,
+      EntityInstance entity);
 
   LogManager* GetCurrentLogManager();
+
+  void GenerateAndUpdateSuggestions(FormGlobalId form_id,
+                                    FieldGlobalId field_id,
+                                    UpdateSuggestionsCallback callback);
+
+  // Returns the EntityType for which Autofill AI could potentially offer an
+  // import prompt (based on the field type), if any.
+  std::optional<EntityType> GetSupportedEntityTypeForField(
+      const FormStructure& form,
+      const AutofillField& field) const;
 
   // A raw reference to the client, which owns `this` and therefore outlives
   // it.
@@ -218,6 +269,29 @@ class AutofillAiManager {
   base::LRUCache<FormGlobalId, UserSuggestionInteractionDetails>
       user_suggestion_interactions_per_form_{
           kSuggestionInteractionCacheMaxSize};
+
+  // Tracks the UKM source ID for which the suggestions shown timing metric was
+  // last logged, ensuring it is logged at most once per page.
+  ukm::SourceId last_logged_ukm_source_id_ = ukm::kInvalidSourceId;
+
+  // Tracks the UKM source ID for which the first interaction timing metric was
+  // last logged, ensuring it is logged at most once per page.
+  ukm::SourceId last_logged_ukm_source_id_for_interaction_ =
+      ukm::kInvalidSourceId;
+
+  // Tracks the UKM source ID for which the prefetch cache readiness metric was
+  // last logged, ensuring it is logged at most once per page.
+  ukm::SourceId last_logged_ukm_source_id_for_cache_readiness_ =
+      ukm::kInvalidSourceId;
+
+  // Callback to update the shown suggestions.
+  base::RepeatingClosure generate_suggestions_and_update_popup_callback_;
+
+  ScopedAutofillManagersObservation autofill_managers_observation_{this};
+
+  base::ScopedObservation<AutofillAiPersonalContextAccessManager,
+                          AutofillAiPersonalContextAccessManager::Observer>
+      autofill_ai_personal_context_access_manager_observation_{this};
 
   base::WeakPtrFactory<AutofillAiManager> weak_ptr_factory_{this};
 };

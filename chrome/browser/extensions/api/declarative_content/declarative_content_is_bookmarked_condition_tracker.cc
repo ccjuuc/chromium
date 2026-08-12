@@ -4,7 +4,6 @@
 
 #include "chrome/browser/extensions/api/declarative_content/declarative_content_is_bookmarked_condition_tracker.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
@@ -109,7 +108,7 @@ BookmarkAddedForUrl(const GURL& url) {
 
 void DeclarativeContentIsBookmarkedConditionTracker::PerWebContentsTracker::
 BookmarkRemovedForUrls(const std::set<GURL>& urls) {
-  if (base::Contains(urls, web_contents()->GetVisibleURL())) {
+  if (urls.contains(web_contents()->GetVisibleURL())) {
     is_url_bookmarked_ = false;
     request_evaluation_.Run(web_contents());
   }
@@ -119,10 +118,12 @@ void DeclarativeContentIsBookmarkedConditionTracker::PerWebContentsTracker::
 UpdateState(bool request_evaluation_if_unchanged) {
   bool state_changed =
       IsCurrentUrlBookmarked() != is_url_bookmarked_;
-  if (state_changed)
+  if (state_changed) {
     is_url_bookmarked_ = !is_url_bookmarked_;
-  if (state_changed || request_evaluation_if_unchanged)
+  }
+  if (state_changed || request_evaluation_if_unchanged) {
     request_evaluation_.Run(web_contents());
+  }
 }
 
 bool DeclarativeContentIsBookmarkedConditionTracker::PerWebContentsTracker::
@@ -152,8 +153,9 @@ DeclarativeContentIsBookmarkedConditionTracker::
   bookmarks::BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(context);
   // Can be null during unit test execution.
-  if (bookmark_model)
+  if (bookmark_model) {
     scoped_bookmarks_observation_.Observe(bookmark_model);
+  }
 }
 
 DeclarativeContentIsBookmarkedConditionTracker::
@@ -198,7 +200,7 @@ void DeclarativeContentIsBookmarkedConditionTracker::TrackForWebContents(
 void DeclarativeContentIsBookmarkedConditionTracker::OnWebContentsNavigation(
     content::WebContents* contents,
     content::NavigationHandle* navigation_handle) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_[contents]->UpdateState(true);
 }
 
@@ -252,8 +254,9 @@ void DeclarativeContentIsBookmarkedConditionTracker::
 
 void DeclarativeContentIsBookmarkedConditionTracker::
     ExtensiveBookmarkChangesEnded() {
-  if (--extensive_bookmark_changes_in_progress_ == 0)
+  if (--extensive_bookmark_changes_in_progress_ == 0) {
     UpdateAllPerWebContentsTrackers();
+  }
 }
 
 void DeclarativeContentIsBookmarkedConditionTracker::
@@ -263,21 +266,23 @@ void DeclarativeContentIsBookmarkedConditionTracker::
 
 void DeclarativeContentIsBookmarkedConditionTracker::
     GroupedBookmarkChangesEnded() {
-  if (--extensive_bookmark_changes_in_progress_ == 0)
+  if (--extensive_bookmark_changes_in_progress_ == 0) {
     UpdateAllPerWebContentsTrackers();
+  }
 }
 
 void
 DeclarativeContentIsBookmarkedConditionTracker::DeletePerWebContentsTracker(
     content::WebContents* contents) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_.erase(contents);
 }
 
 void DeclarativeContentIsBookmarkedConditionTracker::
 UpdateAllPerWebContentsTrackers() {
-  for (const auto& web_contents_tracker_pair : per_web_contents_tracker_)
+  for (const auto& web_contents_tracker_pair : per_web_contents_tracker_) {
     web_contents_tracker_pair.second->UpdateState(false);
+  }
 }
 
 }  // namespace extensions

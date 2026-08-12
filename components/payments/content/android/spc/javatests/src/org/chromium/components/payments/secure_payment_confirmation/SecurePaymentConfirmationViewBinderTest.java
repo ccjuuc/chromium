@@ -34,7 +34,6 @@ import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
 import org.chromium.components.payments.PaymentApp.PaymentEntityLogo;
-import org.chromium.components.payments.R;
 import org.chromium.components.payments.secure_payment_confirmation.SecurePaymentConfirmationProperties.ItemProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -301,6 +300,46 @@ public class SecurePaymentConfirmationViewBinderTest {
         assertEquals(
                 View.GONE,
                 mView.mItemList.getChildAt(0).findViewById(R.id.secondary_text).getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    public void testItemListWhenIconLabelNotProvided() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ModelList itemList = new ModelList();
+                    itemList.add(
+                            new ListItem(
+                                    /* type= */ 0,
+                                    new PropertyModel.Builder(ItemProperties.ALL_KEYS)
+                                            .with(ItemProperties.ICON, TEST_BITMAP)
+                                            // ICON_LABEL intentionally not provided to test
+                                            // fallback.
+                                            .with(ItemProperties.PRIMARY_TEXT, "text")
+                                            .with(ItemProperties.SECONDARY_TEXT, "")
+                                            .build()));
+                    SimpleRecyclerViewAdapter itemListAdapter =
+                            new SimpleRecyclerViewAdapter(itemList);
+                    itemListAdapter.registerType(
+                            /* typeId= */ 0,
+                            SecurePaymentConfirmationView::createItemView,
+                            SecurePaymentConfirmationViewBinder::bindItem);
+
+                    mModel =
+                            mModelBuilder
+                                    .with(
+                                            SecurePaymentConfirmationProperties.ITEM_LIST_ADAPTER,
+                                            itemListAdapter)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            mModel, mView, SecurePaymentConfirmationViewBinder::bind);
+                });
+
+        RecyclerViewTestUtils.waitForStableRecyclerView(mView.mItemList);
+        View itemView = mView.mItemList.getChildAt(0);
+        assertEquals(
+                itemView.getContext().getString(R.string.payments_instrument_icon),
+                itemView.findViewById(R.id.icon).getContentDescription());
     }
 
     @Test

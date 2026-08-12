@@ -10,7 +10,6 @@
 #include <sstream>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -24,7 +23,6 @@
 #include "chrome/browser/apps/app_service/publishers/app_publisher.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
@@ -40,7 +38,6 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
@@ -148,7 +145,7 @@ class ExternallyManagedAppManagerTest : public WebAppTest {
 
 // Test that destroying ExternallyManagedAppManager during a synchronize call
 // that installs an app doesn't crash. Regression test for
-// https://crbug.com/962808
+// https://crbug.com/41458655
 TEST_F(ExternallyManagedAppManagerTest, DestroyDuringInstallInSynchronize) {
   std::vector<ExternalInstallOptions> install_options_list;
   install_options_list.emplace_back(GURL("https://foo.example"),
@@ -169,7 +166,7 @@ TEST_F(ExternallyManagedAppManagerTest, DestroyDuringInstallInSynchronize) {
 
 // Test that destroying ExternallyManagedAppManager during a synchronize call
 // that uninstalls an app doesn't crash. Regression test for
-// https://crbug.com/962808
+// https://crbug.com/41458655
 TEST_F(ExternallyManagedAppManagerTest, DestroyDuringUninstallInSynchronize) {
   // Install an app that will be uninstalled next.
   {
@@ -965,8 +962,12 @@ TEST_F(ExternallyAppManagerTest, PolicyAppOverridesUserInstalledApp) {
 
     ASSERT_TRUE(user_app_id.has_value());
     ASSERT_EQ(user_app_id.value(), app_id);
-    ASSERT_TRUE(app_registrar().WasInstalledByUser(app_id));
-    ASSERT_FALSE(app_registrar().HasExternalApp(app_id));
+    ASSERT_TRUE(
+        app_registrar().AppMatches(app_id, WebAppFilter::InstalledByUser()));
+    ASSERT_TRUE(app_registrar()
+                    .GetAppById(app_id)
+                    ->management_to_external_config_map()
+                    .empty());
     ASSERT_EQ("Test user app", app_registrar().GetAppShortName(app_id));
   }
   {
@@ -1058,7 +1059,7 @@ TEST_F(ExternallyAppManagerTest, RedirectInstallUrlPlaceholder) {
       ExternalInstallSource::kExternalPolicy, result.GetCallback());
   ASSERT_TRUE(result.Wait());
 
-  // The webapps::AppId should be created from teh install url.
+  // The webapps::AppId should be created from the install url.
   webapps::AppId app_id =
       GenerateAppId(/*manifest_id=*/std::nullopt, kInstallUrl);
 

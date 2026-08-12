@@ -23,6 +23,7 @@
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom.h"
 
 namespace predictors {
@@ -106,7 +107,7 @@ class LcpCriticalPathPredictorPageLoadMetricsObserverTest
   void ProvideLCPPHint(content::NavigationSimulator* navigation) {
     blink::mojom::LCPCriticalPathPredictorNavigationTimeHint hint;
     hint.lcp_element_locators = {"foo"};
-    navigation->GetNavigationHandle()->SetLCPPNavigationHint(hint);
+    navigation->GetNavigationHandle()->SetLCPPNavigationHint(hint.Clone());
   }
 
   void SetMockLcpElementLocator(

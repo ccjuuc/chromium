@@ -12,40 +12,49 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/extensions/menu_manager.h"
 #include "chrome/browser/extensions/menu_manager_factory.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
-#include "chrome/browser/feed/web_feed_tab_helper.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service_factory.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/password_manager/chrome_webauthn_credentials_delegate.h"
 #include "chrome/browser/password_manager/chrome_webauthn_credentials_delegate_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/predictors/loading_predictor.h"
 #include "chrome/browser/predictors/loading_predictor_factory.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
+#include "chrome/browser/ui/side_panel/mock_side_panel_ui.h"
+#include "chrome/browser/ui/tabs/page_context_eligibility_helper.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -58,12 +67,14 @@
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
 #include "components/autofill/content/browser/test_content_autofill_driver.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "components/lens/buildflags.h"
 #include "components/lens/lens_features.h"
@@ -74,8 +85,14 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/send_tab_to_self/features.h"
+#include "components/send_tab_to_self/stub_send_tab_to_self_sync_service.h"
+#include "components/send_tab_to_self/target_device_info.h"
 #include "components/sync/test/test_sync_service.h"
+#include "components/tabs/public/mock_tab_interface.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/user_education/common/user_education_features.h"
@@ -94,13 +111,18 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/test_extension_prefs.h"
 #include "extensions/common/url_pattern.h"
+#include "media/base/media_switches.h"
+#include "net/base/url_util.h"
+#include "printing/buildflags/buildflags.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
-#include "third_party/blink/public/common/navigation/impression.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -250,20 +272,6 @@ class RenderViewContextMenuTest : public testing::Test {
   content::RenderViewHostTestEnabler rvh_test_enabler_;
 };
 
-// Check that the fenced frame untrusted network status gated command ids are
-// within the valid command id range.
-TEST_F(RenderViewContextMenuTest,
-       CommandsGatedOnFencedFrameUntrustedNetworkStatus) {
-  ASSERT_GE(
-      *std::cbegin(TestRenderViewContextMenu::
-                       GetFencedFrameUntrustedNetworkStatusGatedCommands()),
-      IDC_MinimumLabelValue);
-  ASSERT_LT(
-      *std::crbegin(TestRenderViewContextMenu::
-                        GetFencedFrameUntrustedNetworkStatusGatedCommands()),
-      IDC_FIRST_UNBOUNDED_MENU);
-}
-
 class RenderViewContextMenuExtensionsTest : public RenderViewContextMenuTest {
  protected:
   RenderViewContextMenuExtensionsTest()
@@ -305,9 +313,9 @@ TEST_F(RenderViewContextMenuExtensionsTest,
                   &MenuManagerFactory::BuildServiceInstanceForTesting))));
 
   const Extension* extension1 = environment().MakeExtension(
-      base::Value::Dict(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      base::DictValue(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   const Extension* extension2 = environment().MakeExtension(
-      base::Value::Dict(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+      base::DictValue(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
   // Create two items in two extensions with same title.
   ASSERT_TRUE(
@@ -352,6 +360,9 @@ class RenderViewContextMenuPrefsTest
     TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
         profile(),
         base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor));
+    AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
+        profile(),
+        base::BindRepeating(&AutocompleteClassifierFactory::BuildInstanceFor));
     template_url_service_ = TemplateURLServiceFactory::GetForProfile(profile());
     search_test_utils::WaitForTemplateURLServiceToLoad(template_url_service_);
 
@@ -379,7 +390,7 @@ class RenderViewContextMenuPrefsTest
   void BeginPreresolveListening() {
     auto* loading_predictor =
         predictors::LoadingPredictorFactory::GetForProfile(
-            GetBrowser()->profile());
+            GetBrowser()->GetProfile());
     ASSERT_TRUE(loading_predictor);
     loading_predictor->preconnect_manager()->SetObserverForTesting(this);
     last_preresolved_url_ = GURL();
@@ -398,6 +409,7 @@ class RenderViewContextMenuPrefsTest
   }
 
   void TearDown() override {
+    lens_controller_.reset();
     browser_.reset();
     template_url_service_ = nullptr;
     registry_.reset();
@@ -444,23 +456,48 @@ class RenderViewContextMenuPrefsTest
     template_url_service_->SetUserSelectedDefaultSearchProvider(template_url);
   }
 
-  Browser* GetBrowser() {
+  BrowserWindowInterface* GetBrowser() {
     if (!browser_) {
-      Browser::CreateParams create_params(profile(), true);
-      auto browser_window = std::make_unique<TestBrowserWindow>();
-      create_params.window = browser_window.release();
-      browser_ = Browser::DeprecatedCreateOwnedForTesting(create_params);
+      auto mock_browser =
+          std::make_unique<testing::NiceMock<MockBrowserWindowInterface>>();
+      ON_CALL(*mock_browser, GetProfile())
+          .WillByDefault(testing::Return(profile()));
+      ON_CALL(testing::Const(*mock_browser), GetProfile())
+          .WillByDefault(testing::Return(profile()));
+      ON_CALL(testing::Const(*mock_browser), GetUnownedUserDataHost())
+          .WillByDefault(testing::ReturnRef(unowned_user_data_host_));
+      ON_CALL(testing::Const(*mock_browser), GetType())
+          .WillByDefault(testing::Return(BrowserWindowInterface::TYPE_NORMAL));
+      ON_CALL(*mock_browser, GetFeatures())
+          .WillByDefault(testing::ReturnRef(features_));
+      ON_CALL(testing::Const(*mock_browser), GetFeatures())
+          .WillByDefault(testing::ReturnRef(features_));
+
+      lens_controller_.emplace(mock_browser.get());
+      browser_ = std::move(mock_browser);
     }
     return browser_.get();
   }
 
-  Browser* GetPwaBrowser() {
+  BrowserWindowInterface* GetPwaBrowser() {
     if (!browser_) {
-      Browser::CreateParams create_params(Browser::Type::TYPE_APP, profile(),
-                                          true);
-      auto browser_window = std::make_unique<TestBrowserWindow>();
-      create_params.window = browser_window.release();
-      browser_ = Browser::DeprecatedCreateOwnedForTesting(create_params);
+      auto mock_browser =
+          std::make_unique<testing::NiceMock<MockBrowserWindowInterface>>();
+      ON_CALL(*mock_browser, GetProfile())
+          .WillByDefault(testing::Return(profile()));
+      ON_CALL(testing::Const(*mock_browser), GetProfile())
+          .WillByDefault(testing::Return(profile()));
+      ON_CALL(testing::Const(*mock_browser), GetUnownedUserDataHost())
+          .WillByDefault(testing::ReturnRef(unowned_user_data_host_));
+      ON_CALL(testing::Const(*mock_browser), GetType())
+          .WillByDefault(testing::Return(BrowserWindowInterface::TYPE_APP));
+      ON_CALL(*mock_browser, GetFeatures())
+          .WillByDefault(testing::ReturnRef(features_));
+      ON_CALL(testing::Const(*mock_browser), GetFeatures())
+          .WillByDefault(testing::ReturnRef(features_));
+
+      lens_controller_.emplace(mock_browser.get());
+      browser_ = std::move(mock_browser);
     }
     return browser_.get();
   }
@@ -474,10 +511,18 @@ class RenderViewContextMenuPrefsTest
     return preresolved_finished_closure_;
   }
 
+  custom_handlers::ProtocolHandlerRegistry* protocol_handler_registry() {
+    return registry_.get();
+  }
+
  private:
   std::unique_ptr<custom_handlers::ProtocolHandlerRegistry> registry_;
   raw_ptr<TemplateURLService> template_url_service_;
-  std::unique_ptr<Browser> browser_;
+  std::unique_ptr<BrowserWindowInterface> browser_;
+  ui::UnownedUserDataHost unowned_user_data_host_;
+  BrowserWindowFeatures features_;
+  std::optional<lens::LensOverlayEntryPointController> lens_controller_;
+  MockSidePanelUI side_panel_ui_{unowned_user_data_host_};
   GURL last_preresolved_url_;
   base::OnceClosure preresolved_finished_closure_;
 
@@ -505,6 +550,41 @@ TEST_F(RenderViewContextMenuPrefsTest,
       menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD));
 }
 
+#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+// Ensure PrintPreviewContextMenuObserver does not intercept "Search the web
+// for…" even when the observer is attached via Init() (i.e., the print preview
+// group is supported). The command should remain unknown to observers and be
+// enabled via the default RenderViewContextMenu path.
+TEST_F(RenderViewContextMenuPrefsTest,
+       SearchWebForNotInterceptedByPrintPreviewObserver) {
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.page_url = GURL("https://example.com/");
+  // Avoid triggering AppendSearchProvider in Init() by simulating a
+  // misspelled word; this skips the search provider menu item construction
+  // while still attaching observers (including
+  // PrintPreviewContextMenuObserver).
+  params.misspelled_word = u"x";
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      *web_contents()->GetPrimaryMainFrame(), params);
+
+  // Ensure a default search provider exists to avoid null deref in
+  // AppendSearchProvider during Init().
+  SetUserSelectedDefaultSearchProvider("https://search.example/",
+                                       /*supports_image_search=*/true);
+
+  // Attach all standard observers, including PrintPreviewContextMenuObserver.
+  menu->Init();
+
+  bool enabled_by_observer = true;
+  EXPECT_FALSE(menu->IsCommandIdKnown(IDC_CONTENT_CONTEXT_SEARCHWEBFOR,
+                                      &enabled_by_observer));
+
+  // Default path should still enable the command when navigation is allowed.
+  menu->set_selection_navigation_url(GURL("https://search.example/"));
+  EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+}
+#endif  // BUILDFLAG(ENABLE_PRINT_PREVIEW)
+
 #if BUILDFLAG(IS_CHROMEOS)
 class RenderViewContextMenuDlpPrefsTest
     : public RenderViewContextMenuPrefsTest {
@@ -523,7 +603,7 @@ class RenderViewContextMenuDlpPrefsTest
         .AddRestriction(data_controls::kRestrictionClipboard,
                         data_controls::kLevelBlock);
 
-    base::Value::List rules;
+    base::ListValue rules;
     rules.Append(rule.Create());
     TestingBrowserProcess::GetGlobal()->local_state()->SetList(
         policy::policy_prefs::kDlpRulesList, std::move(rules));
@@ -766,6 +846,74 @@ TEST_F(RenderViewContextMenuPrefsTest, LoadBrokenImage) {
   ASSERT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_LOAD_IMAGE));
 }
 
+TEST_F(RenderViewContextMenuPrefsTest,
+       ContextMenuMenuSimplificationVideoOrderDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitAndDisableFeature(features::kMenuSimplification);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::VIDEO);
+  params.media_flags |= blink::ContextMenuData::kMediaCanPictureInPicture;
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      *web_contents()->GetPrimaryMainFrame(), params);
+  menu->Init();
+
+  auto pip_item =
+      menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_PICTUREINPICTURE);
+  ASSERT_TRUE(pip_item.has_value());
+
+  auto loop_item = menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_LOOP);
+  ASSERT_TRUE(loop_item.has_value());
+
+  // PiP should be somewhere AFTER Loop and Controls when disabled.
+  EXPECT_GT(pip_item->second, loop_item->second);
+}
+
+// Verify that the MenuSimplification video context menu are ordered properly.
+TEST_F(RenderViewContextMenuPrefsTest,
+       ContextMenuMenuSimplificationVideoOrder) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kMenuSimplification);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::VIDEO);
+  params.media_flags |= blink::ContextMenuData::kMediaCanPictureInPicture;
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      *web_contents()->GetPrimaryMainFrame(), params);
+  menu->Init();
+
+  auto pip_item =
+      menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_PICTUREINPICTURE);
+  ASSERT_TRUE(pip_item.has_value());
+
+  auto route_media_item = menu->GetMenuModelAndItemIndex(IDC_ROUTE_MEDIA);
+  auto loop_item = menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_LOOP);
+  ASSERT_TRUE(loop_item.has_value());
+
+  // PiP should be somewhere BEFORE Loop and Controls when enabled.
+  EXPECT_LT(pip_item->second, loop_item->second);
+
+  ASSERT_TRUE(route_media_item.has_value());
+  EXPECT_EQ(pip_item->second + 1, route_media_item->second);
+  // Ensure they have icons.
+  EXPECT_FALSE(pip_item->first->GetIconAt(pip_item->second).IsEmpty());
+  EXPECT_FALSE(
+      route_media_item->first->GetIconAt(route_media_item->second).IsEmpty());
+  // Ensure there is a separator after them.
+  EXPECT_EQ(ui::MenuModel::TYPE_SEPARATOR,
+            pip_item->first->GetTypeAt(route_media_item->second + 1));
+
+  // Check that the Video Frame submenu exists.
+  auto video_frame_menu =
+      menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_VIDEO_FRAME);
+  ASSERT_TRUE(video_frame_menu.has_value());
+
+  // Check that "Save Video Frame As" is in the submenu.
+  auto save_video_frame =
+      menu->GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_SAVEVIDEOFRAMEAS);
+  ASSERT_TRUE(save_video_frame.has_value());
+  EXPECT_EQ(save_video_frame->first, video_frame_menu->first->GetSubmenuModelAt(
+                                         video_frame_menu->second));
+}
+
 // Verify that the suggested file name is propagated to web contents when save a
 // media file in context menu.
 TEST_F(RenderViewContextMenuPrefsTest, SaveMediaSuggestedFileName) {
@@ -803,7 +951,6 @@ TEST_F(RenderViewContextMenuPrefsTest, OpenLinkNavigationParamsSet) {
   content::ContextMenuParams params = CreateParams(MenuItem::LINK);
   params.unfiltered_link_url = params.link_url;
   params.link_url = params.link_url;
-  params.impression = blink::Impression();
   auto menu = std::make_unique<TestRenderViewContextMenu>(main_frame, params);
   menu->ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB, 0);
   EXPECT_TRUE(delegate.last_navigation_params());
@@ -814,9 +961,6 @@ TEST_F(RenderViewContextMenuPrefsTest, OpenLinkNavigationParamsSet) {
             delegate.last_navigation_params()->initiator_frame_token);
   EXPECT_EQ(main_frame.GetProcess()->GetDeprecatedID(),
             delegate.last_navigation_params()->initiator_process_id);
-
-  // Verify that the impression is attached to the navigation.
-  EXPECT_TRUE(delegate.last_navigation_params()->impression);
 }
 
 // Verify ContextMenu navigations properly set the initiating origin.
@@ -828,7 +972,6 @@ TEST_F(RenderViewContextMenuPrefsTest, OpenLinkNavigationInitiatorSet) {
   content::ContextMenuParams params = CreateParams(MenuItem::LINK);
   params.unfiltered_link_url = params.link_url;
   params.link_url = params.link_url;
-  params.impression = blink::Impression();
   auto menu = std::make_unique<TestRenderViewContextMenu>(main_frame, params);
   menu->ExecuteCommand(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB, 0);
   EXPECT_TRUE(delegate.last_navigation_params());
@@ -837,6 +980,63 @@ TEST_F(RenderViewContextMenuPrefsTest, OpenLinkNavigationInitiatorSet) {
   EXPECT_TRUE(delegate.last_navigation_params()->initiator_origin.has_value());
   EXPECT_EQ(delegate.last_navigation_params()->initiator_origin->GetURL(),
             params.page_url.DeprecatedGetOriginAsURL());
+}
+
+TEST_F(RenderViewContextMenuPrefsTest,
+       SearchWebForNewTabAppendsSourceParameter) {
+  TestNavigationDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+  content::RenderFrameHost& main_frame = *web_contents()->GetPrimaryMainFrame();
+
+  SetUserSelectedDefaultSearchProvider("https://www.google.com/search", true);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.selection_text = u"hello world";
+  auto menu = std::make_unique<TestRenderViewContextMenu>(main_frame, params);
+  menu->Init();
+  menu->ExecuteCommand(IDC_CONTENT_CONTEXT_SEARCHWEBFORNEWTAB, 0);
+
+  ASSERT_TRUE(delegate.last_navigation_params());
+  std::string source_param;
+  EXPECT_TRUE(net::GetValueForKeyInQuery(delegate.last_navigation_params()->url,
+                                         "source", &source_param));
+  EXPECT_EQ("chrome.ctxt", source_param);
+}
+
+TEST_F(RenderViewContextMenuPrefsTest, SearchWebForLogsSelectedTextWordCount) {
+  base::HistogramTester histogram_tester;
+  content::RenderFrameHost& main_frame = *web_contents()->GetPrimaryMainFrame();
+
+  SetUserSelectedDefaultSearchProvider("https://www.google.com/search", true);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.selection_text = u"Search for multiple words in selection";
+  auto menu = std::make_unique<TestRenderViewContextMenu>(main_frame, params);
+  menu->Init();
+  menu->ExecuteCommand(IDC_CONTENT_CONTEXT_SEARCHWEBFOR, 0);
+
+  histogram_tester.ExpectUniqueSample(
+      "RenderViewContextMenu.SelectedTextWordCount.SearchWeb", 6, 1);
+}
+
+TEST_F(RenderViewContextMenuPrefsTest,
+       SearchWebForNewTabDoesNotAppendSourceForNonGoogle) {
+  TestNavigationDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+  content::RenderFrameHost& main_frame = *web_contents()->GetPrimaryMainFrame();
+
+  SetUserSelectedDefaultSearchProvider("https://www.example.com/search", true);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.selection_text = u"hello world";
+  auto menu = std::make_unique<TestRenderViewContextMenu>(main_frame, params);
+  menu->Init();
+  menu->ExecuteCommand(IDC_CONTENT_CONTEXT_SEARCHWEBFORNEWTAB, 0);
+
+  ASSERT_TRUE(delegate.last_navigation_params());
+  std::string source_param;
+  EXPECT_FALSE(net::GetValueForKeyInQuery(
+      delegate.last_navigation_params()->url, "source", &source_param));
 }
 
 TEST_F(RenderViewContextMenuPrefsTest,
@@ -938,8 +1138,9 @@ class RenderViewContextMenuUsePasskeyFromAnotherDeviceTest
     NotifyFormManagerAndWait(form);
 
     content::ContextMenuParams params = CreateParams(MenuItem::EDITABLE);
-    params.form_renderer_id = form.renderer_id().value();
-    params.field_renderer_id = form.fields()[0].renderer_id().value();
+    params.form_renderer_id = blink::DOMNodeIdType(form.renderer_id().value());
+    params.field_renderer_id =
+        blink::DOMNodeIdType(form.fields()[0].renderer_id().value());
 
     auto menu = std::make_unique<TestRenderViewContextMenu>(
         *web_contents()->GetPrimaryMainFrame(), params);
@@ -950,7 +1151,8 @@ class RenderViewContextMenuUsePasskeyFromAnotherDeviceTest
   void NotifyFormManagerAndWait(autofill::FormData form) {
     autofill::TestAutofillManagerWaiter waiter(
         autofill_manager(), {autofill::AutofillManagerEvent::kFormsSeen});
-    autofill_manager().OnFormsSeen({form}, {});
+    autofill_manager().OnFormsSeen(
+        {form}, {}, autofill::AutofillManagerTestApi::pass_key());
     ASSERT_TRUE(waiter.Wait());
   }
 
@@ -979,29 +1181,10 @@ class RenderViewContextMenuUsePasskeyFromAnotherDeviceTest
       af_manager_injector_;
 };
 
-// Verify that "Use passkey from another device" is not displayed when the
-// feature is disabled.
-TEST_F(RenderViewContextMenuUsePasskeyFromAnotherDeviceTest,
-       UsePasskeyFromAnotherDeviceNotInContextMenu) {
-  base::test::ScopedFeatureList features;
-  features.InitAndDisableFeature(
-      password_manager::features::
-          kWebAuthnUsePasskeyFromAnotherDeviceInContextMenu);
-  NavigateAndCommit(get_url());
-
-  auto menu = CreateFormAndDisplayMenu(/*is_webauthn_form=*/true);
-
-  EXPECT_FALSE(
-      menu->IsItemPresent(IDC_CONTENT_CONTEXT_USE_PASSKEY_FROM_ANOTHER_DEVICE));
-}
-
 // Verify that "Use passkey from another device" is not displayed on
-// non-WebAuthn fields when the feature is enabled.
+// non-WebAuthn fields.
 TEST_F(RenderViewContextMenuUsePasskeyFromAnotherDeviceTest,
        UsePasskeyFromAnotherDeviceNotInContextMenuWhenNonWebauthnField) {
-  base::test::ScopedFeatureList features(
-      password_manager::features::
-          kWebAuthnUsePasskeyFromAnotherDeviceInContextMenu);
   NavigateAndCommit(get_url());
   webauthn_delegate()->OnCredentialsReceived(
       {}, ChromeWebAuthnCredentialsDelegate::SecurityKeyOrHybridFlowAvailable(
@@ -1013,10 +1196,10 @@ TEST_F(RenderViewContextMenuUsePasskeyFromAnotherDeviceTest,
       menu->IsItemPresent(IDC_CONTENT_CONTEXT_USE_PASSKEY_FROM_ANOTHER_DEVICE));
 }
 
-class RenderViewContextMenuHideAutofillSuggestionsTest
+class RenderViewContextMenuHideSuggestionsTest
     : public RenderViewContextMenuPrefsTest {
  public:
-  RenderViewContextMenuHideAutofillSuggestionsTest() = default;
+  RenderViewContextMenuHideSuggestionsTest() = default;
 
  protected:
   autofill::TestContentAutofillClient* autofill_client() {
@@ -1029,8 +1212,7 @@ class RenderViewContextMenuHideAutofillSuggestionsTest
 };
 
 // Always hide the autofill popup when the context menu opens.
-TEST_F(RenderViewContextMenuHideAutofillSuggestionsTest,
-       HideAutofillSuggestions) {
+TEST_F(RenderViewContextMenuHideSuggestionsTest, HideSuggestions) {
   NavigateAndCommit(GURL("http://www.foo.com/"));
   content::ContextMenuParams params = CreateParams(MenuItem::EDITABLE);
   params.form_control_type = blink::mojom::FormControlType::kInputText;
@@ -1102,6 +1284,139 @@ TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchEnabled) {
   EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE));
 }
 
+// Verify that the Lens Image Search menu item has an icon in fallback case
+TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchFallbackHasIcon) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures({lens::features::kLensStandalone,
+                             lens::features::kShowContextualTasksMenuIcon},
+                            {lens::features::kLensOverlay});
+  SetUserSelectedDefaultSearchProvider("https://www.google.com",
+                                       /*supports_image_search=*/true);
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE));
+  std::optional<size_t> index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_FALSE(menu.menu_model().GetIconAt(index.value()).IsEmpty());
+}
+
+// Verify that the Lens Video Search menu item has an icon in fallback case
+TEST_F(RenderViewContextMenuPrefsTest, LensVideoSearchFallbackHasIcon) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures(
+      {lens::features::kLensStandalone, media::kContextMenuSearchForVideoFrame,
+       lens::features::kShowContextualTasksMenuIcon},
+      {lens::features::kLensOverlay});
+  SetUserSelectedDefaultSearchProvider("https://www.google.com",
+                                       /*supports_image_search=*/true);
+  content::ContextMenuParams params = CreateParams(MenuItem::VIDEO);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORVIDEOFRAME));
+  std::optional<size_t> index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_SEARCHLENSFORVIDEOFRAME);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_FALSE(menu.menu_model().GetIconAt(index.value()).IsEmpty());
+}
+
+#if BUILDFLAG(IS_MAC)
+// Verify that the Lens Image Search menu item has NO icon when flag is disabled
+TEST_F(RenderViewContextMenuPrefsTest,
+       LensImageSearchFallbackNoIconWhenFlagDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures({lens::features::kLensStandalone},
+                            {lens::features::kLensOverlay,
+                             lens::features::kShowContextualTasksMenuIcon});
+  SetUserSelectedDefaultSearchProvider("https://www.google.com",
+                                       /*supports_image_search=*/true);
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE));
+  std::optional<size_t> index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_TRUE(menu.menu_model().GetIconAt(index.value()).IsEmpty());
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+// Verify that the Lens Image Search menu item has an icon in overlay case
+TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchOverlayHasIcon) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures(
+      {lens::features::kLensStandalone, lens::features::kLensOverlay,
+       lens::features::kShowContextualTasksMenuIcon},
+      {});
+  SetUserSelectedDefaultSearchProvider("https://www.google.com",
+                                       /*supports_image_search=*/true);
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  // Item ID might be different for overlay, let's check both
+  bool present = menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE) ||
+                 menu.IsItemPresent(IDC_CONTENT_CONTEXT_LENS_OVERLAY);
+  EXPECT_TRUE(present);
+
+  std::optional<size_t> index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  if (!index.has_value()) {
+    index =
+        menu.menu_model().GetIndexOfCommandId(IDC_CONTENT_CONTEXT_LENS_OVERLAY);
+  }
+  ASSERT_TRUE(index.has_value());
+  EXPECT_FALSE(menu.menu_model().GetIconAt(index.value()).IsEmpty());
+}
+
+#if BUILDFLAG(IS_MAC)
+// Verify that the Lens Image Search menu item has NO icon in overlay case when
+// flag is disabled
+TEST_F(RenderViewContextMenuPrefsTest,
+       LensImageSearchOverlayNoIconWhenFlagDisabled) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures(
+      {lens::features::kLensStandalone, lens::features::kLensOverlay},
+      {lens::features::kShowContextualTasksMenuIcon});
+  SetUserSelectedDefaultSearchProvider("https://www.google.com",
+                                       /*supports_image_search=*/true);
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  bool present = menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE) ||
+                 menu.IsItemPresent(IDC_CONTENT_CONTEXT_LENS_OVERLAY);
+  EXPECT_TRUE(present);
+
+  std::optional<size_t> index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  if (!index.has_value()) {
+    index =
+        menu.menu_model().GetIndexOfCommandId(IDC_CONTENT_CONTEXT_LENS_OVERLAY);
+  }
+  ASSERT_TRUE(index.has_value());
+  EXPECT_TRUE(menu.menu_model().GetIconAt(index.value()).IsEmpty());
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 // Verify that the Lens Image Search menu item is enabled for Progressive Web
 // Apps
 TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchForProgressiveWebApp) {
@@ -1119,6 +1434,101 @@ TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchForProgressiveWebApp) {
 
   EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHWEBFORIMAGE));
   EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE));
+}
+
+TEST_F(RenderViewContextMenuPrefsTest,
+       GlicShareImageHiddenForProgressiveWebApp) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kGlicShareImage);
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetPwaBrowser());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLICSHAREIMAGE));
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
+}
+
+class MockPageContextEligibilityHelper
+    : public tabs::PageContextEligibilityHelper {
+ public:
+  explicit MockPageContextEligibilityHelper(tabs::TabInterface& tab)
+      : PageContextEligibilityHelper(tab) {}
+  ~MockPageContextEligibilityHelper() override = default;
+
+  MOCK_METHOD(optimization_guide::PageContextEligibilityStatus,
+              IsPageContextEligible,
+              (),
+              (const, override));
+};
+
+TEST_F(RenderViewContextMenuPrefsTest, GlicShareImageEligibility) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kGlicShareImage);
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+
+  // Create a MockTabInterface and link it to our web contents
+  tabs::MockTabInterface mock_tab;
+  ui::UnownedUserDataHost unowned_user_data_host;
+  ON_CALL(mock_tab, GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(unowned_user_data_host));
+  ON_CALL(mock_tab, GetContents())
+      .WillByDefault(testing::Return(web_contents()));
+  ON_CALL(mock_tab, GetProfile()).WillByDefault(testing::Return(profile()));
+  tabs::TabLookupFromWebContents::CreateForWebContents(web_contents(),
+                                                       &mock_tab);
+
+  auto mock_helper =
+      std::make_unique<testing::NiceMock<MockPageContextEligibilityHelper>>(
+          mock_tab);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::IMAGE);
+  params.has_image_contents = true;
+
+  {
+    // Case 1: Helper returns unknown (e.g. inactive or initialization failure)
+    // -> hidden.
+    EXPECT_CALL(*mock_helper, IsPageContextEligible())
+        .WillRepeatedly(testing::Return(
+            optimization_guide::PageContextEligibilityStatus::kUnknown));
+    TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                   params);
+    menu.SetBrowser(GetBrowser());
+    menu.Init();
+    EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLICSHAREIMAGE));
+  }
+
+  {
+    // Case 2: Helper returns ineligible -> hidden.
+    EXPECT_CALL(*mock_helper, IsPageContextEligible())
+        .WillRepeatedly(testing::Return(
+            optimization_guide::PageContextEligibilityStatus::kNotEligible));
+    TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                   params);
+    menu.SetBrowser(GetBrowser());
+    menu.Init();
+    EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLICSHAREIMAGE));
+  }
+
+  {
+    // Case 3: Helper returns eligible -> visible.
+    EXPECT_CALL(*mock_helper, IsPageContextEligible())
+        .WillRepeatedly(testing::Return(
+            optimization_guide::PageContextEligibilityStatus::kEligible));
+    TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                   params);
+    menu.SetBrowser(GetBrowser());
+    menu.Init();
+    EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLICSHAREIMAGE));
+  }
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
 }
 
 // Verify that the Lens Image Search menu item is enabled for third-party
@@ -1334,11 +1744,12 @@ TEST_F(RenderViewContextMenuPrefsTest, TranslateContextMenuHasIcon) {
                                  params);
   menu.SetBrowser(GetBrowser());
   menu.Init();
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
   EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_TRANSLATE));
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_TRANSLATE,
-                                            &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_TRANSLATE);
+  ASSERT_TRUE(model_and_index);
+  ui::MenuModel* model = model_and_index->first;
+  size_t index = model_and_index->second;
 // Context menu items typically do not have icons on Mac.
 #if BUILDFLAG(IS_MAC)
   EXPECT_TRUE(model->GetIconAt(index).IsEmpty());
@@ -1364,11 +1775,9 @@ TEST_F(RenderViewContextMenuPrefsTest,
   menu.SetBrowser(GetBrowser());
   menu.Init();
 
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
-
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(
-      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE, &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  ASSERT_TRUE(model_and_index);
 
   base::RunLoop run_loop;
   preresolved_finished_closure() = run_loop.QuitClosure();
@@ -1393,11 +1802,9 @@ TEST_F(RenderViewContextMenuPrefsTest,
   menu.SetBrowser(GetBrowser());
   menu.Init();
 
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
-
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(
-      IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH, &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH);
+  ASSERT_TRUE(model_and_index);
   EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH));
 
   base::RunLoop run_loop;
@@ -1423,10 +1830,9 @@ TEST_F(RenderViewContextMenuPrefsTest, LensImageSearchIssuesProcessPrewarming) {
   menu.SetBrowser(GetBrowser());
   menu.Init();
 
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(
-      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE, &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  ASSERT_TRUE(model_and_index);
 
   ASSERT_EQ(initial_num_processes + 1,
             mock_rph_factory().GetProcesses()->size());
@@ -1449,10 +1855,9 @@ TEST_F(RenderViewContextMenuPrefsTest,
   menu.SetBrowser(GetBrowser());
   menu.Init();
 
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(
-      IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH, &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH);
+  ASSERT_TRUE(model_and_index);
 
   ASSERT_EQ(initial_num_processes + 1,
             mock_rph_factory().GetProcesses()->size());
@@ -1495,16 +1900,14 @@ TEST_F(RenderViewContextMenuPrefsTest,
   menu.SetBrowser(GetBrowser());
   menu.Init();
 
-  size_t index = 0;
-  raw_ptr<ui::MenuModel> model = nullptr;
-  ASSERT_TRUE(menu.GetMenuModelAndItemIndex(
-      IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE, &model, &index));
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE);
+  ASSERT_TRUE(model_and_index);
 
   ASSERT_EQ(initial_num_processes, mock_rph_factory().GetProcesses()->size());
 }
 
 BASE_FEATURE(kTestUnregisteredFeature,
-             "TestUnregisteredFeature",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 TEST_F(RenderViewContextMenuPrefsTest, GetIsNewFeatureAtValue) {
@@ -1520,10 +1923,15 @@ TEST_F(RenderViewContextMenuPrefsTest, GetIsNewFeatureAtValue) {
                              kTestUnregisteredFeature},
                             {});
 
-  UserEducationServiceFactory::GetForBrowserContext(profile())
-      ->new_badge_registry()
-      ->RegisterFeature({user_education::features::kNewBadgeTestFeature,
-                         user_education::Metadata()});
+  auto* new_badge_registry =
+      UserEducationServiceFactory::GetForBrowserContext(profile())
+          ->new_badge_registry();
+  if (!new_badge_registry->IsFeatureRegistered(
+          user_education::features::kNewBadgeTestFeature)) {
+    new_badge_registry->RegisterFeature(
+        {user_education::features::kNewBadgeTestFeature,
+         user_education::Metadata()});
+  }
 
   // Initialize the New Badge controller, so that the new badge data for this
   // profile is set.
@@ -1612,6 +2020,145 @@ TEST_F(RenderViewContextMenuPrefsTest,
 
 #endif  // BUILDFLAG(ENABLE_LENS_DESKTOP_GOOGLE_BRANDED_FEATURES)
 
+#if !BUILDFLAG(IS_CHROMEOS)
+TEST_F(RenderViewContextMenuPrefsTest,
+       TextSelectionShowsPartialTranslateWhenMenuSimplificationDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kMenuSimplification);
+  translate::TranslateManager::SetIgnoreMissingKeyForTesting(true);
+  base::ScopedClosureRunner reset_ignore_missing_key(base::BindOnce(
+      &translate::TranslateManager::SetIgnoreMissingKeyForTesting, false));
+
+  NavigateAndCommit(GURL("https://www.example.com"));
+  SetUserSelectedDefaultSearchProvider("https://www.google.com", true);
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  ChromeTranslateClient* chrome_translate_client =
+      ChromeTranslateClient::FromWebContents(web_contents());
+  ASSERT_TRUE(chrome_translate_client);
+  chrome_translate_client->GetTranslateManager()
+      ->GetLanguageState()
+      ->LanguageDetermined("fr", true);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE));
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_PRINTING)
+TEST_F(RenderViewContextMenuPrefsTest, PrintSelectionLabel) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kMenuSimplification);
+
+  AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
+      profile(),
+      base::BindRepeating(&AutocompleteClassifierFactory::BuildInstanceFor));
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  params.selection_text = u"hello world";
+
+  // Setup TranslateClient to avoid crash in AppendTranslateItem.
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+
+  // Ensure printing is enabled.
+  profile()->GetPrefs()->SetBoolean(prefs::kPrintingEnabled, true);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_PRINT));
+
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_PRINT);
+  ASSERT_TRUE(model_and_index);
+  ui::MenuModel* model = model_and_index->first;
+  size_t index = model_and_index->second;
+
+  // Verify that the print menu item contains the selection text.
+  std::u16string label = model->GetLabelAt(index);
+  EXPECT_NE(label.find(u"hello world"), std::u16string::npos);
+}
+#endif  // BUILDFLAG(ENABLE_PRINTING)
+
+TEST_F(RenderViewContextMenuPrefsTest, CopySelectionLabel) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kMenuSimplification);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
+  // 30 characters long string.
+  params.selection_text = u"012345678901234567890123456789";
+
+  AutocompleteClassifierFactory::GetInstance()->SetTestingFactoryAndUse(
+      profile(),
+      base::BindRepeating(&AutocompleteClassifierFactory::BuildInstanceFor));
+
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_COPY));
+
+  std::optional<std::pair<ui::MenuModel*, size_t>> model_and_index =
+      menu.GetMenuModelAndItemIndex(IDC_CONTENT_CONTEXT_COPY);
+  ASSERT_TRUE(model_and_index);
+  ui::MenuModel* model = model_and_index->first;
+  size_t index = model_and_index->second;
+
+  std::u16string label = model->GetLabelAt(index);
+  // The label should contain the truncated text.
+  // Expected truncated text: 24 chars + ellipsis.
+  std::u16string expected_selection =
+      u"012345678901234567890123" + std::u16string(1, 0x2026);
+
+  EXPECT_NE(label.find(expected_selection), std::u16string::npos);
+}
+TEST_F(RenderViewContextMenuPrefsTest,
+       ReadingModeSidePanelContextMenuAllowlist) {
+  // Simulate a context menu request with page level options.
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+  params.page_url = GURL(chrome::kChromeUIUntrustedReadAnythingSidePanelURL);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.Init();
+
+  // Verify that unwanted page-level actions are suppressed.
+  EXPECT_FALSE(menu.IsItemPresent(IDC_BACK));
+  EXPECT_FALSE(menu.IsItemPresent(IDC_RELOAD));
+  EXPECT_FALSE(menu.IsItemPresent(IDC_SAVE_PAGE));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_INSPECTELEMENT));
+}
+
+TEST_F(RenderViewContextMenuPrefsTest,
+       ReadingModeSidePanelKeepsApprovedLinkItems) {
+  // Simulate context-clicking an interactive link cleanly.
+  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
+  params.page_url = GURL(chrome::kChromeUIUntrustedReadAnythingSidePanelURL);
+  params.unfiltered_link_url = params.link_url;
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  custom_handlers::ProtocolHandlerRegistry registry(profile()->GetPrefs(),
+                                                    nullptr);
+  menu.set_protocol_handler_registry(&registry);
+  menu.Init();
+
+  // Verify standard link context actions and inspection logic remain.
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_OPENLINKNEWTAB));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_COPYLINKLOCATION));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_INSPECTELEMENT));
+}
+
 // Test FormatUrlForClipboard behavior
 // -------------------------------------------
 
@@ -1632,7 +2179,7 @@ class FormatUrlForClipboardTest
 const FormatUrlForClipboardTestData kFormatUrlForClipboardTestData[]{
     {"http://www.foo.com/", "http://www.foo.com/", "HttpNoEscapes"},
     // Percent-encoded ASCII characters are no longer unescaped.
-    // See https://crbug.com/1252531.
+    // See https://crbug.com/40198802.
     {"http://www.foo.com/%61%62%63", "http://www.foo.com/%61%62%63",
      "HttpNoEscape"},
     {"https://www.foo.com/abc%20def", "https://www.foo.com/abc%20def",
@@ -1644,7 +2191,7 @@ const FormatUrlForClipboardTestData kFormatUrlForClipboardTestData[]{
     {"file://stuff.host.co/my%2Bshare/foo.txt",
      "file://stuff.host.co/my%2Bshare/foo.txt", "FileEscapedSpecialCharacters"},
     // Percent-encoded ASCII characters are no longer unescaped.
-    // See https://crbug.com/1252531.
+    // See https://crbug.com/40198802.
     {"file://stuff.host.co/my%2Dshare/foo.txt",
      "file://stuff.host.co/my%2Dshare/foo.txt", "FileNoEscape"},
     {"mailto:me@foo.com", "me@foo.com", "MailToNoEscapes"},
@@ -1671,145 +2218,6 @@ TEST_P(FormatUrlForClipboardTest, FormatUrlForClipboard) {
   DCHECK_EQ(base::UTF8ToUTF16(param.output), result);
 }
 
-// TODO(crbug.com/374253376): Once existing fenced frame context menu browser
-// tests are changed to interactive UI tests, the test cases here should also be
-// added the interactive UI tests.
-class FencedFrameRenderViewContextMenuTest
-    : public RenderViewContextMenuPrefsTest {
- public:
-  FencedFrameRenderViewContextMenuTest() = default;
-  ~FencedFrameRenderViewContextMenuTest() override = default;
-
-  // Create a fenced frame that is eligible for disabling untrusted network
-  // access.
-  content::RenderFrameHost* CreateAndNavigateFencedFrame(
-      content::RenderFrameHostTester* main_frame) {
-    content::RenderFrameHost* fenced_frame_rfh =
-        main_frame->AppendFencedFrame();
-    GURL fenced_frame_url = GURL("https://fencedframe.com");
-    std::unique_ptr<content::NavigationSimulator> navigation_simulator =
-        content::NavigationSimulator::CreateRendererInitiated(fenced_frame_url,
-                                                              fenced_frame_rfh);
-
-    navigation_simulator->Commit();
-    fenced_frame_rfh = navigation_simulator->GetFinalRenderFrameHost();
-    EXPECT_EQ(fenced_frame_rfh->GetLastCommittedURL(), fenced_frame_url);
-
-    // Set fenced frame config so that its mapped url is the same as the
-    // committed URL.
-    content::test::SetFencedFrameConfig(fenced_frame_rfh, fenced_frame_url);
-
-    return fenced_frame_rfh;
-  }
-
- private:
-  // Enable fenced frame feature flags when constructed.
-  content::test::FencedFrameTestHelper fenced_frame_test_helper_;
-};
-
-TEST_F(FencedFrameRenderViewContextMenuTest,
-       DisableOpenLinkEntriesWhenFencedFrameNetworkRevoked) {
-  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
-
-  // Append a fenced frame to the primary main frame.
-  content::RenderFrameHostTester* main_frame =
-      content::RenderFrameHostTester::For(
-          web_contents()->GetPrimaryMainFrame());
-  main_frame->InitializeRenderFrameIfNeeded();
-  content::RenderFrameHost* fenced_frame_rfh =
-      CreateAndNavigateFencedFrame(main_frame);
-  auto menu =
-      std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-
-  // "Open Link in New Tab", "Open Link in New Window" and "Open Link in
-  // Incognito Window".
-  std::vector<int> commands{IDC_CONTENT_CONTEXT_OPENLINKNEWTAB,
-                            IDC_CONTENT_CONTEXT_OPENLINKNEWWINDOW,
-                            IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD};
-  // Commands should be present and enabled in the context menu.
-  for (auto command : commands) {
-    EXPECT_TRUE(menu->IsCommandIdEnabled(command));
-  }
-
-  ASSERT_TRUE(
-      content::test::RevokeFencedFrameUntrustedNetwork(fenced_frame_rfh));
-  // Commands should be disabled in the context menu after fenced frame has
-  // untrusted network access revoked.
-  menu = std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-  for (auto command : commands) {
-    EXPECT_FALSE(menu->IsCommandIdEnabled(command));
-  }
-}
-
-TEST_F(FencedFrameRenderViewContextMenuTest,
-       DisableOpenLinkInProfileTabWhenFencedFrameNetworkRevoked) {
-  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
-
-  // Append a fenced frame to the primary main frame.
-  content::RenderFrameHostTester* main_frame =
-      content::RenderFrameHostTester::For(
-          web_contents()->GetPrimaryMainFrame());
-  main_frame->InitializeRenderFrameIfNeeded();
-  content::RenderFrameHost* fenced_frame_rfh =
-      CreateAndNavigateFencedFrame(main_frame);
-  auto menu =
-      std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-
-  // "Open Link as User ..." sub-menu should be enabled.
-  EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKINPROFILE));
-
-  ASSERT_TRUE(
-      content::test::RevokeFencedFrameUntrustedNetwork(fenced_frame_rfh));
-  // "Open Link as User ..." sub-menu should be disabled in the context menu
-  // after fenced frame has untrusted network access revoked.
-  menu = std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-  EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKINPROFILE));
-}
-
-// Verifies that OpenLinkInWebApp is is disabled when fenced frame disables
-// untrusted network access.
-TEST_F(FencedFrameRenderViewContextMenuTest,
-       DisableOpenLinkInWebAppWhenFencedFrameNetworkRevoked) {
-  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
-
-  // Append a fenced frame to the primary main frame.
-  content::RenderFrameHostTester* main_frame =
-      content::RenderFrameHostTester::For(
-          web_contents()->GetPrimaryMainFrame());
-  main_frame->InitializeRenderFrameIfNeeded();
-  content::RenderFrameHost* fenced_frame_rfh =
-      CreateAndNavigateFencedFrame(main_frame);
-  auto menu =
-      std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-  EXPECT_TRUE(
-      menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKBOOKMARKAPP));
-
-  content::test::RevokeFencedFrameUntrustedNetwork(fenced_frame_rfh);
-  EXPECT_FALSE(
-      menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_OPENLINKBOOKMARKAPP));
-}
-
-// Verifies that GoToURL field is disabled when fenced frame disables untrusted
-// network access.
-TEST_F(FencedFrameRenderViewContextMenuTest,
-       DisableGoToURLWhenFencedFrameNetworkRevoked) {
-  content::ContextMenuParams params = CreateParams(MenuItem::SELECTION);
-
-  // Append a fenced frame to the primary main frame.
-  content::RenderFrameHostTester* main_frame =
-      content::RenderFrameHostTester::For(
-          web_contents()->GetPrimaryMainFrame());
-  main_frame->InitializeRenderFrameIfNeeded();
-  content::RenderFrameHost* fenced_frame_rfh =
-      CreateAndNavigateFencedFrame(main_frame);
-  auto menu =
-      std::make_unique<TestRenderViewContextMenu>(*fenced_frame_rfh, params);
-  EXPECT_TRUE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_GOTOURL));
-
-  content::test::RevokeFencedFrameUntrustedNetwork(fenced_frame_rfh);
-  EXPECT_FALSE(menu->IsCommandIdEnabled(IDC_CONTENT_CONTEXT_GOTOURL));
-}
-
 class RenderViewContextMenuReadAnythingTest
     : public RenderViewContextMenuPrefsTest,
       public ::testing::WithParamInterface<std::tuple<std::string>> {
@@ -1831,7 +2239,13 @@ class RenderViewContextMenuReadAnythingTest
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_P(RenderViewContextMenuReadAnythingTest, AppendPageItems) {
+// TODO(crbug.com/516289866): Disabled on ChromeOS due to flakiness.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_AppendPageItems DISABLED_AppendPageItems
+#else
+#define MAYBE_AppendPageItems AppendPageItems
+#endif
+TEST_P(RenderViewContextMenuReadAnythingTest, MAYBE_AppendPageItems) {
   const auto& params = GetParam();
   const std::string& group = std::get<0>(params);
 
@@ -1840,13 +2254,14 @@ TEST_P(RenderViewContextMenuReadAnythingTest, AppendPageItems) {
                                  menu_params);
 
   ASSERT_TRUE(GetBrowser());
-  const bool enable_region_search = GetBrowser()
-                                        ->GetFeatures()
-                                        .lens_overlay_entry_point_controller()
-                                        ->IsEnabled();
+  const bool enable_region_search =
+      lens::LensOverlayEntryPointController::From(GetBrowser())->IsEnabled();
   if (enable_region_search) {
     SetUserSelectedDefaultSearchProvider("https://www.google.com",
                                          /*supports_image_search=*/true);
+  } else {
+    SetUserSelectedDefaultSearchProvider("https://www.example.com",
+                                         /*supports_image_search=*/false);
   }
   menu.SetBrowser(GetBrowser());
   menu.Init();
@@ -1901,8 +2316,572 @@ TEST_P(RenderViewContextMenuReadAnythingTest, AppendPageItems) {
   }
 }
 
+TEST_P(RenderViewContextMenuReadAnythingTest, GlicNotPresentInReadingMode) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kGlicContextMenu);
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+
+  // Simulate a context menu request with page level options.
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+  params.page_url = GURL(chrome::kChromeUIUntrustedReadAnythingSidePanelURL);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLIC));
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          RenderViewContextMenuReadAnythingTest,
                          testing::Values("MenuShuffleDefault",
                                          "MenuShuffleSeparation",
                                          "MenuShufflePlaceAtBottom"));
+
+class RenderViewContextMenuListenToThisPageTest
+    : public RenderViewContextMenuPrefsTest {
+ public:
+  RenderViewContextMenuListenToThisPageTest() = default;
+};
+
+TEST_F(RenderViewContextMenuListenToThisPageTest, MenuItemPresentWhenEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kReadAnythingImprovedUi);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_LISTEN_TO_THIS_PAGE));
+}
+
+TEST_F(RenderViewContextMenuListenToThisPageTest, MenuItemAbsentWhenDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kReadAnythingImprovedUi);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_LISTEN_TO_THIS_PAGE));
+}
+
+class ReentrantTestRenderViewContextMenu : public TestRenderViewContextMenu {
+ public:
+  using TestRenderViewContextMenu::TestRenderViewContextMenu;
+
+  void NotifyObserversOnContextMenuShown() {
+    for (auto& observer : observers_) {
+      observer.OnContextMenuShown(params_, gfx::Rect());
+    }
+  }
+};
+
+class MockReentrantObserver : public RenderViewContextMenuObserver {
+ public:
+  explicit MockReentrantObserver(ReentrantTestRenderViewContextMenu* menu)
+      : menu_(menu) {}
+
+  bool IsCommandIdSupported(int command_id) override {
+    return command_id == IDC_CONTENT_CONTEXT_COPY;
+  }
+
+  bool IsCommandIdEnabled(int command_id) override { return true; }
+
+  void OnContextMenuShown(const content::ContextMenuParams& params,
+                          const gfx::Rect& bounds) override {
+    bool enabled = false;
+    menu_->IsCommandIdKnown(IDC_CONTENT_CONTEXT_COPY, &enabled);
+  }
+
+ private:
+  raw_ptr<ReentrantTestRenderViewContextMenu> menu_;
+};
+
+TEST_F(RenderViewContextMenuPrefsTest, ReentrantObserverListTest) {
+  content::ContextMenuParams params;
+  ReentrantTestRenderViewContextMenu menu(
+      *web_contents()->GetPrimaryMainFrame(), params);
+  MockReentrantObserver observer(&menu);
+  menu.AddObserverForTesting(&observer);
+
+  // This should not crash with ReentrantObserverList.
+  menu.NotifyObserversOnContextMenuShown();
+}
+
+class RenderViewContextMenuMenuSimplificationTest
+    : public RenderViewContextMenuPrefsTest {
+ public:
+  RenderViewContextMenuMenuSimplificationTest() {
+    feature_list_.InitAndEnableFeature(features::kMenuSimplification);
+  }
+
+  base::ScopedClosureRunner SetUpTranslateClient() {
+    translate::TranslateManager::SetIgnoreMissingKeyForTesting(true);
+    NavigateAndCommit(GURL("https://www.example.com"));
+    SetUserSelectedDefaultSearchProvider("https://www.google.com", true);
+    ChromeTranslateClient::CreateForWebContents(web_contents());
+    ChromeTranslateClient* chrome_translate_client =
+        ChromeTranslateClient::FromWebContents(web_contents());
+    DCHECK(chrome_translate_client);
+    chrome_translate_client->GetTranslateManager()
+        ->GetLanguageState()
+        ->LanguageDetermined("fr", true);
+    return base::ScopedClosureRunner(base::BindOnce(
+        &translate::TranslateManager::SetIgnoreMissingKeyForTesting, false));
+  }
+
+  int CountOccurrences(const TestRenderViewContextMenu& menu, int command_id) {
+    int count = 0;
+    const ui::SimpleMenuModel& model = menu.menu_model();
+    for (size_t i = 0; i < model.GetItemCount(); ++i) {
+      if (model.GetCommandIdAt(i) == command_id) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, CopySelectionTruncated) {
+  content::ContextMenuParams params;
+  params.selection_text = u"Long text exceeding twenty five characters";
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  size_t index =
+      menu.menu_model().GetIndexOfCommandId(IDC_CONTENT_CONTEXT_COPY).value();
+  std::u16string label = menu.menu_model().GetLabelAt(index);
+  EXPECT_EQ(label, u"&Copy \x201CLong text exceeding twen\x2026\x201D");
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, PasswordFieldRestricted) {
+  content::ContextMenuParams params;
+  params.form_control_type = blink::mojom::FormControlType::kInputPassword;
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_PRINT));
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+}
+
+#if BUILDFLAG(ENABLE_PRINTING)
+TEST_F(RenderViewContextMenuMenuSimplificationTest,
+       PasswordFieldWithSelectionRestricted) {
+  content::ContextMenuParams params =
+      CreateParams(MenuItem::SELECTION | MenuItem::EDITABLE);
+  params.form_control_type = blink::mojom::FormControlType::kInputPassword;
+  params.selection_text = u"secretpassword";
+
+  // Ensure printing is enabled.
+  profile()->GetPrefs()->SetBoolean(prefs::kPrintingEnabled, true);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_PRINT));
+}
+#endif  // BUILDFLAG(ENABLE_PRINTING)
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest,
+       PasswordFieldWithSelectionGlicRestricted) {
+  base::test::ScopedFeatureList features;
+  features.InitAndEnableFeature(features::kGlicContextMenu);
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+
+  content::ContextMenuParams params =
+      CreateParams(MenuItem::SELECTION | MenuItem::EDITABLE);
+  params.form_control_type = blink::mojom::FormControlType::kInputPassword;
+  params.selection_text = u"secretpassword";
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_GLIC));
+
+  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, EmailFieldSearchHidden) {
+  content::ContextMenuParams params;
+  params.form_control_type = blink::mojom::FormControlType::kInputEmail;
+  params.selection_text = u"user@test.com";
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, PureSelectionLayout) {
+  content::ContextMenuParams params;
+  params.selection_text = u"text";
+  params.properties[prefs::kDefaultSearchProviderContextMenuAccessAllowed] = "";
+  SetUserSelectedDefaultSearchProvider("https://www.google.com", true);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_COPY));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_PRINT));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_OPEN_IN_READING_MODE));
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, PageMenuSeparators) {
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  const ui::MenuModel& model = menu.menu_model();
+
+  std::optional<size_t> print_index;
+  for (size_t i = 0; i < model.GetItemCount(); ++i) {
+    if (model.GetCommandIdAt(i) == IDC_PRINT) {
+      print_index = i;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(print_index.has_value());
+
+  std::optional<size_t> next_item_index;
+  for (size_t i = print_index.value() + 1; i < model.GetItemCount(); ++i) {
+    int command_id = model.GetCommandIdAt(i);
+    if (command_id == IDC_CONTENT_CONTEXT_LENS_REGION_SEARCH ||
+        command_id == IDC_CONTENT_CONTEXT_OPEN_IN_READING_MODE) {
+      next_item_index = i;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(next_item_index.has_value());
+
+  bool found_separator = false;
+  for (size_t i = print_index.value() + 1; i < next_item_index.value(); ++i) {
+    if (model.GetTypeAt(i) == ui::MenuModel::TYPE_SEPARATOR) {
+      found_separator = true;
+      break;
+    }
+  }
+
+  EXPECT_TRUE(found_separator);
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest, LinkAndSelectionLayout) {
+  content::ContextMenuParams params;
+  params.selection_text = u"text";
+  params.link_url = GURL("https://example.com");
+  params.properties[prefs::kDefaultSearchProviderContextMenuAccessAllowed] = "";
+  SetUserSelectedDefaultSearchProvider("https://www.google.com", true);
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  ChromeTranslateClient::CreateForWebContents(web_contents());
+  menu.Init();
+
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_COPY));
+  EXPECT_TRUE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_SEARCHWEBFOR));
+  EXPECT_FALSE(menu.IsItemPresent(IDC_CONTENT_CONTEXT_OPEN_IN_READING_MODE));
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest,
+       TranslateSelectionOnlyOnce_NonEditable) {
+  auto reset_ignore_missing_key = SetUpTranslateClient();
+
+  content::ContextMenuParams params;
+  params.selection_text = u"hello world";
+  params.is_editable = false;
+
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      *web_contents()->GetPrimaryMainFrame(), params);
+  menu->SetBrowser(GetBrowser());
+  menu->Init();
+
+  // Verify that the partial translate item is present.
+  EXPECT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE));
+
+  // Verify that it is present exactly once.
+  EXPECT_EQ(1, CountOccurrences(*menu, IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE));
+}
+
+TEST_F(RenderViewContextMenuMenuSimplificationTest,
+       TranslateSelectionOnlyOnce_Editable) {
+  auto reset_ignore_missing_key = SetUpTranslateClient();
+
+  content::ContextMenuParams params;
+  params.selection_text = u"hello world";
+  params.is_editable = true;
+
+  auto menu = std::make_unique<TestRenderViewContextMenu>(
+      *web_contents()->GetPrimaryMainFrame(), params);
+  menu->SetBrowser(GetBrowser());
+  menu->Init();
+
+  // Verify that the partial translate item is present.
+  EXPECT_TRUE(menu->IsItemPresent(IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE));
+
+  // Verify that it is present exactly once.
+  EXPECT_EQ(1, CountOccurrences(*menu, IDC_CONTENT_CONTEXT_PARTIAL_TRANSLATE));
+}
+
+using send_tab_to_self::EntryPointDisplayReason;
+using send_tab_to_self::StubSendTabToSelfSyncService;
+
+struct SendTabToSelfPageMenuTestParam {
+  bool feature_enabled;
+  std::optional<EntryPointDisplayReason> display_reason;
+  bool expected_present;
+  std::optional<ui::MenuModel::ItemType> expected_type = std::nullopt;
+};
+
+class RenderViewContextMenuSendTabToSelfPageTest
+    : public RenderViewContextMenuMenuSimplificationTest,
+      public testing::WithParamInterface<SendTabToSelfPageMenuTestParam> {
+ public:
+  void SetUp() override {
+    RenderViewContextMenuMenuSimplificationTest::SetUp();
+    SendTabToSelfSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+        profile(),
+        base::BindRepeating(
+            &RenderViewContextMenuSendTabToSelfPageTest::BuildStubSyncService));
+    NavigateAndCommit(GURL("https://www.example.com"));
+  }
+
+  static std::unique_ptr<KeyedService> BuildStubSyncService(
+      content::BrowserContext* context) {
+    return std::make_unique<StubSendTabToSelfSyncService>();
+  }
+};
+
+// Tests Send Tab to Self page menu item presence and type across varied feature
+// flag states and target device availability reasons.
+TEST_P(RenderViewContextMenuSendTabToSelfPageTest, CheckPageMenuState) {
+  const SendTabToSelfPageMenuTestParam& param = GetParam();
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureState(
+      send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2,
+      param.feature_enabled);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(param.display_reason);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::PAGE);
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.Init();
+
+  EXPECT_EQ(param.expected_present, menu.IsItemPresent(IDC_SEND_TAB_TO_SELF));
+  if (param.expected_present) {
+    ASSERT_TRUE(param.expected_type.has_value());
+    std::optional<size_t> index =
+        menu.menu_model().GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
+    ASSERT_TRUE(index.has_value());
+    EXPECT_EQ(param.expected_type.value(),
+              menu.menu_model().GetTypeAt(index.value()));
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    RenderViewContextMenuSendTabToSelfPageTest,
+    testing::Values(
+        SendTabToSelfPageMenuTestParam{/*feature_enabled=*/true,
+                                       /*display_reason=*/std::nullopt,
+                                       /*expected_present=*/false},
+        SendTabToSelfPageMenuTestParam{
+            /*feature_enabled=*/true,
+            /*display_reason=*/EntryPointDisplayReason::kInformNoTargetDevice,
+            /*expected_present=*/true,
+            /*expected_type=*/ui::MenuModel::TYPE_COMMAND},
+        SendTabToSelfPageMenuTestParam{
+            /*feature_enabled=*/true,
+            /*display_reason=*/EntryPointDisplayReason::kOfferFeature,
+            /*expected_present=*/true,
+            /*expected_type=*/ui::MenuModel::TYPE_SUBMENU},
+        SendTabToSelfPageMenuTestParam{
+            /*feature_enabled=*/false,
+            /*display_reason=*/EntryPointDisplayReason::kOfferFeature,
+            /*expected_present=*/true,
+            /*expected_type=*/ui::MenuModel::TYPE_COMMAND}));
+
+class RenderViewContextMenuSendTabToSelfLinkTest
+    : public RenderViewContextMenuMenuSimplificationTest {
+ public:
+  void SetUp() override {
+    RenderViewContextMenuMenuSimplificationTest::SetUp();
+    SendTabToSelfSyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
+        profile(),
+        base::BindRepeating(
+            &RenderViewContextMenuSendTabToSelfLinkTest::BuildStubSyncService));
+    NavigateAndCommit(GURL("https://www.example.com"));
+  }
+
+  static std::unique_ptr<KeyedService> BuildStubSyncService(
+      content::BrowserContext* context) {
+    return std::make_unique<StubSendTabToSelfSyncService>();
+  }
+};
+
+// Tests that right-clicking a hyperlink offers the Send Tab to Self item as a
+// submenu when enhanced desktop UI v2 is enabled.
+TEST_F(RenderViewContextMenuSendTabToSelfLinkTest, SubmenuPresentForLink) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kOfferFeature);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
+  params.unfiltered_link_url = params.link_url =
+      GURL("https://example.com/link");
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.set_protocol_handler_registry(protocol_handler_registry());
+  menu.Init();
+
+  ASSERT_TRUE(menu.IsItemPresent(IDC_SEND_TAB_TO_SELF));
+  std::optional<size_t> index =
+      menu.menu_model().GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_EQ(ui::MenuModel::TYPE_SUBMENU,
+            menu.menu_model().GetTypeAt(index.value()));
+}
+
+// Tests that when right-clicking a hyperlink, the Send Tab to Self item is
+// embedded in the same menu group as Save Link As and Copy Link Address (no
+// separators between them).
+TEST_F(RenderViewContextMenuSendTabToSelfLinkTest,
+       InGroupWithSaveLinkAsAndCopyLinkAddress) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kOfferFeature);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
+  params.unfiltered_link_url = params.link_url =
+      GURL("https://example.com/link");
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.set_protocol_handler_registry(protocol_handler_registry());
+  menu.Init();
+
+  std::optional<size_t> save_index =
+      menu.menu_model().GetIndexOfCommandId(IDC_CONTENT_CONTEXT_SAVELINKAS);
+  std::optional<size_t> copy_index = menu.menu_model().GetIndexOfCommandId(
+      IDC_CONTENT_CONTEXT_COPYLINKLOCATION);
+  std::optional<size_t> stts_index =
+      menu.menu_model().GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
+
+  ASSERT_TRUE(save_index.has_value());
+  ASSERT_TRUE(copy_index.has_value());
+  ASSERT_TRUE(stts_index.has_value());
+  EXPECT_LT(stts_index.value(), save_index.value());
+  EXPECT_LT(save_index.value(), copy_index.value());
+  for (size_t i = stts_index.value(); i <= copy_index.value(); ++i) {
+    EXPECT_NE(ui::MenuModel::TYPE_SEPARATOR, menu.menu_model().GetTypeAt(i));
+  }
+}
+
+// Tests that when right-clicking a hyperlink with no target devices available
+// (`kInformNoTargetDevice`), the Send Tab to Self item is appended as a regular
+// command item rather than as a submenu.
+TEST_F(RenderViewContextMenuSendTabToSelfLinkTest,
+       NoSubmenuWhenNoDevicesForLink) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2);
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kInformNoTargetDevice);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
+  params.unfiltered_link_url = params.link_url =
+      GURL("https://example.com/link");
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.set_protocol_handler_registry(protocol_handler_registry());
+  menu.Init();
+
+  ASSERT_TRUE(menu.IsItemPresent(IDC_SEND_TAB_TO_SELF));
+  std::optional<size_t> index =
+      menu.menu_model().GetIndexOfCommandId(IDC_SEND_TAB_TO_SELF);
+  ASSERT_TRUE(index.has_value());
+  EXPECT_EQ(ui::MenuModel::TYPE_COMMAND,
+            menu.menu_model().GetTypeAt(index.value()));
+}
+
+// Tests that right-clicking a hyperlink does NOT append the Send Tab to Self
+// item at all when enhanced desktop UI v2 is disabled (even if v1 is enabled).
+TEST_F(RenderViewContextMenuSendTabToSelfLinkTest,
+       ItemNotPresentForLinkWhenV2Disabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{send_tab_to_self::kSendTabToSelfEnhancedDesktopUI},
+      /*disabled_features=*/{
+          send_tab_to_self::kSendTabToSelfEnhancedDesktopUIv2});
+
+  auto* sync_service = static_cast<StubSendTabToSelfSyncService*>(
+      SendTabToSelfSyncServiceFactory::GetForProfile(profile()));
+  sync_service->SetEntryPointDisplayReason(
+      EntryPointDisplayReason::kOfferFeature);
+
+  content::ContextMenuParams params = CreateParams(MenuItem::LINK);
+  params.unfiltered_link_url = params.link_url =
+      GURL("https://example.com/link");
+
+  TestRenderViewContextMenu menu(*web_contents()->GetPrimaryMainFrame(),
+                                 params);
+  menu.SetBrowser(GetBrowser());
+  menu.set_protocol_handler_registry(protocol_handler_registry());
+  menu.Init();
+
+  EXPECT_FALSE(menu.IsItemPresent(IDC_SEND_TAB_TO_SELF));
+}

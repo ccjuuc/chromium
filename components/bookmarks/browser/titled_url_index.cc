@@ -8,7 +8,7 @@
 
 #include <algorithm>
 #include <iterator>
-#include <unordered_set>
+#include <string>
 #include <utility>
 
 #include "base/i18n/case_conversion.h"
@@ -23,8 +23,25 @@
 #include "components/bookmarks/browser/titled_url_node.h"
 #include "components/omnibox/common/string_cleaning.h"
 #include "components/query_parser/snippet.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/icu/source/common/unicode/normalizer2.h"
 #include "third_party/icu/source/common/unicode/utypes.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/apk_assets.h"
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
+#include "base/path_service.h"
+#include "base/strings/stringprintf.h"
+
+namespace base::i18n {
+extern bool g_icu_initialized;
+}
+
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace bookmarks {
 
@@ -34,6 +51,43 @@ namespace {
 bool IsPrefix(const std::u16string& prefix, const std::u16string& string) {
   return prefix.size() <= string.size() &&
          prefix.compare(0, prefix.size(), string, 0, prefix.size()) == 0;
+}
+
+void DumpNormalizationFailure(bool retry_worked) {
+#if BUILDFLAG(IS_ANDROID)
+  std::string fallback_asset_path;
+  base::FilePath asset_path;
+  // This is the fall-back path used for tests.
+  if (base::PathService::Get(base::DIR_ASSETS, &asset_path)) {
+    asset_path = asset_path.AppendASCII("icudtl.dat");
+    if (base::PathExists(asset_path)) {
+      fallback_asset_path = asset_path.value();
+    }
+  }
+
+  int64_t file_size = -1;
+  std::string apk_path;
+  base::MemoryMappedFile::Region region;
+  base::ScopedFD fd(base::android::OpenApkAsset("assets/icudtl.dat", &region));
+  if (fd.is_valid()) {
+    file_size = static_cast<int64_t>(region.size);
+    base::FilePath target_path;
+    if (base::ReadSymbolicLink(
+            base::FilePath(base::StringPrintf("/proc/self/fd/%d", fd.get())),
+            &target_path)) {
+      apk_path = target_path.value();
+    }
+  }
+
+  SCOPED_CRASH_KEY_STRING256("bookmarks", "fallback_asset_path",
+                             fallback_asset_path);
+  SCOPED_CRASH_KEY_STRING256("bookmarks", "apk_path", apk_path);
+  SCOPED_CRASH_KEY_NUMBER("bookmarks", "file_size", file_size);
+  SCOPED_CRASH_KEY_BOOL("bookmarks", "icu_init", base::i18n::g_icu_initialized);
+  SCOPED_CRASH_KEY_BOOL("bookmarks", "retry_worked", retry_worked);
+
+  base::debug::DumpWithoutCrashing();
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 }  // namespace
@@ -68,11 +122,13 @@ void TitledUrlIndex::AddPath(const TitledUrlNode* node) {
 void TitledUrlIndex::RemovePath(const TitledUrlNode* node) {
   for (const std::u16string& term :
        ExtractQueryWords(Normalize(node->GetTitledUrlNodeTitle()))) {
-    // `path_index_.count(term)` should be > 0, since nodes can't be
+    // `path_index_ should contain `term`, since nodes can't be
     // removed/renamed if they didn't exist to begin with. But some tests don't
     // fully load bookmarks so it's not `DCHECK`ed.
-    if (path_index_.count(term) && !--path_index_[term])
-      path_index_.erase(term);
+    if (auto it = path_index_.find(term);
+        it != path_index_.end() && !--(it->second)) {
+      path_index_.erase(it);
+    }
   }
 }
 
@@ -125,8 +181,12 @@ std::u16string TitledUrlIndex::Normalize(std::u16string_view text) {
   const icu::Normalizer2* normalizer2 =
       icu::Normalizer2::getInstance(nullptr, "nfkc", UNORM2_COMPOSE, status);
   if (U_FAILURE(status)) {
-    // Log and crash right away to capture the error code in the crash report.
-    LOG(FATAL) << "failed to create a normalizer: " << u_errorName(status);
+    LOG(ERROR) << "failed to create a normalizer: " << u_errorName(status);
+    normalizer2 =
+        icu::Normalizer2::getInstance(nullptr, "nfkc", UNORM2_COMPOSE, status);
+    bool retry_worked = !U_FAILURE(status);
+    DumpNormalizationFailure(retry_worked);
+    return std::u16string(text);
   }
   icu::UnicodeString unicode_text(text.data(),
                                   static_cast<int32_t>(text.length()));
@@ -195,7 +255,7 @@ std::optional<TitledUrlMatch> TitledUrlIndex::MatchTitledUrlNodeWithQuery(
       node->GetTitledUrlNodeAncestorTitles(),
       std::back_inserter(lower_ancestor_titles),
       [](const auto& ancestor_title) {
-        return base::i18n::ToLower(Normalize(std::u16string(ancestor_title)));
+        return base::i18n::ToLower(Normalize(ancestor_title));
       });
 
   // Check if the input approximately matches the node. This is less strict than
@@ -324,9 +384,9 @@ TitledUrlIndex::TitledUrlNodeSet TitledUrlIndex::RetrieveNodesMatchingAnyTerms(
       [](size_t first, size_t second) { return first < second; },
       [](const auto& matches) { return matches.size(); });
 
-  // Use an `unordered_set` to avoid potentially 1000's of linear time
+  // Use an `absl::flat_hash_set` to avoid potentially 1000's of linear time
   // insertions into the ordered `TitledUrlNodeSet` (i.e. `flat_set`).
-  std::unordered_set<const TitledUrlNode*> matches;
+  absl::flat_hash_set<const TitledUrlNode*> matches;
   for (const auto& term_matches : matches_per_term) {
     for (const TitledUrlNode* node : term_matches) {
       matches.insert(node);

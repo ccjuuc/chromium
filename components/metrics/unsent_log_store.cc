@@ -11,10 +11,12 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/containers/span.h"
+#include "base/metrics/histogram_base.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
+#include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/metrics/metrics_features.h"
 #include "components/metrics/unsent_log_store_metrics.h"
@@ -53,9 +55,9 @@ std::string DecodeFromBase64(const std::string& to_convert) {
 class LogsPrefWriter {
  public:
   // Create a writer that will write unsent logs to |list_value|. |list_value|
-  // should be a base::Value::List representing a pref. Clears the contents of
+  // should be a base::ListValue representing a pref. Clears the contents of
   // |list_value|.
-  explicit LogsPrefWriter(base::Value::List* list_value)
+  explicit LogsPrefWriter(base::ListValue* list_value)
       : list_value_(list_value) {
     DCHECK(list_value);
     list_value->clear();
@@ -70,7 +72,7 @@ class LogsPrefWriter {
   void WriteLogEntry(UnsentLogStore::LogInfo* log) {
     DCHECK(!finished_);
 
-    base::Value::Dict dict_value;
+    base::DictValue dict_value;
     dict_value.Set(kLogHashKey, EncodeToBase64(log->hash));
     dict_value.Set(kLogSignatureKey, EncodeToBase64(log->signature));
     dict_value.Set(kLogDataKey, EncodeToBase64(log->compressed_log_data));
@@ -114,7 +116,7 @@ class LogsPrefWriter {
 
  private:
   // The list where the logs will be written to. This should represent a pref.
-  raw_ptr<base::Value::List> list_value_;
+  raw_ptr<base::ListValue> list_value_;
 
   // Whether or not this writer has finished writing to pref.
   bool finished_ = false;
@@ -129,7 +131,7 @@ class LogsPrefWriter {
   size_t unsent_logs_count_ = 0;
 };
 
-bool GetString(const base::Value::Dict& dict,
+bool GetString(const base::DictValue& dict,
                std::string_view key,
                std::string& out) {
   const std::string* value = dict.FindString(key);
@@ -184,8 +186,7 @@ UnsentLogStore::UnsentLogStore(std::unique_ptr<UnsentLogStoreMetrics> metrics,
       metadata_pref_name_(metadata_pref_name),
       log_store_limits_(log_store_limits),
       signing_key_(signing_key),
-      logs_event_manager_(logs_event_manager),
-      staged_log_index_(-1) {
+      logs_event_manager_(logs_event_manager) {
   DCHECK(local_state_);
   // One of the limit arguments must be non-zero.
   DCHECK(log_store_limits_.min_log_count > 0 ||
@@ -200,42 +201,39 @@ bool UnsentLogStore::has_unsent_logs() const {
 
 // True if a log has been staged.
 bool UnsentLogStore::has_staged_log() const {
-  return staged_log_index_ != -1;
+  return staged_log_index_.has_value();
 }
 
 // Returns the compressed data of the element in the front of the list.
 const std::string& UnsentLogStore::staged_log() const {
-  DCHECK(has_staged_log());
-  return list_[staged_log_index_]->compressed_log_data;
+  return current_log()->compressed_log_data;
 }
 
 // Returns the hash of element in the front of the list.
 const std::string& UnsentLogStore::staged_log_hash() const {
-  DCHECK(has_staged_log());
-  return list_[staged_log_index_]->hash;
+  return current_log()->hash;
 }
 
 // Returns the signature of element in the front of the list.
 const std::string& UnsentLogStore::staged_log_signature() const {
-  DCHECK(has_staged_log());
-  return list_[staged_log_index_]->signature;
+  return current_log()->signature;
 }
 
 // Returns the timestamp of the element in the front of the list.
 const std::string& UnsentLogStore::staged_log_timestamp() const {
-  DCHECK(has_staged_log());
-  return list_[staged_log_index_]->timestamp;
+  return current_log()->timestamp;
 }
 
 // Returns the user id of the current staged log.
 std::optional<uint64_t> UnsentLogStore::staged_log_user_id() const {
-  DCHECK(has_staged_log());
-  return list_[staged_log_index_]->log_metadata.user_id;
+  return current_log()->log_metadata.user_id;
 }
 
 const LogMetadata UnsentLogStore::staged_log_metadata() const {
+  // Use list_ directly instead of current_log() to preserve the move
+  // semantics enabled by unique_ptr's non-const operator-> in const methods.
   DCHECK(has_staged_log());
-  return std::move(list_[staged_log_index_]->log_metadata);
+  return std::move(list_[staged_log_index_.value()]->log_metadata);
 }
 
 // static
@@ -255,27 +253,27 @@ void UnsentLogStore::StageNextLog() {
   DCHECK(!has_staged_log());
   staged_log_index_ = list_.size() - 1;
   NotifyLogEvent(MetricsLogsEventManager::LogEvent::kLogStaged,
-                 list_[staged_log_index_]->hash);
+                 current_log()->hash);
   DCHECK(has_staged_log());
 }
 
-void UnsentLogStore::DiscardStagedLog(std::string_view reason) {
+void UnsentLogStore::DiscardStagedLogImpl(std::string_view reason) {
   DCHECK(has_staged_log());
-  DCHECK_LT(static_cast<size_t>(staged_log_index_), list_.size());
+  DCHECK_LT(staged_log_index_.value(), list_.size());
   NotifyLogEvent(MetricsLogsEventManager::LogEvent::kLogDiscarded,
-                 list_[staged_log_index_]->hash, reason);
-  list_.erase(list_.begin() + staged_log_index_);
-  staged_log_index_ = -1;
+                 current_log()->hash, reason);
+  list_.erase(list_.begin() + staged_log_index_.value());
+  staged_log_index_ = std::nullopt;
 }
 
 void UnsentLogStore::MarkStagedLogAsSent() {
   DCHECK(has_staged_log());
-  DCHECK_LT(static_cast<size_t>(staged_log_index_), list_.size());
-  auto samples_count = list_[staged_log_index_]->log_metadata.samples_count;
+  DCHECK_LT(staged_log_index_.value(), list_.size());
+  auto samples_count = current_log()->log_metadata.samples_count;
   if (samples_count.has_value())
     total_samples_sent_ += samples_count.value();
   NotifyLogEvent(MetricsLogsEventManager::LogEvent::kLogUploaded,
-                 list_[staged_log_index_]->hash);
+                 current_log()->hash);
 }
 
 void UnsentLogStore::TrimAndPersistUnsentLogs(bool overwrite_in_memory_store) {
@@ -355,11 +353,11 @@ void UnsentLogStore::TrimAndPersistUnsentLogs(bool overwrite_in_memory_store) {
     if (staged_index_distance.has_value()) {
       staged_log_index_ = list_.size() - 1 - staged_index_distance.value();
     } else {
-      // Set |staged_log_index_| to -1. It might already be -1. E.g., at the
-      // time we are trimming logs, there was no staged log. However, it is also
-      // possible that we trimmed away the staged log, so we need to update the
-      // index to -1.
-      staged_log_index_ = -1;
+      // Set |staged_log_index_| to std::nullopt. It might already be
+      // std::nullopt. E.g., at the time we are trimming logs, there was
+      // no staged log. However, it is also possible that we trimmed away the
+      // staged log, so we need to update the index to std::nullopt.
+      staged_log_index_ = std::nullopt;
     }
   }
 
@@ -446,7 +444,7 @@ void UnsentLogStore::SetLogsEventManager(
   logs_event_manager_ = logs_event_manager;
 }
 
-void UnsentLogStore::ReadLogsFromPrefList(const base::Value::List& list_value) {
+void UnsentLogStore::ReadLogsFromPrefList(const base::ListValue& list_value) {
   // The below DCHECK ensures that a log from prefs is not loaded multiple
   // times, which is important for the semantics of the NotifyLogsCreated() call
   // below.
@@ -462,7 +460,7 @@ void UnsentLogStore::ReadLogsFromPrefList(const base::Value::List& list_value) {
   list_.resize(log_count);
 
   for (size_t i = 0; i < log_count; ++i) {
-    const base::Value::Dict* dict = list_value[i].GetIfDict();
+    const base::DictValue* dict = list_value[i].GetIfDict();
     std::unique_ptr<LogInfo> info = std::make_unique<LogInfo>();
     if (!dict || !GetString(*dict, kLogDataKey, info->compressed_log_data) ||
         !GetString(*dict, kLogHashKey, info->hash) ||
@@ -517,7 +515,7 @@ void UnsentLogStore::WriteToMetricsPref(
   }
 
   ScopedDictPrefUpdate update(local_state_, metadata_pref_name_);
-  base::Value::Dict& pref_data = update.Get();
+  base::DictValue& pref_data = update.Get();
   pref_data.Set(kLogUnsentCountKey, unsent_samples_count);
   pref_data.Set(kLogSentCountKey, sent_samples_count);
   // Round up to kb.
@@ -530,7 +528,7 @@ void UnsentLogStore::RecordMetaDataMetrics() {
     return;
   }
 
-  const base::Value::Dict& value = local_state_->GetDict(metadata_pref_name_);
+  const base::DictValue& value = local_state_->GetDict(metadata_pref_name_);
 
   auto unsent_samples_count = value.FindInt(kLogUnsentCountKey);
   auto sent_samples_count = value.FindInt(kLogSentCountKey);
@@ -590,6 +588,16 @@ void UnsentLogStore::NotifyLogsEvent(base::span<std::unique_ptr<LogInfo>> logs,
 std::string Sha1ForUnsentLogStore(std::string_view data) {
   return std::string(base::as_string_view(
       crypto::obsolete::Sha1::Hash(base::as_byte_span(data))));
+}
+
+const UnsentLogStore::LogInfo* UnsentLogStore::current_log() const {
+  DCHECK(has_staged_log());
+  return list_[staged_log_index_.value()].get();
+}
+
+UnsentLogStore::LogInfo* UnsentLogStore::current_log() {
+  DCHECK(has_staged_log());
+  return list_[staged_log_index_.value()].get();
 }
 
 }  // namespace metrics

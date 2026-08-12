@@ -3,19 +3,48 @@
 // found in the LICENSE file.
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
-// clang-format off
-// <if expr="not is_win">
-import {nothing} from '//resources/lit/v3_0/lit.rollup.js';
-// </if>
-// clang-format on
 
-
-
+import {TraceConfig_BufferConfig_FillPolicy} from './perfetto_config.js';
 import type {TraceRecorderElement} from './trace_recorder.js';
 
-function getPrivacyFilterHtml(this: TraceRecorderElement) {
+export function getHtml(this: TraceRecorderElement) {
+  // clang-format off
   return html`
-    <div class="config-toggle-container">
+    <h1>Record Trace</h1>
+    <div id="control-container">
+      <div id="status-container" class="${this.getStatusClass()}">
+        <div class="status-circle"></div>
+        <h3>Status: ${this.tracingState}</h3>
+      </div>
+      <div id="progress-container"
+          ?hidden="${!this.isRecording()}">
+        <label for="buffer-progress">Buffer Usage:
+            ${Math.round(this.bufferUsage * 100)}%
+        </label>
+        <progress id="buffer-progress" max="100"
+            .value="${this.bufferUsage * 100}">
+        </progress>
+      </div>
+      <div id="action-panel">
+        <cr-button
+            @click="${this.onStartTracingClick_}"
+            ?disabled="${!this.isStartTracingEnabled()}">
+          Start Tracing
+        </cr-button>
+        <cr-button
+            @click="${this.onStopTracingClick_}"
+            ?disabled="${!this.isRecording()}">
+          Stop Tracing
+        </cr-button>
+        <cr-button
+            @click="${this.onCloneTraceSessionClick_}"
+            ?disabled="${!this.isRecording()}">
+          Snapshot Trace
+        </cr-button>
+      </div>
+    </div>
+
+    <div class="config-toggle-container"><!-- Privacy Filter -->
       <div class="config-toggle-description">
         <em>Enable privacy filters</em>
         <span>Remove untyped and sensitive data like URLs from local scenarios.
@@ -24,18 +53,11 @@ function getPrivacyFilterHtml(this: TraceRecorderElement) {
       <cr-toggle
           class="config-toggle"
           ?checked="${this.privacyFilterEnabled_}"
-          @change="${this.privacyFilterDidChange_}">
+          @change="${this.onPrivacyFilterChange_}">
       </cr-toggle>
-    </div>`;
-}
+    </div>
 
-/**
- * UI card for configuring trace buffers.
- */
-function getBufferConfigurationCardHtml(this: TraceRecorderElement) {
-  // clang-format off
-  return html`
-    <div class="card">
+    <div class="card"><!-- Buffer Configuration Card -->
       <cr-expand-button class="cr-row" ?expanded="${this.buffersExpanded_}"
           @expanded-changed="${this.onBuffersExpandedChanged_}">
         Buffer Configuration
@@ -48,17 +70,18 @@ function getBufferConfigurationCardHtml(this: TraceRecorderElement) {
                 min="4"
                 max="512"
                 .value="${this.bufferSizeMb}"
-                @cr-slider-value-changed="${this.onBufferSizeChanged_}">
+                @cr-slider-value-changed="${this.onBufferSizeCrSliderValueChanged_}">
             </cr-slider>
           </div>
           <div class="buffer-row-container">
             <h3>Recording mode</h3>
             <select class="md-select" value="${this.bufferFillPolicy}"
-                @change="${this.onBufferFillPolicyChanged_}">
-              <option value="${this.fillPolicyEnum.RING_BUFFER}">
+                @change="${this.onBufferFillPolicyChange_}">
+              <option
+                  value="${TraceConfig_BufferConfig_FillPolicy.RING_BUFFER}">
                 RING BUFFER
               </option>
-              <option value="${this.fillPolicyEnum.DISCARD}">
+              <option value="${TraceConfig_BufferConfig_FillPolicy.DISCARD}">
                 DISCARD
               </option>
             </select>
@@ -66,57 +89,7 @@ function getBufferConfigurationCardHtml(this: TraceRecorderElement) {
         </div>
       </cr-collapse>
     </div>
-  `;
-  // clang-format on
-}
-
-function getEtwConfigurationCardHtml(this: TraceRecorderElement) {
-  // clang-format off
-  // <if expr="is_win">
-  return html`
-    <div class="card">
-      <cr-expand-button class="cr-row" ?expanded="${this.etwExpanded_}"
-          @expanded-changed="${this.onEtwExpandedChanged_}">
-        System Event Tracing for Windows
-      </cr-expand-button>
-      <cr-collapse class="expanded-content" ?opened="${this.etwExpanded_}">
-        <div class="config-grid etw-grid">
-          <div class="header-row-group">
-            <div>Enable</div>
-            <div>Flag</div>
-            <div>Description</div>
-          </div>
-          ${this.etwEvents.map(event => html`
-            <div class="row">
-              <cr-toggle
-                class="config-toggle"
-                ?checked="${
-                    this.isEtwEventEnabled(event.provider, event.keyword)}"
-                @change="${(e: CustomEvent<boolean>) =>
-                    this.onEtwEVentChange_(e, event.provider, event.keyword)}">
-              </cr-toggle>
-              <div>${event.name}</div>
-              <div>${event.description}</div>
-            </div>
-          `)}
-        </div>
-      </cr-collapse>
-    </div>
-  `;
-  // </if>
-  // <if expr="not is_win">
-  return nothing;
-  // </if>
-  // clang-format on
-}
-
-/**
- * UI card for selecting trace categories.
- */
-function getTrackEventCategoriesCardHtml(this: TraceRecorderElement) {
-  // clang-format off
-  return html`
-    <div class="card">
+    <div class="card"><!-- Track Event Categories Card -->
       <cr-expand-button class="cr-row" ?expanded="${this.tagsExpanded_}"
           @expanded-changed="${this.onTagsExpandedChanged_}">
         Track Event Tags
@@ -132,15 +105,13 @@ function getTrackEventCategoriesCardHtml(this: TraceRecorderElement) {
           ${this.trackEventTags.map(tagName => html`
             <div class="row">
               <input
-                type="checkbox"
+                type="checkbox" data-tag="${tagName}"
                 .checked="${this.isTagEnabled(tagName)}"
-                @change="${
-                  (e: Event) => this.onTagsChange_(e, tagName, true)}"/>
+                @change="${this.onTagsTrueChange_}"/>
               <input
-                type="checkbox"
+                type="checkbox" data-tag="${tagName}"
                 .checked="${this.isTagDisabled(tagName)}"
-                @change="${
-                  (e: Event) => this.onTagsChange_(e, tagName, false)}"/>
+                @change="${this.onTagsFalseChange_}"/>
               <div>${tagName}</div>
             </div>
           `)}
@@ -165,12 +136,11 @@ function getTrackEventCategoriesCardHtml(this: TraceRecorderElement) {
           </div>
           ${this.trackEventCategories.map(category => html`
             <div class="row">
-              <input
+              <input data-name="${category.name}"
                 type="checkbox"
                 .disabled="${this.isCategoryForced(category)}"
                 .checked="${this.isCategoryEnabled(category)}"
-                @change="${
-                  (e: Event) => this.onCategoryChange_(e, category.name)}"/>
+                @change="${this.onCategoryChange_}"/>
               <div>${this.canonicalCategoryName(category)}</div>
               <div>${category.tags.join(', ')}</div>
               <div>${category.description}</div>
@@ -179,52 +149,36 @@ function getTrackEventCategoriesCardHtml(this: TraceRecorderElement) {
         </div>
       </cr-collapse>
     </div>
-  `;
-  // clang-format on
-}
-
-export function getHtml(this: TraceRecorderElement) {
-  // clang-format off
-  return html`
-    <h1>Record Trace</h1>
-    <div id="control-container">
-      <div id="status-container" class="${this.statusClass}">
-        <div class="status-circle"></div>
-        <h3>Status: ${this.tracingState}</h3>
+    <if expr="is_win">
+      <div class="card"><!-- ETW Configuration Card -->
+        <cr-expand-button class="cr-row" ?expanded="${this.etwExpanded_}"
+            @expanded-changed="${this.onEtwExpandedChanged_}">
+          System Event Tracing for Windows
+        </cr-expand-button>
+        <cr-collapse class="expanded-content" ?opened="${this.etwExpanded_}">
+          <div class="config-grid etw-grid">
+            <div class="header-row-group">
+              <div>Enable</div>
+              <div>Flag</div>
+              <div>Description</div>
+            </div>
+            ${this.etwEvents.map((event, index) => html`
+              <div class="row">
+                <cr-toggle
+                  class="config-toggle"
+                  data-index="${index}"
+                  ?checked="${
+                      this.isEtwEventEnabled(event.provider, event.keyword)}"
+                  @change="${this.onEtwEVentChange_}">
+                </cr-toggle>
+                <div>${event.name}</div>
+                <div>${event.description}</div>
+              </div>
+            `)}
+          </div>
+        </cr-collapse>
       </div>
-      <div id="progress-container"
-          ?hidden="${!this.isRecording}">
-        <label for="buffer-progress">Buffer Usage:
-            ${Math.round(this.bufferUsage * 100)}%
-        </label>
-        <progress id="buffer-progress" max="100"
-            .value="${this.bufferUsage * 100}">
-        </progress>
-      </div>
-      <div id="action-panel">
-        <cr-button
-            @click="${this.startTracing_}"
-            ?disabled="${!this.isStartTracingEnabled}">
-          Start Tracing
-        </cr-button>
-        <cr-button
-            @click="${this.stopTracing_}"
-            ?disabled="${!this.isRecording}">
-          Stop Tracing
-        </cr-button>
-        <cr-button
-            @click="${this.cloneTraceSession_}"
-            ?disabled="${!this.isRecording}">
-          Snapshot Trace
-        </cr-button>
-      </div>
-    </div>
-
-    ${getPrivacyFilterHtml.bind(this)()}
-
-    ${getBufferConfigurationCardHtml.bind(this)()}
-    ${getTrackEventCategoriesCardHtml.bind(this)()}
-    ${getEtwConfigurationCardHtml.bind(this)()}
+    </if>
 
     <cr-toast id="toast" duration="5000">
       <div>${this.toastMessage}</div>

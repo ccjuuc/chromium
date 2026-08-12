@@ -7,8 +7,10 @@ package org.chromium.chrome.browser.readaloud.player.expanded;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.Context;
@@ -35,13 +37,13 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
 import org.chromium.chrome.browser.readaloud.player.PlayerProperties;
 import org.chromium.chrome.browser.readaloud.player.R;
 import org.chromium.chrome.modules.readaloud.PlaybackArgs.PlaybackMode;
 import org.chromium.chrome.modules.readaloud.PlaybackListener;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -50,10 +52,7 @@ import java.util.Locale;
 /** Unit tests for {@link ExpandedPlayerSheetContent}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@DisableFeatures({
-    ChromeFeatureList.READALOUD_AUDIO_OVERVIEWS_FEEDBACK,
-    ChromeFeatureList.FEED_AUDIO_OVERVIEWS
-})
+@DisableFeatures({ChromeFeatureList.FEED_AUDIO_OVERVIEWS})
 public class ExpandedPlayerSheetContentUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private BottomSheetController mBottomSheetController;
@@ -127,22 +126,12 @@ public class ExpandedPlayerSheetContentUnitTest {
     }
 
     @Test
-    @EnableFeatures({ChromeFeatureList.READALOUD_AUDIO_OVERVIEWS_FEEDBACK})
     public void setPlaybackModeWithFeedback() {
         mContent.setPlaybackMode(PlaybackMode.OVERVIEW);
 
         assertTrue(mMoreOptions.getVisibility() == View.GONE);
         assertTrue(mThumbUp.getVisibility() == View.VISIBLE);
         assertTrue(mThumbDown.getVisibility() == View.VISIBLE);
-    }
-
-    @Test
-    public void setPlaybackModeWithoutFeedback() {
-        mContent.setPlaybackMode(PlaybackMode.OVERVIEW);
-
-        assertTrue(mMoreOptions.getVisibility() == View.GONE);
-        assertTrue(mThumbUp.getVisibility() == View.GONE);
-        assertTrue(mThumbDown.getVisibility() == View.GONE);
     }
 
     @Test
@@ -315,8 +304,10 @@ public class ExpandedPlayerSheetContentUnitTest {
     }
 
     @Test
-    public void testCanSuppressInAnyState() {
-        assertTrue(mContent.canSuppressInAnyState());
+    public void testCanBeSuppressed() {
+        BottomSheetContent newContent = mock(BottomSheetContent.class);
+        when(newContent.getPriority()).thenReturn(BottomSheetContent.ContentPriority.HIGH);
+        assertTrue(mContent.canBeSuppressed(newContent));
     }
 
     @Test
@@ -329,7 +320,7 @@ public class ExpandedPlayerSheetContentUnitTest {
 
     @Test
     public void testLoadingTextIsSetCorrectly() {
-        TextView loadingText = (TextView) mContentView.findViewById(R.id.readaloud_loading_text);
+        TextView loadingText = mContentView.findViewById(R.id.readaloud_loading_text);
 
         mContent.setRequestedPlaybackMode(PlaybackMode.OVERVIEW);
         assertEquals(

@@ -22,15 +22,6 @@ namespace policy {
 // when the policy is updated.
 class DeviceDlcPredownloadListPolicyHandler {
  public:
-  class OnInstallDlcHandler {
-   public:
-    virtual ~OnInstallDlcHandler() = default;
-
-    virtual void OnInstallDlcComplete(
-        const base::Value& dlc_id,
-        const ash::DlcserviceClient::InstallResult& install_result) = 0;
-  };
-
   ~DeviceDlcPredownloadListPolicyHandler();
 
   // This class is non-copyable and non-movable.
@@ -46,7 +37,7 @@ class DeviceDlcPredownloadListPolicyHandler {
   // Decode a list of DLCs that should be pre downloaded to the device from
   // human-readable strings to DLC IDs. Any warning messages from the decoding
   // and schema validation process are stored in |warning|.
-  static base::Value::List DecodeDeviceDlcPredownloadListPolicy(
+  static base::ListValue DecodeDeviceDlcPredownloadListPolicy(
       const google::protobuf::RepeatedPtrField<std::string>& raw_policy_value,
       std::string& out_warning);
 
@@ -60,7 +51,6 @@ class DeviceDlcPredownloadListPolicyHandler {
   void TriggerPredownloadDlcs();
 
   raw_ptr<ash::CrosSettings> cros_settings_;
-  std::unique_ptr<OnInstallDlcHandler> on_install_dlc_handler_;
   base::CallbackListSubscription dlc_predownloader_subscription_;
 };
 

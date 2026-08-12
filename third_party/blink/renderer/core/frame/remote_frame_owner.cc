@@ -31,6 +31,7 @@ RemoteFrameOwner::RemoteFrameOwner(
       allow_fullscreen_(frame_owner_properties.allow_fullscreen),
       allow_payment_request_(frame_owner_properties.allow_payment_request),
       is_display_none_(frame_owner_properties.is_display_none),
+      responsive_sizing_(frame_owner_properties.responsive_sizing),
       color_scheme_(frame_owner_properties.color_scheme),
       preferred_color_scheme_(frame_owner_properties.preferred_color_scheme),
       needs_occlusion_tracking_(false) {}
@@ -74,11 +75,27 @@ void RemoteFrameOwner::NaturalSizingInfoChanged() {
   if (auto natural_sizing_info = local_frame.View()->GetNaturalDimensions()) {
     auto sizing_info = mojom::blink::IntrinsicSizingInfo::New(
         natural_sizing_info->size, natural_sizing_info->aspect_ratio,
-        natural_sizing_info->has_width, natural_sizing_info->has_height);
+        natural_sizing_info->has_width, natural_sizing_info->has_height,
+        /*is_cleared=*/false);
     WebLocalFrameImpl::FromFrame(local_frame)
         ->FrameWidgetImpl()
         ->IntrinsicSizingInfoChanged(std::move(sizing_info));
   }
+}
+
+void RemoteFrameOwner::ClearLastNaturalSizingInfo() {
+  LocalFrame& local_frame = To<LocalFrame>(*frame_);
+  if (auto* web_frame = WebLocalFrameImpl::FromFrame(local_frame)) {
+    if (WebFrameWidgetImpl* widget = web_frame->FrameWidgetImpl()) {
+      auto sizing_info = mojom::blink::IntrinsicSizingInfo::New();
+      sizing_info->is_cleared = true;
+      widget->IntrinsicSizingInfoChanged(std::move(sizing_info));
+    }
+  }
+}
+
+void RemoteFrameOwner::ClearAllNaturalSizingInfo() {
+  ClearLastNaturalSizingInfo();
 }
 
 void RemoteFrameOwner::SetNeedsOcclusionTracking(bool needs_tracking) {

@@ -114,6 +114,13 @@ public interface AutocompleteEditTextModelBase {
 
         /** Specifies whether the current user input should be shown as multi-line. */
         void setInputIsMultilineEligible(boolean isMultilineEligible);
+
+        /**
+         * Sets or removes the site search chip displayed inside the omnibox.
+         *
+         * @param siteSearchLabel The label to display, or null/empty to remove the chip.
+         */
+        void setSiteSearchChip(@Nullable String siteSearchLabel);
     }
 
     /**
@@ -205,11 +212,13 @@ public interface AutocompleteEditTextModelBase {
      * @param inlineAutocompleteText The suggested autocompletion for the user's text.
      * @param additionalText This string is displayed adjacent to the omnibox if this match is the
      *     default. Will usually be URL when autocompleting a title, and empty otherwise.
+     * @param siteSearchLabel The site search label to be shown.
      */
     void setAutocompleteText(
             CharSequence userText,
             @Nullable CharSequence inlineAutocompleteText,
-            @Nullable String additionalText);
+            @Nullable String additionalText,
+            @Nullable String siteSearchLabel);
 
     /**
      * Whether we want to be showing inline autocomplete results. We don't want to show them as the
@@ -223,7 +232,6 @@ public interface AutocompleteEditTextModelBase {
     /**
      * @return Whether any autocomplete information is specified on the current text.
      */
-    @VisibleForTesting
     boolean hasAutocomplete();
 
     /**
@@ -236,4 +244,10 @@ public interface AutocompleteEditTextModelBase {
      * @return Whether accessibility event should be ignored.
      */
     boolean shouldIgnoreAccessibilityEvent();
+
+    /**
+     * Returns whether the given key event represents a delete-by-word gesture that should be
+     * intercepted and handled by the model.
+     */
+    boolean isDeleteByWord(KeyEvent event);
 }

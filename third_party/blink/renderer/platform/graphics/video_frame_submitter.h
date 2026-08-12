@@ -70,6 +70,7 @@ class PLATFORM_EXPORT VideoFrameSubmitter
   void SetIsPageVisible(bool is_visible) override;
   void SetForceBeginFrames(bool force_begin_frames) override;
   void SetForceSubmit(bool) override;
+  std::optional<base::TimeTicks> GetExpectedDisplayTime() const override;
 
   // viz::ContextLostObserver implementation.
   void OnContextLost() override;
@@ -89,9 +90,21 @@ class PLATFORM_EXPORT VideoFrameSubmitter
       uint32_t sequence_id) override {}
   void OnSurfaceEvicted(const viz::LocalSurfaceId& local_surface_id) override {}
 
+  void SetNextFrameTokenForTesting(uint32_t token) {
+    next_frame_token_.SetValueForTesting(token);
+  }
+
  private:
   friend class VideoFrameSubmitterTest;
+  friend class VideoFrameSubmitterMockTimeTest;
   class FrameSinkBundleProxy;
+  struct PendingFrameInfo {
+    std::optional<base::TimeTicks> capture_begin_time;
+    std::optional<uint32_t> rtp_timestamp;
+    viz::BeginFrameArgs begin_frame_args;
+    bool was_decoded_with_end_time = false;
+    bool is_manual_source = false;
+  };
 
   // Called during Initialize() and OnContextLost() after a new ContextGL is
   // requested.
@@ -105,6 +118,16 @@ class PLATFORM_EXPORT VideoFrameSubmitter
   // should be requested.
   bool MaybeAcceptContextProvider(
       scoped_refptr<viz::RasterContextProvider> context_provider);
+
+  // Snaps |estimate| to the nearest VSync tick relative to the current phase.
+  // Logic: result = frame_time + (n * interval), where n is the nearest
+  // integer.
+  //
+  // Note: This is relative to the compositor's |frame_time| anchor, not the
+  // system epoch. We use std::llround to snap to the closest boundary (halfway
+  // cases round away from zero). If no valid BeginFrame exists, returns
+  // |estimate|.
+  base::TimeTicks SnapToNearestVsync(base::TimeTicks estimate) const;
 
   // Starts submission and calls UpdateSubmissionState(); which may submit.
   void StartSubmitting();
@@ -235,18 +258,16 @@ class PLATFORM_EXPORT VideoFrameSubmitter
   // Instead they are a specialized variant of compositor-only frames, submitted
   // via a batch. So track the mapping of FrameToken to viz::BeginFrameArgs in
   // `pending_frames_`, and denote their completion directly to `frame_sorter_`.
-  base::flat_map<uint32_t, viz::BeginFrameArgs> pending_frames_;
+  //
+  // Contains metadata of all submitted video frames, including those that
+  // `pending_frames_` does not store (manual source video frames)
+  base::flat_map<uint32_t, PendingFrameInfo> pending_frames_;
   cc::FrameSequenceTrackerCollection frame_trackers_;
   cc::FrameSorter frame_sorter_;
 
   // The BeginFrameArgs passed to the most recent call of OnBeginFrame().
   // Required for FrameSequenceTrackerCollection::NotifySubmitFrame
   viz::BeginFrameArgs last_begin_frame_args_;
-
-  // The token of the frames that are submitted outside OnBeginFrame(). These
-  // frames should be ignored by the video tracker even if they are reported as
-  // presented.
-  base::flat_set<uint32_t> ignorable_submitted_frames_;
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
 

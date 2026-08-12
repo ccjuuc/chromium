@@ -22,18 +22,18 @@ namespace {
 
 // Array of features exposed through the Java ExternalIntentsFeatures API.
 const base::Feature* const kFeaturesExposedToJava[] = {
-    &kExternalNavigationDebugLogs, &kNavigationCaptureRefactorAndroid};
+    &kExternalNavigationDebugLogs, &kDontClobberTabsWithChromeAppId};
 }  // namespace
 
 // Alphabetical:
 
 BASE_FEATURE(kExternalNavigationDebugLogs, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDontClobberTabsWithChromeAppId, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kNavigationCaptureRefactorAndroid,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-static jlong JNI_ExternalIntentsFeatures_GetFeature(JNIEnv* env, jint ordinal) {
-  return reinterpret_cast<jlong>(UNSAFE_TODO(kFeaturesExposedToJava[ordinal]));
+static int64_t JNI_ExternalIntentsFeatures_GetFeature(JNIEnv* env,
+                                                      int32_t ordinal) {
+  return reinterpret_cast<int64_t>(
+      UNSAFE_TODO(kFeaturesExposedToJava[ordinal]));
 }
 
 }  // namespace external_intents

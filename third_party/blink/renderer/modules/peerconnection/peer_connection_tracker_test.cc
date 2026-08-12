@@ -58,7 +58,8 @@ class MockPeerConnectionTrackerHost
   MOCK_METHOD1(AddPeerConnection,
                void(blink::mojom::blink::PeerConnectionInfoPtr));
   MOCK_METHOD1(RemovePeerConnection, void(int));
-  MOCK_METHOD2(OnPeerConnectionSessionIdSet, void(int, const String&));
+  MOCK_METHOD3(OnPeerConnectionSessionIdSet,
+               void(int, const String&, base::OnceClosure));
   MOCK_METHOD5(GetUserMedia,
                void(int, bool, bool, const String&, const String&));
   MOCK_METHOD4(GetUserMediaSuccess,
@@ -71,7 +72,7 @@ class MockPeerConnectionTrackerHost
   MOCK_METHOD3(GetDisplayMediaFailure, void(int, const String&, const String&));
   MOCK_METHOD2(WebRtcEventLogWrite, void(int, const Vector<uint8_t>&));
   MOCK_METHOD2(WebRtcDataChannelLogWrite, void(int, const Vector<uint8_t>&));
-  MOCK_METHOD2(AddStandardStats, void(int, base::Value::List));
+  MOCK_METHOD2(AddStandardStats, void(int, base::ListValue));
 
   mojo::PendingRemote<blink::mojom::blink::PeerConnectionTrackerHost>
   CreatePendingRemoteAndBind() {
@@ -191,6 +192,63 @@ TEST_F(PeerConnectionTrackerTest, TrackCreateOffer) {
                  "\"voiceActivityDetection\":true,\"iceRestart\":true}")));
   tracker_->TrackCreateOffer(mock_handler_.get(), options);
   base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(PeerConnectionTrackerTest, TrackCreateOfferWithUnsetOfferToReceive) {
+  CreateTrackerWithMocks();
+  CreateAndRegisterPeerConnectionHandler();
+  // -1 means unset.
+  RTCOfferOptionsPlatform* options =
+      MakeGarbageCollected<RTCOfferOptionsPlatform>(-1, -1, true, false);
+  base::RunLoop run_loop;
+  String logged_value;
+  EXPECT_CALL(*mock_host_, UpdatePeerConnection(_, String("createOffer"), _))
+      .WillOnce([&](int, const String&, const String& value) {
+        logged_value = value;
+        run_loop.Quit();
+      });
+  tracker_->TrackCreateOffer(mock_handler_.get(), options);
+  run_loop.Run();
+  EXPECT_EQ(logged_value, String("{\"voiceActivityDetection\":true}"));
+}
+
+TEST_F(PeerConnectionTrackerTest, TrackCreateOfferWithFalseOfferToReceive) {
+  CreateTrackerWithMocks();
+  CreateAndRegisterPeerConnectionHandler();
+  RTCOfferOptionsPlatform* options =
+      MakeGarbageCollected<RTCOfferOptionsPlatform>(0, 0, true, false);
+  base::RunLoop run_loop;
+  String logged_value;
+  EXPECT_CALL(*mock_host_, UpdatePeerConnection(_, String("createOffer"), _))
+      .WillOnce([&](int, const String&, const String& value) {
+        logged_value = value;
+        run_loop.Quit();
+      });
+  tracker_->TrackCreateOffer(mock_handler_.get(), options);
+  run_loop.Run();
+  EXPECT_EQ(
+      logged_value,
+      String("{\"offerToReceiveAudio\":false,\"offerToReceiveVideo\":false,"
+             "\"voiceActivityDetection\":true}"));
+}
+
+TEST_F(PeerConnectionTrackerTest, TrackCreateOfferWithVideoOnlyOfferToReceive) {
+  CreateTrackerWithMocks();
+  CreateAndRegisterPeerConnectionHandler();
+  // Video comes first in the constructor.
+  RTCOfferOptionsPlatform* options =
+      MakeGarbageCollected<RTCOfferOptionsPlatform>(1, -1, true, false);
+  base::RunLoop run_loop;
+  String logged_value;
+  EXPECT_CALL(*mock_host_, UpdatePeerConnection(_, String("createOffer"), _))
+      .WillOnce([&](int, const String&, const String& value) {
+        logged_value = value;
+        run_loop.Quit();
+      });
+  tracker_->TrackCreateOffer(mock_handler_.get(), options);
+  run_loop.Run();
+  EXPECT_EQ(logged_value, String("{\"offerToReceiveVideo\":true,"
+                                 "\"voiceActivityDetection\":true}"));
 }
 
 TEST_F(PeerConnectionTrackerTest, OnSuspend) {

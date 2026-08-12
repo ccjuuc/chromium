@@ -136,10 +136,11 @@ class CORE_EXPORT LineBreaker {
  private:
   Document& GetDocument() const { return node_.GetDocument(); }
 
+  // True if `this` is for a part of an IFC. Used by Ruby.
+  bool IsSubLineBreaker() const { return end_item_index_ != Items().size(); }
+
   const String& Text() const { return text_content_; }
   const InlineItems& Items() const { return items_data_->items; }
-
-  String TextContentForLineBreak() const;
 
   InlineItemResult* AddItem(const InlineItem&, unsigned end_offset, LineInfo*);
   InlineItemResult* AddItem(const InlineItem&, LineInfo*);
@@ -294,11 +295,13 @@ class CORE_EXPORT LineBreaker {
   void SetCurrentStyleForce(const ComputedStyle&);
 
   bool IsPreviousItemOfType(InlineItem::InlineItemType);
+  bool IsNextNonBidiControlItemOpenTag() const;
   void MoveToNextOf(const InlineItem&);
   void MoveToNextOf(const InlineItemResult&);
   bool IsAtEnd() const { return current_.item_index >= end_item_index_; }
 
   void ComputeBaseDirection();
+  LayoutUnit ComputeFloatOffset() const;
   void RecalcClonedBoxDecorations();
 
   LayoutUnit AvailableWidth() const { return available_width_; }
@@ -309,10 +312,11 @@ class CORE_EXPORT LineBreaker {
     return AvailableWidthToFit() - position_;
   }
   bool CanFitOnLine() const {
-    return (parent_breaker_ && !auto_wrap_) ||
-           position_ <= AvailableWidthToFit();
+    return position_ <= AvailableWidthToFit() ||
+           (parent_breaker_ && !auto_wrap_);
   }
   void UpdateAvailableWidth();
+  void UpdateAvailableWidthFromBaseAvailableWidth();
 
   // True if the current line is hyphenated.
   bool HasHyphen() const { return hyphen_index_.has_value(); }
@@ -347,8 +351,16 @@ class CORE_EXPORT LineBreaker {
   // The current position from inline_start. Unlike InlineLayoutAlgorithm
   // that computes position in visual order, this position in logical order.
   LayoutUnit position_;
+
+  // Offset of this (sub-)line's start from the tab-stop origin, i.e. the start
+  // content edge of the nearest block container ancestor. Non-zero only for
+  // ruby sub-LineBreakers.
+  LayoutUnit tab_stop_offset_;
+
   LayoutUnit applied_text_indent_;
   LayoutUnit available_width_;
+  // Available width without `box-decoration-break`.
+  LayoutUnit base_available_width_;
   LineLayoutOpportunity line_opportunity_;
 
   InlineNode node_;

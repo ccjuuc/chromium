@@ -27,10 +27,8 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/rect.h"
@@ -251,10 +249,6 @@ void AppListSearchView::OnSearchResultContainerResultsChanged() {
     if (aggregate_animation_info.use_short_animations) {
       search_result_fast_update_time_ = base::TimeTicks::Now();
     }
-
-    // Records metrics on whether shortened search animations were used.
-    base::UmaHistogramBoolean("Ash.SearchResultUpdateAnimationShortened",
-                              aggregate_animation_info.use_short_animations);
   }
   DeprecatedLayoutImmediately();
 
@@ -369,19 +363,18 @@ void AppListSearchView::MaybeNotifySelectedResultChanged() {
   }
 
   if (!result_selection_controller_->selected_result()) {
-    search_box_view_->SetA11yActiveDescendant(std::nullopt);
+    search_box_view_->SetA11yActiveDescendant(nullptr);
     return;
   }
 
   views::View* selected_view =
       result_selection_controller_->selected_result()->GetSelectedView();
   if (!selected_view) {
-    search_box_view_->SetA11yActiveDescendant(std::nullopt);
+    search_box_view_->SetA11yActiveDescendant(nullptr);
     return;
   }
 
-  search_box_view_->SetA11yActiveDescendant(
-      selected_view->GetViewAccessibility().GetUniqueId());
+  search_box_view_->SetA11yActiveDescendant(selected_view);
 }
 
 bool AppListSearchView::CanSelectSearchResults() {

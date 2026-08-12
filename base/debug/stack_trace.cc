@@ -13,6 +13,7 @@
 
 #include "base/byte_size.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/debug/debugging_buildflags.h"
 #include "base/features.h"
 #include "base/numerics/clamped_math.h"
@@ -372,7 +373,7 @@ std::string StackTrace::ToStringWithPrefix(cstring_view prefix_string) const {
 #if !defined(__UCLIBC__) && !defined(_AIX)
   OutputToStreamWithPrefix(&stream, prefix_string);
 #endif
-  return stream.str();
+  return std::move(stream).str();
 }
 
 // static

@@ -13,6 +13,9 @@
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
+#include "base/feature.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
@@ -25,11 +28,20 @@
 
 namespace persistent_cache {
 
+namespace {
+
+// Enables WAL-mode for databases created in a PersistentCacheCollection.
+BASE_FEATURE(kPersistentCacheCollectionWalMode,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+}  // namespace
+
 PersistentCacheCollection::PersistentCacheCollection(
     base::FilePath top_directory,
     int64_t target_footprint,
+    Client client,
     size_t lru_capacity)
-    : backend_storage_(BackendType::kSqlite, std::move(top_directory)),
+    : backend_storage_(client, BackendType::kSqlite, std::move(top_directory)),
       target_footprint_(target_footprint),
       lru_capacity_(lru_capacity),
       persistent_caches_(PersistentCacheLRUMap::NO_AUTO_EVICT) {
@@ -40,8 +52,11 @@ PersistentCacheCollection::PersistentCacheCollection(
     base::FilePath top_directory,
     int64_t target_footprint,
     std::unique_ptr<BackendStorage::Delegate> storage_delegate,
+    Client client,
     size_t lru_capacity)
-    : backend_storage_(std::move(storage_delegate), std::move(top_directory)),
+    : backend_storage_(client,
+                       std::move(storage_delegate),
+                       std::move(top_directory)),
       target_footprint_(target_footprint),
       lru_capacity_(lru_capacity),
       persistent_caches_(PersistentCacheLRUMap::NO_AUTO_EVICT) {
@@ -52,7 +67,7 @@ PersistentCacheCollection::~PersistentCacheCollection() = default;
 
 base::expected<std::optional<EntryMetadata>, TransactionError>
 PersistentCacheCollection::Find(const std::string& cache_id,
-                                std::string_view key,
+                                base::span<const uint8_t> key,
                                 BufferProvider buffer_provider) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -70,7 +85,7 @@ PersistentCacheCollection::Find(const std::string& cache_id,
 
 base::expected<void, TransactionError> PersistentCacheCollection::Insert(
     const std::string& cache_id,
-    std::string_view key,
+    base::span<const uint8_t> key,
     base::span<const uint8_t> content,
     EntryMetadata metadata) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -222,21 +237,33 @@ PersistentCache* PersistentCacheCollection::GetOrCreateCache(
     persistent_caches_.Erase(oldest_it);
   }
 
-  base::FilePath base_name = BaseNameFromCacheId(cache_id);
-  // `cache_id` must not contain invalid characters.
-  CHECK(!base_name.empty());
-
-  auto backend =
-      backend_storage_.MakeBackend(base_name, /*single_connection=*/false,
-                                   /*journal_mode_wal=*/false);
-  if (!backend) {
-    // Failed to open/create the backend's files or bind to them.
-    return nullptr;
+  const base::FilePath base_name = BaseNameFromCacheId(cache_id);
+  if (base_name.empty()) {
+    return nullptr;  // `cache_id` contains invalid characters.
   }
+
+  ASSIGN_OR_RETURN(
+      auto backend,
+      backend_storage_.MakeBackend(
+          base_name, /*single_connection=*/false,
+          /*journal_mode_wal=*/
+          base::FeatureList::IsEnabled(kPersistentCacheCollectionWalMode)),
+      [this, &base_name](TransactionError error) {
+        DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+        // Failed to open/create the backend's files or bind to them.
+        if (error == TransactionError::kPermanent) {
+          // Delete the files since they are unusable. A future attempt to
+          // create this same cache has a chance to succeed.
+          backend_storage_.DeleteFiles(base_name);
+        }
+        return nullptr;
+      });
 
   // Create the cache
   auto inserted_it = persistent_caches_.Put(
-      cache_id, std::make_unique<PersistentCache>(std::move(backend)));
+      cache_id, std::make_unique<PersistentCache>(backend_storage_.client(),
+                                                  std::move(backend)));
   return inserted_it->second.get();
 }
 
@@ -302,7 +329,11 @@ constexpr auto kCharacterToTokenMap =
                                                     {'\"', "`7"},
                                                     {'?', "`8"},
                                                     {'*', "`9"},
-                                                    {'\n', "`0"}});
+                                                    {'\n', "`0"},
+                                                    {'%', "`p"},
+                                                    {'{', "`l"},
+                                                    {'}', "`r"},
+                                                    {'`', "`g"}});
 
 // Returns a token uniquely representing a character `c` that is not legal in
 // filenames, or an empty string if no such replacement is available.

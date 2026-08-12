@@ -8,12 +8,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
+
 import android.content.Context;
+import android.view.ContextThemeWrapper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -54,7 +56,10 @@ public class NtpChromeColorsAdapterUnitTest {
 
     @Before
     public void setUp() {
-        mContext = ApplicationProvider.getApplicationContext();
+        mContext =
+                new ContextThemeWrapper(
+                        ApplicationProvider.getApplicationContext(),
+                        R.style.Theme_BrowserUI_DayNight);
         mColorInfoList = NtpThemeColorUtils.createThemeColorListForTesting(mContext);
         mAdapter =
                 new NtpChromeColorsAdapter(
@@ -92,6 +97,9 @@ public class NtpChromeColorsAdapterUnitTest {
 
         int selectedPosition = 0;
         int bindingAdaptorPosition = 0;
+        NtpThemeColorInfo colorInfo = mColorInfoList.get(bindingAdaptorPosition);
+        String contentDescription =
+                mContext.getString(NtpThemeColorUtils.getNtpColorThemeStringResId(colorInfo.id));
 
         // Test selected item case.
         mViewHolder.bindImpl(
@@ -100,6 +108,8 @@ public class NtpChromeColorsAdapterUnitTest {
                 selectedPosition,
                 bindingAdaptorPosition);
         assertTrue(mViewHolder.itemView.isActivated());
+        assertTrue(mViewHolder.itemView.isSelected());
+        assertEquals(contentDescription, mViewHolder.itemView.getContentDescription());
 
         // Test unselected item case.
         selectedPosition = 1;
@@ -109,12 +119,15 @@ public class NtpChromeColorsAdapterUnitTest {
                 selectedPosition,
                 bindingAdaptorPosition);
         assertFalse(mViewHolder.itemView.isActivated());
+        assertFalse(mViewHolder.itemView.isSelected());
+        assertEquals(contentDescription, mViewHolder.itemView.getContentDescription());
     }
 
     @Test
     public void testBindViewHolder_setOnClickListener() {
         when(mItemView.getContext()).thenReturn(mContext);
         when(mItemView.findViewById(R.id.color_circle)).thenReturn(mCircleView);
+        when(mItemView.getResources()).thenReturn(mContext.getResources());
         mViewHolder = new NtpChromeColorsAdapter.ColorViewHolder(mItemView);
 
         // Binds the first item view.
@@ -133,9 +146,13 @@ public class NtpChromeColorsAdapterUnitTest {
                 mAdapter.onCreateViewHolder(parent, /* viewType= */ 0);
         int position = 1;
         mAdapter.onBindViewHolder(viewHolder, position);
+        NtpThemeColorInfo colorInfo = mColorInfoList.get(position);
+        String contentDescription =
+                mContext.getString(NtpThemeColorUtils.getNtpColorThemeStringResId(colorInfo.id));
 
         viewHolder.itemView.performClick();
         verify(mOnItemClickCallback).onResult(mColorInfoList.get(position));
+        assertEquals(contentDescription, viewHolder.itemView.getContentDescription());
     }
 
     @Test
@@ -144,23 +161,31 @@ public class NtpChromeColorsAdapterUnitTest {
         assertEquals(0, mAdapter.getSelectedPositionForTesting());
 
         int selectedPosition = 2;
-        mAdapter.setSelectedPosition(selectedPosition);
+        mAdapter.setSelectedPosition(selectedPosition, /* isFromClick= */ true);
 
         // Verify the new selected position and that the callback was invoked.
         assertEquals(selectedPosition, mAdapter.getSelectedPositionForTesting());
         verify(mOnItemClickCallback).onResult(mColorInfoList.get(selectedPosition));
+
+        // Verify the new selected position and that the callback was not invoke if the selected
+        // position is not from a click event.
+        clearInvocations(mOnItemClickCallback);
+        mAdapter.setSelectedPosition(selectedPosition, /* isFromClick= */ false);
+
+        assertEquals(selectedPosition, mAdapter.getSelectedPositionForTesting());
+        verify(mOnItemClickCallback, never()).onResult(mColorInfoList.get(selectedPosition));
     }
 
     @Test
     public void testSetSelectedPosition_invalidPosition() {
         // Set invalid selected position.
-        mAdapter.setSelectedPosition(mColorInfoList.size() + 1);
+        mAdapter.setSelectedPosition(mColorInfoList.size() + 1, /* isFromClick= */ false);
         // Verify the selected position is RecyclerView.NO_POSITION and no callback.
         assertEquals(RecyclerView.NO_POSITION, mAdapter.getSelectedPositionForTesting());
         verify(mOnItemClickCallback, never()).onResult(any());
 
         // Set another invalid position (negative).
-        mAdapter.setSelectedPosition(-5);
+        mAdapter.setSelectedPosition(-5, /* isFromClick= */ false);
         assertEquals(RecyclerView.NO_POSITION, mAdapter.getSelectedPositionForTesting());
         verify(mOnItemClickCallback, never()).onResult(any());
     }
@@ -171,7 +196,7 @@ public class NtpChromeColorsAdapterUnitTest {
         assertEquals(0, mAdapter.getSelectedPositionForTesting());
 
         // Set selected position to NO_POSITION.
-        mAdapter.setSelectedPosition(RecyclerView.NO_POSITION);
+        mAdapter.setSelectedPosition(RecyclerView.NO_POSITION, /* isFromClick= */ false);
 
         // Verify the selected position is NO_POSITION and callback is not invoked.
         assertEquals(RecyclerView.NO_POSITION, mAdapter.getSelectedPositionForTesting());

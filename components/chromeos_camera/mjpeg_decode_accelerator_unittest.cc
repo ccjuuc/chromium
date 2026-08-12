@@ -257,7 +257,7 @@ class MjpegDecodeAcceleratorTestEnvironment : public ::testing::Environment {
   const base::FilePath::CharType* user_jpeg_filenames_;
   const base::FilePath::CharType* test_data_path_;
   const base::FilePath::CharType* perf_output_path_;
-  base::Value::Dict metrics_;
+  base::DictValue metrics_;
 
   std::unique_ptr<media::TestGbmBufferManager> gbm_buffer_manager_;
 };
@@ -851,10 +851,10 @@ void JpegClient::StartDecode(int32_t task_id, bool do_prepare_memory) {
 bool JpegClient::GetSoftwareDecodeResult(int32_t task_id) {
   const DecodeTask& task = (*tasks_)[task_id];
   const bool do_crop_scale = task.target_size != task.image->visible_size;
-  DCHECK(sw_out_frame_->IsMappable());
+  DCHECK(sw_out_frame_->HasDirectCpuAccess());
   DCHECK_EQ(sw_out_frame_->format(), media::PIXEL_FORMAT_I420);
   if (do_crop_scale) {
-    DCHECK(sw_tmp_frame_->IsMappable());
+    DCHECK(sw_tmp_frame_->HasDirectCpuAccess());
     DCHECK_EQ(sw_tmp_frame_->format(), media::PIXEL_FORMAT_I420);
   }
   media::VideoFrame* decode_frame =

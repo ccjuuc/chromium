@@ -21,15 +21,13 @@ import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr
 import type {CrSearchFieldElement} from 'chrome://resources/ash/common/cr_elements/cr_search_field/cr_search_field.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import type {App, Locale} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
+import {browserProxyFactory} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
 import {getAppIcon} from 'chrome://resources/cr_components/app_management/util.js';
-import {type DomRepeatEvent, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-
-import {AppManagementBrowserProxy} from '../app_management/browser_proxy.js';
+import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {DomRepeatEvent} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './app_language_selection_dialog.html.js';
 
-// Keep this in sync with tools/metrics/histograms/metadata/arc/histograms.xml
-// Arc.AppLanguageSwitch.{SettingsPage}.TargetLanguage.
 export enum AppLanguageSelectionDialogEntryPoint {
   APPS_MANAGEMENT_PAGE = 'AppsManagementPage',
   LANGUAGES_PAGE = 'LanguagesPage',
@@ -67,14 +65,19 @@ export class AppLanguageSelectionDialogElement extends
     };
   }
 
+  constructor() {
+    super();
+    this.filteredLanguages_ = [];
+  }
+
   // Public API: Bidirectional data flow.
   // prefs is provided by PrefsMixin.
 
   // App must be present when this dialog is shown.
-  app: App;
-  entryPoint: AppLanguageSelectionDialogEntryPoint;
+  declare app: App;
+  declare entryPoint: AppLanguageSelectionDialogEntryPoint;
   private suggestedLanguages_: Locale[] = [];
-  private filteredLanguages_: Locale[] = [];
+  declare private filteredLanguages_: Locale[];
   private selectedLanguage_?: Locale;
   private searchQuery_ = '';
 
@@ -88,13 +91,10 @@ export class AppLanguageSelectionDialogElement extends
   }
 
   private onActionButtonClick_(): void {
-    AppManagementBrowserProxy.getInstance().handler.setAppLocale(
+    browserProxyFactory.getInstance().handler.setAppLocale(
         this.app.id,
         this.selectedLanguage_!.localeTag,
     );
-    chrome.metricsPrivate.recordSparseValueWithHashMetricName(
-        `Arc.AppLanguageSwitch.${this.entryPoint}.TargetLanguage`,
-        this.selectedLanguage_!.localeTag);
     this.$.dialog.close();
   }
 

@@ -32,22 +32,21 @@ base::TimeTicks GetProcessStartTime() {
       Java_UmaUtils_getProcessStartTime(env));
 }
 
-static jboolean JNI_UmaUtils_IsClientInSampleForMetrics(JNIEnv* env) {
+static bool JNI_UmaUtils_IsClientInSampleForMetrics(JNIEnv* env) {
   return ChromeMetricsServicesManagerClient::IsClientInSampleForMetrics();
 }
 
-static jboolean JNI_UmaUtils_IsClientInSampleForCrashes(JNIEnv* env) {
+static bool JNI_UmaUtils_IsClientInSampleForCrashes(JNIEnv* env) {
   return ChromeMetricsServicesManagerClient::IsClientInSampleForCrashes();
 }
 
-static void JNI_UmaUtils_RecordMetricsReportingDefaultOptIn(
-    JNIEnv* env,
-    jboolean opt_in) {
+static void JNI_UmaUtils_RecordMetricsReportingDefaultOptIn(JNIEnv* env,
+                                                            bool opt_in) {
   DCHECK(g_browser_process);
   PrefService* local_state = g_browser_process->local_state();
 
   // Users can easily accept ToS multiple times by using the back button, only
-  // report the first time. See https://crbug.com/741003.
+  // report the first time. See https://crbug.com/40529487.
   if (metrics::GetMetricsReportingDefaultState(local_state) ==
       metrics::EnableMetricsDefault::DEFAULT_UNKNOWN) {
     metrics::RecordMetricsReportingDefaultState(

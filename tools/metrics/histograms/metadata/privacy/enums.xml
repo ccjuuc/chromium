@@ -26,16 +26,6 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
-<enum name="AdsHeuristicCookieOverride">
-  <int value="0" label="kNone"/>
-  <int value="1" label="kNotAd"/>
-  <int value="2" label="kAny"/>
-  <int value="3" label="kSkipHeuristics"/>
-  <int value="4" label="kSkipMetadata"/>
-  <int value="5" label="kSkipSupport"/>
-  <int value="6" label="kSkipTopLevelSupport"/>
-</enum>
-
 <enum name="AggregationServiceObserverReportStatus">
   <int value="0" label="Sent"/>
   <int value="1" label="Failed to assemble"/>
@@ -50,13 +40,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Third-party resource Blocked"/>
   <int value="1" label="Third-party resource Allowed"/>
   <int value="2" label="First-party resource Allowed"/>
-</enum>
-
-<enum name="ConsentAuditorFeature">
-  <int value="0" label="CHROME_SYNC"/>
-  <int value="1" label="PLAY_STORE"/>
-  <int value="2" label="BACKUP_AND_RESTORE"/>
-  <int value="3" label="GOOGLE_LOCATION_SERVICE"/>
 </enum>
 
 <!-- LINT.IfChange(ContentSettingPatternScope) -->
@@ -83,7 +66,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Off"/>
   <int value="1" label="BlockThirdParty"/>
   <int value="2" label="IncognitoOnly"/>
-  <int value="3" label="Limited"/>
 </enum>
 
 <!-- LINT.ThenChange(//components/content_settings/core/browser/cookie_settings.h:CookieControlsMode, //chrome/browser/resources/settings/site_settings/constants.ts:CookieControlsMode) -->
@@ -156,12 +138,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Enforced"/>
   <int value="4" label="Ignored: Due to empty site."/>
   <int value="5" label="Excepted"/>
-</enum>
-
-<enum name="DIPSDirectNavigationSource">
-  <int value="0" label="Unknown"/>
-  <int value="1" label="Omnibar"/>
-  <int value="2" label="Bookmark"/>
 </enum>
 
 <enum name="DIPSErrorCode">
@@ -277,179 +253,6 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="Pre-installed"/>
   <int value="1" label="Downloaded"/>
 </enum>
-
-<!-- LINT.IfChange(PrivacySandboxDialogCallbackState) -->
-
-<enum name="PrivacySandboxDialogCallbackState">
-  <int value="0" label="SingleActionCallbackDNE"/>
-  <int value="1" label="MultiActionCallbackDNE"/>
-  <int value="2" label="CallbackUnknownBeforeShown"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/ui/webui/privacy_sandbox/privacy_sandbox_dialog_handler.h:PrivacySandboxDialogCallbackState) -->
-
-<!-- LINT.IfChange(PrivacySandboxNoticeAction) -->
-
-<enum name="PrivacySandboxNoticeAction">
-  <int value="0" label="NotSet"/>
-  <int value="1" label="Ack"/>
-  <int value="2" label="Closed"/>
-  <int value="3" label="LearnMore"/>
-  <int value="4" label="OptIn"/>
-  <int value="5" label="OptOut"/>
-  <int value="6" label="Other"/>
-  <int value="7" label="Settings"/>
-  <int value="8" label="UnknownActionPreMigration"/>
-  <int value="9" label="TimedOut"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/privacy_sandbox/notice/notice_storage.h:NoticeActionTaken) -->
-
-<!-- LINT.IfChange(PrivacySandboxNoticeActionBehavior) -->
-
-<enum name="PrivacySandboxNoticeActionBehavior">
-  <int value="0" label="Success"/>
-  <int value="1" label="ActionBeforeShown"/>
-  <int value="2" label="DuplicateActionTaken"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/privacy_sandbox/notice/notice_storage.h:NoticeActionBehavior) -->
-
-<!-- LINT.IfChange(PrivacySandboxNoticeEvent) -->
-
-<enum name="PrivacySandboxNoticeEvent">
-  <int value="0" label="Ack"/>
-  <int value="1" label="Closed"/>
-  <int value="2" label="OptIn"/>
-  <int value="3" label="OptOut"/>
-  <int value="4" label="Settings"/>
-  <int value="5" label="Shown"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/privacy_sandbox/notice/notice.mojom:PrivacySandboxNoticeEvent) -->
-
-<enum name="PrivacySandboxPrivateAggregationBudgeterBudgetValidityStatus2">
-  <int value="0" label="Valid"/>
-  <int value="1" label="Valid but empty; no budget data stored"/>
-  <int value="2"
-      label="Valid but contains an entry with a stale entry, i.e. a window
-             from over a day ago"/>
-  <int value="3" label="Contains a value with a timestamp in the future"/>
-  <int value="4"
-      label="Contains a value with a value that exceeds the budget limit"/>
-  <int value="5"
-      label="Contains an entry with a timestamp that is not rounded to a
-             minute"/>
-  <int value="6" label="Contains budget data that spans more than a day"/>
-  <int value="7" label="Contains an entry with a nonpositive budget value"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationBudgeterRequestResult3">
-  <int value="0" label="Approved"/>
-  <int value="1" label="Insufficient budget left in 10-min scope"/>
-  <int value="2" label="Insufficient budget left in daily scope"/>
-  <int value="3" label="Requested more than total budget"/>
-  <int value="4" label="Too many pending calls"/>
-  <int value="5" label="Storage initialization failed"/>
-  <int value="6" label="Bad values on disk"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationBudgetStorageInitStatus">
-  <int value="0" label="Success"/>
-  <int value="1" label="Failed to open DB in memory"/>
-  <int value="2" label="Failed to open DB file"/>
-  <int value="3" label="Failed to create directory"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationHostFilteringIdStatus">
-  <int value="0" label="No filtering ID, default max bytes"/>
-  <int value="1" label="Filtering ID provided, default max bytes"/>
-  <int value="2" label="No filtering ID, custom max bytes"/>
-  <int value="3" label="Filtering ID provided, custom max bytes"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationHostPipeResult">
-  <int value="0" label="Report success"/>
-  <int value="1"
-      label="Report success but truncated due to too many contributions"/>
-  <int value="2" label="No report, but no error"/>
-  <int value="3" label="API disabled in settings"/>
-  <int value="4" label="Enable debug mode called multiple times"/>
-  <int value="5" label="Negative value"/>
-  <int value="6" label="Filtering ID invalid"/>
-  <int value="7" label="Necessary feature not enabled"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationHostTimeoutResult">
-  <int value="0" label="Occurred before remote disconnection"/>
-  <int value="1" label="Occurred after remote disconnection"/>
-  <int value="2" label="Canceled due to error"/>
-  <int value="3" label="Still scheduled on shutdown"/>
-</enum>
-
-<enum name="PrivacySandboxPrivateAggregationManagerRequestResult">
-  <int value="0" label="Sent with contributions"/>
-  <int value="1" label="Sent without contributions"/>
-  <int value="2" label="Sent but contributions cleared due to budget denial"/>
-  <int value="3" label="Not sent"/>
-</enum>
-
-<!-- LINT.IfChange(PrivacySandboxPrivateAggregationTruncationResult) -->
-
-<enum name="PrivacySandboxPrivateAggregationTruncationResult">
-  <int value="0" label="No truncation occurred"/>
-  <int value="1"
-      label="Truncation occurred with the unconditional contributions alone
-             exceeding the limit"/>
-  <int value="2"
-      label="Truncation occurred but the unconditional contributions alone
-             did not exceed the limit"/>
-</enum>
-
-<!-- LINT.ThenChange(//content/browser/private_aggregation/private_aggregation_pending_contributions.h:TruncationResult) -->
-
-<!-- LINT.IfChange(PrivacySandboxSentimentSurveyStatus) -->
-
-<enum name="PrivacySandboxSentimentSurveyStatus">
-  <int value="0" label="Survey was successfully launched"/>
-  <int value="1" label="Feature not enabled"/>
-  <int value="2" label="Failed to fetch HaTS service"/>
-  <int value="3" label="Failed to launch survey"/>
-  <int value="4" label="Failed to find survey config"/>
-</enum>
-
-<!-- LINT.ThenChange(//components/privacy_sandbox/privacy_sandbox_survey_service.h:PrivacySandboxSentimentSurveyStatus) -->
-
-<enum name="PrivacySandboxStorageActivityType">
-  <int value="0" label="Received kOther (partial CCT or unknown) type"/>
-  <int value="1" label="Received kTabbed (BrowserApp) type"/>
-  <int value="2" label="Received kAGSACustomTab type"/>
-  <int value="3" label="Received kNonAGSACustomTab type"/>
-  <int value="4" label="Received kTrustedWebActivity type"/>
-  <int value="5" label="Received kWebapp type"/>
-  <int value="6" label="Received kWebApk type"/>
-  <int value="7" label="Received kPreFirstTab type"/>
-</enum>
-
-<enum name="PrivacySandboxStorageUserSegmentByRecentActivity">
-  <int value="0" label="kHasOther"/>
-  <int value="1" label="kHasBrowserApp"/>
-  <int value="2" label="kHasAGSACCT"/>
-  <int value="3" label="kHasNonAGSACCT"/>
-  <int value="4" label="kHasPWA"/>
-  <int value="5" label="kHasTWA"/>
-  <int value="6" label="kHasWebapp"/>
-  <int value="7" label="kHasPreFirstTab"/>
-</enum>
-
-<!-- LINT.IfChange(PrivacySandboxSurveyTypesEnums) -->
-
-<enum name="PrivacySandboxSurveyTypes">
-  <int value="0" label="Unknown Survey"/>
-  <int value="1" label="Sentiment Survey"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/privacy_sandbox/PrivacySandboxSurveyController.java:PrivacySandboxSurveyTypes) -->
 
 <enum name="QuickDeleteAction">
   <int value="0" label="Entry from menu item clicked"/>

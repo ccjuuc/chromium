@@ -12,14 +12,16 @@
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"  // nogncheck
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "chrome/renderer/actor/tool_executor.h"
+#include "components/actor/core/task_id.h"  // nogncheck
+#include "components/page_content_annotations/content/mojom/page_stability.mojom.h"
 #include "components/safe_browsing/buildflags.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+#include "pdf/buildflags.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 
@@ -27,7 +29,6 @@ class SkBitmap;
 
 namespace actor {
 class Journal;
-class PageStabilityMonitor;
 }  // namespace actor
 
 namespace gfx {
@@ -38,9 +39,13 @@ namespace optimization_guide {
 class PageTextAgent;
 }
 
+namespace page_content_annotations {
+class PageStabilityMonitor;
+}
+
 namespace safe_browsing {
-class PhishingClassifierDelegate;
-class PhishingImageEmbedderDelegate;
+class ContentPhishingClassifierDelegate;
+class ContentPhishingImageEmbedderDelegate;
 }  // namespace safe_browsing
 
 namespace translate {
@@ -79,6 +84,8 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
 
  private:
   friend class ChromeRenderFrameObserverTest;
+  FRIEND_TEST_ALL_PREFIXES(ChromeRenderFrameObserverTest,
+                           DynamicTranslateAgentCreation);
 
   // RenderFrameObserver implementation.
   void OnInterfaceRequestForFrame(
@@ -95,6 +102,8 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
   void DidCreateNewDocument() override;
   void DidCommitProvisionalLoad(ui::PageTransition transition) override;
   void DidClearWindowObject() override;
+  void DidCreateScriptContext(v8::Local<v8::Context> context,
+                              int32_t world_id) override;
   void DidMeaningfulLayout(blink::WebMeaningfulLayout layout_type) override;
   void OnDestruct() override;
   void WillDetach(blink::DetachReason detach_reason) override;
@@ -125,12 +134,20 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
   void LoadBlockedPlugins(const std::string& identifier) override;
   void SetShouldDeferMediaLoad(bool should_defer) override;
 
+  // TODO(crbug.com/471252374): Move actor mojom methods to its own interface.
+  void InitializeTool(actor::mojom::ToolInvocationPtr request,
+                      InitializeToolCallback callback) override;
+  void ExecuteTool(const actor::TaskId& task_id,
+                   ExecuteToolCallback callback) override;
   void InvokeTool(actor::mojom::ToolInvocationPtr request,
                   InvokeToolCallback callback) override;
   void CancelTool(const actor::TaskId& task_id) override;
   void StartActorJournal(
       mojo::PendingAssociatedRemote<actor::mojom::JournalClient> client)
       override;
+  void GetCrossDocumentScriptToolResult(
+      const base::UnguessableToken& execution_id,
+      GetCrossDocumentScriptToolResultCallback callback) override;
   // Multiple calls will clobber a PageStabilityMonitor previously created and
   // it's the caller's responsibility to ensure the monitor is unneeded before
   // creating a new one.
@@ -139,9 +156,15 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
   // `supports_paint_stability` indicates whether to include paint stability in
   // page stability heuristics.
   void CreatePageStabilityMonitor(
-      mojo::PendingReceiver<actor::mojom::PageStabilityMonitor> monitor,
+      mojo::PendingReceiver<
+          page_content_annotations::mojom::PageStabilityMonitor> monitor,
       const actor::TaskId& task_id,
       bool supports_paint_stability) override;
+#if BUILDFLAG(ENABLE_PDF)
+  void PdfPageCaptured(const std::u16string& contents,
+                       const std::string& pdf_lang,
+                       const GURL& page_url) override;
+#endif
 
   // Initialize a |phishing_classifier_delegate_|.
   void SetClientSidePhishingDetection();
@@ -185,9 +208,9 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
   raw_ptr<translate::TranslateAgent> translate_agent_;
   raw_ptr<optimization_guide::PageTextAgent> page_text_agent_;
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  raw_ptr<safe_browsing::PhishingClassifierDelegate> phishing_classifier_ =
-      nullptr;
-  raw_ptr<safe_browsing::PhishingImageEmbedderDelegate>
+  raw_ptr<safe_browsing::ContentPhishingClassifierDelegate>
+      phishing_classifier_ = nullptr;
+  raw_ptr<safe_browsing::ContentPhishingImageEmbedderDelegate>
       phishing_image_embedder_ = nullptr;
 #endif
 
@@ -202,7 +225,8 @@ class ChromeRenderFrameObserver : public content::RenderFrameObserver,
 #endif
 
   std::unique_ptr<actor::ToolExecutor> tool_executor_;
-  std::unique_ptr<actor::PageStabilityMonitor> page_stability_monitor_;
+  std::unique_ptr<page_content_annotations::PageStabilityMonitor>
+      page_stability_monitor_;
 
   mojo::AssociatedReceiverSet<chrome::mojom::ChromeRenderFrame> receivers_;
 

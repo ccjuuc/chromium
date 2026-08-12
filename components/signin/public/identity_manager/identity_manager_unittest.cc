@@ -23,19 +23,19 @@
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "components/image_fetcher/core/fake_image_decoder.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/signin/internal/identity_manager/account_fetcher_service.h"
 #include "components/signin/internal/identity_manager/account_tracker_service.h"
 #include "components/signin/internal/identity_manager/accounts_cookie_mutator_impl.h"
 #include "components/signin/internal/identity_manager/accounts_mutator_impl.h"
 #include "components/signin/internal/identity_manager/device_accounts_synchronizer_impl.h"
 #include "components/signin/internal/identity_manager/diagnostics_provider_impl.h"
-#include "components/signin/internal/identity_manager/fake_account_capabilities_fetcher_factory.h"
+#include "components/signin/internal/identity_manager/fake_account_fetcher_factory.h"
 #include "components/signin/internal/identity_manager/fake_profile_oauth2_token_service.h"
 #include "components/signin/internal/identity_manager/gaia_cookie_manager_service.h"
 #include "components/signin/internal/identity_manager/primary_account_manager.h"
 #include "components/signin/internal/identity_manager/primary_account_mutator_impl.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
-#include "components/signin/public/base/account_consistency_method.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/list_accounts_test_utils.h"
 #include "components/signin/public/base/oauth_consumer_id.h"
@@ -284,7 +284,6 @@ class IdentityManagerTest : public testing::Test {
     IdentityManager::RegisterLocalStatePrefs(pref_service_.registry());
 
     RecreateIdentityManager(
-        AccountConsistencyMethod::kDisabled,
         PrimaryAccountManagerSetup::kWithAuthenticatedAccout);
     primary_account_id_ =
         identity_manager_->PickAccountIdForAccount(kTestGaiaId, kTestEmail);
@@ -325,7 +324,6 @@ class IdentityManagerTest : public testing::Test {
   // performing some other setup.
   void RecreateIdentityManager() {
     RecreateIdentityManager(
-        AccountConsistencyMethod::kDisabled,
         PrimaryAccountManagerSetup::kNoAuthenticatedAccount);
   }
 
@@ -335,7 +333,6 @@ class IdentityManagerTest : public testing::Test {
   // IdentityManager and its dependencies, then remakes them. Dependencies that
   // outlive PrimaryAccountManager (e.g. SigninClient) will be reused.
   void RecreateIdentityManager(
-      AccountConsistencyMethod account_consistency,
       PrimaryAccountManagerSetup primary_account_manager_setup) {
     // Remove observers first, otherwise IdentityManager destruction might
     // trigger a DCHECK because there are still living observers.
@@ -354,9 +351,8 @@ class IdentityManagerTest : public testing::Test {
 
     ASSERT_TRUE(temp_profile_dir_.CreateUniqueTempDir());
 
-    auto account_tracker_service = std::make_unique<AccountTrackerService>();
-    account_tracker_service->Initialize(&pref_service_,
-                                        temp_profile_dir_.GetPath());
+    auto account_tracker_service = std::make_unique<AccountTrackerService>(
+        &pref_service_, temp_profile_dir_.GetPath());
 
 #if BUILDFLAG(IS_CHROMEOS)
     account_manager::AccountManager::RegisterPrefs(pref_service_.registry());
@@ -388,15 +384,16 @@ class IdentityManagerTest : public testing::Test {
             &signin_client_);
 
     auto account_fetcher_service = std::make_unique<AccountFetcherService>();
+    auto account_fetcher_factory = std::make_unique<FakeAccountFetcherFactory>(
+        *token_service.get(), signin_client_);
     account_fetcher_service->Initialize(
         &signin_client_, token_service.get(), account_tracker_service.get(),
         std::make_unique<image_fetcher::FakeImageDecoder>(),
-        std::make_unique<FakeAccountCapabilitiesFetcherFactory>());
+        std::move(account_fetcher_factory));
 
-    DCHECK_EQ(account_consistency, AccountConsistencyMethod::kDisabled)
-        << "AccountConsistency is not used by PrimaryAccountManager";
     auto primary_account_manager = std::make_unique<PrimaryAccountManager>(
-        &signin_client_, token_service.get(), account_tracker_service.get());
+        &signin_client_, token_service.get(), account_tracker_service.get(),
+        &profile_metrics_service_);
 
     // Passing this switch ensures that the new PrimaryAccountManager starts
     // with a clean slate. Otherwise PrimaryAccountManager::Initialize will use
@@ -410,7 +407,7 @@ class IdentityManagerTest : public testing::Test {
           account_tracker_service->SeedAccountInfo(kTestGaiaId, kTestEmail);
       primary_account_manager->SetPrimaryAccountInfo(
           account_tracker_service->GetAccountInfo(account_id),
-          ConsentLevel::kSync, signin_metrics::AccessPoint::kUnknown);
+          ConsentLevel::kSync, signin_metrics::AccessPoint::kStartPage);
     }
 
     IdentityManager::InitParameters init_params;
@@ -503,6 +500,7 @@ class IdentityManagerTest : public testing::Test {
   sync_preferences::TestingPrefServiceSyncable pref_service_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   TestSigninClient signin_client_;
+  metrics::ProfileMetricsService profile_metrics_service_;
   std::unique_ptr<IdentityManager> identity_manager_;
   std::unique_ptr<TestIdentityManagerObserver> identity_manager_observer_;
   std::unique_ptr<TestIdentityManagerDiagnosticsObserver>
@@ -1117,12 +1115,12 @@ TEST_F(IdentityManagerTest,
   SetRefreshTokenForAccount(identity_manager(), account_id2);
 
   GoogleServiceAuthError account_not_found_error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::ACCOUNT_NOT_FOUND);
+      GoogleServiceAuthError::CreateAccountNotFound();
   GoogleServiceAuthError invalid_gaia_credentials_error =
-      GoogleServiceAuthError(
-          GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS);
-  GoogleServiceAuthError transient_error = GoogleServiceAuthError(
-      GoogleServiceAuthError::State::SERVICE_UNAVAILABLE);
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN);
+  GoogleServiceAuthError transient_error =
+      GoogleServiceAuthError::FromServiceUnavailable("");
 
   // Set a persistent error for |account_id2| and check that it's reflected.
   token_service()->UpdateAuthErrorForTesting(account_id2,
@@ -1184,7 +1182,9 @@ TEST_F(IdentityManagerTest,
   SetRefreshTokenForAccount(
       identity_manager(),
       identity_manager()->GetPrimaryAccountId(ConsentLevel::kSignin),
-      "refresh_token_1", primary_account_wrapped_binding_key);
+      "refresh_token_1",
+      signin::TokenBindingInfo(primary_account_wrapped_binding_key,
+                               /*mtls_token_binding=*/false));
   // Add a secondary account and set a refresh token for it.
   account_tracker()->SeedAccountInfo(kTestGaiaId2, kTestEmail2);
   // NOTE: This should NOT happen in production as all accounts are supposed to
@@ -1193,7 +1193,9 @@ TEST_F(IdentityManagerTest,
   SetRefreshTokenForAccount(
       identity_manager(),
       account_tracker()->FindAccountInfoByGaiaId(kTestGaiaId2).account_id,
-      "refresh_token_2", secondary_account_wrapped_binding_key);
+      "refresh_token_2",
+      signin::TokenBindingInfo(secondary_account_wrapped_binding_key,
+                               /*mtls_token_binding=*/false));
 
   EXPECT_EQ(identity_manager()->GetWrappedBindingKey(),
             primary_account_wrapped_binding_key);
@@ -1212,10 +1214,53 @@ TEST_F(IdentityManagerTest,
   SetRefreshTokenForAccount(
       identity_manager(),
       account_tracker()->FindAccountInfoByGaiaId(kTestGaiaId2).account_id,
-      "refresh_token_2", secondary_account_wrapped_binding_key);
+      "refresh_token_2",
+      signin::TokenBindingInfo(secondary_account_wrapped_binding_key,
+                               /*mtls_token_binding=*/false));
 
   EXPECT_EQ(identity_manager()->GetWrappedBindingKey(),
             secondary_account_wrapped_binding_key);
+}
+
+TEST_F(IdentityManagerTest, HasAccountWithRefreshTokenBoundToMtls) {
+  account_tracker()->SeedAccountInfo(kTestGaiaId2, kTestEmail2);
+  AccountInfo account_info2 =
+      account_tracker()->FindAccountInfoByGaiaId(kTestGaiaId2);
+  CoreAccountId account_id2 = account_info2.account_id;
+
+  // Non-existent token should return false.
+  EXPECT_FALSE(
+      identity_manager()->HasAccountWithRefreshTokenBoundToMtls(account_id2));
+
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kEnableMtlsTokenBinding);
+
+  // Unbound token should return false.
+  SetRefreshTokenForAccount(identity_manager(), account_id2);
+  EXPECT_FALSE(
+      identity_manager()->HasAccountWithRefreshTokenBoundToMtls(account_id2));
+
+  // Set the token with mtls_token_binding = true.
+  SetRefreshTokenForAccount(
+      identity_manager(), account_id2, "token_val",
+      signin::TokenBindingInfo(/*wrapped_binding_key=*/{},
+                               /*mtls_token_binding=*/true));
+  EXPECT_TRUE(
+      identity_manager()->HasAccountWithRefreshTokenBoundToMtls(account_id2));
+
+  // Disable the feature and check it returns false.
+  {
+    base::test::ScopedFeatureList disabled_feature_list;
+    disabled_feature_list.InitAndDisableFeature(
+        switches::kEnableMtlsTokenBinding);
+    EXPECT_FALSE(
+        identity_manager()->HasAccountWithRefreshTokenBoundToMtls(account_id2));
+  }
+
+  // Remove the token and check it returns false.
+  RemoveRefreshTokenForAccount(identity_manager(), account_id2);
+  EXPECT_FALSE(
+      identity_manager()->HasAccountWithRefreshTokenBoundToMtls(account_id2));
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
@@ -1263,12 +1308,12 @@ TEST_F(IdentityManagerTest, GetErrorStateOfRefreshTokenForAccount) {
           account_id2));
 
   GoogleServiceAuthError account_not_found_error =
-      GoogleServiceAuthError(GoogleServiceAuthError::State::ACCOUNT_NOT_FOUND);
+      GoogleServiceAuthError::CreateAccountNotFound();
   GoogleServiceAuthError invalid_gaia_credentials_error =
-      GoogleServiceAuthError(
-          GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS);
-  GoogleServiceAuthError transient_error = GoogleServiceAuthError(
-      GoogleServiceAuthError::State::SERVICE_UNAVAILABLE);
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN);
+  GoogleServiceAuthError transient_error =
+      GoogleServiceAuthError::FromServiceUnavailable("");
 
   // Set a persistent error for |account_id2| and check that it's reflected.
   token_service()->UpdateAuthErrorForTesting(account_id2,
@@ -1337,7 +1382,7 @@ TEST_F(IdentityManagerTest, RemoveAccessTokenFromCache) {
                                                                   kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   SetRefreshTokenForAccount(identity_manager(), primary_account_id(),
                             "refresh_token");
 
@@ -1381,7 +1426,7 @@ TEST_F(IdentityManagerTest,
                                                                   kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   SetRefreshTokenForAccount(identity_manager(), primary_account_id(),
                             "refresh_token");
 
@@ -1421,8 +1466,7 @@ TEST_F(IdentityManagerTest,
   // Cancel the pending request in preparation to check that creating an
   // AccessTokenFetcher without a custom factory works as expected as well.
   token_service()->IssueErrorForAllPendingRequestsForAccount(
-      primary_account_id(),
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+      primary_account_id(), GoogleServiceAuthError::CreateRequestCanceled());
 
   // Now add a second account and request an access token for it to test
   // that the default URLLoaderFactory is used if none is specified.
@@ -1474,7 +1518,7 @@ TEST_F(IdentityManagerTest, ObserveAccessTokenFetch) {
                                                                   kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   SetRefreshTokenForAccount(identity_manager(), primary_account_id(),
                             "refresh_token");
 
@@ -1516,7 +1560,7 @@ TEST_F(IdentityManagerTest,
   run_loop.Run();
 
   EXPECT_TRUE(token_fetcher);
-  EXPECT_EQ(GoogleServiceAuthError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND),
+  EXPECT_EQ(GoogleServiceAuthError::CreateAccountNotFound(),
             identity_manager_diagnostics_observer()
                 ->on_access_token_request_completed_error());
 }
@@ -1532,7 +1576,7 @@ TEST_F(IdentityManagerTest,
                                                                   kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   SetRefreshTokenForAccount(identity_manager(), primary_account_id(),
                             "refresh_token");
   token_service()->set_auto_post_fetch_response_on_message_loop(true);
@@ -1557,7 +1601,7 @@ TEST_F(IdentityManagerTest,
   EXPECT_EQ(ScopeSet({GaiaConstants::kChromeSyncOAuth2Scope}),
             identity_manager_diagnostics_observer()
                 ->on_access_token_request_completed_scopes());
-  EXPECT_EQ(GoogleServiceAuthError(GoogleServiceAuthError::NONE),
+  EXPECT_EQ(GoogleServiceAuthError::AuthErrorNone(),
             identity_manager_diagnostics_observer()
                 ->on_access_token_request_completed_error());
   histogram_tester.ExpectUniqueSample("Signin.AccessTokenFetch.Success", 0, 1);
@@ -1589,7 +1633,7 @@ TEST_F(IdentityManagerTest,
   run_loop.Run();
 
   EXPECT_TRUE(token_fetcher);
-  EXPECT_EQ(GoogleServiceAuthError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND),
+  EXPECT_EQ(GoogleServiceAuthError::CreateAccountNotFound(),
             identity_manager_diagnostics_observer()
                 ->on_access_token_request_completed_error());
   histogram_tester.ExpectUniqueSample(
@@ -1993,14 +2037,21 @@ TEST_F(IdentityManagerTest, GetAccountsInCookieJarWithNoAccounts) {
   SetListAccountsResponseNoAccounts(test_url_loader_factory());
 
   // Do an initial call to GetAccountsInCookieJar(). This call should return no
-  // accounts but should also trigger an internal update and eventual
-  // notification that the accounts in the cookie jar have been updated.
+  // accounts.
+  // If 'kAvoidAutoTriggerListAccountsOnStale' is disabled, it should also
+  // trigger an internal update and eventual notification that the accounts
+  // in the cookie jar have been updated.
   const AccountsInCookieJarInfo& accounts_in_cookie_jar =
       identity_manager()->GetAccountsInCookieJar();
   EXPECT_FALSE(accounts_in_cookie_jar.AreAccountsFresh());
   EXPECT_TRUE(
       accounts_in_cookie_jar.GetPotentiallyInvalidSignedInAccounts().empty());
   EXPECT_TRUE(accounts_in_cookie_jar.GetSignedOutAccounts().empty());
+
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    identity_manager()->GetAccountsCookieMutator()->TriggerCookieJarUpdate();
+  }
 
   run_loop.Run();
 
@@ -2025,14 +2076,21 @@ TEST_F(IdentityManagerTest, GetAccountsInCookieJarWithOneAccount) {
                                     test_url_loader_factory());
 
   // Do an initial call to GetAccountsInCookieJar(). This call should return no
-  // accounts but should also trigger an internal update and eventual
-  // notification that the accounts in the cookie jar have been updated.
+  // accounts.
+  // If 'kAvoidAutoTriggerListAccountsOnStale' is disabled, it should also
+  // trigger an internal update and eventual notification that the accounts
+  // in the cookie jar have been updated.
   const AccountsInCookieJarInfo& accounts_in_cookie_jar =
       identity_manager()->GetAccountsInCookieJar();
   EXPECT_FALSE(accounts_in_cookie_jar.AreAccountsFresh());
   EXPECT_TRUE(
       accounts_in_cookie_jar.GetPotentiallyInvalidSignedInAccounts().empty());
   EXPECT_TRUE(accounts_in_cookie_jar.GetSignedOutAccounts().empty());
+
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    identity_manager()->GetAccountsCookieMutator()->TriggerCookieJarUpdate();
+  }
 
   run_loop.Run();
 
@@ -2065,14 +2123,21 @@ TEST_F(IdentityManagerTest, GetAccountsInCookieJarWithTwoAccounts) {
                                      kTestGaiaId2, test_url_loader_factory());
 
   // Do an initial call to GetAccountsInCookieJar(). This call should return no
-  // accounts but should also trigger an internal update and eventual
-  // notification that the accounts in the cookie jar have been updated.
+  // accounts.
+  // If 'kAvoidAutoTriggerListAccountsOnStale' is disabled, it should also
+  // trigger an internal update and eventual notification that the accounts
+  // in the cookie jar have been updated.
   const AccountsInCookieJarInfo& accounts_in_cookie_jar =
       identity_manager()->GetAccountsInCookieJar();
   EXPECT_FALSE(accounts_in_cookie_jar.AreAccountsFresh());
   EXPECT_TRUE(
       accounts_in_cookie_jar.GetPotentiallyInvalidSignedInAccounts().empty());
   EXPECT_TRUE(accounts_in_cookie_jar.GetSignedOutAccounts().empty());
+
+  if (base::FeatureList::IsEnabled(
+          switches::kAvoidAutoTriggerListAccountsOnStale)) {
+    identity_manager()->GetAccountsCookieMutator()->TriggerCookieJarUpdate();
+  }
 
   run_loop.Run();
 
@@ -2170,7 +2235,8 @@ TEST_F(IdentityManagerTest, CallbackSentOnAccountsCookieDeletedByUserAction) {
   auto cookie = net::CanonicalCookie::CreateUnsafeCookieForTesting(
       "SAPISID", std::string(), ".google.com", "/", base::Time(), base::Time(),
       base::Time(), base::Time(), /*secure=*/true, false,
-      net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT);
+      net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT,
+      net::CookieSourceType::kOther);
   SimulateCookieDeletedByUser(identity_manager()->GetGaiaCookieManagerService(),
                               *cookie);
   run_loop.Run();
@@ -2202,7 +2268,8 @@ TEST_F(IdentityManagerTest, OnNetworkInitialized) {
   auto cookie = net::CanonicalCookie::CreateUnsafeCookieForTesting(
       "SAPISID", std::string(), ".google.com", "/", base::Time(), base::Time(),
       base::Time(), base::Time(), /*secure=*/true, false,
-      net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT);
+      net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT,
+      net::CookieSourceType::kOther);
   test_cookie_manager_ptr->DispatchCookieChange(net::CookieChangeInfo(
       *cookie, net::CookieAccessResult(), net::CookieChangeCause::EXPLICIT));
   run_loop.Run();
@@ -2214,7 +2281,7 @@ TEST_F(IdentityManagerTest,
                                                                   kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   SetRefreshTokenForAccount(identity_manager(), primary_account_id(),
                             "refresh_token");
 
@@ -2230,7 +2297,7 @@ TEST_F(IdentityManagerTest, RevokeEmptyAccessToken) {
   account_tracker()->SeedAccountInfo(kTestGaiaId, kTestEmail);
   identity_manager()->GetPrimaryAccountMutator()->SetPrimaryAccount(
       primary_account_id(), ConsentLevel::kSync,
-      signin_metrics::AccessPoint::kUnknown);
+      signin_metrics::AccessPoint::kStartPage);
   identity_manager()->RemoveAccessTokenFromCache(
       primary_account_id(), signin::OAuthConsumerId::kSync, std::string());
 }

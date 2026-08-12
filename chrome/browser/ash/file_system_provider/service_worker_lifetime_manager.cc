@@ -7,7 +7,9 @@
 #include <tuple>
 #include <utility>
 
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_manager_factory.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_database.mojom.h"
@@ -33,7 +35,7 @@ ServiceWorkerLifetimeManager* ServiceWorkerLifetimeManager::Get(
 }
 
 void ServiceWorkerLifetimeManager::StartRequest(const RequestKey& key) {
-  DCHECK(!base::Contains(requests_, key));
+  DCHECK(!requests_.contains(key));
   requests_[key] = {};
 }
 
@@ -64,7 +66,7 @@ void ServiceWorkerLifetimeManager::RequestDispatched(
   std::set<KeepaliveKey>& keepalive_keys = it->second;
   extensions::WorkerId worker_id{
       target.extension_id,
-      target.render_process_id,
+      content::ChildProcessId::FromUnsafeValue(target.render_process_id),
       target.service_worker_version_id,
       target.worker_thread_id,
   };
@@ -121,7 +123,8 @@ ServiceWorkerLifetimeManagerFactory::GetForBrowserContext(
 // static
 ServiceWorkerLifetimeManagerFactory*
 ServiceWorkerLifetimeManagerFactory::GetInstance() {
-  return base::Singleton<ServiceWorkerLifetimeManagerFactory>::get();
+  static base::NoDestructor<ServiceWorkerLifetimeManagerFactory> instance;
+  return instance.get();
 }
 
 ServiceWorkerLifetimeManagerFactory::ServiceWorkerLifetimeManagerFactory()

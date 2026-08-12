@@ -2,20 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/base/ime/win/tsf_input_scope.h"
 
 #include <windows.h>
 
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/task/current_thread.h"
 #include "base/trace_event/trace_event.h"
 
@@ -29,8 +25,9 @@ void AppendNonTrivialInputScope(std::vector<InputScope>* input_scopes,
   if (input_scope == IS_DEFAULT)
     return;
 
-  if (base::Contains(*input_scopes, input_scope))
+  if (std::ranges::contains(*input_scopes, input_scope)) {
     return;
+  }
 
   input_scopes->push_back(input_scope);
 }
@@ -83,7 +80,7 @@ class TSFInputScope final : public ITfInputScope {
     }
 
     for (size_t i = 0; i < input_scopes_.size(); ++i)
-      (*input_scopes)[i] = input_scopes_[i];
+      UNSAFE_TODO((*input_scopes)[i]) = input_scopes_[i];
     *count = input_scopes_.size();
     return S_OK;
   }

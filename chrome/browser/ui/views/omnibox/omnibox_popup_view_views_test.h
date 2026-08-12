@@ -40,6 +40,8 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
     test::ThemeServiceChangedWaiter waiter_;
   };
 
+  void SetUpOnMainThread() override;
+
   views::Widget* CreatePopupForTestQuery();
   views::Widget* GetPopupWidget() { return popup_view()->GetWidget(); }
   OmniboxHeaderView* GetHeaderViewAt(int index) {
@@ -54,7 +56,7 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
   }
   LocationBarView* location_bar() {
     auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-    return browser_view->toolbar()->location_bar();
+    return browser_view->toolbar()->location_bar_view();
   }
   OmniboxViewViews* omnibox_view() { return location_bar()->omnibox_view(); }
   OmniboxController* controller() {
@@ -63,7 +65,11 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
   OmniboxEditModel* edit_model() { return controller()->edit_model(); }
   OmniboxPopupViewViews* popup_view() {
     return static_cast<OmniboxPopupViewViews*>(
-        location_bar()->GetOmniboxPopupViewForTesting());
+        location_bar()->GetOmniboxPopupView());
+  }
+
+  base::WeakPtr<OmniboxPopupViewViews> GetMetricsWeakPtr() {
+    return popup_view()->metrics_weak_factory_.GetWeakPtr();
   }
 
   SkColor GetSelectedColor(Browser* browser) {
@@ -79,12 +85,12 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
   }
 
   void SetIsGrayscale(bool is_grayscale) {
-    ThemeServiceFactory::GetForProfile(browser()->profile())
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
         ->SetIsGrayscale(is_grayscale);
   }
 
   void SetUseDeviceTheme(bool use_device_theme) {
-    ThemeServiceFactory::GetForProfile(browser()->profile())
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
         ->UseDeviceTheme(use_device_theme);
   }
 

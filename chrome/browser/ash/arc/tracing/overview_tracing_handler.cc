@@ -12,7 +12,6 @@
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/json/json_writer.h"
 #include "base/linux_util.h"
 #include "base/process/process_iterator.h"
@@ -192,7 +191,7 @@ std::unique_ptr<OverviewTracingResult> BuildGraphicsModel(
   trace->model.set_app_icon_png(trace->task_icon_png);
   trace->model.set_platform(base::GetLinuxDistro());
   trace->model.set_timestamp(trace->timestamp);
-  base::Value::Dict model = trace->model.Serialize();
+  base::DictValue model = trace->model.Serialize();
 
   std::string json_content;
   base::JSONWriter::WriteWithOptions(
@@ -240,10 +239,14 @@ std::string OverviewTracingHandler::GetModelBaseNameFromTitle(
   }
   UNSAFE_TODO(normalized_name[index]) = 0;
 
-  const std::string time =
-      base::UnlocalizedTimeFormatWithPattern(timestamp, "yyyy-MM-dd_HH-mm-ss");
+  base::Time::Exploded exploded;
+  timestamp.LocalExplode(&exploded);
+
+  std::string time_str = base::StringPrintf(
+      "%04d-%02d-%02d_%02d-%02d-%02d", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
   return base::StringPrintf("overview_tracing_%s_%s.json", normalized_name,
-                            time.c_str());
+                            time_str.c_str());
 }
 
 OverviewTracingHandler::OverviewTracingHandler(

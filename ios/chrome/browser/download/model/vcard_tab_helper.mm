@@ -9,10 +9,15 @@
 #import "ios/chrome/browser/download/model/vcard_tab_helper_delegate.h"
 #import "ios/chrome/browser/shared/model/utils/mime_type_util.h"
 #import "ios/web/public/download/download_task.h"
+#import "ios/web/public/navigation/navigation_context.h"
 #import "net/base/apple/url_conversions.h"
 
-VcardTabHelper::VcardTabHelper(web::WebState* web_state) {
-  DCHECK(web_state);
+#pragma mark - Initialization
+
+VcardTabHelper::VcardTabHelper(web::WebState* web_state)
+    : web_state_(web_state) {
+  CHECK(web_state_);
+  web_state_observation_.Observe(web_state);
 }
 
 VcardTabHelper::~VcardTabHelper() {
@@ -20,6 +25,8 @@ VcardTabHelper::~VcardTabHelper() {
     task->RemoveObserver(this);
   }
 }
+
+#pragma mark - Public
 
 void VcardTabHelper::Download(std::unique_ptr<web::DownloadTask> task) {
   DCHECK(task->GetMimeType() == kVcardMimeType ||
@@ -33,6 +40,27 @@ void VcardTabHelper::Download(std::unique_ptr<web::DownloadTask> task) {
   task_ptr->AddObserver(this);
   task_ptr->Start(base::FilePath());
 }
+
+#pragma mark - WebStateObserver
+
+void VcardTabHelper::WasShown(web::WebState* web_state) {
+  CHECK_EQ(web_state_, web_state);
+  if (delegate_ && pending_vcard_) {
+    [delegate_ openVcardFromData:pending_vcard_];
+    pending_vcard_ = nil;
+  }
+}
+
+void VcardTabHelper::DidStartNavigation(
+    web::WebState* web_state,
+    web::NavigationContext* navigation_context) {
+  CHECK_EQ(web_state_, web_state);
+  if (!navigation_context->IsSameDocument()) {
+    pending_vcard_ = nil;
+  }
+}
+
+#pragma mark - DownloadTaskObserver
 
 void VcardTabHelper::OnDownloadUpdated(web::DownloadTask* updated_task) {
   auto iterator = tasks_.find(updated_task);
@@ -54,8 +82,14 @@ void VcardTabHelper::OnDownloadUpdated(web::DownloadTask* updated_task) {
                      weak_factory_.GetWeakPtr(), std::move(task)));
 }
 
+#pragma mark - Private
+
 void VcardTabHelper::OnDownloadDataRead(std::unique_ptr<web::DownloadTask> task,
                                         NSData* data) {
   DCHECK(task);
-  [delegate_ openVcardFromData:data];
+  if (web_state_->IsVisible()) {
+    [delegate_ openVcardFromData:data];
+  } else {
+    pending_vcard_ = data;
+  }
 }

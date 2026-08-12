@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/platform/geometry/infinite_int_rect.h"
 #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -18,10 +19,10 @@ String OverscrollBehaviorTypeToString(cc::OverscrollBehavior::Type value) {
       return "none";
     case cc::OverscrollBehavior::Type::kAuto:
       return "auto";
+    case cc::OverscrollBehavior::Type::kChain:
+      return "chain";
     case cc::OverscrollBehavior::Type::kContain:
       return "contain";
-    default:
-      NOTREACHED();
   }
 }
 
@@ -30,7 +31,7 @@ String OverscrollBehaviorTypeToString(cc::OverscrollBehavior::Type value) {
 PaintPropertyChangeType ScrollPaintPropertyNode::State::ComputeChange(
     const State& other) const {
   if (container_rect != other.container_rect ||
-      contents_size != other.contents_size ||
+      contents_rect != other.contents_rect ||
       overflow_clip_node != other.overflow_clip_node ||
       user_scrollable_horizontal != other.user_scrollable_horizontal ||
       user_scrollable_vertical != other.user_scrollable_vertical ||
@@ -43,8 +44,13 @@ PaintPropertyChangeType ScrollPaintPropertyNode::State::ComputeChange(
       main_thread_repaint_reasons != other.main_thread_repaint_reasons ||
       compositor_element_id != other.compositor_element_id ||
       overscroll_behavior != other.overscroll_behavior ||
-      snap_container_data != other.snap_container_data) {
+      snap_container_data != other.snap_container_data ||
+      prevent_scroll_axis_locking != other.prevent_scroll_axis_locking) {
     return PaintPropertyChangeType::kChangedOnlyValues;
+  }
+  if (RuntimeEnabledFeatures::ScrollingContentsCullRectOnScrollNodeEnabled() &&
+      scrolling_contents_cull_rect != other.scrolling_contents_cull_rect) {
+    return PaintPropertyChangeType::kChangedOnlySimpleValues;
   }
   return PaintPropertyChangeType::kUnchanged;
 }
@@ -55,7 +61,7 @@ void ScrollPaintPropertyNode::State::Trace(Visitor* visitor) const {
 
 ScrollPaintPropertyNode::ScrollPaintPropertyNode(RootTag)
     : PaintPropertyNodeBase(kRoot),
-      state_{InfiniteIntRect(), InfiniteIntRect().size()} {}
+      state_{InfiniteIntRect(), InfiniteIntRect()} {}
 
 const ScrollPaintPropertyNode& ScrollPaintPropertyNode::Root() {
   DEFINE_STATIC_LOCAL(Persistent<ScrollPaintPropertyNode>, root,
@@ -74,11 +80,12 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
   auto json = PaintPropertyNode::ToJSON();
   if (!state_.container_rect.IsEmpty())
     json->SetString("containerRect", String(state_.container_rect.ToString()));
-  if (!state_.contents_size.IsEmpty())
-    json->SetString("contentsSize", String(state_.contents_size.ToString()));
+  if (!state_.contents_rect.IsEmpty()) {
+    json->SetString("contentsRect", String(state_.contents_rect.ToString()));
+  }
   if (state_.overflow_clip_node) {
     json->SetString("overflowClipNode",
-                    String::Format("%p", state_.overflow_clip_node.Get()));
+                    Format("{}", state_.overflow_clip_node.Get()));
   }
   if (state_.user_scrollable_horizontal || state_.user_scrollable_vertical) {
     json->SetString(
@@ -87,7 +94,7 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
             ? (state_.user_scrollable_vertical ? "both" : "horizontal")
             : "vertical");
   }
-  if (state_.main_thread_repaint_reasons) {
+  if (!state_.main_thread_repaint_reasons.empty()) {
     json->SetString("mainThreadReasons", cc::MainThreadScrollingReason::AsText(
                                              state_.main_thread_repaint_reasons)
                                              .c_str());
@@ -107,6 +114,10 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
                                                  state_.overscroll_behavior.y));
   }
 
+  if (state_.prevent_scroll_axis_locking) {
+    json->SetBoolean("preventScrollAxisLock", true);
+  }
+
   if (state_.snap_container_data) {
     json->SetString("snap_container_rect",
                     state_.snap_container_data->rect().ToString().c_str());
@@ -118,6 +129,13 @@ std::unique_ptr<JSONObject> ScrollPaintPropertyNode::ToJSON() const {
       }
       json->SetArray("snap_area_rects", std::move(area_rects_json));
     }
+  }
+
+  if (RuntimeEnabledFeatures::ScrollingContentsCullRectOnScrollNodeEnabled()) {
+    auto& rect = state_.scrolling_contents_cull_rect;
+    json->SetString("contents_cull_rect", rect == InfiniteIntRect()
+                                              ? "Inf"
+                                              : String(rect.ToString()));
   }
 
   return json;

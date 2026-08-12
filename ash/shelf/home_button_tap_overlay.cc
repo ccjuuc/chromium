@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "ash/public/cpp/shelf_types.h"
-#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/shelf/home_button.h"
 #include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_view.h"
@@ -67,7 +66,7 @@ constexpr int kHideDurationMs = 200;
 }  // namespace
 
 HomeButtonTapOverlay::HomeButtonTapOverlay(HomeButton* host_view)
-    : ripple_layer_(std::make_unique<ui::Layer>()),
+    : ripple_layer_(std::make_unique<ui::LayerTextured>()),
       host_view_(host_view),
       circle_layer_delegate_(gfx::kPlaceholderColor,
                              kRippleCircleInitRadiusDip) {

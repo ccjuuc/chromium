@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -154,44 +155,28 @@ class TestImageBackingFactory : public gpu::SharedImageBackingFactory {
   // gpu::SharedImageBackingFactory implementation.
   std::unique_ptr<gpu::SharedImageBacking> CreateSharedImage(
       const gpu::Mailbox& mailbox,
-      SharedImageFormat format,
+      const gpu::SharedImageInfo& si_info,
       gpu::SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe) override {
-    size_t estimated_size = format.EstimatedSizeInBytes(size);
-    return std::make_unique<gpu::TestImageBacking>(
-        mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-        estimated_size);
+    size_t estimated_size = si_info.format.EstimatedSizeInBytes(si_info.size);
+    auto backing = std::make_unique<gpu::TestImageBacking>(mailbox, si_info,
+                                                           estimated_size);
+    backings_[mailbox] = backing.get();
+    return backing;
   }
   std::unique_ptr<gpu::SharedImageBacking> CreateSharedImage(
       const gpu::Mailbox& mailbox,
-      SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
+      const gpu::SharedImageInfo& si_info,
       bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override {
-    return std::make_unique<gpu::TestImageBacking>(
-        mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-        pixel_data.size());
+    auto backing = std::make_unique<gpu::TestImageBacking>(mailbox, si_info,
+                                                           pixel_data.size());
+    backings_[mailbox] = backing.get();
+    return backing;
   }
   std::unique_ptr<gpu::SharedImageBacking> CreateSharedImage(
       const gpu::Mailbox& mailbox,
-      SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
+      const gpu::SharedImageInfo& si_info,
       bool is_thread_safe,
       gfx::GpuMemoryBufferHandle handle) override {
     NOTREACHED();
@@ -208,6 +193,13 @@ class TestImageBackingFactory : public gpu::SharedImageBackingFactory {
   gpu::SharedImageBackingType GetBackingType() override {
     return gpu::SharedImageBackingType::kTest;
   }
+
+  gpu::TestImageBacking* GetBacking(const gpu::Mailbox& mailbox) {
+    return backings_[mailbox];
+  }
+
+ private:
+  std::map<gpu::Mailbox, gpu::TestImageBacking*> backings_;
 };
 
 class MockPresenter : public gl::Presenter {
@@ -280,7 +272,7 @@ class SkiaOutputDeviceBufferQueueTest : public TestOnGpu {
   void DidSwapBuffersComplete(gpu::SwapBuffersCompleteParams params,
                               const gfx::Size& pixel_size,
                               gfx::GpuFenceHandle release_fence) {
-    params_.push_back(params);
+    params_.push_back(std::move(params));
   }
 
   void ReleaseOverlays(std::vector<gpu::Mailbox> overlays) {
@@ -352,11 +344,14 @@ class SkiaOutputDeviceBufferQueueTest : public TestOnGpu {
   std::unique_ptr<gpu::OverlayImageRepresentation> MakeOverlay() {
     gpu::Mailbox mailbox = gpu::Mailbox::Generate();
     bool success = shared_image_factory_->CreateSharedImage(
-        mailbox, SinglePlaneFormat::kRGBA_8888, gfx::Size(1000, 1000),
-        gfx::ColorSpace::CreateSRGB(),
-        GrSurfaceOrigin::kTopLeft_GrSurfaceOrigin,
-        SkAlphaType::kPremul_SkAlphaType, gpu::kNullSurfaceHandle,
-        gpu::SHARED_IMAGE_USAGE_SCANOUT, "TestLabel");
+        mailbox,
+        gpu::SharedImageInfo(SinglePlaneFormat::kRGBA_8888,
+                             gfx::Size(1000, 1000),
+                             gfx::ColorSpace::CreateSRGB(),
+                             GrSurfaceOrigin::kTopLeft_GrSurfaceOrigin,
+                             SkAlphaType::kPremul_SkAlphaType,
+                             gpu::SHARED_IMAGE_USAGE_SCANOUT, "TestLabel"),
+        gpu::kNullSurfaceHandle);
     CHECK(success);
 
     auto overlay =
@@ -449,9 +444,8 @@ TEST_F_GPU(SkiaOutputDeviceBufferQueueTest, ScheduleOverlaysStillInUse) {
   EXPECT_EQ(1u, params_.size());
   EXPECT_EQ(0u, params_[0].released_overlays.size());
 
-  auto* overlay2 =
-      static_cast<gpu::TestOverlayImageRepresentation*>(overlay_2.get());
-  overlay2->MarkBackingInUse(true);
+  auto* backing2 = test_backing_factory_.GetBacking(overlay_2->mailbox());
+  backing2->MarkBackingInUse(true);
 
   output_device_->ScheduleOverlays(MakeOverlayList({overlay_2->mailbox()}));
   Present();
@@ -468,7 +462,8 @@ TEST_F_GPU(SkiaOutputDeviceBufferQueueTest, ScheduleOverlaysStillInUse) {
   EXPECT_TRUE(params_[2].released_overlays.empty());
 
   // Now that the overlay is no longer in use, the next frame will release it.
-  overlay2->MarkBackingInUse(false);
+  test_backing_factory_.GetBacking(overlay_2->mailbox())
+      ->MarkBackingInUse(false);
   output_device_->ScheduleOverlays(MakeOverlayList({overlay_1->mailbox()}));
   Present();
   PageFlipComplete();
@@ -498,9 +493,8 @@ TEST_F_GPU(SkiaOutputDeviceBufferQueueTest, InUseOverlaysAreCollected) {
   EXPECT_EQ(1u, params_.size());
   EXPECT_EQ(0u, params_[0].released_overlays.size());
 
-  auto* overlay2 =
-      static_cast<gpu::TestOverlayImageRepresentation*>(overlay_2.get());
-  overlay2->MarkBackingInUse(true);
+  auto* backing = test_backing_factory_.GetBacking(overlay_2->mailbox());
+  backing->MarkBackingInUse(true);
 
   output_device_->ScheduleOverlays(MakeOverlayList({overlay_2->mailbox()}));
   Present();
@@ -518,7 +512,8 @@ TEST_F_GPU(SkiaOutputDeviceBufferQueueTest, InUseOverlaysAreCollected) {
   EXPECT_TRUE(params_[2].released_overlays.empty());
   EXPECT_TRUE(output_device_->OverlaysReclaimTimerForTesting().IsRunning());
 
-  overlay2->MarkBackingInUse(false);
+  test_backing_factory_.GetBacking(overlay_2->mailbox())
+      ->MarkBackingInUse(false);
 
   // Not enough time since last commit, reschedule.
   test_tick_clock_.Advance(base::Milliseconds(1));

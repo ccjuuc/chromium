@@ -1,4 +1,6 @@
-features:
-- name: text-combine-upright
-  files:
-  - "text-combine-upright-*"
+rules:
+- direction-*: [layout-direction-override]
+- unicode-bidi-*: [layout-direction-override]
+- text-combine-upright-*: [text-combine-upright, text-orientation]
+- text-orientation-*: [text-orientation]
+- writing-mode-*: [writing-mode]

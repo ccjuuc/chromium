@@ -30,12 +30,15 @@ bool HasMainFrames(const ProcessNode* process_node) {
   return false;
 }
 
-// Helper function posted by ReleaseOldestProcessKeptAlive to decrement
-// the ref count asynchronously, breaking the re-entrancy chain.
+// Helper function posted to the UI thread to decrement the pending reuse ref
+// count asynchronously. This breaks the synchronous call chain from the PM
+// sequence, avoiding re-entrancy: a synchronous DecrementPendingReuseRefCount()
+// can trigger Cleanup() -> process destruction -> OnProcessNodeRemoved(), which
+// would re-enter the policy while its data structures are being modified.
 void DecrementPendingReuseRefCountById(content::ChildProcessId rph_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   content::RenderProcessHost* rph = content::RenderProcessHost::FromID(rph_id);
-  if (rph) {
+  if (rph && !rph->IsDeletingSoon() && !rph->AreRefCountsDisabled()) {
     rph->DecrementPendingReuseRefCount();
   }
 }
@@ -180,22 +183,18 @@ void TransientKeepAlivePolicy::OnProcessNodeRemoved(
     return;
   }
 
-  // Check if it's in the "active" set.
+  // We do not decrement the RenderProcessHost's pending reuse ref count here.
+  // The process node is only removed when the RenderProcessHost is being
+  // destroyed or the PerformanceManagerRegistry is tearing down. In both cases,
+  // the ref count is moot. Safely untrack the process node.
+  //
+  // Erase from the active set if present.
   if (tracked_processes_with_frames_.erase(process_node)) {
-    content::RenderProcessHost* render_process_host =
-        process_node->GetRenderProcessHostProxy().Get();
-    CHECK(render_process_host);
-    render_process_host->DecrementPendingReuseRefCount();
     return;
   }
 
-  // Check if it's in the "empty" map.
-  if (empty_kept_alive_processes_.erase(process_node)) {
-    content::RenderProcessHost* render_process_host =
-        process_node->GetRenderProcessHostProxy().Get();
-    CHECK(render_process_host);
-    render_process_host->DecrementPendingReuseRefCount();
-  }
+  // Otherwise, erase from the empty keep-alive map if present.
+  empty_kept_alive_processes_.erase(process_node);
 }
 
 // Evict the oldest processes until we are under the limit.
@@ -214,7 +213,7 @@ void TransientKeepAlivePolicy::EnforceKeepAliveCountLimit() {
 void TransientKeepAlivePolicy::ReleaseKeepAlive(
     const ProcessNode* process_node) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // This function is called when a timer expires or by eviction.
+  // This function is called when a timer expires.
   // The process must be in the `empty_kept_alive_processes_` map.
   size_t removed = empty_kept_alive_processes_.erase(process_node);
   CHECK_EQ(removed, 1u);
@@ -225,7 +224,21 @@ void TransientKeepAlivePolicy::ReleaseKeepAlive(
   content::RenderProcessHost* render_process_host =
       process_node->GetRenderProcessHostProxy().Get();
   CHECK(render_process_host);
-  render_process_host->DecrementPendingReuseRefCount();
+  content::ChildProcessId render_process_host_id =
+      render_process_host->GetID();
+
+  // Post the ref count decrement to the UI thread to avoid re-entrancy.
+  // A synchronous DecrementPendingReuseRefCount() can trigger Cleanup() ->
+  // process destruction -> OnProcessNodeRemoved(), which would re-enter this
+  // policy while modifying data structures.
+  // TODO(crbug.com/441949788): Consider using BEST_EFFORT priority here so
+  // the expensive Cleanup() work can be deferred by the scheduler. Longer
+  // term,
+  // DecrementPendingReuseRefCount() itself could post Cleanup() internally so
+  // callers need not worry about re-entrancy.
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(&DecrementPendingReuseRefCountById,
+                                render_process_host_id));
 }
 
 // Finds and evicts the single oldest process being kept alive. This is called

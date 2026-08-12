@@ -38,6 +38,7 @@ class URLLoaderThrottle;
 
 namespace content {
 
+class DedicatedWorkerHost;
 class DevToolsAgentHostImpl;
 class RenderFrameHostImpl;
 class ServiceWorkerContextWrapper;
@@ -126,6 +127,7 @@ class WorkerScriptFetcher : public network::mojom::URLLoaderClient {
       const GURL& initial_request_url,
       RenderFrameHostImpl& ancestor_render_frame_host,
       RenderFrameHostImpl* creator_render_frame_host,
+      DedicatedWorkerHost* creator_worker,
       const net::SiteForCookies& site_for_cookies,
       const url::Origin& request_initiator,
       const blink::StorageKey& request_initiator_storage_key,
@@ -135,6 +137,7 @@ class WorkerScriptFetcher : public network::mojom::URLLoaderClient {
       blink::mojom::FetchClientSettingsObjectPtr
           outside_fetch_client_settings_object,
       network::mojom::RequestDestination request_destination,
+      bool file_url_support,
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
       ServiceWorkerMainResourceHandle* service_worker_handle,
       scoped_refptr<network::SharedURLLoaderFactory> blob_url_loader_factory,
@@ -146,6 +149,9 @@ class WorkerScriptFetcher : public network::mojom::URLLoaderClient {
       const base::UnguessableToken& devtools_worker_token,
       bool require_cross_site_request_for_cookies,
       net::StorageAccessApiStatus storage_access_api_status,
+      const base::UnguessableToken& worker_network_restrictions_id,
+      const base::UnguessableToken& creator_network_restrictions_id,
+      std::optional<PolicyContainerPolicies> creator_policies,
       CompletionCallback callback);
 
   // Creates a loader factory bundle. Must be called on the UI thread. For
@@ -158,7 +164,8 @@ class WorkerScriptFetcher : public network::mojom::URLLoaderClient {
                       bool file_support,
                       bool filesystem_url_support,
                       RenderFrameHostImpl* creator_render_frame_host,
-                      const blink::StorageKey& request_initiator_storage_key);
+                      const blink::StorageKey& request_initiator_storage_key,
+                      network::mojom::RequestDestination request_destination);
 
   // Calculates the final response URL from the redirect chain, URLs fetched by
   // the service worker and the initial request URL. The logic is mostly based
@@ -214,6 +221,9 @@ class WorkerScriptFetcher : public network::mojom::URLLoaderClient {
       DevToolsAgentHostImpl* devtools_agent_host,
       const base::UnguessableToken& devtools_worker_token,
       bool require_cross_site_request_for_cookies,
+      const base::UnguessableToken& worker_network_restrictions_id,
+      const base::UnguessableToken& creator_network_restrictions_id,
+      std::optional<PolicyContainerPolicies> creator_policies,
       WorkerScriptFetcher::CompletionCallback callback);
 
   void Start(std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles);

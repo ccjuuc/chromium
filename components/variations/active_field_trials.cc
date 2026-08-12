@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial.h"
 #include "base/no_destructor.h"
 #include "base/process/launch.h"
@@ -100,13 +99,15 @@ void GetFieldTrialActiveGroupIdsForActiveGroups(
 }
 
 void GetFieldTrialActiveGroupIds(std::string_view suffix,
-                                 std::vector<ActiveGroupId>* name_group_ids) {
+                                 std::vector<ActiveGroupId>* name_group_ids,
+                                 bool include_runtime_overrides) {
   DCHECK(name_group_ids->empty());
   // A note on thread safety: Since GetActiveFieldTrialGroups() is thread
   // safe, and we operate on a separate list of that data, this function is
   // technically thread safe as well, with respect to the FieldTrialList data.
   base::FieldTrial::ActiveGroups active_groups;
-  base::FieldTrialList::GetActiveFieldTrialGroups(&active_groups);
+  base::FieldTrialList::GetActiveFieldTrialGroups(&active_groups,
+                                                  include_runtime_overrides);
   GetFieldTrialActiveGroupIdsForActiveGroups(suffix, active_groups,
                                              name_group_ids);
 }
@@ -158,12 +159,12 @@ bool IsInSyntheticTrialGroup(std::string_view trial_name,
                              std::string_view trial_group) {
   std::vector<std::string> synthetic_trials;
   GetSyntheticTrialGroupIdsAsString(&synthetic_trials);
-  return base::Contains(
+  return std::ranges::contains(
       synthetic_trials,
       base::StringPrintf("%x-%x", HashName(trial_name), HashName(trial_group)));
 }
 
-void SetSeedVersion(const std::string& seed_version) {
+void SetSeedVersion(std::string_view seed_version) {
   GetSeedVersionInternal() = seed_version;
   SetVariationsSeedVersionCrashKey(seed_version);
 }
@@ -174,17 +175,11 @@ const std::string& GetSeedVersion() {
 
 #if BUILDFLAG(USE_BLINK)
 void PopulateLaunchOptionsWithVariationsInfo(
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-    base::GlobalDescriptors::Key descriptor_key,
-    base::ScopedFD& descriptor_to_share,
-#endif
+    base::shared_memory::SharedMemorySwitch* shared_memory_switch,
     base::CommandLine* command_line,
     base::LaunchOptions* launch_options) {
   base::FieldTrialList::PopulateLaunchOptionsWithFieldTrialState(
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-      descriptor_key, descriptor_to_share,
-#endif
-      command_line, launch_options);
+      shared_memory_switch, command_line, launch_options);
   command_line->AppendSwitchASCII(switches::kVariationsSeedVersion,
                                   GetSeedVersion());
 }

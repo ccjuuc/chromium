@@ -42,18 +42,16 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.FeatureList;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.automotivetoolbar.AutomotiveBackButtonToolbarCoordinator;
 import org.chromium.chrome.browser.base.SplitChromeApplication;
-import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutUtils;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.language.GlobalAppLocaleController;
@@ -85,6 +83,7 @@ import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManagerHolder;
 import org.chromium.ui.util.AttrUtils;
+import org.chromium.ui.util.StyleUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -126,13 +125,13 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         int NONE = -1;
     }
 
-    private final SettableObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier =
-            ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<ModalDialogManager>
+            mModalDialogManagerSupplier = ObservableSuppliers.createMonotonic();
     protected final OneshotSupplierImpl<SystemBarColorHelper> mSystemBarColorHelperSupplier =
             new OneshotSupplierImpl<>();
     // TODO(crbug.com/435269657): Update this and the ChromeActivity equivalent to OneShotSupplier
-    protected final ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeControllerSupplier =
-            new ObservableSupplierImpl<>();
+    protected final SettableMonotonicObservableSupplier<EdgeToEdgeController>
+            mEdgeToEdgeControllerSupplier = ObservableSuppliers.createMonotonic();
     // Manages activity results for this activity.
     private final ActivityResultTrackerImpl mActivityResultTracker =
             new ActivityResultTrackerImpl(
@@ -160,7 +159,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         ClassLoader chromeModuleClassLoader = ChromeBaseAppCompatActivity.class.getClassLoader();
         Context appContext = ContextUtils.getApplicationContext();
         if (!chromeModuleClassLoader.equals(appContext.getClassLoader())) {
-            // This should only happen on Android O. See crbug.com/1146745 for more info.
+            // This should only happen on Android O. See crbug.com/40053810 for more info.
             throw new IllegalStateException(
                     "ClassLoader mismatch detected.\nA: "
                             + chromeModuleClassLoader
@@ -182,10 +181,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         Configuration config = new Configuration();
         // Pre-Android O, fontScale gets initialized to 1 in the constructor. Set it to 0 so
         // that applyOverrideConfiguration() does not interpret it as an overridden value.
-        // https://crbug.com/834191
+        // https://crbug.com/40572279
         config.fontScale = 0;
         // NightMode and other applyOverrides must be done before onCreate in attachBaseContext.
-        // https://crbug.com/1139760
+        // https://crbug.com/40726193
         if (applyOverrides(newBase, config)) {
             applyOverrideConfiguration(config);
             if (!sIsTabletDeterminationMismatchRecord) {
@@ -210,6 +209,13 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         BundleUtils.restoreLoadedSplits(savedInstanceState);
+        if (savedInstanceState != null) {
+            Bundle fragmentsState = savedInstanceState.getBundle("android:support:fragments");
+            if (fragmentsState != null) {
+                setRecursiveClassLoader(
+                        fragmentsState, BundleUtils.getSplitCompatClassLoader());
+            }
+        }
         mInMultiWindowMode = isInMultiWindowMode();
 
         mEdgeToEdgeStateProvider = new EdgeToEdgeStateProvider(getWindow());
@@ -245,9 +251,10 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
                         mEdgeToEdgeStateProvider,
                         createSystemBarColorHelperSupplier(),
                         shouldDrawEdgeToEdgeOnCreate(),
-                        EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled());
+                        canColorStatusBarWithEdgeToEdgeHelper(),
+                        canSetTransparentStatusBarWithoutDelegate());
 
-        if (EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled()) {
+        if (canColorStatusBarWithEdgeToEdgeHelper()) {
             initializeSystemBarColors(mEdgeToEdgeManager.getEdgeToEdgeSystemBarColorHelper());
         }
 
@@ -265,11 +272,38 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
                     R.anim.shared_x_axis_close_exit,
                     SemanticColorUtils.getDefaultBgColor(this));
         }
+    }
 
-        if (ChromeFeatureList.sNewTabPageCustomizationV2.isEnabled()) {
-            mNtpThemeStateObserver = () -> recreate();
-            NtpThemeStateProvider.getInstance().addObserver(mNtpThemeStateObserver);
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        if (NtpCustomizationUtils.isNtpThemeCustomizationEnabled()) {
+            if (mNtpThemeStateObserver == null) {
+                mNtpThemeStateObserver = () -> recreate();
+                NtpThemeStateProvider.getInstance().addObserver(mNtpThemeStateObserver);
+            }
         }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+
+        if (mNtpThemeStateObserver != null) {
+            NtpThemeStateProvider.getInstance().removeObserver(mNtpThemeStateObserver);
+            mNtpThemeStateObserver = null;
+        }
+    }
+
+    /** Returns whether the edge-to-edge system bar helper may update the status bar color. */
+    protected boolean canColorStatusBarWithEdgeToEdgeHelper() {
+        return EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled();
+    }
+
+    /** Returns whether the helper may make the status bar transparent without a delegate helper. */
+    protected boolean canSetTransparentStatusBarWithoutDelegate() {
+        return false;
     }
 
     /**
@@ -289,7 +323,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
      * instance for that supplier, or creates a controller creator that will create and supply an
      * EdgeToEdgeController when all conditions are met for the device to draw edge-to-edge.
      */
-    public ObservableSupplier<EdgeToEdgeController> getEdgeToEdgeSupplier() {
+    public MonotonicObservableSupplier<EdgeToEdgeController> getEdgeToEdgeSupplier() {
         if (ChromeFeatureList.sEdgeToEdgeMonitorConfigurations.isEnabled()) {
             if (mEdgeToEdgeControllerCreator == null) {
                 mEdgeToEdgeControllerCreator =
@@ -351,10 +385,6 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
             mEdgeToEdgeControllerCreator.destroy();
             mEdgeToEdgeControllerCreator = null;
         }
-        if (mNtpThemeStateObserver != null) {
-            NtpThemeStateProvider.getInstance().removeObserver(mNtpThemeStateObserver);
-            mNtpThemeStateObserver = null;
-        }
         super.onDestroy();
     }
 
@@ -380,7 +410,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
     protected void onRestoreInstanceState(@Nullable Bundle state) {
         if (state != null) {
             // Ensure that classes from previously loaded splits can be read from the bundle.
-            // https://crbug.com/1382227
+            // https://crbug.com/40877199
             ClassLoader splitClassLoader = BundleUtils.getSplitCompatClassLoader();
             state.setClassLoader(splitClassLoader);
             // See: https://cs.android.com/search?q=Activity.java%20symbol:onRestoreInstanceState
@@ -420,7 +450,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
         NightModeUtils.updateConfigurationForNightMode(
                 this, mNightModeStateProvider.isInNightMode(), newConfig);
         // newConfig will have the default system locale so reapply the app locale override if
-        // needed: https://crbug.com/1248944
+        // needed: https://crbug.com/40197440
         GlobalAppLocaleController.getInstance().maybeOverrideContextConfig(this);
     }
 
@@ -443,7 +473,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
     /**
      * Returns the supplier of {@link ModalDialogManager} that manages the display of modal dialogs.
      */
-    public ObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier() {
+    public MonotonicObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier() {
         return mModalDialogManagerSupplier;
     }
 
@@ -465,7 +495,8 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
                             EdgeToEdgeUtils.isUseBackupNavbarInsetsEnabled(),
                             EdgeToEdgeFieldTrialImpl.getBackupNavbarInsetsOverrides(),
                             ChromeFeatureList.sEdgeToEdgeUseBackupNavbarInsetsUseGestures
-                                    .getValue());
+                                    .getValue(),
+                            ChromeFeatureList.sEdgeToEdgeExtraLogs.isEnabled());
         }
         return mEdgeToEdgeLayoutCoordinator;
     }
@@ -516,7 +547,7 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
             // 1. To prevent multi-window from hiding the tabstrip when on a tablet.
             // 2. To ensure mIsTablet only needs to be set once. Since the override lasts for the
             // life of the activity, it will never change via onConfigurationUpdated().
-            // See crbug.com/588838, crbug.com/662338, crbug.com/780593.
+            // See crbug.com/40457992, crbug.com/40492108, crbug.com/41353023.
             overrideConfig.smallestScreenWidthDp =
                     DisplayUtil.getCurrentSmallestScreenWidth(baseContext);
             result |= true;
@@ -617,11 +648,8 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
             applySingleThemeOverlay(R.style.ThemeOverlay_BrowserUI_OptOutEdgeToEdge);
         }
 
-        if (ChromeFeatureList.sAndroidDesktopDensity.isEnabled() && DeviceInfo.isDesktop()) {
+        if (StyleUtils.shouldApplyDesktopDensity()) {
             applySingleThemeOverlay(R.style.ThemeOverlay_BrowserUI_DesktopDensity);
-        }
-
-        if (StripLayoutUtils.shouldApplyMoreDensity()) {
             applySingleThemeOverlay(R.style.ThemeOverlay_BrowserUI_DesktopDensity_TabStrip);
         }
     }
@@ -772,7 +800,8 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
      * Returns the {@link ActivityResultTracker} for launching new activities and watching for their
      * result.
      */
-    protected ActivityResultTracker getActivityResultTracker() {
+    @VisibleForTesting
+    public ActivityResultTracker getActivityResultTracker() {
         return mActivityResultTracker;
     }
 
@@ -786,7 +815,9 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
     private InsetObserver createInsetObserver() {
         return new InsetObserver(
                 new ImmutableWeakReference<>(getWindow().getDecorView().getRootView()),
-                ChromeFeatureList.sAccountForSuppressedKeyboardInsets.isEnabled());
+                new ImmutableWeakReference<>(this),
+                ChromeFeatureList.sAccountForSuppressedKeyboardInsets.isEnabled(),
+                ChromeFeatureList.sEdgeToEdgeExtraLogs.isEnabled());
     }
 
     private void setAutomotiveToolbarBackButtonAction() {
@@ -815,6 +846,24 @@ public class ChromeBaseAppCompatActivity extends AppCompatActivity
             NtpCustomizationUtils.applyDynamicColorToActivity(this, primaryColor);
         } else {
             DynamicColors.applyToActivityIfAvailable(this);
+        }
+    }
+
+    // Recursively sets the classloader on the given bundle and all nested bundles.
+    // Note: Iterating through a bundle can cause early unmarshalling, which can have side
+    // effects on framework-redirected data like intents (see crbug.com/527604007).
+    // It is safer to only call this on targeted nested bundles (like "android:support:fragments").
+    private static void setRecursiveClassLoader(Bundle bundle, ClassLoader classLoader) {
+        bundle.setClassLoader(classLoader);
+        for (String key : bundle.keySet()) {
+            try {
+                Object value = bundle.get(key);
+                if (value instanceof Bundle) {
+                    setRecursiveClassLoader((Bundle) value, classLoader);
+                }
+            } catch (Exception e) {
+                // Ignore any unmarshalling errors for unknown types.
+            }
         }
     }
 }

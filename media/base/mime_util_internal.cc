@@ -377,9 +377,9 @@ void MimeUtil::AddSupportedMediaFormats() {
   mkv_audio_codecs.emplace(DTSE);
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
   mp4_audio_codecs.emplace(IAMF);
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 
   CodecSet mp4_codecs(mp4_audio_codecs);
   mp4_codecs.insert(mp4_video_codecs.begin(), mp4_video_codecs.end());
@@ -662,8 +662,10 @@ bool MimeUtil::IsCodecSupportedOnAndroid(Codec codec,
 #endif
 
     case AC4:
-    case IAMF:
       return false;
+
+    case IAMF:
+      return !is_encrypted && IsIamfAudioDecodingSupported();
   }
 
   return false;
@@ -886,7 +888,7 @@ bool MimeUtil::ParseCodecHelper(std::string_view mime_type_lower_case,
   }
 #endif
 
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
   if (ParseIamfCodecId(codec_id.data(), nullptr, nullptr)) {
     // TODO(crbug.com/438106645): We'll need to handle IAMF profiles correctly
     // here. Especially if they end up containing xHE-AAC audio.
@@ -918,7 +920,13 @@ SupportsType MimeUtil::IsCodecSupported(std::string_view mime_type_lower_case,
       // http://crbug.com/784993
       video_codec != VideoCodec::kAV1) {
     DCHECK_NE(video_profile, VIDEO_CODEC_PROFILE_UNKNOWN);
-    DCHECK_GT(video_level, 0u);
+
+    // Zero isn't a valid HEVC level, but it appears in the wild and is
+    // supported by Safari, so treat it as has having no level. See
+    // https://crbug.com/491512328
+    if (video_codec != VideoCodec::kHEVC) {
+      DCHECK_GT(video_level, 0u);
+    }
   }
 
   // Check for cases of ambiguous platform support.

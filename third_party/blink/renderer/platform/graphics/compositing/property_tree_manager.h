@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "cc/input/main_thread_scrolling_reason.h"
 #include "cc/layers/layer_collections.h"
 #include "third_party/blink/renderer/platform/graphics/compositor_element_id.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
@@ -163,6 +164,9 @@ class PropertyTreeManager {
   static bool DirectlyUpdatePageScaleTransform(
       cc::LayerTreeHost&,
       const TransformPaintPropertyNode&);
+  static void DirectlyUpdateScrollingContentsCullRect(
+      cc::LayerTreeHost&,
+      const ScrollPaintPropertyNode&);
 
   // This function only updates the cc scroll tree scroll offset and does not
   // update the cc transform node's scroll offset.
@@ -177,8 +181,9 @@ class PropertyTreeManager {
   static void DropCompositorScrollDeltaNextCommit(cc::LayerTreeHost&,
                                                   CompositorElementId);
 
-  static uint32_t GetMainThreadRepaintReasons(const cc::LayerTreeHost&,
-                                              const ScrollPaintPropertyNode&);
+  static cc::MainThreadRepaintReasons GetMainThreadRepaintReasons(
+      const cc::LayerTreeHost&,
+      const ScrollPaintPropertyNode&);
   // TODO(crbug.com/40517276): Remove this function after launching
   // RasterInducingScroll.
   static bool UsesCompositedScrolling(const cc::LayerTreeHost&,
@@ -198,7 +203,8 @@ class PropertyTreeManager {
   // here once the work is ready.
   void UpdateConditionalRenderSurfaceReasons(
       const cc::LayerList& layers,
-      const HashSet<int>& layers_having_text);
+      const HashSet<int>& layers_having_text,
+      const HashSet<int>& layers_having_video);
 
   void EnsureCompositorNodesForAnchorPositionAdjustmentContainers(
       const StackScrollTranslationVector& scroll_translations);
@@ -366,9 +372,11 @@ class PropertyTreeManager {
 
   void UpdatePixelMovingFilterClipExpanders();
 
-  uint32_t NonCompositedMainThreadRepaintReasons(
+  cc::MainThreadRepaintReasons NonCompositedMainThreadRepaintReasons(
       const TransformPaintPropertyNode& scroll_translation) const;
 
+  // The current effect state. Virtually it's the top of the effect stack if
+  // it and effect_stack_ are treated as a whole stack.
   EffectState current_;
   PropertyTreeManagerClient& client_;
 
@@ -386,9 +394,6 @@ class PropertyTreeManager {
   cc::Layer& root_layer_;
 
   LayerListBuilder& layer_list_builder_;
-
-  // The current effect state. Virtually it's the top of the effect stack if
-  // it and effect_stack_ are treated as a whole stack.
 
   // This keep track of cc effect stack. Whenever a new cc effect is nested,
   // a new entry is pushed, and the entry will be popped when the effect closed.

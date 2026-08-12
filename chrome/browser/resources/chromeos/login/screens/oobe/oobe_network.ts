@@ -132,14 +132,14 @@ class NetworkScreen extends NetworkScreenBase {
     return ['setError', 'setQuickStartEntryPointVisibility'];
   }
 
-  private errorMessage: string;
-  private isNetworkConnected: boolean;
-  private ssid: string;
-  private enableWifiScans: boolean;
-  private isQuickStartVisible: boolean;
-  private useQuickStartSubtitle: boolean;
-  private useQuickStartWiFiErrorStrings: boolean;
-  private quickStartCancelButtonVisible: boolean;
+  declare private errorMessage: string;
+  declare private isNetworkConnected: boolean;
+  declare private ssid: string;
+  declare private enableWifiScans: boolean;
+  declare private isQuickStartVisible: boolean;
+  declare private useQuickStartSubtitle: boolean;
+  declare private useQuickStartWiFiErrorStrings: boolean;
+  declare private quickStartCancelButtonVisible: boolean;
 
   constructor() {
     super();
@@ -295,7 +295,7 @@ class NetworkScreen extends NetworkScreenBase {
       }
     }, 300);
     // Timeout is a workaround to correctly propagate focus to
-    // RendererFrameHostImpl see https://crbug.com/955129 for details.
+    // RendererFrameHostImpl see https://crbug.com/40624127 for details.
   }
 
   /**

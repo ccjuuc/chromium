@@ -7,12 +7,14 @@
 #include <cstddef>
 #include <memory>
 
+#include "base/barrier_callback.h"
 #include "base/check_deref.h"
 #include "base/containers/extend.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/types/expected_macros.h"
 #include "build/build_config.h"
@@ -33,13 +35,10 @@ namespace {
 
 constexpr base::TimeDelta kGarbageCollectionDelay = base::Minutes(2);
 
-std::string GetApplicationTag(crypto::UnexportableKeyProvider::Config config) {
-#if BUILDFLAG(IS_MAC)
-  return std::move(config.application_tag);
-#else
-  return std::string();
-#endif  // BUILDFLAG(IS_MAC)
-}
+constexpr std::string_view kObsoleteOTRProfilesHistogramPrefix =
+    "Crypto.UnexportableKeys.GarbageCollection.ObsoleteOTRProfiles.";
+constexpr std::string_view kDestroyedOTRProfilesHistogramPrefix =
+    "Crypto.UnexportableKeys.GarbageCollection.DestroyedOTRProfiles.";
 
 class OriginalProfileGarbageCollectionService : public KeyedService {
  public:
@@ -59,18 +58,24 @@ class OriginalProfileGarbageCollectionService : public KeyedService {
 
  private:
   void StartGarbageCollection() {
-    service_->GetAllSigningKeysForGarbageCollectionSlowlyAsync(
+    service_->GetAllKeysForGarbageCollectionSlowlyAsync(
         BackgroundTaskPriority::kBestEffort,
         base::BindOnce(&OriginalProfileGarbageCollectionService::
-                           OnGetAllSigningKeysForGarbageCollection,
+                           OnGetAllKeysForGarbageCollection,
                        weak_ptr_factory_.GetWeakPtr()));
   }
 
-  void OnGetAllSigningKeysForGarbageCollection(
-      ServiceErrorOr<std::vector<UnexportableKeyId>> key_ids_or_error) {
+  void OnGetAllKeysForGarbageCollection(
+      ServiceErrorOr<std::vector<UnexportableSigningKeyId>> key_ids_or_error) {
     if (!key_ids_or_error.has_value() || key_ids_or_error->empty()) {
       return;
     }
+
+    std::vector<UnexportableSigningKeyId>& key_ids = *key_ids_or_error;
+    const size_t key_count = key_ids.size();
+    base::UmaHistogramCounts100(
+        base::StrCat({kObsoleteOTRProfilesHistogramPrefix, "TotalKeyCount"}),
+        key_count);
 
     // Start by creating a set of application_tag prefixes belonging to all tags
     // that correspond to still active profiles (original and all current OTR
@@ -84,26 +89,25 @@ class OriginalProfileGarbageCollectionService : public KeyedService {
 
     // Remove all key ids where no tag could be obtained, or the prefix is still
     // active.
-    std::vector<UnexportableKeyId>& key_ids = *key_ids_or_error;
-    std::erase_if(key_ids, [&](UnexportableKeyId key_id) -> bool {
-      ASSIGN_OR_RETURN(std::string key_tag, service_->GetKeyTag(key_id),
-                       [](auto) { return true; });
-      // Since `active_application_tag_prefixes` is sorted, a possible prefix of
-      // `key_tag` must come right before `key_tag` if it was in the set.
-      // TODO(crbug.com/455538832): This logic is shared between the garbage
-      // collection classes. Move it to a shared location and add tests.
-      auto it = active_application_tag_prefixes.upper_bound(key_tag);
-      return it != active_application_tag_prefixes.begin() &&
-             key_tag.starts_with(*std::prev(it));
-    });
+    size_t used_key_count = FilterUnexportableKeysByActiveApplicationTags(
+        key_ids, *service_, active_application_tag_prefixes);
 
-    // Schedule the rest for deletion.
-    // TODO(crbug.com/455538832): Add a bulk deletion API to the service.
-    for (UnexportableKeyId key_id : key_ids) {
-      service_->DeleteKeySlowlyAsync(
-          // TODO(crbug.com/455538352): Add metrics.
-          key_id, BackgroundTaskPriority::kBestEffort, base::DoNothing());
-    }
+    base::UmaHistogramCounts100(
+        base::StrCat({kObsoleteOTRProfilesHistogramPrefix, "UsedKeyCount"}),
+        used_key_count);
+
+    base::UmaHistogramCounts100(
+        base::StrCat({kObsoleteOTRProfilesHistogramPrefix, "ObsoleteKeyCount"}),
+        key_ids.size());
+
+    service_->DeleteKeysSlowlyAsync(
+        key_ids, BackgroundTaskPriority::kBestEffort,
+        base::BindOnce([](ServiceErrorOr<size_t> result) {
+          base::UmaHistogramCounts100(
+              base::StrCat({kObsoleteOTRProfilesHistogramPrefix,
+                            "ObsoleteKeyDeletionCount"}),
+              result.value_or(0));
+        }));
   }
 
   const raw_ref<Profile> profile_;
@@ -128,12 +132,18 @@ class OffTheRecordGarbageCollectionService : public KeyedService {
   void Shutdown() override {
     // Delete all keys for OTR profiles.
     service_->DeleteAllKeysSlowlyAsync(
-        BackgroundTaskPriority::kBestEffort,
         base::BindOnce(
             [](std::unique_ptr<UnexportableKeyService>,
-               ServiceErrorOr<size_t>) {
-              // TODO(crbug.com/455538352): Add metrics.
+               ServiceErrorOr<size_t> count_or_error) {
+              if (count_or_error.has_value()) {
+                base::UmaHistogramCounts100(
+                    base::StrCat({kDestroyedOTRProfilesHistogramPrefix,
+                                  "ObsoleteKeyDeletionCount"}),
+                    *count_or_error);
+              }
             },
+            // Transfer ownership of `service_` to the callback to ensure that
+            // the callback is run, even after `this` is destroyed.
             std::move(service_)));
   }
 

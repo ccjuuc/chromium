@@ -193,3 +193,26 @@ e.g.
 $ export SISO_PATH=$HOME/go/bin/siso
 ```
 
+## Btrfs Workspaces (Path Virtualization)
+
+If your workspace is located on a `btrfs` filesystem (e.g., when using
+virtualized instant workspaces like Rift), you should enable Siso path
+virtualization. This allows Siso to reuse build artifacts and file states from
+the original base workspace by making the workspace directory appear at the
+same virtual path, maximizing cache hits.
+
+To enable path virtualization, you can:
+
+* Use the environment variable `DEPOT_TOOLS_USE_VIRTUAL_BUILD_PATH=1`
+when running `autoninja`:
+
+  ```shell
+  $ DEPOT_TOOLS_USE_VIRTUAL_BUILD_PATH=1 autoninja -C out/Default chrome
+  ```
+
+* Or run under `run_in_virtual_path`.
+
+  ```shell
+  $ run_in_virtual_path autoninja -C out/Default chrome
+  ```
+

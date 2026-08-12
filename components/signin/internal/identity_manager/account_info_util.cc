@@ -4,19 +4,21 @@
 
 #include "components/signin/internal/identity_manager/account_info_util.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/signin_constants.h"
@@ -50,6 +52,7 @@ namespace local {
 using ::kNoPictureURLFound;
 using ::signin::kAccountIdKey;
 using ::signin::kLastDownloadedImageURLWithSizeKey;
+using ::signin::kAccountCapabilityOverridesKey;
 using ::signin::constants::kNoHostedDomainFound;
 constexpr std::string_view kAccountEmailKey = "email";
 constexpr std::string_view kAccountGaiaKey = "gaia";
@@ -84,7 +87,7 @@ signin::Tribool ParseTribool(std::optional<int> int_value) {
 
 // Returns a non-empty string found in `dict` by `key` or nullptr if a string is
 // not found or `key` contains an empty string.
-const std::string* FindStringIfNonEmpty(const base::Value::Dict& dict,
+const std::string* FindStringIfNonEmpty(const base::DictValue& dict,
                                         std::string_view key) {
   const std::string* value = dict.FindString(key);
   if (!value) {
@@ -96,7 +99,7 @@ const std::string* FindStringIfNonEmpty(const base::Value::Dict& dict,
 }  // namespace
 
 std::optional<AccountInfo> AccountInfoFromUserInfo(
-    const base::Value::Dict& user_info) {
+    const base::DictValue& user_info) {
   // Both |gaia_id| and |email| are required value in the JSON reply, so
   // return empty result if any is missing or is empty.
   const std::string* gaia_id_value =
@@ -150,8 +153,8 @@ std::optional<AccountInfo> AccountInfoFromUserInfo(
 }
 
 std::optional<AccountCapabilities> AccountCapabilitiesFromServerResponse(
-    const base::Value::Dict& account_capabilities) {
-  const base::Value::List* list =
+    const base::DictValue& account_capabilities) {
+  const base::ListValue* list =
       account_capabilities.FindList(server::kAccountCapabilitiesListKey);
   if (!list) {
     return std::nullopt;
@@ -173,7 +176,7 @@ std::optional<AccountCapabilities> AccountCapabilitiesFromServerResponse(
     }
 
     // Add the capability to the map if it's supported in Chrome.
-    if (base::Contains(
+    if (std::ranges::contains(
             AccountCapabilities::GetSupportedAccountCapabilityNames(), *name)) {
       capabilities_map.insert({*name, *boolean_value});
     }
@@ -182,32 +185,51 @@ std::optional<AccountCapabilities> AccountCapabilitiesFromServerResponse(
   return AccountCapabilities(std::move(capabilities_map));
 }
 
-base::Value::Dict SerializeAccountCapabilities(
+base::DictValue SerializeAccountCapabilities(
     const AccountCapabilities& account_capabilities) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   for (std::string_view name :
        AccountCapabilities::GetSupportedAccountCapabilityNames()) {
     signin::Tribool capability_state =
-        account_capabilities.GetCapabilityByName(name);
+        account_capabilities.GetFetchedCapabilityByName(name);
     dict.Set(name, static_cast<int>(capability_state));
   }
   return dict;
 }
 
 AccountCapabilities DeserializeAccountCapabilities(
-    const base::Value::Dict& dict) {
+    const base::DictValue& capabilities_dict,
+    const base::DictValue& overrides_dict) {
   base::flat_map<std::string, bool> capabilities_map;
   for (std::string_view name :
        AccountCapabilities::GetSupportedAccountCapabilityNames()) {
-    signin::Tribool state = ParseTribool(dict.FindInt(name));
+    signin::Tribool state = ParseTribool(capabilities_dict.FindInt(name));
     if (state != signin::Tribool::kUnknown) {
       capabilities_map.emplace(name, state == signin::Tribool::kTrue);
     }
   }
-  return AccountCapabilities(std::move(capabilities_map));
+  AccountCapabilities account_capabilities =
+      AccountCapabilities(std::move(capabilities_map));
+
+  for (auto [name, value] : overrides_dict) {
+    signin::Tribool state = ParseTribool(value.GetInt());
+    account_capabilities.SetCapabilityOverride(name, state);
+  }
+
+  return account_capabilities;
 }
 
-base::Value::Dict SerializeAccountInfo(const AccountInfo& account_info) {
+base::DictValue SerializeAccountCapabilityOverrides(
+    const AccountCapabilities& account_capabilities) {
+  base::DictValue dict;
+  for (const auto& [name, value] :
+       account_capabilities.GetCapabilityOverrides()) {
+    dict.Set(name, static_cast<int>(value));
+  }
+  return dict;
+}
+
+base::DictValue SerializeAccountInfo(const AccountInfo& account_info) {
   std::string hosted_domain_to_set;
   if (std::optional<std::string_view> hosted_domain =
           account_info.GetHostedDomain()) {
@@ -220,43 +242,63 @@ base::Value::Dict SerializeAccountInfo(const AccountInfo& account_info) {
     avatar_url_to_set = avatar_url->empty() ? local::kNoPictureURLFound
                                             : std::string(*avatar_url);
   }
-  return base::Value::Dict()
-      .Set(local::kAccountIdKey, account_info.GetAccountId().ToString())
-      .Set(local::kAccountEmailKey, account_info.GetEmail())
-      .Set(local::kAccountGaiaKey, account_info.GetGaiaId().ToString())
-      .Set(local::kAccountHostedDomainKey, hosted_domain_to_set)
-      .Set(local::kAccountFullNameKey, account_info.GetFullName().value_or(""))
-      .Set(local::kAccountGivenNameKey,
-           account_info.GetGivenName().value_or(""))
-      .Set(local::kAccountLocaleKey, account_info.GetLocale().value_or(""))
-      .Set(local::kAccountPictureURLKey, avatar_url_to_set)
-      .Set(local::kAccountChildAttributeKey,
-           static_cast<int>(account_info.IsChildAccount()))
-      .Set(local::kAdvancedProtectionAccountStatusKey,
-           account_info.IsUnderAdvancedProtection())
-      .Set(local::kAccountAccessPoint,
-           static_cast<int>(account_info.access_point))
-      .Set(local::kLastDownloadedImageURLWithSizeKey,
-           account_info.GetLastDownloadedAvatarUrlWithSize().value_or(""))
-      .Set(local::kAccountCapabilitiesKey,
-           SerializeAccountCapabilities(account_info.GetAccountCapabilities()));
+  base::DictValue result;
+  result.Set(local::kAccountIdKey, account_info.GetAccountId().ToString());
+  result.Set(local::kAccountEmailKey, account_info.GetEmail());
+  result.Set(local::kAccountGaiaKey, account_info.GetGaiaId().ToString());
+  result.Set(local::kAccountHostedDomainKey, hosted_domain_to_set);
+  result.Set(local::kAccountFullNameKey,
+             account_info.GetFullName().value_or(""));
+  result.Set(local::kAccountGivenNameKey,
+             account_info.GetGivenName().value_or(""));
+  result.Set(local::kAccountLocaleKey, account_info.GetLocale().value_or(""));
+  result.Set(local::kAccountPictureURLKey, avatar_url_to_set);
+  result.Set(local::kAccountChildAttributeKey,
+             static_cast<int>(account_info.IsChildAccount()));
+  result.Set(local::kAdvancedProtectionAccountStatusKey,
+             account_info.IsUnderAdvancedProtection());
+  result.Set(local::kLastDownloadedImageURLWithSizeKey,
+             account_info.GetLastDownloadedAvatarUrlWithSize().value_or(""));
+  result.Set(
+      local::kAccountCapabilitiesKey,
+      SerializeAccountCapabilities(account_info.GetAccountCapabilities()));
+  result.Set(local::kAccountCapabilityOverridesKey,
+             SerializeAccountCapabilityOverrides(
+                 account_info.GetAccountCapabilities()));
+  if (account_info.access_point.has_value()) {
+    result.Set(local::kAccountAccessPoint,
+               static_cast<int>(account_info.access_point.value()));
+  }
+  return result;
 }
 
-std::optional<AccountInfo> DeserializeAccountInfo(
-    const base::Value::Dict& dict) {
+std::optional<AccountInfo> DeserializeAccountInfo(const base::DictValue& dict) {
   const std::string* account_id =
       FindStringIfNonEmpty(dict, local::kAccountIdKey);
   const std::string* email =
       FindStringIfNonEmpty(dict, local::kAccountEmailKey);
 
-  if (!email || !account_id) {
-    // Cannot build `AccountInfo` without an email or account_id.
+  if (!email) {
+    // Cannot build `AccountInfo` without an email.
+    return std::nullopt;
+  }
+
+  if (!base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement) &&
+      !account_id) {
+    // Cannot build `AccountInfo` without an account_id prior to
+    // kGaiaAccountIdEnforcement.
     return std::nullopt;
   }
 
   const std::string* gaia_id =
       FindStringIfNonEmpty(dict, local::kAccountGaiaKey);
 #if BUILDFLAG(IS_CHROMEOS)
+  // TODO(crbug.com/502237328): Remove BUILDFLAG(IS_CHROMEOS) after rolling out
+  // kGaiaAccountIdEnforcement.
+  if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement) &&
+      !gaia_id) {
+    return std::nullopt;
+  }
   AccountInfo::Builder builder =
       AccountInfo::Builder::CreateWithPossiblyEmptyGaiaId(
           GaiaId(gaia_id ? *gaia_id : std::string()), *email);
@@ -270,8 +312,9 @@ std::optional<AccountInfo> DeserializeAccountInfo(
 
   AccountInfo::Builder builder(GaiaId(*gaia_id), *email);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-  builder.SetAccountId(CoreAccountId::FromString(*account_id));
+  if (!base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
+    builder.SetAccountId(CoreAccountId::FromString(*account_id));
+  }
 
   if (const std::string* hosted_domain =
           FindStringIfNonEmpty(dict, local::kAccountHostedDomainKey)) {
@@ -303,17 +346,22 @@ std::optional<AccountInfo> DeserializeAccountInfo(
           dict.FindBool(local::kAdvancedProtectionAccountStatusKey)) {
     builder.SetIsUnderAdvancedProtection(*is_under_advanced_protection);
   }
-  if (std::optional<int> access_point =
+  if (std::optional<int> access_point_value =
           dict.FindInt(local::kAccountAccessPoint)) {
-    builder.SetLastAuthenticationAccessPoint(
-        static_cast<signin_metrics::AccessPoint>(*access_point));
+    if (std::optional<signin_metrics::AccessPoint> access_point =
+            signin_metrics::AccessPointFromInt(*access_point_value)) {
+      builder.SetLastAuthenticationAccessPoint(*access_point);
+    }
   }
   builder.SetIsChildAccount(
       ParseTribool(dict.FindInt(local::kAccountChildAttributeKey)));
-  if (const base::Value::Dict* capabilities =
+  if (const base::DictValue* capabilities =
           dict.FindDict(local::kAccountCapabilitiesKey)) {
-    builder.UpdateAccountCapabilitiesWith(
-        DeserializeAccountCapabilities(*capabilities));
+    const base::DictValue* overrides =
+        dict.FindDict(local::kAccountCapabilityOverridesKey);
+    const base::DictValue default_overrides;
+    builder.UpdateAccountCapabilitiesWith(DeserializeAccountCapabilities(
+        *capabilities, overrides ? *overrides : default_overrides));
   }
   return builder.Build();
 }

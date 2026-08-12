@@ -33,6 +33,9 @@
 #include "base/no_destructor.h"
 #include "base/process/process_metrics.h"
 #include "base/trace_event/process_memory_dump.h"
+#include "ui/gl/gl_display.h"
+#include "ui/gl/gl_implementation.h"
+#include "ui/gl/gl_utils.h"
 #endif
 
 namespace gpu {
@@ -190,6 +193,15 @@ bool AppleGpuMemoryDumpProvider::OnMemoryDump(
   dump->AddScalar("nonpurgeable_size", "bytes", accelerator_nonpurgeable_size);
   dump->AddScalar("purgeable_size", "bytes", accelerator_purgeable_size);
 
+  if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
+    gl::GLDisplayEGL* display_egl = gl::GetDefaultDisplayEGL();
+    if (display_egl) {
+      dump = pmd->CreateAllocatorDump("gpu/angle/metal");
+      dump->AddScalar("size", "bytes",
+                      display_egl->GetMetalDeviceAllocatedMemory());
+    }
+  }
+
   return true;
 }
 }  // namespace
@@ -235,8 +247,8 @@ void CommandBufferService::Flush(int32_t put_offset,
     return;
   }
 
-  TRACE_EVENT1("gpu", "CommandBufferService:PutChanged", "handler",
-               std::string(handler->GetLogPrefix()));
+  TRACE_EVENT2("gpu", "CommandBufferService:PutChanged", "handler",
+               std::string(handler->GetLogPrefix()), "put_offset", put_offset);
 
   put_offset_ = put_offset;
 
@@ -399,11 +411,6 @@ void CommandBufferService::SetParseError(error::Error error) {
 void CommandBufferService::SetContextLostReason(
     error::ContextLostReason reason) {
   state_.context_lost_reason = reason;
-}
-
-bool CommandBufferService::ShouldYield() {
-  return client_->OnCommandBatchProcessed() ==
-         CommandBufferServiceClient::kPauseExecution;
 }
 
 void CommandBufferService::SetScheduled(bool scheduled) {

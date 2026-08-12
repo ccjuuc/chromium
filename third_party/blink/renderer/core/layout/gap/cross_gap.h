@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/gap/gap_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_offset.h"
+#include "third_party/blink/renderer/core/style/grid_enums.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -78,6 +79,11 @@ class CORE_EXPORT CrossGap {
 
   LogicalOffset GetGapOffset() const { return gap_logical_offset_; }
 
+  LayoutUnit GetGapOffset(GridTrackSizingDirection direction) const {
+    return direction == kForColumns ? gap_logical_offset_.inline_offset
+                                    : gap_logical_offset_.block_offset;
+  }
+
   String ToString(bool verbose = false) const;
 
   void SetEdgeIntersectionState(EdgeIntersectionState state) {
@@ -85,13 +91,9 @@ class CORE_EXPORT CrossGap {
   }
   EdgeIntersectionState GetEdgeIntersectionState() const { return edge_state_; }
 
-  bool StartsAtEdge() const {
-    return edge_state_ == kStart || edge_state_ == kBoth;
-  }
   bool EndsAtEdge() const {
     return edge_state_ == kEnd || edge_state_ == kBoth;
   }
-  bool GapIntersectsContainerEdge() const { return edge_state_ != kNone; }
 
   bool HasGapSegmentStateRanges() const {
     return gap_segment_state_ranges_.has_value();
@@ -105,11 +107,11 @@ class CORE_EXPORT CrossGap {
   void AddGapSegmentStateRange(
       const GapSegmentStateRange& gap_segment_state_range);
 
-  static void UpdateCrossGapRangeEdgeState(
-      Vector<CrossGap>& cross_gaps,
-      wtf_size_t start_index,
-      wtf_size_t end_index,
-      CrossGap::EdgeIntersectionState new_state);
+  bool operator==(const CrossGap& other) const {
+    return gap_logical_offset_ == other.gap_logical_offset_ &&
+           edge_state_ == other.edge_state_ &&
+           gap_segment_state_ranges_ == other.gap_segment_state_ranges_;
+  }
 
   // Updates `gap_segment_state_ranges_` to reflect fragmentation up to
   // `last_track_in_previous_fragment`. During fragmentation, main gaps shift

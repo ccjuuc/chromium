@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/login/login_screen_controller.h"
@@ -23,6 +24,7 @@
 #include "ash/system/model/enterprise_domain_model.h"
 #include "ash/system/model/system_tray_model.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -53,6 +55,7 @@
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_common.h"
@@ -68,7 +71,6 @@
 #include "chrome/browser/ui/webui/ash/login/remote_activity_notification_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/auth_types.h"
@@ -78,6 +80,7 @@
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/account_id/account_id.h"
 #include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "components/user_manager/known_user.h"
@@ -122,7 +125,7 @@ bool AllAllowlistedUsersPresent() {
     return false;
   }
 
-  const base::Value::List* allowlist = nullptr;
+  const base::ListValue* allowlist = nullptr;
   if (!cros_settings->GetList(kAccountsPrefUsers, &allowlist) || !allowlist) {
     return false;
   }
@@ -137,7 +140,7 @@ bool AllAllowlistedUsersPresent() {
   return true;
 }
 
-bool IsLazyWebUILoadingEnabled() {
+bool IsLazyWebUILoadingEnabled(const PrefService& local_state) {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableOobeTestAPI)) {
     // Load WebUI for the test API explicitly because it's Web API.
@@ -145,10 +148,9 @@ bool IsLazyWebUILoadingEnabled() {
   }
 
   // Policy override.
-  if (g_browser_process->local_state()->IsManagedPreference(
-          prefs::kLoginScreenWebUILazyLoading)) {
-    return g_browser_process->local_state()->GetBoolean(
-        ash::prefs::kLoginScreenWebUILazyLoading);
+  if (local_state.IsManagedPreference(
+          ash::prefs::kLoginScreenWebUILazyLoading)) {
+    return local_state.GetBoolean(ash::prefs::kLoginScreenWebUILazyLoading);
   }
 
   return true;
@@ -186,13 +188,27 @@ LoginDisplayHostMojo::AuthState::AuthState(
 LoginDisplayHostMojo::AuthState::~AuthState() = default;
 
 LoginDisplayHostMojo::LoginDisplayHostMojo(
+    PrefService* local_state,
+    ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
     DisplayedScreen displayed_screen,
     bool update_geolocation_usage_allowed)
-    : LoginDisplayHostCommon(update_geolocation_usage_allowed),
-      user_selection_screen_(
-          std::make_unique<ChromeUserSelectionScreen>(displayed_screen)),
+    : LoginDisplayHostCommon(local_state,
+                             application_locale_storage,
+                             shared_url_loader_factory,
+                             browser_policy_connector_ash,
+                             update_geolocation_usage_allowed),
+      user_selection_screen_(std::make_unique<ChromeUserSelectionScreen>(
+          local_state,
+          application_locale_storage,
+          std::move(shared_url_loader_factory),
+          browser_policy_connector_ash,
+          displayed_screen)),
       auth_performer_(UserDataAuthClient::Get()),
-      system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>()) {
+      system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>(
+          browser_policy_connector_ash)),
+      challenge_response_auth_keys_loader_(local_state) {
   CHECK(!g_login_display_host_mojo);
   g_login_display_host_mojo = this;
 
@@ -203,7 +219,7 @@ LoginDisplayHostMojo::LoginDisplayHostMojo(
 
   // Do not load WebUI before it is needed if policy and feature permit.
   // Force load WebUI if feature is not enabled.
-  if (!IsLazyWebUILoadingEnabled() &&
+  if (!IsLazyWebUILoadingEnabled(local_state_.get()) &&
       displayed_screen == DisplayedScreen::SIGN_IN_SCREEN) {
     EnsureOobeDialogLoaded();
   }
@@ -306,12 +322,13 @@ void LoginDisplayHostMojo::SetUsers(const user_manager::UserList& users) {
   // This has to happen after login-prompt-visible, as some reset dialog
   // features (TPM firmware update) depend on system services running, which
   // is in turn blocked on the 'login-prompt-visible' signal.
-  PrefService* local_state = g_browser_process->local_state();
-  if (local_state->GetBoolean(::prefs::kFactoryResetRequested)) {
+  if (local_state_->GetBoolean(ash::prefs::kFactoryResetRequested)) {
     StartWizard(ResetView::kScreenId);
-  } else if (local_state->GetBoolean(::prefs::kDebuggingFeaturesRequested)) {
+  } else if (local_state_->GetBoolean(
+                 ash::prefs::kDebuggingFeaturesRequested)) {
     StartWizard(EnableDebuggingScreenView::kScreenId);
-  } else if (local_state->GetBoolean(::prefs::kEnableAdbSideloadingRequested)) {
+  } else if (local_state_->GetBoolean(
+                 arc::prefs::kEnableAdbSideloadingRequested)) {
     StartWizard(EnableAdbSideloadingScreenView::kScreenId);
   }
 }
@@ -516,7 +533,8 @@ void LoginDisplayHostMojo::OnStartSignInScreen() {
 
   OnStartSignInScreenCommon();
 
-  login::SecurityTokenSessionController::MaybeDisplayLoginScreenNotification();
+  login::SecurityTokenSessionController::MaybeDisplayLoginScreenNotification(
+      local_state_.get());
 }
 
 void LoginDisplayHostMojo::ScheduleStartAuthHubInLoginMode() {
@@ -709,7 +727,7 @@ bool LoginDisplayHostMojo::GetKeyboardRemappedPrefValue(
   if (!focused_pod_account_id_.is_valid()) {
     return false;
   }
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   std::optional<int> opt_val =
       known_user.FindIntPath(focused_pod_account_id_, pref_name);
   if (value && opt_val.has_value()) {
@@ -769,7 +787,8 @@ void LoginDisplayHostMojo::HandleAuthenticateUserWithEasyUnlock(
 void LoginDisplayHostMojo::HandleAuthenticateUserWithChallengeResponse(
     const AccountId& account_id,
     base::OnceCallback<void(bool)> callback) {
-  if (!ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id)) {
+  if (!ChallengeResponseAuthKeysLoader::CanAuthenticateUser(local_state_.get(),
+                                                            account_id)) {
     LOG(ERROR)
         << "Challenge-response authentication isn't supported for the user";
     std::move(callback).Run(false);
@@ -836,7 +855,7 @@ void LoginDisplayHostMojo::OnAuthSuccess(const UserContext& user_context) {
   }
 
   if (gaia_reauth_account_id_.has_value()) {
-    SendReauthReason(gaia_reauth_account_id_.value(),
+    SendReauthReason(local_state_.get(), gaia_reauth_account_id_.value(),
                      false /* password changed */);
     gaia_reauth_account_id_.reset();
   }
@@ -845,7 +864,7 @@ void LoginDisplayHostMojo::OnAuthSuccess(const UserContext& user_context) {
 void LoginDisplayHostMojo::OnPasswordChangeDetectedFor(
     const AccountId& account) {
   if (account.is_valid()) {
-    SendReauthReason(account, true /* password changed */);
+    SendReauthReason(local_state_.get(), account, true /* password changed */);
   }
   gaia_reauth_account_id_.reset();
 }
@@ -899,7 +918,13 @@ void LoginDisplayHostMojo::EnsureOobeDialogLoaded() {
   scoped_observation_.Observe(web_dialog_view);
 
   // Should be created after dialog was created and OobeUI was loaded.
-  wizard_controller_ = std::make_unique<WizardController>(GetWizardContext());
+  // TODO(crbug.com/404133029): Avoid using g_browser_process.
+  wizard_controller_ = std::make_unique<WizardController>(
+      &local_state_.get(), g_browser_process->metrics_service(),
+      &application_locale_storage_.get(), shared_url_loader_factory_.get(),
+      &browser_policy_connector_ash_.get(),
+      g_browser_process->platform_part()->component_manager_ash(),
+      GetWizardContext());
 
   GetLoginScreenCertProviderService()->pin_dialog_manager()->AddPinDialogHost(
       &security_token_pin_dialog_host_login_impl_);
@@ -991,7 +1016,9 @@ void LoginDisplayHostMojo::StopObservingOobeUI() {
 }
 
 void LoginDisplayHostMojo::CreateExistingUserController() {
-  existing_user_controller_ = std::make_unique<ExistingUserController>();
+  existing_user_controller_ = std::make_unique<ExistingUserController>(
+      &local_state_.get(), &application_locale_storage_.get(),
+      shared_url_loader_factory_, &browser_policy_connector_ash_.get());
 
   // We need auth attempt results to notify views-based login screen.
   existing_user_controller_->AddLoginStatusConsumer(this);
@@ -1001,7 +1028,7 @@ void LoginDisplayHostMojo::MaybeUpdateOfflineLoginLinkVisibility(
     const AccountId& account_id) {
   bool offline_limit_expired = false;
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   const std::optional<base::TimeDelta> offline_signin_interval =
       known_user.GetOfflineSigninLimit(account_id);
 

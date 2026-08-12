@@ -4,14 +4,16 @@
 
 #include "components/autofill/core/browser/form_parsing/email_field_parser.h"
 
-#include "base/feature_list.h"
-#include "components/autofill/core/browser/autofill_field.h"
+#include <memory>
+#include <optional>
+#include <utility>
+
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
-#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
-#include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_regex_constants.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
@@ -28,8 +30,6 @@ std::unique_ptr<FormFieldParser> EmailFieldParser::Parse(
     // Try parsing the same field as a loyalty card field.
     scanner.Restore(saved_cursor);
     const bool parsed_loyalty_card =
-        base::FeatureList::IsEnabled(
-            features::kAutofillEnableEmailOrLoyaltyCardsFilling) &&
         ParseField(context, scanner, "LOYALTY_MEMBERSHIP_ID", &match);
     if (parsed_loyalty_card) {
       return std::make_unique<EmailFieldParser>(std::move(*match),
@@ -64,7 +64,7 @@ EmailFieldParser::EmailFieldParser(FieldAndMatchInfo match,
 
 void EmailFieldParser::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
-  AddClassification(match_, email_type_, kBaseEmailParserScore,
+  AddClassification(match_, email_type_, HeuristicParser::kEmail,
                     field_candidates);
 }
 

@@ -5,10 +5,12 @@
 #include "content/browser/worker_host/dedicated_worker_host.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/safety_checks.h"
@@ -25,8 +27,9 @@
 #include "content/browser/loader/url_loader_factory_utils.h"
 #include "content/browser/renderer_host/code_cache_host_impl.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
-#include "content/browser/renderer_host/private_network_access_util.h"
+#include "content/browser/renderer_host/local_network_access_util.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/service_worker/service_worker_client.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_main_resource_handle.h"
@@ -38,13 +41,17 @@
 #include "content/browser/worker_host/dedicated_worker_hosts_for_document.h"
 #include "content/browser/worker_host/dedicated_worker_service_impl.h"
 #include "content/browser/worker_host/worker_script_fetcher.h"
+#include "content/browser/worker_host/worker_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_util.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/service_worker_context.h"
+#include "content/public/browser/site_isolation_policy.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_switches.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "net/base/isolation_info.h"
@@ -61,10 +68,12 @@
 #include "third_party/blink/public/common/service_worker/service_worker_scope_match.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "third_party/blink/public/mojom/loader/fetch_client_settings_object.mojom.h"
 #include "third_party/blink/public/mojom/script_source_location.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "content/browser/direct_sockets/direct_sockets_service_impl.h"
@@ -77,25 +86,25 @@ DedicatedWorkerHost::DedicatedWorkerHost(
     const blink::DedicatedWorkerToken& token,
     RenderProcessHost* worker_process_host,
     DedicatedWorkerCreator creator,
-    GlobalRenderFrameHostId ancestor_render_frame_host_id,
-    const blink::StorageKey& creator_storage_key,
+    WeakDocumentPtr ancestor_document,
+    const url::Origin& creator_origin,
+    const blink::StorageKey& worker_storage_key,
     const url::Origin& renderer_origin,
     const net::IsolationInfo& isolation_info,
     network::mojom::ClientSecurityStatePtr creator_client_security_state,
+    const PolicyContainerPolicies& creator_policies,
     base::WeakPtr<CrossOriginEmbedderPolicyReporter> creator_coep_reporter,
+    const base::UnguessableToken& creator_network_restrictions_id,
     mojo::PendingReceiver<blink::mojom::DedicatedWorkerHost> host,
     net::StorageAccessApiStatus storage_access_api_status)
     : service_(service),
       token_(token),
       worker_process_host_(worker_process_host),
       creator_(creator),
-      ancestor_render_frame_host_id_(ancestor_render_frame_host_id),
-      creator_origin_(creator_storage_key.origin()),
+      ancestor_document_(std::move(ancestor_document)),
+      creator_origin_(creator_origin),
+      worker_storage_key_(worker_storage_key),
       renderer_origin_(renderer_origin),
-      // TODO(crbug.com/40051700): Calculate the worker origin based on
-      // the worker script URL (the worker's storage key should have an opaque
-      // origin if the worker script URL's scheme is data:).
-      storage_key_(creator_storage_key),
       isolation_info_(isolation_info),
       reporting_source_(base::UnguessableToken::Create()),
       creator_client_security_state_(std::move(creator_client_security_state)),
@@ -104,7 +113,10 @@ DedicatedWorkerHost::DedicatedWorkerHost(
       code_cache_host_receivers_(GetProcessHost()
                                      ->GetStoragePartition()
                                      ->GetGeneratedCodeCacheContext()),
-      storage_access_api_status_(storage_access_api_status) {
+      storage_access_api_status_(storage_access_api_status),
+      network_restrictions_id_(base::UnguessableToken::Create()),
+      creator_network_restrictions_id_(creator_network_restrictions_id),
+      creator_policies_(creator_policies.Clone()) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(worker_process_host_);
   DCHECK(worker_process_host_->IsInitializedAndNotDead());
@@ -123,8 +135,7 @@ DedicatedWorkerHost::DedicatedWorkerHost(
 
   service_->NotifyWorkerCreated(this);
 
-  auto* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  auto* ancestor_render_frame_host = GetAncestorRenderFrameHost();
   if (ancestor_render_frame_host) {
     DedicatedWorkerHostsForDocument::GetOrCreateForCurrentDocument(
         ancestor_render_frame_host)
@@ -150,18 +161,20 @@ DedicatedWorkerHost::~DedicatedWorkerHost() {
   // or RenderProcessHostObserver. This destruction should be called before
   // the observed render process host (`worker_process_host_`) is destroyed.
 
-  // The frame's current document might no longer be related to this worker. In
-  // this case, the previous DedicatedWorkerHostsForDocument has been deleted
-  // and calling Remove(...)` on the new one is a no-op. Note that when the
-  // previous document is BFCached and not deleted, the RenderFrameHost will
-  // never be reused, so we will always get the right (BFCached) document.
-  auto* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  auto* ancestor_render_frame_host = GetAncestorRenderFrameHost();
   if (ancestor_render_frame_host) {
     DedicatedWorkerHostsForDocument::GetOrCreateForCurrentDocument(
         ancestor_render_frame_host)
         ->Remove(weak_factory_.GetSafeRef());
   }
+
+  if (auto* lock_manager = GetStoragePartitionImpl()->GetLockManager()) {
+    lock_manager->RemoveLockObserver(GetToken().value());
+  }
+
+  GetStoragePartitionImpl()->ClearNetworkRestrictionsAfterDelay({
+      network_restrictions_id_,
+  });
 
   // Send any final reports and allow the reporting configuration to be
   // removed. Note that the RenderProcessHost and the associated
@@ -173,6 +186,17 @@ DedicatedWorkerHost::~DedicatedWorkerHost() {
   service_->NotifyBeforeWorkerDestroyed(token_, creator_);
 
   WorkerDevToolsManager::GetInstance().WorkerDestroyed(this);
+}
+
+GlobalRenderFrameHostId DedicatedWorkerHost::GetAncestorRenderFrameHostId()
+    const {
+  RenderFrameHost* rfh = ancestor_document_.AsRenderFrameHostIfValid();
+  return rfh ? rfh->GetGlobalId() : GlobalRenderFrameHostId();
+}
+
+RenderFrameHostImpl* DedicatedWorkerHost::GetAncestorRenderFrameHost() const {
+  return RenderFrameHostImpl::From(
+      ancestor_document_.AsRenderFrameHostIfValid());
 }
 
 void DedicatedWorkerHost::BindBrowserInterfaceBrokerReceiver(
@@ -187,16 +211,39 @@ void DedicatedWorkerHost::BindBrowserInterfaceBrokerReceiver(
 void DedicatedWorkerHost::CreateContentSecurityNotifier(
     mojo::PendingReceiver<blink::mojom::ContentSecurityNotifier> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  auto* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  auto* ancestor_render_frame_host = GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The ancestor frame may have already been closed. In that case, the worker
     // will soon be terminated too, so abort the connection.
     return;
   }
   mojo::MakeSelfOwnedReceiver(
-      std::make_unique<ContentSecurityNotifier>(ancestor_render_frame_host_id_),
+      std::make_unique<ContentSecurityNotifier>(ancestor_document_),
       std::move(receiver));
+}
+
+void DedicatedWorkerHost::CreateLockManager(
+    mojo::PendingReceiver<blink::mojom::LockManager> receiver) {
+  GetStoragePartitionImpl()->BindLockManager(
+      GetWorkerStorageKey(), GetToken().value(), std::move(receiver));
+  GetStoragePartitionImpl()->GetLockManager()->AddLockObserver(GetToken().value(),
+                                                            this);
+}
+
+bool DedicatedWorkerHost::OnLockContention() {
+  RenderFrameHostImpl* ancestor_render_frame_host =
+      GetAncestorRenderFrameHost();
+  if (!ancestor_render_frame_host) {
+    // The frame may have already been closed.
+    return false;
+  }
+  if (ancestor_render_frame_host->IsInBackForwardCache()) {
+    // Evict the frame from the back-forward cache to avoid deadlock.
+    ancestor_render_frame_host->EvictFromBackForwardCacheWithReason(
+        BackForwardCacheMetrics::NotRestoredReason::kWebLocksContention);
+    return true;
+  }
+  return false;
 }
 
 void DedicatedWorkerHost::OnMojoDisconnect() {
@@ -258,13 +305,12 @@ void DedicatedWorkerHost::StartScriptLoad(
   DCHECK(client);
   client_ = std::move(client);
 
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      worker_process_host_->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
 
   // Get nearest ancestor RenderFrameHost in order to determine the
   // top-frame origin to use for the network isolation key.
   RenderFrameHostImpl* nearest_ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!nearest_ancestor_render_frame_host) {
     ScriptLoadStartFailed(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
     return;
@@ -319,7 +365,13 @@ void DedicatedWorkerHost::StartScriptLoad(
   // initiator origin to keep consistency with WorkerScriptFetcher, but probably
   // this should be calculated based on the worker origin as the factories be
   // used for subresource loading on the worker.
-  file_url_support_ = creator_origin_.scheme() == url::kFileScheme;
+  std::optional<blink::web_pref::WebPreferences> web_preferences;
+  if (creator_render_frame_host) {
+    web_preferences = creator_render_frame_host->GetOrCreateWebPreferences();
+  }
+  file_url_support_ = DoesCreatorAllowFileUrlSupport(
+      creator_origin_, web_preferences ? &*web_preferences : nullptr,
+      creator_worker ? creator_worker->file_url_support() : false);
 
   // For blob URL workers, inherit the controller from the worker's parent.
   // See https://w3c.github.io/ServiceWorker/#control-and-use-worker-client
@@ -356,23 +408,26 @@ void DedicatedWorkerHost::StartScriptLoad(
       nearest_ancestor_render_frame_host->GetSiteInstance()->GetPartitionDomain(
           storage_partition_impl);
 
-  TRACE_EVENT_BEGIN("loading", "WorkerScriptFetcher CreateAndStart",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "loading", "WorkerScriptFetcher CreateAndStart",
+      perfetto::NamedTrack::FromPointer("content::DedicatedWorkerHost", this));
   WorkerScriptFetcher::CreateAndStart(
       worker_process_host_->GetDeprecatedID(), token_, script_url,
       *nearest_ancestor_render_frame_host, creator_render_frame_host,
+      creator_worker,
       nearest_ancestor_render_frame_host->ComputeSiteForCookies(),
-      creator_origin_, storage_key_,
+      creator_origin_, worker_storage_key_,
       nearest_ancestor_render_frame_host->GetIsolationInfoForSubresources(),
       std::move(client_security_state), credentials_mode,
       std::move(outside_fetch_client_settings_object),
-      network::mojom::RequestDestination::kWorker,
+      network::mojom::RequestDestination::kWorker, file_url_support_,
       storage_partition_impl->GetServiceWorkerContext(),
       service_worker_handle_.get(), std::move(blob_url_loader_factory), nullptr,
       storage_partition_impl, partition_domain,
       DedicatedWorkerDevToolsAgentHost::GetFor(this), token_.value(),
       /*require_cross_site_request_for_cookies=*/false,
-      storage_access_api_status,
+      storage_access_api_status, network_restrictions_id_,
+      creator_network_restrictions_id_, creator_policies_.Clone(),
       base::BindOnce(&DedicatedWorkerHost::DidStartScriptLoad,
                      weak_factory_.GetWeakPtr()));
 }
@@ -385,7 +440,8 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     std::optional<WorkerScriptFetcherResult> result) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // WorkerScriptFetcher CreateAndStart
-  TRACE_EVENT_END("loading", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("loading", perfetto::NamedTrack::FromPointer(
+                                 "content::DedicatedWorkerHost", this));
   TRACE_EVENT("loading", "DedicatedWorkerHost::DidStartScriptLoad",
               "final_response_url", script_request_url_);
 
@@ -399,8 +455,25 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     return;
   }
 
-  // TODO(crbug.com/41471904): Check if the main script's final response
-  // URL is committable.
+  // The final response URL is derived from data that may have been supplied by
+  // a renderer (e.g., via the URL list of a service worker provided response),
+  // so make sure the worker process is allowed to commit it before adopting it
+  // as this worker's URL.
+  //
+  // Only grant commit permissions if the URL is same-origin with the worker's
+  // expected origin (e.g. for Isolated Web Apps or extensions).
+  if (url::Origin::Create(result->final_response_url)
+          .IsSameOriginWith(worker_storage_key_.origin())) {
+    ChildProcessSecurityPolicyImpl::GetInstance()->GrantCommitURL(
+        worker_process_host_->GetDeprecatedID(), result->final_response_url);
+  }
+  if (!ChildProcessSecurityPolicyImpl::GetInstance()->CanCommitURL(
+          worker_process_host_->GetDeprecatedID(),
+          result->final_response_url)) {
+    ScriptLoadStartFailed(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
+    return;
+  }
+
   final_response_url_ = result->final_response_url;
   service_->NotifyWorkerFinalResponseURLDetermined(token_,
                                                    result->final_response_url);
@@ -408,7 +481,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
   // TODO(cammie): Change this approach when we support shared workers
   // creating dedicated workers, as there might be no ancestor frame.
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     ScriptLoadStartFailed(network::URLLoaderCompletionStatus(net::ERR_ABORTED));
     return;
@@ -424,6 +497,16 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     DCHECK(result->main_script_load_params->response_head);
     DCHECK(result->main_script_load_params->response_head->parsed_headers);
 
+    if (SiteIsolationPolicy::ShouldUrlUseApplicationIsolationLevel(
+            ancestor_render_frame_host->GetBrowserContext(),
+            result->final_response_url)) {
+      GetContentClient()->browser()->EnsureRequiredHeadersForIsolatedApp(
+          ancestor_render_frame_host->GetBrowserContext(),
+          result->final_response_url,
+          result->main_script_load_params->response_head.get(),
+          /*frame_tree_node=*/std::nullopt);
+    }
+
     worker_client_security_state_ = network::mojom::ClientSecurityState::New();
     worker_client_security_state_->ip_address_space = CalculateIPAddressSpace(
         result->final_response_url,
@@ -432,19 +515,12 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     worker_client_security_state_->is_web_secure_context =
         network::IsUrlPotentiallyTrustworthy(result->final_response_url) &&
         creator_client_security_state_->is_web_secure_context;
-    // Deprecation trial status allowing LNA requests on non-http
-    bool allow_non_secure_local_network_access =
-        ancestor_render_frame_host->policy_container_host() &&
-        ancestor_render_frame_host->policy_container_host()
-            ->policies()
-            .allow_non_secure_local_network_access;
 
-    worker_client_security_state_->private_network_request_policy =
-        DerivePrivateNetworkRequestPolicy(
+    worker_client_security_state_->local_network_access_request_policy =
+        DeriveLocalNetworkAccessRequestPolicy(
             worker_client_security_state_->ip_address_space,
             worker_client_security_state_->is_web_secure_context,
-            allow_non_secure_local_network_access,
-            PrivateNetworkRequestContext::kWorker);
+            LocalNetworkAccessRequestContext::kWorker);
 
     // Check for policy overrides on LNA. For dedicated workers, we apply
     // policy based on origin of the document that owns the worker.
@@ -452,11 +528,12 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     ContentBrowserClient* client = GetContentClient()->browser();
     BrowserContext* context = ancestor_render_frame_host->GetBrowserContext();
     url::Origin origin = ancestor_render_frame_host->GetLastCommittedOrigin();
-    ContentBrowserClient::PrivateNetworkRequestPolicyOverride policy_override =
-        client->ShouldOverridePrivateNetworkRequestPolicy(context, origin);
-    worker_client_security_state_->private_network_request_policy =
+    ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
+        policy_override = client->ShouldOverrideLocalNetworkAccessRequestPolicy(
+            context, origin);
+    worker_client_security_state_->local_network_access_request_policy =
         OverrideLocalNetworkAccessPolicy(
-            worker_client_security_state_->private_network_request_policy,
+            worker_client_security_state_->local_network_access_request_policy,
             policy_override);
 
     // > 14.6 Otherwise, set worker global scope's embedder policy to the result
@@ -472,8 +549,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
   worker_client_security_state_->document_isolation_policy =
       creator_client_security_state_->document_isolation_policy;
 
-  auto* storage_partition = static_cast<StoragePartitionImpl*>(
-      worker_process_host_->GetStoragePartition());
+  auto* storage_partition = GetStoragePartitionImpl();
 
   // Create a COEP reporter with worker's policy.
   const network::CrossOriginEmbedderPolicy& coep =
@@ -514,8 +590,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
 
   // Start observing Network Service crash when it's running out-of-process.
   if (IsOutOfProcessNetworkService()) {
-    ObserveNetworkServiceCrash(static_cast<StoragePartitionImpl*>(
-        worker_process_host_->GetStoragePartition()));
+    ObserveNetworkServiceCrash(GetStoragePartitionImpl());
   }
 
   // Set up the default network loader factory.
@@ -525,6 +600,9 @@ void DedicatedWorkerHost::DidStartScriptLoad(
                                           &bypass_redirect_checks);
   result->subresource_loader_factories->set_bypass_redirect_checks(
       bypass_redirect_checks);
+
+  auto policy_container_host = base::MakeRefCounted<PolicyContainerHost>(
+      std::move(result->policy_container_policies));
 
   blink::mojom::ServiceWorkerContainerInfoForClientPtr container_info;
   blink::mojom::ControllerServiceWorkerInfoPtr controller;
@@ -546,8 +624,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
     std::tie(container_info, controller) =
         service_worker_handle_->scoped_service_worker_client()
             ->CommitResponseAndRelease(
-                /*rfh_id=*/std::nullopt,
-                std::move(result->policy_container_policies),
+                /*rfh_id=*/std::nullopt, policy_container_host->policies(),
                 std::move(coep_reporter), std::move(dip_reporter),
                 ukm::kInvalidSourceId);
   }
@@ -558,6 +635,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
       subresource_loader_updater_.BindNewPipeAndPassReceiver(),
       std::move(controller),
       BindAndPassRemoteForBackForwardCacheControllerHost(),
+      policy_container_host->CreatePolicyContainerForBlink(),
       std::move(coep_reporting_observer), std::move(dip_reporting_observer));
   if (service_worker_handle_->service_worker_client()) {
     service_worker_handle_->service_worker_client()->SetContainerReady();
@@ -566,8 +644,7 @@ void DedicatedWorkerHost::DidStartScriptLoad(
 
 void DedicatedWorkerHost::ScriptLoadStartFailed(
     const network::URLLoaderCompletionStatus& status) {
-  auto* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  auto* ancestor_render_frame_host = GetAncestorRenderFrameHost();
   if (ancestor_render_frame_host) {
     // Notify that the loading failed to DevTools. It fires
     // `Network.onLoadingFailed` event.
@@ -579,6 +656,11 @@ void DedicatedWorkerHost::ScriptLoadStartFailed(
   }
 
   client_->OnScriptLoadStartFailed();
+}
+
+StoragePartitionImpl* DedicatedWorkerHost::GetStoragePartitionImpl() {
+  return static_cast<StoragePartitionImpl*>(
+      GetProcessHost()->GetStoragePartition());
 }
 
 mojo::PendingRemote<network::mojom::URLLoaderFactory>
@@ -602,9 +684,12 @@ DedicatedWorkerHost::CreateNetworkFactoryForSubresources(
     dip_reporter_->Clone(dip_reporter.InitWithNewPipeAndPassReceiver());
   }
 
+  // Use the creator's origin for `factory_params` to allow the worker to
+  // perform fetches that use the "Outside Settings" origin as the initiator
+  // (e.g., static imports in module workers).
   network::mojom::URLLoaderFactoryParamsPtr factory_params =
       URLLoaderFactoryParamsHelper::CreateForFrame(
-          ancestor_render_frame_host, GetStorageKey().origin(), isolation_info_,
+          ancestor_render_frame_host, creator_origin_, isolation_info_,
           worker_client_security_state_->Clone(), std::move(coep_reporter),
           std::move(dip_reporter), worker_process_host_,
           ancestor_render_frame_host->IsFeatureEnabled(
@@ -619,8 +704,11 @@ DedicatedWorkerHost::CreateNetworkFactoryForSubresources(
                     kPotentiallyPermit
               : network::mojom::TrustTokenOperationPolicyVerdict::kForbid,
           ancestor_render_frame_host->GetCookieSettingOverrides(),
-          /*network_restrictions_id=*/std::nullopt,
+          network_restrictions_id_,
           "DedicatedWorkerHost::CreateNetworkFactoryForSubresources");
+  // Worker subresources are not outermost-main-frame requests even when their
+  // creator frame is outermost.
+  factory_params->is_outermost_main_frame = false;
 
   RenderFrameHost* frame = nullptr;
   if (base::FeatureList::IsEnabled(
@@ -635,10 +723,14 @@ DedicatedWorkerHost::CreateNetworkFactoryForSubresources(
           std::move(factory_params),
           url_loader_factory::HeaderClientOption::kAllow,
           url_loader_factory::FactoryOverrideOption::kAllow),
+      // Use the worker's own origin for `ContentClientParams` so that the
+      // browser process (specifically `ContentBrowserClient`) correctly
+      // identifies the worker's origin for security checks and storage
+      // partitioning.
       url_loader_factory::ContentClientParams(
           worker_process_host_->GetBrowserContext(), frame,
-          worker_process_host_->GetDeprecatedID(), GetStorageKey().origin(),
-          isolation_info_,
+          worker_process_host_->GetDeprecatedID(),
+          GetWorkerStorageKey().origin(), isolation_info_,
           ukm::SourceIdObj::FromInt64(
               ancestor_render_frame_host->GetPageUkmSourceId()),
           bypass_redirect_checks),
@@ -700,7 +792,7 @@ void DedicatedWorkerHost::CreateDirectSocketsService(
     mojo::PendingReceiver<blink::mojom::DirectSocketsService> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   // The ancestor frame may have already been closed. In that case, the worker
   // will soon be terminated too, so abort the connection.
   if (!ancestor_render_frame_host) {
@@ -716,7 +808,7 @@ void DedicatedWorkerHost::CreateWebUsbService(
     mojo::PendingReceiver<blink::mojom::WebUsbService> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   // The ancestor frame may have already been closed. In that case, the worker
   // will soon be terminated too, so abort the connection.
   if (!ancestor_render_frame_host) {
@@ -730,7 +822,7 @@ void DedicatedWorkerHost::CreateWebSocketConnector(
     mojo::PendingReceiver<blink::mojom::WebSocketConnector> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The ancestor frame may have already been closed. In that case, the worker
     // will soon be terminated too, so abort the connection.
@@ -740,11 +832,11 @@ void DedicatedWorkerHost::CreateWebSocketConnector(
   // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<WebSocketConnectorImpl>(
-          ancestor_render_frame_host_id_.child_id.GetUnsafeValue(),
-          ancestor_render_frame_host_id_.frame_routing_id,
-          GetStorageKey().origin(),
+          ancestor_render_frame_host->GetGlobalId(), ancestor_document_,
+          GetWorkerStorageKey().origin(),
           ancestor_render_frame_host->GetIsolationInfoForSubresources(),
-          worker_client_security_state_->Clone()),
+          worker_client_security_state_->Clone(), network_restrictions_id_,
+          GetToken().value()),
       std::move(receiver));
 }
 
@@ -752,7 +844,7 @@ void DedicatedWorkerHost::CreateWebTransportConnector(
     mojo::PendingReceiver<blink::mojom::WebTransportConnector> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The ancestor frame may have already been closed. In that case, the worker
     // will soon be terminated too, so abort the connection.
@@ -762,9 +854,10 @@ void DedicatedWorkerHost::CreateWebTransportConnector(
   mojo::MakeSelfOwnedReceiver(
       std::make_unique<WebTransportConnectorImpl>(
           worker_process_host_->GetDeprecatedID(),
-          ancestor_render_frame_host->GetWeakPtr(), GetStorageKey().origin(),
+          ancestor_render_frame_host->GetWeakPtr(), ancestor_document_,
+          GetWorkerStorageKey().origin(),
           isolation_info_.network_anonymization_key(),
-          worker_client_security_state_->Clone()),
+          worker_client_security_state_->Clone(), network_restrictions_id_),
       std::move(receiver));
 }
 
@@ -783,28 +876,36 @@ void DedicatedWorkerHost::BindCacheStorage(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   BindCacheStorageInternal(
       std::move(receiver),
-      storage::BucketLocator::ForDefaultBucket(GetStorageKey()));
+      storage::BucketLocator::ForDefaultBucket(GetWorkerStorageKey()));
 }
 
 void DedicatedWorkerHost::CreateNestedDedicatedWorker(
     mojo::PendingReceiver<blink::mojom::DedicatedWorkerHostFactory> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  RenderFrameHost* ancestor_render_frame_host =
+      ancestor_document_.AsRenderFrameHostIfValid();
+  if (!ancestor_render_frame_host) {
+    // The ancestor frame may have already been closed. In that case, the worker
+    // will soon be terminated too, so abort the connection.
+    return;
+  }
+
   base::WeakPtr<CrossOriginEmbedderPolicyReporter> creator_coep_reporter =
       GetWorkerCoepReporter();
 
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<DedicatedWorkerHostFactoryImpl>(
-          worker_process_host_->GetDeprecatedID(), /*creator=*/token_,
-          ancestor_render_frame_host_id_, GetStorageKey(), isolation_info_,
-          worker_client_security_state_->Clone(), creator_coep_reporter),
-      std::move(receiver));
+  DedicatedWorkerHostFactoryImpl::Create(
+      *ancestor_render_frame_host, std::move(receiver),
+      worker_process_host_->GetID(), /*creator=*/token_, ancestor_document_,
+      GetWorkerStorageKey(), isolation_info_,
+      worker_client_security_state_->Clone(), creator_policies_,
+      creator_coep_reporter, network_restrictions_id_);
 }
 
 void DedicatedWorkerHost::CreateIdleManager(
     mojo::PendingReceiver<blink::mojom::IdleManager> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The ancestor frame may have already been closed. In that case, the worker
     // will soon be terminated too, so abort the connection.
@@ -818,14 +919,13 @@ void DedicatedWorkerHost::CreateBroadcastChannelProvider(
     mojo::PendingReceiver<blink::mojom::BroadcastChannelProvider> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      GetProcessHost()->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
 
   auto* broadcast_channel_service =
       storage_partition_impl->GetBroadcastChannelService();
   broadcast_channel_service->AddReceiver(
       std::make_unique<BroadcastChannelProvider>(broadcast_channel_service,
-                                                 GetStorageKey()),
+                                                 GetWorkerStorageKey()),
       std::move(receiver));
 }
 
@@ -841,19 +941,18 @@ bool DedicatedWorkerHost::WasStorageAccessGranted() {
 void DedicatedWorkerHost::CreateBlobUrlStoreProvider(
     mojo::PendingReceiver<blink::mojom::BlobURLStore> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      GetProcessHost()->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
 
   storage_partition_impl->GetBlobUrlRegistry()->AddReceiver(
-      GetStorageKey(), renderer_origin_, GetProcessHost()->GetDeprecatedID(),
-      std::move(receiver),
+      GetWorkerStorageKey(), renderer_origin_,
+      GetProcessHost()->GetDeprecatedID(), std::move(receiver),
       /*context_type_for_debugging=*/"Dedicated Worker",
       base::BindRepeating(
           [](base::WeakPtr<DedicatedWorkerHost> host) -> std::string {
             if (!host) {
               return "destroyed DedicatedWorkerHost";
             }
-            return host->GetStorageKey().GetDebugString();
+            return host->GetWorkerStorageKey().GetDebugString();
           },
           weak_factory_.GetWeakPtr()),
       base::BindRepeating(
@@ -866,24 +965,26 @@ void DedicatedWorkerHost::CreateBlobUrlStoreProvider(
           weak_factory_.GetWeakPtr()),
       !(GetContentClient()->browser()->IsBlobUrlPartitioningEnabled(
           GetProcessHost()->GetBrowserContext())),
-      storage::BlobURLValidityCheckBehavior::
-          ALLOW_OPAQUE_ORIGIN_STORAGE_KEY_MISMATCH);
+      base::FeatureList::IsEnabled(blink::features::kDataUrlWorkerOpaqueOrigin)
+          ? storage::BlobURLValidityCheckBehavior::DEFAULT
+          : storage::BlobURLValidityCheckBehavior::
+                ALLOW_OPAQUE_ORIGIN_STORAGE_KEY_MISMATCH);
 }
 
 void DedicatedWorkerHost::CreateCodeCacheHost(
     mojo::PendingReceiver<blink::mojom::CodeCacheHost> receiver) {
   // Create a new CodeCacheHostImpl and bind it to the given receiver.
   RenderProcessHost* rph = GetProcessHost();
-  code_cache_host_receivers_.Add(rph->GetDeprecatedID(),
+  code_cache_host_receivers_.Add(rph->GetID(),
                                  isolation_info_.network_isolation_key(),
-                                 GetStorageKey(), std::move(receiver));
+                                 GetWorkerStorageKey(), std::move(receiver));
 }
 
 void DedicatedWorkerHost::BindSerialService(
     mojo::PendingReceiver<blink::mojom::SerialService> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The ancestor frame may have already been closed. In that case, the worker
     // will soon be terminated too, so abort the connection.
@@ -898,7 +999,7 @@ void DedicatedWorkerHost::BindHidService(
     mojo::PendingReceiver<blink::mojom::HidService> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   // The ancestor frame may have already been closed. In that case, the worker
   // will soon be terminated too, so abort the connection.
   if (!ancestor_render_frame_host) {
@@ -917,19 +1018,18 @@ void DedicatedWorkerHost::CreateBucketManagerHost(
 void DedicatedWorkerHost::GetFileSystemAccessManager(
     mojo::PendingReceiver<blink::mojom::FileSystemAccessManager> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      worker_process_host_->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
   auto* manager = storage_partition_impl->GetFileSystemAccessManager();
-  manager->BindReceiver(
-      FileSystemAccessManagerImpl::BindingContext(
-          GetStorageKey(),
-          // TODO(crbug.com/41473757): Obtain and use a better
-          // URL for workers instead of the origin as source url.
-          // This URL will be used for SafeBrowsing checks and for
-          // the Quarantine Service.
-          GetStorageKey().origin().GetURL(), GetAncestorRenderFrameHostId(),
-          /*is_worker=*/true),
-      std::move(receiver));
+  manager->BindReceiver(FileSystemAccessManagerImpl::BindingContext(
+                            GetWorkerStorageKey(),
+                            // TODO(crbug.com/41473757): Obtain and use a better
+                            // URL for workers instead of the origin as source
+                            // url. This URL will be used for SafeBrowsing
+                            // checks and for the Quarantine Service.
+                            GetWorkerStorageKey().origin().GetURL(),
+                            GetAncestorRenderFrameHostId(),
+                            /*is_worker=*/true),
+                        std::move(receiver));
 }
 
 #if BUILDFLAG(ENABLE_COMPUTE_PRESSURE)
@@ -937,13 +1037,13 @@ void DedicatedWorkerHost::BindPressureService(
     mojo::PendingReceiver<blink::mojom::WebPressureManager> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  if (!network::IsOriginPotentiallyTrustworthy(creator_origin_)) {
+  if (!network::IsOriginPotentiallyTrustworthy(
+          GetWorkerStorageKey().origin())) {
     return;
   }
 
   // https://www.w3.org/TR/compute-pressure/#policy-control
-  auto* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  auto* ancestor_render_frame_host = GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     return;
   }
@@ -971,8 +1071,9 @@ void DedicatedWorkerHost::BindPressureService(
 void DedicatedWorkerHost::ObserveNetworkServiceCrash(
     StoragePartitionImpl* storage_partition_impl) {
   auto params = network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = worker_process_host_->GetDeprecatedID();
+  params->process_id = ToOriginatingProcessId(worker_process_host_->GetID());
   params->debug_tag = "DedicatedWorkerHost::ObserveNetworkServiceCrash";
+  params->network_restrictions_id = network_restrictions_id_;
   network_service_connection_error_handler_holder_.reset();
   storage_partition_impl->GetNetworkContext()->CreateURLLoaderFactory(
       network_service_connection_error_handler_holder_
@@ -989,8 +1090,7 @@ void DedicatedWorkerHost::OnNetworkServiceCrash() {
   DCHECK(network_service_connection_error_handler_holder_);
   DCHECK(!network_service_connection_error_handler_holder_.is_connected());
 
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      worker_process_host_->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
   // Start observing Network Service crash again.
   ObserveNetworkServiceCrash(storage_partition_impl);
 
@@ -1004,11 +1104,10 @@ void DedicatedWorkerHost::UpdateSubresourceLoaderFactories() {
     return;
   }
 
-  auto* storage_partition_impl = static_cast<StoragePartitionImpl*>(
-      worker_process_host_->GetStoragePartition());
+  auto* storage_partition_impl = GetStoragePartitionImpl();
 
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     return;
   }
@@ -1033,7 +1132,7 @@ void DedicatedWorkerHost::UpdateSubresourceLoaderFactories() {
           worker_process_host_->GetDeprecatedID(), storage_partition_impl,
           partition_domain, file_url_support_,
           /*filesystem_url_support=*/true, creator_render_frame_host,
-          storage_key_);
+          worker_storage_key_, network::mojom::RequestDestination::kWorker);
 
   bool bypass_redirect_checks = false;
   subresource_loader_factories->pending_default_factory() =
@@ -1056,7 +1155,7 @@ void DedicatedWorkerHost::EvictFromBackForwardCache(
     blink::mojom::RendererEvictionReason reason,
     blink::mojom::ScriptSourceLocationPtr source) {
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The frame may have already been closed.
     return;
@@ -1068,7 +1167,7 @@ void DedicatedWorkerHost::EvictFromBackForwardCache(
 void DedicatedWorkerHost::DidChangeBackForwardCacheDisablingFeatures(
     BackForwardCacheBlockingDetails details) {
   RenderFrameHostImpl* ancestor_render_frame_host =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+      GetAncestorRenderFrameHost();
   if (!ancestor_render_frame_host) {
     // The frame may have already been closed.
     return;
@@ -1078,7 +1177,7 @@ void DedicatedWorkerHost::DidChangeBackForwardCacheDisablingFeatures(
 }
 
 blink::StorageKey DedicatedWorkerHost::GetBucketStorageKey() {
-  return GetStorageKey();
+  return GetWorkerStorageKey();
 }
 
 blink::mojom::PermissionStatus DedicatedWorkerHost::GetPermissionStatus(
@@ -1089,7 +1188,7 @@ blink::mojom::PermissionStatus DedicatedWorkerHost::GetPermissionStatus(
       ->GetPermissionStatusForWorker(
           content::PermissionDescriptorUtil::
               CreatePermissionDescriptorForPermissionType(permission_type),
-          GetProcessHost(), GetStorageKey().origin());
+          GetProcessHost(), GetWorkerStorageKey().origin());
 }
 
 void DedicatedWorkerHost::BindCacheStorageForBucket(
@@ -1128,8 +1227,7 @@ void DedicatedWorkerHost::GetSandboxedFileSystemForBucket(
 }
 
 storage::BucketClientInfo DedicatedWorkerHost::GetBucketClientInfo() const {
-  const auto* ancestor_rfh =
-      RenderFrameHostImpl::FromID(ancestor_render_frame_host_id_);
+  const auto* ancestor_rfh = GetAncestorRenderFrameHost();
   return storage::BucketClientInfo{
       worker_process_host_->GetDeprecatedID(), GetToken(),
       ancestor_rfh ? std::optional(ancestor_rfh->GetDocumentToken())

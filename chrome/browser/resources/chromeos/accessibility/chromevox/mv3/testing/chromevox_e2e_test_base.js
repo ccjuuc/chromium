@@ -31,6 +31,7 @@ ChromeVoxE2ETest = class extends E2ETestBase {
   testGenCppIncludes() {
     super.testGenCppIncludes();
     GEN(`
+  #include "chrome/browser/ui/tabs/features.h"
   #include "extensions/common/extension_l10n_util.h"
   #include "ui/accessibility/accessibility_features.h"
       `);
@@ -52,7 +53,9 @@ ChromeVoxE2ETest = class extends E2ETestBase {
   }
 
   get featureList() {
-    return {enabled: ['features::kAccessibilityManifestV3ChromeVox']};
+    return {
+      enabled: ['features::kAccessibilityManifestV3ChromeVox'],
+    };
   }
 
   /**
@@ -165,5 +168,5 @@ ChromeVoxE2ETest = class extends E2ETestBase {
 
 // TODO: wasm logs errors if it takes too long to load (e.g. liblouis wasm).
 // Separately, LibLouis also logs errors.
-// See https://crbug.com/1170991.
+// See https://crbug.com/40744849.
 ChromeVoxE2ETest.prototype.failOnConsoleError = false;

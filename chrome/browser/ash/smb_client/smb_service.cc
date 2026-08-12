@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
@@ -39,7 +40,6 @@
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_credentials_dialog.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_handler.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -168,11 +168,14 @@ void SmbService::Shutdown() {
 // static
 void SmbService::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kNetworkFileSharesAllowed, true);
-  registry->RegisterBooleanPref(prefs::kNetBiosShareDiscoveryEnabled, true);
-  registry->RegisterBooleanPref(prefs::kNTLMShareAuthenticationEnabled, true);
-  registry->RegisterListPref(prefs::kNetworkFileSharesPreconfiguredShares);
-  registry->RegisterStringPref(prefs::kMostRecentlyUsedNetworkFileShareURL, "");
+  registry->RegisterBooleanPref(ash::prefs::kNetworkFileSharesAllowed, true);
+  registry->RegisterBooleanPref(ash::prefs::kNetBiosShareDiscoveryEnabled,
+                                true);
+  registry->RegisterBooleanPref(ash::prefs::kNTLMShareAuthenticationEnabled,
+                                true);
+  registry->RegisterListPref(ash::prefs::kNetworkFileSharesPreconfiguredShares);
+  registry->RegisterStringPref(ash::prefs::kMostRecentlyUsedNetworkFileShareURL,
+                               "");
   SmbPersistedShareRegistry::RegisterProfilePrefs(registry);
 }
 
@@ -331,8 +334,8 @@ void SmbService::Mount(const std::string& display_name,
                                base::Unretained(this), std::move(callback),
                                info, should_open_file_manager_after_mount));
 
-  profile_->GetPrefs()->SetString(prefs::kMostRecentlyUsedNetworkFileShareURL,
-                                  share_path.value());
+  profile_->GetPrefs()->SetString(
+      ash::prefs::kMostRecentlyUsedNetworkFileShareURL, share_path.value());
 }
 
 void SmbService::OnUserInitiatedMountDone(
@@ -357,12 +360,11 @@ void SmbService::OnUserInitiatedMountDone(
   std::move(callback).Run(SmbMountResult::kSuccess);
 }
 
-void SmbService::MountInternal(
-    const SmbShareInfo& info,
-    const std::string& password,
-    bool save_credentials,
-    bool skip_connect,
-    MountInternalCallback callback) {
+void SmbService::MountInternal(const SmbShareInfo& info,
+                               const std::string& password,
+                               bool save_credentials,
+                               bool skip_connect,
+                               MountInternalCallback callback) {
   // Preconfigured or persisted share information could be invalid.
   if (!info.share_url().IsValid() || info.share_url().GetShare().empty()) {
     std::move(callback).Run(SmbMountResult::kInvalidUrl, {});
@@ -607,12 +609,13 @@ void SmbService::SetUpNetBiosHostLocator() {
 }
 
 bool SmbService::IsNetBiosDiscoveryEnabled() const {
-  return profile_->GetPrefs()->GetBoolean(prefs::kNetBiosShareDiscoveryEnabled);
+  return profile_->GetPrefs()->GetBoolean(
+      ash::prefs::kNetBiosShareDiscoveryEnabled);
 }
 
 bool SmbService::IsNTLMAuthenticationEnabled() const {
   return profile_->GetPrefs()->GetBoolean(
-      prefs::kNTLMShareAuthenticationEnabled);
+      ash::prefs::kNTLMShareAuthenticationEnabled);
 }
 
 bool SmbService::IsShareMounted(const SmbUrl& share) const {
@@ -641,12 +644,12 @@ std::vector<SmbUrl> SmbService::GetPreconfiguredSharePaths(
     const std::string& policy_mode) const {
   std::vector<SmbUrl> preconfigured_urls;
 
-  const base::Value::List& preconfigured_shares = profile_->GetPrefs()->GetList(
-      prefs::kNetworkFileSharesPreconfiguredShares);
+  const base::ListValue& preconfigured_shares = profile_->GetPrefs()->GetList(
+      ash::prefs::kNetworkFileSharesPreconfiguredShares);
 
   for (const base::Value& info_val : preconfigured_shares) {
     // |info| is a dictionary with entries for `share_url` and `mode`.
-    const base::Value::Dict& info = info_val.GetDict();
+    const base::DictValue& info = info_val.GetDict();
     const std::string* share_url_ptr = info.FindString(kShareUrlKey);
     const std::string* mode_ptr = info.FindString(kModeKey);
 

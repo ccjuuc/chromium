@@ -4,11 +4,14 @@
 
 #include "components/autofill/core/browser/form_parsing/alternative_name_field_parser.h"
 
-#include <string>
+#include <memory>
+#include <optional>
 
-#include "base/notimplemented.h"
+#include "base/memory/ptr_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 
 namespace autofill {
 namespace {
@@ -62,7 +65,7 @@ std::unique_ptr<FormFieldParser> AlternativeFullNameField::Parse(
 void AlternativeFullNameField::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
   AddClassification(alternative_full_name_, ALTERNATIVE_FULL_NAME,
-                    kBaseNameParserScore, field_candidates);
+                    HeuristicParser::kName, field_candidates);
 }
 
 // A form field that can parse a family alternative name field and then given
@@ -124,9 +127,9 @@ std::unique_ptr<FormFieldParser> AlternativeFamilyAndGivenNameField::Parse(
 void AlternativeFamilyAndGivenNameField::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
   AddClassification(alternative_family_name_, ALTERNATIVE_FAMILY_NAME,
-                    kBaseNameParserScore, field_candidates);
+                    HeuristicParser::kName, field_candidates);
   AddClassification(alternative_given_name_, ALTERNATIVE_GIVEN_NAME,
-                    kBaseNameParserScore, field_candidates);
+                    HeuristicParser::kName, field_candidates);
 }
 }  // namespace
 

@@ -15,6 +15,8 @@
 #include "base/containers/buffer_iterator.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/span.h"
+#include "base/files/file_util.h"
+#include "base/hash/hash.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
@@ -26,9 +28,12 @@
 #include "build/build_config.h"
 #include "components/tracing/common/system_log_event_utils_win.h"
 #include "crypto/hmac.h"
+#include "services/tracing/public/cpp/perfetto/interning_index.h"
 #include "third_party/perfetto/protos/perfetto/trace/etw/etw.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/etw/etw_event.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/etw/etw_event_bundle.pbzero.h"
+#include "third_party/perfetto/protos/perfetto/trace/interned_data/interned_data.pbzero.h"
+#include "third_party/perfetto/protos/perfetto/trace/profiling/profile_common.pbzero.h"
 #include "third_party/perfetto/protos/perfetto/trace/trace_packet.pbzero.h"
 
 namespace tracing {
@@ -66,6 +71,11 @@ uint64_t CopyPointer(base::BufferIterator<const uint8_t>& iterator,
 uint64_t CopyPointerHash(base::BufferIterator<const uint8_t>& iterator,
                          size_t pointer_size) {
   const uint64_t pointer = CopyPointer(iterator, pointer_size);
+  if (pointer == 0 ||
+      pointer == (pointer_size == sizeof(uint32_t) ? 0xffffffffULL
+                                                   : 0xffffffffffffffffULL)) {
+    return pointer;
+  }
 
   // Hash `pointer` using a random key so that the actual pointer value is
   // obscured and not reversible.
@@ -75,6 +85,20 @@ uint64_t CopyPointerHash(base::BufferIterator<const uint8_t>& iterator,
 
   // Return the first 64 bits of `hash` as a `uint64_t`.
   return base::U64FromNativeEndian(base::span(hash).first<8u>());
+}
+
+// Returns the given `QueryPerformanceCounter` (QPC) timestamp in nanoseconds.
+uint64_t GetTimestampNanoseconds(uint64_t qpc_timestamp) {
+  static const double qpc_ticks_per_second = []() {
+    LARGE_INTEGER perf_counter_frequency = {};
+    ::QueryPerformanceFrequency(&perf_counter_frequency);
+    double frequency = static_cast<double>(perf_counter_frequency.QuadPart);
+    CHECK_GT(frequency, 0.0);
+    return frequency;
+  }();
+  return static_cast<uint64_t>(base::Time::kNanosecondsPerSecond *
+                               static_cast<double>(qpc_timestamp) /
+                               qpc_ticks_per_second);
 }
 
 }  // namespace
@@ -103,6 +127,15 @@ void EtwConsumer::ConsumeEvents() {
 void EtwConsumer::Flush(std::function<void()> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   trace_writer_->Flush(std::move(callback));
+}
+
+void EtwConsumer::WillClearIncrementalState() {
+  reset_emitted_state_.store(true, std::memory_order_relaxed);
+}
+
+void EtwConsumer::ResetEmittedState() {
+  interned_callstacks_.ResetEmittedState();
+  interned_frames_.ResetEmittedState();
 }
 
 // static
@@ -144,6 +177,27 @@ void EtwConsumer::ProcessEventRecord(EVENT_RECORD* event_record) {
       0x11d1,
       {0x84, 0xf4, 0x00, 0x00, 0xf8, 0x04, 0x64, 0xe3}};
 
+  // DiskIoGuid, 3d6fa8d4-fe05-11d0-9dda-00c04fd7ba7c
+  static constexpr GUID kDiskIoGuid = {
+      0x3d6fa8d4,
+      0xfe05,
+      0x11d0,
+      {0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c}};
+
+  // ImageLoad event provider GUID, 2cb15d1d-5fc1-11d2-abe1-00a0c911f518
+  static constexpr GUID kImageLoadGuid = {
+      0x2cb15d1d,
+      0x5fc1,
+      0x11d2,
+      {0xab, 0xe1, 0x00, 0xa0, 0xc9, 0x11, 0xf5, 0x18}};
+
+  // StackWalk event provider GUID, def2fe46-7bd6-4b80-bd94-f57fe20d0ce3
+  static constexpr GUID kStackWalkGuid = {
+      0xdef2fe46,
+      0x7bd6,
+      0x4b80,
+      {0xbd, 0x94, 0xf5, 0x7f, 0xe2, 0xd, 0xc, 0xe3}};
+
   // A mapping of provider GUIDs to handler member functions.
   static constexpr auto kGuidToProvider =
       base::MakeFixedFlatMap<std::reference_wrapper<const GUID>,
@@ -152,7 +206,10 @@ void EtwConsumer::ProcessEventRecord(EVENT_RECORD* event_record) {
            {kThreadGuid, &EtwConsumer::HandleThreadEvent},
            {kLostEventGuid, &EtwConsumer::HandleLostEvent},
            {kMemInfoGuid, &EtwConsumer::HandleMemInfoEvent},
-           {kFileIoGuid, &EtwConsumer::HandleFileIoEvent}});
+           {kFileIoGuid, &EtwConsumer::HandleFileIoEvent},
+           {kDiskIoGuid, &EtwConsumer::HandleDiskIoEvent},
+           {kImageLoadGuid, &EtwConsumer::HandleImageLoadEvent},
+           {kStackWalkGuid, &EtwConsumer::HandleStackWalkEvent}});
 
   auto* const self = reinterpret_cast<EtwConsumer*>(event_record->UserContext);
   DCHECK_CALLED_ON_VALID_SEQUENCE(self->sequence_checker_);
@@ -184,9 +241,7 @@ void EtwConsumer::ProcessEventRecord(EVENT_RECORD* event_record) {
 bool EtwConsumer::ProcessBuffer(EVENT_TRACE_LOGFILE* buffer) {
   auto* const self = reinterpret_cast<EtwConsumer*>(buffer->Context);
   DCHECK_CALLED_ON_VALID_SEQUENCE(self->sequence_checker_);
-  self->etw_events_ = nullptr;
-  // Release the handle to finalize the previous message.
-  self->packet_handle_ = {};
+  self->FinalizePreviousData();
   return true;  // Continue processing events.
 }
 
@@ -266,7 +321,9 @@ void EtwConsumer::HandleFileIoEvent(const EVENT_HEADER& header,
                                     const ETW_BUFFER_CONTEXT& buffer_context,
                                     size_t pointer_size,
                                     base::span<const uint8_t> packet_data) {
-  if (!inclusion_policy_.ShouldRecordFileIoEvents(header.ThreadId)) {
+  const bool should_record =
+      inclusion_policy_.ShouldRecordFileIoEvents(header.ThreadId);
+  if (!should_record && header.EventDescriptor.Opcode != 76) {
     return;
   }
 
@@ -311,11 +368,259 @@ void EtwConsumer::HandleFileIoEvent(const EVENT_HEADER& header,
       break;
     case 76:
       if (!DecodeFileIoOpEndEvent(header, buffer_context, pointer_size,
-                                  packet_data)) {
+                                  packet_data, should_record)) {
         DLOG(ERROR) << "Error decoding FileIo_OpEnd event";
       }
       break;
+    case 78:  // Map file
+    case 79:  // Path delete
+    case 80:  // Path rename
+    case 81:  // Map file pattern
+      if (!DecodeFileIoPathOperationEvent(header, buffer_context, pointer_size,
+                                          packet_data)) {
+        DLOG(ERROR) << "Error decoding FileIo_PathOperation event";
+      }
+      break;
+    // Filter Driver events
+    case 83:  // FltRead
+    case 84:  // FltWrite
+    case 85:  // FltSetInfo
+    case 86:  // FltQueryInfo
+      if (!DecodeFileIoFltOpEvent(header, buffer_context, pointer_size,
+                                  packet_data)) {
+        DLOG(ERROR) << "Error decoding FileIoFltOpEvent";
+      }
+      break;
+
+    default:
+      DLOG(ERROR) << "unhandled file op code " << header.EventDescriptor.Opcode;
   }
+}
+
+void EtwConsumer::HandleDiskIoEvent(const EVENT_HEADER& header,
+                                    const ETW_BUFFER_CONTEXT& buffer_context,
+                                    size_t pointer_size,
+                                    base::span<const uint8_t> packet_data) {
+  switch (header.EventDescriptor.Opcode) {
+    case 10:  // Read
+    case 11:  // Write
+      DecodeDiskIoEventTypeGroup1(header, buffer_context, pointer_size,
+                                  packet_data);
+      break;
+    case 12:  // ReadInit
+    case 13:  // WriteInit
+    case 15:  // FlushInit
+      DecodeDiskIoEventTypeGroup2(header, buffer_context, pointer_size,
+                                  packet_data);
+      break;
+    case 14:  // Flush
+      DecodeDiskIoEventTypeGroup3(header, buffer_context, pointer_size,
+                                  packet_data);
+      break;
+    default:
+      DLOG(ERROR) << "Unhandled disk i/o opcode "
+                  << header.EventDescriptor.Opcode;
+  }
+}
+
+void EtwConsumer::HandleImageLoadEvent(const EVENT_HEADER& header,
+                                       const ETW_BUFFER_CONTEXT& buffer_context,
+                                       size_t pointer_size,
+                                       base::span<const uint8_t> packet_data) {
+  // Size of `ImageLoad` event:
+  //   3 pointers + 8 `uint32`s + wide string contents + wide string terminator.
+  // Check that `packet_data` is large enough to hold at least the pointers,
+  // integers, and wide string terminator.
+  const size_t kMinimumSize =
+      3 * pointer_size + 8 * sizeof(uint32_t) + sizeof(wchar_t);
+  if (packet_data.size() < kMinimumSize) {
+    return;
+  }
+
+  if (!inclusion_policy_.ShouldRecordCallStacks(header.ThreadId)) {
+    return;
+  }
+
+  // Read the contents of `packet_data`.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  const auto image_base = CopyPointer(iterator, pointer_size);
+  const auto image_size = CopyPointer(iterator, pointer_size);
+  auto process_id = *iterator.CopyObject<uint32_t>();
+  if (header.ProcessId != static_cast<DWORD>(-1)) {
+    process_id = header.ProcessId;
+  }
+  (void)iterator.CopyObject<uint32_t>();      // ImageChecksum
+  (void)iterator.CopyObject<uint32_t>();      // TimeDateStamp
+  (void)iterator.CopyObject<uint32_t>();      // Reserved0
+  (void)CopyPointer(iterator, pointer_size);  // DefaultBase
+  (void)iterator.CopyObject<uint32_t>();      // Reserved1
+  (void)iterator.CopyObject<uint32_t>();      // Reserved2
+  (void)iterator.CopyObject<uint32_t>();      // Reserved3
+  (void)iterator.CopyObject<uint32_t>();      // Reserved4
+  const auto file_name = CopyWString(iterator);
+  if (!file_name.has_value()) {
+    return;
+  }
+  base::FilePath path;
+  if (!base::DevicePathToDriveLetterPath(base::FilePath(*file_name), &path)) {
+    return;
+  }
+  switch (header.EventDescriptor.Opcode) {
+    // Emitted when an image is loaded.
+    case EVENT_TRACE_TYPE_LOAD:
+    // Emitted when tracing starts, once per image loaded at the time.
+    case EVENT_TRACE_TYPE_DC_START:
+      active_processes_.AddLoadedImage(process_id, image_base, image_size,
+                                       path);
+      break;
+    // Emitted when an image is unloaded.
+    case EVENT_TRACE_TYPE_END:
+    // Emitted when tracing ends, once per image loaded at the time.
+    case EVENT_TRACE_TYPE_DC_END:
+      active_processes_.RemoveLoadedImage(process_id, image_base, image_size,
+                                          path);
+      break;
+  }
+}
+
+void EtwConsumer::HandleStackWalkEvent(const EVENT_HEADER& header,
+                                       const ETW_BUFFER_CONTEXT& buffer_context,
+                                       size_t pointer_size,
+                                       base::span<const uint8_t> packet_data) {
+  static constexpr int kStackWalkEventId = 32;
+  if (header.EventDescriptor.Opcode != kStackWalkEventId) {
+    return;
+  }
+
+  // Read and validate the contents of `packet_data`.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  // Size of `StackWalk` event:
+  //   `uint64` timestamp + `uint32` process and thread + up to 193 pointers.
+  const size_t kMinimumSize = sizeof(uint64_t) + 2 * sizeof(uint32_t);
+  if (packet_data.size() < kMinimumSize) {
+    return;
+  }
+  const auto qpc_timestamp = *iterator.CopyObject<uint64_t>();
+  const auto stack_process = *iterator.CopyObject<uint32_t>();
+  const auto stack_thread = *iterator.CopyObject<uint32_t>();
+  if (!inclusion_policy_.ShouldRecordCallStacks(stack_thread)) {
+    return;
+  }
+
+  // The remainder of the packet consists of the call stack.
+  const size_t remaining_bytes = packet_data.size_bytes() - iterator.position();
+  const size_t num_frames = remaining_bytes / pointer_size;
+  std::vector<uint64_t> call_stack;
+  call_stack.reserve(num_frames);
+  for (size_t i = 0; i < num_frames; ++i) {
+    call_stack.push_back(CopyPointer(iterator, pointer_size));
+  }
+
+  // Before interning any data, clear previous incremental state if needed.
+  if (reset_emitted_state_.load(std::memory_order_relaxed)) {
+    ResetEmittedState();
+  }
+
+  // Use a hash of the call stack as a unique identifier for interning.
+  size_t ip_hash = 0;
+  for (const auto& ip : call_stack) {
+    ip_hash = base::HashInts(ip_hash, ip);
+  }
+  InterningIndexEntry interned_callstack =
+      interned_callstacks_.LookupOrAdd(ip_hash);
+
+  // Generate a `StackWalk` event, using the timestamp of the event that the
+  // call stack is for, not that of the `StackWalk` event itself.
+  if (interned_callstack.was_emitted) {
+    // This call stack has been seen before in this trace, so the event can
+    // simply be added.
+    auto* event = MakeNextEventWithTimestamp(qpc_timestamp, buffer_context);
+    if (inclusion_policy_.ShouldIncludeThreadId(stack_thread)) {
+      event->set_thread_id(stack_thread);
+    }
+    perfetto::protos::pbzero::StackWalkEtwEvent* stackwalk_event =
+        event->set_stack_walk();
+    stackwalk_event->set_callstack_iid(interned_callstack.id);
+    return;
+  }
+
+  // This call stack hasn't been seen before in this trace. Start a new packet
+  // with interned data.
+  StartNewPacket(qpc_timestamp);
+  perfetto::protos::pbzero::InternedData* interned_data =
+      packet_handle_->set_interned_data();
+
+  // Intern each stack frame not seen before.
+  std::vector<InterningID> frame_ids;
+  for (const auto& ip : call_stack) {
+    // Intern the debug ID (unique identifier) for the module this stack frame
+    // belongs to, and the relative address (i.e., offset within the module), to
+    // enable it to be symbolized.
+    std::optional<ActiveProcesses::Image> module =
+        active_processes_.GetImageForAddress(stack_process, ip);
+    InterningIndexEntry interned_frame =
+        interned_frames_.LookupOrAdd(std::make_pair(stack_process, ip));
+    frame_ids.push_back(interned_frame.id);
+    if (interned_frame.was_emitted) {
+      continue;
+    }
+
+    auto* frame_proto = interned_data->add_frames();
+    frame_proto->set_iid(interned_frame.id);
+    frame_proto->set_rel_pc(module.has_value() ? ip - module->base_address_
+                                               : ip);
+    if (!module.has_value()) {
+      continue;
+    }
+
+    // Intern the module this stack frame belongs to if needed.
+    InterningIndexEntry interned_module = interned_modules_.LookupOrAdd(
+        std::make_pair(stack_process, module->base_address_));
+    frame_proto->set_mapping_id(interned_module.id);
+    if (interned_module.was_emitted) {
+      continue;
+    }
+
+    // Intern the module's debug ID if needed.
+    const auto debug_id_str = module->debug_id_.value_or("");
+    InterningIndexEntry interned_module_debug_id =
+        interned_module_debug_ids_.LookupOrAdd(debug_id_str);
+    if (!interned_module_debug_id.was_emitted) {
+      auto* module_id_proto = interned_data->add_build_ids();
+      module_id_proto->set_iid(interned_module_debug_id.id);
+      module_id_proto->set_str(debug_id_str.data());
+    }
+
+    // Intern the module's filename if needed.
+    const auto module_name = module->path_.BaseName().value();
+    InterningIndexEntry interned_module_name =
+        interned_module_names_.LookupOrAdd(module_name);
+    if (!interned_module_name.was_emitted) {
+      auto* module_name_proto = interned_data->add_mapping_paths();
+      module_name_proto->set_iid(interned_module_name.id);
+      module_name_proto->set_str(base::WideToUTF8(module_name.data()));
+    }
+
+    // Intern the module.
+    auto* module_proto = interned_data->add_mappings();
+    module_proto->set_iid(interned_module.id);
+    module_proto->set_build_id(interned_module_debug_id.id);
+    module_proto->add_path_string_ids(interned_module_name.id);
+  }
+
+  auto* callstack_entry = interned_data->add_callstacks();
+  callstack_entry->set_iid(interned_callstack.id);
+  for (const auto& id : frame_ids) {
+    callstack_entry->add_frame_ids(id);
+  }
+
+  etw_events_ = packet_handle_->set_etw_events();
+  auto* event = MakeNextEventWithTimestamp(qpc_timestamp, buffer_context);
+  if (inclusion_policy_.ShouldIncludeThreadId(stack_thread)) {
+    event->set_thread_id(stack_thread);
+  }
+  auto* stackwalk_event = event->set_stack_walk();
+  stackwalk_event->set_callstack_iid(interned_callstack.id);
 }
 
 void EtwConsumer::HandleLostEvent(const EVENT_HEADER& header,
@@ -627,7 +932,6 @@ bool EtwConsumer::DecodeCSwitchEvent(const EVENT_HEADER& header,
   c_switch->set_old_thread_wait_ideal_processor(
       old_thread_wait_ideal_processor);
   c_switch->set_new_thread_wait_time(new_thread_wait_time);
-
   return true;
 }
 
@@ -665,13 +969,33 @@ bool EtwConsumer::DecodeReadyThreadEvent(
   return true;
 }
 
+uint64_t EtwConsumer::RegisterFileIoStart(const EVENT_HEADER& header,
+                                          uint64_t irp_ptr,
+                                          size_t pointer_size) {
+  if (irp_ptr != 0 &&
+      irp_ptr != (pointer_size == sizeof(uint32_t) ? 0xffffffffULL
+                                                   : 0xffffffffffffffffULL)) {
+    constexpr size_t kMaxActiveChromeIrps = 16384;
+    if (active_irps_from_chrome_threads_.size() < kMaxActiveChromeIrps ||
+        active_irps_from_chrome_threads_.find(irp_ptr) !=
+            active_irps_from_chrome_threads_.end()) {
+      active_irps_from_chrome_threads_[irp_ptr] = header.ThreadId;
+    } else {
+      static bool logged_chrome_full = false;
+      if (!logged_chrome_full) {
+        logged_chrome_full = true;
+        DLOG(WARNING) << "active_irps_from_chrome_threads_ is full!";
+      }
+    }
+  }
+  return irp_ptr;
+}
+
 bool EtwConsumer::DecodeFileIoCreateEvent(
     const EVENT_HEADER& header,
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
     base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoCreateEtwEvent;
-
   // Size of `FileIo_Create` event:
   //   2 pointers + 4 `uint32`s + wide string contents + wide string terminator.
   // Check that `packet_data` is large enough to hold at least the pointers,
@@ -687,7 +1011,8 @@ bool EtwConsumer::DecodeFileIoCreateEvent(
   auto* event = MakeNextEvent(header, buffer_context);
   event->set_thread_id(header.ThreadId);
   auto* file_io_create = event->set_file_io_create();
-  file_io_create->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_create->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
   file_io_create->set_file_object(CopyPointerHash(iterator, pointer_size));
   file_io_create->set_ttid(*iterator.CopyObject<uint32_t>());
   file_io_create->set_create_options(*iterator.CopyObject<uint32_t>());
@@ -696,7 +1021,6 @@ bool EtwConsumer::DecodeFileIoCreateEvent(
   if (!privacy_filtering_enabled_) {
     file_io_create->set_open_path(base::WideToUTF8(*CopyWString(iterator)));
   }
-
   return true;
 }
 
@@ -705,8 +1029,6 @@ bool EtwConsumer::DecodeFileIoDirEnumEvent(
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
     base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoDirEnumEtwEvent;
-
   // Size of `FileIo_DirEnum` event:
   //   3 pointers + 4 `uint32`s + wide string contents + wide string terminator.
   // Check that `packet_data` is large enough to hold at least the pointers,
@@ -717,12 +1039,14 @@ bool EtwConsumer::DecodeFileIoDirEnumEvent(
     return false;
   }
 
-  // Read the contents of `packet_data` and generate a `FileIoDirEnum` event.
   base::BufferIterator<const uint8_t> iterator{packet_data};
+
+  // Read the contents of `packet_data` and generate a `FileIoDirEnum` event.
   auto* event = MakeNextEvent(header, buffer_context);
   event->set_thread_id(header.ThreadId);
   auto* file_io_dir_enum = event->set_file_io_dir_enum();
-  file_io_dir_enum->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_dir_enum->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
   file_io_dir_enum->set_file_object(CopyPointerHash(iterator, pointer_size));
   file_io_dir_enum->set_file_key(CopyPointerHash(iterator, pointer_size));
   file_io_dir_enum->set_ttid(*iterator.CopyObject<uint32_t>());
@@ -741,8 +1065,6 @@ bool EtwConsumer::DecodeFileIoInfoEvent(
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
     base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoInfoEtwEvent;
-
   // Size of `FileIo_Info` event: 4 pointers + 2 `uint32`s.
   const size_t kMinimumSize = 4 * pointer_size + 2 * sizeof(uint32_t);
   if (packet_data.size() < kMinimumSize) {
@@ -754,7 +1076,8 @@ bool EtwConsumer::DecodeFileIoInfoEvent(
   auto* event = MakeNextEvent(header, buffer_context);
   event->set_thread_id(header.ThreadId);
   auto* file_io_info = event->set_file_io_info();
-  file_io_info->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_info->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
   file_io_info->set_file_object(CopyPointerHash(iterator, pointer_size));
   file_io_info->set_file_key(CopyPointerHash(iterator, pointer_size));
   file_io_info->set_extra_info(CopyPointer(iterator, pointer_size));
@@ -764,13 +1087,72 @@ bool EtwConsumer::DecodeFileIoInfoEvent(
   return true;
 }
 
+bool EtwConsumer::DecodeFileIoPathOperationEvent(
+    const EVENT_HEADER& header,
+    const ETW_BUFFER_CONTEXT& buffer_context,
+    size_t pointer_size,
+    base::span<const uint8_t> packet_data) {
+  // Size of `FileIo_PathOperation` event:
+  //   4 pointers + 2 `uint32`s + wide string contents + wide string terminator.
+  const size_t kMinimumSize =
+      4 * pointer_size + 2 * sizeof(uint32_t) + sizeof(wchar_t);
+  if (packet_data.size() < kMinimumSize) {
+    return false;
+  }
+
+  // Read the contents of `packet_data` and generate a `FileIo_PathOperation`
+  // event.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  auto* event = MakeNextEvent(header, buffer_context);
+  event->set_thread_id(header.ThreadId);
+  auto* file_io_path = event->set_file_io_path_operation();
+  file_io_path->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
+  file_io_path->set_file_object(CopyPointerHash(iterator, pointer_size));
+  file_io_path->set_file_key(CopyPointerHash(iterator, pointer_size));
+  file_io_path->set_extra_info(CopyPointer(iterator, pointer_size));
+  file_io_path->set_ttid(*iterator.CopyObject<uint32_t>());
+  file_io_path->set_info_class(*iterator.CopyObject<uint32_t>());
+  if (!privacy_filtering_enabled_) {
+    file_io_path->set_file_name(base::WideToUTF8(*CopyWString(iterator)));
+  }
+  file_io_path->set_opcode(header.EventDescriptor.Opcode);
+  return true;
+}
+
+bool EtwConsumer::DecodeFileIoFltOpEvent(
+    const EVENT_HEADER& header,
+    const ETW_BUFFER_CONTEXT& buffer_context,
+    size_t pointer_size,
+    base::span<const uint8_t> packet_data) {
+  // Size of `FileIo_Info` event: 3 pointers + 4 `uint32`s.
+  const size_t kMinimumSize = 3 * pointer_size + 4 * sizeof(uint32_t);
+  if (packet_data.size() < kMinimumSize) {
+    return false;
+  }
+
+  // Read the contents of `packet_data` and generate a `FileIoInfo` event.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  auto* event = MakeNextEvent(header, buffer_context);
+  event->set_thread_id(header.ThreadId);
+  auto* file_io_info = event->set_file_io_info();
+  file_io_info->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
+  file_io_info->set_file_object(CopyPointerHash(iterator, pointer_size));
+  file_io_info->set_file_key(CopyPointerHash(iterator, pointer_size));
+  file_io_info->set_ttid(*iterator.CopyObject<uint32_t>());
+  file_io_info->set_extra_info(*iterator.CopyObject<uint32_t>());
+  (void)iterator.CopyObject<uint32_t>();  // FilterInstance
+  (void)iterator.CopyObject<uint32_t>();  // Reserved
+  file_io_info->set_opcode(header.EventDescriptor.Opcode);
+  return true;
+}
+
 bool EtwConsumer::DecodeFileIoReadWriteEvent(
     const EVENT_HEADER& header,
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
     base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoReadWriteEtwEvent;
-
   // Size of `FileIo_ReadWrite` event: 1 uint64 + 3 pointers + 3 `uint32`s.
   const size_t kMinimumSize =
       sizeof(uint64_t) + 3 * pointer_size + 3 * sizeof(uint32_t);
@@ -784,7 +1166,8 @@ bool EtwConsumer::DecodeFileIoReadWriteEvent(
   event->set_thread_id(header.ThreadId);
   auto* file_io_read_write = event->set_file_io_read_write();
   file_io_read_write->set_offset(*iterator.CopyObject<uint64_t>());
-  file_io_read_write->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_read_write->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
   file_io_read_write->set_file_object(CopyPointerHash(iterator, pointer_size));
   file_io_read_write->set_file_key(CopyPointerHash(iterator, pointer_size));
   file_io_read_write->set_ttid(*iterator.CopyObject<uint32_t>());
@@ -799,8 +1182,6 @@ bool EtwConsumer::DecodeFileIoSimpleOpEvent(
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
     base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoSimpleOpEtwEvent;
-
   // Size of `FileIo_SimpleOp` event: 3 pointers + 1 uint32.
   const size_t kMinimumSize = 3 * pointer_size + sizeof(uint32_t);
   if (packet_data.size() < kMinimumSize) {
@@ -812,7 +1193,8 @@ bool EtwConsumer::DecodeFileIoSimpleOpEvent(
   auto* event = MakeNextEvent(header, buffer_context);
   event->set_thread_id(header.ThreadId);
   auto* file_io_simple_op = event->set_file_io_simple_op();
-  file_io_simple_op->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_simple_op->set_irp_ptr(RegisterFileIoStart(
+      header, CopyPointerHash(iterator, pointer_size), pointer_size));
   file_io_simple_op->set_file_object(CopyPointerHash(iterator, pointer_size));
   file_io_simple_op->set_file_key(CopyPointerHash(iterator, pointer_size));
   file_io_simple_op->set_ttid(*iterator.CopyObject<uint32_t>());
@@ -824,9 +1206,8 @@ bool EtwConsumer::DecodeFileIoOpEndEvent(
     const EVENT_HEADER& header,
     const ETW_BUFFER_CONTEXT& buffer_context,
     size_t pointer_size,
-    base::span<const uint8_t> packet_data) {
-  using perfetto::protos::pbzero::FileIoOpEndEtwEvent;
-
+    base::span<const uint8_t> packet_data,
+    bool should_record) {
   // Size of `FileIo_OpEnd` event: 2 pointers + 1 uint32.
   const size_t kMinimumSize = 2 * pointer_size + sizeof(uint32_t);
   if (packet_data.size() < kMinimumSize) {
@@ -835,40 +1216,214 @@ bool EtwConsumer::DecodeFileIoOpEndEvent(
 
   // Read the contents of `packet_data` and generate a `FileIoOpEnd` event.
   base::BufferIterator<const uint8_t> iterator{packet_data};
+  const auto irp_ptr = CopyPointerHash(iterator, pointer_size);
+
+  const bool is_irp_valid =
+      (irp_ptr != 0 &&
+       irp_ptr != (pointer_size == sizeof(uint32_t) ? 0xffffffffULL
+                                                    : 0xffffffffffffffffULL));
+
+  uint32_t event_thread_id = header.ThreadId;
+  if (is_irp_valid) {
+    auto it_chrome = active_irps_from_chrome_threads_.find(irp_ptr);
+    if (it_chrome != active_irps_from_chrome_threads_.end()) {
+      // The start event was run on a Chrome thread!
+      if (!should_record) {
+        // Create the end Op with the thread ID of the start event.
+        event_thread_id = it_chrome->second;
+      }
+      active_irps_from_chrome_threads_.erase(it_chrome);
+    } else if (!should_record) {
+      // Not an active Chrome operation and completing on a non-Chrome thread.
+      return true;
+    }
+  } else {
+    // For synchronous / invalid IRP pointers, we must rely on the thread ID
+    // of the completion event.
+    if (!should_record) {
+      return true;
+    }
+  }
+
   auto* event = MakeNextEvent(header, buffer_context);
-  event->set_thread_id(header.ThreadId);
+  event->set_thread_id(event_thread_id);
   auto* file_io_op_end = event->set_file_io_op_end();
-  file_io_op_end->set_irp_ptr(CopyPointerHash(iterator, pointer_size));
+  file_io_op_end->set_irp_ptr(irp_ptr);
   file_io_op_end->set_extra_info(CopyPointer(iterator, pointer_size));
   file_io_op_end->set_nt_status(*iterator.CopyObject<uint32_t>());
   return true;
 }
 
+void EtwConsumer::DecodeDiskIoEventTypeGroup1(
+    const EVENT_HEADER& header,
+    const ETW_BUFFER_CONTEXT& buffer_context,
+    size_t pointer_size,
+    base::span<const uint8_t> packet_data) {
+  // See https://learn.microsoft.com/en-us/windows/win32/etw/diskio-typegroup1.
+  // Size of `DiskIo_TypeGroup1` event:  5 uint32 + 2 uint64 + 2 pointers.
+  const size_t kMinimumSize =
+      5 * sizeof(uint32_t) + 2 * sizeof(uint64_t) + 2 * pointer_size;
+  if (packet_data.size() < kMinimumSize) {
+    DLOG(ERROR) << "Error decoding DiskIo Group1 event";
+    return;
+  }
+  // Read the contents of `packet_data` and generate a `DiskIo` event.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  uint32_t disk_number = *iterator.CopyObject<uint32_t>();
+  uint32_t irp_flags = *iterator.CopyObject<uint32_t>();
+  uint32_t transfer_size = *iterator.CopyObject<uint32_t>();
+  /* skip over reserved bytes*/ (void)*iterator.CopyObject<uint32_t>();
+  int64_t byte_offset = *iterator.CopyObject<int64_t>();
+  uint64_t file_object = CopyPointerHash(iterator, pointer_size);
+  uint64_t irp_ptr = CopyPointerHash(iterator, pointer_size);
+  uint64_t high_res_response_time = *iterator.CopyObject<uint64_t>();
+  uint32_t issuing_thread_id = *iterator.CopyObject<uint32_t>();
+  int32_t event_thread_id;
+  if (!CalculateDiskIoEventInclusionAndThreadId(
+          header.ThreadId, issuing_thread_id, event_thread_id)) {
+    return;
+  }
+
+  uint64_t response_time = GetTimestampNanoseconds(high_res_response_time);
+  // Make a Disk IO event.
+  auto* event = MakeNextEvent(header, buffer_context);
+  event->set_thread_id(event_thread_id);
+  auto* disk_io = event->set_disk_io();
+  disk_io->set_disk_number(disk_number);
+  disk_io->set_irp_flags(irp_flags);
+  disk_io->set_transfer_size(transfer_size);
+  disk_io->set_byte_offset(byte_offset);
+  disk_io->set_file_object(file_object);
+  disk_io->set_irp_ptr(irp_ptr);
+  disk_io->set_response_time(response_time);
+  disk_io->set_issuing_thread_id(issuing_thread_id);
+  disk_io->set_opcode(header.EventDescriptor.Opcode);
+}
+
+void EtwConsumer::DecodeDiskIoEventTypeGroup2(
+    const EVENT_HEADER& header,
+    const ETW_BUFFER_CONTEXT& buffer_context,
+    size_t pointer_size,
+    base::span<const uint8_t> packet_data) {
+  // See https://learn.microsoft.com/en-us/windows/win32/etw/diskio-typegroup2.
+
+  // Size of `DiskIo_TypeGroup2` event: 1 pointer + 1 uint32.
+  const size_t kMinimumSize = pointer_size + sizeof(uint32_t);
+  if (packet_data.size() < kMinimumSize) {
+    DLOG(ERROR) << "Error decoding DiskIo Group2 event";
+    return;
+  }
+
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  uint64_t irp_ptr = CopyPointerHash(iterator, pointer_size);
+  uint32_t issuing_thread_id = *iterator.CopyObject<uint32_t>();
+  int32_t event_thread_id;
+  if (!CalculateDiskIoEventInclusionAndThreadId(
+          header.ThreadId, issuing_thread_id, event_thread_id)) {
+    return;
+  }
+
+  auto* event = MakeNextEvent(header, buffer_context);
+  event->set_thread_id(event_thread_id);
+  auto* disk_io = event->set_disk_io();
+  disk_io->set_irp_ptr(irp_ptr);
+  disk_io->set_issuing_thread_id(issuing_thread_id);
+  disk_io->set_opcode(header.EventDescriptor.Opcode);
+}
+
+void EtwConsumer::DecodeDiskIoEventTypeGroup3(
+    const EVENT_HEADER& header,
+    const ETW_BUFFER_CONTEXT& buffer_context,
+    size_t pointer_size,
+    base::span<const uint8_t> packet_data) {
+  // See https://learn.microsoft.com/en-us/windows/win32/etw/diskio-typegroup3.
+  // Size of `DiskIo_TypeGroup3` event:  3 uint32 + 1 uint64 + 1 pointer
+  const size_t kMinimumSize =
+      3 * sizeof(uint32_t) + sizeof(uint64_t) + pointer_size;
+  if (packet_data.size() < kMinimumSize) {
+    DLOG(ERROR) << "Error decoding DiskIo Group3 event";
+    return;
+  }
+
+  // Read the contents of `packet_data` and generate a `DiskIo` event.
+  base::BufferIterator<const uint8_t> iterator{packet_data};
+  uint32_t disk_number = *iterator.CopyObject<uint32_t>();
+  uint32_t irp_flags = *iterator.CopyObject<uint32_t>();
+  uint64_t high_res_response_time = *iterator.CopyObject<uint64_t>();
+  uint64_t irp_ptr = CopyPointerHash(iterator, pointer_size);
+  uint32_t issuing_thread_id = *iterator.CopyObject<uint32_t>();
+  int32_t event_thread_id;
+  if (!CalculateDiskIoEventInclusionAndThreadId(
+          header.ThreadId, issuing_thread_id, event_thread_id)) {
+    return;
+  }
+  uint64_t response_time = GetTimestampNanoseconds(high_res_response_time);
+  // Make a Disk IO event.
+  auto* event = MakeNextEvent(header, buffer_context);
+  event->set_thread_id(event_thread_id);
+  auto* disk_io = event->set_disk_io();
+  disk_io->set_disk_number(disk_number);
+  disk_io->set_irp_flags(irp_flags);
+  disk_io->set_irp_ptr(irp_ptr);
+  disk_io->set_response_time(response_time);
+  disk_io->set_issuing_thread_id(issuing_thread_id);
+  disk_io->set_opcode(header.EventDescriptor.Opcode);
+}
+
 perfetto::protos::pbzero::EtwTraceEvent* EtwConsumer::MakeNextEvent(
     const EVENT_HEADER& header,
     const ETW_BUFFER_CONTEXT& buffer_context) {
-  static const double qpc_ticks_per_second = []() {
-    LARGE_INTEGER perf_counter_frequency = {};
-    ::QueryPerformanceFrequency(&perf_counter_frequency);
-    double frequency = static_cast<double>(perf_counter_frequency.QuadPart);
-    CHECK_GT(frequency, 0.0);
-    return frequency;
-  }();
+  return MakeNextEventWithTimestamp(header.TimeStamp.QuadPart, buffer_context);
+}
 
-  uint64_t now = static_cast<uint64_t>(
-      base::Time::kNanosecondsPerSecond *
-      static_cast<double>(header.TimeStamp.QuadPart) / qpc_ticks_per_second);
+perfetto::protos::pbzero::EtwTraceEvent*
+EtwConsumer::MakeNextEventWithTimestamp(
+    uint64_t qpc_timestamp,
+    const ETW_BUFFER_CONTEXT& buffer_context) {
   if (!etw_events_) {
-    // Resetting the `packet_handle_` finalizes previous data.
-    packet_handle_ = trace_writer_->NewTracePacket();
-    packet_handle_->set_timestamp(now);
+    StartNewPacket(qpc_timestamp);
     etw_events_ = packet_handle_->set_etw_events();
   }
 
   auto* event = etw_events_->add_event();
-  event->set_timestamp(now);
+  event->set_timestamp(GetTimestampNanoseconds(qpc_timestamp));
   event->set_cpu(buffer_context.ProcessorIndex);
   return event;
+}
+
+bool EtwConsumer::CalculateDiskIoEventInclusionAndThreadId(
+    uint32_t header_thread_id,
+    uint32_t issuing_thread_id,
+    int32_t& event_thread_id) {
+  if (inclusion_policy_.ShouldRecordDiskIoEvents(header_thread_id)) {
+    event_thread_id = header_thread_id;
+    return true;
+  }
+  if (inclusion_policy_.ShouldRecordDiskIoEvents(issuing_thread_id)) {
+    event_thread_id = issuing_thread_id;
+    return true;
+  }
+  return false;
+}
+
+void EtwConsumer::FinalizePreviousData() {
+  etw_events_ = nullptr;
+  packet_handle_ = {};
+}
+
+void EtwConsumer::StartNewPacket(uint64_t qpc_timestamp) {
+  FinalizePreviousData();
+  auto sequence_flags = perfetto::protos::pbzero::
+      perfetto_pbzero_enum_TracePacket::SEQ_NEEDS_INCREMENTAL_STATE;
+  if (reset_emitted_state_.exchange(false, std::memory_order_relaxed)) {
+    ResetEmittedState();
+    sequence_flags =
+        perfetto::protos::pbzero::TracePacket::SEQ_INCREMENTAL_STATE_CLEARED;
+  }
+  packet_handle_ = trace_writer_->NewTracePacket();
+  packet_handle_->set_timestamp(GetTimestampNanoseconds(qpc_timestamp));
+  // `StackWalk` events require incremental state.
+  packet_handle_->set_sequence_flags(sequence_flags);
 }
 
 }  // namespace tracing

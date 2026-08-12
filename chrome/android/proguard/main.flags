@@ -13,8 +13,11 @@
 -keep,allowobfuscation,allowoptimization,allowaccessmodification public class ** extends org.chromium.chrome.browser.base.SplitCompat*$Impl {
   public <init>();
 }
+-keep,allowobfuscation,allowoptimization,allowaccessmodification public class ** extends org.chromium.base.SplitCompatService$Impl {
+  public <init>();
+}
 
-# To fix crbug/1017396. This is because AppBarLayout$ScrollingViewBehavior
+# To fix crbug.com/40654856. This is because AppBarLayout$ScrollingViewBehavior
 # is instantiated via java.lang.reflect.Constructor in CoordinatorLayout.java.
 # Note that AppBarLayout$Behavior is needed to keep the scrolling behavior.
 -keep class com.google.android.material.appbar.AppBarLayout$Behavior {
@@ -33,3 +36,7 @@
 # TODO(crbug.com/430099860): Remove once OnDemandModuleEntryPointsImpl is not
 # removed due to being unused.
 -dontwarn org.chromium.chrome.modules.on_demand.OnDemandModuleEntryPointsImpl
+
+# Test APK targets do not include the XR bundle code, but do include XrModule.java,
+# which references XrModuleProvider via an @IdentifierNameString.
+-dontwarn org.chromium.chrome.browser.xr.scenecore.XrModuleProviderImpl

@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.webapps;
 
 import static android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+import static android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
 
 import android.content.Context;
 import android.content.Intent;
@@ -28,6 +29,7 @@ import org.chromium.chrome.browser.browserservices.intents.ColorProvider;
 import org.chromium.chrome.browser.browserservices.intents.WebApkExtras;
 import org.chromium.chrome.browser.browserservices.intents.WebappExtras;
 import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderUtils;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.device.mojom.ScreenOrientationLockType;
@@ -73,11 +75,18 @@ public class WebappIntentDataProvider extends BrowserServicesIntentDataProvider 
                 new ContextThemeWrapper(
                         ContextUtils.getApplicationContext(), ActivityUtils.getThemeId());
         mCloseButtonIcon = TintedDrawable.constructTintedDrawable(context, R.drawable.btn_close);
-        mTwaDisplayMode =
-                (webappExtras.displayMode == DisplayMode.FULLSCREEN)
-                        ? new ImmersiveMode(
-                                /* sticky= */ false, LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT)
-                        : new DefaultMode();
+        if (webappExtras.displayMode == DisplayMode.FULLSCREEN) {
+            boolean useShortEdgesCutoutMode =
+                    ChromeFeatureList.sWebAppShortEdgesCutoutMode.isEnabled();
+            mTwaDisplayMode =
+                    new ImmersiveMode(
+                            /* isSticky= */ useShortEdgesCutoutMode,
+                            useShortEdgesCutoutMode
+                                    ? LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                                    : LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT);
+        } else {
+            mTwaDisplayMode = new DefaultMode();
+        }
         mShareData = shareData;
         mWebappExtras = webappExtras;
         mWebApkExtras = webApkExtras;
@@ -230,6 +239,15 @@ public class WebappIntentDataProvider extends BrowserServicesIntentDataProvider 
 
         @Override
         public @Nullable Integer getNavigationBarColor() {
+            // The web app manifest has no dedicated navigation bar color, so when the developer
+            // specified a theme color we reuse it for the navigation bar to keep it consistent
+            // with the status bar. Without a custom theme color we leave the navigation bar to the
+            // platform default.
+            if (mHasCustomToolbarColor
+                    && ChromeFeatureList.isEnabled(
+                            ChromeFeatureList.WEB_APP_NAVIGATION_BAR_THEME_COLOR)) {
+                return mToolbarColor;
+            }
             return null;
         }
 

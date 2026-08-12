@@ -44,7 +44,7 @@ SynchronousCompositorProxy::SynchronousCompositorProxy(
 SynchronousCompositorProxy::~SynchronousCompositorProxy() {
   // The LayerTreeFrameSink is destroyed/removed by the compositor before
   // shutting down everything.
-  DCHECK_EQ(layer_tree_frame_sink_, nullptr);
+  CHECK_EQ(layer_tree_frame_sink_, nullptr);
   input_handler_proxy_->SetSynchronousInputHandler(nullptr);
 }
 
@@ -412,6 +412,10 @@ void SynchronousCompositorProxy::BindChannel(
 }
 
 void SynchronousCompositorProxy::HostDisconnected() {
+  control_host_.reset();
+  host_.reset();
+  receiver_.reset();
+
   // It is possible due to bugs that the Host is disconnected without pausing
   // begin frames. This causes hard-to-reproduce but catastrophic bug of
   // blocking the renderer main thread forever on a commit. See

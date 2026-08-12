@@ -80,6 +80,8 @@ class PLATFORM_EXPORT TranslateTransformOperation final
   OperationType GetType() const override { return type_; }
   OperationType PrimitiveType() const final { return kTranslate3D; }
 
+  String DebugString() const override;
+
  protected:
   bool IsEqualAssumingSameType(const TransformOperation& o) const override {
     const TranslateTransformOperation* t =
@@ -89,6 +91,8 @@ class PLATFORM_EXPORT TranslateTransformOperation final
 
  private:
   TransformOperation* Accumulate(const TransformOperation& other) override;
+  TransformOperation* AccumulateN(const TransformOperation& other,
+                                  int n) override;
   TransformOperation* Blend(const TransformOperation* from,
                             double progress,
                             bool blend_to_identity = false) override;

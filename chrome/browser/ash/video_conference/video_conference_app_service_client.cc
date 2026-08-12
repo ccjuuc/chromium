@@ -9,7 +9,6 @@
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/unguessable_token.h"
@@ -54,9 +53,8 @@ VideoConferenceAppServiceClient::~VideoConferenceAppServiceClient() {
   g_client_instance = nullptr;
 }
 
-void VideoConferenceAppServiceClient::ReturnToApp(
-    const base::UnguessableToken& token,
-    ReturnToAppCallback callback) {
+bool VideoConferenceAppServiceClient::ReturnToApp(
+    const base::UnguessableToken& token) {
   // Go through `id_to_app_state_` to find possible app to reactivate.
   // This loop is inevitable unless we use multiple maps which also makes things
   // complicated.
@@ -72,8 +70,7 @@ void VideoConferenceAppServiceClient::ReturnToApp(
     // This will happen very frequently; this is not an error, but expected
     // behavior. This indicates that the app represented by this id does not
     // belong to this client.
-    std::move(callback).Run(false);
-    return;
+    return false;
   }
 
   for (const apps::Instance* instance :
@@ -83,7 +80,7 @@ void VideoConferenceAppServiceClient::ReturnToApp(
     // This is required in virtual desktop to reactivate an arc++ app.
     instance->Window()->Focus();
   }
-  std::move(callback).Run(true);
+  return true;
 }
 
 void VideoConferenceAppServiceClient::OnCapabilityAccessUpdate(
@@ -103,7 +100,7 @@ void VideoConferenceAppServiceClient::OnCapabilityAccessUpdate(
 
   const bool is_capturing_camera = update.Camera().value_or(false);
   const bool is_capturing_microphone = update.Microphone().value_or(false);
-  const bool is_already_tracked = base::Contains(id_to_app_state_, app_id);
+  const bool is_already_tracked = id_to_app_state_.contains(app_id);
 
   // We only want to start tracking a app if it starts to accessing
   // microphone/camera.
@@ -154,15 +151,15 @@ void VideoConferenceAppServiceClient::OnCapabilityAccessUpdate(
   if (update.CameraChanged() && is_capturing_camera &&
       !camera_system_enabled_) {
     video_conference_manager_ash_->NotifyDeviceUsedWhileDisabled(
-        crosapi::mojom::VideoConferenceMediaDevice::kCamera,
-        base::UTF8ToUTF16(app_name), base::DoNothingAs<void(bool)>());
+        VideoConferenceMediaDevice::kCamera, base::UTF8ToUTF16(app_name),
+        base::DoNothingAs<void(bool)>());
   }
 
   if (update.MicrophoneChanged() && is_capturing_microphone &&
       !microphone_system_enabled_) {
     video_conference_manager_ash_->NotifyDeviceUsedWhileDisabled(
-        crosapi::mojom::VideoConferenceMediaDevice::kMicrophone,
-        base::UTF8ToUTF16(app_name), base::DoNothingAs<void(bool)>());
+        VideoConferenceMediaDevice::kMicrophone, base::UTF8ToUTF16(app_name),
+        base::DoNothingAs<void(bool)>());
   }
 }
 
@@ -177,7 +174,7 @@ void VideoConferenceAppServiceClient::OnInstanceUpdate(
   const AppIdString& app_id = update.AppId();
 
   // We only care about the apps being tracked already.
-  if (!base::Contains(id_to_app_state_, app_id)) {
+  if (!id_to_app_state_.contains(app_id)) {
     return;
   }
 
@@ -291,7 +288,7 @@ apps::AppType VideoConferenceAppServiceClient::GetAppType(
 
 VideoConferenceAppServiceClient::AppState&
 VideoConferenceAppServiceClient::GetOrAddAppState(const std::string& app_id) {
-  if (!base::Contains(id_to_app_state_, app_id)) {
+  if (!id_to_app_state_.contains(app_id)) {
     id_to_app_state_[app_id] = AppState{base::UnguessableToken::Create(),
                                         base::Time::Now(), false, false};
 

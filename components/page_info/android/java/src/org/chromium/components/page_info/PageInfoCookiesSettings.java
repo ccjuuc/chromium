@@ -55,7 +55,6 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
     private TextMessagePreference mCookieSummary;
     private Runnable mOnClearCallback;
     private Runnable mOnCookieSettingsLinkClicked;
-    private Callback<Activity> mOnFeedbackClicked;
     private @Nullable Dialog mConfirmationDialog;
     private boolean mDeleteDisabled;
     private boolean mDataUsed;
@@ -134,7 +133,6 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
         mDaysUntilExpirationForTesting = params.daysUntilExpirationForTesting;
         mDeleteDisabled = params.disableCookieDeletion;
         mOnClearCallback = params.onClearCallback;
-        mOnFeedbackClicked = params.onFeedbackLinkClicked;
         mHostName = params.hostName;
 
         // Initialize UI elements that are based on params.
@@ -203,11 +201,6 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
             @CookieControlsState int controlsState,
             @CookieControlsEnforcement int enforcement,
             long expiration) {
-        if (enforcement == CookieControlsEnforcement.ENFORCED_BY_TPCD_GRANT) {
-            setTpcdGrantState();
-            updateContentDescriptionsForA11y();
-            return;
-        }
         boolean visible = controlsState != CookieControlsState.HIDDEN;
         mCookieSwitch.setVisible(visible);
         mThirdPartyCookiesTitle.setVisible(visible);
@@ -230,29 +223,11 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
         updateContentDescriptionsForA11y();
     }
 
-    private void setTpcdGrantState() {
-        mCookieSwitch.setVisible(false);
-        mThirdPartyCookiesTitle.setVisible(false);
-        mCookieSummary.setVisible(false);
-        mThirdPartyCookiesSummary.setSummary(
-                SpanApplier.applySpans(
-                        getString(R.string.page_info_tracking_protection_site_grant_description),
-                        new SpanApplier.SpanInfo(
-                                "<link>",
-                                "</link>",
-                                new ChromeClickableSpan(
-                                        getContext(),
-                                        (view) -> {
-                                            mOnCookieSettingsLinkClicked.run();
-                                        }))));
-        mThirdPartyCookiesSummary.setDividerAllowedAbove(true);
-    }
-
     private void setBlocked3pcTitleAndSummary() {
         mThirdPartyCookiesTitle.setTitle(
                 getString(R.string.page_info_cookies_site_not_working_title));
-        int resId = R.string.page_info_cookies_site_not_working_description_tracking_protection;
-        mThirdPartyCookiesSummary.setSummary(getString(resId));
+        mThirdPartyCookiesSummary.setSummary(
+                getString(R.string.page_info_cookies_site_not_working_description));
     }
 
     private void setAllowed3pcTitleAndSummary(long expiration) {
@@ -269,23 +244,8 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
             }
         }
         mThirdPartyCookiesTitle.setTitle(title);
-
-        int resId =
-                expiration == 0
-                        ? R.string
-                                .page_info_cookies_tracking_protection_permanent_allowed_description
-                        : R.string.page_info_cookies_send_feedback_description;
-        mThirdPartyCookiesSummary.setSummary(
-                SpanApplier.applySpans(
-                        getString(resId),
-                        new SpanApplier.SpanInfo(
-                                "<link>",
-                                "</link>",
-                                new ChromeClickableSpan(
-                                        getContext(),
-                                        (view) -> {
-                                            mOnFeedbackClicked.onResult(this.getActivity());
-                                        }))));
+        int resId = R.string.page_info_tracking_protection_cookies_permanent_allowed_description;
+        mThirdPartyCookiesSummary.setSummary(getString(resId));
     }
 
     /**
@@ -387,8 +347,7 @@ public class PageInfoCookiesSettings extends BaseSiteSettingsFragment {
         return true;
     }
 
-    // TODO(crbug.com/444470792): Determine what pieces of logic are dynamic and need handling.
     public static final BaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new BaseSearchIndexProvider(
-                    PageInfoCookiesSettings.class.getName(), R.xml.page_info_cookie_preference);
+                    PageInfoCookiesSettings.class.getName(), BaseSearchIndexProvider.INDEX_OPT_OUT);
 }

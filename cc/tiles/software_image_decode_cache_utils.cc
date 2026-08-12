@@ -9,10 +9,10 @@
 #include <utility>
 
 #include "base/atomic_sequence_num.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/hash/hash.h"
 #include "base/memory/discardable_memory_allocator.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/memory.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/paint/paint_flags.h"
@@ -179,9 +179,9 @@ SoftwareImageDecodeCacheUtils::DoDecodeImage(
     }
   }
 
-  return std::make_unique<CacheEntry>(
-      target_image, target_gainmap_image, paint_image.GetHDRMetadata(),
-      std::move(target_pixels), SkSize::Make(0, 0));
+  return std::make_unique<CacheEntry>(target_image, target_gainmap_image,
+                                      std::move(target_pixels),
+                                      SkSize::Make(0, 0));
 }
 
 // static
@@ -278,8 +278,7 @@ SoftwareImageDecodeCacheUtils::GenerateCacheEntryFromCandidate(
   }
 
   return std::make_unique<CacheEntry>(
-      target_image, target_gainmap_image, candidate_image.hdr_metadata(),
-      std::move(target_pixels),
+      target_image, target_gainmap_image, std::move(target_pixels),
       SkSize::Make(-key.src_rect().x(), -key.src_rect().y()));
 }
 
@@ -308,7 +307,8 @@ SoftwareImageDecodeCacheUtils::CacheKey::FromDrawImage(const DrawImage& image,
   TargetColorParams target_color_params = image.target_color_params();
   target_color_params.hdr_headroom = std::nullopt;
   if (paint_image.HasGainmapInfo() ||
-      ToneMapUtil::UseGlobalToneMapFilter(paint_image.color_space())) {
+      ToneMapUtil::UseGlobalToneMapFilter(paint_image.color_space(),
+                                          paint_image.GetHDRMetadata())) {
     if (paint_image.color_space()) {
       target_color_params.color_space =
           gfx::ColorSpace(*paint_image.color_space());
@@ -462,14 +462,12 @@ SoftwareImageDecodeCacheUtils::CacheEntry::CacheEntry()
 SoftwareImageDecodeCacheUtils::CacheEntry::CacheEntry(
     sk_sp<SkImage> image,
     sk_sp<SkImage> gainmap_image,
-    const gfx::HDRMetadata& hdr_metadata,
     std::unique_ptr<base::DiscardableMemory> in_memory,
     const SkSize& src_rect_offset)
     : is_locked(true),
       memory(std::move(in_memory)),
       image_(std::move(image)),
       gainmap_image_(std::move(gainmap_image)),
-      hdr_metadata_(hdr_metadata),
       src_rect_offset_(src_rect_offset),
       tracing_id_(g_next_tracing_id_.GetNext()) {
   DCHECK(memory);
@@ -493,7 +491,6 @@ void SoftwareImageDecodeCacheUtils::CacheEntry::MoveImageMemoryTo(
   entry->src_rect_offset_ = std::move(src_rect_offset_);
   entry->image_ = std::move(image_);
   entry->gainmap_image_ = std::move(gainmap_image_);
-  entry->hdr_metadata_ = hdr_metadata_;
 }
 
 bool SoftwareImageDecodeCacheUtils::CacheEntry::Lock() {

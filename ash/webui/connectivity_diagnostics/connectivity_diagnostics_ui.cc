@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "ash/webui/connectivity_diagnostics/connectivity_diagnostics_ui.h"
 
 #include <utility>
@@ -13,6 +12,7 @@
 #include "ash/webui/grit/connectivity_diagnostics_resources_map.h"
 #include "ash/webui/network_ui/network_diagnostics_resource_provider.h"
 #include "ash/webui/network_ui/network_health_resource_provider.h"
+#include "base/containers/span.h"
 #include "chromeos/services/network_health/public/mojom/network_diagnostics.mojom.h"
 #include "chromeos/services/network_health/public/mojom/network_health.mojom.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
@@ -67,18 +67,18 @@ class ConnectivityDiagnosticsMessageHandler
   }
 
  private:
-  void SendFeedbackReportRequest(const base::Value::List& value) {
+  void SendFeedbackReportRequest(const base::ListValue& value) {
     send_feedback_report_callback_.Run(/*extra_diagnostics*/ "");
   }
 
   // TODO(crbug/1220965): Remove conditional feedback button when WebUI feedback
   // is launched.
-  void GetShowFeedbackButton(const base::Value::List& args) {
+  void GetShowFeedbackButton(const base::ListValue& args) {
     if (args.size() < 1 || !args[0].is_string())
       return;
 
     auto callback_id = args[0].GetString();
-    base::Value::List response;
+    base::ListValue response;
     response.Append(base::Value(show_feedback_button_));
 
     AllowJavascript();

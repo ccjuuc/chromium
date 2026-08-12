@@ -5,8 +5,16 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_MANDATORY_REAUTH_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_MANDATORY_REAUTH_MANAGER_H_
 
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <variant>
+#include <vector>
 
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
@@ -91,6 +99,10 @@ class MandatoryReauthManager {
       NonInteractivePaymentMethodType non_interactive_payment_method_type,
       base::OnceCallback<void(bool)> authentication_complete_callback);
 
+  // Returns true if we have supported auth method on the device, false
+  // otherwise.
+  virtual bool IsDeviceAuthenticationSupported();
+
   // Returns true if the user conditions denote that we should offer opt-in for
   // this user, false otherwise.
   // `card_record_type_if_non_interactive_authentication_flow_completed` will be
@@ -129,22 +141,9 @@ class MandatoryReauthManager {
 
   PaymentsDataManager& GetPaymentsDataManager();
 
-  void SetDeviceAuthenticatorPtrForTesting(
-      std::unique_ptr<device_reauth::DeviceAuthenticator>
-          device_authenticator) {
-    device_authenticator_ = std::move(device_authenticator);
-  }
-
-  device_reauth::DeviceAuthenticator* GetDeviceAuthenticatorPtrForTesting() {
-    return device_authenticator_.get();
-  }
-
  private:
   // Raw pointer to the web content's AutofillClient.
   raw_ptr<AutofillClient> client_;
-
-  // Used for authentication related to mandatory re-auth.
-  std::unique_ptr<device_reauth::DeviceAuthenticator> device_authenticator_;
 
   // Used to store the opt in source for logging purposes.
   autofill_metrics::MandatoryReauthOptInOrOutSource opt_in_source_ =

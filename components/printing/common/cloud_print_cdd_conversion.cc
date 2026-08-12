@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -20,20 +21,11 @@
 #include "printing/backend/print_backend.h"
 #include "printing/mojom/print.mojom.h"
 
-#if BUILDFLAG(IS_CHROMEOS)
-#include "printing/printing_features.h"
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 namespace printer = cloud_devices::printer;
 
 namespace cloud_print {
 
 namespace {
-
-#if BUILDFLAG(IS_WIN)
-constexpr char kIdPageOutputQuality[] = "page_output_quality";
-constexpr char kDisplayNamePageOutputQuality[] = "Page output quality";
-#endif  // BUILDFLAG(IS_WIN)
 
 printer::DuplexType ToCloudDuplexType(printing::mojom::DuplexMode mode) {
   switch (mode) {
@@ -311,7 +303,7 @@ void StoreMarginsUnique(const printing::PaperMargins& margins_um,
   printer::Margins printer_margins(
       margins_um.top_margin_um, margins_um.right_margin_um,
       margins_um.bottom_margin_um, margins_um.left_margin_um);
-  if (!base::Contains(margins_storage, printer_margins)) {
+  if (!std::ranges::contains(margins_storage, printer_margins)) {
     margins_storage.emplace_back(std::move(printer_margins));
   }
 }
@@ -368,22 +360,6 @@ printer::MarginsCapability GetMarginsCapabilities(
 }
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-printer::SelectVendorCapability GetPageOutputQualityCapabilities(
-    const printing::PrinterSemanticCapsAndDefaults& semantic_info) {
-  printer::SelectVendorCapability page_output_quality_capabilities;
-  const std::optional<printing::PageOutputQuality>& page_output_quality =
-      semantic_info.page_output_quality;
-  for (const auto& attribute : page_output_quality->qualities) {
-    page_output_quality_capabilities.AddDefaultOption(
-        printer::SelectVendorCapabilityOption(attribute.name,
-                                              attribute.display_name),
-        attribute.name == page_output_quality->default_quality);
-  }
-  return page_output_quality_capabilities;
-}
-#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace
 
@@ -469,35 +445,21 @@ base::Value PrinterSemanticCapsAndDefaultsToCdd(
     vendor_capabilities.SaveTo(&description);
   }
 
-  if (base::FeatureList::IsEnabled(
-          printing::features::kApiPrintingMarginsAndScale)) {
-    if (!semantic_info.print_scaling_types.empty()) {
-      printer::FitToPageCapability fit_to_page =
-          GetFitToPageCapabilities(semantic_info);
-      if (fit_to_page.IsValid()) {
-        fit_to_page.SaveTo(&description);
-      }
+  if (!semantic_info.print_scaling_types.empty()) {
+    printer::FitToPageCapability fit_to_page =
+        GetFitToPageCapabilities(semantic_info);
+    if (fit_to_page.IsValid()) {
+      fit_to_page.SaveTo(&description);
     }
+  }
 
-    if (!semantic_info.papers.empty()) {
-      printer::MarginsCapability margins =
-          GetMarginsCapabilities(semantic_info);
-      if (margins.IsValid()) {
-        margins.SaveTo(&description);
-      }
+  if (!semantic_info.papers.empty()) {
+    printer::MarginsCapability margins = GetMarginsCapabilities(semantic_info);
+    if (margins.IsValid()) {
+      margins.SaveTo(&description);
     }
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-  if (semantic_info.page_output_quality) {
-    printer::VendorCapabilities vendor_capabilities;
-    vendor_capabilities.AddOption(printer::VendorCapability(
-        kIdPageOutputQuality, kDisplayNamePageOutputQuality,
-        GetPageOutputQualityCapabilities(semantic_info)));
-    vendor_capabilities.SaveTo(&description);
-  }
-#endif  // BUILDFLAG(IS_WIN)
 
   return std::move(description).ToValue();
 }

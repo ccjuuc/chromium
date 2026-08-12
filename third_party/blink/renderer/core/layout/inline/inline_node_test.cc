@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_spacing.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder_stream.h"
 
 namespace blink {
 
@@ -46,16 +47,9 @@ class InlineNodeForTest : public InlineNode {
   using InlineNode::InlineNode;
 
   std::string Text() const { return Data().text_content.Utf8(); }
+  const String& TextContent() const { return Data().text_content; }
   InlineItems& Items() { return MutableData()->items; }
   static InlineItems& Items(InlineNodeData& data) { return data.items; }
-  bool IsNGShapeCacheAllowed(const String& text_content,
-                             const Font* override_font,
-                             const InlineItems& items,
-                             ShapeResultSpacing& spacing) const {
-    return InlineNode::IsNGShapeCacheAllowed(text_content, override_font, items,
-                                             spacing);
-  }
-
   void Append(const String& text, LayoutObject* layout_object) {
     InlineNodeData* data = MutableData();
     unsigned start = data->text_content.length();
@@ -220,6 +214,71 @@ TEST_F(InlineNodeTest, CollectInlinesBR) {
   TEST_ITEM_TYPE_OFFSET(items[1], kControl, 5u, 6u);
   TEST_ITEM_TYPE_OFFSET(items[2], kText, 6u, 11u);
   EXPECT_EQ(3u, items.size());
+}
+
+namespace {
+
+constexpr wtf_size_t kLargeSharedTextLength = 1024;
+
+String MakeLargeMultilineText() {
+  StringBuilder builder;
+  while (builder.length() < kLargeSharedTextLength) {
+    if (!builder.empty()) {
+      builder.Append("\n");
+    }
+    builder.Append("abcdefghijklmnopqrstuvwxyz0123456789");
+  }
+  return builder.ToString();
+}
+
+String WrapInDiv(const StringView& style, const StringView& content) {
+  StringBuilder html;
+  html << "<div id=t";
+  if (!style.empty()) {
+    html << " style='" << style << "'";
+  }
+  html << ">" << content << "</div>";
+  return html.ToString();
+}
+}  // namespace
+
+TEST_F(InlineNodeTest, ShareInlineTextContentSingleSource) {
+  String content = MakeLargeMultilineText();
+  SetupHtml("t", WrapInDiv("white-space:pre", content));
+  InlineNodeForTest node = CreateInlineNode();
+  node.CollectInlines();
+  const auto* layout_text = To<LayoutText>(layout_object_.Get());
+  EXPECT_EQ(content, node.TextContent());
+  EXPECT_EQ(node.TextContent().Impl(), layout_text->TransformedText().Impl());
+}
+
+// Large text whose whitespace collapsing changes the length is not shared.
+TEST_F(InlineNodeTest, ShareInlineTextContentLargeNotSharedWhenCollapsed) {
+  StringBuilder builder;
+  while (builder.length() < kLargeSharedTextLength) {
+    if (!builder.empty()) {
+      builder.Append("  ");  // Two spaces collapse to one.
+    }
+    builder.Append("word");
+  }
+  String content = builder.ToString();
+  SetupHtml("t", WrapInDiv(/*style=*/"", content));
+  InlineNodeForTest node = CreateInlineNode();
+  node.CollectInlines();
+  const auto* layout_text = To<LayoutText>(layout_object_.Get());
+  EXPECT_NE(node.TextContent().Impl(), layout_text->TransformedText().Impl());
+}
+
+// Large text whose collapsing keeps the length but changes bytes (each '\n'
+// becomes a space) is not shared.
+TEST_F(InlineNodeTest, ShareInlineTextContentLargeNotSharedSameLength) {
+  String content = MakeLargeMultilineText();
+  SetupHtml("t", WrapInDiv(/*style=*/"", content));
+  InlineNodeForTest node = CreateInlineNode();
+  node.CollectInlines();
+  const auto* layout_text = To<LayoutText>(layout_object_.Get());
+  ASSERT_EQ(content.length(), node.TextContent().length());
+  EXPECT_NE(node.TextContent().Impl(), layout_text->TransformedText().Impl());
 }
 
 TEST_F(InlineNodeTest, CollectInlinesFloat) {
@@ -507,6 +566,22 @@ struct MinMaxData {
     {"A B<span>C D</span>", {20, 60}},
     // A close tag after a forced break.
     {"<span>12<br></span>", {80, 80}, "", "span { border: 30px solid blue; }"},
+    // crbug.com/41462717: Symmetric `border` keeps this stable in LTR/RTL.
+    {"<span>a</span><span> a</span>",
+     {13, 34},
+     "",
+     "span { border: 1px solid }"},
+    // Same, with a nested open tag wrapping the inner span.
+    {"<span>a</span><b><span> a</span></b>",
+     {13, 34},
+     "",
+     "span { border: 1px solid }"},
+    // `dir` attribute introduces a `kBidiControl` item between the close tag
+    // and the open tag; it must not bypass the suppression.
+    {"<span>a</span><span dir=\"rtl\"> a</span>",
+     {13, 34},
+     "",
+     "span { border: 1px solid }"},
     // `pre-wrap` with trailing spaces.
     {"12345 6789 ", {50, 110}, "white-space: pre-wrap;"},
     // `word-break: break-word` can break a space run.
@@ -518,6 +593,13 @@ struct MinMaxData {
     {"&#9;&#9;<span>X</span>",
      {10, 170},
      "white-space: pre-wrap; word-break: break-word;"},
+    // Tabulation inside a ruby base.
+    {"X<ruby>&#9;Y<rt>z</rt></ruby>", {90, 90}, "white-space: pre;"},
+    {"<ruby>X&#9;Y<rt>z</rt></ruby>", {90, 90}, "white-space: pre;"},
+    // Tabulation inside a nested ruby base.
+    {"A<ruby>B<ruby>&#9;X<rt>y</rt></ruby><rt>z</rt></ruby>",
+     {90, 90},
+     "white-space: pre;"},
     // Soft Hyphens.
     {"abcd&shy;ef xx", {50, 90}},
     {"abcd&shy;ef xx", {60, 90}, "hyphens: none;"},
@@ -568,21 +650,20 @@ TEST_P(MinMaxTest, Data) {
   const MinMaxData& data = GetParam();
   LoadAhem();
   StringBuilder html;
-  html.AppendFormat(R"HTML("
+  html << R"HTML(
     <!DOCTYPE html>
     <style>
-    #target { font: 10px Ahem;%s }
-    %s
+    #target { font: 10px Ahem;)HTML"
+       << data.target_style << " }\n    " << data.style << R"HTML(
     </style>
-    <div id="target")HTML",
-                    data.target_style, data.style);
+    <div id="target")HTML";
   if (data.lang) {
-    html.AppendFormat(" lang='%s'", data.lang);
+    html << " lang='" << data.lang << "'";
     LayoutLocale::SetHyphenationForTesting(AtomicString(data.lang),
                                            MockHyphenation::Create());
   }
-  html.AppendFormat(">%s</div>", data.content);
-  SetupHtml("target", html.ToString());
+  html << ">" << data.content << "</div>";
+  SetupHtml("target", html.ReleaseString());
   InlineNodeForTest node = CreateInlineNode();
   const MinMaxSizes actual_sizes = ComputeMinMaxSizes(node);
   const MinMaxSizes expected_sizezs{LayoutUnit(data.min_max[0]),
@@ -1384,7 +1465,7 @@ TEST_F(InlineNodeTest, SegmentRanges) {
 
   InlineItemsData* items_data = layout_block_flow_->GetInlineNodeData();
   ASSERT_TRUE(items_data);
-  InlineItemSegments* segments = items_data->segments.get();
+  InlineItemSegments* segments = items_data->segments.Get();
   ASSERT_TRUE(segments);
 
   // Test EndOffset for the full text. All segment boundaries including the end
@@ -1700,80 +1781,6 @@ TEST_F(InlineNodeTest, FindSvgTextChunksCrash3) {
   tspan->appendChild(GetDocument().createTextNode(text));
   UpdateAllLifecyclePhasesForTest();
   // Pass if no CHECK() failures in FindSvgTextChunks().
-}
-
-TEST_F(InlineNodeTest, FontFeaturesInitial) {
-  SetBodyInnerHTML(R"HTML(
-    <div id="initial"></div>
-    <div id="no-kern" style="font-kerning: none"></div>
-  )HTML");
-  const auto is_initial = [this](const char* id) {
-    const auto* layout_object = GetLayoutObjectByElementId(id);
-    Vector<FontFeatureRange, FontFeatureRange::kInitialSize> features;
-    FontFeatureRange::FromFontDescription(
-        layout_object->StyleRef().GetFont()->GetFontDescription(), features);
-    if (FontFeatureRange::IsInitial(features)) {
-      EXPECT_EQ(features.size(), FontFeatureRange::kInitialSize);
-      return true;
-    }
-    return false;
-  };
-  EXPECT_TRUE(is_initial("initial"));
-  EXPECT_FALSE(is_initial("no-kern"));
-}
-
-TEST_F(InlineNodeTest, ShapeCacheLongString) {
-  for (const unsigned text_length :
-       {NGShapeCache::kMaxTextLengthOfEntries - 1,
-        NGShapeCache::kMaxTextLengthOfEntries,
-        NGShapeCache::kMaxTextLengthOfEntries + 1}) {
-    StringBuilder builder;
-    builder.Append("<div id=t>");
-    for (unsigned i = 0; i < text_length; ++i) {
-      builder.Append(static_cast<LChar>((i % 10) + '0'));
-    }
-    builder.Append("</div>");
-
-    SetupHtml("t", builder.ToString());
-    InlineNodeForTest node = CreateInlineNode();
-    node.CollectInlines();
-
-    const String& text_content(node.Text().c_str());
-    InlineItems& items = node.Items();
-    ShapeResultSpacing spacing(text_content, node.IsSvgText());
-
-    EXPECT_EQ(node.IsNGShapeCacheAllowed(text_content, nullptr, items, spacing),
-              text_length <= NGShapeCache::kMaxTextLengthOfEntries);
-  }
-}
-
-TEST_F(InlineNodeTest, ShapeCacheMultiItems) {
-  SetupHtml("t", "<div id=t>abc<span>def</span>ghi</div>");
-  InlineNodeForTest node = CreateInlineNode();
-  node.CollectInlines();
-
-  const String& text_content(node.Text().c_str());
-  InlineItems& items = node.Items();
-  EXPECT_EQ(5u, items.size());
-  ShapeResultSpacing spacing(text_content, node.IsSvgText());
-
-  EXPECT_FALSE(
-      node.IsNGShapeCacheAllowed(text_content, nullptr, items, spacing));
-}
-
-TEST_F(InlineNodeTest, ShapeCacheSpacingRequired) {
-  SetupHtml("t",
-            "<style>div { letter-spacing: 5px; }</style>"
-            "<div id=t>abc</div>");
-  InlineNodeForTest node = CreateInlineNode();
-  node.CollectInlines();
-
-  const String& text_content(node.Text().c_str());
-  InlineItems& items = node.Items();
-  ShapeResultSpacing spacing(text_content, node.IsSvgText());
-
-  EXPECT_FALSE(
-      node.IsNGShapeCacheAllowed(text_content, nullptr, items, spacing));
 }
 
 // crbug.com/437612643

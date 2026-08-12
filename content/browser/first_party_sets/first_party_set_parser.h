@@ -47,8 +47,7 @@ class CONTENT_EXPORT FirstPartySetParser {
   // any set failed.
   static net::GlobalFirstPartySets ParseSetsFromStream(std::istream& input,
                                                        base::Version version,
-                                                       bool emit_errors,
-                                                       bool emit_metrics);
+                                                       bool emit_errors);
 
   // Canonicalizes the passed in origin to a registered domain. In particular,
   // this ensures that the origin is non-opaque, is HTTPS, and has a registered
@@ -63,7 +62,7 @@ class CONTENT_EXPORT FirstPartySetParser {
   // Returns the parsed lists and a list of warnings if successful; otherwise,
   // returns an error.
   [[nodiscard]] static PolicyParseResult ParseSetsFromEnterprisePolicy(
-      const base::Value::Dict& policy);
+      const base::DictValue& policy);
 
   [[nodiscard]] static net::LocalSetDeclaration ParseFromCommandLine(
       const std::string& switch_value);

@@ -18,7 +18,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/time.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_commands.h"
@@ -37,7 +36,6 @@
 #include "components/download/public/common/mock_download_item.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -98,53 +96,45 @@ const base::FilePath::CharType kDefaultDisplayFileName[] =
 // Default URL for a mock download item in DownloadItemModelTest.
 const char kDefaultURL[] = "http://example.com/foo.bar";
 
+class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
+ public:
+  explicit TestChromeDownloadManagerDelegate(Profile* profile)
+      : ChromeDownloadManagerDelegate(profile) {}
+  ~TestChromeDownloadManagerDelegate() override = default;
+
+  // ChromeDownloadManagerDelegate override:
+  bool IsOpenInBrowserPreferredForFile(const base::FilePath& path) override {
+    return true;
+  }
+};
+
 // A DownloadCoreService that returns the TestChromeDownloadManagerDelegate.
 class TestDownloadCoreService : public DownloadCoreServiceImpl {
  public:
   explicit TestDownloadCoreService(Profile* profile);
   ~TestDownloadCoreService() override;
 
-  void set_download_manager_delegate(ChromeDownloadManagerDelegate* delegate) {
-    delegate_ = delegate;
-  }
-
   ChromeDownloadManagerDelegate* GetDownloadManagerDelegate() override;
 
-  raw_ptr<ChromeDownloadManagerDelegate, DanglingUntriaged> delegate_;
+  std::unique_ptr<ChromeDownloadManagerDelegate> delegate_;
 };
 
 TestDownloadCoreService::TestDownloadCoreService(Profile* profile)
-    : DownloadCoreServiceImpl(profile) {}
+    : DownloadCoreServiceImpl(profile),
+      delegate_(std::make_unique<NiceMock<TestChromeDownloadManagerDelegate>>(
+          profile)) {}
 
 TestDownloadCoreService::~TestDownloadCoreService() = default;
 
 ChromeDownloadManagerDelegate*
 TestDownloadCoreService::GetDownloadManagerDelegate() {
-  return delegate_;
+  return delegate_.get();
 }
 
 static std::unique_ptr<KeyedService> CreateTestDownloadCoreService(
     content::BrowserContext* browser_context) {
   return std::make_unique<TestDownloadCoreService>(
       Profile::FromBrowserContext(browser_context));
-}
-
-class TestChromeDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
- public:
-  explicit TestChromeDownloadManagerDelegate(Profile* profile)
-      : ChromeDownloadManagerDelegate(profile) {}
-  ~TestChromeDownloadManagerDelegate() override;
-
-  // ChromeDownloadManagerDelegate override:
-  bool IsOpenInBrowserPreferredForFile(const base::FilePath& path) override;
-};
-
-TestChromeDownloadManagerDelegate::~TestChromeDownloadManagerDelegate() =
-    default;
-
-bool TestChromeDownloadManagerDelegate::IsOpenInBrowserPreferredForFile(
-    const base::FilePath& path) {
-  return true;
 }
 
 class FakeRenameHandler : public download::DownloadItemRenameHandler {
@@ -172,13 +162,9 @@ class DownloadItemModelTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(testing_profile_manager_.SetUp());
     profile_ = testing_profile_manager_.CreateTestingProfile("testing_profile");
-    delegate_ =
-        std::make_unique<NiceMock<TestChromeDownloadManagerDelegate>>(profile_);
+
     DownloadCoreServiceFactory::GetInstance()->SetTestingFactory(
         profile_, base::BindRepeating(&CreateTestDownloadCoreService));
-    static_cast<TestDownloadCoreService*>(
-        DownloadCoreServiceFactory::GetForBrowserContext(profile_))
-        ->set_download_manager_delegate(delegate_.get());
   }
 
  protected:
@@ -254,8 +240,7 @@ class DownloadItemModelTest : public testing::Test {
   DownloadItemModel model_;
   base::SimpleTestClock clock_;
   TestingProfileManager testing_profile_manager_;
-  raw_ptr<TestingProfile> profile_;
-  std::unique_ptr<NiceMock<TestChromeDownloadManagerDelegate>> delegate_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
 
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -292,6 +277,9 @@ TEST_F(DownloadItemModelTest, InterruptedStatus) {
        u"Failed - File too large", u"File is too big for this device"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_VIRUS_INFECTED,
        u"Failed - Virus detected", u"Virus detected"},
+      {download::DOWNLOAD_INTERRUPT_REASON_LOCAL_DOWNLOAD_BLOCKED,
+       u"Failed - Local download blocked",
+       u"Your organization blocked the local download of this file."},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED, u"Failed - Blocked",
        u"Blocked by your organization"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED,
@@ -382,6 +370,8 @@ TEST_F(DownloadItemModelTest, InterruptTooltip) {
        "foo.bar\nFile too large"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_VIRUS_INFECTED,
        "foo.bar\nVirus detected"},
+      {download::DOWNLOAD_INTERRUPT_REASON_LOCAL_DOWNLOAD_BLOCKED,
+       "foo.bar\nLocal download blocked"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED, "foo.bar\nBlocked"},
       {download::DOWNLOAD_INTERRUPT_REASON_FILE_SECURITY_CHECK_FAILED,
        "foo.bar\nVirus scan failed"},
@@ -527,6 +517,23 @@ TEST_F(DownloadItemModelTest, InProgressStatus) {
               DownloadUIModel::DangerUiPattern::kNormal);
 #endif
   }
+}
+
+TEST_F(DownloadItemModelTest, InProgressStatus_ContentCheck) {
+  SetupDownloadItemDefaults();
+
+  EXPECT_CALL(item(), GetReceivedBytes()).WillRepeatedly(Return(10));
+  EXPECT_CALL(item(), GetTotalBytes()).WillRepeatedly(Return(10));
+
+  // Indicates that the content check is still pending.
+  EXPECT_CALL(item(), GetDangerType())
+      .WillRepeatedly(
+          Return(download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT));
+
+  SetStatusTextBuilder(/*for_bubble=*/true);
+
+  EXPECT_EQ("10 B \xE2\x80\xA2 Checking for safety\xE2\x80\xA6",
+            base::UTF16ToUTF8(model().GetStatusText()));
 }
 
 TEST_F(DownloadItemModelTest, CompletedStatus) {

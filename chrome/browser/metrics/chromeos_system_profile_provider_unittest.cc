@@ -18,6 +18,7 @@
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/multidevice_setup/multidevice_setup_client_factory.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -250,6 +251,22 @@ TEST_F(ChromeOSSystemProfileProviderTest, FullHardwareClass) {
       system_profile.hardware().full_hardware_class();
 
   EXPECT_EQ(expected_full_hw_class, proto_full_hw_class);
+}
+
+TEST_F(ChromeOSSystemProfileProviderTest, UpdatedHardwareClass) {
+  const std::string expected_updated_hw_class = "updated_hardware_class_foo";
+  fake_statistics_provider_.SetUpdatedHardwareClass(expected_updated_hw_class);
+
+  TestChromeOSSystemProfileProvider provider;
+  provider.OnDidCreateMetricsLog();
+  metrics::SystemProfileProto system_profile;
+  provider.ProvideSystemProfileMetrics(&system_profile);
+
+  ASSERT_TRUE(system_profile.has_hardware());
+  std::string proto_updated_hw_class =
+      system_profile.hardware().updated_hardware_class();
+
+  EXPECT_EQ(expected_updated_hw_class, proto_updated_hw_class);
 }
 
 TEST_F(ChromeOSSystemProfileProviderTest, DemoModeDimensions) {

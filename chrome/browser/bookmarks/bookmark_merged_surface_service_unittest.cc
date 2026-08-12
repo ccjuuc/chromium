@@ -148,7 +148,7 @@ class BookmarkMergedSurfaceServiceTest : public testing::Test {
     return managed_bookmark_service_->managed_node();
   }
 
-  void PerformMoveAction(Browser* browser,
+  void PerformMoveAction(BrowserWindowInterface* browser,
                          const bookmarks::BookmarkNode* node,
                          const bookmarks::BookmarkNode* target_node,
                          size_t index) {
@@ -582,8 +582,7 @@ TEST_F(BookmarkMergedSurfaceServiceTest, MoveFromAccountToLocalStorage) {
   base::MockCallback<
       BookmarkMergedSurfaceService::ShowMoveStorageDialogCallback>
       move_storage_callback;
-  service().SetShowMoveStorageDialogCallbackForTesting(
-      move_storage_callback.Get());
+  service().SetShowMoveStorageDialogCallback(move_storage_callback.Get());
   EXPECT_CALL(move_storage_callback, Run(testing::_, node, destination, 1))
       .WillOnce(testing::Invoke(
           this, &BookmarkMergedSurfaceServiceTest::PerformMoveAction));
@@ -617,8 +616,7 @@ TEST_F(BookmarkMergedSurfaceServiceTest, MoveFromLocalToAccountStorage) {
   base::MockCallback<
       BookmarkMergedSurfaceService::ShowMoveStorageDialogCallback>
       move_storage_callback;
-  service().SetShowMoveStorageDialogCallbackForTesting(
-      move_storage_callback.Get());
+  service().SetShowMoveStorageDialogCallback(move_storage_callback.Get());
   EXPECT_CALL(move_storage_callback, Run(testing::_, node, destination, 1))
       .WillOnce(testing::Invoke(
           this, &BookmarkMergedSurfaceServiceTest::PerformMoveAction));

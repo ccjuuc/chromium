@@ -14,6 +14,7 @@
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager.h"
 #include "chrome/browser/safe_browsing/advanced_protection_status_manager_factory.h"
 #include "chrome/browser/safe_browsing/chrome_user_population_helper.h"
+#include "chrome/browser/safe_browsing/client_side_detection_intelligent_scan_delegate_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
@@ -29,6 +30,7 @@
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 #include "url/gurl.h"
 
@@ -85,6 +87,7 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::
   DependsOn(SafeBrowsingNavigationObserverManagerFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(policy::ManagementServiceFactory::GetInstance());
+  DependsOn(ClientSideDetectionIntelligentScanDelegateFactory::GetInstance());
 }
 
 std::unique_ptr<KeyedService> ChromeEnterpriseRealTimeUrlLookupServiceFactory::
@@ -94,6 +97,12 @@ std::unique_ptr<KeyedService> ChromeEnterpriseRealTimeUrlLookupServiceFactory::
     return nullptr;
   }
   Profile* profile = Profile::FromBrowserContext(context);
+
+  base::RepeatingCallback<network::mojom::NetworkContext*()>
+      network_context_getter = base::BindRepeating(
+          &ChromeEnterpriseRealTimeUrlLookupServiceFactory::GetNetworkContext,
+          profile);
+
   auto url_loader_factory =
       std::make_unique<network::CrossThreadPendingSharedURLLoaderFactory>(
           profile->GetURLLoaderFactory());
@@ -117,7 +126,16 @@ std::unique_ptr<KeyedService> ChromeEnterpriseRealTimeUrlLookupServiceFactory::
           &enterprise_connectors::GetNavigationActiveContentAreaUser,
           IdentityManagerFactory::GetForProfile(profile)),
       base::BindRepeating(&enterprise_util::IsProfileAffiliated, profile),
-      /*is_command_line_switch_supported=*/IsCommandLineSwitchSupported());
+      /*is_command_line_switch_supported=*/IsCommandLineSwitchSupported(),
+      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(profile),
+      network_context_getter);
+}
+
+// static
+network::mojom::NetworkContext*
+ChromeEnterpriseRealTimeUrlLookupServiceFactory::GetNetworkContext(
+    Profile* profile) {
+  return profile->GetDefaultStoragePartition()->GetNetworkContext();
 }
 
 }  // namespace safe_browsing

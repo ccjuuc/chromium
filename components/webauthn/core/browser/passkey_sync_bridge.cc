@@ -12,7 +12,6 @@
 #include <string>
 #include <variant>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/flat_tree.h"
 #include "base/containers/span.h"
@@ -32,7 +31,6 @@
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
-#include "components/webauthn/core/browser/import/imported_passkey_checker.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "components/webauthn/core/browser/passkey_model_change.h"
 #include "components/webauthn/core/browser/passkey_model_utils.h"
@@ -82,22 +80,6 @@ PasskeyModelChange::ChangeType ToPasskeyModelChangeType(
   }
 }
 
-// Returns whether the passkey is of the expected format. The conditions checked
-// in this function should apply to every passkey stored in Google Password
-// Manager, regardless of whether they were actually created by GPM or imported
-// through Credential Exchange. For more specific functions based on the source
-// of passkeys, use one of the following:
-// * `passkey_model_utils::IsGpmPasskeyValid()`
-// * `webauthn::CheckImportedPasskey()`
-bool IsPasskeyValid(const sync_pb::WebauthnCredentialSpecifics& passkey) {
-  const size_t cred_id_size = passkey.credential_id().size();
-  return passkey.sync_id().size() == passkey_model_utils::kSyncIdLength &&
-         !passkey.rp_id().empty() && cred_id_size >= kCredentialIdMinLength &&
-         cred_id_size <= kCredentialIdMaxLength &&
-         passkey.user_id().length() <= passkey_model_utils::kUserIdMaxLength &&
-         (passkey.has_private_key() || passkey.has_encrypted());
-}
-
 }  // namespace
 
 PasskeySyncBridge::PasskeySyncBridge(
@@ -126,11 +108,6 @@ void PasskeySyncBridge::RemoveObserver(Observer* observer) {
   observers_.RemoveObserver(observer);
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-PasskeySyncBridge::CreateMetadataChangeList() {
-  return syncer::DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
-
 std::optional<syncer::ModelError> PasskeySyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_changes,
     syncer::EntityChangeList entity_changes) {
@@ -141,11 +118,11 @@ std::optional<syncer::ModelError> PasskeySyncBridge::MergeFullSyncData(
   // Google Password Manager passkeys are disabled when Sync is disabled so it
   // shouldn't be the case that there are any local entities when Sync starts.
   // But it can happen in corner cases. This code uploads any such entities to
-  // the server.
-  base::flat_set<std::string_view> local_only_sync_ids;
-  for (const auto& it : data_) {
-    local_only_sync_ids.insert(it.first);
-  }
+  // the server. The string_views in `local_only_sync_ids` reference std::string
+  // keys in `data_` and so remain valid until they are consumed below.
+  auto local_only_sync_ids = base::MakeFlatSet<std::string_view>(
+      data_, /*comp=*/{},
+      [](const auto& it) { return std::string_view(it.first); });
   for (const auto& change : entity_changes) {
     local_only_sync_ids.erase(change->storage_key());
   }
@@ -164,7 +141,7 @@ PasskeySyncBridge::ApplyIncrementalSyncChanges(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
     syncer::EntityChangeList entity_changes) {
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
-      store_->CreateWriteBatch();
+      store_->CreateWriteBatch(std::move(metadata_change_list));
 
   std::vector<PasskeyModelChange> changes;
   for (const auto& entity_change : entity_changes) {
@@ -196,7 +173,6 @@ PasskeySyncBridge::ApplyIncrementalSyncChanges(
     }
   }
 
-  write_batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   store_->CommitWriteBatch(
       std::move(write_batch),
       base::BindOnce(&PasskeySyncBridge::OnStoreCommitWriteBatch,
@@ -226,9 +202,18 @@ std::unique_ptr<syncer::DataBatch> PasskeySyncBridge::GetAllDataForDebugging() {
   return batch;
 }
 
+sync_pb::EntitySpecifics
+PasskeySyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
+}
+
 bool PasskeySyncBridge::IsEntityDataValid(
     const syncer::EntityData& entity_data) const {
-  return IsPasskeyValid(entity_data.specifics.webauthn_credential());
+  return passkey_model_utils::IsPasskeyValid(
+      entity_data.specifics.webauthn_credential());
 }
 
 std::string PasskeySyncBridge::GetClientTag(
@@ -245,7 +230,8 @@ std::string PasskeySyncBridge::GetStorageKey(
 void PasskeySyncBridge::ApplyDisableSyncChanges(
     std::unique_ptr<syncer::MetadataChangeList> delete_metadata_change_list) {
   CHECK(store_);
-  store_->DeleteAllDataAndMetadata(base::DoNothing());
+  store_->DeleteAllDataAndMetadata(std::move(delete_metadata_change_list),
+                                   base::DoNothing());
   std::vector<PasskeyModelChange> changes;
   for (const auto& passkey : data_) {
     changes.emplace_back(PasskeyModelChange::ChangeType::REMOVE,
@@ -308,30 +294,6 @@ PasskeySyncBridge::GetPasskey(std::variant<AnyRp, std::string_view> rp_id,
     }
   }
 
-  return std::nullopt;
-}
-
-std::optional<sync_pb::WebauthnCredentialSpecifics>
-PasskeySyncBridge::GetPasskeyByUserId(const std::string& rp_id,
-                                      const std::string& user_id) const {
-  // Even if a passkey with a user ID exists, we must not return it if it
-  // has been shadowed. To do that, first collect all passkeys for the RP ID,
-  // then filter shadowed ones, and see if one with the matching credential ID
-  // remains.
-  std::vector<sync_pb::WebauthnCredentialSpecifics> passkeys;
-  for (const auto& sync_id_and_passkey : data_) {
-    const sync_pb::WebauthnCredentialSpecifics& passkey =
-        sync_id_and_passkey.second;
-    if (passkey.rp_id() == rp_id) {
-      passkeys.emplace_back(passkey);
-    }
-  }
-  passkeys = passkey_model_utils::FilterShadowedCredentials(passkeys);
-  for (const sync_pb::WebauthnCredentialSpecifics& passkey : passkeys) {
-    if (passkey.user_id() == user_id) {
-      return passkey;
-    }
-  }
   return std::nullopt;
 }
 
@@ -526,10 +488,10 @@ void PasskeySyncBridge::CreatePasskey(
   // passkey.
   CHECK(IsReady());
 
-  CHECK(IsPasskeyValid(passkey));
+  CHECK(passkey_model_utils::IsPasskeyValid(passkey));
 
   std::string sync_id = passkey.sync_id();
-  CHECK(!base::Contains(data_, sync_id));
+  CHECK(!data_.contains(sync_id));
 
   AddShadowedCredentialIdsToNewPasskey(passkey);
   AddPasskeyInternal(passkey);
@@ -544,12 +506,12 @@ std::string PasskeySyncBridge::AddNewPasskeyForTesting(
 
 void PasskeySyncBridge::AddPasskeyInternal(
     sync_pb::WebauthnCredentialSpecifics specifics) {
-  CHECK(IsPasskeyValid(specifics));
+  CHECK(passkey_model_utils::IsPasskeyValid(specifics));
   CHECK(IsReady());
   CHECK(store_);
 
   std::string sync_id = specifics.sync_id();
-  CHECK(!base::Contains(data_, sync_id));
+  CHECK(!data_.contains(sync_id));
 
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> write_batch =
       store_->CreateWriteBatch();

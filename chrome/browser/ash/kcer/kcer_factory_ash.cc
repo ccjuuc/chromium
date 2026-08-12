@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/kcer/kcer_factory_ash.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -15,7 +16,6 @@
 #include "chrome/browser/net/nss_service.h"
 #include "chrome/browser/net/nss_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "chromeos/ash/components/kcer/chaps/session_chaps_client.h"
 #include "chromeos/ash/components/kcer/extra_instances.h"
@@ -210,7 +210,7 @@ void KcerFactoryAsh::Initialize() {
 
 void KcerFactoryAsh::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kNssChapsDualWrittenCertsExist,
+  registry->RegisterBooleanPref(ash::prefs::kNssChapsDualWrittenCertsExist,
                                 /*default_value=*/false);
 }
 
@@ -261,7 +261,7 @@ void KcerFactoryAsh::RecordPkcs12CertDualWrittenImpl() {
   if (!prefs) {
     return;
   }
-  prefs->SetBoolean(prefs::kNssChapsDualWrittenCertsExist, true);
+  prefs->SetBoolean(ash::prefs::kNssChapsDualWrittenCertsExist, true);
 }
 
 void KcerFactoryAsh::ClearNssTokenMapForTestingImpl() {
@@ -288,8 +288,8 @@ KcerFactoryAsh::BuildServiceInstanceForBrowserContext(
   // This code assumes that by the time BuildServiceInstanceForBrowserContext is
   // called, the context is initialized enough for IsPrimaryContext() to work
   // correctly.
-  if (ash::ProfileHelper::IsPrimaryProfile(
-          Profile::FromBrowserContext(context))) {
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (ash::ProfileHelper::IsPrimaryProfile(profile)) {
     ExtraInstances::Get()->SetDefaultKcer(new_kcer->GetWeakPtr());
   }
 
@@ -299,10 +299,7 @@ KcerFactoryAsh::BuildServiceInstanceForBrowserContext(
       FROM_HERE,
       base::BindOnce(&KcerFactoryAsh::StartInitializingKcerInstance,
                      base::Unretained(const_cast<KcerFactoryAsh*>(this)),
-                     new_kcer->GetWeakPtr(),
-                     // TODO(crbug.com/40061562): Remove
-                     // `UnsafeDanglingUntriaged`
-                     base::UnsafeDanglingUntriaged(context)));
+                     new_kcer->GetWeakPtr(), profile->GetWeakPtr()));
 
   return std::make_unique<KcerService>(std::move(new_kcer));
 }
@@ -313,16 +310,17 @@ bool KcerFactoryAsh::UseKcerWithoutNss() const {
 
 void KcerFactoryAsh::StartInitializingKcerInstance(
     base::WeakPtr<internal::KcerImpl> kcer_service,
-    content::BrowserContext* context) {
+    base::WeakPtr<Profile> profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!kcer_service) {
+  if (!kcer_service || !profile) {
     return;
   }
 
   if (UseKcerWithoutNss()) {
-    return StartInitializingKcerWithoutNss(std::move(kcer_service), context);
+    return StartInitializingKcerWithoutNss(std::move(kcer_service),
+                                          profile.get());
   } else {
-    return StartInitializingKcerForNss(std::move(kcer_service), context);
+    return StartInitializingKcerForNss(std::move(kcer_service), profile.get());
   }
 }
 
@@ -574,7 +572,7 @@ void KcerFactoryAsh::InitializeDeviceKcerWithoutNss(
   }
 
   ExtraInstances::Get()->InitializeDeviceKcer(
-      content::GetIOThreadTaskRunner({}), std::move(device_token));
+      content::GetUIThreadTaskRunner({}), std::move(device_token));
 }
 
 void KcerFactoryAsh::StartInitializingDeviceKcerForNss() {

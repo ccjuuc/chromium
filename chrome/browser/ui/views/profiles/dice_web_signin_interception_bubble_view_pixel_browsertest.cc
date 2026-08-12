@@ -10,16 +10,18 @@
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/web_signin_interceptor.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
 #include "chrome/browser/ui/views/profiles/dice_web_signin_interception_bubble_view.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/profile_destruction_waiter.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -33,6 +35,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/events/event_constants.h"
@@ -44,16 +47,6 @@
 using signin::constants::kNoHostedDomainFound;
 
 namespace {
-
-// Returns the avatar button, which is the anchor view for the interception
-// bubble.
-AvatarToolbarButton* GetAvatarButton(Browser* browser) {
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  AvatarToolbarButton* avatar_button =
-      browser_view->toolbar_button_provider()->GetAvatarToolbarButton();
-  DCHECK(avatar_button);
-  return avatar_button;
-}
 
 enum class NameFormat { Regular, LongName, LongNameSingleWord };
 
@@ -80,6 +73,8 @@ struct TestParam {
   SkColor4f primary_profile_color = SkColors::kBlue;
   NameFormat name_format = NameFormat::Regular;
   bool use_right_to_left_language = false;
+  bool enable_v2_profile_switch = false;
+  std::string avatar_url;
 };
 
 // To be passed as 4th argument to `INSTANTIATE_TEST_SUITE_P()`, allows the test
@@ -109,6 +104,7 @@ const TestParam kTestParams[] = {
         .use_dark_theme = true,
         .intercepted_profile_color = SkColors::kMagenta,
     },
+
 
     // Regular account signing in to a profile having a regular account on a
     // managed device (having policies configured locally for example).
@@ -186,7 +182,60 @@ const TestParam kTestParams[] = {
         .interception_type =
             WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
     },
-
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdateDefaultAvatar",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .enable_v2_profile_switch = true,
+    },
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdate",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .enable_v2_profile_switch = true,
+        .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
+    },
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdateDark",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .use_dark_theme = true,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .enable_v2_profile_switch = true,
+        .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
+    },
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdateEnterprise",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .intercepted_account_management_state =
+            ManagedAccountState::kEnterpriseAccount,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .enable_v2_profile_switch = true,
+        .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
+    },
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdateEnterpriseDark",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .intercepted_account_management_state =
+            ManagedAccountState::kEnterpriseAccount,
+        .use_dark_theme = true,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .enable_v2_profile_switch = true,
+        .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
+    },
+    {
+        .test_suffix = "ProfileSwitchGraphicUpdateRTL",
+        .interception_type =
+            WebSigninInterceptor::SigninInterceptionType::kProfileSwitch,
+        .intercepted_profile_color = SkColors::kMagenta,
+        .use_right_to_left_language = true,
+        .enable_v2_profile_switch = true,
+        .avatar_url = "chrome://theme/IDR_PROFILE_AVATAR_30",
+    },
     // Supervised user sign-in intercept bubble, no accounts in chrome.
     {
         .test_suffix = "ChromeSignInSupervisedUserIntercepted",
@@ -255,7 +304,24 @@ class DiceWebSigninInterceptionBubblePixelTest
     : public DialogBrowserTest,
       public testing::WithParamInterface<TestParam> {
  public:
-  DiceWebSigninInterceptionBubblePixelTest() = default;
+  DiceWebSigninInterceptionBubblePixelTest() {
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
+
+
+    if (GetParam().enable_v2_profile_switch) {
+      enabled_features.push_back(switches::kSigninInterceptGraphicUpdate);
+    } else {
+      disabled_features.push_back(switches::kSigninInterceptGraphicUpdate);
+    }
+
+    // TODO(crbug.com/452061489): Remove this and fix the test failures while
+    // WebUI Omnibox is enabled.
+    disabled_features.push_back(omnibox::internal::kWebUIOmniboxPopup);
+    disabled_features.push_back(omnibox::internal::kWebUIOmniboxAimPopup);
+
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+  }
 
   // DialogBrowserTest:
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -277,7 +343,8 @@ class DiceWebSigninInterceptionBubblePixelTest
 
   void ShowUi(const std::string& name) override {
     policy::ScopedManagementServiceOverrideForTesting browser_management(
-        policy::ManagementServiceFactory::GetForProfile(browser()->profile()),
+        policy::ManagementServiceFactory::GetForProfile(
+            browser()->GetProfile()),
         GetParam().management_authority);
     policy::ScopedManagementServiceOverrideForTesting
         platform_browser_management(
@@ -287,15 +354,17 @@ class DiceWebSigninInterceptionBubblePixelTest
     SkColor primary_highlight_color =
         GetParam().primary_profile_color.toSkColor();
     DefaultAvatarColors avatar_colors = GetDefaultAvatarColors(
-        *browser()->window()->GetColorProvider(), primary_highlight_color);
+        *BrowserWindow::FromBrowser(browser())->GetColorProvider(),
+        primary_highlight_color);
     ProfileThemeColors colors = {
-        /*profile_highlight_color=*/primary_highlight_color,
-        /*default_avatar_fill_color=*/avatar_colors.fill_color,
-        /*default_avatar_stroke_color=*/avatar_colors.stroke_color};
+        .profile_highlight_color = primary_highlight_color,
+        .default_avatar_fill_color = avatar_colors.fill_color,
+        .default_avatar_stroke_color = avatar_colors.stroke_color,
+        .profile_color_seed = primary_highlight_color};
     ProfileAttributesEntry* entry =
         g_browser_process->profile_manager()
             ->GetProfileAttributesStorage()
-            .GetProfileAttributesWithPath(browser()->profile()->GetPath());
+            .GetProfileAttributesWithPath(browser()->GetProfile()->GetPath());
     DCHECK(entry);
     entry->SetProfileThemeColors(colors);
 
@@ -314,8 +383,12 @@ class DiceWebSigninInterceptionBubblePixelTest
         "DiceWebSigninInterceptionBubbleView");
 
     bubble_handle_ = DiceWebSigninInterceptionBubbleView::CreateBubble(
-        browser(), GetAvatarButton(browser()), GetTestBubbleParameters(),
-        base::DoNothing());
+        browser(),
+        BrowserView::GetBrowserViewForBrowser(browser())
+            ->toolbar_button_provider()
+            ->GetAvatarToolbarButtonInterface()
+            ->GetBubbleAnchor(*browser()),
+        GetTestBubbleParameters(), base::DoNothing());
 
     widget_waiter.WaitIfNeededAndGet();
     observer.Wait();
@@ -346,17 +419,27 @@ class DiceWebSigninInterceptionBubblePixelTest
       mutator.set_is_subject_to_parental_controls(true);
     }
 
-    AccountInfo intercepted_account =
-        AccountInfo::Builder(GaiaId("intercepted_ID"),
-                             "sam.sample@intercepted.com")
-            .SetAccountId(CoreAccountId::FromGaiaId(GaiaId("intercepted_ID")))
-            .SetGivenName(GivenNameFromNameFormat())
-            .SetFullName(GivenNameFromNameFormat() + " Sample")
-            .SetHostedDomain(is_managed_intercepted_account
-                                 ? "intercepted.com"
-                                 : kNoHostedDomainFound)
-            .UpdateAccountCapabilitiesWith(capabilities)
-            .Build();
+    AccountInfo::Builder builder(GaiaId("intercepted_ID"),
+                                 "sam.sample@intercepted.com");
+    builder.SetAccountId(CoreAccountId::FromGaiaId(GaiaId("intercepted_ID")))
+        .SetGivenName(GivenNameFromNameFormat())
+        .SetFullName(GivenNameFromNameFormat() + " Sample")
+        .SetHostedDomain(is_managed_intercepted_account ? "intercepted.com"
+                                                        : kNoHostedDomainFound)
+        .UpdateAccountCapabilitiesWith(capabilities);
+    if (!GetParam().avatar_url.empty()) {
+      builder.SetAvatarUrl(GetParam().avatar_url);
+      size_t icon_index;
+      if (profiles::IsDefaultAvatarIconUrl(GetParam().avatar_url,
+                                           &icon_index)) {
+        int resource_id =
+            profiles::GetDefaultAvatarIconResourceIDAtIndex(icon_index);
+        gfx::Image image =
+            ui::ResourceBundle::GetSharedInstance().GetImageNamed(resource_id);
+        builder.SetAvatarImage(image);
+      }
+    }
+    AccountInfo intercepted_account = builder.Build();
 
     AccountCapabilities primary_capabilities;
     AccountCapabilitiesTestMutator(&primary_capabilities)
@@ -390,6 +473,7 @@ class DiceWebSigninInterceptionBubblePixelTest
 
   std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle> bubble_handle_;
   std::unique_ptr<base::ScopedEnvironmentVariableOverride> scoped_env_override_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(DiceWebSigninInterceptionBubblePixelTest,

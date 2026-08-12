@@ -9,7 +9,7 @@ import android.os.Handler;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.CallbackController;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -144,13 +144,14 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
 
     /**
      * @param browserControlsManager The browser controls manager able to toggle the visibility of
-     *                               browser controls.
+     *     browser controls.
      * @param messageContainerCoordinator The coordinator able to show and hide message container.
      * @param activityTabProvider The {@link ActivityTabProvider} to get current tab of activity.
      * @param layoutStateProviderOneShotSupplier Supplier of the {@link LayoutStateProvider}.
-     * @param modalDialogManagerSupplier Supplier of the {@link ModalDialogManager}.
+     * @param modalDialogManagerSupplier The {@link NonNullObservableSupplier} of the {@link
+     *     ModalDialogManager}.
      * @param bottomSheetController The {@link BottomSheetController} able to observe the
-     *                              open/closed state of bottom sheets.
+     *     open/closed state of bottom sheets.
      * @param activityLifecycleDispatcher The dispatcher of activity life cycles.
      * @param messageDispatcher The {@link ManagedMessageDispatcher} able to suspend/resume queue.
      */
@@ -159,7 +160,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
             MessageContainerCoordinator messageContainerCoordinator,
             ActivityTabProvider activityTabProvider,
             OneshotSupplier<LayoutStateProvider> layoutStateProviderOneShotSupplier,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            NonNullObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             BottomSheetController bottomSheetController,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
             ManagedMessageDispatcher messageDispatcher) {
@@ -171,7 +172,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
         mBrowserControlsManager.addObserver(mBrowserControlsObserver);
         layoutStateProviderOneShotSupplier.onAvailable(
                 mCallbackController.makeCancelable(this::setLayoutStateProvider));
-        modalDialogManagerSupplier.addObserver(this::setModalDialogManager);
+        modalDialogManagerSupplier.addSyncObserverAndPostIfNonNull(this::setModalDialogManager);
         mBottomSheetController = bottomSheetController;
         mBottomSheetController.addObserver(mBottomSheetObserver);
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
@@ -182,7 +183,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
                     private int mToken = TokenHolder.INVALID_TOKEN;
 
                     @Override
-                    protected void onObservingDifferentTab(@Nullable Tab tab, boolean hint) {
+                    protected void onObservingDifferentTab(@Nullable Tab tab) {
                         if (mToken == TokenHolder.INVALID_TOKEN && tab == null) {
                             mToken = suspendQueue();
                         } else if (mToken != TokenHolder.INVALID_TOKEN && tab != null) {
@@ -231,7 +232,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
             assert !areBrowserControlsReady()
                     : "Should not be requested when browser controls is ready.";
             assert !mBrowserControlsObserver.isRequesting();
-            mBrowserControlsObserver.setOneTimeRunnableOnControlsFullyVisible(runnable);
+            mBrowserControlsObserver.setOneTimeRunnableOnControlsReady(runnable);
             return;
         }
         mBrowserControlsToken =
@@ -239,10 +240,10 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
 
         mContainerCoordinator.showMessageContainer();
         if (areBrowserControlsReady()) {
-            mBrowserControlsObserver.setOneTimeRunnableOnControlsFullyVisible(null);
+            mBrowserControlsObserver.setOneTimeRunnableOnControlsReady(null);
             runnable.run();
         } else {
-            mBrowserControlsObserver.setOneTimeRunnableOnControlsFullyVisible(runnable);
+            mBrowserControlsObserver.setOneTimeRunnableOnControlsReady(runnable);
         }
     }
 
@@ -264,7 +265,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
                 .releasePersistentShowingToken(mBrowserControlsToken);
         mBrowserControlsToken = TokenHolder.INVALID_TOKEN;
         mContainerCoordinator.hideMessageContainer();
-        mBrowserControlsObserver.setOneTimeRunnableOnControlsFullyVisible(null);
+        mBrowserControlsObserver.setOneTimeRunnableOnControlsReady(null);
     }
 
     @Override
@@ -296,6 +297,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
 
     /**
      * Suspend queue so that the queue will not show a new message until it is resumed.
+     *
      * @return A token of {@link TokenHolder} required when resuming the queue.
      */
     int suspendQueue() {
@@ -315,9 +317,10 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
         assert mActivityTabProvider != null;
         final Tab tab = mActivityTabProvider.get();
         if (tab == null || tab.isDestroyed()) return false;
-        return TabBrowserControlsConstraintsHelper.getConstraints(tab)
+        return mBrowserControlsManager.getTopControlsHeight() == 0
+                || TabBrowserControlsConstraintsHelper.getConstraints(tab)
                         == BrowserControlsState.HIDDEN
-                || BrowserControlsUtils.areBrowserControlsFullyVisible(mBrowserControlsManager);
+                || BrowserControlsUtils.areTopControlsFullyVisible(mBrowserControlsManager);
     }
 
     /**
@@ -365,7 +368,7 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
     }
 
     class BrowserControlsObserver implements BrowserControlsStateProvider.Observer {
-        private @Nullable Runnable mRunOnControlsFullyVisible;
+        private @Nullable Runnable mRunOnControlsReady;
 
         @Override
         public void onControlsOffsetChanged(
@@ -377,24 +380,25 @@ public class ChromeMessageQueueMediator implements MessageQueueDelegate, UrlFocu
                 boolean bottomControlsMinHeightChanged,
                 boolean requestNewFrame,
                 boolean isVisibilityForced) {
-            if (mRunOnControlsFullyVisible != null
-                    && BrowserControlsUtils.areBrowserControlsFullyVisible(
-                            mBrowserControlsManager)) {
-                mRunOnControlsFullyVisible.run();
-                mRunOnControlsFullyVisible = null;
+            if (mRunOnControlsReady != null
+                    && (mBrowserControlsManager.getTopControlsHeight() == 0
+                            || BrowserControlsUtils.areTopControlsFullyVisible(
+                                    mBrowserControlsManager))) {
+                mRunOnControlsReady.run();
+                mRunOnControlsReady = null;
             }
         }
 
-        void setOneTimeRunnableOnControlsFullyVisible(@Nullable Runnable runnable) {
-            mRunOnControlsFullyVisible = runnable;
+        void setOneTimeRunnableOnControlsReady(@Nullable Runnable runnable) {
+            mRunOnControlsReady = runnable;
         }
 
         @Nullable Runnable getRunnableForTesting() {
-            return mRunOnControlsFullyVisible;
+            return mRunOnControlsReady;
         }
 
         boolean isRequesting() {
-            return mRunOnControlsFullyVisible != null;
+            return mRunOnControlsReady != null;
         }
     }
 

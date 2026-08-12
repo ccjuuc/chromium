@@ -8,7 +8,14 @@ per-file threat_details_unittest.cc=skrakowi@chromium.org
 
 # For extensions telemetry changes.
 per-file BUILD.gn=anunoy@chromium.org
+# For tailored security + bundled settings metrics changes.
+per-file BUILD.gn=jacastro@chromium.org
 
-per-file *client_side_detection*=andysjlim@chromium.org
+per-file safe_browsing_pref_change_handler*=jacastro@chromium.org
+
+per-file *client_side_detection*=nwokedi@chromium.org
+per-file *client_side_detection*=andysjlim@chromium.org #{LAST_RESORT_SUGGESTION}
 
 per-file *notification_content_detection*=skrakowi@chromium.org
+
+per-file chrome_safe_browsing_hats_delegate*=nwokedi@chromium.org

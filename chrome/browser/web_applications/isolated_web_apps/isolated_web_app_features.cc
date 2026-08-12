@@ -8,6 +8,7 @@
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/isolated_web_apps_policy.h"
@@ -15,7 +16,7 @@
 namespace web_app {
 
 namespace {
-using Availability = policy::DeveloperToolsPolicyHandler::Availability;
+using Availability = policy::DeveloperToolsAvailability;
 }
 
 bool IsIwaDevModeEnabled(Profile* profile) {
@@ -38,13 +39,22 @@ bool IsIwaDevModeEnabled(Profile* profile) {
   return base::FeatureList::IsEnabled(features::kIsolatedWebAppDevMode);
 }
 
-bool IsIwaUnmanagedInstallEnabled(Profile* profile) {
+bool IsIwaUnmanagedInstallFeatureEnabled(Profile* profile) {
   if (!content::AreIsolatedWebAppsEnabled(profile)) {
     return false;
   }
 
   return base::FeatureList::IsEnabled(
       features::kIsolatedWebAppUnmanagedInstall);
+}
+
+bool IsIwaUnmanagedInstallEnabled(Profile* profile) {
+  if (!IsIwaUnmanagedInstallFeatureEnabled(profile)) {
+    return false;
+  }
+
+  return profile->GetPrefs()->GetBoolean(
+      prefs::kIsolatedWebAppUserInstallationEnabled);
 }
 
 }  // namespace web_app

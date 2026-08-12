@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <string_view>
 
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 
@@ -19,6 +18,7 @@ class Origin;
 }
 
 namespace autofill::payments {
+
 // Returns true if production Payments URLs should be used or false if sandbox
 // should be used.
 bool IsPaymentsProductionEnabled();
@@ -44,7 +44,7 @@ GURL GetManageAddressesUrl();
 GURL GetVirtualCardEnrollmentSupportUrl();
 
 // Returns the support URL for the BNPL issuer terms for issuer_id.
-GURL GetBnplTermsUrl(autofill::BnplIssuer::IssuerId issuer_id);
+GURL GetBnplTermsUrl(BnplIssuer::IssuerId issuer_id);
 
 }  // namespace autofill::payments
 

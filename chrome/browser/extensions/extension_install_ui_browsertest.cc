@@ -14,7 +14,6 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/common/url_constants.h"
 #include "components/crx_file/id_util.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -92,7 +91,7 @@ class ExtensionInstallUIBrowserTest : public extensions::ExtensionBrowserTest {
   }
 };
 
-// Fails on Linux and Windows (http://crbug.com/580907).
+// Fails on Linux and Windows (http://crbug.com/41236457).
 IN_PROC_BROWSER_TEST_F(ExtensionInstallUIBrowserTest,
                        DISABLED_TestThemeInstallUndoResetsToDefault) {
   // Install theme once and undo to verify we go back to default theme.
@@ -146,7 +145,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionInstallUIBrowserTest,
   ASSERT_FALSE(GetTheme());
 }
 
-// Flaky (http://crbug.com/851252).
+// Flaky (http://crbug.com/41393682).
 IN_PROC_BROWSER_TEST_F(ExtensionInstallUIBrowserTest,
                        DISABLED_TestInstallThemeInFullScreen) {
   EXPECT_TRUE(chrome::ExecuteCommand(browser(), IDC_FULLSCREEN));

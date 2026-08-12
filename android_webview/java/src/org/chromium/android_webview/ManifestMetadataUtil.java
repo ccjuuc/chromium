@@ -11,12 +11,14 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Bundle;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+
+import javax.annotation.concurrent.GuardedBy;
 
 /**
  * Utility class to fetch metadata declared in the ApplicationManifest.xml file of the embedding
@@ -30,8 +32,6 @@ public class ManifestMetadataUtil {
     // reporting. See https://developer.android.com/reference/android/webkit/WebView.html
     private static final String METRICS_OPT_OUT_METADATA_NAME =
             "android.webkit.WebView.MetricsOptOut";
-    private static final String CONTEXT_EXPERIMENT_VALUE_METADATA_NAME =
-            "android.webkit.WebView.UseWebViewResourceContext";
     private static final String SAFE_BROWSING_OPT_IN_METADATA_NAME =
             "android.webkit.WebView.EnableSafeBrowsing";
 
@@ -40,8 +40,16 @@ public class ManifestMetadataUtil {
             "android.webkit.WebView.MultiProfileNameTagKey";
 
     // Do not change value, it is used by external AndroidManifest.xml files
+    private static final String ENABLE_CONTENT_RESTRICTION_METADATA_NAME =
+            "android.webkit.WebView.EnableContentRestriction";
+
+    // Do not change value, it is used by external AndroidManifest.xml files
     private static final String METADATA_HOLDER_SERVICE_NAME =
             "android.webkit.MetaDataHolderService";
+
+    // Do not change value, it is used by external AndroidManifest.xml files
+    private static final String FORCE_SYNC_BROWSER_STARTUP_METADATA_NAME =
+            "android.webkit.WebView.ForceSyncBrowserStartup";
 
     /**
      * @noinspection unused Suppress warnings to keep this field in the code for the future.
@@ -54,7 +62,11 @@ public class ManifestMetadataUtil {
     private static final String XRW_ALLOWLIST_METADATA_NAME =
             "REQUESTED_WITH_HEADER_ORIGIN_ALLOW_LIST";
 
-    @Nullable private static volatile MetadataCache sMetadataCache;
+    private static final Object sLock = new Object();
+
+    @GuardedBy("sLock")
+    @Nullable
+    private static volatile MetadataCache sMetadataCache;
 
     /**
      * Cache for all AndroidManifest.xml meta-data. All meta-data should be fetched at the time this
@@ -63,10 +75,10 @@ public class ManifestMetadataUtil {
     @VisibleForTesting
     public static class MetadataCache {
         private final boolean mIsAppOptedOutFromMetricsCollection;
-
-        private final @Nullable Boolean mContextExperimentValue;
         private final @Nullable Boolean mSafeBrowsingOptInPreference;
+        private final @Nullable Boolean mEnableContentRestriction;
         private final @Nullable Integer mAppMultiProfileProfileNameTagKey;
+        private final boolean mForceSyncBrowserStartup;
 
         public MetadataCache(Context context) {
             // Cache app level metadata.
@@ -75,11 +87,12 @@ public class ManifestMetadataUtil {
             mSafeBrowsingOptInPreference = getSafeBrowsingAppOptInPreference(appMetadata);
 
             // Holder service metadata.
-            @Nullable
-            Bundle metadataHolderServiceMetadata = getMetadataHolderServiceMetadata(context);
+            @Nullable Bundle metadataHolderServiceMetadata =
+                    getMetadataHolderServiceMetadata(context);
             mAppMultiProfileProfileNameTagKey =
                     getAppMultiProfileProfileNameTagKey(metadataHolderServiceMetadata);
-            mContextExperimentValue = shouldEnableContextExperiment(metadataHolderServiceMetadata);
+            mForceSyncBrowserStartup = shouldForceSyncBrowserStartup(metadataHolderServiceMetadata);
+            mEnableContentRestriction = getContentRestrictionAppOptInPreference(metadataHolderServiceMetadata);
         }
     }
 
@@ -88,17 +101,28 @@ public class ManifestMetadataUtil {
      * initialize the cache with the given context otherwise.
      */
     public static void ensureMetadataCacheInitialized(Context context) {
-        if (sMetadataCache == null) {
-            sMetadataCache = new MetadataCache(context);
+        synchronized (sLock) {
+            if (sMetadataCache == null) {
+                sMetadataCache = new MetadataCache(context);
+            }
         }
     }
 
     @VisibleForTesting
     public static MetadataCache getMetadataCache() {
-        if (sMetadataCache == null) {
-            sMetadataCache = new MetadataCache(ContextUtils.getApplicationContext());
+        synchronized (sLock) {
+            if (sMetadataCache == null) {
+                sMetadataCache = new MetadataCache(ContextUtils.getApplicationContext());
+            }
+            return sMetadataCache;
         }
-        return sMetadataCache;
+    }
+
+    @VisibleForTesting
+    public static void clearMetadataCache() {
+        synchronized (sLock) {
+            sMetadataCache = null;
+        }
     }
 
     /**
@@ -125,32 +149,6 @@ public class ManifestMetadataUtil {
     }
 
     /**
-     * Checks the application manifest for WebView's context experiment opt-in/opt-out preference.
-     *
-     * @return true if the app has opted in to the experiment, false if the app has opted out or
-     *     null if no value is specified.
-     */
-    @Nullable
-    public static Boolean shouldEnableContextExperiment() {
-        return getMetadataCache().mContextExperimentValue;
-    }
-
-    @VisibleForTesting
-    @Nullable
-    public static Boolean shouldEnableContextExperiment(
-            @Nullable Bundle metadataHolderServiceMetadata) {
-        Boolean value = null;
-        if (metadataHolderServiceMetadata != null
-                && metadataHolderServiceMetadata.containsKey(
-                        CONTEXT_EXPERIMENT_VALUE_METADATA_NAME)) {
-            value =
-                    metadataHolderServiceMetadata.getBoolean(
-                            CONTEXT_EXPERIMENT_VALUE_METADATA_NAME);
-        }
-        return value;
-    }
-
-    /**
      * Checks the application manifest for Safe Browsing opt-in preference.
      *
      * @return true if app has opted in, false if opted out, and null if no preference specified.
@@ -169,6 +167,51 @@ public class ManifestMetadataUtil {
             value = null;
         } else {
             value = appMetadata.getBoolean(SAFE_BROWSING_OPT_IN_METADATA_NAME);
+        }
+        return value;
+    }
+
+    /**
+     * Checks the application manifest for forcing synchronous WebView browser startup.
+     *
+     * @return true if app forces synchronous startup by setting the manifest metadata to true,
+     *     false otherwise.
+     */
+    public static boolean shouldForceSyncBrowserStartup() {
+        return getMetadataCache().mForceSyncBrowserStartup;
+    }
+
+    @VisibleForTesting
+    public static boolean shouldForceSyncBrowserStartup(
+            @Nullable Bundle metadataHolderServiceMetadata) {
+        if (metadataHolderServiceMetadata == null) {
+            return false;
+        }
+        return metadataHolderServiceMetadata.getBoolean(
+                FORCE_SYNC_BROWSER_STARTUP_METADATA_NAME, false);
+    }
+
+    /**
+     * Checks the application manifest for Content Restriction opt-in preference.
+     *
+     * @return true if app has opted in, false if opted out, and null if no preference specified.
+     */
+    @Nullable
+    public static Boolean getContentRestrictionAppOptInPreference() {
+        return getMetadataCache().mEnableContentRestriction;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public static Boolean getContentRestrictionAppOptInPreference(
+            @Nullable Bundle metadataHolderServiceMetadata) {
+        Boolean value;
+        if (metadataHolderServiceMetadata != null
+                && metadataHolderServiceMetadata.containsKey(
+                        ENABLE_CONTENT_RESTRICTION_METADATA_NAME)) {
+            value = metadataHolderServiceMetadata.getBoolean(ENABLE_CONTENT_RESTRICTION_METADATA_NAME);
+        } else {
+            value = null;
         }
         return value;
     }

@@ -55,6 +55,8 @@ FORWARD_DECLARE_TEST(
 FORWARD_DECLARE_TEST(
       WebContentsImplBrowserTest,
       MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection);
+FORWARD_DECLARE_TEST(FencedFrameMPArchBrowserTest,
+                     AutoscrollSelectionFromFencedFrameIgnored);
 FORWARD_DECLARE_TEST(SitePerProcessHitTestBrowserTest,
                            CacheCoordinateTransformUponMouseDown);
 FORWARD_DECLARE_TEST(SitePerProcessHitTestBrowserTest,
@@ -115,6 +117,7 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
    public:
     virtual ~Delegate() = default;
     virtual TouchEmulator* GetTouchEmulator(bool create_if_necessary) = 0;
+    virtual void CancelAutoscroll(RenderWidgetHostViewInput* view) = 0;
   };
 
   explicit RenderWidgetHostInputEventRouter(viz::HitTestDataProvider* provider,
@@ -164,6 +167,8 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
   // creates a touch emulator.
   TouchEmulator* GetTouchEmulator(bool create_if_necessary);
 
+  base::WeakPtr<RenderWidgetHostInputEventRouter> GetWeakPtr();
+
   float last_device_scale_factor() { return last_device_scale_factor_; }
 
   // Returns the RenderWidgetHostViewInput inside the |root_view| at |point|
@@ -189,9 +194,11 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
 
   // RenderWidgetTargeter::Delegate:
   RenderWidgetHostViewInput* FindViewFromFrameSinkId(
-      const viz::FrameSinkId& frame_sink_id) const override;
+      const viz::FrameSinkId& frame_sink_id,
+      RenderWidgetHostViewInput* ancestor_to_verify = nullptr) const override;
   bool ShouldContinueHitTesting(
       RenderWidgetHostViewInput* target_view) const override;
+  void CancelAutoscroll(RenderWidgetHostViewInput* view) override;
 
   // Allows a target to claim or release capture of mouse events.
   void SetMouseCaptureTarget(RenderWidgetHostViewInput* target,
@@ -234,12 +241,18 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
 
   size_t TouchEventAckQueueLengthForTesting() const;
   size_t RegisteredViewCountForTesting() const;
+  const gfx::PointF& mouse_down_post_transformed_coordinate_for_testing()
+      const {
+    return mouse_down_post_transformed_coordinate_;
+  }
 
   void set_route_to_root_for_devtools(bool route) {
     route_to_root_for_devtools_ = route;
   }
 
-  void SetAutoScrollInProgress(bool is_autoscroll_in_progress);
+  RenderWidgetTargeter::AutoscrollStatus SetAutoScrollInProgress(
+      RenderWidgetHostViewInput* view,
+      bool is_autoscroll_in_progress);
 
   RenderWidgetHostViewInput* GetLastMouseMoveTargetForTest();
   RenderWidgetHostViewInput* GetLastMouseMoveRootViewForTest();
@@ -255,6 +268,8 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
   FRIEND_TEST_ALL_PREFIXES(
       content::WebContentsImplBrowserTest,
       MouseUpInOOPIframeShouldCancelMainFrameAutoscrollSelection);
+  FRIEND_TEST_ALL_PREFIXES(content::FencedFrameMPArchBrowserTest,
+                           AutoscrollSelectionFromFencedFrameIgnored);
 
   using FrameSinkIdOwnerMap =
       std::unordered_map<viz::FrameSinkId,
@@ -503,11 +518,6 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
   std::deque<TouchscreenGestureEventDebugData>
       touchscreen_gesture_event_debug_queue_;
   base::debug::CrashKeyString* GetTouchscreenGestureEventHistoryCrashString();
-  void LogTouchscreenEventHistoryForDebug(void* target_view,
-                                          void* resending_view,
-                                          void* touchscreen_gesture_target,
-                                          void* touchpad_gesture_target,
-                                          void* touch_target);
 
   // This is expected to outlive RenderWidgetHostInputEventRouter object.
   const raw_ptr<viz::HitTestDataProvider> hit_test_provider_ = nullptr;

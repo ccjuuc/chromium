@@ -18,6 +18,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/test_data_util.h"
 #include "media/ffmpeg/ffmpeg_common.h"
@@ -29,13 +30,18 @@
 #include "media/parsers/ivf_parser.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
+#include "third_party/fuzztest/src/fuzztest/googletest_fixture_adapter.h"
 #include "third_party/libgav1/src/src/obu_parser.h"
 #include "third_party/libgav1/src/src/utils/common.h"
 #include "third_party/libgav1/src/src/utils/constants.h"
 #include "third_party/libgav1/src/src/utils/types.h"
 #include "third_party/skia/include/core/SkData.h"
+#include "ui/gfx/switches.h"
 
 using ::testing::_;
+using ::testing::AllOf;
 using ::testing::DoAll;
 using ::testing::Return;
 using ::testing::SaveArg;
@@ -137,6 +143,10 @@ MATCHER_P(MatchesFrameData, decoder_buffer, "") {
   auto decoder_buffer_span = base::span(*decoder_buffer);
   return arg.data() == decoder_buffer_span.data() &&
          arg.size() == decoder_buffer_span.size();
+}
+
+MATCHER_P(MatchesHDRMetadata, hdr_metadata, "") {
+  return arg.dynamic_hdr_metadata() == hdr_metadata;
 }
 
 class MockAV1Accelerator : public AV1Decoder::AV1Accelerator {
@@ -263,18 +273,14 @@ std::vector<scoped_refptr<DecoderBuffer>> AV1DecoderTest::ReadIVF(
 
   IvfParser ivf_parser;
   IvfFileHeader ivf_header{};
-  EXPECT_TRUE(
-      ivf_parser.Initialize(reinterpret_cast<const uint8_t*>(ivf_data.data()),
-                            ivf_data.size(), &ivf_header));
+  EXPECT_TRUE(ivf_parser.Initialize(base::as_byte_span(ivf_data), &ivf_header));
   EXPECT_EQ(ivf_header.fourcc, /*AV01=*/0x31305641u);
 
   std::vector<scoped_refptr<DecoderBuffer>> buffers;
   IvfFrameHeader ivf_frame_header{};
-  const uint8_t* data;
-  while (ivf_parser.ParseNextFrame(&ivf_frame_header, &data)) {
-    buffers.push_back(DecoderBuffer::CopyFrom(
-        // TODO(crbug.com/40284755): `ParseNextFrame` should return a span.
-        UNSAFE_TODO(base::span(data, ivf_frame_header.frame_size))));
+  for (auto bytes = ivf_parser.ParseNextFrame(&ivf_frame_header);
+       !bytes.empty(); bytes = ivf_parser.ParseNextFrame(&ivf_frame_header)) {
+    buffers.push_back(DecoderBuffer::CopyFrom(bytes));
   }
   return buffers;
 }
@@ -671,6 +677,66 @@ TEST_F(AV1DecoderTest, ConfigChange) {
   EXPECT_EQ(results, expected);
 }
 
+// A new coded video sequence whose sequence header keeps the same dimensions,
+// profile, bit depth and chroma sampling but flips coding-tool flags such as
+// enable_order_hint or enable_ref_frame_mvs must still surface a kConfigChange
+// so that the accelerator can re-create its hardware context.
+TEST_F(AV1DecoderTest, ConfigChangeOnSequenceHeaderToolFlags) {
+  // 1280x720 profile0 8-bit 4:2:0 key frame with all sequence-header coding
+  // tools disabled (enable_order_hint = 0, enable_ref_frame_mvs = 0, ...).
+  constexpr uint8_t kSequenceA[] = {
+      0x12, 0x00, 0x0a, 0x0c, 0x00, 0x00, 0x00, 0x63, 0xfc,
+      0x13, 0xfc, 0x0b, 0x3c, 0x01, 0x00, 0x14, 0x32, 0x08,
+      0x10, 0x46, 0x40, 0x00, 0x00, 0x18, 0x00, 0x80};
+  // Identical dimensions/profile/bitdepth/chroma but with enable_order_hint,
+  // order_hint_bits, enable_jnt_comp, enable_ref_frame_mvs and the remaining
+  // coding-tool flags enabled.
+  constexpr uint8_t kSequenceB[] = {
+      0x12, 0x00, 0x0a, 0x0d, 0x00, 0x00, 0x00, 0x63, 0xfc, 0x13,
+      0xfc, 0x0b, 0x3c, 0xff, 0xcc, 0x00, 0xa0, 0x32, 0x09, 0x10,
+      0x00, 0x8c, 0x80, 0x00, 0x00, 0x30, 0x00, 0x80};
+
+  const std::vector<DecodeResult> expected = {
+      DecodeResult::kConfigChange, DecodeResult::kRanOutOfStreamData};
+
+  libgav1::ObuSequenceHeader seq_header_a = {};
+  {
+    ::testing::InSequence sequence;
+    EXPECT_CALL(*mock_accelerator_, CreateAV1Picture(_))
+        .WillOnce(Return(base::MakeRefCounted<FakeAV1Picture>()));
+    EXPECT_CALL(*mock_accelerator_, SubmitDecode(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<1>(&seq_header_a),
+                        Return(AV1Decoder::AV1Accelerator::Status::kOk)));
+    EXPECT_CALL(*mock_accelerator_, OutputPicture(_)).WillOnce(Return(true));
+    auto buffer = DecoderBuffer::CopyFrom(kSequenceA);
+    ASSERT_EQ(Decode(buffer), expected);
+    testing::Mock::VerifyAndClearExpectations(mock_accelerator_);
+  }
+  ASSERT_FALSE(seq_header_a.enable_order_hint);
+  ASSERT_FALSE(seq_header_a.enable_ref_frame_mvs);
+
+  libgav1::ObuSequenceHeader seq_header_b = {};
+  {
+    ::testing::InSequence sequence;
+    EXPECT_CALL(*mock_accelerator_, CreateAV1Picture(_))
+        .WillOnce(Return(base::MakeRefCounted<FakeAV1Picture>()));
+    EXPECT_CALL(*mock_accelerator_, SubmitDecode(_, _, _, _, _))
+        .WillOnce(DoAll(SaveArg<1>(&seq_header_b),
+                        Return(AV1Decoder::AV1Accelerator::Status::kOk)));
+    EXPECT_CALL(*mock_accelerator_, OutputPicture(_)).WillOnce(Return(true));
+    auto buffer = DecoderBuffer::CopyFrom(kSequenceB);
+    EXPECT_EQ(Decode(buffer), expected);
+    testing::Mock::VerifyAndClearExpectations(mock_accelerator_);
+  }
+  EXPECT_TRUE(seq_header_b.enable_order_hint);
+  EXPECT_TRUE(seq_header_b.enable_ref_frame_mvs);
+  EXPECT_NE(seq_header_a.order_hint_bits, seq_header_b.order_hint_bits);
+  EXPECT_EQ(seq_header_a.max_frame_width, seq_header_b.max_frame_width);
+  EXPECT_EQ(seq_header_a.max_frame_height, seq_header_b.max_frame_height);
+  EXPECT_EQ(seq_header_a.use_128x128_superblock,
+            seq_header_b.use_128x128_superblock);
+}
+
 TEST_F(AV1DecoderTest, Reset) {
   constexpr gfx::Size kFrameSize(320, 240);
   constexpr gfx::Size kRenderSize(320, 240);
@@ -1011,6 +1077,9 @@ TEST_F(AV1DecoderTest, DecodeWithFrameSizeChange) {
 }
 
 TEST_F(AV1DecoderTest, DecodeStreamWithAgtmMetadata) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kHdrAgtm, features::kHdrAgtmParseOldSyntax}, {});
   constexpr gfx::Size kFrameSize(320, 240);
   constexpr gfx::Size kRenderSize(320, 240);
   constexpr auto kProfile = libgav1::BitstreamProfile::kProfile0;
@@ -1024,12 +1093,15 @@ TEST_F(AV1DecoderTest, DecodeStreamWithAgtmMetadata) {
     auto av1_picture = base::MakeRefCounted<AV1Picture>();
     EXPECT_CALL(*mock_accelerator_, CreateAV1Picture(/*apply_grain=*/false))
         .WillOnce(Return(av1_picture));
+    gfx::HDRMetadata expected_hdr_metadata;
+    expected_hdr_metadata.SetAgtm({.fHdrReferenceWhite = 203.0101f});
     EXPECT_CALL(
         *mock_accelerator_,
         SubmitDecode(
-            MatchesFrameHeader(kFrameSize, kRenderSize,
-                               /*show_existing_frame=*/false,
-                               /*show_frame=*/true),
+            AllOf(MatchesFrameHeader(kFrameSize, kRenderSize,
+                                     /*show_existing_frame=*/false,
+                                     /*show_frame=*/true),
+                  MatchesHDRMetadata(expected_hdr_metadata)),
             MatchesYUV420SequenceHeader(kProfile, /*bitdepth=*/8, kFrameSize,
                                         /*film_grain_params_present=*/false),
             _, NonEmptyTileBuffers(), MatchesFrameData(buffer)))
@@ -1044,10 +1116,98 @@ TEST_F(AV1DecoderTest, DecodeStreamWithAgtmMetadata) {
     testing::Mock::VerifyAndClearExpectations(mock_accelerator_);
   }
   EXPECT_EQ(results, expected);
-  const gfx::HDRMetadata hdr_metadata = decoder_->GetHDRMetadata();
-  ASSERT_TRUE(hdr_metadata.getSerializedAgtm());
-  EXPECT_EQ(hdr_metadata.getSerializedAgtm()->size(), 101u);
 }
+
+TEST(AV1PictureTest, DuplicatePreservesDynamicHdrMetadata) {
+  auto pic = base::MakeRefCounted<AV1Picture>();
+  gfx::HDRMetadata hdr_metadata;
+  hdr_metadata.SetAgtm({.fHdrReferenceWhite = 203.0101f});
+  pic->SetDynamicHdrMetadata(hdr_metadata, nullptr);
+  EXPECT_TRUE(pic->dynamic_hdr_metadata().HasAgtm());
+
+  auto dup_pic = pic->Duplicate();
+  ASSERT_TRUE(dup_pic);
+  EXPECT_TRUE(dup_pic->dynamic_hdr_metadata().HasAgtm());
+  EXPECT_EQ(dup_pic->dynamic_hdr_metadata().GetAgtm().fHdrReferenceWhite,
+            203.0101f);
+}
+
+class FuzzAV1Accelerator : public media::AV1Decoder::AV1Accelerator {
+ public:
+  FuzzAV1Accelerator() = default;
+  ~FuzzAV1Accelerator() override = default;
+  FuzzAV1Accelerator(const FuzzAV1Accelerator&) = delete;
+  FuzzAV1Accelerator& operator=(const FuzzAV1Accelerator&) = delete;
+
+  // media::AV1Decoder::AV1Accelerator implementation.
+  scoped_refptr<media::AV1Picture> CreateAV1Picture(bool apply_grain) override {
+    return base::MakeRefCounted<media::AV1Picture>();
+  }
+  Status SubmitDecode(const media::AV1Picture& pic,
+                      const libgav1::ObuSequenceHeader& sequence_header,
+                      const media::AV1ReferenceFrameVector& ref_frames,
+                      const libgav1::Vector<libgav1::TileBuffer>& tile_buffers,
+                      base::span<const uint8_t> data) override {
+    return Status::kOk;
+  }
+  bool OutputPicture(const media::AV1Picture& pic) override { return true; }
+};
+
+void DecodeDoesNotCrash(const std::vector<std::vector<uint8_t>>& streams) {
+  // Ignore warning logs due to invalid inputs from fuzzing.
+  const int old_level = logging::GetMinLogLevel();
+  logging::SetMinLogLevel(logging::LOGGING_ERROR);
+  auto restore_log_level =
+      absl::MakeCleanup([old_level]() { logging::SetMinLogLevel(old_level); });
+
+  media::AV1Decoder decoder(std::make_unique<FuzzAV1Accelerator>(),
+                            media::AV1PROFILE_PROFILE_MAIN);
+
+  for (size_t i = 0; i < streams.size(); ++i) {
+    scoped_refptr<media::DecoderBuffer> decoder_buffer =
+        media::DecoderBuffer::CopyFrom(streams[i]);
+    if (!decoder_buffer) {
+      continue;
+    }
+    decoder.SetStream(base::checked_cast<int32_t>(i), decoder_buffer);
+
+    // Decode should consume all the data unless it returns kConfigChange, and
+    // in that case it needs to be called again.
+    while (true) {
+      if (decoder.Decode() != media::AcceleratedVideoDecoder::kConfigChange) {
+        break;
+      }
+    }
+    decoder.Reset();
+  }
+  std::ignore = decoder.Flush();
+}
+
+std::vector<std::tuple<std::vector<std::vector<uint8_t>>>> GetAV1Seeds() {
+  std::vector<std::tuple<std::vector<std::vector<uint8_t>>>> seeds;
+  const std::string kSeedFiles[] = {
+      "av1-I-frame-320x240",
+      "av1-I-frame-1280x720",
+      "av1-monochrome-I-frame-320x240-8bpp",
+  };
+
+  for (const auto& name : kSeedFiles) {
+    base::FilePath path = GetTestDataFilePath(name);
+    std::string data;
+    if (base::ReadFileToString(path, &data)) {
+      std::vector<uint8_t> buffer(data.begin(), data.end());
+      seeds.emplace_back(std::vector<std::vector<uint8_t>>{buffer});
+    }
+  }
+  return seeds;
+}
+
+FUZZ_TEST(AV1DecoderFuzz, DecodeDoesNotCrash)
+    .WithDomains(fuzztest::VectorOf(
+                     fuzztest::Arbitrary<std::vector<uint8_t>>().WithMinSize(1))
+                     .WithMinSize(1)
+                     .WithMaxSize(3))
+    .WithSeeds(GetAV1Seeds);
 
 // TODO(hiroh): Add more tests: reference frame tracking, render size change,
 // profile change, bit depth change, render size different than the frame size,

@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {RecentlyClosedTab, Tab, TabGroup, TabSearchItemElement} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {TabAlertState, TabData, TabGroupColor, TabItemType} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {assertDeepEquals, assertEquals, assertNotEquals, assertNotReached} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {createTab, sampleToken} from './tab_search_test_data.js';
+import {initLoadTimeDataWithDefaults} from './tab_search_test_helper.js';
 
 suite('TabSearchItemTest', () => {
   let tabSearchItem: TabSearchItemElement;
 
-  function setupTest(data: TabData) {
+  function setupTest(
+      data: TabData,
+      loadTimeOverriddenData?: {[key: string]: number|string|boolean}) {
+    initLoadTimeDataWithDefaults(loadTimeOverriddenData);
     tabSearchItem = document.createElement('tab-search-item');
     tabSearchItem.data = data;
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
@@ -75,11 +80,23 @@ suite('TabSearchItemTest', () => {
         tabSearchItem.shadowRoot.querySelector('cr-icon-button');
     assertNotEquals(null, tabSearchItemCloseButton);
 
+    const tooltip = tabSearchItem.shadowRoot.querySelector('cr-tooltip');
+    assertNotEquals(null, tooltip);
+
+    // Tooltip should be hidden initially.
+    const innerTooltip = tooltip!.shadowRoot.querySelector('#tooltip');
+    assertNotEquals(null, innerTooltip);
+    assertEquals('none', getComputedStyle(innerTooltip!).display);
+
+    // Test that the tooltip is shown when the close button is focused.
+    tabSearchItemCloseButton!.focus();
+    assertNotEquals('none', getComputedStyle(innerTooltip!).display);
+
     setupTest(new TabData(
         {
           tabId: 0,
           title: 'Example.com site',
-          url: {url: 'https://example.com'},
+          url: 'https://example.com',
           lastActiveTime: {internalValue: BigInt(0)},
           lastActiveElapsedText: '',
         } as RecentlyClosedTab,
@@ -113,8 +130,14 @@ suite('TabSearchItemTest', () => {
         tabSearchItem.shadowRoot.querySelector('#groupDot')!;
     assertNotEquals(null, groupDotElement);
     const groupDotComputedStyle = getComputedStyle(groupDotElement);
+
+    const useColorRefresh = loadTimeData.getBoolean('useTabGroupColorRefresh');
+    const expectedColorVar = useColorRefresh ?
+        '--tab-group-refresh-color-blue' :
+        '--tab-group-color-blue';
+
     assertEquals(
-        groupDotComputedStyle.getPropertyValue('--tab-group-color-blue'),
+        groupDotComputedStyle.getPropertyValue(expectedColorVar),
         groupDotComputedStyle.getPropertyValue('--group-dot-color'));
 
     assertNotEquals(
@@ -167,5 +190,15 @@ suite('TabSearchItemTest', () => {
       assertNotReached(
           `Should not have thrown error: '${(e as Error).message}`);
     }
+  });
+
+  // Regression test for crbug.com/504594425
+  test('SecondaryTextDirection', () => {
+    const secondaryTextInner =
+        tabSearchItem.shadowRoot.querySelector('#secondaryTextInner')!;
+    assertEquals(
+        'ltr',
+        (secondaryTextInner.computedStyleMap().get('direction') as CSSUnitValue)
+            .value);
   });
 });

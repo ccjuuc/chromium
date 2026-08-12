@@ -221,7 +221,8 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) AuthEventsRecorder
   base::circular_deque<std::string> events_;
 
   base::ScopedObservation<session_manager::SessionManager,
-                          session_manager::SessionManagerObserver>
+                          session_manager::SessionManagerObserver,
+                          base::RawPtrTraits::kEmpty>
       session_observation_{this};
 
   // All values should be reset in `Reset()`;

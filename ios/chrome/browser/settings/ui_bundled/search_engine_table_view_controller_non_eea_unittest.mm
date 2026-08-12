@@ -6,6 +6,7 @@
 #import "base/strings/utf_string_conversions.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/regional_capabilities/regional_capabilities_switches.h"
+#import "components/regional_capabilities/regional_capabilities_utils.h"
 #import "components/search_engines/template_url_data_util.h"
 #import "components/search_engines/template_url_prepopulate_data.h"
 #import "ios/chrome/browser/settings/ui_bundled/search_engine_table_view_controller.h"
@@ -13,7 +14,7 @@
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 
-using TemplateURLPrepopulateData::GetAllPrepopulatedEngines;
+using regional_capabilities::GetAllPrepopulatedEngines;
 using TemplateURLPrepopulateData::PrepopulatedEngine;
 
 namespace {
@@ -61,10 +62,9 @@ TEST_F(SearchEngineTableViewControllerNonEEATest,
 
   ASSERT_EQ(2, NumberOfSections());
   ASSERT_EQ(3, NumberOfItemsInSection(0));
-  // Assert order of prepopulated hasn't changed.
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], false, 0, 0);
-  CheckPrepopulatedItem(prepopulated_search_engine_[0], false, 0, 1);
-  CheckPrepopulatedItem(prepopulated_search_engine_[1], true, 0, 2);
+  CheckPrepopulatedItem(prepopulated_search_engine_[0], false, 0, 0);
+  CheckPrepopulatedItem(prepopulated_search_engine_[1], true, 0, 1);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], false, 0, 2);
 
   ASSERT_EQ(3, NumberOfItemsInSection(1));
   CheckCustomItem(custom_search_engine_[0], false, 1, 0);
@@ -94,9 +94,9 @@ TEST_F(SearchEngineTableViewControllerNonEEATest,
 
   ASSERT_EQ(2, NumberOfSections());
   ASSERT_EQ(4, NumberOfItemsInSection(0));
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], false, 0, 0);
-  CheckPrepopulatedItem(prepopulated_search_engine_[0], false, 0, 1);
-  CheckPrepopulatedItem(prepopulated_search_engine_[1], false, 0, 2);
+  CheckPrepopulatedItem(prepopulated_search_engine_[0], false, 0, 0);
+  CheckPrepopulatedItem(prepopulated_search_engine_[1], false, 0, 1);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], false, 0, 2);
   CheckCustomItem(custom_search_engine_[1], true, 0, 3);
 
   ASSERT_EQ(2, NumberOfItemsInSection(1));
@@ -153,11 +153,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, TestChangeProvider) {
 
   TemplateURL* url_p1 =
       template_url_service_->Add(std::make_unique<TemplateURL>(
-          *TemplateURLDataFromPrepopulatedEngine(*prepopulated_engines[0])));
+          *TemplateURLDataFromPrepopulatedEngine(*prepopulated_engines[1])));
   ASSERT_TRUE(url_p1);
   TemplateURL* url_p2 =
       template_url_service_->Add(std::make_unique<TemplateURL>(
-          *TemplateURLDataFromPrepopulatedEngine(*prepopulated_engines[1])));
+          *TemplateURLDataFromPrepopulatedEngine(*prepopulated_engines[0])));
   ASSERT_TRUE(url_p2);
 
   // Also add some custom search engines.
@@ -241,7 +241,7 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, TestChangeProvider) {
   histogram_tester_.ExpectTotalCount(kUmaSelectDefaultSearchEngine, 3);
 
   // Check that the selection was written back to the prefs.
-  const base::Value::Dict& searchProviderDict =
+  const base::DictValue& searchProviderDict =
       profile_->GetTestingPrefService()->GetDict(
           DefaultSearchManager::kDefaultSearchProviderDataPrefName);
   const std::string* short_name =
@@ -289,11 +289,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, EditingMode) {
                         /*checked=*/false);
 
   EXPECT_TRUE([searchEngineController editButtonEnabled]);
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
-                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[0], /*checked=*/false,
-                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[1], /*checked=*/true,
+                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
                         /*section=*/0, /*row=*/2, /*enabled=*/true);
   CheckCustomItem(custom_search_engine_[0], /*checked=*/false, /*section=*/1,
                   /*row=*/0, /*enabled=*/true);
@@ -302,11 +302,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, EditingMode) {
   [searchEngineController setEditing:YES animated:NO];
 
   // Prepopulated engines should be disabled with checkmark removed.
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
-                        /*section=*/0, /*row=*/0, /*enabled=*/false);
   CheckPrepopulatedItem(prepopulated_search_engine_[0], /*checked=*/false,
-                        /*section=*/0, /*row=*/1, /*enabled=*/false);
+                        /*section=*/0, /*row=*/0, /*enabled=*/false);
   CheckPrepopulatedItem(prepopulated_search_engine_[1], /*checked=*/false,
+                        /*section=*/0, /*row=*/1, /*enabled=*/false);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
                         /*section=*/0, /*row=*/2, /*enabled=*/false);
   // Custom engines should enabled.
   CheckCustomItem(custom_search_engine_[0], /*checked=*/false, /*section=*/1,
@@ -332,11 +332,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, EditingMode) {
 
   EXPECT_TRUE([searchEngineController editButtonEnabled]);
 
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
-                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[0], /*checked=*/false,
-                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[1], /*checked=*/true,
+                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
                         /*section=*/0, /*row=*/2, /*enabled=*/true);
   CheckCustomItem(custom_search_engine_[0], /*checked=*/false, /*section=*/1,
                   /*row=*/0, /*enabled=*/true);
@@ -388,11 +388,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, DeleteItems) {
         return NumberOfItemsInSection(1) == 2;
       }));
   ASSERT_EQ(4, NumberOfItemsInSection(0));
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
-                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[0], /*checked=*/false,
-                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[1], /*checked=*/false,
+                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
                         /*section=*/0, /*row=*/2, /*enabled=*/true);
   CheckCustomItem(custom_search_engine_[2], /*checked=*/true, /*section=*/0,
                   /*row=*/3, /*enabled=*/true);
@@ -411,11 +411,11 @@ TEST_F(SearchEngineTableViewControllerNonEEATest, DeleteItems) {
         return NumberOfSections() == 1;
       }));
   ASSERT_EQ(4, NumberOfItemsInSection(0));
-  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
-                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[0], /*checked=*/false,
-                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+                        /*section=*/0, /*row=*/0, /*enabled=*/true);
   CheckPrepopulatedItem(prepopulated_search_engine_[1], /*checked=*/false,
+                        /*section=*/0, /*row=*/1, /*enabled=*/true);
+  CheckPrepopulatedItem(prepopulated_search_engine_[2], /*checked=*/false,
                         /*section=*/0, /*row=*/2, /*enabled=*/true);
   CheckCustomItem(custom_search_engine_[2], /*checked=*/true, /*section=*/0,
                   /*row=*/3, /*enabled=*/true);

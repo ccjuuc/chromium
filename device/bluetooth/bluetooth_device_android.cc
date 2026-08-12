@@ -12,12 +12,12 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notimplemented.h"
 #include "base/stl_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/uuid.h"
 #include "device/bluetooth/android/outcome.h"
 #include "device/bluetooth/bluetooth_adapter_android.h"
 #include "device/bluetooth/bluetooth_common.h"
@@ -176,13 +176,9 @@ BluetoothDevice::UUIDSet BluetoothDeviceAndroid::GetUUIDs() const {
   }
 
   if (adapter_->IsPowered()) {
-    // Java type: String[]
-    base::android::ScopedJavaLocalRef<jobjectArray> sdp_uuids =
+    std::vector<std::string> sdp_uuids =
         Java_ChromeBluetoothDevice_getUuids(AttachCurrentThread(), j_device_);
-    std::vector<std::string> sdp_uuid_strings;
-    base::android::AppendJavaStringArrayToStringVector(
-        AttachCurrentThread(), sdp_uuids, &sdp_uuid_strings);
-    for (std::string& uuid : sdp_uuid_strings) {
+    for (std::string& uuid : sdp_uuids) {
       cached_sdp_uuids_.insert(BluetoothUUID(std::move(uuid)));
     }
   }
@@ -329,7 +325,7 @@ void BluetoothDeviceAndroid::CreateGattRemoteService(
         bluetooth_gatt_service_wrapper) {  // BluetoothGattServiceWrapper
   std::string instance_id_string = ConvertJavaStringToUTF8(env, instance_id);
 
-  if (base::Contains(gatt_services_, instance_id_string))
+  if (gatt_services_.contains(instance_id_string))
     return;
 
   std::unique_ptr<BluetoothRemoteGattServiceAndroid> service =

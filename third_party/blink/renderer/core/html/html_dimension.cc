@@ -46,7 +46,7 @@ static HTMLDimension ParseDimension(
   // HTML5's split removes leading and trailing spaces so we need to skip the
   // leading spaces here.
   const size_t digits_start =
-      SkipWhile<CharacterType, IsASCIISpace>(characters, 0);
+      SkipWhile<CharacterType, IsAsciiSpace>(characters, 0);
 
   // This is Step 5.5. in the algorithm. Going to the last step would make the
   // code less readable.
@@ -55,41 +55,42 @@ static HTMLDimension ParseDimension(
   }
 
   size_t position =
-      SkipWhile<CharacterType, IsASCIIDigit>(characters, digits_start);
+      SkipWhile<CharacterType, IsAsciiDigit>(characters, digits_start);
 
   double value = 0.;
   if (position > digits_start) {
-    bool ok = false;
-    unsigned integer_value = CharactersToUInt(
+    std::optional<unsigned> integer_value = CharactersToUInt(
         characters.subspan(digits_start, position - digits_start),
-        NumberParsingOptions(), &ok);
-    if (!ok)
+        NumberParsingOptions());
+    if (!integer_value) {
       return HTMLDimension(0., HTMLDimension::kRelative);
-    value += integer_value;
+    }
+    value += *integer_value;
 
     if (SkipExactly<CharacterType>(characters, '.', position)) {
       Vector<CharacterType> fraction_numbers;
       while (position < characters.size() &&
-             (IsASCIIDigit(characters[position]) ||
-              IsASCIISpace(characters[position]))) {
-        if (IsASCIIDigit(characters[position]))
+             (IsAsciiDigit(characters[position]) ||
+              IsAsciiSpace(characters[position]))) {
+        if (IsAsciiDigit(characters[position])) {
           fraction_numbers.push_back(characters[position]);
+        }
         ++position;
       }
 
       if (fraction_numbers.size()) {
-        double fraction_value = CharactersToUInt(base::span(fraction_numbers),
-                                                 NumberParsingOptions(), &ok);
-        if (!ok)
+        std::optional<unsigned> fraction_value = CharactersToUInt(
+            base::span(fraction_numbers), NumberParsingOptions());
+        if (!fraction_value) {
           return HTMLDimension(0., HTMLDimension::kRelative);
-
-        value += fraction_value /
+        }
+        value += static_cast<double>(*fraction_value) /
                  pow(10., static_cast<double>(fraction_numbers.size()));
       }
     }
   }
 
-  position = SkipWhile<CharacterType, IsASCIISpace>(characters, position);
+  position = SkipWhile<CharacterType, IsAsciiSpace>(characters, position);
 
   HTMLDimension::HTMLDimensionType type = HTMLDimension::kAbsolute;
   if (position < characters.size()) {
@@ -102,47 +103,42 @@ static HTMLDimension ParseDimension(
   return HTMLDimension(value, type);
 }
 
-static HTMLDimension ParseDimension(const String& raw_token,
-                                    size_t last_parsed_index,
-                                    size_t end_of_current_token) {
-  return VisitCharacters(
-      raw_token, [last_parsed_index, end_of_current_token](auto chars) {
-        return ParseDimension(chars.subspan(
-            last_parsed_index, end_of_current_token - last_parsed_index));
-      });
+static HTMLDimension ParseDimension(const StringView& token) {
+  return VisitCharacters(token,
+                         [](auto chars) { return ParseDimension(chars); });
 }
 
 // This implements the "rules for parsing a list of dimensions" per HTML5.
 // http://www.whatwg.org/specs/web-apps/current-work/multipage/common-microsyntaxes.html#rules-for-parsing-a-list-of-dimensions
-Vector<HTMLDimension> ParseListOfDimensions(const String& input) {
+Vector<HTMLDimension> ParseListOfDimensions(const StringView& input) {
   static const char kComma = ',';
 
   // Step 2. Remove the last character if it's a comma.
-  String trimmed_string = input;
-  if (trimmed_string.EndsWith(kComma))
-    trimmed_string.Truncate(trimmed_string.length() - 1);
+  StringView trimmed_input = input;
+  if (trimmed_input.ends_with(kComma)) {
+    trimmed_input.remove_suffix(1);
+  }
 
   // HTML5's split doesn't return a token for an empty string so
   // we need to match them here.
-  if (trimmed_string.empty())
+  if (trimmed_input.empty()) {
     return Vector<HTMLDimension>();
+  }
 
   // Step 3. To avoid String copies, we just look for commas instead of
   // splitting.
   Vector<HTMLDimension> parsed_dimensions;
-  wtf_size_t last_parsed_index = 0;
   while (true) {
-    wtf_size_t next_comma = trimmed_string.find(kComma, last_parsed_index);
+    const wtf_size_t next_comma = trimmed_input.find(kComma);
     if (next_comma == kNotFound)
       break;
 
     parsed_dimensions.push_back(
-        ParseDimension(trimmed_string, last_parsed_index, next_comma));
-    last_parsed_index = next_comma + 1;
+        ParseDimension(StringView(trimmed_input, 0, next_comma)));
+    trimmed_input.remove_prefix(next_comma + 1);
   }
 
-  parsed_dimensions.push_back(ParseDimension(trimmed_string, last_parsed_index,
-                                             trimmed_string.length()));
+  parsed_dimensions.push_back(ParseDimension(trimmed_input));
   return parsed_dimensions;
 }
 
@@ -152,23 +148,21 @@ static bool ParseDimensionValue(base::span<const CharacterType> characters,
   size_t current = SkipWhile<CharacterType, IsHTMLSpace>(characters, 0);
   // Deviation: HTML allows '+' here.
   const size_t number_start = current;
-  if (!SkipExactly<CharacterType, IsASCIIDigit>(characters, current)) {
+  if (!SkipExactly<CharacterType, IsAsciiDigit>(characters, current)) {
     return false;
   }
-  current = SkipWhile<CharacterType, IsASCIIDigit>(characters, current);
+  current = SkipWhile<CharacterType, IsAsciiDigit>(characters, current);
   if (SkipExactly<CharacterType>(characters, '.', current)) {
     // Deviation: HTML requires a digit after the full stop to be able to treat
     // the value as a percentage (if not, the '.' will considered "garbage",
     // yielding a regular length.) Gecko and Edge does not.
-    current = SkipWhile<CharacterType, IsASCIIDigit>(characters, current);
+    current = SkipWhile<CharacterType, IsAsciiDigit>(characters, current);
   }
-  bool ok;
-  double value = CSSValueClampingUtils::ClampDouble(CharactersToDouble(
-      characters.subspan(number_start,
-                         static_cast<size_t>(current - number_start)),
-      &ok));
-  if (!ok)
+  std::optional<double> value = CharactersToDouble(
+      characters.subspan(number_start, current - number_start));
+  if (!value) {
     return false;
+  }
   HTMLDimension::HTMLDimensionType type = HTMLDimension::kAbsolute;
   if (current < characters.size()) {
     const auto c = characters[current];
@@ -183,7 +177,7 @@ static bool ParseDimensionValue(base::span<const CharacterType> characters,
       type = HTMLDimension::kRelative;
     }
   }
-  dimension = HTMLDimension(value, type);
+  dimension = HTMLDimension(CSSValueClampingUtils::ClampDouble(*value), type);
   return true;
 }
 

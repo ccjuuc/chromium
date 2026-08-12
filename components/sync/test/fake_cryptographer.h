@@ -5,13 +5,16 @@
 #ifndef COMPONENTS_SYNC_TEST_FAKE_CRYPTOGRAPHER_H_
 #define COMPONENTS_SYNC_TEST_FAKE_CRYPTOGRAPHER_H_
 
+#include <array>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/notreached.h"
-#include "components/sync/engine/nigori/cryptographer.h"
+#include "components/sync/engine/cryptographer.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 
 namespace syncer {
 
@@ -37,10 +40,9 @@ class FakeCryptographer : public Cryptographer {
   // `key_name` must have been previously added. Once this is called, `key_name`
   // will be the return value of GetDefaultEncryptionKeyName();
   void SelectDefaultEncryptionKey(const std::string& key_name);
-  void ClearDefaultEncryptionKey();
+  void InvalidateDefaultEncryptionKey();
 
-  const CrossUserSharingPublicPrivateKeyPair& GetCrossUserSharingKeyPair(
-      uint32_t version) const;
+  std::array<uint8_t, 32> GetCrossUserSharingRawPublicKey() const;
 
   // Cryptographer implementation.
   bool CanEncrypt() const override;

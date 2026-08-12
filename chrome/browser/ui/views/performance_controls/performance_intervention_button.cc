@@ -5,35 +5,34 @@
 #include "chrome/browser/ui/views/performance_controls/performance_intervention_button.h"
 
 #include <memory>
-#include <string>
 
-#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/ui/performance_controls/performance_intervention_button_controller.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/performance_controls/performance_intervention_bubble.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/button/button_controller.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 
 PerformanceInterventionButton::PerformanceInterventionButton(
-    BrowserView* browser_view)
+    BrowserWindowInterface* browser)
     : ToolbarButton(
           base::BindRepeating(&PerformanceInterventionButton::OnClicked,
                               base::Unretained(this))),
-      browser_view_(browser_view) {
+      browser_(browser) {
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnPress);
   SetFlipCanvasOnPaintForRTLUI(false);
@@ -46,7 +45,7 @@ PerformanceInterventionButton::PerformanceInterventionButton(
   SetVisible(false);
 
   controller_ = std::make_unique<PerformanceInterventionButtonController>(
-      this, browser_view->browser());
+      this, browser_.get());
 
   if (menu_model()) {
     GetViewAccessibility().SetHasPopup(ax::mojom::HasPopup::kMenu);
@@ -67,42 +66,16 @@ void PerformanceInterventionButton::Hide() {
   PreferredSizeChanged();
 }
 
-bool PerformanceInterventionButton::IsButtonShowing() {
+bool PerformanceInterventionButton::IsButtonShowing() const {
   return GetVisible();
 }
 
-bool PerformanceInterventionButton::IsBubbleShowing() {
+bool PerformanceInterventionButton::IsBubbleShowing() const {
   return bubble_dialog_model_host_ != nullptr;
 }
 
 void PerformanceInterventionButton::OnWidgetDestroying(views::Widget* widget) {
-  InterventionBubbleActionType type = InterventionBubbleActionType::kUnknown;
-  switch (widget->closed_reason()) {
-    case views::Widget::ClosedReason::kUnspecified:
-      type = InterventionBubbleActionType::kUnknown;
-      break;
-    case views::Widget::ClosedReason::kEscKeyPressed:
-      type = InterventionBubbleActionType::kClose;
-      break;
-    case views::Widget::ClosedReason::kCloseButtonClicked:
-      type = InterventionBubbleActionType::kClose;
-      break;
-    case views::Widget::ClosedReason::kLostFocus:
-      type = InterventionBubbleActionType::kIgnore;
-      break;
-    case views::Widget::ClosedReason::kCancelButtonClicked:
-      type = InterventionBubbleActionType::kDismiss;
-      break;
-    case views::Widget::ClosedReason::kAcceptButtonClicked:
-      type = InterventionBubbleActionType::kAccept;
-      break;
-  }
-
-  RecordInterventionBubbleClosedReason(
-      performance_manager::user_tuning::PerformanceDetectionManager::
-          ResourceType::kCpu,
-      type);
-
+  PerformanceInterventionBubble::RecordCloseReason(widget->closed_reason());
   bubble_dialog_model_host_ = nullptr;
   scoped_widget_observation_.Reset();
 }
@@ -126,7 +99,7 @@ void PerformanceInterventionButton::OnClicked() {
 void PerformanceInterventionButton::CreateBubble() {
   CHECK(GetWidget());
   bubble_dialog_model_host_ = PerformanceInterventionBubble::CreateBubble(
-      browser_view_->browser(), this, controller_.get());
+      views::BubbleAnchor(this), controller_.get());
   scoped_widget_observation_.Observe(bubble_dialog_model_host_->GetWidget());
 }
 
@@ -137,7 +110,9 @@ void PerformanceInterventionButton::UpdateIconColor() {
 
   SetImageModel(
       ButtonState::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(kPerformanceSpeedometerIcon,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kSpeedIcon
+                                         : kPerformanceSpeedometerOldIcon,
                                      GetColorProvider()->GetColor(icon_color)));
 }
 

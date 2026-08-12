@@ -23,6 +23,7 @@
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/common/safe_url_pattern.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/liburlpattern/part.h"
 #include "ui/gfx/geometry/size.h"
@@ -305,6 +306,54 @@ proto::WebApp::RunOnOsLoginMode ToWebAppProtoRunOnOsLoginMode(
   }
 }
 
+blink::mojom::DisplayMode ToMojomDisplayMode(
+    proto::WebApp::DisplayMode display_mode) {
+  switch (display_mode) {
+    case proto::WebApp::DISPLAY_MODE_UNSPECIFIED:
+      return blink::mojom::DisplayMode::kUndefined;
+    case proto::WebApp::DISPLAY_MODE_BROWSER:
+      return blink::mojom::DisplayMode::kBrowser;
+    case proto::WebApp::DISPLAY_MODE_MINIMAL_UI:
+      return blink::mojom::DisplayMode::kMinimalUi;
+    case proto::WebApp::DISPLAY_MODE_STANDALONE:
+      return blink::mojom::DisplayMode::kStandalone;
+    case proto::WebApp::DISPLAY_MODE_FULLSCREEN:
+      return blink::mojom::DisplayMode::kFullscreen;
+    case proto::WebApp::DISPLAY_MODE_WINDOW_CONTROLS_OVERLAY:
+      return blink::mojom::DisplayMode::kWindowControlsOverlay;
+    case proto::WebApp::DISPLAY_MODE_TABBED:
+      return blink::mojom::DisplayMode::kTabbed;
+    case proto::WebApp::DISPLAY_MODE_UNFRAMED:
+      return blink::mojom::DisplayMode::kUnframed;
+    case proto::WebApp::DISPLAY_MODE_PICTURE_IN_PICTURE:
+      return blink::mojom::DisplayMode::kPictureInPicture;
+  }
+}
+
+proto::WebApp::DisplayMode ToWebAppProtoDisplayMode(
+    blink::mojom::DisplayMode display_mode) {
+  switch (display_mode) {
+    case blink::mojom::DisplayMode::kBrowser:
+      return proto::WebApp::DISPLAY_MODE_BROWSER;
+    case blink::mojom::DisplayMode::kMinimalUi:
+      return proto::WebApp::DISPLAY_MODE_MINIMAL_UI;
+    case blink::mojom::DisplayMode::kUndefined:
+      return proto::WebApp::DISPLAY_MODE_UNSPECIFIED;
+    case blink::mojom::DisplayMode::kStandalone:
+      return proto::WebApp::DISPLAY_MODE_STANDALONE;
+    case blink::mojom::DisplayMode::kFullscreen:
+      return proto::WebApp::DISPLAY_MODE_FULLSCREEN;
+    case blink::mojom::DisplayMode::kWindowControlsOverlay:
+      return proto::WebApp::DISPLAY_MODE_WINDOW_CONTROLS_OVERLAY;
+    case blink::mojom::DisplayMode::kTabbed:
+      return proto::WebApp::DISPLAY_MODE_TABBED;
+    case blink::mojom::DisplayMode::kUnframed:
+      return proto::WebApp::DISPLAY_MODE_UNFRAMED;
+    case blink::mojom::DisplayMode::kPictureInPicture:
+      return proto::WebApp::DISPLAY_MODE_PICTURE_IN_PICTURE;
+  }
+}
+
 std::optional<blink::SafeUrlPattern> ToUrlPattern(
     const proto::UrlPattern& proto_url_pattern) {
   blink::SafeUrlPattern url_pattern;
@@ -426,7 +475,7 @@ std::optional<TabStrip> ProtoToTabStrip(proto::TabStrip tab_strip_proto) {
 std::string RelativeManifestIdPath(webapps::ManifestId manifest_id) {
   CHECK(manifest_id.is_valid());
   // The relative id does not include the initial '/' character.
-  std::string relative_manifest_id_path = manifest_id.PathForRequest();
+  std::string relative_manifest_id_path = manifest_id.value().PathForRequest();
   if (relative_manifest_id_path.starts_with("/")) {
     relative_manifest_id_path = relative_manifest_id_path.substr(1);
   }

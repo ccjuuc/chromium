@@ -25,8 +25,11 @@ include_rules = [
   "+chrome/browser/ui/webui/ash/settings/pages/os_settings_section.h",
   "+chrome/browser/ui/webui/ash/settings/pages/printing",
   "+chrome/browser/ui/webui/ash/settings/search",
-  "+chrome/browser/ui/webui/settings",
   "+chrome/common",
   "+chrome/grit",
   "+chrome/test",
+
+  "+ash/shell.h",
+  "+ash/shell_observer.h",
+  "+ash/display/cros_display_config.h",
 ]

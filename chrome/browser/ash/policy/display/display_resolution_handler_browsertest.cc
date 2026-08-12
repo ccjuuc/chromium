@@ -17,7 +17,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/policy/display/device_display_cros_browser_test.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
@@ -67,7 +66,7 @@ const gfx::Size kDefaultSecondDisplayResolution(1920, 1080);
 const int kDefaultDisplayScale = 100;
 
 PolicyValue GetPolicySetting() {
-  const base::Value::Dict* resolution_pref = nullptr;
+  const base::DictValue* resolution_pref = nullptr;
   ash::CrosSettings::Get()->GetDictionary(ash::kDeviceDisplayResolution,
                                           &resolution_pref);
   EXPECT_TRUE(resolution_pref) << "DeviceDisplayResolution setting is not set";
@@ -263,7 +262,7 @@ IN_PROC_BROWSER_TEST_P(DeviceDisplayResolutionTest, ConnectSecondDisplay) {
       << "Primary display scale after connecting external";
 }
 
-// crbug.com/1000694.
+// crbug.com/40645781.
 IN_PROC_BROWSER_TEST_P(DeviceDisplayResolutionTest, SetAndUnsetPolicy) {
   const PolicyValue policy_value = GetParam();
   AddExternalDisplay(display_helper()->GetDisplayManager());

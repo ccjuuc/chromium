@@ -57,9 +57,7 @@ class UpdateMenuItemViewBinder {
             text.setContentDescription(model.get(AppMenuItemProperties.TITLE));
         } else if (key == TITLE_COLOR_ID) {
             TextView text = view.findViewById(R.id.menu_item_text);
-            text.setTextColor(
-                    AppCompatResources.getColorStateList(
-                            view.getContext(), model.get(TITLE_COLOR_ID)));
+            text.setTextColor(view.getContext().getColorStateList(model.get(TITLE_COLOR_ID)));
         } else if (key == AppMenuItemProperties.ICON) {
             ImageView image = view.findViewById(R.id.menu_item_icon);
             Drawable icon = model.get(AppMenuItemProperties.ICON);
@@ -76,7 +74,7 @@ class UpdateMenuItemViewBinder {
     }
 
     /** Provides the minimum height for the view for menu sizing. */
-    public static int getPixelHeight(Context context) {
+    public static int getPixelHeight(Context context, PropertyModel model) {
         int textSize =
                 context.getResources()
                         .getDimensionPixelSize(R.dimen.overflow_menu_update_min_height);

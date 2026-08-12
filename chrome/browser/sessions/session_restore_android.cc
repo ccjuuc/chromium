@@ -6,17 +6,43 @@
 
 #include <vector>
 
+#include "base/barrier_callback.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/core/session_types.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/restore_type.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "extensions/buildflags/buildflags.h"
 #include "ui/base/window_open_disposition.h"
+
+namespace {
+
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+BrowserWindowInterface::Type BrowserTypeFromWindowType(
+    sessions::SessionWindow::WindowType type) {
+  switch (type) {
+    case sessions::SessionWindow::TYPE_NORMAL:
+      return BrowserWindowInterface::TYPE_NORMAL;
+    case sessions::SessionWindow::TYPE_POPUP:
+      return BrowserWindowInterface::TYPE_POPUP;
+    case sessions::SessionWindow::TYPE_APP:
+      return BrowserWindowInterface::TYPE_APP;
+    case sessions::SessionWindow::TYPE_DEVTOOLS:
+      // BrowserWindowInterface does not have a window type for devtools.
+      return BrowserWindowInterface::TYPE_NORMAL;
+    case sessions::SessionWindow::TYPE_APP_POPUP:
+      return BrowserWindowInterface::TYPE_APP_POPUP;
+  }
+}
+#endif  // #if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+
+}  // namespace
 
 // The android implementation does not do anything "foreign session" specific.
 // It is also used to replace the current tab when restoring from "recently
@@ -61,7 +87,7 @@ content::WebContents* SessionRestore::RestoreForeignSessionTab(
   // parent will ensure group state, position, etc. should be kept.
   if (disposition == WindowOpenDisposition::CURRENT_TAB) {
     // This will never be a bulk session restore so we can select the tab here.
-    tab_model->CreateTab(current_tab, new_web_contents.release(),
+    tab_model->CreateTab(current_tab, std::move(new_web_contents),
                          TabModel::kInvalidIndex,
                          TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
                          /*should_pin=*/false);
@@ -71,17 +97,43 @@ content::WebContents* SessionRestore::RestoreForeignSessionTab(
   DCHECK(disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
          disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB);
   // Do not select a tab here it will interrupt bulk session restores.
-  tab_model->CreateTab(
-      current_tab, new_web_contents.release(), TabModel::kInvalidIndex,
-      TabModel::TabLaunchType::FROM_RECENT_TABS, /*should_pin=*/false);
+  TabModel::TabLaunchType launch_type =
+      disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB
+          ? TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND
+          : TabModel::TabLaunchType::FROM_RECENT_TABS;
+  tab_model->CreateTab(current_tab, std::move(new_web_contents),
+                       TabModel::kInvalidIndex, launch_type,
+                       /*should_pin=*/false);
   return raw_new_web_contents;
 }
 
 // static
-std::vector<BrowserWindowInterface*>
-SessionRestore::RestoreForeignSessionWindows(
+void SessionRestore::RestoreForeignSessionWindows(
     Profile* profile,
     std::vector<const sessions::SessionWindow*>::const_iterator begin,
-    std::vector<const sessions::SessionWindow*>::const_iterator end) {
+    std::vector<const sessions::SessionWindow*>::const_iterator end,
+    base::OnceCallback<void(std::vector<BrowserWindowInterface*>)> callback) {
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  // The extensions sessions API can restore foreign windows.
+  size_t window_count = std::distance(begin, end);
+  // Wait for `window_count` callbacks.
+  auto barrier_callback = base::BarrierCallback<BrowserWindowInterface*>(
+      window_count, std::move(callback));
+  std::vector<BrowserWindowInterface*> windows;
+  windows.reserve(window_count);
+  for (auto it = begin; it != end; ++it) {
+    BrowserWindowCreateParams params(*profile,
+                                     /*from_user_gesture=*/false);
+    params.type = BrowserTypeFromWindowType((*it)->type);
+    params.initial_bounds = (*it)->bounds;
+    params.app_name = (*it)->app_name;
+    params.initial_show_state = (*it)->show_state;
+    // When `window_count` windows have been created, `barrier_callback` will
+    // have accumulated the created BrowserWindowInterfaces and will invoke
+    // `callback` with them.
+    CreateBrowserWindow(std::move(params), barrier_callback);
+  }
+#else
   NOTREACHED();
+#endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
 }

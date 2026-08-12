@@ -9,7 +9,6 @@
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_matchers.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -57,10 +56,7 @@ id<GREYMatcher> SupervisedIncognitoMessage() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_enabled.push_back(kEnableNTPViewHierarchyRepair);
-  if ([self isRunningTest:@selector(testIncognitoTabsDestroyedOnSignin)]) {
-    config.features_enabled.push_back(kTabSwitcherOverflowMenu);
-  }
+  config.features_enabled.push_back(kChromeNextIa);
   return config;
 }
 
@@ -119,9 +115,10 @@ id<GREYMatcher> SupervisedIncognitoMessage() {
   policy::AssertButtonInCollectionDisabled(
       IDS_IOS_TOOLS_MENU_NEW_INCOGNITO_TAB);
 
-  // Dismiss the popup menu by tapping anywhere.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      performAction:grey_tap()];
+  // Dismiss the popup menu.
+  [ChromeEarlGreyUI dismissContextMenuIfPresent];
+  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
+                      grey_kindOfClassName(@"_UIContextMenuContainerView")];
 
   [SigninEarlGrey signOut];
 
@@ -323,7 +320,7 @@ id<GREYMatcher> SupervisedIncognitoMessage() {
                   @"Incognito tab count should be 0");
 
   // The user should stay on the new tab page.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::NewTabPageOmnibox()]
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
       assertWithMatcher:grey_notNil()];
 }
 

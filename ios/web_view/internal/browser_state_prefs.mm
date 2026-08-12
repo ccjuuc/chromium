@@ -13,6 +13,7 @@
 #import "components/pref_registry/pref_registry_syncable.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #import "components/signin/public/base/signin_prefs.h"
+#import "components/sync/service/device_statistics_scheduler.h"
 #import "components/sync/service/glue/sync_transport_data_prefs.h"
 #import "components/sync/service/sync_prefs.h"
 #import "components/sync_device_info/device_info_prefs.h"
@@ -21,6 +22,7 @@
 #import "components/unified_consent/unified_consent_service.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_prefs.h"
 #import "ios/web_view/internal/autofill/cwv_password_affiliation.h"
+#import "ios/web_view/internal/passwords/web_view_password_manager_client.h"
 
 namespace ios_web_view {
 
@@ -39,10 +41,12 @@ void RegisterBrowserStatePrefs(
   syncer::SyncPrefs::RegisterProfilePrefs(pref_registry);
   syncer::SyncTransportDataPrefs::RegisterProfilePrefs(pref_registry);
   syncer::DeviceInfoPrefs::RegisterProfilePrefs(pref_registry);
+  syncer::DeviceStatisticsScheduler::RegisterProfilePrefs(pref_registry);
   safe_browsing::RegisterProfilePrefs(pref_registry);
   unified_consent::UnifiedConsentService::RegisterPrefs(pref_registry);
   ios_web_view::RegisterCWVAutofillPrefs(pref_registry);
   ios_web_view::RegisterCWVPasswordAffiliationPrefs(pref_registry);
+  ios_web_view::RegisterWebViewPasswordManagerPrefs(pref_registry);
 
   BrowserStateDependencyManager::GetInstance()
       ->RegisterBrowserStatePrefsForServices(pref_registry);

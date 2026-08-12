@@ -38,7 +38,7 @@
 #include "chrome/updater/app/server/win/updater_internal_idl.h"
 #include "chrome/updater/app/server/win/updater_legacy_idl.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "chrome/updater/util/win_util.h"
 #include "chrome/updater/win/task_scheduler.h"
@@ -427,7 +427,7 @@ void AddComServiceWorkItems(const base::FilePath& com_service_path,
 
   const std::wstring language = base::UTF8ToWide(GetTagLanguage());
   list->AddWorkItem(new installer::InstallServiceWorkItem(
-      GetServiceName(internal_service).c_str(),
+      GetServiceName(internal_service),
       GetLocalizedString(internal_service
                              ? IDS_INTERNAL_UPDATER_SERVICE_DISPLAY_NAME_BASE
                              : IDS_UPDATER_SERVICE_DISPLAY_NAME_BASE,

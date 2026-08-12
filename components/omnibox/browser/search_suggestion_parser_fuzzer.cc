@@ -13,6 +13,7 @@
 
 #include "base/at_exit.h"
 #include "base/i18n/icu_util.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
@@ -25,16 +26,15 @@ struct IcuEnvironment {
   base::AtExitManager at_exit_manager;
 };
 
-IcuEnvironment icu_env;
-
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const base::NoDestructor<IcuEnvironment> icu_env;
   // This is an arbitrary size, and arguably even small for a JSON input,
   // but we have to cut it off somewhere.
   if (size > 4096)
     return 0;
   std::optional<std::string> response_body = std::make_optional<std::string>(
       reinterpret_cast<const char*>(data), size);
-  std::optional<base::Value::List> root_list =
+  std::optional<base::ListValue> root_list =
       SearchSuggestionParser::DeserializeJsonData(
           SearchSuggestionParser::ExtractJsonData(nullptr,
                                                   std::move(response_body)));

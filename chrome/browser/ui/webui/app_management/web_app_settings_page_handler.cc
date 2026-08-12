@@ -55,15 +55,12 @@ std::vector<std::string> GetSupportedLinks(const std::string& app_id,
   }
 
   std::vector<std::string> supported_links;
-  if (base::FeatureList::IsEnabled(
-          features::kPwaNavigationCapturingWithScopeExtensions)) {
-    for (const auto& scope_extension :
-         effective_scope->validated_scope_extensions()) {
-      std::string formatted_scope = FormatScope(scope_extension.scope);
-      supported_links.push_back(formatted_scope);
-      if (scope_extension.has_origin_wildcard) {
-        supported_links.push_back("*." + formatted_scope);
-      }
+  for (const auto& scope_extension :
+       effective_scope->validated_scope_extensions()) {
+    std::string formatted_scope = FormatScope(scope_extension.scope);
+    supported_links.push_back(formatted_scope);
+    if (scope_extension.has_origin_wildcard) {
+      supported_links.push_back("*." + formatted_scope);
     }
   }
 
@@ -205,7 +202,7 @@ void WebAppSettingsPageHandler::GetOverlappingPreferredApps(
       web_app::AllAppsLockDescription(),
       base::BindOnce(
           [](const webapps::AppId& app_id, web_app::AllAppsLock& all_apps_lock,
-             base::Value::Dict& debug_value) {
+             base::DictValue& debug_value) {
             return all_apps_lock.registrar().GetOverlappingAppsMatchingScope(
                 app_id);
           },
@@ -215,9 +212,11 @@ void WebAppSettingsPageHandler::GetOverlappingPreferredApps(
 
 void WebAppSettingsPageHandler::SetWindowMode(const std::string& app_id,
                                               apps::WindowMode window_mode) {
-  // Changing window mode is not allowed for isolated web apps.
+  // Changing window mode is not allowed for isolated web apps and isolated sub
+  // apps.
   if (provider().registrar_unsafe().AppMatches(
-          app_id, web_app::WebAppFilter::IsIsolatedApp())) {
+          app_id, web_app::WebAppFilter::IsIsolatedApp() |
+                      web_app::WebAppFilter::IsIsolatedSubApp())) {
     return;
   }
 
@@ -315,9 +314,12 @@ app_management::mojom::AppPtr WebAppSettingsPageHandler::CreateApp(
   }
 #endif
 
-  // On non-ChromeOS platforms, navigation capturing is allowed even if PWAs
-  // open in a new browser tab.
-  app->disable_user_choice_navigation_capturing = false;
+  if (!base::FeatureList::IsEnabled(
+          apps::features::kUpdateAppStringsOnSettings)) {
+    // On non-ChromeOS platforms, navigation capturing is allowed even if PWAs
+    // open in a new browser tab when the feature is disabled.
+    app->disable_user_choice_navigation_capturing = false;
+  }
 
   return app;
 }

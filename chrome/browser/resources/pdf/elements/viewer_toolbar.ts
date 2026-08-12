@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
+import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_progress/cr_progress.js';
@@ -20,6 +22,7 @@ import {AnchorAlignment} from 'chrome://resources/cr_elements/cr_action_menu/cr_
 import {assert} from 'chrome://resources/js/assert.js';
 // </if>
 // <if expr="enable_pdf_ink2">
+import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 // </if>
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
@@ -36,11 +39,14 @@ import {SaveToDriveState} from '../constants.js';
 // </if>
 // <if expr="enable_pdf_ink2">
 import {PluginController, PluginControllerEventType} from '../controller.js';
+import {Ink2Manager} from '../ink2_manager.js';
+import type {UndoRedoStateChangedDetail} from '../undo_redo_stack.js';
 // </if>
 import {record, UserAction} from '../metrics.js';
 
 import {getCss} from './viewer_toolbar.css.js';
 import {getHtml} from './viewer_toolbar.html.js';
+// clang-format on
 
 declare global {
   interface HTMLElementEventMap {
@@ -56,8 +62,8 @@ export interface ViewerToolbarElement {
   $: {
     sidenavToggle: HTMLButtonElement,
     menu: CrActionMenuElement,
-    'present-button': HTMLButtonElement,
-    'two-page-view-button': HTMLButtonElement,
+    presentButton: HTMLButtonElement,
+    twoPageViewButton: HTMLButtonElement,
   };
 }
 
@@ -104,9 +110,11 @@ export class ViewerToolbarElement extends CrLitElement {
       },
 
       displayAnnotations_: {type: Boolean},
-      fittingType_: {type: Number},
+      fittingType_: {type: String},
       printingEnabled_: {type: Boolean},
       viewportZoomPercent_: {type: Number},
+
+      pdfGlicSummarizeEnabled_: {type: Boolean},
 
       // <if expr="enable_pdf_ink2">
       annotationAvailable: {type: Boolean},
@@ -117,8 +125,8 @@ export class ViewerToolbarElement extends CrLitElement {
       enableUndoRedo: {type: Boolean},
       hasInk2Edits: {type: Boolean},
       pdfInk2Enabled: {type: Boolean},
-      canRedoAnnotation_: {type: Boolean},
-      canUndoAnnotation_: {type: Boolean},
+      shouldEnableRedo_: {type: Boolean},
+      shouldEnableUndo_: {type: Boolean},
       pdfTextAnnotationsEnabled_: {type: Boolean},
       // </if> enable_pdf_ink2
 
@@ -151,6 +159,8 @@ export class ViewerToolbarElement extends CrLitElement {
   protected accessor printingEnabled_: boolean = false;
   private accessor viewportZoomPercent_: number = 0;
 
+  protected accessor pdfGlicSummarizeEnabled_: boolean = false;
+
   // <if expr="enable_pdf_save_to_drive">
   accessor pdfSaveToDriveEnabled: boolean = false;
   accessor saveToDriveProgress: number = 0;
@@ -164,13 +174,13 @@ export class ViewerToolbarElement extends CrLitElement {
   accessor enableUndoRedo: boolean = true;
   accessor hasInk2Edits: boolean = false;
   accessor pdfInk2Enabled: boolean = false;
-  protected accessor canRedoAnnotation_: boolean = false;
-  protected accessor canUndoAnnotation_: boolean = false;
+  protected accessor shouldEnableRedo_: boolean = false;
+  protected accessor shouldEnableUndo_: boolean = false;
   protected accessor pdfTextAnnotationsEnabled_: boolean = false;
 
   // Ink2 class members
-  private currentStroke: number = 0;
-  private mostRecentStroke: number = 0;
+  private canUndo_: boolean = false;
+  private canRedo_: boolean = false;
   private pluginController_: PluginController = PluginController.getInstance();
   private strokeInProgress_: boolean = false;
   private tracker_: EventTracker = new EventTracker();
@@ -186,6 +196,9 @@ export class ViewerToolbarElement extends CrLitElement {
         this.pluginController_.getEventTarget(),
         PluginControllerEventType.START_INK_STROKE,
         this.handleStartInkStroke_.bind(this));
+    this.tracker_.add(
+        Ink2Manager.getInstance(), 'undo-redo-state-changed',
+        this.handleUndoRedoStateChanged_.bind(this));
   }
   // </if> enable_pdf_ink2
 
@@ -222,6 +235,8 @@ export class ViewerToolbarElement extends CrLitElement {
 
   private updateLoadTimeData_() {
     this.printingEnabled_ = loadTimeData.getBoolean('printingEnabled');
+    this.pdfGlicSummarizeEnabled_ =
+        loadTimeData.getBoolean('pdfGlicSummarizeEnabled');
     // <if expr="enable_pdf_ink2">
     this.pdfTextAnnotationsEnabled_ =
         loadTimeData.getBoolean('pdfTextAnnotationsEnabled');
@@ -235,8 +250,8 @@ export class ViewerToolbarElement extends CrLitElement {
 
   protected fitToButtonIcon_(): string {
     return 'pdf' +
-        (this.fittingType_ === FittingType.FIT_TO_PAGE ? ':fit-to-height' :
-                                                         ':fit-to-width');
+        (this.fittingType_ === FittingType.FIT_TO_PAGE ? ':fit-page-height' :
+                                                         ':fit-page-width');
   }
 
   /** @return The appropriate tooltip for the current state. */
@@ -247,6 +262,10 @@ export class ViewerToolbarElement extends CrLitElement {
     return loadTimeData.getString(
         this.fittingType_ === FittingType.FIT_TO_PAGE ? 'tooltipFitToPage' :
                                                         'tooltipFitToWidth');
+  }
+
+  protected onGlicSummarizeClick_() {
+    this.fire('glic-summarize');
   }
 
   // <if expr="enable_pdf_ink2">
@@ -263,7 +282,7 @@ export class ViewerToolbarElement extends CrLitElement {
     this.dispatchEvent(new CustomEvent('rotate-left'));
   }
 
-  protected toggleDisplayAnnotations_() {
+  protected onDisplayAnnotationsClick_() {
     record(UserAction.TOGGLE_DISPLAY_ANNOTATIONS);
     this.displayAnnotations_ = !this.displayAnnotations_;
     this.dispatchEvent(new CustomEvent(
@@ -291,7 +310,7 @@ export class ViewerToolbarElement extends CrLitElement {
     return this.sidenavCollapsed ? 'false' : 'true';
   }
 
-  protected toggleTwoPageViewClick_() {
+  protected onTwoPageViewClick_() {
     const newTwoUpViewEnabled = !this.twoUpViewEnabled;
     this.dispatchEvent(
         new CustomEvent('two-up-view-changed', {detail: newTwoUpViewEnabled}));
@@ -329,6 +348,10 @@ export class ViewerToolbarElement extends CrLitElement {
 
   private getZoomInput_(): HTMLInputElement {
     return this.shadowRoot.querySelector('#zoom-controls input')!;
+  }
+
+  protected onZoomBlur_() {
+    this.onZoomChange_();
   }
 
   protected onZoomChange_() {
@@ -432,34 +455,25 @@ export class ViewerToolbarElement extends CrLitElement {
   }
 
   /**
-   * Handles whether the undo and redo buttons should be enabled or disabled
-   * when a new Ink stroke is added to or erased from the page. This event
-   * fires when stroking finishes, but not all strokes (e.g. eraser strokes)
-   * actually modify the page.
+   * Handles when the user finishes a stroke, so that undo/redo operations can
+   * can be allowed if available. This event also fires for eraser operations.
    */
-  private handleFinishInkStroke_(e: CustomEvent<boolean>) {
-    const modified = e.detail;
-    if (modified) {
-      this.currentStroke++;
-      this.mostRecentStroke = this.currentStroke;
-
-      // When a new stroke modification occurs, it can always be undone. Since
-      // it's the most recent modification, the redo action cannot be performed.
-      this.canUndoAnnotation_ = true;
-      this.canRedoAnnotation_ = false;
-    }
-
+  private handleFinishInkStroke_() {
     this.strokeInProgress_ = false;
   }
 
   protected computeEnableUndo_(): boolean {
-    return this.canUndoAnnotation_ && !this.strokeInProgress_ &&
+    return this.shouldEnableUndo_ && !this.strokeInProgress_ &&
         this.enableUndoRedo;
   }
 
   protected computeEnableRedo_(): boolean {
-    return this.canRedoAnnotation_ && !this.strokeInProgress_ &&
+    return this.shouldEnableRedo_ && !this.strokeInProgress_ &&
         this.enableUndoRedo;
+  }
+
+  protected onUndoClick_() {
+    this.undo();
   }
 
   /**
@@ -470,17 +484,16 @@ export class ViewerToolbarElement extends CrLitElement {
       return;
     }
 
-    assert(this.currentStroke > 0);
     assert(this.formFieldFocus !== FormFieldFocusType.TEXT);
 
-    this.pluginController_.undo();
-    this.currentStroke--;
-
-    this.updateCanUndoRedo_();
-    this.dispatchEvent(new CustomEvent(
-        'strokes-updated',
-        {detail: this.currentStroke, bubbles: true, composed: true}));
+    Ink2Manager.getInstance().undo();
+    getAnnouncerInstance().announce(
+        loadTimeData.getString('ink2AnnotationUndone'));
     record(UserAction.UNDO_INK2);
+  }
+
+  protected onRedoClick_() {
+    this.redo();
   }
 
   /**
@@ -491,15 +504,11 @@ export class ViewerToolbarElement extends CrLitElement {
       return;
     }
 
-    assert(this.currentStroke < this.mostRecentStroke);
     assert(this.formFieldFocus !== FormFieldFocusType.TEXT);
 
-    this.pluginController_.redo();
-    this.currentStroke++;
-    this.updateCanUndoRedo_();
-    this.dispatchEvent(new CustomEvent(
-        'strokes-updated',
-        {detail: this.currentStroke, bubbles: true, composed: true}));
+    Ink2Manager.getInstance().redo();
+    getAnnouncerInstance().announce(
+        loadTimeData.getString('ink2AnnotationRedone'));
     record(UserAction.REDO_INK2);
   }
 
@@ -512,21 +521,15 @@ export class ViewerToolbarElement extends CrLitElement {
   private updateCanUndoRedo_() {
     const isTextFormFieldFocused =
         this.formFieldFocus === FormFieldFocusType.TEXT;
-    this.canUndoAnnotation_ = !isTextFormFieldFocused && this.currentStroke > 0;
-    this.canRedoAnnotation_ =
-        !isTextFormFieldFocused && this.currentStroke < this.mostRecentStroke;
+    this.shouldEnableUndo_ = !isTextFormFieldFocused && this.canUndo_;
+    this.shouldEnableRedo_ = !isTextFormFieldFocused && this.canRedo_;
   }
 
-  /**
-   * Reset the stroke counts for testing. This allows tests to re-use the same
-   * toolbar.
-   */
-  resetStrokesForTesting() {
-    this.currentStroke = 0;
-    this.mostRecentStroke = 0;
+  private handleUndoRedoStateChanged_(
+      e: CustomEvent<UndoRedoStateChangedDetail>) {
+    this.canUndo_ = e.detail.canUndo;
+    this.canRedo_ = e.detail.canRedo;
     this.updateCanUndoRedo_();
-    this.dispatchEvent(new CustomEvent(
-        'strokes-updated', {detail: 0, bubbles: true, composed: true}));
   }
   // </if>
 

@@ -249,7 +249,7 @@ TEST(KeyConverter, ToggleModifiers) {
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// Fails on bots: crbug.com/174962
+// Fails on bots: crbug.com/40301345
 #define MAYBE_AllEnglishKeyboardSymbols DISABLED_AllEnglishKeyboardSymbols
 #else
 #define MAYBE_AllEnglishKeyboardSymbols AllEnglishKeyboardSymbols
@@ -383,6 +383,34 @@ TEST(KeyConverter, ReleaseModifiers) {
   std::u16string keys = u"\uE008\uE009";
 
   CheckEvents(keys, key_events, true /* release_modifiers */, 0);
+}
+
+TEST(KeyConverter, SurrogatePairValid) {
+  const std::string emoji = "\xF0\x9F\x98\x80";
+  std::vector<KeyEvent> key_events;
+  KeyEventBuilder builder;
+  builder.SetText(emoji, emoji)
+      ->SetKeyCode(ui::VKEY_UNKNOWN)
+      ->Generate(&key_events);
+
+  std::u16string keys = {0xD83Du, 0xDE00u};
+  CheckEventsReleaseModifiers(keys, key_events);
+}
+
+TEST(KeyConverter, LoneLeadSurrogateRejected) {
+  int modifiers = 0;
+  std::vector<KeyEvent> events;
+  std::u16string keys = {0xD83Du};
+  Status status = ConvertKeysToKeyEvents(keys, true, &modifiers, &events);
+  EXPECT_EQ(kUnknownError, status.code());
+}
+
+TEST(KeyConverter, LoneTrailSurrogateRejected) {
+  int modifiers = 0;
+  std::vector<KeyEvent> events;
+  std::u16string keys = {0xDE00u};
+  Status status = ConvertKeysToKeyEvents(keys, true, &modifiers, &events);
+  EXPECT_EQ(kUnknownError, status.code());
 }
 
 TEST(KeyConverter, CommandA) {

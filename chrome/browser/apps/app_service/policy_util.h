@@ -26,7 +26,7 @@
 #include "build/build_config.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 class Profile;
@@ -55,7 +55,7 @@ std::string TransformRawPolicyId(const std::string& raw_policy_id);
 // |policy_ids|.
 // In most circumstances this function returns no more than one app.
 // However, there are some special cases when there the candidate count might be
-// greater -- Web App placeholders (crbug.com/1427340) or multiple intents in a
+// greater -- Web App placeholders (crbug.com/40261748) or multiple intents in a
 // single ARC package (b/276394178).
 // See go/cros-arc-multi-apps-sketch for a related discussion.
 std::vector<std::string> GetAppIdsFromPolicyId(Profile*,

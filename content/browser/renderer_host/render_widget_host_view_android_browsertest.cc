@@ -7,7 +7,7 @@
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
-#include "base/test/test_trace_processor.h"
+#include "base/test/tracing/test_trace_processor.h"
 #include "components/input/features.h"
 #include "components/input/utils.h"
 #include "content/public/browser/web_contents.h"
@@ -65,6 +65,12 @@ IN_PROC_BROWSER_TEST_F(InputOnVizBrowserTest, TransfersStateOnTouchDown) {
   if (render_frame_submission_observer.render_frame_count() == 0) {
     render_frame_submission_observer.WaitForAnyFrameSubmission();
   }
+
+  // Ensure the EventForwarder Java peer is instantiated. In C++ browser tests,
+  // the EventForwarder Java object is uninitialized unless explicitly
+  // requested, which is required for GetCurrentTouchSequenceOffset JNI calls
+  // during touch transfer.
+  shell()->web_contents()->GetNativeView()->GetEventForwarder();
 
   auto* view = static_cast<RenderWidgetHostViewAndroid*>(
       shell()->web_contents()->GetRenderWidgetHostView());
@@ -200,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewAndroidFluidResizeBrowserTest,
   ASSERT_NE(new_size, current_size_px);
   view->screen_state_change_handler_.OnPhysicalBackingSizeChanged(new_size, 0);
 
-  if (view->using_browser_compositor_) {
+  if (view->using_browser_compositor_ && features::IsFluidResizeEnabled()) {
     EXPECT_TRUE(view->visual_properties_update_pending_);
     // Confirmed visual properties update is pending. We now wait for the
     // renderer to submit a frame acknowledging the resize.
@@ -217,6 +223,24 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewAndroidFluidResizeBrowserTest,
     // Confirmed no pending visual properties update.
     EXPECT_FALSE(view->visual_properties_update_pending_);
   }
+}
+
+using TextSizeAdjustAndroidBrowserTest = ContentBrowserTest;
+
+IN_PROC_BROWSER_TEST_F(TextSizeAdjustAndroidBrowserTest, AffectsFontSize) {
+  const char kHtml[] = R"HTML(
+    data:text/html,
+    <!DOCTYPE html>
+    <body style="font-size: 16px;">
+      <div id="textSizeAdjust" style="text-size-adjust: 150%;">Hello world</div>
+    </body>
+  )HTML";
+
+  EXPECT_TRUE(NavigateToURL(shell(), GURL(kHtml)));
+
+  EXPECT_EQ(24, EvalJs(shell(),
+                       "parseFloat(getComputedStyle(document.getElementById('"
+                       "textSizeAdjust')).fontSize)"));
 }
 
 }  // namespace content

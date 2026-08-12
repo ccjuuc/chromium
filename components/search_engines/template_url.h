@@ -17,6 +17,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
+#include "components/omnibox/common/input_state.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_terms_data.h"
 #include "components/search_engines/template_url_data.h"
@@ -25,8 +26,9 @@
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
 #include "third_party/metrics_proto/omnibox_input_type.pb.h"
-#include "third_party/omnibox_proto/aim_tools_and_models.pb.h"
 #include "third_party/omnibox_proto/chrome_searchbox_stats.pb.h"
+#include "third_party/omnibox_proto/suggest_inventory.pb.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/third_party/mozilla/url_parse.h"
@@ -232,9 +234,14 @@ class TemplateURLRef {
     std::optional<lens::proto::LensOverlaySuggestInputs>
         lens_overlay_suggest_inputs;
 
-    // The tool mode to be sent in query parameters in the suggest requests.
-    omnibox::ChromeAimToolsAndModels aim_tool_mode =
-        omnibox::ChromeAimToolsAndModels::TOOL_MODE_UNSPECIFIED;
+    // Input state. This is specifically the contextual state, with regards to
+    // the tools and models that may be selected.
+    omnibox::InputState input_state;
+
+    // The suggest inventory to be sent as query parameters in the suggest
+    // requests.
+    omnibox::SuggestInventory suggest_inventory =
+        omnibox::SuggestInventory::SUGGEST_INVENTORY_DEFAULT;
 
     // Which omnibox the user used to type the prefix.
     metrics::OmniboxEventProto::PageClassification page_classification =
@@ -299,6 +306,13 @@ class TemplateURLRef {
 
     // The target locale used for image translations.
     std::string image_translate_target_locale;
+
+    // The previously submitted query within this context thread/session.
+    std::string previous_query;
+
+    // The method in which the last input was entered. This is an enum that
+    // gets mapped to third_party/omnibox_proto/chrome_searchbox_stats.proto.
+    int input_method = 0;
   };
 
   TemplateURLRef(const TemplateURL* owner, Type type);
@@ -336,7 +350,7 @@ class TemplateURLRef {
   std::string ReplaceSearchTerms(const SearchTermsArgs& search_terms_args,
                                  const SearchTermsData& search_terms_data,
                                  PostContent* post_content,
-                                 std::string url_override = "") const;
+                                 std::string_view url_override = "") const;
 
   // TODO(jnd): remove the following ReplaceSearchTerms definition which does
   // not have `post_content` parameter once all reference callers pass
@@ -346,7 +360,7 @@ class TemplateURLRef {
   //  `StarterPackExpansion` feature launches/gets cleaned up.
   std::string ReplaceSearchTerms(const SearchTermsArgs& search_terms_args,
                                  const SearchTermsData& search_terms_data,
-                                 std::string url_override = "") const {
+                                 std::string_view url_override = "") const {
     return ReplaceSearchTerms(search_terms_args, search_terms_data, nullptr,
                               url_override);
   }
@@ -467,10 +481,14 @@ class TemplateURLRef {
     GOOGLE_RLZ,
     GOOGLE_SEARCH_CLIENT,
     GOOGLE_SEARCH_FIELDTRIAL_GROUP,
+    // The searchbox source that led to the current search (e.g. omnibox).
+    GOOGLE_SEARCH_SOURCE,
+    // The platform that led to the current search (e.g. Chrome).
     GOOGLE_SEARCH_SOURCE_ID,
     GOOGLE_SEARCH_VERSION,
     GOOGLE_SESSION_TOKEN,
     GOOGLE_SUGGEST_CLIENT,
+    GOOGLE_SUGGEST_PATH,
     GOOGLE_SUGGEST_REQUEST_ID,
     GOOGLE_UNESCAPED_SEARCH_TERMS,
     LANGUAGE,
@@ -546,7 +564,7 @@ class TemplateURLRef {
   // TODO(crbug.com/41494524): Remove the `url_override` when the
   //  `StarterPackExpansion` feature launches/gets cleaned up.
   void ParseIfNecessary(const SearchTermsData& search_terms_data,
-                        std::string url_override = "") const;
+                        std::string_view url_override = "") const;
 
   // Parses a wildcard out of |path|, putting the parsed path in |path_prefix_|
   // and |path_suffix_| and setting |path_wildcard_present_| to true.
@@ -747,6 +765,13 @@ class TemplateURL {
   // Generates a favicon URL from the specified url.
   static GURL GenerateFaviconURL(const GURL& url);
 
+  // Returns the suggestion client string for the given search terms args.
+  static std::string GetSuggestionClient(
+      const TemplateURLRef::SearchTermsArgs& search_terms_args);
+
+  // Returns the suggestion path string for the given client name.
+  static std::string GetSuggestionPath(const std::string& client_name);
+
   // Returns true if |t_url| and |data| are equal in all meaningful respects.
   // Static to allow either or both params to be NULL.
   static bool MatchesData(const TemplateURL* t_url,
@@ -833,18 +858,27 @@ class TemplateURL {
 
   int prepopulate_id() const { return data().prepopulate_id; }
 
+  bool send_x_geo_header() const { return data().send_x_geo_header; }
+
   const std::string& sync_guid() const { return data().sync_guid; }
   void GenerateSyncGUID();
 
   TemplateURLData::ActiveStatus is_active() const { return data().is_active; }
   void set_is_active(TemplateURLData::ActiveStatus active_status);
 
-  int starter_pack_id() const { return data().starter_pack_id; }
-  // Some starter packs are considered 'ask a question' kind of starter packs.
+  template_url_starter_pack_data::StarterPackId starter_pack_id() const {
+    return static_cast<template_url_starter_pack_data::StarterPackId>(
+        data().starter_pack_id);
+  }
+  // Some templates (including certain starter packs) are considered
+  // 'ask' types.
   // This can be used to condition UI text or a11y strings.
-  bool is_ask_starter_pack() const {
-    return starter_pack_id() == template_url_starter_pack_data::kGemini ||
-           starter_pack_id() == template_url_starter_pack_data::kAiMode;
+  bool is_ask_type() const {
+    return starter_pack_id() ==
+               template_url_starter_pack_data::StarterPackId::kGemini ||
+           starter_pack_id() ==
+               template_url_starter_pack_data::StarterPackId::kAiMode ||
+           policy_origin() == TemplateURLData::PolicyOrigin::kSearchAggregator;
   }
 
   const std::vector<TemplateURLRef>& url_refs() const { return url_refs_; }
@@ -894,8 +928,12 @@ class TemplateURL {
   // OMNIBOX_API_EXTENSION.
   std::string GetExtensionId() const;
 
+  // Returns the resource ID base associated with this template URL, if it is
+  // provided from built-in data.
+  std::optional<std::string_view> GetBaseBuiltinResourceId() const;
+
   // Returns the resource ID for the logo (small / favicon style) associated
-  // with this template URL, or an empty string if none is associated with it.
+  // with this template URL, or a default image if none is associated with it.
   std::string GetBuiltinImageResourceId() const;
 
   // Returns the resource ID for the search engine description string associated
@@ -1004,14 +1042,20 @@ class TemplateURL {
   // Returns whether this search engine was created by the Default Search
   // Provider Enterprise policy.
   bool CreatedByDefaultSearchProviderPolicy() const;
-  // Returns whether this search engine was created by an Enterprise policy that
-  // doesn't define the Default Search Provider.
+  // Returns whether this search engine was created by an Enterprise policy,
+  // but not by the Default Search Provider policy (e.g., created by the
+  // SiteSearchSettings or EnterpriseSearchAggregatorSettings policies).
   bool CreatedByNonDefaultSearchProviderPolicy() const;
   // Returns whether this search engine was created by the
   // EnterpriseSearchAggregatorSettings policy.
   bool CreatedByEnterpriseSearchAggregatorPolicy() const;
   // Returns whether this search engine was created by a regulatory program.
   bool CreatedByRegulatoryProgram() const;
+
+  // Returns true if the user should be asked to confirm before removing this
+  // engine. Currently, only built-in search engines and non default search
+  // engines created by policy require confirmation before removal.
+  bool RequiresRemovalConfirmation() const;
 
   void SetURL(const std::string& url);
   void SetPrepopulateId(int id);
@@ -1035,6 +1079,10 @@ class TemplateURL {
   // by an Enterprise policy that doesn't define the Default Search Provider.
   bool CanPolicyBeOverridden() const;
 
+  // Gets text shown in the chip at the front of the omnibox when the
+  // user has selected the keyword.
+  std::u16string GetFullName() const;
+
  private:
   // Resizes the |url_refs_| vector, which always holds the search URL as the
   // last item.
@@ -1049,10 +1097,6 @@ class TemplateURL {
                             std::u16string* search_terms,
                             url::Parsed::ComponentType* search_terms_component,
                             url::Component* search_terms_position) const;
-
-  // Returns the resource ID base associated with this template URL, if it is
-  // provided from built-in data.
-  std::optional<std::string_view> GetBaseBuiltinResourceId() const;
 
   // Returns the built-in marketing snippet string for the search engine, or
   // `std::nullopt` if a marketing snippets are not included in this build of

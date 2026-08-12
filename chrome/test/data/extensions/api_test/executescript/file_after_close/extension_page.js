@@ -4,15 +4,15 @@
 
 window.onload = function() {
   chrome.windows.getCurrent(null, function(window) {
-    chrome.tabs.query({windowId:window.id}, function(tabs) {
-      for (var i = 0; i < tabs.length; i++) {
-        var tab = tabs[i];
+    chrome.tabs.query({windowId: window.id}, function(tabs) {
+      for (let i = 0; i < tabs.length; i++) {
+        const tab = tabs[i];
         if (tab.url.indexOf('web_page1') > -1) {
-          chrome.tabs.executeScript(tab.id, { file: 'script.js' });
+          chrome.tabs.executeScript(tab.id, {file: 'script.js'});
           window.close();
           break;
         }
       }
     });
   });
-}
+};

@@ -13,6 +13,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
+namespace {
 
 class MultipleRequestPaymentsNetworkInterfaceTest
     : public PaymentsNetworkInterfaceTestBase,
@@ -84,7 +85,7 @@ class CreateCardTest : public MultipleRequestPaymentsNetworkInterfaceTest {
   }
 
   std::u16string context_token_;
-  std::unique_ptr<base::Value::Dict> legal_message_;
+  std::unique_ptr<base::DictValue> legal_message_;
   std::vector<std::pair<int, int>> supported_bin_ranges_;
   std::string instrument_id_;
 
@@ -96,7 +97,7 @@ class CreateCardTest : public MultipleRequestPaymentsNetworkInterfaceTest {
   void OnDidGetDetailsForCreateCard(
       PaymentsAutofillClient::PaymentsRpcResult result,
       const std::u16string& context_token,
-      std::unique_ptr<base::Value::Dict> legal_message,
+      std::unique_ptr<base::DictValue> legal_message,
       std::vector<std::pair<int, int>> supported_bin_ranges) {
     result_ = result;
     context_token_ = context_token;
@@ -313,7 +314,7 @@ class MultipleRequestGetVirtualCardEnrollmentDetailsTest
 
   void OnDidGetVirtualCardEnrollmentDetails(
       PaymentsRpcResult result,
-      const payments::GetDetailsForEnrollmentResponseDetails&
+      const GetDetailsForEnrollmentResponseDetails&
           get_details_for_enrollment_response_fields) {
     result_ = result;
     get_details_for_enrollment_response_fields_ =
@@ -413,4 +414,5 @@ TEST_P(MultipleRequestGetVirtualCardEnrollmentDetailsTest,
   EXPECT_EQ(result, result_);
 }
 
+}  // namespace
 }  // namespace autofill::payments

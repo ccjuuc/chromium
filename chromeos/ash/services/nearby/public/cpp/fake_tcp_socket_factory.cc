@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/services/nearby/public/cpp/fake_tcp_socket_factory.h"
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "chromeos/ash/services/nearby/public/cpp/fake_tcp_connected_socket.h"
 #include "chromeos/ash/services/nearby/public/cpp/fake_tcp_server_socket.h"
@@ -11,8 +12,7 @@
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/net_errors.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 FakeTcpSocketFactory::FakeTcpSocketFactory(
     const net::IPEndPoint& default_local_addr)
@@ -79,8 +79,10 @@ void FakeTcpSocketFactory::CreateTCPServerSocket(
           return;
         }
 
-        mojo::MakeSelfOwnedReceiver(std::make_unique<FakeTcpServerSocket>(),
-                                    std::move(socket));
+        mojo::MakeSelfOwnedReceiver(
+            std::make_unique<FakeTcpServerSocket>(
+                base::SequencedTaskRunner::GetCurrentDefault()),
+            std::move(socket));
 
         std::move(callback).Run(result,
                                 net::IPEndPoint(local_addr, port.port()));
@@ -151,5 +153,4 @@ void FakeTcpSocketFactory::CreateTCPConnectedSocket(
   }
 }
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby

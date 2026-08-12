@@ -36,6 +36,7 @@
 #include <memory>
 #include <optional>
 
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink-forward.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -47,7 +48,6 @@
 #include "third_party/blink/public/web/web_frame_load_type.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/frame_types.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
@@ -60,6 +60,7 @@ namespace blink {
 
 class DocumentLoader;
 class FetchClientSettingsObject;
+class LocalDOMWindow;
 class LocalFrame;
 class LocalFrameClient;
 class PolicyContainer;
@@ -88,7 +89,8 @@ class CORE_EXPORT FrameLoader final {
             std::unique_ptr<PolicyContainer> policy_container,
             const StorageKey& storage_key,
             ukm::SourceId document_ukm_source_id,
-            const KURL& creator_base_url);
+            const KURL& creator_base_url,
+            std::unique_ptr<base::UnguessableToken> sandbox_origin_token);
 
   ResourceRequest ResourceRequestForReload(
       WebFrameLoadType,
@@ -187,7 +189,10 @@ class CORE_EXPORT FrameLoader final {
   // receive the next document commit, or false otherwise.
   bool DetachDocument();
 
-  bool ShouldClose(bool is_reload = false);
+  bool ShouldClose(bool is_reload,
+                   bool force_to_proceed,
+                   base::TimeTicks& out_before_unload_dialog_opened_time,
+                   base::TimeTicks& out_before_unload_dialog_closed_time);
 
   // Dispatches the Unload event for the current document and fills in this
   // document's info in OldDocumentInfoForCommit if
@@ -257,6 +262,8 @@ class CORE_EXPORT FrameLoader final {
   bool AllowRequestForThisFrame(const FrameLoadRequest&);
 
   mojo::PendingRemote<mojom::blink::CodeCacheHost> CreateWorkerCodeCacheHost();
+
+  void ProcessPendingCrossDocumentFragment();
 
  private:
   bool ShouldPerformFragmentNavigation(bool is_form_submission,
@@ -345,6 +352,12 @@ class CORE_EXPORT FrameLoader final {
   // The origins for which a legacy TLS version warning has been printed. The
   // size of this set is capped, after which no more warnings are printed.
   HashSet<String> tls_version_warning_origins_;
+
+  // True if we skipped processing a fragment and may need to do it again when
+  // asked.
+  bool has_pending_cross_document_fragment_ = false;
+
+  WeakMember<DocumentLoader> previous_document_loader_for_xslt_;
 };
 
 }  // namespace blink

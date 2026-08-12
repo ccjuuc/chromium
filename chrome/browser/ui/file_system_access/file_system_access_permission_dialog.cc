@@ -9,7 +9,7 @@
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/file_system_access/file_system_access_ui_helpers.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/permissions/permission_util.h"
@@ -166,7 +166,8 @@ std::unique_ptr<ui::DialogModel> CreateFileSystemAccessPermissionDialog(
                            .SetLabel(l10n_util::GetStringUTF16(
                                GetCancelButtonLabel(file_request_data))))
       .SetCloseActionCallback(std::move(cancel_callbacks.second))
-      .SetInitiallyFocusedField(kCancelButtonId);
+      .SetInitiallyFocusedField(kCancelButtonId)
+      .SetEnableInputProtection(true);
   return dialog_builder.Build();
 }
 

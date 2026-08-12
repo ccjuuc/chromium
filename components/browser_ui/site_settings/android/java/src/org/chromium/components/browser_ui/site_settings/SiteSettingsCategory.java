@@ -78,7 +78,6 @@ public class SiteSettingsCategory {
         Type.FILE_EDITING,
         Type.JAVASCRIPT_OPTIMIZER,
         Type.SERIAL_PORT,
-        Type.LOCAL_NETWORK_ACCESS,
         Type.WINDOW_MANAGEMENT,
         Type.AUTO_PICTURE_IN_PICTURE,
         Type.LOCAL_NETWORK,
@@ -123,14 +122,13 @@ public class SiteSettingsCategory {
         int FILE_EDITING = 31;
         int JAVASCRIPT_OPTIMIZER = 32;
         int SERIAL_PORT = 33;
-        int LOCAL_NETWORK_ACCESS = 34;
-        int WINDOW_MANAGEMENT = 35;
-        int AUTO_PICTURE_IN_PICTURE = 36;
-        int LOCAL_NETWORK = 37;
-        int LOOPBACK_NETWORK = 38;
+        int WINDOW_MANAGEMENT = 34;
+        int AUTO_PICTURE_IN_PICTURE = 35;
+        int LOCAL_NETWORK = 36;
+        int LOOPBACK_NETWORK = 37;
 
         /** Number of handled categories used for calculating array sizes. */
-        int NUM_ENTRIES = 39;
+        int NUM_ENTRIES = 38;
     }
 
     private final BrowserContextHandle mBrowserContextHandle;
@@ -261,8 +259,6 @@ public class SiteSettingsCategory {
                 return ContentSettingsType.JAVASCRIPT;
             case Type.JAVASCRIPT_OPTIMIZER:
                 return ContentSettingsType.JAVASCRIPT_OPTIMIZER;
-            case Type.LOCAL_NETWORK_ACCESS:
-                return ContentSettingsType.LOCAL_NETWORK_ACCESS;
             case Type.LOCAL_NETWORK:
                 return ContentSettingsType.LOCAL_NETWORK;
             case Type.LOOPBACK_NETWORK:
@@ -361,8 +357,6 @@ public class SiteSettingsCategory {
                 return "javascript";
             case Type.JAVASCRIPT_OPTIMIZER:
                 return "javascript_optimizer";
-            case Type.LOCAL_NETWORK_ACCESS:
-                return "local_network_access";
             case Type.LOCAL_NETWORK:
                 return "local_network";
             case Type.LOOPBACK_NETWORK:
@@ -618,27 +612,25 @@ public class SiteSettingsCategory {
         return null;
     }
 
-    /**
-     * Returns the message to display when per-app permission is blocked.
-     */
+    /** Returns the message to display when per-app permission is blocked. */
     protected String getMessageForEnablingOsPerAppPermission(Context context, String appName) {
         @ContentSettingsType.EnumType int type = this.getContentSettingsType();
-        int permission_string = R.string.android_permission_off;
+        int permissionString = R.string.android_permission_off;
         if (type == ContentSettingsType.GEOLOCATION
                 || type == ContentSettingsType.GEOLOCATION_WITH_OPTIONS) {
-            permission_string = R.string.android_location_permission_off;
+            permissionString = R.string.android_location_permission_off;
         } else if (type == ContentSettingsType.MEDIASTREAM_MIC) {
-            permission_string = R.string.android_microphone_permission_off;
+            permissionString = R.string.android_microphone_permission_off;
         } else if (type == ContentSettingsType.MEDIASTREAM_CAMERA) {
-            permission_string = R.string.android_camera_permission_off;
+            permissionString = R.string.android_camera_permission_off;
         } else if (type == ContentSettingsType.AR) {
-            permission_string = R.string.android_ar_camera_permission_off;
+            permissionString = R.string.android_ar_camera_permission_off;
         } else if (type == ContentSettingsType.HAND_TRACKING) {
-            permission_string = R.string.android_hand_tracking_permission_off;
+            permissionString = R.string.android_hand_tracking_permission_off;
         } else if (type == ContentSettingsType.NOTIFICATIONS) {
-            permission_string = R.string.android_notifications_permission_off;
+            permissionString = R.string.android_notifications_permission_off;
         }
-        return context.getString(permission_string, appName);
+        return context.getString(permissionString, appName);
     }
 
     /** Returns the message to display when per-app permission is blocked. */

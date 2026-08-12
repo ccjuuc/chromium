@@ -8,12 +8,12 @@
 #include <string>
 #include <string_view>
 
+#include "ash/strings/grit/ash_strings.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/values.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -33,7 +33,7 @@ constexpr std::string_view kKeyCryptohomeFailure = "cryptohome_failure";
 constexpr std::string_view kUserCancelledLaunchKey = "user_cancelled_launch";
 
 // Error from the last kiosk launch.
-std::optional<KioskAppLaunchError::Error> s_last_error = std::nullopt;
+std::optional<KioskAppLaunchError::Error> s_last_error;
 
 }  // namespace
 
@@ -125,7 +125,7 @@ KioskAppLaunchError::Error KioskAppLaunchError::Get(
     return *s_last_error;
   }
   s_last_error = Error::kNone;
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       local_state.GetDict(KioskChromeAppManager::kKioskDictionaryName);
 
   std::optional<int> error = dict.FindInt(kKeyLaunchError);
@@ -139,7 +139,7 @@ KioskAppLaunchError::Error KioskAppLaunchError::Get(
 
 // static
 bool KioskAppLaunchError::DidUserCancelLaunch(const PrefService& local_state) {
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       local_state.GetDict(KioskChromeAppManager::kKioskDictionaryName);
   return dict.FindBool(kUserCancelledLaunchKey).value_or(false);
 }

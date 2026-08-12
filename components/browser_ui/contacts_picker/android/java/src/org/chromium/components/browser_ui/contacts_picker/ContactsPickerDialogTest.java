@@ -30,15 +30,17 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 
+import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.blink.mojom.ContactIconBlob;
-import org.chromium.components.browser_ui.contacts_picker.test.R;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate.SelectionObserver;
@@ -46,9 +48,11 @@ import org.chromium.content.browser.contacts.ContactsPickerProperties;
 import org.chromium.content_public.browser.ContactsFetcher;
 import org.chromium.content_public.browser.ContactsFetcher.RetrievedContact;
 import org.chromium.content_public.browser.ContactsPicker;
+import org.chromium.content_public.browser.ContactsPickerDelegate;
 import org.chromium.content_public.browser.ContactsPickerListener;
 import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.browser.test.util.TestTouchUtils;
 import org.chromium.payments.mojom.PaymentAddress;
 import org.chromium.ui.base.ActivityWindowAndroid;
@@ -141,6 +145,10 @@ public class ContactsPickerDialogTest
 
     @Before
     public void setupTest() throws Exception {
+        FakeAconfigFlaggedApiDelegate fakeDelegate = new FakeAconfigFlaggedApiDelegate();
+        fakeDelegate.setSystemContactsPickerEnabled(false);
+        AconfigFlaggedApiDelegate.setInstanceForTesting(fakeDelegate);
+
         mWindowAndroid =
                 ThreadUtils.runOnUiThreadBlocking(
                         () -> {
@@ -150,9 +158,13 @@ public class ContactsPickerDialogTest
                                     /* listenToActivityState= */ true,
                                     IntentRequestTracker.createFromActivity(mActivity),
                                     mInsetObserver,
-                                    /* trackOcclusion= */ true);
+                                    /* occlusionTrackingAllowed= */ true);
                         });
-        mWebContents = Mockito.mock(WebContents.class);
+        mWebContents =
+                Mockito.mock(
+                        WebContents.class,
+                        Mockito.withSettings()
+                                .extraInterfaces(WebContentsObserver.Observable.class));
         when(mWebContents.getTopLevelNativeWindow()).thenReturn(mWindowAndroid);
         when(mWebContents.isDestroyed()).thenReturn(false);
         when(mWebContents.getVisibility()).thenReturn(Visibility.VISIBLE);
@@ -230,42 +242,54 @@ public class ContactsPickerDialogTest
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ContactsPicker.setContactsPickerDelegate(
-                            (WebContents webContents,
-                                    ContactsPickerListener listener,
-                                    boolean multiple,
-                                    boolean names,
-                                    boolean emails,
-                                    boolean tels,
-                                    boolean addresses,
-                                    boolean icons,
-                                    String formattedOrigin,
-                                    ContactsFetcher contactsFetcher) -> {
-                                mDialog =
-                                        new ContactsPickerDialog(
-                                                webContents.getTopLevelNativeWindow(),
-                                                new PickerAdapter() {
-                                                    @Override
-                                                    protected String findOwnerEmail() {
-                                                        return null;
-                                                    }
+                            new ContactsPickerDelegate() {
+                                @Override
+                                public Object showContactsPicker(
+                                        WebContents webContents,
+                                        ContactsPickerListener listener,
+                                        boolean multiple,
+                                        boolean names,
+                                        boolean emails,
+                                        boolean tels,
+                                        boolean addresses,
+                                        boolean icons,
+                                        String formattedOrigin,
+                                        @Nullable ContactsFetcher contactsFetcher) {
+                                    mDialog =
+                                            new ContactsPickerDialog(
+                                                    webContents.getTopLevelNativeWindow(),
+                                                    new PickerAdapter() {
+                                                        @Override
+                                                        protected String findOwnerEmail() {
+                                                            return null;
+                                                        }
 
-                                                    @Override
-                                                    protected void addOwnerInfoToContacts(
-                                                            ArrayList<ContactDetails> contacts) {}
-                                                },
-                                                listener,
-                                                multiple,
-                                                names,
-                                                emails,
-                                                tels,
-                                                addresses,
-                                                icons,
-                                                formattedOrigin,
-                                                /* shouldPadForContent= */ false,
-                                                contactsFetcher);
+                                                        @Override
+                                                        protected void addOwnerInfoToContacts(
+                                                                ArrayList<ContactDetails> contacts,
+                                                                String ownerEmail) {}
+                                                    },
+                                                    listener,
+                                                    multiple,
+                                                    names,
+                                                    emails,
+                                                    tels,
+                                                    addresses,
+                                                    icons,
+                                                    formattedOrigin,
+                                                    /* shouldPadForContent= */ false,
+                                                    contactsFetcher);
 
-                                mDialog.show();
-                                return true;
+                                    mDialog.show();
+                                    return mDialog;
+                                }
+
+                                @Override
+                                public void cancelContactsPicker(Object picker) {
+                                    if (mDialog != null) {
+                                        mDialog.cancel();
+                                    }
+                                }
                             });
 
                     if (!ContactsPicker.showContactsPicker(
@@ -362,6 +386,9 @@ public class ContactsPickerDialogTest
         categoryView.onClick(cancel);
         onActionCallback.waitForCallback(callCount, 1);
         Assert.assertEquals(ContactsPickerAction.CANCEL, mLastActionRecorded);
+
+        // Wait until the dismiss listener runs and clears the picker.
+        CriteriaHelper.pollUiThread(() -> !ContactsPicker.hasPickerForTesting());
     }
 
     private void toggleSelectAll(

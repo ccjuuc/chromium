@@ -78,7 +78,7 @@ UIButton* SettingsButton() {
   configuration.title = @"Open iOS Settings";
   UIImageSymbolConfiguration* config = [UIImageSymbolConfiguration
       configurationWithWeight:UIImageSymbolWeightLight];
-  configuration.image = DefaultSymbolWithConfiguration(@"gear.circle", config);
+  configuration.image = SymbolWithConfiguration(SymbolSettings, config);
   UIButton* button = [UIButton buttonWithConfiguration:configuration
                                          primaryAction:openSettings];
   button.translatesAutoresizingMaskIntoConstraints = NO;
@@ -115,9 +115,9 @@ const NSInteger kRemoteSuggestionServiceResponseBodyJsonStartingIndex = 4;
 
 }  // namespace
 
-@interface PopupDebugInfoViewController () <UITextFieldDelegate,
+@interface PopupDebugInfoViewController () <UITableViewDataSource,
                                             UITableViewDelegate,
-                                            UITableViewDataSource,
+                                            UITextFieldDelegate,
                                             UITextViewDelegate>
 
 @property(nonatomic, strong) UITextView* activeVariationIDTextView;

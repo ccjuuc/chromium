@@ -114,9 +114,7 @@ class CORE_EXPORT FontFace : public ScriptWrappable,
   String sizeAdjust() const;
 
   // FIXME: Changing these attributes should affect font matching.
-  void setFamily(ExecutionContext*, const AtomicString& s, ExceptionState&) {
-    family_ = s;
-  }
+  void setFamily(ExecutionContext*, const AtomicString& s, ExceptionState&);
   void setStyle(ExecutionContext*, const String&, ExceptionState&);
   void setWeight(ExecutionContext*, const String&, ExceptionState&);
   void setStretch(ExecutionContext*, const String&, ExceptionState&);
@@ -145,6 +143,8 @@ class CORE_EXPORT FontFace : public ScriptWrappable,
   CSSFontFace* CssFontFace() { return css_font_face_.Get(); }
   size_t ApproximateBlankCharacterCount() const;
   FontDisplay GetFontDisplay() const;
+
+  void InvalidateFontFaceOnDescriptorUpdate();
 
   void Trace(Visitor*) const override;
 
@@ -207,7 +207,7 @@ class CORE_EXPORT FontFace : public ScriptWrappable,
   bool SetPropertyFromStyle(const CSSPropertyValueSet&, AtRuleDescriptorID);
   bool SetPropertyValue(const CSSValue*, AtRuleDescriptorID);
   void SetFamilyValue(const CSSFontFamilyValue&);
-  void SetIsInvalidFontFamilyIfNeeded(const AtomicString&);
+  void SetFontFamilyNeedsQuoting(const AtomicString&);
   ScriptPromise<FontFace> FontStatusPromise(ScriptState*);
   void RunCallbacks();
 
@@ -215,7 +215,7 @@ class CORE_EXPORT FontFace : public ScriptWrappable,
 
   HeapVector<Member<LoadFontCallback>> callbacks_;
   AtomicString family_;
-  bool is_invalid_font_family_;
+  bool font_family_needs_quoting_;
   String ots_parse_message_;
   Member<const CSSValue> style_;
   Member<const CSSValue> weight_;

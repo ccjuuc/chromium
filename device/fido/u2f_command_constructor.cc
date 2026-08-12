@@ -4,13 +4,13 @@
 
 #include "device/fido/u2f_command_constructor.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/containers/extend.h"
 #include "components/apdu/apdu_command.h"
 #include "crypto/hash.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/public/fido_constants.h"
 
 namespace device {
@@ -21,7 +21,7 @@ bool IsConvertibleToU2fRegisterCommand(
       request.resident_key_required)
     return false;
 
-  return base::Contains(
+  return std::ranges::contains(
       request.public_key_credential_params.public_key_credential_params(),
       static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256),
       &PublicKeyCredentialParams::CredentialInfo::algorithm);
@@ -91,8 +91,8 @@ std::vector<uint8_t> ConstructU2fRegisterCommand(
     bool is_individual_attestation) {
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength);
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kRegister));
@@ -114,10 +114,10 @@ std::optional<std::vector<uint8_t>> ConstructU2fSignCommand(
   std::vector<uint8_t> data;
   data.reserve(kU2fChallengeParamLength + kU2fApplicationParamLength + 1 +
                key_handle.size());
-  fido_parsing_utils::Append(&data, challenge_parameter);
-  fido_parsing_utils::Append(&data, application_parameter);
+  base::Extend(data, challenge_parameter);
+  base::Extend(data, application_parameter);
   data.push_back(static_cast<uint8_t>(key_handle.size()));
-  fido_parsing_utils::Append(&data, key_handle);
+  base::Extend(data, key_handle);
 
   apdu::ApduCommand command;
   command.set_ins(base::strict_cast<uint8_t>(U2fApduInstruction::kSign));

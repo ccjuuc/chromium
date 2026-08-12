@@ -139,6 +139,11 @@ public interface WebContents extends Parcelable {
     void destroy();
 
     /**
+     * @return Whether the WebContents is currently being captured.
+     */
+    boolean isBeingCaptured();
+
+    /**
      * @return Whether or not the native object associated with this WebContent is destroyed.
      */
     boolean isDestroyed();
@@ -453,7 +458,7 @@ public interface WebContents extends Parcelable {
     void requestSmartClipExtract(int x, int y, int width, int height);
 
     /** Register a handler to handle smart clip data once extraction is done. */
-    void setSmartClipResultHandler(final Handler smartClipHandler);
+    void setSmartClipResultHandler(Handler smartClipHandler);
 
     /**
      * Set the handler that provides stylus handwriting recognition.
@@ -479,10 +484,11 @@ public interface WebContents extends Parcelable {
      *
      * @param handler The handler to install.
      */
-    void setOverscrollRefreshHandler(OverscrollRefreshHandler handler);
+    void setOverscrollRefreshHandler(@Nullable OverscrollRefreshHandler handler);
 
     /**
      * Controls use of spatial-navigation mode.
+     *
      * @param disable True if spatial navigation should never be used.
      */
     void setSpatialNavigationDisabled(boolean disabled);

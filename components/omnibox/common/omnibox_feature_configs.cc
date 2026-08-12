@@ -4,9 +4,12 @@
 
 #include "omnibox_feature_configs.h"
 
+#include <vector>
+
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/strings/string_split.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/omnibox/common/omnibox_features.h"
@@ -72,42 +75,6 @@ AiMode::AiMode() {
   check_ai_eligibility_gws_side =
       base::FeatureParam<bool>(&kAiModeEligibility, "CheckAiEligibilityGWSSide",
                                check_ai_eligibility_gws_side)
-          .Get();
-}
-
-AiModeOmniboxEntryPoint::AiModeOmniboxEntryPoint() {
-  enabled = base::FeatureList::IsEnabled(omnibox::kAiModeOmniboxEntryPoint);
-  enabledEnUs =
-      base::FeatureList::IsEnabled(omnibox::kAiModeOmniboxEntryPointEnUs);
-
-  hide_aim_hint_text =
-      base::FeatureParam<bool>(&omnibox::kAiModeOmniboxEntryPoint,
-                               "HideAimHintText", false)
-          .Get();
-
-  hide_aim_hint_text_on_ntp_open =
-      base::FeatureParam<bool>(&omnibox::kAiModeOmniboxEntryPoint,
-                              "HideAimHintTextOnNtpOpen", true)
-          .Get();
-
-  hide_other_page_actions_on_ntp =
-      base::FeatureParam<bool>(&omnibox::kAiModeOmniboxEntryPoint,
-                               "HideOtherPageActionsOnNtp", true)
-          .Get();
-
-  aim_hint_impression_limit_daily =
-      base::FeatureParam<int>(&omnibox::kAiModeOmniboxEntryPoint,
-                              "AimHintImpressionLimitDaily", 1)
-          .Get();
-
-  aim_hint_impression_limit_total =
-      base::FeatureParam<int>(&omnibox::kAiModeOmniboxEntryPoint,
-                              "AimHintImpressionLimitTotal", 5)
-          .Get();
-
-  enable_hint_impression_limits =
-      base::FeatureParam<bool>(&omnibox::kAiModeOmniboxEntryPoint,
-                               "EnableHintImpressionLimits", false)
           .Get();
 }
 
@@ -381,6 +348,10 @@ DocumentProvider::DocumentProvider() {
       base::FeatureParam<int>(&omnibox::kDocumentProvider,
                               "DocumentProviderMinQueryLength", 4)
           .Get();
+  debounce_delay_ms =
+      base::FeatureParam<int>(&omnibox::kDocumentProvider,
+                              "DocumentProviderDebounceDelayMs", 600)
+          .Get();
   scope_backoff_to_profile =
       base::FeatureParam<bool>(&omnibox::kDocumentProvider,
                                "DocumentProviderScopeBackoffToProfile", false)
@@ -389,6 +360,10 @@ DocumentProvider::DocumentProvider() {
                          &omnibox::kDocumentProvider,
                          "DocumentProviderBackoffDuration", base::TimeDelta())
                          .Get();
+  backoff_on_429 =
+      base::FeatureParam<bool>(&omnibox::kDocumentProvider,
+                               "DocumentProviderBackoffOn429", false)
+          .Get();
 }
 
 DocumentProvider::DocumentProvider(const DocumentProvider&) = default;
@@ -450,43 +425,6 @@ ForceAllowedToBeDefault& ForceAllowedToBeDefault::operator=(
 ForceAllowedToBeDefault::~ForceAllowedToBeDefault() = default;
 
 // static
-BASE_FEATURE(RealboxContextualAndTrendingSuggestions::
-                 kRealboxContextualAndTrendingSuggestions,
-             "NTPRealboxContextualAndTrendingSuggestions",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-RealboxContextualAndTrendingSuggestions::
-    RealboxContextualAndTrendingSuggestions() {
-  enabled =
-      base::FeatureList::IsEnabled(kRealboxContextualAndTrendingSuggestions);
-  total_limit = base::FeatureParam<int>(
-                    &kRealboxContextualAndTrendingSuggestions, "TotalLimit", 4)
-                    .Get();
-  contextual_suggestions_limit =
-      base::FeatureParam<int>(&kRealboxContextualAndTrendingSuggestions,
-                              "ContextualSuggestionsLimit", 4)
-          .Get();
-  trending_suggestions_limit =
-      base::FeatureParam<int>(&kRealboxContextualAndTrendingSuggestions,
-                              "TrendingSuggestionsLimit", 4)
-          .Get();
-}
-
-RealboxContextualAndTrendingSuggestions::
-    RealboxContextualAndTrendingSuggestions(
-        const RealboxContextualAndTrendingSuggestions&) = default;
-RealboxContextualAndTrendingSuggestions::
-    RealboxContextualAndTrendingSuggestions(
-        RealboxContextualAndTrendingSuggestions&&) = default;
-RealboxContextualAndTrendingSuggestions&
-RealboxContextualAndTrendingSuggestions::operator=(
-    const RealboxContextualAndTrendingSuggestions&) = default;
-RealboxContextualAndTrendingSuggestions&
-RealboxContextualAndTrendingSuggestions::operator=(
-    RealboxContextualAndTrendingSuggestions&&) = default;
-RealboxContextualAndTrendingSuggestions::
-    ~RealboxContextualAndTrendingSuggestions() = default;
-
-// static
 BASE_FEATURE(SearchAggregatorProvider::kSearchAggregatorProvider,
              "SearchAggregatorProvider",
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -496,10 +434,6 @@ SearchAggregatorProvider::SearchAggregatorProvider() {
 
   min_query_length =
       base::FeatureParam<int>(&kSearchAggregatorProvider, "min_query_length", 4)
-          .Get();
-  parse_response_in_utility_process =
-      base::FeatureParam<bool>(&kSearchAggregatorProvider,
-                               "parse_response_in_utility_process", true)
           .Get();
   use_discovery_engine_oauth_scope =
       base::FeatureParam<bool>(&kSearchAggregatorProvider,
@@ -629,11 +563,11 @@ std::vector<base::Value> SearchAggregatorProvider::CreateMockSearchEngines()
   return engines;
 }
 
-base::Value::Dict SearchAggregatorProvider::CreateMockSearchAggregator(
+base::DictValue SearchAggregatorProvider::CreateMockSearchAggregator(
     bool featured_by_policy) const {
   CHECK(AreMockEnginesValid());
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set("short_name", name);
   result.Set("keyword", featured_by_policy ? '@' + shortcut : shortcut);
   result.Set("url", search_url);
@@ -800,17 +734,21 @@ BASE_FEATURE(ComposeboxSuggestionLimit::kComposeboxSuggestionLimit,
 ComposeboxSuggestionLimit::ComposeboxSuggestionLimit() {
   enabled = base::FeatureList::IsEnabled(kComposeboxSuggestionLimit);
   max_suggestions = base::FeatureParam<size_t>(&kComposeboxSuggestionLimit,
-                                               "ComposeboxMaxSuggestions", 5)
+                                               "ComposeboxMaxSuggestions", 8)
                         .Get();
   max_aim_suggestions =
       base::FeatureParam<size_t>(&kComposeboxSuggestionLimit,
-                                 "ComposeboxMaxAimSuggestions", 5)
+                                 "ComposeboxMaxAimSuggestions", 8)
           .Get();
   max_contextual_suggestions =
       base::FeatureParam<size_t>(&kComposeboxSuggestionLimit,
-                                 "ComposeboxMaxContextualSuggestions", 5)
+                                 "ComposeboxMaxContextualSuggestions", 8)
           .Get();
 }
+
+// Feature to enable embedded permission prompts (user-pull model) to be used in
+// cobrowsing (full window and side panel), new tab page, and omnibox.
+BASE_FEATURE(kEmbeddedPermissionEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
 
 ComposeboxSuggestionLimit::ComposeboxSuggestionLimit(
     const ComposeboxSuggestionLimit&) = default;
@@ -823,5 +761,48 @@ ComposeboxSuggestionLimit&
 ComposeboxSuggestionLimit::ComposeboxSuggestionLimit::operator=(
     ComposeboxSuggestionLimit&&) = default;
 ComposeboxSuggestionLimit::~ComposeboxSuggestionLimit() = default;
+
+// Feature to enable the short suggest path.
+BASE_FEATURE(SuggestPathClientConfig::kUseShortSuggestPathV1,
+             "OmniboxUseShortSuggestPathV1",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE_PARAM(std::string,
+                   kSuggestPathClient,
+                   &SuggestPathClientConfig::kUseShortSuggestPathV1,
+                   "OmniboxSuggestPathClient",
+                   "");
+
+SuggestPathClientConfig::SuggestPathClientConfig() {
+  enabled = base::FeatureList::IsEnabled(kUseShortSuggestPathV1);
+  const std::string param_value = kSuggestPathClient.Get();
+
+  if (param_value.empty()) {
+    enable_for_all = true;
+  } else {
+    enable_for_all = false;
+    std::vector<std::string> client_list = base::SplitString(
+        param_value, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    allowed_clients.insert(client_list.begin(), client_list.end());
+  }
+}
+
+bool SuggestPathClientConfig::ShouldUseShortPath(
+    const std::string& client_name) const {
+  if (!enabled) {
+    return false;
+  }
+
+  return enable_for_all || allowed_clients.contains(client_name);
+}
+
+SuggestPathClientConfig::SuggestPathClientConfig(
+    const SuggestPathClientConfig&) = default;
+SuggestPathClientConfig::SuggestPathClientConfig(SuggestPathClientConfig&&) =
+    default;
+SuggestPathClientConfig& SuggestPathClientConfig::operator=(
+    const SuggestPathClientConfig&) = default;
+SuggestPathClientConfig& SuggestPathClientConfig::operator=(
+    SuggestPathClientConfig&&) = default;
+SuggestPathClientConfig::~SuggestPathClientConfig() = default;
 
 }  // namespace omnibox_feature_configs

@@ -13,6 +13,7 @@
 #import "ios/chrome/browser/default_browser/model/features.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
 #import "ios/chrome/browser/default_browser/promo/generic/public/default_browser_generic_promo_commands.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/default_browser/promo/ui/default_browser_instructions_view_controller.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/promos_manager/coordinator/promos_manager_ui_handler.h"
@@ -21,11 +22,20 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
 
 using base::RecordAction;
 using base::UserMetricsAction;
+
+namespace {
+// The video name for the settings destination.
+NSString* kDefaultBrowserPromoSettingsDestinationVideo =
+    @"app_specific_settings_instructions_video";
+NSString* kDefaultBrowserPromoDefaultAppsDestinationVideo =
+    @"default_apps_settings_instructions_video";
+}  // namespace
 
 @interface DefaultBrowserGenericPromoCoordinator () <
     ConfirmationAlertActionHandler,
@@ -39,10 +49,6 @@ using base::UserMetricsAction;
   id<DefaultBrowserGenericPromoCommands> _defaultBrowserPromoHandler;
   // Feature engagement tracker reference.
   raw_ptr<feature_engagement::Tracker> _tracker;
-  // Only the first interaction is recorded to metrics.
-  BOOL _firstInteractionRecorded;
-  // The timestamp of the first primary button tap.
-  base::Time _acceptanceTimestamp;
 }
 
 #pragma mark - ChromeCoordinator
@@ -58,8 +64,6 @@ using base::UserMetricsAction;
 }
 
 - (void)stop {
-  LogUserInteractionWithFullscreenPromo();
-
   if (_promoWasFromRemindMeLater && _tracker) {
     _tracker->Dismissed(
         feature_engagement::kIPHiOSPromoDefaultBrowserReminderFeature);
@@ -83,11 +87,6 @@ using base::UserMetricsAction;
 #pragma mark - ConfirmationAlertActionHandler
 
 - (void)confirmationAlertPrimaryAction {
-  [_mediator didTapPrimaryActionButton:
-                 /*useDefaultAppsDestination=*/_promoWasFromOffCycleTrigger];
-  if (!_firstInteractionRecorded) {
-    _firstInteractionRecorded = YES;
-    _acceptanceTimestamp = base::Time::Now();
     RecordDefaultBrowserPromoLastAction(
         IOSDefaultBrowserPromoAction::kActionButton);
     base::UmaHistogramEnumeration(
@@ -95,28 +94,33 @@ using base::UserMetricsAction;
         IOSDefaultBrowserVideoPromoAction::kPrimaryActionTapped);
     RecordAction(UserMetricsAction(
         "IOS.DefaultBrowserVideoPromo.Fullscreen.OpenSettingsTapped"));
-  }
-  if (!IsPersistentDefaultBrowserPromoEnabled()) {
+
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
     [_handler hidePromo];
+    id<PictureInPictureCommands> PIPHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), PictureInPictureCommands);
+    OpenIOSDefaultBrowserSettingsPage(IsDefaultAppsPictureInPictureVariant(),
+                                      /*ui_application_to_use=*/nil,
+                                      PIPHandler);
+    return;
   }
+
+  [_mediator didTapPrimaryActionButton:
+                 /*useDefaultAppsDestination=*/_promoWasFromOffCycleTrigger];
+  [_handler hidePromo];
 }
 
 - (void)confirmationAlertSecondaryAction {
-  if (!_firstInteractionRecorded) {
-    _firstInteractionRecorded = YES;
     RecordDefaultBrowserPromoLastAction(IOSDefaultBrowserPromoAction::kCancel);
     base::UmaHistogramEnumeration(
         "IOS.DefaultBrowserVideoPromo.Fullscreen",
         IOSDefaultBrowserVideoPromoAction::kSecondaryActionTapped);
     RecordAction(
         UserMetricsAction("IOS.DefaultBrowserVideoPromo.Fullscreen.Dismiss"));
-  }
-  [self hidePromoAndRecordDismissal];
+    [_handler hidePromo];
 }
 
 - (void)confirmationAlertTertiaryAction {
-  if (!_firstInteractionRecorded) {
-    _firstInteractionRecorded = YES;
     RecordDefaultBrowserPromoLastAction(
         IOSDefaultBrowserPromoAction::kRemindMeLater);
     base::UmaHistogramEnumeration(
@@ -124,7 +128,6 @@ using base::UserMetricsAction;
         IOSDefaultBrowserVideoPromoAction::kTertiaryActionTapped);
     RecordAction(UserMetricsAction(
         "IOS.DefaultBrowserVideoPromo.Fullscreen.RemindMeLater"));
-  }
   if (_tracker) {
     _tracker->NotifyEvent(
         feature_engagement::events::kDefaultBrowserPromoRemindMeLater);
@@ -141,16 +144,13 @@ using base::UserMetricsAction;
 
 - (void)presentationControllerDidDismiss:
     (UIPresentationController*)presentationController {
-  if (!_firstInteractionRecorded) {
-    _firstInteractionRecorded = YES;
     RecordDefaultBrowserPromoLastAction(IOSDefaultBrowserPromoAction::kDismiss);
     base::UmaHistogramEnumeration(
         "IOS.DefaultBrowserVideoPromo.Fullscreen",
         IOSDefaultBrowserVideoPromoAction::kSwipeDown);
     RecordAction(
         UserMetricsAction("IOS.DefaultBrowserVideoPromo.Fullscreen.Dismiss"));
-  }
-  [self hidePromoAndRecordDismissal];
+    [_handler hidePromo];
 }
 
 #pragma mark - Public
@@ -164,22 +164,6 @@ using base::UserMetricsAction;
 
 #pragma mark - Private
 
-// Dismisses the promo.
-- (void)dismissPromo {
-  if (!_firstInteractionRecorded) {
-    _firstInteractionRecorded = YES;
-    RecordDefaultBrowserPromoLastAction(IOSDefaultBrowserPromoAction::kDismiss);
-    // TODO(crbug.com/443766830): Instead of kSwipeDown, use a dedicated value
-    // for the close button.
-    base::UmaHistogramEnumeration(
-        "IOS.DefaultBrowserVideoPromo.Fullscreen",
-        IOSDefaultBrowserVideoPromoAction::kSwipeDown);
-    RecordAction(
-        UserMetricsAction("IOS.DefaultBrowserVideoPromo.Fullscreen.Dismiss"));
-  }
-  [self hidePromoAndRecordDismissal];
-}
-
 - (void)showPromo {
   BOOL hasRemindMeLater =
       base::FeatureList::IsEnabled(
@@ -188,54 +172,27 @@ using base::UserMetricsAction;
   _viewController = [[DefaultBrowserInstructionsViewController alloc]
           initWithDismissButton:YES
                hasRemindMeLater:hasRemindMeLater
-      useDefaultAppsDestination:_promoWasFromOffCycleTrigger
+      useDefaultAppsDestination:IsDefaultBrowserPictureInPictureEnabled()
+                                    ? IsDefaultAppsPictureInPictureVariant()
+                                    : _promoWasFromOffCycleTrigger
                        hasSteps:NO
-                  actionHandler:self
                       titleText:nil];
+  _viewController.actionHandler = self;
 
-  UIViewController* viewControllerToPresent = _viewController;
-  if (IsPersistentDefaultBrowserPromoEnabled()) {
-    UINavigationController* navigationController =
-        [[UINavigationController alloc]
-            initWithRootViewController:_viewController];
-    _viewController.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-        initWithBarButtonSystemItem:UIBarButtonSystemItemClose
-                             target:self
-                             action:@selector(dismissPromo)];
-    viewControllerToPresent = navigationController;
-  }
-
-  CHECK(viewControllerToPresent);
+  CHECK(_viewController);
   RecordAction(
       UserMetricsAction("IOS.DefaultBrowserVideoPromo.Fullscreen.Impression"));
-  viewControllerToPresent.presentationController.delegate = self;
-  [self.baseViewController presentViewController:viewControllerToPresent
+  _viewController.presentationController.delegate = self;
+  [self.baseViewController presentViewController:_viewController
                                         animated:YES
                                       completion:nil];
 }
 
 // Records that a default browser promo has been shown.
 - (void)recordVideoDefaultBrowserPromoShown {
-  // Record the current state before updating the local storage.
-  RecordPromoDisplayStatsToUMA();
-
-  LogFullscreenDefaultBrowserPromoDisplayed();
   RecordAction(UserMetricsAction("IOS.DefaultBrowserVideoPromo.Appear"));
   base::UmaHistogramEnumeration("IOS.DefaultBrowserPromo.Shown",
                                 DefaultPromoTypeForUMA::kGeneral);
-}
-
-// Records the dismissal of the promo if necessary and hides the promo.
-- (void)hidePromoAndRecordDismissal {
-  if (_firstInteractionRecorded) {
-    base::TimeDelta elapsedSinceAcceptance =
-        base::Time::Now() - _acceptanceTimestamp;
-    // 120 buckets up to 4 hours means 2 minutes per bucket.
-    UmaHistogramCustomTimes("IOS.DefaultBrowserVideoPromo.PersistedDuration",
-                            elapsedSinceAcceptance, base::Minutes(0),
-                            base::Hours(4), 120);
-  }
-  [_handler hidePromo];
 }
 
 @end

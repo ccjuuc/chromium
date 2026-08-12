@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/flat_map.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -37,7 +36,7 @@ std::optional<base::FilePath> GetOverrideFilePath(UpdaterScope scope);
 
 class ExternalConstantsOverrider : public ExternalConstants {
  public:
-  ExternalConstantsOverrider(base::Value::Dict override_values,
+  ExternalConstantsOverrider(base::DictValue override_values,
                              scoped_refptr<ExternalConstants> next_provider);
 
   // Loads a dictionary from overrides.json in the local application data
@@ -61,14 +60,14 @@ class ExternalConstantsOverrider : public ExternalConstants {
   base::TimeDelta MinimumEventLoggingCooldown() const override;
   std::optional<EventLoggingPermissionProvider>
   GetEventLoggingPermissionProvider() const override;
-  base::Value::Dict DictPolicies() const override;
+  base::DictValue DictPolicies() const override;
   base::TimeDelta OverinstallTimeout() const override;
   base::TimeDelta IdleCheckPeriod() const override;
   std::optional<bool> IsMachineManaged() const override;
   base::TimeDelta CecaConnectionTimeout() const override;
 
  private:
-  const base::Value::Dict override_values_;
+  const base::DictValue override_values_;
   ~ExternalConstantsOverrider() override;
 };
 

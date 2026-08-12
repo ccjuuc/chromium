@@ -8,15 +8,14 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "base/check_is_test.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/policy/core/device_attributes.h"
-#include "chrome/browser/ash/policy/core/device_attributes_fake.h"
-#include "chrome/browser/ash/policy/core/device_attributes_impl.h"
 #include "chrome/browser/net/secure_dns_config.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -249,7 +248,7 @@ void StripUnknownEffectivePlaceholders(std::string& templates) {
 std::string ReplaceVariables(std::string templates,
                              const user_manager::User& user,
                              const std::string& salt,
-                             policy::DeviceAttributes* attributes,
+                             const policy::DeviceAttributes& attributes,
                              bool hash_variable) {
   std::string user_email = user.GetAccountId().GetUserEmail();
   std::string user_email_domain = EmailDomain(user_email);
@@ -270,11 +269,11 @@ std::string ReplaceVariables(std::string templates,
   std::string device_serial_number = kDeviceNotManaged;
   std::string device_annotated_location = kDeviceNotManaged;
 
-  if (user.IsAffiliated() && attributes) {
-    device_directory_id = attributes->GetDirectoryApiID();
-    device_asset_id = attributes->GetDeviceAssetID();
-    device_serial_number = attributes->GetDeviceSerialNumber();
-    device_annotated_location = attributes->GetDeviceAnnotatedLocation();
+  if (user.IsAffiliated()) {
+    device_directory_id = attributes.GetDirectoryApiID();
+    device_asset_id = attributes.GetDeviceAssetID();
+    device_serial_number = attributes.GetDeviceSerialNumber();
+    device_annotated_location = attributes.GetDeviceAnnotatedLocation();
   } else {
     // Device identifiers are only replaced for affiliated users.
     LOG(WARNING)
@@ -316,8 +315,10 @@ std::string ReplaceVariables(std::string templates,
 
 namespace ash::dns_over_https {
 
-TemplatesUriResolverImpl::TemplatesUriResolverImpl() {
-  attributes_ = std::make_unique<policy::DeviceAttributesImpl>();
+TemplatesUriResolverImpl::TemplatesUriResolverImpl(
+    std::unique_ptr<policy::DeviceAttributes> device_attributes)
+    : attributes_(std::move(device_attributes)) {
+  CHECK(attributes_);
 }
 
 TemplatesUriResolverImpl::~TemplatesUriResolverImpl() = default;
@@ -326,19 +327,21 @@ void TemplatesUriResolverImpl::Update(const PrefService& local_state,
                                       const user_manager::User& user) {
   doh_with_identifiers_active_ = false;
 
-  const std::string& mode = local_state.GetString(prefs::kDnsOverHttpsMode);
+  const std::string& mode =
+      local_state.GetString(ash::chrome_prefs::kDnsOverHttpsMode);
   if (mode == SecureDnsConfig::kModeOff) {
     return;
   }
 
-  effective_templates_ = local_state.GetString(prefs::kDnsOverHttpsTemplates);
+  effective_templates_ =
+      local_state.GetString(ash::chrome_prefs::kDnsOverHttpsTemplates);
   // In ChromeOS only, the DnsOverHttpsTemplatesWithIdentifiers policy will
   // overwrite the DnsOverHttpsTemplates policy. For privacy reasons, the
   // replacement only happens if the is a salt specified which will be used to
   // hash the identifiers in the template URI.
   std::string templates_with_identifiers =
-      local_state.GetString(prefs::kDnsOverHttpsTemplatesWithIdentifiers);
-  std::string salt = local_state.GetString(prefs::kDnsOverHttpsSalt);
+      local_state.GetString(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  std::string salt = local_state.GetString(ash::prefs::kDnsOverHttpsSalt);
 
   if (!salt.empty() &&
       (salt.size() < kMinSaltSize || salt.size() > kMaxSaltSize)) {
@@ -348,11 +351,11 @@ void TemplatesUriResolverImpl::Update(const PrefService& local_state,
     return;
   }
 
-  std::string effective_templates = ReplaceVariables(
-      templates_with_identifiers, user, salt, attributes_.get(),
-      /*hash_variable=*/true);
+  std::string effective_templates =
+      ReplaceVariables(templates_with_identifiers, user, salt, *attributes_,
+                       /*hash_variable=*/true);
   std::string display_templates =
-      ReplaceVariables(templates_with_identifiers, user, "", attributes_.get(),
+      ReplaceVariables(templates_with_identifiers, user, "", *attributes_,
                        /*hash_variable=*/false);
   if (effective_templates.empty() || display_templates.empty()) {
     return;
@@ -375,12 +378,6 @@ std::string TemplatesUriResolverImpl::GetEffectiveTemplates() {
 
 std::string TemplatesUriResolverImpl::GetDisplayTemplates() {
   return display_templates_;
-}
-
-void TemplatesUriResolverImpl::SetDeviceAttributesForTesting(
-    std::unique_ptr<policy::FakeDeviceAttributes> attributes) {
-  CHECK_IS_TEST();
-  attributes_ = std::move(attributes);
 }
 
 // static

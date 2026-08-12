@@ -52,7 +52,7 @@ class ProcessesEventRouter : public task_manager::TaskManagerObserver {
 
   void DispatchEvent(events::HistogramValue histogram_value,
                      const std::string& event_name,
-                     base::Value::List event_args) const;
+                     base::ListValue event_args) const;
 
   // Determines whether there is a registered listener for the specified event.
   // It helps to avoid collecting data if no one is interested in it.
@@ -146,10 +146,6 @@ class ProcessesTerminateFunction : public ExtensionFunction {
  private:
   ~ProcessesTerminateFunction() override = default;
 
-  // Functions to get the process handle on the IO thread and post it back to
-  // the UI thread from processing.
-  base::ProcessHandle GetProcessHandleOnIO(int child_process_host_id) const;
-  void OnProcessHandleOnUI(base::ProcessHandle handle);
 
   // Terminates the process with `handle` if it's valid and is allowed to be
   // terminated. Returns the response value of this extension function to be

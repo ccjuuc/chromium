@@ -37,6 +37,7 @@
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_profile.h"
@@ -47,6 +48,7 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_names.h"
+#include "components/variations/pref_names.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
@@ -143,8 +145,7 @@ class VideoConferenceIntegrationTest
   VideoConferenceIntegrationTest() {
     // kOnDeviceSpeechRecognition is to support live caption.
     scoped_feature_list_.InitWithFeatures(
-        {ash::features::kVcStopAllScreenShare,
-         ash::features::kOnDeviceSpeechRecognition,
+        {ash::features::kOnDeviceSpeechRecognition,
          ash::features::kFeatureManagementVideoConference,
          ash::features::kVcBackgroundReplace,
          ash::features::kShowLiveCaptionInVideoConferenceTray},
@@ -154,6 +155,8 @@ class VideoConferenceIntegrationTest
   ~VideoConferenceIntegrationTest() override = default;
 
   void SetUpOnMainThread() override {
+    PrefService* local_state = g_browser_process->local_state();
+    local_state->SetString(variations::prefs::kVariationsCountry, "us");
     is_incognito_mode_ = std::get<0>(GetParam());
     is_guest_mode_ = std::get<1>(GetParam());
 
@@ -161,11 +164,13 @@ class VideoConferenceIntegrationTest
 
     ASSERT_TRUE(embedded_test_server()->Start());
 
-    // Create an incognito browser when parameter is true.
     if (is_incognito_mode_) {
-      browser_ = Browser::Create(Browser::CreateParams(
-          browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-          true));
+      browser_ =
+          CreateBrowserWindow(BrowserWindowCreateParams(
+                                  browser()->GetProfile()->GetPrimaryOTRProfile(
+                                      /*create_if_needed=*/true),
+                                  /*from_user_gesture=*/true))
+              ->GetBrowserForMigrationOnly();
       // This creates a blank page which is more consistent with normal mode.
       ui_test_utils::NavigateToURLWithDispositionBlockUntilNavigationsComplete(
           browser_, GURL("chrome://blank"), 1,
@@ -179,9 +184,9 @@ class VideoConferenceIntegrationTest
     // Enable test mode to mock the SetCameraEffects calls.
     camera_effects_controller()->bypass_set_camera_effects_for_testing(true);
 
-    camera_background_img_dir_ = browser()->profile()->GetPath().AppendASCII(
+    camera_background_img_dir_ = browser()->GetProfile()->GetPath().AppendASCII(
         "camera_background_img_dir");
-    camera_background_run_dir_ = browser()->profile()->GetPath().AppendASCII(
+    camera_background_run_dir_ = browser()->GetProfile()->GetPath().AppendASCII(
         "camera_background_run_dir");
     camera_effects_controller()->set_camera_background_img_dir_for_testing(
         camera_background_img_dir_);
@@ -189,7 +194,7 @@ class VideoConferenceIntegrationTest
         camera_background_run_dir_);
 
     // Required for the VcBackgroundApp.
-    ash::SystemWebAppManager::Get(browser()->profile())
+    ash::SystemWebAppManager::Get(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
   }
 
@@ -210,7 +215,7 @@ class VideoConferenceIntegrationTest
   void SetPermission(content::WebContents* web_contents,
                      ContentSettingsType type,
                      ContentSetting result) {
-    HostContentSettingsMapFactory::GetForProfile(browser_->profile())
+    HostContentSettingsMapFactory::GetForProfile(browser_->GetProfile())
         ->SetContentSettingDefaultScope(web_contents->GetURL(), GURL(), type,
                                         result);
   }
@@ -344,7 +349,6 @@ class VideoConferenceIntegrationTest
 
     if (use_screen_sharing) {
       StartScreenSharing(web_contents);
-      WAIT_FOR_CONDITION(share_bt()->is_capturing());
     }
 
     return web_contents;
@@ -352,9 +356,6 @@ class VideoConferenceIntegrationTest
 
   VideoConferenceTrayButton* camera_bt() { return GetVcTray()->camera_icon(); }
   VideoConferenceTrayButton* mic_bt() { return GetVcTray()->audio_icon(); }
-  VideoConferenceTrayButton* share_bt() {
-    return GetVcTray()->screen_share_icon();
-  }
 
   CameraEffectsController* camera_effects_controller() {
     return Shell::Get()->camera_effects_controller();
@@ -397,11 +398,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   EXPECT_FALSE(mic_bt()->is_capturing());
   EXPECT_FALSE(mic_bt()->show_privacy_indicator());
 
-  // screen_share_icon should be invisible.
-  EXPECT_FALSE(share_bt()->GetVisible());
-  EXPECT_FALSE(share_bt()->is_capturing());
-  EXPECT_FALSE(share_bt()->show_privacy_indicator());
-
   // Stop camera and wait for is_capturing to populate.
   StopCamera(web_contents);
   WAIT_FOR_CONDITION(!camera_bt()->is_capturing());
@@ -437,11 +433,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   EXPECT_TRUE(mic_bt()->GetVisible());
   EXPECT_TRUE(mic_bt()->is_capturing());
   EXPECT_TRUE(mic_bt()->show_privacy_indicator());
-
-  // screen_share_icon should be invisible.
-  EXPECT_FALSE(share_bt()->GetVisible());
-  EXPECT_FALSE(share_bt()->is_capturing());
-  EXPECT_FALSE(share_bt()->show_privacy_indicator());
 
   // Stop microphone and wait for is_capturing to populate.
   StopMicrophone(web_contents);
@@ -479,18 +470,8 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   EXPECT_FALSE(mic_bt()->is_capturing());
   EXPECT_FALSE(mic_bt()->show_privacy_indicator());
 
-  // screen_share_icon should be visible.
-  EXPECT_TRUE(share_bt()->GetVisible());
-  EXPECT_TRUE(share_bt()->is_capturing());
-  EXPECT_TRUE(share_bt()->show_privacy_indicator());
-
   // Stop microphone and wait for is_capturing to populate.
   StopScreenSharing(web_contents);
-  WAIT_FOR_CONDITION(!share_bt()->is_capturing());
-
-  EXPECT_FALSE(share_bt()->GetVisible());
-  EXPECT_FALSE(share_bt()->is_capturing());
-  EXPECT_FALSE(share_bt()->show_privacy_indicator());
 
   // VcTray should be invisible.
   EXPECT_TRUE(GetVcTray()->GetVisible());
@@ -521,7 +502,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   // Audio icon should not show because the permission is blocked.
   EXPECT_TRUE(camera_bt()->GetVisible());
   EXPECT_FALSE(mic_bt()->GetVisible());
-  EXPECT_FALSE(share_bt()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
@@ -546,7 +526,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   // Camera icon should not show because the permission is blocked.
   EXPECT_FALSE(camera_bt()->GetVisible());
   EXPECT_TRUE(mic_bt()->GetVisible());
-  EXPECT_FALSE(share_bt()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
@@ -568,7 +547,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
   // Both microphone and camera should not show.
   EXPECT_FALSE(camera_bt()->GetVisible());
   EXPECT_FALSE(mic_bt()->GetVisible());
-  EXPECT_TRUE(share_bt()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
@@ -648,7 +626,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
 
   // Start screen sharing.
   StartScreenSharing(web_contents);
-  WAIT_FOR_CONDITION(share_bt()->show_privacy_indicator());
 
   // Get the ReturnToApp Panel.
   ClickButton(GetVcTray()->toggle_bubble_button());
@@ -690,7 +667,7 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest, OneTabReturnToApp) {
   GetVcTray()->CloseBubble();
 
   // Minimize the browser window; this should make the `web_contents` hidden.
-  browser_->window()->Minimize();
+  browser_->GetWindow()->Minimize();
   WAIT_FOR_CONDITION(web_contents->GetVisibility() ==
                      content::Visibility::HIDDEN);
 
@@ -824,7 +801,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
 
   // Wait for signals to populate.
   WAIT_FOR_CONDITION(camera_bt()->show_privacy_indicator());
-  WAIT_FOR_CONDITION(share_bt()->show_privacy_indicator());
 
   // Get the ReturnToApp Panel.
   ClickButton(GetVcTray()->toggle_bubble_button());
@@ -948,40 +924,6 @@ IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,
 
   EXPECT_TRUE(found_live_caption_button);
   EXPECT_TRUE(found_noise_cancellation_buttion);
-}
-
-IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest, StopAllScreenShare) {
-  // Open a tab.
-  content::WebContents* web_contents_1 =
-      NavigateTo("/video_conference_demo.html");
-
-  // Start the screen sharing.
-  StartScreenSharing(web_contents_1);
-  WAIT_FOR_CONDITION(GetVcTray()->GetVisible());
-
-  // Get the ReturnToApp Panel.
-  ClickButton(GetVcTray()->toggle_bubble_button());
-  WAIT_FOR_CONDITION(GetVcTray()->GetBubbleView()->GetVisible());
-
-  // Check that web_contents_1 is sharing screen.
-  auto buttons = GetReturnToAppButtons();
-  EXPECT_EQ(buttons.size(), 1u);
-  EXPECT_FALSE(buttons[0]->is_capturing_camera());
-  EXPECT_FALSE(buttons[0]->is_capturing_microphone());
-  EXPECT_TRUE(buttons[0]->is_capturing_screen());
-
-  // Hide the ReturnToApp Panel.
-  ClickButton(GetVcTray()->toggle_bubble_button());
-
-  // Click on the screen share button.
-  EXPECT_TRUE(share_bt()->is_capturing());
-  ClickButton(share_bt());
-  WAIT_FOR_CONDITION(!share_bt()->is_capturing());
-
-  // Check that web_contents_1 has stopped sharing screen.
-  ClickButton(GetVcTray()->toggle_bubble_button());
-  WAIT_FOR_CONDITION(GetVcTray()->GetBubbleView()->GetVisible());
-  EXPECT_FALSE(GetReturnToAppButtons()[0]->is_capturing_screen());
 }
 
 IN_PROC_BROWSER_TEST_P(VideoConferenceIntegrationTest,

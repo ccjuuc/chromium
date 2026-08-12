@@ -51,19 +51,22 @@ SVGParsingError SVGNumberList::SetValueAsString(const String& value) {
   if (value.empty())
     return SVGParseStatus::kNoError;
 
-  // Don't call |clear()| if an error is encountered. SVG policy is to use
-  // valid items before error.
-  // Spec: http://www.w3.org/TR/SVG/single-page.html#implnote-ErrorProcessing
-  return VisitCharacters(value, [&](auto chars) { return Parse(chars); });
+  SVGParsingError status =
+      VisitCharacters(value, [&](auto chars) { return Parse(chars); });
+  if (status != SVGParseStatus::kNoError) {
+    Clear();
+  }
+  return status;
 }
 
-void SVGNumberList::Add(const SVGPropertyBase* other,
+bool SVGNumberList::Add(const SVGPropertyBase* other,
                         const SVGElement* context_element) {
   auto* other_list = To<SVGNumberList>(other);
   if (length() != other_list->length())
-    return;
+    return true;
   for (uint32_t i = 0; i < length(); ++i)
     at(i)->Add(other_list->at(i), context_element);
+  return true;
 }
 
 void SVGNumberList::CalculateAnimatedValue(

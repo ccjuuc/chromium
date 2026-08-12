@@ -26,8 +26,7 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
+import org.chromium.components.browser_ui.widget.RoundedCornerImageView;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListUtils;
 import org.chromium.ui.listmenu.ListMenuButton;
 import org.chromium.ui.listmenu.ListMenuDelegate;
@@ -59,7 +58,7 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
 
     private ViewGroup mContainer;
     // The start image view which is shows the favicon.
-    private ImageView mStartImageView;
+    private RoundedCornerImageView mStartImageView;
     private ImprovedBookmarkFolderView mFolderIconView;
     // Displays the title of the bookmark.
     private TextView mTitleView;
@@ -104,7 +103,7 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
                                 : R.layout.improved_bookmark_row_layout,
                         row);
         row.onFinishInflate();
-        row.setStartImageRoundedCornerOutlineProvider(isVisual);
+        row.setStartImageRoundedCorners(isVisual);
         return row;
     }
 
@@ -149,18 +148,17 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
         }
     }
 
-    void setStartImageRoundedCornerOutlineProvider(boolean isVisual) {
+    void setStartImageRoundedCorners(boolean isVisual) {
         assert mStartImageView != null;
 
-        mStartImageView.setOutlineProvider(
-                new RoundedCornerOutlineProvider(
-                        getContext()
-                                .getResources()
-                                .getDimensionPixelSize(
-                                        isVisual
-                                                ? R.dimen.improved_bookmark_row_outer_corner_radius
-                                                : R.dimen.improved_bookmark_icon_radius)));
-        mStartImageView.setClipToOutline(true);
+        int radius =
+                getContext()
+                        .getResources()
+                        .getDimensionPixelSize(
+                                isVisual
+                                        ? R.dimen.improved_bookmark_row_outer_corner_radius
+                                        : R.dimen.improved_bookmark_icon_radius);
+        mStartImageView.setRoundedCorners(radius, radius, radius, radius);
     }
 
     @Override
@@ -182,47 +180,45 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
         mMoreButton = findViewById(R.id.more);
         mEndImageView = findViewById(R.id.end_image);
 
-        if (ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled()) {
-            mDragHandle = findViewById(R.id.drag_handle);
-            mDragHandle.setClickable(true);
-            mDragHandle.setFocusable(true);
+        mDragHandle = findViewById(R.id.drag_handle);
+        mDragHandle.setClickable(true);
+        mDragHandle.setFocusable(true);
 
-            // Define the shadow shape explicitly. This ensures that the shadow appears even if
-            // mDraggedBackgroundColor is transparent.
-            setOutlineProvider(
-                    new ViewOutlineProvider() {
-                        @Override
-                        public void getOutline(View view, Outline outline) {
-                            if (mContainer != null && mContainer.getWidth() > 0) {
-                                Resources res = getContext().getResources();
+        // Define the shadow shape explicitly. This ensures that the shadow appears even if
+        // mDraggedBackgroundColor is transparent.
+        setOutlineProvider(
+                new ViewOutlineProvider() {
+                    @Override
+                    public void getOutline(View view, Outline outline) {
+                        if (mContainer != null && mContainer.getWidth() > 0) {
+                            Resources res = getContext().getResources();
 
-                                int radiusRes =
-                                        mIsSelected
-                                                ? R.dimen.default_rounded_corner_radius
-                                                : R.dimen.improved_bookmark_row_outer_corner_radius;
+                            int radiusRes =
+                                    mIsSelected
+                                            ? R.dimen.default_rounded_corner_radius
+                                            : R.dimen.improved_bookmark_row_outer_corner_radius;
 
-                                float radius = res.getDimension(radiusRes);
+                            float radius = res.getDimension(radiusRes);
 
-                                // Calculate the bounds of the container relative to the parent
-                                // (ImprovedBookmarkRow) and draw the shadow.
-                                outline.setRoundRect(
-                                        mContainer.getLeft(),
-                                        mContainer.getTop(),
-                                        mContainer.getRight(),
-                                        mContainer.getBottom(),
-                                        radius);
-                                // Force shadow opacity even if view is transparent.
-                                outline.setAlpha(1.0f);
-                            } else {
-                                // Don't show the shadow.
-                                outline.setRect(0, 0, view.getWidth(), view.getHeight());
-                                outline.setAlpha(0.0f);
-                            }
+                            // Calculate the bounds of the container relative to the parent
+                            // (ImprovedBookmarkRow) and draw the shadow.
+                            outline.setRoundRect(
+                                    mContainer.getLeft(),
+                                    mContainer.getTop(),
+                                    mContainer.getRight(),
+                                    mContainer.getBottom(),
+                                    radius);
+                            // Force shadow opacity even if view is transparent.
+                            outline.setAlpha(1.0f);
+                        } else {
+                            // Don't show the shadow.
+                            outline.setRect(0, 0, view.getWidth(), view.getHeight());
+                            outline.setAlpha(0.0f);
                         }
-                    });
-            // Allow the shadow to draw outside the view bounds if needed.
-            setClipToOutline(false);
-        }
+                    }
+                });
+        // Allow the shadow to draw outside the view bounds if needed.
+        setClipToOutline(false);
     }
 
     void setRowEnabled(boolean enabled) {
@@ -275,7 +271,7 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
     }
 
     void setStartAreaBackgroundColor(@ColorInt int color) {
-        mStartImageView.setBackgroundColor(color);
+        mStartImageView.setRoundedFillColor(color);
     }
 
     void setAccessoryView(@Nullable View view) {
@@ -356,13 +352,12 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
         boolean checkVisible = mSelectionEnabled && mIsSelected;
         boolean moreVisible = mMoreButtonVisible && !mIsSelected && mBookmarkIdEditable;
 
-        if (ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled()) {
-            // Show handle if row is selected.
-            if (mDragHandle != null) {
-                mDragHandle.setVisibility(
-                        (mIsDragEnabled && mIsSelected) ? View.VISIBLE : View.GONE);
-            }
+        // Show handle if row is selected.
+        if (mDragHandle != null) {
+            mDragHandle.setVisibility((mIsDragEnabled && mIsSelected) ? View.VISIBLE : View.GONE);
         }
+        // ViewOutlineProvider re-runs getOutline().
+        invalidateOutline();
 
         mCheckImageView.setVisibility(checkVisible ? View.VISIBLE : View.GONE);
         mMoreButton.setVisibility(moreVisible ? View.VISIBLE : View.GONE);
@@ -376,7 +371,7 @@ public class ImprovedBookmarkRow extends ViewLookupCachingFrameLayout
 
     // Testing specific methods below.
 
-    public void setStartImageViewForTesting(ImageView startImageView) {
+    public void setStartImageViewForTesting(RoundedCornerImageView startImageView) {
         mStartImageView = startImageView;
     }
 

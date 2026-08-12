@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
@@ -38,11 +39,11 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/content_mock_cert_verifier.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/test_content_browser_client.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -166,7 +167,7 @@ class RequestInterceptor {
     if (0 != (expectations & kShouldBeBlocked)) {
       // Verify that the body is empty.
       EXPECT_EQ("", response_body());
-      EXPECT_EQ(0, completion_status().decoded_body_length);
+      EXPECT_EQ(0u, completion_status().decoded_body_length.InBytes());
 
       // Verify that the console message would have been printed.
       EXPECT_TRUE(completion_status().should_report_orb_blocking);
@@ -932,8 +933,8 @@ IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase,
 
   // Verify that the body has been allowed by ORB.
   EXPECT_EQ(png_body, interceptor.response_body());
-  EXPECT_EQ(static_cast<int64_t>(png_body.size()),
-            interceptor.completion_status().decoded_body_length);
+  EXPECT_EQ(png_body.size(),
+            interceptor.completion_status().decoded_body_length.InBytes());
   EXPECT_EQ(static_cast<int64_t>(png_body.size()),
             interceptor.response_head()->content_length);
 
@@ -996,8 +997,8 @@ IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase,
 
   // Verify that the body has been allowed by ORB.
   EXPECT_EQ(png_body, interceptor.response_body());
-  EXPECT_EQ(static_cast<int64_t>(png_body.size()),
-            interceptor.completion_status().decoded_body_length);
+  EXPECT_EQ(png_body.size(),
+            interceptor.completion_status().decoded_body_length.InBytes());
   EXPECT_EQ(static_cast<int64_t>(png_body.size()),
             interceptor.response_head()->content_length);
 
@@ -1014,9 +1015,6 @@ IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase,
   EXPECT_THAT(headers, Not(HasSubstr("MySecretCookieValue2")));
 }
 
-// TODO(lukasza): https://crbug.com/154571: Enable this test on Android once
-// SharedWorkers are also enabled on Android.
-#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase, SharedWorker) {
   embedded_test_server()->StartAcceptingConnections();
 
@@ -1091,7 +1089,6 @@ IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase, SharedWorker) {
   )";
   EXPECT_EQ("FETCH SUCCEEDED", EvalJs(shell(), kFetchWait));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // https://crbug.com/1218723 this is broken by SplitCacheByNetworkIsolationKey.
 IN_PROC_BROWSER_TEST_F(CrossSiteDocumentBlockingTestBase,

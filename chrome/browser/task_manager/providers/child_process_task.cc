@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -70,11 +70,9 @@ std::u16string GetLocalizedTitle(const std::u16string& title,
         case ChildProcessTask::ProcessSubtype::kSpareRenderProcess:
           return l10n_util::GetStringUTF16(
               IDS_TASK_MANAGER_SPARE_RENDERER_PREFIX);
-#if BUILDFLAG(ENABLE_GLIC)
         case ChildProcessTask::ProcessSubtype::kGlicRenderProcess:
           return l10n_util::GetStringUTF16(
               IDS_TASK_MANAGER_GLIC_RENDERER_PREFIX);
-#endif
         case ChildProcessTask::ProcessSubtype::kUnknownRenderProcess:
           return l10n_util::GetStringUTF16(
               IDS_TASK_MANAGER_UNKNOWN_RENDERER_PREFIX);
@@ -220,9 +218,7 @@ Task::SubType ChildProcessTask::GetSubType() const {
   switch (process_subtype_) {
     case ChildProcessTask::ProcessSubtype::kSpareRenderProcess:
       return Task::SubType::kSpareRenderer;
-#if BUILDFLAG(ENABLE_GLIC)
     case ChildProcessTask::ProcessSubtype::kGlicRenderProcess:
-#endif
     case ChildProcessTask::ProcessSubtype::kUnknownRenderProcess:
       return Task::SubType::kUnknownRenderer;
     default:

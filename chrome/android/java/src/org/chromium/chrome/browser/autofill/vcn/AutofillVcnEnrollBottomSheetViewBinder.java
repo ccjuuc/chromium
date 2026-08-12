@@ -53,7 +53,11 @@ import java.util.function.Function;
                     getDescriptionSpan(
                             model.get(AutofillVcnEnrollBottomSheetProperties.DESCRIPTION)));
             view.mVirtualCardDescription.setMovementMethod(LinkMovementMethod.getInstance());
-
+        } else if (AutofillVcnEnrollBottomSheetProperties.IS_GPAY_LOGO_VISIBLE == propertyKey) {
+            view.mGpayIcon.setVisibility(
+                    model.get(AutofillVcnEnrollBottomSheetProperties.IS_GPAY_LOGO_VISIBLE)
+                            ? View.VISIBLE
+                            : View.GONE);
         } else if (AutofillVcnEnrollBottomSheetProperties.ISSUER_ICON == propertyKey
                 || AutofillVcnEnrollBottomSheetProperties.ISSUER_ICON_FETCH_CALLBACK
                         == propertyKey) {
@@ -69,7 +73,6 @@ import java.util.function.Function;
                 view.mIssuerIcon.setImageBitmap(
                         scaleBitmap(model.get(AutofillVcnEnrollBottomSheetProperties.ISSUER_ICON)));
             }
-
         } else if (AutofillVcnEnrollBottomSheetProperties.CARD_LABEL == propertyKey) {
             view.mCardLabel.setText(model.get(AutofillVcnEnrollBottomSheetProperties.CARD_LABEL));
             view.mCardContainer.setContentDescription(
@@ -112,7 +115,7 @@ import java.util.function.Function;
 
     // Returns the virtual card description text with a "learn more" link.
     private static SpannableString getDescriptionSpan(Description description) {
-        SpannableString result = new SpannableString(new String());
+        SpannableString result = new SpannableString("");
         if (description == null
                 || description.mText == null
                 || description.mText.isEmpty()
@@ -168,9 +171,8 @@ import java.util.function.Function;
                         context,
                         legalMessages.mLines,
                         /* underlineLinks= */ true,
-                        (String url) -> {
-                            legalMessages.mLinkOpener.openLink(url, legalMessages.mLinkType);
-                        })
+                        (String url) ->
+                                legalMessages.mLinkOpener.openLink(url, legalMessages.mLinkType))
                 : new SpannableStringBuilder();
     }
 

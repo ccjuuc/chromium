@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/core/core_probes_inl.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/inspector/protocol/network.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
 #include "third_party/blink/renderer/core/streams/writable_stream.h"
@@ -31,7 +32,6 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
@@ -53,12 +53,10 @@ bool ValidateMulticastOptions(ExecutionContext* execution_context,
     return true;
   }
 
-  if (!RuntimeEnabledFeatures::MulticastInDirectSocketsEnabled()) {
+  if (!execution_context->IsIsolatedContext()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotAllowedError,
-        "Cannot use Multicast options if feature "
-        "MulticastInDirectSocketsEnabled is not enabled. Go to chrome://flags "
-        "to enable it.");
+        "Multicast options can only be used in Isolated Web Apps.");
     return false;
   }
 
@@ -84,7 +82,7 @@ bool ValidateMulticastOptions(ExecutionContext* execution_context,
 }
 
 bool IsMulticastAllowed(ExecutionContext* execution_context) {
-  if (!RuntimeEnabledFeatures::MulticastInDirectSocketsEnabled()) {
+  if (!execution_context->IsIsolatedContext()) {
     return false;
   }
 
@@ -524,6 +522,21 @@ void UDPSocket::FailOpenWith(int32_t error) {
   opened_->Reject(exception);
   GetClosedProperty().Reject(ScriptValue(GetScriptState()->GetIsolate(),
                                          exception->ToV8(GetScriptState())));
+
+  // If connecting to a multicast address was rejected due to missing
+  // 'direct-sockets-multicast' Permissions Policy, report a clear console
+  // error message so web developers understand why the socket opening failed.
+  // Note: This check (and console message) was added after the API shipped to
+  // ease transition for developers who might have relied on the previous
+  // behavior.
+  if (error == net::ERR_MULTICAST_NOT_ALLOWED && GetExecutionContext()) {
+    GetExecutionContext()->AddConsoleMessage(MakeGarbageCollected<
+                                             ConsoleMessage>(
+        mojom::blink::ConsoleMessageSource::kJavaScript,
+        mojom::blink::ConsoleMessageLevel::kError,
+        "DirectSockets UDP socket opening failed. Connecting to a multicast "
+        "address requires 'direct-sockets-multicast' permissions policy."));
+  }
 
   abort_net_error_ = error;
 }

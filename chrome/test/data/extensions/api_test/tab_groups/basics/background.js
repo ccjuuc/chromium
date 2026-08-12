@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Basic browser tests for the tabGroups API. Most API behavior is tested in
-// tab_groups_api_unittest.cc, this just provides end-to-end coverage.
+// Basic API tests for the tabGroups API. Most API behavior is tested in
+// tab_groups_api_browsertest.cc, this just provides end-to-end coverage.
 chrome.test.runTests([
   function testQuerySucceeds() {
     chrome.tabs.create({}, (tab) => {
@@ -28,13 +28,13 @@ chrome.test.runTests([
     });
   },
   function testCreateEventDispatched() {
-    let onCreatedPromise = new Promise((resolve) => {
+    const onCreatedPromise = new Promise((resolve) => {
       chrome.tabGroups.onCreated.addListener((group) => {
         resolve(group.id);
       });
     });
 
-    let createPromise = new Promise((resolve) => {
+    const createPromise = new Promise((resolve) => {
       chrome.tabs.create({}, (tab) => {
         chrome.tabs.group({tabIds: tab.id}, (groupId) => {
           resolve(groupId);
@@ -47,5 +47,5 @@ chrome.test.runTests([
       chrome.test.assertEq(results[0], results[1]);
       chrome.test.succeed();
     });
-  }
+  },
 ]);

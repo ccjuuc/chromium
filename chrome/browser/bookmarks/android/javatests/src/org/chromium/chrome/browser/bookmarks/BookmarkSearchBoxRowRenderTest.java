@@ -25,7 +25,9 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -41,6 +43,7 @@ import java.util.List;
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @Batch(Batch.PER_CLASS)
+@DisableFeatures(ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT)
 public class BookmarkSearchBoxRowRenderTest {
     @ClassParameter
     private static final List<ParameterSet> sClassParams = new NightModeParams().getParameters();
@@ -52,6 +55,7 @@ public class BookmarkSearchBoxRowRenderTest {
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
+                    .setRevision(3) // Make the rectangle surrounding the search bar transparent.
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_BOOKMARKS)
                     .build();
 
@@ -71,7 +75,7 @@ public class BookmarkSearchBoxRowRenderTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mContentView = new LinearLayout(mActivityTestRule.getActivity());
-                    mContentView.setBackgroundColor(Color.WHITE);
+                    mContentView.setBackgroundColor(Color.TRANSPARENT);
 
                     FrameLayout.LayoutParams params =
                             new FrameLayout.LayoutParams(
@@ -135,5 +139,24 @@ public class BookmarkSearchBoxRowRenderTest {
                             true);
                 });
         mRenderTestRule.render(mContentView, "searchText");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testDesktopNormal() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mContentView.removeAllViews();
+                    LayoutInflater.from(mActivityTestRule.getActivity())
+                            .inflate(R.layout.bookmark_search_box_row_desktop, mContentView);
+                    BookmarkSearchBoxRow bookmarkSearchBoxRow =
+                            mContentView.findViewById(R.id.bookmark_toolbar);
+                    PropertyModelChangeProcessor.create(
+                            mPropertyModel,
+                            bookmarkSearchBoxRow,
+                            BookmarkSearchBoxRowViewBinder.createViewBinder());
+                });
+        mRenderTestRule.render(mContentView, "desktop_normal");
     }
 }

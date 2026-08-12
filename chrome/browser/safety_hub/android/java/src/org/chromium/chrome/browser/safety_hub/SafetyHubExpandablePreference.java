@@ -13,7 +13,6 @@ import android.util.AttributeSet;
 import android.view.View;
 import android.view.View.AccessibilityDelegate;
 import android.view.ViewGroup;
-import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -22,8 +21,8 @@ import androidx.preference.PreferenceViewHolder;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.browser_ui.settings.ChromeBasePreference;
+import org.chromium.components.browser_ui.settings.ExpandablePreferenceAccessibilityDelegate;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.ui.widget.ButtonCompat;
 import org.chromium.ui.widget.CheckableImageView;
@@ -106,24 +105,22 @@ public class SafetyHubExpandablePreference extends ChromeBasePreference {
         }
 
         View container = holder.itemView;
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            int bottomPadding =
-                    getContext()
-                            .getResources()
-                            .getDimensionPixelSize(
-                                    R.dimen.safety_hub_expandable_preference_vertical_padding);
-            // remove any additional bottom padding in expanded view
-            if (isExpanded()) {
-                bottomPadding = 0;
-            }
-            container.setPadding(
-                    container.getPaddingStart(),
-                    container.getPaddingTop(),
-                    container.getPaddingEnd(),
-                    bottomPadding);
+        int bottomPadding =
+                getContext()
+                        .getResources()
+                        .getDimensionPixelSize(
+                                R.dimen.safety_hub_expandable_preference_vertical_padding);
+        // remove any additional bottom padding in expanded view
+        if (isExpanded()) {
+            bottomPadding = 0;
         }
+        container.setPadding(
+                container.getPaddingStart(),
+                container.getPaddingTop(),
+                container.getPaddingEnd(),
+                bottomPadding);
 
-        updatePreferenceContentDescription(container);
+        updatePreferenceAccessibility(container, title);
     }
 
     @Override
@@ -187,26 +184,8 @@ public class SafetyHubExpandablePreference extends ChromeBasePreference {
         setIconSpaceReserved(hasProgressBar);
     }
 
-    private void updatePreferenceContentDescription(View view) {
-        // For accessibility, read out the whole title and whether the group is collapsed/expanded.
-        String collapseOrExpandedText =
-                getContext()
-                        .getString(
-                                mExpanded
-                                        ? R.string.accessibility_expanded_group
-                                        : R.string.accessibility_collapsed_group);
-
-        String description =
-                getContext()
-                        .getString(
-                                R.string.concat_two_strings_with_comma,
-                                getTitle(),
-                                collapseOrExpandedText);
-
-        view.setContentDescription(description);
-        if (view.isAccessibilityFocused()) {
-            view.sendAccessibilityEvent(AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION);
-        }
+    private void updatePreferenceAccessibility(View view, @Nullable View titleView) {
+        ExpandablePreferenceAccessibilityDelegate.apply(this, view, titleView, this::isExpanded);
     }
 
     private AccessibilityDelegate createButtonAccessibilityDelegate(View labelView) {

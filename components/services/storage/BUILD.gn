@@ -8,10 +8,15 @@ source_set("storage") {
   sources = [
     "dom_storage/async_dom_storage_database.cc",
     "dom_storage/async_dom_storage_database.h",
-    "dom_storage/dom_storage_constants.cc",
+    "dom_storage/db_status.cc",
+    "dom_storage/db_status.h",
     "dom_storage/dom_storage_constants.h",
     "dom_storage/dom_storage_database.cc",
     "dom_storage/dom_storage_database.h",
+    "dom_storage/dom_storage_histogram_helper.cc",
+    "dom_storage/dom_storage_histogram_helper.h",
+    "dom_storage/dom_storage_rollout.cc",
+    "dom_storage/dom_storage_rollout.h",
     "dom_storage/leveldb/dom_storage_batch_operation_leveldb.cc",
     "dom_storage/leveldb/dom_storage_batch_operation_leveldb.h",
     "dom_storage/leveldb/dom_storage_database_leveldb.cc",
@@ -22,6 +27,8 @@ source_set("storage") {
     "dom_storage/leveldb/local_storage_leveldb.h",
     "dom_storage/leveldb/session_storage_leveldb.cc",
     "dom_storage/leveldb/session_storage_leveldb.h",
+    "dom_storage/leveldb_status_helper.cc",
+    "dom_storage/leveldb_status_helper.h",
     "dom_storage/local_storage_impl.cc",
     "dom_storage/local_storage_impl.h",
     "dom_storage/session_storage_area_impl.cc",
@@ -34,6 +41,17 @@ source_set("storage") {
     "dom_storage/session_storage_metadata.h",
     "dom_storage/session_storage_namespace_impl.cc",
     "dom_storage/session_storage_namespace_impl.h",
+    "dom_storage/sqlite/local_storage_sqlite.cc",
+    "dom_storage/sqlite/local_storage_sqlite.h",
+    "dom_storage/sqlite/map_entries_table.cc",
+    "dom_storage/sqlite/map_entries_table.h",
+    "dom_storage/sqlite/session_storage_sqlite.cc",
+    "dom_storage/sqlite/session_storage_sqlite.h",
+    "dom_storage/sqlite/sqlite_database_macros.h",
+    "dom_storage/sqlite/sqlite_database_utils.cc",
+    "dom_storage/sqlite/sqlite_database_utils.h",
+    "dom_storage/sqlite_status_helper.cc",
+    "dom_storage/sqlite_status_helper.h",
     "dom_storage/storage_area_impl.cc",
     "dom_storage/storage_area_impl.h",
     "indexed_db/leveldb/leveldb_state.cc",
@@ -79,17 +97,6 @@ source_set("storage") {
     "service_worker/service_worker_storage.h",
     "service_worker/service_worker_storage_control_impl.cc",
     "service_worker/service_worker_storage_control_impl.h",
-    "shared_storage/async_shared_storage_database.h",
-    "shared_storage/async_shared_storage_database_impl.cc",
-    "shared_storage/async_shared_storage_database_impl.h",
-    "shared_storage/shared_storage_database.cc",
-    "shared_storage/shared_storage_database.h",
-    "shared_storage/shared_storage_database_migrations.cc",
-    "shared_storage/shared_storage_database_migrations.h",
-    "shared_storage/shared_storage_manager.cc",
-    "shared_storage/shared_storage_manager.h",
-    "shared_storage/shared_storage_options.cc",
-    "shared_storage/shared_storage_options.h",
     "storage_service_impl.cc",
     "storage_service_impl.h",
   ]
@@ -104,6 +111,7 @@ source_set("storage") {
     "//components/services/storage/public/mojom",
     "//components/services/storage/service_worker:service_worker_proto",
     "//mojo/public/cpp/bindings",
+    "//net",
     "//sql",
     "//third_party/abseil-cpp:absl",
     "//third_party/blink/public/common",
@@ -113,14 +121,12 @@ source_set("storage") {
 
   deps = [
     ":filesystem_proxy_factory",
+    ":storage_features",
     "//components/services/storage/public/cpp",
-    "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//storage/browser",
     "//storage/common",
-    "//storage/common:database_status",
-    "//storage/common:leveldb_status_helper",
   ]
 }
 
@@ -136,6 +142,15 @@ component("filesystem_proxy_factory") {
     "//components/services/storage/public/cpp/filesystem",
   ]
   defines = [ "IS_FILESYSTEM_PROXY_FACTORY_IMPL" ]
+}
+
+component("storage_features") {
+  sources = [
+    "dom_storage/features.cc",
+    "dom_storage/features.h",
+  ]
+  deps = [ "//base" ]
+  defines = [ "IS_STORAGE_FEATURES_IMPL" ]
 }
 
 # A separate component target which merely defines storage for a global testing
@@ -155,36 +170,12 @@ component("test_api_stubs") {
   defines = [ "IS_STORAGE_SERVICE_TEST_API_STUBS_IMPL" ]
 }
 
-bundle_data("tests_bundle_data") {
-  visibility = [ ":tests" ]
-  testonly = true
-  sources = [
-    "//components/test/data/storage/shared_storage.init_too_new.sql",
-    "//components/test/data/storage/shared_storage.v0.sql",
-    "//components/test/data/storage/shared_storage.v1.no_budget_table.sql",
-    "//components/test/data/storage/shared_storage.v1.sql",
-    "//components/test/data/storage/shared_storage.v2.sql",
-    "//components/test/data/storage/shared_storage.v3.iterator.sql",
-    "//components/test/data/storage/shared_storage.v3.sql",
-    "//components/test/data/storage/shared_storage.v4.filescheme.sql",
-    "//components/test/data/storage/shared_storage.v4.sql",
-    "//components/test/data/storage/shared_storage.v5.sql",
-    "//components/test/data/storage/shared_storage.v6.empty_values_mapping.5origins.sql",
-    "//components/test/data/storage/shared_storage.v6.empty_values_mapping.6origins.sql",
-    "//components/test/data/storage/shared_storage.v6.empty_values_mapping.7origins.sql",
-    "//components/test/data/storage/shared_storage.v6.empty_values_mapping.8origins.sql",
-    "//components/test/data/storage/shared_storage.v6.single_origin.sql",
-    "//components/test/data/storage/shared_storage.v6.sql",
-  ]
-  outputs = [ "{{bundle_resources_dir}}/" +
-              "{{source_root_relative_dir}}/{{source_file_part}}" ]
-}
-
 source_set("tests") {
   testonly = true
 
   sources = [
     "dom_storage/async_dom_storage_database_unittest.cc",
+    "dom_storage/dom_storage_database_unittest.cc",
     "dom_storage/leveldb/dom_storage_database_leveldb_unittest.cc",
     "dom_storage/leveldb/local_storage_leveldb_unittest.cc",
     "dom_storage/leveldb/session_storage_leveldb_unittest.cc",
@@ -194,6 +185,9 @@ source_set("tests") {
     "dom_storage/session_storage_impl_unittest.cc",
     "dom_storage/session_storage_metadata_unittest.cc",
     "dom_storage/session_storage_namespace_impl_unittest.cc",
+    "dom_storage/sqlite/local_storage_sqlite_unittest.cc",
+    "dom_storage/sqlite/map_entries_table_unittest.cc",
+    "dom_storage/sqlite/session_storage_sqlite_unittest.cc",
     "dom_storage/storage_area_impl_unittest.cc",
     "indexed_db/locks/partitioned_lock_manager_unittest.cc",
     "indexed_db/scopes/leveldb_scope_unittest.cc",
@@ -210,20 +204,16 @@ source_set("tests") {
     "service_worker/service_worker_storage_test_utils.cc",
     "service_worker/service_worker_storage_test_utils.h",
     "service_worker/service_worker_storage_unittest.cc",
-    "shared_storage/async_shared_storage_database_impl_unittest.cc",
-    "shared_storage/shared_storage_database_migrations_unittest.cc",
-    "shared_storage/shared_storage_database_unittest.cc",
-    "shared_storage/shared_storage_manager_unittest.cc",
     "storage_service_impl_unittest.cc",
   ]
 
   deps = [
     ":storage",
     ":test_support",
-    ":tests_bundle_data",
     "//base",
     "//base/test:test_support",
     "//components/services/storage/public/cpp",
+    "//components/services/storage/public/cpp:tests",
     "//components/services/storage/public/cpp/filesystem:tests",
     "//components/services/storage/public/mojom",
     "//components/services/storage/public/mojom:tests",
@@ -237,7 +227,6 @@ source_set("tests") {
     "//sql:test_support",
     "//storage/browser",
     "//storage/browser:test_support",
-    "//storage/common:database_status",
     "//testing/gmock",
     "//testing/gtest",
   ]
@@ -255,8 +244,16 @@ source_set("test_support") {
   sources = [
     "dom_storage/leveldb/test_support/test_leveldb_utils.cc",
     "dom_storage/leveldb/test_support/test_leveldb_utils.h",
+    "dom_storage/sqlite/test_support/test_sqlite_utils.cc",
+    "dom_storage/sqlite/test_support/test_sqlite_utils.h",
     "dom_storage/test_support/dom_storage_database_testing.cc",
     "dom_storage/test_support/dom_storage_database_testing.h",
+    "dom_storage/test_support/fake_dom_storage_database.cc",
+    "dom_storage/test_support/fake_dom_storage_database.h",
+    "dom_storage/test_support/fake_dom_storage_database_factory.cc",
+    "dom_storage/test_support/fake_dom_storage_database_factory.h",
+    "dom_storage/test_support/scoped_dom_storage_database_factory_for_testing.cc",
+    "dom_storage/test_support/scoped_dom_storage_database_factory_for_testing.h",
     "dom_storage/test_support/storage_area_test_util.cc",
     "dom_storage/test_support/storage_area_test_util.h",
     "indexed_db/leveldb/fake_leveldb_factory.cc",
@@ -265,8 +262,6 @@ source_set("test_support") {
     "indexed_db/leveldb/mock_level_db.h",
     "indexed_db/scopes/leveldb_scopes_test_utils.cc",
     "indexed_db/scopes/leveldb_scopes_test_utils.h",
-    "shared_storage/shared_storage_test_utils.cc",
-    "shared_storage/shared_storage_test_utils.h",
   ]
 
   deps = [
@@ -274,7 +269,6 @@ source_set("test_support") {
     "//base/test:test_support",
     "//content/test:test_support",
     "//sql:test_support",
-    "//storage/common:database_status",
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/leveldatabase",

@@ -82,17 +82,17 @@ extern const CGFloat kSecondaryToolbarWithoutOmniboxHeight;
 // preferred font size.
 extern const CGFloat kNonDynamicToolbarHeight;
 // Height of the toolbar when in fullscreen.
-extern const CGFloat kToolbarHeightFullscreen;
+extern const CGFloat kLegacyToolbarHeightFullscreen;
 // Height of the part of the toolbar not scaling up when the user changes the
 // preferred font size.
 extern const CGFloat kNonDynamicToolbarHeightFullscreen;
 
 // Accessibility identifier of the tools menu button.
-extern NSString* const kToolbarToolsMenuButtonIdentifier;
+extern NSString* const kLegacyToolbarToolsMenuButtonIdentifier;
 // Accessibility identifier of the stack button.
 extern NSString* const kToolbarStackButtonIdentifier;
 // Accessibility identifier of the share button.
-extern NSString* const kToolbarShareButtonIdentifier;
+extern NSString* const kLegacyToolbarShareButtonIdentifier;
 // Accessibility identifier of the NewTab button.
 extern NSString* const kToolbarNewTabButtonIdentifier;
 

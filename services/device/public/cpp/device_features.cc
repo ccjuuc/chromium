@@ -4,18 +4,26 @@
 
 #include "services/device/public/cpp/device_features.h"
 
+#include "build/build_config.h"
 #include "services/device/public/cpp/geolocation/buildflags.h"
 
-namespace features {
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
+#endif  // BUILDFLAG(IS_WIN)
 
-// Enables mitigation algorithm to prevent attempt of calibration from an
-// attacker.
-BASE_FEATURE(kComputePressureBreakCalibrationMitigation,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+namespace features {
 
 // Enables an extra set of concrete sensors classes based on Generic Sensor API,
 // which expose previously unexposed platform features, e.g. ALS or Magnetometer
 BASE_FEATURE(kGenericSensorExtraClasses, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables an Allow/Ask/Block set of default permissions for sensors.
+BASE_FEATURE(kSensorsAllowAskBlockPermissionModel,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables browser-side privacy mitigations for generic sensors.
+BASE_FEATURE(kSensorPrivacyMitigations, base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Expose serial port logical connection state and dispatch connection events
 // for Bluetooth serial ports when the Bluetooth device connection state
 // changes.
@@ -27,6 +35,14 @@ BASE_FEATURE(kSerialPortConnected,
 #endif  // !BUILDFLAG(IS_ANDROID)
 );
 
+// Restricts the sharing of C++ SerialPort and WritableStream instances across
+// different DOMWrapperWorld contexts to prevent cross-world leaks.
+BASE_FEATURE(kWebSerialWorldIsolatedCache, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Avoid triggering the macOS Bluetooth permission prompt when
+// navigator.serial.getPorts() is called and permission is undetermined.
+BASE_FEATURE(kAvoidBluetoothPromptInGetPorts, base::FEATURE_ENABLED_BY_DEFAULT);
+
 // This feature allows to dynamically introduce an additional list of devices
 // blocked by WebUSB via a Finch parameter. This parameter should be specified
 // in the Finch configuration to manage the list of blocked devices.
@@ -34,25 +50,59 @@ BASE_FEATURE(kWebUsbBlocklist,
              "WebUSBBlocklist",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// When enabled, WebUSB control transfers are blocked if they target a
+// protected interface class, even if the recipient is not set to interface
+// or endpoint. This protects devices which ignore this field.
+BASE_FEATURE(kWebUsbProtectedClassControlTransferBlock,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, WebUSB control transfers enforce a positive matching allowlist
+// for Standard requests (permitting only GET_STATUS, GET_DESCRIPTOR,
+// GET_CONFIGURATION, GET_INTERFACE, SYNCH_FRAME). All other Standard requests
+// are strictly blocked.
+BASE_FEATURE(kWebUsbEnforceStandardRequestAllowlist,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, WebUSB rejects claiming interfaces that share endpoints with
+// already claimed interfaces, and avoids overwriting endpoint mapping entries.
+// See crbug.com/513167952.
+BASE_FEATURE(kWebUsbHardenEndpointAliasing, base::FEATURE_ENABLED_BY_DEFAULT);
+
 // When enabled, accessing the navigator.hid attribute does not prevent the
 // frame from entering the back forward cache.
 BASE_FEATURE(kWebHidAttributeAllowsBackForwardCache,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_WIN)
-// Enable integration with the Windows system-level location permission.
-BASE_FEATURE(kWinSystemLocationPermission, base::FEATURE_ENABLED_BY_DEFAULT);
+// Enables the event-based approach for monitoring the Windows system-level
+// location permission. If disabled, the polling approach is used.
+BASE_FEATURE(kWinSystemLocationPermissionEventBased,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 // Enables a fix for a HID issue where feature reports read from devices that
 // do not use report IDs would incorrectly include an extra zero byte at the
 // start of the report and truncate the last byte of the report.
 BASE_FEATURE(kHidGetFeatureReportFix, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Defines a feature parameter for the `kWinSystemLocationPermission` feature.
-// This parameter controls the polling interval (in milliseconds) for checking
-// the permission status. The default polling interval is set to 500
-// milliseconds.
-const base::FeatureParam<int> kWinSystemLocationPermissionPollingParam{
-    &kWinSystemLocationPermission, "polling_interval_in_ms", 500};
+// When enabled, UsbDeviceHandleWin will ensure that pending OVERLAPPED requests
+// are not deleted until the kernel has signaled completion, even if the
+// handle is closed.
+BASE_FEATURE(kSafeUsbDeviceHandleWinClose, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, HidConnectionWin will ensure that pending OVERLAPPED requests
+// are not deleted until the kernel has signaled completion, even if the
+// connection is closed.
+BASE_FEATURE(kSafeHidConnectionWinClose, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, SerialPortImpl will ensure that shared memory buffers backing
+// pending OVERLAPPED requests are not unmapped until the kernel has signaled
+// completion, even if the port is closed.
+BASE_FEATURE(kSafeSerialPortImplWinClose, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, SerialDeviceEnumeratorWin reads the USB product and interface
+// string descriptors from the hub driver to build the display name for
+// USB-backed serial ports. When disabled the "bus reported device description"
+// is used instead.
+BASE_FEATURE(kSerialUsbDisplayNameWin, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_WIN)
 
 // Enables usage of the location provider manager to select between
@@ -63,12 +113,6 @@ BASE_FEATURE(kLocationProviderManager, base::FEATURE_ENABLED_BY_DEFAULT);
 #else
 BASE_FEATURE(kLocationProviderManager, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-
-#if BUILDFLAG(IS_CHROMEOS)
-// Enables crash key logging for USB device open operations on ChromeOS. See
-// crbug.com/332722607. Can be disabled as a kill switch if needed.
-BASE_FEATURE(kUsbDeviceLinuxOpenCrashKey, base::FEATURE_ENABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID)
 // Enables registering & unregistering of the Battery Status Manager broadcast
@@ -84,6 +128,10 @@ BASE_FEATURE(kBatteryStatusManagerBroadcastReceiverInBackground,
 BASE_FEATURE(kSecurityKeyHidInterfacesAreFido,
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Enables recursive filtering of nested HID collections to prevent WebHID
+// security bypasses (e.g., nested keyboards or FIDO keys).
+BASE_FEATURE(kWebHidRecursiveFiltering, base::FEATURE_ENABLED_BY_DEFAULT);
 
 const base::FeatureParam<device::mojom::LocationProviderManagerMode>::Option
     location_provider_manager_mode_options[] = {
@@ -117,14 +165,52 @@ const base::FeatureParam<device::mojom::LocationProviderManagerMode>
         &location_provider_manager_mode_options};
 #endif  // BUILDFLAG(IS_MAC)
 
+namespace {
+
+#if BUILDFLAG(IS_WIN)
+// Returns true if the OS provides the Windows location stack that Chromium's
+// platform geolocation support depends on.
+//
+// Two separate pieces arrived in Windows 10, version 1903 (build 18362): the
+// `Windows.Security.Authorization.AppCapabilityAccess` namespace used to query
+// and observe the system-level location permission (which requires
+// UniversalApiContract v8), and the Windows Location Platform that backs
+// `LocationProviderWinrt`. Earlier releases, including Windows Server 2019
+// (build 17763), provide neither. See crbug.com/540482875.
+bool IsWindowsLocationPlatformSupported() {
+  return base::win::GetVersion() >= base::win::Version::WIN10_19H1;
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+}  // namespace
+
 bool IsOsLevelGeolocationPermissionSupportEnabled() {
 #if BUILDFLAG(IS_WIN)
-  return base::FeatureList::IsEnabled(features::kWinSystemLocationPermission);
-#elif BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  // Activating the AppCapability runtime class fails where it is unavailable,
+  // so fall back to the legacy behavior of ignoring the system-level
+  // permission on those versions.
+  if (!IsWindowsLocationPlatformSupported()) {
+    return false;
+  }
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
   return true;
 #else
   return false;
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+}
+
+device::mojom::LocationProviderManagerMode GetLocationProviderManagerMode() {
+#if BUILDFLAG(IS_WIN)
+  // Because `kPlatformOnly` has no fallback, leaving it selected where the
+  // Windows Location Platform is unavailable makes every location request fail
+  // with `kPositionUnavailable`. Use the network provider instead, which is the
+  // behavior Windows had before the platform provider was enabled by default.
+  if (!IsWindowsLocationPlatformSupported()) {
+    return device::mojom::LocationProviderManagerMode::kNetworkOnly;
+  }
 #endif  // BUILDFLAG(IS_WIN)
+  return kLocationProviderManagerParam.Get();
 }
 
 // Controls whether Chrome will try to automatically detach kernel drivers when
@@ -134,6 +220,12 @@ BASE_FEATURE(kAutomaticUsbDetach, base::FEATURE_ENABLED_BY_DEFAULT);
 #elif BUILDFLAG(IS_LINUX)
 BASE_FEATURE(kAutomaticUsbDetach, base::FEATURE_DISABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+// Controls whether we report the product name (like macOS and Win)
+// over the HID_NAME in the WebHID API.
+BASE_FEATURE(kProductNameOverHidName, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_WIN)
 // Splits DTR and RTS control signals. See crbug.com/420689824.

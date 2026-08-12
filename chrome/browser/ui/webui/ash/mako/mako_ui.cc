@@ -4,14 +4,15 @@
 
 #include "chrome/browser/ui/webui/ash/mako/mako_ui.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/lobster/lobster_controller.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
-#include "build/branding_buildflags.h"
-#include "chrome/browser/ash/input_method/editor_helpers.h"
 #include "chrome/browser/ash/input_method/editor_mediator_factory.h"
 #include "chrome/browser/ash/lobster/lobster_service.h"
 #include "chrome/browser/ash/lobster/lobster_service_provider.h"
@@ -31,10 +32,6 @@
 
 namespace ash {
 namespace {
-
-constexpr int kEnUSResourceIds[] = {
-    IDR_MAKO_ORCA_HTML, IDR_MAKO_PRIVACY_HTML, IDR_MAKO_LOBSTER_HTML,
-    IDR_MAKO_ORCA_JS,   IDR_MAKO_LOBSTER_JS,   IDR_MAKO_ORCA_TRANSLATION_EN_JS};
 
 constexpr int kLobsterResourceIds[] = {
     IDR_MAKO_LOBSTER_HTML,
@@ -71,24 +68,15 @@ MakoUntrustedUI::MakoUntrustedUI(content::WebUI* web_ui)
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(), kChromeUIMakoURL);
 
-  base::span<const webui::ResourcePath> orca_resources = kOrcaResources;
-
   LobsterService* lobster_service =
       ash::features::IsLobsterEnabled()
           ? LobsterServiceProvider::GetForProfile(Profile::FromWebUI(web_ui))
           : nullptr;
-  const bool should_use_l10n_strings = input_method::ShouldUseL10nStrings();
-
   auto should_use_resource =
       [&](const webui::ResourcePath& resource_path) -> bool {
     // when lobster access is not granted, lobster resources are not allowed.
     if (lobster_service == nullptr &&
-        base::Contains(kLobsterResourceIds, resource_path.id)) {
-      return false;
-    }
-    // when l10n is disabled, only EN-US resources are allowed.
-    if (!should_use_l10n_strings &&
-        !base::Contains(kEnUSResourceIds, resource_path.id)) {
+        std::ranges::contains(kLobsterResourceIds, resource_path.id)) {
       return false;
     }
     return true;
@@ -96,12 +84,10 @@ MakoUntrustedUI::MakoUntrustedUI(content::WebUI* web_ui)
 
   // TODO: b:333625296 - Add tests for this conditional behavior
   {
-    std::vector<webui::ResourcePath> orca_en_us_resources;
-    std::ranges::copy_if(orca_resources,
-                         std::back_inserter(orca_en_us_resources),
+    std::vector<webui::ResourcePath> allowed_resources;
+    std::ranges::copy_if(kOrcaResources, std::back_inserter(allowed_resources),
                          should_use_resource);
-    webui::SetupWebUIDataSource(source, orca_en_us_resources,
-                                IDR_MAKO_ORCA_HTML);
+    webui::SetupWebUIDataSource(source, allowed_resources, IDR_MAKO_ORCA_HTML);
   }
 
   source->SetDefaultResource(IDR_MAKO_ORCA_HTML);

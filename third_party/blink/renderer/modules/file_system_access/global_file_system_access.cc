@@ -51,16 +51,16 @@ constexpr bool IsHTTPWhitespace(UChar chr) {
 }
 
 bool IsValidSuffixCodePoint(UChar chr) {
-  return IsASCIIAlphanumeric(chr) || chr == '+' || chr == '.';
+  return IsAsciiAlphanumeric(chr) || chr == '+' || chr == '.';
 }
 
 bool IsValidIdCodePoint(UChar chr) {
-  return IsASCIIAlphanumeric(chr) || chr == '_' || chr == '-';
+  return IsAsciiAlphanumeric(chr) || chr == '_' || chr == '-';
 }
 
 bool VerifyIsValidExtension(const String& extension,
                             ExceptionState& exception_state) {
-  if (!extension.StartsWith(".")) {
+  if (!extension.starts_with('.')) {
     exception_state.ThrowTypeError(
         StrCat({"Extension '", extension, "' must start with '.'."}));
     return false;
@@ -70,7 +70,7 @@ bool VerifyIsValidExtension(const String& extension,
         StrCat({"Extension '", extension, "' contains invalid characters."}));
     return false;
   }
-  if (extension.EndsWith(".")) {
+  if (extension.ends_with('.')) {
     exception_state.ThrowTypeError(
         StrCat({"Extension '", extension, "' must not end with '.'."}));
     return false;
@@ -105,7 +105,7 @@ bool AddExtension(const String& extension,
   if (!VerifyIsValidExtension(extension, exception_state))
     return false;
 
-  extensions.push_back(extension.Substring(1));
+  extensions.push_back(extension.substr(1));
   return true;
 }
 
@@ -126,8 +126,7 @@ Vector<mojom::blink::ChooseFileSystemEntryAcceptsOptionPtr> ConvertAccepts(
         exception_state.ThrowTypeError(StrCat({"Invalid type: ", a.first}));
         return {};
       }
-      Vector<String> parsed_type;
-      type.Split('/', true, parsed_type);
+      Vector<StringView> parsed_type = StringView(type).Split('/');
       if (parsed_type.size() != 2) {
         exception_state.ThrowTypeError(StrCat({"Invalid type: ", a.first}));
         return {};

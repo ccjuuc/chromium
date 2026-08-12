@@ -5,15 +5,19 @@
 #include "base/test/gmock_expected_support.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/app_menu_button_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
+#include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/pending_migration_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
@@ -23,6 +27,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/menu/menu_scroll_view_container.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_test.h"
 
 namespace web_app {
@@ -52,7 +57,7 @@ class WebAppMenuBrowserTest
  public:
   WebAppMenuBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
-        {features::kWebAppPredictableAppUpdating,
+        {blink::features::kWebAppMigrationApi,
          blink::features::kDesktopPWAsTabStrip,
          blink::features::kDesktopPWAsTabStripCustomizations},
         {});
@@ -73,7 +78,8 @@ class WebAppMenuBrowserTest
       web_app_info->title = u"Test App";
       web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
       if (app_type == AppType::kTabbed) {
-        web_app_info->display_override = {blink::mojom::DisplayMode::kTabbed};
+        web_app_info->display_override = {web_app::DisplayOverride::Create(
+            blink::mojom::DisplayMode::kTabbed)};
         web_app_info->title = u"Tabbed App";
       }
       app_id_ = InstallWebApp(std::move(web_app_info));
@@ -101,10 +107,11 @@ class WebAppMenuBrowserTest
 
  protected:
   WebAppMenuButton* menu_button() {
-    return static_cast<WebAppMenuButton*>(
-        BrowserView::GetBrowserViewForBrowser(app_browser_)
-            ->toolbar_button_provider()
-            ->GetAppMenuButton());
+    return views::AsViewClass<WebAppMenuButton>(
+        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+            kToolbarAppMenuButtonElementId,
+            views::ElementTrackerViews::GetContextForView(
+                BrowserView::GetBrowserViewForBrowser(app_browser_))));
   }
 
   const webapps::AppId& app_id() const { return app_id_; }
@@ -167,6 +174,19 @@ IN_PROC_BROWSER_TEST_F(WebAppMenuBrowserTest, InvokeUi_main_pending_update) {
     update_info.set_name("Updated app name");
     update_info.set_was_ignored(false);
     update->UpdateApp(app_id())->SetPendingUpdateInfo(std::move(update_info));
+  }
+
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppMenuBrowserTest, InvokeUi_main_pending_migration) {
+  {
+    ScopedRegistryUpdate update = provider().sync_bridge_unsafe().BeginUpdate();
+    PendingMigrationInfo migration_info(
+        webapps::ManifestId(GURL("https://new.app.com/")),
+        MigrationBehavior::kSuggest);
+    update->UpdateApp(app_id())->SetPendingMigrationInfo(
+        std::move(migration_info));
   }
 
   ShowAndVerifyUi();

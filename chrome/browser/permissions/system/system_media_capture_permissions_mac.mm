@@ -17,6 +17,7 @@
 #import "base/task/sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/permissions/system/media_authorization_wrapper_mac.h"
+#include "chrome/browser/permissions/system/system_permission_common.h"
 #include "media/base/media_switches.h"
 #include "ui/base/cocoa/permissions_utils.h"
 
@@ -24,7 +25,7 @@ namespace system_permission_settings {
 
 namespace {
 
-std::optional<bool> g_is_screen_capture_allowed_for_testing = std::nullopt;
+std::optional<bool> g_is_screen_capture_allowed_for_testing;
 
 bool UsingFakeMediaDevices() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -170,7 +171,7 @@ void RequestSystemVideoCapturePermission(base::OnceClosure callback) {
 
 void SetMediaAuthorizationWrapperForTesting(
     MediaAuthorizationWrapper* wrapper) {
-  CHECK(!g_media_authorization_wrapper_for_tests);
+  CHECK(!wrapper || !g_media_authorization_wrapper_for_tests);
   g_media_authorization_wrapper_for_tests = wrapper;
 }
 

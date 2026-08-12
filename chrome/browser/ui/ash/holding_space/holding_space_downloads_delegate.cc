@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/holding_space/holding_space_downloads_delegate.h"
 
+#include <algorithm>
 #include <optional>
 #include <set>
 
@@ -16,8 +17,7 @@
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/dark_light_mode_controller_impl.h"
-#include "base/byte_count.h"
-#include "base/containers/contains.h"
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -30,6 +30,7 @@
 #include "content/public/browser/download_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_styles.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
@@ -54,7 +55,10 @@ gfx::ImageSkia CreateErrorPlaceholderImageSkia(
   return gfx::ImageSkiaOperations::CreateSuperimposedImage(
       image_util::CreateEmptyImage(size),
       gfx::CreateVectorIcon(
-          vector_icons::kErrorOutlineIcon, kHoldingSpaceIconSize,
+          ::features::IsRoundedIconsEnabled()
+              ? vector_icons::kErrorIcon
+              : vector_icons::kErrorOutlineOldIcon,
+          kHoldingSpaceIconSize,
           cros_styles::ResolveColor(
               color_name,
               /*is_dark_mode=*/
@@ -514,7 +518,8 @@ void HoldingSpaceDownloadsDelegate::OnHoldingSpaceItemsRemoved(
   // download, that in-progress download can be destroyed. The download will
   // continue, but it will no longer be associated with a holding space item.
   std::erase_if(in_progress_downloads_, [&](const auto& in_progress_download) {
-    return base::Contains(items, in_progress_download->GetHoldingSpaceItem());
+    return std::ranges::contains(items,
+                                 in_progress_download->GetHoldingSpaceItem());
   });
 }
 
@@ -634,7 +639,7 @@ void HoldingSpaceDownloadsDelegate::OnDownloadFailed(
     // NOTE: Removing `item` from the `model()` will result in the
     // `in_progress_download` being erased.
     model()->RemoveItem(item->id());
-    DCHECK(!base::Contains(in_progress_downloads_, in_progress_download));
+    DCHECK(!in_progress_downloads_.contains(in_progress_download));
     return;
   }
   EraseDownload(in_progress_download);

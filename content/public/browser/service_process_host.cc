@@ -53,9 +53,25 @@ ServiceProcessHost::Options::WithExtraCommandLineSwitches(
   return *this;
 }
 
+ServiceProcessHost::Options&
+ServiceProcessHost::Options::WithExtraCommandLineSwitchKeyValues(
+    std::vector<std::pair<std::string, std::string>> switch_key_values) {
+  extra_switch_key_values = std::move(switch_key_values);
+  return *this;
+}
+
 ServiceProcessHost::Options& ServiceProcessHost::Options::WithProcessCallback(
     base::OnceCallback<void(const base::Process&)> callback) {
   process_callback = std::move(callback);
+  return *this;
+}
+
+ServiceProcessHost::Options& ServiceProcessHost::Options::WithObserver(
+    base::WeakPtr<Observer> obs) {
+  CHECK(!observer) << "Only one per-instance observer may be registered. "
+                      "Use a service-specific manager to fan out to multiple "
+                      "observers.";
+  observer = std::move(obs);
   return *this;
 }
 
@@ -74,6 +90,12 @@ ServiceProcessHost::Options& ServiceProcessHost::Options::WithGpuClient(
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
   allow_gpu_client = true;
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
+  return *this;
+}
+
+ServiceProcessHost::Options& ServiceProcessHost::Options::WithPriority(
+    base::Process::Priority pri) {
+  priority = pri;
   return *this;
 }
 

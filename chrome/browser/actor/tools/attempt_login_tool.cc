@@ -7,30 +7,51 @@
 #include "base/barrier_closure.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/actor/actor_features.h"
 #include "chrome/browser/actor/actor_task.h"
+#include "chrome/browser/actor/tools/click_tool_request.h"
 #include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
 #include "chrome/browser/actor/tools/tool_delegate.h"
+#include "chrome/browser/affiliations/affiliation_service_factory.h"
+#include "chrome/browser/autofill/actor/one_time_tokens/actor_one_time_token_filling_service.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/password_manager/actor_login/actor_login_service.h"
+#include "chrome/browser/password_manager/actor_login/chrome_actor_login_delegate_client.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/common/actor.mojom-data-view.h"
+#include "chrome/common/actor.mojom-shared.h"
+#include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor_webui.mojom-data-view.h"
 #include "chrome/common/actor_webui.mojom.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/affiliations/core/browser/affiliation_service.h"
+#include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/favicon/core/favicon_service.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_service.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
 #include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_manager_util.h"
+#include "components/variations/service/variations_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
+#include "google_apis/gaia/gaia_urls.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
 
+// TODO(crbug.com/482430429): Reconsider the use of BrowserWindowInterface on
+// Android.
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#endif
+
 namespace actor {
+
+using actor_login::ChromeActorLoginDelegateClient;
 
 namespace {
 
@@ -38,48 +59,56 @@ content::RenderFrameHost& GetPrimaryMainFrameOfTab(tabs::TabHandle tab_handle) {
   return *tab_handle.Get()->GetContents()->GetPrimaryMainFrame();
 }
 
-mojom::ActionResultCode LoginErrorToActorError(
-    actor_login::ActorLoginError login_error) {
-  switch (login_error) {
-    case actor_login::ActorLoginError::kServiceBusy:
-      return mojom::ActionResultCode::kLoginTooManyRequests;
-    case actor_login::ActorLoginError::kInvalidTabInterface:
-      return mojom::ActionResultCode::kTabWentAway;
-    case actor_login::ActorLoginError::kFillingNotAllowed:
-      return mojom::ActionResultCode::kLoginFillingNotAllowed;
-    case actor_login::ActorLoginError::kFeatureDisabled:
-      return mojom::ActionResultCode::kLoginFeatureDisabled;
-  }
+std::string MaybeTargetDebugString(const std::optional<PageTarget>& target) {
+  return target ? DebugString(*target) : "null";
 }
 
-mojom::ActionResultCode LoginResultToActorResult(
+bool IsSuccessfulPasswordCredentialFilling(
     actor_login::LoginStatusResult login_result) {
-  // TODO(crbug.com/427817201): Re-assess whether all success statuses should
-  // map to kOk or if differentiation is needed.
   switch (login_result) {
     case actor_login::LoginStatusResult::kSuccessUsernameAndPasswordFilled:
     case actor_login::LoginStatusResult::kSuccessUsernameFilled:
     case actor_login::LoginStatusResult::kSuccessPasswordFilled:
-      return mojom::ActionResultCode::kOk;
+      return true;
+    case actor_login::LoginStatusResult::kSuccessFederated:
     case actor_login::LoginStatusResult::kErrorNoSigninForm:
-      return mojom::ActionResultCode::kLoginNotLoginPage;
     case actor_login::LoginStatusResult::kErrorInvalidCredential:
-      return mojom::ActionResultCode::kLoginNoCredentialsAvailable;
     case actor_login::LoginStatusResult::kErrorNoFillableFields:
-      return mojom::ActionResultCode::kLoginNoFillableFields;
     case actor_login::LoginStatusResult::kErrorDeviceReauthRequired:
-      return mojom::ActionResultCode::kLoginDeviceReauthRequired;
     case actor_login::LoginStatusResult::kErrorDeviceReauthFailed:
-      return mojom::ActionResultCode::kLoginDeviceReauthFailed;
+    case actor_login::LoginStatusResult::kErrorFederatedContinuation:
+    case actor_login::LoginStatusResult::kErrorFederatedAccountNotLoggedIn:
+    case actor_login::LoginStatusResult::kErrorFederatedAccountIsSignUp:
+    case actor_login::LoginStatusResult::kErrorFederatedAccountNotAvailable:
+    case actor_login::LoginStatusResult::kErrorFederatedIdpReturnedError:
+    case actor_login::LoginStatusResult::kErrorFederatedIdpNetworkError:
+    case actor_login::LoginStatusResult::kErrorFederatedTokenRequestAborted:
+    case actor_login::LoginStatusResult::kErrorFederatedFrameNotActive:
+    case actor_login::LoginStatusResult::
+        kErrorFederatedExpectedAccountNotPresent:
+    case actor_login::LoginStatusResult::kErrorFederatedTimeout:
+    case actor_login::LoginStatusResult::kRequiresButtonClick:
+    case actor_login::LoginStatusResult::kErrorPageChangedDuringFilling:
+      return false;
   }
 }
 
 }  // namespace
 
-AttemptLoginTool::AttemptLoginTool(TaskId task_id,
-                                   ToolDelegate& tool_delegate,
-                                   tabs::TabInterface& tab)
-    : Tool(task_id, tool_delegate), tab_handle_(tab.GetHandle()) {}
+AttemptLoginTool::AttemptLoginTool(
+    TaskId task_id,
+    ToolDelegate& tool_delegate,
+    tabs::TabInterface& tab,
+    std::optional<PageTarget> password_button,
+    std::optional<PageTarget> sign_in_with_google_button,
+    bool requires_opening_web_contents)
+    : Tool(task_id, tool_delegate),
+      tab_handle_(tab.GetHandle()),
+      password_button_(password_button),
+      sign_in_with_google_button_(sign_in_with_google_button),
+      requires_opening_web_contents_(requires_opening_web_contents),
+      attempt_login_tool_start_time_(base::TimeTicks::Now()),
+      quality_logger_(g_browser_process->variations_service()) {}
 
 AttemptLoginTool::~AttemptLoginTool() {
   // Uploading the quality log on the destruction of the tool.
@@ -95,11 +124,18 @@ AttemptLoginTool::~AttemptLoginTool() {
   }
   OptimizationGuideKeyedService* opt_guide_service =
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
+
+  // Disable MQLS upload if Password Checkup is enabled while prototyping to
+  // avoid uploading incorrect logs.
+  // TODO(crbug.com/485620841): Remove this check once the prototyping is
+  // complete for Automated Password Change.
+  bool prototype_features_enabled = base::FeatureList::IsEnabled(
+      password_manager::features::kPasswordCheckupPrototype);
+
   if (opt_guide_service &&
       base::FeatureList::IsEnabled(
-          password_manager::features::kActorLoginQualityLogs)) {
-    // TODO(crbug.com/459393643): Add a check for filtering out logs of
-    // enterprise users.
+          password_manager::features::kActorLoginQualityLogs) &&
+      !prototype_features_enabled) {
     quality_logger_.UploadFinalLog(
         opt_guide_service->GetModelQualityLogsUploaderService());
   }
@@ -129,28 +165,61 @@ void AttemptLoginTool::Invoke(ToolCallback callback) {
 
   invoke_callback_ = std::move(callback);
 
+  journal().Log(
+      JournalURL(), task_id(), "LoginTargets",
+      JournalDetailsBuilder()
+          .Add("password_button", MaybeTargetDebugString(password_button_))
+          .Add("sign_in_with_google_button",
+               MaybeTargetDebugString(sign_in_with_google_button_))
+          .Build());
+
   // First check if there is a user selected credential for the current request
   // origin. If so, use it immediately.
   const url::Origin& current_origin = main_rfh->GetLastCommittedOrigin();
   const std::optional<ToolDelegate::CredentialWithPermission>
-      user_selected_credential_and_pemission =
+      user_selected_credential_and_permission =
           tool_delegate().GetUserSelectedCredential(current_origin);
-  if (user_selected_credential_and_pemission.has_value()) {
+  if (user_selected_credential_and_permission.has_value()) {
     const bool should_store_permission =
-        user_selected_credential_and_pemission->permission_duration ==
+        user_selected_credential_and_permission->permission_duration ==
         webui::mojom::UserGrantedPermissionDuration::kAlwaysAllow;
+
     GetActorLoginService().AttemptLogin(
-        tab, user_selected_credential_and_pemission->credential,
+        ChromeActorLoginDelegateClient::GetOrCreateForWebContents(
+            tab->GetContents()),
+        user_selected_credential_and_permission->credential,
         should_store_permission, quality_logger_.AsWeakPtr(),
+        attempt_login_tool_start_time_,
+        GetFrameFillingStartedCallback(
+            tab, user_selected_credential_and_permission->credential),
         base::BindOnce(&AttemptLoginTool::OnAttemptLogin,
                        weak_ptr_factory_.GetWeakPtr(),
-                       user_selected_credential_and_pemission->credential,
-                       should_store_permission));
+                       user_selected_credential_and_permission->credential,
+                       should_store_permission),
+        tool_delegate().GetActionSequenceDelegate());
     return;
   }
 
+  // Only false on Android.
+  if (!affiliations_updated_) {
+    affiliations::AffiliationService* affiliation_service =
+        AffiliationServiceFactory::GetForProfile(&tool_delegate().GetProfile());
+    if (affiliation_service) {
+      affiliation_service->UpdateAffiliationsAndBranding(
+          {affiliations::FacetURI::FromPotentiallyInvalidSpec(
+              current_origin.GetURL().GetWithEmptyPath().spec())},
+          base::BindOnce(&AttemptLoginTool::OnAffiliationsUpdated,
+                         weak_ptr_factory_.GetWeakPtr()));
+    } else {
+      // Unblock the tool execution even if AffiliationService is not available.
+      affiliations_updated_ = true;
+    }
+  }
+
   GetActorLoginService().GetCredentials(
-      tab, quality_logger_.AsWeakPtr(),
+      ChromeActorLoginDelegateClient::GetOrCreateForWebContents(
+          tab->GetContents()),
+      sign_in_with_google_button_.has_value(), quality_logger_.AsWeakPtr(),
       base::BindOnce(&AttemptLoginTool::OnGetCredentials,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -158,8 +227,9 @@ void AttemptLoginTool::Invoke(ToolCallback callback) {
 void AttemptLoginTool::OnGetCredentials(
     actor_login::CredentialsOrError credentials) {
   if (!credentials.has_value()) {
-    PostResponseTask(std::move(invoke_callback_),
-                     MakeResult(LoginErrorToActorError(credentials.error())));
+    PostResponseTask(
+        std::move(invoke_callback_),
+        MakeResult(actor_login::LoginErrorToActorResult(credentials.error())));
     return;
   }
 
@@ -172,41 +242,34 @@ void AttemptLoginTool::OnGetCredentials(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          actor::kGlicEnableAutoLoginPersistedPermissions)) {
-    const auto it_persistent_permission =
-        std::find_if(credentials_.begin(), credentials_.end(),
-                     [](const actor_login::Credential& cred) {
-                       return cred.has_persistent_permission;
-                     });
-    if (it_persistent_permission != credentials_.end()) {
-      OnCredentialSelected(webui::mojom::SelectCredentialDialogResponse::New(
-          task_id().value(), /*error_reason=*/std::nullopt,
-          webui::mojom::UserGrantedPermissionDuration::kAlwaysAllow,
-          it_persistent_permission->id.value()));
-      return;
-    }
+  const auto it_persistent_permission =
+      std::find_if(credentials_.begin(), credentials_.end(),
+                   [](const actor_login::Credential& cred) {
+                     return cred.has_persistent_permission;
+                   });
+  if (it_persistent_permission != credentials_.end()) {
+    OnCredentialSelected(webui::mojom::SelectCredentialDialogResponse::New(
+        task_id().value(), /*error_reason=*/std::nullopt,
+        webui::mojom::UserGrantedPermissionDuration::kAlwaysAllow,
+        it_persistent_permission->id.value()));
+    return;
   }
 
-  std::erase_if(credentials_, [](const actor_login::Credential& cred) {
-    return !cred.immediatelyAvailableToLogin;
-  });
+  // When federated credentials are supported, allow selection of passwords on
+  // non-login pages. If the user selects a password in this case, it will be up
+  // to the server to find the password form.
+  if (!base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin)) {
+    std::erase_if(credentials_, [](const actor_login::Credential& cred) {
+      return !cred.immediatelyAvailableToLogin;
+    });
 
-  if (credentials_.empty()) {
-    if (base::FeatureList::IsEnabled(
-            password_manager::features::kActorLoginGetCredentialsNoLoginForm)) {
+    if (credentials_.empty()) {
       // Saved credentials exist, but none are available for login, which
       // means that this is not a signin page.
       PostResponseTask(std::move(invoke_callback_),
                        MakeResult(mojom::ActionResultCode::kLoginNotLoginPage));
-    } else {
-      // Don't differentiate between no saved credentials and no login form if
-      // the flag isn't enabled.
-      PostResponseTask(
-          std::move(invoke_callback_),
-          MakeResult(mojom::ActionResultCode::kLoginNoCredentialsAvailable));
+      return;
     }
-    return;
   }
 
   tabs::TabInterface* tab = tab_handle_.Get();
@@ -216,17 +279,7 @@ void AttemptLoginTool::OnGetCredentials(
     return;
   }
 
-  // Unless the flag is enabled, always auto-select the first credential, which
-  // is the credential that is most likely to be the correct one.
-  if (base::FeatureList::IsEnabled(actor::kGlicEnableAutoLoginDialogs)) {
-    FetchIcons();
-  } else {
-    // The task ID doesn't matter here because the task ID check is already
-    // done at this point.
-    auto response = webui::mojom::SelectCredentialDialogResponse::New();
-    response->selected_credential_id = credentials_[0].id.value();
-    OnCredentialSelected(std::move(response));
-  }
+  FetchIcons();
 }
 
 void AttemptLoginTool::FetchIcons() {
@@ -244,8 +297,15 @@ void AttemptLoginTool::FetchIcons() {
 
   base::flat_set<GURL> unique_sites;
   for (const auto& cred : credentials_) {
-    if (!cred.source_site_or_app.empty()) {
+    if (cred.source_site_or_app.empty()) {
+      continue;
+    }
+    if (cred.type == actor_login::CredentialType::kPassword) {
       unique_sites.insert(GURL(cred.source_site_or_app));
+    } else if (cred.federation_detail &&
+               !cred.federation_detail->brand_icon.IsEmpty()) {
+      fetched_icons_[base::UTF16ToUTF8(cred.source_site_or_app)] =
+          cred.federation_detail->brand_icon;
     }
   }
 
@@ -282,6 +342,13 @@ void AttemptLoginTool::OnAllIconsFetched() {
       credentials_, fetched_icons_,
       base::BindOnce(&AttemptLoginTool::OnCredentialSelected,
                      weak_ptr_factory_.GetWeakPtr()));
+}
+
+void AttemptLoginTool::OnAffiliationsUpdated() {
+  affiliations_updated_ = true;
+  if (on_affiliations_updated_callback_) {
+    std::move(on_affiliations_updated_callback_).Run();
+  }
 }
 
 void AttemptLoginTool::OnCredentialSelected(
@@ -343,11 +410,26 @@ void AttemptLoginTool::OnCredentialSelected(
   webui::mojom::UserGrantedPermissionDuration permission_duration =
       response->permission_duration.value_or(
           webui::mojom::UserGrantedPermissionDuration::kOneTime);
+
+  SetUserSelectedCredential(*selected_credential, permission_duration);
+}
+
+void AttemptLoginTool::SetUserSelectedCredential(
+    actor_login::Credential selected_credential,
+    webui::mojom::UserGrantedPermissionDuration permission_duration) {
+  if (!affiliations_updated_) {
+    on_affiliations_updated_callback_ =
+        base::BindOnce(&AttemptLoginTool::SetUserSelectedCredential,
+                       weak_ptr_factory_.GetWeakPtr(), selected_credential,
+                       permission_duration);
+    return;
+  }
+
   tool_delegate().SetUserSelectedCredential(
-      ToolDelegate::CredentialWithPermission(*selected_credential,
+      ToolDelegate::CredentialWithPermission(selected_credential,
                                              permission_duration),
       base::BindOnce(&AttemptLoginTool::OnCredentialCachingDone,
-                     weak_ptr_factory_.GetWeakPtr(), *selected_credential,
+                     weak_ptr_factory_.GetWeakPtr(), selected_credential,
                      permission_duration));
 }
 
@@ -374,12 +456,17 @@ void AttemptLoginTool::OnCredentialCachingDone(
   const bool should_store_permission =
       permission_duration ==
       webui::mojom::UserGrantedPermissionDuration::kAlwaysAllow;
+
   GetActorLoginService().AttemptLogin(
-      tab, selected_credential, should_store_permission,
-      quality_logger_.AsWeakPtr(),
+      ChromeActorLoginDelegateClient::GetOrCreateForWebContents(
+          tab->GetContents()),
+      selected_credential, should_store_permission, quality_logger_.AsWeakPtr(),
+      attempt_login_tool_start_time_,
+      GetFrameFillingStartedCallback(tab, selected_credential),
       base::BindOnce(&AttemptLoginTool::OnAttemptLogin,
                      weak_ptr_factory_.GetWeakPtr(), selected_credential,
-                     should_store_permission));
+                     should_store_permission),
+      tool_delegate().GetActionSequenceDelegate());
 }
 
 void AttemptLoginTool::OnAttemptLogin(
@@ -387,15 +474,19 @@ void AttemptLoginTool::OnAttemptLogin(
     bool should_store_permission,
     actor_login::LoginStatusResultOrError login_status) {
   if (!login_status.has_value()) {
-    PostResponseTask(std::move(invoke_callback_),
-                     MakeResult(LoginErrorToActorError(login_status.error())));
+    tool_delegate().GetActorOneTimeTokenFillingService().AbortLoginTracking();
+    PostResponseTask(
+        std::move(invoke_callback_),
+        MakeResult(actor_login::LoginErrorToActorResult(login_status.error())));
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kActorLoginReauthTaskRefocus) &&
-      login_status.value() ==
-          actor_login::LoginStatusResult::kErrorDeviceReauthRequired) {
+  if (!IsSuccessfulPasswordCredentialFilling(login_status.value())) {
+    tool_delegate().GetActorOneTimeTokenFillingService().AbortLoginTracking();
+  }
+
+  if (login_status.value() ==
+      actor_login::LoginStatusResult::kErrorDeviceReauthRequired) {
     if (!tab_handle_.Get()) {
       PostResponseTask(std::move(invoke_callback_),
                        MakeResult(mojom::ActionResultCode::kTabWentAway));
@@ -409,9 +500,50 @@ void AttemptLoginTool::OnAttemptLogin(
     return;
   }
 
-  mojom::ActionResultCode code = LoginResultToActorResult(login_status.value());
-  PostResponseTask(std::move(invoke_callback_),
-                   IsOk(code) ? MakeOkResult() : MakeResult(code));
+  if (login_status.value() ==
+          actor_login::LoginStatusResult::kRequiresButtonClick &&
+      selected_credential.type == actor_login::CredentialType::kFederated &&
+      selected_credential.federation_detail->idp_origin ==
+          GaiaUrls::GetInstance()->gaia_origin() &&
+      sign_in_with_google_button_.has_value()) {
+    tool_delegate().EnqueueFollowupAction(std::make_unique<ClickToolRequest>(
+        tab_handle_, *sign_in_with_google_button_, mojom::ClickType::kLeft,
+        mojom::ClickCount::kSingle, requires_opening_web_contents_));
+    mojom::ActionResultPtr result =
+        MakeOkResult(/*requires_page_stabilization=*/false);
+    result->attempt_login_status = mojom::AttemptLoginStatus::kFederated;
+    PostResponseTask(std::move(invoke_callback_), std::move(result));
+    return;
+  }
+
+  // The availability of the password submit target is bundled with federated
+  // support.
+  if (base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin) &&
+      IsSuccessfulPasswordCredentialFilling(login_status.value()) &&
+      password_button_.has_value()) {
+    CHECK_EQ(selected_credential.type, actor_login::CredentialType::kPassword);
+    tool_delegate().EnqueueFollowupAction(std::make_unique<ClickToolRequest>(
+        tab_handle_, *password_button_, mojom::ClickType::kLeft,
+        mojom::ClickCount::kSingle, requires_opening_web_contents_));
+    mojom::ActionResultPtr result =
+        MakeOkResult(/*requires_page_stabilization=*/false);
+    result->attempt_login_status = mojom::AttemptLoginStatus::kPasswordManager;
+    PostResponseTask(std::move(invoke_callback_), std::move(result));
+    return;
+  }
+
+  mojom::ActionResultCode code =
+      actor_login::LoginResultToActorResult(login_status.value());
+  mojom::ActionResultPtr result =
+      IsOk(code) ? MakeOkResult() : MakeResult(code);
+  if (IsOk(code)) {
+    result->attempt_login_status =
+        login_status.value() ==
+                actor_login::LoginStatusResult::kSuccessFederated
+            ? mojom::AttemptLoginStatus::kFederated
+            : mojom::AttemptLoginStatus::kPasswordManager;
+  }
+  PostResponseTask(std::move(invoke_callback_), std::move(result));
 }
 
 void AttemptLoginTool::OnWillDetach(tabs::TabInterface* tab,
@@ -440,6 +572,9 @@ void AttemptLoginTool::ObserveTabToAwaitFocus() {
       &AttemptLoginTool::OnWillDetach, base::Unretained(this)));
   tab_did_activate_subscription_ = tab->RegisterDidActivate(base::BindRepeating(
       &AttemptLoginTool::HandleTabActivatedChange, base::Unretained(this)));
+// TODO(crbug.com/482430429): Reconsider the use of BrowserWindowInterface on
+// Android.
+#if !BUILDFLAG(IS_ANDROID)
   BrowserWindowInterface* browser_window = tab->GetBrowserWindowInterface();
   // TODO(mcnee): Should we update the window subscription if the tab is moved?
   // The tab would probably be focused first which would cause us to stop
@@ -448,6 +583,7 @@ void AttemptLoginTool::ObserveTabToAwaitFocus() {
       browser_window->RegisterDidBecomeActive(
           base::BindRepeating(&AttemptLoginTool::HandleWindowActivatedChange,
                               base::Unretained(this)));
+#endif
 }
 
 void AttemptLoginTool::StopObservingTab() {
@@ -463,26 +599,40 @@ void AttemptLoginTool::MaybeRetryCredentialNeedingFocus() {
 
   tabs::TabInterface* tab = tab_handle_.Get();
   CHECK(tab);
-  BrowserWindowInterface* browser_window = tab->GetBrowserWindowInterface();
 
   // Note that this is more specific than the conditions checked in
   // `ActorLoginDelegateImpl::IsTaskInFocus`, but for simplicity we check for
   // the specific tab being activated, since the task nudge will take the user
   // there anyway.
-  if (!browser_window->IsActive() || !tab->IsActivated()) {
+  if (!tab->IsActivated()) {
     return;
   }
+
+  // TODO(crbug.com/482430429): Reconsider the use of BrowserWindowInterface on
+  // Android.
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser_window = tab->GetBrowserWindowInterface();
+  if (!browser_window->IsActive()) {
+    return;
+  }
+#endif
 
   StopObservingTab();
   tool_delegate().UninterruptFromTool();
 
   GetActorLoginService().AttemptLogin(
-      tab, credential_awaiting_task_focus_->first,
+      ChromeActorLoginDelegateClient::GetOrCreateForWebContents(
+          tab->GetContents()),
+      credential_awaiting_task_focus_->first,
       credential_awaiting_task_focus_->second, quality_logger_.AsWeakPtr(),
+      attempt_login_tool_start_time_,
+      GetFrameFillingStartedCallback(tab,
+                                     credential_awaiting_task_focus_->first),
       base::BindOnce(&AttemptLoginTool::OnAttemptLogin,
                      weak_ptr_factory_.GetWeakPtr(),
                      credential_awaiting_task_focus_->first,
-                     credential_awaiting_task_focus_->second));
+                     credential_awaiting_task_focus_->second),
+      tool_delegate().GetActionSequenceDelegate());
 }
 
 std::string AttemptLoginTool::DebugString() const {
@@ -503,7 +653,7 @@ AttemptLoginTool::GetObservationDelayer(
 
 void AttemptLoginTool::UpdateTaskBeforeInvoke(ActorTask& task,
                                               ToolCallback callback) const {
-  task.AddTab(tab_handle_, std::move(callback));
+  task.AddTab(tab_handle_, /*stop_task_on_detach=*/true, std::move(callback));
 }
 
 tabs::TabHandle AttemptLoginTool::GetTargetTab() const {
@@ -512,6 +662,17 @@ tabs::TabHandle AttemptLoginTool::GetTargetTab() const {
 
 actor_login::ActorLoginService& AttemptLoginTool::GetActorLoginService() {
   return tool_delegate().GetActorLoginService();
+}
+
+actor_login::FrameFillingStartedCallback
+AttemptLoginTool::GetFrameFillingStartedCallback(
+    tabs::TabInterface* tab,
+    const actor_login::Credential& credential) {
+  return base::BindOnce(
+      &autofill::ActorOneTimeTokenFillingService::OnPasswordFillingStarted,
+      tool_delegate().GetActorOneTimeTokenFillingService().GetWeakPtr(),
+      tab->GetHandle(), credential.request_origin,
+      credential.has_persistent_permission);
 }
 
 }  // namespace actor

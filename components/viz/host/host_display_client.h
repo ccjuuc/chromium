@@ -43,7 +43,7 @@ class VIZ_HOST_EXPORT HostDisplayClient : public mojom::DisplayClient {
   // mojom::DisplayClient implementation:
 #if BUILDFLAG(IS_APPLE)
   void OnDisplayReceivedCALayerParams(
-      const gfx::CALayerParams& ca_layer_params) override;
+      gfx::CALayerParams ca_layer_params) override;
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -52,9 +52,9 @@ class VIZ_HOST_EXPORT HostDisplayClient : public mojom::DisplayClient {
   void AddChildWindowToBrowser(gpu::SurfaceHandle child_window) override;
 #endif
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
   void DidCompleteSwapWithNewSize(const gfx::Size& size) override;
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
 
 #if BUILDFLAG(IS_CHROMEOS)
   void SetPreferredRefreshRate(float refresh_rate) override;

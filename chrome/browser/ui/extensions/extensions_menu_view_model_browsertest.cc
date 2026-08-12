@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/memory/scoped_refptr.h"
+#include "base/test/metrics/user_action_tester.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
@@ -21,12 +22,14 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/permissions_updater.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/manifest_constants.h"
 #include "extensions/test/permissions_manager_waiter.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
@@ -49,13 +52,15 @@ class FakeExtensionActionDelegate : public ExtensionActionDelegate {
   void UnregisterCommand() override {}
   bool IsShowingPopup() const override { return false; }
   void HidePopup() override {}
-  gfx::NativeView GetPopupNativeView() override { return gfx::NativeView(); }
+  gfx::NativeView GetPopupNativeViewForTesting() override {
+    return gfx::NativeView();
+  }
   void TriggerPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
                     PopupShowAction show_action,
                     bool by_user,
                     ShowPopupCallback callback) override {}
   void ShowContextMenuAsFallback() override {}
-  bool CloseOverflowMenuIfOpen() override { return false; }
+  void CloseExtensionsMenuIfOpen() override {}
 };
 
 // The test delegate that acts as the factory for Action ViewModels.
@@ -241,8 +246,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest, UpdateSiteAccess) {
             PermissionsManager::UserSiteAccess::kOnAllSites);
 
   // Update site access to "on site".
-  menu_model()->UpdateSiteAccess(extension->id(),
-                                 PermissionsManager::UserSiteAccess::kOnSite);
+  menu_model()->UpdateSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
+      PermissionsManager::UserSiteAccess::kOnSite);
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kGranted);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
@@ -250,8 +257,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest, UpdateSiteAccess) {
             PermissionsManager::UserSiteAccess::kOnSite);
 
   // Update site access to "on click".
-  menu_model()->UpdateSiteAccess(extension->id(),
-                                 PermissionsManager::UserSiteAccess::kOnClick);
+  menu_model()->UpdateSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin(),
+      PermissionsManager::UserSiteAccess::kOnClick);
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kWithheld);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
@@ -284,7 +293,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
 
   // Granting site access changes site interaction to 'granted' and site access
   // to 'on site'.
-  menu_model()->GrantSiteAccess(extension->id());
+  menu_model()->GrantSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kGranted);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
@@ -315,11 +326,55 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
 
   // Granting site access changes site interaction to 'granted' but site access
   // remains 'on click', since it's a one-time grant.
-  menu_model()->GrantSiteAccess(extension->id());
+  menu_model()->GrantSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kGranted);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
                 *extension, web_contents->GetLastCommittedURL()),
+            PermissionsManager::UserSiteAccess::kOnClick);
+}
+
+// Tests that the extensions menu view model fails to grant site access if the
+// origin changes.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GrantSiteAccess_FailsIfOriginChanges) {
+  // Add extension that requests host permissions and withheld site access.
+  scoped_refptr<const extensions::Extension> extension =
+      AddExtensionWithHostPermission("Extension", "*://example.com/*");
+  extensions::ScriptingPermissionsModifier modifier(profile(), extension);
+  modifier.SetWithholdHostPermissions(true);
+
+  // Navigate to a site the extension requested access to.
+  const GURL urlA =
+      embedded_test_server()->GetURL("example.com", "/simple.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), urlA));
+  content::WebContents* web_contents = GetActiveWebContents();
+  auto originA = web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+
+  // Verify site interaction and site access are withheld.
+  EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
+            SitePermissionsHelper::SiteInteraction::kWithheld);
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
+                *extension, web_contents->GetLastCommittedURL()),
+            PermissionsManager::UserSiteAccess::kOnClick);
+
+  // Simulate navigation to another site before user clicks.
+  const GURL urlB = embedded_test_server()->GetURL("other.com", "/simple.html");
+  ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), urlB));
+
+  // Try to grant site access using the OLD origin.
+  menu_model()->GrantSiteAccess(extension->id(), originA);
+
+  // Verify that site access was NOT granted because the origin changed.
+  // On the new site (other.com), interaction should be kNone since it didn't
+  // request it.
+  EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
+            SitePermissionsHelper::SiteInteraction::kNone);
+
+  // And site access for example.com should still be kOnClick (withheld).
+  EXPECT_EQ(permissions_manager()->GetUserSiteAccess(*extension, urlA),
             PermissionsManager::UserSiteAccess::kOnClick);
 }
 
@@ -346,7 +401,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
 
   // Revoking site access changes site interaction to 'withheld' and site access
   // to 'on click'
-  menu_model()->RevokeSiteAccess(extension->id());
+  menu_model()->RevokeSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kWithheld);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
@@ -381,7 +438,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
 
   // Revoking site access changes site interaction to 'activeTab' and site
   // access remains 'on click'.
-  menu_model()->RevokeSiteAccess(extension->id());
+  menu_model()->RevokeSiteAccess(
+      extension->id(),
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_helper()->GetSiteInteraction(*extension, web_contents),
             SitePermissionsHelper::SiteInteraction::kActiveTab);
   EXPECT_EQ(permissions_manager()->GetUserSiteAccess(
@@ -411,6 +470,23 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest, UpdateSiteSetting) {
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
   EXPECT_EQ(permissions_manager()->GetUserSiteSetting(origin),
             PermissionsManager::UserSiteSetting::kBlockAllExtensions);
+}
+
+// Tests that ExecuteAction triggers the extension action and records metrics.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest, ExecuteAction) {
+  base::UserActionTester user_action_tester;
+  constexpr char kActivatedUserAction[] =
+      "Extensions.Toolbar.ExtensionActivatedFromMenu";
+
+  auto extension = AddExtension("Test Extension");
+  EXPECT_EQ(0, user_action_tester.GetActionCount(kActivatedUserAction));
+
+  menu_model()->ExecuteAction(extension->id());
+  EXPECT_EQ(1, user_action_tester.GetActionCount(kActivatedUserAction));
+
+  // Note: Other tests verify whether the action was actually run (e.g. script
+  // execution, popup creation). Here we only verify the action count because
+  // that's the only logic handled specifically by this ViewModel.
 }
 
 // Tests that the extensions menu view model correctly dismisses a host access
@@ -535,6 +611,50 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
       menu_model()->CanShowSitePermissionsPage(no_permissions_extension->id()));
   EXPECT_FALSE(menu_model()->CanShowSitePermissionsPage(
       extension_with_permissions->id()));
+}
+
+// Tests that GetActionButtonState returns the correct state when the extension
+// has no action.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GetActionButtonState_NoAction) {
+  auto extension = AddExtension("Test Extension");
+
+  NavigateTo("example.com");
+
+  auto button_state =
+      menu_model()->GetActionButtonState(extension->id(), gfx::Size());
+
+  // Button is disabled when the extension has no action.
+  EXPECT_EQ(button_state.text, u"Test Extension");
+  EXPECT_EQ(button_state.tooltip_text, u"Test Extension");
+  EXPECT_EQ(button_state.status,
+            ExtensionsMenuViewModel::ControlState::Status::kDisabled);
+  EXPECT_FALSE(button_state.icon.IsEmpty());
+}
+
+// Tests that GetActionButtonState returns the correct state when the extension
+// has an action.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       GetActionButtonState_Action) {
+  scoped_refptr<const extensions::Extension> extension =
+      extensions::ExtensionBuilder("Test Extension")
+          .SetManifestKey(
+              extensions::manifest_keys::kAction,
+              base::DictValue().Set("default_title", "Custom Tooltip"))
+          .Build();
+  extension_registrar()->AddExtension(extension.get());
+
+  NavigateTo("example.com");
+
+  auto button_state =
+      menu_model()->GetActionButtonState(extension->id(), gfx::Size());
+
+  // Button is enabled when extension has an action.
+  EXPECT_EQ(button_state.text, u"Test Extension");
+  EXPECT_EQ(button_state.tooltip_text, u"Custom Tooltip");
+  EXPECT_EQ(button_state.status,
+            ExtensionsMenuViewModel::ControlState::Status::kEnabled);
+  EXPECT_FALSE(button_state.icon.IsEmpty());
 }
 
 // Tests that GetContextMenuButtonState returns the correct state based on
@@ -671,8 +791,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   EXPECT_FALSE(site_permissions.on_all_sites_option.is_on);
 
   // Update site access to 'on click'.
-  menu_model()->UpdateSiteAccess(extension_A->id(),
-                                 PermissionsManager::UserSiteAccess::kOnClick);
+  menu_model()->UpdateSiteAccess(
+      extension_A->id(),
+      url::Origin::Create(GetActiveWebContents()->GetLastCommittedURL()),
+      PermissionsManager::UserSiteAccess::kOnClick);
 
   // Verify the site permissions for an extension with site access withheld when
   // it's requesting access only to the current site. 'on site' is enabled
@@ -751,7 +873,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
 
   // User cannot customize the extension's site access. Thus site access toggle
   // and site permissions button are always hidden.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -774,7 +897,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is disabled. We leave them visible because
   //   enterprise extensions can still have access to the site, but disabled
   //   because site access cannot be changed.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -783,6 +907,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   EXPECT_EQ(menu_entry_state.site_permissions_button.accessible_name,
             u"No access needed");
   EXPECT_EQ(menu_entry_state.site_permissions_button.tooltip_text, u"");
+  EXPECT_EQ(menu_entry_state.action_button.accessible_name,
+            u"Extension, No access needed");
 }
 
 // Tests the menu item state for an extension that did not request access to
@@ -797,7 +923,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is hidden.
   //   - site permissions button is disabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -806,13 +933,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   EXPECT_EQ(menu_entry_state.site_permissions_button.accessible_name,
             u"No access needed");
   EXPECT_EQ(menu_entry_state.site_permissions_button.tooltip_text, u"");
+  EXPECT_EQ(menu_entry_state.action_button.accessible_name,
+            u"Simple Extension, No access needed");
 
   // When site setting is set to 'block all extensions':
   //   - site access toggle is hidden.
   //   - site permissions button is hidden
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -834,7 +964,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is enabled and off.
   //   - site permissions button is enabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kEnabled);
   EXPECT_FALSE(menu_entry_state.site_access_toggle.is_on);
@@ -848,13 +979,17 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
             u"Ask on every visit. Select to change site permissions");
   EXPECT_EQ(menu_entry_state.site_permissions_button.tooltip_text,
             u"Change site permissions");
+  EXPECT_EQ(
+      menu_entry_state.action_button.accessible_name,
+      u"Extension, Ask on every visit. Select to change site permissions");
 
   // When site setting is set to 'block all extensions':
   //   - site access toggle is hidden.
   //   - site permissions button is hidden
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -874,7 +1009,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is enabled and on.
   //   - site permissions button is enabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kEnabled);
   EXPECT_TRUE(menu_entry_state.site_access_toggle.is_on);
@@ -894,7 +1030,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is hidden
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -913,7 +1050,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is enabled and on.
   //   - site permissions button is enabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kEnabled);
   EXPECT_TRUE(menu_entry_state.site_access_toggle.is_on);
@@ -933,7 +1071,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is hidden
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -953,7 +1092,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is hidden
   //   - site permissions button is disabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -969,7 +1109,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is hidden
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -989,7 +1130,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is hidden
   //   - site permissions button is disabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1006,7 +1148,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is disabled.
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1033,7 +1176,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is hidden
   //   - site permissions button is disabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1050,7 +1194,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is disabled.
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1076,7 +1221,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   // When site setting is set to 'customize by extension' (default):
   //   - site access toggle is hidden
   //   - site permissions button is disabled.
-  auto menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  auto menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1093,7 +1239,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   //   - site permissions button is disabled.
   menu_model()->UpdateSiteSetting(
       PermissionsManager::UserSiteSetting::kBlockAllExtensions);
-  menu_entry_state = menu_model()->GetMenuEntryState(extension->id());
+  menu_entry_state =
+      menu_model()->GetMenuEntryState(extension->id(), gfx::Size());
   EXPECT_EQ(menu_entry_state.site_access_toggle.status,
             ExtensionsMenuViewModel::ControlState::Status::kHidden);
   EXPECT_EQ(menu_entry_state.site_permissions_button.status,
@@ -1254,4 +1401,81 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
   EXPECT_EQ(actions[0]->GetActionName(), u"Alpha");
   EXPECT_EQ(actions[1]->GetActionName(), u"beta");
   EXPECT_EQ(actions[2]->GetActionName(), u"Gamma");
+}
+
+// Tests that host access requests are maintained in alphabetical order
+// matching the action_models_ order, regardless of the order they are added.
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuViewModelBrowserTest,
+                       HostAccessRequests_SortedInsertionAndRemoval) {
+  auto cooldown_reset =
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta());
+
+  // Add 3 extensions (A, B, C) and withhold their permissions, using names that
+  // ensure alphabetical order.
+  auto extension_A = AddExtensionWithHostPermission("Alpha", "<all_urls>");
+  auto extension_B = AddExtensionWithHostPermission("Beta", "<all_urls>");
+  auto extension_C = AddExtensionWithHostPermission("Gamma", "<all_urls>");
+
+  extensions::ScriptingPermissionsModifier(profile(), extension_A)
+      .SetWithholdHostPermissions(true);
+  extensions::ScriptingPermissionsModifier(profile(), extension_B)
+      .SetWithholdHostPermissions(true);
+  extensions::ScriptingPermissionsModifier(profile(), extension_C)
+      .SetWithholdHostPermissions(true);
+
+  NavigateTo("example.com");
+  content::WebContents* web_contents = GetActiveWebContents();
+  int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
+
+  // Verify initial state for action models are sorted.
+  const auto& actions = menu_model()->action_models();
+  ASSERT_EQ(3u, actions.size());
+  EXPECT_EQ(extension_A->id(), actions[0]->GetId());
+  EXPECT_EQ(extension_B->id(), actions[1]->GetId());
+  EXPECT_EQ(extension_C->id(), actions[2]->GetId());
+  EXPECT_TRUE(menu_model()->host_access_requests().empty());
+
+  // Add request for "Beta".
+  permissions_manager()->AddHostAccessRequest(web_contents, tab_id,
+                                              *extension_B);
+  std::vector<extensions::ExtensionId> requests =
+      menu_model()->host_access_requests();
+  ASSERT_EQ(1u, requests.size());
+  EXPECT_EQ(extension_B->id(), requests[0]);
+
+  // Add request for "Alpha".
+  // Order should be [Alpha, Beta, Gamma].
+  permissions_manager()->AddHostAccessRequest(web_contents, tab_id,
+                                              *extension_A);
+  requests = menu_model()->host_access_requests();
+  ASSERT_EQ(2u, requests.size());
+  EXPECT_EQ(extension_A->id(), requests[0]);
+  EXPECT_EQ(extension_B->id(), requests[1]);
+
+  // Add request for "Gamma".
+  // Order should be [Alpha, Beta, Gamma].
+  permissions_manager()->AddHostAccessRequest(web_contents, tab_id,
+                                              *extension_C);
+  requests = menu_model()->host_access_requests();
+  ASSERT_EQ(3u, requests.size());
+  EXPECT_EQ(extension_A->id(), requests[0]);
+  EXPECT_EQ(extension_B->id(), requests[1]);
+  EXPECT_EQ(extension_C->id(), requests[2]);
+
+  // Remove request for "Beta".
+  // Order should be [Alpha, Gamma].
+  permissions_manager()->RemoveHostAccessRequest(tab_id, extension_B->id());
+  requests = menu_model()->host_access_requests();
+  ASSERT_EQ(2u, requests.size());
+  EXPECT_EQ(extension_A->id(), requests[0]);
+  EXPECT_EQ(extension_C->id(), requests[1]);
+
+  // Dismiss request for "Alpha".
+  // Only request left is [Gamma].
+  permissions_manager()->UserDismissedHostAccessRequest(web_contents, tab_id,
+                                                        extension_A->id());
+  requests = menu_model()->host_access_requests();
+  ASSERT_EQ(1u, requests.size());
+  EXPECT_EQ(extension_C->id(), requests[0]);
 }

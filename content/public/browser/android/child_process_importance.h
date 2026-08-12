@@ -5,6 +5,9 @@
 #ifndef CONTENT_PUBLIC_BROWSER_ANDROID_CHILD_PROCESS_IMPORTANCE_H_
 #define CONTENT_PUBLIC_BROWSER_ANDROID_CHILD_PROCESS_IMPORTANCE_H_
 
+#include <iosfwd>
+
+#include "base/process/process.h"
 #include "content/common/content_export.h"
 
 namespace content {
@@ -16,10 +19,10 @@ namespace content {
 // Each importance results in a service binding with different service binding
 // flags to tell the priority of the renderer process to Android system.
 //
-// PERCEPTIBLE importance leads to a service binding with
+// NOT_PERCEPTIBLE importance leads to a service binding with
 // `Context.BIND_NOT_PERCEPTIBLE` which is supported on Android Q+. On older
-// Android version, PERCEPTIBLE importance falls back to NORMAL importance and
-// the corresponding waived service binding.
+// Android version, NOT_PERCEPTIBLE importance falls back to NORMAL importance
+// and the corresponding waived service binding.
 //
 // Note that the numerical order in ChildProcessImportance should be consistent
 // because ChildProcessImportance is compared numerically in
@@ -29,13 +32,21 @@ namespace content {
 enum class ChildProcessImportance {
   // NORMAL is the default value.
   NORMAL = 0,
-  PERCEPTIBLE,
+  NOT_PERCEPTIBLE,
   MODERATE,
   IMPORTANT,
 };
 
+CONTENT_EXPORT std::ostream& operator<<(std::ostream& out,
+                                        ChildProcessImportance importance);
+
 // Whether the device supports `ChildProcessImportance.PERCEPTIBLE` or not.
-CONTENT_EXPORT bool IsPerceptibleImportanceSupported();
+CONTENT_EXPORT bool IsNotPerceptibleImportanceSupported();
+
+// Mapping from base::Process::Priority to ChildProcessImportance for
+// integration with Performance Manager.
+CONTENT_EXPORT ChildProcessImportance
+PriorityToChildProcessImportance(base::Process::Priority priority);
 
 }  // namespace content
 

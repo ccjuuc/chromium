@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -65,7 +66,7 @@ void HTMLFrameElementBase::OpenURL(bool replace_current_item) {
   }
 
   if (url_.empty())
-    url_ = AtomicString(BlankURL().GetString());
+    url_ = AtomicString(BlankUrl().GetString());
   KURL url = GetDocument().CompleteURL(url_);
   if (ContentFrame() && !parent_frame->CanNavigate(*ContentFrame(), url)) {
     return;
@@ -99,20 +100,20 @@ void HTMLFrameElementBase::ParseAttribute(
           ContentFrame()->GetFrameToken(), srcdoc_value);
     }
     if (!value.IsNull()) {
-      SetLocation(SrcdocURL().GetString());
+      SetLocation(SrcdocUrl().GetString());
     } else {
       const AtomicString& src_value = FastGetAttribute(html_names::kSrcAttr);
       if (!src_value.IsNull()) {
-        SetLocation(StripLeadingAndTrailingHTMLSpaces(src_value));
+        SetLocation(StripLeadingAndTrailingHtmlSpaces(src_value));
       } else if (!params.old_value.IsNull()) {
         // We're resetting kSrcdocAttr, but kSrcAttr has no value, so load
         // about:blank. https://crbug.com/1233143
-        SetLocation(BlankURL());
+        SetLocation(BlankUrl().GetString());
       }
     }
   } else if (name == html_names::kSrcAttr &&
              !FastHasAttribute(html_names::kSrcdocAttr)) {
-    SetLocation(StripLeadingAndTrailingHTMLSpaces(value));
+    SetLocation(StripLeadingAndTrailingHtmlSpaces(value));
   } else if (name == html_names::kIdAttr) {
     // Important to call through to base for the id attribute so the hasID bit
     // gets set.
@@ -121,9 +122,9 @@ void HTMLFrameElementBase::ParseAttribute(
   } else if (name == html_names::kNameAttr) {
     frame_name_ = value;
   } else if (name == html_names::kMarginwidthAttr) {
-    SetMarginWidth(value.ToInt());
+    SetMarginWidth(StringToIntLoose(value).value_or(0));
   } else if (name == html_names::kMarginheightAttr) {
-    SetMarginHeight(value.ToInt());
+    SetMarginHeight(StringToIntLoose(value).value_or(0));
   } else if (name == html_names::kScrollingAttr) {
     // https://html.spec.whatwg.org/multipage/rendering.html#the-page:
     // If [the scrolling] attribute's value is an ASCII
@@ -131,12 +132,13 @@ void HTMLFrameElementBase::ParseAttribute(
     // the user agent is expected to prevent any scrollbars from being shown for
     // the viewport of the Document's browsing context, regardless of the
     // 'overflow' property that applies to that viewport.
-    if (EqualIgnoringASCIICase(value, "off") ||
-        EqualIgnoringASCIICase(value, "noscroll") ||
-        EqualIgnoringASCIICase(value, "no"))
+    if (EqualIgnoringAsciiCase(value, "off") ||
+        EqualIgnoringAsciiCase(value, "noscroll") ||
+        EqualIgnoringAsciiCase(value, "no")) {
       SetScrollbarMode(mojom::blink::ScrollbarMode::kAlwaysOff);
-    else
+    } else {
       SetScrollbarMode(mojom::blink::ScrollbarMode::kAuto);
+    }
   } else if (name == html_names::kOnbeforeunloadAttr) {
     // FIXME: should <frame> elements have beforeunload handlers?
     SetAttributeEventListener(
@@ -150,7 +152,7 @@ void HTMLFrameElementBase::ParseAttribute(
 }
 
 scoped_refptr<const SecurityOrigin>
-HTMLFrameElementBase::GetOriginForPermissionsPolicy() const {
+HTMLFrameElementBase::MakeOriginForPermissionsPolicy() const {
   // Sandboxed frames have a unique origin.
   if ((GetFramePolicy().sandbox_flags &
        network::mojom::blink::WebSandboxFlags::kOrigin) !=
@@ -177,10 +179,6 @@ void HTMLFrameElementBase::SetNameAndOpenURL() {
 Node::InsertionNotificationRequest HTMLFrameElementBase::InsertedInto(
     ContainerNode& insertion_point) {
   HTMLFrameOwnerElement::InsertedInto(insertion_point);
-  // Except for when state-preserving atomic moves are enabled, we should never
-  // have a content frame at the point where we got inserted into a tree.
-  SECURITY_CHECK(!ContentFrame() ||
-                 GetDocument().StatePreservingAtomicMoveInProgress());
   return kInsertionShouldCallDidNotifySubtreeInsertions;
 }
 
@@ -204,7 +202,7 @@ void HTMLFrameElementBase::AttachLayoutTree(AttachContext& context) {
     SetEmbeddedContentView(ContentFrame()->View());
 }
 
-void HTMLFrameElementBase::SetLocation(const String& str) {
+void HTMLFrameElementBase::SetLocation(const StringView& str) {
   url_ = AtomicString(str);
 
   if (isConnected())

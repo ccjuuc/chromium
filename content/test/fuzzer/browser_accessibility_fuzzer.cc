@@ -12,12 +12,13 @@
 #include "base/command_line.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #if BUILDFLAG(IS_ANDROID)
+#include "base/test/test_support_android.h"
 #include "content/browser/accessibility/browser_accessibility_manager_android.h"
 #endif
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_task_environment.h"
-#include "content/test/test_content_browser_client.h"
-#include "content/test/test_content_client.h"
+#include "content/public/test/test_content_browser_client.h"
+#include "content/public/test/test_content_client.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
 #include "ui/accessibility/platform/one_shot_accessibility_tree_search.h"
 #include "ui/accessibility/platform/test_ax_node_id_delegate.h"
@@ -25,7 +26,18 @@
 
 struct Env {
   Env() {
-    base::CommandLine::Init(0, nullptr);
+#if BUILDFLAG(IS_ANDROID)
+    // On Android, BrowserTaskEnvironment creates a UI message pump that does
+    // not support RunLoop::Run(). This struct installs a stub pump to allow it
+    // in tests.
+    base::InitAndroidTestMessageLoop();
+#endif
+    // CommandLine could already be initialized on Android.
+    if (!base::CommandLine::InitializedForCurrentProcess()) {
+      base::CommandLine::Init(0, nullptr);
+    }
+
+    task_environment_ = std::make_unique<content::BrowserTaskEnvironment>();
 
     // BrowserAccessibilityStateImpl requires a ContentBrowserClient.
     content_client_ = std::make_unique<content::TestContentClient>();
@@ -40,7 +52,7 @@ struct Env {
     content::SetContentClient(nullptr);
   }
 
-  content::BrowserTaskEnvironment task_environment;
+  std::unique_ptr<content::BrowserTaskEnvironment> task_environment_;
   std::unique_ptr<content::ContentBrowserClient> content_browser_client_;
   std::unique_ptr<content::ContentClient> content_client_;
   base::AtExitManager at_exit;

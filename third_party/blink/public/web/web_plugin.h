@@ -32,10 +32,13 @@
 #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PLUGIN_H_
 #define THIRD_PARTY_BLINK_PUBLIC_WEB_WEB_PLUGIN_H_
 
+#include <optional>
 #include <vector>
 
 #include "base/containers/span.h"
+#include "base/i18n/rtl.h"
 #include "cc/paint/paint_canvas.h"
+#include "components/viz/common/surfaces/frame_sink_id.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/public/mojom/annotation/annotation.mojom-shared.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-shared.h"
@@ -116,6 +119,10 @@ class WebPlugin {
   virtual void UpdateAllLifecyclePhases(blink::DocumentUpdateReason) = 0;
   virtual void Paint(cc::PaintCanvas*, const gfx::Rect&) = 0;
 
+  // If this plugin uses cc::SurfaceLayer for painting, returns the FrameSinkId
+  // used by that Layer. Otherwise, returns an empty FrameSinkId.
+  virtual viz::FrameSinkId GetFrameSinkId() { return viz::FrameSinkId(); }
+
   // Coordinates are relative to the containing window.
   virtual void UpdateGeometry(const gfx::Rect& window_rect,
                               const gfx::Rect& clip_rect,
@@ -125,6 +132,10 @@ class WebPlugin {
   virtual void UpdateFocus(bool focused, mojom::FocusType) = 0;
 
   virtual void UpdateVisibility(bool) = 0;
+
+  virtual void UpdateRenderThrottlingStatus(bool is_throttled,
+                                            bool subtree_throttled,
+                                            bool display_locked) {}
 
   virtual WebInputEventResult HandleInputEvent(const WebCoalescedInputEvent&,
                                                ui::Cursor*) = 0;
@@ -175,6 +186,14 @@ class WebPlugin {
   virtual bool CanUndo() const { return false; }
   virtual bool CanRedo() const { return false; }
   virtual bool CanCopy() const { return true; }
+
+  // Returns the text direction of the focused text input or editing area in
+  // the plugin. Returns `std::nullopt` if there is no focused text area, or
+  // if the plugin does not support text direction.
+  virtual std::optional<base::i18n::TextDirection> GetFocusedFormTextDirection()
+      const {
+    return std::nullopt;
+  }
 
   virtual bool ExecuteEditCommand(const WebString& name,
                                   const WebString& value) {

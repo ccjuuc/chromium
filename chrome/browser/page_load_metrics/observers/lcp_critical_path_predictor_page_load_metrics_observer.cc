@@ -21,7 +21,6 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/url_util.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace internal {
 
@@ -829,17 +828,6 @@ void LcpCriticalPathPredictorPageLoadMetricsObserver::
   if (!lcpp_data_inputs_) {
     lcpp_data_inputs_.emplace();
   }
-  if (lcpp_data_inputs_->subresource_urls.empty()) {
-    base::UmaHistogramMediumTimes(
-        "Blink.LCPP.NavigationToStartPreload.MainFrame.FirstSubresource.Time",
-        subresource_load_start);
-    const base::TimeTicks navigation_start = GetDelegate().GetNavigationStart();
-    TRACE_EVENT_BEGIN("loading", "NavigationToStartFirstPreload",
-                      perfetto::Track::FromPointer(this), navigation_start,
-                      "url", subresource_url);
-    TRACE_EVENT_END("loading", perfetto::Track::FromPointer(this),
-                    navigation_start + subresource_load_start);
-  }
   base::UmaHistogramMediumTimes(
       "Blink.LCPP.NavigationToStartPreload.MainFrame.EachSubresource.Time",
       subresource_load_start);
@@ -906,7 +894,7 @@ void LcpCriticalPathPredictorPageLoadMetricsObserver::
 
   // This value existence indicates failure because predicted LCP should be the
   // last.
-  std::optional<uint32_t> first_valid_index_except_last = std::nullopt;
+  std::optional<uint32_t> first_valid_index_except_last;
   for (size_t i = 0; i < predicted_lcp_indexes_.size() - 1; i++) {
     const std::optional<uint32_t>& maybe_index = predicted_lcp_indexes_[i];
     if (maybe_index) {

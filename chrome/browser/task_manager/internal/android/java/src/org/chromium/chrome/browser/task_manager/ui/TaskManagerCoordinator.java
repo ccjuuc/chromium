@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.task_manager.ui;
 
 import android.graphics.Bitmap;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.LayoutInflater;
@@ -64,7 +65,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                             for (PropertyKey columnKey : TaskManagerProperties.ALL_COLUMN_KEYS) {
                                 view.findViewById(getTaskItemViewId(columnKey))
                                         .setOnClickListener(
-                                                (unused) -> mMediator.cycleSortOrder(columnKey));
+                                                _ -> mMediator.cycleSortOrder(columnKey));
                             }
                             bindHeader(model, view, key);
                         }));
@@ -89,7 +90,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                                     view,
                                     TaskManagerCoordinator::bindHeaderModelAndTaskView));
 
-                    view.setOnClickListener((unused) -> mMediator.toggleSelection(model));
+                    view.setOnClickListener(_ -> mMediator.toggleSelection(model));
                     bindTask(model, view, key);
                 });
 
@@ -128,7 +129,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
             item.setChecked(selectedColumns.contains(columnKey));
 
             item.setOnMenuItemClickListener(
-                    (unused) -> {
+                    _ -> {
                         if (mMediator.toggleColumnFiltering(columnKey)) {
                             // Handle the visual update as it is being dismissed.
                             item.setChecked(!item.isChecked());
@@ -182,11 +183,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                 int size = view.getResources().getDimensionPixelSize(R.dimen.default_favicon_size);
                 Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true);
                 textView.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                        new android.graphics.drawable.BitmapDrawable(
-                                view.getResources(), scaledBitmap),
-                        null,
-                        null,
-                        null);
+                        new BitmapDrawable(view.getResources(), scaledBitmap), null, null, null);
                 textView.setCompoundDrawablePadding(20);
             } else {
                 textView.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null);

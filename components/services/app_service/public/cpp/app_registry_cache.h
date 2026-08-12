@@ -15,7 +15,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -131,7 +130,7 @@ class COMPONENT_EXPORT(APP_UPDATE) AppRegistryCache {
     for (const auto& d_iter : deltas_in_progress_) {
       const App* delta = d_iter.second;
 
-      if (base::Contains(states_, d_iter.first)) {
+      if (states_.contains(d_iter.first)) {
         continue;
       }
 
@@ -260,7 +259,12 @@ class COMPONENT_EXPORT(APP_UPDATE) AppRegistryCache {
 
   void OnAppTypeInitialized();
 
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   // Maps from app_id to the latest state: the "sum" of all previous deltas.
   std::map<std::string, AppPtr, std::less<>> states_;

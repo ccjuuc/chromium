@@ -22,7 +22,7 @@ namespace policy {
 const char kBinaryProtobufContentType[] = "application/x-protobuf";
 
 BASE_FEATURE(kUploadRealtimeReportingEventsUsingProto,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 const char RealtimeReportingJobConfiguration::kContextKey[] = "context";
 const char RealtimeReportingJobConfiguration::kEventListKey[] = "events";
@@ -35,10 +35,10 @@ const char RealtimeReportingJobConfiguration::kFailedUploadsKey[] =
 const char RealtimeReportingJobConfiguration::kPermanentFailedUploadsKey[] =
     "permanentFailedUploads";
 
-base::Value::Dict RealtimeReportingJobConfiguration::BuildReport(
-    base::Value::List events,
-    base::Value::Dict context) {
-  base::Value::Dict value_report;
+base::DictValue RealtimeReportingJobConfiguration::BuildReport(
+    base::ListValue events,
+    base::DictValue context) {
+  base::DictValue value_report;
   value_report.Set(kEventListKey, std::move(events));
   value_report.Set(kContextKey, std::move(context));
   return value_report;
@@ -49,6 +49,24 @@ RealtimeReportingJobConfiguration::RealtimeReportingJobConfiguration(
     const std::string& server_url,
     bool include_device_info,
     UploadCompleteCallback callback)
+    : ReportingJobConfigurationBase(
+          TYPE_UPLOAD_REAL_TIME_REPORT,
+          client->GetURLLoaderFactory(),
+          DMAuth::FromDMToken(client->dm_token()),
+          server_url,
+          base::BindOnce(&RealtimeReportingJobConfiguration::OnUploadComplete,
+                         base::Unretained(this))),
+      complete_callback_(std::move(callback)) {
+  DCHECK(
+      base::FeatureList::IsEnabled(kUploadRealtimeReportingEventsUsingProto));
+  InitializeUploadRequest(client, include_device_info);
+}
+
+RealtimeReportingJobConfiguration::RealtimeReportingJobConfiguration(
+    CloudPolicyClient* client,
+    const std::string& server_url,
+    bool include_device_info,
+    UploadCompleteCallbackDeprecated callback)
     : ReportingJobConfigurationBase(TYPE_UPLOAD_REAL_TIME_REPORT,
                                     client->GetURLLoaderFactory(),
                                     DMAuth::FromDMToken(client->dm_token()),
@@ -58,6 +76,17 @@ RealtimeReportingJobConfiguration::RealtimeReportingJobConfiguration(
     InitializeUploadRequest(client, include_device_info);
   } else {
     InitializePayloadInternal(client, include_device_info);
+  }
+}
+
+void RealtimeReportingJobConfiguration::OnUploadComplete(
+    DeviceManagementService::Job* job,
+    DeviceManagementStatus status,
+    int response_code,
+    std::optional<base::DictValue> response) {
+  if (complete_callback_) {
+    std::move(complete_callback_)
+        .Run(job, status, response_code, std::move(response), upload_request_);
   }
 }
 
@@ -119,11 +148,11 @@ bool RealtimeReportingJobConfiguration::AddRequest(
 }
 
 bool RealtimeReportingJobConfiguration::AddReportDeprecated(
-    base::Value::Dict report) {
+    base::DictValue report) {
   DCHECK(
       !base::FeatureList::IsEnabled(kUploadRealtimeReportingEventsUsingProto));
-  base::Value::Dict* context = report.FindDict(kContextKey);
-  base::Value::List* events = report.FindList(kEventListKey);
+  base::DictValue* context = report.FindDict(kContextKey);
+  base::ListValue* events = report.FindList(kEventListKey);
   if (!context || !events) {
     return false;
   }
@@ -137,7 +166,7 @@ bool RealtimeReportingJobConfiguration::AddReportDeprecated(
   }
 
   // Append event_list to the payload.
-  base::Value::List* to = payload_.FindList(kEventListKey);
+  base::ListValue* to = payload_.FindList(kEventListKey);
   for (auto& event : *events) {
     to->Append(std::move(event));
   }
@@ -166,7 +195,7 @@ void RealtimeReportingJobConfiguration::InitializePayloadInternal(
     InitializePayloadWithoutDeviceInfo();
   }
 
-  payload_.Set(kEventListKey, base::Value::List());
+  payload_.Set(kEventListKey, base::ListValue());
 }
 
 DeviceManagementService::Job::RetryMethod
@@ -225,7 +254,7 @@ std::set<std::string> RealtimeReportingJobConfiguration::GetFailedUploadIds(
   if (!response || !response->is_dict()) {
     return failedIds;
   }
-  base::Value::List* failedUploads =
+  base::ListValue* failedUploads =
       response->GetDict().FindList(kFailedUploadsKey);
   if (failedUploads) {
     for (const auto& failedUpload : *failedUploads) {

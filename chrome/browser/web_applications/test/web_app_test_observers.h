@@ -7,6 +7,7 @@
 
 #include <set>
 
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
@@ -56,6 +57,11 @@ class WebAppInstallManagerObserverAdapter
       base::RepeatingCallback<void(const webapps::AppId& app_id)>;
   void SetWebAppSourceRemovedDelegate(WebAppSourceRemovedDelegate delegate);
 
+  using WebAppMigratedDelegate =
+      base::RepeatingCallback<void(const webapps::AppId& source_app_id,
+                                   const webapps::AppId& target_app_id)>;
+  void SetWebAppMigratedDelegate(WebAppMigratedDelegate delegate);
+
   void OnWebAppInstalled(const webapps::AppId& app_id) override;
   void OnWebAppInstalledWithOsHooks(const webapps::AppId& app_id) override;
   void OnWebAppManifestUpdated(const webapps::AppId& app_id) override;
@@ -65,6 +71,8 @@ class WebAppInstallManagerObserverAdapter
       webapps::WebappUninstallSource uninstall_source) override;
   void OnWebAppInstallManagerDestroyed() override;
   void OnWebAppSourceRemoved(const webapps::AppId& app_id) override;
+  void OnWebAppMigrated(const webapps::AppId& source_app_id,
+                        const webapps::AppId& target_app_id) override;
 
  protected:
   // Helper method for subclasses to allow easy waiting on `wait_loop_`.
@@ -85,6 +93,7 @@ class WebAppInstallManagerObserverAdapter
  private:
   WebAppWillBeUninstalledDelegate app_will_be_uninstalled_delegate_;
   WebAppSourceRemovedDelegate app_source_removed_delegate_;
+  WebAppMigratedDelegate app_migrated_delegate_;
 
   base::ScopedObservation<WebAppInstallManager, WebAppInstallManagerObserver>
       observation_{this};
@@ -109,7 +118,7 @@ class WebAppTestRegistryObserverAdapter : public WebAppRegistrarObserver {
   ~WebAppTestRegistryObserverAdapter() override;
 
   using WebAppWillBeUpdatedFromSyncDelegate = base::RepeatingCallback<void(
-      const std::vector<const WebApp*>& new_apps_state)>;
+      base::span<const WebApp* const> new_apps_state)>;
   void SetWebAppWillBeUpdatedFromSyncDelegate(
       WebAppWillBeUpdatedFromSyncDelegate delegate);
 
@@ -143,7 +152,7 @@ class WebAppTestRegistryObserverAdapter : public WebAppRegistrarObserver {
   void OnWebAppEffectiveScopeChanged(const webapps::AppId& app_id,
                                      const WebAppScope& new_scope) override;
   void OnWebAppsWillBeUpdatedFromSync(
-      const std::vector<const WebApp*>& new_apps_state) override;
+      base::span<const WebApp* const> new_apps_state) override;
   void OnWebAppLastBadgingTimeChanged(const webapps::AppId& app_id,
                                       const base::Time& time) override;
   void OnWebAppPendingUpdateChanged(const webapps::AppId& app_id,

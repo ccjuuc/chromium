@@ -4,8 +4,20 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_details_for_enrollment_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
+#include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
 
 namespace autofill::payments {
 
@@ -45,9 +57,9 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContentType() {
 }
 
 std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
 
-  base::Value::Dict context;
+  base::DictValue context;
   context.Set("language_code", request_details_.app_locale);
   int billable_service_number = 0;
   switch (request_details_.source) {
@@ -96,8 +108,8 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
 }
 
 void GetDetailsForEnrollmentRequest::ParseResponse(
-    const base::Value::Dict& response) {
-  const base::Value::Dict* google_legal_message =
+    const base::DictValue& response) {
+  const base::DictValue* google_legal_message =
       response.FindDict("google_legal_message");
   if (google_legal_message) {
     LegalMessageLine::Parse(*google_legal_message,
@@ -105,7 +117,7 @@ void GetDetailsForEnrollmentRequest::ParseResponse(
                             /*escape_apostrophes=*/true);
   }
 
-  const base::Value::Dict* external_legal_message =
+  const base::DictValue* external_legal_message =
       response.FindDict("external_legal_message");
   if (external_legal_message) {
     LegalMessageLine::Parse(*external_legal_message,

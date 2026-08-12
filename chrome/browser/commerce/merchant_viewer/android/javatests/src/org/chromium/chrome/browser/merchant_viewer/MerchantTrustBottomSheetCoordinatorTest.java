@@ -9,7 +9,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import android.app.Activity;
 import android.view.View;
 import android.view.View.OnLayoutChangeListener;
 
@@ -29,18 +28,19 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.thinwebview.ThinWebView;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -51,15 +51,12 @@ import org.chromium.url.GURL;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@SuppressWarnings("DoNotMock") // Mocks GURL
 public class MerchantTrustBottomSheetCoordinatorTest {
+    private static final GURL TEST_URL = new GURL("https://example.com");
+
     @ClassRule
     public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
-
-    private static Activity sActivity;
-
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -69,40 +66,43 @@ public class MerchantTrustBottomSheetCoordinatorTest {
 
     @Mock private MerchantTrustMetrics mMockMetrics;
 
-    @Mock private GURL mMockGurl;
-
     @Mock private MerchantTrustBottomSheetMediator mMockMediator;
 
     @Mock private Runnable mMockOnBottomSheetDismissed;
+
+    @Mock private Profile mMockProfile;
 
     @Captor private ArgumentCaptor<EmptyBottomSheetObserver> mBottomSheetObserverCaptor;
 
     @Captor private ArgumentCaptor<MerchantTrustBottomSheetContent> mSheetContentCaptor;
 
-    private static final String DUMMY_SHEET_TITLE = "DUMMY_TITLE";
+    private static final String TEST_SHEET_TITLE = "Test Title";
 
     private WindowAndroid mWindowAndroid;
     private MerchantTrustBottomSheetCoordinator mDetailsTabCoordinator;
 
     @BeforeClass
     public static void setupSuite() {
-        sActivity = sActivityTestRule.launchActivity(null);
+        sActivityTestRule.launchActivity(null);
     }
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mWindowAndroid = new WindowAndroid(sActivity, /* trackOcclusion= */ true);
+                    BlankUiTestActivity activity = sActivityTestRule.getActivity();
+                    mWindowAndroid =
+                            new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true);
                     mDetailsTabCoordinator =
                             new MerchantTrustBottomSheetCoordinator(
-                                    sActivity,
+                                    activity,
                                     mWindowAndroid,
                                     mMockBottomSheetController,
                                     mMockDecorView,
                                     mMockMetrics,
-                                    IntentRequestTracker.createFromActivity(sActivity),
-                                    new ObservableSupplierImpl<>());
+                                    IntentRequestTracker.createFromActivity(activity),
+                                    ObservableSuppliers.createNonNull(mMockProfile));
                 });
         mDetailsTabCoordinator.setMediatorForTesting(mMockMediator);
         requestOpenSheetAndVerify();
@@ -121,7 +121,7 @@ public class MerchantTrustBottomSheetCoordinatorTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mDetailsTabCoordinator.requestOpenSheet(
-                            mMockGurl, DUMMY_SHEET_TITLE, mMockOnBottomSheetDismissed);
+                            TEST_URL, TEST_SHEET_TITLE, mMockOnBottomSheetDismissed);
                 });
         verify(mMockMediator, times(1))
                 .setupSheetWebContents(any(ThinWebView.class), any(PropertyModel.class));
@@ -129,7 +129,7 @@ public class MerchantTrustBottomSheetCoordinatorTest {
                 .addObserver(mBottomSheetObserverCaptor.capture());
         verify(mMockDecorView, times(1))
                 .addOnLayoutChangeListener(any(OnLayoutChangeListener.class));
-        verify(mMockMediator, times(1)).navigateToUrl(eq(mMockGurl), eq(DUMMY_SHEET_TITLE));
+        verify(mMockMediator, times(1)).navigateToUrl(eq(TEST_URL), eq(TEST_SHEET_TITLE));
         verify(mMockBottomSheetController, times(1))
                 .requestShowContent(mSheetContentCaptor.capture(), eq(true));
     }

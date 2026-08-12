@@ -32,8 +32,10 @@
 
 #include "base/allocator/partition_alloc_features.h"
 #include "base/allocator/partition_alloc_support.h"
+#include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
+#include "base/memory/aligned_memory.h"
 #include "base/no_destructor.h"
 #include "base/strings/safe_sprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -69,6 +71,12 @@ partition_alloc::PartitionRoot* Partitions::array_buffer_root_ = nullptr;
 partition_alloc::PartitionRoot* Partitions::buffer_root_ = nullptr;
 
 namespace {
+
+// Whether to populate "discardable bytes" in "light" stats reported via
+// `Partitions::DumpMemoryStats`. This involves traversing the free list which
+// is expensive.
+BASE_FEATURE(kPartitionsDumpPopulateDiscardableBytes,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Reads feature configuration and returns a suitable
 // `PartitionOptions`.
@@ -128,7 +136,11 @@ bool Partitions::InitializeOnce() {
   buffer_root_ = buffer_allocator->root();
   if (base::FeatureList::IsEnabled(
           kBlinkUseLargeEmptySlotSpanRingForBufferRoot)) {
-    buffer_root_->EnableLargeEmptySlotSpanRing();
+    constexpr size_t kLargeEmptySlotSpanRingSize =
+        partition_alloc::internal::SlotSpanRingMaxSize::kMedium;
+    constexpr int kDefaultMaxEmptySlotSpansDirtyBytesShift = 3;
+    buffer_root_->AdjustSlotSpanRing(kLargeEmptySlotSpanRingSize,
+                                     kDefaultMaxEmptySlotSpansDirtyBytesShift);
   }
 
   // FastMalloc doesn't provide isolation, only a (hopefully fast) malloc().
@@ -140,6 +152,8 @@ bool Partitions::InitializeOnce() {
   // pay it when we don't have to.
 #if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   options.thread_cache = PartitionOptions::kEnabled;
+  options.thread_cache_index =
+      partition_alloc::internal::kDefaultRootThreadCacheIndex;
   static base::NoDestructor<partition_alloc::PartitionAllocator>
       fast_malloc_allocator(options);
   fast_malloc_root_ = fast_malloc_allocator->root();
@@ -154,12 +168,10 @@ void Partitions::InitializeArrayBufferPartition() {
   CHECK(initialized_);
   CHECK(!ArrayBufferPartitionInitialized());
 
-  // BackupRefPtr disallowed because it will prevent allocations from being 16B
-  // aligned as required by ArrayBufferContents.
+
   static base::NoDestructor<partition_alloc::PartitionAllocator>
       array_buffer_allocator([]() {
         partition_alloc::PartitionOptions opts;
-        opts.backup_ref_ptr = partition_alloc::PartitionOptions::kDisabled;
         // When the V8 virtual memory cage is enabled, the ArrayBuffer
         // partition must be placed inside of it. For that, PA's
         // ConfigurablePool is created inside the V8 Cage during
@@ -194,15 +206,23 @@ void Partitions::DumpMemoryStats(
   // accessed only on the main thread.
   DCHECK(IsMainThread());
 
+  const bool populate_discardable_bytes =
+      !is_light_dump ||
+      base::FeatureList::IsEnabled(kPartitionsDumpPopulateDiscardableBytes);
+
   if (auto* fast_malloc_partition = FastMallocPartition()) {
     fast_malloc_partition->DumpStats("fast_malloc", is_light_dump,
+                                     populate_discardable_bytes,
                                      partition_stats_dumper);
   }
   if (ArrayBufferPartitionInitialized()) {
     ArrayBufferPartition()->DumpStats("array_buffer", is_light_dump,
+                                      populate_discardable_bytes,
                                       partition_stats_dumper);
   }
-  BufferPartition()->DumpStats("buffer", is_light_dump, partition_stats_dumper);
+  BufferPartition()->DumpStats("buffer", is_light_dump,
+                               populate_discardable_bytes,
+                               partition_stats_dumper);
 }
 
 namespace {
@@ -236,15 +256,15 @@ size_t Partitions::TotalSizeOfCommittedPages() {
   size_t total_size = 0;
   // Racy reads below: this is fine to collect statistics.
   if (auto* fast_malloc_partition = FastMallocPartition()) {
-    total_size +=
-        TS_UNCHECKED_READ(fast_malloc_partition->total_size_of_committed_pages);
+    total_size += TS_UNCHECKED_READ(
+        fast_malloc_partition->total_size_of_committed_pages_);
   }
   if (ArrayBufferPartitionInitialized()) {
     total_size += TS_UNCHECKED_READ(
-        ArrayBufferPartition()->total_size_of_committed_pages);
+        ArrayBufferPartition()->total_size_of_committed_pages_);
   }
   total_size +=
-      TS_UNCHECKED_READ(BufferPartition()->total_size_of_committed_pages);
+      TS_UNCHECKED_READ(BufferPartition()->total_size_of_committed_pages_);
   return total_size;
 }
 
@@ -330,13 +350,28 @@ void* Partitions::BufferTryRealloc(void* p, size_t n, const char* type_name) {
 }
 
 // static
+void* Partitions::BufferTryAlignedZeroedMalloc(size_t n,
+                                               size_t alignment,
+                                               const char* type_name) {
+  return BufferPartition()->AlignedAlloc<
+      partition_alloc::AllocFlags::kZeroFill |
+      partition_alloc::AllocFlags::kReturnNull>(alignment, n);
+}
+
+// static
 void Partitions::BufferFree(void* p) {
   BufferPartition()->Free(p);
 }
 
 // static
+void Partitions::BufferAlignedFree(void* p) {
+  BufferPartition()->AlignedFree(p);
+}
+
+// static
 void Partitions::BufferFreeWithSize(void* p, size_t size) {
-  BufferPartition()->FreeWithSize(p, size);
+  BufferPartition()->Free<partition_alloc::FreeFlags::kWithSizeHint>(
+      p, {.size = size});
 }
 
 // static
@@ -362,8 +397,8 @@ void* Partitions::FastMalloc(size_t n, const char* type_name) {
 void* Partitions::FastZeroedMalloc(size_t n, const char* type_name) {
   auto* fast_malloc_partition = FastMallocPartition();
   if (fast_malloc_partition) [[unlikely]] {
-    return fast_malloc_partition
-        ->AllocInline<partition_alloc::AllocFlags::kZeroFill>(n, type_name);
+    return fast_malloc_partition->Alloc<partition_alloc::AllocFlags::kZeroFill>(
+        n, type_name);
   } else {
     return calloc(n, 1);
   }
@@ -433,10 +468,16 @@ void Partitions::AdjustPartitionsForForeground() {
   DCHECK(initialized_);
   if (base::FeatureList::IsEnabled(
           base::features::kPartitionAllocAdjustSizeWhenInForeground)) {
-    array_buffer_root_->AdjustForForeground();
-    buffer_root_->AdjustForForeground();
+    constexpr int kForegroundMaxEmptySlotSpansDirtyBytesShift = 2;
+    int16_t size = static_cast<int16_t>(
+        base::features::kPartitionAllocForegroundEmptySlotSpanRingSize.Get());
+    array_buffer_root_->AdjustSlotSpanRing(
+        size, kForegroundMaxEmptySlotSpansDirtyBytesShift);
+    buffer_root_->AdjustSlotSpanRing(
+        size, kForegroundMaxEmptySlotSpansDirtyBytesShift);
     if (fast_malloc_root_) {
-      fast_malloc_root_->AdjustForForeground();
+      fast_malloc_root_->AdjustSlotSpanRing(
+          size, kForegroundMaxEmptySlotSpansDirtyBytesShift);
     }
   }
 }
@@ -446,10 +487,16 @@ void Partitions::AdjustPartitionsForBackground() {
   DCHECK(initialized_);
   if (base::FeatureList::IsEnabled(
           base::features::kPartitionAllocAdjustSizeWhenInForeground)) {
-    array_buffer_root_->AdjustForBackground();
-    buffer_root_->AdjustForBackground();
+    constexpr int kBackgroundMaxEmptySlotSpansDirtyBytesShift = 3;
+    int16_t size = static_cast<int16_t>(
+        base::features::kPartitionAllocBackgroundEmptySlotSpanRingSize.Get());
+    array_buffer_root_->AdjustSlotSpanRing(
+        size, kBackgroundMaxEmptySlotSpansDirtyBytesShift);
+    buffer_root_->AdjustSlotSpanRing(
+        size, kBackgroundMaxEmptySlotSpansDirtyBytesShift);
     if (fast_malloc_root_) {
-      fast_malloc_root_->AdjustForBackground();
+      fast_malloc_root_->AdjustSlotSpanRing(
+          size, kBackgroundMaxEmptySlotSpansDirtyBytesShift);
     }
   }
 }

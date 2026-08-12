@@ -6,7 +6,6 @@ include_rules = [
   "+gpu/command_buffer/common",
   "+gpu/config",
   "+gpu/ipc",
-  "+gpu/skia_bindings",
   "+services/viz/public/mojom",
   "+skia/ext",
   "+ui/accelerated_widget_mac",
@@ -17,7 +16,7 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  "in_process_context_factory\.h": [
+  "in_process_context_factory\\.h": [
     "+gpu/command_buffer/service/shared_image/shared_image_manager.h",
     "+gpu/command_buffer/service/sync_point_manager.h",
     "+gpu/command_buffer/service/scheduler.h",

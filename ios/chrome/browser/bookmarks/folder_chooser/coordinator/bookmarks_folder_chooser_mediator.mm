@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/bookmarks/folder_chooser/coordinator/bookmarks_folder_chooser_mediator.h"
 
-#import "base/containers/contains.h"
 #import "base/memory/raw_ptr.h"
 #import "components/bookmarks/browser/bookmark_model.h"
 #import "components/bookmarks/browser/bookmark_node.h"
@@ -37,23 +36,27 @@ using bookmarks::BookmarkNode;
   BookmarksFolderChooserSubDataSourceImpl* _accountDataSource;
   // Set of nodes to hide when displaying folders. This is to avoid to move a
   // folder inside a child folder. These are also the list of nodes that are
-  // being edited (moved to a folder).
-  std::set<const BookmarkNode*> _editedNodes;
+  // being moved (moved to a folder).
+  std::set<int64_t> _movedNodeIds;
   // Observer for signin status changes.
   std::unique_ptr<AuthenticationServiceObserverBridge> _authServiceBridge;
   // Sync service.
   raw_ptr<syncer::SyncService> _syncService;
   // Observer for sync service status changes.
   std::unique_ptr<SyncObserverBridge> _syncObserverBridge;
+  // The currently selected folder.
+  raw_ptr<const bookmarks::BookmarkNode> _selectedFolderNode;
 }
 
+@synthesize UIDisabled = _UIDisabled;
+
 - (instancetype)initWithBookmarkModel:(bookmarks::BookmarkModel*)model
-                          editedNodes:(std::set<const BookmarkNode*>)editedNodes
+                         movedNodeIds:(std::set<int64_t>)movedNodeIds
                 authenticationService:(AuthenticationService*)authService
                           syncService:(syncer::SyncService*)syncService {
-  CHECK(model, base::NotFatalUntil::M145);
-  CHECK(model->loaded(), base::NotFatalUntil::M145);
-  CHECK(authService->initialized(), base::NotFatalUntil::M145);
+  CHECK(model);
+  CHECK(model->loaded());
+  CHECK(authService->initialized());
 
   self = [super init];
   if (self) {
@@ -68,7 +71,7 @@ using bookmarks::BookmarkNode;
                          type:BookmarkStorageType::kAccount
              parentDataSource:self];
 
-    _editedNodes = std::move(editedNodes);
+    _movedNodeIds = std::move(movedNodeIds);
     _authServiceBridge = std::make_unique<AuthenticationServiceObserverBridge>(
         authService, self);
     _syncService = syncService;
@@ -84,19 +87,24 @@ using bookmarks::BookmarkNode;
   [_accountDataSource disconnect];
   _accountDataSource.consumer = nil;
   _accountDataSource = nil;
-  _editedNodes.clear();
+  _movedNodeIds.clear();
   _authServiceBridge.reset();
   _syncService = nullptr;
   _syncObserverBridge = nullptr;
 }
 
 - (void)dealloc {
-  CHECK(!_localOrSyncableDataSource, base::NotFatalUntil::M149);
-  CHECK(!_authServiceBridge, base::NotFatalUntil::M149);
+  DUMP_WILL_BE_CHECK(!_localOrSyncableDataSource);
+  DUMP_WILL_BE_CHECK(!_authServiceBridge);
 }
 
-- (const std::set<const BookmarkNode*>&)editedNodes {
-  return _editedNodes;
+- (std::set<raw_ptr<const bookmarks::BookmarkNode>>)movedNodes {
+  return bookmark_utils_ios::GetBookmarkNodesByIds(_bookmarkModel,
+                                                   _movedNodeIds);
+}
+
+- (const bookmarks::BookmarkNode*)selectedFolderNode {
+  return _selectedFolderNode;
 }
 
 #pragma mark - BookmarksFolderChooserDataSource
@@ -120,7 +128,7 @@ using bookmarks::BookmarkNode;
 
 #pragma mark - BookmarksFolderChooserMutator
 
-- (void)setSelectedFolderNode:(const BookmarkNode*)folderNode {
+- (void)setSelectedFolderNode:(const bookmarks::BookmarkNode*)folderNode {
   _selectedFolderNode = folderNode;
   [_consumer notifyModelUpdated];
 }
@@ -128,16 +136,17 @@ using bookmarks::BookmarkNode;
 #pragma mark - BookmarksFolderChooserParentDataSource
 
 - (void)bookmarkNodeDeleted:(const BookmarkNode*)bookmarkNode {
-  // Remove node from `_editedNodes` if it is already deleted (possibly remotely
-  // by another sync device).
-  if (base::Contains(_editedNodes, bookmarkNode)) {
-    _editedNodes.erase(bookmarkNode);
-    // if `_editedNodes` becomes empty, nothing to move.  Exit the folder
+  // Remove node from `_movedNodeIds` if it is already deleted (possibly
+  // remotely by another sync device).
+  int64_t nodeId = bookmarkNode->id();
+  if (_movedNodeIds.contains(nodeId)) {
+    _movedNodeIds.erase(nodeId);
+    // if `_movedNodeIds` becomes empty, nothing to move.  Exit the folder
     // chooser.
-    if (_editedNodes.empty()) {
+    if (_movedNodeIds.empty()) {
       [_delegate bookmarksFolderChooserMediatorWantsDismissal:self];
     }
-    // Exit here because no visible node was deleted. Nodes in `_editedNodes`
+    // Exit here because no visible node was deleted. Nodes in `_movedNodeIds`
     // cannot be any visible folder in folder chooser.
     return;
   }
@@ -146,14 +155,14 @@ using bookmarks::BookmarkNode;
     return;
   }
 
-  if (bookmarkNode == _selectedFolderNode) {
+  if (bookmarkNode == _selectedFolderNode.get()) {
     // The selected folder has been deleted. Unset `_selectedFolderNode`.
     _selectedFolderNode = nil;
   }
 }
 
 - (void)bookmarkModelWillRemoveAllNodes {
-  _editedNodes.clear();
+  _movedNodeIds.clear();
   _selectedFolderNode = nil;
   // Nothing to move so exit the folder chooser.
   [_delegate bookmarksFolderChooserMediatorWantsDismissal:self];

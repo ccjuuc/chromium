@@ -14,11 +14,9 @@
 
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/feature_list.h"
 #include "base/lazy_instance.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "net/base/mime_sniffer.h"
@@ -218,8 +216,7 @@ MimeType GetCanonicalMimeType(std::string_view mime_type) {
     return MimeType::kPlain;
   }
 
-  if (base::Contains(GetNeverSniffedMimeTypes(),
-                     base::ToLowerASCII(mime_type))) {
+  if (GetNeverSniffedMimeTypes().contains(base::ToLowerASCII(mime_type))) {
     return MimeType::kNeverSniffed;
   }
 

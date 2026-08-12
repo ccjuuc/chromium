@@ -8,19 +8,19 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/webui/boca_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/window_state.h"
 #include "base/files/file_path.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/boca/boca_manager.h"
 #include "chrome/browser/ash/boca/boca_manager_factory.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/apps/boca_web_app_info.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.h"
@@ -29,6 +29,7 @@
 #include "chromeos/ash/components/boca/proto/roster.pb.h"
 #include "chromeos/ash/components/boca/proto/session.pb.h"
 #include "chromeos/ash/components/boca/session_api/constants.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -150,9 +151,9 @@ IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
   base::test::TestFuture<void> future;
   boca_session_manager()->set_end_session_callback_for_testing(
       future.GetCallback());
-  Browser* const boca_app_browser =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
-  boca_app_browser->window()->Close();
+  ash::BrowserDelegate* boca_app_browser = ash::FindSystemWebAppBrowser(
+      profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
+  boca_app_browser->Close();
   EXPECT_TRUE(future.Wait());
   EXPECT_FALSE(boca_session_manager()->end_session_callback_for_testing());
 }
@@ -164,8 +165,13 @@ IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
   base::test::TestFuture<void> future;
   boca_session_manager()->set_end_session_callback_for_testing(
       future.GetCallback());
-  Browser* const boca_app_browser =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
+  ash::BrowserDelegate* boca_app_browser_delegate =
+      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA,
+                                   ash::BrowserType::kApp);
+  Browser* boca_app_browser =
+      boca_app_browser_delegate
+          ? boca_app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly()
+          : nullptr;
 
   // Trigger reload which will cause page handler to be recreated.
   ui_test_utils::NavigateToURLWithDisposition(
@@ -180,10 +186,10 @@ IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
 IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
                        ShouldLaunchIntoFloatMode) {
   LaunchAndWait();
+  ash::BrowserDelegate* boca_app_browser = ash::FindSystemWebAppBrowser(
+      profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
   auto* window =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA)
-          ->window()
-          ->GetNativeWindow();
+      boca_app_browser ? boca_app_browser->GetNativeWindow() : nullptr;
   ash::WindowState* window_state = ash::WindowState::Get(window);
   EXPECT_TRUE(window_state->IsFloated());
   EXPECT_EQ(400, window->bounds().width());
@@ -193,8 +199,13 @@ IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
 IN_PROC_BROWSER_TEST_P(BocaAppProviderIntegrationTest,
                        ShouldHideExtensionsContainerInToolbar) {
   LaunchAndWait();
-  const Browser* const boca_app_browser =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
+  ash::BrowserDelegate* boca_app_browser_delegate =
+      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA,
+                                   ash::BrowserType::kApp);
+  Browser* boca_app_browser =
+      boca_app_browser_delegate
+          ? boca_app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly()
+          : nullptr;
   ASSERT_THAT(boca_app_browser, NotNull());
   auto* const web_app_frame_toolbar_view =
       BrowserView::GetBrowserViewForBrowser(boca_app_browser)
@@ -235,10 +246,10 @@ IN_PROC_BROWSER_TEST_P(BocaAppConsumerIntegrationTest,
 IN_PROC_BROWSER_TEST_P(BocaAppConsumerIntegrationTest,
                        ShouldNotLaunchIntoFloatMode) {
   LaunchAndWait();
+  ash::BrowserDelegate* boca_app_browser = ash::FindSystemWebAppBrowser(
+      profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
   auto* window =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA)
-          ->window()
-          ->GetNativeWindow();
+      boca_app_browser ? boca_app_browser->GetNativeWindow() : nullptr;
   ash::WindowState* window_state = ash::WindowState::Get(window);
   EXPECT_FALSE(window_state->IsFloated());
 }
@@ -249,9 +260,9 @@ IN_PROC_BROWSER_TEST_P(BocaAppConsumerIntegrationTest,
   base::test::TestFuture<void> future;
   boca_session_manager()->set_end_session_callback_for_testing(
       future.GetCallback());
-  Browser* const boca_app_browser =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
-  boca_app_browser->window()->Close();
+  ash::BrowserDelegate* boca_app_browser = ash::FindSystemWebAppBrowser(
+      profile(), ash::SystemWebAppType::BOCA, ash::BrowserType::kApp);
+  boca_app_browser->Close();
   // Callback never executed.
   EXPECT_TRUE(boca_session_manager()->end_session_callback_for_testing());
 }
@@ -259,8 +270,13 @@ IN_PROC_BROWSER_TEST_P(BocaAppConsumerIntegrationTest,
 IN_PROC_BROWSER_TEST_P(BocaAppConsumerIntegrationTest,
                        ShouldShowExtensionsContainerInToolbar) {
   LaunchAndWait();
-  const Browser* const boca_app_browser =
-      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA);
+  ash::BrowserDelegate* boca_app_browser_delegate =
+      ash::FindSystemWebAppBrowser(profile(), ash::SystemWebAppType::BOCA,
+                                   ash::BrowserType::kApp);
+  Browser* boca_app_browser =
+      boca_app_browser_delegate
+          ? boca_app_browser_delegate->GetBrowser().GetBrowserForMigrationOnly()
+          : nullptr;
   ASSERT_THAT(boca_app_browser, NotNull());
   auto* const web_app_frame_toolbar_view =
       BrowserView::GetBrowserViewForBrowser(boca_app_browser)

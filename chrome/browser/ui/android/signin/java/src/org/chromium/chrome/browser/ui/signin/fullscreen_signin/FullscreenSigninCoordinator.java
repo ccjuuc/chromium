@@ -4,8 +4,10 @@
 
 package org.chromium.chrome.browser.ui.signin.fullscreen_signin;
 
-import android.accounts.Account;
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
+import android.graphics.drawable.Drawable;
 
 import androidx.annotation.MainThread;
 import androidx.annotation.StringRes;
@@ -16,7 +18,13 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManager;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
+import org.chromium.chrome.browser.signin.services.BadgeConfig;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.identitymanager.PrimaryAccountChangeEvent;
+import org.chromium.components.signin.metrics.AccountConsistencyPromoAction;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
+import org.chromium.google_apis.gaia.CoreAccountId;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -25,11 +33,11 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 /** The coordinator handles the update and interaction of the fullscreen sign-in screen. */
 @NullMarked
 @MainThread
-public class FullscreenSigninCoordinator {
+public class FullscreenSigninCoordinator implements IdentityManager.Observer {
     /** Delegate for the fullscreen signin MVC. */
     public interface Delegate {
-        /** Notifies when the user clicked the "add account" button. */
-        void addAccount();
+        /** Notifies when the user clicked the "add account" button with a specified email. */
+        void addAccount(@Nullable String accountEmail);
 
         /**
          * Notifies when the user accepts the terms of service. Only implemented for the FRE.
@@ -42,17 +50,18 @@ public class FullscreenSigninCoordinator {
         /** Called when the interaction with the page is over and the next page should be shown. */
         void advanceToNextPage();
 
+        /** Aborts the sign-in flow. */
+        void abortFlow();
+
         /** Called to display the device lock page */
-        void displayDeviceLockPage(Account selectedAccount);
+        void displayDeviceLockPage(CoreAccountId selectedAccountId);
 
         /**
          * Records histograms corresponding to the user accepting sign-in.
          *
          * @param promoAction the promo action corresponding to the account used to sign in.
          */
-        void recordUserSignInHistograms(
-                @org.chromium.components.signin.metrics.AccountConsistencyPromoAction
-                        int promoAction);
+        void recordUserSignInHistograms(@AccountConsistencyPromoAction int promoAction);
 
         /** Records histograms corresponding to the user dismissing the sign-in screen. */
         void recordSigninDismissedHistograms();
@@ -75,6 +84,10 @@ public class FullscreenSigninCoordinator {
          * @param url Resource id for the URL of the web page.
          */
         default void showInfoPage(@StringRes int url) {}
+
+        // TODO(crbug.com/537826242): Remove once AndroidFreLayoutUpdate is enabled by default.
+        /** Called when the initial loading phase (native, policies, accounts) is completed. */
+        default void onInitialLoadCompleted() {}
 
         /** Returns the supplier that provides the Profile (when available). */
         OneshotSupplier<ProfileProvider> getProfileSupplier();
@@ -103,6 +116,9 @@ public class FullscreenSigninCoordinator {
     }
 
     private final FullscreenSigninMediator mMediator;
+    private final Delegate mDelegate;
+    @Nullable private IdentityManager mIdentityManager;
+    private boolean mDestroyed;
 
     @Nullable
     private PropertyModelChangeProcessor<PropertyModel, FullscreenSigninView, PropertyKey>
@@ -124,20 +140,49 @@ public class FullscreenSigninCoordinator {
             PrivacyPreferencesManager privacyPreferencesManager,
             FullscreenSigninConfig config,
             @SigninAccessPoint int accessPoint) {
+        mDelegate = delegate;
+        mDelegate.getProfileSupplier().onAvailable(this::onProfileAvailable);
         mMediator =
                 new FullscreenSigninMediator(
                         context,
                         modalDialogManager,
-                        delegate,
+                        mDelegate,
                         privacyPreferencesManager,
                         config,
                         accessPoint);
     }
 
+    private void onProfileAvailable(ProfileProvider result) {
+        if (mDestroyed) return;
+
+        mIdentityManager =
+                IdentityServicesProvider.get().getIdentityManager(result.getOriginalProfile());
+        assumeNonNull(mIdentityManager).addObserver(this);
+    }
+
     /** Releases the resources used by the coordinator. */
     public void destroy() {
+        mDestroyed = true;
         setView(null);
+        if (mIdentityManager != null) {
+            mIdentityManager.removeObserver(this);
+            mIdentityManager = null;
+        }
         mMediator.destroy();
+    }
+
+    /** Implements {@link IdentityManager.Observer}. */
+    @Override
+    public void onPrimaryAccountChanged(PrimaryAccountChangeEvent eventDetails) {
+        if (mDestroyed) return;
+
+        if (mMediator.isContinueOrDismissClicked()) {
+            // If the sign-in occurred through this promo, then it is already being handled.
+            return;
+        }
+        if (eventDetails.getEventTypeFor() == PrimaryAccountChangeEvent.Type.SET) {
+            mDelegate.advanceToNextPage();
+        }
     }
 
     /**
@@ -172,6 +217,10 @@ public class FullscreenSigninCoordinator {
         mMediator.onAccountAdded(accountName);
     }
 
+    public void onAddAccountCanceled() {
+        mMediator.onAddAccountCanceled();
+    }
+
     /** Continue the sign-in process with the currently selected account. */
     public void continueSignIn() {
         mMediator.proceedWithSignIn();
@@ -180,5 +229,21 @@ public class FullscreenSigninCoordinator {
     /** Abandon the sign-in process and dismiss the sign-in page. */
     public void cancelSignInAndDismiss() {
         mMediator.dismiss();
+    }
+
+    public Drawable getProfilePictureForTesting() {
+        return mMediator.getProfilePictureForTesting(); // IN-TEST
+    }
+
+    public void setStartAnimationForTesting(boolean start) {
+        mMediator.setStartAnimationForTesting(start); // IN-TEST
+    }
+
+    public @Nullable BadgeConfig getSigninAnimationBadgeConfigForTesting() {
+        return mMediator.getSigninAnimationBadgeConfigForTesting(); // IN-TEST
+    }
+
+    public @Nullable BadgeConfig getContinueButtonBadgeConfigForTesting() {
+        return mMediator.getContinueButtonBadgeConfigForTesting(); // IN-TEST
     }
 }

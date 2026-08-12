@@ -45,7 +45,9 @@
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/cold_mode_spell_check_requester.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/idle_spell_check_controller.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/on_demand_spell_check_controller.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/spell_check_requester.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/spell_check_requester_helper.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -56,6 +58,7 @@
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -103,6 +106,10 @@ SpellChecker::SpellChecker(LocalDOMWindow& window)
       idle_spell_check_controller_(
           MakeGarbageCollected<IdleSpellCheckController>(
               window,
+              *spell_check_requester_)),
+      on_demand_spell_check_controller_(
+          MakeGarbageCollected<OnDemandSpellCheckController>(
+              window,
               *spell_check_requester_)) {}
 
 LocalFrame& SpellChecker::GetFrame() const {
@@ -119,7 +126,7 @@ bool SpellChecker::IsSpellCheckingEnabled() const {
 void SpellChecker::IgnoreSpelling() {
   RemoveMarkers(GetFrame()
                     .Selection()
-                    .ComputeVisibleSelectionInDOMTree()
+                    .ComputeVisibleSelectionInDomTree()
                     .ToNormalizedEphemeralRange(),
                 DocumentMarker::MarkerTypes::Spelling());
 }
@@ -135,7 +142,7 @@ void SpellChecker::AdvanceToNextMisspelling(bool start_before_selection) {
   // Start at the end of the selection, search to edge of document. Starting at
   // the selection end makes repeated "check spelling" commands work.
   VisibleSelection selection(
-      GetFrame().Selection().ComputeVisibleSelectionInDOMTree());
+      GetFrame().Selection().ComputeVisibleSelectionInDomTree());
   Position spelling_search_start, spelling_search_end;
   Range::selectNodeContents(GetFrame().GetDocument(), spelling_search_start,
                             spelling_search_end);
@@ -241,7 +248,7 @@ void SpellChecker::AdvanceToNextMisspelling(bool start_before_selection) {
         EphemeralRange(spelling_search_start, spelling_search_end),
         misspelling_offset, misspelled_word.length());
     GetFrame().Selection().SetSelectionAndEndTyping(
-        SelectionInDOMTree::Builder()
+        SelectionInDomTree::Builder()
             .SetBaseAndExtent(misspelling_range)
             .Build());
     GetFrame().Selection().RevealSelection();
@@ -335,6 +342,16 @@ void SpellChecker::MarkAndReplaceFor(
   // Clear the stale markers.
   RemoveMarkers(checking_range, DocumentMarker::MarkerTypes::Misspelling());
 
+  // Spelling markers can also exist in the form of Suggestion Markers, this is
+  // often added by IME interactions. After a new spell check request, markers
+  // of this form may become stale and should be removed as well.
+  if (ShouldRemoveSuggestionMarkerOfMisspellingAndGrammarType()) {
+    RemoveSuggestionMarkersByType(
+        checking_range, SuggestionMarker::SuggestionType::kMisspelling);
+    RemoveSuggestionMarkersByType(checking_range,
+                                  SuggestionMarker::SuggestionType::kGrammar);
+  }
+
   if (!results.size())
     return;
 
@@ -411,7 +428,7 @@ void SpellChecker::RemoveSpellingAndGrammarMarkers(const HTMLElement& element,
 DocumentMarkerGroup* SpellChecker::GetSpellCheckMarkerGroupUnderSelection()
     const {
   const VisibleSelection& selection =
-      GetFrame().Selection().ComputeVisibleSelectionInDOMTree();
+      GetFrame().Selection().ComputeVisibleSelectionInDomTree();
   if (selection.IsNone())
     return {};
 
@@ -432,7 +449,7 @@ std::pair<String, String> SpellChecker::SelectMisspellingAsync() {
     return {};
 
   const VisibleSelection& selection =
-      GetFrame().Selection().ComputeVisibleSelectionInDOMTree();
+      GetFrame().Selection().ComputeVisibleSelectionInDomTree();
   // Caret and range selections (one of which we must have since we found a
   // marker) always return valid normalized ranges.
   const EphemeralRange& selection_range =
@@ -458,7 +475,7 @@ void SpellChecker::ReplaceMisspelledRange(const String& text) {
     return;
 
   GetFrame().Selection().SetSelectionAndEndTyping(
-      SelectionInDOMTree::Builder()
+      SelectionInDomTree::Builder()
           .Collapse(marker_group->StartPosition())
           .Extend(marker_group->EndPosition())
           .Build());
@@ -480,6 +497,7 @@ void SpellChecker::RespondToChangedEnablement(const HTMLElement& element,
     idle_spell_check_controller_->RespondToChangedEnablement();
   } else {
     RemoveSpellingAndGrammarMarkers(element);
+    on_demand_spell_check_controller_->SetSpellCheckingDisabled(element);
     idle_spell_check_controller_->SetSpellCheckingDisabled(element);
   }
 }
@@ -524,15 +542,15 @@ bool SpellChecker::SelectionStartHasMarkerFor(
     int length) const {
   Node* node = FindFirstMarkable(GetFrame()
                                      .Selection()
-                                     .ComputeVisibleSelectionInDOMTree()
+                                     .ComputeVisibleSelectionInDomTree()
                                      .Start()
                                      .AnchorNode());
   auto* text_node = DynamicTo<Text>(node);
   if (!text_node)
     return false;
 
-  unsigned start_offset = static_cast<unsigned>(from);
-  unsigned end_offset = static_cast<unsigned>(from + length);
+  wtf_size_t start_offset = static_cast<wtf_size_t>(from);
+  wtf_size_t end_offset = static_cast<wtf_size_t>(from + length);
   DocumentMarkerVector markers =
       GetFrame().GetDocument()->Markers().MarkersFor(*text_node);
   for (wtf_size_t i = 0; i < markers.size(); ++i) {
@@ -555,10 +573,23 @@ void SpellChecker::RemoveMarkers(const EphemeralRange& range,
   GetFrame().GetDocument()->Markers().RemoveMarkersInRange(range, marker_types);
 }
 
+void SpellChecker::RemoveSuggestionMarkersByType(
+    const EphemeralRange& range,
+    SuggestionMarker::SuggestionType type) {
+  DCHECK(!GetFrame().GetDocument()->NeedsLayoutTreeUpdate());
+  if (range.IsNull()) {
+    return;
+  }
+
+  GetFrame().GetDocument()->Markers().RemoveSuggestionMarkerByType(
+      ToEphemeralRangeInFlatTree(range), type);
+}
+
 void SpellChecker::Trace(Visitor* visitor) const {
   visitor->Trace(window_);
   visitor->Trace(spell_check_requester_);
   visitor->Trace(idle_spell_check_controller_);
+  visitor->Trace(on_demand_spell_check_controller_);
 }
 
 Vector<TextCheckingResult> SpellChecker::FindMisspellings(const String& text) {
@@ -651,15 +682,14 @@ std::pair<String, int> SpellChecker::FindFirstMisspelling(const Position& start,
 
         Vector<TextCheckingResult> results = FindMisspellings(paragraph_string);
 
-        for (unsigned i = 0; i < results.size(); i++) {
-          const TextCheckingResult* result = &results[i];
-          if (result->location >= current_start_offset &&
-              result->location + result->length <= current_end_offset) {
-            DCHECK_GT(result->length, 0);
-            DCHECK_GE(result->location, 0);
-            spelling_location = result->location;
+        for (const TextCheckingResult& result : results) {
+          if (result.location >= current_start_offset &&
+              result.location + result.length <= current_end_offset) {
+            DCHECK_GT(result.length, 0);
+            DCHECK_GE(result.location, 0);
+            spelling_location = result.location;
             misspelled_word =
-                paragraph_string.Substring(result->location, result->length);
+                paragraph_string.substr(result.location, result.length);
             DCHECK(misspelled_word.length());
             break;
           }
@@ -703,6 +733,7 @@ std::pair<String, int> SpellChecker::FindFirstMisspelling(const Position& start,
 
 void SpellChecker::ElementRemoved(Element* element) {
   GetIdleSpellCheckController().GetColdModeRequester().ElementRemoved(element);
+  on_demand_spell_check_controller_->ElementRemoved(*element);
 }
 
 // static

@@ -9,7 +9,6 @@ include_rules = [
   "+content/grit",
   "+content/public/common",
   "+content/public/test",
-  "+content/services/auction_worklet/public",
   "+content/test",
   "+blink/public/resources/grit",
   "+cc",
@@ -26,7 +25,6 @@ include_rules = [
 
   "+components/app_launch_prefetch",
   "+components/attribution_reporting",
-  "+components/browsing_topics/common",
   "+components/content_settings/core/common",
   "+components/history/core/browser/features.h",
   "+components/input",
@@ -131,14 +129,13 @@ include_rules = [
   "+storage/common",
 
   # For generated JNI includes.
-  "+content/public/android/common_jni",
   "+content/public/android/content_jni_headers",
   "+content/public/android/content_main_dex_jni",
   "+content/public/android/jar_jni",
 ]
 
 specific_include_rules = {
-  ".*_browsertest[a-z_]*\.(cc|h|mm)": [
+  ".*_browsertest[a-z_]*\\.(cc|h|mm)": [
     # content -> content/shell dependency is disallowed, except browser tests.
     "+content/shell/browser",
     "+content/shell/common",
@@ -147,7 +144,7 @@ specific_include_rules = {
     # content -> tools dependency is disallowed, except buildflags for switches.
     "+tools/v8_context_snapshot/buildflags.h",
   ],
-  ".*_unittest\.(cc|h|m)": [
+  ".*_unittest\\.(cc|h|m)": [
     # unittests can now embed fuzzing tests, and this dependency is needed to
     # access FUZZ_TEST macro and various domain generators.
     "+third_party/fuzztest",

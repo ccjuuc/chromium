@@ -22,10 +22,12 @@
 #include "build/build_config.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/services/storage/public/mojom/storage_service.mojom.h"
+#include "components/vrp_flags/buildflags.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/child_process_host_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/browser/service_host/utility_sandbox_delegate.h"
 #include "content/common/features.h"
 #include "content/common/in_process_child_thread_params.h"
@@ -38,14 +40,15 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/zygote/zygote_buildflags.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "media/base/media_switches.h"
+#include "media/capture/capture_switches.h"
 #include "media/media_buildflags.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
 #include "sandbox/policy/sandbox_type.h"
 #include "sandbox/policy/switches.h"
+#include "services/network/public/cpp/ip_address_space_util.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "ui/base/ui_base_switches.h"
@@ -72,20 +75,24 @@
 #if BUILDFLAG(IS_WIN)
 #include "base/synchronization/waitable_event.h"
 #include "components/app_launch_prefetch/app_launch_prefetch.h"
-#include "media/capture/capture_switches.h"
 #include "services/audio/public/mojom/audio_service.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
+#include "services/webnn/public/mojom/webnn_compiler_service.mojom.h"
+#include "services/webnn/webnn_switches.h"
 #endif
 
 #if BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 #include "base/task/sequenced_task_runner.h"
 #include "components/viz/host/gpu_client.h"
-#include "media/capture/capture_switches.h"
 #include "services/video_capture/public/mojom/video_capture_service.mojom.h"
 #endif  // BUILDFLAG(ENABLE_GPU_CHANNEL_MEDIA_CAPTURE)
 
 #if BUILDFLAG(ENABLE_VR)
 #include "device/vr/public/cpp/switches.h"
+#endif
+
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+#include "components/vrp_flags/vrp_flags.h"  // nogncheck
 #endif
 
 namespace content {
@@ -214,6 +221,13 @@ UtilityProcessHost::Options::WithExtraCommandLineSwitches(
   return *this;
 }
 
+UtilityProcessHost::Options&
+UtilityProcessHost::Options::WithExtraCommandLineSwitchKeyValues(
+    std::vector<std::pair<std::string, std::string>> switch_key_values) {
+  extra_switch_key_values_ = std::move(switch_key_values);
+  return *this;
+}
+
 #if BUILDFLAG(IS_WIN)
 UtilityProcessHost::Options& UtilityProcessHost::Options::WithPreloadLibraries(
     const std::vector<base::FilePath>& preloads) {
@@ -234,8 +248,9 @@ UtilityProcessHost::Options::WithGpuClientAllowed() {
 UtilityProcessHost::Options& UtilityProcessHost::Options::WithFileToPreload(
     std::string key,
     std::variant<base::FilePath, base::ScopedFD> file) {
-  DCHECK_EQ(file_data_->files_to_preload.count(key), 0u);
-  file_data_->files_to_preload.insert({std::move(key), std::move(file)});
+  auto [it, inserted] =
+      file_data_->files_to_preload.try_emplace(std::move(key), std::move(file));
+  DCHECK(inserted);
   return *this;
 }
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
@@ -270,6 +285,12 @@ UtilityProcessHost::Options::WithBoundServiceInterfaceOnChildProcess(
   CHECK(!service_interface_to_bind_.has_value())
       << "Can only bind one service interface.";
   service_interface_to_bind_.emplace(std::move(receiver));
+  return *this;
+}
+
+UtilityProcessHost::Options& UtilityProcessHost::Options::WithPriority(
+    base::Process::Priority priority) {
+  priority_ = priority;
   return *this;
 }
 
@@ -395,6 +416,9 @@ bool UtilityProcessHost::StartProcess() {
 #if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
       switches::kDisableDevShmUsage,
 #endif
+#if BUILDFLAG(ENABLE_VRP_FLAGS)
+      vrp_flags::switches::kVrpFlags,
+#endif
 #if BUILDFLAG(IS_MAC)
       sandbox::policy::switches::kDisableMetalShaderCache,
       sandbox::policy::switches::kEnableSandboxLogging,
@@ -410,6 +434,7 @@ bool UtilityProcessHost::StartProcess() {
       switches::kUseFakeDeviceForMediaStream,
       switches::kUseFakeMjpegDecodeAccelerator,
       switches::kUseFileForFakeVideoCapture,
+      switches::kVideoCaptureUseVirtualDevicesOnly,
       switches::kUseMockCertVerifierForTesting,
       switches::kMockCertVerifierDefaultResultForTesting,
       switches::kUtilityStartupDialog,
@@ -443,8 +468,8 @@ bool UtilityProcessHost::StartProcess() {
 #endif
 #if BUILDFLAG(ENABLE_VR)
       device::switches::kWebXrHandAnonymizationStrategy,
+      device::switches::kWebXrMaxFramebufferScale,
 #endif
-      network::switches::kIpAddressSpaceOverrides,
 #if BUILDFLAG(IS_CHROMEOS)
       switches::kSchedulerBoostUrgent,
 #endif
@@ -455,11 +480,36 @@ bool UtilityProcessHost::StartProcess() {
 #if BUILDFLAG(IS_OZONE)
       switches::kRenderNodeOverride,
 #endif
+#if BUILDFLAG(USE_VAAPI)
+      switches::kHardwareVideoDevicePath,
+#endif
   };
   cmd_line->CopySwitchesFrom(browser_command_line, kSwitchNames);
+#if BUILDFLAG(IS_WIN)
+  // Propagate WebNN-specific switches to the compiler process regardless of
+  // sandbox type, since sandbox may be overridden by
+  // --disable-webnn-compiler-sandbox.
+  if (options_.metrics_name_ == webnn::mojom::WebNNCompilerService::Name_) {
+    cmd_line->CopySwitchesFrom(
+        browser_command_line,
+        switches::GetWebNNSwitchesCopiedFromGpuProcessHost());
+  }
+#endif
 
   network_session_configurator::CopyNetworkSwitches(browser_command_line,
                                                     cmd_line.get());
+
+  // |overrides| combines pref/policy + cmdline switch in the browser process.
+  // For renderer and utility (e.g. NetworkService) processes the switch is the
+  // only available source, so below the combined (pref/policy + cmdline)
+  // IP address space overrides are injected into |cmdline| for these other
+  // processes.
+  std::vector<std::string> overrides =
+      network::IPAddressSpaceOverrides::GetInstance().GetCurrentOverrides();
+  if (!overrides.empty()) {
+    cmd_line->AppendSwitchASCII(network::switches::kIpAddressSpaceOverrides,
+                                base::JoinString(overrides, ","));
+  }
 
   if (has_cmd_prefix) {
     // Launch the utility child process with some prefix
@@ -470,6 +520,10 @@ bool UtilityProcessHost::StartProcess() {
 
   for (const auto& extra_switch : options_.extra_switches_) {
     cmd_line->AppendSwitch(extra_switch);
+  }
+
+  for (const auto& [key, value] : options_.extra_switch_key_values_) {
+    cmd_line->AppendSwitchASCII(key, value);
   }
 
 #if BUILDFLAG(IS_WIN)
@@ -549,6 +603,11 @@ bool UtilityProcessHost::StartProcess() {
 
 void UtilityProcessHost::OnProcessLaunched() {
   launch_state_ = LaunchState::kLaunchComplete;
+#if !BUILDFLAG(IS_ANDROID)
+  if (options_.priority_.has_value()) {
+    process_->SetProcessPriority(options_.priority_.value());
+  }
+#endif
   if (client_) {
     client_->OnProcessLaunched(process_->GetProcess());
   }

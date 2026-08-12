@@ -441,27 +441,27 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerTest,
 
 // Test whether the top view's status is correct during various transitions
 // among normal state, browser fullscreen mode, and tab fullscreen mode.
-// Sheriff: http://crbug.com/925928
+// Sheriff: http://crbug.com/41437713
 IN_PROC_BROWSER_TEST_F(FullscreenControllerTest, DISABLED_TopViewStatusChange) {
   ExclusiveAccessContext* context = GetExclusiveAccessManager()->context();
 #if BUILDFLAG(IS_MAC)
   // First, set the preference to true so we expect to see the top view in
   // fullscreen mode.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(prefs::kShowFullscreenToolbar, true);
 #endif
 
   // Test Normal state <--> Tab fullscreen mode.
   EXPECT_FALSE(context->IsFullscreen());
-  EXPECT_TRUE(browser()->window()->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   EnterActiveTabFullscreen();
   EXPECT_TRUE(context->IsFullscreen());
-  EXPECT_FALSE(browser()->window()->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   SendEscapeToExclusiveAccessManager();
   EXPECT_FALSE(context->IsFullscreen());
-  EXPECT_TRUE(browser()->window()->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   // Test Normal state <--> Browser fullscreen mode <--> Tab fullscreen mode.
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
@@ -471,23 +471,25 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerTest, DISABLED_TopViewStatusChange) {
 #else
   bool should_show_top_ui = false;
 #endif
-  EXPECT_EQ(should_show_top_ui, browser()->window()->IsToolbarVisible());
+  EXPECT_EQ(should_show_top_ui,
+            BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   EnterActiveTabFullscreen();
   EXPECT_TRUE(context->IsFullscreen());
 #if BUILDFLAG(IS_CHROMEOS)
-  EXPECT_TRUE(browser()->window()->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 #else
-  EXPECT_FALSE(browser()->window()->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 #endif
 
   SendEscapeToExclusiveAccessManager();
   EXPECT_TRUE(context->IsFullscreen());
-  EXPECT_EQ(should_show_top_ui, browser()->window()->IsToolbarVisible());
+  EXPECT_EQ(should_show_top_ui,
+            BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
   EXPECT_FALSE(context->IsFullscreen());
-  EXPECT_TRUE(browser()->window()->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   // Test exiting tab fullscreen mode by toggling browser fullscreen mode.
   // This is to simulate pressing fullscreen shortcut key during tab fullscreen
@@ -496,15 +498,16 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerTest, DISABLED_TopViewStatusChange) {
   // tab fullscreen.
   EnterActiveTabFullscreen();
   EXPECT_TRUE(context->IsFullscreen());
-  EXPECT_FALSE(browser()->window()->IsToolbarVisible());
+  EXPECT_FALSE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
   EXPECT_FALSE(context->IsFullscreen());
-  EXPECT_TRUE(browser()->window()->IsToolbarVisible());
+  EXPECT_TRUE(BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
   EXPECT_TRUE(context->IsFullscreen());
-  EXPECT_EQ(should_show_top_ui, browser()->window()->IsToolbarVisible());
+  EXPECT_EQ(should_show_top_ui,
+            BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 }
 
 // The controller must |CanEnterFullscreenModeForTab| while in fullscreen.
@@ -512,7 +515,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerTest, DISABLED_TopViewStatusChange) {
 // element in the tab is handled in the renderer process if both elements are in
 // the same process. But the request will come to the browser when the element
 // is in a different process, such as OOPIF, because the renderer doesn't know
-// if an element in other renderer process is in fullscreen. crbug.com/1298081
+// if an element in other renderer process is in fullscreen. crbug.com/40822728
 IN_PROC_BROWSER_TEST_F(FullscreenControllerTest,
                        EnterFullscreenWhenInFullscreen) {
   EnterActiveTabFullscreen();
@@ -563,7 +566,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerPressAndHoldEscTest,
 IN_PROC_BROWSER_TEST_F(FullscreenControllerPressAndHoldEscTest,
                        NotExitBrowserLockedFullscreenOnPressEsc) {
   // Enter browser locked fullscreen.
-  ash::PinWindow(browser()->window()->GetNativeWindow(), /*trusted=*/true);
+  ash::PinWindow(browser()->GetWindow()->GetNativeWindow(), /*trusted=*/true);
   ASSERT_FALSE(IsWindowFullscreenForTabOrPending());
 
   // Short-press Esc key won't exit browser locked fullscreen.
@@ -575,7 +578,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControllerPressAndHoldEscTest,
 IN_PROC_BROWSER_TEST_F(FullscreenControllerPressAndHoldEscTest,
                        NotExitBrowserLockedFullscreenOnPressAndHoldEsc) {
   // Enter browser locked fullscreen.
-  ash::PinWindow(browser()->window()->GetNativeWindow(), /*trusted=*/true);
+  ash::PinWindow(browser()->GetWindow()->GetNativeWindow(), /*trusted=*/true);
   ASSERT_FALSE(IsWindowFullscreenForTabOrPending());
 
   // Press-and-hold Esc will not exit browser locked fullscreen.

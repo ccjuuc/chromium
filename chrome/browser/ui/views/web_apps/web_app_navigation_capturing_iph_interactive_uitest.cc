@@ -7,8 +7,15 @@
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/webui_url_constants.h"
+#include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
+#include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#endif
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
 #include "chrome/browser/browser_process.h"
@@ -25,6 +32,8 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_utils.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/dom_message_observer.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/feature_engagement/public/feature_constants.h"
@@ -60,6 +69,7 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kStartPageId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewPageId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kAppPageId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kDestinationPageId);
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSettingsPageId);
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(LatestDomMessageObserver,
                                     kLatestDomMessage);
 
@@ -85,6 +95,11 @@ class WebAppNavigationCapturingIphUiTest : public InteractiveFeaturePromoTest {
   void SetUpOnMainThread() override {
     InteractiveFeaturePromoTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
+#if BUILDFLAG(IS_CHROMEOS)
+    // Required to launch the OS Settings System Web App (SWA) during the test.
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
+        ->InstallSystemAppsForTesting();
+#endif
   }
 
   void TearDownOnMainThread() override {
@@ -127,8 +142,8 @@ class WebAppNavigationCapturingIphUiTest : public InteractiveFeaturePromoTest {
     web_app_info->scope = start_url.GetWithoutFilename();
     web_app_info->display_mode = blink::mojom::DisplayMode::kStandalone;
     const webapps::AppId app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
-    apps::AppReadinessWaiter(browser()->profile(), app_id).Await();
+        browser()->GetProfile(), std::move(web_app_info));
+    apps::AppReadinessWaiter(browser()->GetProfile(), app_id).Await();
     return app_id;
   }
 
@@ -139,7 +154,7 @@ class WebAppNavigationCapturingIphUiTest : public InteractiveFeaturePromoTest {
         Steps(InstrumentNextTab(kAppPageId, AnyBrowser()), Do([this, app_id]() {
                 web_app::WebAppProvider* provider =
                     web_app::WebAppProvider::GetForLocalAppsUnchecked(
-                        browser()->profile());
+                        browser()->GetProfile());
                 provider->scheduler().LaunchAppWithCustomParams(
                     apps::AppLaunchParams(
                         app_id, apps::LaunchContainer::kLaunchContainerWindow,
@@ -185,7 +200,7 @@ class WebAppNavigationCapturingIphUiTest : public InteractiveFeaturePromoTest {
     auto steps = Steps(
         InstrumentNextTab(kStartPageId, AnyBrowser()), Do([this, app_id]() {
           WebAppProvider* provider =
-              WebAppProvider::GetForWebApps(browser()->profile());
+              WebAppProvider::GetForWebApps(browser()->GetProfile());
           CHECK(provider);
           provider->scheduler().LaunchApp(app_id, /*url=*/std::nullopt,
                                           base::DoNothing());
@@ -414,6 +429,38 @@ IN_PROC_BROWSER_TEST_F(WebAppNavigationCapturingIphUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppNavigationCapturingIphUiTest,
+                       IPHSettingOpensSettingsAndLogsHistogram) {
+  const webapps::AppId app_id = InstallTestWebApp(GetDestinationUrl());
+
+  base::HistogramTester histogram_tester;
+#if BUILDFLAG(IS_CHROMEOS)
+  const GURL settings_url = GURL(base::StrCat(
+      {ash::kChromeUIOSSettingsURL,
+       chromeos::settings::mojom::kAppDetailsSubpagePath, "?id=", app_id}));
+#else
+  const GURL settings_url = GURL(chrome::kChromeUIWebAppSettingsURL + app_id);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  RunTestSequence(
+      OpenStartPage(),
+      TriggerAppLaunch(kToSiteBTargetBlankNoOpener, ui_controls::LEFT),
+      InSameContext(
+          WaitForPromo(feature_engagement::kIPHDesktopPWAsLinkCapturingLaunch),
+          InstrumentNextTab(kSettingsPageId, AnyBrowser()),
+          PressNonDefaultPromoButton()),
+      InAnyContext(WaitForShow(kSettingsPageId)),
+      InAnyContext(WaitForWebContentsReady(kSettingsPageId, settings_url)),
+      Do([&]() {
+        EXPECT_THAT(
+            histogram_tester.GetAllSamples(
+                "WebApp.AppSettingsPage.EntryPoints"),
+            base::BucketsAre(base::Bucket(web_app::AppSettingsPageEntryPoint::
+                                              kNavigationCapturingIphBubble,
+                                          1)));
+      }));
+}
+
+IN_PROC_BROWSER_TEST_F(WebAppNavigationCapturingIphUiTest,
                        BubbleDismissMeasuresUserDismiss) {
   const webapps::AppId app_id = InstallTestWebApp(GetDestinationUrl());
   base::UserActionTester user_action_tester;
@@ -430,7 +477,7 @@ IN_PROC_BROWSER_TEST_F(WebAppNavigationCapturingIphUiTest,
 IN_PROC_BROWSER_TEST_P(WebAppNavigationCapturingIphUiTestParameterized,
                        IPHShownForNavigateExistingAppInTab) {
   webapps::AppId app_id = test::InstallWebApp(
-      browser()->profile(),
+      browser()->GetProfile(),
       WebAppInstallInfo::CreateForTesting(
           GetDestinationUrl(), blink::mojom::DisplayMode::kBrowser,
           mojom::UserDisplayMode::kBrowser,
@@ -457,7 +504,7 @@ IN_PROC_BROWSER_TEST_P(WebAppNavigationCapturingIphUiTestParameterized,
 IN_PROC_BROWSER_TEST_P(WebAppNavigationCapturingIphUiTestParameterized,
                        IPHForAppInTabDisappearsOnNewTabOpen) {
   webapps::AppId app_id = test::InstallWebApp(
-      browser()->profile(),
+      browser()->GetProfile(),
       WebAppInstallInfo::CreateForTesting(
           GetDestinationUrl(), blink::mojom::DisplayMode::kBrowser,
           mojom::UserDisplayMode::kBrowser,

@@ -11,8 +11,8 @@
 #import "components/prefs/pref_member.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/translate/core/browser/translate_pref_names.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/browser_edit_menu_utils.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/edit_menu_alert_delegate.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/browser_edit_menu_utils.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_alert_delegate.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
@@ -183,6 +183,10 @@ const NSUInteger kPartialTranslateCharactersLimit = 1000;
     return;
   }
 
+  if (![self canHandlePartialTranslateSelectionInWebState:webState]) {
+    return;
+  }
+
   base::WeakPtr<web::WebState> weakWebState = webState->GetWeakPtr();
   __weak __typeof(self) weakSelf = self;
 
@@ -232,8 +236,8 @@ const NSUInteger kPartialTranslateCharactersLimit = 1000;
       l10n_util::GetNSString(IDS_IOS_PARTIAL_TRANSLATE_EDIT_MENU_ENTRY);
   NSString* partialTranslateId = @"chromecommand.partialTranslate";
   return [UIAction actionWithTitle:title
-                             image:CustomSymbolWithPointSize(
-                                       kTranslateSymbol, kSymbolActionPointSize)
+                             image:SymbolWithPointSize(SymbolTranslate,
+                                                       kSymbolActionPointSize)
                         identifier:partialTranslateId
                            handler:handler];
 }

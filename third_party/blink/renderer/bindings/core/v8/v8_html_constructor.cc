@@ -13,7 +13,6 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_construction_stack.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/bindings/v8_dom_wrapper.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_context_data.h"
 #include "third_party/blink/renderer/platform/bindings/v8_set_return_value.h"
@@ -26,7 +25,7 @@ namespace blink {
 void V8HTMLConstructor::HtmlConstructor(
     const v8::FunctionCallbackInfo<v8::Value>& info,
     const WrapperTypeInfo& wrapper_type_info,
-    const HTMLElementType element_interface_name) {
+    const ElementType element_interface_name) {
   TRACE_EVENT0("blink", "HTMLConstructor");
   DCHECK(info.IsConstructCall());
 
@@ -61,14 +60,11 @@ void V8HTMLConstructor::HtmlConstructor(
   // steps.
   v8::Local<v8::Object> constructor = new_target.As<v8::Object>();
   CustomElementDefinition* definition = nullptr;
-  if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
-    // For scoped registries, we first check the construction stack for
-    // definition in a scoped registry.
-    CustomElementConstructionStack* construction_stack =
-        GetCustomElementConstructionStack(window, constructor);
-    if (construction_stack && construction_stack->size()) {
-      definition = construction_stack->back().definition;
-    }
+  // First check the construction stack for a definition in a scoped registry.
+  CustomElementConstructionStack* construction_stack =
+      GetCustomElementConstructionStack(window, constructor);
+  if (construction_stack && construction_stack->size()) {
+    definition = construction_stack->back().definition;
   }
   if (!definition) {
     definition =
@@ -128,8 +124,6 @@ void V8HTMLConstructor::HtmlConstructor(
 
   // 8. If definition's construction stack is empty...
   Element* element;
-  CustomElementConstructionStack* construction_stack =
-      GetCustomElementConstructionStack(window, constructor);
   if (!construction_stack || construction_stack->empty()) {
     // This is an element being created with 'new' from script
     element = definition->CreateElementForConstructor(*window->document());
@@ -158,7 +152,7 @@ void V8HTMLConstructor::HtmlConstructor(
   // Note that SetPrototype doesn't actually return the exceptions, it just
   // returns false or Nothing on exception. See crbug.com/1197894 for an
   // example.
-  v8::Maybe<bool> maybe_result = wrapper->SetPrototypeV2(
+  v8::Maybe<bool> maybe_result = wrapper->SetPrototype(
       script_state->GetContext(), prototype.As<v8::Object>());
   bool success;
   if (!maybe_result.To(&success)) {

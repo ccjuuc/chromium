@@ -1,7 +1,5 @@
-features:
-- name: clipboard-events
-  files:
-  - input-events-cut-paste.html
-- name: contenteditable
-  files:
-  - contenteditable-insertfrompaste-type-inputevent-data.html
+rules:
+- input-events-cut-paste.html: [clipboard-events]
+- contenteditable-insertfrompaste-type-inputevent-data.html: [contenteditable]
+- input-events-exec-command.html: [keyboard-events]
+- input-events-typing.html: [keyboard-events]

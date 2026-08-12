@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEBUI_SIGNIN_TURN_SYNC_ON_HELPER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/callback_list.h"
@@ -25,10 +26,9 @@
 #error "This file should only be included if DICE support / mirror is enabled"
 #endif
 
-class Browser;
+class BrowserWindowInterface;
 class SigninUIError;
 class TurnSyncOnHelperPolicyFetchTracker;
-class AccountSelectionInProgressHandle;
 
 class DiceSignedInProfileCreator;
 class SyncServiceStartupStateObserver;
@@ -130,7 +130,7 @@ class TurnSyncOnHelper {
     // This helper is static because in some cases it needs to be called
     // after this object gets destroyed.
     static void ShowLoginErrorForBrowser(const SigninUIError& error,
-                                         Browser* browser);
+                                         BrowserWindowInterface* browser);
   };
 
   // Create a helper that turns sync on for an account that is already present
@@ -154,7 +154,7 @@ class TurnSyncOnHelper {
   // proposition value should be shown, and what state should the user be in if
   // they cancel.
   TurnSyncOnHelper(Profile* profile,
-                   Browser* browser,
+                   BrowserWindowInterface* browser,
                    signin_metrics::AccessPoint signin_access_point,
                    signin_metrics::PromoAction signin_promo_action,
                    const CoreAccountId& account_id,
@@ -226,7 +226,7 @@ class TurnSyncOnHelper {
 
   // Called when the new profile is created.
   void OnNewSignedInProfileCreated(
-      search_engines::ChoiceData search_engine_choice_data,
+      std::optional<search_engines::ChoiceData> search_engine_choice_data,
       Profile* new_profile);
 
   // Returns the SyncService, or nullptr if sync is not allowed.
@@ -277,10 +277,6 @@ class TurnSyncOnHelper {
   // Prevents Sync from running until configuration is complete.
   std::unique_ptr<syncer::SyncSetupInProgressHandle> sync_blocker_;
 
-  // Prevents `SigninManager` from changing the unconsented primary account
-  // until the flow is complete.
-  std::unique_ptr<AccountSelectionInProgressHandle> account_change_blocker_;
-
   // Called when this object is deleted.
   base::ScopedClosureRunner scoped_callback_runner_;
 
@@ -288,9 +284,7 @@ class TurnSyncOnHelper {
   std::unique_ptr<TurnSyncOnHelperPolicyFetchTracker> policy_fetch_tracker_;
   std::unique_ptr<DiceSignedInProfileCreator> dice_signed_in_profile_creator_;
 
-  // The initial primary account is restored if the flow aborts. This is only
-  // needed if UNO Desktop is enabled, because the `SigninManager` does it
-  // automatically on DICE platforms.
+  // The initial primary account is restored if the flow aborts.
   CoreAccountId initial_primary_account_;
   base::CallbackListSubscription shutdown_subscription_;
   bool enterprise_account_confirmed_ = false;

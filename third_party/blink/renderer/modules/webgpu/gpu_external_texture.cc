@@ -158,37 +158,11 @@ void ExternalTextureCache::ExpireTask() {
   }
 }
 
-void ExternalTextureCache::ReferenceUntilGPUIsFinished(
-    scoped_refptr<WebGPUMailboxTexture> mailbox_texture) {
-  CHECK(mailbox_texture);
-  ExecutionContext* execution_context = device()->GetExecutionContext();
-
-  // If device has no valid execution context. Release
-  // the mailbox immediately.
-  if (!execution_context) {
-    return;
-  }
-
-  // Keep mailbox texture alive until callback returns.
-  auto* callback = BindWGPUOnceCallback(
-      [](scoped_refptr<WebGPUMailboxTexture> mailbox_texture,
-         wgpu::QueueWorkDoneStatus, wgpu::StringView) {},
-      std::move(mailbox_texture));
-
-  device()->queue()->GetHandle().OnSubmittedWorkDone(
-      wgpu::CallbackMode::AllowSpontaneous, callback->UnboundCallback(),
-      callback->AsUserdata());
-
-  // Ensure commands are flushed.
-  device()->EnsureFlush(ToEventLoop(execution_context));
-}
-
 // static
 GPUExternalTexture* GPUExternalTexture::CreateImpl(
     ExternalTextureCache* cache,
     const GPUExternalTextureDescriptor* webgpu_desc,
     scoped_refptr<media::VideoFrame> media_video_frame,
-    media::PaintCanvasVideoRenderer* video_renderer,
     std::optional<media::VideoFrame::ID> media_video_frame_unique_id,
     ExceptionState& exception_state) {
   CHECK(media_video_frame);
@@ -200,9 +174,8 @@ GPUExternalTexture* GPUExternalTexture::CreateImpl(
     return nullptr;
   }
 
-  ExternalTexture external_texture =
-      CreateExternalTexture(cache->device(), dst_predefined_color_space,
-                            media_video_frame, video_renderer);
+  ExternalTexture external_texture = CreateExternalTexture(
+      cache->device(), dst_predefined_color_space, media_video_frame);
 
   if (external_texture.wgpu_external_texture == nullptr ||
       external_texture.mailbox_texture == nullptr) {
@@ -273,7 +246,7 @@ GPUExternalTexture* GPUExternalTexture::FromHTMLVideoElement(
   }
 
   GPUExternalTexture* external_texture = GPUExternalTexture::CreateImpl(
-      cache, webgpu_desc, source.media_video_frame, source.video_renderer,
+      cache, webgpu_desc, source.media_video_frame,
       source.media_video_frame_unique_id, exception_state);
 
   // WebGPU Spec requires that If the latest presented frame of video is not
@@ -301,8 +274,8 @@ GPUExternalTexture* GPUExternalTexture::FromVideoFrame(
     return nullptr;
 
   GPUExternalTexture* external_texture = GPUExternalTexture::CreateImpl(
-      cache, webgpu_desc, source.media_video_frame, source.video_renderer,
-      std::nullopt, exception_state);
+      cache, webgpu_desc, source.media_video_frame, std::nullopt,
+      exception_state);
 
   // If the webcodec video frame has been closed or destroyed, set expired to
   // true, releasing ownership of the underlying resource and remove the texture
@@ -372,7 +345,7 @@ void GPUExternalTexture::Destroy() {
   // construction. Zero copy path needs to ensure all gpu commands
   // execution finished before destroy.
   if (isZeroCopy() && IsReadLockFenceEnabled()) {
-    cache_->ReferenceUntilGPUIsFinished(std::move(mailbox_texture_));
+    device()->queue()->ReferenceUntilGPUIsFinished(std::move(mailbox_texture_));
   }
 
   status_ = Status::Destroyed;

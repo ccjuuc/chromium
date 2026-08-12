@@ -54,7 +54,7 @@ std::optional<std::string> HashFile(const base::FilePath& path) {
     SHA256_Update(&ctx, buffer.data(), *bytes_read);
   }
 
-  std::array<uint8_t, SHA256_DIGEST_LENGTH> hash;
+  std::array<uint8_t, SHA256_DIGEST_LENGTH> hash = {};
   SHA256_Final(hash.data(), &ctx);
   return base::HexEncode(hash);
 }
@@ -100,7 +100,7 @@ bool TryInitializeICU() {
   }
 #endif  // ENTERPRISE_COMPANION_USE_ICU_DATA_FILE
   // InitializeICU may CHECK, though the conditional returns above try to
-  // mitigate this. See https://crbug.com/445616.
+  // mitigate this. See https://crbug.com/40081080.
   if (!base::i18n::InitializeICU()) {
     VLOG(1) << "Failed to initialize ICU";
     return false;

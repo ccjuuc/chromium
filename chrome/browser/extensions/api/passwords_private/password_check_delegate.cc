@@ -18,7 +18,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
@@ -26,17 +25,12 @@
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_event_router.h"
-#include "chrome/browser/extensions/api/passwords_private/passwords_private_event_router_factory.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_utils.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/factories/bulk_leak_check_service_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/common/extensions/api/passwords_private.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check.h"
 #include "components/password_manager/core/browser/leak_detection/encryption_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -177,8 +171,9 @@ api::passwords_private::PasswordCheckState ConvertPasswordCheckState(
 
 std::string FormatElapsedTime(base::Time time) {
   const base::TimeDelta elapsed_time = base::Time::Now() - time;
-  if (elapsed_time < base::Minutes(1))
+  if (elapsed_time < base::Minutes(1)) {
     return l10n_util::GetStringUTF8(IDS_PASSWORD_MANAGER_UI_JUST_NOW);
+  }
 
   return base::UTF16ToUTF8(TimeFormat::SimpleWithMonthAndYear(
       TimeFormat::FORMAT_ELAPSED, TimeFormat::LENGTH_LONG, elapsed_time, true));
@@ -226,25 +221,24 @@ api::passwords_private::CompromisedInfo CreateCompromiseInfo(
 }  // namespace
 
 PasswordCheckDelegate::PasswordCheckDelegate(
-    Profile* profile,
+    PrefService* prefs,
+    password_manager::BulkLeakCheckServiceInterface* bulk_leak_check_service,
     password_manager::SavedPasswordsPresenter* presenter,
     IdGenerator* id_generator,
     PasswordsPrivateEventRouter* event_router)
-    : profile_(profile),
+    : prefs_(prefs),
       saved_passwords_presenter_(presenter),
       insecure_credentials_manager_(presenter),
-      bulk_leak_check_service_adapter_(
-          presenter,
-          BulkLeakCheckServiceFactory::GetForProfile(profile_),
-          profile_->GetPrefs()),
+      bulk_leak_check_service_adapter_(presenter,
+                                       bulk_leak_check_service,
+                                       prefs_),
       id_generator_(id_generator),
       event_router_(event_router) {
   DCHECK(id_generator);
   observed_saved_passwords_presenter_.Observe(saved_passwords_presenter_.get());
   observed_insecure_credentials_manager_.Observe(
       &insecure_credentials_manager_);
-  observed_bulk_leak_check_service_.Observe(
-      BulkLeakCheckServiceFactory::GetForProfile(profile_));
+  observed_bulk_leak_check_service_.Observe(bulk_leak_check_service);
 }
 
 PasswordCheckDelegate::~PasswordCheckDelegate() = default;
@@ -297,8 +291,9 @@ bool PasswordCheckDelegate::MuteInsecureCredential(
     const api::passwords_private::PasswordUiEntry& credential) {
   // Try to obtain the original CredentialUIEntry. Return false if fails.
   const CredentialUIEntry* entry = id_generator_->TryGetKey(credential.id);
-  if (!entry)
+  if (!entry) {
     return false;
+  }
 
   return insecure_credentials_manager_.MuteCredential(*entry);
 }
@@ -307,8 +302,9 @@ bool PasswordCheckDelegate::UnmuteInsecureCredential(
     const api::passwords_private::PasswordUiEntry& credential) {
   // Try to obtain the original CredentialUIEntry. Return false if fails.
   const CredentialUIEntry* entry = id_generator_->TryGetKey(credential.id);
-  if (!entry)
+  if (!entry) {
     return false;
+  }
 
   return insecure_credentials_manager_.UnmuteCredential(*entry);
 }
@@ -350,8 +346,9 @@ void PasswordCheckDelegate::StartPasswordAnalyses(
       base::BindOnce(&PasswordCheckDelegate::NotifyPasswordCheckStatusChanged,
                      weak_ptr_factory_.GetWeakPtr()));
   auto progress = base::MakeRefCounted<PasswordCheckProgress>();
-  for (const auto& password : saved_passwords_presenter_->GetSavedPasswords())
+  for (const auto& password : saved_passwords_presenter_->GetSavedPasswords()) {
     progress->IncrementCounts(password);
+  }
 
   password_check_progress_ = progress->GetWeakPtr();
   PasswordCheckData data(
@@ -374,7 +371,7 @@ PasswordCheckDelegate::GetPasswordCheckStatus() const {
   // Obtain the timestamp of the last completed password or weak check. This
   // will be null in case no check has completely ran before.
   base::Time last_check_completed =
-      std::max(base::Time::FromTimeT(profile_->GetPrefs()->GetDouble(
+      std::max(base::Time::FromTimeT(prefs_->GetDouble(
                    password_manager::prefs::kLastTimePasswordCheckCompleted)),
                last_completed_weak_check_);
   if (!last_check_completed.is_null()) {
@@ -419,8 +416,6 @@ PasswordCheckDelegate::GetInsecureCredentialsManager() {
 
 void PasswordCheckDelegate::OnBulkCheckServiceShutDown() {
   // Stop observing BulkLeakCheckService when the service shuts down.
-  CHECK(observed_bulk_leak_check_service_.IsObservingSource(
-      BulkLeakCheckServiceFactory::GetForProfile(profile_)));
   observed_bulk_leak_check_service_.Reset();
 }
 
@@ -430,8 +425,9 @@ void PasswordCheckDelegate::OnSavedPasswordsChanged(
   // that the delegate is initialized, and start check callbacks can be invoked,
   // if any.
   if (!std::exchange(is_initialized_, true)) {
-    for (auto&& callback : std::exchange(start_check_callbacks_, {}))
+    for (auto&& callback : std::exchange(start_check_callbacks_, {})) {
       StartPasswordCheck(password_check_initiator_, std::move(callback));
+    }
   }
 
   // A change in the saved passwords might result in leaving or entering the
@@ -474,8 +470,9 @@ void PasswordCheckDelegate::OnCredentialDone(
   }
 
   // Update the progress in case there is one.
-  if (password_check_progress_)
+  if (password_check_progress_) {
     password_check_progress_->OnProcessed(credential);
+  }
 
   // While the check is still running trigger an update of the check status,
   // considering that the progress has changed.
@@ -487,9 +484,8 @@ void PasswordCheckDelegate::OnCredentialDone(
 
 void PasswordCheckDelegate::
     RecordAndNotifyAboutCompletedCompromisedPasswordCheck() {
-  profile_->GetPrefs()->SetDouble(
-      password_manager::prefs::kLastTimePasswordCheckCompleted,
-      base::Time::Now().InSecondsFSinceUnixEpoch());
+  prefs_->SetDouble(password_manager::prefs::kLastTimePasswordCheckCompleted,
+                    base::Time::Now().InSecondsFSinceUnixEpoch());
 
   // Delay the last Check Status update by a second. This avoids flickering of
   // the UI if the full check ran from start to finish almost immediately.
@@ -525,6 +521,10 @@ PasswordCheckDelegate::ConstructInsecureCredentialUiEntry(
   if (change_password_url.has_value()) {
     api_credential.change_password_url = change_password_url->spec();
   }
+  api_credential.is_automatic_password_change_supported =
+      base::FeatureList::IsEnabled(
+          password_manager::features::kPasswordCheckupPrototype);
+
   CredentialUIEntry copy(std::move(entry));
   // Weak and reused flags should be cleaned before obtaining id. Otherwise
   // weak or reused flag will be saved to the database whenever credential is

@@ -25,6 +25,8 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinator;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinatorProvider;
 import org.chromium.chrome.browser.layouts.LayoutManagerAppUtils;
 import org.chromium.chrome.browser.layouts.ManagedLayoutManager;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -47,6 +49,7 @@ public final class AutofillSaveCardBottomSheetBridgeTest {
     @Mock private AutofillSaveCardBottomSheetBridge.Natives mBridgeNatives;
     private WindowAndroid mWindow;
     @Mock private ManagedBottomSheetController mBottomSheetController;
+    @Mock private AnchoredDialogCoordinator mAnchoredDialogCoordinator;
     @Mock private ManagedLayoutManager mLayoutManager;
     @Mock private Profile mProfile;
     private AutofillSaveCardBottomSheetBridge mBridge;
@@ -55,8 +58,9 @@ public final class AutofillSaveCardBottomSheetBridgeTest {
     public void setUp() {
         AutofillSaveCardBottomSheetBridgeJni.setInstanceForTesting(mBridgeNatives);
         Activity activity = Robolectric.buildActivity(Activity.class).create().get();
-        mWindow = new WindowAndroid(activity, /* trackOcclusion= */ true);
+        mWindow = new WindowAndroid(activity, /* occlusionTrackingAllowed= */ true);
         BottomSheetControllerFactory.attach(mWindow, mBottomSheetController);
+        AnchoredDialogCoordinatorProvider.attach(mWindow, mAnchoredDialogCoordinator);
         LayoutManagerAppUtils.attach(mWindow, mLayoutManager);
         MockTabModel tabModel = new MockTabModel(mProfile, /* delegate= */ null);
         mBridge =
@@ -67,6 +71,7 @@ public final class AutofillSaveCardBottomSheetBridgeTest {
     @After
     public void tearDown() {
         LayoutManagerAppUtils.detach(mLayoutManager);
+        AnchoredDialogCoordinatorProvider.detach(mAnchoredDialogCoordinator);
         BottomSheetControllerFactory.detach(mBottomSheetController);
         mWindow.destroy();
     }
@@ -77,7 +82,7 @@ public final class AutofillSaveCardBottomSheetBridgeTest {
                         .withLogoIconDescription("")
                         .withCardDetail(new CardDetail(/* iconId= */ 0, "label", "subLabel"))
                         .withCardDescription("Card description")
-                        .withLegalMessageLines(Collections.EMPTY_LIST)
+                        .withLegalMessageLines(Collections.emptyList())
                         .withTitleText("Title")
                         .withConfirmText("Confirm")
                         .withCancelText("Cancel")

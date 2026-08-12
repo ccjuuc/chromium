@@ -101,7 +101,7 @@ class WebSettings {
   // value set by this method.
   virtual void SetAllowRunningOfInsecureContent(bool) = 0;
   virtual void SetAllowScriptsToCloseWindows(bool) = 0;
-  virtual void SetAllowWindowFocusWithoutUserGesture(bool) = 0;
+  virtual void SetAllowUnrestrictedWindowFocus(bool) = 0;
   virtual void SetAllowUniversalAccessFromFileURLs(bool) = 0;
   virtual void SetAccessibilityFontWeightAdjustment(int) = 0;
   virtual void SetAlwaysShowContextMenuOnTouch(bool) = 0;
@@ -124,7 +124,6 @@ class WebSettings {
   virtual void SetDefaultTextEncodingName(const WebString&) = 0;
   virtual void SetDefaultVideoPosterURL(const WebString&) = 0;
   void SetDeferred2dCanvasEnabled(bool) {}  // temporary stub
-  virtual void SetDeviceScaleAdjustment(float) = 0;
   virtual void SetDisableReadingFromCanvas(bool) = 0;
   virtual void SetDontSendKeyEventsToJavascript(bool) = 0;
   virtual void SetDoubleTapToZoomEnabled(bool) = 0;
@@ -152,6 +151,7 @@ class WebSettings {
   virtual void SetFullscreenSupported(bool) = 0;
   virtual void SetHideDownloadUI(bool) = 0;
   virtual void SetHighlightAds(bool) = 0;
+  virtual void SetInspectorHighlightAds(bool) = 0;
   virtual void SetHyperlinkAuditingEnabled(bool) = 0;
   virtual void SetIgnoreMainFrameOverflowHiddenQuirk(bool) = 0;
   virtual void SetImageAnimationPolicy(mojom::ImageAnimationPolicy) = 0;
@@ -167,9 +167,11 @@ class WebSettings {
   virtual void SetMaxTouchPoints(int) = 0;
   virtual void SetPictureInPictureEnabled(bool) = 0;
   virtual void SetWebAppScope(const WebString&) = 0;
+  virtual void SetIsInitialProfile(bool) = 0;
   virtual void SetPresentationRequiresUserGesture(bool) = 0;
   virtual void SetEmbeddedMediaExperienceEnabled(bool) = 0;
   virtual void SetImmersiveModeEnabled(bool) = 0;
+  virtual void SetImmersiveVideoPlaybackEnabled(bool) = 0;
   virtual void SetMinimumFontSize(int) = 0;
   virtual void SetMinimumLogicalFontSize(int) = 0;
   virtual void SetHideScrollbars(bool) = 0;
@@ -215,7 +217,6 @@ class WebSettings {
                                      UScriptCode = USCRIPT_COMMON) = 0;
   virtual void SetStrictMixedContentChecking(bool) = 0;
   virtual void SetStrictMixedContentCheckingForPlugin(bool) = 0;
-  virtual void SetStrictPowerfulFeatureRestrictions(bool) = 0;
   virtual void SetStrictlyBlockBlockableMixedContent(bool) = 0;
   virtual void SetSupportDeprecatedTargetDensityDPI(bool) = 0;
   virtual void SetSupportsMultipleWindows(bool) = 0;
@@ -225,10 +226,10 @@ class WebSettings {
   // TODO(https://crbug.com/404106817): Remove once Chrome Apps are deprecated.
   virtual void SetIgnorePermissionForDeviceChangedEvent(bool) = 0;
   virtual void SetTextAreasAreResizable(bool) = 0;
-  virtual void SetTextAutosizingEnabled(bool) = 0;
   virtual void SetAccessibilityFontScaleFactor(float) = 0;
   virtual void SetAccessibilityTextSizeContrastFactor(int) = 0;
   virtual void SetAccessibilityAlwaysShowFocus(bool) = 0;
+  virtual void SetTextSizeAdjustEnabled(bool) = 0;
   virtual void SetTextTrackKindUserPreference(TextTrackKindUserPreference) = 0;
   virtual void SetTextTrackBackgroundColor(const WebString&) = 0;
   virtual void SetTextTrackFontFamily(const WebString&) = 0;
@@ -255,6 +256,7 @@ class WebSettings {
   virtual void SetWebGLErrorsToConsoleEnabled(bool) = 0;
   virtual void SetWebSecurityEnabled(bool) = 0;
   virtual void SetWideViewportQuirkEnabled(bool) = 0;
+  virtual void SetScaleAllFontsIfNoMetaTextScaleTag(bool) = 0;
   virtual void SetMediaControlsEnabled(bool) = 0;
   virtual void SetDoNotUpdateSelectionOnMutatingSelectionRange(bool) = 0;
   virtual void SetLowPriorityIframesThreshold(WebEffectiveConnectionType) = 0;
@@ -285,9 +287,9 @@ class WebSettings {
   virtual void SetAccessibilityIncludeSvgGElement(bool) = 0;
   virtual void SetWebXRImmersiveArAllowed(bool) = 0;
   virtual void SetModalContextMenu(bool) = 0;
-  virtual void SetRequireTransientActivationAndAuthorizationForSubAppsAPIs(
-      bool) = 0;
   virtual void SetRootScrollbarThemeColor(std::optional<SkColor>) = 0;
+  virtual void SetBatterySaverEnabled(bool) = 0;
+  virtual void SetPreloadingDisabled(bool) = 0;
 
  protected:
   ~WebSettings() = default;

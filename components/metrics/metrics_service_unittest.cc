@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -40,6 +39,7 @@
 #include "components/metrics/metrics_state_manager.h"
 #include "components/metrics/metrics_upload_scheduler.h"
 #include "components/metrics/stability_metrics_helper.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/metrics/test/test_metrics_provider.h"
 #include "components/metrics/test/test_metrics_service_client.h"
@@ -426,6 +426,41 @@ base::HistogramBase::Count32 GetHistogramDeltaTotalCount(
 
 }  // namespace
 
+TEST_F(MetricsServiceTest, Purge) {
+  EnableMetricsReporting();
+  TestMetricsServiceClient client;
+  TestMetricsService service(GetMetricsStateManager(), &client,
+                             GetLocalState());
+  service.InitializeMetricsRecordingState();
+
+  // Populate the log store with various types of logs.
+  MetricsLogStore* test_log_store = service.LogStoreForTest();
+  test_log_store->StoreLog("dummy ongoing log", MetricsLog::ONGOING_LOG,
+                           LogMetadata(),
+                           MetricsLogsEventManager::CreateReason::kUnknown);
+  test_log_store->StageNextLog();
+  test_log_store->StoreLog("more ongoing log", MetricsLog::ONGOING_LOG,
+                           LogMetadata(),
+                           MetricsLogsEventManager::CreateReason::kUnknown);
+  test_log_store->StoreLog("stability log", MetricsLog::INITIAL_STABILITY_LOG,
+                           LogMetadata(),
+                           MetricsLogsEventManager::CreateReason::kUnknown);
+  test_log_store->SetAlternateOngoingLogStore(InitializeTestLogStoreAndGet());
+  test_log_store->StoreLog("alternate log", MetricsLog::ONGOING_LOG,
+                           LogMetadata(),
+                           MetricsLogsEventManager::CreateReason::kUnknown);
+
+  EXPECT_TRUE(test_log_store->has_staged_log());
+  EXPECT_TRUE(test_log_store->has_unsent_logs());
+
+  // Purge data.
+  service.Purge();
+
+  // Verify log store is empty.
+  EXPECT_FALSE(test_log_store->has_staged_log());
+  EXPECT_FALSE(test_log_store->has_unsent_logs());
+}
+
 TEST_F(MetricsServiceTest, RecordId) {
   EnableMetricsReporting();
   GetMetricsStateManager(user_data_dir_path())->ForceClientIdCreation();
@@ -634,6 +669,9 @@ TEST_F(MetricsServiceTest, IndependentLogAtProviderRequest) {
   // have been put into the independent log).
   EXPECT_TRUE(DecodeLogDataToProto(test_log_store->staged_log(), &uma_log));
   EXPECT_EQ(GetHistogramSampleCount(uma_log, test_histogram), 1);
+
+  // Clean up histograms.
+  base::StatisticsRecorder::ForgetHistogramForTesting(test_histogram);
 }
 
 TEST_F(MetricsServiceTest, OnDidCreateMetricsLogAtShutdown) {
@@ -1086,7 +1124,7 @@ TEST_P(MetricsServiceTestWithStartupVisibility, InitialStabilityLogAfterCrash) {
 #else
   partial_expected_contents = "exited_cleanly\":false";
 #endif  // BUILDFLAG(IS_ANDROID)
-  EXPECT_TRUE(base::Contains(beacon_file_contents, partial_expected_contents));
+  EXPECT_TRUE(beacon_file_contents.contains(partial_expected_contents));
 
   // The initial stability log should be generated and persisted in unsent logs.
   MetricsLogStore* test_log_store = service.LogStoreForTest();

@@ -5,30 +5,28 @@
 #ifndef COMPONENTS_ENTERPRISE_CONNECTORS_CORE_COMMON_H_
 #define COMPONENTS_ENTERPRISE_CONNECTORS_CORE_COMMON_H_
 
-#include <map>
 #include <optional>
-#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/supports_user_data.h"
 #include "build/blink_buildflags.h"
+#include "components/download/public/common/download_danger_type.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/enterprise/common/proto/synced_from_google3/chrome_reporting_entity.pb.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(USE_BLINK)
-#include "components/download/public/common/download_danger_type.h"  // nogncheck
-
 namespace download {
 class DownloadItem;
 }  // namespace download
-#endif  // BUILDFLAG(USE_BLINK)
 
 namespace gfx {
 class Range;
@@ -48,6 +46,13 @@ using SourceDestinationStringPair = std::pair<std::string, std::string>;
 
 // Alias to reduce verbosity when using Event::EventCase.
 using EventCase = ::chrome::cros::reporting::proto::Event::EventCase;
+
+// Callback which accepts a hash for use in scan upload or reporting.
+using OnGotHashCallback = base::OnceCallback<void(std::string)>;
+
+// Variant with either a hash or a way to register a callback to receive a hash.
+using HashCallbackVariant =
+    std::variant<std::string, base::RepeatingCallback<void(OnGotHashCallback)>>;
 
 // Keys used to read a connector's policy values.
 inline constexpr char kKeyServiceProvider[] = "service_provider";
@@ -85,7 +90,6 @@ inline constexpr char kMalwareTag[] = "malware";
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. Keep this enum in sync with
 // EnterpriseReportingEventType in enums.xml.
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.enterprise.connectors
 enum class EnterpriseReportingEventType {
   kUnknownEvent = 0,
   kPasswordReuseEvent = 1,
@@ -100,7 +104,17 @@ enum class EnterpriseReportingEventType {
   kExtensionInstallEvent = 10,
   kBrowserCrashEvent = 11,
   kExtensionTelemetryEvent = 12,
-  kMaxValue = kExtensionTelemetryEvent,
+  // Saas usage report event is not reported through reporting connector,
+  // it is controlled by separate policies:
+  // - SaasUsageReportingDomainUrlsForBrowsers
+  // - SaasUsageReportingDomainUrlsForProfiles
+  kSaasUsageReportEvent = 13,
+
+  // Browser launch event is not reported through reporting connector; it is
+  // sent by all managed browsers and profiles for auditing purposes.
+  kBrowserLaunchEvent = 14,
+
+  kMaxValue = kBrowserLaunchEvent,
 };
 
 // Mapping from event name to UMA enum for logging histogram.
@@ -128,6 +142,12 @@ inline constexpr auto kEventNameToUmaEnumMap =
         {kBrowserCrashEvent, EnterpriseReportingEventType::kBrowserCrashEvent},
         {kExtensionTelemetryEvent,
          EnterpriseReportingEventType::kExtensionTelemetryEvent},
+        {kKeySaasUsageEvent,
+         EnterpriseReportingEventType::kSaasUsageReportEvent},
+#if !BUILDFLAG(IS_IOS)
+        {kKeyBrowserLaunchEvent,
+         EnterpriseReportingEventType::kBrowserLaunchEvent},
+#endif
     });
 
 // Struct holding the necessary data to tweak the behavior of the reporting
@@ -140,8 +160,8 @@ struct ReportingSettings {
   ReportingSettings& operator=(ReportingSettings&&);
   ~ReportingSettings();
 
-  std::set<std::string> enabled_event_names;
-  std::map<std::string, std::vector<std::string>> enabled_opt_in_events;
+  base::flat_set<std::string> enabled_event_names;
+  base::flat_map<std::string, std::vector<std::string>> enabled_opt_in_events;
   std::string dm_token;
 
   // Indicates if the report should be made for the profile, or the browser if
@@ -200,6 +220,7 @@ struct ScanResult : public base::SupportsUserData::Data {
 
 // Enum to identify which message to show once scanning is complete. Ordered
 // by precedence for when multiple files have conflicting results.
+// LINT.IfChange(FinalContentAnalysisResult)
 enum class FinalContentAnalysisResult {
   // Show that an issue was found and that the upload is blocked.
   FAILURE = 0,
@@ -216,12 +237,20 @@ enum class FinalContentAnalysisResult {
   // Show that DLP checks failed, but that the user can proceed if they want.
   WARNING = 4,
 
-  // Show that no issue was found and that the user may proceed.
-  SUCCESS = 5,
-
   // Show that the download is blocked and may proceed to cloud storage.
-  FORCE_SAVE_TO_CLOUD = 6,
+  FORCE_SAVE_TO_CLOUD = 5,
+
+  // Show that the user cancelled the scan.
+  CANCELLED = 6,
+
+  // Show that the copy operation is allowed within managed Chrome, but
+  // blocked from the OS clipboard.
+  KEPT_IN_MANAGED_CHROME = 7,
+
+  // Show that no issue was found and that the user may proceed.
+  SUCCESS = 8,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/histograms.xml)
 
 // Result for a single request of the RequestHandler classes.
 struct RequestHandlerResult {
@@ -266,13 +295,11 @@ ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage
 CreateSampleCustomRuleMessage(const std::u16string& msg,
                               const std::string& url);
 
-#if BUILDFLAG(USE_BLINK)
 // Extracts the custom rule message from `download_item`. The rule for that
 // message needs to have an action (WARN, BLOCK) corresponding to `danger_type`.
 std::optional<ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage>
 GetDownloadsCustomRuleMessage(const download::DownloadItem* download_item,
                               download::DownloadDangerType danger_type);
-#endif  // BUILDFLAG(USE_BLINK)
 
 // Checks if |response| contains a negative malware verdict.
 bool ContainsMalwareVerdict(const ContentAnalysisResponse& response);
@@ -313,6 +340,9 @@ enum class EventResult {
   // The user was not allowed to download the file locally. Download will
   // proceed directly to cloud storage, if the user is logged in.
   FORCED_SAVE_TO_CLOUD,
+
+  // The user canceled the scan.
+  CANCELLED,
 };
 
 // Helper function to convert a EventResult to a string that.  The format of
@@ -340,6 +370,7 @@ std::string GetFailedUploadDurationUmaMetricName(
 //   "SafeBrowsing.DeepScan.<access-point>.BytesPerSeconds"
 //   "SafeBrowsing.DeepScan.<access-point>.Duration"
 //   "SafeBrowsing.DeepScan.<access-point>.<result>.Duration"
+//   "Enterprise.[Local]ContentAnalysis.<access-point>.<final-result>.Duration"
 // for the new access point and every possible result.
 // LINT.IfChange(DeepScanAccessPoint)
 enum class DeepScanAccessPoint {
@@ -361,11 +392,22 @@ enum class DeepScanAccessPoint {
   // A deep scan was initiated from transferring 1+ file(s) within ChromeOS.
   FILE_TRANSFER,
 
-  kMaxValue = FILE_TRANSFER,
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:DeepScanAccessPoint)
-std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point);
+  // A deep scan was initiated from an actor/agent action.
+  ACTOR,
 
+  // A deep scan was initiated from copying text.
+  COPY,
+
+  // A deep scan was initiated from a network request.
+  NETWORK_REQUEST,
+
+  kMaxValue = NETWORK_REQUEST,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/histograms.xml:DeepScanAccessPoint)
+
+std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point);
+std::string FinalContentAnalysisResultToString(
+    FinalContentAnalysisResult result);
 }  // namespace enterprise_connectors
 
 #endif  // COMPONENTS_ENTERPRISE_CONNECTORS_CORE_COMMON_H_

@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "ash/webui/scanning/mojom/scanning_type_converters.h"
+#include "ash/webui/scanning/mojom/scanning_mojom_traits.h"
 #include "ash/webui/scanning/scanning_uma.h"
 #include "base/check.h"
 #include "base/check_op.h"
@@ -18,7 +18,6 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -54,8 +53,11 @@ constexpr base::TimeDelta kTimeout = base::Minutes(15);
 std::string CreateFilename(const base::Time& start_time,
                            uint32_t page_number,
                            const mojo_ipc::FileType file_type) {
-  const std::string timestamp =
-      base::UnlocalizedTimeFormatWithPattern(start_time, "yyMMdd-HHmmss");
+  base::Time::Exploded exploded;
+  start_time.LocalExplode(&exploded);
+  const std::string timestamp = base::StringPrintf(
+      "%02d%02d%02d-%02d%02d%02d", exploded.year % 100, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second);
 
   std::string file_ext;
   switch (file_type) {
@@ -599,7 +601,7 @@ void ScanService::OnPageSaved(const base::FilePath& saved_file_path) {
 }
 
 void ScanService::OnAllPagesSaved(lorgnette::ScanFailureMode failure_mode) {
-  std::optional<scanning::ScanJobFailureReason> failure_reason = std::nullopt;
+  std::optional<scanning::ScanJobFailureReason> failure_reason;
   if (failure_mode != lorgnette::SCAN_FAILURE_MODE_NO_FAILURE) {
     failure_reason = GetScanJobFailureReason(failure_mode);
     scanned_file_paths_.clear();

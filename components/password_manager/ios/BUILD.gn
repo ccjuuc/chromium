@@ -4,6 +4,19 @@
 
 import("//ios/web/public/js_messaging/optimize_ts.gni")
 
+bundle_data("auto_submit_test_bundle_data") {
+  testonly = true
+  sources = [
+    "//components/test/data/password_manager/auto_submit_disabled_field_after.html",
+    "//components/test/data/password_manager/auto_submit_disabled_field_between.html",
+    "//components/test/data/password_manager/auto_submit_synthetic_form.html",
+    "//components/test/data/password_manager/auto_submit_test.html",
+    "//components/test/data/password_manager/auto_submit_with_preceding_field.html",
+  ]
+  outputs = [ "{{bundle_resources_dir}}/" +
+              "{{source_root_relative_dir}}/{{source_file_part}}" ]
+}
+
 component("ios") {
   public_deps = [ ":password_manager_feature_header" ]
 
@@ -17,6 +30,7 @@ component("ios") {
     "//components/autofill/ios/browser",
     "//components/autofill/ios/browser:util",
     "//components/autofill/ios/common",
+    "//components/autofill/ios/common:autofill_optimization_features",
     "//components/autofill/ios/form_util",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser/features:password_features",
@@ -25,6 +39,7 @@ component("ios") {
     "//components/security_state/ios",
     "//components/strings:components_strings_grit",
     "//components/ukm/ios:ukm_url_recorder",
+    "//components/webauthn/ios",
     "//components/webauthn/ios:utils",
     "//ios/web/common",
     "//ios/web/public",
@@ -173,6 +188,9 @@ source_set("unit_tests") {
     "//components/test/ios",
     "//components/ukm:test_support",
     "//components/ukm/ios:ukm_url_recorder",
+    "//components/webauthn/core/browser:test_support",
+    "//components/webauthn/ios",
+    "//components/webauthn/ios:test_support",
     "//ios/web/js_messaging",
     "//ios/web/js_messaging:java_script_feature_manager_header",
     "//ios/web/public/js_messaging",

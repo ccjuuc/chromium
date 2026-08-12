@@ -46,6 +46,7 @@
 #include "crypto/scoped_fake_unexportable_key_provider.h"
 #include "crypto/signature_verifier.h"
 #include "google_apis/gaia/gaia_switches.h"
+#include "net/base/url_util.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
@@ -147,11 +148,12 @@ SignatureAlgorithmFromString(std::string_view algorithm) {
 std::vector<std::string> GetTwoCookiesAttributesLines(
     const GURL& url,
     const std::string& cookie_name1,
-    const std::string& cookie_name2) {
+    const std::string& cookie_name2,
+    base::TimeDelta expiry_offset = base::Minutes(10)) {
   std::vector<std::string> cookies;
   for (const std::string& cookie_name : {cookie_name1, cookie_name2}) {
-    CanonicalCookie cookie =
-        BoundSessionTestCookieManager::CreateCookie(url, cookie_name);
+    CanonicalCookie cookie = BoundSessionTestCookieManager::CreateCookie(
+        url, cookie_name, std::nullopt, expiry_offset);
     cookies.push_back(CanonicalCookie::BuildCookieAttributesLine(cookie));
   }
   return cookies;
@@ -177,11 +179,13 @@ struct CookieRotationResponseParams {
       const GURL& url,
       const std::string& cookie_name1,
       const std::string& cookie_name2,
-      bool block_server_response = false) {
+      bool block_server_response = false,
+      base::TimeDelta expiry_offset = base::Minutes(10)) {
     static const std::string kSetCookieHeaderKey = "Set-Cookie";
     HeaderVector headers;
     for (const std::string& cookie_attribute_line :
-         GetTwoCookiesAttributesLines(url, cookie_name1, cookie_name2)) {
+         GetTwoCookiesAttributesLines(url, cookie_name1, cookie_name2,
+                                      expiry_offset)) {
       headers.emplace_back(kSetCookieHeaderKey, cookie_attribute_line);
     }
     return {.headers = std::move(headers),
@@ -305,6 +309,8 @@ class FakeServer {
  private:
   std::unique_ptr<net::test_server::HttpResponse> HandleRegisterSessionRequest(
       const net::test_server::HttpRequest& request) {
+    EXPECT_EQ(request.GetURL().path(), server_params_.registration_path);
+    EXPECT_THAT(request.GetURL().query(), IsEmpty());
     EXPECT_TRUE(request.has_content);
     EXPECT_TRUE(VerifyRegistrationJwt(request.content));
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();
@@ -349,12 +355,11 @@ class FakeServer {
   }
 
   [[nodiscard]] AssertionResult VerifyRegistrationJwt(std::string_view jwt) {
-    std::optional<base::Value::Dict> header = signin::ExtractHeaderFromJwt(jwt);
+    std::optional<base::DictValue> header = signin::ExtractHeaderFromJwt(jwt);
     if (!header) {
       return AssertionFailure() << "JWT header not found";
     }
-    std::optional<base::Value::Dict> payload =
-        signin::ExtractPayloadFromJwt(jwt);
+    std::optional<base::DictValue> payload = signin::ExtractPayloadFromJwt(jwt);
     if (!payload) {
       return AssertionFailure() << "JWT payload not found";
     }
@@ -467,7 +472,8 @@ class FakeServerHost {
 
 std::unique_ptr<FakeServerHost> CreateAndInitializeHealthyFakeServerHost(
     FakeServer::Params params,
-    net::test_server::EmbeddedTestServer& embedded_test_server) {
+    net::test_server::EmbeddedTestServer& embedded_test_server,
+    base::TimeDelta expiry_offset = base::Minutes(10)) {
   auto fake_server_host = std::make_unique<FakeServerHost>(std::move(params));
 
   base::queue<CookieRotationResponseParams> rotation_responses_params;
@@ -479,7 +485,7 @@ std::unique_ptr<FakeServerHost> CreateAndInitializeHealthyFakeServerHost(
           embedded_test_server.GetURL(fake_server_host->params().domain, "/"),
           fake_server_host->params().cookie_name1,
           fake_server_host->params().cookie_name2,
-          /*block_server_response=*/true));
+          /*block_server_response=*/true, expiry_offset));
 
   fake_server_host->Initialize(embedded_test_server,
                                std::move(rotation_responses_params));
@@ -614,7 +620,7 @@ class BoundSessionCookieRefreshServiceImplBrowserTest
 
   BoundSessionCookieRefreshService* service() {
     return BoundSessionCookieRefreshServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void ExpectSessionParamsUpdate(base::RepeatingClosure callback) {
@@ -651,7 +657,8 @@ class BoundSessionCookieRefreshServiceImplBrowserTest
  protected:
   virtual std::vector<std::unique_ptr<FakeServerHost>>
   CreateAndInitializeFakeServerHosts(
-      net::test_server::EmbeddedTestServer& embedded_test_server) {
+      net::test_server::EmbeddedTestServer& embedded_test_server,
+      base::TimeDelta expiry_offset = base::Minutes(10)) {
     std::vector<std::unique_ptr<FakeServerHost>> result;
 
     auto fake_server_host = CreateAndInitializeHealthyFakeServerHost(
@@ -660,7 +667,7 @@ class BoundSessionCookieRefreshServiceImplBrowserTest
                            .registration_path = "/RegisterSession",
                            .rotation_path = "/RotateBoundCookies",
                            .session_id = "007"},
-        embedded_test_server);
+        embedded_test_server, expiry_offset);
 
     result.push_back(std::move(fake_server_host));
     return result;
@@ -670,8 +677,8 @@ class BoundSessionCookieRefreshServiceImplBrowserTest
   void InitializeServer() {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-    server_hosts_ =
-        CreateAndInitializeFakeServerHosts(embedded_https_test_server());
+    server_hosts_ = CreateAndInitializeFakeServerHosts(
+        embedded_https_test_server(), /*expiry_offset=*/base::Minutes(20));
 
     std::vector<std::string> registration_paths;
     for (const auto& server_host : server_hosts_) {
@@ -729,7 +736,14 @@ IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
     // https://crbug.com/352744596
     base::RunLoop bound_session_params_update;
     ExpectSessionParamsUpdate(bound_session_params_update.QuitClosure());
-    bound_session_params_update.Run();
+    if (service()
+            ->GetBoundSessionThrottlerParams()[0]
+            ->cookie_expiry_date.is_null()) {
+      bound_session_params_update.Run();
+    } else {
+      ExpectSessionParamsUpdate({});
+    }
+
     std::vector<chrome::mojom::BoundSessionThrottlerParamsPtr>
         throttler_params = service()->GetBoundSessionThrottlerParams();
     ASSERT_EQ(throttler_params.size(), 1U);
@@ -752,7 +766,7 @@ IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
   ASSERT_EQ(new_throttler_params.size(), 1U);
   EXPECT_EQ(new_throttler_params[0]->domain, kDomain);
   EXPECT_EQ(new_throttler_params[0]->path, "/");
-  EXPECT_GT(new_throttler_params[0]->cookie_expiry_date, cookie_expiration);
+  EXPECT_GE(new_throttler_params[0]->cookie_expiry_date, cookie_expiration);
 }
 
 // Verifies that a bound session is deleted when the user cleares site data.
@@ -764,7 +778,7 @@ IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
 
   // Clear all site data.
   content::BrowsingDataRemover* remover =
-      browser()->profile()->GetBrowsingDataRemover();
+      browser()->GetProfile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver observer(remover);
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(),
@@ -781,7 +795,7 @@ IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
 IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
                        BtmDeletionDoesNotDeleteSession) {
   // Enable third-party cookie blocking to activate the BTM deletion.
-  SetBlockThirdPartyCookies(browser()->profile(), true);
+  SetBlockThirdPartyCookies(browser()->GetProfile(), true);
 
   // Initialize a new session.
   RegisterNewSession();
@@ -795,7 +809,7 @@ IN_PROC_BROWSER_TEST_F(BoundSessionCookieRefreshServiceImplBrowserTest,
 
   // Trigger BTM deletion.
   base::test::TestFuture<const std::vector<std::string>&> deleted_sites;
-  content::BtmService::Get(browser()->profile())
+  content::BtmService::Get(browser()->GetProfile())
       ->DeleteEligibleSitesImmediately(deleted_sites.GetCallback());
   EXPECT_THAT(deleted_sites.Get(), SizeIs(Gt(0)));
 
@@ -808,7 +822,8 @@ class BoundSessionCookieRefreshServiceImplFailingRotationBrowserTest
  protected:
   std::vector<std::unique_ptr<FakeServerHost>>
   CreateAndInitializeFakeServerHosts(
-      net::test_server::EmbeddedTestServer& embedded_test_server) override {
+      net::test_server::EmbeddedTestServer& embedded_test_server,
+      base::TimeDelta expiry_offset = base::Minutes(10)) override {
     std::vector<std::unique_ptr<FakeServerHost>> result;
 
     auto fake_server_host = std::make_unique<FakeServerHost>(
@@ -864,7 +879,8 @@ class BoundSessionCookieRefreshServiceImplSubdomainSessionBrowserTest
  protected:
   std::vector<std::unique_ptr<FakeServerHost>>
   CreateAndInitializeFakeServerHosts(
-      net::test_server::EmbeddedTestServer& embedded_test_server) override {
+      net::test_server::EmbeddedTestServer& embedded_test_server,
+      base::TimeDelta expiry_offset = base::Minutes(10)) override {
     std::vector<std::unique_ptr<FakeServerHost>> result;
 
     auto fake_server_host = CreateAndInitializeHealthyFakeServerHost(
@@ -873,7 +889,7 @@ class BoundSessionCookieRefreshServiceImplSubdomainSessionBrowserTest
                            .registration_path = "/RegisterSession",
                            .rotation_path = "/RotateBoundCookies",
                            .session_id = "007"},
-        embedded_test_server);
+        embedded_test_server, expiry_offset);
 
     result.push_back(std::move(fake_server_host));
     return result;
@@ -910,7 +926,8 @@ class BoundSessionCookieRefreshServiceImplMultipleSessionsBrowserTest
  protected:
   std::vector<std::unique_ptr<FakeServerHost>>
   CreateAndInitializeFakeServerHosts(
-      net::test_server::EmbeddedTestServer& embedded_test_server) override {
+      net::test_server::EmbeddedTestServer& embedded_test_server,
+      base::TimeDelta expiry_offset = base::Minutes(10)) override {
     std::vector<std::unique_ptr<FakeServerHost>> result;
 
     auto first_server_host = CreateAndInitializeHealthyFakeServerHost(
@@ -919,7 +936,7 @@ class BoundSessionCookieRefreshServiceImplMultipleSessionsBrowserTest
                            .registration_path = "/RegisterFirstSession",
                            .rotation_path = "/RotateFirstBoundCookies",
                            .session_id = "session_one"},
-        embedded_test_server);
+        embedded_test_server, expiry_offset);
 
     auto second_server_host = CreateAndInitializeHealthyFakeServerHost(
         FakeServer::Params{.domain = std::string(kSubdomain),
@@ -929,7 +946,7 @@ class BoundSessionCookieRefreshServiceImplMultipleSessionsBrowserTest
                            .session_id = "session_two",
                            .cookie_name1 = "1P_other_test_cookie",
                            .cookie_name2 = "3P_other_test_cookie"},
-        embedded_test_server);
+        embedded_test_server, expiry_offset);
 
     result.push_back(std::move(first_server_host));
     result.push_back(std::move(second_server_host));

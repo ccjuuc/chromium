@@ -6,7 +6,6 @@
 
 #include "base/process/process_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_log.h"
 #include "base/trace_event/traced_value.h"
 
 // Define static storage for trace event categories (see
@@ -23,9 +22,8 @@ perfetto::ThreadTrack ConvertThreadId(const ::base::PlatformThreadId& thread) {
 
 }  // namespace legacy
 
-TraceTimestamp
-TraceTimestampTraits<::base::TimeTicks>::ConvertTimestampToTraceTimeNs(
-    const ::base::TimeTicks& ticks) {
+TraceTimestamp TraceTimestampTraits<
+    ::base::TimeTicks>::ConvertTimestampToTraceTimeNs(::base::TimeTicks ticks) {
   return {static_cast<uint32_t>(::base::TrackEvent::GetTraceClockId()),
           static_cast<uint64_t>(ticks.since_origin().InNanoseconds())};
 }
@@ -76,13 +74,6 @@ TraceEvent::~TraceEvent() = default;
 
 TraceEvent::TraceEvent(TraceEvent&& other) noexcept = default;
 TraceEvent& TraceEvent::operator=(TraceEvent&& other) noexcept = default;
-
-void TraceEvent::Reset() {
-  // Only reset fields that won't be initialized in Reset(int, ...), or that may
-  // hold references to other objects.
-  args_.Reset();
-  parameter_copy_storage_.Reset();
-}
 
 void TraceEvent::InitArgs(TraceArguments* args) {
   if (args) {

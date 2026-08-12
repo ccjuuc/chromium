@@ -15,7 +15,6 @@ import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.database.DataSetObserver;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -32,8 +31,8 @@ import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.widget.list_view.TouchTrackingListView;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.listmenu.ListMenuItemAdapter;
+import org.chromium.ui.listmenu.ListMenuUtils;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
-import org.chromium.ui.util.AttrUtils;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.AnchoredPopupWindow.HorizontalOrientation;
 import org.chromium.ui.widget.FlyoutPopupSpecCalculator;
@@ -57,6 +56,7 @@ public class TabOverflowMenuHolder<T> {
     private final ModelList mModelList;
     private final @Nullable LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
     private AnchoredPopupWindow mMenuWindow;
+    private final TouchTrackingListView mListView;
 
     TabOverflowMenuHolder(
             RectProvider anchorViewRectProvider,
@@ -90,10 +90,9 @@ public class TabOverflowMenuHolder<T> {
         mContext.registerComponentCallbacks(mComponentCallbacks);
 
         mContentView = LayoutInflater.from(mContext).inflate(menuLayout, null);
-        clipContentViewOutline();
+        ListMenuUtils.clipContentViewOutline(mContentView, R.attr.popupBgCornerRadius);
 
-        TouchTrackingListView touchTrackingListView =
-                mContentView.findViewById(R.id.tab_group_action_menu_list);
+        mListView = mContentView.findViewById(R.id.tab_group_action_menu_list);
         ListMenuItemAdapter adapter =
                 createAdapter(
                         modelList,
@@ -110,11 +109,11 @@ public class TabOverflowMenuHolder<T> {
                                     model.get(MENU_ITEM_ID),
                                     id,
                                     collaborationId,
-                                    /* listViewTouchTracker= */ touchTrackingListView);
+                                    /* listViewTouchTracker= */ mListView);
                             mMenuWindow.dismiss();
                         });
-        touchTrackingListView.setItemsCanFocus(true);
-        touchTrackingListView.setAdapter(adapter);
+        mListView.setItemsCanFocus(true);
+        mListView.setAdapter(adapter);
 
         View decorView = activity.getWindow().getDecorView();
 
@@ -141,7 +140,7 @@ public class TabOverflowMenuHolder<T> {
             builder.setAnimationStyle(R.style.PopupWindowAnimFade);
             builder.setSpecCalculator(new FlyoutPopupSpecCalculator());
             builder.setDesiredContentWidth(
-                    UiUtils.computeListAdapterContentDimensions(adapter, touchTrackingListView)[0]);
+                    UiUtils.computeListAdapterContentDimensions(adapter, mListView)[0]);
         } else {
             // Override animation style or animate from anchor as default.
             if (animStyle == Resources.ID_NULL) {
@@ -186,6 +185,7 @@ public class TabOverflowMenuHolder<T> {
 
     void show() {
         mMenuWindow.show();
+        mContentView.findViewById(R.id.tab_group_action_menu_list).requestFocus();
     }
 
     void resize() {
@@ -203,13 +203,7 @@ public class TabOverflowMenuHolder<T> {
         LifetimeAssert.destroy(mLifetimeAssert);
     }
 
-    private void clipContentViewOutline() {
-        GradientDrawable outlineDrawable = new GradientDrawable();
-        outlineDrawable.setShape(GradientDrawable.RECTANGLE);
-        outlineDrawable.setCornerRadius(
-                AttrUtils.getDimensionPixelSize(
-                        mContentView.getContext(), R.attr.popupBgCornerRadius));
-        mContentView.setBackground(outlineDrawable);
-        mContentView.setClipToOutline(true);
+    void setOnScrollChangeListener(View.OnScrollChangeListener listener) {
+        mListView.setOnScrollChangeListener(listener);
     }
 }

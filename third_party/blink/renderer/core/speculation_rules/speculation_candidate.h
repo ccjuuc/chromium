@@ -49,7 +49,13 @@ class CORE_EXPORT SpeculationCandidate
   mojom::blink::SpeculationTargetHint target_hint() const {
     return target_hint_;
   }
+  bool form_submission() const { return form_submission_; }
   mojom::blink::SpeculationEagerness eagerness() const { return eagerness_; }
+  // The No-Vary-Search hint (may be null), used for URL-equivalence matching
+  // by the renderer-side link-selection heuristics.
+  const network::mojom::blink::NoVarySearchPtr& no_vary_search() const {
+    return no_vary_search_;
+  }
   SpeculationRuleSet* rule_set() const { return rule_set_.Get(); }
   // Only set for candidates derived from a document rule (is null for
   // candidates derived from list rules).
@@ -59,9 +65,8 @@ class CORE_EXPORT SpeculationCandidate
   // Returns true if the two candidates are similar from the author's
   // perspective. This means that the two candidates are for the same URL and
   // have the same action, and the other properties are similar enough that
-  // the author would consider them to be the same candidate, except for tags.
-  bool IsSimilarFromAuthorPerspectiveExceptForTags(
-      const SpeculationCandidate& other) const;
+  // the author would consider them to be the same candidate.
+  bool IsSimilarFromAuthorPerspective(const SpeculationCandidate& other) const;
 
  private:
   const KURL url_;

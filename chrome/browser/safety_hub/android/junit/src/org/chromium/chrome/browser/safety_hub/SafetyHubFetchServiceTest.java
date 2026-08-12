@@ -24,14 +24,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.password_manager.FakePasswordCheckupClientHelper;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.safety_hub.SafetyHubFetchService.FetchAccountCredentialsCallback;
 import org.chromium.components.background_task_scheduler.BackgroundTaskScheduler;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.components.background_task_scheduler.TaskIds;
@@ -42,7 +41,6 @@ import java.util.concurrent.TimeUnit;
 
 /** Unit tests for SafetyHubFetchService. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
 public class SafetyHubFetchServiceTest {
     private static final int ONE_DAY_IN_MILLISECONDS = (int) TimeUnit.DAYS.toMillis(1);
 
@@ -50,7 +48,7 @@ public class SafetyHubFetchServiceTest {
     @Rule public SafetyHubTestRule mSafetyHubTestRule = new SafetyHubTestRule();
 
     @Mock private BackgroundTaskScheduler mTaskScheduler;
-    @Mock private Callback<Boolean> mTaskFinishedCallback;
+    @Mock private FetchAccountCredentialsCallback mTaskFinishedCallback;
     @Captor private ArgumentCaptor<TaskInfo> mTaskInfoCaptor;
 
     private Profile mProfile;

@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -459,9 +458,10 @@ ThrottleCheckResult LookalikeUrlNavigationThrottle::PerformChecks(
   //
   // Note that the signed exchange logic can still redirect the initial
   // navigation to the fallback URL even if SGX checks fail (invalid cert,
-  // missing headers etc, see crbug.com/874323 for an example). Such navigations
-  // are not considered SGX navigations and IsSignedExchangeInnerResponse()
-  // will return false. We treat such navigations as simple redirects.
+  // missing headers etc, see crbug.com/40589428 for an example). Such
+  // navigations are not considered SGX navigations and
+  // IsSignedExchangeInnerResponse() will return false. We treat such
+  // navigations as simple redirects.
   if (first_is_lookalike &&
       navigation_handle()->IsSignedExchangeInnerResponse()) {
     first_is_lookalike = false;
@@ -474,7 +474,7 @@ ThrottleCheckResult LookalikeUrlNavigationThrottle::PerformChecks(
     return NavigationThrottle::PROCEED;
   }
   // IMPORTANT: Do not modify first_is_lookalike or last_is_lookalike beyond
-  // this line. See crbug.com/1138138 for an example bug.
+  // this line. See crbug.com/40725190 for an example bug.
 
   // source_id corresponds to last_url, even when first_url is what triggered.
   // UKM records first_is_lookalike/triggered_by_initial_url to disambiguate.

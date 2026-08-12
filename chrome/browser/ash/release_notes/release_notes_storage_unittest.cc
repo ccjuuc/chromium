@@ -9,9 +9,12 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/webui/help_app_ui/help_app_prefs.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/version.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
@@ -97,7 +100,7 @@ class ReleaseNotesStorageTest : public testing::Test,
 // milestone.
 TEST_F(ReleaseNotesStorageTest, ShouldNotShowReleaseNotesOOBE) {
   SetUpProfile();
-  profile_.get()->GetPrefs()->SetString(prefs::kProfileCreatedByVersion,
+  profile_.get()->GetPrefs()->SetString(::prefs::kProfileCreatedByVersion,
                                         version_info::GetVersion().GetString());
 
   EXPECT_EQ(false, release_notes_storage_->ShouldNotify());
@@ -107,7 +110,7 @@ TEST_F(ReleaseNotesStorageTest, ShouldNotShowReleaseNotesOOBE) {
 // version of chrome.
 TEST_F(ReleaseNotesStorageTest, ShouldShowReleaseNotesOldProfile) {
   SetUpProfile();
-  profile_.get()->GetPrefs()->SetString(prefs::kProfileCreatedByVersion,
+  profile_.get()->GetPrefs()->SetString(::prefs::kProfileCreatedByVersion,
                                         "20.0.0.0");
 
   EXPECT_EQ(true, release_notes_storage_->ShouldNotify());
@@ -118,7 +121,7 @@ TEST_F(ReleaseNotesStorageTest, ShouldShowReleaseNotesOldProfile) {
 TEST_F(ReleaseNotesStorageTest, ShouldShowReleaseNotes) {
   SetUpProfile();
   profile_.get()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, 20);
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
 
   EXPECT_EQ(true, release_notes_storage_->ShouldNotify());
 }
@@ -128,7 +131,8 @@ TEST_F(ReleaseNotesStorageTest,
        ShouldNotShowReleaseNotesIfShownInCurrentChromeVersion) {
   SetUpProfile();
   profile_.get()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, CurrentMilestone());
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone,
+      CurrentMilestone());
 
   EXPECT_EQ(false, release_notes_storage_->ShouldNotify());
 }
@@ -141,8 +145,9 @@ TEST_F(ReleaseNotesStorageTest, ReleaseNotesShouldOnlyBeNotifiedOnce) {
 
   release_notes_storage_->MarkNotificationShown();
 
-  EXPECT_NE(20, profile_.get()->GetPrefs()->GetInteger(
-                    prefs::kHelpAppNotificationLastShownMilestone));
+  EXPECT_NE(20,
+            profile_.get()->GetPrefs()->GetInteger(
+                ash::help_app::prefs::kHelpAppNotificationLastShownMilestone));
   EXPECT_EQ(false, release_notes_storage_->ShouldNotify());
 }
 
@@ -191,7 +196,7 @@ TEST_F(ReleaseNotesStorageTest, ShouldShowReleaseNotesForUnicornProfile) {
 TEST_F(ReleaseNotesStorageTest, DoesNotShowReleaseNotesSuggestionChip) {
   SetUpProfile();
   profile_.get()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 0);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 0);
 
   EXPECT_EQ(false, release_notes_storage_->ShouldShowSuggestionChip());
 }
@@ -202,14 +207,14 @@ TEST_F(ReleaseNotesStorageTest, DoesNotShowReleaseNotesSuggestionChip) {
 TEST_F(ReleaseNotesStorageTest, ShowReleaseNotesSuggestionChip) {
   SetUpProfile();
   profile_.get()->GetPrefs()->SetInteger(
-      prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 1);
+      ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow, 1);
 
   ASSERT_EQ(true, release_notes_storage_->ShouldShowSuggestionChip());
 
   release_notes_storage_->DecreaseTimesLeftToShowSuggestionChip();
 
   EXPECT_EQ(0, profile_.get()->GetPrefs()->GetInteger(
-                   prefs::kReleaseNotesSuggestionChipTimesLeftToShow));
+                   ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow));
   EXPECT_EQ(false, release_notes_storage_->ShouldShowSuggestionChip());
 }
 

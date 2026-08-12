@@ -4,29 +4,31 @@
 
 package org.chromium.chrome.browser.payments;
 
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ALLOW_DELETE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.CANCEL_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DONE_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.EDITOR_FIELDS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.EDITOR_TITLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.IS_REQUIRED;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.LABEL;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.VALIDATOR;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.VALUE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.NOTICE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.TEXT_INPUT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.NOTICE_ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.NOTICE_TEXT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_FIELD_TYPE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_FORMATTER;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_SUGGESTIONS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.VALIDATE_ON_SHOW;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.VISIBLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.scrollToFieldWithErrorMessage;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.validateForm;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.ALLOW_DELETE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.CANCEL_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.DONE_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.EDITOR_FIELDS;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.EDITOR_TITLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.VALIDATE_ON_SHOW;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.VISIBLE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.NOTICE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.TEXT_INPUT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_TEXT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_VISIBLE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.SHOW_BACKGROUND;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.validateForm;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsUtil.scrollToFieldWithErrorMessage;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.IS_REQUIRED;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.LABEL;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALIDATOR;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_FIELD_TYPE;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_FORMATTER;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_SUGGESTIONS;
 
 import android.telephony.PhoneNumberUtils;
 import android.text.TextUtils;
@@ -39,10 +41,9 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PhoneNumberUtil;
-import org.chromium.chrome.browser.autofill.editors.EditorBase;
-import org.chromium.chrome.browser.autofill.editors.EditorDialogViewBinder;
-import org.chromium.chrome.browser.autofill.editors.EditorFieldValidator;
-import org.chromium.chrome.browser.autofill.editors.EditorProperties.EditorItem;
+import org.chromium.chrome.browser.autofill.editors.address.EditorDialogViewBinder;
+import org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.EditorItem;
+import org.chromium.chrome.browser.autofill.editors.common.field.EditorFieldValidator;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.autofill.FieldType;
 import org.chromium.payments.mojom.PayerErrors;
@@ -319,9 +320,11 @@ public class ContactEditor extends EditorBase<AutofillContact> {
                                         NOTICE_TEXT,
                                         mContext.getString(
                                                 R.string.payments_required_field_message))
+                                .with(SHOW_BACKGROUND, false)
                                 // Required fields are indicated by an asterisk (*) and announced
                                 // separately by screen readers. Don't announce the message itself.
                                 .with(IMPORTANT_FOR_ACCESSIBILITY, false)
+                                .with(NOTICE_VISIBLE, true)
                                 .build(),
                         /* isFullLine= */ true));
 
@@ -362,8 +365,8 @@ public class ContactEditor extends EditorBase<AutofillContact> {
     private void onDone() {
         assert isShown();
 
-        if (!validateForm(mEditorModel)) {
-            scrollToFieldWithErrorMessage(mEditorModel);
+        if (!validateForm(mEditorModel.get(EDITOR_FIELDS))) {
+            scrollToFieldWithErrorMessage(mEditorModel.get(EDITOR_FIELDS));
             return;
         }
         mEditorModel.set(VISIBLE, false);

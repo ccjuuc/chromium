@@ -10,6 +10,7 @@ from model import PropertyType
 import os
 import posixpath
 import re
+import sys
 
 CHROMIUM_LICENSE = ("""// Copyright %d The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
@@ -18,17 +19,20 @@ GENERATED_FILE_MESSAGE = """// GENERATED FROM THE API DEFINITION IN
 //   %s
 // by tools/json_schema_compiler.
 // DO NOT EDIT.
+//
+// Generator run command:
+//   %s
 """
 GENERATED_BUNDLE_FILE_MESSAGE = """// GENERATED FROM THE API DEFINITIONS IN
 //   %s
 // by tools/json_schema_compiler.
 // DO NOT EDIT.
-"""
-GENERATED_FEATURE_MESSAGE = """// GENERATED FROM THE FEATURE DEFINITIONS IN
+//
+// Generator run command:
 //   %s
-// by tools/json_schema_compiler.
-// DO NOT EDIT.
 """
+def GetGeneratedByCommandLine():
+  return "python3 " + " ".join(sys.argv)
 
 
 def Classname(s):
@@ -178,14 +182,6 @@ def CloseNamespace(cpp_namespace):
   for component in reversed(cpp_namespace.split('::')):
     c.Append('}  // namespace %s' % component)
   return c
-
-
-def FeatureNameToConstantName(feature_name):
-  # type: (str) -> str
-  """Returns a kName for a feature's name.
-  """
-  return ('k' + ''.join(word[0].upper() + word[1:]
-                        for word in feature_name.replace('.', ' ').split()))
 
 
 def UnixNameToConstantName(unix_name):

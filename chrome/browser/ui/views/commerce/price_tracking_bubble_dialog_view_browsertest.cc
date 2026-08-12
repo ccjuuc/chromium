@@ -16,7 +16,6 @@
 #include "components/commerce/core/test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
 #include "components/unified_consent/pref_names.h"
@@ -41,7 +40,7 @@ class PriceTrackingBubbleDialogViewBrowserTest : public DialogBrowserTest {
   void SetUpOnMainThread() override {
     DialogBrowserTest::SetUpOnMainThread();
     signin::ConsentLevel consent_level =
-        base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+        syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
             ? signin::ConsentLevel::kSignin
             : signin::ConsentLevel::kSync;
     signin::MakePrimaryAccountAvailable(

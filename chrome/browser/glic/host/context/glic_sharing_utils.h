@@ -6,15 +6,15 @@
 #define CHROME_BROWSER_GLIC_HOST_CONTEXT_GLIC_SHARING_UTILS_H_
 
 #include "base/callback_list.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
+#include "chrome/browser/tab_list/tab_list_interface_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "components/tabs/public/tab_interface.h"
 
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser_list_observer.h"
-#endif
-
 class BrowserWindowInterface;
+class BrowserCollection;
 class Profile;
 
 namespace content {
@@ -28,11 +28,18 @@ namespace glic {
 bool IsBrowserValidForSharingInProfile(
     BrowserWindowInterface* browser_interface,
     Profile* profile);
+bool IsTabValidForPinningInProfile(tabs::TabInterface* tab, Profile* profile);
 
 // Returns true if `web_contents` can be shared, given its current state.
 // This becomes invalid when the committed URL changes.
 // Sharing may still fail for other reasons.
 bool IsTabValidForSharing(content::WebContents* web_contents);
+bool IsTabValidForSharing(tabs::TabInterface* tab);
+
+// Returns the most recently active tab from the given list of tabs.
+// The list of tabs must not be empty.
+tabs::TabInterface* GetMostRecentlyActiveTab(
+    const std::vector<tabs::TabInterface*>& tabs);
 
 // Returns an empty pin event.
 GlicPinEvent GetEmptyPinEvent();
@@ -43,9 +50,9 @@ GlicPinnedTabUsage GetEmptyPinnedTabUsage();
 // Returns an empty unpin event.
 GlicUnpinEvent GetEmptyUnpinEvent();
 
-#if !BUILDFLAG(IS_ANDROID)
 // Shared util for monitoring changes to "active tab" for a given profile.
-class GlicActiveTabForProfileTracker : public BrowserListObserver {
+class GlicActiveTabForProfileTracker : public BrowserCollectionObserver,
+                                       public TabListInterfaceObserver {
  public:
   explicit GlicActiveTabForProfileTracker(Profile* profile);
   ~GlicActiveTabForProfileTracker() override;
@@ -63,12 +70,14 @@ class GlicActiveTabForProfileTracker : public BrowserListObserver {
   tabs::TabInterface* GetActiveTab() const;
 
  private:
-  // BrowserListObserver.
-  void OnBrowserSetLastActive(Browser* browser) override;
-  void OnBrowserNoLongerActive(Browser* browser) override;
+  // BrowserCollectionObserver.
+  void OnBrowserActivated(BrowserWindowInterface* browser) override;
+  void OnBrowserDeactivated(BrowserWindowInterface* browser) override;
 
-  // Callback for changes to the active tab.
-  void OnActiveTabChanged(BrowserWindowInterface* browser);
+  // TabListInterfaceObserver.
+  void OnActiveTabChanged(TabListInterface& tab_list,
+                          tabs::TabInterface* tab) override;
+  void OnTabListDestroyed(TabListInterface& tab_list) override;
 
   // Pulls the active tab and notifies if changed.
   void UpdateActiveTab();
@@ -76,7 +85,7 @@ class GlicActiveTabForProfileTracker : public BrowserListObserver {
   // Notifies subscribers when active tab has changed.
   void NotifyActiveTabChanged(tabs::TabInterface* active_tab);
 
-  // Updates the active tab subscription (if any) for the given browser.
+  // Updates the active tab observation for the given browser.
   void UpdateActiveTabSubscription(BrowserWindowInterface* browser);
 
   // True if the browser is active and for the same profile.
@@ -89,12 +98,15 @@ class GlicActiveTabForProfileTracker : public BrowserListObserver {
   base::RepeatingCallbackList<void(tabs::TabInterface* tab)>
       active_tab_changed_callback_list_;
 
-  // Subscription for listening to browser-specific active tab changes.
-  base::CallbackListSubscription active_tab_subscription_;
+  // Observation for listening to browser-specific active tab changes.
+  base::ScopedObservation<TabListInterface, TabListInterfaceObserver>
+      tab_list_observation_{this};
+
+  base::ScopedObservation<BrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 
   raw_ptr<Profile> profile_;
 };
-#endif
 
 }  // namespace glic
 

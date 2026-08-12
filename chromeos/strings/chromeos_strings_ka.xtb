@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">შეიყვანეთ მოთხოვნა</translation>
 <translation id="115705039208660697">ანანასები</translation>
 <translation id="1164939766849482256">ეკრანმზოგი განთიადიდან შებინდებამდე</translation>
-<translation id="1167755866710282443">კლავიშების მოსარგებად გახსენით მენიუ. გადასაადგილებლად ჩავლებით გადაიტანეთ მენიუ.</translation>
 <translation id="1171349345463658120">ქვიშიანი ლაგუნა</translation>
 <translation id="1174073918202301297">მალსახმობი დამატებულია</translation>
 <translation id="11743817593307477">გამოიყენეთ ისრიანი კლავიშები, მართვის ეს საშუალება თამაშის სასურველ მოქმედებაზე რომ გადაიტანოთ. მართვის საშუალების დასაფიქსირებლად დააჭირეთ კლავიშს „enter“. გასაუქმებლად გამოიყენეთ კლავიში „escape“.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">დატენის ტესტის გაშვება</translation>
 <translation id="1622402072367425417">გაბრწყინებული ბუშტები</translation>
 <translation id="1626590945318984973">მალსახმობი მიუწვდომელია. დააჭირეთ ახალ მალსახმობს ფუნქციური და „<ph name="META_KEY" />“ კლავიშების გამოყენების გარეშე.</translation>
+<translation id="163774412591892664">თქვენმა ადმინისტრატორმა გათიშა თქვენი მოწყობილობა და შეუძლია მის მდებარეობაზე წვდომა.</translation>
 <translation id="1639239467298939599">იტვირთება</translation>
 <translation id="1641857168437328880">დოკუმენტების მიმწოდი (ცალმხრივი)</translation>
 <translation id="1642396894598555413">ველოსიპედები</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">ფაილის ჩანაცვლება</translation>
 <translation id="2006864819935886708">კავშირი</translation>
 <translation id="2008685064673031089">Prime Search</translation>
-<translation id="2011174342667534258">SDK ვერსია:</translation>
 <translation id="2016697457005847575">გამოცადეთ დეფექტების აღმოფხვრის საფეხურები</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">დანა-ჩანგალი</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">ქვიშის დიუნი</translation>
 <translation id="2619761439309613843">ყოველდღიური განახლება</translation>
 <translation id="2620436844016719705">სისტემა</translation>
+<translation id="2626848494898563581">Google სერვისები მიუწვდომელია</translation>
 <translation id="2637303424821734920">გამორთულია — ადგილობრივი ამინდის საჩვენებლად <ph name="BEGIN_LINK" />ჩართეთ სისტემის მდებარეობაზე წვდომა<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">შესვლის სურათი</translation>
 <translation id="2640549051766135490">არჩეულია ალბომი <ph name="TITLE" /> <ph name="DESC" /></translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">კლავიშთა დანიშვნის D-pad</translation>
 <translation id="3217462202230355157">დარწმუნდით, რომ თქვენი მიკროფონი დაკავშირებულია და ცადეთ <ph name="DEVICE_TYPE" />-ის გადატვირთვა</translation>
 <translation id="3226405216343213872">მიმდინარეობს სკანერების ძიება</translation>
-<translation id="3226657629376379887">განლაგებასთან დაკავშირებული მოქმედებების მენიუ</translation>
 <translation id="3227186760713762082"><ph name="CATEGORY_TEXT" />-ის მნიშვნელობის გაყოფა <ph name="CONVERSION_RATE" />-ზე</translation>
 <translation id="3242622575335502454">ციფრული ხელოვნება</translation>
 <translation id="3246869037381808805">ბეჭდვის 1 დღეზე ძველი დავალებები ამოიშლება</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">გასაღების მიმართულება</translation>
 <translation id="3294437725009624529">სტუმარი</translation>
 <translation id="3303855915957856445">ძიების შედეგები ვერ მოიძებნა</translation>
-<translation id="3305294846493618482">მეტი</translation>
 <translation id="3310640316857623290">DNS-ის რეაგირების დრო მნიშვნელოვნად აღემატება დასაშვებ ზღვარს</translation>
 <translation id="3316495615885967552">შეჯამების და სათაურის შექმნის მოდელის ჩამოტვირთვა დასრულდა</translation>
 <translation id="3321030238473337787">დაკვრის სიჩქარე</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">წარმოიქმნა შეფერხება. ცადეთ ხელახლა.</translation>
 <translation id="357889014807611375">ლიმიტირებული Wi-Fi</translation>
 <translation id="3583278742022654445">სიგნალის სიმძლავრე სუსტია. ცადეთ Wi-Fi სიგნალის წყაროსთან მიახლოება.</translation>
+<translation id="3586931643579894722">დეტალების დამალვა</translation>
 <translation id="3588034708467091142">დარწმუნდით, რომ დაკავშირებული ხართ ინტერნეტთან და ცადეთ ხელახლა.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> არის <ph name="APN_NAME" />-ის მომხმარებელზე მორგებული სახელი.</translation>
 <translation id="3595596368722241419">ბატარეა სავსეა</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">10 წამით უკან გადახვევა</translation>
 <translation id="4128271910628504223">შეიყვანეთ მოთხოვნა, მაგალითად, „დახატე ნისლიანი ტყე“</translation>
 <translation id="4130035430755296270">განლაგებების მეტი ვარიანტებისთვის გააგრძელეთ გადატარება</translation>
-<translation id="4130750466177569591">ვეთანხმები</translation>
 <translation id="4131410914670010031">შავი და თეთრი</translation>
 <translation id="4137700675046373159">შაბათს</translation>
 <translation id="4139326893730851150">ჩაშენებული პროგრამული უზრუნველყოფის განახლებები</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814"><ph name="LANGUAGE_NAME" /> ტრანსკრიფციის მოდელის ჩამოტვირთვა დასრულდა</translation>
 <translation id="42126664696688958">ექსპორტი</translation>
 <translation id="4213104098953699324">USB კლავიატურა</translation>
+<translation id="4217571870635786043">კარნახი</translation>
 <translation id="4227825898293920515">პაროლი ძალაშია <ph name="TIME" /></translation>
 <translation id="4238516577297848345">ბეჭდვის მიმდინარე დავალებები არ არის</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">ჩანართი</translation>
 <translation id="5612205513582918357">საკლასო ხელსაწყოები აზიარებს თქვენს ეკრანს <ph name="RECEIVER_NAME" />-თან</translation>
 <translation id="5613201299517339763">თქვენ სისტემიდან გამოხვედით</translation>
-<translation id="5620281292257375798">მხოლოდ შიდა გამოყენებისთვის</translation>
 <translation id="5628106863521633649">ხელმისაწვდომი ენები</translation>
 <translation id="5630438231335788050">ბაუჰაუსი</translation>
 <translation id="5631759159893697722">რეზიუმე</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">უკუშლა</translation>
 <translation id="6137614725462089991">კიბერპანკი</translation>
 <translation id="6137767437444130246">მომხმარებლის სერტიფიკატი</translation>
+<translation id="6140948187512243695">დეტალების ჩვენება</translation>
 <translation id="6146993107019042706">დასასრულებლად შეიყვანეთ თქვენი ახალი პაროლი</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">ინტერნეტთან დაკავშირება ვერ ხერხდება</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">კონტურების ჩვენება</translation>
 <translation id="6243280677745499710">ამჟამად დაყენებული</translation>
 <translation id="6250316632541035980">ბეკონი და კვერცხი</translation>
+<translation id="6262413940100821797">უცნობი მიმღები</translation>
 <translation id="6265268291107409527">არჩეული კლავიში არის <ph name="KEYS" />. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">ისარი მარჯვნივ</translation>
 <translation id="6278428485366576908">თემა</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">ეს <ph name="DEVICE_TYPE" /> იმართება <ph name="MANAGER" />-ის მიერ. ადმინისტრატორებს შეუძლიათ ამ მოწყობილობის დისტანციურად კონფიგურაცია.</translation>
 <translation id="7180611975245234373">განახლება</translation>
 <translation id="7180865173735832675">მორგება</translation>
-<translation id="7182063559013288142">მყისიერი უსადენო ქსელი</translation>
-<translation id="7184043045742675738">ღილაკის მოსარგებად დააწკაპუნეთ ნებისმიერ კლავიშზე. კლავიშის გადაადგილება შეგიძლიათ მაუსის ან ისრიანი კლავიშების მეშვეობით.</translation>
 <translation id="7187669805838282391">ოთხშაბათს</translation>
 <translation id="7205318498545665455">აირჩიეთ თქვენი მიკროფონი</translation>
-<translation id="7206979415662233817">მომსახურების პირობები</translation>
 <translation id="7210635925306941239">ციანი</translation>
 <translation id="7212547870105584639">მართეთ ქსელის APN-ის პარამეტრები. APN ამყარებს კავშირს ფიჭურ ქსელსა და ინტერნეტს შორის. <ph name="BEGIN_LINK_LEARN_MORE" />შეიტყვეთ მეტი<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">გარე მოწყობილობებში ჩაშენებული პროგრამული უზრუნველყოფის განახლებები</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">მწვანე და ზურმუხტისფერი</translation>
 <translation id="7328475450575141167">სტრელიცია</translation>
-<translation id="7331297744262591636">თქვენ უნდა იყოთ მინიმუმ 18 წლის და თანხმობა განაცხადოთ მასზე, რომ AI ფონების თქვენ მიერ გამოყენება ექვემდებარება <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Google-ის მომსახურების პირობებსა<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> და <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />გენერაციული ხელოვნური ინტელექტის მომსახურების დამატებით პირობებს<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          ხელოვნური ინტელექტით ფონების შექმნა შეგიძლიათ მხოლოდ პირადი, არაკომერციული მიზნით. ფონებთან დაკავშირებით დახმარების მიღებისას ინფორმაცია ეგზავნება Google-ის ხელოვნური ინტელექტის სერვერებს ფონების შემოსათავაზებლად, რაც <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google-ის კონფიდენციალურობის დებულებას<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> ექვემდებარება. <ph name="BEGIN_LINK_LEARN_MORE" />შეიტყვეთ მეტი<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; შედეგის Google Search-ში სანახავად დააჭირეთ კლავიშთა კომბინაციას Search პლუს შორისი.</translation>
 <translation id="7343649194310845056">ქსელური მოწყობილობები</translation>
 <translation id="7344788170842919262">მიწიერი</translation>
 <translation id="7346768383111016081">გამოიყენეთ მართვის საშუალება თამაშში განსაზღვრული მოქმედებისთვის, კლავიატურით რომ ითამაშოთ</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">შეყვანის პარამეტრები</translation>
 <translation id="7595982850646262331">დარჩენილია <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776"><ph name="MANAGER" />-ის ადმინისტრატორმა დააყენა, როდის შეიძლება ამ <ph name="DEVICE_TYPE" />-ის გამოყენება</translation>
-<translation id="7613724632293948900">გადაადგილება შეგიძლიათ მაუსის ან ისრიანი კლავიშების მეშვეობით.</translation>
 <translation id="7618216277886673749">აირჩიეთ <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">ნეიტრალური</translation>
 <translation id="7620771111601174153">შეიტყვეთ მეტი დახმარების ცენტრში</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">გამოიყენეთ Google-ის ხელოვნური ინტელექტი პროდუქტიულობის გაზრდაში</translation>
 <translation id="8200772114523450471">გაგრძელება</translation>
 <translation id="8206859287963243715">ფიჭური</translation>
+<translation id="8208043093301544621">სახლი</translation>
 <translation id="8208861521865154048">ბონუსები</translation>
 <translation id="8226628635270268143">აირჩიეთ თქვენი რჩეული ფოტოები და ალბომები</translation>
 <translation id="8227119283605456246">ფაილის მიმაგრება</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">შეასრულეთ ტესტები და დეფექტების აღმოფხვრა აპარატურის პრობლემების შემთხვევაში</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">ქვემოთ</translation>
+<translation id="8427213022735114808">ნებისმიერი ტექსტური ველის ხმით შესავსებად თქვენი ხმა კარნახის ფუნქციის მიერ გაიგზავნება Google-ში.</translation>
 <translation id="8428213095426709021">პარამეტრები</translation>
 <translation id="8431300646573772016">სიახლეები ChromeOS-ში</translation>
 <translation id="8433186206711564395">ქსელის პარამეტრები</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966"><ph name="DEVICE_NAME" />-ის <ph name="VERSION" /> ვერსიის ჩაშენებული პროგრამული უზრუნველყოფის განახლების დასასრულებლად საჭიროა გადატვირთვა. თქვენი კომპიუტერი შეიძლება რამდენჯერმე გადაიტვირთოს. ასეთი ქცევა მოსალოდნელია.</translation>
 <translation id="8593058461203131755">მედიის დაპაუზება</translation>
 <translation id="8620617069779373398">როუმინგის სტატუსი</translation>
+<translation id="8624524972189162859">თქვენმა <ph name="DOMAIN_NAME" />-ის ადმინისტრატორმა გათიშა თქვენი მოწყობილობა და აქვს წვდომა მის მდებარეობაზე.</translation>
 <translation id="8626489604350149811">სხვა ქმედებები <ph name="APN_NAME" />-ისთვის</translation>
 <translation id="86356131183441916">ღია მეწამული</translation>
 <translation id="8647595191512746911">აუდიოტრანსკრიფცია</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9082718469794970195">ამ ვიდეოს გამოყენება</translation>
-<translation id="9087578468327036362">მოხსენება ამ მოთხოვნის შესახებ</translation>
 <translation id="9088306295921699330">ამჟამად გამოყენებული</translation>
 <translation id="9088994563996376283">გამარტივება</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">მეტი ინფორმაცია გადაყენების თარიღზე</translation>
 <translation id="9100765901046053179">გაფართოებული პარამეტრები</translation>
 <translation id="910415269708673980">განაახლეთ ბილეთი <ph name="PRINCIPAL_NAME" />-ისთვის</translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">სურათი დაყენდა კამერის ფონად</translation>
 <translation id="9211490828691860325">ყველა სამუშაო მაგიდა</translation>
 <translation id="9218016617214286986">ნაცნობი APN-ების ჩვენება</translation>
-<translation id="932327136139879170">საწყისი გვერდი</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">შეფასების გაგზავნა</translation>
 <translation id="950520315903467048">მოქმედებისთვის „<ph name="DIRECTION" />“ აკლია კლავიში. <ph name="ASSIGN_INSTRUCTION" /></translation>

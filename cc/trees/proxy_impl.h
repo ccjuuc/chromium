@@ -13,13 +13,16 @@
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/types/optional_ref.h"
 #include "cc/base/completion_event.h"
 #include "cc/base/delayed_unique_notifier.h"
 #include "cc/input/browser_controls_state.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/paint/draw_image.h"
 #include "cc/scheduler/scheduler.h"
-#include "cc/trees/layer_tree_host_impl_client.h"
+#include "cc/trees/layer_tree_host_impl_delegate.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
 class GURL;
@@ -36,7 +39,7 @@ struct CommitTimestamps;
 struct BrowserControlsOffsetTagModifications;
 class LayerTreeFrameSink;
 class LayerTreeHost;
-class LayerTreeHostImpl;
+class ClientLayerTreeHostImpl;
 class LayerTreeMutator;
 class LayerTreeSettings;
 class PaintWorkletLayerPainter;
@@ -50,7 +53,7 @@ struct ThreadUnsafeCommitState;
 // This class aggregates all the interactions that the main side of the
 // compositor needs to have with the impl side.
 // The class is created and lives on the impl thread.
-class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
+class CC_EXPORT ProxyImpl : public LayerTreeHostImplDelegate,
                             public SchedulerClient {
  public:
   ProxyImpl(base::WeakPtr<ProxyMain> proxy_main_weak_ptr,
@@ -76,9 +79,11 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void InitializePaintWorkletLayerPainterOnImpl(
       std::unique_ptr<PaintWorkletLayerPainter> painter);
   void SetDeferBeginMainFrameFromMain(bool defer_begin_main_frame);
-  void SetPauseRendering(bool pause_rendering);
+  void SetPauseRendering(bool pause_rendering,
+                         bool delay_until_visibility_change);
   void SetNeedsRedrawOnImpl(const gfx::Rect& damage_rect);
-  void SetNeedsCommitOnImpl(bool urgent);
+  void SetNeedsCommitOnImpl(BeginMainFrameReason reason, bool urgent);
+  void SendEarlyFinalBeginMainFrame();
   void SetTargetLocalSurfaceIdOnImpl(
       const viz::LocalSurfaceId& target_local_surface_id);
   void BeginMainFrameAbortedOnImpl(
@@ -101,16 +106,20 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
                               std::unique_ptr<DrawImage> image,
                               bool speculative);
   void SetSourceURL(ukm::SourceId source_id, const GURL& url);
-  void SetUkmDroppedFramesDestination(
-      base::WritableSharedMemoryMapping ukm_dropped_frames_data);
   void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer);
   void DetachInputDelegateAndRenderFrameObserver(
       CompletionEvent* completion_event);
+  void SetUnboundedFrameSink(
+      std::unique_ptr<LayerTreeFrameSink> unbounded_frame_sink,
+      const viz::LocalSurfaceId& local_surface_id);
+  void SetUnboundedFrameSinkId(const viz::FrameSinkId& frame_sink_id,
+                               const viz::LocalSurfaceId& local_surface_id);
+  void DismissUnboundedFrameSink();
+  void SetUnboundedLocalSurfaceId(const viz::LocalSurfaceId& local_surface_id);
 
   void MainFrameWillHappenOnImplForTesting(CompletionEvent* completion,
                                            bool* main_frame_will_happen);
-  void RequestBeginMainFrameNotExpectedOnImpl(bool new_state);
 
   void ClearHistory() override;
   size_t CommitDurationSampleCountForTesting() const override;
@@ -118,12 +127,19 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
       const {
     return smoothness_priority_expiration_notifier_;
   }
-  void SetShouldThrottleFrameRate(bool flag);
+  void SetPauseRenderingUntilVisibilityChangeTimerForTesting(
+      std::unique_ptr<base::OneShotTimer> timer) {
+    pause_rendering_until_visibility_change_timer_ = std::move(timer);
+  }
+  base::OneShotTimer* PauseRenderingUntilVisibilityChangeTimerForTesting() {
+    return pause_rendering_until_visibility_change_timer_.get();
+  }
+  void SetRequestHighFramerate(bool flag);
 
   void NotifyNewLocalSurfaceIdExpectedWhilePaused();
 
  private:
-  // LayerTreeHostImplClient implementation
+  // LayerTreeHostImplDelegate implementation
   void DidLoseLayerTreeFrameSinkOnImplThread() override;
   void SetBeginFrameSource(viz::BeginFrameSource* source) override;
   void DidReceiveCompositorFrameAckOnImplThread() override;
@@ -136,7 +152,8 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void SetNeedsRedrawOnImplThread() override;
   void SetNeedsOneBeginImplFrameOnImplThread() override;
   void SetNeedsPrepareTilesOnImplThread() override;
-  void SetNeedsCommitOnImplThread(bool urgent) override;
+  void SetNeedsCommitOnImplThread(BeginMainFrameReason reason,
+                                  bool urgent) override;
   void SetVideoNeedsBeginFrames(bool needs_begin_frames) override;
   void DidChangeBeginFrameSourcePaused(bool paused) override;
   void SetDeferBeginMainFrameFromImpl(bool defer_begin_main_frame) override;
@@ -196,9 +213,6 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void ScheduledActionPrepareTiles() override;
   void ScheduledActionInvalidateLayerTreeFrameSink(bool needs_redraw) override;
   void ScheduledActionPerformImplSideInvalidation() override;
-  void SendBeginMainFrameNotExpectedSoon() override;
-  void ScheduledActionBeginMainFrameNotExpectedUntil(
-      base::TimeTicks time) override;
   void FrameIntervalUpdated(base::TimeDelta interval) override {}
   void OnBeginImplFrameDeadline() override;
 
@@ -209,7 +223,13 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   base::SingleThreadTaskRunner* MainThreadTaskRunner();
   bool ShouldDeferBeginMainFrame() const;
 
+  void set_begin_main_frame_reason(BeginMainFrameReason reason) {
+    begin_main_frame_reason_.set(static_cast<int>(reason));
+  }
+
   const int layer_tree_host_id_;
+
+  void OnPauseRenderingUntilVisibilityChangeTimeout();
 
   std::unique_ptr<Scheduler> scheduler_;
 
@@ -248,7 +268,10 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
 
   DelayedUniqueNotifier smoothness_priority_expiration_notifier_;
 
-  std::unique_ptr<LayerTreeHostImpl> host_impl_;
+  std::unique_ptr<ClientLayerTreeHostImpl> host_impl_;
+
+  // Reason(s) that BeginMainFrame was triggered. Used only for metrics.
+  BeginMainFrameReasons begin_main_frame_reason_;
 
   // Used to post tasks to ProxyMain on the main thread.
   base::WeakPtr<ProxyMain> proxy_main_weak_ptr_;
@@ -260,6 +283,9 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   // Either thread can request deferring BeginMainFrame; keep track of both.
   bool main_wants_defer_begin_main_frame_ = false;
   bool impl_wants_defer_begin_main_frame_ = false;
+  std::unique_ptr<base::OneShotTimer>
+      pause_rendering_until_visibility_change_timer_ =
+          std::make_unique<base::OneShotTimer>();
 };
 
 }  // namespace cc

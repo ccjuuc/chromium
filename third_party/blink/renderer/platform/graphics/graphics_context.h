@@ -35,10 +35,10 @@
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/geometry/dash_array.h"
 #include "third_party/blink/renderer/platform/graphics/dark_mode_filter.h"
-#include "third_party/blink/renderer/platform/graphics/dark_mode_settings.h"
 #include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context_state.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
+#include "third_party/blink/renderer/platform/graphics/image_node_animation_info.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_filter.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record.h"
@@ -95,20 +95,23 @@ struct ImageDrawOptions {
 
  public:
   ImageDrawOptions() = default;
-  explicit ImageDrawOptions(DarkModeFilter* dark_mode_filter,
-                            SkSamplingOptions& sampling_options,
-                            RespectImageOrientationEnum respect_orientation,
-                            Image::ImageClampingMode clamping_mode,
-                            Image::ImageDecodingMode decode_mode,
-                            bool apply_dark_mode,
-                            bool may_be_lcp_candidate)
+  explicit ImageDrawOptions(
+      DarkModeFilter* dark_mode_filter,
+      SkSamplingOptions& sampling_options,
+      RespectImageOrientationEnum respect_orientation,
+      Image::ImageClampingMode clamping_mode,
+      Image::ImageDecodingMode decode_mode,
+      bool apply_dark_mode,
+      bool may_be_lcp_candidate,
+      const ImageNodeAnimationInfo* image_node_animation_info)
       : dark_mode_filter(dark_mode_filter),
         sampling_options(sampling_options),
         respect_orientation(respect_orientation),
         clamping_mode(clamping_mode),
         decode_mode(decode_mode),
         apply_dark_mode(apply_dark_mode),
-        may_be_lcp_candidate(may_be_lcp_candidate) {}
+        may_be_lcp_candidate(may_be_lcp_candidate),
+        image_node_animation_info(image_node_animation_info) {}
   DarkModeFilter* dark_mode_filter = nullptr;
   SkSamplingOptions sampling_options;
   RespectImageOrientationEnum respect_orientation = kRespectImageOrientation;
@@ -116,6 +119,7 @@ struct ImageDrawOptions {
   Image::ImageDecodingMode decode_mode = Image::kSyncDecode;
   bool apply_dark_mode = false;
   bool may_be_lcp_candidate = false;
+  const ImageNodeAnimationInfo* image_node_animation_info = nullptr;
 };
 
 struct AutoDarkMode {
@@ -209,7 +213,33 @@ class PLATFORM_EXPORT GraphicsContext {
   DarkModeFilter* GetDarkModeFilterForImage(
       const ImageAutoDarkMode& auto_dark_mode);
 
-  void UpdateDarkModeSettingsForTest(const DarkModeSettings&);
+  // Pushes a dark mode inversion pause state on construction and pops it on
+  // destruction, guaranteeing pushes and pops are always balanced. See the
+  // comment on IsAutoDarkModePaused() for the semantics of the pause states.
+  class ScopedAutoDarkModeState {
+    STACK_ALLOCATED();
+
+   public:
+    ScopedAutoDarkModeState(GraphicsContext& context, bool paused)
+        : context_(context) {
+      context_.PushAutoDarkModeState(paused);
+    }
+    ScopedAutoDarkModeState(const ScopedAutoDarkModeState&) = delete;
+    ScopedAutoDarkModeState& operator=(const ScopedAutoDarkModeState&) = delete;
+    ~ScopedAutoDarkModeState() { context_.PopAutoDarkModeState(); }
+
+   private:
+    GraphicsContext& context_;
+  };
+
+  // Dark mode color/flags inversion pause state. While the latest pushed state
+  // is true, inversion is paused regardless of the per-draw |enabled| flag.
+  // Nested scopes can override the pause state of their ancestors: the pushed
+  // state applies until it is popped, after which the previous state takes
+  // effect again. Use ScopedAutoDarkModeState to manage the states.
+  bool IsAutoDarkModePaused() const;
+
+  void SetDarkModeFilterForTest(std::unique_ptr<DarkModeFilter>);
 
   // ---------- State management methods -----------------
   void Save();
@@ -328,7 +358,8 @@ class PLATFORM_EXPORT GraphicsContext {
                  SkBlendMode = SkBlendMode::kSrcOver,
                  RespectImageOrientationEnum = kRespectImageOrientation,
                  Image::ImageClampingMode clamping_mode =
-                     Image::ImageClampingMode::kClampImageToSourceRect);
+                     Image::ImageClampingMode::kClampImageToSourceRect,
+                 const ImageNodeAnimationInfo* = nullptr);
   void DrawImageRRect(Image&,
                       Image::ImageDecodingMode,
                       const ImageAutoDarkMode& auto_dark_mode,
@@ -338,14 +369,16 @@ class PLATFORM_EXPORT GraphicsContext {
                       SkBlendMode = SkBlendMode::kSrcOver,
                       RespectImageOrientationEnum = kRespectImageOrientation,
                       Image::ImageClampingMode clamping_mode =
-                          Image::ImageClampingMode::kClampImageToSourceRect);
+                          Image::ImageClampingMode::kClampImageToSourceRect,
+                      const ImageNodeAnimationInfo* = nullptr);
   void DrawImageTiled(Image& image,
                       const gfx::RectF& dest_rect,
                       const ImageTilingInfo& tiling_info,
                       const ImageAutoDarkMode& auto_dark_mode,
                       const ImagePaintTimingInfo& paint_timing_info,
                       SkBlendMode = SkBlendMode::kSrcOver,
-                      RespectImageOrientationEnum = kRespectImageOrientation);
+                      RespectImageOrientationEnum = kRespectImageOrientation,
+                      const ImageNodeAnimationInfo* = nullptr);
   void SetImagePainted(bool report_paint_timing);
   // These methods write to the canvas.
   // Also drawLine(const gfx::Point& point1, const gfx::Point& point2) and
@@ -504,6 +537,16 @@ class PLATFORM_EXPORT GraphicsContext {
     return paint_state_;
   }
 
+  // Managed exclusively through ScopedAutoDarkModeState to keep pushes and pops
+  // balanced.
+  void PushAutoDarkModeState(bool paused) {
+    auto_dark_mode_states_.push_back(paused);
+  }
+  void PopAutoDarkModeState() {
+    DCHECK(!auto_dark_mode_states_.empty());
+    auto_dark_mode_states_.pop_back();
+  }
+
   template <typename DrawTextFunc>
   void DrawTextPasses(const DrawTextFunc&);
 
@@ -564,6 +607,7 @@ class PLATFORM_EXPORT GraphicsContext {
 
   std::unique_ptr<DarkModeFilter> dark_mode_filter_;
 
+  Vector<bool> auto_dark_mode_states_;
   bool printing_ = false;
   bool printing_internal_headers_and_footers_ = false;
   bool in_drawing_recorder_ = false;

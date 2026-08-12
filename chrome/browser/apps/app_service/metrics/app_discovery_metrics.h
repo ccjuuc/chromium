@@ -142,7 +142,7 @@ class AppDiscoveryMetrics : public AppPlatformMetrics::Observer,
   bool IsAppListAtCapacity();
 
   // Builds a list based on current |app_installed_|.
-  base::Value::List BuildAppInstalledList();
+  base::ListValue BuildAppInstalledList();
 
   // Returns the string identifier to be logged for the given |profile_| and
   // |hashed_app_id|.
@@ -153,8 +153,9 @@ class AppDiscoveryMetrics : public AppPlatformMetrics::Observer,
   //
   // ARC app package names are collected unhashed since the app package names
   // are public information on the play store.
-  std::string GetAppStringToRecord(const std::string& hashed_app_id,
-                                   AppType app_type);
+  std::optional<std::string> GetAppStringToRecord(
+      const std::string& hashed_app_id,
+      AppType app_type);
 
   // Profile for which apps discovery metrics are being recorded for.
   raw_ptr<Profile> profile_;

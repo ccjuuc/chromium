@@ -4,13 +4,22 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_bnpl_payment_instrument_for_fetching_url_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
+#include "url/gurl.h"
 
 namespace autofill::payments {
 
 namespace {
-using Dict = base::Value::Dict;
+using Dict = base::DictValue;
 
 const char kGetBnplPaymentInstrumentForFetchingUrlRequestPath[] =
     "payments/apis-secure/chromepaymentsservice/getpaymentinstrument";
@@ -44,7 +53,7 @@ std::string GetBnplPaymentInstrumentForFetchingUrlRequest::GetRequestContent() {
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
@@ -104,6 +113,7 @@ void GetBnplPaymentInstrumentForFetchingUrlRequest::ParseResponse(
 
 bool GetBnplPaymentInstrumentForFetchingUrlRequest::IsResponseComplete() {
   return response_details_.redirect_url.is_valid() &&
+         response_details_.redirect_url.SchemeIsHTTPOrHTTPS() &&
          response_details_.success_url_prefix.is_valid() &&
          response_details_.failure_url_prefix.is_valid() &&
          !response_details_.context_token.empty();

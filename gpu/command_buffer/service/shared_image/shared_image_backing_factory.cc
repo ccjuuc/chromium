@@ -22,27 +22,15 @@ SharedImageBackingFactory::GetWeakPtr() {
 
 std::unique_ptr<SharedImageBacking>
 SharedImageBackingFactory::CreateSharedImage(const Mailbox& mailbox,
-                                             viz::SharedImageFormat format,
+                                             const SharedImageInfo& si_info,
                                              SurfaceHandle surface_handle,
-                                             const gfx::Size& size,
-                                             const gfx::ColorSpace& color_space,
-                                             GrSurfaceOrigin surface_origin,
-                                             SkAlphaType alpha_type,
-                                             SharedImageUsageSet usage,
-                                             std::string debug_label,
                                              bool is_thread_safe) {
   NOTREACHED();
 }
 std::unique_ptr<SharedImageBacking>
 SharedImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
   NOTREACHED();
@@ -50,27 +38,15 @@ SharedImageBackingFactory::CreateSharedImage(
 std::unique_ptr<SharedImageBacking>
 SharedImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     bool is_thread_safe,
     gfx::GpuMemoryBufferHandle handle) {
   NOTREACHED();
 }
 std::unique_ptr<SharedImageBacking>
 SharedImageBackingFactory::CreateSharedImage(const Mailbox& mailbox,
-                                             viz::SharedImageFormat format,
+                                             const SharedImageInfo& si_info,
                                              SurfaceHandle surface_handle,
-                                             const gfx::Size& size,
-                                             const gfx::ColorSpace& color_space,
-                                             GrSurfaceOrigin surface_origin,
-                                             SkAlphaType alpha_type,
-                                             SharedImageUsageSet usage,
-                                             std::string debug_label,
                                              bool is_thread_safe,
                                              gfx::BufferUsage buffer_usage) {
   NOTREACHED();
@@ -91,6 +67,13 @@ bool SharedImageBackingFactory::CanCreateSharedImage(
 
   return IsSupported(usage, format, size, thread_safe, gmb_type,
                      gr_context_type, pixel_data);
+}
+
+bool SharedImageBackingFactory::IsSupportedForAccessStream(
+    SharedImageAccessStream stream,
+    viz::SharedImageFormat format,
+    const AccessParams* params) const {
+  return true;
 }
 
 void SharedImageBackingFactory::InvalidateWeakPtrsForTesting() {

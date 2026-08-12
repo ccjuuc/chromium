@@ -10,10 +10,14 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/webapps/installable/installed_webapp_bridge.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/permissions/android/android_permission_util.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_data.h"
 #include "components/permissions/permission_request_id.h"
 #include "components/permissions/permission_util.h"
+#include "components/permissions/request_type.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/permission_descriptor_util.h"
@@ -45,25 +49,21 @@ bool GeolocationPermissionContextDelegateAndroid::DecidePermission(
 
   if (web_contents->GetDelegate() &&
       web_contents->GetDelegate()->GetInstalledWebappGeolocationContext()) {
-    auto data = permissions::PermissionRequestData(
-        context, request_data.id,
-        content::PermissionRequestDescription(
-            content::PermissionDescriptorUtil::
-                CreatePermissionDescriptorForPermissionType(
-                    blink::PermissionType::GEOLOCATION)),
-        request_data.requesting_origin,
-        permissions::PermissionUtil::GetLastCommittedOriginAsURL(
-            rfh->GetMainFrame()));
-    data.embedded_permission_request_descriptor =
-        request_data.embedded_permission_request_descriptor.Clone();
+    ContentSettingsType type =
+        content_settings::GeolocationContentSettingsType();
+    CHECK_EQ(permissions::RequestTypeToContentSettingsType(
+                 request_data.request_type.value())
+                 .value(),
+             type);
+    GURL requesting_origin = request_data.requesting_origin;
     InstalledWebappBridge::PermissionCallback permission_callback =
         base::BindOnce(
             &permissions::GeolocationPermissionContext::NotifyPermissionSet,
-            context->GetWeakPtr(), std::move(data), std::move(*callback),
-            false /* persist */);
-    InstalledWebappBridge::DecidePermission(
-        ContentSettingsType::GEOLOCATION, request_data.requesting_origin,
-        web_contents->GetLastCommittedURL(), std::move(permission_callback));
+            context->GetWeakPtr(), request_data.Clone(), std::move(*callback),
+            /*persist=*/false, /*permission_result=*/nullptr);
+    InstalledWebappBridge::DecidePermission(type, requesting_origin,
+                                            web_contents->GetLastCommittedURL(),
+                                            std::move(permission_callback));
     return true;
   }
   return GeolocationPermissionContextDelegate::DecidePermission(

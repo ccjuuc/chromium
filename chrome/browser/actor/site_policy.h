@@ -6,28 +6,23 @@
 #define CHROME_BROWSER_ACTOR_SITE_POLICY_H_
 
 #include "base/functional/callback_forward.h"
-#include "base/types/strong_alias.h"
-#include "chrome/common/actor/task_id.h"
+#include "base/functional/function_ref.h"
+#include "base/types/expected.h"
+#include "chrome/common/actor.mojom-forward.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "url/origin.h"
-
-namespace tabs {
-class TabInterface;
-}
 
 class GURL;
 class Profile;
 
 namespace actor {
 
-class AggregatedJournal;
-
 // Called during initialization of the given profile, to load the blocklist.
 void InitActionBlocklist(Profile* profile);
 
 enum class MayActOnUrlBlockReason {
   kAllowed,
-  kActuactionDisabled,
   kExternalProtocol,
   kIpAddress,
   kLookalikeDomain,
@@ -37,76 +32,36 @@ enum class MayActOnUrlBlockReason {
   kUrlNotInAllowlist,
   kWrongScheme,
   kEnterprisePolicy,
+  kBlockedByStaticList,
+  kBlockedByContainerConfig,
 };
 
 using DecisionCallback = base::OnceCallback<void(/*may_act=*/bool)>;
 using DecisionCallbackWithReason =
     base::OnceCallback<void(MayActOnUrlBlockReason reason)>;
 
-// Types for sets of origins that the actor is able to navigate to.
-// The first, AllowedOriginSet, is the set of origins that have been approved
-// for the actor by the server. The second, ConfirmedOriginSet, is the set of
-// sensitive origins that the user has manually confirmed the actor may interact
-// with. The use of StrongAlias is to convey that these two sets should not be
-// used interchangeably and to enforce this at compile time.
-using AllowedOriginSet = base::StrongAlias<class AllowedOriginSetTag,
-                                           absl::flat_hash_set<url::Origin>>;
-using ConfirmedOriginSet = base::StrongAlias<class ConfirmedOriginSetTag,
-                                             absl::flat_hash_set<url::Origin>>;
-
-enum class EnterprisePolicyBlockReason {
-  // Enterprise policy did not explicitly block a URL, but it also did not
-  // explicitly allow it, so the regular safety checks should still be done.
-  kNotBlocked,
-  // Enterprise policy explicitly allowed a URL. Some additional safety checks
-  // are not done.
-  kExplicitlyAllowed,
-  // Enterprise policy explicitly blocked a URL.
-  kExplicitlyBlocked,
-};
-
-using EnterprisePolicyCallback =
-    base::OnceCallback<EnterprisePolicyBlockReason(const GURL&)>;
-
-// Checks whether the actor may perform actions on the given tab based on the
-// last committed document and URL. Invokes the callback with true if it is
-// allowed.
-// `MayActOnTab` takes a set of `allowed_origins` where for which do not apply
-// the optimization guide check. We do so because `MayActOnTab` is called before
-// any navigations can take place, so we need to check if the current URL when a
-// task starts. However, any future URLs the actor navigates to should undergo
-// blocklist checks in `MayActOnUrl` or
-// `ShouldBlockNavigationUrlForOriginGating`.
-// `enterprise_policy_eval_url` returns the evaluation of the URL based on
-// enterprise policy allow/blocklists.
-// Please use ActorPolicyChecker instead of calling this directly.
-void MayActOnTab(const tabs::TabInterface& tab,
-                 AggregatedJournal& journal,
-                 TaskId task_id,
-                 const ConfirmedOriginSet& confirmed_origins,
-                 EnterprisePolicyCallback enterprise_policy_eval_url,
-                 DecisionCallbackWithReason callback);
-
-// Like MayActOnTab, but considers a URL on its own.
-// This can optionally allow insecure HTTP URLs as in practice sites may have
-// HTTP links that will get upgraded. Rejecting HTTP URLs before this can happen
-// would be too serious of an impediment.
-// Please use ActorPolicyChecker instead of calling this directly.
-void MayActOnUrl(const GURL& url,
-                 bool allow_insecure_http,
-                 Profile* profile,
-                 AggregatedJournal& journal,
-                 TaskId task_id,
-                 EnterprisePolicyCallback enterprise_policy_eval_url,
-                 DecisionCallbackWithReason callback);
-
 // Checks if navigation to `url` should be blocked using
 // OptimizationGuideService. If the callback is invoked with `may_act` set to
-// `true`, then the actor is allowed to navigate to the URL. Otherwise, the
-// actor should block navigation or ask the user to confirm.
-bool ShouldBlockNavigationUrlForOriginGating(const GURL& url,
-                                             Profile* profile,
-                                             DecisionCallback callback);
+// `true`, then the actor is allowed to navigate to the URL. If `callback` is
+// invoked with `false`, the actor should block navigation or ask the user to
+// confirm.
+//
+// Returns `base::ok()` if this function will eventually invoke `callback`;
+// otherwise returns `base::unexpected(callback)` and the caller is responsible
+// for invoking `callback` themselves (maybe because the feature was disabled,
+// or OptimizationGuide is not available for some other reason).
+base::expected<void, DecisionCallback>
+MaybeCheckOptimizationGuideForSensitiveUrl(const GURL& url,
+                                           Profile* profile,
+                                           DecisionCallback callback);
+
+// Expresses the block reason as an action result.
+// A code may be used for multiple cases if they don't need to be distinguished
+// to the client.
+// `for_navigation` indicates if a navigation is being evaluated. This should be
+// false when checking the current page or validating tool parameters.
+mojom::ActionResultCode BlockReasonToResultCode(MayActOnUrlBlockReason reason,
+                                                bool for_navigation);
 
 }  // namespace actor
 

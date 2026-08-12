@@ -10,7 +10,6 @@
 #import "base/values.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/testing_pref_service.h"
-#import "ios/chrome/browser/popup_menu/overflow_menu/public/feature_flags.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_action_provider.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
@@ -269,7 +268,7 @@ TEST_F(OverflowMenuOrdererTest, StoresInitialDestinationRanking) {
   destination_provider_.baseDestinations = sample_destinations;
   [overflow_menu_orderer_ reorderDestinationsForInitialMenu];
 
-  const base::Value::List& stored_ranking =
+  const base::ListValue& stored_ranking =
       prefs_->GetList(prefs::kOverflowMenuDestinationsOrder);
 
   EXPECT_EQ(stored_ranking.size(), sample_destinations.size());
@@ -282,19 +281,18 @@ TEST_F(OverflowMenuOrdererTest, StoresInitialDestinationRanking) {
 TEST_F(OverflowMenuOrdererTest, MigratesDestinationRanking) {
   CreatePrefs();
 
-  base::Value::List old_ranking =
-      base::Value::List()
+  base::ListValue old_ranking =
+      base::ListValue()
           .Append(overflow_menu::StringNameForDestination(
               overflow_menu::Destination::Bookmarks))
           .Append(overflow_menu::StringNameForDestination(
               overflow_menu::Destination::History));
-  base::Value::Dict old_usage_history =
-      base::Value::Dict()
+  base::DictValue old_usage_history =
+      base::DictValue()
           .Set(base::NumberToString(TodaysDay().InDays()),
-               base::Value::Dict().Set(
-                   overflow_menu::StringNameForDestination(
-                       overflow_menu::Destination::Bookmarks),
-                   5))
+               base::DictValue().Set(overflow_menu::StringNameForDestination(
+                                         overflow_menu::Destination::Bookmarks),
+                                     5))
           .Set("ranking", old_ranking.Clone());
 
   prefs_->SetDict(prefs::kOverflowMenuDestinationUsageHistory,
@@ -305,9 +303,9 @@ TEST_F(OverflowMenuOrdererTest, MigratesDestinationRanking) {
   // Set prefs here to force orderer to load and migrate.
   overflow_menu_orderer_.localStatePrefs = prefs_.get();
 
-  const base::Value::List& new_ranking =
+  const base::ListValue& new_ranking =
       prefs_->GetList(prefs::kOverflowMenuDestinationsOrder);
-  const base::Value::Dict& new_usage_history =
+  const base::DictValue& new_usage_history =
       prefs_->GetDict(prefs::kOverflowMenuDestinationUsageHistory);
 
   EXPECT_EQ(new_ranking, old_ranking);
@@ -784,7 +782,7 @@ TEST_F(OverflowMenuOrdererTest,
   action_provider_.basePageActions = sample_actions;
 
   // Verify kOverflowMenuActionsOrder is empty.
-  const base::Value::Dict& initial_ranking =
+  const base::DictValue& initial_ranking =
       prefs_->GetDict(prefs::kOverflowMenuActionsOrder);
   EXPECT_TRUE(initial_ranking.empty());
 
@@ -806,7 +804,7 @@ TEST_F(OverflowMenuOrdererTest,
 
   // Verify that kOverflowMenuActionsOrder remains empty because no
   // customization has occurred.
-  const base::Value::Dict& stored_ranking =
+  const base::DictValue& stored_ranking =
       prefs_->GetDict(prefs::kOverflowMenuActionsOrder);
   EXPECT_TRUE(stored_ranking.empty());
 }
@@ -818,14 +816,14 @@ TEST_F(OverflowMenuOrdererTest, EnablingDestinationUsageHistory) {
 
   // Set the pref state to what it would be with destination usage history
   // disabled and some destinations hidden.
-  base::Value::List shown_destinations =
-      base::Value::List()
+  base::ListValue shown_destinations =
+      base::ListValue()
           .Append(overflow_menu::StringNameForDestination(
               overflow_menu::Destination::ReadingList))
           .Append(overflow_menu::StringNameForDestination(
               overflow_menu::Destination::Downloads));
-  base::Value::List hidden_destinations =
-      base::Value::List()
+  base::ListValue hidden_destinations =
+      base::ListValue()
           .Append(overflow_menu::StringNameForDestination(
               overflow_menu::Destination::Bookmarks))
           .Append(overflow_menu::StringNameForDestination(
@@ -841,9 +839,9 @@ TEST_F(OverflowMenuOrdererTest, EnablingDestinationUsageHistory) {
   base::TimeDelta day = TodaysDay() - base::Days(1);
   std::string bookmarkName = overflow_menu::StringNameForDestination(
       overflow_menu::Destination::Bookmarks);
-  base::Value::Dict day_history =
-      base::Value::Dict().Set(base::NumberToString(day.InDays()),
-                              base::Value::Dict().Set(bookmarkName, 1));
+  base::DictValue day_history =
+      base::DictValue().Set(base::NumberToString(day.InDays()),
+                            base::DictValue().Set(bookmarkName, 1));
   prefs_->SetDict(prefs::kOverflowMenuDestinationUsageHistory,
                   std::move(day_history));
 
@@ -877,7 +875,7 @@ TEST_F(OverflowMenuOrdererTest, EnablingDestinationUsageHistory) {
                 overflow_menu_model_.destinations[3].destination),
             overflow_menu::Destination::History);
 
-  const base::Value::Dict& new_history =
+  const base::DictValue& new_history =
       prefs_->GetDict(prefs::kOverflowMenuDestinationUsageHistory);
   EXPECT_EQ(new_history.size(), 0u);
 }
@@ -887,15 +885,15 @@ TEST_F(OverflowMenuOrdererTest, AddsNewActionsToRanking) {
   CreatePrefs();
 
   // Set the pref state what it would be with a few actions shown and hidden.
-  base::Value::Dict actions_order =
-      base::Value::Dict()
-          .Set("shown", base::Value::List()
+  base::DictValue actions_order =
+      base::DictValue()
+          .Set("shown", base::ListValue()
                             .Append(overflow_menu::StringNameForActionType(
                                 overflow_menu::ActionType::Bookmark))
                             .Append(overflow_menu::StringNameForActionType(
                                 overflow_menu::ActionType::TextZoom)))
           .Set("hidden",
-               base::Value::List()
+               base::ListValue()
                    .Append(overflow_menu::StringNameForActionType(
                        overflow_menu::ActionType::ReadingList))
                    .Append(overflow_menu::StringNameForActionType(
@@ -1710,13 +1708,13 @@ TEST_F(OverflowMenuOrdererTest, HiddenDestinationPropagatesErrorBadge) {
 TEST_F(OverflowMenuOrdererTest, LoadBadgeDataFromPrefs) {
   CreatePrefs();
 
-  base::Value::Dict badge_data =
-      base::Value::Dict().Set(overflow_menu::StringNameForDestination(
-                                  overflow_menu::Destination::Bookmarks),
-                              base::Value::Dict()
-                                  .Set("impressions_remaining", 2)
-                                  .Set("badge_type", "error")
-                                  .Set("is_feature_driven_badge", false));
+  base::DictValue badge_data =
+      base::DictValue().Set(overflow_menu::StringNameForDestination(
+                                overflow_menu::Destination::Bookmarks),
+                            base::DictValue()
+                                .Set("impressions_remaining", 2)
+                                .Set("badge_type", "error")
+                                .Set("is_feature_driven_badge", false));
 
   prefs_->SetDict(prefs::kOverflowMenuDestinationBadgeData,
                   std::move(badge_data));
@@ -1807,7 +1805,7 @@ TEST_F(OverflowMenuOrdererTest, SaveBadgeDataToPrefs) {
 
   [overflow_menu_orderer_ reorderDestinationsForInitialMenu];
 
-  const base::Value::Dict& badge_data =
+  const base::DictValue& badge_data =
       prefs_->GetDict(prefs::kOverflowMenuDestinationBadgeData);
 
   std::string new_destination_string =
@@ -2217,15 +2215,15 @@ TEST_F(OverflowMenuOrdererTest, LoadActionsFromPrefsWithDuplicates) {
   overflow_menu::ActionType textZoomAction =
       overflow_menu::ActionType::TextZoom;
 
-  base::Value::List shown_actions_list =
-      base::Value::List()
+  base::ListValue shown_actions_list =
+      base::ListValue()
           .Append(overflow_menu::StringNameForActionType(bookmarkAction))
           .Append(overflow_menu::StringNameForActionType(textZoomAction))
           // Duplicate shown action.
           .Append(overflow_menu::StringNameForActionType(bookmarkAction));
 
-  base::Value::List hidden_actions_list =
-      base::Value::List()
+  base::ListValue hidden_actions_list =
+      base::ListValue()
           .Append(overflow_menu::StringNameForActionType(readingListAction))
           .Append(overflow_menu::StringNameForActionType(clearDataAction))
           // Duplicate hidden action.
@@ -2235,7 +2233,7 @@ TEST_F(OverflowMenuOrdererTest, LoadActionsFromPrefsWithDuplicates) {
           // Unique hidden action.
           .Append(overflow_menu::StringNameForActionType(translateAction));
 
-  base::Value::Dict actions_order_dict;
+  base::DictValue actions_order_dict;
   actions_order_dict.Set("shown", std::move(shown_actions_list));
   actions_order_dict.Set("hidden", std::move(hidden_actions_list));
 
@@ -2282,21 +2280,21 @@ TEST_F(OverflowMenuOrdererTest, LoadActionsFromPrefsWithInvalidStrings) {
   overflow_menu::ActionType clearDataAction =
       overflow_menu::ActionType::ClearBrowsingData;
 
-  base::Value::List shown_actions_list =
-      base::Value::List()
+  base::ListValue shown_actions_list =
+      base::ListValue()
           .Append("InvalidActionString1")  // Invalid string.
           .Append(overflow_menu::StringNameForActionType(textZoomAction))
           .Append("AnotherInvalidString")  // Another invalid string.
           .Append(overflow_menu::StringNameForActionType(bookmarkAction));
 
-  base::Value::List hidden_actions_list =
-      base::Value::List()
+  base::ListValue hidden_actions_list =
+      base::ListValue()
           .Append(overflow_menu::StringNameForActionType(readingListAction))
           .Append("YetAnotherInvalid")  // Invalid string.
           .Append(overflow_menu::StringNameForActionType(clearDataAction))
           .Append("BogusAction");  // Invalid string.
 
-  base::Value::Dict actions_order_dict;
+  base::DictValue actions_order_dict;
   actions_order_dict.Set("shown", std::move(shown_actions_list));
   actions_order_dict.Set("hidden", std::move(hidden_actions_list));
 
@@ -2325,40 +2323,6 @@ TEST_F(OverflowMenuOrdererTest, LoadActionsFromPrefsWithInvalidStrings) {
       clearDataAction);
 }
 
-// Tests that if prefs contain a stale Reading mode state, the state is
-// discarded when loaded.
-TEST_F(OverflowMenuOrdererTest,
-       LoadActionsFromPrefsWithInvalidReadingModeState) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(kEnableReaderMode);
-  CreatePrefs();
-
-  // Add Reading mode to the previous list of shown and hidden actions.
-  base::Value::List shown_actions_list =
-      base::Value::List().Append(overflow_menu::StringNameForActionType(
-          overflow_menu::ActionType::ReaderMode));
-
-  base::Value::List hidden_actions_list =
-      base::Value::List().Append(overflow_menu::StringNameForActionType(
-          overflow_menu::ActionType::ReaderMode));
-
-  base::Value::Dict actions_order_dict;
-  actions_order_dict.Set("shown", std::move(shown_actions_list));
-  actions_order_dict.Set("hidden", std::move(hidden_actions_list));
-
-  prefs_->SetDict(prefs::kOverflowMenuActionsOrder,
-                  std::move(actions_order_dict));
-
-  InitializeOverflowMenuOrderer(NO);
-
-  ActionCustomizationModel* model =
-      overflow_menu_orderer_.actionCustomizationModel;
-
-  // Reading mode should be filtered since the feature is disabled.
-  ASSERT_EQ(model.shownActions.count, 0u);
-  ASSERT_EQ(model.hiddenActions.count, 0u);
-}
-
 // Tests that if `basePageActions` from the provider is not sorted by
 // ActionType integral values, updating page actions e.g. by accessing
 // `actionCustomizationModel` correctly preserves the order of actions from
@@ -2383,14 +2347,14 @@ TEST_F(OverflowMenuOrdererTest,
   // Set initial prefs: Shown [Clear Browsing Data, Bookmark], Hidden
   // [Translate] Note: Clear Browsing Data (7) comes before Bookmark (5) in
   // shown list.
-  base::Value::List initial_shown_actions =
-      base::Value::List()
+  base::ListValue initial_shown_actions =
+      base::ListValue()
           .Append(overflow_menu::StringNameForActionType(clearBrowsingData))
           .Append(overflow_menu::StringNameForActionType(bookmarkAction));
-  base::Value::List initial_hidden_actions = base::Value::List().Append(
+  base::ListValue initial_hidden_actions = base::ListValue().Append(
       overflow_menu::StringNameForActionType(translateAction));
 
-  base::Value::Dict actions_order_dict;
+  base::DictValue actions_order_dict;
   actions_order_dict.Set("shown", std::move(initial_shown_actions));
   actions_order_dict.Set("hidden", std::move(initial_hidden_actions));
   prefs_->SetDict(prefs::kOverflowMenuActionsOrder,

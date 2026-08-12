@@ -11,9 +11,11 @@
 #import "base/task/thread_pool.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/run_until.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
 #import "components/test/ios/test_utils.h"
+#import "crypto/features.h"
 #import "ios/chrome/app/application_delegate/app_init_stage.h"
 #import "ios/chrome/app/application_delegate/app_init_stage_test_utils.h"
 #import "ios/chrome/app/application_delegate/app_state+Testing.h"
@@ -68,6 +70,44 @@ typedef void (^TaskExpirationBlock)();
 }
 @end
 
+// Async refresh provider task stub.
+@interface AsyncVerifiableTask : NSObject <AppRefreshProviderTask>
+@property(nonatomic, readonly) BOOL executed;
+@property(nonatomic, readonly) BOOL hasCompletionClosure;
+- (void)completeTask;
+@end
+
+@implementation AsyncVerifiableTask {
+  BOOL _executed;
+  base::OnceClosure _completion;
+}
+
+- (BOOL)executed {
+  @synchronized(self) {
+    return _executed;
+  }
+}
+
+- (BOOL)hasCompletionClosure {
+  @synchronized(self) {
+    return !_completion.is_null();
+  }
+}
+
+- (void)executeWithCompletion:(base::OnceClosure)completion {
+  _completion = std::move(completion);
+}
+
+- (void)completeTask {
+  @synchronized(self) {
+    _executed = YES;
+  }
+  if (_completion) {
+    std::move(_completion).Run();
+  }
+}
+@end
+
 // Refresh provider for use in tests that allows a task to be injected, and is
 // always due.
 @interface TestRefreshProvider : AppRefreshProvider
@@ -95,7 +135,7 @@ typedef void (^TaskExpirationBlock)();
 @interface TestUIThreadRefreshProvider : TestRefreshProvider
 @end
 @implementation TestUIThreadRefreshProvider
-- (scoped_refptr<base::SingleThreadTaskRunner>)taskThread {
+- (scoped_refptr<base::SequencedTaskRunner>)taskRunner {
   return web::GetUIThreadTaskRunner({});
 }
 @end
@@ -104,16 +144,16 @@ typedef void (^TaskExpirationBlock)();
 @interface TestOtherThreadRefreshProvider : TestRefreshProvider
 @end
 @implementation TestOtherThreadRefreshProvider {
-  scoped_refptr<base::SingleThreadTaskRunner> _thread;
+  scoped_refptr<base::SequencedTaskRunner> _runner;
 }
 - (instancetype)init {
   if ((self = [super init])) {
-    _thread = base::ThreadPool::CreateSingleThreadTaskRunner({});
+    _runner = base::ThreadPool::CreateSequencedTaskRunner({});
   }
   return self;
 }
-- (scoped_refptr<base::SingleThreadTaskRunner>)taskThread {
-  return _thread;
+- (scoped_refptr<base::SequencedTaskRunner>)taskRunner {
+  return _runner;
 }
 @end
 
@@ -139,16 +179,22 @@ typedef void (^TaskExpirationBlock)();
 //    (b) quits the injected runloop when the end callback is made.
 @interface TestRefreshAudience : NSObject <BackgroundRefreshAudience>
 @property(nonatomic) base::RunLoop* runLoop;
+@property(nonatomic) base::RunLoop* startRunLoop;
 @property(nonatomic) BOOL started;
 @property(nonatomic) BOOL ended;
 @end
 @implementation TestRefreshAudience
 - (void)backgroundRefreshDidStart {
   _started = YES;
+  if (_startRunLoop) {
+    _startRunLoop->Quit();
+  }
 }
 - (void)backgroundRefreshDidEnd {
   _ended = YES;
-  _runLoop->Quit();
+  if (_runLoop) {
+    _runLoop->Quit();
+  }
 }
 @end
 
@@ -171,6 +217,10 @@ typedef void (^TaskExpirationBlock)();
 class BackgroundRefreshAppAgentTest : public PlatformTest {
  protected:
   BackgroundRefreshAppAgentTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {kEnableAppBackgroundRefresh,
+         crypto::features::kMigrateIOSKeychainAccessibility},
+        {});
     TestingApplicationContext* application_context =
         TestingApplicationContext::GetGlobal();
 
@@ -204,6 +254,8 @@ class BackgroundRefreshAppAgentTest : public PlatformTest {
     agent_.audience = audience_;
     agent_.appState = app_state_;
     audience_.runLoop = &run_loop_;
+
+    [agent_ appState:app_state_ willTransitionToInitStage:AppInitStage::kStart];
   }
 
   ~BackgroundRefreshAppAgentTest() override {
@@ -295,8 +347,7 @@ class BackgroundRefreshAppAgentTest : public PlatformTest {
   }
 
   // By default, enable background refresh for all tests.
-  base::test::ScopedFeatureList scoped_feature_list_{
-      kEnableAppBackgroundRefresh};
+  base::test::ScopedFeatureList scoped_feature_list_;
   // Local state for test application context.
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   // Threads.
@@ -364,10 +415,55 @@ TEST_F(BackgroundRefreshAppAgentTest, ExecuteSingleTask) {
   EXPECT_TRUE(audience_.ended);
   EXPECT_TRUE([provider injectedTask].executed);
 
+  histogram_tester.ExpectTotalCount(
+      "IOS.BackgroundRefresh.Provider.Duration.TestRefreshProvider", 1);
+}
+
+TEST_F(BackgroundRefreshAppAgentTest, ExecuteAsyncSingleTask) {
+  // Test that when a single provider with an async task is registered, it runs
+  // and finishes only after the task completes.
+
+  base::HistogramTester histogram_tester;
+
+  TestUIThreadRefreshProvider* provider =
+      [[TestUIThreadRefreshProvider alloc] init];
+  AsyncVerifiableTask* async_task = [[AsyncVerifiableTask alloc] init];
+  provider.injectedTask = (VerifiableTask*)async_task;
+  [agent_ addAppRefreshProvider:provider];
+
+  OCMStub([task_mock_ setTaskCompletedWithSuccess:YES]);
+
+  base::RunLoop start_run_loop;
+  audience_.startRunLoop = &start_run_loop;
+
+  SimulateAppBackgrounding();
+  InvokeTaskHandler();
+
+  // Run the loop until backgroundRefreshDidStart is called.
+  start_run_loop.Run();
+
+  // Wait until executeWithCompletion has been called on the task.
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return async_task.hasCompletionClosure; }));
+
+  EXPECT_TRUE(audience_.started);
+  EXPECT_FALSE(audience_.ended);
+  EXPECT_FALSE(async_task.executed);
+
+  // Now trigger async completion.
+  [async_task completeTask];
+
+  // The completion will post to the UI thread, which quits our main run loop.
+  run_loop_.Run();
+
+  EXPECT_TRUE(audience_.ended);
+  VerifyTaskCompleted(YES);
+  EXPECT_TRUE(async_task.executed);
+
   histogram_tester.ExpectTotalCount("IOS.BackgroundRefresh.ExecutionDuration",
                                     1);
   histogram_tester.ExpectTotalCount(
-      "IOS.BackgroundRefresh.Provider.Duration.TestRefreshProvider", 1);
+      "IOS.BackgroundRefresh.Provider.Duration.TestUIThreadRefreshProvider", 1);
 }
 
 TEST_F(BackgroundRefreshAppAgentTest, NotExecuteNotDueTask) {

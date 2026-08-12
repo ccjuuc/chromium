@@ -7,9 +7,9 @@
 #include <string>
 #include <utility>
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ui/webui/ash/login/base_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 #include "ui/chromeos/devicetype_utils.h"
 
@@ -20,7 +20,7 @@ FactorSetupSuccessScreenHandler::FactorSetupSuccessScreenHandler()
 
 FactorSetupSuccessScreenHandler::~FactorSetupSuccessScreenHandler() = default;
 
-void FactorSetupSuccessScreenHandler::Show(base::Value::Dict params) {
+void FactorSetupSuccessScreenHandler::Show(base::DictValue params) {
   ShowInWebUI(std::move(params));
 }
 

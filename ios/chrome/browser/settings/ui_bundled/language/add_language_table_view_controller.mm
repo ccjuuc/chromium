@@ -222,21 +222,49 @@ typedef NS_ENUM(NSInteger, ItemType) {
       deleteAllItemsFromSectionWithIdentifier:SectionIdentifierLanguages];
   [self populateLanguagesSectionFromDataSource:fromDataSource];
 
-  // Update the table view.
+  // Update the table view. Wrap the reload in -performWithoutAnimation:
+  // because -reloadSections:withRowAnimation:UITableViewRowAnimationNone does
+  // not suppress per-cell height transitions when cells use
+  // estimatedRowHeight. UIKit interpolates between the estimated and final
+  // autolayout-computed heights across a runloop tick, which made rows
+  // visibly slide and overlap on every keystroke while the search filter
+  // changed. -layoutIfNeeded forces the final layout to commit in the same
+  // tick so the new filtered list renders with stable, final cell heights.
   NSUInteger index = [self.tableViewModel
       sectionForSectionIdentifier:SectionIdentifierLanguages];
-  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:index]
-                withRowAnimation:UITableViewRowAnimationNone];
+  [UIView performWithoutAnimation:^{
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:index]
+                  withRowAnimation:UITableViewRowAnimationNone];
+    [self.tableView layoutIfNeeded];
+  }];
 }
 
 // Shows the scrim overlay.
 - (void)showScrim {
+  if (self.scrimView.alpha >= 1.0f) {
+    return;
+  }
+  self.scrimView.alpha = 0.0f;
   self.tableView.accessibilityElementsHidden = YES;
   self.tableView.scrollEnabled = NO;
-  [self.tableView addSubview:self.scrimView];
+  UIView* scrimView = self.scrimView;
+  [self.tableView addSubview:scrimView];
+  UIView* superview = self.tableView.superview;
   // Attach constraints to the superview because tableView is a scrollView and
   // the scrim view will have an empty frame when attaching constraints to it.
-  AddSameConstraints(self.scrimView, self.tableView.superview);
+  if (@available(iOS 26, *)) {
+    AddSameConstraints(scrimView, superview);
+  } else {
+    [NSLayoutConstraint activateConstraints:@[
+      [scrimView.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
+      [scrimView.trailingAnchor
+          constraintEqualToAnchor:superview.trailingAnchor],
+      [scrimView.topAnchor
+          constraintEqualToAnchor:self.navigationController.navigationBar
+                                      .bottomAnchor],
+      [scrimView.bottomAnchor constraintEqualToAnchor:superview.bottomAnchor],
+    ]];
+  }
   [UIView animateWithDuration:kTableViewNavigationScrimFadeDuration
                    animations:^{
                      self.scrimView.alpha = 1.0f;
@@ -246,6 +274,9 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
 // Hides the scrim overlay.
 - (void)hideScrim {
+  if (self.scrimView.alpha <= 0.0f) {
+    return;
+  }
   [UIView animateWithDuration:kTableViewNavigationScrimFadeDuration
       animations:^{
         self.scrimView.alpha = 0.0f;

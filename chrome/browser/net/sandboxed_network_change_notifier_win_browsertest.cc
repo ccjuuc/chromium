@@ -5,11 +5,8 @@
 #include "services/network/public/mojom/network_service.mojom.h"
 
 // clang-format off
-#include <windows.h>  // Must be in front of other Windows header files.
+#include <windows.h>   // Must be in front of other Windows header files.
 #include <initguid.h>  // Must be in front of devpkey.h.
-// Must be in front of Windows includes because they define LogSeverity and this
-// breaks gmock.
-#include "testing/gmock/include/gmock/gmock.h"
 // clang-format on
 
 #include <cfgmgr32.h>
@@ -20,8 +17,8 @@
 #include <shlobj.h>
 #include <stdint.h>
 
-// LogSeverity is both a macro in setupapi.h and in absl, which is used
-// indirectly within InProcessBrowserTest.
+// LogSeverity is both a macro in setupapi.h and an enum in absl, which is used
+// indirectly via //base.
 #undef LogSeverity
 
 #include <optional>
@@ -46,6 +43,7 @@
 #include "net/base/features.h"
 #include "sandbox/policy/features.h"
 #include "services/network/public/mojom/network_change_manager.mojom.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
@@ -142,11 +140,11 @@ class MockNetworkChangeManagerClient
   // NetworkChangeManagerClient implementation:
   MOCK_METHOD(void,
               OnInitialConnectionType,
-              (network::mojom::ConnectionType type),
+              (net::NetworkChangeNotifier::ConnectionType type),
               (override));
   MOCK_METHOD(void,
               OnNetworkChanged,
-              (network::mojom::ConnectionType type),
+              (net::NetworkChangeNotifier::ConnectionType type),
               (override));
 
  private:
@@ -203,23 +201,33 @@ IN_PROC_BROWSER_TEST_P(SandboxedNetworkChangeNotifierBrowserTest,
 
   ::testing::StrictMock<MockNetworkChangeManagerClient> mock(
       network_change_manager.get());
-  ::testing::InSequence order;
 
   // First obtain the initial connection type. Before manipulating any network
   // interfaces.
-  base::test::TestFuture<network::mojom::ConnectionType> connection_future;
+  base::test::TestFuture<net::NetworkChangeNotifier::ConnectionType>
+      connection_future;
   EXPECT_CALL(mock, OnInitialConnectionType)
       .WillOnce(base::test::InvokeFuture(connection_future));
-  network::mojom::ConnectionType connection = connection_future.Get();
+  std::ignore = connection_future.Get();
 
-  // NetworkChangeManager sends two notifications, the first is always
-  // CONNECTION_NONE, followed by the actual ConnectionType. See
-  // `network_change_manager.mojom`.
+  // After a network change, NetworkChangeManager sends one or more
+  // (CONNECTION_NONE, actual_type) notification pairs as the connection type
+  // stabilizes. The actual type may differ from the initial type reported
+  // above if the initial type was CONNECTION_UNKNOWN (which happens when the
+  // connection type is computed asynchronously at startup). Allow any number
+  // of CONNECTION_NONE notifications, and quit the RunLoop on the first
+  // non-CONNECTION_NONE notification.
   base::RunLoop run_loop;
-  EXPECT_CALL(
-      mock, OnNetworkChanged(network::mojom::ConnectionType::CONNECTION_NONE));
-  EXPECT_CALL(mock, OnNetworkChanged(connection))
-      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
+  EXPECT_CALL(mock,
+              OnNetworkChanged(
+                  net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE))
+      .Times(testing::AnyNumber());
+  EXPECT_CALL(mock,
+              OnNetworkChanged(testing::Ne(
+                  net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE)))
+      .Times(testing::AtLeast(1))
+      .WillOnce(base::test::RunClosure(run_loop.QuitClosure()))
+      .WillRepeatedly(testing::Return());
 
   // Install a new network card.
   base::FilePath dir_windows;

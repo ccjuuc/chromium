@@ -20,14 +20,14 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "url/gurl.h"
+
+class GURL;
 
 namespace user_prefs {
 class PrefRegistrySyncable;
 }  // namespace user_prefs
 
 class PrefService;
-class Profile;
 
 namespace browser_switcher {
 
@@ -39,10 +39,10 @@ class NoCopyUrl {
   explicit NoCopyUrl(const GURL& original);
   NoCopyUrl(const NoCopyUrl&) = delete;
 
-  const GURL& original() const { return *original_; }
-  std::string_view host_and_port() const { return host_and_port_; }
-  std::string_view spec() const { return original_->spec(); }
-  std::string_view spec_without_port() const { return spec_without_port_; }
+  const GURL& original() const;
+  std::string_view host_and_port() const;
+  std::string_view spec() const;
+  std::string_view spec_without_port() const;
 
  private:
   const raw_ref<const GURL> original_;
@@ -135,7 +135,8 @@ class BrowserSwitcherPrefs : public KeyedService,
 
   BrowserSwitcherPrefs() = delete;
 
-  explicit BrowserSwitcherPrefs(Profile* profile);
+  BrowserSwitcherPrefs(PrefService* prefs,
+                       policy::PolicyService* policy_service);
 
   BrowserSwitcherPrefs(const BrowserSwitcherPrefs&) = delete;
   BrowserSwitcherPrefs& operator=(const BrowserSwitcherPrefs&) = delete;
@@ -216,11 +217,6 @@ class BrowserSwitcherPrefs : public KeyedService,
   base::CallbackListSubscription RegisterPrefsChangedCallback(
       PrefsChangedCallback cb);
 
- protected:
-  // For internal use and testing.
-  BrowserSwitcherPrefs(PrefService* prefs,
-                       policy::PolicyService* policy_service);
-
  private:
   void RunCallbacksIfDirty();
   void MarkDirty(const std::string& pref_name);
@@ -243,7 +239,7 @@ class BrowserSwitcherPrefs : public KeyedService,
   // pref on the same registrar.
 
   // Listens on *some* prefs, to apply a filter to them
-  // (e.g. convert Value::List => vector<string>).
+  // (e.g. convert base::ListValue => vector<string>).
   PrefChangeRegistrar filtering_change_registrar_;
 
   // Listens on *all* BrowserSwitcher prefs, to notify observers when prefs

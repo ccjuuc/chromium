@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_RENDERER_CONTEXT_MENU_RENDER_VIEW_CONTEXT_MENU_VIEWS_H_
 #define CHROME_BROWSER_UI_VIEWS_RENDERER_CONTEXT_MENU_RENDER_VIEW_CONTEXT_MENU_VIEWS_H_
 
+#include <memory>
+
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 
@@ -33,9 +35,11 @@ class RenderViewContextMenuViews : public RenderViewContextMenu {
   ~RenderViewContextMenuViews() override;
 
   // Factory function to create an instance.
-  static RenderViewContextMenuViews* Create(
+  static std::unique_ptr<RenderViewContextMenuViews> Create(
       content::RenderFrameHost& render_frame_host,
-      const content::ContextMenuParams& params);
+      const content::ContextMenuParams& params,
+      bool is_paste_enabled,
+      bool is_paste_and_match_style_enabled);
 
   void RunMenuAt(views::Widget* parent,
                  const gfx::Point& point,
@@ -48,7 +52,9 @@ class RenderViewContextMenuViews : public RenderViewContextMenu {
 
  protected:
   RenderViewContextMenuViews(content::RenderFrameHost& render_frame_host,
-                             const content::ContextMenuParams& params);
+                             const content::ContextMenuParams& params,
+                             bool is_paste_enabled,
+                             bool is_paste_and_match_style_enabled);
 
   // RenderViewContextMenu implementation.
   bool GetAcceleratorForCommandId(int command_id,

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -17,6 +18,7 @@
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_microtasks_scope.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_urlpatterninit_usvstring.h"
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
@@ -205,7 +207,7 @@ class SpeculationRuleSetTest : public ::testing::Test {
 
   SpeculationRuleSet* CreateSpeculationRuleSetWithTargetHint(
       const char* target_hint) {
-    return CreateRuleSet(String::Format(R"({
+    return CreateRuleSet(UNSAFE_TODO(String::Format(R"({
         "prefetch": [{
           "source": "list",
           "urls": ["https://example.com/hint.html"],
@@ -217,7 +219,7 @@ class SpeculationRuleSetTest : public ::testing::Test {
           "target_hint": "%s"
         }]
       })",
-                                        target_hint, target_hint),
+                                                    target_hint, target_hint)),
                          KURL("https://example.com/"), execution_context_);
   }
 
@@ -360,7 +362,7 @@ TEST_F(SpeculationRuleSetTest, RejectsInvalidJSON) {
                                  execution_context());
   ASSERT_TRUE(rule_set);
   AssertParseError(rule_set);
-  EXPECT_TRUE(rule_set->error_message().Contains("Syntax error"))
+  EXPECT_TRUE(rule_set->error_message().contains("Syntax error"))
       << rule_set->error_message();
 }
 
@@ -369,7 +371,7 @@ TEST_F(SpeculationRuleSetTest, RejectsNonObject) {
       CreateRuleSet("42", KURL("https://example.com"), execution_context());
   ASSERT_TRUE(rule_set);
   AssertParseError(rule_set);
-  EXPECT_TRUE(rule_set->error_message().Contains("must be an object"))
+  EXPECT_TRUE(rule_set->error_message().contains("must be an object"))
       << rule_set->error_message();
 }
 
@@ -378,7 +380,7 @@ TEST_F(SpeculationRuleSetTest, RejectsComments) {
       "{ /* comments! */ }", KURL("https://example.com/"), execution_context());
   ASSERT_TRUE(rule_set);
   AssertParseError(rule_set);
-  EXPECT_TRUE(rule_set->error_message().Contains("Syntax error"))
+  EXPECT_TRUE(rule_set->error_message().contains("Syntax error"))
       << rule_set->error_message();
 }
 
@@ -525,6 +527,70 @@ TEST_F(SpeculationRuleSetTest, IgnoresUnknownOrDifferentlyTypedTopLevelKeys) {
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
 }
 
+TEST_F(SpeculationRuleSetTest, ModerateViewportHeuristicsParsed) {
+  // Parsing is intentionally independent of the origin trial (the trial only
+  // gates whether the params take effect, checked later when the heuristic
+  // runs). So the params are populated here even without the trial enabled.
+  ScopedSpeculationRulesModerateViewportHeuristicsControlForTest disabled(
+      false);
+  auto* rule_set = CreateRuleSet(
+      R"({
+        "moderate_viewport_heuristics": {
+          "distance_from_pointer_down": [-0.5, 0.2],
+          "largest_anchor_threshold": 0.1,
+          "delay": 200
+        },
+        "prefetch": [{"source": "list", "urls": ["https://example.com/a"]}]
+      })",
+      KURL("https://example.com/"), execution_context());
+  ASSERT_TRUE(rule_set);
+  EXPECT_EQ(rule_set->error_type(), SpeculationRuleSetErrorType::kNoError);
+  const auto& params = rule_set->moderate_viewport_heuristics_params();
+  ASSERT_TRUE(params.has_value());
+  ASSERT_TRUE(params->distance_from_pointer_down_low.has_value());
+  EXPECT_DOUBLE_EQ(*params->distance_from_pointer_down_low, -0.5);
+  ASSERT_TRUE(params->distance_from_pointer_down_high.has_value());
+  EXPECT_DOUBLE_EQ(*params->distance_from_pointer_down_high, 0.2);
+  ASSERT_TRUE(params->largest_anchor_threshold.has_value());
+  EXPECT_DOUBLE_EQ(*params->largest_anchor_threshold, 0.1);
+  ASSERT_TRUE(params->delay.has_value());
+  EXPECT_EQ(*params->delay, base::Milliseconds(200));
+}
+
+TEST_F(SpeculationRuleSetTest,
+       ModerateViewportHeuristicsIgnoresMalformedAndUnknownSubKeys) {
+  auto* rule_set = CreateRuleSet(
+      R"({
+        "moderate_viewport_heuristics": {
+          "distance_from_pointer_down": ["not", "numbers"],
+          "largest_anchor_threshold": "oops",
+          "delay": 300,
+          "some_unknown_subkey": 42
+        }
+      })",
+      KURL("https://example.com/"), execution_context());
+  ASSERT_TRUE(rule_set);
+  // Unknown sub-keys and malformed values are ignored; the ruleset still parses
+  // and the well-formed "delay" value is retained.
+  EXPECT_EQ(rule_set->error_type(), SpeculationRuleSetErrorType::kNoError);
+  const auto& params = rule_set->moderate_viewport_heuristics_params();
+  ASSERT_TRUE(params.has_value());
+  EXPECT_FALSE(params->distance_from_pointer_down_low.has_value());
+  EXPECT_FALSE(params->largest_anchor_threshold.has_value());
+  ASSERT_TRUE(params->delay.has_value());
+  EXPECT_EQ(*params->delay, base::Milliseconds(300));
+}
+
+TEST_F(SpeculationRuleSetTest,
+       ModerateViewportHeuristicsIgnoredWhenNotAnObject) {
+  auto* rule_set =
+      CreateRuleSet(R"({"moderate_viewport_heuristics": 42})",
+                    KURL("https://example.com/"), execution_context());
+  ASSERT_TRUE(rule_set);
+  EXPECT_EQ(rule_set->error_type(), SpeculationRuleSetErrorType::kNoError);
+  EXPECT_FALSE(rule_set->moderate_viewport_heuristics_params().has_value());
+}
+
 TEST_F(SpeculationRuleSetTest, DropUnrecognizedRules) {
   auto* rule_set = CreateRuleSet(
       R"({"prefetch": [)"
@@ -613,7 +679,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_Blank) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "\"target_hint\" may not be set for prefetch"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -629,7 +695,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_Self) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "\"target_hint\" may not be set for prefetch"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -648,7 +714,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_Parent) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "\"target_hint\" may not be set for prefetch"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -667,7 +733,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_Top) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "\"target_hint\" may not be set for prefetch"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -683,7 +749,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_EmptyString) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains("invalid \"target_hint\""))
+  EXPECT_TRUE(rule_set->error_message().contains("invalid \"target_hint\""))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
   EXPECT_THAT(rule_set->prerender_rules(), ElementsAre());
@@ -697,7 +763,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_ValidBrowsingContextName) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "\"target_hint\" may not be set for prefetch"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -714,7 +780,7 @@ TEST_F(SpeculationRuleSetTest, RulesWithTargetHint_InvalidBrowsingContextName) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains("invalid \"target_hint\""))
+  EXPECT_TRUE(rule_set->error_message().contains("invalid \"target_hint\""))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
   EXPECT_THAT(rule_set->prerender_rules(), ElementsAre());
@@ -923,9 +989,7 @@ void PropagateRulesToStubSpeculationHost(
   speculation_host.SetDoneClosure(run_loop.QuitClosure());
   {
     auto* script_state = ToScriptStateForMainWorld(&frame);
-    v8::MicrotasksScope microtasks_scope(script_state->GetIsolate(),
-                                         ToMicrotaskQueue(script_state),
-                                         v8::MicrotasksScope::kRunMicrotasks);
+    V8RunMicrotasksScope microtasks_scope(script_state);
     functor();
     if (includes_style_update) {
       page_holder.GetFrameView().UpdateAllLifecyclePhasesForTest();
@@ -963,9 +1027,7 @@ testing::AssertionResult NoRulesPropagatedToStubSpeculationHost(
       [&done_was_called] { done_was_called = true; }));
   {
     auto* script_state = ToScriptStateForMainWorld(&frame);
-    v8::MicrotasksScope microtasks_scope(script_state->GetIsolate(),
-                                         ToMicrotaskQueue(script_state),
-                                         v8::MicrotasksScope::kRunMicrotasks);
+    V8RunMicrotasksScope microtasks_scope(script_state);
     functor();
     if (includes_style_update) {
       page_holder.GetFrameView().UpdateAllLifecyclePhasesForTest();
@@ -1253,7 +1315,7 @@ TEST_F(SpeculationRuleSetTest, ConsoleWarning) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(),
-      [](const String& message) { return message.Contains("Syntax error"); }));
+      [](const String& message) { return message.contains("Syntax error"); }));
 }
 
 // Tests that errors of individual rules which cause them to be ignored are
@@ -1278,7 +1340,7 @@ TEST_F(SpeculationRuleSetTest, ConsoleWarningForInvalidRule) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains("URLs must be given as strings");
+        return message.contains("URLs must be given as strings");
       }));
 }
 
@@ -1296,8 +1358,8 @@ TEST_F(SpeculationRuleSetTest,
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains("speculation rule") &&
-               message.Contains("will be ignored");
+        return message.contains("speculation rule") &&
+               message.contains("will be ignored");
       }));
 }
 
@@ -1319,8 +1381,8 @@ TEST_F(SpeculationRuleSetTest, ConsoleWarningForChildModification) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains("speculation rule") &&
-               message.Contains("modified");
+        return message.contains("speculation rule") &&
+               message.contains("modified");
       }));
 }
 
@@ -1343,9 +1405,9 @@ TEST_F(SpeculationRuleSetTest, ConsoleWarningForDuplicateKey) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains("speculation rule") &&
-               message.Contains("more than one") &&
-               message.Contains("prefetch");
+        return message.contains("speculation rule") &&
+               message.contains("more than one") &&
+               message.contains("prefetch");
       }));
 }
 TEST_F(SpeculationRuleSetTest, DropNotArrayAtRuleSetPosition) {
@@ -1357,7 +1419,7 @@ TEST_F(SpeculationRuleSetTest, DropNotArrayAtRuleSetPosition) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "A rule set for a key must be an array: path = [\"prefetch\"]"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -1373,7 +1435,7 @@ TEST_F(SpeculationRuleSetTest, DropNotObjectAtRulePosition) {
   ASSERT_TRUE(rule_set);
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesSkipped);
-  EXPECT_TRUE(rule_set->error_message().Contains(
+  EXPECT_TRUE(rule_set->error_message().contains(
       "A rule must be an object: path = [\"prefetch\"][0]"))
       << rule_set->error_message();
   EXPECT_THAT(rule_set->prefetch_rules(), ElementsAre());
@@ -1903,7 +1965,7 @@ TEST_F(DocumentRulesTest, ConsoleWarningForInvalidRule) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains("Document rule predicate type is ambiguous");
+        return message.contains("Document rule predicate type is ambiguous");
       }));
 }
 
@@ -4191,7 +4253,7 @@ TEST_F(SpeculationRuleSetTest, ConsoleWarningForNoVarySearchHintNotAString) {
 
   EXPECT_TRUE(std::ranges::any_of(
       chrome_client->ConsoleMessages(), [](const String& message) {
-        return message.Contains(
+        return message.contains(
             "expects_no_vary_search's value must be a string");
       }));
 }
@@ -4463,23 +4525,23 @@ TEST_F(SpeculationRuleSetTest, InvalidTag) {
       KURL("https://example.com/"), execution_context());
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesetLevelTag);
-  EXPECT_TRUE(rule_set->error_message().Contains("Tag value"))
+  EXPECT_TRUE(rule_set->error_message().contains("Tag value"))
       << rule_set->error_message();
 
   const char* tag =
       "Qu\xe9"
       "bec";
-  rule_set = CreateRuleSet(String::Format(R"({
+  rule_set = CreateRuleSet(UNSAFE_TODO(String::Format(R"({
         "tag": "%s",
         "prefetch": [{
           "where": {"href_matches": "/foo"}
         }]
       })",
-                                          tag),
+                                                      tag)),
                            KURL("https://example.com/"), execution_context());
   EXPECT_EQ(rule_set->error_type(),
             SpeculationRuleSetErrorType::kInvalidRulesetLevelTag);
-  EXPECT_TRUE(rule_set->error_message().Contains("Tag value"))
+  EXPECT_TRUE(rule_set->error_message().contains("Tag value"))
       << rule_set->error_message();
 }
 

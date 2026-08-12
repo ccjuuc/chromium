@@ -10,9 +10,7 @@
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "base/containers/contains.h"
 #include "base/i18n/rtl.h"
-#include "base/run_loop.h"
 #include "base/test/icu_test_util.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
@@ -34,7 +32,6 @@ constexpr base::Time::Exploded kTestDateTimeExploded = {.year = 2022,
 void SetAdaptiveChargingPref(bool enabled) {
   Shell::Get()->session_controller()->GetActivePrefService()->SetBoolean(
       prefs::kPowerAdaptiveChargingEnabled, enabled);
-  base::RunLoop().RunUntilIdle();
 }
 
 // Returns the number of (popup or non-popup) notifications that are currently
@@ -126,7 +123,7 @@ TEST_F(AdaptiveChargingNotificationControllerTest, HaveTimeInNotification) {
 
   // Current local time is 12:42 pm, so 5 hours after should be 5:30pm (rounding
   // from 5:42pm).
-  EXPECT_TRUE(base::Contains(notification->message(), u"5:30\u202fpm"));
+  EXPECT_TRUE(notification->message().contains(u"5:30\u202fpm"));
 }
 
 TEST_F(AdaptiveChargingNotificationControllerTest, TimeRoundingUpTest) {
@@ -157,7 +154,7 @@ TEST_F(AdaptiveChargingNotificationControllerTest, TimeRoundingUpTest) {
 
   // Current local time is 12:44 pm, so 5 hours 2 mins after should be 6:00pm
   // (rounding from 5:46pm).
-  EXPECT_TRUE(base::Contains(notification->message(), u"6:00\u202fpm"));
+  EXPECT_TRUE(notification->message().contains(u"6:00\u202fpm"));
 }
 
 TEST_F(AdaptiveChargingNotificationControllerTest,

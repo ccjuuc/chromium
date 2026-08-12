@@ -6,16 +6,22 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/strings/stringprintf.h"
+#include "base/byte_size.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "net/url_request/redirect_info.h"
 #include "net/url_request/redirect_util.h"
+#include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
@@ -26,6 +32,28 @@
 
 namespace blink {
 namespace {
+
+bool IsCorsExposedResponseHeader(
+    std::string_view name,
+    const std::vector<std::string>& cors_exposed_header_names) {
+  if (network::cors::IsCorsSafelistedResponseHeaderName(name)) {
+    return true;
+  }
+  // "content-range" is not a standard CORS-safelisted response header, but it
+  // is required by C++ media loaders (e.g. WebMediaPlayer) to process "206
+  // Partial Content" range responses. We permit it in URLResponseHead to avoid
+  // breaking media playback, while it remains filtered out and hidden from
+  // JavaScript's view in the renderer.
+  if (base::ToLowerASCII(name) == "content-range") {
+    return true;
+  }
+  for (const auto& exposed : cors_exposed_header_names) {
+    if (base::EqualsCaseInsensitiveASCII(name, exposed)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Calls |callback| when Blob reading is complete.
 class BlobCompleteCaller : public mojom::BlobReaderClient {
@@ -48,20 +76,8 @@ class BlobCompleteCaller : public mojom::BlobReaderClient {
 
 void SaveResponseHeaders(const mojom::FetchAPIResponse& response,
                          network::mojom::URLResponseHead* out_head) {
-  // Build a string instead of using HttpResponseHeaders::AddHeader on
-  // each header, since AddHeader has O(n^2) performance.
-  std::string buf(base::StringPrintf("HTTP/1.1 %d %s\r\n", response.status_code,
-                                     response.status_text.c_str()));
-  for (const auto& item : response.headers) {
-    buf.append(item.first);
-    buf.append(": ");
-    buf.append(item.second);
-    buf.append("\r\n");
-  }
-  buf.append("\r\n");
-
-  out_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
-      net::HttpUtil::AssembleRawHeaders(buf));
+  out_head->headers =
+      ServiceWorkerLoaderHelpers::GetHttpResponseHeaders(response);
 
   // Populate |out_head|'s MIME type with the value from the HTTP response
   // headers.
@@ -83,7 +99,7 @@ void SaveResponseHeaders(const mojom::FetchAPIResponse& response,
   // Populate |out_head|'s content length with the value from the HTTP response
   // headers.
   if (out_head->content_length == -1) {
-    std::optional<base::ByteCount> content_length =
+    std::optional<base::ByteSize> content_length =
         out_head->headers->GetContentLength();
     out_head->content_length = content_length ? content_length->InBytes() : -1;
   }
@@ -100,7 +116,7 @@ void SaveResponseHeaders(const mojom::FetchAPIResponse& response,
   if (out_head->encoded_data_length == -1) {
     if (response.response_source ==
         network::mojom::FetchResponseSource::kNetwork) {
-      std::optional<base::ByteCount> content_length =
+      std::optional<base::ByteSize> content_length =
           out_head->headers->GetContentLength();
       out_head->encoded_data_length =
           content_length ? content_length->InBytes() : -1;
@@ -224,6 +240,36 @@ const char* ServiceWorkerLoaderHelpers::FetchResponseSourceToSuffix(
       return "CacheStorage";
   }
   NOTREACHED();
+}
+
+// static
+scoped_refptr<net::HttpResponseHeaders>
+ServiceWorkerLoaderHelpers::GetHttpResponseHeaders(
+    const blink::mojom::FetchAPIResponse& response) {
+  // To avoid O(n^2) performance of net::HttpResponseHeaders::AddHeader(), we
+  // use net::HttpResponseHeaders::Builder here, which provides O(n) performance
+  // by taking all headers at once upon Build().
+  //
+  // We don't use net::HttpUtil::AssembleRawHeaders() because net::HttpUtil is
+  // disallowed in this directory.
+  std::string status = base::StrCat(
+      {base::ToString(response.status_code), " ", response.status_text});
+  net::HttpResponseHeaders::Builder builder({1, 1}, status);
+  // |response.headers| holds the header list of the internal response. For a
+  // CORS filtered response, restrict the resulting header list to the
+  // CORS-safelisted response headers and any explicitly exposed names.
+  // https://fetch.spec.whatwg.org/#concept-filtered-response-cors
+  const bool is_cors_filtered =
+      response.response_type == network::mojom::FetchResponseType::kCors;
+  for (const auto& item : response.headers) {
+    if (is_cors_filtered &&
+        !IsCorsExposedResponseHeader(item.first,
+                                     response.cors_exposed_header_names)) {
+      continue;
+    }
+    builder.AddHeader(item.first, item.second);
+  }
+  return builder.Build();
 }
 
 }  // namespace blink

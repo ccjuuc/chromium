@@ -43,12 +43,9 @@ class CONTENT_EXPORT CriticalOriginTrialsThrottle
       const network::mojom::URLResponseHead& response_head,
       RestartWithURLReset* restart_with_url_reset) override;
   void BeforeWillRedirectRequest(
-      net::RedirectInfo* redirect_info,
+      const net::RedirectInfo& redirect_info,
       const network::mojom::URLResponseHead& response_head,
-      RestartWithURLReset* restart_with_url_reset,
-      std::vector<std::string>* to_be_removed_request_headers,
-      net::HttpRequestHeaders* modified_request_headers,
-      net::HttpRequestHeaders* modified_cors_exempt_request_headers) override;
+      RestartWithURLReset* restart_with_url_reset) override;
 
   // This throttle only handles navigation requests. Use this method to
   // determine if the throttle will handle the passed-in |request| before
@@ -58,8 +55,7 @@ class CONTENT_EXPORT CriticalOriginTrialsThrottle
  private:
   // The delegate is owned by the BrowserContext, and is expected to outlive
   // this throttle.
-  raw_ref<OriginTrialsControllerDelegate, DanglingUntriaged>
-      origin_trials_delegate_;
+  raw_ref<OriginTrialsControllerDelegate> origin_trials_delegate_;
 
   std::optional<url::Origin> top_frame_origin_;
 

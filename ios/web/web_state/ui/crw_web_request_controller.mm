@@ -69,8 +69,10 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
       web::GetWebClient()->IsAppSpecificURL(currentURL);
   // If it's a chrome URL, but not a native one, create the WebUI instance.
   if (isCurrentURLAppSpecific) {
-    if (!(item->GetTransitionType() & ui::PAGE_TRANSITION_TYPED ||
-          item->GetTransitionType() & ui::PAGE_TRANSITION_AUTO_BOOKMARK) &&
+    ui::PageTransition transition = item->GetTransitionType();
+    if (!(ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_TYPED) ||
+          ui::PageTransitionCoreTypeIs(transition,
+                                       ui::PAGE_TRANSITION_AUTO_BOOKMARK)) &&
         self.hasOpener) {
       // WebUI URLs can not be opened by DOM to prevent cross-site scripting as
       // they have increased power. WebUI URLs may only be opened when the user
@@ -496,10 +498,12 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
     request.attribution = NSURLRequestAttributionUser;
   }
 
-  if (navigationURL.SchemeIsFile() &&
+  // Ensure the URL is valid and has a non-empty path.
+  NSURL* requestURL = request.URL;
+  if (requestURL.path.length > 0 && navigationURL.SchemeIsFile() &&
       web::GetWebClient()->IsAppSpecificURL(virtualURL)) {
     navigation = [self.webView loadFileRequest:request
-                       allowingReadAccessToURL:request.URL];
+                       allowingReadAccessToURL:requestURL];
   } else {
     navigation = [self.webView loadRequest:request];
   }

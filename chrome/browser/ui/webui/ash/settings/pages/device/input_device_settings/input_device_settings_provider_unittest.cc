@@ -11,8 +11,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/input_device_settings_controller.h"
 #include "ash/public/cpp/test/mock_input_device_settings_controller.h"
-#include "ash/public/mojom/input_device_settings.mojom-forward.h"
-#include "ash/public/mojom/input_device_settings.mojom-shared.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/system/keyboard_brightness_control_delegate.h"
 #include "base/memory/raw_ptr.h"
@@ -592,7 +590,7 @@ class InputDeviceSettingsProviderTest : public views::ViewsTestBase {
     feature_list_->InitWithFeatures({features::kPeripheralCustomization}, {});
     views::ViewsTestBase::SetUp();
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     widget_->Show();
     scoped_resetter_ = std::make_unique<
         InputDeviceSettingsController::ScopedResetterForTest>();

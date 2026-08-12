@@ -9,6 +9,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/connectors_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -19,11 +20,6 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/browser_context.h"
 
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}
-
 namespace storage {
 class FileSystemURL;
 }
@@ -33,26 +29,21 @@ namespace enterprise_connectors {
 // A keyed service to access ConnectorsManager, which tracks Connector policies.
 class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
  public:
+  using ConnectorsServiceBase::GetAnalysisSettings;
+
   ConnectorsService(content::BrowserContext* context,
                     std::unique_ptr<ConnectorsManagerBase> manager);
   ~ConnectorsService() override;
 
   // Accessors that call the corresponding method in ConnectorsManager.
   std::optional<ReportingSettings> GetReportingSettings() override;
-  std::optional<AnalysisSettings> GetAnalysisSettings(
-      const GURL& url,
-      AnalysisConnector connector);
+
 #if BUILDFLAG(IS_CHROMEOS)
   std::optional<AnalysisSettings> GetAnalysisSettings(
       const storage::FileSystemURL& source_url,
       const storage::FileSystemURL& destination_url,
       AnalysisConnector connector);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-  // Returns the profile email if real-time URL check is set for the profile,
-  // the device ID if it is set for the device, or an empty string if it is
-  // unset.
-  std::string GetRealTimeUrlCheckIdentifier() const;
 
   // Returns the CBCM domain or profile domain that enables connector policies.
   // If both set Connector policies, the CBCM domain is returned as it has
@@ -70,19 +61,20 @@ class ConnectorsService : public ConnectorsServiceBase, public KeyedService {
   FRIEND_TEST_ALL_PREFIXES(ConnectorsServiceReportingFeatureTest,
                            ChromeOsManagedGuestSessionFlagNotSetInUserSession);
 
-  std::optional<AnalysisSettings> GetCommonAnalysisSettings(
-      std::optional<AnalysisSettings> settings,
-      AnalysisConnector connector);
-
   // ConnectorsServiceBase:
   std::optional<DmToken> GetDmToken(const char* scope_pref) const override;
   bool ConnectorsEnabled() const override;
   PrefService* GetPrefs() override;
   const PrefService* GetPrefs() const override;
   policy::CloudPolicyManager* GetManagedUserCloudPolicyManager() const override;
+  bool IsURLExemptFromAnalysis(const GURL& url,
+                               AnalysisConnector connector) override;
+  bool IsProfileAffiliated() const override;
+  std::string GetProfileEmail() const override;
+  std::string GetDeviceClientId() const override;
 
   // Returns the policy::PolicyScope stored in the given |scope_pref|.
-  policy::PolicyScope GetPolicyScope(const char* scope_pref) const;
+  policy::PolicyScope GetPolicyScope(const char* scope_pref) const override;
 
   // Returns ClientMetadata populated with minimum required information
   std::unique_ptr<ClientMetadata> GetBasicClientMetadata(Profile* profile);
@@ -99,7 +91,7 @@ class ConnectorsServiceFactory : public BrowserContextKeyedServiceFactory {
  private:
   ConnectorsServiceFactory();
   ~ConnectorsServiceFactory() override;
-  friend struct base::DefaultSingletonTraits<ConnectorsServiceFactory>;
+  friend base::NoDestructor<ConnectorsServiceFactory>;
 
   // BrowserContextKeyedServiceFactory:
   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(

@@ -11,6 +11,8 @@
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "chrome/browser/autofill/android/autofill_ai_save_update_entity_prompt_controller.h"
+#include "chrome/browser/autofill/android/entity_attribute_update_details_android.h"
+#include "chrome/browser/autofill/android/entity_instance_android.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/web_contents.h"
@@ -52,10 +54,19 @@ bool AutofillAiSaveUpdateEntityPromptViewAndroid::Show(
     return false;
   }
 
+  Profile* browser_profile =
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+
   JNIEnv* env = base::android::AttachCurrentThread();
   java_object_.Reset(Java_AutofillAiSaveUpdateEntityPrompt_create(
       env, web_contents_->GetTopLevelNativeWindow()->GetJavaObject(),
-      java_controller));
+      java_controller, browser_profile->GetJavaObject(),
+      // The `is_enabled`, `is_eligible_for_wallet_storage` and
+      // `requires_reauth_to_see` parameters are hard coded because they are
+      // ignored by the save/update prompt. They are only used in settings.
+      EntityInstanceAndroid(controller->entity_instance(), /*is_enabled=*/true,
+                            /*is_eligible_for_wallet_storage=*/true,
+                            /*requires_reauth_to_see=*/false)));
   if (!java_object_) {
     return false;
   }
@@ -71,17 +82,21 @@ void AutofillAiSaveUpdateEntityPromptViewAndroid::SetContent(
   CHECK(java_object_);
 
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jstring> title =
-      base::android::ConvertUTF16ToJavaString(env, controller->GetTitle());
-  ScopedJavaLocalRef<jstring> positive_button_text =
-      base::android::ConvertUTF16ToJavaString(
-          env, controller->GetPositiveButtonText());
-  ScopedJavaLocalRef<jstring> negative_button_text =
-      base::android::ConvertUTF16ToJavaString(
-          env, controller->GetNegativeButtonText());
 
   Java_AutofillAiSaveUpdateEntityPrompt_setDialogDetails(
-      env, java_object_, title, positive_button_text, negative_button_text);
+      env, java_object_, controller->GetTitle(),
+      controller->GetPositiveButtonText(), controller->GetNegativeButtonText(),
+      controller->IsWalletableEntity());
+
+  Java_AutofillAiSaveUpdateEntityPrompt_setEntityUpdateDetails(
+      env, java_object_, controller->GetEntityUpdateDetails(),
+      controller->IsUpdatePrompt());
+
+  Java_AutofillAiSaveUpdateEntityPrompt_setSourceNotice(
+      env, java_object_, controller->GetSourceNotice(),
+      controller->IsWalletableEntity());
 }
 
 }  // namespace autofill
+
+DEFINE_JNI(AutofillAiSaveUpdateEntityPrompt)

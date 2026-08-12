@@ -95,7 +95,6 @@ function decorateChunk(
 // Consumer of taps on annotations. Forwards to the browser side.
 function tapConsumer(
     annotation: HTMLElementWithSymbolIndex, cancel: boolean): void {
-  decorator?.highlightAnnotation(annotation);
   sendWebKitMessage('annotations', {
     command: 'annotations.onClick',
     cancel: cancel,
@@ -120,7 +119,7 @@ function decorationNodeRemovedConsumer(node: NodeWithSymbolIndex): void {
 // Mark: Public API
 
 // Starts the annotation observer.
-function start(): void {
+function start(maxTextLength: number): void {
   // Check for already started or for a page request to not detect intent.
   if (hasNoIntentDetection() || intersectionObserver) {
     return;
@@ -128,7 +127,7 @@ function start(): void {
   const root = document.documentElement;
   idleTaskTracker = new IdleTaskTracker();
   click = new TextClick(root, tapConsumer, () => decorator?.decorations);
-  extractor = new TextExtractor(textChunkConsumer);
+  extractor = new TextExtractor(textChunkConsumer, maxTextLength);
   styler = new TextStyler();
   decorator = new TextDecorator(styler);
   intersectionObserver =
@@ -171,17 +170,12 @@ function removeDecorationsWithType(type: string): void {
   decorator?.removeDecorationsOfType(type);
 }
 
-function removeHighlight(): void {
-  decorator?.removeHighlight();
-}
-
-const annotations = new CrWebApi();
+const annotations = new CrWebApi('annotations');
 
 annotations.addFunction('start', start);
 annotations.addFunction('stop', stop);
 annotations.addFunction('decorateAnnotations', decorateAnnotations);
 annotations.addFunction('removeDecorations', removeDecorations);
 annotations.addFunction('removeDecorationsWithType', removeDecorationsWithType);
-annotations.addFunction('removeHighlight', removeHighlight);
 
-gCrWeb.registerApi('annotations', annotations);
+gCrWeb.registerApi(annotations);

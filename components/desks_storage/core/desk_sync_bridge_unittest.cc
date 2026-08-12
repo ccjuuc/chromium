@@ -35,7 +35,6 @@
 #include "components/desks_storage/core/desk_test_util.h"
 #include "components/desks_storage/core/saved_desk_builder.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
@@ -753,7 +752,7 @@ class DeskSyncBridgeTest : public testing::Test {
             "admin template 1", AdvanceAndGetTime()));
 
     std::string policy_json;
-    base::Value::List template_list;
+    base::ListValue template_list;
     template_list.Append(
         desk_template_conversion::SerializeDeskTemplateAsBaseValue(
             admin_template1.get(), cache_.get()));
@@ -1768,7 +1767,7 @@ TEST_F(DeskSyncBridgeTest, GetTemplateJsonShouldReturnList) {
         EXPECT_TRUE(parsed_result);
 
         // Content of the conversion is tested in:
-        // components/desks_storage/core/desk_template_conversion_unittests.cc
+        // components/desks_storage/core/desk_template_conversion_unittest.cc
         loop.Quit();
       }));
   loop.Run();

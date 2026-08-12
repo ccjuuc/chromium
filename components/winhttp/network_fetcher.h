@@ -12,7 +12,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -35,6 +34,10 @@ namespace winhttp {
 
 // Implements a network fetcher in terms of WinHTTP. The class is ref-counted
 // as it is accessed from the main sequence and the worker threads in WinHTTP.
+//
+// Each NetworkFetcher instance is strictly single-use and cannot be reused to
+// send multiple requests consecutively or concurrently. Subsequent attempts to
+// start a fetch will trigger a CHECK failure.
 class NetworkFetcher : public base::RefCountedThreadSafe<NetworkFetcher> {
  public:
   using FetchCompleteCallback = base::OnceCallback<void(int response_code)>;
@@ -140,7 +143,7 @@ class NetworkFetcher : public base::RefCountedThreadSafe<NetworkFetcher> {
   int port_ = 0;
   std::string path_for_request_;
 
-  std::wstring_view verb_;
+  std::wstring verb_;
   std::string request_data_;
   // The value of Content-Type header, e.g. "application/json".
   std::string content_type_;

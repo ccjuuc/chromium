@@ -4,9 +4,12 @@
 
 #include "chrome/browser/ash/login/osauth/profile_prefs_auth_policy_connector.h"
 
+#include <algorithm>
+#include <optional>
+
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
+#include "base/logging.h"
 #include "base/notimplemented.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -37,6 +40,23 @@ PrefService* GetPrefsForUser(const AccountId& account) {
   CHECK(user);
   Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(user);
   CHECK(profile);
+  return profile->GetPrefs();
+}
+
+// Safe version of `GetPrefsForUser` which won't crash in case the `account_id`
+// is invalid, or there's no associated `User` or `Profile`.
+PrefService* GetPrefsForUserSafe(const AccountId& account_id) {
+  const user_manager::User* user =
+      user_manager::UserManager::Get()->FindUser(account_id);
+  if (!user) {
+    LOG(WARNING) << "No user found for the given account ID: " << account_id;
+    return nullptr;
+  }
+  Profile* profile = ash::ProfileHelper::Get()->GetProfileByUser(user);
+  if (!profile) {
+    LOG(WARNING) << "No profile found for the user: " << account_id;
+    return nullptr;
+  }
   return profile->GetPrefs();
 }
 
@@ -83,8 +103,9 @@ std::optional<bool> ProfilePrefsAuthPolicyConnector::GetRecoveryMandatoryState(
 std::optional<LocalAuthFactorsComplexity>
 ProfilePrefsAuthPolicyConnector::GetLocalAuthFactorsComplexity(
     const AccountId& account) {
-  const PrefService* pref_service = GetPrefsForUser(account);
-  if (!pref_service->HasPrefPath(prefs::kLocalAuthFactorsComplexity)) {
+  const PrefService* pref_service = GetPrefsForUserSafe(account);
+  if (!pref_service ||
+      !pref_service->HasPrefPath(prefs::kLocalAuthFactorsComplexity)) {
     return std::nullopt;
   }
   int val = pref_service->GetInteger(prefs::kLocalAuthFactorsComplexity);
@@ -95,12 +116,29 @@ std::optional<AuthFactorsSet>
 ProfilePrefsAuthPolicyConnector::AllowedLocalAuthFactors(
     const AccountId& account) {
   const PrefService* pref_service = GetPrefsForUser(account);
-  if (!pref_service->HasPrefPath(prefs::kLocalAuthFactors)) {
+  if (!pref_service->HasPrefPath(prefs::kAllowedLocalAuthFactors)) {
+    // Returning empty here means that there are no restrictions on the auth
+    // factors that can be set.
     return std::nullopt;
   }
-  const base::Value::List* allowed_auth_factors =
-      &pref_service->GetList(prefs::kLocalAuthFactors);
+  const base::ListValue* allowed_auth_factors =
+      &pref_service->GetList(prefs::kAllowedLocalAuthFactors);
   return GetAuthFactorsSetFromPolicyList(allowed_auth_factors);
+}
+
+std::optional<bool>
+ProfilePrefsAuthPolicyConnector::IsPinAllowedByQuickUnlockPolicy(
+    const AccountId& account) {
+  const PrefService* pref_service = GetPrefsForUser(account);
+  if (!pref_service->HasPrefPath(prefs::kQuickUnlockModeAllowlist)) {
+    // Return true means no restrictions, HasPrefPath checks for default and
+    // this is only default for consumers and in that case it makes sense to
+    // return empty here.
+    return std::nullopt;
+  }
+  const base::ListValue* quick_unlock_factors =
+      &pref_service->GetList(prefs::kQuickUnlockModeAllowlist);
+  return HasPinFactor(quick_unlock_factors);
 }
 
 bool ProfilePrefsAuthPolicyConnector::IsAuthFactorManaged(
@@ -131,7 +169,7 @@ bool ProfilePrefsAuthPolicyConnector::IsAuthFactorUserModifiable(
     }
     case AshAuthFactor::kLegacyPin: {
       // Lists of factors that are allowed for some purpose.
-      const base::Value::List* pref_lists[] = {
+      const base::ListValue* pref_lists[] = {
           &prefs->GetList(prefs::kQuickUnlockModeAllowlist),
           &prefs->GetList(prefs::kWebAuthnFactors),
       };
@@ -144,7 +182,7 @@ bool ProfilePrefsAuthPolicyConnector::IsAuthFactorUserModifiable(
 
       for (const auto* pref_list : pref_lists) {
         for (const auto& pref_list_value : pref_list_values) {
-          if (base::Contains(*pref_list, pref_list_value)) {
+          if (std::ranges::contains(*pref_list, pref_list_value)) {
             return true;
           }
         }

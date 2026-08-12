@@ -5,8 +5,6 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.CARD_TYPE;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType.TAB;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -24,8 +22,9 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
@@ -51,11 +50,11 @@ public class TabListRecyclerView extends RecyclerView
     private boolean mBlockTouchInput;
     private boolean mIsSmoothScrolling;
     // Null unless item animations are disabled.
-    private RecyclerView.@Nullable ItemAnimator mDisabledAnimatorHolder;
+    private @Nullable ItemAnimator mDisabledAnimatorHolder;
 
     private final RunOnNextLayoutDelegate mRunOnNextLayoutDelegate;
-    private final ObservableSupplierImpl<Boolean> mIsAnimatorRunningSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableNonNullObservableSupplier<Boolean> mIsAnimatorRunningSupplier =
+            ObservableSuppliers.createNonNull(false);
 
     private @Nullable TabListItemAnimator mTabListItemAnimator;
     private @Nullable Callback<TabKeyEventData> mKeyPageListenerCallback;
@@ -131,9 +130,14 @@ public class TabListRecyclerView extends RecyclerView
         }
     }
 
-    void setupCustomItemAnimator() {
+    public void setupCustomItemAnimator() {
+        setupCustomItemAnimator(/* useClipAnimations= */ false);
+    }
+
+    public void setupCustomItemAnimator(boolean useClipAnimations) {
         if (mTabListItemAnimator == null) {
-            mTabListItemAnimator = new TabListItemAnimator(mIsAnimatorRunningSupplier);
+            mTabListItemAnimator =
+                    new TabListItemAnimator(mIsAnimatorRunningSupplier, useClipAnimations);
             setItemAnimator(mTabListItemAnimator);
         }
     }
@@ -149,8 +153,7 @@ public class TabListRecyclerView extends RecyclerView
     /**
      * Returns a boolean indicating whether any animator in {@link TabListItemAnimator} is running.
      */
-    @Nullable
-    ObservableSupplier<Boolean> getIsAnimatorRunningSupplier() {
+    @Nullable NonNullObservableSupplier<Boolean> getIsAnimatorRunningSupplier() {
         return mIsAnimatorRunningSupplier;
     }
 
@@ -353,7 +356,9 @@ public class TabListRecyclerView extends RecyclerView
         if (holder == null || tabIndex == TabModel.INVALID_TAB_INDEX) return Tab.INVALID_TAB_ID;
         PropertyModel model = holder.model;
         assumeNonNull(model);
-        return model.get(CARD_TYPE) == TAB ? model.get(TabProperties.TAB_ID) : Tab.INVALID_TAB_ID;
+        return TabProperties.isTabOrTabGroup(model)
+                ? model.get(TabProperties.TAB_ID)
+                : Tab.INVALID_TAB_ID;
     }
 
     @Override

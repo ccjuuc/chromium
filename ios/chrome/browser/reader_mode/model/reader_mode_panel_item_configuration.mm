@@ -9,12 +9,15 @@
 #import "ios/chrome/browser/contextual_panel/model/contextual_panel_item_type.h"
 #import "ios/chrome/browser/contextual_panel/model/contextual_panel_tab_helper.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_service_factory.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_service_factory.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/reader_mode/model/constants.h"
+#import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/reader_mode_commands.h"
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/web_state.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -50,11 +53,10 @@ ReaderModePanelItemConfiguration::ReaderModePanelItemConfiguration(
       IDS_IOS_CONTEXTUAL_PANEL_READER_MODE_MODEL_ENTRYPOINT_MESSAGE);
   accessibility_hint = l10n_util::GetStringUTF8(
       IDS_IOS_CONTEXTUAL_PANEL_READER_MODE_MODEL_ENTRYPOINT_HINT);
-  entrypoint_image_name = base::SysNSStringToUTF8(GetReaderModeSymbolName());
-  image_type = ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol;
+  entrypoint_symbol = SymbolReaderMode;
   relevance = ContextualPanelItemConfiguration::low_relevance - 1;
-  entrypoint_custom_action =
-      base::BindRepeating(&ActivateReaderModeInWebState, web_state->GetWeakPtr());
+  entrypoint_custom_action = base::BindRepeating(&ActivateReaderModeInWebState,
+                                                 web_state->GetWeakPtr());
 
   ReaderModeTabHelper* reader_mode_tab_helper =
       ReaderModeTabHelper::FromWebState(web_state);
@@ -68,9 +70,13 @@ ReaderModePanelItemConfiguration::~ReaderModePanelItemConfiguration() = default;
 #pragma mark - ContextualPanelItemConfiguration
 
 void ReaderModePanelItemConfiguration::DidTransitionToSmallEntrypoint() {
-  if (engagement_tracker_) {
+  if (!ShouldIgnoreReaderModeBadgeThreshold() && engagement_tracker_) {
     engagement_tracker_->Dismissed(
         feature_engagement::kIPHiOSReaderModeLargeOmniboxEntrypointFeature);
+  }
+  if (IsProfileEligibleForGemini() ||
+      IsProactiveSuggestionsFrameworkEnabled()) {
+    Invalidate();
   }
 }
 
@@ -84,14 +90,16 @@ void ReaderModePanelItemConfiguration::ReaderModeTabHelperDestroyed(
 
 void ReaderModePanelItemConfiguration::ReaderModeWebStateDidLoadContent(
     ReaderModeTabHelper* tab_helper,
-    web::WebState* web_state) {
-}
+    web::WebState* web_state) {}
 
 void ReaderModePanelItemConfiguration::ReaderModeWebStateWillBecomeUnavailable(
     ReaderModeTabHelper* tab_helper,
     web::WebState* web_state,
     ReaderModeDeactivationReason reason) {
-  Invalidate();
+  if (IsProfileEligibleForGemini() ||
+      IsProactiveSuggestionsFrameworkEnabled()) {
+    Invalidate();
+  }
 }
 
 void ReaderModePanelItemConfiguration::ReaderModeDistillationFailed(
@@ -106,8 +114,7 @@ void ReaderModePanelItemConfiguration::WebStateDestroyed(
   web_state_observation_.Reset();
 }
 
-void ReaderModePanelItemConfiguration::WasHidden(web::WebState* web_state) {
-}
+void ReaderModePanelItemConfiguration::WasHidden(web::WebState* web_state) {}
 
 #pragma mark - Private
 
@@ -124,18 +131,21 @@ void ReaderModePanelItemConfiguration::Invalidate() {
   }
 }
 
-bool ReaderModePanelItemConfiguration::IsProfileEligibleForBwg() {
+bool ReaderModePanelItemConfiguration::IsProfileEligibleForGemini() {
   web::WebState* web_state = web_state_observation_.GetSource();
   if (!web_state || web_state->IsBeingDestroyed()) {
     return false;
   }
   ProfileIOS* profile =
       ProfileIOS::FromBrowserState(web_state->GetBrowserState());
-  BwgService* bwg_service = BwgServiceFactory::GetForProfile(profile);
-  return bwg_service && bwg_service->IsProfileEligibleForBwg();
+  GeminiService* gemini_service = GeminiServiceFactory::GetForProfile(profile);
+  return gemini_service && gemini_service->IsProfileEligibleForGemini();
 }
 
 bool ReaderModePanelItemConfiguration::CanShowLargeEntrypointMessage() {
+  if (ShouldIgnoreReaderModeBadgeThreshold()) {
+    return true;
+  }
   return engagement_tracker_ &&
          engagement_tracker_->ShouldTriggerHelpUI(
              feature_engagement::

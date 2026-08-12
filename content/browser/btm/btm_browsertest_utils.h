@@ -16,17 +16,12 @@ namespace blink {
 class StorageKey;
 }
 
-namespace net {
-class SchemefulSite;
-}
-
 namespace url {
 class Origin;
 }
 
 namespace content {
 class BrowserContext;
-class RenderFrameHost;
 class WebContents;
 
 // Wraps TpcBlockingBrowserClient for use in content browser tests (which
@@ -41,12 +36,6 @@ class ContentBrowserTestTpcBlockingBrowserClient
       const blink::StorageKey& storage_key,
       net::CookieSettingOverrides overrides) override;
 
-  void GrantCookieAccessDueToHeuristic(BrowserContext* browser_context,
-                                       const net::SchemefulSite& top_frame_site,
-                                       const net::SchemefulSite& accessing_site,
-                                       base::TimeDelta ttl,
-                                       bool ignore_schemes) override;
-
   bool AreThirdPartyCookiesGenerallyAllowed(BrowserContext* browser_context,
                                             WebContents* web_contents) override;
 
@@ -56,12 +45,6 @@ class ContentBrowserTestTpcBlockingBrowserClient
       BrowserContext* browser_context,
       const url::Origin& destination_origin,
       PrivacySandboxInvokingAPI invoking_api) override;
-
-  bool IsInterestGroupAPIAllowed(BrowserContext* browser_context,
-                                 RenderFrameHost* render_frame_host,
-                                 InterestGroupApiOperation operation,
-                                 const url::Origin& top_frame_origin,
-                                 const url::Origin& api_origin) override;
 
   TpcBlockingBrowserClient& impl() { return impl_; }
 

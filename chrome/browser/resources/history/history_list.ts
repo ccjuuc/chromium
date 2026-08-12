@@ -9,7 +9,7 @@ import 'chrome://resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import 'chrome://resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
 import './history_item.js';
 
-import type {HistoryEntry, HistoryQuery, PageCallbackRouter, PageHandlerRemote, QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
+import type {HistoryEntry, HistoryQuery, PageCallbackRouter, QueryState} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
@@ -21,8 +21,7 @@ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import type {BrowserService} from './browser_service.js';
-import {BrowserServiceImpl} from './browser_service.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 import {BROWSING_GAP_TIME, VisitContextMenuAction} from './constants.js';
 import type {HistoryItemElement} from './history_item.js';
 import {getCss} from './history_list.css.js';
@@ -43,7 +42,7 @@ type HistoryCheckboxSelectEvent = CustomEvent<{
 
 export interface HistoryListElement {
   $: {
-    infiniteList: CrInfiniteListElement,
+    infiniteList: CrInfiniteListElement<HistoryEntry>,
     dialog: CrLazyRenderLitElement<CrDialogElement>,
     noResults: HTMLElement,
     sharedMenu: CrLazyRenderLitElement<CrActionMenuElement>,
@@ -119,15 +118,11 @@ export class HistoryListElement extends HistoryListElementBase {
   }
 
   protected accessor historyData_: HistoryEntry[] = [];
-  private browserService_: BrowserService = BrowserServiceImpl.getInstance();
-  private callbackRouter_: PageCallbackRouter =
-      BrowserServiceImpl.getInstance().callbackRouter;
+  private callbackRouter_: PageCallbackRouter;
   protected accessor canDeleteHistory_: boolean =
       loadTimeData.getBoolean('allowDeletingHistory');
   protected accessor actionMenuModel_: ActionMenuModel|null = null;
   private lastOffsetHeight_: number = 0;
-  private pageHandler_: PageHandlerRemote =
-      BrowserServiceImpl.getInstance().handler;
   private resizeObserver_: ResizeObserver = new ResizeObserver(() => {
     if (this.lastOffsetHeight_ === 0) {
       this.lastOffsetHeight_ = this.scrollTarget.offsetHeight;
@@ -147,19 +142,48 @@ export class HistoryListElement extends HistoryListElementBase {
   accessor searchedTerm: string = '';
   accessor selectedItems: Set<number> = new Set();
   accessor pendingDelete: boolean = false;
-  protected accessor lastFocused_: HTMLElement|null;
-  protected accessor listBlurred_: boolean;
+  protected accessor lastFocused_: HTMLElement|null = null;
+  protected accessor listBlurred_: boolean = false;
   accessor lastSelectedIndex: number = -1;
-  accessor queryState: QueryState;
+  accessor queryState: QueryState = {
+    incremental: false,
+    querying: false,
+    searchTerm: '',
+    after: null,
+    includeUserVisits: true,
+    includeActorVisits: true,
+  };
   accessor scrollTarget: HTMLElement = document.documentElement;
   accessor scrollOffset: number = 0;
   private onHistoryDeletedListenerId_: number|null = null;
+
+  constructor() {
+    super();
+    this.callbackRouter_ = BrowserProxyImpl.getInstance().callbackRouter;
+  }
 
   override connectedCallback() {
     super.connectedCallback();
     this.onHistoryDeletedListenerId_ =
         this.callbackRouter_.onHistoryDeleted.addListener(
             this.onHistoryDeleted_.bind(this));
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.onHistoryDeletedListenerId_ !== null) {
+      this.callbackRouter_.removeListener(this.onHistoryDeletedListenerId_);
+      this.onHistoryDeletedListenerId_ = null;
+    }
+  }
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+    if (changedPrivateProperties.has('historyData_')) {
+      this.isEmpty = this.historyData_.length === 0;
+    }
   }
 
   override firstUpdated() {
@@ -172,15 +196,6 @@ export class HistoryListElement extends HistoryListElementBase {
         'remove-bookmark-stars', e => this.onRemoveBookmarkStars_(e));
   }
 
-  override willUpdate(changedProperties: PropertyValues<this>) {
-    super.willUpdate(changedProperties);
-    const changedPrivateProperties =
-        changedProperties as Map<PropertyKey, unknown>;
-    if (changedPrivateProperties.has('historyData_')) {
-      this.isEmpty = this.historyData_.length === 0;
-    }
-  }
-
   override updated(changedProperties: PropertyValues<this>) {
     super.updated(changedProperties);
     if (changedProperties.has('isActive')) {
@@ -190,13 +205,6 @@ export class HistoryListElement extends HistoryListElementBase {
     if (changedProperties.has('scrollTarget')) {
       this.onScrollTargetChanged_(changedProperties.get('scrollTarget'));
     }
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    assert(this.onHistoryDeletedListenerId_);
-    this.callbackRouter_.removeListener(this.onHistoryDeletedListenerId_);
-    this.onHistoryDeletedListenerId_ = null;
   }
 
   /////////////////////////////////////////////////////////////////////////////
@@ -262,16 +270,14 @@ export class HistoryListElement extends HistoryListElementBase {
     this.historyData_ = [...this.historyData_, ...results];
     this.resultLoadingDisabled_ = finished;
 
-    if (loadTimeData.getBoolean('enableBrowsingHistoryActorIntegrationM1')) {
-      this.recordActorVisitShown_(results);
-    }
+    this.recordActorVisitShown_(results);
   }
 
   private recordActorVisitShown_(historyResults: HistoryEntry[]) {
     const historyResultsContainActorVisit =
         historyResults.some((result) => result.isActorVisit);
 
-    this.browserService_.recordBooleanHistogram(
+    BrowserProxyImpl.getInstance().recordBooleanHistogram(
         'HistoryPage.ActorItemsShown', historyResultsContainActorVisit);
   }
 
@@ -326,9 +332,9 @@ export class HistoryListElement extends HistoryListElementBase {
       return;
     }
 
-    this.browserService_.recordAction('RemoveSelected');
+    BrowserProxyImpl.getInstance().recordAction('RemoveSelected');
     if (this.queryState.searchTerm !== '') {
-      this.browserService_.recordAction('SearchResultRemove');
+      BrowserProxyImpl.getInstance().recordAction('SearchResultRemove');
     }
     this.$.dialog.get().showModal();
 
@@ -421,7 +427,7 @@ export class HistoryListElement extends HistoryListElementBase {
   // Event listeners:
 
   protected onDialogConfirmClick_() {
-    this.browserService_.recordAction('ConfirmRemoveSelected');
+    BrowserProxyImpl.getInstance().recordAction('ConfirmRemoveSelected');
 
     this.deleteSelected_();
     const dialog = this.$.dialog.getIfExists();
@@ -430,7 +436,7 @@ export class HistoryListElement extends HistoryListElementBase {
   }
 
   protected onDialogCancelClick_() {
-    this.browserService_.recordAction('CancelRemoveSelected');
+    BrowserProxyImpl.getInstance().recordAction('CancelRemoveSelected');
 
     const dialog = this.$.dialog.getIfExists();
     assert(dialog);
@@ -473,21 +479,16 @@ export class HistoryListElement extends HistoryListElementBase {
   }
 
   private deleteItems_(items: HistoryEntry[]): Promise<void> {
-    const removalList = items.map(item => ({
-                                    url: item.url,
-                                    timestamps: item.allTimestamps,
-                                  }));
+    const removalList = items.flatMap(
+        item => Object.entries(item.allTimestamps)
+                    .map(([url, timestamps]) => ({url, timestamps})));
 
     this.pendingDelete = true;
-    return this.pageHandler_.removeVisits(removalList);
+    return BrowserProxyImpl.getInstance().handler.removeVisits(removalList);
   }
 
   private recordContextMenuActionsHistogram_(action: VisitContextMenuAction) {
-    if (!loadTimeData.getBoolean('enableBrowsingHistoryActorIntegrationM1')) {
-      return;
-    }
-
-    this.browserService_.recordHistogram(
+    BrowserProxyImpl.getInstance().recordHistogram(
         this.actionMenuModel_!.item.isActorVisit ?
             'HistoryPage.ActorContextMenuActions' :
             'HistoryPage.NonActorContextMenuActions',
@@ -495,7 +496,7 @@ export class HistoryListElement extends HistoryListElementBase {
   }
 
   protected onMoreFromSiteClick_() {
-    this.browserService_.recordAction('EntryMenuShowMoreFromSite');
+    BrowserProxyImpl.getInstance().recordAction('EntryMenuShowMoreFromSite');
     this.recordContextMenuActionsHistogram_(
         VisitContextMenuAction.MORE_FROM_THIS_SITE_CLICKED);
 
@@ -511,13 +512,34 @@ export class HistoryListElement extends HistoryListElementBase {
     this.recordContextMenuActionsHistogram_(
         VisitContextMenuAction.REMOVE_BOOKMARK_CLICKED);
 
-    this.pageHandler_.removeBookmark(this.actionMenuModel_!.item.url);
+    BrowserProxyImpl.getInstance().handler.removeBookmark(
+        this.actionMenuModel_!.item.url);
     this.fire('remove-bookmark-stars', this.actionMenuModel_!.item.url);
     this.closeMenu_();
   }
 
+  private isCriticalActionsEnabled_(): boolean {
+    return loadTimeData.getBoolean('isCriticalActionsEnabled');
+  }
+
+  protected canShowReviewGeminiActivity_(): boolean {
+    return this.isCriticalActionsEnabled_() &&
+        !!this.actionMenuModel_?.item.isActorVisit;
+  }
+
+  protected onReviewGeminiActivityClick_(e: MouseEvent) {
+    BrowserProxyImpl.getInstance().recordAction(
+        'EntryMenuReviewGeminiActivity');
+    this.recordContextMenuActionsHistogram_(
+        VisitContextMenuAction.REVIEW_GEMINI_ACTIVITY_CLICKED);
+
+    BrowserProxyImpl.getInstance().navigateToUrl(
+        loadTimeData.getString('myActivityGeminiAppsUrl'), '_blank', e);
+    this.closeMenu_();
+  }
+
   protected onRemoveFromHistoryClick_() {
-    this.browserService_.recordAction('EntryMenuRemoveFromHistory');
+    BrowserProxyImpl.getInstance().recordAction('EntryMenuRemoveFromHistory');
     this.recordContextMenuActionsHistogram_(
         VisitContextMenuAction.REMOVE_FROM_HISTORY_CLICKED);
 
@@ -561,7 +583,7 @@ export class HistoryListElement extends HistoryListElementBase {
 
     // Handle shift selection. Change the selection state of all items between
     // |path| and |lastSelected| to the selection state of |item|.
-    if (e.detail.shiftKey && this.lastSelectedIndex !== undefined) {
+    if (e.detail.shiftKey && this.lastSelectedIndex !== -1) {
       for (let i = Math.min(index, this.lastSelectedIndex);
            i <= Math.max(index, this.lastSelectedIndex); i++) {
         indices.push(i);
@@ -590,8 +612,8 @@ export class HistoryListElement extends HistoryListElementBase {
       return false;
     }
 
-    const currentItem = this.historyData_[index];
-    const nextItem = this.historyData_[index + 1];
+    const currentItem = this.historyData_[index]!;
+    const nextItem = this.historyData_[index + 1]!;
 
     if (this.searchedTerm) {
       return currentItem.dateShort !== nextItem.dateShort;
@@ -611,8 +633,8 @@ export class HistoryListElement extends HistoryListElementBase {
       return false;
     }
     return i === 0 ||
-        this.historyData_[i].dateRelativeDay !==
-        this.historyData_[i - 1].dateRelativeDay;
+        this.historyData_[i]!.dateRelativeDay !==
+        this.historyData_[i - 1]!.dateRelativeDay;
   }
 
   /**
@@ -621,12 +643,12 @@ export class HistoryListElement extends HistoryListElementBase {
    */
   protected isCardEnd_(_item: HistoryEntry, i: number): boolean {
     const length = this.historyData_.length;
-    if (i === undefined || length === 0 || i > length - 1) {
+    if (length === 0 || i > length - 1) {
       return false;
     }
     return i === length - 1 ||
-        this.historyData_[i].dateRelativeDay !==
-        this.historyData_[i + 1].dateRelativeDay;
+        this.historyData_[i]!.dateRelativeDay !==
+        this.historyData_[i + 1]!.dateRelativeDay;
   }
 
   protected hasResults_(): boolean {
@@ -649,27 +671,18 @@ export class HistoryListElement extends HistoryListElementBase {
       return;
     }
 
-    let currentDate = results[0].dateRelativeDay;
+    let currentDate = results[0]!.dateRelativeDay;
 
-    for (let i = 0; i < results.length; i++) {
+    for (const result of results) {
       // Sets the default values for these fields to prevent undefined types.
-      results[i].selected = false;
-      results[i].readableTimestamp =
-          info.term === '' ? results[i].dateTimeOfDay : results[i].dateShort;
+      result.selected = false;
+      result.readableTimestamp =
+          info.term === '' ? result.dateTimeOfDay : result.dateShort;
 
-      if (results[i].dateRelativeDay !== currentDate) {
-        currentDate = results[i].dateRelativeDay;
+      if (result.dateRelativeDay !== currentDate) {
+        currentDate = result.dateRelativeDay;
       }
     }
-  }
-
-  private getHistoryEmbeddingsMatches_(): HistoryEntry[] {
-    return this.historyData_.slice(0, 3);
-  }
-
-  private showHistoryEmbeddings_(): boolean {
-    return loadTimeData.getBoolean('enableHistoryEmbeddings') &&
-        !!this.searchedTerm && this.historyData_?.length > 0;
   }
 
   private onIsActiveChanged_() {
@@ -725,9 +738,13 @@ export class HistoryListElement extends HistoryListElementBase {
     this.listBlurred_ = e.detail.value;
   }
 
+  protected onRestoreListFocus_() {
+    this.listBlurred_ = false;
+  }
+
   private getSelectedEntries_(): HistoryEntry[] {
     // `selectedItems` is a Set<number> of row-indexes.
-    return Array.from(this.selectedItems, idx => this.historyData_[idx]);
+    return Array.from(this.selectedItems, idx => this.historyData_[idx]!);
   }
 }
 

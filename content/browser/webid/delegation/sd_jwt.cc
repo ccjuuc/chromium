@@ -4,8 +4,6 @@
 
 #include "sd_jwt.h"
 
-#include <map>
-
 #include "base/base64.h"
 #include "base/base64url.h"
 #include "base/containers/span.h"
@@ -14,7 +12,10 @@
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
+#include "crypto/keypair.h"
 #include "crypto/random.h"
+#include "crypto/sign.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -45,8 +46,13 @@ Jwk::Jwk() = default;
 Jwk::~Jwk() = default;
 Jwk::Jwk(const Jwk& other) = default;
 
+bool Jwk::operator==(const Jwk& other) const {
+  return kty == other.kty && crv == other.crv && x == other.x && y == other.y &&
+         d == other.d && n == other.n && e == other.e;
+}
+
 // static
-std::optional<Jwk> Jwk::From(const base::Value::Dict& dict) {
+std::optional<Jwk> Jwk::From(const base::DictValue& dict) {
   Jwk result;
 
   auto* kty = dict.FindString("kty");
@@ -115,8 +121,8 @@ std::optional<Jwk> Jwk::From(const base::Value::Dict& dict) {
   return result;
 }
 
-base::Value::Dict Jwk::ToDict() const {
-  base::Value::Dict result;
+base::DictValue Jwk::ToDict() const {
+  base::DictValue result;
 
   result.Set("kty", kty);
   if (kty == "EC") {
@@ -154,7 +160,7 @@ Disclosure::~Disclosure() = default;
 Disclosure::Disclosure(const Disclosure& other) = default;
 
 // static
-std::optional<Disclosure> Disclosure::From(const base::Value::List& list) {
+std::optional<Disclosure> Disclosure::From(const base::ListValue& list) {
   // https://www.ietf.org/archive/id/draft-ietf-oauth-selective-disclosure-jwt-13.html#name-disclosures
   if (list.size() != 3) {
     return std::nullopt;
@@ -180,7 +186,7 @@ std::optional<Disclosure> Disclosure::From(const base::Value::List& list) {
 }
 
 std::optional<JSONString> Disclosure::ToJson() const {
-  base::Value::List list;
+  base::ListValue list;
 
   list.Append(salt.value());
   list.Append(name);
@@ -218,7 +224,7 @@ Base64String Disclosure::CreateSalt() {
   return Base64String(salt);
 }
 
-std::optional<SdJwt> SdJwt::From(const base::Value::List& list) {
+std::optional<SdJwt> SdJwt::From(const base::ListValue& list) {
   if (list.size() != 2) {
     return std::nullopt;
   }
@@ -249,7 +255,7 @@ std::optional<SdJwt> SdJwt::From(const base::Value::List& list) {
 }
 
 // static
-std::optional<base::Value::List> SdJwt::Parse(const std::string_view& sdjwt) {
+std::optional<base::ListValue> SdJwt::Parse(const std::string_view& sdjwt) {
   // First, split the token into the issued JWT and the disclosures.
   auto pair = base::SplitStringOnce(sdjwt, "~");
   if (!pair) {
@@ -261,7 +267,7 @@ std::optional<base::Value::List> SdJwt::Parse(const std::string_view& sdjwt) {
     return std::nullopt;
   }
 
-  base::Value::List disclosures;
+  base::ListValue disclosures;
 
   if (!pair->second.empty()) {
     if (pair->second.back() != '~') {
@@ -290,7 +296,7 @@ std::optional<base::Value::List> SdJwt::Parse(const std::string_view& sdjwt) {
     }
   }
 
-  base::Value::List result;
+  base::ListValue result;
   result.Append(std::move(*jwt));
   result.Append(std::move(disclosures));
 
@@ -302,7 +308,7 @@ Header::~Header() = default;
 Header::Header(const Header& other) = default;
 
 // static
-std::optional<Header> Header::From(const base::Value::Dict& json) {
+std::optional<Header> Header::From(const base::DictValue& json) {
   Header result;
 
   auto* typ = json.FindString("typ");
@@ -317,6 +323,10 @@ std::optional<Header> Header::From(const base::Value::Dict& json) {
   }
   result.alg = *alg;
 
+  auto* kid = json.FindString("kid");
+  if (kid) {
+    result.kid = *kid;
+  }
   auto* jwk = json.FindDict("jwk");
   if (jwk) {
     // JWK is an optional parameter.
@@ -327,11 +337,14 @@ std::optional<Header> Header::From(const base::Value::Dict& json) {
 }
 
 std::optional<JSONString> Header::ToJson() const {
-  base::Value::Dict header_dict;
+  base::DictValue header_dict;
 
   header_dict.Set("typ", typ);
   header_dict.Set("alg", alg);
 
+  if (!kid.empty()) {
+    header_dict.Set("kid", kid);
+  }
   if (jwk) {
     header_dict.Set("jwk", jwk->ToDict());
   }
@@ -362,7 +375,7 @@ Payload::~Payload() = default;
 Payload::Payload(const Payload& other) = default;
 
 // static
-std::optional<Payload> Payload::From(const base::Value::Dict& json) {
+std::optional<Payload> Payload::From(const base::DictValue& json) {
   Payload result;
 
   auto* aud = json.FindString("aud");
@@ -436,11 +449,15 @@ std::optional<Payload> Payload::From(const base::Value::Dict& json) {
     result.email = *email;
   }
 
+  auto email_verified = json.FindBool("email_verified");
+  if (email_verified) {
+    result.email_verified = *email_verified;
+  }
   return result;
 }
 
 std::optional<JSONString> Payload::ToJson() const {
-  base::Value::Dict payload_dict;
+  base::DictValue payload_dict;
 
   if (!iss.empty()) {
     payload_dict.Set("iss", iss);
@@ -455,9 +472,7 @@ std::optional<JSONString> Payload::ToJson() const {
   }
 
   if (cnf) {
-    base::Value::Dict jwk;
-
-    base::Value::Dict cnf_dict;
+    base::DictValue cnf_dict;
     cnf_dict.Set("jwk", cnf->jwk.ToDict());
     payload_dict.Set("cnf", std::move(cnf_dict));
   }
@@ -483,7 +498,7 @@ std::optional<JSONString> Payload::ToJson() const {
   }
 
   if (_sd.size() > 0) {
-    base::Value::List list;
+    base::ListValue list;
     for (const auto& disclosure : _sd) {
       list.Append(disclosure.value());
     }
@@ -498,6 +513,9 @@ std::optional<JSONString> Payload::ToJson() const {
     payload_dict.Set("email", email);
   }
 
+  if (email_verified) {
+    payload_dict.Set("email_verified", email_verified);
+  }
   auto result = base::WriteJson(payload_dict);
 
   if (!result) {
@@ -530,7 +548,7 @@ JSONString Jwt::Serialize() const {
 }
 
 // static
-std::optional<Jwt> Jwt::From(const base::Value::List& list) {
+std::optional<Jwt> Jwt::From(const base::ListValue& list) {
   if (list.size() != 3) {
     return std::nullopt;
   }
@@ -548,7 +566,7 @@ std::optional<Jwt> Jwt::From(const base::Value::List& list) {
 }
 
 // static
-std::optional<base::Value::List> Jwt::Parse(const std::string_view& jwt) {
+std::optional<base::ListValue> Jwt::Parse(const std::string_view& jwt) {
   // TODO: implement the validations described here:
   // https://www.rfc-editor.org/rfc/rfc7519.html#section-7.2
 
@@ -565,7 +583,7 @@ std::optional<base::Value::List> Jwt::Parse(const std::string_view& jwt) {
     return std::nullopt;
   }
 
-  base::Value::List result;
+  base::ListValue result;
   result.Append(*header);
 
   auto payload = Base64UrlDecode(parts[1]);
@@ -592,6 +610,20 @@ bool Jwt::Sign(Signer signer) {
                         &signature.value());
 
   return true;
+}
+
+bool Jwt::Verify(Verifier verifier) const {
+  std::string message = Base64UrlEncode(header.value()).value() + "." +
+                        Base64UrlEncode(payload.value()).value();
+
+  std::string sig_bytes;
+  if (!base::Base64UrlDecode(signature.value(),
+                             base::Base64UrlDecodePolicy::IGNORE_PADDING,
+                             &sig_bytes)) {
+    return false;
+  }
+
+  return std::move(verifier).Run(message, base::as_byte_span(sig_bytes));
 }
 
 SdJwt::SdJwt() = default;
@@ -631,15 +663,15 @@ std::optional<std::vector<JSONString>> SdJwt::Disclose(
   // Implements the selective disclosure:
   // https://www.ietf.org/archive/id/draft-ietf-oauth-selective-disclosure-jwt-13.html#name-disclosing-to-a-verifier
 
-  std::map<std::string, JSONString> disclosures_by_name;
-  for (const std::pair<std::string, JSONString>& disclosure : disclosures) {
-    disclosures_by_name[disclosure.first] = disclosure.second;
-  }
+  const absl::flat_hash_map<std::string, JSONString> disclosures_by_name = {
+      disclosures.begin(), disclosures.end()};
 
   std::vector<JSONString> result;
+  result.reserve(selector.size());
   for (const std::string& name : selector) {
-    if (disclosures_by_name.count(name)) {
-      result.push_back(disclosures_by_name[name]);
+    if (auto it = disclosures_by_name.find(name);
+        it != disclosures_by_name.end()) {
+      result.push_back(it->second);
     } else {
       return std::nullopt;
     }

@@ -21,66 +21,69 @@ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 /** The properties required to build the fake search box on new tab page. */
 @NullMarked
 interface SearchBoxProperties {
+    WritableObjectPropertyKey<OnClickListener> AI_CHIP_CLICK_CALLBACK =
+            new WritableObjectPropertyKey<>();
+    WritableBooleanPropertyKey AI_CHIP_VISIBILITY = new WritableBooleanPropertyKey();
     WritableFloatPropertyKey ALPHA = new WritableFloatPropertyKey();
-    WritableBooleanPropertyKey VISIBILITY = new WritableBooleanPropertyKey();
-    WritableBooleanPropertyKey VOICE_SEARCH_VISIBILITY = new WritableBooleanPropertyKey();
-    WritableObjectPropertyKey<Drawable> VOICE_SEARCH_DRAWABLE = new WritableObjectPropertyKey<>();
-    WritableObjectPropertyKey<ColorStateList> VOICE_SEARCH_COLOR_STATE_LIST =
-            new WritableObjectPropertyKey<>();
-    WritableObjectPropertyKey<OnClickListener> VOICE_SEARCH_CLICK_CALLBACK =
-            new WritableObjectPropertyKey<>();
-
-    WritableBooleanPropertyKey COMPOSEPLATE_BUTTON_VISIBILITY = new WritableBooleanPropertyKey();
-    WritableObjectPropertyKey<OnClickListener> COMPOSEPLATE_BUTTON_CLICK_CALLBACK =
-            new WritableObjectPropertyKey<>();
-    WritableBooleanPropertyKey LENS_VISIBILITY = new WritableBooleanPropertyKey();
+    WritableBooleanPropertyKey APPLY_ELEVATION = new WritableBooleanPropertyKey();
+    WritableBooleanPropertyKey APPLY_WHITE_BACKGROUND_AND_SHADOW = new WritableBooleanPropertyKey();
+    WritableObjectPropertyKey<Drawable> DSE_ICON_DRAWABLE = new WritableObjectPropertyKey<>();
+    WritableObjectPropertyKey<ColorStateList> DSE_ICON_TINT = new WritableObjectPropertyKey<>();
+    WritableBooleanPropertyKey ENABLE_SEARCH_BOX_EDIT_TEXT = new WritableBooleanPropertyKey();
     WritableObjectPropertyKey<OnClickListener> LENS_CLICK_CALLBACK =
             new WritableObjectPropertyKey<>();
-    WritableObjectPropertyKey<String> SEARCH_TEXT = new WritableObjectPropertyKey<>();
-    WritableBooleanPropertyKey SEARCH_HINT_VISIBILITY = new WritableBooleanPropertyKey();
+    WritableBooleanPropertyKey LENS_VISIBILITY = new WritableBooleanPropertyKey();
+    WritableObjectPropertyKey<OnClickListener> PLUS_BUTTON_CLICK_CALLBACK =
+            new WritableObjectPropertyKey<>();
+    WritableBooleanPropertyKey PLUS_BUTTON_VISIBILITY = new WritableBooleanPropertyKey();
     WritableObjectPropertyKey<OnClickListener> SEARCH_BOX_CLICK_CALLBACK =
             new WritableObjectPropertyKey<>();
     WritableObjectPropertyKey<OnDragListener> SEARCH_BOX_DRAG_CALLBACK =
             new WritableObjectPropertyKey<>();
+    WritableIntPropertyKey SEARCH_BOX_END_PADDING = new WritableIntPropertyKey();
+    WritableIntPropertyKey SEARCH_BOX_HEIGHT = new WritableIntPropertyKey();
+    WritableObjectPropertyKey<String> SEARCH_BOX_HINT_TEXT = new WritableObjectPropertyKey<>();
+    WritableIntPropertyKey SEARCH_BOX_TEXT_STYLE_RES_ID = new WritableIntPropertyKey();
+    // Sets the search box text watcher. Previously added text watcher will be removed.
     WritableObjectPropertyKey<TextWatcher> SEARCH_BOX_TEXT_WATCHER =
             new WritableObjectPropertyKey<>();
-    WritableIntPropertyKey SEARCH_BOX_HEIGHT = new WritableIntPropertyKey();
     WritableIntPropertyKey SEARCH_BOX_TOP_MARGIN = new WritableIntPropertyKey();
-    WritableIntPropertyKey SEARCH_BOX_END_PADDING = new WritableIntPropertyKey();
-    WritableIntPropertyKey SEARCH_BOX_START_PADDING = new WritableIntPropertyKey();
-    WritableIntPropertyKey SEARCH_BOX_TEXT_STYLE_RES_ID = new WritableIntPropertyKey();
-    WritableBooleanPropertyKey ENABLE_SEARCH_BOX_EDIT_TEXT = new WritableBooleanPropertyKey();
-    WritableObjectPropertyKey<String> SEARCH_BOX_HINT_TEXT = new WritableObjectPropertyKey<>();
-    WritableBooleanPropertyKey APPLY_WHITE_BACKGROUND_WITH_SHADOW =
-            new WritableBooleanPropertyKey();
-
-    WritableIntPropertyKey COMPOSEPLATE_BUTTON_ICON_RAW_RES_ID = new WritableIntPropertyKey();
+    WritableBooleanPropertyKey SEARCH_HINT_VISIBILITY = new WritableBooleanPropertyKey();
+    WritableObjectPropertyKey<String> SEARCH_TEXT = new WritableObjectPropertyKey<>();
+    WritableObjectPropertyKey<OnClickListener> VOICE_SEARCH_CLICK_CALLBACK =
+            new WritableObjectPropertyKey<>();
+    WritableObjectPropertyKey<ColorStateList> VOICE_SEARCH_COLOR_STATE_LIST =
+            new WritableObjectPropertyKey<>();
+    WritableBooleanPropertyKey VOICE_SEARCH_VISIBILITY = new WritableBooleanPropertyKey();
 
     PropertyKey[] ALL_KEYS =
             new PropertyKey[] {
+                // go/keep-sorted start
+                AI_CHIP_CLICK_CALLBACK,
+                AI_CHIP_VISIBILITY,
                 ALPHA,
-                VISIBILITY,
-                VOICE_SEARCH_VISIBILITY,
-                VOICE_SEARCH_DRAWABLE,
-                VOICE_SEARCH_COLOR_STATE_LIST,
-                VOICE_SEARCH_CLICK_CALLBACK,
-                COMPOSEPLATE_BUTTON_VISIBILITY,
-                COMPOSEPLATE_BUTTON_CLICK_CALLBACK,
-                LENS_VISIBILITY,
+                APPLY_ELEVATION,
+                APPLY_WHITE_BACKGROUND_AND_SHADOW,
+                DSE_ICON_DRAWABLE,
+                DSE_ICON_TINT,
+                ENABLE_SEARCH_BOX_EDIT_TEXT,
                 LENS_CLICK_CALLBACK,
-                SEARCH_TEXT,
-                SEARCH_HINT_VISIBILITY,
+                LENS_VISIBILITY,
+                PLUS_BUTTON_CLICK_CALLBACK,
+                PLUS_BUTTON_VISIBILITY,
                 SEARCH_BOX_CLICK_CALLBACK,
                 SEARCH_BOX_DRAG_CALLBACK,
-                SEARCH_BOX_TEXT_WATCHER,
-                SEARCH_BOX_HEIGHT,
-                SEARCH_BOX_TOP_MARGIN,
                 SEARCH_BOX_END_PADDING,
-                SEARCH_BOX_START_PADDING,
-                SEARCH_BOX_TEXT_STYLE_RES_ID,
-                ENABLE_SEARCH_BOX_EDIT_TEXT,
+                SEARCH_BOX_HEIGHT,
                 SEARCH_BOX_HINT_TEXT,
-                APPLY_WHITE_BACKGROUND_WITH_SHADOW,
-                COMPOSEPLATE_BUTTON_ICON_RAW_RES_ID,
+                SEARCH_BOX_TEXT_STYLE_RES_ID,
+                SEARCH_BOX_TEXT_WATCHER,
+                SEARCH_BOX_TOP_MARGIN,
+                SEARCH_HINT_VISIBILITY,
+                SEARCH_TEXT,
+                VOICE_SEARCH_CLICK_CALLBACK,
+                VOICE_SEARCH_COLOR_STATE_LIST,
+                VOICE_SEARCH_VISIBILITY,
+                // go/keep-sorted end
             };
 }

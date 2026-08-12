@@ -9,10 +9,10 @@ import android.view.LayoutInflater;
 import android.view.View;
 
 import androidx.annotation.IntDef;
-import androidx.annotation.Nullable;
 
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.chrome.browser.tab.TabArchiveSettings;
@@ -83,15 +83,11 @@ public class ArchivedTabsAutoDeletePromoCoordinator {
 
         mModel.set(
                 ArchivedTabsAutoDeletePromoProperties.ON_YES_BUTTON_CLICK_LISTENER,
-                (v) -> {
-                    onPromoChoice(UserChoice.YES);
-                });
+                _ -> onPromoChoice(UserChoice.YES));
 
         mModel.set(
                 ArchivedTabsAutoDeletePromoProperties.ON_NO_BUTTON_CLICK_LISTENER,
-                (v) -> {
-                    onPromoChoice(UserChoice.NO);
-                });
+                _ -> onPromoChoice(UserChoice.NO));
     }
 
     /** Cleans up resources. */

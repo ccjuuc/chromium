@@ -3,22 +3,22 @@
 // found in the LICENSE file.
 
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import '/strings.m.js';
 
+import type {CrTooltipElement} from 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import {MouseHoverableMixinLit} from 'chrome://resources/cr_elements/mouse_hoverable_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {getFaviconForPageURL} from 'chrome://resources/js/icon.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {normalizeURL, TabData, TabItemType} from './tab_data.js';
-import {colorName} from './tab_group_color_helper.js';
+import {getTabGroupColorVar} from './tab_group_color_helper.js';
 import type {Tab} from './tab_search.mojom-webui.js';
 import {getCss} from './tab_search_item.css.js';
 import {getHtml} from './tab_search_item.html.js';
-import {highlightText, tabHasMediaAlerts} from './tab_search_utils.js';
-import {TabAlertState} from './tabs.mojom-webui.js';
+import {getFaviconUrlForTab, getMediaAlertImageClass, highlightText, tabHasMediaAlerts} from './tab_search_utils.js';
 
 
 function deepGet(obj: Record<string, any>, path: string): any {
@@ -45,6 +45,7 @@ export interface TabSearchItemElement {
   $: {
     primaryText: HTMLElement,
     secondaryText: HTMLElement,
+    secondaryTextInner: HTMLElement,
   };
 }
 
@@ -68,6 +69,7 @@ export class TabSearchItemElement extends TabSearchItemBase {
     return {
       data: {type: Object},
       buttonRipples_: {type: Boolean},
+      tabGroupColorRefresh_: {type: Boolean},
       hideTimestamp: {type: Boolean},
       hideUrl: {type: Boolean},
       hideCloseButton: {type: Boolean},
@@ -85,25 +87,31 @@ export class TabSearchItemElement extends TabSearchItemBase {
         faviconUrl: null,
         groupId: null,
         alertStates: [],
-        index: 0,
         isDefaultFavicon: false,
         lastActiveElapsedText: '',
         lastActiveTimeTicks: {internalValue: BigInt(0)},
         pinned: false,
         split: false,
+        splitId: null,
+        splitLayout: null,
         showIcon: false,
         tabId: 1,
         title: '',
-        url: {url: ''},
+        url: '',
       },
       TabItemType.OPEN_TAB, '');
   protected accessor buttonRipples_: boolean =
       loadTimeData.getBoolean('useRipples');
+  protected accessor tabGroupColorRefresh_: boolean =
+      loadTimeData.getBoolean('useTabGroupColorRefresh');
   accessor hideTimestamp: boolean = false;
   accessor size: TabSearchItemSize = TabSearchItemSize.MEDIUM;
   accessor hideUrl: boolean = false;
   accessor hideCloseButton: boolean = false;
-  accessor closeButtonIcon: string = 'tab-search:close';
+  accessor closeButtonIcon: string =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+      'tab-search:close' :
+      'tab-search:close-old';
   accessor closeButtonAriaLabel: string = '';
   accessor closeButtonTooltip: string = '';
 
@@ -114,7 +122,8 @@ export class TabSearchItemElement extends TabSearchItemBase {
       if (this.data.tabGroup) {
         this.style.setProperty(
             '--group-dot-color',
-            `var(--tab-group-color-${colorName(this.data.tabGroup.color)})`);
+            getTabGroupColorVar(
+                this.data.tabGroup.color, this.tabGroupColorRefresh_));
       }
 
       if (changedProperties.has('size')) {
@@ -156,25 +165,28 @@ export class TabSearchItemElement extends TabSearchItemBase {
     return this.role === 'option' ? 'option' : 'button';
   }
 
-  protected onItemClose_(e: Event) {
+  protected onCloseButtonClick_(e: Event) {
     this.dispatchEvent(new CustomEvent('close'));
     e.stopPropagation();
   }
 
-  protected faviconUrl_(): string {
-    const tab = this.data.tab;
-    return (tab as Tab).faviconUrl ?
-        `url("${(tab as Tab).faviconUrl!.url}")` :
-        getFaviconForPageURL(
-            (tab as Tab).isDefaultFavicon ? 'chrome://newtab' : tab.url.url,
-            false);
+  protected onCloseButtonFocus_() {
+    // Manual tooltip control for keyboard focus.
+    const tooltip =
+        this.shadowRoot.querySelector<CrTooltipElement>('cr-tooltip');
+    assert(tooltip);
+    tooltip.show();
   }
 
-  /**
-   * Determines the display attribute value for the group SVG element.
-   */
-  protected groupSvgDisplay_(): string {
-    return this.data.tabGroup ? 'block' : 'none';
+  protected onCloseButtonBlur_() {
+    const tooltip =
+        this.shadowRoot.querySelector<CrTooltipElement>('cr-tooltip');
+    assert(tooltip);
+    tooltip.hide();
+  }
+
+  protected faviconUrl_(): string {
+    return getFaviconUrlForTab(this.data.tab.url, this.data.tab as Tab);
   }
 
   private isOpenTabAndHasMediaAlert_(): boolean {
@@ -194,41 +206,16 @@ export class TabSearchItemElement extends TabSearchItemBase {
    * Returns the correct media alert indicator class name.
    */
   protected getMediaAlertImageClass_(): string {
-    if (!this.isOpenTabAndHasMediaAlert_()) {
-      return '';
-    }
-    // GetTabAlertStatesForContents adds alert indicators in the order of their
-    // priority. Only relevant media alerts are sent over mojo so the first
-    // element in alertStates will be the highest priority media alert to
-    // display.
-    const alert = (this.data.tab as Tab).alertStates[0];
-    switch (alert) {
-      case TabAlertState.kMediaRecording:
-        return 'media-recording';
-      case TabAlertState.kAudioRecording:
-        return 'audio-recording';
-      case TabAlertState.kVideoRecording:
-        return 'video-recording';
-      case TabAlertState.kAudioPlaying:
-        return 'audio-playing';
-      case TabAlertState.kAudioMuting:
-        return 'audio-muting';
-      case TabAlertState.kGlicAccessing:
-        return 'glic-accessing';
-      default:
-        return '';
-    }
-  }
-
-  protected hasTabGroupWithTitle_(): boolean {
-    return !!(this.data.tabGroup && this.data.tabGroup.title);
+    return this.isOpenTabAndHasMediaAlert_() ?
+        getMediaAlertImageClass(this.data.tab as Tab) :
+        '';
   }
 
   private dataChanged_() {
     const data = this.data;
     ([
       ['tab.title', this.$.primaryText],
-      ['hostname', this.$.secondaryText],
+      ['hostname', this.$.secondaryTextInner],
       ['tabGroup.title', this.shadowRoot.querySelector('#groupTitle')],
     ] as Array<[string, HTMLElement | null]>)
         .forEach(([path, element]) => {
@@ -240,9 +227,9 @@ export class TabSearchItemElement extends TabSearchItemBase {
         });
 
     // Show chrome:// if it's a chrome internal url
-    const protocol = new URL(normalizeURL(data.tab.url.url)).protocol;
+    const protocol = new URL(normalizeURL(data.tab.url)).protocol;
     if (protocol === 'chrome:') {
-      this.$.secondaryText.prepend(document.createTextNode('chrome://'));
+      this.$.secondaryTextInner.prepend(document.createTextNode('chrome://'));
     }
   }
 

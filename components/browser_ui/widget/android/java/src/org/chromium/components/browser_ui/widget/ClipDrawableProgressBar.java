@@ -58,9 +58,9 @@ public class ClipDrawableProgressBar extends ImageView {
     // http://developer.android.com/reference/android/graphics/drawable/ScaleDrawable.html
     private static final int DRAWABLE_MAX_LEVEL = 10000;
 
-    @Nullable private ColorDrawable mForegroundColorDrawable;
-    @Nullable private GradientDrawable mForegroundGradientDrawable;
-    @Nullable private GradientDrawable mBackgroundGradientDrawable;
+    private @Nullable ColorDrawable mForegroundColorDrawable;
+    private @Nullable GradientDrawable mForegroundGradientDrawable;
+    private @Nullable GradientDrawable mBackgroundGradientDrawable;
     private int mForegroundColor;
     private int mBackgroundColor;
     private int mStaticBackgroundColor;
@@ -335,6 +335,10 @@ public class ClipDrawableProgressBar extends ImageView {
         }
     }
 
+    public int getDesiredAndroidVisibility() {
+        return mDesiredAndroidVisibility;
+    }
+
     private int applyAlpha(int color, float alpha) {
         return (Math.round(alpha * (color >>> 24)) << 24) | (0x00ffffff & color);
     }
@@ -409,9 +413,21 @@ public class ClipDrawableProgressBar extends ImageView {
     protected boolean onSetAlpha(int alpha) {
         int oldVisibility = mCompositedLayersVisibility;
         if (alpha == 0) {
+            if (!ChromeFeatureList.sAndroidApb144Patch2.isEnabled()) {
+                mDesiredAndroidVisibility = INVISIBLE;
+            }
             mCompositedLayersVisibility = INVISIBLE;
         } else {
+            if (!ChromeFeatureList.sAndroidApb144Patch2.isEnabled()) {
+                mDesiredAndroidVisibility = VISIBLE;
+            }
             mCompositedLayersVisibility = VISIBLE;
+        }
+
+        if (ChromeFeatureList.sAndroidApbJumpToCompletionWithFade.getValue()) {
+            for (ProgressBarObserver observer : mObservers) {
+                observer.onVisibleProgressUpdated();
+            }
         }
 
         if (oldVisibility != mCompositedLayersVisibility) {
@@ -430,5 +446,18 @@ public class ClipDrawableProgressBar extends ImageView {
 
     public int getCompositedVisibilityForTesting() {
         return mCompositedLayersVisibility;
+    }
+
+    @Override
+    public int getVisibility() {
+        if (shouldAnimateCompositedLayer()) {
+            if (ChromeFeatureList.sAndroidApb144Patch1.isEnabled()) {
+                return super.getVisibility();
+            } else {
+                return mCompositedLayersVisibility;
+            }
+        } else {
+            return super.getVisibility();
+        }
     }
 }

@@ -4,29 +4,37 @@
 
 #include "components/autofill/core/browser/integrators/autofill_ai/metrics/autofill_ai_ukm_logger.h"
 
+#include <stdint.h>
+
 #include <algorithm>
-#include <cstdint>
-#include <type_traits>
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "base/check_deref.h"
 #include "base/notreached.h"
+#include "components/autofill/core/browser/autofill_browser_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
+#include "components/autofill/core/browser/form_processing/optimization_guide_proto_util.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
 #include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
-#include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/optimization_guide/proto/features/forms_classifications.pb.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill {
 
@@ -44,10 +52,14 @@ optimization_guide::proto::AutofillAiEntityType GetEntityType(
       return ProtoType::AUTOFILL_AI_ENTITY_TYPE_KNOWN_TRAVELER_NUMBER;
     case EntityTypeName::kNationalIdCard:
       return ProtoType::AUTOFILL_AI_ENTITY_TYPE_NATIONAL_ID_CARD;
+    case EntityTypeName::kOrder:
+      return ProtoType::AUTOFILL_AI_ENTITY_TYPE_ORDER;
     case EntityTypeName::kPassport:
       return ProtoType::AUTOFILL_AI_ENTITY_TYPE_PASSPORT;
     case EntityTypeName::kRedressNumber:
       return ProtoType::AUTOFILL_AI_ENTITY_TYPE_REDRESS_NUMBER;
+    case EntityTypeName::kShipment:
+      return ProtoType::AUTOFILL_AI_ENTITY_TYPE_SHIPMENT;
     case EntityTypeName::kVehicle:
       return ProtoType::AUTOFILL_AI_ENTITY_TYPE_VEHICLE;
   }
@@ -65,41 +77,6 @@ optimization_guide::proto::FormatStringSource GetFormatStringSource(
       return optimization_guide::proto::FORMAT_STRING_SOURCE_ML_MODEL;
     case AutofillFormatStringSource::kServer:
       return optimization_guide::proto::FORMAT_STRING_SOURCE_SERVER;
-  }
-  NOTREACHED();
-}
-
-optimization_guide::proto::FormControlType GetFormControlType(
-    FormControlType form_control_type) {
-  switch (form_control_type) {
-    case mojom::FormControlType::kContentEditable:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_CONTENT_EDITABLE;
-    case mojom::FormControlType::kInputCheckbox:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_CHECKBOX;
-    case mojom::FormControlType::kInputEmail:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_EMAIL;
-    case mojom::FormControlType::kInputMonth:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_MONTH;
-    case mojom::FormControlType::kInputNumber:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_NUMBER;
-    case mojom::FormControlType::kInputPassword:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_PASSWORD;
-    case mojom::FormControlType::kInputRadio:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_RADIO;
-    case mojom::FormControlType::kInputSearch:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_SEARCH;
-    case mojom::FormControlType::kInputTelephone:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TELEPHONE;
-    case mojom::FormControlType::kInputText:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TEXT;
-    case mojom::FormControlType::kInputUrl:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_URL;
-    case mojom::FormControlType::kSelectOne:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_SELECT_ONE;
-    case mojom::FormControlType::kTextArea:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_TEXT_AREA;
-    case mojom::FormControlType::kInputDate:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_DATE;
   }
   NOTREACHED();
 }
@@ -124,18 +101,19 @@ optimization_guide::proto::AutofillAiFieldEventType GetFieldEventType(
 }
 
 optimization_guide::proto::AutofillAiPromptUserDecision GetUserDecision(
-    AutofillClient::AutofillAiBubbleClosedReason close_reason) {
-  switch (close_reason) {
-    case AutofillClient::AutofillAiBubbleClosedReason::kAccepted:
+    AutofillClient::AutofillAiBubbleResult result) {
+  switch (result) {
+    case AutofillClient::AutofillAiBubbleResult::kAccepted:
+    case AutofillClient::AutofillAiBubbleResult::kEditAccepted:
       return optimization_guide::proto::
           AUTOFILL_AI_PROMPT_USER_DECISION_ACCEPTED;
-    case AutofillClient::AutofillAiBubbleClosedReason::kCancelled:
-    case AutofillClient::AutofillAiBubbleClosedReason::kClosed:
+    case AutofillClient::AutofillAiBubbleResult::kCancelled:
+    case AutofillClient::AutofillAiBubbleResult::kClosed:
       return optimization_guide::proto::
           AUTOFILL_AI_PROMPT_USER_DECISION_DECLINED;
-    case AutofillClient::AutofillAiBubbleClosedReason::kNotInteracted:
-    case AutofillClient::AutofillAiBubbleClosedReason::kLostFocus:
-    case AutofillClient::AutofillAiBubbleClosedReason::kUnknown:
+    case AutofillClient::AutofillAiBubbleResult::kNotInteracted:
+    case AutofillClient::AutofillAiBubbleResult::kLostFocus:
+    case AutofillClient::AutofillAiBubbleResult::kUnknown:
       return optimization_guide::proto::
           AUTOFILL_AI_PROMPT_USER_DECISION_IGNORED;
   }
@@ -161,6 +139,8 @@ optimization_guide::proto::AutofillAiEntityStorageType GetStorageType(
       return optimization_guide::proto::AUTOFILL_AI_ENTITY_STORAGE_TYPE_LOCAL;
     case EntityInstance::RecordType::kServerWallet:
       return optimization_guide::proto::AUTOFILL_AI_ENTITY_STORAGE_TYPE_WALLET;
+    case EntityInstance::RecordType::kPersonalContext:
+      return optimization_guide::proto::AUTOFILL_AI_ENTITY_STORAGE_TYPE_UNKNOWN;
   }
 }
 
@@ -187,7 +167,6 @@ void AutofillAiUkmLogger::LogKeyMetrics(ukm::SourceId ukm_source_id,
           case FillingProduct::kMerchantPromoCode:
           case FillingProduct::kIban:
           case FillingProduct::kPassword:
-          case FillingProduct::kPlusAddresses:
           case FillingProduct::kAutofillAi:
           case FillingProduct::kLoyaltyCard:
           case FillingProduct::kIdentityCredential:
@@ -197,6 +176,7 @@ void AutofillAiUkmLogger::LogKeyMetrics(ukm::SourceId ukm_source_id,
           case FillingProduct::kCompose:
           case FillingProduct::kDataList:
           case FillingProduct::kPasskey:
+          case FillingProduct::kAtMemory:
           case FillingProduct::kNone:
             return false;
         }
@@ -204,7 +184,7 @@ void AutofillAiUkmLogger::LogKeyMetrics(ukm::SourceId ukm_source_id,
   const int autofill_ai_filled_field_count = std::ranges::count(
       form, FillingProduct::kAutofillAi, &AutofillField::filling_product);
 
-  const bool perfect_filling = IsFormPerfectlyFilled(form.ToFormData());
+  const bool perfect_filling = IsFormStructurePerfectlyFilled(form);
 
   if (optimization_guide::ModelQualityLogsUploaderService* uploader_ =
           client_->GetMqlsUploadService();
@@ -272,7 +252,7 @@ void AutofillAiUkmLogger::LogImportPromptResult(
     AutofillClient::AutofillAiImportPromptType prompt_type,
     EntityType entity_type,
     EntityInstance::RecordType record_type,
-    AutofillClient::AutofillAiBubbleClosedReason close_reason,
+    AutofillClient::AutofillAiBubbleResult result,
     ukm::SourceId ukm_source_id) {
   uint64_t form_session_id =
       autofill_metrics::FormGlobalIdToHash64Bit(form.global_id());
@@ -304,7 +284,7 @@ void AutofillAiUkmLogger::LogImportPromptResult(
     mqls_user_prompt_event->set_storage_type(GetStorageType(record_type));
     mqls_user_prompt_event->set_prompt_type(GetPromptType(prompt_type));
     mqls_user_prompt_event->set_entity_type(GetEntityType(entity_type));
-    mqls_user_prompt_event->set_result(GetUserDecision(close_reason));
+    mqls_user_prompt_event->set_result(GetUserDecision(result));
   }
 
   if (!CanLogUkm(ukm_source_id)) {
@@ -316,7 +296,7 @@ void AutofillAiUkmLogger::LogImportPromptResult(
       .SetEntityType(std::to_underlying(entity_type.name()))
       .SetStorageType(GetStorageType(record_type))
       .SetPromptType(GetPromptType(prompt_type))
-      .SetResult(GetUserDecision(close_reason))
+      .SetResult(GetUserDecision(result))
       .Record(client_->GetUkmRecorder());
 }
 
@@ -377,7 +357,7 @@ void AutofillAiUkmLogger::LogFieldEvent(ukm::SourceId ukm_source_id,
     mqls_field_event->set_format_string_source(
         GetFormatStringSource(field.format_string_source()));
     mqls_field_event->set_form_control_type(
-        GetFormControlType(field.form_control_type()));
+        ToFormControlTypeProto(field.form_control_type()));
     mqls_field_event->set_event_type(GetFieldEventType(event_type));
     mqls_field_event->set_entity_type(GetEntityType(entity_type));
     mqls_field_event->set_storage_type(GetStorageType(record_type));

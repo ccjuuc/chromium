@@ -8,7 +8,7 @@
 #include "base/check_op.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_field.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/core/html/closewatcher/close_watcher.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html_element_type_helpers.h"
@@ -21,7 +21,7 @@ namespace blink {
 // the Element it is attached to becomes the target of an interest invoker.
 class InterestInvokerTargetData final
     : public GarbageCollected<InterestInvokerTargetData>,
-      public ElementRareDataField {
+      public NodeRareDataField {
  public:
   InterestInvokerTargetData() = default;
   InterestInvokerTargetData(const InterestInvokerTargetData&) = delete;
@@ -31,14 +31,12 @@ class InterestInvokerTargetData final
   Element* interestInvoker() { return interest_invoker_; }
 
   void setInterestInvoker(Element* invoker) {
-    DCHECK(!invoker ||
-           RuntimeEnabledFeatures::HTMLInterestForAttributeEnabled());
     interest_invoker_ = invoker;
   }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(interest_invoker_);
-    ElementRareDataField::Trace(visitor);
+    NodeRareDataField::Trace(visitor);
   }
 
  private:

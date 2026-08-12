@@ -31,9 +31,8 @@ export interface SearchEngine {
   isPrepopulated: boolean;
   isStarterPack: boolean;
   keyword: string;
-  modelIndex: number;
   name: string;
-  shouldConfirmDeletion: boolean;
+  shouldConfirmRemoval: boolean;
   url: string;
   urlLocked: boolean;
 }
@@ -43,6 +42,14 @@ export interface SearchEnginesInfo {
   actives: SearchEngine[];
   others: SearchEngine[];
   extensions: SearchEngine[];
+  [key: string]: SearchEngine[];
+}
+
+export interface CategorizedTemplateUrls {
+  activeSiteShortcuts: SearchEngine[];
+  inactiveSiteShortcuts: SearchEngine[];
+  activeFeatureShortcuts: SearchEngine[];
+  inactiveFeatureShortcuts: SearchEngine[];
   [key: string]: SearchEngine[];
 }
 
@@ -60,9 +67,19 @@ export enum SearchEnginesInteractions {
   DEACTIVATE = 1,
   KEYBOARD_SHORTCUT_TAB = 2,
   KEYBOARD_SHORTCUT_SPACE_OR_TAB = 3,
+  SITE_SHORTCUTS_SECTION_EXPANDED = 4,
+  SITE_SHORTCUTS_SECTION_COLLAPSED = 5,
+  FEATURE_SHORTCUTS_SECTION_EXPANDED = 6,
+  FEATURE_SHORTCUTS_SECTION_COLLAPSED = 7,
+  MORE_ACTIONS = 8,
+  EDIT_SEARCH_ENGINE = 9,
+  ADD_SEARCH_ENGINE = 10,
+  SUBPAGE_NAVIGATED = 11,
+  EXTENSION_DISABLE = 12,
+  EXTENSION_MANAGE = 13,
 
   // Leave this at the end.
-  COUNT = 4,
+  COUNT = 14,
 }
 
 /**
@@ -72,35 +89,42 @@ export enum SearchEnginesInteractions {
  * //components/search_engines/choice_made_location.h
  */
 export enum ChoiceMadeLocation {
+  // Some unspecified source, not matching some requirements that the full
+  // search engine choice surfaces are compatible with. Might be used for
+  // example when automatically changing default search engine via an extension,
+  // or some enterprise policy.
+  OTHER = 0,
   // `chrome://settings/search`
-  SEARCH_SETTINGS = 0,
+  SEARCH_SETTINGS = 1,
   // `chrome://settings/searchEngines`
-  SEARCH_ENGINE_SETTINGS = 1,
+  SEARCH_ENGINE_SETTINGS = 2,
   // The search engine choice dialog for existing users or the profile picker
   // for new users. This value should not be used in settings.
-  CHOICE_SCREEN = 2,
-  // Some other source, not matching some requirements that the full search
-  // engine choice surfaces are compatible with. Might be used for example when
-  // automatically changing default search engine via an extension, or some
-  // enterprise policy.
-  OTHER = 3,
+  CHOICE_SCREEN = 3,
+  // Programmatic import of a search engine choice selected at the device level
+  // (e.g., Android Play API). Behaves mostly like `CHOICE_SCREEN` for initial
+  // recording, but allows repeated signals from the OS to be dropped silently
+  // without triggering assertion failures or creating duplicate records.
+  DEVICE_CHOICE_IMPORT = 4,
 }
 
 export interface SearchEnginesBrowserProxy {
   setDefaultSearchEngine(
-      modelIndex: number, choiceMadeLocation: ChoiceMadeLocation,
+      id: number, choiceMadeLocation: ChoiceMadeLocation,
       saveGuestChoice: boolean|null): void;
 
-  setIsActiveSearchEngine(modelIndex: number, isActive: boolean): void;
+  setIsActiveSearchEngine(id: number, isActive: boolean): void;
 
-  removeSearchEngine(modelIndex: number): void;
+  removeSearchEngine(id: number): void;
 
-  searchEngineEditStarted(modelIndex: number): void;
+  searchEngineEditStarted(id: number): void;
 
   searchEngineEditCancelled(): void;
 
   searchEngineEditCompleted(
       searchEngine: string, keyword: string, queryUrl: string): void;
+
+  getCategorizedTemplateUrls(): Promise<CategorizedTemplateUrls>;
 
   getSearchEnginesList(): Promise<SearchEnginesInfo>;
 
@@ -120,26 +144,25 @@ export interface SearchEnginesBrowserProxy {
 export class SearchEnginesBrowserProxyImpl implements
     SearchEnginesBrowserProxy {
   setDefaultSearchEngine(
-      modelIndex: number, choiceMadeLocation: ChoiceMadeLocation,
+      id: number, choiceMadeLocation: ChoiceMadeLocation,
       saveGuestChoice?: boolean|null) {
     chrome.send(
-        'setDefaultSearchEngine',
-        [modelIndex, choiceMadeLocation, saveGuestChoice]);
+        'setDefaultSearchEngine', [id, choiceMadeLocation, saveGuestChoice]);
   }
 
-  setIsActiveSearchEngine(modelIndex: number, isActive: boolean) {
-    chrome.send('setIsActiveSearchEngine', [modelIndex, isActive]);
+  setIsActiveSearchEngine(id: number, isActive: boolean) {
+    chrome.send('setIsActiveSearchEngine', [id, isActive]);
     this.recordSearchEnginesPageHistogram(
         isActive ? SearchEnginesInteractions.ACTIVATE :
                    SearchEnginesInteractions.DEACTIVATE);
   }
 
-  removeSearchEngine(modelIndex: number) {
-    chrome.send('removeSearchEngine', [modelIndex]);
+  removeSearchEngine(id: number) {
+    chrome.send('removeSearchEngine', [id]);
   }
 
-  searchEngineEditStarted(modelIndex: number) {
-    chrome.send('searchEngineEditStarted', [modelIndex]);
+  searchEngineEditStarted(id: number) {
+    chrome.send('searchEngineEditStarted', [id]);
   }
 
   searchEngineEditCancelled() {
@@ -155,16 +178,22 @@ export class SearchEnginesBrowserProxyImpl implements
     ]);
   }
 
+  getCategorizedTemplateUrls() {
+    return sendWithPromise<CategorizedTemplateUrls>(
+        'getCategorizedTemplateUrls');
+  }
+
   getSearchEnginesList() {
-    return sendWithPromise('getSearchEnginesList');
+    return sendWithPromise<SearchEnginesInfo>('getSearchEnginesList');
   }
 
   getSaveGuestChoice() {
-    return sendWithPromise('getSaveGuestChoice');
+    return sendWithPromise<boolean|null>('getSaveGuestChoice');
   }
 
   validateSearchEngineInput(fieldName: string, fieldValue: string) {
-    return sendWithPromise('validateSearchEngineInput', fieldName, fieldValue);
+    return sendWithPromise<boolean>(
+        'validateSearchEngineInput', fieldName, fieldValue);
   }
 
   recordSearchEnginesPageHistogram(interaction: SearchEnginesInteractions) {

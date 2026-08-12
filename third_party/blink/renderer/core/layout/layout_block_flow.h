@@ -65,7 +65,7 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   ~LayoutBlockFlow() override;
   void Trace(Visitor*) const override;
 
-  static LayoutBlockFlow* CreateAnonymous(Document*, const ComputedStyle*);
+  static LayoutBlockFlow* CreateAnonymous(Document&, const ComputedStyle&);
 
   bool IsLayoutBlockFlow() const final {
     NOT_DESTROYED();
@@ -80,7 +80,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   bool CanMergeWith(const LayoutBoxModelObject&) const override;
 
-  void ChildBecameFloatingOrOutOfFlow(LayoutBox* child);
   void CollapseAnonymousBlockChild(LayoutBlockFlow* child);
 
   // Return true if this block establishes a fragmentation context root (e.g. a
@@ -129,27 +128,24 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
     NOT_DESTROYED();
     if (inline_node_data_) {
       // inline_node_data_ is not used from now on but exists until GC happens,
-      // so it is better to eagerly clear HeapVector to improve memory
-      // utilization.
+      // so it is better to eagerly clear HeapVector and Strings to improve
+      // memory utilization.
       inline_node_data_->items.clear();
+      inline_node_data_->text_content = String();
       inline_node_data_.Clear();
     }
   }
   virtual void WillCollectInlines() { NOT_DESTROYED(); }
 
  protected:
-  void WillBeDestroyed() override;
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   void InvalidateDisplayItemClients(PaintInvalidationReason) const override;
 
   Node* NodeForHitTest() const final;
-  bool HitTestChildren(HitTestResult&,
-                       const HitTestLocation&,
-                       const PhysicalOffset& accumulated_offset,
-                       HitTestPhase) override;
 
   void AddOutlineRects(OutlineRectCollector&,
                        LayoutObject::OutlineInfo*,
@@ -164,22 +160,9 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   void AddChildBeforeDescendant(LayoutObject* new_child,
                                 LayoutObject* before_descendant);
 
-  // Merge children of |sibling_that_may_be_deleted| into this object if
-  // possible, and delete |sibling_that_may_be_deleted|. Returns true if we
-  // were able to merge. In that case, |sibling_that_may_be_deleted| will be
-  // dead. We'll only be able to merge if both blocks are anonymous.
-  bool MergeSiblingContiguousAnonymousBlock(
-      LayoutBlockFlow* sibling_that_may_be_deleted);
-
-  // Reparent subsequent or preceding adjacent floating or out-of-flow siblings
-  // into this object.
-  void ReparentSubsequentFloatingOrOutOfFlowSiblings();
-  void ReparentPrecedingFloatingOrOutOfFlowSiblings();
-
   void MakeChildrenInlineIfPossible();
 
   void MakeChildrenNonInline(LayoutObject* insertion_point = nullptr);
-  void ChildBecameNonInline(LayoutObject* child) final;
 
  public:
   bool ShouldTruncateOverflowingText() const;

@@ -14,6 +14,8 @@ build_webui_tests("build") {
       [ "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/*|" +
         rebase_path("$root_gen_dir/chrome/browser/resources/pdf/tsc/*",
                     target_gen_dir) ]
+
+  cc_test_files = [ "//chrome/browser/pdf/pdf_extension_js_test.cc" ]
   files = [
     "basic_plugin_test.ts",
     "basic_test.ts",
@@ -35,6 +37,7 @@ build_webui_tests("build") {
     "save_controls_mixin_test.ts",
     "scroll_with_form_field_focused_test.ts",
     "swipe_detector_test.ts",
+    "test_bookmarks.ts",
     "test_util.ts",
     "title_test.ts",
     "touch_handling_test.ts",
@@ -70,12 +73,19 @@ build_webui_tests("build") {
       "ink2_size_selector_test.ts",
       "ink2_test.ts",
       "ink2_text_alignment_selector_test.ts",
+      "ink2_text_annotations_test.ts",
       "ink2_text_bottom_toolbar_test.ts",
-      "ink2_text_box_test.ts",
+      "ink2_text_box_basic_test.ts",
+      "ink2_text_box_commit_test.ts",
+      "ink2_text_box_keyboard_test.ts",
+      "ink2_text_box_test_utils.ts",
+      "ink2_text_box_viewport_test.ts",
       "ink2_text_side_panel_test.ts",
       "ink2_text_styles_selector_test.ts",
       "ink2_viewer_toolbar_test.ts",
+      "ink_text_annotation_utils_test.ts",
       "selectable_icon_button_test.ts",
+      "undo_redo_stack_test.ts",
     ]
 
     if (enable_pdf_save_to_drive) {

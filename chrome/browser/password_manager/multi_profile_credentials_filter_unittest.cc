@@ -19,17 +19,21 @@
 #include "chrome/browser/signin/dice_web_signin_interceptor.h"
 #include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/sync_username_test_base.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/signin/public/identity_manager/tribool.h"
+#include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_renderer_host.h"
+#include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -100,10 +104,11 @@ class TestPasswordManagerClient
 
 }  // namespace
 
-class MultiProfileCredentialsFilterTest : public BrowserWithTestWindowTest {
+class MultiProfileCredentialsFilterTest : public testing::Test {
  public:
   MultiProfileCredentialsFilterTest()
-      : sync_filter_(&test_password_manager_client_) {}
+      : profile_manager_(TestingBrowserProcess::GetGlobal()),
+        sync_filter_(&test_password_manager_client_) {}
 
   signin::IdentityTestEnvironment* identity_test_env() {
     return identity_test_env_profile_adaptor_->identity_test_env();
@@ -114,7 +119,7 @@ class MultiProfileCredentialsFilterTest : public BrowserWithTestWindowTest {
   }
 
   DiceWebSigninInterceptor* dice_web_signin_interceptor() {
-    return DiceWebSigninInterceptorFactory::GetForProfile(profile());
+    return DiceWebSigninInterceptorFactory::GetForProfile(profile_);
   }
 
   // Creates a profile, a tab and an account so that signing in this account
@@ -129,26 +134,28 @@ class MultiProfileCredentialsFilterTest : public BrowserWithTestWindowTest {
                        .SetLocale("en")
                        .SetAvatarUrl("https://example.com")
                        .Build();
-    AccountCapabilitiesTestMutator(&account_info.capabilities)
+    AccountCapabilitiesTestMutator(&account_info)
         .set_is_subject_to_account_level_enterprise_policies(false);
     DCHECK(account_info.IsValid());
     identity_test_env()->UpdateAccountInfoForAccount(account_info);
-    Profile* profile_2 = profile_manager()->CreateTestingProfile("Profile 2");
+    Profile* profile_2 = profile_manager_.CreateTestingProfile("Profile 2");
     ProfileAttributesEntry* entry =
-        profile_manager()
-            ->profile_attributes_storage()
+        profile_manager_.profile_attributes_storage()
             ->GetProfileAttributesWithPath(profile_2->GetPath());
     entry->SetAuthInfo(account_info.gaia, base::UTF8ToUTF16(email),
                        /*is_consented_primary_account=*/false);
-    AddTab(browser(), GURL("http://foo/1"));
+    web_contents_ =
+        content::WebContentsTester::CreateTestWebContents(profile_, nullptr);
     return account_info;
   }
 
-  // BrowserWithTestWindowTest:
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
+    ASSERT_TRUE(profile_manager_.SetUp());
+    profile_ = profile_manager_.CreateTestingProfile("Profile 1",
+                                                     GetTestingFactories());
+
     identity_test_env_profile_adaptor_ =
-        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile());
+        std::make_unique<IdentityTestEnvironmentProfileAdaptor>(profile_);
     identity_test_env()->SetTestURLLoaderFactory(&test_url_loader_factory_);
 
     test_password_manager_client_.set_identity_manager(
@@ -166,18 +173,21 @@ class MultiProfileCredentialsFilterTest : public BrowserWithTestWindowTest {
   void TearDown() override {
     test_password_manager_client_.set_identity_manager(nullptr);
     identity_test_env_profile_adaptor_.reset();
-    BrowserWithTestWindowTest::TearDown();
+    web_contents_.reset();
+    profile_ = nullptr;
+    profile_manager_.DeleteAllTestingProfiles();
   }
 
   std::unique_ptr<KeyedService> BuildDiceWebSigninInterceptor(
       content::BrowserContext* browser_context) {
     Profile* input_profile = Profile::FromBrowserContext(browser_context);
-    CHECK_EQ(input_profile, profile());
+    CHECK_EQ(input_profile, profile_);
     return std::make_unique<DiceWebSigninInterceptor>(
-        profile(), std::make_unique<TestDiceWebSigninInterceptorDelegate>());
+        profile_, std::make_unique<TestDiceWebSigninInterceptorDelegate>(),
+        &profile_metrics_service_);
   }
 
-  TestingProfile::TestingFactories GetTestingFactories() override {
+  TestingProfile::TestingFactories GetTestingFactories() {
     TestingProfile::TestingFactories factories =
         IdentityTestEnvironmentProfileAdaptor::
             GetIdentityTestEnvironmentFactories();
@@ -195,12 +205,18 @@ class MultiProfileCredentialsFilterTest : public BrowserWithTestWindowTest {
   }
 
  protected:
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfileManager profile_manager_;
+  content::RenderViewHostTestEnabler rvh_enabler_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
+  std::unique_ptr<content::WebContents> web_contents_;
   network::TestURLLoaderFactory test_url_loader_factory_;
   syncer::TestSyncService sync_service_;
   TestPasswordManagerClient test_password_manager_client_;
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_profile_adaptor_;
   password_manager::SyncCredentialsFilter sync_filter_;
+  metrics::ProfileMetricsService profile_metrics_service_;
 };
 
 // Checks that `MultiProfileCredentialsFilter` returns false when
@@ -243,7 +259,7 @@ TEST_F(MultiProfileCredentialsFilterTest, NonGaia) {
 }
 
 // Returns false for an invalid email address.
-// Regression test for https://crbug.com/1401924
+// Regression test for https://crbug.com/40884453
 TEST_F(MultiProfileCredentialsFilterTest, InvalidEmail) {
   // Disallow profile creation to prevent the intercept.
   g_browser_process->local_state()->SetBoolean(prefs::kBrowserAddPersonEnabled,
@@ -284,10 +300,11 @@ TEST_F(MultiProfileCredentialsFilterTest, InterceptInProgress) {
   // Start an interception for the sign-in.
   AccountInfo account_info = SetupInterception();
   dice_web_signin_interceptor()->MaybeInterceptWebSignin(
-      browser()->tab_strip_model()->GetActiveWebContents(),
-      account_info.account_id, signin_metrics::AccessPoint::kUnknown,
+      web_contents_.get(), account_info.account_id,
+      signin_metrics::AccessPoint::kStartPage,
       /*is_new_account=*/true,
-      /*is_sync_signin=*/false);
+      /*is_sync_signin=*/false,
+      /*primary_is_connected=*/signin::Tribool::kUnknown);
   ASSERT_TRUE(dice_web_signin_interceptor()->is_interception_in_progress());
 
   MultiProfileCredentialsFilter multi_profile_filter(
@@ -350,7 +367,7 @@ TEST_F(MultiProfileCredentialsFilterTest, SigninNotIntercepted) {
                      .SetLocale("en")
                      .SetAvatarUrl("https://example.com")
                      .Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_account_level_enterprise_policies(false);
   CHECK(account_info.IsValid());
   identity_test_env()->UpdateAccountInfoForAccount(account_info);

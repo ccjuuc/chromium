@@ -28,9 +28,9 @@ bool HasValidPrefix(const std::string& pref_name,
   return false;
 }
 
-base::Value::List GetPrefsMetadata(
+base::ListValue GetPrefsMetadata(
     PrefValueStore::PrefStoreType pref_value_store_type) {
-  base::Value::List metadata;
+  base::ListValue metadata;
   switch (pref_value_store_type) {
     case PrefValueStore::PrefStoreType::MANAGED_STORE:
       metadata.Append("managed");
@@ -39,7 +39,7 @@ base::Value::List GetPrefsMetadata(
       metadata.Append("managed_by_custodian");
       break;
     case PrefValueStore::PrefStoreType::EXTENSION_STORE:
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_controlled");
       metadata.Append("extension_modifiable");
       break;
@@ -48,34 +48,34 @@ base::Value::List GetPrefsMetadata(
 #endif
     case PrefValueStore::PrefStoreType::COMMAND_LINE_STORE:
       metadata.Append("command_line_controlled");
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::USER_STORE:
       metadata.Append("user_controlled");
       metadata.Append("user_modifiable");
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::RECOMMENDED_STORE:
       metadata.Append("recommended");
       metadata.Append("user_modifiable");
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::DEFAULT_STORE:
       metadata.Append("default");
       metadata.Append("user_modifiable");
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::INVALID_STORE:
       metadata.Append("user_modifiable");
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       metadata.Append("extension_modifiable");
 #endif
       break;
@@ -91,7 +91,7 @@ std::optional<std::string> GetPrefsAsJson(
   std::vector<PrefService::PreferenceValueAndStore> values =
       pref_service->GetPreferencesValueAndStore();
 
-  base::Value::Dict local_state_values;
+  base::DictValue local_state_values;
   for (const auto& [name, value, pref_value_store_type] : values) {
     // Filter out the prefs to only include variations and UMA related fields,
     // which don't contain PII.
@@ -100,7 +100,7 @@ std::optional<std::string> GetPrefsAsJson(
       continue;
     }
 
-    base::Value::Dict pref_details;
+    base::DictValue pref_details;
     pref_details.Set("value", value.Clone());
     pref_details.Set("metadata", GetPrefsMetadata(pref_value_store_type));
     local_state_values.SetByDottedPath(name, std::move(pref_details));

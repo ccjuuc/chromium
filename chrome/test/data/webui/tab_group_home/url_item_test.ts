@@ -16,7 +16,7 @@ suite('UrlItemElementTest', () => {
   const sampleItem: UrlItem = {
     id: 123,
     title: 'Test Title',
-    url: {url: 'https://www.example.com'},
+    url: 'https://www.example.com',
   };
 
   setup(() => {
@@ -34,12 +34,13 @@ suite('UrlItemElementTest', () => {
 
     const faviconElement = urlItemElement.$.favicon;
     assertEquals(
-        getFaviconForPageURL(sampleItem.url.url, false),
+        getFaviconForPageURL(sampleItem.url, false),
         faviconElement.style.backgroundImage);
   });
 
   test('close button click fires', async () => {
-    const eventPromise = eventToPromise('close-button-click', urlItemElement);
+    const eventPromise = eventToPromise<CustomEvent<number>>(
+        'close-button-click', urlItemElement);
 
     const closeButton = urlItemElement.$.closeButton;
     closeButton.click();

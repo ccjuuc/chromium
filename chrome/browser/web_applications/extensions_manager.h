@@ -6,9 +6,11 @@
 #define CHROME_BROWSER_WEB_APPLICATIONS_EXTENSIONS_MANAGER_H_
 
 #include <memory>
+#include <string>
 #include <unordered_set>
 
 #include "base/functional/callback_forward.h"
+#include "chrome/browser/web_applications/mojom/user_display_mode.mojom-forward.h"
 
 class Profile;
 class KeyedServiceBaseFactory;
@@ -24,6 +26,8 @@ class ExtensionService;
 
 namespace web_app {
 
+struct ShortcutInfo;
+
 class ExtensionInstallGate {
  public:
   virtual ~ExtensionInstallGate() = default;
@@ -33,6 +37,12 @@ class ExtensionInstallGate {
 // doesn't have to directly depend on the extensions system (so no circular
 // dependencies), and tests can fake this functionality without needing to use
 // the whole Extensions system.
+//
+// IMPORTANT: All WebAppProvider code that depends on the extensions system MUST
+// go through this interface instead of calling `extensions::` KeyedService
+// APIs directly. This ensures that test fakes (`FakeExtensionsManager`) are
+// properly utilized and tests do not hang waiting for an uninitialized global
+// `ExtensionSystem`.
 //
 // TODO(http://crbug.com/454081171): Make tests for the implementation, and move
 // all remaining extensions functionality the WebAppProvider system uses to this
@@ -55,6 +65,25 @@ class ExtensionsManager {
   // ExtensionService to delay Extension installs.
   virtual std::unique_ptr<ExtensionInstallGate>
   RegisterGarbageCollectionInstallGate() = 0;
+
+  virtual bool IsExtensionBlockedByPolicy(const std::string& extension_id) = 0;
+  virtual bool IsExtensionInstalled(const std::string& extension_id) = 0;
+  virtual bool IsExtensionForceInstalled(const std::string& extension_id,
+                                         std::u16string* reason) = 0;
+  virtual bool IsExtensionDefaultInstalled(const std::string& extension_id) = 0;
+  virtual bool IsExternalExtensionUninstalled(
+      const std::string& extension_id) = 0;
+  virtual bool DidPreinstalledAppsPerformNewInstallation() = 0;
+  virtual bool IsPreinstalledExtensionAppId(const std::string& app_id) = 0;
+
+  virtual void CopyAppSortingLayout(const std::string& from_extension_id,
+                                    const std::string& to_web_app_id) = 0;
+  virtual mojom::UserDisplayMode GetExtensionUserDisplayMode(
+      const std::string& extension_id) = 0;
+  virtual std::unique_ptr<ShortcutInfo> GetExtensionShortcutInfo(
+      const std::string& extension_id) = 0;
+  virtual void WaitForExtensionShortcutsDeleted(const std::string& extension_id,
+                                                base::OnceClosure callback) = 0;
 };
 
 }  // namespace web_app

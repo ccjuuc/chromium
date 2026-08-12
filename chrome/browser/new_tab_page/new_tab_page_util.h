@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/feature_list.h"
+#include "base/values.h"
 #include "components/ntp_tiles/tile_type.h"
 
 class Profile;
@@ -16,6 +17,18 @@ class Profile;
 namespace variations {
 class VariationsService;
 }  // namespace variations
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(NtpShortcutsAutoRemovalReason)
+enum class NtpShortcutsAutoRemovalReason {
+  kManagedPreference = 0,
+  kNotVisible = 1,
+  kDisabled = 2,
+  kStaleDaysCount = 3,
+  kMaxValue = kStaleDaysCount,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NtpShortcutsAutoRemovalReason)
 
 bool IsCartModuleEnabled();
 bool IsDriveModuleEnabled();
@@ -65,5 +78,23 @@ void DisableShortcutsAutoRemoval(Profile* profile);
 
 // Sets the kNtpModulesAutoRemovalDisabledDict pref to true for the module.
 void DisableModuleAutoRemoval(Profile* profile, const std::string& module_id);
+
+// Sets the kNtpModulesAutoRemovalDisabledDict pref to true for the modules.
+void DisableModuleListAutoRemoval(Profile* profile,
+                                  const std::vector<std::string>& module_ids);
+
+// Logs the auto-removal metrics for shortcuts, including:
+// (1) The reason the shortcuts were not auto-removed
+// (2) The new staleness count for the shortcuts if applicable
+void RecordShortcutsAutoRemovalMetrics(Profile* profile, int prev_count);
+
+// Logs the auto-removal metrics for the module, including:
+// (1) The reason the module was not auto-removed
+// (2) The new staleness count for the module if applicable
+void RecordModuleAutoRemovalMetrics(
+    Profile* profile,
+    const base::DictValue& auto_removal_disabled_dict,
+    const std::string& module_id,
+    const int prev_count);
 
 #endif  // CHROME_BROWSER_NEW_TAB_PAGE_NEW_TAB_PAGE_UTIL_H_

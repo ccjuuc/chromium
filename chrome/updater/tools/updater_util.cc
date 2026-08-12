@@ -19,26 +19,25 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_executor.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "build/build_config.h"
 #include "chrome/enterprise_companion/device_management_storage/dm_storage.h"
 #include "chrome/updater/app/app.h"
-#include "chrome/updater/configurator.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/external_constants_default.h"
 #include "chrome/updater/ipc/ipc_support.h"
 #include "chrome/updater/policy/service.h"
-#include "chrome/updater/prefs.h"
 #include "chrome/updater/protos/omaha_settings.pb.h"
 #include "chrome/updater/service_proxy_factory.h"
 #include "chrome/updater/update_service.h"
@@ -369,7 +368,7 @@ bool OutputInJSONFormat() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(kJSONFormatSwitch);
 }
 
-std::string DictToJSONString(const base::Value::Dict& dict) {
+std::string DictToJSONString(const base::DictValue& dict) {
   return base::WriteJson(dict).value_or("");
 }
 
@@ -470,7 +469,15 @@ class AppState : public base::RefCountedThreadSafe<AppState> {
 
 class UpdaterUtilApp : public App {
  public:
-  UpdaterUtilApp() : service_proxy_(CreateUpdateServiceProxy(Scope())) {}
+  UpdaterUtilApp()
+      : service_proxy_(
+#if BUILDFLAG(IS_WIN)
+            CreateUpdateServiceProxyMojo(Scope())
+#else   // BUILDFLAG(IS_WIN)
+            CreateUpdateServiceProxy(Scope())
+#endif  // BUILDFLAG(IS_WIN)
+        ) {
+  }
 
  private:
   ~UpdaterUtilApp() override = default;
@@ -523,10 +530,9 @@ void UpdaterUtilApp::ListApps() {
       [](base::OnceCallback<void(int)> cb,
          const std::vector<updater::UpdateService::AppState>& states) {
         if (OutputInJSONFormat()) {
-          base::Value::Dict apps;
+          base::DictValue apps;
           for (updater::UpdateService::AppState app : states) {
-            apps.Set(app.app_id,
-                     base::Value::Dict().Set("version", app.version));
+            apps.Set(app.app_id, base::DictValue().Set("version", app.version));
           }
           std::cout << DictToJSONString(std::move(apps)) << std::endl;
         } else {
@@ -599,9 +605,9 @@ void UpdaterUtilApp::DoListUpdate(scoped_refptr<AppState> app_state) {
              base::OnceCallback<void(int)> cb, UpdateService::Result result) {
             if (result == UpdateService::Result::kSuccess) {
               if (OutputInJSONFormat()) {
-                base::Value::Dict app;
+                base::DictValue app;
                 app.Set(app_state->app_id(),
-                        base::Value::Dict()
+                        base::DictValue()
                             .Set("CurrentVersion", app_state->current_version())
                             .Set("NextVersion", app_state->next_version()));
                 std::cout << DictToJSONString(std::move(app)) << std::endl;
@@ -656,24 +662,23 @@ void UpdaterUtilApp::DoUpdateApp(scoped_refptr<AppState> app_state) {
 }
 
 void UpdaterUtilApp::ListPolicies() {
-  base::ThreadPool::PostTaskAndReply(
-      FROM_HERE, {base::MayBlock(), base::WithBaseSyncPrimitives()},
-      base::BindOnce([] {
-        auto configurator = base::MakeRefCounted<Configurator>(
-            CreateGlobalPrefs(Scope()), CreateDefaultExternalConstants(),
-            Scope());
+  service_proxy_->GetPoliciesJson(
+      base::BindOnce([&](const std::string& result) {
         if (OutputInJSONFormat()) {
-          std::cout << DictToJSONString(
-                           configurator->GetPolicyService()->GetAllPolicies())
-                    << std::endl;
-        } else {
-          std::cout
-              << "Updater policies: "
-              << configurator->GetPolicyService()->GetAllPoliciesAsString()
-              << std::endl;
+          std::cout << result << std::endl;
+          return;
         }
-      }),
-      base::BindOnce(&UpdaterUtilApp::Shutdown, this, 0));
+        if (const auto root = base::JSONReader::Read(
+                result, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+            root && root->is_dict()) {
+          std::cout << "Updater policies: "
+                    << base::WriteJsonWithOptions(
+                           root->GetDict(),
+                           base::JSONWriter::OPTIONS_PRETTY_PRINT)
+                           .value_or({})
+                    << std::endl;
+        }
+      }).Then(base::BindOnce(&UpdaterUtilApp::Shutdown, this, 0)));
 }
 
 void UpdaterUtilApp::ListCBCMPolicies() {
@@ -697,14 +702,15 @@ void UpdaterUtilApp::UnpackCRX() {
                   kSymlinkOption)
                   ->Create(),
               crx_file::VerifierFormat::CRX3,
+              /*is_foreground=*/true,
               base::BindOnce([](const update_client::Unpacker::Result& result) {
                 if (result.error == update_client::UnpackerError::kNone) {
                   LOG(INFO) << "Unpacked to " << result.unpack_path
                             << " with public key " << result.public_key;
                 } else {
-                  LOG(ERROR)
-                      << "Unpacking failed: " << static_cast<int>(result.error)
-                      << ": " << result.extended_error;
+                  LOG(ERROR) << "Unpacking failed: "
+                             << std::to_underlying(result.error) << ": "
+                             << result.extended_error;
                 }
               })
                   .Then(base::BindPostTaskToCurrentDefault(

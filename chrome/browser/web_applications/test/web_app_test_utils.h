@@ -15,6 +15,7 @@
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
+#include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_stack_entry.h"
 #include "components/webapps/common/web_app_id.h"
 #include "url/gurl.h"
@@ -52,6 +53,18 @@ std::unique_ptr<WebApp> CreateWebApp(
     WebAppManagement::Type source_type = WebAppManagement::kSync,
     const GURL& scope = GURL());
 
+// Same as above, but for creating a web app out of a sync_proto. Follow the
+// same warning as `CreateWebApp()` and don't use this directly for
+// installation. Instead, use the utilities in web_app_install_test_util.h. Only
+// sets the fields that need to be specified in the sync_proto to be valid,
+// which is `start_url`, `manifest_id` and `scope` if set. All other fields need
+// to be explicitly set by calling `Set<Field>()` on a web app.
+// By default, the `kSync` source is already set on this web app.
+// Will check fail if the sync proto does not have the start_url and
+// relative_manifest_id unset.
+std::unique_ptr<WebApp> CreateWebAppFromSyncProto(
+    sync_pb::WebAppSpecifics& sync_proto);
+
 // Do not use this for installation! Instead, use the utilities in
 // web_app_install_test_util.h.
 struct CreateRandomWebAppParams {
@@ -64,16 +77,16 @@ struct CreateRandomWebAppParams {
   int seed = 0;
   bool non_zero = false;
   bool allow_system_source = true;
-  // External management types are often managed by systems that synchronize
-  // their installed apps, so if a test is writing apps and then starting the
-  // system, the external app managers will touch & modify apps that apply to
-  // them. Setting this to 'true' will prevent a generated app from having one
-  // of these management sources.
-  bool only_non_external_management_types = false;
+  // External management types and migration fields are often managed by
+  // systems that synchronize or process installed apps at startup. If a test is
+  // writing apps and then starting the system, these managers will touch &
+  // modify apps. Setting this to 'true' will prevent generated apps from
+  // including these fields, thus avoiding side effects during test startup.
+  bool exclude_fields_with_side_effects = false;
   // When randomly generating an app, if it is randomly a sub-app, then this
   // manifest id is used for the parent id. Set this to an empty url to not
   // generate sub-apps.
-  webapps::ManifestId parent_manifest_id{"https://www.appparent.com/"};
+  std::optional<webapps::ManifestId> parent_manifest_id{GURL("https://www.appparent.com/")};
 };
 std::unique_ptr<WebApp> CreateRandomWebApp(
     const CreateRandomWebAppParams& params);

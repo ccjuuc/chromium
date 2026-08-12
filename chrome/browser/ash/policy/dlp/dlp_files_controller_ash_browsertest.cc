@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include "ash/constants/ash_extension_constants.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/mock_callback.h"
@@ -20,7 +21,6 @@
 #include "chrome/browser/extensions/api/file_system/file_entry_picker.h"
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/enterprise/common/proto/synced/dlp_policy_event.pb.h"
@@ -83,7 +83,7 @@ class DlpFilesControllerAshBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
 
     DlpRulesManagerFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(),
+        browser()->GetProfile(),
         base::BindRepeating(
             &DlpFilesControllerAshBrowserTest::SetDlpRulesManager,
             base::Unretained(this)));
@@ -138,7 +138,8 @@ IN_PROC_BROWSER_TEST_F(DlpFilesControllerAshBrowserTest,
   auto fake_provider = ash::file_system_provider::FakeExtensionProvider::Create(
       extension_misc::kODFSExtensionId);
   const auto providerId = fake_provider->GetId();
-  auto* service = ash::file_system_provider::Service::Get(browser()->profile());
+  auto* service =
+      ash::file_system_provider::Service::Get(browser()->GetProfile());
   service->RegisterProvider(std::move(fake_provider));
 
   const auto mount_options = ash::file_system_provider::MountOptions(

@@ -26,8 +26,9 @@ namespace blink {
 class FragmentItems;
 class InlinePaintContext;
 class PhysicalBoxFragment;
-struct FitTextScale;
+class UsedFont;
 struct LogicalLineItem;
+struct TextFitScale;
 struct TextFragmentPaintInfo;
 
 // Structure of additional fields that are rarely used for a Text type
@@ -35,7 +36,7 @@ struct TextFragmentPaintInfo;
 //
 // * Each text items for SVG <text> has this instance.
 // * An item with ruby annotation has this instance.
-// * An item with text-grow or text-shrunk has this instance.
+// * An item with `text-fit` has this instance.
 struct TextFragmentRareData : public GarbageCollected<TextFragmentRareData> {
  public:
   void Trace(Visitor* visitor) const { visitor->Trace(scaled_font); }
@@ -51,8 +52,6 @@ struct TextFragmentRareData : public GarbageCollected<TextFragmentRareData> {
   FontHeight annotation_metrics;
   // A flag whether SVG or not
   bool is_svg;
-  // A flag whether FitTextInline or not
-  bool is_fit_text_inline;
 };
 
 // This class represents a text run or a box in an inline formatting context.
@@ -99,6 +98,7 @@ class CORE_EXPORT FragmentItem final {
     void Trace(Visitor* visitor) const { visitor->Trace(line_box_fragment); }
     Member<const PhysicalLineBoxFragment> line_box_fragment;
     wtf_size_t descendants_count;
+    float text_fit_scale = 1.0f;
   };
   // Represents a box fragment appeared in a line. This includes inline boxes
   // (e.g., <span>text</span>) and atomic inlines.
@@ -121,7 +121,15 @@ class CORE_EXPORT FragmentItem final {
 
   // Type of the item. The invalid type is needed to support
   // kCanClearUnusedSlotsWithMemset.
-  enum ItemType { kInvalid = 0, kText, kGeneratedText, kLine, kBox };
+  enum ItemType {
+    kInvalid = 0,
+    kText,
+    kGeneratedText,
+    kLine,
+    kBox,
+
+    kMaxValue = kBox
+  };
 
   // Create appropriate type for |line_item|.
   FragmentItem(LogicalLineItem&& line_item, WritingMode writing_mode);
@@ -329,6 +337,9 @@ class CORE_EXPORT FragmentItem final {
       return static_cast<LineBoxType>(sub_type_);
     NOTREACHED() << this;
   }
+  bool IsRubyAnnotationLine() const {
+    return Type() == kLine && GetLineBoxType() == LineBoxType::kRubyLineBox;
+  }
 
   static PhysicalRect LocalVisualRectFor(const LayoutObject& layout_object);
 
@@ -501,15 +512,19 @@ class CORE_EXPORT FragmentItem final {
   // These functions are valid only if IsText() is true.
   bool HasOverAnnotation() const { return has_over_annotation_; }
   bool HasUnderAnnotation() const { return has_under_annotation_; }
-  // Returns the height of over/under ruby annotations for this fragment,
-  // measured from the annotation's baseline.
+  // This function represents how far emphasis marks should be painted from
+  // this text.
   //
-  // If this FragmentItem is associated with multiple ruby texts, the returned
-  // metrics only include the annotations directly associated with this fragment
-  // for now, and do not account for heights of other ruby annotations.
-  // For example, in:
-  // <ruby><ruby>base<rt><em>THIS</em></rt></ruby><rt>outer rt</rt></ruby>
-  // the returned metrics for |THIS| do not include those of |outer rt|.
+  // AnnotationMetrics().ascent is the distance from the line-over of this
+  // FragmentItem to the bottom edge of the over text-emphasis. This value
+  // can be negative for fonts with large internal leading.
+  //
+  // AnnotationMetrics().descent is the distance from the line-under of this
+  // FragmentItem to the top edge of the under text-emphasis. This value
+  // can be negative for fonts with large internal leading.
+  //
+  // This function returns a valid value only when it is a Text FragmentItem
+  // with text-emphasis enabled, otherwise it returns {0, 0}.
   FontHeight AnnotationMetrics() const;
 
   // Whether this item was marked dirty for reuse or not.
@@ -555,10 +570,12 @@ class CORE_EXPORT FragmentItem final {
   // This returns Style().GetFont() for an FragmentItem not for
   // LayoutSVGInlineText.
   const Font& ScaledFont() const;
+  // Returns a used font for painting this item.
+  const UsedFont GetUsedFont() const;
 
-  // Returns a pair of text scaling factor and is_scaled_inline_only flag for
-  // text-grow and text-shrink properties.
-  std::pair<float, bool> GetFitTextScale() const;
+  // Returns a paint-time text scaling factor for text-fit property.
+  float GetTextFitScale() const;
+  void SetLineTextFitScale(float scale);
 
   // Get a description of |this| for the debug purposes.
   String ToString() const;
@@ -618,7 +635,7 @@ class CORE_EXPORT FragmentItem final {
       const AffineTransform& length_adjust) const;
   AffineTransform BuildSvgTransformForLengthAdjust() const;
 
-  void SetTextRareData(const FitTextScale* scale,
+  void SetTextRareData(const TextFitScale* scale,
                        FontHeight annotation_metrics = FontHeight());
 
   // TODO(kojii): We can make them sub-classes if we need to make the vector of
@@ -643,10 +660,13 @@ class CORE_EXPORT FragmentItem final {
   // Item index delta to the next item for the same |LayoutObject|.
   mutable wtf_size_t delta_to_next_for_same_layout_object_ = 0;
 
+  static constexpr size_t kConstTypeBits = 3;
+  static constexpr size_t kSubTypeBits = 3;
+
   // Note: We should not add |bidi_level_| because it is used only for layout.
-  const unsigned const_type_ : 3;         // ItemType
-  unsigned sub_type_ : 3;                 // TextItemType or LineBoxType
-  unsigned style_variant_ : 2;            // StyleVariant
+  const unsigned const_type_ : kConstTypeBits;  // ItemType
+  unsigned sub_type_ : kSubTypeBits;            // TextItemType or LineBoxType
+  unsigned style_variant_ : 2;                  // StyleVariant
   unsigned is_hidden_for_paint_ : 1;
   // Note: For |TextItem| and |GeneratedTextItem|, |text_direction_| equals to
   // |ShapeResult::Direction()|.

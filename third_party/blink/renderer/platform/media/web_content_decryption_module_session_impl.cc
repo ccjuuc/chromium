@@ -119,8 +119,9 @@ bool SanitizeSessionId(const WebString& session_id,
   // The user agent should thoroughly validate the sessionId value before
   // passing it to the CDM. At a minimum, this should include checking that
   // the length and value (e.g. alphanumeric) are reasonable.
-  if (!session_id.ContainsOnlyASCII())
+  if (!session_id.ContainsOnlyAscii()) {
     return false;
+  }
 
   sanitized_session_id->assign(session_id.Ascii());
   if (sanitized_session_id->length() > media::limits::kMaxSessionIdLength)
@@ -290,7 +291,7 @@ void WebContentDecryptionModuleSessionImpl::SetClientInterface(Client* client) {
 }
 
 WebString WebContentDecryptionModuleSessionImpl::SessionId() const {
-  return WebString::FromUTF8(session_id_);
+  return WebString::FromUtf8(session_id_);
 }
 
 void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
@@ -312,7 +313,7 @@ void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
         "The initialization data type is not supported by the key system.";
     result.CompleteWithError(
         kWebContentDecryptionModuleExceptionNotSupportedError, 0,
-        WebString::FromUTF8(message));
+        WebString::FromUtf8(message));
     return;
   }
 
@@ -336,7 +337,7 @@ void WebContentDecryptionModuleSessionImpl::InitializeNewSession(
   if (!SanitizeInitData(eme_init_data_type, init_data, &sanitized_init_data,
                         &message)) {
     result.CompleteWithError(kWebContentDecryptionModuleExceptionTypeError, 0,
-                             WebString::FromUTF8(message));
+                             WebString::FromUtf8(message));
     return;
   }
 

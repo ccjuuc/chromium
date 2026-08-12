@@ -2,13 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #import <AVFoundation/AVFoundation.h>
 
+#include <array>
 #include <memory>
 
 #include "base/test/scoped_feature_list.h"
@@ -52,6 +48,8 @@ struct CALayerProperties {
   gfx::ScopedIOSurface io_surface;
   gfx::ColorSpace color_space;
   base::apple::ScopedCFTypeRef<CVPixelBufferRef> cv_pixel_buffer;
+  gfx::ProtectedVideoType protected_video_type =
+      gfx::ProtectedVideoType::kClear;
 
   bool allow_av_layers = true;
   bool allow_solid_color_layers = true;
@@ -79,7 +77,7 @@ bool ScheduleCALayer(ui::CARendererLayerTree* tree,
       properties->transform, io_surface, io_surface_color_space,
       properties->contents_rect, properties->rect, properties->background_color,
       properties->edge_aa_mask, properties->opacity, properties->filter,
-      gfx::HDRMetadata(), gfx::ProtectedVideoType::kClear, false));
+      gfx::HDRMetadata(), properties->protected_video_type, false));
 }
 
 void UpdateCALayerTree(std::unique_ptr<ui::CARendererLayerTree>& ca_layer_tree,
@@ -573,17 +571,17 @@ TEST_F(CALayerTreeTest, SplitSortingContextZero) {
   properties.rect = gfx::Rect(0, 0, 256, 256);
 
   // We'll use the IOSurface contents to identify the content layers.
-  gfx::ScopedIOSurface io_surfaces[5];
-  for (size_t i = 0; i < 5; ++i) {
-    io_surfaces[i] = gfx::CreateIOSurface(gfx::Size(256, 256),
-                                          viz::SinglePlaneFormat::kBGRA_8888);
+  std::array<gfx::ScopedIOSurface, 5> io_surfaces;
+  for (auto& surface : io_surfaces) {
+    surface = gfx::CreateIOSurface(gfx::Size(256, 256),
+                                   viz::SinglePlaneFormat::kBGRA_8888);
   }
 
   // Have 5 transforms:
   // * 2 flat but different (1 sorting context layer, 2 transform layers)
   // * 1 non-flat (new sorting context layer)
   // * 2 flat and the same (new sorting context layer, 1 transform layer)
-  gfx::Transform transforms[5];
+  std::array<gfx::Transform, 5> transforms;
   transforms[0].Translate(10, 10);
   transforms[1].RotateAboutZAxis(45.0f);
   transforms[2].RotateAboutYAxis(45.0f);
@@ -656,13 +654,13 @@ TEST_F(CALayerTreeTest, SortingContexts) {
   properties.rect = gfx::Rect(0, 0, 256, 256);
 
   // We'll use the IOSurface contents to identify the content layers.
-  gfx::ScopedIOSurface io_surfaces[3];
-  for (size_t i = 0; i < 3; ++i) {
-    io_surfaces[i] = gfx::CreateIOSurface(gfx::Size(256, 256),
-                                          viz::SinglePlaneFormat::kBGRA_8888);
+  std::array<gfx::ScopedIOSurface, 3> io_surfaces;
+  for (auto& surface : io_surfaces) {
+    surface = gfx::CreateIOSurface(gfx::Size(256, 256),
+                                   viz::SinglePlaneFormat::kBGRA_8888);
   }
 
-  int sorting_context_ids[3] = {3, -1, 0};
+  std::array<int, 3> sorting_context_ids = {3, -1, 0};
 
   // Schedule and commit the layers.
   std::unique_ptr<ui::CARendererLayerTree> ca_layer_tree(
@@ -716,11 +714,11 @@ TEST_F(CALayerTreeTest, SortingContextMustHaveConsistentClip) {
   CALayerProperties properties;
 
   // Vary the clipping parameters within sorting contexts.
-  bool is_clippeds[3] = { true, true, false};
-  gfx::Rect clip_rects[3] = {
+  std::array<bool, 3> is_clippeds = {true, true, false};
+  std::array<gfx::Rect, 3> clip_rects = {
       gfx::Rect(0, 0, 16, 16),
       gfx::Rect(4, 8, 16, 32),
-      gfx::Rect(0, 0, 16, 16)
+      gfx::Rect(0, 0, 16, 16),
   };
 
   std::unique_ptr<ui::CARendererLayerTree> ca_layer_tree(
@@ -922,6 +920,61 @@ TEST_F(CALayerTreeTest, AVLayerBlocklist) {
     EXPECT_FALSE([content_layer2
         isKindOfClass:NSClassFromString(@"AVSampleBufferDisplayLayer")]);
     EXPECT_NE(content_layer1, content_layer2);
+  }
+}
+
+// Ensure that preventsCapture is updated when recycling
+// AVSampleBufferDisplayLayer. Regression test for crbug.com/505192638.
+TEST_F(CALayerTreeTest, AVLayerPreventsCapture) {
+  base::test::ScopedFeatureList features;
+  features.InitWithFeatures({ui::kFullscreenLowPowerBackdropMac}, {});
+
+  CALayerProperties properties;
+  properties.io_surface =
+      gfx::CreateIOSurface(gfx::Size(256, 256), viz::MultiPlaneFormat::kNV12);
+
+  std::unique_ptr<ui::CARendererLayerTree> ca_layer_tree;
+  AVSampleBufferDisplayLayer* av_layer_old = nil;
+  AVSampleBufferDisplayLayer* av_layer_new = nil;
+
+  // Initially, video is clear, so preventsCapture should be NO.
+  {
+    properties.protected_video_type = gfx::ProtectedVideoType::kClear;
+    UpdateCALayerTree(ca_layer_tree, &properties, superlayer_);
+    CALayer* content_layer = GetOnlyContentLayer();
+    EXPECT_TRUE([content_layer
+        isKindOfClass:NSClassFromString(@"AVSampleBufferDisplayLayer")]);
+    av_layer_new = (AVSampleBufferDisplayLayer*)content_layer;
+    EXPECT_FALSE(av_layer_new.preventsCapture);
+  }
+  av_layer_old = av_layer_new;
+
+  // Change to protected video. The layer should be recycled and preventsCapture
+  // should be updated to YES.
+  {
+    properties.protected_video_type =
+        gfx::ProtectedVideoType::kHardwareProtected;
+    UpdateCALayerTree(ca_layer_tree, &properties, superlayer_);
+    CALayer* content_layer = GetOnlyContentLayer();
+    EXPECT_TRUE([content_layer
+        isKindOfClass:NSClassFromString(@"AVSampleBufferDisplayLayer")]);
+    av_layer_new = (AVSampleBufferDisplayLayer*)content_layer;
+    EXPECT_EQ(av_layer_new, av_layer_old);
+    EXPECT_TRUE(av_layer_new.preventsCapture);
+  }
+  av_layer_old = av_layer_new;
+
+  // Change back to clear video. The layer should be recycled and
+  // preventsCapture should be updated to NO.
+  {
+    properties.protected_video_type = gfx::ProtectedVideoType::kClear;
+    UpdateCALayerTree(ca_layer_tree, &properties, superlayer_);
+    CALayer* content_layer = GetOnlyContentLayer();
+    EXPECT_TRUE([content_layer
+        isKindOfClass:NSClassFromString(@"AVSampleBufferDisplayLayer")]);
+    av_layer_new = (AVSampleBufferDisplayLayer*)content_layer;
+    EXPECT_EQ(av_layer_new, av_layer_old);
+    EXPECT_FALSE(av_layer_new.preventsCapture);
   }
 }
 

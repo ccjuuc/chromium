@@ -124,7 +124,7 @@ public class RecentActivityListCoordinator {
         SimpleRecyclerViewAdapter adapter = new SimpleRecyclerViewAdapter(mModelList);
         adapter.registerType(
                 0,
-                new LayoutViewBuilder(R.layout.recent_activity_log_item),
+                new LayoutViewBuilder<>(R.layout.recent_activity_log_item),
                 RecentActivityListViewBinder::bind);
 
         mContentRecyclerView = mContentContainer.findViewById(R.id.recent_activity_recycler_view);
@@ -164,7 +164,7 @@ public class RecentActivityListCoordinator {
                             .withMenuId(R.id.see_full_activity)
                             .build());
             ListMenu.Delegate delegate =
-                    (model, unusedView) -> {
+                    (model, _) -> {
                         int textId = model.get(ListMenuItemProperties.TITLE_ID);
                         if (textId == R.string.data_sharing_shared_tab_groups_activity) {
                             mShowFullActivityRunnable.run();

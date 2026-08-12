@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/gpu/v4l2/v4l2_video_decoder_backend_stateless.h"
 
@@ -13,9 +9,10 @@
 #include <linux/media.h>
 #include <sys/ioctl.h>
 
+#include <algorithm>
 #include <memory>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
@@ -27,6 +24,7 @@
 #include "media/base/decoder_status.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_frame.h"
+#include "media/base/video_types.h"
 #include "media/gpu/accelerated_video_decoder.h"
 #include "media/gpu/chromeos/dmabuf_video_frame_pool.h"
 #include "media/gpu/chromeos/video_frame_resource.h"
@@ -314,7 +312,8 @@ bool V4L2StatelessVideoDecoderBackend::SubmitSlice(
   // will exist in the secure buffer.
   if (data) {
     void* mapping = dec_surface->input_buffer().GetPlaneMapping(0);
-    memcpy(reinterpret_cast<uint8_t*>(mapping) + bytes_used, data, size);
+    UNSAFE_TODO(
+        memcpy(reinterpret_cast<uint8_t*>(mapping) + bytes_used, data, size));
   }
   dec_surface->input_buffer().SetPlaneBytesUsed(0, bytes_used + size);
   return true;
@@ -416,6 +415,11 @@ bool V4L2StatelessVideoDecoderBackend::PumpDecodeTask() {
                    << base::strict_cast<int>(decoder_->GetBitDepth());
           return false;
         }
+        if (decoder_->GetChromaSampling() != VideoChromaSampling::k420) {
+          VLOGF(2) << "Unsupported chroma sampling: "
+                   << static_cast<int>(decoder_->GetChromaSampling());
+          return false;
+        }
 
         if (profile_ != decoder_->GetProfile()) {
           DVLOGF(3) << "Profile is changed: " << profile_ << " -> "
@@ -428,7 +432,8 @@ bool V4L2StatelessVideoDecoderBackend::PumpDecodeTask() {
           profile_ = decoder_->GetProfile();
         }
 
-        if (pic_size_ == decoder_->GetPicSize()) {
+        if (pic_size_ == decoder_->GetPicSize() &&
+            bit_depth_ == decoder_->GetBitDepth()) {
           // There is no need to do anything in V4L2 API when only a profile is
           // changed.
           DVLOGF(3) << "Only profile is changed. No need to do anything.";
@@ -540,7 +545,7 @@ void V4L2StatelessVideoDecoderBackend::PumpOutputSurfaces() {
           const auto flat_timestamp = timestamp.InMilliseconds();
           // TODO(b/190615065) |flat_timestamp| might be repeated with H.264
           // bitstreams, investigate why, and change the if() to DCHECK().
-          if (base::Contains(enqueuing_timestamps_, flat_timestamp)) {
+          if (enqueuing_timestamps_.contains(flat_timestamp)) {
             const auto decoding_begin = enqueuing_timestamps_[flat_timestamp];
             const auto decoding_end = base::TimeTicks::Now();
             UMA_HISTOGRAM_TIMES("Media.PlatformVideoDecoding.Decode",
@@ -627,6 +632,8 @@ void V4L2StatelessVideoDecoderBackend::OnChangeResolutionDone(
   }
 
   pic_size_ = decoder_->GetPicSize();
+  bit_depth_ = decoder_->GetBitDepth();
+
   client_->CompleteFlush();
   task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&V4L2StatelessVideoDecoderBackend::DoDecodeWork,
@@ -650,7 +657,8 @@ void V4L2StatelessVideoDecoderBackend::ClearPendingRequests(
   if (decoder_) {
     // If we reset during resolution change, re-create AVD. Then the new AVD
     // will trigger resolution change again after reset.
-    if (pic_size_ != decoder_->GetPicSize()) {
+    if (pic_size_ != decoder_->GetPicSize() ||
+        bit_depth_ != decoder_->GetBitDepth()) {
       CreateDecoder();
     } else {
       decoder_->Reset();
@@ -715,7 +723,7 @@ bool V4L2StatelessVideoDecoderBackend::IsSupportedProfile(
     for (const auto& entry : profiles)
       supported_profiles_.push_back(entry.profile);
   }
-  return base::Contains(supported_profiles_, profile);
+  return std::ranges::contains(supported_profiles_, profile);
 }
 
 bool V4L2StatelessVideoDecoderBackend::CreateDecoder() {
@@ -723,6 +731,7 @@ bool V4L2StatelessVideoDecoderBackend::CreateDecoder() {
   DVLOGF(3);
 
   pic_size_ = gfx::Size();
+  bit_depth_ = kDefaultBitDepth;
 
   CHECK(input_queue_->SupportsRequests());
 

@@ -454,8 +454,6 @@ SearchBoxViewBase::SearchBoxViewBase()
       std::make_unique<views::FillLayout>());
   content_container_->SetFlexForView(search_box_button_container_, 0,
                                      /*use_min_size=*/true);
-
-  UpdateSearchTextfieldAccessibleActiveDescendantId();
 }
 
 SearchBoxViewBase::~SearchBoxViewBase() = default;
@@ -702,8 +700,7 @@ void SearchBoxViewBase::OnMouseEvent(ui::MouseEvent* event) {
 
 void SearchBoxViewBase::OnThemeChanged() {
   views::View::OnThemeChanged();
-  search_box_->SetSelectionBackgroundColor(
-      GetWidget()->GetColorProvider()->GetColor(kColorAshFocusAuraColor));
+  search_box_->SetSelectionBackgroundColorId(kColorAshFocusAuraColor);
   UpdatePlaceholderTextStyle();
 }
 
@@ -724,8 +721,6 @@ bool SearchBoxViewBase::IsSearchBoxTrimmedQueryEmpty() const {
                        &trimmed_query);
   return trimmed_query.empty();
 }
-
-void SearchBoxViewBase::UpdateSearchTextfieldAccessibleActiveDescendantId() {}
 
 void SearchBoxViewBase::ClearSearch() {
   search_box_->SetText(std::u16string());
@@ -753,7 +748,7 @@ void SearchBoxViewBase::SetPreferredStyleForAutocompleteText(
 void SearchBoxViewBase::SetPreferredStyleForSearchboxText(
     const gfx::FontList& font_list,
     ui::ColorId text_color_id) {
-  search_box_->SetTextColor(text_color_id);
+  search_box_->SetTextColorId(text_color_id);
   search_box_->SetFontList(font_list);
 }
 

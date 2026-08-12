@@ -7,7 +7,8 @@
 
 #include <optional>
 
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -33,7 +34,7 @@ namespace chrome {
 // If |url| is an empty URL, then the new tab-page is laoded. An |index| of -1
 // means to append it to the end of the tab strip.
 content::WebContents* AddAndReturnTabAt(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const GURL& url,
     int index,
     bool foreground,
@@ -41,7 +42,7 @@ content::WebContents* AddAndReturnTabAt(
     bool pinned = false);
 
 // Same as above, but eats the return value to make Bind*() easier.
-void AddTabAt(Browser* browser,
+void AddTabAt(BrowserWindowInterface* browser,
               const GURL& url,
               int index,
               bool foreground,
@@ -50,7 +51,7 @@ void AddTabAt(Browser* browser,
 
 // Adds a selected tab with the specified URL and transition, returns the
 // created WebContents.
-content::WebContents* AddSelectedTabWithURL(Browser* browser,
+content::WebContents* AddSelectedTabWithURL(BrowserWindowInterface* browser,
                                             const GURL& url,
                                             ui::PageTransition transition);
 
@@ -64,7 +65,7 @@ content::WebContents* AddSelectedTabWithURL(Browser* browser,
 // Invariant: If `new_contents` is not nullptr, then the returned instance
 // should always match new_contents.get().
 content::WebContents* AddWebContents(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     content::WebContents* source_contents,
     std::unique_ptr<content::WebContents> new_contents,
     const GURL& target_url,
@@ -86,6 +87,9 @@ void ConfigureTabGroupForNavigation(NavigateParams* nav_params);
 
 // Decides whether or not to create a new tab group.
 bool ShouldAutoCreateGroupForNavigation(NavigateParams* nav_params);
+
+// Returns the new tab URL for `browser`.
+GURL GetNewTabURL(const BrowserWindowInterface* browser);
 
 }  // namespace chrome
 

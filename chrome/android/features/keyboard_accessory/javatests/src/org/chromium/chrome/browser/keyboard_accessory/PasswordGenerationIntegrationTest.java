@@ -27,14 +27,15 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.IntegrationTest;
 import org.chromium.base.test.util.Matchers;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.ChromeWindow;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.infobar.InfoBarContainer;
 import org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupView;
 import org.chromium.chrome.browser.password_manager.PasswordManagerTestHelper;
 import org.chromium.chrome.browser.password_manager.PasswordStoreBridge;
@@ -54,6 +55,7 @@ import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.net.test.ServerCertificate;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.test.util.DeviceRestriction;
 import org.chromium.ui.test.util.GmsCoreVersionRestriction;
@@ -68,6 +70,7 @@ import java.util.concurrent.TimeoutException;
                 "TODO(crbug.com/40232561): add resetting logic for"
                         + "FakePasswordStoreAndroidBackend to allow batching")
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, "show-autofill-signatures"})
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/481445547
 public class PasswordGenerationIntegrationTest {
     /**
      * The number of buttons currently available in the keyboard accessory bar. The offered options
@@ -101,6 +104,7 @@ public class PasswordGenerationIntegrationTest {
 
     @Before
     public void setUp() throws InterruptedException {
+        ChromeWindow.setKeyboardVisibilityDelegateFactory(FakeKeyboard::new);
         CoreAccountInfo account = mSyncTestRule.setUpAccountAndSignInForTesting();
         PasswordManagerTestHelper.setAccountForPasswordStore(account.getEmail());
         ManualFillingTestHelper.disableServerPredictions();
@@ -127,6 +131,7 @@ public class PasswordGenerationIntegrationTest {
     @After
     public void tearDown() {
         mHelper.clear();
+        ChromeWindow.resetKeyboardVisibilityDelegateFactory();
     }
 
     // TODO(crbug.com/386734610): enable for autos.
@@ -147,7 +152,7 @@ public class PasswordGenerationIntegrationTest {
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
         rejectPasswordInGenerationBottomSheet(mActivity);
         assertPasswordTextEmpty(PASSWORD_NODE_ID);
-        assertNoInfobarsAreShown();
+        assertNoMessagesAreShown();
         CriteriaHelper.pollUiThread(
                 () -> {
                     PasswordStoreCredential[] credentials =
@@ -174,7 +179,7 @@ public class PasswordGenerationIntegrationTest {
         BottomSheetTestSupport.waitForOpen(mBottomSheetController);
         rejectPasswordInGenerationBottomSheet(mActivity);
         assertPasswordTextEmpty(PASSWORD_NODE_ID_MANUAL);
-        assertNoInfobarsAreShown();
+        assertNoMessagesAreShown();
         CriteriaHelper.pollUiThread(
                 () -> {
                     PasswordStoreCredential[] credentials =
@@ -256,7 +261,7 @@ public class PasswordGenerationIntegrationTest {
                 () -> {
                     return mActivity.findViewById(R.id.passwords_sheet) != null;
                 });
-        ArrayList<View> selectedViews = new ArrayList();
+        ArrayList<View> selectedViews = new ArrayList<>();
         mActivity
                 .findViewById(R.id.passwords_sheet)
                 .findViewsWithText(
@@ -336,12 +341,14 @@ public class PasswordGenerationIntegrationTest {
                 });
     }
 
-    private void assertNoInfobarsAreShown() {
+    private void assertNoMessagesAreShown() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Assert.assertFalse(
-                            InfoBarContainer.from(mActivityTestRule.getActivityTab())
-                                    .hasInfoBars());
+                    WindowAndroid window = mActivity.getWindowAndroid();
+                    Assert.assertEquals(
+                            "No messages should be shown.",
+                            0,
+                            MessagesTestHelper.getMessageCount(window));
                 });
     }
 

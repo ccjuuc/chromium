@@ -13,6 +13,7 @@
 #import "components/prefs/ios/pref_observer_bridge.h"
 #import "components/prefs/pref_change_registrar.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/base/user_selectable_type.h"
@@ -27,6 +28,7 @@
 #import "ios/chrome/browser/push_notification/model/push_notification_settings_util.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_util.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/sync/model/enterprise_utils.h"
 
 using set_up_list_prefs::SetUpListItemState;
@@ -55,6 +57,10 @@ bool GetIsItemComplete(SetUpListItemType type,
       return push_notification_settings::
           IsMobileNotificationsEnabledForAnyClient(account.gaia, prefs);
     }
+    case SetUpListItemType::kSafariImport:
+      return false;
+    case SetUpListItemType::kBackgroundCustomization:
+      return false;
     case SetUpListItemType::kAllSet:
       NOTREACHED();
   }
@@ -107,9 +113,35 @@ BOOL AllItemsComplete(NSArray<SetUpListItem*>* items) {
 // Returns an ordered list of SetUpListItemType to show.
 std::vector<SetUpListItemType> GetSetUpListItemTypeOrder() {
   std::vector<SetUpListItemType> items;
-  items.push_back(SetUpListItemType::kDefaultBrowser);
-  items.push_back(SetUpListItemType::kAutofill);
-  items.push_back(SetUpListItemType::kNotifications);
+
+  if (IsIOSExpandedSetupListEnabled()) {
+    items.push_back(SetUpListItemType::kDefaultBrowser);
+    items.push_back(SetUpListItemType::kNotifications);
+
+    std::string feature_param = GetFieldTrialParamValueByFeature(
+        kIOSExpandedSetupList, kIOSExpandedSetupListVariationParam);
+
+    if (feature_param == kIOSExpandedSetupListVariationParamSafariImport) {
+      items.push_back(SetUpListItemType::kSafariImport);
+      items.push_back(SetUpListItemType::kAutofill);
+    } else if (feature_param ==
+               kIOSExpandedSetupListVariationParamBackgroundCustomization) {
+      items.push_back(SetUpListItemType::kBackgroundCustomization);
+      items.push_back(SetUpListItemType::kAutofill);
+    } else if (feature_param ==
+               kIOSExpandedSetupListVariationParamAllExceptCPE) {
+      items.push_back(SetUpListItemType::kSafariImport);
+      items.push_back(SetUpListItemType::kBackgroundCustomization);
+    } else if (feature_param == kIOSExpandedSetupListVariationParamAll) {
+      items.push_back(SetUpListItemType::kSafariImport);
+      items.push_back(SetUpListItemType::kBackgroundCustomization);
+      items.push_back(SetUpListItemType::kAutofill);
+    }
+  } else {
+    items.push_back(SetUpListItemType::kDefaultBrowser);
+    items.push_back(SetUpListItemType::kAutofill);
+    items.push_back(SetUpListItemType::kNotifications);
+  }
 
   return items;
 }
@@ -169,6 +201,11 @@ std::vector<SetUpListItemType> GetSetUpListItemTypeOrder() {
         set_up_list_prefs::kAutofillItemState, &_prefChangeRegistrar);
     _prefObserverBridge->ObserveChangesForPreference(
         set_up_list_prefs::kNotificationsItemState, &_prefChangeRegistrar);
+    _prefObserverBridge->ObserveChangesForPreference(
+        set_up_list_prefs::kSafariImportItemState, &_prefChangeRegistrar);
+    _prefObserverBridge->ObserveChangesForPreference(
+        set_up_list_prefs::kBackgroundCustomizationItemState,
+        &_prefChangeRegistrar);
   }
   return self;
 }

@@ -93,12 +93,12 @@ export class HistorySyncOptinAppElement extends HistorySyncOptinAppElementBase {
     this.onScreenModeDataReceivedListenerId_ = null;
   }
 
-  protected onReject_() {
+  protected onRejectClick_() {
     this.buttonsDisabled_ = true;
     this.historySyncOptInBrowserProxy_.handler.reject();
   }
 
-  protected onAccept_() {
+  protected onAcceptClick_() {
     this.buttonsDisabled_ = true;
     this.historySyncOptInBrowserProxy_.handler.accept();
   }
@@ -134,7 +134,7 @@ export class HistorySyncOptinAppElement extends HistorySyncOptinAppElementBase {
   }
 
   private handleAccountInfoChanged_(accountInfo: AccountInfo) {
-    this.accountImageSrc_ = accountInfo.accountImageSrc.url;
+    this.accountImageSrc_ = accountInfo.accountImageSrc;
   }
 
   private handleScreenModeChanged_(screenMode: ScreenMode) {

@@ -44,6 +44,7 @@
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "net/url_request/device_bound_session_mode.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_job_factory.h"
 #include "net/url_request/url_request_test_util.h"
@@ -101,6 +102,8 @@ class BasicNetworkDelegate : public NetworkDelegateImpl {
                          CompletionOnceCallback callback,
                          GURL* new_url) override {
     EXPECT_TRUE(request->load_flags() & LOAD_DISABLE_CERT_NETWORK_FETCHES);
+    EXPECT_EQ(request->device_bound_session_mode(),
+              DeviceBoundSessionMode::kDisabled);
     return OK;
   }
 };
@@ -264,7 +267,7 @@ TEST_F(PacFileFetcherImplTest, IsolationInfo) {
       context_->host_resolver()->CreateRequest(
           url::SchemeHostPort(url),
           pac_fetcher->isolation_info().network_anonymization_key(),
-          net::NetLogWithSource(), params);
+          handles::kInvalidNetworkHandle, net::NetLogWithSource(), params);
   net::TestCompletionCallback callback2;
   result = host_request->Start(callback2.callback());
   EXPECT_EQ(net::OK, callback2.GetResult(result));
@@ -277,7 +280,7 @@ TEST_F(PacFileFetcherImplTest, IsolationInfo) {
   // NetworkAnonymizationKey.
   host_request = context_->host_resolver()->CreateRequest(
       url::SchemeHostPort(url), NetworkAnonymizationKey(),
-      net::NetLogWithSource(), params);
+      handles::kInvalidNetworkHandle, net::NetLogWithSource(), params);
   net::TestCompletionCallback callback3;
   result = host_request->Start(callback3.callback());
   EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, callback3.GetResult(result));
@@ -500,7 +503,7 @@ TEST_F(PacFileFetcherImplTest, DataURLs) {
 TEST_F(PacFileFetcherImplTest, IgnoresLimits) {
   // Enough requests to exceed the per-group limit.
   int num_requests = 2 + ClientSocketPoolManager::max_sockets_per_group(
-                             HttpNetworkSession::NORMAL_SOCKET_POOL);
+                             HttpNetworkSession::SocketPoolType::kNormal);
 
   net::test_server::SimpleConnectionListener connection_listener(
       num_requests, net::test_server::SimpleConnectionListener::

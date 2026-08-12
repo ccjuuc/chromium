@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -120,7 +119,7 @@ const char WindowTreeHost::kWindowTreeHostUsesParent[] =
 
 WindowTreeHost::~WindowTreeHost() {
   DCHECK(!compositor_) << "compositor must be destroyed before root window";
-  DCHECK(!base::Contains(HostFrameRateThrottler::GetInstance().hosts(), this));
+  DCHECK(!HostFrameRateThrottler::GetInstance().hosts().contains(this));
 }
 
 // static
@@ -438,7 +437,9 @@ void WindowTreeHost::LockMouse(Window* window) {
 
 void WindowTreeHost::UnlockMouse(Window* window) {
   Window* root_window = window->GetRootWindow();
+  CHECK_EQ(root_window, window_);
   DCHECK(root_window);
+  Window::ScopedDeleteBlocker blocker(root_window);
 
   if (window->HasCapture())
     window->ReleaseCapture();

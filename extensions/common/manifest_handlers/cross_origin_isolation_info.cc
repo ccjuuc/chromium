@@ -15,8 +15,8 @@ namespace {
 using COIManifestKeys = api::cross_origin_isolation::ManifestKeys;
 
 const std::string* GetHeaderValue(const Extension& extension, const char* key) {
-  CrossOriginIsolationHeader* header =
-      static_cast<CrossOriginIsolationHeader*>(extension.GetManifestData(key));
+  const auto* header =
+      extension.GetManifestData<CrossOriginIsolationHeader>(key);
   return header ? &header->value : nullptr;
 }
 

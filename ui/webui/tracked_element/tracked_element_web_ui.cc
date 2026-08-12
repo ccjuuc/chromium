@@ -4,27 +4,83 @@
 
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
 
+#include <sstream>
+#include <string_view>
+#include <utility>
+
 #include "base/check.h"
+#include "base/logging.h"
+#include "base/types/pass_key.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "ui/base/interaction/element_events.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#if !BUILDFLAG(IS_ANDROID)
 #include "ui/gfx/native_ui_util.h"
+#include "ui/views/interaction/view_subregion_anchor.h"
+#endif
 #include "ui/webui/tracked_element/tracked_element_handler.h"
 
 namespace ui {
 
+TrackedElementVisibilityLock::TrackedElementVisibilityLock(
+    base::WeakPtr<TrackedElementWebUI> element)
+    : element_(std::move(element)) {
+  if (element_) {
+    element_->AddVisibilityLock();
+  }
+}
+
+TrackedElementVisibilityLock::~TrackedElementVisibilityLock() {
+  if (element_) {
+    element_->RemoveVisibilityLock();
+  }
+}
+
+TrackedElementVisibilityLock::TrackedElementVisibilityLock(
+    TrackedElementVisibilityLock&& other) noexcept
+    : element_(std::move(other.element_)) {
+  other.element_.reset();
+}
+
+TrackedElementVisibilityLock& TrackedElementVisibilityLock::operator=(
+    TrackedElementVisibilityLock&& other) noexcept {
+  if (this != &other) {
+    if (element_) {
+      element_->RemoveVisibilityLock();
+    }
+    element_ = std::move(other.element_);
+    other.element_.reset();
+  }
+  return *this;
+}
+
+TrackedElementWebUI::HighlightHandle::HighlightHandle(
+    base::WeakPtr<TrackedElementWebUI> element)
+    : element_(std::move(element)) {}
+
+TrackedElementWebUI::HighlightHandle::~HighlightHandle() {
+  if (element_) {
+    element_->ReleaseHighlightHandle();
+  }
+}
+
 TrackedElementWebUI::TrackedElementWebUI(TrackedElementHandler* handler,
                                          ui::ElementIdentifier identifier,
+                                         std::string_view secondary_identifier,
                                          ui::ElementContext context)
-    : TrackedElement(identifier, context), handler_(handler) {
-  DCHECK(handler);
+    : TrackedElement(identifier, context),
+      handler_(handler),
+      secondary_identifier_(secondary_identifier) {
+  CHECK(handler);
+  CHECK(!secondary_identifier.empty());
 }
 
 TrackedElementWebUI::~TrackedElementWebUI() {
-  SetVisible(false);
+  raw_visible_ = false;
+  UpdateEffectiveVisibility();
 }
 
 gfx::Rect TrackedElementWebUI::GetScreenBounds() const {
@@ -48,22 +104,94 @@ gfx::Rect TrackedElementWebUI::GetScreenBounds() const {
 }
 
 gfx::NativeView TrackedElementWebUI::GetNativeView() const {
-  return gfx::GetViewForWindow(
-      handler_->web_contents()->GetTopLevelNativeWindow());
+  auto* const contents = handler_->web_contents();
+#if !BUILDFLAG(IS_ANDROID)
+  return (contents && contents->GetTopLevelNativeWindow())
+             ? gfx::GetViewForWindow(contents->GetTopLevelNativeWindow())
+             : gfx::NativeView();
+#else
+  return (contents) ? contents->GetNativeView() : gfx::NativeView();
+#endif
 }
 
-void TrackedElementWebUI::SetVisible(bool visible, gfx::RectF bounds) {
+std::string TrackedElementWebUI::GetSecondaryIdentifier() const {
+  return secondary_identifier_;
+}
+
+std::string TrackedElementWebUI::ToString() const {
+  std::ostringstream oss;
+  oss << TrackedElement::ToString() << " in page ";
+  if (const auto* contents = handler_->web_contents()) {
+    oss << contents->GetLastCommittedURL();
+  } else {
+    oss << "[none]";
+  }
+  return oss.str();
+}
+
+scoped_refptr<TrackedElementWebUI::HighlightHandle>
+TrackedElementWebUI::GetOrMakeHighlightHandle() {
+  DCHECK(can_highlight_);
+
+  if (highlight_handle_) {
+    return highlight_handle_.get();
+  }
+  auto result = base::WrapRefCounted<HighlightHandle>(
+      new HighlightHandle(weak_ptr_factory_.GetWeakPtr()));
+  highlight_handle_ = result.get();
+  handler_->SetHighlightState(*this, true,
+                              base::PassKey<TrackedElementWebUI>());
+  return result;
+}
+
+void TrackedElementWebUI::ReleaseHighlightHandle() {
+  DCHECK(highlight_handle_);
+  highlight_handle_ = nullptr;
+  handler_->SetHighlightState(*this, false,
+                              base::PassKey<TrackedElementWebUI>());
+}
+
+std::unique_ptr<TrackedElementVisibilityLock>
+TrackedElementWebUI::LockVisible() {
+  return std::make_unique<TrackedElementVisibilityLock>(
+      weak_ptr_factory_.GetWeakPtr());
+}
+
+void TrackedElementWebUI::AddVisibilityLock() {
+  ++visibility_lock_count_;
+  UpdateEffectiveVisibility();
+}
+
+void TrackedElementWebUI::RemoveVisibilityLock() {
+  DCHECK_GT(visibility_lock_count_, 0);
+  --visibility_lock_count_;
+  UpdateEffectiveVisibility();
+}
+
+void TrackedElementWebUI::SetRawVisible(bool visible, gfx::RectF bounds) {
+  const bool bounds_changed = bounds != last_known_bounds_;
+  raw_visible_ = visible;
+  last_known_bounds_ = bounds;
+  UpdateEffectiveVisibility(bounds_changed);
+}
+
+void TrackedElementWebUI::UpdateEffectiveVisibility(bool bounds_changed) {
+  const bool visible = raw_visible_ && (handler_->is_web_contents_visible() ||
+                                        visibility_lock_count_ > 0);
+
   if (visible == visible_) {
-    if (visible && last_known_bounds_ != bounds) {
-      last_known_bounds_ = bounds;
+    if (visible && bounds_changed) {
       // This event signals that the bounds of the element have been updated.
       ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
           this, kElementBoundsChangedEvent);
+#if !BUILDFLAG(IS_ANDROID)
+      ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+          this, views::ViewSubregionAnchor::kAnchorBoundsChangedEvent);
+#endif
     }
     return;
   }
 
-  last_known_bounds_ = bounds;
   visible_ = visible;
   auto* const delegate = ui::ElementTracker::GetFrameworkDelegate();
   if (visible) {
@@ -84,6 +212,6 @@ void TrackedElementWebUI::CustomEvent(ui::CustomElementEventType event_type) {
                                                                 event_type);
 }
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TrackedElementWebUI)
+DEFINE_SAFE_CAST_TARGET(TrackedElementWebUI)
 
 }  // namespace ui

@@ -16,5 +16,14 @@ NSString* const kOmniboxShareButtonIdentifier =
 NSString* const kOmniboxVoiceSearchButtonIdentifier =
     @"kOmniboxVoiceSearchButtonIdentifier";
 
-NSString* const kOmniboxTextHiddenLabelIdentifier =
-    @"kOmniboxTextHiddenLabelidentifier";
+UIContentSizeCategory LegacyLocationBarSteadyViewMaxSizeCategory() {
+  return UIContentSizeCategoryAccessibilityExtraLarge;
+}
+
+UIContentSizeCategory LocationBarSteadyViewMaxSizeCategory() {
+  return UIContentSizeCategoryAccessibilityLarge;
+}
+
+UIFontTextStyle LocationBarFontTextStyle() {
+  return UIFontTextStyleBody;
+}

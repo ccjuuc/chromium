@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -200,18 +199,19 @@ class TabStatsTrackerBrowserTest : public PlatformBrowserTest {
     // until it's added to the tab strip.
     content::WebContents::CreateParams create_params(tab_strip.GetProfile());
     create_params.initially_hidden = true;
-    content::WebContents* new_contents =
-        content::WebContents::Create(create_params).release();
+    std::unique_ptr<content::WebContents> contents =
+        content::WebContents::Create(create_params);
+    content::WebContents* raw_contents = contents.get();
 
     // CreateTab works with both OwningTestTabModel and the initial tab strip,
     // which is a production TabModel.
     tab_strip.tab_model()->CreateTab(
-        TabAndroid::FromWebContents(active_contents), new_contents,
+        TabAndroid::FromWebContents(active_contents), std::move(contents),
         TabModel::kInvalidIndex,
         TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND,
         /*should_pin=*/false);
 
-    NavigateNewTabToUrl(new_contents, url);
+    NavigateNewTabToUrl(raw_contents, url);
     return true;
   }
 
@@ -557,12 +557,12 @@ IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
   // Make sure that the 2 windows don't overlap to avoid some unexpected
   // visibility change events because one tab occludes the other.
   // This resizes the two windows so they're right next to each other.
-  const gfx::NativeWindow window = browser()->window()->GetNativeWindow();
+  const gfx::NativeWindow window = browser()->GetWindow()->GetNativeWindow();
   gfx::Rect work_area =
       display::Screen::Get()->GetDisplayNearestWindow(window).work_area();
   const gfx::Size size(work_area.width() / 3, work_area.height() / 2);
   gfx::Rect browser_rect(work_area.origin(), size);
-  browser()->window()->SetBounds(browser_rect);
+  browser()->GetWindow()->SetBounds(browser_rect);
   browser_rect.set_x(browser_rect.right());
   window2->browser_window_interface()->GetWindow()->SetBounds(browser_rect);
   auto expected_window1_tab1_visibility = content::Visibility::VISIBLE;
@@ -805,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(
     tab_stats_tracker_->AddObserverAndSetInitialState(&mock_observer);
     EXPECT_CALL(mock_observer, OnPrimaryMainFrameNavigationCommitted(_))
         .Times(0);
-    content::FrameTreeNodeId host_id =
+    content::PrerenderHostId host_id =
         prerender_test_helper().AddPrerender(prerender_url);
     ASSERT_TRUE(GetWebContents());
     host_observer = std::make_unique<content::test::PrerenderHostObserver>(
@@ -846,9 +846,19 @@ class TabStatsTrackerSubFrameBrowserTest : public TabStatsTrackerBrowserTest {
   content::test::FencedFrameTestHelper fenced_frame_helper_;
 };
 
+// TODO(crbug.com/532509057): Fix the flakiness on Android and re-enable the
+// test.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_VerifyBehaviorOnSubFrameNavigation \
+  DISABLED_VerifyBehaviorOnSubFrameNavigation
+#else
+#define MAYBE_VerifyBehaviorOnSubFrameNavigation \
+  VerifyBehaviorOnSubFrameNavigation
+#endif
+
 // Ensure that subframe navigation cannot affect TabStatsTracker.
 IN_PROC_BROWSER_TEST_F(TabStatsTrackerSubFrameBrowserTest,
-                       VerifyBehaviorOnSubFrameNavigation) {
+                       MAYBE_VerifyBehaviorOnSubFrameNavigation) {
   MockTabStatsObserver mock_observer;
   TestTabStatsObserver count_observer;
   tab_stats_tracker_->AddObserverAndSetInitialState(&mock_observer);

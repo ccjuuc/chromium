@@ -6,7 +6,6 @@ package org.chromium.components.browser_ui.widget;
 
 import android.content.Context;
 import android.util.AttributeSet;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.ViewGroup;
 import android.widget.Checkable;
@@ -16,12 +15,10 @@ import android.widget.RadioButton;
 import android.widget.TextView;
 
 import androidx.annotation.DrawableRes;
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.constraintlayout.widget.ConstraintLayout;
-import androidx.constraintlayout.widget.ConstraintSet;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.widget.ChromeImageView;
 
 /**
@@ -39,13 +36,9 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
     private TextView mItemDescription;
     private RadioButton mItemRadioButton;
 
-    private ConstraintSet mHorizontalConstraints;
-    private ConstraintSet mVerticalConstraints;
-
     private ConstraintLayout mRootItemLayout;
 
     private boolean mIsChecked;
-    private boolean mIsVerticalLayout;
 
     private int mDefaultRootLayoutPaddingStart;
     private int mDefaultRootLayoutPaddingTop;
@@ -55,29 +48,23 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
     private ViewGroup.MarginLayoutParams mDefaultTitleLayoutParams;
     private ViewGroup.MarginLayoutParams mDefaultRadioButtonLayoutParams;
 
-    public RichRadioButton(@NonNull Context context) {
+    public RichRadioButton(Context context) {
         super(context);
         init(context);
     }
 
-    public RichRadioButton(@NonNull Context context, @Nullable AttributeSet attrs) {
+    public RichRadioButton(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
         init(context);
     }
 
-    public RichRadioButton(
-            @NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
+    public RichRadioButton(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
         init(context);
     }
 
-    private void init(@NonNull Context context) {
+    private void init(Context context) {
         LayoutInflater.from(context).inflate(R.layout.rich_radio_button, this, true);
-
-        mHorizontalConstraints = new ConstraintSet();
-        mHorizontalConstraints.load(context, R.xml.rich_radio_button_horizontal_constraints);
-        mVerticalConstraints = new ConstraintSet();
-        mVerticalConstraints.load(context, R.xml.rich_radio_button_vertical_constraints);
 
         mRootItemLayout = findViewById(R.id.root_item_layout);
         mIconContainer = findViewById(R.id.rich_radio_button_icon_container);
@@ -108,14 +95,9 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
      * @param iconResId Optional drawable resource ID for the icon. Pass 0 to hide the icon.
      * @param title The title text for the item.
      * @param description Optional description text. Pass null or empty string to hide.
-     * @param isInternalVertical True if the item's internal content should be vertically stacked,
-     *     false for horizontal.
      */
     public void setItemData(
-            @DrawableRes int iconResId,
-            @NonNull String title,
-            @Nullable String description,
-            boolean isInternalVertical) {
+            @DrawableRes int iconResId, String title, @Nullable String description) {
         if (iconResId != 0) {
             mItemIcon.setImageResource(iconResId);
             mItemIcon.setVisibility(VISIBLE);
@@ -133,7 +115,6 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
         } else {
             mItemDescription.setVisibility(GONE);
         }
-        setOrientation(isInternalVertical);
     }
 
     private void adjustLayoutWithoutIcon() {
@@ -157,7 +138,10 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
                 (LinearLayout.LayoutParams) mItemTitle.getLayoutParams();
         LinearLayout.LayoutParams newTitleParams =
                 new LinearLayout.LayoutParams(currentTitleParams);
-        newTitleParams.setMargins(titleMarginPx, titleMarginPx, 0, titleMarginPx);
+        newTitleParams.setMarginStart(titleMarginPx);
+        newTitleParams.setMarginEnd(0);
+        newTitleParams.topMargin = titleMarginPx;
+        newTitleParams.bottomMargin = titleMarginPx;
         mItemTitle.setLayoutParams(newTitleParams);
         int radioButtonMarginPx =
                 getContext()
@@ -180,28 +164,6 @@ public class RichRadioButton extends ConstraintLayout implements Checkable {
 
         mItemTitle.setLayoutParams(mDefaultTitleLayoutParams);
         mItemRadioButton.setLayoutParams(mDefaultRadioButtonLayoutParams);
-    }
-
-    /**
-     * Sets the orientation of the item's internal layout.
-     *
-     * @param isVertical True for vertical stacking, false for horizontal.
-     */
-    private void setOrientation(boolean isVertical) {
-        if (mIsVerticalLayout != isVertical) {
-            mIsVerticalLayout = isVertical;
-
-            if (isVertical) {
-                mVerticalConstraints.applyTo(mRootItemLayout);
-                mItemTitle.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
-                mItemDescription.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
-                mItemDescription.setMaxLines(1);
-            } else {
-                mHorizontalConstraints.applyTo(mRootItemLayout);
-                mItemTitle.setGravity(Gravity.NO_GRAVITY);
-                mItemDescription.setGravity(Gravity.NO_GRAVITY);
-            }
-        }
     }
 
     @Override

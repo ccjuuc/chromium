@@ -30,7 +30,8 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.UserDataHost;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
 import org.chromium.cc.input.BrowserControlsState;
@@ -42,11 +43,13 @@ import org.chromium.chrome.browser.tab.TabBrowserControlsConstraintsHelper;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 /** Unit tests for {@link FullscreenHtmlApiHandlerLegacy}. */
 @Features.EnableFeatures({
     ChromeFeatureList.DISPLAY_EDGE_TO_EDGE_FULLSCREEN,
-    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID
+    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID,
+    UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION
 })
 @Features.DisableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
 @RunWith(BaseRobolectricTestRunner.class)
@@ -66,7 +69,7 @@ public class FullscreenHtmlApiHandlerLegacyUnitTest {
 
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
     private FullscreenHtmlApiHandlerLegacy mFullscreenHtmlApiHandlerLegacy;
-    private ObservableSupplierImpl<Boolean> mAreControlsHidden;
+    private SettableNonNullObservableSupplier<Boolean> mAreControlsHidden;
     private UserDataHost mHost;
 
     @Before
@@ -74,8 +77,11 @@ public class FullscreenHtmlApiHandlerLegacyUnitTest {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mHost = new UserDataHost();
         doReturn(mHost).when(mTab).getUserDataHost();
+        doReturn(ObservableSuppliers.createMonotonic())
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
 
-        mAreControlsHidden = new ObservableSupplierImpl<>();
+        mAreControlsHidden = ObservableSuppliers.createNonNull(false);
         mFullscreenHtmlApiHandlerLegacy =
                 new FullscreenHtmlApiHandlerLegacy(
                         mActivity, mAreControlsHidden, false, mMultiWindowModeStateDispatcher) {

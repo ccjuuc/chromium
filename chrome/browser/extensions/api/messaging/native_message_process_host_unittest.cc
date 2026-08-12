@@ -30,6 +30,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
@@ -162,14 +163,16 @@ class NativeMessagingTest : public ::testing::Test,
       last_message_parsed_ = std::move(*dict_value).TakeDict();
     }
 
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
   }
 
   void CloseChannel(const std::string& error_message) override {
     channel_closed_ = true;
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
   }
 
  protected:
@@ -180,12 +183,14 @@ class NativeMessagingTest : public ::testing::Test,
 
   base::FilePath CreateTempFileWithMessage(const std::string& message) {
     base::FilePath filename;
-    if (!base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &filename))
+    if (!base::CreateTemporaryFileInDir(temp_dir_.GetPath(), &filename)) {
       return base::FilePath();
+    }
 
     std::string message_with_header = FormatMessage(message);
-    if (!base::WriteFile(filename, message_with_header))
+    if (!base::WriteFile(filename, message_with_header)) {
       return base::FilePath();
+    }
 
     return filename;
   }
@@ -199,7 +204,7 @@ class NativeMessagingTest : public ::testing::Test,
   TestingProfile profile_;
 
   std::string last_message_;
-  std::optional<base::Value::Dict> last_message_parsed_;
+  std::optional<base::DictValue> last_message_parsed_;
   bool channel_closed_ = false;
 };
 
@@ -283,8 +288,9 @@ TEST_F(NativeMessagingTest, SingleSendMessageWrite) {
   base::TimeTicks start_time = base::TimeTicks::Now();
   while (base::TimeTicks::Now() - start_time < TestTimeouts::action_timeout()) {
     ASSERT_TRUE(base::ReadFileToString(temp_output_file, &output));
-    if (!output.empty())
+    if (!output.empty()) {
       break;
+    }
     base::PlatformThread::YieldCurrentThread();
   }
 
@@ -375,7 +381,7 @@ TEST_F(NativeMessagingTest, ReconnectArgs) {
   ASSERT_FALSE(last_message_.empty());
   ASSERT_TRUE(last_message_parsed_);
 
-  const base::Value::List* args_value = last_message_parsed_->FindList("args");
+  const base::ListValue* args_value = last_message_parsed_->FindList("args");
   ASSERT_TRUE(args_value);
   std::vector<base::CommandLine::StringType> args;
   args.reserve(args_value->size());
@@ -500,6 +506,46 @@ TEST_F(NativeMessagingTest, DisallowUserLevel) {
 
   // The host should fail to start.
   ASSERT_TRUE(channel_closed_);
+}
+
+// Tests that the size of messages sent and received for native messaging are
+// logged.
+TEST_F(NativeMessagingTest, LogMessageSize) {
+  base::HistogramTester histogram_tester;
+  base::FilePath temp_output_file = temp_dir_.GetPath().AppendASCII("output");
+#if BUILDFLAG(IS_WIN)
+  base::FilePath temp_input_file = CreateTempFileWithMessage(kTestMessage);
+  ASSERT_FALSE(temp_input_file.empty());
+  std::unique_ptr<NativeProcessLauncher> launcher =
+      FakeLauncher::Create(temp_input_file, temp_output_file);
+#else
+  base::PlatformFile pipe_handles[2];
+  ASSERT_EQ(0, pipe(pipe_handles));
+  base::File read_file(pipe_handles[0]);
+  std::string formatted_message = FormatMessage(kTestMessage);
+  ASSERT_GT(base::GetPageSize(), formatted_message.size());
+  ASSERT_TRUE(base::WriteFileDescriptor(pipe_handles[1], formatted_message));
+  base::File write_file(pipe_handles[1]);
+  std::unique_ptr<NativeProcessLauncher> launcher =
+      FakeLauncher::CreateWithPipeInput(std::move(read_file), temp_output_file);
+#endif
+  // Set up native_message_host_ with FakeLauncher which mocks a native host
+  // application echoing back kTestMessage over pipe input.
+  native_message_host_ = NativeMessageProcessHost::CreateWithLauncher(
+      ScopedTestNativeMessagingHost::kExtensionId, "empty_app.py",
+      std::move(launcher));
+  native_message_host_->Start(this);
+
+  native_message_host_->OnMessage(kTestMessage);
+  run_loop_ = std::make_unique<base::RunLoop>();
+  run_loop_->Run();
+
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.NativeMessaging.MessageSize.Extension", strlen(kTestMessage),
+      1);
+  histogram_tester.ExpectUniqueSample(
+      "Extensions.NativeMessaging.MessageSize.NativeApp", strlen(kTestMessage),
+      1);
 }
 
 }  // namespace extensions

@@ -14,6 +14,7 @@
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/unique_receiver_set.h"
+#include "services/on_device_model/public/cpp/capabilities.h"
 #include "services/on_device_model/public/cpp/model_assets.h"
 #include "services/on_device_model/public/cpp/service_client.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom.h"
@@ -27,9 +28,6 @@ class FakeOnDeviceModel;
 inline constexpr std::string FakeTsData() {
   return "fake_ts_data";
 }
-inline constexpr std::string FakeTsSpModel() {
-  return "fake_ts_sp_model";
-}
 inline constexpr std::string FakeLanguageModel() {
   return "fake_language_model";
 }
@@ -39,7 +37,8 @@ struct FakeOnDeviceServiceSettings final {
   FakeOnDeviceServiceSettings();
   ~FakeOnDeviceServiceSettings();
 
-  // If non-zero this amount of delay is added before the response is sent.
+  // Synthetic delays to simulate async append and generate model steps.
+  base::TimeDelta append_delay;
   base::TimeDelta execute_delay;
 
   // The delay before running the GetDeviceAndPerformanceInfo() response
@@ -49,16 +48,25 @@ struct FakeOnDeviceServiceSettings final {
   mojom::PerformanceClass performance_class =
       mojom::PerformanceClass::kVeryHigh;
 
+  // Initialize VRAM high enough to support audio input capability.
+  uint64_t vram_mb = kAudioVramMinMb;
+
   // If non-empty, used as the output from Execute().
   std::vector<std::string> model_execute_result;
+
+  // If non-empty, tool calls are simulated during Generate().
+  std::vector<mojom::ToolCallPtr> simulated_tool_calls;
 
   std::optional<ServiceDisconnectReason> service_disconnect_reason;
 
   std::optional<ModelDisconnectReason> drop_connection_request;
 
+  std::optional<on_device_model::mojom::GenerateError> execute_error;
+
   // If not-zero, used as the output from GetSizeInTokens().
   uint32_t size_in_tokens = 0;
 
+  void set_append_delay(base::TimeDelta delay) { append_delay = delay; }
   void set_execute_delay(base::TimeDelta delay) { execute_delay = delay; }
 
   void set_estimated_performance_delay(base::TimeDelta delay) {
@@ -74,6 +82,10 @@ struct FakeOnDeviceServiceSettings final {
   }
 
   void set_size_in_tokens(uint32_t size) { size_in_tokens = size; }
+
+  void set_execute_error(on_device_model::mojom::GenerateError error) {
+    execute_error = error;
+  }
 };
 
 class FakeOnDeviceSession final : public mojom::Session {
@@ -106,6 +118,7 @@ class FakeOnDeviceSession final : public mojom::Session {
       mojo::PendingReceiver<on_device_model::mojom::AsrStreamInput> stream,
       mojo::PendingRemote<on_device_model::mojom::AsrStreamResponder> responder)
       override;
+  void Hint(mojom::HintOptionsPtr options) override;
 
  private:
   void GenerateImpl(mojom::GenerateOptionsPtr options,
@@ -127,6 +140,7 @@ class FakeOnDeviceSession final : public mojom::Session {
   mojom::SessionParamsPtr params_;
   on_device_model::mojom::Priority priority_ =
       on_device_model::mojom::Priority::kForeground;
+  on_device_model::mojom::HintOptionsPtr hint_options_;
 
   base::WeakPtrFactory<FakeOnDeviceSession> weak_factory_{this};
 };
@@ -143,6 +157,7 @@ class FakeOnDeviceModel : public mojom::OnDeviceModel {
     std::string cache_weight = "";
     std::string encoder_cache_weight = "";
     std::string adapter_cache_weight = "";
+    std::string shader_cache_data = "";
     std::vector<uint32_t> adaptation_ranks;
   };
   explicit FakeOnDeviceModel(FakeOnDeviceServiceSettings* settings,
@@ -187,11 +202,11 @@ class FakeOnDeviceModel : public mojom::OnDeviceModel {
   mojo::UniqueReceiverSet<mojom::OnDeviceModel> model_adaptation_receivers_;
 };
 
-class FakeTsModel final : public mojom::TextSafetyModel,
-                          public mojom::TextSafetySession {
+class FakeTextSafetyModel final : public mojom::TextSafetyModel,
+                                  public mojom::TextSafetySession {
  public:
-  explicit FakeTsModel(mojom::TextSafetyModelParamsPtr params);
-  ~FakeTsModel() override;
+  explicit FakeTextSafetyModel(mojom::TextSafetyModelParamsPtr params);
+  ~FakeTextSafetyModel() override;
 
   // on_device_model::mojom::TextSafetyModel
   void StartSession(
@@ -210,15 +225,14 @@ class FakeTsModel final : public mojom::TextSafetyModel,
   mojo::ReceiverSet<mojom::TextSafetySession> sessions_;
 };
 
-// TsHolder holds a single TsModel. Its operations may block.
-class FakeTsHolder final {
+// FakeSafetyModelHolder holds a single FakeTextSafetyModel for testing.
+class FakeSafetyModelHolder final {
  public:
-  explicit FakeTsHolder();
-  ~FakeTsHolder();
+  FakeSafetyModelHolder();
+  ~FakeSafetyModelHolder();
 
-  void Reset(on_device_model::mojom::TextSafetyModelParamsPtr params,
-             mojo::PendingReceiver<on_device_model::mojom::TextSafetyModel>
-                 model_receiver);
+  void Reset(mojom::TextSafetyModelParamsPtr params,
+             mojo::PendingReceiver<mojom::TextSafetyModel> model_receiver);
 
  private:
   mojo::UniqueReceiverSet<on_device_model::mojom::TextSafetyModel> model_;
@@ -255,7 +269,7 @@ class FakeOnDeviceModelService : public mojom::OnDeviceModelService {
       GetDeviceAndPerformanceInfoCallback callback) override;
 
   raw_ptr<FakeOnDeviceServiceSettings> settings_;
-  FakeTsHolder ts_holder_;
+  FakeSafetyModelHolder safety_model_holder_;
   mojo::UniqueReceiverSet<mojom::OnDeviceModel, FakeOnDeviceModel*>
       model_receivers_;
 };

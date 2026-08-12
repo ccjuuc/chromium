@@ -41,7 +41,6 @@
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_high_entropy_op_type.h"
 #include "third_party/blink/renderer/platform/graphics/draw_looper_builder.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/graphics/memory_managed_paint_recorder.h"
@@ -58,11 +57,11 @@
 #include "third_party/skia/include/core/SkM44.h"
 #include "third_party/skia/include/core/SkMatrix.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkTileMode.h"
-#include "third_party/skia/include/private/base/SkPoint_impl.h"
-#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace blink {
 
@@ -142,7 +141,7 @@ class Test2DRecordingContext final
   const MemoryManagedPaintCanvas* GetPaintCanvas() const override {
     return &recorder_.getRecordingCanvas();
   }
-  void WillDraw(const SkIRect& dirty_rect,
+  void WillDraw(const gfx::Rect& dirty_rect,
                 CanvasPerformanceMonitor::DrawType) override {}
 
   sk_sp<PaintFilter> StateGetFilter() override {
@@ -236,8 +235,7 @@ TEST(Canvas2DRecorderContextCompositingTests, Pattern) {
   auto* context = MakeGarbageCollected<Test2DRecordingContext>(scope);
 
   auto* pattern = MakeGarbageCollected<CanvasPattern>(
-      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true,
-      /*high_entropy_canvas_op_types=*/HighEntropyCanvasOpType::kNone);
+      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true);
 
   context->setFillStyle(scope.GetIsolate(),
                         pattern->ToV8(scope.GetScriptState()),
@@ -919,8 +917,7 @@ TEST(Canvas2DRecorderContextCompositingTests, ShadowPattern) {
   auto* context = MakeGarbageCollected<Test2DRecordingContext>(scope);
 
   auto* pattern = MakeGarbageCollected<CanvasPattern>(
-      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true,
-      /*high_entropy_canvas_op_types=*/HighEntropyCanvasOpType::kNone);
+      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true);
 
   context->setShadowBlur(2);
   context->setShadowOffsetX(2);
@@ -982,8 +979,7 @@ TEST(Canvas2DRecorderContextCompositingTests, ShadowPatternTransform) {
   auto* context = MakeGarbageCollected<Test2DRecordingContext>(scope);
 
   auto* pattern = MakeGarbageCollected<CanvasPattern>(
-      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true,
-      /*high_entropy_canvas_op_types=*/HighEntropyCanvasOpType::kNone);
+      Image::NullImage(), Pattern::kRepeatModeXY, /*origin_clean=*/true);
 
   context->setShadowBlur(2);
   context->setShadowOffsetX(2);

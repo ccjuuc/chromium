@@ -28,6 +28,7 @@ class TestPageBroadcast : public blink::mojom::PageBroadcast {
   void ActivatePrerenderedPage(blink::mojom::PrerenderPageActivationParamsPtr
                                    prerender_page_activation_params,
                                ActivatePrerenderedPageCallback) override;
+  void UpgradePrerenderUntilScriptToFullPrerender() override;
   void UpdateWebPreferences(
       const blink::web_pref::WebPreferences& preferences) override;
   void UpdateRendererPreferences(
@@ -47,8 +48,6 @@ class TestPageBroadcast : public blink::mojom::PageBroadcast {
       override;
   void UpdatePageBrowsingContextGroup(
       const base::UnguessableToken& browsing_context_group_token) override;
-  void SetPageAttributionSupport(
-      network::mojom::AttributionSupport support) override;
   void UpdateColorProviders(
       const blink::ColorProviderColorMaps& color_provider_colors) override;
   void SetSupportsDraggableRegions(bool supports_draggable_regions) override;

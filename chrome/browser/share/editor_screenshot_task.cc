@@ -33,9 +33,8 @@ static void JNI_EditorScreenshotTask_SnapshotCallback(
     scoped_refptr<base::RefCountedMemory> png_data) {
   if (png_data.get()) {
     size_t size = png_data->size();
-    auto jbytes =
-        ScopedJavaLocalRef<jbyteArray>::Adopt(env, env->NewByteArray(size));
-    env->SetByteArrayRegion(jbytes.obj(), 0, size, (jbyte*)png_data->front());
+    auto jbytes = jni_zero::AdoptRef(env, env->NewByteArray(size));
+    env->SetByteArrayRegion(jbytes.obj(), 0, size, (int8_t*)png_data->front());
     Java_EditorScreenshotTask_onBytesReceived(env, callback, jbytes);
   } else {
     Java_EditorScreenshotTask_onBytesReceived(env, callback, nullptr);
@@ -46,8 +45,8 @@ static void JNI_EditorScreenshotTask_GrabWindowSnapshotAsync(
     JNIEnv* env,
     const JavaRef<jobject>& jcallback,
     const JavaRef<jobject>& jwindow_android,
-    jint window_width,
-    jint window_height) {
+    int32_t window_width,
+    int32_t window_height) {
   ui::WindowAndroid* window_android =
       ui::WindowAndroid::FromJavaWindowAndroid(jwindow_android);
   gfx::Rect window_bounds(window_width, window_height);

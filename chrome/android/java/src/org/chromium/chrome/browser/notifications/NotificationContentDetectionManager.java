@@ -50,7 +50,7 @@ public class NotificationContentDetectionManager {
 
     // Maps the origins of suspicious notifications and their ids, used for UMA logging.
     @VisibleForTesting
-    static final Map<String, HashSet<String>> sSuspiciousNotificationsMap = new HashMap();
+    static final Map<String, HashSet<String>> sSuspiciousNotificationsMap = new HashMap<>();
 
     // Maps "always allowed" origins to the notification id where the "Always allow" button was
     // tapped. Used for reporting notifications to Google upon user consent.
@@ -63,7 +63,7 @@ public class NotificationContentDetectionManager {
     // origin. If this data is pruned from memory (e.g., Chrome is killed), the user will not be
     // able to restore the original notifications by tapping "Show original notification" on the
     // warning notification.
-    static final Map<String, SuspiciousNotificationWarningDetailsForOrigin>
+    private static final Map<String, SuspiciousNotificationWarningDetailsForOrigin>
             sWarningNotificationAttributesByOrigin = new HashMap<>();
 
     private static @Nullable NotificationContentDetectionManager sInstance;
@@ -177,8 +177,6 @@ public class NotificationContentDetectionManager {
             // When a notification is part of a WebAPK, the channel id is managed by the WebAPK
             // and should not be set here.
             if (mWebApkPackage.isEmpty()) {
-                // TODO(crbug.com/40544272): Channel ID should be retrieved from cache in native and
-                // passed through to here with other notification parameters.
                 notificationBuilder.setChannelId(mChannelId);
             }
 
@@ -308,9 +306,9 @@ public class NotificationContentDetectionManager {
 
         SuspiciousNotificationWarningDetailsForOrigin(
                 String warningNotificationId,
-                Map<String, WarningNotificationWrapperAttributes> mOriginalNotificationBackups) {
-            this.mWarningNotificationId = warningNotificationId;
-            this.mOriginalNotificationBackups = mOriginalNotificationBackups;
+                Map<String, WarningNotificationWrapperAttributes> originalNotificationBackups) {
+            mWarningNotificationId = warningNotificationId;
+            mOriginalNotificationBackups = originalNotificationBackups;
         }
 
         void updateBackupsAndShowWarning(
@@ -442,7 +440,7 @@ public class NotificationContentDetectionManager {
             sWarningNotificationAttributesByOrigin.put(
                     notificationOrigin,
                     new SuspiciousNotificationWarningDetailsForOrigin(
-                            /* mWarningNotificationId */ notificationId,
+                            /* warningNotificationId= */ notificationId,
                             new HashMap<String, WarningNotificationWrapperAttributes>()));
         }
         sWarningNotificationAttributesByOrigin
@@ -923,5 +921,9 @@ public class NotificationContentDetectionManager {
                     channelId);
         }
         NotificationPlatformBridge.displayNotificationSilently(builder, notificationId);
+    }
+
+    static void clearWarningNotificationAttributesByOriginForTesting() {
+        sWarningNotificationAttributesByOrigin.clear();
     }
 }

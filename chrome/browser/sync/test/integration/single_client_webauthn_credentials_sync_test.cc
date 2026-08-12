@@ -13,7 +13,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "chrome/browser/sync/test/integration/multi_client_status_change_checker.h"
-#include "chrome/browser/sync/test/integration/secondary_account_helper.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
@@ -109,7 +108,8 @@ CreateEntityWithCustomClientTagHash(
   *entity.mutable_webauthn_credential() = specifics;
   return std::make_unique<syncer::PersistentUniqueClientEntity>(
       syncer::LoopbackServerEntity::CreateId(syncer::WEBAUTHN_CREDENTIAL,
-                                             client_tag_hash),
+                                             client_tag_hash,
+                                             /*migration_version=*/0),
       syncer::WEBAUTHN_CREDENTIAL, /*version=*/0,
       /*non_unique_name=*/"", client_tag_hash, entity, /*creation_time=*/0,
       /*last_modified_time=*/0,
@@ -169,16 +169,10 @@ class SingleClientWebAuthnCredentialsSyncTestBase : public SyncTest {
   }
 
   // Marks the WEBAUTHN_CREDENTIAL with `sync_id` as deleted on the server.
-  void DeletePasskeyFromFakeServer(const std::string& sync_id) {
-    const std::string client_tag_hash =
-        syncer::ClientTagHash::FromUnhashed(syncer::WEBAUTHN_CREDENTIAL,
-                                            sync_id)
-            .value();
+  void DeletePasskeyFromFakeServer(std::string_view sync_id) {
     fake_server_->InjectEntity(
-        syncer::PersistentTombstoneEntity::PersistentTombstoneEntity::CreateNew(
-            syncer::LoopbackServerEntity::CreateId(syncer::WEBAUTHN_CREDENTIAL,
-                                                   client_tag_hash),
-            client_tag_hash));
+        syncer::PersistentTombstoneEntity::CreateNewForTest(
+            syncer::WEBAUTHN_CREDENTIAL, sync_id));
   }
 
   webauthn::PasskeySyncBridge& GetModel() {
@@ -1141,7 +1135,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
 
 // Tests that disabling sync before sync startup correctly clears the passkey
 // cache.
-// Regression test for crbug.com/1476895.
+// Regression test for crbug.com/40280127.
 IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
                        PRE_ClearingModelDataOnSyncStartup) {
   ASSERT_TRUE(SetupSync());
@@ -1156,7 +1150,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
 IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
                        ClearingModelDataOnSyncStartup) {
   ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->DisableSyncForAllDatatypes());
+  ASSERT_TRUE(GetClient(0)->DisableAllSelectableTypes());
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
 
   EXPECT_TRUE(
@@ -1166,12 +1160,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
 // The unconsented primary account isn't supported on ChromeOS.
 #if !BUILDFLAG(IS_CHROMEOS)
 
-class SingleClientWebAuthnCredentialsSyncTestExplicitParamTest
+class SingleClientWebAuthnCredentialsSyncParamTest
     : public SingleClientWebAuthnCredentialsSyncTestBase,
-      public testing::WithParamInterface<
-          std::tuple<bool, SyncTest::SetupSyncMode>> {
+      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
-  SingleClientWebAuthnCredentialsSyncTestExplicitParamTest() {
+  SingleClientWebAuthnCredentialsSyncParamTest() {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitWithFeatures(
           {webauthn::features::kDeleteOldHiddenPasskeys,
@@ -1183,10 +1176,8 @@ class SingleClientWebAuthnCredentialsSyncTestExplicitParamTest
     }
   }
 
-  bool is_explicit_signin() const { return std::get<0>(GetParam()); }
-
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
-    return std::get<1>(GetParam());
+    return GetParam();
   }
 
  private:
@@ -1195,34 +1186,15 @@ class SingleClientWebAuthnCredentialsSyncTestExplicitParamTest
 
 // Tests that passkeys sync on transport mode only if the user has consented to
 // showing credentials from their Google account.
-IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTestExplicitParamTest,
+IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncParamTest,
                        TransportModeConsent) {
   if (GetSetupSyncMode() == SetupSyncMode::kSyncTheFeature) {
     GTEST_SKIP() << "This test only applies to transport mode.";
   }
   const std::string sync_id = InjectPasskeyToFakeServer(NewPasskey());
-  ASSERT_TRUE(SetupClients());
 
-  const char kTestEmail[] = "user@email.com";
-  AccountInfo account_info =
-      is_explicit_signin()
-          ? secondary_account_helper::SignInUnconsentedAccount(
-                GetProfile(0), &test_url_loader_factory_, kTestEmail)
-          : secondary_account_helper::ImplicitSignInUnconsentedAccount(
-                GetProfile(0), &test_url_loader_factory_, kTestEmail);
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
-  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
+  ASSERT_TRUE(SignIn());
 
-  if (!is_explicit_signin()) {
-    // Passkeys should be syncing only if the signin is explicit.
-    EXPECT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(
-        syncer::WEBAUTHN_CREDENTIAL));
-
-    // Let the user opt in to transport mode and wait for passkeys to start
-    // syncing.
-    GetSyncService(0)->GetUserSettings()->SetSelectedType(
-        syncer::UserSelectableType::kPasswords, true);
-  }
   PasskeySyncActiveChecker(GetSyncService(0)).Wait();
   EXPECT_TRUE(LocalPasskeysMatchChecker(kSingleProfile,
                                         ElementsAre(PasskeyHasSyncId(sync_id)))
@@ -1278,17 +1250,15 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAuthnCredentialsSyncTest,
 
 struct PrintWebAuthnTestSuffixToString {
   std::string operator()(
-      const testing::TestParamInfo<std::tuple<bool, SyncTest::SetupSyncMode>>&
-          info) const {
-    return (std::get<0>(info.param) ? "Explicit" : "Implicit") +
-           SetupSyncModeAsString(std::get<1>(info.param));
+      const testing::TestParamInfo<SyncTest::SetupSyncMode>& info) const {
+    return SetupSyncModeAsString(info.param);
   }
 };
 
 INSTANTIATE_TEST_SUITE_P(
     /* no prefix */,
-    SingleClientWebAuthnCredentialsSyncTestExplicitParamTest,
-    testing::Combine(::testing::Bool(), GetSyncTestModes()),
+    SingleClientWebAuthnCredentialsSyncParamTest,
+    GetSyncTestModes(),
     PrintWebAuthnTestSuffixToString());
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 

@@ -36,6 +36,9 @@ enum class TipsNotificationType;
 // YES if the current interface language uses RTL layout.
 + (BOOL)isRTL;
 
+// Returns YES if the application window is in windowed mode (multitasking).
++ (BOOL)isWindowedMode;
+
 // Clears browsing history and waits for history to finish clearing before
 // returning. Returns nil on success, or else an NSError indicating why the
 // operation failed.
@@ -70,6 +73,10 @@ enum class TipsNotificationType;
 // Opens `URL` using some connected scene.
 + (void)sceneOpenURL:(NSString*)spec;
 
+// Continues `userActivity` using some connected scene with a specific URL.
++ (void)sceneContinueUserActivityWithType:(NSString*)activityType
+                                      url:(NSString*)urlString;
+
 // Loads the URL `spec` in the current WebState with transition type
 // ui::PAGE_TRANSITION_TYPED and returns without waiting for the page to load.
 + (void)startLoadingURL:(NSString*)spec;
@@ -77,11 +84,11 @@ enum class TipsNotificationType;
 // Returns YES if the current WebState is loading.
 + (BOOL)isLoading;
 
+// Returns YES if any WebState across all foreground tabs is loading.
++ (BOOL)isAnyWebStateLoading;
+
 // Reloads the page without waiting for the page to load.
 + (void)startReloading;
-
-// Loads `URL` as if it was opened from an external application.
-+ (void)openURLFromExternalApp:(NSString*)URL;
 
 // Programmatically dismisses settings screen.
 + (void)dismissSettings;
@@ -158,6 +165,22 @@ enum class TipsNotificationType;
 // Opens a new tab, and does not wait for animations to complete.
 + (void)openNewTab;
 
+// Opens a new tab with the given URL and attaches the text fragment to its
+// internal NavigationItem to trigger scroll restoration upon page load.
++ (void)openNewTabWithURL:(NSString*)url textFragment:(NSString*)textFragment;
+
+// Opens a new tab with the given URL, text fragment, and marks it as
+// originating from Send Tab To Self with the given entry GUID.
++ (void)openSendTabToSelfNewTabWithURL:(NSString*)url
+                          textFragment:(NSString*)textFragment
+                             entryGUID:(NSString*)guid;
+
+// Opens a new background tab with the given URL, text fragment, and marks it
+// as originating from Send Tab To Self with the given entry GUID.
++ (void)openSendTabToSelfNewBackgroundTabWithURL:(NSString*)url
+                                    textFragment:(NSString*)textFragment
+                                       entryGUID:(NSString*)guid;
+
 // Simulates opening a custom `URL` from another application.
 + (void)simulateExternalAppURLOpeningWithURL:(NSURL*)URL;
 
@@ -208,6 +231,9 @@ enum class TipsNotificationType;
 
 // Returns the index of active tab in normal mode.
 + (NSUInteger)indexOfActiveNormalTab;
+
+// Returns YES if the current active WebState is showing a new tab page.
++ (BOOL)isCurrentTabNTP;
 
 #pragma mark - Window utilities (EG2)
 
@@ -266,6 +292,9 @@ enum class TipsNotificationType;
 // windows.
 + (void)openSettingsInWindowWithNumber:(int)windowNumber;
 
+// Returns the interface orientation of the scene.
++ (UIInterfaceOrientation)interfaceOrientation;
+
 #pragma mark - WebState Utilities (EG2)
 
 // Attempts to tap the element with `element_id` within window.frames[0] of the
@@ -279,19 +308,8 @@ enum class TipsNotificationType;
 // operation failed, otherwise nil.
 + (NSError*)tapWebStateElementWithID:(NSString*)elementID;
 
-// Waits for the current web state to contain an element matching `selector`.
-// If not succeed returns an NSError indicating  why the operation failed,
-// otherwise nil.
-+ (NSError*)waitForWebStateContainingElement:(ElementSelector*)selector;
-
-// Waits for the current web state to no longer contain an element matching
-// `selector`. On failure, returns an NSError, otherwise nil.
-+ (NSError*)waitForWebStateNotContainingElement:(ElementSelector*)selector;
-
-// Waits for the current web state's frames to contain `text`.
-// If not succeed returns an NSError indicating  why the operation failed,
-// otherwise nil.
-+ (NSError*)waitForWebStateContainingTextInIFrame:(NSString*)text;
+// Returns YES if the current WebState's frames contain `text`.
++ (BOOL)webStateContainsTextInIFrame:(NSString*)text;
 
 // Attempts to submit form with `formID` in the current WebState.
 // Returns nil on success, or else an NSError indicating why the operation
@@ -305,21 +323,17 @@ enum class TipsNotificationType;
 + (BOOL)webStateContainsText:(NSString*)text;
 
 // Waits for the current WebState to contain loaded image with `imageID`.
-// When loaded, the image element will have the same size as actual image.
-// Returns nil if the condition is met within a timeout, or else an NSError
-// indicating why the operation failed.
-+ (NSError*)waitForWebStateContainingLoadedImage:(NSString*)imageID;
+// Returns YES if the current WebState contains a loaded image with `imageID`.
++ (BOOL)webStateContainsLoadedImage:(NSString*)imageID;
 
-// Waits for the current WebState to contain a blocked image with `imageID`.
-// When blocked, the image element will be smaller than the actual image size.
-// Returns nil if the condition is met within a timeout, or else an NSError
-// indicating why the operation failed.
-+ (NSError*)waitForWebStateContainingBlockedImage:(NSString*)imageID;
+// Returns YES if the current WebState contains a blocked image with `imageID`.
++ (BOOL)webStateContainsBlockedImage:(NSString*)imageID;
 
 // Waits for the web state's scroll view zoom scale to be suitably close (within
 // 0.05) of the expected scale. Returns nil if the condition is met within a
 // timeout, or else an NSError indicating why the operation failed.
-+ (NSError*)waitForWebStateZoomScale:(CGFloat)scale;
+// Returns YES if the current WebState's zoom scale is close to `scale`.
++ (BOOL)webStateZoomScaleCloseTo:(CGFloat)scale;
 
 // Signs the user out from Chrome and then starts clearing the identities.
 //
@@ -418,6 +432,35 @@ enum class TipsNotificationType;
 // Injects device info to sync FakeServer.
 + (void)addFakeSyncServerDeviceInfo:(NSString*)deviceName
                lastUpdatedTimestamp:(base::Time)lastUpdatedTimestamp;
+
+// Injects a send tab to self entry to sync FakeServer.
++ (void)addFakeSyncServerSendTabToSelfEntryWithURL:(NSString*)URL
+                                             title:(NSString*)title
+                                        deviceName:(NSString*)deviceName
+                                  targetDeviceGUID:(NSString*)targetDeviceGUID;
+
+// Adds a fake Send Tab To Self entry to the fake sync server and returns its
+// GUID. `formFieldData` is a dictionary where keys are form control names and
+// values are the values to fill.
++ (NSString*)addFakeSendTabToSelfEntryWithURL:(NSString*)url
+                                        title:(NSString*)title
+                                formFieldData:
+                                    (NSDictionary<NSString*, NSString*>*)
+                                        formFieldData;
+
+// Adds a fake Send Tab To Self entry with the given text fragment to the fake
+// sync server and returns its GUID.
++ (NSString*)addFakeSendTabToSelfEntryWithURL:(NSString*)url
+                                        title:(NSString*)title
+                                 textFragment:(NSString*)textFragment;
+
+// Checks if the local Send Tab To Self model contains an entry with the given
+// GUID.
++ (BOOL)hasSendTabToSelfEntryWithGUID:(NSString*)guid;
+
+// Returns the generated text fragment for the given URL, or nil if no entry
+// exists or no fragment is set.
++ (NSString*)textFragmentForSendTabToSelfEntryWithURL:(NSString*)URL;
 
 // Adds typed URL into HistoryService.
 + (void)addHistoryServiceTypedURL:(NSString*)URL;
@@ -535,11 +578,17 @@ enum class TipsNotificationType;
 // Returns YES if kTestFeature is enabled.
 + (BOOL)isTestFeatureEnabled;
 
+// Returns YES if kOverflowMenuHomeCustomizationEntrypoint is enabled.
++ (BOOL)isOverflowMenuHomeCustomizationEntrypointEnabled;
+
+// Returns YES if Fullscreen smooth scrolling is supported.
++ (BOOL)isFullscreenSmoothScrollingSupported;
+
 // Returns YES if DemographicMetricsReporting feature is enabled.
 + (BOOL)isDemographicMetricsReportingEnabled [[nodiscard]];
 
-// Returns YES if AskGeminiChip is enabled.
-+ (BOOL)isAskGeminiChipEnabled [[nodiscard]];
+// Returns YES if ProactiveSuggestionsFramework is enabled.
++ (BOOL)isProactiveSuggestionsFrameworkEnabled [[nodiscard]];
 
 // Returns YES if the `launchSwitch` is found in host app launch switches.
 + (BOOL)appHasLaunchSwitch:(NSString*)launchSwitch;
@@ -556,11 +605,11 @@ enum class TipsNotificationType;
 // can, open multiple windows.
 + (BOOL)areMultipleWindowsSupported;
 
-// Returns whether the NewOverflowMenu feature is enabled.
-+ (BOOL)isNewOverflowMenuEnabled;
-
 // Returns whether the UseLensToSearchForImage feature is enabled.
 + (BOOL)isUseLensToSearchForImageEnabled;
+
+// Returns whether the YourSavedInfoSettingsPageIos feature is enabled.
++ (BOOL)isYourSavedInfoSettingsPageIosEnabled;
 
 // Returns whether the current layout is showing the bottom omnibox.
 + (BOOL)isCurrentLayoutBottomOmnibox;
@@ -568,8 +617,14 @@ enum class TipsNotificationType;
 // Returns whether the ComposeboxIOS feature is enabled.
 + (BOOL)isComposeboxIOSEnabled;
 
-// Returns the interface orientation of the scene.
-+ (UIInterfaceOrientation)interfaceOrientation;
+// Returns whether chrome next is enabled.
++ (BOOL)isChromeNextEnabled;
+
+// Returns whether overflow menu refactoring on the NTP is enabled.
++ (BOOL)isOverflowMenuNTPRefactorEnabled;
+
+// Returns whether the chrome next share icon is visible.
++ (BOOL)isChromeNextShareIconVisible;
 
 #pragma mark - ContentSettings
 
@@ -603,6 +658,10 @@ enum class TipsNotificationType;
 // Creates a `AppGroupCommand` based on the provided text and writes it the
 // shared NSUserDefaults.
 + (void)setAppGroupCommandToSearchText:(NSString*)text;
+
+// Creates an incognito `AppGroupCommand` based on the provided text and writes
+// it the shared NSUserDefaults.
++ (void)setAppGroupCommandToIncognitoSearchText:(NSString*)text;
 
 #pragma mark - Pref Utilities (EG2)
 
@@ -770,6 +829,10 @@ enum class TipsNotificationType;
 
 // Waits for the MessagingBackendService to be initialized.
 + (NSError*)waitForMessagingBackendServiceInitialized;
+
+// Returns YES if the view with `accessibilityID` or any of its ancestors is
+// animating.
++ (BOOL)isViewAnimatingWithAccessibilityID:(NSString*)accessibilityID;
 
 @end
 

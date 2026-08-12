@@ -45,13 +45,13 @@ class SerialIoHandler : public base::RefCountedThreadSafe<SerialIoHandler> {
   virtual void Open(const mojom::SerialConnectionOptions& options,
                     OpenCompleteCallback callback);
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Signals that the port has been opened.
   void OnPathOpened(
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner,
       base::ScopedFD fd);
 
-  // Signals that the permission broker failed to open the port.
+  // Signals that the port opening resulted in an error.
   void OnPathOpenError(
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner,
       const std::string& error_name,
@@ -60,7 +60,7 @@ class SerialIoHandler : public base::RefCountedThreadSafe<SerialIoHandler> {
   // Reports the open error from the permission broker.
   void ReportPathOpenError(const std::string& error_name,
                            const std::string& error_message);
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 
   // Performs an async read operation. Behavior is undefined if this is called
   // while a read is already pending. Otherwise, |callback| will be called
@@ -73,6 +73,18 @@ class SerialIoHandler : public base::RefCountedThreadSafe<SerialIoHandler> {
   // (potentially synchronously) with a result. |buffer| must remain valid until
   // |callback| is run.
   void Write(base::span<const uint8_t> buffer, WriteCompleteCallback callback);
+
+#if BUILDFLAG(IS_WIN)
+  // Registers a closure to be run when the pending read operation completes.
+  // This is used to ensure that memory buffers backing the pending read remain
+  // valid until the kernel has signaled completion.
+  void KeepAliveUntilReadCompletes(base::OnceClosure cleanup);
+
+  // Registers a closure to be run when the pending write operation completes.
+  // This is used to ensure that memory buffers backing the pending write remain
+  // valid until the kernel has signaled completion.
+  void KeepAliveUntilWriteCompletes(base::OnceClosure cleanup);
+#endif  // BUILDFLAG(IS_WIN)
 
   // Indicates whether or not a read is currently pending.
   bool IsReadPending() const;
@@ -119,6 +131,9 @@ class SerialIoHandler : public base::RefCountedThreadSafe<SerialIoHandler> {
       const base::FilePath& port,
       scoped_refptr<base::SingleThreadTaskRunner> ui_thread_task_runner);
   virtual ~SerialIoHandler();
+
+  // Open the device.
+  virtual void OpenImpl();
 
   // Performs a platform-specific read operation. This must guarantee that
   // ReadCompleted is called when the underlying async operation is completed
@@ -219,6 +234,11 @@ class SerialIoHandler : public base::RefCountedThreadSafe<SerialIoHandler> {
   WriteCompleteCallback pending_write_callback_;
   mojom::SerialSendError write_cancel_reason_;
   bool write_canceled_;
+
+#if BUILDFLAG(IS_WIN)
+  base::OnceClosure pending_read_cleanup_;
+  base::OnceClosure pending_write_cleanup_;
+#endif  // BUILDFLAG(IS_WIN)
 
   // Callback to handle the completion of a pending Open() request.
   OpenCompleteCallback open_complete_;

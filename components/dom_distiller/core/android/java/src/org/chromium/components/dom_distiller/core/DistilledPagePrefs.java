@@ -30,6 +30,8 @@ public class DistilledPagePrefs {
         void onChangeTheme(int theme);
 
         void onChangeFontScaling(float scaling);
+
+        void onChangeLinksEnabled(boolean enabled);
     }
 
     /** Wrapper for dom_distiller::android::DistilledPagePrefsObserverAndroid. */
@@ -43,21 +45,26 @@ public class DistilledPagePrefs {
             mDistilledPagePrefsObserver = observer;
         }
 
-        @CalledByNative("DistilledPagePrefsObserverWrapper")
+        @CalledByNative
         private void onChangeFontFamily(int fontFamily) {
             FontFamily.validate(fontFamily);
             mDistilledPagePrefsObserver.onChangeFontFamily(fontFamily);
         }
 
-        @CalledByNative("DistilledPagePrefsObserverWrapper")
+        @CalledByNative
         private void onChangeTheme(int theme) {
             Theme.validate(theme);
             mDistilledPagePrefsObserver.onChangeTheme(theme);
         }
 
-        @CalledByNative("DistilledPagePrefsObserverWrapper")
+        @CalledByNative
         private void onChangeFontScaling(float scaling) {
             mDistilledPagePrefsObserver.onChangeFontScaling(scaling);
+        }
+
+        @CalledByNative
+        private void onChangeLinksEnabled(boolean enabled) {
+            mDistilledPagePrefsObserver.onChangeLinksEnabled(enabled);
         }
 
         public void destroy() {
@@ -136,6 +143,14 @@ public class DistilledPagePrefs {
         return DistilledPagePrefsJni.get().getFontScaling(mDistilledPagePrefsAndroid);
     }
 
+    public void setLinksEnabled(boolean enabled) {
+        DistilledPagePrefsJni.get().setLinksEnabled(mDistilledPagePrefsAndroid, enabled);
+    }
+
+    public boolean getLinksEnabled() {
+        return DistilledPagePrefsJni.get().getLinksEnabled(mDistilledPagePrefsAndroid);
+    }
+
     @NativeMethods
     interface Natives {
         long init(DistilledPagePrefs self, long distilledPagePrefPtr);
@@ -153,6 +168,10 @@ public class DistilledPagePrefs {
         void setUserPrefFontScaling(long nativeDistilledPagePrefsAndroid, float scaling);
 
         float getFontScaling(long nativeDistilledPagePrefsAndroid);
+
+        void setLinksEnabled(long nativeDistilledPagePrefsAndroid, boolean enabled);
+
+        boolean getLinksEnabled(long nativeDistilledPagePrefsAndroid);
 
         void addObserver(long nativeDistilledPagePrefsAndroid, long nativeObserverPtr);
 

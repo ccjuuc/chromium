@@ -16,9 +16,10 @@
 #include "components/feedback/feedback_data.h"
 #include "components/feedback/feedback_report.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/api/feedback_private/feedback_private_delegate.h"
 #include "extensions/browser/api/feedback_private/mock_feedback_service.h"
 #include "extensions/browser/api_unittest.h"
-#include "extensions/shell/browser/api/feedback_private/shell_feedback_private_delegate.h"
+#include "extensions/common/api/feedback_private.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
@@ -31,8 +32,8 @@
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
-#include "third_party/boringssl/src/include/openssl/hpke.h"
+#include "crypto/hpke.h"
+#include "crypto/keypair.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
@@ -89,7 +90,7 @@ class MockFeedbackUploader : public FeedbackUploader {
   base::WeakPtrFactory<MockFeedbackUploader> weak_ptr_factory_{this};
 };
 
-class MockFeedbackPrivateDelegate : public ShellFeedbackPrivateDelegate {
+class MockFeedbackPrivateDelegate : public FeedbackPrivateDelegate {
  public:
   MockFeedbackPrivateDelegate() {
     ON_CALL(*this, FetchSystemInformation)
@@ -112,16 +113,41 @@ class MockFeedbackPrivateDelegate : public ShellFeedbackPrivateDelegate {
 
   ~MockFeedbackPrivateDelegate() override = default;
 
+  MOCK_METHOD(base::DictValue,
+              GetStrings,
+              (content::BrowserContext*, bool),
+              (const, override));
   MOCK_METHOD(void,
               FetchSystemInformation,
               (content::BrowserContext*, system_logs::SysLogsFetcherCallback),
               (const, override));
 #if BUILDFLAG(IS_CHROMEOS)
+  MOCK_METHOD(std::unique_ptr<system_logs::SystemLogsSource>,
+              CreateSingleLogSource,
+              (api::feedback_private::LogSource),
+              (const, override));
   MOCK_METHOD(void,
               FetchExtraLogs,
               (scoped_refptr<feedback::FeedbackData>, FetchExtraLogsCallback),
               (const, override));
+  MOCK_METHOD(api::feedback_private::LandingPageType,
+              GetLandingPageType,
+              (const feedback::FeedbackData&),
+              (const, override));
 #endif  // BUILDFLAG(IS_CHROMEOS)
+  MOCK_METHOD(std::string,
+              GetSignedInUserEmail,
+              (content::BrowserContext*),
+              (const, override));
+  MOCK_METHOD(void, NotifyFeedbackDelayed, (), (const, override));
+  MOCK_METHOD(feedback::FeedbackUploader*,
+              GetFeedbackUploaderForContext,
+              (content::BrowserContext*),
+              (const, override));
+  MOCK_METHOD(void,
+              OpenFeedback,
+              (content::BrowserContext*, api::feedback_private::FeedbackSource),
+              (const, override));
 };
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -309,7 +335,6 @@ class FeedbackServiceTest : public ApiUnitTest {
 
 #if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   base::ScopedTempDir scoped_temp_dir_;
@@ -332,9 +357,9 @@ TEST_F(FeedbackServiceTest, SendFeedbackWithoutSysInfo) {
   base::MockCallback<SendFeedbackCallback> mock_callback;
   EXPECT_CALL(mock_callback, Run(true));
 
-  auto shell_delegate = std::make_unique<ShellFeedbackPrivateDelegate>();
+  auto feedback_delegate = std::make_unique<MockFeedbackPrivateDelegate>();
   auto feedback_service = base::MakeRefCounted<FeedbackService>(
-      browser_context(), shell_delegate.get());
+      browser_context(), feedback_delegate.get());
 
   RunUntilFeedbackIsSent(feedback_service, params, mock_callback.Get());
 }
@@ -443,51 +468,28 @@ TEST_F(FeedbackServiceTest, TestSendFeedbackWithVariationsBinary) {
   EXPECT_EQ(1u, feedback_data_->sys_info()->count(kFakeKey));
 
   // Initialize Hpke private key.
-  bssl::ScopedEVP_HPKE_KEY base_key;
-  std::string decoded_hpke_private_key;
-  base::Base64Decode(kTestBase64HpkePrivateKey, &decoded_hpke_private_key);
-  std::vector<uint8_t> hpke_private_key;
-  hpke_private_key.assign(decoded_hpke_private_key.begin(),
-                          decoded_hpke_private_key.end());
-  ASSERT_TRUE(EVP_HPKE_KEY_init(/*key=*/base_key.get(),
-                                /*kem=*/EVP_hpke_x25519_hkdf_sha256(),
-                                /*priv_key=*/hpke_private_key.data(),
-                                /*priv_key_len=*/hpke_private_key.size()));
+  std::optional<std::vector<uint8_t>> hpke_private_key =
+      base::Base64Decode(kTestBase64HpkePrivateKey);
+  const auto key = crypto::keypair::PrivateKey::FromX25519PrivateKey(
+      base::span<const uint8_t, 32>(*hpke_private_key));
 
   // Get the encrypted file.
   constexpr char kVariationsBinary[] = "variations.binary";
-  const FeedbackCommon::AttachedFile* variatons_binary =
+  const FeedbackCommon::AttachedFile* variations_binary =
       FindAttachment(kVariationsBinary, feedback_data_);
-  ASSERT_TRUE(variatons_binary);
-  std::vector<uint8_t> encrypted_data(variatons_binary->data.begin(),
-                                      variatons_binary->data.end());
+  ASSERT_TRUE(variations_binary);
+  std::vector<uint8_t> ciphertext(variations_binary->data.begin(),
+                                  variations_binary->data.end());
 
-  // Setup recipient context.
-  bssl::ScopedEVP_HPKE_CTX recipient_ctx;
-  ASSERT_TRUE(EVP_HPKE_CTX_setup_recipient(/*ctx=*/recipient_ctx.get(),
-                                           /*key=*/base_key.get(),
-                                           /*kdf=*/EVP_hpke_hkdf_sha256(),
-                                           /*aead=*/EVP_hpke_aes_256_gcm(),
-                                           /*enc=*/encrypted_data.data(),
-                                           /*enc_len=*/X25519_PUBLIC_VALUE_LEN,
-                                           /*info=*/nullptr,
-                                           /*info_len=*/0));
+  const crypto::hpke::HpkeParams kParams = {
+      .kem = crypto::hpke::KemType::kX25519HkdfSha256,
+      .kdf = crypto::hpke::KdfType::kHkdfSha256,
+      .aead = crypto::hpke::AeadType::kAes256Gcm,
+  };
 
-  // Decryption.
-  auto ciphertext =
-      base::span(encrypted_data).subspan<X25519_PUBLIC_VALUE_LEN>();
-  std::vector<uint8_t> plaintext(ciphertext.size());
-  size_t plaintext_len;
-  ASSERT_TRUE(EVP_HPKE_CTX_open(/*ctx=*/recipient_ctx.get(),
-                                /*out=*/plaintext.data(),
-                                /*out_len=*/&plaintext_len,
-                                /*max_out_len=*/plaintext.size(),
-                                /*in=*/ciphertext.data(),
-                                /*in_len=*/ciphertext.size(),
-                                /*ad=*/nullptr,
-                                /*ad_len=*/0));
-  plaintext.resize(plaintext_len);
-  std::string decrypted_string(plaintext.begin(), plaintext.end());
+  std::optional<std::vector<uint8_t>> plaintext =
+      crypto::hpke::Open(kParams, key, ciphertext, /*info=*/{}, /*ad=*/{});
+  std::string decrypted_string(plaintext->begin(), plaintext->end());
 
   // Final check.
   EXPECT_EQ(kTestCommandLineVariations, decrypted_string);

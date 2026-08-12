@@ -21,7 +21,7 @@ OriginAgentClusterIsolationState::CreateForDefaultIsolation(
     // If OAC-by-default is enabled, we also check to see if origin-keyed
     // processes have been enabled as the default.
     bool requires_origin_keyed_process =
-        SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault();
+        SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(context);
     return CreateForOriginAgentCluster(/*had_oac_request=*/false,
                                        requires_origin_keyed_process);
   }
@@ -70,6 +70,14 @@ OriginAgentClusterIsolationState::OriginAgentClusterIsolationState(
              AgentClusterKey::OACStatus::kOriginKeyedByHeader &&
          process_isolation_oac_status_ !=
              AgentClusterKey::OACStatus::kOriginKeyedByDefault));
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         const OriginAgentClusterIsolationState& state) {
+  out << "{logical_oac_status: " << state.logical_oac_status()
+      << ", process_isolation_oac_status: "
+      << state.process_isolation_oac_status() << "}";
+  return out;
 }
 
 }  // namespace content

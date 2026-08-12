@@ -6,15 +6,146 @@
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <vector>
 
+#include "base/strings/strcat.h"
 #include "components/pdf/renderer/pdf_accessibility_tree_builder.h"
 #include "pdf/accessibility_structs.h"
 #include "pdf/pdf_accessibility_constants_helper.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_node_data.h"
 
 namespace pdf {
+
+namespace {
+
+// Groups sequential text runs into one or more kStaticText child nodes of
+// container_node based on style similarity (breaking/splitting static text
+// nodes when styles change).
+void AddTextRunsToContainer(PdfAccessibilityTreeBuilder& builder,
+                            ui::AXNodeData* container_node,
+                            base::span<const size_t> text_run_indices) {
+  const auto& text_runs = builder.text_runs();
+  ui::AXNodeData* static_text_node = nullptr;
+  std::optional<chrome_pdf::AccessibilityTextStyleInfo> current_style;
+  std::string accumulated_text;
+
+  for (size_t run_idx : text_run_indices) {
+    const chrome_pdf::AccessibilityTextRunInfo& text_run = text_runs[run_idx];
+    chrome_pdf::PageCharacterIndex page_char_index = {
+        builder.page_index(), builder.text_run_start_indices()[run_idx]};
+
+    // Break the static text node and start a new one if the style of the
+    // current text run is not equivalent to the previous runs.
+    if (static_text_node && current_style &&
+        !PdfAccessibilityTreeBuilder::AreStylesEquivalent(*current_style,
+                                                          text_run.style)) {
+      static_text_node->AddStringAttribute(ax::mojom::StringAttribute::kName,
+                                           accumulated_text);
+      accumulated_text.clear();
+      static_text_node = nullptr;
+      current_style.reset();
+    }
+
+    if (!static_text_node) {
+      static_text_node = builder.CreateStaticTextNodeWithStyle(page_char_index,
+                                                               text_run.style);
+      container_node->child_ids.push_back(static_text_node->id);
+      current_style = text_run.style;
+    }
+
+    ui::AXNodeData* inline_text_box =
+        builder.CreateInlineTextBoxNode(text_run, page_char_index);
+    static_text_node->child_ids.push_back(inline_text_box->id);
+
+    // Update the bounding boxes. Union the inline box's bounds with both the
+    // current static text node (covers this styled segment) and the parent
+    // paragraph container (covers the entire paragraph).
+    static_text_node->relative_bounds.bounds.Union(
+        inline_text_box->relative_bounds.bounds);
+    container_node->relative_bounds.bounds.Union(
+        inline_text_box->relative_bounds.bounds);
+    base::StrAppend(&accumulated_text, {inline_text_box->GetStringAttribute(
+                                           ax::mojom::StringAttribute::kName)});
+  }
+
+  // Finalize the last active static text node by assigning the remaining
+  // accumulated text string.
+  if (static_text_node) {
+    static_text_node->AddStringAttribute(ax::mojom::StringAttribute::kName,
+                                         accumulated_text);
+  }
+}
+
+// Adds text runs as inline text box children of static_text_node. Returns the
+// accumulated text string.
+std::string AddTextRunsToStaticText(
+    PdfAccessibilityTreeBuilder& builder,
+    ui::AXNodeData* static_text_node,
+    const chrome_pdf::UnassociatedTextRunRange& range) {
+  const auto& text_runs = builder.text_runs();
+  std::string accumulated_text;
+
+  for (size_t run_idx = range.start; run_idx <= range.end; ++run_idx) {
+    const chrome_pdf::AccessibilityTextRunInfo& text_run = text_runs[run_idx];
+    chrome_pdf::PageCharacterIndex page_char_index = {
+        builder.page_index(), builder.text_run_start_indices()[run_idx]};
+
+    ui::AXNodeData* inline_text_box =
+        builder.CreateInlineTextBoxNode(text_run, page_char_index);
+    static_text_node->child_ids.push_back(inline_text_box->id);
+
+    static_text_node->relative_bounds.bounds.Union(
+        inline_text_box->relative_bounds.bounds);
+    base::StrAppend(&accumulated_text, {inline_text_box->GetStringAttribute(
+                                           ax::mojom::StringAttribute::kName)});
+  }
+
+  return accumulated_text;
+}
+
+// Creates a paragraph node containing the text runs in the range.
+ui::AXNodeData* CreateParagraphFromTextRunRange(
+    PdfAccessibilityTreeBuilder& builder,
+    const chrome_pdf::UnassociatedTextRunRange& range) {
+  ui::AXNodeData* container_node = builder.CreateAndAppendNode(
+      ax::mojom::Role::kParagraph, ax::mojom::Restriction::kReadOnly);
+
+  if (features::IsPdfAccessibilityHeuristicEnhancementsEnabled()) {
+    // Under enhanced heuristics, delegate to AddTextRunsToContainer to build
+    // style-aware static text child nodes. This ensures style transitions (e.g.
+    // bold/italic) are preserved even for text runs not associated with any
+    // logical structure tags.
+    std::vector<size_t> text_run_indices;
+    text_run_indices.reserve(range.end - range.start + 1);
+    for (size_t i = range.start; i <= range.end; ++i) {
+      text_run_indices.push_back(i);
+    }
+
+    AddTextRunsToContainer(builder, container_node, text_run_indices);
+    return container_node;
+  }
+
+  chrome_pdf::PageCharacterIndex page_char_index = {
+      builder.page_index(), builder.text_run_start_indices()[range.start]};
+  ui::AXNodeData* static_text_node =
+      builder.CreateStaticTextNode(page_char_index);
+  container_node->child_ids.push_back(static_text_node->id);
+
+  std::string accumulated_text =
+      AddTextRunsToStaticText(builder, static_text_node, range);
+
+  static_text_node->AddStringAttribute(ax::mojom::StringAttribute::kName,
+                                       accumulated_text);
+  container_node->relative_bounds.bounds =
+      static_text_node->relative_bounds.bounds;
+
+  return container_node;
+}
+
+}  // namespace
 
 PdfAccessibilityTreeBuilderStructure::PdfAccessibilityTreeBuilderStructure(
     PdfAccessibilityTreeBuilder& builder,
@@ -25,6 +156,8 @@ PdfAccessibilityTreeBuilderStructure::~PdfAccessibilityTreeBuilderStructure() =
     default;
 
 void PdfAccessibilityTreeBuilderStructure::BuildPageTree() {
+  InsertUnassociatedTextRunsAtStart();
+
   WalkStructureTree(structure_tree_root_, builder_->page_node());
 }
 
@@ -77,6 +210,22 @@ ui::AXNodeData* PdfAccessibilityTreeBuilderStructure::CreateNodeWithTextContent(
     return container_node;
   }
 
+  if (features::IsPdfAccessibilityHeuristicEnhancementsEnabled()) {
+    // Under enhanced heuristics, check style boundaries across all text runs,
+    // including trailing unassociated runs (like punctuation). Fetch them and
+    // append them to `text_run_indices` before grouping, so style boundaries
+    // are evaluated seamlessly.
+    auto range =
+        FindUnassociatedTextRunRangeAtIndex(text_run_indices.back() + 1);
+    if (range) {
+      for (size_t run_idx = range->start; run_idx <= range->end; ++run_idx) {
+        text_run_indices.push_back(run_idx);
+      }
+    }
+    AddTextRunsToContainer(*builder_, container_node, text_run_indices);
+    return container_node;
+  }
+
   // Create static text node as child of container.
   chrome_pdf::PageCharacterIndex page_char_index = {
       builder_->page_index(),
@@ -101,6 +250,17 @@ ui::AXNodeData* PdfAccessibilityTreeBuilderStructure::CreateNodeWithTextContent(
         inline_text_box->relative_bounds.bounds);
     accumulated_text +=
         inline_text_box->GetStringAttribute(ax::mojom::StringAttribute::kName);
+  }
+
+  // If there are any unassociated text runs immediately after the associated
+  // text runs, add them each as sibling text box nodes.
+  // TODO(crbug.com/40707542): Consider using heuristics to determine whether
+  // unassociated text should be siblings or in a separate container.
+  auto range = FindUnassociatedTextRunRangeAtIndex(text_run_indices.back() + 1);
+  if (range) {
+    std::string text =
+        AddTextRunsToStaticText(*builder_, static_text_node, *range);
+    base::StrAppend(&accumulated_text, {text});
   }
 
   static_text_node->AddStringAttribute(ax::mojom::StringAttribute::kName,
@@ -148,9 +308,13 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
       !pdf_struct_element->associated_text_runs_if_available.empty();
   bool has_image = !!pdf_struct_element->associated_image_if_available;
 
-  // Map PDF tag to accessibility role.
-  ax::mojom::Role role =
-      chrome_pdf::AXRoleFromPdfTagType(pdf_struct_element->type);
+  // Map PDF tag to accessibility role, except kDocument which is mapped to
+  // kGenericContainer to avoid introducing a redundant Document node in the
+  // accessibility tree.
+  const ax::mojom::Role role =
+      pdf_struct_element->type == chrome_pdf::PdfTagType::kDocument
+          ? ax::mojom::Role::kGenericContainer
+          : chrome_pdf::AXRoleFromPdfTagType(pdf_struct_element->type);
 
   // Handle elements with both text and image content (from different MCIDs).
   if (has_text && has_image) {
@@ -163,6 +327,11 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
       container_node->AddStringAttribute(ax::mojom::StringAttribute::kLanguage,
                                          pdf_struct_element->language);
     }
+    if (!pdf_struct_element->abbreviation_expansion.empty()) {
+      container_node->AddStringAttribute(
+          ax::mojom::StringAttribute::kDescription,
+          pdf_struct_element->abbreviation_expansion);
+    }
 
     // Add image as additional child of the container.
     chrome_pdf::AccessibilityImageInfo modified_image =
@@ -174,8 +343,6 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
 
     // TODO(crbug.com/40707542): Handle pdf_struct_element->actual_text as text
     // override.
-    // TODO(crbug.com/40707542): Handle
-    // pdf_struct_element->abbreviation_expansion.
 
     for (const auto& child : pdf_struct_element->children) {
       WalkStructureTree(child.get(), container_node);
@@ -192,6 +359,9 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
     if (!pdf_struct_element->alt_text.empty()) {
       node_data->AddStringAttribute(ax::mojom::StringAttribute::kDescription,
                                     pdf_struct_element->alt_text);
+    } else if (!pdf_struct_element->abbreviation_expansion.empty()) {
+      node_data->AddStringAttribute(ax::mojom::StringAttribute::kDescription,
+                                    pdf_struct_element->abbreviation_expansion);
     }
     if (!pdf_struct_element->language.empty()) {
       node_data->AddStringAttribute(ax::mojom::StringAttribute::kLanguage,
@@ -200,8 +370,6 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
 
     // TODO(crbug.com/40707542): Handle pdf_struct_element->actual_text as text
     // override.
-    // TODO(crbug.com/40707542): Handle
-    // pdf_struct_element->abbreviation_expansion.
 
     for (const auto& child : pdf_struct_element->children) {
       WalkStructureTree(child.get(), node_data);
@@ -241,6 +409,11 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
         figure_node->AddStringAttribute(ax::mojom::StringAttribute::kName,
                                         pdf_struct_element->alt_text);
       }
+      if (!pdf_struct_element->abbreviation_expansion.empty()) {
+        figure_node->AddStringAttribute(
+            ax::mojom::StringAttribute::kDescription,
+            pdf_struct_element->abbreviation_expansion);
+      }
       if (!pdf_struct_element->language.empty()) {
         figure_node->AddStringAttribute(ax::mojom::StringAttribute::kLanguage,
                                         pdf_struct_element->language);
@@ -261,6 +434,11 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
       ui::AXNodeData* image_node =
           CreateNodeWithImageContent(parent_node, modified_image);
 
+      if (!pdf_struct_element->abbreviation_expansion.empty()) {
+        image_node->AddStringAttribute(
+            ax::mojom::StringAttribute::kDescription,
+            pdf_struct_element->abbreviation_expansion);
+      }
       if (!pdf_struct_element->language.empty()) {
         image_node->AddStringAttribute(ax::mojom::StringAttribute::kLanguage,
                                        pdf_struct_element->language);
@@ -281,6 +459,9 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
   if (!pdf_struct_element->alt_text.empty()) {
     container->AddStringAttribute(ax::mojom::StringAttribute::kDescription,
                                   pdf_struct_element->alt_text);
+  } else if (!pdf_struct_element->abbreviation_expansion.empty()) {
+    container->AddStringAttribute(ax::mojom::StringAttribute::kDescription,
+                                  pdf_struct_element->abbreviation_expansion);
   }
   if (!pdf_struct_element->language.empty()) {
     container->AddStringAttribute(ax::mojom::StringAttribute::kLanguage,
@@ -290,6 +471,37 @@ void PdfAccessibilityTreeBuilderStructure::WalkStructureTree(
   for (const auto& child : pdf_struct_element->children) {
     WalkStructureTree(child.get(), container);
   }
+}
+
+std::optional<chrome_pdf::UnassociatedTextRunRange>
+PdfAccessibilityTreeBuilderStructure::FindUnassociatedTextRunRangeAtIndex(
+    size_t range_start) const {
+  const auto& ranges =
+      structure_tree_root_->unassociated_text_run_ranges_for_page;
+  if (ranges.empty()) {
+    return std::nullopt;
+  }
+
+  auto range = std::ranges::lower_bound(
+      ranges, range_start, {}, &chrome_pdf::UnassociatedTextRunRange::start);
+  if (range != ranges.end() && range->start == range_start) {
+    return *range;
+  }
+
+  return std::nullopt;
+}
+
+void PdfAccessibilityTreeBuilderStructure::InsertUnassociatedTextRunsAtStart() {
+  auto range = FindUnassociatedTextRunRangeAtIndex(0);
+  if (!range) {
+    return;
+  }
+
+  ui::AXNodeData* container =
+      CreateParagraphFromTextRunRange(*builder_, *range);
+
+  builder_->page_node()->child_ids.insert(
+      builder_->page_node()->child_ids.begin(), container->id);
 }
 
 }  // namespace pdf

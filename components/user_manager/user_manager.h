@@ -87,10 +87,6 @@ class USER_MANAGER_EXPORT UserManager {
         const User& user,
         const gfx::ImageSkia& profile_image) {}
 
-    // Called when any of the device cros settings which are responsible for
-    // user sign in are changed.
-    virtual void OnUsersSignInConstraintsChanged() {}
-
     // Called when the user affiliation is updated.
     virtual void OnUserAffiliationUpdated(const User& user) {}
 
@@ -121,9 +117,6 @@ class USER_MANAGER_EXPORT UserManager {
     // This looks very similar to ActiveUserChanged, so consider to merge
     // in the future.
     virtual void OnLoginStateUpdated(const User* active_user) {}
-
-    // Called when another user got added to the existing session.
-    virtual void UserAddedToSession(const User* added_user) {}
 
    protected:
     ~UserSessionStateObserver() override = default;
@@ -500,7 +493,6 @@ class USER_MANAGER_EXPORT UserManager {
   virtual void NotifyUserProfileImageUpdated(
       const User& user,
       const gfx::ImageSkia& profile_image) = 0;
-  virtual void NotifyUsersSignInConstraintsChanged() = 0;
   virtual void NotifyUserAffiliationUpdated(const User& user) = 0;
   virtual void NotifyUserToBeRemoved(const AccountId& account_id) = 0;
   virtual void NotifyUserRemoved(const AccountId& account_id,

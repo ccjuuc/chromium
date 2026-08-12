@@ -8,9 +8,11 @@
 #include <optional>
 
 #include "base/json/json_reader.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/types/expected_macros.h"
 #include "base/values.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/enterprise/data_controls/core/browser/features.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/prefs/pref_value_map.h"
@@ -44,6 +46,9 @@ constexpr char kSchema[] = R"(
                 },
                 "destinations": {
                   "properties": {
+                    "gemini_in_chrome": {
+                      "type": "boolean"
+                    },
                     "incognito": {
                       "type": "boolean"
                     },
@@ -52,6 +57,18 @@ constexpr char kSchema[] = R"(
                     },
                     "other_profile": {
                       "type": "boolean"
+                    },
+                    "size_higher_than": {
+                      "type": "integer"
+                    },
+                    "size_lower_than": {
+                      "type": "integer"
+                    },
+                    "url_regexprs": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "urls": {
                       "items": {
@@ -73,6 +90,9 @@ constexpr char kSchema[] = R"(
                 },
                 "sources": {
                   "properties": {
+                    "gemini_in_chrome": {
+                      "type": "boolean"
+                    },
                     "incognito": {
                       "type": "boolean"
                     },
@@ -81,6 +101,18 @@ constexpr char kSchema[] = R"(
                     },
                     "other_profile": {
                       "type": "boolean"
+                    },
+                    "size_higher_than": {
+                      "type": "integer"
+                    },
+                    "size_lower_than": {
+                      "type": "integer"
+                    },
+                    "url_regexprs": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "urls": {
                       "items": {
@@ -101,6 +133,9 @@ constexpr char kSchema[] = R"(
           },
           "destinations": {
             "properties": {
+              "gemini_in_chrome": {
+                "type": "boolean"
+              },
               "incognito": {
                 "type": "boolean"
               },
@@ -109,6 +144,20 @@ constexpr char kSchema[] = R"(
               },
               "other_profile": {
                 "type": "boolean"
+              },
+              "size_higher_than": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "size_lower_than": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "url_regexprs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "urls": {
                 "items": {
@@ -132,6 +181,9 @@ constexpr char kSchema[] = R"(
               },
               "destinations": {
                 "properties": {
+                  "gemini_in_chrome": {
+                    "type": "boolean"
+                  },
                   "incognito": {
                     "type": "boolean"
                   },
@@ -140,6 +192,18 @@ constexpr char kSchema[] = R"(
                   },
                   "other_profile": {
                     "type": "boolean"
+                  },
+                  "size_higher_than": {
+                    "type": "integer"
+                  },
+                  "size_lower_than": {
+                    "type": "integer"
+                  },
+                  "url_regexprs": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "urls": {
                     "items": {
@@ -161,6 +225,9 @@ constexpr char kSchema[] = R"(
               },
               "sources": {
                 "properties": {
+                  "gemini_in_chrome": {
+                    "type": "boolean"
+                  },
                   "incognito": {
                     "type": "boolean"
                   },
@@ -169,6 +236,18 @@ constexpr char kSchema[] = R"(
                   },
                   "other_profile": {
                     "type": "boolean"
+                  },
+                  "size_higher_than": {
+                    "type": "integer"
+                  },
+                  "size_lower_than": {
+                    "type": "integer"
+                  },
+                  "url_regexprs": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "urls": {
                     "items": {
@@ -193,6 +272,9 @@ constexpr char kSchema[] = R"(
                 },
                 "destinations": {
                   "properties": {
+                    "gemini_in_chrome": {
+                      "type": "boolean"
+                    },
                     "incognito": {
                       "type": "boolean"
                     },
@@ -201,6 +283,18 @@ constexpr char kSchema[] = R"(
                     },
                     "other_profile": {
                       "type": "boolean"
+                    },
+                    "size_higher_than": {
+                      "type": "integer"
+                    },
+                    "size_lower_than": {
+                      "type": "integer"
+                    },
+                    "url_regexprs": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "urls": {
                       "items": {
@@ -222,6 +316,9 @@ constexpr char kSchema[] = R"(
                 },
                 "sources": {
                   "properties": {
+                    "gemini_in_chrome": {
+                      "type": "boolean"
+                    },
                     "incognito": {
                       "type": "boolean"
                     },
@@ -230,6 +327,18 @@ constexpr char kSchema[] = R"(
                     },
                     "other_profile": {
                       "type": "boolean"
+                    },
+                    "size_higher_than": {
+                      "type": "integer"
+                    },
+                    "size_lower_than": {
+                      "type": "integer"
+                    },
+                    "url_regexprs": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "urls": {
                       "items": {
@@ -273,6 +382,9 @@ constexpr char kSchema[] = R"(
           },
           "sources": {
             "properties": {
+              "gemini_in_chrome": {
+                "type": "boolean"
+              },
               "incognito": {
                 "type": "boolean"
               },
@@ -281,6 +393,18 @@ constexpr char kSchema[] = R"(
               },
               "other_profile": {
                 "type": "boolean"
+              },
+              "size_higher_than": {
+                "type": "integer"
+              },
+              "size_lower_than": {
+                "type": "integer"
+              },
+              "url_regexprs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "urls": {
                 "items": {
@@ -297,7 +421,8 @@ constexpr char kSchema[] = R"(
       "type": "array"
     }
   }
-})";
+}
+)";
 
 constexpr char kValidPolicy[] = R"(
   [
@@ -374,15 +499,6 @@ constexpr policy::PolicySource kCloudSources[] = {
     policy::PolicySource::POLICY_SOURCE_CLOUD,
     policy::PolicySource::POLICY_SOURCE_CLOUD_FROM_ASH};
 
-constexpr policy::PolicySource kNonCloudSources[] = {
-    policy::PolicySource::POLICY_SOURCE_ENTERPRISE_DEFAULT,
-    policy::PolicySource::POLICY_SOURCE_COMMAND_LINE,
-    policy::PolicySource::POLICY_SOURCE_ACTIVE_DIRECTORY,
-    policy::PolicySource::POLICY_SOURCE_PLATFORM,
-    policy::PolicySource::
-        POLICY_SOURCE_RESTRICTED_MANAGED_GUEST_SESSION_OVERRIDE,
-};
-
 constexpr char kInvalidPolicy[] = "[1,2,3]";
 
 constexpr std::pair<const char*, const char16_t*> kInvalidTestCases[] = {
@@ -451,6 +567,24 @@ constexpr std::pair<const char*, const char16_t*> kInvalidTestCases[] = {
         u"Error at PolicyForTesting[0]: \"SCREENSHOT\" is not a supported "
         u"restriction on this platform",
 #endif  // BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+    },
+    {
+        R"([
+            {
+              "sources": {
+                "gemini_in_chrome": true,
+                "urls": ["google.com"]
+              },
+              "restrictions": [
+                {
+                  "class": "CLIPBOARD",
+                  "level": "BLOCK"
+                }
+              ]
+            }
+          ])",
+        u"Error at PolicyForTesting[0].sources: Keys \"urls\" cannot be "
+        u"set in the same dictionary as the \"gemini_in_chrome\" keys",
     },
     {
         R"([
@@ -551,7 +685,7 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 }  // namespace
 
-TEST_F(DataControlsPolicyHandlerTest, AllowsCloudSources) {
+TEST_F(DataControlsPolicyHandlerTest, WithValidPolicy) {
   for (auto scope : kCloudSources) {
     policy::PolicyMap map = CreatePolicyMap(kValidPolicy, scope);
     auto handler = std::make_unique<DataControlsPolicyHandler>(
@@ -573,20 +707,20 @@ TEST_F(DataControlsPolicyHandlerTest, AllowsCloudSources) {
   }
 }
 
-TEST_F(DataControlsPolicyHandlerTest, BlocksNonCloudSources) {
-  for (auto scope : kNonCloudSources) {
-    policy::PolicyMap map = CreatePolicyMap(kValidPolicy, scope);
-    auto handler = std::make_unique<DataControlsPolicyHandler>(
-        kPolicyName, kTestPref, schema());
+TEST_F(DataControlsPolicyHandlerTest, EarlyInitializationSafetyCheck) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithNullFeatureAndFieldTrialLists();
+  policy::PolicyMap map =
+      CreatePolicyMap(kValidPolicy, policy::PolicySource::POLICY_SOURCE_CLOUD);
+  auto handler = std::make_unique<DataControlsPolicyHandler>(
+      kPolicyName, kTestPref, schema());
+  policy::PolicyErrorMap errors;
+  ASSERT_TRUE(handler->CheckPolicySettings(map, &errors));
 
-    policy::PolicyErrorMap errors;
-    ASSERT_FALSE(handler->CheckPolicySettings(map, &errors));
-    ASSERT_FALSE(errors.empty());
-    ASSERT_TRUE(errors.HasError(kPolicyName));
-    std::u16string messages = errors.GetErrorMessages(kPolicyName);
-    ASSERT_EQ(messages,
-              u"Ignored because the policy is not set by a cloud source.");
-  }
+  auto* feature = base::FeatureList::GetEarlyAccessedFeatureForTesting();
+  EXPECT_EQ(nullptr, feature) << "Dangerous early access detected for feature: "
+      << feature->name
+      << ". This can cause the browser to crash.";
 }
 
 TEST_F(DataControlsPolicyHandlerTest, WarnInvalidSchema) {
@@ -673,5 +807,168 @@ TEST_P(DataControlsPolicyHandlerInvalidKeysTest, Test) {
   std::u16string messages = errors.GetErrorMessages(kPolicyName);
   ASSERT_EQ(messages, expected_messages());
 }
+
+struct UrlRegexAndSizeTestCase {
+  bool feature_enabled;
+  const char* policy;
+  const char16_t* expected_messages;
+};
+
+constexpr UrlRegexAndSizeTestCase kUrlRegexAndSizeTestCases[] = {
+    {
+        /*feature_enabled=*/false,
+        R"([
+           {
+             "sources": { "size_higher_than": 1024 },
+             "restrictions": [
+               { "class": "CLIPBOARD", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0].sources: \"size_higher_than\" is not a "
+        u"supported condition for \"CLIPBOARD\"",
+    },
+#if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+    {
+        /*feature_enabled=*/false,
+        R"([
+           {
+             "sources": { "url_regexprs": ["^https://.*$"] },
+             "restrictions": [
+               { "class": "SCREENSHOT", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0].sources: \"url_regexprs\" is not a "
+        u"supported condition for \"SCREENSHOT\"",
+    },
+#endif
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "sources": {
+               "size_higher_than": 1024,
+               "size_lower_than": 100,
+               "url_regexprs": ["^https://.*$"]
+             },
+             "restrictions": [
+               { "class": "CLIPBOARD", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"",
+    },
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "destinations": { "size_higher_than": 1024 },
+             "restrictions": [
+               { "class": "CLIPBOARD", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0].destinations: \"size_higher_than\" is "
+        u"not a supported condition for \"CLIPBOARD\"",
+    },
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "destinations": { "size_lower_than": 1024 },
+             "restrictions": [
+               { "class": "CLIPBOARD", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0].destinations: \"size_lower_than\" is "
+        u"not a supported condition for \"CLIPBOARD\"",
+    },
+#if BUILDFLAG(ENTERPRISE_SCREENSHOT_PROTECTION)
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "sources": { "url_regexprs": ["^https://.*$"] },
+             "restrictions": [
+               { "class": "SCREENSHOT", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"",
+    },
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "sources": { "size_higher_than": 1024 },
+             "restrictions": [
+               { "class": "SCREENSHOT", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0].sources: \"size_higher_than\" is not a "
+        u"supported condition for \"SCREENSHOT\"",
+    },
+#endif
+    {
+        /*feature_enabled=*/true,
+        R"([
+           {
+             "sources": { "url_regexprs": ["^https://.*$"] },
+             "restrictions": [
+               { "class": "PRINTING", "level": "BLOCK" }
+             ]
+           }
+         ])",
+        u"Error at PolicyForTesting[0]: \"PRINTING\" is not a supported "
+        u"restriction on this platform",
+    },
+};
+
+class DataControlsPolicyHandlerUrlRegexAndSizeTest
+    : public testing::WithParamInterface<UrlRegexAndSizeTestCase>,
+      public DataControlsPolicyHandlerTest {
+ public:
+  void SetUp() override {
+    DataControlsPolicyHandlerTest::SetUp();
+    if (GetParam().feature_enabled) {
+      scoped_feature_list_.InitAndEnableFeature(
+          kDataControlsUrlRegexAndSizeAttributes);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          kDataControlsUrlRegexAndSizeAttributes);
+    }
+  }
+
+  const char* policy_value() { return GetParam().policy; }
+  const char16_t* expected_messages() { return GetParam().expected_messages; }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_P(DataControlsPolicyHandlerUrlRegexAndSizeTest, Test) {
+  policy::PolicyMap map = CreatePolicyMap(
+      policy_value(), policy::PolicySource::POLICY_SOURCE_CLOUD);
+  auto handler = std::make_unique<DataControlsPolicyHandler>(
+      kPolicyName, kTestPref, schema());
+
+  policy::PolicyErrorMap errors;
+  ASSERT_TRUE(handler->CheckPolicySettings(map, &errors));
+
+  std::u16string expected = expected_messages();
+  if (expected.empty()) {
+    EXPECT_TRUE(errors.empty());
+  } else {
+    EXPECT_FALSE(errors.empty());
+    EXPECT_EQ(errors.GetErrorMessages(kPolicyName), expected);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         DataControlsPolicyHandlerUrlRegexAndSizeTest,
+                         testing::ValuesIn(kUrlRegexAndSizeTestCases));
 
 }  // namespace data_controls

@@ -50,7 +50,8 @@ function dateToMojoTime(date: Date) {
   // milliseconds.
   const windowsEpoch = Date.UTC(1601, 0, 1, 0, 0, 0, 0);
   const unixEpoch = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
-  // `epochDeltaInMs` is equal to `base::Time::kTimeTToMicrosecondsOffset`.
+  // `epochDeltaInMs` is equal to
+  // `base::Time::kMicrosecondsFromWindowsToUnixEpoch`.
   const epochDeltaInMs = unixEpoch - windowsEpoch;
   const internalValue = BigInt(date.valueOf() + epochDeltaInMs) * BigInt(1000);
   return {internalValue} as Time;
@@ -197,7 +198,7 @@ suite('LocationInternalsUITest', function() {
   let fakeLocationInternalsHandler: FakeLocationInternalsHandlerRemote|null =
       null;
 
-  suiteSetup(function() {
+  suiteSetup(async function() {
     const promiseResolver = new PromiseResolver<void>();
 
     const internalsHandlerInterceptor =
@@ -208,9 +209,12 @@ suite('LocationInternalsUITest', function() {
       promiseResolver.resolve();
     };
     internalsHandlerInterceptor.start();
+
+    const refreshFinishPromise = eventToPromise(REFRESH_FINISH_EVENT, window);
     initializeMojo();
 
-    return promiseResolver.promise;
+    await promiseResolver.promise;
+    await refreshFinishPromise;
   });
 
   teardown(function() {

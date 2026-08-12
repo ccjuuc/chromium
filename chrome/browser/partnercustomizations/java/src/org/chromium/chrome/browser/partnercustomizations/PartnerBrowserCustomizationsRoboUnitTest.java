@@ -8,61 +8,50 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import android.os.Handler;
-import android.os.Looper;
-
-import androidx.annotation.Nullable;
-
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.task.TaskTraits;
-import org.chromium.base.task.test.ShadowPostTask;
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
-import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizationsRoboUnitTest.ShadowCustomizationProviderDelegate;
 import org.chromium.chrome.browser.partnercustomizations.PartnerCustomizationsTestUtils.HomepageCharacterizationHelperStub;
 import org.chromium.chrome.browser.partnercustomizations.PartnerCustomizationsUma.PartnerCustomizationsHomepageEnum;
 import org.chromium.url.JUnitTestGURLs;
 
+import java.util.Locale;
+
 /** Unit tests for {@link PartnerBrowserCustomizations}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {ShadowPostTask.class, ShadowCustomizationProviderDelegate.class})
+@Config(manifest = Config.NONE)
 @EnableFeatures(ChromeFeatureList.PARTNER_CUSTOMIZATIONS_UMA)
 public class PartnerBrowserCustomizationsRoboUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private ActivityLifecycleDispatcher mActivityLifecycleDispatcherMock;
+
+    private static final Locale DEFAULT_LOCALE = Locale.getDefault();
 
     @Before
     public void setup() {
-        ShadowCustomizationProviderDelegate.sHomepage = JUnitTestGURLs.EXAMPLE_URL.getSpec();
-        ShadowPostTask.setTestImpl(
-                new ShadowPostTask.TestImpl() {
-                    final Handler mHandler = new Handler(Looper.getMainLooper());
-
-                    @Override
-                    public void postDelayedTask(
-                            @TaskTraits int taskTraits, Runnable task, long delay) {
-                        mHandler.postDelayed(task, delay);
-                    }
-                });
-
-        MockitoAnnotations.openMocks(this);
+        CustomizationProviderDelegateUpstreamImpl.setHomepageForTesting(
+                JUnitTestGURLs.EXAMPLE_URL.getSpec());
     }
 
     @After
     public void tearDown() {
+        Locale.setDefault(DEFAULT_LOCALE);
         PartnerBrowserCustomizations.destroy();
         PartnerCustomizationsUma.resetStaticsForTesting();
     }
@@ -72,21 +61,22 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
         PartnerBrowserCustomizations.getInstance()
                 .initializeAsync(ContextUtils.getApplicationContext());
         // Run one task, so AsyncTask#doInBackground is run, but not #onFinalized.
-        ShadowLooper.runMainLooperOneTask();
+        RobolectricUtil.runOneBackgroundTask();
         assertFalse(
                 "The homepage refreshed, but result is not yet posted on UI thread.",
                 PartnerBrowserCustomizations.getInstance().isInitialized());
 
         // Assuming homepage is changed during 1st #initializeAsync, and another #initializeAsync is
         // triggered. The 2nd #initializeAsync is ignored since there's one already in the process.
-        ShadowCustomizationProviderDelegate.sHomepage = JUnitTestGURLs.GOOGLE_URL.getSpec();
+        CustomizationProviderDelegateUpstreamImpl.setHomepageForTesting(
+                JUnitTestGURLs.GOOGLE_URL.getSpec());
         PartnerBrowserCustomizations.getInstance()
                 .initializeAsync(ContextUtils.getApplicationContext());
         assertFalse(
                 "#initializeAsync should be in progress.",
                 PartnerBrowserCustomizations.getInstance().isInitialized());
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(
                 "#initializeAsync should be done.",
                 PartnerBrowserCustomizations.getInstance().isInitialized());
@@ -101,7 +91,7 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
                 "3rd #initializeAsync should be in progress.",
                 PartnerBrowserCustomizations.getInstance().isInitialized());
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(
                 "3rd #initializeAsync should be done.",
                 PartnerBrowserCustomizations.getInstance().isInitialized());
@@ -109,33 +99,6 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
                 "Homepage should refreshed by 3rd #initializeAsync.",
                 JUnitTestGURLs.GOOGLE_URL.getSpec(),
                 PartnerBrowserCustomizations.getInstance().getHomePageUrl().getSpec());
-    }
-
-    /** Convenient shadow class to set homepage provided by partner during robo tests. */
-    @Implements(CustomizationProviderDelegateUpstreamImpl.class)
-    public static class ShadowCustomizationProviderDelegate {
-        static String sHomepage;
-
-        public ShadowCustomizationProviderDelegate() {}
-
-        /** Returns the homepage string or null if none is available. */
-        @Implementation
-        @Nullable
-        protected String getHomepage() {
-            return sHomepage;
-        }
-
-        /** Returns whether incognito mode is disabled. */
-        @Implementation
-        protected boolean isIncognitoModeDisabled() {
-            return false;
-        }
-
-        /** Returns whether bookmark editing is disabled. */
-        @Implementation
-        protected boolean isBookmarksEditingDisabled() {
-            return false;
-        }
     }
 
     /**
@@ -149,7 +112,7 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
      */
     @Test
     public void initializeAsyncWithPartnerCustomizationsUma() {
-        ShadowCustomizationProviderDelegate.sHomepage = null;
+        CustomizationProviderDelegateUpstreamImpl.setHomepageForTesting(null);
         HistogramWatcher histograms =
                 HistogramWatcher.newSingleRecordWatcher(
                         "Android.PartnerCustomization.HomepageCustomizationOutcome",
@@ -159,7 +122,7 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
         PartnerBrowserCustomizations.getInstance()
                 .initializeAsync(ContextUtils.getApplicationContext());
         // Run one task, so AsyncTask#doInBackground is run, but not #onFinalized.
-        ShadowLooper.runMainLooperOneTask();
+        RobolectricUtil.runOneBackgroundTask();
 
         // Simulate CTA#createInitialTab: Create an NTP when the delegate says Partner Homepage.
         // TODO(donnd): call this as an async callback through setOnInitializeAsyncFinished.
@@ -170,9 +133,92 @@ public class PartnerBrowserCustomizationsRoboUnitTest {
                         HomepageCharacterizationHelperStub::ntpHelper);
 
         // Trigger Async completion.
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Make sure the Outcome logged to UMA is correct.
         histograms.assertExpected();
+    }
+
+    @Test
+    @DisableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
+    public void testIsHomepageProviderAvailableAndEnabled_FeatureDisabled() {
+        PartnerBrowserCustomizations customizations = PartnerBrowserCustomizations.getInstance();
+        customizations.initializeAsync(ContextUtils.getApplicationContext());
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertTrue(customizations.isHomepageProviderAvailableAndEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+    public void testIsHomepageProviderAvailableAndEnabled_FeatureEnabled_NoBottomBar() {
+        PartnerBrowserCustomizations customizations = PartnerBrowserCustomizations.getInstance();
+        customizations.initializeAsync(ContextUtils.getApplicationContext());
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertFalse(customizations.isHomepageProviderAvailableAndEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID,
+        ChromeFeatureList.ANDROID_BOTTOM_BAR
+    })
+    public void testIsHomepageProviderAvailableAndEnabled_FeatureEnabled_WithBottomBar() {
+        PartnerBrowserCustomizations customizations = PartnerBrowserCustomizations.getInstance();
+        customizations.initializeAsync(ContextUtils.getApplicationContext());
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertTrue(customizations.isHomepageProviderAvailableAndEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+    public void testIsHomepageProviderAvailableAndEnabled_DisablePartnerHomepageEnabled() {
+        Locale.setDefault(Locale.US);
+        PartnerBrowserCustomizations partnerBrowserCustomizations =
+                PartnerBrowserCustomizations.getInstance();
+        partnerBrowserCustomizations.initializeAsync(ContextUtils.getApplicationContext());
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertFalse(partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabled());
+
+        Locale.setDefault(Locale.CANADA);
+        assertTrue(partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabled());
+
+        FeatureOverrides.newBuilder()
+                .param(
+                        ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID,
+                        "apply_to_all_countries",
+                        true)
+                .apply();
+        assertFalse(partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID
+                + ":disable_partner_homepage_android_for_zero_tabs/true"
+    })
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+    public void
+            testIsHomepageProviderAvailableAndEnabledForZeroTabs_DisablePartnerHomepageEnabled() {
+        Locale.setDefault(Locale.US);
+        PartnerBrowserCustomizations partnerBrowserCustomizations =
+                PartnerBrowserCustomizations.getInstance();
+        partnerBrowserCustomizations.initializeAsync(ContextUtils.getApplicationContext());
+        RobolectricUtil.runAllBackgroundAndUi();
+        assertFalse(
+                partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabledForZeroTabs());
+
+        Locale.setDefault(Locale.CANADA);
+        assertTrue(partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabledForZeroTabs());
+
+        FeatureOverrides.newBuilder()
+                .param(
+                        ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID,
+                        "apply_to_all_countries",
+                        true)
+                .apply();
+        assertFalse(
+                partnerBrowserCustomizations.isHomepageProviderAvailableAndEnabledForZeroTabs());
     }
 }

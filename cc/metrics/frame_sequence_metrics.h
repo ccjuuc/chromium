@@ -38,7 +38,7 @@ enum class FrameSequenceTrackerType {
   kWheelScroll = 7,
   kScrollbarScroll = 8,
   kCustom = 9,  // Note that the metrics for kCustom are not reported on UMA,
-                // and instead are dispatched back to the LayerTreeHostClient.
+                // and instead are dispatched back to the LayerTreeHostDelegate.
   kCanvasAnimation = 10,
   kJSAnimation = 11,
   kSETMainThreadAnimation = 12,
@@ -121,8 +121,7 @@ class CC_EXPORT FrameSequenceMetrics {
   bool HasEnoughDataForReporting() const;
   bool HasDataLeftForReporting() const;
   // Report related metrics: throughput, checkboarding...
-  // Returns PercentDroppedFrames4.AllSequences metric.
-  int ReportMetrics();
+  void ReportMetrics();
 
   void AddSortedFrame(const viz::BeginFrameArgs& args,
                       const FrameInfo& frame_info);

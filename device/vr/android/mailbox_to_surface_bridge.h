@@ -7,6 +7,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
+#include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 
 namespace gfx {
 class ColorSpace;
@@ -21,6 +22,7 @@ struct SyncToken;
 }  // namespace gpu
 
 namespace viz {
+class ContextProvider;
 class SharedImageFormat;
 }  // namespace viz
 
@@ -42,17 +44,17 @@ class MailboxToSurfaceBridge {
 
   virtual void GenSyncToken(gpu::SyncToken* out_sync_token) = 0;
 
+  virtual void VerifySyncToken(gpu::SyncToken& out_sync_token) = 0;
+
   virtual void WaitSyncToken(const gpu::SyncToken& sync_token) = 0;
 
   // Copies a GpuFence from the local context to the GPU process,
   // and issues a server wait for it.
   virtual void WaitForClientGpuFence(gfx::GpuFence&) = 0;
 
-  // Creates a GpuFence in the GPU process after the supplied sync_token
-  // completes, and copies it for use in the local context. This is
-  // asynchronous, the callback receives the GpuFence once it's available.
+  // Creates a GpuFence in the GPU process. The callback receives the GpuFence
+  // once it's available.
   virtual void CreateGpuFence(
-      const gpu::SyncToken& sync_token,
       base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)> callback) = 0;
 
   // Creates a shared image bound to |buffer_handle|. Returns the shared image
@@ -64,6 +66,7 @@ class MailboxToSurfaceBridge {
       viz::SharedImageFormat format,
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
+      GrSurfaceOrigin surface_origin,
       gpu::SharedImageUsageSet usage,
       gpu::SyncToken& sync_token) = 0;
 
@@ -73,6 +76,8 @@ class MailboxToSurfaceBridge {
   virtual void DestroySharedImage(
       const gpu::SyncToken& sync_token,
       scoped_refptr<gpu::ClientSharedImage> shared_image) = 0;
+
+  virtual viz::ContextProvider* GetContextProvider() = 0;
 };
 
 class MailboxToSurfaceBridgeFactory {

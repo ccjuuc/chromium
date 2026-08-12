@@ -98,8 +98,6 @@
     "toggle-muted",
     // command for menu elements
     "toggle-menu",
-    "hide-menu",
-    "show-menu",
     // command for scroll
     {name: "page-up", Symbol: "kPage_Up"},
     {name: "page-down", Symbol: "kPage_Down"},
@@ -112,10 +110,22 @@
     // command for overscroll
     "toggle-overscroll",
 
+    // colorspace attribute on <input type=color>
+    // https://html.spec.whatwg.org/multipage/input.html#dom-input-colorspace
+    "limited-srgb",
+    "display-p3",
+
     // loading attribute
     // https://github.com/scott-little/lazyload#ways-the-loading-attribute-can-be-used
     "lazy",
     "eager",
+    "auto",
+
+    // overscrollcontainer attribute
+    "auto",
+    "overlay",
+
+    // overscrollarea attribute
     "auto",
 
     // popover attribute
@@ -175,6 +185,10 @@
     "open",
     "closed",
 
+    // shadowrootslotassignment attribute
+    // https://github.com/whatwg/html/pull/12267
+    "named",
+
     // visibilityState
     // https://w3c.github.io/page-visibility/#visibilitystate-enum
     "hidden",
@@ -183,15 +197,19 @@
     // Blocking attributes
     // https://html.spec.whatwg.org/C/#blocking-attribute
     "render",
-    "full-frame-rate",
 
     // dropEffect IDL attribute
     // https://html.spec.whatwg.org/C/#dom-datatransfer-dropeffect
     "none",
 
+    // effectAllowed IDL attribute
+    // https://html.spec.whatwg.org/C/#dom-datatransfer-effectallowed
+    "uninitialized",
+
     // Various Aria attribute values
     // https://www.w3.org/TR/wai-aria-1.1/#valuetype_true-false
     "false",
+    "presentation",
     "true",
 
     // ol[type] https://html.spec.whatwg.org/C/#attr-ol-type and
@@ -252,8 +270,8 @@
     "-internal-print-footer",
     "-internal-print-page-number",
 
-    // ElementInternals.type
-    // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/ElementInternalsType/explainer.md
+    // Values of the button type attribute
+    // https://html.spec.whatwg.org/multipage/form-elements.html#attr-button-type
     "button",
     "reset",
     "submit",
@@ -265,5 +283,15 @@
     // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/ShadowDOM/explainer.md
     "text/css",
     "module",
+
+    // Values of type attribute for <usermedia> element (formerly <permission> element)
+    // https://wicg.github.io/PEPC/permission-elements.html#element-attrdef-permission-type
+    "camera",
+    "microphone",
+
+    // Values of cachehint attribute for <script> element (under proposal).
+    // https://github.com/explainers-by-googlers/inline-script-cache-hint
+    "never",
+    "default",
   ],
 }

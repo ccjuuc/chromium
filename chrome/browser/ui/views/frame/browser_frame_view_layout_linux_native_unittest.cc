@@ -8,7 +8,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "ui/base/models/image_model.h"
 #include "ui/linux/nav_button_provider.h"
@@ -64,14 +63,8 @@ class TestLayoutDelegate : public OpaqueBrowserFrameViewLayoutDelegate {
   bool IsMinimized() const override { return false; }
   bool IsFullscreen() const override { return false; }
   bool IsTabStripVisible() const override { return true; }
-  bool GetBorderlessModeEnabled() const override { return false; }
-  int GetTabStripHeight() const override {
-    return GetLayoutConstant(TAB_HEIGHT);
-  }
+  bool GetUnframedModeEnabled() const override { return false; }
   bool IsToolbarVisible() const override { return true; }
-  gfx::Size GetTabstripMinimumSize() const override {
-    return gfx::Size(78, 29);
-  }
   int GetTopAreaHeight() const override { return 0; }
   bool UseCustomFrame() const override { return true; }
   bool IsFrameCondensed() const override { return false; }
@@ -124,6 +117,8 @@ class TestNavButtonProvider : public ui::NavButtonProvider {
 
   gfx::Insets GetTopAreaSpacing() const override { return kTopAreaSpacing; }
 
+  int GetNavButtonHeight(bool maximized) const override { return 0; }
+
   int GetInterNavButtonSpacing() const override {
     return kInterNavButtonSpacing;
   }
@@ -139,6 +134,9 @@ class TestFrameProvider : public ui::WindowFrameProvider {
   int GetTopCornerRadiusDip() override { return 0; }
   bool IsTopFrameTranslucent() override { return false; }
   gfx::Insets GetFrameThicknessDip() override { return {}; }
+  int GetTopAreaMinHeightDip() override { return 24; }
+  gfx::Insets GetTopAreaPaddingDip() override { return gfx::Insets::VH(6, 0); }
+  gfx::Insets GetTopAreaBorderDip() override { return gfx::Insets(); }
   void PaintWindowFrame(gfx::Canvas* canvas,
                         const gfx::Rect& rect,
                         int top_area_height,
@@ -174,7 +172,7 @@ class BrowserFrameViewLayoutLinuxNativeTest : public ChromeViewsTestBase {
     layout->set_delegate(delegate_.get());
     layout->set_forced_window_caption_spacing_for_test(0);
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     root_view_ = widget_->GetRootView();
     root_view_->SetSize(gfx::Size(kWindowWidth, kWindowWidth));
     layout_manager_ = root_view_->SetLayoutManager(std::move(layout));

@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -122,7 +121,7 @@ void MultiBuffer::GlobalLRU::SchedulePrune() {
         *task_runner_, FROM_HERE,
         CrossThreadBindOnce(&MultiBuffer::GlobalLRU::PruneTask,
                             blink::RetainedRef(this)),
-        base::Seconds(kBlockPruneInterval));
+        base::Seconds(std::to_underlying(kBlockPruneInterval)));
     background_pruning_pending_ = true;
   }
 }
@@ -226,7 +225,7 @@ void MultiBuffer::AddReader(const BlockId& pos, Reader* reader) {
     }
   }
   if (!provider) {
-    DCHECK(!base::Contains(writer_index_, pos));
+    DCHECK(!writer_index_.contains(pos));
     writer_index_[pos] = CreateWriter(pos, is_client_audio_element_);
     provider = writer_index_[pos].get();
   }
@@ -256,7 +255,7 @@ void MultiBuffer::CleanupWriters(const BlockId& pos) {
 bool MultiBuffer::Contains(const BlockId& pos) const {
   DCHECK(present_[pos] == 0 || present_[pos] == 1)
       << " pos = " << pos << " present_[pos] " << present_[pos];
-  DCHECK_EQ(present_[pos], base::Contains(data_, pos) ? 1 : 0);
+  DCHECK_EQ(present_[pos], data_.Contains(pos) ? 1 : 0);
   return !!present_[pos];
 }
 
@@ -268,8 +267,8 @@ MultiBufferBlockId MultiBuffer::FindNextUnavailable(const BlockId& pos) const {
 }
 
 void MultiBuffer::NotifyAvailableRange(
-    const Interval<MultiBufferBlockId>& observer_range,
-    const Interval<MultiBufferBlockId>& new_range) {
+    const media::Interval<MultiBufferBlockId>& observer_range,
+    const media::Interval<MultiBufferBlockId>& new_range) {
   std::set<Reader*> tmp;
   for (auto i = readers_.lower_bound(observer_range.begin);
        i != readers_.end() && i->first < observer_range.end; ++i) {
@@ -281,7 +280,7 @@ void MultiBuffer::NotifyAvailableRange(
 }
 
 void MultiBuffer::ReleaseBlocks(const std::vector<MultiBufferBlockId>& blocks) {
-  IntervalMap<BlockId, int32_t> freed;
+  media::IntervalMap<BlockId, int32_t> freed;
   {
     base::AutoLock auto_lock(data_lock_);
     for (MultiBufferBlockId to_free : blocks) {
@@ -300,10 +299,10 @@ void MultiBuffer::ReleaseBlocks(const std::vector<MultiBufferBlockId>& blocks) {
       // Technically, there shouldn't be any observers in this range
       // as all observers really should be pinning the range where it's
       // actually observing.
-      NotifyAvailableRange(
-          freed_range.first,
-          // Empty range.
-          Interval<BlockId>(freed_range.first.begin, freed_range.first.begin));
+      NotifyAvailableRange(freed_range.first,
+                           // Empty range.
+                           media::Interval<BlockId>(freed_range.first.begin,
+                                                    freed_range.first.begin));
 
       auto i = present_.find(freed_range.first.begin);
       DCHECK_EQ(i.value(), 0);
@@ -380,7 +379,7 @@ MultiBuffer::ProviderState MultiBuffer::SuggestProviderState(
 
 bool MultiBuffer::ProviderCollision(const BlockId& id) const {
   // If there is a writer at the same location, it is always a collision.
-  if (base::Contains(writer_index_, id)) {
+  if (writer_index_.contains(id)) {
     return true;
   }
 
@@ -410,7 +409,7 @@ void MultiBuffer::OnDataProviderEvent(DataProvider* provider_tmp) {
         AddProvider(std::move(provider));
         break;
       }
-      DCHECK_GE(pos, 0);
+      CHECK_GE(pos, 0);
       scoped_refptr<media::DataBuffer> data = provider->Read();
       data_.Set(pos, data);
       eof = data->end_of_stream();
@@ -424,15 +423,16 @@ void MultiBuffer::OnDataProviderEvent(DataProvider* provider_tmp) {
 
   if (pos > start_pos) {
     present_.SetInterval(start_pos, pos, 1);
-    Interval<BlockId> expanded_range = present_.find(start_pos).interval();
+    media::Interval<BlockId> expanded_range =
+        present_.find(start_pos).interval();
     NotifyAvailableRange(expanded_range, expanded_range);
     lru_->IncrementDataSize(blocks_added);
     Prune(static_cast<size_t>(blocks_added) * kMaxFreesPerAdd + 1);
   } else {
     // Make sure to give progress reports even when there
     // aren't any new blocks yet.
-    NotifyAvailableRange(Interval<BlockId>(start_pos, start_pos + 1),
-                         Interval<BlockId>(start_pos, start_pos));
+    NotifyAvailableRange(media::Interval<BlockId>(start_pos, start_pos + 1),
+                         media::Interval<BlockId>(start_pos, start_pos));
   }
 
   // Check that it's still there before we try to delete it.
@@ -509,7 +509,7 @@ void MultiBuffer::PinRange(const BlockId& from,
   DCHECK_NE(how_much, 0);
   DVLOG(3) << "PINRANGE [" << from << " - " << to << ") += " << how_much;
   pinned_.IncrementInterval(from, to, how_much);
-  Interval<BlockId> modified_range(from, to);
+  media::Interval<BlockId> modified_range(from, to);
 
   // Iterate over all the modified ranges and check if any of them have
   // transitioned in or out of the unlocked state. If so, we iterate over
@@ -525,7 +525,7 @@ void MultiBuffer::PinRange(const BlockId& from,
     DCHECK_GE(range.value(), 0);
     if (range.value() == 0 || range.value() == how_much) {
       bool pin = range.value() == how_much;
-      Interval<BlockId> transition_range =
+      media::Interval<BlockId> transition_range =
           modified_range.Intersect(range.interval());
       if (transition_range.Empty())
         break;
@@ -537,14 +537,14 @@ void MultiBuffer::PinRange(const BlockId& from,
            present_block_range != present_.begin(); --present_block_range) {
         if (!present_block_range.value())
           continue;
-        Interval<BlockId> present_transitioned_range =
+        media::Interval<BlockId> present_transitioned_range =
             transition_range.Intersect(present_block_range.interval());
         if (present_transitioned_range.Empty())
           break;
         for (BlockId block = present_transitioned_range.end - 1;
              block >= present_transitioned_range.begin; --block) {
           DCHECK_GE(block, 0);
-          DCHECK(base::Contains(data_, block));
+          DCHECK(data_.Contains(block));
           if (pin) {
             DCHECK(pinned_[block]);
             lru_->Remove(this, block);
@@ -561,7 +561,8 @@ void MultiBuffer::PinRange(const BlockId& from,
   }
 }
 
-void MultiBuffer::PinRanges(const IntervalMap<BlockId, int32_t>& ranges) {
+void MultiBuffer::PinRanges(
+    const media::IntervalMap<BlockId, int32_t>& ranges) {
   for (auto r : ranges) {
     if (r.second != 0) {
       PinRange(r.first.begin, r.first.end, r.second);

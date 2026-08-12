@@ -121,7 +121,9 @@ class CONTENT_EXPORT BackForwardCache {
     kCacheLimitPrunedOnCriticalMemoryPressure = 71,
     kSharedWorkerMessage = 72,
     kSharedWorkerWithNoActiveClient = 73,
-    kMaxValue = kSharedWorkerWithNoActiveClient,
+    kWebLocksContention = 74,
+    kForwardCacheDisabled = 75,
+    kMaxValue = kForwardCacheDisabled,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:BackForwardCacheNotRestoredReason)
 
@@ -269,15 +271,12 @@ class CONTENT_EXPORT BackForwardCache {
   // Evict all entries from the BackForwardCache with specific reason.
   virtual void Flush(NotRestoredReason reason) = 0;
 
-  // Evict back/forward cache entries from the least recently used ones until
-  // the cache is within the given size limit.
-  // Returns the total number of BFCache entries before the pruning,
-  virtual size_t Prune(size_t limit, NotRestoredReason reason) = 0;
-
   // Sets limits on cache size and time to live, which will take precedent over
   // the default limits.
   virtual void SetEmbedderSuppliedCacheSize(size_t cache_size) = 0;
   virtual void SetEmbedderSuppliedTimeToLive(base::TimeDelta time_to_live) = 0;
+  // Sets whether the cache is allowed to store forward entries.
+  virtual void SetEmbedderSuppliedCacheForwardEntriesAllowed(bool allowed) = 0;
 
   // Disables the BackForwardCache so that no documents will be stored/served.
   // This allows tests to "force" not using the BackForwardCache, this can be

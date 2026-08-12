@@ -43,8 +43,7 @@ AllPasswordsBottomSheetViewImpl::~AllPasswordsBottomSheetViewImpl() {
 }
 
 void AllPasswordsBottomSheetViewImpl::Show(
-    const std::vector<std::unique_ptr<password_manager::PasswordForm>>&
-        credentials,
+    const std::vector<password_manager::PasswordForm>& credentials,
     FocusedFieldType focused_field_type) {
   auto java_object = GetOrCreateJavaObject();
   if (!java_object) {
@@ -57,8 +56,8 @@ void AllPasswordsBottomSheetViewImpl::Show(
   java_credentials.reserve(credentials.size());
   for (const auto& credential : credentials) {
     auto facet = affiliations::FacetURI::FromPotentiallyInvalidSpec(
-        credential->signon_realm);
-    std::string app_display_name = credential->app_display_name;
+        credential.signon_realm);
+    std::string app_display_name = credential.app_display_name;
     if (facet.IsValidAndroidFacetURI() && app_display_name.empty()) {
       app_display_name = l10n_util::GetStringFUTF8(
           IDS_SETTINGS_PASSWORDS_ANDROID_APP,
@@ -66,11 +65,9 @@ void AllPasswordsBottomSheetViewImpl::Show(
     }
 
     java_credentials.emplace_back(Java_Credential_Constructor(
-        env, credential->username_value, credential->password_value,
-        GetDisplayUsername(*credential), credential->url.spec(),
-        facet.IsValidAndroidFacetURI(), app_display_name,
-        controller_->IsPlusAddress(
-            base::UTF16ToUTF8(credential->username_value))));
+        env, credential.username_value, credential.password_value,
+        GetDisplayUsername(credential), credential.url.spec(),
+        facet.IsValidAndroidFacetURI(), app_display_name));
   }
 
   const bool is_password_field =
@@ -81,9 +78,9 @@ void AllPasswordsBottomSheetViewImpl::Show(
 
 void AllPasswordsBottomSheetViewImpl::OnCredentialSelected(
     JNIEnv* env,
-    std::u16string& username,
-    std::u16string& password,
-    jboolean requests_to_fill_password) {
+    const std::u16string& username,
+    const std::u16string& password,
+    bool requests_to_fill_password) {
   controller_->OnCredentialSelected(
       username, password,
       AllPasswordsBottomSheetController::RequestsToFillPassword(

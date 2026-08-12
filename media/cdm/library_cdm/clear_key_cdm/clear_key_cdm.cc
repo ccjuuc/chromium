@@ -29,6 +29,7 @@
 #include "media/base/decoder_buffer.h"
 #include "media/base/decrypt_config.h"
 #include "media/base/encryption_pattern.h"
+#include "media/base/media.h"
 #include "media/cdm/api/content_decryption_module_ext.h"
 #include "media/cdm/cdm_type_conversion.h"
 #include "media/cdm/clear_key_cdm_common.h"
@@ -43,7 +44,6 @@
 #include "base/at_exit.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
-#include "media/base/media.h"
 #include "media/cdm/library_cdm/clear_key_cdm/ffmpeg_cdm_audio_decoder.h"
 
 #if !defined COMPONENT_BUILD
@@ -51,39 +51,20 @@ static base::AtExitManager g_at_exit_manager;
 #endif
 #endif  // CLEAR_KEY_CDM_USE_FFMPEG_DECODER
 
-const char kClearKeyCdmVersion[] = "0.1.0.1";
+constexpr char kClearKeyCdmVersion[] = "0.1.0.1";
 
 // Variants of External Clear Key key system to test different scenarios.
 
-const int64_t kMaxTimerDelayMs = base::Seconds(5).InMilliseconds();
+constexpr int64_t kMaxTimerDelayMs = base::Seconds(5).InMilliseconds();
 
 // CDM unit test result header. Must be in sync with UNIT_TEST_RESULT_HEADER in
 // media/test/data/eme_player_js/globals.js.
-const char kUnitTestResultHeader[] = "UNIT_TEST_RESULT";
+constexpr char kUnitTestResultHeader[] = "UNIT_TEST_RESULT";
 
-const char kDummyIndividualizationRequest[] = "dummy individualization request";
+constexpr char kDummyIndividualizationRequest[] =
+    "dummy individualization request";
 
 static bool g_is_cdm_module_initialized = false;
-
-namespace {
-
-class CdmInputBufferExternalMemory
-    : public media::DecoderBuffer::ExternalMemory {
- public:
-  explicit CdmInputBufferExternalMemory(base::span<const uint8_t> data)
-      : data_(data) {}
-  CdmInputBufferExternalMemory() = delete;
-  CdmInputBufferExternalMemory(const CdmInputBufferExternalMemory&) = delete;
-  CdmInputBufferExternalMemory& operator=(const CdmInputBufferExternalMemory&) =
-      delete;
-
-  const base::span<const uint8_t> Span() const override { return data_; }
-
- private:
-  base::raw_span<const uint8_t> data_;
-};
-
-}  // namespace
 
 // Creates a DecoderBuffer from |input_buffer|. If the |input_buffer| is empty,
 // an empty (end-of-stream) DecoderBuffer is returned.
@@ -93,17 +74,15 @@ static scoped_refptr<media::DecoderBuffer> DecoderBufferFrom(
     CHECK(!input_buffer.data_size);
     return media::DecoderBuffer::CreateEOSBuffer();
   }
-  // SAFETY: `input_buffer` is defined in the cdm interface submodule:
-  // https://chromium.googlesource.com/chromium/cdm
-  auto input_buffer_span =
-      UNSAFE_BUFFERS(base::span(input_buffer.data, input_buffer.data_size));
+  auto input_buffer_span = media::AsSpan(&input_buffer);
 
   // Take |input_buffer|'s underlying memory and store it into |output_buffer|.
   // This is safe because this method is only used in Decrypt(). Decrypt() is
   // called synchronously and |input_buffer| and |output_buffer| will get
   // destroyed when Decrypt() goes out of scope.
   auto external_memory =
-      std::make_unique<CdmInputBufferExternalMemory>(input_buffer_span);
+      std::make_unique<media::DecoderBuffer::UnownedExternalMemory>(
+          input_buffer_span);
   scoped_refptr<media::DecoderBuffer> output_buffer =
       media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
   output_buffer->set_timestamp(base::Microseconds(input_buffer.timestamp));
@@ -113,10 +92,7 @@ static scoped_refptr<media::DecoderBuffer> DecoderBufferFrom(
 
   DCHECK_GT(input_buffer.iv_size, 0u);
   DCHECK_GT(input_buffer.key_id_size, 0u);
-  // SAFETY: `input_buffer` is defined in the cdm interface submodule:
-  // https://chromium.googlesource.com/chromium/cdm
-  auto subsample_span = UNSAFE_BUFFERS(
-      base::span(input_buffer.subsamples, input_buffer.num_subsamples));
+  auto subsample_span = media::SubsamplesFrom(&input_buffer);
   std::vector<media::SubsampleEntry> subsamples;
   for (const cdm::SubsampleEntry& subsample : subsample_span) {
     subsamples.emplace_back(subsample.clear_bytes, subsample.cipher_bytes);
@@ -132,10 +108,14 @@ static scoped_refptr<media::DecoderBuffer> DecoderBufferFrom(
         key_id_string, iv_string, subsamples));
   } else {
     DCHECK_EQ(input_buffer.encryption_scheme, cdm::EncryptionScheme::kCbcs);
+    auto pattern =
+        media::EncryptionPattern::Create(input_buffer.pattern.crypt_byte_block,
+                                         input_buffer.pattern.skip_byte_block);
+    if (!pattern) {
+      return nullptr;
+    }
     output_buffer->set_decrypt_config(media::DecryptConfig::CreateCbcsConfig(
-        key_id_string, iv_string, subsamples,
-        media::EncryptionPattern(input_buffer.pattern.crypt_byte_block,
-                                 input_buffer.pattern.skip_byte_block)));
+        key_id_string, iv_string, subsamples, *pattern));
   }
 
   return output_buffer;
@@ -362,8 +342,7 @@ class CdmVideoFrameAdapter : public cdm::VideoFrame_2 {
 
 template <typename HostInterface>
 ClearKeyCdm::ClearKeyCdm(HostInterface* host, const std::string& key_system)
-    : host_interface_version_(HostInterface::kVersion),
-      cdm_host_proxy_(std::make_unique<CdmHostProxyImpl<HostInterface>>(host)),
+    : cdm_host_proxy_(std::make_unique<CdmHostProxyImpl<HostInterface>>(host)),
       cdm_(base::MakeRefCounted<ClearKeyPersistentSessionCdm>(
           cdm_host_proxy_.get(),
           base::BindRepeating(&ClearKeyCdm::OnSessionMessage,
@@ -446,10 +425,13 @@ void ClearKeyCdm::CreateSessionAndGenerateRequest(
   } else if (key_system_ == kExternalClearKeyStorageIdTestKeySystem) {
     StartStorageIdTest();
   } else if (key_system_ == kExternalClearKeyKeySystem) {
-    // Normally, we would report cdm::kDecoderCheck1SuccessCount after
-    // decoding, but for clear key tests, we only want to verify plumbing of
-    // metrics.
+    // Normally, we would report these metrics after decoding or key system
+    // initialization, but for clear key tests, we only want to verify plumbing.
     cdm_host_proxy_->ReportMetrics(cdm::kDecoderCheck1SuccessCount, 1);
+    cdm_host_proxy_->ReportMetrics(cdm::kKeySystemDataTime1, 111);
+    cdm_host_proxy_->ReportMetrics(cdm::kKeySystemDataTime2, 222);
+    cdm_host_proxy_->ReportMetrics(cdm::kKeySystemDataTime3, 333);
+    cdm_host_proxy_->ReportMetrics(cdm::kKeySystemDataBool1, 1);
   }
 }
 
@@ -511,10 +493,8 @@ void ClearKeyCdm::OnUpdateSuccess(uint32_t promise_id,
       ScheduleNextTimer();
     }
 
-    // Also send an individualization request if never sent before. Only
-    // supported on Host_10 and later.
-    if (host_interface_version_ >= cdm::Host_10::kVersion &&
-        !has_sent_individualization_request_) {
+    // Also send an individualization request if never sent before.
+    if (!has_sent_individualization_request_) {
       has_sent_individualization_request_ = true;
       const std::string request = kDummyIndividualizationRequest;
       cdm_host_proxy_->OnSessionMessage(session_id.data(), session_id.length(),
@@ -626,11 +606,8 @@ cdm::Status ClearKeyCdm::Decrypt(const cdm::InputBuffer_2& encrypted_buffer,
   decrypted_block->SetDecryptedBuffer(
       cdm_host_proxy_->Allocate(buffer_span.size()));
   decrypted_block->DecryptedBuffer()->SetSize(buffer_span.size());
-  // SAFETY: decrypted_block is allocated in the above line with
-  // `buffer_span.size()` capacity.
   base::span<uint8_t> decrypted_buffer_span =
-      UNSAFE_BUFFERS(base::span(decrypted_block->DecryptedBuffer()->Data(),
-                                decrypted_block->DecryptedBuffer()->Size()));
+      AsSpan(decrypted_block->DecryptedBuffer());
   decrypted_buffer_span.copy_from_nonoverlapping(buffer_span);
   decrypted_block->SetTimestamp(buffer->timestamp().InMicroseconds());
 
@@ -670,8 +647,8 @@ cdm::Status ClearKeyCdm::InitializeVideoDecoder(
   }
 
   if (!video_decoder_) {
-    video_decoder_ =
-        CreateVideoDecoder(cdm_host_proxy_.get(), video_decoder_config);
+    video_decoder_ = CreateVideoDecoder(cdm_host_proxy_.get(),
+                                        video_decoder_config, &null_media_log_);
     if (!video_decoder_)
       return cdm::kInitializationError;
   }
@@ -899,9 +876,13 @@ void ClearKeyCdm::OnStorageId(uint32_t version,
   }
 
   is_running_storage_id_test_ = false;
+
+  // SAFETY: CdmAdapter::OnStorageIdObtained guarantees that `storage_id` has a
+  // size of `storage_id_size`.
+  auto storage_id_span =
+      UNSAFE_BUFFERS(base::span<const uint8_t>(storage_id, storage_id_size));
   DVLOG(1) << __func__ << ": storage_id (hex encoded) = "
-           << (storage_id_size ? base::HexEncode(storage_id, storage_id_size)
-                               : "<empty>");
+           << (storage_id_size ? base::HexEncode(storage_id_span) : "<empty>");
 
 #if BUILDFLAG(ENABLE_CDM_STORAGE_ID)
   // Storage Id is enabled, so something should be returned. It should be the

@@ -297,6 +297,18 @@ const char* ProtoEnumToString(sync_pb::SharedTabGroup::Color color) {
   NOTREACHED();
 }
 
+const char* ProtoEnumToString(
+    sync_pb::SyncEnums::GlicExperimentalTriggeringState state) {
+  ASSERT_ENUM_BOUNDS(sync_pb::SyncEnums, GlicExperimentalTriggeringState,
+                     UNAVAILABLE, READY);
+  switch (state) {
+    ENUM_CASE(sync_pb::SyncEnums, UNAVAILABLE);
+    ENUM_CASE(sync_pb::SyncEnums, NEEDS_OPT_IN);
+    ENUM_CASE(sync_pb::SyncEnums, READY);
+  }
+  NOTREACHED();
+}
+
 const char* ProtoEnumToString(sync_pb::SyncEnums::BrowserType browser_type) {
   ASSERT_ENUM_BOUNDS(sync_pb::SyncEnums, BrowserType, BROWSER_TYPE_UNKNOWN,
                      TYPE_AUTH_TAB);
@@ -720,7 +732,7 @@ const char* ProtoEnumToString(
 const char* ProtoEnumToString(
     sync_pb::CardBenefit::CategoryBenefitType category_benefit_type) {
   ASSERT_ENUM_BOUNDS(sync_pb::CardBenefit, CategoryBenefitType,
-                     CATEGORY_BENEFIT_TYPE_UNKNOWN, WHOLESALE_CLUBS);
+                     CATEGORY_BENEFIT_TYPE_UNKNOWN, CAR_RENTALS);
   switch (category_benefit_type) {
     ENUM_CASE(sync_pb::CardBenefit, CATEGORY_BENEFIT_TYPE_UNKNOWN);
     ENUM_CASE(sync_pb::CardBenefit, SUBSCRIPTION);
@@ -737,6 +749,8 @@ const char* ProtoEnumToString(
     ENUM_CASE(sync_pb::CardBenefit, TRANSIT);
     ENUM_CASE(sync_pb::CardBenefit, TRAVEL);
     ENUM_CASE(sync_pb::CardBenefit, WHOLESALE_CLUBS);
+    ENUM_CASE(sync_pb::CardBenefit, HOTELS);
+    ENUM_CASE(sync_pb::CardBenefit, CAR_RENTALS);
   }
   NOTREACHED();
 }
@@ -1093,6 +1107,40 @@ const char* ProtoEnumToString(sync_pb::SharedUrlContext::Source source) {
     ENUM_CASE(sync_pb::SharedUrlContext, OMNIBOX);
     ENUM_CASE(sync_pb::SharedUrlContext, FROM_SYNC);
     ENUM_CASE(sync_pb::SharedUrlContext, CANONICAL_URL);
+  }
+}
+
+const char* ProtoEnumToString(sync_pb::SkillSource skill_source) {
+  ASSERT_ENUM_BOUNDS(sync_pb, SkillSource, SKILL_SOURCE_UNKNOWN,
+                     SKILL_SOURCE_DERIVED_FROM_ENTERPRISE);
+  switch (skill_source) {
+    ENUM_CASE(sync_pb, SKILL_SOURCE_UNKNOWN);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_FIRST_PARTY);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_USER_CREATED);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_ENTERPRISE);
+    ENUM_CASE(sync_pb, SKILL_SOURCE_DERIVED_FROM_ENTERPRISE);
+  }
+}
+
+const char* ProtoEnumToString(
+    sync_pb::AutofillValuableMetadataSpecifics::PassType pass_type) {
+  ASSERT_ENUM_BOUNDS(sync_pb::AutofillValuableMetadataSpecifics, PassType,
+                     PASS_TYPE_UNSPECIFIED, SHIPMENT);
+  switch (pass_type) {
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics,
+              PASS_TYPE_UNSPECIFIED);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, LOYALTY_CARD);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, VEHICLE_REGISTRATION);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, FLIGHT_RESERVATION);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, PASSPORT);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, DRIVER_LICENSE);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, NATIONAL_ID_CARD);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, REDRESS_NUMBER);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics,
+              KNOWN_TRAVELER_NUMBER);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, ORDER);
+    ENUM_CASE(sync_pb::AutofillValuableMetadataSpecifics, SHIPMENT);
   }
 }
 

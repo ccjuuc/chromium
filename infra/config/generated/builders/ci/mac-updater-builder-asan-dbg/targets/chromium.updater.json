@@ -4,8 +4,25 @@
       "chrome/updater:all"
     ]
   },
-  "mac12-x64-updater-tester-asan-dbg": {
+  "mac15-x64-updater-tester-dbg": {
     "gtest_tests": [
+      {
+        "merge": {
+          "script": "//testing/merge_scripts/standard_gtest_merge.py"
+        },
+        "module_name": "//chrome/updater:updater_fuzztests",
+        "module_scheme": "gtest",
+        "name": "updater_fuzztests",
+        "swarming": {
+          "dimensions": {
+            "cpu": "x86-64",
+            "os": "Mac-15"
+          },
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "updater_fuzztests",
+        "test_id_prefix": "ninja://chrome/updater:updater_fuzztests/"
+      },
       {
         "merge": {
           "script": "//testing/merge_scripts/standard_gtest_merge.py"
@@ -16,7 +33,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "x86-64",
-            "os": "Mac-12",
+            "os": "Mac-15",
             "pool": "chromium.tests"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
@@ -34,7 +51,7 @@
         "swarming": {
           "dimensions": {
             "cpu": "x86-64",
-            "os": "Mac-12",
+            "os": "Mac-15",
             "pool": "chromium.tests.updater"
           },
           "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"

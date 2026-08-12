@@ -15,6 +15,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
@@ -85,7 +86,6 @@
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "components/pdf/common/constants.h"
-#include "components/pdf/common/pdf_util.h"
 #endif
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
@@ -206,6 +206,7 @@ void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
 
 #if BUILDFLAG(IS_ANDROID)
   schemes->referrer_schemes.push_back(content::kAndroidAppScheme);
+  schemes->referrer_schemes.push_back(dom_distiller::kDomDistillerScheme);
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -300,7 +301,7 @@ std::string_view ChromeContentClient::GetDataResource(
       resource_id, scale_factor);
 }
 
-base::RefCountedMemory* ChromeContentClient::GetDataResourceBytes(
+scoped_refptr<base::RefCountedMemory> ChromeContentClient::GetDataResourceBytes(
     int resource_id) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
       resource_id);
@@ -322,7 +323,7 @@ std::string ChromeContentClient::GetProcessTypeNameInEnglish(int type) {
 }
 
 blink::OriginTrialPolicy* ChromeContentClient::GetOriginTrialPolicy() {
-  // Prevent initialization race (see crbug.com/721144). There may be a
+  // Prevent initialization race (see crbug.com/41318781). There may be a
   // race when the policy is needed for worker startup (which happens on a
   // separate worker thread).
   base::AutoLock auto_lock(origin_trial_policy_lock_);
@@ -370,8 +371,13 @@ void ChromeContentClient::ExposeInterfacesToBrowser(
 
 bool ChromeContentClient::IsFilePickerAllowedForCrossOriginSubframe(
     const url::Origin& origin) {
-#if BUILDFLAG(ENABLE_PDF)
-  return IsPdfExtensionOrigin(origin);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // Permissive renderer-side gate: any extension-scheme origin is allowed
+  // past the synchronous SecurityError. The authoritative check lives in the
+  // browser via
+  // ContentBrowserClient::IsCrossOriginSubframeAllowedToShowFilePicker(),
+  // which verifies the frame is actually a MIME handler extension subframe.
+  return origin.scheme() == extensions::kExtensionScheme;
 #else
   return false;
 #endif

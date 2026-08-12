@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -15,7 +14,6 @@
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "chrome/browser/ui/media_router/media_router_ui_helper.h"
 #include "chrome/browser/ui/media_router/query_result_manager.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/media_message_center/media_notification_util.h"
 #include "components/media_router/browser/issue_manager.h"
 #include "components/media_router/browser/media_router.h"
@@ -79,7 +77,7 @@ MediaRouteStarter::MediaRouteStarter(MediaRouterUIParameters params)
               : nullptr),
       query_result_manager_(
           std::make_unique<QueryResultManager>(GetMediaRouter())) {
-  if (presentation_manager_) {
+  if (presentation_manager_ && !start_presentation_context_) {
     presentation_manager_->AddObserver(this);
   }
   InitPresentationSources(params.initial_modes);
@@ -100,9 +98,8 @@ MediaRouteStarter::~MediaRouteStarter() {
     bool presentation_sinks_available = std::ranges::any_of(
         GetQueryResultManager()->GetSinksWithCastModes(),
         [](const MediaSinkWithCastModes& sink) {
-          return base::Contains(sink.cast_modes, MediaCastMode::PRESENTATION) ||
-                 base::Contains(sink.cast_modes,
-                                MediaCastMode::REMOTE_PLAYBACK);
+          return sink.cast_modes.contains(MediaCastMode::PRESENTATION) ||
+                 sink.cast_modes.contains(MediaCastMode::REMOTE_PLAYBACK);
         });
     if (presentation_sinks_available) {
       start_presentation_context_->InvokeErrorCallback(
@@ -367,7 +364,7 @@ url::Origin MediaRouteStarter::GetFrameOrigin() const {
 
 bool MediaRouteStarter::IsCastModeAvailable(const CastModeSet& modes,
                                             MediaCastMode mode) {
-  return base::Contains(modes, mode);
+  return modes.contains(mode);
 }
 
 }  // namespace media_router

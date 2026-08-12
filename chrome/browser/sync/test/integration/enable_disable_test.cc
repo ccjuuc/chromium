@@ -185,12 +185,11 @@ class EnableDisableSingleClientTest
                                              user_settings) {
             user_settings->SetSelectedTypes(all_types_enabled, {});
 #if !BUILDFLAG(IS_CHROMEOS)
-            user_settings->SetInitialSyncFeatureSetupComplete(
-                syncer::SyncFirstSetupCompleteSource::ADVANCED_FLOW_CONFIRM);
+            user_settings->SetInitialSyncFeatureSetupComplete();
 #endif  // !BUILDFLAG(IS_CHROMEOS)
           })));
     } else {
-      ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
+      ASSERT_TRUE(GetClient(0)->SignInNoWaitForCompletion());
       GetSyncService(0)->GetUserSettings()->SetSelectedTypes(all_types_enabled,
                                                              {});
       ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
@@ -566,8 +565,7 @@ IN_PROC_BROWSER_TEST_P(EnableDisableSingleClientTest, RedownloadsAfterSignout) {
         types.Remove(syncer::UserSelectableType::kPasswords);
         settings->SetSelectedTypes(/*sync_everything=*/false, types);
 #if !BUILDFLAG(IS_CHROMEOS)
-        settings->SetInitialSyncFeatureSetupComplete(
-            syncer::SyncFirstSetupCompleteSource::ADVANCED_FLOW_CONFIRM);
+        settings->SetInitialSyncFeatureSetupComplete();
 #endif  // !BUILDFLAG(IS_CHROMEOS)
       })));
   ASSERT_TRUE(GetSyncService(0)->IsSyncFeatureActive());

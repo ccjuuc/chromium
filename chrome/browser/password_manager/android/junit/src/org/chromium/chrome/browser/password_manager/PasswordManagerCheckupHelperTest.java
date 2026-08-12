@@ -40,15 +40,15 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPackageManager;
 import org.robolectric.shadows.ShadowSystemClock;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -69,6 +69,7 @@ import org.chromium.google_apis.gaia.GaiaId;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.MockitoHelper;
 
 import java.util.Set;
 
@@ -77,7 +78,6 @@ import java.util.Set;
 @Config(
         manifest = Config.NONE,
         shadows = {ShadowSystemClock.class})
-@Batch(Batch.PER_CLASS)
 public class PasswordManagerCheckupHelperTest {
     private static final String TEST_EMAIL_ADDRESS = "test@email.com";
     private static final String TEST_NO_EMAIL_ADDRESS = null;
@@ -96,14 +96,13 @@ public class PasswordManagerCheckupHelperTest {
 
     @Mock private PendingIntent mPendingIntentMock;
 
-    @Mock private ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
-
     // TODO(crbug.com/40854050): Use fake instead of mock
     @Mock private PasswordManagerBackendSupportHelper mBackendSupportHelperMock;
 
     private SettingsCustomTabLauncher mSettingsCustomTabLauncher;
 
     private ModalDialogManager mModalDialogManager;
+    private SettableNonNullObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     @Mock private LoadingModalDialogCoordinator mLoadingModalDialogCoordinator;
     private LoadingModalDialogCoordinator.Observer mLoadingDialogCoordinatorObserver;
@@ -121,7 +120,7 @@ public class PasswordManagerCheckupHelperTest {
                 new ModalDialogManager(
                         mock(ModalDialogManager.Presenter.class),
                         ModalDialogManager.ModalDialogType.APP);
-        when(mModalDialogManagerSupplier.get()).thenReturn(mModalDialogManager);
+        mModalDialogManagerSupplier = ObservableSuppliers.createNonNull(mModalDialogManager);
         doAnswer(
                         invocation -> {
                             mLoadingDialogCoordinatorObserver = invocation.getArgument(0);
@@ -145,11 +144,11 @@ public class PasswordManagerCheckupHelperTest {
         chooseToSyncPasswords();
         setUpSuccessfulRunPasswordCheckup();
 
-        Callback<Exception> failureCallback = mock(Callback.class);
+        Callback<Exception> failureCallback = MockitoHelper.mockCallback();
         mPasswordManagerHelper.runPasswordCheckupInBackground(
                 org.chromium.chrome.browser.password_manager.PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
+                MockitoHelper.mockCallback(),
                 failureCallback);
         final ArgumentCaptor<PasswordManagerUnavailableException> captor =
                 ArgumentCaptor.forClass(PasswordManagerUnavailableException.class);
@@ -204,8 +203,8 @@ public class PasswordManagerCheckupHelperTest {
                 .getPasswordCheckupIntent(
                         eq(PasswordCheckReferrer.SAFETY_CHECK),
                         eq(TEST_EMAIL_ADDRESS),
-                        any(Callback.class),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     @Test
@@ -221,8 +220,8 @@ public class PasswordManagerCheckupHelperTest {
                 .getPasswordCheckupIntent(
                         eq(PasswordCheckReferrer.SAFETY_CHECK),
                         eq(null),
-                        any(Callback.class),
-                        any(Callback.class));
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     @Test
@@ -417,8 +416,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.runPasswordCheckupInBackground(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -438,8 +437,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.runPasswordCheckupInBackground(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -460,8 +459,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.runPasswordCheckupInBackground(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -479,8 +478,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getBreachedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -498,8 +497,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getWeakCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -517,8 +516,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getReusedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -537,8 +536,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getBreachedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -557,8 +556,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getWeakCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -577,8 +576,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getReusedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -598,8 +597,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getBreachedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -619,8 +618,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getWeakCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -640,8 +639,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getReusedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
 
         histogram.assertExpected();
     }
@@ -831,7 +830,7 @@ public class PasswordManagerCheckupHelperTest {
                 ContextUtils.getApplicationContext(),
                 mSettingsCustomTabLauncher);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mLoadingModalDialogCoordinator).dismiss();
     }
 
@@ -854,7 +853,7 @@ public class PasswordManagerCheckupHelperTest {
 
         mLoadingDialogCoordinatorObserver.onDismissable();
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mLoadingModalDialogCoordinator).dismiss();
     }
 
@@ -982,8 +981,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.runPasswordCheckupInBackground(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
     }
 
     @Test
@@ -995,8 +994,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getBreachedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
     }
 
     @Test
@@ -1008,8 +1007,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getWeakCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
     }
 
     @Test
@@ -1021,8 +1020,8 @@ public class PasswordManagerCheckupHelperTest {
         mPasswordManagerHelper.getReusedCredentialsCount(
                 PasswordCheckReferrer.SAFETY_CHECK,
                 TEST_EMAIL_ADDRESS,
-                mock(Callback.class),
-                mock(Callback.class));
+                MockitoHelper.mockCallback(),
+                MockitoHelper.mockCallback());
     }
 
     @Test
@@ -1127,7 +1126,6 @@ public class PasswordManagerCheckupHelperTest {
     }
 
     private void chooseToSyncPasswords() {
-        when(mSyncServiceMock.isSyncFeatureEnabled()).thenReturn(true);
         when(mSyncServiceMock.getSelectedTypes()).thenReturn(Set.of(UserSelectableType.PASSWORDS));
         when(mSyncServiceMock.getAccountInfo())
                 .thenReturn(
@@ -1144,7 +1142,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getPasswordCheckupIntent(
-                        anyInt(), eq(accountEmail), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(accountEmail),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void returnErrorWhenFetchingIntentForPasswordCheckup(
@@ -1157,7 +1158,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getPasswordCheckupIntent(
-                        anyInt(), eq(accountEmail), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(accountEmail),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void setUpSuccessfulRunPasswordCheckup() {
@@ -1169,7 +1173,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .runPasswordCheckupInBackground(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void setUpSuccessfulGetBreachedCredentialsCount() {
@@ -1181,7 +1188,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getBreachedCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void setUpSuccessfulGetWeakCredentialsCount() {
@@ -1193,7 +1203,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getWeakCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void setUpSuccessfulGetReusedCredentialsCount() {
@@ -1205,7 +1218,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getReusedCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void returnErrorWhenRunningPasswordCheckup(Exception error) {
@@ -1217,7 +1233,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .runPasswordCheckupInBackground(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void returnErrorWhenGettingBreachedCredentialsCount(Exception error) {
@@ -1229,7 +1248,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getBreachedCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void returnErrorWhenGettingWeakCredentialsCount(Exception error) {
@@ -1241,7 +1263,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getWeakCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private void returnErrorWhenGettingReusedCredentialsCount(Exception error) {
@@ -1253,7 +1278,10 @@ public class PasswordManagerCheckupHelperTest {
                         })
                 .when(mPasswordCheckupClientHelperMock)
                 .getReusedCredentialsCount(
-                        anyInt(), eq(TEST_EMAIL_ADDRESS), any(Callback.class), any(Callback.class));
+                        anyInt(),
+                        eq(TEST_EMAIL_ADDRESS),
+                        MockitoHelper.anyCallback(),
+                        MockitoHelper.anyCallback());
     }
 
     private HistogramWatcher.Builder

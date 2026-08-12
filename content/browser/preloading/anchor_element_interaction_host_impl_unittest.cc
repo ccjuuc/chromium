@@ -14,8 +14,7 @@
 #include "content/test/test_web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-data-view.h"
-#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-forward.h"
+#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 
 namespace content {
@@ -75,7 +74,7 @@ TEST_F(AnchorElementInteractionHostImplTest, OnPointerEvents) {
 
   ScopedPreloadingDeciderObserver observer(render_frame_host);
   const auto pointer_down_url = GURL("www.example.com/page1.html");
-  remote->OnPointerDown(pointer_down_url);
+  remote->OnPointerDown(pointer_down_url, /*renderer_enacted=*/false);
   remote.FlushForTesting();
   EXPECT_EQ(pointer_down_url, observer.on_pointer_down_url_);
   EXPECT_FALSE(observer.on_pointer_hover_url_.has_value());
@@ -84,7 +83,8 @@ TEST_F(AnchorElementInteractionHostImplTest, OnPointerEvents) {
   const auto pointer_hover_url = GURL("www.example.com/page2.html");
   remote->OnPointerHoverModerate(
       pointer_hover_url,
-      blink::mojom::AnchorElementPointerData::New(false, 0.0, 0.0));
+      blink::mojom::AnchorElementPointerData::New(false, 0.0, 0.0),
+      /*renderer_enacted=*/false);
   remote.FlushForTesting();
   EXPECT_FALSE(observer.on_pointer_down_url_.has_value());
   EXPECT_EQ(pointer_hover_url, observer.on_pointer_hover_url_);
@@ -95,7 +95,8 @@ TEST_F(AnchorElementInteractionHostImplTest, OnPointerEvents) {
   observer.Reset();
   remote->OnPointerHoverEager(
       pointer_hover_url,
-      blink::mojom::AnchorElementPointerData::New(false, 0.0, 0.0));
+      blink::mojom::AnchorElementPointerData::New(false, 0.0, 0.0),
+      /*renderer_enacted=*/false);
   remote.FlushForTesting();
   EXPECT_FALSE(observer.on_pointer_down_url_.has_value());
   EXPECT_EQ(pointer_hover_url, observer.on_pointer_hover_url_);
@@ -122,7 +123,8 @@ TEST_F(AnchorElementInteractionHostImplTest,
                                            remote.BindNewPipeAndPassReceiver());
 
   const GURL url("https://example.com");
-  remote->OnModerateViewportHeuristicTriggered(url);
+  remote->OnModerateViewportHeuristicTriggered(url,
+                                               /*renderer_enacted=*/false);
   remote.FlushForTesting();
 
   auto* preloading_data =
@@ -160,7 +162,10 @@ TEST_F(AnchorElementInteractionHostImplTest,
                                            remote.BindNewPipeAndPassReceiver());
 
   const GURL url("https://example.com");
-  remote->OnEagerViewportHeuristicTriggered({url});
+  std::vector<blink::mojom::AnchorElementInteractionTargetPtr> targets;
+  targets.push_back(blink::mojom::AnchorElementInteractionTarget::New(
+      url, /*renderer_enacted=*/false));
+  remote->OnEagerViewportHeuristicTriggered(std::move(targets));
   remote.FlushForTesting();
 
   auto* preloading_data =

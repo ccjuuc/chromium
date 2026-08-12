@@ -36,7 +36,16 @@ chromium-metrics-reviews@google.com.
   <variant name="WaitingOnUser" summary="WaitingOnUser"/>
 </variants>
 
-<!-- LINT.ThenChange(//chrome/browser/actor/actor_task.h:State) -->
+<!-- LINT.ThenChange(//chrome/browser/actor/actor_task.h:State, enums.xml:ActorTaskState) -->
+
+<!-- LINT.IfChange(GlicInvocationSourceForActor) -->
+
+<variants name="GlicInvocationSourceForActor">
+  <variant name="Other"/>
+  <variant name="UniversalCart"/>
+</variants>
+
+<!-- LINT.ThenChange(//chrome/browser/actor/actor_metrics.cc:ToString) -->
 
 <!-- LINT.IfChange(StoppedReason) -->
 
@@ -50,6 +59,8 @@ chromium-metrics-reviews@google.com.
   <variant name="PreviousChat" summary="User selected a previous chat."/>
   <variant name="Shutdown" summary="Chrome was being shut down."/>
   <variant name="TabDetached" summary="The acting tab was closed."/>
+  <variant name="Timeout" summary="Forcefully stopped due to timeout."/>
+  <variant name="UserNavigatedAway" summary="User manually navigated away."/>
 </variants>
 
 <!-- LINT.ThenChange(//chrome/browser/actor/actor_task.h:StoppedReason) -->
@@ -61,6 +72,7 @@ chromium-metrics-reviews@google.com.
   <variant name="ActivateWindow" summary="Activate Window"/>
   <variant name="AttemptFormFilling" summary="Attempt Form Filling"/>
   <variant name="AttemptLogin" summary="Attempt Login"/>
+  <variant name="AttemptOtpFilling" summary="Attempt OTP Filling"/>
   <variant name="Click" summary="Click"/>
   <variant name="CloseTab" summary="Close Tab"/>
   <variant name="CloseWindow" summary="Close Window"/>
@@ -68,6 +80,7 @@ chromium-metrics-reviews@google.com.
   <variant name="CreateWindow" summary="Create Window"/>
   <variant name="DragAndRelease" summary="Drag And Release"/>
   <variant name="History" summary="History"/>
+  <variant name="LoadAndExtractContent" summary="Load And Extract Content"/>
   <variant name="MediaControl" summary="Media Control"/>
   <variant name="MoveMouse" summary="MoveMouse"/>
   <variant name="Navigate" summary="Navigate"/>
@@ -96,7 +109,7 @@ chromium-metrics-reviews@google.com.
 <!-- LINT.ThenChange(//chrome/browser/actor/ui/ui_event_debugstring.h:GetUiEventName) -->
 
 <histogram name="Actor.DomNodeGeometry.GetDomNodeResult"
-    enum="GetDomNodeResult" expires_after="2026-08-11">
+    enum="GetDomNodeResult" expires_after="2027-08-11">
   <owner>kmg@google.com</owner>
   <owner>boujane@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -125,7 +138,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.EventDispatcher.ComputedTargetResult"
-    enum="ComputedTargetResult" expires_after="2026-08-11">
+    enum="ComputedTargetResult" expires_after="2026-10-11">
   <owner>kmg@google.com</owner>
   <owner>boujane@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -136,7 +149,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.EventDispatcher.ModelPageTargetType"
-    enum="ModelPageTargetType" expires_after="2026-08-11">
+    enum="ModelPageTargetType" expires_after="2026-10-11">
   <owner>kmg@google.com</owner>
   <owner>boujane@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -146,8 +159,18 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.EventDispatcher.RendererResolvedTargetResult"
+    enum="RendererResolvedTargetResult" expires_after="2026-12-16">
+  <owner>jacobstanley@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    The result of retrieving the renderer resolved target. Recorded everytime we
+    compute a MouseMove UI event. This metric is gated behind a feature.
+  </summary>
+</histogram>
+
 <histogram name="Actor.EventDispatcher.{UiEvent}.Duration" units="microseconds"
-    expires_after="2026-08-11">
+    expires_after="2026-12-13">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -161,7 +184,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.EventDispatcher.{UiEvent}.Failure" enum="Boolean"
-    expires_after="2026-08-11">
+    expires_after="2027-08-11">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -170,7 +193,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.ExecutionEngine.Action.ResultCode"
-    enum="ActionResultCode" expires_after="2026-08-11">
+    enum="ActionResultCode" expires_after="2026-12-16">
   <owner>kmg@google.com</owner>
   <owner>boujane@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -180,8 +203,175 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.ForegroundService.Duration" units="ms"
+    expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritkagup@google.com</owner>
+  <summary>
+    Recorded when the Actor foreground service implementation is destroyed.
+    Captures the total duration of when the service was running from the first
+    onStartCommand to onDestroy. Note that this metric is only recorded on
+    Android.
+  </summary>
+</histogram>
+
+<histogram name="Actor.ForegroundService.Lifecycle"
+    enum="ActorForegroundServiceLifecycle" expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritkagup@google.com</owner>
+  <summary>
+    Records instances where the foreground undergoes a lifecycle change (when
+    the foreground starts, changes pinned notification, or stops). Note that
+    this metric is only recorded on Android.
+  </summary>
+</histogram>
+
+<histogram name="Actor.ForegroundService.StopReason"
+    enum="ActorForegroundServiceStopReason" expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritkagup@google.com</owner>
+  <summary>
+    Records instances of ActorForegroundService stops. The number of expected
+    stops (stopped) and unexpected stops (task removed, low memory, etc) can be
+    compared to get a sense of how often the service crashes to see how it
+    handles restarts. For example, the number of times the service is stopped
+    because of low memory can be compared to the number of times the service has
+    been destroyed to see how frequently it occurs. Note that this metric is
+    only recorded on Android.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.AccountAutoSelected" enum="Boolean"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Recorded when the account used to login is automatically selected due to a
+    previous user choice to always allow logging in with that account. Recorded
+    once per actor login request, when the login attempt starts and the account
+    already had a permanent permission granted.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.AccountTypesShown" enum="ActorLoginAccountTypes"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    An enum of the result from a query to get credentials. Recorded once per
+    actor login request, after fetching the accounts from all sources is
+    completed.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.DeduplicationOccurred" enum="Boolean"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Recorded when there was some deduplication performed in order to show the
+    accounts. Recorded at most once per actor request to show accounts to sign
+    in (if multiple accounts are deduplicated in the same request, only one
+    record is made).
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.Federated.ContinuationShown" enum="Boolean"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Recorded when the FedCM continuation API is invoked during an actor
+    autologin flow. Recorded when the actor is notified that the user must take
+    over due to the continuation API. This is only ever recorded when the user
+    selects the federated account to login.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.Federated.HangingFedCmRequestExists"
+    enum="Boolean" expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Recorded when there is a hanging FedCM request during an actor login
+    request. Recorded at most once per actor login request.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.Federated.LoginResult"
+    enum="ActorLoginFederatedLoginResult" expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    An enum with the final result from a federated actor login request. Recorded
+    when the login flow completes (successfully or otherwise).
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.GetCredentialsCompletedToAccountChosen" units="ms"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Returns the time from when a &quot;get credentials&quot; request completes
+    until an account is chosen. Recorded at most once per actor login request.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.GetCredentialsLatency" units="ms"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    Returns the time from actor login request to when the &quot;get
+    credentials&quot; request is completed. Recorded once per actor login
+    request.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.NumAccountsShown" units="count"
+    expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    The number of accounts shown to the user during an actor login request.
+    Possible values: 0, 1, 2, 3+. Recorded once per actor login request, when
+    accounts are shown to the user.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Login.SelectedAccountType"
+    enum="ActorLoginSelectedAccountType" expires_after="2027-02-25">
+  <owner>npm@google.com</owner>
+  <owner>ioanap@google.com</owner>
+  <owner>otara@google.com</owner>
+  <owner>web-identity-eng@google.com</owner>
+  <summary>
+    An enum of the type of account chosen by the user to login during an actor
+    login request. Recorded once per actor login request.
+  </summary>
+</histogram>
+
 <histogram name="Actor.MayOriginGatePageTransition" enum="Boolean"
-    expires_after="2026-03-30">
+    expires_after="2026-11-29">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
@@ -194,7 +384,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.NavigationGating.AllowListSize" units="origins"
-    expires_after="2026-05-31">
+    expires_after="2026-12-06">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
@@ -206,7 +396,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.NavigationGating.AppliedGate" enum="Boolean"
-    expires_after="2026-05-31">
+    expires_after="2026-12-06">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
@@ -218,40 +408,32 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Actor.NavigationGating.ConfirmedListSize" units="origins"
-    expires_after="2026-03-30">
+<histogram name="Actor.NavigationGating.ConfirmedListSize2" units="origins"
+    expires_after="2027-02-02">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
-    Records the size of the list of sensitive origins on the optimization guide
-    blocklist that the user confirmed the actor can interact with. Recorded at
-    the end of every task.
+    Records the size of the list of origins that the user confirmed the actor
+    can interact with. Recorded at the end of every task.
+
+    Warning: this histogram was expired from 2026-08-02 to 2026-08-25; data may
+    be missing.
   </summary>
 </histogram>
 
-<histogram name="Actor.NavigationGating.CrossOrigin" enum="Boolean"
-    expires_after="2026-05-31">
+<histogram name="Actor.NavigationGating.DarkLaunchConfirmationRequestLatency"
+    units="ms" expires_after="2026-12-16">
+  <owner>masnoble@google.com</owner>
   <owner>dylancutler@google.com</owner>
-  <owner>johannhof@google.com</owner>
   <summary>
-    Records when actor navigation gating is applied to a cross-origin
-    navigation. Recorded when the actor navigates the main frame and origin
-    gating applies.
+    Records the latency of the dark launch navigation confirmation request.
+    Recorded when the browser receives the response from the confirmation
+    request in dark launch mode.
   </summary>
 </histogram>
 
-<histogram name="Actor.NavigationGating.CrossSite" enum="Boolean"
-    expires_after="2026-05-31">
-  <owner>dylancutler@google.com</owner>
-  <owner>johannhof@google.com</owner>
-  <summary>
-    Records when actor navigation gating is applied to a cross-site navigation.
-    Recorded when the actor navigates the main frame and origin gating applies.
-  </summary>
-</histogram>
-
-<histogram name="Actor.NavigationGating.GatingDecision" enum="GatingDecision"
-    expires_after="2026-06-21">
+<histogram name="Actor.NavigationGating.GatingDecision2" enum="GatingDecision"
+    expires_after="2026-12-27">
   <owner>tquintanilla@google.com</owner>
   <owner>dylancutler@google.com</owner>
   <summary>
@@ -262,7 +444,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.NavigationGating.PermissionGranted" enum="Boolean"
-    expires_after="2026-05-31">
+    expires_after="2026-12-16">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
@@ -272,19 +454,53 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Actor.NavigationGating.TimeElapsedForGating" units="ms"
-    expires_after="2026-05-31">
+<histogram name="Actor.NavigationGating.Same{Scope}{Origin}"
+    enum="BooleanMatched" expires_after="2027-01-03">
+  <owner>dylancutler@google.com</owner>
+  <owner>johannhof@google.com</owner>
+  <owner>cfredric@chromium.org</owner>
+  <summary>
+    Records whether actor navigation gating is used to evaluate a navigation for
+    which the destination origin and {Origin} origin are same-{Scope}. Recorded
+    when the actor navigates the main frame and origin gating is active,
+    regardless of whether the navigation is allowed or blocked.
+  </summary>
+  <token key="Scope">
+    <variant name="Origin"/>
+    <variant name="Site"/>
+  </token>
+  <token key="Origin">
+    <variant name="Initiator"/>
+    <variant name="Source"/>
+  </token>
+</histogram>
+
+<histogram name="Actor.NavigationGating.TimeElapsedForGating2" units="ms"
+    expires_after="2026-12-27">
   <owner>dylancutler@google.com</owner>
   <owner>johannhof@google.com</owner>
   <summary>
     Records how long origin gating processing is taking when it decides if an
-    actor can navigate to a new origin. Recorded when the actor navigates the
-    main frame.
+    actor can navigate to a new origin. Includes time for synchronous and
+    asynchronous checks, but does not include time for user prompts. Recorded
+    when the actor navigates the main frame.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Notification.ClickTaskState" enum="ActorTaskState"
+    expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritikagup@google.com</owner>
+  <summary>
+    Recorded when the user clicks an Actor notification to bring Chrome to the
+    foreground. Captures the state of the task associated with the notification
+    at the moment the intent is processed. Note that this metric is only
+    recorded on Android.
   </summary>
 </histogram>
 
 <histogram name="Actor.ObservationDelay.DidNavigate" enum="Boolean"
-    expires_after="2026-08-11">
+    expires_after="2026-12-27">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -295,7 +511,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.ObservationDelay.DidTimeout" enum="Boolean"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -306,7 +522,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.ObservationDelay.LcpDelayNeeded" enum="Boolean"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -318,7 +534,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.ObservationDelay.StateDuration.{State}" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-13">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -327,6 +543,8 @@ chromium-metrics-reviews@google.com.
     machine. Not recorded for timeouts.
   </summary>
   <token key="State">
+    <variant name="WaitForAutofillPredictions"/>
+    <variant name="WaitForFederatedLogin"/>
     <variant name="WaitForLoadCompletion"/>
     <variant name="WaitForPageStability"/>
     <variant name="WaitForVisualStateUpdate"/>
@@ -334,7 +552,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.ObservationDelay.TotalWaitDuration" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-13">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -344,8 +562,28 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram
+    name="Actor.PageContext.APC.Comparison.{Source}.IsIdenticalToPreviousFetch"
+    enum="Boolean" expires_after="2027-01-03">
+  <owner>linnan@google.com</owner>
+  <owner>shivanisha@google.com</owner>
+  <owner>chrome-synapse-team@google.com</owner>
+  <summary>
+    Recorded when a new Annotated Page Content (APC) is fetched by {Source}.
+    Compares the new APC with the immediately preceding fetch from ANY source
+    (e.g. Actor or Glic) and records whether they are identical.
+
+    This is used to evaluate the potential benefit of a shared APC cache between
+    different features.
+  </summary>
+  <token key="Source">
+    <variant name="Actor"/>
+    <variant name="Glic"/>
+  </token>
+</histogram>
+
 <histogram name="Actor.PageContext.APC.Duration" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -355,8 +593,18 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.PageContext.ObservationOutcome"
+    enum="ActorObservationOutcome" expires_after="2027-01-09">
+  <owner>bokan@google.com</owner>
+  <owner>chrome-synapse-team@google.com</owner>
+  <summary>
+    Records the outcome of an page context fetch obeservation. Recorded only for
+    context fetches in response to a performActions call.
+  </summary>
+</histogram>
+
 <histogram name="Actor.PageContext.Screenshot.Duration" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -364,15 +612,96 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.PageContext.TabCount" units="count"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
   <summary>Number of tabs to observe in PerformActions response.</summary>
 </histogram>
 
+<histogram name="Actor.PageContext.TabObservationResult"
+    enum="ActorTabObservationResult" expires_after="2027-01-09">
+  <owner>bokan@google.com</owner>
+  <owner>chrome-synapse-team@google.com</owner>
+  <summary>
+    Records the result of a RequestTabObservation for each tab of an
+    observation. Recorded only for context fetches in response to a
+    performActions call. When a failure causes the page context fetch to be
+    retried this histogram records both the failed/successful tab observation
+    results in the initial fetch as well as the the result of the fetch in the
+    retry.
+  </summary>
+</histogram>
+
+<histogram name="Actor.PageTool.SplitModeTimeOfUseFrameStatus"
+    enum="SplitModeTimeOfUseFrameStatus" expires_after="2027-02-11">
+  <owner>jacobstanley@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    Records the frame status when TimeOfUseValidation is invoked in PageTool.
+    When the split execution flow is active (requires both the renderer resolved
+    target and magic cursor features to be enabled), the the target frame is
+    resolved and its document is stored earlier during the Validate step. During
+    TimeOfUseValidation, we verify that the current target frame matches the one
+    originally stored. If they are not equivalent, the enum captures whether the
+    original document was destroyed or if the frames simply mismatched.
+  </summary>
+</histogram>
+
+<histogram name="Actor.PageTool.TimeOfUseObservationSuccess" enum="Boolean"
+    expires_after="2027-02-11">
+  <owner>jacobstanley@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    Records whether ComputeObservedTargetAndValidateFrame succeeds during
+    TimeOfUseValidation. We can compare the success rates, to determine if
+    computing the observation earlier in the Validate step leads to a higher
+    rate of target invalidation due to the page changing during the initialize
+    and execution gap.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Pip.Duration" units="ms" expires_after="2027-05-11">
+  <owner>bbetini@google.com</owner>
+  <owner>ritikagup@google.com</owner>
+  <summary>
+    Recorded when Picture-in-Picture mode for Actor exits, capturing the total
+    time spent in PiP mode.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Pip.ExitReason" enum="ActorPipExitReason"
+    expires_after="2027-05-11">
+  <owner>bbetini@google.com</owner>
+  <owner>ritikagup@google.com</owner>
+  <summary>
+    Recorded when Picture-in-Picture mode for Actor exits, indicating the reason
+    for the exit.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Pip.Status" enum="ActorPipStatus"
+    expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritikagup@google.com</owner>
+  <summary>
+    Recorded when chrome enters or exits Picture-in-Picture mode based on the
+    actor task state.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Pip.UserInteractions" enum="ActorPipUserInteraction"
+    expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritikagup@google.com</owner>
+  <summary>
+    Recorded when the user interacts with the Pause, Resume, or Expand actions
+    on the Picture-in-Picture window.
+  </summary>
+</histogram>
+
 <histogram name="Actor.RendererPageStability.Outcome"
-    enum="PageStabilityOutcome" expires_after="2026-08-11">
+    enum="PageStabilityOutcome" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -384,7 +713,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Actor.RendererPageStability.TimeFromMonitoringToNetworkAndMainThreadIdle"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -400,7 +729,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Actor.RendererPageStability.TimeFromMonitoringToPaintStability"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -415,7 +744,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.RendererPageStability.TimeFromMonitoringToStable"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -428,7 +757,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.RendererPageStability.TotalTimeToRenderFrameGoingAway"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -440,7 +769,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.RendererPageStability.TotalTimeToStable" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -454,7 +783,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Actor.RendererPaintStability.SubsequentInteractionContentfulPaintCount"
-    units="paints" expires_after="2026-08-11">
+    units="paints" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -467,7 +796,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Actor.RendererPaintStability.TimeBetweenInteractionContentfulPaints"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -481,7 +810,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Actor.RendererPaintStability.TimeToFirstInteractionContentfulPaint"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -492,8 +821,30 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.SafetyListParseResult.NavigationAllowed"
+    enum="SafetyListParseResult" expires_after="2027-01-03">
+  <owner>tquintanilla@google.com</owner>
+  <owner>dylancutler@google.com</owner>
+  <summary>
+    Records the outcome of parsing the navigation allowed static safety list.
+    Recorded every time an attempt is made to parse a navigation static safety
+    lists JSON, regardless of whether or not the parse was successful.
+  </summary>
+</histogram>
+
+<histogram name="Actor.SafetyListParseResult.NavigationBlocked"
+    enum="SafetyListParseResult" expires_after="2027-01-03">
+  <owner>tquintanilla@google.com</owner>
+  <owner>dylancutler@google.com</owner>
+  <summary>
+    Records the outcome of parsing the navigation blocked static safety list.
+    Recorded every time an attempt is made to parse a navigation static safety
+    lists JSON, regardless of whether or not the parse was successful.
+  </summary>
+</histogram>
+
 <histogram name="Actor.Task.Count.{StoppedReason}" units="count"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>erikchen@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -504,7 +855,23 @@ chromium-metrics-reviews@google.com.
   <token key="StoppedReason" variants="StoppedReason"/>
 </histogram>
 
-<histogram name="Actor.Task.Created" enum="Boolean" expires_after="2026-08-11">
+<histogram name="Actor.Task.Count.{StoppedReason}.{GlicInvocationSource}"
+    units="count" expires_after="2026-10-11">
+  <owner>yuhengh@chromium.org</owner>
+  <owner>nyquist@chromium.org</owner>
+  <owner>dtrainor@chromium.org</owner>
+  <summary>
+    Recorded when a task is stopped with {StoppedReason}. This captures the
+    number of the actions in the task. Only recorded when
+    ActorRecordInvocationSourceCompletionMetrics is enabled and the task was
+    created through Glic with a supported invocation source. Sources not listed
+    in GlicInvocationSourceForActor are bucketed as Other.
+  </summary>
+  <token key="StoppedReason" variants="StoppedReason"/>
+  <token key="GlicInvocationSource" variants="GlicInvocationSourceForActor"/>
+</histogram>
+
+<histogram name="Actor.Task.Created" enum="Boolean" expires_after="2026-12-16">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -514,8 +881,23 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.Task.CreateFailedReason"
+    enum="ActorTaskCreateFailedReason" expires_after="2026-12-31">
+  <owner>rosiey@google.com</owner>
+  <owner>sauski@google.com</owner>
+  <summary>
+    Tracks the reason why the Browser Agent might be blocked from performing an
+    actuation on a web page. This is recorded every time a new task is initiated
+    via GlicActorTaskManager::CreateTask. The logged value comes from the
+    GlicActorPolicyChecker::CannotActReason enum, detailing the specific policy
+    or capability issue (e.g., kDisabledByPolicy, kAccountCapabilityIneligible).
+    Note that if a domain is exempted from a block via a URL allowlist, the
+    actuation succeeds and logs kNone.
+  </summary>
+</histogram>
+
 <histogram name="Actor.Task.Duration.NotVisible.{StoppedReason}" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-11-29">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -530,7 +912,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.Duration.Visible.{StoppedReason}" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -545,7 +927,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.Duration.WallClock.{StoppedReason}" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -556,8 +938,27 @@ chromium-metrics-reviews@google.com.
   <token key="StoppedReason" variants="StoppedReason"/>
 </histogram>
 
+<histogram
+    name="Actor.Task.Duration.WallClock.{StoppedReason}.{GlicInvocationSource}"
+    units="ms" expires_after="2026-10-11">
+  <owner>yuhengh@chromium.org</owner>
+  <owner>nyquist@chromium.org</owner>
+  <owner>dtrainor@chromium.org</owner>
+  <summary>
+    Recorded when a task is stopped with {StoppedReason}. This captures the
+    runtime of the task including any paused state. Broken down by the
+    invocation source that initially opened the Glic instance which created the
+    task. Only recorded when ActorRecordInvocationSourceCompletionMetrics is
+    enabled and the task was created through Glic with a supported invocation
+    source. Sources not listed in GlicInvocationSourceForActor are bucketed as
+    Other.
+  </summary>
+  <token key="StoppedReason" variants="StoppedReason"/>
+  <token key="GlicInvocationSource" variants="GlicInvocationSourceForActor"/>
+</histogram>
+
 <histogram name="Actor.Task.Duration.{StoppedReason}" units="ms"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>erikchen@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -568,8 +969,24 @@ chromium-metrics-reviews@google.com.
   <token key="StoppedReason" variants="StoppedReason"/>
 </histogram>
 
+<histogram name="Actor.Task.Duration.{StoppedReason}.{GlicInvocationSource}"
+    units="ms" expires_after="2026-10-11">
+  <owner>yuhengh@chromium.org</owner>
+  <owner>nyquist@chromium.org</owner>
+  <owner>dtrainor@chromium.org</owner>
+  <summary>
+    Recorded when a task is stopped with {StoppedReason}. This captures the
+    runtime of the task excluding any paused state. Only recorded when
+    ActorRecordInvocationSourceCompletionMetrics is enabled and the task was
+    created through Glic with a supported invocation source. Sources not listed
+    in GlicInvocationSourceForActor are bucketed as Other.
+  </summary>
+  <token key="StoppedReason" variants="StoppedReason"/>
+  <token key="GlicInvocationSource" variants="GlicInvocationSourceForActor"/>
+</histogram>
+
 <histogram name="Actor.Task.Interruptions.{StoppedReason}" units="count"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -581,7 +998,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.StateTransition.ActionCount.{OldState}_{NewState}"
-    units="count" expires_after="2026-08-11">
+    units="count" expires_after="2026-12-16">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -595,7 +1012,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.StateTransition.Duration.{ActorTaskState}"
-    units="ms" expires_after="2026-08-11">
+    units="ms" expires_after="2026-12-13">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -607,7 +1024,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.StoppedReason" enum="StoppedReasonEnum"
-    expires_after="2026-09-17">
+    expires_after="2027-01-24">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -615,7 +1032,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.SubsequentWaits" units="count"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -627,7 +1044,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Task.SubsequentWaits.{ToolRequest}" units="count"
-    expires_after="2026-08-11">
+    expires_after="2026-12-16">
   <owner>linnan@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -640,8 +1057,24 @@ chromium-metrics-reviews@google.com.
   <token key="ToolRequest" variants="ToolRequest"/>
 </histogram>
 
+<histogram name="Actor.Tools.ExecutionDuration.{ActorMode}.{ActorTaskState}"
+    units="ms" expires_after="2027-03-31">
+  <owner>bbetini@google.com</owner>
+  <owner>ritkagup@google.com</owner>
+  <summary>
+    Recorded when a task is completed (Finished, Failed, or Cancelled). This
+    captures the cumulative duration the task spent in the {ActorTaskState}
+    state while Chrome was in {ActorMode} mode.
+  </summary>
+  <token key="ActorTaskState" variants="ActorTaskState"/>
+  <token key="ActorMode">
+    <variant name="Foreground" summary="standard Foreground"/>
+    <variant name="Pip" summary="Picture-in-Picture"/>
+  </token>
+</histogram>
+
 <histogram name="Actor.Tools.ExecutionDuration.{ToolRequest}" units="ms"
-    expires_after="2026-09-17">
+    expires_after="2026-11-29">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -653,7 +1086,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Tools.PageStabilization.{ToolRequest}" units="ms"
-    expires_after="2026-09-17">
+    expires_after="2026-11-29">
   <owner>dtapuska@google.com</owner>
   <owner>bokan@google.com</owner>
   <owner>chrome-synapse-team@google.com</owner>
@@ -664,8 +1097,72 @@ chromium-metrics-reviews@google.com.
   <token key="ToolRequest" variants="ToolRequest"/>
 </histogram>
 
+<histogram name="Actor.Tools.RevalidationResult" enum="ActionResultCode"
+    expires_after="2027-02-12">
+  <owner>jacobstanley@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    Records the result code of the tool's revalidation. This occurs when the
+    tool's validation logic is invoked as part of the InitializeTool method, and
+    we need to validate a second time during execution to make sure that we are
+    executing the tool as close to validation as possible.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Tools.ScriptTool.ActionResultCode"
+    enum="ActionResultCode" expires_after="2027-03-05">
+  <owner>mfoltz@google.com</owner>
+  <owner>agentic-web-platform-team@google.com</owner>
+  <summary>
+    Recorded for every script tool invocation. Reports the outcome of the script
+    tool, using the ActionResultCode from the ActionResult.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Tools.ScriptTool.InputSizeBytes" units="bytes"
+    expires_after="2027-03-05">
+  <owner>mfoltz@google.com</owner>
+  <owner>agentic-web-platform-team@google.com</owner>
+  <summary>
+    Recorded for every script tool invocation. Measures the size of the input
+    arguments string in bytes.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Tools.ScriptTool.InvocationResult" enum="BooleanSuccess"
+    expires_after="2027-03-05">
+  <owner>mfoltz@google.com</owner>
+  <owner>agentic-web-platform-team@google.com</owner>
+  <summary>
+    Recorded whenever a script tool is invoked. Indicates whether the invocation
+    succeeded or failed. Success means ActionResult.code is kOk.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Tools.ScriptTool.OutputSizeBytes" units="bytes"
+    expires_after="2027-03-05">
+  <owner>mfoltz@google.com</owner>
+  <owner>agentic-web-platform-team@google.com</owner>
+  <summary>
+    Recorded for successful script tool invocations. Measures the size of the
+    result string returned by the script tool in bytes.
+  </summary>
+</histogram>
+
+<histogram name="Actor.Tools.TimeOfUseReValidation" enum="TimeOfUseResult"
+    expires_after="2027-02-12">
+  <owner>jacobstanley@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    The result of Time-Of-Check Time-Of-Use validation performed before a tool
+    is invoked on a DOM element in a Web page. This validation is done a second
+    time when the initial validation was performed as part of InitializeTool and
+    not ExecuteTool.
+  </summary>
+</histogram>
+
 <histogram name="Actor.Tools.TimeOfUseValidation" enum="TimeOfUseResult"
-    expires_after="2026-09-17">
+    expires_after="2027-01-24">
   <owner>mfoltz@google.com</owner>
   <owner>rodneyding@google.com</owner>
   <summary>
@@ -674,16 +1171,35 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Actor.Ui.GlobalTaskIndicator.Nudge.Shown"
+    enum="TaskNudgeState" expires_after="2026-12-16">
+  <owner>kenok@google.com</owner>
+  <owner>chrstne@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>Recorded when a global task indicator nudge is shown.</summary>
+</histogram>
+
 <histogram name="Actor.Ui.TabController.Error" enum="ActorUiTabControllerError"
-    expires_after="2026-08-11">
+    expires_after="2027-01-03">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
   <summary>Recorded when an error happens in the ActorUiTabController.</summary>
 </histogram>
 
+<histogram name="Actor.Ui.TaskIcon.Error" enum="ActorUiTaskIconError"
+    expires_after="2027-08-11">
+  <owner>chrstne@google.com</owner>
+  <owner>aashnas@google.com</owner>
+  <owner>koilos@google.com</owner>
+  <summary>
+    Recorded when an invalid task is encountered within ActorUiTaskIcon or
+    related component creation.
+  </summary>
+</histogram>
+
 <histogram name="Actor.Ui.TaskListBubble.Rows" units="rows"
-    expires_after="2026-08-11">
+    expires_after="2027-08-11">
   <owner>kenok@google.com</owner>
   <owner>mjenn@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -694,7 +1210,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.Ui.TaskNudge.Shown" enum="TaskNudgeState"
-    expires_after="2026-08-11">
+    expires_after="2027-08-11">
   <owner>kenok@google.com</owner>
   <owner>chrstne@google.com</owner>
   <owner>koilos@google.com</owner>
@@ -702,7 +1218,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Actor.UiTabController.NumberOfPendingCallbacks"
-    units="callbacks" expires_after="2026-08-11">
+    units="callbacks" expires_after="2027-08-11">
   <owner>chrstne@google.com</owner>
   <owner>kenok@google.com</owner>
   <owner>koilos@google.com</owner>

@@ -92,13 +92,13 @@ class AuthenticatorRequestDialogView
   friend class test::AuthenticatorRequestDialogViewTestApi;
 
   void OtherMechanismsButtonPressed();
-  void ManageDevicesButtonPressed();
+  void OpenGpmSettingsButtonPressed();
   void ForgotGPMPinPressed();
   void GPMPinOptionChosen(bool is_arbitrary);
 
   raw_ptr<AuthenticatorRequestDialogModel> model_;
 
-  raw_ptr<AuthenticatorRequestSheetView, DanglingUntriaged> sheet_ = nullptr;
+  raw_ptr<AuthenticatorRequestSheetView> sheet_ = nullptr;
 
   // web_contents_hidden_ is true if the |WebContents| that this dialog should
   // attach to is currently hidden. In this case, the dialog won't be shown

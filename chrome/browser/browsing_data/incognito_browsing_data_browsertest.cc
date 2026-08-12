@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #include <stddef.h>
+
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -90,8 +92,8 @@ class IncognitoBrowsingDataBrowserTest
     Browser* regular_browser = GetRegularBrowser();
     Browser* incognito_browser = GetIncognitoBrowser();
 
-    EXPECT_TRUE(regular_browser->profile()->IsRegularProfile());
-    EXPECT_TRUE(incognito_browser->profile()->IsIncognitoProfile());
+    EXPECT_TRUE(regular_browser->GetProfile()->IsRegularProfile());
+    EXPECT_TRUE(incognito_browser->GetProfile()->IsIncognitoProfile());
 
     // Ensure there is no prior data.
     EXPECT_EQ(0, GetSiteDataCount(GetActiveWebContents(regular_browser)));
@@ -162,7 +164,7 @@ class IncognitoBrowsingDataBrowserTest
 
   inline void ExpectTotalModelCount(Browser* browser, size_t expected) {
     std::unique_ptr<BrowsingDataModel> browsing_data_model =
-        GetBrowsingDataModel(browser->profile());
+        GetBrowsingDataModel(browser->GetProfile());
 
     EXPECT_EQ(expected, browsing_data_model->size());
   }
@@ -179,7 +181,7 @@ class IncognitoBrowsingDataBrowserTest
 
   network::mojom::NetworkContext* network_context() const {
     return GetBrowser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
@@ -211,11 +213,11 @@ class IncognitoBrowsingDataBrowserTest
 // Test BrowsingDataRemover for downloads.
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, Download) {
   DownloadAnItem();
-  VerifyDownloadCount(0u, GetRegularBrowser()->profile());
+  VerifyDownloadCount(0u, GetRegularBrowser()->GetProfile());
 
   // Restart Incognito, ensure no residue.
   RestartIncognitoBrowser();
-  VerifyDownloadCount(0u, GetIncognitoBrowser()->profile());
+  VerifyDownloadCount(0u, GetIncognitoBrowser()->GetProfile());
 }
 
 // Test that the salt for media device IDs is reset between Incognito sessions.
@@ -245,7 +247,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, MediaDeviceIdSalt) {
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
                        VideoDecodePerfHistory) {
   media::VideoDecodePerfHistory* video_decode_perf_history =
-      GetBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetBrowser()->GetProfile()->GetVideoDecodePerfHistory();
 
   // Save a video decode record. Note: we avoid using a web page to generate the
   // stats as this takes at least 5 seconds and even then is not a guarantee
@@ -298,7 +300,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   // |is_power_efficient| should report true because the VideoDecodePerfHistory
   // optimistically returns true when it has no data.
   media::VideoDecodePerfHistory* regular_mode_video_decode_perf_history =
-      GetRegularBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetRegularBrowser()->GetProfile()->GetVideoDecodePerfHistory();
   {
     base::RunLoop run_loop;
     regular_mode_video_decode_perf_history->GetPerfInfo(
@@ -314,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   // Restart Incognito.
   RestartIncognitoBrowser();
   video_decode_perf_history =
-      GetBrowser()->profile()->GetVideoDecodePerfHistory();
+      GetBrowser()->GetProfile()->GetVideoDecodePerfHistory();
 
   // Verify history no longer exists. Both |is_smooth| and |is_power_efficient|
   // should now report true because the VideoDecodePerfHistory optimistically
@@ -357,12 +359,12 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, Cache) {
 
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
                        ExternalProtocolHandlerPerOriginPrefs) {
-  Profile* profile = GetBrowser()->profile();
+  Profile* profile = GetBrowser()->GetProfile();
   url::Origin test_origin = url::Origin::Create(GURL("https://example.test/"));
   const std::string serialized_test_origin = test_origin.Serialize();
-  base::Value::Dict allowed_protocols_for_origin;
+  base::DictValue allowed_protocols_for_origin;
   allowed_protocols_for_origin.Set("tel", true);
-  base::Value::Dict origin_pref;
+  base::DictValue origin_pref;
   origin_pref.Set(serialized_test_origin,
                   std::move(allowed_protocols_for_origin));
   profile->GetPrefs()->SetDict(prefs::kProtocolHandlerPerOriginAllowedProtocols,
@@ -373,11 +375,11 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
 
   // Regular profile should be unaffected.
   block_state = ExternalProtocolHandler::GetBlockState(
-      "tel", &test_origin, GetRegularBrowser()->profile());
+      "tel", &test_origin, GetRegularBrowser()->GetProfile());
   ASSERT_EQ(ExternalProtocolHandler::UNKNOWN, block_state);
 
   RestartIncognitoBrowser();
-  profile = GetBrowser()->profile();
+  profile = GetBrowser()->GetProfile();
 
   block_state =
       ExternalProtocolHandler::GetBlockState("tel", &test_origin, profile);
@@ -491,16 +493,17 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest, MediaLicenseDeletion) {
 }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
-const std::vector<std::string> kStorageTypes{
+constexpr std::string_view kStorageTypes[] = {
     "Cookie",    "LocalStorage",  "FileSystem",   "SessionStorage",
     "IndexedDb", "ServiceWorker", "CacheStorage", "MediaLicense"};
 
 // Test that storage doesn't leave any traces on disk.
 IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
                        StorageDoesntWriteToDisk) {
-  // Checking leveldb content fails in most cases. See https://crbug.com/1238325
-  ASSERT_EQ(0, CheckUserDirectoryForString(kLocalHost, {},
-                                           /*check_leveldb_content=*/false));
+  // Checking leveldb content fails in most cases. See
+  // https://crbug.com/40784064
+  CheckUserDirectoryForString(kLocalHost, {},
+                              /*check_leveldb_content=*/false);
   ASSERT_EQ(0, GetSiteDataCount());
   ExpectTotalModelCount(GetBrowser(), 0);
 
@@ -516,16 +519,15 @@ IN_PROC_BROWSER_TEST_F(IncognitoBrowsingDataBrowserTest,
   GURL url = https_server.GetURL(kLocalHost, "/browsing_data/site_data.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(GetBrowser(), url));
 
-  for (const std::string& type : kStorageTypes) {
-    SetDataForType(type);
-    EXPECT_TRUE(HasDataForType(type));
+  for (std::string_view type : kStorageTypes) {
+    SetDataForType(std::string(type));
+    EXPECT_TRUE(HasDataForType(std::string(type)));
   }
   // TODO(crbug.com/40577815): Add more datatypes for testing. E.g.
   // notifications, payment handler, content settings, autofill, ...?
 
-  int found = CheckUserDirectoryForString(kLocalHost, {},
-                                          /*check_leveldb_content=*/false);
-  EXPECT_EQ(0, found) << "A file contains the hostname.";
+  CheckUserDirectoryForString(kLocalHost, {},
+                              /*check_leveldb_content=*/false);
 
   EXPECT_EQ(0, GetSiteDataCount(GetActiveWebContents(GetRegularBrowser())));
   ExpectTotalModelCount(GetRegularBrowser(), 0);

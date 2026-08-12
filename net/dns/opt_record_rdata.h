@@ -50,8 +50,8 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
 
   class NET_EXPORT_PRIVATE EdeOpt : public Opt {
    public:
-    // Metadata for Filtering Details (ro/inc) are defined in Version 1 of
-    // https://datatracker.ietf.org/doc/draft-nottingham-public-resolver-errors/01/
+    // Metadata for Filtering Details (db/id) are defined in Version 2 of
+    // https://datatracker.ietf.org/doc/draft-nottingham-public-resolver-errors/02/
     struct NET_EXPORT_PRIVATE FilteringDetails {
       FilteringDetails();
       ~FilteringDetails();
@@ -61,8 +61,8 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
       FilteringDetails(FilteringDetails&&) noexcept;
       FilteringDetails& operator=(FilteringDetails&&) noexcept;
 
-      std::string resolver_operator_id;   // "ro"
-      std::string filtering_incident_id;  // "inc"
+      std::string database_operator_id;  // "db" Filtering Database Operator ID
+      std::string incident_id;           // "id" Filtering Incident ID
     };
 
     static const uint16_t kOptCode = dns_protocol::kEdnsExtendedDnsError;
@@ -144,8 +144,8 @@ class NET_EXPORT_PRIVATE OptRecordRdata : public RecordRdata {
     static const uint16_t kOptCode = dns_protocol::kEdnsPadding;
 
     PaddingOpt() = delete;
-    // Construct a PaddingOpt with the specified padding string.
-    explicit PaddingOpt(std::string padding);
+    // Construct a PaddingOpt with the specified padding.
+    explicit PaddingOpt(base::span<const uint8_t> padding);
     // Constructs PaddingOpt with '\0' character padding of specified length.
     // Note: This padding_len only specifies the length of the data section.
     // Users must take into account the header length `Opt::kHeaderSize`

@@ -4,8 +4,8 @@
 
 #include "chrome/browser/actor/tools/tool.h"
 
-#include "chrome/browser/actor/aggregated_journal.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/core/aggregated_journal.h"
 
 namespace actor {
 
@@ -19,6 +19,8 @@ mojom::ActionResultPtr Tool::TimeOfUseValidation(
 }
 
 void Tool::Cancel() {}
+
+void Tool::NotifyPaused() {}
 
 GURL Tool::JournalURL() const {
   return GURL::EmptyGURL();

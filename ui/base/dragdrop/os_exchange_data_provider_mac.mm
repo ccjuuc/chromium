@@ -5,6 +5,7 @@
 #include "ui/base/dragdrop/os_exchange_data_provider_mac.h"
 
 #import <Cocoa/Cocoa.h>
+#include <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <algorithm>
 #include <optional>
@@ -183,11 +184,19 @@ void OSExchangeDataProviderMac::SetString(std::u16string_view string) {
                      forType:NSPasteboardTypeString];
 }
 
-void OSExchangeDataProviderMac::SetURL(const GURL& url,
-                                       std::u16string_view title) {
+void OSExchangeDataProviderMac::SetURLs(
+    base::span<const ClipboardUrlInfo> url_infos) {
+  if (url_infos.empty()) {
+    return;
+  }
+
+  // Currently, SetURLs is only used for single-URL Views drags (for example,
+  // the omnibox/location-bar site icon). Web-content and bookmark drags use
+  // different code paths, so only the first URL is written here.
+  const auto& url_info = url_infos.front();
   NSArray<NSPasteboardItem*>* items = clipboard_util::PasteboardItemsFromUrls(
-      @[ base::SysUTF8ToNSString(url.spec()) ],
-      @[ base::SysUTF16ToNSString(title) ]);
+      @[ base::SysUTF8ToNSString(url_info.url.spec()) ],
+      @[ base::SysUTF16ToNSString(url_info.title) ]);
   clipboard_util::AddDataToPasteboard(GetPasteboard(), items.firstObject);
 }
 
@@ -215,41 +224,27 @@ std::optional<std::u16string> OSExchangeDataProviderMac::GetString() const {
   }
 
   // There was no NSString, check for an NSURL.
-  if (std::optional<UrlInfo> url_info =
-          GetURLAndTitle(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES);
-      url_info.has_value()) {
-    return base::UTF8ToUTF16(url_info->url.spec());
+  std::vector<ClipboardUrlInfo> url_infos =
+      GetURLs(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES);
+  if (!url_infos.empty()) {
+    return base::UTF8ToUTF16(url_infos.front().url.spec());
   }
 
   return std::nullopt;
 }
 
-std::optional<OSExchangeDataProvider::UrlInfo>
-OSExchangeDataProviderMac::GetURLAndTitle(FilenameToURLPolicy policy) const {
-  NSArray<URLAndTitle*>* urls_and_titles =
-      clipboard_util::URLsAndTitlesFromPasteboard(
-          GetPasteboard(), policy == FilenameToURLPolicy::CONVERT_FILENAMES);
-  if (!urls_and_titles.count) {
-    return std::nullopt;
-  }
-
-  GURL url(base::SysNSStringToUTF8(urls_and_titles.firstObject.URL));
-  return UrlInfo{std::move(url),
-                 base::SysNSStringToUTF16(urls_and_titles.firstObject.title)};
-}
-
-std::optional<std::vector<GURL>> OSExchangeDataProviderMac::GetURLs(
+std::vector<ClipboardUrlInfo> OSExchangeDataProviderMac::GetURLs(
     FilenameToURLPolicy policy) const {
   NSArray<URLAndTitle*>* urls_and_titles =
       clipboard_util::URLsAndTitlesFromPasteboard(
           GetPasteboard(), policy == FilenameToURLPolicy::CONVERT_FILENAMES);
   if (!urls_and_titles.count) {
-    return std::nullopt;
+    return {};
   }
-
-  std::vector<GURL> local_urls;
+  std::vector<ClipboardUrlInfo> local_urls;
   for (URLAndTitle* url_and_title in urls_and_titles) {
-    local_urls.emplace_back(base::SysNSStringToUTF8(url_and_title.URL));
+    local_urls.emplace_back(GURL(base::SysNSStringToUTF8(url_and_title.URL)),
+                            base::SysNSStringToUTF16(url_and_title.title));
   }
   return local_urls;
 }
@@ -280,7 +275,7 @@ bool OSExchangeDataProviderMac::HasString() const {
 }
 
 bool OSExchangeDataProviderMac::HasURL(FilenameToURLPolicy policy) const {
-  return GetURLAndTitle(policy).has_value();
+  return !GetURLs(policy).empty();
 }
 
 bool OSExchangeDataProviderMac::HasFile() const {
@@ -294,18 +289,51 @@ bool OSExchangeDataProviderMac::HasCustomFormat(
 
 void OSExchangeDataProviderMac::SetFileContents(
     const base::FilePath& filename,
-    const std::string& file_contents) {
+    base::span<const uint8_t> file_contents) {
   NOTIMPLEMENTED();
 }
 
 std::optional<OSExchangeDataProvider::FileContentsInfo>
 OSExchangeDataProviderMac::GetFileContents() const {
-  NOTIMPLEMENTED();
+  NSPasteboard* pboard = GetPasteboard();
+  if (!pboard) {
+    return std::nullopt;
+  }
+
+  NSArray* types = [pboard types];
+  for (NSString* type in types) {
+    UTType* utType = [UTType typeWithIdentifier:type];
+    if ([utType conformsToType:UTTypeImage]) {
+      NSData* data = [pboard dataForType:type];
+      if (data) {
+        base::span<const uint8_t> span = base::apple::NSDataToSpan(data);
+        std::vector<uint8_t> file_contents(span.begin(), span.end());
+        base::FilePath filename;
+        NSString* ext = utType.preferredFilenameExtension;
+        if (ext) {
+          filename = base::FilePath(base::SysNSStringToUTF8(ext));
+        }
+        return FileContentsInfo{.filename = filename,
+                                .file_contents = std::move(file_contents)};
+      }
+    }
+  }
   return std::nullopt;
 }
 
 bool OSExchangeDataProviderMac::HasFileContents() const {
-  NOTIMPLEMENTED();
+  NSPasteboard* pboard = GetPasteboard();
+  if (!pboard) {
+    return false;
+  }
+
+  NSArray* types = [pboard types];
+  for (NSString* type in types) {
+    UTType* utType = [UTType typeWithIdentifier:type];
+    if ([utType conformsToType:UTTypeImage]) {
+      return true;
+    }
+  }
   return false;
 }
 

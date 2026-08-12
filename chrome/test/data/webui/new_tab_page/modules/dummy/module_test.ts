@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {FooHandlerRemote} from 'chrome://new-tab-page/foo.mojom-webui.js';
 import type {DummyModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {dummyV2Descriptor, FooProxy} from 'chrome://new-tab-page/lazy_load.js';
+import {FooHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import type {CrAutoImgElement} from 'chrome://new-tab-page/new_tab_page.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
@@ -41,7 +41,7 @@ suite('NewTabPageModulesDummyModuleTest', () => {
         imageUrl: 'baz.com',
       },
     ];
-    handler.setResultFor('getData', Promise.resolve({data}));
+    handler.setPromiseResolveFor('getData', {data});
     const modules = await dummyV2Descriptor.initialize(0) as HTMLElement[];
     assertEquals(12, modules.length);
     const module = modules[0]! as DummyModuleElement;
@@ -60,7 +60,7 @@ suite('NewTabPageModulesDummyModuleTest', () => {
   });
 
   test('creates module without data', async () => {
-    handler.setResultFor('getData', Promise.resolve({data: []}));
+    handler.setPromiseResolveFor('getData', {data: []});
     // Act.
     const modules = await dummyV2Descriptor.initialize(0) as HTMLElement[];
     const module = modules[0]! as DummyModuleElement;

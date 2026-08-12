@@ -98,7 +98,8 @@ int64_t MultiBufferReader::TryReadAt(int64_t pos, base::span<uint8_t> data) {
     if (buffer->end_of_stream()) {
       break;
     }
-    const size_t offset = pos & ((1LL << multibuffer_->block_size_shift()) - 1);
+    const size_t offset = base::checked_cast<size_t>(
+        pos & ((1LL << multibuffer_->block_size_shift()) - 1));
     if (offset > buffer->size()) {
       break;
     }
@@ -182,7 +183,7 @@ void MultiBufferReader::UpdateEnd(MultiBufferBlockId p) {
 }
 
 void MultiBufferReader::NotifyAvailableRange(
-    const Interval<MultiBufferBlockId>& range) {
+    const media::Interval<MultiBufferBlockId>& range) {
   // Update end_ if we can.
   if (range.end > range.begin) {
     UpdateEnd(range.end);
@@ -248,7 +249,7 @@ void MultiBufferReader::UpdateInternalState() {
 void MultiBufferReader::PinRange(MultiBuffer::BlockId begin,
                                  MultiBuffer::BlockId end) {
   // Use a rangemap to compute the diff in pinning.
-  IntervalMap<MultiBuffer::BlockId, int32_t> tmp;
+  media::IntervalMap<MultiBuffer::BlockId, int32_t> tmp;
   tmp.IncrementInterval(pinned_range_.begin, pinned_range_.end, -1);
   tmp.IncrementInterval(begin, end, 1);
   multibuffer_->PinRanges(tmp);

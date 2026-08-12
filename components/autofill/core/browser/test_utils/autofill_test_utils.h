@@ -14,7 +14,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_wallet_usage_data.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
@@ -107,7 +106,7 @@ std::unique_ptr<PrefService> PrefServiceForTesting(
 // Returns a `FormData` corresponding to a simple address form. Use `unique_id`
 // to ensure that the form has its own signature.
 [[nodiscard]] FormData CreateTestAddressFormData(
-    const char* unique_id = nullptr);
+    std::string_view unique_id = "");
 
 // Returns a `FormData` corresponding to a simple one-time-password form.
 [[nodiscard]] FormData CreateTestOtpFormData(const char* unique_id = nullptr);
@@ -248,7 +247,8 @@ CreditCardMerchantBenefit GetActiveCreditCardMerchantBenefit();
 base::flat_set<url::Origin> GetOriginsForMerchantBenefit();
 
 // Prevents kAccountNameEmail profile from being created.
-void HideAccountNameEmailProfile(PrefService* pref_service, AccountInfo info);
+void HideAccountNameEmailProfile(PrefService* pref_service,
+                                 const AccountInfo& info);
 
 // Adds `card` with a set `issuer_id`, `benefit` and `benefit_source` to
 // `personal_data`. Also configures a category benefit with the
@@ -261,67 +261,68 @@ void SetUpCreditCardAndBenefitData(
     TestPersonalDataManager& personal_data,
     AutofillOptimizationGuideDecider* optimization_guide);
 
+struct SetProfileInfoOptions {
+  SetProfileInfoOptions();
+  SetProfileInfoOptions(const SetProfileInfoOptions&);
+  SetProfileInfoOptions(SetProfileInfoOptions&&);
+  SetProfileInfoOptions& operator=(const SetProfileInfoOptions&);
+  SetProfileInfoOptions& operator=(SetProfileInfoOptions&&);
+  ~SetProfileInfoOptions();
+
+  std::string guid;
+  std::string first_name;
+  std::string middle_name;
+  std::string last_name;
+  std::string full_name;
+  std::string email;
+  std::string company;
+  std::string address1;
+  std::string address2;
+  std::string dependent_locality;
+  std::string city;
+  std::string state;
+  std::string zipcode;
+  std::string country;
+  std::string phone;
+  VerificationStatus status = VerificationStatus::kObserved;
+};
+
+class SetProfileInfoOptionsBuilder {
+ public:
+  SetProfileInfoOptionsBuilder();
+  SetProfileInfoOptionsBuilder(const SetProfileInfoOptionsBuilder&);
+  SetProfileInfoOptionsBuilder& operator=(const SetProfileInfoOptionsBuilder&);
+  ~SetProfileInfoOptionsBuilder();
+
+  SetProfileInfoOptionsBuilder& with_guid(std::string_view guid);
+  SetProfileInfoOptionsBuilder& with_first_name(std::string_view first_name);
+  SetProfileInfoOptionsBuilder& with_middle_name(std::string_view middle_name);
+  SetProfileInfoOptionsBuilder& with_last_name(std::string_view last_name);
+  SetProfileInfoOptionsBuilder& with_full_name(std::string_view full_name);
+  SetProfileInfoOptionsBuilder& with_email(std::string_view email);
+  SetProfileInfoOptionsBuilder& with_company(std::string_view company);
+  SetProfileInfoOptionsBuilder& with_address1(std::string_view address1);
+  SetProfileInfoOptionsBuilder& with_address2(std::string_view address2);
+  SetProfileInfoOptionsBuilder& with_dependent_locality(
+      std::string_view dependent_locality);
+  SetProfileInfoOptionsBuilder& with_city(std::string_view city);
+  SetProfileInfoOptionsBuilder& with_state(std::string_view state);
+  SetProfileInfoOptionsBuilder& with_zipcode(std::string_view zipcode);
+  SetProfileInfoOptionsBuilder& with_country(std::string_view country);
+  SetProfileInfoOptionsBuilder& with_phone(std::string_view phone);
+  SetProfileInfoOptionsBuilder& with_status(VerificationStatus status);
+
+  [[nodiscard]] SetProfileInfoOptions Build();
+
+ private:
+  SetProfileInfoOptions options_;
+};
+
 // A unit testing utility that is common to a number of the Autofill unit
-// tests.  |SetProfileInfo| provides a quick way to populate a profile with
-// c-strings.
+// tests.  |SetProfileInfo| provides a quick way to populate a profile.
 void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* email,
-                    const char* company,
-                    const char* address1,
-                    const char* address2,
-                    const char* dependent_locality,
-                    const char* city,
-                    const char* state,
-                    const char* zipcode,
-                    const char* country,
-                    const char* phone,
-                    bool finalize = true,
-                    VerificationStatus status = VerificationStatus::kObserved);
-
-// This one doesn't require the |dependent_locality|.
-void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* email,
-                    const char* company,
-                    const char* address1,
-                    const char* address2,
-                    const char* city,
-                    const char* state,
-                    const char* zipcode,
-                    const char* country,
-                    const char* phone,
-                    bool finalize = true,
-                    VerificationStatus status = VerificationStatus::kObserved);
-
-void SetProfileInfo(AutofillProfile* profile,
-                    const char* first_name,
-                    const char* middle_name,
-                    const char* last_name,
-                    const char* country,
-                    bool finalize = true,
-                    VerificationStatus status = VerificationStatus::kObserved);
-
-void SetProfileInfoWithGuid(AutofillProfile* profile,
-                            const char* guid,
-                            const char* first_name,
-                            const char* middle_name,
-                            const char* last_name,
-                            const char* email,
-                            const char* company,
-                            const char* address1,
-                            const char* address2,
-                            const char* city,
-                            const char* state,
-                            const char* zipcode,
-                            const char* country,
-                            const char* phone,
-                            bool finalize = true,
-                            VerificationStatus = VerificationStatus::kObserved);
+                    SetProfileInfoOptions options,
+                    bool finalize = true);
 
 // A unit testing utility that is common to a number of the Autofill unit
 // tests.  |SetCreditCardInfo| provides a quick way to populate a credit card
@@ -348,169 +349,6 @@ CreditCard CreateCreditCardWithInfo(const char* name_on_card,
 void SetServerCreditCards(PaymentsAutofillTable* table,
                           const std::vector<CreditCard>& cards);
 
-template <typename = void>
-struct PassportEntityOptionsT {
-  const char16_t* name = u"Pippi Långstrump";
-  const char16_t* number = u"LR1234567";
-  const char16_t* country = u"Sweden";
-  const char16_t* expiry_date = u"2019-08-30";
-  const char16_t* issue_date = u"2010-09-01";
-  std::string_view guid = "00000000-0000-4000-8000-000000000000";
-  std::string_view nickname = "Passie";
-  base::Time date_modified = kJune2017;
-  base::Time use_date = kJune2017;
-  std::string_view app_locale = "en-US";
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using PassportEntityOptions = PassportEntityOptionsT<>;
-
-// Creates a test passport instance with the values from `options`.
-// Attributes whose value in `options` is `nullptr` are left absent.
-// `options.date_modified` is rounded to seconds so that writing and reading the
-// entity from the database obtains the original entity (the resolution of
-// base::Time in the database is seconds).
-EntityInstance GetPassportEntityInstance(PassportEntityOptions options = {});
-
-EntityInstance GetPassportEntityInstanceWithRandomGuid(
-    PassportEntityOptions options = {});
-
-template <typename = void>
-struct DriversLicenseOptionsT {
-  const char16_t* name = u"Knecht Ruprecht";
-  const char16_t* region = u"California";
-  const char16_t* number = u"12312345";
-  const char16_t* expiration_date = u"01/12/2019";
-  const char16_t* issue_date = u"01/01/2010";
-  std::string_view guid = "00000000-0000-4000-8000-100000000000";
-  std::string_view nickname = "License";
-  base::Time date_modified = kJune2017;
-  base::Time use_date = kJune2017;
-  std::string_view app_locale = "en-US";
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using DriversLicenseOptions = DriversLicenseOptionsT<>;
-
-EntityInstance GetDriversLicenseEntityInstance(
-    DriversLicenseOptions options = {});
-
-EntityInstance GetDriversLicenseEntityInstanceWithRandomGuid(
-    DriversLicenseOptions options = {});
-
-template <typename = void>
-struct VehicleOptionsT {
-  const char16_t* name = u"Knecht Ruprecht";
-  const char16_t* plate = u"123456";
-  const char16_t* number = u"12312345";
-  const char16_t* make = u"BMW";
-  const char16_t* model = u"Series 2";
-  const char16_t* year = u"2025";
-  const char16_t* state = u"California";
-  std::string_view guid = "00000000-0000-4000-8000-200000000000";
-  std::string_view nickname = "Vehicle";
-  base::Time date_modified = kJune2017;
-  base::Time use_date = kJune2017;
-  std::string_view app_locale = "en-US";
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using VehicleOptions = VehicleOptionsT<>;
-
-EntityInstance GetVehicleEntityInstance(VehicleOptions options = {});
-
-EntityInstance GetVehicleEntityInstanceWithRandomGuid(
-    VehicleOptions options = {});
-
-template <typename = void>
-struct NationalIdCardOptionsT {
-  const char16_t* number = u"987654321";
-  const char16_t* country = u"United States";
-  const char16_t* issue_date = u"01/12/2020";
-  const char16_t* expiry_date = u"01/12/2030";
-  std::string_view guid = "00000000-0000-4000-8000-300000000000";
-  std::string_view nickname = "IdCard";
-  std::string_view app_locale = "en-US";
-  base::Time use_date = kJune2017;
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using NationalIdCardOptions = NationalIdCardOptionsT<>;
-
-EntityInstance GetNationalIdCardEntityInstance(
-    NationalIdCardOptions options = {});
-
-template <typename = void>
-struct KnownTravelerNumberOptionsT {
-  const char16_t* number = u"987654321";
-  const char16_t* expiration_date = u"01/12/2030";
-  std::string_view guid = "00000000-0000-4000-8000-400000000000";
-  std::string_view nickname = "Known Traveler Number";
-  std::string_view app_locale = "en-US";
-  base::Time use_date = kJune2017;
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using KnownTravelerNumberOptions = KnownTravelerNumberOptionsT<>;
-
-EntityInstance GetKnownTravelerNumberInstance(
-    KnownTravelerNumberOptions options = {});
-
-template <typename = void>
-struct RedressNumberOptionsT {
-  const char16_t* number = u"987654321";
-  std::string_view guid = "00000000-0000-4000-8000-500000000000";
-  std::string_view nickname = "RedressNumber";
-  std::string_view app_locale = "en-US";
-  base::Time use_date = kJune2017;
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using RedressNumberOptions = RedressNumberOptionsT<>;
-
-EntityInstance GetRedressNumberEntityInstance(
-    RedressNumberOptions options = {});
-
-template <typename = void>
-struct FlightReservationOptionsT {
-  const char16_t* flight_number = u"AA123";
-  const char16_t* ticket_number = u"123123456";
-  const char16_t* confirmation_code = u"AB4KW5";
-  const char16_t* name = u"John Doe";
-  const char16_t* departure_airport = u"MUC";
-  const char16_t* arrival_airport = u"BEY";
-  std::optional<base::Time> departure_time = std::nullopt;
-  base::TimeDelta departure_time_zone_offset = base::TimeDelta();
-  std::string_view guid = "00000000-0000-4000-8000-500000000000";
-  std::string_view nickname = "FlightReservation";
-  std::string_view app_locale = "en-US";
-  base::Time date_modified = kJune2017;
-  base::Time use_date = kJune2017;
-  EntityInstance::RecordType record_type = EntityInstance::RecordType::kLocal;
-  EntityInstance::AreAttributesReadOnly are_attributes_read_only =
-      EntityInstance::AreAttributesReadOnly(false);
-  int use_count = 0;
-};
-using FlightReservationOptions = FlightReservationOptionsT<>;
-
-EntityInstance GetFlightReservationEntityInstance(
-    FlightReservationOptions options = {});
-
-EntityInstance GetFlightReservationEntityInstanceWithRandomGuid(
-    FlightReservationOptions options = {});
-
 // Adds `possible_types` at the end of `possible_field_types`.
 void InitializePossibleTypes(std::vector<FieldTypeSet>& possible_field_types,
                              const std::vector<FieldType>& possible_types);
@@ -526,13 +364,14 @@ void FillUploadField(AutofillUploadContents::Field* field,
 
 // Creates the structure of signatures that would be encoded by
 // `EncodeUploadRequest()` and `EncodeAutofillPageQueryRequest()`
-// and consumed by `ParseServerPredictionsQueryResponse()` and
-// `ProcessServerPredictionsQueryResponse()`.
+// and consumed by `ParseServerPredictionsFromQueryResponse()`.
 //
 // Perhaps a neater way would be to move this to TestFormStructure.
 std::vector<FormSignature> GetEncodedSignatures(const FormStructure& form);
 std::vector<FormSignature> GetEncodedSignatures(
     const std::vector<raw_ref<FormStructure>>& forms);
+std::vector<FormSignature> GetEncodedSignatures(
+    base::span<const FormData> forms);
 
 std::vector<FormSignature> GetEncodedAlternativeSignatures(
     const FormStructure& form);
@@ -546,6 +385,10 @@ void GenerateTestAutofillPopup(
 
 std::string ObfuscatedCardDigitsAsUTF8(const std::string& str,
                                        int obfuscation_length);
+
+// Creates a GUID for testing. For example,
+// MakeGuid(123) = "00000000-4000-8000-0000-000000000123";
+std::string MakeGuid(size_t last_digit);
 
 // Returns 2-digit month string, like "02", "10".
 std::string NextMonth();
@@ -621,8 +464,7 @@ sync_pb::PaymentInstrument CreatePaymentInstrumentWithLinkedBnplIssuer(
 
 // Returns a linked BNPL issuer with fake data.
 BnplIssuer GetTestLinkedBnplIssuer(
-    autofill::BnplIssuer::IssuerId issuer_id =
-        autofill::BnplIssuer::IssuerId::kBnplAffirm,
+    BnplIssuer::IssuerId issuer_id = BnplIssuer::IssuerId::kBnplAffirm,
     DenseSet<PaymentInstrument::ActionRequired> actions_required =
         DenseSet<PaymentInstrument::ActionRequired>());
 
@@ -633,6 +475,11 @@ BnplIssuer GetTestUnlinkedBnplIssuer();
 // fake data using `id` as the `PaymentInstrumentCreationOption.id`.
 sync_pb::PaymentInstrumentCreationOption
 CreatePaymentInstrumentCreationOptionWithBnplIssuer(const std::string& id);
+
+// Returns a payment instrument creation option with an eWallet filled with
+// fake data using `id` as the `PaymentInstrumentCreationOption.id`.
+sync_pb::PaymentInstrumentCreationOption
+CreatePaymentInstrumentCreationOptionWithEwallet(const std::string& id);
 
 // For the key metrics as used for different data types, this struct allows to
 // define expectations. The values are marked optional. `std::nullopt` means

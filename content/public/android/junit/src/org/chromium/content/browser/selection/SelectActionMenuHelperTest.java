@@ -23,10 +23,12 @@ import android.content.pm.ResolveInfo;
 import android.content.res.TypedArray;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
@@ -47,6 +49,7 @@ import java.util.List;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class SelectActionMenuHelperTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private SelectActionMenuHelper.TextSelectionCapabilitiesDelegate mDelegate;
     @Mock private Context mContext;
 
@@ -98,7 +101,6 @@ public class SelectActionMenuHelperTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         // Used to mock out getting menu item icons.
         TypedArray a = mock(TypedArray.class);
         when(mContext.obtainStyledAttributes(any(int[].class))).thenReturn(a);
@@ -119,16 +121,16 @@ public class SelectActionMenuHelperTest {
         PendingSelectionMenu pendingMenu = new PendingSelectionMenu(mContext);
         pendingMenu.addAll(
                 SelectActionMenuHelper.getDefaultItems(
-                        mContext, mDelegate, MenuType.FLOATING, null));
+                        mContext, mDelegate, MenuType.FLOATING, "test", null));
         List<SelectionMenuItem> menuItems = pendingMenu.getMenuItemsForTesting();
         assertEquals(7, menuItems.size());
-        assertEquals(menuItems.get(0).id, R.id.select_action_menu_cut);
-        assertEquals(menuItems.get(1).id, R.id.select_action_menu_copy);
-        assertEquals(menuItems.get(2).id, R.id.select_action_menu_paste);
-        assertEquals(menuItems.get(3).id, R.id.select_action_menu_paste_as_plain_text);
-        assertEquals(menuItems.get(4).id, R.id.select_action_menu_share);
-        assertEquals(menuItems.get(5).id, R.id.select_action_menu_select_all);
-        assertEquals(menuItems.get(6).id, R.id.select_action_menu_web_search);
+        assertEquals(R.id.select_action_menu_cut, menuItems.get(0).id);
+        assertEquals(R.id.select_action_menu_copy, menuItems.get(1).id);
+        assertEquals(android.R.id.paste, menuItems.get(2).id);
+        assertEquals(android.R.id.pasteAsPlainText, menuItems.get(3).id);
+        assertEquals(R.id.select_action_menu_share, menuItems.get(4).id);
+        assertEquals(R.id.select_action_menu_select_all, menuItems.get(5).id);
+        assertEquals(R.id.select_action_menu_web_search, menuItems.get(6).id);
     }
 
     @Test
@@ -139,23 +141,27 @@ public class SelectActionMenuHelperTest {
         PendingSelectionMenu pendingMenu = new PendingSelectionMenu(mContext);
         pendingMenu.addAll(
                 SelectActionMenuHelper.getDefaultItems(
-                        mContext, mDelegate, MenuType.FLOATING, selectionActionMenuDelegate));
+                        mContext,
+                        mDelegate,
+                        MenuType.FLOATING,
+                        "test",
+                        selectionActionMenuDelegate));
         List<SelectionMenuItem> menuItems = pendingMenu.getMenuItemsForTesting();
         assertEquals(7, menuItems.size());
-        assertEquals(menuItems.get(0).id, R.id.select_action_menu_cut);
-        assertEquals(menuItems.get(1).id, R.id.select_action_menu_copy);
-        assertEquals(menuItems.get(2).id, R.id.select_action_menu_paste);
-        assertEquals(menuItems.get(3).id, R.id.select_action_menu_paste_as_plain_text);
-        assertEquals(menuItems.get(4).id, R.id.select_action_menu_select_all);
-        assertEquals(menuItems.get(5).id, R.id.select_action_menu_share);
-        assertEquals(menuItems.get(6).id, R.id.select_action_menu_web_search);
+        assertEquals(R.id.select_action_menu_cut, menuItems.get(0).id);
+        assertEquals(R.id.select_action_menu_copy, menuItems.get(1).id);
+        assertEquals(android.R.id.paste, menuItems.get(2).id);
+        assertEquals(android.R.id.pasteAsPlainText, menuItems.get(3).id);
+        assertEquals(R.id.select_action_menu_select_all, menuItems.get(4).id);
+        assertEquals(R.id.select_action_menu_share, menuItems.get(5).id);
+        assertEquals(R.id.select_action_menu_web_search, menuItems.get(6).id);
     }
 
     @Test
     @Feature({"TextInput"})
     public void testGetTextProcessingItems() {
         ContextUtils.initApplicationContextForTests(mContext);
-        List<ResolveInfo> list2 = new ArrayList();
+        List<ResolveInfo> list2 = new ArrayList<>();
         ResolveInfo resolveInfo2 = createResolveInfoWithActivityInfo("ProcessTextActivity2", true);
         list2.add(resolveInfo2);
         PackageManager pm = mock(PackageManager.class);

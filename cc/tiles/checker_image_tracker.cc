@@ -10,9 +10,7 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
@@ -292,7 +290,7 @@ bool CheckerImageTracker::ShouldCheckerImage(const DrawImage& draw_image,
 
   // If the image is pending invalidation, continue checkering it. All tiles
   // for these images will be invalidated on the next pending tree.
-  if (base::Contains(images_pending_invalidation_, image_id)) {
+  if (images_pending_invalidation_.contains(image_id)) {
     return true;
   }
 

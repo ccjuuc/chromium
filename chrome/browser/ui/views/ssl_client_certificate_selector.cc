@@ -14,7 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ssl/ssl_client_auth_observer.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
@@ -186,7 +186,7 @@ base::OnceClosure ShowSSLClientCertificateSelector(
   // Not all WebContentses can show modal dialogs.
   //
   // TODO(davidben): Move this hook to the WebContentsDelegate and only try to
-  // show a dialog in Browser's implementation. https://crbug.com/456255
+  // show a dialog in Browser's implementation. https://crbug.com/40404657
   if (!SSLClientCertificateSelector::CanShow(contents)) {
     return base::OnceClosure();
   }

@@ -316,7 +316,7 @@ ScriptPromise<IDLAny> LockManager::request(ScriptState* script_state,
 
   // 6. Otherwise, if name starts with U+002D HYPHEN-MINUS (-), then reject
   // promise with a "NotSupportedError" DOMException.
-  if (name.StartsWith("-")) {
+  if (name.starts_with('-')) {
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
                                       "Names cannot start with '-'.");
     return EmptyPromise();
@@ -393,6 +393,7 @@ void LockManager::RequestImpl(const LockOptions* options,
 
     if (!service_.is_bound()) {
       resolver->RejectWithDOMException(DOMExceptionCode::kAbortError, "");
+      return;
     }
   }
   if (!observer_.is_bound()) {
@@ -402,6 +403,7 @@ void LockManager::RequestImpl(const LockOptions* options,
 
     if (!observer_.is_bound()) {
       resolver->RejectWithDOMException(DOMExceptionCode::kAbortError, "");
+      return;
     }
   }
 
@@ -482,6 +484,7 @@ void LockManager::QueryImpl(
 
     if (!service_.is_bound()) {
       resolver->RejectWithDOMException(DOMExceptionCode::kAbortError, "");
+      return;
     }
   }
 

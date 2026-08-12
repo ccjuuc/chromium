@@ -17,6 +17,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/version.h"
+#include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/sync/sync_bundle.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sync/model/model_error.h"
@@ -43,7 +44,8 @@ class ExtensionSyncData;
 class ExtensionSyncService : public syncer::SyncableService,
                              public KeyedService,
                              public extensions::ExtensionRegistryObserver,
-                             public extensions::ExtensionPrefsObserver {
+                             public extensions::ExtensionPrefsObserver,
+                             public extensions::ExtensionManagement::Observer {
  public:
   explicit ExtensionSyncService(Profile* profile);
 
@@ -75,12 +77,19 @@ class ExtensionSyncService : public syncer::SyncableService,
   std::string GetClientTag(
       const syncer::EntityData& entity_data) const override;
 
+  // extensions::ExtensionManagement::Observer:
+  void OnExtensionManagementSettingsChanged() override;
+
   void SetSyncStartFlareForTesting(
       const syncer::SyncableService::StartSyncFlare& flare);
 
+  // Returns true if the extension with `extension_id` is pending installation
+  // from sync.
+  bool IsPendingSyncInstall(const std::string& extension_id) const;
+
   // Special hack: There was a bug where themes incorrectly ended up in the
-  // syncer::EXTENSIONS type. This is for cleaning up the data. crbug.com/558299
-  // DO NOT USE FOR ANYTHING ELSE!
+  // syncer::EXTENSIONS type. This is for cleaning up the data.
+  // crbug.com/40445445 DO NOT USE FOR ANYTHING ELSE!
   // TODO(crbug.com/41401013): This *should* be safe to remove now, but it's
   // not.
   void DeleteThemeDoNotUse(const extensions::Extension& theme);
@@ -95,6 +104,8 @@ class ExtensionSyncService : public syncer::SyncableService,
   void OnExtensionInstalled(content::BrowserContext* browser_context,
                             const extensions::Extension* extension,
                             bool is_update) override;
+  void OnExtensionLoaded(content::BrowserContext* browser_context,
+                         const extensions::Extension* extension) override;
   void OnExtensionUninstalled(content::BrowserContext* browser_context,
                               const extensions::Extension* extension,
                               extensions::UninstallReason reason) override;
@@ -114,7 +125,14 @@ class ExtensionSyncService : public syncer::SyncableService,
   extensions::ExtensionSyncData CreateSyncData(
       const extensions::Extension& extension) const;
 
-  // Applies the given change coming in from the server to the local state.
+  // Re-applies the sync data for the given `type` (apps or extensions).
+  void ReloadSyncData(syncer::DataType type);
+
+  // Applies the given list of changes to the local state.
+  void ApplySyncDataList(
+      const std::vector<extensions::ExtensionSyncData>& sync_data_list);
+
+  // Applies the given change to the local state.
   void ApplySyncData(const extensions::ExtensionSyncData& extension_sync_data);
 
   // Collects the ExtensionSyncData for all installed apps or extensions.
@@ -159,6 +177,9 @@ class ExtensionSyncService : public syncer::SyncableService,
   base::ScopedObservation<extensions::ExtensionPrefs,
                           extensions::ExtensionPrefsObserver>
       prefs_observation_{this};
+  base::ScopedObservation<extensions::ExtensionManagement,
+                          extensions::ExtensionManagement::Observer>
+      extension_management_observation_{this};
 
   // When this is set to true, any incoming updates (from the observers as well
   // as from explicit SyncExtensionChangeIfNeeded calls) are ignored. This is
@@ -188,6 +209,12 @@ class ExtensionSyncService : public syncer::SyncableService,
   std::optional<base::flat_set<std::string>>
       migrating_default_chrome_app_ids_cache_;
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+  // Tracks extension IDs currently being installed from sync to prevent race
+  // conditions in observer notification order. Populated during
+  // OnExtensionInstalled() for pending sync installs and cleared in a posted
+  // task after all OnExtensionInstalled observers have finished processing.
+  base::flat_set<std::string> sync_installs_in_progress_;
 
   base::WeakPtrFactory<ExtensionSyncService> weak_ptr_factory_{this};
 };

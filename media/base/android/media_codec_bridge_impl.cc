@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/base/android/media_codec_bridge_impl.h"
 
@@ -18,6 +14,7 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_bytebuffer.h"
 #include "base/android/jni_string.h"
+#include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
@@ -29,10 +26,13 @@
 #include "media/base/android/jni_hdr_metadata.h"
 #include "media/base/android/media_codec_bridge.h"
 #include "media/base/android/media_codec_util.h"
+#include "media/base/android/media_format_color_space.h"
 #include "media/base/audio_codecs.h"
+#include "media/base/limits.h"
 #include "media/base/media_switches.h"
 #include "media/base/subsample_entry.h"
 #include "media/base/video_codecs.h"
+#include "ui/gfx/android/rect_jni_conversion.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "media/base/android/media_jni_headers/MediaCodecBridgeBuilder_jni.h"
@@ -106,15 +106,15 @@ bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
       const uint8_t* current_pos = extra_data;
       // Calculate the length of the first 2 headers.
       for (int i = 0; i < 2; ++i) {
-        header_length[i] = 0;
+        UNSAFE_TODO(header_length[i]) = 0;
         while (total_length < extra_data_size) {
-          size_t size = *(++current_pos);
+          size_t size = *UNSAFE_TODO(++current_pos);
           total_length += 1 + size;
           if (total_length > 0x80000000) {
             LOG(ERROR) << "Vorbis header size too large";
             return false;
           }
-          header_length[i] += size;
+          UNSAFE_TODO(header_length[i]) += size;
           if (size < 0xFF) {
             break;
           }
@@ -124,14 +124,15 @@ bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
           return false;
         }
       }
-      current_pos++;
+      UNSAFE_TODO(current_pos++);
 
       // The first header is the identification header.
-      output_csd0->assign(current_pos, current_pos + header_length[0]);
+      output_csd0->assign(current_pos,
+                          UNSAFE_TODO(current_pos + header_length[0]));
 
       // The last header is the codec header.
-      output_csd1->assign(extra_data + total_length,
-                          extra_data + extra_data_size);
+      output_csd1->assign(UNSAFE_TODO(extra_data + total_length),
+                          UNSAFE_TODO(extra_data + extra_data_size));
       break;
     }
     case AudioCodec::kFLAC: {
@@ -185,13 +186,13 @@ bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
       const uint8_t* codec_delay_ns_ptr =
           reinterpret_cast<const uint8_t*>(&codec_delay_ns);
       output_csd1->assign(codec_delay_ns_ptr,
-                          codec_delay_ns_ptr + sizeof(int64_t));
+                          UNSAFE_TODO(codec_delay_ns_ptr + sizeof(int64_t)));
 
       // csd2 - Seek Preroll
       const uint8_t* seek_preroll_ns_ptr =
           reinterpret_cast<const uint8_t*>(&seek_preroll_ns);
       output_csd2->assign(seek_preroll_ns_ptr,
-                          seek_preroll_ns_ptr + sizeof(int64_t));
+                          UNSAFE_TODO(seek_preroll_ns_ptr + sizeof(int64_t)));
       break;
     }
     default:
@@ -203,68 +204,6 @@ bool GetCodecSpecificDataForAudio(const AudioDecoderConfig& config,
       return false;
   }
   return true;
-}
-
-// Given |status|, return the appropriate MediaCodecResult::Codes for it. This
-// is needed so that the actual MediaCodecResult object is created next to the
-// call that so that the call stack points at a usable line number, not
-// somewhere in this function.
-MediaCodecResult::Codes ConvertToMediaCodecEnum(MediaCodecStatus status) {
-  switch (status) {
-    case MEDIA_CODEC_OK:
-      return MediaCodecResult::Codes::kOk;
-    case MEDIA_CODEC_TRY_AGAIN_LATER:
-      return MediaCodecResult::Codes::kTryAgainLater;
-    case MEDIA_CODEC_OUTPUT_BUFFERS_CHANGED:
-      return MediaCodecResult::Codes::kOutputBuffersChanged;
-    case MEDIA_CODEC_OUTPUT_FORMAT_CHANGED:
-      return MediaCodecResult::Codes::kOutputFormatChanged;
-    case MEDIA_CODEC_NO_KEY:
-      return MediaCodecResult::Codes::kNoKey;
-    case MEDIA_CODEC_ERROR:
-    case MEDIA_CODEC_KEY_EXPIRED:
-    case MEDIA_CODEC_RESOURCE_BUSY:
-    case MEDIA_CODEC_INSUFFICIENT_OUTPUT_PROTECTION:
-    case MEDIA_CODEC_SESSION_NOT_OPENED:
-    case MEDIA_CODEC_UNSUPPORTED_OPERATION:
-    case MEDIA_CODEC_INSUFFICIENT_SECURITY:
-    case MEDIA_CODEC_FRAME_TOO_LARGE:
-    case MEDIA_CODEC_LOST_STATE:
-    case MEDIA_CODEC_GENERIC_OEM:
-    case MEDIA_CODEC_GENERIC_PLUGIN:
-    case MEDIA_CODEC_LICENSE_PARSE:
-    case MEDIA_CODEC_MEDIA_FRAMEWORK:
-    case MEDIA_CODEC_ZERO_SUBSAMPLES:
-    case MEDIA_CODEC_UNKNOWN_CIPHER_MODE:
-    case MEDIA_CODEC_PATTERN_ENCRYPTION_NOT_SUPPORTED:
-    case MEDIA_CODEC_INSUFFICIENT_RESOURCE:
-    case MEDIA_CODEC_RECLAIMED:
-    case MEDIA_CODEC_INPUT_SLOT_UNAVAILABLE:
-    case MEDIA_CODEC_ILLEGAL_STATE:
-    case MEDIA_CODEC_UNKNOWN_CRYPTO_EXCEPTION:
-    case MEDIA_CODEC_UNKNOWN_MEDIADRM_EXCEPTION:
-    case MEDIA_CODEC_UNKNOWN_CODEC_EXCEPTION:
-    case MEDIA_CODEC_LINEAR_BLOCK_EXCEPTION:
-    case MEDIA_CODEC_CERTIFICATE_MALFORMED:
-    case MEDIA_CODEC_CERTIFICATE_MISSING:
-    case MEDIA_CODEC_CRYPTO_LIBRARY:
-    case MEDIA_CODEC_INIT_DATA:
-    case MEDIA_CODEC_KEY_NOT_LOADED:
-    case MEDIA_CODEC_LICENSE_POLICY:
-    case MEDIA_CODEC_LICENSE_RELEASE:
-    case MEDIA_CODEC_LICENSE_REQUEST_REJECTED:
-    case MEDIA_CODEC_LICENSE_RESTORE:
-    case MEDIA_CODEC_LICENSE_STATE:
-    case MEDIA_CODEC_PROVISIONING_CERTIFICATE:
-    case MEDIA_CODEC_PROVISIONING_CONFIG:
-    case MEDIA_CODEC_PROVISIONING_PARSE:
-    case MEDIA_CODEC_PROVISIONING_REQUEST_REJECTED:
-    case MEDIA_CODEC_PROVISIONING_RETRY:
-    case MEDIA_CODEC_SECURE_STOP_RELEASE:
-    case MEDIA_CODEC_STORAGE_READ:
-    case MEDIA_CODEC_STORAGE_WRITE:
-      return MediaCodecResult::Codes::kError;
-  }
 }
 
 // Given |status|, return an appropriate error message to be included in
@@ -383,6 +322,87 @@ std::string ApplyDescriptiveMessage(MediaCodecStatus status) {
   }
 }
 
+bool IsFatalError(MediaCodecStatus status) {
+  switch (status) {
+    case MEDIA_CODEC_OK:
+    case MEDIA_CODEC_TRY_AGAIN_LATER:
+    case MEDIA_CODEC_OUTPUT_BUFFERS_CHANGED:
+    case MEDIA_CODEC_OUTPUT_FORMAT_CHANGED:
+    case MEDIA_CODEC_NO_KEY:
+      return false;
+    default:
+      return true;
+  }
+}
+
+// Given |status|, return the appropriate MediaCodecResult for it.
+MediaCodecResult FromMediaCodecStatus(
+    MediaCodecStatus status,
+    const base::Location& location = FROM_HERE) {
+  switch (status) {
+    case MEDIA_CODEC_OK:
+      return OkStatus();
+    case MEDIA_CODEC_TRY_AGAIN_LATER:
+      return {MediaCodecResult::Codes::kTryAgainLater,
+              ApplyDescriptiveMessage(status), location};
+    case MEDIA_CODEC_OUTPUT_BUFFERS_CHANGED:
+      return {MediaCodecResult::Codes::kOutputBuffersChanged,
+              ApplyDescriptiveMessage(status), location};
+    case MEDIA_CODEC_OUTPUT_FORMAT_CHANGED:
+      return {MediaCodecResult::Codes::kOutputFormatChanged,
+              ApplyDescriptiveMessage(status), location};
+    case MEDIA_CODEC_NO_KEY:
+      return {MediaCodecResult::Codes::kNoKey, ApplyDescriptiveMessage(status),
+              location};
+    case MEDIA_CODEC_ERROR:
+    case MEDIA_CODEC_KEY_EXPIRED:
+    case MEDIA_CODEC_RESOURCE_BUSY:
+    case MEDIA_CODEC_INSUFFICIENT_OUTPUT_PROTECTION:
+    case MEDIA_CODEC_SESSION_NOT_OPENED:
+    case MEDIA_CODEC_UNSUPPORTED_OPERATION:
+    case MEDIA_CODEC_INSUFFICIENT_SECURITY:
+    case MEDIA_CODEC_FRAME_TOO_LARGE:
+    case MEDIA_CODEC_LOST_STATE:
+    case MEDIA_CODEC_GENERIC_OEM:
+    case MEDIA_CODEC_GENERIC_PLUGIN:
+    case MEDIA_CODEC_LICENSE_PARSE:
+    case MEDIA_CODEC_MEDIA_FRAMEWORK:
+    case MEDIA_CODEC_ZERO_SUBSAMPLES:
+    case MEDIA_CODEC_UNKNOWN_CIPHER_MODE:
+    case MEDIA_CODEC_PATTERN_ENCRYPTION_NOT_SUPPORTED:
+    case MEDIA_CODEC_INSUFFICIENT_RESOURCE:
+    case MEDIA_CODEC_RECLAIMED:
+    case MEDIA_CODEC_INPUT_SLOT_UNAVAILABLE:
+    case MEDIA_CODEC_ILLEGAL_STATE:
+    case MEDIA_CODEC_UNKNOWN_CRYPTO_EXCEPTION:
+    case MEDIA_CODEC_UNKNOWN_MEDIADRM_EXCEPTION:
+    case MEDIA_CODEC_UNKNOWN_CODEC_EXCEPTION:
+    case MEDIA_CODEC_LINEAR_BLOCK_EXCEPTION:
+    case MEDIA_CODEC_CERTIFICATE_MALFORMED:
+    case MEDIA_CODEC_CERTIFICATE_MISSING:
+    case MEDIA_CODEC_CRYPTO_LIBRARY:
+    case MEDIA_CODEC_INIT_DATA:
+    case MEDIA_CODEC_KEY_NOT_LOADED:
+    case MEDIA_CODEC_LICENSE_POLICY:
+    case MEDIA_CODEC_LICENSE_RELEASE:
+    case MEDIA_CODEC_LICENSE_REQUEST_REJECTED:
+    case MEDIA_CODEC_LICENSE_RESTORE:
+    case MEDIA_CODEC_LICENSE_STATE:
+    case MEDIA_CODEC_PROVISIONING_CERTIFICATE:
+    case MEDIA_CODEC_PROVISIONING_CONFIG:
+    case MEDIA_CODEC_PROVISIONING_PARSE:
+    case MEDIA_CODEC_PROVISIONING_REQUEST_REJECTED:
+    case MEDIA_CODEC_PROVISIONING_RETRY:
+    case MEDIA_CODEC_SECURE_STOP_RELEASE:
+    case MEDIA_CODEC_STORAGE_READ:
+    case MEDIA_CODEC_STORAGE_WRITE:
+      return {MediaCodecResult::Codes::kError, ApplyDescriptiveMessage(status),
+              location};
+    default:
+      return {MediaCodecResult::Codes::kError, "Invalid JNI Error code"};
+  }
+}
+
 }  // namespace
 
 VideoCodecConfig::VideoCodecConfig() = default;
@@ -406,8 +426,7 @@ std::unique_ptr<MediaCodecBridge> MediaCodecBridgeImpl::CreateAudioDecoder(
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jstring> j_mime = ConvertUTF8ToJavaString(env, mime);
 
-  const int channel_count =
-      ChannelLayoutToChannelCount(config.channel_layout());
+  const int channel_count = config.channels();
 
   CodecSpecificData csd0, csd1, csd2;
   bool output_frame_has_adts_header;
@@ -424,7 +443,7 @@ std::unique_ptr<MediaCodecBridge> MediaCodecBridgeImpl::CreateAudioDecoder(
       Java_MediaCodecBridgeBuilder_createAudioDecoder(
           env, j_mime, media_crypto, config.samples_per_second(), channel_count,
           j_csd0, j_csd1, j_csd2, output_frame_has_adts_header,
-          !!on_buffers_available_cb));
+          !on_buffers_available_cb.is_null()));
 
   if (j_bridge.is_null()) {
     return nullptr;
@@ -450,8 +469,7 @@ std::unique_ptr<MediaCodecBridge> MediaCodecBridgeImpl::CreateVideoDecoder(
 
   std::unique_ptr<JniHdrMetadata> jni_hdr_metadata;
   if (!config.hdr_metadata.IsEmpty()) {
-    jni_hdr_metadata = std::make_unique<JniHdrMetadata>(
-        config.container_color_space, config.hdr_metadata);
+    jni_hdr_metadata = std::make_unique<JniHdrMetadata>(config.hdr_metadata);
   }
   auto j_hdr_metadata = jni_hdr_metadata ? jni_hdr_metadata->obj() : nullptr;
   auto j_decoder_name = ConvertUTF8ToJavaString(env, config.name);
@@ -461,8 +479,11 @@ std::unique_ptr<MediaCodecBridge> MediaCodecBridgeImpl::CreateVideoDecoder(
           env, j_mime, static_cast<int>(config.codec_type), config.media_crypto,
           config.initial_expected_coded_size.width(),
           config.initial_expected_coded_size.height(), config.surface, j_csd0,
-          j_csd1, j_hdr_metadata, /*allowAdaptivePlayback=*/true,
-          /*useAsyncApi=*/!!config.on_buffers_available_cb,
+          j_csd1, config.container_color_space.standard,
+          config.container_color_space.transfer,
+          config.container_color_space.range, j_hdr_metadata,
+          /*allowAdaptivePlayback=*/true,
+          /*useAsyncApi=*/!config.on_buffers_available_cb.is_null(),
           /*useBlockModel=*/config.use_block_model,
           /*useLowLatencyMode=*/config.use_low_latency_mode, j_decoder_name,
           config.profile));
@@ -521,10 +542,12 @@ MediaCodecResult MediaCodecBridgeImpl::Flush() {
   MediaCodecStatus status = static_cast<MediaCodecStatus>(
       Java_MediaCodecBridge_flush(env, j_bridge_));
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
-MediaCodecResult MediaCodecBridgeImpl::GetOutputSize(gfx::Size* size) {
+MediaCodecResult MediaCodecBridgeImpl::GetOutputSizeAndCropRect(
+    gfx::Size& size,
+    gfx::Rect& crop_rect) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> result =
       Java_MediaCodecBridge_getOutputFormat(env, j_bridge_);
@@ -532,8 +555,11 @@ MediaCodecResult MediaCodecBridgeImpl::GetOutputSize(gfx::Size* size) {
     return {MediaCodecResult::Codes::kError, "Unable to get output format."};
   }
 
-  size->SetSize(Java_MediaFormatWrapper_width(env, result),
-                Java_MediaFormatWrapper_height(env, result));
+  size.SetSize(Java_MediaFormatWrapper_width(env, result),
+               Java_MediaFormatWrapper_height(env, result));
+
+  crop_rect = jni_zero::FromJniType<gfx::Rect>(
+      env, Java_MediaFormatWrapper_cropRect(env, result));
   return OkStatus();
 }
 
@@ -564,7 +590,7 @@ MediaCodecResult MediaCodecBridgeImpl::GetOutputChannelCount(
 }
 
 MediaCodecResult MediaCodecBridgeImpl::GetOutputColorSpace(
-    gfx::ColorSpace* color_space) {
+    MediaFormatColorSpace* color_space) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> result =
       Java_MediaCodecBridge_getOutputFormat(env, j_bridge_);
@@ -574,80 +600,9 @@ MediaCodecResult MediaCodecBridgeImpl::GetOutputColorSpace(
 
   // TODO(liberato): Consider consolidating these to save JNI hops.  However,
   // since this is called only rarely, it's clearer this way.
-  int standard = Java_MediaFormatWrapper_colorStandard(env, result);
-  int range = Java_MediaFormatWrapper_colorRange(env, result);
-  int transfer = Java_MediaFormatWrapper_colorTransfer(env, result);
-  gfx::ColorSpace::PrimaryID primary_id;
-  gfx::ColorSpace::TransferID transfer_id;
-  gfx::ColorSpace::MatrixID matrix_id;
-  gfx::ColorSpace::RangeID range_id;
-
-  switch (standard) {
-    case 1:  // MediaFormat.COLOR_STANDARD_BT709:
-      primary_id = gfx::ColorSpace::PrimaryID::BT709;
-      matrix_id = gfx::ColorSpace::MatrixID::BT709;
-      break;
-    case 2:  // MediaFormat.COLOR_STANDARD_BT601_PAL:
-      primary_id = gfx::ColorSpace::PrimaryID::BT470BG;
-      matrix_id = gfx::ColorSpace::MatrixID::SMPTE170M;
-      break;
-    case 4:  // MediaFormat.COLOR_STANDARD_BT601_NTSC:
-      primary_id = gfx::ColorSpace::PrimaryID::SMPTE170M;
-      matrix_id = gfx::ColorSpace::MatrixID::SMPTE170M;
-      break;
-    case 6:  // MediaFormat.COLOR_STANDARD_BT2020
-      primary_id = gfx::ColorSpace::PrimaryID::BT2020;
-      matrix_id = gfx::ColorSpace::MatrixID::BT2020_NCL;
-      break;
-    default:
-      DVLOG(3) << __func__ << ": unsupported primary in p: " << standard
-               << " r: " << range << " t: " << transfer;
-      return {MediaCodecResult::Codes::kError,
-              "Unexpected MediaFormat.COLOR_STANDARD of " +
-                  base::NumberToString(standard) + " specified."};
-  }
-
-  switch (transfer) {
-    case 1:  // MediaFormat.COLOR_TRANSFER_LINEAR
-      // TODO(liberato): LINEAR or LINEAR_HDR?
-      // Based on https://android.googlesource.com/platform/frameworks/native/
-      //            +/master/libs/nativewindow/include/android/data_space.h#57
-      // we pick LINEAR_HDR.
-      transfer_id = gfx::ColorSpace::TransferID::LINEAR_HDR;
-      break;
-    case 3:  // MediaFormat.COLOR_TRANSFER_SDR_VIDEO
-      transfer_id = gfx::ColorSpace::TransferID::SMPTE170M;
-      break;
-    case 6:  // MediaFormat.COLOR_TRANSFER_ST2084
-      transfer_id = gfx::ColorSpace::TransferID::PQ;
-      break;
-    case 7:  // MediaFormat.COLOR_TRANSFER_HLG
-      transfer_id = gfx::ColorSpace::TransferID::HLG;
-      break;
-    default:
-      DVLOG(3) << __func__ << ": unsupported transfer in p: " << standard
-               << " r: " << range << " t: " << transfer;
-      return {MediaCodecResult::Codes::kError,
-              "Unexpected MediaFormat.COLOR_TRANSFER of " +
-                  base::NumberToString(transfer) + " specified."};
-  }
-
-  switch (range) {
-    case 1:  // MediaFormat.COLOR_RANGE_FULL
-      range_id = gfx::ColorSpace::RangeID::FULL;
-      break;
-    case 2:  // MediaFormat.COLOR_RANGE_LIMITED
-      range_id = gfx::ColorSpace::RangeID::LIMITED;
-      break;
-    default:
-      DVLOG(3) << __func__ << ": unsupported range in p: " << standard
-               << " r: " << range << " t: " << transfer;
-      return {MediaCodecResult::Codes::kError,
-              "Unexpected MediaFormat.COLOR_RANGE of " +
-                  base::NumberToString(range) + " specified."};
-  }
-
-  *color_space = gfx::ColorSpace(primary_id, transfer_id, matrix_id, range_id);
+  color_space->standard = Java_MediaFormatWrapper_colorStandard(env, result);
+  color_space->range = Java_MediaFormatWrapper_colorRange(env, result);
+  color_space->transfer = Java_MediaFormatWrapper_colorTransfer(env, result);
 
   return OkStatus();
 }
@@ -679,7 +634,7 @@ MediaCodecResult MediaCodecBridgeImpl::QueueFilledInputBuffer(
           env, j_bridge_, index, 0, data_size,
           presentation_time.InMicroseconds(), 0));
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 MediaCodecResult MediaCodecBridgeImpl::QueueSecureInputBuffer(
@@ -698,17 +653,22 @@ MediaCodecResult MediaCodecBridgeImpl::QueueSecureInputBuffer(
   const auto num_subsamples =
       std::max(static_cast<size_t>(1), decrypt_config.subsamples().size());
 
-  // Decompose SubsampleEntry objects into two jint arrays since there's no way
-  // to set the values directly into a jintArray :|
-  auto native_clear_array = base::HeapArray<jint>::Uninit(num_subsamples);
-  auto native_cypher_array = base::HeapArray<jint>::Uninit(num_subsamples);
+  if (num_subsamples > media::limits::kMaxSubsamplesPerBuffer) {
+    return {MediaCodecResult::Codes::kError, "Too many subsamples."};
+  }
+
+  // Decompose SubsampleEntry objects into two int32_t arrays since there's no
+  // way to set the values directly into a jintArray :|
+  auto native_clear_array = base::HeapArray<int32_t>::Uninit(num_subsamples);
+  auto native_cypher_array = base::HeapArray<int32_t>::Uninit(num_subsamples);
   if (decrypt_config.subsamples().empty()) {
     native_clear_array[0] = 0;
     native_cypher_array[0] = data.size();
   } else {
     for (size_t i = 0; i < decrypt_config.subsamples().size(); ++i) {
       const auto& subsamples = decrypt_config.subsamples()[i];
-      if (subsamples.cypher_bytes > std::numeric_limits<jint>::max()) {
+      if (subsamples.cypher_bytes > std::numeric_limits<int32_t>::max() ||
+          subsamples.clear_bytes > std::numeric_limits<int32_t>::max()) {
         return {MediaCodecResult::Codes::kError,
                 "Subsample size is too large."};
       }
@@ -752,7 +712,7 @@ MediaCodecResult MediaCodecBridgeImpl::QueueSecureInputBuffer(
 
     Java_ObtainBlockResult_recycle(env, j_result);
     ReportAnyErrorToUMA(status);
-    return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+    return FromMediaCodecStatus(status);
   }
 
   if (!FillInputBuffer(index, data)) {
@@ -776,7 +736,7 @@ MediaCodecResult MediaCodecBridgeImpl::QueueSecureInputBuffer(
               : 0,
           presentation_time.InMicroseconds()));
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 MediaCodecResult MediaCodecBridgeImpl::QueueEOS(int input_buffer_index) {
@@ -809,7 +769,7 @@ MediaCodecResult MediaCodecBridgeImpl::QueueEOS(int input_buffer_index) {
            << ", index: " << input_buffer_index;
 
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 MediaCodecResult MediaCodecBridgeImpl::DequeueInputBuffer(
@@ -823,7 +783,7 @@ MediaCodecResult MediaCodecBridgeImpl::DequeueInputBuffer(
       Java_DequeueInputResult_status(env, result));
   DVLOG(3) << __func__ << ": status: " << status << ", index: " << *index;
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 MediaCodecResult MediaCodecBridgeImpl::DequeueOutputBuffer(
@@ -860,7 +820,7 @@ MediaCodecResult MediaCodecBridgeImpl::DequeueOutputBuffer(
            << ", offset: " << *offset << ", size: " << *size
            << ", flags: " << flags;
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 void MediaCodecBridgeImpl::ReleaseOutputBuffer(int index, bool render) {
@@ -973,7 +933,7 @@ MediaCodecResult MediaCodecBridgeImpl::QueueInputBlock(
           presentation_time.InMicroseconds(), 0));
   Java_ObtainBlockResult_recycle(env, j_result);
   ReportAnyErrorToUMA(status);
-  return {ConvertToMediaCodecEnum(status), ApplyDescriptiveMessage(status)};
+  return FromMediaCodecStatus(status);
 }
 
 void MediaCodecBridgeImpl::ReportAnyErrorToUMA(MediaCodecStatus status) {
@@ -984,7 +944,7 @@ void MediaCodecBridgeImpl::ReportAnyErrorToUMA(MediaCodecStatus status) {
   }
 
   // Don't bother reporting `status` if it's not a error that stops playback.
-  if (ConvertToMediaCodecEnum(status) != MediaCodecResult::Codes::kError) {
+  if (!IsFatalError(status)) {
     return;
   }
 

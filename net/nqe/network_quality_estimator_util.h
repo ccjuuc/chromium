@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "net/base/net_export.h"
+#include "net/base/network_handle.h"
 #include "net/log/net_log_with_source.h"
 #include "url/scheme_host_port.h"
 
@@ -22,7 +23,7 @@ namespace nqe::internal {
 // A unified compact representation of an IPv6 or an IPv4 address.
 typedef uint64_t IPHash;
 
-// Returns true if the host contained of |request.url()| is a host in a
+// Returns true if the host contained of `request.url()` is a host in a
 // private Internet as defined by RFC 1918 or if the requests to it are not
 // expected to generate useful network quality information. This includes
 // localhost, hosts on private subnets, and hosts on subnets that are reserved
@@ -39,7 +40,8 @@ NET_EXPORT_PRIVATE bool IsRequestForPrivateHost(const URLRequest& request,
 NET_EXPORT_PRIVATE bool IsPrivateHostForTesting(
     HostResolver* host_resolver,
     url::SchemeHostPort scheme_host_port,
-    const NetworkAnonymizationKey& network_anonymization_key);
+    const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network);
 
 }  // namespace nqe::internal
 

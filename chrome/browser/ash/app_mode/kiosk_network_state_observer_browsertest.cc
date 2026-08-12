@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/test_future.h"
@@ -20,7 +21,6 @@
 #include "chrome/browser/ash/app_mode/test/kiosk_mixin.h"
 #include "chrome/browser/ash/app_mode/test/kiosk_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/shill/fake_shill_simulated_result.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
@@ -72,7 +72,7 @@ WiFiServiceInfo ServiceInfoWithSuffix(std::string suffix) {
 
 bool IsPropertyValueEqualsTo(std::string key,
                              base::Value expected_value,
-                             const base::Value::Dict* service_properties) {
+                             const base::DictValue* service_properties) {
   const base::Value* value = service_properties->Find(key);
   return !!value && (*value == expected_value);
 }
@@ -117,7 +117,7 @@ class KioskNetworkStateObserverTest
 
   void UpdateActiveWiFiCredentialsScopeChangePolicy(bool enable) {
     kiosk::test::CurrentProfile().GetPrefs()->SetBoolean(
-        prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled, enable);
+        ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled, enable);
   }
 
   void AddNetworkService(WiFiServiceInfo info) {
@@ -157,7 +157,7 @@ class KioskNetworkStateObserverTest
     if (!exposure_attempt_.Take()) {
       return false;
     }
-    const base::Value::Dict* service_properties =
+    const base::DictValue* service_properties =
         network_helper().service_test()->GetServiceProperties(
             wifi.service_path);
     if (!service_properties) {
@@ -297,7 +297,7 @@ IN_PROC_BROWSER_TEST_P(KioskNetworkStateObserverTest, ExposeOnlyActiveWiFi) {
   UpdateActiveWiFiCredentialsScopeChangePolicy(true);
 
   EXPECT_FALSE(IsWiFiSuccessfullyExposedToDeviceLevel(kOnlineService));
-  const base::Value::Dict* service_properties =
+  const base::DictValue* service_properties =
       network_helper().service_test()->GetServiceProperties(
           kIdleService.service_path);
   ASSERT_NE(service_properties, nullptr);

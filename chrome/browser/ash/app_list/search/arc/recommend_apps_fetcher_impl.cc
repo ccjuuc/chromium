@@ -13,10 +13,10 @@
 #include "base/base64url.h"
 #include "base/json/json_reader.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/app_list/search/arc/recommend_apps_fetcher_delegate.h"
 #include "net/base/load_flags.h"
@@ -241,9 +241,9 @@ std::optional<base::Value> RecommendAppsFetcherImpl::ParseResponse(
     return std::nullopt;
   }
 
-  base::Value::List output;
+  base::ListValue output;
   for (const auto& item : app_list) {
-    base::Value::Dict output_map;
+    base::DictValue output_map;
 
     const auto* dict = item.GetIfDict();
     if (!dict) {

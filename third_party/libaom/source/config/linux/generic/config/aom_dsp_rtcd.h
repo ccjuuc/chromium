@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Alliance for Open Media. All rights reserved.
+ * Copyright (c) 2017, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -50,6 +50,9 @@ void aom_blend_a64_mask_c(uint8_t *dst, uint32_t dst_stride, const uint8_t *src0
 
 void aom_blend_a64_vmask_c(uint8_t *dst, uint32_t dst_stride, const uint8_t *src0, uint32_t src0_stride, const uint8_t *src1, uint32_t src1_stride, const uint8_t *mask, int w, int h);
 #define aom_blend_a64_vmask aom_blend_a64_vmask_c
+
+int64_t aom_calc_variance_stat_c(const uint8_t *src, int stride, int bw, int bh);
+#define aom_calc_variance_stat aom_calc_variance_stat_c
 
 void aom_comp_avg_pred_c(uint8_t *comp_pred, const uint8_t *pred, int width, int height, const uint8_t *ref, int ref_stride);
 #define aom_comp_avg_pred aom_comp_avg_pred_c

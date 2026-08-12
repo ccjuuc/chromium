@@ -56,6 +56,12 @@ void CreateSubresourceLoaderFactoryForProviderContext(
     blink::mojom::ServiceWorkerFetchHandlerBypassOption
         fetch_handler_bypass_option,
     std::optional<blink::ServiceWorkerRouterRules> router_rules,
+    const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
+    mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
+        cross_origin_embedder_policy_reporter,
+    const network::DocumentIsolationPolicy& document_isolation_policy,
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        document_isolation_policy_reporter,
     std::optional<blink::EmbeddedWorkerStatus> initial_running_status,
     mojo::PendingReceiver<blink::mojom::ServiceWorkerRunningStatusCallback>
         running_status_receiver,
@@ -68,7 +74,10 @@ void CreateSubresourceLoaderFactoryForProviderContext(
   auto connector = base::MakeRefCounted<ControllerServiceWorkerConnector>(
       std::move(remote_container_host), std::move(remote_controller),
       std::move(remote_cache_storage), client_id, fetch_handler_bypass_option,
-      router_rules, initial_running_status, std::move(running_status_receiver));
+      router_rules, cross_origin_embedder_policy,
+      std::move(cross_origin_embedder_policy_reporter),
+      document_isolation_policy, std::move(document_isolation_policy_reporter),
+      initial_running_status, std::move(running_status_receiver));
   connector->AddBinding(std::move(connector_receiver));
   ServiceWorkerSubresourceLoaderFactory::Create(
       std::move(connector),
@@ -168,6 +177,20 @@ ServiceWorkerProviderContext::GetSubresourceLoaderFactoryInternal() {
     // extra contention on the main thread.
     auto task_runner = base::ThreadPool::CreateSequencedTaskRunner(
         {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
+    mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
+        cross_origin_embedder_policy_reporter;
+    if (cross_origin_embedder_policy_reporter_) {
+      cross_origin_embedder_policy_reporter_->Clone(
+          cross_origin_embedder_policy_reporter
+              .InitWithNewPipeAndPassReceiver());
+    }
+    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+        document_isolation_policy_reporter;
+    if (document_isolation_policy_reporter_) {
+      document_isolation_policy_reporter_->Clone(
+          document_isolation_policy_reporter.InitWithNewPipeAndPassReceiver());
+    }
+
     task_runner->PostTask(
         FROM_HERE,
         base::BindOnce(
@@ -175,6 +198,10 @@ ServiceWorkerProviderContext::GetSubresourceLoaderFactoryInternal() {
             std::move(remote_container_host), std::move(remote_controller_),
             std::move(remote_cache_storage_), client_id_,
             fetch_handler_bypass_option_, router_rules_,
+            cross_origin_embedder_policy_,
+            std::move(cross_origin_embedder_policy_reporter),
+            document_isolation_policy_,
+            std::move(document_isolation_policy_reporter),
             initial_running_status_, std::move(running_status_receiver_),
             fallback_loader_factory_->Clone(),
             controller_connector_.BindNewPipeAndPassReceiver(),
@@ -369,7 +396,7 @@ ServiceWorkerProviderContext::GetFetchHandlerBypassOption() const {
 }
 
 const blink::WebString ServiceWorkerProviderContext::client_id() const {
-  return blink::WebString::FromUTF8(client_id_);
+  return blink::WebString::FromUtf8(client_id_);
 }
 
 std::unique_ptr<blink::WebServiceWorkerProvider>
@@ -434,6 +461,29 @@ void ServiceWorkerProviderContext::SetController(
   remote_controller_ = std::move(controller_info->remote_controller);
   fetch_handler_bypass_option_ = controller_info->fetch_handler_bypass_option;
   sha256_script_checksum_ = controller_info->sha256_script_checksum;
+
+  cross_origin_embedder_policy_ = network::CrossOriginEmbedderPolicy();
+  cross_origin_embedder_policy_reporter_.reset();
+  if (controller_info->cross_origin_embedder_policy) {
+    cross_origin_embedder_policy_ =
+        controller_info->cross_origin_embedder_policy->value;
+    if (controller_info->cross_origin_embedder_policy->reporter) {
+      cross_origin_embedder_policy_reporter_.Bind(
+          std::move(controller_info->cross_origin_embedder_policy->reporter));
+    }
+  }
+
+  document_isolation_policy_ = network::DocumentIsolationPolicy();
+  document_isolation_policy_reporter_.reset();
+  if (controller_info->document_isolation_policy) {
+    document_isolation_policy_ =
+        controller_info->document_isolation_policy->value;
+    if (controller_info->document_isolation_policy->reporter) {
+      document_isolation_policy_reporter_.Bind(
+          std::move(controller_info->document_isolation_policy->reporter));
+    }
+  }
+
   if (controller_info->router_data) {
     router_rules_ = controller_info->router_data->router_rules;
     initial_running_status_ =
@@ -442,6 +492,14 @@ void ServiceWorkerProviderContext::SetController(
         std::move(controller_info->router_data->running_status_receiver);
     remote_cache_storage_ =
         std::move(controller_info->router_data->remote_cache_storage);
+  } else {
+    // The new controller has no static router. Reset any router state inherited
+    // from a previous controller so that a subsequent subresource loader
+    // factory cannot pair stale router rules.
+    router_rules_.reset();
+    initial_running_status_.reset();
+    running_status_receiver_.reset();
+    remote_cache_storage_.reset();
   }
 
   // Propagate the controller to workers related to this provider.
@@ -574,11 +632,6 @@ void ServiceWorkerProviderContext::Register(
   }
 
   if (container_host_) {
-    TRACE_EVENT_BEGIN("ServiceWorker",
-                      "WebServiceWorkerProviderImpl::RegisterServiceWorker",
-                      perfetto::Track::FromPointer(this), "Scope",
-                      options->scope.spec(), "Script URL", script_url.spec());
-
     container_host_->Register(std::move(script_url), std::move(options),
                               std::move(fetch_client_settings),
                               std::move(callback));
@@ -613,11 +666,6 @@ void ServiceWorkerProviderContext::GetRegistration(
   }
 
   if (container_host_) {
-    TRACE_EVENT_BEGIN("ServiceWorker",
-                      "WebServiceWorkerProviderImpl::GetRegistration",
-                      perfetto::Track::FromPointer(this), "Document URL",
-                      document_url.spec());
-
     container_host_->GetRegistration(document_url, std::move(callback));
   } else {
     const std::string error_prefix(
@@ -649,10 +697,6 @@ void ServiceWorkerProviderContext::GetRegistrations(
   }
 
   if (container_host_) {
-    TRACE_EVENT_BEGIN("ServiceWorker",
-                      "WebServiceWorkerProviderImpl::GetRegistrations",
-                      perfetto::Track::FromPointer(this));
-
     container_host_->GetRegistrations(std::move(callback));
   } else {
     const std::string error_prefix(
@@ -684,10 +728,6 @@ void ServiceWorkerProviderContext::GetRegistrationForReady(
   }
 
   if (container_host_) {
-    TRACE_EVENT_BEGIN("ServiceWorker",
-                      "WebServiceWorkerProviderImpl::GetRegistrationForReady",
-                      perfetto::Track::FromPointer(this));
-
     container_host_->GetRegistrationForReady(std::move(callback));
   }
 }

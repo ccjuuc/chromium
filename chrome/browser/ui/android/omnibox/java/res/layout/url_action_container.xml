@@ -7,15 +7,19 @@ found in the LICENSE file.
 <merge
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-    <!-- Fusebox/Omnibox top-stacked elements on Inactive Omnibox on NTP -->
-    <org.chromium.ui.widget.ChromeImageButton
-        style="@style/LocationBarActionButton.AdaptiveDensity"
-        android:id="@+id/composeplate_button"
+
+    <!-- LINT.IfChange(toolbar_tablet_components) -->
+
+    <!-- Omnibox chip container. -->
+    <LinearLayout
+        android:id="@+id/omnibox_chip_container"
+        android:layout_width="wrap_content"
+        android:layout_height="?attr/locationBarActionButtonHeight"
+        android:orientation="horizontal"
         android:visibility="gone"
-        android:src="@drawable/search_spark_black_24dp"
-        android:contentDescription="@string/accessibility_toolbar_btn_composeplate"
-        app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
-        app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/install_button"/>
 
     <!-- Fusebox/Omnibox top-stacked elements on Inactive Omnibox on Tablets -->
     <org.chromium.ui.widget.ChromeImageButton
@@ -53,9 +57,10 @@ found in the LICENSE file.
         style="@style/LocationBarActionButton.AdaptiveDensity"
         android:id="@+id/mic_button"
         android:visibility="invisible"
+        android:foreground="@drawable/circle_button_focus_ring"
         android:src="@drawable/ic_mic_white_24dp"
         android:contentDescription="@string/accessibility_toolbar_btn_mic"
-        android:tooltipText="@string/accessibility_toolbar_btn_mic"
+        android:tooltipText="@string/tooltip_mic_search"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toStartOf="@id/lens_camera_button"/>
 
@@ -67,7 +72,7 @@ found in the LICENSE file.
         android:contentDescription="@string/accessibility_btn_lens_camera"
         android:tooltipText="@string/accessibility_btn_lens_camera"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
+        app:layout_constraintEnd_toStartOf="@id/navigate_button"/>
 
     <!--
     Fusebox/Omnibox top-stacked elements on Active Omnibox with Non-empty content
@@ -75,12 +80,15 @@ found in the LICENSE file.
     <org.chromium.ui.widget.ChromeImageButton
         style="@style/LocationBarActionButton.AdaptiveDensity"
         android:id="@+id/delete_button"
+        android:foreground="@drawable/circle_button_focus_ring"
         android:visibility="gone"
-        android:src="@drawable/btn_delete_24dp"
+        android:src="@drawable/material_ic_close_24dp"
         android:contentDescription="@string/accessibility_toolbar_btn_delete_url"
         android:tooltipText="@string/accessibility_toolbar_btn_delete_url"
         app:layout_constraintTop_toBottomOf="@id/location_bar_attachments"
         app:layout_constraintEnd_toStartOf="@id/margin_spacer"/>
+
+    <!-- LINT.ThenChange(/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarUtils.java:toolbar_tablet_components) -->
 
     <Space
         android:id="@+id/margin_spacer"
@@ -94,7 +102,7 @@ found in the LICENSE file.
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:barrierDirection="start"
-        app:constraint_referenced_ids="composeplate_button,install_button,delete_button,mic_button,margin_spacer"/>
+        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,mic_button,margin_spacer"/>
 
     <!-- URL Bar barrier for multimodal location bar -->
     <androidx.constraintlayout.widget.Barrier
@@ -102,6 +110,6 @@ found in the LICENSE file.
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:barrierDirection="start"
-        app:constraint_referenced_ids="composeplate_button,install_button,delete_button,margin_spacer"/>
+        app:constraint_referenced_ids="omnibox_chip_container,fusebox_activation_chip,composeplate_button,install_button,delete_button,margin_spacer"/>
 
 </merge>

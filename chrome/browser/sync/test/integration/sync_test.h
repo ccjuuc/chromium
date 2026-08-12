@@ -27,10 +27,14 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/user_selectable_type.h"
+#include "components/sync/test/embedded_fake_server_adapter.h"
 #include "components/sync/test/fake_server.h"
+#include "content/public/test/network_connection_change_simulator.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_status_code.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/test/test_url_loader_factory.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
@@ -72,9 +76,9 @@ class CommandLine;
 class ScopedTempDir;
 }  // namespace base
 
-namespace fake_server {
-class FakeServer;
-}  // namespace fake_server
+namespace content {
+class URLLoaderInterceptor;
+}  // namespace content
 
 namespace gaia {
 class FakeOAuth2TokenResponse;
@@ -149,6 +153,7 @@ class SyncTest : public PlatformBrowserTest,
   void TearDown() override;
   void PostRunTestOnMainThread() override;
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) override;
+  void SetUpLocalStatePrefService(PrefService* local_state) override;
 
   // Sets up command line flags required for sync tests.
   void SetUpCommandLine(base::CommandLine* cl) override;
@@ -208,6 +213,10 @@ class SyncTest : public PlatformBrowserTest,
   // in conjunction with test parameterization.
   virtual SetupSyncMode GetSetupSyncMode() const;
 
+  // Returns the URL to be opened in the initial tab of each profile's browser
+  // window.
+  virtual GURL GetInitialURL() const;
+
   // Returns a pointer to the sync profile that is used to verify changes to
   // individual sync profiles. Callee owns the object and manages its lifetime.
   Profile* verifier();
@@ -230,8 +239,18 @@ class SyncTest : public PlatformBrowserTest,
   [[nodiscard]] bool SetupSync(
       SyncTestAccount account,
       SyncWaitCondition wait_condition = WAIT_FOR_COMMITS_TO_COMPLETE);
-  // Should only be used if SetupSync() doesn't work, i.e. `setup_mode` needs to
-  // be changed during the test.
+
+  // Signs in to a primary and enables sync transport, without enabling
+  // sync-the-feature.
+  [[nodiscard]] bool SignIn(
+      SyncTestAccount account = SyncTestAccount::kDefaultAccount);
+
+  // Should only be used if SetupSync() and SignIn() aren't sufficient, i.e.
+  // `setup_mode` is only known during runtime (usually parameterized tests).
+  //
+  // Note that, for kSyncTransportOnly, history sync
+  // is enabled, to make the behavior more similar to the SyncTheFeature case,
+  // for convenience of parameterized tests.
   [[nodiscard]] bool SetupSyncWithMode(
       SetupSyncMode setup_mode,
       SyncWaitCondition wait_condition = WAIT_FOR_COMMITS_TO_COMPLETE,
@@ -273,6 +292,12 @@ class SyncTest : public PlatformBrowserTest,
   // not being used.
   fake_server::FakeServer* GetFakeServer() const;
 
+  // Mimics the device being offline.
+  void DisableNetwork();
+
+  // Mimics the device being online.
+  void EnableNetwork();
+
   // Triggers a sync for the given |data_types| for the Profile at |index|.
   void TriggerSyncForDataTypes(int index, syncer::DataTypeSet data_types);
 
@@ -282,6 +307,7 @@ class SyncTest : public PlatformBrowserTest,
 
  protected:
   // BrowserTestBase implementation:
+  void SetUpOnMainThread() override;
   void TearDownOnMainThread() override;
 
   // ProfileObserver implementation.
@@ -291,9 +317,6 @@ class SyncTest : public PlatformBrowserTest,
   void OnProfileAdded(Profile* profile) override;
   void OnProfileManagerDestroying() override;
   void OnProfileCreationStarted(Profile* profile) override;
-
-  // Invoked immediately before creating profile |index| under |profile_path|.
-  virtual void BeforeSetupClient(int index, const base::FilePath& profile_path);
 
   // The name for a directory under chrome::DIR_USER_DATA.
   virtual base::FilePath GetProfileBaseName(int index);
@@ -307,8 +330,13 @@ class SyncTest : public PlatformBrowserTest,
   // Note that this replaces the list of excluded types (if set earlier).
   void ExcludeDataTypesFromCheckForDataTypeFailures(syncer::DataTypeSet types);
 
-  // The FakeServer used in tests with server type IN_PROCESS_FAKE_SERVER.
+  // The FakeServer used in tests with server type IN_PROCESS_FAKE_SERVER, along
+  // with the adapter to integrate it with EmbeddedTestServer.
   std::unique_ptr<fake_server::FakeServer> fake_server_;
+  std::unique_ptr<fake_server::EmbeddedFakeServerAdapter>
+      embedded_fake_server_adapter_;
+
+  net::test_server::EmbeddedTestServerHandle embedded_test_server_handle_;
 
   // The factory used to mock out GAIA signin.
   network::TestURLLoaderFactory test_url_loader_factory_;
@@ -351,9 +379,11 @@ class SyncTest : public PlatformBrowserTest,
   void InitializeProfile(int index, Profile* profile);
 
   // Internal routine for setting up sync.
-  [[nodiscard]] bool SetupSyncInternal(SetupSyncMode setup_mode,
-                                       SyncWaitCondition wait_condition,
-                                       SyncTestAccount account);
+  [[nodiscard]] bool SetupSyncInternal(
+      SetupSyncMode setup_mode,
+      SyncWaitCondition wait_condition,
+      SyncTestAccount account,
+      bool enable_history_sync_in_transport_mode);
 
   // Used to determine whether ARC_PACKAGE data type needs to be enabled. This
   // is applicable on ChromeOS-Ash platform only.
@@ -382,10 +412,10 @@ class SyncTest : public PlatformBrowserTest,
   const int num_clients_;
 
   // Used to catch any timeout within RunLoop and cause test error.
-  base::test::ScopedRunLoopTimeout sync_run_loop_timeout;
+  base::test::ScopedRunLoopTimeout sync_run_loop_timeout_;
 
   // The default profile, created before our actual testing |profiles_|. This is
-  // needed in a workaround for https://crbug.com/801569, see comments in the
+  // needed in a workaround for https://crbug.com/41364511, see comments in the
   // .cc file.
   raw_ptr<Profile, AcrossTasksDanglingUntriaged> previous_profile_ = nullptr;
 
@@ -450,6 +480,9 @@ class SyncTest : public PlatformBrowserTest,
 
   std::unique_ptr<fake_server::FakeServerSyncInvalidationSender>
       fake_server_sync_invalidation_sender_;
+
+  std::unique_ptr<content::URLLoaderInterceptor> url_loader_interceptor_;
+  content::NetworkConnectionChangeSimulator connection_change_simulator_;
 
   base::ScopedObservation<ProfileManager, ProfileManagerObserver>
       profile_manager_observation_{this};

@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.safe_browsing.settings;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -22,14 +23,15 @@ import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
 import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.TextMessagePreference;
 import org.chromium.components.policy.test.annotations.Policies;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 /** Tests for {@link StandardProtectionSettingsFragment}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -46,10 +48,15 @@ public class StandardProtectionSettingsFragmentTest {
     public SettingsActivityTestRule<StandardProtectionSettingsFragment> mTestRule =
             new SettingsActivityTestRule<>(StandardProtectionSettingsFragment.class);
 
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
+    @Rule public final SigninTestRule mSigninTestRule = new SigninTestRule();
 
     private ChromeSwitchPreference mExtendedReportingPreference;
     private TextMessagePreference mStandardProtectionSubtitle;
+
+    @Before
+    public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
+    }
 
     // TODO(crbug.com/336547987): Add a new test for checking that mExtendedReportingPreference is
     // not shown when the flag is enabled.
@@ -94,28 +101,27 @@ public class StandardProtectionSettingsFragmentTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    boolean is_extended_reporting_enabled =
-                            isSafeBrowsingExtendedReportingEnabled();
-                    String checked_state_error_message =
+                    boolean isExtendedReportingEnabled = isSafeBrowsingExtendedReportingEnabled();
+                    String checkedStateErrorMessage =
                             ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + CHECKED_STATE;
-                    String enabled_state_error_message =
+                    String enabledStateErrorMessage =
                             ASSERT_MESSAGE_PREFIX + EXTENDED_REPORTING + ENABLED_STATE;
                     Assert.assertEquals(
-                            checked_state_error_message,
-                            is_extended_reporting_enabled,
+                            checkedStateErrorMessage,
+                            isExtendedReportingEnabled,
                             mExtendedReportingPreference.isChecked());
                     Assert.assertTrue(
-                            enabled_state_error_message, mExtendedReportingPreference.isEnabled());
+                            enabledStateErrorMessage, mExtendedReportingPreference.isEnabled());
 
                     mExtendedReportingPreference.performClick();
 
                     Assert.assertEquals(
-                            checked_state_error_message,
-                            !is_extended_reporting_enabled,
+                            checkedStateErrorMessage,
+                            !isExtendedReportingEnabled,
                             mExtendedReportingPreference.isChecked());
                     Assert.assertEquals(
-                            enabled_state_error_message + FROM_NATIVE,
-                            !is_extended_reporting_enabled,
+                            enabledStateErrorMessage + FROM_NATIVE,
+                            !isExtendedReportingEnabled,
                             isSafeBrowsingExtendedReportingEnabled());
                 });
     }
@@ -125,7 +131,7 @@ public class StandardProtectionSettingsFragmentTest {
     @Feature({"SafeBrowsing"})
     @DisableFeatures({ChromeFeatureList.SAFE_BROWSING_EXTENDED_REPORTING_REMOVE_PREF_DEPENDENCY})
     public void testPreferenceDisabledInEnhancedProtectionMode() {
-        mBrowserTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         setSafeBrowsingState(SafeBrowsingState.ENHANCED_PROTECTION);
         startSettings();
 
@@ -145,7 +151,7 @@ public class StandardProtectionSettingsFragmentTest {
     @Feature({"SafeBrowsing"})
     @DisableFeatures({ChromeFeatureList.SAFE_BROWSING_EXTENDED_REPORTING_REMOVE_PREF_DEPENDENCY})
     public void testPreferenceDisabledInNoProtectionMode() {
-        mBrowserTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         setSafeBrowsingState(SafeBrowsingState.NO_SAFE_BROWSING);
         startSettings();
 
@@ -166,7 +172,7 @@ public class StandardProtectionSettingsFragmentTest {
     @DisableFeatures({ChromeFeatureList.SAFE_BROWSING_EXTENDED_REPORTING_REMOVE_PREF_DEPENDENCY})
     @Policies.Add({@Policies.Item(key = "SafeBrowsingExtendedReportingEnabled", string = "true")})
     public void testExtendedReportingPolicyManaged() {
-        mBrowserTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
+        mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
@@ -207,7 +213,7 @@ public class StandardProtectionSettingsFragmentTest {
                     String standardProtectionSubtitle =
                             fragment.getContext()
                                     .getString(R.string.safe_browsing_standard_protection_subtitle);
-                    String extended_reporting_title =
+                    String extendedReportingTitle =
                             fragment.getContext()
                                     .getString(
                                             R.string
@@ -218,7 +224,7 @@ public class StandardProtectionSettingsFragmentTest {
                     // Assert the Extended Reporting preference is present.
                     Assert.assertNotNull(mExtendedReportingPreference);
                     Assert.assertEquals(
-                            extended_reporting_title, mExtendedReportingPreference.getTitle());
+                            extendedReportingTitle, mExtendedReportingPreference.getTitle());
                 });
     }
 

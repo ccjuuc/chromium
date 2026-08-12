@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -373,10 +374,8 @@ class BtmServiceStateRemovalTest : public testing::Test {
   // |third_party_url| embedded by |first_party_url|.
   void Add3PCException(const GURL& first_party_url,
                        const GURL& third_party_url) {
-    browser_client_.GrantCookieAccessDueToHeuristic(
-        profile_.get(), net::SchemefulSite(first_party_url),
-        net::SchemefulSite(third_party_url), base::Days(1),
-        /*ignore_schemes=*/false);
+    browser_client_.SetThirdPartyCookieAccess(third_party_url, first_party_url,
+                                              CONTENT_SETTING_ALLOW);
 
     auto* client = GetContentClientForTesting()->browser();
     EXPECT_TRUE(client->IsFullCookieAccessAllowed(
@@ -804,7 +803,8 @@ TEST_F(
 
   // Exceptions to block third-party cookies.
   browser_client_.BlockThirdPartyCookiesOnSite(blocked_1p_url);
-  browser_client_.BlockThirdPartyCookies(redirect_url_1, scoped_blocked_1p_url);
+  browser_client_.SetThirdPartyCookieAccess(
+      redirect_url_1, scoped_blocked_1p_url, CONTENT_SETTING_BLOCK);
 
   int stateful_bounce_count = 0;
   BtmServiceImpl::StatefulBounceCallback increment_bounce =
@@ -1079,72 +1079,6 @@ TEST_F(BtmServiceHistogramTest, DISABLED_Deletion_Enforced) {
   histograms().ExpectUniqueSample(kUmaHistogramDeletionPrefix + kBlock3PC,
                                   BtmDeletionAction::kEnforced, 1);
   EXPECT_TRUE(GetBtmState(GetService(), url).has_value());
-}
-
-TEST_F(BtmServiceHistogramTest, ServerBounceDelay) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      features::kBtm, {{"triggering_action", "bounce"}});
-
-  // Verify that the histograms start empty.
-  histograms().ExpectTotalCount(kServerRedirectsDelayHist, 0);
-  histograms().ExpectTotalCount(kServerRedirectsChainDelayHist, 0);
-  EXPECT_TRUE(histograms()
-                  .GetTotalCountsForPrefix(kServerRedirectsStatusCodePrefix)
-                  .empty());
-
-  TestBrowserContext profile;
-  BtmServiceImpl* service = BtmServiceImpl::Get(&profile);
-
-  GURL initial_url = GURL("http://a.test/");
-  ukm::SourceId initial_source_id = ukm::AssignNewSourceId();
-  GURL first_redirect_url = GURL("http://b.test/");
-  ukm::SourceId first_redirect_source_id = ukm::AssignNewSourceId();
-  GURL second_redirect_url = GURL("http://c.test/");
-  ukm::SourceId second_redirect_source_id = ukm::AssignNewSourceId();
-
-  BtmRedirectChainObserver observer(service, GURL());
-  std::vector<BtmRedirectPtr> redirects;
-  redirects.push_back(BtmRedirect::CreateForServer(
-      first_redirect_url, first_redirect_source_id,
-      /*access_type=*/BtmDataAccessType::kNone,
-      /*time=*/base::Time::Now(),
-      /*was_response_cached=*/true,
-      /*response_code=*/net::HTTP_MOVED_PERMANENTLY,
-      /*server_bounce_delay=*/base::Milliseconds(100)));
-  redirects.push_back(BtmRedirect::CreateForServer(
-      second_redirect_url, second_redirect_source_id,
-      /*access_type=*/BtmDataAccessType::kNone,
-      /*time=*/base::Time::Now(),
-      /*was_response_cached=*/false,
-      /*response_code=*/net::HTTP_FOUND,
-      /*server_bounce_delay=*/base::Milliseconds(100)));
-  BtmRedirectChainPtr chain = std::make_unique<BtmRedirectChain>(
-      initial_url, initial_source_id, GURL(), ukm::kInvalidSourceId,
-      redirects.size(),
-      /*is_partial_chain=*/false, Are3PcsGenerallyEnabled());
-  btm::Populate3PcExceptions(&profile, /*web_contents=*/nullptr,
-                             chain->initial_url, chain->final_url, redirects);
-  service->HandleRedirectChain(std::move(redirects), std::move(chain),
-                               base::DoNothing());
-  observer.Wait();
-
-  histograms().ExpectTotalCount(kServerRedirectsDelayHist, 2);
-  histograms().ExpectTotalCount(kServerRedirectsChainDelayHist, 1);
-  base::HistogramTester::CountsMap expected_counts = {
-      {kServerRedirectsStatusCodePrefix + kNoCache, 1},
-      {kServerRedirectsStatusCodePrefix + kCached, 1},
-  };
-  EXPECT_THAT(
-      histograms().GetTotalCountsForPrefix(kServerRedirectsStatusCodePrefix),
-      testing::ContainerEq(expected_counts));
-
-  histograms().ExpectUniqueSample(kServerRedirectsStatusCodePrefix + kNoCache,
-                                  net::HTTP_FOUND, 1);
-  histograms().ExpectUniqueSample(kServerRedirectsStatusCodePrefix + kCached,
-                                  net::HTTP_MOVED_PERMANENTLY, 1);
-  histograms().ExpectUniqueSample(kServerRedirectsDelayHist, 100, 2);
-  histograms().ExpectUniqueSample(kServerRedirectsChainDelayHist, 200, 1);
 }
 
 MATCHER_P(HasSourceId, id, "") {

@@ -12,10 +12,12 @@ import android.widget.LinearLayout;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
@@ -29,6 +31,7 @@ import java.util.concurrent.TimeoutException;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class ModelListAdapterTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final Integer VIEW_TYPE_1 = 0;
     private static final Integer VIEW_TYPE_2 = 1;
     private static final Integer VIEW_TYPE_3_INFLATED = 2;
@@ -39,14 +42,15 @@ public class ModelListAdapterTest {
             new PropertyModel.WritableFloatPropertyKey();
     private static final PropertyModel.WritableIntPropertyKey INT_PROPERTY =
             new PropertyModel.WritableIntPropertyKey();
-    private static final PropertyModel.WritableObjectPropertyKey OBJECT_PROPERTY =
-            new PropertyModel.WritableObjectPropertyKey();
+    private static final PropertyModel.WritableObjectPropertyKey<TestObject> OBJECT_PROPERTY =
+            new PropertyModel.WritableObjectPropertyKey<>();
     private static final PropertyModel.ReadableBooleanPropertyKey READONLY_BOOLEAN_PROPERTY =
             new PropertyModel.ReadableBooleanPropertyKey();
 
-    private class TestViewBinder implements PropertyModelChangeProcessor.ViewBinder {
+    private class TestViewBinder
+            implements PropertyModelChangeProcessor.ViewBinder<PropertyModel, View, PropertyKey> {
         @Override
-        public void bind(Object model, Object view, Object propertyKey) {
+        public void bind(PropertyModel model, View view, PropertyKey propertyKey) {
             if (propertyKey.equals(BOOLEAN_PROPERTY)) {
                 mBindBooleanCallbackHelper.notifyCalled();
             } else if (propertyKey.equals(FLOAT_PROPERTY)) {
@@ -92,7 +96,6 @@ public class ModelListAdapterTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         MVCListAdapter.ModelList testData = new MVCListAdapter.ModelList();
         mModel = new PropertyModel(BOOLEAN_PROPERTY, FLOAT_PROPERTY, INT_PROPERTY, OBJECT_PROPERTY);
@@ -106,7 +109,7 @@ public class ModelListAdapterTest {
         mModelListAdapter.registerType(VIEW_TYPE_2, new TestViewBuilder(), new TestViewBinder());
         mModelListAdapter.registerType(
                 VIEW_TYPE_3_INFLATED,
-                new LayoutViewBuilder(R.layout.layout_view_builder_test),
+                new LayoutViewBuilder<>(R.layout.layout_view_builder_test),
                 new TestViewBinder());
     }
 

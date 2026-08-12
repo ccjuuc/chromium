@@ -79,8 +79,11 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
     kInvalidPath,
     kInvalidHostPrefix,
     kInvalidSecurePrefix,
+    kInvalidHttpPrefix,
+    kInvalidHostHttpPrefix,
     kEmptyNameWithHiddenPrefix,
     kPartitionedInsecure,
+    kEmptyNameWithAmbiguousValue,
   };
 
   // Carries metadata related to the canonicalization results for a given
@@ -250,19 +253,19 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
       bool httponly,
       CookieSameSite same_site,
       CookiePriority priority,
+      CookieSourceType source_type,
       std::optional<CookiePartitionKey> partition_key = std::nullopt,
-      CookieSourceScheme scheme_secure = CookieSourceScheme::kUnset,
-      int source_port = url::PORT_UNSPECIFIED,
-      CookieSourceType source_type = CookieSourceType::kUnknown);
+      CookieSourceScheme source_scheme = CookieSourceScheme::kUnset,
+      int source_port = url::PORT_UNSPECIFIED);
 
   // Like Create but with some more friendly defaults for use in tests.
   static std::unique_ptr<CanonicalCookie> CreateForTesting(
       const GURL& url,
-      const std::string& cookie_line,
+      std::string_view cookie_line,
       base::Time creation_time,
+      CookieSourceType source_type,
       std::optional<base::Time> server_time = std::nullopt,
       std::optional<CookiePartitionKey> cookie_partition_key = std::nullopt,
-      CookieSourceType source_type = CookieSourceType::kUnknown,
       CookieInclusionStatus* status = nullptr);
 
   friend auto operator<=>(const CanonicalCookie& left,
@@ -436,7 +439,6 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
  private:
   FRIEND_TEST_ALL_PREFIXES(CanonicalCookieTest,
                            TestGetAndAdjustPortForTrustworthyUrls);
-  FRIEND_TEST_ALL_PREFIXES(CanonicalCookieTest, TestHasHiddenPrefixName);
 
   // Returns the appropriate port value for the given `source_url` depending on
   // if the url is considered trustworthy or not.
@@ -450,9 +452,6 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
   // indicate that we're treating `source_url` as if it was secure.
   static int GetAndAdjustPortForTrustworthyUrls(const GURL& source_url,
                                                 bool url_is_trustworthy);
-
-  // Checks for values that could be misinterpreted as a cookie name prefix.
-  static bool HasHiddenPrefixName(std::string_view cookie_value);
 
   // Helpers for use in canonicalization checks.
   static CanonicalizationResult Pass();
@@ -470,7 +469,7 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
       const CookieOptions& options_used) const override;
 
   // Keep defaults here in sync with
-  // services/network/public/interfaces/cookie_manager.mojom.
+  // services/network/public/mojom/cookie_manager.mojom.
   // These are the fields specific to CanonicalCookie. See CookieBase for other
   // data fields.
   // If adding more data fields, please also adjust GetAllDataMembersAsTuple().
@@ -479,7 +478,7 @@ class NET_EXPORT CanonicalCookie : public CookieBase {
   base::Time last_access_date_;
   base::Time last_update_date_;
   CookiePriority priority_{COOKIE_PRIORITY_MEDIUM};
-  CookieSourceType source_type_{CookieSourceType::kUnknown};
+  CookieSourceType source_type_{CookieSourceType::kOther};
 };
 
 // Used to pass excluded cookie information when it's possible that the

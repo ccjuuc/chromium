@@ -11,6 +11,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/task_environment.h"
+#include "media/base/win/d3d11_mocks.h"
 #include "media/gpu/windows/d3d11_picture_buffer.h"
 #include "media/gpu/windows/d3d11_texture_wrapper.h"
 #include "media/gpu/windows/d3d11_video_processor_proxy.h"
@@ -28,7 +29,8 @@ namespace media {
 
 class MockVideoProcessorProxy : public VideoProcessorProxy {
  public:
-  MockVideoProcessorProxy() : VideoProcessorProxy(nullptr, nullptr) {}
+  MockVideoProcessorProxy()
+      : VideoProcessorProxy(MakeComPtr<D3D11VideoDeviceMock>(), nullptr) {}
 
   D3D11Status Init(uint32_t width, uint32_t height) override {
     return MockInit(width, height);
@@ -81,7 +83,6 @@ class MockTexture2DWrapper : public Texture2DWrapper {
   MockTexture2DWrapper() {}
 
   D3D11Status ProcessTexture(
-      const gfx::ColorSpace& input_color_space,
       scoped_refptr<gpu::ClientSharedImage>& shared_image_dest) override {
     return MockProcessTexture();
   }
@@ -101,11 +102,14 @@ class MockTexture2DWrapper : public Texture2DWrapper {
     return MockBeginSharedImageAccess();
   }
 
+  const gfx::Size& GetSize() const override { return size_; }
+
   MOCK_METHOD0(MockInit, D3D11Status());
   MOCK_METHOD0(MockProcessTexture, D3D11Status());
   MOCK_METHOD0(MockBeginSharedImageAccess, D3D11Status());
 
   scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner_;
+  gfx::Size size_;
 };
 
 CommandBufferHelperPtr UselessHelper() {
@@ -207,14 +211,14 @@ TEST_P(D3D11CopyingTexture2DWrapperTest,
   MockVideoProcessorProxy* processor_raw = processor.get();
   auto texture_wrapper = ExpectTextureWrapper();
   MockTexture2DWrapper* texture_wrapper_raw = texture_wrapper.get();
+  gfx::ColorSpace input_color_space = gfx::ColorSpace::CreateSRGBLinear();
   gfx::ColorSpace output_color_space = gfx::ColorSpace::CreateHDR10();
   auto wrapper = std::make_unique<CopyingTexture2DWrapper>(
-      size, output_color_space, std::move(texture_wrapper), processor, nullptr);
+      size, input_color_space, output_color_space, std::move(texture_wrapper),
+      processor, nullptr);
 
   // TODO: check |gpu_task_runner_|.
-
   scoped_refptr<gpu::ClientSharedImage> shared_image;
-  gfx::ColorSpace input_color_space = gfx::ColorSpace::CreateSRGBLinear();
   EXPECT_EQ(
       wrapper
           ->Init(gpu_task_runner_, CreateMockHelperCB(),
@@ -227,10 +231,10 @@ TEST_P(D3D11CopyingTexture2DWrapperTest,
   if (GetProcessorProxyInit()) {
     EXPECT_EQ(texture_wrapper_raw->gpu_task_runner_, gpu_task_runner_);
   }
-  EXPECT_EQ(wrapper->ProcessTexture(input_color_space, shared_image).is_ok(),
+  EXPECT_EQ(wrapper->ProcessTexture(shared_image).is_ok(),
             ProcessTextureSucceeds());
 
-  if (ProcessTextureSucceeds()) {
+  if (InitSucceeds()) {
     // Also expect that the input and copy spaces were provided to the video
     // processor as the stream and output color spaces, respectively.
     EXPECT_TRUE(processor_raw->last_stream_color_space_);

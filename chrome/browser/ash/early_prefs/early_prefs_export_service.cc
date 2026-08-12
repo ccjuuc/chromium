@@ -6,15 +6,10 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/policy/profile_policy_connector.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
@@ -47,7 +42,11 @@ EarlyPrefsExportService::EarlyPrefsExportService(const base::FilePath& root_dir,
   StoreAndTrackPref(ash::prefs::kLocalAuthFactorsComplexity);
 
   // Used for determining which local auth factors have been enabled.
-  StoreAndTrackPref(prefs::kLocalAuthFactors);
+  StoreAndTrackPref(prefs::kAllowedLocalAuthFactors);
+
+  // Used for handling the interactions between local auth factors and quick
+  // unlock.
+  StoreAndTrackPref(prefs::kQuickUnlockModeAllowlist);
 }
 
 EarlyPrefsExportService::~EarlyPrefsExportService() = default;

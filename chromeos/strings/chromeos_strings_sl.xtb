@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">Vnesite poziv</translation>
 <translation id="115705039208660697">ananasi</translation>
 <translation id="1164939766849482256">Ohranjevalnik zaslona od zore do mraka</translation>
-<translation id="1167755866710282443">Odprite meni za prilagajanje tipk. Povlecite meni, če ga želite premakniti.</translation>
 <translation id="1171349345463658120">peščena laguna</translation>
 <translation id="1174073918202301297">Bližnjica je bila dodana</translation>
 <translation id="11743817593307477">S puščičnimi tipkami ta kontrolnik premaknite na želeno dejanje v igri. S tipko Enter postavite kontrolnik. Če želite preklicati, uporabite tipko Escape.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">Zaženi preizkus napolnjenosti</translation>
 <translation id="1622402072367425417">žareči oblački</translation>
 <translation id="1626590945318984973">Bližnjica ni na voljo. Pritisnite novo bližnjico brez uporabe funkcijskih tipk in tipk <ph name="META_KEY" />.</translation>
+<translation id="163774412591892664">Skrbnik je onemogočil vašo napravo in lahko dostopa do njene lokacije.</translation>
 <translation id="1639239467298939599">Nalaganje</translation>
 <translation id="1641857168437328880">Podajalnik dokumentov (enostransko)</translation>
 <translation id="1642396894598555413">kolesa</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">Zamenjava datoteke</translation>
 <translation id="2006864819935886708">Povezljivost</translation>
 <translation id="2008685064673031089">Začetno iskanje</translation>
-<translation id="2011174342667534258">Različica kompleta za razvoj programske opreme:</translation>
 <translation id="2016697457005847575">Poskusite postopke za odpravljanje težav.</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">jedilni pribor</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">peščena sipina</translation>
 <translation id="2619761439309613843">Dnevno osveževanje</translation>
 <translation id="2620436844016719705">Sistem</translation>
+<translation id="2626848494898563581">Googlovih storitev ni mogoče doseči</translation>
 <translation id="2637303424821734920">IZKLOPLJENO – Za prikaz lokalnega vremena <ph name="BEGIN_LINK" />vklopite dostop do lokacije sistema<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">Slika za prijavo</translation>
 <translation id="2640549051766135490">Album <ph name="TITLE" /> <ph name="DESC" /> je bil izbran</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">Smerni gumb pri razporejanju tipk</translation>
 <translation id="3217462202230355157">Prepričajte se, da je mikrofon priključen, ali poskusite znova zagnati napravo <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">Iskanje optičnih bralnikov</translation>
-<translation id="3226657629376379887">Meni z dejanji za postavitev</translation>
 <translation id="3227186760713762082">Deljenje vrednosti kategorije »<ph name="CATEGORY_TEXT" />« s/z: <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">digitalna umetnost</translation>
 <translation id="3246869037381808805">Izbrisana bodo tiskalna opravila, starejša od 1 dneva</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">Smer ključa</translation>
 <translation id="3294437725009624529">Gost</translation>
 <translation id="3303855915957856445">Ni rezultatov iskanja</translation>
-<translation id="3305294846493618482">več</translation>
 <translation id="3310640316857623290">Zakasnitev DNS-ja je znatno nad dovoljenim pragom</translation>
 <translation id="3316495615885967552">Prenos modela za ustvarjanje povzetkov in naslovov je končan</translation>
 <translation id="3321030238473337787">Hitrost predvajanja</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">Prišlo je do napake. Poskusite znova.</translation>
 <translation id="357889014807611375">Wi‑Fi z omejeno količino prenosa</translation>
 <translation id="3583278742022654445">Šibka moč signala. Poskusite se premakniti bliže viru signala omrežja Wi-Fi.</translation>
+<translation id="3586931643579894722">Skrij podrobnosti</translation>
 <translation id="3588034708467091142">Zagotovite, da imate vzpostavljeno internetno povezavo, in poskusite znova.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> je uporabniku prijazno ime za <ph name="APN_NAME" />.</translation>
 <translation id="3595596368722241419">Baterija je polna</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">Nazaj 10 sekund</translation>
 <translation id="4128271910628504223">Vnesite poziv, kot je »nariši megleni gozd«</translation>
 <translation id="4130035430755296270">Premikajte miškin kazalec, če želite več možnosti postavitve.</translation>
-<translation id="4130750466177569591">Strinjam se</translation>
 <translation id="4131410914670010031">Črno-belo</translation>
 <translation id="4137700675046373159">v soboto</translation>
 <translation id="4139326893730851150">Posodobitve vdelane programske opreme</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814">Prenos modela prepisa v jeziku <ph name="LANGUAGE_NAME" /> je končan</translation>
 <translation id="42126664696688958">Izvozi</translation>
 <translation id="4213104098953699324">Tipkovnica USB</translation>
+<translation id="4217571870635786043">Narek</translation>
 <translation id="4227825898293920515">Geslo poteče čez toliko časa: <ph name="TIME" /></translation>
 <translation id="4238516577297848345">Nobeno tiskalno opravilo ne poteka</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tabulatorka</translation>
 <translation id="5612205513582918357">Razredna orodja delijo vaš zaslon z razredom <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">Odjavljeni ste</translation>
-<translation id="5620281292257375798">Samo za interno rabo</translation>
 <translation id="5628106863521633649">Razpoložljivi jeziki</translation>
 <translation id="5630438231335788050">bauhaus</translation>
 <translation id="5631759159893697722">izvleček</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">vračalka</translation>
 <translation id="6137614725462089991">cyberpunk</translation>
 <translation id="6137767437444130246">Uporabniško potrdilo</translation>
+<translation id="6140948187512243695">Pokaži podrobnosti</translation>
 <translation id="6146993107019042706">Za dokončanje vnesite novo geslo</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">Internetne povezave ni mogoče vzpostaviti</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">Prikaži oris</translation>
 <translation id="6243280677745499710">Trenutno nastavljeno</translation>
 <translation id="6250316632541035980">slanina in jajca</translation>
+<translation id="6262413940100821797">neznan prejemnik</translation>
 <translation id="6265268291107409527">Izbrani ključ je <ph name="KEYS" />. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">Puščica desno</translation>
 <translation id="6278428485366576908">Tema</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">To napravo <ph name="DEVICE_TYPE" /> upravlja domena <ph name="MANAGER" />. Skrbniki lahko napravo konfigurirajo na daljavo.</translation>
 <translation id="7180611975245234373">Osveži</translation>
 <translation id="7180865173735832675">Prilagodi</translation>
-<translation id="7182063559013288142">Takojšnja dostopna točka</translation>
-<translation id="7184043045742675738">Če želite prilagoditi gumb, kliknite katero koli tipko. Prestavite tipko z miško ali puščičnimi tipkami.</translation>
 <translation id="7187669805838282391">v sredo</translation>
 <translation id="7205318498545665455">Izberite mikrofon</translation>
-<translation id="7206979415662233817">Pogoji storitve</translation>
 <translation id="7210635925306941239">cijan</translation>
 <translation id="7212547870105584639">Upravljanje nastavitev APN-ja. APN-ji vzpostavijo povezavo med mobilnim omrežjem in internetom. <ph name="BEGIN_LINK_LEARN_MORE" />Več o tem<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">Posodobitve vdelane programske opreme za zunanje naprave</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">zelena in zelenomodra</translation>
 <translation id="7328475450575141167">strelicija</translation>
-<translation id="7331297744262591636">Stari morate biti vsaj 18 let in se strinjati, da za vašo uporabo UI zaslonskih ozadij veljajo <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Googlovi pogoji storitve<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> in <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />dodatni pogoji storitve za generativno umetno inteligenco<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          Zaslonska ozadja z umetno inteligenco lahko ustvarjate samo za osebno in nekomercialno uporabo. Ko prejmete pomoč za zaslonsko ozadje, se besedilo pošlje v strežnike Googlove umetne inteligence zaradi ustvarjanja predlogov za zaslonska ozadja v skladu z <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Googlovim pravilnikom o zasebnosti<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />. <ph name="BEGIN_LINK_LEARN_MORE" />Več o tem<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; Pritisnite tipko za iskanje in preslednico, če si želite rezultat ogledati v Iskanju Google.</translation>
 <translation id="7343649194310845056">Omrežne naprave</translation>
 <translation id="7344788170842919262">zemeljsko</translation>
 <translation id="7346768383111016081">Prestavite upravljanje na dejanje v igri, če želite igrati s tipkovnico</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">Nastavitve vnosa</translation>
 <translation id="7595982850646262331">Še <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776">Skrbnik <ph name="MANAGER" /> je določil, kdaj je mogoče uporabljati to napravo <ph name="DEVICE_TYPE" />.</translation>
-<translation id="7613724632293948900">Prestavljanje z miško ali puščičnimi tipkami.</translation>
 <translation id="7618216277886673749">Izberite: <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">Nevtralna</translation>
 <translation id="7620771111601174153">Preberite več v centru za pomoč</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">Uporabite Googlovo umetno inteligenco za doseganje večje storilnosti</translation>
 <translation id="8200772114523450471">Nadaljuj</translation>
 <translation id="8206859287963243715">Prenosni</translation>
+<translation id="8208043093301544621">Začetni zaslon</translation>
 <translation id="8208861521865154048">Ugodnosti</translation>
 <translation id="8226628635270268143">Izberite priljubljene fotografije in albume</translation>
 <translation id="8227119283605456246">Prilaganje datoteke</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">Izvajanje preizkusov in odpravljanje težav s strojno opremo.</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">dol</translation>
+<translation id="8427213022735114808">Narekovanje pošlje vaš glas v Google zaradi omogočanja glasovnega tipkanja v poljubnem besedilnem polju.</translation>
 <translation id="8428213095426709021">Nastavitve</translation>
 <translation id="8431300646573772016">Novosti v Chromu OS</translation>
 <translation id="8433186206711564395">Omrežne nastavitve</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966">Če želite dokončati namestitev vdelane programske opreme za napravo <ph name="DEVICE_NAME" /> na različico <ph name="VERSION" />, morate znova zagnati napravo. Videti bo, kot da se računalnik večkrat znova zažene. To je pričakovano.</translation>
 <translation id="8593058461203131755">začasna zaustavitev predstavnosti</translation>
 <translation id="8620617069779373398">Stanje gostovanja</translation>
+<translation id="8624524972189162859">Skrbnik za <ph name="DOMAIN_NAME" /> je onemogočil vašo napravo in lahko dostopa do njene lokacije.</translation>
 <translation id="8626489604350149811">Več dejanj za <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">Svetlo vijolična</translation>
 <translation id="8647595191512746911">Prepis zvoka</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9082718469794970195">Uporabi ta videoposnetek</translation>
-<translation id="9087578468327036362">Prijavite to poizvedbo</translation>
 <translation id="9088306295921699330">Trenutna poraba</translation>
 <translation id="9088994563996376283">Poenostavi</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">Več informacij o datumu ponastavitve</translation>
 <translation id="9100765901046053179">Dodatne nastavitve</translation>
 <translation id="910415269708673980">Osvežite kartonček za <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">Slika je nastavljena kot ozadje kamere</translation>
 <translation id="9211490828691860325">Vsa namizja</translation>
 <translation id="9218016617214286986">Pokaži znane APN-je</translation>
-<translation id="932327136139879170">Domov</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">Pošiljanje povratnih informacij</translation>
 <translation id="950520315903467048">Manjka tipka za <ph name="DIRECTION" />. <ph name="ASSIGN_INSTRUCTION" /></translation>

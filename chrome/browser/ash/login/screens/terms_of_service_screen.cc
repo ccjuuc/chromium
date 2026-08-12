@@ -7,7 +7,9 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
@@ -19,19 +21,17 @@
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/storage_partition.h"
 #include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -83,12 +83,17 @@ std::string TermsOfServiceScreen::GetResultString(Result result) {
 }
 
 TermsOfServiceScreen::TermsOfServiceScreen(
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
     base::WeakPtr<TermsOfServiceScreenView> view,
     const ScreenExitCallback& exit_callback)
     : BaseScreen(TermsOfServiceScreenView::kScreenId,
                  OobeScreenPriority::DEFAULT),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
       view_(std::move(view)),
       exit_callback_(exit_callback) {
+  CHECK(shared_url_loader_factory_);
   DCHECK(view_);
 }
 
@@ -128,7 +133,7 @@ bool TermsOfServiceScreen::MaybeSkip(WizardContext& context) {
   // immediately.
   if (context.skip_post_login_screens_for_tests ||
       !ProfileManager::GetActiveUserProfile()->GetPrefs()->IsManagedPreference(
-          prefs::kTermsOfServiceURL)) {
+          ash::prefs::kTermsOfServiceURL)) {
     exit_callback_.Run(Result::NOT_APPLICABLE);
     return true;
   }
@@ -144,12 +149,10 @@ void TermsOfServiceScreen::ShowImpl() {
     return;
 
   // Set the domain name whose Terms of Service are being shown.
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
   // Show the screen.
   view_->Show(
       ash::InstallAttributes::Get()->IsEnterpriseManaged()
-          ? connector->GetEnterpriseDomainManager()
+          ? browser_policy_connector_ash_->GetEnterpriseDomainManager()
           : enterprise_util::GetDomainFromEmail(
                 ProfileManager::GetActiveUserProfile()->GetProfileUserName()));
 
@@ -159,7 +162,7 @@ void TermsOfServiceScreen::ShowImpl() {
 
 void TermsOfServiceScreen::HideImpl() {}
 
-void TermsOfServiceScreen::OnUserAction(const base::Value::List& args) {
+void TermsOfServiceScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kBack)
     OnDecline();
@@ -176,7 +179,7 @@ void TermsOfServiceScreen::StartDownload() {
   // If an URL from which the Terms of Service can be downloaded has not been
   // set, show an error message to the user.
   std::string terms_of_service_url =
-      prefs->GetString(prefs::kTermsOfServiceURL);
+      prefs->GetString(ash::prefs::kTermsOfServiceURL);
   if (terms_of_service_url.empty()) {
     if (view_)
       view_->OnLoadError();
@@ -218,12 +221,10 @@ void TermsOfServiceScreen::StartDownload() {
   // download.
   terms_of_service_loader_->SetRetryOptions(
       3, network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
-  network::mojom::URLLoaderFactory* loader_factory =
-      g_browser_process->system_network_context_manager()
-          ->GetURLLoaderFactory();
   terms_of_service_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
-      loader_factory, base::BindOnce(&TermsOfServiceScreen::OnDownloaded,
-                                     base::Unretained(this)));
+      shared_url_loader_factory_.get(),
+      base::BindOnce(&TermsOfServiceScreen::OnDownloaded,
+                     base::Unretained(this)));
 
   // Abort the download attempt if it takes longer than one minute.
   download_timer_.Start(FROM_HERE, base::Minutes(1), this,

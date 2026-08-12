@@ -1516,11 +1516,22 @@ TEST(HlsTagsTest, ParseInfTag) {
         "123", ParseStatusCode::kMissingRequiredSegmentInfoTrailingComma);
   }
 
+  if (HLSQuirks::AllowSpaceBetweenEXTINFAndTimestamp()) {
+    result = OkTest<InfTag>(" 8.7,");
+    EXPECT_TRUE(RoughlyEqual(result.tag.duration, base::Seconds(8.7)));
+  } else {
+    ErrorTest<InfTag>(" 8.7",
+                      ParseStatusCode::kFailedToParseDecimalFloatingPoint);
+  }
+
   // Test some invalid tags
   ErrorTest<InfTag>(std::nullopt, ParseStatusCode::kNoTagBody);
   ErrorTest<InfTag>("", ParseStatusCode::kFailedToParseDecimalFloatingPoint);
   ErrorTest<InfTag>(",", ParseStatusCode::kFailedToParseDecimalFloatingPoint);
   ErrorTest<InfTag>("-123,",
+                    ParseStatusCode::kFailedToParseDecimalFloatingPoint);
+  ErrorTest<InfTag>("0,", ParseStatusCode::kFailedToParseDecimalFloatingPoint);
+  ErrorTest<InfTag>("0.0,",
                     ParseStatusCode::kFailedToParseDecimalFloatingPoint);
   ErrorTest<InfTag>("asdf,",
                     ParseStatusCode::kFailedToParseDecimalFloatingPoint);
@@ -1733,6 +1744,30 @@ TEST(HlsTagsTest, ParseXKeyTag) {
   {
     auto result = OkTest<XKeyTag>(
         "METHOD=SAMPLE-AES-CTR,URI=\"https://example.com\","
+        "KEYFORMAT=\"urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47\"",
+        dict, subs);
+    EXPECT_EQ(result.tag.method, XKeyTagMethod::kSampleAESCTR);
+    EXPECT_TRUE(result.tag.uri.has_value());
+    EXPECT_EQ(result.tag.uri.value().Str(), "https://example.com");
+    EXPECT_FALSE(result.tag.iv.has_value());
+    EXPECT_EQ(result.tag.keyformat, XKeyTagKeyFormat::kClearKeyCENC);
+    EXPECT_FALSE(result.tag.keyformat_versions.has_value());
+  }
+  {
+    auto result = OkTest<XKeyTag>(
+        "METHOD=SAMPLE-AES,URI=\"https://example.com\","
+        "KEYFORMAT=\"urn:uuid:be58615b-19c4-4684-88b3-c8c57e99e957\"",
+        dict, subs);
+    EXPECT_EQ(result.tag.method, XKeyTagMethod::kSampleAES);
+    EXPECT_TRUE(result.tag.uri.has_value());
+    EXPECT_EQ(result.tag.uri.value().Str(), "https://example.com");
+    EXPECT_FALSE(result.tag.iv.has_value());
+    EXPECT_EQ(result.tag.keyformat, XKeyTagKeyFormat::kClearKeyCBCS);
+    EXPECT_FALSE(result.tag.keyformat_versions.has_value());
+  }
+  {
+    auto result = OkTest<XKeyTag>(
+        "METHOD=SAMPLE-AES-CTR,URI=\"https://example.com\","
         "KEYFORMAT=\"org.w3.clearkey\"",
         dict, subs);
     EXPECT_EQ(result.tag.method, XKeyTagMethod::kSampleAESCTR);
@@ -1740,6 +1775,18 @@ TEST(HlsTagsTest, ParseXKeyTag) {
     EXPECT_EQ(result.tag.uri.value().Str(), "https://example.com");
     EXPECT_FALSE(result.tag.iv.has_value());
     EXPECT_EQ(result.tag.keyformat, XKeyTagKeyFormat::kClearKey);
+    EXPECT_FALSE(result.tag.keyformat_versions.has_value());
+  }
+  {
+    auto result = OkTest<XKeyTag>(
+        "METHOD=AES-128,URI=\"https://example.com\","
+        "KEYFORMAT=\"urn:uuid:3ea8778f-7742-4bf9-b18b-e834b2acbd47\"",
+        dict, subs);
+    EXPECT_EQ(result.tag.method, XKeyTagMethod::kAES128);
+    EXPECT_TRUE(result.tag.uri.has_value());
+    EXPECT_EQ(result.tag.uri.value().Str(), "https://example.com");
+    EXPECT_FALSE(result.tag.iv.has_value());
+    EXPECT_EQ(result.tag.keyformat, XKeyTagKeyFormat::kClearKeyCENC);
     EXPECT_FALSE(result.tag.keyformat_versions.has_value());
   }
 }

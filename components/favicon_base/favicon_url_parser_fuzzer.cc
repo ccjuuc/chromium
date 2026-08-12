@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
+#include "components/favicon_base/favicon_url_parser.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -13,16 +10,15 @@
 #include <string>
 
 #include "base/at_exit.h"
+#include "base/compiler_specific.h"
 #include "base/i18n/icu_util.h"
-#include "components/favicon_base/favicon_url_parser.h"
+#include "base/no_destructor.h"
 
 struct IcuEnvironment {
   IcuEnvironment() { CHECK(base::i18n::InitializeICU()); }
   // used by ICU integration.
   base::AtExitManager at_exit_manager;
 };
-
-IcuEnvironment* env = new IcuEnvironment();
 
 chrome::FaviconUrlFormat GetFaviconUrlFormatFromUint8(uint8_t value) {
   // Dummy switch to detect changes to the enum definition.
@@ -37,6 +33,7 @@ chrome::FaviconUrlFormat GetFaviconUrlFormatFromUint8(uint8_t value) {
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const base::NoDestructor<IcuEnvironment> env;
   if (size < 2)
     return 0;
 
@@ -45,8 +42,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const chrome::FaviconUrlFormat url_format =
       GetFaviconUrlFormatFromUint8(data[0]);
 
-  const std::string string_input(reinterpret_cast<const char*>(data + 1),
-                                 size - 1);
+  const std::string string_input(
+      reinterpret_cast<const char*>(UNSAFE_TODO(data + 1)), size - 1);
   chrome::ParsedFaviconPath parsed;
   chrome::ParseFaviconPath(string_input, url_format, &parsed);
   return 0;

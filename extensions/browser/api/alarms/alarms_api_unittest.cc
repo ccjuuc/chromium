@@ -17,7 +17,12 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
+#include "base/test/test_future.h"
+// TODO(crbug.com/445720439): Remove this import.
+#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
@@ -27,6 +32,8 @@
 #include "extensions/browser/api/alarms/alarms_api_constants.h"
 #include "extensions/browser/api_unittest.h"
 #include "extensions/common/extension_builder.h"
+// TODO(crbug.com/445720439): Remove this import.
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -87,7 +94,12 @@ class ExtensionAlarmsTest : public ApiUnitTest {
   }
 
   void CreateAlarm(const std::string& args) {
-    RunFunction(new AlarmsCreateFunction(&test_clock_), args);
+    RunFunction(base::MakeRefCounted<AlarmsCreateFunction>(&test_clock_), args);
+  }
+
+  std::string FailToCreateAlarm(const std::string& args) {
+    return RunFunctionAndReturnError(
+        base::MakeRefCounted<AlarmsCreateFunction>(&test_clock_), args);
   }
 
   // Takes a JSON result from a function and converts it to a vector of
@@ -119,7 +131,8 @@ class ExtensionAlarmsTest : public ApiUnitTest {
     };
     for (size_t i = 0; i < num_alarms; ++i) {
       std::optional<base::Value> result = RunFunctionAndReturnValue(
-          new AlarmsCreateFunction(&test_clock_), kCreateArgs[i]);
+          base::MakeRefCounted<AlarmsCreateFunction>(&test_clock_),
+          kCreateArgs[i]);
       EXPECT_FALSE(result);
     }
   }
@@ -163,6 +176,42 @@ TEST_F(ExtensionAlarmsTest, Create) {
   alarm_manager_->GetAlarm(
       extension()->id(), std::string(),
       base::BindOnce(ExtensionAlarmsTestGetAlarmCallback, this));
+}
+
+TEST_F(ExtensionAlarmsTest, CreateNameInObject) {
+  test_clock_.SetNow(base::Time::FromSecondsSinceUnixEpoch(10));
+  // Create 1 non-repeating alarm passing name in object.
+  CreateAlarm("[null, {\"name\": \"Alarm Name\", \"delayInMinutes\": 0}]");
+
+  base::test::TestFuture<Alarm*> alarm_future;
+  alarm_manager_->GetAlarm(extension()->id(), "Alarm Name",
+                           alarm_future.GetCallback());
+  Alarm* alarm = alarm_future.Get();
+  ASSERT_TRUE(alarm);
+  EXPECT_EQ("Alarm Name", alarm->js_alarm->name);
+  EXPECT_DOUBLE_EQ(10000, alarm->js_alarm->scheduled_time);
+  EXPECT_FALSE(alarm->js_alarm->period_in_minutes);
+
+  // Now wait for the alarm to fire. Our test delegate will quit the
+  // `MessageLoop` when that happens.
+  alarm_delegate_->WaitForAlarm();
+
+  ASSERT_EQ(1u, alarm_delegate_->alarms_seen.size());
+  EXPECT_EQ("Alarm Name", alarm_delegate_->alarms_seen[0]);
+
+  // Ensure the alarm is gone.
+  base::test::TestFuture<const AlarmList*> alarm_list_future;
+  alarm_manager_->GetAllAlarms(extension()->id(),
+                               alarm_list_future.GetCallback());
+  const AlarmList* alarm_list = alarm_list_future.Get();
+  ASSERT_FALSE(alarm_list);
+}
+
+// Passing alarm name twice is not valid.
+TEST_F(ExtensionAlarmsTest, CreateNameInvalid) {
+  EXPECT_EQ("Cannot set alarm name in both separate argument and object form.",
+            FailToCreateAlarm(
+                R"(["Invalid", {"name": "Invalid", "delayInMinutes": 0}])"));
 }
 
 void ExtensionAlarmsTestCreateRepeatingGetAlarmCallback(
@@ -356,6 +405,73 @@ TEST_F(ExtensionAlarmsLogTest, CreateDelayBelowMinimum) {
                   "delay is less than the minimum duration of 30 seconds"));
 }
 
+// TODO(crbug.com/445720439): Clean up this test after long alarm name
+// deprecation.
+TEST_F(ExtensionAlarmsLogTest, CreateLongAlarmName) {
+  // Disable alarm length error to test the warning.
+  base::test::ScopedFeatureList features;
+  features.InitAndDisableFeature(
+      extensions_features::kApiAlarmsCreateLengthLimit);
+
+  // Set up context for the test.
+  ConsoleLogMessageLocalFrame local_frame;
+  local_frame.Init(
+      contents()->GetPrimaryMainFrame()->GetRemoteAssociatedInterfaces());
+  ASSERT_EQ(local_frame.message_count(), 0u);
+
+  // Short alarm names (no longer than 1024 characters) do not result in
+  // warnings.
+  CreateAlarm("[\"" + std::string(1024, 'a') + "\", {\"when\": 0}]");
+  this->alarm_delegate_->WaitForAlarm();
+  ASSERT_EQ(local_frame.message_count(), 0u);
+
+  // Long alarm names (1025 characters and longer) cause a warning.
+  CreateAlarm("[\"" + std::string(1025, 'a') + "\", {\"when\": 0}]");
+  this->alarm_delegate_->WaitForAlarm();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return local_frame.message_count() == 1u; }));
+  EXPECT_EQ(blink::mojom::ConsoleMessageLevel::kWarning,
+            local_frame.last_level());
+  EXPECT_EQ(
+      local_frame.last_message(),
+      "Alarm length is 1025 characters which exceeds future limit of 1024 "
+      "characters. Chrome 150 will throw an error for alarm creation with "
+      "names longer than 1024 characters.");
+}
+
+TEST_F(ExtensionAlarmsLogTest, RejectLongAlarmName) {
+  // Alarm name length limit must be enabled by default.
+  EXPECT_TRUE(base::FeatureList::IsEnabled(
+      extensions_features::kApiAlarmsCreateLengthLimit));
+
+  // Set up context for the test.
+  ConsoleLogMessageLocalFrame local_frame;
+  local_frame.Init(
+      contents()->GetPrimaryMainFrame()->GetRemoteAssociatedInterfaces());
+  ASSERT_EQ(local_frame.message_count(), 0u);
+
+  // Short alarm names (no longer than 1024 characters) do not result in
+  // warnings.
+  CreateAlarm("[\"" + std::string(1024, 'a') + "\", {\"when\": 0}]");
+  this->alarm_delegate_->WaitForAlarm();
+  ASSERT_EQ(local_frame.message_count(), 0u);
+
+  // Long alarm names (1025 characters and longer) throw without altering
+  // registered alarms. Attempt to create an alarm with a long name scheduled
+  // far in the future (1 hour) should result in exteption with an appropriate
+  // message and no alarm should be created.
+  EXPECT_EQ(
+      "Alarm name size is 1025 bytes which exceeds the limit of 1024 bytes.",
+      FailToCreateAlarm("[\"" + std::string(1025, 'a') +
+                        "\", {\"delayInMinutes\": 60}]"));
+
+  // No alarm should be created.
+  std::optional<base::Value> result = RunFunctionAndReturnValue(
+      base::MakeRefCounted<AlarmsGetAllFunction>(), "[]");
+  std::vector<JsAlarm> alarms = ToAlarmList(result);
+  EXPECT_EQ(0u, alarms.size());
+}
+
 TEST_F(ExtensionAlarmsTest, Get) {
   test_clock_.SetNow(base::Time::FromSecondsSinceUnixEpoch(4));
 
@@ -364,8 +480,8 @@ TEST_F(ExtensionAlarmsTest, Get) {
 
   // Get the default one.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsGetFunction(), "[null]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsGetFunction>(), "[null]");
     ASSERT_TRUE(result);
     ASSERT_TRUE(result->is_dict());
     auto alarm = JsAlarm::FromValue(result->GetDict());
@@ -377,8 +493,8 @@ TEST_F(ExtensionAlarmsTest, Get) {
 
   // Get "7".
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsGetFunction(), "[\"7\"]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsGetFunction>(), "[\"7\"]");
     ASSERT_TRUE(result);
     ASSERT_TRUE(result->is_dict());
     auto alarm = JsAlarm::FromValue(result->GetDict());
@@ -390,8 +506,8 @@ TEST_F(ExtensionAlarmsTest, Get) {
 
   // Get a non-existent one.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsGetFunction(), "[\"nobody\"]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsGetFunction>(), "[\"nobody\"]");
     ASSERT_FALSE(result);
   }
 }
@@ -399,8 +515,8 @@ TEST_F(ExtensionAlarmsTest, Get) {
 TEST_F(ExtensionAlarmsTest, GetAll) {
   // Test getAll with 0 alarms.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsGetAllFunction(), "[]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsGetAllFunction>(), "[]");
     std::vector<JsAlarm> alarms = ToAlarmList(result);
     EXPECT_EQ(0u, alarms.size());
   }
@@ -409,8 +525,8 @@ TEST_F(ExtensionAlarmsTest, GetAll) {
   CreateAlarms(2);
 
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsGetAllFunction(), "[null]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsGetAllFunction>(), "[null]");
     std::vector<JsAlarm> alarms = ToAlarmList(result);
     EXPECT_EQ(2u, alarms.size());
 
@@ -458,8 +574,8 @@ void ExtensionAlarmsTestClearGetAllAlarms1Callback(
 TEST_F(ExtensionAlarmsTest, Clear) {
   // Clear a non-existent one.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsClearFunction(), "[\"nobody\"]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsClearFunction>(), "[\"nobody\"]");
     ASSERT_TRUE(result->is_bool());
     EXPECT_FALSE(result->GetBool());
   }
@@ -469,14 +585,14 @@ TEST_F(ExtensionAlarmsTest, Clear) {
 
   // Clear all but the 0.001-minute alarm.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsClearFunction(), "[\"7\"]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsClearFunction>(), "[\"7\"]");
     ASSERT_TRUE(result->is_bool());
     EXPECT_TRUE(result->GetBool());
   }
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsClearFunction(), "[\"0\"]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsClearFunction>(), "[\"0\"]");
     ASSERT_TRUE(result->is_bool());
     EXPECT_TRUE(result->GetBool());
   }
@@ -498,7 +614,7 @@ void ExtensionAlarmsTestClearAllGetAllAlarms1Callback(
   EXPECT_EQ(3u, alarms->size());
 
   // Clear them.
-  test->RunFunction(new AlarmsClearAllFunction(), "[]");
+  test->RunFunction(base::MakeRefCounted<AlarmsClearAllFunction>(), "[]");
   test->alarm_manager_->GetAllAlarms(
       test->extension()->id(),
       base::BindOnce(ExtensionAlarmsTestClearAllGetAllAlarms2Callback));
@@ -507,8 +623,8 @@ void ExtensionAlarmsTestClearAllGetAllAlarms1Callback(
 TEST_F(ExtensionAlarmsTest, ClearAll) {
   // ClearAll with no alarms set.
   {
-    std::optional<base::Value> result =
-        RunFunctionAndReturnValue(new AlarmsClearAllFunction(), "[]");
+    std::optional<base::Value> result = RunFunctionAndReturnValue(
+        base::MakeRefCounted<AlarmsClearAllFunction>(), "[]");
     ASSERT_TRUE(result->is_bool());
     EXPECT_TRUE(result->GetBool());
   }
@@ -714,7 +830,7 @@ void FrequencyTestGetAlarmsCallback(ExtensionAlarmsTest* test, Alarm* alarm) {
 
 // Tests that alarms with very small period written to storage are also
 // subjected to minimum polling interval.
-// Regression test for https://crbug.com/618540.
+// Regression test for https://crbug.com/40472348.
 TEST_F(ExtensionAlarmsSchedulingTest, PollFrequencyFromStoredAlarm) {
   static constexpr struct {
     bool is_unpacked;
@@ -735,7 +851,7 @@ TEST_F(ExtensionAlarmsSchedulingTest, PollFrequencyFromStoredAlarm) {
     // Mimic retrieving an alarm from StateStore.
     std::string alarm_args =
         "[{\"name\": \"hello\", \"scheduledTime\": 10000, "
-        "\"periodInMinutes\": 0.0001}]";
+        "\"periodInMinutes\": 0.0001, \"persistAcrossSessions\": true}]";
     base::TimeDelta min_delay = alarms_api_constants::GetMinimumDelay(
         entry.is_unpacked, entry.manifest_version);
 
@@ -765,6 +881,31 @@ TEST_F(ExtensionAlarmsSchedulingTest, PollFrequencyFromStoredAlarm) {
               expected_poll_time + base::Seconds(10));
     RemoveAlarm("hello");
   }
+}
+
+void OldAlarmTestGetAlarmsCallback(ExtensionAlarmsTest* test, Alarm* alarm) {
+  ASSERT_TRUE(alarm);
+  EXPECT_EQ("hello", alarm->js_alarm->name);
+  EXPECT_TRUE(alarm->js_alarm->persist_across_sessions);
+}
+
+// Tests that when reading an alarm from storage that was created before we had
+// support for both persistent and non-persistent alarms, the alarm will be
+// scheduled according to the old policy.
+TEST_F(ExtensionAlarmsTest, OldPersistentAlarmFromStorage) {
+  // Mimic retrieving an alarm from StateStore.
+  std::string alarm_args = "[{\"name\": \"hello\", \"scheduledTime\": 10000}]";
+
+  alarm_manager_->ReadFromStorage(extension()->id(),
+                                  /*min_delay=*/base::Seconds(1),
+                                  base::test::ParseJson(alarm_args));
+
+  alarm_manager_->GetAlarm(extension()->id(), "hello",
+                           base::BindOnce(OldAlarmTestGetAlarmsCallback, this));
+
+  // This looks racy (we're removing the alarm that the callback is waiting to
+  // fire on), but the callback is run synchronously, so this is fine.
+  alarm_manager_->RemoveAlarm(extension()->id(), "hello", base::DoNothing());
 }
 
 // Test that scheduled alarms go off at set intervals, even if their actual

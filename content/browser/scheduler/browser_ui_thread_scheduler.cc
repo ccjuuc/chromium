@@ -65,7 +65,6 @@ BrowserUIThreadScheduler::BrowserUIThreadScheduler()
                       internal::CreateBrowserTaskPrioritySettings())
                   .SetIsMainThread(true)
                   .SetShouldSampleCPUTime(true)
-                  .SetShouldReportLockMetrics(true)
                   .SetShouldBlockOnScopedFences(true)
                   .Build())),
       task_queues_(BrowserThread::UI, owned_sequence_manager_.get()),
@@ -73,8 +72,8 @@ BrowserUIThreadScheduler::BrowserUIThreadScheduler()
   task_queues_.SetOnTaskCompletedHandler(base::BindRepeating(
       &BrowserUIThreadScheduler::OnTaskCompleted, base::Unretained(this)));
   CommonSequenceManagerSetup(owned_sequence_manager_.get());
-  owned_sequence_manager_->SetDefaultTaskRunner(
-      handle_->GetDefaultTaskRunner());
+  owned_sequence_manager_->SetDefaultTaskQueue(
+      task_queues_.GetDefaultTaskQueue());
 
   owned_sequence_manager_->BindToMessagePump(
       base::MessagePump::Create(base::MessagePumpType::UI));
@@ -89,23 +88,16 @@ BrowserUIThreadScheduler::BrowserUIThreadScheduler(
   g_browser_ui_thread_scheduler = this;
 }
 
+base::sequence_manager::TaskQueue*
+BrowserUIThreadScheduler::GetDefaultTaskQueue() const {
+  return task_queues_.GetDefaultTaskQueue();
+}
+
 void BrowserUIThreadScheduler::CommonSequenceManagerSetup(
     base::sequence_manager::SequenceManager* sequence_manager) {
   DCHECK_EQ(static_cast<size_t>(sequence_manager->GetPriorityCount()),
             static_cast<size_t>(internal::BrowserTaskPriority::kPriorityCount));
   sequence_manager->EnableCrashKeys("ui_scheduler_async_stack");
-
-  scenario_priority_boost_ =
-      std::make_unique<base::TaskMonitoringScopedBoostPriority>(
-          base::ThreadType::kInteractive,
-          base::BindRepeating(&internal::ShouldBoostThreadsPriority));
-}
-
-void BrowserUIThreadScheduler::OnStartupComplete() {
-  if (base::FeatureList::IsEnabled(
-          features::kBoostThreadsPriorityDuringInputScenario)) {
-    owned_sequence_manager_->AddTaskObserver(scenario_priority_boost_.get());
-  }
 }
 
 void BrowserUIThreadScheduler::OnTaskCompleted(

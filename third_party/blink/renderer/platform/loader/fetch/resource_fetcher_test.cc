@@ -47,14 +47,17 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/loader/request_context_frame_type.mojom-blink.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_url_response.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/loader/fetch/console_logger.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
@@ -116,14 +119,31 @@ class PartialResourceRequest {
 class ResourceFetcherTestBase : public testing::Test {
  public:
   ResourceFetcherTestBase()
-      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  ~ResourceFetcherTestBase() override = default;
+
+ protected:
+  void SetUp() override {
+    scoped_memory_cache_ = std::make_unique<ScopedMemoryCacheForTesting>(
+        MakeGarbageCollected<MemoryCache>(
+            task_environment_.GetMainThreadTaskRunner()));
     Resource::SetClockForTesting(task_environment_.GetMockClock());
     // The state of global LcppEnabled flag depends on several feature flags
     // which can be enabled/disabled in tests. Clear the global flag value.
     ResetLcppEnabledForTesting();
   }
-  ~ResourceFetcherTestBase() override {
-    MemoryCache::Get()->EvictResources();
+
+  void TearDown() override {
+    // ThreadState::CollectAllGarbageForTesting() must be called before
+    // resetting `scoped_memory_cache_`. This ensures that any garbage objects
+    // (like `ResourceFetcher` which clears preloads in its pre-finalizer) are
+    // fully collected and finalized while the test's `MemoryCache` is still
+    // active. Otherwise, finalizers running during the GC inside
+    // `scoped_memory_cache_.reset()` would call `MemoryCache::Get()` when
+    // `g_memory_cache` is already null, causing an illegal allocation during GC
+    // sweeping and crashing.
+    blink::ThreadState::Current()->CollectAllGarbageForTesting();
+    scoped_memory_cache_.reset();
     Resource::SetClockForTesting(nullptr);
   }
 
@@ -137,10 +157,11 @@ class ResourceFetcherTestBase : public testing::Test {
     void WillSendRequest(const ResourceRequest& request,
                          const ResourceResponse& redirect_response,
                          ResourceType,
-                         const ResourceLoaderOptions&,
+                         const ResourceLoaderOptions& options,
                          RenderBlockingBehavior,
                          const Resource*) override {
       request_ = PartialResourceRequest(request);
+      world_for_csp_ = options.world_for_csp;
     }
     void DidChangePriority(uint64_t identifier,
                            ResourceLoadPriority,
@@ -176,12 +197,24 @@ class ResourceFetcherTestBase : public testing::Test {
     const std::optional<PartialResourceRequest>& GetLastRequest() const {
       return request_;
     }
+    const DOMWrapperWorld* GetLastWorldForCsp() const {
+      return world_for_csp_.Get();
+    }
 
-    void ClearLastRequest() { request_ = std::nullopt; }
+    void ClearLastRequest() {
+      request_ = std::nullopt;
+      world_for_csp_ = nullptr;
+    }
+
+    void Trace(Visitor* visitor) const override {
+      visitor->Trace(world_for_csp_);
+      ResourceLoadObserver::Trace(visitor);
+    }
 
    private:
     std::optional<PartialResourceRequest> request_;
     bool interested_in_all_requests_ = false;
+    Member<const DOMWrapperWorld> world_for_csp_;
   };
 
  protected:
@@ -221,8 +254,9 @@ class ResourceFetcherTestBase : public testing::Test {
         kTestResourceMimeType, platform_->GetURLLoaderMockFactory());
   }
 
-  base::test::SingleThreadTaskEnvironment task_environment_;
+  base::test::TaskEnvironment task_environment_;
   ScopedTestingPlatformSupport<FetchTestingPlatformSupport> platform_;
+  std::unique_ptr<ScopedMemoryCacheForTesting> scoped_memory_cache_;
 };
 
 class ResourceFetcherTest : public ResourceFetcherTestBase,
@@ -1176,6 +1210,77 @@ TEST_P(ResourceFetcherTest, StaleWhileRevalidate) {
   EXPECT_FALSE(MemoryCache::Get()->Contains(resource));
 }
 
+TEST_P(ResourceFetcherTest, StaleWhileRevalidatePropagatesIsolatedWorld) {
+  scoped_refptr<const SecurityOrigin> source_origin =
+      SecurityOrigin::CreateUniqueOpaque();
+  auto* observer = MakeGarbageCollected<TestResourceLoadObserver>();
+  MockFetchContext* context = MakeGarbageCollected<MockFetchContext>();
+  auto* fetcher = CreateFetcher(
+      *MakeGarbageCollected<TestResourceFetcherProperties>(source_origin),
+      context);
+  fetcher->SetResourceLoadObserver(observer);
+
+  KURL url("http://127.0.0.1:8000/foo.html");
+  FetchParameters fetch_params =
+      FetchParameters::CreateForTest(ResourceRequest(url));
+  DOMWrapperWorld* isolated_world = DOMWrapperWorld::EnsureIsolatedWorld(
+      /*v8::Isolate=*/nullptr, blink::kIsolatedWorldIdLimit - 1);
+  fetch_params.MutableOptions().world_for_csp = isolated_world;
+
+  ResourceResponse response(url);
+  response.SetHttpStatusCode(200);
+  response.SetHttpHeaderField(
+      http_names::kCacheControl,
+      AtomicString("max-age=0, stale-while-revalidate=40"));
+
+  platform_->GetURLLoaderMockFactory()->RegisterURL(
+      url, WrappedResourceResponse(response),
+      test::PlatformTestDataPath(kTestResourceFilename));
+  Resource* resource = MockResource::Fetch(fetch_params, fetcher, nullptr);
+  ASSERT_TRUE(resource);
+
+  platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  EXPECT_TRUE(resource->IsLoaded());
+  EXPECT_TRUE(MemoryCache::Get()->Contains(resource));
+  EXPECT_EQ(isolated_world, observer->GetLastWorldForCsp());
+
+  ResourceRequest resource_request(url);
+  resource_request.SetRequestContext(
+      mojom::blink::RequestContextType::INTERNAL);
+  FetchParameters fetch_params2 =
+      FetchParameters::CreateForTest(std::move(resource_request));
+  fetch_params2.MutableOptions().world_for_csp = isolated_world;
+  Resource* new_resource = MockResource::Fetch(fetch_params2, fetcher, nullptr);
+  EXPECT_EQ(resource, new_resource);
+  platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  EXPECT_TRUE(resource->IsLoaded());
+  EXPECT_EQ(isolated_world, observer->GetLastWorldForCsp());
+
+  // Advance the clock, make sure the original resource gets removed from the
+  // memory cache after the revalidation completes.
+  task_environment_.AdvanceClock(base::Seconds(1));
+  ResourceResponse revalidate_response(url);
+  revalidate_response.SetHttpStatusCode(200);
+  platform_->GetURLLoaderMockFactory()->UnregisterURL(url);
+  platform_->GetURLLoaderMockFactory()->RegisterURL(
+      url, WrappedResourceResponse(revalidate_response),
+      test::PlatformTestDataPath(kTestResourceFilename));
+  new_resource = MockResource::Fetch(fetch_params2, fetcher, nullptr);
+  EXPECT_EQ(resource, new_resource);
+  EXPECT_TRUE(MemoryCache::Get()->Contains(resource));
+  observer->ClearLastRequest();
+
+  static_cast<scheduler::FakeTaskRunner*>(fetcher->GetTaskRunner().get())
+      ->AdvanceTimeAndRun(base::Seconds(0));
+  std::optional<PartialResourceRequest> swr_request =
+      observer->GetLastRequest();
+  ASSERT_TRUE(swr_request.has_value());
+  EXPECT_EQ(ResourceLoadPriority::kVeryLow, swr_request->Priority());
+  EXPECT_EQ(isolated_world, observer->GetLastWorldForCsp());
+  platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  EXPECT_FALSE(MemoryCache::Get()->Contains(resource));
+}
+
 TEST_P(ResourceFetcherTest, CachedResourceShouldNotCrashByNullURL) {
   auto* fetcher = CreateFetcher();
 
@@ -1501,29 +1606,42 @@ TEST_P(ResourceFetcherTest, DuplicatePreloadAllowsPriorityChange) {
   EXPECT_FALSE(resource1->IsUnusedPreload());
 }
 
-TEST_P(ResourceFetcherTest, StrongReferenceThreshold) {
+class ResourceFetcherStrongReferenceThresholdTest : public ResourceFetcherTest {
+ public:
   // Upper and lower bound for the size of a resource. The actual size is the
-  // sum of overhead (between 3700 and 4800 bytes, varies by platform) and
-  // encoded length (103 bytes for `kTestResourcefilename`)
-  constexpr size_t kMockResourceSizeLowerBound = 3700 + 103;
-  constexpr size_t kMockResourceSizeUpperBound = 4800 + 103;
+  // sum of overhead (between 3700 and 5200 bytes, varies by platform) and
+  // encoded length (103 bytes for `kTestResourceFilename`)
+  static constexpr size_t kMockResourceSizeLowerBound = 3700 + 103;
+  static constexpr size_t kMockResourceSizeUpperBound = 5200 + 103;
 
   // Set up the strong reference feature so that the memory cache can keep
   // strong references to 2 resources, but not 3.
-  constexpr size_t kTotalSizeThreshold = kMockResourceSizeUpperBound * 2;
-  constexpr size_t kResourceSizeThreshold = kMockResourceSizeUpperBound;
+  static constexpr size_t kTotalSizeThreshold = kMockResourceSizeUpperBound * 2;
+  static constexpr size_t kResourceSizeThreshold = kMockResourceSizeUpperBound;
+
+  ResourceFetcherStrongReferenceThresholdTest() {
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {
+            {features::kMemoryCacheStrongReference,
+             {{"memory_cache_strong_ref_total_size_threshold",
+               base::NumberToString(kTotalSizeThreshold)},
+              {"memory_cache_strong_ref_resource_size_threshold",
+               base::NumberToString(kResourceSizeThreshold)}}},
+        },
+        /*disabled_features=*/{});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ResourceFetcherStrongReferenceThresholdTest,
+                         testing::Bool());
+
+TEST_P(ResourceFetcherStrongReferenceThresholdTest, StrongReferenceThreshold) {
   static_assert(3 * kMockResourceSizeLowerBound > kTotalSizeThreshold);
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeaturesAndParameters(
-      /*enabled_features=*/
-      {
-          {features::kMemoryCacheStrongReference,
-           {{"memory_cache_strong_ref_total_size_threshold",
-             base::NumberToString(kTotalSizeThreshold)},
-            {"memory_cache_strong_ref_resource_size_threshold",
-             base::NumberToString(kResourceSizeThreshold)}}},
-      },
-      /*disabled_features=*/{});
 
   ResourceFetcher* fetcher = CreateFetcher();
 
@@ -1585,7 +1703,8 @@ TEST_F(ResourceFetcherTestBase, PopulateResourceRequestPermissionsPolicy) {
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false},
-            {network::mojom::PermissionsPolicyFeature::kSharedStorage,
+            {network::mojom::PermissionsPolicyFeature::
+                 kDeprecated_SharedStorage,
              /*allowed_origins=*/{},
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
@@ -1622,7 +1741,8 @@ TEST_F(ResourceFetcherTestBase,
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
              /*matches_opaque_src=*/false},
-            {network::mojom::PermissionsPolicyFeature::kSharedStorage,
+            {network::mojom::PermissionsPolicyFeature::
+                 kDeprecated_SharedStorage,
              /*allowed_origins=*/{},
              /*self_if_matches=*/std::nullopt,
              /*matches_all_origins=*/false,
@@ -2354,6 +2474,117 @@ TEST_P(TransparentPlaceholderResourceFetcherTest, InspectorNotAttached) {
   std::optional<PartialResourceRequest> last_request =
       observer->GetLastRequest();
   EXPECT_FALSE(last_request.has_value());
+}
+
+// Tests that extension resources loaded in one isolated world (or the main
+// world) are not reused by requests originating from a different isolated
+// world. Regression test for crbug.com/461167648.
+TEST_P(ResourceFetcherTest, CrossWorldExtensionResourceMismatch) {
+  // Explicitly enable `kPreventExtensionResourceFetchAcrossIsolatedWorlds` for
+  // this test since the feature is disabled by default.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kPreventExtensionResourceFetchAcrossIsolatedWorlds);
+
+  // Register the scheme to ensure it's recognized as an extension.
+  CommonSchemeRegistry::RegisterURLSchemeAsExtension("chrome-extension");
+
+  // Set up the `fetcher` and a mock URL that returns a valid response.
+  auto* fetcher = CreateFetcher();
+  KURL url("chrome-extension://1234/foo.png");
+  ResourceResponse response(url);
+  response.SetHttpStatusCode(200);
+  response.SetHttpHeaderField(http_names::kCacheControl,
+                              AtomicString("max-age=3600"));
+  platform_->GetURLLoaderMockFactory()->RegisterURL(
+      url, WrappedResourceResponse(response),
+      test::PlatformTestDataPath(kTestResourceFilename));
+
+  // Simulate a request from the main world. This request should succeed and
+  // populate `MemoryCache` for future fetches.
+  ResourceRequest main_world_request(url);
+  main_world_request.SetRequestContext(
+      mojom::blink::RequestContextType::INTERNAL);
+  FetchParameters main_world_fetch_params =
+      FetchParameters::CreateForTest(std::move(main_world_request));
+  Resource* main_world_resource = MockResource::Fetch(
+      main_world_fetch_params, fetcher, /*ResourceClient=*/nullptr);
+  ASSERT_TRUE(main_world_resource);
+  platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  EXPECT_TRUE(main_world_resource->IsLoaded());
+  EXPECT_TRUE(MemoryCache::Get()->Contains(main_world_resource));
+
+  // Simulate a request from a different isolated world (extension).
+  ResourceRequest isolated_world_request(url);
+  isolated_world_request.SetRequestContext(
+      mojom::blink::RequestContextType::INTERNAL);
+  FetchParameters isolated_world_fetch_params =
+      FetchParameters::CreateForTest(std::move(isolated_world_request));
+  DOMWrapperWorld* isolated_world = DOMWrapperWorld::EnsureIsolatedWorld(
+      /*v8::Isolate=*/nullptr, blink::kIsolatedWorldIdLimit - 1);
+  isolated_world_fetch_params.MutableOptions().world_for_csp = isolated_world;
+
+  // Verify that the cached resource is not reused in the extension isolated
+  // world. Because the initiating worlds differ, this should force a mismatch
+  // and cause a fresh fetch, yielding a different `Resource` instance.
+  Resource* isolated_world_resource = MockResource::Fetch(
+      isolated_world_fetch_params, fetcher, /*ResourceClient=*/nullptr);
+  EXPECT_NE(main_world_resource, isolated_world_resource);
+
+  // Clean up the registered scheme.
+  CommonSchemeRegistry::RemoveURLSchemeAsExtensionForTest("chrome-extension");
+}
+
+// Tests that a preloaded resource fetched via a Service Worker is not reused
+// by a request from a different script world, even if the URL and resource
+// type match.
+//
+// Practical Example:
+// A main world page preloads a script from a CDN
+// (e.g., `https://cdn.com/lib.js`) which is served with a custom response by
+// the page's Service Worker. Later, an extension content script (isolated
+// world) attempts to fetch the same CDN script. Rather than fetch and reuse
+// the Service Worker cached script, the extension should perform a fresh fetch
+// to obtain the resource.
+TEST_P(ResourceFetcherTest, PreloadMatchServiceWorkerWorldMismatch) {
+  auto* fetcher = CreateFetcher();
+  KURL url("http://127.0.0.1:8000/foo.js");
+
+  // Register mock response with `SetWasFetchedViaServiceWorker(true)`.
+  ResourceResponse response(url);
+  response.SetHttpStatusCode(200);
+  response.SetWasFetchedViaServiceWorker(true);
+  platform_->GetURLLoaderMockFactory()->RegisterURL(
+      url, WrappedResourceResponse(response),
+      test::PlatformTestDataPath(kTestResourceFilename));
+
+  // 1. Trigger Preload in main world (default world_for_csp is null)
+  FetchParameters fetch_params_preload =
+      FetchParameters::CreateForTest(ResourceRequest(url));
+  fetch_params_preload.SetLinkPreload(true);
+  Resource* preload_resource =
+      MockResource::Fetch(fetch_params_preload, fetcher, nullptr);
+  ASSERT_TRUE(preload_resource);
+  EXPECT_TRUE(preload_resource->IsLinkPreload());
+  platform_->GetURLLoaderMockFactory()->ServeAsynchronousRequests();
+  EXPECT_TRUE(preload_resource->IsLoaded());
+
+  // 2. Fetch in isolated world (different world_for_csp)
+  FetchParameters fetch_params_load =
+      FetchParameters::CreateForTest(ResourceRequest(url));
+  DOMWrapperWorld* isolated_world = DOMWrapperWorld::EnsureIsolatedWorld(
+      /*v8::Isolate=*/nullptr, blink::kIsolatedWorldIdLimit - 1);
+  fetch_params_load.MutableOptions().world_for_csp = isolated_world;
+
+  // Verify that the loader detects the script world mismatch for the
+  // Service Worker-fetched resource (returning
+  // `kCrossWorldServiceWorkerResourceMismatch`). The preload should be
+  // rejected for reuse, forcing a new load to start and returning a different
+  // resource instance.
+  Resource* load_resource =
+      MockResource::Fetch(fetch_params_load, fetcher, nullptr);
+
+  EXPECT_NE(preload_resource, load_resource);
 }
 
 }  // namespace blink

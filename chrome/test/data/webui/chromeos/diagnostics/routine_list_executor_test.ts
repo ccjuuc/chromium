@@ -9,7 +9,7 @@ import {ExecutionProgress, ResultStatusItem, RoutineListExecutor} from 'chrome:/
 import type {PowerRoutineResult, RoutineResultInfo} from 'chrome://diagnostics/system_routine_controller.mojom-webui.js';
 import {RoutineType, StandardRoutineResult} from 'chrome://diagnostics/system_routine_controller.mojom-webui.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {assertEquals, assertNotEquals, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertEquals, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 suite('fakeRoutineListExecutorTestSuite', function() {
   let controller: FakeSystemRoutineController|null = null;
@@ -108,6 +108,7 @@ suite('fakeRoutineListExecutorTestSuite', function() {
         simpleResult: StandardRoutineResult.kTestFailed,
         powerResult: undefined,
       },
+      details: null,
     }];
     return runRoutinesAndAssertResults(routines);
   });
@@ -120,6 +121,7 @@ suite('fakeRoutineListExecutorTestSuite', function() {
           simpleResult: StandardRoutineResult.kTestPassed,
           powerResult: undefined,
         },
+        details: null,
       },
       {
         type: RoutineType.kCpuCache,
@@ -127,6 +129,7 @@ suite('fakeRoutineListExecutorTestSuite', function() {
           simpleResult: StandardRoutineResult.kTestFailed,
           powerResult: undefined,
         },
+        details: null,
       },
       {
         type: RoutineType.kCpuFloatingPoint,
@@ -134,6 +137,7 @@ suite('fakeRoutineListExecutorTestSuite', function() {
           simpleResult: StandardRoutineResult.kTestPassed,
           powerResult: undefined,
         },
+        details: null,
       },
       {
         type: RoutineType.kCpuPrime,
@@ -141,6 +145,7 @@ suite('fakeRoutineListExecutorTestSuite', function() {
           simpleResult: StandardRoutineResult.kTestFailed,
           powerResult: undefined,
         },
+        details: null,
       },
     ];
 

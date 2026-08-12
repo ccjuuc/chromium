@@ -14,7 +14,7 @@
 #include "chrome/browser/actor/tools/tool_callbacks.h"
 #include "chrome/browser/actor/tools/tool_delegate.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
+#include "components/actor/core/task_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "url/gurl.h"
 
@@ -65,6 +65,14 @@ class Tool {
   //
   // The tool will be deleted synchronously after this method returns.
   virtual void Cancel();
+
+  // Notifies the tool that its execution has been paused to await user
+  // interaction.
+  //
+  // This is a hook tools can use to cancel any time-sensitive actions or timers
+  // that may fire, because the user may take an arbitrary amount of time to
+  // complete the request.
+  virtual void NotifyPaused();
 
   // Provides a human readable description of the tool useful for log and
   // debugging purposes.

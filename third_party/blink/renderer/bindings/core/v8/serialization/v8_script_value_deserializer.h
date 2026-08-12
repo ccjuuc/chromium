@@ -49,6 +49,8 @@ class CORE_EXPORT V8ScriptValueDeserializer
 
   v8::Local<v8::Value> Deserialize();
 
+  bool HasError() const { return has_error_; }
+
   static bool ExecutionContextExposesInterface(ExecutionContext*,
                                                SerializationTag interface_tag);
 
@@ -78,8 +80,8 @@ class CORE_EXPORT V8ScriptValueDeserializer
       return false;
     }
     // SAFETY: ReadRawBytes() ensures `data` and `size` are safe.
-    *out_span = UNSAFE_BUFFERS(
-        base::span(reinterpret_cast<const uint8_t*>(data), size));
+    *out_span = UNSAFE_BUFFERS(base::span(
+        base::unchecked, reinterpret_cast<const uint8_t*>(data), size));
     return true;
   }
   bool ReadUnguessableToken(base::UnguessableToken* token_out);
@@ -131,6 +133,7 @@ class CORE_EXPORT V8ScriptValueDeserializer
   UnpackedSerializedScriptValue* unpacked_value_;
   scoped_refptr<SerializedScriptValue> serialized_script_value_;
   const bool slow_mode_ = false;
+  bool has_error_ = false;
   v8::ValueDeserializer deserializer_;
 
   // Message ports which were transferred in.

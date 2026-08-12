@@ -29,7 +29,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   using AudioDeviceStateMap = std::map<uint64_t, DeviceState>;
   using AudioDeviceUserPriority = std::map<uint64_t, int>;
   using AudioDevicePreferenceSetMap = std::map<std::string, std::string>;
-  using MostRecentActivatedDeviceIdList = base::Value::List;
+  using MostRecentActivatedDeviceIdList = base::ListValue;
 
   AudioDevicesPrefHandlerStub();
 
@@ -65,6 +65,10 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   uint32_t GetVoiceIsolationPreferredEffect() const override;
   void SetVoiceIsolationPreferredEffect(uint32_t effect) override;
 
+  bool GetKrispNoiseCancellationState() override;
+  void SetKrispNoiseCancellationState(
+      bool krisp_noise_cancellation_state) override;
+
   bool GetNoiseCancellationState() override;
   void SetNoiseCancellationState(bool noise_cancellation_state) override;
 
@@ -86,7 +90,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   void UpdateDevicePreferenceSet(const AudioDeviceList& devices,
                                  const AudioDevice& preferred_device) override;
 
-  const base::Value::List& GetMostRecentActivatedDeviceIdList(
+  const base::ListValue& GetMostRecentActivatedDeviceIdList(
       bool is_input) override;
   void UpdateMostRecentActivatedDeviceIdList(
       const AudioDevice& device) override;
@@ -104,11 +108,12 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO)
   AudioDevicePreferenceSetMap device_preference_set_map_;
   MostRecentActivatedDeviceIdList most_recent_activated_device_id_list;
 
-  base::ObserverList<AudioPrefObserver>::Unchecked observers_;
+  base::ObserverList<AudioPrefObserver> observers_;
 
   bool is_audio_output_allowed_ = true;
   bool voice_isolation_state_ = false;
   uint32_t voice_isolation_preferred_effect_ = 0;
+  bool krisp_noise_cancellation_state_ = false;
   bool force_respect_ui_gains_ = false;
   bool hfp_mic_sr_ = false;
   bool spatial_audio_ = false;

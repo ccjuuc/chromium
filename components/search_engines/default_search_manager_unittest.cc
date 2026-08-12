@@ -17,6 +17,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/regional_capabilities/regional_capabilities_switches.h"
+#include "components/regional_capabilities/regional_capabilities_utils.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_engines_pref_names.h"
@@ -42,18 +43,18 @@ namespace {
 
 void SetOverrides(sync_preferences::TestingPrefServiceSyncable* prefs,
                   bool update) {
-  auto overrides = base::Value::List();
+  auto overrides = base::ListValue();
 
   // Lambda facilitating insertion of TemplateURL definitions, ensuring that all
   // mandatory fields are present.
   auto add_definition = [&overrides](TemplateURLID id,
                                      std::string name_and_keyword,
                                      std::string base_url) {
-    auto alternate_urls = base::Value::List();
+    auto alternate_urls = base::ListValue();
     alternate_urls.Append(base_url + "/alternate?q={searchTerms}");
 
     overrides.Append(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", name_and_keyword)
             .Set("id", (int)id)
             .Set("keyword", name_and_keyword)
@@ -82,7 +83,7 @@ void SetPolicy(sync_preferences::TestingPrefServiceSyncable* prefs,
     EXPECT_FALSE(data->keyword().empty());
     EXPECT_FALSE(data->url().empty());
   }
-  base::Value::Dict entry = TemplateURLDataToDictionary(*data);
+  base::DictValue entry = TemplateURLDataToDictionary(*data);
   entry.Set(DefaultSearchManager::kDisabledByPolicy, !enabled);
 
   is_mandatory ? prefs->SetManagedPref(
@@ -224,8 +225,36 @@ TEST_F(DefaultSearchManagerTest, DefaultSearchSetByUserPref) {
   EXPECT_EQ(DefaultSearchManager::FROM_FALLBACK, source);
 }
 
+// Test that DefaultSearch manager ignores kSearchProviderOverrides when the
+// kIgnoreSearchProviderOverrides flag is enabled.
+TEST_F(DefaultSearchManagerTest, DefaultSearchOverridesIgnoredWhenFlagEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(switches::kIgnoreSearchProviderOverrides);
+
+  SetOverrides(pref_service(), false);
+  auto manager = create_manager();
+
+  // The fallback engine should be the default prepopulated one (Google), not
+  // the one from overrides.
+  std::unique_ptr<TemplateURLData> fallback_t_url_data =
+      prepopulate_data_resolver().GetFallbackSearch();
+  EXPECT_EQ(fallback_t_url_data->keyword(),
+            TemplateURLPrepopulateData::google.keyword);
+  EXPECT_EQ(fallback_t_url_data->prepopulate_id,
+            TemplateURLPrepopulateData::google.id);
+
+  DefaultSearchManager::Source source = DefaultSearchManager::FROM_POLICY;
+  const TemplateURLData* engine = manager->GetDefaultSearchEngine(&source);
+  ASSERT_TRUE(engine);
+  EXPECT_EQ(engine->keyword(), TemplateURLPrepopulateData::google.keyword);
+  EXPECT_EQ(DefaultSearchManager::FROM_FALLBACK, source);
+}
+
 // Test that DefaultSearch manager detects changes to kSearchProviderOverrides.
 TEST_F(DefaultSearchManagerTest, DefaultSearchSetByOverrides) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(switches::kIgnoreSearchProviderOverrides);
+
   SetOverrides(pref_service(), false);
   auto manager = create_manager();
 
@@ -435,32 +464,64 @@ TEST_F(DefaultSearchManagerTest,
   ExpectSimilar(&expected_engine, result);
 }
 
-TEST_F(DefaultSearchManagerTest,
-       DefaultSearchSetByPlayAPI_MergeByDomainName_FeatureEnabled) {
-  SetOverrides(pref_service(), false);
+TEST_F(DefaultSearchManagerTest, DefaultSearchSetByPlayAPI_MergeByDomainName) {
   auto manager = create_manager();
 
   // Find the expected engine. We could fabricate one too, this is easier.
-  auto all_engines = prepopulate_data_resolver().GetPrepopulatedEngines();
-  const auto& builtin_engine =
-      *std::ranges::find_if(all_engines, [](const auto& engine) {
-        GURL url(engine->url());
-        return url.is_valid() && url.host() == "emea.search.yahoo.com";
-      });
+  const TemplateURLPrepopulateData::PrepopulatedEngine& builtin_engine =
+      TemplateURLPrepopulateData::yahoo_emea;
+  ASSERT_EQ(GURL(builtin_engine.search_url).host(), "emea.search.yahoo.com");
 
   auto supplied_engine = GenerateDummyTemplateURLData("yahoo.com");
   supplied_engine->SetURL("https://emea.search.yahoo.com/any_path");
   supplied_engine->regulatory_origin = RegulatoryExtensionType::kAndroidEEA;
   // Needed by ExpectSimilar.
-  supplied_engine->favicon_url = builtin_engine->favicon_url;
+  supplied_engine->favicon_url = GURL(builtin_engine.favicon_url);
 
   // Verify engine reconciled with builtin definition.
   manager->SetUserSelectedDefaultSearchEngine(*supplied_engine);
   auto* result = manager->GetDefaultSearchEngine(nullptr);
 
-  TemplateURLData expected_engine = *builtin_engine;
-  expected_engine.regulatory_origin = RegulatoryExtensionType::kAndroidEEA;
-  ExpectSimilar(&expected_engine, result);
+  std::unique_ptr<TemplateURLData> expected_engine =
+      TemplateURLDataFromPrepopulatedEngine(builtin_engine);
+  expected_engine->regulatory_origin = RegulatoryExtensionType::kAndroidEEA;
+  ExpectSimilar(expected_engine.get(), result);
+}
+
+TEST_F(DefaultSearchManagerTest,
+       GetDefaultSearchEngineIgnoringExtensions_Reconciliation) {
+  auto manager = create_manager();
+  auto* builtin_engine = manager->GetDefaultSearchEngine(nullptr);
+
+  // Set user selected DSE with prepopulate_id, which should be reconciled.
+  auto supplied_engine = GenerateDummyTemplateURLData(
+      base::UTF16ToUTF8(builtin_engine->keyword()));
+  supplied_engine->prepopulate_id = builtin_engine->prepopulate_id;
+  // Needed by ExpectSimilar.
+  supplied_engine->favicon_url = builtin_engine->favicon_url;
+
+  // Store in preferences directly.
+  pref_service()->SetDict(
+      DefaultSearchManager::kDefaultSearchProviderDataPrefName,
+      TemplateURLDataToDictionary(*supplied_engine));
+
+  // Set an extension-controlled default search provider to override the user
+  // pref.
+  std::unique_ptr<TemplateURLData> extension_data =
+      GenerateDummyTemplateURLData("ext");
+  SetExtensionDefaultSearchInPrefs(pref_service(), *extension_data);
+
+  // GetDefaultSearchEngine() should return the extension engine.
+  DefaultSearchManager::Source source = DefaultSearchManager::FROM_FALLBACK;
+  ExpectSimilar(extension_data.get(), manager->GetDefaultSearchEngine(&source));
+  EXPECT_EQ(DefaultSearchManager::FROM_EXTENSION, source);
+
+  // GetDefaultSearchEngineIgnoringExtensions() should return the user engine,
+  // AND it should be fully reconciled (builtin_engine).
+  std::unique_ptr<TemplateURLData> ignored_extension_engine =
+      manager->GetDefaultSearchEngineIgnoringExtensions();
+  ASSERT_TRUE(ignored_extension_engine);
+  ExpectSimilar(builtin_engine, ignored_extension_engine.get());
 }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
@@ -507,6 +568,102 @@ TEST_F(DefaultSearchManagerTest, DefaultSearchReset) {
   EXPECT_EQ(DefaultSearchManager::FROM_FALLBACK, source);
 }
 
+TEST_F(DefaultSearchManagerTest, DefaultSearchNotResetForManagedDefaultSearch) {
+  base::test::ScopedFeatureList feature_list{
+      switches::kResetTamperedDefaultSearchEngine};
+  base::HistogramTester histograms;
+
+  auto user_data = set_default_search_provider_data_pref("search_engine_A");
+  set_mirrored_default_search_provider_data_pref("search_engine_B");
+
+  // Set the policy-enforced default search.
+  std::unique_ptr<TemplateURLData> policy_data =
+      GenerateDummyTemplateURLData("policy");
+  SetPolicy(pref_service(), true, policy_data.get(), /*is_mandatory=*/true);
+
+  auto manager = create_manager();
+
+  // The original and mirrored DSE prefs should NOT be cleared since the setting
+  // is managed by policy.
+  EXPECT_FALSE(
+      pref_service()
+          ->GetDict(DefaultSearchManager::kDefaultSearchProviderDataPrefName)
+          .empty());
+  EXPECT_FALSE(
+      pref_service()
+          ->GetDict(
+              DefaultSearchManager::kMirroredDefaultSearchProviderDataPrefName)
+          .empty());
+
+  // Reset skipped due to managed policy recorded.
+  histograms.ExpectUniqueSample(
+      DefaultSearchManager::kDefaultSearchEngineMirrorCheckOutcomeMetric,
+      static_cast<int>(
+          DefaultSearchManager::DefaultSearchEngineMirrorCheckOutcomeType::
+              kResetSkippedForManagedDefaultSearch),
+      1);
+
+  // Unacknowledged reset did not occur.
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kUnacknowledgedDefaultSearchEngineResetOccurred));
+  EXPECT_TRUE(pref_service()->GetTime(
+                  prefs::kDefaultSearchEngineMirrorCheckResetTimeStamp) ==
+              base::Time());
+
+  // The DSE should be the policy-enforced one.
+  DefaultSearchManager::Source source;
+  ExpectSimilar(policy_data.get(), manager->GetDefaultSearchEngine(&source));
+  EXPECT_EQ(DefaultSearchManager::FROM_POLICY, source);
+}
+
+TEST_F(DefaultSearchManagerTest,
+       DefaultSearchNotResetOnRecommendedPolicyChangeWithoutUserSetting) {
+  base::test::ScopedFeatureList feature_list{
+      switches::kResetTamperedDefaultSearchEngine};
+  base::HistogramTester histograms;
+
+  // Set the mirrored DSE pref to simulate a roamed/old value (Yahoo).
+  set_mirrored_default_search_provider_data_pref("search_engine_B");
+
+  // No user-set preference exists (kDefaultSearchProviderDataPrefName is
+  // empty). Now set the recommended policy default search to Google (different
+  // from Yahoo).
+  std::unique_ptr<TemplateURLData> policy_data =
+      GenerateDummyTemplateURLData("policy");
+  SetPolicy(pref_service(), true, policy_data.get(), /*is_mandatory=*/false);
+
+  auto manager = create_manager();
+
+  // Reset skipped due to recommended policy without user setting recorded.
+  histograms.ExpectUniqueSample(
+      DefaultSearchManager::kDefaultSearchEngineMirrorCheckOutcomeMetric,
+      static_cast<int>(
+          DefaultSearchManager::DefaultSearchEngineMirrorCheckOutcomeType::
+              kResetSkippedForManagedDefaultSearch),
+      1);
+
+  // The mirrored DSE pref should be updated to the recommended policy value
+  // (policy) to eliminate the mismatch, but kDefaultSearchProviderDataPrefName
+  // should NOT be reset/cleared (since it was already empty, clearing it is
+  // unnecessary, but the warning must not be triggered).
+  EXPECT_FALSE(pref_service()->GetBoolean(
+      prefs::kUnacknowledgedDefaultSearchEngineResetOccurred));
+  EXPECT_TRUE(pref_service()->GetTime(
+                  prefs::kDefaultSearchEngineMirrorCheckResetTimeStamp) ==
+              base::Time());
+
+  // The mirrored pref should now match the recommended policy.
+  const base::DictValue& mirrored_dict = pref_service()->GetDict(
+      DefaultSearchManager::kMirroredDefaultSearchProviderDataPrefName);
+  auto mirrored_data = TemplateURLDataFromDictionary(mirrored_dict);
+  ExpectSimilar(policy_data.get(), mirrored_data.get());
+
+  // The active DSE should be the recommended policy.
+  DefaultSearchManager::Source source;
+  ExpectSimilar(policy_data.get(), manager->GetDefaultSearchEngine(&source));
+  EXPECT_EQ(DefaultSearchManager::FROM_POLICY_RECOMMENDED, source);
+}
+
 TEST_F(DefaultSearchManagerTest, UserDseChangeDisablesResetNotification) {
   base::test::ScopedFeatureList feature_list{
       switches::kResetTamperedDefaultSearchEngine};
@@ -536,7 +693,8 @@ TEST_F(DefaultSearchManagerTest, UserDseChangeDisablesResetNotification) {
 }
 
 #if BUILDFLAG(IS_WIN)
-TEST_F(DefaultSearchManagerTest, DefaultSearchNotResetForEnterprisePolicy) {
+TEST_F(DefaultSearchManagerTest,
+       DefaultSearchResetOnEnterpriseDeviceWithoutPolicy) {
   base::test::ScopedFeatureList feature_list{
       switches::kResetTamperedDefaultSearchEngine};
   // Simulate an enterprise device.
@@ -548,37 +706,38 @@ TEST_F(DefaultSearchManagerTest, DefaultSearchNotResetForEnterprisePolicy) {
 
   auto manager = create_manager();
 
-  // The DSE prefs should NOT be cleared since this is an enterprise device.
-  EXPECT_FALSE(
+  // The DSE prefs SHOULD be cleared since there is no policy enforcing it,
+  // even though it is an enterprise device.
+  EXPECT_TRUE(
       pref_service()
           ->GetDict(DefaultSearchManager::kDefaultSearchProviderDataPrefName)
           .empty());
-  EXPECT_FALSE(
+  EXPECT_TRUE(
       pref_service()
           ->GetDict(
               DefaultSearchManager::kMirroredDefaultSearchProviderDataPrefName)
           .empty());
 
-  // DSE reset was skipped due to enterprise policy recorded.
+  // DSE reset was executed.
   histograms.ExpectUniqueSample(
       DefaultSearchManager::kDefaultSearchEngineMirrorCheckOutcomeMetric,
       static_cast<int>(
           DefaultSearchManager::DefaultSearchEngineMirrorCheckOutcomeType::
-              kResetSkippedForEnterpriseDevice),
+              kMirrorCheckReset),
       1);
 
-  // Reset did not occur.
-  EXPECT_FALSE(pref_service()->GetBoolean(
+  // Reset DID occur.
+  EXPECT_TRUE(pref_service()->GetBoolean(
       prefs::kUnacknowledgedDefaultSearchEngineResetOccurred));
-  // A mirror check reset time is not recorded.
-  EXPECT_TRUE(pref_service()->GetTime(
-                  prefs::kDefaultSearchEngineMirrorCheckResetTimeStamp) ==
-              base::Time());
+  // A mirror check reset time IS recorded.
+  EXPECT_FALSE(pref_service()->GetTime(
+                   prefs::kDefaultSearchEngineMirrorCheckResetTimeStamp) ==
+               base::Time());
 
-  // The DSE should not have been changed.
+  // The DSE should now be the fallback.
   DefaultSearchManager::Source source;
-  ExpectSimilar(user_data.get(), manager->GetDefaultSearchEngine(&source));
-  EXPECT_EQ(DefaultSearchManager::FROM_USER, source);
+  manager->GetDefaultSearchEngine(&source);
+  EXPECT_EQ(DefaultSearchManager::FROM_FALLBACK, source);
 }
 #endif  // BUILDFLAG(IS_WIN)
 

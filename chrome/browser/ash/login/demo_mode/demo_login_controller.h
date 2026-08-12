@@ -11,10 +11,18 @@
 #include "ash/metrics/demo_session_metrics_recorder.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+
+class PrefService;
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace ash {
 
@@ -50,7 +58,15 @@ class DemoLoginController
 
   using ResultCode = DemoSessionMetricsRecorder::DemoAccountRequestResultCode;
 
-  explicit DemoLoginController(base::RepeatingClosure auto_login_mgs_callback);
+  // `local_state` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  // `device_cloud_policy_manager_ash` may be null in unit tests, and must
+  // outlive `this` if non-null
+  DemoLoginController(
+      PrefService* local_state,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::DeviceCloudPolicyManagerAsh* device_cloud_policy_manager_ash,
+      base::RepeatingClosure auto_login_mgs_callback);
   DemoLoginController(const DemoLoginController&) = delete;
   DemoLoginController& operator=(const DemoLoginController&) = delete;
   ~DemoLoginController() override;
@@ -97,7 +113,7 @@ class DemoLoginController
   // We keep this function in-class because it needs to access the member
   // `policy_manager_for_testing_`, which is set by unit tests through
   // SetDeviceCloudPolicyManagerForTesting().
-  std::optional<base::Value::Dict> GetDeviceIdentifier(
+  std::optional<base::DictValue> GetDeviceIdentifier(
       const std::string& login_scope_device_id);
 
   // Called on the feature is finished loading from growth.
@@ -112,6 +128,12 @@ class DemoLoginController
 
   // Called on 5th second for waiting policy manager connection.
   void OnPolicyManagerConnectionTimeOut();
+
+  const raw_ref<PrefService> local_state_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+  const raw_ptr<policy::DeviceCloudPolicyManagerAsh>
+      device_cloud_policy_manager_ash_;
 
   // We only allow 1 demo account request at a time.
   std::unique_ptr<network::SimpleURLLoader> url_loader_;

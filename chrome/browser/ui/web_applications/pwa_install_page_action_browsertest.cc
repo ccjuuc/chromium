@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/containers/extend.h"
@@ -28,6 +29,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "base/time/time.h"
 #include "chrome/browser/banners/test_app_banner_manager_desktop.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
@@ -47,9 +49,10 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
+#include "chrome/browser/ui/views/page_action/test_support/page_action_test_support.h"
 #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
+#include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/install_bounce_metric.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
@@ -173,29 +176,19 @@ class MockRecordIgnoreDelegate : public page_actions::RecordIgnoreDelegate {
 
 // Tests various cases that effect the visibility of the install icon in the
 // omnibox.
-class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
-                                  public ::testing::WithParamInterface<bool> {
+class PwaInstallViewBrowserTest : public base::test::WithFeatureOverride,
+                                  public extensions::ExtensionBrowserTest {
  public:
   PwaInstallViewBrowserTest()
-      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+      : base::test::WithFeatureOverride(features::kWebAppInstallDialog),
+        https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
     // kIPHDemoMode will bypass IPH framework's triggering validation so that
     // we can test PWA specific triggering logic.
-    std::vector<base::test::FeatureRefAndParams> enabled_features{
-        {feature_engagement::kIPHDemoMode,
-         {{feature_engagement::kIPHDemoModeFeatureChoiceParam,
-           feature_engagement::kIPHDesktopPwaInstallFeature.name}}},
-        {feature_engagement::kIPHDesktopPwaInstallFeature, {}}};
-    if (IsMigrationEnabled()) {
-      enabled_features.push_back(
-          {features::kPageActionsMigration,
-           {{features::kPageActionsMigrationPwaInstall.name, "true"}}});
-    } else {
-      enabled_features.push_back(
-          {features::kPageActionsMigration,
-           {{features::kPageActionsMigrationPwaInstall.name, "false"}}});
-    }
-
-    features_.InitAndEnableFeaturesWithParameters(enabled_features, {});
+    features_.InitAndEnableFeaturesWithParameters(
+        {{feature_engagement::kIPHDemoMode,
+          {{feature_engagement::kIPHDemoModeFeatureChoiceParam,
+            feature_engagement::kIPHDesktopPwaInstallFeature.name}}},
+         {feature_engagement::kIPHDesktopPwaInstallFeature, {}}});
   }
 
   PwaInstallViewBrowserTest(const PwaInstallViewBrowserTest&) = delete;
@@ -241,7 +234,7 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
     app_banner_manager_ =
         webapps::TestAppBannerManagerDesktop::FromWebContents(web_contents_);
     web_app::test::WaitUntilReady(
-        web_app::WebAppProvider::GetForTest(browser()->profile()));
+        web_app::WebAppProvider::GetForTest(browser()->GetProfile()));
   }
 
   std::unique_ptr<net::test_server::HttpResponse> RequestInterceptor(
@@ -268,7 +261,7 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
   };
 
   OpenTabResult OpenTab(const GURL& url) {
-    chrome::NewTab(browser());
+    chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
     content::WebContents* web_contents = GetCurrentTab();
     auto* app_banner_manager =
         webapps::TestAppBannerManagerDesktop::FromWebContents(web_contents);
@@ -312,16 +305,10 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
           run_loop.Quit();
         }));
 
-    {
-      views::Widget* install_dialog_widget =
-          ClickPWAInstallIconAndWaitForBubbleShown();
-      EXPECT_NE(install_dialog_widget, nullptr);
-      views::test::WidgetDestroyedWaiter destroyed_waiter(
-          install_dialog_widget);
-      views::test::AcceptDialog(install_dialog_widget);
-      destroyed_waiter.Wait();
-    }
-
+    base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+        web_app::SetPwaInstallationAutoRespondForTesting(
+            web_app::InstallDialogTestResponse::kAcceptAndLaunch);
+    ClickPWAInstallIconAndWaitForBubbleShown();
     run_loop.Run();
 
     return app_id;
@@ -329,7 +316,7 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
 
   void UninstallWebApp(const webapps::AppId& app_id) {
     base::RunLoop run_loop;
-    web_app::WebAppProvider::GetForTest(browser()->profile())
+    web_app::WebAppProvider::GetForTest(browser()->GetProfile())
         ->scheduler()
         .RemoveUserUninstallableManagements(
             app_id, webapps::WebappUninstallSource::kAppMenu,
@@ -373,31 +360,23 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
 
   views::Widget* ClickPWAInstallIconAndWaitForBubbleShown() {
     views::NamedWidgetShownWaiter pwa_confirmation_bubble_id_waiter(
-        views::test::AnyWidgetTestPasskey(), "WebAppSimpleInstallDialog");
+        views::test::AnyWidgetTestPasskey(), IsParamFeatureEnabled()
+                                                 ? "WebAppInstallFlowDialog"
+                                                 : "WebAppSimpleInstallDialog");
 
     ExecuteForTesting();
     return pwa_confirmation_bubble_id_waiter.WaitIfNeededAndGet();
   }
 
-  bool IsMigrationEnabled() const { return GetParam(); }
-
  protected:
   IconLabelBubbleView* GetPageActionView() {
-    return BrowserView::GetBrowserViewForBrowser(browser())
-        ->toolbar_button_provider()
-        ->GetPageActionView(kActionInstallPwa);
-  }
-  void ExecuteForTesting() {
-    if (IsMigrationEnabled()) {
-      web_app::ShowPwaInstallDialog(browser());
-      return;
-    }
-    auto* pwa_install_view =
+    return page_actions::GetIconLabelBubbleViewForTesting(
         BrowserView::GetBrowserViewForBrowser(browser())
             ->toolbar_button_provider()
-            ->GetPageActionIconView(PageActionIconType::kPwaInstall);
-    pwa_install_view->ExecuteForTesting();
+            ->GetPageActionViewInterface(kActionInstallPwa),
+        kActionInstallPwa);
   }
+  void ExecuteForTesting() { web_app::ShowPwaInstallDialog(browser()); }
   void FastForwardAnimation(IconLabelBubbleView* view) {
     auto animation = std::make_unique<gfx::AnimationTestApi>(
         &view->slide_animation_for_testing());
@@ -412,16 +391,6 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
   }
   void VerifyLabelVisibility(bool isVisible) {
     auto* page_action_view = GetPageActionView();
-
-    // In the legacy implementation, checking for is_animating_label is
-    // equivalent to checking that the label is visible or being animated in.
-    // This happens because while AnimateIn is used to show the label,
-    // ResetSlideAnimation, which doesn't animate the label out,
-    // is used to hide it.
-    if (!IsMigrationEnabled()) {
-      EXPECT_EQ(page_action_view->is_animating_label(), isVisible);
-      return;
-    }
 
     FastForwardAnimation(page_action_view);
     EXPECT_EQ(page_action_view->ShouldShowLabel(), isVisible);
@@ -440,10 +409,6 @@ class PwaInstallViewBrowserTest : public extensions::ExtensionBrowserTest,
   web_app::OsIntegrationManager::ScopedSuppressForTesting os_hooks_suppress_;
   feature_engagement::test::ScopedIphFeatureList features_;
 };
-
-INSTANTIATE_TEST_SUITE_P(PwaInstallViewBrowserTestSuite,
-                         PwaInstallViewBrowserTest,
-                         ::testing::Values(false, true));
 
 // Tests that the plus icon is not shown when an existing app is installed and
 // set to open in a window.
@@ -492,7 +457,7 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
   webapps::AppId app_id = StartPwaInstallFromPageActionViewAndGetInstalledApp();
 
   // Change launch container to open in tab.
-  web_app::WebAppProvider::GetForTest(browser()->profile())
+  web_app::WebAppProvider::GetForTest(browser()->GetProfile())
       ->sync_bridge_unsafe()
       .SetAppUserDisplayModeForTesting(
           app_id, web_app::mojom::UserDisplayMode::kBrowser);
@@ -642,7 +607,9 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
   OpenTabResult result = OpenTab(GetInstallableAppURL());
   EXPECT_TRUE(result.installable);
   EXPECT_NE(first_tab, GetCurrentTab());
+  ui_test_utils::BrowserCreatedObserver browser_observer;
   StartPwaInstallFromPageActionViewAndGetInstalledApp();
+  browser_observer.Wait();
   EXPECT_EQ(first_tab, GetCurrentTab());
   EXPECT_FALSE(GetPageActionView()->GetVisible());
 }
@@ -654,14 +621,15 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest, LabelAnimation) {
   EXPECT_FALSE(GetPageActionView()->GetVisible());
   ASSERT_TRUE(app_banner_manager_->WaitForInstallableCheck());
   EXPECT_TRUE(GetPageActionView()->GetVisible());
-  EXPECT_TRUE(GetPageActionView()->is_animating_label());
+  FastForwardAnimation(GetPageActionView());
+  EXPECT_TRUE(GetPageActionView()->ShouldShowLabel());
 
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   EXPECT_FALSE(GetPageActionView()->GetVisible());
 
   chrome::SelectPreviousTab(browser());
   EXPECT_TRUE(GetPageActionView()->GetVisible());
-  EXPECT_FALSE(GetPageActionView()->is_animating_label());
+  EXPECT_FALSE(GetPageActionView()->ShouldShowLabel());
 }
 
 // Tests that the plus icon becomes invisible when the user is typing in the
@@ -909,9 +877,6 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest, PwaIntallIphIgnored) {
 
 IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
                        OnCloseDoesntRecordIgnoreIfExecuting) {
-  if (!IsMigrationEnabled()) {
-    return;
-  }
   PwaInstallPageActionController* pwa_install_controller =
       browser()
           ->GetActiveTabInterface()
@@ -920,16 +885,13 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
   pwa_install_controller->SetIsExecuting(true);
 
   MockRecordIgnoreDelegate record_ignore;
-  pwa_install_controller->ExecuteOnIphClosedForTesting(GetInstallableAppURL(),
-                                                       &record_ignore);
+  pwa_install_controller->ExecuteOnIphClosedForTesting(
+      webapps::ManifestId(GetInstallableAppURL()), &record_ignore);
   EXPECT_FALSE(record_ignore.GetIgnoreWasCalled());
 }
 
 IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
                        OnCloseRecordsIgnoreIfNotExecuting) {
-  if (!IsMigrationEnabled()) {
-    return;
-  }
   PwaInstallPageActionController* pwa_install_controller =
       browser()
           ->GetActiveTabInterface()
@@ -938,8 +900,8 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
   ASSERT_FALSE(pwa_install_controller->GetIsExecuting());
 
   MockRecordIgnoreDelegate record_ignore;
-  pwa_install_controller->ExecuteOnIphClosedForTesting(GetInstallableAppURL(),
-                                                       &record_ignore);
+  pwa_install_controller->ExecuteOnIphClosedForTesting(
+      webapps::ManifestId(GetInstallableAppURL()), &record_ignore);
   EXPECT_TRUE(record_ignore.GetIgnoreWasCalled());
 }
 
@@ -960,9 +922,9 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest, IconViewAccessibleName) {
 // true and an ARC app listed as related.
 IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
                        ListedRelatedAndroidAppInstalled) {
-  arc::SetArcPlayStoreEnabledForProfile(browser()->profile(), true);
+  arc::SetArcPlayStoreEnabledForProfile(browser()->GetProfile(), true);
   ArcAppListPrefs* arc_app_list_prefs =
-      ArcAppListPrefs::Get(browser()->profile());
+      ArcAppListPrefs::Get(browser()->GetProfile());
   auto app_instance =
       std::make_unique<arc::FakeAppInstance>(arc_app_list_prefs);
   arc_app_list_prefs->app_connection_holder()->SetInstance(app_instance.get());
@@ -984,3 +946,5 @@ IN_PROC_BROWSER_TEST_P(PwaInstallViewBrowserTest,
       "Manifest listing related android app"));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PwaInstallViewBrowserTest);

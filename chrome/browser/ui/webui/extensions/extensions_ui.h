@@ -5,10 +5,11 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_EXTENSIONS_EXTENSIONS_UI_H_
 #define CHROME_BROWSER_UI_WEBUI_EXTENSIONS_EXTENSIONS_UI_H_
 
+#include "base/memory/scoped_refptr.h"
 #include "components/prefs/pref_member.h"
-#include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/webui_config.h"
 #include "ui/base/resource/resource_scale_factor.h"
+#include "ui/webui/mojo_web_ui_controller.h"
 
 namespace base {
 class RefCountedMemory;
@@ -31,14 +32,14 @@ class ExtensionsUIConfig : public content::WebUIConfig {
       const GURL& url) override;
 };
 
-class ExtensionsUI : public content::WebUIController {
+class ExtensionsUI : public ui::MojoWebUIController {
  public:
   explicit ExtensionsUI(content::WebUI* web_ui);
   ExtensionsUI(const ExtensionsUI&) = delete;
   ExtensionsUI& operator=(const ExtensionsUI&) = delete;
   ~ExtensionsUI() override;
 
-  static base::RefCountedMemory* GetFaviconResourceBytes(
+  static scoped_refptr<base::RefCountedMemory> GetFaviconResourceBytes(
       ui::ResourceScaleFactor scale_factor);
 
  private:

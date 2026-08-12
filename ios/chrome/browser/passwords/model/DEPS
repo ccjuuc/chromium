@@ -1,6 +1,9 @@
 include_rules = [
+  # keep-sorted start
+  "+components/trusted_vault",
   "+ios/chrome/browser/affiliations/model",
   "+ios/chrome/browser/autofill/model",
+  "+ios/chrome/browser/device_reauth/model",
   "+ios/chrome/browser/enterprise/connectors/reporting",
   "+ios/chrome/browser/infobars/model",
   "+ios/chrome/browser/optimization_guide/model",
@@ -10,6 +13,7 @@ include_rules = [
   "+ios/chrome/browser/translate/model",
   "+ios/chrome/browser/webauthn/model",
   "+ios/chrome/browser/webdata_services/model",
+  # keep-sorted end
 ]
 
 specific_include_rules = {

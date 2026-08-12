@@ -33,7 +33,7 @@ def gen_jni_register_function(sb, jni_mode, gen_jni_class,
     sb('\n};')
     sb(f"""
 jni_zero::ScopedJavaLocalRef<jclass> native_clazz =
-    jni_zero::GetClass(env, "{gen_jni_class.full_name_with_slashes}");
+    jni_zero::GetClass(env, "{gen_jni_class.full_name}");
 if (env->RegisterNatives(native_clazz.obj(), kMethods, std::size(kMethods)) < 0) {{
   jni_zero::internal::HandleRegistrationError(env, native_clazz.obj(), __FILE__);
   return false;
@@ -74,10 +74,14 @@ return true;
 """)
 
 
-def main_register_function(sb, jni_objs, namespace, gen_jni_class=None):
+def main_register_function(sb,
+                           jni_objs,
+                           namespace,
+                           gen_jni_class=None,
+                           register_natives_name='RegisterNatives'):
   """RegisterNatives() that calls the helper RegisterNatives() methods."""
-  with sb.namespace(namespace or ''):
-    sb('bool RegisterNatives(JNIEnv* env)')
+  with sb.namespace(namespace):
+    sb(f'bool {register_natives_name}(JNIEnv* env)')
     with sb.block():
       if gen_jni_class:
         sb(f"""// Register natives in a proxy.

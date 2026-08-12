@@ -71,7 +71,7 @@ bool MatchingString(const std::string& search_string,
 enum class FindAppIdResult { NoMatch, UniqueMatch, NonUniqueMatch };
 // Looks for an app where prefs_key is set to search_value. Returns the apps id
 // if there was only one app matching, otherwise returns an empty string.
-FindAppIdResult FindAppId(const base::Value::Dict& prefs,
+FindAppIdResult FindAppId(const base::DictValue& prefs,
                           std::string_view prefs_key,
                           std::string_view search_value,
                           const std::optional<GuestId>& guest_id,
@@ -137,8 +137,6 @@ FindAppIdResult FindAppId(const base::Value::Dict& prefs,
 // - For Bruschetta app windows: it is the container_token
 // - For Borealis app windows: "borealis"
 // - For all other guest app windows: "termina"
-// Note that PluginVM does not match this prefix since it has a
-// hard-coded window_app_id.
 std::string GetGuestTokenForWindowId(const std::string* window_app_id) {
   if (!window_app_id ||
       !base::StartsWith(*window_app_id, kGuestOsWindowAppIdPrefix,
@@ -193,7 +191,7 @@ std::string GetGuestOsShelfAppId(Profile* profile,
   if (!profile || !profile->GetPrefs())
     return std::string();
 
-  const base::Value::Dict& apps =
+  const base::DictValue& apps =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsRegistry);
 
   // TODO(b/244651040): Consider moving the borealis GetBorealisAppId logic

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 async function getFirstTab() {
-  let tabs = await chrome.tabs.query({});
+  const tabs = await chrome.tabs.query({});
   chrome.test.assertTrue(tabs.length >= 1);
   return tabs[0];
 }
@@ -60,9 +60,26 @@ chrome.test.runTests([
 
     await chrome.test.assertPromiseRejects(
         chrome.sidePanel.close({tabId}),
-        `Error: No active side panel for tabId: ${tabId}`);
+        `Error: No active tab-specific side panel for tabId: ${tabId}`);
 
     // Re-enable for cleanup.
+    await chrome.sidePanel.setOptions({tabId, enabled: true});
+    chrome.test.succeed();
+  },
+
+  async function closeGlobalPanelWithBothTabIdAndWindowIdFails() {
+    const tabId = await getFirstTabId();
+    const windowId = await getOnlyWindowId();
+    // Enable the global side panel for this window.
+    await chrome.sidePanel.setOptions({enabled: true});
+    // Disable the tab-specific side panel for this tab.
+    await chrome.sidePanel.setOptions({tabId, enabled: false});
+
+    await chrome.test.assertPromiseRejects(
+        chrome.sidePanel.close({tabId, windowId}),
+        `Error: No active tab-specific side panel for tabId: ${tabId}`);
+
+    // Cleanup.
     await chrome.sidePanel.setOptions({tabId, enabled: true});
     chrome.test.succeed();
   },

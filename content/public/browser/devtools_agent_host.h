@@ -63,7 +63,6 @@ class CONTENT_EXPORT DevToolsAgentHost
   static const char kTypeSharedWorker[];
   static const char kTypeServiceWorker[];
   static const char kTypeWorklet[];
-  static const char kTypeSharedStorageWorklet[];
   static const char kTypeBrowser[];
   static const char kTypeGuest[];
   static const char kTypeOther[];
@@ -76,7 +75,7 @@ class CONTENT_EXPORT DevToolsAgentHost
   static constexpr int kWriteFD = 4;
 
   // Latest DevTools protocol version supported.
-  static std::string GetProtocolVersion();
+  static std::string_view GetProtocolVersion();
 
   // Returns whether particular version of DevTools protocol is supported.
   static bool IsSupportedProtocolVersion(const std::string& version);

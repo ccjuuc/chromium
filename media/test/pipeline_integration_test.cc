@@ -83,6 +83,11 @@ constexpr int kVP9WebMFileDurationMs = 2736;
 constexpr int kVP8AWebMFileDurationMs = 2733;
 
 constexpr char kSfxLosslessHash[] = "3.03,2.86,2.99,3.31,3.57,4.06,";
+constexpr char kBear320x240AudioHash[] = "-3.59,-2.06,-0.43,2.15,0.77,-0.95,";
+constexpr char kSfxMp3Hash[] = "1.30,2.72,4.56,5.08,3.74,2.03,";
+constexpr char kSilentSectionMp3Hash[] = "-4.37,-4.44,-3.23,-6.92,-6.71,-8.27,";
+
+constexpr char kSfxMseMp3Hash[] = "1.01,2.71,4.18,4.32,3.04,1.12,";
 
 // Hash for a full playthrough of "opus-trimming-test.(webm|ogg)".
 constexpr char kOpusEndTrimmingHash_1[] =
@@ -225,8 +230,9 @@ class KeyProvidingApp : public FakeEncryptedMedia::AppBase {
                                 AesDecryptor* decryptor) override {
     // Since only 1 session is created, skip the request if the |init_data|
     // has been seen before (no need to add the same key again).
-    if (init_data == prev_init_data_)
+    if (init_data == prev_init_data_) {
       return;
+    }
     prev_init_data_ = init_data;
 
     if (current_session_id_.empty()) {
@@ -260,8 +266,9 @@ class RotatingKeyProvidingApp : public KeyProvidingApp {
                                 const std::vector<uint8_t>& init_data,
                                 AesDecryptor* decryptor) override {
     // Skip the request if the |init_data| has been seen.
-    if (init_data == prev_init_data_)
+    if (init_data == prev_init_data_) {
       return;
+    }
     prev_init_data_ = init_data;
     ++num_distinct_need_key_calls_;
 
@@ -357,12 +364,14 @@ class PipelineIntegrationTest : public testing::Test,
     }
 
     Play();
-    if (!WaitUntilCurrentTimeIsAfter(start_seek_time))
+    if (!WaitUntilCurrentTimeIsAfter(start_seek_time)) {
       return false;
+    }
 
     source.Seek(seek_time, seek_file_position, seek_append_size);
-    if (!Seek(seek_time))
+    if (!Seek(seek_time)) {
       return false;
+    }
 
     source.EndOfStream();
 
@@ -687,7 +696,7 @@ TEST_F(PipelineIntegrationTest, BasicPlaybackHashed) {
 
   EXPECT_EQ("a6dbca10f0730373ab948df04b4bc16d7bca6d3a1593dc989b6e376487544bf5",
             GetVideoHash());
-  EXPECT_AUDIO_HASH("-3.59,-2.06,-0.43,2.15,0.77,-0.95,");
+  EXPECT_AUDIO_HASH(kBear320x240AudioHash);
   EXPECT_TRUE(demuxer_->GetTimelineOffset().is_null());
 }
 
@@ -1247,7 +1256,7 @@ TEST_F(PipelineIntegrationTest, BasicPlaybackLive) {
 
   EXPECT_EQ("a6dbca10f0730373ab948df04b4bc16d7bca6d3a1593dc989b6e376487544bf5",
             GetVideoHash());
-  EXPECT_AUDIO_HASH("-3.59,-2.06,-0.43,2.15,0.77,-0.95,");
+  EXPECT_AUDIO_HASH(kBear320x240AudioHash);
   EXPECT_EQ(kLiveTimelineOffset(), demuxer_->GetTimelineOffset());
 }
 
@@ -1833,7 +1842,14 @@ TEST_F(PipelineIntegrationTest, BasicPlaybackHashed_MP3) {
   ASSERT_TRUE(WaitUntilOnEnded());
 
   // Verify codec delay and preroll are stripped.
-  EXPECT_AUDIO_HASH("1.30,2.72,4.56,5.08,3.74,2.03,");
+  EXPECT_AUDIO_HASH(kSfxMp3Hash);
+}
+
+TEST_F(PipelineIntegrationTest, BasicPlayback_SilentSection_MP3) {
+  ASSERT_EQ(PIPELINE_OK, Start("silent-section.mp3", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSilentSectionMp3Hash);
 }
 
 TEST_F(PipelineIntegrationTest, BasicPlaybackHashed_FlacInMp4) {
@@ -1946,7 +1962,7 @@ TEST_F(PipelineIntegrationTest, MSE_MP3) {
   EXPECT_TRUE(WaitUntilOnEnded());
 
   // Verify that codec delay was stripped.
-  EXPECT_AUDIO_HASH("1.01,2.71,4.18,4.32,3.04,1.12,");
+  EXPECT_AUDIO_HASH(kSfxMseMp3Hash);
 }
 
 TEST_F(PipelineIntegrationTest, MSE_MP3_TimestampOffset) {
@@ -2052,20 +2068,9 @@ TEST_F(PipelineIntegrationTest, BasicPlaybackHashed_M4A) {
   Play();
   ASSERT_TRUE(WaitUntilOnEnded());
 
-  // Verify preroll is stripped. This file uses a preroll of 2112 frames, which
-  // spans all three packets in the file. Postroll is not correctly stripped at
-  // present; see the note below.
-  EXPECT_AUDIO_HASH("3.84,4.25,4.33,3.58,3.27,3.16,");
-
-  // Note the above hash is incorrect since the <audio> path doesn't properly
-  // trim trailing silence at end of stream for AAC decodes. This isn't a huge
-  // deal since plain src= tags can't splice streams and MSE requires an
-  // explicit append window for correctness.
-  //
-  // The WebAudio path via AudioFileReader computes this correctly, so the hash
-  // below is taken from that test.
-  //
-  // EXPECT_AUDIO_HASH("3.77,4.53,4.75,3.48,3.67,3.76,");
+  // Verify preroll and postroll are correctly stripped. This file uses a
+  // preroll of 2112 frames, which spans all three packets in the file.
+  EXPECT_AUDIO_HASH("3.77,4.53,4.75,3.48,3.67,3.76,");
 }
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
@@ -2847,6 +2852,22 @@ TEST_F(PipelineIntegrationTest, BasicPlayback_VP9A_Odd_WebM) {
   EXPECT_EQ(last_video_frame_format_, PIXEL_FORMAT_I420A);
 }
 
+// Verify that VP9 422 video with alpha channel can be played back.
+TEST_F(PipelineIntegrationTest, BasicPlayback_VP9A_422_WebM) {
+  ASSERT_EQ(PIPELINE_OK, Start("bear-vp9a-422.webm"));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_EQ(last_video_frame_format_, PIXEL_FORMAT_I422A);
+}
+
+// Verify that VP9 444 video with alpha channel can be played back.
+TEST_F(PipelineIntegrationTest, BasicPlayback_VP9A_444_WebM) {
+  ASSERT_EQ(PIPELINE_OK, Start("bear-vp9a-444.webm"));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_EQ(last_video_frame_format_, PIXEL_FORMAT_I444A);
+}
+
 // Verify that VP9 video with 4:4:4 subsampling can be played back.
 TEST_F(PipelineIntegrationTest, P444_VP9_WebM) {
   ASSERT_EQ(PIPELINE_OK, Start("bear-320x240-P444.webm"));
@@ -2924,6 +2945,62 @@ TEST_F(PipelineIntegrationTest, BasicPlaybackPositiveStartTime) {
   Play();
   ASSERT_TRUE(WaitUntilOnEnded());
   ASSERT_EQ(base::Microseconds(396000), demuxer_->GetStartTime());
+}
+
+class OpusPipelineIntegrationTest : public PipelineIntegrationTest {
+ public:
+  OpusPipelineIntegrationTest() {
+    scoped_feature_list_.InitAndEnableFeature(kDirectOpusAudioDecoding);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(OpusPipelineIntegrationTest, BasicPlaybackOpusWebmTrimmingHashed) {
+  ASSERT_EQ(PIPELINE_OK, Start("opus-trimming-test.webm", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_1);
+
+  // Seek within the pre-skip section, this should not cause a beep.
+  ASSERT_TRUE(Seek(base::Seconds(1)));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_2);
+
+  // Seek somewhere outside of the pre-skip / end-trim section, this should
+  // behave normally.
+  ASSERT_TRUE(Seek(base::Seconds(6.36)));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_3);
+}
+
+TEST_F(OpusPipelineIntegrationTest, BasicPlaybackOpusOggTrimmingHashed) {
+  ASSERT_EQ(PIPELINE_OK, Start("opus-trimming-test.ogg", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_1);
+
+  // Seek within the pre-skip section, this should not cause a beep.
+  ASSERT_TRUE(Seek(base::Seconds(1)));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_2);
+
+  // Seek somewhere outside of the pre-skip / end-trim section, this should
+  // behave normally.
+  ASSERT_TRUE(Seek(base::Seconds(6.36)));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kOpusEndTrimmingHash_3);
+}
+
+TEST_F(OpusPipelineIntegrationTest, BasicPlayback_Opus441kHz) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx-opus-441.webm"));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
 }
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
@@ -3005,7 +3082,7 @@ TEST_F(PipelineIntegrationTest, HLSMediaPlaylistTSavc1) {
   Play();
   ASSERT_TRUE(WaitUntilOnEnded());
   // 320x192 video of which only 320x180 is visible.
-  EXPECT_EQ("9537d9d2592aa801cff8fceb2af9f6e3c5226df089e16f8f789d43e1fdec7ba2",
+  EXPECT_EQ("8154a4c21175255af6728f2a9d8448d910a0dd90ff3c2ccd4a2df3bb03f9ca48",
             GetVideoHash());
 }
 #endif
@@ -3019,5 +3096,106 @@ TEST_F(PipelineIntegrationTest, Fullrange_H264) {
 }
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
 #endif  // BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+
+#if BUILDFLAG(ENABLE_SYMPHONIA)
+class SymphoniaPipelineIntegrationTest : public testing::Test,
+                                         public PipelineIntegrationTestBase {
+ public:
+  SymphoniaPipelineIntegrationTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {kSymphoniaAudioDecoding, kSymphoniaMp3Decoding, kSymphoniaPcmDecoding,
+         kSymphoniaVorbisDecoding},
+        {} /*disabled_features=*/);
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlaybackHashed_MP3) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx.mp3", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSfxMp3Hash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_SilentSection_MP3) {
+  ASSERT_EQ(PIPELINE_OK, Start("silent-section.mp3", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSilentSectionMp3Hash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_Flac) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx-flac.mp4", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSfxLosslessHash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_Vorbis) {
+  ASSERT_EQ(PIPELINE_OK, Start("bear-320x240.webm", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kBear320x240AudioHash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_S32LE) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx_s32le.wav", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSfxLosslessHash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_F32LE) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx_f32le.wav", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSfxLosslessHash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_FLAC_File) {
+  ASSERT_EQ(PIPELINE_OK, Start("sfx.flac", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kSfxLosslessHash);
+}
+
+TEST_F(SymphoniaPipelineIntegrationTest, BasicPlayback_Vorbis_AudioOnly) {
+  ASSERT_EQ(PIPELINE_OK, Start("bear-320x240-audio-only.webm", kHashed));
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  EXPECT_AUDIO_HASH(kBear320x240AudioHash);
+}
+
+#endif  // BUILDFLAG(ENABLE_SYMPHONIA)
+
+#if BUILDFLAG(ENABLE_IAMF_TOOLS) && BUILDFLAG(USE_PROPRIETARY_CODECS) && \
+    BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
+TEST_F(PipelineIntegrationTest, MSE_BasicPlayback_Iamf_714) {
+  base::test::ScopedFeatureList scoped_feature_list(kIamfAudioDecoding);
+  TestMediaSource source("iamf_alternating_sine_waves_714.mp4",
+                         kAppendWholeFile);
+  EXPECT_EQ(PIPELINE_OK, StartPipelineWithMediaSource(&source));
+  source.EndOfStream();
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  source.Shutdown();
+  Stop();
+}
+
+TEST_F(PipelineIntegrationTest, MSE_BasicPlayback_Iamf_Stereo) {
+  base::test::ScopedFeatureList scoped_feature_list(kIamfAudioDecoding);
+  TestMediaSource source("iamf_alternating_sine_waves_stereo.mp4",
+                         kAppendWholeFile);
+  EXPECT_EQ(PIPELINE_OK, StartPipelineWithMediaSource(&source));
+  source.EndOfStream();
+  Play();
+  ASSERT_TRUE(WaitUntilOnEnded());
+  source.Shutdown();
+  Stop();
+}
+#endif  // BUILDFLAG(ENABLE_IAMF_TOOLS) && BUILDFLAG(USE_PROPRIETARY_CODECS) &&
+        // \ BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
 
 }  // namespace media

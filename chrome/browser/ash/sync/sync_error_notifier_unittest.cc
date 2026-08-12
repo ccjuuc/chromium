@@ -13,6 +13,7 @@
 #include "chrome/browser/ui/webui/signin/login_ui_service.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/sync/base/features.h"
 #include "components/sync/test/test_sync_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/message_center/public/cpp/notification.h"
@@ -26,12 +27,6 @@ namespace {
 constexpr char kNotificationId[] =
     "chrome://settings/sync/testing_profile@test";
 
-class FakeLoginUIService : public LoginUIService {
- public:
-  FakeLoginUIService() : LoginUIService(nullptr) {}
-  ~FakeLoginUIService() override = default;
-};
-
 class FakeLoginUI : public LoginUIService::LoginUI {
  public:
   FakeLoginUI() = default;
@@ -39,11 +34,6 @@ class FakeLoginUI : public LoginUIService::LoginUI {
 
   void FocusUI() override {}
 };
-
-std::unique_ptr<KeyedService> BuildFakeLoginUIService(
-    content::BrowserContext* profile) {
-  return std::make_unique<FakeLoginUIService>();
-}
 
 class SyncErrorNotifierTest : public BrowserWithTestWindowTest {
  public:
@@ -57,9 +47,8 @@ class SyncErrorNotifierTest : public BrowserWithTestWindowTest {
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
 
-    FakeLoginUIService* login_ui_service = static_cast<FakeLoginUIService*>(
-        LoginUIServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            profile(), base::BindRepeating(&BuildFakeLoginUIService)));
+    LoginUIService* login_ui_service =
+        LoginUIServiceFactory::GetForProfile(profile());
     login_ui_service->SetLoginUI(&login_ui_);
 
     error_notifier_ = std::make_unique<SyncErrorNotifier>(&service_, profile());
@@ -69,7 +58,9 @@ class SyncErrorNotifierTest : public BrowserWithTestWindowTest {
   }
 
   void TearDown() override {
+    // Explicitly destroy the notifier to ensure it doesn't outlive the profile.
     error_notifier_->Shutdown();
+    error_notifier_.reset();
 
     BrowserWithTestWindowTest::TearDown();
   }
@@ -100,6 +91,33 @@ TEST_F(SyncErrorNotifierTest, NoNotificationWhenNoPassphrase) {
   ExpectNotificationShown(false);
 }
 
+TEST_F(SyncErrorNotifierTest,
+       NotificationShownWhenSyncFeatureDisabledViaDashboard) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(syncer::kReplaceSyncPromosWithSignInPromos);
+
+  service_.SetSignedIn(signin::ConsentLevel::kSignin);
+  service_.GetUserSettings()->SetSyncFeatureDisabledViaDashboard();
+  service_.SetInitialSyncFeatureSetupComplete(true);
+
+  error_notifier_->OnStateChanged(&service_);
+  ExpectNotificationShown(true);
+}
+
+TEST_F(SyncErrorNotifierTest,
+       NoNotificationWhenSyncFeatureDisabledViaDashboardWithoutFlag) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      syncer::kReplaceSyncPromosWithSignInPromos);
+
+  service_.SetSignedIn(signin::ConsentLevel::kSignin);
+  service_.GetUserSettings()->SetSyncFeatureDisabledViaDashboard();
+  service_.SetInitialSyncFeatureSetupComplete(true);
+
+  error_notifier_->OnStateChanged(&service_);
+  ExpectNotificationShown(false);
+}
+
 TEST_F(SyncErrorNotifierTest, NotificationShownWhenBrowserSyncEnabled) {
   service_.GetUserSettings()->SetPassphraseRequired();
   service_.SetInitialSyncFeatureSetupComplete(true);
@@ -118,6 +136,40 @@ TEST_F(SyncErrorNotifierTest, NotificationShownOnce) {
                                        kNotificationId, true /* by_user */);
   error_notifier_->OnStateChanged(&service_);
   ExpectNotificationShown(false);
+}
+
+TEST_F(SyncErrorNotifierTest, NotificationClickRedirectsToSyncSetupByDefault) {
+  service_.GetUserSettings()->SetPassphraseRequired();
+  service_.SetInitialSyncFeatureSetupComplete(true);
+
+  EXPECT_EQ(SyncErrorNotifier::GetDestinationSubpage(&service_), "syncSetup");
+}
+
+TEST_F(
+    SyncErrorNotifierTest,
+    NotificationClickRedirectsToAccountSettingsWhenFlagEnabledAndNoSyncConsent) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(syncer::kReplaceSyncPromosWithSignInPromos);
+
+  // Consent level kSignin (means HasSyncConsent is false).
+  service_.SetSignedIn(signin::ConsentLevel::kSignin);
+  service_.GetUserSettings()->SetPassphraseRequired();
+  service_.SetInitialSyncFeatureSetupComplete(true);
+
+  EXPECT_EQ(SyncErrorNotifier::GetDestinationSubpage(&service_), "account");
+}
+
+TEST_F(SyncErrorNotifierTest,
+       NotificationClickRedirectsToSyncSetupWhenFlagEnabledAndHasSyncConsent) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(syncer::kReplaceSyncPromosWithSignInPromos);
+
+  // Consent level kSync (means HasSyncConsent is true).
+  service_.SetSignedIn(signin::ConsentLevel::kSync);
+  service_.GetUserSettings()->SetPassphraseRequired();
+  service_.SetInitialSyncFeatureSetupComplete(true);
+
+  EXPECT_EQ(SyncErrorNotifier::GetDestinationSubpage(&service_), "syncSetup");
 }
 
 }  // namespace

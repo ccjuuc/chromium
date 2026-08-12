@@ -6,8 +6,8 @@
 
 #include "base/functional/bind.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -45,8 +45,6 @@ CollaborationMessagingPageActionController::
     : page_actions_controller_(page_action_controller),
       collaboration_messaging_tab_data_(collaboration_messaging_tab_data),
       scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
-  CHECK(IsPageActionMigrated(PageActionIconType::kCollaborationMessaging));
-
   tab_activated_subscription_ = tab.RegisterDidActivate(base::BindRepeating(
       &CollaborationMessagingPageActionController::HandleUpdate,
       base::Unretained(this)));

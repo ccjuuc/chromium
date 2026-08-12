@@ -12,9 +12,9 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/functional/callback.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/metrics/statistics_recorder.h"
@@ -49,31 +49,9 @@ std::string HistogramTypeToString(HistogramType type) {
   NOTREACHED();
 }
 
-HistogramBase* DeserializeHistogramInfo(PickleIterator* iter) {
-  int type;
-  if (!iter->ReadInt(&type)) {
-    return nullptr;
-  }
-
-  switch (type) {
-    case HISTOGRAM:
-      return Histogram::DeserializeInfoImpl(iter);
-    case LINEAR_HISTOGRAM:
-      return LinearHistogram::DeserializeInfoImpl(iter);
-    case BOOLEAN_HISTOGRAM:
-      return BooleanHistogram::DeserializeInfoImpl(iter);
-    case CUSTOM_HISTOGRAM:
-      return CustomHistogram::DeserializeInfoImpl(iter);
-    case SPARSE_HISTOGRAM:
-      return SparseHistogram::DeserializeInfoImpl(iter);
-    default:
-      return nullptr;
-  }
-}
-
 HistogramBase::CountAndBucketData::CountAndBucketData(Count32 count,
                                                       int64_t sum,
-                                                      Value::List buckets)
+                                                      ListValue buckets)
     : count(count), sum(sum), buckets(std::move(buckets)) {}
 
 HistogramBase::CountAndBucketData::~CountAndBucketData() = default;
@@ -85,6 +63,46 @@ HistogramBase::CountAndBucketData& HistogramBase::CountAndBucketData::operator=(
     CountAndBucketData&& other) = default;
 
 const HistogramBase::Sample32 HistogramBase::kSampleType_MAX = INT_MAX;
+
+// static
+HistogramBase* HistogramBase::DeserializeInfo(
+    PickleIterator* iter,
+    HistogramBase::NameMapper mapper) {
+  int type;
+  if (!iter->ReadInt(&type)) {
+    return nullptr;
+  }
+
+  HistogramBase* result;
+  switch (type) {
+    case HISTOGRAM:
+      result = Histogram::DeserializeInfoImpl(iter, mapper);
+      break;
+    case LINEAR_HISTOGRAM:
+      result = LinearHistogram::DeserializeInfoImpl(iter, mapper);
+      break;
+    case BOOLEAN_HISTOGRAM:
+      result = BooleanHistogram::DeserializeInfoImpl(iter, mapper);
+      break;
+    case CUSTOM_HISTOGRAM:
+      result = CustomHistogram::DeserializeInfoImpl(iter, mapper);
+      break;
+    case SPARSE_HISTOGRAM:
+      result = SparseHistogram::DeserializeInfoImpl(iter, mapper);
+      break;
+    default:
+      return nullptr;
+  }
+
+  if (result != nullptr &&
+      result->GetHistogramType() != static_cast<HistogramType>(type)) {
+    // If there's a type mismatch, this could be a DummyHistogram returned by
+    // FactoryGetInternal() due to invalid arguments. In this case, return
+    // nullptr to indicate an error.
+    return nullptr;
+  }
+  return result;
+}
 
 HistogramBase::HistogramBase(DurableStringView name)
     : histogram_name_(name->data()),
@@ -116,37 +134,11 @@ bool HistogramBase::HasFlags(int32_t flags) const {
   return (this->flags() & flags) == flags;
 }
 
-void HistogramBase::AddScaled(Sample32 value, int count, int scale) {
-  DCHECK_GT(scale, 0);
-
-  // Convert raw count and probabilistically round up/down if the remainder
-  // is more than a random number [0, scale). This gives a more accurate
-  // count when there are a large number of records. RandInt is "inclusive",
-  // hence the -1 for the max value.
-  int count_scaled = count / scale;
-  if (count - (count_scaled * scale) > base::RandInt(0, scale - 1)) {
-    ++count_scaled;
-  }
-  if (count_scaled <= 0) {
-    return;
-  }
-
-  AddCount(value, count_scaled);
-}
-
-void HistogramBase::AddKilo(Sample32 value, int count) {
-  AddScaled(value, count, 1000);
-}
-
-void HistogramBase::AddKiB(Sample32 value, int count) {
-  AddScaled(value, count, 1024);
-}
-
-void HistogramBase::AddTimeMillisecondsGranularity(const TimeDelta& time) {
+void HistogramBase::AddTimeMillisecondsGranularity(TimeDelta time) {
   Add(saturated_cast<Sample32>(time.InMilliseconds()));
 }
 
-void HistogramBase::AddTimeMicrosecondsGranularity(const TimeDelta& time) {
+void HistogramBase::AddTimeMicrosecondsGranularity(TimeDelta time) {
   // Intentionally drop high-resolution reports on clients with low-resolution
   // clocks. High-resolution metrics cannot make use of low-resolution data and
   // reporting it merely adds noise to the metric. https://crbug.com/807615#c16
@@ -172,10 +164,10 @@ uint32_t HistogramBase::FindCorruption(const HistogramSamples& samples) const {
 void HistogramBase::WriteJSON(std::string* output,
                               JSONVerbosityLevel verbosity_level) const {
   CountAndBucketData count_and_bucket_data = GetCountAndBucketData();
-  Value::Dict parameters = GetParameters();
+  DictValue parameters = GetParameters();
 
   JSONStringValueSerializer serializer(output);
-  Value::Dict root;
+  DictValue root;
   root.Set("name", histogram_name());
   root.Set("count", count_and_bucket_data.count);
   root.Set("sum", static_cast<double>(count_and_bucket_data.sum));
@@ -213,14 +205,14 @@ HistogramBase::CountAndBucketData HistogramBase::GetCountAndBucketData() const {
   int64_t sum = snapshot->sum();
   std::unique_ptr<SampleCountIterator> it = snapshot->Iterator();
 
-  Value::List buckets;
+  ListValue buckets;
   while (!it->Done()) {
     Sample32 bucket_min;
     int64_t bucket_max;
     Count32 bucket_count;
     it->Get(&bucket_min, &bucket_max, &bucket_count);
 
-    Value::Dict bucket_value;
+    DictValue bucket_value;
     bucket_value.Set("low", bucket_min);
     // TODO(crbug.com/40228085): Make base::Value able to hold int64_t and
     // remove this cast.
@@ -259,7 +251,7 @@ void HistogramBase::WriteAsciiBucketValue(Count32 current,
 }
 
 void HistogramBase::WriteAscii(std::string* output) const {
-  base::Value::Dict graph_dict = ToGraphDict();
+  base::DictValue graph_dict = ToGraphDict();
   output->append(*graph_dict.FindString("header"));
   output->append("\n");
   output->append(*graph_dict.FindString("body"));

@@ -42,6 +42,8 @@ export class XfBreadcrumb extends XfBase {
 
   @query('button[elider]') private $eliderButton_?: HTMLButtonElement;
   @query('cr-action-menu') private $actionMenu_?: CrActionMenuElement;
+  // TODO(crbug.com/493886981): Fix members asserted as non-null.
+  /* eslint-disable-next-line no-restricted-syntax */
   @query('#first') private $firstButton_!: HTMLButtonElement;
 
   /** Indicates if the elider menu is open or not. */
@@ -317,7 +319,7 @@ function getCSS() {
       margin: 0;
 
       /* elide wide text */
-      max-width: 200px;
+      max-width: 15em;
       /* text rendering debounce: fix a minimum width. */
       min-width: calc(12px + 1em);
       outline: none;

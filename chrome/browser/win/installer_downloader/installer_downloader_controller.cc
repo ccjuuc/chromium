@@ -12,6 +12,7 @@
 #include "base/base_paths.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -23,27 +24,34 @@
 #include "base/version_info/channel.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/win/installer_downloader/installer_downloader_feature.h"
+#include "chrome/browser/win/installer_downloader/installer_downloader_constants.h"
 #include "chrome/browser/win/installer_downloader/installer_downloader_infobar_window_active_tab_tracker.h"
 #include "chrome/browser/win/installer_downloader/installer_downloader_model.h"
 #include "chrome/browser/win/installer_downloader/installer_downloader_model_impl.h"
 #include "chrome/browser/win/installer_downloader/system_info_provider_impl.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/grit/branded_strings.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
+#include "components/omnibox/browser/vector_icons.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
 namespace installer_downloader {
@@ -82,10 +90,8 @@ std::string GetDefaultInstallerDownloadUrlTemplate() {
 }
 
 std::optional<GURL> BuildInstallerDownloadUrl(bool is_metrics_enabled) {
-  std::string installer_url_template = kInstallerUrlTemplateParam.Get();
-  if (installer_url_template.empty()) {
-    installer_url_template = GetDefaultInstallerDownloadUrlTemplate();
-  }
+  std::string installer_url_template =
+      GetDefaultInstallerDownloadUrlTemplate();
 
   base::ReplaceFirstSubstringAfterOffset(
       &installer_url_template, /*start_offset=*/0, "IIDGUID",
@@ -124,6 +130,7 @@ InstallerDownloaderController::InstallerDownloaderController(
       should_show_infobar_for_profile_callback_(base::BindRepeating(
           &InstallerDownloaderController::ShouldShowInfobarForCurrentProfile,
           base::Unretained(this))) {
+  RegisterInfoBar();
   RegisterBrowserWindowEvents();
 }
 
@@ -140,7 +147,54 @@ InstallerDownloaderController::InstallerDownloaderController(
       should_show_infobar_for_profile_callback_(base::BindRepeating(
           &InstallerDownloaderController::ShouldShowInfobarForCurrentProfile,
           base::Unretained(this))) {
+  RegisterInfoBar();
   RegisterBrowserWindowEvents();
+}
+
+void InstallerDownloaderController::RegisterInfoBar() {
+  if (!infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE)) {
+    return;
+  }
+
+  auto* browser_infobar_manager =
+      infobars::BrowserInfoBarManager::From(g_browser_process);
+  if (!browser_infobar_manager) {
+    return;
+  }
+
+  auto spec =
+      infobars::InfoBarSpec::Builder(
+          infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE)
+          .SetMessageText(
+              l10n_util::GetStringUTF16(IDS_INSTALLER_DOWNLOADER_DISCLAIMER))
+          .SetLinkText(l10n_util::GetStringUTF16(IDS_INSTALLER_DOWNLOADER_LINK))
+          .SetLinkNavigationUrl(GURL(kLearnMoreUrl))
+          .SetIcon(features::IsRoundedIconsEnabled()
+                       ? omnibox::kChromeProductIcon
+                       : vector_icons::kProductRefreshIcon)
+          .SetScope(infobars::InfoBarScope::kGlobal)
+          .SetExpireOnNavigation(false)
+          // InstallerDownloaderController is registered as a global feature and
+          // this controller is a global feature outliving any infobar
+          // instances, so base::Unretained(this) is safe.
+          .AddOkButton(
+              l10n_util::GetStringUTF16(IDS_INSTALLER_DOWNLOADER_BUTTON_LABEL),
+              base::BindRepeating(
+                  [](InstallerDownloaderController* controller,
+                     content::WebContents*) {
+                    CHECK(controller->destination_.has_value());
+                    controller->OnDownloadRequestAccepted(
+                        controller->destination_.value());
+                  },
+                  base::Unretained(this)))
+          .SetDismissAction(base::BindRepeating(
+              [](InstallerDownloaderController* controller,
+                 content::WebContents*) { controller->OnInfoBarDismissed(); },
+              base::Unretained(this)))
+          .Build();
+
+  browser_infobar_manager->Register(std::move(spec));
 }
 
 void InstallerDownloaderController::RegisterBrowserWindowEvents() {
@@ -149,10 +203,13 @@ void InstallerDownloaderController::RegisterBrowserWindowEvents() {
           &InstallerDownloaderController::OnActiveBrowserWindowChanged,
           base::Unretained(this)));
 
-  removed_window_subscription_ =
-      window_tracker_.RegisterRemovedWindowCallback(base::BindRepeating(
-          &InstallerDownloaderController::OnRemovedBrowserWindow,
-          base::Unretained(this)));
+  if (!infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE)) {
+    removed_window_subscription_ =
+        window_tracker_.RegisterRemovedWindowCallback(base::BindRepeating(
+            &InstallerDownloaderController::OnRemovedBrowserWindow,
+            base::Unretained(this)));
+  }
 }
 
 content::WebContents* InstallerDownloaderController::GetActiveWebContents() {
@@ -180,6 +237,12 @@ void InstallerDownloaderController::OnActiveBrowserWindowChanged(
     BrowserWindowInterface* bwi) {
   // This can be null during  the startup or when the last window is closed.
   if (!bwi) {
+    return;
+  }
+
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE)) {
+    MaybeShowInfoBar();
     return;
   }
 
@@ -239,6 +302,39 @@ void InstallerDownloaderController::OnEligibilityReady(
 
   // Early return when we have no destination and bypass is not allowed.
   if (!destination.has_value() && !model_->ShouldByPassEligibilityCheck()) {
+    return;
+  }
+
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE)) {
+    if (infobar_shown_) {
+      return;
+    }
+
+    // Compute a fallback destination (user’s Desktop) when bypassing
+    // eligibility.
+    if (!destination) {
+      base::FilePath desktop_path;
+      if (!base::PathService::Get(base::DIR_USER_DESKTOP, &desktop_path)) {
+        return;
+      }
+
+      destination = std::move(desktop_path);
+    }
+
+    destination_ = destination;
+
+    auto* browser_infobar_manager =
+        infobars::BrowserInfoBarManager::From(g_browser_process);
+    CHECK(browser_infobar_manager);
+
+    browser_infobar_manager->ShowGlobally(
+        infobars::InfoBarDelegate::INSTALLER_DOWNLOADER_INFOBAR_DELEGATE);
+
+    infobar_shown_ = true;
+    model_->IncrementShowCount();
+    base::UmaHistogramBoolean("Windows.InstallerDownloader.InfobarShown",
+                              /*sample=*/true);
     return;
   }
 
@@ -328,6 +424,7 @@ void InstallerDownloaderController::OnDownloadRequestAccepted(
                             true);
 
   user_initiated_info_bar_close_pending_ = true;
+  infobar_closed_ = true;
   // User have explicitly gave download consent. Therefore, a background
   // download should be issued.
   auto* contents = get_active_web_contents_callback_.Run();
@@ -350,7 +447,7 @@ void InstallerDownloaderController::OnDownloadRequestAccepted(
 
   model_->StartDownload(
       installer_url.value(),
-      destination.AppendASCII(kDownloadedInstallerFileName.Get()),
+      destination.AppendASCII(kDownloadedInstallerFileName),
       CHECK_DEREF(profile->GetDownloadManager()),
       base::BindOnce(&InstallerDownloaderController::OnDownloadCompleted,
                      base::Unretained(this), std::move(keep_alive)));
@@ -362,6 +459,9 @@ void InstallerDownloaderController::OnDownloadCompleted(
   base::UmaHistogramBoolean("Windows.InstallerDownloader.DownloadSucceed",
                             success);
   model_->PreventFutureDisplay();
+  if (success) {
+    model_->RecordDownloadCompleted();
+  }
 }
 
 void InstallerDownloaderController::SetActiveWebContentsCallbackForTesting(
@@ -379,6 +479,7 @@ void InstallerDownloaderController::OnInfoBarDismissed() {
   base::UmaHistogramBoolean("Windows.InstallerDownloader.RequestAccepted",
                             false);
   user_initiated_info_bar_close_pending_ = true;
+  infobar_closed_ = true;
   model_->PreventFutureDisplay();
 }
 

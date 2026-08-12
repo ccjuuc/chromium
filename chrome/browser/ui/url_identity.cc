@@ -16,22 +16,22 @@
 #include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
-#include "components/webapps/isolated_web_apps/scheme.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+// Android does not support //chrome/browser/web_applications, see
+// chrome/browser/web_applications/BUILD.gn.
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "components/webapps/common/web_app_id.h"
+#include "components/webapps/isolated_web_apps/scheme.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_registry.h"  // nogncheck
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 using Type = UrlIdentity::Type;
 using DefaultFormatOptions = UrlIdentity::DefaultFormatOptions;
@@ -53,7 +53,7 @@ UrlIdentity CreateDefaultUrlIdentityFromUrl(const GURL& url,
     name = url_formatter::FormatUrlForSecurityDisplay(
         url, url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
   } else if (options.default_options.Has(DefaultFormatOptions::kHostname)) {
-    name = url_formatter::IDNToUnicode(url.GetHost());
+    name = url_formatter::IDNToUnicode(url.host());
   } else if (options.default_options.Has(
                  DefaultFormatOptions::kOmitSchemePathAndTrivialSubdomains)) {
     name = url_formatter::FormatUrlForDisplayOmitSchemePathAndTrivialSubdomains(
@@ -65,7 +65,7 @@ UrlIdentity CreateDefaultUrlIdentityFromUrl(const GURL& url,
   return UrlIdentity{.type = Type::kDefault, .name = name};
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 UrlIdentity CreateChromeExtensionIdentityFromUrl(Profile* profile,
                                                  const GURL& url,
                                                  const FormatOptions& options) {
@@ -88,16 +88,9 @@ UrlIdentity CreateChromeExtensionIdentityFromUrl(Profile* profile,
                      .name = base::CollapseWhitespace(
                          base::UTF8ToUTF16(extension->name()), false)};
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
-std::optional<webapps::AppId> GetIsolatedWebAppIdFromUrl(const GURL& url) {
-  base::expected<web_app::IsolatedWebAppUrlInfo, std::string> url_info =
-      web_app::IsolatedWebAppUrlInfo::Create(url);
-  return url_info.has_value() ? std::make_optional(url_info.value().app_id())
-                              : std::nullopt;
-}
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
 UrlIdentity CreateIsolatedWebAppIdentityFromUrl(Profile* profile,
                                                 const GURL& url,
                                                 const FormatOptions& options) {
@@ -109,7 +102,10 @@ UrlIdentity CreateIsolatedWebAppIdentityFromUrl(Profile* profile,
       web_app::WebAppProvider::GetForWebApps(profile);
   DCHECK(provider);
 
-  std::optional<webapps::AppId> app_id = GetIsolatedWebAppIdFromUrl(url);
+  std::optional<webapps::AppId> app_id =
+      provider->registrar_unsafe().FindBestAppWithUrlInScope(
+          url, web_app::WebAppFilter::IsIsolatedApp() |
+                   web_app::WebAppFilter::IsIsolatedSubApp());
   if (!app_id.has_value()) {  // fallback to default
     return CreateDefaultUrlIdentityFromUrl(url, options);
   }
@@ -128,9 +124,7 @@ UrlIdentity CreateIsolatedWebAppIdentityFromUrl(Profile* profile,
               provider->registrar_unsafe().GetAppShortName(app_id.value())),
           false)};
 }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 UrlIdentity CreateFileIdentityFromUrl(Profile* profile,
                                       const GURL& url,
@@ -148,21 +142,19 @@ UrlIdentity UrlIdentity::CreateFromUrl(Profile* profile,
                                        const GURL& url,
                                        const TypeSet& allowed_types,
                                        const FormatOptions& options) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (url.SchemeIs(extensions::kExtensionScheme)) {
     DCHECK(allowed_types.Has(Type::kChromeExtension));
     return CreateChromeExtensionIdentityFromUrl(profile, url, options);
   }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_ANDROID)
   if (url.SchemeIs(webapps::kIsolatedAppScheme)) {
     DCHECK(allowed_types.Has(Type::kIsolatedWebApp));
     return CreateIsolatedWebAppIdentityFromUrl(profile, url, options);
   }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   if (url.SchemeIsFile()) {
     DCHECK(allowed_types.Has(Type::kFile));

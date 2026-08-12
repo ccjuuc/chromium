@@ -22,12 +22,10 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_util.h"
 #include "chrome/common/chrome_version.h"
+#include "components/user_education/webui/whats_new_registry.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/reduce_accept_language_controller_delegate.h"
@@ -40,58 +38,46 @@
 
 namespace whats_new {
 const char kChromeWhatsNewURL[] = "https://www.google.com/chrome/whats-new/";
-const char kChromeWhatsNewRefreshURL[] =
-    "https://www.google.com/chrome/wn-2025/whats-new/";
 const char kChromeWhatsNewStagingURL[] =
     "https://chrome-staging.corp.google.com/chrome/whats-new/";
-const char kChromeWhatsNewRefreshStagingURL[] =
-    "https://chrome-staging.corp.google.com/chrome/wn-2025/whats-new/";
 
 const int64_t kMaxDownloadBytes = 1024 * 1024;
 
-GURL AddVersionParameter(const GURL& base_url) {
-  return net::AppendQueryParameter(base_url, "version",
-                                   base::NumberToString(CHROME_VERSION_MAJOR));
+GURL AddVersionParameter(const WhatsNewRegistry& whats_new_registry,
+                         const GURL& base_url) {
+  return net::AppendQueryParameter(
+      base_url, "version",
+      base::NumberToString(whats_new_registry.version_override().value_or(
+          CHROME_VERSION_MAJOR)));
 }
 
-GURL GetServerLegacyURL(bool is_staging) {
+GURL GetServerURL(const WhatsNewRegistry& whats_new_registry, bool is_staging) {
+  const bool use_staging = is_staging || UseStagingOverrideEnabled();
+
   const GURL base_url =
-      is_staging ? GURL(kChromeWhatsNewStagingURL) : GURL(kChromeWhatsNewURL);
-  return AddVersionParameter(base_url);
-}
-
-GURL GetServerRefreshURL(bool is_staging) {
-  const GURL base_url = is_staging ? GURL(kChromeWhatsNewRefreshStagingURL)
-                                   : GURL(kChromeWhatsNewRefreshURL);
-  return AddVersionParameter(base_url);
-}
-
-GURL GetServerURL(bool is_staging) {
-  return base::FeatureList::IsEnabled(features::kWhatsNewDesktopRefresh)
-             ? GetServerRefreshURL(is_staging)
-             : GetServerLegacyURL(is_staging);
+      use_staging ? GURL(kChromeWhatsNewStagingURL) : GURL(kChromeWhatsNewURL);
+  return AddVersionParameter(whats_new_registry, base_url);
 }
 
 GURL GetServerURLForRender(const WhatsNewRegistry& whats_new_registry,
                            bool is_staging) {
-  GURL url = GetServerURL(is_staging);
+  GURL url = GetServerURL(whats_new_registry, is_staging);
   const auto active_features = whats_new_registry.GetActiveFeatureNames();
   if (!active_features.empty()) {
-    url = net::AppendQueryParameter(
-        url, "enabled", base::JoinString(active_features, std::string(",")));
+    url = net::AppendQueryParameter(url, "enabled",
+                                    base::JoinString(active_features, ","));
   }
 
   const auto rolled_features = whats_new_registry.GetRolledFeatureNames();
   if (!rolled_features.empty()) {
-    url = net::AppendQueryParameter(
-        url, "rolled", base::JoinString(rolled_features, std::string(",")));
+    url = net::AppendQueryParameter(url, "rolled",
+                                    base::JoinString(rolled_features, ","));
   }
 
   const auto customizations = whats_new_registry.GetCustomizations();
   if (!customizations.empty()) {
-    url = net::AppendQueryParameter(
-        url, "customization",
-        base::JoinString(customizations, std::string(",")));
+    url = net::AppendQueryParameter(url, "customization",
+                                    base::JoinString(customizations, ","));
   }
 
   return net::AppendQueryParameter(url, "internal", "true");
@@ -99,19 +85,18 @@ GURL GetServerURLForRender(const WhatsNewRegistry& whats_new_registry,
 
 namespace {
 
-class WhatsNewFetcher : public BrowserListObserver {
+// TODO(crbug.com/417823694): Migrate this to BrowserWindowFeatures and refactor
+// it such that it is not self-owned.
+class WhatsNewFetcher {
  public:
   explicit WhatsNewFetcher(Browser* browser) : browser_(browser) {
-    BrowserList::AddObserver(this);
-    browser_did_become_active_subscription_ = browser_->RegisterDidBecomeActive(
-        base::BindRepeating(&WhatsNewFetcher::OnBrowserDidBecomeActive,
-                            base::Unretained(this)));
-    browser_did_become_inactive_subscription_ =
-        browser_->RegisterDidBecomeActive(
-            base::BindRepeating(&WhatsNewFetcher::OnBrowserDidBecomeInactive,
-                                base::Unretained(this)));
+    browser_did_close_subscription_ =
+        browser_->RegisterBrowserDidClose(base::BindRepeating(
+            &WhatsNewFetcher::OnBrowserClosed, base::Unretained(this)));
 
-    GURL server_url = GetServerURL();
+    const WhatsNewRegistry* whats_new_registry =
+        g_browser_process->GetFeatures()->whats_new_registry();
+    GURL server_url = GetServerURL(*whats_new_registry);
     startup_url_ = GetWebUIStartupURL();
 
     if (IsRemoteContentDisabled()) {
@@ -164,7 +149,7 @@ class WhatsNewFetcher : public BrowserListObserver {
 
     // Inform the server of the top browser language via the
     // Accept-Language header.
-    if (auto* profile = browser->profile()) {
+    if (auto* profile = browser->GetProfile()) {
       if (auto* delegate =
               profile->GetReduceAcceptLanguageControllerDelegate()) {
         auto languages = delegate->GetUserAcceptLanguages();
@@ -189,27 +174,14 @@ class WhatsNewFetcher : public BrowserListObserver {
         kMaxDownloadBytes);
   }
 
-  ~WhatsNewFetcher() override { BrowserList::RemoveObserver(this); }
+  ~WhatsNewFetcher() = default;
 
-  void OnBrowserDidBecomeActive(BrowserWindowInterface* browser) {
-    browser_closed_or_inactive_ = false;
-  }
-
-  void OnBrowserDidBecomeInactive(BrowserWindowInterface* browser) {
-    browser_closed_or_inactive_ = true;
-  }
-
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override {
-    if (browser != browser_) {
-      return;
-    }
-
-    browser_closed_or_inactive_ = true;
-    BrowserList::RemoveObserver(this);
-    browser_did_become_active_subscription_ = {};
-    browser_did_become_inactive_subscription_ = {};
-    browser_ = nullptr;
+  void OnBrowserClosed(BrowserWindowInterface* browser) {
+    CHECK_EQ(browser_, browser);
+    // If the browser was closed while What's New was loading record the outcome
+    // and delete the dialog to avoid leaking memory.
+    LogLoadEvent(LoadEvent::kLoadAbort);
+    delete this;
   }
 
  private:
@@ -224,7 +196,7 @@ class WhatsNewFetcher : public BrowserListObserver {
   }
 
   void OpenWhatsNewTabForTest() {
-    if (browser_closed_or_inactive_) {
+    if (!browser_->IsActive()) {
       return;
     }
 
@@ -233,6 +205,8 @@ class WhatsNewFetcher : public BrowserListObserver {
   }
 
   void OnResponseLoaded(std::optional<std::string> body) {
+    DCHECK(browser_);
+
     int error_or_response_code = simple_loader_->NetError();
     const auto& headers = simple_loader_->ResponseInfo()
                               ? simple_loader_->ResponseInfo()->headers
@@ -253,30 +227,26 @@ class WhatsNewFetcher : public BrowserListObserver {
     success = success && error_or_response_code >= 200 &&
               error_or_response_code <= 302 && body;
 
-    // If the browser was closed or moved to the background while What's New was
-    // loading, return early before recording that the user saw the page.
-    if (browser_closed_or_inactive_) {
+    if (!browser_->IsActive()) {
+      // If the browser was moved to the background while What's New was loading
+      // log the appropriate event and immediately destroy the dialog to avoid
+      // leaking memory.
       LogLoadEvent(LoadEvent::kLoadAbort);
-      return;
-    }
+    } else {
+      LogLoadEvent(success ? LoadEvent::kLoadSuccess
+                           : LoadEvent::kLoadFailAndDoNotShow);
 
-    DCHECK(browser_);
-
-    LogLoadEvent(success ? LoadEvent::kLoadSuccess
-                         : LoadEvent::kLoadFailAndDoNotShow);
-
-    if (success) {
-      AddWhatsNewTab(browser_);
+      if (success) {
+        AddWhatsNewTab(browser_);
+      }
     }
     delete this;
   }
 
   std::unique_ptr<network::SimpleURLLoader> simple_loader_;
   raw_ptr<Browser> browser_;
-  bool browser_closed_or_inactive_ = false;
   GURL startup_url_;
-  base::CallbackListSubscription browser_did_become_active_subscription_;
-  base::CallbackListSubscription browser_did_become_inactive_subscription_;
+  base::CallbackListSubscription browser_did_close_subscription_;
 };
 
 }  // namespace

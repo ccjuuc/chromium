@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "build/build_config.h"
 #include "pdf/flatten_pdf_result.h"
@@ -42,9 +43,10 @@ namespace chrome_pdf {
 
 namespace {
 
-// UI should have done parameter sanity check, when execution
-// reaches here, `pages_per_sheet` should be a positive integer.
+// Assumes the Print Preview UI passed in a positive integer. So this function
+// does not need to handle invalid values like negative values or zero.
 bool ShouldDoNup(int pages_per_sheet) {
+  CHECK_GE(pages_per_sheet, 1);
   return pages_per_sheet > 1;
 }
 
@@ -179,8 +181,12 @@ void TransformPDFPageForPrinting(
   // document of multiple page sizes. To give better user experience, we
   // decided to have same crop box and media box values. Hence, the user will
   // see a list of uniform pages.
+  //
+  // Some downstream components (e.g. cups-filters) may use the trim box
+  // instead of the crop box, so reset that as well.
   FPDFPage_SetMediaBox(page, 0, 0, page_size.width(), page_size.height());
   FPDFPage_SetCropBox(page, 0, 0, page_size.width(), page_size.height());
+  FPDFPage_SetTrimBox(page, 0, 0, page_size.width(), page_size.height());
 
   // Transformation is not required, so return early. Do this check only after
   // updating the media box and crop box. For more detailed information, please

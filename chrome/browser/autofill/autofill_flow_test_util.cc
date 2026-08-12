@@ -21,7 +21,6 @@
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/translate/translate_bubble_model.h"
 #include "chrome/browser/ui/translate/translate_bubble_test_utils.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "content/public/browser/browser_accessibility_state.h"
@@ -172,10 +171,10 @@ struct ShowAutofillSuggestionsParams {
   };
 
   // It seems that due to race conditions with Blink's layouting
-  // (crbug.com/1175735#c9), the below focus events are sometimes too early:
-  // Autofill closes the popup right away because it is outside of the content
-  // area. To work around this, we attempt to bring up the Autofill popup
-  // multiple times, with some delay.
+  // (crbug.com/40168071#comment10), the below focus events are sometimes too
+  // early: Autofill closes the popup right away because it is outside of the
+  // content area. To work around this, we attempt to bring up the Autofill
+  // popup multiple times, with some delay.
   testing::Message m;
   m << __func__ << "(): with " << p.num_profile_suggestions
     << " profile suggestions.";
@@ -183,7 +182,7 @@ struct ShowAutofillSuggestionsParams {
   for (size_t i = 1; i <= p.max_tries; ++i) {
     m << "\nIteration " << i << "/" << p.max_tries << ". ";
     // A Translate bubble may overlap with the Autofill popup, which causes
-    // flakiness. See crbug.com/1175735#c10.
+    // flakiness. See crbug.com/40168071#comment11.
     // Also, the address-save prompts and others may overlap with the Autofill
     // popup. So we preemptively close all bubbles, which however is not
     // reliable on Windows.

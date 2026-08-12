@@ -41,13 +41,13 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
 import org.robolectric.shadows.ShadowContentResolver;
 import org.robolectric.shadows.ShadowDialog;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowToast;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.device_reauth.BiometricStatus;
@@ -58,6 +58,7 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.pwm_disabled.PwmDeprecationDialogsMetricsRecorder.DownloadCsvFlowStep;
 import org.chromium.components.browser_ui.settings.SettingsCustomTabLauncher;
 import org.chromium.components.browser_ui.test.BrowserUiTestFragmentActivity;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.ui.widget.ToastManager;
 
 import java.io.BufferedReader;
@@ -69,7 +70,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Tests for {@link PasswordsCsvDownloadDialogController} */
+/** Tests for {@link PasswordCsvDownloadFlowController} */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
         manifest = Config.NONE,
@@ -136,7 +137,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog dialog = ShadowDialog.getLatestDialog();
         dialog.findViewById(R.id.positive_button).performClick();
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         Resources resources = RuntimeEnvironment.getApplication().getResources();
 
@@ -169,8 +170,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog dialog = ShadowDialog.getLatestDialog();
         dialog.findViewById(R.id.positive_button).performClick();
 
-        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor = MockitoHelper.callbackCaptor();
         verify(mReauthenticatorBridge).reauthenticate(resultCallbackCaptor.capture());
         resultCallbackCaptor.getValue().onResult(false);
 
@@ -200,8 +200,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog exportDialog = ShadowDialog.getLatestDialog();
         exportDialog.findViewById(R.id.positive_button).performClick();
 
-        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor = MockitoHelper.callbackCaptor();
         verify(mReauthenticatorBridge).reauthenticate(resultCallbackCaptor.capture());
         resultCallbackCaptor.getValue().onResult(true);
 
@@ -213,7 +212,7 @@ public class PasswordCsvDownloadFlowControllerTest {
 
         // Simulate the user cancelling the activity and not setting a destination file
         shadowActivity.receiveResult(startedIntent, RESULT_OK, new Intent().setData(null));
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(exportDialog.isShowing());
 
@@ -245,8 +244,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog exportDialog = ShadowDialog.getLatestDialog();
         exportDialog.findViewById(R.id.positive_button).performClick();
 
-        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor = MockitoHelper.callbackCaptor();
         verify(mReauthenticatorBridge).reauthenticate(resultCallbackCaptor.capture());
         resultCallbackCaptor.getValue().onResult(true);
 
@@ -286,9 +284,7 @@ public class PasswordCsvDownloadFlowControllerTest {
                 ContextUtils.getApplicationContext()
                         .getString(R.string.password_settings_export_tips),
                 description.getText());
-        errorAlertDialog
-                .getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEGATIVE)
-                .performClick();
+        errorAlertDialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
         BaseRobolectricTestRule.runAllBackgroundAndUi();
 
         // The source file should not have been deleted, because the write to the destination
@@ -319,8 +315,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog dialog = ShadowDialog.getLatestDialog();
         dialog.findViewById(R.id.positive_button).performClick();
 
-        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor = MockitoHelper.callbackCaptor();
         verify(mReauthenticatorBridge).reauthenticate(resultCallbackCaptor.capture());
         resultCallbackCaptor.getValue().onResult(true);
 
@@ -365,8 +360,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         Dialog dialog = ShadowDialog.getLatestDialog();
         dialog.findViewById(R.id.positive_button).performClick();
 
-        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Boolean>> resultCallbackCaptor = MockitoHelper.callbackCaptor();
         verify(mReauthenticatorBridge).reauthenticate(resultCallbackCaptor.capture());
         resultCallbackCaptor.getValue().onResult(true);
 
@@ -380,7 +374,7 @@ public class PasswordCsvDownloadFlowControllerTest {
         // crashes occur. This scenario could happen in case of system resource pressure while the
         // file chooser activity is shown.
         mActivity.recreate();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @Test

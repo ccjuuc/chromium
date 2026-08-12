@@ -38,7 +38,7 @@ using base::test::TestMessage;
 namespace {
 
 constexpr char kOptimizationGuideServiceUrl[] =
-    "https://optimization-guide-server.com/?key=foo_key";
+    "https://optimization-guide-server.com/";
 
 TestMessage BuildTestMessage(const std::string& test_message_str) {
   TestMessage test_message;
@@ -89,13 +89,13 @@ class ModelExecutionFetcherImplTest : public testing::Test {
     RunUntilIdle();
   }
 
-  void VerifyHasPendingFetchRequest() {
+  void VerifyHasPendingFetchRequest(bool expect_key = false) {
     EXPECT_GE(test_url_loader_factory_.NumPending(), 1);
     auto* pending_request = test_url_loader_factory_.GetPendingRequest(0);
     EXPECT_EQ(pending_request->request.method, "POST");
     std::string key_value;
-    EXPECT_TRUE(net::GetValueForKeyInQuery(pending_request->request.url, "key",
-                                           &key_value));
+    EXPECT_EQ(expect_key, net::GetValueForKeyInQuery(
+                              pending_request->request.url, "key", &key_value));
     last_authorization_request_header_.clear();
     if (std::optional<std::string> header =
             pending_request->request.headers.GetHeader(
@@ -203,9 +203,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestSuccessfulResponseNoTimeout) {
                 ->test());
   EXPECT_TRUE(last_server_timeout_header_.empty());
 
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.NetErrorCode", -net::OK, 1);
   histogram_tester_.ExpectTotalCount(
@@ -244,9 +241,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestSuccessfulResponseWithTimeout) {
                 ->test());
   EXPECT_EQ("600", last_server_timeout_header_);
 
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.NetErrorCode", -net::OK, 1);
   histogram_tester_.ExpectTotalCount(
@@ -277,9 +271,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestNetErrorResponse) {
       "OptimizationGuide.ModelExecutionFetcher.RequestStatus."
       "WallpaperSearch",
       FetcherRequestStatus::kResponseError, 1);
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      0);
   EXPECT_EQ(ModelExecutionError::kGenericFailure,
             last_execute_response_->error().error());
 }
@@ -304,9 +295,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestBadResponse) {
       "OptimizationGuide.ModelExecutionFetcher.RequestStatus."
       "WallpaperSearch",
       FetcherRequestStatus::kResponseError, 1);
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      0);
   EXPECT_EQ(ModelExecutionError::kGenericFailure,
             last_execute_response_->error().error());
 }
@@ -336,13 +324,13 @@ TEST_F(ModelExecutionFetcherImplTest, TestMultipleParallelRequests) {
                BuildTestMessage("foo request"));
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       "access_token", base::Time::Max());
-  ExecuteModel(ModelBasedCapabilityKey::kTabOrganization,
+  ExecuteModel(ModelBasedCapabilityKey::kCompose,
                BuildTestMessage("foo request"));
 
   // The second request should fail immediately.
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.RequestStatus."
-      "TabOrganization",
+      "Compose",
       FetcherRequestStatus::kFetcherBusy, 1);
   EXPECT_EQ(ModelExecutionError::kGenericFailure,
             last_execute_response_->error().error());
@@ -358,9 +346,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestMultipleParallelRequests) {
       FetcherRequestStatus::kSuccess, 1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.Status", net::HTTP_OK, 1);
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      1);
 }
 
 TEST_F(ModelExecutionFetcherImplTest, TestSuccessfulResponseWithLogin) {
@@ -391,9 +376,6 @@ TEST_F(ModelExecutionFetcherImplTest, TestSuccessfulResponseWithLogin) {
                 last_execute_response_->value().response_metadata())
                 ->test());
 
-  histogram_tester_.ExpectTotalCount(
-      "OptimizationGuide.ModelExecutionFetcher.FetchLatency.WallpaperSearch",
-      1);
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.ModelExecutionFetcher.NetErrorCode", -net::OK, 1);
   histogram_tester_.ExpectTotalCount(
@@ -411,7 +393,7 @@ TEST_F(ModelExecutionFetcherImplTest, TestAccessTokenFailureWithLogin) {
   ExecuteModel(ModelBasedCapabilityKey::kWallpaperSearch,
                BuildTestMessage("foo request"));
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   EXPECT_EQ(0, test_url_loader_factory_.NumPending());
   histogram_tester_.ExpectUniqueSample(
@@ -433,6 +415,32 @@ TEST_F(ModelExecutionFetcherImplTest, TestNoUserSignIn) {
       FetcherRequestStatus::kUserNotSignedIn, 1);
   EXPECT_EQ(ModelExecutionError::kPermissionDenied,
             last_execute_response_->error().error());
+}
+
+TEST_F(ModelExecutionFetcherImplTest,
+       TestSuccessfulResponseNoAccessTokenRequired) {
+  ExecuteModel(ModelBasedCapabilityKey::kScamDetection,
+               BuildTestMessage("foo request"));
+  VerifyHasPendingFetchRequest(/*expect_key=*/true);
+
+  SimulateSuccessfulResponse(
+      BuildTestExecuteResponse(BuildTestMessage("foo response")));
+
+  EXPECT_EQ(
+      proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SCAM_DETECTION,
+      last_execute_request_->feature());
+  EXPECT_EQ("type.googleapis.com/base.test.TestMessage",
+            last_execute_request_->request_metadata().type_url());
+  EXPECT_EQ("type.googleapis.com/base.test.TestMessage",
+            last_execute_response_->value().response_metadata().type_url());
+  EXPECT_EQ("foo request", ParsedAnyMetadata<TestMessage>(
+                               last_execute_request_->request_metadata())
+                               ->test());
+  EXPECT_EQ("foo response",
+            ParsedAnyMetadata<TestMessage>(
+                last_execute_response_->value().response_metadata())
+                ->test());
+  EXPECT_TRUE(last_server_timeout_header_.empty());
 }
 
 }  // namespace optimization_guide

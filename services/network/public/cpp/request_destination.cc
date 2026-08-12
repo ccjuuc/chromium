@@ -45,9 +45,9 @@ constexpr char kXslt[] = "xslt";
 constexpr char kFencedframe[] = "fencedframe";
 constexpr char kWebIdentity[] = "webidentity";
 constexpr char kEmailVerification[] = "emailverification";
-constexpr char kDictionary[] = "dictionary";
+constexpr char kCompressionDictionary[] = "compression-dictionary";
 constexpr char kSpeculationRules[] = "speculationrules";
-constexpr char kSharedStorageWorklet[] = "sharedstorageworklet";
+constexpr char kText[] = "text";
 
 constexpr auto kRequestDestinationToStringMap =
     base::MakeFixedFlatMap<network::mojom::RequestDestination, const char*>(
@@ -68,6 +68,7 @@ constexpr auto kRequestDestinationToStringMap =
          {network::mojom::RequestDestination::kServiceWorker, kServiceWorker},
          {network::mojom::RequestDestination::kSharedWorker, kSharedWorker},
          {network::mojom::RequestDestination::kStyle, kStyle},
+         {network::mojom::RequestDestination::kText, kText},
          {network::mojom::RequestDestination::kTrack, kTrack},
          {network::mojom::RequestDestination::kVideo, kVideo},
          {network::mojom::RequestDestination::kWebBundle, kWebBundle},
@@ -77,12 +78,11 @@ constexpr auto kRequestDestinationToStringMap =
          {network::mojom::RequestDestination::kWebIdentity, kWebIdentity},
          {network::mojom::RequestDestination::kEmailVerification,
           kEmailVerification},
-         {network::mojom::RequestDestination::kDictionary, kDictionary},
+         {network::mojom::RequestDestination::kCompressionDictionary,
+          kCompressionDictionary},
          {network::mojom::RequestDestination::kSpeculationRules,
           kSpeculationRules},
-         {network::mojom::RequestDestination::kJson, kJson},
-         {network::mojom::RequestDestination::kSharedStorageWorklet,
-          kSharedStorageWorklet}});
+         {network::mojom::RequestDestination::kJson, kJson}});
 
 constexpr auto kRequestDestinationFromStringMap =
     base::MakeFixedFlatMap<std::string_view,
@@ -104,6 +104,7 @@ constexpr auto kRequestDestinationFromStringMap =
          {kServiceWorker, network::mojom::RequestDestination::kServiceWorker},
          {kSharedWorker, network::mojom::RequestDestination::kSharedWorker},
          {kStyle, network::mojom::RequestDestination::kStyle},
+         {kText, network::mojom::RequestDestination::kText},
          {kTrack, network::mojom::RequestDestination::kTrack},
          {kVideo, network::mojom::RequestDestination::kVideo},
          {kWebBundle, network::mojom::RequestDestination::kWebBundle},
@@ -113,24 +114,44 @@ constexpr auto kRequestDestinationFromStringMap =
          {kWebIdentity, network::mojom::RequestDestination::kWebIdentity},
          {kEmailVerification,
           network::mojom::RequestDestination::kEmailVerification},
-         {kDictionary, network::mojom::RequestDestination::kDictionary},
+         {kCompressionDictionary,
+          network::mojom::RequestDestination::kCompressionDictionary},
          {kSpeculationRules,
           network::mojom::RequestDestination::kSpeculationRules},
-         {kJson, network::mojom::RequestDestination::kJson},
-         {kSharedStorageWorklet,
-          network::mojom::RequestDestination::kSharedStorageWorklet}});
+         {kJson, network::mojom::RequestDestination::kJson}});
 // LINT.ThenChange(/third_party/blink/renderer/core/fetch/request.idl)
 
+// Gaps in the network::mojom::RequestDestination enum due to deprecated types.
+// When a type is deprecated and removed from the mojom definition, its numeric
+// value is not reused. This introduces gaps in the enum values.
+// These must be kept in sync with the mojom definition to ensure the static
+// asserts below work correctly.
+constexpr int kDeprecatedRequestDestinationValues[] = {
+    27,  // kSharedStorageWorklet
+};
+
+constexpr size_t CountDeprecatedRequestDestinationValues(int max_value) {
+  size_t count = 0;
+  for (int value : kDeprecatedRequestDestinationValues) {
+    if (value < max_value) {
+      count++;
+    }
+  }
+  return count;
+}
+
 static_assert(
-    std::size(kRequestDestinationToStringMap) ==
-        static_cast<unsigned>(network::mojom::RequestDestination::kMaxValue) +
-            1,
-    "All types must be in kRequestDestinationToStringMap.");
+    std::size(kRequestDestinationToStringMap) +
+            CountDeprecatedRequestDestinationValues(static_cast<int>(
+                network::mojom::RequestDestination::kMaxValue)) ==
+        static_cast<size_t>(network::mojom::RequestDestination::kMaxValue) + 1,
+    "All non-deprecated types must be in kRequestDestinationToStringMap.");
 static_assert(
-    std::size(kRequestDestinationFromStringMap) ==
-        static_cast<unsigned>(network::mojom::RequestDestination::kMaxValue) +
-            1,
-    "All types must be in kRequestDestinationFromStringMap.");
+    std::size(kRequestDestinationFromStringMap) +
+            CountDeprecatedRequestDestinationValues(static_cast<int>(
+                network::mojom::RequestDestination::kMaxValue)) ==
+        static_cast<size_t>(network::mojom::RequestDestination::kMaxValue) + 1,
+    "All non-deprecated types must be in kRequestDestinationFromStringMap.");
 
 constexpr char kFiveCharEmptyString[] = "empty";
 

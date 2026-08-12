@@ -6,28 +6,26 @@
 
 #include <stddef.h>
 
-#include <algorithm>
-#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
-#include "base/i18n/case_conversion.h"
-#include "base/notreached.h"
-#include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_store.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
-#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
+#include "components/autofill/core/browser/data_model/form_group.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/geo/country_names.h"
 #include "components/autofill/core/browser/geo/state_names.h"
@@ -200,20 +198,6 @@ void Address::GetMatchingTypes(std::u16string_view text,
          compare.StringsEqual(state_abbreviation, canon_profile_state))) {
       matching_types->insert(ADDRESS_HOME_STATE);
     }
-  }
-
-  // Votes for ADDRESS_HOME_ZIP_PREFIX are mapped to ADDRESS_HOME_ZIP
-  // to prevent unexpected voting results on international forms.
-  // On such forms with a single zip code field, American users often
-  // enter a 5-digit zip code. Since these 5-digit values correspond to both
-  // ADDRESS_HOME_ZIP and ADDRESS_HOME_ZIP_PREFIX, they can cause votes
-  // for ADDRESS_HOME_ZIP_PREFIX, while users from other countries
-  // will send votes for ADDRESS_HOME_ZIP.
-  // If ADDRESS_HOME_ZIP_PREFIX wins the vote, it could result in
-  // partial zip values autofilled in Japan, Brazil, and other
-  // countries with split zip code formats.
-  if (matching_types->erase(ADDRESS_HOME_ZIP_PREFIX)) {
-    matching_types->insert(ADDRESS_HOME_ZIP);
   }
 }
 

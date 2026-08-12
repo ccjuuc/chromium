@@ -21,15 +21,19 @@ namespace content {
 
 class IdentityProviderData;
 
+// The disclosure fields requested by the relying party.
+// Note: The order of entries in this enum defines the display order in the UI.
+// Do not reorder entries without updating relevant UI tests.
+//
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.content.webid
 // GENERATED_JAVA_CLASS_NAME_OVERRIDE: IdentityRequestDialogDisclosureField
 enum class IdentityRequestDialogDisclosureField : int32_t {
   kName,
   kEmail,
-  kPicture,
+  kUsername,
   kPhoneNumber,
-  kUsername
+  kPicture,
 };
 
 // Represents a federated user account which is used when displaying the FedCM
@@ -76,6 +80,7 @@ class CONTENT_EXPORT IdentityRequestAccount
       const GURL& picture,
       const std::string& phone,
       const std::string& username,
+      std::vector<std::string> potentially_approved_site_hashes,
       std::vector<std::string> login_hints,
       std::vector<std::string> domain_hints,
       std::vector<std::string> labels,
@@ -85,6 +90,12 @@ class CONTENT_EXPORT IdentityRequestAccount
 
   explicit IdentityRequestAccount(
       const blink::common::webid::LoginStatusAccount& account);
+
+  // Populates the idp_claimed_login_state for each account based on the
+  // approved_clients field and the client_id.
+  static void ComputeIdpClaimedLoginStates(
+      const std::string& client_id,
+      std::vector<scoped_refptr<IdentityRequestAccount>>& accounts);
 
   // The identity provider to which the account belongs to. This is not set in
   // the constructor but instead set later.
@@ -104,6 +115,8 @@ class CONTENT_EXPORT IdentityRequestAccount
   // This will be an empty image if fetching failed.
   gfx::Image decoded_picture;
 
+  std::vector<std::string> potentially_approved_site_hashes;
+
   std::vector<std::string> login_hints;
   std::vector<std::string> domain_hints;
   std::vector<std::string> labels;
@@ -116,6 +129,10 @@ class CONTENT_EXPORT IdentityRequestAccount
   // The account login state populated by the IDP through an approved clients
   // list.
   std::optional<LoginState> idp_claimed_login_state;
+
+  // The list of approved clients for this account, or std::nullopt if the IDP
+  // did not provide the approved_clients list.
+  std::optional<std::vector<std::string>> approved_clients = std::nullopt;
 
   // The account login state populated by the browser based on stored permission
   // grants.

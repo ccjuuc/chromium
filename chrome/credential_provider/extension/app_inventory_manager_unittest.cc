@@ -15,6 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
+#include "base/win/scoped_bstr.h"
 #include "chrome/credential_provider/extension/user_device_context.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
@@ -43,11 +44,11 @@ void AppInventoryManagerBaseTest::SetUp() {
 
 std::wstring AppInventoryManagerBaseTest::CreateUser() {
   // Create a fake user associated to a gaia id.
-  CComBSTR sid_str;
+  base::win::ScopedBstr sid_str;
   EXPECT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       kDefaultUsername, L"password", L"Full Name", L"comment",
-                      kDefaultGaiaId, L"user@company.com", &sid_str));
-  return OLE2W(sid_str);
+                      kDefaultGaiaId, L"user@company.com", sid_str.Receive()));
+  return sid_str.Get();
 }
 
 // Tests user policy fetch by ESA service.
@@ -107,11 +108,12 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
   std::wstring user_sid = L"invalid-user-sid";
   if (has_valid_sid) {
     // Create a fake user associated to a gaia id.
-    CComBSTR sid_str;
-    ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                        kDefaultUsername, L"password", L"Full Name", L"comment",
-                        kDefaultGaiaId, L"user@company.com", &sid_str));
-    user_sid = OLE2W(sid_str);
+    base::win::ScopedBstr sid_str;
+    ASSERT_EQ(S_OK,
+              fake_os_user_manager()->CreateTestOSUser(
+                  kDefaultUsername, L"password", L"Full Name", L"comment",
+                  kDefaultGaiaId, L"user@company.com", sid_str.Receive()));
+    user_sid = sid_str.Get();
   }
 
   if (has_app_data) {
@@ -149,7 +151,7 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
       AppInventoryManager::Get()->GetGemServiceUploadAppInventoryUrl();
   ASSERT_TRUE(app_inventory_url.is_valid());
 
-  auto expected_response_value = base::Value::Dict().Set(
+  auto expected_response_value = base::DictValue().Set(
       "deviceResourceId", base::WideToUTF8(device_resource_id));
   std::string expected_response =
       base::WriteJson(expected_response_value).value_or("");
@@ -180,16 +182,16 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
     std::optional<base::Value> body_value = base::JSONReader::Read(
         request_data.body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
-    base::Value::Dict request;
+    base::DictValue request;
 
     request.Set("device_resource_id", "valid-device-resource-id");
     request.Set("dm_token", "valid-dm-token");
     request.Set("obfuscated_gaia_id", "test-gaia-id");
     request.Set("user_sid", "S-1-4-2");
-    base::Value::List app_info_value_list;
+    base::ListValue app_info_value_list;
 
     if (has_app_data) {
-      base::Value::Dict request_dict_1;
+      base::DictValue request_dict_1;
       request_dict_1.Set(kAppDisplayName, base::WideToUTF8(kAppDisplayName1));
       request_dict_1.Set(kAppDisplayVersion,
                          base::WideToUTF8(kAppDisplayVersion1));
@@ -198,7 +200,7 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
       request_dict_1.Set(kAppType, 1);
       app_info_value_list.Append(std::move(request_dict_1));
 
-      base::Value::Dict request_dict_2;
+      base::DictValue request_dict_2;
       request_dict_2.Set(kAppDisplayName, base::WideToUTF8(kAppDisplayName2));
       request_dict_2.Set(kAppDisplayVersion,
                          base::WideToUTF8(kAppDisplayVersion2));

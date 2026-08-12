@@ -7,14 +7,12 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/i18n/rtl.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/ui/bookmarks/bookmark_utils.h"
 #include "chrome/common/chrome_switches.h"
-#include "components/bookmarks/browser/bookmark_model.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/menu/menu_item_view.h"
@@ -46,12 +44,13 @@ BookmarkContextMenuObserver::~BookmarkContextMenuObserver() = default;
 
 BookmarkContextMenu::BookmarkContextMenu(
     views::Widget* parent_widget,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     Profile* profile,
     BookmarkLaunchLocation opened_from,
     const std::vector<raw_ptr<const BookmarkNode, VectorExperimental>>&
         selection,
-    bool close_on_remove)
+    bool close_on_remove,
+    bool can_paste)
     : controller_(new BookmarkContextMenuController(
           parent_widget ? parent_widget->GetNativeWindow()
                         : gfx::NativeWindow(),
@@ -59,8 +58,9 @@ BookmarkContextMenu::BookmarkContextMenu(
           browser,
           profile,
           opened_from,
-          selection)),
-      parent_widget_(parent_widget),
+          selection,
+          can_paste)),
+      parent_widget_(parent_widget ? parent_widget->GetWeakPtr() : nullptr),
       menu_(new views::MenuItemView(this)),
       close_on_remove_(close_on_remove) {
   menu_runner_ = std::make_unique<views::MenuRunner>(
@@ -68,9 +68,22 @@ BookmarkContextMenu::BookmarkContextMenu(
       views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::IS_NESTED |
           views::MenuRunner::MENU_ITEM_CONTEXT_MENU);
   ui::SimpleMenuModel* menu_model = controller_->menu_model();
+  ui::MenuModel* submodel = nullptr;
   for (size_t i = 0; i < menu_model->GetItemCount(); ++i) {
     views::MenuModelAdapter::AppendMenuItemFromModel(
         menu_model, i, menu_, menu_model->GetCommandIdAt(i));
+    if (menu_model->GetCommandIdAt(i) == IDC_BOOKMARK_BAR_SUBMENU) {
+      submodel = menu_model->GetSubmenuModelAt(i);
+    }
+  }
+
+  if (submodel) {
+    views::MenuItemView* item =
+        menu_->GetMenuItemByID(IDC_BOOKMARK_BAR_SUBMENU);
+    for (size_t i = 0; i < submodel->GetItemCount(); ++i) {
+      views::MenuModelAdapter::AppendMenuItemFromModel(
+          submodel, i, item, submodel->GetCommandIdAt(i));
+    }
   }
 }
 
@@ -87,12 +100,16 @@ void BookmarkContextMenu::RunMenuAt(const gfx::Point& point,
     return;
   }
 
+  if (!parent_widget_) {
+    return;
+  }
+
   if (!PreRunCallback().is_null()) {
     std::move(PreRunCallback()).Run();
   }
 
   // width/height don't matter here.
-  menu_runner_->RunMenuAt(parent_widget_, nullptr,
+  menu_runner_->RunMenuAt(parent_widget_.get(), nullptr,
                           gfx::Rect(point.x(), point.y(), 0, 0),
                           views::MenuAnchorPosition::kTopLeft, source_type);
 }
@@ -110,6 +127,7 @@ void BookmarkContextMenu::RemoveObserver(
 // BookmarkContextMenu, views::MenuDelegate implementation:
 
 void BookmarkContextMenu::ExecuteCommand(int command_id, int event_flags) {
+  chrome::UpdateBookmarkBarVisibilityPrefOnUserAction(controller_->profile());
   controller_->ExecuteCommand(command_id, event_flags);
 }
 
@@ -127,6 +145,17 @@ bool BookmarkContextMenu::IsCommandVisible(int command_id) const {
 
 bool BookmarkContextMenu::ShouldCloseAllMenusOnExecute(int id) {
   return (id != IDC_BOOKMARK_BAR_REMOVE) || close_on_remove_;
+}
+
+bool BookmarkContextMenu::ShouldExecuteCommandWithoutClosingMenu(
+    int id,
+    const ui::Event& e) {
+  if (id == IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW ||
+      id == IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE ||
+      id == IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP) {
+    return true;
+  }
+  return false;
 }
 
 void BookmarkContextMenu::OnMenuClosed(views::MenuItemView* menu) {
@@ -154,5 +183,22 @@ void BookmarkContextMenu::WillExecuteCommand(
 void BookmarkContextMenu::DidExecuteCommand(int command_id) {
   if (IsRemoveBookmarksCommand(command_id)) {
     observers_.Notify(&BookmarkContextMenuObserver::DidRemoveBookmarks);
+  }
+
+  if (command_id == IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW ||
+      command_id == IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE ||
+      command_id == IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP) {
+    UpdateSubMenuState();
+  }
+}
+
+void BookmarkContextMenu::UpdateSubMenuState() {
+  for (int id : {IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW,
+                 IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE,
+                 IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP}) {
+    views::MenuItemView* item = menu_->GetMenuItemByID(id);
+    if (item) {
+      item->RefreshCheckmarkState();
+    }
   }
 }

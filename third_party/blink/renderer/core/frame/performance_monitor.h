@@ -35,7 +35,6 @@ class Document;
 class ExecutionContext;
 class Frame;
 class LocalFrame;
-class WindowPerformance;
 class SourceLocation;
 
 // Performance monitor for Web Performance APIs and logging.
@@ -136,7 +135,8 @@ class CORE_EXPORT PerformanceMonitor final
   // TaskTimeObserver implementation
   void WillProcessTask(base::TimeTicks start_time) override;
   void DidProcessTask(base::TimeTicks start_time,
-                      base::TimeTicks end_time) override;
+                      base::TimeTicks end_time,
+                      base::TimeTicks desired_execution_time) override;
 
   void WillExecuteScript(ExecutionContext*);
   void DidExecuteScript();

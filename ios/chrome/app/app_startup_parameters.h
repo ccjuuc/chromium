@@ -7,7 +7,9 @@
 
 #import <Foundation/Foundation.h>
 
-#include <vector>
+#import <vector>
+
+#import "ios/chrome/browser/app_switcher/model/app_switcher_params_request_status.h"
 
 // Input format for the `TabOpening` protocol.
 enum class ApplicationModeForTabOpening {
@@ -49,21 +51,16 @@ enum TabOpeningPostOpeningAction {
   EXTERNAL_ACTION_SHOW_BROWSER_SETTINGS,
   START_LENS_FROM_SHARE_EXTENSION,
   CREDENTIAL_EXCHANGE_IMPORT,
+  TRIGGER_GEMINI_PROMO,
+  SHOW_GOOGLE_ONE_SCREEN,
+  START_GEMINI_AI_SUMMARIZATION,
 };
 
-// Represents the status of a request to change the application mode.
-enum class ApplicationModeRequestStatus {
-  // TODO(crbug.com/374935368): Move to a separate file.
-  kUnavailable,
-  kRequested,
-  kAvailable,
-};
-
-// Type of the block invoked when an application mode request completes. It is
-// invoked asynchronously with the status of the operation as
-// `application_mode`.
-using AppModeRequestBlock =
+// Type of the block invoked when an App Switcher parameters request completes.
+using AppSwitcherParamsRequestBlock =
     void (^)(ApplicationModeForTabOpening application_mode);
+
+using AppModeRequestBlock = AppSwitcherParamsRequestBlock;
 
 class GURL;
 
@@ -119,6 +116,11 @@ class GURL;
 @property(nonatomic, readwrite, assign) BOOL openedWithURL;
 // Boolean to track whether the app was opened via share extension.
 @property(nonatomic, readwrite, assign) BOOL openedViaShareExtensionScheme;
+// Boolean to track whether the app was opened via Siri shortcut.
+@property(nonatomic, readwrite, assign) BOOL openedViaSiriShortcut;
+// The hashed GAIA ID of the user identity requested by the triggering entry
+// point (e.g., App Switcher AI Summarization).
+@property(nonatomic, readwrite, copy) NSString* appSwitcherHashedUserID;
 
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -139,9 +141,9 @@ class GURL;
              applicationMode:(ApplicationModeForTabOpening)mode
         forceApplicationMode:(BOOL)forceApplicationMode;
 
-// Initiate the request for application mode if needed and invoke `block` when
-// the it becomes `kAvailable`.
-- (void)requestApplicationModeWithBlock:(AppModeRequestBlock)block;
+// Initiates the request to fetch all App Switcher parameters (e.g. application
+// mode, AI summarization) if needed and invokes `block` when complete.
+- (void)fetchAppSwitcherParamsWithBlock:(AppSwitcherParamsRequestBlock)block;
 
 // Sets the application mode. The application mode will be forced if
 // `forceApplicationMode` is YES.

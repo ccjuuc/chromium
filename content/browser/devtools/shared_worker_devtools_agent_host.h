@@ -11,7 +11,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/shared_worker_instance.h"
+#include "third_party/blink/public/mojom/devtools/devtools_agent.mojom.h"
 
 namespace blink {
 class StorageKey;
@@ -21,7 +23,8 @@ namespace content {
 
 class SharedWorkerHost;
 
-class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
+class CONTENT_EXPORT SharedWorkerDevToolsAgentHost
+    : public DevToolsAgentHostImpl {
  public:
   using List = std::vector<scoped_refptr<SharedWorkerDevToolsAgentHost>>;
 
@@ -70,6 +73,7 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
   // DevToolsAgentHostImpl overrides.
   bool AttachSession(DevToolsSession* session) override;
   void DetachSession(DevToolsSession* session) override;
+  void UpdateRendererChannel(bool force) override;
 
   std::unique_ptr<protocol::TargetAutoAttacher> auto_attacher_;
 
@@ -82,6 +86,10 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
   raw_ptr<SharedWorkerHost> worker_host_;
   base::UnguessableToken devtools_worker_token_;
   SharedWorkerInstance instance_;
+  mojo::PendingRemote<blink::mojom::DevToolsAgent> pending_agent_remote_;
+  mojo::PendingReceiver<blink::mojom::DevToolsAgentHost>
+      pending_agent_host_receiver_;
+  const base::UnguessableToken browser_context_token_;
 };
 
 }  // namespace content

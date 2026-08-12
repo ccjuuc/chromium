@@ -16,12 +16,6 @@ export function isDlpEnabled() {
   return isFlagEnabled('DLP_ENABLED');
 }
 
-/**
- * Returns true if FuseBoxDebug flag is enabled.
- */
-export function isFuseBoxDebugEnabled() {
-  return isFlagEnabled('FUSEBOX_DEBUG');
-}
 
 /**
  * Returns true if GuestOsFiles flag is enabled.
@@ -67,13 +61,6 @@ export function isDriveFsBulkPinningEnabled() {
  */
 export function isArcVmEnabled() {
   return isFlagEnabled('ARC_VM_ENABLED');
-}
-
-/**
- * Returns true if PluginVM is enabled.
- */
-export function isPluginVmEnabled() {
-  return isFlagEnabled('PLUGIN_VM_ENABLED');
 }
 
 /**

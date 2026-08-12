@@ -7,13 +7,14 @@
 
 #include <queue>
 
+#include "base/containers/span.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/chromebox_for_meetings/artemis/artemis_features.h"
 #include "chrome/browser/ash/chromebox_for_meetings/artemis/command_source.h"
 #include "chrome/browser/ash/chromebox_for_meetings/artemis/log_source.h"
 #include "chromeos/ash/components/dbus/chromebox_for_meetings/cfm_observer.h"
 #include "chromeos/services/chromebox_for_meetings/public/cpp/service_adaptor.h"
-#include "chromeos/services/chromebox_for_meetings/public/mojom/meet_devices_data_aggregator.mojom-shared.h"
 #include "chromeos/services/chromebox_for_meetings/public/mojom/meet_devices_data_aggregator.mojom.h"
 #include "chromeos/services/chromebox_for_meetings/public/mojom/meet_devices_info.mojom.h"
 #include "chromeos/services/chromebox_for_meetings/public/mojom/meet_devices_logger.mojom.h"
@@ -93,13 +94,11 @@ class DataAggregatorService : public CfmObserver,
 
   // Manage singleton instance.
   static void Initialize();
-  static void InitializeForTesting(
-      DataAggregatorService* data_aggregator_service);
   static void Shutdown();
   static DataAggregatorService* Get();
   static bool IsInitialized();
 
- protected:
+ private:
   // CfmObserver:
   bool ServiceRequestReceived(const std::string& interface_name) override;
 
@@ -118,15 +117,10 @@ class DataAggregatorService : public CfmObserver,
                    AddWatchDogCallback callback) override;
 
   // Disconnect handler for |mojom::DataAggregator|
-  virtual void OnMojoDisconnect();
+  void OnMojoDisconnect();
 
-  // Will be overridden by test object for more controlled test environment
-  virtual void InitializeLocalSources();
-
-  // Maps DataSource names to their remotes, for access convenience
-  std::map<std::string, mojo::Remote<mojom::DataSource>> data_source_map_;
-
- private:
+  void InitializeLocalSources();
+  void InitializeCommandSources(enum features::TelemetryVerbosity verbosity);
   void AddLocalCommandSource(const std::string& command,
                              const base::TimeDelta& poll_freq);
   void OnLocalCommandDisconnect(const std::string& command,
@@ -156,6 +150,9 @@ class DataAggregatorService : public CfmObserver,
   void EnqueueNextPendingTransportPayload();
   void InitiateEnqueueRequest();
   void HandleEnqueueResponse(chromeos::cfm::mojom::LoggerStatusPtr status);
+
+  // Maps DataSource names to their remotes, for access convenience
+  std::map<std::string, mojo::Remote<mojom::DataSource>> data_source_map_;
 
   chromeos::cfm::ServiceAdaptor service_adaptor_;
   mojo::ReceiverSet<mojom::DataAggregator> receivers_;
@@ -200,6 +197,21 @@ class DataAggregatorService : public CfmObserver,
   // A backoff retry timer that automatically adjusts itself if
   // the initial enqueue fails, to avoid a DoS.
   net::BackoffEntry enqueue_retry_backoff_;
+
+  // How often the data aggregator fetches data from each source.
+  base::TimeDelta fetch_frequency_;
+
+  // How often each log source ingests a new batch of logs.
+  base::TimeDelta log_poll_frequency_;
+
+  // The number of lines ingested in each log batch.
+  size_t log_batch_size_;
+
+  // The size at which payloads are queued for upload.
+  size_t payload_max_size_bytes_;
+
+  // The max internal payload queue size.
+  size_t payload_queue_max_size_;
 
   // Must be the last class member.
   base::WeakPtrFactory<DataAggregatorService> weak_ptr_factory_{this};

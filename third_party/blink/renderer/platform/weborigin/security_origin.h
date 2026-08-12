@@ -34,6 +34,8 @@
 #include <memory>
 #include <optional>
 
+#include "base/types/pass_key.h"
+#include "net/base/schemeful_site.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -46,6 +48,7 @@
 namespace blink {
 
 class KURL;
+class SandboxedOpaqueSecurityOriginCreator;
 
 // An identifier which defines the source of content (e.g. a document) and
 // restricts what other objects it is permitted to access (based on their
@@ -102,6 +105,18 @@ class PLATFORM_EXPORT SecurityOrigin : public RefCounted<SecurityOrigin> {
 
   static scoped_refptr<SecurityOrigin> CreateFromUrlOrigin(const url::Origin&);
   url::Origin ToUrlOrigin() const;
+
+  // Returns the cached `net::SchemefulSite` for this origin, computing it
+  // on-demand. Equivalent to `net::SchemefulSite(ToUrlOrigin())`.
+  const net::SchemefulSite& GetSchemefulSite() const;
+
+  // Creates an opaque origin with the given nonce and origin. This method can
+  // only be called by SandboxedOpaqueSecurityOriginCreator to ensure proper
+  // access control for nonce-based origins.
+  static scoped_refptr<SecurityOrigin> CreateWithNonce(
+      base::PassKey<SandboxedOpaqueSecurityOriginCreator>,
+      const base::UnguessableToken& nonce,
+      const SecurityOrigin* origin);
 
   SecurityOrigin(const SecurityOrigin&) = delete;
   SecurityOrigin& operator=(const SecurityOrigin&) = delete;
@@ -193,6 +208,10 @@ class PLATFORM_EXPORT SecurityOrigin : public RefCounted<SecurityOrigin> {
   // cryptographically-authenticated origin, as described in
   // https://w3c.github.io/webappsec-secure-contexts/#is-origin-trustworthy
   bool IsPotentiallyTrustworthy() const;
+
+  // Returns true if this origin's protocol is a WebUI scheme (e.g. chrome://,
+  // chrome-untrusted://, or registered as WebUI).
+  bool IsWebUI() const;
 
   // Returns a human-readable error message describing that a non-secure
   // origin's access to a feature is denied.
@@ -477,6 +496,10 @@ class PLATFORM_EXPORT SecurityOrigin : public RefCounted<SecurityOrigin> {
   // For opaque origins, tracks the non-opaque origin from which the opaque
   // origin is derived.
   const scoped_refptr<const SecurityOrigin> precursor_origin_;
+
+  // Cached value of `GetSchemefulSite()`. Pure function of `const` tuple
+  // members so invalidation is not needed. Not copied; copies recompute lazily.
+  mutable std::unique_ptr<net::SchemefulSite> cached_schemeful_site_;
 };
 
 // The default HashTraits of SecurityOrigin implements the "same origin"
@@ -504,7 +527,7 @@ struct HashTraits<scoped_refptr<const SecurityOrigin>>
 #error "Unknown bits"
 #endif
     };
-    return StringHasher::HashMemory(base::as_byte_span(hash_codes));
+    return StringHasher::HashMemory32(base::as_byte_span(hash_codes));
   }
   static unsigned GetHash(const scoped_refptr<const SecurityOrigin>& origin) {
     return GetHash(origin.get());

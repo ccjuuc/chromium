@@ -10,29 +10,29 @@ let testUtil;
  * @type {Object}
  * @const
  */
-var TESTING_FILE = Object.freeze({
+const TESTING_FILE = Object.freeze({
   isDirectory: false,
   name: 'kitty',
   size: 1024,
-  modificationTime: new Date(2014, 4, 28, 10, 39, 15)
+  modificationTime: new Date(2014, 4, 28, 10, 39, 15),
 });
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_ANOTHER_FILE = Object.freeze({
+const TESTING_ANOTHER_FILE = Object.freeze({
   isDirectory: false,
   name: 'bunny',
   size: 2048,
-  modificationTime: new Date(2014, 4, 28, 9, 38, 14)
+  modificationTime: new Date(2014, 4, 28, 9, 38, 14),
 });
 
 /**
  * @type {string}
  * @const
  */
-var TESTING_NEW_FILE_NAME = 'puppy.txt';
+const TESTING_NEW_FILE_NAME = 'puppy.txt';
 
 /**
  * Moves an entry within the same file system.
@@ -63,7 +63,7 @@ function onMoveEntryRequested(options, onSuccess, onError) {
   }
 
   // Move the metadata with changing the 'name' field.
-  var newMetadata =
+  const newMetadata =
       structuredClone(testUtil.defaultMetadata[options.sourcePath]);
   newMetadata.name = options.targetPath.split('/').pop();
   testUtil.defaultMetadata[options.targetPath] = newMetadata;
@@ -84,8 +84,8 @@ function setUp(callback) {
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
       testUtil.onGetMetadataRequestedDefault);
 
-  testUtil.defaultMetadata['/' + TESTING_FILE.name] = TESTING_FILE;
-  testUtil.defaultMetadata['/' + TESTING_ANOTHER_FILE.name] =
+  testUtil.defaultMetadata[`/${TESTING_FILE.name}`] = TESTING_FILE;
+  testUtil.defaultMetadata[`/${TESTING_ANOTHER_FILE.name}`] =
       TESTING_ANOTHER_FILE;
 
   chrome.fileSystemProvider.onMoveEntryRequested.addListener(
@@ -107,24 +107,24 @@ function runTests() {
             chrome.test.assertEq(TESTING_FILE.name, sourceEntry.name);
             chrome.test.assertFalse(sourceEntry.isDirectory);
             sourceEntry.moveTo(
-                testUtil.fileSystem.root,
-                TESTING_NEW_FILE_NAME,
+                testUtil.fileSystem.root, TESTING_NEW_FILE_NAME,
                 chrome.test.callbackPass(function(targetEntry) {
                   chrome.test.assertEq(TESTING_NEW_FILE_NAME, targetEntry.name);
                   chrome.test.assertFalse(targetEntry.isDirectory);
                   // The source file should be deleted.
                   testUtil.fileSystem.root.getFile(
-                      TESTING_FILE.name, {create: false},
-                      function(newSourceEntry) {
+                      TESTING_FILE.name,
+                      {create: false}, function(newSourceEntry) {
                         chrome.test.fail('Source file not deleted.');
-                      },
-                      chrome.test.callbackPass(function(error) {
+                      }, chrome.test.callbackPass(function(error) {
                         chrome.test.assertEq('NotFoundError', error.name);
-                      }))
-                }), function(error) {
+                      }));
+                }),
+                function(error) {
                   chrome.test.fail(error.name);
                 });
-          }), function(error) {
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
     },
@@ -139,16 +139,16 @@ function runTests() {
             chrome.test.assertFalse(sourceEntry.isDirectory);
             sourceEntry.moveTo(
                 testUtil.fileSystem.root,
-                TESTING_NEW_FILE_NAME,
-                function(targetEntry) {
+                TESTING_NEW_FILE_NAME, function(targetEntry) {
                   chrome.test.fail('Succeeded, but should fail.');
                 }, chrome.test.callbackPass(function(error) {
                   chrome.test.assertEq('InvalidModificationError', error.name);
                 }));
-          }), function(error) {
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
-    }
+    },
   ]);
 }
 
@@ -156,7 +156,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

@@ -8,7 +8,6 @@
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
@@ -28,7 +27,6 @@
 #include "components/optimization_guide/core/model_execution/on_device_model_access_controller.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
-#include "components/optimization_guide/core/model_execution/redactor.h"
 #include "components/optimization_guide/core/model_execution/repetition_checker.h"
 #include "components/optimization_guide/core/model_execution/response_parser.h"
 #include "components/optimization_guide/core/model_execution/safety_checker.h"
@@ -59,6 +57,17 @@ void LogSessionCreation(OptimizationGuideLogger* logger,
   }
 }
 
+void LogSessionTermination(OptimizationGuideLogger* logger,
+                           mojom::OnDeviceFeature feature,
+                           std::string_view reason) {
+  if (logger && logger->ShouldEnableDebugLogs()) {
+    OPTIMIZATION_GUIDE_LOGGER(
+        optimization_guide_common::mojom::LogSource::MODEL_EXECUTION, logger)
+        << "Terminated on-device session for " << base::ToString(feature)
+        << " (Reason: " << reason << ")";
+  }
+}
+
 }  // namespace
 
 SessionImpl::SessionImpl(mojom::OnDeviceFeature feature,
@@ -82,7 +91,9 @@ SessionImpl::SessionImpl(mojom::OnDeviceFeature feature,
                          const SamplingParams& sampling_params)
     : feature_(feature), sampling_params_(sampling_params) {}
 
-SessionImpl::~SessionImpl() {}
+SessionImpl::~SessionImpl() {
+  DestroyOnDeviceState("Session destroyed");
+}
 
 const TokenLimits& SessionImpl::GetTokenLimits() const {
   if (!on_device_context_) {
@@ -123,13 +134,13 @@ SessionImpl::AddContextResult SessionImpl::AddContextImpl(
   }
 
   if (!ShouldUseOnDeviceModel()) {
-    DestroyOnDeviceState();
+    DestroyOnDeviceState("On-device model disabled or blocked");
     return AddContextResult::kUsingServer;
   }
 
   if (!on_device_context_->SetInput(context_.read(), std::move(callback))) {
     // Use server if can't construct input.
-    DestroyOnDeviceState();
+    DestroyOnDeviceState("Failed to construct input context prompt");
     return AddContextResult::kFailedConstructingInput;
   }
 
@@ -183,7 +194,7 @@ void SessionImpl::ExecuteModelWithResponseConstraint(
   auto merged_request = context_.Merge(request_metadata);
 
   if (!ShouldUseOnDeviceModel()) {
-    DestroyOnDeviceState();
+    DestroyOnDeviceState("On-device model disabled or blocked");
     std::move(callback).Run(OptimizationGuideModelStreamingExecutionResult(
         base::unexpected(OnDeviceError::kGenericFailure),
         /*provided_by_on_device=*/true));
@@ -205,18 +216,19 @@ void SessionImpl::ExecuteModelWithResponseConstraint(
   on_device_execution_->BeginExecution(*on_device_context_);
 }
 
-void SessionImpl::OnDeviceExecutionTerminated(bool healthy) {
+void SessionImpl::OnDeviceExecutionTerminated() {
   on_device_execution_.reset();
-  if (!healthy) {
-    DestroyOnDeviceState();
-  }
 }
 
 bool SessionImpl::ShouldUseOnDeviceModel() const {
   return on_device_context_ && on_device_context_->CanUse();
 }
 
-void SessionImpl::DestroyOnDeviceState() {
+void SessionImpl::DestroyOnDeviceState(std::string_view reason) {
+  if (on_device_context_) {
+    LogSessionTermination(on_device_context_->opts().logger.get(), feature_,
+                          reason);
+  }
   on_device_context_.reset();
 }
 
@@ -228,7 +240,7 @@ void SessionImpl::GetSizeInTokens(
     return;
   }
   auto input = on_device_model::mojom::Input::New();
-  input->pieces.push_back(text);
+  input->pieces.push_back(on_device_model::mojom::InputPiece::NewText(text));
   on_device_context_->GetOrCreateSession()->GetSizeInTokens(
       std::move(input), base::BindOnce([](uint32_t size) {
                           return std::optional<uint32_t>(size);

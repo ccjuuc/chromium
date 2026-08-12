@@ -11,17 +11,16 @@
 #include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
+#include "chrome/browser/ui/views/profiles/first_run_flow_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view.h"
 #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_handler.h"
 #include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/views/controls/webview/webview.h"
@@ -40,37 +39,36 @@ content::WebContents* GetPickerWebContents() {
   return ProfilePicker::GetWebViewForTesting()->GetWebContents();
 }
 
-class TestProfileManagementFlowController
-    : public ProfileManagementFlowController,
-      public content::WebContentsObserver {
+template <typename BaseFlowController>
+class TestFlowControllerMixin : public BaseFlowController,
+                                public content::WebContentsObserver {
  public:
-  TestProfileManagementFlowController(
-      ProfilePickerWebContentsHost* host,
-      ClearHostClosure clear_host_callback,
-      Step step,
+  template <typename... Args>
+  TestFlowControllerMixin(
+      ProfileManagementFlowController::Step step,
       ProfileManagementStepTestView::StepControllerFactory factory,
-      base::OnceClosure initial_step_load_finished_closure)
-      : ProfileManagementFlowController(host,
-                                        std::move(clear_host_callback),
-                                        /*flow_type_string==*/"TestFlow"),
+      base::OnceClosure initial_step_load_finished_closure,
+      Args&&... args)
+      : BaseFlowController(std::forward<Args>(args)...),
         step_(step),
         step_controller_factory_(std::move(factory)),
         initial_step_load_finished_closure_(
             std::move(initial_step_load_finished_closure)) {}
 
   void Init() override {
-    RegisterStep(step_, step_controller_factory_.Run(host()));
-    SwitchToStep(
+    BaseFlowController::RegisterStep(
+        step_, step_controller_factory_.Run(BaseFlowController::host()));
+    BaseFlowController::SwitchToStep(
         step_, /*reset_state=*/true,
         /*step_switch_finished_callback=*/
         StepSwitchFinishedCallback(base::BindOnce(
-            &TestProfileManagementFlowController::OnInitialStepSwitchFinished,
+            &TestFlowControllerMixin::OnInitialStepSwitchFinished,
             weak_ptr_factory_.GetWeakPtr())));
   }
 
   void OnInitialStepSwitchFinished(bool success) {
-    if (host()->GetPickerContents()->IsLoading()) {
-      Observe(host()->GetPickerContents());
+    if (BaseFlowController::host()->GetPickerContents()->IsLoading()) {
+      Observe(BaseFlowController::host()->GetPickerContents());
     } else {
       DCHECK(initial_step_load_finished_closure_);
       std::move(initial_step_load_finished_closure_).Run();
@@ -92,12 +90,17 @@ class TestProfileManagementFlowController
     NOTREACHED();
   }
 
-  Step step_;
+  ProfileManagementFlowController::Step step_;
   ProfileManagementStepTestView::StepControllerFactory step_controller_factory_;
   base::OnceClosure initial_step_load_finished_closure_;
-  base::WeakPtrFactory<TestProfileManagementFlowController> weak_ptr_factory_{
-      this};
+  base::WeakPtrFactory<TestFlowControllerMixin> weak_ptr_factory_{this};
 };
+
+using TestProfileManagementFlowController =
+    TestFlowControllerMixin<ProfileManagementFlowController>;
+
+using TestFirstRunFlowController =
+    TestFlowControllerMixin<FirstRunFlowController>;
 
 }  // namespace
 
@@ -249,9 +252,16 @@ std::unique_ptr<ProfileManagementFlowController>
 ProfileManagementStepTestView::CreateFlowController(
     Profile* picker_profile,
     ClearHostClosure clear_host_callback) {
+  if (params().entry_point() == ProfilePicker::EntryPoint::kFirstRun) {
+    return std::make_unique<TestFirstRunFlowController>(
+        step_, step_controller_factory_, run_loop_.QuitClosure(), this,
+        std::move(clear_host_callback), picker_profile,
+        /*first_run_exited_callback=*/base::DoNothing());
+  }
+
   return std::make_unique<TestProfileManagementFlowController>(
-      this, std::move(clear_host_callback), step_, step_controller_factory_,
-      run_loop_.QuitClosure());
+      step_, step_controller_factory_, run_loop_.QuitClosure(), this,
+      std::move(clear_host_callback), /*flow_type_string=*/"TestFlow");
 }
 
 MockProfilePickerWebContentsHost::MockProfilePickerWebContentsHost() = default;

@@ -4,20 +4,26 @@
 
 #include "chrome/browser/glic/widget/browser_conditions.h"
 
+#include "base/check_deref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
+#include "chrome/browser/glic/common/future_browser_features.h"
 #include "chrome/browser/glic/public/glic_enabling.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "ui/base/base_window.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/views/widget/widget_observer.h"
+#endif
 
 #if BUILDFLAG(IS_WIN)
 #include "ui/aura/window.h"
@@ -107,7 +113,7 @@ BrowserWindowInterface* FindBrowserForAttachment(Profile* profile) {
 }
 
 bool IsBrowserInForeground(BrowserWindowInterface* bwi) {
-  if (bwi->IsActive()) {
+  if (IsActive(bwi)) {
     return true;
   }
 #if BUILDFLAG(IS_WIN)
@@ -121,11 +127,13 @@ bool IsBrowserInForeground(BrowserWindowInterface* bwi) {
 #endif  // BUILDFLAG(IS_WIN)
 }
 
-bool IsBrowserVisible(Browser* browser) {
-  return browser && browser->window() &&
-         browser->GetBrowserView().GetWidget() &&
-         browser->window()->IsVisible() && !browser->window()->IsMinimized() &&
-         browser->capabilities()->IsVisibleOnScreen();
+bool IsBrowserVisible(BrowserWindowInterface* bwi) {
+  return bwi && bwi->GetWindow() && bwi->GetWindow()->IsVisible() &&
+         !bwi->GetWindow()->IsMinimized()
+#if !BUILDFLAG(IS_ANDROID)
+         && bwi->capabilities()->IsVisibleOnScreen()
+#endif
+      ;
 }
 
 BrowserWindowInterface* GetActiveGlicEligibleBrowser(Profile* profile) {
@@ -138,6 +146,7 @@ BrowserWindowInterface* GetActiveGlicEligibleBrowser(Profile* profile) {
   return nullptr;
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 class BrowserAttachObservationImpl : public BrowserAttachObservation,
                                      public BrowserCollectionObserver,
                                      public views::WidgetObserver {
@@ -171,7 +180,8 @@ class BrowserAttachObservationImpl : public BrowserAttachObservation,
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
     if (IsBrowserGlicCompatible(profile_, browser)) {
       browser_widget_observations_.AddObservation(
-          browser->GetBrowserForMigrationOnly()->GetBrowserView().GetWidget());
+          CHECK_DEREF(BrowserView::GetBrowserViewForBrowser(browser))
+              .GetWidget());
     }
   }
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
@@ -236,5 +246,6 @@ std::unique_ptr<BrowserAttachObservation> ObserveBrowserForAttachment(
     BrowserAttachObserver* observer) {
   return std::make_unique<BrowserAttachObservationImpl>(profile, observer);
 }
+#endif
 
 }  // namespace glic

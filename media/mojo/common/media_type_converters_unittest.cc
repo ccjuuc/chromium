@@ -19,8 +19,10 @@
 #include "media/base/decrypt_config.h"
 #include "media/base/encryption_pattern.h"
 #include "media/base/encryption_scheme.h"
+#include "media/base/limits.h"
 #include "media/base/sample_format.h"
 #include "media/base/test_helpers.h"
+#include "media/mojo/common/validation_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -103,6 +105,33 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_Normal) {
   EXPECT_FALSE(result->decrypt_config());
 }
 
+TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_HdrMetadata) {
+  const uint8_t kData[] = "hello, world";
+  scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
+
+  gfx::HDRMetadata hdr_metadata;
+  hdr_metadata.SetCLLI(
+      skhdr::ContentLightLevelInformation::MakeUint16(1000, 400));
+  buffer->WritableSideData().hdr_metadata = hdr_metadata;
+
+  // 1. Test TypeConverter (Round-trip)
+  mojom::DecoderBufferPtr ptr(mojom::DecoderBuffer::From(*buffer));
+  scoped_refptr<DecoderBuffer> result(ptr.To<scoped_refptr<DecoderBuffer>>());
+
+  ASSERT_TRUE(result->side_data());
+  EXPECT_EQ(buffer->side_data()->hdr_metadata,
+            result->side_data()->hdr_metadata);
+
+  // 2. Test ValidateAndConvertMojoDecoderBuffer (Used in OOPVD)
+  mojom::DecoderBufferPtr ptr2(mojom::DecoderBuffer::From(*buffer));
+  scoped_refptr<DecoderBuffer> result2(
+      ValidateAndConvertMojoDecoderBuffer(std::move(ptr2)));
+
+  ASSERT_TRUE(result2->side_data());
+  EXPECT_EQ(buffer->side_data()->hdr_metadata,
+            result2->side_data()->hdr_metadata);
+}
+
 TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_EOS) {
   // Original.
   scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CreateEOSBuffer());
@@ -172,10 +201,7 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CencEncryptedBuffer) {
   const char kKeyId[] = "00112233445566778899aabbccddeeff";
   const char kIv[] = "0123456789abcdef";
 
-  std::vector<SubsampleEntry> subsamples;
-  subsamples.push_back(SubsampleEntry(10, 20));
-  subsamples.push_back(SubsampleEntry(30, 40));
-  subsamples.push_back(SubsampleEntry(50, 60));
+  std::vector<SubsampleEntry> subsamples = {SubsampleEntry(5, 8)};
 
   // Original.
   scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
@@ -207,12 +233,9 @@ TEST(MediaTypeConvertersTest, ConvertDecoderBuffer_CbcsEncryptedBuffer) {
   const char kKeyId[] = "00112233445566778899aabbccddeeff";
   const char kIv[] = "0123456789abcdef";
 
-  std::vector<SubsampleEntry> subsamples;
-  subsamples.push_back(SubsampleEntry(10, 20));
-  subsamples.push_back(SubsampleEntry(30, 40));
-  subsamples.push_back(SubsampleEntry(50, 60));
+  std::vector<SubsampleEntry> subsamples = {SubsampleEntry(5, 8)};
 
-  EncryptionPattern pattern{1, 2};
+  auto pattern = EncryptionPattern::Create(1, 2);
 
   // Original.
   scoped_refptr<DecoderBuffer> buffer(DecoderBuffer::CopyFrom(kData));
@@ -284,6 +307,29 @@ TEST(MediaTypeConvertersTest, ConvertAudioBuffer_FLOAT) {
   CompareAudioBuffers(kSampleFormatPlanarF32, *buffer, *result);
 }
 
+TEST(MediaTypeConvertersTest, ConvertAudioBuffer_PlanarWithChannelPadding) {
+  constexpr ChannelLayout kChannelLayout = CHANNEL_LAYOUT_STEREO;
+  constexpr int kChannelCount = 2;
+  constexpr int kSampleRate = 48000;
+  constexpr int kFrameCount = 3;
+  constexpr size_t kPayloadSize =
+      kChannelCount * kFrameCount *
+      SampleFormatToBytesPerChannel(kSampleFormatPlanarF32);
+  const base::TimeDelta start_time = base::Seconds(1000.0);
+  scoped_refptr<AudioBuffer> buffer = MakeAudioBuffer<float>(
+      kSampleFormatPlanarF32, kChannelLayout, kChannelCount, kSampleRate, 0.0f,
+      1.0f, kFrameCount, start_time);
+
+  mojom::AudioBufferPtr ptr(mojom::AudioBuffer::From(*buffer));
+
+  // Planar channel allocations are aligned, so this payload uses padding in
+  // the serialized data between channel starts.
+  EXPECT_GT(ptr->data.size(), kPayloadSize);
+
+  scoped_refptr<AudioBuffer> result(ptr.To<scoped_refptr<AudioBuffer>>());
+  CompareAudioBuffers(kSampleFormatPlanarF32, *buffer, *result);
+}
+
 TEST(MediaTypeConvertersTest, ConvertAudioBuffer_DISCRETE) {
   // Original.
   const ChannelLayout kChannelLayout = CHANNEL_LAYOUT_DISCRETE;
@@ -299,6 +345,45 @@ TEST(MediaTypeConvertersTest, ConvertAudioBuffer_DISCRETE) {
 
   // Compare.
   CompareAudioBuffers(kSampleFormatPlanarF32, *buffer, *result);
+}
+
+// This test ensures that a `mojom::DecoderBuffer` with maliciously oversized
+// subsamples is correctly rejected during conversion to a C++ `DecoderBuffer`,
+// resulting in a `nullptr` return.
+TEST(MediaTypeConvertersTest, RejectOOBSubsample) {
+  const size_t kDataSize = 100;
+  auto buffer = base::MakeRefCounted<DecoderBuffer>(kDataSize);
+
+  std::vector<SubsampleEntry> subsamples;
+  // Set a malicious DecryptConfig with subsamples larger than data size
+  subsamples.push_back(SubsampleEntry(50, 500));
+
+  buffer->set_decrypt_config(DecryptConfig::CreateCencConfig(
+      "key_id", "0123456789abcdef", subsamples));
+
+  // Convert to Mojom
+  mojom::DecoderBufferPtr mojo_buffer = mojom::DecoderBuffer::From(*buffer);
+
+  // Convert back to DecoderBuffer
+  scoped_refptr<DecoderBuffer> converted_buffer =
+      mojo_buffer.To<scoped_refptr<DecoderBuffer>>();
+
+  EXPECT_FALSE(converted_buffer);
+}
+
+TEST(MediaTypeConvertersTest, ConvertDecryptConfig_RejectsUnboundedSubsamples) {
+  media::mojom::DecryptConfigPtr mojo_decrypt_config(
+      media::mojom::DecryptConfig::New());
+  mojo_decrypt_config->key_id = "key_id";
+  mojo_decrypt_config->iv = "0123456789abcdef";
+  mojo_decrypt_config->encryption_scheme = media::EncryptionScheme::kCenc;
+  mojo_decrypt_config->subsamples.resize(
+      media::limits::kMaxSubsamplesPerBuffer + 1);
+
+  std::unique_ptr<media::DecryptConfig> decrypt_config =
+      mojo_decrypt_config.To<std::unique_ptr<media::DecryptConfig>>();
+
+  EXPECT_FALSE(decrypt_config);
 }
 
 }  // namespace media

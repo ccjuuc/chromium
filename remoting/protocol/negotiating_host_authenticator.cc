@@ -4,26 +4,24 @@
 
 #include "remoting/protocol/negotiating_host_authenticator.h"
 
+#include <algorithm>
 #include <memory>
 #include <sstream>
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
 #include "remoting/base/rsa_key_pair.h"
-#include "remoting/protocol/channel_authenticator.h"
 #include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/host_authentication_config.h"
 #include "remoting/protocol/pairing_host_authenticator.h"
 #include "remoting/protocol/pairing_registry.h"
 #include "remoting/protocol/session_authz_authenticator.h"
 #include "remoting/protocol/spake2_authenticator.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
 
@@ -42,19 +40,17 @@ NegotiatingHostAuthenticator::NegotiatingHostAuthenticator(
 NegotiatingHostAuthenticator::~NegotiatingHostAuthenticator() = default;
 
 void NegotiatingHostAuthenticator::ProcessMessage(
-    const jingle_xmpp::XmlElement* message,
+    const JingleAuthentication& message,
     base::OnceClosure resume_callback) {
   DCHECK_EQ(state(), WAITING_MESSAGE);
   state_ = PROCESSING_MESSAGE;
 
-  const jingle_xmpp::XmlElement* pairing_tag =
-      message->FirstNamed(kPairingInfoTag);
-  if (pairing_tag) {
-    client_id_ = pairing_tag->Attr(kClientIdAttribute);
+  if (message.pairing_info) {
+    client_id_ = message.pairing_info->client_id;
   }
 
-  std::string method_attr = message->Attr(kMethodAttributeQName);
-  AuthenticationMethod method = ParseAuthenticationMethodString(method_attr);
+  AuthenticationMethod method =
+      message.method.value_or(AuthenticationMethod::INVALID);
 
   if (current_method_ != AuthenticationMethod::INVALID &&
       method != current_method_) {
@@ -71,12 +67,10 @@ void NegotiatingHostAuthenticator::ProcessMessage(
   // unknown or unsupported method, then select the first known method from
   // the supported-methods attribute.
   if (method == AuthenticationMethod::INVALID ||
-      !base::Contains(methods_, method)) {
+      !std::ranges::contains(methods_, method)) {
     method = AuthenticationMethod::INVALID;
 
-    std::string supported_methods_attr =
-        message->Attr(kSupportedMethodsAttributeQName);
-    if (supported_methods_attr.empty()) {
+    if (message.supported_methods.empty()) {
       state_ = REJECTED;
       rejection_reason_ = RejectionReason::INVALID_ARGUMENT;
       rejection_details_ = RejectionDetails(
@@ -88,12 +82,8 @@ void NegotiatingHostAuthenticator::ProcessMessage(
 
     // Find the first mutually-supported method in the client's list of
     // supported-methods.
-    for (const std::string& method_str : base::SplitString(
-             supported_methods_attr, std::string(1, kSupportedMethodsSeparator),
-             base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
-      AuthenticationMethod value = ParseAuthenticationMethodString(method_str);
-      if (value != AuthenticationMethod::INVALID &&
-          base::Contains(methods_, value)) {
+    for (AuthenticationMethod value : message.supported_methods) {
+      if (std::ranges::contains(methods_, value)) {
         // Found common method.
         method = value;
         break;
@@ -114,7 +104,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
     CreateAuthenticator(
         MESSAGE_READY,
         base::BindOnce(&NegotiatingHostAuthenticator::UpdateState,
-                       base::Unretained(this), std::move(resume_callback)));
+                       weak_factory_.GetWeakPtr(), std::move(resume_callback)));
     return;
   }
 
@@ -126,8 +116,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
     CreateAuthenticator(
         WAITING_MESSAGE,
         base::BindOnce(&NegotiatingAuthenticatorBase::ProcessMessageInternal,
-                       base::Unretained(this),
-                       base::Owned(new jingle_xmpp::XmlElement(*message)),
+                       weak_factory_.GetWeakPtr(), message,
                        std::move(resume_callback)));
     return;
   }
@@ -136,8 +125,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
   ProcessMessageInternal(message, std::move(resume_callback));
 }
 
-std::unique_ptr<jingle_xmpp::XmlElement>
-NegotiatingHostAuthenticator::GetNextMessage() {
+JingleAuthentication NegotiatingHostAuthenticator::GetNextMessage() {
   return GetNextMessageInternal();
 }
 

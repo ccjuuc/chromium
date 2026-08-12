@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_AI_ENTITY_TABLE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_AI_ENTITY_TABLE_H_
 
+#include <stdint.h>
+
 #include <map>
 #include <optional>
 #include <string>
@@ -15,6 +17,7 @@
 #include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/webdata/common/web_database_table.h"
 
@@ -122,6 +125,10 @@ class EntityTable : public WebDatabaseTable {
   std::optional<EntityInstance::EntityMetadata> GetEntityMetadata(
       const EntityInstance::EntityId& guid) const;
 
+  // Returns the entity type name for the given `guid`.
+  std::optional<EntityType> GetEntityType(
+      const EntityInstance::EntityId& guid) const;
+
   // Returns the valid entity instances; ignores invalid instances.
   //
   // An instance is valid only if all the following is true:
@@ -188,7 +195,7 @@ class EntityTable : public WebDatabaseTable {
       EntityInstance::EntityId guid,
       std::string nickname,
       base::Time date_modified,
-      int use_count,
+      int64_t use_count,
       base::Time use_date,
       std::underlying_type_t<EntityInstance::RecordType>
           underlying_storage_type,

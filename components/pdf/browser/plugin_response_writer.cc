@@ -8,10 +8,12 @@
 #include <string>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "components/pdf/browser/pdf_stream_delegate.h"
@@ -79,7 +81,8 @@ $3
 
   return base::ReplaceStringPlaceholders(
       kResponseTemplate,
-      {stream_info.stream_url.spec(), stream_info.original_url.spec(),
+      {stream_info.stream_url.spec(),
+       base::EscapeForHTML(stream_info.original_url.spec()),
        stream_info.injected_script ? *stream_info.injected_script : "",
        base::NumberToString(stream_info.background_color),
        stream_info.allow_javascript ? "allow" : "block",
@@ -144,9 +147,9 @@ void PluginResponseWriter::OnWrite(base::OnceClosure done_callback,
 
   if (result == MOJO_RESULT_OK) {
     network::URLLoaderCompletionStatus status(net::OK);
-    status.encoded_data_length = body_.size();
-    status.encoded_body_length = body_.size();
-    status.decoded_body_length = body_.size();
+    status.encoded_data_length = base::ByteSize(body_.size());
+    status.encoded_body_length = base::ByteSize(body_.size());
+    status.decoded_body_length = base::ByteSize(body_.size());
     client_->OnComplete(status);
   } else {
     client_->OnComplete(network::URLLoaderCompletionStatus(net::ERR_FAILED));

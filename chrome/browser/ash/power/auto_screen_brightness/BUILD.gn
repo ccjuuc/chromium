@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("auto_screen_brightness") {
@@ -54,10 +52,10 @@ static_library("auto_screen_brightness") {
     "//ash/constants",
     "//base",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/common",
     "//chromeos/components/sensors",
     "//chromeos/components/sensors/mojom",
-    "//chromeos/crosapi/mojom",
     "//chromeos/dbus/power",
     "//chromeos/dbus/power:power_manager_proto",
     "//components/metrics",

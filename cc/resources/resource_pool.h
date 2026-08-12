@@ -14,14 +14,15 @@
 #include <utility>
 
 #include "base/containers/circular_deque.h"
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
 #include "base/trace_event/memory_dump_provider.h"
+#include "base/trace_event/trace_event.h"
 #include "cc/cc_export.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/shared_image_format.h"
@@ -29,8 +30,10 @@
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/sync_token.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -43,11 +46,21 @@ class RasterContextProvider;
 
 namespace cc {
 
-class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
-                               public base::MemoryPressureListener {
+CC_EXPORT BASE_DECLARE_FEATURE(kInvalidateResourcesOnSizeChange);
+
+class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider {
   class PoolResource;
 
  public:
+  struct SizeComparator {
+    bool operator()(const gfx::Size& a, const gfx::Size& b) const {
+      if (a.width() != b.width()) {
+        return a.width() < b.width();
+      }
+      return a.height() < b.height();
+    }
+  };
+
   // Delay before a resource is considered expired.
   static constexpr base::TimeDelta kDefaultExpirationDelay = base::Seconds(5);
   // Max delay before an evicted resource is flushed.
@@ -108,9 +121,6 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
     scoped_refptr<gpu::ClientSharedImage> shared_image() {
       return shared_image_;
     }
-    const gfx::Size& size() const { return size_; }
-    const viz::SharedImageFormat& format() const { return format_; }
-    const gfx::ColorSpace& color_space() const { return color_space_; }
 
     // If this field is set to false, the backing's SharedImage is in the
     // process of being created on a worker thread and should not be accessed on
@@ -135,6 +145,11 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
     bool is_using_raw_draw = false;
 
    private:
+    friend class OneCopyRasterBufferProvider;
+    const gfx::Size& size() const { return size_; }
+    const viz::SharedImageFormat& format() const { return format_; }
+    const gfx::ColorSpace& color_space() const { return color_space_; }
+
     scoped_refptr<gpu::ClientSharedImage> shared_image_;
     const gfx::Size size_;
     const viz::SharedImageFormat format_;
@@ -286,8 +301,6 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
 
-  void OnMemoryPressure(base::MemoryPressureLevel level) override;
-
   size_t GetTotalMemoryUsageForTesting() const {
     return total_memory_usage_bytes_;
   }
@@ -300,6 +313,8 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   bool AllowsNonExactReUseForTesting() const {
     return !disallow_non_exact_reuse_;
   }
+
+  void NotifyOfViewportSizeChange(gfx::Size old_size, gfx::Size new_size);
 
   // Overrides internal clock for testing purposes.
   void SetClockForTesting(const base::TickClock* clock) { clock_ = clock; }
@@ -444,6 +459,10 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
                                viz::SharedImageFormat format,
                                const gfx::ColorSpace& color_space);
 
+  static void DecrementSizeCount(
+      std::map<gfx::Size, size_t, SizeComparator>& unused_resources_by_size,
+      const gfx::Size& size);
+
   void DidFinishUsingResource(std::unique_ptr<PoolResource> resource);
   void DeleteResource(std::unique_ptr<PoolResource> resource);
   static void UpdateResourceContentIdAndInvalidation(
@@ -458,6 +477,7 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   bool HasEvictableResources() const;
   base::TimeTicks GetUsageTimeForLRUResource() const;
   void FlushEvictedResources();
+  void UpdateTracingCounters();
 
   const raw_ptr<viz::ClientResourceProvider> resource_provider_;
   const raw_ptr<viz::RasterContextProvider> context_provider_;
@@ -465,6 +485,7 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   const base::TimeDelta resource_expiration_delay_;
   const bool disallow_non_exact_reuse_ = false;
   const int tracing_id_;
+  base::trace_event::TrackRegistration<perfetto::NamedTrack> tracing_track_;
 
   size_t next_resource_unique_id_ = 1;
   size_t max_memory_usage_bytes_ = 0;
@@ -472,6 +493,8 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   size_t unused_memory_usage_bytes_ = 0;
   size_t total_memory_usage_bytes_ = 0;
   size_t total_resource_count_ = 0;
+  size_t peak_total_memory_usage_bytes_ = 0;
+  size_t peak_total_resource_count_ = 0;
   bool evict_expired_resources_pending_ = false;
   bool evict_busy_resources_when_unused_ = false;
 
@@ -479,11 +502,11 @@ class CC_EXPORT ResourcePool : public base::trace_event::MemoryDumpProvider,
   base::circular_deque<std::unique_ptr<PoolResource>> unused_resources_;
   base::circular_deque<std::unique_ptr<PoolResource>> busy_resources_;
 
+  // A lookup table for |unused_resources_| by size.
+  std::map<gfx::Size, size_t, SizeComparator> unused_resources_by_size_;
+
   // Map from the PoolResource |unique_id| to the PoolResource.
   std::map<size_t, std::unique_ptr<PoolResource>> in_use_resources_;
-
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
 
   base::TimeTicks flush_evicted_resources_deadline_;
 

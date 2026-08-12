@@ -19,11 +19,63 @@
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
 #include "third_party/blink/renderer/core/scroll/scroll_into_view_util.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
 
 namespace blink {
+
+PseudoId ScrollButtonPseudoElement::PseudoIdFromScrollButtonArgument(
+    const AtomicString& argument,
+    const ComputedStyle& originating_element_style) {
+  DEFINE_STATIC_LOCAL(AtomicString, wildcard, ("*"));
+  DEFINE_STATIC_LOCAL(AtomicString, block_start, ("block-start"));
+  DEFINE_STATIC_LOCAL(AtomicString, inline_start, ("inline-start"));
+  DEFINE_STATIC_LOCAL(AtomicString, inline_end, ("inline-end"));
+  DEFINE_STATIC_LOCAL(AtomicString, block_end, ("block-end"));
+
+  if (argument == wildcard) {
+    return kPseudoIdScrollButton;
+  }
+  if (argument == block_start) {
+    return kPseudoIdScrollButtonBlockStart;
+  }
+  if (argument == inline_start) {
+    return kPseudoIdScrollButtonInlineStart;
+  }
+  if (argument == inline_end) {
+    return kPseudoIdScrollButtonInlineEnd;
+  }
+  if (argument == block_end) {
+    return kPseudoIdScrollButtonBlockEnd;
+  }
+
+  DEFINE_STATIC_LOCAL(AtomicString, up, ("up"));
+  DEFINE_STATIC_LOCAL(AtomicString, right, ("right"));
+  DEFINE_STATIC_LOCAL(AtomicString, down, ("down"));
+  DEFINE_STATIC_LOCAL(AtomicString, left, ("left"));
+
+  if (argument != up && argument != right && argument != down &&
+      argument != left) {
+    return kPseudoIdScrollButton;
+  }
+
+  PhysicalToLogical<bool> mapping(
+      originating_element_style.GetWritingDirection(), argument == up,
+      argument == right, argument == down, argument == left);
+  if (mapping.BlockStart()) {
+    return kPseudoIdScrollButtonBlockStart;
+  }
+  if (mapping.InlineStart()) {
+    return kPseudoIdScrollButtonInlineStart;
+  }
+  if (mapping.InlineEnd()) {
+    return kPseudoIdScrollButtonInlineEnd;
+  }
+  CHECK(mapping.BlockEnd());
+  return kPseudoIdScrollButtonBlockEnd;
+}
 
 namespace {
 
@@ -68,7 +120,10 @@ void ScrollButtonPseudoElement::Trace(Visitor* v) const {
   PseudoElement::Trace(v);
 }
 
-void ScrollButtonPseudoElement::HandleButtonActivation() {
+bool ScrollButtonPseudoElement::HandleButtonActivation() {
+  if (!isConnected() || !parentElement()) {
+    return false;
+  }
   Element& scrolling_element = UltimateOriginatingElement();
   LayoutBox* scroller = scrolling_element.GetLayoutBox();
   PaintLayerScrollableArea* scrollable_area =
@@ -77,7 +132,7 @@ void ScrollButtonPseudoElement::HandleButtonActivation() {
   // Future proof in case of possibility to activate scroll button
   // without an appropriate scroller via a click event from JS.
   if (!scrollable_area) {
-    return;
+    return false;
   }
 
   LogicalToPhysical<bool> mapping(
@@ -103,6 +158,7 @@ void ScrollButtonPseudoElement::HandleButtonActivation() {
                                   FocusParams(SelectionBehaviorOnFocus::kNone,
                                               mojom::blink::FocusType::kNone,
                                               /*capabilities=*/nullptr));
+  return true;
 }
 
 void ScrollButtonPseudoElement::DefaultEventHandler(Event& event) {
@@ -115,8 +171,7 @@ void ScrollButtonPseudoElement::DefaultEventHandler(Event& event) {
                       To<KeyboardEvent>(event).keyCode() == VKEY_SPACE);
   bool should_intercept =
       event.RawTarget() == this && (is_click || is_enter_or_space);
-  if (should_intercept) {
-    HandleButtonActivation();
+  if (should_intercept && HandleButtonActivation()) {
     event.SetDefaultHandled();
   }
   PseudoElement::DefaultEventHandler(event);
@@ -133,7 +188,7 @@ FocusableState ScrollButtonPseudoElement::SupportsFocus(
 bool ScrollButtonPseudoElement::UpdateSnapshot() {
   // Note: we can hit it here, since we don't unsubscribe from
   // scroll snapshot client (maybe we should).
-  if (!isConnected()) {
+  if (!isConnected() || !parentElement()) {
     return false;
   }
   LayoutBox* scroller =

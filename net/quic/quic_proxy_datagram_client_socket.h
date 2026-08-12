@@ -10,6 +10,7 @@
 #include <queue>
 #include <string_view>
 
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_export.h"
@@ -18,6 +19,7 @@
 #include "net/quic/quic_chromium_client_session.h"
 #include "net/quic/quic_chromium_client_stream.h"
 #include "net/socket/datagram_client_socket.h"
+#include "net/socket/read_multiple_emulator.h"
 #include "net/socket/udp_socket.h"
 #include "net/spdy/spdy_http_utils.h"
 #include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
@@ -37,6 +39,9 @@ class ProxyDelegate;
 class NET_EXPORT_PRIVATE QuicProxyDatagramClientSocket
     : public DatagramClientSocket,
       public quic::QuicSpdyStream::Http3DatagramVisitor {
+  // TODO(crbug.com/495798630): Remove this macro once it gets fixed.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   // Initializes a QuicProxyDatagramClientSocket with the provided network
   // log (source_net_log) and destination URL. The destination URL is
@@ -104,6 +109,12 @@ class NET_EXPORT_PRIVATE QuicProxyDatagramClientSocket
   int Read(IOBuffer* buf,
            int buf_len,
            CompletionOnceCallback callback) override;
+  base::expected<DatagramsMetadata, Error> ReadMultiple(
+      IOBuffer* buf,
+      size_t buf_len,
+      size_t maximum_packet_size,
+      base::OnceCallback<void(base::expected<DatagramsMetadata, Error>)>
+          callback) override;
   int Write(IOBuffer* buf,
             int buf_len,
             CompletionOnceCallback callback,
@@ -170,7 +181,7 @@ class NET_EXPORT_PRIVATE QuicProxyDatagramClientSocket
   // this by simply using the current chain and indexing the last proxy in
   // that chain.
   const ProxyChain& proxy_chain() { return proxy_chain_; }
-  int proxy_chain_index() { return proxy_chain_.length() - 1; }
+  size_t proxy_chain_index() { return proxy_chain_.length() - 1; }
 
   State next_state_ = STATE_DISCONNECTED;
 
@@ -190,8 +201,6 @@ class NET_EXPORT_PRIVATE QuicProxyDatagramClientSocket
   // a buffer, allowing datagrams to be stored when received and processed
   // asynchronously at a later time.
   std::queue<std::string> datagrams_;
-  // Visitor on stream is registered to receive HTTP/3 datagrams.
-  bool datagram_visitor_registered_ = false;
 
   // Tracks whether the CONNECT-UDP request has been sent (even if response not
   // received yet).
@@ -230,6 +239,8 @@ class NET_EXPORT_PRIVATE QuicProxyDatagramClientSocket
   std::string user_agent_;
 
   NetLogWithSource net_log_;
+
+  ReadMultipleEmulator read_multiple_emulator_{this};
 
   // The default weak pointer factory.
   base::WeakPtrFactory<QuicProxyDatagramClientSocket> weak_factory_{this};

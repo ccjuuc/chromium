@@ -40,9 +40,18 @@ class CocoaWindowMoveLoop {
 
   raw_ptr<NativeWidgetNSWindowBridge> owner_;  // Weak. Owns this.
 
-  // Initial mouse location at the time before the CocoaWindowMoveLoop is
-  // created.
-  NSPoint initial_mouse_in_screen_;
+  // Baseline mouse location for relative drag offset calculations. Re-anchored
+  // if the window size changes mid-drag.
+  NSPoint base_mouse_in_screen_;
+
+  // Baseline window frame before dragging, or updated baseline frame if the
+  // window size changed programmatically during the drag.
+  NSRect base_frame_;
+
+  // The last window frame that was explicitly set by this move loop. Used to
+  // detect if the window frame was changed programmatically from outside of
+  // the move loop (e.g. by TabDragController to fit a new display work area).
+  NSRect last_set_frame_;
 
   // Pointer to a stack variable holding the exit reason.
   raw_ptr<LoopExitReason> exit_reason_ref_ = nullptr;

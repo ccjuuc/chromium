@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/bluetooth/bluetooth_handler.h"
 
+#include <memory>
+
 #include "ash/public/cpp/fake_hats_bluetooth_revamp_trigger_impl.h"
 #include "ash/public/cpp/hats_bluetooth_revamp_trigger.h"
 #include "content/public/test/test_web_ui.h"
@@ -69,7 +71,7 @@ class BluetoothHandlerTest : public testing::Test {
 TEST_F(BluetoothHandlerTest, GetRequestFastPairDeviceSupport) {
   size_t call_data_count_before_call = test_web_ui()->call_data().size();
 
-  base::Value::List args;
+  base::ListValue args;
   test_web_ui()->HandleReceivedMessage("requestFastPairDeviceSupportStatus",
                                        args);
 
@@ -84,7 +86,7 @@ TEST_F(BluetoothHandlerTest, GetRequestFastPairDeviceSupport) {
 
 TEST_F(BluetoothHandlerTest, ShowBluetoothRevampHatsSurvey) {
   EXPECT_EQ(0u, GetTryToShowSurveyCount());
-  base::Value::List args;
+  base::ListValue args;
   test_web_ui()->HandleReceivedMessage("showBluetoothRevampHatsSurvey", args);
 
   EXPECT_EQ(1u, GetTryToShowSurveyCount());

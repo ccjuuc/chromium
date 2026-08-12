@@ -63,11 +63,11 @@ void ConvertTiltOrientationToTiltXY(float tilt_rad,
 
 #define ACTION_REVERSE_CASE(x)        \
   case MotionEventAndroid::Action::x: \
-    return JNI_MotionEvent::ACTION_##x
+    return MotionEventJni::ACTION_##x
 
 #define TOOL_TYPE_REVERSE_CASE(x)       \
   case MotionEventAndroid::ToolType::x: \
-    return JNI_MotionEvent::TOOL_TYPE_##x
+    return MotionEventJni::TOOL_TYPE_##x
 
 int ToAndroidAction(MotionEventAndroid::Action action) {
   switch (action) {
@@ -104,20 +104,27 @@ int ToAndroidToolType(MotionEventAndroid::ToolType tool_type) {
 
 int FromAndroidButtonState(int button_state) {
   int result = 0;
-  if ((button_state & JNI_MotionEvent::BUTTON_BACK) != 0)
+  if ((button_state & MotionEventJni::BUTTON_BACK) != 0) {
     result |= MotionEventAndroid::BUTTON_BACK;
-  if ((button_state & JNI_MotionEvent::BUTTON_FORWARD) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_FORWARD) != 0) {
     result |= MotionEventAndroid::BUTTON_FORWARD;
-  if ((button_state & JNI_MotionEvent::BUTTON_PRIMARY) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_PRIMARY) != 0) {
     result |= MotionEventAndroid::BUTTON_PRIMARY;
-  if ((button_state & JNI_MotionEvent::BUTTON_SECONDARY) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_SECONDARY) != 0) {
     result |= MotionEventAndroid::BUTTON_SECONDARY;
-  if ((button_state & JNI_MotionEvent::BUTTON_TERTIARY) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_TERTIARY) != 0) {
     result |= MotionEventAndroid::BUTTON_TERTIARY;
-  if ((button_state & JNI_MotionEvent::BUTTON_STYLUS_PRIMARY) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_STYLUS_PRIMARY) != 0) {
     result |= MotionEventAndroid::BUTTON_STYLUS_PRIMARY;
-  if ((button_state & JNI_MotionEvent::BUTTON_STYLUS_SECONDARY) != 0)
+  }
+  if ((button_state & MotionEventJni::BUTTON_STYLUS_SECONDARY) != 0) {
     result |= MotionEventAndroid::BUTTON_STYLUS_SECONDARY;
+  }
   return result;
 }
 
@@ -126,7 +133,8 @@ int ToEventFlags(int meta_state, int button_state) {
          EventFlagsFromAndroidButtonState(button_state);
 }
 
-size_t ToValidHistorySize(jint history_size, ui::MotionEvent::Action action) {
+size_t ToValidHistorySize(int32_t history_size,
+                          ui::MotionEvent::Action action) {
   DCHECK_GE(history_size, 0);
   // While the spec states that only Action::MOVE events should contain
   // historical entries, it's possible that an embedder could repurpose an
@@ -139,15 +147,15 @@ size_t ToValidHistorySize(jint history_size, ui::MotionEvent::Action action) {
 
 }  // namespace
 
-MotionEventAndroid::Pointer::Pointer(jint id,
-                                     jfloat pos_x_pixels,
-                                     jfloat pos_y_pixels,
-                                     jfloat touch_major_pixels,
-                                     jfloat touch_minor_pixels,
-                                     jfloat pressure,
-                                     jfloat orientation_rad,
-                                     jfloat tilt_rad,
-                                     jint tool_type)
+MotionEventAndroid::Pointer::Pointer(int32_t id,
+                                     float pos_x_pixels,
+                                     float pos_y_pixels,
+                                     float touch_major_pixels,
+                                     float touch_minor_pixels,
+                                     float pressure,
+                                     float orientation_rad,
+                                     float tilt_rad,
+                                     int32_t tool_type)
     : id(id),
       pos_x_pixels(pos_x_pixels),
       pos_y_pixels(pos_y_pixels),

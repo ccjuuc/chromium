@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/i18n/language_tag.h"
 #include "base/json/json_reader.h"
 #include "base/test/test_timeouts.h"
 #include "base/values.h"
@@ -154,9 +155,11 @@ TEST_F(LanguagePrefsTest, ResetLanguagePrefs) {
   content_languages_tester.ExpectSelectedLanguagePrefs("en,es,fr");
   content_languages_tester.ExpectAcceptLanguagePrefs("en,es,fr");
 #if BUILDFLAG(IS_ANDROID)
-  language_prefs_->SetULPLanguages({"a", "b", "c"});
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("en"),
+                                    base::i18n::GetKnownLanguageTag("es"),
+                                    base::i18n::GetKnownLanguageTag("fr")});
   EXPECT_THAT(language_prefs_->GetULPLanguages(),
-              testing::ElementsAre("a", "b", "c"));
+              testing::ElementsAre("en", "es", "fr"));
 #endif
 
   ResetLanguagePrefs(prefs_.get());
@@ -182,18 +185,44 @@ TEST_F(LanguagePrefsTest, ULPLanguagesPref) {
   EXPECT_THAT(language_prefs_->GetULPLanguages(), testing::IsEmpty());
 
   // Set ULP Language Preference.
-  language_prefs_->SetULPLanguages({"a", "b", "c"});
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("en"),
+                                    base::i18n::GetKnownLanguageTag("es"),
+                                    base::i18n::GetKnownLanguageTag("fr")});
   EXPECT_THAT(language_prefs_->GetULPLanguages(),
-              testing::ElementsAre("a", "b", "c"));
+              testing::ElementsAre("en", "es", "fr"));
 
   // Setting ULP languages to a new list clears the old list.
-  language_prefs_->SetULPLanguages({"d", "e", "f"});
+  language_prefs_->SetULPLanguages({base::i18n::GetKnownLanguageTag("de"),
+                                    base::i18n::GetKnownLanguageTag("pt"),
+                                    base::i18n::GetKnownLanguageTag("zh")});
   EXPECT_THAT(language_prefs_->GetULPLanguages(),
-              testing::ElementsAre("d", "e", "f"));
+              testing::ElementsAre("de", "pt", "zh"));
 
   // Setting ULP languages to a an empty list clears it.
   language_prefs_->SetULPLanguages({});
   EXPECT_THAT(language_prefs_->GetULPLanguages(), testing::IsEmpty());
 #endif
 }
+TEST_F(LanguagePrefsTest, GetIncognitoLanguageListTest) {
+  // Test mapping from generated map.
+  // For example "fr" should map to "fr-FR,fr,en-US,en" based on
+  // components_locale_settings_fr.xtb.
+  EXPECT_EQ("en-US,en", language::GetIncognitoLanguageList("en,fr"));
+  EXPECT_EQ("en-US,en", language::GetIncognitoLanguageList("en-US,fr"));
+  EXPECT_EQ("fr-FR,fr,en-US,en",
+            language::GetIncognitoLanguageList("fr,en-US"));
+  EXPECT_EQ("zh-CN,zh", language::GetIncognitoLanguageList("zh-CN,zh"));
+
+  // Test fallback heuristic for language not in map.
+  EXPECT_EQ("as,en-US,en", language::GetIncognitoLanguageList("as,en-US"));
+  EXPECT_EQ("zz,en-US,en", language::GetIncognitoLanguageList("zz,en-US"));
+
+  // Test empty or single language cases (should return unchanged).
+  EXPECT_EQ("", language::GetIncognitoLanguageList(""));
+  EXPECT_EQ("fr", language::GetIncognitoLanguageList("fr"));
+  EXPECT_EQ("zh-CN", language::GetIncognitoLanguageList("zh-CN"));
+  EXPECT_EQ("en", language::GetIncognitoLanguageList("en"));
+  EXPECT_EQ("en-US", language::GetIncognitoLanguageList("en-US"));
+}
+
 }  // namespace language

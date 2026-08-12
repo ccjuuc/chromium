@@ -5,18 +5,18 @@
 #include "components/autofill/core/browser/data_model/transliterator.h"
 
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 #include "base/feature_list.h"
+#include "base/i18n/case_conversion.h"
 #include "base/i18n/transliterator.h"
-#include "base/i18n/unicodestring.h"
-#include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
+#include "base/synchronization/lock.h"
 #include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/data_model/addresses/address.h"
 #include "components/autofill/core/common/autofill_features.h"
 
 namespace autofill {
@@ -55,8 +55,6 @@ GetTransliteratorsMap() {
 
 std::unique_ptr<base::i18n::Transliterator> CreateTransliterator(
     TransliterationId id) {
-  std::unique_ptr<base::i18n::Transliterator> transliterator;
-
   // Apply a simplified version of the "::de-ASCII" transliteration, which
   // follows DIN 5007-2 ("ö" becomes "oe"). Here we map everything to lower case
   // because that happens with "::Lower" anyway.
@@ -80,28 +78,16 @@ std::unique_ptr<base::i18n::Transliterator> CreateTransliterator(
 
   switch (id) {
     case TransliterationId::kKatakanaToHiragana:
-      transliterator = base::i18n::CreateTransliterator("Katakana-Hiragana");
-      break;
+      return base::i18n::CreateTransliterator("Katakana-Hiragana");
     case TransliterationId::kHiraganaToKatakana:
-      transliterator = base::i18n::CreateTransliterator("Hiragana-Katakana");
-      break;
+      return base::i18n::CreateTransliterator("Hiragana-Katakana");
     case TransliterationId::kGerman:
-      transliterator = base::i18n::CreateTransliteratorFromRules(
+      return base::i18n::CreateTransliteratorFromRules(
           "DE_NormalizForAddress", base::StrCat({kGermanRules, kDefaultRules}));
-      break;
     case TransliterationId::kDefault:
-      transliterator = base::i18n::CreateTransliteratorFromRules(
+      return base::i18n::CreateTransliteratorFromRules(
           "NormalizeForAddress", kDefaultRules);
-      break;
   }
-
-  if (!transliterator) {
-    base::UmaHistogramBoolean("Autofill.TransliteratorInitStatus", false);
-    return nullptr;
-  }
-
-  base::UmaHistogramBoolean("Autofill.TransliteratorInitStatus", true);
-  return transliterator;
 }
 
 // May return nullptr if the transliterator cannot be initialized.

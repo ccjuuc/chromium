@@ -7,6 +7,8 @@
 
 #include <variant>
 
+#include "base/memory/stack_allocated.h"
+
 class Browser;
 class Profile;
 
@@ -19,13 +21,17 @@ namespace webui {
 // change in the future so we prepare for it.
 // NOTE: a PreloadContext should NOT outlive the Profile or Browser it wraps.
 class PreloadContext {
+  STACK_ALLOCATED();
+
  public:
   ~PreloadContext();
 
   static PreloadContext From(Browser* browser);
   static PreloadContext From(Profile* profile);
 
+  Browser* GetBrowser();
   const Browser* GetBrowser() const;
+  Profile* GetProfile();
   const Profile* GetProfile() const;
 
   bool IsBrowser() const;

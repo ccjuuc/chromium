@@ -18,6 +18,7 @@
 // clang-format on
 
 #include "base/containers/span.h"
+#include "gpu/gpu_gles2_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/win/d3d_shared_fence.h"
 #include "ui/gl/buildflags.h"
@@ -28,7 +29,7 @@ bool ClearD3D11TextureToColor(
     const Microsoft::WRL::ComPtr<ID3D11Texture2D>& d3d11_texture,
     const SkColor4f& color);
 
-wgpu::Texture CreateDawnSharedTexture(
+GPU_GLES2_EXPORT wgpu::Texture CreateDawnSharedTexture(
     const wgpu::SharedTextureMemory& shared_texture_memory,
     wgpu::TextureUsage usage,
     wgpu::TextureUsage internal_usage,
@@ -39,9 +40,13 @@ wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
     bool use_keyed_mutex,
     HANDLE handle);
 
-wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
+GPU_GLES2_EXPORT wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
     const wgpu::Device& device,
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture);
+
+GPU_GLES2_EXPORT wgpu::SharedTextureMemory CreateDawnSharedTextureMemory(
+    const wgpu::Device& device,
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource);
 
 wgpu::Buffer CreateDawnSharedBuffer(
     const wgpu::SharedBufferMemory& shared_buffer_memory,
@@ -51,7 +56,7 @@ wgpu::SharedBufferMemory CreateDawnSharedBufferMemory(
     const wgpu::Device& device,
     Microsoft::WRL::ComPtr<ID3D12Resource> resource);
 
-wgpu::SharedFence CreateDawnSharedFence(
+GPU_GLES2_EXPORT wgpu::SharedFence CreateDawnSharedFence(
     const wgpu::Device& device,
     scoped_refptr<gfx::D3DSharedFence> fence);
 

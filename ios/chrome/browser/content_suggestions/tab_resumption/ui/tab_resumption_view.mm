@@ -13,7 +13,9 @@
 #import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_data.h"
 #import "ios/chrome/browser/content_suggestions/tab_resumption/public/tab_resumption_constants.h"
 #import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_commands.h"
-#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_item.h"
+#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_config.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
 #import "ios/chrome/browser/price_notifications/ui_bundled/cells/price_notifications_price_chip_view.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -67,24 +69,24 @@ void SetFallbackImageToImageView(UIImageView* image_view,
                                  UIView* background_view,
                                  CGFloat favicon_size) {
   image_view.image =
-      DefaultSymbolWithPointSize(kGlobeAmericasSymbol, kCenterSymbolSize);
+      SymbolWithPointSize(SymbolGlobeAmericas, kCenterSymbolSize);
   image_view.backgroundColor = [UIColor colorNamed:kBlue500Color];
   background_view.backgroundColor = [UIColor colorNamed:kBlue500Color];
   image_view.tintColor = UIColor.whiteColor;
 }
 
-bool HasPriceDropOnTab(TabResumptionItem* item) {
-  return item.shopCardData &&
-         item.shopCardData.shopCardItemType ==
+bool HasPriceDropOnTab(TabResumptionConfig* config) {
+  return config.shopCardData &&
+         config.shopCardData.shopCardItemType ==
              ShopCardItemType::kPriceDropOnTab &&
-         item.shopCardData.priceDrop.has_value();
+         config.shopCardData.priceDrop.has_value();
 }
 
 }  // namespace
 
 @implementation TabResumptionView {
   // Item used to configure the view.
-  TabResumptionItem* _item;
+  TabResumptionConfig* _config;
   // The view container.
   UIStackView* _containerStackView;
 
@@ -103,10 +105,11 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
   UIStackView* _labelStackView;
 }
 
-- (instancetype)initWithItem:(TabResumptionItem*)item {
-  self = [super init];
-  if (self) {
-    _item = item;
+- (instancetype)initWithConfig:(TabResumptionConfig*)config {
+  if ((self = [super init])) {
+    _config = config;
+    [self registerForTraitChanges:@[ NewTabPageTrait.class ]
+                       withAction:@selector(applyBackgroundColors)];
   }
   return self;
 }
@@ -120,12 +123,6 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
     [self createSubviews];
     [self addTapGestureRecognizer];
   }
-}
-
-#pragma mark - TabResumptionConsumer
-- (void)shopCardDataCompleted:(TabResumptionItem*)item {
-  _item = item;
-  [self createSubviews];
 }
 
 #pragma mark - Private methods
@@ -152,7 +149,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
   [_labelStackView addArrangedSubview:hostnameAndSyncTimeLabel];
   [accessibilityLabel addObject:hostnameAndSyncTimeLabel.text];
 
-  if (HasPriceDropOnTab(_item)) {
+  if (HasPriceDropOnTab(_config)) {
     _tabTitleLabel.numberOfLines = 1;
     _priceNotificationsChip = [[PriceNotificationsPriceChipView alloc] init];
     _priceNotificationsChip.translatesAutoresizingMaskIntoConstraints = NO;
@@ -163,13 +160,11 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
         PreferredFontForTextStyle(UIFontTextStyleFootnote, UIFontWeightMedium);
     _priceNotificationsChip.strikeoutPreviousPrice = YES;
     [_priceNotificationsChip
-         setPriceDrop:_item.shopCardData.priceDrop->current_price
-        previousPrice:_item.shopCardData.priceDrop->previous_price];
+         setPriceDrop:_config.shopCardData.priceDrop->current_price
+        previousPrice:_config.shopCardData.priceDrop->previous_price];
     [_labelStackView addArrangedSubview:_priceNotificationsChip];
-    self.accessibilityLabel = _item.shopCardData.accessibilityString;
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitPreferredContentSizeCategory.self ]);
-    [self registerForTraitChanges:traits
+    self.accessibilityLabel = _config.shopCardData.accessibilityString;
+    [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.self ]
                        withAction:@selector(hidePriceDropOnTraitChange)];
 
   } else {
@@ -179,6 +174,8 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 
   [self addSubview:_containerStackView];
   AddSameConstraints(_containerStackView, self);
+
+  [self applyBackgroundColors];
 }
 
 - (void)clearSubviews {
@@ -254,8 +251,8 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
     faviconBackgroundCornerRadius = kCenterFaviconBackgroundCornerRadius;
   }
 
-  if (_item.faviconImage) {
-    faviconImageView.image = _item.faviconImage;
+  if (_config.faviconImage) {
+    faviconImageView.image = _config.faviconImage;
   } else {
     SetFallbackImageToImageView(faviconImageView, faviconBackgroundView,
                                 faviconSize);
@@ -304,8 +301,8 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
   UIImageView* contentImageView = [[UIImageView alloc] init];
 
   // Compute the size of the image.
-  CGFloat width = _item.contentImage.size.width;
-  CGFloat height = _item.contentImage.size.height;
+  CGFloat width = _config.contentImage.size.width;
+  CGFloat height = _config.contentImage.size.height;
   if (width > height) {
     width = (width * containerSize) / height;
     height = containerSize;
@@ -324,7 +321,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
                                              format:format];
   UIImage* scaledImage =
       [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
-        [_item.contentImage drawInRect:CGRectMake(0, 0, width, height)];
+        [_config.contentImage drawInRect:CGRectMake(0, 0, width, height)];
       }];
   [contentImageView setImage:scaledImage];
 
@@ -337,7 +334,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
   gradientLayer.frame = CGRectMake(0, 0, containerSize, containerSize);
   gradientLayer.startPoint = CGPointMake(0.0, 0.0);
   gradientLayer.endPoint = CGPointMake(0.0, 1.0);
-  if (HasPriceDropOnTab(_item)) {
+  if (HasPriceDropOnTab(_config)) {
     gradientLayer.colors = @[
       static_cast<id>([[UIColor blackColor]
                           colorWithAlphaComponent:kPriceDropOverlayStartAlpha]
@@ -365,8 +362,8 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 
   BOOL hasContentImage = NO;
   CGFloat containerSize;
-  if (_item.contentImage && _item.contentImage.size.width &&
-      _item.contentImage.size.height) {
+  if (_config.contentImage && _config.contentImage.size.width &&
+      _config.contentImage.size.height) {
     hasContentImage = YES;
     containerSize = kImageContentContainerSize;
     UIView* contentImageView =
@@ -374,7 +371,6 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
     [containerView addSubview:contentImageView];
     AddSameConstraints(contentImageView, containerView);
   } else {
-    containerView.backgroundColor = [UIColor colorNamed:kGrey100Color];
     containerSize = kImageEmptyContainerSize;
   }
 
@@ -383,7 +379,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
     [containerView.heightAnchor constraintEqualToConstant:containerSize],
   ]];
 
-  if (hasContentImage && !_item.faviconImage) {
+  if (hasContentImage && !_config.faviconImage) {
     return containerView;
   }
 
@@ -409,7 +405,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 - (UILabel*)configuredSessionLabel {
   NSString* sessionString =
       l10n_util::GetNSStringF(IDS_IOS_TAB_RESUMPTION_TILE_HOST_LABEL,
-                              base::SysNSStringToUTF16(_item.sessionName));
+                              base::SysNSStringToUTF16(_config.sessionName));
 
   UILabel* label = [[UILabel alloc] init];
   label.text = sessionString.uppercaseString;
@@ -425,8 +421,8 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 // Configures and returns the UILabel that contains the session name.
 - (UILabel*)configuredTabTitleLabel {
   UILabel* label = [[UILabel alloc] init];
-  NSString* text = [_item.tabTitle length]
-                       ? _item.tabTitle
+  NSString* text = [_config.tabTitle length]
+                       ? _config.tabTitle
                        : l10n_util::GetNSString(
                              IDS_IOS_TAB_RESUMPTION_TAB_TITLE_PLACEHOLDER);
   UIFont* font =
@@ -453,14 +449,14 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 - (UILabel*)configuredHostNameAndSyncTimeLabel {
   NSString* hostnameAndSyncTimeString;
   UILabel* label = [[UILabel alloc] init];
-  if (_item.itemType == kLastSyncedTab && _item.sessionName) {
+  if (_config.itemType == kLastSyncedTab && _config.sessionName) {
     hostnameAndSyncTimeString = [NSString
-        stringWithFormat:@"%@ • %@", [self hostnameFromGURL:_item.tabURL],
-                         _item.sessionName];
+        stringWithFormat:@"%@ • %@", [self hostnameFromGURL:_config.tabURL],
+                         _config.sessionName];
   } else {
     hostnameAndSyncTimeString = [NSString
-        stringWithFormat:@"%@ • %@", [self hostnameFromGURL:_item.tabURL],
-                         [self lastSyncTimeStringFromTime:_item.syncedTime]];
+        stringWithFormat:@"%@ • %@", [self hostnameFromGURL:_config.tabURL],
+                         [self lastSyncTimeStringFromTime:_config.syncedTime]];
   }
   label.lineBreakMode = NSLineBreakByTruncatingTail;
   label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
@@ -472,6 +468,19 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
   label.textColor = [UIColor colorNamed:kTextSecondaryColor];
 
   return label;
+}
+
+- (void)applyBackgroundColors {
+  // Only set background color if item does not have content image.
+  BOOL hasContentImage = _config.contentImage &&
+                         _config.contentImage.size.width &&
+                         _config.contentImage.size.height;
+  if (!hasContentImage) {
+    NewTabPageColorPalette* colorPalette =
+        [self.traitCollection objectForNewTabPageTrait];
+    _imageContainerView.backgroundColor =
+        colorPalette.tertiaryColor ?: [UIColor colorNamed:kGrey100Color];
+  }
 }
 
 // Returns the tab hostname from the given `URL`.
@@ -500,7 +509,7 @@ bool HasPriceDropOnTab(TabResumptionItem* item) {
 
 // Called when the view has been tapped.
 - (void)tabResumptionItemTapped:(UIGestureRecognizer*)sender {
-  [self.commandHandler openTabResumptionItem:_item];
+  [self.tabResumptionHandler openTabResumptionItem:_config];
 }
 
 - (void)hidePriceDropOnTraitChange {

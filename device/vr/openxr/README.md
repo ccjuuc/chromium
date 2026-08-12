@@ -16,14 +16,14 @@ The main entry point to OpenXR is via an [`OpenXrDevice`](openxr_device.h).
 Depending on the platform, this may be directly created by a more general
 purpose device provider (e.g. Windows and the [Isolated Xr Device service][xr_device_service])
 or by a specific `OpenXrDeviceProvider` (e.g. [Android's](../../../components/webxr/android/openxr_device_provider.h)).
-It is a good idea to try to create both an `XrInstance` and an `XrDevice` via
-the OpenXR API before creating an `OpenXrDevice`, as that will indicate that a
-session can *actually* be created. This `OpenXrDevice`, when requested for a
-session will create and maintain an [`OpenXrRenderLoop`](openxr_render_loop.h).
+It is a good idea to try to create both an `XrInstance` and obtain an
+`XrSystemId` via the OpenXR API before creating an `OpenXrDevice`, as that
+will indicate that a session can *actually* be created. This `OpenXrDevice`,
+when requested for a session will create and maintain an [`OpenXrRenderLoop`](openxr_render_loop.h).
 This `OpenXrRenderLoop` will create an [`OpenXrApiWrapper`](openxr_api_wrapper.h),
 which is largely responsible for handling the `XrSession` object. The
 `OpenXrRenderLoop` and `OpenXrApiWrapper` between themselves will create a
-number of helper objects to abstract various aspects of the API (e.g. [OpenXrInputHelper](openxr_inut_helper.h)
+number of helper objects to abstract various aspects of the API (e.g. [OpenXrInputHelper](openxr_input_helper.h)
 and [OpenXrExtensionHelper](openxr_extension_helper.h)). Classes that depend
 solely on the core spec can be created directly by the render loop or API
 wrapper; but classes that rely on extension methods should be created by the
@@ -91,17 +91,45 @@ added and extended as needed. The base path of the interaction profile must be
 defined as a constant in [openxr_interaction_profile_paths.h](openxr_interaction_profile_paths.h),
 for compatibility with tests. If the interaction profile should have hand input
 enabled for it, the required extension should also be added to the list in the
-[OpenXrHandTrackerHandlerFactory](openxr_hand_tracker.h).
+[OpenXrHandTrackerFactory](openxr_hand_tracker.h).
 
 ### Hand Gesture Extensions
 
 The secondary means of adding interaction profile support depends upon extension
 methods to the XR_EXT_hand_tracking structs. After the initial enum and profile
 map has been added, simply extend [OpenXrHandTracker](openxr_hand_tracker.h),
-which has some more detailed instructions. [OpenXrHandTrackerAndroid](android/openxr_hand_tracker_android.h)
-is an example of a class that extends `OpenXrHandTracker` to provide such
-support. Note that you are still responsible for ensuring that your extension is
-enabled when available and providing a means to create your new class as
-described in [OpenXR Extensions](#openxr-extensions).
+which has some more detailed instructions. [OpenXrHandTrackerFb](fb/openxr_hand_tracker_fb.h)
+is an example of a class that extends `OpenXrHandTracker` to support
+vendor-specific extensions (specifically Meta's `XR_FB_hand_tracking`
+extensions). Note that you are still responsible for ensuring that your
+extension is enabled when available and providing a means to create your new
+class as described in [OpenXR Extensions](#openxr-extensions).
 
 [xr_device_service]: https://source.chromium.org/chromium/chromium/src/+/main:content/services/isolated_xr_device/README.md
+
+## Testing
+
+OpenXR testing is handled by a fake implementation of the API found in
+[`//device/vr/openxr/test/fake_openxr_impl_api.cc`](test/fake_openxr_impl_api.cc)
+along with [`OpenXrTestHelper`](test/openxr_test_helper.h). Typically, an OpenXR
+runtime is a separate shared library loaded by the OpenXR loader. To simplify
+testing and avoid DLL boundary issues (such as duplicate `//base` singletons or
+data marshalling), we embed the fake OpenXR implementation directly into the
+target process (the test binary/browser process on Android, or the isolated XR
+device service on Windows).
+
+To intercept calls from the OpenXR loader, we compile a lightweight trampoline shared
+library in the [`//device/vr:openxr_mock`](../../BUILD.gn) target (`libopenxr_mock.so` on
+Android or `openxr_mock.dll` on Windows). Runtime configuration JSON files
+([`openxr_android.json`](test/openxr_android.json) and [`openxr_win.json`](test/openxr_win.json))
+are deployed during test setup to direct the OpenXR loader to use this trampoline library as the
+active runtime.
+
+During test initialization, the main process passes its OpenXR function dispatch table to this
+trampoline via `SetMockOpenXrDispatchTable()`. When the OpenXR loader negotiates the runtime
+interface, the trampoline reverse-registers and forwards all subsequent OpenXR calls back to the
+embedded implementation in the main process.
+
+For more details on writing and running XR browser tests, see the
+[XR Browser Tests documentation](../../../chrome/browser/vr/test/xr_browser_tests.md)
+and [XR Browser Test Details](../../../chrome/browser/vr/test/xr_browser_test_details.md).

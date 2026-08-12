@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
@@ -131,7 +130,7 @@ void RecentTabHelper::ObserveAndDownloadCurrentPage(const ClientId& client_id,
   // If there is an ongoing snapshot request, completely ignore this one and
   // cancel the Background Offliner request.
   // TODO(carlosk): it might be better to make the decision to schedule or not
-  // the background request here. See https://crbug.com/686165.
+  // the background request here. See https://crbug.com/41298004.
   if (downloads_ongoing_snapshot_info_) {
     DVLOG(1) << "Ongoing request exist; ignored download request for: "
              << web_contents()->GetLastCommittedURL().spec();

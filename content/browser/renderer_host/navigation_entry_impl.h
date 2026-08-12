@@ -16,9 +16,10 @@
 #include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/safety_checks.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "content/browser/renderer_host/back_forward_cache_metrics.h"
+#include "content/browser/back_forward_cache/back_forward_cache_metrics.h"
 #include "content/browser/renderer_host/frame_navigation_entry.h"
 #include "content/browser/renderer_host/navigation_transitions/navigation_transition_data.h"
 #include "content/browser/site_instance_impl.h"
@@ -58,6 +59,10 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
   // Represents a tree of FrameNavigationEntries that make up this joint session
   // history item.
   struct TreeNode {
+    // TODO(https://crbug.com/495931147): Remove this macro.
+    ADVANCED_MEMORY_SAFETY_CHECKS();
+
+   public:
     TreeNode(TreeNode* parent, scoped_refptr<FrameNavigationEntry> frame_entry);
     ~TreeNode();
 
@@ -177,8 +182,9 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
   bool IsRestored() const override;
   std::string GetExtraHeaders() const override;
   void AddExtraHeaders(const std::string& extra_headers) override;
+  bool GetRemoveExtraHeadersOnCrossOriginRedirect() const override;
+  void SetRemoveExtraHeadersOnCrossOriginRedirect(bool value) override;
   int64_t GetMainFrameDocumentSequenceNumber() const override;
-  bool IsPossiblySkippableAdEntryForTesting() const override;
 
   // Creates a copy of this NavigationEntryImpl that can be modified
   // independently from the original, but that shares FrameNavigationEntries.
@@ -602,8 +608,14 @@ class CONTENT_EXPORT NavigationEntryImpl : public NavigationEntry {
   // compiler provided copy constructor.  Cleared in |ResetForCommit|.
   scoped_refptr<network::ResourceRequestBody> post_data_;
 
-  // This member is not persisted with session restore.
+  // Additional HTTP headers to be passed as part of the request.
+  // This member is not persisted with session restore, except in Android
+  // WebView when the kWebViewSaveStateIncludeHeaders feature is enabled.
   std::string extra_headers_;
+
+  // If true, any extra headers provided will be removed on a cross-origin
+  // redirect.
+  bool remove_extra_headers_on_cross_origin_redirect_ = false;
 
   // Used for specifying base URL for pages loaded via data URLs. Only used and
   // persisted by Android WebView.

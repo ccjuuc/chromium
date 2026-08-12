@@ -24,7 +24,6 @@ static_library("sensor_info") {
     "//ash",
     "//base",
     "//chrome/browser:browser_public_dependencies",
-    "//chrome/common",
     "//content/public/browser",
     "//content/public/common",
     "//mojo/public/cpp/bindings",
@@ -33,6 +32,7 @@ static_library("sensor_info") {
 
   deps = [
     "//chrome/browser/ash/file_manager",
+    "//chrome/browser/download",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/resources/chromeos/sensor_info:resources",
     "//ui/webui",

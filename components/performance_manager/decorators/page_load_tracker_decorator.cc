@@ -54,9 +54,9 @@ void PageLoadTrackerDecorator::OnTakenFromGraph(Graph* graph) {
   UnregisterObservers(graph);
 }
 
-base::Value::Dict PageLoadTrackerDecorator::DescribePageNodeData(
+base::DictValue PageLoadTrackerDecorator::DescribePageNodeData(
     const PageNode* page_node) const {
-  base::Value::Dict ret;
+  base::DictValue ret;
 
   PageNodeImpl* page_node_impl = PageNodeImpl::FromNode(page_node);
   if (!Data::Exists(page_node_impl)) {
@@ -312,7 +312,7 @@ void PageLoadTrackerDecorator::TransitionToLoadedAndIdle(
 // static
 bool PageLoadTrackerDecorator::IsIdling(const PageNodeImpl* page_node) {
   // Get the frame node for the main frame associated with this page.
-  const FrameNodeImpl* main_frame_node = page_node->main_frame_node();
+  const FrameNodeImpl* main_frame_node = page_node->primary_main_frame_node();
   if (!main_frame_node)
     return false;
 

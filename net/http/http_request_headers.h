@@ -89,6 +89,7 @@ class NET_EXPORT HttpRequestHeaders {
   static constexpr char kContentLength[] = "Content-Length";
   static constexpr char kContentType[] = "Content-Type";
   static constexpr char kCookie[] = "Cookie";
+  static constexpr char kDNT[] = "DNT";
   static constexpr char kHost[] = "Host";
   static constexpr char kIfMatch[] = "If-Match";
   static constexpr char kIfModifiedSince[] = "If-Modified-Since";
@@ -102,7 +103,11 @@ class NET_EXPORT HttpRequestHeaders {
   static constexpr char kProxyConnection[] = "Proxy-Connection";
   static constexpr char kRange[] = "Range";
   static constexpr char kReferer[] = "Referer";
+  static constexpr char kSecGPC[] = "Sec-GPC";
+  static constexpr char kSecPurpose[] = "Sec-Purpose";
   static constexpr char kTransferEncoding[] = "Transfer-Encoding";
+  static constexpr char kUpgradeInsecureRequests[] =
+      "Upgrade-Insecure-Requests";
   static constexpr char kUserAgent[] = "User-Agent";
 
   HttpRequestHeaders();
@@ -190,8 +195,8 @@ class NET_EXPORT HttpRequestHeaders {
 
   // Takes in the request line and returns a Value for use with the NetLog
   // containing both the request line and all headers fields.
-  base::Value::Dict NetLogParams(const std::string& request_line,
-                                 NetLogCaptureMode capture_mode) const;
+  base::DictValue NetLogParams(const std::string& request_line,
+                               NetLogCaptureMode capture_mode) const;
 
   const HeaderVector& GetHeaderVector() const { return headers_; }
 

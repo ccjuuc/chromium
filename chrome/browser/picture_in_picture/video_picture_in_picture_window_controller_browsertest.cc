@@ -9,6 +9,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/scoped_observation.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
@@ -29,6 +30,7 @@
 #include "chrome/browser/ui/views/overlay/skip_ad_label_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_camera_button.h"
 #include "chrome/browser/ui/views/overlay/toggle_microphone_button.h"
+#include "chrome/browser/ui/views/overlay/toggle_mute_button.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -119,10 +121,13 @@ class MockVideoPictureInPictureWindowController
   MOCK_METHOD0(ToggleMicrophone, void());
   MOCK_METHOD0(ToggleCamera, void());
   MOCK_METHOD0(HangUp, void());
+  MOCK_METHOD1(RequestMute, void(bool));
+  MOCK_METHOD0(GetMuteStatus, bool());
   MOCK_METHOD0(PreviousSlide, void());
   MOCK_METHOD0(NextSlide, void());
   MOCK_METHOD1(SeekTo, void(base::TimeDelta time));
   MOCK_CONST_METHOD0(GetSourceBounds, const gfx::Rect&());
+  MOCK_CONST_METHOD0(IsImmersive, bool());
   void GetMediaImage(
       const media_session::MediaImage& image,
       int minimum_size_px,
@@ -350,7 +355,8 @@ class VideoPictureInPictureWindowControllerBrowserTest
   }
 
   MediaEngagementService* GetMediaEngagementService() const {
-    return MediaEngagementServiceFactory::GetForProfile(browser()->profile());
+    return MediaEngagementServiceFactory::GetForProfile(
+        browser()->GetProfile());
   }
 
   void SetExpectedHasHighEngagement(bool has_high_engagenent) const {
@@ -1192,7 +1198,7 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
       window_controller();
   EXPECT_TRUE(first_controller->GetWindowForTesting()->IsVisible());
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = CreateBrowser(browser()->GetProfile());
   LoadTabAndEnterPictureInPicture(
       second_browser, base::FilePath(kPictureInPictureWindowSizePage));
 
@@ -2246,6 +2252,68 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
   WaitForTitle(active_web_contents, u"hangup");
 }
 
+// Test fixture with kPictureInPictureMuteControl enabled.
+class PictureInPictureMuteControlBrowserTest
+    : public VideoPictureInPictureWindowControllerBrowserTest {
+ public:
+  PictureInPictureMuteControlBrowserTest() {
+    scoped_feature_list_.InitWithFeatures({media::kPictureInPictureMuteControl},
+                                          {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Test fixture with kPictureInPictureMuteControl disabled.
+class PictureInPictureMuteControlDisabledBrowserTest
+    : public VideoPictureInPictureWindowControllerBrowserTest {
+ public:
+  PictureInPictureMuteControlDisabledBrowserTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {}, {media::kPictureInPictureMuteControl});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(PictureInPictureMuteControlBrowserTest,
+                       MuteButton_VisibleAndTogglesState) {
+  LoadTabAndEnterPictureInPicture(
+      browser(), base::FilePath(kPictureInPictureWindowSizePage));
+  ASSERT_NE(GetOverlayWindow(), nullptr);
+
+  ToggleMuteButton* toggle_mute_button =
+      GetOverlayWindow()->toggle_mute_button_for_testing();
+  ASSERT_NE(nullptr, toggle_mute_button);
+
+  // The button should start in the unmuted state.
+  EXPECT_FALSE(toggle_mute_button->is_muted_for_testing());
+
+  // Clicking the mute button should toggle to muted. The mute request travels
+  // via mojo to the renderer and back, so we must wait for the state change.
+  GetOverlayWindow()->ForceControlsVisibleForTesting(true);
+  ClickButton(toggle_mute_button);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return toggle_mute_button->is_muted_for_testing(); }));
+
+  // Clicking again should toggle back to unmuted.
+  ClickButton(toggle_mute_button);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !toggle_mute_button->is_muted_for_testing(); }));
+}
+
+// When the feature is disabled, the mute button should not exist.
+IN_PROC_BROWSER_TEST_F(PictureInPictureMuteControlDisabledBrowserTest,
+                       MuteButton_NotVisibleWhenFeatureDisabled) {
+  LoadTabAndEnterPictureInPicture(
+      browser(), base::FilePath(kPictureInPictureWindowSizePage));
+  ASSERT_NE(GetOverlayWindow(), nullptr);
+
+  EXPECT_EQ(nullptr, GetOverlayWindow()->toggle_mute_button_for_testing());
+}
+
 IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
                        IsTrustedForMediaPlayback_FileScheme) {
   LoadTabAndEnterPictureInPicture(
@@ -2342,6 +2410,29 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       TimestampHiddenOnChangeToMediaStream) {
+  LoadTabAndEnterPictureInPicture(
+      browser(), base::FilePath(kPictureInPictureWindowSizePage));
+  content::WebContents* const web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  ASSERT_EQ(true, EvalJs(web_contents, "changeVideoSrcToMediaStream();"));
+
+  // The implicit MediaPosition specifies infinite duration (the canvas player
+  // has no timeline), so the timestamp should be hidden.
+  EXPECT_NO_FATAL_FAILURE(AssertControlsVisible(
+      {GetOverlayWindow()->timestamp_for_testing()}, false));
+
+  // If the page establishes an explicit MediaPosition, the timestamp should
+  // become visible.
+  ASSERT_TRUE(ExecJs(
+      web_contents,
+      "navigator.mediaSession.setPositionState({duration: 12, position: 0});"));
+  EXPECT_NO_FATAL_FAILURE(AssertControlsVisible(
+      {GetOverlayWindow()->timestamp_for_testing()}, true));
+}
+
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
                        TitleVisibility) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
@@ -2422,6 +2513,263 @@ IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
   GetOverlayWindow()->FireEnableControlsAfterMoveTimerForTesting();
   GetOverlayWindow()->initial_title_hide_timer_for_testing().FireNow();
   EXPECT_TRUE(GetOverlayWindow()->AreTitleAndScrimVisibleForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       SourceTitle_OpaqueFallback) {
+  const std::string kTestHost = "example.com";
+  const std::u16string kExpectedTitlePrefix = base::ASCIIToUTF16(kTestHost);
+
+  // Open a sandboxed page, which will have an opaque origin.
+  GURL sandboxed_main_url =
+      embedded_test_server()->GetURL(kTestHost,
+                                     "/set-header?Content-Security-Policy: "
+                                     "sandbox allow-scripts allow-popups");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), sandboxed_main_url));
+
+  content::WebContents* active_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Verify the main frame has an opaque origin.
+  ASSERT_TRUE(active_web_contents->GetPrimaryMainFrame()
+                  ->GetLastCommittedOrigin()
+                  .opaque());
+
+  // Open an about:blank popup from the sandboxed main frame.
+  content::WebContents* popup_contents;
+  {
+    content::WebContentsAddedObserver new_contents_observer;
+    ASSERT_TRUE(ExecJs(active_web_contents, "window.open('about:blank');"));
+    popup_contents = new_contents_observer.GetWebContents();
+  }
+
+  // Verify that the popup also has an opaque origin
+  // and has established the opener relationship.
+  ASSERT_TRUE(
+      popup_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin().opaque());
+  ASSERT_EQ(active_web_contents->GetPrimaryMainFrame(),
+            popup_contents->GetOpener());
+
+  // Inject a video element and play it in the popup.
+  GURL video_url =
+      embedded_test_server()->GetURL(kTestHost, "/media/bear.webm");
+  std::string script = base::ReplaceStringPlaceholders(
+      R"(
+        const video = document.createElement('video');
+        video.src = '$1';
+        video.loop = true;
+        document.body.appendChild(video);
+        video.play().then(() => video.requestPictureInPicture());
+      )",
+      {video_url.spec()}, nullptr);
+  ASSERT_TRUE(ExecJs(popup_contents, script));
+
+  // Wait until the Picture-in-Picture window is visible and its source title
+  // reflects the precursor origin of the opaque sandboxed frame (example.com).
+  SetUpWindowController(popup_contents);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* overlay_window = GetOverlayWindow();
+    return overlay_window && overlay_window->IsVisible() &&
+           overlay_window->origin_for_testing() &&
+           base::StartsWith(overlay_window->origin_for_testing()->GetText(),
+                            kExpectedTitlePrefix);
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       SourceTitle_NestedOpaqueFallback) {
+  const std::string kTestHost = "example.com";
+  const std::u16string kExpectedTitlePrefix = base::ASCIIToUTF16(kTestHost);
+
+  // Open a sandboxed page, which will have an opaque origin.
+  GURL sandboxed_main_url =
+      embedded_test_server()->GetURL(kTestHost,
+                                     "/set-header?Content-Security-Policy: "
+                                     "sandbox allow-scripts allow-popups");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), sandboxed_main_url));
+
+  content::WebContents* active_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Open an about:blank popup from the sandboxed main frame.
+  content::WebContents* popup1_contents;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(ExecJs(active_web_contents, "window.open('about:blank');"));
+    popup1_contents = observer.GetWebContents();
+  }
+
+  // Open another about:blank popup from the first popup.
+  content::WebContents* popup2_contents;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(ExecJs(popup1_contents, "window.open('about:blank');"));
+    popup2_contents = observer.GetWebContents();
+  }
+
+  // Inject a video element and play it in the nested popup.
+  GURL video_url =
+      embedded_test_server()->GetURL(kTestHost, "/media/bear.webm");
+  std::string script = base::ReplaceStringPlaceholders(
+      R"(
+        const video = document.createElement('video');
+        video.src = '$1';
+        video.loop = true;
+        document.body.appendChild(video);
+        video.play().then(() => video.requestPictureInPicture());
+      )",
+      {video_url.spec()}, nullptr);
+  ASSERT_TRUE(ExecJs(popup2_contents, script));
+
+  // Wait until the Picture-in-Picture window is visible and its source title
+  // reflects the inherited precursor origin of the nested popups (example.com).
+  SetUpWindowController(popup2_contents);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* overlay_window = GetOverlayWindow();
+    return overlay_window && overlay_window->IsVisible() &&
+           overlay_window->origin_for_testing() &&
+           base::StartsWith(overlay_window->origin_for_testing()->GetText(),
+                            kExpectedTitlePrefix);
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       SourceTitle_InheritedFromNavigatedOpener) {
+  const std::string kHost1 = "example.com";
+  const std::string kHost2 = "another-site.com";
+  const std::u16string kExpectedTitlePrefix = base::ASCIIToUTF16(kHost2);
+
+  // Open Host 1 sandboxed.
+  GURL url1 =
+      embedded_test_server()->GetURL(kHost1,
+                                     "/set-header?Content-Security-Policy: "
+                                     "sandbox allow-scripts allow-popups");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
+  content::WebContents* active_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Open about:blank (Popup 1).
+  content::WebContents* popup1_contents;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(ExecJs(active_web_contents, "window.open('about:blank');"));
+    popup1_contents = observer.GetWebContents();
+  }
+
+  // Navigate Popup 1 to Host 2 sandboxed.
+  GURL url2 =
+      embedded_test_server()->GetURL(kHost2,
+                                     "/set-header?Content-Security-Policy: "
+                                     "sandbox allow-scripts allow-popups");
+  {
+    content::TestNavigationObserver nav_observer(popup1_contents);
+    ASSERT_TRUE(ExecJs(popup1_contents,
+                       base::StringPrintf("window.location.href = '%s';",
+                                          url2.spec().c_str())));
+    nav_observer.Wait();
+  }
+
+  // Open another about:blank (Popup 2) from Popup 1 (Host 2).
+  content::WebContents* popup2_contents;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(ExecJs(popup1_contents, "window.open('about:blank');"));
+    popup2_contents = observer.GetWebContents();
+  }
+
+  // Play video in Popup 2.
+  GURL video_url = embedded_test_server()->GetURL(kHost2, "/media/bear.webm");
+  std::string script = base::ReplaceStringPlaceholders(
+      R"(
+        const video = document.createElement('video');
+        video.src = '$1';
+        video.loop = true;
+        document.body.appendChild(video);
+        video.play().then(() => video.requestPictureInPicture());
+      )",
+      {video_url.spec()}, nullptr);
+  ASSERT_TRUE(ExecJs(popup2_contents, script));
+
+  // Verify the source title reflects the opener's origin at the time of the
+  // popup's creation (another-site.com).
+  SetUpWindowController(popup2_contents);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* overlay_window = GetOverlayWindow();
+    return overlay_window && overlay_window->IsVisible() &&
+           overlay_window->origin_for_testing() &&
+           base::StartsWith(overlay_window->origin_for_testing()->GetText(),
+                            kExpectedTitlePrefix);
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(VideoPictureInPictureWindowControllerBrowserTest,
+                       SourceTitle_AboutBlankPopupUsesInheritedOrigin) {
+  const std::string kHost1 = "example.com";
+  const std::string kHost2 = "another-site.com";
+  const std::u16string kExpectedTitlePrefix = base::ASCIIToUTF16(kHost1);
+
+  // Open a non-sandboxed page on Host 1.
+  GURL url1 = embedded_test_server()->GetURL(kHost1, "/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
+  content::WebContents* active_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Open an about:blank popup. The popup's committed URL is about:blank, but
+  // its committed origin is inherited from Host 1.
+  content::WebContents* popup_contents;
+  {
+    content::WebContentsAddedObserver observer;
+    ASSERT_TRUE(ExecJs(active_web_contents, "window.open('about:blank');"));
+    popup_contents = observer.GetWebContents();
+  }
+  ASSERT_FALSE(
+      popup_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin().opaque());
+  ASSERT_EQ(url::Origin::Create(url1),
+            popup_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+
+  // Navigate the opener cross-origin to Host 2. The popup keeps its inherited
+  // Host 1 origin and its opener relationship.
+  GURL url2 = embedded_test_server()->GetURL(kHost2, "/title1.html");
+  {
+    content::TestNavigationObserver nav_observer(active_web_contents);
+    ASSERT_TRUE(ExecJs(active_web_contents,
+                       base::StringPrintf("window.location.href = '%s';",
+                                          url2.spec().c_str())));
+    nav_observer.Wait();
+  }
+  ASSERT_EQ(active_web_contents->GetPrimaryMainFrame(),
+            popup_contents->GetOpener());
+
+  // Play video in the popup and request Picture-in-Picture.
+  GURL video_url = embedded_test_server()->GetURL(kHost1, "/media/bear.webm");
+  std::string script = base::ReplaceStringPlaceholders(
+      R"(
+        const video = document.createElement('video');
+        video.src = '$1';
+        video.loop = true;
+        document.body.appendChild(video);
+        video.play().then(() => video.requestPictureInPicture());
+      )",
+      {video_url.spec()}, nullptr);
+  ASSERT_TRUE(ExecJs(popup_contents, script));
+
+  // Wait until the Picture-in-Picture window is visible and its source title
+  // has been populated.
+  SetUpWindowController(popup_contents);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* overlay_window = GetOverlayWindow();
+    return overlay_window && overlay_window->IsVisible() &&
+           overlay_window->origin_for_testing() &&
+           !overlay_window->origin_for_testing()->GetText().empty();
+  }));
+
+  // The source title must reflect the popup's own (inherited) origin, not the
+  // opener's current origin.
+  EXPECT_TRUE(
+      base::StartsWith(GetOverlayWindow()->origin_for_testing()->GetText(),
+                       kExpectedTitlePrefix))
+      << "source title is '"
+      << GetOverlayWindow()->origin_for_testing()->GetText() << "'";
 }
 
 struct InteractionTestParam {

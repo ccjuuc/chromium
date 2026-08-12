@@ -88,9 +88,10 @@ TemplateURLData::TemplateURLData(
     std::string_view favicon_url,
     std::string_view encoding,
     std::u16string_view image_search_branding_label,
-    const base::Value::List& alternate_urls_list,
+    const base::ListValue& alternate_urls_list,
     bool preconnect_to_search_url,
     bool prefetch_likely_navigations,
+    bool send_x_geo_header,
     int prepopulate_id,
     const base::span<const TemplateURLData::RegulatoryExtension>&
         reg_extensions)
@@ -120,7 +121,8 @@ TemplateURLData::TemplateURLData(
       prepopulate_id(prepopulate_id),
       sync_guid(GenerateGUID(prepopulate_id, 0)),
       preconnect_to_search_url(preconnect_to_search_url),
-      prefetch_likely_navigations(prefetch_likely_navigations) {
+      prefetch_likely_navigations(prefetch_likely_navigations),
+      send_x_geo_header(send_x_geo_header) {
   SetShortName(name);
   SetKeyword(keyword);
   SetURL(std::string(search_url));
@@ -173,9 +175,12 @@ std::vector<uint8_t> TemplateURLData::GenerateHash() const {
   base::Pickle pickle;
   pickle.WriteInt64(id);
   pickle.WriteString(url_);
+  pickle.WriteString16(keyword_);
+  pickle.WriteBool(enforced_by_policy);
+  pickle.WriteInt(starter_pack_id);
   // Prepend a hash version. This would allow expanding the data contained
   // within the hash in the future, while keeping backwards compatibility.
-  const uint8_t kHashVersion = 1u;
+  const uint8_t kHashVersion = 2u;
   std::vector<uint8_t> result(1, kHashVersion);
 
   const auto hash = crypto::hash::Sha256(pickle);
@@ -230,4 +235,8 @@ bool TemplateURLData::CreatedByEnterpriseSearchAggregatorPolicy() const {
 
 bool TemplateURLData::CreatedBySiteSearchPolicy() const {
   return policy_origin == PolicyOrigin::kSiteSearch;
+}
+
+bool TemplateURLData::CreatedByRegulatoryProgram() const {
+  return regulatory_origin != RegulatoryExtensionType::kDefault;
 }

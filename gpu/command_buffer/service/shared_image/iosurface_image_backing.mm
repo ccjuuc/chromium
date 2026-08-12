@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "gpu/command_buffer/service/shared_image/iosurface_image_backing.h"
 
 #include <EGL/egl.h>
@@ -19,15 +14,17 @@
 #include "base/apple/scoped_cftyperef.h"
 #include "base/apple/scoped_nsobject.h"
 #include "base/bits.h"
+#include "base/compiler_specific.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_policy.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_trace_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/dawn_context_provider.h"
-#include "gpu/command_buffer/service/metal_context_provider.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/copy_image_plane.h"
 #include "gpu/command_buffer/service/shared_image/dawn_fallback_image_representation.h"
@@ -36,7 +33,6 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_gl_utils.h"
 #include "gpu/command_buffer/service/shared_image/skia_graphite_dawn_image_representation.h"
 #include "gpu/command_buffer/service/skia_utils.h"
-#include "gpu/config/gpu_finch_features.h"
 #include "third_party/angle/include/EGL/eglext_angle.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/gpu/ganesh/GrContextThreadSafeProxy.h"
@@ -48,6 +44,7 @@
 #include "ui/gl/egl_surface_io_surface.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_display.h"
+#include "ui/gl/gl_display_manager.h"
 #include "ui/gl/gl_fence_egl.h"
 #include "ui/gl/gl_gl_api_implementation.h"
 #include "ui/gl/gl_implementation.h"
@@ -136,83 +133,10 @@ wgpu::Texture CreateWGPUTexture(wgpu::SharedTextureMemory shared_texture_memory,
   return shared_texture_memory.CreateTexture(&texture_descriptor);
 }
 
-#if BUILDFLAG(SKIA_USE_METAL)
-
-base::apple::scoped_nsprotocol<id<MTLTexture>> CreateMetalTexture(
-    id<MTLDevice> mtl_device,
-    IOSurfaceRef io_surface,
-    const gfx::Size& size,
-    viz::SharedImageFormat format,
-    int plane_index) {
-  TRACE_EVENT0("gpu", "IOSurfaceImageBackingFactory::CreateMetalTexture");
-  base::apple::scoped_nsprotocol<id<MTLTexture>> mtl_texture;
-  MTLPixelFormat mtl_pixel_format =
-      static_cast<MTLPixelFormat>(ToMTLPixelFormat(format, plane_index));
-  if (mtl_pixel_format == MTLPixelFormatInvalid) {
-    return mtl_texture;
-  }
-
-  base::apple::scoped_nsobject<MTLTextureDescriptor> mtl_tex_desc(
-      [[MTLTextureDescriptor alloc] init]);
-  [mtl_tex_desc.get() setTextureType:MTLTextureType2D];
-  [mtl_tex_desc.get()
-      setUsage:MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget];
-  [mtl_tex_desc.get() setPixelFormat:mtl_pixel_format];
-  [mtl_tex_desc.get() setWidth:size.width()];
-  [mtl_tex_desc.get() setHeight:size.height()];
-  [mtl_tex_desc.get() setDepth:1];
-  [mtl_tex_desc.get() setMipmapLevelCount:1];
-  [mtl_tex_desc.get() setArrayLength:1];
-  [mtl_tex_desc.get() setSampleCount:1];
-  // TODO(crbug.com/40622826): For zero-copy resources that are populated
-  // on the CPU (e.g, video frames), it may be that MTLStorageModeManaged will
-  // be more appropriate.
-#if BUILDFLAG(IS_IOS)
-  // On iOS we are using IOSurfaces which must use MTLStorageModeShared.
-  [mtl_tex_desc.get() setStorageMode:MTLStorageModeShared];
-#else
-  [mtl_tex_desc.get() setStorageMode:MTLStorageModeManaged];
-#endif
-  mtl_texture.reset([mtl_device newTextureWithDescriptor:mtl_tex_desc.get()
-                                               iosurface:io_surface
-                                                   plane:plane_index]);
-  DCHECK(mtl_texture);
-  return mtl_texture;
-}
-
-std::vector<scoped_refptr<GraphiteTextureHolder>> CreateGraphiteMetalTextures(
-    std::vector<base::apple::scoped_nsprotocol<id<MTLTexture>>> mtl_textures,
-    const viz::SharedImageFormat format,
-    const gfx::Size& size) {
-  int num_planes = format.NumberOfPlanes();
-  std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_textures;
-  graphite_textures.reserve(num_planes);
-  for (int plane = 0; plane < num_planes; plane++) {
-    SkISize sk_size = gfx::SizeToSkISize(format.GetPlaneSize(plane, size));
-    graphite_textures.emplace_back(base::MakeRefCounted<GraphiteTextureHolder>(
-        skgpu::graphite::BackendTextures::MakeMetal(
-            sk_size, mtl_textures[plane].get())));
-  }
-  return graphite_textures;
-}
-#endif
-
 id<MTLDevice> QueryMetalDeviceFromANGLE(EGLDisplay display) {
-  id<MTLDevice> metal_device = nil;
-  if (gl::GetANGLEImplementation() == gl::ANGLEImplementation::kMetal) {
-    EGLAttrib angle_device_attrib = 0;
-    if (eglQueryDisplayAttribEXT(display, EGL_DEVICE_EXT,
-                                 &angle_device_attrib)) {
-      EGLDeviceEXT angle_device =
-          reinterpret_cast<EGLDeviceEXT>(angle_device_attrib);
-      EGLAttrib metal_device_attrib = 0;
-      if (eglQueryDeviceAttribEXT(angle_device, EGL_METAL_DEVICE_ANGLE,
-                                  &metal_device_attrib)) {
-        metal_device = (__bridge id)(void*)metal_device_attrib;
-      }
-    }
-  }
-  return metal_device;
+  auto* display_egl =
+      gl::GLDisplayManagerEGL::GetInstance()->GetDisplay(display);
+  return display_egl ? display_egl->GetMetalDevice() : nil;
 }
 
 }  // namespace
@@ -233,6 +157,9 @@ IOSurfaceImageBacking::DawnBufferCopyRepresentation::
 
 wgpu::Buffer IOSurfaceImageBacking::DawnBufferCopyRepresentation::BeginAccess(
     wgpu::BufferUsage usage) {
+  CHECK(this->usage().HasAll(SHARED_IMAGE_USAGE_WEBGPU_READ |
+                             SHARED_IMAGE_USAGE_WEBGPU_WRITE));
+
   auto scoped_access = dawn_image_representation_->BeginScopedAccess(
       wgpu::TextureUsage::CopySrc, wgpu::TextureUsage::None,
       /*allow_uncleared=*/AllowUnclearedAccess::kYes);
@@ -279,7 +206,8 @@ wgpu::Buffer IOSurfaceImageBacking::DawnBufferCopyRepresentation::BeginAccess(
   // 3. Create the final packed destination buffer
   wgpu::BufferDescriptor final_buffer_desc;
   final_buffer_desc.size = packed_bytes_per_row * size().height();
-  final_buffer_desc.usage = usage | wgpu::BufferUsage::CopySrc;
+  final_buffer_desc.usage =
+      usage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst;
   buffer_ = device_.CreateBuffer(&final_buffer_desc);
 
   // 4. Copy from the staging buffer to the final packed buffer, row by row.
@@ -350,6 +278,10 @@ void IOSurfaceImageBacking::DawnBufferCopyRepresentation::EndAccess() {
 
   wgpu::CommandBuffer command_buffer = encoder.Finish();
   device_.GetQueue().Submit(1, &command_buffer);
+
+  // We no longer need the buffer (which was created in BeginAccess).
+  buffer_.Destroy();
+  buffer_ = {};
 }
 
 WebNNIOSurfaceTensorRepresentation::WebNNIOSurfaceTensorRepresentation(
@@ -414,7 +346,7 @@ IOSurfaceBackingEGLState::~IOSurfaceBackingEGLState() {
   }
 }
 
-GLuint IOSurfaceBackingEGLState::GetGLServiceId(int plane_index) const {
+GLuint IOSurfaceBackingEGLState::GetGLServiceId(size_t plane_index) const {
   return GetGLTexture(plane_index)->service_id();
 }
 
@@ -459,7 +391,7 @@ class IOSurfaceImageBacking::GLTextureIRepresentation final
  private:
   // GLTexturePassthroughImageRepresentation:
   const scoped_refptr<gles2::TexturePassthrough>& GetTexturePassthrough(
-      int plane_index) override {
+      size_t plane_index) override {
     return egl_state_->GetGLTexture(plane_index);
   }
 
@@ -697,125 +629,6 @@ void IOSurfaceImageBacking::SkiaGaneshRepresentation::CheckContext() {
 #endif
 }
 
-#if BUILDFLAG(SKIA_USE_METAL)
-///////////////////////////////////////////////////////////////////////////////
-// SkiaGraphiteMetalRepresentation
-
-class IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation final
-    : public SkiaGraphiteImageRepresentation {
- public:
-  // Graphite does not keep track of the MetalTexture like Ganesh, so the
-  // representation/backing needs to keep the Metal texture alive.
-  SkiaGraphiteMetalRepresentation(
-      SharedImageManager* manager,
-      SharedImageBacking* backing,
-      MemoryTypeTracker* tracker,
-      skgpu::graphite::Recorder* recorder,
-      std::vector<base::apple::scoped_nsprotocol<id<MTLTexture>>> mtl_textures)
-      : SkiaGraphiteImageRepresentation(manager, backing, tracker),
-        recorder_(recorder),
-        mtl_textures_(std::move(mtl_textures)) {
-    CHECK_EQ(mtl_textures_.size(), NumPlanesExpected());
-  }
-
-  ~SkiaGraphiteMetalRepresentation() override {
-    if (!write_surfaces_.empty()) {
-      DLOG(ERROR) << "SkiaImageRepresentation was destroyed while still "
-                  << "open for write access.";
-    }
-  }
-
- private:
-  // SkiaGraphiteImageRepresentation:
-  std::vector<sk_sp<SkSurface>> BeginWriteAccess(
-      const SkSurfaceProps& surface_props,
-      const gfx::Rect& update_rect) override;
-  std::vector<scoped_refptr<GraphiteTextureHolder>> BeginWriteAccess() override;
-  void EndWriteAccess() override;
-  std::vector<scoped_refptr<GraphiteTextureHolder>> BeginReadAccess() override;
-  void EndReadAccess() override;
-
-  IOSurfaceImageBacking* backing_impl() const {
-    return static_cast<IOSurfaceImageBacking*>(backing());
-  }
-
-  const raw_ptr<skgpu::graphite::Recorder> recorder_;
-  std::vector<base::apple::scoped_nsprotocol<id<MTLTexture>>> mtl_textures_;
-  std::vector<sk_sp<SkSurface>> write_surfaces_;
-};
-
-std::vector<sk_sp<SkSurface>>
-IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation::BeginWriteAccess(
-    const SkSurfaceProps& surface_props,
-    const gfx::Rect& update_rect) {
-  AutoLock auto_lock(backing_impl());
-
-  if (!write_surfaces_.empty()) {
-    // Write access is already in progress.
-    return {};
-  }
-
-  if (!backing_impl()->BeginAccess(/*readonly=*/false)) {
-    return {};
-  }
-
-  int num_planes = format().NumberOfPlanes();
-  write_surfaces_.reserve(num_planes);
-  for (int plane = 0; plane < num_planes; plane++) {
-    SkColorType sk_color_type = viz::ToClosestSkColorType(format(), plane);
-    // Gray is not a renderable single channel format, but alpha is.
-    if (sk_color_type == kGray_8_SkColorType) {
-      sk_color_type = kAlpha_8_SkColorType;
-    }
-    SkISize sk_size = gfx::SizeToSkISize(format().GetPlaneSize(plane, size()));
-
-    auto backend_texture = skgpu::graphite::BackendTextures::MakeMetal(
-        sk_size, mtl_textures_[plane].get());
-    auto surface = SkSurfaces::WrapBackendTexture(
-        recorder_, backend_texture, sk_color_type,
-        backing()->color_space().GetAsFullRangeRGB().ToSkColorSpace(),
-        &surface_props);
-    write_surfaces_.emplace_back(std::move(surface));
-  }
-  return write_surfaces_;
-}
-
-std::vector<scoped_refptr<GraphiteTextureHolder>>
-IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation::BeginWriteAccess() {
-  AutoLock auto_lock(backing_impl());
-
-  if (!backing_impl()->BeginAccess(/*readonly=*/false)) {
-    return {};
-  }
-  return CreateGraphiteMetalTextures(mtl_textures_, format(), size());
-}
-
-void IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation::EndWriteAccess() {
-  AutoLock auto_lock(backing_impl());
-#if DCHECK_IS_ON()
-  for (auto& surface : write_surfaces_) {
-    DCHECK(surface->unique());
-  }
-#endif
-  write_surfaces_.clear();
-  backing_impl()->EndAccess(/*readonly=*/false);
-}
-
-std::vector<scoped_refptr<GraphiteTextureHolder>>
-IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation::BeginReadAccess() {
-  AutoLock auto_lock(backing_impl());
-  if (!backing_impl()->BeginAccess(/*readonly=*/true)) {
-    return {};
-  }
-  return CreateGraphiteMetalTextures(mtl_textures_, format(), size());
-}
-
-void IOSurfaceImageBacking::SkiaGraphiteMetalRepresentation::EndReadAccess() {
-  AutoLock auto_lock(backing_impl());
-  backing_impl()->EndAccess(/*readonly=*/true);
-}
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////
 // OverlayRepresentation
 
@@ -1017,6 +830,7 @@ wgpu::Texture IOSurfaceImageBacking::DawnRepresentation::BeginAccess(
   CHECK(shared_fences.size() == signaled_values.size());
   begin_access_desc.fenceCount = shared_fences.size();
   begin_access_desc.fences = shared_fences.data();
+  begin_access_desc.signaledValueCount = signaled_values.size();
   begin_access_desc.signaledValues = signaled_values.data();
 
   if (shared_texture_memory_.BeginAccess(texture_, &begin_access_desc) !=
@@ -1076,6 +890,7 @@ void IOSurfaceImageBacking::DawnRepresentation::EndAccess() {
 
   CHECK_EQ(shared_texture_memory_.EndAccess(texture_, &end_access_state),
            wgpu::Status::Success);
+  CHECK(end_access_state.fenceCount == end_access_state.signaledValueCount);
 
   if (end_access_state.initialized) {
     iosurface_backing->SetClearedInternal();
@@ -1085,8 +900,8 @@ void IOSurfaceImageBacking::DawnRepresentation::EndAccess() {
   // IOSurface must wait upon before attempting to use that IOSurface on another
   // command queue. Store these events in the underlying IOSurfaceImageBacking.
   for (size_t i = 0; i < end_access_state.fenceCount; i++) {
-    auto fence = end_access_state.fences[i];
-    auto signaled_value = end_access_state.signaledValues[i];
+    auto fence = UNSAFE_TODO(end_access_state.fences[i]);
+    auto signaled_value = UNSAFE_TODO(end_access_state.signaledValues[i]);
 
     wgpu::SharedFenceExportInfo fence_export_info;
     wgpu::SharedFenceMTLSharedEventExportInfo fence_mtl_export_info;
@@ -1153,30 +968,19 @@ bool IOSurfaceImageBacking::SkiaGraphiteDawnMetalRepresentation::
 IOSurfaceImageBacking::IOSurfaceImageBacking(
     gfx::ScopedIOSurface io_surface,
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    gpu::SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     GLenum gl_target,
     bool framebuffer_attachment_angle,
     bool is_cleared,
     bool is_thread_safe,
     GrContextType gr_context_type,
     std::optional<gfx::BufferUsage> buffer_usage)
-    : ClearTrackingSharedImageBacking(mailbox,
-                                      format,
-                                      size,
-                                      color_space,
-                                      surface_origin,
-                                      alpha_type,
-                                      usage,
-                                      std::move(debug_label),
-                                      format.EstimatedSizeInBytes(size),
-                                      is_thread_safe,
-                                      std::move(buffer_usage)),
+    : ClearTrackingSharedImageBacking(
+          mailbox,
+          si_info,
+          si_info.format.EstimatedSizeInBytes(si_info.size),
+          is_thread_safe,
+          std::move(buffer_usage)),
       io_surface_(std::move(io_surface)),
       io_surface_size_(IOSurfaceGetWidth(io_surface_.get()),
                        IOSurfaceGetHeight(io_surface_.get())),
@@ -1186,20 +990,18 @@ IOSurfaceImageBacking::IOSurfaceImageBacking(
       framebuffer_attachment_angle_(framebuffer_attachment_angle),
       weak_factory_(this) {
   CHECK(io_surface_);
-  CHECK(!is_thread_safe ||
-        base::FeatureList::IsEnabled(features::kIOSurfaceMultiThreading));
 
   // Set the color space for the underlying IOSurface when it's used as overlay.
-  gfx::IOSurfaceSetColorSpace(io_surface_.get(), color_space);
+  gfx::IOSurfaceSetColorSpace(io_surface_.get(), si_info.color_space);
 
   // If this will be bound to different GL backends, then make RetainGLTexture
   // and ReleaseGLTexture actually create and destroy the texture.
   // https://crbug.com/1251724
-  if (usage.Has(SHARED_IMAGE_USAGE_HIGH_PERFORMANCE_GPU)) {
+  if (si_info.usage.Has(SHARED_IMAGE_USAGE_HIGH_PERFORMANCE_GPU)) {
     return;
   }
 
-  SetClearedRectInternal((is_cleared ? gfx::Rect(size) : gfx::Rect()));
+  SetClearedRectInternal((is_cleared ? gfx::Rect(si_info.size) : gfx::Rect()));
 
   // NOTE: Mac currently retains GLTexture and reuses it. This might lead to
   // issues with context losses, but is also beneficial to performance at
@@ -1261,10 +1063,10 @@ bool IOSurfaceImageBacking::ReadbackToMemory(
 
     const void* io_surface_base_address =
         IOSurfaceGetBaseAddressOfPlane(io_surface_.get(), plane_index);
-    DCHECK_EQ(plane_size.width(), static_cast<int>(IOSurfaceGetWidthOfPlane(
+    CHECK_EQ(plane_size.width(), static_cast<int>(IOSurfaceGetWidthOfPlane(
+                                     io_surface_.get(), plane_index)));
+    CHECK_EQ(plane_size.height(), static_cast<int>(IOSurfaceGetHeightOfPlane(
                                       io_surface_.get(), plane_index)));
-    DCHECK_EQ(plane_size.height(), static_cast<int>(IOSurfaceGetHeightOfPlane(
-                                       io_surface_.get(), plane_index)));
 
     int io_surface_row_bytes = 0;
     int dst_bytes_per_row = 0;
@@ -1286,8 +1088,8 @@ bool IOSurfaceImageBacking::ReadbackToMemory(
 
     const int copy_bytes =
         static_cast<int>(pixmaps[plane_index].info().minRowBytes());
-    DCHECK_LE(copy_bytes, io_surface_row_bytes);
-    DCHECK_LE(copy_bytes, dst_bytes_per_row);
+    CHECK_LE(copy_bytes, io_surface_row_bytes);
+    CHECK_LE(copy_bytes, dst_bytes_per_row);
 
     CopyImagePlane(src_ptr, io_surface_row_bytes, dst_ptr, dst_bytes_per_row,
                    copy_bytes, plane_size.height());
@@ -1312,10 +1114,10 @@ bool IOSurfaceImageBacking::UploadFromMemory(
 
     void* io_surface_base_address =
         IOSurfaceGetBaseAddressOfPlane(io_surface_.get(), plane_index);
-    DCHECK_EQ(plane_size.width(), static_cast<int>(IOSurfaceGetWidthOfPlane(
+    CHECK_EQ(plane_size.width(), static_cast<int>(IOSurfaceGetWidthOfPlane(
+                                     io_surface_.get(), plane_index)));
+    CHECK_EQ(plane_size.height(), static_cast<int>(IOSurfaceGetHeightOfPlane(
                                       io_surface_.get(), plane_index)));
-    DCHECK_EQ(plane_size.height(), static_cast<int>(IOSurfaceGetHeightOfPlane(
-                                       io_surface_.get(), plane_index)));
 
     int io_surface_row_bytes = 0;
     int src_bytes_per_row = 0;
@@ -1335,8 +1137,8 @@ bool IOSurfaceImageBacking::UploadFromMemory(
 
     const int copy_bytes =
         static_cast<int>(pixmaps[plane_index].info().minRowBytes());
-    DCHECK_LE(copy_bytes, src_bytes_per_row);
-    DCHECK_LE(copy_bytes, io_surface_row_bytes);
+    CHECK_LE(copy_bytes, src_bytes_per_row);
+    CHECK_LE(copy_bytes, io_surface_row_bytes);
 
     uint8_t* dst_ptr = static_cast<uint8_t*>(io_surface_base_address);
 
@@ -1489,6 +1291,8 @@ void IOSurfaceImageBacking::WaitForCommandsToBeScheduled(
     id<MTLDevice> waiting_device) {
   AssertLockAcquired();
   TRACE_EVENT0("gpu", "IOSurfaceImageBacking::WaitForCommandsToBeScheduled");
+  base::TimeDelta dawn_wait_time;
+  base::TimeDelta angle_wait_time;
 
   base::flat_map<wgpu::Device, wgpu::Future, WGPUDeviceCompare> futures_to_keep;
   for (const auto& [device, future] : wgpu_commands_scheduled_futures_) {
@@ -1497,13 +1301,16 @@ void IOSurfaceImageBacking::WaitForCommandsToBeScheduled(
       futures_to_keep.emplace(device, future);
       continue;
     }
+
     TRACE_EVENT0("gpu",
                  "IOSurfaceImageBacking::WaitForCommandsToBeScheduled::Dawn");
+    base::TimeTicks start_time = base::TimeTicks::Now();
     wgpu::WaitStatus status =
         device.GetAdapter().GetInstance().WaitAny(future, UINT64_MAX);
     if (status != wgpu::WaitStatus::Success) {
       LOG(ERROR) << "WaitAny on commandsScheduledFuture failed with " << status;
     }
+    dawn_wait_time += base::TimeTicks::Now() - start_time;
   }
   wgpu_commands_scheduled_futures_ = std::move(futures_to_keep);
 
@@ -1513,11 +1320,42 @@ void IOSurfaceImageBacking::WaitForCommandsToBeScheduled(
       fences_to_keep.emplace(display, std::move(fence));
       continue;
     }
+
     TRACE_EVENT0("gpu",
                  "IOSurfaceImageBacking::WaitForCommandsToBeScheduled::ANGLE");
+    base::TimeTicks start_time = base::TimeTicks::Now();
     fence->ClientWait();
+    angle_wait_time += base::TimeTicks::Now() - start_time;
   }
   egl_commands_scheduled_fences_ = std::move(fences_to_keep);
+
+  // Record the time it takes to schedule the commands on Dawn and ANGLE.
+  // Here we use the same kWaitTimeMax from Compositing.Display.DrawToSwapUs.
+  static constexpr base::TimeDelta kWaitTimeMin = base::Microseconds(5);
+  static constexpr base::TimeDelta kWaitTimeMax = base::Milliseconds(50);
+  static constexpr uint32_t kCommandsScheduledBuckets = 50;
+
+  const base::TimeDelta total_wait_time = dawn_wait_time + angle_wait_time;
+
+  if (total_wait_time.is_positive() &&
+      base::ShouldRecordSubsampledMetric(0.01)) {
+    if (dawn_wait_time.is_positive()) {
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+          "GPU.IOSurface.WaitForCommandsToBeScheduledTimeUs.Dawn",
+          dawn_wait_time, kWaitTimeMin, kWaitTimeMax,
+          kCommandsScheduledBuckets);
+    }
+    if (angle_wait_time.is_positive()) {
+      UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+          "GPU.IOSurface.WaitForCommandsToBeScheduledTimeUs.ANGLE",
+          angle_wait_time, kWaitTimeMin, kWaitTimeMax,
+          kCommandsScheduledBuckets);
+    }
+
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "GPU.IOSurface.WaitForCommandsToBeScheduledTimeUs", total_wait_time,
+        kWaitTimeMin, kWaitTimeMax, kCommandsScheduledBuckets);
+  }
 }
 
 IOSurfaceRef IOSurfaceImageBacking::GetIOSurface() {
@@ -1689,37 +1527,9 @@ IOSurfaceImageBacking::ProduceSkiaGraphite(
     return std::make_unique<SkiaGraphiteDawnImageRepresentation>(
         std::move(dawn_representation), context_state,
         context_state->gpu_main_graphite_recorder(), manager, this, tracker);
-#else
-    NOTREACHED();
-#endif
-  } else {
-    CHECK(context_state->IsGraphiteMetal());
-#if BUILDFLAG(SKIA_USE_METAL)
-    std::vector<base::apple::scoped_nsprotocol<id<MTLTexture>>> mtl_textures;
-    mtl_textures.reserve(format().NumberOfPlanes());
-
-    for (int plane = 0; plane < format().NumberOfPlanes(); plane++) {
-      auto plane_size = format().GetPlaneSize(plane, size());
-      base::apple::scoped_nsprotocol<id<MTLTexture>> mtl_texture =
-          CreateMetalTexture(
-              context_state->metal_context_provider()->GetMTLDevice(),
-              io_surface_.get(), plane_size, format(), plane);
-      if (!mtl_texture) {
-        LOG(ERROR) << "Failed to create MTLTexture from IOSurface";
-        return nullptr;
-      }
-      mtl_textures.push_back(std::move(mtl_texture));
-    }
-
-    // Use GPU main recorder since this should only be called for
-    // fulfilling Graphite promise images on GPU main thread.
-    return std::make_unique<SkiaGraphiteMetalRepresentation>(
-        manager, this, tracker, context_state->gpu_main_graphite_recorder(),
-        std::move(mtl_textures));
-#else
-    NOTREACHED();
 #endif
   }
+  NOTREACHED();
 }
 
 void IOSurfaceImageBacking::SetPurgeable(bool purgeable) {
@@ -2114,9 +1924,9 @@ bool IOSurfaceImageBacking::InitializePixels(
   }
 
   for (size_t y = 0; y < height; ++y) {
-    memcpy(dst_data, src_data, src_stride);
-    dst_data += dst_stride;
-    src_data += src_stride;
+    UNSAFE_TODO(memcpy(dst_data, src_data, src_stride));
+    UNSAFE_TODO(dst_data += dst_stride);
+    UNSAFE_TODO(src_data += src_stride);
   }
 
   return true;

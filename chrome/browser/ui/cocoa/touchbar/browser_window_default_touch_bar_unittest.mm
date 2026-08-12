@@ -15,7 +15,10 @@
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection_platform_delegate.h"
 #include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
@@ -41,7 +44,7 @@ class BrowserWindowDefaultTouchBarUnitTest : public BrowserWithTestWindowTest {
         std::make_unique<TemplateURLServiceFactoryTestUtil>(profile());
     template_service_util_->VerifyLoad();
 
-    command_updater_ = browser()->command_controller();
+    command_updater_ = chrome::BrowserCommandController::From(browser());
 
     browser()->tab_strip_model()->AppendWebContents(
         content::WebContentsTester::CreateTestWebContents(profile(), nullptr),
@@ -56,11 +59,13 @@ class BrowserWindowDefaultTouchBarUnitTest : public BrowserWithTestWindowTest {
   }
 
   bool ShowsHomeButton() {
-    return browser()->profile()->GetPrefs()->GetBoolean(prefs::kShowHomeButton);
+    return browser()->GetProfile()->GetPrefs()->GetBoolean(
+        prefs::kShowHomeButton);
   }
 
   void SetShowHomeButton(bool flag) {
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton, flag);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kShowHomeButton,
+                                                    flag);
   }
 
   void TearDown() override {
@@ -265,4 +270,19 @@ TEST_F(BrowserWindowDefaultTouchBarUnitTest, HomeUpdate) {
 
   // Restore the original state.
   SetShowHomeButton(home_button_showing);
+}
+
+// Tests that closing a browser doesn't cause a use-after-free when resetting
+// the browser property of the Touch Bar.
+TEST_F(BrowserWindowDefaultTouchBarUnitTest, OnBrowserClosedNoCrash) {
+  EXPECT_NE(nil, touch_bar_);
+  EXPECT_EQ(browser(), touch_bar_.browser);
+
+  // Simulate OnBrowserClosed from GlobalBrowserCollection.
+  BrowserCollectionObserver* platform_delegate =
+      GlobalBrowserCollection::GetInstance()->GetPlatformDelegate();
+  platform_delegate->OnBrowserClosed(browser());
+
+  // The Touch Bar's browser property should be reset, and the bridge destroyed.
+  EXPECT_EQ(nullptr, touch_bar_.browser);
 }

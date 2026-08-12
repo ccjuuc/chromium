@@ -110,9 +110,9 @@ class OpDownloadTest : public testing::Test {
     return base::DoNothing();
   }
 
-  base::RepeatingCallback<void(base::Value::Dict)> MakePingCallback() {
+  base::RepeatingCallback<void(base::DictValue)> MakePingCallback() {
     return base::BindLambdaForTesting(
-        [&](base::Value::Dict ping) { pings_.push_back(std::move(ping)); });
+        [&](base::DictValue ping) { pings_.push_back(std::move(ping)); });
   }
 
   base::OnceCallback<void(base::expected<base::FilePath, CategorizedError>)>
@@ -128,9 +128,6 @@ class OpDownloadTest : public testing::Test {
                 int64_t length,
                 const std::string& hash) {
     DownloadOperation(config, "appid",
-                      base::BindRepeating([](const base::FilePath&) -> int64_t {
-                        return 100'000'000;  // 100 MiB
-                      }),
                       /*is_foreground=*/false, {GURL("http://localhost:111")},
                       length, hash, MakePingCallback(), base::DoNothing(),
                       MakeProgressCallback(), {}, MakeDoneCallback());
@@ -143,7 +140,7 @@ class OpDownloadTest : public testing::Test {
   base::ScopedTempDir temp_dir_;
   base::RunLoop runloop_;
 
-  std::vector<base::Value::Dict> pings_;
+  std::vector<base::DictValue> pings_;
   base::expected<base::FilePath, CategorizedError> outcome_;
 };
 

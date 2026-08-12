@@ -10,7 +10,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/extensions/api/web_view/chrome_web_view_internal_api.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest_delegate.h"
 
@@ -41,10 +40,15 @@ class ChromeWebViewGuestDelegate : public WebViewGuestDelegate {
   std::optional<blink::UserAgentOverride> GetDefaultUserAgentOverride()
       override;
   void SetClientHintsEnabled(bool enable) override;
+  bool ShouldForwardOpenUrlFromTabToOwnerWebContents(
+      const GURL& owner_url) override;
 
   WebViewGuest* web_view_guest() const { return web_view_guest_; }
 
  private:
+  void OnBuildMenuComplete(int request_id,
+                           std::unique_ptr<RenderViewContextMenuBase> menu);
+
   // A counter to generate a unique request id for a context menu request.
   // We only need the ids to be unique for a given WebViewGuest.
   int pending_context_menu_request_id_;

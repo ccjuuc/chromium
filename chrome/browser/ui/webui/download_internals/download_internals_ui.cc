@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/download_internals/download_internals_ui_message_handler.h"
 #include "chrome/common/url_constants.h"
@@ -15,6 +16,13 @@
 #include "content/public/browser/web_ui_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
+
+bool DownloadInternalsUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  return !Profile::FromBrowserContext(browser_context)
+              ->GetProfilePolicyConnector()
+              ->IsManaged();
+}
 
 DownloadInternalsUI::DownloadInternalsUI(content::WebUI* web_ui)
     : content::WebUIController(web_ui) {
@@ -32,8 +40,8 @@ DownloadInternalsUI::DownloadInternalsUI(content::WebUI* web_ui)
   // Required resources.
   html_source->UseStringsJs();
   html_source->AddResourcePaths(kDownloadInternalsResources);
-  html_source->AddResourcePath("",
-                               IDR_DOWNLOAD_INTERNALS_DOWNLOAD_INTERNALS_HTML);
+  html_source->SetDefaultResource(
+      IDR_DOWNLOAD_INTERNALS_DOWNLOAD_INTERNALS_HTML);
 
   web_ui->AddMessageHandler(
       std::make_unique<

@@ -14,22 +14,27 @@
 #include "chrome/browser/preloading/bookmarkbar_preload/bookmarkbar_preload_pipeline_manager.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_button_util.h"
 #include "chrome/browser/ui/views/event_utils.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/preloading_data.h"
 #include "content/public/browser/web_contents.h"
+#include "services/network/public/cpp/constants.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/tooltip_manager.h"
+#include "ui/views/widget/widget.h"
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -55,10 +60,10 @@ const base::FeatureParam<int> kPrefetchStartDelayOnMouseHoverByMilliseconds{
 BookmarkButtonBase::BookmarkButtonBase(PressedCallback callback,
                                        std::u16string_view title)
     : LabelButton(std::move(callback), title) {
-  ConfigureInkDropForToolbar(this);
+  ConfigureInkDrop(this);
 
   SetImageLabelSpacing(
-      GetLayoutConstant(BOOKMARK_BAR_BUTTON_IMAGE_LABEL_PADDING));
+      GetLayoutConstant(LayoutConstant::kBookmarkBarButtonImageLabelPadding));
 
   views::InstallPillHighlightPathGenerator(this);
 
@@ -104,7 +109,7 @@ END_METADATA
 BookmarkButton::BookmarkButton(PressedCallback callback,
                                const GURL& url,
                                std::u16string_view title,
-                               const raw_ptr<Browser> browser)
+                               const raw_ptr<BrowserWindowInterface> browser)
     : BookmarkButtonBase(base::BindRepeating(&BookmarkButton::OnButtonPressed,
                                              base::Unretained(this)),
                          title),
@@ -113,6 +118,18 @@ BookmarkButton::BookmarkButton(PressedCallback callback,
       browser_(browser) {}
 
 BookmarkButton::~BookmarkButton() = default;
+
+void BookmarkButton::OnButtonPressed(const ui::Event& event) {
+  if (base::FeatureList::IsEnabled(features::kBookmarkTriggerForPrefetch) &&
+      browser_) {
+    browser_->GetProfile()->GetPrefs()->SetInt64(
+        prefs::kBookmarkBarNavigationCount,
+        browser_->GetProfile()->GetPrefs()->GetInt64(
+            prefs::kBookmarkBarNavigationCount) +
+            1);
+  }
+  callback_.Run(event);
+}
 
 void BookmarkButton::AddedToWidget() {
   BookmarkButtonBase::AddedToWidget();
@@ -133,17 +150,12 @@ void BookmarkButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
   UpdateMaxTooltipWidth();
 }
 
-void BookmarkButton::UpdateTooltipText() {
-  if (!GetWidget()) {
-    return;
+std::u16string BookmarkButton::GetRenderedTooltipText(
+    const gfx::Point& p) const {
+  if (tooltip_text_needs_update_) {
+    const_cast<BookmarkButton*>(this)->MaybeUpdateTooltipText();
   }
-
-  const views::TooltipManager* tooltip_manager =
-      GetWidget()->GetTooltipManager();
-  if (tooltip_manager) {
-    SetTooltipText(BookmarkBarView::CreateToolTipForURLAndTitle(
-        max_tooltip_width_, tooltip_manager->GetFontList(), *url_, GetText()));
-  }
+  return GetTooltipText();
 }
 
 void BookmarkButton::AdjustAccessibleName(std::u16string& new_name,
@@ -160,13 +172,41 @@ void BookmarkButton::AdjustAccessibleName(std::u16string& new_name,
 
 void BookmarkButton::SetText(std::u16string_view text) {
   BookmarkButtonBase::SetText(text);
-  UpdateTooltipText();
+  tooltip_text_needs_update_ = true;
+}
+
+void BookmarkButton::MaybeUpdateTooltipText() {
+  if (!tooltip_text_needs_update_) {
+    return;
+  }
+  tooltip_text_needs_update_ = false;
+  if (!GetWidget()) {
+    return;
+  }
+  const views::TooltipManager* tooltip_manager =
+      GetWidget()->GetTooltipManager();
+  if (tooltip_manager) {
+    SetTooltipText(BookmarkBarView::CreateToolTipForURLAndTitle(
+        max_tooltip_width_, tooltip_manager->GetFontList(), *url_, GetText()));
+  }
 }
 
 void BookmarkButton::OnMouseEntered(const ui::MouseEvent& event) {
+  // Compute the tooltip text before it's queried by the tooltip manager.
+  MaybeUpdateTooltipText();
+
   // Reset source information for taking metrics for following mouse events.
 
   BookmarkButtonBase::OnMouseEntered(event);
+
+  if (base::FeatureList::IsEnabled(features::kBookmarkTriggerForPrefetch) &&
+      browser_) {
+    browser_->GetProfile()->GetPrefs()->SetInt64(
+        prefs::kBookmarkBarHoverCount,
+        browser_->GetProfile()->GetPrefs()->GetInt64(
+            prefs::kBookmarkBarHoverCount) +
+            1);
+  }
 
   if (base::FeatureList::IsEnabled(features::kBookmarkTriggerForPreconnect)) {
     preconnect_timer_.Start(
@@ -269,12 +309,13 @@ void BookmarkButton::StartPreconnecting(GURL url) {
     return;
   }
 
-  auto* loading_predictor =
-      predictors::LoadingPredictorFactory::GetForProfile(browser_->profile());
+  auto* loading_predictor = predictors::LoadingPredictorFactory::GetForProfile(
+      browser_->GetProfile());
   if (loading_predictor) {
     loading_predictor->PrepareForPageLoad(
         /*initiator_origin=*/std::nullopt, url,
-        predictors::HintOrigin::BOOKMARK_BAR, true);
+        predictors::HintOrigin::BOOKMARK_BAR,
+        network::GetNoOpNetworkRestrictionsId(), true);
   }
 }
 
@@ -294,7 +335,6 @@ void BookmarkButton::StartPreloading(const GURL& url,
     case content::PreloadingType::kUnspecified:
     case content::PreloadingType::kPreconnect:
     case content::PreloadingType::kNoStatePrefetch:
-    case content::PreloadingType::kLinkPreview:
     case content::PreloadingType::kPrerenderUntilScript:
       NOTREACHED();
   }
@@ -312,7 +352,7 @@ void BookmarkButton::UpdateMaxTooltipWidth() {
   int max_tooltip_width = tooltip_manager->GetMaxWidth(p);
   if (max_tooltip_width != max_tooltip_width_) {
     max_tooltip_width_ = max_tooltip_width;
-    UpdateTooltipText();
+    tooltip_text_needs_update_ = true;
   }
 }
 

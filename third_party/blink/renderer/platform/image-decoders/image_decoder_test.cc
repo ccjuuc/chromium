@@ -345,7 +345,7 @@ TEST(ImageDecoderTest, decodedSizeLimitIsIgnored) {
 
 #endif  // BUILDFLAG(IS_FUCHSIA)
 
-#if BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_DAV1D_DECODER)
 TEST(ImageDecoderTest, hasSufficientDataToSniffMimeTypeAvif) {
   // The first 36 bytes of the Netflix AVIF test image
   // Chimera-AV1-10bit-1280x720-2380kbps-100.avif. Since the major_brand is
@@ -367,15 +367,18 @@ TEST(ImageDecoderTest, hasSufficientDataToSniffMimeTypeAvif) {
 
   scoped_refptr<SharedBuffer> buffer =
       SharedBuffer::Create(base::span(kData).first(8u));
-  EXPECT_FALSE(ImageDecoder::HasSufficientDataToSniffMimeType(*buffer));
+  EXPECT_FALSE(ImageDecoder::HasSufficientDataToSniffMimeType(
+      *buffer, /*all_data_received=*/false));
   EXPECT_EQ(ImageDecoder::SniffMimeType(buffer), String());
   buffer->Append(base::span(kData).subspan(8u, 8u));
-  EXPECT_FALSE(ImageDecoder::HasSufficientDataToSniffMimeType(*buffer));
+  EXPECT_FALSE(ImageDecoder::HasSufficientDataToSniffMimeType(
+      *buffer, /*all_data_received=*/false));
   EXPECT_EQ(ImageDecoder::SniffMimeType(buffer), String());
   buffer->Append(base::span(kData).subspan(16u));
-  EXPECT_TRUE(ImageDecoder::HasSufficientDataToSniffMimeType(*buffer));
+  EXPECT_TRUE(ImageDecoder::HasSufficientDataToSniffMimeType(
+      *buffer, /*all_data_received=*/false));
   EXPECT_EQ(ImageDecoder::SniffMimeType(buffer), "image/avif");
 }
-#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
+#endif  // BUILDFLAG(ENABLE_DAV1D_DECODER)
 
 }  // namespace blink

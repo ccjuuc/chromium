@@ -23,7 +23,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -103,7 +103,7 @@ class SafetyCheckMediator {
      */
     private final SettingsCustomTabLauncher mSettingsCustomTabLauncher;
 
-    private final ObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     /** Callbacks and related objects to show the checking state for at least 1 second. */
     private Handler mHandler;
@@ -193,7 +193,7 @@ class SafetyCheckMediator {
             PasswordStoreBridge passwordStoreBridge,
             PasswordCheckControllerFactory passwordCheckControllerFactory,
             PasswordManagerHelper passwordManagerHelper,
-            ObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
             SettingsCustomTabLauncher settingsCustomTabLauncher) {
         mSafetyCheckModel = safetyCheckModel;
         mPasswordsCheckAccountStorageModel = passwordsCheckAccountModel;
@@ -280,7 +280,7 @@ class SafetyCheckMediator {
                     SafetyCheckProperties.SAFE_BROWSING_STATE, SafeBrowsingState.CHECKING);
             mSafetyCheckModel.set(SafetyCheckProperties.UPDATES_STATE, UpdatesState.CHECKING);
             checkSafeBrowsing();
-            mUpdatesClient.checkForUpdates(new WeakReference(mUpdatesCheckCallback));
+            mUpdatesClient.checkForUpdates(new WeakReference<>(mUpdatesCheckCallback));
         } else {
             mShowSafePasswordState = false;
             mSafetyCheckModel.set(
@@ -332,7 +332,7 @@ class SafetyCheckMediator {
         checkSafeBrowsing();
         checkPasswords(PasswordStorageType.ACCOUNT_STORAGE);
         checkPasswords(PasswordStorageType.LOCAL_STORAGE);
-        mUpdatesClient.checkForUpdates(new WeakReference(mUpdatesCheckCallback));
+        mUpdatesClient.checkForUpdates(new WeakReference<>(mUpdatesCheckCallback));
     }
 
     /** Cancels any pending callbacks and registered observers. */
@@ -479,7 +479,7 @@ class SafetyCheckMediator {
                         mPasswordManagerHelper.showPasswordSettings(
                                 p.getContext(),
                                 ManagePasswordsReferrer.SAFETY_CHECK,
-                                mModalDialogManagerSupplier.asNonNull(),
+                                mModalDialogManagerSupplier.asNonNull().get(),
                                 /* managePasskeys= */ false,
                                 account,
                                 mSettingsCustomTabLauncher);
@@ -521,7 +521,7 @@ class SafetyCheckMediator {
         PropertyModel passwordCheckModel = getPasswordsCheckModelForStoreType(passwordStorageType);
         if (passwordCheckModel == null) return;
 
-        WeakReference<SafetyCheckMediator> weakRef = new WeakReference(this);
+        WeakReference<SafetyCheckMediator> weakRef = new WeakReference<>(this);
         mPasswordCheckController
                 .getBreachedCredentialsCount(passwordStorageType)
                 .whenComplete(
@@ -542,7 +542,7 @@ class SafetyCheckMediator {
         PropertyModel passwordCheckModel = getPasswordsCheckModelForStoreType(passwordStorageType);
         if (passwordCheckModel == null) return;
 
-        WeakReference<SafetyCheckMediator> weakRef = new WeakReference(this);
+        WeakReference<SafetyCheckMediator> weakRef = new WeakReference<>(this);
         mPasswordCheckController
                 .checkPasswords(passwordStorageType)
                 .whenComplete(

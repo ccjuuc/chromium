@@ -8,6 +8,7 @@
 #include "base/strings/strcat.h"
 #include "components/safe_browsing/core/browser/web_ui/web_ui_info_singleton_event_observer.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 
 namespace safe_browsing {
 
@@ -296,13 +297,32 @@ void WebUIInfoSingleton::ClearHPRTLookupPings() {
   std::map<int, V5::SearchHashesResponse>().swap(hprt_lookup_responses_);
 }
 
+void WebUIInfoSingleton::LogMessage(const std::string& message) {
+  if (!HasListener()) {
+    return;
+  }
+
+  base::Time timestamp = base::Time::Now();
+  log_messages_.push_back(std::make_pair(timestamp, message));
+
+  PostLogMessage(timestamp, message);
+}
+
 void WebUIInfoSingleton::ClearLogMessages() {
   std::vector<std::pair<base::Time, std::string>>().swap(log_messages_);
 }
 
+void WebUIInfoSingleton::NotifyLogMessageListeners(const base::Time& timestamp,
+                                                   const std::string& message) {
+  for (safe_browsing::WebUIInfoSingletonEventObserver* webui_listener :
+       webui_instances_) {
+    webui_listener->NotifyLogMessageJsListener(timestamp, message);
+  }
+}
+
 void WebUIInfoSingleton::AddToReportingEvents(
     const ::chrome::cros::reporting::proto::UploadEventsRequest& event,
-    const base::Value::Dict& result) {
+    const base::DictValue& result) {
   if (!HasListener()) {
     return;
   }
@@ -317,7 +337,7 @@ void WebUIInfoSingleton::AddToReportingEvents(
 
 // TODO(crbug.com/443997643): Delete when
 // UploadRealtimeReportingEventsUsingProto is cleaned up.
-void WebUIInfoSingleton::AddToReportingEvents(const base::Value::Dict& event) {
+void WebUIInfoSingleton::AddToReportingEvents(const base::DictValue& event) {
   if (!HasListener()) {
     return;
   }
@@ -331,13 +351,13 @@ void WebUIInfoSingleton::AddToReportingEvents(const base::Value::Dict& event) {
 }
 
 void WebUIInfoSingleton::ClearReportingEvents() {
-  std::vector<base::Value::Dict>().swap(reporting_events_);
+  std::vector<base::DictValue>().swap(reporting_events_);
   std::vector<std::pair<::chrome::cros::reporting::proto::UploadEventsRequest,
-                        base::Value::Dict>>()
+                        base::DictValue>>()
       .swap(upload_event_requests_);
 }
 
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 void WebUIInfoSingleton::AddToDeepScanRequests(
     bool per_profile_request,
     const std::string& access_token,
@@ -379,6 +399,21 @@ void WebUIInfoSingleton::AddToDeepScanRequests(
   }
 }
 
+void WebUIInfoSingleton::AddHeadersToDeepScanRequests(
+    const std::string& request_token,
+    const net::HttpRequestHeaders& headers) {
+  if (!HasListener()) {
+    return;
+  }
+
+  // Only update the request time the first time we see a token.
+  if (deep_scan_requests_.find(request_token) == deep_scan_requests_.end()) {
+    deep_scan_requests_[request_token].request_time = base::Time::Now();
+  }
+
+  deep_scan_requests_[request_token].request_headers = headers;
+}
+
 void WebUIInfoSingleton::AddToDeepScanResponses(
     const std::string& token,
     const std::string& status,
@@ -402,6 +437,9 @@ void WebUIInfoSingleton::ClearDeepScans() {
       deep_scan_requests_);
 }
 
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
 void WebUIInfoSingleton::SetTailoredVerdictOverride(
     ClientDownloadResponse::TailoredVerdict new_value,
     const WebUIInfoSingletonEventObserver* new_source) {
@@ -453,6 +491,18 @@ void WebUIInfoSingleton::UnregisterWebUIInstance(
   MaybeClearData();
 }
 
+mojo::Remote<network::mojom::CookieManager>
+WebUIInfoSingleton::GetCookieManager(
+    network::mojom::NetworkContext* network_context) {
+  mojo::Remote<network::mojom::CookieManager> cookie_manager_remote;
+  if (network_context) {
+    network_context->GetCookieManager(
+        cookie_manager_remote.BindNewPipeAndPassReceiver());
+  }
+
+  return cookie_manager_remote;
+}
+
 void WebUIInfoSingleton::ClearListenerForTesting() {
   has_test_listener_ = false;
   on_csbrr_logged_for_testing_ = base::NullCallback();
@@ -474,10 +524,13 @@ void WebUIInfoSingleton::MaybeClearData() {
     ClearLogMessages();
     ClearReportingEvents();
 
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
     ClearDeepScans();
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
     ClearTailoredVerdictOverride();
-#endif
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) &&
+        // !BUILDFLAG(IS_ANDROID)
   }
 }
 

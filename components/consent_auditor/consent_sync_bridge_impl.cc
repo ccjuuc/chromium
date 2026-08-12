@@ -79,11 +79,6 @@ ConsentSyncBridgeImpl::~ConsentSyncBridgeImpl() {
   }
 }
 
-std::unique_ptr<MetadataChangeList>
-ConsentSyncBridgeImpl::CreateMetadataChangeList() {
-  return DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
-
 std::optional<ModelError> ConsentSyncBridgeImpl::MergeFullSyncData(
     std::unique_ptr<MetadataChangeList> metadata_change_list,
     EntityChangeList entity_data) {
@@ -151,6 +146,14 @@ std::string ConsentSyncBridgeImpl::GetClientTag(
 std::string ConsentSyncBridgeImpl::GetStorageKey(
     const EntityData& entity_data) const {
   return GetStorageKeyFromSpecifics(entity_data.specifics.user_consent());
+}
+
+sync_pb::EntitySpecifics
+ConsentSyncBridgeImpl::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool ConsentSyncBridgeImpl::IsEntityDataValid(

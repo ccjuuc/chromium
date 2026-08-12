@@ -2,17 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "device/vr/orientation/orientation_device.h"
+
 #include <math.h>
 
 #include <numbers>
 #include <vector>
 
+#include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/time/time.h"
-#include "device/vr/orientation/orientation_device.h"
 #include "device/vr/orientation/orientation_session.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer.h"
@@ -59,7 +63,8 @@ VROrientationDevice::VROrientationDevice(mojom::SensorProvider* sensor_provider,
     : VRDeviceBase(mojom::XRDeviceId::ORIENTATION_DEVICE_ID),
       ready_callback_(std::move(ready_callback)) {
   DVLOG(2) << __func__;
-  sensor_provider->GetSensor(kOrientationSensorType,
+  sensor_provider->GetSensor(kOrientationSensorType, mojo::NullReceiver(),
+                             /*initially_suspended=*/false,
                              base::BindOnce(&VROrientationDevice::SensorReady,
                                             base::Unretained(this)));
 

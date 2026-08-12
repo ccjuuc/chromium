@@ -4,8 +4,10 @@
 
 #include <string>
 
+#include "base/check_deref.h"
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
@@ -16,7 +18,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "net/base/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
@@ -28,8 +29,10 @@ constexpr test::UIPath kOpenSettingsButtonPath = {"redirect-dialog",
 bool IsSettingsWindowOpened() {
   auto settings_browsers =
       ui_test_utils::FindMatchingBrowsers([](BrowserWindowInterface* browser) {
-        return ash::IsBrowserForSystemWebApp(browser,
-                                             ash::SystemWebAppType::SETTINGS);
+        return ash::IsBrowserForSystemWebApp(
+            CHECK_DEREF(
+                ash::BrowserController::GetInstance()->GetDelegate(browser)),
+            ash::SystemWebAppType::SETTINGS);
       });
   return !settings_browsers.empty();
 }
@@ -37,10 +40,7 @@ bool IsSettingsWindowOpened() {
 
 class KerberosInBrowserDialogButtonTest : public InProcessBrowserTest {
  public:
-  KerberosInBrowserDialogButtonTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        net::features::kKerberosInBrowserRedirect);
-  }
+  KerberosInBrowserDialogButtonTest() = default;
 
   KerberosInBrowserDialogButtonTest(const KerberosInBrowserDialogButtonTest&) =
       delete;
@@ -51,7 +51,7 @@ class KerberosInBrowserDialogButtonTest : public InProcessBrowserTest {
 
  protected:
   void SetUpOnMainThread() override {
-    ash::SystemWebAppManager::GetForTest(browser()->profile())
+    ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
         ->InstallSystemAppsForTesting();
   }
 
@@ -85,9 +85,6 @@ class KerberosInBrowserDialogButtonTest : public InProcessBrowserTest {
   }
 
   raw_ptr<content::WebUI, DanglingUntriaged> webui_;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(KerberosInBrowserDialogButtonTest, CancelButton) {
@@ -116,30 +113,6 @@ IN_PROC_BROWSER_TEST_F(KerberosInBrowserDialogButtonTest, SettingsButton) {
   std::make_unique<test::TestPredicateWaiter>(base::BindRepeating([]() {
     return IsSettingsWindowOpened();
   }))->Wait();
-}
-
-class KerberosInBrowserDialogFeatureDisabledTest
-    : public KerberosInBrowserDialogButtonTest {
- public:
-  KerberosInBrowserDialogFeatureDisabledTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        net::features::kKerberosInBrowserRedirect);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(KerberosInBrowserDialogFeatureDisabledTest, Smoke) {
-  ash::KerberosInBrowserDialog::Show();
-
-  // If the feature is disabled the system dialog is created anyway, but the
-  // WebUI is not loaded.
-  EXPECT_TRUE(ash::KerberosInBrowserDialog::IsShown());
-  auto* dialog = ash::KerberosInBrowserDialog::GetDialogForTesting();
-  ASSERT_TRUE(dialog);
-  webui_ = dialog->GetWebUIForTest();
-  ASSERT_FALSE(webui_);
 }
 
 }  // namespace ash

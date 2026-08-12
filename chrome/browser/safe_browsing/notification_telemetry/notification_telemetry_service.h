@@ -14,11 +14,10 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/timer/timer.h"
-#include "chrome/browser/safe_browsing/notification_telemetry/notification_telemetry_store.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/safe_browsing/content/browser/ui_manager.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/browser/service_worker_context_observer.h"
 
 class Profile;
@@ -30,18 +29,11 @@ struct ServiceWorkerRegistrationInformation;
 
 }  // namespace content
 
-namespace network {
 
-class SharedURLLoaderFactory;
-class SimpleURLLoader;
-
-}  // namespace network
-
-namespace net {
-class HttpResponseHeaders;
-}
 
 namespace safe_browsing {
+
+using CSBRR = ClientSafeBrowsingReportRequest;
 
 struct ServiceWorkerTelemetryInfo {
   ServiceWorkerTelemetryInfo() noexcept;
@@ -68,9 +60,7 @@ class NotificationTelemetryService
 
   explicit NotificationTelemetryService(
       Profile* profile,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
-      std::unique_ptr<NotificationTelemetryStoreInterface> telemetry_store,
       scoped_refptr<SafeBrowsingUIManager> ui_manager);
   explicit NotificationTelemetryService(const NotificationTelemetryService&) =
       delete;
@@ -88,26 +78,19 @@ class NotificationTelemetryService
       const GURL& script_url,
       const std::optional<std::vector<GURL>>& requested_urls) override;
 
-  void OnGetServiceWorkerBehaviors(
-      bool success,
-      std::unique_ptr<std::vector<CSBRR::ServiceWorkerBehavior>> entries);
-
   static int ServiceWorkerInfoCacheSizeForTest();
 
-  NotificationTelemetryStoreInterface* GetTelemetryStoreForTest();
-
-  int GetEmptyDbFoundCountForTest();
+  void SetShouldSendReportForTest(bool should_send);
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(NotificationTelemetryServiceTest,
-                           OnGetServiceWorkerBehaviors);
   FRIEND_TEST_ALL_PREFIXES(NotificationTelemetryServiceTest,
                            SendsTelemetryReport);
   FRIEND_TEST_ALL_PREFIXES(NotificationTelemetryServiceTest,
                            EnforcesServiceWorkerInfoCacheSize);
-  FRIEND_TEST_ALL_PREFIXES(
-      NotificationTelemetryServiceTest,
-      ServiceWorkerSubscriptionRecordsServiceWorkerBehavior);
+  FRIEND_TEST_ALL_PREFIXES(NotificationTelemetryServiceTest,
+                           ServiceWorkerSubscriptionSendsServiceWorkerBehavior);
+  FRIEND_TEST_ALL_PREFIXES(NotificationTelemetryServiceTest,
+                           OnPushEventFinished);
   // TODO(crbug.com/433543634): Clean up post
   // GlobalCacheListForGatingNotificationProtections launch.
   FRIEND_TEST_ALL_PREFIXES(
@@ -130,29 +113,9 @@ class NotificationTelemetryService
       ServiceWorkerTelemetryInfo service_worker_info,
       bool allowlisted);
 
-  // Used for logging after an upload.
-  void UploadComplete(scoped_refptr<net::HttpResponseHeaders> headers);
-
   // Check if a notifications service worker ID matches any of the stored
   // service worker origins.
   void OnNewNotificationServiceWorkerSubscription(int64_t registration_id);
-
-  // Returns the URL to which telemetry reports are to be sent.
-  static GURL GetTelemetryReportUrl();
-
-  // Attempts to upload a CSBRR report.
-  void MaybeUploadReport();
-
-  // Called after the NotificationTelemetryStore has deleted all data because
-  // the user is no longer an ESB user.
-  void OnTelemetryStoreDeleted(bool success);
-
-  // Called after a new ServiceWorkerBehavior has been added to storage.
-  void OnAddServiceWorkerBehavior(bool success);
-
-  // Removes any duplicate requested urls from a ServiceWorkerBehavior.
-  void DedupeRequestedURLs(
-      CSBRR::ServiceWorkerBehavior* service_worker_behavior);
 
   // Normalizes URLs by stripping any query param values. Since query param
   // values aren't important aspects of the URL, removing them reduces noise
@@ -163,31 +126,20 @@ class NotificationTelemetryService
   // `kNotificationTelemetryServiceWorkerInfoMaxCount`
   std::vector<ServiceWorkerTelemetryInfo> service_worker_infos_;
 
-  // Accessor for an URLLoaderFactory with which reports will be sent.
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
   // TODO(crbug.com/433543634): Remove `database_manager_` post
   // GlobalCacheListForGatingNotificationProtections launch.
   // Used to preform the Safe Browsing allowlist lookup.
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
 
-  std::unique_ptr<network::SimpleURLLoader> url_loader_;
-
-  // Responsible for storing the ServiceWorkerBehaviors.
-  std::unique_ptr<NotificationTelemetryStoreInterface> telemetry_store_;
-
   // Responsible for sending the CSBRRs.
   scoped_refptr<SafeBrowsingUIManager> ui_manager_;
+
+  // Forces a report to be sent in tests.
+  bool should_send_report_for_test_ = false;
 
   raw_ptr<Profile> profile_;
 
   raw_ptr<content::ServiceWorkerContext> service_worker_context_ = nullptr;
-
-  // Tracks how many consecutive times an empty database was encountered.
-  int empty_db_found_count_ = 0;
-
-  // Used to periodically attempt to send a report to Safe Browsing.
-  base::RepeatingTimer timer_;
 
   base::WeakPtrFactory<NotificationTelemetryService> weak_factory_{this};
 };

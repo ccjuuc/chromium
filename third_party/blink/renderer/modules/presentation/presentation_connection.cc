@@ -41,7 +41,7 @@ mojom::blink::PresentationConnectionMessagePtr MakeBinaryMessage(
   auto message =
       mojom::blink::PresentationConnectionMessage::NewData(Vector<uint8_t>());
   Vector<uint8_t>& data = message->get_data();
-  data.AppendSpan(buffer->ByteSpan());
+  data.append_range(buffer->ByteSpan());
   return message;
 }
 
@@ -462,8 +462,8 @@ void PresentationConnection::send(
     return;
   }
 
-  messages_.push_back(
-      MakeGarbageCollected<Message>(array_buffer_view->buffer()));
+  messages_.push_back(MakeGarbageCollected<Message>(
+      DOMArrayBuffer::Create(array_buffer_view->ByteSpan())));
   HandleMessageQueue();
 }
 

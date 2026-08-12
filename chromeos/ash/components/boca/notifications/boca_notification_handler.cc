@@ -115,18 +115,30 @@ void BocaNotificationHandler::HandleScreenShareStartedNotification(
   if (!message_center) {
     return;
   }
+
+  std::u16string receiver_name_utf16;
   if (receiver_name.empty()) {
-    return;
+    receiver_name_utf16 = l10n_util::GetStringUTF16(IDS_BOCA_UNKNOWN_RECEIVER);
+  } else {
+    receiver_name_utf16 = base::UTF8ToUTF16(receiver_name);
   }
 
   if (message_center->FindNotificationById(kScreenShareNotificationId)) {
+    message_center->UpdateNotification(
+        kScreenShareNotificationId,
+        CreateBaseNotificationForMessage(
+            kScreenShareNotificationId,
+            l10n_util::GetStringFUTF16(
+                IDS_BOCA_SHARE_SCREEN_NOTIFICATION_MESSAGE,
+                receiver_name_utf16),
+            /*has_button=*/false));
     return;
   }
 
   message_center->AddNotification(CreateBaseNotificationForMessage(
       kScreenShareNotificationId,
       l10n_util::GetStringFUTF16(IDS_BOCA_SHARE_SCREEN_NOTIFICATION_MESSAGE,
-                                 base::UTF8ToUTF16(receiver_name)),
+                                 receiver_name_utf16),
       /*has_button=*/false));
 }
 

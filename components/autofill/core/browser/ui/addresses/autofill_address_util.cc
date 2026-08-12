@@ -4,29 +4,26 @@
 
 #include "components/autofill/core/browser/ui/addresses/autofill_address_util.h"
 
-#include <algorithm>
-#include <iterator>
-#include <memory>
-#include <utility>
+#include <stddef.h>
 
-#include "autofill_address_util.h"
+#include <algorithm>
+#include <array>
+#include <iterator>
+#include <string>
+#include <vector>
+
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/to_vector.h"
-#include "base/memory/ptr_util.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/values.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_comparator.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/address_i18n.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
-#include "components/autofill/core/browser/ui/country_combobox_model.h"
-#include "components/autofill/core/common/autofill_features.h"
-#include "components/strings/grit/components_strings.h"
+#include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_field.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_ui.h"
 #include "third_party/libaddressinput/src/cpp/include/libaddressinput/address_ui_component.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -52,6 +49,10 @@ AutofillAddressUIComponent::LengthHint ConvertLengthHint(
       return AutofillAddressUIComponent::LengthHint::HINT_SHORT;
   }
   NOTREACHED();
+}
+
+bool IsLiteral(const AutofillAddressUIComponent& component) {
+  return !component.literal.empty();
 }
 }  // namespace
 
@@ -216,37 +217,61 @@ std::u16string GetEnvelopeStyleAddress(const AutofillProfile& profile,
                            /*include_literals=*/true, not_used);
 
   DCHECK(!components.empty());
-  std::string address;
-  for (const AutofillAddressUIComponent& component : components) {
-    // Add string literals directly.
-    if (!component.literal.empty()) {
-      address += component.literal;
-      continue;
+  // Remove components that evaluate to an empty string.
+  std::erase_if(components, [&](const AutofillAddressUIComponent& component) {
+    if (IsLiteral(component)) {
+      return false;
     }
     if (!include_recipient && (component.field == NAME_FULL ||
                                component.field == ALTERNATIVE_FULL_NAME)) {
+      return true;
+    }
+    return profile.GetInfo(component.field, ui_language_code).empty();
+  });
+
+  // Remove delimiters from the beginning and the end.
+  while (!components.empty() && IsLiteral(components.front())) {
+    components.erase(components.begin());
+  }
+  while (!components.empty() && IsLiteral(components.back())) {
+    components.pop_back();
+  }
+
+  std::vector<std::u16string> pieces;
+  // Indicates if the previous field component was non-empty.
+  // Literals are only added if they are preceded by a non-empty field.
+  bool last_field_was_non_empty = false;
+  for (const AutofillAddressUIComponent& component : components) {
+    if (IsLiteral(component)) {
+      if (last_field_was_non_empty) {
+        pieces.push_back(base::UTF8ToUTF16(component.literal));
+        last_field_was_non_empty = false;
+      }
       continue;
     }
-    FieldType type = component.field;
-    address += base::UTF16ToUTF8(profile.GetInfo(type, ui_language_code));
+    std::u16string info = profile.GetInfo(component.field, ui_language_code);
+    pieces.push_back(info);
+    last_field_was_non_empty = true;
   }
+
   if (include_country) {
-    address += "\n";
-    address += base::UTF16ToUTF8(
-        profile.GetInfo(ADDRESS_HOME_COUNTRY, ui_language_code));
+    pieces.push_back(u"\n");
+    pieces.push_back(profile.GetInfo(ADDRESS_HOME_COUNTRY, ui_language_code));
   }
+
+  std::string address_utf8 = base::UTF16ToUTF8(base::StrCat(pieces));
 
   // Remove all white spaces and new lines from the beginning and the end of the
   // address.
-  base::TrimString(address, base::kWhitespaceASCII, &address);
+  base::TrimString(address_utf8, base::kWhitespaceASCII, &address_utf8);
 
   // Collapse new lines to remove empty lines.
-  re2::RE2::GlobalReplace(&address, re2::RE2("\\n+"), "\n");
+  re2::RE2::GlobalReplace(&address_utf8, re2::RE2("\\n+"), "\n");
 
   // Collapse white spaces.
-  re2::RE2::GlobalReplace(&address, re2::RE2("[ ]+"), " ");
+  re2::RE2::GlobalReplace(&address_utf8, re2::RE2("[ ]+"), " ");
 
-  return base::UTF8ToUTF16(address);
+  return base::UTF8ToUTF16(address_utf8);
 }
 
 std::u16string GetProfileDescription(const AutofillProfile& profile,
@@ -301,7 +326,7 @@ std::vector<ProfileValueDifference> GetProfileDifferenceForUi(
                      EMAIL_ADDRESS, PHONE_HOME_WHOLE_NUMBER});
 
   std::erase_if(differences_for_ui, [](const ProfileValueDifference& diff) {
-    return !base::Contains(kPriorityOrder, diff.type);
+    return !std::ranges::contains(kPriorityOrder, diff.type);
   });
 
   auto get_priority = [](FieldType type) -> size_t {
@@ -357,8 +382,6 @@ AddressUIComponentIconType GetAddressUIComponentIconTypeForFieldType(
     case NAME_LAST_SECOND:
     case NAME_MIDDLE_INITIAL:
     case NAME_SUFFIX:
-    case NAME_LAST_PREFIX:
-    case NAME_LAST_CORE:
     case ALTERNATIVE_GIVEN_NAME:
     case ALTERNATIVE_FAMILY_NAME:
     case USERNAME_AND_EMAIL_ADDRESS:
@@ -448,6 +471,7 @@ AddressUIComponentIconType GetAddressUIComponentIconTypeForFieldType(
     case ADDRESS_HOME_CITY:
     case ADDRESS_HOME_STATE:
     case ADDRESS_HOME_ZIP:
+    case ADDRESS_HOME_ZIP_AND_CITY:
     case ADDRESS_HOME_ZIP_PREFIX:
     case ADDRESS_HOME_ZIP_SUFFIX:
     case ADDRESS_HOME_COUNTRY:
@@ -474,6 +498,10 @@ AddressUIComponentIconType GetAddressUIComponentIconTypeForFieldType(
     case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
     case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
+    case ORDER_ID:
+    case ORDER_DATE:
+    case ORDER_MERCHANT_NAME:
+    case SHIPMENT_TRACKING_NUMBER:
       return AddressUIComponentIconType::kNoIcon;
   }
 }

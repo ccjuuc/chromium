@@ -16,7 +16,6 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "components/update_client/crx_update_item.h"
 #include "components/update_client/protocol_definition.h"
 #include "components/update_client/update_client.h"
@@ -28,9 +27,9 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/browser/scoped_extension_keep_alive.h"
 #include "extensions/browser/updater/extension_downloader.h"
 #include "extensions/browser/updater/extension_update_data.h"
-#include "extensions/browser/updater/scoped_extension_updater_keep_alive.h"
 #include "extensions/browser/updater/update_data_provider.h"
 #include "extensions/browser/updater/update_service_factory.h"
 #include "extensions/common/extension_features.h"
@@ -85,10 +84,11 @@ void UpdateService::SendUninstallPing(const std::string& id,
                                       int reason) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(update_client_);
+
   update_client::CrxComponent crx;
   crx.app_id = id;
   crx.version = version;
-  // A ScopedExtensionUpdaterKeepAlive is bound into the callback to keep the
+  // A ScopedBrowserContextKeepAlive is bound into the callback to keep the
   // context alive throughout the operation.
   update_client_->SendPing(
       crx,
@@ -96,7 +96,7 @@ void UpdateService::SendUninstallPing(const std::string& id,
        .result = update_client::protocol_request::kEventResultSuccess,
        .error_code = 0,
        .extra_code1 = reason},
-      base::BindOnce([](std::unique_ptr<ScopedExtensionUpdaterKeepAlive>,
+      base::BindOnce([](std::unique_ptr<ScopedBrowserContextKeepAlive>,
                         update_client::Error) {},
                      ExtensionsBrowserClient::Get()->CreateUpdaterKeepAlive(
                          browser_context_)));
@@ -132,7 +132,7 @@ void UpdateService::OnCrxStateChange(UpdateFoundCallback update_found_callback,
   }
 
   if (should_perform_action_on_omaha_attributes) {
-    base::Value::Dict attributes = GetExtensionOmahaAttributes(item);
+    base::DictValue attributes = GetExtensionOmahaAttributes(item);
     // Note that it's important to perform actions even if |attributes| is
     // empty, missing values may default to false and have associated logic.
     ExtensionSystem::Get(browser_context_)
@@ -276,9 +276,9 @@ void UpdateService::RemoveUpdateClientObserver(
   }
 }
 
-base::Value::Dict UpdateService::GetExtensionOmahaAttributes(
+base::DictValue UpdateService::GetExtensionOmahaAttributes(
     const update_client::CrxUpdateItem& update_item) {
-  base::Value::Dict attributes;
+  base::DictValue attributes;
 
   for (const char* key : kOmahaAttributes) {
     auto iter = update_item.custom_updatecheck_data.find(key);

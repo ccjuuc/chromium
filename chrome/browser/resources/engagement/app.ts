@@ -15,7 +15,7 @@ import {SiteEngagementDetailsProvider} from './site_engagement_details.mojom-web
  * Rounds the supplied value to two decimal places of accuracy.
  */
 function roundScore(score: number): number {
-  return Number(Math.round(score * 100) / 100);
+  return Math.round(score * 100) / 100;
 }
 
 /**
@@ -25,18 +25,22 @@ function roundScore(score: number): number {
  *     positive number otherwise.
  */
 function compareTableItem(
-    sortKey: string, a: {[k: string]: any}, b: {[k: string]: any}): number {
+    sortKey: keyof SiteEngagementDetails, a: SiteEngagementDetails,
+    b: SiteEngagementDetails): number {
   const val1 = a[sortKey];
   const val2 = b[sortKey];
 
   // Compare the hosts of the origin ignoring schemes.
   if (sortKey === 'origin') {
-    return new URL(val1.url).host > new URL(val2.url).host ? 1 : -1;
+    return new URL(val1 as string).host > new URL(val2 as string).host ? 1 : -1;
   }
 
-  if (sortKey === 'baseScore' || sortKey === 'bonusScore' ||
+  if (sortKey === 'baseScore' || sortKey === 'installedBonus' ||
       sortKey === 'totalScore') {
-    return val1 - val2;
+    if (typeof val1 === 'number' && typeof val2 === 'number') {
+      return val1 - val2;
+    }
+    return NaN;
   }
 
   assertNotReached('Unsupported sort key: ' + sortKey);
@@ -58,7 +62,7 @@ export class SiteEngagementAppElement extends CustomElement {
       SiteEngagementDetailsProvider.getRemote();
   private updateInterval: number|null = null;
   private showWebUiPages: boolean = false;
-  private sortKey: string = 'totalScore';
+  private sortKey: keyof SiteEngagementDetails = 'totalScore';
   private sortReverse: boolean = true;
   private whenPopulatedResolver: PromiseResolver<void> = new PromiseResolver();
 
@@ -77,7 +81,7 @@ export class SiteEngagementAppElement extends CustomElement {
         if (this.sortKey === newSortKey) {
           this.sortReverse = !this.sortReverse;
         } else {
-          this.sortKey = newSortKey;
+          this.sortKey = newSortKey as keyof SiteEngagementDetails;
           this.sortReverse = false;
         }
         const oldSortColumn = this.getRequiredElement('.sort-column');
@@ -105,7 +109,7 @@ export class SiteEngagementAppElement extends CustomElement {
   private createRow(info: SiteEngagementDetails): HTMLElement {
     const originCell = document.createElement('td');
     originCell.classList.add('origin-cell');
-    originCell.textContent = info.origin.url;
+    originCell.textContent = info.origin;
 
     const baseScoreInput = document.createElement('input');
     baseScoreInput.classList.add('base-score-input');
@@ -192,7 +196,7 @@ export class SiteEngagementAppElement extends CustomElement {
     } catch {
       return;
     }
-    const origin: Url = {url: originInput.value};
+    const origin: Url = originInput.value;
     const score = parseFloat(scoreInput.value);
 
     this.engagementDetailsProvider.setSiteEngagementBaseScoreForUrl(
@@ -238,8 +242,8 @@ export class SiteEngagementAppElement extends CustomElement {
     assert(this.info);
     this.info.forEach((info) => {
       if (!this.showWebUiPages &&
-          (info.origin.url.startsWith('chrome://') ||
-           info.origin.url.startsWith('chrome-untrusted://'))) {
+          (info.origin.startsWith('chrome://') ||
+           info.origin.startsWith('chrome-untrusted://'))) {
         return;
       }
 

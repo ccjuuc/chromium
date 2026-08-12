@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_POLICY_ENROLLMENT_ENROLLMENT_CONFIG_H_
 #define CHROME_BROWSER_ASH_POLICY_ENROLLMENT_ENROLLMENT_CONFIG_H_
 
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -139,9 +140,10 @@ struct EnrollmentConfig {
   // |statistics_provider| would also be const if it had const access methods.
   // May alter the enrollment recovery flag in local state if it discovers
   // inconsistency there.
-  static EnrollmentConfig GetPrescribedEnrollmentConfig();
   static EnrollmentConfig GetPrescribedEnrollmentConfig(
-      PrefService* local_state,
+      PrefService& local_state);
+  static EnrollmentConfig GetPrescribedEnrollmentConfig(
+      PrefService& local_state,
       const ash::InstallAttributes& install_attributes,
       ash::system::StatisticsProvider* statistics_provider,
       const ash::OobeConfiguration* oobe_configuration);
@@ -234,8 +236,9 @@ struct EnrollmentConfig {
   EnrollmentConfig GetEffectiveConfig() const;
 
   // Returns a manual fallback config corresponding to the given automatic
-  // enrollment config.
-  EnrollmentConfig GetManualFallbackConfig() const;
+  // enrollment config if `is_mode_with_manual_fallback` returns true.
+  // Otherwise returns `std::nullopt`.
+  std::optional<EnrollmentConfig> GetManualFallbackConfig() const;
 
   // Indicates the enrollment flow variant to trigger during OOBE.
   Mode mode = MODE_NONE;

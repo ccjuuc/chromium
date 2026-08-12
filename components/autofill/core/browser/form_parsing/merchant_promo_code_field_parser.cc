@@ -4,10 +4,14 @@
 
 #include "components/autofill/core/browser/form_parsing/merchant_promo_code_field_parser.h"
 
-#include "components/autofill/core/browser/autofill_field.h"
+#include <memory>
+#include <optional>
+#include <utility>
+
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/autofill/core/common/autofill_regex_constants.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 
 namespace autofill {
 
@@ -29,7 +33,7 @@ MerchantPromoCodeFieldParser::MerchantPromoCodeFieldParser(
 void MerchantPromoCodeFieldParser::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
   AddClassification(match_, MERCHANT_PROMO_CODE,
-                    kBaseMerchantPromoCodeParserScore, field_candidates);
+                    HeuristicParser::kMerchantPromoCode, field_candidates);
 }
 
 }  // namespace autofill

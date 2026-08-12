@@ -53,7 +53,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
       assertTrue(isVisible(element.$.startTime));
       assertEquals(element.$.title.textContent, 'Test Event 1');
       assertEquals(element.$.startTime.textContent, '3:04am');
-      assertEquals(element.$.header.href, element.event.url.url);
+      assertEquals(element.$.header.href, element.event.url);
     });
 
     test('time status hidden if not expanded', async () => {
@@ -202,7 +202,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
       const moduleName = 'OutlookCalendar';
       element.expanded = true;
       element.event = createEvent(
-          1, {attachments: createAttachments(3, {resourceUrl: {url: ''}})});
+          1, {attachments: createAttachments(3, {resourceUrl: ''})});
       element.moduleName = moduleName;
       await microtasksFinished();
 
@@ -211,7 +211,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
 
       // Assert attachments are disabled.
       for (let i = 0; i < attachments.length; i++) {
-        const attachment = attachments[i] as any;
+        const attachment = attachments[i];
         assertTrue(!!attachment);
         assertTrue(attachment.hasAttribute('disabled'));
       }
@@ -229,7 +229,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
       assertEquals(attachments.length, 3);
 
       for (let i = 0; i < attachments.length; i++) {
-        const attachment = attachments[i] as any;
+        const attachment = attachments[i];
         assertTrue(!!attachment);
         assertFalse(attachment.hasAttribute('disabled'));
       }
@@ -237,7 +237,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
 
     test('conference button hidden if empty', async () => {
       element.expanded = true;
-      element.event = createEvent(1, {conferenceUrl: {url: ''}});
+      element.event = createEvent(1, {conferenceUrl: ''});
       await microtasksFinished();
 
       // Assert.
@@ -364,8 +364,7 @@ suite('NewTabPageModulesCalendarEventTest', () => {
       const usagePromise = eventToPromise('usage', element);
       const moduleName = 'GoogleCalendar';
       element.expanded = true;
-      element.event =
-          createEvent(1, {conferenceUrl: {url: 'https://google.com/'}});
+      element.event = createEvent(1, {conferenceUrl: 'https://google.com/'});
       element.moduleName = moduleName;
       await microtasksFinished();
 

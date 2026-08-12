@@ -24,21 +24,19 @@ static void JNI_AccessibilityState_OnAnimatorDurationScaleChanged(JNIEnv* env) {
 
 static void JNI_AccessibilityState_OnDisplayInversionEnabledChanged(
     JNIEnv* env,
-    jboolean enabled) {
-  AccessibilityState::Get()->NotifyDisplayInversionEnabledObservers(
-      static_cast<bool>(enabled));
+    bool enabled) {
+  AccessibilityState::Get()->NotifyDisplayInversionEnabledObservers(enabled);
 }
 
 static void JNI_AccessibilityState_OnContrastLevelChanged(
     JNIEnv* env,
-    jboolean highContrastEnabled) {
-  AccessibilityState::Get()->NotifyContrastLevelObservers(
-      static_cast<bool>(highContrastEnabled));
+    bool highContrastEnabled) {
+  AccessibilityState::Get()->NotifyContrastLevelObservers(highContrastEnabled);
 }
 
 static void JNI_AccessibilityState_OnTextCursorBlinkIntervalChanged(
     JNIEnv* env,
-    jint newIntervalMs) {
+    int32_t newIntervalMs) {
   AccessibilityState::Get()->NotifyTextCursorBlinkIntervalObservers(
       base::Milliseconds(newIntervalMs));
 }
@@ -122,6 +120,15 @@ std::vector<std::string> AccessibilityState::GetAccessibilityServiceIds() {
       env, Java_AccessibilityState_getAccessibilityServiceIds(env),
       &service_ids);
   return service_ids;
+}
+
+// static
+std::vector<bool> AccessibilityState::GetAccessibilityToolFlags() {
+  JNIEnv* const env = base::android::AttachCurrentThread();
+  std::vector<bool> tool_flags;
+  base::android::JavaBooleanArrayToBoolVector(
+      env, Java_AccessibilityState_getAccessibilityToolFlags(env), &tool_flags);
+  return tool_flags;
 }
 
 // static

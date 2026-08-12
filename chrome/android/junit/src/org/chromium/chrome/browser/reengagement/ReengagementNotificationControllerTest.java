@@ -26,19 +26,20 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowNotificationManager;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.util.DefaultBrowserInfo;
+import org.chromium.chrome.browser.util.DefaultBrowserInfo.DefaultInfo;
 import org.chromium.components.browser_ui.notifications.NotificationFeatureMap;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
@@ -50,7 +51,6 @@ import org.chromium.components.feature_engagement.Tracker;
     ChromeFeatureList.REENGAGEMENT_NOTIFICATION
 })
 @Config(shadows = {ShadowNotificationManager.class})
-@LooperMode(LooperMode.Mode.LEGACY)
 public class ReengagementNotificationControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -61,16 +61,15 @@ public class ReengagementNotificationControllerTest {
 
     private class TestingReengagementNotificationController
             extends ReengagementNotificationController {
-        private final DefaultBrowserInfo.DefaultInfo mInfo;
+        private final DefaultInfo mInfo;
 
-        TestingReengagementNotificationController(DefaultBrowserInfo.DefaultInfo info) {
+        TestingReengagementNotificationController(DefaultInfo info) {
             super(mContext, mTracker, Activity.class);
             mInfo = info;
         }
 
         @Override
-        protected void getDefaultBrowserInfo(
-                Callback<DefaultBrowserInfo.@Nullable DefaultInfo> callback) {
+        protected void getDefaultBrowserInfo(Callback<@Nullable DefaultInfo> callback) {
             new Handler().post(() -> callback.onResult(mInfo));
         }
     }
@@ -194,12 +193,8 @@ public class ReengagementNotificationControllerTest {
                 .when(mTracker)
                 .shouldTriggerHelpUi(FeatureConstants.CHROME_REENGAGEMENT_NOTIFICATION_3_FEATURE);
         controller.tryToReengageTheUser();
-        new Handler()
-                .post(
-                        () ->
-                                Assert.assertEquals(
-                                        0,
-                                        mShadowNotificationManager.getAllNotifications().size()));
+        RobolectricUtil.runAllBackgroundAndUi();
+        Assert.assertEquals(0, mShadowNotificationManager.getAllNotifications().size());
     }
 
     @Test
@@ -222,31 +217,22 @@ public class ReengagementNotificationControllerTest {
     }
 
     private void testFeatureShowed(String feature) {
+        RobolectricUtil.runAllBackgroundAndUi();
         Assert.assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
-                        "Mobile.SystemNotification.Shown", getNotificationType(feature)));
+                        "Mobile.SystemNotification.Shown2", getNotificationType(feature)));
 
         verify(mTracker, times(1)).shouldTriggerHelpUi(feature);
         verify(mTracker, times(1)).dismissed(feature);
         Notification notification = mShadowNotificationManager.getAllNotifications().get(0);
 
-        new Handler()
-                .post(
-                        () -> {
-                            Assert.assertEquals(
-                                    getNotificationTitle(feature),
-                                    notification
-                                            .extras
-                                            .getCharSequence(Notification.EXTRA_TITLE)
-                                            .toString());
-                            Assert.assertEquals(
-                                    getNotificationDescription(feature),
-                                    notification
-                                            .extras
-                                            .getCharSequence(Notification.EXTRA_TEXT)
-                                            .toString());
-                        });
+        Assert.assertEquals(
+                getNotificationTitle(feature),
+                notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
+        Assert.assertEquals(
+                getNotificationDescription(feature),
+                notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
     }
 
     private @NotificationUmaTracker.SystemNotificationType int getNotificationType(String feature) {
@@ -294,14 +280,15 @@ public class ReengagementNotificationControllerTest {
         throw new AssertionError("Invalid feature, cannot find notification description.");
     }
 
-    private DefaultBrowserInfo.DefaultInfo createDefaultInfo(boolean passesPrecondition) {
+    private DefaultInfo createDefaultInfo(boolean passesPrecondition) {
         int browserCount = passesPrecondition ? 2 : 1;
-        return new DefaultBrowserInfo.DefaultInfo(
+        return new DefaultInfo(
                 DefaultBrowserInfo.DefaultBrowserState.CHROME_DEFAULT,
                 /* isChromeSystem= */ true,
                 /* isDefaultSystem= */ true,
                 browserCount,
                 /* systemCount= */ 0,
-                /* isChromePreStableInstalled */ false);
+                /* isChromePreStableInstalled= */ false,
+                /* defaultBrowserResolveInfo= */ null);
     }
 }

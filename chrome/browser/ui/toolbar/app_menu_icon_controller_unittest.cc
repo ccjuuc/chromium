@@ -89,10 +89,6 @@ class FakeMenuGlobalError : public GlobalError {
 
 }  // namespace
 
-bool operator==(const AppMenuIconController::TypeAndSeverity& a,
-                const AppMenuIconController::TypeAndSeverity& b) {
-  return a.type == b.type && a.severity == b.severity;
-}
 
 // A test parameterized on an install mode index. For Google Chrome builds on
 // Windows, this allows the test to run for each of the supported side-by-side
@@ -126,7 +122,7 @@ class AppMenuIconControllerTest : public ::testing::TestWithParam<int> {
     return GetParam() >= install_static::DEV_INDEX;
 #else
     // Non-Windows platforms don't have a way to specify the channel; see
-    // https://crbug.com/903798.
+    // https://crbug.com/40601741.
     return false;
 #endif
   }

@@ -8,46 +8,119 @@
 #include <utility>
 
 #include "base/atomic_sequence_num.h"
-#include "base/containers/contains.h"
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/common/task_annotator.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "gpu/config/gpu_info.h"
 #include "gpu/ipc/client/client_shared_image_interface.h"
 #include "gpu/ipc/common/command_buffer_id.h"
 #include "gpu/ipc/common/command_buffer_trace_utils.h"
 #include "gpu/ipc/common/gpu_watchdog_timeout.h"
 #include "ipc/ipc_channel.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "url/gurl.h"
 
 using base::AutoLock;
 
 namespace gpu {
 
-GpuChannelHost::GpuChannelHost(
+scoped_refptr<GpuChannelHost> GpuChannelHost::Create(
     int channel_id,
     const gpu::GPUInfo& gpu_info,
     const gpu::GpuFeatureInfo& gpu_feature_info,
     const gpu::SharedImageCapabilities& shared_image_capabilities,
+    mojo::ScopedMessagePipeHandle handle,
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
+  auto host = base::WrapRefCounted(new GpuChannelHost(
+      channel_id, std::move(handle), std::move(io_task_runner)));
+  host->SetInfo(gpu_info, gpu_feature_info, shared_image_capabilities);
+  return host;
+}
+
+// static
+GpuChannelHost::Builder GpuChannelHost::Builder::CreateAndGetGPUInfo(
+    base::PassKey<viz::Gpu> pass_key,
+    int channel_id,
+    mojo::ScopedMessagePipeHandle handle,
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
+    base::OnceCallback<void(const gpu::GPUInfo&,
+                            const gpu::GpuFeatureInfo&,
+                            const gpu::SharedImageCapabilities&)> callback) {
+  Builder builder(channel_id, std::move(handle), io_task_runner);
+  builder.GetGPUInfo(std::move(callback));
+  return builder;
+}
+
+GpuChannelHost::Builder::Builder(
+    int channel_id,
+    mojo::ScopedMessagePipeHandle handle,
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
+  host_ = base::WrapRefCounted(new GpuChannelHost(
+      channel_id, std::move(handle),
+      io_task_runner ? io_task_runner
+                     : base::SingleThreadTaskRunner::GetCurrentDefault()));
+}
+
+GpuChannelHost::Builder::~Builder() = default;
+
+GpuChannelHost::Builder::Builder(Builder&& other) = default;
+GpuChannelHost::Builder& GpuChannelHost::Builder::operator=(Builder&& other) =
+    default;
+
+scoped_refptr<GpuChannelHost> GpuChannelHost::Builder::SetInfo(
+    const gpu::GPUInfo& gpu_info,
+    const gpu::GpuFeatureInfo& gpu_feature_info,
+    const gpu::SharedImageCapabilities& shared_image_capabilities) {
+  CHECK(host_);
+  host_->SetInfo(gpu_info, gpu_feature_info, shared_image_capabilities);
+  return std::move(host_);
+}
+
+void GpuChannelHost::Builder::GetGPUInfo(
+    base::OnceCallback<void(const gpu::GPUInfo&,
+                            const gpu::GpuFeatureInfo&,
+                            const gpu::SharedImageCapabilities&)> callback) {
+  CHECK(host_);
+  // If the GPU process crashes, the Mojo connection is dropped and this
+  // callback would normally be deleted without running. Wrap it to ensure
+  // we return empty info, which allows `viz::Gpu` to detect the failure
+  // and fall back to the standard initialization path.
+  host_->GetGpuChannel().GetGPUInfo(mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      std::move(callback), gpu::GPUInfo(), gpu::GpuFeatureInfo(),
+      gpu::SharedImageCapabilities()));
+}
+
+bool GpuChannelHost::Builder::GetGPUInfoSync(
+    gpu::GPUInfo* gpu_info,
+    gpu::GpuFeatureInfo* gpu_feature_info,
+    gpu::SharedImageCapabilities* shared_image_capabilities) {
+  CHECK(host_);
+  return host_->GetGpuChannel().GetGPUInfo(gpu_info, gpu_feature_info,
+                                           shared_image_capabilities);
+}
+
+bool GpuChannelHost::Builder::IsLost() const {
+  CHECK(host_);
+  return host_->IsLost();
+}
+
+GpuChannelHost::GpuChannelHost(
+    int channel_id,
     mojo::ScopedMessagePipeHandle handle,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
     : io_thread_(io_task_runner
                      ? io_task_runner
                      : base::SingleThreadTaskRunner::GetCurrentDefault()),
       channel_id_(channel_id),
-      gpu_info_(gpu_info),
-      gpu_feature_info_(gpu_feature_info),
       listener_(nullptr, base::OnTaskRunnerDeleter(io_thread_)),
       connection_tracker_(base::MakeRefCounted<ConnectionTracker>()),
-      shared_image_interface_(
-          this,
-          static_cast<int32_t>(GpuChannelReservedRoutes::kSharedImageInterface),
-          shared_image_capabilities),
       sync_point_graph_validation_enabled_(
           features::IsSyncPointGraphValidationEnabled()) {
   if (features::IsLegacyIpcDisabled()) {
@@ -55,6 +128,11 @@ GpuChannelHost::GpuChannelHost(
         mojo::PendingRemote<mojom::GpuChannel>(std::move(handle), 0),
         io_thread_);
   } else {
+    // NOTE: The Legacy IPC channel is bound immediately to the IO thread. It is
+    // used purely as a transport to bootstrap the `mojom::GpuChannel`
+    // associated interface. The Listener only handles channel errors and does
+    // not process any legacy IPC messages, so this does not introduce any race
+    // conditions before `SetInfo()` is called with valid metadata.
     listener_ = std::unique_ptr<Listener, base::OnTaskRunnerDeleter>(
         new Listener(), base::OnTaskRunnerDeleter(io_thread_));
     mojo::PendingAssociatedRemote<mojom::GpuChannel> channel;
@@ -81,8 +159,21 @@ GpuChannelHost::GpuChannelHost(
 
   next_image_id_.GetNext();
   for (int32_t i = 0;
-       i <= static_cast<int32_t>(GpuChannelReservedRoutes::kMaxValue); ++i)
+       i <= static_cast<int32_t>(GpuChannelReservedRoutes::kMaxValue); ++i) {
     next_route_id_.GetNext();
+  }
+}
+
+void GpuChannelHost::SetInfo(
+    const gpu::GPUInfo& gpu_info,
+    const gpu::GpuFeatureInfo& gpu_feature_info,
+    const gpu::SharedImageCapabilities& shared_image_capabilities) {
+  gpu_info_ = gpu_info;
+  gpu_feature_info_ = gpu_feature_info;
+  shared_image_interface_ = std::make_unique<SharedImageInterfaceProxy>(
+      this,
+      static_cast<int32_t>(GpuChannelReservedRoutes::kSharedImageInterface),
+      shared_image_capabilities);
 }
 
 mojom::GpuChannel& GpuChannelHost::GetGpuChannel() {
@@ -103,21 +194,26 @@ uint32_t GpuChannelHost::OrderingBarrier(
     EnqueuePendingOrderingBarrier();
   }
 
-  unsigned int trace_event_flags = TRACE_EVENT_FLAG_FLOW_OUT;
+  bool terminating_flow = true;
   if (!pending_ordering_barrier_) {
+    terminating_flow = false;
     pending_ordering_barrier_.emplace();
     pending_ordering_barrier_->deferred_message_id =
         next_deferred_message_id_++;
-  } else {
-    trace_event_flags |= TRACE_EVENT_FLAG_FLOW_IN;
   }
 
   const uint64_t global_flush_id = GlobalFlushTracingId(
       channel_id_, pending_ordering_barrier_->deferred_message_id);
-  TRACE_EVENT_WITH_FLOW0(
-      "gpu,toplevel.flow", "CommandBuffer::OrderingBarrier",
-      TRACE_ID_WITH_SCOPE("CommandBuffer::Flush", global_flush_id),
-      trace_event_flags);
+  TRACE_EVENT("gpu,toplevel.flow", "CommandBuffer::OrderingBarrier",
+              [&](perfetto::EventContext& ctx) {
+                if (terminating_flow) {
+                  perfetto::TerminatingFlow::Global(
+                      global_flush_id, "CommandBuffer::Flush")(ctx);
+                } else {
+                  perfetto::Flow::Global(global_flush_id,
+                                         "CommandBuffer::Flush")(ctx);
+                }
+              });
 
   pending_ordering_barrier_->route_id = route_id;
   pending_ordering_barrier_->put_offset = put_offset;
@@ -263,10 +359,8 @@ void GpuChannelHost::EnqueuePendingOrderingBarrier() {
 
   const uint64_t global_flush_id = GlobalFlushTracingId(
       channel_id_, pending_ordering_barrier_->deferred_message_id);
-  TRACE_EVENT_WITH_FLOW0(
-      "gpu,toplevel.flow", "CommandBuffer::OrderingBarrier",
-      TRACE_ID_WITH_SCOPE("CommandBuffer::Flush", global_flush_id),
-      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("gpu,toplevel.flow", "CommandBuffer::OrderingBarrier",
+              perfetto::Flow::Global(global_flush_id, "CommandBuffer::Flush"));
 
   DCHECK_LT(enqueued_deferred_message_id_,
             pending_ordering_barrier_->deferred_message_id);
@@ -314,10 +408,9 @@ void GpuChannelHost::InternalFlush(uint32_t deferred_message_id) {
             auto& flush = command_buffer_request->params->get_async_flush();
             const uint64_t global_flush_id =
                 GlobalFlushTracingId(channel_id_, flush->flush_id);
-            TRACE_EVENT_WITH_FLOW0(
-                "gpu,toplevel.flow", "GpuChannel::Flush",
-                TRACE_ID_WITH_SCOPE("CommandBuffer::Flush", global_flush_id),
-                TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+            TRACE_EVENT("gpu,toplevel.flow", "GpuChannel::Flush",
+                        perfetto::Flow::Global(global_flush_id,
+                                               "CommandBuffer::Flush"));
           }
         }
       }
@@ -375,7 +468,7 @@ void GpuChannelHost::TerminateGpuProcessForTesting() {
 scoped_refptr<SharedImageInterface>
 GpuChannelHost::CreateClientSharedImageInterface() {
   return base::MakeRefCounted<ClientSharedImageInterface>(
-      &shared_image_interface_, this);
+      shared_image_interface_.get(), this);
 }
 
 GpuChannelHost::~GpuChannelHost() = default;
@@ -397,7 +490,7 @@ bool GpuChannelHost::ConnectionTracker::AddObserverIfNotAlreadyLost(
   if (!is_connected()) {
     return false;
   }
-  CHECK(!base::Contains(observer_list_, obs));
+  CHECK(!std::ranges::contains(observer_list_, obs));
   observer_list_.push_back(obs);
   return true;
 }

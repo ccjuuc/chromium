@@ -9,8 +9,10 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ref.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/test/gmock_callback_support.h"
@@ -1557,20 +1559,21 @@ std::vector<uint8_t> ReadTestFile(const std::string& file_name) {
 }
 
 const std::vector<uint8_t>& GetPkcs12DataRsa() {
-  static std::vector<uint8_t> pkcs12_data = ReadTestFile("client.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("client.p12"));
+  return *pkcs12_data;
 }
 
 const std::vector<uint8_t>& GetPkcs12DataEc() {
-  static std::vector<uint8_t> pkcs12_data =
-      ReadTestFile("client_with_ec_key.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("client_with_ec_key.p12"));
+  return *pkcs12_data;
 }
 
 const std::vector<uint8_t>& GetPkcs12DataWith2Certs() {
-  static std::vector<uint8_t> pkcs12_data =
-      ReadTestFile("2_client_certs_1_key.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("2_client_certs_1_key.p12"));
+  return *pkcs12_data;
 }
 
 base::flat_map<uint32_t /*attribute_id*/, const chaps::Attribute*> MakeMap(
@@ -1771,8 +1774,7 @@ TEST_F(KcerNssImportPkcs12Test, CertWithRsaKeySuccess) {
         SpanEqual(private_key_map[CKA_EXPONENT_2]->value(), kExponent2));
     EXPECT_TRUE(
         SpanEqual(private_key_map[CKA_COEFFICIENT]->value(), kCoefficient));
-    EXPECT_FALSE(
-        base::Contains(private_key_map, chaps::kForceSoftwareAttribute));
+    EXPECT_FALSE(private_key_map.contains(chaps::kForceSoftwareAttribute));
   }
 
   {
@@ -1794,8 +1796,7 @@ TEST_F(KcerNssImportPkcs12Test, CertWithRsaKeySuccess) {
     EXPECT_TRUE(SpanEqual(public_key_map[CKA_MODULUS]->value(), kModulus));
     EXPECT_TRUE(SpanEqual(public_key_map[CKA_PUBLIC_EXPONENT]->value(),
                           kPublicExponent));
-    EXPECT_FALSE(
-        base::Contains(public_key_map, chaps::kForceSoftwareAttribute));
+    EXPECT_FALSE(public_key_map.contains(chaps::kForceSoftwareAttribute));
   }
 
   {
@@ -2039,8 +2040,7 @@ TEST_F(KcerNssImportPkcs12Test, ImportPkcs12CertEcSuccess) {
     EXPECT_TRUE(
         SpanEqual(private_key_map[CKA_VALUE]->value(), kPrivateKeyValue));
 
-    EXPECT_FALSE(
-        base::Contains(private_key_map, chaps::kForceSoftwareAttribute));
+    EXPECT_FALSE(private_key_map.contains(chaps::kForceSoftwareAttribute));
   }
 
   {
@@ -2061,8 +2061,7 @@ TEST_F(KcerNssImportPkcs12Test, ImportPkcs12CertEcSuccess) {
     EXPECT_TRUE(SpanEqual(public_key_map[CKA_EC_POINT]->value(), kEcPoint));
     EXPECT_TRUE(SpanEqual(public_key_map[CKA_ID]->value(), kPkcs11Id));
 
-    EXPECT_FALSE(
-        base::Contains(public_key_map, chaps::kForceSoftwareAttribute));
+    EXPECT_FALSE(public_key_map.contains(chaps::kForceSoftwareAttribute));
   }
 
   {

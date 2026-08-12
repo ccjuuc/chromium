@@ -18,7 +18,9 @@
 #include "base/memory/ref_counted.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/media_switches.h"
@@ -30,12 +32,14 @@
 #include "media/base/test_data_util.h"
 #include "media/base/test_helpers.h"
 #include "media/base/video_decoder_config.h"
+#include "media/base/video_spatial_format.h"
 #include "media/formats/mp4/es_descriptor.h"
 #include "media/formats/mp4/fourccs.h"
 #include "media/media_buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/switches.h"
 
 using ::testing::InSequence;
 using ::testing::StrictMock;
@@ -77,10 +81,7 @@ MATCHER_P(DebugLog, debug_string, "") {
 
 class MP4StreamParserTest : public testing::Test {
  public:
-  MP4StreamParserTest()
-      : configs_received_(false),
-        lower_bound_(kMaxDecodeTimestamp),
-        verifying_keyframeness_sequence_(false) {
+  MP4StreamParserTest() {
     base::flat_set<int> audio_object_types;
     audio_object_types.insert(kISO_14496_3);
     parser_.reset(
@@ -90,15 +91,20 @@ class MP4StreamParserTest : public testing::Test {
  protected:
   StrictMock<MockMediaLog> media_log_;
   std::unique_ptr<MP4StreamParser> parser_;
-  bool configs_received_;
+  bool configs_received_ = false;
   std::unique_ptr<MediaTracks> media_tracks_;
   AudioDecoderConfig audio_decoder_config_;
   VideoDecoderConfig video_decoder_config_;
-  DecodeTimestamp lower_bound_;
-  StreamParser::TrackId audio_track_id_;
-  StreamParser::TrackId video_track_id_;
-  bool verifying_keyframeness_sequence_;
+  DecodeTimestamp lower_bound_ = kMaxDecodeTimestamp;
+  StreamParser::TrackId audio_track_id_ = 0;
+  StreamParser::TrackId video_track_id_ = 0;
+  bool verifying_keyframeness_sequence_ = false;
   StrictMock<base::MockRepeatingCallback<void(Keyframeness)>> keyframeness_cb_;
+
+  // If `capture_video_buffers` is true, then retain all parsed buffers from
+  // `video_track_id_` in `video_buffers_`.
+  bool capture_video_buffers_ = false;
+  std::vector<scoped_refptr<StreamParserBuffer>> video_buffers_;
 
   // Note this is similar to a StreamParserTestBase method, so may benefit from
   // utility method or inheritance if they don't diverge.
@@ -142,6 +148,8 @@ class MP4StreamParserTest : public testing::Test {
               params.detected_audio_track_count);
     EXPECT_EQ(expected_params.detected_video_track_count,
               params.detected_video_track_count);
+    EXPECT_EQ(expected_params.detected_metadata_track_count,
+              params.detected_metadata_track_count);
   }
 
   bool NewConfigF(std::unique_ptr<MediaTracks> tracks) {
@@ -193,6 +201,10 @@ class MP4StreamParserTest : public testing::Test {
                  << ", dur=" << buf->duration().InSecondsF();
         // Ensure that track ids are properly assigned on all emitted buffers.
         EXPECT_EQ(track_id, buf->track_id());
+
+        if (track_id == video_track_id_ && capture_video_buffers_) {
+          video_buffers_.push_back(buf);
+        }
 
         // Let single-track tests verify the sequence of keyframes/nonkeyframes.
         if (verifying_keyframeness_sequence_) {
@@ -395,6 +407,94 @@ TEST_F(MP4StreamParserTest, AVC_NonKeyframeness_Mismatches_Container) {
                512);
 }
 
+TEST_F(MP4StreamParserTest, AVC_SEIRecoveryPointPromotedToKeyframe) {
+  // Open-GOP content: first fragment has IDR (keyframe), second fragment has
+  // SEI recovery point + non-IDR (promoted to keyframe by our fix).
+  // Without the fix, the second fragment's frames would all be non-keyframes
+  // and MSE would silently drop them after a seek.
+  //
+  // Note: This test uses unencrypted content. The keyframe promotion is scoped
+  // to clear (unencrypted) content only, since encrypted content may not
+  // support the software decode fallback needed on platforms where hardware
+  // decoders don't handle non-IDR recovery points correctly.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {kParseSEIRecoveryPoints, kMediaSourceSeiRecoveryPointKeyframe}, {});
+
+  auto params = GetDefaultInitParametersExpectations();
+  params.detected_audio_track_count = 0;
+  InitializeParserWithInitParametersExpectations(params);
+
+  // The container marks the recovery point as sync, but bitstream analysis
+  // says non-IDR — this mismatch log fires. Then our promotion overrides.
+  EXPECT_MEDIA_LOG(DebugLog(
+      "ISO-BMFF container metadata for video frame indicates that the frame is "
+      "a keyframe, but the video frame contents indicate the opposite."));
+  EXPECT_MEDIA_LOG(InfoLog("Promoting non-IDR frame with SEI recovery point"));
+
+  // The test file has 48 frames: 24 in fragment 1 (1 IDR + 23 non-key) and
+  // 24 in fragment 2 (1 recovery point promoted to key + 23 non-key).
+  // Total: 2 keyframes, 46 non-keyframes.
+  verifying_keyframeness_sequence_ = true;
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kKeyframe)).Times(2);
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kNonKeyframe)).Times(46);
+
+  ParseMP4File("bear-320x240-v-2fragments-open-gop_frag.mp4", 512);
+}
+
+TEST_F(MP4StreamParserTest, AVC_SEIRecoveryPointNotPromotedWhenDisabled) {
+  // Same open-GOP content, but with the feature flag disabled.
+  // The recovery point frame should NOT be promoted to keyframe.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures({kParseSEIRecoveryPoints},
+                                       {kMediaSourceSeiRecoveryPointKeyframe});
+
+  auto params = GetDefaultInitParametersExpectations();
+  params.detected_audio_track_count = 0;
+  InitializeParserWithInitParametersExpectations(params);
+
+  // Container says sync but bitstream analysis overrides to non-keyframe.
+  EXPECT_MEDIA_LOG(DebugLog(
+      "ISO-BMFF container metadata for video frame indicates that the frame is "
+      "a keyframe, but the video frame contents indicate the opposite."));
+
+  // Only one keyframe (the IDR). The recovery point is NOT promoted, so
+  // 48 frames total: 1 keyframe, 47 non-keyframes.
+  verifying_keyframeness_sequence_ = true;
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kKeyframe)).Times(1);
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kNonKeyframe)).Times(47);
+
+  ParseMP4File("bear-320x240-v-2fragments-open-gop_frag.mp4", 512);
+}
+
+TEST_F(MP4StreamParserTest, AVC_SEIRecoveryPointNotPromotedWhenEncrypted) {
+  // Same open-GOP content but CENC encrypted. The keyframe promotion should
+  // NOT apply to encrypted content, since encrypted streams may not support
+  // the software decode fallback needed on platforms where hardware decoders
+  // don't handle non-IDR recovery points.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {kParseSEIRecoveryPoints, kMediaSourceSeiRecoveryPointKeyframe}, {});
+
+  auto params = GetDefaultInitParametersExpectations();
+  params.detected_audio_track_count = 0;
+  InitializeParserWithInitParametersExpectations(params);
+
+  // Even with the feature enabled, encrypted content should not get the
+  // promotion. The mismatch log fires but no promotion log.
+  EXPECT_MEDIA_LOG(DebugLog(
+      "ISO-BMFF container metadata for video frame indicates that the frame is "
+      "a keyframe, but the video frame contents indicate the opposite."));
+
+  // Only one keyframe (the IDR). The recovery point is NOT promoted because
+  // the content is encrypted.
+  verifying_keyframeness_sequence_ = true;
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kKeyframe)).Times(1);
+  EXPECT_CALL(keyframeness_cb_, Run(Keyframeness::kNonKeyframe)).Times(47);
+
+  ParseMP4File("bear-320x240-v-2fragments-open-gop_frag-cenc.mp4", 512);
+}
+
 TEST_F(MP4StreamParserTest, MPEG2_AAC_LC) {
   InSequence s;
   base::flat_set<int> audio_object_types;
@@ -472,6 +572,22 @@ TEST_F(MP4StreamParserTest, MissingSampleEncryptionInfo) {
   scoped_refptr<DecoderBuffer> buffer =
       ReadTestDataFile("bear-1280x720-a_frag-cenc_missing-saiz-saio.mp4");
   EXPECT_MEDIA_LOG(SampleEncryptionInfoUnavailableLog());
+  EXPECT_FALSE(AppendAllDataThenParseInPieces(*buffer, 512));
+}
+
+// Test that files with duplicate track IDs across different track types are
+// rejected.
+TEST_F(MP4StreamParserTest, DuplicateTrackIdRejected) {
+  InSequence s;
+
+  InitializeParser();
+
+  scoped_refptr<DecoderBuffer> buffer =
+      ReadTestDataFile("duplicate_track_id.mp4");
+
+  // We expect an error log about duplicate track ID.
+  EXPECT_MEDIA_LOG(testing::HasSubstr("Duplicate track ID in moov"));
+
   EXPECT_FALSE(AppendAllDataThenParseInPieces(*buffer, 512));
 }
 
@@ -669,6 +785,8 @@ TEST_F(MP4StreamParserTest, DemuxingDVProfile5WithHEVCMimeTypeSourceBuffer) {
 
   scoped_refptr<DecoderBuffer> buffer =
       ReadTestDataFile("glass-blowing2-dolby-vision-profile-5-frag.mp4");
+  EXPECT_MEDIA_LOG(testing::HasSubstr("Dolby Vision video track with track_id"))
+      .Times(testing::AtMost(1));
   EXPECT_EQ(expect_success, AppendAllDataThenParseInPieces(*buffer, 512));
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
   EXPECT_EQ(VideoCodec::kDolbyVision, video_decoder_config_.codec());
@@ -980,11 +1098,11 @@ TEST_F(MP4StreamParserTest, Vp9) {
                             gfx::ColorSpace::RangeID::LIMITED));
 
   const auto& hdr_metadata = video_decoder_config_.hdr_metadata();
-  EXPECT_EQ(hdr_metadata.cta_861_3->max_content_light_level, 1000u);
-  EXPECT_EQ(hdr_metadata.cta_861_3->max_frame_average_light_level, 640u);
+  EXPECT_EQ(hdr_metadata.GetCLLI().fMaxCLL, 1000u);
+  EXPECT_EQ(hdr_metadata.GetCLLI().fMaxFALL, 640u);
 
-  const auto& smpte_st_2086 = hdr_metadata.smpte_st_2086.value();
-  const auto& primaries = smpte_st_2086.primaries;
+  const auto& mdcv = hdr_metadata.GetMDCV();
+  const auto& primaries = mdcv.fDisplayPrimaries;
 
   constexpr float kColorCoordinateUnit = 1 / 16.0f;
   EXPECT_NEAR(primaries.fRX, 0.68, kColorCoordinateUnit);
@@ -997,10 +1115,11 @@ TEST_F(MP4StreamParserTest, Vp9) {
   EXPECT_NEAR(primaries.fWY, 0.351, kColorCoordinateUnit);
 
   constexpr float kLuminanceMaxUnit = 1 / 8.0f;
-  EXPECT_NEAR(smpte_st_2086.luminance_max, 1000.0f, kLuminanceMaxUnit);
+  EXPECT_NEAR(mdcv.fMaximumDisplayMasteringLuminance, 1000.0f,
+              kLuminanceMaxUnit);
 
   constexpr float kLuminanceMinUnit = 1 / 14.0;
-  EXPECT_NEAR(smpte_st_2086.luminance_min, 0.01f, kLuminanceMinUnit);
+  EXPECT_NEAR(mdcv.fMinimumDisplayMasteringLuminance, 0.01f, kLuminanceMinUnit);
 }
 
 TEST_F(MP4StreamParserTest, FourCCToString) {
@@ -1074,6 +1193,49 @@ TEST_F(MP4StreamParserTest, MultiTrackFile) {
   EXPECT_EQ(audio_track2.language().value(), "und");
 }
 
+// The test depends on AV1 codec.
+#if BUILDFLAG(ENABLE_DAV1D_DECODER)
+#define MAYBE_TimedMetadataTrack TimedMetadataTrack
+#else
+#define MAYBE_TimedMetadataTrack DISABLED_TimedMetadataTrack
+#endif
+TEST_F(MP4StreamParserTest, MAYBE_TimedMetadataTrack) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({kMP4TimedMetadataTrack, features::kHdrAgtm},
+                                {});
+
+  auto params = GetDefaultInitParametersExpectations();
+  params.liveness = StreamLiveness::kRecorded;
+  params.detected_video_track_count = 1;
+  params.detected_audio_track_count = 0;
+  params.detected_metadata_track_count = 1;
+  params.duration = base::Milliseconds(1500);
+  InitializeParserWithInitParametersExpectations(params);
+  capture_video_buffers_ = true;
+
+  scoped_refptr<DecoderBuffer> buffer;
+  buffer = ReadTestDataFile("agtm-metadata-track-frag.mp4");
+  EXPECT_TRUE(AppendAllDataThenParseInPieces(*buffer, 512));
+  parser_->Flush();
+
+  buffer = ReadTestDataFile("agtm-metadata-track-frag.m4s");
+  EXPECT_TRUE(AppendAllDataThenParseInPieces(*buffer, 512));
+  parser_->Flush();
+
+  uint32_t video_buffers_with_agtm = 0;
+  uint32_t video_buffers_total = 0;
+  for (const auto& buf : video_buffers_) {
+    if (buf->track_id() == video_track_id_) {
+      video_buffers_total++;
+      if (buf->side_data() && buf->side_data()->hdr_metadata.HasAgtm()) {
+        video_buffers_with_agtm++;
+      }
+    }
+  }
+  EXPECT_GT(video_buffers_total, 0u);
+  EXPECT_EQ(video_buffers_with_agtm, video_buffers_total);
+}
+
 // <cos(θ), sin(θ), θ expressed as a rotation Enum>
 using MatrixRotationTestCaseParam =
     std::tuple<double, double, VideoTransformation>;
@@ -1132,6 +1294,20 @@ MatrixRotationTestCaseParam rotation_test_cases[6] = {
 INSTANTIATE_TEST_SUITE_P(CheckMath,
                          MP4StreamParserRotationMatrixEvaluatorTest,
                          testing::ValuesIn(rotation_test_cases));
+
+TEST_F(MP4StreamParserTest, ParseEquirectangularProjection) {
+  auto params = GetDefaultInitParametersExpectations();
+  params.detected_audio_track_count = 0;
+  params.duration = base::Milliseconds(6700);
+  params.liveness = StreamLiveness::kRecorded;
+  InitializeParserWithInitParametersExpectations(params);
+  ParseMP4File("spherical_frag.mp4", 512);
+
+  EXPECT_EQ(video_decoder_config_.spatial_format().stereo_mode,
+            VideoStereoMode::kTopBottomLeftFirst);
+  EXPECT_EQ(video_decoder_config_.spatial_format().projection_type,
+            VideoProjectionType::kEquirect360);
+}
 
 }  // namespace mp4
 }  // namespace media

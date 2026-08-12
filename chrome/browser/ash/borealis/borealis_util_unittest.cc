@@ -255,7 +255,7 @@ guest_os::GuestOsRegistryService::Registration CreateRegistration(
     std::string_view name,
     std::string_view exec) {
   base::Value pref(base::Value::Type::DICT);
-  base::Value::Dict localized_name;
+  base::DictValue localized_name;
   localized_name.Set("" /* locale */, base::Value(name));
   pref.GetDict().Set(guest_os::prefs::kAppNameKey, std::move(localized_name));
   pref.GetDict().Set(guest_os::prefs::kAppExecKey, exec);
@@ -280,6 +280,14 @@ TEST_F(BorealisUtilTest, DoesNotHideGames) {
   // It's also not an actual game (yet?), this is just an example.
   EXPECT_FALSE(ShouldHideIrrelevantApp(CreateRegistration(
       "fake app id", "Proton Rush", "steam://rungameid/123456789")));
+}
+
+TEST_F(BorealisUtilTest, IsExternalURLAllowed) {
+  GURL valid_url("steam://run/123");
+  EXPECT_TRUE(IsExternalURLAllowed(valid_url));
+
+  GURL malicious_url("steam://run/123#$(id)");
+  EXPECT_FALSE(IsExternalURLAllowed(malicious_url));
 }
 
 }  // namespace borealis

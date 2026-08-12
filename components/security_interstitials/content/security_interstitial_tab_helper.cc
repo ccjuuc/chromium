@@ -143,8 +143,7 @@ void SecurityInterstitialTabHelper::BindInterstitialCommands(
 
 bool SecurityInterstitialTabHelper::IsInterstitialPendingForNavigation(
     int64_t navigation_id) const {
-  return base::Contains(blocking_documents_for_pending_navigations_,
-                        navigation_id);
+  return blocking_documents_for_pending_navigations_.contains(navigation_id);
 }
 
 bool SecurityInterstitialTabHelper::ShouldDisplayURL() const {
@@ -165,8 +164,8 @@ bool SecurityInterstitialTabHelper::HasPendingOrActiveInterstitial() const {
 
 bool SecurityInterstitialTabHelper::IsInterstitialCommittedForFrame(
     content::FrameTreeNodeId frame_tree_node_id) const {
-  return base::Contains(blocking_documents_for_committed_navigations_,
-                        frame_tree_node_id);
+  return blocking_documents_for_committed_navigations_.contains(
+      frame_tree_node_id);
 }
 
 security_interstitials::SecurityInterstitialPage*
@@ -211,8 +210,8 @@ void SecurityInterstitialTabHelper::SetBlockingPage(
 
 SecurityInterstitialPage*
 SecurityInterstitialTabHelper::GetBlockingPageForCurrentTargetFrame() {
-  auto* render_frame_host = receivers_.GetCurrentTargetFrame();
-  content::FrameTreeNodeId id = render_frame_host->GetFrameTreeNodeId();
+  content::RenderFrameHost& render_frame_host = receivers_.CurrentTargetFrame();
+  content::FrameTreeNodeId id = render_frame_host.GetFrameTreeNodeId();
   if (!IsInterstitialCommittedForFrame(id)) {
     // TODO(crbug.com/376688788): Remove this condition. This method should not
     // be invoked if there is no blocking page for the current target frame.

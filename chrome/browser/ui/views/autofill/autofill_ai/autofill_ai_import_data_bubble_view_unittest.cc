@@ -7,24 +7,21 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/autofill/autofill_ai/autofill_ai_import_data_controller.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/autofill/autofill_ai/mock_autofill_ai_import_data_controller.h"
+#include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "chrome/grit/browser_resources.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/events/base_event_utils.h"
-#include "ui/gfx/geometry/point.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/styled_label.h"
-#include "ui/views/test/button_test_api.h"
 #include "ui/views/widget/widget_utils.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 
 // TODO(crbug.com/362227379): Consider having an interactive UI test to evaluate
 // both the controller and the view working together.
@@ -32,10 +29,10 @@ namespace autofill {
 
 namespace {
 
-using EntityAttributeUpdateDetails =
-    AutofillAiImportDataController::EntityAttributeUpdateDetails;
-using EntityAttributeUpdateType =
-    AutofillAiImportDataController::EntityAttributeUpdateType;
+using ::testing::Mock;
+using ::testing::NiceMock;
+using ::testing::Return;
+
 class AutofillAiImportDataBubbleViewTest : public ChromeViewsTestBase {
  public:
   AutofillAiImportDataBubbleViewTest() = default;
@@ -51,22 +48,18 @@ class AutofillAiImportDataBubbleViewTest : public ChromeViewsTestBase {
   void CreateViewAndShow();
 
   void TearDown() override {
-    view_ = nullptr;
+    ResetViewPointer();
     anchor_widget_.reset();
     ChromeViewsTestBase::TearDown();
   }
 
-  AutofillAiImportDataBubbleView& view() { return *view_; }
+  AutofillAiImportDataBubbleView* view() { return view_.get(); }
   MockAutofillAiImportDataController& mock_controller() {
     return mock_controller_;
   }
 
-  void ClickButton(views::ImageButton* button) {
-    CHECK(button);
-    ui::MouseEvent e(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
-                     ui::EventTimeForNow(), 0, 0);
-    views::test::ButtonTestApi test_api(button);
-    test_api.NotifyClick(e);
+  void ResetViewPointer() {
+    view_ = nullptr;
   }
 
  private:
@@ -75,7 +68,7 @@ class AutofillAiImportDataBubbleViewTest : public ChromeViewsTestBase {
   std::unique_ptr<content::WebContents> web_contents_;
   std::unique_ptr<views::Widget> anchor_widget_;
   raw_ptr<AutofillAiImportDataBubbleView> view_ = nullptr;
-  testing::NiceMock<MockAutofillAiImportDataController> mock_controller_;
+  NiceMock<MockAutofillAiImportDataController> mock_controller_;
 };
 
 void AutofillAiImportDataBubbleViewTest::CreateViewAndShow() {
@@ -91,9 +84,11 @@ void AutofillAiImportDataBubbleViewTest::CreateViewAndShow() {
       // they updated their name and added country data.
       EntityAttributeUpdateDetails(
           /*attribute_name=*/u"Name", /*attribute_value=*/u"Jon doe",
+          /*old_attribute_value=*/u"Seb doe",
           EntityAttributeUpdateType::kNewEntityAttributeUpdated),
       EntityAttributeUpdateDetails(
           /*attribute_name=*/u"Country", /*attribute_value=*/u"Brazil",
+          /*old_attribute_value=*/u"Ukraine",
           EntityAttributeUpdateType::kNewEntityAttributeAdded),
       // The next two values are saying:
       // 1. That the user's passport expiry date information has not changed.
@@ -101,36 +96,145 @@ void AutofillAiImportDataBubbleViewTest::CreateViewAndShow() {
       EntityAttributeUpdateDetails(
           /*attribute_name=*/u"Expiry date",
           /*attribute_value=*/u"12/12/2027",
+          /*old_attribute_value=*/std::nullopt,
           EntityAttributeUpdateType::kNewEntityAttributeUnchanged),
       EntityAttributeUpdateDetails(
           /*attribute_name=*/u"Issue date",
           /*attribute_value=*/u"12/12/2020",
+          /*old_attribute_value=*/std::nullopt,
           EntityAttributeUpdateType::kNewEntityAttributeUnchanged)};
   ON_CALL(mock_controller(), GetUpdatedAttributesDetails())
-      .WillByDefault(testing::Return(details));
+      .WillByDefault(Return(details));
+  ON_CALL(mock_controller(), CloseOnAccept()).WillByDefault(Return(true));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(Return(IDS_AUTOFILL_AI_SAVE_ENTITY_DIALOG_SUBTITLE));
 
   auto view_unique = std::make_unique<AutofillAiImportDataBubbleView>(
-      anchor_widget_->GetContentsView(), web_contents_.get(),
-      &mock_controller_);
+      views::BubbleAnchor(anchor_widget_->GetContentsView()),
+      web_contents_.get(), &mock_controller_);
   view_ = view_unique.get();
   views::BubbleDialogDelegateView::CreateBubble(std::move(view_unique))->Show();
 }
 
 TEST_F(AutofillAiImportDataBubbleViewTest, HasCloseButton) {
   CreateViewAndShow();
-  EXPECT_TRUE(view().ShouldShowCloseButton());
+  EXPECT_TRUE(view()->ShouldShowCloseButton());
 }
 
 TEST_F(AutofillAiImportDataBubbleViewTest, AcceptInvokesTheController) {
   CreateViewAndShow();
+
+  base::RunLoop run_loop;
   EXPECT_CALL(mock_controller(), OnSaveButtonClicked);
-  view().AcceptDialog();
+  EXPECT_CALL(mock_controller(), OnBubbleClosed).WillOnce([this, &run_loop]() {
+    ResetViewPointer();
+    run_loop.Quit();
+  });
+
+  view()->AcceptDialog();
+  run_loop.Run();
+}
+
+// Tests that the bubble is not closed when the controller does not want to
+// close it on accept.
+TEST_F(AutofillAiImportDataBubbleViewTest, AcceptDoesNotCloseTheBubble) {
+  CreateViewAndShow();
+  EXPECT_CALL(mock_controller(), CloseOnAccept()).WillOnce(Return(false));
+  EXPECT_CALL(mock_controller(), OnSaveButtonClicked);
+  EXPECT_CALL(mock_controller(), OnBubbleClosed).Times(0);
+  view()->AcceptDialog();
+
+  task_environment()->RunUntilIdle();
+  // Clear expectations explicitly since the widget is destroyed during tear
+  // down.
+  Mock::VerifyAndClearExpectations(&mock_controller());
+}
+
+TEST_F(AutofillAiImportDataBubbleViewTest, AcceptShowsThrobber) {
+  CreateViewAndShow();
+  EXPECT_CALL(mock_controller(), CloseOnAccept()).WillOnce(Return(false));
+  EXPECT_CALL(mock_controller(), OnSaveButtonClicked);
+
+  views::View* throbber = view()->GetViewByID(DialogViewId::LOADING_THROBBER);
+  ASSERT_TRUE(throbber);
+  EXPECT_FALSE(throbber->parent()->GetVisible());
+
+  view()->AcceptDialog();
+
+  EXPECT_TRUE(throbber->parent()->GetVisible());
+  EXPECT_EQ(view()->buttons(),
+            static_cast<int>(ui::mojom::DialogButton::kNone));
 }
 
 TEST_F(AutofillAiImportDataBubbleViewTest, CancelInvokesTheController) {
   CreateViewAndShow();
-  EXPECT_CALL(mock_controller(), OnBubbleClosed);
-  view().CancelDialog();
+
+  base::RunLoop run_loop;
+  EXPECT_CALL(mock_controller(), OnBubbleClosed).WillOnce([this, &run_loop]() {
+    ResetViewPointer();
+    run_loop.Quit();
+  });
+
+  view()->CancelDialog();
+  run_loop.Run();
+}
+
+TEST_F(AutofillAiImportDataBubbleViewTest,
+       WalletIconShownWhenBrandingDisabledForSavePrompt) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kAutofillAiWalletPassBranding2026);
+  EXPECT_CALL(mock_controller(), IsWalletableEntity())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_controller(), IsSavePrompt())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_controller(), GetSaveUpdateDialogTitleImagesResourceId())
+      .WillRepeatedly(Return(IDR_AUTOFILL_SAVE_DRIVERS_LICENSE_LOTTIE));
+  EXPECT_CALL(mock_controller(), GetNoticeStringId())
+      .WillRepeatedly(
+          Return(IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE_NEW));
+  CreateViewAndShow();
+
+  ASSERT_NE(view()->GetBubbleFrameView()->title(), nullptr);
+  EXPECT_EQ(view()->GetBubbleFrameView()->title()->children().size(), 2u);
+}
+
+TEST_F(AutofillAiImportDataBubbleViewTest,
+       WalletIconNotShownWhenBrandingEnabledForSavePrompt) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kAutofillAiWalletPassBranding2026);
+  EXPECT_CALL(mock_controller(), IsWalletableEntity())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_controller(), IsSavePrompt())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_controller(), GetSaveUpdateDialogTitleImagesResourceId())
+      .WillRepeatedly(Return(IDR_AUTOFILL_SAVE_DRIVERS_LICENSE_LOTTIE));
+  EXPECT_CALL(mock_controller(), GetNoticeStringId())
+      .WillRepeatedly(
+          Return(IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE_NEW));
+  CreateViewAndShow();
+
+  ASSERT_NE(view()->GetBubbleFrameView()->title(), nullptr);
+  EXPECT_EQ(view()->GetBubbleFrameView()->title()->children().size(), 0u);
+}
+
+TEST_F(AutofillAiImportDataBubbleViewTest,
+       WalletIconShownWhenBrandingEnabledForUpdatePrompt) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kAutofillAiWalletPassBranding2026);
+  EXPECT_CALL(mock_controller(), IsWalletableEntity())
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(mock_controller(), IsSavePrompt())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(mock_controller(), GetNoticeStringId())
+      .WillRepeatedly(
+          Return(IDS_AUTOFILL_AI_UPDATE_ENTITY_TO_WALLET_DIALOG_SUBTITLE));
+  CreateViewAndShow();
+
+  ASSERT_NE(view()->GetBubbleFrameView()->title(), nullptr);
+  EXPECT_EQ(view()->GetBubbleFrameView()->title()->children().size(), 2u);
 }
 
 }  // namespace

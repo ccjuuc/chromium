@@ -4,10 +4,10 @@
 
 #include "printing/backend/mojom/print_backend_mojom_traits.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
@@ -206,23 +206,19 @@ EnumTraits<printing::mojom::AdvancedCapabilityType,
 }
 
 // static
-bool EnumTraits<printing::mojom::AdvancedCapabilityType,
-                ::printing::AdvancedCapability::Type>::
-    FromMojom(printing::mojom::AdvancedCapabilityType input,
-              ::printing::AdvancedCapability::Type* output) {
+::printing::AdvancedCapability::Type
+EnumTraits<printing::mojom::AdvancedCapabilityType,
+           ::printing::AdvancedCapability::Type>::
+    FromMojom(printing::mojom::AdvancedCapabilityType input) {
   switch (input) {
     case printing::mojom::AdvancedCapabilityType::kBoolean:
-      *output = ::printing::AdvancedCapability::Type::kBoolean;
-      return true;
+      return ::printing::AdvancedCapability::Type::kBoolean;
     case printing::mojom::AdvancedCapabilityType::kFloat:
-      *output = ::printing::AdvancedCapability::Type::kFloat;
-      return true;
+      return ::printing::AdvancedCapability::Type::kFloat;
     case printing::mojom::AdvancedCapabilityType::kInteger:
-      *output = ::printing::AdvancedCapability::Type::kInteger;
-      return true;
+      return ::printing::AdvancedCapability::Type::kInteger;
     case printing::mojom::AdvancedCapabilityType::kString:
-      *output = ::printing::AdvancedCapability::Type::kString;
-      return true;
+      return ::printing::AdvancedCapability::Type::kString;
   }
   NOTREACHED();
 }
@@ -247,25 +243,6 @@ bool StructTraits<printing::mojom::AdvancedCapabilityDataView,
          data.ReadValues(&out->values);
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-// static
-bool StructTraits<printing::mojom::PageOutputQualityAttributeDataView,
-                  printing::PageOutputQualityAttribute>::
-    Read(printing::mojom::PageOutputQualityAttributeDataView data,
-         printing::PageOutputQualityAttribute* out) {
-  return data.ReadDisplayName(&out->display_name) && data.ReadName(&out->name);
-}
-
-// static
-bool StructTraits<printing::mojom::PageOutputQualityDataView,
-                  printing::PageOutputQuality>::
-    Read(printing::mojom::PageOutputQualityDataView data,
-         printing::PageOutputQuality* out) {
-  return data.ReadQualities(&out->qualities) &&
-         data.ReadDefaultQuality(&out->default_quality);
-}
-#endif
 
 // static
 bool StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
@@ -332,35 +309,6 @@ bool StructTraits<printing::mojom::PrinterSemanticCapsAndDefaultsDataView,
     return false;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-  if (!data.ReadPageOutputQuality(&out->page_output_quality)) {
-    return false;
-  }
-  if (out->page_output_quality) {
-    printing::PageOutputQualityAttributes qualities =
-        out->page_output_quality->qualities;
-    std::optional<std::string> default_quality =
-        out->page_output_quality->default_quality;
-
-    // If non-null `default_quality`, there should be a matching element in
-    // `qualities` array.
-    if (default_quality) {
-      if (!base::Contains(qualities, *default_quality,
-                          &printing::PageOutputQualityAttribute::name)) {
-        DLOG(ERROR) << "Non-null default quality, but page output qualities "
-                       "does not contain default quality";
-        return false;
-      }
-    }
-
-    // There should be no duplicates in `qualities` array.
-    if (HasDuplicateItems(qualities)) {
-      DLOG(ERROR) << "Duplicate page output qualities detected.";
-      return false;
-    }
-  }
-#endif
 
   if (!data.ReadMediaTypes(&media_types) ||
       !data.ReadDefaultMediaType(&default_media_type)) {

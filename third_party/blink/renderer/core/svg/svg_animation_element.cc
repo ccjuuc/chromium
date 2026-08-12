@@ -26,6 +26,7 @@
 
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/animation/element_smil_animations.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_effect_parameters.h"
@@ -39,6 +40,7 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/parsing_utilities.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -46,6 +48,7 @@ SVGAnimationElement::SVGAnimationElement(const QualifiedName& tag_name,
                                          Document& document)
     : SVGSMILElement(tag_name, document),
       animation_valid_(AnimationValidity::kUnknown),
+      always_revalidate_animation_value_(false),
       registered_animation_(false),
       calc_mode_(kCalcModeLinear),
       animation_mode_(kNoAnimation) {
@@ -59,8 +62,7 @@ bool SVGAnimationElement::ParseValues(const String& value,
   // ignored.
   // http://www.w3.org/TR/SVG11/animate.html#ValuesAttribute
   result.clear();
-  Vector<String> parse_list;
-  value.Split(';', true, parse_list);
+  Vector<StringView> parse_list = StringView(value).Split(';');
   unsigned last = parse_list.size() - 1;
   for (unsigned i = 0; i <= last; ++i) {
     parse_list[i] = parse_list[i].StripWhiteSpace(IsHTMLSpace<UChar>);
@@ -69,7 +71,7 @@ bool SVGAnimationElement::ParseValues(const String& value,
       if (i < last)
         goto fail;
     } else {
-      result.push_back(parse_list[i]);
+      result.push_back(parse_list[i].ToString());
     }
   }
 
@@ -87,10 +89,9 @@ static bool ParseKeyTimes(const String& string,
                           HeapVector<float>& result,
                           bool verify_order) {
   result.clear();
-  Vector<String> parse_list;
-  string.Split(';', true, parse_list);
+  Vector<StringView> parse_list = StringView(string).Split(';');
   for (unsigned n = 0; n < parse_list.size(); ++n) {
-    String time_string = parse_list[n].StripWhiteSpace();
+    StringView time_string = parse_list[n].StripWhiteSpace();
     if (time_string.empty()) {
       // Tolerate trailing ';'
       if (n == parse_list.size() - 1) {
@@ -98,19 +99,20 @@ static bool ParseKeyTimes(const String& string,
       }
       goto fail;
     }
-    bool ok;
-    float time = time_string.ToFloat(&ok);
-    if (!ok || !IsInZeroToOneRange(time))
+    auto time = StringToFloat(time_string);
+    if (!time || !IsInZeroToOneRange(*time)) {
       goto fail;
+    }
     if (verify_order) {
       if (!n) {
-        if (time)
+        if (*time) {
           goto fail;
-      } else if (time < result.back()) {
+        }
+      } else if (*time < result.back()) {
         goto fail;
       }
     }
-    result.push_back(time);
+    result.push_back(*time);
   }
   return true;
 fail:
@@ -310,11 +312,11 @@ AnimationMode SVGAnimationElement::CalculateAnimationMode() {
   if (hasAttribute(svg_names::kValuesAttr)) {
     return kValuesAnimation;
   }
-  if (!ToValue().empty()) {
-    return FromValue().empty() ? kToAnimation : kFromToAnimation;
+  if (!ToValue().IsNull()) {
+    return FromValue().IsNull() ? kToAnimation : kFromToAnimation;
   }
-  if (!ByValue().empty()) {
-    return FromValue().empty() ? kByAnimation : kFromByAnimation;
+  if (!ByValue().IsNull()) {
+    return FromValue().IsNull() ? kByAnimation : kFromByAnimation;
   }
   return kNoAnimation;
 }
@@ -460,6 +462,7 @@ float SVGAnimationElement::CalculatePercentFromKeyPoints(float percent) const {
   DCHECK_LT(index + 1, KeyTimes().size());
   float from_percent = KeyTimes()[index];
   float to_percent = KeyTimes()[index + 1];
+  DCHECK_GT(to_percent, from_percent);
   float to_key_point = key_points_[index + 1];
   float key_point_percent =
       (percent - from_percent) / (to_percent - from_percent);
@@ -552,6 +555,55 @@ float SVGAnimationElement::CurrentValuesForValuesAnimation(
   return effective_percent;
 }
 
+float SVGAnimationElement::CurrentValuesForPathAnimation(
+    float percent,
+    Keyframe& keyframe) const {
+  DCHECK_EQ(animation_valid_, AnimationValidity::kValid);
+
+  if (!key_points_.empty()) {
+    return CalculatePercentFromKeyPoints(percent);
+  }
+
+  CalcMode calc_mode = GetCalcMode();
+  if (RuntimeEnabledFeatures::SvgAnimateMotionDiscreteCalcModeEnabled() &&
+      calc_mode == kCalcModeDiscrete) {
+    wtf_size_t keyframe_count = DiscretePathKeyframeCount();
+    if (percent == 1 || keyframe_count == 1) {
+      keyframe = {keyframe_count - 1, keyframe_count - 1};
+      return percent;
+    }
+    wtf_size_t key_times_count = KeyTimes().size();
+    unsigned index = CalculateKeyTimesIndex(percent);
+    if (!key_times_count) {
+      index = static_cast<unsigned>(percent * keyframe_count);
+    }
+    keyframe = {index, index};
+    return percent;
+  }
+
+  if (calc_mode == kCalcModeSpline && KeyTimes().size() > 1) {
+    return CalculatePercentForSpline(percent, CalculateKeyTimesIndex(percent));
+  }
+
+  return percent;
+}
+
+bool SVGAnimationElement::IsValid() const {
+  if (!SvgTestsIsValid()) {
+    return false;
+  }
+  // Also check ancestors. If any ancestor SVG element fails conditional
+  // processing (e.g. a <g> with unmatched systemLanguage), this animation
+  // should not run.
+  for (const Node& ancestor : NodeTraversal::AncestorsOf(*this)) {
+    auto* svg_ancestor = DynamicTo<SVGElement>(ancestor);
+    if (svg_ancestor && !svg_ancestor->IsValid()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool SVGAnimationElement::UpdateAnimationMode() {
   if (!IsValid() || !HasValidTarget()) {
     return false;
@@ -586,8 +638,10 @@ bool SVGAnimationElement::CheckAnimationParameters() const {
     // are 'keyTimes' or 'keyPoints'.
     if (key_splines_.empty() ||
         (has_key_points && key_splines_.size() != key_points_.size() - 1) ||
-        (has_key_times && key_splines_.size() != KeyTimes().size() - 1))
+        (has_key_times && key_splines_.size() != KeyTimes().size() - 1) ||
+        (!KeyTimes().empty() && KeyTimes().back() != 1)) {
       return false;
+    }
   }
   if (animation_mode_ == kValuesAnimation) {
     const wtf_size_t values_count = ValuesCount();
@@ -611,6 +665,17 @@ bool SVGAnimationElement::CheckAnimationParameters() const {
     // are 'values'.
     if (calc_mode == kCalcModeSpline &&
         key_splines_.size() != values_count - 1) {
+      return false;
+    }
+  }
+  if (RuntimeEnabledFeatures::SvgAnimateMotionDiscreteCalcModeEnabled() &&
+      animation_mode_ == kPathAnimation && GetCalcMode() == kCalcModeDiscrete &&
+      !has_key_points) {
+    const wtf_size_t path_keyframe_count = DiscretePathKeyframeCount();
+    if (path_keyframe_count == 0) {
+      return false;
+    }
+    if (has_key_times && KeyTimes().size() != path_keyframe_count) {
       return false;
     }
   }
@@ -647,7 +712,7 @@ bool SVGAnimationElement::UpdateAnimationValues() {
       return true;
     }
     case kPathAnimation:
-      break;
+      return CalculatePathValues();
     case kNoAnimation:
       NOTREACHED();
   }
@@ -667,6 +732,10 @@ SMILAnimationEffectParameters SVGAnimationElement::ComputeEffectParameters()
 }
 
 void SVGAnimationElement::ApplyAnimation(SMILAnimationValue& animation_value) {
+  if (always_revalidate_animation_value_) {
+    animation_valid_ = AnimationValidity::kUnknown;
+  }
+
   if (animation_valid_ == AnimationValidity::kUnknown) {
     if (UpdateAnimationMode() && UpdateAnimationValues() &&
         CheckAnimationParameters()) {
@@ -695,6 +764,15 @@ void SVGAnimationElement::ApplyAnimation(SMILAnimationValue& animation_value) {
   if (animation_mode == kValuesAnimation) {
     Keyframe keyframe;
     effective_percent = CurrentValuesForValuesAnimation(percent, keyframe);
+    if (keyframe != last_keyframe_) {
+      UpdateKeyframeValues(keyframe);
+      last_keyframe_ = keyframe;
+    }
+  } else if (RuntimeEnabledFeatures::
+                 SvgAnimateMotionDiscreteCalcModeEnabled() &&
+             animation_mode == kPathAnimation) {
+    Keyframe keyframe;
+    effective_percent = CurrentValuesForPathAnimation(percent, keyframe);
     if (keyframe != last_keyframe_) {
       UpdateKeyframeValues(keyframe);
       last_keyframe_ = keyframe;

@@ -4,29 +4,37 @@
 
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 
+#include <stddef.h>
+
 #include <algorithm>
-#include <map>
 #include <optional>
+#include <ostream>
+#include <ranges>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/zip.h"
-#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_parsing_expression_components.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_format_provider.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_utils.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "third_party/re2/src/re2/re2.h"
 
 namespace autofill {
 
@@ -117,6 +125,10 @@ AddressComponent::AddressComponent(FieldType storage_type,
   }
 }
 
+AddressComponent::AddressComponent(FieldType storage_type,
+                                   SubcomponentsList subcomponents)
+    : AddressComponent(storage_type, subcomponents, MergeMode::kNone) {}
+
 AddressComponent::~AddressComponent() = default;
 
 FieldType AddressComponent::GetStorageType() const {
@@ -143,7 +155,7 @@ void AddressComponent::CopyFrom(const AddressComponent& other) {
   CHECK_EQ(other.subcomponents_.size(), subcomponents_.size())
       << GetStorageTypeName();
   for (auto [subcomponent, other_subcomponent] :
-       base::zip(subcomponents_, other.subcomponents_)) {
+       std::views::zip(subcomponents_, other.subcomponents_)) {
     subcomponent->CopyFrom(*other_subcomponent);
   }
 
@@ -168,7 +180,7 @@ bool AddressComponent::SameAs(const AddressComponent& other) const {
     return false;
   }
   for (auto [subcomponent, other_subcomponent] :
-       base::zip(subcomponents_, other.subcomponents_)) {
+       std::views::zip(subcomponents_, other.subcomponents_)) {
     if (!subcomponent->SameAs(*other_subcomponent)) {
       return false;
     }
@@ -322,10 +334,10 @@ std::u16string AddressComponent::GetValueForOtherSupportedType(
 }
 
 std::u16string AddressComponent::GetFormatString() const {
-  std::u16string result = i18n_model_definition::GetFormattingExpression(
+  std::u16string_view result = i18n_model_definition::GetFormattingExpression(
       GetStorageType(), GetCountryCode());
   if (!result.empty()) {
-    return result;
+    return std::u16string(result);
   }
 
   // If the component is atomic, the format string is just the value.
@@ -902,9 +914,7 @@ int AddressComponent::
 
   // Only count non-empty nodes, unless they were user verified.
   if (!GetValue().empty() ||
-      (base::FeatureList::IsEnabled(
-           features::kAutofillSupportPhoneticNameForJP) &&
-       GetVerificationStatus() == VerificationStatus::kUserVerified)) {
+      GetVerificationStatus() == VerificationStatus::kUserVerified) {
     ++result;
   }
 
@@ -960,7 +970,7 @@ void AddressComponent::MergeVerificationStatuses(
   CHECK_EQ(newer_component.subcomponents_.size(), subcomponents_.size())
       << GetStorageTypeName();
   for (auto [subcomponent, newer_subcomponent] :
-       base::zip(subcomponents_, newer_component.subcomponents_)) {
+       std::views::zip(subcomponents_, newer_component.subcomponents_)) {
     subcomponent->MergeVerificationStatuses(*newer_subcomponent);
   }
 }
@@ -1064,7 +1074,7 @@ bool AddressComponent::IsMergeableWithComponent(
       return false;
     }
     return std::ranges::all_of(
-        base::zip(subcomponents_, newer_component.subcomponents_),
+        std::views::zip(subcomponents_, newer_component.subcomponents_),
         [](const auto& p) {
           auto [subcomponent, newer_subcomponent] = p;
           return subcomponent->IsMergeableWithComponent(*newer_subcomponent);
@@ -1225,7 +1235,7 @@ bool AddressComponent::MergeWithComponent(
   // the child tokens. Reformat this nodes from its children after the merge.
   if (merge_mode_ & kMergeChildrenAndReformatIfNeeded) {
     if (std::ranges::any_of(
-            base::zip(subcomponents_, newer_component.subcomponents_),
+            std::views::zip(subcomponents_, newer_component.subcomponents_),
             [&](const auto& p) {
               auto [subcomponent, newer_subcomponent] = p;
               return !subcomponent->MergeWithComponent(
@@ -1323,7 +1333,7 @@ bool AddressComponent::MergeTokenEquivalentComponent(
     // Otherwise, replace this subtree with the other one if this subtree is
     // empty.
     for (auto [subcomponent, other_subcomponent] :
-         base::zip(subcomponents_, other_subcomponents)) {
+         std::views::zip(subcomponents_, other_subcomponents)) {
       subcomponent->CopyFrom(*other_subcomponent);
     }
     return true;

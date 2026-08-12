@@ -12,9 +12,11 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/events/event_dispatcher.h"
 #include "third_party/blink/renderer/core/dom/events/event_path.h"
+#include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/html/html_frame_element_base.h"
+#include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/input/event_handling_util.h"
 #include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/modules/xr/xr_grip_space.h"
@@ -26,6 +28,7 @@
 #include "third_party/blink/renderer/modules/xr/xr_system.h"
 #include "third_party/blink/renderer/modules/xr/xr_target_ray_space.h"
 #include "third_party/blink/renderer/modules/xr/xr_utils.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
@@ -519,13 +522,34 @@ void XRInputSource::ProcessOverlayHitTest(
   // the common base class to cover both. (There's no intention to actively
   // support framesets for DOM Overlay, but this helps prevent them from
   // being used as a mechanism for information leaks.)
-  HTMLFrameElementBase* frame = DynamicTo<HTMLFrameElementBase>(hit_element);
-  if (frame) {
-    Document* hit_document = frame->contentDocument();
-    if (hit_document) {
-      Frame* hit_frame = hit_document->GetFrame();
-      DCHECK(hit_frame);
-      if (hit_frame->IsCrossOriginToOutermostMainFrame()) {
+  HTMLFrameOwnerElement* frame_element =
+      DynamicTo<HTMLFrameOwnerElement>(hit_element);
+  if (frame_element) {
+    Frame* hit_frame = frame_element->ContentFrame();
+    if (hit_frame) {
+      bool is_cross_origin = false;
+      const SecurityOrigin* session_origin =
+          session_->GetExecutionContext()->GetSecurityOrigin();
+
+      // Ensure that same-origin wrapper iframes cannot be used to bypass input
+      // suppression for nested cross-origin iframes. Walk the entire frame
+      // subtree to check if any descendant frame is cross-origin or remote.
+      for (Frame* node = hit_frame; node != nullptr;
+           node = node->Tree().TraverseNext(hit_frame)) {
+        if (node->IsRemoteFrame()) {
+          is_cross_origin = true;
+          break;
+        } else {
+          const SecurityOrigin* hit_origin =
+              node->GetSecurityContext()->GetSecurityOrigin();
+          if (!hit_origin->IsSameOriginWith(session_origin)) {
+            is_cross_origin = true;
+            break;
+          }
+        }
+      }
+
+      if (is_cross_origin) {
         // Mark the input source as invisible until the primary button is
         // released.
         state_.is_visible = false;

@@ -10,11 +10,20 @@
 #import <memory>
 #import <string>
 
+#import "components/webauthn/ios/passkey_types.h"
 #import "ios/chrome/browser/data_import/ui/data_import_credential_conflict_mutator.h"
 
 namespace password_manager {
 class SavedPasswordsPresenter;
 }  // namespace password_manager
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
+
+namespace syncer {
+class SyncService;
+}  // namespace syncer
 
 namespace webauthn {
 class PasskeyModel;
@@ -25,6 +34,7 @@ enum class CredentialImportStage;
 class FaviconLoader;
 @class PasskeyImportItem;
 @class PasswordImportItem;
+class PrefService;
 
 // Delegate for CredentialImportMediator.
 @protocol CredentialImportMediatorDelegate <NSObject>
@@ -35,11 +45,18 @@ class FaviconLoader;
 // Notifies the delegate to display the "nothing imported" alert.
 - (void)showNothingImportedScreen;
 
+// Notifies the delegate to display the "nothing imported" alert due to
+// all credential types import being blocked by enterprise policies.
+- (void)showNothingImportedEnterpriseScreen;
+
 // Notifies the delegate to display a conflict resolution screen.
 - (void)showConflictResolutionScreenWithPasswords:
             (NSArray<PasswordImportItem*>*)passwords
                                          passkeys:(NSArray<PasskeyImportItem*>*)
                                                       passkeys;
+
+// Notifies the delegate to display a generic error alert.
+- (void)showGenericError;
 
 @end
 
@@ -66,12 +83,14 @@ class FaviconLoader;
 // passed back to the OS to receive the credential data.
 - (instancetype)initWithUUID:(NSUUID*)UUID
                     delegate:(id<CredentialImportMediatorDelegate>)delegate
-                   userEmail:(std::string)userEmail
+             identityManager:(signin::IdentityManager*)identityManager
      savedPasswordsPresenter:
          (std::unique_ptr<password_manager::SavedPasswordsPresenter>)
              savedPasswordsPresenter
                 passkeyModel:(webauthn::PasskeyModel*)passkeyModel
                faviconLoader:(FaviconLoader*)faviconLoader
+                 syncService:(syncer::SyncService*)syncService
+                 prefService:(PrefService*)prefService
     NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -79,7 +98,7 @@ class FaviconLoader;
 // `trustedVaultKeys` are needed to encrypt passkeys if there are any to be
 // imported.
 - (void)startImportingCredentialsWithTrustedVaultKeys:
-    (NSArray<NSData*>*)trustedVaultKeys;
+    (webauthn::SharedKeyList)trustedVaultKeys;
 
 @end
 

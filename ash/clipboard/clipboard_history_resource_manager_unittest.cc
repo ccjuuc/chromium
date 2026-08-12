@@ -48,6 +48,7 @@ class MockClipboardImageModelFactory : public ClipboardImageModelFactory {
                ImageModelCallback),
               (override));
   MOCK_METHOD(void, CancelRequest, (const base::UnguessableToken&), (override));
+  MOCK_METHOD(void, CancelAllRequests, (), (override));
   MOCK_METHOD(void, Activate, (), (override));
   MOCK_METHOD(void, Deactivate, (), (override));
   MOCK_METHOD(void, RenderCurrentPendingRequests, (), (override));
@@ -101,6 +102,13 @@ class ClipboardHistoryResourceManagerTest : public AshTestBase {
         std::make_unique<StrictMock<MockClipboardImageModelFactory>>();
   }
 
+  void TearDown() override {
+    mock_image_factory_.reset();
+    resource_manager_ = nullptr;
+    clipboard_history_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
   const ClipboardHistory* clipboard_history() const {
     return clipboard_history_;
   }
@@ -114,9 +122,8 @@ class ClipboardHistoryResourceManagerTest : public AshTestBase {
   }
 
  private:
-  raw_ptr<const ClipboardHistory, DanglingUntriaged> clipboard_history_;
-  raw_ptr<const ClipboardHistoryResourceManager, DanglingUntriaged>
-      resource_manager_;
+  raw_ptr<const ClipboardHistory> clipboard_history_;
+  raw_ptr<const ClipboardHistoryResourceManager> resource_manager_;
   std::unique_ptr<MockClipboardImageModelFactory> mock_image_factory_;
 };
 
@@ -289,7 +296,8 @@ TEST_F(ClipboardHistoryResourceManagerTest, IneligibleDisplayTypes) {
     ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
     scw.WriteText(u"test");
     scw.WriteRTF("rtf");
-    scw.WriteBookmark(u"bookmark_title", "test_url");
+    scw.WriteURL(ui::ClipboardUrlInfo{.url = GURL("test_url"),
+                                      .title = u"bookmark_title"});
   }
   FlushMessageLoop();
 

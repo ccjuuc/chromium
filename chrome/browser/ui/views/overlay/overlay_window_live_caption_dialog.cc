@@ -15,6 +15,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
@@ -41,7 +42,7 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
     : profile_(profile) {
   SetSize(kLiveCaptionDialogSize);
   SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface, kLiveCaptionDialogCornerRadius));
+      ui::kColorLiveCaptionDialogBackground, kLiveCaptionDialogCornerRadius));
   SetLayoutManager(std::make_unique<views::BoxLayout>(
                        views::BoxLayout::Orientation::kVertical))
       ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
@@ -50,7 +51,9 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
 
   auto live_caption_image = std::make_unique<views::ImageView>();
   live_caption_image->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kLiveCaptionOnIcon, ui::kColorIcon, kImageWidthDip));
+      features::IsRoundedIconsEnabled() ? vector_icons::kSubtitlesIcon
+                                        : vector_icons::kLiveCaptionOnOldIcon,
+      ui::kColorLiveCaptionDialogForeground, kImageWidthDip));
   live_caption_container->AddChildView(std::move(live_caption_image));
 
   auto live_caption_title =
@@ -58,6 +61,8 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
           IDS_PICTURE_IN_PICTURE_LIVE_CAPTION_CONTROL_TEXT));
   live_caption_title->SetHorizontalAlignment(
       gfx::HorizontalAlignment::ALIGN_LEFT);
+  live_caption_title->SetEnabledColor(ui::kColorLiveCaptionDialogForeground);
+  live_caption_title->SetBackgroundColor(SK_ColorTRANSPARENT);
   live_caption_title->SetMultiLine(true);
   live_caption_title_ =
       live_caption_container->AddChildView(std::move(live_caption_title));
@@ -87,7 +92,8 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
 
   auto live_translate_image = std::make_unique<views::ImageView>();
   live_translate_image->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kTranslateIcon, ui::kColorIcon, kImageWidthDip));
+      vector_icons::kGTranslateIcon, ui::kColorLiveCaptionDialogForeground,
+      kImageWidthDip));
   live_translate_container->AddChildView(std::move(live_translate_image));
 
   auto live_translate_label_wrapper = std::make_unique<View>();
@@ -99,6 +105,8 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
           IDS_SETTINGS_CAPTIONS_ENABLE_LIVE_TRANSLATE_TITLE));
   live_translate_title->SetHorizontalAlignment(
       gfx::HorizontalAlignment::ALIGN_LEFT);
+  live_translate_title->SetEnabledColor(ui::kColorLiveCaptionDialogForeground);
+  live_translate_title->SetBackgroundColor(SK_ColorTRANSPARENT);
   live_translate_title->SetMultiLine(true);
   live_translate_title_ = live_translate_label_wrapper->AddChildView(
       std::move(live_translate_title));
@@ -153,6 +161,8 @@ OverlayWindowLiveCaptionDialog::OverlayWindowLiveCaptionDialog(Profile* profile)
   target_language_combobox->SetEnabled(
       profile_->GetPrefs()->GetBoolean(prefs::kLiveTranslateEnabled) &&
       profile_->GetPrefs()->GetBoolean(prefs::kLiveCaptionEnabled));
+  target_language_combobox->SetForegroundColorId(
+      ui::kColorLiveCaptionDialogForeground);
   target_language_combobox_ = target_language_container->AddChildView(
       std::move(target_language_combobox));
   AddChildView(std::move(target_language_container));

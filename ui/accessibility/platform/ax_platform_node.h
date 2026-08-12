@@ -62,11 +62,6 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
   // tree for a native window.
   static void RegisterNativeWindowHandler(NativeWindowHandlerCallback handler);
 
-  // Disallow any updates to the AXMode when needing to force a certain AXMode,
-  // like during testing.
-  static void SetAXModeChangeAllowed(bool allow);
-  static bool IsAXModeChangeAllowed();
-
   // Return the focused object in any UI popup overlaying content, or null.
   static gfx::NativeViewAccessible GetPopupFocusOverride();
 
@@ -135,19 +130,11 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
 
   // Associates a node delegate object to the platform node.
   // Keep it protected. Only AXPlatformNode::Create should be calling this.
-  // Note: it would make a nicer design if initialization was integrated into
-  // the platform node constructor, but platform node implementation on Windows
-  // (AXPlatformNodeWin) relies on CComObject::CreateInstance() in order to
-  // create a platform node instance, and it doesn't allow to pass arguments to
-  // the constructor.
   virtual void Init(AXPlatformNodeDelegate& delegate) = 0;
 
   // Call Destroy rather than deleting this, because the subclass may
   // use reference counting.
   virtual void Destroy() = 0;
-
- private:
-  static bool allow_ax_mode_changes_;
 };
 
 }  // namespace ui

@@ -8,9 +8,10 @@
 #include <utility>
 
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/glic/common/future_browser_features.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/common/chrome_features.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
@@ -35,6 +36,9 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
     tab_will_deactivate_subscription_ =
         tab_->RegisterWillDeactivate(base::BindRepeating(
             &TabObserver::HandleTabActivatedChange, base::Unretained(this)));
+    will_discard_contents_subscription_ =
+        tab_->RegisterWillDiscardContents(base::BindRepeating(
+            &TabObserver::OnWillDiscardContents, base::Unretained(this)));
     tab_data_observer_ = std::make_unique<TabDataObserver>(
         tab_, tab_->GetContents(),
         base::BindRepeating(&TabObserver::SendTabData, base::Unretained(this)));
@@ -47,7 +51,7 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
   void Subscribe(::mojo::PendingRemote<mojom::TabDataHandler> receiver) {
     mojo::Remote<mojom::TabDataHandler> new_remote;
     new_remote.Bind(std::move(receiver));
-    new_remote->OnTabDataChanged(CreateTabData(tab_->GetContents()));
+    new_remote->OnTabDataChanged(CreateTabData(tab_));
     tab_data_receivers_.Add(std::move(new_remote));
   }
 
@@ -61,13 +65,18 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
   }
 
   void UpdateWindowObservations() {
+#if !BUILDFLAG(IS_ANDROID)
     BrowserWindowInterface* browser_window = tab_->GetBrowserWindowInterface();
+    if (!browser_window) {
+      return;
+    }
     window_did_become_active_subscription_ =
         browser_window->RegisterDidBecomeActive(base::BindRepeating(
             &TabObserver::HandleWindowActivatedChange, base::Unretained(this)));
     window_did_become_inactive_subscription_ =
         browser_window->RegisterDidBecomeInactive(base::BindRepeating(
             &TabObserver::HandleWindowActivatedChange, base::Unretained(this)));
+#endif
   }
 
   // Callback for TabInterface activated changes.
@@ -83,15 +92,17 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
   // Runs asynchronously after HandleTabActivatedChange, once the changes
   // actually take effect.
   void NotifyTabInfoChangeAfterTabActivatedChange() {
-    SendTabData(TabDataChange{{TabDataChangeCause::kVisibility},
-                              CreateTabData(web_contents())});
+    SendTabData(
+        TabDataChange{{TabDataChangeCause::kVisibility}, CreateTabData(tab_)});
   }
 
+#if !BUILDFLAG(IS_ANDROID)
   // Callback for BrowserWindowInterface activated changes.
   void HandleWindowActivatedChange(BrowserWindowInterface* browser_window) {
-    SendTabData(TabDataChange{{TabDataChangeCause::kVisibility},
-                              CreateTabData(web_contents())});
+    SendTabData(
+        TabDataChange{{TabDataChangeCause::kVisibility}, CreateTabData(tab_)});
   }
+#endif
 
   void OnDidInsert(tabs::TabInterface* tab) { UpdateWindowObservations(); }
 
@@ -101,6 +112,15 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
       // Destroys `this`.
       owner_observer_->OnTabWillClose(tab->GetHandle());
     }
+  }
+
+  void OnWillDiscardContents(tabs::TabInterface* tab,
+                             content::WebContents* previous_contents,
+                             content::WebContents* new_contents) {
+    Observe(new_contents);
+    tab_data_observer_ = std::make_unique<TabDataObserver>(
+        tab_, new_contents,
+        base::BindRepeating(&TabObserver::SendTabData, base::Unretained(this)));
   }
 
   void SendTabData(TabDataChange tab_data) {
@@ -118,21 +138,25 @@ class GlicTabDataObserver::TabObserver : public content::WebContentsObserver {
 
   base::CallbackListSubscription did_insert_subscription_;
   base::CallbackListSubscription will_detach_subscription_;
+  base::CallbackListSubscription will_discard_contents_subscription_;
 
   // Subscriptions for changes to TabInterface::IsActivated.
   base::CallbackListSubscription tab_did_activate_subscription_;
   base::CallbackListSubscription tab_will_deactivate_subscription_;
 
+#if !BUILDFLAG(IS_ANDROID)
   // Subscriptions for changes to BrowserWindowInterface::IsActive.
   base::CallbackListSubscription window_did_become_active_subscription_;
   base::CallbackListSubscription window_did_become_inactive_subscription_;
+#endif
 
   std::unique_ptr<TabDataObserver> tab_data_observer_;
 
   base::WeakPtrFactory<TabObserver> weak_ptr_factory_{this};
 };
 
-GlicTabDataObserver::GlicTabDataObserver() = default;
+GlicTabDataObserver::GlicTabDataObserver(Profile* profile)
+    : profile_(profile) {}
 GlicTabDataObserver::~GlicTabDataObserver() = default;
 
 void GlicTabDataObserver::OnTabWillClose(tabs::TabHandle tab_handle) {
@@ -145,6 +169,10 @@ void GlicTabDataObserver::SubscribeToTabData(
   tabs::TabInterface::Handle handle(tab_id);
   tabs::TabInterface* tab = handle.Get();
   if (!tab) {
+    remote.reset();
+    return;
+  }
+  if (tab->GetProfile() != profile_) {
     remote.reset();
     return;
   }

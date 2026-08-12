@@ -4,31 +4,39 @@
 
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
 #include <array>
-#include <iterator>
+#include <string>
 #include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/i18n/char_iterator.h"
-#include "base/no_destructor.h"
+#include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/branding_buildflags.h"
 #include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
+#include "components/autofill/core/browser/geo/country_data.h"
 #include "components/autofill/core/browser/webdata/autofill_table_utils.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/strings/grit/components_strings.h"
+#include "third_party/icu/source/common/unicode/umachine.h"
+#include "third_party/icu/source/common/unicode/urename.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
-#include "third_party/re2/src/re2/re2.h"
+#include "third_party/icu/source/common/unicode/utypes.h"
 
 namespace autofill::data_util {
 
@@ -44,32 +52,27 @@ namespace {
 // https://w3c.github.io/webpayments-methods-card/#method-id
 
 constexpr PaymentRequestData kPaymentRequestData[]{
-    {autofill::kAmericanExpressCard, "amex", IDR_AUTOFILL_METADATA_CC_AMEX,
+    {kAmericanExpressCard, "amex", IDR_AUTOFILL_METADATA_CC_AMEX,
      IDS_AUTOFILL_CC_AMEX},
-    {autofill::kDinersCard, "diners", IDR_AUTOFILL_METADATA_CC_DINERS,
+    {kDinersCard, "diners", IDR_AUTOFILL_METADATA_CC_DINERS,
      IDS_AUTOFILL_CC_DINERS},
-    {autofill::kDiscoverCard, "discover", IDR_AUTOFILL_METADATA_CC_DISCOVER,
+    {kDiscoverCard, "discover", IDR_AUTOFILL_METADATA_CC_DISCOVER,
      IDS_AUTOFILL_CC_DISCOVER},
-    {autofill::kEloCard, "elo", IDR_AUTOFILL_METADATA_CC_ELO,
-     IDS_AUTOFILL_CC_ELO},
-    {autofill::kJCBCard, "jcb", IDR_AUTOFILL_METADATA_CC_JCB,
-     IDS_AUTOFILL_CC_JCB},
-    {autofill::kMasterCard, "mastercard", IDR_AUTOFILL_METADATA_CC_MASTERCARD,
+    {kEloCard, "elo", IDR_AUTOFILL_METADATA_CC_ELO, IDS_AUTOFILL_CC_ELO},
+    {kJCBCard, "jcb", IDR_AUTOFILL_METADATA_CC_JCB, IDS_AUTOFILL_CC_JCB},
+    {kMasterCard, "mastercard", IDR_AUTOFILL_METADATA_CC_MASTERCARD,
      IDS_AUTOFILL_CC_MASTERCARD},
-    {autofill::kMirCard, "mir", IDR_AUTOFILL_METADATA_CC_MIR,
-     IDS_AUTOFILL_CC_MIR},
-    {autofill::kTroyCard, "troy", IDR_AUTOFILL_METADATA_CC_TROY,
-     IDS_AUTOFILL_CC_TROY},
-    {autofill::kUnionPay, "unionpay", IDR_AUTOFILL_METADATA_CC_UNIONPAY,
+    {kMirCard, "mir", IDR_AUTOFILL_METADATA_CC_MIR, IDS_AUTOFILL_CC_MIR},
+    {kTroyCard, "troy", IDR_AUTOFILL_METADATA_CC_TROY, IDS_AUTOFILL_CC_TROY},
+    {kUnionPay, "unionpay", IDR_AUTOFILL_METADATA_CC_UNIONPAY,
      IDS_AUTOFILL_CC_UNION_PAY},
-    {autofill::kVerveCard, "verve", IDR_AUTOFILL_METADATA_CC_VERVE,
+    {kVerveCard, "verve", IDR_AUTOFILL_METADATA_CC_VERVE,
      IDS_AUTOFILL_CC_VERVE},
-    {autofill::kVisaCard, "visa", IDR_AUTOFILL_METADATA_CC_VISA,
-     IDS_AUTOFILL_CC_VISA},
+    {kVisaCard, "visa", IDR_AUTOFILL_METADATA_CC_VISA, IDS_AUTOFILL_CC_VISA},
 };
 
 constexpr PaymentRequestData kGenericPaymentRequestData = {
-    autofill::kGenericCard, "generic", IDR_AUTOFILL_METADATA_CC_GENERIC,
+    kGenericCard, "generic", IDR_AUTOFILL_METADATA_CC_GENERIC,
     IDS_AUTOFILL_CC_GENERIC};
 
 constexpr auto kNamePrefixes = std::to_array<std::string_view>(
@@ -249,16 +252,16 @@ bool SplitCJKName(const std::vector<std::u16string_view>& name_tokens,
 void AddGroupToBitmask(uint32_t* group_bitmask, FieldType type) {
   const FieldTypeGroup group = GroupTypeOfFieldType(type);
   switch (group) {
-    case autofill::FieldTypeGroup::kName:
+    case FieldTypeGroup::kName:
       *group_bitmask |= kName;
       break;
-    case autofill::FieldTypeGroup::kAddress:
+    case FieldTypeGroup::kAddress:
       *group_bitmask |= kAddress;
       break;
-    case autofill::FieldTypeGroup::kEmail:
+    case FieldTypeGroup::kEmail:
       *group_bitmask |= kEmail;
       break;
-    case autofill::FieldTypeGroup::kPhone:
+    case FieldTypeGroup::kPhone:
       *group_bitmask |= kPhone;
       break;
     default:
@@ -308,7 +311,7 @@ bool IsSupportedFormType(uint32_t groups) {
              2;
 }
 
-std::string GetSuffixForProfileFormType(uint32_t bitmask) {
+std::string_view GetSuffixForProfileFormType(uint32_t bitmask) {
   switch (bitmask) {
     case kAddress | kEmail | kPhone:
     case kName | kAddress | kEmail | kPhone:
@@ -492,6 +495,15 @@ std::u16string JoinNameParts(std::u16string_view given,
 
 const PaymentRequestData& GetPaymentRequestData(
     std::string_view issuer_network) {
+  if (issuer_network == kAmericanExpressCard &&
+      base::FeatureList::IsEnabled(
+          features::kAutofillEnableNewAmexNetworkArt)) {
+    static const PaymentRequestData& payments_request_data = {
+        kAmericanExpressCard, "amex", IDR_AUTOFILL_METADATA_CC_AMEX_NEW,
+        IDS_AUTOFILL_CC_AMEX};
+    return payments_request_data;
+  }
+
   for (const PaymentRequestData& data : kPaymentRequestData) {
     if (issuer_network == data.issuer_network) {
       return data;
@@ -510,30 +522,29 @@ const char* GetIssuerNetworkForBasicCardIssuerNetwork(
   return kGenericPaymentRequestData.issuer_network;
 }
 
-bool IsValidBasicCardIssuerNetwork(std::string_view basic_card_issuer_network) {
-  return base::Contains(kPaymentRequestData, basic_card_issuer_network,
-                        &PaymentRequestData::basic_card_issuer_network);
-}
-
 bool IsValidCountryCode(std::string_view country_code) {
-  if (country_code.size() != 2) {
-    return false;
-  }
-  return std::ranges::all_of(country_code, base::IsAsciiUpper<char>);
+  return GetCountryCodes().contains(country_code);
 }
 
 bool IsValidCountryCode(std::u16string_view country_code) {
   return IsValidCountryCode(base::UTF16ToUTF8(country_code));
 }
 
-std::string GetCountryCodeWithFallback(const autofill::AutofillProfile& profile,
+std::string GetCountryCodeWithFallback(const AutofillProfile& profile,
                                        std::string_view app_locale) {
   std::string country_code =
-      base::UTF16ToUTF8(profile.GetRawInfo(autofill::ADDRESS_HOME_COUNTRY));
+      base::UTF16ToUTF8(profile.GetRawInfo(ADDRESS_HOME_COUNTRY));
   if (!IsValidCountryCode(country_code)) {
     country_code = AutofillCountry::CountryCodeForLocale(app_locale);
   }
   return country_code;
+}
+
+bool HaveNonConflictingCountryCodes(const AddressCountryCode& country_code1,
+                                    const AddressCountryCode& country_code2) {
+  return country_code1 == country_code2 ||
+         !IsValidCountryCode(country_code1.value()) ||
+         !IsValidCountryCode(country_code2.value());
 }
 
 }  // namespace autofill::data_util

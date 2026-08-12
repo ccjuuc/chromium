@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("network_change_manager") {
@@ -16,7 +14,6 @@ static_library("network_change_manager") {
     "//base",
     "//chromeos/ash/components/dbus",
     "//chromeos/ash/components/network",
-    "//chromeos/crosapi/mojom",
     "//chromeos/dbus/power",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",

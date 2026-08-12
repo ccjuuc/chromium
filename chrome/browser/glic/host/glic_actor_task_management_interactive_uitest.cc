@@ -4,15 +4,16 @@
 
 #include "base/test/metrics/user_action_tester.h"
 #include "build/build_config.h"
-#include "chrome/browser/actor/actor_features.h"
+#include "chrome/browser/actor/ui/actor_task_unload_handler.h"
 #include "chrome/browser/download/download_test_file_activity_observer.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
 #include "chrome/browser/glic/host/glic_features.mojom-features.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/download_test_observer.h"
@@ -72,7 +73,20 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest, StopActorTask) {
 }
 
 // Tests that closing a tab that's being acted on stops the associated task.
-IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest, StopActorTaskOnTabClose) {
+class GlicActorTaskManagementTabCloseUiTest
+    : public GlicActorTaskManagementUiTest {
+ public:
+  GlicActorTaskManagementTabCloseUiTest() {
+    scoped_feature_list_.InitAndEnableFeature(features::kGlicConfirmTabClose);
+    actor::ActorTaskTabCloseConfirmDialog::SetSuppressForTesting(false);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementTabCloseUiTest,
+                       StopActorTaskOnTabClose) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
 
   const GURL task_url =
@@ -83,8 +97,19 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest, StopActorTaskOnTabClose) {
     InitializeWithOpenGlicWindow(),
     StartActorTaskInNewTab(task_url, kNewActorTabId),
     CheckIsActingOnTab(kNewActorTabId, true),
-    PrepareForStopStateChange(),
+    PrepareForStopStateChange(task_id_),
     CloseTab(kNewActorTabId),
+    InAnyContext(WaitForShow(
+        actor::ActorTaskTabCloseConfirmDialog::kViewId)),
+    InAnyContext(WithView(actor::ActorTaskTabCloseConfirmDialog::kViewId,
+             [](views::View* view) {
+               auto* widget = view->GetWidget();
+               if (widget) {
+                 widget->widget_delegate()->AsDialogDelegate()->AcceptDialog();
+               }
+             })),
+    InAnyContext(WaitForHide(
+        actor::ActorTaskTabCloseConfirmDialog::kViewId)),
     WaitForActorTaskStateChangeToStopped());
   // clang-format on
 }
@@ -371,14 +396,25 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest, CreateTaskNoTitle) {
                       "", "Task has no title"));
 }
 
-IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest, ForegroundActorTaskTab) {
+// Flaky timeout on ASAN.
+// TODO(crbug.com/498409892): Flaky on linux-chromeos-dbg.
+// TODO(crbug.com/498409892): Flaky on linux(dbg). Seems that this test is slow
+// and causes timeout.
+#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_CHROMEOS) || \
+    (BUILDFLAG(IS_LINUX) && !defined(NDEBUG))
+#define MAYBE_ForegroundActorTaskTab DISABLED_ForegroundActorTaskTab
+#else
+#define MAYBE_ForegroundActorTaskTab ForegroundActorTaskTab
+#endif
+IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementUiTest,
+                       MAYBE_ForegroundActorTaskTab) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOtherTabId);
 
 #if BUILDFLAG(IS_LINUX)
   // TODO(crbug.com/466748978): The test flakily times out when trying to focus
   // the other tab on linux-wayland-mutter.
-  if (ui::OzonePlatform::GetPlatformNameForTest() == "wayland") {
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
     GTEST_SKIP() << "Flaky on wayland crbug.com/466748978";
   }
 #endif
@@ -416,12 +452,12 @@ class GlicActorTaskManagementDownloadUiTest
   }
   void SetUpOnMainThread() override {
     GlicActorTaskManagementUiTest::SetUpOnMainThread();
-    browser()->profile()->GetPrefs()->SetBoolean(::prefs::kPromptForDownload,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(::prefs::kPromptForDownload,
+                                                    true);
 
     file_activity_observer_ =
         std::make_unique<DownloadTestFileActivityObserver>(
-            browser()->profile());
+            browser()->GetProfile());
 
     file_activity_observer_->EnableFileChooser(true);
   }
@@ -448,7 +484,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementDownloadUiTest,
   const GURL task_url = embedded_test_server()->GetURL("/actor/download.html");
 
   content::DownloadManager* download_manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   std::unique_ptr<content::DownloadTestObserverTerminal> download_observer;
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
@@ -492,7 +528,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementDownloadUiTest,
   const GURL task_url = embedded_test_server()->GetURL("/actor/download.html");
 
   content::DownloadManager* download_manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   std::unique_ptr<content::DownloadTestObserverTerminal> download_observer;
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
@@ -539,7 +575,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorTaskManagementDownloadUiTest,
       embedded_test_server()->GetURL("example.com", "/actor/download.html");
 
   content::DownloadManager* download_manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   std::unique_ptr<content::DownloadTestObserverTerminal> download_observer;
   RunTestSequence(
       InitializeWithOpenGlicWindow(),

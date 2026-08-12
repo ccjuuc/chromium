@@ -38,6 +38,7 @@
 #include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/native_theme_observer.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/input_event_activation_protector.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/native_widget_delegate.h"
 #include "ui/views/window/client_view.h"
@@ -165,6 +166,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   using Widgets = std::set<raw_ptr<Widget, SetExperimental>>;
   using ShapeRects = std::vector<gfx::Rect>;
   using PaintAsActiveCallbackList = base::RepeatingClosureList;
+
+  enum class ClosedReason;
+  using ClosedCallback = base::OnceCallback<void(ClosedReason)>;
 
   enum class FrameType {
     kDefault,      // Use whatever the default would be.
@@ -484,9 +488,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // If true, force the window not to be shown in the taskbar, even for
     // window types that do appear in the taskbar by default.
     bool dont_show_in_taskbar = false;
-
-    // If true, adds the WS_SYSMENU style to TYPE_WINDOW_FRAMELESS windows.
-    bool force_system_menu_for_frameless = false;
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_LINUX)
@@ -499,6 +500,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
     // Only used by Wayland, for root level windows.
     std::string wayland_app_id;
+    // The startup ID (or XDG activation token) used to associate the window
+    // with the launch event that created it. Used for both X11 and Wayland.
+    std::string startup_id;
 #endif  // BUILDFLAG(IS_LINUX)
 
     // If true then the widget uses software compositing.
@@ -784,6 +788,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Returns the bounds of the Widget's client area in screen coordinates.
   gfx::Rect GetClientAreaBoundsInScreen() const;
 
+  // Returns the non decorated client area bounds, as perceived by the user
+  // (including title bar and excluding shadows), in screen coordinates.
+  gfx::Rect GetNonDecoratedClientAreaBoundsInScreen() const;
+
   // Retrieves the restored bounds for the window.
   gfx::Rect GetRestoredBounds() const;
 
@@ -828,6 +836,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Whether calling RunMoveLoop() is supported for the widget.
   bool IsMoveLoopSupported() const;
+
+  // Returns true if a mouse button is currently down.
+  bool IsMouseButtonDown() const;
 
   // Starts a nested run loop that moves the window. This can be used to
   // start a window move operation from a mouse or touch event. This returns
@@ -885,21 +896,20 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   //
   //  // Called by the implementation of DialogDelegate when the user clicks the
   //  // close/cancel buttons, or presses `esc`.
-  //  void Client::CloseWidget(Widget::CloseReason reason) {
+  //  void Client::CloseWidget(Widget::ClosedReason reason) {
   //    LogExactlyOnceOnWidgetDestruction(reason);
   //    widget_.reset();
   //  }
   //
   //  // If the client wants to close the widget, it can also do so.
   //  Client::ClientCloseWidget() {
-  //    CloseWidget(CloseReason::kUnspecified);
+  //    CloseWidget(Widget::ClosedReason::kUnspecified);
   //  }
   //
   // It is OK to not reset the Widget in the callback. This blocks the window
   // from closing. Used for example in web page unload handlers that shows a
   // dialog to the user to confirm whether to discard changes.
-  void MakeCloseSynchronous(
-      base::OnceCallback<void(ClosedReason)> override_close);
+  void MakeCloseSynchronous(ClosedCallback override_close);
 
   // A UI test which tries to asynchronously examine a widget (e.g. the pixel
   // tests) will fail if the widget is closed before that.  This can happen
@@ -961,6 +971,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // default implementation simply calls CanActivate().
   virtual bool ShouldViewsStyleFollowWidgetActivation() const;
 
+  // [Deprecated] Legacy implementation of above method.
+  bool ShouldDescendIntoChildForEventHandlingDeprecated(
+      ui::Layer* root_layer,
+      gfx::NativeView child,
+      ui::Layer* child_layer,
+      const gfx::Point& location);
+
   // Sets the z-order of the widget. This only applies to top-level widgets.
   void SetZOrderLevel(ui::ZOrderLevel order);
 
@@ -1001,6 +1018,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // IsVisbleOnAllWorkspaces() == true (for example, when the platform doesn't
   // support workspaces).
   bool IsVisibleOnAllWorkspaces() const;
+
+#if BUILDFLAG(IS_MAC)
+  // Moves the widget into an active fullscreen space. Used to ensure that
+  // picture-in-picture windows can display on top of fullscreen.
+  void MoveToActiveFullscreenSpace();
+#endif  // BUILDFLAG(IS_MAC)
 
   // Maximizes/minimizes/restores the window.
   void Maximize();
@@ -1051,16 +1074,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   View* GetRootView();
   const View* GetRootView() const;
 
-  // A secondary widget is one that is automatically closed (via Close()) when
-  // all non-secondary widgets are closed.
-  // Default is true.
-  // TODO(beng): This is an ugly API, should be handled implicitly via
-  //             transience.
-  void set_is_secondary_widget(bool is_secondary_widget) {
-    is_secondary_widget_ = is_secondary_widget;
-  }
-  bool is_secondary_widget() const { return is_secondary_widget_; }
-
   // Returns whether the Widget is mapped by the window server. It doesn't
   // necessarily mean the window's pixels are currently visible on a physical
   // display to the user.
@@ -1104,25 +1117,26 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Returns the SublevelManager for this widget.
   SublevelManager* GetSublevelManager();
 
-  // Starts a drag operation for the specified view. This blocks until the drag
-  // operation completes or is cancelled by calling `CancelShellDrag()`.
-  // |view| can be NULL.
+  // Starts a drag-drop operation for the specified view. This blocks until the
+  // drag-drop operation completes or is cancelled by calling
+  // `CancelDragDropLoop()`. |view| can be NULL.
+  //
   // If the view is non-NULL it can be accessed during the drag by calling
   // dragged_view(). If the view has not been deleted during the drag,
   // OnDragDone() is called on it. |location| is in the widget's coordinate
   // system. |view| must be hosted by this widget.
-  void RunShellDrag(View* view,
-                    std::unique_ptr<ui::OSExchangeData> data,
-                    const gfx::Point& location,
-                    int operation,
-                    ui::mojom::DragEventSource source);
+  void RunDragDropLoop(View* view,
+                       std::unique_ptr<ui::OSExchangeData> data,
+                       const gfx::Point& location,
+                       int operation,
+                       ui::mojom::DragEventSource source);
 
   // Cancels a currently running drag operation for the specified view. |view|
   // can be NULL.
-  void CancelShellDrag(View* view);
+  void CancelDragDropLoop(View* view);
 
   // Returns the view that requested the current drag operation via
-  // RunShellDrag(), or NULL if there is no such view or drag operation.
+  // RunDragDropLoop(), or NULL if there is no such view or drag operation.
   View* dragged_view() {
     return const_cast<View*>(const_cast<const Widget*>(this)->dragged_view());
   }
@@ -1298,6 +1312,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   bool movement_disabled() const { return movement_disabled_; }
   void set_movement_disabled(bool disabled) { movement_disabled_ = disabled; }
 
+  // True if the widget is currently being dragged.
+  bool is_dragging() const { return is_dragging_; }
+
   // Returns the work area bounds of the screen the Widget belongs to.
   gfx::Rect GetWorkAreaBoundsInScreen() const;
 
@@ -1356,6 +1373,21 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // the ShouldPaintAsActive() state.
   void NotifyPaintAsActiveChanged();
 
+  // Enables input protection. Installs standard policies (occlusion, window
+  // activation, click-spam) if `custom_protector` is nullptr. Otherwise, the
+  // caller must configure the provided protector with the desired policies.
+  // See ui/views/input_protection/README.md for details on how this works.
+  void EnableInputEventActivationProtection(
+      std::unique_ptr<InputEventActivationProtector> custom_protector =
+          nullptr);
+
+  // Returns true if input event activation protection is enabled.
+  bool IsInputEventActivationProtectionEnabled() const;
+
+  InputEventActivationProtector* input_protector_for_testing() {
+    return input_protector_.get();
+  }
+
   base::WeakPtr<Widget> GetWeakPtr();
 
   // Overridden from NativeWidgetDelegate:
@@ -1379,6 +1411,8 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   void OnNativeWidgetSizeChanged(const gfx::Size& new_size) override;
   void OnNativeWidgetUserResizeStarted() override;
   void OnNativeWidgetUserResizeEnded() override;
+  void OnNativeWidgetUserDragStarted() override;
+  void OnNativeWidgetUserDragEnded() override;
   void OnNativeWidgetWorkspaceChanged() override;
   void OnNativeWidgetWindowShowStateChanged() override;
   void OnNativeWidgetBeginUserBoundsChange() override;
@@ -1428,6 +1462,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // e.g. if set to kDark, colors will always be for the dark theme.
   void SetColorModeOverride(
       std::optional<ui::ColorProviderKey::ColorMode> color_mode);
+  std::optional<ui::ColorProviderKey::ColorMode> color_mode_override() const {
+    return color_mode_override_;
+  }
 
   // Sets an override for `user_color` when `GetColorProvider()` is requested.
   // e.g. if set to kDark, colors will always be for the dark theme.
@@ -1461,6 +1498,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   void SetAllowScreenshots(bool allow);
   bool AreScreenshotsAllowed();
 
+#if BUILDFLAG(IS_WIN)
+  // Called to exclude this window from screen capture.
+  // Note: On macOS, equivalent functionality is handled at the capturer
+  // level via ScreenCaptureKit (see screen_capture_kit_device_mac.mm).
+  void SetExcludeFromScreenCapture(bool exclude);
+#endif
+
   // Called when we become / stop being `child_widget`'s parent.
   void OnChildAdded(Widget* child_widget);
   void OnChildRemoved(Widget* child_widget);
@@ -1486,11 +1530,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // TODO(beng): remove once we fold those objects onto this one.
   void DestroyRootView();
 
-  // Notification that a drag will start. Default implementation does nothing.
-  virtual void OnDragWillStart();
+  // Notification that a drag-and-drop session will start. Default
+  // implementation does nothing.
+  virtual void OnDragDropWillStart();
 
-  // Notification that the drag performed by RunShellDrag() has completed.
-  virtual void OnDragComplete();
+  // Notification that the drag-and-drop session has completed, whether
+  // successfully or because it was cancelled by calling `CancelDragDropLoop()`.
+  virtual void OnDragDropCompleted();
 
   // Set the native theme from which this widget gets color from.
   void SetNativeTheme(ui::NativeTheme* native_theme);
@@ -1523,6 +1569,7 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   };
 
   class PaintAsActiveLockImpl;
+  class ScopedCallStackLock;
 
   friend class ButtonTest;
   friend class ComboboxTest;
@@ -1600,6 +1647,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   ui::ColorId GetBackgroundColorId() const;
 
+  // Returns true if the event is a possibly unintended interaction.
+  bool IsPossiblyUnintendedInteraction(const ui::Event& event,
+                                       const View* target);
+
   static DisableActivationChangeHandlingType
       g_disable_activation_change_handling_;
 
@@ -1611,7 +1662,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // through the |native_widget_| weak ptr.
   std::unique_ptr<internal::NativeWidgetPrivate> owned_native_widget_;
 
-  base::ObserverList<WidgetObserver> observers_;
+  // A WidgetObserver handles an event that invokes other events, therefore is
+  // inherently reentrant.
+  base::ReentrantObserverList<WidgetObserver> observers_;
 
   base::ObserverList<WidgetRemovalsObserver>::Unchecked removals_observers_;
 
@@ -1652,15 +1705,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // order specified by their InitParams::sublevel.
   std::unique_ptr<SublevelManager> sublevel_manager_;
 
-  // Valid for the lifetime of RunShellDrag(), indicates the view the drag
+  // Valid for the lifetime of RunDragDropLoop(), indicates the view the drag
   // started from.
   raw_ptr<View> dragged_view_ = nullptr;
 
   // See class documentation for Widget above for a note about ownership.
   InitParams::Ownership ownership_ = InitParams::NATIVE_WIDGET_OWNS_WIDGET;
-
-  // See set_is_secondary_widget().
-  bool is_secondary_widget_ = true;
 
   // If set, overrides this value is used instead of the one from NativeTheme
   // when constructing a ColorProvider.
@@ -1695,6 +1745,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Set to true if the widget is in the process of being destroyed.
   bool is_destroying_ = false;
+
+  // Set to true after HandleWidgetDestroying called.
+  bool widget_destroying_handled_ = false;
 
   // Set to true after OnWidgetDestroyed called.
   bool native_widget_destroyed_ = false;
@@ -1762,6 +1815,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // Block the widget from closing.
   bool block_close_ = false;
 
+  // True if the widget is currently being dragged.
+  bool is_dragging_ = false;
+
   // The native theme this widget is using.
   // If nullptr, defaults to use the regular native theme.
   raw_ptr<ui::NativeTheme> native_theme_ = nullptr;
@@ -1771,6 +1827,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // fullscreen. However, on macOS some child widgets logically correspond to
   // the same window. Their fullscreen state should inherit from their parents.
   bool check_parent_for_fullscreen_ = false;
+
+  // Whether any method using this Widget is still on the call stack. Used to
+  // crash in the destructor if so, to turn UaFs into predictable crashes.
+  bool on_call_stack_ = false;
 
   // Replaces the implementation of Close() and CloseWithReason().
   base::OnceCallback<void(ClosedReason)> override_close_;
@@ -1785,6 +1845,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   base::ScopedObservation<ui::AXPlatform, ui::AXModeObserver>
       ax_mode_observation_{this};
+
+  // Handles input protection for this widget.
+  std::unique_ptr<InputEventActivationProtector> input_protector_;
+
+  // True if input protection is enabled for this widget.
+  bool input_event_activation_protection_enabled_ = false;
 
   // Indicates whether there is an autosize task in the task queue. Also used to
   // cancel the autosize task in testing.

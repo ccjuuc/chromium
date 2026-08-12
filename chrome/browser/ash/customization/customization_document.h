@@ -63,6 +63,10 @@ class CustomizationDocument {
   // Return true if the document was successfully fetched and parsed.
   bool IsReady() const { return root_.get(); }
 
+  void set_root_for_test(std::unique_ptr<base::DictValue> root) {
+    root_ = std::move(root);
+  }
+
  protected:
   explicit CustomizationDocument(const std::string& accepted_version);
 
@@ -73,7 +77,7 @@ class CustomizationDocument {
                                       const std::string& dictionary_name,
                                       const std::string& entry_name) const;
 
-  std::unique_ptr<base::Value::Dict> root_;
+  std::unique_ptr<base::DictValue> root_;
 
   // Value of the "version" attribute that is supported.
   // Otherwise config is not loaded.
@@ -179,7 +183,7 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   bool GetDefaultWallpaperUrl(GURL* out_url) const;
 
   // Returns list of default apps.
-  std::optional<base::Value::Dict> GetDefaultApps() const;
+  std::optional<base::DictValue> GetDefaultApps() const;
 
   // Creates an extensions::ExternalLoader that will provide OEM default apps.
   // Cache of OEM default apps stored in profile preferences.
@@ -248,8 +252,8 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   void OnManifestLoaded();
 
   // Returns list of default apps in ExternalProvider format.
-  static base::Value::Dict GetDefaultAppsInProviderFormat(
-      const base::Value::Dict& root);
+  static base::DictValue GetDefaultAppsInProviderFormat(
+      const base::DictValue& root);
 
   // Update cached manifest for |profile|.
   void UpdateCachedManifest(Profile* profile);
@@ -258,11 +262,11 @@ class ServicesCustomizationDocument : public CustomizationDocument {
   void OnCustomizationNotFound();
 
   // Set OEM apps folder name for AppListSyncableService for |profile|.
-  void SetOemFolderName(Profile* profile, const base::Value::Dict& root);
+  void SetOemFolderName(Profile* profile, const base::DictValue& root);
 
   // Returns the name of the folder for OEM apps for given |locale|.
   std::string GetOemAppsFolderNameImpl(const std::string& locale,
-                                       const base::Value::Dict& root) const;
+                                       const base::DictValue& root) const;
 
   // Start download of wallpaper image if needed.
   void StartOEMWallpaperDownload(const GURL& wallpaper_url,
@@ -308,7 +312,7 @@ class ServicesCustomizationDocument : public CustomizationDocument {
 
   // Delay between checks for network online state. If the optional is empty,
   // the default value for delay is used.
-  std::optional<base::TimeDelta> custom_network_delay_ = std::nullopt;
+  std::optional<base::TimeDelta> custom_network_delay_;
 
   // Known external loaders.
   ExternalLoaders external_loaders_;

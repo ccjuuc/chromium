@@ -39,6 +39,42 @@
           {
             "builder_id": {
               "bucket": "ci",
+              "builder": "Dawn Android arm64 DEPS Release (Pixel 10)",
+              "project": "chromium"
+            },
+            "builder_spec": {
+              "builder_group": "chromium.dawn",
+              "execution_mode": "TEST",
+              "legacy_android_config": {
+                "config": "base_config"
+              },
+              "legacy_chromium_config": {
+                "apply_configs": [
+                  "mb"
+                ],
+                "build_config": "Release",
+                "config": "main_builder",
+                "target_arch": "arm",
+                "target_bits": 64,
+                "target_platform": "android"
+              },
+              "legacy_gclient_config": {
+                "apply_configs": [
+                  "android"
+                ],
+                "config": "chromium"
+              },
+              "parent": {
+                "bucket": "ci",
+                "builder": "Dawn Android arm64 DEPS Builder",
+                "project": "chromium"
+              },
+              "run_tests_serially": true
+            }
+          },
+          {
+            "builder_id": {
+              "bucket": "ci",
               "builder": "Dawn Android arm64 DEPS Release (Pixel 6)",
               "project": "chromium"
             },
@@ -84,12 +120,16 @@
       "builder_ids_in_scope_for_testing": [
         {
           "bucket": "ci",
+          "builder": "Dawn Android arm64 DEPS Release (Pixel 10)",
+          "project": "chromium"
+        },
+        {
+          "bucket": "ci",
           "builder": "Dawn Android arm64 DEPS Release (Pixel 6)",
           "project": "chromium"
         }
       ],
-      "targets_spec_directory": "infra/config/generated/builders/try/dawn-android-arm64-deps-rel/targets",
-      "targets_spec_directory_relative_to_source_dir": true
+      "targets_spec_directory": "infra/config/generated/builders/try/dawn-android-arm64-deps-rel/targets"
     }
   },
   "$build/siso": {
@@ -97,10 +137,10 @@
       "builder"
     ],
     "enable_cloud_monitoring": true,
-    "enable_cloud_profiler": true,
     "enable_cloud_trace": true,
     "experiments": [],
-    "metrics_project": "chromium-reclient-metrics",
+    "keep_going": 3,
+    "profile_mode": "cloud",
     "project": "rbe-chromium-untrusted",
     "remote_jobs": 150
   },

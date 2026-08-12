@@ -8,23 +8,21 @@
 #include <memory>
 #include <string_view>
 
-#include "base/command_line.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
-#include "base/path_service.h"
-#include "base/process/launch.h"
 #include "base/run_loop.h"
-#include "base/strings/cstring_view.h"
-#include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "net/base/cache_type.h"
+#include "net/base/features.h"
+#include "net/disk_cache/sql/sql_async_task_manager.h"
 #include "net/disk_cache/sql/sql_backend_constants.h"
 #include "net/disk_cache/sql/sql_persistent_store.h"
+#include "net/disk_cache/sql/test_util.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,8 +30,9 @@
 namespace disk_cache_sql_queries {
 
 // Defines the set of queries that are used for schema and index creation. These
-// queries are not suitable for checking plans against an already-initialized
-// database.
+// queries are executed during database initialization and do not operate on
+// existing data, so their performance is not as critical as data manipulation
+// queries.
 constexpr auto kSchemaAndIndexQueries = base::MakeFixedFlatSet<Query>({
     Query::kInitSchema_CreateTableResources,
     Query::kInitSchema_CreateTableBlobs,
@@ -43,9 +42,18 @@ constexpr auto kSchemaAndIndexQueries = base::MakeFixedFlatSet<Query>({
     Query::kIndex_BlobsResIdStart,
 });
 
-class SqlPersistentStoreQueriesTest : public testing::Test {
+class SqlPersistentStoreQueriesTest : public testing::TestWithParam<bool> {
  protected:
-  void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
+  void SetUp() override {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(
+          net::features::kRendererAccessibleHttpCache);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          net::features::kRendererAccessibleHttpCache);
+    }
+    ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+  }
 
   // Creates a database file with the correct schema in the temporary directory.
   // This is done by instantiating and initializing a SqlPersistentStore, which
@@ -61,7 +69,8 @@ class SqlPersistentStoreQueriesTest : public testing::Test {
     auto store = std::make_unique<disk_cache::SqlPersistentStore>(
         path, kDefaultMaxBytes, net::CacheType::DISK_CACHE,
         std::vector<scoped_refptr<base::SequencedTaskRunner>>(
-            {background_task_runner}));
+            {background_task_runner}),
+        async_task_manager_, /*cleanup_tracker=*/nullptr);
 
     base::test::TestFuture<disk_cache::SqlPersistentStore::Error> future;
     store->Initialize(future.GetCallback());
@@ -80,46 +89,25 @@ class SqlPersistentStoreQueriesTest : public testing::Test {
   // `sqlite_dev_shell` tool. This allows verifying that the query optimizer is
   // using the expected indexes, which is critical for performance.
   std::string GetQueryPlan(base::cstring_view query) {
-    base::CommandLine command_line(GetExecSqlShellPath());
-    command_line.AppendArgPath(temp_dir_.GetPath().Append(
-        disk_cache::kSqlBackendDatabaseShard0FileName));
-
-    std::string explain_query = base::StrCat({"EXPLAIN QUERY PLAN ", query});
-    command_line.AppendArg(explain_query);
-
-    std::string output;
-    if (!base::GetAppOutput(command_line, &output)) {
-      return "Failed to execute sqlite_dev_shell";
-    }
-    base::TrimWhitespaceASCII(output, base::TRIM_ALL, &output);
-    if (base::StartsWith(output, "QUERY PLAN")) {
-      std::string_view temp = output;
-      temp.remove_prefix(strlen("QUERY PLAN"));
-      temp = base::TrimWhitespaceASCII(temp, base::TRIM_LEADING);
-      output = std::string(temp);
-    }
-    return output;
+    return disk_cache::test::GetQueryPlan(
+        temp_dir_.GetPath().Append(
+            disk_cache::kSqlBackendDatabaseShard0FileName),
+        query);
   }
 
   base::ScopedTempDir temp_dir_;
 
  private:
-  // Helper to locate the `sqlite_dev_shell` executable, which is expected to be
-  // in the same directory as the test executable.
-  base::FilePath GetExecSqlShellPath() {
-    base::FilePath path;
-    base::PathService::Get(base::DIR_EXE, &path);
-    return path.AppendASCII("sqlite_dev_shell");
-  }
-
+  base::test::ScopedFeatureList feature_list_;
   base::test::TaskEnvironment task_environment_;
+  disk_cache::SqlAsyncTaskManager async_task_manager_;
 };
 
 // This test verifies that critical SQL queries use the intended indexes by
 // checking their query plans. This is essential for ensuring the performance of
 // database operations. A query that performs a full table scan instead of using
 // an index can lead to significant performance degradation.
-TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
+TEST_P(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
   CreateDatabaseInTemDir();
 
   // Defines the expected query plan for each query. An empty plan indicates
@@ -151,20 +139,45 @@ TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
            {Query::kDeleteResourceByResIds_DeleteFromResources,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kDeleteResourceByResIdReturnHash,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kDeleteLiveResourceByResIdReturnUsageAndHash,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
            {Query::kUpdateEntryLastUsedByKey_UpdateResourceLastUsed,
             "`--SEARCH resources USING "
             "INDEX index_resources_cache_key_hash_doomed "
             "(cache_key_hash=? AND doomed=?)"},
-           {Query::kUpdateEntryLastUsedByResId_UpdateResourceLastUsed,
+           {Query::kInsertIntoResources, ""},
+           {Query::kUpdateLastUsed,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
-           {Query::kUpdateEntryHeaderAndLastUsed_UpdateResource,
+           {Query::kUpdateLastUsedHeader,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
-           {Query::kUpdateEntryHeaderAndLastUsed_UpdateResourceAndHints,
+           {Query::kUpdateLastUsedHeaderHints,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kUpdateLastUsedHints,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kUpdateLastUsedBody,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kUpdateLastUsedBodyHints,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kUpdateLastUsedBodyHeader,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kUpdateLastUsedBodyHeaderHints,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
            {Query::kWriteEntryData_UpdateResource,
+            "`--SEARCH resources USING "
+            "INTEGER PRIMARY KEY (rowid=?)"},
+           {Query::kMoveBlobsToSharedCache_UpdateResource,
             "`--SEARCH resources USING "
             "INTEGER PRIMARY KEY (rowid=?)"},
            {Query::kTrimOverlappingBlobs_DeleteContained,
@@ -220,10 +233,16 @@ TEST_F(SqlPersistentStoreQueriesTest, AllQueriesHaveValidPlan) {
   static_assert(kAllQueriesAndPlans.size() + kSchemaAndIndexQueries.size() ==
                 static_cast<int>(Query::kMaxValue) + 1);
   for (const auto& it : kAllQueriesAndPlans) {
-    const base::cstring_view query_string = GetQuery(it.first);
+    if (!GetParam() &&
+        it.first == Query::kMoveBlobsToSharedCache_UpdateResource) {
+      continue;
+    }
+    const base::cstring_view query_string = GetQuery(it.first, GetParam());
     SCOPED_TRACE(query_string);
     EXPECT_EQ(GetQueryPlan(query_string), it.second);
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(All, SqlPersistentStoreQueriesTest, testing::Bool());
 
 }  // namespace disk_cache_sql_queries

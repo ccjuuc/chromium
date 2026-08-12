@@ -9,10 +9,13 @@ import android.graphics.Rect;
 import android.view.Display;
 import android.view.Surface;
 
+import org.chromium.base.AconfigFlaggedApiDelegate;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.WeakHashMap;
 
 /**
@@ -67,11 +70,16 @@ public class DisplayAndroid {
     public static final class AdaptiveRefreshRateInfo {
         public final boolean supportsAdaptiveRefreshRate;
         public final float suggestedFrameRateHigh;
+        public final @Nullable List<AconfigFlaggedApiDelegate.FrameRateVelocityPoint>
+                velocityMapping;
 
         public AdaptiveRefreshRateInfo(
-                boolean supportsAdaptiveRefreshRate, float suggestedFrameRateHigh) {
+                boolean supportsAdaptiveRefreshRate,
+                float suggestedFrameRateHigh,
+                @Nullable List<AconfigFlaggedApiDelegate.FrameRateVelocityPoint> velocityMapping) {
             this.supportsAdaptiveRefreshRate = supportsAdaptiveRefreshRate;
             this.suggestedFrameRateHigh = suggestedFrameRateHigh;
+            this.velocityMapping = velocityMapping;
         }
 
         @Override
@@ -81,12 +89,15 @@ public class DisplayAndroid {
             }
             AdaptiveRefreshRateInfo other = (AdaptiveRefreshRateInfo) obj;
             return supportsAdaptiveRefreshRate == other.supportsAdaptiveRefreshRate
-                    && suggestedFrameRateHigh == other.suggestedFrameRateHigh;
+                    && suggestedFrameRateHigh == other.suggestedFrameRateHigh
+                    && Objects.equals(velocityMapping, other.velocityMapping);
         }
     }
 
     private static final DisplayAndroidObserver[] EMPTY_OBSERVER_ARRAY =
             new DisplayAndroidObserver[0];
+
+    private static @Nullable DisplayAndroid sNonMultiDisplayForTesting;
 
     private final WeakHashMap<DisplayAndroidObserver, Object /* null */> mObservers;
     // Do NOT add strong references to objects with potentially complex lifetime, like Context.
@@ -116,7 +127,7 @@ public class DisplayAndroid {
     protected boolean mIsDisplayWideColorGamut;
     protected boolean mIsDisplayServerWideColorGamut;
     private AdaptiveRefreshRateInfo mAdaptiveRefreshRateInfo =
-            new AdaptiveRefreshRateInfo(false, 0.0f);
+            new AdaptiveRefreshRateInfo(false, 0.0f, null);
 
     protected static DisplayAndroidManager getManager() {
         return DisplayAndroidManager.getInstance();
@@ -126,9 +137,9 @@ public class DisplayAndroid {
      * Get the non-multi-display DisplayAndroid for the given context. It's safe to call this with
      * any type of context, including the Application.
      *
-     * To support multi-display, obtain DisplayAndroid from WindowAndroid instead.
+     * <p>To support multi-display, obtain DisplayAndroid from WindowAndroid instead.
      *
-     * This function is intended to be analogous to GetPrimaryDisplay() for other platforms.
+     * <p>This function is intended to be analogous to GetPrimaryDisplay() for other platforms.
      * However, Android has historically had no real concept of a Primary Display, and instead uses
      * the notion of a default display for an Activity. Under normal circumstances, this function,
      * called with the correct context, will return the expected display for an Activity. However,
@@ -138,8 +149,30 @@ public class DisplayAndroid {
      * @return What the Android WindowManager considers to be the default display for this context.
      */
     public static DisplayAndroid getNonMultiDisplay(Context context) {
+        if (sNonMultiDisplayForTesting != null) return sNonMultiDisplayForTesting;
         Display display = DisplayAndroidManager.getDefaultDisplayForContext(context);
         return getManager().getDisplayAndroid(display);
+    }
+
+    public static void setNonMultiDisplayForTesting(DisplayAndroid display) {
+        sNonMultiDisplayForTesting = display;
+        ResettersForTesting.register(() -> sNonMultiDisplayForTesting = null);
+    }
+
+    /**
+     * Returns the device's internal, built-in display (ID 0).
+     *
+     * <p>This method always returns the default display (typically the phone or tablet screen),
+     * even if the application is currently running on a secondary screen (such as an external
+     * monitor or in Samsung DeX mode).
+     *
+     * <p>
+     *
+     * @return The {@link DisplayAndroid} corresponding to {@link
+     *     android.view.Display#DEFAULT_DISPLAY}.
+     */
+    /* package */ static DisplayAndroid getGlobalDefaultDisplay() {
+        return getManager().getDisplayAndroid(DisplayAndroidManager.getGlobalDefaultDisplay());
     }
 
     /** Returns the display ID that matches the one defined in Android's Display. */

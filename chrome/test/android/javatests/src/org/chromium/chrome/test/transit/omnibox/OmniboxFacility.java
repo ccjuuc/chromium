@@ -17,9 +17,10 @@ import org.chromium.base.test.transit.OptionalViewElement;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewSpec;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.UrlBar;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
+import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.browser_ui.widget.scrim.ScrimView;
 
 /** Represents the Omnibox focused state showing the URL bar and accepting keyboard input. */
@@ -49,9 +50,8 @@ public class OmniboxFacility extends Facility<CtaPageStation> {
         // Action buttons are 71% displayed in tablets (though the actual image is fully displayed).
         urlBarElement = declareView(URL_FIELD, ViewElement.unscopedOption());
         statusIconElement = declareOptionalView(STATUS_ICON);
-        micButtonElement = declareOptionalView(MIC_BUTTON, ViewElement.displayingAtLeastOption(50));
-        deleteButtonElement =
-                declareOptionalView(DELETE_BUTTON, ViewElement.displayingAtLeastOption(50));
+        micButtonElement = declareOptionalView(MIC_BUTTON);
+        deleteButtonElement = declareOptionalView(DELETE_BUTTON);
     }
 
     public FakeOmniboxSuggestions getFakeSuggestions() {
@@ -70,5 +70,15 @@ public class OmniboxFacility extends Facility<CtaPageStation> {
     public OmniboxEnteredTextFacility setText(String textToSetAndExpect) {
         return runOnUiThreadTo(() -> urlBarElement.value().setText(textToSetAndExpect))
                 .enterFacility(new OmniboxEnteredTextFacility(this, textToSetAndExpect));
+    }
+
+    /**
+     * Clicks the omnibox mic button, expecting to navigate to a search results page.
+     *
+     * @param query the query to expect in the search URL
+     * @return the {@link WebPageStation} representing the search results page
+     */
+    public WebPageStation clickOmniboxMicToSearchPage(String query) {
+        return micButtonElement.clickTo().arriveAt(mHostStation.createSearchPageStation(query));
     }
 }

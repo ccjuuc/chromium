@@ -18,7 +18,6 @@ source_set("confirm") {
     "//ios/chrome/browser/overlays/model",
     "//ios/chrome/browser/overlays/model/public/infobar_banner",
     "//ios/chrome/browser/overlays/model/public/infobar_modal",
-    "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/public/commands",
   ]
 }
@@ -34,7 +33,9 @@ source_set("unit_tests") {
     "//ios/chrome/browser/infobars/model/overlays",
     "//ios/chrome/browser/infobars/model/test",
     "//ios/chrome/browser/overlays/model",
+    "//ios/chrome/browser/shared/public/commands",
     "//ios/web/public/test/fakes",
     "//testing/gtest",
+    "//third_party/ocmock",
   ]
 }

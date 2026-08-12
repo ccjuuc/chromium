@@ -24,7 +24,7 @@ namespace policies {
 //   frames become frozen and record the size of their working set after x
 //   minutes.
 //   TODO(fdoray): Record the working set size x minutes after emptying it.
-//   https://crbug.com/885293
+//   https://crbug.com/40594220
 //
 // Objective #2: Improve performance.
 //   We hypothesize that emptying the working set of a process causes its pages
@@ -80,7 +80,7 @@ class WorkingSetTrimmerPolicy : public GraphOwned,
   void SetLastTrimTime(const ProcessNode* process_node, base::TimeTicks time);
 
   // NodeDataDescriber implementation:
-  base::Value::Dict DescribeProcessNodeData(
+  base::DictValue DescribeProcessNodeData(
       const ProcessNode* node) const override;
 };
 

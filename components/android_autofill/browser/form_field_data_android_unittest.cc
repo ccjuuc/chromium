@@ -13,12 +13,16 @@
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/common/autofill_test_utils.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill {
 namespace {
+
+using ::autofill::test::FormFieldDataEq;
 
 FormFieldData CreateTestField() {
   FormFieldData f;
@@ -100,11 +104,11 @@ TEST_F(FormFieldDataAndroidTest, OnFormFieldDidChange) {
   constexpr std::u16string_view kSampleValue = u"SomeValue";
 
   FormFieldData field;
-  field.set_is_autofilled(true);
+  field.set_is_autofilled_according_to_renderer(true);
   FormFieldDataAndroid field_android(&field);
   EXPECT_CALL(bridge(), UpdateValue(kSampleValue));
   field_android.OnFormFieldDidChange(kSampleValue);
-  EXPECT_FALSE(field.is_autofilled());
+  EXPECT_FALSE(field.is_autofilled_according_to_renderer());
   EXPECT_EQ(field.value(), kSampleValue);
 }
 
@@ -114,7 +118,7 @@ TEST_F(FormFieldDataAndroidTest, OnFormFieldVisibilityDidChange) {
   FormFieldData field;
   field.set_is_focusable(false);
   field.set_role(FormFieldData::RoleAttribute::kOther);
-  EXPECT_FALSE(field.IsFocusable());
+  EXPECT_FALSE(field.is_focusable());
 
   FormFieldDataAndroid field_android(&field);
   FormFieldData field_copy = field;
@@ -124,8 +128,7 @@ TEST_F(FormFieldDataAndroidTest, OnFormFieldVisibilityDidChange) {
   EXPECT_CALL(bridge(), UpdateFocusable(true));
   field_copy.set_is_focusable(true);
   field_android.OnFormFieldVisibilityDidChange(field_copy);
-  EXPECT_TRUE(
-      FormFieldData::IdenticalAndEquivalentDomElements(field, field_copy));
+  EXPECT_THAT(field, FormFieldDataEq(field_copy));
 }
 
 // Tests that field similarity checks include name, name_attribute, id_attribute

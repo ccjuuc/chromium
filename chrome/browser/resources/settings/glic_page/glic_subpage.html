@@ -1,6 +1,15 @@
-<style include="cr-icons cr-shared-style settings-columned-section settings-shared">
+<style include="cr-icons cr-shared-style settings-columned-section
+    settings-shared md-select">
   .keyboard-shortcut-setting {
-    align-items: start;
+    align-items: center;
+  }
+
+  .keyboard-shortcut-setting .md-select {
+    line-height: 22px;
+    margin-inline-start: var(--cr-section-padding);
+    margin-inline-end: var(--cr-section-padding);
+    --md-select-width: fit-content;
+    min-width: 120px;
   }
 
   #mainShortcutSetting {
@@ -59,18 +68,19 @@
           sub-label="$i18n{glicTabstripButtonToggleSublabel}"
           on-settings-boolean-control-change="onTabstripButtonToggleChange_">
       </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="launcherToggle" pref="{{prefs.glic.launcher_enabled}}"
           label="$i18n{glicOsWidgetToggle}"
           sub-label="$i18n{glicOsWidgetToggleSublabel}"
           learn-more-url="$i18n{glicLauncherToggleLearnMoreUrl}"
           on-learn-more-clicked="onLauncherToggleLearnMoreClick_"
-          checked="{{launcherToggleOn_}}"
           on-settings-boolean-control-change="onLauncherToggleChange_">
       </settings-toggle-button>
-      <cr-collapse opened="[[launcherToggleOn_]]">
+      <cr-collapse opened="[[computeMainShortcutOpened_(
+          prefs.glic.launcher_enabled.value,
+          glicHotkeyLocalScopeEnabled_)]]">
         <div class="cr-row keyboard-shortcut-setting"
-             id="mainShortcutSetting">
+            id="mainShortcutSetting">
           <div class="flex cr-padded-text">
             <div class="shortcut-label" aria-hidden>
               $i18n{glicKeyboardShortcut}
@@ -80,23 +90,63 @@
               $i18n{glicKeyboardShortcutSublabel}
               <a id="shortcutsLearnMoreLabel" class="learn-more-label"
                   href="$i18n{glicKeyboardShortcutLearnMoreUrl}"
-                  aria-label="$i18n{glicKeyboardShortcutLearnMoreLabel}"
+                  aria-label="$i18n{glicKeyboardShortcutLearnMoreAriaLabel}"
                   aria-description="$i18n{opensInNewTab}"
                   on-click="onShortcutsLearnMoreClick_" target="_blank">
                 $i18n{glicKeyboardShortcutLearnMoreLabel}
               </a>
             </div>
           </div>
+          <select id="scopeSelector" class="md-select"
+              value="[[selectedScope_]]"
+              on-change="onScopeChanged_"
+              hidden="[[!glicHotkeyLocalScopeEnabled_]]">
+            <option value="CHROME">
+              $i18n{glicHotkeyScopeChrome}
+            </option>
+            <option value="GLOBAL">
+              $i18n{glicHotkeyScopeGlobal}
+            </option>
+          </select>
           <cr-shortcut-input class="cr-padded-text shortcut-input"
               input-aria-label="$i18n{glicKeyboardShortcut}"
+              edit-button-aria-label="$i18n{glicKeyboardShortcutEditLabel}"
+              clear-button-aria-label="$i18n{glicKeyboardShortcutClearLabel}"
               shortcut="[[registeredShortcut_]]"
               allow-ctrl-alt-shortcuts
               on-input-capture-change="onInputCaptureChange_"
               on-shortcut-updated="onShortcutUpdated_">
           </cr-shortcut-input>
         </div>
+        <div class="hr cr-row keyboard-shortcut-setting"
+            hidden="[[!glicSelectionFeatureEnabled_]]"
+            id="selectionShortcutSetting">
+          <div class="flex cr-padded-text">
+            <div class="shortcut-label" aria-hidden>
+              $i18n{glicSelectionShortcut}
+            </div>
+            <div class="secondary">$i18n{glicSelectionShortcutSublabel}
+                <a id="shortcutsSelectionLearnMoreLabel"
+                    class="learn-more-label"
+                    href="$i18n{glicKeyboardShortcutLearnMoreUrl}"
+                    aria-label="$i18n{glicSelectionShortcutLearnMoreAriaLabel}"
+                    aria-description="$i18n{opensInNewTab}"
+                    on-click="onShortcutsLearnMoreClick_" target="_blank">
+                  $i18n{glicKeyboardShortcutLearnMoreLabel}
+                </a>
+            </div>
+          </div>
+          <cr-shortcut-input class="cr-padded-text shortcut-input"
+              input-aria-label="$i18n{glicNavigationShortcut}"
+              edit-button-aria-label="$i18n{glicSelectionShortcutEditLabel}"
+              clear-button-aria-label="$i18n{glicSelectionShortcutClearLabel}"
+              shortcut="[[registeredSelectionShortcut_]]"
+              allow-ctrl-alt-shortcuts
+              on-shortcut-updated="onSelectionShortcutUpdated_">
+          </cr-shortcut-input>
+        </div>
       </cr-collapse>
-      <div class="cr-row keyboard-shortcut-setting"
+      <div class="hr cr-row keyboard-shortcut-setting"
            id="focusToggleShortcutSetting">
         <div class="flex cr-padded-text">
           <div class="shortcut-label" aria-hidden>
@@ -106,7 +156,7 @@
               <a id="shortcutsNavigationLearnMoreLabel"
                   class="learn-more-label"
                   href="$i18n{glicKeyboardShortcutLearnMoreUrl}"
-                  aria-label="$i18n{glicKeyboardShortcutLearnMoreLabel}"
+                  aria-label="$i18n{glicNavigationShortcutLearnMoreAriaLabel}"
                   aria-description="$i18n{opensInNewTab}"
                   on-click="onShortcutsLearnMoreClick_" target="_blank">
                 $i18n{glicKeyboardShortcutLearnMoreLabel}
@@ -115,6 +165,8 @@
         </div>
         <cr-shortcut-input class="cr-padded-text shortcut-input"
             input-aria-label="$i18n{glicNavigationShortcut}"
+            edit-button-aria-label="$i18n{glicNavigationShortcutEditLabel}"
+            clear-button-aria-label="$i18n{glicNavigationShortcutClearLabel}"
             shortcut="[[registeredFocusToggleShortcut_]]"
             allow-ctrl-alt-shortcuts
             on-shortcut-updated="onFocusToggleShortcutUpdated_">
@@ -122,7 +174,7 @@
       </div>
       <settings-toggle-button class="hr"
           id="closedCaptionsToggle"
-          hidden="[[!closedCaptionsFeatureEnabled_]]"
+          hidden="[[!closedCaptionsToggleEnabled_]]"
           pref="{{prefs.glic.closed_captioning_enabled}}"
           label="$i18n{glicClosedCaptionsToggle}"
           sub-label="$i18n{glicClosedCaptionsToggleSublabel}"
@@ -133,8 +185,17 @@
           hidden="[[!showGlicKeepSidepanelOpenOnNewTabsSetting_]]"
           pref="{{prefs.glic.keep_sidepanel_open_on_new_tabs_enabled}}"
           label="$i18n{glicKeepSidepanelOpenOnNewTabsToggle}"
+          sub-label="$i18n{glicKeepSidepanelOpenOnNewTabsToggleSublabel}"
           on-settings-boolean-control-change=
               "onKeepSidepanelOpenOnNewTabsToggleChange_">
+      </settings-toggle-button>
+      <settings-toggle-button class="hr"
+          id="shakeTriggerToggle"
+          hidden="[[!showGlicShakeTrigger_]]"
+          pref="{{prefs.glic.shake_trigger_enabled}}"
+          label="$i18n{glicShakeTriggerToggle}"
+          sub-label="$i18n{glicShakeTriggerToggleSublabel}"
+          on-settings-boolean-control-change="onShakeTriggerToggleChange_">
       </settings-toggle-button>
     </template>
   </div>
@@ -147,34 +208,28 @@
           label="$i18n{glicLocationToggle}"
           sub-label="[[locationSubLabel_]]">
       </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="microphoneToggle" pref="[[fakePref_]]" disabled
           label="$i18n{glicMicrophoneToggle}"
           sub-label="[[microphoneSubLabel_]]">
       </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="tabAccessToggle" pref="[[fakePref_]]" disabled
           label="$i18n{glicTabAccessToggle}"
           sub-label="[[tabAccessSubLabel_]]"
           hidden="[[showGlicDefaultTabContextSetting_]]">
       </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="defaultTabAccessToggle" pref="[[fakePref_]]" disabled
           label="$i18n{glicDefaultTabAccessToggle}"
           sub-label-with-link="[[defaultTabAccessSubLabel_]]"
           on-sub-label-link-clicked="onDefaultTabAccessToggleLearnMoreClick_"
           hidden="[[!showGlicDefaultTabContextSetting_]]">
       </settings-toggle-button>
-      <settings-toggle-button
-          id="webActuationToggleDisabled" pref="[[fakePref_]]" disabled
-          label="$i18n{glicWebActuationToggle}"
-          sub-label-with-link="[[webActuationSubLabel_]]"
-          on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_"
-          hidden="[[!webActuationFeatureEnabled_]]">
-      </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="keepSidepanelOpenOnNewTabsToggle" pref="[[fakePref_]]" disabled
           label="$i18n{glicKeepSidepanelOpenOnNewTabsToggle}"
+          sub-label="$i18n{glicKeepSidepanelOpenOnNewTabsToggleSublabel}"
           hidden="[[!showGlicKeepSidepanelOpenOnNewTabsSetting_]]">
       </settings-toggle-button>
     </template>
@@ -189,14 +244,15 @@
           on-learn-more-clicked="onLocationToggleLearnMoreClick_"
           on-settings-boolean-control-change="onGeolocationToggleChange_">
       </settings-toggle-button>
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="microphoneToggle" pref="{{prefs.glic.microphone_enabled}}"
           label="$i18n{glicMicrophoneToggle}"
           sub-label="[[microphoneSubLabel_]]"
+          hidden="[[!microphoneToggleEnabled_]]"
           on-settings-boolean-control-change="onMicrophoneToggleChange_">
       </settings-toggle-button>
       <div hidden="[[showGlicDefaultTabContextSetting_]]">
-      <settings-toggle-button
+      <settings-toggle-button class="hr"
           id="tabAccessToggle" pref="{{prefs.glic.tab_context_enabled}}"
           label="$i18n{glicTabAccessToggle}"
           sub-label="[[tabAccessSubLabel_]]"
@@ -207,7 +263,8 @@
         <div id="tabAccessToggleActions" class="toggle-actions-container"
             slot="more-actions">
           <cr-expand-button id="tabAccessExpandButton" no-hover
-              expanded="{{tabAccessToggleExpanded_}}">
+              expanded="{{tabAccessToggleExpanded_}}"
+              aria-label="$i18n{glicTabAccessToggle}">
           </cr-expand-button>
           <div class="separator"></div>
         </div>
@@ -263,7 +320,7 @@
         </cr-collapse>
       </div>
       <div hidden="[[!showGlicDefaultTabContextSetting_]]">
-        <settings-toggle-button
+        <settings-toggle-button class="hr"
             id="defaultTabAccessToggle"
             pref="{{prefs.glic.default_tab_context_enabled}}"
             label="$i18n{glicDefaultTabAccessToggle}"
@@ -275,7 +332,8 @@
               class="toggle-actions-container"
               slot="more-actions">
             <cr-expand-button id="defaultTabAccessExpandButton" no-hover
-                expanded="{{defaultTabAccessToggleExpanded_}}">
+                expanded="{{defaultTabAccessToggleExpanded_}}"
+                aria-label="$i18n{glicDefaultTabAccessToggle}">
             </cr-expand-button>
             <div class="separator"></div>
           </div>
@@ -347,48 +405,196 @@
           </div>
         </cr-collapse>
       </div>
-      <div hidden="[[!webActuationFeatureEnabled_]]">
-        <template is="dom-if"
-                  if="[[!isWebActuationDisabledForEnterprise_]]" restamp>
-          <settings-toggle-button
-              id="webActuationToggle"
-              pref="{{prefs.glic.user_enabled_actuation_on_web}}"
-              label="$i18n{glicWebActuationToggle}"
-              sub-label-with-link="[[webActuationSubLabel_]]"
-              on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_"
-              on-settings-boolean-control-change="onWebActuationToggleChange_"
-              no-toggle-on-host-click on-click="onWebActuationExpand_">
-              <div id="webActuationToggleActions"
-                class="toggle-actions-container"
-                slot="more-actions">
-              <cr-expand-button id="webActuationExpandButton" no-hover
-                  expanded="{{webActuationEnabledExpanded_}}">
-              </cr-expand-button>
-              <div class="separator"></div>
-            </div>
-          </settings-toggle-button>
-        </template>
-        <template is="dom-if"
-                  if="[[isWebActuationDisabledForEnterprise_]]" restamp>
-          <settings-toggle-button disabled
-              id="webActuationToggle"
-              pref="[[webActuationDisabledForEnterprisePref_]]"
-              label="$i18n{glicWebActuationToggle}"
-              sub-label-with-link="[[webActuationSubLabel_]]"
-              on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_"
-              no-toggle-on-host-click on-click="onWebActuationExpand_">
-              <div id="webActuationToggleActions"
-                class="toggle-actions-container"
-                slot="more-actions">
-              <cr-expand-button id="webActuationExpandButton" no-hover
-                  expanded="{{webActuationEnabledExpanded_}}">
-              </cr-expand-button>
-              <div class="separator"></div>
-            </div>
-          </settings-toggle-button>
-        </template>
-        <cr-collapse id="webActuationInfoCollapse"
-            opened="[[webActuationEnabledExpanded_]]">
+      <template is="dom-if" if="[[headlessCaptionsEnabled_]]" restamp>
+        <settings-toggle-button class="hr"
+            id="mediaUnderstandingToggle"
+            pref="{{prefs.glic.media_understanding_enabled}}"
+            label="$i18n{glicMediaUnderstandingToggle}"
+            sub-label-with-link="[[i18nAdvanced('glicMediaUnderstandingToggleSublabel')]]"
+            on-sub-label-link-clicked="onMediaUnderstandingToggleLearnMoreClick_">
+        </settings-toggle-button>
+      </template>
+      <settings-toggle-button class="hr"
+          id="shakeTriggerToggle"
+          pref="{{prefs.glic.shake_trigger_enabled}}"
+          hidden="[[!showGlicShakeTrigger_]]"
+          label="$i18n{glicShakeTriggerToggle}"
+          sub-label="$i18n{glicShakeTriggerToggleSublabel}"
+          on-settings-boolean-control-change="onShakeTriggerToggleChange_">
+      </settings-toggle-button>
+      <template is="dom-if" if="[[actorLoginFederatedLoginSupportEnabled_]]"
+          restamp>
+        <cr-link-row id="actorLoginPermissionsButton" class="hr"
+            on-click="onActorLoginPermissionsRowClick_"
+            label="$i18n{glicActorLoginPermissionsSectionTitle}"
+            sub-label="$i18n{glicActorLoginPermissionsSectionSublabel}">
+        </cr-link-row>
+      </template>
+      <cr-link-row id="activityButton" class="hr" on-click="onActivityRowClick_"
+          label="$i18n{glicActivityButton}"
+          sub-label="$i18n{glicActivityButtonSublabel}" external>
+      </cr-link-row>
+      <cr-link-row id="extensionsButton" class="hr"
+          hidden="[[!glicExtensionsFeatureEnabled_]]"
+          on-click="onExtensionsRowClick_"
+          label="$i18n{glicExtensionsButton}"
+          sub-label="$i18n{glicExtensionsButtonSublabel}" external>
+      </cr-link-row>
+      <cr-link-row id="geminiPersonalContextLink" class="hr"
+          hidden="[[!showGlicPersonalContextLink_]]"
+          on-click="onGeminiPersonalContextClick_"
+          label="$i18n{glicPersonalContextSettingButton}"
+          sub-label="$i18n{glicPersonalContextSettingSublabel}" external>
+      </cr-link-row>
+      <cr-link-row id="InstructionLink" class="hr"
+          hidden="[[!showGlicInstructionLink_]]"
+          on-click="onGeminiPersonalContextClick_"
+          label="$i18n{glicInstructionsSettingButton}"
+          sub-label="$i18n{glicInstructionsSettingSublabel}" external>
+      </cr-link-row>
+    </template>
+  </div>
+  <div class="section" hidden="[[!webActuationFeatureEnabled_]]">
+    <h2 class="cr-title-text">$i18n{glicAutoBrowseSection}</h2>
+    <!-- Glic Policy Disabled - show disabled controls -->
+    <template is="dom-if" if="[[disallowedByAdmin_]]" restamp>
+      <settings-toggle-button
+          id="webActuationToggleDisabled" pref="[[fakePref_]]" disabled
+          label="$i18n{glicWebActuationToggle}"
+          sub-label-with-link="[[webActuationSubLabel_]]"
+          on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_">
+      </settings-toggle-button>
+    </template>
+
+    <!-- Glic Policy Enabled -->
+    <template is="dom-if" if="[[!disallowedByAdmin_]]" restamp>
+      <template is="dom-if"
+                if="[[!isWebActuationDisabledForEnterprise_]]" restamp>
+        <settings-toggle-button
+            id="webActuationToggle"
+            pref="{{webActuationEnabledPref_}}"
+            no-set-pref
+            label="$i18n{glicWebActuationToggle}"
+            sub-label-with-link="[[webActuationSubLabel_]]"
+            on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_"
+            on-settings-boolean-control-change="onWebActuationToggleChange_"
+            no-toggle-on-host-click on-click="onWebActuationExpand_">
+            <div id="webActuationToggleActions"
+              class="toggle-actions-container"
+              slot="more-actions">
+            <cr-expand-button id="webActuationExpandButton" no-hover
+                expanded="{{webActuationEnabledExpanded_}}"
+                aria-label="$i18n{glicWebActuationToggle}">
+            </cr-expand-button>
+            <div class="separator"></div>
+          </div>
+        </settings-toggle-button>
+      </template>
+      <template is="dom-if"
+                if="[[isWebActuationDisabledForEnterprise_]]" restamp>
+        <settings-toggle-button disabled
+            id="webActuationToggle"
+            pref="[[webActuationDisabledForEnterprisePref_]]"
+            label="$i18n{glicWebActuationToggle}"
+            sub-label-with-link="[[webActuationSubLabel_]]"
+            on-sub-label-link-clicked="onWebActuationToggleLearnMoreClick_"
+            no-toggle-on-host-click on-click="onWebActuationExpand_">
+            <div id="webActuationToggleActions"
+              class="toggle-actions-container"
+              slot="more-actions">
+            <cr-expand-button id="webActuationExpandButton" no-hover
+                expanded="{{webActuationEnabledExpanded_}}"
+                aria-label="$i18n{glicWebActuationToggle}">
+            </cr-expand-button>
+            <div class="separator"></div>
+          </div>
+        </settings-toggle-button>
+      </template>
+      <cr-collapse id="webActuationInfoCollapse"
+          opened="[[webActuationEnabledExpanded_]]">
+        <div class="settings-columned-section">
+          <div class="column">
+            <h2 class="description-header">$i18n{columnHeadingWhenOn}</h2>
+            <ul class="icon-bulleted-list">
+              <li>
+                <cr-icon aria-hidden="true"
+<if expr="not _google_chrome">
+                    icon="settings20:arrow-selector-tool">
+</if>
+<if expr="_google_chrome">
+                    icon="settings-internal:arrow-selector-spark">
+</if>
+                </cr-icon>
+                <div class="secondary">
+                  $i18n{glicWebActuationToggleWhenOn1}
+                </div>
+              </li>
+              <li>
+                <cr-icon aria-hidden="true"
+                    icon="cr:check-circle">
+                </cr-icon>
+                <div class="secondary">
+                  $i18n{glicWebActuationToggleWhenOn2}
+                </div>
+              </li>
+            </ul>
+          </div>
+          <div class="column">
+            <h2 class="description-header">$i18n{columnHeadingConsider}</h2>
+            <ul class="icon-bulleted-list">
+              <li>
+                <cr-icon aria-hidden="true"
+                  <if expr="not _google_chrome">
+                    icon="settings20:web">
+                  </if>
+                  <if expr="_google_chrome">
+                    icon="settings-internal:screensaver-auto">
+                  </if>
+                </cr-icon>
+                <div class="secondary">
+                  $i18n{glicWebActuationToggleConsider1}
+                </div>
+              </li>
+              <li>
+                <cr-icon aria-hidden="true"
+                    icon="settings20:shield">
+                </cr-icon>
+                <div class="secondary"
+                    inner-h-t-m-l="[[webActuationToggleConsider2_]]">
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </cr-collapse>
+      <template is="dom-if" if="[[showGlicExperimentalTriggering_]]">
+        <settings-toggle-button
+            id="glicExperimentalTriggeringToggle"
+            class="hr"
+            disabled="[[isExperimentalTriggeringDisabled_(
+                webActuationEnabledPref_.value,
+                isWebActuationDisabledForEnterprise_)]]"
+            pref="{{experimentalTriggeringEnabledPref_}}"
+            no-set-pref
+            label="$i18n{glicExperimentalTriggering}"
+            sub-label-with-link="[[experimentalTriggeringSubLabel_]]"
+            on-sub-label-link-clicked=
+                "onExperimentalTriggeringToggleLearnMoreClick_"
+            on-settings-boolean-control-change=
+                "onExperimentalTriggeringToggleChange_"
+            no-toggle-on-host-click on-click="onExperimentalTriggeringExpand_">
+            <div id="experimentalTriggeringToggleActions"
+              class="toggle-actions-container"
+              slot="more-actions">
+            <cr-expand-button id="experimentalTriggeringExpandButton" no-hover
+                expanded="{{experimentalTriggeringExpanded_}}"
+                aria-label="$i18n{glicExperimentalTriggering}">
+            </cr-expand-button>
+            <div class="separator"></div>
+          </div>
+        </settings-toggle-button>
+        <cr-collapse id="experimentalTriggeringInfoCollapse"
+            opened="[[experimentalTriggeringExpanded_]]">
           <div class="settings-columned-section">
             <div class="column">
               <h2 class="description-header">$i18n{columnHeadingWhenOn}</h2>
@@ -403,15 +609,15 @@
 </if>
                   </cr-icon>
                   <div class="secondary">
-                    $i18n{glicWebActuationToggleWhenOn1}
+                    $i18n{glicExperimentalTriggeringWhenOn1}
                   </div>
                 </li>
                 <li>
                   <cr-icon aria-hidden="true"
-                      icon="cr:check-circle">
+                      icon="settings20:agent-mode-2">
                   </cr-icon>
                   <div class="secondary">
-                    $i18n{glicWebActuationToggleWhenOn2}
+                    $i18n{glicExperimentalTriggeringWhenOn2}
                   </div>
                 </li>
               </ul>
@@ -421,15 +627,10 @@
               <ul class="icon-bulleted-list">
                 <li>
                   <cr-icon aria-hidden="true"
-                    <if expr="not _google_chrome">
-                      icon="settings20:web">
-                    </if>
-                    <if expr="_google_chrome">
-                      icon="settings-internal:screensaver-auto">
-                    </if>
+                      icon="privacy:cookie">
                   </cr-icon>
                   <div class="secondary">
-                    $i18n{glicWebActuationToggleConsider1}
+                    $i18n{glicExperimentalTriggeringConsider1}
                   </div>
                 </li>
                 <li>
@@ -437,36 +638,22 @@
                       icon="settings20:shield">
                   </cr-icon>
                   <div class="secondary">
-                    $i18nRaw{glicWebActuationToggleConsider2}
+                    $i18n{glicExperimentalTriggeringConsider2}
+                  </div>
+                </li>
+                <li>
+                  <cr-icon aria-hidden="true"
+                      icon="settings20:stream-science">
+                  </cr-icon>
+                  <div class="secondary">
+                    $i18nRaw{glicExperimentalTriggeringConsider3}
                   </div>
                 </li>
               </ul>
             </div>
           </div>
         </cr-collapse>
-      </div>
-      <cr-link-row id="activityButton" on-click="onActivityRowClick_"
-          label="$i18n{glicActivityButton}"
-          sub-label="$i18n{glicActivityButtonSublabel}" external>
-      </cr-link-row>
-      <cr-link-row id="extensionsButton"
-          hidden="[[!glicExtensionsFeatureEnabled_]]"
-          on-click="onExtensionsRowClick_"
-          label="$i18n{glicExtensionsButton}"
-          sub-label="$i18n{glicExtensionsButtonSublabel}" external>
-      </cr-link-row>
-      <cr-link-row id="geminiPersonalContextLink"
-          hidden="[[!showGlicPersonalContextLink_]]"
-          on-click="onGeminiPersonalContextClick_"
-          label="$i18n{glicPersonalContextSettingButton}"
-          sub-label="$i18n{glicPersonalContextSettingSublabel}" external>
-      </cr-link-row>
-      <cr-link-row id="InstructionLink"
-          hidden="[[!showGlicInstructionLink_]]"
-          on-click="onGeminiPersonalContextClick_"
-          label="$i18n{glicInstructionsSettingButton}"
-          sub-label="$i18n{glicInstructionsSettingSublabel}" external>
-      </cr-link-row>
+      </template>
     </template>
   </div>
 </settings-subpage>

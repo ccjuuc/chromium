@@ -16,6 +16,7 @@
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "base/numerics/checked_math.h"
@@ -65,7 +66,7 @@ ACCESS_MODE ConvertAccessMode(SecurityAccessMode access_mode) {
 // control list to become a null ACL (allowing everyone access!).
 base::HeapArray<uint8_t> AddACEToAcl(
     ACL* old_acl,
-    const std::vector<ExplicitAccessEntry>& entries) {
+    base::span<const ExplicitAccessEntry> entries) {
   std::vector<EXPLICIT_ACCESS> access_entries(entries.size());
   auto entries_interator = access_entries.begin();
   for (const ExplicitAccessEntry& entry : entries) {
@@ -102,12 +103,6 @@ ExplicitAccessEntry::ExplicitAccessEntry(const Sid& sid,
       mode_(mode),
       access_mask_(access_mask),
       inheritance_(inheritance) {}
-
-ExplicitAccessEntry::ExplicitAccessEntry(WellKnownSid known_sid,
-                                         SecurityAccessMode mode,
-                                         DWORD access_mask,
-                                         DWORD inheritance)
-    : ExplicitAccessEntry(Sid(known_sid), mode, access_mask, inheritance) {}
 
 ExplicitAccessEntry::ExplicitAccessEntry(ExplicitAccessEntry&&) = default;
 ExplicitAccessEntry& ExplicitAccessEntry::operator=(ExplicitAccessEntry&&) =
@@ -155,7 +150,7 @@ AccessControlList& AccessControlList::operator=(AccessControlList&&) = default;
 AccessControlList::~AccessControlList() = default;
 
 bool AccessControlList::SetEntries(
-    const std::vector<ExplicitAccessEntry>& entries) {
+    base::span<const ExplicitAccessEntry> entries) {
   if (entries.empty()) {
     return true;
   }

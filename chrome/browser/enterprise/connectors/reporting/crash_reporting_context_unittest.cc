@@ -4,9 +4,12 @@
 #include "chrome/browser/enterprise/connectors/reporting/crash_reporting_context.h"
 
 #include "base/command_line.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
@@ -66,31 +69,21 @@ constexpr int kDefaultCrashpadPollingIntervalSeconds = 3600;
 
 }  // namespace
 
-class CrashReportingContextTest : public testing::TestWithParam<bool> {
+class CrashReportingContextTest : public testing::Test {
  public:
   CrashReportingContextTest()
       : profile_manager_(TestingBrowserProcess::GetGlobal()) {}
 
   void SetUp() override {
     EXPECT_TRUE(profile_manager_.SetUp());
-
-    if (use_proto_format()) {
-      feature_list_.InitAndEnableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    } else {
-      feature_list_.InitAndDisableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    }
   }
-
-  bool use_proto_format() { return GetParam(); }
 
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager profile_manager_;
   base::test::ScopedFeatureList feature_list_;
 };
 
-TEST_P(CrashReportingContextTest, GetNewReportsFromDB) {
+TEST_F(CrashReportingContextTest, GetNewReportsFromDB) {
   base::ScopedTempDir database_dir;
   ASSERT_TRUE(database_dir.CreateUniqueTempDir());
   std::unique_ptr<crashpad::CrashReportDatabase> database =
@@ -105,7 +98,7 @@ TEST_P(CrashReportingContextTest, GetNewReportsFromDB) {
   EXPECT_EQ(reports.size(), 1u);
 }
 
-TEST_P(CrashReportingContextTest, GetAndSetLatestCrashReportingTime) {
+TEST_F(CrashReportingContextTest, GetAndSetLatestCrashReportingTime) {
   time_t timestamp = base::Time::Now().ToTimeT();
 
   SetLatestCrashReportTime(g_browser_process->local_state(), timestamp);
@@ -113,7 +106,7 @@ TEST_P(CrashReportingContextTest, GetAndSetLatestCrashReportingTime) {
             GetLatestCrashReportTime(g_browser_process->local_state()));
 }
 
-TEST_P(CrashReportingContextTest, UploadToReportingServer) {
+TEST_F(CrashReportingContextTest, UploadToReportingServer) {
   EXPECT_EQ(static_cast<long>(0u),
             GetLatestCrashReportTime(g_browser_process->local_state()));
 
@@ -133,52 +126,35 @@ TEST_P(CrashReportingContextTest, UploadToReportingServer) {
 
   test::SetOnSecurityEventReporting(
       profile->GetPrefs(), /*enabled=*/true,
-      /*enabled_event_names=*/std::set<std::string>(),
+      /*enabled_event_names=*/base::flat_set<std::string>(),
       /*enabled_opt_in_events=*/
-      std::map<std::string, std::vector<std::string>>());
+      base::flat_map<std::string, std::vector<std::string>>());
 
   test::MockRealtimeReportingClient* reporting_client =
       static_cast<test::MockRealtimeReportingClient*>(
           RealtimeReportingClientFactory::GetForProfile(profile));
 
   ::chrome::cros::reporting::proto::Event expected_event_proto;
-  base::Value::Dict expected_event;
 
-  if (use_proto_format()) {
-    auto* browser_crash_event =
-        expected_event_proto.mutable_browser_crash_event();
-    browser_crash_event->set_channel(
-        version_info::GetChannelString(chrome::GetChannel()));
-    browser_crash_event->set_version(version_info::GetVersionNumber());
-    browser_crash_event->set_report_id("123");
-    browser_crash_event->set_platform(version_info::GetOSType());
-    *expected_event_proto.mutable_time() =
-        ToProtoTimestamp(base::Time::FromTimeT(timestamp));
+  auto* browser_crash_event =
+      expected_event_proto.mutable_browser_crash_event();
+  browser_crash_event->set_channel(
+      version_info::GetChannelString(chrome::GetChannel()));
+  browser_crash_event->set_version(version_info::GetVersionNumber());
+  browser_crash_event->set_report_id("123");
+  browser_crash_event->set_platform(version_info::GetOSType());
+  *expected_event_proto.mutable_time() =
+      ToProtoTimestamp(base::Time::FromTimeT(timestamp));
 
-    EXPECT_CALL(*reporting_client,
-                ReportEvent(EqualsProto(expected_event_proto), _))
-        .Times(1);
-  } else {
-    expected_event.Set("channel",
-                       version_info::GetChannelString(chrome::GetChannel()));
-    expected_event.Set("version", version_info::GetVersionNumber());
-    expected_event.Set("reportId", "123");
-    expected_event.Set("platform", version_info::GetOSType());
-
-    EXPECT_CALL(
-        *reporting_client,
-        ReportPastEvent(kBrowserCrashEvent, _, Eq(ByRef(expected_event)),
-                        base::Time::FromTimeT(timestamp)))
-        .Times(1);
-  }
+  EXPECT_CALL(*reporting_client,
+              ReportEvent(EqualsProto(expected_event_proto), _))
+      .Times(1);
 
   UploadToReportingServer(reporting_client->AsWeakPtrImpl(),
                           g_browser_process->local_state(), reports);
   EXPECT_EQ(timestamp,
             GetLatestCrashReportTime(g_browser_process->local_state()));
 }
-
-INSTANTIATE_TEST_SUITE_P(, CrashReportingContextTest, ::testing::Bool());
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_ANDROID)
 

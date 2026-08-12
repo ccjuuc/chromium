@@ -8,10 +8,10 @@ import 'chrome://resources/cr_components/history_embeddings/history_embeddings.j
 import {HistoryResultType} from '//resources/cr_components/history/constants.js';
 import {CrFeedbackOption} from '//resources/cr_elements/cr_feedback_buttons/cr_feedback_buttons.js';
 import {getFaviconForPageURL} from '//resources/js/icon.js';
-import {HistoryEmbeddingsBrowserProxyImpl} from 'chrome://resources/cr_components/history_embeddings/browser_proxy.js';
-import type {HistoryEmbeddingsElement} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.js';
-import {AnswerStatus, PageHandlerRemote, UserFeedback} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.mojom-webui.js';
+import type {HistoryEmbeddingsElement, HistoryEmbeddingsMoreActionsClickEvent, HistoryEmbeddingsResultClickEvent, HistoryEmbeddingsResultContextMenuEvent} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.js';
+import {AnswerStatus, browserProxyFactory, PageHandlerRemote, UserFeedback} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.mojom-webui.js';
 import type {SearchQuery, SearchResult, SearchResultItem} from 'chrome://resources/cr_components/history_embeddings/history_embeddings.mojom-webui.js';
+import type {CrA11yAnnouncerMessagesSentEvent} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
@@ -26,7 +26,7 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
     const mockResults: SearchResultItem[] = [
       {
         title: 'Google',
-        url: {url: 'http://google.com'},
+        url: 'http://google.com',
         urlForDisplay: 'google.com',
         relativeTime: '2 hours ago',
         shortDateTime: 'Sept 2, 2022',
@@ -37,7 +37,7 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       },
       {
         title: 'Youtube',
-        url: {url: 'http://youtube.com'},
+        url: 'http://youtube.com',
         urlForDisplay: 'youtube.com',
         relativeTime: '4 hours ago',
         shortDateTime: 'Sept 2, 2022',
@@ -77,8 +77,8 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
         });
       };
 
-      HistoryEmbeddingsBrowserProxyImpl.setInstance(
-          new HistoryEmbeddingsBrowserProxyImpl(handler));
+      const {instance} = browserProxyFactory.createForTest(handler);
+      browserProxyFactory.setInstance(instance);
 
       element = document.createElement('cr-history-embeddings');
       document.body.appendChild(element);
@@ -189,16 +189,16 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
     });
 
     test('AnnouncesResults', async () => {
-      let announcePromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+      let announcePromise = eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+          'cr-a11y-announcer-messages-sent', document.body);
       let announceEvent = await announcePromise;
       assertEquals(
           'Found 2 best matches for \'some query\'',
           announceEvent.detail.messages.pop());
 
       // New results for the same query should announce.
-      announcePromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+      announcePromise = eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+          'cr-a11y-announcer-messages-sent', document.body);
       element.searchResultChangedForTesting({
         query: 'some query',
         answerStatus: AnswerStatus.kLoading,
@@ -220,8 +220,8 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       });
 
       // New queries with their own results should announce.
-      announcePromise =
-          eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+      announcePromise = eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+          'cr-a11y-announcer-messages-sent', document.body);
       element.searchQuery = 'my new query!';
       announceEvent = await announcePromise;
       const messages = announceEvent.detail.messages;
@@ -283,7 +283,9 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
 
     test('FiresClick', async () => {
       const resultsElements = getResultElements();
-      const resultClickEventPromise = eventToPromise('result-click', element);
+      const resultClickEventPromise =
+          eventToPromise<HistoryEmbeddingsResultClickEvent>(
+              'result-click', element);
       // Prevent clicking from actually open in new tabs for native anchor tags.
       resultsElements[0]!.addEventListener('click', e => e.preventDefault());
       resultsElements[0]!.dispatchEvent(new MouseEvent('click', {
@@ -296,17 +298,18 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       }));
       const resultClickEvent = await resultClickEventPromise;
       assertEquals(mockResults[0], resultClickEvent.detail.item);
-      assertEquals(true, resultClickEvent.detail.middleButton);
-      assertEquals(true, resultClickEvent.detail.altKey);
-      assertEquals(false, resultClickEvent.detail.ctrlKey);
-      assertEquals(false, resultClickEvent.detail.metaKey);
-      assertEquals(true, resultClickEvent.detail.shiftKey);
+      assertTrue(resultClickEvent.detail.middleButton);
+      assertTrue(resultClickEvent.detail.altKey);
+      assertFalse(resultClickEvent.detail.ctrlKey);
+      assertFalse(resultClickEvent.detail.metaKey);
+      assertTrue(resultClickEvent.detail.shiftKey);
     });
 
     test('FiresRecordHistoryLinkClick', async () => {
       const resultsElements = getResultElements();
-      const recordClickEventPromise =
-          eventToPromise('record-history-link-click', element);
+      const recordClickEventPromise = eventToPromise<
+          CustomEvent<{resultType: HistoryResultType, index: number}>>(
+          'record-history-link-click', element);
       // Prevent clicking from actually open in new tabs for native anchor tags.
       resultsElements[1]!.addEventListener('click', e => e.preventDefault());
       resultsElements[1]!.click();
@@ -319,7 +322,8 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
     test('FiresContextMenu', async () => {
       const resultsElements = getResultElements();
       const resultContextMenuEventPromise =
-          eventToPromise('result-context-menu', element);
+          eventToPromise<HistoryEmbeddingsResultContextMenuEvent>(
+              'result-context-menu', element);
       resultsElements[0]!.dispatchEvent(
           new MouseEvent('contextmenu', {clientX: 50, clientY: 100}));
       const resultContextMenuEvent = await resultContextMenuEventPromise;
@@ -335,7 +339,7 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
 
       const resultWithAnswer = {
         title: 'Website with answer',
-        url: {url: 'http://answer.com'},
+        url: 'http://answer.com',
         urlForDisplay: 'Answer.com',
         relativeTime: '2 months ago',
         shortDateTime: 'Sept 2, 2022',
@@ -355,7 +359,9 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       const answerLink = element.shadowRoot.querySelector('.answer-link');
       assertTrue(!!answerLink);
       answerLink.addEventListener('click', e => e.preventDefault());
-      const answerClickEventPromise = eventToPromise('answer-click', element);
+      const answerClickEventPromise =
+          eventToPromise<HistoryEmbeddingsResultClickEvent>(
+              'answer-click', element);
       answerLink.dispatchEvent(new MouseEvent('click', {
         button: 1,
         altKey: true,
@@ -366,14 +372,15 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       }));
       const answerClickEvent = await answerClickEventPromise;
       assertEquals(resultWithAnswer, answerClickEvent.detail.item);
-      assertEquals(true, answerClickEvent.detail.middleButton);
-      assertEquals(true, answerClickEvent.detail.altKey);
-      assertEquals(false, answerClickEvent.detail.ctrlKey);
-      assertEquals(false, answerClickEvent.detail.metaKey);
-      assertEquals(true, answerClickEvent.detail.shiftKey);
+      assertTrue(answerClickEvent.detail.middleButton);
+      assertTrue(answerClickEvent.detail.altKey);
+      assertFalse(answerClickEvent.detail.ctrlKey);
+      assertFalse(answerClickEvent.detail.metaKey);
+      assertTrue(answerClickEvent.detail.shiftKey);
 
       const answerLinkContextMenuEventPromise =
-          eventToPromise('answer-context-menu', element);
+          eventToPromise<HistoryEmbeddingsResultContextMenuEvent>(
+              'answer-context-menu', element);
       answerLink.dispatchEvent(
           new MouseEvent('contextmenu', {clientX: 50, clientY: 100}));
       const answerLinkContextMenuEvent =
@@ -402,7 +409,8 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       // Clicking on the first button should fire the 'more-from-site-click'
       // event with the first item's model, and then close the menu.
       const moreFromSiteEventPromise =
-          eventToPromise('more-from-site-click', element);
+          eventToPromise<HistoryEmbeddingsMoreActionsClickEvent>(
+              'more-from-site-click', element);
       const moreFromSiteItem =
           moreActionsMenu.querySelector<HTMLElement>('#moreFromSiteOption')!;
       moreFromSiteItem.click();
@@ -415,7 +423,8 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       moreActionsIconButtons[1]!.click();
       assertTrue(moreActionsMenu.open);
       const removeItemEventPromise =
-          eventToPromise('remove-item-click', element);
+          eventToPromise<HistoryEmbeddingsMoreActionsClickEvent>(
+              'remove-item-click', element);
       const removeItemItem = moreActionsMenu.querySelector<HTMLElement>(
           '#removeFromHistoryOption')!;
       removeItemItem.click();
@@ -850,7 +859,7 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       // Make the result at index 1 the result corresponding to the answer.
       const resultWithAnswer = {
         title: 'Website with answer',
-        url: {url: 'http://answer.com'},
+        url: 'http://answer.com',
         urlForDisplay: 'Answer.com',
         relativeTime: '2 months ago',
         shortDateTime: 'Sept 2, 2022',
@@ -895,7 +904,7 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
       function sendAnswerWithTextDirectives(directives: string[] = []) {
         const resultWithAnswer = {
           title: 'Website with answer',
-          url: {url: 'http://answer.com'},
+          url: 'http://answer.com',
           urlForDisplay: 'Answer.com',
           relativeTime: '2 months ago',
           shortDateTime: 'Jan 2, 2022',
@@ -948,10 +957,10 @@ import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test
           '.result-url-and-favicon  .favicon');
       assertEquals(2, favicons.length);
       assertEquals(
-          getFaviconForPageURL(mockResults[0]!.url.url, true),
+          getFaviconForPageURL(mockResults[0]!.url, true),
           favicons[0]!.style.backgroundImage);
       assertEquals(
-          getFaviconForPageURL(mockResults[1]!.url.url, true),
+          getFaviconForPageURL(mockResults[1]!.url, true),
           favicons[1]!.style.backgroundImage);
     });
 

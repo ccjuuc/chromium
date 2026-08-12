@@ -14,8 +14,6 @@ import "mojo/public/mojom/base/time.mojom";
 // kTrustTokenV3Pmb, and kTrustTokenV3Voprf can safely be supported at the same
 // time, as they use the same underlying data model; they just use different
 // cryptosystems to generate tokens' signatures.
-// TODO(crbug.com/40722816): Schema versioning needs to be implemented for
-// future versions that need to clear the database on schema changes.
 //
 // NOTE: When updating this enum, you probably also need to update
 // kTrustTokensMajorVersion in trust_token_parameterization.h.
@@ -141,13 +139,6 @@ struct TrustTokenParams {
   // caller wishes to use a cached Redemption Record (RR) if available or
   // redeem a new token, evicting the RR currently stored.
   TrustTokenRefreshPolicy refresh_policy = kUseCached;
-
-  // "custom_key_commitment" stores a custom key commitment that should be
-  // used for this operation if set.
-  string? custom_key_commitment;
-
-  // "custom_issuer" specifies what issuer to use for this operation if set.
-  url.mojom.Origin? custom_issuer;
 
   // The remaining members are used only when "operation" is "kSigning": these
   // parameters specify the manner in which the outgoing request should be

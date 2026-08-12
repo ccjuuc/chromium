@@ -16,6 +16,8 @@
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 
+class PrefService;
+
 namespace ash {
 
 class UserContext;
@@ -29,6 +31,11 @@ class WizardContext {
 
   WizardContext(const WizardContext&) = delete;
   WizardContext& operator=(const WizardContext&) = delete;
+
+  // Returns true if the device is configured to automatically wipe the
+  // cryptohome on password mismatch, and the current user is an
+  // enterprise-managed account.
+  bool ShouldTriggerAutoWipe(PrefService& local_state) const;
 
   // Should be tweaked by the tests only in case we need this early in the init
   // process. Otherwise tweak context from `GetWizardContextForTesting`.
@@ -146,7 +153,7 @@ class WizardContext {
   // version rollback.
   // Set by WizardController.
   // Used by multiple screens.
-  base::Value::Dict configuration;
+  base::DictValue configuration;
 
   // Indicates that enterprise enrollment was triggered early in the OOBE
   // process, so Update screen should be skipped and Enrollment start right
@@ -262,6 +269,10 @@ class WizardContext {
   std::optional<ash::quick_start::mojom::WifiCredentials>
       quick_start_wifi_credentials;
 
+  // Whether we are showing the sign-in fatal error screen due to a SAML
+  // password verification failure.
+  std::optional<bool> is_scraped_password_verification_failure;
+
   // If this is a first login after update from CloudReady to a new version.
   // During such an update show users license agreement and data collection
   // consent.
@@ -277,6 +288,12 @@ class WizardContext {
 
   // True when user is inside the "Add Person" flow.
   bool is_add_person_flow = false;
+
+  // Whether the password selection screen should be shown during the
+  // recovery flow. This is used to ensure the screen is shown only when
+  // intended, as some recovery-like flows (e.g., manual GAIA password change)
+  // should bypass it.
+  bool allow_factor_change_during_recovery = false;
 
   // True if user clicked "Select more fatures" button on the last CHOOBE
   // selected screen.
@@ -297,6 +314,11 @@ class WizardContext {
 
 // Returns |true| if this is an OOBE flow after enterprise enrollment.
 bool IsRollbackFlow(const WizardContext& context);
+
+// Sets the `UserContext` in the wizard context while making sure that no other
+// `UserContext` is already set.
+void SetUserContext(WizardContext& wizard_context,
+                    std::unique_ptr<UserContext> user_context);
 
 }  // namespace ash
 

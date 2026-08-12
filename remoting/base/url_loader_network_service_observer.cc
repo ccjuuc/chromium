@@ -18,7 +18,6 @@
 #include "remoting/base/logging.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "url/gurl.h"
 
 namespace remoting {
@@ -125,6 +124,11 @@ void UrlLoaderNetworkServiceObserver::OnLocalNetworkAccessPermissionRequired(
     network::mojom::IPAddressSpace ip_address_space,
     OnLocalNetworkAccessPermissionRequiredCallback callback) {}
 
+void UrlLoaderNetworkServiceObserver::OnPlatformLocalNetworkPermissionRequired(
+    OnPlatformLocalNetworkPermissionRequiredCallback callback) {
+  std::move(callback).Run(/*granted=*/false);
+}
+
 void UrlLoaderNetworkServiceObserver::OnClearSiteData(
     const GURL& url,
     const std::string& header_value,
@@ -146,18 +150,6 @@ void UrlLoaderNetworkServiceObserver::OnDataUseUpdate(
     base::ByteSize recv_bytes,
     base::ByteSize sent_bytes) {}
 
-void UrlLoaderNetworkServiceObserver::OnSharedStorageHeaderReceived(
-    const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-        methods_with_options,
-    const std::optional<std::string>& with_lock,
-    OnSharedStorageHeaderReceivedCallback callback) {
-  std::move(callback).Run();
-}
-
-void UrlLoaderNetworkServiceObserver::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
 
 void UrlLoaderNetworkServiceObserver::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
@@ -165,11 +157,11 @@ void UrlLoaderNetworkServiceObserver::Clone(
   receivers_.Add(this, std::move(observer));
 }
 
-void UrlLoaderNetworkServiceObserver::OnWebSocketConnectedToPrivateNetwork(
+void UrlLoaderNetworkServiceObserver::OnWebSocketConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace ip_address_space) {}
 
-void UrlLoaderNetworkServiceObserver::OnUrlLoaderConnectedToPrivateNetwork(
+void UrlLoaderNetworkServiceObserver::OnUrlLoaderConnectedToLocalNetwork(
     const GURL& request_url,
     network::mojom::IPAddressSpace response_address_space,
     network::mojom::IPAddressSpace client_address_space,

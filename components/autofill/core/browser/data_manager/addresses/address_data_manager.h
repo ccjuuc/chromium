@@ -9,14 +9,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/strike_databases/addresses/address_on_typing_suggestion_strike_database.h"
@@ -24,15 +27,19 @@
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_migration_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_save_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/addresses/autofill_profile_update_strike_database.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
 #include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/signatures.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_member.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/strike_database/strike_database_base.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/service/sync_service.h"
-#include "components/webdata/common/web_data_service_consumer.h"
+#include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
 
 namespace signin {
 class IdentityManager;
@@ -45,7 +52,6 @@ namespace autofill {
 class AccountNameEmailStore;
 class AddressDataCleaner;
 class AlternativeStateNameMapUpdater;
-class ContactInfoPreconditionChecker;
 class HomeAndWorkMetadataStore;
 
 // Contains all address-related logic of the `PersonalDataManager`. See comment
@@ -99,6 +105,8 @@ class AddressDataManager : public AutofillWebDataServiceObserverOnUISequence {
   ~AddressDataManager() override;
   AddressDataManager(const AddressDataManager&) = delete;
   AddressDataManager& operator=(const AddressDataManager&) = delete;
+
+  base::WeakPtr<AddressDataManager> GetWeakPtr();
 
   // Only intended to be called during shutdown of the parent `KeyedService`.
   void Shutdown();
@@ -271,20 +279,6 @@ class AddressDataManager : public AutofillWebDataServiceObserverOnUISequence {
   // SyncService::IsSyncFeatureEnabled() are deleted from the codebase.
   bool IsSyncFeatureEnabledForAutofill() const;
 
-  // Returns true if `syncer::UserSelectableType::kAutofill` is enabled.
-  bool IsAutofillUserSelectableTypeEnabled() const;
-
-  // Defines whether the Sync toggle on the Autofill Settings page is visible.
-  // TODO(crbug.com/40943238): Remove when toggle becomes available on the Sync
-  // page for non-syncing users.
-  bool IsAutofillSyncToggleAvailable() const;
-
-  // Sets the Sync UserSelectableType::kAutofill toggle value.
-  // TODO(crbug.com/40943238): Used for the toggle on the Autofill Settings page
-  // only. It controls syncing of autofill data stored in user accounts for
-  // non-syncing users. Remove when toggle becomes available on the Sync page.
-  void SetAutofillSelectableTypeEnabled(bool enabled);
-
   // Returns the account info of currently signed-in user, or std::nullopt if
   // the user is not signed-in or the identity manager is not available.
   std::optional<CoreAccountInfo> GetPrimaryAccountInfo() const;
@@ -316,6 +310,7 @@ class AddressDataManager : public AutofillWebDataServiceObserverOnUISequence {
 #if BUILDFLAG(IS_IOS)
   // Calls `account_name_email_store_` in order to create or update the
   // kAccountNameEmail profile using current primary account info.
+  // If `account_name` is empty, this method does nothing.
   // TODO(crbug.com/449708427): Remove once `AccountInfo` supports full_name on
   // IOS.
   void MaybeCreateAccountNameEmailProfile(std::string account_name,
@@ -379,10 +374,6 @@ class AddressDataManager : public AutofillWebDataServiceObserverOnUISequence {
   // Triggered when a profile is added/updated/removed on db.
   void OnAutofillProfileChanged(const AutofillProfileChange& change);
 
-  // Update a profile in AutofillTable asynchronously. The change only surfaces
-  // in the PDM after the task on the DB sequence has finished.
-  void UpdateProfileInDB(const AutofillProfile& profile);
-
   // Look at the next `ongoing_profile_changes_` and schedules the corresponding
   // database operation.
   void HandleNextProfileChange();
@@ -403,10 +394,12 @@ class AddressDataManager : public AutofillWebDataServiceObserverOnUISequence {
   virtual void RemoveProfileImpl(const std::string& guid,
                                  bool non_permanent_account_profile_removal);
 
-  base::ObserverList<Observer> observers_;
-
-  std::unique_ptr<ContactInfoPreconditionChecker>
-      contact_info_precondition_checker_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   WebDataServiceBase::Handle pending_profile_query_ = 0;
 

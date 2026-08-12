@@ -37,14 +37,15 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(AsyncCheckTracker);
 bool AsyncCheckTracker::IsMainPageResourceLoadPending(
     const security_interstitials::UnsafeResource& resource) {
   return IsMainPageLoadPending(resource.rfh_locator, resource.navigation_id,
-                               resource.threat_type);
+                               resource.threat_type, resource.threat_source);
 }
 
 // static
 bool AsyncCheckTracker::IsMainPageLoadPending(
     const security_interstitials::UnsafeResourceLocator& rfh_locator,
     const std::optional<int64_t>& navigation_id,
-    safe_browsing::SBThreatType threat_type) {
+    safe_browsing::SBThreatType threat_type,
+    safe_browsing::ThreatSource threat_source) {
   content::WebContents* web_contents =
       unsafe_resource_util::GetWebContentsForLocator(rfh_locator);
   if (web_contents && AsyncCheckTracker::FromWebContents(web_contents) &&
@@ -55,7 +56,8 @@ bool AsyncCheckTracker::IsMainPageLoadPending(
     return AsyncCheckTracker::FromWebContents(web_contents)
         ->IsNavigationPending(navigation_id.value());
   }
-  return UnsafeResource::IsMainPageLoadPendingWithSyncCheck(threat_type);
+  return UnsafeResource::IsMainPageLoadPendingWithSyncCheck(threat_type,
+                                                            threat_source);
 }
 
 // static
@@ -124,7 +126,7 @@ void AsyncCheckTracker::PendingCheckerCompleted(
            << " proceed: " << result.proceed
            << " has_post_commit_interstitial_skipped: "
            << result.has_post_commit_interstitial_skipped;
-  if (!base::Contains(pending_checkers_, navigation_id)) {
+  if (!pending_checkers_.contains(navigation_id)) {
     return;
   }
   if (!result.proceed) {
@@ -157,12 +159,12 @@ void AsyncCheckTracker::PendingCheckerCompleted(
 }
 
 bool AsyncCheckTracker::IsNavigationPending(int64_t navigation_id) {
-  return !base::Contains(committed_navigation_timestamps_, navigation_id);
+  return !committed_navigation_timestamps_.contains(navigation_id);
 }
 
 std::optional<base::TimeTicks>
 AsyncCheckTracker::GetNavigationCommittedTimestamp(int64_t navigation_id) {
-  if (!base::Contains(committed_navigation_timestamps_, navigation_id)) {
+  if (!committed_navigation_timestamps_.contains(navigation_id)) {
     return std::nullopt;
   }
   return committed_navigation_timestamps_[navigation_id];
@@ -250,7 +252,7 @@ void AsyncCheckTracker::DisplayBlockingPage(UnsafeResource resource) {
 }
 
 void AsyncCheckTracker::MaybeDeleteChecker(int64_t navigation_id) {
-  if (!base::Contains(pending_checkers_, navigation_id)) {
+  if (!pending_checkers_.contains(navigation_id)) {
     return;
   }
   pending_checkers_[navigation_id].reset();

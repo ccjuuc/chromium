@@ -7,6 +7,7 @@ import org.chromium.android_webview.AwNavigation;
 import org.chromium.android_webview.AwNavigationListener;
 import org.chromium.android_webview.AwPage;
 import org.chromium.android_webview.common.Lifetime;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.support_lib_boundary.WebViewNavigationClientBoundaryInterface;
 import org.chromium.support_lib_boundary.util.BoundaryInterfaceReflectionUtil;
 import org.chromium.support_lib_boundary.util.Features;
@@ -21,6 +22,7 @@ import java.lang.reflect.Proxy;
  * call. Do not store state here.
  */
 @Lifetime.Temporary
+@NullMarked
 class SupportLibWebViewNavigationClientAdapter implements AwNavigationListener {
     private final WebViewNavigationClientBoundaryInterface mClientImpl;
     private final String[] mSupportedFeatures;
@@ -70,6 +72,11 @@ class SupportLibWebViewNavigationClientAdapter implements AwNavigationListener {
                 BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
                         new SupportLibWebViewNavigationAdapter(navigation)));
     }
+
+    // Not implemented as this navigation client is set to be deprecated in favour of
+    // {@link #AwNavigationListener}
+    @Override
+    public void onNavigationVisible(AwNavigation navigation) {}
 
     @Override
     public void onPageDeleted(AwPage page) {

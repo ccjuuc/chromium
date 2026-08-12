@@ -17,6 +17,7 @@ include_rules = [
   "+chrome/browser/apps/app_discovery_service",
   "+chrome/browser/apps/app_service",
   "+chrome/browser/ash/app_list",
+  "+chrome/browser/ash/browser_delegate/browser_delegate.h",
   "+chrome/browser/ash/arc",
   "+chrome/browser/ash/crostini",
   "+chrome/browser/ash/drive",
@@ -41,10 +42,8 @@ include_rules = [
   "+chrome/browser/trusted_vault",
   "+chrome/browser/ui/ash",
   "+chrome/browser/ui/browser_commands.h",
-  "+chrome/browser/ui/browser_finder.h",
   "+chrome/browser/ui/browser.h",
   "+chrome/browser/ui/browser_window.h",
-  "+chrome/browser/ui/chrome_pages.h",
   "+chrome/browser/ui/webui/ash/settings/calculator",
   "+chrome/browser/ui/webui/ash/settings/pages/storage",
   "+chrome/browser/ui/webui/ash/settings/search",
@@ -55,7 +54,6 @@ include_rules = [
   "+chrome/common/channel_info.h",
   "+chrome/common/chrome_constants.h",
   "+chrome/common/chrome_paths.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
   "+chrome/test/base",
 
@@ -70,6 +68,13 @@ include_rules = [
 
 specific_include_rules = {
   ".*browsertest\\.cc": [
+    "+chrome/browser/browser_process.h",
+    "+chrome/browser/ui/browser_window/public/global_browser_collection.h",
+  ],
+  "file_search_provider\\.cc": [
+    "+chrome/browser/browser_process.h",
+  ],
+  "local_image_search_service_factory\\.cc": [
     "+chrome/browser/browser_process.h",
   ],
 }

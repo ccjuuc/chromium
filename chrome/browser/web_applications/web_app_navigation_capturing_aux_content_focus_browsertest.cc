@@ -27,7 +27,8 @@ class WebAppNavigationCapturingAuxContentFocusBrowserTest
       public testing::WithParamInterface<ManifestLaunchHandler_ClientMode> {
  protected:
   GURL GetAppUrl() {
-    return https_server()->GetURL("/web_apps/aux_content_no_focus/index.html");
+    return embedded_https_test_server().GetURL(
+        "/web_apps/aux_content_no_focus/index.html");
   }
 };
 
@@ -64,7 +65,7 @@ IN_PROC_BROWSER_TEST_P(WebAppNavigationCapturingAuxContentFocusBrowserTest,
   ASSERT_TRUE(app_browser);
   content::WebContents* app_contents =
       app_browser->tab_strip_model()->GetWebContentsAt(0);
-  EXPECT_EQ(Browser::Type::TYPE_APP, app_browser->type());
+  EXPECT_EQ(Browser::Type::TYPE_APP, app_browser->GetType());
 
   WaitForLaunchParams(app_contents, /* min_launch_params_to_wait_for= */ 1);
   std::vector<GURL> launch_params = apps::test::GetLaunchParamUrlsInContents(

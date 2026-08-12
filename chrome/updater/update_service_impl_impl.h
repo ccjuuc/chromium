@@ -16,7 +16,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/update_service.h"
 
@@ -89,14 +89,8 @@ class UpdateServiceImplImpl : public UpdateService {
       base::OnceCallback<void(Result)> callback) override;
   void GetUpdaterState(
       base::OnceCallback<void(const UpdaterState&)> callback) override;
-  void GetUpdaterPolicies(
-      base::OnceCallback<void(const base::flat_map<std::string, PolicyValue>&)>
-          callback) override;
-  void GetAppPolicies(
-      base::OnceCallback<
-          void(const base::flat_map<std::string,
-                                    base::flat_map<std::string, PolicyValue>>&)>
-          callback) override;
+  void GetPoliciesJson(
+      base::OnceCallback<void(const std::string&)> callback) override;
 
  private:
   ~UpdateServiceImplImpl() override;

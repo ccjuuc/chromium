@@ -9,6 +9,7 @@
 #include "third_party/blink/public/common/loader/javascript_framework_detection.h"
 #include "third_party/blink/public/common/loader/loading_behavior_flag.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -16,11 +17,14 @@
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html/html_meta_element.h"
+#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
+#include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/platform/bindings/dom_data_store.h"
 #include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -81,7 +85,7 @@ inline void CheckAttributeMatches(const Element& element,
     result.detected_versions[JavaScriptFramework::kReact] =
         kNoFrameworkVersionDetected;
   }
-  if (element.GetClassAttribute().StartsWith(kSvelte)) {
+  if (element.GetClassAttribute().starts_with(kSvelte)) {
     result.detected_versions[JavaScriptFramework::kSvelte] =
         kNoFrameworkVersionDetected;
   }
@@ -128,8 +132,8 @@ inline void CheckPropertyMatches(Element& element,
     } else if (key_value == reactRootContainer_string) {
       result.detected_versions[JavaScriptFramework::kReact] =
           kNoFrameworkVersionDetected;
-    } else if (key_value.StartsWith(reactListening_string) ||
-               key_value.StartsWith(reactFiber_string)) {
+    } else if (key_value.starts_with(reactListening_string) ||
+               key_value.starts_with(reactFiber_string)) {
       result.detected_versions[JavaScriptFramework::kReact] =
           kNoFrameworkVersionDetected;
     }
@@ -175,6 +179,36 @@ inline void CheckGlobalPropertyMatches(
   }
   if (IsFrameworkVariableUsed(context, kSquarespace)) {
     result.detected_versions[JavaScriptFramework::kSquarespace] =
+        kNoFrameworkVersionDetected;
+  }
+}
+
+inline void CheckGlobalStringMatches(
+    v8::Isolate* isolate,
+    JavaScriptFrameworkDetectionResult& result) {
+  // This will find strings that are used anywhere as object properties. To be
+  // precise, it will find internalized strings which include object properties
+  // but potentially also other uses of strings. To avoid false negatives,
+  // ensure that the string is used as a property name. To avoid false
+  // positives, use unique strings that are unlikely used anywhere else.
+  // Do not use V8AtomicString here because those are already internalized on
+  // construction and will therefore always be found in the string table.
+  v8::Local<v8::String> tfjs_string =
+      v8::String::NewFromUtf8Literal(isolate, "tfjs-core");
+  v8::Local<v8::String> transformers_js_string =
+      v8::String::NewFromUtf8Literal(isolate, "transformers.js_config");
+  v8::Local<v8::String> media_pipe_string = v8::String::NewFromUtf8Literal(
+      isolate, "addStringVectorToInputSidePacket");
+  if (tfjs_string->IsInStringTable(isolate)) {
+    result.detected_versions[JavaScriptFramework::kTFJS] =
+        kNoFrameworkVersionDetected;
+  }
+  if (transformers_js_string->IsInStringTable(isolate)) {
+    result.detected_versions[JavaScriptFramework::kTransformersJS] =
+        kNoFrameworkVersionDetected;
+  }
+  if (media_pipe_string->IsInStringTable(isolate)) {
+    result.detected_versions[JavaScriptFramework::kMediaPipe] =
         kNoFrameworkVersionDetected;
   }
 }
@@ -289,7 +323,7 @@ void DetectFrameworkVersions(Document& document,
   if (document.head()) {
     for (HTMLMetaElement& meta_element :
          Traversal<HTMLMetaElement>::DescendantsOf(*document.head())) {
-      if (EqualIgnoringASCIICase(meta_element.GetName(), "generator")) {
+      if (EqualIgnoringAsciiCase(meta_element.GetName(), "generator")) {
         generator_meta = &meta_element;
         break;
       }
@@ -299,38 +333,36 @@ void DetectFrameworkVersions(Document& document,
   if (generator_meta) {
     const AtomicString& content = generator_meta->Content();
     if (!content.empty()) {
-      if (content.StartsWith("Wix")) {
+      if (content.starts_with("Wix")) {
         result.detected_versions[JavaScriptFramework::kWix] =
             kNoFrameworkVersionDetected;
-      } else if (content.StartsWith("Joomla")) {
+      } else if (content.starts_with("Joomla")) {
         result.detected_versions[JavaScriptFramework::kJoomla] =
             kNoFrameworkVersionDetected;
       } else {
-        constexpr char wordpress_prefix[] = "WordPress ";
-        constexpr size_t wordpress_prefix_length =
-            std::char_traits<char>::length(wordpress_prefix);
+        constexpr char kWordpressPrefix[] = "WordPress ";
+        constexpr size_t kWordpressPrefixLength =
+            std::char_traits<char>::length(kWordpressPrefix);
 
-        if (content.StartsWith(wordpress_prefix)) {
-          String version_string =
-              String(content).Substring(wordpress_prefix_length);
+        if (content.starts_with(kWordpressPrefix)) {
+          StringView version_string = content;
+          version_string.remove_prefix(kWordpressPrefixLength);
           result.detected_versions[JavaScriptFramework::kWordPress] =
               ExtractVersion(version_regexp, context,
                              V8String(isolate, version_string));
         }
 
-        constexpr char drupal_prefix[] = "Drupal ";
-        constexpr size_t drupal_prefix_length =
-            std::char_traits<char>::length(drupal_prefix);
+        constexpr char kDrupalPrefix[] = "Drupal ";
+        constexpr size_t kDrupalPrefixLength =
+            std::char_traits<char>::length(kDrupalPrefix);
 
-        if (content.StartsWith(drupal_prefix)) {
-          String version_string =
-              String(content).Substring(drupal_prefix_length);
-          String trimmed =
-              version_string.Substring(0, version_string.Find(" "));
-          bool ok = true;
-          int version = trimmed.ToInt(&ok);
+        if (content.starts_with(kDrupalPrefix)) {
+          StringView version_string(content, kDrupalPrefixLength);
+          version_string = version_string.substr(0, version_string.find(' '));
+          std::optional<int> version = StringToIntLoose(version_string);
           result.detected_versions[JavaScriptFramework::kDrupal] =
-              ok ? ((version & 0xff) << 8) : kNoFrameworkVersionDetected;
+              version.has_value() ? ((*version & 0xff) << 8)
+                                  : kNoFrameworkVersionDetected;
         }
       }
     }
@@ -354,6 +386,7 @@ void TraverseTreeForFrameworks(Document& document,
   }
   CheckIdMatches(document, result);
   CheckGlobalPropertyMatches(context, isolate, result);
+  CheckGlobalStringMatches(isolate, result);
   DetectFrameworkVersions(document, context, isolate, result,
                           detected_ng_version);
   DCHECK(!try_catch.HasCaught());
@@ -365,8 +398,8 @@ void TraverseTreeForFrameworks(Document& document,
 void DetectJavascriptFrameworksOnLoad(Document& document) {
   LocalFrame* const frame = document.GetFrame();
   if (!frame || !frame->IsOutermostMainFrame() ||
-      !document.Url().ProtocolIsInHTTPFamily() ||
-      !document.BaseURL().ProtocolIsInHTTPFamily()) {
+      !document.Url().ProtocolIsInHttpFamily() ||
+      !document.BaseURL().ProtocolIsInHttpFamily()) {
     return;
   }
 
@@ -389,6 +422,35 @@ void DetectJavascriptFrameworksOnLoad(Document& document) {
 
   ScriptState::Scope scope(script_state);
   TraverseTreeForFrameworks(document, isolate, context);
+}
+
+void DetectJavascriptFrameworksOnWorkerLoad(
+    WorkerGlobalScope& worker_global_scope,
+    JavaScriptFrameworkDetectionResult& result) {
+  // This should run on the worker itself and not on the main thread because it
+  // needs access to the isolate and other internals that are not safe to access
+  // otherwise.
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kDetectJSFrameworksOnWorker)) {
+    return;
+  }
+  CHECK(worker_global_scope.GetThread()->IsCurrentThread());
+  v8::Isolate* const isolate = worker_global_scope.GetThread()->GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context =
+      worker_global_scope.ScriptController()->GetScriptState()->GetContext();
+
+  if (context.IsEmpty()) {
+    return;
+  }
+
+  v8::TryCatch try_catch(isolate);
+
+  // Workers only support detection mechanisms that don't rely on the document
+  // (i.e. no DOM elements).
+  CheckGlobalStringMatches(isolate, result);
+
+  DCHECK(!try_catch.HasCaught());
 }
 
 }  // namespace blink

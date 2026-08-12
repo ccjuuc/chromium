@@ -27,8 +27,7 @@ class NewTabButtonMenuModel;
 class NewTabButton : public TabStripControlButton,
                      public views::ContextMenuController {
  public:
-  NewTabButton(TabStripController* tab_strip,
-               PressedCallback callback,
+  NewTabButton(PressedCallback callback,
                const gfx::VectorIcon& icon,
                Edge fixed_flat_edge = Edge::kNone,
                Edge animated_flat_edge = Edge::kNone,
@@ -43,6 +42,10 @@ class NewTabButton : public TabStripControlButton,
       View* source,
       const gfx::Point& point,
       ui::mojom::MenuSourceType source_type) override;
+
+ protected:
+  // TabStripControlButton:
+  void UpdateBackground() override;
 
  private:
   std::unique_ptr<NewTabButtonMenuModel> context_menu_model_;

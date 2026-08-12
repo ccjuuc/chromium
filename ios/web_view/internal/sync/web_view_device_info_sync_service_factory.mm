@@ -4,12 +4,13 @@
 
 #import "ios/web_view/internal/sync/web_view_device_info_sync_service_factory.h"
 
+#import <optional>
 #import <utility>
 
 #import "base/feature_list.h"
 #import "base/features.h"
 #import "base/functional/bind.h"
-#import "base/memory/singleton.h"
+#import "base/no_destructor.h"
 #import "base/time/default_clock.h"
 #import "components/keyed_service/ios/browser_state_dependency_manager.h"
 #import "components/signin/public/base/device_id_helper.h"
@@ -47,10 +48,9 @@ class DeviceInfoSyncClient : public syncer::DeviceInfoSyncClient {
   bool GetSendTabToSelfReceivingEnabled() const override { return false; }
 
   // syncer::DeviceInfoSyncClient:
-  sync_pb::SyncEnums_SendTabReceivingType GetSendTabToSelfReceivingType()
+  syncer::DeviceInfo::SendTabReceivingType GetSendTabToSelfReceivingType()
       const override {
-    return sync_pb::
-        SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED;
+    return syncer::DeviceInfo::SendTabReceivingType::kChromeOrUnspecified;
   }
 
   // syncer::DeviceInfoSyncClient:
@@ -93,6 +93,23 @@ class DeviceInfoSyncClient : public syncer::DeviceInfoSyncClient {
   // syncer::DeviceInfoSyncClient:
   bool GetDesktopToIOSPromoReceivingEnabled() const override { return false; }
 
+  // syncer::DeviceInfoSyncClient:
+  MobilePromoOnDesktopPromoTypeSet GetDesktopToIOSPromoReceivingTypes()
+      const override {
+    return {};
+  }
+
+  // syncer::DeviceInfoSyncClient:
+  syncer::DeviceInfo::GlicExperimentalTriggeringState
+  GetGlicExperimentalTriggeringState() const override {
+    return syncer::DeviceInfo::GlicExperimentalTriggeringState::kUnavailable;
+  }
+
+  // syncer::DeviceInfoSyncClient:
+  std::optional<int> GetGlicExperimentalTriggeringVersion() const override {
+    return std::nullopt;
+  }
+
  private:
   PrefService* const prefs_;
   syncer::SyncInvalidationsService* const sync_invalidations_service_;
@@ -105,7 +122,8 @@ namespace ios_web_view {
 // static
 WebViewDeviceInfoSyncServiceFactory*
 WebViewDeviceInfoSyncServiceFactory::GetInstance() {
-  return base::Singleton<WebViewDeviceInfoSyncServiceFactory>::get();
+  static base::NoDestructor<WebViewDeviceInfoSyncServiceFactory> instance;
+  return instance.get();
 }
 
 // static

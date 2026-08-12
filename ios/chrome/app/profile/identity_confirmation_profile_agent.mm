@@ -15,7 +15,6 @@
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/ui_bundled/management_util.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state_observer.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -139,11 +138,12 @@ enum class IdentityConfirmationSnackbarDecision {
 // not to be displayed.
 - (IdentityConfirmationSnackbarDecision)
     shouldShowIdentityConfirmationSnackbarWithBrowser:(Browser*)browser {
+  // The browser must be regular in order to get the authentication service.
+  CHECK_EQ(browser->type(), Browser::Type::kRegular);
   ProfileIOS* profile = browser->GetProfile();
   AuthenticationService* authenticationService =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (!authenticationService->HasPrimaryIdentity(
-          signin::ConsentLevel::kSignin)) {
+  if (!authenticationService->HasPrimaryIdentity()) {
     // As the user is signed-out, don’t show the identity snackbar.
     return IdentityConfirmationSnackbarDecision::kDontShowNoAccount;
   }
@@ -157,8 +157,7 @@ enum class IdentityConfirmationSnackbarDecision {
   }
 
   // For non-managed accounts, show the snackbar only on top of Bling Start.
-  if (!authenticationService->HasPrimaryIdentityManaged(
-          signin::ConsentLevel::kSignin) &&
+  if (!authenticationService->HasPrimaryIdentityManaged() &&
       ![self isStartSurfaceWithBrowser:browser]) {
     return IdentityConfirmationSnackbarDecision::kDontShowNotOnStartPage;
   }
@@ -225,7 +224,7 @@ enum class IdentityConfirmationSnackbarDecision {
   AuthenticationService* authenticationService =
       AuthenticationServiceFactory::GetForProfile(profile);
   id<SystemIdentity> systemIdentity =
-      authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+      authenticationService->GetPrimaryIdentity();
   CHECK(systemIdentity, base::NotFatalUntil::M151);
 
   SnackbarMessage* message =

@@ -9,7 +9,8 @@
 #include "chrome/browser/controlled_frame/controlled_frame_permission_request_test_base.h"
 #include "chrome/browser/controlled_frame/controlled_frame_test_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -93,8 +94,9 @@ class ControlledFramePointerLockInteractiveUiTest
     : public ControlledFrameTestBase {
  public:
   void SetUpOnMainThread() override {
+    embedded_https_test_server().ServeFilesFromSourceDirectory(
+        GetChromeTestDataDir().AppendASCII("web_apps/simple_isolated_app"));
     ControlledFrameTestBase::SetUpOnMainThread();
-    StartContentServer("web_apps/simple_isolated_app");
   }
 
  protected:
@@ -171,8 +173,9 @@ IN_PROC_BROWSER_TEST_F(ControlledFramePointerLockInteractiveUiTest,
   // At this point, `releasePromise` has defined new event listeners.
   // These are waiting for the pointer lock to be released, which we will
   // trigger using the Escape key signal next.
-  Browser* app_window = chrome::FindBrowserWithTab(
-      content::WebContents::FromRenderFrameHost(app_frame));
+  BrowserWindowInterface* app_window =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          content::WebContents::FromRenderFrameHost(app_frame));
   ASSERT_TRUE(app_window);
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(app_window, ui::VKEY_ESCAPE,
                                               false, false, false, false));

@@ -10,10 +10,13 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/types/expected.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/web_package/web_bundle_utils.h"
 #include "components/webapps/isolated_web_apps/reading/response_reader.h"
 #include "components/webapps/isolated_web_apps/reading/response_reader_registry.h"
@@ -38,7 +41,6 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
  public:
   IsolatedWebAppURLLoaderImpl(
       const base::FilePath& web_bundle_path,
-      bool dev_mode,
       const web_package::SignedWebBundleId& web_bundle_id,
       mojo::PendingRemote<network::mojom::URLLoaderClient> loader_client,
       const network::ResourceRequest& resource_request,
@@ -47,7 +49,6 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
         resource_request_(resource_request),
         frame_tree_node_id_(frame_tree_node_id),
         web_bundle_path_(web_bundle_path),
-        dev_mode_(dev_mode),
         web_bundle_id_(web_bundle_id) {}
 
   IsolatedWebAppURLLoaderImpl(const IsolatedWebAppURLLoaderImpl&) = delete;
@@ -58,7 +59,7 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
   void Start(content::BrowserContext* browser_context) {
     IsolatedWebAppReaderRegistryFactory::Get(browser_context)
         ->ReadResponse(
-            web_bundle_path_, dev_mode_, web_bundle_id_, resource_request_,
+            web_bundle_path_, web_bundle_id_, resource_request_,
             base::BindOnce(&IsolatedWebAppURLLoaderImpl::OnResponseRead,
                            weak_factory_.GetWeakPtr()));
   }
@@ -103,11 +104,6 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
       return;
     }
 
-    std::string header_string =
-        web_package::CreateHeaderString(response->head());
-    auto response_head =
-        web_package::CreateResourceResponseFromHeaderString(header_string);
-    response_head->content_length = response->head()->payload_length;
     mojo::ScopedDataPipeProducerHandle producer_handle;
     mojo::ScopedDataPipeConsumerHandle consumer_handle;
     MojoCreateDataPipeOptions options;
@@ -125,8 +121,17 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
           network::URLLoaderCompletionStatus(net::ERR_INSUFFICIENT_RESOURCES));
       return;
     }
-    header_length_ = header_string.size();
-    body_length_ = response_head->content_length;
+
+    std::string header_string =
+        web_package::CreateHeaderString(response->head());
+    header_length_ = base::ByteSize(header_string.size());
+    body_length_ = base::ByteSize(response->head()->payload_length);
+
+    auto response_head =
+        web_package::CreateResourceResponseFromHeaderString(header_string);
+    // Copying `payload_length` into `body_length_` (a ByteSize) first ensures
+    // it fits into `content_length` (an int64_t).
+    response_head->content_length = body_length_.InBytes();
     loader_client_->OnReceiveResponse(std::move(response_head),
                                       std::move(consumer_handle), std::nullopt);
 
@@ -152,9 +157,7 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
 
   // network::mojom::URLLoader implementation
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     NOTREACHED();
   }
@@ -162,12 +165,11 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
                    int intra_priority_value) override {}
 
   mojo::Remote<network::mojom::URLLoaderClient> loader_client_;
-  int64_t header_length_;
-  int64_t body_length_;
+  base::ByteSize header_length_;
+  base::ByteSize body_length_;
   const network::ResourceRequest resource_request_;
   std::optional<content::FrameTreeNodeId> frame_tree_node_id_;
   const base::FilePath web_bundle_path_;
-  const bool dev_mode_;
   const web_package::SignedWebBundleId web_bundle_id_;
 
   base::WeakPtrFactory<IsolatedWebAppURLLoaderImpl> weak_factory_{this};
@@ -179,7 +181,6 @@ class IsolatedWebAppURLLoaderImpl : public network::mojom::URLLoader {
 void IsolatedWebAppURLLoader::CreateAndStart(
     content::BrowserContext* browser_context,
     const base::FilePath& web_bundle_path,
-    bool dev_mode,
     const web_package::SignedWebBundleId& web_bundle_id,
     mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
     mojo::PendingRemote<network::mojom::URLLoaderClient> loader_client,
@@ -189,7 +190,7 @@ void IsolatedWebAppURLLoader::CreateAndStart(
   // dangling pointers (as this is a self-owned class without a shutdown
   // notifier).
   auto loader = std::make_unique<IsolatedWebAppURLLoaderImpl>(
-      web_bundle_path, dev_mode, web_bundle_id, std::move(loader_client),
+      web_bundle_path, web_bundle_id, std::move(loader_client),
       resource_request, frame_tree_node_id);
   auto* raw_loader = loader.get();
   mojo::MakeSelfOwnedReceiver(std::move(loader), std::move(loader_receiver));

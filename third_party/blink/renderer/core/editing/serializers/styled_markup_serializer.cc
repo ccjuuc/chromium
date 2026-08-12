@@ -238,12 +238,10 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
       DetermineParentTagAndUpdateLastClosed(first_node, past_end);
 
   // `UpdateViewportSize` ensures viewport_size_ is defined.
-  //  See comment on viewport_size_ in style_engine.h
-  //  without `UpdateViewportSize` call to `GetViewportsize()` while
-  //  resolving style causes crash  in other unit tests and resize scenarios
-  if (RuntimeEnabledFeatures::ResolveVarStylesOnCopyEnabled()) {
-    start_.GetDocument()->GetStyleEngine().UpdateViewportSize();
-  }
+  // See comment on viewport_size_ in style_engine.h
+  // without `UpdateViewportSize` call to `GetViewportsize()` while
+  // resolving style causes crash  in other unit tests and resize scenarios.
+  start_.GetDocument()->GetStyleEngine().UpdateViewportSize();
 
   StyledMarkupTraverser<Strategy> traverser(&markup_accumulator, last_closed_);
   Node* last_closed = traverser.Traverse(first_node, past_end);
@@ -276,7 +274,6 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
       // elements are currently not supported - absent in mathml_names.h
       auto* mathml_element = DynamicTo<MathMLElement>(ancestor);
       if (mathml_element &&
-          RuntimeEnabledFeatures::MathMLSkipMtrTagInAncestorWrappingEnabled() &&
           mathml_element->HasTagName(mathml_names::kMtrTag)) {
         if (ancestor == highest_node_to_be_serialized_) {
           break;
@@ -299,10 +296,10 @@ String StyledMarkupSerializer<Strategy>::CreateMarkup() {
                 html_names::kBackgroundAttr)) {
           fully_selected_root_style->Style()->ParseAndSetProperty(
               CSSPropertyID::kBackgroundImage,
-              String("url('" +
-                     fully_selected_root->getAttribute(
-                         html_names::kBackgroundAttr) +
-                     "')"),
+              StrCat({"url('",
+                      fully_selected_root->getAttribute(
+                          html_names::kBackgroundAttr),
+                      "')"}),
               /* important */ false,
               fully_selected_root->GetExecutionContext()
                   ->GetSecureContextMode());
@@ -367,7 +364,7 @@ bool StyledMarkupSerializer<Strategy>::DetermineParentTagAndUpdateLastClosed(
   last_closed_ =
       StyledMarkupTraverser<Strategy>().Traverse(first_node, past_end);
   if (last_closed_ && last_closed_->IsTextNode() &&
-      IsPresentationalHTMLElement(last_closed_->parentNode())) {
+      IsPresentationalHtmlElement(last_closed_->parentNode())) {
     last_closed_ = last_closed_->parentElement();
     return true;
   }
@@ -445,9 +442,7 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
         continue;
       }
       bool should_skip_unselectable_node = false;
-      if (RuntimeEnabledFeatures::
-              SkipUnselectableContentInSerializationEnabled() &&
-          ShouldSkipUnselectableContent() && n->GetLayoutObject() &&
+      if (ShouldSkipUnselectableContent() && n->GetLayoutObject() &&
           !n->GetLayoutObject()->IsSelectable()) {
         should_skip_unselectable_node = !IsSelectableOrHasSelectableDescendants(
             *n, has_selectable_descendants);
@@ -530,6 +525,16 @@ Node* StyledMarkupTraverser<Strategy>::Traverse(Node* start_node,
     }
   }
 
+  // If traversal stopped exactly at past_end, any ancestors that were opened
+  // and never revisited remain in ancestors_to_close. Close them to keep markup
+  // balanced for partial selections (e.g. nested MathML containers).
+  while (!ancestors_to_close.empty()) {
+    ContainerNode* ancestor = ancestors_to_close.back();
+    AppendEndMarkup(*ancestor);
+    last_closed = ancestor;
+    ancestors_to_close.pop_back();
+  }
+
   return last_closed;
 }
 
@@ -549,7 +554,7 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
     return;
   StringBuilder markup;
   if (auto* document = DynamicTo<Document>(node)) {
-    MarkupFormatter::AppendXMLDeclaration(markup, *document);
+    MarkupFormatter::AppendXmlDeclaration(*document, markup);
     accumulator_->PushMarkup(markup.ToString());
     return;
   }
@@ -557,9 +562,9 @@ void StyledMarkupTraverser<Strategy>::WrapWithNode(ContainerNode& node,
   if (!element)
     return;
   if (ShouldApplyWrappingStyle(*element) || NeedsInlineStyle(*element))
-    accumulator_->AppendElementWithInlineStyle(markup, *element, style);
+    accumulator_->AppendElementWithInlineStyle(*element, style, markup);
   else
-    accumulator_->AppendElement(markup, *element);
+    accumulator_->AppendElement(*element, markup);
   accumulator_->PushMarkup(markup.ToString());
   accumulator_->AppendEndTag(*element);
 }

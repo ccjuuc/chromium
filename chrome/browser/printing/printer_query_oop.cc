@@ -72,7 +72,7 @@ void PrinterQueryOop::OnDidUseDefaultSettings(
                        << result;
 
     // TODO(crbug.com/40561724)  Fill in support for handling of access-denied
-    // result code.  Blocked on crbug.com/1243873 for Windows.
+    // result code.  Blocked on crbug.com/40787526 for Windows.
   } else {
     VLOG(1) << "Use default settings from service complete";
     result = mojom::ResultCode::kSuccess;
@@ -115,7 +115,7 @@ void PrinterQueryOop::OnDidAskUserForSettings(
     }
 
     // TODO(crbug.com/40561724)  Fill in support for handling of access-denied
-    // result code.  Blocked on crbug.com/1243873 for Windows.
+    // result code.  Blocked on crbug.com/40787526 for Windows.
   }
 
   InvokeSettingsCallback(std::move(callback), result);
@@ -196,7 +196,7 @@ void PrinterQueryOop::GetSettingsWithUI(uint32_t document_page_count,
 #endif
 }
 
-void PrinterQueryOop::UpdatePrintSettings(base::Value::Dict new_settings,
+void PrinterQueryOop::UpdatePrintSettings(base::DictValue new_settings,
                                           SettingsCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -222,7 +222,7 @@ void PrinterQueryOop::UpdatePrintSettings(base::Value::Dict new_settings,
     // `PrintingContextWin::UpdatePrintSettings()` is special because it can
     // invoke `AskUserForSettings()` and cause a system dialog to be displayed.
     // Running a dialog causes an exit to webpage-initiated fullscreen.
-    // http://crbug.com/728276
+    // http://crbug.com/41322524
     content::WebContents* web_contents = GetWebContents();
     if (web_contents && web_contents->IsFullscreen()) {
       web_contents->ExitFullscreen(true);
@@ -373,7 +373,7 @@ void PrinterQueryOop::SendAskUserForSettings(uint32_t document_page_count,
   content::WebContents* web_contents = GetWebContents();
 
   // Running a dialog causes an exit to webpage-initiated fullscreen.
-  // http://crbug.com/728276
+  // http://crbug.com/41322524
   if (web_contents && web_contents->IsFullscreen()) {
     web_contents->ExitFullscreen(true);
   }

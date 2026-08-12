@@ -10,11 +10,11 @@
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/public/cpp/system_tray_client.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/cellular_esim_profile_handler.h"
@@ -60,9 +60,8 @@ bool IsConfigurationError(const std::string& shill_error) {
          shill_error == shill::kErrorBadWEPKey;
 }
 
-std::string GetStringFromDictionary(
-    const std::optional<base::Value::Dict>& dict,
-    const std::string& key) {
+std::string GetStringFromDictionary(const std::optional<base::DictValue>& dict,
+                                    const std::string& key) {
   const std::string* v = dict ? dict->FindString(key) : nullptr;
   return v ? *v : std::string();
 }
@@ -96,12 +95,12 @@ std::u16string GetConnectErrorString(const std::string& error_name) {
 const gfx::VectorIcon& GetErrorNotificationVectorIcon(
     const std::string& network_type) {
   if (network_type == shill::kTypeVPN) {
-    return kNotificationVpnIcon;
+    return ash::kNotificationVpnIcon;
   }
   if (network_type == shill::kTypeCellular) {
-    return kNotificationMobileDataOffIcon;
+    return ash::kNotificationMobileDataOffIcon;
   }
-  return kNotificationWifiOffIcon;
+  return ash::kNotificationWifiOffIcon;
 }
 
 // |identifier| may be a service path or guid.
@@ -425,7 +424,7 @@ void NetworkStateNotifier::UpdateCellularActivating(
       new message_center::HandleNotificationClickDelegate(
           base::BindRepeating(&NetworkStateNotifier::ShowNetworkSettings,
                               weak_ptr_factory_.GetWeakPtr(), cellular_guid)),
-      kNotificationMobileDataIcon,
+      ash::kNotificationMobileDataIcon,
       message_center::SystemNotificationWarningLevel::WARNING);
   SystemNotificationHelper::GetInstance()->Display(notification);
 }
@@ -468,7 +467,7 @@ void NetworkStateNotifier::ShowMobileActivationErrorForGuid(
       new message_center::HandleNotificationClickDelegate(base::BindRepeating(
           &NetworkStateNotifier::ShowNetworkSettings,
           weak_ptr_factory_.GetWeakPtr(), cellular->guid())),
-      kNotificationMobileDataOffIcon,
+      ash::kNotificationMobileDataOffIcon,
       message_center::SystemNotificationWarningLevel::WARNING);
   SystemNotificationHelper::GetInstance()->Display(notification);
 }
@@ -486,7 +485,7 @@ void NetworkStateNotifier::RemoveCarrierUnlockNotification() {
 void NetworkStateNotifier::OnConnectErrorGetProperties(
     const std::string& error_name,
     const std::string& service_path,
-    std::optional<base::Value::Dict> shill_properties) {
+    std::optional<base::DictValue> shill_properties) {
   if (!shill_properties) {
     ShowConnectErrorNotification(error_name, service_path,
                                  std::move(shill_properties));
@@ -499,7 +498,7 @@ void NetworkStateNotifier::OnConnectErrorGetProperties(
       NetworkState::StateIsConnecting(state)) {
     NET_LOG(EVENT) << "Skipping connect error notification. State: " << state;
     // Network is no longer in an error state. This can happen if an
-    // unexpected idle state transition occurs, see http://crbug.com/333955.
+    // unexpected idle state transition occurs, see http://crbug.com/41083575.
     return;
   }
   ShowConnectErrorNotification(error_name, service_path,
@@ -509,7 +508,7 @@ void NetworkStateNotifier::OnConnectErrorGetProperties(
 void NetworkStateNotifier::ShowConnectErrorNotification(
     const std::string& error_name,
     const std::string& service_path,
-    std::optional<base::Value::Dict> shill_properties) {
+    std::optional<base::DictValue> shill_properties) {
   std::u16string error = GetConnectErrorString(error_name);
   NET_LOG(DEBUG) << "Notify: " << NetworkPathId(service_path)
                  << ": Connect error: " << error_name << ": "

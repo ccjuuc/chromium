@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "content/public/browser/webid/identity_request_account.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/gfx/native_ui_types.h"
 
 using Account = content::IdentityRequestAccount;
@@ -23,6 +24,7 @@ using TokenError = content::IdentityCredentialTokenError;
 // identity dialog controller with the Android frontend.
 class AccountSelectionView {
  public:
+  DECLARE_USER_DATA(AccountSelectionView);
   class Delegate {
    public:
     virtual ~Delegate() = default;
@@ -43,10 +45,14 @@ class AccountSelectionView {
     virtual void OnMoreDetails() = 0;
     // Informs the controller that the accounts dialog has been displayed.
     virtual void OnAccountsDisplayed() = 0;
+    // Informs the controller that a native app returned a token result.
+    virtual void OnNativeAppResult(const std::string& token) = 0;
     // The web page view containing the focused field.
     virtual gfx::NativeView GetNativeView() = 0;
     // The WebContents for the page.
     virtual content::WebContents* GetWebContents() = 0;
+    virtual content::IdentityRequestDialogController::PassiveDialogVolume
+    GetPassiveDialogVolume() const = 0;
   };
 
   static std::unique_ptr<AccountSelectionView> Create(Delegate* delegate);
@@ -63,6 +69,11 @@ class AccountSelectionView {
   AccountSelectionView(const AccountSelectionView&) = delete;
   AccountSelectionView& operator=(const AccountSelectionView&) = delete;
   virtual ~AccountSelectionView() = default;
+
+  // Triggered when the user clicks on the page action while it is in the
+  // passive state. Called when the user clicks the page action (omnibox chip)
+  // in passive mode.
+  virtual void OnPageActionClicked() = 0;
 
   // Instructs the view to show the provided accounts to the user.
   // `rp_data` is the relying party's data, such as the display name and icon.
@@ -121,13 +132,19 @@ class AccountSelectionView {
                                    Account::SignInMode sign_in_mode,
                                    blink::mojom::RpMode rp_mode) = 0;
 
+  // Shows or hides the account selection view.
+  // Applies to both active mode (modal) and passive mode (widget/bottom sheet).
+  virtual void SetCanShowUi(bool can_show_ui) {}
+
   virtual std::string GetTitle() const = 0;
   virtual std::optional<std::string> GetSubtitle() const = 0;
 
   virtual void ShowUrl(LinkType type, const GURL& url) = 0;
   virtual content::WebContents* ShowModalDialog(
       const GURL& url,
-      blink::mojom::RpMode rp_mode) = 0;
+      blink::mojom::RpMode rp_mode,
+      content::IdentityRequestDialogController::ShownModalAsyncCallback
+          on_shown_async) = 0;
   virtual void CloseModalDialog() = 0;
   virtual content::WebContents* GetRpWebContents() = 0;
 

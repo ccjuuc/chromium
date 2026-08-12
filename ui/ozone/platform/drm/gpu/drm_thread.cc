@@ -11,7 +11,6 @@
 
 #include "base/functional/bind.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
@@ -84,7 +83,7 @@ void DrmThread::Start(base::OnceClosure receiver_completer,
 
   base::Thread::Options thread_options;
   thread_options.message_pump_type = base::MessagePumpType::IO;
-  thread_options.thread_type = base::ThreadType::kDisplayCritical;
+  thread_options.thread_type = base::ThreadType::kPresentation;
 
   if (!StartWithOptions(std::move(thread_options)))
     LOG(FATAL) << "Failed to create DRM thread";

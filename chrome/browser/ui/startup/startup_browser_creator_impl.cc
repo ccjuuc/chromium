@@ -10,12 +10,14 @@
 #include <iterator>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
+#include "base/supports_user_data.h"
 #include "base/version.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/platform_apps/install_chrome_app.h"
@@ -25,8 +27,6 @@
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/headless/headless_command_processor.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
-#include "chrome/browser/privacy_sandbox/privacy_sandbox_service.h"
-#include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
@@ -36,16 +36,18 @@
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/startup/infobar_utils.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/browser/ui/startup/startup_infobar_observer.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/browser/ui/startup/startup_types.h"
@@ -53,6 +55,7 @@
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version.h"
@@ -60,12 +63,17 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "components/prefs/pref_service.h"
-#include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_switches.h"
+#include "url/origin.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/nix/xdg_util.h"
+#include "ui/display/screen.h"
+#endif
 
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
@@ -81,7 +89,13 @@
 #include "components/app_restore/full_restore_utils.h"
 #endif
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#endif
+
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/search_integrity/search_integrity.h"
+#include "chrome/browser/search_integrity/search_integrity_factory.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_fetcher.h"
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
@@ -117,6 +131,86 @@ void AppendTabs(const StartupTabs& from, StartupTabs* to) {
 // Prepends the contents of |from| to the beginning of |to|.
 void PrependTabs(const StartupTabs& from, StartupTabs* to) {
   to->insert(to->begin(), from.begin(), from.end());
+}
+
+Browser* GetExistingBrowserForOpenBehavior(
+    Profile* profile,
+    chrome::startup::IsProcessStartup process_startup) {
+  BrowserWindowInterface* current_browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
+  Browser* workspace_browser =
+      current_browser ? current_browser->GetBrowserForMigrationOnly() : nullptr;
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
+  // On Windows and ChromeOS we specifically want to select the last active
+  // window on the current workspace if possible, see crbug.com/497494119.
+  ProfileBrowserCollection::GetForProfile(profile)->ForEach(
+      [&](BrowserWindowInterface* window) {
+        Browser* const candidate = window->GetBrowserForMigrationOnly();
+        if (window->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
+          return true;
+        }
+
+        BrowserWindow* const browser_window =
+            BrowserWindow::FromBrowser(candidate);
+        if (!browser_window) {
+          return true;
+        }
+
+        if (browser_window->IsOnCurrentWorkspace()) {
+          workspace_browser = candidate;
+          return false;
+        }
+        return true;
+      },
+      BrowserCollection::Order::kActivation);
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+  const bool match_original_profiles =
+      process_startup == chrome::startup::IsProcessStartup::kYes;
+  display::Screen* const screen = display::Screen::Get();
+  const std::string current_workspace =
+      screen ? screen->GetCurrentWorkspace() : std::string();
+
+  if (!current_workspace.empty()) {
+    GlobalBrowserCollection::GetInstance()->ForEach(
+        [&, current_workspace,
+         match_original_profiles](BrowserWindowInterface* window) {
+          Browser* const candidate = window->GetBrowserForMigrationOnly();
+
+          Profile* const candidate_profile = window->GetProfile();
+          if (match_original_profiles) {
+            if (candidate_profile->GetOriginalProfile() !=
+                profile->GetOriginalProfile()) {
+              return true;
+            }
+          } else if (candidate_profile != profile) {
+            return true;
+          }
+
+          if (window->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
+            return true;
+          }
+
+          BrowserWindow* const browser_window =
+              BrowserWindow::FromBrowser(candidate);
+          if (!browser_window) {
+            return true;
+          }
+
+          if (browser_window->IsVisibleOnAllWorkspaces() ||
+              browser_window->GetWorkspace() == current_workspace) {
+            workspace_browser = candidate;
+            return false;
+          }
+          return true;
+        },
+        BrowserCollection::Order::kActivation);
+  }
+#endif  // BUILDFLAG(IS_LINUX)
+
+  return workspace_browser;
 }
 
 }  // namespace
@@ -160,6 +254,16 @@ void StartupBrowserCreatorImpl::Launch(
   DCHECK(profile);
   profile_ = profile;
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  // Check for DSE integrity if flag is enabled.
+  if (base::FeatureList::IsEnabled(features::kDseIntegrity)) {
+    if (auto* search_integrity_service =
+            search_integrity::SearchIntegrityFactory::GetForProfile(profile_)) {
+      search_integrity_service->CheckSearchEngines();
+    }
+  }
+#endif
+
   DetermineURLsAndLaunch(process_startup, restore_tabbed_browser);
 
   // It's possible for there to be no browser window, e.g. if someone
@@ -201,16 +305,27 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
   // |browser|. While we may not end up actually using |browser| (since it
   // could be a popup window), we can at least use the profile.
   if (!profile_ && browser) {
-    profile_ = browser->profile();
+    profile_ = browser->GetProfile();
   }
 
-  if (!browser || !browser->is_type_normal()) {
+#if BUILDFLAG(IS_LINUX)
+  std::string startup_id =
+      command_line_->GetSwitchValueASCII(base::nix::kXdgActivationTokenSwitch);
+  if (startup_id.empty()) {
+    startup_id = command_line_->GetSwitchValueASCII("desktop-startup-id");
+  }
+#endif
+
+  const bool create_new_browser =
+      !browser ||
+      browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL;
+  if (create_new_browser) {
     CHECK(profile_);
     // In some conditions a new browser object cannot be created. The most
     // common reason for not being able to create browser is having this call
     // when the browser process is shutting down. This can also fail if the
     // passed profile is of a type that is not suitable for browser creation.
-    if (Browser::GetCreationStatusForProfile(profile_) !=
+    if (GetBrowserWindowCreationStatusForProfile(*profile_) !=
         Browser::CreationStatus::kOk) {
       return nullptr;
     }
@@ -219,18 +334,26 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
     // created in response to the user clicking on chrome. There was an
     // incomplete check on whether a user gesture created a window which looked
     // at the state of the MessageLoop.
-    Browser::CreateParams params = Browser::CreateParams(profile_, false);
-    params.creation_source = Browser::CreationSource::kStartupCreator;
+    BrowserWindowCreateParams params(profile_, false);
+    params.creation_source =
+        BrowserWindowCreateParams::CreationSource::kStartupCreator;
 #if BUILDFLAG(IS_LINUX)
-    params.startup_id =
-        command_line_->GetSwitchValueASCII("desktop-startup-id");
+    params.startup_id = startup_id;
 #endif
     if (command_line_->HasSwitch(switches::kWindowName)) {
       params.user_title =
-          command_line_->GetSwitchValueASCII(switches::kWindowName);
+          command_line_->GetSwitchValueUTF8(switches::kWindowName);
     }
 
-    browser = Browser::Create(params);
+    base::TimeTicks now = base::TimeTicks::Now();
+    BrowserWindowInterface* browser_window =
+        CreateBrowserWindow(std::move(params));
+    if (auto* manager =
+            InitialWebUIWindowMetricsManager::From(browser_window)) {
+      manager->SetWindowCreationInfo(
+          waap::NewWindowCreationSource::kBrowserInitiated, now);
+    }
+    browser = browser_window->GetBrowserForMigrationOnly();
   }
   CHECK(profile_);
 
@@ -276,7 +399,7 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
               [](base::WeakPtr<Browser> browser,
                  std::unique_ptr<ScopedProfileKeepAlive> profile_keepalive,
                  headless::HeadlessCommandHandler::Result result) {
-                if (browser && browser->window()) {
+                if (browser && browser->GetWindow()) {
 #if BUILDFLAG(IS_MAC)
                   // On Macs Chrome keeps running after the last browser
                   // window is closed which is not expected for headless
@@ -284,7 +407,7 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
                   // to terminate after the browser window is closed.
                   app_controller_mac::AllowApplicationToTerminate();
 #endif
-                  browser->window()->Close();
+                  browser->GetWindow()->Close();
                 }
               },
               browser->AsWeakPtr(), std::move(profile_keepalive)));
@@ -310,6 +433,13 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
     }
 
     NavigateParams params(browser, tab.url, ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+    if (tab.is_untrusted_launch) {
+      // Force an opaque initiator origin for custom scheme launches triggered
+      // externally (e.g., from another browser). This prevents downstream
+      // components from treating the navigation as a highly privileged,
+      // user-typed omnibox navigation.
+      params.initiator_origin = url::Origin();
+    }
     params.disposition = first_tab ? WindowOpenDisposition::NEW_FOREGROUND_TAB
                                    : WindowOpenDisposition::NEW_BACKGROUND_TAB;
     params.tabstrip_add_types = add_types;
@@ -335,7 +465,12 @@ Browser* StartupBrowserCreatorImpl::OpenTabsInBrowser(
     }
   }
 
-  browser->window()->Show();
+#if BUILDFLAG(IS_LINUX)
+  if (!create_new_browser && !startup_id.empty()) {
+    base::nix::SetActivationToken(startup_id);
+  }
+#endif
+  browser->GetWindow()->Show();
 
   return browser;
 }
@@ -351,6 +486,26 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
 
   const bool is_incognito_or_guest = profile_->IsOffTheRecord();
   bool is_post_crash_launch = HasPendingUncleanExit(profile_);
+
+  // Defer adding info bars until the browser window is ready. The observer
+  // will delete itself once the infobars are added.
+  // It is safe to store Profile* in the callback as callback will be destroyed
+  // upon Profile teardown.
+  StartupInfoBarObserver::AddInfoBarsCallback add_infobars_callback =
+      base::BindOnce(
+          [](const base::CommandLine& startup_command_line,
+             chrome::startup::IsFirstRun is_first_run,
+             bool is_post_crash_launch, bool was_restarted, Profile* profile,
+             BrowserWindowInterface* browser) {
+            AddInfoBarsIfNecessary(browser, profile, startup_command_line,
+                                   is_first_run, /*is_web_app=*/false,
+                                   is_post_crash_launch, was_restarted);
+          },
+          *command_line_, is_first_run_, is_post_crash_launch,
+          StartupBrowserCreator::WasRestarted(), base::Unretained(profile_));
+
+  StartupInfoBarObserver::ObserveProfile(*profile_,
+                                         std::move(add_infobars_callback));
 
   // Presentation of promotional and/or educational tabs may be controlled via
   // administrative policy.
@@ -375,28 +530,9 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
   const bool whats_new_enabled =
       whats_new::ShouldShowForState(local_state, promotions_enabled);
 
-  auto* privacy_sandbox_service =
-      PrivacySandboxServiceFactory::GetForProfile(profile_);
-
-  bool privacy_sandbox_dialog_required = false;
-  if (privacy_sandbox_service) {
-    switch (privacy_sandbox_service->GetRequiredPromptType(
-        PrivacySandboxService::SurfaceType::kDesktop)) {
-      case PrivacySandboxService::PromptType::kM1Consent:
-      case PrivacySandboxService::PromptType::kM1NoticeEEA:
-      case PrivacySandboxService::PromptType::kM1NoticeROW:
-      case PrivacySandboxService::PromptType::kM1NoticeRestricted:
-        privacy_sandbox_dialog_required = true;
-        break;
-      case PrivacySandboxService::PromptType::kNone:
-        break;
-    }
-  }
-
   auto result = DetermineStartupTabs(
       StartupTabProviderImpl(), process_startup, is_incognito_or_guest,
-      is_post_crash_launch, promotions_enabled, whats_new_enabled,
-      privacy_sandbox_dialog_required);
+      is_post_crash_launch, promotions_enabled, whats_new_enabled);
   StartupTabs tabs = std::move(result.tabs);
 
   // Return immediately if we start an async restore, since the remainder of
@@ -443,11 +579,6 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
   Browser* browser = RestoreOrCreateBrowser(
       tabs, behavior, restore_options, process_startup, is_post_crash_launch);
 
-  // Finally, add info bars.
-  AddInfoBarsIfNecessary(browser, profile_, *command_line_, is_first_run_,
-                         /*is_web_app=*/false, is_post_crash_launch,
-                         StartupBrowserCreator::WasRestarted());
-
   tab_groups::MaybeShowSharedTabGroupVersionOutOfDateModal(browser);
   tab_groups::MaybeShowSharedTabGroupVersionUpToDateToast(browser);
 
@@ -458,13 +589,6 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
             : CHROME_VERSION_STRING;
     MaybeShowNonMilestoneUpdateToast(browser, current_version_string);
   }
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  // Check for DSE integrity if flag is enabled.
-  if (base::FeatureList::IsEnabled(features::kDseIntegrity)) {
-    // TODO(466065123): The controller will instantiate the model, check the
-    // pref, and show the notification if needed.
-  }
-#endif
 }
 
 StartupBrowserCreatorImpl::DetermineStartupTabsResult::
@@ -488,8 +612,7 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
     bool is_incognito_or_guest,
     bool is_post_crash_launch,
     bool promotions_enabled,
-    bool whats_new_enabled,
-    bool privacy_sandbox_dialog_required) {
+    bool whats_new_enabled) {
   StartupTabs tabs =
       provider.GetCommandLineTabs(*command_line_, cur_dir_, profile_);
   LaunchResult launch_result =
@@ -508,7 +631,7 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
       return {std::move(tabs), launch_result};
     }
 
-    return {StartupTabs({StartupTab(GURL(chrome::kChromeUINewTabURL))}),
+    return {StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())}),
             launch_result};
   }
 
@@ -519,6 +642,8 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
 
   // URLs passed on the command line supersede all others, except pinned tabs.
   PrependTabs(reset_tabs, &tabs);
+
+  StartupTabs pinned_tabs = provider.GetPinnedTabs(*command_line_, profile_);
 
   if (launch_result == LaunchResult::kNormally) {
     // An initial preferences file provided with this distribution may specify
@@ -558,26 +683,29 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
     // read and add those.
     StartupTabs prefs_tabs =
         provider.GetPreferencesTabs(*command_line_, profile_);
+
+    bool prefs_tabs_originally_empty = prefs_tabs.empty();
+
+    // Filter out tabs from preferences that are already pinned.
+    std::erase_if(prefs_tabs, [&pinned_tabs](const StartupTab& pref_tab) {
+      return std::ranges::any_of(pinned_tabs,
+                                 [&pref_tab](const StartupTab& pinned_tab) {
+                                   return pref_tab.url == pinned_tab.url;
+                                 });
+    });
+
     AppendTabs(prefs_tabs, &tabs);
 
     // Potentially add the New Tab Page.
     // Note that URLs from preferences are explicitly meant to override showing
     // the NTP.
-    if (prefs_tabs.empty()) {
+    if (prefs_tabs_originally_empty) {
       AppendTabs(provider.GetNewTabPageTabs(*command_line_, profile_), &tabs);
-    }
-
-    // Potentially add a tab appropriate to display the Privacy Sandbox
-    // confirmaton dialog on top of. Ideally such a tab will already exist
-    // in |tabs|, and no additional tab will be required.
-    if (privacy_sandbox_dialog_required &&
-        launch_result == LaunchResult::kNormally) {
-      AppendTabs(provider.GetPrivacySandboxTabs(profile_, tabs), &tabs);
     }
   }
 
   // Maybe add any tabs which the user has previously pinned.
-  AppendTabs(provider.GetPinnedTabs(*command_line_, profile_), &tabs);
+  AppendTabs(pinned_tabs, &tabs);
 
   return {std::move(tabs), launch_result};
 }
@@ -623,16 +751,15 @@ Browser* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
       restore_options |= SessionRestore::RESTORE_APPS;
     }
 
-    browser = SessionRestore::RestoreSession(profile_, nullptr, restore_options,
-                                             tabs);
-    if (browser) {
-      return browser;
+    BrowserWindowInterface* browser_window = SessionRestore::RestoreSession(
+        profile_, nullptr, restore_options, tabs);
+    if (browser_window) {
+      return browser_window->GetBrowserForMigrationOnly();
     }
   } else if (behavior == BrowserOpenBehavior::USE_EXISTING ||
              behavior ==
                  BrowserOpenBehavior::USE_EXISTING_AND_OVERWRITE_ACTIVE_TAB) {
-    browser = chrome::FindTabbedBrowser(
-        profile_, process_startup == chrome::startup::IsProcessStartup::kYes);
+    browser = GetExistingBrowserForOpenBehavior(profile_, process_startup);
   }
 
   base::AutoReset<bool> synchronous_launch_resetter(
@@ -644,7 +771,7 @@ Browser* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
   browser = OpenTabsInBrowser(
       browser, process_startup,
       (tabs.empty()
-           ? StartupTabs({StartupTab(GURL(chrome::kChromeUINewTabURL))})
+           ? StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())})
            : tabs),
       (behavior == BrowserOpenBehavior::USE_EXISTING_AND_OVERWRITE_ACTIVE_TAB
            ? (TabOverWrite::kYes)

@@ -18,12 +18,11 @@
 #include "content/browser/file_system/file_system_manager_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/media/media_internals.h"
-#include "content/browser/memory_coordinator/browser_memory_consumer_registry.h"
+#include "content/browser/memory_coordinator/browser_memory_coordinator.h"
 #include "content/browser/mime_registry_impl.h"
 #include "content/browser/push_messaging/push_messaging_manager.h"
 #include "content/browser/renderer_host/embedded_frame_sink_provider_impl.h"
 #include "content/browser/renderer_host/media/media_stream_track_metrics_host.h"
-#include "content/browser/renderer_host/p2p/socket_dispatcher_host.h"
 #include "content/browser/renderer_host/render_message_filter.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
 #include "content/common/features.h"
@@ -41,6 +40,7 @@
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom.h"
 #include "services/metrics/ukm_recorder_factory_impl.h"
+#include "services/network/public/cpp/network_service_buildflags.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
 #include "third_party/blink/public/mojom/plugins/plugin_registry.mojom.h"
 #include "third_party/blink/public/public_buildflags.h"
@@ -51,6 +51,10 @@
 #include "content/public/browser/android/java_interfaces.h"
 #include "third_party/blink/public/mojom/android_font_lookup/android_font_lookup.mojom.h"
 #endif
+
+#if BUILDFLAG(IS_P2P_ENABLED)
+#include "content/browser/renderer_host/p2p/socket_dispatcher_host.h"
+#endif  // BUILDFLAG(IS_P2P_ENABLED)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/services/font/public/mojom/font_service.mojom.h"  // nogncheck
@@ -74,7 +78,7 @@
 #include "content/public/common/font_cache_win.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/services/font_data/font_data_service_impl.h"
 #endif
 
@@ -135,10 +139,10 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
       registry.get(),
       base::BindRepeating(
           [](ChildProcessId rph_id,
-             mojo::PendingReceiver<mojom::BrowserMemoryConsumerRegistry>
+             mojo::PendingReceiver<mojom::ChildMemoryConsumerRegistryHost>
                  receiver) {
-            BindBrowserMemoryConsumerRegistry(PROCESS_TYPE_RENDERER, rph_id,
-                                              std::move(receiver));
+            BrowserMemoryCoordinator::Get().Bind(PROCESS_TYPE_RENDERER, rph_id,
+                                                 std::move(receiver));
           },
           GetID()));
 
@@ -215,22 +219,28 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
       hyphenation::HyphenationImpl::GetTaskRunner());
 #endif
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(features::kFontSrcLocalMatching)) {
+  registry->AddInterface(
+      base::BindRepeating(&FontUniqueNameLookupService::Create),
+      FontUniqueNameLookupService::GetTaskRunner());
+#endif
+#if BUILDFLAG(IS_WIN)
+  if (!base::FeatureList::IsEnabled(
+          features::kFontDataServiceForCSSLocalFonts)) {
+    // DWriteFontProxy is superseded by FontDataService.
     registry->AddInterface(
-        base::BindRepeating(&FontUniqueNameLookupService::Create),
-        FontUniqueNameLookupService::GetTaskRunner());
+        base::BindRepeating(&DWriteFontProxyImpl::Create),
+        base::ThreadPool::CreateSequencedTaskRunner(
+            {base::TaskPriority::USER_BLOCKING, base::MayBlock()}));
+  } else {
+    // If we don't initialize DWriteFontProxy, we should have FontDataService
+    // enabled.
+    CHECK(features::IsFontDataServiceEnabled());
   }
 #endif
 
-#if BUILDFLAG(IS_WIN)
-  registry->AddInterface(
-      base::BindRepeating(&DWriteFontProxyImpl::Create),
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::TaskPriority::USER_BLOCKING, base::MayBlock()}));
-#endif
-
   file_system_manager_impl_.reset(new FileSystemManagerImpl(
-      GetDeprecatedID(), storage_partition_impl_->GetFileSystemContext(),
+      ChildProcessSecurityPolicyImpl::GetInstance()->CreateHandle(GetID()),
+      storage_partition_impl_->GetFileSystemContext(),
       ChromeBlobStorageContext::GetFor(GetBrowserContext())));
 
   AddUIThreadInterface(
@@ -324,7 +334,7 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
   GetContentClient()->browser()->ExposeInterfacesToRenderer(
       registry.get(), associated_interfaces_.get(), this);
 
-  DCHECK(child_host_pending_receiver_);
+  CHECK(child_host_pending_receiver_, base::NotFatalUntil::M154);
   io_thread_host_impl_.emplace(
       GetIOThreadTaskRunner({}), GetID(), instance_weak_factory_.GetWeakPtr(),
       std::move(registry), std::move(child_host_pending_receiver_));
@@ -340,7 +350,7 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
     }
   }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (features::IsFontDataServiceEnabled()) {
     if (auto font_data_receiver =
             receiver.As<font_data_service::mojom::FontDataService>()) {
@@ -439,6 +449,16 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
   GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&IOThreadHostImpl::BindHostReceiverOnUIThread,
                                 weak_host_, std::move(receiver)));
+}
+
+void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceivers(
+    std::vector<mojo::GenericPendingReceiver> receivers) {
+  // Bind each receiver through the same per-item path, preserving the
+  // interceptor, interface filtering, BinderRegistry, and UI-thread
+  // fallthrough.
+  for (auto& receiver : receivers) {
+    BindHostReceiver(std::move(receiver));
+  }
 }
 
 // static

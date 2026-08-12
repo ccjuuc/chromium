@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_GLIC_TEST_SUPPORT_GLIC_API_TEST_H_
 #define CHROME_BROWSER_GLIC_TEST_SUPPORT_GLIC_API_TEST_H_
 
+#include <algorithm>
 #include <type_traits>
 
 #include "base/json/json_writer.h"
@@ -12,6 +13,7 @@
 #include "base/test/run_until.h"
 #include "base/test/test_timeouts.h"
 #include "base/values.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/glic/test_support/non_interactive_glic_test.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -111,24 +113,10 @@ class WebUIStateListener : public Host::Observer {
   std::deque<mojom::WebUiState> states_;
 };
 
-// Observes the state of the WebUI hosted in the glic window.
-class CurrentViewListener : public Host::Observer {
- public:
-  explicit CurrentViewListener(Host* host);
-
-  ~CurrentViewListener() override;
-
-  void OnViewChanged(mojom::CurrentView view) override;
-
-  // Returns if `state` has been seen. Consumes all observed states up to the
-  // point where this state is seen.
-  void WaitForCurrentView(mojom::CurrentView view);
-
- private:
-  raw_ptr<Host> host_;
-  std::deque<mojom::CurrentView> views_;
-};
-
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use `chrome/browser/glic/test_support/glic_browser_test.h` instead.
+// =============================================================================
 template <typename T>
   requires std::is_base_of<
       test::InteractiveGlicTestMixin<InteractiveBrowserTest>,
@@ -147,7 +135,7 @@ class GlicApiTestBase : public T {
         base::BindRepeating(&GlicApiTestBase::OnEmbeddedTestServerHttpRequest,
                             base::Unretained(this)));
 
-    T::add_mock_glic_query_param(
+    T::AddMockGlicQueryParam(
         "test",
         ::testing::UnitTest::GetInstance()->current_test_info()->name());
 
@@ -157,6 +145,9 @@ class GlicApiTestBase : public T {
             {features::kGlic,
              {
                  {"glic-default-hotkey", "Ctrl+G"},
+             }},
+            {features::kGlicWebClientLoadTimes,
+             {
                  // Shorten load timeouts.
                  {features::kGlicPreLoadingTimeMs.name, "20"},
                  {features::kGlicMinLoadingTimeMs.name, "40"},
@@ -170,7 +161,7 @@ class GlicApiTestBase : public T {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         ::switches::kGlicHostLogging);
     T::SetGlicPagePath("/glic/browser_tests/test.html");
-    T::add_mock_glic_query_param("testsrc", js_source_path);
+    T::AddMockGlicQueryParam("testsrc", js_source_path);
   }
 
   ~GlicApiTestBase() override = default;
@@ -179,23 +170,23 @@ class GlicApiTestBase : public T {
     T::host_resolver()->AddRule("a.com", "127.0.0.1");
     T::host_resolver()->AddRule("b.com", "127.0.0.1");
     T::DisableWarming();
-    NonInteractiveGlicTest::SetUpOnMainThread();
+    T::SetUpOnMainThread();
   }
 
   void TearDownOnMainThread() override {
     if (!next_step_required_.empty()) {
       FAIL() << "Test not finished: call ContinueJsTest()";
     }
-    NonInteractiveGlicTest::TearDownOnMainThread();
+    T::TearDownOnMainThread();
   }
 
   GlicKeyedService* GetService() {
-    Profile* profile = T::browser()->profile();
+    Profile* profile = T::browser()->GetProfile();
     return GlicKeyedServiceFactory::GetGlicKeyedService(profile);
   }
 
   Host* GetHost() {
-    GlicInstance* instance = T::GetGlicInstance();
+    GlicInstanceImpl* instance = T::GetGlicInstanceImpl();
     return instance ? &instance->host() : nullptr;
   }
 
@@ -304,9 +295,9 @@ class GlicApiTestBase : public T {
       return;
     }
 
-    ASSERT_THAT(result, content::EvalJsResult::IsOk());
+    ASSERT_TRUE(result.is_ok());
     if (result.is_dict()) {
-      const base::Value::Dict& dict = result.ExtractDict();
+      const base::DictValue& dict = result.ExtractDict();
       auto* id = dict.Find("id");
       if (id && id->is_string() && id->GetString() == "next-step") {
         step_data_ = dict.Find("payload")->Clone();
@@ -331,8 +322,8 @@ class GlicApiTestBase : public T {
     defined(MEMORY_SANITIZER)
     GTEST_SKIP() << "AssertAllTestsRegistered not processed for slow binaries.";
 #else
-    T::RunTestSequence(T::OpenGlicWindow(T::GlicWindowMode::kDetached,
-                                         T::GlicInstrumentMode::kNone));
+    T::RunTestSequence(T::DeprecatedOpenGlicWindow(
+        T::GlicWindowMode::kDetached, T::GlicInstrumentMode::kNone));
     ExecuteJsTest();
     ASSERT_TRUE(step_data()->is_list());
     ::testing::UnitTest* unit_test = ::testing::UnitTest::GetInstance();
@@ -343,8 +334,8 @@ class GlicApiTestBase : public T {
     }
     for (int i = 0; i < unit_test->total_test_suite_count(); ++i) {
       const auto* test_suite = unit_test->GetTestSuite(i);
-      if (!base::Contains(gunit_test_suite_names,
-                          std::string(test_suite->name()))) {
+      if (!std::ranges::contains(gunit_test_suite_names,
+                                 std::string(test_suite->name()))) {
         continue;
       }
       for (int j = 0; j < test_suite->total_test_count(); ++j) {

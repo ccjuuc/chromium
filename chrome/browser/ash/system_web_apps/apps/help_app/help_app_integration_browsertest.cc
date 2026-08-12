@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/shell.h"
 #include "ash/webui/help_app_ui/buildflags.h"
 #include "ash/webui/help_app_ui/help_app_manager.h"
@@ -27,10 +29,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/app_install/app_install_service_ash.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
@@ -42,12 +42,11 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -55,15 +54,13 @@
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/pref_test_utils.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/package_id.h"
 #include "components/supervised_user/core/common/pref_names.h"
@@ -88,6 +85,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/message_center/message_center.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
 #include "url/url_constants.h"
@@ -105,9 +103,9 @@ class HelpAppIntegrationTest : public SystemWebAppIntegrationTest {
             net::EmbeddedTestServer::TYPE_HTTPS)} {
     scoped_feature_list_.InitWithFeatures(
         {chromeos::features::kUploadOfficeToCloud,
-         features::kReleaseNotesNotificationAllChannels,
-         features::kHelpAppLauncherSearch},
-        {features::kHelpAppOpensInsteadOfReleaseNotesNotification});
+         features::kReleaseNotesNotificationAllChannels},
+        {features::kHelpAppOpensInsteadOfReleaseNotesNotification,
+         ::features::kWebAppInstallDialog});
     https_server()->AddDefaultHandlers(GetChromeTestDataDir());
   }
 
@@ -123,7 +121,10 @@ class HelpAppIntegrationTest : public SystemWebAppIntegrationTest {
 using HelpAppAllProfilesIntegrationTest = HelpAppIntegrationTest;
 
 content::WebContents* GetActiveWebContents() {
-  return chrome::FindLastActive()->tab_strip_model()->GetActiveWebContents();
+  return GlobalBrowserCollection::GetInstance()
+      ->GetLastActiveBrowser()
+      ->GetTabStripModel()
+      ->GetActiveWebContents();
 }
 
 class HelpAppIntegrationTestWithAutoTriggerDisabled
@@ -193,7 +194,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2DefaultWindowBounds) {
       display::Screen::Get()->GetDisplayForNewWindows().work_area();
   int x = (work_area.width() - 960) / 2;
   int y = (work_area.height() - 600) / 2;
-  EXPECT_EQ(browser->window()->GetBounds(), gfx::Rect(x, y, 960, 600));
+  EXPECT_EQ(browser->GetWindow()->GetBounds(), gfx::Rect(x, y, 960, 600));
 }
 
 // Test that the Help App logs metric when launching the app using the
@@ -266,7 +267,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest, HelpAppV2ShowHelp) {
   // Help app should have opened at the expected page.
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 #else
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(GURL(chrome::kChromeHelpViaKeyboardURL),
             GetActiveWebContents()->GetVisibleURL());
 #endif
@@ -304,7 +305,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTestWithFirstRunEnabled,
                                       apps::LaunchSource::kFromFirstRun, 1);
 #else
   // We just have the original browser. No new app opens.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   histogram_tester.ExpectUniqueSample("Apps.DefaultAppLaunch.FromFirstRun",
                                       apps::DefaultAppName::kHelpApp, 0);
   histogram_tester.ExpectUniqueSample("Discover.Overall.AppLaunched",
@@ -319,7 +320,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
   WaitForTestSystemAppInstall();
 
   // There should be 1 browser window initially.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   const GURL expected_url("chrome://help-app/updates");
   content::TestNavigationObserver navigation_observer(expected_url);
@@ -332,7 +333,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
 
   // There should be two browser windows, one regular and one for the newly
   // opened app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // The opened window should be showing the url with attached WebUI.
   // The inner frame should be the pathname for the release notes pathname.
@@ -341,7 +342,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
                 GetActiveWebContents(), "window.location.href"));
 #else
   // Nothing should happen on non-branded builds.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 #endif
 }
 
@@ -372,13 +373,11 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                        HelpAppV2ReleaseNotesNotificationFromBackground) {
   WaitForTestSystemAppInstall();
   content::WebContents* web_contents = LaunchApp(SystemWebAppType::HELP);
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
   base::UserActionTester user_action_tester;
   profile()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, 20);
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
-                prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
+                ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
             0);
 
   // Script that simulates what the Help App background page would do to show
@@ -396,32 +395,33 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
             content::EvalJs(
                 SandboxedWebUiAppTestBase::GetAppFrame(web_contents), kScript));
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
-                prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
+                ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
             0);
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* help_app_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  ui_test_utils::BrowserDestroyedObserver observer(help_app_browser);
   // Close the web contents we just created to simulate what would happen in
   // production with a background page. This helps us ensure that our
   // notification shows up and can be interacted with even after the web ui
   // that triggered it has died.
   web_contents->Close();
   // Wait until the browser with the web contents closes.
-  ui_test_utils::WaitForBrowserToClose(browser);
+  observer.Wait();
   // Assert that the notification really is there.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  ASSERT_EQ(0u, notifications.size());
+  ASSERT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
 
   // Click on the notification.
   GURL expected_url = GURL("chrome://help-app/updates");
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
-  display_service->SimulateClick(NotificationHandler::Type::TRANSIENT,
-                                 "show_release_notes_notification",
-                                 std::nullopt, std::nullopt);
+  message_center::MessageCenter::Get()->ClickOnNotification(
+      "show_release_notes_notification");
 #if !BUILDFLAG(ENABLE_CROS_HELP_APP)
   // We just have the original browser. No new app opens.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 #endif
 }
 
@@ -434,26 +434,24 @@ IN_PROC_BROWSER_TEST_P(
   content::TestNavigationObserver navigation_observer(
       expected_trusted_frame_url);
   navigation_observer.StartWatchingNewWebContents();
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
 
   profile()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, 20);
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
   std::make_unique<HelpAppNotificationController>(profile())
       ->MaybeShowReleaseNotesNotification();
 
   // The release notes notification should not appear.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  EXPECT_EQ(0u, notifications.size());
+  EXPECT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
   // The release notes suggestion chip should not appear.
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
-                prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
+                ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
             0);
 
 #if !BUILDFLAG(ENABLE_CROS_HELP_APP)
   // We just have the original browser. No new app opens.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   histogram_tester.ExpectUniqueSample("Discover.Overall.AppLaunched",
                                       apps::LaunchSource::kFromOsLogin, 0);
 #endif
@@ -468,30 +466,28 @@ IN_PROC_BROWSER_TEST_P(
   content::TestNavigationObserver navigation_observer(
       expected_trusted_frame_url);
   navigation_observer.StartWatchingNewWebContents();
-  auto display_service =
-      std::make_unique<NotificationDisplayServiceTester>(/*profile=*/nullptr);
 
   profile()->GetPrefs()->SetInteger(
-      prefs::kHelpAppNotificationLastShownMilestone, 20);
+      ash::help_app::prefs::kHelpAppNotificationLastShownMilestone, 20);
   std::make_unique<HelpAppNotificationController>(profile())
       ->MaybeShowReleaseNotesNotification();
 
   // The release notes notification should not appear.
-  auto notifications = display_service->GetDisplayedNotificationsForType(
-      NotificationHandler::Type::TRANSIENT);
-  EXPECT_EQ(0u, notifications.size());
+  EXPECT_FALSE(
+      message_center::MessageCenter::Get()->FindVisibleNotificationById(
+          "show_release_notes_notification"));
   // The release notes suggestion chip should not appear.
   EXPECT_EQ(profile()->GetPrefs()->GetInteger(
-                prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
+                ash::prefs::kReleaseNotesSuggestionChipTimesLeftToShow),
             0);
 #if BUILDFLAG(ENABLE_CROS_HELP_APP)
   // No new app should open because of birch flag.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   histogram_tester.ExpectUniqueSample(
       "Discover.Overall.AppLaunched",
       apps::LaunchSource::kFromReleaseNotesNotification, 0);
 #else
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   histogram_tester.ExpectUniqueSample(
       "Discover.Overall.AppLaunched",
       apps::LaunchSource::kFromReleaseNotesNotification, 0);
@@ -504,7 +500,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2NavigateOnRelaunch) {
   WaitForTestSystemAppInstall();
 
   // There should initially be a single browser window.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   Browser* browser;
   content::WebContents* web_contents =
@@ -512,7 +508,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2NavigateOnRelaunch) {
 
   // There should be two browser windows, one regular and one for the newly
   // opened app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   content::TestNavigationObserver navigation_observer(web_contents);
   LaunchAppWithoutWaiting(SystemWebAppType::HELP);
@@ -520,8 +516,9 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2NavigateOnRelaunch) {
   navigation_observer.Wait();
 
   // LaunchApp should navigate the existing window and not open any new windows.
-  EXPECT_EQ(browser, chrome::FindLastActive());
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(browser,
+            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 // Test direct navigation to a subpage.
@@ -568,7 +565,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2OpenSettings) {
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   const GURL expected_url("chrome://os-settings/osAccessibility");
   content::TestNavigationObserver navigation_observer(expected_url);
@@ -587,7 +584,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2OpenSettings) {
   navigation_observer.Wait();
 
   // Settings should be active in a new window.
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 }
 
@@ -597,7 +594,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                        HelpAppV2SetHasCompletedNewDeviceChecklist) {
   WaitForTestSystemAppInstall();
   profile()->GetPrefs()->SetBoolean(
-      help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist, false);
+      ash::help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist, false);
   content::WebContents* web_contents = LaunchApp(SystemWebAppType::HELP);
 
   constexpr char kScript[] = R"(
@@ -610,11 +607,11 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   EXPECT_TRUE(content::ExecJs(
       SandboxedWebUiAppTestBase::GetAppFrame(web_contents), kScript));
   WaitForPrefValue(profile()->GetPrefs(),
-                   help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist,
+                   ash::help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist,
                    base::Value(true));
 
   EXPECT_EQ(profile()->GetPrefs()->GetBoolean(
-                help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist),
+                ash::help_app::prefs::kHelpAppHasCompletedNewDeviceChecklist),
             true);
 }
 
@@ -623,7 +620,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                        HelpAppV2SetHasVisitedHowToPage) {
   WaitForTestSystemAppInstall();
   profile()->GetPrefs()->SetBoolean(
-      help_app::prefs::kHelpAppHasVisitedHowToPage, false);
+      ash::help_app::prefs::kHelpAppHasVisitedHowToPage, false);
   content::WebContents* web_contents = LaunchApp(SystemWebAppType::HELP);
 
   constexpr char kScript[] = R"(
@@ -636,11 +633,11 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   EXPECT_TRUE(content::ExecJs(
       SandboxedWebUiAppTestBase::GetAppFrame(web_contents), kScript));
   WaitForPrefValue(profile()->GetPrefs(),
-                   help_app::prefs::kHelpAppHasVisitedHowToPage,
+                   ash::help_app::prefs::kHelpAppHasVisitedHowToPage,
                    base::Value(true));
 
   EXPECT_EQ(profile()->GetPrefs()->GetBoolean(
-                help_app::prefs::kHelpAppHasVisitedHowToPage),
+                ash::help_app::prefs::kHelpAppHasVisitedHowToPage),
             true);
 }
 
@@ -653,7 +650,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   const GURL expected_url("chrome://os-settings/apps");
   content::TestNavigationObserver navigation_observer(expected_url);
@@ -673,7 +670,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   navigation_observer.Wait();
 
   // Settings should be active in a new window.
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 }
 
@@ -684,7 +681,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2ShowParentalControls) {
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   const GURL expected_url("chrome://os-settings/osPeople");
   content::TestNavigationObserver navigation_observer(expected_url);
@@ -704,7 +701,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2ShowParentalControls) {
   navigation_observer.Wait();
 
   // Settings should be active in a new window.
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 }
 
@@ -715,7 +712,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2ShowAppMallSWA) {
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   const GURL expected_url("chrome://mall/");
   content::TestNavigationObserver navigation_observer(expected_url);
@@ -735,7 +732,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2ShowAppMallSWA) {
   navigation_observer.Wait();
 
   // The app mall should be active in a new window.
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(expected_url, GetActiveWebContents()->GetVisibleURL());
 }
 
@@ -749,7 +746,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTestWithAutoTriggerDisabled,
   ASSERT_TRUE(test_url.SchemeIs(url::kHttpsScheme));
 
   // There should be only be one regular browser with one tab.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
 
   WaitForTestSystemAppInstall();
@@ -757,7 +754,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTestWithAutoTriggerDisabled,
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   content::TestNavigationObserver navigation_observer(test_url);
   navigation_observer.StartWatchingNewWebContents();
@@ -780,12 +777,13 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTestWithAutoTriggerDisabled,
   navigation_observer.Wait();
 
   // There should still be two browser windows.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   // The regular browser should only have 2 tabs.
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
   // After opening the URL, the regular browser should be the most recently
   // active browser.
-  EXPECT_EQ(browser(), chrome::FindLastActive());
+  EXPECT_EQ(browser(),
+            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
   // The active tab should be the `test_url` we opened.
   EXPECT_EQ(test_url, GetActiveWebContents()->GetVisibleURL());
 }
@@ -801,7 +799,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   ASSERT_TRUE(test_url.SchemeIs(url::kHttpsScheme));
 
   // There should be only be one regular browser with one tab.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
 
   WaitForTestSystemAppInstall();
@@ -809,7 +807,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 
   // There should be two browser windows, one regular and one for the newly
   // opened help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   content::TestNavigationObserver navigation_observer(test_url);
   navigation_observer.StartWatchingNewWebContents();
@@ -834,12 +832,13 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
   navigation_observer.Wait();
 
   // There should still be two browser windows.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   // The regular browser should only have 2 tabs.
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
   // After opening the URL, the regular browser should be the most recently
   // active browser.
-  EXPECT_EQ(browser(), chrome::FindLastActive());
+  EXPECT_EQ(browser(),
+            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
   // The active tab should be the `test_url` we opened.
   EXPECT_EQ(test_url, GetActiveWebContents()->GetVisibleURL());
 
@@ -853,7 +852,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
                        HelpAppV2CrashesForInvalidUrlsInBrowser) {
   // There should be only be one regular browser with one tab.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   // The regular browser should only have 1 tab.
   EXPECT_EQ(1, browser()->tab_strip_model()->count());
   // The tab should be the default "about:blank" URL.
@@ -884,7 +883,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 
     // There should be two browser windows, one regular and one for the newly
     // opened help app.
-    EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
     auto* frame = SandboxedWebUiAppTestBase::GetAppFrame(web_contents);
 
     // Test that calls with invalid URLs crash the renderer process.
@@ -900,11 +899,12 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 
     // The Help app renderer process crashed. Close the browser window so that
     // we can relaunch it in another browser window.
+    ui_test_utils::BrowserDestroyedObserver observer(help_app_browser);
     chrome::CloseWindow(help_app_browser);
-    ui_test_utils::WaitForBrowserToClose(help_app_browser);
+    observer.Wait();
 
     // There should only be 1 regular browser.
-    EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
     // The regular browser should still only have 1 tab.
     EXPECT_EQ(1, browser()->tab_strip_model()->count());
     // The tab should still be the default "about:blank" URL.
@@ -931,8 +931,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest, HelpAppV2CanOpenMS365Setup) {
                 SandboxedWebUiAppTestBase::GetAppFrame(web_contents), kScript));
 
   ash::SystemWebDialogDelegate* dialog =
-      ash::SystemWebDialogDelegate::FindInstance(
-          chrome::kChromeUICloudUploadURL);
+      ash::SystemWebDialogDelegate::FindInstance(ash::kChromeUICloudUploadURL);
   EXPECT_TRUE(dialog);
 }
 
@@ -1068,7 +1067,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppIntegrationTest,
 
   // Wait for system apps background tasks to start.
   base::RunLoop run_loop;
-  SystemWebAppManager::GetForTest(browser()->profile())
+  SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->on_tasks_started()
       .Post(FROM_HERE, run_loop.QuitClosure());
   run_loop.Run();
@@ -1186,7 +1185,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
 
 #if BUILDFLAG(ENABLE_CROS_HELP_APP)
   // Default browser tab and Help app are open.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ("chrome://help-app/", GetActiveWebContents()->GetVisibleURL());
   histogram_tester.ExpectUniqueSample("Apps.DefaultAppLaunch.FromKeyboard",
                                       apps::DefaultAppName::kHelpApp, 1);
@@ -1194,7 +1193,7 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
                                       apps::LaunchSource::kFromKeyboard, 1);
 #else
   // We just have the one browser. Navigates chrome.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(GURL(chrome::kChromeHelpViaKeyboardURL),
             GetActiveWebContents()->GetVisibleURL());
   histogram_tester.ExpectUniqueSample("Apps.DefaultAppLaunch.FromKeyboard",
@@ -1212,14 +1211,14 @@ IN_PROC_BROWSER_TEST_P(HelpAppAllProfilesIntegrationTest,
   content::TestNavigationObserver navigation_observer(
       GURL("chrome://help-app"));
   navigation_observer.StartWatchingNewWebContents();
-  ASSERT_EQ(1u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Try to navigate to the help app in the browser.
   ui_test_utils::SendToOmniboxAndSubmit(browser(), "chrome://help-app");
   navigation_observer.Wait();
 
   // We now have two browsers, one for the chrome window, one for the Help app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(GURL("chrome://help-app"), GetActiveWebContents()->GetVisibleURL());
 }
 

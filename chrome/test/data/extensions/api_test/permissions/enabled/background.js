@@ -5,12 +5,12 @@
 // All of the calls to chrome.* functions should succeed, since this extension
 // has requested all required permissions.
 
-var pass = chrome.test.callbackPass;
+const pass = chrome.test.callbackPass;
 
 chrome.test.runTests([
   function history() {
     try {
-      var query = { 'text': '', 'maxResults': 1 };
+      const query = {text: '', maxResults: 1};
       chrome.history.search(query, pass(function(results) {}));
     } catch (e) {
       chrome.test.fail();
@@ -21,7 +21,7 @@ chrome.test.runTests([
     try {
       // Use getRecent() instead of get("1") because desktop Android doesn't
       // create the bookmark bar (id "1") by default.
-      chrome.bookmarks.getRecent(1, pass(function (results) { }));
+      chrome.bookmarks.getRecent(1, pass(function(results) {}));
     } catch (e) {
       chrome.test.fail();
     }
@@ -33,5 +33,5 @@ chrome.test.runTests([
     } catch (e) {
       chrome.test.fail();
     }
-  }
+  },
 ]);

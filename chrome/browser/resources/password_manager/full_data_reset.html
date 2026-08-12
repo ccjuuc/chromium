@@ -49,9 +49,10 @@
 
 <cr-link-row class="cr-row" non-clickable hide-icon
     label="$i18n{fullResetTitle}"
-    sub-label="$i18n{fullResetRowDescription}">
+    sub-label="$i18n{fullResetRowDescription}"
+    aria-show-label aria-show-sublabel>
     <cr-button id="deleteAllButton" class="cr-row-action-button"
-        on-click="onDeleteAllClick_" aria-label="[[getAriaLabel_()]]">
+        on-click="onDeleteAllClick_" aria-description="[[getAriaDescription_()]]">
       $i18n{fullResetDeleteAll}
     </cr-button>
 </cr-link-row>
@@ -63,7 +64,7 @@
   <div slot="body">
     <div id="detailsContainer">
       <div class="counter-row">
-        <cr-icon icon="passwords-icon:password">
+        <cr-icon icon="[[getPasswordIcon_()]]">
         </cr-icon>
         <div>
           <h3 class="counter-summary">[[passwordsCount_]]</h3>
@@ -71,7 +72,7 @@
         </div>
       </div>
       <div class="counter-row">
-        <cr-icon icon="passwords-icon:passkey-filled">
+        <cr-icon icon="[[getPasskeyIcon_()]]">
         </cr-icon>
         <div>
           <h3 class="counter-summary">[[passkeysCount_]]</h3>
@@ -80,7 +81,7 @@
       </div>
     </div>
     <div id="warningContainer">
-      <cr-icon id="warningIcon" icon="passwords-icon:outlined-warning">
+      <cr-icon id="warningIcon" icon="[[getWarningIcon_()]]">
       </cr-icon>
       <div>$i18n{fullResetConfirmationDescription}</div>
     </div>

@@ -60,7 +60,7 @@ class WebViewPermissionHelper {
   using RequestMap = std::map<int, PermissionResponseInfo>;
 
   void RequestPermission(WebViewPermissionType permission_type,
-                         base::Value::Dict request_info,
+                         base::DictValue request_info,
                          PermissionResponseCallback callback,
                          bool allowed_by_default);
 
@@ -92,6 +92,13 @@ class WebViewPermissionHelper {
   void RequestPointerLockPermission(bool user_gesture,
                                     bool last_unlocked_by_target,
                                     base::OnceCallback<void(bool)> callback);
+
+  // Requests Media Permission from the embedder (for Page Embedded Permission
+  // Control).
+  void RequestMediaPermission(ContentSettingsType type,
+                              const GURL& requesting_frame_origin,
+                              bool user_gesture,
+                              base::OnceCallback<void(bool)> callback);
 
   // Requests Geolocation Permission from the embedder.
   void RequestGeolocationPermission(const GURL& requesting_frame,

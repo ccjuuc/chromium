@@ -12,8 +12,6 @@
 #include "chrome/browser/glic/host/context/glic_sharing_utils.h"
 #include "chrome/browser/glic/host/context/glic_tab_data.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -21,6 +19,7 @@
 #include "content/public/common/url_constants.h"
 #include "ui/base/base_window.h"
 #include "ui/views/widget/widget.h"
+
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/cocoa/appkit_utils.h"
 #endif
@@ -117,9 +116,6 @@ void GlicFocusedTabManager::OnFocusedBrowserChanged(
   // can be in a different browser window (i.e., the user drag-n-drop the
   // focused tab into a new window). Let the subscribers to decide what to do in
   // this case.
-  //
-  // TODO(crbug.com/393578218): We should have dedicated subscription lists for
-  // different types of notifications.
   MaybeUpdateFocusedTab(/*force_notify=*/true);
 }
 
@@ -176,10 +172,12 @@ void GlicFocusedTabManager::MaybeUpdateFocusedTab(bool force_notify) {
                           base::Unretained(this)));
 
   if (focused_instance_changed) {
-    NotifyFocusedTabInstanceChanged(focused_tab_state_.focused_tab.get());
     NotifyFocusedTabDataChanged(
         {{TabDataChangeCause::kTabChanged},
-         CreateTabData(focused_tab_state_.focused_tab.get())});
+         CreateTabData(focused_tab_state_.focused_tab
+                           ? tabs::TabInterface::GetFromContents(
+                                 focused_tab_state_.focused_tab.get())
+                           : nullptr)});
   }
 
   if (focused_or_candidate_instance_changed) {
@@ -288,6 +286,11 @@ FocusedTabData GlicFocusedTabManager::ImplToPublic(FocusedTabDataImpl impl) {
       return FocusedTabData(std::string("focused tab disappeared"),
                             /*unfocused_tab=*/nullptr);
     }
+    // TODO(crbug.com/485529659): Confirm whether crash persists.
+    if (contents->IsBeingDestroyed()) {
+      return FocusedTabData(std::string("focused tab being destroyed"),
+                            /*unfocused_tab=*/nullptr);
+    }
     return FocusedTabData(tabs::TabInterface::GetFromContents(contents));
   }
   const NoFocusedTabData* no_focus = impl.no_focus();
@@ -360,7 +363,7 @@ GlicFocusedTabManager::NoFocusedTabData::operator=(
     const NoFocusedTabData& other) = default;
 
 GlicPinAwareDetachedFocusedTabManager::GlicPinAwareDetachedFocusedTabManager(
-    GlicSharingManager* sharing_manager,
+    GlicSharingManagerInternal* sharing_manager,
     GlicFocusedBrowserManager* focused_browser_manager)
     : sharing_manager_(sharing_manager),
       focused_tab_manager_(focused_browser_manager) {}
@@ -454,10 +457,7 @@ void GlicPinAwareDetachedFocusedTabManager::OnTabPinningStatusChanged(
         GetPinAwareFocusedTabData(focused_tab_data);
     NotifyFocusedTabChanged(pin_aware_focused_tab_data);
     NotifyFocusedTabDataChanged(
-        CreateTabData(pin_aware_focused_tab_data.focus()
-                          ? pin_aware_focused_tab_data.focus()->GetContents()
-                          : nullptr)
-            .get());
+        CreateTabData(pin_aware_focused_tab_data.focus()).get());
   }
 }
 

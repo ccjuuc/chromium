@@ -28,11 +28,9 @@ CSSPaintValue::CSSPaintValue(CSSCustomIdentValue* name,
     : CSSImageGeneratorValue(kPaintClass),
       name_(name),
       paint_image_generator_observer_(MakeGarbageCollected<Observer>(this)),
-      off_thread_paint_state_(
-          (!threaded_compositing_enabled ||
-           !RuntimeEnabledFeatures::OffMainThreadCSSPaintEnabled())
-              ? OffThreadPaintState::kMainThread
-              : OffThreadPaintState::kUnknown) {}
+      off_thread_paint_state_(!threaded_compositing_enabled
+                                  ? OffThreadPaintState::kMainThread
+                                  : OffThreadPaintState::kUnknown) {}
 
 CSSPaintValue::CSSPaintValue(CSSCustomIdentValue* name)
     : CSSPaintValue(name, Thread::CompositorThread()) {}
@@ -213,14 +211,21 @@ bool CSSPaintValue::ParseInputArguments(const Document& document) {
     DCHECK_EQ(SecureContextMode::kSecureContext,
               document.GetExecutionContext()->GetSecureContextMode());
     DCHECK(!argument_variable_data_[i]->NeedsVariableResolution());
+    //  TODO(crbug.com/475807587): We use CSSParserLocalContext without a
+    //  property because parsed_value is converted to a CSSStyleValue, which
+    //  does not yet support the random() function. Revisit when CSSOM is
+    //  updated.
+    CSSParserLocalContext local_context =
+        CSSParserLocalContext::CreateWithoutPropertyForCSSOM();
     const CSSValue* parsed_value = argument_variable_data_[i]->ParseForSyntax(
-        input_argument_types[i], SecureContextMode::kSecureContext);
+        input_argument_types[i], SecureContextMode::kSecureContext,
+        local_context);
     if (!parsed_value) {
       input_arguments_invalid_ = true;
       parsed_input_arguments_ = nullptr;
       return false;
     }
-    parsed_input_arguments_->AppendVector(
+    parsed_input_arguments_->append_range(
         StyleValueFactory::CssValueToStyleValueVector(*parsed_value));
   }
   return true;
@@ -240,6 +245,12 @@ void CSSPaintValue::PaintImageGeneratorReady() {
   }
 }
 
+bool CSSPaintValue::IsCorsSameOrigin() const {
+  // TODO(https://crbug.com/513107673): This is pessimistic and incorrectly
+  // considers all paint values to be cross-origin.
+  return false;
+}
+
 bool CSSPaintValue::KnownToBeOpaque(const Document& document,
                                     const ComputedStyle&) const {
   auto it = generators_.find(&document);
@@ -249,6 +260,10 @@ bool CSSPaintValue::KnownToBeOpaque(const Document& document,
 bool CSSPaintValue::Equals(const CSSPaintValue& other) const {
   return GetName() == other.GetName() &&
          CustomCSSText() == other.CustomCSSText();
+}
+
+bool CSSPaintValue::HasRandomFunctions() const {
+  return name_ && name_->HasRandomFunctions();
 }
 
 void CSSPaintValue::TraceAfterDispatch(blink::Visitor* visitor) const {

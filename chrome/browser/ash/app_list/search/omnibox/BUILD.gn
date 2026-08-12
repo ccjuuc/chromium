@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("omnibox") {
@@ -14,6 +12,8 @@ static_library("omnibox") {
     "omnibox_provider.h",
     "omnibox_result.cc",
     "omnibox_result.h",
+    "omnibox_types.cc",
+    "omnibox_types.h",
     "omnibox_util.cc",
     "omnibox_util.h",
     "open_tab_result.cc",
@@ -28,19 +28,17 @@ static_library("omnibox") {
     "//ash/public/cpp/app_list/vector_icons",
     "//ash/strings",
     "//base",
-    "//chrome/app:generated_resources",
     "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/app_list/search",
     "//chrome/browser/ash/app_list/search/common",
     "//chrome/browser/ash/app_list/search/ranking",
     "//chrome/browser/autocomplete",
     "//chrome/browser/bitmap_fetcher",
+    "//chrome/browser/bookmarks",
     "//chrome/browser/favicon",
     "//chrome/browser/history",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/search_engines",
     "//chromeos/ash/components/string_matching",
-    "//chromeos/crosapi/mojom",
     "//components/bookmarks/browser",
     "//components/favicon/core",
     "//components/omnibox/browser",
@@ -82,7 +80,6 @@ source_set("unit_tests") {
     ":omnibox",
     "//ash/constants",
     "//ash/public/cpp",
-    "//ash/strings",
     "//base",
     "//base/test:test_support",
     "//chrome/browser",
@@ -90,13 +87,11 @@ source_set("unit_tests") {
     "//chrome/browser/ash/app_list/search/common",
     "//chrome/browser/ash/app_list/search/test:test_support",
     "//chrome/browser/ash/app_list/test:test_support",
-    "//chrome/browser/ash/crosapi",
     "//chrome/browser/search_engines",
     "//chrome/browser/ui",
     "//chrome/common:non_code_constants",
     "//chrome/test:test_support",
     "//chromeos/ash/components/string_matching",
-    "//chromeos/crosapi/mojom",
     "//components/bookmarks/browser",
     "//components/bookmarks/test",
     "//components/favicon/core/test:test_support",

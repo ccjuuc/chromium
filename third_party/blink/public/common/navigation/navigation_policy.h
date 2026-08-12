@@ -9,7 +9,6 @@
 
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/navigation/resource_intercept_policy.h"
-#include "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom.h"
 
 // A centralized file for base helper methods and policy decisions about
 // navigations.
@@ -38,8 +37,21 @@ enum class NavigationDownloadType {
   // The navigation was initiated without user activation.
   kNoGesture = 6,
 
-  kMaxValue = kNoGesture
+  // The navigation was initiated from an ad script.
+  kAdScript = 7,
+
+  kMaxValue = kAdScript
 };
+
+// LINT.IfChange(InputStartPresence)
+enum class InputStartPresence {
+  kNone = 0,
+  kOnlyOld = 1,
+  kOnlyNew = 2,
+  kBoth = 3,
+  kMaxValue = kBoth,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/navigation/enums.xml:InputStartPresence)
 
 // Stores the navigation types that may be of interest to the download-related
 // metrics to be reported at download-discovery time. Also controls how
@@ -65,14 +77,15 @@ struct BLINK_COMMON_EXPORT NavigationDownloadPolicy {
   // Returns if download is allowed based on |disallowed_types|.
   bool IsDownloadAllowed() const;
 
-  // Possibly set the kOpenerCrossOrigin and kSandboxNoGesture policy in
-  // |download_policy|. The parameter `openee_can_access_opener_origin` only
-  // matters if `is_opener_navigation` is true.
+  // Possibly set the impacted types in `observed_types` and `disallowed_types`.
+  // The parameter `openee_can_access_opener_origin` only matters if
+  // `is_opener_navigation` is true.
   void ApplyDownloadFramePolicy(bool is_opener_navigation,
                                 bool has_gesture,
                                 bool openee_can_access_opener_origin,
                                 bool has_download_sandbox_flag,
-                                bool from_ad);
+                                bool from_ad_frame,
+                                bool is_ad_script_in_stack);
 
   // An alias of a bitset of navigation types.
   using NavigationDownloadTypes =
@@ -86,14 +99,6 @@ struct BLINK_COMMON_EXPORT NavigationDownloadPolicy {
   // a download, the download should be dropped.
   NavigationDownloadTypes disallowed_types;
 };
-
-// Construct a `NavigationInitiatorActivationAndAdStatus` based on the user
-// activation and ad status.
-BLINK_COMMON_EXPORT
-blink::mojom::NavigationInitiatorActivationAndAdStatus
-GetNavigationInitiatorActivationAndAdStatus(bool has_user_activation,
-                                            bool initiator_frame_is_ad,
-                                            bool is_ad_script_in_stack);
 
 }  // namespace blink
 

@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/shelf/shelf.h"
@@ -22,7 +23,6 @@
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/login_wizard.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
@@ -40,8 +40,8 @@
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/login/test/user_adding_screen_utils.h"
 #include "chrome/browser/ash/login/test/user_auth_config.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
 #include "chrome/browser/ui/browser.h"
@@ -334,7 +334,7 @@ void TestSystemTrayIsVisible() {
 // the -login-user flag indicating that the user is already logged in.
 // This profile should NOT be an OTR profile.
 IN_PROC_BROWSER_TEST_F(LoginUserTest, UserPassed) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   std::string profile_base_name =
       BrowserContextHelper::GetUserBrowserContextDirName("hash");
   EXPECT_EQ(profile_base_name, profile->GetBaseName().value());
@@ -345,7 +345,7 @@ IN_PROC_BROWSER_TEST_F(LoginUserTest, UserPassed) {
 
 // After a guest login, we should get the OTR default profile.
 IN_PROC_BROWSER_TEST_F(LoginGuestTest, GuestIsOTR) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   EXPECT_TRUE(profile->IsOffTheRecord());
   // Ensure there's extension service for this profile.
   EXPECT_TRUE(extensions::ExtensionSystem::Get(profile)->extension_service());
@@ -492,7 +492,10 @@ IN_PROC_BROWSER_TEST_F(LoginOfflineManagedTest, UserOfflineLoginBlocked) {
 
 class UserAddingScreenTrayTest : public LoginManagerTest {
  public:
-  UserAddingScreenTrayTest() { login_mixin_.AppendRegularUsers(3); }
+  UserAddingScreenTrayTest() {
+    set_exit_when_last_browser_closes(false);
+    login_mixin_.AppendRegularUsers(3);
+  }
 
  protected:
   LoginManagerMixin login_mixin_{&mixin_host_};
@@ -505,8 +508,10 @@ IN_PROC_BROWSER_TEST_F(UserAddingScreenTrayTest, TrayVisible) {
 }
 
 IN_PROC_BROWSER_TEST_F(LoginManagerTest, SafeBrowsingDisabledForSigninProfile) {
-  ASSERT_FALSE(ProfileHelper::GetSigninProfile()->GetPrefs()->GetBoolean(
-      ::prefs::kSafeBrowsingEnabled));
+  Profile* signin_profile = Profile::FromBrowserContext(
+      BrowserContextHelper::Get()->GetSigninBrowserContext());
+  ASSERT_FALSE(
+      signin_profile->GetPrefs()->GetBoolean(::prefs::kSafeBrowsingEnabled));
 }
 
 class LoginOfflineWithAutoEnrollmentCheckForcedTest : public LoginOfflineTest {

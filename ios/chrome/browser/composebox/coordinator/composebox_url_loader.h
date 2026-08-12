@@ -7,8 +7,16 @@
 
 struct UrlLoadParams;
 
+namespace lens {
+class ClientToAimMessage;
+}
+
 // Protocol for loading URLs in the composebox.
 @protocol ComposeboxURLLoader
+
+// Prepares for loading with a ClientToAimMessage.
+- (void)prepareLoadWithClientToAimMessage:
+    (const lens::ClientToAimMessage&)message;
 
 - (void)loadURLParams:(const UrlLoadParams&)URLLoadParams;
 

@@ -14,7 +14,7 @@
 #import "ios/chrome/browser/overlays/model/public/overlay_request_support.h"
 #import "ios/chrome/browser/overlays/ui_bundled/infobar_banner/infobar_banner_overlay_mediator+consumer_support.h"
 #import "ios/chrome/browser/overlays/ui_bundled/overlay_request_mediator+subclassing.h"
-#import "ios/chrome/browser/passwords/model/ios_chrome_save_password_infobar_delegate.h"
+#import "ios/chrome/browser/passwords/infobars/model/ios_chrome_save_password_infobar_delegate.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/non_modal_signin_promo_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -70,8 +70,21 @@
     return;
   }
 
-  self.passwordDelegate->Accept();
-  [self dismissOverlay];
+  if (self.passwordDelegate->Accept()) {
+    // Dismiss overlay only if there is no password error fix flow ongoing.
+    [self dismissOverlay];
+  }
+}
+
+- (void)dismissInfobarBannerForUserInteraction:(BOOL)userInitiated {
+  if (!userInitiated && self.passwordDelegate &&
+      self.passwordDelegate->IsHandlingPasswordError()) {
+    // Prevent automatic dismissal while error fix flow is ongoing, as the
+    // delegate needs to handle the completion of it. After that, the infobar
+    // will be dismissed.
+    return;
+  }
+  [super dismissInfobarBannerForUserInteraction:userInitiated];
 }
 
 #pragma mark - InfobarBannerOverlayMediator
@@ -80,19 +93,21 @@
   if (self.passwordDelegate) {
     // If the infobar owning the delegate isn't yet deleted, report the infobar
     // as gone right now. The infobar outlives the banner UI when the state of
-    // the page hasn't changed after dimissing the banner.
+    // the page hasn't changed after dismissing the banner.
     //
     // Not having a delegate at this moment happens when navigating away from
     // the page on which the banner is displayed, where the infobar delegate is
     // deleted before the dismiss callback is called.
     self.passwordDelegate->InfobarGone();
+
+    // Trigger the sign-in promo in the banner mediator upon dismissal
+    // completion rather than in the infobar delegate, since the promo
+    // presentation is tied to the banner UI dismissal animation lifecycle.
+    [self.nonModalSignInPromoHandler
+        showNonModalSignInPromoWithType:NonModalSignInPromoType::kPassword];
   }
 
   [super finishDismissal];
-
-  // Shows the promo.
-  [self.nonModalSignInPromoHandler
-      showNonModalSignInPromoWithType:NonModalSignInPromoType::kPassword];
 }
 
 #pragma mark - Private
@@ -101,10 +116,10 @@
 - (UIImage*)iconImage {
   UIImage* image =
 #if BUILDFLAG(IS_IOS_MACCATALYST)
-      CustomSymbolWithPointSize(kPasswordSymbol, kInfobarSymbolPointSize);
+      SymbolWithPointSize(SymbolPassword, kInfobarSymbolPointSize);
 #else
-      MakeSymbolMulticolor(CustomSymbolWithPointSize(kMulticolorPasswordSymbol,
-                                                     kInfobarSymbolPointSize));
+      MakeSymbolMulticolor(SymbolWithPointSize(SymbolMulticolorPassword,
+                                               kInfobarSymbolPointSize));
 #endif  // BUILDFLAG(IS_IOS_MACCATALYST)
   return image;
 }
@@ -124,15 +139,7 @@
   infobarType_ = self.config->infobar_type();
 
   NSString* title = base::SysUTF16ToNSString(delegate->GetMessageText());
-
-  std::optional<std::string> account_string =
-      delegate->GetAccountToStorePassword();
-  NSString* subtitle =
-      account_string ? l10n_util::GetNSStringF(
-                           IDS_IOS_PASSWORD_MANAGER_ON_ACCOUNT_SAVE_SUBTITLE,
-                           base::UTF8ToUTF16(*account_string))
-                     : l10n_util::GetNSString(
-                           IDS_IOS_PASSWORD_MANAGER_LOCAL_SAVE_SUBTITLE);
+  NSString* subtitle = delegate->GetSubtitle();
 
   NSString* button_text = base::SysUTF16ToNSString(
       delegate->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK));

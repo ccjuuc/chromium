@@ -11,6 +11,7 @@ import static org.junit.Assert.assertTrue;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil.FOLIO_FOOT_LENGTH_DP;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Rect;
 import android.view.ContextThemeWrapper;
 
@@ -24,12 +25,16 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.actor.ui.TabIndicatorStatus;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTabDelegate.VisualState;
+import org.chromium.chrome.browser.tab.MediaState;
 import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.util.ColorUtils;
 
 /** Tests for {@link StripLayoutTab}. */
@@ -38,7 +43,7 @@ import org.chromium.ui.util.ColorUtils;
 public class StripLayoutTabTest {
 
     private static final String TAG = "StripLayoutTabTest";
-    private static final float DIVIDER_FOLIO_LIGHT_OPACITY = 0.3f;
+    private static final float DIVIDER_FOLIO_LIGHT_OPACITY = 0.2f;
 
     private Context mContext;
     private StripLayoutTab mNormalTab;
@@ -166,7 +171,7 @@ public class StripLayoutTabTest {
                         SemanticColorUtils.getDefaultIconColorAccent1(mContext),
                         DIVIDER_FOLIO_LIGHT_OPACITY);
         assertEquals(
-                "Light mode divider uses 30% primary color",
+                "Light mode divider uses 20% primary color",
                 expectedColor, mNormalTab.getDividerTint());
 
         // Incognito.
@@ -268,7 +273,149 @@ public class StripLayoutTabTest {
         assertEquals(new Rect(folioFootLengthPx, 0, widthWithoutFolio, height), rect);
     }
 
+    @Test
+    public void testTabIndicatorPriorityHierarchy() {
+        // Case 1: Actuation vs. Recording Media (Recording Media should win)
+        StripLayoutTab tabWithRecording =
+                new StripLayoutTab(
+                        mContext,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        false,
+                        MediaState.RECORDING);
+        tabWithRecording.setTabIndicatorStatus(TabIndicatorStatus.DYNAMIC);
+
+        assertTrue(
+                "Indicator should be shown when recording is active",
+                tabWithRecording.shouldShowIndicator());
+        assertEquals(
+                "Should return recording dot icon res",
+                R.drawable.radio_button_checked_24dp,
+                tabWithRecording.getIndicatorRes());
+        assertEquals(
+                "Should return null overlay res when recording",
+                Resources.ID_NULL,
+                tabWithRecording.getIndicatorOverlayRes());
+        assertEquals(
+                "Should return recording media color for tint",
+                mContext.getColor(R.color.tab_recording_media_color),
+                tabWithRecording.getIndicatorTint());
+
+        // Case 2: Actuation vs. Audible Media (Actuation should win)
+        StripLayoutTab tabWithAudio =
+                new StripLayoutTab(
+                        mContext,
+                        0,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        false,
+                        MediaState.AUDIBLE);
+        tabWithAudio.setTabIndicatorStatus(TabIndicatorStatus.DYNAMIC);
+
+        assertTrue(
+                "Indicator should be shown when actuation is active",
+                tabWithAudio.shouldShowIndicator());
+        assertEquals(
+                "Should return actuation icon res",
+                R.drawable.ic_arrow_selector_spark_14dp,
+                tabWithAudio.getIndicatorRes());
+        assertEquals(
+                "Should return spinner overlay res when actuating",
+                R.drawable.tab_indicator_spinner,
+                tabWithAudio.getIndicatorOverlayRes());
+        assertEquals(
+                "Should return primary color for actuation tint",
+                SemanticColorUtils.getColorPrimary(mContext),
+                tabWithAudio.getIndicatorTint());
+    }
+
     private StripLayoutTab createStripLayoutTab(boolean incognito) {
-        return new StripLayoutTab(mContext, 0, null, null, null, null, incognito, false);
+        return new StripLayoutTab(
+                mContext, 0, null, null, null, null, null, null, incognito, false, MediaState.NONE);
+    }
+
+    @Test
+    public void testCloseButtonRect_OnDesktop() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        mContext.getTheme().applyStyle(R.style.ThemeOverlay_BrowserUI_DesktopDensity, true);
+        mContext.getTheme()
+                .applyStyle(R.style.ThemeOverlay_BrowserUI_DesktopDensity_TabStrip, true);
+
+        // Recreate normal tab under desktop theme
+        StripLayoutTab desktopTab = createStripLayoutTab(false);
+        desktopTab.setWidth(68f);
+        desktopTab.setHeight(40f);
+        desktopTab.setDrawX(100f);
+        desktopTab.setDrawY(0f);
+
+        // Force close button opacity to be visible so layout properties are updated
+        desktopTab.getCloseButton().setOpacity(1.f);
+
+        // LTR Verification
+        LocalizationUtils.setRtlForTesting(false);
+        // Setting width forces the bounds of the close button to be calculated
+        desktopTab.setWidth(68f);
+
+        // On desktop, close touch target bounds should have right padding 8dp, meaning:
+        // left = width (68) - closeButtonWidth (20) - closeOffsetX (24) = 24dp.
+        // absolute close_left = tab_draw_x (100) + 24 = 124f
+        float expectedLtrLeft = 124f;
+        assertEquals(
+                "Close button left in LTR should be 124f",
+                expectedLtrLeft,
+                desktopTab.getCloseButton().getDrawX(),
+                0.0001f);
+        assertEquals(
+                "Close button width in LTR should be 20f",
+                20f,
+                desktopTab.getCloseButton().getWidth(),
+                0.0001f);
+    }
+
+    @Test
+    public void testCloseButtonRect_OnDesktop_Rtl() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        mContext.getTheme().applyStyle(R.style.ThemeOverlay_BrowserUI_DesktopDensity, true);
+        mContext.getTheme()
+                .applyStyle(R.style.ThemeOverlay_BrowserUI_DesktopDensity_TabStrip, true);
+
+        // Recreate normal tab under desktop theme
+        StripLayoutTab desktopTab = createStripLayoutTab(false);
+        desktopTab.setWidth(68f);
+        desktopTab.setHeight(40f);
+        desktopTab.setDrawX(100f);
+        desktopTab.setDrawY(0f);
+
+        // Force close button opacity to be visible so layout properties are updated
+        desktopTab.getCloseButton().setOpacity(1.f);
+
+        // RTL Verification
+        LocalizationUtils.setRtlForTesting(true);
+        // Force calculation of bounds
+        desktopTab.setWidth(68f);
+
+        // In RTL, close_left = tab_draw_x (100) + closeOffsetX (24) = 124f
+        float expectedRtlLeft = 124f;
+        assertEquals(
+                "Close button left in RTL should be 124f",
+                expectedRtlLeft,
+                desktopTab.getCloseButton().getDrawX(),
+                0.0001f);
+        assertEquals(
+                "Close button width in RTL should be 20f",
+                20f,
+                desktopTab.getCloseButton().getWidth(),
+                0.0001f);
     }
 }

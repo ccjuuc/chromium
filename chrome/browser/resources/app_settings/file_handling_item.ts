@@ -10,7 +10,7 @@ import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 
 import {assert} from '//resources/js/assert.js';
 import type {App} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import {BrowserProxy} from 'chrome://resources/cr_components/app_management/browser_proxy.js';
+import {browserProxyFactory} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
 import {AppManagementUserAction} from 'chrome://resources/cr_components/app_management/constants.js';
 import {recordAppManagementUserAction} from 'chrome://resources/cr_components/app_management/util.js';
 import type {CrDialogElement} from 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
@@ -96,21 +96,21 @@ export class FileHandlingItemElement extends FileHandlingItemBase {
 
   protected getLearnMoreLinkUrl_(): string {
     if (this.app.fileHandlingState && this.app.fileHandlingState.learnMoreUrl) {
-      return this.app.fileHandlingState.learnMoreUrl.url;
+      return this.app.fileHandlingState.learnMoreUrl;
     }
     return '';
   }
 
-  protected onLearnMoreLinkClicked_(e: CustomEvent): void {
+  protected onLearnMoreLinkClicked_(e: CustomEvent<{event: Event}>): void {
     if (!this.getLearnMoreLinkUrl_()) {
       // Currently, this branch should only be used on Windows.
       e.detail.event.preventDefault();
       e.stopPropagation();
-      BrowserProxy.getInstance().handler.showDefaultAppAssociationsUi();
+      browserProxyFactory.getInstance().handler.showDefaultAppAssociationsUi();
     }
   }
 
-  protected launchDialog_(e: CustomEvent): void {
+  protected onTypeListLinkClicked_(e: CustomEvent<{event: Event}>): void {
     // A place holder href with the value "#" is used to have a compliant link.
     // This prevents the browser from navigating the window to "#"
     e.detail.event.preventDefault();
@@ -121,7 +121,7 @@ export class FileHandlingItemElement extends FileHandlingItemBase {
         this.app.type, AppManagementUserAction.FILE_HANDLING_OVERFLOW_SHOWN);
   }
 
-  protected onCloseButtonClicked_() {
+  protected onCloseButtonClick_() {
     this.shadowRoot.querySelector<CrDialogElement>('#dialog')!.close();
   }
 
@@ -145,7 +145,7 @@ export class FileHandlingItemElement extends FileHandlingItemBase {
         this.shadowRoot.querySelector<ToggleRowElement>(
                            '#toggle-row')!.isChecked();
 
-    BrowserProxy.getInstance().handler.setFileHandlingEnabled(
+    browserProxyFactory.getInstance().handler.setFileHandlingEnabled(
         this.app.id,
         enabled,
     );

@@ -9,6 +9,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/screen_capture_notification_ui.h"
 #include "chrome/browser/ui/views/chrome_views_export.h"
 #include "chrome/browser/ui/views/screen_sharing_util.h"
@@ -41,7 +42,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration_win.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/win/shell.h"
 #include "ui/views/win/hwnd_util.h"
@@ -429,16 +431,22 @@ void ScreenCaptureNotificationUIImpl::SetWindowsAppId(views::Widget* widget) {
   if (!capturing_web_contents_) {
     return;
   }
-  Browser* browser = chrome::FindBrowserWithTab(capturing_web_contents_.get());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          capturing_web_contents_.get());
   // Can be nullptr from extension background page call.
   if (!browser) {
     return;
   }
-  const base::FilePath profile_path = browser->profile()->GetPath();
+  Browser* raw_browser = browser->GetBrowserForMigrationOnly();
+  const base::FilePath profile_path = browser->GetProfile()->GetPath();
   std::wstring app_user_model_id =
-      browser->is_type_app()
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP
           ? shell_integration::win::GetAppUserModelIdForApp(
-                base::UTF8ToWide(browser->app_name()), profile_path)
+                base::UTF8ToWide(BrowserInitState::From(raw_browser)
+                                     ->create_params()
+                                     .app_name),
+                profile_path)
           : shell_integration::win::GetAppUserModelIdForBrowser(profile_path);
   if (!app_user_model_id.empty()) {
     ui::win::SetAppIdForWindow(app_user_model_id, views::HWNDForWidget(widget));

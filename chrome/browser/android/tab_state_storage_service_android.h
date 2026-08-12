@@ -42,13 +42,39 @@ class TabStateStorageServiceAndroid : public base::SupportsUserData::Data {
                    bool is_off_the_record,
                    const jni_zero::JavaRef<jobject>& j_loaded_data_callback);
 
+  void CountTabsForWindow(JNIEnv* env,
+                          const std::string& window_tag,
+                          bool is_off_the_record,
+                          const jni_zero::JavaRef<jobject>& j_count_callback);
+
   void ClearState(JNIEnv* env);
 
   void ClearWindow(JNIEnv* env, const std::string& window_tag);
 
+  void ClearAllWindowsExcept(JNIEnv* env,
+                             const std::vector<std::string>& window_tags);
+
+  void ClearWindowWithOtrStatus(JNIEnv* env,
+                                const std::string& window_tag,
+                                bool is_off_the_record);
+  void ClearUnusedNodesForWindow(JNIEnv* env,
+                                 const std::string& window_tag,
+                                 bool is_off_the_record,
+                                 const TabStripCollection* collection);
+
   void PrintAll(JNIEnv* env);
 
-  jlong CreateBatch(JNIEnv* env);
+  int64_t CreateBatch(JNIEnv* env);
+
+  void SetKey(JNIEnv* env,
+              const std::string& window_tag,
+              std::vector<uint8_t> key);
+
+  void RemoveKey(JNIEnv* env, const std::string& window_tag);
+
+  base::android::ScopedJavaLocalRef<jbyteArray> GenerateKey(
+      JNIEnv* env,
+      const std::string& window_tag);
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 

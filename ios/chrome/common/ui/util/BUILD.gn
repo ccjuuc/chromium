@@ -16,8 +16,6 @@ source_set("util") {
     "chrome_button.mm",
     "constraints_ui_util.h",
     "constraints_ui_util.mm",
-    "device_util.h",
-    "device_util.mm",
     "pointer_interaction_util.h",
     "pointer_interaction_util.mm",
     "text_view_util.h",
@@ -29,7 +27,6 @@ source_set("util") {
     "//base",
     "//ios/chrome/common:constants",
     "//ios/chrome/common/ui/colors",
-    "//ui/gfx/ios:uikit_util",
   ]
 }
 
@@ -56,6 +53,7 @@ source_set("image_util") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "chrome_button_unittest.mm",
     "dynamic_type_util_unittest.mm",
     "image_util_unittest.mm",
     "ui_util_unittest.mm",

@@ -30,6 +30,7 @@ import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabBuilder;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
+import org.chromium.chrome.browser.tab.TabDestroyStatus;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.ChromeTabCreator;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
@@ -54,11 +55,11 @@ public class CustomTabActivityTabFactory {
     private final BrowserServicesIntentDataProvider mIntentDataProvider;
     private final TabCreatorManager mTabCreatorManager;
     private final Supplier<TabModelSelector> mTabModelSelectorSupplier;
-    private final Supplier<CompositorViewHolder> mCompositorViewHolderSupplier;
+    private final Supplier<@Nullable CompositorViewHolder> mCompositorViewHolderSupplier;
     private final CipherFactory mCipherFactory;
 
     private @Nullable CustomTabsTabModelOrchestrator mTabModelOrchestrator;
-    @ActivityType int mActivityType;
+    private @ActivityType int mActivityType;
 
     public CustomTabActivityTabFactory(
             Activity activity,
@@ -69,7 +70,7 @@ public class CustomTabActivityTabFactory {
             BrowserServicesIntentDataProvider intentDataProvider,
             TabCreatorManager tabCreatorManager,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
-            Supplier<CompositorViewHolder> compositorViewHolderSupplier,
+            Supplier<@Nullable CompositorViewHolder> compositorViewHolderSupplier,
             CipherFactory cipherFactory) {
         mActivity = activity;
         mPersistencePolicy = persistencePolicy;
@@ -93,10 +94,11 @@ public class CustomTabActivityTabFactory {
         return mTabModelOrchestrator;
     }
 
-    public void destroyTabModelOrchestrator() {
+    public @TabDestroyStatus int destroyTabModelOrchestrator() {
         if (mTabModelOrchestrator != null) {
-            mTabModelOrchestrator.destroy();
+            return mTabModelOrchestrator.destroy();
         }
+        return TabDestroyStatus.NO_SHUTDOWN;
     }
 
     /** Calls the {@link TabModelOrchestrator} to create TabModels and TabPersistentStore. */
@@ -108,6 +110,7 @@ public class CustomTabActivityTabFactory {
                         mTabCreatorManager,
                         mPersistencePolicy,
                         mActivityType,
+                        mIntentDataProvider.getCustomTabMode(),
                         AsyncTabParamsManagerSingleton.getInstance(),
                         mCipherFactory);
     }

@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -13,24 +14,28 @@
 #include "build/build_config.h"
 #include "content/browser/webui/url_data_manager.h"
 #include "content/public/browser/url_data_source.h"
+#include "content/public/common/content_client.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
+#include "content/public/test/test_content_client.h"
 #include "content/public/test/test_renderer_host.h"
-#include "mojo/public/c/system/data_pipe.h"
-#include "mojo/public/c/system/types.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/url_util.h"
 
 namespace content {
 
 namespace {
 
 const char* kTestWebUIScheme = kChromeUIScheme;
+const char kNonChromeDummyScheme[] = "non-chrome";
 constexpr char kTestWebUIHost[] = "testhost";
 constexpr size_t kMaxTestResourceSize = 10;
 
@@ -204,42 +209,57 @@ TEST_P(WebUIURLLoaderFactoryTest, RangeRequest) {
 
   if (loader_client.completion_status().error_code == net::OK) {
     ASSERT_TRUE(loader_client.response_body().is_valid());
-    size_t response_size;
-    ASSERT_EQ(
-        loader_client.response_body().ReadData(
-            MOJO_READ_DATA_FLAG_QUERY, base::span<uint8_t>(), response_size),
-        MOJO_RESULT_OK);
-    ASSERT_EQ(response_size, GetParam().expected_size);
+    std::string response;
+    ASSERT_TRUE(mojo::BlockingCopyToString(
+        loader_client.response_body_release(), &response));
+    ASSERT_EQ(response.size(), GetParam().expected_size);
 
-    if (response_size > 0u) {
-      std::vector<uint8_t> response(response_size);
-      ASSERT_EQ(loader_client.response_body().ReadData(
-                    MOJO_READ_DATA_FLAG_ALL_OR_NONE, response, response_size),
-                MOJO_RESULT_OK);
-
-      std::vector<unsigned char> expected_resource =
-          TestWebUIDataSource::GetResource(GetParam().resource_size);
-      expected_resource.erase(expected_resource.begin(),
-                              expected_resource.begin() +
-                                  GetParam().first_byte_position.value_or(0));
-      expected_resource.resize(GetParam().expected_size);
-      EXPECT_EQ(response, expected_resource);
-    }
+    std::vector<unsigned char> expected_resource =
+        TestWebUIDataSource::GetResource(GetParam().resource_size);
+    expected_resource.erase(
+        expected_resource.begin(),
+        expected_resource.begin() + GetParam().first_byte_position.value_or(0));
+    expected_resource.resize(GetParam().expected_size);
+    EXPECT_EQ(std::vector<uint8_t>(response.begin(), response.end()),
+              expected_resource);
   }
 }
 
-TEST(WebUIURLLoaderFactoryErrorHandlingTest, HandlesDestroyedContext) {
-  content::BrowserTaskEnvironment task_environment;
-  auto test_context = std::make_unique<TestBrowserContext>();
-  mojo::Remote<network::mojom::URLLoaderFactory> loader_factory(
-      CreateWebUIServiceWorkerLoaderFactory(test_context.get(),
-                                            kTestWebUIScheme, {}));
+class WebUIURLLoaderFactoryInvalidUrlTest
+    : public RenderViewHostTestHarness,
+      public testing::WithParamInterface<std::string> {
+ public:
+  void SetUp() override {
+    RenderViewHostTestHarness::SetUp();
+    browser_client_ = std::make_unique<InvalidUrlTestBrowserClient>();
+    old_browser_client_ = SetBrowserClientForTesting(browser_client_.get());
+  }
 
-  // Destroy the context before sending a request.
-  test_context.reset();
+  void TearDown() override {
+    SetBrowserClientForTesting(old_browser_client_);
+    RenderViewHostTestHarness::TearDown();
+  }
+
+ private:
+  class InvalidUrlTestBrowserClient : public TestContentBrowserClient {
+   public:
+    void GetAdditionalWebUISchemes(
+        std::vector<std::string>* additional_schemes) override {
+      additional_schemes->push_back(kNonChromeDummyScheme);
+    }
+  };
+
+  std::unique_ptr<InvalidUrlTestBrowserClient> browser_client_;
+  raw_ptr<ContentBrowserClient> old_browser_client_;
+};
+
+TEST_P(WebUIURLLoaderFactoryInvalidUrlTest, InvalidUrl) {
+  mojo::Remote<network::mojom::URLLoaderFactory> loader_factory(
+      CreateWebUIURLLoaderFactory(main_rfh(), kNonChromeDummyScheme,
+                                  /*allowed_hosts=*/{}));
 
   network::ResourceRequest request;
-  request.url = GURL(base::StrCat({kTestWebUIScheme, "://", kTestWebUIHost}));
+  request.url = GURL(base::StrCat({kNonChromeDummyScheme, "://", GetParam()}));
 
   mojo::PendingRemote<network::mojom::URLLoader> loader;
   network::TestURLLoaderClient loader_client;
@@ -249,7 +269,23 @@ TEST(WebUIURLLoaderFactoryErrorHandlingTest, HandlesDestroyedContext) {
       net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
   loader_client.RunUntilComplete();
 
-  ASSERT_EQ(loader_client.completion_status().error_code, net::ERR_FAILED);
+  EXPECT_EQ(loader_client.completion_status().error_code, net::ERR_INVALID_URL);
 }
+
+// Test that non-chrome://blob-internals, non-chrome://dino and
+// non-chrome://network-error/<xyz> are not reachable.
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    WebUIURLLoaderFactoryInvalidUrlTest,
+    testing::Values(kChromeUIBlobInternalsHost,
+                    kChromeUIDinoHost,
+                    base::StrCat({kChromeUINetworkErrorHost, "/-147"})),
+    [](const testing::TestParamInfo<std::string>& info) {
+      std::string name = base::StrCat({kNonChromeDummyScheme, "_", info.param});
+      std::replace_if(
+          name.begin(), name.end(), [](char c) { return !std::isalnum(c); },
+          '_');
+      return name;
+    });
 
 }  // namespace content

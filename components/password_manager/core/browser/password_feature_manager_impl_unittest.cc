@@ -27,10 +27,6 @@ class PasswordFeatureManagerImplTest : public ::testing::Test {
       : password_feature_manager_(&pref_service_,
                                   &pref_service_,
                                   &sync_service_) {
-#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
-    pref_service_.registry()->RegisterBooleanPref(
-        ::prefs::kExplicitBrowserSignin, false);
-#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 
     account_.email = "account@gmail.com";
     account_.gaia = GaiaId("account");
@@ -104,7 +100,7 @@ TEST_F(PasswordFeatureManagerImplTest, AccountStorageDisabledIfSigninPaused) {
             syncer::SyncService::TransportState::PAUSED);
   ASSERT_EQ(password_manager::sync_util::GetPasswordSyncState(&sync_service_),
             password_manager::sync_util::SyncState::kNotActive);
-  EXPECT_FALSE(password_feature_manager_.IsAccountStorageEnabled());
+  EXPECT_FALSE(password_feature_manager_.IsAccountStorageActive());
 }
 
 #if BUILDFLAG(IS_ANDROID)

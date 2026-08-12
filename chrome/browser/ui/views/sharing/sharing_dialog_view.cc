@@ -10,22 +10,24 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "components/sharing_message/sharing_app.h"
 #include "components/sharing_message/sharing_metrics.h"
 #include "components/sync/protocol/sync_enums.pb.h"
 #include "components/sync_device_info/device_info.h"
 #include "components/url_formatter/elide_url.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -96,20 +98,23 @@ const gfx::VectorIcon& GetIconType(
     const syncer::DeviceInfo::FormFactor& device_form_factor) {
   switch (device_form_factor) {
     case syncer::DeviceInfo::FormFactor::kPhone:
-      return kHardwareSmartphoneIcon;
+      return features::IsRoundedIconsEnabled() ? kMobileIcon
+                                               : kHardwareSmartphoneOldIcon;
     case syncer::DeviceInfo::FormFactor::kTablet:
-      return kTabletIcon;
+      return features::IsRoundedIconsEnabled() ? kTabletFilledIcon
+                                               : kTabletOldIcon;
     default:
-      return kHardwareComputerIcon;
+      return features::IsRoundedIconsEnabled() ? kComputerCustomIcon
+                                               : kHardwareComputerOldIcon;
   }
 }
 
 }  // namespace
 
-SharingDialogView::SharingDialogView(views::View* anchor_view,
+SharingDialogView::SharingDialogView(views::BubbleAnchor anchor,
                                      content::WebContents* web_contents,
                                      SharingDialogData data)
-    : LocationBarBubbleDelegateView(anchor_view,
+    : LocationBarBubbleDelegateView(anchor,
                                     web_contents,
                                     /*autosize=*/true),
       data_(std::move(data)) {
@@ -195,21 +200,6 @@ void SharingDialogView::AppButtonPressed(size_t index) {
 // static
 views::BubbleDialogDelegateView* SharingDialogView::GetAsBubble(
     SharingDialog* dialog) {
-  return static_cast<SharingDialogView*>(dialog);
-}
-
-// static
-views::BubbleDialogDelegateView* SharingDialogView::GetAsBubbleForClickToCall(
-    SharingDialog* dialog) {
-#if BUILDFLAG(IS_CHROMEOS)
-  if (!dialog) {
-    auto* bubble = IntentPickerBubbleView::intent_picker_bubble();
-    if (bubble && bubble->bubble_type() ==
-                      IntentPickerBubbleView::BubbleType::kClickToCall) {
-      return bubble;
-    }
-  }
-#endif
   return static_cast<SharingDialogView*>(dialog);
 }
 
@@ -336,3 +326,6 @@ std::unique_ptr<views::StyledLabel> SharingDialogView::CreateHelpText() {
 
   return label;
 }
+
+BEGIN_METADATA(SharingDialogView)
+END_METADATA

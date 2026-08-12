@@ -33,12 +33,12 @@ class InProcessVideoFrameHandleReleaser final
   // mojom::MojoVideoFrameHandleReleaser implementation.
   void ReleaseVideoFrame(
       const base::UnguessableToken& release_token,
-      const std::optional<gpu::SyncToken>& release_sync_token) final {
+      std::optional<gpu::SharedImageExportResult> release_export_result) final {
     DVLOG(3) << __func__ << "(" << release_token.ToString() << ")";
     // Note: we don't pass a gpu::SyncToken because it's assumed that the
     // renderer client uses SynchronizationType::kGpuCommandsCompleted.
     dst_releaser_remote_->ReleaseVideoFrame(
-        release_token, /*release_sync_token=*/std::nullopt);
+        release_token, /*release_export_result=*/std::nullopt);
   }
 
  private:
@@ -93,6 +93,7 @@ void OOPVideoDecoderService::Construct(
     const gfx::ColorSpace& target_color_space) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (video_decoder_client_receiver_.is_bound()) {
+    CHECK(mojo::IsInMessageDispatch());
     mojo::ReportBadMessage("Construct() already called");
     return;
   }
@@ -128,10 +129,12 @@ void OOPVideoDecoderService::Initialize(const VideoDecoderConfig& config,
   // The client of the OOPVideoDecoderService is the OOPVideoDecoder which lives
   // in the GPU process and is therefore up the trust gradient. The
   // OOPVideoDecoder doesn't call Initialize() with a cdm id (it calls
-  // Initialize() with a cdm context instead). Thus, it's appropriate to crash
-  // here via a NOTREACHED().
+  // Initialize() with a cdm context instead). Thus, it's appropriate to report
+  // a bad message.
   if (cdm && !cdm->is_cdm_context()) {
-    NOTREACHED();
+    CHECK(mojo::IsInMessageDispatch());
+    mojo::ReportBadMessage("OOPVideoDecoder only supports CdmContext");
+    return;
   }
 
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -250,8 +253,9 @@ void OOPVideoDecoderService::OnOverlayInfoChanged(
   // The client of the OOPVideoDecoderService is the OOPVideoDecoder which lives
   // in the GPU process and is therefore up the trust gradient. The
   // OOPVideoDecoder doesn't call OnOverlayInfoChanged(). Thus, it's appropriate
-  // to crash here via a NOTREACHED().
-  NOTREACHED();
+  // to report a bad message.
+  CHECK(mojo::IsInMessageDispatch());
+  mojo::ReportBadMessage("OnOverlayInfoChanged() is not supported");
 }
 
 void OOPVideoDecoderService::OnVideoFrameDecoded(
@@ -263,13 +267,12 @@ void OOPVideoDecoderService::OnVideoFrameDecoded(
   DCHECK(release_token.has_value());
 
   // The mojo traits have been coded assuming these conditions.
-  CHECK(frame->metadata().allow_overlay);
   CHECK(!frame->metadata().end_of_stream);
   CHECK(frame->metadata().power_efficient);
   CHECK(!frame->HasMappableSharedImage());
 
   video_decoder_client_remote_->OnVideoFrameDecoded(
-      std::move(frame), can_read_without_stalling, *release_token);
+      std::move(frame), can_read_without_stalling, release_token);
 }
 
 void OOPVideoDecoderService::OnWaiting(WaitingReason reason) {

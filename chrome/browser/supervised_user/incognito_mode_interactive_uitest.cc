@@ -5,8 +5,9 @@
 #include <string>
 #include <string_view>
 
+#include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -36,7 +37,8 @@ class IncognitoModeInSupervisedContextUiTest
  protected:
   auto CheckCountOfIncognitoBrowsers(size_t expected_count) {
     return Check(base::BindLambdaForTesting([expected_count]() {
-                   return chrome::GetIncognitoBrowserCount() == expected_count;
+                   return GlobalBrowserCollection::GetInstance()
+                              ->GetIncognitoBrowserCount() == expected_count;
                  }),
                  "Verify count of incognito browsers");
   }
@@ -46,11 +48,11 @@ class IncognitoModeInSupervisedContextUiTest
 IN_PROC_BROWSER_TEST_F(IncognitoModeInSupervisedContextUiTest,
                        IncognitoModeIsNotAvailableToSupervisedUser) {
   ASSERT_TRUE(
-      IncognitoModePrefs::IsIncognitoAllowed(child().browser().profile()));
-  TurnOnSyncFor(child());
+      IncognitoModePrefs::IsIncognitoAllowed(child().browser().GetProfile()));
+  SigninToBrowserFor(child());
 
   ASSERT_FALSE(
-      IncognitoModePrefs::IsIncognitoAllowed(child().browser().profile()));
+      IncognitoModePrefs::IsIncognitoAllowed(child().browser().GetProfile()));
 
   RunTestSequenceInContext(
       BrowserElements::From(&child().browser())->GetContext(),
@@ -66,9 +68,9 @@ IN_PROC_BROWSER_TEST_F(IncognitoModeInSupervisedContextUiTest,
 // TODO(https://crbug.com/367205684): SelectMenuItem unsupported
 IN_PROC_BROWSER_TEST_F(IncognitoModeInSupervisedContextUiTest,
                        IncognitoModeIsAvailableToHeadOfHousehold) {
-  TurnOnSyncFor(head_of_household());
+  SigninToBrowserFor(head_of_household());
   ASSERT_TRUE(IncognitoModePrefs::IsIncognitoAllowed(
-      head_of_household().browser().profile()));
+      head_of_household().browser().GetProfile()));
 
   RunTestSequenceInContext(
       BrowserElements::From(&head_of_household().browser())->GetContext(),

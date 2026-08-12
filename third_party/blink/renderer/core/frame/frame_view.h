@@ -38,6 +38,7 @@ class CORE_EXPORT FrameView : public EmbeddedContentView {
       ComputeIntersectionsContext&) = 0;
 
   virtual std::optional<NaturalSizingInfo> GetNaturalDimensions() const = 0;
+  virtual void ClearNaturalDimensions() = 0;
 
   // Returns true if this frame could potentially skip rendering and avoid
   // scheduling visual updates.
@@ -49,7 +50,6 @@ class CORE_EXPORT FrameView : public EmbeddedContentView {
   bool CanThrottleRenderingForPropagation() const;
 
   bool IsFrameView() const override { return true; }
-  virtual bool ShouldReportMainFrameIntersection() const { return false; }
 
   Frame& GetFrame() const;
   std::optional<mojom::blink::FrameVisibility> GetFrameVisibility() const {

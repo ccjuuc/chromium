@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/content_suggestions/magic_stack/ui/magic_stack_context_menu_interaction_handler.h"
 
-#import "base/containers/contains.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/commerce/core/commerce_feature_list.h"
@@ -13,7 +12,7 @@
 #import "ios/chrome/browser/content_suggestions/magic_stack/ui/magic_stack_module_container_delegate.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_data.h"
-#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_item.h"
+#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_config.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_collection_utils.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_client_id.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_settings_util.h"
@@ -54,26 +53,8 @@ BOOL AllowsLongPressForModuleType(ContentSuggestionsModuleType type) {
 NSString* GetContextMenuTitleForType(ContentSuggestionsModuleType type,
                                      MagicStackModule* config) {
   switch (type) {
-    case ContentSuggestionsModuleType::kTabResumption: {
-      TabResumptionItem* tabResumptionItemConfig =
-          static_cast<TabResumptionItem*>(config);
-      if ((base::Contains(commerce::kShopCardVariation.Get(),
-                          commerce::kShopCardArm3) ||
-           commerce::kShopCardVariation.Get() == commerce::kShopCardArm4) &&
-          tabResumptionItemConfig.shopCardData) {
-        if (tabResumptionItemConfig.shopCardData.shopCardItemType ==
-                ShopCardItemType::kPriceDropOnTab &&
-            tabResumptionItemConfig.shopCardData.priceDrop.has_value()) {
-          return l10n_util::GetNSString(
-              IDS_IOS_CONTENT_SUGGESTIONS_SHOPCARD_PRICE_DROP_CONTEXT_MENU_TITLE);
-        } else if (tabResumptionItemConfig.shopCardData.shopCardItemType ==
-                   ShopCardItemType::kPriceTrackableProductOnTab) {
-          return l10n_util::GetNSString(
-              IDS_IOS_CONTENT_SUGGESTIONS_SHOPCARD_TRACK_PRICE_CONTEXT_MENU_TITLE);
-        }
-      }
+    case ContentSuggestionsModuleType::kTabResumption:
       return l10n_util::GetNSString(IDS_IOS_TAB_RESUMPTION_CONTEXT_MENU_TITLE);
-    }
     case ContentSuggestionsModuleType::kSafetyCheck:
       return l10n_util::GetNSString(IDS_IOS_SAFETY_CHECK_CONTEXT_MENU_TITLE);
     case ContentSuggestionsModuleType::kPriceTrackingPromo:
@@ -105,18 +86,9 @@ NSString* GetContextMenuHideDescriptionForType(
     ContentSuggestionsModuleType type,
     MagicStackModule* config) {
   switch (type) {
-    case ContentSuggestionsModuleType::kTabResumption: {
-      TabResumptionItem* tabResumptionItemConfig =
-          static_cast<TabResumptionItem*>(config);
-      if (tabResumptionItemConfig.shopCardData &&
-          tabResumptionItemConfig.shopCardData.shopCardItemType ==
-              ShopCardItemType::kPriceTrackableProductOnTab) {
-        return l10n_util::GetNSString(
-            IDS_IOS_CONTENT_SUGGESTIONS_SHOPCARD_TRACK_PRICE_HIDE_ALT);
-      }
+    case ContentSuggestionsModuleType::kTabResumption:
       return l10n_util::GetNSString(
           IDS_IOS_TAB_RESUMPTION_CONTEXT_MENU_DESCRIPTION);
-    }
     case ContentSuggestionsModuleType::kSafetyCheck:
       return l10n_util::GetNSString(
           IDS_IOS_SAFETY_CHECK_CONTEXT_MENU_DESCRIPTION);
@@ -186,18 +158,14 @@ NSString* GetContextMenuHideDescriptionForType(
 - (NSArray<UIMenuElement*>*)menuElements {
   NSMutableArray<UIAction*>* actions = [[NSMutableArray alloc] init];
 
-  BOOL canShowTipsNotificationsOptIn = IsTipsModuleType(self.type);
-
-  BOOL canShowSafetyCheckNotificationsOptIn =
-      self.type == ContentSuggestionsModuleType::kSafetyCheck &&
-      IsSafetyCheckNotificationsEnabled();
-
-  if (canShowTipsNotificationsOptIn || canShowSafetyCheckNotificationsOptIn) {
+  // Currently, only Tips and Safety Check modules support the notifications
+  // opt-in/out toggle.
+  if (IsTipsModuleType(self.type) ||
+      self.type == ContentSuggestionsModuleType::kSafetyCheck) {
     [actions addObject:[self toggleNotificationsActionForModuleType:self.type]];
   }
 
   [actions addObject:[self hideAction]];
-
   [actions addObject:[self customizeCardAction]];
 
   return actions;
@@ -243,13 +211,13 @@ NSString* GetContextMenuHideDescriptionForType(
 
   NSString* title =
       GetContextMenuHideDescriptionForType(self.type, self.config);
-  UIAction* hideAction = [UIAction
-      actionWithTitle:title
-                image:DefaultSymbolWithPointSize(kHideActionSymbol, 18)
-           identifier:title
-              handler:^(UIAction* action) {
-                weakSelf.shouldHide = YES;
-              }];
+  UIAction* hideAction =
+      [UIAction actionWithTitle:title
+                          image:SymbolWithPointSize(SymbolHideAction, 18)
+                     identifier:title
+                        handler:^(UIAction* action) {
+                          weakSelf.shouldHide = YES;
+                        }];
 
   hideAction.attributes = UIMenuElementAttributesDestructive;
 
@@ -259,15 +227,15 @@ NSString* GetContextMenuHideDescriptionForType(
 /// Returns the menu action to show the card customization settings.
 - (UIAction*)customizeCardAction {
   __weak __typeof(self) weakSelf = self;
-  UIAction* customizeCardAction = [UIAction
-      actionWithTitle:
-          l10n_util::GetNSString(
-              IDS_IOS_MAGIC_STACK_CONTEXT_MENU_CUSTOMIZE_CARDS_TITLE)
-                image:DefaultSymbolWithPointSize(kSliderHorizontalSymbol, 18)
-           identifier:nil
-              handler:^(UIAction* action) {
-                [weakSelf.delegate customizeCardsWasTapped];
-              }];
+  UIAction* customizeCardAction =
+      [UIAction actionWithTitle:
+                    l10n_util::GetNSString(
+                        IDS_IOS_MAGIC_STACK_CONTEXT_MENU_CUSTOMIZE_CARDS_TITLE)
+                          image:SymbolWithPointSize(SymbolSliderHorizontal, 18)
+                     identifier:nil
+                        handler:^(UIAction* action) {
+                          [weakSelf.delegate customizeCardsWasTapped];
+                        }];
   return customizeCardAction;
 }
 
@@ -282,7 +250,7 @@ NSString* GetContextMenuHideDescriptionForType(
   __weak __typeof(self) weakSelf = self;
 
   NSString* title;
-  NSString* symbol;
+  Symbol symbol;
 
   int featureTitle = [self pushNotificationTitleMessageId:moduleType];
 
@@ -290,17 +258,17 @@ NSString* GetContextMenuHideDescriptionForType(
     title = l10n_util::GetNSStringF(
         IDS_IOS_TIPS_NOTIFICATIONS_CONTEXT_MENU_ITEM_OFF,
         l10n_util::GetStringUTF16(featureTitle));
-    symbol = kBellSlashSymbol;
+    symbol = SymbolBellSlash;
   } else {
     title =
         l10n_util::GetNSStringF(IDS_IOS_TIPS_NOTIFICATIONS_CONTEXT_MENU_ITEM,
                                 l10n_util::GetStringUTF16(featureTitle));
-    symbol = kBellSymbol;
+    symbol = SymbolBell;
   }
 
   return [UIAction
       actionWithTitle:title
-                image:DefaultSymbolWithPointSize(symbol, 18)
+                image:SymbolWithPointSize(symbol, 18)
            identifier:nil
               handler:^(UIAction* action) {
                 if (optedIn) {

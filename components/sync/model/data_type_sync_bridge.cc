@@ -9,6 +9,7 @@
 #include "base/notreached.h"
 #include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/data_batch.h"
+#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
 #include "components/sync/protocol/entity_data.h"
@@ -25,6 +26,11 @@ DataTypeSyncBridge::DataTypeSyncBridge(
 }
 
 DataTypeSyncBridge::~DataTypeSyncBridge() = default;
+
+std::unique_ptr<MetadataChangeList>
+DataTypeSyncBridge::CreateMetadataChangeList() {
+  return std::make_unique<InMemoryMetadataChangeList>();
+}
 
 void DataTypeSyncBridge::OnSyncStarting(
     const DataTypeActivationRequest& request) {}
@@ -82,14 +88,6 @@ DataTypeSyncBridge::OnCommitAttemptFailed(SyncCommitError commit_error) {
 
 size_t DataTypeSyncBridge::EstimateSyncOverheadMemoryUsage() const {
   return 0U;
-}
-
-sync_pb::EntitySpecifics
-DataTypeSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
-    const sync_pb::EntitySpecifics& entity_specifics) const {
-  // Clears all fields by default to avoid the memory and I/O overhead of an
-  // additional copy of the data.
-  return sync_pb::EntitySpecifics();
 }
 
 DataTypeLocalChangeProcessor* DataTypeSyncBridge::change_processor() {

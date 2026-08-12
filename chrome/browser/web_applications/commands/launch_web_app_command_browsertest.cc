@@ -13,22 +13,24 @@
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
+#include "chrome/browser/web_applications/model/migration_behavior.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/browser/web_applications/test/web_app_page_waiter.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
@@ -37,8 +39,10 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -70,7 +74,7 @@ class LaunchWebAppWithFirstRunServiceBrowserTest
 
  protected:
   WebAppProvider& GetProvider() {
-    return *WebAppProvider::GetForTest(browser()->profile());
+    return *WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   webapps::AppId InstallWebApp(const GURL& app_url) {
@@ -91,6 +95,7 @@ class LaunchWebAppWithFirstRunServiceBrowserTest
         FallbackBehavior::kAllowFallbackDataAlways);
 
     run_loop.Run();
+    GetProvider().command_manager().AwaitAllCommandsCompleteForTesting();
     return app_id;
   }
 };
@@ -98,11 +103,11 @@ class LaunchWebAppWithFirstRunServiceBrowserTest
 IN_PROC_BROWSER_TEST_P(
     LaunchWebAppWithFirstRunServiceBrowserTest,
     LaunchInWindowWithFirstRunServiceRequiredSetupSuccessful) {
-  webapps::AppId app_id =
-      InstallWebApp(https_server()->GetURL("/banners/manifest_test_page.html"));
+  webapps::AppId app_id = InstallWebApp(
+      embedded_https_test_server().GetURL("/banners/manifest_test_page.html"));
 
-  ASSERT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            GetProvider().registrar_unsafe().GetInstallState(app_id));
+  ASSERT_TRUE(GetProvider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 
   Browser* browser = LaunchWebAppBrowser(app_id);
   ASSERT_TRUE(browser);
@@ -110,11 +115,11 @@ IN_PROC_BROWSER_TEST_P(
 
 IN_PROC_BROWSER_TEST_P(LaunchWebAppWithFirstRunServiceBrowserTest,
                        LaunchInTabWithFirstRunServiceRequiredSetupSuccessful) {
-  webapps::AppId app_id =
-      InstallWebApp(https_server()->GetURL("/banners/manifest_test_page.html"));
+  webapps::AppId app_id = InstallWebApp(
+      embedded_https_test_server().GetURL("/banners/manifest_test_page.html"));
 
-  ASSERT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            GetProvider().registrar_unsafe().GetInstallState(app_id));
+  ASSERT_TRUE(GetProvider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 
   Browser* browser = LaunchBrowserForWebAppInTab(app_id);
   ASSERT_TRUE(browser);
@@ -139,11 +144,11 @@ class LaunchWebAppCommandTest : public WebAppBrowserTestBase {
     return *web_app::WebAppProvider::GetForTest(profile());
   }
 
-  std::tuple<base::WeakPtr<Browser>,
+  std::tuple<base::WeakPtr<BrowserWindowInterface>,
              base::WeakPtr<content::WebContents>,
              apps::LaunchContainer>
   DoLaunch(apps::AppLaunchParams params) {
-    base::test::TestFuture<base::WeakPtr<Browser>,
+    base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                            base::WeakPtr<content::WebContents>,
                            apps::LaunchContainer>
         future;
@@ -183,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, TabbedLaunchCurrentBrowser) {
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
       apps::LaunchSource::kFromCommandLine, {}, std::nullopt);
 
-  base::WeakPtr<Browser> launch_browser;
+  base::WeakPtr<BrowserWindowInterface> launch_browser;
   base::WeakPtr<content::WebContents> web_contents;
   apps::LaunchContainer launch_container;
   std::tie(launch_browser, web_contents, launch_container) =
@@ -191,7 +196,7 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, TabbedLaunchCurrentBrowser) {
 
   EXPECT_FALSE(AppBrowserController::IsWebApp(launch_browser.get()));
   EXPECT_EQ(launch_browser.get(), browser());
-  EXPECT_EQ(launch_browser->tab_strip_model()->count(), 2);
+  EXPECT_EQ(launch_browser->GetTabStripModel()->count(), 2);
   EXPECT_EQ(web_contents->GetVisibleURL(), kAppStartUrl);
 }
 
@@ -201,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, StandaloneLaunch) {
       WindowOpenDisposition::CURRENT_TAB, apps::LaunchSource::kFromCommandLine,
       {}, std::nullopt);
 
-  base::WeakPtr<Browser> launch_browser;
+  base::WeakPtr<BrowserWindowInterface> launch_browser;
   base::WeakPtr<content::WebContents> web_contents;
   apps::LaunchContainer launch_container;
   std::tie(launch_browser, web_contents, launch_container) =
@@ -209,16 +214,16 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, StandaloneLaunch) {
 
   EXPECT_TRUE(AppBrowserController::IsWebApp(launch_browser.get()));
   EXPECT_NE(launch_browser.get(), browser());
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2ul);
-  EXPECT_EQ(launch_browser->tab_strip_model()->count(), 1);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2ul);
+  EXPECT_EQ(launch_browser->GetTabStripModel()->count(), 1);
   EXPECT_EQ(web_contents->GetVisibleURL(), kAppStartUrl);
 }
 
 IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, StandaloneLaunchAppConfig) {
-  base::WeakPtr<Browser> launch_browser;
+  base::WeakPtr<BrowserWindowInterface> launch_browser;
   base::WeakPtr<content::WebContents> web_contents;
   apps::LaunchContainer launch_container;
-  base::test::TestFuture<base::WeakPtr<Browser>,
+  base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                          base::WeakPtr<content::WebContents>,
                          apps::LaunchContainer>
       launch_future;
@@ -230,14 +235,14 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, StandaloneLaunchAppConfig) {
 
   EXPECT_TRUE(AppBrowserController::IsWebApp(launch_browser.get()));
   EXPECT_NE(launch_browser.get(), browser());
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2ul);
-  EXPECT_EQ(launch_browser->tab_strip_model()->count(), 1);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2ul);
+  EXPECT_EQ(launch_browser->GetTabStripModel()->count(), 1);
   EXPECT_EQ(web_contents->GetVisibleURL(), kAppStartUrl);
 }
 
 IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, AppLaunchNoIntegration) {
   const GURL kStartUrl =
-      https_server()->GetURL("/banners/manifest_test_page.html");
+      embedded_https_test_server().GetURL("/banners/manifest_test_page.html");
   auto web_app_info =
       WebAppInstallInfo::CreateWithStartUrlForTesting(kStartUrl);
   web_app_info->scope = kStartUrl.GetWithoutFilename();
@@ -267,20 +272,20 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, AppLaunchNoIntegration) {
   EXPECT_EQ(provider().registrar_unsafe().GetInstallState(app_id),
             proto::INSTALLED_WITHOUT_OS_INTEGRATION);
 
-  base::test::TestFuture<base::WeakPtr<Browser>,
+  base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
                          base::WeakPtr<content::WebContents>,
                          apps::LaunchContainer>
       launch_future;
   provider().scheduler().LaunchApp(app_id, std::nullopt,
                                    launch_future.GetCallback());
   ASSERT_TRUE(launch_future.Wait());
-  EXPECT_EQ(provider().registrar_unsafe().GetInstallState(app_id),
-            proto::INSTALLED_WITH_OS_INTEGRATION);
+  EXPECT_TRUE(provider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 
   // Check the state is correct.
   EXPECT_TRUE(AppBrowserController::IsWebApp(
-      launch_future.Get<base::WeakPtr<Browser>>().get()));
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2ul);
+      launch_future.Get<base::WeakPtr<BrowserWindowInterface>>().get()));
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2ul);
   EXPECT_EQ(
       launch_future.Get<base::WeakPtr<content::WebContents>>()->GetVisibleURL(),
       kStartUrl);
@@ -290,10 +295,80 @@ IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest, AppLaunchNoIntegration) {
                   .registrar_unsafe()
                   .GetAppCurrentOsIntegrationState(app_id)
                   ->has_shortcut());
-  EXPECT_EQ(proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-            provider().registrar_unsafe().GetInstallState(app_id));
+  EXPECT_TRUE(provider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
+}
+
+IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest,
+                       NoAppLaunchForMigrationSuggestedApps) {
+  const GURL kStartUrl =
+      embedded_https_test_server().GetURL("/banners/manifest_test_page.html");
+  auto web_app_info =
+      WebAppInstallInfo::CreateWithStartUrlForTesting(kStartUrl);
+  web_app_info->scope = kStartUrl.GetWithoutFilename();
+  web_app_info->title = u"Name";
+  web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
+
+  web_app_info->migration_sources.emplace_back(
+      webapps::ManifestId(GURL("https://migration.example.com/start.html")),
+      MigrationBehavior::kSuggest);
+
+  // Install & bypass os integration.
+  base::test::TestFuture<const webapps::AppId&, webapps::InstallResultCode>
+      install_future;
+  WebAppInstallParams params;
+  params.add_to_applications_menu = false;
+  params.add_to_desktop = false;
+  params.add_to_quick_launch_bar = false;
+  params.install_state = proto::InstallState::SUGGESTED_FROM_MIGRATION;
+  provider().scheduler().InstallFromInfoWithParams(
+      std::move(web_app_info), /*overwrite_existing_manifest_fields=*/false,
+      webapps::WebappInstallSource::OMNIBOX_INSTALL_ICON,
+      install_future.GetCallback(), params);
+  ASSERT_TRUE(install_future.Wait());
+  webapps::AppId app_id = install_future.Get<webapps::AppId>();
+
+  // Check that OS integration has NOT occurred.
+  EXPECT_FALSE(provider()
+                   .registrar_unsafe()
+                   .GetAppCurrentOsIntegrationState(app_id)
+                   ->has_shortcut());
+  EXPECT_EQ(provider().registrar_unsafe().GetInstallState(app_id),
+            proto::SUGGESTED_FROM_MIGRATION);
+
+  // No app has been launched.
+  base::test::TestFuture<base::WeakPtr<BrowserWindowInterface>,
+                         base::WeakPtr<content::WebContents>,
+                         apps::LaunchContainer>
+      launch_future;
+  provider().scheduler().LaunchApp(app_id, std::nullopt,
+                                   launch_future.GetCallback());
+  ASSERT_TRUE(launch_future.Wait());
+  EXPECT_THAT(launch_future.Get<base::WeakPtr<BrowserWindowInterface>>().get(),
+              testing::IsNull());
 }
 
 }  // namespace
+
+IN_PROC_BROWSER_TEST_F(LaunchWebAppCommandTest,
+                       WebAppLaunchProcessStripsMaliciousShortcutUrl) {
+  apps::AppLaunchParams launch_params =
+      CreateLaunchParams(app_id_, apps::LaunchContainer::kLaunchContainerWindow,
+                         WindowOpenDisposition::NEW_WINDOW,
+                         apps::LaunchSource::kFromTest, {}, std::nullopt);
+  launch_params.override_url = GURL("chrome://settings");
+
+  base::WeakPtr<BrowserWindowInterface> launch_browser;
+  base::WeakPtr<content::WebContents> web_contents;
+  apps::LaunchContainer launch_container;
+  std::tie(launch_browser, web_contents, launch_container) =
+      DoLaunch(std::move(launch_params));
+
+  ASSERT_TRUE(web_contents);
+  EXPECT_TRUE(test::WebAppPageWaiter(web_contents.get())
+                  .ExpectUrl(kAppStartUrl)
+                  .ManifestOrLoadedNoManifest()
+                  .WaitAndFlushCommands());
+}
 
 }  // namespace web_app

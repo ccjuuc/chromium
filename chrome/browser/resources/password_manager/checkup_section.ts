@@ -233,8 +233,7 @@ export class CheckupSectionElement extends CheckupSectionElementBase {
     const param = route.queryParameters.get(UrlParam.START_CHECK) || '';
     if (param === 'true' && !this.didCheckAutomatically_) {
       this.didCheckAutomatically_ = true;
-      PasswordManagerImpl.getInstance().startBulkPasswordCheck().catch(
-          () => {});
+      PasswordManagerImpl.getInstance().startBulkPasswordCheck();
       PasswordManagerImpl.getInstance().recordPasswordCheckInteraction(
           PasswordCheckInteraction.START_CHECK_AUTOMATICALLY);
     }
@@ -366,7 +365,7 @@ export class CheckupSectionElement extends CheckupSectionElementBase {
    * Starts/Restarts bulk password check.
    */
   private onPasswordCheckButtonClick_() {
-    PasswordManagerImpl.getInstance().startBulkPasswordCheck().catch(() => {});
+    PasswordManagerImpl.getInstance().startBulkPasswordCheck();
     PasswordManagerImpl.getInstance().recordPasswordCheckInteraction(
         PasswordCheckInteraction.START_CHECK_MANUALLY);
   }
@@ -391,9 +390,9 @@ export class CheckupSectionElement extends CheckupSectionElementBase {
       issues: chrome.passwordsPrivate.PasswordUiEntry[],
       checkForError: boolean): string {
     if (checkForError && this.status_ && this.didCompromiseCheckFail_()) {
-      return 'cr:error';
+      return 'cr:error-filled';
     }
-    return !!issues && issues.length ? 'cr:error' : 'cr:check-circle';
+    return !!issues && issues.length ? 'cr:error-filled' : 'cr:check-circle';
   }
 
   private hasAnyIssues_(): boolean {
@@ -517,7 +516,7 @@ export class CheckupSectionElement extends CheckupSectionElementBase {
     this.focusConfig.set(Page.CHECKUP_DETAILS, () => {
       const previousRoute = Router.getInstance().previousRoute;
 
-      switch (previousRoute?.details as unknown as CheckupSubpage) {
+      switch (previousRoute?.details as CheckupSubpage) {
         case CheckupSubpage.COMPROMISED:
           focusWithoutInk(this.$.compromisedRow);
           break;

@@ -19,6 +19,8 @@ import org.chromium.ui.accessibility.AccessibilityState;
 /** Helper class for recording UMA histograms of accessibility events */
 @NullMarked
 public class AccessibilityHistogramRecorder {
+    private static final String TAG = "A11yHistRecorder";
+
     // OnDemand AX Mode histogram values
     @VisibleForTesting
     public static final String PERCENTAGE_DROPPED_HISTOGRAM =
@@ -126,6 +128,34 @@ public class AccessibilityHistogramRecorder {
     @VisibleForTesting
     public static final String ACCESSIBILITY_TIME_OF_SCROLL_TO_MAKE_VISIBLE =
             "Accessibility.Android.Performance.TimeOfScrollToMakeVisible";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_HEALTH_INDEX =
+            "Accessibility.Android.Performance.FakeCache.CacheHealthIndex";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_STALE_NODES =
+            "Accessibility.Android.Performance.FakeCache.PercentageStaleNodes";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_CHURN =
+            "Accessibility.Android.Performance.FakeCache.PercentageChurn";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_OCCUPANCY =
+            "Accessibility.Android.Performance.FakeCache.PercentageOccupancy";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_SIZE =
+            "Accessibility.Android.Performance.FakeCache.Size";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_FAKE_CACHE_NODE_LIFETIME =
+            "Accessibility.Android.Performance.FakeCache.NodeLifetime";
+
+    @VisibleForTesting
+    public static final String ACCESSIBILITY_CONTENT_CHANGED_SUBTREE =
+            "Accessibility.Android.ContentChanged.Subtree";
 
     private static final int EVENTS_DROPPED_HISTOGRAM_MIN_BUCKET = 1;
     private static final int EVENTS_DROPPED_HISTOGRAM_MAX_BUCKET = 10000;
@@ -269,6 +299,12 @@ public class AccessibilityHistogramRecorder {
     /** Increment the count of instances when a node was returned from the cache */
     public void incrementNodeWasReturnedFromCache() {
         mNodeWasReturnedFromCache++;
+    }
+
+    /** Record UMA histogram for the lifetime of removed nodes */
+    public void reportNodeRemovedFromFakeCache(int virtualViewId, long lifetimeMs) {
+        RecordHistogram.recordMediumTimesHistogram(
+                ACCESSIBILITY_FAKE_CACHE_NODE_LIFETIME, lifetimeMs);
     }
 
     /** Increment the count of instances when a node was created from scratch */
@@ -485,6 +521,48 @@ public class AccessibilityHistogramRecorder {
                 1,
                 DateUtils.MINUTE_IN_MILLIS,
                 80);
+    }
+
+    /** Record UMA histogram for the number of stale nodes on the fake cache */
+    public void recordFakeCacheHistograms(
+            int peakCacheNodesInBatch, int removedCount, int staleNodes, int cacheSize) {
+        Integer cacheHealthIndex = null;
+        Integer churn = null;
+        int staleNodesPercent;
+
+        RecordHistogram.recordCustomCountHistogram(
+                ACCESSIBILITY_FAKE_CACHE_SIZE,
+                cacheSize,
+                CACHE_MAX_NODES_MIN_BUCKET,
+                CACHE_MAX_NODES_MAX_BUCKET,
+                CACHE_MAX_NODES_BUCKET_COUNT);
+
+        if (cacheSize == 0) {
+            staleNodesPercent = 0;
+        } else {
+            staleNodesPercent = computeIntegerPercent(staleNodes, cacheSize);
+        }
+        RecordHistogram.recordPercentageHistogram(
+                ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_STALE_NODES, staleNodesPercent);
+
+        if (peakCacheNodesInBatch > 0 && removedCount > 0) {
+            churn = computeIntegerPercent(removedCount, peakCacheNodesInBatch);
+            RecordHistogram.recordPercentageHistogram(
+                    ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_CHURN, churn);
+
+            float stability = 1.0f - ((float) churn / 100.0f);
+            float validity = 1.0f - ((float) staleNodesPercent / 100.0f);
+            cacheHealthIndex = (int) (stability * validity * 100.0f);
+
+            RecordHistogram.recordPercentageHistogram(
+                    ACCESSIBILITY_FAKE_CACHE_HEALTH_INDEX, cacheHealthIndex);
+        }
+    }
+
+    /** Record UMA histogram for whether a content changed event was for a subtree. */
+    public void recordContentChangedSubtreeHistogram(boolean setSubtreeChanged) {
+        RecordHistogram.recordBooleanHistogram(
+                ACCESSIBILITY_CONTENT_CHANGED_SUBTREE, setSubtreeChanged);
     }
 
     /**

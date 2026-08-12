@@ -1,9 +1,9 @@
 Name: llvm-libc
 URL: https://libc.llvm.org/
 Version: N/A
-Revision: DEPS
-Update Mechanism: Manual
-License: MIT, NCSA
+Revision: 6fd5620cc4fd3c55ee749e9bf71f52038431f76d
+Update Mechanism: Autoroll
+License: Apache-with-LLVM-Exception, NCSA
 License File: src/LICENSE.TXT
 Security Critical: yes
 Shipped: yes

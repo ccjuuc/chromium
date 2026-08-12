@@ -7,8 +7,11 @@
 
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "media/base/audio_codecs.h"
 #include "media/base/cdm_factory.h"
+#include "media/base/channel_layout.h"
 #include "media/base/demuxer.h"
+#include "media/base/encryption_scheme.h"
 #include "media/base/renderer_factory_selector.h"
 #include "media/base/svc_scalability_mode.h"
 #include "media/base/video_transformation.h"
@@ -41,21 +44,16 @@ struct EnumTraits<media::mojom::CdmEvent, ::media::CdmEvent> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::CdmEvent input,
-                        ::media::CdmEvent* output) {
+  static ::media::CdmEvent FromMojom(media::mojom::CdmEvent input) {
     switch (input) {
       case media::mojom::CdmEvent::kSignificantPlayback:
-        *output = ::media::CdmEvent::kSignificantPlayback;
-        return true;
+        return ::media::CdmEvent::kSignificantPlayback;
       case media::mojom::CdmEvent::kPlaybackError:
-        *output = ::media::CdmEvent::kPlaybackError;
-        return true;
+        return ::media::CdmEvent::kPlaybackError;
       case media::mojom::CdmEvent::kCdmError:
-        *output = ::media::CdmEvent::kCdmError;
-        return true;
+        return ::media::CdmEvent::kCdmError;
       case media::mojom::CdmEvent::kHardwareContextReset:
-        *output = ::media::CdmEvent::kHardwareContextReset;
-        return true;
+        return ::media::CdmEvent::kHardwareContextReset;
     }
 
     NOTREACHED();
@@ -86,24 +84,50 @@ struct EnumTraits<media::mojom::CdmSessionClosedReason,
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::CdmSessionClosedReason input,
-                        ::media::CdmSessionClosedReason* output) {
+  static ::media::CdmSessionClosedReason FromMojom(
+      media::mojom::CdmSessionClosedReason input) {
     switch (input) {
       case media::mojom::CdmSessionClosedReason::kInternalError:
-        *output = ::media::CdmSessionClosedReason::kInternalError;
-        return true;
+        return ::media::CdmSessionClosedReason::kInternalError;
       case media::mojom::CdmSessionClosedReason::kClose:
-        *output = ::media::CdmSessionClosedReason::kClose;
-        return true;
+        return ::media::CdmSessionClosedReason::kClose;
       case media::mojom::CdmSessionClosedReason::kReleaseAcknowledged:
-        *output = ::media::CdmSessionClosedReason::kReleaseAcknowledged;
-        return true;
+        return ::media::CdmSessionClosedReason::kReleaseAcknowledged;
       case media::mojom::CdmSessionClosedReason::kHardwareContextReset:
-        *output = ::media::CdmSessionClosedReason::kHardwareContextReset;
-        return true;
+        return ::media::CdmSessionClosedReason::kHardwareContextReset;
       case media::mojom::CdmSessionClosedReason::kResourceEvicted:
-        *output = ::media::CdmSessionClosedReason::kResourceEvicted;
-        return true;
+        return ::media::CdmSessionClosedReason::kResourceEvicted;
+    }
+
+    NOTREACHED();
+  }
+};
+
+template <>
+struct EnumTraits<media::mojom::EncryptionScheme, ::media::EncryptionScheme> {
+  static media::mojom::EncryptionScheme ToMojom(
+      ::media::EncryptionScheme input) {
+    switch (input) {
+      case ::media::EncryptionScheme::kUnencrypted:
+        return media::mojom::EncryptionScheme::kUnencrypted;
+      case ::media::EncryptionScheme::kCenc:
+        return media::mojom::EncryptionScheme::kCenc;
+      case ::media::EncryptionScheme::kCbcs:
+        return media::mojom::EncryptionScheme::kCbcs;
+    }
+
+    NOTREACHED();
+  }
+
+  static ::media::EncryptionScheme FromMojom(
+      media::mojom::EncryptionScheme input) {
+    switch (input) {
+      case media::mojom::EncryptionScheme::kUnencrypted:
+        return ::media::EncryptionScheme::kUnencrypted;
+      case media::mojom::EncryptionScheme::kCenc:
+        return ::media::EncryptionScheme::kCenc;
+      case media::mojom::EncryptionScheme::kCbcs:
+        return ::media::EncryptionScheme::kCbcs;
     }
 
     NOTREACHED();
@@ -129,21 +153,16 @@ struct EnumTraits<media::mojom::EncryptionType, ::media::EncryptionType> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::EncryptionType input,
-                        ::media::EncryptionType* output) {
+  static ::media::EncryptionType FromMojom(media::mojom::EncryptionType input) {
     switch (input) {
       case media::mojom::EncryptionType::kNone:
-        *output = ::media::EncryptionType::kNone;
-        return true;
+        return ::media::EncryptionType::kNone;
       case media::mojom::EncryptionType::kClear:
-        *output = ::media::EncryptionType::kClear;
-        return true;
+        return ::media::EncryptionType::kClear;
       case media::mojom::EncryptionType::kEncrypted:
-        *output = ::media::EncryptionType::kEncrypted;
-        return true;
+        return ::media::EncryptionType::kEncrypted;
       case media::mojom::EncryptionType::kEncryptedWithClearLead:
-        *output = ::media::EncryptionType::kEncryptedWithClearLead;
-        return true;
+        return ::media::EncryptionType::kEncryptedWithClearLead;
     }
 
     NOTREACHED();
@@ -233,123 +252,86 @@ struct EnumTraits<media::mojom::SVCScalabilityMode, media::SVCScalabilityMode> {
     NOTREACHED();
   }
 
-  static bool FromMojom(media::mojom::SVCScalabilityMode input,
-                        media::SVCScalabilityMode* output) {
+  static media::SVCScalabilityMode FromMojom(
+      media::mojom::SVCScalabilityMode input) {
     switch (input) {
       case media::mojom::SVCScalabilityMode::kL1T1:
-        *output = media::SVCScalabilityMode::kL1T1;
-        return true;
+        return media::SVCScalabilityMode::kL1T1;
       case media::mojom::SVCScalabilityMode::kL1T2:
-        *output = media::SVCScalabilityMode::kL1T2;
-        return true;
+        return media::SVCScalabilityMode::kL1T2;
       case media::mojom::SVCScalabilityMode::kL1T3:
-        *output = media::SVCScalabilityMode::kL1T3;
-        return true;
+        return media::SVCScalabilityMode::kL1T3;
       case media::mojom::SVCScalabilityMode::kL2T1:
-        *output = media::SVCScalabilityMode::kL2T1;
-        return true;
+        return media::SVCScalabilityMode::kL2T1;
       case media::mojom::SVCScalabilityMode::kL2T2:
-        *output = media::SVCScalabilityMode::kL2T2;
-        return true;
+        return media::SVCScalabilityMode::kL2T2;
       case media::mojom::SVCScalabilityMode::kL2T3:
-        *output = media::SVCScalabilityMode::kL2T3;
-        return true;
+        return media::SVCScalabilityMode::kL2T3;
       case media::mojom::SVCScalabilityMode::kL3T1:
-        *output = media::SVCScalabilityMode::kL3T1;
-        return true;
+        return media::SVCScalabilityMode::kL3T1;
       case media::mojom::SVCScalabilityMode::kL3T2:
-        *output = media::SVCScalabilityMode::kL3T2;
-        return true;
+        return media::SVCScalabilityMode::kL3T2;
       case media::mojom::SVCScalabilityMode::kL3T3:
-        *output = media::SVCScalabilityMode::kL3T3;
-        return true;
+        return media::SVCScalabilityMode::kL3T3;
       case media::mojom::SVCScalabilityMode::kL2T1h:
-        *output = media::SVCScalabilityMode::kL2T1h;
-        return true;
+        return media::SVCScalabilityMode::kL2T1h;
       case media::mojom::SVCScalabilityMode::kL2T2h:
-        *output = media::SVCScalabilityMode::kL2T2h;
-        return true;
+        return media::SVCScalabilityMode::kL2T2h;
       case media::mojom::SVCScalabilityMode::kL2T3h:
-        *output = media::SVCScalabilityMode::kL2T3h;
-        return true;
+        return media::SVCScalabilityMode::kL2T3h;
       case media::mojom::SVCScalabilityMode::kS2T1:
-        *output = media::SVCScalabilityMode::kS2T1;
-        return true;
+        return media::SVCScalabilityMode::kS2T1;
       case media::mojom::SVCScalabilityMode::kS2T2:
-        *output = media::SVCScalabilityMode::kS2T2;
-        return true;
+        return media::SVCScalabilityMode::kS2T2;
       case media::mojom::SVCScalabilityMode::kS2T3:
-        *output = media::SVCScalabilityMode::kS2T3;
-        return true;
+        return media::SVCScalabilityMode::kS2T3;
       case media::mojom::SVCScalabilityMode::kS2T1h:
-        *output = media::SVCScalabilityMode::kS2T1h;
-        return true;
+        return media::SVCScalabilityMode::kS2T1h;
       case media::mojom::SVCScalabilityMode::kS2T2h:
-        *output = media::SVCScalabilityMode::kS2T2h;
-        return true;
+        return media::SVCScalabilityMode::kS2T2h;
       case media::mojom::SVCScalabilityMode::kS2T3h:
-        *output = media::SVCScalabilityMode::kS2T3h;
-        return true;
+        return media::SVCScalabilityMode::kS2T3h;
       case media::mojom::SVCScalabilityMode::kS3T1:
-        *output = media::SVCScalabilityMode::kS3T1;
-        return true;
+        return media::SVCScalabilityMode::kS3T1;
       case media::mojom::SVCScalabilityMode::kS3T2:
-        *output = media::SVCScalabilityMode::kS3T2;
-        return true;
+        return media::SVCScalabilityMode::kS3T2;
       case media::mojom::SVCScalabilityMode::kS3T3:
-        *output = media::SVCScalabilityMode::kS3T3;
-        return true;
+        return media::SVCScalabilityMode::kS3T3;
       case media::mojom::SVCScalabilityMode::kS3T1h:
-        *output = media::SVCScalabilityMode::kS3T1h;
-        return true;
+        return media::SVCScalabilityMode::kS3T1h;
       case media::mojom::SVCScalabilityMode::kS3T2h:
-        *output = media::SVCScalabilityMode::kS3T2h;
-        return true;
+        return media::SVCScalabilityMode::kS3T2h;
       case media::mojom::SVCScalabilityMode::kS3T3h:
-        *output = media::SVCScalabilityMode::kS3T3h;
-        return true;
+        return media::SVCScalabilityMode::kS3T3h;
       case media::mojom::SVCScalabilityMode::kL2T1Key:
-        *output = media::SVCScalabilityMode::kL2T1Key;
-        return true;
+        return media::SVCScalabilityMode::kL2T1Key;
       case media::mojom::SVCScalabilityMode::kL2T2Key:
-        *output = media::SVCScalabilityMode::kL2T2Key;
-        return true;
+        return media::SVCScalabilityMode::kL2T2Key;
       case media::mojom::SVCScalabilityMode::kL2T2KeyShift:
-        *output = media::SVCScalabilityMode::kL2T2KeyShift;
-        return true;
+        return media::SVCScalabilityMode::kL2T2KeyShift;
       case media::mojom::SVCScalabilityMode::kL2T3Key:
-        *output = media::SVCScalabilityMode::kL2T3Key;
-        return true;
+        return media::SVCScalabilityMode::kL2T3Key;
       case media::mojom::SVCScalabilityMode::kL2T3KeyShift:
-        *output = media::SVCScalabilityMode::kL2T3KeyShift;
-        return true;
+        return media::SVCScalabilityMode::kL2T3KeyShift;
       case media::mojom::SVCScalabilityMode::kL3T1Key:
-        *output = media::SVCScalabilityMode::kL3T1Key;
-        return true;
+        return media::SVCScalabilityMode::kL3T1Key;
       case media::mojom::SVCScalabilityMode::kL3T2Key:
-        *output = media::SVCScalabilityMode::kL3T2Key;
-        return true;
+        return media::SVCScalabilityMode::kL3T2Key;
       case media::mojom::SVCScalabilityMode::kL3T2KeyShift:
-        *output = media::SVCScalabilityMode::kL3T2KeyShift;
-        return true;
+        return media::SVCScalabilityMode::kL3T2KeyShift;
       case media::mojom::SVCScalabilityMode::kL3T3Key:
-        *output = media::SVCScalabilityMode::kL3T3Key;
-        return true;
+        return media::SVCScalabilityMode::kL3T3Key;
       case media::mojom::SVCScalabilityMode::kL3T3KeyShift:
-        *output = media::SVCScalabilityMode::kL3T3KeyShift;
-        return true;
+        return media::SVCScalabilityMode::kL3T3KeyShift;
       case media::mojom::SVCScalabilityMode::kL3T1h:
-        *output = media::SVCScalabilityMode::kL3T1h;
-        return true;
+        return media::SVCScalabilityMode::kL3T1h;
       case media::mojom::SVCScalabilityMode::kL3T2h:
-        *output = media::SVCScalabilityMode::kL3T2h;
-        return true;
+        return media::SVCScalabilityMode::kL3T2h;
       case media::mojom::SVCScalabilityMode::kL3T3h:
-        *output = media::SVCScalabilityMode::kL3T3h;
-        return true;
+        return media::SVCScalabilityMode::kL3T3h;
     }
     NOTREACHED();
-    return false;
+    NOTREACHED();
   }
 };
 
@@ -369,18 +351,15 @@ struct EnumTraits<media::mojom::SVCInterLayerPredMode,
     NOTREACHED();
   }
 
-  static bool FromMojom(media::mojom::SVCInterLayerPredMode input,
-                        media::SVCInterLayerPredMode* output) {
+  static media::SVCInterLayerPredMode FromMojom(
+      media::mojom::SVCInterLayerPredMode input) {
     switch (input) {
       case media::mojom::SVCInterLayerPredMode::kOff:
-        *output = media::SVCInterLayerPredMode::kOff;
-        return true;
+        return media::SVCInterLayerPredMode::kOff;
       case media::mojom::SVCInterLayerPredMode::kOn:
-        *output = media::SVCInterLayerPredMode::kOn;
-        return true;
+        return media::SVCInterLayerPredMode::kOn;
       case media::mojom::SVCInterLayerPredMode::kOnKeyPic:
-        *output = media::SVCInterLayerPredMode::kOnKeyPic;
-        return true;
+        return media::SVCInterLayerPredMode::kOnKeyPic;
     }
     NOTREACHED();
   }
@@ -405,21 +384,16 @@ struct EnumTraits<media::mojom::VideoRotation, ::media::VideoRotation> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::VideoRotation input,
-                        media::VideoRotation* output) {
+  static media::VideoRotation FromMojom(media::mojom::VideoRotation input) {
     switch (input) {
       case media::mojom::VideoRotation::kVideoRotation0:
-        *output = ::media::VideoRotation::VIDEO_ROTATION_0;
-        return true;
+        return ::media::VideoRotation::VIDEO_ROTATION_0;
       case media::mojom::VideoRotation::kVideoRotation90:
-        *output = ::media::VideoRotation::VIDEO_ROTATION_90;
-        return true;
+        return ::media::VideoRotation::VIDEO_ROTATION_90;
       case media::mojom::VideoRotation::kVideoRotation180:
-        *output = ::media::VideoRotation::VIDEO_ROTATION_180;
-        return true;
+        return ::media::VideoRotation::VIDEO_ROTATION_180;
       case media::mojom::VideoRotation::kVideoRotation270:
-        *output = ::media::VideoRotation::VIDEO_ROTATION_270;
-        return true;
+        return ::media::VideoRotation::VIDEO_ROTATION_270;
     }
 
     NOTREACHED();
@@ -457,39 +431,28 @@ struct EnumTraits<media::mojom::RendererType, ::media::RendererType> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::RendererType input,
-                        ::media::RendererType* output) {
+  static ::media::RendererType FromMojom(media::mojom::RendererType input) {
     switch (input) {
       case media::mojom::RendererType::kRendererImpl:
-        *output = ::media::RendererType::kRendererImpl;
-        return true;
+        return ::media::RendererType::kRendererImpl;
       case media::mojom::RendererType::kMojo:
-        *output = ::media::RendererType::kMojo;
-        return true;
+        return ::media::RendererType::kMojo;
       case media::mojom::RendererType::kCourier:
-        *output = ::media::RendererType::kCourier;
-        return true;
+        return ::media::RendererType::kCourier;
       case media::mojom::RendererType::kFlinging:
-        *output = ::media::RendererType::kFlinging;
-        return true;
+        return ::media::RendererType::kFlinging;
       case media::mojom::RendererType::kCast:
-        *output = ::media::RendererType::kCast;
-        return true;
+        return ::media::RendererType::kCast;
       case media::mojom::RendererType::kMediaFoundation:
-        *output = ::media::RendererType::kMediaFoundation;
-        return true;
+        return ::media::RendererType::kMediaFoundation;
       case media::mojom::RendererType::kRemoting:
-        *output = ::media::RendererType::kRemoting;
-        return true;
+        return ::media::RendererType::kRemoting;
       case media::mojom::RendererType::kCastStreaming:
-        *output = ::media::RendererType::kCastStreaming;
-        return true;
+        return ::media::RendererType::kCastStreaming;
       case media::mojom::RendererType::kContentEmbedderDefined:
-        *output = ::media::RendererType::kContentEmbedderDefined;
-        return true;
+        return ::media::RendererType::kContentEmbedderDefined;
       case media::mojom::RendererType::kTest:
-        *output = ::media::RendererType::kTest;
-        return true;
+        return ::media::RendererType::kTest;
     }
 
     NOTREACHED();
@@ -521,30 +484,22 @@ struct EnumTraits<media::mojom::DemuxerType, ::media::DemuxerType> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::DemuxerType input,
-                        ::media::DemuxerType* output) {
+  static ::media::DemuxerType FromMojom(media::mojom::DemuxerType input) {
     switch (input) {
       case media::mojom::DemuxerType::kUnknownDemuxer:
-        *output = ::media::DemuxerType::kUnknownDemuxer;
-        return true;
+        return ::media::DemuxerType::kUnknownDemuxer;
       case media::mojom::DemuxerType::kMockDemuxer:
-        *output = ::media::DemuxerType::kMockDemuxer;
-        return true;
+        return ::media::DemuxerType::kMockDemuxer;
       case media::mojom::DemuxerType::kFFmpegDemuxer:
-        *output = ::media::DemuxerType::kFFmpegDemuxer;
-        return true;
+        return ::media::DemuxerType::kFFmpegDemuxer;
       case media::mojom::DemuxerType::kChunkDemuxer:
-        *output = ::media::DemuxerType::kChunkDemuxer;
-        return true;
+        return ::media::DemuxerType::kChunkDemuxer;
       case media::mojom::DemuxerType::kFrameInjectingDemuxer:
-        *output = ::media::DemuxerType::kFrameInjectingDemuxer;
-        return true;
+        return ::media::DemuxerType::kFrameInjectingDemuxer;
       case media::mojom::DemuxerType::kStreamProviderDemuxer:
-        *output = ::media::DemuxerType::kStreamProviderDemuxer;
-        return true;
+        return ::media::DemuxerType::kStreamProviderDemuxer;
       case media::mojom::DemuxerType::kManifestDemuxer:
-        *output = ::media::DemuxerType::kManifestDemuxer;
-        return true;
+        return ::media::DemuxerType::kManifestDemuxer;
     }
 
     NOTREACHED();
@@ -619,95 +574,233 @@ struct EnumTraits<media::mojom::CreateCdmStatus, media::CreateCdmStatus> {
 
   // Returning false results in deserialization failure and causes the
   // message pipe receiving it to be disconnected.
-  static bool FromMojom(media::mojom::CreateCdmStatus input,
-                        media::CreateCdmStatus* output) {
+  static media::CreateCdmStatus FromMojom(media::mojom::CreateCdmStatus input) {
     switch (input) {
       case media::mojom::CreateCdmStatus::kSuccess:
-        *output = media::CreateCdmStatus::kSuccess;
-        return true;
+        return media::CreateCdmStatus::kSuccess;
       case media::mojom::CreateCdmStatus::kUnknownError:
-        *output = media::CreateCdmStatus::kUnknownError;
-        return true;
+        return media::CreateCdmStatus::kUnknownError;
       case media::mojom::CreateCdmStatus::kCdmCreationAborted:
-        *output = media::CreateCdmStatus::kCdmCreationAborted;
-        return true;
+        return media::CreateCdmStatus::kCdmCreationAborted;
       case media::mojom::CreateCdmStatus::kCreateCdmFuncNotAvailable:
-        *output = media::CreateCdmStatus::kCreateCdmFuncNotAvailable;
-        return true;
+        return media::CreateCdmStatus::kCreateCdmFuncNotAvailable;
       case media::mojom::CreateCdmStatus::kCdmHelperCreationFailed:
-        *output = media::CreateCdmStatus::kCdmHelperCreationFailed;
-        return true;
+        return media::CreateCdmStatus::kCdmHelperCreationFailed;
       case media::mojom::CreateCdmStatus::kGetCdmPrefDataFailed:
-        *output = media::CreateCdmStatus::kGetCdmPrefDataFailed;
-        return true;
+        return media::CreateCdmStatus::kGetCdmPrefDataFailed;
       case media::mojom::CreateCdmStatus::kGetCdmOriginIdFailed:
-        *output = media::CreateCdmStatus::kGetCdmOriginIdFailed;
-        return true;
+        return media::CreateCdmStatus::kGetCdmOriginIdFailed;
       case media::mojom::CreateCdmStatus::kInitCdmFailed:
-        *output = media::CreateCdmStatus::kInitCdmFailed;
-        return true;
+        return media::CreateCdmStatus::kInitCdmFailed;
       case media::mojom::CreateCdmStatus::kCdmFactoryCreationFailed:
-        *output = media::CreateCdmStatus::kCdmFactoryCreationFailed;
-        return true;
+        return media::CreateCdmStatus::kCdmFactoryCreationFailed;
       case media::mojom::CreateCdmStatus::kCdmNotSupported:
-        *output = media::CreateCdmStatus::kCdmNotSupported;
-        return true;
+        return media::CreateCdmStatus::kCdmNotSupported;
       case media::mojom::CreateCdmStatus::kInvalidCdmConfig:
-        *output = media::CreateCdmStatus::kInvalidCdmConfig;
-        return true;
+        return media::CreateCdmStatus::kInvalidCdmConfig;
       case media::mojom::CreateCdmStatus::kUnsupportedKeySystem:
-        *output = media::CreateCdmStatus::kUnsupportedKeySystem;
-        return true;
+        return media::CreateCdmStatus::kUnsupportedKeySystem;
       case media::mojom::CreateCdmStatus::kDisconnectionError:
-        *output = media::CreateCdmStatus::kDisconnectionError;
-        return true;
+        return media::CreateCdmStatus::kDisconnectionError;
       case media::mojom::CreateCdmStatus::kNotAllowedOnUniqueOrigin:
-        *output = media::CreateCdmStatus::kNotAllowedOnUniqueOrigin;
-        return true;
+        return media::CreateCdmStatus::kNotAllowedOnUniqueOrigin;
       case media::mojom::CreateCdmStatus::kMediaCryptoNotAvailable:
-        *output = media::CreateCdmStatus::kMediaCryptoNotAvailable;
-        return true;
+        return media::CreateCdmStatus::kMediaCryptoNotAvailable;
       case media::mojom::CreateCdmStatus::kNoMoreInstances:
-        *output = media::CreateCdmStatus::kNoMoreInstances;
-        return true;
+        return media::CreateCdmStatus::kNoMoreInstances;
       case media::mojom::CreateCdmStatus::kInsufficientGpuResources:
-        *output = media::CreateCdmStatus::kInsufficientGpuResources;
-        return true;
+        return media::CreateCdmStatus::kInsufficientGpuResources;
       case media::mojom::CreateCdmStatus::kCrOsVerifiedAccessDisabled:
-        *output = media::CreateCdmStatus::kCrOsVerifiedAccessDisabled;
-        return true;
+        return media::CreateCdmStatus::kCrOsVerifiedAccessDisabled;
       case media::mojom::CreateCdmStatus::kCrOsRemoteFactoryCreationFailed:
-        *output = media::CreateCdmStatus::kCrOsRemoteFactoryCreationFailed;
-        return true;
+        return media::CreateCdmStatus::kCrOsRemoteFactoryCreationFailed;
       case media::mojom::CreateCdmStatus::kAndroidMediaDrmIllegalArgument:
-        *output = media::CreateCdmStatus::kAndroidMediaDrmIllegalArgument;
-        return true;
+        return media::CreateCdmStatus::kAndroidMediaDrmIllegalArgument;
       case media::mojom::CreateCdmStatus::kAndroidMediaDrmIllegalState:
-        *output = media::CreateCdmStatus::kAndroidMediaDrmIllegalState;
-        return true;
+        return media::CreateCdmStatus::kAndroidMediaDrmIllegalState;
       case media::mojom::CreateCdmStatus::kAndroidFailedL1SecurityLevel:
-        *output = media::CreateCdmStatus::kAndroidFailedL1SecurityLevel;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedL1SecurityLevel;
       case media::mojom::CreateCdmStatus::kAndroidFailedL3SecurityLevel:
-        *output = media::CreateCdmStatus::kAndroidFailedL3SecurityLevel;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedL3SecurityLevel;
       case media::mojom::CreateCdmStatus::kAndroidFailedSecurityOrigin:
-        *output = media::CreateCdmStatus::kAndroidFailedSecurityOrigin;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedSecurityOrigin;
       case media::mojom::CreateCdmStatus::kAndroidFailedMediaCryptoSession:
-        *output = media::CreateCdmStatus::kAndroidFailedMediaCryptoSession;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedMediaCryptoSession;
       case media::mojom::CreateCdmStatus::kAndroidFailedToStartProvisioning:
-        *output = media::CreateCdmStatus::kAndroidFailedToStartProvisioning;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedToStartProvisioning;
       case media::mojom::CreateCdmStatus::kAndroidFailedMediaCryptoCreate:
-        *output = media::CreateCdmStatus::kAndroidFailedMediaCryptoCreate;
-        return true;
+        return media::CreateCdmStatus::kAndroidFailedMediaCryptoCreate;
       case media::mojom::CreateCdmStatus::kAndroidUnsupportedMediaCryptoScheme:
-        *output = media::CreateCdmStatus::kAndroidUnsupportedMediaCryptoScheme;
-        return true;
+        return media::CreateCdmStatus::kAndroidUnsupportedMediaCryptoScheme;
     }
 
+    NOTREACHED();
+  }
+};
+
+template <>
+struct EnumTraits<media::mojom::ChannelLayout, ::media::ChannelLayout> {
+  static media::mojom::ChannelLayout ToMojom(::media::ChannelLayout input) {
+    switch (input) {
+      case ::media::CHANNEL_LAYOUT_NONE:
+        return media::mojom::ChannelLayout::kNone;
+      case ::media::CHANNEL_LAYOUT_UNSUPPORTED:
+        return media::mojom::ChannelLayout::kUnsupported;
+      case ::media::CHANNEL_LAYOUT_MONO:
+        return media::mojom::ChannelLayout::kMono;
+      case ::media::CHANNEL_LAYOUT_STEREO:
+        return media::mojom::ChannelLayout::kStereo;
+      case ::media::CHANNEL_LAYOUT_2_1:
+        return media::mojom::ChannelLayout::k2_1;
+      case ::media::CHANNEL_LAYOUT_SURROUND:
+        return media::mojom::ChannelLayout::kSurround;
+      case ::media::CHANNEL_LAYOUT_4_0:
+        return media::mojom::ChannelLayout::k4_0;
+      case ::media::CHANNEL_LAYOUT_2_2:
+        return media::mojom::ChannelLayout::k2_2;
+      case ::media::CHANNEL_LAYOUT_QUAD:
+        return media::mojom::ChannelLayout::kQuad;
+      case ::media::CHANNEL_LAYOUT_5_0:
+        return media::mojom::ChannelLayout::k5_0;
+      case ::media::CHANNEL_LAYOUT_5_1:
+        return media::mojom::ChannelLayout::k5_1;
+      case ::media::CHANNEL_LAYOUT_5_0_BACK:
+        return media::mojom::ChannelLayout::k5_0Back;
+      case ::media::CHANNEL_LAYOUT_5_1_BACK:
+        return media::mojom::ChannelLayout::k5_1Back;
+      case ::media::CHANNEL_LAYOUT_7_0:
+        return media::mojom::ChannelLayout::k7_0;
+      case ::media::CHANNEL_LAYOUT_7_1:
+        return media::mojom::ChannelLayout::k7_1;
+      case ::media::CHANNEL_LAYOUT_7_1_WIDE:
+        return media::mojom::ChannelLayout::k7_1Wide;
+      case ::media::CHANNEL_LAYOUT_STEREO_DOWNMIX:
+        return media::mojom::ChannelLayout::kStereoDownmix;
+      case ::media::CHANNEL_LAYOUT_2POINT1:
+        return media::mojom::ChannelLayout::k2Point1;
+      case ::media::CHANNEL_LAYOUT_3_1:
+        return media::mojom::ChannelLayout::k3_1;
+      case ::media::CHANNEL_LAYOUT_4_1:
+        return media::mojom::ChannelLayout::k4_1;
+      case ::media::CHANNEL_LAYOUT_6_0:
+        return media::mojom::ChannelLayout::k6_0;
+      case ::media::CHANNEL_LAYOUT_6_0_FRONT:
+        return media::mojom::ChannelLayout::k6_0Front;
+      case ::media::CHANNEL_LAYOUT_HEXAGONAL:
+        return media::mojom::ChannelLayout::kHexagonal;
+      case ::media::CHANNEL_LAYOUT_6_1:
+        return media::mojom::ChannelLayout::k6_1;
+      case ::media::CHANNEL_LAYOUT_6_1_BACK:
+        return media::mojom::ChannelLayout::k6_1Back;
+      case ::media::CHANNEL_LAYOUT_6_1_FRONT:
+        return media::mojom::ChannelLayout::k6_1Front;
+      case ::media::CHANNEL_LAYOUT_7_0_FRONT:
+        return media::mojom::ChannelLayout::k7_0Front;
+      case ::media::CHANNEL_LAYOUT_7_1_WIDE_BACK:
+        return media::mojom::ChannelLayout::k7_1WideBack;
+      case ::media::CHANNEL_LAYOUT_OCTAGONAL:
+        return media::mojom::ChannelLayout::kOctagonal;
+      case ::media::CHANNEL_LAYOUT_DISCRETE:
+        return media::mojom::ChannelLayout::kDiscrete;
+      case ::media::CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC:
+        return media::mojom::ChannelLayout::kStereoAndKeyboardMic;
+      case ::media::CHANNEL_LAYOUT_4_1_QUAD_SIDE:
+        return media::mojom::ChannelLayout::k4_1QuadSide;
+      case ::media::CHANNEL_LAYOUT_BITSTREAM:
+        return media::mojom::ChannelLayout::kBitstream;
+      case ::media::CHANNEL_LAYOUT_5_1_4_DOWNMIX:
+        return media::mojom::ChannelLayout::k5_1_4Downmix;
+      case ::media::CHANNEL_LAYOUT_1_1:
+        return media::mojom::ChannelLayout::k1_1;
+      case ::media::CHANNEL_LAYOUT_3_1_BACK:
+        return media::mojom::ChannelLayout::k3_1Back;
+      case ::media::CHANNEL_LAYOUT_5_1_4:
+        return media::mojom::ChannelLayout::k5_1_4;
+      case ::media::CHANNEL_LAYOUT_7_1_4:
+        return media::mojom::ChannelLayout::k7_1_4;
+    }
+    NOTREACHED();
+  }
+
+  static ::media::ChannelLayout FromMojom(media::mojom::ChannelLayout input) {
+    switch (input) {
+      case media::mojom::ChannelLayout::kNone:
+        return ::media::CHANNEL_LAYOUT_NONE;
+      case media::mojom::ChannelLayout::kUnsupported:
+        return ::media::CHANNEL_LAYOUT_UNSUPPORTED;
+      case media::mojom::ChannelLayout::kMono:
+        return ::media::CHANNEL_LAYOUT_MONO;
+      case media::mojom::ChannelLayout::kStereo:
+        return ::media::CHANNEL_LAYOUT_STEREO;
+      case media::mojom::ChannelLayout::k2_1:
+        return ::media::CHANNEL_LAYOUT_2_1;
+      case media::mojom::ChannelLayout::kSurround:
+        return ::media::CHANNEL_LAYOUT_SURROUND;
+      case media::mojom::ChannelLayout::k4_0:
+        return ::media::CHANNEL_LAYOUT_4_0;
+      case media::mojom::ChannelLayout::k2_2:
+        return ::media::CHANNEL_LAYOUT_2_2;
+      case media::mojom::ChannelLayout::kQuad:
+        return ::media::CHANNEL_LAYOUT_QUAD;
+      case media::mojom::ChannelLayout::k5_0:
+        return ::media::CHANNEL_LAYOUT_5_0;
+      case media::mojom::ChannelLayout::k5_1:
+        return ::media::CHANNEL_LAYOUT_5_1;
+      case media::mojom::ChannelLayout::k5_0Back:
+        return ::media::CHANNEL_LAYOUT_5_0_BACK;
+      case media::mojom::ChannelLayout::k5_1Back:
+        return ::media::CHANNEL_LAYOUT_5_1_BACK;
+      case media::mojom::ChannelLayout::k7_0:
+        return ::media::CHANNEL_LAYOUT_7_0;
+      case media::mojom::ChannelLayout::k7_1:
+        return ::media::CHANNEL_LAYOUT_7_1;
+      case media::mojom::ChannelLayout::k7_1Wide:
+        return ::media::CHANNEL_LAYOUT_7_1_WIDE;
+      case media::mojom::ChannelLayout::kStereoDownmix:
+        return ::media::CHANNEL_LAYOUT_STEREO_DOWNMIX;
+      case media::mojom::ChannelLayout::k2Point1:
+        return ::media::CHANNEL_LAYOUT_2POINT1;
+      case media::mojom::ChannelLayout::k3_1:
+        return ::media::CHANNEL_LAYOUT_3_1;
+      case media::mojom::ChannelLayout::k4_1:
+        return ::media::CHANNEL_LAYOUT_4_1;
+      case media::mojom::ChannelLayout::k6_0:
+        return ::media::CHANNEL_LAYOUT_6_0;
+      case media::mojom::ChannelLayout::k6_0Front:
+        return ::media::CHANNEL_LAYOUT_6_0_FRONT;
+      case media::mojom::ChannelLayout::kHexagonal:
+        return ::media::CHANNEL_LAYOUT_HEXAGONAL;
+      case media::mojom::ChannelLayout::k6_1:
+        return ::media::CHANNEL_LAYOUT_6_1;
+      case media::mojom::ChannelLayout::k6_1Back:
+        return ::media::CHANNEL_LAYOUT_6_1_BACK;
+      case media::mojom::ChannelLayout::k6_1Front:
+        return ::media::CHANNEL_LAYOUT_6_1_FRONT;
+      case media::mojom::ChannelLayout::k7_0Front:
+        return ::media::CHANNEL_LAYOUT_7_0_FRONT;
+      case media::mojom::ChannelLayout::k7_1WideBack:
+        return ::media::CHANNEL_LAYOUT_7_1_WIDE_BACK;
+      case media::mojom::ChannelLayout::kOctagonal:
+        return ::media::CHANNEL_LAYOUT_OCTAGONAL;
+      case media::mojom::ChannelLayout::kDiscrete:
+        return ::media::CHANNEL_LAYOUT_DISCRETE;
+      case media::mojom::ChannelLayout::kStereoAndKeyboardMic:
+        return ::media::CHANNEL_LAYOUT_STEREO_AND_KEYBOARD_MIC;
+      case media::mojom::ChannelLayout::k4_1QuadSide:
+        return ::media::CHANNEL_LAYOUT_4_1_QUAD_SIDE;
+      case media::mojom::ChannelLayout::kBitstream:
+        return ::media::CHANNEL_LAYOUT_BITSTREAM;
+      case media::mojom::ChannelLayout::k5_1_4Downmix:
+        return ::media::CHANNEL_LAYOUT_5_1_4_DOWNMIX;
+      case media::mojom::ChannelLayout::k1_1:
+        return ::media::CHANNEL_LAYOUT_1_1;
+      case media::mojom::ChannelLayout::k3_1Back:
+        return ::media::CHANNEL_LAYOUT_3_1_BACK;
+      case media::mojom::ChannelLayout::k5_1_4:
+        return ::media::CHANNEL_LAYOUT_5_1_4;
+      case media::mojom::ChannelLayout::k7_1_4:
+        return ::media::CHANNEL_LAYOUT_7_1_4;
+    }
     NOTREACHED();
   }
 };

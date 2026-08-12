@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/core/animation/keyframe_effect_model.h"
 #include "third_party/blink/renderer/core/animation/string_keyframe.h"
 #include "third_party/blink/renderer/core/animation/timing_input.h"
+#include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_style_declaration.h"
@@ -51,6 +52,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 
 namespace blink {
 
@@ -169,11 +171,11 @@ void HTMLMarqueeElement::setScrollDelay(unsigned value) {
 }
 
 int HTMLMarqueeElement::loop() const {
-  bool ok;
-  int loop = FastGetAttribute(html_names::kLoopAttr).ToInt(&ok);
-  if (!ok || loop <= 0)
+  auto loop = StringToIntLoose(FastGetAttribute(html_names::kLoopAttr));
+  if (!loop || *loop <= 0) {
     return kDefaultLoopLimit;
-  return loop;
+  }
+  return *loop;
 }
 
 void HTMLMarqueeElement::setLoop(int value, ExceptionState& exception_state) {
@@ -193,12 +195,14 @@ void HTMLMarqueeElement::start() {
 
   RequestAnimationFrameCallback* callback =
       MakeGarbageCollected<RequestAnimationFrameCallback>(this);
-  continue_callback_request_id_ = GetDocument().RequestAnimationFrame(callback);
+  continue_callback_request_id_ = GetDocument().RequestAnimationFrame(
+      callback, FrameCallbackType::kInternal);
 }
 
 void HTMLMarqueeElement::stop() {
   if (continue_callback_request_id_) {
-    GetDocument().CancelAnimationFrame(continue_callback_request_id_);
+    GetDocument().CancelAnimationFrame(continue_callback_request_id_,
+                                       FrameCallbackType::kInternal);
     continue_callback_request_id_ = 0;
     return;
   }
@@ -322,21 +326,26 @@ bool HTMLMarqueeElement::ShouldContinue() {
 
 HTMLMarqueeElement::Behavior HTMLMarqueeElement::GetBehavior() const {
   const AtomicString& behavior = FastGetAttribute(html_names::kBehaviorAttr);
-  if (EqualIgnoringASCIICase(behavior, "alternate"))
+  if (EqualIgnoringAsciiCase(behavior, "alternate")) {
     return kAlternate;
-  if (EqualIgnoringASCIICase(behavior, "slide"))
+  }
+  if (EqualIgnoringAsciiCase(behavior, "slide")) {
     return kSlide;
+  }
   return kScroll;
 }
 
 HTMLMarqueeElement::Direction HTMLMarqueeElement::GetDirection() const {
   const AtomicString& direction = FastGetAttribute(html_names::kDirectionAttr);
-  if (EqualIgnoringASCIICase(direction, "down"))
+  if (EqualIgnoringAsciiCase(direction, "down")) {
     return kDown;
-  if (EqualIgnoringASCIICase(direction, "up"))
+  }
+  if (EqualIgnoringAsciiCase(direction, "up")) {
     return kUp;
-  if (EqualIgnoringASCIICase(direction, "right"))
+  }
+  if (EqualIgnoringAsciiCase(direction, "right")) {
     return kRight;
+  }
   return kLeft;
 }
 
@@ -368,10 +377,17 @@ HTMLMarqueeElement::Metrics HTMLMarqueeElement::GetMetrics() {
   CSSStyleDeclaration* mover_style =
       GetDocument().domWindow()->getComputedStyle(mover_);
 
-  metrics.content_width = mover_style->getPropertyValue("width").ToDouble();
-  metrics.content_height = mover_style->getPropertyValue("height").ToDouble();
-  metrics.marquee_width = marquee_style->getPropertyValue("width").ToDouble();
-  metrics.marquee_height = marquee_style->getPropertyValue("height").ToDouble();
+  auto double_value = [](CSSStyleDeclaration* decl, CSSPropertyID prop) {
+    if (auto* value = DynamicTo<CSSNumericLiteralValue>(
+            decl->GetPropertyCSSValueInternal(prop))) {
+      return value->DoubleValue();
+    }
+    return 0.0;
+  };
+  metrics.content_width = double_value(mover_style, CSSPropertyID::kWidth);
+  metrics.content_height = double_value(mover_style, CSSPropertyID::kHeight);
+  metrics.marquee_width = double_value(marquee_style, CSSPropertyID::kWidth);
+  metrics.marquee_height = double_value(marquee_style, CSSPropertyID::kHeight);
 
   if (IsHorizontal()) {
     mover_->style()->removeProperty("width", ASSERT_NO_EXCEPTION);
@@ -485,7 +501,7 @@ HTMLMarqueeElement::GetAnimationParameters() {
 
 AtomicString HTMLMarqueeElement::CreateTransform(double value) const {
   return AtomicString(StrCat({"translate", IsHorizontal() ? "X" : "Y", "(",
-                              String::NumberToStringECMAScript(value), "px)"}));
+                              String::NumberToStringEcmaScript(value), "px)"}));
 }
 
 void HTMLMarqueeElement::Trace(Visitor* visitor) const {

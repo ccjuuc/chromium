@@ -7,7 +7,10 @@
 
 #include "chrome/utility/safe_browsing/archive_analysis_delegate.h"
 #include "components/enterprise/obfuscation/core/utils.h"
+
+#if USE_UNRAR
 #include "third_party/unrar/google/unrar_wrapper.h"
+#endif
 
 namespace safe_browsing {
 
@@ -22,10 +25,12 @@ class ObfuscatedArchiveAnalysisDelegate : public ArchiveAnalysisDelegate {
       base::File file) override;
   std::unique_ptr<SafeBrowsingZipWriterDelegate> CreateZipWriterDelegate(
       base::File file) override;
+#if USE_UNRAR
   std::unique_ptr<third_party_unrar::RarReaderDelegate> CreateRarReaderDelegate(
       base::File file) override;
   std::unique_ptr<third_party_unrar::RarWriterDelegate> CreateRarWriterDelegate(
       base::File file) override;
+#endif
   std::unique_ptr<ArchiveAnalysisDelegate> CreateNestedDelegate(
       base::File extracted_file) override;
 

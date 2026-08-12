@@ -30,7 +30,6 @@ import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.components.browser_ui.widget.RoundedCornerImageView;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.signin.base.AccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.text.SpanApplier;
@@ -132,8 +131,8 @@ class ManageAccountDevicesLinkView extends LinearLayout {
     private static AccountInfo getSharingAccountInfo(Profile profile) {
         IdentityManager identityManager =
                 assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile));
-        var accountInfo = assumeNonNull(identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN));
-        var account = identityManager.findExtendedAccountInfoByEmailAddress(accountInfo.getEmail());
+        var accountInfo = assumeNonNull(identityManager.getPrimaryAccountInfo());
+        var account = identityManager.findExtendedAccountInfoByAccountId(accountInfo.getId());
         assert account != null : "Account info should be non-null.";
         return account;
     }

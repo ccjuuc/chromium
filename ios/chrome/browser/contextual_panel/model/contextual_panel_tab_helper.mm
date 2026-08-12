@@ -18,8 +18,7 @@
 
 ContextualPanelTabHelper::ContextualPanelTabHelper(
     web::WebState* web_state,
-    std::map<ContextualPanelItemType,
-             raw_ptr<ContextualPanelModel, DanglingUntriaged>> models)
+    std::map<ContextualPanelItemType, raw_ptr<ContextualPanelModel>> models)
     : web_state_(web_state), models_(models), weak_ptr_factory_(this) {
   web_state_observation_.Observe(web_state_);
 }
@@ -112,10 +111,8 @@ void ContextualPanelTabHelper::SetMetricsData(
 bool ContextualPanelTabHelper::ShouldRefreshData(
     web::WebState* web_state,
     web::NavigationContext* navigation_context) {
-  // Refresh data if navigation is to a new URL (ignoring ref) or a new
-  // document.
-  return previous_url_ != navigation_context->GetUrl().GetWithoutRef() ||
-         !navigation_context->IsSameDocument();
+  // Refresh data if navigation is not to the same document.
+  return !navigation_context->IsSameDocument();
 }
 
 #pragma mark - WebStateObserver

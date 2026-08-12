@@ -5,27 +5,24 @@
 #include "chrome/browser/ui/views/tabs/tab_strip_layout_helper.h"
 
 #include <algorithm>
-#include <memory>
 #include <optional>
-#include <set>
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/tabs/tab_style.h"
 #include "chrome/browser/ui/tabs/tab_types.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_layout_state.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_layout_types.h"
 #include "chrome/browser/ui/views/tabs/tab_style_views.h"
-#include "chrome/common/chrome_features.h"
-#include "components/tabs/public/split_tab_id.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "tab_container_controller.h"
 #include "ui/gfx/range/range.h"
 #include "ui/views/view_model.h"
+#include "ui/views/view_utils.h"
 
 struct TabStripLayoutHelper::TabSlot {
   static TabStripLayoutHelper::TabSlot CreateForTabSlotView(TabSlotView* view,
@@ -48,7 +45,9 @@ TabStripLayoutHelper::TabStripLayoutHelper(
     GetTabsCallback get_tabs_callback)
     : controller_(controller),
       get_tabs_callback_(get_tabs_callback),
-      tab_strip_layout_domain_(LayoutDomain::kInactiveWidthEqualsActiveWidth) {}
+      tab_strip_layout_domain_(LayoutDomain::kInactiveWidthEqualsActiveWidth),
+      show_pinned_tabs_in_focused_groups_(
+          features::kTabGroupsFocusingPinnedTabs.Get()) {}
 
 TabStripLayoutHelper::~TabStripLayoutHelper() = default;
 
@@ -56,7 +55,7 @@ std::vector<Tab*> TabStripLayoutHelper::GetTabs() const {
   std::vector<Tab*> tabs;
   for (const TabSlot& slot : slots_) {
     if (slot.type == TabSlotView::ViewType::kTab) {
-      tabs.push_back(static_cast<Tab*>(slot.view));
+      tabs.push_back(views::AsViewClass<Tab>(slot.view));
     }
   }
 
@@ -216,7 +215,7 @@ int TabStripLayoutHelper::UpdateIdealBounds(int available_width) {
 
   // Store the active split (if applicable) for determining whether other tabs
   // in the split should be active.
-  std::optional<split_tabs::SplitTabId> active_split_id = std::nullopt;
+  std::optional<split_tabs::SplitTabId> active_split_id;
   if (active_tab_slot_index.has_value()) {
     const TabSlot& active_slot = slots_[active_tab_slot_index.value()];
     active_split_id = active_slot.view->split();
@@ -331,8 +330,8 @@ int TabStripLayoutHelper::GetSlotInsertionIndexForNewTab(
   // matches, the tab goes to the right of the header to keep it
   // contiguous.
   if (slots_[slot_index].type == TabSlotView::ViewType::kTabGroupHeader &&
-      static_cast<const TabGroupHeader*>(slots_[slot_index].view)->group() ==
-          group) {
+      views::AsViewClass<const TabGroupHeader>(slots_[slot_index].view)
+              ->group() == group) {
     return slot_index + 1;
   }
 
@@ -362,7 +361,7 @@ int TabStripLayoutHelper::GetFirstSlotIndexForTabModelIndex(
   int current_model_index = 0;
 
   // Conceptually we assign a model index to each slot equal to the
-  // number of open tabs preceeding it. Group headers will have the same
+  // number of open tabs preceding it. Group headers will have the same
   // index as the tab before it, and each open tab will have the index
   // of the previous slot plus 1. Closing tabs are not counted, and are
   // skipped altogether.
@@ -395,7 +394,7 @@ int TabStripLayoutHelper::GetSlotIndexForGroupHeader(
     tab_groups::TabGroupId group) const {
   const auto it = std::ranges::find_if(slots_, [group](const auto& slot) {
     return slot.type == TabSlotView::ViewType::kTabGroupHeader &&
-           static_cast<TabGroupHeader*>(slot.view)->group() == group;
+           views::AsViewClass<TabGroupHeader>(slot.view)->group() == group;
   });
   CHECK(it != slots_.end());
   return it - slots_.begin();
@@ -424,6 +423,12 @@ bool TabStripLayoutHelper::SlotIsCollapsedTab(int i) const {
   // If a group is focused, all other tabs and group headers should be
   // collapsed.
   if (focused_group.has_value()) {
+    // When the pinned feature is enabled, pinned tabs should not be collapsed.
+    if (show_pinned_tabs_in_focused_groups_ &&
+        slots_[i].state.pinned() == TabPinned::kPinned) {
+      return false;
+    }
+
     const std::optional<tab_groups::TabGroupId> id = slots_[i].view->group();
     return !id.has_value() || id.value() != focused_group.value();
   }

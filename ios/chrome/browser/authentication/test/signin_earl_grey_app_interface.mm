@@ -14,6 +14,7 @@
 #import "components/bookmarks/browser/titled_url_match.h"
 #import "components/policy/core/browser/signin/profile_separation_policies.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #import "components/signin/public/identity_manager/account_info.h"
@@ -28,11 +29,13 @@
 #import "ios/chrome/browser/authentication/ui_bundled/cells/table_view_identity_cell.h"
 #import "ios/chrome/browser/authentication/ui_bundled/enterprise/enterprise_utils.h"
 #import "ios/chrome/browser/bookmarks/model/bookmarks_utils.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/account_profile_mapper.h"
@@ -178,30 +181,28 @@
                             withUnknownCapabilities:NO];
   std::string emailAddress = base::SysNSStringToUTF8(identity.userEmail);
   PrefService* prefService = chrome_test_util::GetOriginalProfile()->GetPrefs();
-  prefService->SetString(prefs::kGoogleServicesLastSyncingUsername,
+  prefService->SetString(prefs::kGoogleServicesLastSignedInUsername,
                          emailAddress);
   ShowSigninCommand* command = [[ShowSigninCommand alloc]
       initWithOperation:AuthenticationOperation::kResignin
             accessPoint:signin_metrics::AccessPoint::kResigninInfobar];
   UIViewController* baseViewController =
       chrome_test_util::GetActiveViewController();
-  SceneController* sceneController =
-      chrome_test_util::GetForegroundActiveSceneController();
-  [sceneController showSignin:command baseViewController:baseViewController];
+  id<SceneCommands> sceneHandler = HandlerForProtocol(
+      chrome_test_util::GetMainBrowser()->GetCommandDispatcher(),
+      SceneCommands);
+  [sceneHandler showSignin:command baseViewController:baseViewController];
 }
 
 + (void)triggerConsistencyPromoSigninDialogWithURL:(NSURL*)url {
   const GURL gURL = net::GURLWithNSURL(url);
   UIViewController* baseViewController =
       chrome_test_util::GetActiveViewController();
-  SceneController* sceneController =
-      chrome_test_util::GetForegroundActiveSceneController();
-  [sceneController showWebSigninPromoFromViewController:baseViewController
-                                                    URL:gURL];
-}
-
-+ (void)presentSignInAccountsViewControllerIfNecessary {
-  chrome_test_util::PresentSignInAccountsViewControllerIfNecessary();
+  id<SceneCommands> sceneHandler = HandlerForProtocol(
+      chrome_test_util::GetMainBrowser()->GetCommandDispatcher(),
+      SceneCommands);
+  [sceneHandler showWebSigninPromoFromViewController:baseViewController
+                                                 URL:gURL];
 }
 
 + (void)setSelectedType:(syncer::UserSelectableType)type enabled:(BOOL)enabled {

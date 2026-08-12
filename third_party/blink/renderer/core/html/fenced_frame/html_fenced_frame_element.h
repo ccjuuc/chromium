@@ -72,6 +72,10 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   ~HTMLFencedFrameElement() override;
   void Trace(Visitor* visitor) const override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLFencedFrameElement;
+  }
+
   DOMTokenList* sandbox() const;
 
   // HTMLFrameOwnerElement overrides.
@@ -114,18 +118,6 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   // Sets the FencedFrameConfig that this FencedFrame uses, and navigates the
   // frame to the config's URL. If `config` is null, navigates to about:blank.
   void setConfig(FencedFrameConfig* config);
-
-  // Web-exposed API that returns whether an opaque-ads fenced frame would be
-  // allowed to be created in the current active document of this node.
-  // Note: This function is deprecated. Please use
-  // `NavigatorAuction::canLoadAdAuctionFencedFrame` instead.
-  static bool canLoadOpaqueURL(ScriptState*);
-
-  // Fires an event named `event_type` at `this`. This path is only invoked for
-  // events that were originally fired *inside* of the fenced frame content, and
-  // that have been intentionally propagated outwards to `this`, the frame
-  // owner, for reception by the embedder script.
-  void DispatchFencedEvent(const String& event_type);
 
  private:
   // This method will only navigate the underlying frame if the element
@@ -242,6 +234,10 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
 // enabled, which would result in creation of an HTMLUnknownElement with the
 // "fencedframe" tag name. We can't support casting those elements to
 // HTMLFencedFrameElements because they are not fenced frame elements.
+// See
+// https://chromium.googlesource.com/chromium/src.git/+/main/docs/custom_type_helpers_for_origin_trial_elements.md
+// for more details.
+//
 // TODO(crbug.com/1123606): Remove these custom helpers when the origin trial is
 // over.
 template <>

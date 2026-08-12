@@ -8,32 +8,47 @@ import static org.chromium.content.browser.accessibility.AccessibilityContentShe
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellActivityTestRule.RESULTS_NULL;
 
 import android.annotation.SuppressLint;
+import android.os.Build;
+import android.os.Build.VERSION_CODES_FULL;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.TestAnimations;
+import org.chromium.content.common.ContentInternalFeatures;
 import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.browser.test.ContentJUnit4ClassRunner;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.test.util.DeviceRestriction;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Tests for WebContentsAccessibilityImpl integration with accessibility services. */
 @RunWith(ContentJUnit4ClassRunner.class)
 @SuppressLint("VisibleForTests")
 @Batch(Batch.PER_CLASS)
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
+@EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
 @TestAnimations.EnableAnimations
 public class WebContentsAccessibilityEventsTest {
+    private WebContentsObserver mWebContentsObserver;
+
     // File path that holds all the relevant tests.
     private static final String BASE_FILE_PATH = "content/test/data/accessibility/event/";
     private static final String EMPTY_EXPECTATIONS_FILE = "EmptyExpectationsFile";
@@ -48,7 +63,10 @@ public class WebContentsAccessibilityEventsTest {
      *
      */
     private void performTest(String inputFile, String expectationFile) {
-        performTest(inputFile, expectationFile, true);
+        performTest(
+                inputFile,
+                expectationFile,
+                /* shouldFilterTrivialEvents= */ true);
     }
 
     /**
@@ -64,7 +82,21 @@ public class WebContentsAccessibilityEventsTest {
     private void performTest(
             String inputFile, String expectationFile, boolean shouldFilterTrivialEvents) {
         performTestWithJavascriptMethod(
-                inputFile, expectationFile, "go()", shouldFilterTrivialEvents);
+                inputFile,
+                expectationFile,
+                "go()",
+                shouldFilterTrivialEvents,
+                /* testServer= */ false);
+    }
+
+    private void performTestWithServer(
+            String inputFile, String expectationFile, boolean shouldFilterTrivialEvents) {
+        performTestWithJavascriptMethod(
+                inputFile,
+                expectationFile,
+                "go()",
+                shouldFilterTrivialEvents,
+                /* testServer= */ true);
     }
 
     /**
@@ -77,14 +109,23 @@ public class WebContentsAccessibilityEventsTest {
      * @param expectationFile TXT expectations file
      * @param javascriptMethod javascript method (e.g. "expand()" or "go()")
      * @param shouldFilterTrivialEvents Flag to filter out TYPE_WINDOW_CONTENT_CHANGED event
+     * @param testServer Flag to indicate that the test server should be used
      */
     private void performTestWithJavascriptMethod(
             String inputFile,
             String expectationFile,
             String javascriptMethod,
-            boolean shouldFilterTrivialEvents) {
+            boolean shouldFilterTrivialEvents,
+            boolean testServer) {
         // Build page from given file and enable testing framework, set a tracker.
-        mActivityTestRule.setupTestFromFile(BASE_FILE_PATH + inputFile, shouldFilterTrivialEvents);
+        mActivityTestRule.setupTestFromFile(
+                BASE_FILE_PATH + inputFile,
+                shouldFilterTrivialEvents,
+                testServer,
+                /* sendReadyForTestSignal= */ true);
+
+        // Inject a separator comment to separate initial page-load events from JS events
+        mActivityTestRule.addCommentToTracker("=== END INITIAL PAGE LOAD ===");
 
         // Execute go() method until it's returning false.
         boolean runGoAgain;
@@ -112,7 +153,7 @@ public class WebContentsAccessibilityEventsTest {
      * Helper method to compare test outputs with expected results. Reads content of expectations
      * file, asserts non-null, then compares with results.
      *
-     * @param expectationFile           Filename of the expectations for the given test.
+     * @param expectationFile Filename of the expectations for the given test.
      */
     private void assertResults(String expectationFile) {
         String expectedResults;
@@ -144,13 +185,23 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_addAlert() {
         performTest("add-alert.html", "add-alert-expected-android.txt");
     }
 
     @Test
     @SmallTest
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_addAlertWithRoleChange() {
         performTest(
                 "add-alert-with-role-change.html",
@@ -161,25 +212,30 @@ public class WebContentsAccessibilityEventsTest {
     @SmallTest
     @DisableFeatures({
         ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_addAlertContent() {
         performTest("add-alert-content.html", "add-alert-content-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_addAlertContent_exp() {
         performTest("add-alert-content.html", "add-alert-content-expected-android-exp.txt");
     }
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_alertShadowDomIgnoredChanged() {
         performTest(
@@ -189,7 +245,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_alertShadowDomIgnoredChanged_exp() {
         performTest(
                 "alert-shadow-dom-ignored-changed.html",
@@ -198,9 +258,10 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_alertShadowDomIgnoredReparented() {
         performTest(
@@ -210,7 +271,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_alertShadowDomIgnoredReparented_exp() {
         performTest(
                 "alert-shadow-dom-ignored-reparented.html",
@@ -335,7 +400,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_ariaComboboxFocus() {
         performTest("aria-combo-box-focus.html", "aria-combo-box-focus-expected-android.txt");
     }
@@ -429,6 +493,14 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
+    public void test_ariaInvalidStatusChanged() {
+        performTest(
+                "aria-invalid-status-changed.html",
+                "aria-invalid-status-changed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
     public void test_ariaLevelChanged() {
         performTest("aria-level-changed.html", "aria-level-changed-expected-android.txt");
     }
@@ -441,7 +513,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_ariaMenuItemFocus() {
         performTest("aria-menuitem-focus.html", "aria-menuitem-focus-expected-android.txt");
     }
@@ -450,6 +521,12 @@ public class WebContentsAccessibilityEventsTest {
     @SmallTest
     public void test_ariaMultilineChanged() {
         performTest("aria-multiline-changed.html", "aria-multiline-changed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaMeterValueChange() {
+        performTest("aria-meter-value-change.html", "aria-meter-value-change-expected-android.txt");
     }
 
     @Test
@@ -549,8 +626,15 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
     public void test_ariaSortChanged() {
-        performTest("aria-sort-changed.html", "aria-sort-changed-expected-android.txt");
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
+        performTest(
+                "aria-sort-changed.html",
+                "aria-sort-changed-expected-android.txt",
+                /* shouldFilterTrivialEvents= */ false);
     }
 
     @Test
@@ -571,10 +655,34 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
+    public void test_ariaSpinbuttonAppendingTextChanged() {
+        performTest(
+                "aria-spinbutton-appending-text-changed.html",
+                "aria-spinbutton-appending-text-changed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
     public void test_ariaSpinbuttonValuetextChanged() {
         performTest(
                 "aria-spinbutton-valuetext-change.html",
                 "aria-spinbutton-valuetext-change-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    public void test_nativeSpinbuttonAppendingTextChanged() {
+        performTest(
+                "native-spinbutton-appending-text-changed.html",
+                "native-spinbutton-appending-text-changed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    public void test_nativeSpinbuttonArrowUpTextChanged() {
+        performTest(
+                "native-spinbutton-arrow-up-changed.html",
+                "native-spinbutton-arrow-up-changed-expected-android.txt");
     }
 
     @Test
@@ -615,7 +723,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_ariaTreeItemFocus() {
         performTest("aria-treeitem-focus.html", "aria-treeitem-focus-expected-android.txt");
     }
@@ -634,35 +741,30 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_caretBrowsingDisabled() {
         performTest("caret-browsing-disabled.html", "caret-browsing-disabled-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_caretBrowsingEnabled() {
         performTest("caret-browsing-enabled.html", "caret-browsing-enabled-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_caretHide() {
         performTest("caret-hide.html", "caret-hide-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_caretMoveHiddenInput() {
         performTest("caret-move-hidden-input.html", "caret-move-hidden-input-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_caretMove() {
         performTest("caret-move.html", "caret-move-expected-android.txt");
     }
@@ -791,7 +893,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_dialogPaneNameChanged() {
         performTest("dialog-pane-name-change.html", "dialog-pane-name-change-expected-android.txt");
     }
@@ -823,14 +924,12 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_focusListbox() {
         performTest("focus-listbox.html", "focus-listbox-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_focusListboxMultiselect() {
         performTest(
                 "focus-listbox-multiselect.html", "focus-listbox-multiselect-expected-android.txt");
@@ -850,9 +949,44 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1392791")
-    public void test_immediateRefresh() {
-        performTest("immediate-refresh.html", "immediate-refresh-expected-android.txt");
+    public void test_constantRefresh() throws TimeoutException {
+        // This test differs from the rest given we cannot send the readyForTestSignal because
+        // of the constant refreshing of the webpage. Instead, another parameter could've been added
+        // to performTest(), but the assertion logic is also different given we call no go()
+        // functions.
+        mActivityTestRule.setupTestFromFile(
+                BASE_FILE_PATH + "constant-refresh.html",
+                /* shouldFilterTrivialEvents= */ true,
+                /* testServer= */ false,
+                /* sendReadyForTestSignal= */ false);
+
+        // CallbackHelper detects when the navigation commits.
+        CallbackHelper callbackHelper = new CallbackHelper();
+        int currentCallCount = callbackHelper.getCallCount();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mWebContentsObserver =
+                            new WebContentsObserver(mActivityTestRule.getWebContents()) {
+                                @Override
+                                public void didFinishNavigationInPrimaryMainFrame(
+                                        NavigationHandle navigation) {
+                                    if (navigation.hasCommitted() && !navigation.isSameDocument()) {
+                                        callbackHelper.notifyCalled();
+                                    }
+                                }
+                            };
+                });
+
+        // We wait for two refresh commits to verify a full navigation cycle has been covered.
+        callbackHelper.waitForCallback(
+                "Timed out waiting for refreshes",
+                currentCallCount,
+                /* numberOfCallsToWaitFor= */ 2,
+                CallbackHelper.WAIT_TIMEOUT_SECONDS,
+                TimeUnit.SECONDS);
+
+        assertResults("constant-refresh-expected-android.txt");
     }
 
     @Test
@@ -895,7 +1029,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_listboxFocus() {
         performTest("listbox-focus.html", "listbox-focus-expected-android.txt");
     }
@@ -908,9 +1041,10 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_liveRegionAdd() {
         performTest("live-region-add.html", "live-region-add-expected-android.txt");
@@ -918,9 +1052,36 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_liveRegionAdd_exp() {
         performTest("live-region-add.html", "live-region-add-expected-android-exp.txt");
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
+    public void test_liveRegionAtomicAdd() {
+        performTest("live-region-atomic-add.html", "live-region-atomic-add-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
+    public void test_liveRegionAtomicAdd_exp() {
+        performTest(
+                "live-region-atomic-add.html", "live-region-atomic-add-expected-android-exp.txt");
     }
 
     @Test
@@ -933,9 +1094,10 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_liveRegionChanged() {
         performTest("live-region-change.html", "live-region-change-expected-android.txt");
@@ -943,16 +1105,21 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_liveRegionChanged_exp() {
         performTest("live-region-change.html", "live-region-change-expected-android-exp.txt");
     }
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_liveRegionChangedInnerHtml() {
         performTest(
@@ -962,7 +1129,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_liveRegionChangedInnerHtml_exp() {
         performTest(
                 "live-region-change-innerhtml.html",
@@ -971,9 +1142,10 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_liveRegionChangedInnerText() {
         performTest(
@@ -983,7 +1155,37 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
+    public void test_liveRegionAtomicChangedInnerText() {
+        performTest(
+                "live-region-atomic-change-innertext.html",
+                "live-region-atomic-change-innertext-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
+    public void test_liveRegionAtomicChangedInnerText_exp() {
+        performTest(
+                "live-region-atomic-change-innertext.html",
+                "live-region-atomic-change-innertext-expected-android-exp.txt");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_liveRegionChangedInnerText_exp() {
         performTest(
                 "live-region-change-innertext.html",
@@ -998,9 +1200,10 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisableFeatures({
-        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
-        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
     })
     public void test_liveRegionElemReparent() {
         performTest(
@@ -1009,7 +1212,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_liveRegionElemReparent_exp() {
         performTest(
                 "live-region-elem-reparent.html",
@@ -1037,7 +1244,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_menuBarShowHideMenus() {
         performTest("menubar-show-hide-menus.html", "menubar-show-hide-menus-expected-android.txt");
     }
@@ -1062,7 +1268,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_menulistFocus() {
         performTest("menulist-focus.html", "menulist-focus-expected-android.txt");
     }
@@ -1075,9 +1280,20 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/414363686")
     public void test_menuOpenedClosed() {
         performTest("menu-opened-closed.html", "menu-opened-closed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    public void test_menuPopupCreated() {
+        performTest("menu-popup-created.html", "menu-popup-created-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    public void test_menuPopupStatic() {
+        performTest("menu-popup-static.html", "menu-popup-static-expected-android.txt");
     }
 
     @Test
@@ -1102,9 +1318,11 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "crbug.com/382549182")
     public void test_navigationApi() {
-        performTest("navigation-api.html", "navigation-api-expected-android.txt");
+        performTestWithServer(
+                "navigation-api.html",
+                "navigation-api-expected-android.txt",
+                /* shouldFilterTrivialEvents= */ true);
     }
 
     @Test
@@ -1187,10 +1405,28 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
+    @DisableFeatures(ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE)
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
     public void test_reportValidityInvalidField() {
         performTest(
                 "report-validity-invalid-field.html",
                 "report-validity-invalid-field-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_IMPROVE_LIVE_REGION_ANNOUNCE,
+        ContentFeatureList.ACCESSIBILITY_ATOMIC_LIVE_REGIONS
+    })
+    public void test_reportValidityInvalidField_exp() {
+        performTest(
+                "report-validity-invalid-field.html",
+                "report-validity-invalid-field-expected-android-exp.txt");
     }
 
     @Test
@@ -1202,7 +1438,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_scrollHorizontalScrollPercentChanged() {
         performTest(
                 "scroll-horizontal-scroll-percent-change.html",
@@ -1211,7 +1446,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1186376")
     public void test_scrollVerticalScrollPercentChanged() {
         performTest(
                 "scroll-vertical-scroll-percent-change.html",
@@ -1290,7 +1524,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_tbodyFocus() {
         performTest("tbody-focus.html", "tbody-focus-expected-android.txt");
     }
@@ -1323,14 +1556,12 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_textSelectionChanged() {
         performTest("text-selection-changed.html", "text-selection-changed-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_textSelectionInsideHiddenElement() {
         performTest(
                 "text-selection-inside-hidden-element.html",
@@ -1339,7 +1570,6 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION)
     public void test_textSelectionInsideVideo() {
         performTest(
                 "text-selection-inside-video.html",
@@ -1348,14 +1578,12 @@ public class WebContentsAccessibilityEventsTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_tfootFocus() {
         performTest("tfoot-focus.html", "tfoot-focus-expected-android.txt");
     }
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1190218")
     public void test_theadFocus() {
         performTest("thead-focus.html", "thead-focus-expected-android.txt");
     }
@@ -1378,5 +1606,37 @@ public class WebContentsAccessibilityEventsTest {
     public void test_visibilityHiddenChanged() {
         performTest(
                 "visibility-hidden-changed.html", "visibility-hidden-changed-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void test_contenteditableSelectionRetargeting() {
+        performTest(
+                "contenteditable-selection-retargeting.html",
+                "contenteditable-selection-retargeting-expected-android.txt");
+    }
+
+    @Test
+    @SmallTest
+    // Whenever ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS is enabled, we perform parceling
+    // on the node info, which requires tiramisu or higher.
+    @MinAndroidSdkLevel(Build.VERSION_CODES.TIRAMISU)
+    @EnableFeatures(ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS)
+    public void test_scopedContentChanged_enabled() {
+        performTest(
+                "scoped-content-changed.html",
+                "scoped-content-changed-enabled-expected-android.txt",
+                /* shouldFilterTrivialEvents= */ false);
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS)
+    public void test_scopedContentChanged_disabled() {
+        performTest(
+                "scoped-content-changed.html",
+                "scoped-content-changed-disabled-expected-android.txt",
+                /* shouldFilterTrivialEvents= */ false);
     }
 }

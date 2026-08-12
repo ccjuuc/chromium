@@ -107,6 +107,27 @@ element by matching key properties like its type, interactivity, and location.
 If needed, it can further verify the element by comparing its text content to
 ensure the correct action is taken.
 
+### Selective Node ID Emission
+
+APC now supports a selective node-id policy in `AIPageContentOptions`:
+
+* `node_id_allowlist`: Optional list of `AIPageContentAttributeType` values
+  that should emit `dom_node_id`.
+
+The main goal is to avoid assigning DOM node ids to more nodes than needed.
+Over-emitting ids grows Blink's DOM node id hash map, which hurts overall
+renderer performance after extraction finishes.
+
+Semantics:
+
+* If `node_id_allowlist` is unset, APC preserves legacy behavior and emits ids
+  broadly.
+* If `node_id_allowlist` is set (empty or non-empty), APC always emits ids for
+  required override cases (for example actionable targets and metadata-linked
+  nodes such as focus/selection/label-for references).
+* If `node_id_allowlist` is non-empty, APC also emits ids for the listed
+  attribute types.
+
 ## 5\. Critical Considerations for Implementation
 
 Using APC requires careful attention to privacy and security. While APC
@@ -117,9 +138,10 @@ responsibility.
 from multiple origins (e.g., in iframes). APC tags all data with its source
 origin, allowing consumers to detect and handle cross-origin information
 appropriately.
-* **Handling Password Fields:** Values from password fields are removed from
-the APC representation unless the user has explicitly made them visible on the
-page.
+* **Handling Password-Like Fields:** Values from password fields (and other
+  password-like text inputs detected via heuristics such as
+  `-webkit-text-security`) are removed from the APC representation to help
+  prevent sensitive credential leakage.
 * **Paywalled Content:** APC's design helps exclude most paywalled content.
 Websites can also use specific markup
 ([`isAccessibleForFree=false`](https://developers.google.com/search/docs/appeara
@@ -158,4 +180,30 @@ To update the web test expectations:
 
 ```bash
 third_party/blink/tools/run_web_tests.py -C out/Default content_extraction --reset-results
+```
+
+### Feature Flags and APC-on-load
+
+`AIPageContentOuterBoxMapToAncestorSpace` reuses the GeometryMapper mapping for
+both the `outer_bounding_box` and `visible_bounding_box`. It is enabled by
+default because it is a stable Blink runtime feature.
+
+`AIPageContentBuildOnLoadForTesting` forces every local root frame to build APC
+(in actionable mode) immediately after load. This mirrors the behaviour used by
+the AnnotatedPageContentExtraction Finch trial.
+
+For example, to launch content_shell with APC-on-load enabled:
+
+```bash
+out/Default/content_shell \
+  --enable-blink-features=AIPageContentBuildOnLoadForTesting
+```
+
+A dedicated virtual test suite (`content-extraction`) exercises existing
+layout tests with APC-on-load enabled while reusing the default geometry path:
+
+```bash
+third_party/blink/tools/run_web_tests.py \
+    -C out/Default \
+    --virtual-test-suite content-extraction
 ```

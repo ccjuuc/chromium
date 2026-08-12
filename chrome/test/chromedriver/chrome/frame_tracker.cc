@@ -38,15 +38,17 @@ void FrameTracker::SetContextIdForFrame(std::string frame_id,
 
 WebView* FrameTracker::GetTargetForFrame(const std::string& frame_id) {
   // Context in the current target, return current target.
-  if (frame_to_context_map_.count(frame_id) != 0)
+  if (frame_to_context_map_.contains(frame_id)) {
     return web_view_;
+  }
   // Child target of the current target, return that child target.
-  if (frame_to_target_map_.count(frame_id) != 0)
-    return frame_to_target_map_[frame_id].get();
+  if (auto it = frame_to_target_map_.find(frame_id);
+      it != frame_to_target_map_.end()) {
+    return it->second.get();
+  }
   // Frame unknown, recursively search all child targets.
-  for (auto it = frame_to_target_map_.begin(); it != frame_to_target_map_.end();
-       ++it) {
-    FrameTracker* child = it->second->GetFrameTracker();
+  for (auto& [frame, target] : frame_to_target_map_) {
+    FrameTracker* child = target->GetFrameTracker();
     if (child != nullptr) {
       WebView* child_result = child->GetTargetForFrame(frame_id);
       if (child_result != nullptr)
@@ -57,9 +59,9 @@ WebView* FrameTracker::GetTargetForFrame(const std::string& frame_id) {
 }
 
 bool FrameTracker::IsKnownFrame(const std::string& frame_id) const {
-  if (attached_frames_.count(frame_id) != 0 ||
-      frame_to_context_map_.count(frame_id) != 0 ||
-      frame_to_target_map_.count(frame_id) != 0) {
+  if (attached_frames_.contains(frame_id) ||
+      frame_to_context_map_.contains(frame_id) ||
+      frame_to_target_map_.contains(frame_id)) {
     return true;
   }
   // Frame unknown to this tracker, recursively search all child targets.
@@ -80,7 +82,7 @@ Status FrameTracker::OnConnected(DevToolsClient* client) {
   frame_to_target_map_.clear();
   attached_frames_.clear();
   // Enable target events to allow tracking iframe targets creation.
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("autoAttach", true);
   params.Set("flatten", true);
   params.Set("waitForDebuggerOnStart", false);
@@ -94,9 +96,9 @@ Status FrameTracker::OnConnected(DevToolsClient* client) {
 
 Status FrameTracker::OnEvent(DevToolsClient* client,
                              const std::string& method,
-                             const base::Value::Dict& params) {
+                             const base::DictValue& params) {
   if (method == "Runtime.executionContextCreated") {
-    const base::Value::Dict* context = params.FindDict("context");
+    const base::DictValue* context = params.FindDict("context");
     if (!context) {
       return Status(kUnknownError,
                     "Runtime.executionContextCreated missing dict 'context'");
@@ -173,7 +175,7 @@ Status FrameTracker::OnEvent(DevToolsClient* client,
       if (!session_id)
         return Status(kUnknownError,
                       "missing session ID in Target.attachedToTarget event");
-      if (frame_to_target_map_.count(*target_id) > 0) {
+      if (frame_to_target_map_.contains(*target_id)) {
         // Since chrome 70 we are seeing multiple Target.attachedToTarget events
         // for the same target_id.  This is causing crashes because:
         // - replacing the value in frame_to_target_map_ is causing the
@@ -208,7 +210,7 @@ Status FrameTracker::OnEvent(DevToolsClient* client,
     if (target->IsLocked())
       target->SetDetached();
     else
-      frame_to_target_map_.erase(*target_id);
+      frame_to_target_map_.erase(target_iter);
   }
   return Status(kOk);
 }

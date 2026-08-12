@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/scroll/mac_scrollbar_animator_impl.h"
 
 #import "base/task/single_thread_task_runner.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/scroll/scroll_animator.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme_mac.h"
@@ -25,21 +26,6 @@ ScrollbarToAnimatorV2Map& GetScrollbarToAnimatorV2Map() {
   DEFINE_STATIC_LOCAL(Persistent<ScrollbarToAnimatorV2MapHolder>, holder,
                       (MakeGarbageCollected<ScrollbarToAnimatorV2MapHolder>()));
   return holder->Value();
-}
-
-blink::ScrollbarThemeMac* MacOverlayScrollbarTheme(
-    blink::ScrollbarTheme& scrollbar_theme) {
-  return !scrollbar_theme.IsMockTheme()
-             ? static_cast<blink::ScrollbarThemeMac*>(&scrollbar_theme)
-             : nullptr;
-}
-
-bool IsScrollbarRegistered(blink::Scrollbar& scrollbar) {
-  if (blink::ScrollbarThemeMac* scrollbar_theme =
-          MacOverlayScrollbarTheme(scrollbar.GetTheme())) {
-    return scrollbar_theme->IsScrollbarRegistered(scrollbar);
-  }
-  return false;
 }
 
 }  // namespace
@@ -97,6 +83,23 @@ bool MacScrollbarImplV2::DidScroll() {
     return true;
   }
   return false;
+}
+
+bool MacScrollbarImplV2::FadeInScrollbarIfExists() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeInScrollbar(
+        base::FeatureList::IsEnabled(
+            blink::features::kFadeInScrollbarWhenMouseWheelMayBegin) &&
+        blink::features::kDeferFadeOutScrollbarUntilMouseWheelEnded.Get());
+    return true;
+  }
+  return false;
+}
+
+void MacScrollbarImplV2::FadeOutScrollbarIfNeeded() {
+  if (overlay_animator_) {
+    overlay_animator_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 float MacScrollbarImplV2::GetKnobAlpha() {
@@ -160,7 +163,7 @@ void MacScrollbarAnimatorV2::MouseExitedScrollbar(Scrollbar& scrollbar) const {
 }
 
 void MacScrollbarAnimatorV2::DidAddVerticalScrollbar(Scrollbar& scrollbar) {
-  if (!IsScrollbarRegistered(scrollbar))
+  if (!scrollbar.GetTheme().IsScrollbarRegistered(scrollbar))
     return;
   DCHECK(!vertical_scrollbar_);
   vertical_scrollbar_ =
@@ -172,7 +175,7 @@ void MacScrollbarAnimatorV2::WillRemoveVerticalScrollbar(Scrollbar& scrollbar) {
 }
 
 void MacScrollbarAnimatorV2::DidAddHorizontalScrollbar(Scrollbar& scrollbar) {
-  if (!IsScrollbarRegistered(scrollbar))
+  if (!scrollbar.GetTheme().IsScrollbarRegistered(scrollbar))
     return;
   DCHECK(!horizontal_scrollbar_);
   horizontal_scrollbar_ =
@@ -194,14 +197,25 @@ void MacScrollbarAnimatorV2::DidChangeUserVisibleScrollOffset(
 
 bool MacScrollbarAnimatorV2::FadeInScrollbarIfExists(bool horizontal,
                                                      bool vertical) {
-  bool did_scroll = false;
+  bool did_fade_in_and_begin_deferring_fade_out = false;
   if (horizontal && horizontal_scrollbar_) {
-    did_scroll |= horizontal_scrollbar_->DidScroll();
+    did_fade_in_and_begin_deferring_fade_out |=
+        horizontal_scrollbar_->FadeInScrollbarIfExists();
   }
   if (vertical && vertical_scrollbar_) {
-    did_scroll |= vertical_scrollbar_->DidScroll();
+    did_fade_in_and_begin_deferring_fade_out |=
+        vertical_scrollbar_->FadeInScrollbarIfExists();
   }
-  return did_scroll;
+  return did_fade_in_and_begin_deferring_fade_out;
+}
+
+void MacScrollbarAnimatorV2::FadeOutScrollbarIfNeeded() {
+  if (horizontal_scrollbar_) {
+    horizontal_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
+  if (vertical_scrollbar_) {
+    vertical_scrollbar_->FadeOutScrollbarIfNeeded();
+  }
 }
 
 void MacScrollbarAnimatorV2::Dispose() {

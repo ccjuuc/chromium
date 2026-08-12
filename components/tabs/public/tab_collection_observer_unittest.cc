@@ -234,7 +234,7 @@ TEST_F(TabCollectionObserverTest, OnTabCollectionAttached) {
   std::unique_ptr<tabs::SplitTabCollection> split_collection_unique =
       std::make_unique<tabs::SplitTabCollection>(
           split_id, split_tabs::SplitTabVisualData(
-                        split_tabs::SplitTabLayout::kVertical, 0.5));
+                        split_tabs::SplitTabLayout::kSideBySide, 0.5));
 
   split_collection_unique->AddTab(CreateMockTab(), 0);
   split_collection_unique->AddTab(CreateMockTab(), 0);
@@ -422,7 +422,7 @@ TEST_F(TabCollectionObserverTest, OnCollectionRemoved) {
   std::unique_ptr<tabs::SplitTabCollection> split_collection =
       std::make_unique<tabs::SplitTabCollection>(
           split_id, split_tabs::SplitTabVisualData(
-                        split_tabs::SplitTabLayout::kVertical, 0.5));
+                        split_tabs::SplitTabLayout::kSideBySide, 0.5));
   tabs::SplitTabCollection* split_collection_ptr = split_collection.get();
   tabs::TabCollectionHandle split_handle = split_collection->GetHandle();
   split_collection->AddTab(CreateMockTab(), 0);
@@ -559,7 +559,7 @@ TEST_F(TabCollectionObserverTest, OnSplitCreated) {
 
   collection->CreateSplit(split_id, tabs_to_split,
                           split_tabs::SplitTabVisualData(
-                              split_tabs::SplitTabLayout::kVertical, 0.5));
+                              split_tabs::SplitTabLayout::kSideBySide, 0.5));
 }
 
 TEST_F(TabCollectionObserverTest, OnUnsplit) {
@@ -571,7 +571,7 @@ TEST_F(TabCollectionObserverTest, OnUnsplit) {
   std::unique_ptr<tabs::SplitTabCollection> split_collection =
       std::make_unique<tabs::SplitTabCollection>(
           split_id, split_tabs::SplitTabVisualData(
-                        split_tabs::SplitTabLayout::kVertical, 0.5));
+                        split_tabs::SplitTabLayout::kSideBySide, 0.5));
   tabs::TabCollectionHandle split_handle = split_collection->GetHandle();
 
   for (int i = 0; i < 2; i++) {
@@ -968,8 +968,8 @@ TEST_F(TabCollectionObserverTest, MoveTabAndGroup) {
         .Times(1)
         .RetiresOnSaturation();
 
-    const std::set<tabs::TabCollection::Type> retain_collection_types =
-        std::set<tabs::TabCollection::Type>({tabs::TabCollection::Type::GROUP});
+    const tabs::TabCollection::TypeEnumSet retain_collection_types = {
+        tabs::TabCollection::Type::GROUP};
     collection->MoveTabsRecursive({0, 1}, 1, std::nullopt, false,
                                   retain_collection_types);
   }

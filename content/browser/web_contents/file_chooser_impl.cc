@@ -10,14 +10,17 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/thread_pool.h"
-#include "content/browser/child_process_security_policy_impl.h"
-#include "content/browser/renderer_host/back_forward_cache_disable.h"
+#include "content/browser/back_forward_cache/back_forward_cache_disable.h"
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
+#include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 
 namespace content {
@@ -158,6 +161,16 @@ void FileChooserImpl::OpenFileChooser(blink::mojom::FileChooserParamsPtr params,
     std::move(callback).Run(nullptr);
     return;
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  WebContents* web_contents =
+      WebContents::FromRenderFrameHost(render_frame_host());
+  if (!GetContentClient()->browser()->ShouldAllowSystemUiPopups(
+          web_contents)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+#endif
   callback_ = std::move(callback);
   auto listener = base::MakeRefCounted<FileSelectListenerImpl>(this);
   listener_impl_ = listener.get();
@@ -171,11 +184,21 @@ void FileChooserImpl::OpenFileChooser(blink::mojom::FileChooserParamsPtr params,
     return;
   }
 
+  // Do not allow save mode from the renderer process.
+  // Save mode was primarily used by PPAPI and is not used anymore in Blink,
+  // i.e. `blink::FileInputType::OpenPopupView()`.
+  // The File System Access API handles save pickers in the browser process,
+  // bypassing this Mojo interface.
+  // See https://crbug.com/435684924 for context.
+  if (params->mode == blink::mojom::FileChooserParams::Mode::kSave) {
+    mojo::ReportBadMessage("FileChooser: Save mode is not allowed.");
+    listener->FileSelectionCanceled();
+    return;
+  }
+
   // Do not allow open dialogs to have renderer-controlled default_file_name.
   // See https://crbug.com/433800617 for context.
-  if (params->mode != blink::mojom::FileChooserParams::Mode::kSave) {
-    params->default_file_name = base::FilePath();
-  }
+  params->default_file_name = base::FilePath();
 
   // Don't allow page with open FileChooser to enter BackForwardCache to avoid
   // any unexpected behaviour from BackForwardCache.
@@ -200,7 +223,7 @@ void FileChooserImpl::EnumerateChosenDirectory(
   auto listener = base::MakeRefCounted<FileSelectListenerImpl>(this);
   listener_impl_ = listener.get();
   auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
-  if (policy->CanReadFile(render_frame_host()->GetProcess()->GetDeprecatedID(),
+  if (policy->CanReadFile(render_frame_host()->GetProcess()->GetID(),
                           directory_path)) {
     WebContentsImpl::FromRenderFrameHostImpl(render_frame_host())
         ->EnumerateDirectory(GetWeakPtr(), render_frame_host(),
@@ -214,21 +237,23 @@ void FileChooserImpl::FileSelected(
     const base::FilePath& base_dir,
     blink::mojom::FileChooserParams::Mode mode,
     std::vector<blink::mojom::FileChooserFileInfoPtr> files) {
+  if (mode == blink::mojom::FileChooserParams::Mode::kSave) {
+    // Save mode should be blocked by OpenFileChooser, but if we get here, e.g.
+    // via test, we must not process it to avoid granting read permissions to
+    // the renderer.
+    return;
+  }
+
   listener_impl_ = nullptr;
   if (!render_frame_host()) {
     std::move(callback_).Run(nullptr);
     return;
   }
   storage::FileSystemContext* file_system_context = nullptr;
-  const int pid = render_frame_host()->GetProcess()->GetDeprecatedID();
+  const ChildProcessId pid = render_frame_host()->GetProcess()->GetID();
   auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
   // Grant the security access requested to the given files.
   for (const auto& file : files) {
-    if (mode == blink::mojom::FileChooserParams::Mode::kSave) {
-      policy->GrantCreateReadWriteFile(pid, file->get_native_file()->file_path);
-      continue;
-    }
-
     if (file->is_file_system()) {
       if (!file_system_context) {
         file_system_context =

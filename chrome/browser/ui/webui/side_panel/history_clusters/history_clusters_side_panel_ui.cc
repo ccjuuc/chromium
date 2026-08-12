@@ -20,14 +20,13 @@
 #include "chrome/browser/ui/webui/history_clusters/history_clusters_handler.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/grit/side_panel_history_clusters_resources.h"
 #include "chrome/grit/side_panel_history_clusters_resources_map.h"
 #include "chrome/grit/side_panel_shared_resources.h"
 #include "chrome/grit/side_panel_shared_resources_map.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/history_clusters/core/features.h"
-#include "components/history_embeddings/history_embeddings_features.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/page_image_service/image_service.h"
 #include "components/page_image_service/image_service_handler.h"
 #include "components/strings/grit/components_strings.h"
@@ -99,11 +98,19 @@ void HistoryClustersSidePanelUI::SetBrowserWindowInterface(
 }
 
 void HistoryClustersSidePanelUI::BindInterface(
-    mojo::PendingReceiver<history_clusters::mojom::PageHandler>
-        pending_page_handler) {
+    mojo::PendingReceiver<history_clusters::mojom::PageHandlerFactory>
+        pending_page_handler_factory) {
+  history_clusters_handler_factory_receiver_.reset();
+  history_clusters_handler_factory_receiver_.Bind(
+      std::move(pending_page_handler_factory));
+}
+
+void HistoryClustersSidePanelUI::CreatePageHandler(
+    mojo::PendingRemote<history_clusters::mojom::Page> page,
+    mojo::PendingReceiver<history_clusters::mojom::PageHandler> receiver) {
   history_clusters_handler_ =
       std::make_unique<history_clusters::HistoryClustersHandler>(
-          std::move(pending_page_handler), Profile::FromWebUI(web_ui()),
+          std::move(receiver), std::move(page), Profile::FromWebUI(web_ui()),
           web_ui()->GetWebContents(), browser_window_interface_);
   history_clusters_handler_->SetSidePanelUIEmbedder(this->embedder());
 }
@@ -123,10 +130,18 @@ void HistoryClustersSidePanelUI::BindInterface(
 }
 
 void HistoryClustersSidePanelUI::BindInterface(
-    mojo::PendingReceiver<history_embeddings::mojom::PageHandler>
-        pending_page_handler) {
+    mojo::PendingReceiver<history_embeddings::mojom::PageHandlerFactory>
+        pending_page_handler_factory) {
+  history_embeddings_handler_factory_receiver_.reset();
+  history_embeddings_handler_factory_receiver_.Bind(
+      std::move(pending_page_handler_factory));
+}
+
+void HistoryClustersSidePanelUI::CreatePageHandler(
+    mojo::PendingRemote<history_embeddings::mojom::Page> page,
+    mojo::PendingReceiver<history_embeddings::mojom::PageHandler> receiver) {
   history_embeddings_handler_ = std::make_unique<HistoryEmbeddingsHandler>(
-      std::move(pending_page_handler),
+      std::move(receiver), std::move(page),
       Profile::FromWebUI(web_ui())->GetWeakPtr(), web_ui(),
       /*for_side_panel=*/true);
 }

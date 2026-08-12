@@ -24,17 +24,18 @@ class WebState;
 namespace autofill {
 
 class AutofillProgressDialogController;
+enum class AutofillProgressUiType;
 class BnplIssuer;
+struct CardUnmaskChallengeOption;
 class CardUnmaskOtpInputDialogController;
 class CardUnmaskPromptController;
 class CreditCardCvcAuthenticator;
 class CreditCardOtpAuthenticator;
 class CreditCardRiskBasedAuthenticator;
-class WebViewAutofillClientIOS;
 class PaymentsDataManager;
-struct CardUnmaskChallengeOption;
 struct VirtualCardEnrollmentFields;
 class VirtualCardEnrollmentManager;
+class WebViewAutofillClientIOS;
 
 namespace payments {
 
@@ -48,7 +49,7 @@ class MandatoryReauthManager;
 class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
  public:
   explicit IOSWebViewPaymentsAutofillClient(
-      autofill::WebViewAutofillClientIOS* client,
+      WebViewAutofillClientIOS* client,
       id<CWVAutofillClientIOSBridge> bridge,
       web::WebState* web_state);
   IOSWebViewPaymentsAutofillClient(const IOSWebViewPaymentsAutofillClient&) =
@@ -89,8 +90,8 @@ class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
       base::OnceClosure accept_virtual_card_callback,
       base::OnceClosure decline_virtual_card_callback) override;
   void VirtualCardEnrollCompleted(PaymentsRpcResult result) override;
-  void OnCardDataAvailable(
-      const FilledCardInformationBubbleOptions& options) override;
+  void OnCardDataAvailable(const FilledCardInformationBubbleOptions& options,
+                           const url::Origin& origin) override;
   void ConfirmSaveIbanLocally(const Iban& iban,
                               bool should_show_prompt,
                               SaveIbanPromptCallback callback) override;
@@ -100,7 +101,7 @@ class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
                                 SaveIbanPromptCallback callback) override;
   void IbanUploadCompleted(bool iban_saved, bool hit_max_strikes) override;
   void ShowAutofillProgressDialog(
-      AutofillProgressDialogType autofill_progress_dialog_type,
+      AutofillProgressUiType autofill_progress_dialog_type,
       base::OnceClosure cancel_callback) override;
   void CloseAutofillProgressDialog(
       bool show_confirmation_before_closing,
@@ -136,9 +137,7 @@ class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
   CreditCardCvcAuthenticator& GetCvcAuthenticator() override;
   CreditCardOtpAuthenticator* GetOtpAuthenticator() override;
   CreditCardRiskBasedAuthenticator* GetRiskBasedAuthenticator() override;
-  bool IsRiskBasedAuthEffectivelyAvailable() const override;
   bool IsMandatoryReauthEnabled() override;
-  bool IsUsingCustomCardIconEnabled() const override;
   void ShowMandatoryReauthOptInPrompt(
       base::OnceClosure accept_mandatory_reauth_callback,
       base::OnceClosure cancel_mandatory_reauth_callback,
@@ -156,26 +155,29 @@ class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
       const OfferNotificationOptions& options) override;
   void DismissOfferNotification() override;
   bool ShowTouchToFillCreditCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) override;
   bool ShowTouchToFillIban(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      base::span<const autofill::Iban> ibans_to_suggest) override;
-  bool ShowTouchToFillLoyaltyCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      std::vector<autofill::LoyaltyCard> loyalty_cards_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      base::span<const Iban> ibans_to_suggest) override;
+  bool ShowTouchToFillAffiliatedLoyaltyCard(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
+  bool ShowTouchToFillForAllLoyaltyCards(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool OnPurchaseAmountExtracted(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       std::optional<int64_t> extracted_amount,
       bool is_amount_supported_by_any_issuer,
       const std::optional<std::string>& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillProgress(base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillBnplIssuers(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       const std::string& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillError(const AutofillErrorDialogContext& context) override;
   bool ShowTouchToFillBnplTos(BnplTosModel model,
@@ -195,14 +197,14 @@ class IOSWebViewPaymentsAutofillClient : public PaymentsAutofillClient {
   void ShowCreditCardSaveAndFillPendingDialog(
       CardSaveAndFillDialogCallback callback) override;
   void HideCreditCardSaveAndFillDialog() override;
-  bool IsTabModalPopupDeprecated() const override;
+  bool IsTabModalPopup() const override;
   BnplStrategy* GetBnplStrategy() override;
   BnplUiDelegate* GetBnplUiDelegate() override;
 
   // Begin IOSWebViewPaymentsAutofillClient-specific section.
 
  private:
-  const raw_ref<autofill::WebViewAutofillClientIOS> client_;
+  const raw_ref<WebViewAutofillClientIOS> client_;
 
   __weak id<CWVAutofillClientIOSBridge> bridge_;
 

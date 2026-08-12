@@ -18,7 +18,6 @@
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/signin_specifics.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/cleanup/cleanup_manager_ash.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/cleanup/mock_cleanup_handler.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/errors.h"
@@ -26,9 +25,11 @@
 #include "chrome/browser/chromeos/extensions/login_screen/login/login_api_lock_handler.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login/shared_session_handler.h"
 #include "chrome/browser/extensions/extension_api_unittest.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/ui/ash/login/mock_login_display_host.h"
 #include "chrome/common/extensions/api/login.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/login/auth/public/cryptohome_key_constants.h"
@@ -37,6 +38,8 @@
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/browser/browser_context.h"
@@ -48,6 +51,8 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/user_activity/user_activity_detector.h"
@@ -72,7 +77,18 @@ const char kLaunchSamlUserSessionArguments[] =
 
 class MockExistingUserController : public ash::ExistingUserController {
  public:
-  MockExistingUserController() = default;
+  // `local_state`, `application_locale_storage` and
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  MockExistingUserController(
+      PrefService* local_state,
+      const ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash)
+      : ash::ExistingUserController(local_state,
+                                    application_locale_storage,
+                                    std::move(shared_url_loader_factory),
+                                    browser_policy_connector_ash) {}
 
   MockExistingUserController(const MockExistingUserController&) = delete;
 
@@ -112,11 +128,9 @@ class ScopedTestingProfile {
  public:
   ScopedTestingProfile(TestingProfile* profile,
                        TestingProfileManager* profile_manager,
-                       ash::TestPrefServiceProvider* pref_service_provider,
                        const AccountId& account_id)
       : profile_(profile),
         profile_manager_(profile_manager),
-        pref_service_provider_(pref_service_provider),
         account_id_(account_id) {
     user_manager::UserManager::Get()->OnUserProfileCreated(account_id,
                                                            profile->GetPrefs());
@@ -129,8 +143,6 @@ class ScopedTestingProfile {
   ~ScopedTestingProfile() {
     user_manager::UserManager::Get()->OnUserProfileWillBeDestroyed(account_id_);
     std::string user_name = profile_->GetProfileUserName();
-    pref_service_provider_->ClearUnownedUserPrefs(
-        AccountId::FromUserEmail(user_name));
     profile_ = nullptr;
     profile_manager_->DeleteTestingProfile(user_name);
   }
@@ -140,7 +152,6 @@ class ScopedTestingProfile {
  private:
   raw_ptr<TestingProfile> profile_;
   const raw_ptr<TestingProfileManager> profile_manager_;
-  const raw_ptr<ash::TestPrefServiceProvider> pref_service_provider_;
   const AccountId account_id_;
 };
 
@@ -171,15 +182,28 @@ class LoginApiUnittest : public ExtensionApiUnittest {
 
  protected:
   void SetUp() override {
+    session_manager_ = std::make_unique<session_manager::SessionManager>(
+        std::make_unique<session_manager::FakeSessionManagerDelegate>());
+
     ExtensionApiUnittest::SetUp();
 
     auth_events_recorder_ = ash::AuthEventsRecorder::CreateForTesting();
     fake_chrome_user_manager_ = new ash::FakeChromeUserManager();
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
         std::unique_ptr<ash::FakeChromeUserManager>(fake_chrome_user_manager_));
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
     mock_login_display_host_ = std::make_unique<ash::MockLoginDisplayHost>();
     mock_existing_user_controller_ =
-        std::make_unique<MockExistingUserController>();
+        std::make_unique<MockExistingUserController>(
+            TestingBrowserProcess::GetGlobal()->local_state(),
+            TestingBrowserProcess::GetGlobal()
+                ->GetFeatures()
+                ->application_locale_storage(),
+            TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+            TestingBrowserProcess::GetGlobal()
+                ->platform_part()
+                ->browser_policy_connector_ash());
     mock_lock_handler_ = std::make_unique<MockLoginApiLockHandler>();
     // Set `LOGIN_PRIMARY` as the default state.
 
@@ -200,6 +224,7 @@ class LoginApiUnittest : public ExtensionApiUnittest {
     mock_lock_handler_.reset();
     mock_existing_user_controller_.reset();
     mock_login_display_host_.reset();
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
     scoped_user_manager_.reset();
     auth_events_recorder_.reset();
 
@@ -210,20 +235,22 @@ class LoginApiUnittest : public ExtensionApiUnittest {
       const std::string& email) {
     user_manager::User* user = fake_chrome_user_manager_->AddPublicAccountUser(
         AccountId::FromUserEmail(email));
-    TestingProfile* profile = profile_manager()->CreateTestingProfile(email);
+    TestingProfile* profile =
+        testing_profile_manager()->CreateTestingProfile(email);
 
     return std::make_unique<ScopedTestingProfile>(
-        profile, profile_manager(), ash_test_helper()->prefs_provider(),
-        user->GetAccountId());
+        profile, testing_profile_manager(), user->GetAccountId());
   }
 
   raw_ptr<ash::FakeChromeUserManager, DanglingUntriaged>
       fake_chrome_user_manager_;
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
   std::unique_ptr<ash::MockLoginDisplayHost> mock_login_display_host_;
   std::unique_ptr<MockExistingUserController> mock_existing_user_controller_;
   std::unique_ptr<MockLoginApiLockHandler> mock_lock_handler_;
   std::unique_ptr<ash::AuthEventsRecorder> auth_events_recorder_;
+  std::unique_ptr<session_manager::SessionManager> session_manager_;
 };
 
 MATCHER_P(MatchSigninSpecifics, expected, "") {
@@ -313,7 +340,7 @@ TEST_F(LoginApiUnittest, ExitCurrentSessionWithData) {
       base::MakeRefCounted<LoginExitCurrentSessionFunction>(),
       base::StringPrintf(R"(["%s"])", data_for_next_login_attempt.c_str()));
 
-  PrefService* local_state = g_browser_process->local_state();
+  PrefService* local_state = TestingBrowserProcess::GetGlobal()->local_state();
   ASSERT_EQ(
       data_for_next_login_attempt,
       local_state->GetString(prefs::kLoginExtensionApiDataForNextLoginAttempt));
@@ -322,7 +349,7 @@ TEST_F(LoginApiUnittest, ExitCurrentSessionWithData) {
 // Test that calling `login.exitCurrentSession()` with no data clears the
 // `kLoginExtensionApiDataForNextLoginAttempt` pref.
 TEST_F(LoginApiUnittest, ExitCurrentSessionWithNoData) {
-  PrefService* local_state = g_browser_process->local_state();
+  PrefService* local_state = TestingBrowserProcess::GetGlobal()->local_state();
   local_state->SetString(prefs::kLoginExtensionApiDataForNextLoginAttempt,
                          "hello world");
 
@@ -338,7 +365,7 @@ TEST_F(LoginApiUnittest, ExitCurrentSessionWithNoData) {
 TEST_F(LoginApiUnittest, FetchDataForNextLoginAttemptClearsPref) {
   const std::string data_for_next_login_attempt = "hello world";
 
-  PrefService* local_state = g_browser_process->local_state();
+  PrefService* local_state = TestingBrowserProcess::GetGlobal()->local_state();
   local_state->SetString(prefs::kLoginExtensionApiDataForNextLoginAttempt,
                          data_for_next_login_attempt);
 
@@ -359,7 +386,7 @@ TEST_F(LoginApiUnittest, SetDataForNextLoginAttempt) {
       base::MakeRefCounted<LoginSetDataForNextLoginAttemptFunction>(),
       "[\"" + data_for_next_login_attempt + "\"]");
 
-  PrefService* local_state = g_browser_process->local_state();
+  PrefService* local_state = TestingBrowserProcess::GetGlobal()->local_state();
   ASSERT_EQ(
       data_for_next_login_attempt,
       local_state->GetString(prefs::kLoginExtensionApiDataForNextLoginAttempt));
@@ -637,11 +664,11 @@ class LoginApiUserSessionUnittest : public LoginApiUnittest {
     auto* user = fake_chrome_user_manager_->AddUserWithAffiliation(
         AccountId::FromUserEmailGaiaId(email, kGaiaId),
         /* is_affiliated= */ true);
-    TestingProfile* profile = profile_manager()->CreateTestingProfile(email);
+    TestingProfile* profile =
+        testing_profile_manager()->CreateTestingProfile(email);
 
     return std::make_unique<ScopedTestingProfile>(
-        profile, profile_manager(), ash_test_helper()->prefs_provider(),
-        user->GetAccountId());
+        profile, testing_profile_manager(), user->GetAccountId());
   }
 };
 
@@ -858,8 +885,8 @@ class LoginApiSharedSessionUnittest : public LoginApiUnittest {
 
  protected:
   void SetUp() override {
-    GetCrosSettingsHelper()->ReplaceDeviceSettingsProviderWithStub();
-    GetCrosSettingsHelper()->SetBoolean(
+    cros_settings_test_helper().ReplaceDeviceSettingsProviderWithStub();
+    cros_settings_test_helper().SetBoolean(
         ash::kDeviceRestrictedManagedGuestSessionEnabled, true);
     // Remove cleanup handlers.
     chromeos::CleanupManagerAsh::Get()->SetCleanupHandlersForTesting({});
@@ -868,7 +895,7 @@ class LoginApiSharedSessionUnittest : public LoginApiUnittest {
   }
 
   void TearDown() override {
-    GetCrosSettingsHelper()->RestoreRealDeviceSettingsProvider();
+    cros_settings_test_helper().RestoreRealDeviceSettingsProvider();
     chromeos::SharedSessionHandler::Get()->ResetStateForTesting();
     chromeos::CleanupManagerAsh::Get()->ResetCleanupHandlersForTesting();
     testing_profile_.reset();
@@ -986,7 +1013,7 @@ TEST_F(LoginApiSharedSessionUnittest, LaunchSharedManagedGuestSession) {
 // when the DeviceRestrictedManagedGuestSessionEnabled policy is set to false.
 TEST_F(LoginApiSharedSessionUnittest,
        LaunchSharedManagedGuestSessionRestrictedMGSNotEnabled) {
-  GetCrosSettingsHelper()->SetBoolean(
+  cros_settings_test_helper().SetBoolean(
       ash::kDeviceRestrictedManagedGuestSessionEnabled, false);
 
   ASSERT_EQ(
@@ -1272,7 +1299,7 @@ TEST_F(LoginApiSharedSessionUnittest, EnterSharedSession) {
 // DeviceRestrictedManagedGuestSessionEnabled policy is set to false.
 TEST_F(LoginApiSharedSessionUnittest,
        EnterSharedSessionRestrictedMGSNotEnabled) {
-  GetCrosSettingsHelper()->SetBoolean(
+  cros_settings_test_helper().SetBoolean(
       ash::kDeviceRestrictedManagedGuestSessionEnabled, false);
 
   ASSERT_EQ(login_api_errors::kDeviceRestrictedManagedGuestSessionNotEnabled,
@@ -1391,13 +1418,14 @@ TEST_F(LoginApiSharedSessionUnittest, SharedSessionFlow) {
 }
 
 TEST_F(LoginApiUnittest, CallsOnRequestExternalLogout) {
-  // Register second profile. Not necessary to be a User profile.
-  profile_manager()->CreateTestingProfile("other@test");
+  // Register two more profiles to test event routing.
+  testing_profile_manager()->CreateTestingProfile("other1@test");
+  testing_profile_manager()->CreateTestingProfile("other2@test");
 
   std::vector<std::unique_ptr<extensions::TestEventRouterObserver>> observers;
   {
     auto loaded_profiles =
-        profile_manager()->profile_manager()->GetLoadedProfiles();
+        testing_profile_manager()->profile_manager()->GetLoadedProfiles();
     ASSERT_GE(loaded_profiles.size(), 2u);
     for (auto* profile : loaded_profiles) {
       observers.push_back(std::make_unique<TestEventRouterObserver>(
@@ -1416,19 +1444,20 @@ TEST_F(LoginApiUnittest, CallsOnRequestExternalLogout) {
 
   // Make sure events are routed to all profiles.
   for (const auto& observer : observers) {
-    EXPECT_TRUE(base::Contains(
-        observer->events(), api::login::OnRequestExternalLogout::kEventName));
+    EXPECT_TRUE(observer->events().contains(
+        api::login::OnRequestExternalLogout::kEventName));
   }
 }
 
 TEST_F(LoginApiUnittest, CallsOnExternalLogoutDone) {
-  // Register second profile. Not necessary to be a User profile.
-  profile_manager()->CreateTestingProfile("other@test");
+  // Register two more profiles to test event routing.
+  testing_profile_manager()->CreateTestingProfile("other1@test");
+  testing_profile_manager()->CreateTestingProfile("other2@test");
 
   std::vector<std::unique_ptr<extensions::TestEventRouterObserver>> observers;
   {
     auto loaded_profiles =
-        profile_manager()->profile_manager()->GetLoadedProfiles();
+        testing_profile_manager()->profile_manager()->GetLoadedProfiles();
     ASSERT_GE(loaded_profiles.size(), 2u);
     for (auto* profile : loaded_profiles) {
       observers.push_back(std::make_unique<TestEventRouterObserver>(
@@ -1447,8 +1476,8 @@ TEST_F(LoginApiUnittest, CallsOnExternalLogoutDone) {
 
   // Make sure events are routed to all profiles.
   for (const auto& observer : observers) {
-    EXPECT_TRUE(base::Contains(observer->events(),
-                               api::login::OnExternalLogoutDone::kEventName));
+    EXPECT_TRUE(observer->events().contains(
+        api::login::OnExternalLogoutDone::kEventName));
   }
 }
 

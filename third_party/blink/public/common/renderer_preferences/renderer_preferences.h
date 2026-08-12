@@ -17,6 +17,7 @@
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_url_entry.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/font_render_params.h"
 
 namespace blink {
@@ -53,7 +54,7 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
   bool allow_cross_origin_auth_prompt{false};
   bool enable_do_not_track{false};
   bool enable_encrypted_media{true};
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   bool use_overlay_scrollbar{false};
 #endif
   blink::mojom::WebRtcIpHandlingPolicy webrtc_ip_handling_policy =
@@ -80,10 +81,6 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
   int32_t status_font_height{0};
   std::u16string message_font_family_name;
   int32_t message_font_height{0};
-  int32_t vertical_scroll_bar_width_in_dips{0};
-  int32_t horizontal_scroll_bar_height_in_dips{0};
-  int32_t arrow_bitmap_height_vertical_scroll_bar_in_dips{0};
-  int32_t arrow_bitmap_width_horizontal_scroll_bar_in_dips{0};
 #endif
 #if BUILDFLAG(IS_OZONE)
   bool selection_clipboard_buffer_available{false};
@@ -98,6 +95,11 @@ struct BLINK_COMMON_EXPORT RendererPreferences {
   // The default value must be false to avoid performance problems on very large
   // source pages.
   bool view_source_line_wrap_enabled{false};
+  bool system_color_chooser_is_modal{false};
+
+  ui::KeyboardCode autofill_shortcut_key_code = ui::VKEY_UNKNOWN;
+  int autofill_shortcut_modifiers = 0;
+  std::string autofill_trigger_string;
 
   RendererPreferences();
   RendererPreferences(const RendererPreferences& other);

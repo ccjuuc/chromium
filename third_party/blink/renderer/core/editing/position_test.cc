@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/editing/position.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 
 namespace blink {
@@ -283,7 +284,7 @@ TEST_F(PositionTest, FirstPositionInShadowHost) {
 
   Position dom = Position::FirstPositionInNode(*host);
   PositionInFlatTree flat = PositionInFlatTree::FirstPositionInNode(*host);
-  EXPECT_EQ(dom, ToPositionInDOMTree(flat));
+  EXPECT_EQ(dom, ToPositionInDomTree(flat));
   EXPECT_EQ(flat, ToPositionInFlatTree(dom));
 }
 
@@ -294,7 +295,7 @@ TEST_F(PositionTest, LastPositionInShadowHost) {
 
   Position dom = Position::LastPositionInNode(*host);
   PositionInFlatTree flat = PositionInFlatTree::LastPositionInNode(*host);
-  EXPECT_EQ(dom, ToPositionInDOMTree(flat));
+  EXPECT_EQ(dom, ToPositionInDomTree(flat));
   EXPECT_EQ(flat, ToPositionInFlatTree(dom));
 }
 
@@ -306,16 +307,16 @@ TEST_F(PositionTest, ComparePositionsAcrossShadowBoundary) {
   Node* child = shadow_root->firstChild();
   Node* grandchild = child->firstChild();
   std::array<Node*, 4> nodes = {body, host, child, grandchild};
-  unsigned size = nodes.size();
-  for (unsigned i = 0; i < size; ++i) {
-    for (unsigned j = 0; j < i; ++j) {
+  wtf_size_t size = nodes.size();
+  for (wtf_size_t i = 0; i < size; ++i) {
+    for (wtf_size_t j = 0; j < i; ++j) {
       EXPECT_LT(Position(nodes[j], 0), Position(nodes[i], 0));
       EXPECT_LT(PositionInFlatTree(nodes[j], 0),
                 PositionInFlatTree(nodes[i], 0));
     }
     EXPECT_EQ(Position(nodes[i], 0), Position(nodes[i], 0));
     EXPECT_EQ(PositionInFlatTree(nodes[i], 0), PositionInFlatTree(nodes[i], 0));
-    for (unsigned j = i + 1; j < size; ++j) {
+    for (wtf_size_t j = i + 1; j < size; ++j) {
       EXPECT_GT(Position(nodes[j], 0), Position(nodes[i], 0));
       EXPECT_GT(PositionInFlatTree(nodes[j], 0),
                 PositionInFlatTree(nodes[i], 0));

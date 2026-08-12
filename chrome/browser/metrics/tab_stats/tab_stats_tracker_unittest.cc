@@ -18,13 +18,19 @@
 #include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/power_monitor_test.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/test_vertical_tab_strip_state_controller_delegate.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/metrics/daily_event.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -40,15 +46,46 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_test_helper.h"
 #else
 #include "chrome/browser/resource_coordinator/test_lifecycle_unit.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/mock_side_panel_ui.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_prefs.h"
+#include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/test/user_education/mock_browser_user_education_interface.h"
+#include "ui/actions/actions.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/base/test/mock_base_window.h"
 #endif
 
 namespace metrics {
 
 namespace {
+
+#if !BUILDFLAG(IS_ANDROID)
+void DestroyBrowserActionsSafely(
+    std::unique_ptr<BrowserActions> browser_actions) {
+  if (!browser_actions) {
+    return;
+  }
+
+  auto dummy_action_item = actions::ActionItem::Builder().Build();
+  actions::ActionItem* dummy_ptr =
+      actions::ActionManager::Get().AddAction(std::move(dummy_action_item));
+
+  raw_ptr<actions::ActionItem>* root_ptr =
+      reinterpret_cast<raw_ptr<actions::ActionItem>*>(browser_actions.get());
+  *root_ptr = dummy_ptr;
+
+  browser_actions.reset();
+}
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 using TabsStats = TabStatsDataStore::TabsStats;
 using TabStripInterface = TabStatsTracker::TabStripInterface;
@@ -153,25 +190,33 @@ class TabStripModifier {
 
 class TabStripModifier {
  public:
-  TabStripModifier(const TabStripInterface* tab_strip, Browser* browser)
-      : tab_strip_(tab_strip), browser_(browser) {}
+  TabStripModifier(const TabStripInterface* tab_strip,
+                   TabStripModel* tab_strip_model)
+      : tab_strip_(tab_strip), tab_strip_model_(tab_strip_model) {}
 
   const TabStripInterface& tab_strip() const { return *tab_strip_; }
 
   void InsertWebContentsAt(size_t index,
                            std::unique_ptr<content::WebContents> web_contents) {
-    browser_->tab_strip_model()->InsertWebContentsAt(
-        index, std::move(web_contents), AddTabTypes::ADD_ACTIVE);
+    tab_strip_model_->InsertWebContentsAt(index, std::move(web_contents),
+                                          AddTabTypes::ADD_ACTIVE);
   }
 
   void CloseWebContentsAt(size_t index) {
-    browser_->tab_strip_model()->CloseWebContentsAt(
-        index, TabCloseTypes::CLOSE_USER_GESTURE);
+    tab_strip_model_->CloseWebContentsAt(index,
+                                         TabCloseTypes::CLOSE_USER_GESTURE);
   }
+
+#if !BUILDFLAG(IS_ANDROID)
+  void AddToNewSplit(int index) {
+    tab_strip_model_->AddToNewSplit(
+        {index}, {}, split_tabs::SplitTabCreatedSource::kTabContextMenu);
+  }
+#endif
 
  private:
   raw_ptr<const TabStripInterface> tab_strip_;
-  raw_ptr<Browser> browser_;
+  raw_ptr<TabStripModel> tab_strip_model_;
 };
 
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -215,6 +260,24 @@ class TestTabStatsTracker : public TabStatsTracker {
     }
     return tab_stats_data_store()->tab_stats().total_tab_count;
   }
+
+#if !BUILDFLAG(IS_ANDROID)
+  void CreateSplitTab(size_t split_count,
+                      ChromeRenderViewHostTestHarness* test_harness,
+                      TabStripModifier* tab_strip_modifier) {
+    EXPECT_TRUE(test_harness);
+    for (size_t i = 0; i < split_count; ++i) {
+      int index = tab_strip_modifier->tab_strip().GetTabCount();
+      std::unique_ptr<content::WebContents> tab1 =
+          test_harness->CreateTestWebContents();
+      tab_strip_modifier->InsertWebContentsAt(index, std::move(tab1));
+      std::unique_ptr<content::WebContents> tab2 =
+          test_harness->CreateTestWebContents();
+      tab_strip_modifier->InsertWebContentsAt(index + 1, std::move(tab2));
+      tab_strip_modifier->AddToNewSplit(index);
+    }
+  }
+#endif
 
   size_t AddWindows(size_t window_count) {
     for (size_t i = 0; i < window_count; ++i)
@@ -298,6 +361,18 @@ class TabStatsTrackerTest : public ChromeRenderViewHostTestHarness {
 
   TabStatsTrackerTest() {
     TabStatsTracker::RegisterPrefs(pref_service_.registry());
+#if !BUILDFLAG(IS_ANDROID)
+    pref_service_.registry()->RegisterBooleanPref(prefs::kVerticalTabsEnabled,
+                                                  false);
+    pref_service_.registry()->RegisterBooleanPref(
+        prefs::kVerticalTabsExpandOnHoverEnabled, false);
+    pref_service_.registry()->RegisterBooleanPref(
+        prefs::kVerticalTabsEnabledFirstTime, false);
+    pref_service_.registry()->RegisterBooleanPref(
+        prefs::kVerticalTabsCollapsedState, false);
+    pref_service_.registry()->RegisterIntegerPref(
+        prefs::kVerticalTabsUncollapsedWidth, 0);
+#endif
 
     // The tab stats tracker has to be created after the power monitor as it's
     // using it.
@@ -317,28 +392,93 @@ class TabStatsTrackerTest : public ChromeRenderViewHostTestHarness {
     tab_strip_modifier_ = std::make_unique<TabStripModifier>(
         tab_strip_interface_.get(), test_tab_model_.get());
 #else
-    browser_ = CreateBrowserWithTestWindowForParams(
-        Browser::CreateParams(profile(), true));
-    tab_strip_interface_ = std::make_unique<TabStripInterface>(browser_.get());
+    scoped_feature_.InitWithFeatures({tabs::kVerticalTabs}, {});
+    test_tab_strip_model_delegate_ =
+        std::make_unique<TestTabStripModelDelegate>();
+    tab_strip_model_ = std::make_unique<TabStripModel>(
+        test_tab_strip_model_delegate_.get(), profile());
+
+    ON_CALL(static_cast<const MockBrowserWindowInterface&>(
+                mock_browser_window_interface_),
+            GetUnownedUserDataHost())
+        .WillByDefault(::testing::ReturnRef(unowned_user_data_host_));
+    ON_CALL(mock_browser_window_interface_, GetProfile())
+        .WillByDefault(::testing::Return(profile()));
+    ON_CALL(static_cast<const MockBrowserWindowInterface&>(
+                mock_browser_window_interface_),
+            GetProfile())
+        .WillByDefault(::testing::Return(profile()));
+    ON_CALL(mock_browser_window_interface_, GetTabStripModel())
+        .WillByDefault(::testing::Return(tab_strip_model_.get()));
+    ON_CALL(static_cast<const MockBrowserWindowInterface&>(
+                mock_browser_window_interface_),
+            GetTabStripModel())
+        .WillByDefault(::testing::Return(tab_strip_model_.get()));
+    ON_CALL(mock_browser_window_interface_, GetFeatures())
+        .WillByDefault(::testing::ReturnRef(browser_window_features_));
+    ON_CALL(static_cast<const MockBrowserWindowInterface&>(
+                mock_browser_window_interface_),
+            GetFeatures())
+        .WillByDefault(::testing::ReturnRef(browser_window_features_));
+    ON_CALL(mock_browser_window_interface_, GetWindow())
+        .WillByDefault(::testing::Return(&mock_base_window_));
+    ON_CALL(static_cast<const MockBrowserWindowInterface&>(
+                mock_browser_window_interface_),
+            GetWindow())
+        .WillByDefault(::testing::Return(&mock_base_window_));
+    ON_CALL(mock_browser_window_interface_, GetType())
+        .WillByDefault(
+            ::testing::Return(BrowserWindowInterface::Type::TYPE_NORMAL));
+
+    browser_actions_ =
+        std::make_unique<BrowserActions>(&mock_browser_window_interface_);
+
+    test_tab_strip_model_delegate_->SetBrowserWindowInterface(
+        &mock_browser_window_interface_);
+
+    mock_browser_user_education_interface_ =
+        std::make_unique<testing::NiceMock<MockBrowserUserEducationInterface>>(
+            &mock_browser_window_interface_);
+
+    vertical_tab_strip_state_controller_ =
+        std::make_unique<tabs::VerticalTabStripStateController>(
+            &mock_browser_window_interface_, &pref_service_, nullptr, nullptr,
+            SessionID::InvalidValue(), std::nullopt, std::nullopt);
+
+    static_cast<BrowserCollectionObserver*>(
+        GlobalBrowserCollection::GetInstance()->GetPlatformDelegate())
+        ->OnBrowserCreated(&mock_browser_window_interface_);
+
+    tab_strip_interface_ =
+        std::make_unique<TabStripInterface>(&mock_browser_window_interface_);
     tab_strip_modifier_ = std::make_unique<TabStripModifier>(
-        tab_strip_interface_.get(), browser_.get());
+        tab_strip_interface_.get(), tab_strip_model_.get());
 #endif
   }
 
   void TearDown() override {
+#if !BUILDFLAG(IS_ANDROID)
+    static_cast<BrowserCollectionObserver*>(
+        GlobalBrowserCollection::GetInstance()->GetPlatformDelegate())
+        ->OnBrowserClosed(&mock_browser_window_interface_);
+#endif
     tab_stats_tracker_->RemoveTabs(tab_strip_interface_->GetTabCount(),
                                    tab_strip_modifier_.get());
-    tab_stats_tracker_.reset();
 
-    // Everything depending on `profile()` must be destroyed before it's deleted
-    // in TearDown.
     tab_strip_modifier_.reset();
     tab_strip_interface_.reset();
 #if BUILDFLAG(IS_ANDROID)
     test_tab_model_.reset();
 #else
-    browser_.reset();
+    vertical_tab_strip_state_controller_.reset();
+    mock_browser_user_education_interface_.reset();
+    DestroyBrowserActionsSafely(std::move(browser_actions_));
+    test_tab_strip_model_delegate_->SetBrowserWindowInterface(nullptr);
+    tab_strip_model_.reset();
+    test_tab_strip_model_delegate_.reset();
 #endif
+
+    tab_stats_tracker_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -410,10 +550,23 @@ class TabStatsTrackerTest : public ChromeRenderViewHostTestHarness {
 
   TestingPrefServiceSimple pref_service_;
 
+  base::test::ScopedFeatureList scoped_feature_;
+
 #if BUILDFLAG(IS_ANDROID)
   std::unique_ptr<OwningTestTabModel> test_tab_model_;
 #else
-  std::unique_ptr<Browser> browser_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_interface_;
+  testing::NiceMock<ui::MockBaseWindow> mock_base_window_;
+  std::unique_ptr<testing::NiceMock<MockBrowserUserEducationInterface>>
+      mock_browser_user_education_interface_;
+  ui::UnownedUserDataHost unowned_user_data_host_;
+  BrowserWindowFeatures browser_window_features_;
+  MockSidePanelUI side_panel_ui_{unowned_user_data_host_};
+  std::unique_ptr<TestTabStripModelDelegate> test_tab_strip_model_delegate_;
+  std::unique_ptr<TabStripModel> tab_strip_model_;
+  std::unique_ptr<BrowserActions> browser_actions_;
+  std::unique_ptr<tabs::VerticalTabStripStateController>
+      vertical_tab_strip_state_controller_;
 #endif
 
   // Wrappers for the TabStripModel on desktop or TabModel on Android.
@@ -795,6 +948,11 @@ TEST_F(TabStatsTrackerTest, DailyDiscards) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(TabStatsTrackerTest, HeartbeatMetrics) {
+#if !BUILDFLAG(IS_ANDROID)
+  size_t expected_split_tab_count = 2;
+  tab_stats_tracker_->CreateSplitTab(expected_split_tab_count / 2, this,
+                                     tab_strip_modifier_.get());
+#endif
   size_t expected_tab_count =
       tab_stats_tracker_->AddTabs(12, this, tab_strip_modifier_.get());
   size_t expected_window_count = tab_stats_tracker_->AddWindows(5);
@@ -803,6 +961,17 @@ TEST_F(TabStatsTrackerTest, HeartbeatMetrics) {
 
   ExpectBucketedSample(UmaStatsReportingDelegate::kTabCountHistogramName,
                        expected_tab_count, 1);
+#if !BUILDFLAG(IS_ANDROID)
+  ExpectBucketedSample(
+      base::StrCat(
+          {UmaStatsReportingDelegate::kTabCountHistogramName, ".SplitTabs"}),
+      expected_split_tab_count, 1);
+
+  ExpectBucketedSample(
+      base::StrCat({UmaStatsReportingDelegate::kTabCountHistogramName,
+                    ".HorizontalTabStrip"}),
+      expected_tab_count, 1);
+#endif
   ExpectBucketedSample(UmaStatsReportingDelegate::kWindowCountHistogramName,
                        expected_window_count, 1);
 
@@ -815,6 +984,104 @@ TEST_F(TabStatsTrackerTest, HeartbeatMetrics) {
   ExpectBucketedSample(UmaStatsReportingDelegate::kWindowCountHistogramName,
                        expected_window_count, 1);
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(TabStatsTrackerTest, HeartbeatMetricsPinnedTabs) {
+  tab_stats_tracker_->AddTabs(5, this, tab_strip_modifier_.get());
+
+  tab_strip_model_->SetTabPinned(0, true);
+  tab_strip_model_->SetTabPinned(1, true);
+  size_t expected_pinned_tab_count = 2;
+
+  tab_stats_tracker_->OnHeartbeatEvent();
+
+  ExpectBucketedSample(
+      base::StrCat({UmaStatsReportingDelegate::kPinnedTabCountHistogramName,
+                    ".HorizontalTabStrip"}),
+      expected_pinned_tab_count, 1);
+}
+
+TEST_F(TabStatsTrackerTest, HeartbeatMetricsWithVerticalTabs) {
+  tabs::VerticalTabStripStateController::From(&mock_browser_window_interface_)
+      ->SetVerticalTabsEnabled(true);
+
+  size_t expected_tab_count =
+      tab_stats_tracker_->AddTabs(12, this, tab_strip_modifier_.get());
+
+  tab_stats_tracker_->OnHeartbeatEvent();
+
+  ExpectBucketedSample(
+      base::StrCat({UmaStatsReportingDelegate::kTabCountHistogramName,
+                    ".VerticalTabStrip"}),
+      expected_tab_count, 1);
+}
+
+TEST_F(TabStatsTrackerTest, HeartbeatMetricsWithVerticalTabsCollapseState) {
+  auto* controller = tabs::VerticalTabStripStateController::From(
+      &mock_browser_window_interface_);
+  tabs::TestVerticalTabStripStateControllerDelegate delegate;
+  controller->SetDelegate(&delegate);
+  controller->SetVerticalTabsEnabled(true);
+
+  // Default is not collapsed (Expanded).
+  EXPECT_FALSE(controller->IsCollapsed());
+  tab_stats_tracker_->OnHeartbeatEvent();
+  histogram_tester_.ExpectUniqueSample(
+      UmaStatsReportingDelegate::kVerticalTabStripCollapseStateHistogramName,
+      VerticalTabStripCollapseState::kExpanded, 1);
+
+  // Collapse it.
+  controller->RequestCollapse(true);
+  tab_stats_tracker_->OnHeartbeatEvent();
+  histogram_tester_.ExpectBucketCount(
+      UmaStatsReportingDelegate::kVerticalTabStripCollapseStateHistogramName,
+      VerticalTabStripCollapseState::kCollapsed, 1);
+
+  // Disable vertical tabs.
+  controller->SetVerticalTabsEnabled(false);
+  tab_stats_tracker_->OnHeartbeatEvent();
+  // No new sample for the collapse state.
+  histogram_tester_.ExpectTotalCount(
+      UmaStatsReportingDelegate::kVerticalTabStripCollapseStateHistogramName,
+      2);
+
+  controller->SetDelegate(nullptr);
+}
+
+TEST_F(TabStatsTrackerTest, HeartbeatMetricsFocusMode) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      features::kTabGroupsFocusing);
+
+  tab_stats_tracker_->AddTabs(3, this, tab_strip_modifier_.get());
+
+  // Initially not in focus mode.
+  EXPECT_FALSE(tab_strip_model_->GetFocusedGroup().has_value());
+  tab_stats_tracker_->OnHeartbeatEvent();
+  histogram_tester_.ExpectUniqueSample(
+      UmaStatsReportingDelegate::kFocusModeIsActiveHistogramName, false, 1);
+
+  // Group tabs and focus the group.
+  tab_groups::TabGroupId group_id = tab_strip_model_->AddToNewGroup({0, 1});
+  tab_strip_model_->SetFocusedGroup(group_id);
+  EXPECT_EQ(group_id, tab_strip_model_->GetFocusedGroup());
+
+  tab_stats_tracker_->OnHeartbeatEvent();
+  histogram_tester_.ExpectBucketCount(
+      UmaStatsReportingDelegate::kFocusModeIsActiveHistogramName, true, 1);
+  histogram_tester_.ExpectTotalCount(
+      UmaStatsReportingDelegate::kFocusModeIsActiveHistogramName, 2);
+
+  // Unfocus the group.
+  tab_strip_model_->SetFocusedGroup(std::nullopt);
+  EXPECT_FALSE(tab_strip_model_->GetFocusedGroup().has_value());
+
+  tab_stats_tracker_->OnHeartbeatEvent();
+  histogram_tester_.ExpectBucketCount(
+      UmaStatsReportingDelegate::kFocusModeIsActiveHistogramName, false, 2);
+  histogram_tester_.ExpectTotalCount(
+      UmaStatsReportingDelegate::kFocusModeIsActiveHistogramName, 3);
+}
+#endif
 
 TEST_F(TabStatsTrackerTest, VideoPlayingInTab) {
   content::WebContentsTester* const contents_tester =
@@ -899,5 +1166,40 @@ TEST_F(TabStatsTrackerTest, VideoPlayingInTab) {
   EXPECT_FALSE(tab_stats_observer.is_video_playing_in_tab())
       << "No video is playing";
 }
+
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(TabStatsTrackerTest, RecordKeyboardTabSwitchModeDaily) {
+  base::HistogramTester histogram_tester;
+
+  // Add a tab to make sure the profile is considered active and the daily
+  // event triggers (ReportDailyMetrics returns early if max tab count is 0).
+  tab_stats_tracker_->AddTabs(1, this, tab_strip_modifier_.get());
+
+  // Set the preference to true (MRU).
+  profile()->GetPrefs()->SetBoolean(prefs::kCtrlTabMru, true);
+
+  // Trigger the daily event.
+  tab_stats_tracker_->TriggerDailyEvent();
+
+  histogram_tester.ExpectUniqueSample(
+      UmaStatsReportingDelegate::kKeyboardTabSwitchModeHistogramName,
+      static_cast<int>(UmaStatsReportingDelegate::KeyboardTabSwitchMode::kMRU),
+      1);
+
+  // Set the preference to false (Standard).
+  profile()->GetPrefs()->SetBoolean(prefs::kCtrlTabMru, false);
+
+  // Trigger the daily event again.
+  tab_stats_tracker_->TriggerDailyEvent();
+
+  histogram_tester.ExpectBucketCount(
+      UmaStatsReportingDelegate::kKeyboardTabSwitchModeHistogramName,
+      static_cast<int>(
+          UmaStatsReportingDelegate::KeyboardTabSwitchMode::kStandard),
+      1);
+  histogram_tester.ExpectTotalCount(
+      UmaStatsReportingDelegate::kKeyboardTabSwitchModeHistogramName, 2);
+}
+#endif
 
 }  // namespace metrics

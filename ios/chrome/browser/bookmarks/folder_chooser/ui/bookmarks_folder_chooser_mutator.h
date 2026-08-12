@@ -15,9 +15,12 @@ class BookmarkNode;
 // te model.
 @protocol BookmarksFolderChooserMutator <NSObject>
 
-// TODO(crbug.com/40252439): Change parameter signature. View controller should
+// TODO(crbug.com/498389665): Change parameter signature. View controller should
 // not know about BookmarkNode.
 - (void)setSelectedFolderNode:(const bookmarks::BookmarkNode*)folderNode;
+
+// Whether the UI is disabled.
+@property(nonatomic, assign) BOOL UIDisabled;
 
 @end
 

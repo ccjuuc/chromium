@@ -6,6 +6,7 @@
 
 #include <cert.h>
 #include <certdb.h>
+#include <nss.h>
 #include <pkcs11n.h>
 #include <prtypes.h>
 
@@ -22,6 +23,7 @@
 #include "net/cert/scoped_nss_types.h"
 #include "net/cert/x509_util.h"
 #include "net/cert/x509_util_nss.h"
+#include "net/test/cert_builder.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/test_data_directory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -574,6 +576,12 @@ TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
 // in the user DB. The system trust settings should not be used, but the trust
 // from the user DB should be honored.
 TEST_F(TrustStoreNSSTestIgnoreSystemCerts, UserDbTrustForSystemRootHonored) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);
@@ -594,6 +602,12 @@ TEST_F(TrustStoreNSSTestIgnoreSystemCerts, UserDbTrustForSystemRootHonored) {
 // the user DB should be honored.
 TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
        UserDbLeafTrustForSystemRootHonored) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);
@@ -624,6 +638,12 @@ TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
 // trust from the user DB should be honored.
 TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
        UserDbAnchorAndLeafTrustForSystemRootHonored) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);
@@ -646,6 +666,12 @@ TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
 // settings in the user DB. The system trust settings should not be used, and
 // the distrust from the user DB should be honored.
 TEST_F(TrustStoreNSSTestIgnoreSystemCerts, UserDbDistrustForSystemRootHonored) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);
@@ -667,6 +693,12 @@ TEST_F(TrustStoreNSSTestIgnoreSystemCerts, UserDbDistrustForSystemRootHonored) {
 // unspecified trust.
 TEST_F(TrustStoreNSSTestIgnoreSystemCerts,
        UserDbUnspecifiedTrustForSystemRootHonored) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);
@@ -714,6 +746,31 @@ TEST_F(TrustStoreNSSTestWithoutSlotFilter, TrustedCA) {
       bssl::CertificateTrust::ForUnspecified()));
 
   EXPECT_TRUE(HasTrust({newroot_}, ExpectedTrustForAnchor()));
+}
+
+// Trust for a cert shouldn't apply to a different cert even if most parts of
+// the cert are the same.
+TEST_F(TrustStoreNSSTestWithoutSlotFilter, TrustedCertWithDifferentKey) {
+  auto [leaf_builder, root_builder] = CertBuilder::CreateSimpleChain2();
+
+  auto trusted_root = bssl::ParsedCertificate::Create(
+      root_builder->DupCertBuffer(),
+      x509_util::DefaultParseCertificateOptions(), nullptr);
+  ASSERT_TRUE(trusted_root);
+  AddCertToNSSSlotWithTrust(trusted_root.get(), test_nssdb_.slot(),
+                            bssl::CertificateTrustType::TRUSTED_ANCHOR);
+
+  // Regenerate the private key of the cert builder to create a similar cert
+  // where the only difference is the SPKI (and the self-signature).
+  root_builder->GenerateECKey();
+  auto imposter_root = bssl::ParsedCertificate::Create(
+      root_builder->DupCertBuffer(),
+      x509_util::DefaultParseCertificateOptions(), nullptr);
+  ASSERT_TRUE(imposter_root);
+
+  EXPECT_TRUE(HasTrust({trusted_root}, ExpectedTrustForAnchor()));
+  EXPECT_TRUE(
+      HasTrust({imposter_root}, bssl::CertificateTrust::ForUnspecified()));
 }
 
 // Distrust a single self-signed CA certificate.
@@ -858,6 +915,12 @@ TEST_F(TrustStoreNSSTestAllowSpecifiedUserSlot, CertOnOtherUserSlot) {
 // The same certificate is stored in multiple user slots with different trust
 // settings. Ensure that the correct trust setting is used.
 TEST_F(TrustStoreNSSTestAllowSpecifiedUserSlot, CertOnMultipleSlots) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   // Add unrelated trust record to test that we find the correct one.
   AddCertToNSSSlotWithTrust(newintermediate_.get(), test_nssdb_.slot(),
                             bssl::CertificateTrustType::DISTRUSTED);
@@ -879,6 +942,12 @@ TEST_F(TrustStoreNSSTestAllowSpecifiedUserSlot, CertOnMultipleSlots) {
 // A NSS trusted root certificate is also stored in multiple user slots with
 // different trust settings. Ensure that the correct trust setting is used.
 TEST_F(TrustStoreNSSTestAllowSpecifiedUserSlot, SystemRootCertOnMultipleSlots) {
+  if (NSS_VersionCheck("3.115")) {
+    // TODO(crbug.com/490139148): The functionality tested here appears to be
+    // broken by upstream changes in NSS around 3.115-3.116.
+    GTEST_SKIP();
+  }
+
   std::shared_ptr<const bssl::ParsedCertificate> system_root =
       GetASSLTrustedBuiltinRoot();
   ASSERT_TRUE(system_root);

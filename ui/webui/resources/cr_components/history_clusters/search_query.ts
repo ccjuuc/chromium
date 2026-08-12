@@ -6,9 +6,8 @@ import {CrRippleMixin} from '//resources/cr_elements/cr_ripple/cr_ripple_mixin.j
 import {assert} from '//resources/js/assert.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserProxyImpl} from './browser_proxy.js';
 import type {SearchQuery} from './history_cluster_types.mojom-webui.js';
-import {RelatedSearchAction} from './history_clusters.mojom-webui.js';
+import {browserProxyFactory, RelatedSearchAction} from './history_clusters.mojom-webui.js';
 import {MetricsProxyImpl} from './metrics_proxy.js';
 import {getCss} from './search_query.css.js';
 import {getHtml} from './search_query.html.js';
@@ -68,7 +67,7 @@ export class SearchQueryElement extends SearchQueryElementBase {
     this.addEventListener('pointercancel', this.onPointerCancel_.bind(this));
   }
 
-  protected onAuxClick_() {
+  protected onAuxclick_() {
     MetricsProxyImpl.getInstance().recordRelatedSearchAction(
         RelatedSearchAction.kClicked, this.index);
 
@@ -80,7 +79,7 @@ export class SearchQueryElement extends SearchQueryElementBase {
     event.preventDefault();  // Prevent default browser action (navigation).
 
     // To record metrics.
-    this.onAuxClick_();
+    this.onAuxclick_();
 
     this.openUrl_(event);
   }
@@ -97,7 +96,7 @@ export class SearchQueryElement extends SearchQueryElementBase {
     this.getRipple().uiDownAction();
 
     // To record metrics.
-    this.onAuxClick_();
+    this.onAuxclick_();
 
     this.openUrl_(e);
 
@@ -116,7 +115,7 @@ export class SearchQueryElement extends SearchQueryElementBase {
 
   private openUrl_(event: MouseEvent|KeyboardEvent) {
     assert(this.searchQuery);
-    BrowserProxyImpl.getInstance().handler.openHistoryUrl(
+    browserProxyFactory.getInstance().handler.openHistoryUrl(
         this.searchQuery.url, {
           middleButton: false,
           altKey: event.altKey,

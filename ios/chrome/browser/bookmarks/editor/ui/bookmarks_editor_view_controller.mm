@@ -24,7 +24,6 @@
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_header_footer_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/shared/ui/util/image/image_util.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
@@ -122,7 +121,8 @@ const CGFloat kEstimatedTableSectionFooterHeight = 40;
 - (void)viewDidLoad {
   [super viewDidLoad];
 
-  self.tableView.backgroundColor = self.styler.tableViewBackgroundColor;
+  self.tableView.backgroundColor =
+      [UIColor colorNamed:kGroupedPrimaryBackgroundColor];
   self.tableView.estimatedRowHeight = kEstimatedTableRowHeight;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
   self.tableView.sectionHeaderHeight = 0;
@@ -245,6 +245,7 @@ const CGFloat kEstimatedTableSectionFooterHeight = 40;
 }
 
 - (void)dismissBookmarkEditorView {
+  self.mutator.UIDisabled = YES;
   [self.view endEditing:YES];
 
   // Dismiss this controller.
@@ -324,11 +325,17 @@ const CGFloat kEstimatedTableSectionFooterHeight = 40;
 }
 
 - (void)cancel {
+  if (self.mutator.UIDisabled) {
+    return;
+  }
   base::RecordAction(base::UserMetricsAction("MobileBookmarksEditorCanceled"));
   [self dismissBookmarkEditorView];
 }
 
 - (void)save {
+  if (self.mutator.UIDisabled) {
+    return;
+  }
   base::RecordAction(base::UserMetricsAction("MobileBookmarksEditorSaved"));
   [self.mutator commitBookmarkChangesWithURLString:[self inputURLString]
                                               name:[self inputBookmarkName]];

@@ -53,8 +53,12 @@ mojom("interfaces") {
   public_deps = [ "//mojo/public/mojom/base" ]
 }
 
+# TODO(crbug.com/514743962): This target should be broken up and have its
+# code moved into appropriate subcomponents.
 component("features") {
   sources = [
+    # All of these feature_registry targets are related to
+    # remote model execution / MQLS.
     "feature_registry/enterprise_policy_registry.cc",
     "feature_registry/enterprise_policy_registry.h",
     "feature_registry/feature_registration.cc",
@@ -63,13 +67,18 @@ component("features") {
     "feature_registry/mqls_feature_registry.h",
     "feature_registry/settings_ui_registry.cc",
     "feature_registry/settings_ui_registry.h",
+
+    # TODO(crbug.com/514743962): This belongs with remote model execution.
     "model_execution/feature_keys.h",
+
+    # TODO(crbug.com/514743962): This is mostly on-device model things,
+    # with a couple stray remote model execution things.
     "model_execution/model_execution_prefs.cc",
     "model_execution/model_execution_prefs.h",
     "model_execution/on_device_features.cc",
     "model_execution/on_device_features.h",
-    "optimization_guide_constants.cc",
-    "optimization_guide_constants.h",
+
+    # TODO(crbug.com/514743962): These should all be broken up and removed.
     "optimization_guide_enums.h",
     "optimization_guide_features.cc",
     "optimization_guide_features.h",
@@ -95,6 +104,9 @@ component("features") {
     "//third_party/metrics_proto",
     "//ui/base",
   ]
+  if (is_android) {
+    deps += [ "//components/version_info/android:channel_getter" ]
+  }
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
   defines = [ "IS_OPTIMIZATION_GUIDE_FEATURES_IMPL" ]
 }
@@ -191,6 +203,8 @@ source_set("core_util") {
 source_set("model_execution") {
   # TODO: crbug.com/421262905 - Should not need these without model_execution
   sources = [
+    "model_execution/component_download_observer.cc",
+    "model_execution/component_download_observer.h",
     "model_execution/optimization_guide_model_execution_error.cc",
     "model_execution/optimization_guide_model_execution_error.h",
     "model_execution/remote_model_executor.cc",
@@ -208,12 +222,14 @@ source_set("model_execution") {
     ":features",
     "//base",
     "//base/version_info",
+    "//components/component_updater",
     "//components/optimization_guide:optimization_guide_buildflags",
     "//components/optimization_guide/optimization_guide_internals/webui:mojo_bindings",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/optimization_guide/public/mojom",
     "//components/policy/core/common",
     "//components/prefs",
+    "//components/update_client",
     "//components/variations/net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
@@ -225,6 +241,7 @@ source_set("model_execution") {
       "model_execution/model_execution_features.h",
       "model_execution/model_execution_features_controller.cc",
       "model_execution/model_execution_features_controller.h",
+      "model_execution/model_execution_fetcher.cc",
       "model_execution/model_execution_fetcher.h",
       "model_execution/model_execution_fetcher_impl.cc",
       "model_execution/model_execution_fetcher_impl.h",
@@ -235,8 +252,6 @@ source_set("model_execution") {
     ]
     deps += [
       ":core_util",
-      ":ondevice",  # TODO: crbug.com/421262905 - Remove this dep.
-      "//components/component_updater",
       "//components/optimization_guide/proto:optimization_guide_proto",
       "//components/prefs",
       "//components/signin/public/identity_manager",
@@ -244,7 +259,17 @@ source_set("model_execution") {
       "//components/version_info",
       "//google_apis",
       "//services/network/public/cpp",
-      "//third_party/tflite:buildflags",
+    ]
+    sources += [
+      "model_execution/private_ai_model_execution_fetcher.cc",
+      "model_execution/private_ai_model_execution_fetcher.h",
+      "model_execution/private_ai_utils.cc",
+      "model_execution/private_ai_utils.h",
+    ]
+    deps += [
+      "//components/private_ai",
+      "//components/private_ai:proto",
+      "//components/variations",
     ]
   }
 }
@@ -260,6 +285,7 @@ source_set("ondevice") {
     ":features",
     "//base",
     "//base/version_info",
+    "//build:branding_buildflags",
     "//components/optimization_guide:optimization_guide_buildflags",
     "//components/optimization_guide/optimization_guide_internals/webui:mojo_bindings",
     "//components/optimization_guide/proto:optimization_guide_proto",
@@ -303,6 +329,8 @@ source_set("ondevice") {
       "model_execution/on_device_model_adaptation_loader.h",
       "model_execution/on_device_model_component.cc",
       "model_execution/on_device_model_component.h",
+      "model_execution/on_device_model_download_progress_manager.cc",
+      "model_execution/on_device_model_download_progress_manager.h",
       "model_execution/on_device_model_execution_proto_descriptors.h",
       "model_execution/on_device_model_execution_proto_status.h",
       "model_execution/on_device_model_execution_proto_value_utils.cc",
@@ -311,14 +339,16 @@ source_set("ondevice") {
       "model_execution/on_device_model_feature_adapter.h",
       "model_execution/on_device_model_metadata.cc",
       "model_execution/on_device_model_metadata.h",
+      "model_execution/on_device_model_names.cc",
+      "model_execution/on_device_model_names.h",
       "model_execution/on_device_model_service_controller.cc",
       "model_execution/on_device_model_service_controller.h",
       "model_execution/on_device_model_validator.cc",
       "model_execution/on_device_model_validator.h",
+      "model_execution/on_device_telemetry_logger.cc",
+      "model_execution/on_device_telemetry_logger.h",
       "model_execution/performance_class.cc",
       "model_execution/performance_class.h",
-      "model_execution/redactor.cc",
-      "model_execution/redactor.h",
       "model_execution/repetition_checker.cc",
       "model_execution/repetition_checker.h",
       "model_execution/response_parser.cc",
@@ -354,18 +384,22 @@ source_set("ondevice") {
       "//components/optimization_guide/proto:optimization_guide_proto",
       "//components/optimization_guide/public/mojom",
       "//components/prefs",
+      "//components/update_client",
       "//components/version_info",
-      "//services/data_decoder/public/cpp",
       "//services/on_device_model/public/cpp",
       "//third_party/re2",
       "//third_party/tflite:buildflags",
     ]
+    if (build_with_internal_optimization_guide) {
+      deps += [ "//services/on_device_model/ml:ml_no_internal" ]
+    }
     if (is_android) {
       sources += [
         "model_execution/android/model_broker_android.cc",
         "model_execution/android/model_broker_android.h",
       ]
       deps += [
+        "//build:branding_buildflags",
         "//services/on_device_model:on_device_model_service",
         "//services/on_device_model/android",
         "//services/on_device_model/android:mojom",
@@ -373,6 +407,81 @@ source_set("ondevice") {
     }
   }
 }
+
+if (build_with_model_execution) {
+  source_set("manifest_broker") {
+    sources = [
+      "model_execution/manifest_broker/manifest.cc",
+      "model_execution/manifest_broker/manifest.h",
+      "model_execution/manifest_broker/manifest_asset_manager.cc",
+      "model_execution/manifest_broker/manifest_asset_manager.h",
+      "model_execution/manifest_broker/manifest_broker_state.cc",
+      "model_execution/manifest_broker/manifest_broker_state.h",
+      "model_execution/manifest_broker/manifest_monitor.cc",
+      "model_execution/manifest_broker/manifest_monitor.h",
+      "model_execution/manifest_broker/manifest_solution_factory.cc",
+      "model_execution/manifest_broker/manifest_solution_factory.h",
+      "model_execution/manifest_broker/manifest_validation.cc",
+      "model_execution/manifest_broker/manifest_validation.h",
+      "model_execution/manifest_broker/override_manifest_asset_manager_delegate.cc",
+      "model_execution/manifest_broker/override_manifest_asset_manager_delegate.h",
+    ]
+    deps = [
+      ":features",
+      ":model_execution",
+      ":ondevice",
+      "//base",
+      "//build:branding_buildflags",
+      "//components/component_updater",
+      "//components/crx_file",
+      "//components/optimization_guide/core:features",
+      "//components/optimization_guide/proto:optimization_guide_proto",
+      "//components/optimization_guide/public/mojom",
+      "//components/prefs",
+      "//components/update_client",
+      "//services/on_device_model/public/cpp",
+    ]
+  }
+
+  static_library("manifest_broker_dev_support") {
+    sources = [
+      "model_execution/manifest_broker/test/example_manifest.cc",
+      "model_execution/manifest_broker/test/example_manifest.h",
+      "model_execution/manifest_broker/test/manifest_builder.cc",
+      "model_execution/manifest_broker/test/manifest_builder.h",
+    ]
+    deps = [
+      ":manifest_broker",
+      "//base",
+      "//components/optimization_guide/proto:optimization_guide_proto",
+      "//components/optimization_guide/public/mojom",
+    ]
+  }
+
+  static_library("manifest_broker_test_support") {
+    testonly = true
+    sources = [
+      "model_execution/manifest_broker/test/fake_manifest_broker.cc",
+      "model_execution/manifest_broker/test/fake_manifest_broker.h",
+      "model_execution/manifest_broker/test/scenario_builder.cc",
+      "model_execution/manifest_broker/test/scenario_builder.h",
+      "model_execution/manifest_broker/test/test_manifest_asset_manager_component_state.cc",
+      "model_execution/manifest_broker/test/test_manifest_asset_manager_component_state.h",
+    ]
+    deps = [
+      ":manifest_broker",
+      ":manifest_broker_dev_support",
+      ":model_execution_test_support",
+      ":ondevice",
+      "//base",
+      "//base/test:test_support",
+      "//components/optimization_guide/proto:optimization_guide_proto",
+      "//components/optimization_guide/public/mojom",
+      "//services/on_device_model/public/cpp/test_support",
+      "//testing/gmock",
+    ]
+  }
+}  # if (build_with_model_execution)
 
 static_library("core") {
   sources = [
@@ -392,16 +501,16 @@ static_library("core") {
     "//components/leveldb_proto",
     "//components/optimization_guide:machine_learning_tflite_buildflags",
     "//components/optimization_guide/core:interfaces",
+    "//components/optimization_guide/core/inference",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//third_party/re2",
-  ]
-  if (build_with_tflite_lib) {
-    public_deps += [
-      "//components/optimization_guide/core/inference",
 
-      # TODO: crbug.com/421262905 - Don't provide compression_utils
-      "//third_party/zlib/google:compression_utils",
-    ]
+    # TODO: crbug.com/421262905 - Don't provide compression_utils
+    "//third_party/zlib/google:compression_utils",
+  ]
+
+  if (build_with_model_execution) {
+    public_deps += [ ":manifest_broker" ]
   }
 }
 
@@ -421,6 +530,10 @@ static_library("prediction") {
     "delivery/optimization_target_model_observer.h",
     "delivery/prediction_manager.cc",
     "delivery/prediction_manager.h",
+    "delivery/prediction_model_component_configs.cc",
+    "delivery/prediction_model_component_configs.h",
+    "delivery/prediction_model_component_update_listener.cc",
+    "delivery/prediction_model_component_update_listener.h",
     "delivery/prediction_model_download_manager.cc",
     "delivery/prediction_model_download_manager.h",
     "delivery/prediction_model_download_observer.h",
@@ -498,8 +611,8 @@ static_library("hints_test_support") {
     "proto_database_provider_test_base.cc",
     "proto_database_provider_test_base.h",
   ]
+  public_deps = [ ":hints" ]
   deps = [
-    ":hints",
     "//base",
     "//components/leveldb_proto",
     "//components/optimization_guide/proto:optimization_guide_proto",
@@ -512,8 +625,6 @@ static_library("hints_test_support") {
 static_library("delivery_test_support") {
   testonly = true
   sources = [
-    "delivery/test_model_info_builder.cc",
-    "delivery/test_model_info_builder.h",
     "delivery/test_optimization_guide_model_provider.cc",
     "delivery/test_optimization_guide_model_provider.h",
   ]
@@ -548,12 +659,16 @@ static_library("model_execution_test_support") {
   ]
   if (build_with_model_execution) {
     sources += [
+      "model_execution/test/fake_component_update_service.cc",
+      "model_execution/test/fake_component_update_service.h",
       "model_execution/test/fake_model_assets.cc",
       "model_execution/test/fake_model_assets.h",
       "model_execution/test/fake_model_broker.cc",
       "model_execution/test/fake_model_broker.h",
       "model_execution/test/feature_config_builder.cc",
       "model_execution/test/feature_config_builder.h",
+      "model_execution/test/mock_download_progress_observer.cc",
+      "model_execution/test/mock_download_progress_observer.h",
       "model_execution/test/mock_on_device_capability.cc",
       "model_execution/test/mock_on_device_capability.h",
       "model_execution/test/mock_remote_model_executor.cc",
@@ -568,11 +683,25 @@ static_library("model_execution_test_support") {
       "model_execution/test/test_on_device_model_component_state_manager.h",
     ]
     deps += [
+      "//components/component_updater:test_support",
       "//components/optimization_guide/public/mojom",
       "//components/prefs:test_support",
+      "//components/update_client",
+      "//components/version_info",
       "//services/on_device_model/public/cpp:types",
       "//services/on_device_model/public/cpp/test_support",
+      "//third_party/dawn/src/dawn:proc",
     ]
+    if (is_android) {
+      sources += [
+        "model_execution/test/fake_model_broker_android.cc",
+        "model_execution/test/fake_model_broker_android.h",
+      ]
+      deps += [
+        "//services/on_device_model/android",
+        "//services/on_device_model/android:test_support",
+      ]
+    }
   }
 }
 
@@ -583,10 +712,13 @@ group("test_support") {
     ":filters_test_support",
     ":hints_test_support",
     ":model_execution_test_support",
+    "//components/optimization_guide/core/inference:test_support",
   ]
-  if (build_with_tflite_lib) {
-    public_deps +=
-        [ "//components/optimization_guide/core/inference:test_support" ]
+  if (build_with_model_execution) {
+    public_deps += [
+      ":manifest_broker_dev_support",
+      ":manifest_broker_test_support",
+    ]
   }
 }
 
@@ -594,8 +726,6 @@ if (is_ios) {
   source_set("eg_test_support+eg2") {
     testonly = true
     sources = [
-      "optimization_guide_constants.cc",
-      "optimization_guide_constants.h",
       "optimization_guide_enums.h",
       "optimization_guide_switches.cc",
       "optimization_guide_switches.h",
@@ -674,6 +804,8 @@ source_set("delivery_unit_tests") {
     "delivery/model_store_metadata_entry_unittest.cc",
     "delivery/model_util_unittest.cc",
     "delivery/prediction_manager_unittest.cc",
+    "delivery/prediction_model_component_configs_unittest.cc",
+    "delivery/prediction_model_component_update_listener_unittest.cc",
     "delivery/prediction_model_download_manager_unittest.cc",
     "delivery/prediction_model_fetch_timer_unittest.cc",
     "delivery/prediction_model_fetcher_unittest.cc",
@@ -729,11 +861,20 @@ source_set("model_execution_unit_tests") {
     "//testing/gtest",
   ]
 
-  if (build_with_model_execution) {
+  # CfT bypasses On Device model installation throttling breaking most of the
+  # tests below. See https://crbug.com/514435730.
+  if (build_with_model_execution && !is_chrome_for_testing) {
     sources += [
       "model_execution/aqa_response_parser_unittest.cc",
       "model_execution/fieldwise_response_parser_unittest.cc",
       "model_execution/json_response_parser_unittest.cc",
+      "model_execution/manifest_broker/manifest_asset_manager_unittest.cc",
+      "model_execution/manifest_broker/manifest_broker_service_crash_unittest.cc",
+      "model_execution/manifest_broker/manifest_broker_state_unittest.cc",
+      "model_execution/manifest_broker/manifest_solution_factory_unittest.cc",
+      "model_execution/manifest_broker/manifest_unittest.cc",
+      "model_execution/manifest_broker/manifest_validation_unittest.cc",
+      "model_execution/manifest_broker/override_manifest_asset_manager_delegate_unittest.cc",
       "model_execution/model_broker_client_unittest.cc",
       "model_execution/model_execution_features_controller_unittest.cc",
       "model_execution/model_execution_features_unittest.cc",
@@ -743,6 +884,7 @@ source_set("model_execution_unit_tests") {
       "model_execution/on_device_asset_manager_unittest.cc",
       "model_execution/on_device_model_adaptation_loader_unittest.cc",
       "model_execution/on_device_model_component_unittest.cc",
+      "model_execution/on_device_model_download_progress_manager_unittest.cc",
       "model_execution/on_device_model_execution_proto_descriptors_unittest.cc",
       "model_execution/on_device_model_execution_proto_value_utils_unittest.cc",
       "model_execution/on_device_model_feature_adapter_unittest.cc",
@@ -751,7 +893,6 @@ source_set("model_execution_unit_tests") {
       "model_execution/on_device_model_validator_unittest.cc",
       "model_execution/optimization_guide_model_execution_error_unittest.cc",
       "model_execution/performance_class_unittest.cc",
-      "model_execution/redactor_unittest.cc",
       "model_execution/repetition_checker_unittest.cc",
       "model_execution/response_parser_factory_unittest.cc",
       "model_execution/safety_checker_unittest.cc",
@@ -760,12 +901,15 @@ source_set("model_execution_unit_tests") {
       "model_quality/model_execution_logging_wrappers_unittest.cc",
     ]
     deps += [
+      ":manifest_broker",
+      ":manifest_broker_dev_support",
+      ":manifest_broker_test_support",
       ":prediction",
       "//components/component_updater",
+      "//components/crx_file",
       "//components/optimization_guide/public/mojom",
       "//components/signin/public/identity_manager:test_support",
       "//components/sync_preferences:test_support",
-      "//services/data_decoder/public/cpp:test_support",
       "//services/on_device_model/public/cpp",
       "//services/on_device_model/public/cpp/test_support",
       "//services/on_device_model/public/mojom",
@@ -778,6 +922,12 @@ source_set("model_execution_unit_tests") {
         "//services/on_device_model/android:test_support",
       ]
     }
+    sources +=
+        [ "model_execution/private_ai_model_execution_fetcher_unittest.cc" ]
+    deps += [
+      "//components/private_ai:proto",
+      "//components/private_ai:testing",
+    ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
@@ -793,9 +943,9 @@ source_set("unit_tests") {
     "feature_registry/settings_ui_registry_unittest.cc",
     "noisy_metrics_recorder_unittest.cc",
     "optimization_guide_features_unittest.cc",
+    "optimization_guide_logger_unittest.cc",
     "optimization_guide_permissions_util_unittest.cc",
     "optimization_guide_proto_util_unittest.cc",
-    "optimization_guide_switches_unittest.cc",
     "optimization_guide_util_unittest.cc",
   ]
   deps = [
@@ -808,6 +958,7 @@ source_set("unit_tests") {
     ":unit_tests_bundle_data",
     "//base",
     "//base/test:test_support",
+    "//components/optimization_guide/core/inference:unit_tests",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/prefs:test_support",
     "//components/sync_preferences:test_support",
@@ -816,9 +967,6 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
   ]
-  if (build_with_tflite_lib) {
-    deps += [ "//components/optimization_guide/core/inference:unit_tests" ]
-  }
 }
 
 bundle_data("unit_tests_bundle_data") {

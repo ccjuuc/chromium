@@ -121,8 +121,6 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   // Can be null before/during init and during/after shutdown (and in tests).
   StoragePartitionImpl* storage_partition() const;
 
-  void set_storage_partition(StoragePartitionImpl* storage_partition);
-
   BrowserContext* browser_context();
 
   ServiceWorkerProcessManager* process_manager() {
@@ -164,7 +162,7 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   void OnStarting(int64_t version_id) override;
   void OnStarted(int64_t version_id,
                  const GURL& scope,
-                 int process_id,
+                 ChildProcessId process_id,
                  const GURL& script_url,
                  const blink::ServiceWorkerToken& token,
                  const blink::StorageKey& key) override;
@@ -188,14 +186,15 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
       ServiceWorkerContextObserverSynchronous* observer) override;
   void RemoveSyncObserver(
       ServiceWorkerContextObserverSynchronous* observer) override;
-  // TODO (crbug.com/1335059) RegisterServiceWorker passes an invalid frame id.
-  // Currently it's okay because it is used only by PaymentAppInstaller and
-  // Extensions, but ideally we should add some guard to avoid the method is
-  // called from other places.
+  // TODO(crbug.com/40228395): RegisterServiceWorker accepts an invalid frame
+  // id. Currently it's okay because only Extensions calls this function with an
+  // invalid frame id, but ideally we should add some guards to avoid the method
+  // being called with an invalid frame id from other places.
   void RegisterServiceWorker(
       const GURL& script_url,
       const blink::StorageKey& key,
       const blink::mojom::ServiceWorkerRegistrationOptions& options,
+      GlobalRenderFrameHostId requesting_frame_id,
       StatusCodeCallback callback) override;
   void UnregisterServiceWorker(const GURL& scope,
                                const blink::StorageKey& key,
@@ -248,10 +247,16 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   GetRunningServiceWorkerInfos() override;
   bool IsLiveStartingServiceWorker(int64_t service_worker_version_id) override;
   bool IsLiveRunningServiceWorker(int64_t service_worker_version_id) override;
+  bool IsLiveServiceWorkerWithToken(
+      int64_t service_worker_version_id,
+      const blink::ServiceWorkerToken& token) override;
   service_manager::InterfaceProvider& GetRemoteInterfaces(
       int64_t service_worker_version_id) override;
   blink::AssociatedInterfaceProvider& GetRemoteAssociatedInterfaces(
       int64_t service_worker_version_id) override;
+  void AddMessageToConsole(int64_t service_worker_version_id,
+                           blink::mojom::ConsoleMessageLevel level,
+                           const std::string& message) override;
 
   // Returns the running info for a worker with `version_id`, if found.
   std::optional<ServiceWorkerRunningInfo> GetRunningServiceWorkerInfo(
@@ -419,7 +424,8 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   // Returns nullptr on failure.
   scoped_refptr<network::SharedURLLoaderFactory> GetLoaderFactoryForUpdateCheck(
       const GURL& scope,
-      network::mojom::ClientSecurityStatePtr client_security_state);
+      network::mojom::ClientSecurityStatePtr client_security_state,
+      const base::UnguessableToken& creator_network_restrictions_id);
 
   // Returns nullptr on failure.
   // Note: This is currently only used for plzServiceWorker.
@@ -427,7 +433,8 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   GetLoaderFactoryForMainScriptFetch(
       const GURL& scope,
       int64_t version_id,
-      network::mojom::ClientSecurityStatePtr client_security_state);
+      network::mojom::ClientSecurityStatePtr client_security_state,
+      const base::UnguessableToken& creator_network_restrictions_id);
 
   const base::FilePath& user_data_directory() { return user_data_directory_; }
 
@@ -453,9 +460,13 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   friend class ServiceWorkerMainResourceHandle;
   friend class ServiceWorkerProcessManager;
   friend class ServiceWorkerVersionBrowserTest;
+  friend class ServiceWorkerContextWrapperTestApi;
+  friend class StoragePartitionImpl;
   friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
 
   ~ServiceWorkerContextWrapper() override;
+
+  void set_storage_partition(StoragePartitionImpl* storage_partition);
 
   // Init() with a custom database task runner and BrowserContext. Explicitly
   // called from EmbeddedWorkerTestHelper.
@@ -561,7 +572,8 @@ class CONTENT_EXPORT ServiceWorkerContextWrapper
   GetLoaderFactoryForBrowserInitiatedRequest(
       const GURL& scope,
       std::optional<int64_t> version_id,
-      network::mojom::ClientSecurityStatePtr client_security_state);
+      network::mojom::ClientSecurityStatePtr client_security_state,
+      const base::UnguessableToken& creator_network_restrictions_id);
 
   // Observers of `context_core_` which live within content's implementation
   // boundary. Shared with `context_core_`.

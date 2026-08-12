@@ -14,12 +14,11 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 
-@interface ConsistencyAccountChooserMediator () <
-    IdentityManagerObserverBridgeDelegate> {
+@interface ConsistencyAccountChooserMediator () <IdentityManagerObserving> {
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
   raw_ptr<signin::IdentityManager> _identityManager;
   std::unique_ptr<signin::IdentityManagerObserverBridge>
@@ -40,6 +39,7 @@
                        (ChromeAccountManagerService*)accountManagerService {
   if ((self = [super init])) {
     CHECK(identityManager);
+    CHECK(accountManagerService, base::NotFatalUntil::M153);
     _identityManager = identityManager;
     _identityManagerObserver =
         std::make_unique<signin::IdentityManagerObserverBridge>(
@@ -56,8 +56,8 @@
 }
 
 - (void)dealloc {
-  CHECK(!_identityManager, base::NotFatalUntil::M145);
-  CHECK(!_accountManagerService, base::NotFatalUntil::M145);
+  CHECK(!_identityManager);
+  CHECK(!_accountManagerService);
 }
 
 - (void)disconnect {
@@ -69,7 +69,7 @@
 #pragma mark - Properties
 
 - (void)setSelectedIdentity:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if ([_selectedIdentity isEqual:identity]) {
     return;
   }
@@ -115,7 +115,7 @@
 // Updates `configurator` based on `identity`.
 - (void)updateIdentityItemConfigurator:(IdentityItemConfigurator*)configurator
                           withIdentity:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   configurator.gaiaID = identity.gaiaId;
   configurator.name = identity.userFullName;
   configurator.email = identity.userEmail;
@@ -132,7 +132,7 @@
   configurator.managed = NO;
   __weak __typeof(self) weakSelf = self;
   FetchManagedStatusForIdentity(identity, base::BindOnce(^(bool managed) {
-                                  CHECK(identity, base::NotFatalUntil::M147);
+                                  CHECK(identity);
                                   if (managed) {
                                     [weakSelf handleIdentityUpdated:identity];
                                   }
@@ -140,7 +140,7 @@
 }
 
 - (void)handleIdentityUpdated:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   IdentityItemConfigurator* configurator = nil;
   for (IdentityItemConfigurator* cursor in self
            .sortedIdentityItemConfigurators) {
@@ -155,15 +155,15 @@
 
 #pragma mark -  IdentityManagerObserver
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   [self loadIdentityItemConfigurators];
   [self.consumer reloadAllIdentities];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
       _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   [self handleIdentityUpdated:identity];
 }
 

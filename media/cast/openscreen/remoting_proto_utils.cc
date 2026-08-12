@@ -24,6 +24,23 @@ constexpr size_t kPayloadVersionFieldSize = sizeof(uint8_t);
 constexpr size_t kProtoBufferHeaderSize = sizeof(uint16_t);
 constexpr size_t kDataBufferHeaderSize = sizeof(uint32_t);
 
+// Helper method for Chromium enums that are contiguous, meaning all integers in
+// [kUnknown, kMaxValue] are valid (where kUnknown is typically zero but not a
+// requirement for this function).
+template <typename Enum>
+  requires requires {
+    Enum::kMaxValue;
+    Enum::kUnknown;
+  }
+Enum SafeCastAsContiguousEnum(int64_t value) {
+  static_assert(Enum::kUnknown <= Enum::kMaxValue);
+  if (value >= static_cast<int64_t>(Enum::kUnknown) &&
+      value <= static_cast<int64_t>(Enum::kMaxValue)) {
+    return static_cast<Enum>(value);
+  }
+  return Enum::kUnknown;
+}
+
 scoped_refptr<media::DecoderBuffer> ConvertProtoToDecoderBuffer(
     const openscreen::cast::DecoderBuffer& buffer_message,
     scoped_refptr<media::DecoderBuffer> buffer) {
@@ -125,7 +142,10 @@ scoped_refptr<media::DecoderBuffer> ByteArrayToDecoderBuffer(
     // it may be EOS buffer.
     scoped_refptr<media::DecoderBuffer> decoder_buffer =
         ConvertProtoToDecoderBuffer(
-            segment, media::DecoderBuffer::CopyFrom(buffer_span));
+            segment,
+            media::DecoderBuffer::FromExternalMemory(
+                std::make_unique<media::DecoderBuffer::UnownedExternalMemory>(
+                    buffer_span)));
     return decoder_buffer;
   }
 
@@ -198,10 +218,12 @@ bool ConvertProtoToAudioDecoderConfig(
   DCHECK(audio_config);
 
   const auto extra_data = base::span(audio_message.extra_data());
+  const media::ChannelLayout layout =
+      ToMediaChannelLayout(audio_message.channel_layout()).value();
   audio_config->Initialize(
       ToMediaAudioCodec(audio_message.codec()).value(),
       ToMediaSampleFormat(audio_message.sample_format()).value(),
-      ToMediaChannelLayout(audio_message.channel_layout()).value(),
+      media::ChannelLayoutConfig::FromLayout(layout),
       audio_message.samples_per_second(),
       std::vector<uint8_t>(extra_data.begin(), extra_data.end()),
       media::EncryptionScheme::kUnencrypted,
@@ -330,7 +352,8 @@ void ConvertProtoToPipelineStatistics(
   if (stats_message.has_audio_decoder_info()) {
     auto audio_info = stats_message.audio_decoder_info();
     stats->audio_pipeline_info.decoder_type =
-        static_cast<media::AudioDecoderType>(audio_info.decoder_type());
+        SafeCastAsContiguousEnum<media::AudioDecoderType>(
+            audio_info.decoder_type());
     stats->audio_pipeline_info.is_platform_decoder =
         audio_info.is_platform_decoder();
     stats->audio_pipeline_info.has_decrypting_demuxer_stream = false;
@@ -339,7 +362,8 @@ void ConvertProtoToPipelineStatistics(
   if (stats_message.has_video_decoder_info()) {
     auto video_info = stats_message.video_decoder_info();
     stats->video_pipeline_info.decoder_type =
-        static_cast<media::VideoDecoderType>(video_info.decoder_type());
+        SafeCastAsContiguousEnum<media::VideoDecoderType>(
+            video_info.decoder_type());
     stats->video_pipeline_info.is_platform_decoder =
         video_info.is_platform_decoder();
     stats->video_pipeline_info.has_decrypting_demuxer_stream = false;

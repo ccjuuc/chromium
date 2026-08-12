@@ -46,7 +46,7 @@ v8::Intercepted ObjectTemplateBuilder::NamedPropertyGetterImpl(
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   NamedPropertyInterceptor* interceptor =
-      NamedInterceptorFromV8(isolate, info.HolderV2(), tag);
+      NamedInterceptorFromV8(isolate, info.Holder(), tag);
   if (!interceptor) {
     return v8::Intercepted::kNo;
   }
@@ -65,10 +65,10 @@ v8::Intercepted ObjectTemplateBuilder::NamedPropertySetterImpl(
     WrappablePointerTag tag,
     v8::Local<v8::Name> property,
     v8::Local<v8::Value> value,
-    const v8::PropertyCallbackInfo<void>& info) {
+    const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   NamedPropertyInterceptor* interceptor =
-      NamedInterceptorFromV8(isolate, info.HolderV2(), tag);
+      NamedInterceptorFromV8(isolate, info.Holder(), tag);
   if (!interceptor) {
     return v8::Intercepted::kNo;
   }
@@ -86,7 +86,7 @@ v8::Intercepted ObjectTemplateBuilder::NamedPropertyQueryImpl(
     const v8::PropertyCallbackInfo<v8::Integer>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   NamedPropertyInterceptor* interceptor =
-      NamedInterceptorFromV8(isolate, info.HolderV2(), tag);
+      NamedInterceptorFromV8(isolate, info.Holder(), tag);
   if (!interceptor) {
     return v8::Intercepted::kNo;
   }
@@ -104,7 +104,7 @@ void ObjectTemplateBuilder::NamedPropertyEnumeratorImpl(
     const v8::PropertyCallbackInfo<v8::Array>& info) {
   v8::Isolate* isolate = info.GetIsolate();
   NamedPropertyInterceptor* interceptor =
-      NamedInterceptorFromV8(isolate, info.HolderV2(), tag);
+      NamedInterceptorFromV8(isolate, info.Holder(), tag);
   if (!interceptor) {
     return;
   }
@@ -141,9 +141,7 @@ ObjectTemplateBuilder::ObjectTemplateBuilder(v8::Isolate* isolate,
                                   " cannot be created using the constructor."})
                   : "Objects of this type cannot be created using the "
                     "constructor"))),
-      template_(constructor_template_->InstanceTemplate()) {
-  template_->SetInternalFieldCount(kNumberOfInternalFields);
-}
+      template_(constructor_template_->InstanceTemplate()) {}
 
 ObjectTemplateBuilder::ObjectTemplateBuilder(
     const ObjectTemplateBuilder& other) = default;

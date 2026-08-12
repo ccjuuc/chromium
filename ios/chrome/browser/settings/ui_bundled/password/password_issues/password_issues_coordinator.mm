@@ -24,14 +24,12 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_issues/password_issues_presenter.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_issues/password_issues_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/reauthentication/local_reauthentication_coordinator.h"
-#import "ios/chrome/browser/settings/ui_bundled/utils/password_utils.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
-#import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 #import "ui/base/l10n/l10n_util.h"
 
 using password_manager::WarningType;
@@ -57,10 +55,10 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
 }  // namespace
 
 @interface PasswordIssuesCoordinator () <
+    LocalReauthenticationCoordinatorDelegate,
     PasswordDetailsCoordinatorDelegate,
     PasswordIssuesCoordinatorDelegate,
-    PasswordIssuesPresenter,
-    LocalReauthenticationCoordinatorDelegate>
+    PasswordIssuesPresenter>
 
 @end
 
@@ -112,8 +110,8 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
   if (self) {
     _warningType = warningType;
     _baseNavigationController = navigationController;
-    _dispatcher = HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                                     ApplicationCommands);
+    _dispatcher =
+        HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
     _skipAuthenticationOnStart = NO;
   }
   return self;
@@ -138,14 +136,6 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
           initWithWarningType:_warningType];
   passwordIssuesTableViewController.imageDataSource = _mediator;
   _viewController = passwordIssuesTableViewController;
-
-  // If reauthentication module was not provided, coordinator will create its
-  // own.
-  if (!self.reauthModule) {
-    self.reauthModule = password_manager::BuildReauthenticationModule(
-        /*successfulReauthTimeAccessor=*/_mediator);
-  }
-
   _mediator.consumer = _viewController;
   _viewController.presenter = self;
 
@@ -203,7 +193,6 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
       initWithBaseNavigationController:self.baseNavigationController
                                browser:self.browser
                             credential:password.credential
-                          reauthModule:self.reauthModule
                                context:ComputeDetailsContextFromWarningType(
                                            _warningType)];
   _passwordDetails.delegate = self;
@@ -224,7 +213,6 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
       baseNavigationController:self.baseNavigationController
                        browser:self.browser];
   _dismissedPasswordIssuesCoordinator.skipAuthenticationOnStart = YES;
-  _dismissedPasswordIssuesCoordinator.reauthModule = self.reauthModule;
   _dismissedPasswordIssuesCoordinator.delegate = self;
   [_dismissedPasswordIssuesCoordinator start];
 }
@@ -287,7 +275,6 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
 
 - (void)stopDismissedPasswordIssuesCoordinator {
   [_dismissedPasswordIssuesCoordinator stop];
-  _dismissedPasswordIssuesCoordinator.reauthModule = nil;
   _dismissedPasswordIssuesCoordinator.delegate = nil;
   _dismissedPasswordIssuesCoordinator = nil;
 }
@@ -333,7 +320,6 @@ DetailsContext ComputeDetailsContextFromWarningType(WarningType warning_type) {
   _reauthCoordinator = [[LocalReauthenticationCoordinator alloc]
       initWithBaseNavigationController:_baseNavigationController
                                browser:self.browser
-                reauthenticationModule:_reauthModule
                            authOnStart:authOnStart];
 
   _reauthCoordinator.delegate = self;

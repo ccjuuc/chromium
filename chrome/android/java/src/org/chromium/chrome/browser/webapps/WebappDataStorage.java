@@ -69,6 +69,7 @@ public class WebappDataStorage {
     static final String KEY_WEBAPK_MANIFEST_URL = "webapk_manifest_url";
     static final String KEY_WEBAPK_MANIFEST_ID = "webapk_manifest_id";
     static final String KEY_WEBAPK_VERSION_CODE = "webapk_version_code";
+    static final String KEY_LOCAL_REGISTRATION_TIMESTAMP = "local_registration_timestamp";
 
     // The completion time of the last check for whether the WebAPK's Web Manifest was updated.
     static final String KEY_LAST_CHECK_WEB_MANIFEST_UPDATE_TIME =
@@ -112,7 +113,7 @@ public class WebappDataStorage {
     public static final long UPDATE_INTERVAL = DateUtils.DAY_IN_MILLIS;
 
     // Number of milliseconds between checks of updates for a WebAPK that is expected to check
-    // updates less frequently. crbug.com/680128.
+    // updates less frequently. crbug.com/40501007.
     public static final long RELAXED_UPDATE_INTERVAL = DateUtils.DAY_IN_MILLIS * 30;
 
     // The default shell Apk version of WebAPKs.
@@ -575,7 +576,7 @@ public class WebappDataStorage {
                 TaskTraits.BEST_EFFORT_MAY_BLOCK,
                 () -> {
                     if (!new File(pendingUpdateFilePath).delete()) {
-                        Log.d(TAG, "Failed to delete file " + pendingUpdateFilePath);
+                        Log.d(TAG, "Failed to delete file %s", pendingUpdateFilePath);
                     }
                 });
     }
@@ -629,6 +630,19 @@ public class WebappDataStorage {
     /** Returns the timestamp when the WebAPK was uninstalled. */
     public long getWebApkUninstallTimestamp() {
         return mPreferences.getLong(KEY_WEBAPK_UNINSTALL_TIMESTAMP, 0);
+    }
+
+    /** Records the current time as the local registration time. */
+    public void updateLocalRegistrationTimestamp() {
+        mPreferences
+                .edit()
+                .putLong(KEY_LOCAL_REGISTRATION_TIMESTAMP, TimeUtils.currentTimeMillis())
+                .apply();
+    }
+
+    /** Returns the local registration timestamp. */
+    public long getLocalRegistrationTimestamp() {
+        return mPreferences.getLong(KEY_LOCAL_REGISTRATION_TIMESTAMP, 0);
     }
 
     /** Increments the number of times that the webapp was launched. */

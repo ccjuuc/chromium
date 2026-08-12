@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/feature_list.h"
+#include "base/test/scoped_feature_list.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
+#include "net/cert/cert_status_flags.h"
 #include "net/cookies/site_for_cookies.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/cors/cors_url_loader.h"
 #include "services/network/cors/cors_url_loader_test_util.h"
 #include "services/network/network_context.h"
@@ -164,6 +166,15 @@ class CorsURLLoaderSharedDictionaryTest : public CorsURLLoaderTestBase {
         ->GetStorageCountForTesting();
   }
 
+  size_t GetDictionaryCount(SharedDictionaryStorage* storage) {
+    const auto& dictionary_map = GetInMemoryDictionaryMap(storage);
+    size_t count = 0;
+    for (const auto& it : dictionary_map) {
+      count += it.second.size();
+    }
+    return count;
+  }
+
   net::IsolationInfo isolation_info_;
   mojo::ScopedDataPipeProducerHandle producer_handle_;
   mojo::ScopedDataPipeConsumerHandle consumer_handle_;
@@ -185,6 +196,31 @@ TEST_F(CorsURLLoaderSharedDictionaryTest, SameOriginUrlSameOriginModeRequest) {
   // The response of SameOrigin request should be stored to the
   // dictionary storage.
   CheckDictionaryInStorage(/*expect_exists=*/true);
+}
+
+TEST_F(CorsURLLoaderSharedDictionaryTest, CertStatusErrorPreventStorage) {
+  ResetFactory();
+  ResourceRequest request = CreateResourceRequest();
+  request.mode = mojom::RequestMode::kSameOrigin;
+  CreateLoaderAndStart(request);
+  RunUntilCreateLoaderAndStartCalled();
+
+  CreateDataPipeAndWriteTestData();
+  auto response_head = mojom::URLResponseHead::New();
+  response_head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
+      "HTTP/1.1 200 OK\n"
+      "Use-As-Dictionary: match=\"/path*\"\n"
+      "Cache-Control: max-age=2592000\n");
+  response_head->cert_status = net::CERT_STATUS_AUTHORITY_INVALID;
+  NotifyLoaderClientOnReceiveResponse(std::move(response_head),
+                                      std::move(consumer_handle_));
+  NotifyLoaderClientOnComplete(net::OK);
+  producer_handle_.reset();
+
+  RunUntilComplete();
+  EXPECT_EQ(net::OK, client().completion_status().error_code);
+
+  CheckDictionaryInStorage(/*expect_exists=*/false);
 }
 
 TEST_F(CorsURLLoaderSharedDictionaryTest, SameOriginUrlNoCorsModeRequest) {
@@ -572,6 +608,158 @@ TEST_F(CorsURLLoaderSharedDictionaryTest,
   // Starting a navigation request for insecure context should not create a
   // SharedDictionaryStorage.
   EXPECT_EQ(0u, GetStorageCount());
+}
+
+TEST_F(CorsURLLoaderSharedDictionaryTest, CrossOriginRedirect) {
+  ResetFactoryParams factory_params;
+  factory_params.is_trusted = true;
+  CorsURLLoaderTestBase::ResetFactory(isolation_info_.frame_origin(),
+                                      OriginatingProcessId::browser(),
+                                      factory_params);
+
+  const GURL kUrlA("https://a.test/test");
+  const GURL kUrlB("https://b.test/test");
+
+  ResourceRequest request;
+  request.method = "GET";
+  request.mode = mojom::RequestMode::kNavigate;
+  request.url = kUrlA;
+  request.request_initiator = url::Origin::Create(kUrlA);
+  request.site_for_cookies =
+      net::SiteForCookies::FromOrigin(url::Origin::Create(kUrlA));
+  request.shared_dictionary_writer_enabled = true;
+
+  request.trusted_params = ResourceRequest::TrustedParams();
+  url::Origin originA = url::Origin::Create(kUrlA);
+  request.trusted_params->isolation_info = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, originA, originA,
+      net::SiteForCookies::FromOrigin(originA));
+  request.trusted_params->client_security_state =
+      ClientSecurityStateBuilder().WithIsSecureContext(true).Build();
+
+  CreateLoaderAndStart(request);
+  RunUntilCreateLoaderAndStartCalled();
+
+  // Make sure a single SharedDictionaryStorage was created for the initial
+  // request and that no actual dictionaries were written.
+  EXPECT_EQ(1u, GetStorageCount());
+  std::optional<net::SharedDictionaryIsolationKey> isolation_key_a =
+      net::SharedDictionaryIsolationKey::MaybeCreate(
+          request.trusted_params->isolation_info);
+  ASSERT_TRUE(isolation_key_a);
+  scoped_refptr<SharedDictionaryStorage> storage_a =
+      network_context()->GetSharedDictionaryManager()->GetStorage(
+          *isolation_key_a);
+  EXPECT_EQ(0u, GetDictionaryCount(storage_a.get()));
+
+  // Follow the redirect to a different origin.
+  net::RedirectInfo redirect_info;
+  redirect_info.new_url = kUrlB;
+  redirect_info.new_method = "GET";
+  redirect_info.new_site_for_cookies =
+      net::SiteForCookies::FromOrigin(url::Origin::Create(kUrlB));
+  redirect_info.new_referrer_policy = net::ReferrerPolicy::NO_REFERRER;
+
+  NotifyLoaderClientOnReceiveRedirect(redirect_info);
+
+  FollowRedirect();
+  CreateDataPipeAndWriteTestData();
+  CallOnReceiveResponseAndOnCompleteAndFinishBody();
+
+  RunUntilComplete();
+  EXPECT_EQ(net::OK, client().completion_status().error_code);
+
+  // Make sure a second SharedDictionaryStorage was created for the final
+  // request and that a dictionary was written to the correctly partitioned
+  // storage and there is still nothing in the first storage.
+  EXPECT_EQ(2u, GetStorageCount());
+
+  EXPECT_EQ(0u, GetDictionaryCount(storage_a.get()));
+  CheckDictionaryInStorage(/*expect_exists=*/false);
+
+  url::Origin originB = url::Origin::Create(kUrlB);
+  isolation_info_ = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, originB, originB,
+      net::SiteForCookies::FromOrigin(originB));
+  std::optional<net::SharedDictionaryIsolationKey> isolation_key_b =
+      net::SharedDictionaryIsolationKey::MaybeCreate(isolation_info_);
+  ASSERT_TRUE(isolation_key_b);
+  scoped_refptr<SharedDictionaryStorage> storage_b =
+      network_context()->GetSharedDictionaryManager()->GetStorage(
+          *isolation_key_b);
+  EXPECT_EQ(1u, GetDictionaryCount(storage_b.get()));
+  CheckDictionaryInStorage(/*expect_exists=*/true, kUrlB);
+}
+
+class CorsURLLoaderSharedDictionaryPervasiveTest
+    : public CorsURLLoaderSharedDictionaryTest {
+ public:
+  CorsURLLoaderSharedDictionaryPervasiveTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kPervasiveSharedDictionaries,
+         features::kCacheSharingForPervasiveResources},
+        {});
+  }
+
+  void CallOnReceiveResponseWithSharedResource(bool is_shared_resource) {
+    auto response = mojom::URLResponseHead::New();
+    response->headers = net::HttpResponseHeaders::TryToCreate(
+        "HTTP/1.1 200 OK\n"
+        "cache-control: max-age=2592000\n"
+        "use-as-dictionary: match=\"/path*\"\n\n");
+    response->is_shared_resource = is_shared_resource;
+    NotifyLoaderClientOnReceiveResponse(std::move(response),
+                                        std::move(consumer_handle_));
+    NotifyLoaderClientOnComplete(net::OK);
+    producer_handle_.reset();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(CorsURLLoaderSharedDictionaryPervasiveTest,
+       RegistrationTargetsPervasiveStorageWhenSharedResourceTrue) {
+  ResetFactory();
+  const GURL kUrl("https://origin.test/pervasive_item");
+  ResourceRequest request = CreateResourceRequest();
+  request.url = kUrl;
+
+  CreateLoaderAndStart(request);
+  RunUntilCreateLoaderAndStartCalled();
+  CreateDataPipeAndWriteTestData();
+  CallOnReceiveResponseWithSharedResource(/*is_shared_resource=*/true);
+
+  RunUntilComplete();
+  EXPECT_EQ(net::OK, client().completion_status().error_code);
+
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      network_context()->GetSharedDictionaryManager()->GetPervasiveStorage();
+  ASSERT_TRUE(pervasive_storage);
+  EXPECT_EQ(1u, GetDictionaryCount(pervasive_storage.get()));
+  CheckDictionaryInStorage(/*expect_exists=*/false, kUrl);
+}
+
+TEST_F(CorsURLLoaderSharedDictionaryPervasiveTest,
+       RegistrationTargetsPartitionedStorageWhenSharedResourceFalse) {
+  ResetFactory();
+  const GURL kUrl("https://origin.test/partitioned_item");
+  ResourceRequest request = CreateResourceRequest();
+  request.url = kUrl;
+
+  CreateLoaderAndStart(request);
+  RunUntilCreateLoaderAndStartCalled();
+  CreateDataPipeAndWriteTestData();
+  CallOnReceiveResponseWithSharedResource(/*is_shared_resource=*/false);
+
+  RunUntilComplete();
+  EXPECT_EQ(net::OK, client().completion_status().error_code);
+
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      network_context()->GetSharedDictionaryManager()->GetPervasiveStorage();
+  ASSERT_TRUE(pervasive_storage);
+  EXPECT_EQ(0u, GetDictionaryCount(pervasive_storage.get()));
+  CheckDictionaryInStorage(/*expect_exists=*/true, kUrl);
 }
 
 }  // namespace network::cors

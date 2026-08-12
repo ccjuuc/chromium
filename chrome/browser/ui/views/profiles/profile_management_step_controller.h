@@ -18,6 +18,10 @@
 class ProfilePickerPostSignInAdapter;
 class ProfilePickerWebContentsHost;
 
+namespace signin {
+enum class DeviceSignalsDisclaimerResult;
+}
+
 namespace content {
 class WebContents;
 }
@@ -32,26 +36,9 @@ class ProfileManagementStepController {
   CreateForProfilePickerApp(ProfilePickerWebContentsHost* host,
                             const GURL& initial_url);
 
-  // Forwards the profile and account specific arguments obtained from the
-  // sign-in step to the caller, see
-  // `ProfilePickerSignInProvider::SignedInCallback` for more info.
-  // If a step if shown after this one, the `StepSwitchFinishedCallback` will
-  // be called when the new step is shown. Otherwise, it might just be dropped
-  // as the host gets cleared.
-  using SignInStepFinishedCallback = base::OnceCallback<void(
-      Profile*,
-      const CoreAccountInfo&,
-      std::unique_ptr<content::WebContents>,
-      StepSwitchFinishedCallback step_switch_finished_callback)>;
-
-  using SigninErrorCallback = base::OnceCallback<
-      void(Profile*, content::WebContents*, const SigninUIError&)>;
-
   static std::unique_ptr<ProfileManagementStepController> CreateForSignIn(
       ProfilePickerWebContentsHost* host,
-      std::unique_ptr<ProfilePickerSignInProvider> sign_in_provider,
-      SignInStepFinishedCallback signed_in_callback,
-      SigninErrorCallback signin_error_callback);
+      std::unique_ptr<ProfilePickerSignInProvider> sign_in_provider);
 
   // Creates a step controller that will take over from the sign-in step during
   // a SAML sign-in flow, and transition the flow into a browser window where it
@@ -87,6 +74,12 @@ class ProfileManagementStepController {
       ProfilePickerWebContentsHost* host,
       base::OnceClosure finish_flow_and_run_in_browser_callback);
 
+  static std::unique_ptr<ProfileManagementStepController>
+  CreateForDeviceSignalsDisclaimer(
+      ProfilePickerWebContentsHost* host,
+      Profile* profile,
+      base::OnceCallback<void(signin::DeviceSignalsDisclaimerResult)> callback);
+
   explicit ProfileManagementStepController(ProfilePickerWebContentsHost* host);
   virtual ~ProfileManagementStepController();
 
@@ -105,8 +98,19 @@ class ProfileManagementStepController {
   // Method to be called if the user is attempting to reload this step.
   virtual void OnReloadRequested();
 
-  // Method to be called if the user is attempting to navigate back.
-  virtual void OnNavigateBackRequested() = 0;
+  // Method to be called if the user is attempting to navigate back. Subclasses
+  // that support back navigation should override this. The default
+  // implementation crashes via NOTREACHED().
+  virtual void OnNavigateBackRequested();
+
+  // Returns whether navigating back is allowed for this step. Subclasses
+  // should override this if they support back navigation. By default this
+  // returns false.
+  virtual bool CanNavigateBack() const;
+
+  // Called when the user requests to toggle the media effects (e.g. audio or
+  // animations) for a given step.
+  virtual void ToggleMediaEffects(bool active);
 
   void set_pop_step_callback(base::OnceClosure callback) {
     pop_step_callback_ = std::move(callback);
@@ -117,6 +121,9 @@ class ProfileManagementStepController {
   // If it returns true, we expect that a `pop_step_callback_` is set (by
   // calling `set_pop_step_callback()`) before we attempt to navigate back.
   virtual bool CanPopStep() const;
+
+  // Helper to check if back navigation can be performed.
+  bool CanNavigateBackInternal(content::WebContents* contents) const;
 
   // Helper to implement back navigations for `OnNavigateBackRequested()`.
   // `contents` is expected to be the `WebContents` in which the current step

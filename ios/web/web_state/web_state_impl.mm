@@ -9,9 +9,11 @@
 
 #import <string_view>
 
+#import "base/check.h"
 #import "base/compiler_specific.h"
 #import "base/debug/dump_without_crashing.h"
 #import "base/feature_list.h"
+#import "base/notreached.h"
 #import "base/time/time.h"
 #import "ios/web/common/features.h"
 #import "ios/web/js_messaging/web_frames_manager_impl.h"
@@ -24,6 +26,7 @@
 #import "ios/web/web_state/ui/crw_web_controller.h"
 #import "ios/web/web_state/web_state_impl_realized_web_state.h"
 #import "ios/web/web_state/web_state_impl_serialized_data.h"
+#import "ios/web/web_state/web_view_pass_key.h"
 #import "net/base/apple/url_conversions.h"
 #import "url/gurl.h"
 
@@ -293,7 +296,7 @@ bool WebStateImpl::HasWebUI() const {
 
 void WebStateImpl::HandleWebUIMessage(const GURL& source_url,
                                       std::string_view message,
-                                      const base::Value::List& args) {
+                                      const base::ListValue& args) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RealizedState()->HandleWebUIMessage(source_url, message, args);
 }
@@ -404,10 +407,17 @@ WebState* WebStateImpl::CreateNewWebState(const GURL& url,
 
 void WebStateImpl::OnAuthRequired(NSURLProtectionSpace* protection_space,
                                   NSURLCredential* proposed_credential,
-                                  WebStateDelegate::AuthCallback callback) {
+                                  WebStateDelegate::HTTPAuthCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RealizedState()->OnAuthRequired(protection_space, proposed_credential,
                                   std::move(callback));
+}
+
+void WebStateImpl::OnAuthRequired(
+    NSURLProtectionSpace* protection_space,
+    WebStateDelegate::ClientCertAuthCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RealizedState()->OnAuthRequired(protection_space, std::move(callback));
 }
 
 void WebStateImpl::CancelDialogs() {
@@ -419,6 +429,15 @@ id<CRWWebViewNavigationProxy> WebStateImpl::GetWebViewNavigationProxy() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (pimpl_) [[likely]] {
     return pimpl_->GetWebViewNavigationProxy();
+  }
+  return nil;
+}
+
+WKWebView* WebStateImpl::GetWebView(WebViewPassKey pass_key) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pimpl_) [[likely]] {
+    CRWWebController* web_controller = pimpl_->GetWebController();
+    return [web_controller webViewWithPassKey:std::move(pass_key)];
   }
   return nil;
 }
@@ -650,6 +669,20 @@ void WebStateImpl::LoadSimulatedRequest(const GURL& url,
 void WebStateImpl::Stop() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RealizedState()->Stop();
+}
+
+std::optional<std::string> WebStateImpl::GetUserAgentOverride() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pimpl_) [[likely]] {
+    return pimpl_->GetUserAgentOverride();
+  }
+  return std::nullopt;
+}
+
+void WebStateImpl::SetUserAgentOverride(
+    std::optional<std::string> ua_override) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RealizedState()->SetUserAgentOverride(std::move(ua_override));
 }
 
 const NavigationManager* WebStateImpl::GetNavigationManager() const {
@@ -994,6 +1027,19 @@ id WebStateImpl::GetActivityItem() API_AVAILABLE(ios(16.4)) {
   return [GetWebController() activityItem];
 }
 
+bool WebStateImpl::IsCustomOpenPanelSupported() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pimpl_) [[likely]] {
+    return pimpl_->IsCustomOpenPanelSupported();
+  }
+  return false;
+}
+
+void WebStateImpl::SetCustomOpenPanelSupported(bool supports) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RealizedState()->SetCustomOpenPanelSupported(supports);
+}
+
 UIColor* WebStateImpl::GetThemeColor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsRealized()) [[unlikely]] {
@@ -1024,6 +1070,7 @@ WebStateImpl::RealizedWebState* WebStateImpl::RealizedState() {
 
 void WebStateImpl::AddWebStateImplMarker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   // Store an empty base::SupportsUserData::Data that mark the current instance
   // as a WebStateImpl. Need to be done before anything else, so that casting
   // can safely be performed even before the end of the constructor.

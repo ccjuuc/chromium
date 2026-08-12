@@ -9,15 +9,16 @@
 #include "base/test/scoped_feature_list.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_test.h"
 #include "extensions/browser/process_map.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
@@ -170,17 +171,17 @@ TEST_P(ExtensionWebRequestPermissionsWithHashRealTimeDependenceTest,
   }
   cases.insert(cases.end(), additional_cases.begin(), additional_cases.end());
 
-  const int kRendererProcessId = 1;
-  const int kBrowserProcessId = -1;
+  const content::ChildProcessId kRendererProcessId(1);
+  const content::ChildProcessId kBrowserProcessId;
 
   // Returns a WebRequestInfoInitParams instance constructed as per the given
   // parameters.
   auto create_request_params = [](const GURL& url,
                                   WebRequestResourceType web_request_type,
-                                  int render_process_id) {
+                                  content::ChildProcessId render_process_id) {
     WebRequestInfoInitParams request;
     request.url = url;
-    request.render_process_id = render_process_id;
+    request.global_id.child_id = render_process_id;
     request.web_request_type = web_request_type;
     request.is_navigation_request =
         web_request_type == WebRequestResourceType::MAIN_FRAME ||
@@ -263,7 +264,7 @@ TEST_P(ExtensionWebRequestPermissionsWithHashRealTimeDependenceTest,
 
   // If the origin is labeled by the WebStoreAppId, it becomes protected.
   {
-    const int kWebstoreProcessId = 42;
+    const content::ChildProcessId kWebstoreProcessId(42);
     ProcessMap::Get(browser_context())
         ->Insert(extensions::kWebStoreAppId, kWebstoreProcessId);
     WebRequestInfo sensitive_request_info(create_request_params(
@@ -311,7 +312,7 @@ TEST_F(ExtensionWebRequestPermissionsTest,
                                         WebRequestResourceType type) {
     WebRequestInfoInitParams request;
     request.url = url;
-    request.render_process_id = 1;
+    request.global_id.child_id = content::ChildProcessId(1);
     request.web_request_type = type;
     request.initiator = url::Origin::Create(GURL("chrome-untrusted://test/"));
 
@@ -350,7 +351,7 @@ TEST_F(ExtensionWebRequestPermissionsTest,
   auto create_sub_frame_navigation_request = [](const GURL& url) {
     WebRequestInfoInitParams request;
     request.url = url;
-    request.render_process_id = 1;
+    request.global_id.child_id = content::ChildProcessId(1);
     request.web_request_type = WebRequestResourceType::SUB_FRAME;
     request.is_navigation_request = true;
     request.initiator = url::Origin::Create(GURL("chrome-untrusted://test/"));
@@ -373,7 +374,7 @@ TEST_F(ExtensionWebRequestPermissionsTest,
   auto create_main_frame_request_info = [](const GURL& url) {
     WebRequestInfoInitParams request;
     request.url = url;
-    request.render_process_id = 1;
+    request.global_id.child_id = content::ChildProcessId(1);
     request.web_request_type = WebRequestResourceType::MAIN_FRAME;
     request.is_navigation_request = true;
     request.initiator = url::Origin::Create(GURL("chrome-untrusted://test/"));
@@ -465,7 +466,7 @@ TEST_F(ExtensionWebRequestPermissionsTest,
   // However, if a sub-resource request is made to example.com from an initiator
   // that the extension has access to, access is allowed. This is functionally
   // necessary for any extension with webRequest to work with the runtime host
-  // permissions feature. See https://crbug.com/851722.
+  // permissions feature. See https://crbug.com/40580327.
   EXPECT_EQ(PermissionsData::PageAccess::kAllowed,
             get_access(example_com, chromium_org_origin,
                        WebRequestResourceType::OTHER));

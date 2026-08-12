@@ -35,7 +35,7 @@ const char kAndroidDownloadDirPrefix[] = "/storage/emulated/0/Download/";
 // The path of the MyFiles directory inside Android. The UUID "0000....2019" is
 // defined in
 // chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.cc.
-// TODO(crbug.com/929031): Move MyFiles constants to a common place.
+// TODO(crbug.com/255484683): Move MyFiles constants to a common place.
 const char kAndroidMyFilesDirPrefix[] =
     "/storage/0000000000000000000000000000CAFEF00D2019/";
 
@@ -91,10 +91,6 @@ RecentArcMediaSource::CallContext::CallContext(const Params& params,
     : params(params),
       callback(std::move(callback)),
       build_start_time(base::TimeTicks::Now()) {}
-RecentArcMediaSource::CallContext::CallContext(CallContext&& context)
-    : params(context.params),
-      callback(std::move(context.callback)),
-      build_start_time(std::move(context.build_start_time)) {}
 
 RecentArcMediaSource::CallContext::~CallContext() = default;
 

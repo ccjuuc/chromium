@@ -42,8 +42,11 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_script_runner.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/core/script/mock_script_element_base.h"
+#include "third_party/blink/renderer/core/script/wasm_module_script.h"
+#include "third_party/blink/renderer/core/testing/dummy_modulator.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -63,7 +66,6 @@
 #include "third_party/blink/renderer/platform/scheduler/public/worker_pool.h"
 #include "third_party/blink/renderer/platform/testing/mock_context_lifecycle_notifier.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
@@ -184,13 +186,15 @@ const uint32_t kDataPipeSize = 1024;
 
 }  // namespace
 
-class ScriptStreamingTest : public testing::Test {
+class ScriptStreamingTestBase : public testing::Test {
  public:
-  ScriptStreamingTest()
+  ScriptStreamingTestBase()
       : url_(String("http://streaming-test.example.com/foo" +
                     base::NumberToString(url_counter_++))) {}
 
-  void Init(v8::Isolate* isolate, bool use_response_http_scheme = true) {
+  void Init(v8::Isolate* isolate,
+            bool use_response_http_scheme = true,
+            const String& encoding = String()) {
     auto* properties = MakeGarbageCollected<TestResourceFetcherProperties>();
     FetchContext* context = MakeGarbageCollected<MockFetchContext>();
     scoped_refptr<base::SingleThreadTaskRunner> task_runner =
@@ -223,6 +227,9 @@ class ScriptStreamingTest : public testing::Test {
 
     ResourceResponse response(url_);
     response.SetHttpStatusCode(200);
+    if (!encoding.IsNull()) {
+      response.SetTextEncodingName(AtomicString(encoding));
+    }
 
     if (!use_response_http_scheme) {
       response.SetCurrentRequestUrl(KURL("file:///something"));
@@ -265,9 +272,32 @@ class ScriptStreamingTest : public testing::Test {
   mojo::ScopedDataPipeConsumerHandle consumer_handle_;
 };
 
-int ScriptStreamingTest::url_counter_ = 0;
+class ScriptStreamingTest : public ScriptStreamingTestBase,
+                            public testing::WithParamInterface<bool> {
+ public:
+  ScriptStreamingTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(features::kDecodeScriptsInBlink);
+    } else {
+      feature_list_.InitAndDisableFeature(features::kDecodeScriptsInBlink);
+    }
+  }
 
-TEST_F(ScriptStreamingTest, CompilingStreamedScript) {
+  static std::string DescribeParams(
+      const testing::TestParamInfo<ParamType>& info) {
+    return info.param ? "DecodeScriptsInBlinkEnabled"
+                      : "DecodeScriptsInBlinkDisabled";
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(All, ScriptStreamingTest, testing::Bool());
+
+int ScriptStreamingTestBase::url_counter_ = 0;
+
+TEST_P(ScriptStreamingTest, CompilingStreamedScript) {
   // Test that we can successfully compile a streamed script.
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -300,7 +330,41 @@ TEST_F(ScriptStreamingTest, CompilingStreamedScript) {
   EXPECT_FALSE(try_catch.HasCaught());
 }
 
-TEST_F(ScriptStreamingTest, CompilingStreamedScriptWithParseError) {
+TEST_P(ScriptStreamingTest, InitialDataInRawDataWhenBlinkDecodeEnabled) {
+  if (!GetParam()) {
+    return;
+  }
+
+  V8TestingScope scope;
+  Init(scope.GetIsolate());
+
+  const char kInitialData[] = "function foo() { ";
+  const char kPipeData[] = "return 42; }";
+
+  AppendData(kInitialData);
+  AppendData(kPipeData);
+  Finish();
+
+  RunUntilResourceLoaded();
+  EXPECT_TRUE(resource_client_->Finished());
+
+  ClassicScript* classic_script = CreateClassicScript();
+  ScriptStreamer* streamer = classic_script->Streamer();
+  ASSERT_TRUE(streamer);
+  ResourceScriptStreamer* resource_streamer =
+      static_cast<ResourceScriptStreamer*>(streamer);
+
+  SegmentedBuffer raw_data = resource_streamer->TakeRawDataForTest();
+  Vector<char> raw_bytes;
+  for (const auto& span : raw_data) {
+    raw_bytes.append_range(span);
+  }
+
+  std::string full_raw_data(raw_bytes.begin(), raw_bytes.end());
+  EXPECT_EQ(full_raw_data, std::string(kInitialData) + kPipeData);
+}
+
+TEST_P(ScriptStreamingTest, CompilingStreamedScriptWithParseError) {
   // Test that scripts with parse errors are handled properly. In those cases,
   // V8 stops reading the network stream: make sure we handle it gracefully.
   V8TestingScope scope;
@@ -333,7 +397,7 @@ TEST_F(ScriptStreamingTest, CompilingStreamedScriptWithParseError) {
   EXPECT_TRUE(try_catch.HasCaught());
 }
 
-TEST_F(ScriptStreamingTest, CancellingStreaming) {
+TEST_P(ScriptStreamingTest, CancellingStreaming) {
   // Test that the upper layers (PendingScript and up) can be ramped down
   // while streaming is ongoing, and ScriptStreamer handles it gracefully.
   V8TestingScope scope;
@@ -357,9 +421,11 @@ TEST_F(ScriptStreamingTest, CancellingStreaming) {
   EXPECT_TRUE(resource_client_->Finished());
   EXPECT_TRUE(resource_client_->ErrorOccurred());
   EXPECT_FALSE(resource_->HasStreamer());
+  producer_handle_.reset();
+  task_environment_.RunUntilIdle();
 }
 
-TEST_F(ScriptStreamingTest, DataAfterCancelling) {
+TEST_P(ScriptStreamingTest, DataAfterCancelling) {
   // Test that the upper layers (PendingScript and up) can be ramped down
   // before streaming is started, and ScriptStreamer handles it gracefully.
   V8TestingScope scope;
@@ -387,7 +453,7 @@ TEST_F(ScriptStreamingTest, DataAfterCancelling) {
   EXPECT_FALSE(resource_->HasStreamer());
 }
 
-TEST_F(ScriptStreamingTest, SuppressingStreaming) {
+TEST_P(ScriptStreamingTest, SuppressingStreaming) {
   // If we notice before streaming that there is a code cache, streaming
   // is suppressed (V8 doesn't parse while the script is loading), and the
   // upper layer (ScriptResourceClient) should get a notification when the
@@ -414,7 +480,7 @@ TEST_F(ScriptStreamingTest, SuppressingStreaming) {
   EXPECT_FALSE(classic_script->Streamer());
 }
 
-TEST_F(ScriptStreamingTest, ConsumeLocalCompileHints) {
+TEST_P(ScriptStreamingTest, ConsumeLocalCompileHints) {
   // If we notice before streaming that there is a compile hints cache, we use
   // it for eager compilation.
   base::test::ScopedFeatureList features;
@@ -473,7 +539,7 @@ TEST_F(ScriptStreamingTest, ConsumeLocalCompileHints) {
   EXPECT_FALSE(local_compile_hints_consumer->GetCompileHint(240));
 }
 
-TEST_F(ScriptStreamingTest, EmptyScripts) {
+TEST_P(ScriptStreamingTest, EmptyScripts) {
   // Empty scripts should also be streamed properly, that is, the upper layer
   // (ScriptResourceClient) should be notified when an empty script has been
   // loaded.
@@ -489,7 +555,7 @@ TEST_F(ScriptStreamingTest, EmptyScripts) {
   EXPECT_FALSE(classic_script->Streamer());
 }
 
-TEST_F(ScriptStreamingTest, SmallScripts) {
+TEST_P(ScriptStreamingTest, SmallScripts) {
   // Small scripts shouldn't be streamed.
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -508,7 +574,7 @@ TEST_F(ScriptStreamingTest, SmallScripts) {
   EXPECT_FALSE(classic_script->Streamer());
 }
 
-TEST_F(ScriptStreamingTest, ScriptsWithSmallFirstChunk) {
+TEST_P(ScriptStreamingTest, ScriptsWithSmallFirstChunk) {
   // If a script is long enough, if should be streamed, even if the first data
   // chunk is small.
   V8TestingScope scope;
@@ -545,7 +611,7 @@ TEST_F(ScriptStreamingTest, ScriptsWithSmallFirstChunk) {
   EXPECT_FALSE(try_catch.HasCaught());
 }
 
-TEST_F(ScriptStreamingTest, EncodingChanges) {
+TEST_P(ScriptStreamingTest, EncodingChanges) {
   // It's possible that the encoding of the Resource changes after we start
   // loading it.
   V8TestingScope scope;
@@ -581,7 +647,7 @@ TEST_F(ScriptStreamingTest, EncodingChanges) {
   EXPECT_FALSE(try_catch.HasCaught());
 }
 
-TEST_F(ScriptStreamingTest, EncodingFromBOM) {
+TEST_P(ScriptStreamingTest, EncodingFromBOM) {
   // Byte order marks should be removed before giving the data to V8. They
   // will also affect encoding detection.
   V8TestingScope scope;
@@ -590,11 +656,11 @@ TEST_F(ScriptStreamingTest, EncodingFromBOM) {
   // This encoding is wrong on purpose.
   resource_->SetEncodingForTest("windows-1252");
 
-  // \xef\xbb\xbf is the UTF-8 byte order mark. \xec\x92\x81 are the raw bytes
-  // for \uc481.
+  // \xef\xbb\xbf is the UTF-8 byte order mark. \xc3\xa9 is the UTF-8 byte
+  // sequence for 'é' (U+00E9).
   AppendData(
-      "\xef\xbb\xbf function foo() { var foob\xec\x92\x81r = 13; return "
-      "foob\xec\x92\x81r; } foo();");
+      "\xef\xbb\xbf"
+      "const foo = \"\xc3\xa9\"; foo;");
 
   Finish();
   RunUntilResourceLoaded();
@@ -615,10 +681,15 @@ TEST_F(ScriptStreamingTest, EncodingFromBOM) {
                   compile_options, no_cache_reason)
                   .ToLocal(&script));
   EXPECT_FALSE(try_catch.HasCaught());
+
+  v8::Local<v8::Value> result;
+  EXPECT_TRUE(script->Run(scope.GetContext()).ToLocal(&result));
+  v8::String::Utf8Value utf8_result(scope.GetIsolate(), result);
+  EXPECT_EQ(std::string(*utf8_result), "é");
 }
 
 // A test for crbug.com/711703. Should not crash.
-TEST_F(ScriptStreamingTest, GarbageCollectDuringStreaming) {
+TEST_P(ScriptStreamingTest, GarbageCollectDuringStreaming) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
 
@@ -629,7 +700,7 @@ TEST_F(ScriptStreamingTest, GarbageCollectDuringStreaming) {
       ThreadState::StackState::kNoHeapPointers);
 }
 
-TEST_F(ScriptStreamingTest, ResourceSetRevalidatingRequest) {
+TEST_P(ScriptStreamingTest, ResourceSetRevalidatingRequest) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
 
@@ -653,7 +724,7 @@ TEST_F(ScriptStreamingTest, ResourceSetRevalidatingRequest) {
 }
 
 class InlineScriptStreamingTest
-    : public ScriptStreamingTest,
+    : public ScriptStreamingTestBase,
       public ::testing::WithParamInterface<
           std::pair<bool /* 16 bit source */,
                     v8::ScriptCompiler::CompileOptions>> {};
@@ -664,10 +735,14 @@ TEST_P(InlineScriptStreamingTest, InlineScript) {
   Init(scope.GetIsolate());
 
   String source = "function foo() {return 5;} foo();";
-  if (GetParam().first)
+  if (GetParam().first) {
     source.Ensure16Bit();
+  }
+  static const base::FeatureParam<base::TimeDelta> kWaitTimeoutParam{
+      &features::kPrecompileInlineScripts, "inline-script-timeout",
+      base::Milliseconds(0)};
   auto streamer = base::MakeRefCounted<BackgroundInlineScriptStreamer>(
-      scope.GetIsolate(), source, GetParam().second);
+      scope.GetIsolate(), source, GetParam().second, kWaitTimeoutParam.Get());
   worker_pool::PostTask(
       FROM_HERE, {},
       CrossThreadBindOnce(&BackgroundInlineScriptStreamer::Run, streamer));
@@ -689,7 +764,7 @@ TEST_P(InlineScriptStreamingTest, InlineScript) {
       5, result.GetSuccessValue()->Int32Value(scope.GetContext()).FromJust());
 }
 
-TEST_F(ScriptStreamingTest, ProduceLocalCompileHintsForStreamedScript) {
+TEST_P(ScriptStreamingTest, ProduceLocalCompileHintsForStreamedScript) {
   // Test that we can produce local compile hints when a script is streamed.
   base::test::ScopedFeatureList flag_on(features::kLocalCompileHints);
   V8TestingScope scope;
@@ -726,11 +801,12 @@ TEST_F(ScriptStreamingTest, ProduceLocalCompileHintsForStreamedScript) {
 
   // Expect that we got a compile hint for the function which was run. Don't
   // assert what it is (that's internal to V8).
-  std::vector<int> compile_hints = script->GetProducedCompileHints();
+  std::vector<int> compile_hints =
+      script->GetCompileHintsCollector()->GetCompileHints(scope.GetIsolate());
   EXPECT_EQ(1UL, compile_hints.size());
 }
 
-TEST_F(ScriptStreamingTest, NullCacheHandler) {
+TEST_P(ScriptStreamingTest, NullCacheHandler) {
   V8TestingScope scope;
   // Use setting the responses URL to something else than HTTP(S) to trigger the
   // "streaming but no cache handler" corner case.
@@ -747,6 +823,171 @@ TEST_F(ScriptStreamingTest, NullCacheHandler) {
   ResourceScriptStreamer* resource_script_streamer =
       reinterpret_cast<ResourceScriptStreamer*>(script_streamer);
   EXPECT_TRUE(resource_script_streamer);
+}
+
+// This test exercises the scenario where the background thread is blocked in
+// mojo::Wait waiting for new data, and the data pipe is closed by the producer.
+// It verifies that this condition (returning MOJO_RESULT_FAILED_PRECONDITION)
+// is correctly recovered and treated as a successful End-Of-File (EOF),
+// allowing the script to compile successfully.
+TEST_P(ScriptStreamingTest, MojoWaitEOFRecovery) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate());
+
+  // Append a small chunk first, but do not finish or close the pipe.
+  AppendData("function foo() { return 42; }");
+  EXPECT_FALSE(resource_client_->Finished());
+
+  // Spin the run loop to allow the background thread to process this chunk.
+  // Since the pipe is still open, the background thread will finish reading
+  // this chunk and then block on mojo::Wait.
+  base::RunLoop().RunUntilIdle();
+
+  // Now close the producer handle without sending more data, which triggers
+  // MOJO_RESULT_FAILED_PRECONDITION in the mojo::Wait block.
+  producer_handle_.reset();
+  resource_->Loader()->DidFinishLoading(base::TimeTicks(), 0, 0, 0);
+  resource_->SetStatus(ResourceStatus::kCached);
+
+  // Run until the streaming and loading finish.
+  RunUntilResourceLoaded();
+  EXPECT_TRUE(resource_client_->Finished());
+  EXPECT_FALSE(resource_client_->ErrorOccurred());
+
+  // Verify that the script compiled successfully.
+  ClassicScript* classic_script = CreateClassicScript();
+  EXPECT_TRUE(classic_script->Streamer());
+  v8::TryCatch try_catch(scope.GetIsolate());
+  v8::Local<v8::Script> script;
+  v8::ScriptCompiler::CompileOptions compile_options;
+  V8CodeCache::ProduceCacheOptions produce_cache_options;
+  v8::ScriptCompiler::NoCacheReason no_cache_reason;
+  std::tie(compile_options, produce_cache_options, no_cache_reason) =
+      V8CodeCache::GetCompileOptions(mojom::blink::V8CacheOptions::kDefault,
+                                     *classic_script);
+  EXPECT_TRUE(V8ScriptRunner::CompileScript(
+                  scope.GetScriptState(), *classic_script,
+                  classic_script->CreateScriptOrigin(scope.GetIsolate()),
+                  compile_options, no_cache_reason)
+                  .ToLocal(&script));
+  EXPECT_FALSE(try_catch.HasCaught());
+}
+
+// This test exercises the background-thread decoding and BOM stripping.
+// It verifies that when a script starts with a UTF-8 Byte Order Mark (BOM),
+// the BOM is correctly identified and stripped on the background thread during
+// Blink-side decoding, and the script compiles successfully without the BOM.
+TEST_P(ScriptStreamingTest, BackgroundBOMStripping) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate());
+
+  // Append a UTF-8 BOM followed by a valid script.
+  AppendData(
+      "\xEF\xBB\xBF"
+      "let a = 1;");
+  Finish();
+
+  RunUntilResourceLoaded();
+  EXPECT_TRUE(resource_client_->Finished());
+  EXPECT_FALSE(resource_client_->ErrorOccurred());
+
+  ClassicScript* classic_script = CreateClassicScript();
+  EXPECT_TRUE(classic_script->Streamer());
+
+  // Verify compilation.
+  v8::TryCatch try_catch(scope.GetIsolate());
+  v8::Local<v8::Script> script;
+  v8::ScriptCompiler::CompileOptions compile_options;
+  V8CodeCache::ProduceCacheOptions produce_cache_options;
+  v8::ScriptCompiler::NoCacheReason no_cache_reason;
+  std::tie(compile_options, produce_cache_options, no_cache_reason) =
+      V8CodeCache::GetCompileOptions(mojom::blink::V8CacheOptions::kDefault,
+                                     *classic_script);
+  EXPECT_TRUE(V8ScriptRunner::CompileScript(
+                  scope.GetScriptState(), *classic_script,
+                  classic_script->CreateScriptOrigin(scope.GetIsolate()),
+                  compile_options, no_cache_reason)
+                  .ToLocal(&script));
+  EXPECT_FALSE(try_catch.HasCaught());
+}
+
+// This test exercises streaming decoding with a non-UTF-8 encoding
+// (ISO-8859-1). It verifies that the background decoder correctly decodes
+// ISO-8859-1 characters (such as Latin-1 accented characters) into the proper
+// Unicode representation, and that the resulting script is parsed correctly.
+TEST_P(ScriptStreamingTest, BackgroundISO88591Decoding) {
+  V8TestingScope scope;
+  // Initialize with ISO-8859-1 charset.
+  Init(scope.GetIsolate(), /*use_response_http_scheme=*/true, "ISO-8859-1");
+
+  // E9 is 'é' in ISO-8859-1.
+  // The script: "let é = 1;"
+  AppendData("let \xE9 = 1;");
+  Finish();
+
+  RunUntilResourceLoaded();
+  EXPECT_TRUE(resource_client_->Finished());
+  EXPECT_FALSE(resource_client_->ErrorOccurred());
+
+  ClassicScript* classic_script = CreateClassicScript();
+  EXPECT_TRUE(classic_script->Streamer());
+
+  // Verify compilation.
+  v8::TryCatch try_catch(scope.GetIsolate());
+  v8::Local<v8::Script> script;
+  v8::ScriptCompiler::CompileOptions compile_options;
+  V8CodeCache::ProduceCacheOptions produce_cache_options;
+  v8::ScriptCompiler::NoCacheReason no_cache_reason;
+  std::tie(compile_options, produce_cache_options, no_cache_reason) =
+      V8CodeCache::GetCompileOptions(mojom::blink::V8CacheOptions::kDefault,
+                                     *classic_script);
+  EXPECT_TRUE(V8ScriptRunner::CompileScript(
+                  scope.GetScriptState(), *classic_script,
+                  classic_script->CreateScriptOrigin(scope.GetIsolate()),
+                  compile_options, no_cache_reason)
+                  .ToLocal(&script));
+  EXPECT_FALSE(try_catch.HasCaught());
+}
+
+// This test exercises the encoding width transition (8-bit to 16-bit) within
+// the streaming decoder and V8's FlexibleChunkedStream.
+// It verifies that when early chunks contain only 8-bit (ASCII) characters,
+// and a subsequent chunk contains 16-bit Unicode characters, the stream is
+// seamlessly widened to 16-bit, and the entire script compiles and runs
+// correctly.
+TEST_P(ScriptStreamingTest, ChunkWidthTransition) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate());
+
+  // Append a purely 8-bit (ASCII) chunk.
+  AppendData("let s = 'ascii'; ");
+  // Append a 16-bit Unicode chunk (containing sparkle Emoji: \u2728).
+  // Sparkle emoji is UTF-8: E2 9C A8.
+  AppendData("let u = '\xE2\x9C\xA8';");
+  Finish();
+
+  RunUntilResourceLoaded();
+  EXPECT_TRUE(resource_client_->Finished());
+  EXPECT_FALSE(resource_client_->ErrorOccurred());
+
+  ClassicScript* classic_script = CreateClassicScript();
+  EXPECT_TRUE(classic_script->Streamer());
+
+  // Verify compilation.
+  v8::TryCatch try_catch(scope.GetIsolate());
+  v8::Local<v8::Script> script;
+  v8::ScriptCompiler::CompileOptions compile_options;
+  V8CodeCache::ProduceCacheOptions produce_cache_options;
+  v8::ScriptCompiler::NoCacheReason no_cache_reason;
+  std::tie(compile_options, produce_cache_options, no_cache_reason) =
+      V8CodeCache::GetCompileOptions(mojom::blink::V8CacheOptions::kDefault,
+                                     *classic_script);
+  EXPECT_TRUE(V8ScriptRunner::CompileScript(
+                  scope.GetScriptState(), *classic_script,
+                  classic_script->CreateScriptOrigin(scope.GetIsolate()),
+                  compile_options, no_cache_reason)
+                  .ToLocal(&script));
+  EXPECT_FALSE(try_catch.HasCaught());
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -776,6 +1017,25 @@ const char kLargeEnoughScript[] = "function foo() { return 5; }";
 const char kScriptWithBOM[] =
     "\xef\xbb\xbf function foo() { var foob\xec\x92\x81r = 13; return "
     "foob\xec\x92\x81r; } foo();";
+
+// WASM module constants. Use string_views instead of char c-style arrays
+// because the Wasm bytes include null characters.
+// A valid Wasm module should start with the magic number and the version.
+constexpr std::string_view kWasmMagicNumber("\x00\x61\x73\x6d", 4);
+constexpr std::string_view kWasmVersion("\x01\x00\x00\x00", 4);
+// This is a larger valid WASM module with an empty function.
+constexpr std::string_view kWasmModuleWithFunction(
+    "\x00\x61\x73\x6d"  // Magic
+    "\x01\x00\x00\x00"  // Version
+    "\x01\x04"          // Type section, length 4
+    "\x01"              // 1 type
+    "\x60\x00\x00"      // Function type: () -> ()
+    "\x03\x02"          // Function section, length 2
+    "\x01\x00"          // 1 function, type 0
+    "\x0a\x04"          // Code section, length 4
+    "\x01\x02"          // 1 function body, length 2
+    "\x00\x0b",         // Empty function body + end
+    24);
 
 class DummyLoaderFactory final : public ResourceFetcher::LoaderFactory {
  public:
@@ -982,20 +1242,12 @@ network::mojom::URLResponseHeadPtr CreateURLResponseHead(
 
 }  // namespace
 
-class BackgroundResourceScriptStreamerTest : public testing::Test {
+class BackgroundResourceScriptStreamerTestBase : public testing::Test {
  public:
-  explicit BackgroundResourceScriptStreamerTest(
-      bool enable_background_code_cache_decode_start = false)
+  explicit BackgroundResourceScriptStreamerTestBase()
       : url_(String("http://streaming-test.example.com/foo" +
-                    base::NumberToString(url_counter_++))) {
-    feature_list_.InitWithFeaturesAndParameters(
-        {{features::kBackgroundResourceFetch,
-          {{"background-script-response-processor", "true"},
-           {"background-code-cache-decoder-start",
-            base::ToString(enable_background_code_cache_decode_start)}}}},
-        {});
-  }
-  ~BackgroundResourceScriptStreamerTest() override = default;
+                    base::NumberToString(url_counter_++))) {}
+  ~BackgroundResourceScriptStreamerTestBase() override = default;
 
   void TearDown() override {
     RunInBackgroundThread(base::BindLambdaForTesting(
@@ -1056,11 +1308,6 @@ class BackgroundResourceScriptStreamerTest : public testing::Test {
     }));
   }
 
-  ClassicScript* CreateClassicScript() const {
-    return ClassicScript::CreateFromResource(resource_, ScriptFetchOptions());
-  }
-
- protected:
   void AppendData(std::string_view data) {
     AppendDataToDataPipe(data, producer_handle_);
   }
@@ -1101,15 +1348,15 @@ class BackgroundResourceScriptStreamerTest : public testing::Test {
     EXPECT_EQ(nullptr, streamer);
   }
 
-  void CheckScriptStreamer(mojom::blink::ScriptType script_type =
-                               mojom::blink::ScriptType::kClassic) {
+  ScriptStreamer* TakeScriptStreamer(mojom::blink::ScriptType script_type =
+                                         mojom::blink::ScriptType::kClassic) {
     ScriptStreamer* streamer;
     ScriptStreamer::NotStreamingReason not_streamed_reason;
     std::tie(streamer, not_streamed_reason) =
         ScriptStreamer::TakeFrom(resource_, script_type);
     EXPECT_EQ(ScriptStreamer::NotStreamingReason::kInvalid,
               not_streamed_reason);
-    EXPECT_NE(nullptr, streamer);
+    return streamer;
   }
 
   static int url_counter_;
@@ -1129,9 +1376,46 @@ class BackgroundResourceScriptStreamerTest : public testing::Test {
       background_resource_fetch_task_runner_;
   base::test::ScopedFeatureList feature_list_;
 };
-int BackgroundResourceScriptStreamerTest::url_counter_ = 0;
+int BackgroundResourceScriptStreamerTestBase::url_counter_ = 0;
 
-TEST_F(BackgroundResourceScriptStreamerTest, UnsupportedModuleMimeType) {
+class BackgroundResourceScriptStreamerTest
+    : public BackgroundResourceScriptStreamerTestBase,
+      public testing::WithParamInterface<bool> {
+ public:
+  explicit BackgroundResourceScriptStreamerTest(
+      bool enable_background_code_cache_decode_start = false) {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kBackgroundResourceFetch,
+         {{"background-script-response-processor", "true"},
+          {"background-code-cache-decoder-start",
+           base::ToString(enable_background_code_cache_decode_start)}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (GetParam()) {
+      enabled_features.push_back({features::kDecodeScriptsInBlink, {}});
+    } else {
+      disabled_features.push_back(features::kDecodeScriptsInBlink);
+    }
+    feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                disabled_features);
+  }
+
+  static std::string DescribeParams(
+      const testing::TestParamInfo<ParamType>& info) {
+    return info.param ? "DecodeScriptsInBlinkEnabled"
+                      : "DecodeScriptsInBlinkDisabled";
+  }
+
+ protected:
+  ClassicScript* CreateClassicScript() const {
+    return ClassicScript::CreateFromResource(resource_, ScriptFetchOptions());
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         BackgroundResourceScriptStreamerTest,
+                         testing::Bool());
+
+TEST_P(BackgroundResourceScriptStreamerTest, UnsupportedModuleMimeType) {
   V8TestingScope scope;
   Init(scope.GetIsolate(), /*is_module_script=*/true);
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1154,7 +1438,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, UnsupportedModuleMimeType) {
       mojom::blink::ScriptType::kModule);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, HasCodeCache) {
+TEST_P(BackgroundResourceScriptStreamerTest, HasCodeCache) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   mojo_base::BigBuffer code_cache_data = CreateDummyCodeCacheData();
@@ -1192,9 +1476,20 @@ class BackgroundResourceScriptStreamerCodeCacheDecodeStartTest
             /*enable_background_code_cache_decode_start=*/true) {}
   ~BackgroundResourceScriptStreamerCodeCacheDecodeStartTest() override =
       default;
+
+  static std::string DescribeParams(
+      const testing::TestParamInfo<ParamType>& info) {
+    return info.param ? "DecodeScriptsInBlinkEnabled"
+                      : "DecodeScriptsInBlinkDisabled";
+  }
 };
 
-TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest, HasCodeCache) {
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
+    testing::Bool());
+
+TEST_P(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest, HasCodeCache) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   mojo_base::BigBuffer code_cache_data = CreateDummyCodeCacheData();
@@ -1230,7 +1525,7 @@ TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest, HasCodeCache) {
       ScriptStreamer::NotStreamingReason::kHasCodeCacheBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
+TEST_P(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
        HasCodeCacheWithCorrectHash) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -1268,7 +1563,7 @@ TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
       ScriptStreamer::NotStreamingReason::kHasCodeCacheBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
+TEST_P(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
        HasCodeCacheWithIncorrectHash) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -1307,7 +1602,7 @@ TEST_F(BackgroundResourceScriptStreamerCodeCacheDecodeStartTest,
       ScriptStreamer::NotStreamingReason::kHasCodeCacheBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, HasTimeStampData) {
+TEST_P(BackgroundResourceScriptStreamerTest, HasTimeStampData) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   mojo_base::BigBuffer time_stamp_data = CreateDummyTimeStampData();
@@ -1338,10 +1633,11 @@ TEST_F(BackgroundResourceScriptStreamerTest, HasTimeStampData) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer();
+  ScriptStreamer* streamer = TakeScriptStreamer();
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, InvalidCachedMetadata) {
+TEST_P(BackgroundResourceScriptStreamerTest, InvalidCachedMetadata) {
   uint8_t kInvalidCachedMetadata[] = {0x00, 0x00};
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -1370,10 +1666,11 @@ TEST_F(BackgroundResourceScriptStreamerTest, InvalidCachedMetadata) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer();
+  ScriptStreamer* streamer = TakeScriptStreamer();
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, SmallScript) {
+TEST_P(BackgroundResourceScriptStreamerTest, SmallScript) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1401,7 +1698,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, SmallScript) {
       ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, SmallScriptInFirstChunk) {
+TEST_P(BackgroundResourceScriptStreamerTest, SmallScriptInFirstChunk) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   // Append the data chunk to the producer handle here, so the
@@ -1431,7 +1728,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, SmallScriptInFirstChunk) {
       ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EmptyScript) {
+TEST_P(BackgroundResourceScriptStreamerTest, EmptyScript) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1458,7 +1755,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, EmptyScript) {
       ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EmptyScriptSyncCheckable) {
+TEST_P(BackgroundResourceScriptStreamerTest, EmptyScriptSyncCheckable) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   // Close the data pipe here, so the MaybeStartProcessingResponse() can
@@ -1484,7 +1781,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, EmptyScriptSyncCheckable) {
       ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EnoughData) {
+TEST_P(BackgroundResourceScriptStreamerTest, EnoughData) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1508,10 +1805,11 @@ TEST_F(BackgroundResourceScriptStreamerTest, EnoughData) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer();
+  ScriptStreamer* streamer = TakeScriptStreamer();
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EnoughDataInFirstChunk) {
+TEST_P(BackgroundResourceScriptStreamerTest, EnoughDataInFirstChunk) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   // Append the data chunk to the producer handle before
@@ -1537,10 +1835,11 @@ TEST_F(BackgroundResourceScriptStreamerTest, EnoughDataInFirstChunk) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer();
+  ScriptStreamer* streamer = TakeScriptStreamer();
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EnoughDataModuleScript) {
+TEST_P(BackgroundResourceScriptStreamerTest, EnoughDataModuleScript) {
   V8TestingScope scope;
   Init(scope.GetIsolate(), /*is_module_script=*/true);
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1564,10 +1863,12 @@ TEST_F(BackgroundResourceScriptStreamerTest, EnoughDataModuleScript) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer(mojom::blink::ScriptType::kModule);
+  ScriptStreamer* streamer =
+      TakeScriptStreamer(mojom::blink::ScriptType::kModule);
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EncodingNotSupported) {
+TEST_P(BackgroundResourceScriptStreamerTest, EncodingNotSupported) {
   V8TestingScope scope;
   // Intentionally using unsupported encoding "EUC-JP".
   Init(scope.GetIsolate(), /*is_module_script=*/false, TextEncoding("EUC-JP"));
@@ -1596,7 +1897,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, EncodingNotSupported) {
       ScriptStreamer::NotStreamingReason::kEncodingNotSupportedBackground);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, EncodingFromBOM) {
+TEST_P(BackgroundResourceScriptStreamerTest, EncodingFromBOM) {
   V8TestingScope scope;
   // Intentionally using unsupported encoding "EUC-JP".
   Init(scope.GetIsolate(), /*is_module_script=*/false, TextEncoding("EUC-JP"));
@@ -1621,10 +1922,11 @@ TEST_F(BackgroundResourceScriptStreamerTest, EncodingFromBOM) {
   Finish();
   RunUntilResourceLoaded();
   // ScriptStreamer must have been created.
-  CheckScriptStreamer();
+  ScriptStreamer* streamer = TakeScriptStreamer();
+  EXPECT_TRUE(streamer);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, ScriptTypeMismatch) {
+TEST_P(BackgroundResourceScriptStreamerTest, ScriptTypeMismatch) {
   V8TestingScope scope;
   Init(scope.GetIsolate(), /*is_module_script=*/true);
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1654,7 +1956,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, ScriptTypeMismatch) {
       mojom::blink::ScriptType::kClassic);
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, CancelWhileWaitingForDataPipe) {
+TEST_P(BackgroundResourceScriptStreamerTest, CancelWhileWaitingForDataPipe) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1677,7 +1979,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, CancelWhileWaitingForDataPipe) {
   task_environment_.RunUntilIdle();
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, CancelBeforeReceiveResponse) {
+TEST_P(BackgroundResourceScriptStreamerTest, CancelBeforeReceiveResponse) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   Cancel();
@@ -1688,7 +1990,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, CancelBeforeReceiveResponse) {
   task_environment_.RunUntilIdle();
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, CancelWhileRuningStreamingTask) {
+TEST_P(BackgroundResourceScriptStreamerTest, CancelWhileRuningStreamingTask) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1713,7 +2015,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, CancelWhileRuningStreamingTask) {
   task_environment_.RunUntilIdle();
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest, CompilingStreamedScript) {
+TEST_P(BackgroundResourceScriptStreamerTest, CompilingStreamedScript) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1755,7 +2057,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, CompilingStreamedScript) {
   EXPECT_FALSE(try_catch.HasCaught());
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest,
+TEST_P(BackgroundResourceScriptStreamerTest,
        CompilingStreamedScriptWithParseError) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -1800,7 +2102,7 @@ TEST_F(BackgroundResourceScriptStreamerTest,
 }
 
 // Regression test for https://crbug.com/337998760.
-TEST_F(BackgroundResourceScriptStreamerTest, DataPipeReadableAfterGC) {
+TEST_P(BackgroundResourceScriptStreamerTest, DataPipeReadableAfterGC) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
   RunInBackgroundThread(base::BindLambdaForTesting([&]() {
@@ -1840,7 +2142,7 @@ TEST_F(BackgroundResourceScriptStreamerTest, DataPipeReadableAfterGC) {
   task_environment_.RunUntilIdle();
 }
 
-TEST_F(BackgroundResourceScriptStreamerTest,
+TEST_P(BackgroundResourceScriptStreamerTest,
        DataPipeReadableAfterProcessorIsDeleted) {
   V8TestingScope scope;
   Init(scope.GetIsolate());
@@ -1885,7 +2187,7 @@ TEST_F(BackgroundResourceScriptStreamerTest,
 }
 
 // Regression test for https://crbug.com/341473518.
-TEST_F(BackgroundResourceScriptStreamerTest,
+TEST_P(BackgroundResourceScriptStreamerTest,
        DeletingBackgroundProcessorWhileParsingShouldNotCrash) {
   V8TestingScope scope;
   v8_compile_hints::V8CrowdsourcedCompileHintsConsumer*
@@ -1935,6 +2237,286 @@ TEST_F(BackgroundResourceScriptStreamerTest,
   producer_handle_.reset();
 
   task_environment_.RunUntilIdle();
+}
+
+class WasmStreamingDummyModulator : public DummyModulator {
+ public:
+  explicit WasmStreamingDummyModulator(ScriptState* script_state)
+      : script_state_(script_state) {}
+  ~WasmStreamingDummyModulator() override = default;
+
+  ScriptState* GetScriptState() override { return script_state_; }
+
+  void Trace(Visitor* visitor) const override {
+    DummyModulator::Trace(visitor);
+    visitor->Trace(script_state_);
+  }
+
+ private:
+  Member<ScriptState> script_state_;
+};
+
+// Tests for BackgroundWasmStreamManager
+class BackgroundWasmResourceScriptStreamerTest
+    : public BackgroundResourceScriptStreamerTestBase {
+ public:
+  BackgroundWasmResourceScriptStreamerTest() {
+    feature_list_.InitWithFeaturesAndParameters(
+        {{features::kBackgroundResourceFetch,
+          {{"background-script-response-processor", "true"}}},
+         {features::kJavaScriptSourcePhaseImports, {}}},
+        {});
+  }
+
+ protected:
+  void CheckNotStreamingReason(
+      ScriptStreamer::NotStreamingReason expected_not_streamed_reason) {
+    ScriptStreamer* streamer;
+    ScriptStreamer::NotStreamingReason not_streamed_reason;
+    std::tie(streamer, not_streamed_reason) =
+        ScriptStreamer::TakeFrom(resource_, mojom::blink::ScriptType::kModule);
+    EXPECT_EQ(expected_not_streamed_reason, not_streamed_reason);
+    EXPECT_EQ(nullptr, streamer);
+  }
+
+  void CheckStreamedWasm(ScriptState* script_state, bool has_parse_error) {
+    // If a valid Wasm module was streamed successfully, then
+    // `WasmModuleScript::Create` should use the `v8::WasmModuleObject`
+    // from the streamer and ignore the invalid source code that we are
+    // passing here.
+    base::RunLoop run_loop;
+    ScriptStreamer* streamer =
+        TakeScriptStreamer(mojom::blink::ScriptType::kModule);
+    EXPECT_TRUE(streamer);
+    v8::WasmModuleCompilation* wasm_module_compilation =
+        streamer->GetWasmModuleCompilation();
+    EXPECT_TRUE(wasm_module_compilation);
+    wasm_module_compilation->Finish(
+        script_state->GetIsolate(), nullptr,
+        [&](std::variant<v8::Local<v8::WasmModuleObject>, v8::Local<v8::Value>>
+                module_or_error) {
+          WasmModuleScript* module_script =
+              WasmModuleScript::CreateFromStreamingResult(
+                  MakeGarbageCollected<WasmStreamingDummyModulator>(
+                      script_state),
+                  ScriptFetchOptions(), std::move(module_or_error), url_, url_);
+          EXPECT_TRUE(module_script);
+          EXPECT_EQ(has_parse_error, module_script->HasParseError());
+          run_loop.Quit();
+        });
+    run_loop.Run();
+  }
+};
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, InvalidWasmScriptType) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/false);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_FALSE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_TRUE(head);
+    EXPECT_TRUE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  Finish();
+  RunUntilResourceLoaded();
+  CheckNotStreamingReason(
+      ScriptStreamer::NotStreamingReason::kNonModuleWithWasmMimeType);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, NoData) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  // Close the data pipe without any data.
+  producer_handle_.reset();
+  background_response_processor_client_.WaitUntilFinished();
+  background_response_processor_client_.CheckResultOfFinishCallback(
+      /*expected_body=*/{},
+      /*expected_cached_metadata=*/std::nullopt);
+  Finish();
+  RunUntilResourceLoaded();
+  // When the WASM module is empty, we should not stream it.
+  CheckNotStreamingReason(
+      ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, WasmMagicNumberOnly) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  AppendData(kWasmMagicNumber);
+  producer_handle_.reset();
+  background_response_processor_client_.WaitUntilFinished();
+  Finish();
+  RunUntilResourceLoaded();
+  CheckNotStreamingReason(
+      ScriptStreamer::NotStreamingReason::kScriptTooSmallBackground);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, EmptyWasmModule) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  AppendData(kWasmMagicNumber);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  AppendData(kWasmVersion);
+  producer_handle_.reset();
+  background_response_processor_client_.WaitUntilFinished();
+  background_response_processor_client_.CheckResultOfFinishCallback(
+      /*expected_body=*/base::span(
+          base::StrCat({kWasmMagicNumber, kWasmVersion})),
+      /*expected_cached_metadata=*/std::nullopt);
+  Finish();
+  RunUntilResourceLoaded();
+  CheckStreamedWasm(scope.GetScriptState(), /*has_parse_error=*/false);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, InvalidWasmModule) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  AppendData(kWasmMagicNumber);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  AppendData(kWasmVersion);
+  AppendData("f");
+  producer_handle_.reset();
+  background_response_processor_client_.WaitUntilFinished();
+  background_response_processor_client_.CheckResultOfFinishCallback(
+      /*expected_body=*/base::span(
+          base::StrCat({kWasmMagicNumber, kWasmVersion, "f"})),
+      /*expected_cached_metadata=*/std::nullopt);
+  Finish();
+  RunUntilResourceLoaded();
+  CheckStreamedWasm(scope.GetScriptState(), /*has_parse_error=*/true);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest, LargeEnoughWasmModule) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  // Append enough data to start streaming.
+  AppendData(kWasmModuleWithFunction);
+  producer_handle_.reset();
+  background_response_processor_client_.WaitUntilFinished();
+  background_response_processor_client_.CheckResultOfFinishCallback(
+      /*expected_body=*/base::span(kWasmModuleWithFunction),
+      /*expected_cached_metadata=*/std::nullopt);
+  Finish();
+  RunUntilResourceLoaded();
+  CheckStreamedWasm(scope.GetScriptState(), /*has_parse_error=*/false);
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest,
+       CancelWhileWaitingForDataPipe) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  Cancel();
+  RunInBackgroundThread(base::BindLambdaForTesting(
+      [&]() { background_response_processor_.reset(); }));
+  producer_handle_.reset();
+  // Cancelling the background response processor while waiting for data pipe
+  // should not cause any crash. Run a no-op task on the background thread to
+  // ensure any queued background work has completed.
+  RunInBackgroundThread(base::BindLambdaForTesting([]() {}));
+}
+
+TEST_F(BackgroundWasmResourceScriptStreamerTest,
+       CancelWhileRunningStreamingTask) {
+  V8TestingScope scope;
+  Init(scope.GetIsolate(), /*is_module_script=*/true);
+  RunInBackgroundThread(base::BindLambdaForTesting([&]() {
+    network::mojom::URLResponseHeadPtr head =
+        CreateURLResponseHead("application/wasm");
+    std::optional<mojo_base::BigBuffer> cached_metadata;
+    EXPECT_TRUE(background_response_processor_->MaybeStartProcessingResponse(
+        head, consumer_handle_, cached_metadata,
+        background_resource_fetch_task_runner_,
+        &background_response_processor_client_));
+    EXPECT_FALSE(head);
+    EXPECT_FALSE(consumer_handle_);
+    EXPECT_FALSE(cached_metadata);
+  }));
+  // Append enough data to start streaming.
+  AppendData(kWasmModuleWithFunction);
+  Cancel();
+  RunInBackgroundThread(base::BindLambdaForTesting(
+      [&]() { background_response_processor_.reset(); }));
+  producer_handle_.reset();
+  // Cancelling the background response processor while running streaming task
+  // should not cause any crash. Run a no-op task on the background thread to
+  // ensure any queued background work has completed.
+  RunInBackgroundThread(base::BindLambdaForTesting([]() {}));
 }
 
 }  // namespace blink

@@ -8,7 +8,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.hasItem;
-import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -19,7 +18,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -29,8 +27,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
-
-import static java.util.function.Function.identity;
 
 import android.app.backup.BackupDataInput;
 import android.app.backup.BackupDataOutput;
@@ -44,7 +40,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
-import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.MockitoJUnit;
@@ -53,12 +48,14 @@ import org.mockito.stubbing.Answer;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.task.PostTask;
+import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.init.AsyncInitTaskRunner;
@@ -86,9 +83,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
-import java.util.stream.Collectors;
 
 /** Unit tests for {@link org.chromium.chrome.browser.backup.ChromeBackupAgent}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -97,7 +92,6 @@ import java.util.stream.Collectors;
         shadows = {
             ChromeBackupAgentTest.BackupManagerShadow.class,
         })
-@LooperMode(LooperMode.Mode.INSTRUMENTATION_TEST)
 public class ChromeBackupAgentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Rule public TemporaryFolder mTempDir = new TemporaryFolder();
@@ -141,32 +135,19 @@ public class ChromeBackupAgentTest {
     private static final String SHARED_PREF_NOT_BACKED_UP = "shared_pref_not_backed_up";
     private static final String NATIVE_PREF_NOT_BACKED_UP = "native_pref_not_backed_up";
     private static final String ACCOUNT_SETTINGS_PREF_VALUE = "account_settings_pref_value";
-    private static final int BACKUP_BOOL_PREF_COUNT =
-            new BoolPrefBackupSerializer().getAllowlistedPrefs().size()
-                    + ChromeBackupAgentImpl.BACKUP_ANDROID_BOOL_PREFS.length;
     // The 1 additional preference is the signed-in account.
     private static final int BACKUP_PREF_COUNT =
             ChromeBackupAgentImpl.NATIVE_PREFS_SERIALIZERS.stream()
                             .mapToInt(serializer -> serializer.getAllowlistedPrefs().size())
                             .sum()
-                    + ChromeBackupAgentImpl.BACKUP_ANDROID_BOOL_PREFS.length
+                    + ChromeBackupAgentImpl.BACKUP_ANDROID_BOOL_PREFS.size()
                     + 1;
-    // Number of preferences that default to true in the test, see setUpPrefsToBackup().
-    private static final int DEFAULT_TRUE_BOOL_PREF_COUNT = 2;
-
-    // Mutable map containing boolean preferences names and their values for the fake backup.
-    private final Map<String, Boolean> mNativeBoolPrefBackupValues =
-            new BoolPrefBackupSerializer()
-                    .getAllowlistedPrefs().stream()
-                            .collect(Collectors.toMap(identity(), pref -> false));
 
     // Sets up default values for native and android prefs to be backed up.
     private void setUpPrefsToBackup(SharedPreferences prefs) {
         when(mDictPrefBackupSerializerJniMock.getSerializedDict(
                         mPrefService, SyncPrefNames.SELECTED_TYPES_PER_ACCOUNT))
                 .thenReturn(ACCOUNT_SETTINGS_PREF_VALUE);
-        // Other boolean prefs in BACKUP_NATIVE_SYNC_TYPE_BOOL_PREFS are false by default.
-        when(mPrefService.getBoolean(SyncPrefNames.SYNC_PASSWORDS)).thenReturn(true);
 
         SharedPreferences.Editor editor = prefs.edit();
         // In production some of these prefs can't be present in SharedPreferences at the same time,
@@ -177,10 +158,12 @@ public class ChromeBackupAgentTest {
         editor.putBoolean(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER, false);
         editor.putBoolean(
                 ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_POLICY, false);
+        editor.putBoolean(
+                ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, false);
 
         editor.putBoolean(SHARED_PREF_NOT_BACKED_UP, false);
 
-        doReturn(mAccountInfo).when(mIdentityManagerMock).getPrimaryAccountInfo(anyInt());
+        doReturn(mAccountInfo).when(mIdentityManagerMock).getPrimaryAccountInfo();
         editor.apply();
     }
 
@@ -251,8 +234,9 @@ public class ChromeBackupAgentTest {
      * user.
      */
     @Test
-    public void testOnBackup_firstBackup_signedInNotSyncing()
-            throws IOException, ClassNotFoundException {
+    // ObjectInputStream.readObject() returns Object; casts to generic ArrayList are unchecked.
+    @SuppressWarnings("unchecked")
+    public void testOnBackup_firstBackup_signedIn() throws IOException, ClassNotFoundException {
         // Mock the backup data.
         BackupDataOutput backupData = mock(BackupDataOutput.class);
 
@@ -268,7 +252,6 @@ public class ChromeBackupAgentTest {
         }
 
         // Check that the right things were written to the backup
-        verify(backupData).writeEntityHeader("native." + SyncPrefNames.SYNC_PASSWORDS, 1);
         byte[] accountSettingsPrefBytes =
                 ApiCompatibilityUtils.getBytesUtf8(ACCOUNT_SETTINGS_PREF_VALUE);
         verify(backupData)
@@ -289,14 +272,6 @@ public class ChromeBackupAgentTest {
                                 + ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
                         1);
 
-        verify(backupData, times(DEFAULT_TRUE_BOOL_PREF_COUNT)).writeEntityData(new byte[] {1}, 1);
-        verify(backupData, times(BACKUP_BOOL_PREF_COUNT - DEFAULT_TRUE_BOOL_PREF_COUNT))
-                .writeEntityData(new byte[] {0}, 1);
-        byte[] unameBytes = ApiCompatibilityUtils.getBytesUtf8(mAccountInfo.getEmail());
-        verify(backupData, times(0))
-                .writeEntityHeader(
-                        "AndroidDefault." + ChromeBackupAgentImpl.SYNCING_ACCOUNT_KEY,
-                        unameBytes.length);
         byte[] uidBytes = ApiCompatibilityUtils.getBytesUtf8(mAccountInfo.getGaiaId().toString());
         verify(backupData)
                 .writeEntityHeader(
@@ -312,7 +287,6 @@ public class ChromeBackupAgentTest {
                 new ObjectInputStream(new FileInputStream(stateFile))) {
             ArrayList<String> names = (ArrayList<String>) newStateStream.readObject();
             assertThat(names.size(), equalTo(BACKUP_PREF_COUNT));
-            assertThat(names, hasItem("native." + SyncPrefNames.SYNC_PASSWORDS));
             assertThat(
                     names, hasItem("NativeJsonDict." + SyncPrefNames.SELECTED_TYPES_PER_ACCOUNT));
             assertThat(
@@ -334,7 +308,6 @@ public class ChromeBackupAgentTest {
                     hasItem("AndroidDefault." + ChromeBackupAgentImpl.SIGNED_IN_ACCOUNT_ID_KEY));
             ArrayList<byte[]> values = (ArrayList<byte[]>) newStateStream.readObject();
             assertThat(values.size(), equalTo(BACKUP_PREF_COUNT));
-            assertThat(values, not(hasItem(unameBytes)));
             assertThat(values, hasItem(uidBytes));
             assertThat(values, hasItem(accountSettingsPrefBytes));
             assertThat(values, hasItem(new byte[] {0}));
@@ -490,39 +463,31 @@ public class ChromeBackupAgentTest {
             mAgent.onBackup(null, backupData, newState);
         }
         assertThat(prefs.getInt(ChromeBackupAgentImpl.BACKUP_FAILURE_COUNT, 0), equalTo(0));
-        verify(backupData, times(DEFAULT_TRUE_BOOL_PREF_COUNT)).writeEntityData(new byte[] {1}, 1);
+    }
+
+    private static Pair<String, byte[]> booleanPrefPair(String prefName, boolean value) {
+        return new Pair<>("AndroidDefault." + prefName, value ? new byte[] {1} : new byte[] {0});
+    }
+
+    private static Pair<String, byte[]> stringPrefPair(String prefName, String value) {
+        return new Pair<>("AndroidDefault." + prefName, ApiCompatibilityUtils.getBytesUtf8(value));
     }
 
     private BackupDataInput createMockBackupData(
-            boolean hasSyncingUser, boolean hasSignedInUser, boolean hasAccountSettings)
-            throws IOException {
+            boolean hasSignedInUser, boolean hasAccountSettings) throws IOException {
         // Mock the backup data
         BackupDataInput backupData = mock(BackupDataInput.class);
 
-        String syncingUserEmail = hasSyncingUser ? mAccountInfo.getEmail() : "";
         String signedInUserGaiaId = hasSignedInUser ? mAccountInfo.getGaiaId().toString() : "";
         ArrayList<Pair<String, byte[]>> keysAndValues =
-                new ArrayList(
+                new ArrayList<>(
                         Arrays.asList(
                                 new Pair<>("native." + NATIVE_PREF_NOT_BACKED_UP, new byte[] {1}),
-                                new Pair<>(
-                                        "AndroidDefault."
-                                                + ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE,
-                                        new byte[] {1}),
+                                booleanPrefPair(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE, true),
                                 new Pair<>("AndroidDefault.junk", new byte[] {23, 42}),
-                                new Pair<>(
-                                        "AndroidDefault."
-                                                + ChromeBackupAgentImpl.SYNCING_ACCOUNT_KEY,
-                                        ApiCompatibilityUtils.getBytesUtf8(syncingUserEmail)),
-                                new Pair<>(
-                                        "AndroidDefault."
-                                                + ChromeBackupAgentImpl.SIGNED_IN_ACCOUNT_ID_KEY,
-                                        ApiCompatibilityUtils.getBytesUtf8(signedInUserGaiaId))));
-
-        for (Map.Entry<String, Boolean> entry : mNativeBoolPrefBackupValues.entrySet()) {
-            byte[] value = entry.getValue() ? new byte[] {1} : new byte[] {0};
-            keysAndValues.add(new Pair<>("native." + entry.getKey(), value));
-        }
+                                stringPrefPair(
+                                        ChromeBackupAgentImpl.SIGNED_IN_ACCOUNT_ID_KEY,
+                                        signedInUserGaiaId)));
 
         if (hasAccountSettings) {
             keysAndValues.add(
@@ -588,16 +553,10 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_withSignInUser() throws IOException {
         executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ false,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
+                /* withSignedInUser= */ true, /* withAccountSettings= */ true);
 
         verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
         verifyAccountSettingsBackupRestored(true);
-        // Verify that bool prefs are not migrated to account settings, since the backed-up user
-        // is not previously syncing, even if the flags are enabled.
-        verifyBoolPrefsMigratedToAccountSettings(false);
     }
 
     /**
@@ -607,16 +566,10 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_withSignInUser_noAccountSettings() throws IOException {
         executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ false,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ false);
+                /* withSignedInUser= */ true, /* withAccountSettings= */ false);
 
         verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
         verifyAccountSettingsBackupRestored(false);
-        // Verify that bool prefs are not migrated to account settings, since the backed-up user
-        // is not previously syncing.
-        verifyBoolPrefsMigratedToAccountSettings(false);
     }
 
     /**
@@ -627,16 +580,10 @@ public class ChromeBackupAgentTest {
     public void testOnRestore_withSignInUser_isManaged() throws IOException {
         mIsAccountManaged = true;
         executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ false,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
+                /* withSignedInUser= */ true, /* withAccountSettings= */ true);
 
         verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
         verifyAccountSettingsBackupRestored(true);
-        // Verify that bool prefs are not migrated to account settings, since the backed-up user
-        // is not previously syncing.
-        verifyBoolPrefsMigratedToAccountSettings(false);
     }
 
     /**
@@ -647,106 +594,10 @@ public class ChromeBackupAgentTest {
     public void testOnRestore_withSignInUser_notManaged() throws IOException {
         mIsAccountManaged = false;
         executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ false,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
+                /* withSignedInUser= */ true, /* withAccountSettings= */ true);
 
         verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
         verifyAccountSettingsBackupRestored(true);
-        // Verify that bool prefs are not migrated to account settings, since the backed-up user
-        // is not previously syncing.
-        verifyBoolPrefsMigratedToAccountSettings(false);
-    }
-
-    /**
-     * Test method for {@link ChromeBackupAgent#onRestore}. The backup contains a record for the
-     * previously signed-in user and another for the syncing user.
-     */
-    @Test
-    public void testOnRestore_withSignInAndSyncUser() throws IOException {
-        executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ true,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
-
-        // Verify sign-in restoration.
-        verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
-        verifyAccountSettingsBackupRestored(true);
-        // Verify that global prefs are migrated to account settings, given that flags are enabled,
-        // and the backed-up account was a syncing one.
-        verifyBoolPrefsMigratedToAccountSettings(true);
-    }
-
-    /**
-     * Test method for {@link ChromeBackupAgent#onRestore}. The backup contains a record for the
-     * previously signed-in user and another for the syncing user, and no account settings.
-     */
-    @Test
-    public void testOnRestore_withSignInAndSyncUser_noAccountSettings() throws IOException {
-        executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ true,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ false);
-
-        // Verify sign-in restoration.
-        verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
-        verifyAccountSettingsBackupRestored(false);
-        // Verify that global prefs are migrated to account settings, given that flags are enabled,
-        // and the backed-up account was a syncing one.
-        verifyBoolPrefsMigratedToAccountSettings(true);
-    }
-
-    /**
-     * Test method for {@link ChromeBackupAgent#onRestore}. The backup contains a record for the
-     * previously syncing user, and a record for account settings.
-     */
-    @Test
-    public void testOnRestore_withSyncUserAndAccountSettings() throws IOException {
-        executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ true,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
-
-        verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
-        InOrder inOrder =
-                inOrder(mChromeBackupAgentJniMock, mDictPrefBackupSerializerJniMock, mPrefService);
-        inOrder.verify(mPrefService, times(mNativeBoolPrefBackupValues.size()))
-                .setBoolean(anyString(), anyBoolean());
-        inOrder.verify(mDictPrefBackupSerializerJniMock, times(1))
-                .setDict(
-                        mPrefService,
-                        SyncPrefNames.SELECTED_TYPES_PER_ACCOUNT,
-                        ACCOUNT_SETTINGS_PREF_VALUE);
-        // Verify that global prefs are migrated to account settings, after the account setting
-        // backup is restored.
-        // The migration is done since the corresponding flags are enabled, and the backed-up
-        // account was a syncing one.
-        inOrder.verify(mChromeBackupAgentJniMock, times(1)).commitPendingPrefWrites(mPrefService);
-        inOrder.verifyNoMoreInteractions();
-    }
-
-    /**
-     * Test method for {@link ChromeBackupAgent#onRestore}. The backup contains a record for the
-     * previously syncing user only, and the backup value for SYNC_KEEP_EVERYTHING_SYNCED is true.
-     */
-    @Test
-    public void testOnRestore_withSyncUser_syncEverything() throws IOException {
-        mNativeBoolPrefBackupValues.put(SyncPrefNames.SYNC_KEEP_EVERYTHING_SYNCED, true);
-        executeNormalRestoreAndCheckPrefs(
-                /* withSyncingUser= */ true,
-                /* withSignedInUser= */ true,
-                /* withAccountSettings= */ true);
-
-        verifyRestoreFinishWithSignin();
-        verifySyncTypeBoolPrefsRestored(true);
-        verifyAccountSettingsBackupRestored(true);
-        // Verify that global prefs are migrated to account settings, given that flags are enabled,
-        // and the backed-up account was a syncing one.
-        verifyBoolPrefsMigratedToAccountSettings(true);
     }
 
     /**
@@ -756,16 +607,13 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_noUserInBackup() throws IOException {
         BackupDataInput backupData =
-                createMockBackupData(
-                        /* hasSyncingUser= */ false,
-                        /* hasSignedInUser= */ false,
-                        /* hasAccountSettings= */ true);
+                createMockBackupData(/* hasSignedInUser= */ false, /* hasAccountSettings= */ true);
 
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
             // Triggers a restore.
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
 
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
@@ -780,9 +628,7 @@ public class ChromeBackupAgentTest {
                 equalTo(ChromeBackupAgentImpl.RestoreStatus.NO_SIGNED_IN_ACCOUNT_IN_BACKUP));
         verify(mSigninManager, never()).signin(any(CoreAccountInfo.class), anyInt(), any());
         assertFalse(prefs.contains(ChromePreferenceKeys.BACKUP_FLOW_SIGNIN_ACCOUNT_NAME));
-        verifySyncTypeBoolPrefsRestored(false);
         verifyAccountSettingsBackupRestored(false);
-        verifyBoolPrefsMigratedToAccountSettings(false);
     }
 
     /**
@@ -793,50 +639,41 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_badUser() throws IOException {
         BackupDataInput backupData =
-                createMockBackupData(
-                        /* hasSyncingUser= */ true,
-                        /* hasSignedInUser= */ true,
-                        /* hasAccountSettings= */ true);
+                createMockBackupData(/* hasSignedInUser= */ true, /* hasAccountSettings= */ true);
 
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
             // Do a restore.
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
 
         // Verify that the restore is not done since no valid account can be signed-in.
-        // The signed-in & syncing account is recorded in the backup, but is not present on the
+        // The signed-in account is recorded in the backup, but is not present on the
         // device, so the sign-in can't be done.
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertFalse(prefs.contains(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE));
-        verify(mPrefService, never()).setBoolean(any(), anyBoolean());
         verify(mTaskRunner)
                 .startBackgroundTasks(
                         /* allocateChildConnection= */ false, /* fetchVariationSeed= */ true);
 
         // Verify that no sign-in or prefs restoration is done.
         verifyRestoreFinishWithoutSignin();
-        verifySyncTypeBoolPrefsRestored(false);
         verifyAccountSettingsBackupRestored(false);
-        verifyBoolPrefsMigratedToAccountSettings(false);
     }
 
     /** Test method for {@link ChromeBackupAgent#onRestore} for browser startup failure */
     @Test
     public void testOnRestore_browserStartupFails() throws IOException {
         BackupDataInput backupData =
-                createMockBackupData(
-                        /* hasSyncingUser= */ true,
-                        /* hasSignedInUser= */ true,
-                        /* hasAccountSettings= */ true);
+                createMockBackupData(/* hasSignedInUser= */ true, /* hasAccountSettings= */ true);
         doReturn(false).when(mAgent).initializeBrowser();
 
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
             // Do a restore.
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertFalse(prefs.contains(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE));
@@ -851,17 +688,14 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_afterFirstRun() throws IOException {
         BackupDataInput backupData =
-                createMockBackupData(
-                        /* hasSyncingUser= */ true,
-                        /* hasSignedInUser= */ true,
-                        /* hasAccountSettings= */ true);
+                createMockBackupData(/* hasSignedInUser= */ true, /* hasAccountSettings= */ true);
         FirstRunStatus.setFirstRunFlowComplete(true);
 
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
             // Do a restore.
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertTrue(prefs.contains(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE));
@@ -879,17 +713,14 @@ public class ChromeBackupAgentTest {
     @Test
     public void testOnRestore_alreadySignedIn() throws IOException {
         BackupDataInput backupData =
-                createMockBackupData(
-                        /* hasSyncingUser= */ false,
-                        /* hasSignedInUser= */ true,
-                        /* hasAccountSettings= */ true);
+                createMockBackupData(/* hasSignedInUser= */ true, /* hasAccountSettings= */ true);
         mAccountManagerTestRule.addAccount(mAccountInfo);
-        doReturn(true).when(mIdentityManagerMock).hasPrimaryAccount(anyInt());
+        doReturn(true).when(mIdentityManagerMock).hasPrimaryAccount();
 
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
 
         assertEquals(
@@ -960,7 +791,7 @@ public class ChromeBackupAgentTest {
 
     /**
      * Test that browser startup fails when in a child process. This is important because of
-     * https://crbug.com/718166
+     * https://crbug.com/40518724
      */
     @Test
     public void testInitializeBrowser_childProcess() {
@@ -973,11 +804,9 @@ public class ChromeBackupAgentTest {
     }
 
     private void executeNormalRestoreAndCheckPrefs(
-            boolean withSyncingUser, boolean withSignedInUser, boolean withAccountSettings)
-            throws IOException {
+            boolean withSignedInUser, boolean withAccountSettings) throws IOException {
         BackupDataInput backupData =
                 createMockBackupData(
-                        /* hasSyncingUser= */ withSyncingUser,
                         /* hasSignedInUser= */ withSignedInUser,
                         /* hasAccountSettings= */ withAccountSettings);
         mAccountManagerTestRule.addAccount(mAccountInfo);
@@ -985,14 +814,13 @@ public class ChromeBackupAgentTest {
         try (ParcelFileDescriptor newState =
                 ParcelFileDescriptor.open(
                         mTempDir.newFile(), ParcelFileDescriptor.MODE_WRITE_ONLY)) {
-            mAgent.onRestore(backupData, 0, newState);
+            onRestore(backupData, 0, newState);
         }
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertTrue(prefs.getBoolean(ChromePreferenceKeys.FIRST_RUN_FLOW_COMPLETE, false));
         assertFalse(prefs.contains("junk"));
         assertFalse(prefs.contains(ChromeBackupAgentImpl.SIGNED_IN_ACCOUNT_ID_KEY));
         assertFalse(prefs.contains(SyncPrefNames.SELECTED_TYPES_PER_ACCOUNT));
-        verify(mPrefService, never()).setBoolean(eq(NATIVE_PREF_NOT_BACKED_UP), anyBoolean());
     }
 
     private void verifyRestoreFinishWithSignin() {
@@ -1001,11 +829,11 @@ public class ChromeBackupAgentTest {
                 ChromeBackupAgentImpl.getRestoreStatus(),
                 equalTo(ChromeBackupAgentImpl.RestoreStatus.RESTORE_COMPLETED));
 
-        // Verify that the account is not recorded to trigger the sign-in & sync flow later.
+        // Verify that the account is not recorded to trigger the sign-in flow later.
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertFalse(prefs.contains(ChromePreferenceKeys.BACKUP_FLOW_SIGNIN_ACCOUNT_NAME));
 
-        // Verify that sign-in without sync is triggered for the given account.
+        // Verify that sign-in is triggered for the given account.
         verify(mSigninManager, timeout(CriteriaHelper.DEFAULT_MAX_TIME_TO_POLL))
                 .signin(eq(mAccountInfo), anyInt(), any());
 
@@ -1013,16 +841,6 @@ public class ChromeBackupAgentTest {
             verify(mSigninManager).setUserAcceptedAccountManagement(true);
         } else {
             verify(mSigninManager, never()).setUserAcceptedAccountManagement(anyBoolean());
-        }
-    }
-
-    private void verifySyncTypeBoolPrefsRestored(boolean isRestored) {
-        for (Map.Entry<String, Boolean> entry : mNativeBoolPrefBackupValues.entrySet()) {
-            if (isRestored) {
-                verify(mPrefService, times(1)).setBoolean(entry.getKey(), entry.getValue());
-            } else {
-                verify(mPrefService, never()).setBoolean(eq(entry.getKey()), anyBoolean());
-            }
         }
     }
 
@@ -1039,16 +857,6 @@ public class ChromeBackupAgentTest {
         }
     }
 
-    private void verifyBoolPrefsMigratedToAccountSettings(boolean isMigrated) {
-        if (isMigrated) {
-            verify(mChromeBackupAgentJniMock, times(1))
-                    .migrateGlobalDataTypePrefsToAccount(mPrefService, mAccountInfo.getGaiaId());
-        } else {
-            verify(mChromeBackupAgentJniMock, never())
-                    .migrateGlobalDataTypePrefsToAccount(any(), any());
-        }
-    }
-
     private void verifyRestoreFinishWithoutSignin() {
         // Verify that the status of the restore has been recorded.
         assertThat(
@@ -1058,8 +866,22 @@ public class ChromeBackupAgentTest {
         // Verify that the sign-in is not triggered immediately.
         verify(mSigninManager, never()).signin(any(CoreAccountInfo.class), anyInt(), any());
 
-        // Verify that the account is not recorded to trigger the sign-in & sync flow later.
+        // Verify that the account is not recorded to trigger the sign-in flow later.
         SharedPreferences prefs = ContextUtils.getAppSharedPreferences();
         assertFalse(prefs.contains(ChromePreferenceKeys.BACKUP_FLOW_SIGNIN_ACCOUNT_NAME));
+    }
+
+    private void onRestore(
+            BackupDataInput data, int appVersionCode, ParcelFileDescriptor newState) {
+        PostTask.postTask(
+                TaskTraits.USER_BLOCKING,
+                () -> {
+                    try {
+                        mAgent.onRestore(data, appVersionCode, newState);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+        RobolectricUtil.runAllBackgroundAndUiAllowBlocking();
     }
 }

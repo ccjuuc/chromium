@@ -12,6 +12,7 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability.h"
@@ -21,26 +22,30 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
+class PrefService;
 class Profile;
 
 namespace content {
 class BrowserContext;
 }  // namespace content
 
-namespace signin {
-class IdentityManager;
-}  // namespace signin
-
 namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
+namespace signin {
+class IdentityManager;
+}  // namespace signin
 
 namespace arc {
 
 class ArcAuthCodeFetcher;
 class ArcBackgroundAuthCodeFetcher;
 class ArcBridgeService;
-class ArcFetcherBase;
 
 inline constexpr char kArcAuthRequestAccountInfoResultPrimaryHistogramName[] =
     "Arc.Auth.RequestAccountInfoResult.Primary";
@@ -201,7 +206,7 @@ class ArcAuthService : public KeyedService,
 
   // Deletes a completed enrollment token / auth code fetch request from
   // |pending_token_requests_|.
-  void DeletePendingTokenRequest(ArcFetcherBase* fetcher);
+  void DeletePendingTokenRequest(ArcAuthCodeFetcher* fetcher);
 
   // Triggers an async push of the accounts in IdentityManager to ARC.
   // If |filter_primary_account| is set to |true|, the Primary Account in Chrome
@@ -223,6 +228,12 @@ class ArcAuthService : public KeyedService,
   // Response for |mojom::GetMainAccountResolutionStatus|.
   void OnMainAccountResolutionStatus(mojom::MainAccountResolutionStatus status);
 
+  const raw_ref<PrefService> local_state_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      system_url_loader_factory_;
+  const raw_ptr<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+
   std::unique_ptr<Delegate> delegate_;
 
   // Non-owning pointers.
@@ -235,7 +246,7 @@ class ArcAuthService : public KeyedService,
   bool url_loader_factory_for_testing_set_ = false;
 
   // A list of pending enrollment token / auth code requests.
-  std::vector<std::unique_ptr<ArcFetcherBase>> pending_token_requests_;
+  std::vector<std::unique_ptr<ArcAuthCodeFetcher>> pending_token_requests_;
 
   // Pending callback for |GetGoogleAccountsInArc| if ARC bridge is not yet
   // ready.

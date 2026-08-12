@@ -15,11 +15,13 @@ import static org.mockito.Mockito.verify;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
@@ -27,6 +29,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browsing_data.content.BrowsingDataInfo;
 import org.chromium.components.browsing_data.content.BrowsingDataModel;
 import org.chromium.content_public.browser.BrowserContextHandle;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
@@ -50,6 +53,7 @@ public class SiteDataCleanerUnitTest {
     public static final WebsiteGroup GROUP =
             new WebsiteGroup(
                     GOOGLE_COM, new ArrayList<>(Arrays.asList(ORIGIN_1, ORIGIN_2, ORIGIN_3)));
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private WebsitePreferenceBridge.Natives mBridgeMock;
 
@@ -61,7 +65,6 @@ public class SiteDataCleanerUnitTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         WebsitePreferenceBridgeJni.setInstanceForTesting(mBridgeMock);
         doReturn(mContextHandle).when(mSiteSettingsDelegate).getBrowserContextHandle();
     }
@@ -91,7 +94,7 @@ public class SiteDataCleanerUnitTest {
 
         doAnswer(this::mockBDMCallback)
                 .when(mSiteSettingsDelegate)
-                .getBrowsingDataModel(any(Callback.class));
+                .getBrowsingDataModel(MockitoHelper.anyCallback());
 
         doAnswer(this::mockBDMRemoveCallback)
                 .when(mBrowsingDataModel)
@@ -122,7 +125,7 @@ public class SiteDataCleanerUnitTest {
     }
 
     private Object mockBDMCallback(InvocationOnMock invocation) {
-        var callback = (Callback<BrowsingDataModel>) invocation.getArguments()[0];
+        Callback<BrowsingDataModel> callback = invocation.getArgument(0);
         callback.onResult(mBrowsingDataModel);
         return null;
     }

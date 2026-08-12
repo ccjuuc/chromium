@@ -29,6 +29,7 @@
 #include <limits>
 
 #include "build/build_config.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_oscillator_type.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_graph_tracer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
@@ -60,7 +61,7 @@ OscillatorNode::OscillatorNode(BaseAudioContext& context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypeOscillatorFrequency,
           kDefaultFrequencyValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable,
           /*min_value=*/-context.sampleRate() / 2,
           /*max_value=*/context.sampleRate() / 2)),
@@ -70,13 +71,12 @@ OscillatorNode::OscillatorNode(BaseAudioContext& context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypeOscillatorDetune,
           kDefaultDetuneValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable,
           /*min_value=*/-1200 * log2f(std::numeric_limits<float>::max()),
           /*max_value=*/1200 * log2f(std::numeric_limits<float>::max()))) {
   SetHandler(
-      OscillatorHandler::Create(*this, context.sampleRate(), oscillator_type,
-                                wave_table ? wave_table->impl() : nullptr,
+      OscillatorHandler::Create(*this, context.sampleRate(),
                                 frequency_->Handler(), detune_->Handler()));
 }
 
@@ -86,8 +86,20 @@ OscillatorNode* OscillatorNode::Create(BaseAudioContext& context,
                                        ExceptionState& exception_state) {
   DCHECK(IsMainThread());
 
-  return MakeGarbageCollected<OscillatorNode>(context, oscillator_type,
-                                              wave_table);
+  auto* node = MakeGarbageCollected<OscillatorNode>(context,
+                                                    oscillator_type,
+                                                    wave_table);
+  if (wave_table) {
+    node->GetOscillatorHandler().SetInitialPeriodicWave(wave_table->impl());
+  } else {
+    if (!node->GetOscillatorHandler().SetInitialType(oscillator_type)) {
+      exception_state.ThrowDOMException(
+          DOMExceptionCode::kNotSupportedError,
+          "Failed to initialize oscillator due to insufficient memory.");
+      return nullptr;
+    }
+  }
+  return node;
 }
 
 OscillatorNode* OscillatorNode::Create(BaseAudioContext* context,

@@ -9,7 +9,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/successful_position_fallback.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_field.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/core/style/position_try_fallbacks.h"
 #include "third_party/blink/renderer/platform/geometry/physical_offset.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
@@ -18,21 +18,33 @@
 
 namespace blink {
 
+enum class RememberedScrollOffsetType { kLayout, kRangeAdjustment };
+
 class CSSPropertyValueSet;
 class Element;
 class LayoutBox;
 class LayoutObject;
 
-class CORE_EXPORT OutOfFlowData final
-    : public GarbageCollected<OutOfFlowData>,
-      public ElementRareDataField {
+class CORE_EXPORT OutOfFlowData final : public GarbageCollected<OutOfFlowData>,
+                                        public NodeRareDataField {
  public:
+  struct ScrollOffsetPair {
+    PhysicalOffset scroll_offset_for_layout;
+    PhysicalOffset scroll_offset_for_range_adjustment;
+
+    bool operator==(const ScrollOffsetPair& other) const {
+      return scroll_offset_for_layout == other.scroll_offset_for_layout &&
+             scroll_offset_for_range_adjustment ==
+                 other.scroll_offset_for_range_adjustment;
+    }
+  };
+
   class RememberedScrollOffsets
       : public GarbageCollected<RememberedScrollOffsets> {
    public:
     RememberedScrollOffsets() = default;
 
-    std::optional<PhysicalOffset> GetOffsetForAnchor(
+    std::optional<ScrollOffsetPair> GetOffsetsForAnchor(
         const Element* anchor) const {
       if (!anchor) {
         return std::nullopt;
@@ -41,8 +53,28 @@ class CORE_EXPORT OutOfFlowData final
       return it != offsets_.end() ? std::make_optional(it->value)
                                   : std::nullopt;
     }
-    void SetOffsetForAnchor(const Element* anchor, PhysicalOffset offset) {
-      offsets_.Set(anchor, offset);
+    std::optional<PhysicalOffset> GetOffset(const Element* anchor,
+                                            RememberedScrollOffsetType type,
+                                            bool needs_x,
+                                            bool needs_y) const {
+      if (const auto& offsets = GetOffsetsForAnchor(anchor)) {
+        PhysicalOffset result =
+            type == RememberedScrollOffsetType::kLayout
+                ? offsets->scroll_offset_for_layout
+                : offsets->scroll_offset_for_range_adjustment;
+        if (!needs_x) {
+          result.left = LayoutUnit();
+        }
+        if (!needs_y) {
+          result.top = LayoutUnit();
+        }
+        return result;
+      }
+      return std::nullopt;
+    }
+    void SetOffsetsForAnchor(const Element* anchor,
+                             const ScrollOffsetPair& offsets) {
+      offsets_.Set(anchor, offsets);
     }
 
     bool operator==(const RememberedScrollOffsets& other) const {
@@ -54,7 +86,7 @@ class CORE_EXPORT OutOfFlowData final
     String ToString() const;
 
    private:
-    HeapHashMap<WeakMember<const Element>, PhysicalOffset> offsets_;
+    HeapHashMap<WeakMember<const Element>, ScrollOffsetPair> offsets_;
   };
 
   // For each layout of an OOF that ever had a successful try fallback, register
@@ -105,22 +137,6 @@ class CORE_EXPORT OutOfFlowData final
     return last_successful_position_fallback_.index_;
   }
 
-  // Return the offset caused by scrolling in all containers up to (but not
-  // including) the containing block of this anchored element, at the latest
-  // anchor recalculation point.
-  //
-  // This value is updated at an "anchor recalculation point". This occurs when
-  // the element is initially laid out, and when switching to a different
-  // position option.
-  PhysicalOffset DefaultAnchorScrollShift() const {
-    return default_anchor_scroll_shift_;
-  }
-
-  // See DefaultAnchorScrollShift(). This function returns that offset, except
-  // that it's based on the current scroll offsets, not what the offsets were at
-  // the last "anchor recalculation point".
-  PhysicalOffset PotentialNextDefaultAnchorScrollShift(const LayoutBox&) const;
-
   // Return true if there's any stale successful position fallback data (if
   // `position-try-fallbacks` has changed).
   bool HasStaleFallbackData(const LayoutBox&) const;
@@ -144,8 +160,6 @@ class CORE_EXPORT OutOfFlowData final
   // here. Will be copied to the last_successful_position_fallback_ at next
   // resize observer update.
   SuccessfulPositionFallback new_successful_position_fallback_;
-
-  PhysicalOffset default_anchor_scroll_shift_;
 
   Member<const RememberedScrollOffsets> remembered_scroll_offsets_;
   Member<const RememberedScrollOffsets> pending_remembered_scroll_offsets_;

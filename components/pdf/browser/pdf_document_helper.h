@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "content/public/browser/document_user_data.h"
@@ -43,6 +44,15 @@ class PDFDocumentHelper
       public ui::TouchSelectionMenuClient,
       public content::TouchSelectionControllerClientManager::Observer {
  public:
+  using PdfListener = ::pdf::mojom::PdfListener;
+
+  // Registers a callback to be called when a `PDFDocumentHelper` is created
+  // for `web_contents`. This should only be called if a `PDFDocumentHelper`
+  // does not already exist for `web_contents`.
+  static base::CallbackListSubscription RegisterForCreate(
+      content::WebContents& web_contents,
+      base::OnceClosure callback);
+
   PDFDocumentHelper(const PDFDocumentHelper&) = delete;
   PDFDocumentHelper& operator=(const PDFDocumentHelper&) = delete;
 
@@ -54,7 +64,7 @@ class PDFDocumentHelper
       std::unique_ptr<PDFDocumentHelperClient> client);
 
   static PDFDocumentHelper* MaybeGetForWebContents(
-      content::WebContents* contents);
+      content::WebContents& contents);
 
   // content::RenderWidgetHostObserver:
   void RenderWidgetHostDestroyed(
@@ -74,10 +84,10 @@ class PDFDocumentHelper
   void DidScroll() override;
 
   // ui::TouchSelectionMenuClient:
-  bool IsCommandIdEnabled(int command_id) const override;
+  bool IsCommandIdEnabled(int command_id, bool can_paste) const override;
   void ExecuteCommand(int command_id, int event_flags) override;
   void RunContextMenu() override;
-  bool ShouldShowQuickMenu() override;
+  bool ShouldShowQuickMenu(bool can_paste) override;
   std::u16string GetSelectedText() override;
 
   // content::TouchSelectionControllerClientManager::Observer:
@@ -87,8 +97,7 @@ class PDFDocumentHelper
   // pdf::mojom::PdfHost:
   void SetListener(mojo::PendingRemote<mojom::PdfListener> listener) override;
   void OnDocumentLoadComplete() override;
-  void SaveUrlAs(const GURL& url,
-                 network::mojom::ReferrerPolicy policy) override;
+  void SavePdf() override;
   void UpdateContentRestrictions(int32_t content_restrictions) override;
   void SelectionChanged(const gfx::PointF& left,
                         int32_t left_height,
@@ -126,8 +135,8 @@ class PDFDocumentHelper
   // Registers `callback` to be run when document load completes successfully.
   // When the PDF is already loaded, `callback` is invoked immediately. Will not
   // be invoked when the load fails. This is useful to wait for document
-  // metadata to be loaded, before calls to `GetPdfBytes()`, and `GetPageText()`
-  // should be made.
+  // metadata to be loaded, before calls to `GetPdfBytes()`, `GetPageText()`,
+  // `HasMeaningfulText()` and `HasJavaScript()` should be made.
   //
   // This `callback` will run before
   // `PDFDocumentHelperClient::OnDocumentLoadComplete()`.
@@ -137,6 +146,18 @@ class PDFDocumentHelper
   // Returns whether document is searchified.
   bool SearchifyStarted() const { return searchify_started_; }
 #endif
+
+  // Queries whether the PDF document has meaningful text. If called before the
+  // document is loaded, the callback will be invoked with false.
+  void HasMeaningfulText(PdfListener::HasMeaningfulTextCallback callback);
+
+  // Queries whether the PDF document has JavaScript actions. If called before
+  // the document is loaded, the callback will be invoked with `false`.
+  void HasJavaScript(PdfListener::HasJavaScriptCallback callback);
+
+  // Queries whether the PDF document is password protected. If called before
+  // the document is loaded, the callback will be invoked with `false`.
+  void IsPasswordProtected(PdfListener::IsPasswordProtectedCallback callback);
 
  private:
   friend class content::DocumentUserData<PDFDocumentHelper>;

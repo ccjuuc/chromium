@@ -6,7 +6,6 @@ import 'chrome://shimless-rma/shimless_rma.js';
 
 import {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
-import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {strictQuery} from 'chrome://resources/ash/common/typescript_utils/strict_query.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {FakeShimlessRmaService} from 'chrome://shimless-rma/fake_shimless_rma_service.js';
@@ -14,7 +13,7 @@ import {setShimlessRmaServiceForTesting} from 'chrome://shimless-rma/mojo_interf
 import {Shimless3pDiagnostics} from 'chrome://shimless-rma/shimless_3p_diagnostics.js';
 import {ShimlessRma} from 'chrome://shimless-rma/shimless_rma.js';
 import {Show3pDiagnosticsAppResult} from 'chrome://shimless-rma/shimless_rma.mojom-webui.js';
-import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
@@ -56,7 +55,6 @@ suite('shimless3pDiagTest', function() {
     hasDisabledAllButtons = false;
     isAllButtonsDisabled = false;
 
-    loadTimeData.overrideValues({'3pDiagnosticsEnabled': true});
     service.setGet3pDiagnosticsProviderResult(providerName);
     service.setInstallable3pDiagnosticsAppPath(null);
     service.setInstallLastFound3pDiagnosticsApp(null);
@@ -101,7 +99,7 @@ suite('shimless3pDiagTest', function() {
   }
 
   function pressKey(
-      key: string, altKey: boolean, shiftKey: boolean): Promise<void> {
+      key: string, altKey: boolean, shiftKey: boolean): Promise<KeyboardEvent> {
     assert(component);
     const eventPromise = eventToPromise('keydown', component);
     component.dispatchEvent(new KeyboardEvent(
@@ -117,7 +115,7 @@ suite('shimless3pDiagTest', function() {
     return eventPromise;
   }
 
-  function pressEnterOnDialog(selector: string): Promise<void> {
+  function pressEnterOnDialog(selector: string): Promise<KeyboardEvent> {
     assert(component);
     const dialog = strictQuery(selector, component.shadowRoot, CrDialogElement);
     const eventPromise = eventToPromise('keypress', dialog);
@@ -132,7 +130,7 @@ suite('shimless3pDiagTest', function() {
     return eventPromise;
   }
 
-  function cancelDialog(selector: string): Promise<void> {
+  function cancelDialog(selector: string): Promise<Event> {
     assert(component);
     const dialog = strictQuery(selector, component.shadowRoot, CrDialogElement);
     const eventPromise = eventToPromise('cancel', component);
@@ -145,18 +143,6 @@ suite('shimless3pDiagTest', function() {
   test('initialize', async () => {
     await initialize();
     assert(component);
-  });
-
-  // Verify 3p diag is disabled by flag.
-  test('3pDiagIsDisabledByFlag', async () => {
-    loadTimeData.overrideValues({'3pDiagnosticsEnabled': false});
-    await initialize();
-
-    assert(component);
-    component.launch3pDiagnostics();
-
-    await flushTasks();
-    assertFalse(hasDisabledAllButtons);
   });
 
   // If provider is not yet fetched, should not trigger the launch.

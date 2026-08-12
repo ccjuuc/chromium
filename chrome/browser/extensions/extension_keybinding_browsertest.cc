@@ -6,6 +6,7 @@
 // For UI interactive tests, see extension_keybinding_apitest.cc.
 
 #include "base/strings/stringprintf.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/commands/command_service.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_apitest.h"
@@ -94,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(CommandsBrowserTest, PageActionKeyUpdated) {
 }
 
 // Verify that keyboard shortcut takes effect without reloading the extension.
-// Regression test for https://crbug.com/1190476.
+// Regression test for https://crbug.com/40756021.
 IN_PROC_BROWSER_TEST_F(CommandsBrowserTest, ActionKeyUpdated) {
   ASSERT_TRUE(embedded_test_server()->Start());
   ASSERT_TRUE(RunExtensionTest("keybinding/action")) << message_;

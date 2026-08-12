@@ -239,10 +239,6 @@
     visibility: visible;
   }
 
-  :host(:not([enable-region-context-menu])) #selectedRegionContextMenu {
-    display: none;
-  }
-
   .context-menu-item {
     align-items: center;
     align-self: stretch;
@@ -399,7 +395,6 @@
     <div id="extraScrim"></div>
     <overlay-shimmer-canvas
       hidden$="[[disableShimmer || enableBorderGlow]]"
-      theme="[[theme]]"
       id="overlayShimmerCanvas"
     ></overlay-shimmer-canvas>
     <template is="dom-if" if="[[enableBorderGlow]]">
@@ -417,12 +412,10 @@
     <lens-object-layer
       id="objectSelectionLayer"
       screenshot-data-uri="[[screenshotDataUri]]"
-      theme="[[theme]]"
     >
     </lens-object-layer>
     <region-selection
       id="regionSelectionLayer"
-      theme="[[theme]]"
       screenshot-data-uri="[[screenshotDataUri]]"
       selection-overlay-rect="[[selectionOverlayRect]]"
       border-glow-enabled="[[enableBorderGlow]]"

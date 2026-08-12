@@ -150,8 +150,6 @@ void EventSource::Connect() {
   request.SetHttpMethod(http_names::kGET);
   request.SetHttpHeaderField(http_names::kAccept,
                              AtomicString("text/event-stream"));
-  request.SetHttpHeaderField(http_names::kCacheControl,
-                             AtomicString("no-cache"));
   request.SetRequestContext(mojom::blink::RequestContextType::EVENT_SOURCE);
   request.SetFetchLikeAPI(true);
   request.SetMode(network::mojom::RequestMode::kCors);
@@ -163,14 +161,7 @@ void EventSource::Connect() {
   request.SetCorsPreflightPolicy(
       network::mojom::CorsPreflightPolicy::kPreventPreflight);
   if (parser_ && !parser_->LastEventId().empty()) {
-    // HTTP headers are Latin-1 byte strings, but the Last-Event-ID header is
-    // encoded as UTF-8.
-    // TODO(davidben): This should be captured in the type of
-    // setHTTPHeaderField's arguments.
-    std::string last_event_id_utf8 = parser_->LastEventId().Utf8();
-    request.SetHttpHeaderField(
-        http_names::kLastEventID,
-        AtomicString(base::as_byte_span(last_event_id_utf8)));
+    request.SetEventSourceLastEventId(parser_->LastEventId());
   }
 
   ResourceLoaderOptions resource_loader_options(world_);
@@ -257,32 +248,29 @@ void EventSource::DidReceiveResponse(uint64_t identifier,
     const String& charset = response.TextEncodingName();
     // If we have a charset, the only allowed value is UTF-8 (case-insensitive).
     response_is_valid =
-        charset.empty() || EqualIgnoringASCIICase(charset, "UTF-8");
+        charset.empty() || EqualIgnoringAsciiCase(charset, "UTF-8");
     if (!response_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a charset (\"");
-      message.Append(charset);
-      message.Append("\") that is not UTF-8. Aborting the connection.");
+      String message =
+          StrCat({"EventSource's response has a charset (\"", charset,
+                  "\") that is not UTF-8. Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   } else {
     // To keep the signal-to-noise ratio low, we only log 200-response with an
     // invalid MIME type.
     if (status_code == 200 && !mime_type_is_valid) {
-      StringBuilder message;
-      message.Append("EventSource's response has a MIME type (\"");
-      message.Append(response.MimeType());
-      message.Append(
-          "\") that is not \"text/event-stream\". Aborting the connection.");
+      String message = StrCat(
+          {"EventSource's response has a MIME type (\"", response.MimeType(),
+           "\") that is not \"text/event-stream\". Aborting the connection."});
       // FIXME: We are missing the source line.
       GetExecutionContext()->AddConsoleMessage(
           MakeGarbageCollected<ConsoleMessage>(
-              mojom::ConsoleMessageSource::kJavaScript,
-              mojom::ConsoleMessageLevel::kError, message.ToString()));
+              mojom::blink::ConsoleMessageSource::kJavaScript,
+              mojom::blink::ConsoleMessageLevel::kError, message));
     }
   }
 

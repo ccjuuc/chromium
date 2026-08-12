@@ -172,6 +172,24 @@ class SearchSuggestionParser {
                   bool should_prefetch,
                   bool should_prerender,
                   const std::u16string& input_text);
+    SuggestResult(
+        const std::u16string& suggestion,
+        AutocompleteMatchType::Type type,
+        omnibox::SuggestType suggest_type,
+        std::vector<int> subtypes,
+        const std::u16string& match_contents,
+        const std::u16string& match_contents_prefix,
+        const std::u16string& annotation,
+        omnibox::EntityInfo entity_info,
+        const std::string& deletion_url,
+        bool from_keyword,
+        omnibox::NavigationalIntent navigational_intent,
+        int relevance,
+        bool relevance_from_server,
+        bool should_prefetch,
+        bool should_prerender,
+        const std::u16string& input_text,
+        std::optional<omnibox::SuggestTemplateInfo> suggest_template_info);
     SuggestResult(const SuggestResult& result);
     ~SuggestResult() override;
 
@@ -394,15 +412,30 @@ class SearchSuggestionParser {
   // Parses JSON response received from the provider, stripping XSSI
   // protection if needed. Returns the parsed data if successful, NULL
   // otherwise.
-  static std::optional<base::Value::List> DeserializeJsonData(
+  static std::optional<base::ListValue> DeserializeJsonData(
       std::string_view json_data);
+
+  // The options struct for ParseSuggestResultsWithOptions
+  struct ParseSuggestResultsOptions {
+    bool allow_empty_suggestion = false;
+  };
 
   // Parses results from the suggest server and updates the appropriate suggest
   // and navigation result lists in |results|. |is_keyword_result| indicates
   // whether the response was received from the keyword provider.
   // Returns whether the appropriate result list members were updated.
   static bool ParseSuggestResults(
-      const base::Value::List& root_list,
+      const base::ListValue& root_list,
+      const AutocompleteInput& input,
+      const AutocompleteSchemeClassifier& scheme_classifier,
+      int default_result_relevance,
+      bool is_keyword_result,
+      const ParseSuggestResultsOptions& options,
+      Results* results);
+
+  // ParseSuggestResultsWithOptions with optional values set to their default
+  static bool ParseSuggestResults(
+      const base::ListValue& root_list,
       const AutocompleteInput& input,
       const AutocompleteSchemeClassifier& scheme_classifier,
       int default_result_relevance,

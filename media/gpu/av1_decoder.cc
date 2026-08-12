@@ -100,28 +100,58 @@ VideoChromaSampling GetAV1ChromaSampling(
   }
 }
 
-gfx::HdrMetadataSmpteSt2086 ToGfxSmpteSt2086(
+skhdr::MasteringDisplayColorVolume ToSkHdrMDCV(
     const libgav1::ObuMetadataHdrMdcv& mdcv) {
   constexpr auto kChromaDenominator = 65536.0f;
   constexpr auto kLumaMaxDenoninator = 256.0f;
   constexpr auto kLumaMinDenoninator = 16384.0f;
   // display primaries are in R/G/B order in metadata_hdr_mdcv OBU Metadata.
-  return gfx::HdrMetadataSmpteSt2086(
-      {mdcv.primary_chromaticity_x[0] / kChromaDenominator,
-       mdcv.primary_chromaticity_y[0] / kChromaDenominator,
-       mdcv.primary_chromaticity_x[1] / kChromaDenominator,
-       mdcv.primary_chromaticity_y[1] / kChromaDenominator,
-       mdcv.primary_chromaticity_x[2] / kChromaDenominator,
-       mdcv.primary_chromaticity_y[2] / kChromaDenominator,
-       mdcv.white_point_chromaticity_x / kChromaDenominator,
-       mdcv.white_point_chromaticity_y / kChromaDenominator},
-      /*luminance_max=*/mdcv.luminance_max / kLumaMaxDenoninator,
-      /*luminance_min=*/mdcv.luminance_min / kLumaMinDenoninator);
+  return {.fDisplayPrimaries =
+              {mdcv.primary_chromaticity_x[0] / kChromaDenominator,
+               mdcv.primary_chromaticity_y[0] / kChromaDenominator,
+               mdcv.primary_chromaticity_x[1] / kChromaDenominator,
+               mdcv.primary_chromaticity_y[1] / kChromaDenominator,
+               mdcv.primary_chromaticity_x[2] / kChromaDenominator,
+               mdcv.primary_chromaticity_y[2] / kChromaDenominator,
+               mdcv.white_point_chromaticity_x / kChromaDenominator,
+               mdcv.white_point_chromaticity_y / kChromaDenominator},
+          .fMaximumDisplayMasteringLuminance =
+              mdcv.luminance_max / kLumaMaxDenoninator,
+          .fMinimumDisplayMasteringLuminance =
+              mdcv.luminance_min / kLumaMinDenoninator};
 }
 
-gfx::HdrMetadataCta861_3 ToGfxCta861_3(const libgav1::ObuMetadataHdrCll& cll) {
-  return gfx::HdrMetadataCta861_3(cll.max_cll, cll.max_fall);
+skhdr::ContentLightLevelInformation ToSkHdrCLLI(
+    const libgav1::ObuMetadataHdrCll& cll) {
+  return skhdr::ContentLightLevelInformation::MakeUint16(
+      /*maxCLL=*/cll.max_cll, /*maxFALL=*/cll.max_fall);
 }
+bool RequiresHardwareContextReset(
+    const libgav1::ObuSequenceHeader& old_header,
+    const libgav1::ObuSequenceHeader& new_header) {
+  // Changes to these fields require re-allocating GPU memory pools and context.
+  return old_header.use_128x128_superblock !=
+             new_header.use_128x128_superblock ||
+         old_header.film_grain_params_present !=
+             new_header.film_grain_params_present ||
+         old_header.enable_cdef != new_header.enable_cdef ||
+         old_header.enable_restoration != new_header.enable_restoration ||
+         old_header.enable_superres != new_header.enable_superres ||
+         old_header.enable_filter_intra != new_header.enable_filter_intra ||
+         old_header.enable_intra_edge_filter !=
+             new_header.enable_intra_edge_filter ||
+         old_header.enable_interintra_compound !=
+             new_header.enable_interintra_compound ||
+         old_header.enable_masked_compound !=
+             new_header.enable_masked_compound ||
+         old_header.enable_warped_motion != new_header.enable_warped_motion ||
+         old_header.enable_dual_filter != new_header.enable_dual_filter ||
+         old_header.enable_order_hint != new_header.enable_order_hint ||
+         old_header.order_hint_bits != new_header.order_hint_bits ||
+         old_header.enable_jnt_comp != new_header.enable_jnt_comp ||
+         old_header.enable_ref_frame_mvs != new_header.enable_ref_frame_mvs;
+}
+
 }  // namespace
 
 scoped_refptr<AV1Picture> AV1Decoder::AV1Accelerator::CreateAV1PictureSecure(
@@ -196,6 +226,9 @@ void AV1Decoder::SetStream(int32_t id,
                            scoped_refptr<DecoderBuffer> decoder_buffer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(decoder_buffer);
+  // Keep the old buffer alive until the end of this function to ensure
+  // that any active spans in the parser are cleared before the memory is freed.
+  auto outgoing_decoder_buffer = std::move(decoder_buffer_);
   decoder_buffer_ = std::move(decoder_buffer);
   stream_id_ = id;
   ClearCurrentFrame();
@@ -294,23 +327,20 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
           return kDecodeError;
         }
 
-        current_sequence_header_ = parser_->sequence_header();
+        const auto& new_sequence_header = parser_->sequence_header();
         VideoChromaSampling new_chroma_sampling =
-            GetAV1ChromaSampling(current_sequence_header_->color_config);
-        if (new_chroma_sampling != chroma_sampling_) {
-          chroma_sampling_ = new_chroma_sampling;
-        }
+            GetAV1ChromaSampling(new_sequence_header.color_config);
 
-        if (chroma_sampling_ != VideoChromaSampling::k420 &&
-            chroma_sampling_ != VideoChromaSampling::k444) {
+        if (new_chroma_sampling != VideoChromaSampling::k420 &&
+            new_chroma_sampling != VideoChromaSampling::k444) {
           DVLOG(1) << "Only YUV 4:2:0 and YUV 4:4:4 are supported";
           return kDecodeError;
         }
 
         const VideoCodecProfile new_profile =
-            AV1ProfileToVideoCodecProfile(current_sequence_header_->profile);
+            AV1ProfileToVideoCodecProfile(new_sequence_header.profile);
         const uint8_t new_bit_depth = base::checked_cast<uint8_t>(
-            current_sequence_header_->color_config.bitdepth);
+            new_sequence_header.color_config.bitdepth);
         if (!IsValidBitDepth(new_bit_depth, new_profile)) {
           DVLOG(1) << "Invalid bit depth="
                    << base::strict_cast<int>(new_bit_depth)
@@ -319,12 +349,21 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
         }
 
         const gfx::Size new_frame_size(
-            base::strict_cast<int>(current_sequence_header_->max_frame_width),
-            base::strict_cast<int>(current_sequence_header_->max_frame_height));
+            base::strict_cast<int>(new_sequence_header.max_frame_width),
+            base::strict_cast<int>(new_sequence_header.max_frame_height));
         gfx::Rect new_visible_rect(
             base::strict_cast<int>(current_frame_header_->width),
             base::strict_cast<int>(current_frame_header_->height));
+
         DCHECK(!new_frame_size.IsEmpty());
+        if (new_frame_size.width() > limits::kMaxDimension ||
+            new_frame_size.height() > limits::kMaxDimension ||
+            new_frame_size.GetCheckedArea().ValueOrDefault(
+                std::numeric_limits<int>::max()) > limits::kMaxCanvas) {
+          DVLOG(1) << "AV1 max_frame_size " << new_frame_size.ToString()
+                   << " exceeds media::limits";
+          return kDecodeError;
+        }
         if (!gfx::Rect(new_frame_size).Contains(new_visible_rect)) {
           DVLOG(1) << "Render size exceeds picture size. render size: "
                    << new_visible_rect.ToString()
@@ -332,7 +371,7 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
           new_visible_rect = gfx::Rect(new_frame_size);
         }
 
-        const auto& cc = current_sequence_header_->color_config;
+        const auto& cc = new_sequence_header.color_config;
         const VideoColorSpace header_color_space =
             VideoColorSpace(cc.color_primary, cc.transfer_characteristics,
                             cc.matrix_coefficients,
@@ -354,23 +393,36 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
                                   new_color_space != picture_color_space_;
         }
 
+        const bool structural_change =
+            current_sequence_header_ &&
+            RequiresHardwareContextReset(*current_sequence_header_,
+                                         new_sequence_header);
+
+        current_sequence_header_ = new_sequence_header;
         ClearReferenceFrames();
-        // Issues kConfigChange only if either the dimensions, profile or bit
-        // depth is changed.
+
+        // Issue kConfigChange if the sequence header changed significantly,
+        // OR if the visible rect/color space changed.
         if (frame_size_ != new_frame_size ||
             visible_rect_ != new_visible_rect || profile_ != new_profile ||
-            bit_depth_ != new_bit_depth || is_color_space_change) {
-          DVLOG(1) << "New profile: " << GetProfileName(new_profile)
+            bit_depth_ != new_bit_depth ||
+            chroma_sampling_ != new_chroma_sampling || is_color_space_change ||
+            structural_change) {
+          DVLOG(1) << "Configuration changed. New profile: "
+                   << GetProfileName(new_profile)
                    << ", new resolution: " << new_frame_size.ToString()
                    << ", new visible rect: " << new_visible_rect.ToString()
                    << ", new bit depth: "
                    << base::strict_cast<int>(new_bit_depth)
                    << ", new color space: " << new_color_space.ToString();
+
           frame_size_ = new_frame_size;
           visible_rect_ = new_visible_rect;
           profile_ = new_profile;
           bit_depth_ = new_bit_depth;
           picture_color_space_ = new_color_space;
+          chroma_sampling_ = new_chroma_sampling;
+
           std::move(clear_current_frame).Cancel();
           return kConfigChange;
         }
@@ -469,21 +521,22 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
     // Thus we should also extract HDR metadata here in case we
     // miss the information.
     if (current_frame_->hdr_cll_set()) {
-      hdr_metadata_.cta_861_3 = ToGfxCta861_3(current_frame_->hdr_cll());
+      hdr_metadata_bitstream_.SetCLLI(ToSkHdrCLLI(current_frame_->hdr_cll()));
     }
     if (current_frame_->hdr_mdcv_set()) {
-      hdr_metadata_.smpte_st_2086 =
-          ToGfxSmpteSt2086(current_frame_->hdr_mdcv());
+      hdr_metadata_bitstream_.SetMDCV(ToSkHdrMDCV(current_frame_->hdr_mdcv()));
     }
-    if (current_frame_->itut_t35_set()) {
-      // SAFETY: The best we can do is trust the size provided by libgav1.
-      auto t35_payload_span = UNSAFE_BUFFERS(base::span<const uint8_t>(
-          current_frame_->itut_t35().payload_bytes,
-          static_cast<size_t>(current_frame_->itut_t35().payload_size)));
-      if (auto agtm = GetSerializedAgtmItutT35(
-              current_frame_->itut_t35().country_code, t35_payload_span)) {
-        // Overwrite existing AGTM metadata if any.
-        hdr_metadata_.setSerializedAgtm(agtm);
+    if (current_frame_->itut_t35_count() > 0) {
+      // SAFETY: The best we can do is trust the count provided by libgav1.
+      for (const auto& itut_t35 : UNSAFE_BUFFERS(base::span(
+               current_frame_->itut_t35(),
+               static_cast<size_t>(current_frame_->itut_t35_count())))) {
+        // SAFETY: The best we can do is trust the size provided by libgav1.
+        auto t35_payload_span = UNSAFE_BUFFERS(base::span<const uint8_t>(
+            itut_t35.payload_bytes,
+            static_cast<size_t>(itut_t35.payload_size)));
+        SetAgtmFromT35WithCountryCode(hdr_metadata_bitstream_,
+                                      itut_t35.country_code, t35_payload_span);
       }
     }
 
@@ -504,10 +557,7 @@ AcceleratedVideoDecoder::DecodeResult AV1Decoder::DecodeInternal() {
 
     // Set the color space for the picture.
     pic->set_colorspace(picture_color_space_);
-
-    if (!hdr_metadata_.IsEmpty()) {
-      pic->set_hdr_metadata(hdr_metadata_);
-    }
+    pic->SetDynamicHdrMetadata(hdr_metadata_bitstream_, decoder_buffer_.get());
 
     pic->frame_header = frame_header;
     if (decrypt_config_)
@@ -615,11 +665,6 @@ AV1Decoder::AV1Accelerator::Status AV1Decoder::DecodeAndOutputPicture(
          current_frame_header_->refresh_frame_flags == 0xff);
   UpdateReferenceFrames(std::move(pic));
   return AV1Accelerator::Status::kOk;
-}
-
-gfx::HDRMetadata AV1Decoder::GetHDRMetadata() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return hdr_metadata_;
 }
 
 gfx::Size AV1Decoder::GetPicSize() const {

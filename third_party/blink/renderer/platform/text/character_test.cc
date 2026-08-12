@@ -5,11 +5,16 @@
 #include "third_party/blink/renderer/platform/text/character.h"
 
 #include <ubidi_props.h>
+#include <unicode/uniset.h>
+#include <unicode/unistr.h>
 #include <unicode/uscript.h>
+#include <unicode/utfiterator.h>
 #include <unicode/utypes.h>
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/renderer/platform/text/character_property_data.h"
 #include "third_party/blink/renderer/platform/text/emoji_segmentation_category.h"
 #include "third_party/blink/renderer/platform/text/emoji_segmentation_category_inline_header.h"
 #include "third_party/blink/renderer/platform/text/justification_opportunity.h"
@@ -18,27 +23,45 @@
 
 namespace blink {
 
-testing::AssertionResult IsCJKIdeographOrSymbolWithMessage(UChar32 codepoint) {
+testing::AssertionResult IsCjkIdeographOrSymbolWithMessage(UChar32 codepoint) {
   const size_t kFormatBufferSize = 10;
   char formatted_as_hex[kFormatBufferSize];
   snprintf(formatted_as_hex, kFormatBufferSize, "0x%x", codepoint);
 
-  if (Character::IsCJKIdeographOrSymbol(codepoint)) {
+  if (Character::IsCjkIdeographOrSymbol(codepoint)) {
     return testing::AssertionSuccess()
-           << "Codepoint " << formatted_as_hex << " is a CJKIdeographOrSymbol.";
+           << "Codepoint " << formatted_as_hex << " is a CjkIdeographOrSymbol.";
   }
 
   return testing::AssertionFailure() << "Codepoint " << formatted_as_hex
-                                     << " is not a CJKIdeographOrSymbol.";
+                                     << " is not a CjkIdeographOrSymbol.";
 }
 
 // Test Unicode-derived functions work as intended.
 // These functions may need to be adjusted if Unicode changes.
 TEST(CharacterTest, Derived) {
   StringBuilder builder;
+  // Extended_Pictographic codepoints in RGI emoji sequences must be
+  // IsCjkIdeographOrSymbol so that the word segmenter enters the emoji code
+  // path and keeps multi-codepoint sequences together.
+  UErrorCode error = U_ZERO_ERROR;
+  icu::UnicodeSet set(
+      icu::UnicodeString(
+          "[[:RGI_Emoji_ZWJ_Sequence:][:RGI_Emoji_Modifier_Sequence:]]"),
+      error);
+  ASSERT_EQ(error, U_ZERO_ERROR);
+  for (auto s : set.strings()) {
+    for (auto unit : icu::header::unsafeUTFStringCodePoints<UChar32>(s)) {
+      UChar32 cp = unit.codePoint();
+      if (Character::IsExtendedPictographic(cp)) {
+        EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(cp));
+      }
+    }
+  }
+
   for (UChar32 ch = 0; ch < uchar::kMaxCodepoint; ++ch) {
     if (Character::IsEmojiEmojiDefault(ch)) {
-      EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(ch));
+      EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(ch));
     }
 
     const UBlockCode block = ublock_getCode(ch);
@@ -74,28 +97,86 @@ TEST(CharacterTest, Derived) {
   }
 }
 
+TEST(CharacterTest, CjkIdeographOrSymbolCollisions) {
+  icu::UnicodeSet emoji_set;
+  UErrorCode error = U_ZERO_ERROR;
+  emoji_set.addAll(
+      icu::UnicodeSet(icu::UnicodeString("[:Emoji_Presentation:]"), error));
+  ASSERT_EQ(error, U_ZERO_ERROR);
+
+  const char* const kRgiEmojiSequences =
+      "[[:RGI_Emoji_ZWJ_Sequence:][:RGI_Emoji_Modifier_Sequence:]]";
+  icu::UnicodeSet set(icu::UnicodeString(kRgiEmojiSequences), error);
+  ASSERT_EQ(error, U_ZERO_ERROR);
+  for (auto s : set.strings()) {
+    icu::UnicodeString us(s.data(), static_cast<int32_t>(s.length()));
+    for (auto cp : icu::header::unsafeUTFStringCodePoints<UChar32>(us)) {
+      if (Character::IsExtendedPictographic(cp.codePoint())) {
+        emoji_set.add(cp.codePoint());
+      }
+    }
+  }
+
+  for (UChar32 cp : kIsCjkIdeographOrSymbolArray) {
+    if (emoji_set.contains(cp)) {
+      ADD_FAILURE() << "Codepoint 0x" << std::hex << cp
+                    << " in kIsCjkIdeographOrSymbolArray is already covered by "
+                       "SetIsCjkIdeographOrSymbolForEmoji.";
+    }
+  }
+
+  for (size_t i = 0; i < kIsCjkIdeographOrSymbolRanges.size(); i += 2) {
+    UChar32 start = kIsCjkIdeographOrSymbolRanges[i];
+    UChar32 end = kIsCjkIdeographOrSymbolRanges[i + 1];
+    for (UChar32 cp = start; cp <= end; ++cp) {
+      if (emoji_set.contains(cp)) {
+        ADD_FAILURE()
+            << "Codepoint 0x" << std::hex << cp
+            << " in kIsCjkIdeographOrSymbolRanges (range 0x" << start << " - 0x"
+            << end
+            << ") is already covered by SetIsCjkIdeographOrSymbolForEmoji.";
+      }
+    }
+  }
+}
+
+TEST(CharacterTest, CjkIdeographOrSymbolArrayOrRangeCollisions) {
+  for (UChar32 cp : kIsCjkIdeographOrSymbolArray) {
+    for (size_t i = 0; i < kIsCjkIdeographOrSymbolRanges.size(); i += 2) {
+      UChar32 start = kIsCjkIdeographOrSymbolRanges[i];
+      UChar32 end = kIsCjkIdeographOrSymbolRanges[i + 1];
+      if (cp >= start && cp <= end) {
+        ADD_FAILURE() << "Codepoint 0x" << std::hex << cp
+                      << " in kIsCjkIdeographOrSymbolArray is already covered "
+                         "by kIsCjkIdeographOrSymbolRanges (range 0x"
+                      << start << " - 0x" << end << ").";
+      }
+    }
+  }
+}
+
 static void TestSpecificUChar32RangeIdeograph(UChar32 range_start,
                                               UChar32 range_end,
                                               bool before = true,
                                               bool after = true) {
   if (before) {
-    EXPECT_FALSE(Character::IsCJKIdeographOrSymbol(range_start - 1))
+    EXPECT_FALSE(Character::IsCjkIdeographOrSymbol(range_start - 1))
         << std::hex << (range_start - 1);
   }
-  EXPECT_TRUE(Character::IsCJKIdeographOrSymbol(range_start))
+  EXPECT_TRUE(Character::IsCjkIdeographOrSymbol(range_start))
       << std::hex << range_start;
   UChar32 mid = static_cast<UChar32>(
       (static_cast<uint64_t>(range_start) + range_end) / 2);
-  EXPECT_TRUE(Character::IsCJKIdeographOrSymbol(mid)) << std::hex << mid;
-  EXPECT_TRUE(Character::IsCJKIdeographOrSymbol(range_end))
+  EXPECT_TRUE(Character::IsCjkIdeographOrSymbol(mid)) << std::hex << mid;
+  EXPECT_TRUE(Character::IsCjkIdeographOrSymbol(range_end))
       << std::hex << range_end;
   if (after) {
-    EXPECT_FALSE(Character::IsCJKIdeographOrSymbol(range_end + 1))
+    EXPECT_FALSE(Character::IsCjkIdeographOrSymbol(range_end + 1))
         << std::hex << (range_end + 1);
   }
 }
 
-TEST(CharacterTest, TestIsCJKIdeograph) {
+TEST(CharacterTest, TestIsCjkIdeograph) {
   // The basic CJK Unified Ideographs block.
   TestSpecificUChar32RangeIdeograph(0x4E00, 0x9FFF, false);
   // CJK Unified Ideographs Extension A.
@@ -117,150 +198,150 @@ TEST(CharacterTest, TestIsCJKIdeograph) {
 
 static void TestSpecificUChar32RangeIdeographSymbol(UChar32 range_start,
                                                     UChar32 range_end) {
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(range_start - 1));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(range_start));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(range_start - 1));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(range_start));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(
       (UChar32)((uint64_t)range_start + (uint64_t)range_end) / 2));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(range_end));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(range_end + 1));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(range_end));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(range_end + 1));
 }
 
-TEST(CharacterTest, TestIsCJKIdeographOrSymbol) {
+TEST(CharacterTest, TestIsCjkIdeographOrSymbol) {
   // CJK Compatibility Ideographs Supplement.
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2C7));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2CA));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2CB));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2D9));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2C7));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2CA));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2CB));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2D9));
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2020));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2021));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2030));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x203B));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x203C));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2042));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2047));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2048));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2049));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2051));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x20DD));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x20DE));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2100));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2103));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2105));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2109));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x210A));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2113));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2116));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2121));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x212B));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x213B));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2150));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2151));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2152));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2020));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2021));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2030));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x203B));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x203C));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2042));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2047));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2048));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2049));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2051));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x20DD));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x20DE));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2100));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2103));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2105));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2109));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x210A));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2113));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2116));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2121));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x212B));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x213B));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2150));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2151));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2152));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2156, 0x215A);
   TestSpecificUChar32RangeIdeographSymbol(0x2160, 0x216B);
   TestSpecificUChar32RangeIdeographSymbol(0x2170, 0x217B);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x217F));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2189));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2307));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2312));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x217F));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2189));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2307));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2312));
 
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0x23BD));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x23BE));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x23C4));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x23CC));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0x23CD));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x23CE));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2423));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0x23BD));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x23BE));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x23C4));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x23CC));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0x23CD));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x23CE));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2423));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2460, 0x2492);
   TestSpecificUChar32RangeIdeographSymbol(0x249C, 0x24FF);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25A0));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25A1));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25A2));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25AA));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25AB));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25B1));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25B2));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25B3));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25B6));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25B7));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25BC));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25BD));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25C0));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25C1));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25C6));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25C7));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25C9));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25CB));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25CC));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25A0));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25A1));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25A2));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25AA));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25AB));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25B1));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25B2));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25B3));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25B6));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25B7));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25BC));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25BD));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25C0));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25C1));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25C6));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25C7));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25C9));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25CB));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25CC));
 
   TestSpecificUChar32RangeIdeographSymbol(0x25CE, 0x25D3);
   TestSpecificUChar32RangeIdeographSymbol(0x25E2, 0x25E6);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x25EF));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x25EF));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2600, 0x2603);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2605));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2606));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x260E));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2616));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2617));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2640));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2642));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2605));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2606));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x260E));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2616));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2617));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2640));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2642));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2660, 0x266F);
   TestSpecificUChar32RangeIdeographSymbol(0x2672, 0x267D);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x26A0));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x26BD));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x26BE));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2713));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x271A));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x273F));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2740));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2756));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x26A0));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x26BD));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x26BE));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2713));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x271A));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x273F));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2740));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2756));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2763, 0x2764);
   TestSpecificUChar32RangeIdeographSymbol(0x2776, 0x277F);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x2B1A));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x2B1A));
 
   TestSpecificUChar32RangeIdeographSymbol(0x2FF0, 0x302D);
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x3031));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x312F));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0x3130));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x3031));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x312F));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0x3130));
 
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0x318F));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x3190));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x319F));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x31BF));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0x318F));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x3190));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x319F));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x31BF));
 
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0x31FF));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x3200));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x3300));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x33FF));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0x31FF));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x3200));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x3300));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x33FF));
 
   TestSpecificUChar32RangeIdeographSymbol(0xF860, 0xF862);
   TestSpecificUChar32RangeIdeographSymbol(0xFE30, 0xFE6F);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0xFE10));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0xFE11));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0xFE12));
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0xFE19));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0xFE10));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0xFE11));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0xFE12));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0xFE19));
 
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0xFF0D));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0xFF1B));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0xFF1C));
-  EXPECT_FALSE(IsCJKIdeographOrSymbolWithMessage(0xFF1E));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0xFF0D));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0xFF1B));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0xFF1C));
+  EXPECT_FALSE(IsCjkIdeographOrSymbolWithMessage(0xFF1E));
 
   TestSpecificUChar32RangeIdeographSymbol(0xFF00, 0xFFEF);
 
-  EXPECT_TRUE(IsCJKIdeographOrSymbolWithMessage(0x1F100));
+  EXPECT_TRUE(IsCjkIdeographOrSymbolWithMessage(0x1F100));
 
   TestSpecificUChar32RangeIdeographSymbol(0x1F110, 0x1F129);
   TestSpecificUChar32RangeIdeographSymbol(0x1F130, 0x1F149);
@@ -608,7 +689,7 @@ static std::vector<UScriptCode> east_asian_script_codes{
 
 // returns true if the script code is in the above list.
 bool IsEastAsianScript(const UScriptCode& script_code) {
-  return base::Contains(east_asian_script_codes, script_code);
+  return std::ranges::contains(east_asian_script_codes, script_code);
 }
 
 // returns true if any of script_extension is in the above list.
@@ -616,7 +697,8 @@ bool HasEastAsianScriptExtention(
     const std::vector<UScriptCode>& script_extension) {
   for (const UScriptCode& east_asian_script_extension_code :
        east_asian_script_codes) {
-    if (base::Contains(script_extension, east_asian_script_extension_code)) {
+    if (std::ranges::contains(script_extension,
+                              east_asian_script_extension_code)) {
       return true;
     }
   }
@@ -665,7 +747,7 @@ bool ShouldBeConditional(UChar32 test_char, UEastAsianWidth east_asian_width) {
   // DOUBLE DAGGER U+2026 HORIZONTAL ELLIPSIS
   static std::vector<UChar32> not_conditional{0x0022, 0x0027, 0x002A, 0x002F,
                                               0x00B7, 0x2020, 0x2021, 0x2026};
-  if (base::Contains(not_conditional, test_char)) {
+  if (std::ranges::contains(not_conditional, test_char)) {
     return false;
   }
   // Exclude if the East_Asian_Width property is “East Asian Fullwidth (F)”,
@@ -708,7 +790,8 @@ TEST(CharacterTest, TestEastAsianSpacingPropertyRule) {
     ASSERT_TRUE(U_SUCCESS(error_code));
     std::vector<UScriptCode> script_list(32);
     int32_t required_capacity = uscript_getScriptExtensions(
-        test_char, script_list.data(), script_list.size(), &error_code);
+        test_char, script_list.data(), static_cast<int32_t>(script_list.size()),
+        &error_code);
     ASSERT_TRUE(U_SUCCESS(error_code))
         << error_code << "\t" << required_capacity;
     UEastAsianWidth east_asian_width = Character::EastAsianWidth(test_char);
@@ -749,20 +832,24 @@ TEST(CharacterTest, TestEastAsianSpacingPropertyRule) {
 }
 
 TEST(CharacterTest, ExpansionOpportunityEmoji) {
-  JustificationContext context;
   // a, an emoji ZWJ sequence, z
   // We should count both side of the emoji sequence.
   StringView source(u"a\U0001F635\u200d\U0001f4ABz");
-  EXPECT_EQ(2u, Character::ExpansionOpportunityCount(
-                    TextJustify::kAuto, source.Span16(), TextDirection::kLtr,
-                    context));
-  EXPECT_FALSE(context.is_after_opportunity);
+  {
+    JustificationContext context;
+    EXPECT_EQ(2u,
+              context.CountOpportunities(TextJustify::kAuto, source.Span16(),
+                                         TextDirection::kLtr));
+    EXPECT_FALSE(context.IsAfterOpportunity());
+  }
 
-  context.is_after_opportunity = true;
-  EXPECT_EQ(2u, Character::ExpansionOpportunityCount(
-                    TextJustify::kAuto, source.Span16(), TextDirection::kRtl,
-                    context));
-  EXPECT_FALSE(context.is_after_opportunity);
+  {
+    JustificationContext context;
+    EXPECT_EQ(2u,
+              context.CountOpportunities(TextJustify::kAuto, source.Span16(),
+                                         TextDirection::kRtl));
+    EXPECT_FALSE(context.IsAfterOpportunity());
+  }
 }
 
 static struct CanReceiveTextEmphasisTestData {

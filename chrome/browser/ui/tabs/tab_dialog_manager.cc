@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/tabs/public/tab_interface.h"
@@ -294,6 +293,9 @@ TabDialogManager::TabDialogManager(TabInterface* tab_interface)
   tab_subscriptions_.push_back(
       tab_interface_->RegisterWillDetach(base::BindRepeating(
           &TabDialogManager::TabWillDetach, base::Unretained(this))));
+  tab_subscriptions_.push_back(
+      tab_interface->RegisterWillDiscardContents(base::BindRepeating(
+          &TabDialogManager::OnDiscardContents, base::Unretained(this))));
 }
 
 TabDialogManager::~TabDialogManager() = default;
@@ -352,11 +354,15 @@ void TabDialogManager::ShowDialog(views::Widget* widget,
       std::make_unique<WebContentsModalDialogHostObserver>(this,
                                                            tab_interface_);
 
-  if (params_->should_show_inactive) {
-    widget_->ShowInactive();
-  } else {
+  // Only show as active if the primary window widget (usually the browser
+  // window) is painted as active. This prevents a background browser window
+  // from becoming foreground on showing the dialog.
+  if (GetHostWidget()->ShouldPaintAsActive()) {
     widget_->Show();
+  } else {
+    widget->ShowInactive();
   }
+
   UpdateDialogVisibility();
 }
 
@@ -477,17 +483,12 @@ void TabDialogManager::UpdateModalDialogHost() {
 
 bool TabDialogManager::UpdateDialogVisibility(
     std::optional<bool> requested_visibility) {
-  if (!widget_) {
-    return false;
+  if (widget_) {
+    widget_->SetVisible(GetDialogWidgetVisibility() &&
+                        requested_visibility.value_or(true));
+    return widget_->IsVisible();
   }
-  const bool should_be_visible =
-      GetDialogWidgetVisibility() && requested_visibility.value_or(true);
-  if (should_be_visible) {
-    params_->should_show_inactive ? widget_->ShowInactive() : widget_->Show();
-  } else {
-    widget_->Hide();
-  }
-  return widget_->IsVisible();
+  return false;
 }
 
 bool TabDialogManager::IsDialogManaged(views::Widget* widget) {
@@ -561,6 +562,13 @@ void TabDialogManager::TabWillDetach(TabInterface* tab_interface,
   if (widget_ && params_->close_on_detach) {
     CloseDialog();
   }
+}
+
+void TabDialogManager::OnDiscardContents(TabInterface* tab,
+                                         content::WebContents* old_contents,
+                                         content::WebContents* new_contents) {
+  CHECK_EQ(tab, tab_interface_);
+  Observe(new_contents);
 }
 
 bool TabDialogManager::GetDialogWidgetVisibility() {

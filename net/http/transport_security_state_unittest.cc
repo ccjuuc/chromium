@@ -32,6 +32,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "crypto/hash.h"
 #include "crypto/sha2.h"
 #include "net/base/features.h"
 #include "net/base/hash_value.h"
@@ -126,9 +127,10 @@ std::vector<SHA256HashValue> DeserializeHashes(
     base::span<const char* const> serialized_hashes) {
   std::vector<SHA256HashValue> result;
   for (const auto* serialized_hash : serialized_hashes) {
-    net::HashValue h(HASH_VALUE_SHA256);
-    CHECK(h.FromString(std::string_view(serialized_hash)));
-    result.push_back(h.sha256hashvalue());
+    std::optional<net::HashValue> h =
+        net::HashValue::FromString(std::string_view(serialized_hash));
+    CHECK(h);
+    result.push_back(h->sha256hashvalue());
   }
   return result;
 }
@@ -162,8 +164,8 @@ class TransportSecurityStateTest : public ::testing::Test,
 
   static HashValueVector GetSampleSPKIHashes() {
     HashValueVector spki_hashes;
-    HashValue hash(GetSampleSPKIHash(1));
-    spki_hashes.push_back(hash);
+    spki_hashes.push_back(net::HashValue(net::HashValueTag::HASH_VALUE_SHA256,
+                                         GetSampleSPKIHash(1)));
     return spki_hashes;
   }
 
@@ -625,12 +627,15 @@ TEST_F(TransportSecurityStateTest, NewPinsOverride) {
   TransportSecurityState::PKPState pkp_state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
-  HashValue hash1(HASH_VALUE_SHA256);
-  std::ranges::fill(hash1.span(), 0x01);
-  HashValue hash2(HASH_VALUE_SHA256);
-  std::ranges::fill(hash2.span(), 0x02);
-  HashValue hash3(HASH_VALUE_SHA256);
-  std::ranges::fill(hash3.span(), 0x03);
+  std::array<uint8_t, crypto::hash::kSha256Size> hash1_bytes;
+  std::ranges::fill(hash1_bytes, 0x01);
+  HashValue hash1(HASH_VALUE_SHA256, hash1_bytes);
+  std::array<uint8_t, crypto::hash::kSha256Size> hash2_bytes;
+  std::ranges::fill(hash2_bytes, 0x02);
+  HashValue hash2(HASH_VALUE_SHA256, hash2_bytes);
+  std::array<uint8_t, crypto::hash::kSha256Size> hash3_bytes;
+  std::ranges::fill(hash3_bytes, 0x03);
+  HashValue hash3(HASH_VALUE_SHA256, hash3_bytes);
 
   state.AddHPKP("example.com", expiry, true, HashValueVector(1, hash1));
 
@@ -859,9 +864,19 @@ TEST_F(TransportSecurityStateTest, DecodePreloadedMultipleMix) {
 
   sts_state = TransportSecurityState::STSState();
   pkp_state = TransportSecurityState::PKPState();
+  // example.com is in the HSTS json with include_subdirs=true, while
+  // hpkp.example.com (a subdomain of example.com) only occurs in the
+  // pins.json.
+  // In the old implementation where HSTS and PKP were mixed in a single data
+  // structure, this would have the unintuitive side effect that HSTS would be
+  // disabled for hpkp.example.com. Now that they are separated, a PKP entry
+  // has no effect on HSTS enforcement for conflicting domain names, or
+  // vice-versa.
   EXPECT_TRUE(
       GetStaticDomainState(&state, "hpkp.example.com", &sts_state, &pkp_state));
-  EXPECT_TRUE(sts_state == TransportSecurityState::STSState());
+  EXPECT_TRUE(sts_state.include_subdomains);
+  EXPECT_EQ(TransportSecurityState::STSState::MODE_FORCE_HTTPS,
+            sts_state.upgrade_mode);
   EXPECT_TRUE(pkp_state.include_subdomains);
   EXPECT_THAT(pkp_state.spki_hashes,
               testing::UnorderedElementsAre(GetSampleSPKIHash(0x1)));
@@ -995,27 +1010,36 @@ TEST_F(TransportSecurityStateTest, RequireCTConsultsDelegate) {
                   ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
   }
 
-  // If CT is not required, then regardless of the CT state for the host,
-  // it should indicate CT is not required.
+  // If the delegate overrides the CT requirement and returns that CT is not
+  // required for the specified cert, then any CT failure should instead be
+  // allowed and indicate CT is not required. If CT was successful, then it
+  // should indicate that CT requirements were met, regardless of the delegate.
   {
     TransportSecurityState state;
     const ct::CTRequirementsStatus original_status = state.CheckCTRequirements(
         "www.example.com", true, hashes, cert.get(),
         ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS);
+    // If no delegate is set, this should be indicated as CT not required, and
+    // not considered as CT being overridden by the delegate.
+    EXPECT_EQ(ct::CTRequirementsStatus::CT_NOT_REQUIRED, original_status);
 
     scoped_refptr<MockRequireCTDelegate> never_require_delegate =
         base::MakeRefCounted<MockRequireCTDelegate>();
     EXPECT_CALL(*never_require_delegate, IsCTRequiredForHost(_, _, _))
         .WillRepeatedly(Return(CTRequirementLevel::NOT_REQUIRED));
     state.SetRequireCTDelegate(never_require_delegate);
-    EXPECT_EQ(ct::CTRequirementsStatus::CT_NOT_REQUIRED,
+    EXPECT_EQ(ct::CTRequirementsStatus::CT_REQUIREMENT_OVERRIDDEN,
               state.CheckCTRequirements(
                   "www.example.com", true, hashes, cert.get(),
                   ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
-    EXPECT_EQ(ct::CTRequirementsStatus::CT_NOT_REQUIRED,
+    EXPECT_EQ(ct::CTRequirementsStatus::CT_REQUIREMENT_OVERRIDDEN,
               state.CheckCTRequirements(
                   "www.example.com", true, hashes, cert.get(),
                   ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
+    EXPECT_EQ(ct::CTRequirementsStatus::CT_REQUIREMENTS_MET,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS));
 
     state.SetRequireCTDelegate(nullptr);
     EXPECT_EQ(original_status,

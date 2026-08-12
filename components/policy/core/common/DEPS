@@ -1,12 +1,11 @@
 include_rules = [
-  "+absl/container/flat_hash_map.h",
-  "+absl/functional/overload.h",
-  "+absl/types/variant.h",
+  "+chromeos/ash/components/channel",
   "+chromeos/ash/components/policy/device_local_account",
   "+chromeos/ash/components/system",
-  "+chromeos/crosapi",
   "+chromeos/startup",
   "+components/account_id",
+  "+components/keyed_service/core",
+  "+components/metrics/metrics_provider.h",
   "+components/reporting",
   "-components/policy/core/browser",
   "+components/signin/public",
@@ -17,5 +16,6 @@ include_rules = [
   "+services/network/test",
   "+services/network/public/mojom",
   "+third_party/libxml/chromium",
+  "+ui/base/device_form_factor.h",
   "+ui/base/l10n",
 ]

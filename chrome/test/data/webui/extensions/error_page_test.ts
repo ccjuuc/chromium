@@ -103,7 +103,7 @@ suite('ExtensionErrorPageTest', function() {
     assertEquals(
         'message',
         error.querySelector<HTMLElement>('.error-message')!.textContent.trim());
-    assertTrue(error.querySelector('cr-icon')!.icon === 'cr:error');
+    assertTrue(error.querySelector('cr-icon')!.icon === 'cr:error-filled');
 
     const manifestError = Object.assign(
         {
@@ -125,7 +125,7 @@ suite('ExtensionErrorPageTest', function() {
     assertEquals(
         'invalid key',
         error.querySelector<HTMLElement>('.error-message')!.textContent.trim());
-    assertTrue(error.querySelector('cr-icon')!.icon === 'cr:warning');
+    assertTrue(error.querySelector('cr-icon')!.icon === 'cr:warning-filled');
 
     mockDelegate.testClickingCalls(
         error.querySelector<HTMLElement>('.icon-delete-gray')!, 'deleteErrors',
@@ -225,7 +225,7 @@ suite('ExtensionErrorPageTest', function() {
   });
 
   // Tests that the element can still be shown with an invalid URL. Regression
-  // test for crbug.com/1257170, as without the fix, this test would simply
+  // test for crbug.com/40200545, as without the fix, this test would simply
   // crash when the page tries and fails to create a URL object.
   test('InvalidUrl', async () => {
     const newRuntimeError = Object.assign(
@@ -259,7 +259,8 @@ suite('ExtensionErrorPageTest', function() {
         'message',
         errorElements[0]!.querySelector<HTMLElement>(
                              '.error-message')!.textContent.trim());
-    assertEquals('cr:error', errorElements[0]!.querySelector('cr-icon')!.icon);
+    assertEquals(
+        'cr:error-filled', errorElements[0]!.querySelector('cr-icon')!.icon);
     assertEquals(1, crCollapses.length);
     assertTrue(crCollapses[0]!.opened);
     assertEquals(

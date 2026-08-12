@@ -55,7 +55,9 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBuffer {
 
   // Returns a pointer to the memory address of a plane. Buffer must have been
   // successfully mapped using a call to Map() before calling this function.
-  virtual void* memory(size_t plane) = 0;
+  // NB the length of the span may be larger than the requested plane; it may
+  // point to the end of the entire valid mapping.
+  virtual base::span<uint8_t> memory(size_t plane) = 0;
 
   // Unmaps the buffer. It's illegal to use any pointer returned by memory()
   // after this has been called.
@@ -67,6 +69,9 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBuffer {
 
   // Returns the type of this buffer.
   virtual gfx::GpuMemoryBufferType GetType() const = 0;
+
+  // Whether the underlying buffer supports zero-copy import into WebGPU.
+  virtual bool SupportsZeroCopyWebGPUImport() const = 0;
 
   // Returns a platform specific handle for this buffer which in particular can
   // be sent over IPC. This duplicates file handles as appropriate, so that a

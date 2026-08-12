@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_delegate.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/extensions/sync/account_extension_tracker.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -47,11 +48,8 @@ syncer::DataType GetDataTypeFromAccessPoint(
 
 BubbleSignInPromoDelegate::BubbleSignInPromoDelegate(
     content::WebContents& web_contents,
-    signin_metrics::AccessPoint access_point,
-    syncer::LocalDataItemModel::DataId data_id)
-    : data_id_(std::move(data_id)),
-      web_contents_(web_contents.GetWeakPtr()),
-      access_point_(access_point) {}
+    signin_metrics::AccessPoint access_point)
+    : web_contents_(web_contents.GetWeakPtr()), access_point_(access_point) {}
 
 BubbleSignInPromoDelegate::~BubbleSignInPromoDelegate() = default;
 
@@ -76,7 +74,72 @@ void BubbleSignInPromoDelegate::OnSignIn(const AccountInfo& account) {
 
   base::UmaHistogramEnumeration("Signin.SignInPromo.Accepted", access_point_);
   signin_ui_util::SignInFromSingleAccountPromo(profile, account, access_point_);
+  OnSignInPromoAccepted(profile);
+}
 
+void BubbleSignInPromoDelegate::RegisterPostSignInCallback(
+    Profile* profile,
+    base::OnceClosure callback) {
+  CHECK(profile);
+  if (!callback) {
+    return;
+  }
+
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  if (!identity_manager) {
+    return;
+  }
+
+  signin_util::SignedInState signed_in_state =
+      signin_util::GetSignedInState(identity_manager);
+  if (signed_in_state == signin_util::SignedInState::kSignedIn ||
+      signed_in_state == signin_util::SignedInState::kSyncing) {
+    // Post a task to execute the callback so it occurs after the active
+    // promo bubble is fully closed and destroyed.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(callback));
+    return;
+  }
+
+  if (!web_contents_) {
+    return;
+  }
+
+  content::WebContents* sign_in_tab_contents =
+      signin_ui_util::GetSignInTabWithAccessPoint(
+          tabs::TabInterface::GetFromContents(web_contents_.get())
+              ->GetBrowserWindowInterface(),
+          access_point_);
+
+  // SignInFromSingleAccountPromo may fail to open a tab. Do not wait for a
+  // sign in event in that case.
+  if (!sign_in_tab_contents) {
+    return;
+  }
+
+  SigninPromoTabHelper::GetForWebContents(*sign_in_tab_contents)
+      ->InitializeCallbackAfterSignIn(std::move(callback), access_point_);
+}
+
+BubbleSignInPromoForSyncableDataTypeDelegate::
+    BubbleSignInPromoForSyncableDataTypeDelegate(
+        content::WebContents& web_contents,
+        signin_metrics::AccessPoint access_point,
+        syncer::LocalDataItemModel::DataId data_id)
+    : BubbleSignInPromoDelegate(web_contents, access_point),
+      data_id_(std::move(data_id)) {}
+
+BubbleSignInPromoForSyncableDataTypeDelegate::
+    ~BubbleSignInPromoForSyncableDataTypeDelegate() = default;
+
+void BubbleSignInPromoForSyncableDataTypeDelegate::OnSignInPromoAccepted(
+    Profile* profile) {
+  MaybeHandleSyncableDataTypeAfterSignIn(profile);
+}
+
+void BubbleSignInPromoForSyncableDataTypeDelegate::
+    MaybeHandleSyncableDataTypeAfterSignIn(Profile* profile) {
   if (!base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp) &&
       access_point_ == signin_metrics::AccessPoint::kExtensionInstallBubble) {
     // Make sure the `data_id_` is of the correct type.
@@ -143,7 +206,18 @@ void BubbleSignInPromoDelegate::OnSignIn(const AccountInfo& account) {
     sync_user_settings->SetSelectedType(user_selectable_type.value(), true);
   }
 
-  SigninPromoTabHelper::GetForWebContents(*sign_in_tab_contents)
-      ->InitializeCallbackAfterSignIn(std::move(maybe_move_data),
-                                      access_point_);
+  RegisterPostSignInCallback(profile, std::move(maybe_move_data));
+}
+
+DefaultBubbleSignInPromoDelegate::DefaultBubbleSignInPromoDelegate(
+    content::WebContents& web_contents,
+    signin_metrics::AccessPoint access_point,
+    base::OnceClosure post_signin_callback)
+    : BubbleSignInPromoDelegate(web_contents, access_point),
+      post_signin_callback_(std::move(post_signin_callback)) {}
+
+DefaultBubbleSignInPromoDelegate::~DefaultBubbleSignInPromoDelegate() = default;
+
+void DefaultBubbleSignInPromoDelegate::OnSignInPromoAccepted(Profile* profile) {
+  RegisterPostSignInCallback(profile, std::move(post_signin_callback_));
 }

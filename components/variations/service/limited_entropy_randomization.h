@@ -8,6 +8,8 @@
 #include <optional>
 #include <string_view>
 
+#include "components/variations/proto/study.pb.h"
+
 // Provides functions to validate that the variations seed is
 // correctly configured to respect an entropy limit. See below for details.
 //
@@ -15,9 +17,7 @@
 // entropy" layer – that is, a layer with `EntropyMode.LIMITED`. For brevity,
 // documentation in this file will refer to this layer as the "limited layer".
 // There is at most one limited layer in the seed with filters that are
-// applicable to the client. For now, it's the server's responsibility to ensure
-// this invariant. As an optimization, the client code should be updated to
-// consider the filters when calculating entropy (TODO(b/319681288)).
+// applicable to the client.
 //
 // Consider each client's chosen groups across all studies which use limited
 // entropy. While some group combinations may be more likely than others (based
@@ -77,12 +77,13 @@ struct MisconfiguredEntropyResult {
   std::optional<bool> seed_has_active_low_layer;
 };
 
-// The maximum amount of total entropy, in bits, for field trials with Google
-// web experiment ids.
+// Returns the platform-specific maximum amount of total entropy, in bits, for
+// field trials (A) with Google web experiment IDs or Google web trigger
+// experiment IDs and (B) that are randomized with the limited entropy source.
 //
 // The cumulative probability of group assignments across all such field trials
-// on the client must be at least 1 / (2 ^ GetGoogleWebEntropyLimitInBits()).
-double GetGoogleWebEntropyLimitInBits();
+// on the client can be at most 1 / (2 ^ GetGoogleWebEntropyLimitInBits()).
+double GetMaxLimitedEntropyInBits(Study::Platform platform);
 
 // Returns an object whose is_misconfigured field is true if the entropy from
 // the variations seed is misconfigured or if the entropy cannot be computed. If
@@ -101,11 +102,11 @@ double GetGoogleWebEntropyLimitInBits();
 // * client_state: The client state to use for filtering studies.
 // * seed: The seed to check for misconfigured entropy.
 // * entropy_limit_in_bits: The entropy limit to use for checking. Exposed for
-//     testing. Should be set to GetGoogleWebEntropyLimitInBits() in production.
+//     testing. Should be set to GetMaxLimitedEntropyInBits() in production.
 MisconfiguredEntropyResult SeedHasMisconfiguredEntropy(
     const ClientFilterableState& client_state,
     const VariationsSeed& seed,
-    double entropy_limit_in_bits = GetGoogleWebEntropyLimitInBits());
+    double entropy_limit_in_bits);
 
 }  // namespace variations
 

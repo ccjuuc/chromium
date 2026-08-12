@@ -41,16 +41,6 @@
 
 namespace {
 
-// Extracts the |name| argument for ShowUi() from the current test case name.
-// E.g. for InvokeUi_name (or DISABLED_InvokeUi_name) returns "name".
-std::string NameFromTestCase() {
-  const std::string name = base::TestNameWithoutDisabledPrefix(
-      testing::UnitTest::GetInstance()->current_test_info()->name());
-  size_t underscore = name.find('_');
-  return underscore == std::string::npos ? std::string()
-                                         : name.substr(underscore + 1);
-}
-
 #if defined(USE_AURA)
 class ScopedMouseDisabler {
  public:
@@ -59,7 +49,7 @@ class ScopedMouseDisabler {
             view->GetWidget()->GetNativeWindow()->GetRootWindow())) {
     // Generate a mouse move event to remove any effects caused by mouse enter
     // (e.g. hover). This is necessary as hiding cursor may not emit mouse exit
-    // event. (crbug.com/723535).
+    // event. (crbug.com/40521214).
     ui::test::EventGenerator generator(
         view->GetWidget()->GetNativeWindow()->GetRootWindow());
     generator.MoveMouseTo({0, 0});
@@ -221,4 +211,19 @@ void TestBrowserUi::ShowAndVerifyUi() {
 bool TestBrowserUi::IsInteractiveUi() const {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kTestLauncherInteractive);
+}
+
+std::string TestBrowserUi::NameFromTestCase() {
+  const std::string name = base::TestNameWithoutDisabledPrefix(
+      testing::UnitTest::GetInstance()->current_test_info()->name());
+  size_t underscore = name.find('_');
+  size_t slash = name.find('/');
+
+  if (underscore == std::string::npos) {
+    return std::string();
+  }
+  if (slash == std::string::npos) {
+    return name.substr(underscore + 1);
+  }
+  return name.substr(underscore + 1, slash - underscore - 1);
 }

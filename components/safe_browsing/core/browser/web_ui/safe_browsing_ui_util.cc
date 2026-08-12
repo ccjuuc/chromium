@@ -20,10 +20,10 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "base/strings/escape.h"
 #else
-#include "components/enterprise/common/proto/upload_request_response.to_value.h"  // nogncheck crbug.com/1125897
+#include "components/enterprise/common/proto/upload_request_response.to_value.h"  // nogncheck crbug.com/40147906
 #endif
 
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/enterprise/common/proto/connectors.to_value.h"
 #endif
@@ -32,11 +32,13 @@ using sync_pb::GaiaPasswordReuse;
 
 namespace safe_browsing::web_ui {
 
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 DeepScanDebugData::DeepScanDebugData() = default;
 DeepScanDebugData::DeepScanDebugData(const DeepScanDebugData&) = default;
 DeepScanDebugData::~DeepScanDebugData() = default;
+#endif  //  BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
 TailoredVerdictOverrideData::TailoredVerdictOverrideData() = default;
 TailoredVerdictOverrideData::~TailoredVerdictOverrideData() = default;
 
@@ -56,9 +58,10 @@ void TailoredVerdictOverrideData::Clear() {
   override_value.reset();
   source = 0u;
 }
-#endif
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) &&
+        // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(SAFE_BROWSING_DB_LOCAL)
+#if BUILDFLAG(SAFE_BROWSING_DB_LOCAL) || BUILDFLAG(IS_IOS)
 
 std::string UserReadableTimeFromMillisSinceEpoch(int64_t time_in_milliseconds) {
   base::Time time =
@@ -68,24 +71,26 @@ std::string UserReadableTimeFromMillisSinceEpoch(int64_t time_in_milliseconds) {
 
 void AddStoreInfo(
     const DatabaseManagerInfo::DatabaseInfo::StoreInfo& store_info,
-    base::Value::List& database_info_list) {
+    base::ListValue& database_info_list) {
   if (store_info.has_file_name()) {
     database_info_list.Append(store_info.file_name());
   } else {
     database_info_list.Append("Unknown store");
   }
 
-  base::Value::List store_info_list;
+  base::ListValue store_info_list;
   if (store_info.has_file_size_bytes()) {
     store_info_list.Append(
         "Size (in bytes): " +
         base::UTF16ToUTF8(base::FormatNumber(store_info.file_size_bytes())));
   }
 
-  if (store_info.has_update_status()) {
+  if (store_info.has_v4_update_status()) {
     store_info_list.Append(
         "Update status: " +
-        base::UTF16ToUTF8(base::FormatNumber(store_info.update_status())));
+        base::UTF16ToUTF8(base::FormatNumber(store_info.v4_update_status())));
+  } else if (store_info.has_v5_update_status()) {
+    store_info_list.Append("Update status: " + store_info.v5_update_status());
   }
 
   if (store_info.has_last_apply_update_time_millis()) {
@@ -116,7 +121,7 @@ void AddStoreInfo(
 }
 
 void AddDatabaseInfo(const DatabaseManagerInfo::DatabaseInfo& database_info,
-                     base::Value::List& database_info_list) {
+                     base::ListValue& database_info_list) {
   if (database_info.has_database_size_bytes()) {
     database_info_list.Append("Database size (in bytes)");
     database_info_list.Append(
@@ -130,7 +135,7 @@ void AddDatabaseInfo(const DatabaseManagerInfo::DatabaseInfo& database_info,
 }
 
 void AddUpdateInfo(const DatabaseManagerInfo::UpdateInfo& update_info,
-                   base::Value::List& database_info_list) {
+                   base::ListValue& database_info_list) {
   if (update_info.has_network_status_code()) {
     // Network status of the last GetUpdate().
     database_info_list.Append("Last update network status code");
@@ -151,7 +156,7 @@ void AddUpdateInfo(const DatabaseManagerInfo::UpdateInfo& update_info,
 void ParseFullHashInfo(
     const FullHashCacheInfo::FullHashCache::CachedHashPrefixInfo::FullHashInfo&
         full_hash_info,
-    base::Value::Dict& full_hash_info_dict) {
+    base::DictValue& full_hash_info_dict) {
   if (full_hash_info.has_positive_expiry()) {
     full_hash_info_dict.Set(
         "Positive expiry",
@@ -180,8 +185,8 @@ void ParseFullHashInfo(
 }
 
 void ParseFullHashCache(const FullHashCacheInfo::FullHashCache& full_hash_cache,
-                        base::Value::List& full_hash_cache_list) {
-  base::Value::Dict full_hash_cache_parsed;
+                        base::ListValue& full_hash_cache_list) {
+  base::DictValue full_hash_cache_parsed;
 
   if (full_hash_cache.has_hash_prefix()) {
     std::string hash_prefix;
@@ -201,16 +206,16 @@ void ParseFullHashCache(const FullHashCacheInfo::FullHashCache& full_hash_cache,
 
   for (const auto& full_hash_info_it :
        full_hash_cache.cached_hash_prefix_info().full_hash_info()) {
-    base::Value::Dict full_hash_info_dict;
+    base::DictValue full_hash_info_dict;
     ParseFullHashInfo(full_hash_info_it, full_hash_info_dict);
     full_hash_cache_list.Append(std::move(full_hash_info_dict));
   }
 }
 
 void ParseFullHashCacheInfo(const FullHashCacheInfo& full_hash_cache_info_proto,
-                            base::Value::List& full_hash_cache_info) {
+                            base::ListValue& full_hash_cache_info) {
   if (full_hash_cache_info_proto.has_number_of_hits()) {
-    base::Value::Dict number_of_hits;
+    base::DictValue number_of_hits;
     number_of_hits.Set("Number of cache hits",
                        full_hash_cache_info_proto.number_of_hits());
     full_hash_cache_info.Append(std::move(number_of_hits));
@@ -219,7 +224,7 @@ void ParseFullHashCacheInfo(const FullHashCacheInfo& full_hash_cache_info_proto,
   // Record FullHashCache list.
   for (const auto& full_hash_cache_it :
        full_hash_cache_info_proto.full_hash_cache()) {
-    base::Value::List full_hash_cache_list;
+    base::ListValue full_hash_cache_list;
     ParseFullHashCache(full_hash_cache_it, full_hash_cache_list);
     full_hash_cache_info.Append(std::move(full_hash_cache_list));
   }
@@ -227,7 +232,7 @@ void ParseFullHashCacheInfo(const FullHashCacheInfo& full_hash_cache_info_proto,
 
 std::string AddFullHashCacheInfo(
     const FullHashCacheInfo& full_hash_cache_info_proto) {
-  base::Value::List full_hash_cache;
+  base::ListValue full_hash_cache;
   ParseFullHashCacheInfo(full_hash_cache_info_proto, full_hash_cache);
   return SerializeJson(full_hash_cache);
 }
@@ -260,8 +265,8 @@ std::string SerializeCSBRR(const ClientSafeBrowsingReportRequest& report) {
 
 std::string SerializeDownloadUrlChecked(const std::vector<GURL>& urls,
                                         DownloadCheckResult result) {
-  base::Value::Dict url_and_result;
-  base::Value::List urls_value;
+  base::DictValue url_and_result;
+  base::ListValue urls_value;
   for (const GURL& url : urls) {
     urls_value.Append(url.spec());
   }
@@ -271,94 +276,20 @@ std::string SerializeDownloadUrlChecked(const std::vector<GURL>& urls,
   return web_ui::SerializeJson(url_and_result);
 }
 
-std::string SerializeHitReport(const HitReport& hit_report) {
-  base::Value::Dict hit_report_dict;
-  hit_report_dict.Set("malicious_url", hit_report.malicious_url.spec());
-  hit_report_dict.Set("page_url", hit_report.page_url.spec());
-  hit_report_dict.Set("referrer_url", hit_report.referrer_url.spec());
-  hit_report_dict.Set("is_subresource", hit_report.is_subresource);
-  std::string threat_type;
-  switch (hit_report.threat_type) {
-    case SBThreatType::SB_THREAT_TYPE_URL_PHISHING:
-      threat_type = "SB_THREAT_TYPE_URL_PHISHING";
-      break;
-    case SBThreatType::SB_THREAT_TYPE_URL_MALWARE:
-      threat_type = "SB_THREAT_TYPE_URL_MALWARE";
-      break;
-    case SBThreatType::SB_THREAT_TYPE_URL_UNWANTED:
-      threat_type = "SB_THREAT_TYPE_URL_UNWANTED";
-      break;
-    case SBThreatType::SB_THREAT_TYPE_URL_BINARY_MALWARE:
-      threat_type = "SB_THREAT_TYPE_URL_BINARY_MALWARE";
-      break;
-    default:
-      threat_type = "OTHER";
-  }
-  hit_report_dict.Set("threat_type", std::move(threat_type));
-  std::string threat_source;
-  switch (hit_report.threat_source) {
-    case ThreatSource::LOCAL_PVER4:
-      threat_source = "LOCAL_PVER4";
-      break;
-    case ThreatSource::CLIENT_SIDE_DETECTION:
-      threat_source = "CLIENT_SIDE_DETECTION";
-      break;
-    case ThreatSource::URL_REAL_TIME_CHECK:
-      threat_source = "URL_REAL_TIME_CHECK";
-      break;
-    case ThreatSource::NATIVE_PVER5_REAL_TIME:
-      threat_source = "NATIVE_PVER5_REAL_TIME";
-      break;
-    case ThreatSource::ANDROID_SAFEBROWSING_REAL_TIME:
-      threat_source = "ANDROID_SAFEBROWSING_REAL_TIME";
-      break;
-    case ThreatSource::ANDROID_SAFEBROWSING:
-      threat_source = "ANDROID_SAFEBROWSING";
-      break;
-    case ThreatSource::UNKNOWN:
-      threat_source = "UNKNOWN";
-      break;
-  }
-  hit_report_dict.Set("threat_source", std::move(threat_source));
-  std::string extended_reporting_level;
-  switch (hit_report.extended_reporting_level) {
-    case ExtendedReportingLevel::SBER_LEVEL_OFF:
-      extended_reporting_level = "SBER_LEVEL_OFF";
-      break;
-    case ExtendedReportingLevel::SBER_LEVEL_LEGACY:
-      extended_reporting_level = "SBER_LEVEL_LEGACY";
-      break;
-    case ExtendedReportingLevel::SBER_LEVEL_SCOUT:
-      extended_reporting_level = "SBER_LEVEL_SCOUT";
-      break;
-    case ExtendedReportingLevel::SBER_LEVEL_ENHANCED_PROTECTION:
-      extended_reporting_level = "SBER_LEVEL_ENHANCED_PROTECTION";
-      break;
-  }
-  hit_report_dict.Set("extended_reporting_level",
-                      std::move(extended_reporting_level));
-  hit_report_dict.Set("is_enhanced_protection",
-                      hit_report.is_enhanced_protection);
-  hit_report_dict.Set("is_metrics_reporting_active",
-                      hit_report.is_metrics_reporting_active);
-  hit_report_dict.Set("post_data", hit_report.post_data);
-  return SerializeJson(hit_report_dict);
-}
-
 std::string SerializeJson(base::ValueView value) {
   return base::WriteJsonWithOptions(value,
                                     base::JSONWriter::OPTIONS_PRETTY_PRINT)
       .value_or(std::string());
 }
 
-base::Value::Dict SerializePGEvent(const sync_pb::UserEventSpecifics& event) {
-  base::Value::Dict result;
+base::DictValue SerializePGEvent(const sync_pb::UserEventSpecifics& event) {
+  base::DictValue result;
 
   base::Time timestamp = base::Time::FromDeltaSinceWindowsEpoch(
       base::Microseconds(event.event_time_usec()));
   result.Set("time", timestamp.InMillisecondsFSinceUnixEpoch());
 
-  base::Value::Dict event_dict;
+  base::DictValue event_dict;
 
   // Nominally only one of the following if() statements would be true.
   // Note that top-level path is either password_captured, or one of the fields
@@ -407,11 +338,11 @@ base::Value::Dict SerializePGEvent(const sync_pb::UserEventSpecifics& event) {
   return result;
 }
 
-base::Value::Dict SerializeSecurityEvent(
+base::DictValue SerializeSecurityEvent(
     const sync_pb::GaiaPasswordReuse& event) {
-  base::Value::Dict result;
+  base::DictValue result;
 
-  base::Value::Dict event_dict;
+  base::DictValue event_dict;
   if (event.has_reuse_lookup()) {
     event_dict.SetByDottedPath(
         "reuse_lookup.lookup_result",
@@ -430,9 +361,9 @@ base::Value::Dict SerializeSecurityEvent(
 }
 
 #if BUILDFLAG(IS_ANDROID)
-base::Value::Dict SerializeReferringAppInfo(
+base::DictValue SerializeReferringAppInfo(
     const internal::ReferringAppInfo& info) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("referring_app_source",
            ReferringAppInfo_ReferringAppSource_Name(info.referring_app_source));
   dict.Set("referring_app_info", info.referring_app_name);
@@ -468,10 +399,10 @@ std::string SerializeURTLookupResponse(const RTLookupResponse& response) {
 }
 
 std::string SerializeHPRTLookupPing(const HPRTLookupRequest& ping) {
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
 
-  base::Value::Dict inner_request_dict;
-  base::Value::List encoded_hash_prefixes;
+  base::DictValue inner_request_dict;
+  base::ListValue encoded_hash_prefixes;
   for (const auto& hash_prefix : ping.inner_request.hash_prefixes()) {
     std::string encoded_hash_prefix;
     base::Base64UrlEncode(hash_prefix,
@@ -498,9 +429,9 @@ std::string SerializeHPRTLookupResponse(
   return SerializeJson(ToValue(response));
 }
 
-base::Value::Dict SerializeLogMessage(base::Time timestamp,
-                                      const std::string& message) {
-  base::Value::Dict result;
+base::DictValue SerializeLogMessage(base::Time timestamp,
+                                    const std::string& message) {
+  base::DictValue result;
   result.Set("time", timestamp.InMillisecondsFSinceUnixEpoch());
   result.Set("message", message);
   return result;
@@ -508,17 +439,17 @@ base::Value::Dict SerializeLogMessage(base::Time timestamp,
 
 // TODO(crbug.com/443997643): Delete when
 // UploadRealtimeReportingEventsUsingProto is cleaned up.
-base::Value::Dict SerializeReportingEvent(const base::Value::Dict& event) {
-  base::Value::Dict result;
+base::DictValue SerializeReportingEvent(const base::DictValue& event) {
+  base::DictValue result;
   result.Set("message", SerializeJson(event));
   return result;
 }
 
-base::Value::Dict SerializeUploadEventsRequest(
+base::DictValue SerializeUploadEventsRequest(
     const ::chrome::cros::reporting::proto::UploadEventsRequest&
         upload_events_request,
-    const base::Value::Dict& result) {
-  base::Value::Dict message;
+    const base::DictValue& result) {
+  base::DictValue message;
 #if BUILDFLAG(IS_ANDROID)
   message.Set("request",
               base::EscapeNonASCII(upload_events_request.SerializeAsString()));
@@ -528,7 +459,7 @@ base::Value::Dict SerializeUploadEventsRequest(
 #endif
   message.Set("response", result.Clone());
 
-  base::Value::Dict wrapper;
+  base::DictValue wrapper;
   wrapper.Set("message", SerializeJson(message));
   auto& event = upload_events_request.events()[0];
   wrapper.Set("timeMillis",
@@ -542,7 +473,16 @@ base::Value::Dict SerializeUploadEventsRequest(
   return wrapper;
 }
 
-#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) && !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+std::string SerializeRequestHeaders(const net::HttpRequestHeaders& headers) {
+  std::ostringstream string_stream;
+  for (net::HttpRequestHeaders::Iterator it(headers); it.GetNext();) {
+    string_stream << it.name() << ": " << it.value() << "\r\n";
+  }
+
+  return string_stream.str();
+}
+
 std::string SerializeContentAnalysisRequest(
     bool per_profile_request,
     const std::string& access_token_truncated,
@@ -551,7 +491,7 @@ std::string SerializeContentAnalysisRequest(
     const enterprise_connectors::ContentAnalysisRequest& request) {
   base::Value request_value = ToValue(request);
   CHECK(request_value.is_dict());
-  base::Value::Dict& request_dict = request_value.GetDict();
+  base::DictValue& request_dict = request_value.GetDict();
   request_dict.Set("access_token", access_token_truncated);
   request_dict.Set("upload_info", upload_info);
   request_dict.Set("upload_url", upload_url);
@@ -563,14 +503,18 @@ std::string SerializeContentAnalysisResponse(
   return SerializeJson(ToValue(response));
 }
 
-base::Value::Dict SerializeDeepScanDebugData(const std::string& token,
-                                             const DeepScanDebugData& data) {
-  base::Value::Dict value;
+base::DictValue SerializeDeepScanDebugData(const std::string& token,
+                                           const DeepScanDebugData& data) {
+  base::DictValue value;
   value.Set("token", token);
 
   if (!data.request_time.is_null()) {
     value.Set("request_time",
               data.request_time.InMillisecondsFSinceUnixEpoch());
+  }
+
+  if (!data.request_headers.IsEmpty()) {
+    value.Set("http_headers", SerializeRequestHeaders(data.request_headers));
   }
 
   if (data.request.has_value()) {
@@ -596,7 +540,6 @@ base::Value::Dict SerializeDeepScanDebugData(const std::string& token,
 
   return value;
 }
-#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION) &&
-        // !BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 
 }  // namespace safe_browsing::web_ui

@@ -3,25 +3,28 @@
 // found in the LICENSE file.
 
 import '//resources/cr_components/composebox/composebox.js';
+import './omnibox_composebox.js';
 import '/strings.m.js';
 
 import {ColorChangeUpdater} from '//resources/cr_components/color_change_listener/colors_css_updater.js';
 import type {ComposeboxElement} from '//resources/cr_components/composebox/composebox.js';
-import {SearchboxBrowserProxy} from '//resources/cr_components/searchbox/searchbox_browser_proxy.js';
+import type {VoicePermissionPromptState} from '//resources/cr_components/composebox/composebox_voice_search.js';
 import {assert} from '//resources/js/assert.js';
 import {EventTracker} from '//resources/js/event_tracker.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
-import type {PageHandlerInterface as SearchboxPageHandlerInterface, SearchContext} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import type {SearchContext} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import type {InputState} from '//resources/mojo/components/omnibox/composebox/composebox_query.mojom-webui.js';
 
 import {getCss} from './aim_app.css.js';
 import {getHtml} from './aim_app.html.js';
-import {BrowserProxy} from './aim_browser_proxy.js';
-import type {PageCallbackRouter, PageHandlerInterface} from './omnibox_popup_aim.mojom-webui.js';
+import type {OmniboxComposeboxElement} from './omnibox_composebox.js';
+import {browserProxyFactory} from './omnibox_popup_aim.mojom-webui.js';
+import type {BrowserProxy} from './omnibox_popup_aim.mojom-webui.js';
 
 export interface OmniboxAimAppElement {
   $: {
-    composebox: ComposeboxElement,
+    composebox: ComposeboxElement|OmniboxComposeboxElement,
   };
 }
 
@@ -38,49 +41,103 @@ export class OmniboxAimAppElement extends CrLitElement {
     return getHtml.bind(this)();
   }
 
-  protected searchboxLayoutMode_: string =
-      loadTimeData.getString('searchboxLayoutMode');
+  static override get properties() {
+    return {
+      searchboxLayoutMode_: {type: String},
+      hasAllowedInputs_: {type: Boolean},
+      caretAnimationsEnabled_: {type: Boolean},
+      disableComposeboxAnimation_: {type: Boolean},
+      energyEffectEnabled_: {
+        type: Boolean,
+        reflect: true,
+      },
+      energyEffectAnimationEnabled_: {
+        type: Boolean,
+        reflect: true,
+      },
+      disableVoiceSearchAnimation_: {type: Boolean},
+      usePecApi_: {type: Boolean},
+      smartTabSharingVisible_: {type: Boolean},
+      contextManagementInComposeboxEnabled_: {type: Boolean},
+      isOblongShape_: {type: Boolean},
+      webuiOmniboxSimplificationEnabled_: {type: Boolean},
+      smartComposeEnabled_: {type: Boolean},
+    };
+  }
 
-  private isDebug_: boolean =
-      new URLSearchParams(window.location.search).has('debug');
+  protected accessor searchboxLayoutMode_: string =
+      loadTimeData.getString('searchboxLayoutMode');
+  protected accessor hasAllowedInputs_: boolean = false;
+  protected accessor disableComposeboxAnimation_: boolean =
+      loadTimeData.getBoolean('composeboxAnimationDisabled');
+  // Voice search animation is disabled outside of voice coherence.
+  protected accessor disableVoiceSearchAnimation_: boolean =
+      !loadTimeData.getBoolean('voiceSearchCoherenceComposeboxesEnabled');
+
+  protected accessor caretAnimationsEnabled_: boolean =
+      loadTimeData.getBoolean('caretAnimationEnabled');
+  protected accessor energyEffectEnabled_: boolean =
+      loadTimeData.getBoolean('energyEffectEnabled');
+  // The use of energyEffectEnabled to set energyEffectAnimationEnabled_ is
+  // intentional. This is to align the gating properties for energy effects
+  // across all surfaces (= Nextbox, Omnibox, and Realbox).
+  protected accessor energyEffectAnimationEnabled_: boolean =
+      loadTimeData.getBoolean('energyEffectEnabled');
+  protected accessor usePecApi_: boolean =
+      loadTimeData.getBoolean('contextualMenuUsePecApi');
+  protected accessor smartTabSharingVisible_: boolean =
+      loadTimeData.getBoolean('composeboxSmartTabSharingVisible');
+  protected accessor contextManagementInComposeboxEnabled_: boolean =
+      loadTimeData.getBoolean('contextManagementInComposeboxEnabled');
+  protected accessor isOblongShape_: boolean =
+      loadTimeData.getBoolean('contextButtonShapeIsOblong');
+  protected accessor webuiOmniboxSimplificationEnabled_: boolean =
+      loadTimeData.getBoolean('webuiOmniboxSimplificationEnabled');
+  protected accessor smartComposeEnabled_: boolean =
+      loadTimeData.getBoolean('composeboxSmartComposeEnabled');
+
   private eventTracker_ = new EventTracker();
-  private searchboxPageHandler_: SearchboxPageHandlerInterface;
-  private pageHandler_: PageHandlerInterface;
-  private callbackRouter_: PageCallbackRouter;
+  private browserProxy_: BrowserProxy;
   private listenerIds_: number[] = [];
   private preserveContextOnClose_: boolean = false;
 
   constructor() {
     super();
     ColorChangeUpdater.forDocument().start();
-    this.searchboxPageHandler_ = SearchboxBrowserProxy.getInstance().handler;
-    this.callbackRouter_ = BrowserProxy.getInstance().callbackRouter;
-    this.pageHandler_ = BrowserProxy.getInstance().handler;
+    this.browserProxy_ = browserProxyFactory.getInstance();
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    // Force an initial refresh to avoid the race condition where the profile
+    // theme loads after the page, but before the listener is ready.
+    ColorChangeUpdater.forDocument().refreshColorsCss();
 
     this.listenerIds_ = [
-      this.callbackRouter_.onPopupShown.addListener(
+      this.browserProxy_.callbackRouter.onPopupShown.addListener(
           this.onPopupShown_.bind(this)),
-      this.callbackRouter_.addContext.addListener(this.addContext_.bind(this)),
-      this.callbackRouter_.onPopupHidden.addListener(
-          this.onPopupHidden_.bind(this)),
-      this.callbackRouter_.setPreserveContextOnClose.addListener(
+      this.browserProxy_.callbackRouter.addContext.addListener(
+          this.addContext_.bind(this)),
+      this.browserProxy_.callbackRouter.focusInput.addListener(
+          this.focusInput_.bind(this)),
+      this.browserProxy_.callbackRouter.clearPopup.addListener(
+          this.clearPopup_.bind(this)),
+      this.browserProxy_.callbackRouter.setPreserveContextOnClose.addListener(
           this.setPreserveContextOnClose_.bind(this)),
+      this.browserProxy_.callbackRouter.onContextMenuClosed.addListener(
+          this.onContextMenuClosed_.bind(this)),
     ];
 
-    this.$.composebox.focusInput();
+    this.eventTracker_.add(
+        this.$.composebox, 'input-state-changed',
+        (e: CustomEvent<{inputState: InputState}>) => {
+          const inputState = e.detail.inputState;
+          this.hasAllowedInputs_ = inputState.allowedModels.length > 0 ||
+              inputState.allowedTools.length > 0 ||
+              inputState.allowedInputTypes.length > 0;
+        });
 
-    if (!this.isDebug_) {
-      this.eventTracker_.add(
-          document.documentElement, 'contextmenu', (e: Event) => {
-            e.preventDefault();
-          });
-    }
-
-    this.setupLocalizedLinkListener();
+    this.focusInput_();
   }
 
   override disconnectedCallback() {
@@ -88,34 +145,68 @@ export class OmniboxAimAppElement extends CrLitElement {
     this.eventTracker_.removeAll();
 
     for (const listenerId of this.listenerIds_) {
-      this.callbackRouter_.removeListener(listenerId);
+      this.browserProxy_.callbackRouter.removeListener(listenerId);
     }
     this.listenerIds_ = [];
   }
 
-  // As links do not navigate in the omnibox as they do in normal
-  // web ui pages, set up a listener to open the link in the current
-  // tab.
-  private setupLocalizedLinkListener() {
-    const link = this.$.composebox.shadowRoot.querySelector('localized-link')
-                     ?.shadowRoot!.querySelector('#container a');
-    if (link) {
-      link.addEventListener('click', this.onLinkClick_.bind(this));
+  protected getSearchboxLayoutMode_(): string {
+    if (this.searchboxLayoutMode_.startsWith('Tall') &&
+        !this.hasAllowedInputs_) {
+      return 'Compact';
     }
+    return this.searchboxLayoutMode_;
   }
 
-  protected onContextualEntryPointClicked_(
+  protected onContextMenuEntrypointClick_(
       e: CustomEvent<{x: number, y: number}>) {
     e.preventDefault();
     const point = {
       x: e.detail.x,
       y: e.detail.y,
     };
-    this.searchboxPageHandler_.showContextMenu(point);
+    // Force the button to keep its hover background visually while
+    // the menu is open, even if the mouse doesn't move out of the button
+    // area after clicking.
+    const contextButton = this.$.composebox.getContextEntrypointElement();
+    if (contextButton) {
+      contextButton.classList.add('menu-open');
+    }
+
+    this.browserProxy_.handler.showContextMenu(point);
   }
 
+  private onContextMenuClosed_() {
+    const contextButton = this.$.composebox.getContextEntrypointElement();
+    if (contextButton) {
+      contextButton.classList.remove('menu-open');
+    }
+  }
+
+  // Fired from voice search component in cr-composebox if minimum height
+  // and width are non zero when permission prompt is displayed, or any time
+  // when permission prompt hides.
+  protected onVoicePermissionPromptChanged(
+      e: CustomEvent<VoicePermissionPromptState>) {
+    if (e.detail.isOpened) {  // Permission prompt opened.
+      if (this.$.composebox) {
+        this.$.composebox.classList.add('has-permission-prompt');
+        this.$.composebox.style.setProperty(
+            '--cr_composebox_minimum_height', `${e.detail.height}px`);
+        this.$.composebox.style.setProperty(
+            '--cr_composebox_minimum_width', `${e.detail.width}px`);
+      }
+    } else {  // Permission prompt closed.
+      if (this.$.composebox) {
+        this.$.composebox.classList.remove('has-permission-prompt');
+        this.$.composebox.style.removeProperty(
+            '--cr_composebox_minimum_height');
+        this.$.composebox.style.removeProperty('--cr_composebox_minimum_width');
+      }
+    }
+  }
   protected onCloseComposebox_() {
-    this.pageHandler_.requestClose();
+    this.browserProxy_.handler.requestClose();
   }
 
   protected setPreserveContextOnClose_(preserveContextOnClose: boolean) {
@@ -129,35 +220,60 @@ export class OmniboxAimAppElement extends CrLitElement {
       // context on close as this indicates that the user is returning to the
       // widget after adding context.
       this.$.composebox.playGlowAnimation();
+      this.$.composebox.setDefaultModel();
     }
     this.$.composebox.addSearchContext(context);
-    this.$.composebox.focusInput();
+    this.focusInput_();
     this.preserveContextOnClose_ = false;
   }
 
   private addContext_(context: SearchContext) {
     this.$.composebox.addSearchContext(context);
+    this.focusInput_();
+    // Reset `preserveContextOnClose_` so subsequent popup closes correctly
+    // clear searchbox state (e.g. after adding context via Drive picker while
+    // popup stayed open).
+    this.setPreserveContextOnClose_(false);
+  }
+
+  private focusInput_() {
     this.$.composebox.focusInput();
   }
 
-  private onPopupHidden_(): Promise<{input: string}> {
-    const input = this.$.composebox.getInputText();
+  private async clearPopup_(): Promise<{input: string}> {
+    const input = this.$.composebox.input;
     if (!this.preserveContextOnClose_) {
-      this.$.composebox.clearAllInputs(/* querySubmitted= */ false);
+      this.$.composebox.clearAllInputs(
+          /* querySubmitted= */ false,
+          /* shouldBlockAutoSuggestedTabs= */ false);
       this.$.composebox.clearAutocompleteMatches();
       this.$.composebox.resetModes();
+      this.$.composebox.resetToolsAndModels();
     }
+    await this.updateComplete;
+    // Transfer input text to the location bar.
     return Promise.resolve({input});
   }
 
   protected onComposeboxSubmit_() {
-    this.$.composebox.clearAllInputs(/* querySubmitted= */ true);
+    this.$.composebox.clearAllInputs(/* querySubmitted= */ true,
+                                     /* shouldBlockAutoSuggestedTabs= */ false);
   }
 
-  private onLinkClick_(e: Event) {
-    e.preventDefault();
-    const href = (e.currentTarget as HTMLAnchorElement).href;
-    this.pageHandler_.navigateCurrentTab({url: href});
+  setSearchboxLayoutModeForTesting(mode: string) {
+    this.searchboxLayoutMode_ = mode;
+  }
+
+  setHasAllowedInputsForTesting(hasAllowedInputs: boolean) {
+    this.hasAllowedInputs_ = hasAllowedInputs;
+  }
+
+  getSearchboxLayoutModeForTesting(): string {
+    return this.getSearchboxLayoutMode_();
+  }
+
+  getHasAllowedInputsForTesting(): boolean {
+    return this.hasAllowedInputs_;
   }
 }
 

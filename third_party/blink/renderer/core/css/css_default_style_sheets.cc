@@ -41,10 +41,13 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
+#include "third_party/blink/renderer/core/html/html_camera_element.h"
+#include "third_party/blink/renderer/core/html/html_capability_element_base.h"
 #include "third_party/blink/renderer/core/html/html_geolocation_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
-#include "third_party/blink/renderer/core/html/html_permission_element.h"
+#include "third_party/blink/renderer/core/html/html_install_element.h"
+#include "third_party/blink/renderer/core/html/html_microphone_element.h"
 #include "third_party/blink/renderer/core/html/html_user_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
@@ -62,8 +65,8 @@ namespace blink {
 namespace {
 String MaybeRemoveCSSImportant(String string) {
   const blink::StringView kImportantSuffix(" !important");
-  return string.EndsWith(kImportantSuffix)
-             ? string.Substring(0, string.length() - kImportantSuffix.length())
+  return string.ends_with(kImportantSuffix)
+             ? string.substr(0, string.length() - kImportantSuffix.length())
              : string;
 }
 }  // namespace
@@ -73,12 +76,6 @@ CSSDefaultStyleSheets& CSSDefaultStyleSheets::Instance() {
                       css_default_style_sheets,
                       (MakeGarbageCollected<CSSDefaultStyleSheets>()));
   return *css_default_style_sheets;
-}
-
-static const MediaQueryEvaluator& PrintEval() {
-  DEFINE_STATIC_LOCAL(const Persistent<MediaQueryEvaluator>, static_print_eval,
-                      (MakeGarbageCollected<MediaQueryEvaluator>("print")));
-  return *static_print_eval;
 }
 
 static const MediaQueryEvaluator& ForcedColorsEval() {
@@ -135,6 +132,37 @@ void CSSDefaultStyleSheets::PrepareForLeakDetection() {
   Reset();
 }
 
+void CSSDefaultStyleSheets::ResetTextTrackStyleSheet() {
+  if (!text_track_style_sheet_) {
+    return;
+  }
+
+  text_track_style_sheet_.Clear();
+
+  // Recreate the default_media_controls_style_, and
+  // default_forced_colors_media_controls_style_ RuleSets to remove the old
+  // text track cue rule.
+  default_media_controls_style_ = MakeGarbageCollected<RuleSet>();
+  if (media_controls_style_sheet_) {
+    default_media_controls_style_->AddRulesFromSheet(
+        media_controls_style_sheet_, ScreenEval(), /*mixins=*/{});
+  }
+  default_media_controls_style_->CompactRulesIfNeeded();
+
+  if (default_forced_colors_media_controls_style_) {
+    default_forced_colors_media_controls_style_ =
+        MakeGarbageCollected<RuleSet>();
+    if (media_controls_style_sheet_) {
+      default_forced_colors_media_controls_style_->AddRulesFromSheet(
+          media_controls_style_sheet_, ForcedColorsEval(), /*mixins=*/{});
+    }
+    default_forced_colors_media_controls_style_->CompactRulesIfNeeded();
+  }
+
+  VerifyUniversalRuleCount();
+  rule_set_group_cache_.clear();
+}
+
 void CSSDefaultStyleSheets::Reset() {
   // Clear the optional style sheets.
   svg_style_sheet_.Clear();
@@ -150,6 +178,8 @@ void CSSDefaultStyleSheets::Reset() {
   permission_element_style_sheet_.Clear();
   view_source_style_sheet_.Clear();
   json_style_sheet_.Clear();
+  default_view_transition_style_sheet_.Clear();
+  skeleton_style_sheet_.Clear();
   // Recreate the default style sheet to clean up possible SVG resources.
   String default_rules =
       StrCat({UncompressResourceAsASCIIString(IDR_UASTYLE_HTML_CSS),
@@ -198,7 +228,8 @@ void CSSDefaultStyleSheets::VerifyUniversalRuleCount() {
   }
 
   if (marker_style_sheet_ || scroll_button_style_sheet_ ||
-      scroll_marker_style_sheet_) {
+      scroll_marker_style_sheet_ || overscroll_style_sheet_ ||
+      skeleton_style_sheet_) {
     default_pseudo_element_style_->CompactRulesIfNeeded();
     size_t expected_rule_count = 0u;
     if (marker_style_sheet_) {
@@ -209,6 +240,15 @@ void CSSDefaultStyleSheets::VerifyUniversalRuleCount() {
     }
     if (scroll_marker_style_sheet_) {
       expected_rule_count += 6u;
+    }
+    if (overscroll_style_sheet_) {
+      expected_rule_count += 1u;
+    }
+    if (default_view_transition_style_sheet_) {
+      expected_rule_count += 11u;
+    }
+    if (skeleton_style_sheet_) {
+      expected_rule_count += 2u;
     }
     DCHECK_EQ(default_pseudo_element_style_->UniversalRules().size(),
               expected_rule_count);
@@ -223,7 +263,6 @@ void CSSDefaultStyleSheets::InitializeDefaultStyles() {
   default_mathml_style_ = MakeGarbageCollected<RuleSet>();
   default_svg_style_ = MakeGarbageCollected<RuleSet>();
   default_html_quirks_style_ = MakeGarbageCollected<RuleSet>();
-  default_print_style_ = MakeGarbageCollected<RuleSet>();
   default_media_controls_style_ = MakeGarbageCollected<RuleSet>();
   default_fullscreen_style_ = MakeGarbageCollected<RuleSet>();
   default_forced_color_style_.Clear();
@@ -234,12 +273,9 @@ void CSSDefaultStyleSheets::InitializeDefaultStyles() {
                                          /*mixins=*/{});
   default_html_quirks_style_->AddRulesFromSheet(QuirksStyleSheet(),
                                                 ScreenEval(), /*mixins=*/{});
-  default_print_style_->AddRulesFromSheet(DefaultStyleSheet(), PrintEval(),
-                                          /*mixins=*/{});
 
   default_html_style_->CompactRulesIfNeeded();
   default_html_quirks_style_->CompactRulesIfNeeded();
-  default_print_style_->CompactRulesIfNeeded();
 
   CHECK(default_html_style_->ViewTransitionRules().empty())
       << "@view-transition is not implemented for the UA stylesheet.";
@@ -304,9 +340,7 @@ void CSSDefaultStyleSheets::AddRulesToDefaultStyleSheets(
       default_media_controls_style_->CompactRulesIfNeeded();
       break;
   }
-  // Add to print and forced color for all namespaces.
-  default_print_style_->AddRulesFromSheet(rules, PrintEval(), /*mixins=*/{});
-  default_print_style_->CompactRulesIfNeeded();
+  // Add to forced color for all namespaces.
   if (default_forced_color_style_) {
     switch (type) {
       case NamespaceType::kMediaControls:
@@ -358,17 +392,23 @@ bool CSSDefaultStyleSheets::EnsureDefaultStyleSheetsForElement(
     changed_default_style = true;
   }
 
-  if (!permission_element_style_sheet_ && IsA<HTMLPermissionElement>(element)) {
-    CHECK(RuntimeEnabledFeatures::PermissionElementEnabled(
-              element.GetExecutionContext()) ||
-          (RuntimeEnabledFeatures::UserMediaElementEnabled(
+  if (!permission_element_style_sheet_ &&
+      IsA<HTMLCapabilityElementBase>(element)) {
+    CHECK((RuntimeEnabledFeatures::UserMediaElementEnabled(
                element.GetExecutionContext()) &&
            IsA<HTMLUserMediaElement>(element)) ||
+          (RuntimeEnabledFeatures::CameraAndMicrophoneElementsEnabled(
+               element.GetExecutionContext()) &&
+           (IsA<HTMLCameraElement>(element) ||
+            IsA<HTMLMicrophoneElement>(element))) ||
           (RuntimeEnabledFeatures::GeolocationElementEnabled(
                element.GetExecutionContext()) &&
-           IsA<HTMLGeolocationElement>(element)));
+           IsA<HTMLGeolocationElement>(element)) ||
+          (RuntimeEnabledFeatures::InstallElementEnabled(
+               element.GetExecutionContext()) &&
+           IsA<HTMLInstallElement>(element)));
     permission_element_style_sheet_ = ParseUASheet(
-        UncompressResourceAsASCIIString(IDR_UASTYLE_PERMISSION_ELEMENT_CSS));
+        UncompressResourceAsASCIIString(IDR_UASTYLE_CAPABILITY_ELEMENT_CSS));
     AddRulesToDefaultStyleSheets(permission_element_style_sheet_,
                                  NamespaceType::kHTML);
     changed_default_style = true;
@@ -497,6 +537,39 @@ bool CSSDefaultStyleSheets::EnsureDefaultStyleSheetsForPseudoElement(
       }
       default_pseudo_element_style_->AddRulesFromSheet(
           MarkerStyleSheet(), ScreenEval(), /*mixins=*/{});
+      default_pseudo_element_style_->CompactRulesIfNeeded();
+      return true;
+    }
+    case kPseudoIdViewTransition:
+    case kPseudoIdViewTransitionGroup:
+    case kPseudoIdViewTransitionGroupChildren:
+    case kPseudoIdViewTransitionImagePair:
+    case kPseudoIdViewTransitionOld:
+    case kPseudoIdViewTransitionNew: {
+      if (default_view_transition_style_sheet_) {
+        return false;
+      }
+      default_view_transition_style_sheet_ = ParseUASheet(
+          UncompressResourceAsASCIIString(IDR_UASTYLE_TRANSITION_CSS));
+      if (!default_pseudo_element_style_) {
+        default_pseudo_element_style_ = MakeGarbageCollected<RuleSet>();
+      }
+      default_pseudo_element_style_->AddRulesFromSheet(
+          DefaultViewTransitionStyleSheet(), ScreenEval(), /*mixins=*/{});
+      default_pseudo_element_style_->CompactRulesIfNeeded();
+      return true;
+    }
+    case kPseudoIdSkeleton: {
+      if (skeleton_style_sheet_) {
+        return false;
+      }
+      skeleton_style_sheet_ = ParseUASheet(
+          UncompressResourceAsASCIIString(IDR_UASTYLE_SKELETON_CSS));
+      if (!default_pseudo_element_style_) {
+        default_pseudo_element_style_ = MakeGarbageCollected<RuleSet>();
+      }
+      default_pseudo_element_style_->AddRulesFromSheet(
+          SkeletonStyleSheet(), ScreenEval(), /*mixins=*/{});
       default_pseudo_element_style_->CompactRulesIfNeeded();
       return true;
     }
@@ -642,7 +715,6 @@ void CSSDefaultStyleSheets::Trace(Visitor* visitor) const {
   visitor->Trace(default_mathml_style_);
   visitor->Trace(default_svg_style_);
   visitor->Trace(default_html_quirks_style_);
-  visitor->Trace(default_print_style_);
   visitor->Trace(default_view_source_style_);
   visitor->Trace(default_forced_color_style_);
   visitor->Trace(default_pseudo_element_style_);
@@ -666,6 +738,8 @@ void CSSDefaultStyleSheets::Trace(Visitor* visitor) const {
   visitor->Trace(overscroll_style_sheet_);
   visitor->Trace(view_source_style_sheet_);
   visitor->Trace(json_style_sheet_);
+  visitor->Trace(default_view_transition_style_sheet_);
+  visitor->Trace(skeleton_style_sheet_);
 
   visitor->Trace(rule_set_group_cache_);
 }

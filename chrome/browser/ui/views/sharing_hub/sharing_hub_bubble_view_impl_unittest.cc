@@ -5,8 +5,8 @@
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_view_impl.h"
 
 #include <algorithm>
+#include <ranges>
 
-#include "base/containers/adapters.h"
 #include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/sharing_hub/fake_sharing_hub_bubble_controller.h"
@@ -93,7 +93,7 @@ class SharingHubBubbleTest : public ChromeViewsTestBase {
   void SetUp() override {
     ChromeViewsTestBase::SetUp();
     anchor_widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   }
 
   void TearDown() override {
@@ -104,7 +104,7 @@ class SharingHubBubbleTest : public ChromeViewsTestBase {
 
   void ShowBubble() {
     auto bubble = std::make_unique<sharing_hub::SharingHubBubbleViewImpl>(
-        anchor_widget_->GetRootView(),
+        views::BubbleAnchor(anchor_widget_->GetRootView()),
         share::ShareAttempt(nullptr, u"Hello!",
                             GURL("https://www.chromium.org"), ui::ImageModel()),
         &controller_);
@@ -184,7 +184,7 @@ TEST_F(SharingHubBubbleTest, ArrowKeysTraverseItemsBackward) {
 
   auto actions = GetActionButtons();
   ASSERT_GT(actions.size(), 0u);
-  for (auto* button : base::Reversed(actions)) {
+  for (auto* button : std::views::reverse(actions)) {
     SendKeyPress(bubble_widget(), ui::VKEY_UP);
     EXPECT_EQ(button, FocusedViewOf(bubble_widget()));
   }

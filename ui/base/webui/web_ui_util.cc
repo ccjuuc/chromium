@@ -23,6 +23,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/template_expressions.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -74,7 +75,7 @@ std::string GetPngDataUrl(base::span<const uint8_t> data) {
   return output;
 }
 
-WindowOpenDisposition GetDispositionFromClick(const base::Value::List& list,
+WindowOpenDisposition GetDispositionFromClick(const base::ListValue& list,
                                               size_t start_index) {
   double button = list[start_index].GetDouble();
   bool alt_key = list[start_index + 1].GetBool();
@@ -184,12 +185,20 @@ void ParsePathAndImageSpec(const GURL& url,
 }
 
 void SetLoadTimeDataDefaults(const std::string& app_locale,
-                             base::Value::Dict* localized_strings) {
+                             base::DictValue* localized_strings) {
   localized_strings->Set("fontfamily", GetFontFamily());
   localized_strings->Set("fontfamilyMd", GetFontFamilyMd());
   localized_strings->Set("fontsize", GetFontSize());
   localized_strings->Set("language", l10n_util::GetLanguage(app_locale));
   localized_strings->Set("textdirection", GetTextDirection());
+  localized_strings->Set(
+      "roundedIconsAttribute",
+      features::IsRoundedIconsEnabled() ? "rounded-icons" : "");
+  localized_strings->Set("webuiRoundedIconsEnabled",
+                         features::IsWebUIRoundedIconsEnabled());
+  localized_strings->Set(
+      "webuiRoundedIconsAttribute",
+      features::IsWebUIRoundedIconsEnabled() ? "webui-rounded-icons" : "");
 }
 
 void SetLoadTimeDataDefaults(const std::string& app_locale,
@@ -199,6 +208,12 @@ void SetLoadTimeDataDefaults(const std::string& app_locale,
   (*replacements)["fontsize"] = GetFontSize();
   (*replacements)["language"] = l10n_util::GetLanguage(app_locale);
   (*replacements)["textdirection"] = GetTextDirection();
+  (*replacements)["roundedIconsAttribute"] =
+      features::IsRoundedIconsEnabled() ? "rounded-icons" : "";
+  (*replacements)["webuiRoundedIconsEnabled"] =
+      features::IsWebUIRoundedIconsEnabled() ? "true" : "false";
+  (*replacements)["webuiRoundedIconsAttribute"] =
+      features::IsWebUIRoundedIconsEnabled() ? "webui-rounded-icons" : "";
 }
 
 std::string GetWebUiCssTextDefaults() {
@@ -238,7 +253,7 @@ std::string GetTextDirection() {
 }
 
 std::string GetLocalizedHtml(std::string_view html_template,
-                             const base::Value::Dict& strings) {
+                             const base::DictValue& strings) {
   // Populate $i18n{...} placeholders.
   ui::TemplateReplacements replacements;
   ui::TemplateReplacementsFromDictionaryValue(strings, &replacements);

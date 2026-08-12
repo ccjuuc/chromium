@@ -7,7 +7,6 @@ package org.chromium.base.test.transit;
 import static org.chromium.base.test.util.ViewPrinter.Options.PRINT_SHALLOW_WITH_BOUNDS;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
-import android.app.Activity;
 import android.view.View;
 
 import androidx.test.espresso.Root;
@@ -15,7 +14,6 @@ import androidx.test.espresso.Root;
 import org.hamcrest.Matcher;
 import org.hamcrest.StringDescription;
 
-import org.chromium.base.ApplicationStatus;
 import org.chromium.base.test.util.ViewPrinter;
 import org.chromium.build.annotations.Nullable;
 
@@ -61,6 +59,13 @@ public class DisplayedCondition<ViewT extends View> extends ConditionWithResult<
                 .append(" (>= ")
                 .append(mOptions.mDisplayedPercentageRequired)
                 .append("% displayed");
+
+        description
+                .append(", effectively ")
+                .append(
+                        ViewConditions.visibilityIntToString(
+                                mOptions.mExpectedEffectiveVisibility));
+
         if (mOptions.mSettleTimeMs > 0) {
             description.append(", settled for ").append(mOptions.mSettleTimeMs).append("ms");
         }
@@ -70,36 +75,26 @@ public class DisplayedCondition<ViewT extends View> extends ConditionWithResult<
         if (mOptions.mExpectDisabled) {
             description.append(", disabled");
         }
+
         // TODO(crbug.com/456770151): Add to description which RootSpec was used.
-        return description.toString();
+        return description.append(")").toString();
     }
 
     @Override
     protected ConditionStatusWithResult<ViewT> resolveWithSuppliers() {
-        if (!ApplicationStatus.hasVisibleActivities()) {
-            return awaiting("No visible activities").withoutResult();
-        }
-
         // Match even views that are not visible so that visibility checking can be done with
         // more details later in this method.
         ArrayList<String> messages = new ArrayList<>();
 
         RootSpec rootSpec = mRootSpecSupplier.get();
-        Supplier<? extends Activity> activitySupplier = rootSpec.getActivitySupplier();
 
-        if (activitySupplier != null) {
-            Activity activity = activitySupplier.get();
-            if (activity == null) {
-                return awaiting("Waiting for Activity from %s", activitySupplier).withoutResult();
-            }
-            if (activity.isDestroyed()) {
-                return notFulfilled("Activity from %s is destroyed", activitySupplier)
-                        .withoutResult();
-            }
-            if (activity.isFinishing()) {
-                return notFulfilled("Activity from %s is finishing", activitySupplier)
-                        .withoutResult();
-            }
+        String reasonToWait = rootSpec.getReasonToWaitToMatch();
+        if (reasonToWait != null) {
+            return awaiting(reasonToWait).withoutResult();
+        }
+        String reasonWillNotMatch = rootSpec.getReasonWillNotMatch();
+        if (reasonWillNotMatch != null) {
+            return notFulfilled(reasonWillNotMatch).withoutResult();
         }
 
         List<Root> roots = InternalViewFinder.findRoots(rootSpec);
@@ -110,7 +105,9 @@ public class DisplayedCondition<ViewT extends View> extends ConditionWithResult<
         for (ViewAndRoot viewAndRoot : allMatches) {
             ViewConditions.DisplayedEvaluation displayedEvaluation =
                     ViewConditions.evaluateMatch(
-                            viewAndRoot, mOptions.mDisplayedPercentageRequired);
+                            viewAndRoot,
+                            mOptions.mDisplayedPercentageRequired,
+                            mOptions.mExpectedEffectiveVisibility);
             displayedEvaluations.add(displayedEvaluation);
             if (displayedEvaluation.didMatch) {
                 displayedMatches.add(displayedEvaluation);
@@ -218,6 +215,7 @@ public class DisplayedCondition<ViewT extends View> extends ConditionWithResult<
     public static class Options {
         boolean mExpectEnabled = true;
         boolean mExpectDisabled;
+        int mExpectedEffectiveVisibility = View.VISIBLE;
         int mDisplayedPercentageRequired = ViewElement.MIN_DISPLAYED_PERCENT;
         int mSettleTimeMs;
 
@@ -237,6 +235,12 @@ public class DisplayedCondition<ViewT extends View> extends ConditionWithResult<
             /** Whether the View is expected to be disabled. */
             public Options.Builder withExpectDisabled(boolean state) {
                 mExpectDisabled = state;
+                return this;
+            }
+
+            /** Whether the View is expected to be effectively VISIBLE, INVISIBLE or GONE. */
+            public Options.Builder withEffectiveVisibility(int expectedVisibility) {
+                mExpectedEffectiveVisibility = expectedVisibility;
                 return this;
             }
 

@@ -68,6 +68,7 @@ static_library("public") {
     "//build:branding_buildflags",
     "//components/feed:feature_list",
     "//components/keyed_service/core",
+    "//components/segmentation_platform/public",
     "//components/webui/flags",
     "//extensions/buildflags",
   ]
@@ -86,17 +87,6 @@ static_library("public") {
     sources += [
       "ios_promo_feature_configuration.cc",
       "ios_promo_feature_configuration.h",
-    ]
-  }
-
-  if (is_chromeos) {
-    sources += [
-      "scalable_iph_feature_configurations.cc",
-      "scalable_iph_feature_configurations.h",
-    ]
-    deps += [
-      "//ash/constants",
-      "//chromeos/ash/components/scalable_iph:constants",
     ]
   }
 }

@@ -9,6 +9,7 @@ import static org.chromium.ui.base.KeyNavigationUtil.isGoBackward;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Rect;
+import android.os.Build;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
@@ -16,12 +17,21 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ListView;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
+import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.view.ViewCompat;
 
+import org.chromium.base.Callback;
+import org.chromium.base.ObserverList;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
@@ -39,6 +49,7 @@ import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * A controller to manage the logic for hierarchical menus i.e., flyout and drilldown.
@@ -50,6 +61,21 @@ import java.util.List;
  */
 @NullMarked
 public class HierarchicalMenuController<T> {
+
+    /** An observer that is notified when a submenu is loaded. */
+    public interface SubmenuObserver {
+        /**
+         * Called when a submenu's items have been loaded.
+         *
+         * @param items The list of items that were loaded.
+         */
+        void onSubmenuLoaded(List<ListItem> items);
+
+        /** Called when a submenu has been entered and shown. */
+        default void onSubmenuEntered() {}
+    }
+
+    private static @Nullable Boolean sDrillDownOverrideValueForTesting;
 
     /** An interface for creating the ListItem for drilldown's header. */
     public interface SubmenuHeaderFactory {
@@ -78,21 +104,28 @@ public class HierarchicalMenuController<T> {
      * @param drillDownOverrideValue If not null, forces the menu behavior to be drill-down ({@code
      *     true}) or flyout ({@code false}), overriding the default.
      */
-    public void setDrillDownOverrideValueForTesting(@Nullable Boolean drillDownOverrideValue) {
-        mDrillDownOverrideValue = drillDownOverrideValue;
+    public static void setDrillDownOverrideValueForTesting(
+            @Nullable Boolean drillDownOverrideValue) {
+        @Nullable Boolean oldValue = sDrillDownOverrideValueForTesting;
+        ResettersForTesting.register(() -> sDrillDownOverrideValueForTesting = oldValue);
+        sDrillDownOverrideValueForTesting = drillDownOverrideValue;
     }
 
     private final SubmenuHeaderFactory mSubmenuHeaderFactory;
+    private final ObserverList<SubmenuObserver> mObservers = new ObserverList<>();
 
     private @Nullable FlyoutController<T> mFlyoutController;
-    private List<ListItem> mLastHighlightedPath = new ArrayList<ListItem>();
+    private List<ListItem> mLastHighlightedPath = new ArrayList<>();
+    private final ArrayList<Runnable> mBackRunnableStack = new ArrayList<>();
+    private final SettableNonNullObservableSupplier<Boolean> mBackPressChangedSupplier =
+            ObservableSuppliers.createNonNull(false);
 
     /**
      * Creates an instance of the controller.
      *
      * @param context The application's {@link Context} to retrieve resources.
-     * @param submenuHeaderFactory The {@link SubmenuHeaderFactory} to use.
      * @param keyProvider The {@link HierarchicalMenuKeyProvider} for the controller to use.
+     * @param submenuHeaderFactory The {@link SubmenuHeaderFactory} to use.
      */
     public HierarchicalMenuController(
             Context context,
@@ -108,25 +141,132 @@ public class HierarchicalMenuController<T> {
     }
 
     /**
+     * Adds an observer to be notified of submenu loading events.
+     *
+     * @param observer The {@link SubmenuObserver} to add.
+     */
+    public void addObserver(SubmenuObserver observer) {
+        mObservers.addObserver(observer);
+    }
+
+    /**
+     * Removes an observer.
+     *
+     * @param observer The {@link SubmenuObserver} to remove.
+     */
+    public void removeObserver(SubmenuObserver observer) {
+        mObservers.removeObserver(observer);
+    }
+
+    /**
      * Creates and initializes the {@link FlyoutController}.
      *
      * @param flyoutHandler The {@link FlyoutHandler} for the controller to use for displaying
      *     flyout popups.
      * @param mainPopup The main popup window for flyout popups to fly out of.
+     * @param scrollListenerAttacher Callback to attach the scroll listener to the main popup.
      * @param drillDownOverrideValue If not null, forces the menu behavior to be drill-down ({@code
      *     true}) or flyout ({@code false}), overriding the default.
      */
     public void setupFlyoutController(
-            FlyoutHandler<T> flyoutHandler, T mainPopup, @Nullable Boolean drillDownOverrideValue) {
-        mFlyoutController = new FlyoutController<T>(flyoutHandler, mKeyProvider, mainPopup, this);
+            FlyoutHandler<T> flyoutHandler,
+            T mainPopup,
+            Callback<View.OnScrollChangeListener> scrollListenerAttacher,
+            @Nullable Boolean drillDownOverrideValue) {
+        mFlyoutController =
+                new FlyoutController<T>(
+                        flyoutHandler, mKeyProvider, mainPopup, this, scrollListenerAttacher);
         mDrillDownOverrideValue = drillDownOverrideValue;
     }
 
     /** Dismiss all popups including the main window and destroy the {@link FlyoutController}. */
     public void destroyFlyoutController() {
-        assert mFlyoutController != null;
-        mFlyoutController.destroy();
-        mFlyoutController = null;
+        if (mFlyoutController != null) {
+            mFlyoutController.destroy();
+            mFlyoutController = null;
+        }
+        mBackRunnableStack.clear();
+        mBackPressChangedSupplier.set(false);
+    }
+
+    /**
+     * Handles the back action (e.g. from system back navigation or drill-down header click).
+     *
+     * @return {@code true} if a drill-down submenu was open and navigated back one level, {@code
+     *     false} if at the root level of the menu (stack is empty).
+     */
+    public boolean handleBackPress() {
+        if (mBackRunnableStack.isEmpty()) {
+            return false;
+        }
+        Runnable backRunnable = mBackRunnableStack.remove(mBackRunnableStack.size() - 1);
+        backRunnable.run();
+        mBackPressChangedSupplier.set(!mBackRunnableStack.isEmpty());
+        return true;
+    }
+
+    public NonNullObservableSupplier<Boolean> getHandleBackPressChangedSupplier() {
+        return mBackPressChangedSupplier;
+    }
+
+    /**
+     * Helper to wire up modern Android 13+ (API 33+) back gesture interception for popup window
+     * menus.
+     *
+     * @param contentView The content view of the menu window.
+     * @param defaultDismissAction The runnable to execute when back is pressed at the root level.
+     */
+    public void setupBackPressBehaviorForPopupWindow(
+            @Nullable View contentView, Runnable defaultDismissAction) {
+        if (contentView == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            OnBackInvokedCallback backCallback =
+                    () -> {
+                        if (!handleBackPress()) {
+                            defaultDismissAction.run();
+                        }
+                    };
+            @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+            class BackPressAttachStateChangeListener implements View.OnAttachStateChangeListener {
+                private @Nullable OnBackInvokedDispatcher mAttachedDispatcher;
+
+                @Override
+                public void onViewAttachedToWindow(View v) {
+                    register(v);
+                }
+
+                @Override
+                public void onViewDetachedFromWindow(View v) {
+                    unregister();
+                    v.removeOnAttachStateChangeListener(this);
+                }
+
+                public void register(View v) {
+                    if (mAttachedDispatcher != null) {
+                        return;
+                    }
+                    OnBackInvokedDispatcher dispatcher = v.findOnBackInvokedDispatcher();
+                    if (dispatcher != null) {
+                        dispatcher.registerOnBackInvokedCallback(
+                                OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCallback);
+                        mAttachedDispatcher = dispatcher;
+                    }
+                }
+
+                public void unregister() {
+                    if (mAttachedDispatcher != null) {
+                        mAttachedDispatcher.unregisterOnBackInvokedCallback(backCallback);
+                        mAttachedDispatcher = null;
+                    }
+                }
+            }
+
+            BackPressAttachStateChangeListener listener = new BackPressAttachStateChangeListener();
+            contentView.addOnAttachStateChangeListener(listener);
+            if (ViewCompat.isAttachedToWindow(contentView)) {
+                listener.register(contentView);
+            }
+        }
     }
 
     /**
@@ -149,6 +289,7 @@ public class HierarchicalMenuController<T> {
      * @return True to use the drilldown, false to use the flyout style.
      */
     public boolean shouldUseDrillDown() {
+        if (sDrillDownOverrideValueForTesting != null) return sDrillDownOverrideValueForTesting;
         if (mDrillDownOverrideValue != null) {
             if (!mDrillDownOverrideValue) {
                 assert mFlyoutController != null;
@@ -272,7 +413,8 @@ public class HierarchicalMenuController<T> {
             ListItem item,
             View view,
             int levelOfHoveredItem,
-            List<ListItem> highlightPath) {
+            List<ListItem> highlightPath,
+            Runnable dismissRunnable) {
         if (mPendingHoverExitRunnable != null) {
             assert mHoverExitDelayHandler != null;
             mHoverExitDelayHandler.removeCallbacks(mPendingHoverExitRunnable);
@@ -285,7 +427,8 @@ public class HierarchicalMenuController<T> {
                 updateHighlights(highlightPath);
                 if (!shouldUseDrillDown()) {
                     assert mFlyoutController != null;
-                    mFlyoutController.onItemHovered(item, view, levelOfHoveredItem, highlightPath);
+                    mFlyoutController.onItemHovered(
+                            item, view, levelOfHoveredItem, highlightPath, dismissRunnable);
                 }
                 return true;
             case MotionEvent.ACTION_HOVER_EXIT:
@@ -326,6 +469,45 @@ public class HierarchicalMenuController<T> {
     }
 
     /**
+     * Ensures that the submenu items for the given {@code item} are loaded and initialized.
+     *
+     * @param headerModelList {@link ModelList} for unscrollable top header; null if headers scroll.
+     * @param contentModelList {@link ModelList} for the scrollable content of the menu.
+     * @param item The menu item which was clicked.
+     * @param dismissDialog The {@link Runnable} to run to dismiss the dialog.
+     * @param levelOfHoveredItem The depth of the item within the menu hierarchy (e.g., 0 for root
+     * @param highlightPath The complete list of items from the root of the menu to the currently
+     *     hovered {@code item}, inclusive.
+     */
+    public List<ListItem> getLoadedSubmenuItems(
+            @Nullable ModelList headerModelList,
+            ModelList contentModelList,
+            ListItem item,
+            Runnable dismissDialog,
+            int levelOfItem,
+            List<ListItem> highlightPath) {
+        WritableObjectPropertyKey<Supplier<List<ListItem>>> providerKey =
+                mKeyProvider.getSubmenuProviderKey();
+        List<ListItem> submenuItems = item.model.get(providerKey).get();
+
+        for (SubmenuObserver observer : mObservers) {
+            observer.onSubmenuLoaded(submenuItems);
+        }
+
+        for (ListItem submenuItem : submenuItems) {
+            setupCallbacksForItem(
+                    headerModelList,
+                    contentModelList,
+                    submenuItem,
+                    dismissDialog,
+                    levelOfItem + 1,
+                    highlightPath);
+        }
+
+        return submenuItems;
+    }
+
+    /**
      * Callback to use when a menu item of type MENU_ITEM_WITH_SUBMENU is clicked.
      *
      * @param headerModelList {@link ModelList} for unscrollable top header; null if headers scroll.
@@ -333,7 +515,12 @@ public class HierarchicalMenuController<T> {
      * @param item The menu item which was clicked.
      */
     private void onItemWithSubmenuClicked(
-            @Nullable ModelList headerModelList, ModelList contentModelList, ListItem item) {
+            @Nullable ModelList headerModelList,
+            ModelList contentModelList,
+            ListItem item,
+            Runnable dismissDialog,
+            int levelOfItem,
+            List<ListItem> highlightPath) {
         if (!shouldUseDrillDown()) {
             return;
         }
@@ -349,16 +536,29 @@ public class HierarchicalMenuController<T> {
                     }
                     setModelListContent(contentModelList, parentModelList);
                 };
+        mBackRunnableStack.add(headerBackClick);
+        mBackPressChangedSupplier.set(true);
 
-        ListItem headerItem = mSubmenuHeaderFactory.createHeaderItem(item, headerBackClick);
+        ListItem headerItem = mSubmenuHeaderFactory.createHeaderItem(item, this::handleBackPress);
         List<ListItem> newContentList = new ArrayList<>();
         if (headerModelList == null) {
             newContentList.add(headerItem);
         } else {
             headerModelList.set(List.of(headerItem));
         }
-        newContentList.addAll(item.model.get(mKeyProvider.getSubmenuItemsKey()));
+        newContentList.addAll(
+                getLoadedSubmenuItems(
+                        headerModelList,
+                        contentModelList,
+                        item,
+                        dismissDialog,
+                        levelOfItem,
+                        highlightPath));
         contentModelList.set(newContentList);
+
+        for (SubmenuObserver observer : mObservers) {
+            observer.onSubmenuEntered();
+        }
     }
 
     private void setModelListContent(ModelList modelList, ModelList target) {
@@ -414,7 +614,7 @@ public class HierarchicalMenuController<T> {
      * @param item The item to start with.
      * @param dismissDialog The {@link Runnable} to run.
      */
-    private void setupCallbacksRecursivelyForItem(
+    private void setupCallbacksForItem(
             @Nullable ModelList headerModelList,
             ModelList contentModelList,
             ListItem item,
@@ -433,7 +633,12 @@ public class HierarchicalMenuController<T> {
                     mKeyProvider.getHoverListenerKey(),
                     (view, event) -> {
                         return handleHoverEvent(
-                                event, item, view, levelOfHoveredItem, highlightPath);
+                                event,
+                                item,
+                                view,
+                                levelOfHoveredItem,
+                                highlightPath,
+                                dismissDialog);
                     });
 
             View.OnKeyListener originalListener = item.model.get(mKeyProvider.getKeyListenerKey());
@@ -458,7 +663,15 @@ public class HierarchicalMenuController<T> {
                     });
         }
 
-        if (item.model.containsKey(mKeyProvider.getSubmenuItemsKey())) {
+        WritableObjectPropertyKey<Supplier<List<ListItem>>> providerKey =
+                mKeyProvider.getSubmenuProviderKey();
+
+        boolean hasSubmenu =
+                providerKey != null
+                        && item.model.containsKey(providerKey)
+                        && item.model.get(providerKey) != null;
+
+        if (hasSubmenu) {
             final View.OnClickListener existingListener =
                     item.model.get(mKeyProvider.getClickListenerKey());
             item.model.set(
@@ -468,27 +681,22 @@ public class HierarchicalMenuController<T> {
                             existingListener.onClick(view);
                         }
                         if (shouldUseDrillDown()) {
-                            onItemWithSubmenuClicked(headerModelList, contentModelList, item);
+                            onItemWithSubmenuClicked(
+                                    headerModelList,
+                                    contentModelList,
+                                    item,
+                                    dismissDialog,
+                                    levelOfHoveredItem,
+                                    highlightPath);
                         } else if (mFlyoutController != null) {
                             // Allow for controlling flyout with keyboard for accessibility.
                             mFlyoutController.enterFlyoutWithoutDelay(
-                                    item, view, levelOfHoveredItem, highlightPath);
+                                    item, view, levelOfHoveredItem, highlightPath, dismissDialog);
                         }
                     });
-            for (ListItem submenuItem :
-                    PropertyModel.getFromModelOrDefault(
-                            item.model, mKeyProvider.getSubmenuItemsKey(), List.of())) {
-                setupCallbacksRecursivelyForItem(
-                        headerModelList,
-                        contentModelList,
-                        submenuItem,
-                        dismissDialog,
-                        levelOfHoveredItem + 1,
-                        highlightPath);
-            }
         } else {
             // Note: SUBMENU_HEADER items should be (and are) excluded by this, because
-            // SUBMENU_HEADER items aren't in the model's SUBMENU_ITEMS.
+            // SUBMENU_HEADER items aren't in the model's SUBMENU_PROVIDER.
             // MENU_ITEM_WITH_SUBMENU items should also not be included.
             // The rationale for excluding these is that we don't want to dismiss the dialog when we
             // are navigating through submenus.
@@ -504,14 +712,14 @@ public class HierarchicalMenuController<T> {
      * @param contentModelList {@link ModelList} for the scrollable content of the menu.
      * @param dismissDialog The {@link Runnable} to run.
      */
-    public void setupCallbacksRecursively(
+    public void setupCallbacks(
             @Nullable ModelList headerModelList,
             ModelList contentModelList,
             Runnable dismissDialog) {
         long time = SystemClock.elapsedRealtime();
         if (headerModelList != null) {
             for (ListItem listItem : headerModelList) {
-                setupCallbacksRecursivelyForItem(
+                setupCallbacksForItem(
                         headerModelList,
                         contentModelList,
                         listItem,
@@ -521,7 +729,7 @@ public class HierarchicalMenuController<T> {
             }
         }
         for (ListItem listItem : contentModelList) {
-            setupCallbacksRecursivelyForItem(
+            setupCallbacksForItem(
                     headerModelList,
                     contentModelList,
                     listItem,
@@ -571,7 +779,7 @@ public class HierarchicalMenuController<T> {
             Runnable backRunnable) {
         builder.with(keyProvider.getTitleKey(), title)
                 .with(keyProvider.getEnabledKey(), true)
-                .with(keyProvider.getClickListenerKey(), (unusedView) -> backRunnable.run())
+                .with(keyProvider.getClickListenerKey(), _ -> backRunnable.run())
                 .with(
                         keyProvider.getKeyListenerKey(),
                         (view, keyCode, keyEvent) -> {
@@ -648,8 +856,9 @@ public class HierarchicalMenuController<T> {
             // The method calls below ensure that when we transition to a different submenu, the
             // keyboard focus goes to the topmost element.
             mContentView.setSelection(0);
-            if (mHeaderView != null && mHeaderModelList != null && !mHeaderModelList.isEmpty())
+            if (mHeaderView != null && mHeaderModelList != null && !mHeaderModelList.isEmpty()) {
                 mHeaderView.setSelection(0);
+            }
             mView.requestFocus();
         }
     }

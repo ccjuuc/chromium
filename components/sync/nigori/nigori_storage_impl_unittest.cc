@@ -6,11 +6,12 @@
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "components/os_crypt/async/browser/test_utils.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "components/os_crypt/async/common/test_encryptor.h"
-#include "components/os_crypt/sync/os_crypt_mocker.h"
 #include "components/sync/protocol/nigori_local_data.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -18,11 +19,10 @@ namespace syncer {
 
 namespace {
 
-os_crypt_async::Encryptor GetInstanceSync(
+scoped_refptr<os_crypt_async::Encryptor> GetInstanceSync(
     os_crypt_async::OSCryptAsync* factory) {
-  base::test::TestFuture<os_crypt_async::Encryptor> future;
-  factory->GetInstance(future.GetCallback(),
-                       os_crypt_async::Encryptor::Option::kNone);
+  base::test::TestFuture<scoped_refptr<os_crypt_async::Encryptor>> future;
+  factory->GetInstance(future.GetCallback());
   return future.Take();
 }
 
@@ -37,7 +37,10 @@ sync_pb::NigoriLocalData MakeSomeNigoriLocalData() {
 
 class NigoriStorageImplTest : public testing::Test {
  protected:
-  NigoriStorageImplTest() = default;
+  NigoriStorageImplTest() {
+    os_crypt_ = os_crypt_async::GetTestOSCryptAsyncForTesting(
+        /*is_sync_for_unittests=*/true);
+  }
   ~NigoriStorageImplTest() override = default;
 
   void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
@@ -47,64 +50,41 @@ class NigoriStorageImplTest : public testing::Test {
         base::FilePath(FILE_PATH_LITERAL("some_file")));
   }
 
+  scoped_refptr<os_crypt_async::Encryptor> GetEncryptor() {
+    return GetInstanceSync(os_crypt_.get());
+  }
+
  private:
   base::ScopedTempDir temp_dir_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_;
 };
 
-TEST_F(NigoriStorageImplTest, ShouldBeAbleToRestoreAfterWriteWithAsync) {
-  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt =
-      os_crypt_async::GetTestOSCryptAsyncForTesting(
-          /*is_sync_for_unittests=*/true);
-
-  NigoriStorageImpl writer_storage(GetFilePath(),
-                                   std::make_unique<os_crypt_async::Encryptor>(
-                                       GetInstanceSync(os_crypt.get())));
+TEST_F(NigoriStorageImplTest, ShouldBeAbleToRestoreAfterWrite) {
+  NigoriStorageImpl writer_storage(GetFilePath(), GetEncryptor());
   sync_pb::NigoriLocalData write_data = MakeSomeNigoriLocalData();
   writer_storage.StoreData(write_data);
 
   // Use different NigoriStorageImpl when reading to avoid dependency on its
   // state and emulate browser restart.
-  NigoriStorageImpl reader_storage(GetFilePath(),
-                                   std::make_unique<os_crypt_async::Encryptor>(
-                                       GetInstanceSync(os_crypt.get())));
+  NigoriStorageImpl reader_storage(GetFilePath(), GetEncryptor());
   std::optional<sync_pb::NigoriLocalData> read_data =
       reader_storage.RestoreData();
   EXPECT_NE(read_data, std::nullopt);
   EXPECT_EQ(read_data->SerializeAsString(), write_data.SerializeAsString());
-}
-
-TEST_F(NigoriStorageImplTest, ShouldBeAbleToRestoreAfterWriteWithSync) {
-  OSCryptMocker::SetUp();
-  NigoriStorageImpl writer_storage(GetFilePath(), /*encryptor=*/nullptr);
-  sync_pb::NigoriLocalData write_data = MakeSomeNigoriLocalData();
-  writer_storage.StoreData(write_data);
-
-  // Use different NigoriStorageImpl when reading to avoid dependency on its
-  // state and emulate browser restart.
-  NigoriStorageImpl reader_storage(GetFilePath(), /*encryptor=*/nullptr);
-  std::optional<sync_pb::NigoriLocalData> read_data =
-      reader_storage.RestoreData();
-
-  EXPECT_NE(read_data, std::nullopt);
-  EXPECT_EQ(read_data->SerializeAsString(), write_data.SerializeAsString());
-
-  OSCryptMocker::TearDown();
 }
 
 TEST_F(NigoriStorageImplTest, ShouldReturnNulloptWhenFileNotExists) {
-  NigoriStorageImpl storage(GetFilePath(), /*encryptor=*/nullptr);
+  NigoriStorageImpl storage(GetFilePath(), GetEncryptor());
   EXPECT_EQ(storage.RestoreData(), std::nullopt);
 }
 
 TEST_F(NigoriStorageImplTest, ShouldRemoveFile) {
-  OSCryptMocker::SetUp();
-  NigoriStorageImpl storage(GetFilePath(), /*encryptor=*/nullptr);
+  NigoriStorageImpl storage(GetFilePath(), GetEncryptor());
   sync_pb::NigoriLocalData data = MakeSomeNigoriLocalData();
   storage.StoreData(data);
   ASSERT_TRUE(base::PathExists(GetFilePath()));
   storage.ClearData();
   EXPECT_FALSE(base::PathExists(GetFilePath()));
-  OSCryptMocker::TearDown();
 }
 
 }  // namespace

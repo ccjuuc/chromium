@@ -14,9 +14,11 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "content/browser/bluetooth/bluetooth_adapter_factory_wrapper.h"
 #include "content/browser/bluetooth/bluetooth_allowed_devices.h"
+#include "content/browser/bluetooth/bluetooth_blocklist.h"
 #include "content/browser/bluetooth/web_bluetooth_pairing_manager.h"
 #include "content/public/browser/bluetooth_delegate.h"
 #include "content/public/common/content_client.h"
@@ -30,6 +32,7 @@
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "device/bluetooth/test/mock_bluetooth_device.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_characteristic.h"
+#include "device/bluetooth/test/mock_bluetooth_gatt_descriptor.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_notify_session.h"
 #include "device/bluetooth/test/mock_bluetooth_gatt_service.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -94,6 +97,8 @@ constexpr char kBatteryLevelCharacteristicId[] = "battery_level_id";
 const device::BluetoothUUID kBatteryServiceUUID(kBatteryServiceUUIDString);
 const device::BluetoothUUID kBatteryLevelCharacteristicUUID(
     "00002a19-0000-1000-8000-00805f9b34fb");
+const device::BluetoothUUID kCharacteristicUserDescriptionDescriptorUUID(
+    "00002901-0000-1000-8000-00805f9b34fb");
 const BluetoothDeviceBundleData battery_device_bundle_data = {
     kBatteryServiceId, kBatteryLevelCharacteristicId, kBatteryServiceUUID,
     kBatteryLevelCharacteristicUUID, kTestCharacteristicProperties};
@@ -340,11 +345,6 @@ class TestBluetoothDelegate : public BluetoothDelegate {
   TestBluetoothDelegate& operator=(const TestBluetoothDelegate&) = delete;
 
   // BluetoothDelegate:
-  std::unique_ptr<BluetoothChooser> RunBluetoothChooser(
-      RenderFrameHost* frame,
-      const BluetoothChooser::EventHandler& event_handler) override {
-    return nullptr;
-  }
   std::unique_ptr<BluetoothScanningPrompt> ShowBluetoothScanningPrompt(
       RenderFrameHost* frame,
       const BluetoothScanningPrompt::EventHandler& event_handler) override {
@@ -362,54 +362,31 @@ class TestBluetoothDelegate : public BluetoothDelegate {
     std::move(callback).Run(PairPromptResult(PairPromptStatus::kCancelled));
   }
 
-  blink::WebBluetoothDeviceId GetWebBluetoothDeviceId(
-      RenderFrameHost* frame,
-      const std::string& device_address) override {
-    return blink::WebBluetoothDeviceId();
-  }
-  std::string GetDeviceAddress(RenderFrameHost* frame,
-                               const blink::WebBluetoothDeviceId&) override {
-    return std::string();
-  }
-  blink::WebBluetoothDeviceId AddScannedDevice(
-      RenderFrameHost* frame,
-      const std::string& device_address) override {
-    return blink::WebBluetoothDeviceId();
-  }
-  blink::WebBluetoothDeviceId GrantServiceAccessPermission(
-      RenderFrameHost* frame,
-      const device::BluetoothDevice* device,
-      const blink::mojom::WebBluetoothRequestDeviceOptions* options) override {
-    return blink::WebBluetoothDeviceId();
-  }
   bool HasDevicePermission(
       RenderFrameHost* frame,
       const blink::WebBluetoothDeviceId& device_id) override {
-    return false;
+    return has_device_permission_;
   }
-  void RevokeDevicePermissionWebInitiated(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id) override {}
-  bool MayUseBluetooth(RenderFrameHost* rfh) override { return true; }
-  bool IsAllowedToAccessService(RenderFrameHost* frame,
-                                const blink::WebBluetoothDeviceId& device_id,
-                                const device::BluetoothUUID& service) override {
-    return false;
+
+  void set_has_device_permission(bool value) {
+    has_device_permission_ = value;
   }
-  bool IsAllowedToAccessAtLeastOneService(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id) override {
-    return false;
+
+  bool MayUseBluetooth(RenderFrameHost* frame) override {
+    return may_use_bluetooth_;
   }
-  bool IsAllowedToAccessManufacturerData(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id,
-      const uint16_t manufacturer_code) override {
-    return false;
+
+  void set_may_use_bluetooth(bool value) { may_use_bluetooth_ = value; }
+
+  AllowWebBluetoothResult AllowWebBluetooth(
+      content::BrowserContext* browser_context,
+      const url::Origin& requesting_origin,
+      const url::Origin& embedding_origin) override {
+    return allow_web_bluetooth_;
   }
-  std::vector<blink::mojom::WebBluetoothDevicePtr> GetPermittedDevices(
-      RenderFrameHost* frame) override {
-    return {};
+
+  void set_allow_web_bluetooth(AllowWebBluetoothResult value) {
+    allow_web_bluetooth_ = value;
   }
 
   void RunBluetoothScanningPromptEventCallback(
@@ -421,11 +398,11 @@ class TestBluetoothDelegate : public BluetoothDelegate {
     prompt_->RunPromptEventCallback(event);
   }
 
-  void AddFramePermissionObserver(FramePermissionObserver* observer) override {}
-  void RemoveFramePermissionObserver(
-      FramePermissionObserver* observer) override {}
-
  private:
+  bool has_device_permission_ = false;
+  bool may_use_bluetooth_ = true;
+  AllowWebBluetoothResult allow_web_bluetooth_ =
+      AllowWebBluetoothResult::kAllow;
   raw_ptr<FakeBluetoothScanningPrompt, AcrossTasksDanglingUntriaged> prompt_ =
       nullptr;
 };
@@ -605,6 +582,7 @@ class WebBluetoothServiceImplTest : public RenderViewHostImplTestHarness,
     heart_rate_device_bundle_.reset();
     service_ptr_ = nullptr;
     SetBrowserClientForTesting(old_browser_client_);
+    BluetoothBlocklist::Get().ResetToDefaultValuesForTest();
     RenderViewHostImplTestHarness::TearDown();
   }
 
@@ -668,7 +646,7 @@ class WebBluetoothServiceImplTest : public RenderViewHostImplTestHarness,
   }
 
   void RegisterTestCharacteristic() {
-    auto& battery_device_id = AddTestDevice(battery_device_bundle());
+    const auto battery_device_id = AddTestDevice(battery_device_bundle());
 
     auto& device = battery_device_bundle_->device();
     device.SetGattServicesDiscoveryComplete(true);
@@ -718,7 +696,7 @@ class WebBluetoothServiceImplTest : public RenderViewHostImplTestHarness,
     return *heart_rate_device_bundle_;
   }
 
-  const blink::WebBluetoothDeviceId& AddTestDevice(
+  blink::WebBluetoothDeviceId AddTestDevice(
       FakeBluetoothDeviceBundle& device_bundle) {
     auto device_options = blink::mojom::WebBluetoothRequestDeviceOptions::New();
     device_options->accept_all_devices = true;
@@ -734,6 +712,17 @@ class WebBluetoothServiceImplTest : public RenderViewHostImplTestHarness,
     // this test does.
     WebBluetoothServiceImpl::DeleteForCurrentDocument(
         &service_ptr_.ExtractAsDangling()->render_frame_host());
+  }
+
+  void ForgetDevice(
+      const blink::WebBluetoothDeviceId& device_id,
+      blink::mojom::WebBluetoothService::ForgetDeviceCallback callback) {
+    service_ptr_->ForgetDevice(device_id, std::move(callback));
+  }
+
+  std::string GetAllowedDeviceAddress(
+      const blink::WebBluetoothDeviceId& device_id) {
+    return service_ptr_->allowed_devices().GetDeviceAddress(device_id);
   }
 
   scoped_refptr<FakeBluetoothAdapter> adapter_;
@@ -1079,8 +1068,26 @@ TEST_F(WebBluetoothServiceImplTest, DeferredStartNotifySession) {
   }
 }
 
+TEST_F(WebBluetoothServiceImplTest, StartNotificationsBlocklisted) {
+  RegisterTestCharacteristic();
+  FakeBluetoothCharacteristic& test_characteristic =
+      battery_device_bundle().characteristic();
+
+  BluetoothBlocklist::Get().Add(test_characteristic.GetUUID(),
+                                BluetoothBlocklist::Value::EXCLUDE_READS);
+
+  base::test::TestFuture<WebBluetoothResult> future;
+  service_ptr_->RemoteCharacteristicStartNotifications(
+      test_characteristic.GetIdentifier(),
+      BindCharacteristicClientAndPassRemote(), future.GetCallback());
+
+  EXPECT_EQ(future.Get(), WebBluetoothResult::BLOCKLISTED_READ);
+
+  BluetoothBlocklist::Get().ResetToDefaultValuesForTest();
+}
+
 TEST_F(WebBluetoothServiceImplTest, DeviceGattServicesDiscoveryTimeout) {
-  auto& battery_device_id = AddTestDevice(battery_device_bundle());
+  const auto battery_device_id = AddTestDevice(battery_device_bundle());
 
   auto& device = battery_device_bundle_->device();
   device.SetGattServicesDiscoveryComplete(false);
@@ -1099,7 +1106,7 @@ TEST_F(WebBluetoothServiceImplTest, DeviceGattServicesDiscoveryTimeout) {
 }
 
 TEST_F(WebBluetoothServiceImplTest, DeviceDisconnected) {
-  auto& battery_device_id = AddTestDevice(battery_device_bundle());
+  const auto battery_device_id = AddTestDevice(battery_device_bundle());
 
   auto& device = battery_device_bundle_->device();
   device.SetConnected(false);
@@ -1147,8 +1154,8 @@ TEST_F(WebBluetoothServiceImplTest, TwoWatchAdvertisementsReqSuccess) {
   TestFuture<WebBluetoothResult> future1;
   TestFuture<WebBluetoothResult> future2;
 
-  auto& battry_device_id = AddTestDevice(battery_device_bundle());
-  auto& heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
+  const auto battry_device_id = AddTestDevice(battery_device_bundle());
+  const auto heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
 
   mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
       client_remote1;
@@ -1181,8 +1188,8 @@ TEST_F(WebBluetoothServiceImplTest, TwoWatchAdvertisementsReqFail) {
   TestFuture<WebBluetoothResult> future1;
   TestFuture<WebBluetoothResult> future2;
 
-  auto& battry_device_id = AddTestDevice(battery_device_bundle());
-  auto& heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
+  const auto battry_device_id = AddTestDevice(battery_device_bundle());
+  const auto heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
 
   mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
       client_remote1;
@@ -1208,13 +1215,37 @@ TEST_F(WebBluetoothServiceImplTest, TwoWatchAdvertisementsReqFail) {
 }
 
 TEST_F(WebBluetoothServiceImplTest,
+       WatchAdvertisementsReqAbortedWhenTabHidden) {
+  TestFuture<WebBluetoothResult> future;
+
+  const auto battery_device_id = AddTestDevice(battery_device_bundle());
+
+  mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
+      client_remote;
+
+  battery_device_bundle().advertisement_client().BindReceiver(
+      client_remote.InitWithNewEndpointAndPassReceiver());
+
+  // Install SUCCESS result for StartScanWithFilter
+  adapter_->SetStartScanWithFilterResult(
+      device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
+
+  service_ptr_->WatchAdvertisementsForDevice(
+      battery_device_id, std::move(client_remote), future.GetCallback());
+
+  contents()->SetVisibilityAndNotifyObservers(Visibility::HIDDEN);
+
+  EXPECT_EQ(future.Get(), WebBluetoothResult::WATCH_ADVERTISEMENTS_ABORTED);
+}
+
+TEST_F(WebBluetoothServiceImplTest,
        SecWatchAdvertisementsReqAfterFirstSuccess) {
   // Install SUCCESS result for StartScanWithFilter
   adapter_->SetStartScanWithFilterResult(
       device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
 
   TestFuture<WebBluetoothResult> future1;
-  auto& battry_device_id = AddTestDevice(battery_device_bundle());
+  const auto battry_device_id = AddTestDevice(battery_device_bundle());
   mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
       client_remote1;
   battery_device_bundle().advertisement_client().BindReceiver(
@@ -1226,7 +1257,7 @@ TEST_F(WebBluetoothServiceImplTest,
   // When second watchAdvertisements request comes in and there is an active
   // discovery session, it should get SUCCESS result directly.
   TestFuture<WebBluetoothResult> future2;
-  auto& heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
+  const auto heart_rate_device_id = AddTestDevice(heart_rate_device_bundle());
   mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
       client_remote2;
   heart_rate_device_bundle().advertisement_client().BindReceiver(
@@ -1352,4 +1383,205 @@ TEST_F(WebBluetoothServiceImplTestWithBaseAdapter,
   EXPECT_EQ(BluetoothAdapterFactoryWrapper::Get().GetAdapter(service_ptr_),
             base_adapter_);
 }
+// Regression test: the fast path in WatchAdvertisementsForDeviceImpl (when a
+// discovery session already exists) must check device permission, matching the
+// slow path in OnStartDiscoverySessionForWatchAdvertisements.
+TEST_F(WebBluetoothServiceImplTest,
+       WatchAdvertisementsFastPathChecksPermission) {
+  adapter_->SetStartScanWithFilterResult(
+      device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
+
+  // First watch: slow path — creates the discovery session.
+  // Copy the device_id (not a reference) because RemoveDevice() below will
+  // erase the original from allowed_devices.
+  auto device_id = AddTestDevice(battery_device_bundle());
+  TestFuture<WebBluetoothResult> future1;
+  mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
+      client_remote1;
+  battery_device_bundle().advertisement_client().BindReceiver(
+      client_remote1.InitWithNewEndpointAndPassReceiver());
+  service_ptr_->WatchAdvertisementsForDevice(
+      device_id, std::move(client_remote1), future1.GetCallback());
+  EXPECT_EQ(future1.Get(), WebBluetoothResult::SUCCESS);
+
+  // Revoke device permission by removing it from allowed_devices.
+  service_ptr_->allowed_devices().RemoveDevice(
+      battery_device_bundle().device().GetAddress());
+
+  // Second watch: fast path — session exists. Should be rejected because the
+  // device permission was revoked.
+  TestFuture<WebBluetoothResult> future2;
+  FakeWebBluetoothAdvertisementClient second_client;
+  mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
+      client_remote2;
+  second_client.BindReceiver(
+      client_remote2.InitWithNewEndpointAndPassReceiver());
+  service_ptr_->WatchAdvertisementsForDevice(
+      device_id, std::move(client_remote2), future2.GetCallback());
+  EXPECT_EQ(future2.Get(),
+            WebBluetoothResult::NOT_ALLOWED_TO_ACCESS_ANY_SERVICE);
+
+  EXPECT_CALL(*adapter_, StopScan).Times(1);
+}
+
+// Fixture with kWebBluetoothNewPermissionsBackend enabled.
+class WebBluetoothServiceImplTestNewPermissionsBackend
+    : public WebBluetoothServiceImplTest {
+ public:
+  WebBluetoothServiceImplTestNewPermissionsBackend() {
+    feature_list_.InitAndEnableFeature(
+        features::kWebBluetoothNewPermissionsBackend);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Same regression test as above but with the new permissions backend
+// (BluetoothDelegate).
+TEST_F(WebBluetoothServiceImplTestNewPermissionsBackend,
+       WatchAdvertisementsFastPathChecksPermission) {
+  adapter_->SetStartScanWithFilterResult(
+      device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
+
+  // Grant permission via the delegate so the first watch succeeds.
+  browser_client_.bluetooth_delegate()->set_has_device_permission(true);
+
+  // First watch: slow path — creates the discovery session.
+  auto device_id = AddTestDevice(battery_device_bundle());
+  TestFuture<WebBluetoothResult> future1;
+  mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
+      client_remote1;
+  battery_device_bundle().advertisement_client().BindReceiver(
+      client_remote1.InitWithNewEndpointAndPassReceiver());
+  service_ptr_->WatchAdvertisementsForDevice(
+      device_id, std::move(client_remote1), future1.GetCallback());
+  EXPECT_EQ(future1.Get(), WebBluetoothResult::SUCCESS);
+
+  // Revoke device permission via the delegate.
+  browser_client_.bluetooth_delegate()->set_has_device_permission(false);
+
+  // Second watch: fast path — session exists. Should be rejected because the
+  // device permission was revoked.
+  TestFuture<WebBluetoothResult> future2;
+  FakeWebBluetoothAdvertisementClient second_client;
+  mojo::PendingAssociatedRemote<blink::mojom::WebBluetoothAdvertisementClient>
+      client_remote2;
+  second_client.BindReceiver(
+      client_remote2.InitWithNewEndpointAndPassReceiver());
+  service_ptr_->WatchAdvertisementsForDevice(
+      device_id, std::move(client_remote2), future2.GetCallback());
+  EXPECT_EQ(future2.Get(),
+            WebBluetoothResult::NOT_ALLOWED_TO_ACCESS_ANY_SERVICE);
+
+  EXPECT_CALL(*adapter_, StopScan).Times(1);
+}
+
+TEST_F(WebBluetoothServiceImplTest,
+       RemoteDescriptorReadValue_ParentCharacteristicBlocklisted) {
+  RegisterTestCharacteristic();
+
+  FakeBluetoothCharacteristic& test_characteristic =
+      battery_device_bundle().characteristic();
+
+  auto mock_descriptor =
+      std::make_unique<testing::NiceMock<device::MockBluetoothGattDescriptor>>(
+          &test_characteristic, "test_descriptor_id",
+          kCharacteristicUserDescriptionDescriptorUUID,
+          device::BluetoothRemoteGattCharacteristic::PERMISSION_NONE);
+
+  test_characteristic.AddMockDescriptor(std::move(mock_descriptor));
+
+  base::test::TestFuture<
+      WebBluetoothResult,
+      std::optional<
+          std::vector<blink::mojom::WebBluetoothRemoteGATTDescriptorPtr>>>
+      get_descriptors_future;
+  service_ptr_->RemoteCharacteristicGetDescriptors(
+      test_characteristic.GetIdentifier(),
+      WebBluetoothGATTQueryQuantity::SINGLE, std::nullopt,
+      get_descriptors_future.GetCallback());
+
+  EXPECT_EQ(get_descriptors_future.Get<0>(), WebBluetoothResult::SUCCESS);
+
+  const auto& descriptors = get_descriptors_future.Get<1>();
+  ASSERT_TRUE(descriptors.has_value());
+  ASSERT_FALSE(descriptors->empty());
+  std::string descriptor_instance_id = descriptors->at(0)->instance_id;
+
+  BluetoothBlocklist::Get().Add(test_characteristic.GetUUID(),
+                                BluetoothBlocklist::Value::EXCLUDE_READS);
+
+  base::test::TestFuture<WebBluetoothResult, std::vector<uint8_t>> read_future;
+  service_ptr_->RemoteDescriptorReadValue(
+      descriptor_instance_id,
+      base::BindLambdaForTesting(
+          [&read_future](WebBluetoothResult result,
+                         base::span<const uint8_t> value) {
+            read_future.SetValue(
+                result, std::vector<uint8_t>(value.begin(), value.end()));
+          }));
+
+  EXPECT_EQ(read_future.Get<0>(), WebBluetoothResult::BLOCKLISTED_READ);
+}
+
+TEST_F(WebBluetoothServiceImplTest,
+       RemoteDescriptorWriteValue_ParentCharacteristicBlocklisted) {
+  RegisterTestCharacteristic();
+
+  FakeBluetoothCharacteristic& test_characteristic =
+      battery_device_bundle().characteristic();
+
+  auto mock_descriptor =
+      std::make_unique<testing::NiceMock<device::MockBluetoothGattDescriptor>>(
+          &test_characteristic, "test_descriptor_id",
+          kCharacteristicUserDescriptionDescriptorUUID,
+          device::BluetoothRemoteGattCharacteristic::PERMISSION_NONE);
+
+  test_characteristic.AddMockDescriptor(std::move(mock_descriptor));
+
+  base::test::TestFuture<
+      WebBluetoothResult,
+      std::optional<
+          std::vector<blink::mojom::WebBluetoothRemoteGATTDescriptorPtr>>>
+      get_descriptors_future;
+  service_ptr_->RemoteCharacteristicGetDescriptors(
+      test_characteristic.GetIdentifier(),
+      WebBluetoothGATTQueryQuantity::SINGLE, std::nullopt,
+      get_descriptors_future.GetCallback());
+
+  EXPECT_EQ(get_descriptors_future.Get<0>(), WebBluetoothResult::SUCCESS);
+
+  const auto& descriptors = get_descriptors_future.Get<1>();
+  ASSERT_TRUE(descriptors.has_value());
+  ASSERT_FALSE(descriptors->empty());
+  std::string descriptor_instance_id = descriptors->at(0)->instance_id;
+
+  BluetoothBlocklist::Get().Add(test_characteristic.GetUUID(),
+                                BluetoothBlocklist::Value::EXCLUDE_WRITES);
+
+  std::vector<uint8_t> value = {1, 2, 3};
+  base::test::TestFuture<WebBluetoothResult> write_future;
+  service_ptr_->RemoteDescriptorWriteValue(descriptor_instance_id, value,
+                                           write_future.GetCallback());
+
+  EXPECT_EQ(write_future.Get(), WebBluetoothResult::BLOCKLISTED_WRITE);
+}
+
+TEST_F(WebBluetoothServiceImplTest, ForgetDevice_NotAllowed) {
+  blink::WebBluetoothDeviceId device_id =
+      AddTestDevice(battery_device_bundle());
+  EXPECT_FALSE(GetAllowedDeviceAddress(device_id).empty());
+
+  browser_client_.bluetooth_delegate()->set_may_use_bluetooth(false);
+
+  base::test::TestFuture<void> future;
+  ForgetDevice(device_id, future.GetCallback());
+  EXPECT_TRUE(future.Wait());
+
+  // The device should STILL be in allowed devices because ForgetDevice should
+  // return early.
+  EXPECT_FALSE(GetAllowedDeviceAddress(device_id).empty());
+}
+
 }  // namespace content

@@ -251,7 +251,10 @@
         Multi-select mode
       </message>
       <message name="IDS_TAB_ITEM_PICKER_LIMIT_REACHED" desc="Notification shown on Tab Item Picker when maximum item limit is reached.">
-        Add up to 10 files, tabs, or images
+        {LIMIT_COUNT, plural,
+          =1 {Add up to <ph name="LIMIT_COUNT_ONE">%1$d<ex>1</ex></ph> file, tab, or image}
+          other {Add up to <ph name="LIMIT_COUNT_MANY">%1$d<ex>10</ex></ph> files, tabs, or images}
+        }
       </message>
       <!-- Tab Selection Editor V2 strings -->
       <message name="IDS_TAB_SELECTION_EDITOR_SELECT_ALL" desc="This text button is shown in the Tab Selection Editor Toolbar. When the user taps the button, Chrome selects all the tabs shown in the editor. [CHAR_LIMIT=27]">
@@ -297,18 +300,6 @@
         {TABS_COUNT, plural,
           =1 {<ph name="TABS_COUNT_ONE">%1$d<ex>1</ex></ph> item}
           other {<ph name="TABS_COUNT_MANY">%1$d<ex>8</ex></ph> items}
-        }
-      </message>
-      <message name="IDS_TAB_SELECTION_EDITOR_GROUP_TABS" desc="This text menu item is shown in the Tab Selection Editor menu. 'Group' is a verb. When the user taps the menu item, Chrome creates a new group that contains the selected tabs. [CHAR_LIMIT=27]">
-        {TABS_COUNT, plural,
-          =1 {Group tab}
-          other {Group tabs}
-        }
-      </message>
-      <message name="IDS_ACCESSIBILITY_TAB_SELECTION_EDITOR_GROUP_TABS" desc="The accessibility text to read when the 'Group tabs' menu item in the selection mode menu is focused. When this menu item is tapped, all the selected tabs will be grouped together.">
-        {TABS_COUNT, plural,
-          =1 {Group <ph name="TABS_COUNT_ONE">%1$d<ex>1</ex></ph> selected tab}
-          other {Group <ph name="TABS_COUNT_MANY">%1$d<ex>8</ex></ph> selected tabs}
         }
       </message>
       <message name="IDS_ADD_TAB_TO_NEW_GROUP_MENU_ITEM" desc="This text menu item is shown in several menus and starts the UI flow for adding a tab to a new group.">
@@ -650,12 +641,7 @@
       <message name="IDS_ACCESSIBILITY_TAB_GROUP_COLOR_ICON_DESCRIPTION" desc="Accessibility string describing what color the current tab group color icon has. Tap this item to change the color.">
         <ph name="COLOR_NAME">%1$s<ex>Blue</ex></ph> tab group color icon
       </message>
-      <message name="IDS_ACCESSIBILITY_TAB_GROUP_COLOR_PICKER_COLOR_ITEM_SELECTED_DESCRIPTION" desc="Accessibility string describing the icon that indicates that this color item is the currently selected one.">
-        <ph name="COLOR_NAME">%1$s<ex>Blue</ex></ph> Selected
-      </message>
-      <message name="IDS_ACCESSIBILITY_TAB_GROUP_COLOR_PICKER_COLOR_ITEM_NOT_SELECTED_DESCRIPTION" desc="Accessibility string describing that no icon is shown to indicate that this color item is the currently selected one.">
-        <ph name="COLOR_NAME">%1$s<ex>Blue</ex></ph> Not selected
-      </message>
+
       <message name="IDS_ACCESSIBILITY_EXPAND_TAB_GROUP_WITH_COLOR" desc="The accessibility text to read when a card representing a tab group is clicked in grid tab switcher. NUMBER_OF_TABS is the number of tabs within this group. COLOR_NAME is the color of this group.">
         {NUMBER_OF_TABS, plural,
           =1 {Expand tab group with <ph name="TABS_COUNT_ONE">%1$d<ex>1</ex></ph> tab, color <ph name="COLOR_NAME">%2$s<ex>Blue</ex></ph>.}
@@ -729,6 +715,12 @@
       <!-- Tab Group Pane and Sync Strings -->
       <message name="IDS_ACCESSIBILITY_TAB_GROUPS" desc="Content description for the button to show tab groups UI.">
         Tab groups
+      </message>
+      <message name="IDS_ACCESSIBILITY_COLLAPSE_VERTICAL_TABS" desc="Content description for the button to collapse the vertical tabs rail.">
+        Collapse Tabs
+      </message>
+      <message name="IDS_ACCESSIBILITY_EXPAND_VERTICAL_TABS" desc="Content description for the button to expand the vertical tabs rail.">
+        Expand Tabs
       </message>
       <message name="IDS_TAB_GROUPS_CREATED_AGO_NOW" desc="A subtitle on a row for a tab group. Explains the group was created less than a minute ago.">
         Created just now
@@ -1074,6 +1066,11 @@
         Dismiss the card.
       </message>
 
+      <!-- Tab Strip Hover Card strings -->
+      <message name="IDS_TAB_HOVER_CARD_MEMORY_USAGE" desc="Text at the bottom of a hovercard that shows how much memory a specific tab is using.">
+        Memory usage: <ph name="MEMORY_USAGE">%1$s<ex>300 MB</ex></ph>
+      </message>
+
       <!-- Tab context menu -->
       <message name="IDS_SELECT_TAB" desc="Content description for an action which selects a singular tab.">
         Select tab
@@ -1086,6 +1083,7 @@
           =1 {Move tab to new window}
           other {Move tab to another window}}
       </message>
+
       <message name="IDS_MOVE_TABS_LEFT" desc="Menu item for moving tab(s) to the left in the tab strip order.">
         {TAB_COUNT, plural,
           =1 {Move tab left}
@@ -1138,8 +1136,43 @@
             =1 {Unmute site}
             other {Unmute sites}}
       </message>
+      <message name="IDS_MUTE_SITE" desc="Content description for an action which mutes a site.">
+        Mute site
+      </message>
+      <message name="IDS_UNMUTE_SITE" desc="Content description for an action which unmutes a site.">
+        Unmute site
+      </message>
       <message name="IDS_DUPLICATE_TAB_MENU_ITEM" desc="Content description for an action which duplicates a selection of tabs.">
         Duplicate
+      </message>
+      <message name="IDS_CLOSE_OTHER_TABS_MENU_ITEM" desc="Content description for an action which closes all tabs not currently selected.">
+        Close other tabs
+      </message>
+      <message name="IDS_CLOSE_TABS_TO_THE_RIGHT_MENU_ITEM" desc="Content description for an action which closes all tabs to the right of the right most selected tab.">
+        Close tabs to the right
+      </message>
+      <message name="IDS_NEW_TAB_TO_THE_RIGHT_MENU_ITEM" desc="Content description for an action which creates a new tab to the right of the current tab.">
+        New tab to the right
+      </message>
+      <message name="IDS_ADD_TAB_TO_READING_LIST_MENU_ITEM" desc="Content description for an action which adds the currently selected tabs to the reading list.">
+        {TAB_COUNT, plural,
+          =1 {Add tab to reading list}
+          other {Add tabs to reading list}}
+      </message>
+      <message name="IDS_SHOW_TABS_VERTICALLY" desc="Context menu item text to show the vertical tabs.">
+        Show tabs vertically
+      </message>
+      <message name="IDS_SHOW_TABS_HORIZONTALLY" desc="Context menu item text to show the horizontal tabs.">
+        Show tabs horizontally
+      </message>
+      <message name="IDS_NEW_TAB_BELOW_MENU_ITEM" desc="Context menu item text to create a new tab below the selected tab.">
+        New tab below
+      </message>
+      <message name="IDS_CLOSE_TABS_BELOW_MENU_ITEM" desc="Context menu item text to close all tabs below the selected tab.">
+        Close tabs below
+      </message>
+      <message name="IDS_SEND_FEEDBACK_ABOUT_TAB_STRIP" desc="Context menu item text to send feedback about the tab strip.">
+        Send feedback about the tab strip
       </message>
 
       <!-- Tab Group List Bottom Sheet -->
@@ -1189,6 +1222,9 @@
       </message>
       <message name="IDS_ACCESSIBILITY_TAB_GROUP_SHARING" desc="Accessibility description for a tab group that contains a tab that is sharing its screen.">
         Sharing tab screen
+      </message>
+      <message name="IDS_ACCESSIBILITY_TAB_GROUP_PICTURE_IN_PICTURE" desc="Accessibility description for a tab group that contains a tab that is in picture-in-picture mode.">
+        Picture-in-picture
       </message>
     </messages>
   </release>

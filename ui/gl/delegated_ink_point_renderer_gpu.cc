@@ -14,6 +14,8 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/windows_version.h"
+#include "third_party/perfetto/include/perfetto/tracing/string_helpers.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 
 namespace gl {
@@ -29,13 +31,12 @@ constexpr uint64_t kMaximumNumberOfPointerIds = 10;
 // Note that this returns true if the HRESULT is anything other than S_OK,
 // meaning that it returns true when an event is traced (because of a
 // failure).
-bool TraceEventOnFailure(HRESULT hr, const char* name) {
+bool TraceEventOnFailure(HRESULT hr, perfetto::StaticString name) {
   if (SUCCEEDED(hr)) {
     return false;
   }
 
-  TRACE_EVENT_INSTANT1("delegated_ink_trails", name, TRACE_EVENT_SCOPE_THREAD,
-                       "hr", hr);
+  TRACE_EVENT_INSTANT("delegated_ink_trails", name, "hr", hr);
   return true;
 }
 
@@ -131,6 +132,10 @@ void DelegatedInkPointRendererGpu::ReportPointsDrawn() {
   for (const auto& point : points_to_be_drawn_) {
     UMA_HISTOGRAM_TIMES("Renderer.DelegatedInkTrail.OS.TimeToDrawPointsMillis",
                         now - point.timestamp());
+    TRACE_EVENT("delegated_ink_trails",
+                "DelegatedInkPointRendererGpu::ReportPointsDrawn",
+                perfetto::Flow::Global(point.trace_id()), "delegated point",
+                point.ToString());
     most_recent_timestamp = std::max(point.timestamp(), most_recent_timestamp);
 
     // Update the point's `paint_timestamp` if this is the first time it is
@@ -160,11 +165,10 @@ void DelegatedInkPointRendererGpu::ReportPointsDrawn() {
 
 void DelegatedInkPointRendererGpu::SetDelegatedInkTrailStartPoint(
     std::unique_ptr<gfx::DelegatedInkMetadata> metadata) {
-  TRACE_EVENT_WITH_FLOW1(
-      "delegated_ink_trails",
-      "DelegatedInkPointRendererGpu::SetDelegatedInkTrailStartPoint",
-      TRACE_ID_GLOBAL(metadata->trace_id()), TRACE_EVENT_FLAG_FLOW_IN,
-      "metadata", metadata->ToString());
+  TRACE_EVENT("delegated_ink_trails",
+              "DelegatedInkPointRendererGpu::SetDelegatedInkTrailStartPoint",
+              perfetto::TerminatingFlow::Global(metadata->trace_id()),
+              "metadata", metadata->ToString());
 
   DCHECK(delegated_ink_trail_);
 
@@ -253,11 +257,10 @@ void DelegatedInkPointRendererGpu::SetDelegatedInkTrailStartPoint(
 
 void DelegatedInkPointRendererGpu::StoreDelegatedInkPoint(
     const gfx::DelegatedInkPoint& point) {
-  TRACE_EVENT_WITH_FLOW1("delegated_ink_trails",
-                         "DelegatedInkPointRendererGpu::StoreDelegatedInkPoint",
-                         TRACE_ID_GLOBAL(point.trace_id()),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT,
-                         "point", point.ToString());
+  TRACE_EVENT("delegated_ink_trails",
+              "DelegatedInkPointRendererGpu::StoreDelegatedInkPoint",
+              perfetto::Flow::Global(point.trace_id()), "point",
+              point.ToString());
 
   const int32_t pointer_id = point.pointer_id();
 
@@ -444,9 +447,8 @@ void DelegatedInkPointRendererGpu::DrawSavedTrailPoints() {
       }
     }
   } else {
-    TRACE_EVENT_INSTANT0("delegated_ink_trails",
-                         "DrawSavedTrailPoints failed - no pointer id",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("delegated_ink_trails",
+                        "DrawSavedTrailPoints failed - no pointer id");
   }
 }
 
@@ -521,11 +523,12 @@ bool DelegatedInkPointRendererGpu::DrawDelegatedInkPoint(
     return false;
   }
 
-  TRACE_EVENT_WITH_FLOW1("delegated_ink_trails",
-                         "DelegatedInkPointRendererGpu::DrawDelegatedInkPoint "
-                         "- Point added to trail",
-                         TRACE_ID_GLOBAL(point.trace_id()),
-                         TRACE_EVENT_FLAG_FLOW_IN, "point", point.ToString());
+  TRACE_EVENT(
+      "delegated_ink_trails",
+      "DelegatedInkPointRendererGpu::DrawDelegatedInkPoint - Point added to "
+      "trail",
+      perfetto::TerminatingFlow::Global(point.trace_id()), "point",
+      point.ToString());
 
   if (point.timestamp().IsHighResolution() &&
       point.timestamp().IsConsistentAcrossProcesses()) {

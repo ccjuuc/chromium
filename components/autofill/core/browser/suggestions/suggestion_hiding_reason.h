@@ -8,10 +8,11 @@
 namespace autofill {
 
 // This reason is passed whenever a popup needs to be closed.
+//
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-// When adding a value to this enum, please update
-// tools/metrics/histograms/metadata/autofill/enums.xml.
+//
+// LINT.IfChange(SuggestionHidingReason)
 enum class SuggestionHidingReason {
   // A suggestion was accepted.
   kAcceptSuggestion = 0,
@@ -24,8 +25,6 @@ enum class SuggestionHidingReason {
   kFocusChanged = 3,
   // Scrolling or zooming into the page displaces the popup.
   kContentAreaMoved = 4,
-  // A navigation on the page or frame level.
-  kNavigation = 5,
   // The popup is or would become empty.
   kNoSuggestions = 6,
   // The renderer explicitly requested closing the popup.
@@ -58,7 +57,7 @@ enum class SuggestionHidingReason {
   // The context menu is shown instead of the autofill suggestions.
   kOverlappingWithAutofillContextMenu = 19,
   // The Fast Checkout surface is shown instead of autofill suggestions.
-  kOverlappingWithFastCheckoutSurface = 20,
+  // kOverlappingWithFastCheckoutSurface = 20, // DEPRECATED
   // The picture-in-picture window overlaps with the autofill suggestions.
   kOverlappingWithPictureInPictureWindow = 21,
   // The context menu was opened. We hide the autofill popup to make sure it
@@ -80,8 +79,12 @@ enum class SuggestionHidingReason {
   kFadeTimerExpired = 26,
   // The popup search bar loses focus.
   kSearchBarFocusLost = 27,
-  kMaxValue = kSearchBarFocusLost
+  // The caller requested to hide the popup (e.g., to transition to a
+  // feature-specific UI flow).
+  kHiddenByCaller = 28,
+  kMaxValue = kHiddenByCaller
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillSuggestionHidingReason)
 
 }  // namespace autofill
 

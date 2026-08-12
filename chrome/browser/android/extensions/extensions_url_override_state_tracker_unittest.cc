@@ -8,7 +8,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/android/extensions/extensions_url_override_state_tracker_impl.h"
-#include "chrome/browser/extensions/extension_web_ui_override_registrar.h"
+#include "chrome/browser/extensions/extension_url_overrides_registrar.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/crx_file/id_util.h"
@@ -33,7 +33,7 @@ constexpr char kHistoryUrlPath[] = "history";
 
 std::unique_ptr<KeyedService> BuildOverrideRegistrar(
     content::BrowserContext* context) {
-  return std::make_unique<ExtensionWebUIOverrideRegistrar>(context);
+  return std::make_unique<ExtensionUrlOverridesRegistrar>(context);
 }
 
 class MockStateListener
@@ -60,9 +60,9 @@ class ExtensionUrlOverrideStateTrackerImplTest : public testing::Test {
     extension_system_->CreateExtensionService(
         base::CommandLine::ForCurrentProcess(), base::FilePath(), false);
 
-    ExtensionWebUIOverrideRegistrar::GetFactoryInstance()->SetTestingFactory(
+    ExtensionUrlOverridesRegistrar::GetFactoryInstance()->SetTestingFactory(
         profile_.get(), base::BindRepeating(&BuildOverrideRegistrar));
-    ExtensionWebUIOverrideRegistrar::GetFactoryInstance()->Get(profile_.get());
+    ExtensionUrlOverridesRegistrar::GetFactoryInstance()->Get(profile_.get());
     tracker_ = std::make_unique<ExtensionUrlOverrideStateTrackerImpl>(
         profile_.get(), &listener_);
   }
@@ -77,14 +77,14 @@ class ExtensionUrlOverrideStateTrackerImplTest : public testing::Test {
       const std::string& name,
       const std::string& page_to_override,
       bool incognito_split_mode) {
-    base::Value::Dict manifest;
+    base::DictValue manifest;
     manifest.Set("name", name);
     manifest.Set("version", "1.0");
     manifest.Set("manifest_version", 2);
     if (incognito_split_mode) {
       manifest.Set("incognito", "split");
     }
-    base::Value::Dict chrome_url_overrides;
+    base::DictValue chrome_url_overrides;
     chrome_url_overrides.Set(page_to_override, "override.html");
     manifest.Set("chrome_url_overrides", std::move(chrome_url_overrides));
     return ExtensionBuilder()

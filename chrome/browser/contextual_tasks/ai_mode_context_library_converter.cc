@@ -6,6 +6,7 @@
 
 #include <vector>
 
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "components/contextual_search/contextual_search_types.h"
 #include "components/contextual_tasks/public/contextual_task.h"
@@ -18,7 +19,8 @@ const contextual_search::FileInfo* GetFileInfoFromContext(
     const std::vector<contextual_search::FileInfo>& contexts) {
   for (auto& file_info : contexts) {
     // TODO(nyquist): Remove this cast when we roll in the new request ID proto.
-    if (static_cast<int64_t>(file_info.GetContextId()) == context_id) {
+    if (file_info.GetContextId().has_value() &&
+        static_cast<int64_t>(file_info.GetContextId().value()) == context_id) {
       return &file_info;
     }
   }
@@ -35,43 +37,49 @@ std::vector<UrlResource> ConvertAiModeContextToUrlResources(
   // Iterate through the contexts in the message and attempt to find matching
   // local file info (e.g. tab URL) to build the UrlResource list.
   for (const auto& context : message.contexts()) {
+    std::optional<UrlResource> url_resource;
     if (context.has_webpage()) {
-      UrlResource url_resource(GURL(context.webpage().url()));
-      url_resource.context_id = context.context_id();
-      url_resource.title = context.webpage().title();
+      url_resource.emplace(GURL(context.webpage().url()),
+                           ResourceType::kWebpage);
+      url_resource->context_id = context.context_id();
+      url_resource->title = context.webpage().title();
+      url_resource->has_chrome_tab_data = context.has_chrome_tab_data();
+    } else if (context.has_pdf()) {
+      url_resource.emplace(GURL(context.pdf().url()), ResourceType::kPdf);
+      url_resource->context_id = context.context_id();
+      url_resource->title = context.pdf().title();
+    } else if (context.has_image()) {
+      url_resource.emplace(GURL(context.image().url()), ResourceType::kImage);
+      url_resource->context_id = context.context_id();
+      url_resource->title = context.image().title();
+    } else {
+      // Unknown context type. This client does not support representing it.
+      url_resource.emplace(GURL::EmptyGURL(), ResourceType::kUnknown);
+      url_resource->context_id = context.context_id();
+    }
 
+    if (url_resource) {
       const contextual_search::FileInfo* file_info =
           GetFileInfoFromContext(context.context_id(), local_contexts);
       if (file_info) {
-        if (url_resource.url.is_empty() && file_info->tab_url.has_value() &&
+        if (url_resource->url.is_empty() && file_info->tab_url.has_value() &&
             file_info->tab_url.value().is_valid()) {
-          url_resource.url = *file_info->tab_url;
+          url_resource->url = *file_info->tab_url;
         }
-        if (!url_resource.tab_id.has_value()) {
-          url_resource.tab_id = file_info->tab_session_id;
+        if (!url_resource->tab_id.has_value()) {
+          url_resource->tab_id = file_info->tab_session_id;
         }
-        if (!url_resource.title.has_value()) {
-          url_resource.title = file_info->tab_title;
+        if (!url_resource->title.has_value()) {
+          url_resource->title = file_info->tab_title;
+        }
+        if (file_info->request_id.has_value() &&
+            file_info->request_id->has_time_usec()) {
+          url_resource->timestamp =
+              base::Time::UnixEpoch() +
+              base::Microseconds(file_info->request_id->time_usec());
         }
       }
-      result.push_back(url_resource);
-    } else if (context.has_pdf()) {
-      // TODO(nyquist): Add special handling for PDFs.
-      UrlResource url_resource(GURL(context.pdf().url()));
-      url_resource.context_id = context.context_id();
-      url_resource.title = context.pdf().title();
-      result.push_back(url_resource);
-    } else if (context.has_image()) {
-      // TODO(nyquist): Add special handling for images.
-      UrlResource url_resource(GURL(context.image().url()));
-      url_resource.context_id = context.context_id();
-      url_resource.title = context.image().title();
-      result.push_back(url_resource);
-    } else {
-      // Unknown context type. This client does not support representing it.
-      UrlResource url_resource(GURL::EmptyGURL());
-      url_resource.context_id = context.context_id();
-      result.push_back(url_resource);
+      result.push_back(*url_resource);
     }
   }
   return result;

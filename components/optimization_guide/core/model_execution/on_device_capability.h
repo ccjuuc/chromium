@@ -15,12 +15,16 @@
 #include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/proto/model_quality_metadata.pb.h"
-#include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom.h"
+#include "components/optimization_guide/public/mojom/model_broker_debug.mojom.h"
 #include "services/on_device_model/public/cpp/capabilities.h"
 #include "services/on_device_model/public/mojom/on_device_model.mojom.h"
 
 class OptimizationGuideLogger;
+
+namespace on_device_internals {
+class PageHandler;
+}
 
 namespace optimization_guide {
 
@@ -41,8 +45,12 @@ enum class OnDeviceError : int {
   kCancelled = 10,
   // The response was low quality.
   kResponseLowQuality = 11,
+  // Failed to parse the response.
+  kResponseParsingFailed = 12,
+  // Failed to run the safety checks.
+  kFailedToRunSafety = 13,
   // Insert new values before this line.
-  kMaxValue = kResponseLowQuality
+  kMaxValue = kFailedToRunSafety
 };
 
 // A response type used for OnDeviceSession.
@@ -97,6 +105,12 @@ using OptimizationGuideModelExecutionResultStreamingCallback =
 // The callback for receiving the token size of the given input.
 using OptimizationGuideModelSizeInTokenCallback =
     base::OnceCallback<void(std::optional<uint32_t>)>;
+
+// The callback for adding a download progress observer to
+// OnDeviceModelDownloadProgressManager.
+using AddDownloadProgressObserverCallback = base::RepeatingCallback<void(
+    const std::string& use_case,
+    mojo::PendingRemote<on_device_model::mojom::DownloadObserver>)>;
 
 // Params used to control sampling output tokens for the on-device model.
 struct SamplingParams {
@@ -170,9 +184,12 @@ enum class OnDeviceModelEligibilityReason {
   // There was no on-device feature usage so the model has not been
   // downloaded yet.
   kNoOnDeviceFeatureUsed = 18,
+  // The device does not have enough disk space to build caches for the
+  // on-device model.
+  kInsufficientDiskSpaceForCaches = 19,
 
   // Insert new values before this line.
-  kMaxValue = kNoOnDeviceFeatureUsed,
+  kMaxValue = kInsufficientDiskSpaceForCaches,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/optimization/enums.xml:OptimizationGuideOnDeviceModelEligibilityReason)
 
@@ -182,6 +199,9 @@ std::ostream& operator<<(std::ostream& out,
 // Simplify an eligibility reason to an availability state.
 std::optional<mojom::ModelUnavailableReason> AvailabilityFromEligibilityReason(
     OnDeviceModelEligibilityReason);
+std::optional<mojom::ModelNotSupportedDetailedReason>
+    NotSupportedDetailedReasonFromEligibilityReason(
+        OnDeviceModelEligibilityReason);
 
 // Observer that is notified when the on-device model availability changes for
 // the on-device eligible features.
@@ -317,8 +337,17 @@ class OnDeviceCapability {
   OnDeviceCapability();
   virtual ~OnDeviceCapability();
 
+  // Binds a model broker receiver to this capability.
   virtual void BindModelBroker(
       mojo::PendingReceiver<mojom::ModelBroker> receiver) {}
+
+  // Convenience method to bind a model broker receiver and pass the remote.
+  mojo::PendingRemote<mojom::ModelBroker> BindAndPassRemoteBroker();
+
+  // Binds a debug interface for chrome://on-device-internals.
+  virtual void BindModelBrokerDebug(
+      base::PassKey<on_device_internals::PageHandler> key,
+      mojo::PendingReceiver<mojom::ModelBrokerDebug> receiver) {}
 
   // Starts a session which allows streaming input and output from the model.
   // May return nullptr if model execution is not supported. This session should
@@ -336,9 +365,6 @@ class OnDeviceCapability {
       mojom::OnDeviceFeature feature,
       OnDeviceModelAvailabilityObserver* observer);
 
-  // Returns the capabilities for the on-device model, or empty capabilities if
-  // no model is available.
-  virtual on_device_model::Capabilities GetOnDeviceCapabilities();
   virtual OnDeviceModelEligibilityReason GetOnDeviceModelEligibility(
       mojom::OnDeviceFeature feature);
   // Similar to above, but bumps the priority of related tasks such as computing
@@ -347,10 +373,6 @@ class OnDeviceCapability {
       mojom::OnDeviceFeature feature,
       const on_device_model::Capabilities& capabilities,
       base::OnceCallback<void(OnDeviceModelEligibilityReason)> callback);
-  virtual std::optional<SamplingParamsConfig> GetSamplingParamsConfig(
-      mojom::OnDeviceFeature feature);
-  virtual std::optional<const optimization_guide::proto::Any>
-  GetFeatureMetadata(mojom::OnDeviceFeature feature);
 };
 
 }  // namespace optimization_guide

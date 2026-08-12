@@ -38,9 +38,9 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   void RemovePropertyChangedObserver(
       ShillPropertyChangedObserver* observer) override;
   void GetProperties(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) override;
+      chromeos::DBusMethodCallback<base::DictValue> callback) override;
   void GetNetworksForGeolocation(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) override;
+      chromeos::DBusMethodCallback<base::DictValue> callback) override;
   void SetProperty(const std::string& name,
                    const base::Value& value,
                    base::OnceClosure callback,
@@ -54,14 +54,14 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   void DisableTechnology(const std::string& type,
                          base::OnceClosure callback,
                          ErrorCallback error_callback) override;
-  void ConfigureService(const base::Value::Dict& properties,
+  void ConfigureService(const base::DictValue& properties,
                         chromeos::ObjectPathCallback callback,
                         ErrorCallback error_callback) override;
   void ConfigureServiceForProfile(const dbus::ObjectPath& profile_path,
-                                  const base::Value::Dict& properties,
+                                  const base::DictValue& properties,
                                   chromeos::ObjectPathCallback callback,
                                   ErrorCallback error_callback) override;
-  void GetService(const base::Value::Dict& properties,
+  void GetService(const base::DictValue& properties,
                   chromeos::ObjectPathCallback callback,
                   ErrorCallback error_callback) override;
   void ScanAndConnectToBestServices(base::OnceClosure callback,
@@ -70,11 +70,11 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) override;
   void AddPasspointCredentials(const dbus::ObjectPath& profile_path,
-                               const base::Value::Dict& properties,
+                               const base::DictValue& properties,
                                base::OnceClosure callback,
                                ErrorCallback error_callback) override;
   void RemovePasspointCredentials(const dbus::ObjectPath& profile_path,
-                                  const base::Value::Dict& properties,
+                                  const base::DictValue& properties,
                                   base::OnceClosure callback,
                                   ErrorCallback error_callback) override;
   void SetTetheringEnabled(bool enabled,
@@ -92,25 +92,30 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                       base::OnceClosure callback,
                       ErrorCallback error_callback) override;
 
-  void CreateP2PGroup(
-      const CreateP2PGroupParameter& create_group_argument,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
-      ErrorCallback error_callback) override;
+  void CreateP2PGroup(const CreateP2PGroupParameter& create_group_argument,
+                      base::OnceCallback<void(base::DictValue result)> callback,
+                      ErrorCallback error_callback) override;
 
   void ConnectToP2PGroup(
       const ConnectP2PGroupParameter& connect_group_argument,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) override;
 
   void DestroyP2PGroup(
       const int shill_id,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) override;
 
   void DisconnectFromP2PGroup(
       const int shill_id,
-      base::OnceCallback<void(base::Value::Dict result)> callback,
+      base::OnceCallback<void(base::DictValue result)> callback,
       ErrorCallback error_callback) override;
+  void TestHostsConnectivity(
+      const std::vector<std::string>& hosts,
+      const base::flat_map<std::string, std::string>& options,
+      TestHostsConnectivityCallback callback,
+      ErrorCallback error_callback,
+      std::optional<int> timeout_ms = std::nullopt) override;
 
   ShillManagerClient::TestInterface* GetTestInterface() override;
 
@@ -128,12 +133,12 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                             base::OnceClosure callback,
                             bool enabled) override;
   void AddGeoNetwork(const std::string& technology,
-                     const base::Value::Dict& network) override;
+                     const base::DictValue& network) override;
   void AddProfile(const std::string& profile_path) override;
   void ClearProperties() override;
   void SetManagerProperty(const std::string& key,
                           const base::Value& value) override;
-  base::Value::Dict GetStubProperties() override;
+  base::DictValue GetStubProperties() override;
   void AddManagerService(const std::string& service_path,
                          bool notify_observers) override;
   void RemoveManagerService(const std::string& service_path) override;
@@ -170,7 +175,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   void SetSimulateDisconnectFromP2PGroupResult(
       FakeShillSimulatedResult operation_result,
       const std::string& result_code) override;
-  base::Value::List GetEnabledServiceList() const override;
+  void SetConfigureServiceHook(
+      base::RepeatingCallback<void(const base::DictValue&)>
+          configure_service_hook) override;
+  base::ListValue GetEnabledServiceList() const override;
   void ClearProfiles() override;
   void SetShouldReturnNullProperties(bool value) override;
   void SetWifiServicesVisibleByDefault(
@@ -179,6 +187,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   int GetRecentlyDisconnectedP2PGroupId() override;
   void SetAutoCompleteScan(bool auto_complete_scan) override;
   void TriggerScanCompleted(const std::string& device_path) override;
+  void SetTestHostsConnectivityResponse(
+      const std::vector<uint8_t>& response) override;
+  void SetSimulateTestHostsConnectivityResult(
+      FakeShillSimulatedResult result) override;
 
   // Constants used for testing.
   static const char kFakeEthernetNetworkGuid[];
@@ -195,14 +207,14 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
 
   void SetDefaultProperties();
   void PassNullopt(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void PassStubProperties(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void PassStubGeoNetworks(
-      chromeos::DBusMethodCallback<base::Value::Dict> callback) const;
+      chromeos::DBusMethodCallback<base::DictValue> callback) const;
   void CallNotifyObserversPropertyChanged(const std::string& property);
   void NotifyObserversPropertyChanged(const std::string& property);
-  base::Value::List& GetListProperty(const std::string& property);
+  base::ListValue& GetListProperty(const std::string& property);
   bool TechnologyEnabled(const std::string& type) const;
 
   // Parses the command line for Shill stub switches and sets initial states.
@@ -219,10 +231,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
       ConnectToBestServicesCallbacks connect_to_best_services_callbacks);
 
   // Dictionary of property name -> property value
-  base::Value::Dict stub_properties_;
+  base::DictValue stub_properties_;
 
   // Dictionary of technology -> list of property dictionaries
-  base::Value::Dict stub_geo_networks_;
+  base::DictValue stub_geo_networks_;
 
   // Delay for interactive actions
   base::TimeDelta interactive_delay_;
@@ -246,7 +258,7 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   using DevicePropertyMap = std::map<std::string, ShillPropertyMap>;
   DevicePropertyMap shill_device_property_map_;
 
-  base::ObserverList<ShillPropertyChangedObserver>::Unchecked observer_list_;
+  base::ObserverList<ShillPropertyChangedObserver> observer_list_;
 
   // Track the default service for signaling Manager.DefaultService.
   std::string default_service_;
@@ -279,6 +291,8 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
       FakeShillSimulatedResult::kSuccess;
   std::string simulate_disconnect_p2p_group_result_code_;
 
+  base::RepeatingCallback<void(const base::DictValue&)> configure_service_hook_;
+
   bool return_null_properties_ = false;
   bool wifi_services_visible_by_default_ = true;
 
@@ -294,6 +308,13 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   // Caches the last-passed callbacks for ScanAndConnectToBestServices.
   std::optional<ConnectToBestServicesCallbacks>
       connect_to_best_services_callbacks_;
+
+  // Canned response for TestHostsConnectivity.
+  std::vector<uint8_t> test_hosts_connectivity_response_;
+
+  // Controls whether TestHostsConnectivity succeeds, fails, or times out.
+  FakeShillSimulatedResult simulate_test_hosts_connectivity_result_ =
+      FakeShillSimulatedResult::kSuccess;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

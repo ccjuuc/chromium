@@ -212,9 +212,16 @@ class PrerenderBrowserAgent::Delegate final
   void OnAuthRequired(web::WebState* web_state,
                       NSURLProtectionSpace* protection_space,
                       NSURLCredential* proposed_credential,
-                      AuthCallback callback) final {
+                      HTTPAuthCallback callback) final {
     agent_->ScheduleCancelPrerender();
     std::move(callback).Run(nil, nil);
+  }
+
+  void OnAuthRequired(web::WebState* web_state,
+                      NSURLProtectionSpace* protection_space,
+                      ClientCertAuthCallback callback) final {
+    agent_->ScheduleCancelPrerender();
+    std::move(callback).Run(nil);
   }
 
   UIView* GetWebViewContainer(web::WebState* web_state) final {
@@ -358,17 +365,22 @@ class PrerenderBrowserAgent::ManageAccountsDelegate final
 
   // ManageAccountsDelegate implementation.
   void OnRestoreGaiaCookies() final { agent_->ScheduleCancelPrerender(); }
-  void OnManageAccounts(const GURL& url) final {
+  void OnManageAccounts(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnAddAccount(const GURL& url, const std::string& prefilled_email) final {
+  void OnAddAccount(const GURL& url,
+                    const std::string& prefilled_email,
+                    web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnShowConsistencyPromo(const GURL& url, web::WebState* webState) final {
+  void OnShowConsistencyPromo(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnGoIncognito(const GURL& url) final {
+  void OnGoIncognito(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
+  }
+  bool SigninEnabled() const final {
+    return agent_->signin_enabled_data_source_->SigninEnabled();
   }
 
  private:
@@ -385,8 +397,11 @@ enum class PrerenderBrowserAgent::PrerenderFinalStatus {
   kMaxValue = kNotAllowed,
 };
 
-PrerenderBrowserAgent::PrerenderBrowserAgent(Browser* browser)
-    : BrowserUserData(browser) {
+PrerenderBrowserAgent::PrerenderBrowserAgent(
+    Browser* browser,
+    signin::SigninEnabledDataSource* signin_enabled_data_source)
+    : BrowserUserData(browser),
+      signin_enabled_data_source_(signin_enabled_data_source) {
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
   registrar_.Init(browser_->GetProfile()->GetPrefs());
   registrar_.Add(prefs::kNetworkPredictionSetting,
@@ -592,9 +607,9 @@ void PrerenderBrowserAgent::StartPendingRequest() {
   AttachTabHelpers(web_state, TabHelperFilter::kPrerender);
   crash_report_helper::MonitorURLsForPreloadWebState(web_state);
 
+  ProfileIOS* profile = browser_->GetProfile();
   if (AccountConsistencyService* service =
-          ios::AccountConsistencyServiceFactory::GetForProfile(
-              browser_->GetProfile())) {
+          ios::AccountConsistencyServiceFactory::GetForProfile(profile)) {
     if (!manage_accounts_delegate_) {
       manage_accounts_delegate_ =
           std::make_unique<ManageAccountsDelegate>(this);

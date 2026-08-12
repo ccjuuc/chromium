@@ -5,6 +5,7 @@
 #include "components/saved_tab_groups/internal/personal_collaboration_data_conversion_utils.h"
 
 #include "base/uuid.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/sync/base/collaboration_id.h"

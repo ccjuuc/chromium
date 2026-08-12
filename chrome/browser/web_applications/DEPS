@@ -2,7 +2,11 @@ include_rules = {
   "+ash/edusumer",
   "+base",
   "+chrome/browser",
+  "-chrome/browser/extensions",
+  "-extensions",
   "+chrome/common/chromeos/extensions",
+  "+components/dbus",
+  "+dbus",
   "+components/web_package",
   "+components/webapps/services/web_app_origin_association",
   "+components/webapps/isolated_web_apps",
@@ -10,6 +14,7 @@ include_rules = {
   "+mojo/core/embedder",
   "+mojo/public/cpp/bindings",
   "+services/network/public/cpp",
+  "+services/network/public/mojom",
   "+third_party/blink/public/common",
   "+third_party/fuzztest",
   "+third_party/liburlpattern",
@@ -19,5 +24,18 @@ include_rules = {
 specific_include_rules = {
   "system_media_controls_bridge_browsertest.cc": [
     "+components/system_media_controls/system_media_controls.h",
+  ],
+  "sampling_metrics_provider_browsertest.cc": [
+    "+ui/views/test/widget_test_api.h",
+    "+ui/views/widget/any_widget_observer.h",
+    "+ui/views/widget/widget.h",
+  ],
+  ".*unittest\\.(cc|h)": [
+    "+chrome/browser/extensions",
+    "+extensions",
+  ],
+  ".*browsertest\\.(cc|h)": [
+    "+chrome/browser/extensions",
+    "+extensions",
   ],
 }

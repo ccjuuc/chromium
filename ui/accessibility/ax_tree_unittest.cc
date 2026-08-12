@@ -4,6 +4,8 @@
 
 #include "ui/accessibility/ax_tree.h"
 
+#include <algorithm>
+
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 
@@ -11,7 +13,6 @@
 #include <atk/atk.h>
 #endif  // BUILDFLAG(IS_LINUX)
 
-#include "base/containers/contains.h"
 #include "base/scoped_observation.h"
 #include "base/strings/to_string.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -1121,9 +1122,9 @@ TEST(AXTreeTest, ReparentingDoesNotTriggerNodeCreated) {
       test_observer.subtree_reparented_finished_ids();
   std::vector<int> node_reparented =
       test_observer.node_reparented_finished_ids();
-  ASSERT_FALSE(base::Contains(created, 3));
-  ASSERT_TRUE(base::Contains(subtree_reparented, 3));
-  ASSERT_FALSE(base::Contains(node_reparented, 3));
+  ASSERT_FALSE(std::ranges::contains(created, 3));
+  ASSERT_TRUE(std::ranges::contains(subtree_reparented, 3));
+  ASSERT_FALSE(std::ranges::contains(node_reparented, 3));
 }
 
 TEST(AXTreeTest, MultipleIgnoredChangesDoesNotBreakCache) {
@@ -1797,6 +1798,50 @@ TEST(AXTreeTest, GetBoundsCropsChildToRoot) {
   EXPECT_EQ("(50, 700) size (150 x 150)", GetUnclippedBoundsAsString(tree, 5));
 }
 
+// Verify that bounds are clipped to the rootWebArea even when the
+// kClipsChildren attribute is intentionally omitted. A compromised renderer
+// must not be able to bypass clipping by stripping the attribute.
+TEST(AXTreeTest, RootWebAreaEnforcesClippingWithoutAttribute) {
+  AXTreeUpdate tree_update;
+  tree_update.root_id = 1;
+  tree_update.nodes.resize(3);
+  tree_update.nodes[0].id = 1;
+  tree_update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  tree_update.nodes[0].relative_bounds.bounds = gfx::RectF(0, 0, 800, 600);
+  // Deliberately omit kClipsChildren on the root.
+  tree_update.nodes[0].child_ids.push_back(2);
+  tree_update.nodes[0].child_ids.push_back(3);
+
+  // Child with bounds extending beyond the root to the right/bottom.
+  tree_update.nodes[1].id = 2;
+  tree_update.nodes[1].relative_bounds.bounds = gfx::RectF(700, 500, 200, 200);
+
+  // Child completely outside the root (above/left).
+  tree_update.nodes[2].id = 3;
+  tree_update.nodes[2].relative_bounds.bounds =
+      gfx::RectF(-300, -300, 100, 100);
+
+  AXTree tree(tree_update);
+
+  // kClipsChildren should have been enforced on the rootWebArea.
+  EXPECT_TRUE(
+      tree.root()->GetBoolAttribute(ax::mojom::BoolAttribute::kClipsChildren));
+
+  // Node 2 should be clipped to the root bounds.
+  EXPECT_EQ("(700, 500) size (100 x 100)", GetBoundsAsString(tree, 2));
+  // Node 3 is fully offscreen, so it gets clamped to the nearest edge.
+  EXPECT_EQ("(0, 0) size (1 x 1)", GetBoundsAsString(tree, 3));
+
+  // Unclipped bounds remain unaffected.
+  EXPECT_EQ("(700, 500) size (200 x 200)", GetUnclippedBoundsAsString(tree, 2));
+  EXPECT_EQ("(-300, -300) size (100 x 100)",
+            GetUnclippedBoundsAsString(tree, 3));
+
+  // Offscreen state should be reported correctly.
+  EXPECT_FALSE(IsNodeOffscreen(tree, 2));
+  EXPECT_TRUE(IsNodeOffscreen(tree, 3));
+}
+
 TEST(AXTreeTest, GetBoundsSetsOffscreenIfClipsChildren) {
   AXTreeUpdate tree_update;
   tree_update.root_id = 1;
@@ -1889,7 +1934,7 @@ TEST(AXTreeTest, IntReverseRelations) {
   auto reverse_active_descendant =
       tree.GetReverseRelations(ax::mojom::IntAttribute::kActivedescendantId, 2);
   ASSERT_EQ(1U, reverse_active_descendant.size());
-  EXPECT_TRUE(base::Contains(reverse_active_descendant, 1));
+  EXPECT_TRUE(reverse_active_descendant.contains(1));
 
   reverse_active_descendant =
       tree.GetReverseRelations(ax::mojom::IntAttribute::kActivedescendantId, 1);
@@ -1919,7 +1964,7 @@ TEST(AXTreeTest, IntReverseRelations) {
   reverse_active_descendant =
       tree.GetReverseRelations(ax::mojom::IntAttribute::kActivedescendantId, 5);
   ASSERT_EQ(1U, reverse_active_descendant.size());
-  EXPECT_TRUE(base::Contains(reverse_active_descendant, 1));
+  EXPECT_TRUE(reverse_active_descendant.contains(1));
 
   reverse_member_of =
       tree.GetReverseRelations(ax::mojom::IntAttribute::kMemberOfId, 1);
@@ -1955,7 +2000,7 @@ TEST(AXTreeTest, DeletingNodeUpdatesReverseRelations) {
   auto reverse_active_descendant =
       tree.GetReverseRelations(ax::mojom::IntAttribute::kActivedescendantId, 2);
   ASSERT_EQ(1U, reverse_active_descendant.size());
-  EXPECT_TRUE(base::Contains(reverse_active_descendant, 3));
+  EXPECT_TRUE(reverse_active_descendant.contains(3));
 
   AXTreeUpdate update;
   update.root_id = 1;
@@ -3101,12 +3146,12 @@ TEST(AXTreeTest, ChildTreeIds) {
 
   auto child_tree_2_nodes = tree.GetNodeIdsForChildTreeId(tree_id_2);
   EXPECT_EQ(1U, child_tree_2_nodes.size());
-  EXPECT_TRUE(base::Contains(child_tree_2_nodes, 2));
+  EXPECT_TRUE(child_tree_2_nodes.contains(2));
 
   auto child_tree_3_nodes = tree.GetNodeIdsForChildTreeId(tree_id_3);
   EXPECT_EQ(2U, child_tree_3_nodes.size());
-  EXPECT_TRUE(base::Contains(child_tree_3_nodes, 3));
-  EXPECT_TRUE(base::Contains(child_tree_3_nodes, 4));
+  EXPECT_TRUE(child_tree_3_nodes.contains(3));
+  EXPECT_TRUE(child_tree_3_nodes.contains(4));
 
   AXTreeUpdate update = initial_state;
   update.nodes[2].string_attributes.clear();
@@ -3117,8 +3162,8 @@ TEST(AXTreeTest, ChildTreeIds) {
 
   child_tree_2_nodes = tree.GetNodeIdsForChildTreeId(tree_id_2);
   EXPECT_EQ(2U, child_tree_2_nodes.size());
-  EXPECT_TRUE(base::Contains(child_tree_2_nodes, 2));
-  EXPECT_TRUE(base::Contains(child_tree_2_nodes, 3));
+  EXPECT_TRUE(child_tree_2_nodes.contains(2));
+  EXPECT_TRUE(child_tree_2_nodes.contains(3));
 
   child_tree_3_nodes = tree.GetNodeIdsForChildTreeId(tree_id_3);
   EXPECT_EQ(0U, child_tree_3_nodes.size());
@@ -4331,9 +4376,10 @@ TEST(AXTreeTest, SetSizePosInSetPopUpButtonAndSelect) {
   initial_state.nodes[5].role = ax::mojom::Role::kMenuListOption;
   AXTree tree(initial_state);
 
-  // The first popupbutton should have SetSize of 0.
+  // The first popupbutton has no controls, no details, and no children,
+  // so it has no SetSize.
   AXNode* popup_button_1 = tree.GetFromId(2);
-  EXPECT_OPTIONAL_EQ(0, popup_button_1->GetSetSize());
+  EXPECT_FALSE(popup_button_1->GetSetSize());
   // The combo box select should have SetSize of 2, since the menulistpopup
   // that it wraps has a SetSize of 2.
   AXNode* combo_box_select = tree.GetFromId(3);
@@ -4684,9 +4730,9 @@ TEST(AXTreeTest, SetSizePosInSetControls) {
   EXPECT_OPTIONAL_EQ(3, item->GetPosInSet());
   EXPECT_OPTIONAL_EQ(3, item->GetSetSize());
   button = tree.GetFromId(7);
-  EXPECT_OPTIONAL_EQ(0, button->GetSetSize());
+  EXPECT_FALSE(button->GetSetSize().has_value());
   button = tree.GetFromId(8);
-  EXPECT_OPTIONAL_EQ(0, button->GetSetSize());
+  EXPECT_FALSE(button->GetSetSize().has_value());
 }
 
 // Tests GetPosInSet and GetSetSize return the assigned int attribute values
@@ -4815,7 +4861,7 @@ TEST(AXTreeTest, SingleUpdateDeletesNewlyCreatedChildNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea\n",
+      "id=1 rootWebArea clips_children\n",
       tree.ToString(/*verbose*/ false));
 
   // Unserialize again, but with another add child.
@@ -4828,7 +4874,7 @@ TEST(AXTreeTest, SingleUpdateDeletesNewlyCreatedChildNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea child_ids=2\n"
+      "id=1 rootWebArea clips_children child_ids=2\n"
       "  id=2 genericContainer\n",
       tree.ToString(/*verbose*/ false));
 }
@@ -4879,7 +4925,7 @@ TEST(AXTreeTest, SingleUpdateReparentsNodeMultipleTimes) {
 
   ASSERT_TRUE(tree.Unserialize(tree_update)) << tree.error();
   EXPECT_EQ(
-      "AXTree\nid=1 rootWebArea child_ids=2,3\n"
+      "AXTree\nid=1 rootWebArea clips_children child_ids=2,3\n"
       "  id=2 list child_ids=4\n"
       "    id=4 listItem\n"
       "  id=3 list\n",
@@ -4893,7 +4939,7 @@ TEST(AXTreeTest, SingleUpdateReparentsNodeMultipleTimes) {
 
   ASSERT_TRUE(tree.Unserialize(tree_update)) << tree.error();
   EXPECT_EQ(
-      "AXTree\nid=1 rootWebArea child_ids=2,3\n"
+      "AXTree\nid=1 rootWebArea clips_children child_ids=2,3\n"
       "  id=2 list\n"
       "  id=3 list child_ids=4\n"
       "    id=4 listItem\n",
@@ -4926,7 +4972,7 @@ TEST(AXTreeTest, SingleUpdateIgnoresNewlyCreatedUnignoredChildNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea child_ids=2\n"
+      "id=1 rootWebArea clips_children child_ids=2\n"
       "  id=2 genericContainer IGNORED\n",
       tree.ToString(/*verbose*/ false));
 }
@@ -4944,7 +4990,7 @@ TEST(AXTreeTest, SingleUpdateTogglesIgnoredStateAfterCreatingNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea\n",
+      "id=1 rootWebArea clips_children\n",
       tree.ToString(/*verbose*/ false));
 
   AXTreeUpdate tree_update;
@@ -4968,7 +5014,7 @@ TEST(AXTreeTest, SingleUpdateTogglesIgnoredStateAfterCreatingNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea child_ids=2,3\n"
+      "id=1 rootWebArea clips_children child_ids=2,3\n"
       "  id=2 genericContainer IGNORED\n"
       "  id=3 genericContainer\n",
       tree.ToString(/*verbose*/ false));
@@ -4993,7 +5039,7 @@ TEST(AXTreeTest, SingleUpdateTogglesIgnoredStateBeforeDestroyingNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea child_ids=2,3\n"
+      "id=1 rootWebArea clips_children child_ids=2,3\n"
       "  id=2 genericContainer\n"
       "  id=3 genericContainer IGNORED\n",
       tree.ToString(/*verbose*/ false));
@@ -5014,7 +5060,7 @@ TEST(AXTreeTest, SingleUpdateTogglesIgnoredStateBeforeDestroyingNode) {
 
   ASSERT_EQ(
       "AXTree\n"
-      "id=1 rootWebArea\n",
+      "id=1 rootWebArea clips_children\n",
       tree.ToString(/*verbose*/ false));
 }
 
@@ -5368,6 +5414,44 @@ TEST(AXTreeTest, SetSizePosInSetRadioButtonsWithGroupIds) {
   // Group 2: node 4. SetSize = 1.
   EXPECT_EQ(1, tree.GetPosInSet(*tree.GetFromId(4)));
   EXPECT_EQ(1, tree.GetSetSize(*tree.GetFromId(4)));
+}
+
+TEST(AXTreeTest, InvalidNodeIdZeroUAFRepro) {
+  // 1. Initialize tree with a valid root.
+  AXTreeUpdate initial_state;
+  initial_state.root_id = 1;
+  initial_state.nodes.resize(1);
+  initial_state.nodes[0].id = 1;
+  initial_state.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  AXTree tree(initial_state);
+
+  // 2. Update 1: Add child ID 0 (invalid) to root, but don't define it.
+  AXTreeUpdate update1;
+  update1.root_id = 1;
+  update1.nodes.resize(1);
+  update1.nodes[0].id = 1;
+  update1.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update1.nodes[0].child_ids.push_back(0);  // kInvalidAXNodeID
+
+#if AX_FAIL_FAST_BUILD()
+  EXPECT_DEATH_IF_SUPPORTED(tree.Unserialize(update1), "Child ID is invalid.");
+#else
+  // We expect Unserialize to fail.
+  EXPECT_FALSE(tree.Unserialize(update1));
+  EXPECT_EQ("Child ID is invalid.", tree.error());
+
+  // 3. Update 2: Send another update referencing child 0.
+  AXTreeUpdate update2 = update1;
+
+  // We expect Unserialize to fail.
+  EXPECT_FALSE(tree.Unserialize(update2));
+
+  // If we didn't crash, verify the tree is not corrupted.
+  // Root should have no children because updates failed.
+  AXNode* root = tree.root();
+  ASSERT_NE(nullptr, root);
+  EXPECT_EQ(0u, root->children().size());
+#endif
 }
 
 }  // namespace ui

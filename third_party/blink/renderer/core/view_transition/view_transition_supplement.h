@@ -67,6 +67,9 @@ class CORE_EXPORT ViewTransitionSupplement
       Document&,
       ViewTransitionState transition_state);
 
+  void StartNavigationPreviewIfNeeded();
+  void AbortNavigationPreview();
+
   // Abort any ongoing transitions in the document.
   static void AbortTransition(Document&);
 
@@ -92,11 +95,17 @@ class CORE_EXPORT ViewTransitionSupplement
   void OnSkipTransitionWithPendingCallback(ViewTransition*) override;
   void OnSkippedTransitionDOMCallback(ViewTransition*) override;
   void OnTransitionCaptured(ViewTransition*) override;
+  void OnCaptureCommitted(ViewTransition*) override;
+  void OnDOMCallbackReadyToRun(ViewTransition*);
+  bool IsEarlyCallbackEnabled() const override;
+  bool HasNonScriptTransitions() const;
 
   // TODO(https://crbug.com/1422251): Expand this to receive a the full set of
   // @view-transition options.
-  void OnViewTransitionsStyleUpdated(bool cross_document_enabled,
-                                     const Vector<String>& types);
+  void OnViewTransitionsStyleUpdated(
+      bool cross_document_enabled,
+      const Vector<String>& types,
+      const std::optional<Vector<String>>& preview_types);
 
   // Notifies that the `body` element has been parsed and will be added to the
   // Document.
@@ -139,6 +148,9 @@ class CORE_EXPORT ViewTransitionSupplement
 
   void SendOptInStatusToHost();
 
+  bool HasActiveCaptures() const;
+  void AdvanceCapturedTransitions();
+
   // The document we belong to.
   Member<Document> document_;
 
@@ -166,6 +178,7 @@ class CORE_EXPORT ViewTransitionSupplement
       viz::ViewTransitionElementResourceId::kInvalidLocalId;
 
   Vector<String> cross_document_types_;
+  std::optional<Vector<String>> preview_types_;
 
   bool in_get_computed_style_scope_ = false;
   bool last_update_had_computed_style_scope_ = false;
@@ -173,7 +186,6 @@ class CORE_EXPORT ViewTransitionSupplement
   // Track in flight and captured transitions. Advance from the capture phase to
   // DOM callback is deferred until all in flight captures are complete in order
   // to trigger the DOM callbacks in creation order.
-  int in_flight_capture_requests_ = 0;
   HeapVector<Member<ViewTransition>> captured_transitions_;
 
   // This allow deferring starting a navigation transition until some conditions

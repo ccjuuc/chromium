@@ -376,6 +376,11 @@ inline constexpr char kDeviceDisabled[] = "cros.device_disabled";
 // the device is disabled.
 inline constexpr char kDeviceDisabledMessage[] = "cros.disabled_state.message";
 
+// A boolean pref that indicates whether location tracking is enabled when the
+// device is in disabled mode.
+inline constexpr char kDeviceDisabledLocationTrackingEnabled[] =
+    "cros.disabled_state.location_tracking_enabled";
+
 // A boolean pref that indicates whether the device automatically reboots when
 // the user initiates a shutdown via an UI element.  If set to true, all
 // shutdown buttons in the UI will be replaced by reboot buttons.
@@ -570,10 +575,6 @@ inline constexpr char kDeviceAutoUpdateTimeRestrictions[] =
 // allowed for unaffiliated user.
 inline constexpr char kDeviceUnaffiliatedCrostiniAllowed[] =
     "cros.device.unaffiliated_crostini_allowed";
-
-// A boolean pref that indicates whether PluginVm is allowed to run on this
-// device.
-inline constexpr char kPluginVmAllowed[] = "cros.device.plugin_vm_allowed";
 
 // An enum pref specifying the case when device needs to reboot on user sign
 // out.

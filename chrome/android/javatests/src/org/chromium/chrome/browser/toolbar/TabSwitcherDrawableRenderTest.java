@@ -23,13 +23,15 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -37,18 +39,20 @@ import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.browser.ThemeTestUtils;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.ui.test.util.RenderTestRule;
 
 /** Render tests for the {@link TabSwitcherDrawable} with notification feature. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
 public class TabSwitcherDrawableRenderTest {
     @Rule
     public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(RenderTestRule.Component.UI_BROWSER_MOBILE_TAB_GROUPS)
-                    .setRevision(5)
+                    .setRevision(7)
                     .build();
 
     @Rule
@@ -74,13 +78,34 @@ public class TabSwitcherDrawableRenderTest {
     @MediumTest
     @Feature("RenderTest")
     @EnableFeatures(ChromeFeatureList.DATA_SHARING)
+    @DisableFeatures(ChromeFeatureList.HOME_BUTTON_REMOVAL)
     public void testTabSwitcherDrawable_toggleNotificationRegular() throws Exception {
+        testTabSwitcherDrawable_toggleNotificationRegularImpl(
+                "tab_page_toolbar_view_regular_off", "tab_page_toolbar_view_regular_on");
+    }
+
+    @Test
+    @MediumTest
+    @Feature("RenderTest")
+    @EnableFeatures({
+        ChromeFeatureList.DATA_SHARING,
+        ChromeFeatureList.HOME_BUTTON_REMOVAL + ":keep_home_button_on_ntp/true"
+    })
+    public void testTabSwitcherDrawable_toggleNotificationRegular_withHomeButtonRemovalKeepOnNtp()
+            throws Exception {
+        testTabSwitcherDrawable_toggleNotificationRegularImpl(
+                "tab_page_toolbar_view_regular_off_with_home_button_removal",
+                "tab_page_toolbar_view_regular_on_with_home_button_removal");
+    }
+
+    private void testTabSwitcherDrawable_toggleNotificationRegularImpl(
+            String offGoldenId, String onGoldenId) throws Exception {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
         mActivityTestRule.loadUrlInNewTab("about:blank", /* incognito= */ false);
 
         int tabCount = 2;
         View toolbarView = activity.findViewById(R.id.toolbar);
-        mRenderTestRule.render(toolbarView, "tab_page_toolbar_view_regular_off");
+        mRenderTestRule.render(toolbarView, offGoldenId);
 
         String contentDesc =
                 activity.getResources()
@@ -103,12 +128,14 @@ public class TabSwitcherDrawableRenderTest {
                                 tabCount,
                                 tabCount);
         assertEquals(notificationContentDesc, mToggleTabStackButton.getContentDescription());
-        mRenderTestRule.render(toolbarView, "tab_page_toolbar_view_regular_on");
+        mRenderTestRule.render(toolbarView, onGoldenId);
     }
 
     @Test
     @MediumTest
     @Feature("RenderTest")
+    // TODO(crbug.com/475816843): Remove this and update goldens once migration is complete.
+    @DisableFeatures({SigninFeatures.SIGNIN_LEVEL_UP_BUTTON})
     public void testTabSwitcherDrawable_newTabPage() throws Exception {
         ChromeTabbedActivity activity = mActivityTestRule.getActivity();
 

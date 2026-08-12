@@ -10,6 +10,9 @@
 @class AccountPickerSelectionScreenCoordinator;
 @protocol AccountPickerLayoutDelegate;
 @protocol AccountPickerLogger;
+namespace signin_metrics {
+enum class AccessPoint;
+}  // namespace signin_metrics
 @protocol SystemIdentity;
 
 // Delegate for AccountPickerSelectionScreenCoordinator.
@@ -19,11 +22,8 @@
 - (void)accountPickerSelectionScreenCoordinatorIdentitySelected:
     (AccountPickerSelectionScreenCoordinator*)coordinator;
 
-// Invoke add account SigninCoordinator.
-// Up to iOS 18, due to crbug.com/395959814, the add account view may disappear
-// without the signinCompletion being called. So the view must not be blocked
-// when calling this.
-- (void)accountPickerSelectionScreenCoordinatorOpenAddAccount:
+// The coordinators requests to be stopped without any sign-in.
+- (void)accountPickerSelectionScreenCoordinatorWantsToBeStopped:
     (AccountPickerSelectionScreenCoordinator*)coordinator;
 
 @end
@@ -32,16 +32,22 @@
 // default account available on the device.
 @interface AccountPickerSelectionScreenCoordinator : ChromeCoordinator
 
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser NS_UNAVAILABLE;
+
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                          selectedIdentity:(id<SystemIdentity>)selectedIdentity
+                               accessPoint:
+                                   (signin_metrics::AccessPoint)accessPoint
+    NS_DESIGNATED_INITIALIZER;
+
 // Identity selected by the user.
 @property(nonatomic, strong, readonly) id<SystemIdentity> selectedIdentity;
 @property(nonatomic, strong, readonly) UIViewController* viewController;
 @property(nonatomic, weak) id<AccountPickerSelectionScreenCoordinatorDelegate>
     delegate;
 @property(nonatomic, weak) id<AccountPickerLayoutDelegate> layoutDelegate;
-
-- (void)start NS_UNAVAILABLE;
-// Starts the coordinator with the selected identity.
-- (void)startWithSelectedIdentity:(id<SystemIdentity>)selectedIdentity;
 
 @end
 

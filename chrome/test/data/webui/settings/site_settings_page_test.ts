@@ -6,14 +6,16 @@
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {CrExpandButtonElement, SettingsSiteSettingsPageElement} from 'chrome://settings/lazy_load.js';
-import {ContentSetting, CookieControlsMode, ContentSettingsTypes, defaultSettingLabel, SettingsState, SafetyHubBrowserProxyImpl, SafetyHubEvent} from 'chrome://settings/lazy_load.js';
+import {ContentSetting, CookieControlsMode, ContentSettingsTypes, defaultSettingLabel, SettingsState, SafetyHubBrowserProxyImpl, SafetyHubEvent, SiteSettingsBrowserProxyImpl} from 'chrome://settings/lazy_load.js';
 import type {CrLinkRowElement, Route, SettingsPrefsElement, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
 import {CrSettingsPrefs, loadTimeData, Router, routes} from 'chrome://settings/settings.js';
-import {assertEquals, assertFalse, assertTrue, assertThrows} from 'chrome://webui-test/chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isChildVisible} from 'chrome://webui-test/test_util.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 
 import {TestSafetyHubBrowserProxy} from './test_safety_hub_browser_proxy.js';
+import {TestSiteSettingsBrowserProxy} from './test_site_settings_browser_proxy.js';
+import {createContentSettingTypeToValuePair, createDefaultContentSetting, createSiteSettingsPrefs} from './test_util.js';
 
 const redesignedPages: Route[] = [
   routes.SITE_SETTINGS_HANDLERS,
@@ -78,12 +80,6 @@ suite('SiteSettingsPage', function() {
           },
         },
       },
-      tracking_protection: {
-        block_all_3pc_toggle_enabled: {
-          type: chrome.settingsPrivate.PrefType.BOOLEAN,
-          value: true,
-        },
-      },
     };
     document.body.appendChild(page);
     flush();
@@ -111,11 +107,14 @@ suite('SiteSettingsPage', function() {
     assertEquals('b', defaultSettingLabel(ContentSetting.BLOCK, 'a', 'b'));
     assertEquals('a', defaultSettingLabel(ContentSetting.ALLOW, 'a', 'b', 'c'));
     assertEquals('b', defaultSettingLabel(ContentSetting.BLOCK, 'a', 'b', 'c'));
-    assertEquals(
-        'c', defaultSettingLabel(ContentSetting.SESSION_ONLY, 'a', 'b', 'c'));
-    assertEquals(
-        'c', defaultSettingLabel(ContentSetting.DEFAULT, 'a', 'b', 'c'));
     assertEquals('c', defaultSettingLabel(ContentSetting.ASK, 'a', 'b', 'c'));
+    assertEquals(
+        'c',
+        defaultSettingLabel(
+            ContentSetting.SESSION_ONLY, 'a', 'b', undefined, 'c'));
+    assertEquals(
+        'c',
+        defaultSettingLabel(ContentSetting.DEFAULT, 'a', 'b', undefined, 'c'));
   });
 
   test('CookiesLinkRowSublabel', async function() {
@@ -155,10 +154,10 @@ suite('SiteSettingsPage', function() {
             '#notifications')!;
     assertTrue(!!notificationsLinkRow);
 
-    page.set('prefs.generated.notification.value', SettingsState.BLOCK);
+    page.set('prefs.generated.notification.value', SettingsState.CPSS);
     await flushTasks();
     assertEquals(
-        loadTimeData.getString('siteSettingsNotificationsBlocked'),
+        loadTimeData.getString('siteSettingsNotificationsAskCPSS'),
         notificationsLinkRow.subLabel);
 
     page.set('prefs.generated.notification.value', SettingsState.QUIET);
@@ -383,10 +382,63 @@ suite('ContentSettingsVisibility', function() {
   });
 });
 
-suite('WebPrintingNotShown', function() {
-  test('navigateToWebPrinting', function() {
-    assertThrows(
-        () =>
-            Router.getInstance().navigateTo(routes.SITE_SETTINGS_WEB_PRINTING));
+suite('SiteSettingsList', function() {
+  let browserProxy: TestSiteSettingsBrowserProxy;
+
+  setup(function() {
+    browserProxy = new TestSiteSettingsBrowserProxy();
+    SiteSettingsBrowserProxyImpl.setInstance(browserProxy);
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+  });
+
+  test('SensorsIconChangesWithSetting', async function() {
+    const categoryList = [{
+      route: routes.SITE_SETTINGS_SENSORS,
+      id: ContentSettingsTypes.SENSORS,
+      label: 'siteSettingsSensors',
+      icon: 'privacy:sensors',
+      enabledLabel: 'siteSettingsSensorsAllowed',
+      disabledLabel: 'siteSettingsSensorsBlocked',
+      askLabel: 'siteSettingsSensorsAsk',
+    }];
+
+    const listElement = document.createElement('settings-site-settings-list');
+    listElement.categoryList = categoryList;
+    document.body.appendChild(listElement);
+    await flushTasks();
+
+    const sensorsRow =
+        listElement.shadowRoot!.querySelector<CrLinkRowElement>('#sensors');
+    assertTrue(!!sensorsRow);
+
+    const allowPrefs = createSiteSettingsPrefs(
+        [createContentSettingTypeToValuePair(
+            ContentSettingsTypes.SENSORS, createDefaultContentSetting({
+              setting: ContentSetting.ALLOW,
+            }))],
+        [], []);
+    browserProxy.setPrefs(allowPrefs);
+    await flushTasks();
+    assertEquals('privacy:sensors', sensorsRow.startIcon);
+
+    const askPrefs = createSiteSettingsPrefs(
+        [createContentSettingTypeToValuePair(
+            ContentSettingsTypes.SENSORS, createDefaultContentSetting({
+              setting: ContentSetting.ASK,
+            }))],
+        [], []);
+    browserProxy.setPrefs(askPrefs);
+    await flushTasks();
+    assertEquals('privacy:sensors-ask-custom', sensorsRow.startIcon);
+
+    const blockPrefs = createSiteSettingsPrefs(
+        [createContentSettingTypeToValuePair(
+            ContentSettingsTypes.SENSORS, createDefaultContentSetting({
+              setting: ContentSetting.BLOCK,
+            }))],
+        [], []);
+    browserProxy.setPrefs(blockPrefs);
+    await flushTasks();
+    assertEquals('privacy:sensors-off', sensorsRow.startIcon);
   });
 });

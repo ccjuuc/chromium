@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
@@ -256,8 +255,7 @@ Surface::QueueFrameResult Surface::QueueFrame(
     base::ScopedClosureRunner frame_rejected_callback) {
   if (frame.size_in_pixels() != surface_info_.size_in_pixels() ||
       frame.device_scale_factor() != surface_info_.device_scale_factor()) {
-    TRACE_EVENT_INSTANT0("viz", "Surface invariants violation",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("viz", "Surface invariants violation");
     return QueueFrameResult::REJECTED;
   }
 
@@ -273,9 +271,8 @@ Surface::QueueFrameResult Surface::QueueFrame(
     // Return oldest frame if uncommitted queue is full.
     DCHECK_LE(uncommitted_frames_.size(), max_uncommitted_frames_);
     if (uncommitted_frames_.size() == max_uncommitted_frames_) {
-      TRACE_EVENT_INSTANT1("viz", "DropUncommitedFrame",
-                           TRACE_EVENT_SCOPE_THREAD, "queue_length",
-                           uncommitted_frames_.size());
+      TRACE_EVENT_INSTANT("viz", "DropUncommitedFrame", "queue_length",
+                          uncommitted_frames_.size());
 
       UnrefFrameResourcesAndRunCallbacks(
           std::move(uncommitted_frames_.front()));
@@ -287,9 +284,8 @@ Surface::QueueFrameResult Surface::QueueFrame(
     // If we still have space in queue we should send ack the client because we
     // can receive another frame without dropping it.
     if (uncommitted_frames_.size() < max_uncommitted_frames_) {
-      TRACE_EVENT_INSTANT1("viz", "AckingUncommitedFrame",
-                           TRACE_EVENT_SCOPE_THREAD, "queue_length",
-                           uncommitted_frames_.size());
+      TRACE_EVENT_INSTANT("viz", "AckingUncommitedFrame", "queue_length",
+                          uncommitted_frames_.size());
       uncommitted_frames_.back().SendAckIfNeeded(surface_client_.get());
     }
 
@@ -320,24 +316,22 @@ Surface::QueueFrameResult Surface::CommitFrame(FrameData frame) {
   pending_frame_data_.reset();
   view_transition_dependencies_.clear();
 
-  if (features::ShouldAckCOREarlyForViewTransition()) {
-    for (const auto& directive : frame.frame.metadata.transition_directives) {
-      const auto& token = directive.transition_token();
-      // If there is no SurfaceAnimationManager for the `token` and an Animate
-      // directive has been issued, then previous frame is held up and has not
-      // performed Save directive yet for a cross-document view transition. So
-      // add this token as dependency for new document's surface which needs to
-      // be resolved for activation.
-      if (directive.type() ==
-              CompositorFrameTransitionDirective::Type::kAnimateRenderer &&
-          !surface_manager_->FrameSinkManagerHasViewTransitionToken(token) &&
-          directive.delay_layer_tree_view_deletion()) {
-        // Observe FrameSinkManager if we're not already observing.
-        if (!frame_sink_manager_observation_.IsObserving()) {
-          frame_sink_manager_observation_.Observe(surface_manager_);
-        }
-        view_transition_dependencies_.insert(token);
+  for (const auto& directive : frame.frame.metadata.transition_directives) {
+    const auto& token = directive.transition_token();
+    // If there is no SurfaceAnimationManager for the `token` and an Animate
+    // directive has been issued, then previous frame is held up and has not
+    // performed Save directive yet for it's view transition. So add this
+    // token as dependency for new document's surface which needs to be
+    // resolved for activation.
+    if (directive.type() ==
+            CompositorFrameTransitionDirective::Type::kAnimateRenderer &&
+        !surface_manager_->FrameSinkManagerHasViewTransitionToken(token) &&
+        directive.delay_layer_tree_view_deletion()) {
+      // Observe FrameSinkManager if we're not already observing.
+      if (!frame_sink_manager_observation_.IsObserving()) {
+        frame_sink_manager_observation_.Observe(surface_manager_);
       }
+      view_transition_dependencies_.insert(token);
     }
   }
 
@@ -388,13 +382,13 @@ Surface::QueueFrameResult Surface::CommitFrame(FrameData frame) {
 }
 
 void Surface::RequestCopyOfOutput(
-    PendingCopyOutputRequest pending_copy_output_request) {
+    std::unique_ptr<PendingCopyOutputRequest> pending_copy_output_request) {
   TRACE_EVENT1("viz", "Surface::RequestCopyOfOutput", "has_active_frame_data",
                !!active_frame_data_);
-
-  if (!pending_copy_output_request.subtree_capture_id.is_valid()) {
+  CHECK(!pending_copy_output_request->IsTimedOut());
+  if (!pending_copy_output_request->subtree_capture_id.is_valid()) {
     RequestCopyOfOutputOnRootRenderPass(
-        std::move(pending_copy_output_request.copy_output_request));
+        std::move(pending_copy_output_request->copy_output_request));
     return;
   }
 
@@ -403,9 +397,9 @@ void Surface::RequestCopyOfOutput(
 
   for (auto& render_pass : GetActiveFrame().render_pass_list) {
     if (render_pass->subtree_capture_id ==
-        pending_copy_output_request.subtree_capture_id) {
+        pending_copy_output_request->subtree_capture_id) {
       RequestCopyOfOutputOnRenderPass(
-          std::move(pending_copy_output_request.copy_output_request),
+          std::move(pending_copy_output_request->copy_output_request),
           *render_pass);
       return;
     }
@@ -512,10 +506,9 @@ void Surface::ActivatePendingFrame() {
 
   std::optional<base::TimeDelta> duration = deadline_->Cancel();
   if (duration.has_value()) {
-    TRACE_EVENT_INSTANT2("viz", "SurfaceSynchronizationEvent",
-                         TRACE_EVENT_SCOPE_THREAD, "surface_id",
-                         surface_info_.id().ToString(), "duration_ms",
-                         duration.value().InMilliseconds());
+    TRACE_EVENT_INSTANT("viz", "SurfaceSynchronizationEvent", "surface_id",
+                        surface_info_.id().ToString(), "duration_ms",
+                        duration.value().InMilliseconds());
   }
 
   ActivateFrame(std::move(frame_data));
@@ -541,13 +534,19 @@ void Surface::CommitFramesRecursively(const CommitPredicate& predicate) {
   }
 
   if (HasPendingFrame()) {
-    for (auto& range : pending_frame_data_->frame.metadata.referenced_surfaces)
+    const std::vector<SurfaceRange> referenced_surfaces =
+        pending_frame_data_->frame.metadata.referenced_surfaces;
+    for (auto& range : referenced_surfaces) {
       surface_manager_->CommitFramesInRangeRecursively(range, predicate);
+    }
   }
 
   if (HasActiveFrame()) {
-    for (auto& range : active_frame_data_->frame.metadata.referenced_surfaces)
+    const std::vector<SurfaceRange> referenced_surfaces =
+        active_frame_data_->frame.metadata.referenced_surfaces;
+    for (auto& range : referenced_surfaces) {
       surface_manager_->CommitFramesInRangeRecursively(range, predicate);
+    }
   }
 
   // If we freed up some space in queue send ack for the last frame if it's
@@ -621,8 +620,13 @@ void Surface::RecomputeActiveReferencedSurfaces() {
   // notify SurfaceManager of the new references.
   active_referenced_surfaces_.clear();
   std::vector<SurfaceAllocationGroup*> new_referenced_allocation_groups;
-  for (const SurfaceRange& surface_range :
-       active_frame_data_->frame.metadata.referenced_surfaces) {
+  // Iterate over a copy because UpdateLastActiveReferenceAndMaybeActivate()
+  // can synchronously activate a referenced surface, which can resolve a
+  // dependency of this surface's pending frame and replace
+  // |active_frame_data_| while we're iterating over it.
+  const std::vector<SurfaceRange> referenced_surfaces =
+      active_frame_data_->frame.metadata.referenced_surfaces;
+  for (const SurfaceRange& surface_range : referenced_surfaces) {
     // Figure out what surface in the |surface_range| needs to be referenced.
     Surface* surface =
         surface_manager_->GetLatestInFlightSurface(surface_range);
@@ -728,7 +732,7 @@ void Surface::ActivateFrame(FrameData frame_data) {
   // completely processed.
   const auto& metadata = GetActiveFrameMetadata();
   if (surface_client_ && metadata.send_frame_token_to_embedder) {
-    if (!FrameTokenGT(metadata.frame_token, last_sent_frame_token_)) {
+    if (metadata.frame_token <= last_sent_frame_token_) {
       uint32_t current_token = metadata.frame_token;
       uint32_t last_token = last_sent_frame_token_;
       base::debug::Alias(&current_token);
@@ -797,16 +801,36 @@ void Surface::UpdateActivationDependencies(
   base::flat_set<raw_ptr<SurfaceAllocationGroup, CtnExperimental>>
       new_blocking_allocation_groups;
   std::vector<SurfaceId> new_activation_dependencies;
+  bool bypass_outdated_surface_activation =
+      base::FeatureList::IsEnabled(features::kBypassOutdatedSurfaceActivation);
   for (const SurfaceId& surface_id :
        current_frame.metadata.activation_dependencies) {
     SurfaceAllocationGroup* group =
         surface_manager_->GetOrCreateAllocationGroupForSurfaceId(surface_id);
-    if (base::Contains(new_blocking_allocation_groups, group))
+    if (new_blocking_allocation_groups.contains(group))
       continue;
     if (group)
       group->UpdateLastPendingReferenceAndMaybeActivate(surface_id);
     Surface* dependency = surface_manager_->GetSurfaceForId(surface_id);
-    if (dependency && dependency->HasActiveFrame()) {
+    bool is_active = dependency && dependency->HasActiveFrame();
+
+    if (!is_active && bypass_outdated_surface_activation && group &&
+        group->last_created_surface()) {
+      // Proactive Monotonic Range Check: Mitigates display server deadlocks
+      // caused by outdated surface activation dependency tokens when parent
+      // frames lag behind child renderer execution. If the demanded
+      // `surface_id` isn't currently active, but the allocation group's latest
+      // active surface already satisfies the monotonic range boundary, we
+      // natively treat the dependency as fulfilled upfront. This avoids blind
+      // storage of deadlocked blockers downstream.
+      SurfaceRange range(surface_id,
+                         group->last_created_surface()->surface_id());
+      if (group->FindLatestActiveSurfaceInRange(range)) {
+        is_active = true;
+      }
+    }
+
+    if (is_active) {
       // Normally every creation of SurfaceAllocationGroup should be followed by
       // a call to Register* to keep it alive. However, since this one already
       // has a registered surface, we don't have to do that.
@@ -847,7 +871,7 @@ void Surface::TakeCopyOutputRequests(Surface::CopyRequestsMap* copy_requests) {
 void Surface::TakeCopyOutputRequestsFromClient() {
   if (!surface_client_)
     return;
-  for (PendingCopyOutputRequest& request_params :
+  for (std::unique_ptr<PendingCopyOutputRequest>& request_params :
        surface_client_->TakeCopyOutputRequests(
            surface_id().local_surface_id())) {
     RequestCopyOfOutput(std::move(request_params));
@@ -878,11 +902,9 @@ void Surface::SetActiveFrameForViewTransition(CompositorFrame frame) {
 
   active_frame_data_->frame = std::move(frame);
 
-  if (features::ShouldAckCOREarlyForViewTransition()) {
-    // We need to recompute these as there can be undrawn surfaces as referenced
-    // surfaces for cross-doc view transitions on shared element replacement.
-    RecomputeActiveReferencedSurfaces();
-  }
+  // We need to recompute these as there can be undrawn surfaces as referenced
+  // surfaces for cross-doc view transitions on shared element replacement.
+  RecomputeActiveReferencedSurfaces();
 }
 
 const CompositorFrame& Surface::GetPendingFrame() {

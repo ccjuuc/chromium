@@ -4,6 +4,7 @@
 
 #include "components/sync/service/device_statistics_request_impl.h"
 
+#include "base/byte_size.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
@@ -27,11 +28,6 @@ class DeviceStatisticsRequestImplTest : public testing::Test {
       : shared_url_loader_factory_(
             base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
                 &test_url_loader_factory_)) {
-    // A primary account must exist, even when querying data for a non-primary
-    // account.
-    identity_test_env_.MakePrimaryAccountAvailable(
-        "primary@gmail.com", signin::ConsentLevel::kSignin);
-
     account_info_ = identity_test_env_.MakeAccountAvailable(kTestEmail);
   }
 
@@ -46,7 +42,8 @@ class DeviceStatisticsRequestImplTest : public testing::Test {
     head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
         "HTTP/1.1 200 OK\nContent-Type: application/octet-stream");
     network::URLLoaderCompletionStatus status(net::OK);
-    status.decoded_body_length = response.SerializeAsString().size();
+    status.decoded_body_length =
+        base::ByteSize(response.SerializeAsString().size());
     test_url_loader_factory_.AddResponse(GURL(kTestUrl), std::move(head),
                                          response.SerializeAsString(), status);
   }
@@ -58,6 +55,12 @@ class DeviceStatisticsRequestImplTest : public testing::Test {
     network::URLLoaderCompletionStatus unauthorized_status(net::OK);
     test_url_loader_factory_.AddResponse(
         GURL(kTestUrl), std::move(unauthorized_head), "", unauthorized_status);
+  }
+
+  void SetNetworkErrorResponse() {
+    network::URLLoaderCompletionStatus status(net::ERR_FAILED);
+    test_url_loader_factory_.AddResponse(
+        GURL(kTestUrl), network::mojom::URLResponseHead::New(), "", status);
   }
 
   base::test::TaskEnvironment task_environment_;
@@ -85,7 +88,8 @@ TEST_F(DeviceStatisticsRequestImplTest, ShouldSucceed) {
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(DeviceStatisticsRequest::State::kComplete, request.GetState());
   ASSERT_EQ(1u, request.GetResults().size());
-  EXPECT_EQ("test_client", request.GetResults()[0].client_name());
+  EXPECT_EQ("test_client",
+            request.GetResults()[0].specifics().device_info().client_name());
 }
 
 TEST_F(DeviceStatisticsRequestImplTest, ShouldHandleAuthError) {
@@ -96,19 +100,45 @@ TEST_F(DeviceStatisticsRequestImplTest, ShouldHandleAuthError) {
   base::test::TestFuture<void> future;
   request.Start(future.GetCallback());
   identity_test_env_.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+      GoogleServiceAuthError::FromServiceUnavailable(/*error_message=*/
+                                                     std::string()));
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(DeviceStatisticsRequest::State::kFailed, request.GetState());
 }
 
-TEST_F(DeviceStatisticsRequestImplTest, ShouldHandleNetworkError) {
-  auto head = network::mojom::URLResponseHead::New();
-  head->headers = base::MakeRefCounted<net::HttpResponseHeaders>(
-      "HTTP/1.1 500 Internal Server Error\nContent-Type: "
-      "application/octet-stream");
-  network::URLLoaderCompletionStatus status(net::ERR_FAILED);
-  test_url_loader_factory_.AddResponse(GURL(kTestUrl), std::move(head), "",
-                                       status);
+TEST_F(DeviceStatisticsRequestImplTest, ShouldRetryOnNetworkError) {
+  DeviceStatisticsRequestImpl request(identity_test_env_.identity_manager(),
+                                      shared_url_loader_factory_, "user_agent",
+                                      account_info_, GURL(kTestUrl));
+
+  // First response is a network error.
+  SetNetworkErrorResponse();
+
+  base::test::TestFuture<void> future;
+  request.Start(future.GetCallback());
+  identity_test_env_
+      .WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
+          "token", base::Time::Max(), "id_token",
+          {GaiaConstants::kChromeSyncOAuth2Scope});
+
+  // The request should retry (which includes requesting an access token again).
+  // Set up the second server response as "OK".
+  SetOkResponse("test_client");
+  identity_test_env_
+      .WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
+          "token", base::Time::Max(), "id_token",
+          {GaiaConstants::kChromeSyncOAuth2Scope});
+
+  EXPECT_TRUE(future.Wait());
+  EXPECT_EQ(DeviceStatisticsRequest::State::kComplete, request.GetState());
+  ASSERT_EQ(1u, request.GetResults().size());
+  EXPECT_EQ("test_client",
+            request.GetResults()[0].specifics().device_info().client_name());
+}
+
+TEST_F(DeviceStatisticsRequestImplTest, ShouldRetryOnlyOnceOnNetworkError) {
+  // The server always responds with a network error.
+  SetNetworkErrorResponse();
 
   DeviceStatisticsRequestImpl request(identity_test_env_.identity_manager(),
                                       shared_url_loader_factory_, "user_agent",
@@ -120,6 +150,14 @@ TEST_F(DeviceStatisticsRequestImplTest, ShouldHandleNetworkError) {
       .WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
           "token", base::Time::Max(), "id_token",
           {GaiaConstants::kChromeSyncOAuth2Scope});
+
+  // The request should retry exactly once (which includes requesting an access
+  // token again).
+  identity_test_env_
+      .WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
+          "token", base::Time::Max(), "id_token",
+          {GaiaConstants::kChromeSyncOAuth2Scope});
+
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(DeviceStatisticsRequest::State::kFailed, request.GetState());
 }
@@ -153,7 +191,8 @@ TEST_F(DeviceStatisticsRequestImplTest, ShouldRetryOnUnauthorized) {
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(DeviceStatisticsRequest::State::kComplete, request.GetState());
   ASSERT_EQ(1u, request.GetResults().size());
-  EXPECT_EQ("test_client", request.GetResults()[0].client_name());
+  EXPECT_EQ("test_client",
+            request.GetResults()[0].specifics().device_info().client_name());
 }
 
 TEST_F(DeviceStatisticsRequestImplTest, ShouldRetryOnlyOnceOnUnauthorized) {

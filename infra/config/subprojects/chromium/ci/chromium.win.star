@@ -81,7 +81,7 @@ ci.builder(
     ),
     targets = targets.bundle(
         targets = [
-            "chromium_webkit_isolated_scripts",
+            "chromium_blink_isolated_scripts",
         ],
         mixins = [
             "win10",
@@ -235,10 +235,6 @@ ci.builder(
             ),
             "content_shell_crash_test": targets.mixin(
                 # https://crbug.com/861730
-                experiment_percentage = 100,
-            ),
-            "extensions_browsertests": targets.mixin(
-                # https://crbug.com/876615
                 experiment_percentage = 100,
             ),
             "interactive_ui_tests": targets.mixin(
@@ -412,7 +408,6 @@ ci.builder(
             "x86-64",
             "win10",
             "isolate_profile_data",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "blink_web_tests": targets.mixin(
@@ -430,9 +425,6 @@ ci.builder(
                 ),
             ),
             "browser_tests": targets.mixin(
-                # Only retry the individual failed tests instead of rerunning
-                # entire shards.
-                # crbug.com/1473501
                 swarming = targets.swarming(
                     # This is for slow test execution that often becomes a
                     # critical path of swarming jobs. crbug.com/868114
@@ -516,6 +508,72 @@ ci.thin_tester(
 )
 
 ci.thin_tester(
+    name = "windows-no-initial-webui-rel",
+    description_html = "Runs tests with Initial WebUI disabled to check legacy UI path. See b/505579819.",
+    parent = "ci/Win x64 Builder",
+    builder_spec = builder_config.builder_spec(
+        execution_mode = builder_config.execution_mode.TEST,
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                "use_clang_coverage",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    targets = targets.bundle(
+        targets = [
+            "browser_tests",
+            "interactive_ui_tests",
+            "unit_tests",
+        ],
+        mixins = [
+            "isolate_profile_data",
+            "win11-any",
+            "x86-64",
+        ],
+        per_test_modifications = {
+            "browser_tests": targets.mixin(
+                args = [
+                    "--disable-features=InitialWebUI,WebUIReloadButton,SkipIPCChannelPausingForNonGuests,WebUIInProcessResourceLoadingV2,InitialWebUISyncNavStartToCommit",
+                ],
+                swarming = targets.swarming(
+                    shards = 14,
+                ),
+            ),
+            "interactive_ui_tests": targets.mixin(
+                args = [
+                    "--disable-features=InitialWebUI,WebUIReloadButton,SkipIPCChannelPausingForNonGuests,WebUIInProcessResourceLoadingV2,InitialWebUISyncNavStartToCommit",
+                ],
+                swarming = targets.swarming(
+                    shards = 3,
+                ),
+            ),
+            "unit_tests": targets.mixin(
+                args = [
+                    "--disable-features=InitialWebUI,WebUIReloadButton,SkipIPCChannelPausingForNonGuests,WebUIInProcessResourceLoadingV2,InitialWebUISyncNavStartToCommit",
+                ],
+            ),
+        },
+    ),
+    tree_closing = False,
+    console_view_entry = consoles.console_view_entry(
+        category = "release",
+        short_name = "no-webui",
+    ),
+    cq_mirrors_console_view = "mirrors",
+    contact_team_email = "chrome-webium-product-eng@google.com",
+)
+
+ci.thin_tester(
     name = "Win11 Tests x64",
     parent = "ci/Win x64 Builder",
     builder_spec = builder_config.builder_spec(
@@ -545,7 +603,6 @@ ci.thin_tester(
             "x86-64",
             "win11-any",
             "isolate_profile_data",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             "blink_web_tests": targets.mixin(
@@ -559,7 +616,7 @@ ci.thin_tester(
                 swarming = targets.swarming(
                     # This is for slow test execution that often becomes a
                     # critical path of swarming jobs. crbug.com/868114
-                    shards = 15,
+                    shards = 20,
                 ),
             ),
             "browser_tests_no_field_trial": targets.remove(
@@ -665,8 +722,8 @@ ci.builder(
     ),
     cq_mirrors_console_view = "mirrors",
     contact_team_email = "chrome-desktop-engprod@google.com",
-    # 20min (bot update) + 3hr (compile time without cache) +
-    # 40min (isolate tests) with 1hr buffer
+    # 3hr (compile time without cache) +
+    # 30min (isolate tests) with buffer
     execution_timeout = 5 * time.hour,
 )
 
@@ -705,16 +762,8 @@ ci.thin_tester(
         ],
         mixins = [
             "win-arm64",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
-            "browser_tests": targets.mixin(
-                swarming = targets.swarming(
-                    # This is for slow test execution that often becomes a
-                    # critical path of swarming jobs. crbug.com/868114
-                    shards = 15,
-                ),
-            ),
             "browser_tests_no_field_trial": targets.remove(
                 reason = "Disabled on similar Windows testers due to crbug/40630866.",
             ),
@@ -867,7 +916,7 @@ ci.thin_tester(
             ),
             "interactive_ui_tests": targets.mixin(
                 swarming = targets.swarming(
-                    shards = 9,
+                    shards = 18,
                 ),
             ),
             "leveldb_unittests": targets.mixin(
@@ -1012,4 +1061,5 @@ ci.builder(
         short_name = "lxw",
     ),
     contact_team_email = "chrome-build-team@google.com",
+    execution_timeout = 4 * time.hour,
 )

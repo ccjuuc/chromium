@@ -149,26 +149,26 @@ void BlobData::AppendText(const String& text,
   DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
       << "Blobs with a unknown-size file cannot have other items.";
   std::string utf8_text =
-      Utf8Encoding().Encode(text, UnencodableHandling::kNoUnencodables);
+      Utf8Encoding().Encode(text, UnencodableHandling::kNone);
 
   if (do_normalize_line_endings_to_native) {
     if (utf8_text.length() >
         BlobBytesProvider::kMaxConsolidatedItemSizeInBytes) {
       auto raw_data = RawData::Create();
-      NormalizeLineEndingsToNative(utf8_text, *raw_data->MutableData());
+      NormalizeLineEndingsToNative(utf8_text, raw_data->MutableData());
       AppendDataInternal(base::span(*raw_data), raw_data);
     } else {
-      Vector<char> buffer;
+      Vector<uint8_t> buffer;
       NormalizeLineEndingsToNative(utf8_text, buffer);
       AppendDataInternal(base::span(buffer));
     }
   } else {
-    AppendDataInternal(base::span(utf8_text));
+    AppendDataInternal(base::as_byte_span(utf8_text));
   }
 }
 
 void BlobData::AppendBytes(base::span<const uint8_t> bytes) {
-  AppendDataInternal(base::as_chars(bytes));
+  AppendDataInternal(bytes);
 }
 
 uint64_t BlobData::length() const {
@@ -190,7 +190,7 @@ uint64_t BlobData::length() const {
   return length;
 }
 
-void BlobData::AppendDataInternal(base::span<const char> data,
+void BlobData::AppendDataInternal(base::span<const uint8_t> data,
                                   scoped_refptr<RawData> raw_data) {
   DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
       << "Blobs with a unknown-size file cannot have other items.";
@@ -206,7 +206,7 @@ void BlobData::AppendDataInternal(base::span<const char> data,
     const auto& bytes_element = elements_.back()->get_bytes();
     bytes_element->length += data.size();
     if (should_embed_bytes && bytes_element->embedded_data) {
-      bytes_element->embedded_data->AppendSpan(data);
+      bytes_element->embedded_data->append_range(data);
       current_memory_population_ += data.size();
     } else if (bytes_element->embedded_data) {
       current_memory_population_ -= bytes_element->embedded_data->size();
@@ -230,7 +230,7 @@ void BlobData::AppendDataInternal(base::span<const char> data,
         data.size(), std::nullopt, std::move(bytes_provider_remote));
     if (should_embed_bytes) {
       bytes_element->embedded_data = Vector<uint8_t>();
-      bytes_element->embedded_data->AppendSpan(data);
+      bytes_element->embedded_data->append_range(data);
       current_memory_population_ += data.size();
     }
     elements_.push_back(DataElement::NewBytes(std::move(bytes_element)));
@@ -250,7 +250,7 @@ scoped_refptr<BlobDataHandle> BlobDataHandle::CreateForFile(
     const std::optional<base::Time>& expected_modification_time,
     const String& content_type) {
   mojom::blink::DataElementFilePtr element = mojom::blink::DataElementFile::New(
-      WebStringToFilePath(path), offset, length, expected_modification_time);
+      StringToFilePath(path), offset, length, expected_modification_time);
   uint64_t size = length == BlobData::kToEndOfFile
                       ? std::numeric_limits<uint64_t>::max()
                       : length;
@@ -267,7 +267,7 @@ scoped_refptr<BlobDataHandle> BlobDataHandle::CreateForFileSync(
     const std::optional<base::Time>& expected_modification_time,
     const String& content_type) {
   mojom::blink::DataElementFilePtr element = mojom::blink::DataElementFile::New(
-      WebStringToFilePath(path), offset, length, expected_modification_time);
+      StringToFilePath(path), offset, length, expected_modification_time);
   uint64_t size = length == BlobData::kToEndOfFile
                       ? std::numeric_limits<uint64_t>::max()
                       : length;
@@ -287,7 +287,7 @@ scoped_refptr<BlobDataHandle> BlobDataHandle::Create(
 }
 
 BlobDataHandle::BlobDataHandle()
-    : uuid_(CreateCanonicalUUIDString()),
+    : uuid_(CreateCanonicalUuidString()),
       size_(0),
       is_single_unknown_size_file_(false) {
   GetThreadSpecificRegistry()->Register(
@@ -295,7 +295,7 @@ BlobDataHandle::BlobDataHandle()
 }
 
 BlobDataHandle::BlobDataHandle(std::unique_ptr<BlobData> data, uint64_t size)
-    : uuid_(CreateCanonicalUUIDString()),
+    : uuid_(CreateCanonicalUuidString()),
       type_(data->ContentType()),
       size_(size),
       is_single_unknown_size_file_(data->IsSingleUnknownSizeFile()) {
@@ -312,7 +312,7 @@ BlobDataHandle::BlobDataHandle(
     const String& content_type,
     uint64_t size,
     bool synchronous_register)
-    : uuid_(CreateCanonicalUUIDString()),
+    : uuid_(CreateCanonicalUuidString()),
       type_(content_type),
       size_(size),
       is_single_unknown_size_file_(size ==

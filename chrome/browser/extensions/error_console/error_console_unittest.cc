@@ -23,19 +23,23 @@
 #include "extensions/browser/extension_error_test_util.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/unloaded_extension_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/features/feature_channel.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace extensions {
+namespace {
 
 using error_test_util::CreateNewManifestError;
 using error_test_util::CreateNewRuntimeError;
 
 class ErrorConsoleUnitTest : public testing::Test {
  public:
-  ErrorConsoleUnitTest() : error_console_(nullptr) {}
+  ErrorConsoleUnitTest() = default;
   ~ErrorConsoleUnitTest() override = default;
 
   void SetUp() override {
@@ -48,7 +52,7 @@ class ErrorConsoleUnitTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
-  raw_ptr<ErrorConsole> error_console_;
+  raw_ptr<ErrorConsole> error_console_ = nullptr;
 };
 
 // Test that the error console is enabled/disabled appropriately.
@@ -82,7 +86,7 @@ TEST_F(ErrorConsoleUnitTest, EnableAndDisableErrorConsole) {
       "ohmmkhmmmpcnpikjeljgnaoabkaalbgc";
   scoped_refptr<const Extension> adt =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "apps dev tools")
                            .Set("version", "0.2.0")
                            .Set("manifest_version", 2))
@@ -196,7 +200,7 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
   // For this, we need actual extensions.
   scoped_refptr<const Extension> unpacked_extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "unpacked")
                            .Set("version", "0.0.1")
                            .Set("manifest_version", 2))
@@ -205,7 +209,7 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
           .Build();
   scoped_refptr<const Extension> packed_extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "packed")
                            .Set("version", "0.0.1")
                            .Set("manifest_version", 2))
@@ -268,4 +272,5 @@ TEST_F(ErrorConsoleUnitTest, TestDefaultStoringPrefs) {
       unpacked_extension->id()));
 }
 
+}  // namespace
 }  // namespace extensions

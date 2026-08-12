@@ -117,7 +117,6 @@ TEST_F(USBDeviceManagerImplTest, GetDevices) {
       device_manager.BindNewPipeAndPassReceiver());
 
   auto filter = mojom::UsbDeviceFilter::New();
-  filter->has_vendor_id = true;
   filter->vendor_id = 0x1234;
   UsbEnumerationOptionsPtr options = mojom::UsbEnumerationOptions::New();
   options->filters.push_back(std::move(filter));
@@ -154,6 +153,17 @@ TEST_F(USBDeviceManagerImplTest, GetDevice) {
                               /*device_client=*/mojo::NullRemote());
     // Close is a no-op if the device hasn't been opened but ensures that the
     // pipe was successfully connected.
+    device->Close(loop.QuitClosure());
+    loop.Run();
+  }
+
+  {
+    base::RunLoop loop;
+    mojo::Remote<mojom::UsbDevice> device;
+    device_manager->GetUnrestrictedDevice(mock_device->guid(),
+                                          /*blocked_interface_classes=*/{},
+                                          device.BindNewPipeAndPassReceiver(),
+                                          /*device_client=*/mojo::NullRemote());
     device->Close(loop.QuitClosure());
     loop.Run();
   }

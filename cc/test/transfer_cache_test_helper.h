@@ -22,10 +22,9 @@ namespace cc {
 class TransferCacheTestHelper : public TransferCacheDeserializeHelper,
                                 public TransferCacheSerializeHelper {
  public:
-  explicit TransferCacheTestHelper(GrDirectContext* context = nullptr);
+  TransferCacheTestHelper();
   ~TransferCacheTestHelper() override;
 
-  void SetGrContext(GrDirectContext* context);
   void SetCachedItemsLimit(size_t limit);
 
   // Direct Access API (simulates ContextSupport methods).
@@ -51,17 +50,14 @@ class TransferCacheTestHelper : public TransferCacheDeserializeHelper,
   // Serialization helpers.
   bool LockEntryInternal(const EntryKey& key) override;
   uint32_t CreateEntryInternal(const ClientTransferCacheEntry& entry,
-                               uint8_t* memory) override;
+                               base::span<uint8_t> memory) override;
   void FlushEntriesInternal(std::set<EntryKey> keys) override;
 
  private:
   // Helper functions.
   void EnforceLimits();
 
-  // owned_context_ must be declared before context_ because when no context is
-  // provided, context_ points to owned_context_.get().
-  sk_sp<GrDirectContext> owned_context_;
-  raw_ptr<GrDirectContext> context_ = nullptr;
+  sk_sp<GrDirectContext> context_;
 
   // entries_ may reference owned_context_ so must be destroyed before the
   // context to avoid dangling ptrs.

@@ -10,20 +10,31 @@
 #include <CoreAudio/CoreAudio.h>
 #import <Foundation/Foundation.h>
 #include <MacTypes.h>
+#include <dispatch/dispatch.h>
+#include <libproc.h>
 #include <unistd.h>
 
 #include <string_view>
+#include <utility>
+#include <vector>
 
+#include "base/debug/leak_annotations.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/mac/mac_util.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/process/process.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
+#include "base/types/expected.h"
 #include "media/audio/application_loopback_device_helper.h"
 #include "media/audio/audio_features.h"
 #include "media/audio/mac/audio_loopback_input_mac.h"
@@ -32,8 +43,49 @@
 #include "media/base/audio_bus.h"
 #include "media/base/audio_sample_types.h"
 #include "media/base/audio_timestamp_helper.h"
+#include "media/base/converting_audio_fifo.h"
 
 namespace media {
+// On macOS 14, CATap does not handle sample rate mismatches, making internal
+// resampling necessary. This issue is resolved in macOS 15+.
+BASE_FEATURE(kMacCatapSonomaInternalResampling,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If this feature is enabled, the internal resampler is used instead of the
+// CoreAudio resampler. This is useful for debugging and testing purposes.
+BASE_FEATURE(kMacCatapForceInternalResampling,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Acts as a thread-safe bridge between the CoreAudio IOProc and the
+// CatapAudioInputStreamSource. If teardown fails, this object is intentionally
+// leaked to give the orphaned OS thread a valid memory address to read.
+class API_AVAILABLE(macos(14.2)) CatapIoProcProxy {
+ public:
+  CatapIoProcProxy(raw_ptr<CatapAudioInputStreamSource> source)
+      : source_(source) {}
+
+  // Called from the main sequence during teardown.
+  void Detach() {
+    base::AutoLock auto_lock(lock_);
+    source_ = nullptr;
+  }
+
+  // Called by the CoreAudio high-priority thread.
+  void ForwardSample(const AudioBuffer* input_buffer,
+                     const AudioTimeStamp* input_time) {
+    base::AutoLock auto_lock(lock_);
+    if (source_) {
+      source_->OnCatapSample(input_buffer, input_time);
+    }
+  }
+
+ private:
+  // Lock to protect access to source_ and to ensure that ForwardSample()
+  // finishes before Detach() returns.
+  base::Lock lock_;
+  raw_ptr<CatapAudioInputStreamSource> source_ GUARDED_BY(lock_);
+};
+
 namespace {
 const char kCatapAudioInputStreamUmaBaseName[] =
     "Media.Audio.Mac.CatapAudioInputStream";
@@ -54,6 +106,22 @@ const AudioObjectPropertyAddress kSampleRateAddress = {
     kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal,
     kAudioObjectPropertyElementMain};
 
+const AudioObjectPropertyAddress kAudioProcessListAddress = {
+    kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain};
+
+const AudioObjectPropertyAddress kAudioProcessPidAddress = {
+    kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain};
+
+const AudioObjectPropertyAddress kAudioProcessBundleIdAddress = {
+    kAudioProcessPropertyBundleID, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain};
+
+const AudioObjectPropertyAddress kAudioTapPropertyDescriptionAddress = {
+    kAudioTapPropertyDescription, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyElementMain};
+
 const char kHistogramPartsSeparator[] = ".";
 const char kHistogramStatusPrefix[] = "Status";
 const char kHistogramOperationDurationPrefix[] = "OperationDuration";
@@ -63,6 +131,8 @@ const char kHistogramStopSuffix[] = "Stop";
 const char kHistogramCloseSuffix[] = "Close";
 const char kHistogramGetProcessAudioDeviceIdsSuffix[] =
     "GetProcessAudioDeviceIds";
+const char kHistogramGetProcessAudioDeviceIdsFromBundleIdSuffix[] =
+    "GetProcessAudioDeviceIdsFromBundleId";
 const char kHistogramSuccessSuffix[] = "Success";
 const char kHistogramFailureSuffix[] = "Failure";
 const char kHostTimeStatusName[] = "HostTimeStatus";
@@ -94,6 +164,16 @@ BASE_FEATURE(kMacCatapCaptureAllDevices, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kMacCatapForceMonoCaptureOfMonoDevices,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+// Returns true if the default device should use internal resampling.
+// On macOS 14, CATap does not handle sample rate mismatches, making internal
+// resampling necessary. This issue is resolved in macOS 15+.
+bool ShouldDefaultDeviceUseInternalResampling() {
+  return (base::mac::MacOSVersion() >= 14'00'00 &&
+          base::mac::MacOSVersion() < 15'00'00 &&
+          base::FeatureList::IsEnabled(kMacCatapSonomaInternalResampling)) ||
+         base::FeatureList::IsEnabled(kMacCatapForceInternalResampling);
+}
+
 API_AVAILABLE(macos(14.2))
 OSStatus DeviceIoProc(AudioDeviceID,
                       const AudioTimeStamp*,
@@ -102,9 +182,8 @@ OSStatus DeviceIoProc(AudioDeviceID,
                       AudioBufferList* output_data,
                       const AudioTimeStamp* output_time,
                       void* client_data) {
-  CatapAudioInputStreamSource* catap_input_stream =
-      reinterpret_cast<CatapAudioInputStreamSource*>(client_data);
-  CHECK(catap_input_stream != nullptr);
+  CatapIoProcProxy* proxy = reinterpret_cast<CatapIoProcProxy*>(client_data);
+  CHECK(proxy != nullptr);
 
   // Multiple buffers correspond to multiple streams. This is not expected
   // during system audio capture, and the OnCatapSample() function is designed
@@ -114,7 +193,7 @@ OSStatus DeviceIoProc(AudioDeviceID,
   DCHECK_EQ(input_data->mNumberBuffers, 1u);
 
   if (input_data->mNumberBuffers > 0 && input_data->mBuffers->mData != NULL) {
-    catap_input_stream->OnCatapSample(input_data->mBuffers, input_time);
+    proxy->ForwardSample(input_data->mBuffers, input_time);
   }
   return noErr;
 }
@@ -187,6 +266,17 @@ void ReportGetProcessAudioDeviceIdsDuration(bool success,
       GetHistogramName(
           kHistogramOperationDurationPrefix,
           kHistogramGetProcessAudioDeviceIdsSuffix,
+          success ? kHistogramSuccessSuffix : kHistogramFailureSuffix),
+      duration);
+}
+
+void ReportGetProcessAudioDeviceIdsFromBundleIdDuration(
+    bool success,
+    base::TimeDelta duration) {
+  base::UmaHistogramTimes(
+      GetHistogramName(
+          kHistogramOperationDurationPrefix,
+          kHistogramGetProcessAudioDeviceIdsFromBundleIdSuffix,
           success ? kHistogramSuccessSuffix : kHistogramFailureSuffix),
       duration);
 }
@@ -268,19 +358,116 @@ bool MuteLocalPlaybackLoopback(const std::string& device_id) {
 // Returns AudioDeviceID and Unique ID (UID) for default output device, or
 // `nullopt` if there were any errors.
 API_AVAILABLE(macos(14.2))
-CatapAudioInputStream::AudioDeviceIds GetDefaultOutputDeviceIds() {
-  CatapAudioInputStream::AudioDeviceIds device_ids;
-  device_ids.id = core_audio_mac::GetDefaultDevice(/*input=*/false);
-  if (device_ids.id) {
-    device_ids.uid = core_audio_mac::GetDeviceUniqueID(*device_ids.id);
+std::optional<AudioDeviceIdentity> GetDefaultOutputDeviceIds() {
+  std::optional<AudioDeviceID> device_id =
+      CoreAudioUtilMac().GetDefaultDevice(/*input=*/false);
+  if (!device_id) {
+    return std::nullopt;
   }
+  std::optional<std::string> uid =
+      CoreAudioUtilMac().GetDeviceUniqueID(*device_id);
+  if (!uid) {
+    return std::nullopt;
+  }
+  return AudioDeviceIdentity(*device_id, *uid);
+}
+
+// Set `description` to `tap` with kAudioTapPropertyDescription.
+// Returns the result of the AudioObjectSetPropertyData() call.
+API_AVAILABLE(macos(14.2))
+OSStatus SetTapDescription(CatapApi* catap_api,
+                           AudioObjectID tap,
+                           CATapDescription* description) {
+  // `AudioObjectSetPropertyData()` does not take ownership of the object. We
+  // use a non-owning `__bridge` cast to pass the pointer.
+  void* set_description_ptr = (__bridge void*)description;
+  UInt32 propertySize = sizeof(CATapDescription*);
+  return catap_api->AudioObjectSetPropertyData(
+      tap, &kAudioTapPropertyDescriptionAddress, /*in_qualifier_data_size=*/0,
+      /*in_qualifier_data=*/nullptr, propertySize, &set_description_ptr);
+}
+
+// Define the possible failure points in GetAllProcessAudioDeviceIds()
+enum class AudioPropertyError {
+  kSizeFetchFailed,
+  kDataFetchFailed,
+};
+
+// A simple struct to carry the full error context from
+// GetAllProcessAudioDeviceIds()
+struct AudioFetchError {
+  AudioPropertyError stage;
+  OSStatus status;
+};
+
+// Returns all CoreAudio process audio device IDs in the system.
+base::expected<std::vector<AudioDeviceID>, AudioFetchError>
+GetAllProcessAudioDeviceIds(CatapApi* catap_api) {
+  UInt32 property_size;
+
+  // Retrieve the size of the process audio device id list.
+  OSStatus result = catap_api->AudioObjectGetPropertyDataSize(
+      kAudioObjectSystemObject, &kAudioProcessListAddress,
+      /*in_qualifier_data_size=*/0,
+      /*in_qualifier_data=*/nullptr, &property_size);
+  if (result != noErr) {
+    return base::unexpected(
+        AudioFetchError{AudioPropertyError::kSizeFetchFailed, result});
+  }
+
+  // Get all CoreAudio process audio device IDs (which are UInt32).
+  UInt32 num_devices = property_size / sizeof(AudioDeviceID);
+  auto device_ids = std::vector<AudioDeviceID>(num_devices);
+  result = catap_api->AudioObjectGetPropertyData(
+      kAudioObjectSystemObject, &kAudioProcessListAddress,
+      /*in_qualifier_data_size=*/0,
+      /*in_qualifier_data=*/nullptr, &property_size, device_ids.data());
+  if (result != noErr) {
+    return base::unexpected(
+        AudioFetchError{AudioPropertyError::kDataFetchFailed, result});
+  }
+
   return device_ids;
 }
+
+// Returns true if `process_bundle_id` matches `main_bundle_id` exactly, or if
+// `process_bundle_id` is a sub-component (e.g., a helper process) of the
+// `main_bundle_id`.
+// Example: {process_bundle_id: "org.chromium.Chromium.helper"} matches
+// {main_bundle_id: "org.chromium.Chromium"}.
+bool IsSameOrSubBundle(std::string_view process_bundle_id,
+                       std::string_view main_bundle_id) {
+  if (process_bundle_id == main_bundle_id) {
+    return true;
+  }
+
+  // Match sub-bundles by checking for the main bundle ID followed by a
+  // separator. This prevents "com.example.app-other" from matching
+  // "com.example.app".
+  std::string main_with_dot = std::string(main_bundle_id) + ".";
+  return base::StartsWith(process_bundle_id, main_with_dot,
+                          base::CompareCase::SENSITIVE);
+}
+
 
 bool operator==(const AudioObjectPropertyAddress& x,
                 const AudioObjectPropertyAddress& y) {
   return x.mSelector == y.mSelector && x.mScope == y.mScope &&
          x.mElement == y.mElement;
+}
+
+int GetVirtualFormatSampleRate(CatapApi* catap_api, AudioDeviceID device_id) {
+  AudioStreamBasicDescription stream_format;
+  UInt32 property_size = sizeof(AudioStreamBasicDescription);
+  OSStatus status = catap_api->AudioObjectGetPropertyData(
+      device_id, &kVirtualFormatAddress, 0, nullptr, &property_size,
+      &stream_format);
+
+  if (status != noErr) {
+    return 0;
+  }
+
+  return stream_format.mSampleRate;
 }
 
 }  // namespace
@@ -293,54 +480,76 @@ bool operator==(const AudioObjectPropertyAddress& x,
 // optionally, the kAudioHardwarePropertyDefaultOutputDevice property of the
 // system object.
 //
-// The property listener block uses `dispatch_get_main_queue()` to ensure that
-// property change notifications are delivered on the main thread. Using a weak
-// pointer for the callback acts as a final safeguard to prevent a crash if a
-// notification fires during the object's destruction.
+// The property listener block runs on a private serial dispatch queue to avoid
+// deadlocks with CoreAudio during listener removal. The block posts
+// notifications back to the main thread's task runner. Using a weak pointer for
+// the callback acts as a final safeguard to prevent a crash if a notification
+// fires during the object's destruction.
 class PropertyListenerHelper {
  public:
   using ProcessPropertyChangeCallback = base::RepeatingCallback<void(
       base::span<const AudioObjectPropertyAddress>)>;
   PropertyListenerHelper(
-      bool capture_default_device,
+      std::optional<AudioDeviceID> capture_audio_device_id,
+      bool monitor_process_object_list,
       AudioObjectID aggregate_device_id,
       ProcessPropertyChangeCallback process_property_change_callback,
       const raw_ptr<CatapApi> catap_api)
-      : capture_default_device_(capture_default_device),
+      : capture_audio_device_id_(capture_audio_device_id),
+        monitor_process_object_list_(monitor_process_object_list),
         aggregate_device_id_(aggregate_device_id),
-        catap_api_(catap_api) {
-    AddPropertyListener(process_property_change_callback);
+        catap_api_(catap_api),
+        queue_(dispatch_queue_create("org.chromium.PropertyListenerHelper",
+                                     DISPATCH_QUEUE_SERIAL)) {
+    AddPropertyListener(std::move(process_property_change_callback));
   }
 
   ~PropertyListenerHelper() { RemovePropertyListener(); }
 
  private:
   void AddPropertyListener(
-      const ProcessPropertyChangeCallback process_property_change_callback) {
+      ProcessPropertyChangeCallback process_property_change_callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     TRACE_EVENT0("audio", "PropertyListenerHelper::AddPropertyListener");
+    scoped_refptr<base::SequencedTaskRunner> task_runner =
+        base::SequencedTaskRunner::GetCurrentDefault();
     property_listener_block_ = ^(UInt32 number_of_addresses,
                                  const AudioObjectPropertyAddress* addresses) {
-      // SAFETY: The type of addresses cannot be changed since it's received
-      // from the OS. Wrap it immediately using its specified size.
-      base::span UNSAFE_BUFFERS(
-          property_addresses(addresses, number_of_addresses));
-      process_property_change_callback.Run(property_addresses);
+      std::vector<AudioObjectPropertyAddress> addresses_copy;
+      // SAFETY: CoreAudio guarantees that `addresses` points to an array of at
+      // least `number_of_addresses` elements.
+      UNSAFE_BUFFERS({
+        addresses_copy.assign(addresses, addresses + number_of_addresses);
+      });
+      task_runner->PostTask(FROM_HERE,
+                            base::BindOnce(process_property_change_callback,
+                                           std::move(addresses_copy)));
     };
 
     catap_api_->AudioObjectAddPropertyListenerBlock(
-        aggregate_device_id_, &kDeviceIsAliveAddress, dispatch_get_main_queue(),
+        aggregate_device_id_, &kDeviceIsAliveAddress, queue_,
         property_listener_block_);
 
-    if (capture_default_device_) {
+    if (capture_audio_device_id_.has_value()) {
       catap_api_->AudioObjectAddPropertyListenerBlock(
           kAudioObjectSystemObject, &kDefaultOutputDevicePropertyAddress,
-          dispatch_get_main_queue(), property_listener_block_);
+          queue_, property_listener_block_);
+      if (ShouldDefaultDeviceUseInternalResampling()) {
+        catap_api_->AudioObjectAddPropertyListenerBlock(
+            *capture_audio_device_id_, &kSampleRateAddress, queue_,
+            property_listener_block_);
+      }
     }
 
-    catap_api_->AudioObjectAddPropertyListenerBlock(
-        aggregate_device_id_, &kSampleRateAddress, dispatch_get_main_queue(),
-        property_listener_block_);
+    catap_api_->AudioObjectAddPropertyListenerBlock(aggregate_device_id_,
+                                                    &kSampleRateAddress, queue_,
+                                                    property_listener_block_);
+
+    if (monitor_process_object_list_) {
+      catap_api_->AudioObjectAddPropertyListenerBlock(
+          kAudioObjectSystemObject, &kAudioProcessListAddress, queue_,
+          property_listener_block_);
+    }
   }
 
   void RemovePropertyListener() {
@@ -348,24 +557,37 @@ class PropertyListenerHelper {
     TRACE_EVENT0("audio", "PropertyListenerHelper::RemovePropertyListener");
 
     // Use the stored block reference to remove the listener.
-    catap_api_->AudioObjectRemovePropertyListenerBlock(
-        aggregate_device_id_, &kSampleRateAddress, dispatch_get_main_queue(),
-        property_listener_block_);
-
-    if (capture_default_device_) {
+    if (monitor_process_object_list_) {
       catap_api_->AudioObjectRemovePropertyListenerBlock(
-          kAudioObjectSystemObject, &kDefaultOutputDevicePropertyAddress,
-          dispatch_get_main_queue(), property_listener_block_);
+          kAudioObjectSystemObject, &kAudioProcessListAddress, queue_,
+          property_listener_block_);
     }
 
     catap_api_->AudioObjectRemovePropertyListenerBlock(
-        aggregate_device_id_, &kDeviceIsAliveAddress, dispatch_get_main_queue(),
+        aggregate_device_id_, &kSampleRateAddress, queue_,
+        property_listener_block_);
+
+    if (capture_audio_device_id_.has_value()) {
+      if (ShouldDefaultDeviceUseInternalResampling()) {
+        catap_api_->AudioObjectRemovePropertyListenerBlock(
+            *capture_audio_device_id_, &kSampleRateAddress, queue_,
+            property_listener_block_);
+      }
+
+      catap_api_->AudioObjectRemovePropertyListenerBlock(
+          kAudioObjectSystemObject, &kDefaultOutputDevicePropertyAddress,
+          queue_, property_listener_block_);
+    }
+
+    catap_api_->AudioObjectRemovePropertyListenerBlock(
+        aggregate_device_id_, &kDeviceIsAliveAddress, queue_,
         property_listener_block_);
 
     property_listener_block_ = nil;
   }
 
-  const bool capture_default_device_;
+  const std::optional<AudioDeviceID> capture_audio_device_id_;
+  const bool monitor_process_object_list_;
 
   const AudioObjectID aggregate_device_id_;
 
@@ -377,6 +599,8 @@ class PropertyListenerHelper {
   AudioObjectPropertyListenerBlock property_listener_block_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
+  const dispatch_queue_t __strong queue_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
@@ -384,46 +608,92 @@ class PropertyListenerHelper {
 // TODO(crbug.com/415953612): Is this okay, or do we need to support this?
 constexpr float kMaxVolume = 0.0;
 
-CatapAudioInputStreamSource::Config::Config(const AudioParameters& params,
-                                            const std::string& device_id,
-                                            bool force_mono_capture)
+CatapAudioInputStreamSource::Config::Config(
+    const AudioParameters& params,
+    const std::string& device_id,
+    std::optional<AudioDeviceIdentity> target_device,
+    int aggregate_device_sample_rate,
+    bool force_mono_capture)
     : catap_channels(force_mono_capture ? 1 : params.channels()),
       output_channels(params.channels()),
       sample_rate(params.sample_rate()),
       frames_per_buffer(params.frames_per_buffer()),
-      capture_default_device(IsDefaultOutputDeviceLoopback(device_id)),
+      target_device(std::move(target_device)),
+      aggregate_device_sample_rate(aggregate_device_sample_rate),
+      // Note: Integer truncation is acceptable here because it only sets the
+      // nominal input buffer size requested from the OS, not the total audio
+      // captured. The underlying ConvertingAudioFifo queues these buffers
+      // continuously and handles the exact fractional math under the hood.
+      aggregate_frames_per_buffer(
+          aggregate_device_sample_rate != sample_rate
+              ? frames_per_buffer * aggregate_device_sample_rate / sample_rate
+              : frames_per_buffer),
       mute_local_device(MuteLocalPlaybackLoopback(device_id)),
-      exclude_chrome(ExcludeChromeLoopback(device_id)),
-      capture_application_process_id(
-          AudioDeviceDescription::IsApplicationLoopbackDevice(device_id)
-              ? std::make_optional(
-                    GetApplicationIdFromApplicationLoopbackDeviceId(device_id))
-              : std::nullopt) {}
+      exclude_chrome(ExcludeChromeLoopback(device_id)) {
+  if (AudioDeviceDescription::IsApplicationLoopbackDevice(device_id)) {
+    std::tie(capture_application, capture_application_pid) =
+        ParseApplicationLoopbackDeviceId(device_id);
+  }
+}
+
+CatapAudioInputStreamSource::Config::Config(const Config& other) = default;
+CatapAudioInputStreamSource::Config::Config(Config&& other) = default;
+CatapAudioInputStreamSource::Config&
+CatapAudioInputStreamSource::Config::operator=(const Config& other) = default;
+CatapAudioInputStreamSource::Config&
+CatapAudioInputStreamSource::Config::operator=(Config&& other) = default;
+CatapAudioInputStreamSource::Config::~Config() = default;
 
 std::string CatapAudioInputStreamSource::Config::AsHumanReadableString() const {
   std::ostringstream s;
   s << "output channels: " << output_channels
     << ", sample_rate: " << sample_rate
     << ", frames_per_buffer: " << frames_per_buffer
-    << ", capture_default_device: " << capture_default_device
+    << ", aggregate_device_sample_rate: " << aggregate_device_sample_rate
+    << ", aggregate_frames_per_buffer: " << aggregate_frames_per_buffer
+    << ", target_device set: " << target_device.has_value()
     << ", mute_local_device: " << mute_local_device
     << ", exclude_chrome: " << exclude_chrome
     << ", catap_channels: " << catap_channels;
-  if (capture_application_process_id) {
-    s << ", capture_application_process_id: "
-      << *capture_application_process_id;
+  if (capture_application) {
+    s << ", capture_application: " << *capture_application;
+  }
+  if (capture_application_pid) {
+    s << ", capture_application_pid: " << *capture_application_pid;
   }
   return s.str();
 }
 
+API_AVAILABLE(macos(14.2))
+std::unique_ptr<ConvertingAudioFifo> MaybeCreateConvertingAudioFifo(
+    const CatapAudioInputStreamSource::Config& config) {
+  if (config.aggregate_device_sample_rate != config.sample_rate) {
+    AudioParameters input_params(
+        AudioParameters::AUDIO_PCM_LOW_LATENCY,
+        ChannelLayoutConfig::Guess(config.catap_channels),
+        config.aggregate_device_sample_rate,
+        config.aggregate_frames_per_buffer);
+    AudioParameters output_params(
+        AudioParameters::AUDIO_PCM_LOW_LATENCY,
+        ChannelLayoutConfig::Guess(config.output_channels), config.sample_rate,
+        config.frames_per_buffer);
+    return std::make_unique<ConvertingAudioFifo>(input_params, output_params,
+                                                 /*use_input_bus_pool=*/true);
+  }
+  return nullptr;
+}
+
 CatapAudioInputStreamSource::CatapAudioInputStreamSource(
     const raw_ptr<CatapApi> catap_api,
-    const Config& config,
+    Config config,
     const AudioManager::LogCallback log_callback,
     const raw_ptr<AudioPropertyChangeCallback> audio_property_change_callback)
     : catap_api_(catap_api),
-      config_(config),
-      buffer_frames_duration_(
+      config_(std::move(config)),
+      input_buffer_duration_(AudioTimestampHelper::FramesToTime(
+          config_.aggregate_frames_per_buffer,
+          config_.aggregate_device_sample_rate)),
+      output_buffer_duration_(
           AudioTimestampHelper::FramesToTime(config_.frames_per_buffer,
                                              config_.sample_rate)),
       glitch_helper_(config_.sample_rate,
@@ -432,6 +702,7 @@ CatapAudioInputStreamSource::CatapAudioInputStreamSource(
                      ? AudioBus::CreateWrapper(config_.output_channels)
                      : AudioBus::Create(config_.output_channels,
                                         config_.frames_per_buffer)),
+      converting_audio_fifo_(MaybeCreateConvertingAudioFifo(config_)),
       sink_(nullptr),
       log_callback_(std::move(log_callback)),
       audio_property_change_callback_(audio_property_change_callback) {
@@ -443,8 +714,9 @@ CatapAudioInputStreamSource::CatapAudioInputStreamSource(
   CHECK(config_.catap_channels == 1 ||
         config_.catap_channels == config_.output_channels);
 
-  SendLogMessage("%s({config=[%s]})", __func__,
-                 config_.AsHumanReadableString().c_str());
+  SendLogMessage("%s({config=[%s], converting_audio_fifo_=%s})", __func__,
+                 config_.AsHumanReadableString().c_str(),
+                 converting_audio_fifo_ ? "true" : "false");
 }
 
 CatapAudioInputStreamSource::~CatapAudioInputStreamSource() {
@@ -453,8 +725,7 @@ CatapAudioInputStreamSource::~CatapAudioInputStreamSource() {
   ReportAndResetStats();
 }
 
-AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open(
-    std::optional<std::string> default_output_device_uid) {
+AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   TRACE_EVENT0("audio", "CatapAudioInputStreamSource::Open");
   base::ElapsedTimer timer;
@@ -467,19 +738,16 @@ AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open(
     return AudioInputStream::OpenOutcome::kAlreadyOpen;
   }
 
-  if (config_.capture_application_process_id) {
+  if (config_.capture_application) {
     // Get a list of all CoreAudio process device IDs that belong to the
-    // specified application process.
-    pid_t application_pid = *config_.capture_application_process_id;
+    // specified application.
     NSArray<NSNumber*>* process_audio_device_ids_to_include =
-        GetProcessAudioDeviceIds(application_pid);
+        GetProcessAudioDeviceIds(*config_.capture_application,
+                                 config_.capture_application_pid);
     if (![process_audio_device_ids_to_include count]) {
-      ReportOpenStatus(OpenStatus::kGetProcessAudioDeviceIdsReturnedEmpty,
-                       timer.Elapsed());
       SendLogMessage("%s => Could not determine audio objects that belong to "
                      "the application process.",
                      __func__);
-      return AudioInputStream::OpenOutcome::kFailed;
     }
     // Mix the given process to a stereo stream. We will not select default
     // device below when we capture application audio.
@@ -516,15 +784,9 @@ AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open(
     return AudioInputStream::OpenOutcome::kFailed;
   }
 
-  if (config_.capture_default_device) {
-    if (!default_output_device_uid) {
-      ReportOpenStatus(OpenStatus::kGetDefaultDeviceUidEmpty, timer.Elapsed());
-      SendLogMessage("%s => Error getting UID for default output device",
-                     __func__);
-      return AudioInputStream::OpenOutcome::kFailed;
-    }
-    // Select the default output device.
-    tap_description_.deviceUID = @(default_output_device_uid->c_str());
+  if (config_.target_device.has_value()) {
+    // Select the specified output device.
+    tap_description_.deviceUID = @(config_.target_device->uid.c_str());
     tap_description_.stream = @(0);
   }
 
@@ -604,9 +866,29 @@ AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open(
   }
 
   // Initialization: Step 3.
-  // Attach callback to the aggregate device.
-  status = catap_api_->AudioDeviceCreateIOProcID(
-      aggregate_device_id_, DeviceIoProc, this, &tap_io_proc_id_);
+  // Attach callback to the aggregate device. If this is the first time we're
+  // calling AudioDeviceCreateIOProcID(), this will trigger the macOS permission
+  // dialog. If the user doesn't respond to the dialog, this call will time out
+  // in 60 seconds. When this happens all interactions with CoreAudio will fail
+  // until the audio process is restarted.
+  io_proc_proxy_ = std::make_unique<CatapIoProcProxy>(this);
+  {
+    constexpr base::TimeDelta kCreateIoProcIdTimeout = base::Seconds(59);
+    base::ElapsedTimer create_io_proc_id_timer;
+    status = catap_api_->AudioDeviceCreateIOProcID(
+        aggregate_device_id_, DeviceIoProc, io_proc_proxy_.get(),
+        &tap_io_proc_id_);
+    if (base::FeatureList::IsEnabled(
+            features::kMacCatapRestartAudioProcessOnTimeout) &&
+        create_io_proc_id_timer.Elapsed() > kCreateIoProcIdTimeout) {
+      ReportOpenStatus(OpenStatus::kCreateIoProcIdTimeout, timer.Elapsed());
+      SendLogMessage("%s => AudioDeviceCreateIOProcID timed out. Status: %d. "
+                     "Restarting the audio process.",
+                     __func__, status);
+      base::Process::TerminateCurrentProcessImmediately(1);
+    }
+  }
+
   if (status != noErr) {
     ReportOpenStatus(OpenStatus::kErrorCreatingIOProcID, timer.Elapsed());
     SendLogMessage("%s => Error calling AudioDeviceCreateIOProcID. Status: %d",
@@ -625,7 +907,10 @@ AudioInputStream::OpenOutcome CatapAudioInputStreamSource::Open(
   }
 
   property_listener_ = std::make_unique<PropertyListenerHelper>(
-      config_.capture_default_device, aggregate_device_id_,
+      config_.target_device.has_value()
+          ? std::optional<AudioDeviceID>(config_.target_device->id)
+          : std::nullopt,
+      config_.capture_application.has_value(), aggregate_device_id_,
       base::BindRepeating(&CatapAudioInputStreamSource::ProcessPropertyChange,
                           weak_ptr_factory_.GetWeakPtr()),
       catap_api_);
@@ -653,7 +938,7 @@ void CatapAudioInputStreamSource::Start(
     ReportStartStatus(false, timer.Elapsed());
     SendLogMessage("%s => Error starting the device. Status: %d", __func__,
                    status);
-    sink_->OnError();
+    sink_->OnError(Error::kStartupFailed);
   }
   ReportStartStatus(true, timer.Elapsed());
 }
@@ -663,6 +948,13 @@ void CatapAudioInputStreamSource::Stop() {
   TRACE_EVENT0("audio", "CatapAudioInputStreamSource::Stop");
   SendLogMessage("%s", __func__);
   base::ElapsedTimer timer;
+
+  // Instantly fence off the CoreAudio thread.
+  // If the OS thread is currently in the callback, this blocks until it
+  // finishes.
+  if (io_proc_proxy_) {
+    io_proc_proxy_->Detach();
+  }
 
   property_listener_.reset();
 
@@ -674,12 +966,15 @@ void CatapAudioInputStreamSource::Stop() {
   CHECK_NE(tap_io_proc_id_, nullptr);
 
   // Reversing Step 4.
-  // The call to AudioDeviceStop is synchronous. It will not return until any
-  // current callbacks have finished executing. The call to AudioDeviceStop()
-  // succeeds even though AudioDeviceStart() has not been called.
+  // AudioDeviceStop is synchronous when it succeeds, but may not be if it
+  // fails. The lock above mitigates the failure case by acting as a synchronous
+  // fence, ensuring that no callbacks are actively executing before we proceed.
+  // Note: The call to AudioDeviceStop() will succeed even if AudioDeviceStart()
+  // has not been called.
   OSStatus status =
       catap_api_->AudioDeviceStop(aggregate_device_id_, tap_io_proc_id_);
   if (status != noErr) {
+    stop_failed_ = true;
     ReportStopStatus(false, timer.Elapsed());
     SendLogMessage("%s => Error stopping the device. Status: %d", __func__,
                    status);
@@ -712,6 +1007,7 @@ void CatapAudioInputStreamSource::Close() {
   base::ElapsedTimer timer;
 
   is_device_open_ = false;
+  bool destroy_failed = false;
 
   if (aggregate_device_id_ != kAudioObjectUnknown &&
       tap_io_proc_id_ != nullptr) {
@@ -719,6 +1015,7 @@ void CatapAudioInputStreamSource::Close() {
     OSStatus status = catap_api_->AudioDeviceDestroyIOProcID(
         aggregate_device_id_, tap_io_proc_id_);
     if (status != noErr) {
+      destroy_failed = true;
       ReportCloseStatus(CloseStatus::kErrorDestroyingIOProcID, timer.Elapsed());
       SendLogMessage("%s => Error destroying device IO process ID. Status: %d",
                      __func__, status);
@@ -755,6 +1052,20 @@ void CatapAudioInputStreamSource::Close() {
     tap_description_ = nil;
   }
 
+  if (io_proc_proxy_) {
+    if (stop_failed_ || destroy_failed) {
+      // INTENTIONAL LEAK
+      // The OS failed to release the IOProc. The CoreAudio thread might still
+      // fire. We leak the proxy so the OS thread reads valid memory instead of
+      // triggering a Use-After-Free.
+      ANNOTATE_LEAKING_OBJECT_PTR(io_proc_proxy_.get());
+      io_proc_proxy_.release();
+    } else {
+      // Safe to delete, the OS has definitively relinquished the pointer.
+      io_proc_proxy_.reset();
+    }
+  }
+
   ReportCloseStatus(CloseStatus::kOk, timer.Elapsed());
 }
 
@@ -778,9 +1089,17 @@ void CatapAudioInputStreamSource::OnCatapSample(
   TRACE_EVENT1("audio", "CatapAudioInputStreamSource::OnCatapSample",
                "capture_time", capture_time);
 
-  float* data = (float*)input_buffer->mData;
-  int frames = input_buffer->mDataByteSize /
-               (input_buffer->mNumberChannels * sizeof(Float32));
+  const auto& data_byte_size = input_buffer->mDataByteSize;
+  CHECK_EQ(data_byte_size % sizeof(float), 0u);
+
+  // SAFETY: This comes from a struct provided by the OS and the number of
+  // frames is calculated based on the information provided in the struct.
+  // We've also made sure that the size is a multiple of `sizeof(float)` above.
+  base::span<float> data =
+      UNSAFE_BUFFERS(base::span(reinterpret_cast<float*>(input_buffer->mData),
+                                data_byte_size / sizeof(float)));
+  CHECK_EQ(data.size() % input_buffer->mNumberChannels, 0u);
+  const int frames = data.size() / input_buffer->mNumberChannels;
 
   // The number of channels may change when a bluetooth device is captured and
   // the bluetooth profile is switched between A2DP and HFP. The sample rate
@@ -801,43 +1120,66 @@ void CatapAudioInputStreamSource::OnCatapSample(
     }
     return;
   }
-  if (frames != config_.frames_per_buffer) {
+  if (frames != config_.aggregate_frames_per_buffer) {
     ++total_callbacks_with_frames_mismatch_;
     if (total_callbacks_with_frames_mismatch_ < kMaxNumberOfWarningReports) {
-      DLOG(WARNING) << "CatapAudioInputStream::OnCatapSample: "
-                       "frames: "
-                    << frames << " does not match config_.frames_per_buffer: "
-                    << config_.frames_per_buffer;
+      DLOG(WARNING) << "CatapAudioInputStream::OnCatapSample: frames: "
+                    << frames
+                    << " does not match config_.aggregate_frames_per_buffer: "
+                    << config_.aggregate_frames_per_buffer;
     }
     return;
   }
+  glitch_helper_.OnFramesReceived(*input_time, frames);
 
-  glitch_helper_.OnFramesReceived(*input_time, config_.frames_per_buffer);
+  if (converting_audio_fifo_) {
+    // The next output buffer will begin with leftover, unprocessed frames
+    // currently sitting in the FIFO. We subtract their duration from the
+    // current input's capture time to anchor our output timestamp to the
+    // exact moment that oldest sample was captured. This continuous anchoring
+    // to the advancing hardware clock ensures strictly monotonic output
+    // timestamps, safely handling any upstream time glitches.
+    base::TimeTicks output_capture_time =
+        capture_time - converting_audio_fifo_->GetBufferedInputDuration();
 
-  if (config_.catap_channels == 1) {
-    // If the captured signal is mono, we may need to upmix it. This loop copies
-    // the single mono channel to all output channels. For example, if
-    // outputting to stereo, both left and right channels will get the same mono
-    // data.
+    std::unique_ptr<AudioBus> input_bus =
+        converting_audio_fifo_->GetInputAudioBus();
+    input_bus->FromInterleaved<Float32SampleTypeTraits>(data);
+    converting_audio_fifo_->Push(std::move(input_bus));
 
-    // SAFETY: This comes from a struct provided by the OS and the number of
-    // frames is calculated based on the information provided in the struct.
-    base::span UNSAFE_BUFFERS(mono_data(data, (size_t)frames));
-    audio_bus_->set_frames(frames);
-    for (int i = 0; i < config_.output_channels; ++i) {
-      audio_bus_->SetChannelData(i, mono_data);
+    while (converting_audio_fifo_->HasOutput()) {
+      const AudioBus* output_bus = converting_audio_fifo_->PeekOutput();
+
+      sink_->OnData(output_bus, output_capture_time, kMaxVolume,
+                    glitch_helper_.ConsumeGlitchInfo());
+      converting_audio_fifo_->PopOutput();
+      // Advance the timestamp for the next block (if any).
+      output_capture_time += output_buffer_duration_;
     }
   } else {
-    // The captured signal is already stereo, so we can de-interleave it
-    // directly into the audio bus.
-    audio_bus_->FromInterleaved<Float32SampleTypeTraits>(data, frames);
+    if (config_.catap_channels == 1) {
+      // If the captured signal is mono, we may need to upmix it. This loop
+      // copies a reference to the single mono channel to all output channels.
+      // For example, if outputting to stereo, both left and right channels will
+      // get the same mono data.
+      audio_bus_->set_frames(frames);
+      for (int i = 0; i < config_.output_channels; ++i) {
+        audio_bus_->SetChannelData(i, data);
+      }
+    } else {
+      // If not mono, we only support stereo.
+      CHECK_EQ(config_.catap_channels, 2);
+      // The captured signal is already stereo, so we can de-interleave it
+      // directly into the audio bus.
+      audio_bus_->FromInterleaved<Float32SampleTypeTraits>(data);
+    }
+    sink_->OnData(audio_bus_.get(), capture_time, kMaxVolume,
+                  glitch_helper_.ConsumeGlitchInfo());
   }
-  sink_->OnData(audio_bus_.get(), capture_time, kMaxVolume,
-                glitch_helper_.ConsumeGlitchInfo());
 
   // Stores the time of the next expected audio callback. This is used as a
   // fallback if the host doesn't provide a timestamp.
-  next_expected_capture_time_ = capture_time + buffer_frames_duration_;
+  next_expected_capture_time_ = capture_time + input_buffer_duration_;
 }
 
 NSArray<NSNumber*>* CatapAudioInputStreamSource::GetProcessAudioDeviceIds(
@@ -846,45 +1188,31 @@ NSArray<NSNumber*>* CatapAudioInputStreamSource::GetProcessAudioDeviceIds(
   // process ID.
   base::ElapsedTimer timer;
 
-  AudioObjectPropertyAddress property_address = {
-      kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal,
-      kAudioObjectPropertyElementMain};
-  UInt32 property_size;
+  auto get_device_ids_result = GetAllProcessAudioDeviceIds(catap_api_.get());
+  if (!get_device_ids_result.has_value()) {
+    const AudioFetchError& err = get_device_ids_result.error();
+    const char* message =
+        (err.stage == AudioPropertyError::kSizeFetchFailed)
+            ? "Could not get number of process audio device IDs"
+            : "Could not get process audio device IDs";
 
-  // Get all CoreAudio process audio device IDs (which are UInt32).
-  OSStatus result = catap_api_->AudioObjectGetPropertyDataSize(
-      kAudioObjectSystemObject, &property_address, /*in_qualifier_data_size=*/0,
-      /*in_qualifier_data=*/nullptr, &property_size);
-  if (result != noErr) {
     ReportGetProcessAudioDeviceIdsDuration(false, timer.Elapsed());
-    SendLogMessage(
-        "%s => Could not get number of process audio device IDs. Status: %d",
-        __func__, result);
+    SendLogMessage("%s => %s. Status: %d", __func__, message, err.status);
     return @[];
   }
 
-  UInt32 num_devices = property_size / sizeof(AudioDeviceID);
-  auto device_ids = std::vector<AudioDeviceID>(num_devices);
-  result = catap_api_->AudioObjectGetPropertyData(
-      kAudioObjectSystemObject, &property_address, /*in_qualifier_data_size=*/0,
-      /*in_qualifier_data=*/nullptr, &property_size, device_ids.data());
-  if (result != noErr) {
-    ReportGetProcessAudioDeviceIdsDuration(false, timer.Elapsed());
-    SendLogMessage("%s => Could not get process audio device IDs. Status: %d",
-                   __func__, result);
-    return @[];
-  }
+  std::vector<AudioDeviceID> device_ids =
+      std::move(get_device_ids_result.value());
 
   NSMutableArray<NSNumber*>* process_audio_device_ids_array =
-      [NSMutableArray arrayWithCapacity:num_devices];
+      [NSMutableArray arrayWithCapacity:device_ids.size()];
 
   for (AudioDeviceID device_id : device_ids) {
     // Get the process ID and add the device to the list if there's a match.
-    property_address.mSelector = kAudioProcessPropertyPID;
     int32_t process_id;
-    property_size = sizeof(int32_t);
-    result = catap_api_->AudioObjectGetPropertyData(
-        device_id, &property_address, /*in_qualifier_data_size=*/0,
+    UInt32 property_size = sizeof(int32_t);
+    OSStatus result = catap_api_->AudioObjectGetPropertyData(
+        device_id, &kAudioProcessPidAddress, /*in_qualifier_data_size=*/0,
         /*in_qualifier_data=*/nullptr, &property_size, &process_id);
     if (result != noErr) {
       SendLogMessage("%s => Could not determine process ID of process audio "
@@ -902,11 +1230,103 @@ NSArray<NSNumber*>* CatapAudioInputStreamSource::GetProcessAudioDeviceIds(
   return process_audio_device_ids_array;
 }
 
+NSArray<NSNumber*>* CatapAudioInputStreamSource::GetProcessAudioDeviceIds(
+    const std::string& main_bundle_id,
+    std::optional<pid_t> application_pid) {
+  base::ElapsedTimer timer;
+
+  auto get_device_ids_result = GetAllProcessAudioDeviceIds(catap_api_.get());
+  if (!get_device_ids_result.has_value()) {
+    const AudioFetchError& err = get_device_ids_result.error();
+    const char* message =
+        (err.stage == AudioPropertyError::kSizeFetchFailed)
+            ? "Could not get number of process audio device IDs"
+            : "Could not get process audio device IDs";
+
+    ReportGetProcessAudioDeviceIdsDuration(false, timer.Elapsed());
+    SendLogMessage("%s => %s. Status: %d", __func__, message, err.status);
+    return @[];
+  }
+
+  std::vector<AudioDeviceID> device_ids =
+      std::move(get_device_ids_result.value());
+  NSMutableArray<NSNumber*>* process_audio_device_ids_array =
+      [NSMutableArray arrayWithCapacity:device_ids.size()];
+
+  for (AudioDeviceID device_id : device_ids) {
+    base::apple::ScopedCFTypeRef<CFStringRef> cf_process_bundle_id;
+    UInt32 str_size = sizeof(CFStringRef);
+    OSStatus result = catap_api_->AudioObjectGetPropertyData(
+        device_id, &kAudioProcessBundleIdAddress, /*in_qualifier_data_size=*/0,
+        /*in_qualifier_data=*/nullptr, &str_size,
+        cf_process_bundle_id.InitializeInto());
+
+    if (result != noErr) {
+      SendLogMessage("%s => Could not determine bundle ID of process audio "
+                     "device ID. Status: %d",
+                     __func__, result);
+      continue;  // Skip this device and continue to the next.
+    }
+
+    std::string process_bundle_id =
+        base::SysCFStringRefToUTF8(cf_process_bundle_id.get());
+
+    if (IsSameOrSubBundle(process_bundle_id, main_bundle_id)) {
+      if (!application_pid) {
+        [process_audio_device_ids_array addObject:@(device_id)];
+        continue;
+      }
+
+      // If the `application_pid` is non-empty, we will filter the process
+      // audio objects based on PID as well. We will only add the process
+      // audio object to the tap if its PID, or its parent's PID, matches
+      // `application_pid`.
+      //
+      // This solves the issue where audio processes of Chrome and Edge
+      // variants (stable, dev, beta, canary) have the same bundle ID as the
+      // main application, but different PIDs. Without PID filtering we would
+      // end up capturing audio from all variants.
+      int32_t process_id;
+      UInt32 property_size = sizeof(int32_t);
+      result = catap_api_->AudioObjectGetPropertyData(
+          device_id, &kAudioProcessPidAddress,
+          /*in_qualifier_data_size=*/0,
+          /*in_qualifier_data=*/nullptr, &property_size, &process_id);
+      if (result != noErr) {
+        SendLogMessage("%s => Could not determine process ID of process audio "
+                       "device ID. Result: %d",
+                       __func__, result);
+        continue;  // Skip this device and continue to the next.
+      }
+
+      // Add the audio device ID if the PID of the process audio
+      // object matches `application_pid`.
+      if (process_id == *application_pid) {
+        [process_audio_device_ids_array addObject:@(device_id)];
+        continue;
+      }
+
+      // If the PID for the process audio object did not match, we check if
+      // the parent process ID matches `application_pid`.
+      struct proc_bsdinfo process_info;
+      if (proc_pidinfo(process_id, PROC_PIDTBSDINFO, 0, &process_info,
+                       sizeof(process_info)) == sizeof(process_info)) {
+        if (static_cast<pid_t>(process_info.pbi_ppid) == *application_pid) {
+          [process_audio_device_ids_array addObject:@(device_id)];
+        }
+      }
+    }
+  }
+
+  ReportGetProcessAudioDeviceIdsFromBundleIdDuration(true, timer.Elapsed());
+  return process_audio_device_ids_array;
+}
+
 bool CatapAudioInputStreamSource::ConfigureSampleRateOfAggregateDevice() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // Set sample rate.
   UInt32 property_size = sizeof(Float64);
-  Float64 sample_rate = config_.sample_rate;
+  Float64 sample_rate = config_.aggregate_device_sample_rate;
   OSStatus result = catap_api_->AudioObjectSetPropertyData(
       aggregate_device_id_, &kSampleRateAddress, /*in_qualifier_data_size=*/0,
       /*in_qualifier_data=*/nullptr, property_size, &sample_rate);
@@ -939,13 +1359,11 @@ CatapAudioInputStreamSource::GetSampleRateOfAggregateDevice() {
 
 bool CatapAudioInputStreamSource::ConfigureFramesPerBufferOfAggregateDevice() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Set frames per buffer.
-  // Set sample rate.
   AudioObjectPropertyAddress property_address = {
       kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal,
       kAudioObjectPropertyElementMain};
   UInt32 property_size = sizeof(UInt32);
-  UInt32 frames_per_buffer = config_.frames_per_buffer;
+  UInt32 frames_per_buffer = config_.aggregate_frames_per_buffer;
   OSStatus result = catap_api_->AudioObjectSetPropertyData(
       aggregate_device_id_, &property_address, /*in_qualifier_data_size=*/0,
       /*in_qualifier_data=*/nullptr, property_size, &frames_per_buffer);
@@ -962,13 +1380,10 @@ bool CatapAudioInputStreamSource::ProbeAudioTapPermissions() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   UInt32 propertySize = sizeof(CATapDescription*);
-  AudioObjectPropertyAddress propertyAddress = {
-      kAudioTapPropertyDescription, kAudioObjectPropertyScopeGlobal,
-      kAudioObjectPropertyElementMain};
 
   void* get_description_ptr = nullptr;
   OSStatus status = catap_api_->AudioObjectGetPropertyData(
-      tap_, &propertyAddress, /*in_qualifier_data_size=*/0,
+      tap_, &kAudioTapPropertyDescriptionAddress, /*in_qualifier_data_size=*/0,
       /*in_qualifier_data=*/nullptr, &propertySize, &get_description_ptr);
   if (status != noErr) {
     return false;
@@ -980,14 +1395,7 @@ bool CatapAudioInputStreamSource::ProbeAudioTapPermissions() {
   // automatically when it goes out of scope.
   CATapDescription* description = CFBridgingRelease(get_description_ptr);
 
-  // `AudioObjectSetPropertyData()` does not take ownership of the object. We
-  // use a non-owning `__bridge` cast to pass the pointer. ARC retains
-  // ownership, and `description` will be released when it goes out of scope.
-  void* set_description_ptr = (__bridge void*)description;
-  status = catap_api_->AudioObjectSetPropertyData(
-      tap_, &propertyAddress, /*in_qualifier_data_size=*/0,
-      /*in_qualifier_data=*/nullptr, propertySize, &set_description_ptr);
-
+  status = SetTapDescription(catap_api_.get(), tap_, description);
   if (status != noErr) {
     return false;
   }
@@ -997,6 +1405,11 @@ bool CatapAudioInputStreamSource::ProbeAudioTapPermissions() {
 void CatapAudioInputStreamSource::ProcessPropertyChange(
     base::span<const AudioObjectPropertyAddress> property_addresses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Keep a weak pointer to self to handle the case where `OnError()` or the
+  // callback implementation in `audio_property_change_callback_` might delete
+  // this object.
+  base::WeakPtr<CatapAudioInputStreamSource> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
   for (const AudioObjectPropertyAddress& property_address :
        property_addresses) {
     if (property_address == kDeviceIsAliveAddress) {
@@ -1021,38 +1434,91 @@ void CatapAudioInputStreamSource::ProcessPropertyChange(
       SendLogMessage("%s => Device is alive property changed: %d", __func__,
                      is_alive);
       if (!is_alive) {
-        OnError();
+        // OnError() may delete `this`.
+        OnError(Error::kRuntimeError);
+        if (!weak_this) {
+          return;
+        }
       }
     } else if (property_address == kDefaultOutputDevicePropertyAddress) {
       TRACE_EVENT1("audio",
                    "CatapAudioInputStreamSource::ProcessPropertyChange",
                    "property", "DefaultOutputDevice");
       SendLogMessage("%s => Default output device changed.", __func__);
-      // Nothing should be done after the callback is called, because 'this'
-      // might be deleted within the callback implementation.
+      // The callback may delete `this`.
       audio_property_change_callback_->OnDefaultDeviceChange();
+      if (!weak_this) {
+        return;
+      }
     } else if (property_address == kSampleRateAddress) {
       TRACE_EVENT1("audio",
                    "CatapAudioInputStreamSource::ProcessPropertyChange",
                    "property", "SampleRate");
       std::optional<double> sample_rate = GetSampleRateOfAggregateDevice();
       if (!sample_rate.has_value() ||
-          sample_rate.value() != config_.sample_rate) {
-        SendLogMessage("%s => Sample rate changed. New sample rate: %f",
+          sample_rate.value() != config_.aggregate_device_sample_rate) {
+        SendLogMessage("%s => Sample rate of aggregate device changed. New "
+                       "sample rate: %f",
                        __func__, sample_rate.value_or(-1.0));
-        // Nothing should be done after the callback is called, because 'this'
-        // might be deleted within the callback implementation.
+        // The callback may delete `this`.
         audio_property_change_callback_->OnSampleRateChange();
+        if (!weak_this) {
+          return;
+        }
+      }
+      if (config_.target_device.has_value() &&
+          ShouldDefaultDeviceUseInternalResampling()) {
+        // Check if the sample rate of the output device has changed.
+        int device_sample_rate = GetVirtualFormatSampleRate(
+            catap_api_.get(), config_.target_device->id);
+        if (device_sample_rate != 0 &&
+            device_sample_rate != config_.aggregate_device_sample_rate) {
+          SendLogMessage("%s => Sample rate of default device changed. New "
+                         "sample rate: %d",
+                         __func__, device_sample_rate);
+          // The callback may delete `this`.
+          audio_property_change_callback_->OnSampleRateChange();
+          if (!weak_this) {
+            return;
+          }
+        }
+      }
+    } else if (property_address == kAudioProcessListAddress) {
+      // We only listen on `kAudioProcessListAddress` changes if we capture
+      // application audio, i.e., we have a
+      // `config_.capture_application`.
+      CHECK(config_.capture_application.has_value());
+      NSArray<NSNumber*>* process_audio_device_ids_to_include =
+          GetProcessAudioDeviceIds(*config_.capture_application,
+                                   config_.capture_application_pid);
+      NSSet* new_tap_objects =
+          [NSSet setWithArray:process_audio_device_ids_to_include];
+      NSSet* current_tap_objects =
+          [NSSet setWithArray:[tap_description_ processes]];
+
+      // If the set of Audio Process Objects for the target application has
+      // changed, the tap needs to be updated.
+      if (![new_tap_objects isEqualToSet:current_tap_objects]) {
+        SendLogMessage("%s => Update tap objects for application capture",
+                       __func__);
+        tap_description_.processes = process_audio_device_ids_to_include;
+        OSStatus status =
+            SetTapDescription(catap_api_.get(), tap_, tap_description_);
+        if (status != noErr) {
+          SendLogMessage("%s => Could not update tap description on the active "
+                         "tap. Status: %d",
+                         __func__, status);
+        }
       }
     }
   }
 }
 
-void CatapAudioInputStreamSource::OnError() {
+void CatapAudioInputStreamSource::OnError(Error error_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   SendLogMessage("%s", __func__);
   if (sink_) {
-    sink_->OnError();
+    sink_->OnError(error_code);
   }
 }
 
@@ -1061,7 +1527,7 @@ void CatapAudioInputStreamSource::SendLogMessage(const char* format, ...) {
   va_list args;
   va_start(args, format);
   log_callback_.Run("CatapAudioInputStreamSource::" +
-                    base::StringPrintV(format, args));
+                    UNSAFE_TODO(base::StringPrintV(format, args)));
   va_end(args);
 }
 
@@ -1073,12 +1539,17 @@ void CatapAudioInputStreamSource::ReportAndResetStats() {
   }
 }
 
-CatapAudioInputStream::AudioDeviceIds::AudioDeviceIds() = default;
-CatapAudioInputStream::AudioDeviceIds::~AudioDeviceIds() = default;
-CatapAudioInputStream::AudioDeviceIds::AudioDeviceIds(
-    const AudioDeviceIds& other) = default;
-CatapAudioInputStream::AudioDeviceIds::AudioDeviceIds(AudioDeviceID device_id,
-                                                      std::string uid)
+AudioDeviceIdentity::AudioDeviceIdentity() = default;
+AudioDeviceIdentity::~AudioDeviceIdentity() = default;
+AudioDeviceIdentity::AudioDeviceIdentity(const AudioDeviceIdentity& other) =
+    default;
+AudioDeviceIdentity::AudioDeviceIdentity(AudioDeviceIdentity&& other) = default;
+AudioDeviceIdentity& AudioDeviceIdentity::operator=(
+    const AudioDeviceIdentity& other) = default;
+AudioDeviceIdentity& AudioDeviceIdentity::operator=(
+    AudioDeviceIdentity&& other) = default;
+AudioDeviceIdentity::AudioDeviceIdentity(AudioDeviceID device_id,
+                                         std::string uid)
     : id(device_id), uid(std::move(uid)) {}
 
 CatapAudioInputStream::CatapAudioInputStream(
@@ -1110,31 +1581,45 @@ AudioInputStream::OpenOutcome CatapAudioInputStream::Open() {
     return AudioInputStream::OpenOutcome::kAlreadyOpen;
   }
 
-  AudioDeviceIds default_device_ids = get_default_device_ids_callback_.Run();
+  bool force_mono_capture = false;
+  int aggregate_sample_rate = params_.sample_rate();
+  std::optional<AudioDeviceIdentity> default_device_ids;
+  if (IsDefaultOutputDeviceLoopback(device_id_)) {
+    base::ElapsedTimer timer;
+    default_device_ids = get_default_device_ids_callback_.Run();
+    if (!default_device_ids) {
+      ReportOpenStatus(
+          CatapAudioInputStreamSource::OpenStatus::kGetDefaultDeviceUidEmpty,
+          timer.Elapsed());
+      SendLogMessage("%s => Error getting Id/UID for default output device",
+                     __func__);
+      return AudioInputStream::OpenOutcome::kFailed;
+    }
 
-  // The microphone input from Bluetooth headsets using the headset profile
-  // is mono. Typically the OS handles this and provides a stereo stream,
-  // but this mechanism can fail. Forcing a direct mono capture for these
-  // mono sources serves as a workaround.
-  bool force_mono_capture =
-      IsDefaultOutputDeviceLoopback(device_id_) &&
-      base::FeatureList::IsEnabled(kMacCatapForceMonoCaptureOfMonoDevices) &&
-      GetVirtualFormatChannels(
-          default_device_ids.id.value_or(kAudioObjectUnknown)) == 1;
+    if (ShouldDefaultDeviceUseInternalResampling()) {
+      int device_sample_rate =
+          GetVirtualFormatSampleRate(catap_api_.get(), default_device_ids->id);
+      if (device_sample_rate != 0) {
+        aggregate_sample_rate = device_sample_rate;
+      }
+    }
 
-  CatapAudioInputStreamSource::Config config(params_, device_id_,
-                                             force_mono_capture);
-
-  if (AudioDeviceDescription::IsApplicationLoopbackDevice(device_id_) &&
-      !config.capture_application_process_id) {
-    SendLogMessage("%s => No valid Application PID to capture.", __func__);
-    return AudioInputStream::OpenOutcome::kFailed;
+    // The microphone input from Bluetooth headsets using the headset profile
+    // is mono. Typically the OS handles this and provides a stereo stream,
+    // but this mechanism can fail. Forcing a direct mono capture for these
+    // mono sources serves as a workaround.
+    force_mono_capture =
+        base::FeatureList::IsEnabled(kMacCatapForceMonoCaptureOfMonoDevices) &&
+        GetVirtualFormatChannels(default_device_ids->id) == 1;
   }
+  CatapAudioInputStreamSource::Config config(
+      params_, device_id_, std::move(default_device_ids), aggregate_sample_rate,
+      force_mono_capture);
 
   source_ = std::make_unique<CatapAudioInputStreamSource>(
-      catap_api_.get(), config, log_callback_, this);
+      catap_api_.get(), std::move(config), log_callback_, this);
 
-  AudioInputStream::OpenOutcome outcome = source_->Open(default_device_ids.uid);
+  AudioInputStream::OpenOutcome outcome = source_->Open();
 
   if (outcome != OpenOutcome::kSuccess) {
     SendLogMessage("%s => Failed to open(), outcome: %d", __func__, outcome);
@@ -1150,7 +1635,7 @@ void CatapAudioInputStream::Start(AudioInputCallback* callback) {
   CHECK(callback);
   if (!source_) {
     SendLogMessage("%s => stream is nullptr", __func__);
-    callback->OnError();
+    callback->OnError(Error::kStartupFailed);
     return;
   }
   audio_input_callback_ = callback;
@@ -1204,7 +1689,7 @@ void CatapAudioInputStream::OnSampleRateChange() {
   if (restart_on_device_change_) {
     RestartStream();
   } else {
-    OnError();
+    OnError(Error::kRuntimeError);
   }
 }
 
@@ -1220,11 +1705,11 @@ CatapAudioInputStream::~CatapAudioInputStream() {
   CHECK(!source_);
 }
 
-void CatapAudioInputStream::OnError() {
+void CatapAudioInputStream::OnError(Error error_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   SendLogMessage("%s", __func__);
   if (audio_input_callback_) {
-    audio_input_callback_->OnError();
+    audio_input_callback_->OnError(error_code);
   }
 }
 
@@ -1256,7 +1741,7 @@ void CatapAudioInputStream::RestartStream() {
   source_.reset();
   if (Open() != OpenOutcome::kSuccess) {
     CHECK(!source_);
-    OnError();
+    OnError(Error::kRuntimeError);
     audio_input_callback_ = nullptr;
     return;
   }
@@ -1273,7 +1758,7 @@ void CatapAudioInputStream::SendLogMessage(const char* format, ...) {
   va_list args;
   va_start(args, format);
   log_callback_.Run("CatapAudioInputStream::" +
-                    base::StringPrintV(format, args));
+                    UNSAFE_TODO(base::StringPrintV(format, args)));
   va_end(args);
 }
 
@@ -1300,7 +1785,7 @@ AudioInputStream* CreateCatapAudioInputStreamForTesting(
     AudioManager::LogCallback log_callback,
     base::OnceCallback<void(AudioInputStream*)> close_callback,
     std::unique_ptr<CatapApi> catap_api,
-    base::RepeatingCallback<CatapAudioInputStream::AudioDeviceIds()>
+    base::RepeatingCallback<std::optional<AudioDeviceIdentity>()>
         get_default_device_ids_callback) {
   return new CatapAudioInputStream(
       std::move(catap_api), std::move(get_default_device_ids_callback), params,

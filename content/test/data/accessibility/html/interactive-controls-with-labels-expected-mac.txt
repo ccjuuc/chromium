@@ -13,22 +13,22 @@ AXWebArea
 ++AXButton AXTitle='Test label'
 ++AXComboBox AXDescription='aria label'
 ++AXList
-++++AXMenuItem AXValue='Option 1'
-++++AXMenuItem AXValue='Option 2'
+++++AXStaticText AXValue='Option 1'
+++++AXStaticText AXValue='Option 2'
 ++AXComboBox AXTitle='Test label'
 ++AXList
-++++AXMenuItem AXValue='Option 3'
-++++AXMenuItem AXValue='Option 4'
+++++AXStaticText AXValue='Option 3'
+++++AXStaticText AXValue='Option 4'
 ++AXComboBox AXDescription='aria label' AXValue='Combobox'
 ++++AXStaticText AXValue='Combobox'
 ++AXList
-++++AXMenuItem AXValue='Option 5'
-++++AXMenuItem AXValue='Option 6'
+++++AXStaticText AXValue='Option 5'
+++++AXStaticText AXValue='Option 6'
 ++AXComboBox AXTitle='Test label' AXValue='Combobox with aria-labelledby'
 ++++AXStaticText AXValue='Combobox with aria-labelledby'
 ++AXList
-++++AXMenuItem AXValue='Option 7'
-++++AXMenuItem AXValue='Option 8'
+++++AXStaticText AXValue='Option 7'
+++++AXStaticText AXValue='Option 8'
 ++AXTimeField AXDescription='aria label' AXValue='12:05'
 ++++AXGroup
 ++++++AXGroup
@@ -37,15 +37,15 @@ AXWebArea
 ++++++++AXIncrementor AXDescription='Minutes aria label' AXValue=5
 ++++++++AXStaticText AXValue=' '
 ++++++++AXIncrementor AXDescription='AM/PM aria label' AXValue=2
-++++AXPopUpButton AXDescription='Show time picker'
+++++AXPopUpButton AXDescription='Show time picker aria label'
 ++AXTimeField AXTitle='Test label' AXValue='12:05'
 ++++AXGroup
 ++++++AXGroup
-++++++++AXIncrementor AXTitle='Hours Test label' AXValue=12
+++++++++AXIncrementor AXDescription='Hours Test label' AXValue=12
 ++++++++AXStaticText AXValue=':'
-++++++++AXIncrementor AXTitle='Minutes Test label' AXValue=5
+++++++++AXIncrementor AXDescription='Minutes Test label' AXValue=5
 ++++++++AXStaticText AXValue=' '
-++++++++AXIncrementor AXTitle='AM/PM Test label' AXValue=2
-++++AXPopUpButton AXDescription='Show time picker'
+++++++++AXIncrementor AXDescription='AM/PM Test label' AXValue=2
+++++AXPopUpButton AXDescription='Show time picker Test label'
 ++AXColorWell AXDescription='aria label' AXValue='rgb 0.89412 0.89412 0.89412 1'
 ++AXColorWell AXTitle='Test label' AXValue='rgb 0.89412 0.89412 0.89412 1'

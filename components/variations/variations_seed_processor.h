@@ -7,11 +7,10 @@
 
 #include <stdint.h>
 
-#include <string>
-
 #include "base/component_export.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ref.h"
+#include "base/types/pass_key.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/proto/study.pb.h"
 #include "components/variations/proto/variations_seed.pb.h"
@@ -22,6 +21,8 @@ class FeatureList;
 }
 
 namespace variations {
+
+class VariationsService;
 
 namespace internal {
 // The trial group selected when a study specifies a feature that is already
@@ -47,9 +48,6 @@ class VariationsLayers;
 // Helper class to instantiate field trials from a variations seed.
 class COMPONENT_EXPORT(VARIATIONS) VariationsSeedProcessor {
  public:
-  using UIStringOverrideCallback =
-      base::RepeatingCallback<void(uint32_t, const std::u16string&)>;
-
   // Note: The `sticky_activation_manager` must outlive this class.
   explicit VariationsSeedProcessor(
       StickyActivationManager& sticky_activation_manager);
@@ -67,12 +65,22 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedProcessor {
   // according to the client's |client_state|.
   void CreateTrialsFromSeed(const VariationsSeed& seed,
                             const ClientFilterableState& client_state,
-                            const UIStringOverrideCallback& override_callback,
                             const EntropyProviders& entropy_providers,
                             const VariationsLayers& layers,
                             base::FeatureList* feature_list);
 
+  // See private CreateTrialFromStudyImpl() below.
+  scoped_refptr<base::FieldTrial> CreateTrialFromStudy(
+      base::PassKey<VariationsService>,
+      const ProcessedStudy& processed_study,
+      const EntropyProviders& entropy_providers,
+      const VariationsLayers& layers,
+      base::FeatureList* feature_list,
+      bool simulated = false);
+
  private:
+  template <typename Environment>
+  friend class VariationsSeedProcessorTest;
   friend void CreateTrialFromStudyFuzzer(const Study& study);
 
   // Check if the |study| is only associated with platform Android/iOS and
@@ -80,12 +88,24 @@ class COMPONENT_EXPORT(VARIATIONS) VariationsSeedProcessor {
   // (Otherwise, forcing_flag and variation_id are mutually exclusive.)
   bool AllowVariationIdWithForcingFlag(const Study& study);
 
-  // Creates and registers a field trial from the |processed_study| data.
-  void CreateTrialFromStudy(const ProcessedStudy& processed_study,
-                            const UIStringOverrideCallback& override_callback,
-                            const EntropyProviders& entropy_providers,
-                            const VariationsLayers& layers,
-                            base::FeatureList* feature_list);
+  // Creates and registers a field trial from the `processed_study` data. If
+  // the trial is successfully created, returns a pointer to the trial.
+  // Otherwise (e.g. a trial with the same name that does not match the passed
+  // `processed_study` already exists), returns nullptr.
+  // `simulated` can be set to simulate what group would be selected for a given
+  // study. In this case, this function will have no side effects: the trial
+  // created will NOT be registered, `feature_list` will NOT be modified (i.e.
+  // no feature overrides will be registered), no params will be registered,
+  // and no variation IDs will be registered. Since the trial will not be
+  // registered, the caller will have the only pointer to the returned trial
+  // and hence have full ownership (as opposed to when `simulated` is false,
+  // where the trial is registered with FieldTrialList and ownership is shared).
+  scoped_refptr<base::FieldTrial> CreateTrialFromStudyImpl(
+      const ProcessedStudy& processed_study,
+      const EntropyProviders& entropy_providers,
+      const VariationsLayers& layers,
+      base::FeatureList* feature_list,
+      bool simulated = false);
 
   // Used to manage studies that use sticky activation, to determine which ones
   // should be activated on startup per their prior state.

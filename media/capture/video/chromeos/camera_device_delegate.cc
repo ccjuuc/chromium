@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/chromeos/camera_device_delegate.h"
 
 #include <algorithm>
@@ -17,7 +12,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
@@ -32,6 +27,7 @@
 #include "media/capture/video/blob_utils.h"
 #include "media/capture/video/chromeos/camera_3a_controller.h"
 #include "media/capture/video/chromeos/camera_app_device_bridge_impl.h"
+#include "media/capture/video/chromeos/camera_app_device_impl.h"
 #include "media/capture/video/chromeos/camera_buffer_factory.h"
 #include "media/capture/video/chromeos/camera_hal_delegate.h"
 #include "media/capture/video/chromeos/camera_metadata_utils.h"
@@ -149,17 +145,17 @@ void GetStreamResolutions(const cros::mojom::CameraMetadataPtr& static_metadata,
   const size_t kStreamHeightOffset = 2;
   const size_t kStreamTypeOffset = 3;
   const size_t kStreamConfigurationSize = 4;
-  int32_t* iter =
-      reinterpret_cast<int32_t*>((*stream_configurations)->data.data());
+  int32_t* iter = UNSAFE_TODO(
+      reinterpret_cast<int32_t*>((*stream_configurations)->data.data()));
   for (size_t i = 0; i < (*stream_configurations)->count;
        i += kStreamConfigurationSize) {
-    auto format =
-        static_cast<cros::mojom::HalPixelFormat>(iter[kStreamFormatOffset]);
-    int32_t width = iter[kStreamWidthOffset];
-    int32_t height = iter[kStreamHeightOffset];
-    auto type =
-        static_cast<cros::mojom::Camera3StreamType>(iter[kStreamTypeOffset]);
-    iter += kStreamConfigurationSize;
+    auto format = static_cast<cros::mojom::HalPixelFormat>(
+        UNSAFE_TODO(iter[kStreamFormatOffset]));
+    int32_t width = UNSAFE_TODO(iter[kStreamWidthOffset]);
+    int32_t height = UNSAFE_TODO(iter[kStreamHeightOffset]);
+    auto type = static_cast<cros::mojom::Camera3StreamType>(
+        UNSAFE_TODO(iter[kStreamTypeOffset]));
+    UNSAFE_TODO(iter += kStreamConfigurationSize);
 
     if (type != stream_type || format != stream_format) {
       continue;
@@ -203,9 +199,9 @@ void SetFpsRangeInMetadata(cros::mojom::CameraMetadataPtr* settings,
   // definition of the FPS metadata tag, its data type is int32, so we
   // reinterpret_cast here.
   std::vector<uint8_t> fps_range(sizeof(int32_t) * entry_length);
-  auto* fps_ptr = reinterpret_cast<int32_t*>(fps_range.data());
+  auto* fps_ptr = UNSAFE_TODO(reinterpret_cast<int32_t*>(fps_range.data()));
   fps_ptr[0] = min_frame_rate;
-  fps_ptr[1] = max_frame_rate;
+  UNSAFE_TODO(fps_ptr[1]) = max_frame_rate;
   cros::mojom::CameraMetadataEntryPtr e =
       cros::mojom::CameraMetadataEntry::New();
   e->tag = cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AE_TARGET_FPS_RANGE;
@@ -523,7 +519,7 @@ void CameraDeviceDelegate::SetPhotoOptions(
   // the vendor tag is set and false otherwise.
   auto to_uint8_vector = [](int32_t value) {
     std::vector<uint8_t> temp(sizeof(int32_t));
-    auto* temp_ptr = reinterpret_cast<int32_t*>(temp.data());
+    auto* temp_ptr = UNSAFE_TODO(reinterpret_cast<int32_t*>(temp.data()));
     *temp_ptr = value;
     return temp;
   };
@@ -596,6 +592,9 @@ void CameraDeviceDelegate::SetPhotoOptions(
     int32_t min_diff = std::numeric_limits<int32_t>::max();
     for (const auto& mode : awb_available_modes) {
       auto it = map.find(mode);
+      if (it == map.end()) {
+        continue;
+      }
       // Find the nearest awb mode
       int32_t diff = std::abs(settings->color_temperature - it->second);
       if (diff < min_diff) {
@@ -1311,7 +1310,7 @@ gfx::Size CameraDeviceDelegate::GetBlobResolution(
   // resolution specified through Mojo API as a fallback. If it fails too,
   // use the largest resolution as default.
   if (new_blob_resolution.has_value() &&
-      base::Contains(blob_resolutions, *new_blob_resolution)) {
+      std::ranges::contains(blob_resolutions, *new_blob_resolution)) {
     return *new_blob_resolution;
   }
 
@@ -1322,7 +1321,7 @@ gfx::Size CameraDeviceDelegate::GetBlobResolution(
     auto specified_capture_resolution =
         camera_app_device->GetStillCaptureResolution();
     if (!specified_capture_resolution.IsEmpty() &&
-        base::Contains(blob_resolutions, specified_capture_resolution)) {
+        std::ranges::contains(blob_resolutions, specified_capture_resolution)) {
       return specified_capture_resolution;
     }
   }
@@ -1771,7 +1770,10 @@ void CameraDeviceDelegate::DoGetPhotoState(
     else {
       // Need to find current color temperature.
       photo_state->current_white_balance_mode = mojom::MeteringMode::MANUAL;
-      current_temperature = map.at(result_metadata_.awb_mode.value());
+      auto it = map.find(result_metadata_.awb_mode.value());
+      if (it != map.end()) {
+        current_temperature = it->second;
+      }
     }
 
     int32_t min = std::numeric_limits<int32_t>::max();
@@ -1796,7 +1798,7 @@ void CameraDeviceDelegate::DoGetPhotoState(
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AE_AVAILABLE_MODES);
   bool support_manual_exposure_time = false;
   if (ae_available_modes.size() > 1 && result_metadata_.ae_mode) {
-    support_manual_exposure_time = base::Contains(
+    support_manual_exposure_time = std::ranges::contains(
         ae_available_modes,
         static_cast<uint8_t>(
             cros::mojom::AndroidControlAeMode::ANDROID_CONTROL_AE_MODE_OFF));
@@ -1835,7 +1837,7 @@ void CameraDeviceDelegate::DoGetPhotoState(
       cros::mojom::CameraMetadataTag::ANDROID_CONTROL_AF_AVAILABLE_MODES);
   bool support_manual_focus_distance = false;
   if (af_available_modes.size() > 1 && result_metadata_.af_mode) {
-    support_manual_focus_distance = base::Contains(
+    support_manual_focus_distance = std::ranges::contains(
         af_available_modes,
         static_cast<uint8_t>(
             cros::mojom::AndroidControlAfMode::ANDROID_CONTROL_AF_MODE_OFF));

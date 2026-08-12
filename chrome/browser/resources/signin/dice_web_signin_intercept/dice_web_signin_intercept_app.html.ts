@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
+
 import type {DiceWebSigninInterceptAppElement} from './dice_web_signin_intercept_app.js';
 
 export function getHtml(this: DiceWebSigninInterceptAppElement) {
@@ -10,7 +11,25 @@ export function getHtml(this: DiceWebSigninInterceptAppElement) {
   return html`<!--_html_template_start_-->
 <div role="dialog" id="interceptDialog" aria-labelledby="title"
      aria-describedby="contents">
-  ${this.interceptionParameters_.useV2Design ? html`
+  ${this.interceptionParameters_.useV2ProfileSwitchDesign ? html`
+    <div id="headerV2">
+      <svg>
+        <use href="images/v2_profile_switch.svg#EXPORT_v2_profile_switch"
+            id="headerImageIntercepted">
+        </use>
+      </svg>
+      <div id="avatarContainerSwitchProfile" class="avatar-container-v2">
+        <img class="avatar" alt=""
+            src="${this.interceptionParameters_.interceptedAccount.pictureUrl}">
+        <div class="work-badge"
+            ?hidden="${!this.interceptionParameters_.interceptedAccount.avatarBadge.length}">
+          <cr-icon class="icon" aria-hidden="true"
+              icon="${this.interceptionParameters_.interceptedAccount.avatarBadge}">
+          </cr-icon>
+        </div>
+      </div>
+    </div>
+  ` : this.interceptionParameters_.useV2Design ? html`
     <div id="headerV2">
       <svg>
         <use href="images/split_header.svg#EXPORT_primary"
@@ -77,10 +96,13 @@ export function getHtml(this: DiceWebSigninInterceptAppElement) {
     ${this.acceptButtonClicked_ ? html`<div class="spinner"></div>` : ''}
     <div class="action-container">
       <cr-button id="acceptButton" class="action-button" autofocus
-          @click="${this.onAccept_}" ?disabled="${this.acceptButtonClicked_}">
+          @click="${this.onAcceptClick_}"
+          ?disabled="${this.acceptButtonClicked_}">
         ${this.interceptionParameters_.confirmButtonLabel}
       </cr-button>
-      <cr-button id="cancelButton" @click="${this.onCancel_}"
+      <cr-button id="cancelButton"
+          class="tonal-button"
+          @click="${this.onCancelClick_}"
           ?disabled="${this.acceptButtonClicked_}">
         ${this.interceptionParameters_.cancelButtonLabel}
       </cr-button>

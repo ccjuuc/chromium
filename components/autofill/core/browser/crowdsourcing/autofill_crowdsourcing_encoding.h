@@ -5,14 +5,30 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_CROWDSOURCING_AUTOFILL_CROWDSOURCING_ENCODING_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_CROWDSOURCING_AUTOFILL_CROWDSOURCING_ENCODING_H_
 
-#include <optional>
-#include <string>
+#include <stdint.h>
 
+#include <deque>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "components/autofill/core/browser/crowdsourcing/randomized_encoder.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/proto/api_v1.pb.h"
+#include "components/autofill/core/browser/proto/server.pb.h"
+#include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/language_code.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
@@ -147,29 +163,57 @@ std::vector<AutofillUploadContents> EncodeUploadRequest(
 // Encodes the list of `forms` and their fields that are valid into an
 // `AutofillPageQueryRequest` proto. The queried FormSignatures and
 // FieldSignatures are also returned in the same order as in `query`. In case
-// multiple FormStructures have the same FormSignature, only the first one is
+// multiple FormData have the same FormSignature, only the first one is
 // included in `AutofillPageQueryRequest` and the returned queried form
 // signatures.
 std::pair<AutofillPageQueryRequest, std::vector<FormSignature>>
-EncodeAutofillPageQueryRequest(
-    const std::vector<raw_ptr<const FormStructure, VectorExperimental>>& forms);
+EncodeAutofillPageQueryRequest(const std::vector<FormData>& forms);
 
-// Parses `payload` as AutofillQueryResponse proto and calls
-// `ProcessServerPredictionsQueryResponse`.
-void ParseServerPredictionsQueryResponse(
+// Holds the predictions returned by ParseServerPredictionsFromQueryResponse.
+class ServerPredictions {
+ public:
+  ServerPredictions(bool may_run_autofill_ai_model,
+                    std::map<std::pair<FormSignature, FieldSignature>,
+                             std::deque<FieldSuggestion>>& field_suggestion_map,
+                    const FormData& form);
+  ServerPredictions(const ServerPredictions&);
+  ServerPredictions(ServerPredictions&&);
+  ServerPredictions& operator=(const ServerPredictions&);
+  ServerPredictions& operator=(ServerPredictions&&);
+  ~ServerPredictions();
+
+  // Sets the information in the stored `FieldSuggestion`s to the appropriate
+  // `AutofillField`s in `form`.
+  void ApplyTo(FormStructure& form) const;
+
+ private:
+  FormVersion version_;
+  bool may_run_autofill_ai_model_;
+
+  // Contains the predictions to be applied to each field given its
+  // FieldGlobalId. The value of the map is `std::optional<FieldSuggestion>`
+  // because we would like the map to have an entry for each queried field,
+  // regardless whether the server had a suggestion for that field or not. This
+  // will help distinguishing at the time of applying the predictions between
+  // fields for which the server did not have suggestions with fields that were
+  // not queried in the first place.
+  base::flat_map<FieldGlobalId, std::optional<FieldSuggestion>> predictions_;
+};
+
+// Parses `payload` as AutofillQueryResponse proto returns a list of
+// `ServerPredictions`, one for each of the queried forms.
+// `ignore_small_forms` determines whether forms with less than
+// `kSmallFormThreshold` fields (all of which are address related), should have
+// server predictions cleared.
+std::vector<ServerPredictions> ParseServerPredictionsFromQueryResponse(
     std::string_view payload,
-    const std::vector<raw_ref<FormStructure>>& forms,
+    base::span<const FormData> forms,
     const std::vector<FormSignature>& queried_form_signatures,
-    LogManager* log_manager);
+    LogManager* log_manager,
+    bool ignore_small_forms);
 
-// Parses the field types from the server query response. `forms` must be the
-// same as the one passed to `EncodeAutofillPageQueryRequest()` when
-// constructing the query.
-void ProcessServerPredictionsQueryResponse(
-    const AutofillQueryResponse& response,
-    const std::vector<raw_ref<FormStructure>>& forms,
-    const std::vector<FormSignature>& queried_form_signatures,
-    LogManager* log_manager);
+void ClearSmallAddressFormPredictionsForTesting(
+    AutofillQueryResponse::FormSuggestion& form_suggestion);
 
 }  // namespace autofill
 

@@ -11,6 +11,7 @@
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
@@ -79,6 +80,7 @@ WorkletGlobalScope::WorkletGlobalScope(
           MakeGarbageCollected<Agent>(
               isolate,
               creation_params->agent_cluster_id,
+              blink::Agent::AgentType::kNonCrossOriginIsolatedWorker,
               v8::MicrotaskQueue::New(isolate, v8::MicrotasksPolicy::kScoped)),
           creation_params->global_scope_name,
           creation_params->parent_devtools_token,
@@ -90,7 +92,6 @@ WorkletGlobalScope::WorkletGlobalScope(
           /*is_worker_loaded_from_data_url=*/false,
           /*is_default_world_of_isolate=*/
           creation_params->is_default_world_of_isolate),
-      ActiveScriptWrappable<WorkletGlobalScope>({}),
       url_(creation_params->script_url),
       user_agent_(creation_params->user_agent),
       document_security_origin_(creation_params->starter_origin),
@@ -107,7 +108,7 @@ WorkletGlobalScope::WorkletGlobalScope(
               ? creation_params->parent_context_token->GetAs<LocalFrameToken>()
               : blink::LocalFrameToken()),
       parent_cross_origin_isolated_capability_(
-          creation_params->parent_cross_origin_isolated_capability),
+          creation_params->cross_origin_isolated_capability),
       parent_is_isolated_context_(creation_params->parent_is_isolated_context),
       browser_interface_broker_proxy_(this) {
   DCHECK((thread_type_ == ThreadType::kMainThread && frame_) ||
@@ -195,7 +196,13 @@ bool WorkletGlobalScope::IsContextThread() const {
 void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
                                                bool discard_duplicates) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->Console().AddMessage(console_message, discard_duplicates);
+    return;
+  }
+  if (!worker_thread_) {
     return;
   }
   worker_thread_->GetWorkerReportingProxy().ReportConsoleMessage(
@@ -207,8 +214,14 @@ void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
 
 void WorkletGlobalScope::AddInspectorIssue(AuditsIssue issue) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     frame_->DomWindow()->AddInspectorIssue(std::move(issue));
   } else {
+    if (!worker_thread_) {
+      return;
+    }
     worker_thread_->GetInspectorIssueStorage()->AddInspectorIssue(
         this, std::move(issue));
   }
@@ -216,12 +229,18 @@ void WorkletGlobalScope::AddInspectorIssue(AuditsIssue issue) {
 
 void WorkletGlobalScope::ExceptionThrown(ErrorEvent* error_event) {
   if (IsMainThreadWorkletGlobalScope()) {
+    if (!frame_) {
+      return;
+    }
     MainThreadDebugger::Instance(GetIsolate())
         ->ExceptionThrown(this, error_event);
     return;
   }
+  if (!worker_thread_) {
+    return;
+  }
   if (WorkerThreadDebugger* debugger =
-          WorkerThreadDebugger::From(GetThread()->GetIsolate())) {
+          WorkerThreadDebugger::From(worker_thread_->GetIsolate())) {
     debugger->ExceptionThrown(worker_thread_, error_event);
   }
 }
@@ -303,7 +322,7 @@ void WorkletGlobalScope::FetchAndInvokeScript(
   // Step 3 to 5 are implemented in
   // WorkletModuleTreeClient::NotifyModuleTreeLoadFinished.
   auto* client = MakeGarbageCollected<WorkletModuleTreeClient>(
-      ScriptController()->GetScriptState(),
+      ScriptController()->GetScriptState(), module_url_record,
       std::move(outside_settings_task_runner), pending_tasks);
 
   auto request_context_type = mojom::blink::RequestContextType::SCRIPT;
@@ -357,10 +376,6 @@ void WorkletGlobalScope::Trace(Visitor* visitor) const {
   visitor->Trace(frame_);
   visitor->Trace(browser_interface_broker_proxy_);
   WorkerOrWorkletGlobalScope::Trace(visitor);
-}
-
-bool WorkletGlobalScope::HasPendingActivity() const {
-  return !ExecutionContext::IsContextDestroyed();
 }
 
 }  // namespace blink

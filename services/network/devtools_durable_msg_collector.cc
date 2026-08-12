@@ -19,6 +19,7 @@ DevtoolsDurableMessageCollector::~DevtoolsDurableMessageCollector() {
   // WillRemoveBytes(). Explicitly clear the map to avoid a destruction
   // ordering bug.
   request_id_to_message_map_.clear();
+  CHECK_EQ(cur_buffer_size_, 0);
   if (manager_) {
     manager_->OnCollectorDestroyed(this);
   }
@@ -58,42 +59,75 @@ DevtoolsDurableMessageCollector::CreateDurableMessage(
   // Mark eviction order.
   message_queue_.push(message->GetWeakPtr());
 
+  if (manager_) {
+    manager_->OnCollectorAddedMessage();
+  }
+
   return message->GetWeakPtr();
 }
 
 void DevtoolsDurableMessageCollector::WillAddBytes(
     DevtoolsDurableMessage& message,
     int64_t size) {
-  if (size > max_buffer_size_) {
+  if (size < 0 || size > max_buffer_size_) {
     // This body cannot be stored with the current set limits.
     // If the beginning of this body was already stored, evict it and bail.
     EvictMessage(message);
     return;
   }
 
-  // Evict prior items if we're short on storage buffer.
-  while (!message_queue_.empty() &&
-         cur_buffer_size_ + size > max_buffer_size_) {
+  // Evict prior items if we're short on storage buffer, locally or globally.
+  while (!message_queue_.empty()) {
+    bool local_ok = size <= max_buffer_size_ - cur_buffer_size_;
+    bool global_ok = manager_ ? manager_->CanAccommodate(size) : true;
+    if (local_ok && global_ok) {
+      break;
+    }
+
     auto evict_message = message_queue_.front();
     message_queue_.pop();
     if (evict_message) {
       bool is_current_message_evicted = (evict_message.get() == &message);
       EvictMessage(*evict_message);
       if (is_current_message_evicted) {
-        // The message being callec with is now evicted, and remaining bytes
+        // The message being called with is now evicted, and remaining bytes
         // will not be stored.
         return;
       }
     }
   }
 
+  // Final check: if we're STILL out of global space (because our local queue
+  // is empty, but other collectors are hogging global space), we drop *this*
+  // message.
+  bool local_ok = size <= max_buffer_size_ - cur_buffer_size_;
+  bool global_ok = manager_ ? manager_->CanAccommodate(size) : true;
+  if (!local_ok || !global_ok) {
+    EvictMessage(message);
+    return;
+  }
+
   cur_buffer_size_ += size;
+  if (manager_) {
+    manager_->OnCollectorAddedBytes(size);
+  }
 }
 
 void DevtoolsDurableMessageCollector::WillRemoveBytes(
     DevtoolsDurableMessage& message) {
-  cur_buffer_size_ -= message.encoded_byte_size();
+  int64_t size = message.size();
+  cur_buffer_size_ -= size;
   CHECK_GE(cur_buffer_size_, 0);
+  if (manager_) {
+    manager_->OnCollectorRemovedBytes(size);
+  }
+}
+
+void DevtoolsDurableMessageCollector::WillDestroyMessage(
+    DevtoolsDurableMessage& message) {
+  if (manager_) {
+    manager_->OnCollectorRemovedMessage();
+  }
 }
 
 void DevtoolsDurableMessageCollector::EvictMessage(

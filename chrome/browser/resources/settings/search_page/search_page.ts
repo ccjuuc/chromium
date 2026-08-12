@@ -8,86 +8,113 @@
  */
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
-import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import '/shared/settings/controls/cr_policy_pref_indicator.js';
 import '/shared/settings/controls/extension_controlled_indicator.js';
+import './extension_controlled_message.js';
+import './search_engine_icon.js';
 import './search_engine_list_dialog.js';
 import '../settings_page/settings_section.js';
-import '../settings_shared.css.js';
-import '../settings_vars.css.js';
-import '../site_favicon.js';
 
+import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
 import type {CrToastElement} from 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
-import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
-import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener_mixin.js';
+import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
+import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {loadTimeData} from '../i18n_setup.js';
 import {routes} from '../route.js';
 import {Router} from '../router.js';
-import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
+import {SettingsViewMixinLit} from '../settings_page/settings_view_mixin_lit.js';
 
-import type {SearchEngine, SearchEnginesBrowserProxy, SearchEnginesInfo} from './search_engines_browser_proxy.js';
-import {SearchEnginesBrowserProxyImpl} from './search_engines_browser_proxy.js';
-import {getTemplate} from './search_page.html.js';
+import type {CategorizedTemplateUrls, SearchEngine, SearchEnginesBrowserProxy, SearchEnginesInfo} from './search_engines_browser_proxy.js';
+import {SearchEnginesBrowserProxyImpl, SearchEnginesInteractions} from './search_engines_browser_proxy.js';
+import {getCss} from './search_page.css.js';
+import {getHtml} from './search_page.html.js';
 
-const SettingsSearchPageElementBase =
-    SettingsViewMixin(WebUiListenerMixin(I18nMixin(PolymerElement)));
+const SettingsSearchPageElementBase = PrefServiceObserverMixinLit(
+    SettingsViewMixinLit(WebUiListenerMixinLit(I18nMixinLit(CrLitElement))));
 
 export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
   static get is() {
     return 'settings-search-page';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      prefs: Object,
+      defaultSearchProviderDataPref_: {type: Object},
 
       /**
-       * List of search engines available.
+       * List of search engines available in the search engine list dialog.
        */
-      searchEngines_: Array,
+      searchEngines_: {type: Array},
 
       // The selected default search engine.
-      defaultSearchEngine_: {
-        type: Object,
-        computed: 'computeDefaultSearchEngine_(searchEngines_)',
-      },
+      defaultSearchEngine_: {type: Object},
+
+      // The title of the page and the default search engine card.
+      searchPageTitle_: {type: String},
 
       // Boolean to check whether we need to show the dialog or not.
-      showSearchEngineListDialog_: Boolean,
+      showSearchEngineListDialog_: {type: Boolean},
 
       // The label of the confirmation toast that is displayed when the user
       // chooses a default search engine.
-      confirmationToastLabel_: String,
+      confirmationToastLabel_: {type: String},
+
+      // With this enabled, the shortcuts settings are present on this page
+      // rather than the search engines subpage.
+      searchSettingsUpdateEnabled_: {type: Boolean},
     };
   }
 
-  declare prefs: Object;
-  declare private searchEngines_: SearchEngine[];
-  declare private showSearchEngineListDialog_: boolean;
-  declare private defaultSearchEngine_: SearchEngine|null;
+  protected accessor defaultSearchProviderDataPref_:
+      chrome.settingsPrivate.PrefObject|undefined;
+  protected accessor searchEngines_: SearchEngine[] = [];
+  protected accessor showSearchEngineListDialog_: boolean = false;
+  protected accessor defaultSearchEngine_: SearchEngine|null = null;
+  protected accessor searchSettingsUpdateEnabled_: boolean =
+      loadTimeData.getBoolean('searchSettingsUpdate');
+  protected accessor searchPageTitle_: string = '';
+  protected accessor confirmationToastLabel_: string = '';
+
   private browserProxy_: SearchEnginesBrowserProxy =
       SearchEnginesBrowserProxyImpl.getInstance();
 
-  // Whether we need to set the icon size to large because they are loaded
-  // in the binary or smaller because we get them from the favicon service.
-  private isEeaChoiceCountry_: boolean =
-      loadTimeData.getBoolean('isEeaChoiceCountry');
+  override connectedCallback() {
+    super.connectedCallback();
 
-  declare private confirmationToastLabel_: string;
+    this.mirrorPref(
+        'default_search_provider_data.template_url_data',
+        'defaultSearchProviderDataPref_');
 
-  override ready() {
-    super.ready();
+    if (this.searchSettingsUpdateEnabled_) {
+      // Only regional search engines and the default engine should be visible
+      // in the search engine list dialog. No need to sort these since the
+      // `activeSiteShortcuts` are already in the expected order (sorted
+      // regional search engines first, then default engine if it is not in the
+      // list).
+      const updateSearchEngines =
+          (categorizedTemplateUrls: CategorizedTemplateUrls) => {
+            this.searchEngines_ =
+                categorizedTemplateUrls.activeSiteShortcuts.filter(
+                    engine => engine.isPrepopulated || engine.default);
+          };
+      this.browserProxy_.getCategorizedTemplateUrls().then(updateSearchEngines);
+      this.addWebUiListener('search-engines-changed', updateSearchEngines);
+      return;
+    }
 
-    // Omnibox search engine
     const updateSearchEngines = (searchEngines: SearchEnginesInfo) => {
       this.searchEngines_ = searchEngines.defaults;
     };
@@ -95,76 +122,95 @@ export class SettingsSearchPageElement extends SettingsSearchPageElementBase {
     this.addWebUiListener('search-engines-changed', updateSearchEngines);
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.setFaviconSize_();
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+
+    if (changedPrivateProperties.has('searchEngines_')) {
+      this.defaultSearchEngine_ = this.computeDefaultSearchEngine_();
+    }
+
+    if (changedPrivateProperties.has('searchSettingsUpdateEnabled_')) {
+      this.searchPageTitle_ = this.computeSearchPageTitle_();
+    }
   }
 
-  private onDisableExtension_() {
-    this.dispatchEvent(new CustomEvent('refresh-pref', {
-      bubbles: true,
-      composed: true,
-      detail: 'default_search_provider.enabled',
-    }));
+  protected onDisableExtensionClick_() {
+    this.fire('refresh-pref', 'default_search_provider.enabled');
   }
 
-  private onManageSearchEnginesClick_() {
+  protected onManageSearchEnginesClick_() {
+    this.browserProxy_.recordSearchEnginesPageHistogram(
+        SearchEnginesInteractions.SUBPAGE_NAVIGATED);
     Router.getInstance().navigateTo(routes.SEARCH_ENGINES);
   }
 
-  private isDefaultSearchControlledByPolicy_(
-      pref: chrome.settingsPrivate.PrefObject): boolean {
-    return pref.controlledBy ===
+  protected isDefaultSearchControlledByPolicy_(): boolean {
+    return !!this.defaultSearchProviderDataPref_ &&
+        this.defaultSearchProviderDataPref_.controlledBy ===
         chrome.settingsPrivate.ControlledBy.USER_POLICY;
   }
 
-  private isDefaultSearchEngineEnforced_(
-      pref: chrome.settingsPrivate.PrefObject): boolean {
-    return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED;
+  protected isDefaultSearchEngineEnforced_(): boolean {
+    return !!this.defaultSearchProviderDataPref_ &&
+        this.defaultSearchProviderDataPref_.enforcement ===
+        chrome.settingsPrivate.Enforcement.ENFORCED;
   }
 
-  private computeDefaultSearchEngine_() {
+  private computeSearchPageTitle_(): string {
+    return this.i18n(
+        this.searchSettingsUpdateEnabled_ ? 'defaultSearch' :
+                                            'searchPageTitle');
+  }
+
+  private computeDefaultSearchEngine_(): SearchEngine|null {
     if (!this.searchEngines_.length) {
       return null;
     }
 
-    return this.searchEngines_.find(engine => engine.default)!;
+    return this.searchEngines_.find(engine => engine.default) || null;
   }
 
-  private onOpenDialogButtonClick_() {
+  protected onOpenDialogButtonClick_() {
     this.showSearchEngineListDialog_ = true;
     chrome.metricsPrivate.recordUserAction('ChooseDefaultSearchEngine');
   }
 
-  private onDefaultSearchEngineChangedInDialog_(e: CustomEvent) {
+  protected onSearchEngineChanged_(
+      e: CustomEvent<{searchEngine: SearchEngine}>) {
     this.confirmationToastLabel_ = this.i18n(
         'searchEnginesConfirmationToastLabel', e.detail.searchEngine.name);
-    this.shadowRoot!.querySelector<CrToastElement>(
-                        '#confirmationToast')!.show();
+    const confirmationToast =
+        this.shadowRoot.querySelector<CrToastElement>('#confirmationToast');
+    assert(confirmationToast);
+    confirmationToast.show();
   }
 
-  private onSearchEngineListDialogClose_() {
+  protected onSearchEngineListDialogClose_() {
     this.showSearchEngineListDialog_ = false;
-  }
-
-  private setFaviconSize_() {
-    this.style.setProperty(
-        '--favicon-size', this.isEeaChoiceCountry_ ? '24px' : '16px');
   }
 
   // SettingsViewMixin implementation.
   override getFocusConfig() {
-    return new Map([
-      [routes.SEARCH_ENGINES.path, '#enginesSubpageTrigger'],
-    ]);
+    const map = new Map();
+
+    if (!this.searchSettingsUpdateEnabled_) {
+      map.set(routes.SEARCH_ENGINES.path, '#enginesSubpageTrigger');
+    }
+    return map;
   }
 
   // SettingsViewMixin implementation.
   override getAssociatedControlFor(childViewId: string): HTMLElement {
+    assert(!this.searchSettingsUpdateEnabled_);
     assert(childViewId === 'searchEngines');
     const control =
-        this.shadowRoot!.querySelector<HTMLElement>('#enginesSubpageTrigger');
-    assert(control);
+        this.shadowRoot.querySelector<HTMLElement>('#enginesSubpageTrigger');
+    assert(
+        control,
+        `Failed to find associated control for child '${childViewId}'`);
     return control;
   }
 }

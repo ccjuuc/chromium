@@ -52,6 +52,10 @@
 #include "chrome/installer/util/google_update_settings.h"
 #endif
 
+#if BUILDFLAG(CHROME_FOR_TESTING)
+#include "chrome/browser/chrome_for_testing/config.h"
+#endif
+
 namespace component_updater {
 namespace {
 
@@ -90,6 +94,9 @@ class ChromeConfigurator : public update_client::Configurator {
   std::optional<bool> IsMachineExternallyManaged() const override;
   update_client::UpdaterStateProvider GetUpdaterStateProvider() const override;
   scoped_refptr<update_client::CrxCache> GetCrxCache() const override;
+#if BUILDFLAG(CHROME_FOR_TESTING)
+  std::vector<std::string> GetRequiredComponents() const override;
+#endif
   bool IsConnectionMetered() const override;
 
  private:
@@ -313,6 +320,13 @@ std::optional<base::FilePath> ChromeConfigurator::GetBackgroundDownloaderCache()
              ? std::optional<base::FilePath>(path.AppendASCII("download_cache"))
              : std::nullopt;
 }
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+std::vector<std::string> ChromeConfigurator::GetRequiredComponents() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return chrome_for_testing::GetRequiredComponents();
+}
+#endif
 
 bool ChromeConfigurator::IsConnectionMetered() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

@@ -98,7 +98,7 @@ class FromGWSNavigationAndKeepAliveRequestObserverTestBase
   }
 
   void enable_feature() {
-    static const FeaturesType enabled_features = {
+    const FeaturesType enabled_features = {
         {page_load_metrics::features::kBeaconLeakageLogging,
          {{"category_prefix", kRequestCategoryPrefix}}}};
     scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features, {});
@@ -120,8 +120,7 @@ TEST_F(MaybeFromGWSNavigationAndKeepAliveRequestObserverForWebContentsTest,
        FeatureDisabled) {
   disable_feature();
   EXPECT_THAT(
-      FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreateForWebContents(
-          web_contents()),
+      FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreate(web_contents()),
       IsNull());
 }
 
@@ -130,8 +129,7 @@ TEST_F(MaybeFromGWSNavigationAndKeepAliveRequestObserverForWebContentsTest,
   enable_feature();
 
   EXPECT_THAT(
-      FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreateForWebContents(
-          web_contents()),
+      FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreate(web_contents()),
       NotNull());
 }
 
@@ -139,10 +137,9 @@ TEST_F(MaybeFromGWSNavigationAndKeepAliveRequestObserverForWebContentsTest,
        NullWebContents) {
   enable_feature();
 
-  EXPECT_THAT(
-      FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreateForWebContents(
-          /*web_contents=*/nullptr),
-      IsNull());
+  EXPECT_THAT(FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreate(
+                  /*web_contents=*/nullptr),
+              IsNull());
 }
 
 class FromGWSNavigationAndKeepAliveRequestObserverTest
@@ -169,16 +166,14 @@ class FromGWSNavigationAndKeepAliveRequestObserverTest
 
   std::unique_ptr<FromGWSNavigationAndKeepAliveRequestObserver> CreateObserver()
       const {
-    return FromGWSNavigationAndKeepAliveRequestObserver::
-        MaybeCreateForWebContents(web_contents());
+    return FromGWSNavigationAndKeepAliveRequestObserver::MaybeCreate(
+        web_contents());
   }
 
   network::ResourceRequest CreateRequest(const GURL& url) {
     network::ResourceRequest request;
 
     request.url = url;
-    request.attribution_reporting_eligibility =
-        network::mojom::AttributionReportingEligibility::kEmpty;
     request.keepalive = true;
     request.keepalive_token = base::UnguessableToken::Create();
 
@@ -234,7 +229,7 @@ TEST_F(FromGWSNavigationAndKeepAliveRequestObserverTest,
   auto navigation_target = GetCategoryUrl(kTestNonGoogleSearchUrl, category);
   auto handle = CreateMockNavigationHandle(navigation_target);
   handle->set_initiator_frame_token(&main_rfh()->GetFrameToken());
-  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetDeprecatedID());
+  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetID());
 
   EXPECT_CALL(*tracker(), TrackNavigation).Times(0);
   EXPECT_CALL(*tracker(), TrackKeepAliveRequest).Times(0);
@@ -255,7 +250,7 @@ TEST_F(FromGWSNavigationAndKeepAliveRequestObserverTest,
   auto navigation_target = GURL(kTestNonGoogleSearchUrl);
   auto handle = CreateMockNavigationHandle(navigation_target);
   handle->set_initiator_frame_token(&main_rfh()->GetFrameToken());
-  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetDeprecatedID());
+  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetID());
 
   EXPECT_CALL(*tracker(), TrackNavigation).Times(0);
   EXPECT_CALL(*tracker(), TrackKeepAliveRequest).Times(0);
@@ -274,7 +269,7 @@ TEST_F(FromGWSNavigationAndKeepAliveRequestObserverTest, DidStartNavigation) {
   auto navigation_target = GetCategoryUrl(kTestNonGoogleSearchUrl, category);
   auto handle = CreateMockNavigationHandle(navigation_target);
   handle->set_initiator_frame_token(&main_rfh()->GetFrameToken());
-  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetDeprecatedID());
+  handle->set_initiator_process_id(main_rfh()->GetProcess()->GetID());
 
   EXPECT_CALL(*tracker(), TrackNavigation(Eq(main_rfh()->GetGlobalId()), Eq(10),
                                           Eq(main_rfh()->GetPageUkmSourceId()),

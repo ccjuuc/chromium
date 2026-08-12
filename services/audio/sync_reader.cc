@@ -5,6 +5,7 @@
 #include "services/audio/sync_reader.h"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <string>
 #include <utility>
@@ -70,25 +71,31 @@ SyncReader::SyncReader(
       base::CancelableSyncSocket::CreatePair(&socket_, foreign_socket)) {
     auto buffer_span = shared_memory_mapping_.GetMemoryAsSpan<uint8_t>();
     auto audio_data =
-        buffer_span.subspan<sizeof(media::AudioInputBufferParameters)>();
+        buffer_span.subspan<sizeof(media::AudioOutputBufferParameters)>();
     CHECK_EQ(audio_data.size(), output_bus_buffer_size_);
 
     auto* const buffer =
         shared_memory_mapping_.GetMemoryAs<media::AudioOutputBuffer>();
     CHECK_EQ(audio_data.data(), buffer->audio);
+    buffer->params.cumulative_glitch_duration_us = 0;
+    buffer->params.cumulative_glitch_count = 0;
 
     output_bus_ = media::AudioBus::WrapMemory(params, audio_data);
     output_bus_->Zero();
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
     output_bus_->set_is_bitstream_format(params.IsBitstreamFormat());
+#else
+    CHECK(!params.IsBitstreamFormat());
+#endif
   }
 }
 
 SyncReader::~SyncReader() {
   OutputGlitchCounter::LogStats log_stats = glitch_counter_->GetLogStats();
 
-  TRACE_EVENT_INSTANT2("audio", "~SyncReader", TRACE_EVENT_SCOPE_THREAD,
-                       "Missed callbacks", log_stats.miss_count_,
-                       "Total callbacks", log_stats.callback_count_);
+  TRACE_EVENT_INSTANT("audio", "~SyncReader", "Missed callbacks",
+                      log_stats.miss_count_, "Total callbacks",
+                      log_stats.callback_count_);
 
   log_callback_.Run(base::StringPrintf(
       "ASR: number of detected audio glitches: %" PRIuS " out of %" PRIuS,
@@ -127,25 +134,17 @@ void SyncReader::RequestMoreData(base::TimeDelta delay,
   buffer->params.delay_timestamp_us =
       (delay_timestamp - base::TimeTicks()).InMicroseconds();
   // Add platform glitches to the accumulated glitch info.
-  pending_glitch_info_ += glitch_info;
-  buffer->params.glitch_duration_us =
-      pending_glitch_info_.duration.InMicroseconds();
-  buffer->params.glitch_count = pending_glitch_info_.count;
+  pending_glitch_info_.Add(glitch_info);
+  media::AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(
+      buffer->params, pending_glitch_info_.GetAndReset());
 
   // Zero out the entire output buffer to avoid stuttering/repeating-buffers
   // in the anomalous case if the renderer is unable to keep up with real-time.
   output_bus_->Zero();
 
-  uint32_t control_signal = 0;
-  if (delay.is_max()) {
-    // std::numeric_limits<uint32_t>::max() is a special signal which is
-    // returned after the browser stops the output device in response to a
-    // renderer side request.
-    control_signal = std::numeric_limits<uint32_t>::max();
-  }
-
-  size_t sent_bytes = socket_.Send(base::byte_span_from_ref(control_signal));
-  if (sent_bytes != sizeof(control_signal)) {
+  constexpr uint32_t kControlSignal = 0;
+  size_t sent_bytes = socket_.Send(base::byte_span_from_ref(kControlSignal));
+  if (sent_bytes != sizeof(kControlSignal)) {
     // Ensure we don't log consecutive errors as this can lead to a large
     // amount of logs.
     if (!had_socket_error_) {
@@ -154,13 +153,11 @@ void SyncReader::RequestMoreData(base::TimeDelta delay,
           "ASR: No room in socket buffer.";
       PLOG(WARNING) << socket_send_failure_message;
       log_callback_.Run(socket_send_failure_message);
-      TRACE_EVENT_INSTANT0("audio", socket_send_failure_message,
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("audio",
+                          perfetto::StaticString(socket_send_failure_message));
     }
   } else {
     had_socket_error_ = false;
-    // We have successfully passed on the glitch info, now reset it.
-    pending_glitch_info_ = {};
     // The AudioDeviceThread will only increase its own index if the socket
     // write succeeds, so only increase our own index on successful writes in
     // order not to get out of sync.
@@ -182,7 +179,7 @@ bool SyncReader::Read(media::AudioBus* dest, bool is_mixing) {
     }
     dest->Zero();
     // Add IPC glitch to the accumulated glitch info.
-    pending_glitch_info_ += read_timeout_glitch_;
+    pending_glitch_info_.Add(read_timeout_glitch_);
     return false;
   }
 
@@ -193,6 +190,7 @@ bool SyncReader::Read(media::AudioBus* dest, bool is_mixing) {
     return true;
   }
 
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
   if (output_bus_->is_bitstream_format()) {
     // For bitstream formats, we need the real data size and PCM frame count.
     auto* const buffer =
@@ -209,6 +207,7 @@ bool SyncReader::Read(media::AudioBus* dest, bool is_mixing) {
     output_bus_->CopyTo(dest);
     return true;
   }
+#endif
 
   // Copy and clip data coming across the shared memory since it's untrusted.
   output_bus_->CopyAndClipTo(dest);
@@ -216,8 +215,8 @@ bool SyncReader::Read(media::AudioBus* dest, bool is_mixing) {
 }
 
 void SyncReader::Close() {
-  uint32_t exit_signal = std::numeric_limits<uint32_t>::max() - 1;
-  socket_.Send(base::byte_span_from_ref(exit_signal));
+  constexpr uint32_t kExitSignal = std::numeric_limits<uint32_t>::max() - 1;
+  socket_.Send(base::byte_span_from_ref(kExitSignal));
 
   socket_.Close();
   output_bus_.reset();
@@ -262,8 +261,7 @@ bool SyncReader::WaitUntilDataIsReady() {
   // Receive timed out or another error occurred.  Receive can timeout if the
   // renderer is unable to deliver audio data within the allotted time.
   if (!bytes_received || renderer_buffer_index != buffer_index_) {
-    TRACE_EVENT_INSTANT0("audio", "SyncReader::Read timed out",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("audio", "SyncReader::Read timed out");
 
     base::TimeDelta time_since_start = base::TimeTicks::Now() - start_time;
     base::UmaHistogramCustomTimes("Media.AudioOutputControllerDataNotReady",

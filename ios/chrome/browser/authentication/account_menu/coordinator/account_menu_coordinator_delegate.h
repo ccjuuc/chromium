@@ -4,10 +4,14 @@
 
 #ifndef IOS_CHROME_BROWSER_AUTHENTICATION_ACCOUNT_MENU_COORDINATOR_ACCOUNT_MENU_COORDINATOR_DELEGATE_H_
 #define IOS_CHROME_BROWSER_AUTHENTICATION_ACCOUNT_MENU_COORDINATOR_ACCOUNT_MENU_COORDINATOR_DELEGATE_H_
+
+#import <Foundation/Foundation.h>
+
 @class AccountMenuCoordinator;
 
 @protocol AccountMenuCoordinatorDelegate <NSObject>
 
+// Requests the delegate to synchronously stop the account menu.
 - (void)accountMenuCoordinatorWantsToBeStopped:
     (AccountMenuCoordinator*)coordinator;
 

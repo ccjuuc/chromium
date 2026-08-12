@@ -20,7 +20,6 @@
 #include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -90,7 +89,6 @@ StartParams GetPopulatedStartParams() {
 UpgradeParams GetPopulatedUpgradeParams() {
   UpgradeParams params;
   params.account_id = "fee1dead";
-  params.skip_boot_completed_broadcast = true;
   params.packages_cache_mode = UpgradeParams::PackageCacheMode::COPY_ON_INIT;
   params.skip_gms_core_cache = true;
   params.management_transition = ArcManagementTransition::CHILD_TO_REGULAR;
@@ -1076,8 +1074,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_NeedPowerwashAdbResponse) {
   UpgradeArc(true);
   EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
   EXPECT_FALSE(is_system_shutdown().has_value());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_adb_sideloading=0"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_adb_sideloading=0"));
 }
 
 // Tests that adb sideloading is disabled by default.
@@ -1087,8 +1085,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_AdbSideloadingPropertyDefault) {
   UpgradeArc(true);
   EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
   EXPECT_FALSE(is_system_shutdown().has_value());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_adb_sideloading=0"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_adb_sideloading=0"));
 }
 
 // Tests that adb sideloading can be controlled via session_manager.
@@ -1099,8 +1097,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_AdbSideloadingPropertyEnabled) {
   UpgradeArc(true);
   EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
   EXPECT_FALSE(is_system_shutdown().has_value());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_adb_sideloading=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_adb_sideloading=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, UpgradeArc_AdbSideloadingPropertyDisabled) {
@@ -1110,8 +1108,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_AdbSideloadingPropertyDisabled) {
   UpgradeArc(true);
   EXPECT_GE(GetTestConciergeClient()->start_arc_vm_call_count(), 1);
   EXPECT_FALSE(is_system_shutdown().has_value());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_adb_sideloading=0"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_adb_sideloading=0"));
 }
 
 // Tests that "no serial" failure is handled properly.
@@ -1265,8 +1263,8 @@ TEST_F(ArcVmClientAdapterTest, StartUpgradeArc_DemoMode) {
   params.is_demo_session = true;
 
   UpgradeArcWithParams(true, std::move(params));
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.arc_demo_mode=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.arc_demo_mode=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, StartUpgradeArc_DisableMediaStoreMaintenance) {
@@ -2108,22 +2106,12 @@ TEST_F(ArcVmClientAdapterTest, ArcVmUseHugePagesEnabled) {
   EXPECT_TRUE(request.use_hugepages());
 }
 
-TEST_F(ArcVmClientAdapterTest, ArcVmLockGuestMemoryEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kLockGuestMemory);
-  StartParams start_params(GetPopulatedStartParams());
-  StartMiniArcWithParams(true, std::move(start_params));
-  const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_TRUE(request.lock_guest_memory());
-}
-
 TEST_F(ArcVmClientAdapterTest, ArcVmMemoryOptionsDisabled) {
   StartParams start_params(GetPopulatedStartParams());
   StartMiniArcWithParams(true, std::move(start_params));
   const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  // Verify that both options are disabled by default.
+  // Verify that options are disabled by default.
   EXPECT_FALSE(request.use_hugepages());
-  EXPECT_FALSE(request.lock_guest_memory());
 }
 
 // Test that StartArcVmRequest has no memory_mib field when kVmMemorySize is
@@ -2301,8 +2289,8 @@ TEST_F(ArcVmClientAdapterTest, ArcVmBlockApexDiskExists) {
   set_block_apex_path(base::FilePath(path));
   StartMiniArc();
   const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_TRUE(base::Contains(request.disks(), path,
-                             [](const auto& p) { return p.path(); }));
+  EXPECT_TRUE(std::ranges::contains(request.disks(), path,
+                                    [](const auto& p) { return p.path(); }));
 }
 
 // Test that the block apex disk path isn't included when it doesn't exist.
@@ -2310,8 +2298,8 @@ TEST_F(ArcVmClientAdapterTest, ArcVmNoBlockApexDisk) {
   constexpr const char path[] = "/opt/google/vms/android/apex/payload.img";
   StartMiniArc();
   const auto& request = GetTestConciergeClient()->start_arc_vm_request();
-  EXPECT_FALSE(base::Contains(request.disks(), path,
-                              [](const auto& p) { return p.path(); }));
+  EXPECT_FALSE(std::ranges::contains(request.disks(), path,
+                                     [](const auto& p) { return p.path(); }));
 }
 
 // Tests that OnConnectionReady() calls the ArcVmCompleteBoot call D-Bus method.
@@ -2372,8 +2360,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_EnableArcNearbyShare_Default) {
   UpgradeArcWithParams(/*expect_success=*/true, GetPopulatedUpgradeParams());
   EXPECT_EQ(boot_notification_server()->connection_count(), 2);
   EXPECT_FALSE(boot_notification_server()->received_data().empty());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_arc_nearby_share=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_arc_nearby_share=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, UpgradeArc_EnableArcNearbyShare_Enabled) {
@@ -2386,8 +2374,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_EnableArcNearbyShare_Enabled) {
   UpgradeArcWithParams(/*expect_success=*/true, upgrade_params);
   EXPECT_EQ(boot_notification_server()->connection_count(), 2);
   EXPECT_FALSE(boot_notification_server()->received_data().empty());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_arc_nearby_share=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_arc_nearby_share=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, UpgradeArc_EnableArcNearbyShare_Disabled) {
@@ -2400,8 +2388,8 @@ TEST_F(ArcVmClientAdapterTest, UpgradeArc_EnableArcNearbyShare_Disabled) {
   UpgradeArcWithParams(/*expect_success=*/true, upgrade_params);
   EXPECT_EQ(boot_notification_server()->connection_count(), 2);
   EXPECT_FALSE(boot_notification_server()->received_data().empty());
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.enable_arc_nearby_share=0"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.enable_arc_nearby_share=0"));
 }
 
 TEST_F(ArcVmClientAdapterTest,
@@ -2741,8 +2729,8 @@ TEST_F(ArcVmClientAdapterTest, ConvertUpgradeParams_SkipTtsCacheSetup) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.skip_tts_cache = true;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.skip_tts_cache=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.skip_tts_cache=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, ConvertUpgradeParams_EnableTtsCacheSetup) {
@@ -2750,8 +2738,8 @@ TEST_F(ArcVmClientAdapterTest, ConvertUpgradeParams_EnableTtsCacheSetup) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.skip_tts_cache = false;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.skip_tts_cache=0"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.skip_tts_cache=0"));
 }
 
 TEST_F(ArcVmClientAdapterTest, mglruReclaimEnabled) {
@@ -2789,8 +2777,8 @@ TEST_F(ArcVmClientAdapterTest, ArcLmkPerceptibleMinStateUpdateDisabled) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.enable_lmk_perceptible_min_state_update = false;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_FALSE(base::Contains(boot_notification_server()->received_data(),
-                              "ro.boot.arc.lmk.perceptible_min_state_update"));
+  EXPECT_FALSE(boot_notification_server()->received_data().contains(
+      "ro.boot.arc.lmk.perceptible_min_state_update"));
 }
 
 TEST_F(ArcVmClientAdapterTest, ArcLmkPerceptibleMinStateUpdateEnabled) {
@@ -2798,8 +2786,8 @@ TEST_F(ArcVmClientAdapterTest, ArcLmkPerceptibleMinStateUpdateEnabled) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.enable_lmk_perceptible_min_state_update = true;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.arc.lmk.perceptible_min_state_update=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.arc.lmk.perceptible_min_state_update=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, DefaultDexOptCacheSetup) {
@@ -2807,8 +2795,8 @@ TEST_F(ArcVmClientAdapterTest, DefaultDexOptCacheSetup) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.skip_tts_cache = false;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_FALSE(base::Contains(boot_notification_server()->received_data(),
-                              "ro.boot.skip_dexopt_cache"));
+  EXPECT_FALSE(boot_notification_server()->received_data().contains(
+      "ro.boot.skip_dexopt_cache"));
 }
 
 TEST_F(ArcVmClientAdapterTest, SkipDexOptCacheSetupArcT) {
@@ -2818,8 +2806,8 @@ TEST_F(ArcVmClientAdapterTest, SkipDexOptCacheSetupArcT) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.skip_dexopt_cache = true;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_TRUE(base::Contains(boot_notification_server()->received_data(),
-                             "ro.boot.skip_dexopt_cache=1"));
+  EXPECT_TRUE(boot_notification_server()->received_data().contains(
+      "ro.boot.skip_dexopt_cache=1"));
 }
 
 TEST_F(ArcVmClientAdapterTest, SkipDexOptCacheSetupArcR) {
@@ -2829,8 +2817,8 @@ TEST_F(ArcVmClientAdapterTest, SkipDexOptCacheSetupArcR) {
   UpgradeParams upgrade_params = GetPopulatedUpgradeParams();
   upgrade_params.skip_dexopt_cache = true;
   UpgradeArcWithParams(true, std::move(upgrade_params));
-  EXPECT_FALSE(base::Contains(boot_notification_server()->received_data(),
-                              "ro.boot.skip_dexopt_cache"));
+  EXPECT_FALSE(boot_notification_server()->received_data().contains(
+      "ro.boot.skip_dexopt_cache"));
 }
 
 TEST_F(ArcVmClientAdapterTest, VirtualSwapDevice_Enabled) {

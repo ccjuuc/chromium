@@ -16,10 +16,8 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/process.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -43,12 +41,10 @@
 #include "chrome/browser/resource_coordinator/time.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/graph/graph.h"
@@ -112,9 +108,7 @@ WebContents* TabManager::DiscardTabByExtension(content::WebContents* contents) {
     return nullptr;
   }
 
-  return DiscardTabImpl(
-      LifecycleUnitDiscardReason::EXTERNAL,
-      performance_manager::policies::kNonVisiblePagesUrgentProtectionTime);
+  return DiscardTabImpl(LifecycleUnitDiscardReason::EXTERNAL);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -141,7 +135,7 @@ bool TabManager::IsInternalPage(const GURL& url) {
 
 content::WebContents* TabManager::DiscardTabImpl(
     LifecycleUnitDiscardReason reason,
-    base::TimeDelta minimum_time_in_background_to_discard) {
+    bool ignore_recent_visibility) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   performance_manager::Graph* graph =
@@ -149,7 +143,7 @@ content::WebContents* TabManager::DiscardTabImpl(
   CHECK(graph);
   return performance_manager::policies::PageDiscardingHelper::GetFromGraph(
              graph)
-      ->DiscardAPage(reason, minimum_time_in_background_to_discard)
+      ->DiscardAPage(reason, ignore_recent_visibility)
       .first_content_after_discard;
 }
 

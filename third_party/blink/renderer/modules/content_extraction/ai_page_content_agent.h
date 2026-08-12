@@ -5,6 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CONTENT_EXTRACTION_AI_PAGE_CONTENT_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_CONTENT_EXTRACTION_AI_PAGE_CONTENT_AGENT_H_
 
+#include <cstdint>
+
+#include "base/containers/enum_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/stack_allocated.h"
 #include "base/types/pass_key.h"
@@ -20,13 +23,19 @@
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 #include "third_party/blink/renderer/platform/supplementable.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 
 namespace blink {
 class Document;
 class LayoutIFrame;
+class LayoutBox;
 class LayoutObject;
 class LocalFrame;
+class Node;
+#if DCHECK_IS_ON()
+class AutoBuildHelper;
+#endif
 
 // AIPageContent is responsible for handling requests for inner-text. It calls
 // to InnerTextBuilder to handle building of the text.
@@ -59,6 +68,8 @@ class MODULES_EXPORT AIPageContentAgent final
   // mojom::blink::AIPageContentAgent overrides.
   void GetAIPageContent(mojom::blink::AIPageContentOptionsPtr options,
                         GetAIPageContentCallback callback) override;
+  void GetImageBytes(int32_t dom_node_id,
+                     GetImageBytesCallback callback) override;
 
   // public for testing.
   mojom::blink::AIPageContentPtr GetAIPageContentInternal(
@@ -68,6 +79,13 @@ class MODULES_EXPORT AIPageContentAgent final
 
   String DumpContentNodeTreeForTest();
   String DumpContentNodeForTest(Node* node);
+
+#if DCHECK_IS_ON()
+  // Called by the DOMContentLoaded listener to kick off auto-build; this is
+  // only used by tests to ensure we run cleanly without triggering crashes or
+  // checks/dchecks.
+  void RunAutoBuildAfterDOMContentLoadedForTesting();
+#endif
 
  private:
   void GetAIPageContentSync(mojom::blink::AIPageContentOptionsPtr options,
@@ -85,6 +103,11 @@ class MODULES_EXPORT AIPageContentAgent final
     mojom::blink::AIPageContentPtr Build(LocalFrame& frame);
 
    private:
+    using NodeIdAttributeTypeAllowlist =
+        base::EnumSet<mojom::blink::AIPageContentAttributeType,
+                      mojom::blink::AIPageContentAttributeType::kRoot,
+                      mojom::blink::AIPageContentAttributeType::kMaxValue>;
+
     class RecursionData {
       STACK_ALLOCATED();
 
@@ -92,8 +115,17 @@ class MODULES_EXPORT AIPageContentAgent final
       RecursionData(const ComputedStyle& document_style);
 
       bool is_aria_disabled = false;
+      bool is_aria_hidden = false;
+      bool is_in_fixed_pos_subtree = false;
+      // The nearest overflow container clips descendants. It may or may not be
+      // user-scrollable, because `overflow:hidden` also creates a container.
+      const LayoutBox* nearest_overflow_container = nullptr;
+      // Once an overflow container cannot be reached, its descendants cannot
+      // be reached through that container either.
+      bool is_inside_unreachable_overflow_container = false;
       const ComputedStyle& document_style;
       int stack_depth = 0;
+      DOMNodeId accessibility_focused_node_id = kInvalidDOMNodeId;
     };
 
     bool actionable_mode() const {
@@ -101,14 +133,20 @@ class MODULES_EXPORT AIPageContentAgent final
              mojom::blink::AIPageContentMode::kActionableElements;
     }
     // Returns true if any descendant of `object` has a computed value of
-    // visible for `visibility`.
+    // visible for `visibility`. `ancestor_for_geometry_repair` is the nearest
+    // APC ancestor that started with an empty outer box.
     bool WalkChildren(const LayoutObject& object,
                       mojom::blink::AIPageContentNode& content_node,
-                      const RecursionData& recursion_data);
+                      const RecursionData& recursion_data,
+                      mojom::blink::AIPageContentNode*
+                          ancestor_for_geometry_repair = nullptr);
     void ProcessIframe(const LayoutIFrame& object,
                        mojom::blink::AIPageContentNode& content_node,
                        const RecursionData& recursion_data);
     mojom::blink::AIPageContentNodePtr MaybeGenerateContentNode(
+        const LayoutObject& object,
+        const RecursionData& recursion_data);
+    mojom::blink::AIPageContentNodePtr MaybeGenerateContentNodeImpl(
         const LayoutObject& object,
         const RecursionData& recursion_data);
     void AddPageInteractionInfo(const Document& document,
@@ -121,12 +159,11 @@ class MODULES_EXPORT AIPageContentAgent final
             frame_interaction_info);
     void MaybeAddPopupData(LocalFrame& frame,
                            mojom::blink::AIPageContentFrameData& frame_data);
-    void AddAriaRole(const LayoutObject& object,
-                     mojom::blink::AIPageContentAttributes& attributes);
     void AddNodeInteractionInfo(
         const LayoutObject& object,
         mojom::blink::AIPageContentAttributes& attributes,
-        bool is_aria_disabled) const;
+        bool is_aria_disabled,
+        bool is_aria_hidden);
     void AddInteractionInfoForHitTesting(
         const Node* node,
         mojom::blink::AIPageContentNodeInteractionInfo& interaction_info) const;
@@ -134,7 +171,8 @@ class MODULES_EXPORT AIPageContentAgent final
         const LocalFrame& frame,
         Vector<mojom::blink::AIPageContentMetaPtr>& meta_data) const;
     void AddNodeGeometry(const LayoutObject& object,
-                         mojom::blink::AIPageContentAttributes& attributes);
+                         mojom::blink::AIPageContentAttributes& attributes,
+                         DOMNodeId accessibility_focused_node_id);
     void AddAnnotatedRoles(const LayoutObject& object,
                            Vector<mojom::blink::AIPageContentAnnotatedRole>&
                                annotated_roles) const;
@@ -144,43 +182,73 @@ class MODULES_EXPORT AIPageContentAgent final
     // control. This includes both explicit association using for, or
     // implicit association when the input node is a descendant of the label
     // node.
-    void AddForDomNodeId(
+    void PopulateLabelForDomNodeId(
         const LayoutObject& object,
-        mojom::blink::AIPageContentAttributes& attributes) const;
-    bool IsGenericContainer(
+        mojom::blink::AIPageContentAttributes& attributes);
+    // Returns whether `attributes.dom_node_id` should be emitted in APC output.
+    //
+    // If `node_id_allowlist` is unset, emit all ids.
+    //
+    // Otherwise, emit ids for:
+    // 1. Actionable targets (`node_interaction_info` in actionable mode).
+    // 2. Metadata-linked nodes tracked in `interactive_dom_node_ids_` (focused
+    //    element, accessibility focus, selection endpoints, label-for targets,
+    //    popup openers).
+    // 3. Attribute types listed in `node_id_allowlist`.
+    // This method must not allocate a new DomNodeIds entry for nodes that are
+    // ultimately suppressed by policy. Callers should only mint new ids after
+    // this returns true.
+    bool ShouldEmitNodeIdForOutput(
+        const LayoutObject& object,
+        const mojom::blink::AIPageContentAttributes& attributes) const;
+    // Returns true when the caller policy allowlists this `attribute_type` for
+    // id emission.
+    bool IsNodeIdAttributeTypeAllowlisted(
+        mojom::blink::AIPageContentAttributeType attribute_type) const;
+    bool ShouldSkipSingleNode(
         const LayoutObject& object,
         const mojom::blink::AIPageContentAttributes& attributes) const;
 
+    DOMNodeId AddInteractiveNode(Node& node);
     void AddInteractiveNode(DOMNodeId dom_node_id);
     void ComputeHitTestableNodesInViewport(const LocalFrame& frame);
 
     void UpdateLifecycle(Document& document);
 
-    void TrackPasswordRedactionIfNeeded(
+    // Collects the visible bounding box for nodes that require redaction
+    // (e.g. passwords or masked elements) so they can be obscured in
+    // screenshots.
+    void CollectGeometryForRedactedNodes(
         const LayoutObject& object,
-        mojom::blink::AIPageContentAttributes& attributes,
+        mojom::blink::AIPageContentRedactionDecision redaction_decision,
         std::optional<gfx::Rect> visible_bounding_box = std::nullopt);
 
-    Vector<gfx::Rect> visible_bounding_box_for_passwords_;
+    bool ShouldAddNodeGeometry(
+        const LayoutObject& object,
+        const mojom::blink::AIPageContentAttributes& attributes,
+        DOMNodeId accessibility_focused_node_id) const;
 
-    // The set of nodes which are involved in a user interaction and must
-    // produce a ContentNode.
-    base::flat_set<DOMNodeId> interactive_dom_node_ids_;
+    Vector<gfx::Rect> visible_bounding_boxes_for_redaction_;
 
-    // If present, the node which is accessibility focused. This is used to
-    // determine which node to add geometry for in non-actionable mode.
-    DOMNodeId accessibility_focused_node_id_ = kInvalidDOMNodeId;
+    // The set of node ids that must always be emitted in APC output for
+    // round-trippable metadata and interaction flows.
+    HashSet<DOMNodeId, IntWithZeroKeyHashTraits<DOMNodeId>>
+        interactive_dom_node_ids_;
 
     const raw_ref<const mojom::blink::AIPageContentOptions> options_;
 
-    HashMap<DOMNodeId, int32_t, IntWithZeroKeyHashTraits<DOMNodeId>>
-        dom_node_to_z_order_;
+    // Keyed by Node identity within a single extraction pass.
+    HeapHashMap<Member<const Node>, int32_t> dom_node_to_z_order_;
 
     // Whether the stack depth has exceeded the max tree depth.
     bool stack_depth_exceeded_ = false;
 
     // List of nodes marked as isAccessibleForFree=false.
     PaidContent paid_content_;
+
+    // Built once per extraction so node-id policy checks do not rescan the
+    // allowlisted attribute types for every content node in the tree.
+    NodeIdAttributeTypeAllowlist allowlisted_attribute_types_;
   };
 
   void Bind(mojo::PendingReceiver<mojom::blink::AIPageContentAgent> receiver);
@@ -194,9 +262,10 @@ class MODULES_EXPORT AIPageContentAgent final
   Vector<base::OnceClosure> async_extraction_tasks_;
 
 #if DCHECK_IS_ON()
-  void MaybeRunAutomaticActionableExtraction();
-  // Should content extraction tree be built automatically on page load.
-  bool is_auto_actionable_extraction_pending_ = false;
+  void ListenForDOMContentLoadedForAutoBuild();
+  AutoBuildHelper* GetOrCreateAutoBuildHelper();
+  Member<AutoBuildHelper> auto_build_helper_;
+  friend class AutoBuildHelper;
 #endif
 };
 

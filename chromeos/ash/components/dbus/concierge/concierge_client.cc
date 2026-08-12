@@ -359,6 +359,12 @@ class ConciergeClientImpl : public ConciergeClient {
         base::BindOnce(&ConciergeClientImpl::OnSignalConnected,
                        weak_ptr_factory_.GetWeakPtr()));
     concierge_proxy_->ConnectToSignal(
+        concierge::kVmConciergeInterface, concierge::kVmInstallStateSignal,
+        base::BindRepeating(&ConciergeClientImpl::OnVmInstallStateSignal,
+                            weak_ptr_factory_.GetWeakPtr()),
+        base::BindOnce(&ConciergeClientImpl::OnSignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
+    concierge_proxy_->ConnectToSignal(
         concierge::kVmConciergeInterface, concierge::kDiskImageProgressSignal,
         base::BindRepeating(&ConciergeClientImpl::OnDiskImageProgress,
                             weak_ptr_factory_.GetWeakPtr()),
@@ -546,6 +552,19 @@ class ConciergeClientImpl : public ConciergeClient {
     }
   }
 
+  void OnVmInstallStateSignal(dbus::Signal* signal) {
+    vm_tools::concierge::VmInstallStateSignal vm_install_state_signal;
+    if (!dbus::MessageReader(signal).PopArrayOfBytesAsProto(
+            &vm_install_state_signal)) {
+      LOG(ERROR) << "Failed to parse VmInstallStateSignal";
+      return;
+    }
+
+    for (auto& observer : vm_observer_list_) {
+      observer.OnVmInstallState(vm_install_state_signal);
+    }
+  }
+
   void OnDiskImageProgress(dbus::Signal* signal) {
     DCHECK_EQ(signal->GetInterface(), concierge::kVmConciergeInterface);
     DCHECK_EQ(signal->GetMember(), concierge::kDiskImageProgressSignal);
@@ -580,6 +599,8 @@ class ConciergeClientImpl : public ConciergeClient {
       is_vm_stopping_signal_connected_ = is_connected;
     } else if (signal_name == concierge::kVmSwappingSignal) {
       // DO NOTHING.
+    } else if (signal_name == concierge::kVmInstallStateSignal) {
+      // DO NOTHING.
     } else {
       NOTREACHED();
     }
@@ -589,10 +610,10 @@ class ConciergeClientImpl : public ConciergeClient {
 
   base::ObserverList<Observer> observer_list_{
       ConciergeClient::kObserverListPolicy};
-  base::ObserverList<VmObserver>::UncheckedAndDanglingUntriaged
-      vm_observer_list_{ConciergeClient::kObserverListPolicy};
-  base::ObserverList<DiskImageObserver>::UncheckedAndDanglingUntriaged
-      disk_image_observer_list_{ConciergeClient::kObserverListPolicy};
+  base::ObserverList<VmObserver> vm_observer_list_{
+      ConciergeClient::kObserverListPolicy};
+  base::ObserverList<DiskImageObserver> disk_image_observer_list_{
+      ConciergeClient::kObserverListPolicy};
 
   bool is_vm_started_signal_connected_ = false;
   bool is_vm_stopped_signal_connected_ = false;

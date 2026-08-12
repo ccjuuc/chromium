@@ -13,6 +13,7 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "extensions/common/manifest_handlers/content_scripts_handler.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/externally_connectable.h"
 #include "extensions/common/manifest_handlers/permissions_parser.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -327,10 +328,10 @@ TEST(ExtensionBuilderTest, Background) {
 }
 
 TEST(ExtensionBuilderTest, MergeManifest) {
-  auto connectable = base::Value::Dict().Set(
-      "matches", base::Value::List().Append("*://example.com/*"));
-  base::Value::Dict connectable_value =
-      base::Value::Dict().Set("externally_connectable", std::move(connectable));
+  auto connectable = base::DictValue().Set(
+      "matches", base::ListValue().Append("*://example.com/*"));
+  base::DictValue connectable_value =
+      base::DictValue().Set("externally_connectable", std::move(connectable));
   scoped_refptr<const Extension> extension =
       ExtensionBuilder("extra")
           .MergeManifest(std::move(connectable_value))
@@ -348,18 +349,18 @@ TEST(ExtensionBuilderTest, IDUniqueness) {
 }
 
 TEST(ExtensionBuilderTest, SetManifestAndMergeManifest) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", "some name")
                       .Set("manifest_version", 2)
                       .Set("description", "some description");
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetManifest(std::move(manifest))
-          .MergeManifest(base::Value::Dict().Set("version", "0.1"))
+          .MergeManifest(base::DictValue().Set("version", "0.1"))
           .Build();
   EXPECT_EQ("some name", extension->name());
   EXPECT_EQ(2, extension->manifest_version());
-  EXPECT_EQ("some description", extension->description());
+  EXPECT_EQ("some description", DescriptionInfo::GetDescription(*extension));
   EXPECT_EQ("0.1", extension->version().GetString());
 }
 
@@ -367,7 +368,7 @@ TEST(ExtensionBuilderTest, MergeManifestOverridesValues) {
   {
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("foo")
-            .MergeManifest(base::Value::Dict().Set("version", "52.0.9"))
+            .MergeManifest(base::DictValue().Set("version", "52.0.9"))
             .Build();
     // MergeManifest() should have overwritten the default 0.1 value for
     // version.
@@ -375,7 +376,7 @@ TEST(ExtensionBuilderTest, MergeManifestOverridesValues) {
   }
 
   {
-    auto manifest = base::Value::Dict()
+    auto manifest = base::DictValue()
                         .Set("name", "some name")
                         .Set("manifest_version", 2)
                         .Set("description", "some description")
@@ -383,7 +384,7 @@ TEST(ExtensionBuilderTest, MergeManifestOverridesValues) {
     scoped_refptr<const Extension> extension =
         ExtensionBuilder()
             .SetManifest(std::move(manifest))
-            .MergeManifest(base::Value::Dict().Set("version", "42.1"))
+            .MergeManifest(base::DictValue().Set("version", "42.1"))
             .Build();
     EXPECT_EQ("42.1", extension->version().GetString());
   }

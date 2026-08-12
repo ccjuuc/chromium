@@ -380,9 +380,9 @@ TEST(VideoLayerImplTest, NativeYUVFrameGeneratesYUVQuad) {
 
   auto si_size = gfx::Size(10, 10);
   gpu::SharedImageMetadata metadata;
-  metadata.format = viz::SinglePlaneFormat::kRGBA_8888;
+  metadata.format = viz::MultiPlaneFormat::kI420;
   metadata.size = si_size;
-  metadata.color_space = gfx::ColorSpace::CreateSRGB();
+  metadata.color_space = gfx::ColorSpace::CreateREC709();
   metadata.surface_origin = kTopLeft_GrSurfaceOrigin;
   metadata.alpha_type = kOpaque_SkAlphaType;
   metadata.usage = gpu::SharedImageUsageSet();
@@ -390,10 +390,9 @@ TEST(VideoLayerImplTest, NativeYUVFrameGeneratesYUVQuad) {
       gpu::ClientSharedImage::CreateForTesting(metadata);
 
   scoped_refptr<media::VideoFrame> video_frame =
-      media::VideoFrame::WrapSharedImage(media::PIXEL_FORMAT_I420, shared_image,
-                                         gpu::SyncToken(), base::DoNothing(),
-                                         si_size, gfx::Rect(si_size), si_size,
-                                         base::TimeDelta());
+      media::VideoFrame::WrapSharedImage(
+          media::PIXEL_FORMAT_I420, shared_image, gpu::SyncToken(),
+          base::DoNothing(), gfx::Rect(si_size), si_size, base::TimeDelta());
   ASSERT_TRUE(video_frame);
   video_frame->metadata().allow_overlay = true;
   FakeVideoFrameProvider provider;
@@ -427,7 +426,7 @@ TEST(VideoLayerImplTest, NativeARGBFrameGeneratesTextureQuad) {
 
   auto si_size = gfx::Size(10, 10);
   gpu::SharedImageMetadata metadata;
-  metadata.format = viz::SinglePlaneFormat::kRGBA_8888;
+  metadata.format = viz::SinglePlaneFormat::kBGRA_8888;
   metadata.size = si_size;
   metadata.color_space = gfx::ColorSpace::CreateSRGB();
   metadata.surface_origin = kTopLeft_GrSurfaceOrigin;
@@ -437,10 +436,9 @@ TEST(VideoLayerImplTest, NativeARGBFrameGeneratesTextureQuad) {
       gpu::ClientSharedImage::CreateForTesting(metadata);
 
   scoped_refptr<media::VideoFrame> video_frame =
-      media::VideoFrame::WrapSharedImage(media::PIXEL_FORMAT_ARGB, shared_image,
-                                         gpu::SyncToken(), base::DoNothing(),
-                                         si_size, gfx::Rect(si_size), si_size,
-                                         base::TimeDelta());
+      media::VideoFrame::WrapSharedImage(
+          media::PIXEL_FORMAT_ARGB, shared_image, gpu::SyncToken(),
+          base::DoNothing(), gfx::Rect(si_size), si_size, base::TimeDelta());
   ASSERT_TRUE(video_frame);
   video_frame->metadata().allow_overlay = true;
   FakeVideoFrameProvider provider;

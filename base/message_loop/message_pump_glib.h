@@ -94,14 +94,14 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
   // returns whether or not HandleDispatch should be called. HandleDispatch is
   // called if HandleCheck returned true.
   int HandlePrepare();
-  bool HandleCheck();
+  gboolean HandleCheck();
   void HandleDispatch();
 
   // Very similar to the above, with the key difference that these functions are
   // only used to track work items and never indicate work is available, and
   // poll indefinitely.
   void HandleObserverPrepare();
-  bool HandleObserverCheck();
+  gboolean HandleObserverCheck();
 
   // Overridden from MessagePump:
   void Run(Delegate* delegate) override;
@@ -110,6 +110,7 @@ class BASE_EXPORT MessagePumpGlib : public MessagePump,
   void ScheduleDelayedWork(
       const Delegate::NextWorkInfo& next_work_info) override;
   IOWatcher* GetIOWatcher() override;
+  bool IsAsyncIOSupported() override;
 
   // Internal methods used for processing the FdWatchSource callbacks. As for
   // main pump callbacks, they are public for simplicity but should not be used

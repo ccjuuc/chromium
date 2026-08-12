@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {CrInfiniteListElement} from '//resources/cr_elements/cr_infinite_list/cr_infinite_list.js';
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
+import type {HistoryEntry} from 'chrome://resources/cr_components/history/history.mojom-webui.js';
 
 import type {HistoryListElement} from './history_list.js';
+
+export interface TemplatizedDomNodes {
+  infiniteList: CrInfiniteListElement<HistoryEntry>;
+}
 
 export function getHtml(this: HistoryListElement) {
   // clang-format off
@@ -20,23 +26,26 @@ export function getHtml(this: HistoryListElement) {
         role="grid" aria-rowcount="${this.historyData_.length}"
         ?hidden="${!this.hasResults_()}"
         .scrollTarget="${this.scrollTarget}" .scrollOffset="${this.scrollOffset}"
-        .template='${(item: any, index: number, tabindex: number) => html`
-            <history-item tabindex="${tabindex}"
-                .item="${item}"
-                ?selected="${item.selected}"
-                ?is-card-start="${this.isCardStart_(item, index)}"
-                ?is-card-end="${this.isCardEnd_(item, index)}"
-                ?has-time-gap="${this.needsTimeGap_(item, index)}"
-                .searchTerm="${this.searchedTerm}"
-                .numberOfItems="${this.historyData_.length}"
-                .index="${index}"
-                .focusRowIndex="${index}"
-                .listTabIndex="${tabindex}"
-                .lastFocused="${this.lastFocused_}"
-                @last-focused-changed="${this.onLastFocusedChanged_}"
-                .listBlurred="${this.listBlurred_}"
-                @list-blurred-changed="${this.onListBlurredChanged_}">
-            </history-item>`}'>
+        @restore-list-focus="${this.onRestoreListFocus_}"
+        .template='${(item: HistoryEntry, index: number, tabindex: number) =>
+            html`
+              <history-item tabindex="${tabindex}"
+                  .item="${item}"
+                  ?selected="${item.selected}"
+                  ?is-card-start="${this.isCardStart_(item, index)}"
+                  ?is-card-end="${this.isCardEnd_(item, index)}"
+                  ?has-time-gap="${this.needsTimeGap_(item, index)}"
+                  .searchTerm="${this.searchedTerm}"
+                  .numberOfItems="${this.historyData_.length}"
+                  .index="${index}"
+                  .focusRowIndex="${index}"
+                  .listTabIndex="${tabindex}"
+                  .lastFocused="${this.lastFocused_}"
+                  @last-focused-changed="${this.onLastFocusedChanged_}"
+                  .listBlurred="${this.listBlurred_}"
+                  @list-blurred-changed="${this.onListBlurredChanged_}">
+              </history-item>
+            `}'>
     </cr-infinite-list>
 
     <cr-lazy-render-lit id="dialog" .template='${() => html`
@@ -63,12 +72,19 @@ export function getHtml(this: HistoryListElement) {
     </cr-lazy-render-lit>
 
     <cr-lazy-render-lit id="sharedMenu" .template='${() => html`
-        <cr-action-menu role-description="$i18n{actionMenuDescription}">
+        <cr-action-menu auto-close-on-focusout
+            role-description="$i18n{actionMenuDescription}">
           <button id="menuMoreButton" class="dropdown-item"
               ?hidden="${!this.canSearchMoreFromSite_()}"
               @click="${this.onMoreFromSiteClick_}">
             $i18n{moreFromSite}
           </button>
+          <button id="menuReviewGeminiActivityButton" class="dropdown-item"
+              ?hidden="${!this.canShowReviewGeminiActivity_()}"
+              @click="${this.onReviewGeminiActivityClick_}">
+            $i18n{reviewGeminiActivity}
+          </button>
+          <div class="hr" ?hidden="${!this.canShowReviewGeminiActivity_()}"></div>
           <button id="menuRemoveButton" class="dropdown-item"
               ?hidden="${!this.canDeleteHistory_}"
               ?disabled="${this.pendingDelete}"

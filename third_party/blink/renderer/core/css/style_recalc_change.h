@@ -161,6 +161,9 @@ class CORE_EXPORT StyleRecalcChange {
     return {propagate_,
             static_cast<Flags>(flags_ | kRecalcDescendantAnchoredContainers)};
   }
+  StyleRecalcChange ForceRecalcDescendantContainers() const {
+    return {propagate_, static_cast<Flags>(flags_ | kRecalcContainerFlags)};
+  }
   StyleRecalcChange ForceRecalcDescendantContentVisibility() const {
     return {propagate_,
             static_cast<Flags>(flags_ | kRecalcDescendantContentVisibility)};
@@ -201,8 +204,8 @@ class CORE_EXPORT StyleRecalcChange {
   // root-font-size changes and kRecalcDescendants that happens for other
   // reasons.
   //
-  // See call to `UpdateRemUnits` in `Element::RecalcOwnStyle`.
-  bool RemUnitsMaybeChanged() const { return RecalcDescendants(); }
+  // See call to `UpdateRootRelativeUnits` in `Element::RecalcOwnStyle`.
+  bool RootRelativeUnitsMaybeChanged() const { return RecalcDescendants(); }
 
   // If true, the values of container-relative units may have changed.
   //

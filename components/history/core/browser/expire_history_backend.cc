@@ -16,11 +16,12 @@
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/favicon/core/favicon_database.h"
 #include "components/history/core/browser/features.h"
@@ -131,7 +132,7 @@ constexpr base::TimeDelta kExpirationSleepWakeupThreshold = base::Hours(1);
 const int kClearOnDemandFaviconsIntervalHours = 24;
 
 bool IsAnyURLPinned(HistoryBackendClient* backend_client,
-                    const std::vector<GURL>& urls) {
+                    base::span<const GURL> urls) {
   for (const GURL& url : urls) {
     if (backend_client->IsPinnedURL(url))
       return true;
@@ -186,7 +187,7 @@ void ExpireHistoryBackend::DeleteURL(const GURL& url, base::Time end_time) {
   DeleteURLs({url}, end_time);
 }
 
-void ExpireHistoryBackend::DeleteURLs(const std::vector<GURL>& urls,
+void ExpireHistoryBackend::DeleteURLs(base::span<const GURL> urls,
                                       base::Time end_time) {
   if (!main_db_)
     return;
@@ -268,7 +269,7 @@ void ExpireHistoryBackend::ExpireHistoryBetween(
 }
 
 void ExpireHistoryBackend::ExpireHistoryForTimes(
-    const std::vector<base::Time>& times) {
+    base::span<const base::Time> times) {
   // `times` must be in reverse chronological order and have no
   // duplicates, i.e. each member must be earlier than the one before
   // it.
@@ -347,7 +348,7 @@ void ExpireHistoryBackend::ClearOldOnDemandFaviconsIfPossible(
       icon_mappings = favicon_db_->GetOldOnDemandFavicons(expiration_threshold);
   DeleteEffects effects;
 
-  for (auto id_and_mappings_pair : icon_mappings) {
+  for (const auto& id_and_mappings_pair : icon_mappings) {
     favicon_base::FaviconID icon_id = id_and_mappings_pair.first;
     const favicon::IconMappingsForExpiry& mappings =
         id_and_mappings_pair.second;

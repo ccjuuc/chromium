@@ -61,7 +61,7 @@ bool TouchToFillPasswordGenerationController::ShowTouchToFill(
 
   std::u16string generated_password =
       frame_driver_->GetPasswordGenerationHelper()->GeneratePassword(
-          web_contents_->GetLastCommittedURL().DeprecatedGetOriginAsURL(), type,
+          frame_driver_->GetLastCommittedOrigin().GetURL(), type,
           generation_element_data_.form_signature,
           generation_element_data_.field_signature,
           generation_element_data_.max_password_length);
@@ -101,7 +101,7 @@ void TouchToFillPasswordGenerationController::OnGeneratedPasswordAccepted(
 }
 
 void TouchToFillPasswordGenerationController::OnGeneratedPasswordRejected() {
-  // TODO (crbug.com/1495639) Trigger Keyboard Accessory here.
+  // TODO (crbug.com/40937805) Trigger Keyboard Accessory here.
 }
 
 void TouchToFillPasswordGenerationController::AddSuppressShowingImeCallback() {

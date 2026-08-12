@@ -5,15 +5,30 @@
 #include "components/autofill/core/browser/form_parsing/address_field_parser_ng.h"
 
 #include <initializer_list>
+#include <memory>
+#include <optional>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/flat_map.h"
+#include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_store.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/form_field_data.h"
 
 namespace autofill {
 
@@ -354,7 +369,7 @@ void AddressFieldParserNG::AddClassifications(
         FieldAndMatchInfo(field_ptr,
                           {.matched_attribute =
                                MatchInfo::MatchAttribute::kHighQualityLabel}),
-        field_type, kBaseAddressParserScore, field_candidates);
+        field_type, HeuristicParser::kAddress, field_candidates);
   }
 }
 
@@ -367,25 +382,10 @@ std::optional<double> AddressFieldParserNG::FindScoreOfBestMatchingRule(
   // is used consistently to keep the code readable.
 
   // Give the label priority over the name to avoid misclassifications when the
-  // name has a misleading value (e.g. in TR the province field is named "city",
-  // in MX the input field for "Municipio/Delegación" is sometimes named "city"
-  // even though that should be mapped to a "Ciudad"). The list of conditions is
-  // currently hard-coded for simplicity and performance.
-  // We may want to consider whether we unify this logic with the two if-blocks.
-  // The first block is language-based, the second one is country based.
-  // Currently, we don't always prefer labels if page_language ==
-  // LanguageCode("es") here because Spanish is spoken in many countries and we
-  // don't know whether such a change would be uniformly positive. At the same
-  // time, limiting prefer_label in the first block to the Turkish geolocation
-  // may restrict the behavior more than necessary.
-  bool prefer_label = false;
-  if (context_->page_language == LanguageCode("tr") &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillEnableLabelPrecedenceForTurkishAddresses)) {
-    prefer_label = true;
-  } else if (context_->client_country == GeoIpCountryCode("MX")) {
-    prefer_label = true;
-  }
+  // name has a misleading value (e.g. in MX the input field for
+  // "Municipio/Delegación" is sometimes named "city" even though that should be
+  // mapped to a "Ciudad").
+  bool prefer_label = context_->client_country == GeoIpCountryCode("MX");
 
   auto MatchOnlyLabel = [](const MatchParams& p) {
     return MatchParamsWithoutAttribute(p, MatchAttribute::kName);
@@ -592,6 +592,12 @@ std::optional<double> AddressFieldParserNG::FindScoreOfBestMatchingRule(
         return 1.5;
       }
       return std::nullopt;
+    case ADDRESS_HOME_ZIP_AND_CITY:
+      if (context_->client_country == GeoIpCountryCode("FR") &&
+          Match("ZIP_CODE", 1.0) && Match("CITY", 1.0)) {
+        return 1.5;
+      }
+      return std::nullopt;
 
     // Address related fields that we don't parse (yet).
     case DELIVERY_INSTRUCTIONS:
@@ -614,8 +620,6 @@ std::optional<double> AddressFieldParserNG::FindScoreOfBestMatchingRule(
     case NAME_MIDDLE_INITIAL:
     case NAME_FULL:
     case NAME_SUFFIX:
-    case NAME_LAST_PREFIX:
-    case NAME_LAST_CORE:
     case ALTERNATIVE_FULL_NAME:
     case ALTERNATIVE_GIVEN_NAME:
     case ALTERNATIVE_FAMILY_NAME:
@@ -699,6 +703,10 @@ std::optional<double> AddressFieldParserNG::FindScoreOfBestMatchingRule(
     case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
+    case ORDER_ID:
+    case ORDER_DATE:
+    case ORDER_MERCHANT_NAME:
+    case SHIPMENT_TRACKING_NUMBER:
     case MAX_VALID_FIELD_TYPE:
       return std::nullopt;
   }

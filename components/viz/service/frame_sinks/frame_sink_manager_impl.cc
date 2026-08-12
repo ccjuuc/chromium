@@ -15,7 +15,6 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/map_util.h"
 #include "base/containers/queue.h"
 #include "base/debug/alias.h"
@@ -41,6 +40,7 @@
 #include "components/viz/service/frame_sinks/video_capture/capturable_frame_sink.h"
 #include "components/viz/service/frame_sinks/video_capture/frame_sink_video_capturer_impl.h"
 #include "components/viz/service/input/input_manager.h"
+#include "components/viz/service/performance_hint/hint_session.h"
 #include "components/viz/service/surfaces/pending_copy_output_request.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "services/viz/privileged/mojom/compositing/frame_sink_manager.mojom.h"
@@ -102,8 +102,8 @@ FrameSinkManagerImpl::FrameSinkManagerImpl(const InitParams& params)
       host_process_id_(params.host_process_id),
       hint_session_factory_(params.hint_session_factory),
       frame_sink_manager_receiver_(std::in_place_type<Receiver>, this) {
-  if (mojo::IsDirectReceiverSupported() &&
-      features::IsVizDirectCompositorThreadIpcFrameSinkManagerEnabled()) {
+  if (mojo::IsDirectReceiverSupported() && mojo::IsAsyncIOSupported() &&
+      params.use_direct_receiver) {
     frame_sink_manager_receiver_.emplace<DirectReceiver>(
         mojo::DirectReceiverKey{}, this);
   }
@@ -131,12 +131,12 @@ FrameSinkManagerImpl::~FrameSinkManagerImpl() {
 
   // All mojom::CompositorFrameSinks and BeginFrameSources should be deleted by
   // this point.
-  DCHECK(sink_map_.empty());
-  DCHECK(root_sink_map_.empty());
+  CHECK(sink_map_.empty());
+  CHECK(root_sink_map_.empty());
 #if BUILDFLAG(IS_ANDROID)
-  DCHECK(cached_back_buffers_.empty());
+  CHECK(cached_back_buffers_.empty());
 #endif
-  DCHECK(registered_sources_.empty());
+  CHECK(registered_sources_.empty());
 
   surface_manager_.RemoveObserver(this);
   surface_manager_.RemoveObserver(&hit_test_manager_);
@@ -157,8 +157,8 @@ void FrameSinkManagerImpl::BindAndSetClient(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     mojo::PendingRemote<mojom::FrameSinkManagerClient> client,
     SharedImageInterfaceProvider* shared_image_interface_provider) {
-  DCHECK(!client_);
-  DCHECK(shared_image_interface_provider);
+  CHECK(!client_);
+  CHECK(shared_image_interface_provider);
   shared_image_interface_provider_ = shared_image_interface_provider;
 
   std::visit(absl::Overload{[&](Receiver& receiver) {
@@ -185,8 +185,8 @@ void FrameSinkManagerImpl::BindAndSetClient(
 void FrameSinkManagerImpl::SetLocalClient(
     mojom::FrameSinkManagerClient* client,
     scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-  DCHECK(!client_remote_);
-  DCHECK(!ui_task_runner_);
+  CHECK(!client_remote_);
+  CHECK(!ui_task_runner_);
   client_ = client;
   ui_task_runner_ = ui_task_runner;
 }
@@ -203,7 +203,7 @@ void FrameSinkManagerImpl::SetInputManagerForTesting(
 void FrameSinkManagerImpl::RegisterFrameSinkId(const FrameSinkId& frame_sink_id,
                                                bool report_activation) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!base::Contains(frame_sink_data_, frame_sink_id));
+  CHECK(!frame_sink_data_.contains(frame_sink_id));
 
   frame_sink_data_.emplace(std::make_pair(frame_sink_id, report_activation));
 
@@ -249,8 +249,8 @@ void FrameSinkManagerImpl::SetFrameSinkDebugLabel(
 void FrameSinkManagerImpl::CreateRootCompositorFrameSink(
     mojom::RootCompositorFrameSinkParamsPtr params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!base::Contains(root_sink_map_, params->frame_sink_id));
-  DCHECK(output_surface_provider_);
+  CHECK(!root_sink_map_.contains(params->frame_sink_id));
+  CHECK(output_surface_provider_);
 
   // We are transferring ownership of |params| so remember FrameSinkId here.
   FrameSinkId frame_sink_id = params->frame_sink_id;
@@ -298,11 +298,11 @@ void FrameSinkManagerImpl::CreateCompositorDisplayLink(
           update_vsync_displays_cb);
 }
 
-void FrameSinkManagerImpl::UpdateVSyncDisplays() {
+void FrameSinkManagerImpl::UpdateVSyncDisplays(int64_t display_id) {
   for (auto& root_frame_sink : root_sink_map_) {
     if (root_frame_sink.second->external_begin_frame_source()) {
-      root_frame_sink.second->external_begin_frame_source()
-          ->UpdateVSyncDisplay();
+      root_frame_sink.second->external_begin_frame_source()->UpdateVSyncDisplay(
+          display_id);
     }
   }
 }
@@ -314,7 +314,7 @@ void FrameSinkManagerImpl::CreateFrameSinkBundle(
     mojo::PendingReceiver<mojom::FrameSinkBundle> receiver,
     mojo::PendingRemote<mojom::FrameSinkBundleClient> client) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (base::Contains(bundle_map_, bundle_id)) {
+  if (bundle_map_.contains(bundle_id)) {
     uint32_t client_id = bundle_id.client_id();
     uint32_t bundle_id_value = bundle_id.bundle_id();
     std::visit(
@@ -340,7 +340,7 @@ void FrameSinkManagerImpl::CreateCompositorFrameSink(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   TRACE_EVENT("viz", "FrameSinkManagerImpl::CreateCompositorFrameSink",
               "frame_sink_id", frame_sink_id);
-  if (base::Contains(sink_map_, frame_sink_id)) {
+  if (sink_map_.contains(frame_sink_id)) {
     std::visit(
         [](auto& receiver) {
           receiver.ReportBadMessage("Duplicate FrameSinkId");
@@ -387,7 +387,7 @@ void FrameSinkManagerImpl::RegisterFrameSinkHierarchy(
   CHECK(!ChildContains(child_frame_sink_id, parent_frame_sink_id));
 
   auto& children = frame_sink_source_map_[parent_frame_sink_id].children;
-  DCHECK(!base::Contains(children, child_frame_sink_id));
+  CHECK(!children.contains(child_frame_sink_id));
   children.insert(child_frame_sink_id);
 
   // Add `parent_frame_sink_id` as parent to the list tracking parents of
@@ -410,7 +410,7 @@ void FrameSinkManagerImpl::RegisterFrameSinkHierarchy(
   if (!parent_source)
     return;
 
-  DCHECK_EQ(registered_sources_.count(parent_source), 1u);
+  CHECK_EQ(registered_sources_.count(parent_source), 1u);
   RecursivelyAttachBeginFrameSource(child_frame_sink_id, parent_source);
 }
 
@@ -430,7 +430,7 @@ void FrameSinkManagerImpl::UnregisterFrameSinkHierarchy(
   CHECK(iter_child != frame_sink_source_map_.end());
 
   auto& child_mapping = iter_child->second;
-  DCHECK(base::Contains(child_mapping.parent, parent_frame_sink_id));
+  CHECK(std::ranges::contains(child_mapping.parent, parent_frame_sink_id));
 
   // Delete `parent_frame_sink_id` from parent list of `child_frame_sink_id` in
   // `frame_sink_source_map_`.
@@ -450,7 +450,7 @@ void FrameSinkManagerImpl::UnregisterFrameSinkHierarchy(
 
   // Remove |child_frame_sink_id| from parents list of children.
   auto& mapping = iter_parent->second;
-  DCHECK(base::Contains(mapping.children, child_frame_sink_id));
+  CHECK(mapping.children.contains(child_frame_sink_id));
   mapping.children.erase(child_frame_sink_id);
 
   for (auto& observer : observer_list_) {
@@ -531,11 +531,12 @@ void FrameSinkManagerImpl::EvictSurfaces(
 void FrameSinkManagerImpl::RequestCopyOfOutput(
     const SurfaceId& surface_id,
     std::unique_ptr<CopyOutputRequest> request,
-    bool capture_exact_surface_id) {
+    bool capture_exact_surface_id,
+    base::TimeDelta timeout) {
   TRACE_EVENT0("viz", "FrameSinkManagerImpl::RequestCopyOfOutput");
-  PendingCopyOutputRequest pending_request(
+  auto pending_request = std::make_unique<PendingCopyOutputRequest>(
       surface_id.local_surface_id(), SubtreeCaptureId(), std::move(request),
-      capture_exact_surface_id);
+      capture_exact_surface_id, timeout);
   // The exact request can be picked up by the targeted surface right away,
   // instead of being queued up in the `CompositorFrameSinkSupport`. In some
   // cases (e.g., a request issued against the old surface after the old
@@ -584,7 +585,7 @@ void FrameSinkManagerImpl::DestroyFrameSinkBundle(const FrameSinkBundleId& id) {
 void FrameSinkManagerImpl::OnFirstSurfaceActivation(
     const SurfaceInfo& surface_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_GT(surface_info.device_scale_factor(), 0.0f);
+  CHECK_GT(surface_info.device_scale_factor(), 0.0f);
 
   const auto* frame_sink_data =
       base::FindOrNull(frame_sink_data_, surface_info.id().frame_sink_id());
@@ -597,7 +598,7 @@ void FrameSinkManagerImpl::OnFirstSurfaceActivation(
 void FrameSinkManagerImpl::UpdateHitTestRegionData(
     const FrameSinkId& frame_sink_id,
     const std::vector<AggregatedHitTestRegion>& hit_test_data) {
-  if (!base::Contains(display_hit_test_query_, frame_sink_id)) {
+  if (!display_hit_test_query_.contains(frame_sink_id)) {
     // The corresponding HitTestQuery has already been deleted, so drop the
     // in-flight hit-test data.
     return;
@@ -631,9 +632,35 @@ void FrameSinkManagerImpl::AggregatedFrameSinksChanged() {
   hit_test_manager_.SetNeedsSubmit();
 }
 
+void FrameSinkManagerImpl::RegisterSameDocViewTransitionToken(
+    const blink::ViewTransitionToken& token) {
+  same_doc_tokens_pending_.insert(token);
+}
+
+void FrameSinkManagerImpl::MarkSameDocViewTransitionTokenReady(
+    const blink::ViewTransitionToken& token) {
+  if (!same_doc_tokens_pending_.erase(token)) {
+    return;
+  }
+
+  same_doc_tokens_ready_.insert(token);
+
+  // This is what Surface waits on to resolve view_transition_dependencies_.
+  for (auto& observer : observer_list_) {
+    observer.OnViewTransitionSaved(token);
+  }
+}
+
+void FrameSinkManagerImpl::ClearSameDocViewTransitionToken(
+    const blink::ViewTransitionToken& token) {
+  same_doc_tokens_pending_.erase(token);
+  same_doc_tokens_ready_.erase(token);
+}
+
 bool FrameSinkManagerImpl::HasViewTransitionToken(
     const blink::ViewTransitionToken& transition_token) {
-  return transition_token_to_animation_manager_.contains(transition_token);
+  return transition_token_to_animation_manager_.contains(transition_token) ||
+         same_doc_tokens_ready_.contains(transition_token);
 }
 
 void FrameSinkManagerImpl::AddHitTestRegionObserver(
@@ -654,8 +681,8 @@ const DisplayHitTestQueryMap& FrameSinkManagerImpl::GetDisplayHitTestQuery()
 void FrameSinkManagerImpl::RegisterCompositorFrameSinkSupport(
     const FrameSinkId& frame_sink_id,
     CompositorFrameSinkSupport* support) {
-  DCHECK(support);
-  DCHECK(!base::Contains(support_map_, frame_sink_id));
+  CHECK(support);
+  CHECK(!support_map_.contains(frame_sink_id));
 
   support_map_[frame_sink_id] = support;
 
@@ -671,10 +698,7 @@ void FrameSinkManagerImpl::RegisterCompositorFrameSinkSupport(
     support->SetBeginFrameSource(mapping->source);
   }
 
-  if (global_throttle_interval_) {
-    UpdateThrottlingRecursively(frame_sink_id,
-                                global_throttle_interval_.value());
-  }
+  UpdateThrottlingRecursively(frame_sink_id);
 
   if (frame_counter_) {
     frame_counter_->AddFrameSink(frame_sink_id, support->is_root(),
@@ -687,7 +711,7 @@ void FrameSinkManagerImpl::UnregisterCompositorFrameSinkSupport(
   TRACE_EVENT("viz",
               "FrameSinkManagerImpl::UnregisterCompositorFrameSinkSupport",
               "frame_sink_id", frame_sink_id);
-  DCHECK(base::Contains(support_map_, frame_sink_id));
+  CHECK(support_map_.contains(frame_sink_id));
 
   for (auto& observer : observer_list_)
     observer.OnDestroyedCompositorFrameSink(frame_sink_id);
@@ -698,14 +722,16 @@ void FrameSinkManagerImpl::UnregisterCompositorFrameSinkSupport(
       capturer->OnTargetWillGoAway();
   }
 
+  captured_frame_sink_ids_.erase(frame_sink_id);
   support_map_.erase(frame_sink_id);
+  UpdateThrottlingRecursively(frame_sink_id);
 }
 
 void FrameSinkManagerImpl::RegisterBeginFrameSource(
     BeginFrameSource* source,
     const FrameSinkId& frame_sink_id) {
-  DCHECK(source);
-  DCHECK_EQ(registered_sources_.count(source), 0u);
+  CHECK(source);
+  CHECK_EQ(registered_sources_.count(source), 0u);
 
   registered_sources_[source] = frame_sink_id;
   RecursivelyAttachBeginFrameSource(frame_sink_id, source);
@@ -717,8 +743,8 @@ void FrameSinkManagerImpl::RegisterBeginFrameSource(
 
 void FrameSinkManagerImpl::UnregisterBeginFrameSource(
     BeginFrameSource* source) {
-  DCHECK(source);
-  DCHECK_EQ(registered_sources_.count(source), 1u);
+  CHECK(source);
+  CHECK_EQ(registered_sources_.count(source), 1u);
 
   FrameSinkId frame_sink_id = registered_sources_[source];
   registered_sources_.erase(source);
@@ -814,7 +840,7 @@ CapturableFrameSink* FrameSinkManagerImpl::FindCapturableFrameSink(
     for (const auto& id_and_sink : support_map_) {
       const RegionCaptureBounds& bounds =
           id_and_sink.second->current_capture_bounds();
-      if (base::Contains(bounds.bounds(), crop_id)) {
+      if (bounds.bounds().contains(crop_id)) {
         return id_and_sink.second;
       }
     }
@@ -831,6 +857,33 @@ CapturableFrameSink* FrameSinkManagerImpl::FindCapturableFrameSink(
 void FrameSinkManagerImpl::OnCapturerConnectionLost(
     FrameSinkVideoCapturerImpl* capturer) {
   video_capturers_.erase(capturer);
+}
+
+bool FrameSinkManagerImpl::IsValidUnboundedFrameSinkId(
+    const FrameSinkId& parent_frame_sink_id,
+    const FrameSinkId& unbounded_frame_sink_id) const {
+  // Unbounded surface FrameSinkIds are allocated by the browser process, so
+  // they must not use the renderer's own client_id namespace.
+  if (unbounded_frame_sink_id.client_id() == parent_frame_sink_id.client_id()) {
+    return false;
+  }
+  // Check the hierarchy tree to verify unbounded_frame_sink_id belongs to the
+  // frame sink hierarchy.
+  if (ChildContains(parent_frame_sink_id, unbounded_frame_sink_id)) {
+    return true;
+  }
+  FrameSinkId root_id = parent_frame_sink_id;
+  while (!root_sink_map_.contains(root_id)) {
+    FrameSinkId oldest_parent = GetOldestParentByChildFrameId(root_id);
+    if (!oldest_parent.is_valid()) {
+      break;
+    }
+    root_id = oldest_parent;
+  }
+  if (root_id != parent_frame_sink_id && root_id.is_valid()) {
+    return ChildContains(root_id, unbounded_frame_sink_id);
+  }
+  return false;
 }
 
 bool FrameSinkManagerImpl::ChildContains(
@@ -855,12 +908,12 @@ InputManager* FrameSinkManagerImpl::GetInputManager() {
   return input_manager_.get();
 }
 
-void FrameSinkManagerImpl::SubmitHitTestRegionList(
+bool FrameSinkManagerImpl::SubmitHitTestRegionList(
     const SurfaceId& surface_id,
     uint64_t frame_index,
     std::optional<HitTestRegionList> hit_test_region_list) {
-  hit_test_manager_.SubmitHitTestRegionList(surface_id, frame_index,
-                                            std::move(hit_test_region_list));
+  return hit_test_manager_.SubmitHitTestRegionList(
+      surface_id, frame_index, std::move(hit_test_region_list));
 }
 
 void FrameSinkManagerImpl::OnFrameTokenChangedDirect(
@@ -891,7 +944,7 @@ void FrameSinkManagerImpl::OnFrameTokenChanged(const FrameSinkId& frame_sink_id,
 VideoDetector* FrameSinkManagerImpl::CreateVideoDetectorForTesting(
     const base::TickClock* tick_clock,
     scoped_refptr<base::SequencedTaskRunner> task_runner) {
-  DCHECK(!video_detector_);
+  CHECK(!video_detector_);
   video_detector_ = std::make_unique<VideoDetector>(
       GetRegisteredFrameSinkIds(), surface_manager(), tick_clock, task_runner);
   return video_detector_.get();
@@ -945,7 +998,7 @@ std::vector<FrameSinkId> FrameSinkManagerImpl::GetRegisteredFrameSinkIds()
 
 FrameSinkId FrameSinkManagerImpl::GetOldestParentByChildFrameId(
     const FrameSinkId& child_frame_sink_id) const {
-  CHECK(!base::Contains(root_sink_map_, child_frame_sink_id));
+  CHECK(!root_sink_map_.contains(child_frame_sink_id));
 
   const FrameSinkSourceMapping* mapping =
       base::FindOrNull(frame_sink_source_map_, child_frame_sink_id);
@@ -965,7 +1018,7 @@ FrameSinkId FrameSinkManagerImpl::GetOldestRootCompositorFrameSinkId(
     const FrameSinkId& child_frame_sink_id) const {
   auto parent_id = GetOldestParentByChildFrameId(child_frame_sink_id);
 
-  while (parent_id.is_valid() && !base::Contains(root_sink_map_, parent_id)) {
+  while (parent_id.is_valid() && !root_sink_map_.contains(parent_id)) {
     parent_id = GetOldestParentByChildFrameId(parent_id);
   }
   return parent_id;
@@ -976,6 +1029,32 @@ base::flat_set<FrameSinkId> FrameSinkManagerImpl::GetChildrenByParent(
   auto* mapping =
       base::FindOrNull(frame_sink_source_map_, parent_frame_sink_id);
   return mapping ? mapping->children : base::flat_set<FrameSinkId>();
+}
+
+void FrameSinkManagerImpl::RecurseChildren(
+    const FrameSinkId& frame_sink_id,
+    base::FunctionRef<void(const FrameSinkId&)> callback) {
+  callback(frame_sink_id);
+
+  auto* mapping = base::FindOrNull(frame_sink_source_map_, frame_sink_id);
+  if (mapping) {
+    for (const FrameSinkId& child_id : mapping->children) {
+      RecurseChildren(child_id, callback);
+    }
+  }
+}
+
+void FrameSinkManagerImpl::RecurseParents(
+    const FrameSinkId& frame_sink_id,
+    base::FunctionRef<void(const FrameSinkId&)> callback) {
+  callback(frame_sink_id);
+
+  auto* mapping = base::FindOrNull(frame_sink_source_map_, frame_sink_id);
+  if (mapping) {
+    for (const FrameSinkId& parent_id : mapping->parent) {
+      RecurseParents(parent_id, callback);
+    }
+  }
 }
 
 CompositorFrameSinkSupport* FrameSinkManagerImpl::GetFrameSinkForId(
@@ -1001,7 +1080,7 @@ void FrameSinkManagerImpl::DiscardPendingCopyOfOutputRequests(
 
 void FrameSinkManagerImpl::OnCaptureStarted(const FrameSinkId& id) {
   if (captured_frame_sink_ids_.insert(id).second) {
-    ClearThrottling(id);
+    UpdateThrottling();
   }
   for (auto& observer : observer_list_)
     observer.OnCaptureStarted(id);
@@ -1048,7 +1127,7 @@ void FrameSinkManagerImpl::CacheBackBuffer(
     return;
   }
 
-  DCHECK(!base::Contains(cached_back_buffers_, cache_id));
+  CHECK(!cached_back_buffers_.contains(cache_id));
   cached_back_buffers_[cache_id] = root_frame_sink->GetCacheBackBufferCb();
 }
 
@@ -1064,22 +1143,67 @@ void FrameSinkManagerImpl::UpdateDebugRendererSettings(
   debug_settings_ = debug_settings;
 }
 
+
+
 void FrameSinkManagerImpl::UpdateThrottlingRecursively(
-    const FrameSinkId& frame_sink_id,
-    base::TimeDelta interval) {
-  CompositorFrameSinkSupport* support =
-      base::FindPtrOrNull(support_map_, frame_sink_id);
-  if (support) {
-    support->ThrottleBeginFrame(interval);
+    FrameSinkId frame_sink_id) {
+  const base::TimeDelta default_throttle =
+      global_throttle_interval_.value_or(base::TimeDelta());
+
+  // Clear throttling on all children
+  RecurseChildren(frame_sink_id,
+                  [this, &default_throttle](const FrameSinkId& child_id) {
+                    if (auto* support = GetFrameSinkForId(child_id)) {
+                      support->SetThrottleInterval(default_throttle);
+                      support->SetAllowThrottling(true);
+                    }
+                  });
+
+  bool check_throttles = ThrottleIntervalHasEffect();
+  bool check_captures = !captured_frame_sink_ids_.empty();
+
+  if (!check_throttles && !check_captures) {
+    return;
   }
-  auto children = GetChildrenByParent(frame_sink_id);
-  for (auto& id : children)
-    UpdateThrottlingRecursively(id, interval);
+
+  base::flat_set<FrameSinkId> throttles;
+  base::flat_set<FrameSinkId> captures;
+
+  // Identify anything which would affect throttling from ancestors or
+  // descendants.
+  auto collect_roots = [&](const FrameSinkId& id, bool is_ancestor) {
+    // If an ancestor is throttled/captured, the current `frame_sink_id` acts as
+    // the root of that effect for this subtree update.
+    //
+    // This ensures we limit updates to only the current subtree, while also
+    // inheriting capture or throttle effects from parents.
+    const FrameSinkId& root = is_ancestor ? frame_sink_id : id;
+
+    if (check_throttles && frame_sink_ids_to_throttle_.contains(id)) {
+      throttles.insert(root);
+    }
+    if (check_captures && captured_frame_sink_ids_.contains(id)) {
+      captures.insert(root);
+    }
+  };
+
+  RecurseParents(frame_sink_id, [&](const FrameSinkId& parent) {
+    if (parent != frame_sink_id) {
+      collect_roots(parent, /*is_ancestor=*/true);
+    }
+  });
+
+  RecurseChildren(frame_sink_id, [&](const FrameSinkId& child) {
+    collect_roots(child, /*is_ancestor=*/false);
+  });
+
+  // Apply the identified rules.
+  ApplyThrottlingRules(throttles, captures);
 }
 
 void FrameSinkManagerImpl::Throttle(const std::vector<FrameSinkId>& ids,
                                     base::TimeDelta interval) {
-  frame_sink_ids_to_throttle_ = ids;
+  frame_sink_ids_to_throttle_ = base::flat_set<FrameSinkId>(ids);
   throttle_interval_ = interval;
   UpdateThrottling();
 }
@@ -1095,39 +1219,47 @@ void FrameSinkManagerImpl::StopThrottlingAllFrameSinks() {
   UpdateThrottling();
 }
 
-void FrameSinkManagerImpl::UpdateThrottling() {
-  // Clear previous throttling effect on all frame sinks.
-  for (auto& support_map_item : support_map_) {
-    support_map_item.second->ThrottleBeginFrame(base::TimeDelta());
-  }
-  if (throttle_interval_.is_zero() &&
-      (!global_throttle_interval_ ||
-       global_throttle_interval_.value().is_zero()))
-    return;
-
-  if (global_throttle_interval_) {
-    for (const auto& support : support_map_) {
-      support.second->ThrottleBeginFrame(global_throttle_interval_.value());
+void FrameSinkManagerImpl::ApplyThrottlingRules(
+    const base::flat_set<FrameSinkId>& throttled_roots,
+    const base::flat_set<FrameSinkId>& captured_roots) {
+  // Apply throttling
+  if (ThrottleIntervalHasEffect()) {
+    for (const auto& id : throttled_roots) {
+      RecurseChildren(id, [this](const FrameSinkId& frame_sink_id) {
+        if (auto* support = GetFrameSinkForId(frame_sink_id)) {
+          support->SetThrottleInterval(throttle_interval_);
+        }
+      });
     }
   }
 
-  // If the per-frame sink throttle interval is more aggressive than the global
-  // throttling interval, apply it to those frame sinks effectively always
-  // throttling a frame sink as much as possible.
-  if (!global_throttle_interval_ ||
-      throttle_interval_ > global_throttle_interval_) {
-    for (const auto& id : frame_sink_ids_to_throttle_) {
-      UpdateThrottlingRecursively(id, throttle_interval_);
-    }
-  }
-  // Clear throttling on frame sinks currently being captured.
-  for (const auto& id : captured_frame_sink_ids_) {
-    UpdateThrottlingRecursively(id, base::TimeDelta());
+  // Do not allow throttling on frame sinks currently being captured.
+  for (const auto& id : captured_roots) {
+    RecurseChildren(id, [this](const FrameSinkId& frame_sink_id) {
+      if (auto* support = GetFrameSinkForId(frame_sink_id)) {
+        support->SetAllowThrottling(false);
+      }
+    });
   }
 }
 
-void FrameSinkManagerImpl::ClearThrottling(const FrameSinkId& id) {
-  UpdateThrottlingRecursively(id, base::TimeDelta());
+void FrameSinkManagerImpl::UpdateThrottling() {
+  // Update throttling on all frame sinks to an initial state, which is
+  // either the global state or the unthrottled state.
+  const base::TimeDelta gloabl_throttle =
+      global_throttle_interval_.value_or(base::TimeDelta());
+
+  for (auto& [id, support] : support_map_) {
+    support->SetThrottleInterval(gloabl_throttle);
+    support->SetAllowThrottling(true);
+  }
+
+  ApplyThrottlingRules(frame_sink_ids_to_throttle_, captured_frame_sink_ids_);
+}
+
+bool FrameSinkManagerImpl::ThrottleIntervalHasEffect() const {
+  return !global_throttle_interval_ ||
+         throttle_interval_ > global_throttle_interval_;
 }
 
 void FrameSinkManagerImpl::MaybeEraseHitTestQuery(
@@ -1202,15 +1334,16 @@ void FrameSinkManagerImpl::OnViewTransitionResourcesCaptured(
   if (client_) {
     client_->OnViewTransitionResourcesCaptured(transition_token);
   }
+  MarkSameDocViewTransitionTokenReady(transition_token);
 }
 
 bool FrameSinkManagerImpl::IsFrameSinkIdInRootSinkMap(
     const FrameSinkId& frame_sink_id) {
-  return base::Contains(root_sink_map_, frame_sink_id);
+  return root_sink_map_.contains(frame_sink_id);
 }
 
 gpu::SharedImageInterface* FrameSinkManagerImpl::GetSharedImageInterface() {
-  DCHECK(shared_image_interface_provider_);
+  CHECK(shared_image_interface_provider_);
   return shared_image_interface_provider_->GetSharedImageInterface();
 }
 
@@ -1223,11 +1356,11 @@ FrameSinkManagerImpl::GetViewTransitionResourcesCapturedCallback() {
 
 void FrameSinkManagerImpl::StartFrameCounting(base::TimeTicks start_time,
                                               base::TimeDelta bucket_size) {
-  DCHECK(!frame_counter_.has_value());
+  CHECK(!frame_counter_.has_value());
   frame_counter_.emplace(start_time, bucket_size);
 
   for (auto& [sink_id, support] : support_map_) {
-    DCHECK_EQ(sink_id, support->frame_sink_id());
+    CHECK_EQ(sink_id, support->frame_sink_id());
     frame_counter_->AddFrameSink(sink_id, support->is_root(),
                                  GetFrameSinkDebugLabel(sink_id));
   }
@@ -1358,6 +1491,15 @@ void FrameSinkManagerImpl::RequestBeginFrameForGpuService(bool toggle) {
 
 GpuServiceImpl* FrameSinkManagerImpl::GetGpuService() {
   return gpu_service_;
+}
+
+bool FrameSinkManagerImpl::IsChildOf(const FrameSinkId& parent,
+                                     const FrameSinkId& child) const {
+  auto it = frame_sink_source_map_.find(parent);
+  if (it == frame_sink_source_map_.end()) {
+    return false;
+  }
+  return it->second.children.contains(child);
 }
 
 }  // namespace viz

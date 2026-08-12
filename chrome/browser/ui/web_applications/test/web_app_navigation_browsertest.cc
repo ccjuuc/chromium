@@ -16,15 +16,16 @@
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/profiles/profile_io_data.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -192,16 +193,15 @@ void WebAppNavigationBrowserTest::ClickLinkAndWait(
   ClickLinkAndWaitForURL(web_contents, link_url, link_url, target, rel);
 }
 
-WebAppNavigationBrowserTest::WebAppNavigationBrowserTest()
-    : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+WebAppNavigationBrowserTest::WebAppNavigationBrowserTest() = default;
 
 WebAppNavigationBrowserTest::~WebAppNavigationBrowserTest() = default;
 
 void WebAppNavigationBrowserTest::SetUp() {
-  https_server_.AddDefaultHandlers(GetChromeTestDataDir());
+  embedded_https_test_server().AddDefaultHandlers(GetChromeTestDataDir());
   // Register a request handler that will return empty pages. Tests are
   // responsible for adding elements and firing events on these empty pages.
-  https_server_.RegisterRequestHandler(base::BindRepeating(
+  embedded_https_test_server().RegisterRequestHandler(base::BindRepeating(
       [](const net::test_server::HttpRequest& request)
           -> std::unique_ptr<net::test_server::HttpResponse> {
         // Let the default request handlers handle redirections.
@@ -243,7 +243,7 @@ void WebAppNavigationBrowserTest::SetUpOnMainThread() {
   host_resolver()->AddRule("*", "127.0.0.1");
   // By default, all SSL cert checks are valid. Can be overridden in tests.
   cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
-  profile_ = browser()->profile();
+  profile_ = browser()->GetProfile();
 }
 
 void WebAppNavigationBrowserTest::TearDownOnMainThread() {
@@ -252,7 +252,7 @@ void WebAppNavigationBrowserTest::TearDownOnMainThread() {
   const WebAppRegistrar& registrar = provider->registrar_unsafe();
   std::vector<webapps::AppId> app_ids = registrar.GetAppIds();
   for (const auto& app_id : app_ids) {
-    if (!registrar.IsInRegistrar(app_id)) {
+    if (!registrar.GetInstallState(app_id).has_value()) {
       continue;
     }
     const WebApp* app = registrar.GetAppById(app_id);
@@ -285,14 +285,12 @@ void WebAppNavigationBrowserTest::InstallTestWebApp() {
 webapps::AppId WebAppNavigationBrowserTest::InstallTestWebApp(
     const std::string& app_host,
     const std::string& app_scope) {
-  if (!https_server_.Started()) {
-    CHECK(https_server_.Start());
-  }
-
-  GURL start_url = https_server_.GetURL(app_host, GetAppUrlPath());
+  GURL start_url =
+      embedded_https_test_server().GetURL(app_host, GetAppUrlPath());
   auto web_app_info =
       WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
-  web_app_info->scope = https_server_.GetURL(app_host, app_scope);
+  web_app_info->scope =
+      embedded_https_test_server().GetURL(app_host, app_scope);
   web_app_info->title = base::UTF8ToUTF16(GetAppName());
   web_app_info->description = u"Test description";
   web_app_info->user_display_mode =
@@ -306,7 +304,8 @@ webapps::AppId WebAppNavigationBrowserTest::InstallTestWebApp(
 }
 
 Browser* WebAppNavigationBrowserTest::OpenTestWebApp() {
-  GURL app_url = https_server_.GetURL(GetAppUrlHost(), GetAppUrlPath());
+  GURL app_url =
+      embedded_https_test_server().GetURL(GetAppUrlHost(), GetAppUrlPath());
   auto observer = GetTestNavigationObserver(app_url);
   Browser* app_browser = LaunchWebAppBrowser(test_web_app_);
   observer->Wait();
@@ -316,8 +315,8 @@ Browser* WebAppNavigationBrowserTest::OpenTestWebApp() {
 
 void WebAppNavigationBrowserTest::NavigateToLaunchingPage(Browser* browser) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser,
-      https_server_.GetURL(GetLaunchingPageHost(), GetLaunchingPagePath())));
+      browser, embedded_https_test_server().GetURL(GetLaunchingPageHost(),
+                                                   GetLaunchingPagePath())));
 }
 
 bool WebAppNavigationBrowserTest::ExpectLinkClickNotCapturedIntoAppBrowser(
@@ -327,14 +326,18 @@ bool WebAppNavigationBrowserTest::ExpectLinkClickNotCapturedIntoAppBrowser(
   content::WebContents* initial_tab =
       browser->tab_strip_model()->GetActiveWebContents();
   int num_tabs = browser->tab_strip_model()->count();
-  size_t num_browsers = chrome::GetBrowserCount(browser->profile());
+  size_t num_browsers =
+      ProfileBrowserCollection::GetForProfile(browser->GetProfile())->GetSize();
 
   ClickLinkAndWait(browser->tab_strip_model()->GetActiveWebContents(),
                    target_url, LinkTarget::SELF, rel);
 
   EXPECT_EQ(num_tabs, browser->tab_strip_model()->count());
-  EXPECT_EQ(num_browsers, chrome::GetBrowserCount(browser->profile()));
-  EXPECT_EQ(browser, chrome::FindLastActive());
+  EXPECT_EQ(num_browsers,
+            ProfileBrowserCollection::GetForProfile(browser->GetProfile())
+                ->GetSize());
+  EXPECT_EQ(browser,
+            GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser());
   EXPECT_EQ(initial_tab, browser->tab_strip_model()->GetActiveWebContents());
   EXPECT_EQ(target_url, initial_tab->GetLastCommittedURL());
 

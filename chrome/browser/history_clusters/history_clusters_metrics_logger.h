@@ -5,18 +5,21 @@
 #ifndef CHROME_BROWSER_HISTORY_CLUSTERS_HISTORY_CLUSTERS_METRICS_LOGGER_H_
 #define CHROME_BROWSER_HISTORY_CLUSTERS_HISTORY_CLUSTERS_METRICS_LOGGER_H_
 
-#include "components/history_clusters/core/cluster_metrics_utils.h"
-#include "content/public/browser/page.h"
+#include <optional>
+
 #include "content/public/browser/page_user_data.h"
-#include "content/public/browser/web_contents_observer.h"
 
 namespace history_clusters {
+
+enum class ClusterAction;
+enum class RelatedSearchAction;
+enum class VisitAction;
+enum class VisitType;
 
 // The initial state that describes how an interaction with the HistoryClusters
 // UI was started.
 //
-// Keep in sync with HistoryClustersInitialState in
-// tools/metrics/histograms/enums.xml.
+// LINT.IfChange(HistoryClustersInitialState)
 enum class HistoryClustersInitialState {
   kUnknown = 0,
   // The HistoryClusters UI was opened via direct URL, i.e., not opened via any
@@ -38,6 +41,7 @@ enum class HistoryClustersInitialState {
   // Add new values above this line.
   kMaxValue = kSidePanelFromToolbarButton,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/history/enums.xml:HistoryClustersInitialState)
 
 // HistoryClustersMetricsLogger contains all the metrics/events associated with
 // interactions and internals of HistoryClusters in Chrome. It has the same

@@ -17,8 +17,8 @@ import androidx.core.content.res.ResourcesCompat;
 import androidx.core.graphics.Insets;
 
 import org.chromium.base.Callback;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
@@ -44,7 +44,7 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
     private final ThemeColorProvider mThemeColorProvider;
     private final TabSupplierObserver mTabObserver;
     private @Nullable Tab mCurrentTab;
-    private final ObservableSupplier<Boolean> mEnabledSupplier;
+    private final NonNullObservableSupplier<Boolean> mEnabledSupplier;
     private final Callback<Boolean> mEnabledObserver;
     private Insets mInsets;
     private final boolean mIsWebApp;
@@ -67,7 +67,7 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
             ClickWithMetaStateCallback onBackPressed,
             ThemeColorProvider themeColorProvider,
             NullableObservableSupplier<Tab> tabSupplier,
-            ObservableSupplier<Boolean> enabledSupplier,
+            NonNullObservableSupplier<Boolean> enabledSupplier,
             Callback<Tab> showNavigationPopup,
             Resources resources,
             Context context,
@@ -82,8 +82,8 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
 
         mModel.set(
                 BackButtonProperties.CLICK_LISTENER,
-                (metaState) -> {
-                    onBackPressed.onClickWithMeta(metaState);
+                (metaState, buttonState) -> {
+                    onBackPressed.onClickWithMeta(metaState, buttonState);
                     updateButtonEnabledState();
                 });
         mModel.set(
@@ -97,7 +97,7 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
 
         mEnabledSupplier = enabledSupplier;
         mEnabledObserver = (isEnabled) -> updateButtonEnabledState();
-        mEnabledSupplier.addObserver(mEnabledObserver);
+        mEnabledSupplier.addSyncObserverAndPostIfNonNull(mEnabledObserver);
 
         // From web_contents_impl.cc and browser.cc back button's enabled state is updated based on
         // the InvalidateType.{TAB, LOAD, and URL} flags that are mapped to the callbacks below.
@@ -134,7 +134,7 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
                     public void onUrlUpdated(Tab tab) {
                         // Some updates such as making a navigation entry unskippable can change
                         // canGoBack() result. Such updates are delivered here and we want to handle
-                        // them to update our state, see https://crbug.com/1477784.
+                        // them to update our state, see https://crbug.com/40071066.
                         updateButtonEnabledState();
                     }
                 };
@@ -201,6 +201,11 @@ class BackButtonMediator implements ThemeColorProvider.TintObserver {
      */
     void setVisibility(boolean isVisible) {
         mModel.set(BackButtonProperties.IS_VISIBLE, isVisible);
+    }
+
+    /** Returns whether there is enough space for the button to be shown. */
+    boolean hasSpaceToShow() {
+        return mModel.get(BackButtonProperties.HAS_SPACE_TO_SHOW);
     }
 
     /**

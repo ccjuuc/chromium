@@ -55,17 +55,26 @@ struct WebAppIdentityUpdate {
   // correct position accordingly.
   int GetCombinationChangeIndex() const;
 
+  // Returns true if the identity update has a title change.
+  bool HasTitleChange() const;
+
+  // If the `new_*` fields are std::nullopt, then they are considered to be the
+  // same as the `old_*` fields.
   std::u16string old_title;
-  std::optional<std::u16string> new_title = std::nullopt;
+  std::optional<std::u16string> new_title;
   gfx::Image old_icon;
-  std::optional<gfx::Image> new_icon = std::nullopt;
+  std::optional<gfx::Image> new_icon;
   GURL old_start_url;
-  std::optional<GURL> new_start_url = std::nullopt;
+  std::optional<GURL> new_start_url;
 
   // To be used for forced app migrations to ensure that the user cannot ignore
   // this update. If this is true, `new_start_url` NEEDS to be set and be
   // different from `old_start_url`.
   bool is_forced_migration = false;
+
+  // Set to true if the old and new icon have an insignificant difference.
+  // If this is true, the icon change flag is ignored.
+  bool icon_diff_is_insignificant = false;
 };
 
 // The result of the predictable app updating dialog closing, either from an
@@ -87,7 +96,10 @@ enum class WebAppIdentityUpdateResult {
   // The dialog was closed without user action, likely due to another dialog
   // being present, shutdown, or other factors.
   kUnexpectedError = 4,
-  kMaxValue = kUnexpectedError
+  // The dialog was closed by direct user action (e.g., the escape key), and
+  // because the dialog requires immediate action, close the web app entirely.
+  kCloseApp = 5,
+  kMaxValue = kCloseApp
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/webapps/enums.xml:WebAppIdentityUpdateResult)
 

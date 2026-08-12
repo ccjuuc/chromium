@@ -35,7 +35,6 @@
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -86,7 +85,10 @@ bool HTMLScriptElement::HasLegalLinkAttribute(const QualifiedName& name) const {
 
 void HTMLScriptElement::ChildrenChanged(const ChildrenChange& change) {
   HTMLElement::ChildrenChanged(change);
-  loader_->ChildrenChanged(change);
+
+  if (!GetDocument().StatePreservingAtomicMoveInProgress()) {
+    loader_->ChildrenChanged(change);
+  }
 
   // We'll record whether the script element children were ever changed by
   // the API (as opposed to the parser).
@@ -116,21 +118,6 @@ void HTMLScriptElement::ParseAttribute(
         !IsPotentiallyRenderBlocking()) {
       GetDocument().GetRenderBlockingResourceManager()->RemovePendingScript(
           *this);
-    }
-  } else if (params.name == html_names::kAttributionsrcAttr) {
-    if (GetDocument().GetFrame()) {
-      // Copied from `ScriptLoader::PrepareScript()`.
-      String referrerpolicy_attr = ReferrerPolicyAttributeValue();
-      network::mojom::ReferrerPolicy referrer_policy =
-          network::mojom::ReferrerPolicy::kDefault;
-      if (!referrerpolicy_attr.empty()) {
-        SecurityPolicy::ReferrerPolicyFromString(
-            referrerpolicy_attr, kDoNotSupportReferrerPolicyLegacyKeywords,
-            &referrer_policy);
-      }
-
-      GetDocument().GetFrame()->GetAttributionSrcLoader()->Register(
-          params.new_value, /*element=*/this, referrer_policy);
     }
   } else {
     HTMLElement::ParseAttribute(params);
@@ -244,17 +231,17 @@ void HTMLScriptElement::setTextContent(const String& string) {
   Node::setTextContent(string);
 }
 
-V8UnionStringOrTrustedScript* HTMLScriptElement::scriptTextContentForBinding() {
+String HTMLScriptElement::scriptTextContentForBinding() {
   return textContentForBinding();
 }
 
-V8UnionStringLegacyNullToEmptyStringOrTrustedScript*
-HTMLScriptElement::scriptInnerTextForBinding() {
+String HTMLScriptElement::scriptInnerTextForBinding() {
   return innerTextForBinding();
 }
 
-V8UnionStringOrTrustedScript* HTMLScriptElement::text() {
-  return MakeGarbageCollected<V8UnionStringOrTrustedScript>(TextFromChildren());
+V8UnionStringOrTrustedScript::Ret HTMLScriptElement::text(
+    ScriptState* script_state) {
+  return V8UnionStringOrTrustedScript::Ret(script_state, TextFromChildren());
 }
 
 void HTMLScriptElement::setText(V8UnionStringOrTrustedScript* value,
@@ -272,9 +259,8 @@ void HTMLScriptElement::setTextWithoutTrustedTypes(const String& value) {
   setTextContent(value);
 }
 
-V8UnionTrustedScriptURLOrUSVString* HTMLScriptElement::src() {
-  return MakeGarbageCollected<V8UnionTrustedScriptURLOrUSVString>(
-      GetURLAttribute(html_names::kSrcAttr));
+String HTMLScriptElement::src() {
+  return GetURLAttribute(html_names::kSrcAttr);
 }
 
 void HTMLScriptElement::setSrc(const V8UnionTrustedScriptURLOrUSVString* value,
@@ -360,6 +346,10 @@ String HTMLScriptElement::FetchPriorityAttributeValue() const {
   return FastGetAttribute(html_names::kFetchpriorityAttr);
 }
 
+String HTMLScriptElement::CacheHintAttributeValue() const {
+  return FastGetAttribute(html_names::kCachehintAttr);
+}
+
 String HTMLScriptElement::ChildTextContent() {
   return TextFromChildren();
 }
@@ -378,10 +368,6 @@ bool HTMLScriptElement::DeferAttributeValue() const {
 
 bool HTMLScriptElement::HasSourceAttribute() const {
   return FastHasAttribute(html_names::kSrcAttr);
-}
-
-bool HTMLScriptElement::HasAttributionsrcAttribute() const {
-  return FastHasAttribute(html_names::kAttributionsrcAttr);
 }
 
 bool HTMLScriptElement::IsConnected() const {
@@ -476,11 +462,6 @@ bool HTMLScriptElement::supports(const AtomicString& type) {
     return true;
   if (type == script_type_names::kImportmap)
     return true;
-
-  if (type == script_type_names::kRoutemap &&
-      RuntimeEnabledFeatures::RouteMatchingEnabled()) {
-    return true;
-  }
   if (type == script_type_names::kSpeculationrules) {
     return true;
   }

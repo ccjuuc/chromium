@@ -39,7 +39,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_urls/chrome_urls_ui.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
@@ -67,16 +66,16 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include <map>
 
+#include "ash/constants/webui_url_constants.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/base64.h"
 #include "base/strings/strcat.h"
-#include "chrome/browser/ash/borealis/borealis_credits.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/customization/customization_document.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
-#include "chrome/browser/ui/webui/chrome_web_ui_controller_factory.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/component_updater/ash/component_manager_ash.h"
@@ -97,6 +96,13 @@ constexpr char kStringsJsPath[] = "strings.js";
 #if BUILDFLAG(IS_CHROMEOS)
 
 constexpr char kTerminaCreditsPath[] = "about_os_credits.html";
+
+// Source for chrome://os-credits. On some devices, this will be compressed.
+// Check both.
+constexpr char kChromeOSCreditsPath[] =
+    "/opt/google/chrome/resources/about_os_credits.html";
+constexpr char kChromeOSCreditsCompressedPath[] =
+    "/opt/google/chrome/resources/about_os_credits.html.gz";
 
 // Loads bundled terms of service contents (Eula, OEM Eula, Play Store Terms).
 // The online version of terms is fetched in OOBE screen javascript. This is
@@ -122,22 +128,22 @@ class ChromeOSTermsHandler
                        content::URLDataSource::GotDataCallback callback)
       : path_(path),
         callback_(std::move(callback)),
-        // Previously we were using "initial locale" http://crbug.com/145142
+        // Previously we were using "initial locale" http://crbug.com/40915798
         locale_(g_browser_process->GetApplicationLocale()) {}
 
   virtual ~ChromeOSTermsHandler() = default;
 
   void StartOnUIThread() {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    if (path_ == chrome::kOemEulaURLPath) {
+    if (path_ == ash::kChromeUITermsOemEulaURLPath) {
       // Load local OEM EULA from the disk.
       base::ThreadPool::PostTaskAndReply(
           FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
           base::BindOnce(&ChromeOSTermsHandler::LoadOemEulaFileAsync, this),
           base::BindOnce(&ChromeOSTermsHandler::ResponseOnUIThread, this));
-    } else if (path_ == chrome::kArcTermsURLPath) {
+    } else if (path_ == ash::kChromeUITermsArcTermsURLPath) {
       LOG(WARNING) << "Could not load offline Play Store ToS.";
-    } else if (path_ == chrome::kArcPrivacyPolicyURLPath) {
+    } else if (path_ == ash::kChromeUITermsArcPrivacyPolicyURLPath) {
       LOG(WARNING) << "Could not load offline Play Store privacy policy.";
     } else {
       NOTREACHED();
@@ -230,10 +236,10 @@ class ChromeOSCreditsHandler
   // ResponseOnUIThread.
   void LoadCreditsFileAsync() {
     if (prefix_.empty()) {
-      prefix_ = base::FilePath(chrome::kChromeOSCreditsPath).DirName();
+      prefix_ = base::FilePath(kChromeOSCreditsPath).DirName();
     }
     base::FilePath credits =
-        prefix_.Append(base::FilePath(chrome::kChromeOSCreditsPath).BaseName());
+        prefix_.Append(base::FilePath(kChromeOSCreditsPath).BaseName());
     if (base::ReadFileToString(credits, &contents_)) {
       // Decompressed present; return.
       return;
@@ -241,7 +247,7 @@ class ChromeOSCreditsHandler
 
     // Decompressed not present; load compressed.
     base::FilePath compressed_credits = prefix_.Append(
-        base::FilePath(chrome::kChromeOSCreditsCompressedPath).BaseName());
+        base::FilePath(kChromeOSCreditsCompressedPath).BaseName());
     std::string compressed;
     if (!base::ReadFileToString(compressed_credits, &compressed)) {
       // File with credits not found, ResponseOnUIThread will load credits
@@ -282,21 +288,6 @@ class ChromeOSCreditsHandler
   // Directory containing files to read.
   base::FilePath prefix_;
 };
-
-void OnBorealisCreditsLoaded(content::URLDataSource::GotDataCallback callback,
-                             std::string credits_html) {
-  if (credits_html.empty()) {
-    credits_html = l10n_util::GetStringUTF8(IDS_BOREALIS_CREDITS_PLACEHOLDER);
-  }
-  std::move(callback).Run(
-      base::MakeRefCounted<base::RefCountedString>(std::move(credits_html)));
-}
-
-void HandleBorealisCredits(Profile* profile,
-                           content::URLDataSource::GotDataCallback callback) {
-  borealis::LoadBorealisCredits(
-      profile, base::BindOnce(&OnBorealisCreditsLoaded, std::move(callback)));
-}
 
 class CrostiniCreditsHandler
     : public base::RefCountedThreadSafe<CrostiniCreditsHandler> {
@@ -451,14 +442,10 @@ LinuxProxyConfigUI::LinuxProxyConfigUI()
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
-OSCreditsUI::OSCreditsUI()
-    : AboutUIConfigBase(chrome::kChromeUIOSCreditsHost) {}
-
-BorealisCreditsUI::BorealisCreditsUI()
-    : AboutUIConfigBase(chrome::kChromeUIBorealisCreditsHost) {}
+OSCreditsUI::OSCreditsUI() : AboutUIConfigBase(ash::kChromeUIOSCreditsHost) {}
 
 CrostiniCreditsUI::CrostiniCreditsUI()
-    : AboutUIConfigBase(chrome::kChromeUICrostiniCreditsHost) {}
+    : AboutUIConfigBase(ash::kChromeUICrostiniCreditsHost) {}
 #endif
 
 // AboutUIHTMLSource ----------------------------------------------------------
@@ -500,9 +487,8 @@ void AboutUIHTMLSource::StartDataRequest(
     response = AboutLinuxProxyConfig();
 #endif
 #if BUILDFLAG(IS_CHROMEOS)
-  } else if (source_name_ == chrome::kChromeUIOSCreditsHost ||
-             source_name_ == chrome::kChromeUICrostiniCreditsHost ||
-             source_name_ == chrome::kChromeUIBorealisCreditsHost) {
+  } else if (source_name_ == ash::kChromeUIOSCreditsHost ||
+             source_name_ == ash::kChromeUICrostiniCreditsHost) {
     int idr = IDR_ABOUT_UI_CREDITS_HTML;
     if (path == kCreditsJsPath) {
       idr = IDR_ABOUT_UI_CREDITS_JS;
@@ -510,13 +496,11 @@ void AboutUIHTMLSource::StartDataRequest(
       idr = IDR_ABOUT_UI_CREDITS_CSS;
     }
     if (idr == IDR_ABOUT_UI_CREDITS_HTML) {
-      if (source_name_ == chrome::kChromeUIOSCreditsHost) {
+      if (source_name_ == ash::kChromeUIOSCreditsHost) {
         ChromeOSCreditsHandler::Start(path, std::move(callback),
                                       os_credits_prefix_);
-      } else if (source_name_ == chrome::kChromeUICrostiniCreditsHost) {
+      } else if (source_name_ == ash::kChromeUICrostiniCreditsHost) {
         CrostiniCreditsHandler::Start(profile(), path, std::move(callback));
-      } else if (source_name_ == chrome::kChromeUIBorealisCreditsHost) {
-        HandleBorealisCredits(profile(), std::move(callback));
       } else {
         NOTREACHED();
       }
@@ -568,7 +552,7 @@ std::string AboutUIHTMLSource::GetAccessControlAllowOriginForOrigin(
 #if BUILDFLAG(IS_CHROMEOS)
   // Allow chrome://oobe to load chrome://terms via XHR.
   if (source_name_ == chrome::kChromeUITermsHost &&
-      base::StartsWith(chrome::kChromeUIOobeURL, origin,
+      base::StartsWith(ash::kChromeUIOobeURL, origin,
                        base::CompareCase::SENSITIVE)) {
     return origin;
   }

@@ -19,15 +19,13 @@ public interface AutocompleteDelegate extends UrlBarDelegate {
         void onLoadUrl(LoadUrlParams params, LoadUrlResult loadUrlResult);
     }
 
-    /** Notified that the URL text has changed. */
-    void onUrlTextChanged();
-
     /**
      * Notified that suggestions have changed.
      *
      * @param defaultMatch default AutocompleteMatch.
+     * @param hasSuggestions Whether 1 or more suggestions are being displayed.
      */
-    void onSuggestionsChanged(@Nullable AutocompleteMatch defaultMatch);
+    void onSuggestionsChanged(@Nullable AutocompleteMatch defaultMatch, boolean hasSuggestions);
 
     /**
      * Requests the keyboard visibility update.
@@ -55,11 +53,6 @@ public interface AutocompleteDelegate extends UrlBarDelegate {
      * @return Whether the omnibox was focused via the NTP fakebox.
      */
     boolean didFocusUrlFromFakebox();
-
-    /**
-     * @return Whether the URL currently has focus.
-     */
-    boolean isUrlBarFocused();
 
     /* Requests to show default browser promo when user pasting an URL. */
     void maybeShowDefaultBrowserPromo();

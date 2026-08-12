@@ -118,7 +118,8 @@ void BaseBlockingPage::CommandReceived(const std::string& page_cmd) {
       static_cast<security_interstitials::SecurityInterstitialCommand>(command);
 
   if (interstitial_command ==
-      security_interstitials::SecurityInterstitialCommand::CMD_PROCEED) {
+          security_interstitials::SecurityInterstitialCommand::CMD_PROCEED &&
+      !sb_error_ui_->is_proceed_anyway_disabled()) {
     // With committed interstitials, OnProceed() doesn't get called, so handle
     // adding to the allow list here.
     set_proceeded(true);
@@ -131,7 +132,7 @@ void BaseBlockingPage::CommandReceived(const std::string& page_cmd) {
 }
 
 void BaseBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   sb_error_ui_->PopulateStringsForHtml(load_time_data);
 }
 
@@ -146,7 +147,7 @@ BaseBlockingPage::UnsafeResourceMap* BaseBlockingPage::GetUnsafeResourcesMap() {
 }
 
 // static
-std::string BaseBlockingPage::GetMetricPrefix(
+std::string_view BaseBlockingPage::GetMetricPrefix(
     const UnsafeResourceList& unsafe_resources,
     BaseSafeBrowsingErrorUI::SBInterstitialReason interstitial_reason) {
   switch (interstitial_reason) {

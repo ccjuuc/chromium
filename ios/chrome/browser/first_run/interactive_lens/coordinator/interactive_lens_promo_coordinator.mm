@@ -69,6 +69,7 @@
         return presenter;
       };
 
+  // C2PA: Promo image should not have C2PA metadata. b/541315801
   [_lensOverlayHandler
           searchImageWithLens:_promoViewController.lensSearchImage
                    entrypoint:LensOverlayEntrypoint::kFREPromo
@@ -97,7 +98,7 @@
 
 - (void)didTapContinueButtonWithInteraction:(BOOL)interaction {
   CHECK(self.firstRunDelegate);
-  [self.firstRunDelegate screenWillFinishPresenting];
+  [self.firstRunDelegate firstRunScreenCoordinatorWantsToBeStopped:self];
   first_run::FirstRunStage stage =
       interaction ? first_run::kInteractiveLensCompletionWithInteraction
                   : first_run::kInteractiveLensCompletionWithoutInteraction;

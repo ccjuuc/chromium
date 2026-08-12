@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <set>
 
+#include "base/check.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "services/webnn/public/cpp/webnn_errors.h"
@@ -385,7 +386,55 @@ std::vector<uint32_t> CalculateStrides(base::span<const uint32_t> dimensions) {
     strides[i] = stride.ValueOrDie();
     stride *= dimensions[i];
   }
+  CHECK(stride.IsValid());
   return strides;
+}
+
+webnn::Pool2dKind FromMojoPool2dType(mojom::Pool2d::Kind kind) {
+  switch (kind) {
+    case mojom::Pool2d::Kind::kAveragePool2d:
+      return webnn::Pool2dKind::kAverage;
+    case mojom::Pool2d::Kind::kL2Pool2d:
+      return webnn::Pool2dKind::kL2;
+    case mojom::Pool2d::Kind::kMaxPool2d:
+      return webnn::Pool2dKind::kMax;
+  }
+}
+
+webnn::ReduceKind FromMojoReduceType(mojom::Reduce::Kind kind) {
+  switch (kind) {
+    case mojom::Reduce::Kind::kL1:
+      return webnn::ReduceKind::kL1;
+    case mojom::Reduce::Kind::kL2:
+      return webnn::ReduceKind::kL2;
+    case mojom::Reduce::Kind::kLogSum:
+      return webnn::ReduceKind::kLogSum;
+    case mojom::Reduce::Kind::kLogSumExp:
+      return webnn::ReduceKind::kLogSumExp;
+    case mojom::Reduce::Kind::kMax:
+      return webnn::ReduceKind::kMax;
+    case mojom::Reduce::Kind::kMean:
+      return webnn::ReduceKind::kMean;
+    case mojom::Reduce::Kind::kMin:
+      return webnn::ReduceKind::kMin;
+    case mojom::Reduce::Kind::kProduct:
+      return webnn::ReduceKind::kProduct;
+    case mojom::Reduce::Kind::kSum:
+      return webnn::ReduceKind::kSum;
+    case mojom::Reduce::Kind::kSumSquare:
+      return webnn::ReduceKind::kSumSquare;
+  }
+}
+
+webnn::PaddingMode FromMojoPaddingMode(mojom::PaddingMode::Tag tag) {
+  switch (tag) {
+    case mojom::PaddingMode::Tag::kConstant:
+      return webnn::PaddingMode::kConstant;
+    case mojom::PaddingMode::Tag::kEdge:
+      return webnn::PaddingMode::kEdge;
+    case mojom::PaddingMode::Tag::kReflection:
+      return webnn::PaddingMode::kReflection;
+  }
 }
 
 }  // namespace webnn

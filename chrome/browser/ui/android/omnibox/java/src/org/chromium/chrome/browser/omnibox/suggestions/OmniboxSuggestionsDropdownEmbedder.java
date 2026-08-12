@@ -23,13 +23,14 @@ public interface OmniboxSuggestionsDropdownEmbedder {
     class OmniboxAlignment {
 
         public static final OmniboxAlignment UNSPECIFIED =
-                new OmniboxAlignment(-1, -1, -1, -1, -1, -1, -1);
+                new OmniboxAlignment(-1, -1, -1, -1, -1, -1, -1, -1);
         public final int left;
         public final int top;
         public final int width;
         public final int height;
         public final int paddingLeft;
         public final int paddingRight;
+        public final int paddingTop;
         public final int paddingBottom;
 
         public OmniboxAlignment(
@@ -39,19 +40,22 @@ public interface OmniboxSuggestionsDropdownEmbedder {
                 int height,
                 int paddingLeft,
                 int paddingRight,
+                int paddingTop,
                 int paddingBottom) {
             this.left = left;
             this.top = top;
             this.width = width;
             this.paddingLeft = paddingLeft;
             this.paddingRight = paddingRight;
+            this.paddingTop = paddingTop;
             this.paddingBottom = paddingBottom;
             this.height = height;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(left, top, width, paddingLeft, paddingRight, paddingBottom);
+            return Objects.hash(
+                    left, top, width, paddingLeft, paddingRight, paddingTop, paddingBottom);
         }
 
         @Override
@@ -64,6 +68,7 @@ public interface OmniboxSuggestionsDropdownEmbedder {
                     && other.height == this.height
                     && other.paddingLeft == this.paddingLeft
                     && other.paddingRight == this.paddingRight
+                    && other.paddingTop == this.paddingTop
                     && other.paddingBottom == this.paddingBottom;
         }
 
@@ -72,8 +77,8 @@ public interface OmniboxSuggestionsDropdownEmbedder {
         public String toString() {
             return String.format(
                     "OmniboxAlignment left: %d top: %d width: %d height: %d paddingLeft: %d"
-                            + " paddingRight: %d paddingBottom: %d",
-                    left, top, width, height, paddingLeft, paddingRight, paddingBottom);
+                            + " paddingRight: %d paddingTop: %d paddingBottom: %d",
+                    left, top, width, height, paddingLeft, paddingRight, paddingTop, paddingBottom);
         }
 
         /**
@@ -87,6 +92,7 @@ public interface OmniboxSuggestionsDropdownEmbedder {
                                     && this.paddingRight != other.paddingRight))
                     && (this.top == other.top
                             && this.width == other.width
+                            && this.paddingTop == other.paddingTop
                             && this.paddingBottom == other.paddingBottom);
         }
 
@@ -118,14 +124,11 @@ public interface OmniboxSuggestionsDropdownEmbedder {
      */
     OmniboxAlignment getCurrentAlignment();
 
-    /** Return whether the suggestions are being rendered in the tablet UI. */
-    boolean isTablet();
+    /** Return whether the current window is a wide window. */
+    boolean isWideWindow();
 
-    /**
-     * Returns whether {@link OmniboxSuggestionsContainer} should pass through unhandled touch
-     * events.
-     */
-    boolean shouldPassThroughUnhandledTouchEvents();
+    /** Return whether the suggestions are being rendered in a phone-style window. */
+    boolean isPhoneStyleWindow();
 
     /**
      * The dropdown must call this when it is attached to the window to start the process of

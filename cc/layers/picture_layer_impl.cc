@@ -14,7 +14,6 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
@@ -101,31 +100,12 @@ gfx::Rect SafeIntersectRects(const gfx::Rect& one, const gfx::Rect& two) {
 }  // namespace
 
 PictureLayerImpl::PictureLayerImpl(LayerTreeImpl* tree_impl, int id)
-    : TileBasedLayerImpl(tree_impl, id) {
-  layer_tree_impl()->RegisterPictureLayerImpl(this);
-}
+    : TileBasedLayerImpl(tree_impl, id) {}
 
 PictureLayerImpl::~PictureLayerImpl() {
-  if (twin_layer_)
+  if (twin_layer_) {
     twin_layer_->twin_layer_ = nullptr;
-
-  // We only track PaintWorklet-containing PictureLayerImpls on the pending
-  // tree. However this deletion may happen outside the commit flow when we are
-  // on the recycle tree instead, so just check !IsActiveTree().
-  if (!paint_worklet_records_.empty() && !layer_tree_impl()->IsActiveTree())
-    layer_tree_impl()->NotifyLayerHasPaintWorkletsChanged(this, false);
-
-  // Similarly, AnimatedPaintWorkletTracker is only valid on the pending tree.
-  if (!layer_tree_impl()->IsActiveTree()) {
-    layer_tree_impl()
-        ->paint_worklet_tracker()
-        .UpdatePaintWorkletInputProperties({}, this);
   }
-
-  layer_tree_impl()->UnregisterPictureLayerImpl(this);
-
-  // Unregister for all images on the current raster source.
-  UnregisterAnimatedImages();
 }
 
 mojom::LayerType PictureLayerImpl::GetLayerType() const {
@@ -137,24 +117,47 @@ std::unique_ptr<LayerImpl> PictureLayerImpl::CreateLayerImpl(
   return PictureLayerImpl::Create(tree_impl, id());
 }
 
-void PictureLayerImpl::PushPropertiesTo(LayerImpl* base_layer) {
+void PictureLayerImpl::CopyPropertiesTo(LayerImpl* base_layer) const {
   PictureLayerImpl* layer_impl = static_cast<PictureLayerImpl*>(base_layer);
 
-  layer_impl->has_animated_image_update_rect_ = has_animated_image_update_rect_;
-  layer_impl->has_non_animated_image_update_rect_ =
-      has_non_animated_image_update_rect_;
+  LayerImpl::CopyPropertiesTo(base_layer);
 
-  // This hs to be cached before calling LayerImpl::PushPropertiesTo because it
-  // reset the flag.
   bool changed_other_props = GetChangeFlag(kChangedGeneralProperty);
+  if (changed_other_props) {
+    layer_impl->has_animated_image_update_rect_ =
+        has_animated_image_update_rect_;
+    layer_impl->has_non_animated_image_update_rect_ =
+        has_non_animated_image_update_rect_;
+    layer_impl->SetIsBackdropFilterMask(is_backdrop_filter_mask());
 
-  LayerImpl::PushPropertiesTo(base_layer);
+    // Solid color layers have no tilings.
+    DCHECK(!solid_color() || tilings_->num_tilings() == 0);
+
+    // The pending tree should have at most a single tiling.
+    DCHECK_LE(tilings_->num_tilings(), 1u);
+
+    layer_impl->set_gpu_raster_max_texture_size(gpu_raster_max_texture_size_);
+
+    layer_impl->raster_page_scale_ = raster_page_scale_;
+    layer_impl->raster_device_scale_ = raster_device_scale_;
+    layer_impl->raster_source_scale_ = raster_source_scale_;
+    layer_impl->raster_contents_scale_ = raster_contents_scale_;
+    // Simply push the value to the active tree without any extra invalidations,
+    // since the pending tree tiles would have this handled. This is here to
+    // ensure the state is consistent for future raster.
+    layer_impl->lcd_text_disallowed_reason_ = lcd_text_disallowed_reason_;
+  }
+}
+
+void PictureLayerImpl::MovePropertiesToActiveLayer(LayerImpl* active_layer) {
+  LayerImpl::MovePropertiesToActiveLayer(active_layer);
+  PictureLayerImpl* layer_impl = static_cast<PictureLayerImpl*>(active_layer);
 
   // Twin relationships should never change once established.
   DCHECK(!twin_layer_ || twin_layer_ == layer_impl);
   DCHECK(!twin_layer_ || layer_impl->twin_layer_ == this);
   // The twin relationship does not need to exist before the first
-  // PushPropertiesTo from pending to active layer since before that the active
+  // CopyPropertiesTo from pending to active layer since before that the active
   // layer can not have a pile or tilings, it has only been created and inserted
   // into the tree at that point.
   twin_layer_ = layer_impl;
@@ -164,7 +167,8 @@ void PictureLayerImpl::PushPropertiesTo(LayerImpl* base_layer) {
     // Move tile updates over to the active layer so they get pushed to the
     // display tree. Note that the active layer after this point can also
     // accumulate their own tile updates into its |updated_tiles_|.
-    {
+    bool changed_tiles = GetChangeFlag(kChangedTile);
+    if (changed_tiles) {
       // Deep merge logic.
       auto& dst = layer_impl->updated_tiles_;
       auto& src = updated_tiles_;
@@ -180,6 +184,8 @@ void PictureLayerImpl::PushPropertiesTo(LayerImpl* base_layer) {
         }
       }
       src.clear();
+    } else {
+      DCHECK(updated_tiles_.empty()) << "kChangedTile flag should be set!";
     }
 
     // Since the layer has been activated, all the active tree tile updates
@@ -188,33 +194,16 @@ void PictureLayerImpl::PushPropertiesTo(LayerImpl* base_layer) {
     layer_impl->should_batch_updated_tiles_ = true;
   }
 
+  bool changed_other_props = GetChangeFlag(kChangedGeneralProperty);
   if (changed_other_props) {
-    layer_impl->SetIsBackdropFilterMask(is_backdrop_filter_mask());
-
-    // Solid color layers have no tilings.
-    DCHECK(!solid_color() || tilings_->num_tilings() == 0);
-
-    // The pending tree should have at most a single tiling.
-    DCHECK_LE(tilings_->num_tilings(), 1u);
-
-    layer_impl->set_gpu_raster_max_texture_size(gpu_raster_max_texture_size_);
     layer_impl->UpdateRasterSourceInternal(
-        raster_source_, &invalidation_, tilings_.get(), &paint_worklet_records_,
-        discardable_image_map_.get());
+        raster_source_, std::move(invalidation_), tilings_.get(),
+        &paint_worklet_records_, discardable_image_map_.get());
     DCHECK(invalidation_.IsEmpty());
-
-    // After syncing a solid color layer, the active layer has no tilings.
-    DCHECK(!solid_color() || layer_impl->tilings_->num_tilings() == 0);
-
-    layer_impl->raster_page_scale_ = raster_page_scale_;
-    layer_impl->raster_device_scale_ = raster_device_scale_;
-    layer_impl->raster_source_scale_ = raster_source_scale_;
-    layer_impl->raster_contents_scale_ = raster_contents_scale_;
-    // Simply push the value to the active tree without any extra invalidations,
-    // since the pending tree tiles would have this handled. This is here to
-    // ensure the state is consistent for future raster.
-    layer_impl->lcd_text_disallowed_reason_ = lcd_text_disallowed_reason_;
   }
+
+  // After syncing a solid color layer, the active layer has no tilings.
+  DCHECK(!solid_color() || layer_impl->tilings_->num_tilings() == 0);
 
   layer_impl->SanityCheckTilingState();
 }
@@ -262,44 +251,73 @@ void PictureLayerImpl::AppendQuadsForResourcelessSoftwareDraw(
                                                       : WhichTree::ACTIVE_TREE;
   for (const auto& image_data :
        discardable_image_map_->animated_images_metadata()) {
-    image_animation_map[image_data.paint_image_id] =
-        controller->GetFrameIndexForImage(image_data.paint_image_id, tree);
+    image_animation_map[image_data.second.paint_image_id] =
+        controller->GetFrameIndexForImage(image_data.second.paint_image_id,
+                                          tree);
   }
 
   auto* quad = render_pass->CreateAndAppendDrawQuad<viz::PictureDrawQuad>();
   quad->SetNew(
       shared_quad_state, geometry_rect, visible_geometry_rect, needs_blending,
-      texture_rect, nearest_neighbor_, quad_content_rect, max_contents_scale,
+      texture_rect, GetNearestNeighbor(), quad_content_rect, max_contents_scale,
       std::move(image_animation_map), raster_source_->GetDisplayItemList(),
       GetRasterInducingScrollOffsets());
   ValidateQuadResources(quad);
 }
 
-void PictureLayerImpl::AppendQuadsSpecialization(
-    const AppendQuadsContext& context,
-    viz::CompositorRenderPass* render_pass,
+bool PictureLayerImpl::ShouldUpdateApproximatedVisibleContentArea(
+    TileResolution resolution) const {
+  return resolution != HIGH_RESOLUTION;
+}
+
+bool PictureLayerImpl::ShouldReportTileAsMissing(
+    const gfx::Rect& tile_geometry_rect,
+    const gfx::Rect& scaled_viewport_for_tile_priority) const {
+  // Only report the tile as missing if it's in the viewport.
+  return tile_geometry_rect.Intersects(scaled_viewport_for_tile_priority);
+}
+
+void PictureLayerImpl::DidAppendQuad(
+    viz::DrawQuad* quad,
+    const TilingSetCoverageIterator<PictureLayerTiling>& iter,
     AppendQuadsData* append_quads_data,
-    viz::SharedQuadState* shared_quad_state,
-    const Occlusion& scaled_occlusion,
-    const gfx::Vector2d& quad_offset,
-    float max_contents_scale) {
-  // Keep track of the tilings that were used so that tilings that are
-  // unused can be considered for removal.
-  ClearLastAppendQuadsScales();
+    bool is_checkerboard) {
+  ValidateQuadResources(quad);
 
-  // Ignore missing tiles outside of viewport for tile priority. This is
-  // normally the same as draw viewport but can be independently overridden by
-  // embedders like Android WebView with SetExternalTilePriorityConstraints.
-  gfx::Rect scaled_viewport_for_tile_priority = gfx::ScaleToEnclosingRect(
-      viewport_rect_for_tile_priority_in_content_space_, max_contents_scale);
+  if (is_checkerboard) {
+    // Report data on any missing images that might be the largest
+    // contentful image.
+    if (*iter) {
+      UMA_HISTOGRAM_BOOLEAN(
+          "Compositing.DecodeLCPCandidateImage.MissedDeadline",
+          iter->HasMissingLCPCandidateImages());
+    }
+  }
+}
 
-  std::optional<gfx::Rect> scaled_cull_rect =
-      CalculateScaledCullRect(max_contents_scale);
+void PictureLayerImpl::WillProcessReadyToDrawTile(
+    const TilingSetCoverageIterator<PictureLayerTiling>& iter) {
+  // Mark the tile used for raster. This is used to reclaim old prepaint
+  // tiles in TileManager.
+  if (*iter) {
+    (*iter)->mark_used();
+  }
+}
+
+bool PictureLayerImpl::ComputeCheckerboardedNeedsRecord() {
+  if (is_backdrop_filter_mask()) {
+    return false;
+  }
+
+  if (solid_color()) {
+    return false;
+  }
 
   const ScrollTree& scroll_tree =
       layer_tree_impl()->property_trees()->scroll_tree();
 
-  if (const auto& display_list = raster_source_->GetDisplayItemList()) {
+  if (const auto& display_list =
+          raster_source_ ? raster_source_->GetDisplayItemList() : nullptr) {
     for (auto& [element_id, info] : display_list->raster_inducing_scrolls()) {
       if (!info.visual_rect.Intersects(visible_layer_rect())) {
         continue;
@@ -317,144 +335,46 @@ void PictureLayerImpl::AppendQuadsSpecialization(
           visible_rect.Offset(
               scroll_tree.current_scroll_offset(element_id).OffsetFromOrigin());
           if (!cull_rect->Contains(gfx::ToEnclosedRect(visible_rect))) {
-            append_quads_data->checkerboarded_needs_record = true;
-            break;
+            return true;
           }
         }
       }
     }
   }
 
-  int missing_tile_count = 0;
-  produced_tile_last_append_quads_ = false;
-  gfx::Rect scaled_recorded_bounds = gfx::ScaleToEnclosingRect(
-      raster_source_->recorded_bounds(), max_contents_scale);
-  for (auto iter = Cover(shared_quad_state->visible_quad_layer_rect,
-                         max_contents_scale, GetIdealContentsScaleKey());
-       iter; ++iter) {
-    gfx::Rect geometry_rect = iter.geometry_rect();
-    gfx::Rect visible_geometry_rect;
-    if (ShouldSkipTile(geometry_rect, scaled_recorded_bounds, scaled_occlusion,
-                       visible_geometry_rect)) {
-      continue;
-    }
-
-    gfx::Rect offset_geometry_rect = geometry_rect;
-    offset_geometry_rect.Offset(quad_offset);
-    gfx::Rect offset_visible_geometry_rect = visible_geometry_rect;
-    offset_visible_geometry_rect.Offset(quad_offset);
-
-    bool needs_blending = !contents_opaque();
-
-    uint64_t visible_geometry_area = visible_geometry_rect.size().Area64();
-    append_quads_data->visible_layer_area += visible_geometry_area;
-
-    bool has_draw_quad = false;
-    if (*iter && iter->draw_info().IsReadyToDraw()) {
-      const TileDrawInfo& draw_info = iter->draw_info();
-      // Mark the tile used for raster. This is used to reclaim old prepaint
-      // tiles in TileManager.
-      iter->mark_used();
-
-      switch (draw_info.mode()) {
-        case TileDrawInfo::RESOURCE_MODE: {
-          gfx::RectF texture_rect = iter.texture_rect();
-
-          // The raster_contents_scale_ is the best scale that the layer is
-          // trying to produce, even though it may not be ideal. Since that's
-          // the best the layer can promise in the future, consider those as
-          // complete. Also consider a tile complete if it is ideal scale or
-          // better. Note that PLTS::CoverageIterator prefers the _smallest_
-          // scale that is >= ideal, which may be < raster_contents_scale_.
-          if (iter->contents_scale_key() != raster_contents_scale_key() &&
-              iter->contents_scale_key() < GetIdealContentsScaleKey() &&
-              geometry_rect.Intersects(scaled_viewport_for_tile_priority)) {
-            append_quads_data->checkerboarded_needs_raster = true;
-          }
-
-          auto* quad =
-              render_pass->CreateAndAppendDrawQuad<viz::TileDrawQuad>();
-          quad->SetNew(
-              shared_quad_state, offset_geometry_rect,
-              offset_visible_geometry_rect, needs_blending,
-              draw_info.resource_id_for_export(), texture_rect,
-              nearest_neighbor_,
-              !layer_tree_impl()->settings().enable_edge_anti_aliasing);
-          ValidateQuadResources(quad);
-          has_draw_quad = true;
-          break;
-        }
-        case TileDrawInfo::SOLID_COLOR_MODE: {
-          float alpha = draw_info.solid_color().fA * shared_quad_state->opacity;
-          if (alpha >= std::numeric_limits<float>::epsilon()) {
-            auto* quad =
-                render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
-            quad->SetNew(
-                shared_quad_state, offset_geometry_rect,
-                offset_visible_geometry_rect, draw_info.solid_color(),
-                !layer_tree_impl()->settings().enable_edge_anti_aliasing);
-            ValidateQuadResources(quad);
-          }
-          has_draw_quad = true;
-          break;
-        }
-        case TileDrawInfo::OOM_MODE:
-          break;  // Checkerboard.
-      }
-    }
-
-    if (!append_quads_data->checkerboarded_needs_record && scaled_cull_rect &&
-        !scaled_cull_rect->Contains(visible_geometry_rect)) {
-      append_quads_data->checkerboarded_needs_record = true;
-    }
-
-    if (!has_draw_quad) {
-      // Checkerboard due to missing raster.
-      SkColor4f color = safe_opaque_background_color();
-      if (ShowDebugBorders(DebugBorderType::LAYER)) {
-        // Fill the whole tile with the missing tile color.
-        color = DebugColors::DefaultCheckerboardColor();
-      }
-      auto* quad =
-          render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
-      quad->SetNew(shared_quad_state, offset_geometry_rect,
-                   offset_visible_geometry_rect, color, false);
-      ValidateQuadResources(quad);
-
-      if (geometry_rect.Intersects(scaled_viewport_for_tile_priority)) {
-        ++missing_tile_count;
-      }
-
-      // Report data on any missing images that might be the largest
-      // contentful image.
-      if (*iter) {
-        UMA_HISTOGRAM_BOOLEAN(
-            "Compositing.DecodeLCPCandidateImage.MissedDeadline",
-            iter->HasMissingLCPCandidateImages());
-      }
-
-      continue;
-    }
-
-    if (iter.resolution() != HIGH_RESOLUTION) {
-      append_quads_data->approximated_visible_content_area +=
-          visible_geometry_area;
-    }
-
-    produced_tile_last_append_quads_ = true;
-
-    AddScaleToLastAppendQuadsScales(iter.CurrentTiling()->contents_scale_key());
+  std::optional<gfx::Rect> cull_rect_in_layer_space =
+      CalculateCullRectInLayerSpace();
+  if (!cull_rect_in_layer_space) {
+    return false;
   }
 
-  if (missing_tile_count) {
-    append_quads_data->num_missing_tiles += missing_tile_count;
-    append_quads_data->checkerboarded_needs_raster = true;
-    TRACE_EVENT_INSTANT1("cc", "PictureLayerImpl::AppendQuads checkerboard",
-                         TRACE_EVENT_SCOPE_THREAD, "missing_tile_count",
-                         missing_tile_count);
-  }
+  // The unoccluded recorded visible rect is what we might want to record.
+  // We compute this in layer space (unscaled) to avoid unnecessary scaling
+  // operations and avoid expensive GetOcclusionWithGivenDrawTransform() which
+  // involves matrix multiplication and inversion.
+  gfx::Rect recorded_visible_layer_rect = visible_layer_rect();
+  recorded_visible_layer_rect.Intersect(gfx::Rect(bounds()));
+  recorded_visible_layer_rect.Intersect(RecordedBounds());
 
-  SanityCheckTilingState();
+  gfx::Rect unoccluded_recorded_visible_rect =
+      draw_properties().occlusion_in_content_space.GetUnoccludedContentRect(
+          recorded_visible_layer_rect);
+
+  if (!unoccluded_recorded_visible_rect.IsEmpty() &&
+      !cull_rect_in_layer_space->Contains(unoccluded_recorded_visible_rect)) {
+    return true;
+  }
+  return false;
+}
+
+void PictureLayerImpl::WillAppendQuads() {
+  set_produced_tile_last_append_quads(false);
+}
+
+gfx::Rect PictureLayerImpl::GetScaledViewportForTilePriority(
+    float max_contents_scale) const {
+  return gfx::ScaleToEnclosingRect(
+      viewport_rect_for_tile_priority_in_content_space_, max_contents_scale);
 }
 
 bool PictureLayerImpl::UpdateTiles() {
@@ -515,7 +435,7 @@ bool PictureLayerImpl::UpdateTiles() {
   bool can_require_tiles_for_activation = false;
   if (contributes_to_drawn_render_surface()) {
     can_require_tiles_for_activation =
-        produced_tile_last_append_quads_ || RequiresHighResToDraw() ||
+        produced_tile_last_append_quads() || RequiresHighResToDraw() ||
         !layer_tree_impl()->SmoothnessTakesPriority();
   }
 
@@ -534,6 +454,25 @@ bool PictureLayerImpl::UpdateTiles() {
   DCHECK_GT(tilings_->num_tilings(), 0u);
   SanityCheckTilingState();
   return updated;
+}
+
+bool PictureLayerImpl::HasAnimatedImages() const {
+  return discardable_image_map_ &&
+         discardable_image_map_->animated_images_metadata().size();
+}
+
+void PictureLayerImpl::AnnotateAnimatedImages(
+    AnimatedImageDriverMap& driver_map) const {
+  if (!discardable_image_map_) {
+    return;
+  }
+  for (const auto& data : discardable_image_map_->animated_images_metadata()) {
+    auto& driver_state = driver_map[data.first];
+    driver_state.first |= ShouldAnimate(data.first);
+    if (canvas_child_id()) {
+      driver_state.second.push_back(canvas_child_id());
+    }
+  }
 }
 
 void PictureLayerImpl::UpdateViewportRectForTilePriorityInContentSpace() {
@@ -580,22 +519,28 @@ PictureLayerImpl* PictureLayerImpl::GetPendingOrActiveTwinLayer() const {
   return twin_layer_;
 }
 
-void PictureLayerImpl::UpdateRasterSource(
+void PictureLayerImpl::StageNewRasterSourceForCommit(
     scoped_refptr<RasterSource> raster_source,
-    Region* new_invalidation) {
-  CHECK(layer_tree_impl()->IsSyncTree());
+    Region new_invalidation) {
+  pending_raster_source_ = std::move(raster_source);
+  pending_invalidation_ = std::move(new_invalidation);
+}
+
+void PictureLayerImpl::CommitPendingRasterSource() {
+  CHECK(pending_raster_source_);
   UpdateRasterSourceInternal(
-      std::move(raster_source), new_invalidation,
+      std::move(pending_raster_source_), std::move(pending_invalidation_),
       // These pointers being null indicates we are committing.
       nullptr, nullptr, nullptr);
 }
 
 void PictureLayerImpl::UpdateRasterSourceInternal(
     scoped_refptr<RasterSource> raster_source,
-    Region* new_invalidation,
+    Region new_invalidation,
     const PictureLayerTilingSet* pending_set,
     const PaintWorkletRecordMap* pending_paint_worklet_records,
     const DiscardableImageMap* pending_discardable_image_map) {
+  CHECK(!!pending_set || layer_tree_impl()->IsSyncTree());
   CHECK(raster_source);
   // The layer bounds and the raster source size may differ if the raster source
   // wasn't updated (ie. PictureLayer::Update didn't happen). In that case the
@@ -617,8 +562,8 @@ void PictureLayerImpl::UpdateRasterSourceInternal(
       !raster_source_ || raster_source_->GetDisplayItemList() !=
                              raster_source->GetDisplayItemList();
 
-    // If the MSAA sample count has changed, we need to re-raster the complete
-    // layer.
+  // If the MSAA sample count has changed, we need to re-raster the complete
+  // layer.
   if (recording_updated && raster_source_) {
     const auto& current_display_item_list =
         raster_source_->GetDisplayItemList();
@@ -635,7 +580,7 @@ void PictureLayerImpl::UpdateRasterSourceInternal(
           layer_tree_impl()->GetTargetColorParams(
               new_display_item_list->content_color_usage());
       if (needs_full_invalidation) {
-        new_invalidation->Union(gfx::Rect(raster_source->size()));
+        new_invalidation.Union(gfx::Rect(raster_source->size()));
       }
     }
   }
@@ -657,11 +602,14 @@ void PictureLayerImpl::UpdateRasterSourceInternal(
     // During activation, check if we need to pull the discardable image map
     // from the pending tree.
     if (pending_discardable_image_map != discardable_image_map_) {
+      bool had_animated_images = HasAnimatedImages();
       CHECK(pending_paint_worklet_records);
       paint_worklet_records_ = *pending_paint_worklet_records;
-      UnregisterAnimatedImages();
       discardable_image_map_ = pending_discardable_image_map;
-      RegisterAnimatedImages();
+      if (had_animated_images != HasAnimatedImages()) {
+        layer_tree_impl()->NotifyLayerHasAnimatedImagesChanged(
+            this, HasAnimatedImages());
+      }
     }
   } else if (recording_updated) {
     layer_tree_impl()->AddLayerNeedingUpdateDiscardableImageMap(this);
@@ -669,8 +617,7 @@ void PictureLayerImpl::UpdateRasterSourceInternal(
 
   // The |new_invalidation| must be cleared before updating tilings since they
   // access the invalidation through the PictureLayerTilingClient interface.
-  invalidation_.Clear();
-  invalidation_.Swap(new_invalidation);
+  invalidation_ = std::move(new_invalidation);
 
   bool can_have_tilings = CanHaveTilings();
   DCHECK(!pending_set ||
@@ -708,26 +655,34 @@ void PictureLayerImpl::SetRasterSourceForTesting(
     scoped_refptr<RasterSource> raster_source,
     const Region& invalidation) {
   LayerTreeImpl::DiscardableImageMapUpdater updater(layer_tree_impl());
-  Region invalidation_temp = invalidation;
-  UpdateRasterSource(std::move(raster_source), &invalidation_temp);
+  UpdateRasterSourceInternal(std::move(raster_source), std::move(invalidation),
+                             nullptr, nullptr, nullptr);
 }
 
 void PictureLayerImpl::RegenerateDiscardableImageMap() {
   CHECK(layer_tree_impl()->IsSyncTree());
-  UnregisterAnimatedImages();
+  bool had_animated_images = HasAnimatedImages();
   if (const auto* display_list = raster_source_->GetDisplayItemList().get()) {
     DiscardableImageMap::DecodingModeMap decoding_mode_map;
     DiscardableImageMap::PaintWorkletInputs paint_worklet_inputs;
     discardable_image_map_ = display_list->GenerateDiscardableImageMap(
         GetRasterInducingScrollOffsets(), &decoding_mode_map,
         &paint_worklet_inputs);
+    auto* controller = layer_tree_impl()->image_animation_controller();
+    for (const auto& data :
+         discardable_image_map_->animated_images_metadata()) {
+      controller->UpdateAnimatedImage(data.second);
+    }
     SetPaintWorkletInputs(paint_worklet_inputs);
     layer_tree_impl()->UpdateImageDecodingHints(decoding_mode_map);
   } else {
     SetPaintWorkletInputs({});
     discardable_image_map_ = nullptr;
   }
-  RegisterAnimatedImages();
+  if (had_animated_images != HasAnimatedImages()) {
+    layer_tree_impl()->NotifyLayerHasAnimatedImagesChanged(this,
+                                                           HasAnimatedImages());
+  }
 }
 
 void PictureLayerImpl::UpdateCanUseLCDText(
@@ -742,10 +697,10 @@ void PictureLayerImpl::UpdateCanUseLCDText(
 }
 
 bool PictureLayerImpl::AffectedByWillChangeTransformHint() const {
-  TransformNode* transform_node =
-      GetTransformTree().Node(transform_tree_index());
-  return transform_node &&
-         transform_node->node_or_ancestors_will_change_transform;
+  return transform_tree_index() != kInvalidPropertyNodeId &&
+         GetTransformTree()
+             .Node(transform_tree_index())
+             .node_or_ancestors_will_change_transform;
 }
 
 LCDTextDisallowedReason PictureLayerImpl::ComputeLCDTextDisallowedReason(
@@ -763,9 +718,9 @@ LCDTextDisallowedReason PictureLayerImpl::ComputeLCDTextDisallowedReason(
     return LCDTextDisallowedReason::kSetting;
   }
 
-  TransformNode* transform_node =
+  const TransformNode& transform_node =
       GetTransformTree().Node(transform_tree_index());
-  if (transform_node->node_or_ancestors_will_change_transform) {
+  if (transform_node.node_or_ancestors_will_change_transform) {
     return LCDTextDisallowedReason::kWillChangeTransform;
   }
 
@@ -773,9 +728,9 @@ LCDTextDisallowedReason PictureLayerImpl::ComputeLCDTextDisallowedReason(
     return LCDTextDisallowedReason::kTransformAnimation;
   }
 
-  EffectNode* effect_node = GetEffectTree().Node(effect_tree_index());
-  if (effect_node->lcd_text_disallowed_by_filter ||
-      effect_node->lcd_text_disallowed_by_backdrop_filter) {
+  const EffectNode& effect_node = GetEffectTree().Node(effect_tree_index());
+  if (effect_node.lcd_text_disallowed_by_filter ||
+      effect_node.lcd_text_disallowed_by_backdrop_filter) {
     return LCDTextDisallowedReason::kPixelOrColorEffect;
   }
 
@@ -813,7 +768,7 @@ void PictureLayerImpl::NotifyTileStateChanged(const Tile* tile,
                                               bool update_damage) {
   if (update_damage) {
     if (layer_tree_impl()->IsActiveTree()) {
-      damage_rect_.Union(tile->enclosing_layer_rect());
+      UnionWithExistingDamage(tile->enclosing_layer_rect());
     }
     if (tile->draw_info().NeedsRaster()) {
       PictureLayerTiling* tiling =
@@ -825,30 +780,28 @@ void PictureLayerImpl::NotifyTileStateChanged(const Tile* tile,
     }
   }
 
-  if (layer_tree_impl()->settings().TreesInVizInClientProcess() &&
-      should_batch_updated_tiles_) {
-    bool update_damage_in_viz = false;
-    if (update_damage && layer_tree_impl()->IsActiveTree()) {
-      update_damage_in_viz = true;
+  if (layer_tree_impl()->settings().TreesInVizInClientProcess()) {
+    if (should_batch_updated_tiles_) {
+      bool update_damage_in_viz = false;
+      if (update_damage && layer_tree_impl()->IsActiveTree()) {
+        update_damage_in_viz = true;
+      }
+      // This layer's tile updates are being batched. For a pending layer, this
+      // is always true. For an active layer, this means it was just activated
+      // and is waiting for its state to be sent to Viz via UpdateDisplayTree.
+      // The accumulated updates are pushed to the active tree on activation and
+      // active layer can continue to accumulate the tile updates until
+      // UpdateDisplayTree.
+      auto result = updated_tiles_[tile->contents_scale_key()].emplace(
+          tile->tiling_i_index(), tile->tiling_j_index(), update_damage_in_viz);
+      // If there is {i,j,false} in the set already, we want to switch it to
+      // true if |update_damage_in_viz| is true.
+      if (!result.second && update_damage_in_viz) {
+        result.first->update_damage = true;
+      }
     }
-    // This layer's tile updates are being batched. For a pending layer, this is
-    // always true. For an active layer, this means it was just activated and is
-    // waiting for its state to be sent to Viz via UpdateDisplayTree. The
-    // accumulated updates are pushed to the active tree on activation and
-    // active layer can continue to accumulate the tile updates until
-    // UpdateDisplayTree.
-    auto result = updated_tiles_[tile->contents_scale_key()].emplace(
-        tile->tiling_i_index(), tile->tiling_j_index(), update_damage_in_viz);
-    // If there is {i,j,false} in the set already, we want to switch it to
-    // true if |update_damage_in_viz| is true.
-    if (!result.second && update_damage_in_viz) {
-      result.first->update_damage = true;
-    }
+    SetNeedsPushProperties(kChangedTile);
   }
-}
-
-gfx::Rect PictureLayerImpl::GetDamageRect() const {
-  return damage_rect_;
 }
 
 void PictureLayerImpl::DidDraw(viz::ClientResourceProvider* resource_provider) {
@@ -863,8 +816,7 @@ void PictureLayerImpl::DidDraw(viz::ClientResourceProvider* resource_provider) {
 }
 
 void PictureLayerImpl::ResetChangeTracking() {
-  LayerImpl::ResetChangeTracking();
-  damage_rect_.SetRect(0, 0, 0, 0);
+  TileBasedLayerImpl<PictureLayerTiling>::ResetChangeTracking();
   has_animated_image_update_rect_ = false;
   has_non_animated_image_update_rect_ = false;
 }
@@ -956,6 +908,10 @@ bool PictureLayerImpl::IsDirectlyCompositedImage() const {
   return directly_composited_image_default_raster_scale_ > 0.f;
 }
 
+gfx::Rect PictureLayerImpl::RecordedBounds() const {
+  return raster_source_ ? raster_source_->recorded_bounds() : gfx::Rect();
+}
+
 std::vector<const DrawImage*> PictureLayerImpl::GetDiscardableImagesInRect(
     const gfx::Rect& rect) const {
   return discardable_image_map_->GetDiscardableImagesInRect(rect);
@@ -973,12 +929,10 @@ ScrollOffsetMap PictureLayerImpl::GetRasterInducingScrollOffsets() const {
       // The transform node has the realized scroll offset and snap amount,
       // and should be used for rendering.
       const auto* scroll_node = scroll_tree.FindNodeFromElementId(element_id);
-      const auto* transform =
-          scroll_node ? transform_tree.Node(scroll_node->transform_id)
-                      : nullptr;
-      if (transform) {
+      if (scroll_node && scroll_node->transform_id != kInvalidPropertyNodeId) {
         map[element_id] = gfx::PointAtOffsetFromOrigin(
-            -transform->to_parent.To2dTranslation());
+            -transform_tree.Node(scroll_node->transform_id)
+                 .to_parent.To2dTranslation());
       } else {
         // Use the current scroll offset if the scroll node doesn't exist or
         // doesn't have a transform node. It doesn't matter because such a
@@ -994,11 +948,6 @@ ScrollOffsetMap PictureLayerImpl::GetRasterInducingScrollOffsets() const {
 const GlobalStateThatImpactsTilePriority& PictureLayerImpl::global_tile_state()
     const {
   return layer_tree_impl()->global_tile_state();
-}
-
-gfx::Rect PictureLayerImpl::GetEnclosingVisibleRectInTargetSpace() const {
-  return GetScaledEnclosingVisibleRectInTargetSpace(
-      MaximumTilingContentsScale());
 }
 
 bool PictureLayerImpl::ShouldAnimate(PaintImage::Id paint_image_id) const {
@@ -1019,8 +968,23 @@ bool PictureLayerImpl::ShouldAnimate(PaintImage::Id paint_image_id) const {
   //
   //  Additionally only animate images which are on-screen, animations are
   //  paused once they are not visible.
-  if (!HasValidTilePriorities())
+  //
+  // An exception to the above is animated images inside a <canvas>, which we
+  // animate to trigger a "paint" event when the animation advances.
+  if (!HasValidTilePriorities() && !canvas_child_id()) {
     return false;
+  }
+
+  if (auto it = discardable_image_map_->animated_images_metadata().find(
+          paint_image_id);
+      it != discardable_image_map_->animated_images_metadata().end()) {
+    if (it->second.repetition_count == kAnimationPaused) {
+      return false;
+    }
+    if (canvas_child_id()) {
+      return true;
+    }
+  }
 
   const auto& rects = discardable_image_map_->GetRectsForImage(paint_image_id);
   for (const auto& r : rects) {
@@ -1032,56 +996,6 @@ bool PictureLayerImpl::ShouldAnimate(PaintImage::Id paint_image_id) const {
 
 gfx::Size PictureLayerImpl::CalculateTileSize(const gfx::Size& content_bounds) {
   return tile_size_calculator_.CalculateTileSize(content_bounds);
-}
-
-void PictureLayerImpl::GetContentsResourceId(
-    viz::ResourceId* resource_id,
-    gfx::Size* resource_size,
-    gfx::SizeF* resource_uv_size) const {
-  // We need contents resource for backdrop filter masks only.
-  if (!is_backdrop_filter_mask()) {
-    *resource_id = viz::kInvalidResourceId;
-    return;
-  }
-
-  float dest_scale = MaximumTilingContentsScale();
-  gfx::Rect content_rect =
-      gfx::ScaleToEnclosingRect(gfx::Rect(bounds()), dest_scale);
-  auto iter =
-      tilings_->Cover(content_rect, dest_scale, GetIdealContentsScaleKey());
-
-  // Mask resource not ready yet.
-  if (!iter || !*iter) {
-    *resource_id = viz::kInvalidResourceId;
-    return;
-  }
-
-  // Masks only supported if they fit on exactly one tile.
-  DCHECK(iter.geometry_rect() == content_rect)
-      << "iter rect " << iter.geometry_rect().ToString() << " content rect "
-      << content_rect.ToString();
-
-  const TileDrawInfo& draw_info = iter->draw_info();
-  if (!draw_info.IsReadyToDraw() ||
-      draw_info.mode() != TileDrawInfo::RESOURCE_MODE) {
-    *resource_id = viz::kInvalidResourceId;
-    return;
-  }
-
-  *resource_id = draw_info.resource_id_for_export();
-  *resource_size = draw_info.resource_size();
-  // |resource_uv_size| represents the range of UV coordinates that map to the
-  // content being drawn. Typically, we draw to the entire texture, so these
-  // coordinates are (1.0f, 1.0f). However, if we are rasterizing to an
-  // over-large texture, this size will be smaller, mapping to the subset of the
-  // texture being used.
-  gfx::SizeF requested_tile_size =
-      gfx::SizeF(iter->tiling()->tiling_data()->tiling_rect().size());
-  DCHECK_LE(requested_tile_size.width(), draw_info.resource_size().width());
-  DCHECK_LE(requested_tile_size.height(), draw_info.resource_size().height());
-  *resource_uv_size = gfx::SizeF(
-      requested_tile_size.width() / draw_info.resource_size().width(),
-      requested_tile_size.height() / draw_info.resource_size().height());
 }
 
 void PictureLayerImpl::UpdateDirectlyCompositedImageFromRasterSource() {
@@ -1099,10 +1013,10 @@ void PictureLayerImpl::UpdateDirectlyCompositedImageFromRasterSource() {
       new_default_raster_scale !=
       directly_composited_image_default_raster_scale_;
 
-  if (new_nearest_neighbor != nearest_neighbor_ ||
+  if (new_nearest_neighbor != GetNearestNeighbor() ||
       directly_composited_image_default_raster_scale_changed_) {
     directly_composited_image_default_raster_scale_ = new_default_raster_scale;
-    nearest_neighbor_ = new_nearest_neighbor;
+    SetNearestNeighbor(new_nearest_neighbor);
     NoteLayerPropertyChanged();
   }
 }
@@ -1986,8 +1900,11 @@ PictureLayerImpl::InvalidateRegionForImages(
   auto* controller = layer_tree_impl()->image_animation_controller();
   InvalidationRegion image_invalidation;
   for (auto image_id : images_to_invalidate) {
-    all_animated_image &= controller->IsRegistered(image_id);
     const auto& rects = discardable_image_map_->GetRectsForImage(image_id);
+    if (rects.empty()) {
+      continue;
+    }
+    all_animated_image &= controller->IsRegistered(image_id);
     for (const auto& r : rects) {
       image_invalidation.Union(r);
     }
@@ -2009,8 +1926,7 @@ PictureLayerImpl::InvalidateRegionForImages(
 
   invalidation_.Union(invalidation);
   tilings_->Invalidate(invalidation);
-  // TODO(crbug.com/40335690): SetNeedsPushProperties() would be needed here if
-  // PictureLayerImpl didn't always push properties every activation.
+  SetNeedsPushProperties(kChangedGeneralProperty);
   return ImageInvalidationResult::kInvalidated;
 }
 
@@ -2043,39 +1959,15 @@ void PictureLayerImpl::InvalidateRasterInducingScrolls(
     }
     invalidation_.Union(invalidation);
     tilings_->Invalidate(invalidation);
+    SetNeedsPushProperties(kChangedGeneralProperty);
   }
 }
 
 void PictureLayerImpl::SetPaintWorkletRecord(
     scoped_refptr<const PaintWorkletInput> input,
     PaintRecord record) {
-  DCHECK(base::Contains(paint_worklet_records_, input));
+  DCHECK(paint_worklet_records_.contains(input));
   paint_worklet_records_[input].second = std::move(record);
-}
-
-void PictureLayerImpl::RegisterAnimatedImages() {
-  if (!discardable_image_map_) {
-    return;
-  }
-
-  auto* controller = layer_tree_impl()->image_animation_controller();
-  for (const auto& data : discardable_image_map_->animated_images_metadata()) {
-    // Only update the metadata from updated recordings received from a commit.
-    if (layer_tree_impl()->IsSyncTree())
-      controller->UpdateAnimatedImage(data);
-    controller->RegisterAnimationDriver(data.paint_image_id, this);
-  }
-}
-
-void PictureLayerImpl::UnregisterAnimatedImages() {
-  if (!discardable_image_map_) {
-    return;
-  }
-
-  auto* controller = layer_tree_impl()->image_animation_controller();
-  for (const auto& data : discardable_image_map_->animated_images_metadata()) {
-    controller->UnregisterAnimationDriver(data.paint_image_id, this);
-  }
 }
 
 void PictureLayerImpl::SetPaintWorkletInputs(
@@ -2114,7 +2006,7 @@ void PictureLayerImpl::SetPaintWorkletInputs(
   if (layer_tree_impl()->IsPendingTree()) {
     layer_tree_impl()
         ->paint_worklet_tracker()
-        .UpdatePaintWorkletInputProperties(inputs, this);
+        .UpdatePaintWorkletInputProperties(inputs);
   }
 }
 
@@ -2128,7 +2020,7 @@ void PictureLayerImpl::InvalidatePaintWorklets(
     // If the PaintWorklet depends on the property whose value was changed by
     // the animation system, then invalidate its associated PaintRecord so that
     // we can repaint the PaintWorklet during impl side invalidation.
-    if (base::Contains(prop_ids, key) &&
+    if (std::ranges::contains(prop_ids, key) &&
         entry.first->ValueChangeShouldCauseRepaint(prev, next)) {
       entry.second.second = std::nullopt;
     }
@@ -2165,7 +2057,8 @@ PictureLayerImpl::TileUpdateSet PictureLayerImpl::TakeAllTiles() {
     PictureLayerTiling::TileIterator iter(tilings_->tiling_at(ii));
     for (; !iter.AtEnd(); iter.Next()) {
       Tile* tile = iter.GetCurrent();
-      // TODO(zmo): Should |update_damage| be faise here?
+      // During a full tree sync (e.g. context lost), layer-level update_rect is
+      // used for damage tracking, so tile-level damage tracking is not needed.
       updates[tile->contents_scale_key()].emplace(tile->tiling_i_index(),
                                                   tile->tiling_j_index(),
                                                   /*update_damage=*/false);
@@ -2181,6 +2074,9 @@ PictureLayerImpl::TileUpdateSet PictureLayerImpl::TakeAllTiles() {
 }
 
 gfx::ContentColorUsage PictureLayerImpl::GetContentColorUsage() const {
+  if (!raster_source_) {
+    return gfx::ContentColorUsage::kSRGB;
+  }
   auto display_item_list = raster_source_->GetDisplayItemList();
   if (!display_item_list)
     return gfx::ContentColorUsage::kSRGB;
@@ -2193,13 +2089,13 @@ DamageReasonSet PictureLayerImpl::GetDamageReasons() const {
   if (has_animated_image_update_rect_) {
     reasons.Put(DamageReason::kAnimatedImage);
   }
-  if (has_non_animated_image_update_rect_ || !damage_rect_.IsEmpty()) {
+  if (has_non_animated_image_update_rect_ || !GetDamageRect().IsEmpty()) {
     reasons.Put(DamageReason::kUntracked);
   }
   return reasons;
 }
 
-float PictureLayerImpl::GetMaximumContentsScaleForUseInAppendQuads() {
+float PictureLayerImpl::GetMaximumContentsScaleForUseInAppendQuads() const {
   // If we don't have tilings, we're likely going to append a checkerboard quad
   // the size of the layer. In that case, use scale 1 for more stable
   // to-screen-space mapping.
@@ -2221,7 +2117,7 @@ PictureLayerImpl::GetTilingResolutionForDebugBorders(
 TilingSetCoverageIterator<PictureLayerTiling> PictureLayerImpl::Cover(
     const gfx::Rect& coverage_rect,
     float coverage_scale,
-    float ideal_contents_scale) {
+    float ideal_contents_scale) const {
   return tilings_->Cover(coverage_rect, coverage_scale, ideal_contents_scale);
 }
 

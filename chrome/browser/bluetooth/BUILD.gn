@@ -34,6 +34,8 @@ source_set("impl") {
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/ui",
     "//chrome/browser/ui/bluetooth",
+    "//chrome/browser/ui/dialogs",
+    "//components/content_settings/core/browser",
     "//components/guest_view/buildflags",
     "//components/strings:components_strings",
     "//components/strings:components_strings_grit",
@@ -44,7 +46,10 @@ source_set("impl") {
   }
   if (is_android) {
     sources += [ "android/bluetooth_bridge.cc" ]
-    deps += [ "//chrome/browser/bluetooth/android:jni_headers" ]
+    deps += [
+      "//chrome/browser/bluetooth/android:jni_headers",
+      "//chrome/browser/ui/android/device_dialog",
+    ]
   }
 }
 
@@ -59,6 +64,7 @@ if (!is_android) {
     public_deps = [
       ":bluetooth",
       "//chrome/browser",
+      "//chrome/browser:chrome_content_browser_client",
       "//device/bluetooth",
       "//device/bluetooth:mocks",
       "//device/bluetooth/public/cpp",
@@ -96,7 +102,10 @@ if (!is_android) {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "bluetooth_chooser_context_unittest.cc" ]
+  sources = [
+    "bluetooth_chooser_context_unittest.cc",
+    "chrome_bluetooth_delegate_unittest.cc",
+  ]
   deps = [
     ":bluetooth",
     "//chrome/browser/content_settings:content_settings_factory",

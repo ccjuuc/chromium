@@ -10,6 +10,7 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/task_environment.h"
 #import "base/time/time.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_config.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 
@@ -23,7 +24,9 @@ class PageContextWrapperMetricsTest : public PlatformTest {
  protected:
   void SetUp() override {
     PlatformTest::SetUp();
-    metrics_ = [[PageContextWrapperMetrics alloc] init];
+    PageContextWrapperConfig config = PageContextWrapperConfigBuilder().Build();
+    metrics_ = [[PageContextWrapperMetrics alloc]
+        initWithAPCConfigVariant:config.GetApcConfigVariant()];
   }
 
   base::test::TaskEnvironment& task_environment() { return task_environment_; }
@@ -87,7 +90,7 @@ TEST_F(PageContextWrapperMetricsTest, TestMultipleSubtasks) {
   histogram_tester()->ExpectTotalCount(
       "IOS.PageContext.Screenshot.Success.Latency", 1);
   histogram_tester()->ExpectTotalCount(
-      "IOS.PageContext.AnnotatedPageContent.Failure.Latency", 1);
+      "IOS.PageContext.AnnotatedPageContent.Failure.InnerTextOnly.Latency", 1);
   histogram_tester()->ExpectTotalCount("IOS.PageContext.PDF.Timeout.Latency",
                                        1);
   histogram_tester()->ExpectTotalCount(
@@ -105,6 +108,23 @@ TEST_F(PageContextWrapperMetricsTest, TestUnfinishedSubtask) {
       "IOS.PageContext.Overall.Success.Latency", 1);
   histogram_tester()->ExpectTotalCount(
       "IOS.PageContext.Screenshot.Success.Latency", 0);
+}
+
+// Tests that a NotExtractable subtask logs the correct metric.
+TEST_F(PageContextWrapperMetricsTest, TestNotExtractableStatus) {
+  [metrics() executionStartedForTask:PageContextTask::kAnnotatedPageContent];
+  [metrics()
+      executionFinishedForTask:PageContextTask::kAnnotatedPageContent
+          withCompletionStatus:PageContextCompletionStatus::kNotExtractable];
+  [metrics()
+      executionFinishedForTask:PageContextTask::kOverall
+          withCompletionStatus:PageContextCompletionStatus::kNotExtractable];
+
+  histogram_tester()->ExpectTotalCount(
+      "IOS.PageContext.Overall.NotExtractable.Latency", 1);
+  histogram_tester()->ExpectTotalCount("IOS.PageContext.AnnotatedPageContent."
+                                       "NotExtractable.InnerTextOnly.Latency",
+                                       1);
 }
 
 // Tests that the logged latency metric is accurate.
@@ -132,6 +152,111 @@ TEST_F(PageContextWrapperMetricsTest, TestLatencyValue) {
   histogram_tester()->ExpectUniqueSample(
       "IOS.PageContext.Overall.Success.Latency",
       overall_latency.InMilliseconds(), 1);
+}
+
+// Tests that LogTaskExecutionLatency appends the correct config suffix for APC.
+TEST_F(PageContextWrapperMetricsTest, TestConfigVariants) {
+  // Rich Config.
+  {
+    PageContextWrapperConfig config =
+        PageContextWrapperConfigBuilder().SetUseRichExtraction(true).Build();
+    PageContextWrapperMetrics* rich_metrics = [[PageContextWrapperMetrics alloc]
+        initWithAPCConfigVariant:config.GetApcConfigVariant()];
+
+    [rich_metrics
+        executionStartedForTask:PageContextTask::kAnnotatedPageContent];
+    [rich_metrics
+        executionFinishedForTask:PageContextTask::kAnnotatedPageContent
+            withCompletionStatus:PageContextCompletionStatus::kSuccess];
+    [rich_metrics
+        executionFinishedForTask:PageContextTask::kOverall
+            withCompletionStatus:PageContextCompletionStatus::kSuccess];
+
+    histogram_tester()->ExpectTotalCount(
+        "IOS.PageContext.AnnotatedPageContent.Success.Rich.Latency", 1);
+  }
+
+  // RichActionable Config.
+  {
+    PageContextWrapperConfig config =
+        PageContextWrapperConfigBuilder()
+            .SetUseRichExtractionWithActionable(true)
+            .Build();
+    PageContextWrapperMetrics* actionable_metrics =
+        [[PageContextWrapperMetrics alloc]
+            initWithAPCConfigVariant:config.GetApcConfigVariant()];
+
+    [actionable_metrics
+        executionStartedForTask:PageContextTask::kAnnotatedPageContent];
+    [actionable_metrics
+        executionFinishedForTask:PageContextTask::kAnnotatedPageContent
+            withCompletionStatus:PageContextCompletionStatus::kSuccess];
+    [actionable_metrics
+        executionFinishedForTask:PageContextTask::kOverall
+            withCompletionStatus:PageContextCompletionStatus::kSuccess];
+
+    histogram_tester()->ExpectTotalCount("IOS.PageContext.AnnotatedPageContent."
+                                         "Success.RichAndActionable.Latency",
+                                         1);
+  }
+}
+
+// Tests that LogAnnotatedPageContentMetricsWithSize (ByteSize) sets correct
+// values.
+TEST_F(PageContextWrapperMetricsTest, TestByteSizeMetric) {
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder().SetUseRichExtraction(true).Build();
+  PageContextWrapperMetrics* metrics_with_config =
+      [[PageContextWrapperMetrics alloc]
+          initWithAPCConfigVariant:config.GetApcConfigVariant()];
+
+  // 1. Underflow size: 0 bytes. Since min is 1 byte, this lands in the
+  // underflow bucket (0).
+  [metrics_with_config logAnnotatedPageContentSize:0];
+  histogram_tester()->ExpectUniqueSample(
+      "IOS.PageContext.AnnotatedPageContent.Rich.ByteSize", 0, 1);
+
+  // 2. Regular size: 12 KB (12288 bytes).
+  int size_bytes = 12288;
+  [metrics_with_config logAnnotatedPageContentSize:size_bytes];
+  histogram_tester()->ExpectBucketCount(
+      "IOS.PageContext.AnnotatedPageContent.Rich.ByteSize", size_bytes, 1);
+
+  // 3. Overflow size: 12 MB (exceeds 10 MB max). Lands in the overflow bucket.
+  int overflow_bytes = 12 * 1024 * 1024;
+  [metrics_with_config logAnnotatedPageContentSize:overflow_bytes];
+  histogram_tester()->ExpectBucketCount(
+      "IOS.PageContext.AnnotatedPageContent.Rich.ByteSize", overflow_bytes, 1);
+}
+
+// Tests that logAnnotatedPageContentHighRangeSizeInKb sets correct values.
+TEST_F(PageContextWrapperMetricsTest, TestHighRangeSizeInKbMetric) {
+  PageContextWrapperConfig config =
+      PageContextWrapperConfigBuilder().SetUseRichExtraction(true).Build();
+  PageContextWrapperMetrics* metrics_with_config =
+      [[PageContextWrapperMetrics alloc]
+          initWithAPCConfigVariant:config.GetApcConfigVariant()];
+
+  // 1. Underflow size: 500 bytes (0 KB). Since min is 1 KB, this lands in the
+  // underflow bucket (0).
+  [metrics_with_config logAnnotatedPageContentHighRangeSizeInKb:500];
+  histogram_tester()->ExpectUniqueSample(
+      "IOS.PageContext.AnnotatedPageContent.Rich.HighRangeSizeInKB", 0, 1);
+
+  // 2. Regular medium size: 10 MB (10240 KB).
+  int medium_size = 10 * 1024 * 1024;
+  [metrics_with_config logAnnotatedPageContentHighRangeSizeInKb:medium_size];
+  histogram_tester()->ExpectBucketCount(
+      "IOS.PageContext.AnnotatedPageContent.Rich.HighRangeSizeInKB",
+      medium_size / 1024, 1);
+
+  // 3. Overflow size: 600 MB (614400 KB). Exceeds max 500 MB, lands in the
+  // overflow bucket.
+  int overflow_size = 600 * 1024 * 1024;
+  [metrics_with_config logAnnotatedPageContentHighRangeSizeInKb:overflow_size];
+  histogram_tester()->ExpectBucketCount(
+      "IOS.PageContext.AnnotatedPageContent.Rich.HighRangeSizeInKB",
+      overflow_size / 1024, 1);
 }
 
 using PageContextWrapperMetricsDeathTest = PageContextWrapperMetricsTest;

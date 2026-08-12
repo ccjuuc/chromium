@@ -95,10 +95,10 @@ void HTMLEmbedElement::CollectStyleForPresentationAttribute(
 void HTMLEmbedElement::ParseAttribute(
     const AttributeModificationParams& params) {
   if (params.name == html_names::kTypeAttr) {
-    SetServiceType(params.new_value.LowerASCII());
-    wtf_size_t pos = service_type_.Find(";");
+    SetServiceType(params.new_value.ToAsciiLower());
+    wtf_size_t pos = service_type_.find(';');
     if (pos != kNotFound)
-      SetServiceType(service_type_.Left(pos));
+      SetServiceType(service_type_.substr(0, pos));
     SetDisposeView();
     if (GetLayoutObject()) {
       SetNeedsPluginUpdate(true);
@@ -108,7 +108,7 @@ void HTMLEmbedElement::ParseAttribute(
   } else if (params.name == html_names::kCodeAttr) {
     // TODO(rendering-core): Remove this branch? It's not in the spec and we're
     // not in the HTMLAppletElement hierarchy.
-    SetUrl(StripLeadingAndTrailingHTMLSpaces(params.new_value));
+    SetUrl(StripLeadingAndTrailingHtmlSpaces(params.new_value));
     SetDisposeView();
   } else if (params.name == html_names::kSrcAttr) {
     // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#the-embed-element
@@ -117,19 +117,19 @@ void HTMLEmbedElement::ParseAttribute(
     // steps.
     // We don't follow the "potentially active" definition precisely here, but
     // it works.
-    SetUrl(StripLeadingAndTrailingHTMLSpaces(params.new_value));
+    SetUrl(StripLeadingAndTrailingHtmlSpaces(params.new_value));
     SetDisposeView();
     if (GetLayoutObject() && IsImageType()) {
       if (!image_loader_)
         image_loader_ = MakeGarbageCollected<HTMLImageLoader>(this);
       image_loader_->UpdateFromElement(ImageLoader::kUpdateIgnorePreviousError);
-    } else if (GetLayoutObject()) {
+    } else {
       if (!FastHasAttribute(html_names::kTypeAttr)) {
         UseCounter::Count(GetDocument(),
                           WebFeature::kEmbedElementWithoutTypeSrcChanged);
       }
       SetNeedsPluginUpdate(true);
-      ReattachOnPluginChangeIfNeeded();
+      ReattachOnPluginChangeIfNeeded(/*require_layout=*/false);
     }
   } else {
     HTMLPlugInElement::ParseAttribute(params);
@@ -232,9 +232,8 @@ bool HTMLEmbedElement::IsExposed() const {
   return true;
 }
 
-const V8UnionTrustedScriptURLOrUSVString* HTMLEmbedElement::src() {
-  return MakeGarbageCollected<V8UnionTrustedScriptURLOrUSVString>(
-      GetURLAttribute(html_names::kSrcAttr));
+String HTMLEmbedElement::src() {
+  return GetURLAttribute(html_names::kSrcAttr);
 }
 
 void HTMLEmbedElement::setSrc(const V8UnionTrustedScriptURLOrUSVString* value,

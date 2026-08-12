@@ -13,6 +13,8 @@ namespace autofill {
 class AutofillWebDataServiceObserverOnDBSequence {
  public:
   // Called on DB sequence whenever autocomplete entries are changed.
+  // The changes are emitted only from the old non-label-sensitive autocomplete
+  // table. New label-sensitive autocomplete is not sync at all.
   virtual void AutocompleteEntriesChanged(
       const AutocompleteChangeList& changes) {}
 
@@ -47,6 +49,10 @@ class AutofillWebDataServiceObserverOnDBSequence {
   // were server metadata is changed.
   virtual void ServerEntityInstanceMetadataChanged(
       const EntityInstanceMetadataChange& change) {}
+
+  // Called on DB sequence when a valuable metadata has been
+  // added/updated/deleted in the WebDatabase.
+  virtual void ValuableMetadataChanged(const ValuableMetadataChange& change) {}
 
  protected:
   virtual ~AutofillWebDataServiceObserverOnDBSequence() = default;

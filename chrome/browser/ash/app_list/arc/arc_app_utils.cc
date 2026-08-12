@@ -10,8 +10,10 @@
 #include <tuple>
 #include <utility>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
@@ -21,6 +23,7 @@
 #include "base/values.h"
 #include "chrome/browser/apps/app_service/intent_util.h"
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
+#include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/intent.h"
 #include "chrome/browser/ash/app_list/search/ranking/launch_data.h"
 #include "chrome/browser/ash/app_list/search/search_controller.h"
@@ -33,17 +36,18 @@
 #include "chrome/browser/ash/arc/vmm/arc_vmm_manager.h"
 #include "chrome/browser/ash/arc/window_predictor/window_predictor.h"
 #include "chrome/browser/ash/arc/window_predictor/window_predictor_utils.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
 #include "chrome/browser/ui/ash/shelf/arc_shelf_spinner_item_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_launch_notifier.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
 #include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_service.h"
@@ -83,13 +87,20 @@ namespace arc {
 
 namespace {
 
-// TODO(djacobo): Evaluate to build these strings by using
-// ArcIntentHelperBridge::AppendStringToIntentHelperPackageName.
 // Intent helper strings.
-constexpr char kIntentHelperClassName[] =
-    "org.chromium.arc.intent_helper.SettingsReceiver";
-constexpr char kSetInTouchModeIntent[] =
-    "org.chromium.arc.intent_helper.SET_IN_TOUCH_MODE";
+const std::string& GetIntentHelperClassName() {
+  static const base::NoDestructor<std::string> class_name(
+      ArcIntentHelperBridge::AppendStringToIntentHelperPackageName(
+          "SettingsReceiver"));
+  return *class_name;
+}
+
+const std::string& GetSetInTouchModeIntent() {
+  static const base::NoDestructor<std::string> intent(
+      ArcIntentHelperBridge::AppendStringToIntentHelperPackageName(
+          "SET_IN_TOUCH_MODE"));
+  return *intent;
+}
 
 constexpr char kAndroidClockAppId[] = "ddmmnabaeomoacfpfjgghfpocfolhjlg";
 constexpr char kAndroidFilesAppId[] = "gmiohhmfhgfclpeacmdfancbipocempm";
@@ -491,13 +502,12 @@ bool SetTouchMode(bool enable) {
   if (!intent_helper_instance)
     return false;
 
-  base::Value::Dict extras;
+  base::DictValue extras;
   extras.Set("inTouchMode", enable);
-  std::string extras_string =
-      base::WriteJson(base::Value(std::move(extras))).value_or("");
-  intent_helper_instance->SendBroadcast(kSetInTouchModeIntent,
-                                        kArcIntentHelperPackageName,
-                                        kIntentHelperClassName, extras_string);
+  std::string extras_string = base::WriteJson(extras).value_or("");
+  intent_helper_instance->SendBroadcast(
+      GetSetInTouchModeIntent(), kArcIntentHelperPackageName,
+      GetIntentHelperClassName(), extras_string);
 
   return true;
 }
@@ -508,7 +518,7 @@ std::vector<std::string> GetSelectedPackagesFromPrefs(
   const Profile* const profile = Profile::FromBrowserContext(context);
   const PrefService* prefs = profile->GetPrefs();
 
-  const base::Value::List& selected_package_prefs =
+  const base::ListValue& selected_package_prefs =
       prefs->GetList(arc::prefs::kArcFastAppReinstallPackages);
   for (const base::Value& item : selected_package_prefs) {
     std::string item_str = item.is_string() ? item.GetString() : std::string();

@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//components/compose/features.gni")
+import("//third_party/protobuf/proto_library.gni")
 
 assert(enable_compose)
 
@@ -15,8 +16,8 @@ source_set("compose") {
     "proactive_nudge_tracker.h",
   ]
   public_deps = [
+    ":compose_optimization_guide_proto",
     "//base",
-    "//chrome/browser:compose_optimization_guide_proto",
     "//chrome/browser/optimization_guide",
     "//chrome/common/compose:mojo_bindings",
     "//components/autofill/core/browser",
@@ -53,6 +54,7 @@ source_set("impl") {
     "//chrome/browser/signin",
     "//chrome/browser/translate",
     "//chrome/browser/ui:browser_element_identifiers",
+    "//chrome/browser/ui/dialogs",
     "//chrome/browser/ui/hats",
     "//chrome/browser/ui/user_education",
     "//chrome/common",
@@ -77,14 +79,14 @@ source_set("impl") {
     "//ui/gfx/geometry",
     "//url",
 
-    # TODO(crbug.com/353332589): The following headers are included and cause
-    # a dependency against //c/b/ui:ui. Because of them, the `:impl` target is needed.
-    # Unify `:compose` and `:impl` targets and these inclusions are gone.
+    # TODO(crbug.com/353332589): The following headers are included and cause a
+    # dependency against //c/b/ui:ui. Because of them, the `:impl` target is
+    # needed. Unify `:compose` and `:impl` targets and these inclusions are
+    # gone.
     # - c/b/ui/browser.h"
     # - c/b/ui/browser_dialogs.h"
-    # - c/b/ui/browser_finder.h"
-    # - c/b/ui/chrome_pages.h"
     "//chrome/browser/ui",
+    "//chrome/browser/ui:chrome_pages",
   ]
 }
 
@@ -164,6 +166,7 @@ if (!is_android) {
     testonly = true
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
     sources = [
+      "chrome_compose_client_browsertest.cc",
       "compose_dialog_browsertest.cc",
       "compose_enabling_browsertest.cc",
     ]
@@ -176,27 +179,40 @@ if (!is_android) {
       "//chrome/browser:flags",
       "//chrome/browser/optimization_guide:test_support",
       "//chrome/browser/profiles:profile",
+      "//chrome/browser/segmentation_platform",
       "//chrome/browser/signin",
       "//chrome/browser/ui",
+      "//chrome/browser/ui/hats:test_support",
       "//chrome/browser/ui/tabs:tab_enums",
       "//chrome/browser/ui/tabs:tab_strip",
+      "//chrome/browser/ui/views/compose",
       "//chrome/common:constants",
       "//chrome/test:test_support",
       "//chrome/test:test_support_ui",
+      "//components/autofill/content/browser:test_support",
       "//components/autofill/core/common:features",
       "//components/compose/core/browser:features",
       "//components/feature_engagement/test:test_support",
       "//components/optimization_guide/core",
+      "//components/optimization_guide/core:model_execution_test_support",
       "//components/prefs",
+      "//components/segmentation_platform/public:test_support",
       "//components/signin/public/identity_manager:test_support",
+      "//components/ukm:test_support",
       "//components/unified_consent",
       "//components/variations/service",
       "//content/public/browser",
       "//content/test:test_support",
       "//net:test_support",
+      "//testing/gmock",
       "//testing/gtest",
       "//ui/gfx/geometry",
       "//ui/views:test_support",
     ]
   }
+}
+
+proto_library("compose_optimization_guide_proto") {
+  sources = [ "proto/compose_optimization_guide.proto" ]
+  cc_generator_options = "lite=true:"
 }

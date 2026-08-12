@@ -81,15 +81,17 @@ class QueuedTouchpadPinchEvent : public GestureEventWithLatencyInfo {
                            DispatchToRendererCallback callback)
       : GestureEventWithLatencyInfo(original_event),
         dispatch_callback(std::move(callback)) {
-    TRACE_EVENT_BEGIN("input", "TouchpadPinchEventQueue::QueueEvent",
-                      perfetto::Track::FromPointer(this));
+    TRACE_EVENT_BEGIN(
+        "input", "TouchpadPinchEventQueue::QueueEvent",
+        perfetto::NamedTrack::FromPointer("TouchpadPinchEventQueue", this));
   }
 
   QueuedTouchpadPinchEvent(const QueuedTouchpadPinchEvent&) = delete;
   QueuedTouchpadPinchEvent& operator=(const QueuedTouchpadPinchEvent&) = delete;
 
   ~QueuedTouchpadPinchEvent() {
-    TRACE_EVENT_END("input", perfetto::Track::FromPointer(this));
+    TRACE_EVENT_END("input", perfetto::NamedTrack::FromPointer(
+                                 "TouchpadPinchEventQueue", this));
   }
 
   DispatchToRendererCallback dispatch_callback;
@@ -119,10 +121,9 @@ void TouchpadPinchEventQueue::QueueEvent(
       last_event->CoalesceWith(event);
       DCHECK_EQ(blink::WebInputEvent::Type::kGesturePinchUpdate,
                 last_event->event.GetType());
-      TRACE_EVENT_INSTANT1("input",
-                           "TouchpadPinchEventQueue::CoalescedPinchEvent",
-                           TRACE_EVENT_SCOPE_THREAD, "scale",
-                           last_event->event.data.pinch_update.scale);
+      TRACE_EVENT_INSTANT("input",
+                          "TouchpadPinchEventQueue::CoalescedPinchEvent",
+                          "scale", last_event->event.data.pinch_update.scale);
       return;
     }
   }

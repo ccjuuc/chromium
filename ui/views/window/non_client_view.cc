@@ -20,6 +20,7 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/client_view.h"
 #include "ui/views/window/frame_view.h"
+#include "ui/views/window/hit_test_utils.h"
 
 namespace views {
 
@@ -41,12 +42,17 @@ NonClientView::~NonClientView() {
 void NonClientView::SetFrameView(std::unique_ptr<FrameView> frame_view) {
   // If there is an existing frame view, ensure that the ClientView remains
   // attached to the Widget by moving the ClientView to the new frame before
-  // removing the old frame from the view hierarchy.
+  // removing the old frame from the view hierarchy. Also copy the focus state.
   std::unique_ptr<FrameView> old_frame_view = std::move(frame_view_);
   frame_view_ = std::move(frame_view);
   if (parent()) {
+    views::View* focused_view =
+        old_frame_view->GetFocusManager()->GetFocusedView();
     AddChildViewAt(frame_view_.get(), 0);
     frame_view_->InsertClientView(client_view_);
+    if (focused_view) {
+      frame_view_->GetFocusManager()->SetFocusedView(focused_view);
+    }
   }
 
   if (old_frame_view) {
@@ -91,6 +97,12 @@ gfx::Rect NonClientView::GetWindowBoundsForClientBounds(
 }
 
 int NonClientView::NonClientHitTest(const gfx::Point& point) {
+  if (overlay_view_ && overlay_view_->GetVisible()) {
+    int component = views::GetHitTestComponent(overlay_view_, point);
+    if (component != HTNOWHERE) {
+      return component;
+    }
+  }
   // The FrameView is responsible for also asking the ClientView.
   return frame_view_->NonClientHitTest(point);
 }
@@ -157,24 +169,6 @@ void NonClientView::Layout(PassKey) {
   }
 }
 
-View* NonClientView::GetTooltipHandlerForPoint(const gfx::Point& point) {
-  // The same logic as for TargetForRect() applies here.
-  if (frame_view_->parent() == this) {
-    // During the reset of the frame_view_ it's possible to be in this code
-    // after it's been removed from the view hierarchy but before it's been
-    // removed from the NonClientView.
-    gfx::Point point_in_child_coords(point);
-    View::ConvertPointToTarget(this, frame_view_.get(), &point_in_child_coords);
-    View* handler =
-        frame_view_->GetTooltipHandlerForPoint(point_in_child_coords);
-    if (handler) {
-      return handler;
-    }
-  }
-
-  return View::GetTooltipHandlerForPoint(point);
-}
-
 void NonClientView::ViewHierarchyChanged(
     const ViewHierarchyChangedDetails& details) {
   // Add our child views here as we are added to the Widget so that if we are
@@ -189,36 +183,6 @@ void NonClientView::ViewHierarchyChanged(
       AddChildViewRaw(overlay_view_.get());
     }
   }
-}
-
-View* NonClientView::TargetForRect(View* root, const gfx::Rect& rect) {
-  CHECK_EQ(root, this);
-
-  if (!UsePointBasedTargeting(rect)) {
-    return ViewTargeterDelegate::TargetForRect(root, rect);
-  }
-
-  // Because of the z-ordering of our child views (the client view is positioned
-  // over the frame view, if the client view ever overlaps the frame view
-  // visually (as it does for the browser window), then it will eat events for
-  // the window controls. We override this method here so that we can detect
-  // this condition and re-route the events to the frame view. The assumption is
-  // that the frame view's implementation of HitTest will only return true for
-  // area not occupied by the client view.
-  if (frame_view_->parent() == this) {
-    // During the reset of the frame_view_ it's possible to be in this code
-    // after it's been removed from the view hierarchy but before it's been
-    // removed from the NonClientView.
-    gfx::RectF rect_in_child_coords_f(rect);
-    View::ConvertRectToTarget(this, frame_view_.get(), &rect_in_child_coords_f);
-    gfx::Rect rect_in_child_coords =
-        gfx::ToEnclosingRect(rect_in_child_coords_f);
-    if (frame_view_->HitTestRect(rect_in_child_coords)) {
-      return frame_view_->GetEventHandlerForRect(rect_in_child_coords);
-    }
-  }
-
-  return ViewTargeterDelegate::TargetForRect(root, rect);
 }
 
 BEGIN_METADATA(NonClientView)

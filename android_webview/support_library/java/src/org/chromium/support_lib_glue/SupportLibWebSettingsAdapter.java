@@ -302,47 +302,15 @@ class SupportLibWebSettingsAdapter implements WebSettingsBoundaryInterface {
     }
 
     @Override
+    @Deprecated
     public void setAttributionBehavior(@AttributionBehavior int behavior) {
-        try (TraceEvent event =
-                TraceEvent.scoped("WebView.APICall.AndroidX.SET_ATTRIBUTION_BEHAVIOR")) {
-            recordApiCall(ApiCall.SET_ATTRIBUTION_BEHAVIOR);
-            switch (behavior) {
-                case AttributionBehavior.DISABLED:
-                    mAwSettings.setAttributionBehavior(AwSettings.ATTRIBUTION_DISABLED);
-                    break;
-                case AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER:
-                    mAwSettings.setAttributionBehavior(
-                            AwSettings.ATTRIBUTION_APP_SOURCE_AND_WEB_TRIGGER);
-                    break;
-                case AttributionBehavior.WEB_SOURCE_AND_WEB_TRIGGER:
-                    mAwSettings.setAttributionBehavior(
-                            AwSettings.ATTRIBUTION_WEB_SOURCE_AND_WEB_TRIGGER);
-                    break;
-                case AttributionBehavior.APP_SOURCE_AND_APP_TRIGGER:
-                    mAwSettings.setAttributionBehavior(
-                            AwSettings.ATTRIBUTION_APP_SOURCE_AND_APP_TRIGGER);
-                    break;
-            }
-        }
+        throw new UnsupportedOperationException("AttributionBehavior is not supported.");
     }
 
     @Override
+    @Deprecated
     public int getAttributionBehavior() {
-        try (TraceEvent event =
-                TraceEvent.scoped("WebView.APICall.AndroidX.GET_ATTRIBUTION_BEHAVIOR")) {
-            recordApiCall(ApiCall.GET_ATTRIBUTION_BEHAVIOR);
-            switch (mAwSettings.getAttributionBehavior()) {
-                case AwSettings.ATTRIBUTION_DISABLED:
-                    return AttributionBehavior.DISABLED;
-                case AwSettings.ATTRIBUTION_APP_SOURCE_AND_WEB_TRIGGER:
-                    return AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER;
-                case AwSettings.ATTRIBUTION_WEB_SOURCE_AND_WEB_TRIGGER:
-                    return AttributionBehavior.WEB_SOURCE_AND_WEB_TRIGGER;
-                case AwSettings.ATTRIBUTION_APP_SOURCE_AND_APP_TRIGGER:
-                    return AttributionBehavior.APP_SOURCE_AND_APP_TRIGGER;
-            }
-            return AttributionBehavior.APP_SOURCE_AND_WEB_TRIGGER;
-        }
+        throw new UnsupportedOperationException("AttributionBehavior is not supported.");
     }
 
     @Override
@@ -495,7 +463,7 @@ class SupportLibWebSettingsAdapter implements WebSettingsBoundaryInterface {
             return BoundaryInterfaceReflectionUtil.createInvocationHandlerFor(
                     new SupportLibWebViewBackForwardCacheSettingsAdapter(
                             mAwSettings.getBackForwardCacheSettingsMaxPagesInCache(),
-                            mAwSettings.getBackForwardCacheSettingsTimeout()));
+                            (int) mAwSettings.getBackForwardCacheSettingsTimeout()));
         }
     }
 
@@ -576,7 +544,7 @@ class SupportLibWebSettingsAdapter implements WebSettingsBoundaryInterface {
     }
 
     @Override
-    public void setBackForwardCacheSettingsTimeout(int timeout) {
+    public void setBackForwardCacheSettingsTimeout(long timeout) {
         try (TraceEvent ignored =
                 TraceEvent.scoped(
                         "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_SET_TIMEOUT_IN_SECONDS")) {
@@ -592,6 +560,64 @@ class SupportLibWebSettingsAdapter implements WebSettingsBoundaryInterface {
                         "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_SET_MAX_PAGES_IN_CACHE")) {
             recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_SET_MAX_PAGES_IN_CACHE);
             mAwSettings.setBackForwardCacheMaxPagesInCache(pagesInCache);
+        }
+    }
+
+    @Override
+    public void setBackForwardCacheSettingsKeepForwardEntries(boolean keepForwardEntries) {
+        try (TraceEvent ignored =
+                TraceEvent.scoped(
+                        "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_SET_KEEP_FORWARD_ENTRIES")) {
+            recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_SET_KEEP_FORWARD_ENTRIES);
+            mAwSettings.setBackForwardCacheKeepForwardEntries(keepForwardEntries);
+        }
+    }
+
+    @Override
+    public long getBackForwardCacheSettingsTimeout() {
+        try (TraceEvent ignored =
+                TraceEvent.scoped(
+                        "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_GET_MAX_PAGES_IN_CACHE")) {
+            recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_TIMEOUT_IN_SECONDS);
+            return mAwSettings.getBackForwardCacheSettingsTimeout();
+        }
+    }
+
+    @Override
+    public int getBackForwardCacheSettingsMaxPagesInCache() {
+        try (TraceEvent ignored =
+                TraceEvent.scoped(
+                        "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_GET_MAX_PAGES_IN_CACHE")) {
+            recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_MAX_PAGES_IN_CACHE);
+            return mAwSettings.getBackForwardCacheSettingsMaxPagesInCache();
+        }
+    }
+
+    @Override
+    public boolean getBackForwardCacheSettingsKeepForwardEntries() {
+        try (TraceEvent ignored =
+                TraceEvent.scoped(
+                        "WebView.APICall.AndroidX.BACK_FORWARD_CACHE_SETTINGS_GET_KEEP_FORWARD_ENTRIES")) {
+            recordApiCall(ApiCall.BACK_FORWARD_CACHE_SETTINGS_GET_KEEP_FORWARD_ENTRIES);
+            return mAwSettings.getBackForwardCacheSettingsKeepForwardEntries();
+        }
+    }
+
+    @Override
+    public void setDownloadFaviconsEnabled(boolean enabled) {
+        try (TraceEvent ignored =
+                TraceEvent.scoped("WebView.APICall.AndroidX.SET_DOWNLOAD_FAVICONS_ENABLED")) {
+            recordApiCall(ApiCall.SET_DOWNLOAD_FAVICONS_ENABLED);
+            mAwSettings.setDownloadFaviconsEnabled(enabled);
+        }
+    }
+
+    @Override
+    public boolean getDownloadFaviconsEnabled() {
+        try (TraceEvent ignored =
+                TraceEvent.scoped("WebView.APICall.AndroidX.GET_DOWNLOAD_FAVICONS_ENABLED")) {
+            recordApiCall(ApiCall.GET_DOWNLOAD_FAVICONS_ENABLED);
+            return mAwSettings.getDownloadFaviconsEnabled();
         }
     }
 }

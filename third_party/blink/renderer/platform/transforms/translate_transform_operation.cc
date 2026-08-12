@@ -23,6 +23,7 @@
 
 #include "third_party/blink/renderer/platform/geometry/blend.h"
 #include "third_party/blink/renderer/platform/geometry/calculation_value.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
 
@@ -40,11 +41,26 @@ Length AddLengths(const Length& lhs, const Length& rhs) {
       MakeGarbageCollected<CalculationValue>(result, Length::ValueRange::kAll));
 }
 
+Length ScaleAndAddLength(const Length& base, const Length& delta, int n) {
+  PixelsAndPercent base_pap = base.GetPixelsAndPercent();
+  PixelsAndPercent delta_pap = delta.GetPixelsAndPercent();
+  delta_pap *= static_cast<float>(n);
+  PixelsAndPercent result = base_pap + delta_pap;
+  if (result.percent == 0) {
+    return Length(result.pixels, Length::kFixed);
+  }
+  if (result.pixels == 0) {
+    return Length(result.percent, Length::kPercent);
+  }
+  return Length(
+      MakeGarbageCollected<CalculationValue>(result, Length::ValueRange::kAll));
+}
+
 TransformOperation::OperationType GetTypeForTranslate(const Length& x,
                                                       const Length& y,
                                                       double z) {
   bool x_zero = x.IsZero();
-  bool y_zero = x.IsZero();
+  bool y_zero = y.IsZero();
   bool z_zero = !z;
   if (y_zero && z_zero)
     return TransformOperation::kTranslateX;
@@ -66,6 +82,18 @@ TransformOperation* TranslateTransformOperation::Accumulate(
   Length new_x = AddLengths(x_, other_op.x_);
   Length new_y = AddLengths(y_, other_op.y_);
   double new_z = z_ + other_op.z_;
+  return MakeGarbageCollected<TranslateTransformOperation>(
+      new_x, new_y, new_z, GetTypeForTranslate(new_x, new_y, new_z));
+}
+
+TransformOperation* TranslateTransformOperation::AccumulateN(
+    const TransformOperation& other,
+    int n) {
+  DCHECK(other.CanBlendWith(*this));
+  const auto& other_op = To<TranslateTransformOperation>(other);
+  Length new_x = ScaleAndAddLength(x_, other_op.x_, n);
+  Length new_y = ScaleAndAddLength(y_, other_op.y_, n);
+  double new_z = z_ + n * other_op.z_;
   return MakeGarbageCollected<TranslateTransformOperation>(
       new_x, new_y, new_z, GetTypeForTranslate(new_x, new_y, new_z));
 }
@@ -118,6 +146,18 @@ void TranslateTransformOperation::CommonPrimitiveForInterpolation(
   } else {
     common_type = kTranslate;
   }
+}
+
+String TranslateTransformOperation::DebugString() const {
+  StringBuilder sb;
+  sb.Append("translate(");
+  sb.Append(x_.ToString());
+  sb.Append(", ");
+  sb.Append(y_.ToString());
+  sb.Append(", ");
+  sb.AppendNumber(z_);
+  sb.Append(")");
+  return sb.ReleaseString();
 }
 
 }  // namespace blink

@@ -34,6 +34,7 @@ class PinnedActionToolbarButton : public ToolbarButton {
   ~PinnedActionToolbarButton() override;
 
   actions::ActionId GetActionId() { return action_id_; }
+  Browser* browser() { return browser_; }
 
   void AddHighlight();
   void ResetHighlight();
@@ -80,6 +81,7 @@ class PinnedActionToolbarButton : public ToolbarButton {
 
  private:
   void OnAnchorCountChanged(size_t anchor_count);
+  void UpdateFlexPriority();
 
   raw_ptr<Browser> browser_;
   raw_ptr<PinnedToolbarButtonStatusIndicator> status_indicator_;
@@ -132,5 +134,15 @@ class PinnedActionToolbarButtonActionViewInterface
 extern const ui::ClassProperty<
     std::underlying_type_t<PinnedToolbarActionFlexPriority>>* const
     kToolbarButtonFlexPriorityKey;
+
+using CreateCustomPinnedActionToolbarButtonCallback =
+    base::RepeatingCallback<std::unique_ptr<PinnedActionToolbarButton>(
+        Browser* browser,
+        actions::ActionId action_id,
+        base::WeakPtr<PinnedToolbarActionsContainer> container)>;
+
+extern const ui::ClassProperty<
+    CreateCustomPinnedActionToolbarButtonCallback*>* const
+    kCustomPinnedActionToolbarButtonFactoryKey;
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_PINNED_ACTION_TOOLBAR_BUTTON_H_

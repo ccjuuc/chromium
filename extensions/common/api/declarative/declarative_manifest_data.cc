@@ -47,9 +47,9 @@ class ErrorBuilder {
 // the manifest key for the internal key.
 bool ConvertManifestRule(DeclarativeManifestData::Rule& rule,
                          ErrorBuilder* error_builder) {
-  auto convert_list = [error_builder](base::Value::List& list) {
+  auto convert_list = [error_builder](base::ListValue& list) {
     for (base::Value& value : list) {
-      base::Value::Dict* dictionary = value.GetIfDict();
+      base::DictValue* dictionary = value.GetIfDict();
       if (!dictionary) {
         error_builder->Append("expected dictionary, got ",
                               base::Value::GetTypeName(value.type()));
@@ -75,6 +75,10 @@ bool ConvertManifestRule(DeclarativeManifestData::Rule& rule,
 
 }  // namespace
 
+// static
+const char* DeclarativeManifestData::kManifestDataKey =
+    manifest_keys::kEventRules;
+
 DeclarativeManifestData::DeclarativeManifestData() {
 }
 
@@ -82,10 +86,9 @@ DeclarativeManifestData::~DeclarativeManifestData() {
 }
 
 // static
-DeclarativeManifestData* DeclarativeManifestData::Get(
+const DeclarativeManifestData* DeclarativeManifestData::Get(
     const Extension* extension) {
-  return static_cast<DeclarativeManifestData*>(
-      extension->GetManifestData(manifest_keys::kEventRules));
+  return extension->GetManifestData<DeclarativeManifestData>();
 }
 
 // static
@@ -139,7 +142,7 @@ std::unique_ptr<DeclarativeManifestData> DeclarativeManifestData::FromValue(
                            base::Value::GetTypeName(element.type()));
       return nullptr;
     }
-    const base::Value::Dict& dict = element.GetDict();
+    const base::DictValue& dict = element.GetDict();
     const std::string* event = dict.FindString("event");
     if (!event) {
       error_builder.Append("'event' is required");
@@ -162,15 +165,18 @@ std::unique_ptr<DeclarativeManifestData> DeclarativeManifestData::FromValue(
 }
 
 std::vector<DeclarativeManifestData::Rule>
-DeclarativeManifestData::RulesForEvent(const std::string& event) {
-  const auto& rules = event_rules_map_[event];
+DeclarativeManifestData::RulesForEvent(const std::string& event) const {
   std::vector<DeclarativeManifestData::Rule> result;
-  result.reserve(rules.size());
-  for (const auto& rule : rules) {
-    // TODO(rdevlin.cronin): It would be nice if we could have the RulesRegistry
-    // reference the rules owned here, but the ownership issues are a bit
-    // tricky. Revisit this.
-    result.push_back(rule.Clone());
+  auto iterator = event_rules_map_.find(event);
+  if (iterator != event_rules_map_.end()) {
+    const std::vector<Rule>& rules = iterator->second;
+    result.reserve(rules.size());
+    for (const Rule& rule : rules) {
+      // TODO(rdevlin.cronin): It would be nice if we could have the
+      // RulesRegistry reference the rules owned here, but the ownership issues
+      // are a bit tricky. Revisit this.
+      result.push_back(rule.Clone());
+    }
   }
   return result;
 }

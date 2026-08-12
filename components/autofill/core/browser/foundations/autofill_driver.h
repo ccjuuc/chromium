@@ -5,29 +5,40 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FOUNDATIONS_AUTOFILL_DRIVER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FOUNDATIONS_AUTOFILL_DRIVER_H_
 
+#include <stdint.h>
+
+#include <optional>
+#include <string>
 #include <vector>
 
-#include "base/containers/flat_map.h"
-#include "base/memory/raw_ptr.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
+#include "base/dcheck_is_on.h"
+#include "base/functional/callback_forward.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/isolation_info.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "ui/accessibility/ax_tree_id.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/origin.h"
 
 namespace autofill {
+
+namespace mojom {
+class AutofillVisibilityObserver;
+}  // namespace mojom
 
 class AutofillClient;
 class AutofillDriverFactory;
 class AutofillManager;
 class FormStructure;
-class Section;
 
 namespace internal {
 class FormForest;
@@ -131,12 +142,15 @@ class AutofillDriver {
   // Returns the uniquely identifying frame token.
   virtual LocalFrameToken GetFrameToken() const = 0;
 
-  // Resolves a FrameToken `query` from the perspective of `this` to the
-  // globally unique LocalFrameToken. Returns `std::nullopt` if `query` is a
-  // RemoteFrameToken that cannot be resolved from the perspective of `this`.
+  // Resolves a FrameToken `query` to a child frame of `this`.
   //
-  // This function should not be cached: a later Resolve() call may map the same
-  // RemoteFrameToken to another LocalFrameToken.
+  // Returns `std::nullopt` if either
+  // - `query` is a RemoteFrameToken that cannot be resolved from the
+  //   perspective of `this` or
+  // - `query` does not identify a child frame of `this`.
+  //
+  // This function should not be cached: a later Resolve() call may map the
+  // same RemoteFrameToken to another LocalFrameToken.
   //
   // See the documentation of LocalFrameToken and RemoteFrameToken for details.
   virtual std::optional<LocalFrameToken> Resolve(FrameToken query) = 0;
@@ -299,11 +313,6 @@ class AutofillDriver {
   // `triggered_origin` is the origin of the field that triggered the filling
   // operation currently being filled or undone.
   //
-  // `section_for_clear_form_on_ios` is a hack for iOS, where "Clear Form"
-  // resets the values of fields in a certain section.
-  // TODO(crbug.com/338201947): Remove `section_for_clear_form_on_ios` when iOS
-  // has "Undo Autofill" instead of "Clear Form".
-  //
   // Returns the FieldGlobalIds that were safe to modify according to Autofill's
   // security policy. This is a subset of the FieldGlobalIds of `form.fields`.
   //
@@ -315,8 +324,7 @@ class AutofillDriver {
       const FillId& fill_id,
       bool supports_refill,
       const url::Origin& triggered_origin,
-      const base::flat_map<FieldGlobalId, FieldType>& field_type_map,
-      const Section& section_for_clear_form_on_ios) = 0;
+      const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map) = 0;
 
   // Tells the renderer to perform actions on the node text.
   // If the `action_type` is kSelectAll, then `value` needs to be empty.
@@ -331,7 +339,8 @@ class AutofillDriver {
   // Exposes DOM Node IDs in an attribute "dom-node-id".
   virtual void ExposeDomNodeIdsInAllFrames() = 0;
 
-  // Tells the renderer to accept data list suggestions for |value|.
+  // Tells the renderer to set `field_id`'s value to the accepted datalist
+  // suggestion `value`.
   virtual void RendererShouldAcceptDataListSuggestion(
       const FieldGlobalId& field_id,
       const std::u16string& value) = 0;
@@ -344,12 +353,17 @@ class AutofillDriver {
       const FieldGlobalId& field_id,
       AutofillSuggestionTriggerSource trigger_source) = 0;
 
-  // Tells the renderer to set the currently focused node's corresponding
-  // accessibility node's autofill suggestion_availability to
-  // |suggestion_availability|.
+  // Tells the renderer to set `field_id`'s corresponding accessibility node's
+  // autofill suggestion availability to `suggestion_availability`.
   virtual void RendererShouldSetSuggestionAvailability(
       const FieldGlobalId& field_id,
       mojom::AutofillSuggestionAvailability suggestion_availability) = 0;
+
+  // Registers an observer to be notified when the field identified by
+  // `field_id` becomes visible.
+  virtual void ObserveFieldVisibility(
+      const FieldGlobalId& field_id,
+      mojo::PendingRemote<mojom::AutofillVisibilityObserver> observer) = 0;
 
   // Query's the DOM for four digit combinations that could potentially be of a
   // card number.
@@ -367,9 +381,31 @@ class AutofillDriver {
       base::OnceCallback<void(const std::string& amount)>
           response_callback) = 0;
 
-  virtual void DispatchEmailVerifiedEvent(
-      FieldGlobalId field_id,
-      const std::string& presentation_token) = 0;
+  // Sends an email verification token to the renderer to be used upon
+  // form submission.
+  virtual void SendEmailVerificationToken(FieldGlobalId email_field_id,
+                                          const std::string& email,
+                                          FieldGlobalId token_field_id,
+                                          const std::string& token) = 0;
+
+  // Notifies the renderer of a change in the email verification state (e.g.,
+  // loading spinner, verified icon, or reset to none) for `email_field_id`.
+  virtual void UpdateEmailVerificationState(
+      const FieldGlobalId& email_field_id,
+      mojom::EmailVerificationState state) = 0;
+
+  // Scrolls the page containing the field corresponding to `field_id` until it
+  // becomes visible on the user's display.
+  virtual void ScrollFieldIntoView(FieldGlobalId field_id) = 0;
+
+  // Returns whether a value of type `filled_type` can be filled into `field`
+  // from a fill operation triggered on `trigger_origin`, according to the
+  // iframe security policy. (See `AutofillDriverRouter::IsSafeToFill()` for the
+  // policy.)
+  virtual bool IsSafeToFill(const FormFieldData& field,
+                            FieldType filled_type,
+                            const url::Origin& main_origin,
+                            const url::Origin& trigger_origin) const = 0;
 
  private:
   friend class AutofillDriverTestApi;

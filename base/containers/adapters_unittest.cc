@@ -5,6 +5,7 @@
 #include "base/containers/adapters.h"
 
 #include <array>
+#include <forward_list>
 #include <ranges>
 #include <utility>
 #include <vector>
@@ -145,24 +146,6 @@ TEST(AdaptersTest, ReversedConst) {
   for (int i : base::Reversed(cv)) {
     EXPECT_EQ(++j, i);
   }
-}
-
-TEST(AdaptersTest, RangeAsRvalues) {
-  std::vector<std::unique_ptr<int>> v;
-  v.push_back(std::make_unique<int>(1));
-  v.push_back(std::make_unique<int>(2));
-  v.push_back(std::make_unique<int>(3));
-
-  auto v2 = base::ToVector(base::RangeAsRvalues(std::move(v)));
-  EXPECT_EQ(1, *v2[0]);
-  EXPECT_EQ(2, *v2[1]);
-  EXPECT_EQ(3, *v2[2]);
-
-  // The old vector should be consumed. The standard guarantees that a
-  // moved-from std::unique_ptr will be null.
-  EXPECT_EQ(nullptr, v[0]);  // NOLINT(bugprone-use-after-move)
-  EXPECT_EQ(nullptr, v[1]);  // NOLINT(bugprone-use-after-move)
-  EXPECT_EQ(nullptr, v[2]);  // NOLINT(bugprone-use-after-move)
 }
 
 }  // namespace

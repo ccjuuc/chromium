@@ -4,7 +4,6 @@
 
 #include "components/page_content_annotations/core/page_content_annotation_job.h"
 
-#include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 
 namespace page_content_annotations {
@@ -63,6 +62,7 @@ void PageContentAnnotationJob::FillWithNullOutputs() {
                           input, std::nullopt),
                       i);
         break;
+      case AnnotationType::kCategoryClassifier:
       case AnnotationType::kDeprecatedTextEmbedding:
       case AnnotationType::kDeprecatedPageEntities:
       case AnnotationType::kUnknown:
@@ -108,6 +108,10 @@ bool PageContentAnnotationJob::HadAnySuccess() const {
     if (result.type() == AnnotationType::kContentVisibility &&
         result.visibility_score()) {
       return true;
+    }
+    if (result.type() == AnnotationType::kCategoryClassifier) {
+      // Category classifier is not supported for batch annotation yet.
+      NOTREACHED();
     }
   }
   return false;

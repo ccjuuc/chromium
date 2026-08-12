@@ -9,6 +9,7 @@ import("//testing/test.gni")
 if (is_mac) {
   import("//build/config/mac/mac_sdk.gni")
 }
+import("//services/on_device_model/on_device_model.gni")
 import("//third_party/dawn/scripts/dawn_features.gni")
 import("//ui/gl/features.gni")
 
@@ -83,6 +84,7 @@ component("service") {
     "//gpu/config",
     "//gpu/vulkan:buildflags",
     "//mojo/public/cpp/bindings",
+    "//services/on_device_model:ml_internal_buildflags",
     "//ui/base:ozone_buildflags",
   ]
   libs = []
@@ -93,11 +95,21 @@ component("service") {
       "dcomp_texture_win.h",
       "image_transport_surface_win.cc",
     ]
+    if (skia_use_dawn) {
+      sources += [
+        "dawn_texture_solid_color_pool.cc",
+        "dawn_texture_solid_color_pool.h",
+      ]
+    }
     libs += [
       "d3d11.lib",
       "dcomp.lib",
       "dxguid.lib",
     ]
+
+    if (enable_ml_internal) {
+      deps += [ "//services/webnn/public/mojom:features" ]
+    }
   }
   if (is_apple) {
     sources += [

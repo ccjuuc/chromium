@@ -70,7 +70,7 @@ class ChromeLocationBarModelDelegateTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
 
     TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(browser()->profile());
+        TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
     search_test_utils::WaitForTemplateURLServiceToLoad(template_url_service);
 
     delegate_ = std::make_unique<TestChromeLocationBarModelDelegate>(browser());
@@ -78,7 +78,7 @@ class ChromeLocationBarModelDelegateTest : public InProcessBrowserTest {
 
   void SetSearchProvider(bool set_ntp_url) {
     TemplateURLService* template_url_service =
-        TemplateURLServiceFactory::GetForProfile(browser()->profile());
+        TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
     TemplateURLData data;
     data.SetShortName(u"foo.com");
     data.SetURL("http://foo.com/url?bar={searchTerms}");
@@ -108,32 +108,41 @@ class ChromeLocationBarModelDelegateTest : public InProcessBrowserTest {
 // ChromeLocationBarModelDelegate::IsNewTabPageURL return the expected results
 // for various NTP scenarios.
 IN_PROC_BROWSER_TEST_F(ChromeLocationBarModelDelegateTest, IsNewTabPage) {
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   // New Tab URL with Google DSP resolves to the local or the WebUI NTP URL.
-  GURL ntp_url(chrome::kChromeUINewTabPageURL);
-  EXPECT_EQ(ntp_url, search::GetNewTabPageURL(browser()->profile()));
+  const GURL& ntp_url = chrome::ChromeUINewTabPageURLAsGURL();
+  EXPECT_EQ(ntp_url, search::GetNewTabPageURL(browser()->GetProfile()));
 
   EXPECT_TRUE(delegate()->IsNewTabPage());
   EXPECT_TRUE(delegate()->IsNewTabPageURL(GetURL()));
 
   SetSearchProvider(false);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   // New Tab URL with a user selected DSP without an NTP URL resolves to
   // chrome://new-tab-page-third-party/.
   EXPECT_EQ(GURL(chrome::kChromeUINewTabPageThirdPartyURL),
-            search::GetNewTabPageURL(browser()->profile()));
+            search::GetNewTabPageURL(browser()->GetProfile()));
 
   EXPECT_FALSE(delegate()->IsNewTabPage());
   EXPECT_TRUE(delegate()->IsNewTabPageURL(GetURL()));
 
   SetSearchProvider(true);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   // New Tab URL with a user selected DSP resolves to the DSP's NTP URL.
   EXPECT_EQ("https://foo.com/newtab",
-            search::GetNewTabPageURL(browser()->profile()));
+            search::GetNewTabPageURL(browser()->GetProfile()));
 
   EXPECT_FALSE(delegate()->IsNewTabPage());
   EXPECT_TRUE(delegate()->IsNewTabPageURL(GetURL()));
+}
+
+IN_PROC_BROWSER_TEST_F(ChromeLocationBarModelDelegateTest,
+                       IsNewTabPageURLWithFragment) {
+  EXPECT_TRUE(delegate()->IsNewTabPageURL(GURL("chrome://newtab")));
+
+  // Verify that fragments don't prevent matching.
+  EXPECT_TRUE(
+      delegate()->IsNewTabPageURL(GURL("chrome://newtab/#mostvisited")));
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeLocationBarModelDelegateTest,

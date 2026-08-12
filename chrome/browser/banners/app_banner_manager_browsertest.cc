@@ -23,11 +23,18 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
+
 #include "chrome/browser/banners/app_banner_manager_browsertest_base.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/banners/app_banner_metrics.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
@@ -58,194 +65,94 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 #endif
 
 namespace webapps {
 
 using State = AppBannerManager::State;
 
-// Browser tests for web app banners.
-// NOTE: this test relies on service workers; failures and flakiness may be due
-// to changes in SW code.
-// TODO(http://crbug.com/329145718): Use AppBannerManagerNoFakeBrowserTest style
-// instead of overriding like this.
-// TODO(http://crbug.com/322342499): Completely remove this class.
-class AppBannerManagerTest : public AppBannerManager {
+// TODO(http://crbug.com/329255543): Add the config data after the struct is
+// converted to a class w/o const members (this makes it hard to work with
+// TestFuture).
+using AppBannerInstallableCallback =
+    base::RepeatingCallback<void(std::optional<ManifestId>)>;
+class AppBannerManagerObserverAdapter : public AppBannerManager::Observer {
  public:
-  explicit AppBannerManagerTest(content::WebContents* web_contents)
-      : AppBannerManager(web_contents) {}
-
-  AppBannerManagerTest(const AppBannerManagerTest&) = delete;
-  AppBannerManagerTest& operator=(const AppBannerManagerTest&) = delete;
-
-  ~AppBannerManagerTest() override = default;
-
-  bool TriggeringDisabledForTesting() const override { return false; }
-
-  void RequestAppBanner() override {
-    // Filter out about:blank navigations - we use these in testing to force
-    // Stop() to be called.
-    if (validated_url_ == GURL("about:blank")) {
-      return;
-    }
-
-    AppBannerManager::RequestAppBanner();
+  explicit AppBannerManagerObserverAdapter(
+      AppBannerManager* app_banner_manager,
+      AppBannerInstallableCallback callback = base::DoNothing(),
+      InstallableWebAppCheckResult filter =
+          InstallableWebAppCheckResult::kUnknown)
+      : app_banner_manager_(app_banner_manager),
+        callback_(std::move(callback)),
+        filter_(filter) {
+    observation_.Observe(app_banner_manager);
   }
-
-  bool banner_shown() { return banner_shown_.get() && *banner_shown_; }
-
-  std::optional<WebappInstallSource> install_source() {
-    return install_source_;
-  }
-
-  void clear_will_show() { banner_shown_.reset(); }
-
-  State state() { return AppBannerManager::state(); }
 
   // Configures a callback to be invoked when the app banner flow finishes.
   void PrepareDone(base::OnceClosure on_done) { on_done_ = std::move(on_done); }
 
-  // Configures a callback to be invoked from OnBannerPromptReply.
-  void PrepareBannerPromptReply(base::OnceClosure on_banner_prompt_reply) {
-    on_banner_prompt_reply_ = std::move(on_banner_prompt_reply);
+  bool banner_shown() { return banner_shown_; }
+  void clear_banner_shown() { banner_shown_ = false; }
+
+  State state_for_testing() const {
+    return app_banner_manager_->state_for_testing();
   }
 
-  void OnMlInstallPrediction(base::PassKey<MLInstallabilityPromoter>,
-                             std::string result_label) override {}
-
- protected:
-  bool CanRequestAppBanner() const override { return true; }
-
-  InstallableParams ParamsToPerformInstallableWebAppCheck() override {
-    InstallableParams params;
-    params.valid_primary_icon = true;
-    params.installable_criteria =
-        InstallableCriteria::kImplicitManifestFieldsHTML;
-    params.fetch_screenshots = true;
-    return params;
+  InstallableWebAppCheckResult GetInstallableWebAppCheckResult() const {
+    return app_banner_manager_->GetInstallableWebAppCheckResult();
   }
 
-  bool ShouldDoNativeAppCheck(
-      const blink::mojom::Manifest& manifest) const override {
-    return false;
-  }
-
-  void DoNativeAppInstallableCheck(content::WebContents* web_contents,
-                                   const GURL& validated_url,
-                                   const blink::mojom::Manifest& manifest,
-                                   NativeCheckCallback callback) override {
-    NOTREACHED();
-  }
-
-  void OnWebAppInstallableCheckedNoErrors(
-      const ManifestId& manifest_id) const override {}
-
-  base::expected<void, InstallableStatusCode> CanRunWebAppInstallableChecks(
-      const blink::mojom::Manifest& manifest) override {
-    return base::ok();
-  }
-
-  void MaybeShowAmbientBadge(const InstallBannerConfig& config) override {
-    return;
-  }
-
-  void ResetCurrentPageData() override {}
-
-  // The overridden RequestAppBanner() can filter out about:blank calls
-  // to force Stop() to be called, however, the newly introduced
-  // AppBannerManagerBrowserTestWithChromeBFCache starts a server and navigates
-  // to a dynamic/installable banner link and then retriggers the pipeline by
-  // terminating an existing banner. As a result, there can exist banners in an
-  // intermediary state (on_done_ not initialized, banner still shown) that
-  // needs to be cleaned in these overridden functions for Stop() and
-  // UpdateState(State::PENDING).
-  //
-  // As a result, calls to RequestAppBanner should always terminate in
-  // ShowBannerUi(), but not necessarily in Stop() (not showing banner).
-  // Override these methods to capture test status.
-  void Stop(InstallableStatusCode code) override {
-    AppBannerManager::Stop(code);
-    if (banner_shown_)
-      clear_will_show();
-    ASSERT_FALSE(banner_shown_.get());
-    banner_shown_ = std::make_unique<bool>(false);
-    install_source_ = std::nullopt;
-    if (on_done_)
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, std::move(on_done_));
-  }
-
-  void ShowBannerUi(WebappInstallSource install_source,
-                    const InstallBannerConfig& config) override {
-    // Fake the call to ReportStatus here - this is usually called in
-    // platform-specific code which is not exposed here.
-    ReportStatus(InstallableStatusCode::SHOWING_WEB_APP_BANNER);
-    ASSERT_FALSE(banner_shown_.get());
-    banner_shown_ = std::make_unique<bool>(true);
-    install_source_ = install_source;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, std::move(on_done_));
-  }
-
-  void UpdateState(AppBannerManager::State state) override {
-    AppBannerManager::UpdateState(state);
-    if (state == AppBannerManager::State::PENDING_PROMPT_CANCELED ||
-        state == AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED) {
-      if (on_done_)
-        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-            FROM_HERE, std::move(on_done_));
-    }
-  }
-
-  void OnBannerPromptReply(
-      const InstallBannerConfig& install_config,
-      mojo::Remote<blink::mojom::AppBannerController> controller,
-      blink::mojom::AppBannerPromptReply reply) override {
-    AppBannerManager::OnBannerPromptReply(install_config, std::move(controller),
-                                          reply);
-    if (on_banner_prompt_reply_) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, std::move(on_banner_prompt_reply_));
-    }
-  }
-
-  base::WeakPtr<AppBannerManager> GetWeakPtrForThisNavigation() override {
-    return weak_factory_.GetWeakPtr();
-  }
-
-  void InvalidateWeakPtrsForThisNavigation() override {
-    weak_factory_.InvalidateWeakPtrs();
-  }
-
-  bool IsSupportedNonWebAppPlatform(
-      const std::u16string& platform) const override {
-    return base::EqualsASCII(platform, "chrome_web_store");
-  }
-
-  bool IsRelatedNonWebAppInstalled(
-      const blink::Manifest::RelatedApplication& related_app) const override {
-    // Corresponds to the id listed in manifest_listing_related_chrome_app.json.
-    return base::EqualsASCII(related_app.platform.value_or(std::u16string()),
-                             "chrome_web_store") &&
-           base::EqualsASCII(related_app.id.value_or(std::u16string()),
-                             "installed-extension-id");
-  }
-
-  void InstallableWebAppStatusUpdate() override {}
-
-  base::OnceClosure on_done_;
+  AppBannerManager* app_banner_manager() const { return app_banner_manager_; }
 
  private:
-  // If non-null, |on_banner_prompt_reply_| will be invoked from
-  // OnBannerPromptReply.
-  base::OnceClosure on_banner_prompt_reply_;
+  void OnInstallableWebAppStatusUpdated(
+      InstallableWebAppCheckResult result,
+      const std::optional<WebAppBannerData>& data) override {
+    if (result != filter_) {
+      LOG(WARNING) << "Filtered result: " << base::ToString(result);
+      return;
+    }
+    callback_.Run(data.has_value() ? std::make_optional(data->manifest_id)
+                                   : std::nullopt);
+  }
 
-  std::unique_ptr<bool> banner_shown_;
-  std::optional<WebappInstallSource> install_source_;
+  void OnBannerShown() override {
+    banner_shown_ = true;
+    if (on_done_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(on_done_));
+    }
+  }
 
-  base::WeakPtrFactory<AppBannerManagerTest> weak_factory_{this};
+  void OnComplete(InstallableStatusCode code) override {
+    if (code == InstallableStatusCode::MANIFEST_URL_CHANGED) {
+      return;
+    }
+    if (on_done_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(on_done_));
+    }
+  }
+
+  void OnBannerPromptReply() override {
+    if (on_done_) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, std::move(on_done_));
+    }
+  }
+
+  raw_ptr<AppBannerManager> app_banner_manager_;
+  AppBannerInstallableCallback callback_;
+  InstallableWebAppCheckResult filter_;
+  base::ScopedObservation<AppBannerManager, AppBannerManager::Observer>
+      observation_{this};
+  base::OnceClosure on_done_;
+  bool banner_shown_ = false;
 };
-
 
 enum class CheckWebAppExistence { kAsync = 0, kSync = 1, kMaxValue = kSync };
 
@@ -253,59 +160,85 @@ class AppBannerManagerBrowserTest
     : public AppBannerManagerBrowserTestBase,
       public ::testing::WithParamInterface<CheckWebAppExistence> {
  public:
-  AppBannerManagerBrowserTest()
-      : disable_banner_trigger_(&test::g_disable_banner_triggering_for_testing,
-                                true) {}
-
+  AppBannerManagerBrowserTest() = default;
   AppBannerManagerBrowserTest(const AppBannerManagerBrowserTest&) = delete;
   AppBannerManagerBrowserTest& operator=(const AppBannerManagerBrowserTest&) =
       delete;
 
+  void SetUp() override {
+#if BUILDFLAG(IS_ANDROID)
+    if (base::android::device_info::is_automotive()) {
+      GTEST_SKIP() << "Skipping test on Android Automotive";
+    }
+#endif
+    AppBannerManagerBrowserTestBase::SetUp();
+  }
+
+  void SetUpOnMainThread() override {
+    AppBannerManagerBrowserTestBase::SetUpOnMainThread();
+    ASSERT_TRUE(embedded_https_test_server().Start());
+  }
+
   void SetUpCommandLine(base::CommandLine* command_line) override {
     if (GetParam() == CheckWebAppExistence::kAsync) {
-      feature_list_.InitAndEnableFeature(features::kCheckWebAppExistenceAsync);
+      feature_list_.InitWithFeatures(
+          /*enabled_features=*/
+          {features::kCheckWebAppExistenceAsync},
+          /*disabled_features=*/
+          // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
+          // Omnibox is enabled and then remove these two Features.
+          {omnibox::internal::kWebUIOmniboxPopup,
+           omnibox::internal::kWebUIOmniboxAimPopup});
     } else {
-      feature_list_.InitAndDisableFeature(features::kCheckWebAppExistenceAsync);
+      feature_list_.InitWithFeatures(
+          /*enabled_features=*/{},
+          /*disabled_features=*/
+          {features::kCheckWebAppExistenceAsync,
+           // TODO(crbug.com/452061489): Fix tests that fail when the WebUI
+           // Omnibox is enabled and then remove these two Features.
+           omnibox::internal::kWebUIOmniboxPopup,
+           omnibox::internal::kWebUIOmniboxAimPopup});
     }
   }
 
  protected:
-  std::unique_ptr<AppBannerManagerTest> CreateAppBannerManager() {
-    content::WebContents* web_contents =
-        chrome_test_utils::GetActiveWebContents(this);
-    return std::make_unique<AppBannerManagerTest>(web_contents);
+  std::unique_ptr<AppBannerManagerObserverAdapter>
+  CreateAppBannerManagerObserver(
+      AppBannerInstallableCallback callback = base::DoNothing(),
+      InstallableWebAppCheckResult filter =
+          InstallableWebAppCheckResult::kUnknown) {
+    return std::make_unique<AppBannerManagerObserverAdapter>(
+        AppBannerManager::FromWebContents(web_contents()), callback, filter);
   }
 
   void RunBannerTest(
       content::WebContents* web_contents,
-      AppBannerManagerTest* manager,
+      AppBannerManagerObserverAdapter* observer,
       const GURL& url,
-      std::optional<InstallableStatusCode> expected_code_for_histogram,
-      bool is_off_the_record = false) {
+      std::optional<InstallableStatusCode> expected_code_for_histogram) {
     base::HistogramTester histograms;
 
-    // Spin the run loop and wait for the manager to finish.
+    // Spin the run loop and wait for the AppBannerManager to finish.
     base::RunLoop run_loop;
-    manager->clear_will_show();
-    manager->PrepareDone(run_loop.QuitClosure());
+    observer->clear_banner_shown();
+    observer->PrepareDone(run_loop.QuitClosure());
     ASSERT_TRUE(content::NavigateToURL(web_contents, url));
     run_loop.Run();
 
     EXPECT_EQ(expected_code_for_histogram.value_or(
                   InstallableStatusCode::MAX_ERROR_CODE) ==
                   InstallableStatusCode::SHOWING_WEB_APP_BANNER,
-              manager->banner_shown());
-    EXPECT_EQ(std::nullopt, manager->install_source());
+              observer->banner_shown());
 
     // Generally the manager will be in the complete state, however some test
     // cases navigate the page, causing the state to go back to INACTIVE.
-    EXPECT_TRUE(manager->state() == State::COMPLETE ||
-                manager->state() == State::PENDING_PROMPT_CANCELED ||
-                manager->state() == State::PENDING_PROMPT_NOT_CANCELED ||
-                manager->state() == State::INACTIVE);
+    EXPECT_TRUE(
+        observer->state_for_testing() == State::COMPLETE ||
+        observer->state_for_testing() == State::PENDING_PROMPT_CANCELED ||
+        observer->state_for_testing() == State::PENDING_PROMPT_NOT_CANCELED ||
+        observer->state_for_testing() == State::INACTIVE);
 
-    // If in incognito, ensure that nothing is recorded.
-    if (is_off_the_record || !expected_code_for_histogram) {
+    if (!expected_code_for_histogram) {
       histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
     } else {
       EXPECT_THAT(histograms.GetAllSamples(kInstallableStatusCodeHistogram),
@@ -314,37 +247,36 @@ class AppBannerManagerBrowserTest
     }
   }
 
-  void TriggerBannerFlowWithNavigation(AppBannerManagerTest* manager,
-                                       const GURL& url,
-                                       bool expected_will_show,
-                                       std::optional<State> expected_state) {
+  void TriggerBannerFlowWithNavigation(
+      AppBannerManagerObserverAdapter* observer,
+      const GURL& url,
+      bool expected_will_show,
+      std::optional<State> expected_state) {
     // Use NavigateToURLWithDisposition as it isn't overloaded, so can be used
     // with Bind.
     TriggerBannerFlow(
-        manager, base::BindLambdaForTesting([&]() {
+        observer, base::BindLambdaForTesting([&]() {
           ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
         }),
         expected_will_show, expected_state);
   }
 
-  void TriggerBannerFlow(AppBannerManagerTest* manager,
+  void TriggerBannerFlow(AppBannerManagerObserverAdapter* observer,
                          base::OnceClosure trigger_task,
                          bool expected_will_show,
                          std::optional<State> expected_state) {
     base::RunLoop run_loop;
-    manager->clear_will_show();
-    manager->PrepareDone(run_loop.QuitClosure());
+    observer->clear_banner_shown();
+    observer->PrepareDone(run_loop.QuitClosure());
     std::move(trigger_task).Run();
     run_loop.Run();
 
-    EXPECT_EQ(expected_will_show, manager->banner_shown());
+    EXPECT_EQ(expected_will_show, observer->banner_shown());
     if (expected_state)
-      EXPECT_EQ(expected_state, manager->state());
+      EXPECT_EQ(expected_state, observer->state_for_testing());
   }
 
  private:
-  // Disable the banners in the browser so it won't interfere with the test.
-  base::AutoReset<bool> disable_banner_trigger_;
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -356,8 +288,8 @@ class AppBannerManagerBrowserTest
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_WebAppBannerNoTypeInManifest) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  RunBannerTest(web_contents(), manager.get(),
+  auto observer = CreateAppBannerManagerObserver();
+  RunBannerTest(web_contents(), observer.get(),
                 GetBannerURLWithManifest("/banners/manifest_no_type.json"),
                 std::nullopt);
 }
@@ -372,8 +304,8 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_WebAppBannerNoTypeInManifestCapsExtension) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  RunBannerTest(web_contents(), manager.get(),
+  auto observer = CreateAppBannerManagerObserver();
+  RunBannerTest(web_contents(), observer.get(),
                 GetBannerURLWithManifest("/banners/manifest_no_type_caps.json"),
                 std::nullopt);
 }
@@ -385,8 +317,8 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
 #define MAYBE_WebAppBannerSvgIcon WebAppBannerSvgIcon
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, MAYBE_WebAppBannerSvgIcon) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  RunBannerTest(web_contents(), manager.get(),
+  auto observer = CreateAppBannerManagerObserver();
+  RunBannerTest(web_contents(), observer.get(),
                 GetBannerURLWithManifest("/banners/manifest_svg_icon.json"),
                 std::nullopt);
 }
@@ -399,66 +331,173 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, MAYBE_WebAppBannerSvgIcon) {
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_WebAppBannerWebPIcon) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  RunBannerTest(web_contents(), manager.get(),
+  auto observer = CreateAppBannerManagerObserver();
+  RunBannerTest(web_contents(), observer.get(),
                 GetBannerURLWithManifest("/banners/manifest_webp_icon.json"),
                 std::nullopt);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        DelayedManifestTriggersPipeline) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   RunBannerTest(
-      web_contents(), manager.get(),
+      web_contents(), observer.get(),
       embedded_test_server()->GetURL("/banners/no_manifest_test_page.html"),
       InstallableStatusCode::NO_MANIFEST);
 
   // Dynamically add the manifest.
   base::HistogramTester histograms;
   TriggerBannerFlow(
-      manager.get(), base::BindLambdaForTesting([&]() {
+      observer.get(), base::BindLambdaForTesting([&]() {
         EXPECT_TRUE(content::ExecJs(web_contents(), "addManifestLinkTag()"));
       }),
-      /*expected_will_show=*/false, std::nullopt);
-  TriggerBannerFlow(manager.get(), base::DoNothing(),
-                    /*expected_will_show=*/false,
-                    AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
+      /*expected_will_show=*/false,
+      AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
   histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        RemovingManifestStopsPipeline) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   RunBannerTest(
-      web_contents(), manager.get(),
+      web_contents(), observer.get(),
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
       std::nullopt);
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
 
   // Dynamically remove the manifest.
   base::HistogramTester histograms;
   TriggerBannerFlow(
-      manager.get(), base::BindLambdaForTesting([&]() {
+      observer.get(), base::BindLambdaForTesting([&]() {
         EXPECT_TRUE(content::ExecJs(web_contents(), "removeAllManifestTags()"));
       }),
       false, AppBannerManager::State::COMPLETE);
+
+  // Verify installable result is updated to kNo.
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
+            InstallableWebAppCheckResult::kNo);
+
   histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 1);
   histograms.ExpectUniqueSample(kInstallableStatusCodeHistogram,
                                 InstallableStatusCode::NO_MANIFEST, 1);
 }
 
+// Removing manifest after user-triggered prompt should update installable
+// check result to kNo. This tests the scenario where user has interacted
+// with the install prompt before manifest removal.
+// See crbug.com/371998380 for the original bug report.
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
+                       RemovingManifestFromCompleteStateUpdatesResult) {
+  auto observer = CreateAppBannerManagerObserver();
+  GURL test_url = GetBannerURLWithAction("stash_event");
+
+  // Navigate to page and get the pipeline started.
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
+                                  false /* expected_will_show */,
+                                  State::PENDING_PROMPT_NOT_CANCELED);
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
+            InstallableWebAppCheckResult::kYes_Promotable);
+
+  // Trigger the prompt and let it complete (simulate user seeing the prompt).
+  TriggerBannerFlow(observer.get(),
+                    base::BindOnce(&AppBannerManagerBrowserTest::ExecuteScript,
+                                   web_contents(), "callStashedPrompt();",
+                                   true /* with_gesture */),
+                    true /* expected_will_show */, State::COMPLETE);
+
+  // Now from COMPLETE state, remove the manifest.
+  // The installable check result should be updated to kNo.
+  base::HistogramTester histograms;
+  EXPECT_TRUE(content::ExecJs(web_contents(), "removeAllManifestTags()"));
+
+  // Since state is already COMPLETE, Terminate() is not called, but
+  // SetInstallableWebAppCheckResult(kNo) should still be called.
+  // Wait for the async DidUpdateWebManifestURL callback to complete.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return observer->GetInstallableWebAppCheckResult() ==
+           InstallableWebAppCheckResult::kNo;
+  })) << "Timed out waiting for installable result to become kNo";
+  // No histogram recorded since state was already COMPLETE.
+  histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
+
+  // Dismiss the banner so it does not stay open during test teardown.
+  base::RunLoop run_loop;
+  observer->PrepareDone(run_loop.QuitClosure());
+  observer->app_banner_manager()->SendBannerDismissed();
+  run_loop.Run();
+}
+
+// Verify that after removing manifest and then re-adding it, the installable
+// check result is correctly updated back to promotable.
+// This is an important real-world scenario where a page might temporarily
+// remove its manifest and then restore it.
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
+                       RemoveAndReAddManifestRestoresPromotability) {
+  auto observer = CreateAppBannerManagerObserver();
+
+  // Navigate to a page with a valid manifest.
+  RunBannerTest(
+      web_contents(), observer.get(),
+      embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+      std::nullopt);
+  EXPECT_EQ(observer->state_for_testing(),
+            AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
+            InstallableWebAppCheckResult::kYes_Promotable);
+
+  // Remove the manifest - result should become kNo.
+  {
+    base::HistogramTester histograms;
+    TriggerBannerFlow(observer.get(), base::BindLambdaForTesting([&]() {
+                        EXPECT_TRUE(content::ExecJs(web_contents(),
+                                                    "removeAllManifestTags()"));
+                      }),
+                      false, AppBannerManager::State::COMPLETE);
+    EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
+              InstallableWebAppCheckResult::kNo);
+    histograms.ExpectUniqueSample(kInstallableStatusCodeHistogram,
+                                  InstallableStatusCode::NO_MANIFEST, 1);
+  }
+
+  // Re-add the manifest - pipeline should restart and result should become
+  // promotable again.
+  {
+    base::HistogramTester histograms;
+    TriggerBannerFlow(
+        observer.get(), base::BindLambdaForTesting([&]() {
+          EXPECT_TRUE(content::ExecJs(web_contents(), "addManifestLinkTag()"));
+        }),
+        false, std::nullopt);
+    // Wait for the pipeline to complete.
+    if (observer->state_for_testing() !=
+        AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED) {
+      base::RunLoop run_loop;
+      observer->PrepareDone(run_loop.QuitClosure());
+      run_loop.Run();
+    }
+    EXPECT_EQ(observer->state_for_testing(),
+              AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
+    EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
+              InstallableWebAppCheckResult::kYes_Promotable);
+    // No histogram is recorded when re-adding manifest from COMPLETE state
+    // because the status reporter is already a NullStatusReporter after
+    // previous Stop() call.
+    histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
+  }
+}
+
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        ManifestChangeTriggersPipeline) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
 
   // Cause the manifest test page to reach the PENDING_PROMPT stage of the
   // app banner pipeline.
   RunBannerTest(
-      web_contents(), manager.get(),
+      web_contents(), observer.get(),
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
       std::nullopt);
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
 
   // Dynamically change the manifest, which results in a
@@ -468,7 +507,7 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
     // Note - The state of the appbannermanager here will be racy, so don't
     // check for that.
     TriggerBannerFlow(
-        manager.get(), base::BindLambdaForTesting([&]() {
+        observer.get(), base::BindLambdaForTesting([&]() {
           EXPECT_TRUE(content::ExecJs(
               web_contents(),
               "addManifestLinkTag('/banners/manifest_one_icon.json')"));
@@ -481,49 +520,49 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
   }
   // The pipeline should either have completed, or it is scheduled in the
   // background. Wait for the next prompt request if so.
-  if (manager->state() !=
+  if (observer->state_for_testing() !=
       AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED) {
     base::HistogramTester histograms;
     base::RunLoop run_loop;
-    manager->PrepareDone(run_loop.QuitClosure());
+    observer->PrepareDone(run_loop.QuitClosure());
     run_loop.Run();
     histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
   }
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPageManifestProvidesDefaultManifest) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   GURL page_url =
       embedded_test_server()->GetURL("/banners/no_manifest_test_page.html");
-  RunBannerTest(web_contents(), manager.get(), page_url,
+  RunBannerTest(web_contents(), observer.get(), page_url,
                 InstallableStatusCode::NO_MANIFEST);
   std::optional<WebAppBannerData> banner =
-      manager->GetCurrentWebAppBannerData();
+      observer->app_banner_manager()->GetCurrentWebAppBannerData();
   // Check the default manifest was populated.
   ASSERT_TRUE(banner);
   EXPECT_TRUE(blink::IsDefaultManifest(banner->manifest(), page_url));
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, MissingManifest) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  RunBannerTest(web_contents(), manager.get(),
+  auto observer = CreateAppBannerManagerObserver();
+  RunBannerTest(web_contents(), observer.get(),
                 GetBannerURLWithManifest("/banners/manifest_missing.json"),
                 InstallableStatusCode::MANIFEST_PARSING_OR_NETWORK_ERROR);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerInIFrame) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   GURL url = embedded_test_server()->GetURL("/banners/iframe_test_page.html");
-  RunBannerTest(web_contents(), manager.get(), url,
+  RunBannerTest(web_contents(), observer.get(), url,
                 InstallableStatusCode::NO_MANIFEST);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             webapps::InstallableWebAppCheckResult::kNo);
   // The banner will be the default one for the current page.
   std::optional<WebAppBannerData> banner =
-      manager->GetCurrentWebAppBannerData();
+      observer->app_banner_manager()->GetCurrentWebAppBannerData();
   ASSERT_TRUE(banner);
   EXPECT_TRUE(blink::IsDefaultManifest(banner->manifest(), url));
 }
@@ -531,29 +570,27 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerInIFrame) {
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, DoesNotShowInIncognito) {
   Browser* incognito_browser =
-      OpenURLOffTheRecord(browser()->profile(), GURL("about:blank"));
+      OpenURLOffTheRecord(browser()->GetProfile(), GURL("about:blank"));
   content::WebContents* web_contents =
       incognito_browser->tab_strip_model()->GetActiveWebContents();
-  std::unique_ptr<AppBannerManagerTest> manager =
-      std::make_unique<AppBannerManagerTest>(web_contents);
-  RunBannerTest(web_contents, manager.get(), GetBannerURL(),
-                InstallableStatusCode::IN_INCOGNITO, true);
+  // AppBannerManager is not even set up for incognito WebContents.
+  ASSERT_EQ(nullptr, AppBannerManager::FromWebContents(web_contents));
 }
 #endif
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerNotCreated) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   GURL test_url = GetBannerURL();
 
   // Navigate and expect the manager to end up waiting for prompt to be called.
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_NOT_CANCELED);
 
   // Navigate and expect Stop() to be called.
-  TriggerBannerFlowWithNavigation(manager.get(), GURL("about:blank"),
+  TriggerBannerFlowWithNavigation(observer.get(), GURL("about:blank"),
                                   false /* expected_will_show */,
                                   State::INACTIVE);
 
@@ -562,7 +599,7 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerNotCreated) {
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerCancelled) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   // Explicitly call preventDefault(), but don't call prompt().
@@ -570,12 +607,12 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerCancelled) {
 
   // Navigate and expect the manager to end up waiting for prompt() to be
   // called.
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_CANCELED);
 
   // Navigate to about:blank and expect Stop() to be called.
-  TriggerBannerFlowWithNavigation(manager.get(), GURL("about:blank"),
+  TriggerBannerFlowWithNavigation(observer.get(), GURL("about:blank"),
                                   false /* expected_will_show */,
                                   State::INACTIVE);
 
@@ -592,41 +629,49 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerCancelled) {
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_WebAppBannerPromptWithGesture) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   GURL test_url = GetBannerURLWithAction("stash_event");
 
   // Navigate to page and get the pipeline started.
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_NOT_CANCELED);
 
   // Now let the page call prompt with a gesture. The banner should be shown.
-  TriggerBannerFlow(manager.get(),
+  TriggerBannerFlow(observer.get(),
                     base::BindOnce(&AppBannerManagerBrowserTest::ExecuteScript,
                                    web_contents(), "callStashedPrompt();",
                                    true /* with_gesture */),
                     true /* expected_will_show */, State::COMPLETE);
 
+#if BUILDFLAG(IS_ANDROID)
   histograms.ExpectUniqueSample(kInstallableStatusCodeHistogram,
                                 InstallableStatusCode::SHOWING_WEB_APP_BANNER,
                                 1);
+#else
+  histograms.ExpectUniqueSample(
+      kInstallableStatusCodeHistogram,
+      InstallableStatusCode::SHOWING_APP_INSTALLATION_DIALOG, 1);
+#endif
+
+  observer->app_banner_manager()->ResetCurrentPageDataForTesting();
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerReprompt) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   GURL test_url = GetBannerURLWithAction("stash_event");
 
   // Navigate to page and get the pipeline started.
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_NOT_CANCELED);
 
   // Call prompt to show the banner.
-  TriggerBannerFlow(manager.get(),
+  TriggerBannerFlow(observer.get(),
                     base::BindOnce(&AppBannerManagerBrowserTest::ExecuteScript,
                                    web_contents(), "callStashedPrompt();",
                                    true /* with_gesture */),
@@ -634,22 +679,29 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerReprompt) {
 
   // Dismiss the banner.
   base::RunLoop run_loop;
-  manager->PrepareDone(base::DoNothing());
-  manager->PrepareBannerPromptReply(run_loop.QuitClosure());
-  manager->SendBannerDismissed();
+  observer->PrepareDone(run_loop.QuitClosure());
+  observer->app_banner_manager()->SendBannerDismissed();
   // Wait for OnBannerPromptReply event.
   run_loop.Run();
 
   // Call prompt again to show the banner again.
-  TriggerBannerFlow(manager.get(),
+  TriggerBannerFlow(observer.get(),
                     base::BindOnce(&AppBannerManagerBrowserTest::ExecuteScript,
                                    web_contents(), "callStashedPrompt();",
                                    true /* with_gesture */),
                     true /* expected_will_show */, State::COMPLETE);
 
+#if BUILDFLAG(IS_ANDROID)
   histograms.ExpectUniqueSample(kInstallableStatusCodeHistogram,
                                 InstallableStatusCode::SHOWING_WEB_APP_BANNER,
                                 1);
+#else
+  histograms.ExpectUniqueSample(
+      kInstallableStatusCodeHistogram,
+      InstallableStatusCode::SHOWING_APP_INSTALLATION_DIALOG, 1);
+#endif
+
+  observer->app_banner_manager()->ResetCurrentPageDataForTesting();
 }
 
 // Flaky on Android. crbug.com/369804412
@@ -660,12 +712,12 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerReprompt) {
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_PreferRelatedAppUnknown) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
 
   GURL test_url = embedded_test_server()->GetURL(
       "/banners/manifest_test_page.html?manifest="
       "manifest_prefer_related_apps_unknown.json");
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_NOT_CANCELED);
 }
@@ -678,14 +730,15 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_PreferRelatedChromeApp) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   GURL test_url = embedded_test_server()->GetURL(
       "/banners/manifest_test_page.html?manifest="
       "manifest_prefer_related_chrome_app.json");
-  TriggerBannerFlowWithNavigation(
-      manager.get(), test_url, false /* expected_will_show */, State::COMPLETE);
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
+                                  false /* expected_will_show */,
+                                  State::COMPLETE);
   histograms.ExpectUniqueSample(
       kInstallableStatusCodeHistogram,
       InstallableStatusCode::PREFER_RELATED_APPLICATIONS, 1);
@@ -700,41 +753,64 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_ListedRelatedChromeAppInstalled) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
+
+  // If this test is going to be re-enabled on android, it will probably need
+  // a different manifest, with a different related app. Perhaps there should
+  // be separate OS-specific versions of this test for AppBannerManagerDesktop
+  // and AppBannerManagerAndroid.
+#if !BUILDFLAG(IS_ANDROID)
+  // Corresponds to the id listed in manifest_listing_related_chrome_app.json.
+  const auto extension =
+      extensions::ExtensionBuilder("installed related chrome app")
+          .SetID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+          .SetLocation(extensions::mojom::ManifestLocation::kInternal)
+          .Build();
+  // Install the extension via ExtensionRegistrar so the full load path runs and
+  // notifies RendererStartupHelper. Adding it straight to the ExtensionRegistry
+  // enabled set leaves RendererStartupHelper's bookkeeping out of sync and
+  // trips a DCHECK when a new renderer process initializes
+  // (crbug.com/515192463).
+  extensions::ExtensionRegistrar::Get(browser()->GetProfile())
+      ->AddExtension(extension);
+#endif
 
   GURL test_url = embedded_test_server()->GetURL(
       "/banners/manifest_test_page.html?manifest="
       "manifest_listing_related_chrome_app.json");
-  TriggerBannerFlowWithNavigation(
-      manager.get(), test_url, false /* expected_will_show */, State::COMPLETE);
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
+                                  false /* expected_will_show */,
+                                  State::COMPLETE);
   histograms.ExpectUniqueSample(
       kInstallableStatusCodeHistogram,
       InstallableStatusCode::PREFER_RELATED_APPLICATIONS, 1);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, WebAppBannerTerminated) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   base::HistogramTester histograms;
 
   GURL test_url = GetBannerURL();
 
   // Navigate and expect the manager to end up waiting for prompt() to be
   // called.
-  TriggerBannerFlowWithNavigation(manager.get(), test_url,
+  TriggerBannerFlowWithNavigation(observer.get(), test_url,
                                   false /* expected_will_show */,
                                   State::PENDING_PROMPT_NOT_CANCELED);
 
   // Navigate to about:blank and expect it to be terminated because the previous
   // URL is still pending.
-  TriggerBannerFlowWithNavigation(manager.get(), GURL("about:blank"),
+  TriggerBannerFlowWithNavigation(observer.get(), GURL("about:blank"),
                                   false /* expected_will_show */,
                                   State::INACTIVE);
 
   // Expect the installation config to be empty, as the page is not eligible
   // for installation.
-  EXPECT_EQ(manager->GetCurrentWebAppBannerData(), std::nullopt);
-  EXPECT_EQ(manager->GetCurrentBannerConfig(), std::nullopt);
+  EXPECT_EQ(observer->app_banner_manager()->GetCurrentWebAppBannerData(),
+            std::nullopt);
+  EXPECT_EQ(observer->app_banner_manager()->GetCurrentBannerConfig(),
+            std::nullopt);
 
   // Expect RENDERER_CANCELLED to be called when an existing call is terminated.
   histograms.ExpectUniqueSample(kInstallableStatusCodeHistogram,
@@ -787,21 +863,21 @@ class AppBannerManagerBrowserTestWithChromeBFCache
 IN_PROC_BROWSER_TEST_F(AppBannerManagerBrowserTestWithChromeBFCache,
                        VerifyBFCacheBehavior) {
   ASSERT_TRUE(embedded_test_server()->Start());
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
 
   base::HistogramTester histograms;
   // Triggering flow to first URL with a pending prompt.
-  TriggerBannerFlowWithNavigation(manager.get(), GetBannerURL(),
+  TriggerBannerFlowWithNavigation(observer.get(), GetBannerURL(),
                                   /*expected_will_show=*/false,
                                   State::PENDING_PROMPT_NOT_CANCELED);
   content::RenderFrameHostWrapper rfh_a(current_frame_host());
-  ASSERT_EQ(manager->state(),
+  ASSERT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
   histograms.ExpectTotalCount(kInstallableStatusCodeHistogram, 0);
 
   // Navigating to 2nd installable URL while PENDING_PROMPT will trigger
   // the pipeline.
-  TriggerBannerFlowWithNavigation(manager.get(), Get2ndInstallableURL(),
+  TriggerBannerFlowWithNavigation(observer.get(), Get2ndInstallableURL(),
                                   /*expected_will_show=*/false, std::nullopt);
   AssertBackForwardCacheIsUsedAsExpected(rfh_a);
 
@@ -811,7 +887,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerBrowserTestWithChromeBFCache,
   web_contents()->GetController().GoBack();
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   // Verify pipeline has been triggered for new page load.
-  EXPECT_NE(manager->state(), AppBannerManager::State::INACTIVE);
+  EXPECT_NE(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   AssertBackForwardCacheIsUsedAsExpected(rfh_b);
 
@@ -819,7 +895,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerBrowserTestWithChromeBFCache,
   web_contents()->GetController().GoForward();
   ASSERT_TRUE(content::WaitForLoadStop(web_contents()));
   // Verify pipeline has been triggered for new page load.
-  EXPECT_NE(manager->state(), AppBannerManager::State::INACTIVE);
+  EXPECT_NE(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   AssertBackForwardCacheIsUsedAsExpected(rfh_a);
 }
@@ -905,21 +981,26 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerPrerenderBrowserTest,
   auto initial_url = embedded_test_server()->GetURL("/empty.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), initial_url));
 
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  EXPECT_EQ(manager->state(), AppBannerManager::State::INACTIVE);
+  // Reset the AppBannerManager so that it is not running its pipeline.
+  AppBannerManager::FromWebContents(web_contents())
+      ->ResetCurrentPageDataForTesting();
+
+  auto observer = CreateAppBannerManagerObserver();
+  EXPECT_EQ(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   // Load a page in the prerender.
   GURL prerender_url = GetBannerURL();
-  const content::FrameTreeNodeId host_id =
+  const content::PrerenderHostId host_id =
       prerender_test_helper().AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*web_contents(), host_id);
   EXPECT_FALSE(host_observer.was_activated());
-  EXPECT_EQ(manager->state(), AppBannerManager::State::INACTIVE);
+  EXPECT_EQ(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   // Activate the prerender page.
   prerender_test_helper().NavigatePrimaryPage(prerender_url);
   EXPECT_TRUE(host_observer.was_activated());
-  EXPECT_EQ(manager->state(), AppBannerManager::State::FETCHING_MANIFEST);
+  EXPECT_EQ(observer->state_for_testing(),
+            AppBannerManager::State::FETCHING_MANIFEST);
 }
 
 class AppBannerManagerFencedFrameBrowserTest
@@ -932,6 +1013,15 @@ class AppBannerManagerFencedFrameBrowserTest
 
   AppBannerManagerFencedFrameBrowserTest& operator=(
       const AppBannerManagerFencedFrameBrowserTest&) = delete;
+
+  void SetUp() override {
+#if BUILDFLAG(IS_ANDROID)
+    if (base::android::device_info::is_automotive()) {
+      GTEST_SKIP() << "Skipping test on Android Automotive";
+    }
+#endif
+    AppBannerManagerMPArchBrowserTest::SetUp();
+  }
 
   content::test::FencedFrameTestHelper& fenced_frame_test_helper() {
     return fenced_frame_helper_;
@@ -949,10 +1039,16 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerFencedFrameBrowserTest,
 
   // Initialize a MockWebContentsObserver to ensure that DidUpdateManifestURL is
   // not invoked for fenced frame.
-  testing::NiceMock<content::MockWebContentsObserver> observer(web_contents());
+  testing::NiceMock<content::MockWebContentsObserver> web_contents_observer(
+      web_contents());
 
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
-  EXPECT_EQ(manager->state(), AppBannerManager::State::INACTIVE);
+  // Reset the AppBannerManager so that it is not running its pipeline.
+  AppBannerManager::FromWebContents(web_contents())
+      ->ResetCurrentPageDataForTesting();
+
+  auto observer = CreateAppBannerManagerObserver();
+
+  EXPECT_EQ(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   // Create a fenced frame.
   GURL fenced_frame_url = embedded_test_server()->GetURL(
@@ -962,17 +1058,18 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerFencedFrameBrowserTest,
       fenced_frame_test_helper().CreateFencedFrame(
           web_contents()->GetPrimaryMainFrame(), fenced_frame_url);
   EXPECT_NE(nullptr, fenced_frame_host);
-  EXPECT_EQ(manager->state(), AppBannerManager::State::INACTIVE);
+  EXPECT_EQ(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 
   // Cross check that  DidUpdateWebManifestURL is not called for fenced frame
   // RenderFrameHost.
-  EXPECT_CALL(observer, DidUpdateWebManifestURL(fenced_frame_host, testing::_))
+  EXPECT_CALL(web_contents_observer,
+              DidUpdateWebManifestURL(fenced_frame_host, testing::_))
       .Times(0);
 
   // Navigate the fenced frame.
   fenced_frame_test_helper().NavigateFrameInFencedFrameTree(fenced_frame_host,
                                                             fenced_frame_url);
-  EXPECT_EQ(manager->state(), AppBannerManager::State::INACTIVE);
+  EXPECT_EQ(observer->state_for_testing(), AppBannerManager::State::INACTIVE);
 }
 
 // TODO(crbug.com/370270547): Many tests are failing.
@@ -982,63 +1079,64 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerFencedFrameBrowserTest,
 #define MAYBE_ShowBanner ShowBanner
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, MAYBE_ShowBanner) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   RunBannerTest(
-      web_contents(), manager.get(),
+      web_contents(), observer.get(),
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
       std::nullopt);
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, NoServiceWorker) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
 
-  RunBannerTest(web_contents(), manager.get(),
+  RunBannerTest(web_contents(), observer.get(),
                 embedded_test_server()->GetURL(
                     "/banners/manifest_no_service_worker.html"),
                 /*expected_code_for_histogram=*/std::nullopt);
 
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, NoFetchHandler) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
 
-  RunBannerTest(web_contents(), manager.get(),
+  RunBannerTest(web_contents(), observer.get(),
                 embedded_test_server()->GetURL(
                     "/banners/no_sw_fetch_handler_test_page.html"),
                 /*expected_code_for_histogram=*/std::nullopt);
 
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
 
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, PendingServiceWorker) {
-  std::unique_ptr<AppBannerManagerTest> manager =
-      std::make_unique<AppBannerManagerTest>(web_contents());
+  auto observer = CreateAppBannerManagerObserver();
 
-  RunBannerTest(web_contents(), manager.get(),
+  RunBannerTest(web_contents(), observer.get(),
                 embedded_test_server()->GetURL(
                     "/banners/manifest_no_service_worker.html"),
                 std::nullopt);
 
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
 
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
 
-  ASSERT_TRUE(manager->GetCurrentBannerConfig());
-  EXPECT_EQ(manager->GetCurrentBannerConfig()->GetWebOrNativeAppName(),
+  ASSERT_TRUE(observer->app_banner_manager()->GetCurrentBannerConfig());
+  EXPECT_EQ(observer->app_banner_manager()
+                ->GetCurrentBannerConfig()
+                ->GetWebOrNativeAppName(),
             u"Manifest test app");
 }
 
@@ -1050,14 +1148,14 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, PendingServiceWorker) {
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        MAYBE_ValidManifestShowBanner) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
   RunBannerTest(
-      web_contents(), manager.get(),
+      web_contents(), observer.get(),
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
       std::nullopt);
-  EXPECT_EQ(manager->state(),
+  EXPECT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
 }
 
@@ -1068,93 +1166,62 @@ IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
 #define MAYBE_ImplicitName ImplicitName
 #endif
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, MAYBE_ImplicitName) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
+
+  InstallableParams params;
+  params.valid_primary_icon = true;
+  params.installable_criteria =
+      InstallableCriteria::kImplicitManifestFieldsHTML;
+  params.fetch_screenshots = true;
+  observer->app_banner_manager()->OverrideInstallableParamsForTesting(params);
 
   GURL test_url = embedded_test_server()->GetURL(
       "/banners/manifest_test_page.html?manifest="
       "manifest_empty_name_short_name.json&application-name=TestApp");
 
-  RunBannerTest(web_contents(), manager.get(), test_url, std::nullopt);
+  RunBannerTest(web_contents(), observer.get(), test_url, std::nullopt);
 
-  ASSERT_EQ(manager->state(),
+  ASSERT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
-  ASSERT_TRUE(manager->GetCurrentBannerConfig());
-    EXPECT_EQ(manager->GetCurrentBannerConfig()->GetWebOrNativeAppName(),
-              u"TestApp");
+  ASSERT_TRUE(observer->app_banner_manager()->GetCurrentBannerConfig());
+  EXPECT_EQ(observer->app_banner_manager()
+                ->GetCurrentBannerConfig()
+                ->GetWebOrNativeAppName(),
+            u"TestApp");
 }
 
 IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, ImplicitNameDocumentTitle) {
-  std::unique_ptr<AppBannerManagerTest> manager(CreateAppBannerManager());
+  auto observer = CreateAppBannerManagerObserver();
+
+  InstallableParams params;
+  params.valid_primary_icon = true;
+  params.installable_criteria =
+      InstallableCriteria::kImplicitManifestFieldsHTML;
+  params.fetch_screenshots = true;
+  observer->app_banner_manager()->OverrideInstallableParamsForTesting(params);
 
   GURL test_url = embedded_test_server()->GetURL(
       "/banners/manifest_test_page.html?manifest="
       "manifest_empty_name_short_name.json");
 
-  RunBannerTest(web_contents(), manager.get(), test_url, std::nullopt);
+  RunBannerTest(web_contents(), observer.get(), test_url, std::nullopt);
 
-  ASSERT_EQ(manager->state(),
+  ASSERT_EQ(observer->state_for_testing(),
             AppBannerManager::State::PENDING_PROMPT_NOT_CANCELED);
-  EXPECT_EQ(manager->GetInstallableWebAppCheckResult(),
+  EXPECT_EQ(observer->GetInstallableWebAppCheckResult(),
             InstallableWebAppCheckResult::kYes_Promotable);
-  ASSERT_TRUE(manager->GetCurrentBannerConfig());
-    EXPECT_EQ(manager->GetCurrentBannerConfig()->GetWebOrNativeAppName(),
-              u"Web app banner test page");
+  ASSERT_TRUE(observer->app_banner_manager()->GetCurrentBannerConfig());
+  EXPECT_EQ(observer->app_banner_manager()
+                ->GetCurrentBannerConfig()
+                ->GetWebOrNativeAppName(),
+            u"Web app banner test page");
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-// TODO(http://crbug.com/329255543): Add the config data after the struct is
-// converted to a class w/o const members (this makes it hard to work with
-// TestFuture).
-using AppBannerInstallableCallback =
-    base::RepeatingCallback<void(std::optional<ManifestId>)>;
-class AppBannerManagerObserverAdapter : public AppBannerManager::Observer {
- public:
-  AppBannerManagerObserverAdapter(AppBannerManager* source,
-                                  AppBannerInstallableCallback callback,
-                                  InstallableWebAppCheckResult filter)
-      : callback_(std::move(callback)), filter_(filter) {
-    observation_.Observe(source);
-  }
 
-  void OnInstallableWebAppStatusUpdated(
-      InstallableWebAppCheckResult result,
-      const std::optional<WebAppBannerData>& data) override {
-    if (result != filter_) {
-      LOG(WARNING) << "Filtered result: " << base::ToString(result);
-      return;
-    }
-    callback_.Run(data.has_value() ? std::make_optional(data->manifest_id)
-                                   : std::nullopt);
-  }
-
- private:
-  AppBannerInstallableCallback callback_;
-  InstallableWebAppCheckResult filter_;
-  base::ScopedObservation<AppBannerManager, AppBannerManager::Observer>
-      observation_{this};
-};
-
-// Test class that doesn't do complex faking of the AppBannerManager.
-class AppBannerManagerNoFakeBrowserTest
-    : public AppBannerManagerBrowserTestBase {
- public:
-  AppBannerManagerNoFakeBrowserTest() {
-    feature_list_.InitAndEnableFeature(
-        ::features::kPwaNavigationCapturingWithScopeExtensions);
-  }
-
-  void SetUpOnMainThread() override {
-    AppBannerManagerBrowserTestBase::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_https_test_server().Start());
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest, Prompts) {
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest, Prompts) {
   const GURL kAppUrl =
       embedded_test_server()->GetURL("/banners/manifest_test_page.html");
 
@@ -1168,10 +1235,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest, Prompts) {
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        PromptsForInnerCraftedOuterDiy) {
   const GURL kDiyAppUrl =
       embedded_test_server()->GetURL("/web_apps/nesting/index.html");
@@ -1196,10 +1263,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kInnerAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kInnerAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kInnerAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPromptsForInnerDiyOuterDiy) {
   const GURL kDiyAppUrl =
       embedded_test_server()->GetURL("/web_apps/nesting/index.html");
@@ -1224,10 +1291,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kInnerDiyAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kInnerDiyAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kInnerDiyAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPromptForOuterCraftedDisplayBrowserInnerCrafted) {
   const GURL kOuterAppUrl =
       embedded_test_server()->GetURL("/web_apps/nesting/index.html");
@@ -1251,10 +1318,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kInnerAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kInnerAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kInnerAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPromptForOuterCraftedDisplayStandaloneInnerCrafted) {
   const GURL kOuterAppUrl =
       embedded_test_server()->GetURL("/web_apps/nesting/index.html");
@@ -1277,10 +1344,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kInnerAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kInnerAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kInnerAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPromptForOuterCraftedDisplayBrowserInnerDiy) {
   const GURL kOuterAppUrl =
       embedded_test_server()->GetURL("/web_apps/nesting/index.html");
@@ -1303,10 +1370,10 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kInnerAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kInnerAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kInnerAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        NoPromptForOverlapWithCraftedExtendedScopeStandalone) {
   const GURL kExistingAppUrl =
       embedded_test_server()->GetURL("app1.com", "/web_apps/basic.html");
@@ -1333,11 +1400,11 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kNewAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kNewAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kNewAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(
-    AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(
+    AppBannerManagerBrowserTest,
     NoPromptForOverlapWithCraftedExtendedScopeStandaloneWhenInstalledInBrowser) {
   const GURL kExistingAppUrl =
       embedded_test_server()->GetURL("app1.com", "/web_apps/basic.html");
@@ -1371,10 +1438,10 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kNewAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kNewAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kNewAppUrl), future.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
+IN_PROC_BROWSER_TEST_P(AppBannerManagerBrowserTest,
                        PromptForOverlapWithCraftedExtendedScopeInBrowser) {
   const GURL kExistingAppUrl =
       embedded_test_server()->GetURL("app1.com", "/web_apps/basic.html");
@@ -1400,7 +1467,7 @@ IN_PROC_BROWSER_TEST_F(AppBannerManagerNoFakeBrowserTest,
   ASSERT_TRUE(content::NavigateToURL(web_contents(), kNewAppUrl));
 
   ASSERT_TRUE(future.Wait());
-  EXPECT_EQ(kNewAppUrl, future.Get());
+  EXPECT_EQ(ManifestId(kNewAppUrl), future.Get());
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID)

@@ -5,6 +5,7 @@
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_page_selector/cr_page_selector.js';
 
+import {VoiceSearchQuerySource} from 'chrome://resources/cr_components/composebox/composebox_voice_search.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
@@ -208,13 +209,13 @@ export class VoiceSearchOverlayElement extends CrLitElement {
 
   protected accessor interimResult_: string = '';
   protected accessor finalResult_: string = '';
-  private accessor state_: State = State.UNINITIALIZED;
   protected accessor helpUrl_: string =
       `https://support.google.com/chrome/?p=ui_voice_search&hl=${
           window.navigator.language}`;
   protected accessor micVolumeLevel_: number = 0;
   protected accessor micVolumeDuration_: number =
       VOLUME_ANIMATION_DURATION_MIN_MS;
+  private accessor state_: State = State.UNINITIALIZED;
 
   private voiceRecognition_: SpeechRecognition;
   private error_: Error|null = null;
@@ -402,11 +403,16 @@ export class VoiceSearchOverlayElement extends CrLitElement {
     searchParams.append('q', this.finalResult_);
     // Add a parameter to indicate that this request is a voice search.
     searchParams.append('gs_ivs', '1');
+    searchParams.append('sourceid', 'chrome');
     // Build the query URL.
     const queryUrl =
         new URL('/search', loadTimeData.getString('googleBaseUrl'));
     queryUrl.search = searchParams.toString();
     recordVoiceAction(Action.QUERY_SUBMITTED);
+    recordEnumeration(
+        'VoiceSearch.QuerySubmission.Source',
+        VoiceSearchQuerySource.NTP_REALBOX,
+        VoiceSearchQuerySource.MAX_VALUE + 1);
     WindowProxy.getInstance().navigate(queryUrl.href);
   }
 
@@ -433,6 +439,8 @@ export class VoiceSearchOverlayElement extends CrLitElement {
 
   private onError_(error: Error) {
     recordEnumeration('NewTabPage.VoiceErrors', error, Error.MAX_VALUE + 1);
+    recordEnumeration(
+        'VoiceSearch.Errors.NTP_REALBOX', error, Error.MAX_VALUE + 1);
     if (error === Error.ABORTED) {
       // We are in the process of closing voice search.
       return;

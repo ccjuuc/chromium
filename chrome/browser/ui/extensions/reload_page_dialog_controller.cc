@@ -10,7 +10,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/grit/generated_resources.h"
@@ -20,6 +19,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_icon_placeholder.h"
 #include "extensions/browser/image_loader.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
@@ -28,6 +28,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -38,10 +39,11 @@
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
+namespace extensions {
 namespace {
 
 // Whether the dialog should be accepted without showing it on tests.
-std::optional<bool> g_accept_bubble_for_testing_ = std::nullopt;
+std::optional<bool> g_accept_bubble_for_testing_;
 
 // The size of the extension icon.
 constexpr int kIconSize = extension_misc::EXTENSION_ICON_SMALLISH;
@@ -57,9 +59,8 @@ std::u16string GetTitle(
   }
 
   if (extensions_info.size() == 1) {
-    std::u16string extension_name =
-        extensions::util::GetFixupExtensionNameForUIDisplay(
-            base::UTF8ToUTF16(extensions_info[0].name));
+    std::u16string extension_name = ui_util::GetFixupExtensionNameForUIDisplay(
+        base::UTF8ToUTF16(extensions_info[0].name));
     return l10n_util::GetStringFUTF16(
         IDS_EXTENSION_RELOAD_PAGE_BUBBLE_ALLOW_SINGLE_EXTENSION_TITLE,
         extension_name);
@@ -71,8 +72,6 @@ std::u16string GetTitle(
 
 }  // namespace
 
-namespace extensions {
-
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kReloadPageDialogOkButtonElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kReloadPageDialogCancelButtonElementId);
 
@@ -81,7 +80,14 @@ ReloadPageDialogController::ReloadPageDialogController(
     content::BrowserContext* browser_context)
     : web_contents_(web_contents), browser_context_(browser_context) {}
 
-ReloadPageDialogController::~ReloadPageDialogController() = default;
+ReloadPageDialogController::~ReloadPageDialogController() {
+#if BUILDFLAG(IS_ANDROID)
+  if (message_ && message_->is_in_queue()) {
+    messages::MessageDispatcherBridge::Get()->DismissMessage(
+        message_.get(), messages::DismissReason::DISMISSED_BY_FEATURE);
+  }
+#endif
+}
 
 void ReloadPageDialogController::TriggerShow(
     const std::vector<const Extension*>& extensions) {
@@ -177,12 +183,15 @@ void ReloadPageDialogController::Show() {
     } else {
       // For multiple extensions, set the icon to the extensions puzzle icon.
       message_->SetIcon(
-          gfx::Image(
-              ui::ImageModel::FromVectorIcon(vector_icons::kExtensionIcon,
-                                             ui::kColorIcon, kIconSize)
-                  .Rasterize(&web_contents_->GetColorProvider()))
+          gfx::Image(ui::ImageModel::FromVectorIcon(
+                         features::IsRoundedIconsEnabled()
+                             ? vector_icons::kExtensionFilledIcon
+                             : vector_icons::kExtensionOldIcon,
+                         ui::kColorIcon, kIconSize)
+                         .Rasterize(&web_contents_->GetColorProvider()))
               .AsBitmap());
     }
+    message_->DisableIconTint();
   }
 
   messages::MessageDispatcherBridge::Get()->EnqueueMessage(
@@ -213,7 +222,7 @@ void ReloadPageDialogController::Show() {
       for (auto extension_info : extensions_info_) {
         dialog_builder.AddMenuItem(
             ui::ImageModel::FromImage(extension_info.icon),
-            util::GetFixupExtensionNameForUIDisplay(extension_info.name),
+            ui_util::GetFixupExtensionNameForUIDisplay(extension_info.name),
             base::DoNothing(),
             ui::DialogModelMenuItem::Params().SetIsEnabled(false));
       }

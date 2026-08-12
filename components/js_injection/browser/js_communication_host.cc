@@ -60,9 +60,11 @@ void ForEachRenderFrameHostWithinSameWebContents(
 struct JsObject {
   JsObject(const std::u16string& name,
            origin_matcher::OriginMatcher allowed_origin_rules,
+           int32_t world_id,
            std::unique_ptr<WebMessageHostFactory> factory)
       : name(std::move(name)),
         allowed_origin_rules(std::move(allowed_origin_rules)),
+        world_id(world_id),
         factory(std::move(factory)) {}
   JsObject(JsObject&& other) = delete;
   JsObject& operator=(JsObject&& other) = delete;
@@ -70,6 +72,7 @@ struct JsObject {
 
   std::u16string name;
   origin_matcher::OriginMatcher allowed_origin_rules;
+  int32_t world_id;
   std::unique_ptr<WebMessageHostFactory> factory;
 };
 
@@ -99,8 +102,8 @@ class JsCommunicationHost::JsToBrowserMessagingList
     : public mojom::JsObjectsClient {
  public:
   JsToBrowserMessagingList(
-      std::map<std::u16string, std::unique_ptr<JsToBrowserMessaging>>
-          js_to_browser_messagings,
+      std::map<std::pair<std::u16string, int32_t>,
+               std::unique_ptr<JsToBrowserMessaging>> js_to_browser_messagings,
       mojo::PendingAssociatedReceiver<mojom::JsObjectsClient> receiver)
       : js_to_browser_messagings_(std::move(js_to_browser_messagings)),
         receiver_(this, std::move(receiver)) {}
@@ -113,13 +116,15 @@ class JsCommunicationHost::JsToBrowserMessagingList
     }
   }
 
-  const std::map<std::u16string, std::unique_ptr<JsToBrowserMessaging>>&
+  const std::map<std::pair<std::u16string, int32_t>,
+                 std::unique_ptr<JsToBrowserMessaging>>&
   js_to_browser_messagings() const {
     return js_to_browser_messagings_;
   }
 
  private:
-  const std::map<std::u16string, std::unique_ptr<JsToBrowserMessaging>>
+  const std::map<std::pair<std::u16string, int32_t>,
+                 std::unique_ptr<JsToBrowserMessaging>>
       js_to_browser_messagings_;
   mojo::AssociatedReceiver<mojom::JsObjectsClient> receiver_;
 };
@@ -181,7 +186,8 @@ JsCommunicationHost::GetPersistentJavaScripts() const {
 std::u16string JsCommunicationHost::AddWebMessageHostFactory(
     std::unique_ptr<WebMessageHostFactory> factory,
     const std::u16string& js_object_name,
-    const std::vector<std::string>& allowed_origin_rules) {
+    const std::vector<std::string>& allowed_origin_rules,
+    int32_t world_identifier) {
   origin_matcher::OriginMatcher origin_matcher;
   std::string error_message = ConvertToNativeAllowedOriginRulesWithSanityCheck(
       allowed_origin_rules, origin_matcher);
@@ -189,8 +195,10 @@ std::u16string JsCommunicationHost::AddWebMessageHostFactory(
     return base::UTF8ToUTF16(error_message);
 
   for (const auto& js_object : js_objects_) {
-    if (js_object->name == js_object_name) {
-      return u"jsObjectName " + js_object->name + u" was already added.";
+    if (js_object->name == js_object_name &&
+        js_object->world_id == world_identifier) {
+      return u"jsObjectName " + js_object->name +
+             u" was already added for world.";
     }
   }
 
@@ -202,6 +210,8 @@ std::u16string JsCommunicationHost::AddWebMessageHostFactory(
     // navigation notifications for it will be sent.
     // TODO(https://crbug.com/332809183): Guard this behind an origin trial
     // check later on.
+    // Changing this could break downstream apps, see
+    // https://crbug.com/494548175 for more details.
     has_navigation_listener_ = true;
     NavigationWebMessageSender::CreateForPageIfNeeded(
         web_contents()->GetPrimaryPage(), js_object_name, factory.get());
@@ -210,7 +220,7 @@ std::u16string JsCommunicationHost::AddWebMessageHostFactory(
   }
 
   js_objects_.push_back(std::make_unique<JsObject>(
-      js_object_name, origin_matcher, std::move(factory)));
+      js_object_name, origin_matcher, world_identifier, std::move(factory)));
 
   // If a new message listener is added when a page is in BFCache or
   // prerendered, the listener won't be available when be page is activated
@@ -232,10 +242,12 @@ std::u16string JsCommunicationHost::AddWebMessageHostFactory(
 }
 
 void JsCommunicationHost::RemoveWebMessageHostFactory(
-    const std::u16string& js_object_name) {
+    const std::u16string& js_object_name,
+    int32_t world_identifier) {
   for (auto iterator = js_objects_.begin(); iterator != js_objects_.end();
        ++iterator) {
-    if ((*iterator)->name == js_object_name) {
+    if ((*iterator)->name == js_object_name &&
+        (*iterator)->world_id == world_identifier) {
       js_objects_.erase(iterator);
       ForEachRenderFrameHostWithinSameWebContents(
           web_contents()->GetPrimaryMainFrame(),
@@ -255,6 +267,7 @@ JsCommunicationHost::GetWebMessageHostFactories() {
     factories[i].js_name = js_objects_[i]->name;
     factories[i].allowed_origin_rules = js_objects_[i]->allowed_origin_rules;
     factories[i].factory = js_objects_[i]->factory.get();
+    factories[i].world_id = js_objects_[i]->world_id;
   }
   return factories;
 }
@@ -312,7 +325,8 @@ void JsCommunicationHost::NotifyFrameForWebMessageListener(
       &configurator_remote);
   std::vector<mojom::JsObjectPtr> js_objects;
   js_objects.reserve(js_objects_.size());
-  std::map<std::u16string, std::unique_ptr<JsToBrowserMessaging>>
+  std::map<std::pair<std::u16string, int32_t>,
+           std::unique_ptr<JsToBrowserMessaging>>
       js_to_browser_messagings;
   for (const auto& js_object : js_objects_) {
     if (NavigationWebMessageSender::IsNavigationListener(js_object->name)) {
@@ -330,15 +344,16 @@ void JsCommunicationHost::NotifyFrameForWebMessageListener(
     }
     mojo::PendingAssociatedRemote<mojom::JsToBrowserMessaging> pending_remote;
     mojo::PendingAssociatedReceiver<mojom::BrowserToJsMessagingFactory> factory;
-    js_to_browser_messagings[js_object->name] =
+    js_to_browser_messagings[{js_object->name, js_object->world_id}] =
         std::make_unique<JsToBrowserMessaging>(
             render_frame_host,
             pending_remote.InitWithNewEndpointAndPassReceiver(),
             factory.InitWithNewEndpointAndPassRemote(),
-            js_object->factory.get(), js_object->allowed_origin_rules);
+            js_object->factory.get(), js_object->allowed_origin_rules,
+            js_object->name, js_object->world_id);
     js_objects.push_back(mojom::JsObject::New(
         js_object->name, std::move(pending_remote), std::move(factory),
-        js_object->allowed_origin_rules));
+        js_object->allowed_origin_rules, js_object->world_id));
   }
   mojo::PendingAssociatedRemote<mojom::JsObjectsClient> client;
   js_to_browser_messagings_[render_frame_host->GetGlobalId()] =

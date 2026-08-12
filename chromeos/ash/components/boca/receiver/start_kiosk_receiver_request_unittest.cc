@@ -43,6 +43,18 @@ TEST(StartKioskReceiverRequestTest, RelativeUrl) {
   EXPECT_EQ(request.GetRelativeUrl(), "/v1/receivers/receiver_id:start");
 }
 
+TEST(StartKioskReceiverRequestTest, RelativeUrlWithEscapedReceiverId) {
+  ::boca::UserIdentity initiator;
+  ::boca::UserIdentity presenter;
+  StartKioskReceiverRequest request(
+      "../teachers/111/sessions/222:updateConfig?", initiator, presenter,
+      std::string(kInitiatorDeviceId), std::string(kPresenterDeviceId),
+      std::string(kConnectionCode), std::string(kSessionId), base::DoNothing());
+  EXPECT_EQ(request.GetRelativeUrl(),
+            "/v1/receivers/"
+            "..%2Fteachers%2F111%2Fsessions%2F222%3AupdateConfig%3F:start");
+}
+
 TEST(StartKioskReceiverRequestTest, GetRequestBody) {
   std::optional<std::string> response_body;
   ::boca::ConnectionParameter connection_param;
@@ -67,7 +79,7 @@ TEST(StartKioskReceiverRequestTest, GetRequestBody) {
 
   std::optional<std::string> request_body = request.GetRequestBody();
   ASSERT_TRUE(request_body.has_value());
-  std::optional<base::Value::Dict> request_dict = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> request_dict = base::JSONReader::ReadDict(
       request_body.value(), base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(request_dict.has_value());
   EXPECT_EQ(*request_dict.value().FindString(boca::kSessionId), kSessionId);
@@ -120,7 +132,7 @@ TEST(StartKioskReceiverRequestTest, OnSuccess) {
           [&response_body](std::optional<std::string> response) {
             response_body = std::move(response);
           }));
-  base::Value::Dict response_dict;
+  base::DictValue response_dict;
   response_dict.Set(boca::kConnectionId, "connection_id");
   request.OnSuccess(std::make_unique<base::Value>(std::move(response_dict)));
 

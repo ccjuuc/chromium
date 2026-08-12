@@ -8,7 +8,6 @@
 #include <limits>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
@@ -100,11 +99,6 @@ void WebRtcAudioSink::OnData(const media::AudioBus& audio_bus,
   // will be a joint effort, and should be carefully carried out.
   last_estimated_capture_time_ = estimated_capture_time;
 
-  if (base::FeatureList::IsEnabled(
-          features::kWebRtcAudioSinkUseTimestampAligner)) {
-    adapter_->UpdateTimestampAligner(estimated_capture_time);
-  }
-
   // The following will result in zero, one, or multiple synchronous calls to
   // DeliverRebufferedAudio().
   fifo_.Push(audio_bus);
@@ -121,7 +115,9 @@ void WebRtcAudioSink::OnSetFormat(const media::AudioParameters& params) {
   fifo_.Reset(params_.frames_per_buffer());
   const int num_pcm16_data_elements =
       params_.frames_per_buffer() * params_.channels();
-  interleaved_data_.reset(new int16_t[num_pcm16_data_elements]);
+
+  interleaved_data_ = base::AlignedUninit<int16_t>(
+      num_pcm16_data_elements, media::AudioBus::kChannelAlignment);
 }
 
 void WebRtcAudioSink::DeliverRebufferedAudio(const media::AudioBus& audio_bus,
@@ -135,14 +131,14 @@ void WebRtcAudioSink::DeliverRebufferedAudio(const media::AudioBus& audio_bus,
   static_assert(sizeof(interleaved_data_[0]) == 2,
                 "ToInterleaved expects 2 bytes.");
   audio_bus.ToInterleaved<media::SignedInt16SampleTypeTraits>(
-      audio_bus.frames(), interleaved_data_.get());
+      interleaved_data_);
 
   const base::TimeTicks estimated_capture_time =
       last_estimated_capture_time_ + media::AudioTimestampHelper::FramesToTime(
                                          frame_delay, params_.sample_rate());
 
   num_preferred_channels_ = adapter_->DeliverPCMToWebRtcSinks(
-      interleaved_data_.get(), params_.sample_rate(), audio_bus.channels(),
+      interleaved_data_.data(), params_.sample_rate(), audio_bus.channels(),
       audio_bus.frames(), estimated_capture_time);
 }
 
@@ -206,17 +202,6 @@ int WebRtcAudioSink::Adapter::DeliverPCMToWebRtcSinks(
   int64_t capture_timestamp_ms =
       estimated_capture_time.since_origin().InMilliseconds();
 
-  if (base::FeatureList::IsEnabled(
-          features::kWebRtcAudioSinkUseTimestampAligner)) {
-    // This use |timestamp_aligner_| to transform |estimated_capture_timestamp|
-    // to webrtc::TimeMicros(). See the comment at UpdateTimestampAligner() for
-    // more details.
-    capture_timestamp_ms =
-        timestamp_aligner_.TranslateTimestamp(
-            estimated_capture_time.since_origin().InMicroseconds()) /
-        webrtc::kNumMicrosecsPerMillisec;
-  }
-
   int num_preferred_channels = -1;
   for (webrtc::AudioTrackSinkInterface* sink : sinks_) {
     sink->OnData(audio_data, sizeof(int16_t) * 8, sample_rate,
@@ -248,7 +233,7 @@ void WebRtcAudioSink::Adapter::AddSink(webrtc::AudioTrackSinkInterface* sink) {
   SendLogMessage(
       base::StringPrintf("Adapter::AddSink({label=%s})", label_.c_str()));
   base::AutoLock auto_lock(lock_);
-  DCHECK(!base::Contains(sinks_, sink));
+  DCHECK(!std::ranges::contains(sinks_, sink));
   sinks_.push_back(sink);
 }
 
@@ -295,18 +280,6 @@ webrtc::AudioSourceInterface* WebRtcAudioSink::Adapter::GetSource() const {
   DCHECK(!signaling_task_runner_ ||
          signaling_task_runner_->RunsTasksInCurrentSequence());
   return source_.get();
-}
-
-void WebRtcAudioSink::Adapter::UpdateTimestampAligner(
-    base::TimeTicks capture_time) {
-  // The |timestamp_aligner_| stamps an audio frame as if it is captured 'now',
-  // taking webrtc::TimeMicros as the reference clock. It does not provide the
-  // time that the frame was originally captured, Using |timestamp_aligner_|
-  // rather than calling webrtc::TimeMicros is to take the advantage that it
-  // aligns its output timestamps such that the time spacing in the
-  // |capture_time| is maintained.
-  timestamp_aligner_.TranslateTimestamp(
-      capture_time.since_origin().InMicroseconds(), webrtc::TimeMicros());
 }
 
 }  // namespace blink

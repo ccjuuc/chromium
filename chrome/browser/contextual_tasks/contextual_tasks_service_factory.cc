@@ -9,8 +9,9 @@
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "build/buildflag.h"
-#include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -24,15 +25,15 @@
 #include "components/contextual_tasks/public/features.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/sync/base/features.h"
 #include "components/sync/model/data_type_store_service.h"
 #include "content/public/browser/browser_context.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
-#include "chrome/browser/contextual_tasks/tab_strip_context_decorator.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck crbug.com/40147906
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #endif
@@ -51,22 +52,23 @@ size_t GetNumberOfActiveTasks(Profile* profile) {
         }
 
         // Check how many tasks are cached in the side panel.
-        if (auto* coordinator =
-                ContextualTasksSidePanelCoordinator::From(browser)) {
-          number_of_active_tasks += coordinator->GetNumberOfActiveTasks();
+        if (auto* controller = ContextualTasksPanelController::From(browser)) {
+          number_of_active_tasks += controller->GetNumberOfActiveTasks();
         }
 
         // Check how many tasks are open in a full tab.
-        TabStripModel* tab_strip_model = browser->GetTabStripModel();
-        if (tab_strip_model) {
-          for (int i = 0; i < tab_strip_model->count(); ++i) {
-            if (auto* web_contents = tab_strip_model->GetWebContentsAt(i)) {
-              if (web_contents->GetLastCommittedURL().scheme() ==
-                      content::kChromeUIScheme &&
-                  web_contents->GetLastCommittedURL().host() ==
-                      chrome::kChromeUIContextualTasksHost) {
-                number_of_active_tasks++;
-              }
+        TabListInterface* tab_list = TabListInterface::From(browser);
+        if (tab_list) {
+          for (int i = 0; i < tab_list->GetTabCount(); ++i) {
+            tabs::TabInterface* tab = tab_list->GetTab(i);
+            content::WebContents* web_contents =
+                tab ? tab->GetContents() : nullptr;
+            if (web_contents &&
+                web_contents->GetLastCommittedURL().scheme() ==
+                    content::kChromeUIScheme &&
+                web_contents->GetLastCommittedURL().host() ==
+                    chrome::kChromeUIContextualTasksHost) {
+              number_of_active_tasks++;
             }
           }
         }
@@ -100,9 +102,9 @@ ContextualTasksServiceFactory::ContextualTasksServiceFactory()
               .WithRegular(ProfileSelection::kOwnInstance)
               .WithGuest(ProfileSelection::kOwnInstance)
               .Build()) {
-  DependsOn(AimEligibilityServiceFactory::GetInstance());
   DependsOn(DataTypeStoreServiceFactory::GetInstance());
   DependsOn(FaviconServiceFactory::GetInstance());
+  DependsOn(glic::GlicKeyedServiceFactory::GetInstance());
   DependsOn(HistoryServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
 }
@@ -112,7 +114,9 @@ ContextualTasksServiceFactory::~ContextualTasksServiceFactory() = default;
 std::unique_ptr<KeyedService>
 ContextualTasksServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!base::FeatureList::IsEnabled(kContextualTasks)) {
+  if (!contextual_tasks::IsContextualTasksUIEnabled() &&
+      !base::FeatureList::IsEnabled(syncer::kSyncAIThread) &&
+      !base::FeatureList::IsEnabled(syncer::kSyncGeminiThread)) {
     return nullptr;
   }
 
@@ -123,23 +127,14 @@ ContextualTasksServiceFactory::BuildServiceInstanceForBrowserContext(
   history::HistoryService* history_service =
       HistoryServiceFactory::GetForProfile(profile,
                                            ServiceAccessType::EXPLICIT_ACCESS);
-  AimEligibilityService* aim_eligibility_service =
-      AimEligibilityServiceFactory::GetForProfile(profile);
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
   std::map<ContextualTaskContextSource, std::unique_ptr<ContextDecorator>>
       additional_decorators;
 
-#if !BUILDFLAG(IS_ANDROID)
-  additional_decorators.emplace(
-      ContextualTaskContextSource::kTabStrip,
-      std::make_unique<TabStripContextDecorator>(profile));
-#endif
-
-  // When sync is enabled, we should only set this to true for incognito and
-  // guest sessions.
-  bool supports_ephemeral_only = true;
+  bool supports_ephemeral_only =
+      profile->IsOffTheRecord() || profile->IsGuestSession();
 
   return std::make_unique<ContextualTasksServiceImpl>(
       chrome::GetChannel(),
@@ -148,9 +143,13 @@ ContextualTasksServiceFactory::BuildServiceInstanceForBrowserContext(
           ->GetStoreFactory(),
       CreateCompositeContextDecorator(favicon_service, history_service,
                                       std::move(additional_decorators)),
-      aim_eligibility_service, identity_manager, profile->GetPrefs(),
-      supports_ephemeral_only,
-      base::BindRepeating(&GetNumberOfActiveTasks, profile));
+      identity_manager, profile->GetPrefs(), supports_ephemeral_only,
+      base::BindRepeating(&GetNumberOfActiveTasks, profile),
+      base::BindRepeating(
+          [](Profile* profile) -> bool {
+            return glic::GlicEnabling::IsEnabledForProfile(profile);
+          },
+          profile));
 }
 
 }  // namespace contextual_tasks

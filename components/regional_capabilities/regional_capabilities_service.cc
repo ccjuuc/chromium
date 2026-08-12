@@ -4,6 +4,7 @@
 
 #include "components/regional_capabilities/regional_capabilities_service.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -12,7 +13,6 @@
 #include "base/callback_list.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -41,6 +41,7 @@
 #endif
 
 using ::country_codes::CountryId;
+using ::TemplateURLPrepopulateData::PrepopulatedEngine;
 
 namespace regional_capabilities {
 namespace {
@@ -69,7 +70,7 @@ GetPersistedCountryIdAndSource(const PrefService& profile_prefs) {
 
   base::flat_set<CountryIdStoreStatus> sources;
 
-  if (base::FeatureList::IsEnabled(switches::kDynamicProfileCountry) &&
+  if (switches::IsDynamicProfileCountryEnabled() &&
       profile_prefs.HasPrefPath(prefs::kCountryID)) {
     const CountryId persisted_dynamic_country_id =
         CountryId::Deserialize(profile_prefs.GetInteger(prefs::kCountryID));
@@ -198,12 +199,12 @@ std::pair<CountryId, LoadedCountrySource> SelectCountryId(
 
   // If the dynamic profile country feature is disabled, it's preferred
   // to return persisted country ID first.
-  if (!base::FeatureList::IsEnabled(switches::kDynamicProfileCountry)) {
+  if (!switches::IsDynamicProfileCountryEnabled()) {
     return {persisted_country, LoadedCountrySource::kPersistedPreferred};
   }
 
   // At this point the `kDynamicProfileCountry` feature is enabled.
-  DCHECK(base::FeatureList::IsEnabled(switches::kDynamicProfileCountry));
+  DCHECK(switches::IsDynamicProfileCountryEnabled());
 
   // Fetched current CountryID is preferred over persisted CountryID.
   if (!is_current_country_from_fallback) {
@@ -276,6 +277,8 @@ Program CountryOverrideToProgram(SearchEngineCountryOverride country_override) {
               case SearchEngineCountryListOverride::kEeaAll:
               case SearchEngineCountryListOverride::kEeaDefault:
                 return Program::kWaffle;
+              case SearchEngineCountryListOverride::kTestOverride:
+                return Program::kDefault;
             }
             NOTREACHED();
           },
@@ -304,6 +307,54 @@ CountryId CountryOverrideToCountryId(
                     country_override);
 }
 
+// Updates in place the `engines` vector to replace deprecated entries with the
+// post-migration ones. No-op if the migration feature is disabled.
+void ApplyPrepopulatedEnginesMigration(
+    std::vector<raw_ptr<const PrepopulatedEngine>>& engines) {
+  if (!base::FeatureList::IsEnabled(switches::kPrepopulatedEnginesMigration)) {
+    return;
+  }
+
+  // Check whether some of the entries in this regional list are deprecated
+  // and need to be swapped out with another designated prepopulated engine.
+  auto all_engines = GetAllPrepopulatedEngines();
+  for (auto& engine : engines) {
+    if (engine->migrate_to_id != 0) {
+      auto new_engine_iter = std::ranges::find(
+          all_engines, engine->migrate_to_id, &PrepopulatedEngine::id);
+      CHECK(new_engine_iter != all_engines.end());
+      engine = *new_engine_iter;
+    }
+  }
+}
+
+struct GetCountryIdResult {
+  CountryId country_id;
+  bool is_country_from_fallback = false;
+};
+
+// Fetches the device country using `Client::FetchCountryId()`. Upon
+// completion, returns it and also forwards it to `callback`. If the fetched
+// country is invalid, falls back to `Client::GetFallbackCountryId()`.
+GetCountryIdResult GetCountryIdFromClient(
+    RegionalCapabilitiesService::Client& client,
+    RegionalCapabilitiesService::Client::CountryIdCallback callback) {
+  ScopedCountryIdReceiver country_id_receiver;
+
+  client.FetchCountryId(DispatchCountryId(
+      country_id_receiver.GetCaptureCallback(), std::move(callback)));
+
+  const CountryId current_country =
+      country_id_receiver.received_country().value_or(CountryId());
+  if (current_country.IsValid()) {
+    return {current_country, /*is_country_from_fallback=*/false};
+  }
+  // The initialization failed or did not complete synchronously. Use the
+  // fallback value. If the fetch completes later, the persisted country will be
+  // picked up at the next startup.
+  return {client.GetFallbackCountryId(), /*is_country_from_fallback=*/true};
+}
+
 }  // namespace
 
 RegionalCapabilitiesService::RegionalCapabilitiesService(
@@ -320,45 +371,74 @@ RegionalCapabilitiesService::~RegionalCapabilitiesService() {
 #endif
 }
 
-std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>
+std::vector<raw_ptr<const PrepopulatedEngine>>
 RegionalCapabilitiesService::GetRegionalPrepopulatedEngines() {
+  std::vector<raw_ptr<const PrepopulatedEngine>> engines;
+
   if (HasSearchEngineCountryListOverride()) {
     auto country_override = std::get<SearchEngineCountryListOverride>(
         GetSearchEngineCountryOverride().value());
-
     switch (country_override) {
       case SearchEngineCountryListOverride::kEeaAll:
-        return GetAllEeaRegionPrepopulatedEngines();
+        engines = GetAllEeaRegionPrepopulatedEngines();
+        break;
       case SearchEngineCountryListOverride::kEeaDefault:
-        return GetDefaultPrepopulatedEngines();
+        engines = GetDefaultPrepopulatedEngines();
+        break;
+      case SearchEngineCountryListOverride::kTestOverride:
+        engines = GetPrepopulatedEnginesOverrideForTesting()  // IN-TEST
+                      .regional_engines;
+        break;
     }
-    NOTREACHED();
+    CHECK(!engines.empty());
+  } else {
+    engines = GetPrepopulatedEngines(
+        GetCountryIdInternal(), profile_prefs_.get(),
+        GetActiveProgramSettings().search_engine_list_type);
   }
 
-  return GetPrepopulatedEngines(
-      GetCountryIdInternal(), profile_prefs_.get(),
-      GetActiveProgramSettings().search_engine_list_type);
+  ApplyPrepopulatedEnginesMigration(engines);
+
+  return engines;
 }
 
 bool RegionalCapabilitiesService::IsInSearchEngineChoiceScreenRegion() {
   return GetChoiceScreenEligibilityConfig().has_value();
 }
 
+bool RegionalCapabilitiesService::IsInCurrentSearchEngineChoiceScreenRegion(
+    const country_codes::CountryId& tested_country_id) {
+  return IsInSearchEngineChoiceScreenRegion() &&
+         std::ranges::contains(GetActiveProgramSettings().associated_countries,
+                               tested_country_id);
+}
+
 // static
-bool RegionalCapabilitiesService::IsInSearchEngineChoiceScreenRegion(
+bool RegionalCapabilitiesService::IsInAnySearchEngineChoiceScreenRegion(
     const country_codes::CountryId& tested_country_id) {
   return GetSettingsForProgram(CountryIdToProgram(tested_country_id))
       .choice_screen_eligibility_config.has_value();
 }
 
-bool RegionalCapabilitiesService::
-    IsChoiceScreenCompatibleWithCurrentLocation() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+// static
+bool RegionalCapabilitiesService::IsInAnySearchEngineChoiceScreenRegion(
+    Client& client) {
+  const GetCountryIdResult country_id_result =
+      GetCountryIdFromClient(client, Client::CountryIdCallback());
+  return GetSettingsForProgram(CountryIdToProgram(country_id_result.country_id))
+      .choice_screen_eligibility_config.has_value();
+}
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
+RegionalCapabilitiesService::LocationCompatibility
+RegionalCapabilitiesService::IsChoiceScreenCompatibleWithCurrentLocation() {
   CHECK(GetChoiceScreenEligibilityConfig().has_value())
       << "No choice screen config is present so it won't be shown. "
          "Checking the compatibility with the current location in "
          "this context is irrelevant and should not have happened.";
   if (!GetChoiceScreenEligibilityConfig()->restrict_to_associated_countries) {
-    return true;
+    return LocationCompatibility::kCompatible;
   }
 
   if (const auto override = GetSearchEngineCountryOverride();
@@ -369,26 +449,32 @@ bool RegionalCapabilitiesService::
     // This is a testing situation where we are manually overriding regional
     // settings, the region checks are not relevant as the current country gets
     // overridden too.
-    return true;
+    return LocationCompatibility::kCompatible;
   }
 
-  if (!base::Contains(GetActiveProgramSettings().associated_countries,
-                      client_->GetVariationsLatestCountryId())) {
-    return false;
+  if (!client_->GetVariationsLatestCountryId().IsValid()) {
+    // Don't decide here on whether the location is compatible or not. Let the
+    // caller do it based on the context.
+    return LocationCompatibility::kLocationUnknown;
+  }
+
+  if (!std::ranges::contains(GetActiveProgramSettings().associated_countries,
+                             client_->GetVariationsLatestCountryId())) {
+    return LocationCompatibility::kIncompatible;
   }
 
   if (base::FeatureList::IsEnabled(switches::kStrictAssociatedCountriesCheck) &&
       GetCountryIdInternal() != client_->GetVariationsLatestCountryId()) {
-    return false;
+    return LocationCompatibility::kIncompatible;
   }
 
-  return true;
+  return LocationCompatibility::kCompatible;
 }
 
 bool RegionalCapabilitiesService::CanRecordDisplayStateForCountry(
     CountryId display_state_country_id) {
-  if (!base::Contains(GetActiveProgramSettings().associated_countries,
-                      display_state_country_id)) {
+  if (!std::ranges::contains(GetActiveProgramSettings().associated_countries,
+                             display_state_country_id)) {
     // Choice screen completions happen in context of a given regional program.
     // Based on the client state, the active program might change across
     // sessions. Since the metrics upload get tagged with the active program
@@ -423,6 +509,7 @@ RegionalCapabilitiesService::GetChoiceScreenDesign() {
     case Program::kDefault:
       return std::nullopt;
     case Program::kTaiyaki:
+#if BUILDFLAG(IS_IOS)
       return RegionalCapabilitiesService::ChoiceScreenDesign{
           .title_string_id = IDS_SEARCH_ENGINE_CHOICE_PAGE_TITLE,
           .subtitle_1_string_id =
@@ -433,7 +520,15 @@ RegionalCapabilitiesService::GetChoiceScreenDesign() {
               IDS_SEARCH_ENGINE_CHOICE_PAGE_SUBTITLE_INFO_LINK_A11Y_LABEL,
           .subtitle_2_string_id =
               IDS_SEARCH_ENGINE_CHOICE_PAGE_SUBTITLE_WITH_DEFINITION2,
+          .learn_more_third_paragraph_string_id =
+              base::FeatureList::IsEnabled(
+                  switches::kSearchEngineChoiceScreenSnackbar)
+                  ? IDS_SEARCH_ENGINE_CHOICE_INFO_DIALOG_BODY_THIRD_PARAGRAPH_INSTRUCTIVE
+                  : IDS_SEARCH_ENGINE_CHOICE_INFO_DIALOG_BODY_THIRD_PARAGRAPH,
       };
+#else
+      NOTREACHED();
+#endif
     case Program::kWaffle:
       return RegionalCapabilitiesService::ChoiceScreenDesign{
           .title_string_id = IDS_SEARCH_ENGINE_CHOICE_PAGE_TITLE,
@@ -442,11 +537,24 @@ RegionalCapabilitiesService::GetChoiceScreenDesign() {
               IDS_SEARCH_ENGINE_CHOICE_PAGE_SUBTITLE_INFO_LINK,
           .subtitle_1_learn_more_a11y_string_id =
               IDS_SEARCH_ENGINE_CHOICE_PAGE_SUBTITLE_INFO_LINK_A11Y_LABEL,
+          .learn_more_third_paragraph_string_id =
+              IDS_SEARCH_ENGINE_CHOICE_INFO_DIALOG_BODY_THIRD_PARAGRAPH,
       };
   }
   NOTREACHED();
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS)
+bool RegionalCapabilitiesService::ShouldShowChoiceConfirmationSnackbar() {
+  if (!switches::IsSearchEngineChoiceScreenSnackbarEnabled()) {
+    return false;
+  }
+  const auto& eligibility_config = GetChoiceScreenEligibilityConfig();
+  return eligibility_config.has_value() &&
+         eligibility_config->highlight_current_default;
+}
+#endif  // BUILDFLAG(IS_IOS)
 
 const std::optional<ChoiceScreenEligibilityConfig>&
 RegionalCapabilitiesService::GetChoiceScreenEligibilityConfig() {
@@ -525,60 +633,38 @@ void RegionalCapabilitiesService::EnsureRegionalScopeCacheInitialized() {
     }
   }
 
-  // Fetches the device country using `Client::FetchCountryId()`. Upon
-  // completion, makes it available through `country_id_receiver` and also
-  // forwards it to `completion_callback`.
-  ScopedCountryIdReceiver country_id_receiver;
-  client_->FetchCountryId(DispatchCountryId(
-      // Callback to a weak_ptr, and like `country_id_receiver`, scoped to the
-      // function only.
-      country_id_receiver.GetCaptureCallback(),
-      // Callback scoped to the lifetime of the service.
+  const GetCountryIdResult country_id_result = GetCountryIdFromClient(
+      CHECK_DEREF(client_),
       base::BindOnce(&RegionalCapabilitiesService::TrySetPersistedCountryId,
-                     weak_ptr_factory_.GetWeakPtr())));
+                     weak_ptr_factory_.GetWeakPtr()));
 
-  CountryId current_country =
-      country_id_receiver.received_country().value_or(CountryId());
-  bool is_current_country_from_fallback = false;
-  if (!current_country.IsValid()) {
-    // The initialization failed or did not complete synchronously. Use the
-    // fallback value and don't persist it. If the fetch completes later, the
-    // persisted country will be picked up at the next startup.
-    current_country = client_->GetFallbackCountryId();
-    is_current_country_from_fallback = true;
-  }
-
-  RecordVariationsCountryMatching(client_->GetVariationsLatestCountryId(),
-                                  persisted_country_id, current_country,
-                                  is_current_country_from_fallback);
+  RecordVariationsCountryMatching(
+      client_->GetVariationsLatestCountryId(), persisted_country_id,
+      country_id_result.country_id, country_id_result.is_country_from_fallback);
 
   const std::pair<CountryId, LoadedCountrySource> selected_country_and_source =
-      SelectCountryId(persisted_country_id, current_country,
-                      is_current_country_from_fallback);
+      SelectCountryId(persisted_country_id, country_id_result.country_id,
+                      country_id_result.is_country_from_fallback);
 
   country_id_cache_ = selected_country_and_source.first;
 
   Program program;
 
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(
-          switches::kResolveRegionalCapabilitiesFromDevice)) {
-    program = client_->GetDeviceProgram();
+  program = client_->GetDeviceProgram();
 
-    if (IsInProgramRegion(program, country_id_cache_.value())) {
-      RecordAndroidProgramResolution(AndroidProgramResolution::kSuccess);
-    } else {
-      // Interim program inconsistencies originate from asynchronous nature of
-      // their resolution. For the time being, use a reasonable default.
-      program = Program::kDefault;
-      RecordAndroidProgramResolution(
-          AndroidProgramResolution::kDefaultForOutOfProgramCountry);
-    }
-  } else
-#endif  // BUILDFLAG(IS_ANDROID)
-  {
-    program = CountryIdToProgram(country_id_cache_.value());
+  if (IsInProgramRegion(program, country_id_cache_.value())) {
+    RecordAndroidProgramResolution(AndroidProgramResolution::kSuccess);
+  } else {
+    // Interim program inconsistencies originate from asynchronous nature of
+    // their resolution. For the time being, use a reasonable default.
+    program = Program::kDefault;
+    RecordAndroidProgramResolution(
+        AndroidProgramResolution::kDefaultForOutOfProgramCountry);
   }
+#else
+  program = CountryIdToProgram(country_id_cache_.value());
+#endif  // BUILDFLAG(IS_ANDROID)
 
   program_settings_cache_ = GetSettingsForProgram(program);
 
@@ -647,7 +733,7 @@ void RegionalCapabilitiesService::TrySetPersistedCountryId(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(switches::kDynamicProfileCountry)) {
+  if (switches::IsDynamicProfileCountryEnabled()) {
     profile_prefs_->SetInteger(prefs::kCountryID, country_id.Serialize());
   }
 
@@ -679,10 +765,15 @@ void RegionalCapabilitiesService::DestroyJavaObject() {
   }
 }
 
-jboolean RegionalCapabilitiesService::IsInEeaCountry(JNIEnv* env) {
+bool RegionalCapabilitiesService::IsInEeaCountry(JNIEnv* env) {
   return IsInEeaCountry();
 }
 #endif
+
+Program CountryIdToProgramForTesting(
+    const country_codes::CountryId& country_id) {
+  return CountryIdToProgram(country_id);
+}
 
 }  // namespace regional_capabilities
 

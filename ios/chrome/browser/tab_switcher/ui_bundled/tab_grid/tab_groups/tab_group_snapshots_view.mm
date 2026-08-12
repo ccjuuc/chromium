@@ -6,12 +6,12 @@
 
 #import "base/check_op.h"
 #import "ios/chrome/browser/shared/ui/elements/top_aligned_image_view.h"
+#import "ios/chrome/browser/shared/ui/util/color_palette/tab_group_color_palette.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_groups/group_tab_view.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_item_utils.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_snapshot_and_favicon.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
 namespace {
@@ -174,6 +174,10 @@ constexpr NSInteger kMaxSummaryFaviconVisible = 3;
   // Reinitialize group views attributes.
   for (GroupTabView* view in [self allGroupTabViews]) {
     [view hideAllAttributes];
+    if (self.tabGroupColorPalette) {
+      // Forward the color palette to subview.
+      view.tabGroupColorPalette = self.tabGroupColorPalette;
+    }
   }
 
   // Reconfigure group views for each tabs.

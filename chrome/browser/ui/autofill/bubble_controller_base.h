@@ -35,7 +35,13 @@ enum class BubbleType {
   kWalletablePassConsent = 9,
   // Denotes bubble for walletable pass save.
   kWalletablePassSave = 10,
-  kMaxValue = kWalletablePassSave
+  // Denotes bubble for omnibox autofill.
+  kOmniboxAutofill = 11,
+  // Denotes bubble for payments churned users.
+  kPaymentsChurnedUsers = 12,
+  // Denotes bubble for the Wallet reminder notice.
+  kWalletReminderNotice = 13,
+  kMaxValue = kWalletReminderNotice
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillBubbleType)
 
@@ -67,10 +73,15 @@ class BubbleControllerBase {
   // Returns true if the mouse is currently inside the bubble view.
   virtual bool IsMouseHovered() const = 0;
 
-  // Returns false if the bubble should not be queued and shown again later
-  // (e.g. after being preempted). This is the case for bubbles that are
-  // time-sensitive or whose state is cleared upon closing.
+  // Returns false if the bubble's data is stale or the flow is finished.
+  // This is checked by the manager before queueing a bubble as well as
+  // attempting to show a queued bubble.
   virtual bool CanBeReshown() const = 0;
+
+  // Returns true if this bubble should be preserved in the queue when its
+  // tab is hidden, allowing it to reappear when the tab is revisited.
+  // This is checked when the tab is hidden.
+  virtual bool ShouldReshowOnTabVisible() const = 0;
 
   // Subclasses need to implement this method so that the resulting weak
   // pointers are invalidated as soon as the derived class is destroyed.

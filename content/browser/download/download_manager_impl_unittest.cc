@@ -15,7 +15,6 @@
 #include <tuple>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -109,6 +108,13 @@ class MockDownloadManagerDelegate : public DownloadManagerDelegate {
                     SavePackagePathPickedCallback));
   MOCK_METHOD0(ApplicationClientIdForFileScanning, std::string());
   MOCK_METHOD1(AttachExtraInfo, void(download::DownloadItem*));
+  bool SupportsHistoryLoading() override { return supports_history_loading_; }
+  void set_supports_history_loading(bool supports) {
+    supports_history_loading_ = supports;
+  }
+
+ private:
+  bool supports_history_loading_ = true;
 };
 
 MockDownloadManagerDelegate::MockDownloadManagerDelegate() {}
@@ -205,7 +211,7 @@ MockDownloadItemFactory::MockDownloadItemFactory()
 MockDownloadItemFactory::~MockDownloadItemFactory() {}
 
 download::MockDownloadItemImpl* MockDownloadItemFactory::GetItem(int id) {
-  if (!base::Contains(items_, id)) {
+  if (!items_.contains(id)) {
     return nullptr;
   }
   return items_[id];
@@ -223,7 +229,7 @@ download::MockDownloadItemImpl* MockDownloadItemFactory::PopItem() {
 }
 
 void MockDownloadItemFactory::RemoveItem(int id) {
-  DCHECK(base::Contains(items_, id));
+  DCHECK(items_.contains(id));
   items_.erase(id);
 }
 
@@ -255,7 +261,7 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreatePersistedItem(
     base::Time last_access_time,
     bool transient,
     const std::vector<download::DownloadItem::ReceivedSlice>& received_slices) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
   EXPECT_CALL(*result, GetId()).WillRepeatedly(Return(download_id));
@@ -269,7 +275,7 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreateActiveItem(
     download::DownloadItemImplDelegate* delegate,
     uint32_t download_id,
     const download::DownloadCreateInfo& info) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
 
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
@@ -337,7 +343,7 @@ download::DownloadItemImpl* MockDownloadItemFactory::CreateSavePageItem(
     const GURL& url,
     const std::string& mime_type,
     download::DownloadJob::CancelRequestCallback cancel_request_callback) {
-  DCHECK(!base::Contains(items_, download_id));
+  DCHECK(!items_.contains(download_id));
 
   download::MockDownloadItemImpl* result =
       new StrictMock<download::MockDownloadItemImpl>(&item_delegate_);
@@ -750,6 +756,10 @@ base::RepeatingCallback<bool(const GURL&)> GetSingleURLFilter(const GURL& url) {
 
 // Confirm that only downloads with the specified URL are removed.
 TEST_F(DownloadManagerTest, RemoveDownloadsByURL) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  OnInProgressDownloadManagerInitialized();
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
+
   base::Time now(base::Time::Now());
   for (uint32_t i = 0; i < 2; ++i) {
     download::MockDownloadItemImpl& item(AddItemToManager());
@@ -763,9 +773,28 @@ TEST_F(DownloadManagerTest, RemoveDownloadsByURL) {
 
   base::RepeatingCallback<bool(const GURL&)> url_filter =
       GetSingleURLFilter(download_urls_[0]);
-  int remove_count = download_manager_->RemoveDownloadsByURLAndTime(
-      std::move(url_filter), base::Time(), base::Time::Max());
-  EXPECT_EQ(remove_count, 1);
+  bool called = false;
+  download_manager_->RemoveDownloadsByURLAndTime(
+      std::move(url_filter), base::Time(), base::Time::Max(),
+      base::BindOnce([](bool* called) { *called = true; }, &called));
+  EXPECT_TRUE(called);
+}
+
+TEST_F(DownloadManagerTest, RemoveDownloadsByURLUninitialized) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  EXPECT_FALSE(download_manager_->IsManagerInitialized());
+
+  base::RepeatingCallback<bool(const GURL&)> url_filter =
+      GetSingleURLFilter(download_urls_[0]);
+  bool called = false;
+  download_manager_->RemoveDownloadsByURLAndTime(
+      std::move(url_filter), base::Time(), base::Time::Max(),
+      base::BindOnce([](bool* called) { *called = true; }, &called));
+  EXPECT_FALSE(called);
+
+  OnInProgressDownloadManagerInitialized();
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
+  EXPECT_TRUE(called);
 }
 
 // Confirm that in-progress downloads will be taken and managed by
@@ -990,6 +1019,18 @@ TEST_F(DownloadManagerShutdownTest,
        OnDownloadCanceledAtShutdownNotCalledForCompleteDownload) {
   RunOnDownloadCanceledAtShutdownCalledTest(download::DownloadItem::COMPLETE,
                                             /*expected_canceled_call_times=*/0);
+}
+
+TEST_F(DownloadManagerTest, PostInitializationWithoutHistoryLoadingSupport) {
+  GetMockDownloadManagerDelegate().set_supports_history_loading(false);
+  EXPECT_FALSE(download_manager_->IsManagerInitialized());
+
+  OnInProgressDownloadManagerInitialized();
+
+  // Since history loading is not supported by the delegate, DownloadManager
+  // becomes initialized immediately after in-progress cache initialization,
+  // without waiting for OnHistoryDBInitialized().
+  EXPECT_TRUE(download_manager_->IsManagerInitialized());
 }
 
 }  // namespace content

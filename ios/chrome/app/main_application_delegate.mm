@@ -14,7 +14,6 @@
 #import "base/metrics/user_metrics.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/download/public/background_service/background_download_service.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/memory_warning_helper.h"
@@ -32,7 +31,6 @@
 #import "ios/chrome/browser/keyboard/ui_bundled/menu_builder.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_delegate.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_util.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_delegate.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -404,12 +402,7 @@ constexpr base::TimeDelta kMainIntentCheckDelay = base::Seconds(1);
     return NO;
   }
 
-  ProfileIOS* profile = browser->GetProfile();
-
-  return IsContentNotificationEnabled(profile) ||
-         IsContentNotificationRegistered(profile) ||
-         base::FeatureList::IsEnabled(
-             send_tab_to_self::kSendTabToSelfIOSPushNotifications);
+  return YES;
 }
 
 @end

@@ -122,7 +122,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandlerImpl
   // ConnectToNetwork(), see comment for info.
   void VerifyConfiguredAndConnect(bool check_error_state,
                                   const std::string& service_path,
-                                  std::optional<base::Value::Dict> properties);
+                                  std::optional<base::DictValue> properties);
 
   // Queues a connect request until certificates have loaded.
   void QueueConnectRequest(const std::string& service_path);
@@ -204,6 +204,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConnectionHandlerImpl
   // Track if there's a connection triggered by policy auto-connect.
   bool has_policy_auto_connect_ = false;
 
+  base::ScopedObservation<NetworkCertLoader, NetworkCertLoader::Observer>
+      network_cert_loader_observer_{this};
   base::WeakPtrFactory<NetworkConnectionHandlerImpl> weak_ptr_factory_{this};
 };
 

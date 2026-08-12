@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
+#include <sys/stat.h>
 
 #include <algorithm>
+#include <array>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/logging.h"
+#include "base/strings/string_view_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "v8/src/fuzzilli/cov.h"
 
@@ -56,6 +56,42 @@ int LLVMFuzzerRunDriverImpl(int* argc,
                             int (*UserCb)(const uint8_t* Data, size_t Size)) {
   // Allow blocking for the whole fuzzing session.
   base::ScopedAllowBlockingForTesting allow_blocking;
+
+  // Verify that the FDs used by Fuzzilli match what we expect i.e.
+  // kControlReadFd and kControlWriteFd should be pipes, and kDataReadFd should
+  // be a memfd which appears as a regular file.
+  //
+  // During startup tests, Fuzzilli will launch js_in_process_fuzzer without the
+  // required FDs. In that case, we just print a warning and exit.
+  struct stat st_ctrl_read, st_ctrl_write, st_data_read;
+
+  // Ensure all three expected file descriptors are open.
+  if (fstat(kControlReadFd, &st_ctrl_read) != 0 ||
+      fstat(kControlWriteFd, &st_ctrl_write) != 0 ||
+      fstat(kDataReadFd, &st_data_read) != 0) {
+    LOG(WARNING)
+        << "Unexpected FD: REPRL file descriptors are not open. Exiting.";
+    return 0;
+  }
+
+  // Verify Control FDs are pipes (FIFOs).
+  if (!S_ISFIFO(st_ctrl_read.st_mode) || !S_ISFIFO(st_ctrl_write.st_mode)) {
+    LOG(WARNING) << "Unexpected FD: REPRL Control FDs are not pipes. Exiting.";
+    return 0;
+  }
+
+  // Verify Data FD is a regular file.
+  if (!S_ISREG(st_data_read.st_mode)) {
+    LOG(WARNING)
+        << "Unexpected FD: REPRL Data FD is not a regular file. Exiting.";
+    return 0;
+  }
+
+  // Explicitly pull in the Fuzzilli coverage instrumentation. Otherwise the
+  // linker might decide not to link in `cov.o`, causing us to not record
+  // coverage and/or crash at runtime when the wrong sancov hooks are called.
+  fuzzilli_cov_enable();
+
   // Open files for communication with Fuzzilli.
   auto ctrl_read_file = base::File(base::ScopedPlatformFile(kControlReadFd));
   auto ctrl_write_file = base::File(base::ScopedPlatformFile(kControlWriteFd));
@@ -67,7 +103,7 @@ int LLVMFuzzerRunDriverImpl(int* argc,
   static_assert(kExpectedSize == 4);
 
   ctrl_write_file.WriteAtCurrentPosAndCheck(base::as_bytes(kHelloMessage));
-  char actual_magic[kExpectedSize] = {};
+  std::array<char, kExpectedSize> actual_magic = {};
   ctrl_read_file.ReadAtCurrentPosAndCheck(
       base::as_writable_byte_span(actual_magic));
 
@@ -76,10 +112,26 @@ int LLVMFuzzerRunDriverImpl(int* argc,
   while (true) {
     // Read the action message ("exec") from Fuzzilli.
     constexpr auto kExpectedAction = base::span_from_cstring("exec");
-    uint8_t action_msg[kExpectedAction.size()];
-    if (!ctrl_read_file.ReadAtCurrentPosAndCheck(base::span(action_msg)) ||
-        !std::ranges::equal(kExpectedAction, action_msg)) {
-      LOG(WARNING) << "Unexpected message from Fuzzilli: " << action_msg;
+    std::array<uint8_t, kExpectedAction.size()> read_buffer;
+    std::optional<size_t> bytes_read =
+        ctrl_read_file.ReadAtCurrentPos(base::span(read_buffer));
+
+    if (!bytes_read.has_value()) {
+      LOG(ERROR) << "Failed to read from Fuzzilli control pipe.";
+      return 0;
+    }
+
+    base::span<const uint8_t> bytes =
+        base::span(read_buffer).first(*bytes_read);
+    if (bytes.empty()) {
+      LOG(WARNING) << "Fuzzilli disconnected (EOF). Exiting.";
+      return 0;
+    }
+
+    if (bytes != kExpectedAction) {
+      LOG(WARNING) << "Unexpected message from Fuzzilli. Expected size: "
+                   << kExpectedAction.size() << ", Read size: " << bytes.size()
+                   << ", Expected: exec, Got: " << base::as_string_view(bytes);
       return 0;
     }
 
@@ -91,7 +143,7 @@ int LLVMFuzzerRunDriverImpl(int* argc,
     // Read the JavaScript script from Fuzzilli.
     std::vector<uint8_t> buffer(script_size + 1);
     data_read_file.ReadAtCurrentPosAndCheck(
-        base::span(buffer.data(), script_size));
+        base::span(buffer).first(script_size));
     buffer[script_size] = 0;
 
     // Run the script:
@@ -100,11 +152,6 @@ int LLVMFuzzerRunDriverImpl(int* argc,
     // Fuzzilli status is similar to the Linux return status. Lower 8 bits are
     // used for signals, and higher 8 bits for return code.
     ctrl_write_file.WriteAtCurrentPosAndCheck(base::byte_span_from_ref(status));
-
-    // After every iteration, we reset the coverage edges so that we can mark
-    // which edges are hit in the next iteration. This is needed by Fuzzilli
-    // instrumentation.
-    sanitizer_cov_reset_edgeguards();
   }
 }
 

@@ -36,7 +36,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
@@ -69,7 +69,6 @@ const int kAsyncId2 = 6;
 const char kAsyncId2Str[] = "0x6";
 
 constexpr const char kRecordAllCategoryFilter[] = "*";
-constexpr const char kAllCategory[] = "test_all";
 
 bool IsCategoryEnabled(const char* name) {
   bool result;
@@ -86,17 +85,17 @@ class TraceEventTestFixture : public testing::Test {
       WaitableEvent* flush_complete_event,
       const scoped_refptr<base::RefCountedString>& events_str,
       bool has_more_events);
-  const Value::Dict* FindMatchingTraceEntry(const JsonKeyValue* key_values);
-  const Value::Dict* FindNamePhase(const char* name, const char* phase);
-  const Value::Dict* FindNamePhaseKeyValue(const char* name,
-                                           const char* phase,
-                                           const char* key,
-                                           const char* value);
+  const DictValue* FindMatchingTraceEntry(const JsonKeyValue* key_values);
+  const DictValue* FindNamePhase(const char* name, const char* phase);
+  const DictValue* FindNamePhaseKeyValue(const char* name,
+                                         const char* phase,
+                                         const char* key,
+                                         const char* value);
   void DropTracedMetadataRecords();
   bool FindMatchingValue(const char* key, const char* value);
   bool FindNonMatchingValue(const char* key, const char* value);
   void Clear() {
-    trace_parsed_ = Value::List();
+    trace_parsed_ = ListValue();
     json_output_.json_output.clear();
   }
 
@@ -172,7 +171,7 @@ class TraceEventTestFixture : public testing::Test {
   }
 
   std::string old_thread_name_;
-  Value::List trace_parsed_;
+  ListValue trace_parsed_;
   TraceResultBuffer trace_buffer_;
   TraceResultBuffer::SimpleOutput json_output_;
   size_t num_flush_callbacks_;
@@ -206,7 +205,7 @@ void TraceEventTestFixture::OnTraceDataCollected(
   }
 
   ASSERT_TRUE(root->is_list());
-  Value::List& root_list = root->GetList();
+  ListValue& root_list = root->GetList();
 
   // Move items into our aggregate collection
   trace_parsed_.reserve(trace_parsed_.size() + root_list.size());
@@ -232,7 +231,7 @@ static bool CompareJsonValues(const std::string& lhs,
 }
 
 static bool IsKeyValueInDict(const JsonKeyValue* key_value,
-                             const Value::Dict* dict) {
+                             const DictValue* dict) {
   const std::string* value_str = dict->FindStringByDottedPath(key_value->key);
   if (value_str &&
       CompareJsonValues(*value_str, key_value->value, key_value->op)) {
@@ -240,7 +239,7 @@ static bool IsKeyValueInDict(const JsonKeyValue* key_value,
   }
 
   // Recurse to test arguments
-  const Value::Dict* args_dict = dict->FindDictByDottedPath("args");
+  const DictValue* args_dict = dict->FindDictByDottedPath("args");
   if (args_dict) {
     return IsKeyValueInDict(key_value, args_dict);
   }
@@ -249,7 +248,7 @@ static bool IsKeyValueInDict(const JsonKeyValue* key_value,
 }
 
 static bool IsAllKeyValueInDict(const JsonKeyValue* key_values,
-                                const Value::Dict* dict) {
+                                const DictValue* dict) {
   // Scan all key_values, they must all be present and equal.
   while (key_values && key_values->key) {
     if (!IsKeyValueInDict(key_values, dict)) {
@@ -260,7 +259,7 @@ static bool IsAllKeyValueInDict(const JsonKeyValue* key_values,
   return true;
 }
 
-const Value::Dict* TraceEventTestFixture::FindMatchingTraceEntry(
+const DictValue* TraceEventTestFixture::FindMatchingTraceEntry(
     const JsonKeyValue* key_values) {
   // Scan all items
   for (const Value& value : trace_parsed_) {
@@ -285,15 +284,15 @@ void TraceEventTestFixture::DropTracedMetadataRecords() {
   });
 }
 
-const Value::Dict* TraceEventTestFixture::FindNamePhase(const char* name,
-                                                        const char* phase) {
+const DictValue* TraceEventTestFixture::FindNamePhase(const char* name,
+                                                      const char* phase) {
   JsonKeyValue key_values[] = {{"name", name, IS_EQUAL},
                                {"ph", phase, IS_EQUAL},
                                {nullptr, nullptr, IS_EQUAL}};
   return FindMatchingTraceEntry(key_values);
 }
 
-const Value::Dict* TraceEventTestFixture::FindNamePhaseKeyValue(
+const DictValue* TraceEventTestFixture::FindNamePhaseKeyValue(
     const char* name,
     const char* phase,
     const char* key,
@@ -319,7 +318,7 @@ bool TraceEventTestFixture::FindNonMatchingValue(const char* key,
   return FindMatchingTraceEntry(key_values);
 }
 
-bool IsStringInDict(const char* string_to_match, const Value::Dict* dict) {
+bool IsStringInDict(const char* string_to_match, const DictValue* dict) {
   for (const auto pair : *dict) {
     if (pair.first.find(string_to_match) != std::string::npos) {
       return true;
@@ -335,7 +334,7 @@ bool IsStringInDict(const char* string_to_match, const Value::Dict* dict) {
   }
 
   // Recurse to test arguments
-  const Value::Dict* args_dict = dict->FindDict("args");
+  const DictValue* args_dict = dict->FindDict("args");
   if (args_dict) {
     return IsStringInDict(string_to_match, args_dict);
   }
@@ -343,13 +342,13 @@ bool IsStringInDict(const char* string_to_match, const Value::Dict* dict) {
   return false;
 }
 
-const Value::Dict* FindTraceEntry(
-    const Value::List& trace_parsed,
+const DictValue* FindTraceEntry(
+    const ListValue& trace_parsed,
     const char* string_to_match,
-    const Value::Dict* match_after_this_item = nullptr) {
+    const DictValue* match_after_this_item = nullptr) {
   // Scan all items.
   for (const Value& value : trace_parsed) {
-    const Value::Dict* dict = value.GetIfDict();
+    const DictValue* dict = value.GetIfDict();
     if (!dict) {
       continue;
     }
@@ -384,16 +383,14 @@ void TraceWithAllMacroVariants(WaitableEvent* task_complete_event) {
                          TRACE_EVENT_SCOPE_THREAD, "name1", "value1", "name2",
                          "value2");
 
-    TRACE_EVENT_BEGIN0("test_all", "TRACE_EVENT_BEGIN0 call");
-    TRACE_EVENT_BEGIN1("test_all", "TRACE_EVENT_BEGIN1 call", "name1",
-                       "value1");
-    TRACE_EVENT_BEGIN2("test_all", "TRACE_EVENT_BEGIN2 call", "name1", "value1",
-                       "name2", "value2");
+    TRACE_EVENT_BEGIN("test_all", "TRACE_EVENT_BEGIN call");
+    TRACE_EVENT_BEGIN("test_all", "TRACE_EVENT_BEGIN call", "name1", "value1");
+    TRACE_EVENT_BEGIN("test_all", "TRACE_EVENT_BEGIN call", "name1", "value1",
+                      "name2", "value2");
 
-    TRACE_EVENT_END0("test_all", "TRACE_EVENT_BEGIN2 call");
-    TRACE_EVENT_END1("test_all", "TRACE_EVENT_BEGIN1 call", "name1", "value1");
-    TRACE_EVENT_END2("test_all", "TRACE_EVENT_BEGIN0 call", "name1", "value1",
-                     "name2", "value2");
+    TRACE_EVENT_END("test_all");
+    TRACE_EVENT_END("test_all", "name1", "value1");
+    TRACE_EVENT_END("test_all", "name1", "value1", "name2", "value2");
 
     TRACE_EVENT_ASYNC_BEGIN0("test_all", "TRACE_EVENT_ASYNC_BEGIN0 call",
                              kAsyncId);
@@ -441,10 +438,6 @@ void TraceWithAllMacroVariants(WaitableEvent* task_complete_event) {
                                         "hello");
     TRACE_EVENT_OBJECT_DELETED_WITH_ID("test_all", "tracked object 1", 0x42);
 
-    TraceScopedTrackableObject<int, kAllCategory> trackable("tracked object 2",
-                                                            0x2128506);
-    trackable.snapshot("world");
-
     TRACE_EVENT_OBJECT_CREATED_WITH_ID("test_all", "tracked object 3",
                                        TRACE_ID_WITH_SCOPE("scope", 0x42));
     TRACE_EVENT_OBJECT_SNAPSHOT_WITH_ID("test_all", "tracked object 3",
@@ -471,8 +464,8 @@ void TraceWithAllMacroVariants(WaitableEvent* task_complete_event) {
   }
 }
 
-void ValidateAllTraceMacrosCreatedData(const Value::List& trace_parsed) {
-  const Value::Dict* item = nullptr;
+void ValidateAllTraceMacrosCreatedData(const ListValue& trace_parsed) {
+  const DictValue* item = nullptr;
 
 #define EXPECT_FIND_(string)                   \
   item = FindTraceEntry(trace_parsed, string); \
@@ -513,11 +506,11 @@ void ValidateAllTraceMacrosCreatedData(const Value::List& trace_parsed) {
   EXPECT_SUB_FIND_("name2");
   EXPECT_SUB_FIND_("value2");
 
-  EXPECT_FIND_("TRACE_EVENT_BEGIN0 call");
-  EXPECT_FIND_("TRACE_EVENT_BEGIN1 call");
+  EXPECT_FIND_("TRACE_EVENT_BEGIN call");
+  EXPECT_FIND_("TRACE_EVENT_BEGIN call");
   EXPECT_SUB_FIND_("name1");
   EXPECT_SUB_FIND_("value1");
-  EXPECT_FIND_("TRACE_EVENT_BEGIN2 call");
+  EXPECT_FIND_("TRACE_EVENT_BEGIN call");
   EXPECT_SUB_FIND_("name1");
   EXPECT_SUB_FIND_("value1");
   EXPECT_SUB_FIND_("name2");
@@ -639,23 +632,6 @@ void ValidateAllTraceMacrosCreatedData(const Value::List& trace_parsed) {
     EXPECT_EQ(*item->FindString("id"), "0x42");
   }
 
-  EXPECT_FIND_("tracked object 2");
-  {
-    EXPECT_EQ(*item->FindString("ph"), "N");
-    EXPECT_EQ(*item->FindString("id"), "0x2128506");
-
-    item = FindTraceEntry(trace_parsed, "tracked object 2", item);
-    EXPECT_TRUE(item);
-    EXPECT_EQ(*item->FindString("ph"), "O");
-    EXPECT_EQ(*item->FindString("id"), "0x2128506");
-    EXPECT_EQ(*item->FindStringByDottedPath("args.snapshot"), "world");
-
-    item = FindTraceEntry(trace_parsed, "tracked object 2", item);
-    EXPECT_TRUE(item);
-    EXPECT_EQ(*item->FindString("ph"), "D");
-    EXPECT_EQ(*item->FindString("id"), "0x2128506");
-  }
-
   EXPECT_FIND_("tracked object 3");
   {
     auto* id_hash = "0x6a31ee0fa7951e05";
@@ -729,13 +705,13 @@ void TraceManyInstantEvents(int thread_id,
   }
 }
 
-void ValidateInstantEventPresentOnEveryThread(const Value::List& trace_parsed,
+void ValidateInstantEventPresentOnEveryThread(const ListValue& trace_parsed,
                                               int num_threads,
                                               int num_events) {
   std::map<int, std::map<int, bool>> results;
 
   for (const Value& value : trace_parsed) {
-    const Value::Dict* dict = value.GetIfDict();
+    const DictValue* dict = value.GetIfDict();
     if (!dict) {
       continue;
     }
@@ -914,7 +890,7 @@ TEST_F(TraceEventTestFixture, AsyncBeginEndEvents) {
   TRACE_EVENT_ASYNC_BEGIN0("cat", "name1", id);
   TRACE_EVENT_ASYNC_STEP_INTO0("cat", "name1", id, "step1");
   TRACE_EVENT_ASYNC_END0("cat", "name1", id);
-  TRACE_EVENT_BEGIN0("cat", "name2");
+  TRACE_EVENT_BEGIN("cat", "name2");
   TRACE_EVENT_ASYNC_BEGIN0("cat", "name3", 0);
   TRACE_EVENT_ASYNC_STEP_PAST0("cat", "name3", 0, "step2");
 
@@ -941,21 +917,19 @@ TEST_F(TraceEventTestFixture, AsyncBeginEndEvents) {
 TEST_F(TraceEventTestFixture, AsyncBeginEndPointerNotMangled) {
   void* ptr = this;
 
-  TraceLog::GetInstance()->SetProcessID(100);
   BeginTrace();
   TRACE_EVENT_ASYNC_BEGIN0("cat", "name1", ptr);
   TRACE_EVENT_ASYNC_BEGIN0("cat", "name2", ptr);
   EndTraceAndFlush();
 
-  TraceLog::GetInstance()->SetProcessID(200);
   BeginTrace();
   TRACE_EVENT_ASYNC_BEGIN0("cat", "name1", ptr);
   TRACE_EVENT_ASYNC_END0("cat", "name1", ptr);
   EndTraceAndFlush();
 
-  const Value::Dict* async_begin = FindNamePhase("name1", "S");
-  const Value::Dict* async_begin2 = FindNamePhase("name2", "S");
-  const Value::Dict* async_end = FindNamePhase("name1", "F");
+  const DictValue* async_begin = FindNamePhase("name1", "S");
+  const DictValue* async_begin2 = FindNamePhase("name2", "S");
+  const DictValue* async_end = FindNamePhase("name1", "F");
   EXPECT_TRUE(async_begin);
   EXPECT_TRUE(async_begin2);
   EXPECT_TRUE(async_end);
@@ -1042,8 +1016,8 @@ TEST_F(TraceEventTestFixture, DisabledCategories) {
   TRACE_EVENT_INSTANT0("test_included", "first", TRACE_EVENT_SCOPE_THREAD);
   EndTraceAndFlush();
   {
-    const Value::Dict* item = nullptr;
-    Value::List& trace_parsed = trace_parsed_;
+    const DictValue* item = nullptr;
+    ListValue& trace_parsed = trace_parsed_;
     EXPECT_NOT_FIND_("disabled-by-default-cc");
     EXPECT_FIND_("test_included");
   }
@@ -1057,8 +1031,8 @@ TEST_F(TraceEventTestFixture, DisabledCategories) {
   EndTraceAndFlush();
 
   {
-    const Value::Dict* item = nullptr;
-    Value::List& trace_parsed = trace_parsed_;
+    const DictValue* item = nullptr;
+    ListValue& trace_parsed = trace_parsed_;
     EXPECT_FIND_("disabled-by-default-cc");
     EXPECT_FIND_("test_other_included");
   }
@@ -1074,8 +1048,8 @@ TEST_F(TraceEventTestFixture, DisabledCategories) {
   EndTraceAndFlush();
 
   {
-    const Value::Dict* item = nullptr;
-    Value::List& trace_parsed = trace_parsed_;
+    const DictValue* item = nullptr;
+    ListValue& trace_parsed = trace_parsed_;
     EXPECT_FIND_("test,disabled-by-default-cc,test_other_included");
     EXPECT_FIND_("test_other_included,disabled-by-default-cc");
   }
@@ -1101,7 +1075,7 @@ TEST_F(TraceEventTestFixture, DeepCopy) {
 
   EXPECT_FALSE(FindTraceEntry(trace_parsed_, name.c_str()));
 
-  const Value::Dict* entry = FindTraceEntry(trace_parsed_, kOriginalName);
+  const DictValue* entry = FindTraceEntry(trace_parsed_, kOriginalName);
   ASSERT_TRUE(entry);
 
   EXPECT_FALSE(entry->FindIntByDottedPath("args.@rg1"));
@@ -1254,13 +1228,13 @@ TEST_F(TraceEventTestFixture, MAYBE_ConvertableTypes) {
   EndTraceAndFlush();
 
   // One arg version.
-  const Value::Dict* dict = FindNamePhase("bar", "X");
+  const DictValue* dict = FindNamePhase("bar", "X");
   ASSERT_TRUE(dict);
 
-  const Value::Dict* args_dict = dict->FindDict("args");
+  const DictValue* args_dict = dict->FindDict("args");
   ASSERT_TRUE(args_dict);
 
-  const Value::Dict* convertable_dict = args_dict->FindDict("data");
+  const DictValue* convertable_dict = args_dict->FindDict("data");
   ASSERT_TRUE(convertable_dict);
 
   EXPECT_EQ(*convertable_dict->FindInt("foo"), 1);
@@ -1354,8 +1328,8 @@ TEST_F(TraceEventTestFixture, MAYBE_PrimitiveArgs) {
   }
   EndTraceAndFlush();
 
-  const Value::Dict* args_dict = nullptr;
-  const Value::Dict* dict = nullptr;
+  const DictValue* args_dict = nullptr;
+  const DictValue* dict = nullptr;
   std::string str_value;
 
   dict = FindNamePhase("event1", "X");
@@ -1544,13 +1518,13 @@ TEST_F(TraceEventTestFixture, EchoToConsole) {
 
   TraceLog::GetInstance()->SetEnabled(
       TraceConfig(kRecordAllCategoryFilter, ECHO_TO_CONSOLE));
-  TRACE_EVENT_BEGIN0("test_a", "begin_end");
+  TRACE_EVENT_BEGIN("test_a", "begin_end");
   {
     TRACE_EVENT0("test_b", "duration");
     TRACE_EVENT0("test_b1", "duration1");
   }
   TRACE_EVENT_INSTANT0("test_c", "instant", TRACE_EVENT_SCOPE_GLOBAL);
-  TRACE_EVENT_END0("test_a", "begin_end");
+  TRACE_EVENT_END("test_a");
 
   EndTraceAndFlush();
   delete g_log_buffer;
@@ -1601,10 +1575,10 @@ TEST_F(TraceEventTestFixture, ContextLambda) {
   }
   EndTraceAndFlush();
 
-  const Value::Dict* dict = FindNamePhase("Name", "X");
+  const DictValue* dict = FindNamePhase("Name", "X");
   ASSERT_TRUE(dict);
 
-  const Value::Dict* args_dict = dict->FindDict("args");
+  const DictValue* args_dict = dict->FindDict("args");
   ASSERT_TRUE(args_dict);
 
   EXPECT_EQ(*args_dict->FindString("arg"), "foobar");

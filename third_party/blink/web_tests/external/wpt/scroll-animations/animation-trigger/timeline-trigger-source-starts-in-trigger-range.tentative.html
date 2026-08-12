@@ -12,10 +12,13 @@
 <body>
   <style>
     @keyframes anim {
-      from {
-        width: 100px;
+      0% {
+        width: 200px;
       }
-      to {
+      50% {
+        width: 200px;
+      }
+      100% {
         width: 100px;
       }
     }
@@ -52,8 +55,8 @@
   </div>
   <script>
     promise_test(async (test) => {
-      await waitForAnimationFrames(3);
-      assert_equals(getComputedStyle(target).width, "100px");
+      await waitForCompositorCommit();
+      assert_equals(getComputedStyle(target).width, "200px");
     }, "Already in-view source triggers animation");
   </script>
 

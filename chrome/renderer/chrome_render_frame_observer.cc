@@ -13,9 +13,9 @@
 #include <set>
 #include <utility>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -25,28 +25,36 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/open_search_description_document_handler.mojom.h"
 #include "chrome/common/webui_url_constants.h"
+#include "chrome/renderer/actor/chrome_page_stability_monitor_delegate.h"
 #include "chrome/renderer/actor/journal.h"
-#include "chrome/renderer/actor/page_stability_monitor.h"
 #include "chrome/renderer/actor/tool_executor.h"
+#include "chrome/renderer/benchmarking_bindings.h"
 #include "chrome/renderer/chrome_content_settings_agent_delegate.h"
+#include "chrome/renderer/loadtimes_bindings.h"
 #include "chrome/renderer/media/media_feeds.h"
 #include "chrome/renderer/process_state.h"
 #include "components/crash/core/common/crash_key.h"
+#include "components/guest_view/buildflags/buildflags.h"
+#include "components/guest_view/renderer/slim_web_view/slim_web_view_bindings.h"
 #include "components/lens/lens_metadata.mojom.h"
 #include "components/no_state_prefetch/renderer/no_state_prefetch_helper.h"
 #include "components/no_state_prefetch/renderer/no_state_prefetch_utils.h"
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/optimization_guide/content/renderer/page_text_agent.h"
+#include "components/page_content_annotations/content/renderer/page_stability_monitor.h"
 #include "components/translate/content/renderer/translate_agent.h"
 #include "components/translate/core/common/translate_util.h"
+#include "components/variations/variations_switches.h"
 #include "components/web_cache/renderer/web_cache_impl.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/buildflags.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_visitor.h"
 #include "content/public/renderer/render_thread.h"
@@ -81,8 +89,8 @@
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_classifier_delegate.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_image_embedder_delegate.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_classifier_delegate.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_image_embedder_delegate.h"
 #endif
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -141,7 +149,7 @@ FrameHeaderMap& GetFrameHeaderMap() {
 // origins for OOM crashes. Keys are recorded here and not via
 // ChromeContentClient::SetActiveURL() because that method is only invoked in
 // response to IPC messages and most OOMs do not occur in response to an IPC.
-// https://crbug.com/1310046
+// https://crbug.com/40830140
 void UpdateLoadedOriginCrashKeys() {
   // Capture the origin for each RenderFrame.
   struct Visitor : public content::RenderFrameVisitor {
@@ -182,6 +190,17 @@ void UpdateLoadedOriginCrashKeys() {
   }
 }
 
+bool ShouldForceTranslateAgentCreation(const GURL& url) {
+#if !BUILDFLAG(IS_ANDROID)
+  // The Reading Mode side panel is a Top Chrome WebUI, but it exceptionally
+  // requires a TranslateAgent to support PDF translation.
+  return url.SchemeIs("chrome-untrusted") &&
+         url.host() == chrome::kChromeUIUntrustedReadAnythingSidePanelHost;
+#else
+  return false;
+#endif
+}
+
 }  // namespace
 
 ChromeRenderFrameObserver::ChromeRenderFrameObserver(
@@ -205,8 +224,15 @@ ChromeRenderFrameObserver::ChromeRenderFrameObserver(
   SetClientSidePhishingDetection();
 #endif
 
-  translate_agent_ =
-      new translate::TranslateAgent(render_frame, ISOLATED_WORLD_ID_TRANSLATE);
+  bool skip_translate = base::FeatureList::IsEnabled(features::kInitialWebUI) &&
+                        features::kInitialWebUIWithoutTranslate.Get() &&
+                        base::CommandLine::ForCurrentProcess()->HasSwitch(
+                            switches::kTopChromeWebUI);
+
+  if (!skip_translate) {
+    translate_agent_ = new translate::TranslateAgent(
+        render_frame, ISOLATED_WORLD_ID_TRANSLATE);
+  }
 }
 
 ChromeRenderFrameObserver::~ChromeRenderFrameObserver() = default;
@@ -239,6 +265,16 @@ void ChromeRenderFrameObserver::ReadyToCommitNavigation(
   // event (including tab reload).
   if (render_frame()->IsMainFrame() && web_cache_impl_)
     web_cache_impl_->ExecutePendingClearCache();
+
+  // Dynamically instantiate TranslateAgent on-the-fly if this WebUI
+  // exceptionally requires it.
+  if (!translate_agent_ && render_frame()->IsMainFrame() && document_loader) {
+    GURL url = GURL(document_loader->GetUrl());
+    if (ShouldForceTranslateAgentCreation(url)) {
+      translate_agent_ = new translate::TranslateAgent(
+          render_frame(), ISOLATED_WORLD_ID_TRANSLATE);
+    }
+  }
 
   // Let translate_agent do any preparatory work before the new document loads.
   if (translate_agent_) {
@@ -348,6 +384,16 @@ void ChromeRenderFrameObserver::DidClearWindowObject() {
     ReadAnythingAppController::Install(render_frame());
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(ENABLE_GUEST_VIEW) && !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  guest_view::SlimWebViewBindings::MaybeInstall(*render_frame());
+#endif  // BUILDFLAG(ENABLE_GUEST_VIEW) && !BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+}
+
+void ChromeRenderFrameObserver::DidCreateScriptContext(
+    v8::Local<v8::Context> context,
+    int32_t world_id) {
+  BenchmarkingBindings::InstallConditionally(context);
+  LoadTimesBindings::Install(context);
 }
 
 void ChromeRenderFrameObserver::DidMeaningfulLayout(
@@ -577,7 +623,7 @@ void ChromeRenderFrameObserver::FindImageElements(
 void ChromeRenderFrameObserver::RequestReloadImageForContextNode() {
   WebLocalFrame* frame = render_frame()->GetWebFrame();
   // TODO(dglazkov): This code is clearly in the wrong place. Need
-  // to investigate what it is doing and fix (http://crbug.com/606164).
+  // to investigate what it is doing and fix (http://crbug.com/41250588).
   WebNode context_node = frame->ContextMenuImageNode();
   if (!context_node.IsNull()) {
     frame->ReloadImage(context_node);
@@ -622,6 +668,25 @@ void ChromeRenderFrameObserver::SetShouldDeferMediaLoad(bool should_defer) {
   prerender::SetShouldDeferMediaLoad(render_frame(), should_defer);
 }
 
+void ChromeRenderFrameObserver::InitializeTool(
+    actor::mojom::ToolInvocationPtr request,
+    InitializeToolCallback callback) {
+  if (!tool_executor_) {
+    tool_executor_ =
+        std::make_unique<actor::ToolExecutor>(render_frame(), *actor_journal_);
+  }
+
+  actor::mojom::InitializeToolResultPtr result =
+      tool_executor_->InitializeTool(std::move(request));
+  std::move(callback).Run(std::move(result));
+}
+
+void ChromeRenderFrameObserver::ExecuteTool(const actor::TaskId& task_id,
+                                            ExecuteToolCallback callback) {
+  CHECK(tool_executor_) << "ExecuteTool was called before InitializeTool";
+  tool_executor_->ExecuteTool(task_id, std::move(callback));
+}
+
 void ChromeRenderFrameObserver::InvokeTool(
     actor::mojom::ToolInvocationPtr request,
     InvokeToolCallback callback) {
@@ -644,23 +709,58 @@ void ChromeRenderFrameObserver::StartActorJournal(
   actor_journal_->Bind(std::move(client));
 }
 
+void ChromeRenderFrameObserver::GetCrossDocumentScriptToolResult(
+    const base::UnguessableToken& execution_id,
+    GetCrossDocumentScriptToolResultCallback callback) {
+  render_frame()->GetWebFrame()->GetDocument().GetCrossDocumentScriptToolResult(
+      execution_id,
+      base::BindOnce(
+          [](GetCrossDocumentScriptToolResultCallback cb,
+             blink::WebString result) { std::move(cb).Run(result.Utf8()); },
+          std::move(callback)));
+}
+
 void ChromeRenderFrameObserver::CreatePageStabilityMonitor(
-    mojo::PendingReceiver<actor::mojom::PageStabilityMonitor> monitor,
+    mojo::PendingReceiver<page_content_annotations::mojom::PageStabilityMonitor>
+        monitor,
     const actor::TaskId& task_id,
     bool supports_paint_stability) {
-  page_stability_monitor_ = std::make_unique<actor::PageStabilityMonitor>(
-      *render_frame(), supports_paint_stability, task_id, *actor_journal_);
+  page_stability_monitor_ = std::make_unique<
+      page_content_annotations::PageStabilityMonitor>(
+      *render_frame(), supports_paint_stability,
+      std::make_unique<actor::ChromePageStabilityMonitorDelegate>(
+          task_id, *actor_journal_,
+          actor::PageStabilityMonitorDelegate::Thresholds{
+              .timeout_delay = features::kGlicActorPageStabilityTimeout.Get(),
+              .min_wait = features::kGlicActorPageStabilityMinWait.Get(),
+              .initial_paint_timeout =
+                  features::kActorPaintStabilityIntialPaintTimeout.Get(),
+              .subsequent_paint_timeout =
+                  features::kActorPaintStabilitySubsequentPaintTimeout.Get(),
+          }));
   page_stability_monitor_->Bind(std::move(monitor));
 }
 
 void ChromeRenderFrameObserver::SetClientSidePhishingDetection() {
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  phishing_classifier_ = safe_browsing::PhishingClassifierDelegate::Create(
-      render_frame(), nullptr);
+  phishing_classifier_ =
+      safe_browsing::ContentPhishingClassifierDelegate::Create(render_frame(),
+                                                               nullptr);
   phishing_image_embedder_ =
-      safe_browsing::PhishingImageEmbedderDelegate::Create(render_frame());
+      safe_browsing::ContentPhishingImageEmbedderDelegate::Create(
+          render_frame());
 #endif
 }
+
+#if BUILDFLAG(ENABLE_PDF)
+void ChromeRenderFrameObserver::PdfPageCaptured(const std::u16string& contents,
+                                                const std::string& pdf_lang,
+                                                const GURL& page_url) {
+  if (translate_agent_) {
+    translate_agent_->PdfPageCaptured(contents, pdf_lang, page_url);
+  }
+}
+#endif
 
 void ChromeRenderFrameObserver::OnRenderFrameObserverRequest(
     mojo::PendingAssociatedReceiver<chrome::mojom::ChromeRenderFrame>
@@ -769,7 +869,7 @@ void ChromeRenderFrameObserver::CapturePageText(
   // Will swap out the string.
   if (phishing_classifier_) {
     phishing_classifier_->PageCaptured(
-        contents, layout_type == blink::WebMeaningfulLayout::kFinishedParsing);
+        layout_type == blink::WebMeaningfulLayout::kFinishedParsing);
   }
   if (phishing_image_embedder_) {
     phishing_image_embedder_->PageCaptured(

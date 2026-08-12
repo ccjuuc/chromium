@@ -47,6 +47,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
@@ -54,14 +55,15 @@ import org.chromium.base.IntentUtils;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.net.test.EmbeddedTestServerRule;
 import org.chromium.ui.test.util.RenderTestRule;
@@ -75,6 +77,7 @@ import java.util.List;
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class CustomTabActivityRenderTest {
     @ParameterAnnotations.ClassParameter
     private static final List<ParameterSet> sClassParameter =
@@ -134,6 +137,11 @@ public class CustomTabActivityRenderTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Tracker mTracker;
+
+    // Spy created inside individual tests; kept as a field so MockitoResetter picks it up and
+    // resets Mockito state on it, breaking the MockingProgress -> InvocationContainer retention
+    // chain.
+    @Spy private CustomTabsConnection mConnectionSpy;
 
     @Before
     public void setUp() {
@@ -261,9 +269,9 @@ public class CustomTabActivityRenderTest {
     @Feature("RenderTest")
     public void testCctToolbarWithOmnibox() throws IOException {
         // Permit Omnibox for any upcoming intent(s).
-        var connection = spy(CustomTabsConnection.getInstance());
-        doReturn(true).when(connection).shouldEnableOmniboxForIntent(any());
-        CustomTabsConnection.setInstanceForTesting(connection);
+        mConnectionSpy = spy(CustomTabsConnection.getInstance());
+        doReturn(true).when(mConnectionSpy).shouldEnableOmniboxForIntent(any());
+        CustomTabsConnection.setInstanceForTesting(mConnectionSpy);
         startActivityAndRenderToolbar("cct_omnibox");
     }
 

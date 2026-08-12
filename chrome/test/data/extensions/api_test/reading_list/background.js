@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-let readingList = chrome.readingList;
+const readingList = chrome.readingList;
 chrome.test.runTests([
 
   async function testAddEntryFunction() {
     const entry = {
       url: 'https://www.example.com',
       title: 'example of title',
-      hasBeenRead: false
+      hasBeenRead: false,
     };
     await readingList.addEntry(entry);
     await chrome.test.assertPromiseRejects(
@@ -21,7 +21,7 @@ chrome.test.runTests([
     const entry = {
       url: 'Invalid URL',
       title: 'example of title',
-      hasBeenRead: false
+      hasBeenRead: false,
     };
     await chrome.test.assertPromiseRejects(
         readingList.addEntry(entry), 'Error: URL is not valid.');
@@ -32,7 +32,7 @@ chrome.test.runTests([
     const entry = {
       url: 'chrome://example',
       title: 'example of title',
-      hasBeenRead: false
+      hasBeenRead: false,
     };
     await chrome.test.assertPromiseRejects(
         readingList.addEntry(entry), 'Error: URL is not supported.');
@@ -41,7 +41,7 @@ chrome.test.runTests([
 
   async function testRemoveEntryFunction() {
     const entry = {
-      url: 'https://www.example.com'
+      url: 'https://www.example.com',
     };
     await readingList.removeEntry(entry);
     await chrome.test.assertPromiseRejects(
@@ -51,7 +51,7 @@ chrome.test.runTests([
 
   async function testRemoveEntryInvalidURLError() {
     const entry = {
-      url: 'Invalid URL'
+      url: 'Invalid URL',
     };
     await chrome.test.assertPromiseRejects(
         readingList.removeEntry(entry), 'Error: URL is not valid.');
@@ -60,7 +60,7 @@ chrome.test.runTests([
 
   async function testRemoveEntryNotSupportedURLError() {
     const entry = {
-      url: 'chrome://example'
+      url: 'chrome://example',
     };
     await chrome.test.assertPromiseRejects(
         readingList.removeEntry(entry), 'Error: URL is not supported.');
@@ -68,10 +68,10 @@ chrome.test.runTests([
   },
 
   async function testUpdateEntryFunction() {
-    let entry = {
+    const entry = {
       url: 'https://www.example.com',
       title: 'Title',
-      hasBeenRead: true
+      hasBeenRead: true,
     };
     await readingList.addEntry(entry);
     entry.title = 'New title';
@@ -104,16 +104,16 @@ chrome.test.runTests([
   },
 
   async function testQueryFunction() {
-    let entry = {
+    const entry = {
       url: 'https://www.example2.com',
       title: 'Example',
-      hasBeenRead: false
+      hasBeenRead: false,
     };
     readingList.addEntry(entry);
     entry.url = 'https://www.example3.com';
     readingList.addEntry(entry);
 
-    let query = {title: 'Example'};
+    const query = {title: 'Example'};
     let entries = await readingList.query(query);
     chrome.test.assertEq(entries.length, 2);
 
@@ -122,19 +122,19 @@ chrome.test.runTests([
     // the entries themselves.
     const expectedResult = [
       {
-        'url': 'https://www.example2.com/',
-        'title': 'Example',
-        'hasBeenRead': false,
-        'creationTime': entries[0].creationTime,
-        'lastUpdateTime': entries[0].lastUpdateTime,
+        url: 'https://www.example2.com/',
+        title: 'Example',
+        hasBeenRead: false,
+        creationTime: entries[0].creationTime,
+        lastUpdateTime: entries[0].lastUpdateTime,
       },
       {
-        'url': 'https://www.example3.com/',
-        'title': 'Example',
-        'hasBeenRead': false,
-        'creationTime': entries[1].creationTime,
-        'lastUpdateTime': entries[1].lastUpdateTime,
-      }
+        url: 'https://www.example3.com/',
+        title: 'Example',
+        hasBeenRead: false,
+        creationTime: entries[1].creationTime,
+        lastUpdateTime: entries[1].lastUpdateTime,
+      },
     ];
     chrome.test.assertEq(entries, expectedResult);
 

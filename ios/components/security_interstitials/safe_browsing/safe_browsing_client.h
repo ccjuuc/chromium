@@ -13,6 +13,7 @@ class PrefService;
 namespace safe_browsing {
 class HashRealTimeService;
 class RealTimeUrlLookupServiceBase;
+class V5GetHashProtocolManager;
 }  // namespace safe_browsing
 
 namespace security_interstitials {
@@ -44,6 +45,9 @@ class SafeBrowsingClient : public KeyedService {
   GetRealTimeUrlLookupService() = 0;
   // Gets the hash-real-time service factory. Client may return nullptr.
   virtual safe_browsing::HashRealTimeService* GetHashRealTimeService() = 0;
+  // Gets the V5 get hash protocol manager. Clients may return nullptr.
+  virtual safe_browsing::V5GetHashProtocolManager*
+  GetV5GetHashProtocolManager() = 0;
   // Gets the variations service. Clients may return nullptr.
   virtual variations::VariationsService* GetVariationsService() = 0;
   // Returns whether or not `resource` should be blocked from loading.
@@ -61,6 +65,11 @@ class SafeBrowsingClient : public KeyedService {
   // Returns whether or not real time url checks allow navigation to continue
   // while awaiting for the results.
   virtual bool ShouldForceSyncRealTimeUrlChecks() const = 0;
+  // Reports a security interstitial shown event to the enterprise reporting
+  // service.
+  virtual void OnSecurityInterstitialShown(
+      web::WebState* web_state,
+      const security_interstitials::UnsafeResource& resource) = 0;
 };
 
 #endif  // IOS_COMPONENTS_SECURITY_INTERSTITIALS_SAFE_BROWSING_SAFE_BROWSING_CLIENT_H_

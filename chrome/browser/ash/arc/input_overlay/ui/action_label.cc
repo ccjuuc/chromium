@@ -6,18 +6,17 @@
 
 #include <set>
 
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/style/style_util.h"
 #include "base/compiler_specific.h"
 #include "base/notimplemented.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/arc/input_overlay/actions/action.h"
 #include "chrome/browser/ash/arc/input_overlay/constants.h"
 #include "chrome/browser/ash/arc/input_overlay/ui/action_view.h"
 #include "chrome/browser/ash/arc/input_overlay/ui/touch_point.h"
 #include "chrome/browser/ash/arc/input_overlay/ui/ui_utils.h"
 #include "chrome/browser/ash/arc/input_overlay/util.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -365,11 +364,11 @@ void ActionLabel::SetToViewMode() {
   if (mouse_action_ != MouseAction::NONE) {
     if (mouse_action_ == MouseAction::PRIMARY_CLICK) {
       auto left_click_icon = ui::ImageModel::FromVectorIcon(
-          kMouseLeftClickViewIcon, gfx::kPlaceholderColor, kIconSize);
+          ash::kMouseLeftClickViewIcon, gfx::kPlaceholderColor, kIconSize);
       SetImageModel(views::Button::STATE_NORMAL, left_click_icon);
     } else {
       auto right_click_icon = ui::ImageModel::FromVectorIcon(
-          kMouseRightClickViewIcon, gfx::kPlaceholderColor, kIconSize);
+          ash::kMouseRightClickViewIcon, gfx::kPlaceholderColor, kIconSize);
       SetImageModel(views::Button::STATE_NORMAL, right_click_icon);
     }
   }

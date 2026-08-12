@@ -16,6 +16,9 @@ import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.os.Looper;
+import android.view.MotionEvent;
+
+import androidx.core.graphics.Insets;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -24,23 +27,22 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
+import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.util.ClickWithMetaStateCallback;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.PAUSED)
 public class BackButtonMediatorTest {
     private static final int TAB_ID = 0;
 
@@ -52,7 +54,7 @@ public class BackButtonMediatorTest {
     @Mock public Resources mResources;
     @Mock public Context mContext;
     private SettableNullableObservableSupplier<Tab> mTabSupplier;
-    private ObservableSupplierImpl<Boolean> mEnabledSupplier;
+    private SettableNonNullObservableSupplier<Boolean> mEnabledSupplier;
     private PropertyModel mModel;
     private BackButtonMediator mMediator;
 
@@ -63,7 +65,7 @@ public class BackButtonMediatorTest {
     public void setup() {
         mTab = new MockTab(TAB_ID, mProfile);
         mTabSupplier = ObservableSuppliers.createNullable();
-        mEnabledSupplier = new ObservableSupplierImpl<>(true);
+        mEnabledSupplier = ObservableSuppliers.createNonNull(true);
         mModel =
                 new PropertyModel.Builder(BackButtonProperties.ALL_KEYS)
                         .with(BackButtonProperties.CLICK_LISTENER, mOnBackPressed)
@@ -121,7 +123,7 @@ public class BackButtonMediatorTest {
         assertEquals(
                 "Background ripple effect should be default",
                 mMediator.getBackgroundResForTesting(),
-                org.chromium.chrome.browser.toolbar.R.drawable.default_icon_background);
+                R.drawable.default_icon_background);
     }
 
     @Test
@@ -132,7 +134,7 @@ public class BackButtonMediatorTest {
         assertEquals(
                 "Background ripple effect should be default",
                 mMediator.getBackgroundResForTesting(),
-                org.chromium.chrome.browser.toolbar.R.drawable.default_icon_background);
+                R.drawable.default_icon_background);
     }
 
     @Test
@@ -143,7 +145,7 @@ public class BackButtonMediatorTest {
         assertEquals(
                 "Background ripple effect should be default",
                 mMediator.getBackgroundResForTesting(),
-                org.chromium.chrome.browser.toolbar.R.drawable.default_icon_background);
+                R.drawable.default_icon_background);
     }
 
     @Test
@@ -154,13 +156,20 @@ public class BackButtonMediatorTest {
         assertEquals(
                 "Background ripple effect should be incognito",
                 mMediator.getBackgroundResForTesting(),
-                org.chromium.chrome.browser.toolbar.R.drawable.default_icon_background_baseline);
+                R.drawable.default_icon_background_baseline);
     }
 
     @Test
     public void testClick_shouldForwardCallToParent() {
-        mModel.get(BackButtonProperties.CLICK_LISTENER).onClickWithMeta(0);
-        verify(mOnBackPressed).onClickWithMeta(0);
+        mModel.get(BackButtonProperties.CLICK_LISTENER).onClickWithMeta(0, 0);
+        verify(mOnBackPressed).onClickWithMeta(0, 0);
+    }
+
+    @Test
+    public void testMiddleClick_shouldForwardCallToParent() {
+        mModel.get(BackButtonProperties.CLICK_LISTENER)
+                .onClickWithMeta(0, MotionEvent.BUTTON_TERTIARY);
+        verify(mOnBackPressed).onClickWithMeta(0, MotionEvent.BUTTON_TERTIARY);
     }
 
     @Test
@@ -316,7 +325,7 @@ public class BackButtonMediatorTest {
 
     @Test
     public void testSetBackgroundInsets() {
-        final var insets = androidx.core.graphics.Insets.of(1, 2, 3, 4);
+        final var insets = Insets.of(1, 2, 3, 4);
         mMediator.setBackgroundInsets(insets);
         assertEquals(
                 "Padding should be equal to insets.",

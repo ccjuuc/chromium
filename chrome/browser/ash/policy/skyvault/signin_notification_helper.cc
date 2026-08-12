@@ -16,9 +16,12 @@
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
+#include "chromeos/ash/experiences/camera/camera_notification_util.h"
+#include "chromeos/ui/vector_icons/vector_icons.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/message_center/public/cpp/notification.h"
 
@@ -114,7 +117,9 @@ void ShowSignInNotification(
       rich_notification_data.should_make_spoken_feedback_for_popup_updates =
           false;
       rich_notification_data.vector_small_image =
-          &vector_icons::kNotificationDownloadIcon;
+          &(features::IsRoundedIconsEnabled()
+                ? vector_icons::kDownload2FilledIcon
+                : vector_icons::kNotificationDownloadOldIcon);
       // TODO(b/356326503): Fix the strings.
       auto notification_id = base::StrCat(
           {kDownloadSignInNotificationPrefix, base::NumberToString(id)});
@@ -150,7 +155,45 @@ void ShowSignInNotification(
       break;
     }
     case local_user_files::UploadTrigger::kCamera: {
-      // TODO(crbug.com/454152412) Implement this.
+      message_center::RichNotificationData rich_notification_data;
+      rich_notification_data.vector_small_image = &chromeos::kCameraIcon;
+      if (thumbnail.has_value()) {
+        rich_notification_data.image = thumbnail.value();
+        rich_notification_data.image_path = file_path;
+      }
+      auto notification_id = base::StrCat(
+          {kCameraSignInNotificationIdPrefix, base::NumberToString(id)});
+      SignInNotificationIds title_and_message =
+          GetCameraSignInStringsFromFilename(file_path);
+      message_center::Notification notification(
+          message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
+          /*title=*/l10n_util::GetStringUTF16(title_and_message.title),
+          /*message=*/l10n_util::GetStringUTF16(title_and_message.message),
+          /*icon=*/ui::ImageModel(),
+          /*display_source=*/
+          l10n_util::GetStringUTF16(
+              IDS_POLICY_SKYVAULT_CAMERA_SIGN_IN_DISPLAY_SOURCE),
+          /*origin_url=*/GURL(),
+          message_center::NotifierId(
+              message_center::NotifierType::SYSTEM_COMPONENT, notification_id,
+              ash::NotificationCatalogName::kCameraUpload),
+          rich_notification_data,
+          base::MakeRefCounted<SignInNotificationDelegate>(
+              profile, notification_id, std::move(signin_callback)));
+
+      notification.set_fullscreen_visibility(
+          message_center::FullscreenVisibility::OVER_USER);
+
+      message_center::ButtonInfo signin_button(
+          l10n_util::GetStringUTF16(IDS_POLICY_SKYVAULT_CAMERA_SIGN_IN_BUTTON));
+      message_center::ButtonInfo cancel_button(l10n_util::GetStringUTF16(
+          IDS_POLICY_SKYVAULT_CAMERA_SIGN_IN_CANCEL_BUTTON));
+      notification.set_buttons({signin_button, cancel_button});
+
+      NotificationDisplayServiceFactory::GetForProfile(profile)->Display(
+          NotificationHandler::Type::TRANSIENT, notification,
+          /*metadata=*/nullptr);
+
       break;
     }
     case local_user_files::UploadTrigger::kScreenCapture: {
@@ -212,7 +255,8 @@ void ShowSignInNotification(
           base::MakeRefCounted<SignInNotificationDelegate>(
               profile, kMigrationSignInNotification,
               std::move(signin_callback)),
-          vector_icons::kBusinessIcon,
+          features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                            : vector_icons::kBusinessOldIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
 
       notification->set_fullscreen_visibility(

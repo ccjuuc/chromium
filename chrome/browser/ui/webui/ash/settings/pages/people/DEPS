@@ -19,15 +19,13 @@ include_rules = [
   "+chrome/browser/ash/child_accounts",
   "+chrome/browser/ash/login/quick_unlock",
   "+chrome/browser/ash/profiles",
-  "+chrome/browser/browser_process.h",
-  "+chrome/browser/browser_process_platform_part.h",
   "+chrome/browser/enterprise/util",
   "+chrome/browser/policy/profile_policy_connector.h",
   "+chrome/browser/profiles/profile.h",
   "+chrome/browser/signin",
   "+chrome/browser/sync",
-  "+chrome/browser/ui/chrome_pages.h",
   "+chrome/browser/ui/ui_features.h",
+  "+chrome/browser/ui/ash/account_manager",
   "+chrome/browser/ui/webui/ash/account_manager",
   "+chrome/browser/ui/webui/ash/add_supervision",
   "+chrome/browser/ui/webui/ash/settings/os_settings_features_util.h",
@@ -35,8 +33,19 @@ include_rules = [
   "+chrome/browser/ui/webui/ash/settings/pages/os_settings_section.h",
   "+chrome/browser/ui/webui/ash/settings/search",
   "+chrome/browser/ui/webui/settings",
-  "+chrome/browser/ui/webui/signin/ash",
-  "+chrome/common",
   "+chrome/grit",
   "+chrome/test",
 ]
+
+specific_include_rules = {
+  "graduation_handler\\.cc": [
+    "+chrome/browser/ui/ash/system_web_apps/system_web_app_utils.h",
+  ],
+  "people_section_unittest\\.cc": [
+    "+chrome/browser/ash/login/users/profile_user_manager_controller.h",
+  ],
+  "account_manager_ui_handler_browsertest\\.cc": [
+    "+chrome/browser/ash/login/test/logged_in_user_mixin.h",
+    "+chrome/browser/browser_process.h",
+  ]
+}

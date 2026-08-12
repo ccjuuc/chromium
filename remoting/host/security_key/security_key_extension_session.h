@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -17,13 +17,8 @@
 #include "remoting/host/host_extension_session.h"
 #include "remoting/host/mojom/remote_security_key.mojom.h"
 
-namespace base {
-class SingleThreadTaskRunner;
-}  // namespace base
-
 namespace remoting {
 
-class ClientSessionDetails;
 class SecurityKeyAuthHandler;
 
 namespace protocol {
@@ -34,9 +29,8 @@ class ClientStub;
 class SecurityKeyExtensionSession : public HostExtensionSession {
  public:
   SecurityKeyExtensionSession(
-      ClientSessionDetails* client_session_details,
-      protocol::ClientStub* client_stub,
-      scoped_refptr<base::SingleThreadTaskRunner> file_task_runner);
+      base::WeakPtr<SecurityKeyAuthHandler> auth_handler,
+      protocol::ClientStub* client_stub);
 
   SecurityKeyExtensionSession(const SecurityKeyExtensionSession&) = delete;
   SecurityKeyExtensionSession& operator=(const SecurityKeyExtensionSession&) =
@@ -45,26 +39,16 @@ class SecurityKeyExtensionSession : public HostExtensionSession {
   ~SecurityKeyExtensionSession() override;
 
   // HostExtensionSession interface.
-  bool OnExtensionMessage(ClientSessionDetails* client_session_details,
-                          protocol::ClientStub* client_stub,
+  bool OnExtensionMessage(protocol::ClientStub* client_stub,
                           const protocol::ExtensionMessage& message) override;
-
-#if BUILDFLAG(IS_WIN)
-  void BindSecurityKeyForwarder(
-      mojo::PendingReceiver<mojom::SecurityKeyForwarder> receiver);
-#endif  // BUILDFLAG(IS_WIN)
-
-  // Allows overriding SecurityKeyAuthHandler for unit testing.
-  void SetSecurityKeyAuthHandlerForTesting(
-      std::unique_ptr<SecurityKeyAuthHandler> security_key_auth_handler);
 
  private:
   // These methods process specific security key extension message types.
-  void ProcessControlMessage(const base::Value::Dict& message_data) const;
-  void ProcessDataMessage(const base::Value::Dict& message_data) const;
-  void ProcessErrorMessage(const base::Value::Dict& message_data) const;
+  void ProcessControlMessage(const base::DictValue& message_data) const;
+  void ProcessDataMessage(const base::DictValue& message_data) const;
+  void ProcessErrorMessage(const base::DictValue& message_data) const;
 
-  void SendMessageToClient(int connection_id, const std::string& data) const;
+  void SendMessageToClient(int connection_id, const std::string& data);
 
   // Ensures SecurityKeyExtensionSession methods are called on the same thread.
   base::ThreadChecker thread_checker_;
@@ -73,7 +57,9 @@ class SecurityKeyExtensionSession : public HostExtensionSession {
   raw_ptr<protocol::ClientStub> client_stub_ = nullptr;
 
   // Handles platform specific security key operations.
-  std::unique_ptr<SecurityKeyAuthHandler> security_key_auth_handler_;
+  base::WeakPtr<SecurityKeyAuthHandler> auth_handler_;
+
+  base::WeakPtrFactory<SecurityKeyExtensionSession> weak_factory_{this};
 };
 
 }  // namespace remoting

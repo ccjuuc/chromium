@@ -16,6 +16,7 @@
 #include "base/memory/ref_counted.h"
 #include "content/browser/service_worker/service_worker_context_core_observer.h"
 #include "content/browser/service_worker/service_worker_info.h"
+#include "content/browser/service_worker/service_worker_version.h"
 #include "content/common/content_export.h"
 #include "third_party/blink/public/common/service_worker/embedded_worker_status.h"
 
@@ -92,7 +93,7 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
   void OnStarting(int64_t version_id) override;
   void OnStarted(int64_t version_id,
                  const GURL& scope,
-                 int process_id,
+                 ChildProcessId process_id,
                  const GURL& script_url,
                  const blink::ServiceWorkerToken& token,
                  const blink::StorageKey& key) override;
@@ -102,10 +103,12 @@ class CONTENT_EXPORT ServiceWorkerContextWatcher
                              const GURL& scope,
                              const blink::StorageKey& key,
                              ServiceWorkerVersion::Status status) override;
-  void OnVersionRouterRulesChanged(int64_t version_id,
-                                   const std::string& router_rules) override;
+  void OnVersionRouterRulesChanged(
+      int64_t version_id,
+      const ServiceWorkerVersion::RouterRulesForDevTools& router_rules)
+      override;
   void OnVersionDevToolsRoutingIdChanged(int64_t version_id,
-                                         int process_id,
+                                         ChildProcessId process_id,
                                          int devtools_agent_route_id) override;
   void OnMainScriptResponseSet(int64_t version_id,
                                base::Time script_response_time,

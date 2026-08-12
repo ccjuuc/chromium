@@ -96,7 +96,7 @@ suite('SeaPenRecentWallpapersElementTest', function() {
       const menuDialog =
           (actionMenu as HTMLElement)
               .shadowRoot!.querySelector<HTMLDialogElement>('dialog');
-      assertFalse(!!menuDialog!.open, `menu dialog ${i} should be closed.`);
+      assertFalse(menuDialog!.open, `menu dialog ${i} should be closed.`);
     });
   });
 
@@ -247,18 +247,18 @@ suite('SeaPenRecentWallpapersElementTest', function() {
     recentImages = getDisplayedRecentImages();
     assertEquals(1, recentImages.length, '1 image done loading');
     assertDeepEquals(
-        {url: 'data:image/jpeg;base64,image111data'}, recentImages[0]!.src);
+        'data:image/jpeg;base64,image111data', recentImages[0]!.src);
 
     // Set loading failed for second thumbnail.
     personalizationStore.data.wallpaper.seaPen = {
       ...personalizationStore.data.wallpaper.seaPen,
       recentImageData: {
         111: {
-          url: {url: 'data:image/jpeg;base64,image111data'},
+          url: 'data:image/jpeg;base64,image111data',
           imageInfo: null,
         },
         222: {
-          url: {url: ''},
+          url: '',
           imageInfo: seaPenProvider.recentImageInfo2,
         },
       },
@@ -281,7 +281,7 @@ suite('SeaPenRecentWallpapersElementTest', function() {
     recentImages = getDisplayedRecentImages();
     assertEquals(1, recentImages.length, '1 image loaded successfully');
     assertDeepEquals(
-        {url: 'data:image/jpeg;base64,image111data'}, recentImages[0]!.src,
+        'data:image/jpeg;base64,image111data', recentImages[0]!.src,
         'src equals successfully loaded image url');
   });
 
@@ -316,9 +316,9 @@ suite('SeaPenRecentWallpapersElementTest', function() {
           (actionMenu as HTMLElement)
               .shadowRoot!.querySelector<HTMLDialogElement>('dialog');
       if (i === 1) {
-        assertTrue(!!menuDialog!.open, `menu dialog ${i} should be opened.`);
+        assertTrue(menuDialog!.open, `menu dialog ${i} should be opened.`);
       } else {
-        assertFalse(!!menuDialog!.open, `menu dialog ${i} should be closed.`);
+        assertFalse(menuDialog!.open, `menu dialog ${i} should be closed.`);
       }
     });
   });
@@ -482,7 +482,7 @@ suite('SeaPenRecentWallpapersElementTest', function() {
         const menuDialog2 =
             actionMenu2.shadowRoot!.querySelector<HTMLDialogElement>('dialog');
         assertTrue(
-            !!menuDialog2!.open,
+            menuDialog2!.open,
             `menu dialog for the 3rd image should be opened.`);
 
         // Wallpaper Info menu option is available. Click on this option.
@@ -545,7 +545,7 @@ suite('SeaPenRecentWallpapersElementTest', function() {
         const menuDialog0 =
             actionMenu0.shadowRoot!.querySelector<HTMLDialogElement>('dialog');
         assertTrue(
-            !!menuDialog0!.open,
+            menuDialog0!.open,
             `menu dialog for the 1st image should be opened.`);
 
         // Wallpaper Info menu option is not available as SeaPenRecentData has
@@ -606,7 +606,7 @@ suite('SeaPenRecentWallpapersElementTest', function() {
     const actionMenu = actionMenus[0] as HTMLElement;
     const menuDialog =
         actionMenu.shadowRoot!.querySelector<HTMLDialogElement>('dialog');
-    assertTrue(!!menuDialog!.open, `menu dialog 0 should be opened.`);
+    assertTrue(menuDialog!.open, `menu dialog 0 should be opened.`);
 
     // Wallpaper Info menu option is available. Click on this option.
     const deleteWallpaperOption =
@@ -627,9 +627,9 @@ suite('SeaPenRecentWallpapersElementTest', function() {
     recentImages = getDisplayedRecentImages();
     assertEquals(2, recentImages.length, 'only 2 images should display.');
     assertDeepEquals(
-        {url: 'data:image/jpeg;base64,image222data'}, recentImages[0]!.src);
+        'data:image/jpeg;base64,image222data', recentImages[0]!.src);
     assertDeepEquals(
-        {url: 'data:image/jpeg;base64,image333data'}, recentImages[1]!.src);
+        'data:image/jpeg;base64,image333data', recentImages[1]!.src);
   });
 
   test('clicks on a recent wallpaper to set wallpaper', async () => {

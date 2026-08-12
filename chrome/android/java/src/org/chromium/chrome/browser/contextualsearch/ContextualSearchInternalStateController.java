@@ -10,7 +10,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchSelectionController.SelectionType;
 
 import java.lang.annotation.Retention;
@@ -210,9 +210,10 @@ class ContextualSearchInternalStateController {
     }
 
     /**
-     * Enters the given starting state immediately.
-     * Note: This will synchronously complete the given state and process all subsequent
-     * non-asynchronous states before returning.  See https://crbug.com/1099383.
+     * Enters the given starting state immediately. Note: This will synchronously complete the given
+     * state and process all subsequent non-asynchronous states before returning. See
+     * https://crbug.com/40137460.
+     *
      * @param state The new starting {@link InternalState} we're now in.
      */
     void enter(@InternalState int state) {
@@ -259,9 +260,10 @@ class ContextualSearchInternalStateController {
 
     /**
      * Confirms that work has been finished on the given state, and will process all subsequent
-     * non-asynchronous states before returning.  See https://crbug.com/1099383.
-     * This should be called by every operation that waits for some kind of completion when it
-     * completes.  The operation's start must be flagged using {@link #notifyStartingWorkOn}.
+     * non-asynchronous states before returning. See https://crbug.com/40137460. This should be
+     * called by every operation that waits for some kind of completion when it completes. The
+     * operation's start must be flagged using {@link #notifyStartingWorkOn}.
+     *
      * @param state The {@link InternalState} that we've finished working on.
      */
     void notifyFinishedWorkOn(@InternalState int state) {
@@ -293,16 +295,17 @@ class ContextualSearchInternalStateController {
     }
 
     /**
-     * Establishes the given state by calling code that starts work on that state or simply
-     * displays the appropriate UX for that state.
+     * Establishes the given state by calling code that starts work on that state or simply displays
+     * the appropriate UX for that state.
+     *
      * @param state The new {@link InternalState} to establish.
-     * @param reason The reason we're starting this state, or {@code null} if not significant
-     *        or known.  Only needed when we enter the IDLE state.
+     * @param reason The reason we're starting this state, or {@code null} if not significant or
+     *     known. Only needed when we enter the IDLE state.
      */
     private void transitionTo(
             final @InternalState int state, final @Nullable @StateChangeReason Integer reason) {
         if (state == mState && !mPolicy.shouldRetryCurrentState(state)) return;
-        Log.v(TAG, "State transition " + String.valueOf(mState) + " => " + String.valueOf(state));
+        Log.v(TAG, "State transition %d => %d", mState, state);
 
         // This should be the only part of the code that changes the state (other than #enter)!
         mPreviousState = mState;

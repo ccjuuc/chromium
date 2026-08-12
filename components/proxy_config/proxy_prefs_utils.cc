@@ -4,6 +4,12 @@
 
 #include "components/proxy_config/proxy_prefs_utils.h"
 
+#include "components/policy/core/common/policy_map.h"
+#include "components/policy/core/common/policy_namespace.h"
+#include "components/policy/core/common/policy_service.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/prefs/pref_service.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
 #include "net/base/proxy_string_util.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
@@ -53,6 +59,37 @@ net::ProxyChain ProxyOverrideRuleProxyFromString(std::string_view raw_value) {
                                                   url.port());
   }
   return net::PacResultElementToProxyChain(raw_value);
+}
+
+bool ProxyOverrideRulesAllowed(const PrefService* pref_service,
+                               policy::PolicyService* policy_service) {
+  CHECK(pref_service);
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  if (pref_service->GetInteger(prefs::kEnableProxyOverrideRulesForAllUsers) ==
+      1) {
+    return true;
+  }
+
+  if (policy_service) {
+    const policy::PolicyMap& policies = policy_service->GetPolicies(
+        policy::PolicyNamespace(policy::POLICY_DOMAIN_CHROME, std::string()));
+    if (policies.GetDeviceAffiliationIds().empty() ||
+        policies.IsUserAffiliated()) {
+      return true;
+    }
+  }
+
+  const PrefService::Preference* pref =
+      pref_service->FindPreference(prefs::kProxyOverrideRules);
+  CHECK(pref);
+
+  return !(pref->IsExtensionControlled() ||
+           (pref->IsManaged() &&
+            pref_service->GetInteger(prefs::kProxyOverrideRulesScope) ==
+                policy::POLICY_SCOPE_USER));
+#else   // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  return true;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 }
 
 }  // namespace proxy_config

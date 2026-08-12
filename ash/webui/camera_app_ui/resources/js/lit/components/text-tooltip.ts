@@ -2,13 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {
-  classMap,
-  css,
-  html,
-  LitElement,
-  PropertyDeclarations,
-} from 'chrome://resources/mwc/lit/index.js';
+import type {PropertyDeclarations} from 'chrome://resources/mwc/lit/index.js';
+import {classMap, css, html, LitElement} from 'chrome://resources/mwc/lit/index.js';
 
 import {checkInstanceof} from '../../assert.js';
 import {DEFAULT_STYLE} from '../styles.js';

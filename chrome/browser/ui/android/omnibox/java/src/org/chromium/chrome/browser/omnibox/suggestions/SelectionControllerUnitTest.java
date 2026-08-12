@@ -29,7 +29,7 @@ import org.chromium.chrome.browser.omnibox.suggestions.SelectionController.Mode;
 public class SelectionControllerUnitTest {
     private static final int DEFAULT_NUM_ITEMS = 3;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private SelectionController createTestController(@Mode int mode) {
         return spy(
@@ -310,5 +310,338 @@ public class SelectionControllerUnitTest {
         verifyPositionChanged(c, 0, 1);
         c.reset(); // back to default (0)
         verifyPositionChanged(c, 1, 0);
+    }
+
+    @Test
+    public void selectionControllerWithNoItems_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        when(c.getItemCount()).thenReturn(0);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+        assertEquals(null, c.getPosition());
+
+        when(c.getItemCount()).thenReturn(1);
+        c.reset();
+        assertFalse(c.isParkedAtSentinel());
+        assertEquals(Integer.valueOf(0), c.getPosition());
+    }
+
+    @Test
+    public void selectionControllerWithNoItems_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        when(c.getItemCount()).thenReturn(0);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+        assertEquals(null, c.getPosition());
+
+        when(c.getItemCount()).thenReturn(1);
+        c.reset();
+        assertTrue(c.isParkedAtSentinel());
+        assertEquals(null, c.getPosition());
+    }
+
+    @Test
+    public void selectNextItem_onlyOneSelectableItem_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        when(c.isSelectableItem(1)).thenReturn(false);
+        when(c.isSelectableItem(2)).thenReturn(false);
+        c.reset();
+
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 0);
+    }
+
+    @Test
+    public void reset_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        c.reset();
+
+        verifyPositionSet(c, 0);
+
+        c.selectNextItem();
+        verifyPositionChanged(c, 0, 1);
+        c.reset();
+        verifyPositionChanged(c, 1, 0);
+    }
+
+    @Test
+    public void reset_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        c.selectNextItem();
+        verifyPositionSet(c, 0);
+        c.reset();
+        verifyPositionReset(c, 0);
+    }
+
+    @Test
+    public void selectNextItem_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        c.reset();
+
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 1);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 1, 2);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 2, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 1);
+    }
+
+    @Test
+    public void selectNextItem_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 1);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 1, 2);
+
+        assertFalse(c.selectNextItem());
+        verifyPositionReset(c, 2);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 0);
+    }
+
+    @Test
+    public void selectPreviousItem_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        c.reset();
+
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 0, 2);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 2, 1);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 1, 0);
+    }
+
+    @Test
+    public void selectPreviousItem_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionSet(c, 2);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 2, 1);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 1, 0);
+
+        assertFalse(c.selectPreviousItem());
+        verifyPositionReset(c, 0);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionSet(c, 2);
+    }
+
+    @Test
+    public void reset_sentinelThenWrapping() {
+        var c = createTestController(Mode.SENTINEL_THEN_WRAPPING);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        c.selectNextItem();
+        verifyPositionSet(c, 0);
+        c.reset();
+        verifyPositionReset(c, 0);
+    }
+
+    @Test
+    public void selectNextItem_sentinelThenWrapping() {
+        var c = createTestController(Mode.SENTINEL_THEN_WRAPPING);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 1);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 1, 2);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 2, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 1);
+    }
+
+    @Test
+    public void selectPreviousItem_sentinelThenWrapping() {
+        var c = createTestController(Mode.SENTINEL_THEN_WRAPPING);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionSet(c, 2);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 2, 1);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 1, 0);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 0, 2);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionChanged(c, 2, 1);
+    }
+
+    @Test
+    public void selectNextItem_skipMiddleItems_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        when(c.isSelectableItem(1)).thenReturn(false);
+        c.reset();
+
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 2);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 2, 0);
+    }
+
+    @Test
+    public void selectNextItem_skipMiddleItems_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        when(c.isSelectableItem(1)).thenReturn(false);
+        c.reset();
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 0);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionChanged(c, 0, 2);
+
+        assertFalse(c.selectNextItem());
+        verifyPositionReset(c, 2);
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 0);
+    }
+
+    @Test
+    public void selectNextItem_noSelectableItems_wrapping() {
+        var c = createTestController(Mode.WRAPPING);
+        when(c.isSelectableItem(0)).thenReturn(false);
+        when(c.isSelectableItem(1)).thenReturn(false);
+        when(c.isSelectableItem(2)).thenReturn(false);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertFalse(c.selectNextItem());
+        assertTrue(c.isParkedAtSentinel());
+
+        assertFalse(c.selectPreviousItem());
+        assertTrue(c.isParkedAtSentinel());
+    }
+
+    @Test
+    public void selectNextItem_noSelectableItems_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        when(c.isSelectableItem(0)).thenReturn(false);
+        when(c.isSelectableItem(1)).thenReturn(false);
+        when(c.isSelectableItem(2)).thenReturn(false);
+        c.reset();
+
+        assertTrue(c.isParkedAtSentinel());
+
+        assertFalse(c.selectNextItem());
+        assertTrue(c.isParkedAtSentinel());
+
+        assertFalse(c.selectPreviousItem());
+        assertTrue(c.isParkedAtSentinel());
+    }
+
+    @Test
+    public void selectNextItem_onlyMiddleSelectableItem_wrappingWithSentinel() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        when(c.isSelectableItem(0)).thenReturn(false);
+        when(c.isSelectableItem(2)).thenReturn(false);
+        c.reset();
+
+        assertTrue(c.selectNextItem());
+        verifyPositionSet(c, 1);
+
+        assertFalse(c.selectNextItem());
+        verifyPositionReset(c, 1);
+
+        assertTrue(c.selectPreviousItem());
+        verifyPositionSet(c, 1);
+
+        assertFalse(c.selectPreviousItem());
+        verifyPositionReset(c, 1);
+    }
+
+    @Test
+    public void setSelectionMode() {
+        var c = createTestController(Mode.WRAPPING);
+        c.reset();
+        verifyPositionSet(c, 0);
+
+        c.setSelectionMode(Mode.WRAPPING_WITH_SENTINEL);
+        c.reset();
+        verifyPositionReset(c, 0);
+        assertTrue(c.isParkedAtSentinel());
+
+        c.setSelectionMode(Mode.WRAPPING);
+        c.reset();
+        verifyPositionSet(c, 0);
+        assertFalse(c.isParkedAtSentinel());
+
+        c.setSelectionMode(Mode.SENTINEL_THEN_WRAPPING);
+        c.reset();
+        verifyPositionReset(c, 0);
+        assertTrue(c.isParkedAtSentinel());
+    }
+
+    @Test
+    public void testSelectFirstAndLastAttachment() {
+        var c = createTestController(Mode.WRAPPING_WITH_SENTINEL);
+        when(c.getItemCount()).thenReturn(3);
+
+        c.selectFirstItem();
+        assertEquals(0, c.getPosition().intValue());
+
+        c.selectLastItem();
+        assertEquals(2, c.getPosition().intValue());
     }
 }

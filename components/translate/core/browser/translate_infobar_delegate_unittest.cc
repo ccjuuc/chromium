@@ -51,7 +51,9 @@ class TestInfoBarManager : public infobars::InfoBarManager {
   int GetActiveEntryID() override { return 0; }
 
   // infobars::InfoBarManager:
-  void OpenURL(const GURL& url, WindowOpenDisposition disposition) override {
+  void OpenURL(const GURL& url,
+               WindowOpenDisposition disposition,
+               const std::string& text_fragment) override {
     NOTREACHED();
   }
 };
@@ -285,7 +287,7 @@ TEST_F(TranslateInfoBarDelegateTest, IsTranslatableLanguage) {
       .WillByDefault(Return(&accept_languages));
   ScopedListPrefUpdate update(pref_service_.get(),
                               translate::prefs::kBlockedLanguages);
-  base::Value::List& update_list = update.Get();
+  base::ListValue& update_list = update.Get();
   update_list.Append(kSourceLanguage);
   pref_service_->SetString(language::prefs::kAcceptLanguages, kSourceLanguage);
 #if BUILDFLAG(IS_CHROMEOS)
@@ -303,11 +305,11 @@ TEST_F(TranslateInfoBarDelegateTest, IsTranslatableLanguage) {
 TEST_F(TranslateInfoBarDelegateTest, ShouldAutoAlwaysTranslate) {
   ScopedDictPrefUpdate update_translate_accepted_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateAcceptedCount);
-  base::Value::Dict& update_translate_accepted_dict =
+  base::DictValue& update_translate_accepted_dict =
       update_translate_accepted_count.Get();
   update_translate_accepted_dict.Set(kSourceLanguage, kAutoAlwaysThreshold + 1);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoAlwaysCount);
   std::optional<int> translate_auto_always_count =
       dict->FindInt(kSourceLanguage);
@@ -334,13 +336,13 @@ TEST_F(TranslateInfoBarDelegateTest, ShouldAutoAlwaysTranslate) {
 TEST_F(TranslateInfoBarDelegateTest, ShouldNotAutoAlwaysTranslateUnknown) {
   ScopedDictPrefUpdate update_translate_accepted_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateAcceptedCount);
-  base::Value::Dict& update_translate_accepted_dict =
+  base::DictValue& update_translate_accepted_dict =
       update_translate_accepted_count.Get();
   // Should not trigger auto always translate for unknown source language.
   update_translate_accepted_dict.Set(language_detection::kUnknownLanguageCode,
                                      kAutoAlwaysThreshold + 1);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoAlwaysCount);
   std::optional<int> translate_auto_always_count =
       dict->FindInt(language_detection::kUnknownLanguageCode);
@@ -390,12 +392,12 @@ TEST_F(TranslateInfoBarDelegateTest, ShouldAutoNeverTranslate) {
 
   ScopedDictPrefUpdate update_translate_denied_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateDeniedCount);
-  base::Value::Dict& update_translate_denied_dict =
+  base::DictValue& update_translate_denied_dict =
       update_translate_denied_count.Get();
   // 21 = kAutoNeverThreshold + 1
   update_translate_denied_dict.Set(kSourceLanguage, 21);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoNeverCount);
   std::optional<int> translate_auto_never_count =
       dict->FindInt(kSourceLanguage);

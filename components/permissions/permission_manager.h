@@ -97,11 +97,6 @@ class PermissionManager : public KeyedService,
   PermissionContextBase* GetPermissionContext(ContentSettingsType type);
 
   // content::PermissionControllerDelegate implementation.
-  void RequestPermissions(
-      content::RenderFrameHost* render_frame_host,
-      const content::PermissionRequestDescription& request_description,
-      base::OnceCallback<void(const std::vector<content::PermissionResult>&)>
-          callback) override;
   void RequestPermissionsInternal(
       content::RenderFrameHost* render_frame_host,
       const content::PermissionRequestDescription& request_description,
@@ -142,6 +137,15 @@ class PermissionManager : public KeyedService,
   void OnPermissionStatusChangeSubscriptionAdded(
       content::PermissionController::SubscriptionId subscription_id) override;
   void UnsubscribeFromPermissionResultChange(
+      content::PermissionController::SubscriptionId subscription_id) override;
+  content::PermissionController::SubscriptionId
+  SubscribeToContentSettingsTypeChange(
+      ContentSettingsType content_settings_type,
+      const GURL& requesting_origin,
+      const GURL& embedding_origin,
+      base::RepeatingCallback<void(const PermissionSetting&)> callback)
+      override;
+  void UnsubscribeFromContentSettingsTypeChange(
       content::PermissionController::SubscriptionId subscription_id) override;
   std::optional<gfx::Rect> GetExclusionAreaBoundsInScreen(
       content::WebContents* web_contents) const override;
@@ -187,6 +191,23 @@ class PermissionManager : public KeyedService,
   PermissionContextMap permission_contexts_;
 
   bool is_shutting_down_ = false;
+
+  struct ContentSettingsTypeSubscription {
+    ContentSettingsTypeSubscription();
+    ~ContentSettingsTypeSubscription();
+
+    ContentSettingsType content_settings_type;
+    GURL requesting_origin;
+    GURL embedding_origin;
+    base::RepeatingCallback<void(const PermissionSetting&)> callback;
+    PermissionSetting last_setting;
+  };
+
+  base::IDMap<std::unique_ptr<ContentSettingsTypeSubscription>,
+              content::PermissionController::SubscriptionId>
+      content_settings_subscriptions_;
+  content::PermissionController::SubscriptionId::Generator
+      subscription_id_generator_;
 
   base::WeakPtrFactory<PermissionManager> weak_factory_{this};
 };

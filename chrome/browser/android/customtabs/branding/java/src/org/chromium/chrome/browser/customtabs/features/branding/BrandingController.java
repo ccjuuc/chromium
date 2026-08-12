@@ -25,7 +25,6 @@ import org.chromium.components.crash.PureJavaExceptionReporter;
 import org.chromium.ui.widget.Toast;
 
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 /** Controls the strategy to start branding, and the duration to show branding. */
 @NullMarked
@@ -53,7 +52,7 @@ public class BrandingController {
     private final OneshotSupplierImpl<BrandingInfo> mBrandingInfo = new OneshotSupplierImpl<>();
     private final BrandingChecker mBrandingChecker;
     private final Context mContext;
-    private final String mAppId;
+    private final @Nullable String mAppId;
     private final String mBrowserName;
     private final int mToastTemplateId;
     private final @Nullable PureJavaExceptionReporter mExceptionReporter;
@@ -63,7 +62,20 @@ public class BrandingController {
     private long mToolbarInitializedTime;
     private boolean mIsDestroyed;
 
-    private final Supplier<MismatchNotificationChecker> mMismatchNotificationChecker;
+    private final MismatchNotificationCheckerFactory mMismatchNotificationCheckerFactory;
+    private @Nullable MismatchNotificationChecker mMismatchNotificationChecker;
+
+    /** Factory interface for mismatch notification checker. */
+    public interface MismatchNotificationCheckerFactory {
+        /**
+         * Create a mismatch notification checker.
+         *
+         * @param appId The ID for the embedded app.
+         * @return A mismatch notification checker, or null if the notification is suppressed or not
+         *     applicable to the current session (e.g. Incognito profile, or ineligible app).
+         */
+        @Nullable MismatchNotificationChecker create(@Nullable String appId);
+    }
 
     /**
      * Branding controller responsible for showing branding.
@@ -72,21 +84,21 @@ public class BrandingController {
      * @param appId The ID for the embedded app. Can be {@code null}
      * @param browserName The browser name shown on the branding toast.
      * @param toastTemplateId Resource ID of the string to be shown on Toast branding UI.
-     * @param mismatchNotificationChecker A bridge interface for mismatch notification handler.
+     * @param mismatchNotificationCheckerFactory A factory for mismatch notification checker.
      * @param exceptionReporter Optional reporter that reports wrong state quietly.
      */
     public BrandingController(
             Context context,
-            String appId,
+            @Nullable String appId,
             String browserName,
             @StringRes int toastTemplateId,
-            Supplier<MismatchNotificationChecker> mismatchNotificationChecker,
+            MismatchNotificationCheckerFactory mismatchNotificationCheckerFactory,
             @Nullable PureJavaExceptionReporter exceptionReporter) {
         mContext = context;
         mAppId = appId;
         mBrowserName = browserName;
         mToastTemplateId = toastTemplateId;
-        mMismatchNotificationChecker = mismatchNotificationChecker;
+        mMismatchNotificationCheckerFactory = mismatchNotificationCheckerFactory;
         mExceptionReporter = exceptionReporter;
         mBrandingInfo.onAvailable(
                 mCallbackController.makeCancelable((data) -> maybeMakeBrandingDecision()));
@@ -145,10 +157,14 @@ public class BrandingController {
         // place quite early without native layer involved, while the checker needs the native
         // layer to be initialized. For this reason, it is instantiated lazily only at this
         // point, where the native is likely to be ready for pre-warmed CCTs.
-        var checker = mMismatchNotificationChecker.get();
-        if (checker != null) {
+        if (mMismatchNotificationChecker == null) {
+            mMismatchNotificationChecker = mMismatchNotificationCheckerFactory.create(mAppId);
+        }
+        if (mMismatchNotificationChecker != null) {
             var storage = SharedPreferencesBrandingTimeStorage.getInstance();
-            if (checker.maybeShow(mAppId, info.lastShowTime, info.mimData, storage::putMimData)) {
+            assert mAppId != null;
+            if (mMismatchNotificationChecker.maybeShow(
+                    mAppId, info.lastShowTime, info.mimData, storage::putMimData)) {
                 brandingDecision = BrandingDecision.MIM;
             }
         }
@@ -181,10 +197,7 @@ public class BrandingController {
         if (mToolbarBrandingDelegate == null) return;
         mToolbarBrandingDelegate.showBrandingLocationBar();
 
-        Runnable hideToolbarBranding =
-                () -> {
-                    mToolbarBrandingDelegate.showRegularToolbar();
-                };
+        Runnable hideToolbarBranding = () -> mToolbarBrandingDelegate.showRegularToolbar();
         PostTask.postDelayedTask(
                 TaskTraits.UI_DEFAULT,
                 mCallbackController.makeCancelable(hideToolbarBranding),
@@ -222,8 +235,10 @@ public class BrandingController {
         if (mToast != null) {
             mToast.cancel();
         }
-        var checker = mMismatchNotificationChecker.get();
-        if (checker != null) checker.cancel();
+        if (mMismatchNotificationChecker != null) {
+            mMismatchNotificationChecker.destroy();
+            mMismatchNotificationChecker = null;
+        }
     }
 
     private void reportErrorMessage(String message) {

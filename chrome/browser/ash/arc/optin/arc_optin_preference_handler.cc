@@ -14,7 +14,6 @@
 #include "chrome/browser/ash/arc/optin/arc_optin_preference_handler_observer.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/metrics/per_user_state_manager_chromeos.h"
@@ -38,7 +37,7 @@ ArcOptInPreferenceHandler::ArcOptInPreferenceHandler(
 }
 
 void ArcOptInPreferenceHandler::Start() {
-  reporting_consent_subscription_ =
+  reporting_choice_subscription_ =
       ash::StatsReportingController::Get()->AddObserver(base::BindRepeating(
           &ArcOptInPreferenceHandler::OnMetricsPreferenceChanged,
           base::Unretained(this)));
@@ -100,7 +99,7 @@ void ArcOptInPreferenceHandler::OnLocationServicePreferenceChanged() {
 void ArcOptInPreferenceHandler::EnableMetricsOnOwnershipKnown(
     bool metrics_enabled,
     ash::DeviceSettingsService::OwnershipStatus ownership_status) {
-  if (IsAllowedToUpdateUserConsent(ownership_status)) {
+  if (IsAllowedToUpdateUserChoice(ownership_status)) {
     EnableUserMetrics(metrics_enabled);
   } else {
     // Handles case in which device is either not owned or per-user is not
@@ -115,12 +114,13 @@ void ArcOptInPreferenceHandler::EnableMetricsOnOwnershipKnown(
 
 void ArcOptInPreferenceHandler::SendMetricsMode(
     ash::DeviceSettingsService::OwnershipStatus ownership_status) {
-  if (IsAllowedToUpdateUserConsent(ownership_status)) {
+  if (IsAllowedToUpdateUserChoice(ownership_status)) {
     observer_->OnMetricsModeChanged(GetUserMetrics(),
-                                    IsMetricsReportingPolicyManaged());
-  } else if (g_browser_process->local_state()) {
+                                    metrics::IsMetricsReportingPolicyManaged());
+  } else {
     bool enabled = ash::StatsReportingController::Get()->IsEnabled();
-    observer_->OnMetricsModeChanged(enabled, IsMetricsReportingPolicyManaged());
+    observer_->OnMetricsModeChanged(enabled,
+                                    metrics::IsMetricsReportingPolicyManaged());
   }
 }
 
@@ -197,17 +197,17 @@ void ArcOptInPreferenceHandler::EnableLocationService(bool is_enabled) {
   }
 }
 
-bool ArcOptInPreferenceHandler::IsAllowedToUpdateUserConsent(
+bool ArcOptInPreferenceHandler::IsAllowedToUpdateUserChoice(
     ash::DeviceSettingsService::OwnershipStatus ownership_status) {
-  // Managed devices should not use per-user consent.
+  // Managed devices should not use per-user choice.
   // Devices that fail this check are unmanaged, referred to as
   // having consumer ownership.
-  if (IsMetricsReportingPolicyManaged()) {
+  if (metrics::IsMetricsReportingPolicyManaged()) {
     return false;
   }
 
   // Unmanaged guest sessions can be started while ownership status is None.
-  // Guest sessions use per-user consent, asked during the ToS in guest OOBE.
+  // Guest sessions use per-user choice, asked during the ToS in guest OOBE.
   if (ProfileManager::GetActiveUserProfile()->IsGuestSession()) {
     return true;
   }
@@ -217,18 +217,18 @@ bool ArcOptInPreferenceHandler::IsAllowedToUpdateUserConsent(
       ash::DeviceSettingsService::OwnershipStatus::kOwnershipNone;
 
   // If the ownership is none, we assume that this is the device owner.
-  // Owner users do not use per-user consent, as owner consent is handled by
+  // Owner users do not use per-user choice, as owner choice is handled by
   // ash::StatsReportingController.
   if (is_device_owner) {
     return false;
   }
 
-  bool is_per_user_consent_enabled =
-      metrics_service_->GetCurrentUserMetricsConsent().has_value();
+  bool is_per_user_choice_enabled =
+      metrics_service_->GetCurrentUserMetricsChoice().has_value();
 
-  // Check that per-user set the current user consent.
+  // Check that per-user set the current user choice.
   // Per-user is only enabled on unmanaged devices with secondary users.
-  if (!is_per_user_consent_enabled) {
+  if (!is_per_user_choice_enabled) {
     return false;
   }
 
@@ -239,7 +239,7 @@ bool ArcOptInPreferenceHandler::IsAllowedToUpdateUserConsent(
       user_manager::UserManager::Get()->IsCurrentUserOwner();
 
   // As a precaution, check is_owner_user even though
-  // !is_per_user_consent_enabled should correctly disable owner users.
+  // !is_per_user_choice_enabled should correctly disable owner users.
   if (is_owner_user) {
     return false;
   }
@@ -250,15 +250,15 @@ bool ArcOptInPreferenceHandler::IsAllowedToUpdateUserConsent(
 void ArcOptInPreferenceHandler::EnableUserMetrics(bool is_enabled) {
   // If user is not eligible for per-user, this will no-op. See details at
   // chrome/browser/metrics/per_user_state_manager_chromeos.h.
-  metrics_service_->UpdateCurrentUserMetricsConsent(is_enabled);
+  metrics_service_->UpdateCurrentUserMetricsChoice(is_enabled);
 }
 
 bool ArcOptInPreferenceHandler::GetUserMetrics() {
   std::optional<bool> metrics_enabled =
-      metrics_service_->GetCurrentUserMetricsConsent();
+      metrics_service_->GetCurrentUserMetricsChoice();
 
-  // No value means user is not eligible for per-user consent. This should be
-  // caught by IsAllowedToUpdateUserConsent().
+  // No value means user is not eligible for per-user choice. This should be
+  // caught by IsAllowedToUpdateUserChoice().
   DCHECK(metrics_enabled.has_value());
 
   return *metrics_enabled;

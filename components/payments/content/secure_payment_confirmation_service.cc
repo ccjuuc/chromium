@@ -6,10 +6,14 @@
 
 #include <optional>
 
+#include "base/barrier_callback.h"
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/task/thread_pool.h"
+#include "base/timer/elapsed_timer.h"
 #include "components/payments/content/browser_binding/browser_bound_key.h"
 #include "components/payments/content/browser_binding/browser_bound_key_store.h"
 #include "components/payments/content/web_payments_web_data_service.h"
@@ -18,8 +22,10 @@
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/secure_payment_confirmation_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/webauth_request_security_checker.h"
 #include "content/public/common/content_features.h"
 #include "crypto/random.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
@@ -28,6 +34,13 @@
 namespace payments {
 
 namespace {
+
+#if !BUILDFLAG(IS_IOS)
+constexpr char kIsBbkHardwareSupportedHistogramName[] =
+    "PaymentRequest.GetSecurePaymentConfirmationCapabilities."
+    "BrowserBoundKeyHardware";
+#endif
+
 void OnIsUserVerifyingPlatformAuthenticatorAvailable(
     SecurePaymentConfirmationService::
         SecurePaymentConfirmationAvailabilityCallback callback,
@@ -38,6 +51,13 @@ void OnIsUserVerifyingPlatformAuthenticatorAvailable(
           : mojom::SecurePaymentConfirmationAvailabilityEnum::
                 kUnavailableNoUserVerifyingPlatformAuthenticator);
 }
+
+mojom::SecurePaymentConfirmationCapabilityPtr MakeCapability(std::string name,
+                                                             bool available) {
+  return mojom::SecurePaymentConfirmationCapability::New(std::move(name),
+                                                         available);
+}
+
 }  // namespace
 
 SecurePaymentConfirmationService::SecurePaymentConfirmationService(
@@ -52,9 +72,7 @@ SecurePaymentConfirmationService::SecurePaymentConfirmationService(
       browser_bound_key_store_keychain_access_group_(
           std::move(browser_bound_key_store_keychain_access_group)) {}
 
-SecurePaymentConfirmationService::~SecurePaymentConfirmationService() {
-  Reset();
-}
+SecurePaymentConfirmationService::~SecurePaymentConfirmationService() = default;
 
 void SecurePaymentConfirmationService::SecurePaymentConfirmationAvailability(
     SecurePaymentConfirmationAvailabilityCallback callback) {
@@ -104,16 +122,76 @@ void SecurePaymentConfirmationService::SecurePaymentConfirmationAvailability(
       &OnIsUserVerifyingPlatformAuthenticatorAvailable, std::move(callback)));
 }
 
+void SecurePaymentConfirmationService::GetSecurePaymentConfirmationCapabilities(
+    GetSecurePaymentConfirmationCapabilitiesCallback callback) {
+  const size_t kNumberOfCapabilities = 1;
+  // Currently we only support 1 capability, but using a barrier callback
+  // converts the output to a std::vector for us and will allow for easy
+  // expansion in the future.
+  auto barrier_callback =
+      base::BarrierCallback<mojom::SecurePaymentConfirmationCapabilityPtr>(
+          kNumberOfCapabilities, std::move(callback));
+
+  IsBrowserBoundKeyHardwareSupported(
+      base::BindOnce(&MakeCapability,
+                     spc_capabilities::kBrowserBoundKeyHardware)
+          .Then(barrier_callback));
+}
+
 void SecurePaymentConfirmationService::StorePaymentCredential(
     const std::vector<uint8_t>& credential_id,
     const std::string& rp_id,
     const std::vector<uint8_t>& user_id,
     StorePaymentCredentialCallback callback) {
-  if (state_ != State::kIdle || !IsCurrentStateValid() ||
+  if (remote_validation_ || !web_data_service_ ||
+      !content::IsFrameAllowedToUseSecurePaymentConfirmation(
+          &render_frame_host()) ||
       credential_id.empty() || rp_id.empty() || user_id.empty()) {
-    Reset();
     std::move(callback).Run(
         mojom::PaymentCredentialStorageStatus::FAILED_TO_STORE_CREDENTIAL);
+    return;
+  }
+
+  base::WeakPtr<SecurePaymentConfirmationService> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
+
+  auto remote_validation =
+      render_frame_host()
+          .GetWebAuthRequestSecurityChecker()
+          ->ValidateDomainAndRelyingPartyID(
+              origin(), rp_id,
+              content::WebAuthRequestSecurityChecker::RequestType::
+                  kMakePaymentCredential,
+              /*remote_desktop_client_override_origin=*/std::nullopt,
+              base::BindOnce(&SecurePaymentConfirmationService::
+                                 ContinueStorePaymentCredentialAfterRpIdCheck,
+                             weak_this, mojo::GetBadMessageCallback(),
+                             credential_id, rp_id, user_id,
+                             std::move(callback)));
+
+  // ValidateDomainAndRelyingPartyID might run the callback synchronously.
+  // If validation fails, the callback will call `ResetAndDeleteThis()` and
+  // delete `this`. We must check `weak_this` to avoid a UAF when storing the
+  // returned validation handle.
+  if (weak_this) {
+    remote_validation_ = std::move(remote_validation);
+  }
+}
+
+void SecurePaymentConfirmationService::
+    ContinueStorePaymentCredentialAfterRpIdCheck(
+        mojo::ReportBadMessageCallback bad_message_callback,
+        std::vector<uint8_t> credential_id,
+        std::string rp_id,
+        std::vector<uint8_t> user_id,
+        StorePaymentCredentialCallback callback,
+        blink::mojom::AuthenticatorStatus rp_id_validation_result) {
+  remote_validation_.reset();
+  // If the RP ID check failed, we cannot store the credential.
+  if (rp_id_validation_result != blink::mojom::AuthenticatorStatus::SUCCESS) {
+    std::move(bad_message_callback)
+        .Run("Invalid RP ID in StorePaymentCredential");
+    ResetAndDeleteThis();
     return;
   }
 
@@ -124,20 +202,20 @@ void SecurePaymentConfirmationService::StorePaymentCredential(
   // will already have been stored during creation.
   if (base::FeatureList::IsEnabled(
           features::kSecurePaymentConfirmationUseCredentialStoreAPIs)) {
-    Reset();
     std::move(callback).Run(mojom::PaymentCredentialStorageStatus::SUCCESS);
     return;
   }
 
-  storage_callback_ = std::move(callback);
-  state_ = State::kStoringCredential;
-  data_service_request_handle_ =
-      web_data_service_->AddSecurePaymentConfirmationCredential(
-          std::make_unique<SecurePaymentConfirmationCredential>(credential_id,
-                                                                rp_id, user_id),
-          base::BindOnce(
-              &SecurePaymentConfirmationService::OnStorePaymentCredential,
-              weak_ptr_factory_.GetWeakPtr()));
+  web_data_service_->AddSecurePaymentConfirmationCredential(
+      std::make_unique<SecurePaymentConfirmationCredential>(
+          std::move(credential_id), std::move(rp_id), std::move(user_id)),
+      base::BindOnce([](WebDataServiceBase::Handle h,
+                        std::unique_ptr<WDTypedResult> result) {
+        return result && static_cast<WDResult<bool>*>(result.get())->GetValue()
+                   ? mojom::PaymentCredentialStorageStatus::SUCCESS
+                   : mojom::PaymentCredentialStorageStatus::
+                         FAILED_TO_STORE_CREDENTIAL;
+      }).Then(std::move(callback)));
 }
 
 void SecurePaymentConfirmationService::MakePaymentCredential(
@@ -145,9 +223,7 @@ void SecurePaymentConfirmationService::MakePaymentCredential(
     MakePaymentCredentialCallback callback) {
 #if !BUILDFLAG(IS_IOS)
   std::string relying_party_id;
-  if (options &&
-      base::FeatureList::IsEnabled(
-          blink::features::kSecurePaymentConfirmationBrowserBoundKeys)) {
+  if (options) {
     relying_party_id = options->relying_party.id;
     if (!passkey_browser_binder_) {
       if (scoped_refptr<BrowserBoundKeyStore> key_store =
@@ -197,22 +273,9 @@ void SecurePaymentConfirmationService::SetPasskeyBrowserBinderForTesting(
   passkey_browser_binder_ = std::move(passkey_browser_binder);
 }
 
-void SecurePaymentConfirmationService::OnStorePaymentCredential(
-    WebDataServiceBase::Handle h,
-    std::unique_ptr<WDTypedResult> result) {
-  if (state_ != State::kStoringCredential || !IsCurrentStateValid() ||
-      data_service_request_handle_ != h) {
-    Reset();
-    return;
-  }
-
-  auto callback = std::move(storage_callback_);
-  Reset();
-
-  std::move(callback).Run(
-      result && static_cast<WDResult<bool>*>(result.get())->GetValue()
-          ? mojom::PaymentCredentialStorageStatus::SUCCESS
-          : mojom::PaymentCredentialStorageStatus::FAILED_TO_STORE_CREDENTIAL);
+void SecurePaymentConfirmationService::SetBrowserBoundKeyStoreForTesting(
+    scoped_refptr<BrowserBoundKeyStore> browser_bound_key_store) {
+  test_browser_bound_key_store_ = browser_bound_key_store;
 }
 
 // Handles the authenticator make credential callback by adding the browser
@@ -224,19 +287,16 @@ void SecurePaymentConfirmationService::OnAuthenticatorMakeCredential(
     ::blink::mojom::AuthenticatorStatus authenticator_status,
     ::blink::mojom::MakeCredentialAuthenticatorResponsePtr response,
     ::blink::mojom::WebAuthnDOMExceptionDetailsPtr maybe_exception_details) {
-  if (response &&
-      base::FeatureList::IsEnabled(
-          blink::features::kSecurePaymentConfirmationBrowserBoundKeys)) {
-    if (browser_bound_key) {
-      std::vector<uint8_t> signature_output =
-          browser_bound_key->Get().Sign(response->info->client_data_json);
-      response->payment =
-          blink::mojom::AuthenticationExtensionsPaymentResponse::New();
-      response->payment->browser_bound_signature = std::move(signature_output);
+  if (response && browser_bound_key) {
+    std::vector<uint8_t> signature_output =
+        browser_bound_key->Get().Sign(response->info->client_data_json);
+    response->payment =
+        blink::mojom::AuthenticationExtensionsPaymentResponse::New();
+    response->payment->browser_bound_signature = std::move(signature_output);
 
-      // Last used time is needed on platforms where the credentials cannot be
-      // listed by platform APIs.
-      std::optional<base::Time> last_used;
+    // Last used time is needed on platforms where the credentials cannot be
+    // listed by platform APIs.
+    std::optional<base::Time> last_used;
 #if BUILDFLAG(IS_WIN)
       last_used = base::Time::NowFromSystemTime();
 #endif
@@ -244,7 +304,6 @@ void SecurePaymentConfirmationService::OnAuthenticatorMakeCredential(
       passkey_browser_binder_->BindKey(
           std::move(*browser_bound_key), response->info->raw_id,
           std::move(relying_party), std::move(last_used));
-    }
   }
 
   std::move(callback).Run(authenticator_status, std::move(response),
@@ -274,20 +333,31 @@ void SecurePaymentConfirmationService::OnCreateUnboundKey(
           std::move(relying_party_id), std::move(unbound_key)));
 }
 
-bool SecurePaymentConfirmationService::IsCurrentStateValid() const {
-  if (!content::IsFrameAllowedToUseSecurePaymentConfirmation(
-          &render_frame_host()) ||
-      !web_data_service_) {
-    return false;
-  }
+void SecurePaymentConfirmationService::IsBrowserBoundKeyHardwareSupported(
+    base::OnceCallback<void(bool)> callback) {
+#if !BUILDFLAG(IS_IOS)
+  scoped_refptr<BrowserBoundKeyStore> bbk_store =
+      test_browser_bound_key_store_
+          ? test_browser_bound_key_store_
+          : GetBrowserBoundKeyStoreInstance(BrowserBoundKeyStore::Config{
+#if BUILDFLAG(IS_MAC)
+                .keychain_access_group =
+                    browser_bound_key_store_keychain_access_group_
+#endif  // BUILDFLAG(IS_MAC)
+            });
 
-  switch (state_) {
-    case State::kIdle:
-      return !storage_callback_ && !data_service_request_handle_;
-
-    case State::kStoringCredential:
-      return storage_callback_ && data_service_request_handle_;
-  }
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+      base::BindOnce(&BrowserBoundKeyStore::GetDeviceSupportsHardwareKeys,
+                     bbk_store),
+      base::BindOnce(
+          [](base::OnceCallback<void(bool)> callback, bool supported) {
+            base::UmaHistogramBoolean(kIsBbkHardwareSupportedHistogramName,
+                                      supported);
+            std::move(callback).Run(supported);
+          },
+          std::move(callback)));
+#endif  // !BUILDFLAG(IS_IOS)
 }
 
 void SecurePaymentConfirmationService::RecordFirstSystemPromptResult(
@@ -296,23 +366,6 @@ void SecurePaymentConfirmationService::RecordFirstSystemPromptResult(
     is_system_prompt_result_recorded_ = true;
     RecordEnrollSystemPromptResult(result);
   }
-}
-
-void SecurePaymentConfirmationService::Reset() {
-  // Callbacks must either be run or disconnected before being destroyed, so
-  // run them if they are still connected.
-  if (storage_callback_) {
-    std::move(storage_callback_)
-        .Run(mojom::PaymentCredentialStorageStatus::FAILED_TO_STORE_CREDENTIAL);
-  }
-
-  if (web_data_service_ && data_service_request_handle_) {
-    web_data_service_->CancelRequest(data_service_request_handle_.value());
-  }
-
-  data_service_request_handle_.reset();
-  is_system_prompt_result_recorded_ = false;
-  state_ = State::kIdle;
 }
 
 }  // namespace payments

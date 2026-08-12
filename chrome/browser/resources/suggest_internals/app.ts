@@ -1,6 +1,7 @@
 // Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+import '/strings.m.js';
 import './icons.html.js';
 import './request.js';
 import '//resources/cr_elements/cr_button/cr_button.js';
@@ -19,6 +20,7 @@ import type {CrToastElement} from '//resources/cr_elements/cr_toast/cr_toast.js'
 import type {CrToolbarSearchFieldElement} from '//resources/cr_elements/cr_toolbar/cr_toolbar_search_field.ts';
 import type {TimeDelta} from '//resources/mojo/mojo/public/mojom/base/time.mojom-webui.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
@@ -58,6 +60,7 @@ class SuggestInternalsAppElement extends CrLitElement {
       responseText_: {type: String},
       toastDuration_: {type: Number},
       toastMessage_: {type: String},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -68,6 +71,8 @@ class SuggestInternalsAppElement extends CrLitElement {
   protected accessor responseText_: string = '';
   protected accessor toastDuration_: number = 3000;
   protected accessor toastMessage_: string = '';
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   private callbackRouter_: PageCallbackRouter;
   private pageHandler_: PageHandlerInterface;
@@ -119,11 +124,11 @@ class SuggestInternalsAppElement extends CrLitElement {
     this.hardcodedRequest_ = null;
   }
 
-  protected onCloseDialogs_() {
+  protected onCloseDialogsClick_() {
     this.$.hardcodeResponseDialog.close();
   }
 
-  protected async onConfirmHardcodeResponseDialog_() {
+  protected async onConfirmHardcodeResponseDialogClick_() {
     const responseDelayMs = Math.max(0, parseInt(this.responseDelay_) || 0);
     await this.pageHandler_
         .hardcodeResponse(
@@ -146,7 +151,7 @@ class SuggestInternalsAppElement extends CrLitElement {
     a.click();
   }
 
-  protected onFilterChanged_(e: CustomEvent<string>) {
+  protected onSearchChanged_(e: CustomEvent<string>) {
     this.filter_ = e.detail ?? '';
   }
 
@@ -154,7 +159,7 @@ class SuggestInternalsAppElement extends CrLitElement {
     this.$.fileInput.click();
   }
 
-  protected onImportFile_(event: Event) {
+  protected onImportFileChange_(event: Event) {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (!file) {
       return;
@@ -231,10 +236,10 @@ class SuggestInternalsAppElement extends CrLitElement {
 
   protected requestFilter_(request: Request): boolean {
     const filter = this.filter_.trim().toLowerCase();
-    return request.url.url.toLowerCase().includes(filter);
+    return request.url.toLowerCase().includes(filter);
   }
 
-  protected showOutputControls_() {
+  protected onCrToolbarMenuClick_() {
     this.$.drawer.openDrawer();
   }
 
@@ -244,7 +249,7 @@ class SuggestInternalsAppElement extends CrLitElement {
         (_key, value) => typeof value === 'bigint' ? value.toString() : value);
   }
 
-  protected populateSearchInput_(e: CustomEvent<string>) {
+  protected onChipClick_(e: CustomEvent<string>) {
     // Populate the searchbar with the pgcl of the selected chip.
     const toolbar = this.shadowRoot.querySelector<HTMLElement>('cr-toolbar')!;
     const searchbar =
@@ -253,11 +258,11 @@ class SuggestInternalsAppElement extends CrLitElement {
     searchbar.setValue('pgcl=' + e.detail);
   }
 
-  protected onResponseDelayChanged_(e: CustomEvent<{value: string}>) {
+  protected onResponseDelayValueChanged_(e: CustomEvent<{value: string}>) {
     this.responseDelay_ = e.detail.value;
   }
 
-  protected onResponseTextChanged_(e: CustomEvent<{value: string}>) {
+  protected onResponseTextValueChanged_(e: CustomEvent<{value: string}>) {
     this.responseText_ = e.detail.value;
   }
 }

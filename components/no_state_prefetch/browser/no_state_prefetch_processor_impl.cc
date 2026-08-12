@@ -46,17 +46,22 @@ void NoStatePrefetchProcessorImpl::Create(
 
 void NoStatePrefetchProcessorImpl::Start(
     blink::mojom::PrerenderAttributesPtr attributes) {
-  // TODO(crbug.com/40109437): Remove the exception for opaque origins below and
-  // allow HostsOrigin() to always verify them, including checking their
-  // precursor. This verification is currently enabled behind a kill switch.
-  bool should_skip_checks_for_opaque_origin =
-      initiator_origin_.opaque() &&
-      !base::FeatureList::IsEnabled(
-          features::kAdditionalOpaqueOriginEnforcements);
-  if (!should_skip_checks_for_opaque_origin &&
-      !content::ChildProcessSecurityPolicy::GetInstance()->HostsOrigin(
+  if (!content::ChildProcessSecurityPolicy::GetInstance()->HostsOrigin(
           render_process_id_, initiator_origin_)) {
     receiver_.ReportBadMessage("NSPPI_INVALID_INITIATOR_ORIGIN");
+    // The above ReportBadMessage() closes |receiver_| but does not trigger its
+    // disconnect handler, so we need to call the handler explicitly
+    // here to do some necessary work.
+    Abandon();
+    return;
+  }
+
+  // The referrer is supplied by the renderer and is forwarded to the prefetch
+  // navigation, so it must be same-origin with the initiator that bound this
+  // receiver.
+  if (!attributes->referrer->url.is_empty() &&
+      !initiator_origin_.IsSameOriginWith(attributes->referrer->url)) {
+    receiver_.ReportBadMessage("NSPPI_INVALID_REFERRER_ORIGIN");
     // The above ReportBadMessage() closes |receiver_| but does not trigger its
     // disconnect handler, so we need to call the handler explicitly
     // here to do some necessary work.
@@ -77,6 +82,21 @@ void NoStatePrefetchProcessorImpl::Start(
   auto* render_frame_host =
       content::RenderFrameHost::FromID(render_process_id_, render_frame_id_);
   if (!render_frame_host) {
+    return;
+  }
+
+  // NoStatePrefetch is not yet compatible with Connection-Allowlist: the
+  // prefetch is driven by a separate NoStatePrefetchContents that does not
+  // carry the initiating document's allowlist, so its requests would escape
+  // enforcement. Until PrerenderUntilScript
+  // (https://chromestatus.com/feature/6324676351623168) replaces
+  // NoStatePrefetch and is made allowlist-aware, do not start it when the
+  // initiating document enforces a Connection-Allowlist. A report-only
+  // allowlist does not block, matching report-only semantics. (An enforced
+  // allowlist is only ever committed when the kConnectionAllowlists feature is
+  // enabled, so no explicit feature check is needed here -- which keeps this
+  // component free of network-service deps.)
+  if (render_frame_host->GetConnectionAllowlists().enforced.has_value()) {
     return;
   }
 

@@ -7,52 +7,51 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "components/send_tab_to_self/send_tab_to_self_entry.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
 class BrowserWindowInterface;
-struct NavigateParams;
 
 namespace send_tab_to_self {
-
-class SendTabToSelfEntry;
 
 class SendTabToSelfToolbarBubbleView : public views::BubbleDialogDelegateView {
   METADATA_HEADER(SendTabToSelfToolbarBubbleView,
                   views::BubbleDialogDelegateView)
 
  public:
-  SendTabToSelfToolbarBubbleView(
-      BrowserWindowInterface& browser,
-      View* parent,
-      const SendTabToSelfEntry& entry,
-      base::OnceCallback<void(NavigateParams*)> navigate_callback);
+  SendTabToSelfToolbarBubbleView(BrowserWindowInterface& browser,
+                                 views::BubbleAnchor anchor,
+                                 const SendTabToSelfEntry& entry);
 
   ~SendTabToSelfToolbarBubbleView() override;
 
   // Creates and shows the bubble.
   static SendTabToSelfToolbarBubbleView* CreateBubble(
       BrowserWindowInterface& browser,
-      View* parent,
-      const SendTabToSelfEntry& entry,
-      base::OnceCallback<void(NavigateParams*)> navigate_callback);
+      views::BubbleAnchor anchor,
+      const SendTabToSelfEntry& entry);
 
   // Overwrites the existing entry in the bubble with `new_entry`.
   void ReplaceEntry(const SendTabToSelfEntry& new_entry);
   void Hide();
 
-  std::string GetGuidForTesting() { return guid_; }
+  void OpenInNewTab();
+
+  std::string GetGuidForTesting() { return entry_.GetGUID(); }
 
  private:
   friend class SendTabToSelfToolbarBubbleViewTest;
+  friend class SendTabToSelfToolbarBubbleViewScrollPositionDisabledTest;
   FRIEND_TEST_ALL_PREFIXES(SendTabToSelfToolbarBubbleViewTest,
                            ButtonNavigatesToPage);
-
-  void OpenInNewTab();
+  FRIEND_TEST_ALL_PREFIXES(SendTabToSelfToolbarBubbleViewTest,
+                           ButtonNavigatesWithScrollPosition);
+  FRIEND_TEST_ALL_PREFIXES(
+      SendTabToSelfToolbarBubbleViewScrollPositionDisabledTest,
+      ButtonNavigatesWithoutScrollPositionIfFeatureDisabled);
 
   void Timeout();
-
-  base::OnceCallback<void(NavigateParams*)> navigate_callback_;
 
   bool opened_ = false;
 
@@ -62,10 +61,7 @@ class SendTabToSelfToolbarBubbleView : public views::BubbleDialogDelegateView {
   raw_ptr<views::Label> url_label_;
   raw_ptr<views::Label> device_label_;
 
-  std::string title_;
-  GURL url_;
-  std::string device_name_;
-  std::string guid_;
+  SendTabToSelfEntry entry_;
 
   base::WeakPtrFactory<SendTabToSelfToolbarBubbleView> weak_ptr_factory_{this};
 };

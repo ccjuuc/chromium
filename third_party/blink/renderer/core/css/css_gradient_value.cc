@@ -32,11 +32,16 @@
 #include "base/memory/values_equivalent.h"
 #include "base/notreached.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+#include "third_party/blink/renderer/core/css/css_alpha_color_value.h"
 #include "third_party/blink/renderer/core/css/css_color.h"
+#include "third_party/blink/renderer/core/css/css_color_mix_value.h"
+#include "third_party/blink/renderer/core/css/css_contrast_color_value.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
+#include "third_party/blink/renderer/core/css/css_light_dark_value_pair.h"
 #include "third_party/blink/renderer/core/css/css_math_expression_node.h"
 #include "third_party/blink/renderer/core/css/css_math_function_value.h"
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
+#include "third_party/blink/renderer/core/css/css_relative_color_value.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/css_value_pair.h"
 #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
@@ -44,6 +49,8 @@
 #include "third_party/blink/renderer/core/css/resolver/style_builder_converter.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/text_link_colors.h"
+#include "third_party/blink/renderer/platform/geometry/calculation_expression_node.h"
+#include "third_party/blink/renderer/platform/geometry/evaluation_input.h"
 #include "third_party/blink/renderer/platform/geometry/skia_geometry_utils.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/gradient.h"
@@ -51,6 +58,7 @@
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/size.h"
@@ -197,6 +205,7 @@ scoped_refptr<Image> CSSGradientValue::GetImage(
           conversion_data, size, document, style);
       break;
     case kConstantGradientClass:
+    case kColorImageClass:
       gradient = To<CSSConstantGradientValue>(this)->CreateGradient(
           conversion_data, size, document, style);
       break;
@@ -388,11 +397,12 @@ static Color ResolveStopColor(const CSSToLengthConversionData& conversion_data,
                               const ComputedStyle& style) {
   mojom::blink::ColorScheme color_scheme = style.UsedColorScheme();
   const ResolveColorValueContext context{
-      .conversion_data = conversion_data,
+      .length_resolver = conversion_data,
       .text_link_colors = document.GetTextLinkColors(),
       .used_color_scheme = color_scheme,
       .color_provider = document.GetColorProviderForPainting(color_scheme),
-      .is_in_web_app_scope = document.IsInWebAppScope()};
+      .can_expose_accent_color =
+          document.IsInWebAppScope() && document.IsInitialProfile()};
   const StyleColor style_stop_color = ResolveColorValue(stop_color, context);
   return style_stop_color.Resolve(
       style.VisitedDependentColor(GetCSSPropertyColor()), color_scheme);
@@ -443,7 +453,7 @@ static const CSSValue* GetComputedStopColor(const CSSValue& color,
   const mojom::blink::ColorScheme color_scheme = style.UsedColorScheme();
   // TODO(40946458): Don't use default length resolver here!
   const ResolveColorValueContext context{
-      .conversion_data = CSSToLengthConversionData(/*element=*/nullptr),
+      .length_resolver = CSSToLengthConversionData(/*element=*/nullptr),
       .text_link_colors = TextLinkColors(),
       .used_color_scheme = color_scheme};
   const StyleColor style_stop_color = ResolveColorValue(color, context);
@@ -978,6 +988,20 @@ static const CSSPrimitiveValue* ResolveAngle(
       return CSSNumericLiteralValue::Create(
           percentage, CSSPrimitiveValue::UnitType::kPercentage);
     }
+    if (const auto* math_function = DynamicTo<CSSMathFunctionValue>(value);
+        math_function &&
+        math_function->ExpressionNode()->Category() == kCalcPercentAngle) {
+      // Resolve the calc() mixing <angle> and <percentage> by lowering to a
+      // CalculationExpressionNode and evaluating it with 360deg as the 100%
+      // basis, mirroring how <length-percentage> calc() is resolved against a
+      // container length.
+      const CalculationExpressionNode* calc_expr =
+          math_function->ExpressionNode()->ToCalculationExpression(
+              conversion_data);
+      float angle = calc_expr->Evaluate(360.0f, /*input=*/{});
+      return CSSNumericLiteralValue::Create(
+          angle, CSSPrimitiveValue::UnitType::kDegrees);
+    }
     double angle = value->ComputeDegrees(conversion_data);
     return CSSNumericLiteralValue::Create(
         angle, CSSPrimitiveValue::UnitType::kDegrees);
@@ -1059,6 +1083,9 @@ const CSSGradientValue& CSSGradientValue::ResolveValuesIfNeeded(
     case kConstantGradientClass:
       return To<CSSConstantGradientValue>(this)->ResolveValuesIfNeeded(
           style_resolver_state);
+    case kColorImageClass:
+      return To<CSSColorImageValue>(this)->ResolveValuesIfNeeded(
+          style_resolver_state);
     default:
       NOTREACHED();
   }
@@ -1078,6 +1105,9 @@ CSSGradientValue& CSSGradientValue::ResolveValuesIfNeeded(
           style_resolver_state);
     case kConstantGradientClass:
       return To<CSSConstantGradientValue>(this)->ResolveValuesIfNeeded(
+          style_resolver_state);
+    case kColorImageClass:
+      return To<CSSColorImageValue>(this)->ResolveValuesIfNeeded(
           style_resolver_state);
     default:
       NOTREACHED();
@@ -1100,6 +1130,9 @@ CSSGradientValue* CSSGradientValue::ComputedCSSValue(
           style, allow_visited_style, value_phase);
     case kConstantGradientClass:
       return To<CSSConstantGradientValue>(this)->ComputedCSSValue(
+          style, allow_visited_style, value_phase);
+    case kColorImageClass:
+      return To<CSSColorImageValue>(this)->ComputedCSSValue(
           style, allow_visited_style, value_phase);
     default:
       NOTREACHED();
@@ -1545,13 +1578,37 @@ CSSLinearGradientValue* CSSLinearGradientValue::ComputedCSSValue(
   return result;
 }
 
+static bool IsUsingCurrentColor(const CSSValue& value) {
+  if (const auto* identifier_value = DynamicTo<CSSIdentifierValue>(value)) {
+    return identifier_value->GetValueID() == CSSValueID::kCurrentcolor;
+  }
+  if (const auto* mix_value = DynamicTo<CSSColorMixValue>(value)) {
+    return IsUsingCurrentColor(mix_value->Color1()) ||
+           IsUsingCurrentColor(mix_value->Color2());
+  }
+  if (const auto* alpha_color_value = DynamicTo<CSSAlphaColorValue>(value)) {
+    return IsUsingCurrentColor(alpha_color_value->OriginColor());
+  }
+  if (const auto* contrast_value = DynamicTo<CSSContrastColorValue>(value)) {
+    return IsUsingCurrentColor(contrast_value->Color());
+  }
+  if (const auto* relative_value = DynamicTo<CSSRelativeColorValue>(value)) {
+    return IsUsingCurrentColor(relative_value->OriginColor());
+  }
+  if (const auto* light_dark_value = DynamicTo<CSSLightDarkValuePair>(value)) {
+    return IsUsingCurrentColor(light_dark_value->First()) ||
+           IsUsingCurrentColor(light_dark_value->Second());
+  }
+  return false;
+}
+
 static bool IsUsingCurrentColor(
     const HeapVector<CSSGradientColorStop, 2>& stops) {
   for (const CSSGradientColorStop& stop : stops) {
-    auto* identifier_value = DynamicTo<CSSIdentifierValue>(stop.color_.Get());
-    if (identifier_value &&
-        identifier_value->GetValueID() == CSSValueID::kCurrentcolor) {
-      return true;
+    if (const CSSValue* stop_color = stop.color_.Get()) {
+      if (IsUsingCurrentColor(*stop_color)) {
+        return true;
+      }
     }
   }
   return false;
@@ -2047,8 +2104,10 @@ CSSRadialGradientValue::ResolveValuesAndCreateCopyIfNeeded(
   for (const auto& stop : stops_) {
     const auto* offset = DynamicTo<CSSPrimitiveValue>(
         ResolveLength(stop.offset_, conversion_data));
-    stops_changed = stops_changed || (offset != stop.offset_);
-    stops.push_back(CSSGradientColorStop(offset, stop.color_));
+    const CSSValue* color = ResolveColor(stop.color_, style_resolver_state);
+    stops_changed =
+        stops_changed || (offset != stop.offset_) || (color != stop.color_);
+    stops.push_back(CSSGradientColorStop(offset, color));
   }
 
   // If the values are the same as the current ones, return this.
@@ -2235,9 +2294,12 @@ CSSConicGradientValue::ResolveValuesAndCreateCopyIfNeeded(
   bool stops_changed = false;
   HeapVector<CSSGradientColorStop> stops;
   for (const auto& stop : stops_) {
-    const auto* offset = ResolveAngle(stop.offset_, conversion_data);
-    stops_changed = stops_changed || (offset != stop.offset_);
-    stops.push_back(CSSGradientColorStop(offset, stop.color_));
+    const CSSPrimitiveValue* offset =
+        ResolveAngle(stop.offset_, conversion_data);
+    const CSSValue* color = ResolveColor(stop.color_, style_resolver_state);
+    stops_changed =
+        stops_changed || (offset != stop.offset_) || (color != stop.color_);
+    stops.push_back(CSSGradientColorStop(offset, color));
   }
 
   // If the values are the same as the current ones, return this.
@@ -2303,6 +2365,10 @@ void CSSConicGradientValue::TraceAfterDispatch(blink::Visitor* visitor) const {
   CSSGradientValue::TraceAfterDispatch(visitor);
 }
 
+String CSSConstantGradientValue::CustomCSSText() const {
+  return color_->CssText();
+}
+
 bool CSSConstantGradientValue::Equals(
     const CSSConstantGradientValue& other) const {
   return base::ValuesEquivalent(color_, other.color_);
@@ -2321,6 +2387,10 @@ bool CSSConstantGradientValue::KnownToBeOpaque(
   return ResolveStopColor(CSSToLengthConversionData(/*element=*/nullptr),
                           *color_, document, style)
       .IsOpaque();
+}
+
+bool CSSConstantGradientValue::IsUsingCurrentColor() const {
+  return blink::cssvalue::IsUsingCurrentColor(*color_);
 }
 
 std::unique_ptr<Gradient> CSSConstantGradientValue::CreateGradient(
@@ -2371,6 +2441,40 @@ CSSConstantGradientValue& CSSConstantGradientValue::ResolveValuesIfNeeded(
     return *this;
   }
   return *MakeGarbageCollected<CSSConstantGradientValue>(color);
+}
+
+String CSSColorImageValue::CustomCSSText() const {
+  return StrCat({"image(", color_->CssText(), ")"});
+}
+
+bool CSSColorImageValue::Equals(const CSSColorImageValue& other) const {
+  return CSSConstantGradientValue::Equals(other);
+}
+
+CSSColorImageValue* CSSColorImageValue::ComputedCSSValue(
+    const ComputedStyle& style,
+    bool allow_visited_style,
+    CSSValuePhase value_phase) const {
+  return MakeGarbageCollected<CSSColorImageValue>(
+      GetComputedStopColor(*color_, style, allow_visited_style, value_phase));
+}
+
+const CSSColorImageValue& CSSColorImageValue::ResolveValuesIfNeeded(
+    const StyleResolverState& style_resolver_state) const {
+  const CSSValue* color = ResolveColor(color_, style_resolver_state);
+  if (color == color_) {
+    return *this;
+  }
+  return *MakeGarbageCollected<CSSColorImageValue>(color);
+}
+
+CSSColorImageValue& CSSColorImageValue::ResolveValuesIfNeeded(
+    const StyleResolverState& style_resolver_state) {
+  const CSSValue* color = ResolveColor(color_, style_resolver_state);
+  if (color == color_) {
+    return *this;
+  }
+  return *MakeGarbageCollected<CSSColorImageValue>(color);
 }
 
 }  // namespace blink::cssvalue

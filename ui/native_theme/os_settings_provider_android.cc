@@ -10,6 +10,9 @@
 #include "ui/accessibility/android/accessibility_state.h"
 #include "ui/native_theme/native_theme.h"
 
+// JNI-zero generated header. Must be included after other headers.
+#include "ui/native_theme/jni_headers/OsSettingsProviderAndroidBridge_jni.h"
+
 namespace ui {
 
 OsSettingsProviderAndroid::OsSettingsProviderAndroid()
@@ -18,6 +21,39 @@ OsSettingsProviderAndroid::OsSettingsProviderAndroid()
 }
 
 OsSettingsProviderAndroid::~OsSettingsProviderAndroid() = default;
+
+NativeTheme::PreferredColorScheme
+OsSettingsProviderAndroid::PreferredColorScheme() const {
+  return preferred_color_scheme_;
+}
+
+bool OsSettingsProviderAndroid::IsAndroidProvider() const {
+  return true;
+}
+
+void OsSettingsProviderAndroid::SetPreferredColorScheme(
+    NativeTheme::PreferredColorScheme scheme) {
+  if (preferred_color_scheme_ == scheme) {
+    return;
+  }
+  preferred_color_scheme_ = scheme;
+  NotifyOnSettingsChanged();
+}
+
+// JNI Methods
+static void JNI_OsSettingsProviderAndroidBridge_SetPreferredColorScheme(
+    JNIEnv* env,
+    bool is_dark) {
+  auto& provider = OsSettingsProvider::Get();
+  if (!provider.IsAndroidProvider()) {
+    // This can happen in browser tests, because browser tests may use a
+    // different OssettingsProvider class.
+    return;
+  }
+  static_cast<OsSettingsProviderAndroid&>(provider).SetPreferredColorScheme(
+      is_dark ? NativeTheme::PreferredColorScheme::kDark
+              : NativeTheme::PreferredColorScheme::kLight);
+}
 
 NativeTheme::PreferredContrast OsSettingsProviderAndroid::PreferredContrast()
     const {
@@ -60,3 +96,5 @@ void OsSettingsProviderAndroid::OnTextCursorBlinkIntervalChanged(
 }
 
 }  // namespace ui
+
+DEFINE_JNI(OsSettingsProviderAndroidBridge)

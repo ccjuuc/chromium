@@ -47,11 +47,8 @@ source_set("screen_ai") {
     deps += [
       "//base/allocator/partition_allocator:buildflags",
       "//base/allocator/partition_allocator/src/partition_alloc:allocator_shim",
+      "//components/crash/core/common:crash_key",
     ]
-  }
-
-  if (!use_fake_screen_ai) {
-    deps += [ "//components/crash/core/common:crash_key" ]
   }
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
@@ -86,7 +83,6 @@ if (is_linux || is_chromeos) {
     deps = [
       "//base",
       "//components/component_updater",
-      "//components/crash/core/common:crash_key",
       "//sandbox/linux:sandbox_services",
       "//services/screen_ai/buildflags",
       "//services/screen_ai/public/cpp:utilities",
@@ -132,6 +128,10 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//ui/accessibility:test_support",
   ]
+
+  if (is_linux) {
+    deps += [ "//services/screen_ai/public/cpp:utilities" ]
+  }
 
   data_deps = [ ":test_support_data" ]
 }

@@ -122,14 +122,14 @@ void BlobBytesProvider::AppendData(scoped_refptr<RawData> data) {
   data_.push_back(std::move(data));
 }
 
-void BlobBytesProvider::AppendData(base::span<const char> data) {
+void BlobBytesProvider::AppendData(base::span<const uint8_t> data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (data_.empty() ||
       data_.back()->size() + data.size() > kMaxConsolidatedItemSizeInBytes) {
     AppendData(RawData::Create());
   }
-  data_.back()->MutableData()->AppendSpan(data);
+  data_.back()->MutableData().append_range(data);
 }
 
 // static
@@ -162,7 +162,7 @@ void BlobBytesProvider::RequestAsReply(RequestAsReplyCallback callback) {
   // to reduce the number of copies of data that are made here.
   Vector<uint8_t> result;
   for (const auto& d : data_)
-    result.AppendSpan(base::span(*d));
+    result.append_range(*d);
   std::move(callback).Run(result);
 }
 

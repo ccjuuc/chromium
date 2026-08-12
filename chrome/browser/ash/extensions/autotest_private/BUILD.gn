@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("autotest_private") {
@@ -24,6 +22,7 @@ static_library("autotest_private") {
     "//base",
     "//chrome/app:command_ids",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/app_list/arc",
     "//chrome/browser/ash/arc",
     "//chrome/browser/ash/arc:arc_util",
@@ -40,7 +39,6 @@ static_library("autotest_private") {
     "//chrome/browser/ash/input_method",
     "//chrome/browser/ash/lobster",
     "//chrome/browser/ash/login",
-    "//chrome/browser/ash/plugin_vm",
     "//chrome/browser/ash/policy/core",
     "//chrome/browser/ash/power/ml/smart_dim",
     "//chrome/browser/ash/printing",
@@ -49,20 +47,22 @@ static_library("autotest_private") {
     "//chrome/browser/ash/system",
     "//chrome/browser/ash/system_web_apps",
     "//chrome/browser/banners",
+    "//chrome/browser/component_updater",
     "//chrome/browser/signin",
     "//chrome/browser/ui/aura/accessibility",
     "//chrome/browser/ui/toolbar",
     "//chrome/browser/ui/views/bruschetta",
     "//chrome/browser/ui/views/crostini",
-    "//chrome/browser/ui/views/plugin_vm",
     "//chrome/browser/ui/web_applications",
     "//chrome/browser/ui/webui/ash/crostini_installer",
     "//chrome/common",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/dbus",
     "//chromeos/ash/components/dbus/session_manager",
     "//chromeos/ash/components/default_pinned_apps",
     "//chromeos/ash/components/metrics",
     "//chromeos/ash/components/settings",
+    "//chromeos/ash/components/signin:identity_manager_provider",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc/mojom",
     "//chromeos/ash/services/assistant/public/cpp",
@@ -120,6 +120,7 @@ source_set("browser_tests") {
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/app_list/search",
     "//chrome/browser/ash/app_list/search/test:browser_test_support",
     "//chrome/browser/ash/app_list/search/test:test_support",

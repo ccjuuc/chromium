@@ -74,7 +74,7 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
 
   const base::Version& version() const { return version_; }
 
-  const base::Value::Dict& manifest() const { return manifest_; }
+  const base::DictValue& manifest() const { return manifest_; }
 
   const base::FilePath& GetPath() const {
     return component_install_dir_.GetPath();
@@ -147,7 +147,9 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
   }
 
   void VerifyRankedDicts() {
-    zxcvbn::RankedDicts& ranked_dicts = zxcvbn::default_ranked_dicts();
+    scoped_refptr<zxcvbn::RefCountedRankedDicts> dicts_ref =
+        zxcvbn::default_ranked_dicts();
+    const zxcvbn::RankedDicts& ranked_dicts = dicts_ref->Data();
     EXPECT_EQ(ranked_dicts.Find("english"), 1UL);
     EXPECT_EQ(ranked_dicts.Find("wikipedia"), 2UL);
     EXPECT_EQ(ranked_dicts.Find("female"), 1UL);
@@ -165,7 +167,7 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
  private:
   base::test::TaskEnvironment task_env_;
   base::Version version_;
-  base::Value::Dict manifest_;
+  base::DictValue manifest_;
   ZxcvbnDataComponentInstallerPolicy policy_;
   base::ScopedTempDir component_install_dir_;
 };
@@ -205,7 +207,7 @@ TEST_F(ZxcvbnDataComponentInstallerPolicyTest,
 TEST_F(ZxcvbnDataComponentInstallerPolicyTest,
        VerifyInstallationExpectsValidVersion) {
   // Verification fails for a missing version.
-  EXPECT_FALSE(policy().VerifyInstallation(base::Value::Dict(), GetPath()));
+  EXPECT_FALSE(policy().VerifyInstallation(base::DictValue(), GetPath()));
 
   // Verification fails for an invalid version.
   SetVersion("1.x2");
@@ -217,7 +219,8 @@ TEST_F(ZxcvbnDataComponentInstallerPolicyTest, ComponentReadyForMissingFiles) {
   policy().ComponentReady(version(), GetPath(), manifest().Clone());
   task_env().RunUntilIdle();
 
-  EXPECT_FALSE(zxcvbn::default_ranked_dicts().Find("english").has_value());
+  EXPECT_FALSE(
+      zxcvbn::default_ranked_dicts()->Data().Find("english").has_value());
 }
 
 // Tests that ComponentReady reads in the file contents and properly populates

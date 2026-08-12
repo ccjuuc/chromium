@@ -9,7 +9,6 @@
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -29,13 +28,15 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
-#include "extensions/browser/extension_util.h"
 #include "extensions/browser/image_loader.h"
+#include "extensions/browser/ui_util.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/permissions/permission_message.h"
+#include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -132,7 +133,7 @@ int ExtensionDisabledGlobalError::MenuItemCommandID() {
 
 std::u16string ExtensionDisabledGlobalError::MenuItemLabel() {
   std::u16string extension_name =
-      util::GetFixupExtensionNameForUIDisplay(extension_->name());
+      ui_util::GetFixupExtensionNameForUIDisplay(extension_->name());
   // Ampersands need to be escaped to avoid being treated like
   // mnemonics in the menu.
   base::ReplaceChars(extension_name, u"&", u"&&", &extension_name);
@@ -149,7 +150,7 @@ void ExtensionDisabledGlobalError::ExecuteMenuItem(Browser* browser) {
 
 std::u16string ExtensionDisabledGlobalError::GetBubbleViewTitle() {
   std::u16string extension_name =
-      util::GetFixupExtensionNameForUIDisplay(extension_->name());
+      ui_util::GetFixupExtensionNameForUIDisplay(extension_->name());
   return l10n_util::GetStringFUTF16(
       is_remote_install_ ? IDS_EXTENSION_DISABLED_REMOTE_INSTALL_ERROR_TITLE
                          : IDS_EXTENSION_DISABLED_ERROR_TITLE,
@@ -162,6 +163,13 @@ ExtensionDisabledGlobalError::GetBubbleViewMessages() {
 
   std::unique_ptr<const PermissionSet> granted_permissions =
       ExtensionPrefs::Get(profile_)->GetGrantedPermissions(extension_->id());
+  // The granted-permissions pref may be missing or malformed (observed during
+  // install/uninstall/update races and on corrupted profiles). Fall back to an
+  // empty set so all current permissions are treated as newly granted, rather
+  // than dereferencing a null pointer.
+  if (!granted_permissions) {
+    granted_permissions = std::make_unique<PermissionSet>();
+  }
 
   PermissionMessages permission_warnings =
       extension_->permissions_data()->GetNewPermissionMessages(
@@ -218,9 +226,9 @@ void ExtensionDisabledGlobalError::BubbleViewAcceptButtonPressed(
 void ExtensionDisabledGlobalError::BubbleViewCancelButtonPressed(
     Browser* browser) {
   uninstall_dialog_ = ExtensionUninstallDialog::Create(
-      profile_, browser->window()->GetNativeWindow(), this);
+      profile_, browser->GetWindow()->GetNativeWindow(), this);
   // Delay showing the uninstall dialog, so that this function returns
-  // immediately, to close the bubble properly. See crbug.com/121544.
+  // immediately, to close the bubble properly. See crbug.com/40184398.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&ExtensionUninstallDialog::ConfirmUninstall,
                                 uninstall_dialog_->AsWeakPtr(),

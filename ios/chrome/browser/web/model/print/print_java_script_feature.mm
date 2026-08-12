@@ -22,8 +22,7 @@ PrintJavaScriptFeature::PrintJavaScriptFeature()
               kScriptName,
               FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kAllFrames,
-              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)},
-          {web::java_script_features::GetCommonJavaScriptFeature()}) {}
+              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)}) {}
 
 PrintJavaScriptFeature::~PrintJavaScriptFeature() = default;
 
@@ -43,7 +42,7 @@ void PrintJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  PrintTabHelper* helper = PrintTabHelper::GetOrCreateForWebState(web_state);
+  PrintTabHelper* helper = PrintTabHelper::FromWebState(web_state);
   if (!helper) {
     return;
   }

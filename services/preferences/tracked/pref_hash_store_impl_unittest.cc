@@ -19,6 +19,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/enterprise_util.h"
+#include "base/memory/scoped_refptr.h"
 #endif
 
 namespace {
@@ -52,8 +53,13 @@ class PrefHashStoreImplTest : public testing::Test {
  protected:
   HashStoreContents* GetHashStoreContents() { return &contents_; }
 
+  static void FilterEncryptedHashesRecursive(const base::DictValue& src,
+                                             base::DictValue& dest) {
+    PrefHashStoreImpl::FilterEncryptedHashesRecursive(src, dest);
+  }
+
  private:
-  base::Value::Dict pref_store_contents_;
+  base::DictValue pref_store_contents_;
   // Must be declared after |pref_store_contents_| as it needs to be outlived
   // by it.
   DictionaryHashStoreContents contents_;
@@ -62,7 +68,7 @@ class PrefHashStoreImplTest : public testing::Test {
 TEST_F(PrefHashStoreImplTest, ComputeMac) {
   base::Value string_1("string1");
   base::Value string_2("string2");
-  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
 
   std::string computed_mac_1 = pref_hash_store.ComputeMac("path1", &string_1);
   std::string computed_mac_2 = pref_hash_store.ComputeMac("path1", &string_2);
@@ -77,14 +83,14 @@ TEST_F(PrefHashStoreImplTest, ComputeMac) {
 }
 
 TEST_F(PrefHashStoreImplTest, ComputeSplitMacs) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("a", "string1");
   dict.Set("b", "string2");
   // Verify that dictionary keys can contain a '.' delimiter.
   dict.Set("http://www.example.com", "string3");
-  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
 
-  base::Value::Dict computed_macs =
+  base::DictValue computed_macs =
       pref_hash_store.ComputeSplitMacs("foo.bar", &dict);
 
   const std::string mac_1 = computed_macs.Find("a")->GetString();
@@ -105,11 +111,39 @@ TEST_F(PrefHashStoreImplTest, ComputeSplitMacs) {
 }
 
 TEST_F(PrefHashStoreImplTest, ComputeNullSplitMacs) {
-  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
-  base::Value::Dict computed_macs =
+  PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
+  base::DictValue computed_macs =
       pref_hash_store.ComputeSplitMacs("foo.bar", nullptr);
 
   EXPECT_TRUE(computed_macs.empty());
+}
+
+TEST_F(PrefHashStoreImplTest, FilterEncryptedHashesRecursive) {
+  base::DictValue src;
+  src.Set("pref1", "value1");
+  src.Set("pref2_encrypted_hash", "hash2");
+
+  base::DictValue nested;
+  nested.Set("pref3", "value3");
+  nested.Set("pref4_encrypted_hash", "hash4");
+  src.Set("nested", std::move(nested));
+
+  base::DictValue dest;
+  FilterEncryptedHashesRecursive(src, dest);
+
+  EXPECT_FALSE(dest.Find("pref1"));
+  ASSERT_TRUE(dest.Find("pref2_encrypted_hash"));
+  EXPECT_EQ("hash2", dest.Find("pref2_encrypted_hash")->GetString());
+
+  const base::Value* dest_nested_val = dest.Find("nested");
+  ASSERT_TRUE(dest_nested_val);
+  ASSERT_TRUE(dest_nested_val->is_dict());
+
+  const auto& dest_nested_dict = dest_nested_val->GetDict();
+  EXPECT_FALSE(dest_nested_dict.Find("pref3"));
+  ASSERT_TRUE(dest_nested_dict.Find("pref4_encrypted_hash"));
+  EXPECT_EQ("hash4",
+            dest_nested_dict.Find("pref4_encrypted_hash")->GetString());
 }
 
 TEST_F(PrefHashStoreImplTest, AtomicHashStoreAndCheck) {
@@ -118,7 +152,7 @@ TEST_F(PrefHashStoreImplTest, AtomicHashStoreAndCheck) {
 
   {
     // 32 NULL bytes is the seed that was used to generate the legacy hash.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
@@ -137,7 +171,7 @@ TEST_F(PrefHashStoreImplTest, AtomicHashStoreAndCheck) {
     EXPECT_EQ(ValueState::CHANGED, transaction->CheckValue("path1", &string_2));
 
     base::Value dict_val(base::Value::Type::DICT);
-    base::Value::Dict& dict = dict_val.GetDict();
+    base::DictValue& dict = dict_val.GetDict();
     dict.Set("a", "foo");
     dict.Set("d", "bad");
     dict.Set("b", "bar");
@@ -153,7 +187,7 @@ TEST_F(PrefHashStoreImplTest, AtomicHashStoreAndCheck) {
   {
     // |pref_hash_store| should trust its initial hashes dictionary and thus
     // trust new unknown values.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(ValueState::TRUSTED_UNKNOWN_VALUE,
@@ -170,7 +204,7 @@ TEST_F(PrefHashStoreImplTest, AtomicHashStoreAndCheck) {
   {
     // |pref_hash_store| should no longer trust its initial hashes dictionary
     // and thus shouldn't trust non-NULL unknown values.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(ValueState::UNTRUSTED_UNKNOWN_VALUE,
@@ -188,7 +222,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Initial state: no super MAC.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_FALSE(transaction->IsSuperMACValid());
@@ -213,7 +247,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Verify that the super MAC was stamped.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_TRUE(transaction->IsSuperMACValid());
@@ -232,7 +266,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Verify that validity was preserved and that the clear took effect.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_TRUE(transaction->IsSuperMACValid());
@@ -243,7 +277,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
   GetHashStoreContents()->SetSuperMac(std::string());
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_FALSE(transaction->IsSuperMACValid());
@@ -261,7 +295,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Verify that invalidity was preserved and that the import took effect.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_FALSE(transaction->IsSuperMACValid());
@@ -279,7 +313,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
   }
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_FALSE(transaction->IsSuperMACValid());
@@ -290,7 +324,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Verify that the store is now valid.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_TRUE(transaction->IsSuperMACValid());
@@ -303,7 +337,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
   }
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_TRUE(transaction->IsSuperMACValid());
@@ -317,7 +351,7 @@ TEST_F(PrefHashStoreImplTest, ImportExportOperations) {
 
   // Verify that validity was preserved and the "over-import" took effect.
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     ASSERT_TRUE(transaction->IsSuperMACValid());
@@ -333,7 +367,7 @@ TEST_F(PrefHashStoreImplTest, SuperMACDisabled) {
 
   {
     // Pass |use_super_mac| => false.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), false);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), false, false);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
@@ -343,9 +377,10 @@ TEST_F(PrefHashStoreImplTest, SuperMACDisabled) {
   }
 
   ASSERT_TRUE(GetHashStoreContents()->GetSuperMac().empty());
+  EXPECT_TRUE(GetHashStoreContents()->GetSuperEncryptedHash().empty());
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), false);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), false, false);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(ValueState::UNTRUSTED_UNKNOWN_VALUE,
@@ -353,23 +388,43 @@ TEST_F(PrefHashStoreImplTest, SuperMACDisabled) {
   }
 }
 
+TEST_F(PrefHashStoreImplTest, SuperEncryptedHashDisabled) {
+  base::Value string_1("string1");
+
+  {
+    // Pass |use_super_mac| => true, |use_super_encrypted_hash| => false.
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, false);
+    std::unique_ptr<PrefHashStoreTransaction> transaction(
+        pref_hash_store.BeginTransaction(GetHashStoreContents()));
+
+    transaction->StoreHash("path1", &string_1);
+    EXPECT_EQ(ValueState::UNCHANGED,
+              transaction->CheckValue("path1", &string_1));
+  }
+
+  // SuperMAC should be stored.
+  EXPECT_FALSE(GetHashStoreContents()->GetSuperMac().empty());
+  // SuperEncryptedHash should NOT be stored.
+  EXPECT_TRUE(GetHashStoreContents()->GetSuperEncryptedHash().empty());
+}
+
 TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("a", base::Value("to be replaced"));
   dict.Set("unchanged.path.with.dots", base::Value("same"));
   dict.Set("o", base::Value("old"));
 
-  base::Value::Dict modified_dict;
+  base::DictValue modified_dict;
   modified_dict.Set("a", base::Value("replaced"));
   modified_dict.Set("unchanged.path.with.dots", base::Value("same"));
   modified_dict.Set("c", base::Value("new"));
 
-  base::Value::Dict empty_dict;
+  base::DictValue empty_dict;
 
   std::vector<std::string> invalid_keys;
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
@@ -452,7 +507,7 @@ TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
   {
     // |pref_hash_store| should trust its initial hashes dictionary and thus
     // trust new unknown values.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(ValueState::TRUSTED_UNKNOWN_VALUE,
@@ -461,7 +516,7 @@ TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
   }
   {
     // Check the same as above for a path with dots.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(
@@ -476,7 +531,7 @@ TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
   {
     // |pref_hash_store| should no longer trust its initial hashes dictionary
     // and thus shouldn't trust unknown values.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(ValueState::UNTRUSTED_UNKNOWN_VALUE,
@@ -485,7 +540,7 @@ TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
   }
   {
     // Check the same as above for a path with dots.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     EXPECT_EQ(
@@ -496,17 +551,17 @@ TEST_F(PrefHashStoreImplTest, SplitHashStoreAndCheck) {
 }
 
 TEST_F(PrefHashStoreImplTest, EmptyAndNULLSplitDict) {
-  base::Value::Dict empty_dict;
+  base::DictValue empty_dict;
 
   std::vector<std::string> invalid_keys;
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
     // Store hashes for a random dict to be overwritten below.
-    base::Value::Dict initial_dict;
+    base::DictValue initial_dict;
     initial_dict.Set("a", "foo");
     transaction->StoreSplitHash("path1", &initial_dict);
 
@@ -535,11 +590,11 @@ TEST_F(PrefHashStoreImplTest, EmptyAndNULLSplitDict) {
     // the hashes for path1 by setting its value to NULL (this is a regression
     // test ensuring that the internal action of clearing some hashes does
     // update the stored hash of hashes).
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
-    base::Value::Dict tested_dict;
+    base::DictValue tested_dict;
     tested_dict.Set("a", "foo");
     tested_dict.Set("b", "bar");
     EXPECT_EQ(
@@ -558,14 +613,14 @@ TEST_F(PrefHashStoreImplTest, EmptyAndNULLSplitDict) {
 TEST_F(PrefHashStoreImplTest, TrustedUnknownSplitValueFromExistingAtomic) {
   base::Value string("string1");
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("a", "foo");
   dict.Set("d", "bad");
   dict.Set("b", "bar");
   dict.Set("c", "baz");
 
   {
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
 
@@ -575,7 +630,7 @@ TEST_F(PrefHashStoreImplTest, TrustedUnknownSplitValueFromExistingAtomic) {
 
   {
     // Load a new |pref_hash_store| in which the hashes dictionary is trusted.
-    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true);
+    PrefHashStoreImpl pref_hash_store(std::string(32, 0), true, true);
     std::unique_ptr<PrefHashStoreTransaction> transaction(
         pref_hash_store.BeginTransaction(GetHashStoreContents()));
     std::vector<std::string> invalid_keys;
@@ -590,15 +645,17 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
   const std::string kSeed = "test_seed_store_encrypted";
 
   PrefHashStoreImplEncryptedTest()
-      : hash_store_(kSeed, /*use_super_mac=*/true),
+      : hash_store_(kSeed,
+                    /*use_super_mac=*/true,
+                    /*use_super_encrypted_hash=*/true),
         test_encryptor_(os_crypt_async::GetTestEncryptorForTesting()),
         dictionary_contents_(pref_store_contents_) {}
 
  protected:
   std::unique_ptr<PrefHashStoreTransaction> BeginTransaction(
       bool with_encryptor) {
-    const os_crypt_async::Encryptor* encryptor_arg =
-        with_encryptor ? &test_encryptor_ : nullptr;
+    scoped_refptr<const os_crypt_async::Encryptor> encryptor_arg =
+        with_encryptor ? test_encryptor_ : nullptr;
     return hash_store_.BeginTransaction(&dictionary_contents_, encryptor_arg);
   }
 
@@ -653,7 +710,7 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
 
   void MakeSuperMACInvalid() { dictionary_contents_.SetSuperMac("invalid"); }
   void MakeSuperMACValid() {
-    const base::Value::Dict* macs_dict = GetCurrentDictionaryContents();
+    const base::DictValue* macs_dict = GetCurrentDictionaryContents();
     std::string valid_super_mac;
     if (macs_dict) {
       base::Value dict_value_wrapper(macs_dict->Clone());
@@ -675,11 +732,11 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
   }
 
   void SeedSplitMacs(const std::string& path,
-                     const base::Value::Dict* dict_to_hash) {
+                     const base::DictValue* dict_to_hash) {
     // Remove any existing entry at this path (atomic or old split dict)
     dictionary_contents_.RemoveEntry(path);
     if (dict_to_hash) {
-      base::Value::Dict macs = hash_store_.ComputeSplitMacs(path, dict_to_hash);
+      base::DictValue macs = hash_store_.ComputeSplitMacs(path, dict_to_hash);
       for (const auto item : macs) {
         if (item.second.is_string()) {
           dictionary_contents_.SetSplitMac(path, item.first,
@@ -690,7 +747,7 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
   }
 
   void SeedSplitEncryptedHashes(const std::string& path,
-                                const base::Value::Dict* computed_hashes_dict) {
+                                const base::DictValue* computed_hashes_dict) {
     std::string enc_base_key = GetSplitEncKeyBase(path);
     dictionary_contents_.RemoveEntry(
         enc_base_key);  // Remove potentially conflicting atomic entry
@@ -709,13 +766,12 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
   // Seeds split encrypted hashes by computing them first.
   void SeedSplitEncryptedHashesFromValues(
       const std::string& path,
-      const base::Value::Dict* values_to_hash) {
+      const base::DictValue* values_to_hash) {
     std::string enc_base_key = GetSplitEncKeyBase(path);
     dictionary_contents_.RemoveEntry(enc_base_key);
     if (values_to_hash) {
-      base::Value::Dict computed_hashes =
-          hash_store_.ComputeSplitEncryptedHashes(path, values_to_hash,
-                                                  &test_encryptor_);
+      base::DictValue computed_hashes = hash_store_.ComputeSplitEncryptedHashes(
+          path, values_to_hash, test_encryptor_.get());
       for (auto item : computed_hashes) {
         if (item.second.is_string()) {
           dictionary_contents_.SetSplitMac(enc_base_key, item.first,
@@ -725,15 +781,33 @@ class PrefHashStoreImplEncryptedTest : public testing::Test {
     }
   }
 
-  const base::Value::Dict* GetCurrentDictionaryContents() {
+  const base::DictValue* GetCurrentDictionaryContents() {
     return dictionary_contents_.GetContents();
   }
 
   PrefHashStoreImpl hash_store_;
-  os_crypt_async::Encryptor test_encryptor_;
-  base::Value::Dict pref_store_contents_;
+  scoped_refptr<os_crypt_async::Encryptor> test_encryptor_;
+  base::DictValue pref_store_contents_;
   DictionaryHashStoreContents dictionary_contents_;
 };
+
+TEST_F(PrefHashStoreImplEncryptedTest, SuperEncryptedHashOnly) {
+  base::Value value("test_value");
+  std::string path = "test.pref";
+
+  {
+    // Pass |use_super_mac| => false, |use_super_encrypted_hash| => true.
+    PrefHashStoreImpl local_hash_store(kSeed, false, true);
+    auto tx = local_hash_store.BeginTransaction(&dictionary_contents_,
+                                                test_encryptor_);
+    tx->StoreEncryptedHash(path, &value);
+  }
+
+  // SuperMAC should NOT be stored.
+  EXPECT_TRUE(dictionary_contents_.GetSuperMac().empty());
+  // SuperEncryptedHash should be stored.
+  EXPECT_FALSE(dictionary_contents_.GetSuperEncryptedHash().empty());
+}
 
 TEST_F(PrefHashStoreImplEncryptedTest, StoreAndGetHashes) {
   base::Value value("test_value");
@@ -767,6 +841,30 @@ TEST_F(PrefHashStoreImplEncryptedTest, StoreAndGetHashes) {
     EXPECT_EQ(stored_mac, tx->GetMac(path));
     EXPECT_EQ(stored_enc_b64, tx->GetEncryptedHash(path));
   }
+}
+
+TEST_F(PrefHashStoreImplEncryptedTest, SuperEncryptedHashDualWrite) {
+  base::Value value("test_value");
+  std::string path = "test_pref";
+
+  {
+    auto tx = BeginTransaction(/*with_encryptor=*/true);
+    tx->StoreEncryptedHash(path, &value);
+  }
+
+  std::string super_encrypted_hash =
+      dictionary_contents_.GetSuperEncryptedHash();
+  EXPECT_FALSE(super_encrypted_hash.empty());
+
+  // Verify that it is NOT written if encryptor is missing and we start fresh.
+  base::DictValue fresh_store_contents;
+  DictionaryHashStoreContents fresh_contents(fresh_store_contents);
+  {
+    auto tx = hash_store_.BeginTransaction(&fresh_contents, nullptr);
+    tx->StoreHash(path, &value);
+  }
+  std::string hash = fresh_contents.GetSuperEncryptedHash();
+  EXPECT_TRUE(hash.empty()) << "Hash was not empty! Value: " << hash;
 }
 
 TEST_F(PrefHashStoreImplEncryptedTest, StoreHashOnly) {
@@ -943,8 +1041,8 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
   // Helper lambda to run a specific test case scenario
   auto run_scenario =
       [&](const std::string& scenario_name,
-          const base::Value::Dict* current_pref_dict_ptr,
-          const base::Value::Dict& original_values_for_hashing,
+          const base::DictValue* current_pref_dict_ptr,
+          const base::DictValue& original_values_for_hashing,
           ValueState expected_state,
           const std::vector<std::string>& expected_invalid_key_list) {
         SCOPED_TRACE("Scenario: " + scenario_name);
@@ -955,9 +1053,9 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
         MakeSuperMACInvalid();
         // 1. Seed the encrypted hashes into dictionary_contents_
         // These are the "stored" hashes.
-        base::Value::Dict computed_split_encrypted_hashes =
+        base::DictValue computed_split_encrypted_hashes =
             hash_store_.ComputeSplitEncryptedHashes(
-                kPrefPath, &original_values_for_hashing, &test_encryptor_);
+                kPrefPath, &original_values_for_hashing, test_encryptor_.get());
         SeedSplitEncryptedHashes(kPrefPath, &computed_split_encrypted_hashes);
 
         // 2. Ensure no MACs are present for this path to isolate the encrypted
@@ -982,54 +1080,54 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
   // --- These tests are triggered when an encryptor_ is present ---
 
   // Scenario E1: All Keys Match, Hashes Valid
-  base::Value::Dict s1_prefs_and_hashes;
+  base::DictValue s1_prefs_and_hashes;
   s1_prefs_and_hashes.Set("key1", "value1");
   s1_prefs_and_hashes.Set("key2", "value2");
   run_scenario("E1_AllValid", &s1_prefs_and_hashes, s1_prefs_and_hashes,
                ValueState::UNCHANGED_ENCRYPTED, {});
 
   // Scenario E2: Value Changed for One Key (Hash Invalid)
-  base::Value::Dict s2_current_prefs;
+  base::DictValue s2_current_prefs;
   s2_current_prefs.Set("key1", "value1_MODIFIED");
   s2_current_prefs.Set("key2", "value2");
-  base::Value::Dict s2_original_hashes;
+  base::DictValue s2_original_hashes;
   s2_original_hashes.Set("key1", "value1");
   s2_original_hashes.Set("key2", "value2");
   run_scenario("E2_OneValueChanged", &s2_current_prefs, s2_original_hashes,
                ValueState::CHANGED_ENCRYPTED, {"key1"});
 
   // Scenario E3: Key Added in Value (Not in Stored Hashes)
-  base::Value::Dict s3_current_prefs;
+  base::DictValue s3_current_prefs;
   s3_current_prefs.Set("key1", "value1");
   s3_current_prefs.Set("key2", "value2");
-  base::Value::Dict s3_original_hashes;
+  base::DictValue s3_original_hashes;
   s3_original_hashes.Set("key1", "value1");
   run_scenario("E3_KeyAddedInValue", &s3_current_prefs, s3_original_hashes,
                ValueState::CHANGED_ENCRYPTED, {"key2"});
 
   // Scenario E4: Key Removed from Value (Present in Stored Hashes)
-  base::Value::Dict s4_current_prefs;
+  base::DictValue s4_current_prefs;
   s4_current_prefs.Set("key1", "value1");
-  base::Value::Dict s4_original_hashes;
+  base::DictValue s4_original_hashes;
   s4_original_hashes.Set("key1", "value1");
   s4_original_hashes.Set("key2", "value2");
   run_scenario("E4_KeyRemovedFromValue", &s4_current_prefs, s4_original_hashes,
                ValueState::CHANGED_ENCRYPTED, {"key2"});
 
   // Scenario E5: Multiple Invalidities (Value Change, Key Added, Key Removed)
-  base::Value::Dict s5_current_prefs;
+  base::DictValue s5_current_prefs;
   s5_current_prefs.Set("keyA", "valueA_MODIFIED");
   s5_current_prefs.Set("keyC", "valueC");
-  base::Value::Dict s5_original_hashes;
+  base::DictValue s5_original_hashes;
   s5_original_hashes.Set("keyA", "valueA");
   s5_original_hashes.Set("keyB", "valueB");
   run_scenario("E5_MultipleInvalidities", &s5_current_prefs, s5_original_hashes,
                ValueState::CHANGED_ENCRYPTED, {"keyA", "keyB", "keyC"});
 
   // Scenario E6: Initial Value is Empty, Stored Encrypted Hashes Exist
-  base::Value::Dict s6_original_hashes;
+  base::DictValue s6_original_hashes;
   s6_original_hashes.Set("key1", "value1");
-  base::Value::Dict s6_empty_current_prefs;
+  base::DictValue s6_empty_current_prefs;
   run_scenario("E6_EmptyValue_HashesExist", &s6_empty_current_prefs,
                s6_original_hashes, ValueState::CLEARED_ENCRYPTED, {"key1"});
 
@@ -1039,9 +1137,9 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
 
   // --- Scenario E7: Initial Value Exists, No Stored Encrypted Hashes (empty
   // map of seed hashes) ---
-  base::Value::Dict s7_current_prefs;
+  base::DictValue s7_current_prefs;
   s7_current_prefs.Set("key1", "value1");
-  base::Value::Dict s7_empty_original_hashes;
+  base::DictValue s7_empty_original_hashes;
   run_scenario("E7_ValueExists_NoHashesStored", &s7_current_prefs,
                s7_empty_original_hashes, ValueState::UNTRUSTED_UNKNOWN_VALUE,
                {});
@@ -1054,7 +1152,7 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
     actual_invalid_keys.clear();
     MakeSuperMACInvalid();
 
-    base::Value::Dict s8_current_prefs;
+    base::DictValue s8_current_prefs;
     s8_current_prefs.Set("keyA", "valueA");
     s8_current_prefs.Set("keyB", "valueB");
 
@@ -1062,7 +1160,7 @@ TEST_F(PrefHashStoreImplEncryptedTest, CheckSplitValueEncryptedPathValidation) {
     //    at the correct nested path within pref_store_contents_.
     std::string enc_base_key_for_split = GetSplitEncKeyBase(kPrefPath);
     std::string full_dotted_path = "protection.macs." + enc_base_key_for_split;
-    pref_store_contents_.SetByDottedPath(full_dotted_path, base::Value::Dict());
+    pref_store_contents_.SetByDottedPath(full_dotted_path, base::DictValue());
     // ^^^ Creates an empty dictionary at the full path
 
     // 2. Ensure no MACs are present for this path
@@ -1088,31 +1186,31 @@ TEST_F(PrefHashStoreImplEncryptedTest, ComputeSplitEncryptedHashes) {
   const std::string kBasePath = "my.split.pref";
 
   // Scenario 1: Null split_values
-  base::Value::Dict result1 = hash_store_.ComputeSplitEncryptedHashes(
-      kBasePath, nullptr, &test_encryptor_);
+  base::DictValue result1 = hash_store_.ComputeSplitEncryptedHashes(
+      kBasePath, nullptr, test_encryptor_.get());
   EXPECT_TRUE(result1.empty());
 
   // Scenario 2: Empty split_values dictionary
-  base::Value::Dict empty_dict;
-  base::Value::Dict result2 = hash_store_.ComputeSplitEncryptedHashes(
-      kBasePath, &empty_dict, &test_encryptor_);
+  base::DictValue empty_dict;
+  base::DictValue result2 = hash_store_.ComputeSplitEncryptedHashes(
+      kBasePath, &empty_dict, test_encryptor_.get());
   EXPECT_TRUE(result2.empty());
 
   // Scenario 3: Null encryptor
-  base::Value::Dict input_dict3;
+  base::DictValue input_dict3;
   input_dict3.Set("key1", "value1");
-  base::Value::Dict result3 =
+  base::DictValue result3 =
       hash_store_.ComputeSplitEncryptedHashes(kBasePath, &input_dict3, nullptr);
   EXPECT_TRUE(result3.empty());
 
   // Scenario 4: Valid split_values and encryptor - Functional Test
-  base::Value::Dict input_dict4;
+  base::DictValue input_dict4;
   input_dict4.Set("sub1", "alpha");
   input_dict4.Set("sub2", 123);
 
-  base::Value::Dict computed_hashes_for_dict4 =
+  base::DictValue computed_hashes_for_dict4 =
       hash_store_.ComputeSplitEncryptedHashes(kBasePath, &input_dict4,
-                                              &test_encryptor_);
+                                              test_encryptor_.get());
 
   // Assertions for Scenario 4: Check structure and functional validity
   ASSERT_EQ(2u, computed_hashes_for_dict4.size());
@@ -1140,15 +1238,15 @@ TEST_F(PrefHashStoreImplEncryptedTest, ComputeSplitEncryptedHashes) {
   // Scenario 5: One sub-item is binary
   // Assuming production code hashes non-serializable (like binary) as if it
   // were an empty string.
-  base::Value::Dict input_dict5;
+  base::DictValue input_dict5;
   input_dict5.Set("good_key1", "good_value1");
   std::vector<uint8_t> binary_data = {0, 1, 2};
   input_dict5.Set("bad_key_binary", base::Value(binary_data));
   input_dict5.Set("good_key2", "another_value");
 
-  base::Value::Dict computed_hashes_for_dict5 =
+  base::DictValue computed_hashes_for_dict5 =
       hash_store_.ComputeSplitEncryptedHashes(kBasePath, &input_dict5,
-                                              &test_encryptor_);
+                                              test_encryptor_.get());
 
   // Assertions for Scenario 5 - EXPECTING bad_key_binary TO BE HASHED
   ASSERT_EQ(3u, computed_hashes_for_dict5.size())
@@ -1186,13 +1284,13 @@ TEST_F(PrefHashStoreImplEncryptedTest, ComputeSplitEncryptedHashes) {
 // For PrefHashStoreImpl::ComputeEncryptedHash(..., Dict*, ...)
 TEST_F(PrefHashStoreImplEncryptedTest, ComputeEncryptedHash_ForDict_Success) {
   const std::string kPath = "test.dict.pref.compute";
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set("d_key1", "d_value1");
   test_dict.Set("d_key2", 456);
 
   // Assuming test_encryptor_instance_ works by default.
-  std::string encrypted_hash_str =
-      hash_store_.ComputeEncryptedHash(kPath, &test_dict, &test_encryptor_);
+  std::string encrypted_hash_str = hash_store_.ComputeEncryptedHash(
+      kPath, &test_dict, test_encryptor_.get());
   EXPECT_FALSE(encrypted_hash_str.empty());
   std::string decoded_once;
   EXPECT_TRUE(base::Base64Decode(encrypted_hash_str, &decoded_once))
@@ -1222,13 +1320,13 @@ TEST_F(PrefHashStoreImplEncryptedTest,
 TEST_F(PrefHashStoreImplEncryptedTest,
        CheckSplitValue_EncryptorOn_KeyPresentInStoreMissingInValue) {
   const std::string kPath = "split.eh.key_removed_from_value";
-  base::Value::Dict original_seeded_values;
+  base::DictValue original_seeded_values;
   original_seeded_values.Set("keyA", "valA");
   original_seeded_values.Set("keyB_in_store_only", "valB");
   SeedSplitEncryptedHashesFromValues(kPath, &original_seeded_values);
   SeedSplitMacs(kPath, nullptr);
 
-  base::Value::Dict current_pref_dict;
+  base::DictValue current_pref_dict;
   current_pref_dict.Set("keyA", "valA");
 
   auto tx = BeginTransaction(/*with_encryptor=*/true);
@@ -1244,13 +1342,13 @@ TEST_F(PrefHashStoreImplEncryptedTest,
 TEST_F(PrefHashStoreImplEncryptedTest,
        CheckSplitValue_NoEncryptor_EHExists_NoMACs_ResultsInUntrusted) {
   const std::string kPath = "split.no_encryptor.only_eh_unusable";
-  base::Value::Dict values_for_eh;
+  base::DictValue values_for_eh;
   values_for_eh.Set("key1", "value1");
   SeedSplitEncryptedHashesFromValues(kPath, &values_for_eh);
   SeedSplitMacs(kPath, nullptr);
   MakeSuperMACInvalid();
 
-  base::Value::Dict current_pref_dict = values_for_eh.Clone();
+  base::DictValue current_pref_dict = values_for_eh.Clone();
 
   auto tx = BeginTransaction(/*with_encryptor=*/false);
   std::vector<std::string> invalid_keys;
@@ -1264,18 +1362,18 @@ TEST_F(PrefHashStoreImplEncryptedTest,
 TEST_F(PrefHashStoreImplEncryptedTest,
        CheckSplitValue_NoEncryptor_EHAndMACsExist_UsesMACs) {
   const std::string kPath = "split.no_encryptor.eh_and_macs";
-  base::Value::Dict base_values;
+  base::DictValue base_values;
   base_values.Set("key1", "value1");
   base_values.Set("key2", "value2");
 
-  base::Value::Dict eh_seed_values;
+  base::DictValue eh_seed_values;
   eh_seed_values.Set("key1", "value1");
   SeedSplitEncryptedHashesFromValues(kPath, &eh_seed_values);
 
   SeedSplitMacs(kPath, &base_values);
   MakeSuperMACInvalid();
 
-  base::Value::Dict current_pref_dict1 = base_values.Clone();
+  base::DictValue current_pref_dict1 = base_values.Clone();
   {
     auto tx = BeginTransaction(/*with_encryptor=*/false);
     std::vector<std::string> invalid_keys;
@@ -1286,7 +1384,7 @@ TEST_F(PrefHashStoreImplEncryptedTest,
     EXPECT_TRUE(invalid_keys.empty());
   }
 
-  base::Value::Dict current_pref_dict2 = base_values.Clone();
+  base::DictValue current_pref_dict2 = base_values.Clone();
   current_pref_dict2.Set("key2", "value2_changed");
   {
     auto tx = BeginTransaction(/*with_encryptor=*/false);
@@ -1363,7 +1461,7 @@ TEST_F(PrefHashStoreImplEncryptedTest,
     auto tx = BeginTransaction(/*with_encryptor=*/true);
     ASSERT_TRUE(tx->IsSuperMACValid());
 
-    base::Value::Dict dict_to_import_data;
+    base::DictValue dict_to_import_data;
     dict_to_import_data.Set(kImportMacKey, "imported_dict_mac");
     base::Value value_for_import(dict_to_import_data.Clone());
     tx->ImportHash(kPath, &value_for_import);
@@ -1385,7 +1483,7 @@ TEST_F(PrefHashStoreImplEncryptedTest,
     auto tx = BeginTransaction(/*with_encryptor=*/true);
     ASSERT_TRUE(tx->IsSuperMACValid());
 
-    base::Value::Dict dict_to_import_data;
+    base::DictValue dict_to_import_data;
     dict_to_import_data.Set(kImportEncryptedHashKey, "imported_dict_eh_b64");
     base::Value value_for_import(dict_to_import_data.Clone());
     tx->ImportHash(kPath, &value_for_import);
@@ -1413,7 +1511,7 @@ TEST_F(
   EXPECT_TRUE(tx->StampSuperMac())
       << "First stamp will always be true if use_super_mac is on.";
 
-  base::Value::Dict dict_to_import_data;
+  base::DictValue dict_to_import_data;
   dict_to_import_data.Set("some_other_key", "some_value");
   base::Value value_for_import(dict_to_import_data.Clone());
   tx->ImportHash(kPath, &value_for_import);
@@ -1509,12 +1607,12 @@ TEST_F(
   ASSERT_EQ(kLegacyMacValue, temp_check_val);
 
   // 2. Seed old split encrypted hashes.
-  base::Value::Dict old_split_content;
+  base::DictValue old_split_content;
   old_split_content.Set("old_subkey", "old_value");
   old_split_content.Set("common_subkey", "common_value_old_hash");
-  base::Value::Dict old_computed_split_ehs =
+  base::DictValue old_computed_split_ehs =
       hash_store_.ComputeSplitEncryptedHashes(kPath, &old_split_content,
-                                              &test_encryptor_);
+                                              test_encryptor_.get());
   SeedSplitEncryptedHashes(kPath, &old_computed_split_ehs);
 
   // Verify old split EHs are present.
@@ -1524,7 +1622,7 @@ TEST_F(
   ASSERT_TRUE(temp_split_ehs.count("old_subkey"));
 
   // 3. Prepare new split value.
-  base::Value::Dict new_split_content;
+  base::DictValue new_split_content;
   new_split_content.Set("new_subkey", "new_value");
   new_split_content.Set("common_subkey", "common_value_new_hash");
 
@@ -1558,8 +1656,8 @@ TEST_F(PrefHashStoreImplEncryptedTest,
   base::Value value("enterprise_value");
 
   SeedAtomicMac(kPath, hash_store_.ComputeMac(kPath, &value));
-  SeedAtomicEncryptedHash(
-      kPath, hash_store_.ComputeEncryptedHash(kPath, &value, &test_encryptor_));
+  SeedAtomicEncryptedHash(kPath, hash_store_.ComputeEncryptedHash(
+                                     kPath, &value, test_encryptor_.get()));
   SeedAtomicMac(kPath, "invalid_roaming_mac");
 
   std::optional<base::AutoReset<bool>> is_enterprise_device_for_testing_ =

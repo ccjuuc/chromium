@@ -21,11 +21,12 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
 
-// Top margin for the managed icon in the enteprised image view
+// Top margin for the managed icon in the enterprise image view.
 constexpr CGFloat kTopMarginForManagedIcon = 16.;
 
 // Point size of enterprise icon in the bottom view.
@@ -70,9 +71,11 @@ NSString* const kCollaborationSigninHeaderBackground =
 @synthesize screenIntent = _screenIntent;
 @synthesize signinStatus = _signinStatus;
 @synthesize syncEnabled = _syncEnabled;
+@synthesize currentPrimaryIdentityEmail = _currentPrimaryIdentityEmail;
+@synthesize targetIdentityEmail = _targetIdentityEmail;
 
 - (instancetype)initWithContextStyle:(SigninContextStyle)contextStyle {
-  self = [super init];
+  self = [super initWithConfiguration:[[ButtonStackConfiguration alloc] init]];
   if (self) {
     _contextStyle = contextStyle;
   }
@@ -95,7 +98,7 @@ NSString* const kCollaborationSigninHeaderBackground =
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   self.bannerName = kChromeSigninBannerImage;
   self.headerImage = MakeSymbolMulticolor(
-      CustomSymbolWithPointSize(kMulticolorChromeballSymbol, kHeaderImageSize));
+      SymbolWithPointSize(SymbolMulticolorChromeball, kHeaderImageSize));
 #else
   self.bannerName = kChromiumSigninBannerImage;
 #endif
@@ -130,9 +133,7 @@ NSString* const kCollaborationSigninHeaderBackground =
       break;
     }
     case SigninScreenConsumerSigninStatusDisabled: {
-      UIUserInterfaceIdiom idiom =
-          [[UIDevice currentDevice] userInterfaceIdiom];
-      if (idiom == UIUserInterfaceIdiomPad) {
+      if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
         self.titleText =
             l10n_util::GetNSString(IDS_IOS_FIRST_RUN_WELCOME_SCREEN_TITLE_IPAD);
       } else {
@@ -170,7 +171,7 @@ NSString* const kCollaborationSigninHeaderBackground =
             ? self.specificContentView.topAnchor
             : self.identityControl.bottomAnchor;
     UIImage* image = SymbolWithPalette(
-        CustomSymbolWithPointSize(kEnterpriseSymbol, kEnterpriseIconPointSize),
+        SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
         @[ [UIColor colorNamed:kStaticGrey600Color] ]);
     UIImageView* enterpriseImageView =
         [[UIImageView alloc] initWithImage:image];
@@ -205,6 +206,7 @@ NSString* const kCollaborationSigninHeaderBackground =
   // Call super after setting up the strings and others, as required per super
   // class.
   [super viewDidLoad];
+  [self.delegate fullscreenSigninScreenViewControllerViewDidLoad:self];
 }
 
 #pragma mark - Properties
@@ -246,7 +248,8 @@ NSString* const kCollaborationSigninHeaderBackground =
   DCHECK_NE(self.signinStatus, SigninScreenConsumerSigninStatusDisabled);
   DCHECK(email);
   DCHECK(avatar);
-  self.personalizedButtonPrompt = givenName ? givenName : email;
+  self.personalizedButtonPrompt =
+      givenName ? givenName : (userName ? userName : email);
   [self updateUIForIdentityAvailable:YES];
   [self.identityControl setIdentityName:userName email:email managed:managed];
   [self.identityControl setIdentityAvatar:avatar];
@@ -260,6 +263,7 @@ NSString* const kCollaborationSigninHeaderBackground =
 - (void)setUIEnabled:(BOOL)UIEnabled {
   // For the disabled UI, show a spinner in the primary button.
   self.configuration.loading = !UIEnabled;
+  [self reloadConfiguration];
   self.view.userInteractionEnabled = UIEnabled;
 }
 
@@ -370,6 +374,23 @@ NSString* const kCollaborationSigninHeaderBackground =
           l10n_util::GetNSString(IDS_IOS_SIGNIN_GROUP_COLLABORATION_SUBTITLE);
       break;
     }
+    case SigninContextStyle::kDeeplinkSignin: {
+      if (self.currentPrimaryIdentityEmail) {
+        CHECK(self.targetIdentityEmail);
+        self.titleText =
+            l10n_util::GetNSString(IDS_IOS_DEEPLINK_ACCOUNT_SWITCH_TITLE);
+        self.subtitleText = l10n_util::GetNSStringF(
+            IDS_IOS_DEEPLINK_ACCOUNT_SWITCH_SUBTITLE,
+            base::SysNSStringToUTF16(self.currentPrimaryIdentityEmail),
+            base::SysNSStringToUTF16(self.targetIdentityEmail));
+      } else {
+        self.titleText =
+            l10n_util::GetNSString(IDS_IOS_UNO_UPGRADE_PROMO_SIGNIN_TITLE_1);
+        self.subtitleText =
+            l10n_util::GetNSString(IDS_IOS_DEEPLINK_SIGNIN_SUBTITLE);
+      }
+      break;
+    }
     case SigninContextStyle::kDefault: {
       // Use in the context of the fullscreen sign-in promo dialog.
       self.titleText = [self promoSignInHeaderText];
@@ -395,25 +416,20 @@ NSString* const kCollaborationSigninHeaderBackground =
       self.configuration.secondaryActionString = l10n_util::GetNSString(
           IDS_IOS_PROMOS_MANAGER_ALERT_PROMO_DEFAULT_CANCEL_BUTTON_TEXT);
       break;
-    case SigninContextStyle::kDefault: {
-      if (FRESignInSecondaryActionLabelUpdate()) {
-        std::string signinValue =
-            kFRESignInSecondaryActionLabelUpdateParam.Get();
-        if (signinValue ==
-            kFRESignInSecondaryActionLabelUpdateParamStaySignedOut) {
-          self.configuration.secondaryActionString =
-              l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
-        } else {
-          // Fallback action when no valid value is provided.
-          self.configuration.secondaryActionString =
-              l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN);
-        }
-      } else {
-        // When the feature flag is disabled, default to the original string
+    case SigninContextStyle::kDeeplinkSignin:
+      if (self.currentPrimaryIdentityEmail) {
         self.configuration.secondaryActionString =
-            l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN);
+            l10n_util::GetNSString(IDS_IOS_DEEPLINK_ACCOUNT_SWITCH_NO_THANKS);
+        break;
+      } else {
+        self.configuration.secondaryActionString =
+            l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
       }
-    } break;
+      break;
+    case SigninContextStyle::kDefault:
+      self.configuration.secondaryActionString =
+          l10n_util::GetNSString(IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT);
+      break;
   }
 }
 

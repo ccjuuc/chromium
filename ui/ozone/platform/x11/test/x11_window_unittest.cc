@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -160,7 +159,8 @@ class WMStateWaiter : public X11PropertyChangeWaiter {
     std::vector<x11::Atom> hints;
     if (x11::Connection::Get()->GetArrayProperty(
             xwindow(), x11::GetAtom("_NET_WM_STATE"), &hints)) {
-      return base::Contains(hints, x11::GetAtom(hint_)) != wait_till_set_;
+      return std::ranges::contains(hints, x11::GetAtom(hint_)) !=
+             wait_till_set_;
     }
     return true;
   }
@@ -187,6 +187,24 @@ class TestScreen : public display::ScreenBase {
     display.SetScaleAndBounds(scale, bounds_in_pixels);
     ProcessDisplayChanged(display, true);
   }
+};
+
+class DestructionWindowDelegate : public TestPlatformWindowDelegate {
+ public:
+  DestructionWindowDelegate() = default;
+  ~DestructionWindowDelegate() override = default;
+
+  void set_window(std::unique_ptr<X11Window> window) {
+    window_ = std::move(window);
+  }
+
+  void OnActivationChanged(bool active) override {
+    // Synchronously destroy the window.
+    window_.reset();
+  }
+
+ private:
+  std::unique_ptr<X11Window> window_;
 };
 
 // Returns the list of rectangles which describe |window|'s bounding region via
@@ -519,6 +537,37 @@ TEST_F(X11WindowTest,
   }
   EXPECT_FALSE(window->IsMinimized());
   EXPECT_EQ(delegate.state(), PlatformWindowState::kNormal);
+}
+
+// Tests that synchronous destruction of the window during event dispatching
+// does not cause a UAF.
+TEST_F(X11WindowTest, SynchronousDestructionDuringEventDispatch) {
+  auto delegate = std::make_unique<DestructionWindowDelegate>();
+  constexpr gfx::Rect bounds(10, 10, 100, 100);
+  auto window = CreateX11Window(delegate.get(), bounds, nullptr);
+  X11Window* window_ptr = window.get();
+  delegate->set_window(std::move(window));
+
+  // Create a CrossingEvent (EnterNotify) that will trigger OnActivationChanged.
+  x11::CrossingEvent enter_event;
+  enter_event.opcode = x11::CrossingEvent::EnterNotify;
+  enter_event.event = static_cast<x11::Window>(delegate->widget());
+  enter_event.root = x11::Connection::Get()->default_root();
+  enter_event.same_screen_focus = 1;  // CROSSING_FLAG_FOCUS
+  enter_event.mode = x11::NotifyMode::Normal;
+  enter_event.detail = x11::NotifyDetail::Ancestor;
+
+  x11::Event xev(false, std::move(enter_event));
+
+  MouseEvent mouse_event(ui::EventType::kMouseEntered, gfx::Point(),
+                         gfx::Point(), base::TimeTicks(), 0, 0);
+
+  // This should trigger HandleEvent, which triggers OnCrossingEvent,
+  // which triggers AfterActivationStateChanged, which triggers
+  // OnActivationChanged(true), which destroys the window.
+  // DispatchUiEvent will then continue and should return safely due to the
+  // liveness check.
+  window_ptr->DispatchUiEvent(&mouse_event, xev);
 }
 
 }  // namespace ui

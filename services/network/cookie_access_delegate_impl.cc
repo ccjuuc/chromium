@@ -55,47 +55,30 @@ net::CookieScopeSemantics CookieAccessDelegateImpl::GetScopeSemantics(
   if (!cookie_settings_) {
     return net::CookieScopeSemantics::UNKNOWN;
   }
-  // TODO(crbug.com/378827534)  finish propagating string_view thru cookie
-  // settings.
-  return cookie_settings_->GetCookieScopeSemanticsForDomain(
-      std::string(domain));
+  return cookie_settings_->GetCookieScopeSemanticsForDomain(domain);
 }
 
 bool CookieAccessDelegateImpl::ShouldIgnoreSameSiteRestrictions(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies) const {
+    const net::SiteForCookies& site_for_cookies,
+    const url::Origin& top_level_origin) const {
   if (cookie_settings_) {
-    return cookie_settings_->ShouldIgnoreSameSiteRestrictions(url,
-                                                              site_for_cookies);
+    return cookie_settings_->ShouldIgnoreSameSiteRestrictions(
+        url, site_for_cookies, top_level_origin);
   }
   return false;
 }
 
-std::optional<std::pair<net::FirstPartySetMetadata,
-                        net::FirstPartySetsCacheFilter::MatchInfo>>
-CookieAccessDelegateImpl::ComputeFirstPartySetMetadataMaybeAsync(
+std::pair<net::FirstPartySetMetadata, net::FirstPartySetsCacheFilter::MatchInfo>
+CookieAccessDelegateImpl::ComputeFirstPartySetMetadata(
     const net::SchemefulSite& site,
-    const net::SchemefulSite* top_frame_site,
-    base::OnceCallback<void(net::FirstPartySetMetadata,
-                            net::FirstPartySetsCacheFilter::MatchInfo)>
-        callback) const {
+    const net::SchemefulSite* top_frame_site) const {
   if (!first_party_sets_access_delegate_) {
     return std::make_pair(net::FirstPartySetMetadata(),
                           net::FirstPartySetsCacheFilter::MatchInfo());
   }
-  return first_party_sets_access_delegate_->ComputeMetadata(
-      site, top_frame_site, std::move(callback));
-}
-
-std::optional<FirstPartySetsAccessDelegate::EntriesResult>
-CookieAccessDelegateImpl::FindFirstPartySetEntries(
-    const base::flat_set<net::SchemefulSite>& sites,
-    base::OnceCallback<void(FirstPartySetsAccessDelegate::EntriesResult)>
-        callback) const {
-  if (!first_party_sets_access_delegate_)
-    return FirstPartySetsAccessDelegate::EntriesResult();
-  return first_party_sets_access_delegate_->FindEntries(sites,
-                                                        std::move(callback));
+  return first_party_sets_access_delegate_->ComputeMetadata(site,
+                                                            top_frame_site);
 }
 
 }  // namespace network

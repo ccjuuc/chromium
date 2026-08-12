@@ -6,6 +6,7 @@
 #define COMPONENTS_ENTERPRISE_DATA_CONTROLS_CORE_BROWSER_CONDITIONS_ATTRIBUTES_CONDITION_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/values.h"
 #include "components/enterprise/data_controls/core/browser/conditions/condition.h"
@@ -16,6 +17,10 @@
 
 #include "components/enterprise/data_controls/core/browser/component.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+namespace re2 {
+class RE2;
+}  // namespace re2
 
 namespace data_controls {
 
@@ -36,16 +41,21 @@ class AttributesCondition {
   // should map to an AttributesCondition. If an attribute is not used outside
   // of this class, declare it in the anonymous namespace instead.
   static constexpr char kKeyUrls[] = "urls";
+  static constexpr char kKeyUrlRegexprs[] = "url_regexprs";
   static constexpr char kKeyIncognito[] = "incognito";
   static constexpr char kKeyOsClipboard[] = "os_clipboard";
   static constexpr char kKeyOtherProfile[] = "other_profile";
+  static constexpr char kKeyGeminiInChrome[] = "gemini_in_chrome";
+  static constexpr char kKeySizeHigherThan[] = "size_higher_than";
+  static constexpr char kKeySizeLowerThan[] = "size_lower_than";
 #if BUILDFLAG(IS_CHROMEOS)
   static constexpr char kKeyComponents[] = "components";
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  explicit AttributesCondition(const base::Value::Dict& value);
+  explicit AttributesCondition(const base::DictValue& value);
   AttributesCondition(AttributesCondition&& other);
   ~AttributesCondition();
+  bool is_size_condition() const;
 
   // Returns true if at least one of the internal values is non-null/empty, aka
   // if the JSON represented a valid condition. This should only be checked
@@ -67,9 +77,12 @@ class AttributesCondition {
   bool IncognitoMatches(bool incognito) const;
   bool OsClipboardMatches(bool os_clipboard) const;
   bool OtherProfileMatches(bool other_profile) const;
+  bool GeminiInChromeMatches(bool gemini_in_chrome) const;
+  bool SizeMatches(std::optional<int64_t> size) const;
 
   // Helpers to help check which attributes are meaningful to the condition.
   bool is_os_clipboard_condition() const;
+  bool is_gemini_in_chrome_condition() const;
 
  private:
   // These attributes represent tab-specific conditions, and are only evaluated
@@ -79,6 +92,7 @@ class AttributesCondition {
   // corresponding attribute was not set in the JSON initializing this
   // `AttributesCondition`, and such attributes are ignored.
   std::unique_ptr<url_matcher::URLMatcher> url_matcher_;
+  std::vector<std::unique_ptr<re2::RE2>> url_regexprs_;
   std::optional<bool> incognito_;
 
   // This attribute indicates the destination/source condition must/mustn't be
@@ -88,6 +102,17 @@ class AttributesCondition {
   // This attribute indicates the destination/source condition must/mustn't be
   // a separate Chrome profile. It is always null for non-clipboard conditions.
   std::optional<bool> other_profile_;
+
+  // This attribute indicates the destination/source condition must/mustn't be
+  // the integrated Gemini browser agent (Glic). It is always null for
+  // conditions not involving the agent.
+  std::optional<bool> gemini_in_chrome_;
+
+  // This attribute indicates the source condition must be larger/smaller than
+  // a certain size. Size is  exclusive. It is always null for conditions not
+  // involving size.
+  std::optional<int64_t> min_size_;
+  std::optional<int64_t> max_size_;
 
 #if BUILDFLAG(IS_CHROMEOS)
   // A destination/source must be in this set to pass the condition, unless the
@@ -101,7 +126,7 @@ class SourceAttributesCondition : public AttributesCondition, public Condition {
  public:
   // Returns nullptr if the passed JSON doesn't match the expected schema.
   static std::unique_ptr<Condition> Create(const base::Value& value);
-  static std::unique_ptr<Condition> Create(const base::Value::Dict& value);
+  static std::unique_ptr<Condition> Create(const base::DictValue& value);
 
   // data_controls::Condition:
   bool CanBeEvaluated(const ActionContext& action_context) const override;
@@ -119,7 +144,7 @@ class DestinationAttributesCondition : public AttributesCondition,
  public:
   // Returns nullptr if the passed JSON doesn't match the expected schema.
   static std::unique_ptr<Condition> Create(const base::Value& value);
-  static std::unique_ptr<Condition> Create(const base::Value::Dict& value);
+  static std::unique_ptr<Condition> Create(const base::DictValue& value);
 
   // data_controls::Condition:
   bool CanBeEvaluated(const ActionContext& action_context) const override;

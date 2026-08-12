@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message_mojom_traits.h"
 
+#include <ranges>
+
 #include "mojo/public/cpp/base/big_buffer_mojom_traits.h"
 #include "skia/ext/skia_utils_base.h"
 #include "third_party/blink/public/mojom/messaging/static_bitmap_image.mojom-blink.h"
@@ -56,8 +58,9 @@ ToSerializedAcceleratedImage(
           blink::AcceleratedImageInfo{
               shared_image->Export(), cloned_image->GetSyncToken(),
               cloned_image->GetAlphaType(),
-              blink::BindOnce(&blink::StaticBitmapImage::UpdateSyncToken,
-                              std::move(cloned_image))});
+              blink::BindOnce(
+                  &blink::StaticBitmapImage::UpdateSyncTokenFromExportResult,
+                  std::move(cloned_image))});
   return result;
 }
 
@@ -111,9 +114,7 @@ bool StructTraits<blink::mojom::blink::TransferableMessage::DataView,
     return false;
   }
 
-  out->ports.ReserveInitialCapacity(ports.size());
-  out->ports.AppendRange(std::make_move_iterator(ports.begin()),
-                         std::make_move_iterator(ports.end()));
+  out->ports.append_range(std::views::as_rvalue(ports));
   for (auto& channel : stream_channels) {
     out->message->GetStreams().push_back(
         blink::SerializedScriptValue::Stream(std::move(channel)));
@@ -164,17 +165,12 @@ bool StructTraits<blink::mojom::blink::SerializedArrayBufferContents::DataView,
     return false;
   auto contents_data = contents_view.data();
 
-  std::optional<size_t> max_data_size;
-  if (data.is_resizable_by_user_javascript()) {
-    max_data_size = base::checked_cast<size_t>(data.max_byte_length());
-  }
+  std::optional<size_t> max_data_size = data.javascript_resize_limit();
   blink::ArrayBufferContents array_buffer_contents(
       contents_data.size(), max_data_size, 1,
       blink::ArrayBufferContents::kNotShared,
-      blink::ArrayBufferContents::kDontInitialize);
-  if (contents_data.size() != array_buffer_contents.DataLength()) {
-    return false;
-  }
+      blink::ArrayBufferContents::kDontInitialize,
+      blink::ArrayBufferContents::AllocationFailureBehavior::kCrash);
   array_buffer_contents.ByteSpan().copy_from(contents_data);
   *out = std::move(array_buffer_contents);
   return true;

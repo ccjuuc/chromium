@@ -24,6 +24,7 @@
 #include "net/base/load_timing_info.h"
 #include "net/base/load_timing_info_test_util.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/session_usage.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/bidirectional_stream_request_info.h"
@@ -125,8 +126,8 @@ class TestDelegateBase : public BidirectionalStream::Delegate {
     std::move(callback_).Run(OK);
   }
 
-  void OnHeadersReceived(
-      const quiche::HttpHeaderBlock& response_headers) override {
+  void OnHeadersReceived(const quiche::HttpHeaderBlock& response_headers,
+                         const net::ProxyInfo& used_proxy_info) override {
     CHECK(!not_expect_callback_);
 
     response_headers_ = response_headers.Clone();
@@ -327,9 +328,9 @@ class DeleteStreamDelegate : public TestDelegateBase {
 
   ~DeleteStreamDelegate() override = default;
 
-  void OnHeadersReceived(
-      const quiche::HttpHeaderBlock& response_headers) override {
-    TestDelegateBase::OnHeadersReceived(response_headers);
+  void OnHeadersReceived(const quiche::HttpHeaderBlock& response_headers,
+                         const net::ProxyInfo& used_proxy_info) override {
+    TestDelegateBase::OnHeadersReceived(response_headers, used_proxy_info);
     if (phase_ == ON_HEADERS_RECEIVED) {
       DeleteStream();
       QuitLoop();
@@ -439,7 +440,8 @@ class BidirectionalStreamTest : public TestWithTaskEnvironment {
                        ProxyChain::Direct(), SessionUsage::kDestination,
                        socket_tag, NetworkAnonymizationKey(),
                        SecureDnsPolicy::kAllow,
-                       /*disable_cert_verification_network_fetches=*/false);
+                       /*disable_cert_verification_network_fetches=*/false,
+                       handles::kInvalidNetworkHandle);
     session_ =
         CreateSpdySession(http_session_.get(), key,
                           NetLogWithSource::Make(NetLogSourceType::NONE));
@@ -633,7 +635,8 @@ TEST_F(BidirectionalStreamTest, ClientAuthRequestIgnored) {
                      ProxyChain::Direct(), SessionUsage::kDestination,
                      SocketTag(), NetworkAnonymizationKey(),
                      SecureDnsPolicy::kAllow,
-                     /*disable_cert_verification_network_fetches=*/false);
+                     /*disable_cert_verification_network_fetches=*/false,
+                     handles::kInvalidNetworkHandle);
   auto request_info = std::make_unique<BidirectionalStreamRequestInfo>();
   request_info->method = "GET";
   request_info->url = default_url_;

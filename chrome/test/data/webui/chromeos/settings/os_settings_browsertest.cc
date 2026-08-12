@@ -3,14 +3,15 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
@@ -28,9 +29,7 @@ namespace ash::settings {
 
 class OSSettingsMochaTest : public WebUIMochaBrowserTest {
  protected:
-  OSSettingsMochaTest() {
-    set_test_loader_host(chrome::kChromeUIOSSettingsHost);
-  }
+  OSSettingsMochaTest() { set_test_loader_host(ash::kChromeUIOSSettingsHost); }
 
   // Runs the specified test.
   // - test_path: The path to the test file within the CrOS Settings test root
@@ -48,9 +47,6 @@ class OSSettingsMochaTest : public WebUIMochaBrowserTest {
     });
     RunTest(path_with_parent_directory, trigger);
   }
-
-  base::test::ScopedFeatureList scoped_feature_list_{
-      ash::features::kEnableHostnameSetting};
 };
 
 /* Start Test Classes */
@@ -349,14 +345,13 @@ IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest, CrostiniPageBruschettaSubpage) {
   RunSettingsTest("crostini_page/bruschetta_subpage_test.js");
 }
 
-IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
-                       CrostiniPageCrostiniExportImport) {
-  RunSettingsTest("crostini_page/crostini_export_import_test.js");
+IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest, CrostiniPageCrostiniArcAdb) {
+  RunSettingsTest("crostini_page/crostini_arc_adb_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
-                       CrostiniPageCrostiniExtraContainersSubpage) {
-  RunSettingsTest("crostini_page/crostini_extra_containers_subpage_test.js");
+                       CrostiniPageCrostiniExportImport) {
+  RunSettingsTest("crostini_page/crostini_export_import_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsCrostiniTest,
@@ -399,6 +394,14 @@ IN_PROC_BROWSER_TEST_F(OSSettingsDeviceTestPeripheralAndSplitEnabled,
 
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, DevicePageAudioPage) {
   RunSettingsTest("device_page/audio_page_test.js");
+}
+
+IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, DevicePageKeyboard) {
+  RunSettingsTest("device_page/keyboard_test.js");
+}
+
+IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, DevicePagePointers) {
+  RunSettingsTest("device_page/pointers_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
@@ -724,6 +727,10 @@ IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, LockScreenSubpage) {
   RunSettingsTest("lock_screen_subpage_test.js");
 }
 
+IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, LockStateMixin) {
+  RunSettingsTest("lock_state_mixin_test.js");
+}
+
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, MainPageContainer) {
   RunSettingsTest("main_page_container/main_page_container_test.js");
 }
@@ -972,10 +979,6 @@ IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
   RunSettingsTest("os_about_page/detailed_build_info_subpage_test.js");
 }
 
-IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, OsAboutPageEditHostnameDialog) {
-  RunSettingsTest("os_about_page/edit_hostname_dialog_test.js");
-}
-
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, OsAppsPage) {
   RunSettingsTest("os_apps_page/os_apps_page_test.js");
 }
@@ -1040,12 +1043,6 @@ IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
                        OsAppsPageAppManagementPagePinToShelfItem) {
   RunSettingsTest("os_apps_page/app_management_page/pin_to_shelf_item_test.js");
-}
-
-IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
-                       OsAppsPageAppManagementPagePluginVmDetailView) {
-  RunSettingsTest(
-      "os_apps_page/app_management_page/plugin_vm_detail_view_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest,
@@ -1132,14 +1129,6 @@ IN_PROC_BROWSER_TEST_F(
   RunSettingsTest(
       "os_apps_page/app_parental_controls_page/"
       "app_verify_pin_dialog_test.js");
-}
-
-IN_PROC_BROWSER_TEST_F(
-    OSSettingsMochaTest,
-    OsAppsPageManageIsolatedWebAppsPageManageIsolatedWebAppsSubpage) {
-  RunSettingsTest(
-      "os_apps_page/manage_isolated_web_apps_page/"
-      "manage_isolated_web_apps_subpage_test.js");
 }
 
 IN_PROC_BROWSER_TEST_F(OSSettingsMochaTest, OsBluetoothPage) {

@@ -5,30 +5,42 @@
 #ifndef CHROME_BROWSER_PERMISSIONS_TEST_MOCK_PASSAGE_EMBEDDER_H_
 #define CHROME_BROWSER_PERMISSIONS_TEST_MOCK_PASSAGE_EMBEDDER_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/run_loop.h"
-#include "components/passage_embeddings/passage_embeddings_test_util.h"
+#include "components/passage_embeddings/core/passage_embeddings_test_util.h"
 
 namespace test {
 
 class PassageEmbedderMock : public passage_embeddings::TestEmbedder {
  public:
-  PassageEmbedderMock() = default;
-  ~PassageEmbedderMock() override = default;
+  PassageEmbedderMock();
+  ~PassageEmbedderMock() override;
+
+  PassageEmbedderMock(const PassageEmbedderMock&) = delete;
+  PassageEmbedderMock& operator=(const PassageEmbedderMock&) = delete;
 
   // passage_embeddings::TestEmbedder:
-  passage_embeddings::Embedder::TaskId ComputePassagesEmbeddings(
+  passage_embeddings::Embedder::Job ComputePassagesEmbeddings(
       passage_embeddings::PassagePriority priority,
       std::vector<std::string> passages,
       ComputePassagesEmbeddingsCallback callback) override;
 
   void set_status(passage_embeddings::ComputeEmbeddingsStatus status);
 
+  const std::vector<std::string>& GetLastPassages() const {
+    return last_passages_;
+  }
+
+ protected:
+  uint64_t next_job_id_ = 1;
+
  private:
   passage_embeddings::ComputeEmbeddingsStatus status_ =
       passage_embeddings::ComputeEmbeddingsStatus::kSuccess;
+  std::vector<std::string> last_passages_;
 };
 
 // A mock that simulates a delayed execution of passage embeddings computation.
@@ -46,7 +58,7 @@ class DelayedPassageEmbedderMock : public PassageEmbedderMock {
   // computing the embeddings, it captures the arguments and the callback. The
   // actual computation (in this case a fake) is deferred until
   // `ReleaseCallback` is called.
-  passage_embeddings::Embedder::TaskId ComputePassagesEmbeddings(
+  passage_embeddings::Embedder::Job ComputePassagesEmbeddings(
       passage_embeddings::PassagePriority priority,
       std::vector<std::string> passages,
       ComputePassagesEmbeddingsCallback callback) override;
@@ -57,15 +69,20 @@ class DelayedPassageEmbedderMock : public PassageEmbedderMock {
   // task_runner internally to simulate an async model execution.
   void ReleaseCallback();
 
+  // Blocks until ComputePassagesEmbeddings has been called and
+  // the pending callback is stored.
+  void WaitForEmbedderToBeTriggered();
+
  private:
   // A wrapper for the `ComputePassagesEmbeddingsCallback`. This is invoked when
   // the underlying `PassageEmbedderMock` completes its computation. It forwards
   // the results to the original callback and quits the run loop to unblock the
   // test execution that called `ReleaseCallback`.
   void ComputePassageEmbeddingsCallbackWrapper(
+      uint64_t expected_job_id,
       std::vector<std::string> passages,
       std::vector<passage_embeddings::Embedding> embeddings,
-      TaskId task_id,
+      uint64_t job_id,
       passage_embeddings::ComputeEmbeddingsStatus status);
 
   // An internal helper method that is bound as a callback and executed when
@@ -87,7 +104,12 @@ class DelayedPassageEmbedderMock : public PassageEmbedderMock {
   // A run loop used to make the asynchronous execution behave synchronously for
   // tests. `ReleaseCallback` runs this loop, and
   // `ComputePassageEmbeddingsCallbackWrapper` quits it.
-  base::RunLoop model_execute_run_loop_for_testing_;
+  std::unique_ptr<base::RunLoop> model_execute_run_loop_;
+
+  // Quit closure signaled when ComputePassagesEmbeddings stores
+  // execution_callback_. Used by WaitForEmbedderCallback() to
+  // block until the async chain has reached the embedder.
+  base::OnceClosure on_callback_received_;
 
   // Used for creating the execution_callback_.
   base::WeakPtrFactory<DelayedPassageEmbedderMock> weak_ptr_factory_{this};

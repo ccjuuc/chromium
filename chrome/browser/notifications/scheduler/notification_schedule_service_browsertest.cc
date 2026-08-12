@@ -17,6 +17,7 @@
 #include "chrome/browser/notifications/scheduler/notification_background_task_scheduler_impl.h"
 #include "chrome/browser/notifications/scheduler/public/display_agent.h"
 #include "chrome/browser/notifications/scheduler/public/features.h"
+#include "chrome/browser/notifications/scheduler/public/finds_agent.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_client.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_client_registrar.h"
@@ -58,6 +59,9 @@ class TestClient : public NotificationSchedulerClient {
       shown_notification_data_.emplace_back(*notification_data);
     std::move(callback).Run(std::move(notification_data));
   }
+
+  void OnShowNotification(
+      std::unique_ptr<NotificationData> notification_data) override {}
 
   void OnSchedulerInitialized(bool success,
                               std::set<std::string> guids) override {
@@ -140,13 +144,16 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
   }
 
   void TearDownOnMainThread() override {
+    task_scheduler_ = nullptr;
+    clients_.clear();
+    service_.reset();
     InProcessBrowserTest::TearDownOnMainThread();
     ASSERT_TRUE(tmp_dir_.Delete());
   }
 
   // Initializes |service_|. Injects database test data before this call.
   void Init() {
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     auto client = std::make_unique<TestClient>();
     clients_[SchedulerClientType::kTest1] = client.get();
     auto client_registrar =
@@ -158,14 +165,15 @@ class NotificationScheduleServiceTest : public InProcessBrowserTest {
     auto background_task_scheduler =
         std::make_unique<TestBackgroundTaskScheduler>();
     auto tips_agent = notifications::TipsAgent::Create();
+    auto finds_agent = notifications::FindsAgent::Create();
     task_scheduler_ = background_task_scheduler.get();
     auto* db_provider =
         profile->GetDefaultStoragePartition()->GetProtoDatabaseProvider();
     service_ = CreateNotificationScheduleService(
         std::move(client_registrar), std::move(background_task_scheduler),
-        std::move(display_agent), std::move(tips_agent), db_provider,
-        tmp_dir_.GetPath().Append(kTestDir), profile->IsOffTheRecord(),
-        profile->GetPrefs());
+        std::move(display_agent), std::move(tips_agent), std::move(finds_agent),
+        db_provider, tmp_dir_.GetPath().Append(kTestDir),
+        profile->IsOffTheRecord(), profile->GetPrefs());
   }
 
   // Helper function to schedule a notification immediately to show.

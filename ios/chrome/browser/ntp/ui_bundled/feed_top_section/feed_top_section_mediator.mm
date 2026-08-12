@@ -12,6 +12,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin_promo_view_mediator.h"
@@ -36,7 +37,7 @@ using base::RecordAction;
 using base::UmaHistogramEnumeration;
 using base::UserMetricsAction;
 
-@interface FeedTopSectionMediator () <IdentityManagerObserverBridgeDelegate> {
+@interface FeedTopSectionMediator () <IdentityManagerObserving> {
   // Observes changes in identity.
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityObserverBridge;
@@ -115,10 +116,10 @@ using base::UserMetricsAction;
   return _signinPromoConfigurator;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user changes the syncing state.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
@@ -138,8 +139,7 @@ using base::UserMetricsAction;
 #pragma mark - SigninPromoViewConsumer
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
+    (SigninPromoViewConfigurator*)configurator {
   // No-op: The NTP is always recreated when the identity changes, so this is
   // not needed.
 }
@@ -209,8 +209,8 @@ using base::UserMetricsAction;
 // Returns true if notifications are enabled in Chime or at the OS level.
 - (BOOL)isNotificationsEnabled {
   DCHECK([self isUserSignedIn]);
-  id<SystemIdentity> identity = self.authenticationService->GetPrimaryIdentity(
-      signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity =
+      self.authenticationService->GetPrimaryIdentity();
   // Check if user has notifications enabled at the Chime level.
   BOOL isChimeEnabled =
       push_notification_settings::IsMobileNotificationsEnabledForAnyClient(

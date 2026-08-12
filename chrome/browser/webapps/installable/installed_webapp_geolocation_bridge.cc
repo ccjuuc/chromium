@@ -8,7 +8,9 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/webapps/installable/installed_webapp_geolocation_context.h"
 #include "services/device/public/cpp/geolocation/geoposition.h"
@@ -19,10 +21,10 @@
 
 InstalledWebappGeolocationBridge::InstalledWebappGeolocationBridge(
     mojo::PendingReceiver<Geolocation> receiver,
-    const GURL& url,
+    const url::Origin& origin,
     InstalledWebappGeolocationContext* context)
     : context_(context),
-      url_(url),
+      origin_(origin),
       high_accuracy_(false),
       receiver_(this, std::move(receiver)) {
   DCHECK(context_);
@@ -38,17 +40,17 @@ InstalledWebappGeolocationBridge::~InstalledWebappGeolocationBridge() {
 void InstalledWebappGeolocationBridge::StartListeningForUpdates() {
   JNIEnv* env = base::android::AttachCurrentThread();
   if (java_ref_.is_null()) {
-    java_ref_.Reset(Java_InstalledWebappGeolocationBridge_create(
+    java_ref_.Reset(InstalledWebappGeolocationBridgeJni::create(
         env, reinterpret_cast<intptr_t>(this),
-        url::GURLAndroid::FromNativeGURL(env, url_)));
+        url::GURLAndroid::FromNativeGURL(env, origin_.GetURL())));
   }
-  Java_InstalledWebappGeolocationBridge_start(env, java_ref_, high_accuracy_);
+  java_ref_->start(env, high_accuracy_);
 }
 
 void InstalledWebappGeolocationBridge::StopUpdates() {
   if (!java_ref_.is_null()) {
     JNIEnv* env = base::android::AttachCurrentThread();
-    Java_InstalledWebappGeolocationBridge_stopAndDestroy(env, java_ref_);
+    java_ref_->stopAndDestroy(env);
     java_ref_.Reset();
   }
 }
@@ -78,6 +80,15 @@ void InstalledWebappGeolocationBridge::QueryNextPosition(
   if (current_position_) {
     ReportCurrentPosition();
   }
+}
+
+// QueryCachedPosition is not supported by this provider since it is not
+// needed by Trusted Web Activities.
+void InstalledWebappGeolocationBridge::QueryCachedPosition(
+    QueryCachedPositionCallback callback) {
+  std::move(callback).Run(device::mojom::GeopositionResult::NewError(
+      device::mojom::GeopositionError::New(
+          device::mojom::GeopositionErrorCode::kPositionUnavailable, "", "")));
 }
 
 void InstalledWebappGeolocationBridge::SetOverride(
@@ -134,19 +145,18 @@ void InstalledWebappGeolocationBridge::ReportCurrentPosition() {
   std::move(position_callback_).Run(std::move(current_position_));
 }
 
-void InstalledWebappGeolocationBridge::OnNewLocationAvailable(
-    JNIEnv* env,
-    jdouble latitude,
-    jdouble longitude,
-    jdouble time_stamp,
-    jboolean has_altitude,
-    jdouble altitude,
-    jboolean has_accuracy,
-    jdouble accuracy,
-    jboolean has_heading,
-    jdouble heading,
-    jboolean has_speed,
-    jdouble speed) {
+void InstalledWebappGeolocationBridge::OnNewLocationAvailable(JNIEnv* env,
+                                                              double latitude,
+                                                              double longitude,
+                                                              double time_stamp,
+                                                              bool has_altitude,
+                                                              double altitude,
+                                                              bool has_accuracy,
+                                                              double accuracy,
+                                                              bool has_heading,
+                                                              double heading,
+                                                              bool has_speed,
+                                                              double speed) {
   auto position = device::mojom::Geoposition::New();
   position->latitude = latitude;
   position->longitude = longitude;
@@ -176,7 +186,7 @@ void InstalledWebappGeolocationBridge::OnNewLocationAvailable(
 
 void InstalledWebappGeolocationBridge::OnNewErrorAvailable(
     JNIEnv* env,
-    std::string& message) {
+    const std::string& message) {
   OnLocationUpdate(device::mojom::GeopositionResult::NewError(
       device::mojom::GeopositionError::New(
           device::mojom::GeopositionErrorCode::kPositionUnavailable, message,

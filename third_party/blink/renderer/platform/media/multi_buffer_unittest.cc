@@ -18,6 +18,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "media/base/fake_single_thread_task_runner.h"
@@ -153,17 +154,17 @@ class TestMultiBuffer : public MultiBuffer {
   void SetMaxWriters(size_t max_writers) { max_writers_ = max_writers; }
 
   void CheckPresentState() {
-    IntervalMap<MultiBufferBlockId, int32_t> tmp;
+    media::IntervalMap<MultiBufferBlockId, int32_t> tmp;
     for (auto i = data_.begin(); i != data_.end(); ++i) {
       CHECK(i->value);  // Null pointers are not allowed in data_.
       CHECK_NE(!!pinned_[i->key], lru_->Contains(this, i->key))
           << " i->key = " << i->key;
       tmp.IncrementInterval(i->key, i->key + 1, 1);
     }
-    IntervalMap<MultiBufferBlockId, int32_t>::const_iterator tmp_iterator =
-        tmp.begin();
-    IntervalMap<MultiBufferBlockId, int32_t>::const_iterator present_iterator =
-        present_.begin();
+    media::IntervalMap<MultiBufferBlockId, int32_t>::const_iterator
+        tmp_iterator = tmp.begin();
+    media::IntervalMap<MultiBufferBlockId, int32_t>::const_iterator
+        present_iterator = present_.begin();
     while (tmp_iterator != tmp.end() && present_iterator != present_.end()) {
       EXPECT_EQ(tmp_iterator.interval_begin(),
                 present_iterator.interval_begin());
@@ -287,7 +288,7 @@ TEST_F(MultiBufferTest, ReadAll) {
       EXPECT_EQ(buffer[17], 17);
       for (int64_t i = 0; i < bytes_read; i++) {
         uint8_t expected = static_cast<uint8_t>((pos * 15485863) >> 16);
-        EXPECT_EQ(expected, buffer[i]) << " pos = " << pos;
+        EXPECT_EQ(expected, buffer[static_cast<size_t>(i)]) << " pos = " << pos;
         pos++;
       }
     } else {
@@ -318,7 +319,7 @@ TEST_F(MultiBufferTest, ReadAllAdvanceFirst) {
     EXPECT_EQ(buffer[17], 17);
     for (int64_t i = 0; i < bytes; i++) {
       uint8_t expected = static_cast<uint8_t>((pos * 15485863) >> 16);
-      EXPECT_EQ(expected, buffer[i]) << " pos = " << pos;
+      EXPECT_EQ(expected, buffer[static_cast<size_t>(i)]) << " pos = " << pos;
       pos++;
     }
   }
@@ -349,7 +350,7 @@ TEST_F(MultiBufferTest, ReadAllAdvanceFirst_NeverDefer) {
     EXPECT_EQ(buffer[17], 17);
     for (int64_t i = 0; i < bytes; i++) {
       uint8_t expected = static_cast<uint8_t>((pos * 15485863) >> 16);
-      EXPECT_EQ(expected, buffer[i]) << " pos = " << pos;
+      EXPECT_EQ(expected, buffer[static_cast<size_t>(i)]) << " pos = " << pos;
       pos++;
     }
   }
@@ -381,7 +382,7 @@ TEST_F(MultiBufferTest, ReadAllAdvanceFirst_NeverDefer2) {
     EXPECT_EQ(buffer[17], 17);
     for (int64_t i = 0; i < bytes; i++) {
       uint8_t expected = static_cast<uint8_t>((pos * 15485863) >> 16);
-      EXPECT_EQ(expected, buffer[i]) << " pos = " << pos;
+      EXPECT_EQ(expected, buffer[static_cast<size_t>(i)]) << " pos = " << pos;
       pos++;
     }
   }
@@ -526,7 +527,8 @@ class ReadHelper {
     if (bytes_read) {
       for (int64_t i = 0; i < bytes_read; i++) {
         unsigned char expected = (pos_ * 15485863) >> 16;
-        EXPECT_EQ(expected, buffer[i]) << " pos = " << pos_;
+        EXPECT_EQ(expected, buffer[static_cast<size_t>(i)])
+            << " pos = " << pos_;
         pos_++;
       }
       CHECK_EQ(pos_, reader_.Tell());
@@ -611,6 +613,51 @@ TEST_F(MultiBufferTest, RandomTest_RangeSupported) {
     multibuffer_.CheckLRUState();
   }
   multibuffer_.CheckPresentState();
+}
+
+TEST_F(MultiBufferTest, BlockIdOverflowCrashes) {
+  // Mock a DataProvider that reports its position as -2.
+  class MockDataProvider : public MultiBuffer::DataProvider {
+   public:
+    explicit MockDataProvider(MultiBufferBlockId pos) : pos_(pos) {}
+    MultiBufferBlockId Tell() const override { return pos_; }
+    bool Available() const override { return available_; }
+    int64_t AvailableBytes() const override { return 0; }
+    scoped_refptr<media::DataBuffer> Read() override {
+      available_ = false;
+      return media::DataBuffer::CreateEOSBuffer();
+    }
+    void SetDeferred(bool deferred) override {}
+    void set_available(bool available) { available_ = available; }
+
+   private:
+    MultiBufferBlockId pos_;
+    bool available_ = false;
+  };
+
+  // We use -2 because it is the deleted sentinel for the HashMap.
+  MultiBufferBlockId sentinel_pos = -2;
+  auto mock_provider = std::make_unique<MockDataProvider>(sentinel_pos);
+  MockDataProvider* provider_ptr = mock_provider.get();
+  multibuffer_.AddProvider(std::move(mock_provider));
+
+  // Set available to true so OnDataProviderEvent can proceed.
+  provider_ptr->set_available(true);
+
+  // This call is expected to hit a CHECK_GE(pos, 0) in multi_buffer.cc.
+  EXPECT_DEATH_IF_SUPPORTED(multibuffer_.OnDataProviderEvent(provider_ptr), "");
+}
+
+TEST_F(MultiBufferTest, BlockIdOverflow) {
+  // This test verifies that extremely large byte offsets that would cause
+  // MultiBufferBlockId (int32_t) overflow are caught by base::checked_cast.
+  int64_t huge_pos = 1LL << 45;  // 32TB, overflows when shifted by 8.
+
+  MultiBufferReader reader(&multibuffer_, 0, huge_pos + 1024, false,
+                           base::NullCallback(), task_runner_);
+
+  // This should crash due to base::checked_cast in MultiBufferReader::block.
+  EXPECT_DEATH_IF_SUPPORTED(reader.Seek(huge_pos), "");
 }
 
 }  // namespace blink

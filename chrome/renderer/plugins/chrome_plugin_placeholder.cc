@@ -130,7 +130,7 @@ ChromePluginPlaceholder* ChromePluginPlaceholder::CreateLoadableMissingPlugin(
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           IDR_BLOCKED_PLUGIN_HTML);
 
-  base::Value::Dict values;
+  base::DictValue values;
   values.Set("name", "");
   values.Set("message", l10n_util::GetStringUTF8(IDS_PLUGIN_NOT_SUPPORTED));
 
@@ -153,7 +153,7 @@ ChromePluginPlaceholder* ChromePluginPlaceholder::CreateBlockedPlugin(
     const std::u16string& name,
     int template_id,
     const std::u16string& message) {
-  base::Value::Dict values;
+  base::DictValue values;
   values.Set("message", message);
   values.Set("name", name);
   values.Set("hide", l10n_util::GetStringUTF8(IDS_PLUGIN_HIDE));
@@ -224,10 +224,8 @@ void ChromePluginPlaceholder::PluginListChanged() {
   mojo::AssociatedRemote<chrome::mojom::PluginInfoHost> plugin_info_host;
   render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(
       &plugin_info_host);
-  plugin_info_host->GetPluginInfo(
-      GetPluginParams().url,
-      render_frame()->GetWebFrame()->Top()->GetSecurityOrigin(), mime_type,
-      &plugin_info);
+  plugin_info_host->GetPluginInfo(GetPluginParams().url, mime_type,
+                                  &plugin_info);
   if (plugin_info->status == status_)
     return;
   blink::WebPlugin* new_plugin = ChromeContentRendererClient::CreatePlugin(
@@ -320,9 +318,7 @@ void ChromePluginPlaceholder::CustomContextMenuAction(uint32_t action) {
   }
 }
 
-void ChromePluginPlaceholder::ContextMenuClosed(
-    const GURL&,
-    const std::optional<blink::Impression>&) {
+void ChromePluginPlaceholder::ContextMenuClosed(const GURL&) {
   context_menu_client_receiver_.reset();
   render_frame()->GetWebFrame()->View()->DidCloseContextMenu();
 }

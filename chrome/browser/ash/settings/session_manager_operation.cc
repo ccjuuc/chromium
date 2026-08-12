@@ -147,8 +147,9 @@ void SessionManagerOperation::StorePublicKey(base::OnceClosure callback,
 }
 
 void SessionManagerOperation::RetrieveDeviceSettings() {
-  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
+  login_manager::PolicyDescriptor descriptor = ash::MakePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE, login_manager::POLICY_DOMAIN_CHROME,
+      kEmptyAccountId);
   session_manager_client()->RetrievePolicy(
       descriptor,
       base::BindOnce(&SessionManagerOperation::ValidateDeviceSettings,
@@ -157,8 +158,9 @@ void SessionManagerOperation::RetrieveDeviceSettings() {
 
 void SessionManagerOperation::BlockingRetrieveDeviceSettings() {
   std::string policy_blob;
-  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
+  login_manager::PolicyDescriptor descriptor = ash::MakePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE, login_manager::POLICY_DOMAIN_CHROME,
+      kEmptyAccountId);
   RetrievePolicyResponseType response =
       session_manager_client()->BlockingRetrievePolicy(descriptor,
                                                        &policy_blob);
@@ -214,7 +216,7 @@ void SessionManagerOperation::ValidateDeviceSettings(
     validator->RunValidation();
     ReportValidatorStatus(validator.get());
   } else {
-    policy::DeviceCloudPolicyValidator::StartValidation(
+    policy::CloudPolicyValidatorBase::StartValidation(
         std::move(validator),
         base::BindOnce(&SessionManagerOperation::ReportValidatorStatus,
                        weak_factory_.GetWeakPtr()));
@@ -222,11 +224,13 @@ void SessionManagerOperation::ValidateDeviceSettings(
 }
 
 void SessionManagerOperation::ReportValidatorStatus(
-    policy::DeviceCloudPolicyValidator* validator) {
+    policy::CloudPolicyValidatorBase* validator) {
   if (validator->success()) {
     policy_fetch_response_ = std::move(validator->policy());
     policy_data_ = std::move(validator->policy_data());
-    device_settings_ = std::move(validator->payload());
+    auto* typed_validator =
+        static_cast<policy::DeviceCloudPolicyValidator*>(validator);
+    device_settings_ = std::move(typed_validator->payload());
     ReportResult(DeviceSettingsService::STORE_SUCCESS);
   } else {
     LOG(ERROR) << "Policy validation failed: " << validator->status() << " ("

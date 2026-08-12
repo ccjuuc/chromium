@@ -8,7 +8,7 @@
 
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "base/trace_event/trace_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_features.h"
@@ -218,6 +218,22 @@ void MetricIntegrationTest::ExpectUKMPageLoadMetricLowerThan(
   EXPECT_LT(*value, expected_value);
 }
 
+bool MetricIntegrationTest::ExtractUKMPageLoadMetric(
+    std::string_view metric_name,
+    int64_t* extracted_value) {
+  ukm::mojom::UkmEntryPtr entry = GetEntry();
+  if (!entry) {
+    return false;
+  }
+  const int64_t* value =
+      TestUkmRecorder::GetEntryMetric(entry.get(), metric_name);
+  if (!value) {
+    return false;
+  }
+  *extracted_value = *value;
+  return true;
+}
+
 void MetricIntegrationTest::ExpectUKMPageLoadMetricsInAscendingOrder(
     std::string_view metric_name1,
     std::string_view metric_name2) {
@@ -234,6 +250,11 @@ void MetricIntegrationTest::ExpectUKMPageLoadMetricsInAscendingOrder(
 int64_t MetricIntegrationTest::GetUKMPageLoadMetricFlagSet(
     std::string_view metric_name) {
   ukm::mojom::UkmEntryPtr entry = GetEntry();
+  EXPECT_TRUE(entry);
+  if (!entry) {
+    return 0;
+  }
+
   const int64_t* flag_set =
       TestUkmRecorder::GetEntryMetric(entry.get(), metric_name);
   EXPECT_TRUE(flag_set != nullptr);
@@ -332,7 +353,7 @@ void MetricIntegrationTest::ExpectMetricInLastUKMUpdateTraceEventNear(
 
   const TraceEvent* last_update_event = ukm_update_events.back();
 
-  base::Value::Dict arg_dict;
+  base::DictValue arg_dict;
   last_update_event->GetArgAsDict("ukm_page_load_timing_update", &arg_dict);
   std::optional<double> metric_value = arg_dict.FindDouble(metric_name);
   ASSERT_TRUE(metric_value.has_value());

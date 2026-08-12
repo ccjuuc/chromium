@@ -13,9 +13,29 @@
 #include "content/browser/renderer_host/navigation_request.h"
 #include "content/browser/renderer_host/render_frame_host_delegate.h"
 #include "content/public/browser/navigation_handle.h"
+#include "services/network/public/cpp/supports_loading_mode/supports_loading_mode_parser.h"
+#include "services/network/public/mojom/supports_loading_mode.mojom.h"
 #include "url/origin.h"
 
 namespace content {
+
+namespace {
+
+bool FrameSupportsPrerenderCrossOrigin(RenderFrameHostImpl& rfh) {
+  const network::mojom::URLResponseHead* response_head =
+      rfh.GetLastResponseHead();
+  if (!response_head) {
+    return false;
+  }
+  if (!response_head->parsed_headers) {
+    return false;
+  }
+  return std::ranges::contains(
+      response_head->parsed_headers->supports_loading_mode,
+      network::mojom::LoadingMode::kPrerenderCrossOriginFrames);
+}
+
+}  // namespace
 
 // static
 void PrerenderSubframeNavigationThrottle::MaybeCreateAndAdd(
@@ -35,12 +55,14 @@ void PrerenderSubframeNavigationThrottle::MaybeCreateAndAdd(
 PrerenderSubframeNavigationThrottle::PrerenderSubframeNavigationThrottle(
     NavigationThrottleRegistry& registry)
     : NavigationThrottle(registry),
-      prerender_root_ftn_id_(
+      prerender_host_id_(
           NavigationRequest::From(&registry.GetNavigationHandle())
               ->frame_tree_node()
               ->frame_tree()
-              .root()
-              ->frame_tree_node_id()) {}
+              .delegate()
+              ->GetPrerenderHostId()) {
+  CHECK(prerender_host_id_);
+}
 
 PrerenderSubframeNavigationThrottle::~PrerenderSubframeNavigationThrottle() =
     default;
@@ -75,7 +97,7 @@ PrerenderSubframeNavigationThrottle::WillProcessResponse() {
             ->delegate()
             ->GetPrerenderHostRegistry();
     prerender_host_registry->CancelHost(
-        frame_tree_node->frame_tree().root()->frame_tree_node_id(),
+        frame_tree_node->frame_tree().delegate()->GetPrerenderHostId(),
         PrerenderFinalStatus::kDownload);
     return CANCEL;
   }
@@ -91,9 +113,9 @@ PrerenderSubframeNavigationThrottle::WillProcessResponse() {
   // added here, because this is the first place that the throttle can properly
   // check for cross-origin using GetOriginToCommit(). See comments in
   // WillStartOrRedirectRequest() for more details.
-  RenderFrameHostImpl* rfhi = frame_tree_node->frame_tree().GetMainFrame();
-  const url::Origin& main_origin = rfhi->GetLastCommittedOrigin();
-  if (!main_origin.IsSameOriginWith(
+  RenderFrameHostImpl* parent_rfh = frame_tree_node->parent();
+  const url::Origin& parent_origin = parent_rfh->GetLastCommittedOrigin();
+  if (!parent_origin.IsSameOriginWith(
           navigation_request->GetOriginToCommit().value())) {
     return DecidePolicyForCrossOriginSubframeNavigation(*frame_tree_node);
   }
@@ -126,8 +148,8 @@ void PrerenderSubframeNavigationThrottle::DidFinishNavigation(
   // Ignore finished navigations that are not the activation navigation for the
   // prerendering frame tree that this subframe navigation started in.
   auto* finished_navigation = NavigationRequest::From(nav_handle);
-  if (finished_navigation->prerender_frame_tree_node_id() !=
-      prerender_root_ftn_id_) {
+  if (finished_navigation->activating_prerender_host_id() !=
+      prerender_host_id_) {
     return;
   }
 
@@ -176,7 +198,7 @@ NavigationThrottle::ThrottleCheckResult PrerenderSubframeNavigationThrottle::
                                         ->delegate()
                                         ->GetPrerenderHostRegistry();
   PrerenderHost* prerender_host =
-      registry->FindNonReservedHostById(prerender_root_ftn_id_);
+      registry->FindNonReservedHostById(prerender_host_id_);
   if (!prerender_host) {
     // The PrerenderHostRegistry removed the PrerenderHost and scheduled to
     // destroy it asynchronously.
@@ -184,7 +206,17 @@ NavigationThrottle::ThrottleCheckResult PrerenderSubframeNavigationThrottle::
   }
 
   if (prerender_host->AllowCrossOriginSubframeNavigation()) {
-    return NavigationThrottle::PROCEED;
+    static const bool is_nesting_enabled =
+        features::kPrerender2CrossOriginIframesNesting.Get();
+    if (!is_nesting_enabled) {
+      return NavigationThrottle::PROCEED;
+    }
+
+    RenderFrameHostImpl* parent_rfh = frame_tree_node.parent();
+    CHECK(parent_rfh);
+    if (FrameSupportsPrerenderCrossOrigin(*parent_rfh)) {
+      return NavigationThrottle::PROCEED;
+    }
   }
 
   // Defer cross-origin subframe navigations during prerendering.
@@ -224,9 +256,9 @@ PrerenderSubframeNavigationThrottle::WillStartOrRedirectRequest() {
   // Note: about:blank and about:srcdoc also might not result in an appropriate
   // origin if we create the origin from the URL, but those cases won't go
   // through the NavigationThrottle, so it's not a problem here
-  RenderFrameHostImpl* rfhi = frame_tree_node->frame_tree().GetMainFrame();
-  const url::Origin& main_origin = rfhi->GetLastCommittedOrigin();
-  if (!main_origin.IsSameOriginWith(navigation_handle()->GetURL())) {
+  RenderFrameHostImpl* parent_rfh = frame_tree_node->parent();
+  const url::Origin& parent_origin = parent_rfh->GetLastCommittedOrigin();
+  if (!parent_origin.IsSameOriginWith(navigation_handle()->GetURL())) {
     return DecidePolicyForCrossOriginSubframeNavigation(*frame_tree_node);
   }
 

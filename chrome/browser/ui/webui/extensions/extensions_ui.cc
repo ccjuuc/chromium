@@ -11,27 +11,25 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
-#include "chrome/browser/extensions/mv2_experiment_stage.h"
 #include "chrome/browser/extensions/permissions_url_constants.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/managed_ui_handler.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
 #include "chrome/browser/ui/webui/page_not_available_for_guest/page_not_available_for_guest_ui.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/extensions_resources.h"
 #include "chrome/grit/extensions_resources_map.h"
 #include "chrome/grit/generated_resources.h"
@@ -44,9 +42,11 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/grit/extensions_browser_resources.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -68,6 +68,16 @@ constexpr char kEnableEnhancedSiteControls[] = "enableEnhancedSiteControls";
 
 std::string GetLoadTimeClasses(bool in_dev_mode) {
   return in_dev_mode ? "in-dev-mode" : std::string();
+}
+
+bool IsGlobalShortcutEnabled() {
+// Disable the global scoped shortcuts on Android and ChromeOS since they're
+// no-ops.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+  return false;
+#else
+  return true;
+#endif
 }
 
 content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
@@ -120,12 +130,6 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
        IDS_EXTENSIONS_EDIT_SITE_PERMISSIONS_CUSTOMIZE_PER_EXTENSION},
       {"editSitePermissionsRestrictExtensions",
        IDS_EXTENSIONS_EDIT_SITE_PERMISSIONS_RESTRICT_EXTENSIONS},
-      {"enableToggleTooltipDisabled",
-       IDS_EXTENSIONS_ENABLE_TOGGLE_TOOLTIP_DISABLED},
-      {"enableToggleTooltipEnabled",
-       IDS_EXTENSIONS_ENABLE_TOGGLE_TOOLTIP_ENABLED},
-      {"enableToggleTooltipEnabledWithSiteAccess",
-       IDS_EXTENSIONS_ENABLE_TOGGLE_TOOLTIP_ENABLED_WITH_SITE_ACCESS},
       {"errorsPageHeading", IDS_EXTENSIONS_ERROR_PAGE_HEADING},
       {"clearActivities", IDS_EXTENSIONS_CLEAR_ACTIVITIES},
       {"clearAll", IDS_EXTENSIONS_ERROR_CLEAR_ALL},
@@ -141,7 +145,7 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
       {"safetyCheckExtensionsKeep", IDS_CONFIRM_DOWNLOAD},
       {"stackTrace", IDS_EXTENSIONS_ERROR_STACK_TRACE},
       {"sidebarDiscoverMore", IDS_EXTENSIONS_SIDEBAR_DISCOVER_MORE},
-      {"sidebarDocsPromo", IDS_EXTENSIONS_WHATS_NEW_SIDEBAR_PROMO},
+      {"sidebarDocsPromo", IDS_EXTENSIONS_MODERN_WEB_GUIDANCE_PROMO},
       {"keyboardShortcuts", IDS_EXTENSIONS_SIDEBAR_KEYBOARD_SHORTCUTS},
       {"incognitoInfoWarning", IDS_EXTENSIONS_INCOGNITO_WARNING},
       {"userScriptInfoWarning", IDS_EXTENSIONS_ALLOW_USER_SCRIPTS_WARNING},
@@ -215,6 +219,7 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
       {"extensionIcon", IDS_EXTENSIONS_EXTENSION_ICON},
       {"extensionA11yAssociation", IDS_EXTENSIONS_EXTENSION_A11Y_ASSOCIATION},
       {"extensionsSectionHeader", IDS_EXTENSIONS_SECTION_HEADER},
+      {"pinNewExtensions", IDS_EXTENSIONS_PIN_NEW_EXTENSIONS},
       {"itemIdHeading", IDS_EXTENSIONS_ITEM_ID_HEADING},
       {"extensionEnabled", IDS_EXTENSIONS_EXTENSION_ENABLED},
       {"appEnabled", IDS_EXTENSIONS_APP_ENABLED},
@@ -351,9 +356,6 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
        IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_FIND_ALTERNATIVE_BUTTON_ACC_LABEL},
       {"mv2DeprecationPanelRemoveButtonAccLabel",
        IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_REMOVE_BUTTON_ACC_LABEL},
-      {"mv2DeprecationPanelKeepForNowButton",
-       IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_KEEP_FOR_NOW_BUTTON},
-      {"mv2DeprecationPanelRemoveExtensionButton", IDS_EXTENSIONS_UNINSTALL},
       {"mv2DeprecationMessageDisabledHeader",
        IDS_EXTENSIONS_MV2_DEPRECATION_MESSAGE_DISABLED_HEADER},
       {"mv2DeprecationMessageDisabledSubtitle",
@@ -369,6 +371,9 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
       {"setShortcutInSystemSettings",
        IDS_EXTENSIONS_SET_SHORTCUT_IN_SYSTEM_SETTINGS},
       {"shortcutNotSet", IDS_SHORTCUT_NOT_SET},
+      {"shortcutInputLabel", IDS_EXTENSIONS_SHORTCUT_INPUT_LABEL},
+      {"shortcutScope", IDS_EXTENSIONS_SHORTCUT_SCOPE},
+      {"shortcutClear", IDS_SHORTCUT_CLEAR},
       {"shortcutScopeGlobal", IDS_EXTENSIONS_SHORTCUT_SCOPE_GLOBAL},
       {"shortcutScopeLabel", IDS_EXTENSIONS_SHORTCUT_SCOPE_LABEL},
       {"shortcutScopeInChrome", IDS_EXTENSIONS_SHORTCUT_SCOPE_IN_CHROME},
@@ -455,10 +460,10 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
               g_browser_process->GetApplicationLocale())
               .spec()));
   source->AddString(
-      "extensionsWhatsNewURL",
+      "modernWebGuidanceURL",
       base::ASCIIToUTF16(google_util::AppendGoogleLocaleParam(
                              extension_urls::AppendUtmSource(
-                                 extension_urls::GetDocsWhatsNewURL(),
+                                 extension_urls::GetModernWebGuidanceURL(),
                                  extension_urls::kExtensionsSidebarUtmSource),
                              g_browser_process->GetApplicationLocale())
                              .spec()));
@@ -466,6 +471,9 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
       "hostPermissionsLearnMoreLink",
       extension_permissions_constants::kRuntimeHostPermissionsHelpURL);
   source->AddBoolean(kInDevModeKey, in_dev_mode);
+  source->AddBoolean(
+      "enableExtensionsPinnedByDefault",
+      base::FeatureList::IsEnabled(features::kExtensionsPinnedByDefault));
   source->AddBoolean(kShowActivityLogKey,
                      base::CommandLine::ForCurrentProcess()->HasSwitch(
                          ::switches::kEnableExtensionActivityLogging));
@@ -485,15 +493,12 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
   source->AddBoolean(
       "safetyHubThreeDotDetails",
       base::FeatureList::IsEnabled(features::kSafetyHubThreeDotDetails));
+  source->AddBoolean("enableGlobalScopedShortcuts", IsGlobalShortcutEnabled());
 
   // MV2 deprecation.
-  auto* mv2_experiment_manager = ManifestV2ExperimentManager::Get(profile);
-  MV2ExperimentStage experiment_stage =
-      mv2_experiment_manager->GetCurrentExperimentStage();
-  source->AddInteger("MV2ExperimentStage", static_cast<int>(experiment_stage));
-  source->AddBoolean(
-      "MV2DeprecationNoticeDismissed",
-      mv2_experiment_manager->DidUserAcknowledgeNoticeGlobally());
+  auto* mv2_handler = ManifestV2Handler::Get(profile);
+  source->AddBoolean("MV2DeprecationNoticeDismissed",
+                     mv2_handler->DidUserAcknowledgeNoticeGlobally());
 
 #if BUILDFLAG(IS_ANDROID)
   source->AddResourcePath("images/product_logo.png",
@@ -507,6 +512,10 @@ content::WebUIDataSource* CreateAndAddExtensionsSource(Profile* profile,
           IDS_EXTENSIONS_KIOSK_DISABLE_BAILOUT_SHORTCUT_WARNING_BODY,
           l10n_util::GetStringUTF16(IDS_SHORT_PRODUCT_OS_NAME)));
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
+                                            ? "webui-refresh-2026"
+                                            : "");
 
   return source;
 }
@@ -529,7 +538,8 @@ ExtensionsUIConfig::CreateWebUIController(content::WebUI* web_ui,
   return std::make_unique<ExtensionsUI>(web_ui);
 }
 
-ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+ExtensionsUI::ExtensionsUI(content::WebUI* web_ui)
+    : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = nullptr;
 
@@ -548,6 +558,8 @@ ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   // Add a handler to provide pluralized strings.
   auto plural_string_handler = std::make_unique<PluralStringHandler>();
@@ -575,7 +587,7 @@ ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 ExtensionsUI::~ExtensionsUI() = default;
 
 // static
-base::RefCountedMemory* ExtensionsUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> ExtensionsUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   return rb.LoadDataResourceBytesForScale(IDR_EXTENSIONS_FAVICON, scale_factor);
@@ -584,7 +596,7 @@ base::RefCountedMemory* ExtensionsUI::GetFaviconResourceBytes(
 // Normally volatile data does not belong in loadTimeData, but in this case
 // prevents flickering on a very prominent surface (top of the landing page).
 void ExtensionsUI::OnDevModeChanged() {
-  base::Value::Dict update;
+  base::DictValue update;
   update.Set(kInDevModeKey, *in_dev_mode_);
   update.Set(kLoadTimeClassesKey, GetLoadTimeClasses(*in_dev_mode_));
   content::WebUIDataSource::Update(Profile::FromWebUI(web_ui()),

@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
@@ -28,10 +27,10 @@
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/tabs/tab_list_interface.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/pref_names.h"
@@ -56,8 +55,8 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_usage.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
-#include "extensions/common/manifest_url_handlers.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -66,18 +65,23 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/menu_separator_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"   // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"  // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"         // nogncheck
 #include "chrome/common/extensions/api/side_panel.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_tracker.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -116,7 +120,7 @@ bool MenuItemMatchesAction(const std::optional<ActionInfo::Type> action_type,
 // the toolbar by policy.
 bool IsExtensionForcePinned(const Extension& extension, Profile* profile) {
   auto* management = ExtensionManagementFactory::GetForBrowserContext(profile);
-  return base::Contains(management->GetForcePinnedList(), extension.id());
+  return management->GetForcePinnedList().contains(extension.id());
 }
 
 // Returns true if the given |extension| is allowed to be inspected based on
@@ -127,12 +131,21 @@ bool IsExtensionInspectionAllowed(const Extension& extension,
   policy::DeveloperToolsPolicyChecker* checker =
       policy::DeveloperToolsPolicyCheckerFactory::GetForBrowserContext(profile);
   if (checker) {
-    if (auto url_check =
-            checker->CheckDevToolsAvailabilityForUrl(extension.url())) {
-      return *url_check;
+    auto url_availability =
+        checker->GetDevToolsAvailabilityForUrl(extension.url());
+    switch (url_availability) {
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::kAllowed:
+        return true;
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::
+          kDisallowed:
+        return false;
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::kNotSet:
+        // The URL is not covered by the URL-based policies, so we fall back to
+        // the general enum-based policy.
+        break;
     }
   }
-  using Availability = policy::DeveloperToolsPolicyHandler::Availability;
+  using Availability = policy::DeveloperToolsAvailability;
   Availability availability =
       policy::DeveloperToolsPolicyHandler::GetEffectiveAvailability(profile);
 
@@ -388,6 +401,10 @@ bool ExtensionContextMenuModel::IsCommandIdChecked(int command_id) const {
       command_id == PAGE_ACCESS_RUN_ON_SITE ||
       command_id == PAGE_ACCESS_RUN_ON_ALL_SITES) {
     auto* permissions = PermissionsManager::Get(profile_);
+    if (extension->permissions_data()->IsRestrictedUrl(origin_.GetURL(),
+                                                       nullptr)) {
+      return false;
+    }
     PermissionsManager::UserSiteAccess current_access =
         permissions->GetUserSiteAccess(*extension, origin_.GetURL());
     return current_access == CommandIdToSiteAccess(command_id);
@@ -521,6 +538,19 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       RecordUkmForExtension(extension->url(),
                             visible ? ExtensionUsageAction::kPinned
                                     : ExtensionUsageAction::kUnpinned);
+#if !BUILDFLAG(IS_ANDROID)
+      if (visible) {
+        ui::ElementContext context =
+            BrowserElements::From(browser_)->GetContext();
+        ui::TrackedElement* const browser_element =
+            ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                kBrowserViewElementId, context);
+        if (browser_element) {
+          ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+              browser_element, kExtensionsMenuPinExtensionsEventId);
+        }
+      }
+#endif
       break;
     }
     case UNINSTALL: {
@@ -600,7 +630,7 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       // Do nothing if the extension cannot have its site permissions updated.
       // Page access option should only be enabled when the extension site
       // permissions can be changed. However, sometimes the command still gets
-      // invoked (crbug.com/1468151). Thus, we exit early to prevent any
+      // invoked (crbug.com/40068180). Thus, we exit early to prevent any
       // crashes.
       if (!PermissionsManager::Get(profile_)->CanAffectExtension(*extension)) {
         return;
@@ -608,7 +638,7 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
 
       SitePermissionsHelper permissions(profile_);
       permissions.UpdateSiteAccess(*extension, web_contents,
-                                   CommandIdToSiteAccess(command_id));
+                                   CommandIdToSiteAccess(command_id), origin_);
       break;
     }
     case PAGE_ACCESS_PERMISSIONS_PAGE:
@@ -651,11 +681,8 @@ void ExtensionContextMenuModel::MenuClosed(ui::SimpleMenuModel* menu) {
 #if !BUILDFLAG(IS_ANDROID)
     if (source_ == ContextMenuSource::kMenuItem &&
         was_side_panel_action_taken) {
-      browser_->GetBrowserForMigrationOnly()
-          ->window()
-          ->GetExtensionsContainer()
-          ->CloseOverflowMenuIfOpen();
-      // WARNING: The overflow menu was the parent for this menu, so it's
+      ExtensionsContainer::From(*browser_)->CloseExtensionsMenuIfOpen();
+      // WARNING: The extensions menu was the parent for this menu, so it's
       // possible `this` is now deleted.
     }
 #endif
@@ -761,7 +788,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
         page_access_submenu_->AddSeparator(ui::NORMAL_SEPARATOR);
         page_access_submenu_->AddItemWithStringIdAndIcon(
             POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-            ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+            ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kDomainIcon
+                                               : vector_icons::kBusinessOldIcon,
                                            ui::kColorIcon, 16));
         policy_entry_in_subpage = true;
       }
@@ -801,7 +830,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     // TODO (kylixrd): Investigate the usage of the hard-coded color.
     AddItemWithStringIdAndIcon(
         POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-        ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kDomainIcon
+                                           : vector_icons::kBusinessOldIcon,
                                        ui::kColorIcon, 16));
   }
 
@@ -816,7 +847,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     if (IsExtensionForcePinned(*extension, profile_)) {
       AddItemWithStringIdAndIcon(
           TOGGLE_VISIBILITY, IDS_EXTENSIONS_PINNED_BY_ADMIN,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
     } else {
       int message_id = is_pinned_
@@ -858,7 +891,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     } else {
       AddItemWithStringIdAndIcon(
           INSPECT_POPUP, IDS_EXTENSION_ACTION_INSPECT_POPUP,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
     }
   }
@@ -905,7 +940,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
       // TODO (kylixrd): Investigate the usage of the hard-coded color.
       AddItemWithStringIdAndIcon(
           POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
 
     } else {
@@ -922,9 +959,11 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
     if (IsExtensionForcePinned(*extension, profile_)) {
       size_t toggle_visibility_index =
           GetIndexOfCommandId(TOGGLE_VISIBILITY).value();
-      SetIcon(toggle_visibility_index,
-              ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
-                                             ui::kColorIcon, 16));
+      SetIcon(toggle_visibility_index, ui::ImageModel::FromVectorIcon(
+                                           features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kDomainIcon
+                                               : vector_icons::kBusinessOldIcon,
+                                           ui::kColorIcon, 16));
     }
   }
 

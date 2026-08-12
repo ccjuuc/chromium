@@ -8,6 +8,8 @@ import static org.chromium.build.NullUtil.assertNonNull;
 
 import android.app.Activity;
 
+import androidx.annotation.VisibleForTesting;
+
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
@@ -25,7 +27,7 @@ import org.chromium.ui.modaldialog.DialogDismissalCause;
 @JNINamespace("autofill")
 @NullMarked
 final class AutofillNameFixFlowBridge implements AutofillNameFixFlowPromptDelegate {
-    private final long mNativeCardNameFixFlowViewAndroid;
+    private long mNativeCardNameFixFlowViewAndroid;
     private final @Nullable Activity mActivity;
     private final String mTitle;
     private final String mInferredName;
@@ -33,7 +35,8 @@ final class AutofillNameFixFlowBridge implements AutofillNameFixFlowPromptDelega
     private final int mIconId;
     private @Nullable AutofillNameFixFlowPrompt mNameFixFlowPrompt;
 
-    private AutofillNameFixFlowBridge(
+    @VisibleForTesting
+    AutofillNameFixFlowBridge(
             long nativeCardNameFixFlowViewAndroid,
             String title,
             String inferredName,
@@ -51,7 +54,7 @@ final class AutofillNameFixFlowBridge implements AutofillNameFixFlowPromptDelega
             mNameFixFlowPrompt = null;
             // Clean up the native counterpart. This is posted to allow the native counterpart
             // to fully finish the construction of this glue object before we attempt to delete it.
-            PostTask.postTask(TaskTraits.UI_DEFAULT, () -> onPromptDismissed());
+            PostTask.postTask(TaskTraits.UI_DEFAULT, this::onPromptDismissed);
         }
     }
 
@@ -74,16 +77,25 @@ final class AutofillNameFixFlowBridge implements AutofillNameFixFlowPromptDelega
 
     @Override
     public void onPromptDismissed() {
-        AutofillNameFixFlowBridgeJni.get().promptDismissed(mNativeCardNameFixFlowViewAndroid);
+        if (mNativeCardNameFixFlowViewAndroid == 0) return;
+        long nativePtr = mNativeCardNameFixFlowViewAndroid;
+        // The native pointer is zeroed out here before calling promptDismissed to ensure
+        // that any subsequent UI events triggered during the dismissal flow (like focus
+        // changes or text watcher events) are dropped instead of attempting to call
+        // JNI methods on a dangling pointer.
+        mNativeCardNameFixFlowViewAndroid = 0;
+        AutofillNameFixFlowBridgeJni.get().promptDismissed(nativePtr);
     }
 
     @Override
     public void onUserDismiss() {
+        if (mNativeCardNameFixFlowViewAndroid == 0) return;
         AutofillNameFixFlowBridgeJni.get().onUserDismiss(mNativeCardNameFixFlowViewAndroid);
     }
 
     @Override
     public void onUserAcceptCardholderName(String name) {
+        if (mNativeCardNameFixFlowViewAndroid == 0) return;
         AutofillNameFixFlowBridgeJni.get().onUserAccept(mNativeCardNameFixFlowViewAndroid, name);
     }
 
@@ -95,7 +107,7 @@ final class AutofillNameFixFlowBridge implements AutofillNameFixFlowPromptDelega
     @CalledByNative
     private void show(WindowAndroid windowAndroid) {
         mNameFixFlowPrompt =
-                AutofillNameFixFlowPrompt.createAsInfobarFixFlowPrompt(
+                AutofillNameFixFlowPrompt.createAsMessageFixFlowPrompt(
                         assertNonNull(mActivity),
                         this,
                         mInferredName,

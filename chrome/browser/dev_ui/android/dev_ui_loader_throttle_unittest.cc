@@ -10,7 +10,6 @@
 
 #include "chrome/android/modules/dev_ui/provider/dev_ui_module_provider.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "content/public/browser/navigation_handle.h"
 #include "content/public/common/buildflags.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/mock_navigation_throttle_registry.h"
@@ -33,6 +32,10 @@ const char* const kNonDevUiUrls[] = {
 const char* const kDevUiUrls[] = {
     "chrome://bluetooth-internals",
     "chrome://bluetooth-internals/path?query#frag",
+    "chrome://chrome-finds-internals",
+    "chrome://chrome-finds-internals/path?query#frag",
+    "chrome://private-ai-internals",
+    "chrome://private-ai-internals/path?query#frag",
 #if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
     "devtools://devtools/bundled/devtools_app.html",
 #endif

@@ -443,9 +443,9 @@ def check_test_lists(port):
 def run_checks(host, options):
     finder = PathFinder(host.filesystem)
     if finder.is_cog():
-        _log.warning('Skipping run_checks for cog workspace')
-        # Return 2 to indicate a warning and make it explicit this test is getting skipped.
-        return 2
+        _log.info('Skipping run_checks for cog workspace')
+        # Return 0 since a warning is too noisy on cog.
+        return 0
     # Add all extra expectation files to be linted.
     options.additional_expectations.extend([
         finder.path_from_web_tests('WebGPUExpectations'),
@@ -495,6 +495,10 @@ def main(argv, stderr, host=None):
         action='append',
         default=[],
         help='paths to additional expectation files to lint.')
+    parser.add_option(
+        '--remote-branch',
+        default=None,
+        help='remote branch ref to diff against. Defaults to main.')
 
     options, _ = parser.parse_args(argv)
 
@@ -507,6 +511,9 @@ def main(argv, stderr, host=None):
             host = MockHost()
         else:
             host = Host()
+
+    if options.remote_branch:
+        host.remote_branch = options.remote_branch
 
     if options.verbose:
         configure_logging(logging_level=logging.DEBUG, stream=stderr)

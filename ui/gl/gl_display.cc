@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/crash_logging.h"
 #include "base/export_template.h"
 #include "base/logging.h"
@@ -181,10 +180,6 @@ EGLDisplay GetDisplayFromType(
       }
       return eglGetDisplay(display);
     }
-    case ANGLE_D3D9:
-      return GetPlatformANGLEDisplay(
-          display, EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE, enabled_angle_features,
-          disabled_angle_features, extra_display_attribs);
     case ANGLE_D3D11:
       return GetPlatformANGLEDisplay(
           display, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE, enabled_angle_features,
@@ -265,12 +260,12 @@ EGLDisplay GetDisplayFromType(
       extra_display_attribs.push_back(EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE);
       extra_display_attribs.push_back(
           EGL_PLATFORM_ANGLE_DEVICE_TYPE_SWIFTSHADER_ANGLE);
-#if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(SUPPORTS_OZONE_X11)
       extra_display_attribs.push_back(
           EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
       extra_display_attribs.push_back(
           EGL_PLATFORM_VULKAN_DISPLAY_MODE_HEADLESS_ANGLE);
-#endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(SUPPORTS_OZONE_X11)
       return GetPlatformANGLEDisplay(
           display, EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE, enabled_angle_features,
           disabled_angle_features, extra_display_attribs);
@@ -293,8 +288,6 @@ EGLDisplay GetDisplayFromType(
 ANGLEImplementation GetANGLEImplementationFromDisplayType(
     DisplayType display_type) {
   switch (display_type) {
-    case ANGLE_D3D9:
-      return ANGLEImplementation::kD3D9;
     case ANGLE_D3D11:
     case ANGLE_D3D11_NULL:
     case ANGLE_D3D11on12:
@@ -330,8 +323,6 @@ const char* DisplayTypeString(DisplayType display_type) {
       return "Default";
     case SWIFT_SHADER:
       return "SwiftShader";
-    case ANGLE_D3D9:
-      return "D3D9";
     case ANGLE_D3D11:
       return "D3D11";
     case ANGLE_D3D11_WARP:
@@ -671,7 +662,8 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
     return true;
   }
 
-  LOG(ERROR) << "Initialization of all EGL display types failed.";
+  LOG(ERROR) << "Initialization of all (" << init_displays.size()
+             << ") EGL display types failed.";
 
   return false;
 }

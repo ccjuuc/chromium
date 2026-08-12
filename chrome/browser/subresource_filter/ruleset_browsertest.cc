@@ -7,7 +7,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/async_document_subresource_filter.h"
@@ -119,8 +118,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterBrowserTest, InvalidRuleset_Checksum) {
   // via the checksum, and not the Flatbuffer Verifier.  This was determined
   // at random by flipping elements until this test failed, then adding
   // the checksum code and ensuring it passed.
-  testing::TestRuleset::CorruptByFilling(test_ruleset_pair.indexed, 28246,
-                                         28247, 32);
+  testing::TestRuleset::CorruptByFilling(test_ruleset_pair.indexed, 1000, 1001,
+                                         32);
   OpenAndPublishRuleset(service, test_ruleset_pair.indexed.path);
   ASSERT_TRUE(service->GetRulesetDealer());
 

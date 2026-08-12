@@ -9,6 +9,7 @@ import android.view.Gravity;
 
 import androidx.annotation.GravityInt;
 
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
@@ -31,11 +32,13 @@ import java.util.function.Supplier;
 /** Helper class showing page info dialog for Clank. */
 @NullMarked
 public class ChromePageInfo {
-    private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final Supplier<@Nullable ModalDialogManager> mModalDialogManagerSupplier;
     private final @Nullable String mPublisher;
     private final @OpenedFromSource int mSource;
-    private final @Nullable Supplier<StoreInfoActionHandler> mStoreInfoActionHandlerSupplier;
-    private final @Nullable Supplier<EphemeralTabCoordinator> mEphemeralTabCoordinatorSupplier;
+    private final @Nullable MonotonicObservableSupplier<StoreInfoActionHandler>
+            mStoreInfoActionHandlerSupplier;
+    private final @Nullable Supplier<@Nullable EphemeralTabCoordinator>
+            mEphemeralTabCoordinatorSupplier;
     private final @Nullable TabCreator mTabCreator;
 
     /**
@@ -47,11 +50,12 @@ public class ChromePageInfo {
      * @param tabCreator {@link TabCreator} to handle a new tab creation.
      */
     public ChromePageInfo(
-            Supplier<ModalDialogManager> modalDialogManagerSupplier,
+            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
             @Nullable String publisher,
             @OpenedFromSource int source,
-            @Nullable Supplier<StoreInfoActionHandler> storeInfoActionHandlerSupplier,
-            @Nullable Supplier<EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
+            @Nullable MonotonicObservableSupplier<StoreInfoActionHandler>
+                    storeInfoActionHandlerSupplier,
+            @Nullable Supplier<@Nullable EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
             @Nullable TabCreator tabCreator) {
         mModalDialogManagerSupplier = modalDialogManagerSupplier;
         mPublisher = publisher;

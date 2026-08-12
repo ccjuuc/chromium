@@ -19,9 +19,16 @@ RenderWidgetHostViewTVOS::RenderWidgetHostViewTVOS(RenderWidgetHost* widget)
 RenderWidgetHostViewTVOS::~RenderWidgetHostViewTVOS() = default;
 
 void RenderWidgetHostViewTVOS::UpdateCALayerTree(
-    const gfx::CALayerParams& ca_layer_params) {
-  DCHECK(display_tree_);
-  display_tree_->UpdateCALayerTree(ca_layer_params);
+    gfx::CALayerParams ca_layer_params) {
+  CHECK(display_tree_, base::NotFatalUntil::M152);
+  display_tree_->UpdateCALayerTree(std::move(ca_layer_params));
+}
+
+void RenderWidgetHostViewTVOS::OnGestureEvent(
+    const ui::GestureEventData& gesture) {}
+
+bool RenderWidgetHostViewTVOS::RequiresDoubleTapGestureEvents() const {
+  return false;
 }
 
 }  // namespace content

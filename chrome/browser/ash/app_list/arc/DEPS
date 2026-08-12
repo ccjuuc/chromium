@@ -14,7 +14,6 @@ include_rules = [
   # Files residing in certain directories (e.g., //chrome/browser) are listed
   # individually. Other dependencies within //chrome are listed on a per-
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
-  "+chrome/browser/apps/app_service",
   "+chrome/browser/ash/app_list",
   "+chrome/browser/ash/arc",
   "+chrome/browser/ash/login",
@@ -28,18 +27,23 @@ include_rules = [
   "+chrome/browser/ui/ash/shelf",
   "+chrome/browser/ui/browser.h",
   "+chrome/browser/web_applications/test",
-  "+chrome/common/chrome_features.h",
   "+chrome/common/chrome_paths.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]
 
 specific_include_rules = {
+  "arc_app_utils\\.cc": [
+    "+chrome/browser/apps/app_service/intent_util.h",
+  ],
   "arc_app_list_prefs\\.cc": [
      "+ash",
   ],
+  "arc_app_test\\.cc": [
+    "+chrome/browser/apps/app_service",
+  ],
   "arc_app_unittest\\.cc": [
+    "+chrome/browser/apps/app_service",
     "+chrome/browser/ash/browser_delegate/browser_controller_impl.h",
   ],
 }

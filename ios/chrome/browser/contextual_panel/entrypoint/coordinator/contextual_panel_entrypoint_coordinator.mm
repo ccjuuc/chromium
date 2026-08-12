@@ -15,16 +15,18 @@
 #import "ios/chrome/browser/fullscreen/ui_bundled/animated_scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
+#import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_panel_entrypoint_iph_commands.h"
 #import "ios/chrome/browser/shared/public/commands/contextual_sheet_commands.h"
+#import "ios/chrome/browser/shared/public/commands/fullscreen_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/omnibox_util.h"
 
 @interface ContextualPanelEntrypointCoordinator () <
-    ContextualPanelEntrypointCommands,
     ContextualPanelEntrypointMediatorDelegate> {
   // Observer that updates ContextualPanelEntrypointViewController for
   // fullscreen events.
@@ -33,7 +35,9 @@
 
   // The AnimatedFullscreenDisabler to disable fullscreen momentarily as the
   // large entrypoint is shown.
-  std::unique_ptr<AnimatedScopedFullscreenDisabler> _animatedFullscreenDisabler;
+  std::unique_ptr<ScopedFullscreenDisabler> _fullscreenDisabler;
+  std::unique_ptr<AnimatedScopedFullscreenDisabler>
+      _legacyAnimatedFullscreenDisabler;
 }
 
 // The mediator for this coordinator.
@@ -52,9 +56,14 @@
   WebStateList* webStateList = self.browser->GetWebStateList();
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
 
-  [dispatcher
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(ContextualPanelEntrypointCommands)];
+  // Skip registration if Next is enabled to avoid a duplicate registration
+  // crash. In that mode, MainToolbarCoordinator takes over command handling
+  // and forwards them to LocationBarCoordinator.
+  if (!IsChromeNextIaEnabled()) {
+    [dispatcher
+        startDispatchingToTarget:self
+                     forProtocol:@protocol(ContextualPanelEntrypointCommands)];
+  }
 
   id<ContextualSheetCommands> contextualSheetHandler =
       HandlerForProtocol(dispatcher, ContextualSheetCommands);
@@ -89,7 +98,8 @@
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   [dispatcher stopDispatchingToTarget:self];
 
-  _animatedFullscreenDisabler = nullptr;
+  _fullscreenDisabler = nullptr;
+  _legacyAnimatedFullscreenDisabler = nullptr;
 
   [_mediator disconnect];
   _mediator.consumer = nil;
@@ -116,14 +126,21 @@
 }
 
 - (void)enableFullscreen {
-  _animatedFullscreenDisabler = nullptr;
+  _fullscreenDisabler = nullptr;
+  _legacyAnimatedFullscreenDisabler = nullptr;
 }
 
 - (void)disableFullscreen {
-  _animatedFullscreenDisabler =
-      std::make_unique<AnimatedScopedFullscreenDisabler>(
-          FullscreenController::FromBrowser(self.browser));
-  _animatedFullscreenDisabler->StartAnimation();
+  if (IsFullscreenRefactoringEnabled()) {
+    id<FullscreenCommands> handler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), FullscreenCommands);
+    _fullscreenDisabler = std::make_unique<ScopedFullscreenDisabler>(handler);
+  } else {
+    _legacyAnimatedFullscreenDisabler =
+        std::make_unique<AnimatedScopedFullscreenDisabler>(
+            FullscreenController::FromBrowser(self.browser));
+    _legacyAnimatedFullscreenDisabler->StartAnimation();
+  }
 }
 
 - (BOOL)isBottomOmniboxActive {

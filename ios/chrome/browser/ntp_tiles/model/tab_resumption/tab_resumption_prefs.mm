@@ -20,7 +20,6 @@ namespace tab_resumption_prefs {
 // The maximum length of the last distant tab URL.
 size_t kMaxLengthTabURL = 2 * 1024;
 
-const char kTabResumptionDisabledPref[] = "tab_resumption.disabled";
 const char kTabResumptionLastOpenedTabURLPref[] =
     "tab_resumption.last_opened_tab_url";
 const char kTabResumptionRegularUrlImpressions[] =
@@ -30,17 +29,10 @@ const char kTabResumptionWithPriceDropUrlImpressions[] =
 const char kTabResumptionWithPriceTrackableUrlImpressions[] =
     "tab_resumption.price_trackable.url_impressions";
 
-void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
-  // TODO(crbug.com/395840133): Remove `kTabResumptionDisabledPref` registration
-  // from local-state Prefs after successfully migrating to profile Prefs.
-  registry->RegisterBooleanPref(kTabResumptionDisabledPref, false);
-}
-
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterStringPref(kTabResumptionLastOpenedTabURLPref,
                                std::string());
   // Added 02/2025
-  registry->RegisterBooleanPref(kTabResumptionDisabledPref, false);
   registry->RegisterDictionaryPref(kTabResumptionRegularUrlImpressions);
   registry->RegisterDictionaryPref(kTabResumptionWithPriceDropUrlImpressions);
   registry->RegisterDictionaryPref(

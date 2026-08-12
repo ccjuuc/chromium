@@ -41,6 +41,8 @@ gin::ObjectTemplateBuilder APIBindingJSUtil::GetObjectTemplateBuilder(
       .SetMethod("sendRequest", &APIBindingJSUtil::SendRequest)
       .SetMethod("registerEventArgumentMassager",
                  &APIBindingJSUtil::RegisterEventArgumentMassager)
+      .SetMethod("registerEventDispatchHandler",
+                 &APIBindingJSUtil::RegisterEventDispatchHandler)
       .SetMethod("createCustomEvent", &APIBindingJSUtil::CreateCustomEvent)
       .SetMethod("createCustomDeclarativeEvent",
                  &APIBindingJSUtil::CreateCustomDeclarativeEvent)
@@ -81,7 +83,7 @@ void APIBindingJSUtil::SendRequest(
       NOTREACHED();
     }
     v8::Local<v8::Object> options_obj = options.As<v8::Object>();
-    if (!options_obj->GetPrototypeV2()->IsNull()) {
+    if (!options_obj->GetPrototype()->IsNull()) {
       NOTREACHED();
     }
     gin::Dictionary options_dict(isolate, options_obj);
@@ -123,6 +125,18 @@ void APIBindingJSUtil::RegisterEventArgumentMassager(
   v8::Local<v8::Context> context = arguments->GetHolderCreationContext();
 
   event_handler_->RegisterArgumentMassager(context, event_name, massager);
+}
+
+void APIBindingJSUtil::RegisterEventDispatchHandler(
+    gin::Arguments* arguments,
+    const std::string& event_name,
+    v8::Local<v8::Function> dispatch_handler) {
+  v8::Isolate* isolate = arguments->isolate();
+  v8::HandleScope handle_scope(isolate);
+  v8::Local<v8::Context> context = arguments->GetHolderCreationContext();
+
+  event_handler_->RegisterEventDispatchHandler(context, event_name,
+                                               dispatch_handler);
 }
 
 void APIBindingJSUtil::CreateCustomEvent(gin::Arguments* arguments,
@@ -313,9 +327,8 @@ void APIBindingJSUtil::AddCustomSignature(
   }
 
   type_refs_->AddCustomSignature(
-      custom_signature_name,
-      APISignature::CreateFromValues(*base_signature, nullptr /*returns_async*/,
-                                     nullptr /*access_checker*/));
+      custom_signature_name, APISignature::CreateFromValues(
+                                 *base_signature, nullptr /*returns_async*/));
 }
 
 void APIBindingJSUtil::ValidateCustomSignature(

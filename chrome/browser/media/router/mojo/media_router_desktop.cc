@@ -11,10 +11,10 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -44,13 +44,14 @@
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/providers/cast/cast_media_source.h"
 #include "components/media_router/common/providers/cast/channel/cast_socket_service.h"
-#include "components/openscreen_platform/network_context.h"
+#include "components/openscreen_platform/socket_factory.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/network/public/mojom/socket_factory.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -60,6 +61,10 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/common/constants.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+#include "chrome/browser/media/router/providers/redirection/redirection_media_route_provider.h"
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 
 namespace media_router {
 namespace {
@@ -230,6 +235,7 @@ void MediaRouterDesktop::JoinRoute(const MediaSource::Id& source_id,
                                    MediaRouteResponseCallback callback,
                                    base::TimeDelta timeout) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
   std::optional<mojom::MediaRouteProviderId> provider_id =
       GetProviderIdForPresentation(presentation_id);
   if (!provider_id || !HasJoinableRoute()) {
@@ -238,6 +244,16 @@ void MediaRouterDesktop::JoinRoute(const MediaSource::Id& source_id,
     MediaRouterMetrics::RecordJoinRouteResultCode(result->result_code());
     // TODO(btolsch): This should really move `result` now that there's only a
     // single callback.
+    std::move(callback).Run(nullptr, *result);
+    return;
+  }
+
+  if (IsDesktopCaptureEscalation(MediaSource(source_id), presentation_id)) {
+    std::unique_ptr<RouteRequestResult> result = RouteRequestResult::FromError(
+        "Cannot switch to desktop capture without user consent",
+        mojom::RouteRequestResultCode::USER_NOT_ALLOWED);
+    MediaRouterMetrics::RecordJoinRouteResultCode(result->result_code(),
+                                                  provider_id);
     std::move(callback).Run(nullptr, *result);
     return;
   }
@@ -373,7 +389,7 @@ base::Value MediaRouterDesktop::GetLogs() const {
   return logger_.GetLogsAsValue();
 }
 
-base::Value::Dict MediaRouterDesktop::GetState() const {
+base::DictValue MediaRouterDesktop::GetState() const {
   return media_sink_service_status_.GetStatusAsValue();
 }
 
@@ -524,7 +540,7 @@ void MediaRouterDesktop::RegisterMediaRouteProvider(
     mojo::PendingRemote<mojom::MediaRouteProvider>
         media_route_provider_remote) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(!base::Contains(media_route_providers_, provider_id));
+  DCHECK(!media_route_providers_.contains(provider_id));
   mojo::Remote<mojom::MediaRouteProvider> bound_remote(
       std::move(media_route_provider_remote));
   bound_remote.set_disconnect_handler(
@@ -732,17 +748,39 @@ void MediaRouterDesktop::InitializeMediaRouteProviders() {
   DCHECK(!base::CommandLine::ForCurrentProcess()->HasSwitch(
       kDisableMediaRouteProvidersForTestSwitch));
 
-  if (!openscreen_platform::HasNetworkContextGetter()) {
-    openscreen_platform::SetNetworkContextGetter(base::BindRepeating([] {
-      DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-      return g_browser_process->system_network_context_manager()->GetContext();
-    }));
+  if (!openscreen_platform::SocketFactoryGetter::IsSet()) {
+    openscreen_platform::SocketFactoryGetter::Set(
+        base::BindRepeating([]() -> network::mojom::SocketFactory* {
+          DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+          static base::NoDestructor<mojo::Remote<network::mojom::SocketFactory>>
+              socket_factory;
+          if (!socket_factory->is_bound()) {
+            network::mojom::NetworkContext* context =
+                g_browser_process->system_network_context_manager()
+                    ->GetContext();
+            if (context) {
+              context->CreateSocketFactory(
+                  socket_factory->BindNewPipeAndPassReceiver());
+              mojo::Remote<network::mojom::SocketFactory>* raw_remote =
+                  socket_factory.get();
+              socket_factory->set_disconnect_handler(base::BindOnce(
+                  [](mojo::Remote<network::mojom::SocketFactory>* remote) {
+                    remote->reset();
+                  },
+                  raw_remote));
+            }
+          }
+          return socket_factory->get();
+        }));
   }
 
   InitializeWiredDisplayMediaRouteProvider();
   InitializeCastMediaRouteProvider();
   if (DialMediaRouteProviderEnabled()) {
     InitializeDialMediaRouteProvider();
+  }
+  if (RedirectionMediaRouteProviderEnabled()) {
+    InitializeRedirectionMediaRouteProvider();
   }
 }
 
@@ -799,6 +837,22 @@ void MediaRouterDesktop::InitializeDialMediaRouteProvider() {
           base::OnTaskRunnerDeleter(task_runner));
   RegisterMediaRouteProvider(mojom::MediaRouteProviderId::DIAL,
                              std::move(dial_provider_remote));
+}
+
+void MediaRouterDesktop::InitializeRedirectionMediaRouteProvider() {
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+  mojo::PendingRemote<mojom::MediaRouter> media_router_remote;
+  MediaRouterDesktop::BindToMojoReceiver(
+      media_router_remote.InitWithNewPipeAndPassReceiver());
+  mojo::PendingRemote<mojom::MediaRouteProvider> redirection_provider_remote;
+  redirection_provider_ = std::make_unique<RedirectionMediaRouteProvider>(
+      redirection_provider_remote.InitWithNewPipeAndPassReceiver(),
+      std::move(media_router_remote));
+  RegisterMediaRouteProvider(mojom::MediaRouteProviderId::REDIRECTION,
+                             std::move(redirection_provider_remote));
+#else
+  NOTREACHED() << "Redirection Media Route Provider is not enabled.";
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -900,7 +954,8 @@ MediaRouterDesktop::GetProviderIdForPresentation(
     DCHECK_LE(std::ranges::count(routes, presentation_id,
                                  &MediaRoute::presentation_id),
               1);
-    if (base::Contains(routes, presentation_id, &MediaRoute::presentation_id)) {
+    if (std::ranges::contains(routes, presentation_id,
+                              &MediaRoute::presentation_id)) {
       return provider_id;
     }
   }
@@ -913,7 +968,7 @@ MediaRouterDesktop::GetProviderIdForRoute(const MediaRoute::Id& route_id) {
   for (const auto& provider_to_routes : routes_query_.providers_to_routes()) {
     const mojom::MediaRouteProviderId provider_id = provider_to_routes.first;
     const std::vector<MediaRoute>& routes = provider_to_routes.second;
-    if (base::Contains(routes, route_id, &MediaRoute::media_route_id)) {
+    if (std::ranges::contains(routes, route_id, &MediaRoute::media_route_id)) {
       return provider_id;
     }
   }
@@ -990,6 +1045,7 @@ void MediaRouterDesktop::RecordPresentationRequestUrlBySink(
       }
       break;
     case mojom::MediaRouteProviderId::ANDROID_CAF:
+    case mojom::MediaRouteProviderId::REDIRECTION:
     case mojom::MediaRouteProviderId::TEST:
       break;
   }
@@ -999,6 +1055,35 @@ void MediaRouterDesktop::RecordPresentationRequestUrlBySink(
 
 bool MediaRouterDesktop::HasJoinableRoute() const {
   return !(current_routes_.empty());
+}
+
+bool MediaRouterDesktop::IsDesktopCaptureEscalation(
+    const MediaSource& new_source,
+    const std::string& presentation_id) const {
+  if (!new_source.IsDesktopMirroringSource()) {
+    return false;
+  }
+
+  if (presentation_id == kAutoJoinPresentationId) {
+    // Auto-join is not supported for desktop mirroring to prevent silent
+    // escalation from non-desktop to desktop capture without user consent.
+    return true;
+  }
+
+  auto current_routes = GetCurrentRoutes();
+  auto it = std::ranges::find_if(current_routes, [&](const MediaRoute& route) {
+    return route.presentation_id() == presentation_id;
+  });
+  if (it != current_routes.end()) {
+    // Block joining if the target route is not also desktop mirroring.
+    // This prevents upgrading to desktop capture without explicit user consent.
+    return !it->media_source().IsDesktopMirroringSource();
+  }
+
+  // Execution falls through here if a non-existent Cast route ID bypasses
+  // prior checks. Returning true treats this as an escalation to block the
+  // request.
+  return true;
 }
 
 bool MediaRouterDesktop::ShouldInitializeMediaRouteProviders() const {
@@ -1085,8 +1170,8 @@ bool MediaRouterDesktop::MediaRoutesQuery::AddRouteForProvider(
     mojom::MediaRouteProviderId provider_id,
     const MediaRoute& route) {
   std::vector<MediaRoute>& routes = providers_to_routes_[provider_id];
-  if (!base::Contains(routes, route.media_route_id(),
-                      &MediaRoute::media_route_id)) {
+  if (!std::ranges::contains(routes, route.media_route_id(),
+                             &MediaRoute::media_route_id)) {
     routes.push_back(route);
     UpdateCachedRouteList();
     return true;

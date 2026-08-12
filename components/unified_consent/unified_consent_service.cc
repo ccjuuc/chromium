@@ -19,8 +19,7 @@ namespace unified_consent {
 // static
 UnifiedConsentService::SyncState UnifiedConsentService::GetSyncState(
     const syncer::SyncService* sync_service) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
 
   if (sync_service->HasDisableReason(
           syncer::SyncService::DISABLE_REASON_NOT_SIGNED_IN)) {
@@ -50,8 +49,7 @@ UnifiedConsentService::SyncState UnifiedConsentService::GetSyncState(
 bool UnifiedConsentService::ShouldEnableUrlKeyedAnonymizedDataCollection(
     SyncState old_sync_state,
     SyncState new_sync_state) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
 
   // If nothing changed, leave UrlKeyedAnonymizedDataCollection alone.
   if (old_sync_state == new_sync_state) {
@@ -102,8 +100,7 @@ bool UnifiedConsentService::ShouldEnableUrlKeyedAnonymizedDataCollection(
 bool UnifiedConsentService::ShouldDisableUrlKeyedAnonymizedDataCollection(
     SyncState old_sync_state,
     SyncState new_sync_state) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
 
   // If nothing changed, leave UrlKeyedAnonymizedDataCollection alone.
   if (old_sync_state == new_sync_state) {
@@ -155,7 +152,12 @@ UnifiedConsentService::UnifiedConsentService(
     sync_preferences::PrefServiceSyncable* pref_service,
     signin::IdentityManager* identity_manager,
     syncer::SyncService* sync_service,
-    const std::vector<std::string>& service_pref_names)
+    const std::vector<std::string>& service_pref_names
+#if BUILDFLAG(IS_CHROMEOS)
+    ,
+    bool is_new_profile
+#endif
+    )
     : pref_service_(pref_service),
       identity_manager_(identity_manager),
       sync_service_(sync_service),
@@ -169,9 +171,18 @@ UnifiedConsentService::UnifiedConsentService(
     MigrateProfileToUnifiedConsent();
 #endif
 
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     last_sync_state_ = GetSyncState(sync_service_);
+#if BUILDFLAG(IS_CHROMEOS)
+    // On ChromeOS, the user is signed in before this service is constructed.
+    // If this is a new profile, set the initial value of MSBB by simulating a
+    // transition from signed-out to the current sync state.
+    if (!sync_service_->HasSyncConsent() && is_new_profile) {
+      SetUrlKeyedAnonymizedDataCollectionEnabled(
+          ShouldEnableUrlKeyedAnonymizedDataCollection(SyncState::kSignedOut,
+                                                       last_sync_state_));
+    }
+#endif
   }
 
   pref_service_->AddObserver(this);
@@ -226,8 +237,7 @@ void UnifiedConsentService::OnPrimaryAccountChanged(
 void UnifiedConsentService::OnStateChanged(syncer::SyncService* sync) {
   // Update the UrlKeyedAnonymizedDataCollectionEnabled if user changed the
   // history opt-in state or the explicit-passphrase state.
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     const SyncState new_sync_state = GetSyncState(sync_service_);
 
     // Before updating the cached state, remember the old value, to detect

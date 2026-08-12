@@ -10,7 +10,6 @@
 #include <cmath>
 #include <ranges>
 
-#include "base/containers/contains.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_xr_render_state_init.h"
 #include "third_party/blink/renderer/modules/xr/xr_composition_layer.h"
 #include "third_party/blink/renderer/modules/xr/xr_frame_provider.h"
@@ -28,8 +27,9 @@ constexpr double kDefaultFieldOfView = M_PI * 0.5;
 }  // namespace
 
 XRRenderState::XRRenderState(bool immersive) : immersive_(immersive) {
-  if (!immersive_)
+  if (!immersive_) {
     inline_vertical_fov_ = kDefaultFieldOfView;
+  }
 }
 
 void XRRenderState::Update(const XRRenderStateInit* init) {
@@ -72,7 +72,7 @@ void XRRenderState::UpdateLayersState(FrozenArray<XRLayer>* layers) {
                                        const FrozenArray<XRLayer>& other_layers,
                                        bool needs_redraw) {
     std::ranges::for_each(source_layers, [&](auto& source_layer) {
-      if (!base::Contains(other_layers, source_layer)) {
+      if (!std::ranges::contains(other_layers, source_layer)) {
         source_layer->SetNeedsRedraw(needs_redraw);
       }
     });
@@ -104,13 +104,27 @@ HTMLCanvasElement* XRRenderState::output_canvas() const {
 }
 
 std::optional<double> XRRenderState::inlineVerticalFieldOfView() const {
-  if (immersive_)
+  if (immersive_) {
     return std::nullopt;
+  }
   return inline_vertical_fov_;
 }
 
 bool XRRenderState::HasActiveLayer() const {
   return base_layer_ || (layers_ && !layers_->empty());
+}
+
+bool XRRenderState::HasLayer(XRLayer* layer) const {
+  if (!layer) {
+    return false;
+  }
+  if (layer == base_layer_) {
+    return true;
+  }
+  if (layers_) {
+    return std::ranges::contains(*layers_, layer);
+  }
+  return false;
 }
 
 void XRRenderState::OnFrameStart() {
@@ -193,6 +207,21 @@ void XRRenderState::MaybeDispatchRedrawEvents() {
   if (layers_) {
     for (XRLayer* layer : *layers_) {
       layer->MaybeDispatchRedrawEvent();
+    }
+  }
+}
+
+void XRRenderState::OnTransferComplete(
+    const Vector<device::LayerId>& layer_ids) {
+  if (base_layer_) {
+    base_layer_->SetNeedsRedraw(false);
+  }
+
+  if (layers_) {
+    for (XRLayer* layer : *layers_) {
+      if (layer_ids.Contains(layer->layer_id())) {
+        layer->SetNeedsRedraw(false);
+      }
     }
   }
 }

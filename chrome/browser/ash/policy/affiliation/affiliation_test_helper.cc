@@ -11,8 +11,9 @@
 #include <string_view>
 
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/numerics/safe_conversions.h"
@@ -134,22 +135,23 @@ void AffiliationTestHelper::SetUserAffiliationIDs(
 
   fake_session_manager_client_->set_user_policy(
       cryptohome::CreateAccountIdentifierFromAccountId(user_account_id),
-      user_policy->GetBlob());
+      login_manager::POLICY_DOMAIN_CHROME, user_policy->GetBlob());
 }
 
 // static
 void AffiliationTestHelper::PreLoginUser(const AccountId& account_id) {
   ScopedListPrefUpdate users_pref(g_browser_process->local_state(),
                                   "LoggedInUsers");
-  base::Value email_value(account_id.GetUserEmail());
-  if (!base::Contains(users_pref.Get(), email_value)) {
-    users_pref->Append(std::move(email_value));
+  std::string email_value(account_id.GetUserEmail());
+  if (!users_pref.Get().contains(email_value)) {
+    users_pref->Append(email_value);
   }
 
   user_manager::KnownUser(g_browser_process->local_state())
       .SaveKnownUser(account_id);
 
-  ash::StartupUtils::MarkOobeCompleted();
+  ash::StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
 }
 
 // static

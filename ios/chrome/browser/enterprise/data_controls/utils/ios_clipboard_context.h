@@ -21,6 +21,13 @@ class IOSClipboardContext : public ClipboardContext {
                       ProfileIOS* destination_profile,
                       ui::ClipboardMetadata metadata);
 
+  // Construct a CopiedTextSource based on `source_url`, `source_profile` and
+  // `destination_profile`.
+  static enterprise_connectors::ContentMetaData::CopiedTextSource
+  GetCopiedTextSource(const GURL& source_url,
+                      ProfileIOS* source_profile,
+                      ProfileIOS* destination_profile);
+
   // ClipboardContext override:
   GURL source_url() const override;
   GURL destination_url() const override;
@@ -35,7 +42,7 @@ class IOSClipboardContext : public ClipboardContext {
   GURL source_url_;
   GURL destination_url_;
   raw_ptr<ProfileIOS> source_profile_;
-  raw_ptr<ProfileIOS> destination_Profile_;
+  raw_ptr<ProfileIOS> destination_profile_;
   ui::ClipboardMetadata metadata_;
 };
 

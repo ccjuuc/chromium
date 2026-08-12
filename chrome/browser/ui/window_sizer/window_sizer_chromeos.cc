@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -26,7 +27,7 @@ namespace {
 // first run will be maximized.
 constexpr int kForceMaximizeWidthLimit = 1366;
 
-bool ShouldForceMaximizeOnFirstRun(Profile* profile) {
+bool ShouldForceMaximizeOnFirstRun(const Profile* profile) {
   return profile->GetPrefs()->GetBoolean(prefs::kForceMaximizeOnFirstRun);
 }
 
@@ -34,7 +35,7 @@ bool ShouldForceMaximizeOnFirstRun(Profile* profile) {
 
 WindowSizerChromeOS::WindowSizerChromeOS(
     std::unique_ptr<StateProvider> state_provider,
-    const Browser* browser)
+    Browser* browser)
     : WindowSizer(std::move(state_provider), browser) {}
 
 WindowSizerChromeOS::~WindowSizerChromeOS() = default;
@@ -57,8 +58,9 @@ void WindowSizerChromeOS::DetermineWindowBoundsAndShowState(
 gfx::Rect WindowSizerChromeOS::GetDefaultWindowBounds(
     const display::Display& display) const {
   // Let apps set their own default.
-  if (browser() && browser()->app_controller()) {
-    gfx::Rect bounds = browser()->app_controller()->GetDefaultBounds();
+  if (browser() && web_app::AppBrowserController::From(browser())) {
+    gfx::Rect bounds =
+        web_app::AppBrowserController::From(browser())->GetDefaultBounds();
     if (!bounds.IsEmpty()) {
       return bounds;
     }
@@ -89,21 +91,22 @@ bool WindowSizerChromeOS::GetBrowserBounds(
   }
 
   // This should not be called on a Browser that already has a window.
-  DCHECK(!browser()->window());
+  DCHECK(!browser()->GetWindow());
 
   bool determined = false;
   if (bounds->IsEmpty()) {
-    if (browser()->is_type_normal()) {
+    if (browser()->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
       GetTabbedBrowserBounds(bounds, show_state);
       determined = true;
-    } else if (browser()->is_trusted_source()) {
+    } else if (WindowFeatureController::From(browser())->IsTrustedSource()) {
       // For trusted popups (v1 apps and system windows), do not use the last
       // active window bounds, only use saved or default bounds.
       // For PWA app windows (which are also a trusted source) we do want to use
       // the last active window bounds.
-      if (!browser()->is_type_app() || !browser()->app_controller() ||
+      if (browser()->GetType() != BrowserWindowInterface::Type::TYPE_APP ||
+          !web_app::AppBrowserController::From(browser()) ||
           !GetAppBrowserBoundsFromLastActive(bounds, show_state)) {
-        if (!browser()->create_params().can_resize ||
+        if (!BrowserInitState::From(browser())->create_params().can_resize ||
             !GetSavedWindowBounds(bounds, show_state)) {
           *bounds = GetDefaultWindowBounds(GetDisplayForNewWindow());
         }
@@ -123,7 +126,7 @@ bool WindowSizerChromeOS::GetBrowserBounds(
     }
   }
 
-  if (browser()->is_type_normal() &&
+  if (browser()->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
       *show_state == ui::mojom::WindowShowState::kDefault) {
     display::Display display =
         display::Screen::Get()->GetDisplayMatching(*bounds);
@@ -147,7 +150,7 @@ void WindowSizerChromeOS::GetTabbedBrowserBounds(
     ui::mojom::WindowShowState* show_state) const {
   DCHECK(show_state);
   DCHECK(bounds_in_screen);
-  DCHECK(browser()->is_type_normal());
+  DCHECK(browser()->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
   DCHECK(bounds_in_screen->IsEmpty());
 
   const ui::mojom::WindowShowState passed_show_state = *show_state;
@@ -159,12 +162,12 @@ void WindowSizerChromeOS::GetTabbedBrowserBounds(
   }
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 
-  if (browser()->is_session_restore()) {
+  if (BrowserInitState::From(browser())->is_session_restore()) {
     // Respect display for saved bounds during session restore.
     display = display::Screen::Get()->GetDisplayMatching(*bounds_in_screen);
   } else if (GlobalBrowserCollection::GetInstance()->IsEmpty() &&
              !is_saved_bounds &&
-             (ShouldForceMaximizeOnFirstRun(browser()->profile()) ||
+             (ShouldForceMaximizeOnFirstRun(browser()->GetProfile()) ||
               (display.work_area().width() <= kForceMaximizeWidthLimit &&
                !command_line->HasSwitch(
                    switches::kDisableAutoMaximizeForTests)))) {
@@ -194,7 +197,7 @@ bool WindowSizerChromeOS::GetAppBrowserBoundsFromLastActive(
     ui::mojom::WindowShowState* show_state) const {
   DCHECK(show_state);
   DCHECK(bounds_in_screen);
-  DCHECK(browser()->app_controller());
+  DCHECK(web_app::AppBrowserController::From(browser()));
 
   if (state_provider() && state_provider()->GetLastActiveWindowState(
                               bounds_in_screen, show_state)) {

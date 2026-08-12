@@ -8,26 +8,26 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.fail;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.services.media_session.MediaMetadata;
+
+import java.util.HashSet;
+import java.util.Set;
 
 /** Robolectric tests for MediaImageManager. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class MediaNotificationInfoTest {
     @Mock private MediaNotificationListener mListener;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Test
     public void testEmptyBuilderDoesNotBuild() {
@@ -90,6 +90,47 @@ public class MediaNotificationInfoTest {
         assertNotNull(info);
 
         // Make sure hashCode() doesn't crash.
-        var unused = info.hashCode();
+        var _ = info.hashCode();
+    }
+
+    @Test
+    public void testBuilderCopyConstructor() {
+        MediaNotificationInfo.Builder builder = new MediaNotificationInfo.Builder();
+        builder.setOrigin("https://example.com");
+        builder.setMetadata(new MediaMetadata("title", "artist", "album"));
+        builder.setListener(mListener);
+        builder.setInstanceId(42);
+        builder.setId(100);
+        builder.setPaused(true);
+        builder.setPrivate(false);
+        builder.setNotificationSmallIcon(1);
+        builder.setDefaultNotificationLargeIcon(2);
+
+        builder.setActions(
+                MediaNotificationInfo.ACTION_PLAY_PAUSE | MediaNotificationInfo.ACTION_STOP);
+        Set<Integer> sessionActions = new HashSet<>();
+        sessionActions.add(1);
+        sessionActions.add(2);
+        builder.setMediaSessionActions(sessionActions);
+
+        MediaNotificationInfo original = builder.build();
+        MediaNotificationInfo copy = new MediaNotificationInfo.Builder(original).build();
+
+        assertNotNull(copy);
+        assertEquals(original.origin, copy.origin);
+        assertEquals(original.metadata.getTitle(), copy.metadata.getTitle());
+        assertEquals(original.metadata.getArtist(), copy.metadata.getArtist());
+        assertEquals(original.metadata.getAlbum(), copy.metadata.getAlbum());
+        assertEquals(original.listener, copy.listener);
+        assertEquals(original.instanceId, copy.instanceId);
+        assertEquals(original.id, copy.id);
+        assertEquals(original.isPaused, copy.isPaused);
+        assertEquals(original.isPrivate, copy.isPrivate);
+        assertEquals(original.notificationSmallIcon, copy.notificationSmallIcon);
+        assertEquals(original.defaultNotificationLargeIcon, copy.defaultNotificationLargeIcon);
+
+        assertEquals(original.supportsPlayPause(), copy.supportsPlayPause());
+        assertEquals(original.supportsStop(), copy.supportsStop());
+        assertEquals(original.mediaSessionActions, copy.mediaSessionActions);
     }
 }

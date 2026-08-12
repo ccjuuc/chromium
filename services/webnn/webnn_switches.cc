@@ -16,7 +16,8 @@ namespace switches {
 // has trouble deducing the type and size of the array, even if you specify the
 // type. If you add new build flags to items of the array, be sure and also add
 // them to the #if right below guarding the definition.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(WEBNN_USE_LITERT)
 
 // Returns the list of WebNN switches passed from the GpuProcessHost to the
 // GPU process. Add your switch to this list if you need to read it in the
@@ -26,7 +27,7 @@ base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost() {
 #if BUILDFLAG(IS_MAC)
       kWebNNCoreMlDumpModel,
 #endif
-#if BUILDFLAG(WEBNN_USE_TFLITE)
+#if BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(WEBNN_USE_LITERT)
       kWebNNTfliteDumpModel,
 #endif
 #if BUILDFLAG(IS_WIN)
@@ -37,6 +38,8 @@ base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost() {
       kWebNNOrtEpDevice,
       kWebNNOrtIgnoreEpBlocklist,
       kWebNNOrtIgnoreIhvEps,
+      kWebNNOrtDisableVirtualDevices,
+      kWebNNOrtAllowAllCompilerDevices,
       kWebNNOrtGraphOptimizationLevel,
       kWebNNOrtEnableProfiling,
       kWebNNOrtDisableCpuFallback,
@@ -50,5 +53,14 @@ base::span<const char* const> GetWebNNSwitchesCopiedFromGpuProcessHost() {
   return {};
 }
 #endif
+
+base::span<const char* const> GetWebNNSwitchesForRendererProcess() {
+#if BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(WEBNN_USE_LITERT)
+  static constexpr auto flags = std::to_array({kWebNNTfliteDumpModel});
+  return flags;
+#else
+  return {};
+#endif
+}
 
 }  // namespace switches

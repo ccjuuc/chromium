@@ -86,10 +86,11 @@ class FakeSessionManagerClient : public ash::FakeSessionManagerClient {
 
   // SessionManagerClient override:
   void StorePolicyForUser(const cryptohome::AccountIdentifier& cryptohome_id,
+                          login_manager::PolicyDomain domain,
                           const std::string& policy_blob,
                           chromeos::VoidDBusMethodCallback callback) override {
     ash::FakeSessionManagerClient::StorePolicyForUser(
-        cryptohome_id, policy_blob,
+        cryptohome_id, domain, policy_blob,
         base::BindOnce(&FakeSessionManagerClient::OnStorePolicyForUser,
                        weak_ptr_factory_.GetWeakPtr(), cryptohome_id,
                        std::move(callback)));
@@ -136,7 +137,7 @@ class UserCloudPolicyStoreAshTest : public testing::Test {
     store_ = std::make_unique<UserCloudPolicyStoreAsh>(
         &cryptohome_misc_client_, session_manager_client_.get(),
         base::SingleThreadTaskRunner::GetCurrentDefault(), account_id_,
-        user_policy_dir());
+        user_policy_dir(), dm_protocol::GetChromeUserPolicyType());
     store_->AddObserver(&observer_);
 
     // Set the verification key to be used for testing by the
@@ -192,7 +193,8 @@ class UserCloudPolicyStoreAshTest : public testing::Test {
   // |session_manager_client_| and sends |response|.
   void PerformPolicyLoad(const std::string& response) {
     // Issue a load command.
-    session_manager_client_->set_user_policy(cryptohome_id_, response);
+    session_manager_client_->set_user_policy(
+        cryptohome_id_, login_manager::POLICY_DOMAIN_CHROME, response);
     store_->Load();
   }
 
@@ -516,7 +518,8 @@ TEST_F(UserCloudPolicyStoreAshTest, LoadInvalidSignature) {
 }
 
 TEST_F(UserCloudPolicyStoreAshTest, LoadImmediately) {
-  session_manager_client_->set_user_policy(cryptohome_id_, policy_.GetBlob());
+  session_manager_client_->set_user_policy(
+      cryptohome_id_, login_manager::POLICY_DOMAIN_CHROME, policy_.GetBlob());
 
   EXPECT_FALSE(store_->policy());
 
@@ -551,7 +554,8 @@ TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyNoPolicy) {
 }
 
 TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyInvalidBlob) {
-  session_manager_client_->set_user_policy(cryptohome_id_, "le blob");
+  session_manager_client_->set_user_policy(
+      cryptohome_id_, login_manager::POLICY_DOMAIN_CHROME, "le blob");
 
   EXPECT_FALSE(store_->policy());
 
@@ -566,7 +570,8 @@ TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyInvalidBlob) {
 }
 
 TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyDBusFailure) {
-  session_manager_client_->set_user_policy(cryptohome_id_, policy_.GetBlob());
+  session_manager_client_->set_user_policy(
+      cryptohome_id_, login_manager::POLICY_DOMAIN_CHROME, policy_.GetBlob());
 
   // Make the dbus call to cryptohome fail.
   cryptohome_misc_client_.SetServiceIsAvailable(false);
@@ -584,7 +589,8 @@ TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyDBusFailure) {
 }
 
 TEST_F(UserCloudPolicyStoreAshTest, LoadImmediatelyNoUserPolicyKey) {
-  session_manager_client_->set_user_policy(cryptohome_id_, policy_.GetBlob());
+  session_manager_client_->set_user_policy(
+      cryptohome_id_, login_manager::POLICY_DOMAIN_CHROME, policy_.GetBlob());
 
   // Ensure no policy data.
   ASSERT_TRUE(base::DeleteFile(user_policy_key_file()));

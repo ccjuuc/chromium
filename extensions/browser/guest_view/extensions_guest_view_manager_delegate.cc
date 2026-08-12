@@ -15,16 +15,15 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_features.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/browser_frame_context_data.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
-#include "extensions/browser/guest_view/app_view/app_view_guest.h"
 #include "extensions/browser/guest_view/extension_options/extension_options_guest.h"
 #include "extensions/browser/guest_view/guest_view_events.h"
-#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_map.h"
@@ -36,6 +35,13 @@
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/common/utils/extension_utils.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom-forward.h"
+
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#include "extensions/browser/guest_view/app_view/app_view_guest.h"
+#endif
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+#endif
 
 using guest_view::GuestViewBase;
 using guest_view::GuestViewManager;
@@ -80,12 +86,12 @@ bool ExtensionsGuestViewManagerDelegate::IsGuestAvailableToContextWithFeature(
       ProcessManager::Get(context)->GetExtensionForRenderFrameHost(
           guest->owner_rfh());
 
-  const GURL& owner_site_url = guest->GetOwnerSiteURL();
+  const GURL owner_site_url = guest->GetOwnerSiteURL();
   // Ok for |owner_extension| to be nullptr, the embedder might be WebUI.
   Feature::Availability availability = feature->IsAvailableToContext(
       owner_extension,
       process_map->GetMostLikelyContextType(
-          owner_extension, guest->owner_rfh()->GetProcess()->GetDeprecatedID(),
+          owner_extension, guest->owner_rfh()->GetProcess()->GetID(),
           &owner_site_url),
       owner_site_url, util::GetBrowserContextId(context),
       BrowserFrameContextData(guest->owner_rfh()));
@@ -108,14 +114,13 @@ void ExtensionsGuestViewManagerDelegate::OnGuestAdded(
 
 void ExtensionsGuestViewManagerDelegate::DispatchEvent(
     const std::string& event_name,
-    base::Value::Dict args,
+    base::DictValue args,
     GuestViewBase* guest,
     int instance_id) {
   CHECK(guest);
   mojom::EventFilteringInfoPtr info = mojom::EventFilteringInfo::New();
-  info->has_instance_id = true;
   info->instance_id = instance_id;
-  base::Value::List event_args;
+  base::ListValue event_args;
   event_args.Append(std::move(args));
 
   // GetEventHistogramValue maps guest view event names to their histogram
@@ -124,8 +129,8 @@ void ExtensionsGuestViewManagerDelegate::DispatchEvent(
   // extensions::events::HistogramValue as an argument.
   events::HistogramValue histogram_value =
       guest_view_events::GetEventHistogramValue(event_name);
-  DCHECK_NE(events::UNKNOWN, histogram_value) << "Event " << event_name
-                                              << " must have a histogram value";
+  DCHECK_NE(events::UNKNOWN, histogram_value)
+      << "Event " << event_name << " must have a histogram value";
 
   content::RenderFrameHost* owner = guest->owner_rfh();
   if (!owner || !ExtensionsBrowserClient::Get()->IsValidContext(
@@ -144,7 +149,14 @@ void ExtensionsGuestViewManagerDelegate::DispatchEvent(
 
 bool ExtensionsGuestViewManagerDelegate::IsGuestAvailableToContext(
     const GuestViewBase* guest) const {
-  return IsGuestAvailableToContextWithFeature(guest, guest->GetAPINamespace());
+  const char* api_namespace = guest->GetAPINamespace();
+  if (!api_namespace) {
+    // If there's no associated API namespace, we consider the feature
+    // implicitly allowed.
+    return true;
+  }
+
+  return IsGuestAvailableToContextWithFeature(guest, api_namespace);
 }
 
 bool ExtensionsGuestViewManagerDelegate::IsOwnedByExtension(
@@ -161,16 +173,20 @@ bool ExtensionsGuestViewManagerDelegate::IsOwnedByControlledFrameEmbedder(
 
 void ExtensionsGuestViewManagerDelegate::RegisterAdditionalGuestViewTypes(
     GuestViewManager* manager) {
+#if BUILDFLAG(IS_CHROMEOS)
   manager->RegisterGuestViewType(AppViewGuest::Type,
                                  base::BindRepeating(&AppViewGuest::Create),
                                  base::NullCallback());
+#endif
   manager->RegisterGuestViewType(
       ExtensionOptionsGuest::Type,
       base::BindRepeating(&ExtensionOptionsGuest::Create),
       base::NullCallback());
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   manager->RegisterGuestViewType(
       MimeHandlerViewGuest::Type,
       base::BindRepeating(&MimeHandlerViewGuest::Create), base::NullCallback());
+#endif
   manager->RegisterGuestViewType(WebViewGuest::Type,
                                  base::BindRepeating(&WebViewGuest::Create),
                                  base::BindRepeating(&WebViewGuest::CleanUp));

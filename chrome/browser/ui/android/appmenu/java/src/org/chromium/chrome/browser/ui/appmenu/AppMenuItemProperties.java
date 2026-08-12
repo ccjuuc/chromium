@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.ui.appmenu;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
+import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -30,7 +31,7 @@ public class AppMenuItemProperties {
             new WritableObjectPropertyKey<>("TITLE");
 
     /**
-     * The unused title id of the menu item, to accomodate `HierarchicalMenuKeyProvider`.
+     * The unused title id of the menu item, to accommodate `HierarchicalMenuKeyProvider`.
      * TODO(crbug.com/40738791): Remove this and use only {@link TITLE}.
      */
     public static final WritableIntPropertyKey TITLE_ID = new WritableIntPropertyKey("TITLE_ID");
@@ -73,6 +74,17 @@ public class AppMenuItemProperties {
     /** Whether to show a badge on the menu item icon. */
     public static final WritableBooleanPropertyKey ICON_SHOW_BADGE =
             new WritableBooleanPropertyKey("ICON_SHOW_BADGE");
+
+    /**
+     * * Whether to skip the default icon tinting. Set to true for items that provide their own
+     * full-color icons (e.g. Browser Promo).
+     */
+    public static final WritableBooleanPropertyKey ICON_NO_TINT =
+            new WritableBooleanPropertyKey("ICON_NO_TINT");
+
+    /** The supplier for the icon for the menu item. */
+    public static final WritableObjectPropertyKey<LazyOneshotSupplier<Drawable>> ICON_SUPPLIER =
+            new WritableObjectPropertyKey<>("ICON_SUPPLIER");
 
     /** The the menu item's position in the menu. */
     static final WritableIntPropertyKey POSITION = new WritableIntPropertyKey("POSITION");
@@ -141,6 +153,8 @@ public class AppMenuItemProperties {
                 HAS_HOVER_BACKGROUND,
                 KEY_LISTENER,
                 MENU_ICON_AT_START,
-                ADDITIONAL_ICONS
+                ADDITIONAL_ICONS,
+                ICON_NO_TINT,
+                ICON_SUPPLIER
             };
 }

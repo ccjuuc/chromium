@@ -2,18 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "base/strings/utf_string_conversions.h"
 
 #include <stddef.h>
 
+#include "base/features.h"
 #include "base/strings/string_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/fuzztest/src/fuzztest/fuzztest.h"
 
 namespace base {
 
@@ -48,6 +46,25 @@ const wchar_t* const kConvertRoundtripCases[] = {
 #endif
 };
 
+class ScopedFastAsciiFeatureHelper {
+ public:
+  explicit ScopedFastAsciiFeatureHelper(bool enable) {
+    if (enable) {
+      features_.InitAndEnableFeature(features::kUtfConversionAsciiFastPath);
+    } else {
+      features_.InitAndDisableFeature(features::kUtfConversionAsciiFastPath);
+    }
+    strings_internal::InitializeUtfStringConversionsFeatures();
+  }
+  ~ScopedFastAsciiFeatureHelper() {
+    features_.Reset();
+    strings_internal::InitializeUtfStringConversionsFeatures();
+  }
+
+ private:
+  test::ScopedFeatureList features_;
+};
+
 }  // namespace
 
 TEST(UTFStringConversionsTest, ConvertUTF8AndWide) {
@@ -58,9 +75,9 @@ TEST(UTFStringConversionsTest, ConvertUTF8AndWide) {
     std::ostringstream utf8;
     utf8 << WideToUTF8(i);
     std::wostringstream wide;
-    wide << UTF8ToWide(utf8.str());
+    wide << UTF8ToWide(utf8.view());
 
-    EXPECT_EQ(i, wide.str());
+    EXPECT_EQ(i, wide.view());
   }
 }
 
@@ -196,5 +213,193 @@ TEST(UTFStringConversionsTest, ConvertMultiString) {
 
   EXPECT_EQ(expected, UTF16ToUTF8(multistring16));
 }
+
+TEST(UTFStringConversionsTest, UTFConversionASCIISequenceGapsCoverage) {
+  std::vector<std::string> test_strings = {
+      // 1. Short strings (< 32 bytes)
+      "a",
+      "main-container",
+      "id_caf\xc3\xa9",
+      "\xe6\xa4\x9c\xe7\xb4\xa2",
+
+      // 2. Interspersed ASCII and Unicode
+      "Hello \xf0\x9f\x91\x8b World \xf0\x9f\x8c\x8d Chromium \xf0\x9f\x9a\x80",
+
+      // 3. Early non-ASCII in long strings
+      "{\"name\": \"Jos\xc3\xa9\", \"payload\": \"" + std::string(1000, 'x') +
+          "\"}",
+
+      // 4. Large multi-KB payloads
+      std::string(10000, 'x'),
+      std::string(10000, 'x') + "\xc2\xa2" + std::string(500, 'y'),
+      std::string(50000, 'z') + "\xe6\xa4\x9c",
+      []() {
+        std::string s;
+        while (s.length() < 10000) {
+          s += "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
+        }
+        return s;
+      }(),
+
+      // 5. Invalid UTF-8 sequences at various positions
+      "\xff",
+      "Hello\xffWorld",
+      std::string(127, 'A') + "\xff" + std::string(100, 'B'),
+      std::string(1023, 'A') + "\xff" + std::string(100, 'B'),
+  };
+
+  for (const auto& str : test_strings) {
+    std::u16string out_fast;
+    bool res_fast;
+    {
+      ScopedFastAsciiFeatureHelper features(true);
+      res_fast = UTF8ToUTF16(str.data(), str.length(), &out_fast);
+    }
+
+    std::u16string out_legacy;
+    bool res_legacy;
+    {
+      ScopedFastAsciiFeatureHelper features(false);
+      res_legacy = UTF8ToUTF16(str.data(), str.length(), &out_legacy);
+    }
+
+    EXPECT_EQ(res_fast, res_legacy) << "Mismatch in return value for: " << str;
+    EXPECT_EQ(out_fast, out_legacy)
+        << "Mismatch in converted output for: " << str;
+
+    // Test UTF16 to UTF8 roundtrip equivalence
+    std::string out16_fast;
+    std::string out16_legacy;
+    {
+      ScopedFastAsciiFeatureHelper features(true);
+      UTF16ToUTF8(out_fast.data(), out_fast.length(), &out16_fast);
+    }
+    {
+      ScopedFastAsciiFeatureHelper features(false);
+      UTF16ToUTF8(out_legacy.data(), out_legacy.length(), &out16_legacy);
+    }
+    EXPECT_EQ(out16_fast, out16_legacy);
+  }
+}
+
+void UTF8ToUTF16FastPathMatchesLegacy(std::string_view input) {
+  std::u16string out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = UTF8ToUTF16(input.data(), input.size(), &out_fast);
+  }
+
+  std::u16string out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = UTF8ToUTF16(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, UTF8ToUTF16FastPathMatchesLegacy);
+
+void UTF16ToUTF8FastPathMatchesLegacy(std::u16string_view input) {
+  std::string out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = UTF16ToUTF8(input.data(), input.size(), &out_fast);
+  }
+
+  std::string out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = UTF16ToUTF8(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, UTF16ToUTF8FastPathMatchesLegacy);
+
+void UTF8ToWideFastPathMatchesLegacy(std::string_view input) {
+  std::wstring out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = UTF8ToWide(input.data(), input.size(), &out_fast);
+  }
+
+  std::wstring out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = UTF8ToWide(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, UTF8ToWideFastPathMatchesLegacy);
+
+void WideToUTF8FastPathMatchesLegacy(std::wstring_view input) {
+  std::string out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = WideToUTF8(input.data(), input.size(), &out_fast);
+  }
+
+  std::string out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = WideToUTF8(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, WideToUTF8FastPathMatchesLegacy);
+
+void WideToUTF16FastPathMatchesLegacy(std::wstring_view input) {
+  std::u16string out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = WideToUTF16(input.data(), input.size(), &out_fast);
+  }
+
+  std::u16string out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = WideToUTF16(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, WideToUTF16FastPathMatchesLegacy);
+
+void UTF16ToWideFastPathMatchesLegacy(std::u16string_view input) {
+  std::wstring out_fast;
+  bool res_fast;
+  {
+    ScopedFastAsciiFeatureHelper features(true);
+    res_fast = UTF16ToWide(input.data(), input.size(), &out_fast);
+  }
+
+  std::wstring out_legacy;
+  bool res_legacy;
+  {
+    ScopedFastAsciiFeatureHelper features(false);
+    res_legacy = UTF16ToWide(input.data(), input.size(), &out_legacy);
+  }
+
+  EXPECT_EQ(res_fast, res_legacy);
+  EXPECT_EQ(out_fast, out_legacy);
+}
+FUZZ_TEST(UTFStringConversionsTest, UTF16ToWideFastPathMatchesLegacy);
 
 }  // namespace base

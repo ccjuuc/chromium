@@ -11,11 +11,14 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/history/core/browser/features.h"
 #include "content/browser/process_lock.h"
@@ -25,18 +28,24 @@
 #include "content/browser/renderer_host/process_selection_deferring_condition_runner.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/site_instance_impl.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_discard_reason.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/runtime_feature_state/runtime_feature_state_document_data.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
+#include "content/public/browser/storage_partition.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/back_forward_cache_util.h"
@@ -63,15 +72,18 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/default_handlers.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "net/test/url_request/url_request_failed_job.h"
 #include "services/network/public/cpp/loading_params.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_context.h"
 #include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_read_context.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 #include "third_party/blink/public/mojom/runtime_feature_state/runtime_feature.mojom.h"
 #include "ui/base/page_transition_types.h"
+#include "url/origin.h"
 #include "url/scheme_host_port.h"
 #include "url/url_constants.h"
 
@@ -1951,11 +1963,15 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
   EXPECT_EQ(shell()->web_contents()->GetPrimaryMainFrame()->GetSiteInstance(),
             starting_site_instance);
   if (ShouldSkipEarlyCommitPendingForCrashedFrame()) {
-    EXPECT_EQ(GURL("http://a.com"), starting_site_instance->GetSiteURL());
+    EXPECT_EQ(
+        GURL("http://a.com"),
+        starting_site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL());
   } else {
     // Because of the sad tab, this is actually the b.com SiteInstance, which
     // commits immediately after starting the navigation and has a process.
-    EXPECT_EQ(GURL("http://b.com"), starting_site_instance->GetSiteURL());
+    EXPECT_EQ(
+        GURL("http://b.com"),
+        starting_site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL());
   }
   EXPECT_TRUE(starting_site_instance->HasProcess());
 
@@ -2364,7 +2380,8 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
                                             ->web_contents()
                                             ->GetPrimaryMainFrame()
                                             ->GetSiteInstance()
-                                            ->GetSiteURL());
+                                            ->GetSecurityPrincipal()
+                                            .GetDeprecatedSiteURL());
     } else {
       EXPECT_EQ(
           site_instance,
@@ -2392,7 +2409,8 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
                                             ->web_contents()
                                             ->GetPrimaryMainFrame()
                                             ->GetSiteInstance()
-                                            ->GetSiteURL());
+                                            ->GetSecurityPrincipal()
+                                            .GetDeprecatedSiteURL());
       EXPECT_EQ(process_id, shell()
                                 ->web_contents()
                                 ->GetPrimaryMainFrame()
@@ -2450,7 +2468,8 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
                                             ->web_contents()
                                             ->GetPrimaryMainFrame()
                                             ->GetSiteInstance()
-                                            ->GetSiteURL());
+                                            ->GetSecurityPrincipal()
+                                            .GetDeprecatedSiteURL());
     }
   }
 
@@ -2522,7 +2541,8 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest, ErrorPageNetworkError) {
                                             ->web_contents()
                                             ->GetPrimaryMainFrame()
                                             ->GetSiteInstance()
-                                            ->GetSiteURL());
+                                            ->GetSecurityPrincipal()
+                                            .GetDeprecatedSiteURL());
     }
   }
 }
@@ -3807,6 +3827,105 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestDownloadBrowserTest, Disallowed) {
   EXPECT_FALSE(handle_observer.is_download());
 }
 
+IN_PROC_BROWSER_TEST_F(NavigationRequestDownloadBrowserTest,
+                       OpenerCrossOriginDownload_SanitizesConsoleUrl) {
+  GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  GURL popup_url(embedded_test_server()->GetURL("c.com", "/title1.html"));
+  GURL download_url(embedded_test_server()->GetURL(
+      "b.com", "/download-test1.lib?token=SECRET_12345"));
+
+  ASSERT_TRUE(NavigateToURL(shell(), main_url));
+
+  WebContentsConsoleObserver console_observer(shell()->web_contents());
+  console_observer.SetPattern(
+      "*Navigating a cross-origin opener to a download*");
+
+  // Open a cross-origin popup from a.com.
+  ShellAddedObserver shell_observer;
+  std::string open_script = JsReplace("window.open($1, 'popup');", popup_url);
+  EXPECT_TRUE(ExecJs(shell(), open_script));
+  Shell* popup = shell_observer.GetShell();
+  EXPECT_TRUE(WaitForLoadStop(popup->web_contents()));
+
+  // Navigate opener (a.com) to cross-origin download from the cross-origin
+  // popup (c.com).
+  std::string script = JsReplace("window.opener.location = $1;", download_url);
+  EXPECT_TRUE(ExecJs(popup->web_contents(), script));
+
+  ASSERT_TRUE(console_observer.Wait());
+  ASSERT_EQ(1u, console_observer.messages().size());
+  std::string msg = base::UTF16ToUTF8(console_observer.messages()[0].message);
+
+  // Verify the console message contains the origin (b.com) but not full path or
+  // secret query token.
+  EXPECT_THAT(msg, ::testing::HasSubstr("b.com"));
+  EXPECT_THAT(msg, ::testing::Not(::testing::HasSubstr("SECRET_12345")));
+  EXPECT_THAT(msg, ::testing::Not(::testing::HasSubstr("download-test1.lib")));
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationRequestDownloadBrowserTest,
+                       OpenerCrossOrigin_BrowserOverridesCompromisedRenderer) {
+  GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  GURL popup_url(embedded_test_server()->GetURL("c.com", "/title1.html"));
+  GURL download_url(
+      embedded_test_server()->GetURL("b.com", "/download-test1.lib"));
+
+  ASSERT_TRUE(NavigateToURL(shell(), main_url));
+
+  ShellAddedObserver shell_observer;
+  std::string open_script = JsReplace("window.open($1, 'popup');", popup_url);
+  EXPECT_TRUE(ExecJs(shell(), open_script));
+  Shell* popup = shell_observer.GetShell();
+  EXPECT_TRUE(WaitForLoadStop(popup->web_contents()));
+
+  RenderFrameHostImpl* main_rfh =
+      static_cast<WebContentsImpl*>(shell()->web_contents())
+          ->GetPrimaryMainFrame();
+  RenderFrameHostImpl* popup_rfh =
+      static_cast<WebContentsImpl*>(popup->web_contents())
+          ->GetPrimaryMainFrame();
+
+  EXPECT_NE(nullptr, popup_rfh->frame_tree_node()->opener());
+  EXPECT_EQ(main_rfh->frame_tree_node(),
+            popup_rfh->frame_tree_node()->opener());
+
+  TestNavigationManager manager(shell()->web_contents(), download_url);
+  std::string script = JsReplace("window.opener.location = $1;", download_url);
+  EXPECT_TRUE(ExecJs(popup->web_contents(), script));
+
+  EXPECT_TRUE(manager.WaitForRequestStart());
+  NavigationRequest* request =
+      static_cast<WebContentsImpl*>(shell()->web_contents())
+          ->GetPrimaryMainFrame()
+          ->frame_tree_node()
+          ->navigation_request();
+
+  // Simulate a compromised renderer that stripped the kOpenerCrossOrigin flag
+  // from IPC.
+  request->common_params_->download_policy.observed_types.reset();
+  request->common_params_->download_policy.disallowed_types.reset();
+
+  EXPECT_FALSE(request->common_params_->download_policy.IsType(
+      blink::NavigationDownloadType::kOpenerCrossOrigin));
+  EXPECT_TRUE(request->common_params_->download_policy.IsDownloadAllowed());
+
+  // Close the initiator popup to destroy the initiator RenderFrameHost. This
+  // verifies that browser-side enforcement relies on cached state recorded at
+  // NavigationRequest creation, preventing a race condition bypass where a
+  // compromised renderer closes itself or navigates away before policy
+  // recomputation.
+  popup->Close();
+
+  // Run browser recomputation:
+  request->ComputeDownloadPolicy();
+
+  // Verify browser recomputation enforced kOpenerCrossOrigin even after
+  // initiator RFH destruction:
+  EXPECT_TRUE(request->common_params_->download_policy.IsType(
+      blink::NavigationDownloadType::kOpenerCrossOrigin));
+  EXPECT_FALSE(request->common_params_->download_policy.IsDownloadAllowed());
+}
+
 class NavigationRequestBackForwardBrowserTest
     : public NavigationRequestBrowserTest,
       public WebContentsObserver {
@@ -4380,9 +4499,11 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
     ASSERT_FALSE(NavigateToURL(shell(), url));
     EXPECT_FALSE(observer.last_navigation_succeeded());
     if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
-      EXPECT_EQ(
-          GURL(kUnreachableWebDataURL),
-          web_contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+      EXPECT_EQ(GURL(kUnreachableWebDataURL),
+                web_contents->GetPrimaryMainFrame()
+                    ->GetSiteInstance()
+                    ->GetSecurityPrincipal()
+                    .GetDeprecatedSiteURL());
     }
   }
 
@@ -4399,7 +4520,9 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
   }
   RenderFrameHostImpl* rfh =
       static_cast<RenderFrameHostImpl*>(web_contents->GetPrimaryMainFrame());
-  EXPECT_NE(GURL(kUnreachableWebDataURL), rfh->GetSiteInstance()->GetSiteURL());
+  EXPECT_NE(
+      GURL(kUnreachableWebDataURL),
+      rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL());
 
   // Note that the error page's origin was opaque with a.com as the precursor.
   // This becomes the initiator origin for the about:blank navigation, and it
@@ -4424,7 +4547,9 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
   // and an unassigned SiteInstance. See https://crbug.com/1426928.
   EXPECT_FALSE(rfh->GetProcess()->IsUnused());
   if (AreAllSitesIsolatedForTesting()) {
-    EXPECT_EQ("http://a.com/", rfh->GetSiteInstance()->GetSiteURL());
+    EXPECT_EQ(
+        "http://a.com/",
+        rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL());
     EXPECT_TRUE(rfh->GetProcess()->GetProcessLock().IsLockedToSite());
     EXPECT_EQ("http://a.com/", rfh->GetProcess()->GetProcessLock().site_url());
   } else {
@@ -4782,7 +4907,7 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestPrerenderBrowserTest,
             primary_main_frame->cross_origin_embedder_policy().value);
 
   // Add a prerender.
-  FrameTreeNodeId host_id = prerender_helper().AddPrerender(
+  PrerenderHostId host_id = prerender_helper().AddPrerender(
       https_server()->GetURL("a.test", "/title1.html?prerendering"));
   RenderFrameHostImpl* prerender_main_frame = static_cast<RenderFrameHostImpl*>(
       prerender_helper().GetPrerenderedMainFrameHost(host_id));
@@ -5045,8 +5170,8 @@ class NavigationRequestResponseBodyBrowserTest
 };
 
 IN_PROC_BROWSER_TEST_F(NavigationRequestResponseBodyBrowserTest, Received) {
-  net::test_server::ControllableHttpResponse response(embedded_test_server(),
-                                                      "/target.html");
+  net::test_server::ExpectationHandler handler(embedded_test_server());
+  handler.OnRequest("/target.html").RespondWith("text/html", kResponseBody);
   ASSERT_TRUE(embedded_test_server()->Start());
 
   ResponseBodyNavigationThrottle* client_throttle = nullptr;
@@ -5070,10 +5195,6 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestResponseBodyBrowserTest, Received) {
   EXPECT_TRUE(manager.WaitForRequestStart());
   manager.ResumeNavigation();
 
-  // Build the response with no headers and some body text.
-  response.WaitForRequest();
-  response.Send(base::StringPrintf(kResponseTemplate, "", kResponseBody));
-  response.Done();
   ASSERT_TRUE(manager.WaitForResponse());
   ASSERT_NE(nullptr, client_throttle);
   EXPECT_TRUE(client_throttle->was_callback_called());
@@ -5630,6 +5751,407 @@ IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
       contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin();
   EXPECT_EQ(data_tentative_origin_to_commit.value(), data_committed_origin);
   EXPECT_EQ(url_info_origin.value(), data_committed_origin);
+}
+
+// Tests that on reload of a POST request, the HTTP `Origin` header is set
+// properly.
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest, OriginHeaderOnPostReload) {
+  GURL start_url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(NavigateToURL(shell(), start_url));
+
+  GURL url = embedded_test_server()->GetURL("/echoheader?Origin");
+
+  // Do an initial POST navigation.
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  {
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecJs(shell(), script));
+    observer.Wait();
+  }
+
+  EXPECT_EQ(url::Origin::Create(start_url).Serialize(),
+            EvalJs(shell(), "document.body.textContent"));
+
+  // Reload and check that the Origin header is the same as on the original POST
+  // navigation.
+  {
+    TestNavigationObserver reload_observer(shell()->web_contents());
+    shell()->web_contents()->GetController().Reload(ReloadType::NORMAL,
+                                                    /*check_for_repost=*/false);
+    reload_observer.Wait();
+  }
+
+  EXPECT_EQ(url::Origin::Create(start_url).Serialize(),
+            EvalJs(shell(), "document.body.textContent"));
+}
+
+// Tests that on reload of a POST request that was initiated by an opaque
+// origin, the HTTP `Origin` header is set properly.
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginHeaderOpaqueOnPostReload) {
+  GURL data_url("data:text/html,<html><body></body></html>");
+  ASSERT_TRUE(NavigateToURL(shell(), data_url));
+
+  GURL url = embedded_test_server()->GetURL("/echoheader?Origin");
+
+  // Do an initial POST navigation.
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  {
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecJs(shell(), script));
+    observer.Wait();
+  }
+
+  EXPECT_EQ("null", EvalJs(shell(), "document.body.textContent"));
+
+  // Reload and check that the Origin header is the same as on the original POST
+  // navigation.
+  {
+    TestNavigationObserver reload_observer(shell()->web_contents());
+    shell()->web_contents()->GetController().Reload(ReloadType::NORMAL,
+                                                    /*check_for_repost=*/false);
+    reload_observer.Wait();
+  }
+
+  EXPECT_EQ("null", EvalJs(shell(), "document.body.textContent"));
+}
+
+// Tests that a POST request from an opaque origin uses an HTTP `Origin` header
+// of "null".
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginHeaderOnPostFromOpaque) {
+  GURL data_url("data:text/html,<html><body></body></html>");
+  ASSERT_TRUE(NavigateToURL(shell(), data_url));
+
+  GURL url = embedded_test_server()->GetURL("a.com", "/echoheader?Origin");
+
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  {
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecJs(shell(), script));
+    observer.Wait();
+  }
+
+  EXPECT_EQ("null", EvalJs(shell(), "document.body.textContent"));
+}
+
+// Tests that on a "client-initiated" reload (e.g., `location.reload()`) of a
+// POST navigation, the HTTP `Origin` header is set properly to the current
+// document's origin.
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginHeaderOnPostReloadClientInitiated) {
+  GURL start_url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(NavigateToURL(shell(), start_url));
+
+  GURL url = embedded_test_server()->GetURL("b.com", "/echoheader?Origin");
+
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  {
+    TestNavigationObserver observer(shell()->web_contents());
+    EXPECT_TRUE(ExecJs(shell(), script));
+    observer.Wait();
+  }
+
+  EXPECT_EQ(url::Origin::Create(start_url).Serialize(),
+            EvalJs(shell(), "document.body.textContent"));
+
+  // Do a client-initiated reload and check that the Origin header matches the
+  // document that initiated the reload, not `start_url`.
+  {
+    TestNavigationObserver reload_observer(shell()->web_contents());
+    EXPECT_TRUE(ExecJs(shell(), "location.reload()"));
+    reload_observer.Wait();
+  }
+
+  EXPECT_EQ(url::Origin::Create(url).Serialize(),
+            EvalJs(shell(), "document.body.textContent"));
+}
+
+// Tests that a POST navigation from about:blank has the correct Origin header.
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginHeaderOnPostAboutBlank) {
+  GURL start_url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(NavigateToURL(shell(), start_url));
+
+  // Open about:blank popup from `start_url` so that it has `start_url`'s
+  // origin.
+  ShellAddedObserver shell_observer;
+  EXPECT_TRUE(ExecJs(shell(), "window.open('about:blank', 'popup')"));
+  Shell* popup_shell = shell_observer.GetShell();
+  EXPECT_TRUE(WaitForLoadStop(popup_shell->web_contents()));
+
+  GURL url = embedded_test_server()->GetURL("b.com", "/echoheader?Origin");
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  TestNavigationObserver observer(popup_shell->web_contents());
+  EXPECT_TRUE(ExecJs(popup_shell->web_contents(), script));
+  observer.Wait();
+
+  EXPECT_EQ(url::Origin::Create(start_url).Serialize(),
+            EvalJs(popup_shell->web_contents(), "document.body.textContent"));
+}
+
+// Tests that a POST navigation from about:blank (with referrer policy of
+// `no-referrer`) has the correct Origin header of "null".
+IN_PROC_BROWSER_TEST_F(NavigationRequestBrowserTest,
+                       OriginHeaderOnPostAboutBlankNoReferrer) {
+  GURL start_url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(NavigateToURL(shell(), start_url));
+
+  // Open about:blank popup with no-referrer.
+  ShellAddedObserver shell_observer;
+  EXPECT_TRUE(ExecJs(shell(),
+                     "var w = window.open('about:blank', 'popup');"
+                     "var d = w.document;"
+                     "var m = d.createElement('meta');"
+                     "m.name = 'referrer';"
+                     "m.content = 'no-referrer';"
+                     "d.head.appendChild(m);"));
+  Shell* popup_shell = shell_observer.GetShell();
+  EXPECT_TRUE(WaitForLoadStop(popup_shell->web_contents()));
+
+  GURL url = embedded_test_server()->GetURL("a.com", "/echoheader?Origin");
+  std::string script = JsReplace(
+      "var f = document.createElement('form');"
+      "f.method = 'POST';"
+      "f.action = $1;"
+      "document.body.appendChild(f);"
+      "f.submit();",
+      url);
+
+  TestNavigationObserver observer(popup_shell->web_contents());
+  EXPECT_TRUE(ExecJs(popup_shell->web_contents(), script));
+  observer.Wait();
+
+  // Origin should be "null" because of the no-referrer policy.
+  EXPECT_EQ("null",
+            EvalJs(popup_shell->web_contents(), "document.body.textContent"));
+}
+
+namespace {
+
+base::ListValue TakeEarlyFailureReportsForTesting(
+    DeclarativePerformanceObserverStore* store,
+    const url::Origin& origin) {
+  base::ListValue out;
+  base::RunLoop loop;
+  store->TakeEarlyFailureReports(
+      origin, base::BindLambdaForTesting([&](base::ListValue res) {
+        out = std::move(res);
+        loop.Quit();
+      }));
+  loop.Run();
+  return out;
+}
+
+class NavigationRequestPartitionBrowserTest
+    : public NavigationRequestBrowserTest {
+ public:
+  NavigationRequestPartitionBrowserTest() {
+    feature_list_.InitWithFeatures(
+        {blink::features::kDeclarativePerformanceObserver,
+         features::kAbortNavigationsFromTabClosures},
+        {});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+}  // namespace
+
+// Verifies that when a navigation request in a non-default StoragePartition is
+// aborted before reaching WILL_START_REQUEST, early failure reports are not
+// recorded in either the default StoragePartition or the frame's partition.
+IN_PROC_BROWSER_TEST_F(
+    NavigationRequestPartitionBrowserTest,
+    EarlyFailureInNonDefaultPartitionAbortedBeforeStartNavigation) {
+  CustomStoragePartitionBrowserClient modified_client(GURL("http://b.com/"));
+
+  GURL url1(embedded_test_server()->GetURL("b.com", "/title1.html"));
+  GURL url2(embedded_test_server()->GetURL("b.com", "/title2.html"));
+  const url::Origin origin = url::Origin::Create(url1);
+
+  EXPECT_TRUE(NavigateToURL(shell(), url1));
+
+  RenderFrameHostImpl* rfh = contents()->GetPrimaryMainFrame();
+  SiteInstanceImpl* si = rfh->GetSiteInstance();
+  EXPECT_FALSE(
+      si->GetSecurityPrincipal().GetStoragePartitionConfig().is_default());
+
+  BrowserContext* browser_context = contents()->GetBrowserContext();
+  auto* frame_partition =
+      static_cast<StoragePartitionImpl*>(rfh->GetStoragePartition());
+  auto* default_partition =
+      static_cast<StoragePartitionImpl*>(browser_context->GetStoragePartition(
+          StoragePartitionConfig::CreateDefault(browser_context)));
+  EXPECT_NE(frame_partition, default_partition);
+
+  DeclarativePerformanceObserverStore* frame_store =
+      frame_partition->GetDeclarativePerformanceObserverStore();
+  DeclarativePerformanceObserverStore* default_store =
+      default_partition->GetDeclarativePerformanceObserverStore();
+  EXPECT_TRUE(frame_store);
+  EXPECT_TRUE(default_store);
+
+  {
+    base::RunLoop loop;
+    default_store->SetEarlyFailurePolicy(origin, true, loop.QuitClosure());
+    loop.Run();
+  }
+  {
+    base::RunLoop loop;
+    frame_store->SetEarlyFailurePolicy(origin, true, loop.QuitClosure());
+    loop.Run();
+  }
+  EXPECT_TRUE(default_store->HasEarlyFailurePolicy(origin));
+  EXPECT_TRUE(frame_store->HasEarlyFailurePolicy(origin));
+
+  EXPECT_TRUE(ExecJs(rfh, R"(
+      window.addEventListener('beforeunload', e => {
+        e.preventDefault();
+        e.returnValue = 'blocked';
+      });
+  )"));
+  rfh->ExecuteJavaScriptWithUserGestureForTests(
+      std::u16string(), base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
+  rfh->DisableBeforeUnloadHangMonitorForTesting();
+
+  FrameTreeNode* root = contents()->GetPrimaryFrameTree().root();
+  EXPECT_EQ(FrameType::kPrimaryMainFrame, root->GetFrameType());
+
+  {
+    BeforeUnloadBlockingDelegate beforeunload_pauser(contents());
+
+    shell()->LoadURL(url2);
+    beforeunload_pauser.Wait();
+
+    NavigationRequest* pending = root->navigation_request();
+    EXPECT_TRUE(pending);
+    if (pending) {
+      EXPECT_EQ(NavigationRequest::WAITING_FOR_RENDERER_RESPONSE,
+                pending->state());
+      EXPECT_TRUE(pending->IsInPrimaryMainFrame());
+    }
+
+    root->ResetNavigationRequest(
+        NavigationDiscardReason::kNewOtherNavigationBrowserInitiated);
+    EXPECT_FALSE(root->navigation_request());
+  }
+
+  base::ListValue default_reports =
+      TakeEarlyFailureReportsForTesting(default_store, origin);
+  base::ListValue frame_reports =
+      TakeEarlyFailureReportsForTesting(frame_store, origin);
+
+  EXPECT_EQ(0u, default_reports.size());
+  EXPECT_EQ(0u, frame_reports.size());
+}
+
+// Verifies that when a standard navigation request in the default
+// StoragePartition is aborted before reaching WILL_START_REQUEST, early failure
+// reports are correctly recorded in the default StoragePartition.
+// Note: This test fails under the original fix CL that unconditionally
+// required `state_ >= WILL_START_REQUEST`.
+IN_PROC_BROWSER_TEST_F(
+    NavigationRequestPartitionBrowserTest,
+    EarlyFailureInDefaultPartitionAbortedBeforeStartNavigation) {
+  GURL url1(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  GURL url2(embedded_test_server()->GetURL("a.com", "/title2.html"));
+  const url::Origin origin = url::Origin::Create(url1);
+
+  EXPECT_TRUE(NavigateToURL(shell(), url1));
+
+  RenderFrameHostImpl* rfh = contents()->GetPrimaryMainFrame();
+  SiteInstanceImpl* si = rfh->GetSiteInstance();
+  EXPECT_TRUE(
+      si->GetSecurityPrincipal().GetStoragePartitionConfig().is_default());
+
+  BrowserContext* browser_context = contents()->GetBrowserContext();
+  auto* default_partition =
+      static_cast<StoragePartitionImpl*>(browser_context->GetDefaultStoragePartition());
+
+  DeclarativePerformanceObserverStore* default_store =
+      default_partition->GetDeclarativePerformanceObserverStore();
+  EXPECT_TRUE(default_store);
+
+  {
+    base::RunLoop loop;
+    default_store->SetEarlyFailurePolicy(origin, true, loop.QuitClosure());
+    loop.Run();
+  }
+  EXPECT_TRUE(default_store->HasEarlyFailurePolicy(origin));
+
+  EXPECT_TRUE(ExecJs(rfh, R"(
+      window.addEventListener('beforeunload', e => {
+        e.preventDefault();
+        e.returnValue = 'blocked';
+      });
+  )"));
+  rfh->ExecuteJavaScriptWithUserGestureForTests(
+      std::u16string(), base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
+  rfh->DisableBeforeUnloadHangMonitorForTesting();
+
+  FrameTreeNode* root = contents()->GetPrimaryFrameTree().root();
+  EXPECT_EQ(FrameType::kPrimaryMainFrame, root->GetFrameType());
+
+  {
+    BeforeUnloadBlockingDelegate beforeunload_pauser(contents());
+
+    shell()->LoadURL(url2);
+    beforeunload_pauser.Wait();
+
+    NavigationRequest* pending = root->navigation_request();
+    EXPECT_TRUE(pending);
+    if (pending) {
+      EXPECT_EQ(NavigationRequest::WAITING_FOR_RENDERER_RESPONSE,
+                pending->state());
+      EXPECT_TRUE(pending->IsInPrimaryMainFrame());
+    }
+
+    root->ResetNavigationRequest(
+        NavigationDiscardReason::kNewOtherNavigationBrowserInitiated);
+    EXPECT_FALSE(root->navigation_request());
+  }
+
+  base::ListValue default_reports =
+      TakeEarlyFailureReportsForTesting(default_store, origin);
+
+  EXPECT_EQ(1u, default_reports.size());
 }
 
 }  // namespace content

@@ -27,39 +27,6 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_f.h"
 
-namespace {
-
-static float calculateDeviceScaleAdjustment(int width,
-                                            int height,
-                                            float deviceScaleFactor) {
-  // Chromium on Android uses a device scale adjustment for fonts used in text
-  // autosizing for improved legibility. This function computes this adjusted
-  // value for text autosizing.
-  // For a description of the Android device scale adjustment algorithm, see:
-  // chrome/browser/chrome_content_browser_client.cc,
-  // GetDeviceScaleAdjustment(...)
-  if (!width || !height || !deviceScaleFactor)
-    return 1;
-
-  static const float kMinFSM = 1.05f;
-  static const int kWidthForMinFSM = 320;
-  static const float kMaxFSM = 1.3f;
-  static const int kWidthForMaxFSM = 800;
-
-  float minWidth = std::min(width, height) / deviceScaleFactor;
-  if (minWidth <= kWidthForMinFSM)
-    return kMinFSM;
-  if (minWidth >= kWidthForMaxFSM)
-    return kMaxFSM;
-
-  // The font scale multiplier varies linearly between kMinFSM and kMaxFSM.
-  float ratio = static_cast<float>(minWidth - kWidthForMinFSM) /
-                (kWidthForMaxFSM - kWidthForMinFSM);
-  return ratio * (kMaxFSM - kMinFSM) + kMinFSM;
-}
-
-}  // namespace
-
 namespace blink {
 
 class DevToolsEmulator::ScopedGlobalOverrides
@@ -117,10 +84,6 @@ DevToolsEmulator::ScopedGlobalOverrides*
 DevToolsEmulator::DevToolsEmulator(WebViewImpl* web_view)
     : web_view_(web_view),
       device_metrics_enabled_(false),
-      embedder_text_autosizing_enabled_(
-          web_view->GetPage()->GetSettings().GetTextAutosizingEnabled()),
-      embedder_device_scale_adjustment_(
-          web_view->GetPage()->GetSettings().GetDeviceScaleAdjustment()),
       embedder_lcd_text_preference_(
           web_view->GetPage()->GetSettings().GetLCDTextPreference()),
       embedder_viewport_style_(
@@ -145,6 +108,8 @@ DevToolsEmulator::DevToolsEmulator(WebViewImpl* web_view)
           web_view->GetPage()->GetSettings().GetViewportEnabled()),
       embedder_viewport_meta_enabled_(
           web_view->GetPage()->GetSettings().GetViewportMetaEnabled()),
+      embedder_text_size_adjust_enabled_(
+          web_view->GetPage()->GetSettings().GetTextSizeAdjustEnabled()),
       touch_event_emulation_enabled_(false),
       double_tap_to_zoom_enabled_(false),
       original_max_touch_points_(0),
@@ -154,6 +119,8 @@ DevToolsEmulator::DevToolsEmulator(WebViewImpl* web_view)
       embedder_hide_scrollbars_(
           web_view->GetPage()->GetSettings().GetHideScrollbars()),
       scrollbars_hidden_(false),
+      force_android_overlay_scrollbar_(
+          web_view->GetPage()->GetSettings().GetForceAndroidOverlayScrollbar()),
       embedder_cookie_enabled_(
           web_view->GetPage()->GetSettings().GetCookieEnabled()),
       document_cookie_disabled_(false),
@@ -180,21 +147,6 @@ void DevToolsEmulator::Shutdown() {
   // Restore global overrides, but do not restore any page overrides, since
   // the page may already be in an inconsistent state at this moment.
   global_overrides_.reset();
-}
-
-void DevToolsEmulator::SetTextAutosizingEnabled(bool enabled) {
-  embedder_text_autosizing_enabled_ = enabled;
-  if (!emulate_mobile_enabled()) {
-    web_view_->GetPage()->GetSettings().SetTextAutosizingEnabled(enabled);
-  }
-}
-
-void DevToolsEmulator::SetDeviceScaleAdjustment(float device_scale_adjustment) {
-  embedder_device_scale_adjustment_ = device_scale_adjustment;
-  if (!emulate_mobile_enabled()) {
-    web_view_->GetPage()->GetSettings().SetDeviceScaleAdjustment(
-        device_scale_adjustment);
-  }
 }
 
 void DevToolsEmulator::SetLCDTextPreference(LCDTextPreference preference) {
@@ -282,6 +234,13 @@ void DevToolsEmulator::SetViewportMetaEnabled(bool enabled) {
   }
 }
 
+void DevToolsEmulator::SetTextSizeAdjustEnabled(bool enabled) {
+  embedder_text_size_adjust_enabled_ = enabled;
+  if (!emulate_mobile_enabled()) {
+    web_view_->GetPage()->GetSettings().SetTextSizeAdjustEnabled(enabled);
+  }
+}
+
 void DevToolsEmulator::SetAvailablePointerTypes(int types) {
   embedder_available_pointer_types_ = types;
   if (!touch_event_emulation_enabled_)
@@ -322,7 +281,9 @@ gfx::Transform DevToolsEmulator::EnableDeviceEmulation(
       emulation_params_.device_scale_factor == params.device_scale_factor &&
       emulation_params_.scale == params.scale &&
       emulation_params_.viewport_offset == params.viewport_offset &&
-      emulation_params_.viewport_scale == params.viewport_scale) {
+      emulation_params_.viewport_scale == params.viewport_scale &&
+      emulation_params_.force_android_overlay_scrollbar ==
+          params.force_android_overlay_scrollbar) {
     return ComputeRootLayerTransform();
   }
   if ((emulation_params_.device_scale_factor != params.device_scale_factor ||
@@ -349,15 +310,12 @@ gfx::Transform DevToolsEmulator::EnableDeviceEmulation(
   emulation_params_ = params;
   device_metrics_enabled_ = true;
 
-  web_view_->GetPage()->GetSettings().SetDeviceScaleAdjustment(
-      calculateDeviceScaleAdjustment(params.view_size.width(),
-                                     params.view_size.height(),
-                                     params.device_scale_factor));
-
   if (params.screen_type == mojom::blink::EmulatedScreenType::kMobile)
     EnableMobileEmulation();
   else
     DisableMobileEmulation();
+
+  SetForceAndroidOverlayScrollbar(params.force_android_overlay_scrollbar);
 
   web_view_->SetCompositorDeviceScaleFactorOverride(params.device_scale_factor);
 
@@ -382,15 +340,15 @@ void DevToolsEmulator::DisableDeviceEmulation() {
 
   MemoryCache::Get()->EvictResources();
   device_metrics_enabled_ = false;
-  web_view_->GetPage()->GetSettings().SetDeviceScaleAdjustment(
-      embedder_device_scale_adjustment_);
   DisableMobileEmulation();
+  SetForceAndroidOverlayScrollbar(false);
   web_view_->SetCompositorDeviceScaleFactorOverride(0.f);
-  web_view_->SetPageScaleFactor(1.f);
 
-  // TODO(wjmaclean): Tell all local frames in the WebView's frame tree, not
-  // just a local main frame.
   if (web_view_->MainFrameImpl()) {
+    web_view_->SetPageScaleFactor(1.f);
+
+    // TODO(wjmaclean): Tell all local frames in the WebView's frame tree,
+    // not just a local main frame.
     if (Document* document =
             web_view_->MainFrameImpl()->GetFrame()->GetDocument())
       document->MediaQueryAffectingValueChanged(MediaValueChange::kOther);
@@ -407,13 +365,12 @@ void DevToolsEmulator::EnableMobileEmulation() {
   CHECK(!is_shutdown_);
   CHECK(!emulate_mobile_enabled());
   global_overrides_ = ScopedGlobalOverrides::AssureInstalled();
-  web_view_->GetPage()->GetSettings().SetForceAndroidOverlayScrollbar(true);
   web_view_->GetPage()->GetSettings().SetViewportStyle(
       mojom::blink::ViewportStyle::kMobile);
   web_view_->GetPage()->GetSettings().SetViewportEnabled(true);
   web_view_->GetPage()->GetSettings().SetViewportMetaEnabled(true);
+  web_view_->GetPage()->GetSettings().SetTextSizeAdjustEnabled(true);
   web_view_->GetPage()->GetSettings().SetShrinksViewportContentToFit(true);
-  web_view_->GetPage()->GetSettings().SetTextAutosizingEnabled(true);
   web_view_->GetPage()->GetSettings().SetLCDTextPreference(
       LCDTextPreference::kIgnored);
   web_view_->GetPage()->GetSettings().SetMainFrameResizesAreOrientationChanges(
@@ -439,16 +396,15 @@ void DevToolsEmulator::DisableMobileEmulation() {
     return;
   }
   global_overrides_.reset();
-  web_view_->GetPage()->GetSettings().SetForceAndroidOverlayScrollbar(false);
   web_view_->GetPage()->GetSettings().SetViewportEnabled(
       embedder_viewport_enabled_);
   web_view_->GetPage()->GetSettings().SetViewportMetaEnabled(
       embedder_viewport_meta_enabled_);
+  web_view_->GetPage()->GetSettings().SetTextSizeAdjustEnabled(
+      embedder_text_size_adjust_enabled_);
   web_view_->GetPage()->GetVisualViewport().InitializeScrollbars();
   web_view_->GetSettings()->SetShrinksViewportContentToFit(
       embedder_shrink_viewport_content_);
-  web_view_->GetPage()->GetSettings().SetTextAutosizingEnabled(
-      embedder_text_autosizing_enabled_);
   web_view_->GetPage()->GetSettings().SetLCDTextPreference(
       embedder_lcd_text_preference_);
   web_view_->GetPage()->GetSettings().SetViewportStyle(
@@ -571,6 +527,27 @@ void DevToolsEmulator::SetScrollbarsHidden(bool hidden) {
   scrollbars_hidden_ = hidden;
   web_view_->GetPage()->GetSettings().SetHideScrollbars(
       scrollbars_hidden_ || embedder_hide_scrollbars_);
+}
+
+void DevToolsEmulator::SetForceAndroidOverlayScrollbar(
+    bool force_android_overlay_scrollbar) {
+  if (force_android_overlay_scrollbar_ == force_android_overlay_scrollbar) {
+    return;
+  }
+  force_android_overlay_scrollbar_ = force_android_overlay_scrollbar;
+  web_view_->GetPage()->GetSettings().SetForceAndroidOverlayScrollbar(
+      force_android_overlay_scrollbar_);
+
+  if (web_view_->GetPage()->GetVisualViewport().IsActiveViewport()) {
+    web_view_->GetPage()->GetVisualViewport().InitializeScrollbars();
+  }
+
+  web_view_->GetPage()->UsesOverlayScrollbarsChanged();
+
+  if (web_view_->MainFrameImpl()) {
+    web_view_->MainFrameImpl()->GetFrameView()->UpdateLifecycleToLayoutClean(
+        DocumentUpdateReason::kInspector);
+  }
 }
 
 void DevToolsEmulator::SetDocumentCookieDisabled(bool disabled) {

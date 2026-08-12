@@ -14,14 +14,13 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/self_deleting.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -45,9 +44,11 @@ const int kMaxWarnings = 2;
 // Implementation of BrowserCollectionObserver used to wait for a browser
 // window.
 class NetworkProfileBubbleBrowserCollectionObserver
-    : public BrowserCollectionObserver {
+    : public BrowserCollectionObserver,
+      public base::SelfDeleting {
  public:
-  NetworkProfileBubbleBrowserCollectionObserver();
+  explicit NetworkProfileBubbleBrowserCollectionObserver(
+      base::SelfDeletingPassKey key);
 
  private:
   ~NetworkProfileBubbleBrowserCollectionObserver() override;
@@ -60,7 +61,8 @@ class NetworkProfileBubbleBrowserCollectionObserver
 };
 
 NetworkProfileBubbleBrowserCollectionObserver::
-    NetworkProfileBubbleBrowserCollectionObserver() {
+    NetworkProfileBubbleBrowserCollectionObserver(base::SelfDeletingPassKey key)
+    : base::SelfDeleting(key) {
   browser_collection_observation_.Observe(
       GlobalBrowserCollection::GetInstance());
 }
@@ -176,12 +178,13 @@ void NetworkProfileBubble::RecordUmaEvent(MetricNetworkedProfileCheck event) {
 
 // static
 void NetworkProfileBubble::NotifyNetworkProfileDetected() {
-  Browser* browser = chrome::FindLastActive();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 
   if (browser) {
     ShowNotification(browser);
   } else {
     // Won't leak because the observer is self-deleting.
-    new NetworkProfileBubbleBrowserCollectionObserver();
+    base::MakeSelfDeleting<NetworkProfileBubbleBrowserCollectionObserver>();
   }
 }

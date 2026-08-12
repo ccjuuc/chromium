@@ -27,6 +27,7 @@
 
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/video_painter.h"
@@ -36,6 +37,14 @@ namespace blink {
 LayoutVideo::LayoutVideo(HTMLVideoElement* video) : LayoutMedia(video) {}
 
 LayoutVideo::~LayoutVideo() = default;
+
+bool LayoutVideo::IsReplacedNormalFlowStackingContext(
+    const ComputedStyle& style) const {
+  NOT_DESTROYED();
+  return RuntimeEnabledFeatures::StackingContextIsNotStackedEnabled() &&
+         style.GetPosition() == EPosition::kStatic &&
+         VideoElement()->FastHasAttribute(html_names::kControlsAttr);
+}
 
 void LayoutVideo::NaturalSizeChanged() {
   NOT_DESTROYED();
@@ -148,10 +157,11 @@ HTMLVideoElement* LayoutVideo::VideoElement() const {
 void LayoutVideo::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutImage::StyleDidChange(diff, old_style, style_change_context);
-  VideoElement()->StyleDidChange(old_style, StyleRef());
+  LayoutImage::StyleDidChange(diff, old_style, new_style, style_change_context);
+  VideoElement()->StyleDidChange(old_style, new_style);
 }
 
 void LayoutVideo::UpdateFromElement() {
@@ -200,10 +210,10 @@ bool LayoutVideo::SupportsAcceleratedRendering() const {
 
 CompositingReasons LayoutVideo::AdditionalCompositingReasons() const {
   NOT_DESTROYED();
-  if (GetDisplayMode() == kVideo && SupportsAcceleratedRendering())
-    return CompositingReason::kVideo;
-
-  return CompositingReason::kNone;
+  if (GetDisplayMode() == kVideo && SupportsAcceleratedRendering()) {
+    return {CompositingReason::kVideo};
+  }
+  return {};
 }
 
 }  // namespace blink

@@ -10,23 +10,25 @@
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_speech_recognition_host.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_test_util.h"
-#include "chrome/browser/accessibility/live_translate_controller_factory.h"
+#include "chrome/browser/accessibility/live_caption/live_translate_controller_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/live_caption/caption_bubble_controller.h"
+#include "components/live_caption/google_api_translation_dispatcher.h"
 #include "components/live_caption/live_caption_controller.h"
 #include "components/live_caption/live_translate_controller.h"
 #include "components/live_caption/pref_names.h"
+#include "components/live_caption/translation_dispatcher_on_device.h"
 #include "components/live_caption/translation_util.h"
+#include "components/on_device_translation/installer.h"
+#include "components/on_device_translation/service/service_launcher.h"
+#include "components/on_device_translation/service_controller.h"
 #include "components/prefs/pref_service.h"
-#include "components/sync_preferences/pref_service_syncable.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/mojo/mojom/speech_recognition.mojom.h"
-#include "net/test/embedded_test_server/http_request.h"
-#include "net/test/embedded_test_server/http_response.h"
 
 namespace {
 // A WebContentsObserver that allows waiting for some media to start or stop
@@ -63,8 +65,9 @@ MockLiveTranslateController::MockLiveTranslateController(
     content::BrowserContext* browser_context)
     : LiveTranslateController(
           profile_prefs,
-          std::make_unique<TranslationDispatcher>("dummy_api_key",
-                                                  browser_context)) {}
+          std::make_unique<TranslationDispatcherOnDevice>(),
+          std::make_unique<GoogleApiTranslationDispatcher>("dummy_api_key",
+                                                           browser_context)) {}
 
 MockLiveTranslateController::~MockLiveTranslateController() = default;
 
@@ -90,7 +93,7 @@ std::unique_ptr<KeyedService>
 LiveCaptionSpeechRecognitionHostTest::SetLiveTranslateController(
     content::BrowserContext* context) {
   return std::make_unique<testing::NiceMock<MockLiveTranslateController>>(
-      browser()->profile()->GetPrefs(), browser()->profile());
+      browser()->GetProfile()->GetPrefs(), browser()->GetProfile());
 }
 
 void LiveCaptionSpeechRecognitionHostTest::SetUp() {
@@ -102,7 +105,7 @@ void LiveCaptionSpeechRecognitionHostTest::SetUp() {
 
 void LiveCaptionSpeechRecognitionHostTest::SetUpOnMainThread() {
   LiveTranslateControllerFactory::GetInstance()->SetTestingFactory(
-      browser()->profile(),
+      browser()->GetProfile(),
       base::BindRepeating(
           &LiveCaptionSpeechRecognitionHostTest::SetLiveTranslateController,
           base::Unretained(this)));
@@ -149,14 +152,14 @@ void LiveCaptionSpeechRecognitionHostTest::OnSpeechRecognitionError(
 }
 
 bool LiveCaptionSpeechRecognitionHostTest::HasBubbleController() {
-  return LiveCaptionControllerFactory::GetForProfile(browser()->profile())
+  return LiveCaptionControllerFactory::GetForProfile(browser()->GetProfile())
              ->caption_bubble_controller_for_testing() != nullptr;
 }
 
 void LiveCaptionSpeechRecognitionHostTest::ExpectIsWidgetVisible(bool visible) {
 #if defined(TOOLKIT_VIEWS)
     CaptionBubbleController* bubble_controller =
-        LiveCaptionControllerFactory::GetForProfile(browser()->profile())
+        LiveCaptionControllerFactory::GetForProfile(browser()->GetProfile())
             ->caption_bubble_controller_for_testing();
     EXPECT_EQ(visible, bubble_controller->IsWidgetVisibleForTesting());
 #endif
@@ -166,7 +169,7 @@ std::vector<std::string>
 LiveCaptionSpeechRecognitionHostTest::GetTranslationRequests() {
   return static_cast<MockLiveTranslateController*>(
              LiveTranslateControllerFactory::GetForProfile(
-                 browser()->profile()))
+                 browser()->GetProfile()))
       ->GetTranslationRequests();
 }
 
@@ -176,7 +179,7 @@ void LiveCaptionSpeechRecognitionHostTest::DispatchTranscriptionCallback(
   EXPECT_EQ(expected_success, success);
 }
 
-// Disabled due to flaky crashes; https://crbug.com/1216304.
+// Disabled due to flaky crashes; https://crbug.com/40184759.
 IN_PROC_BROWSER_TEST_F(LiveCaptionSpeechRecognitionHostTest,
                        DISABLED_DestroysWithoutCrashing) {
   content::RenderFrameHost* frame_host = browser()
@@ -449,7 +452,7 @@ IN_PROC_BROWSER_TEST_F(LiveCaptionSpeechRecognitionHostTest,
   SetLiveTranslateEnabled(true);
 
   // Ensure that ideographic to non-ideographic translations are not cached.
-  browser()->profile()->GetPrefs()->SetString(prefs::kLiveCaptionLanguageCode,
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kLiveCaptionLanguageCode,
                                               "ja-JP");
   CreateLiveCaptionSpeechRecognitionHost(frame_host);
 

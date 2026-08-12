@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.RecyclerView.OnScrollListener;
 
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
@@ -40,12 +41,10 @@ public class CreditCardAccessorySheetCoordinator extends AccessorySheetTabCoordi
      * @param scrollListener An optional listener that will be bound to the inflated recycler view.
      */
     public CreditCardAccessorySheetCoordinator(
-            Context context,
-            Profile profile,
-            RecyclerView.@Nullable OnScrollListener scrollListener) {
+            Context context, Profile profile, @Nullable OnScrollListener scrollListener) {
         super(
                 context.getString(R.string.autofill_payment_methods),
-                IconProvider.getIcon(context, R.drawable.infobar_autofill_cc),
+                R.drawable.ic_autofill_cc,
                 context.getString(R.string.credit_card_accessory_sheet_toggle),
                 R.layout.credit_card_accessory_sheet,
                 AccessoryTabType.CREDIT_CARDS,
@@ -54,7 +53,7 @@ public class CreditCardAccessorySheetCoordinator extends AccessorySheetTabCoordi
                 createUiConfiguration(context, AutofillImageFetcherFactory.getForProfile(profile));
         mMediator =
                 new AccessorySheetTabMediator(
-                        mModel, Type.CREDIT_CARD_INFO, AccessoryAction.MANAGE_CREDIT_CARDS, null);
+                        mModel, Type.CREDIT_CARD_INFO, AccessoryAction.MANAGE_CREDIT_CARDS);
     }
 
     @Override

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/layout/flex/flex_layout_algorithm.h"
 
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/layout/base_layout_algorithm_test.h"
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/flex/devtools_flex_info.h"
@@ -794,6 +795,156 @@ TEST_F(FlexLayoutAlgorithmTest, GapDecorationsColumnFlexDirection) {
   VerifyCrossGaps(expected_cross_gaps, cross_gaps);
 }
 
+TEST_F(FlexLayoutAlgorithmTest, GapDecorationsContentDistributionGaps) {
+  ScopedCSSGapDecorationForTest scoped_gap_decoration(true);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+    body {
+        margin: 0px;
+    }
+      #flexbox {
+            width: 400px;
+            border: 2px solid #333;
+
+            background-color: #fff;
+
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            column-rule: 5px solid gold;
+        }
+
+        .item {
+            width: 70px;
+            height: 50px;
+            background-color: #007bff;
+            color: white;
+            display: flex;
+        }
+    </style>
+      <div id="flexbox">
+        <div class="item">1</div>
+        <div class="item">2</div>
+        <div class="item">3</div>
+        <div class="item">4</div>
+
+        <div class="item">5</div>
+        <div class="item">6</div>
+        <div class="item">7</div>
+
+        <div class="item">8</div>
+        <div class="item">9</div>
+    </div>
+  )HTML");
+
+  BlockNode node(GetLayoutBoxByElementId("flexbox"));
+
+  ConstraintSpace space = ConstructBlockLayoutTestConstraintSpace(
+      {WritingMode::kHorizontalTb, TextDirection::kLtr},
+      LogicalSize(LayoutUnit(200), LayoutUnit(200)),
+      /* stretch_inline_size_if_auto */ true,
+      /* is_new_formatting_context */ true);
+
+  FragmentGeometry fragment_geometry =
+      CalculateInitialFragmentGeometry(space, node, /* break_token */
+                                       nullptr);
+
+  FlexLayoutAlgorithm algorithm({node, fragment_geometry, space});
+
+  algorithm.Layout();
+
+  const GapGeometry* gap_geometry = algorithm.GetGapGeometry();
+
+  const Vector<CrossGap> expected_column_gaps = {
+      CrossGap(LogicalOffset(LayoutUnit(78.25), LayoutUnit(2)),
+               CrossGap::EdgeIntersectionState::kStart),
+      CrossGap(LogicalOffset(LayoutUnit(160.75), LayoutUnit(2)),
+               CrossGap::EdgeIntersectionState::kStart),
+      CrossGap(LogicalOffset(LayoutUnit(243.25), LayoutUnit(2)),
+               CrossGap::EdgeIntersectionState::kStart),
+      CrossGap(LogicalOffset(LayoutUnit(325.75), LayoutUnit(2)),
+               CrossGap::EdgeIntersectionState::kStart),
+      CrossGap(LogicalOffset(LayoutUnit(92), LayoutUnit(52)),
+               CrossGap::EdgeIntersectionState::kEnd),
+      CrossGap(LogicalOffset(LayoutUnit(202), LayoutUnit(52)),
+               CrossGap::EdgeIntersectionState::kEnd),
+      CrossGap(LogicalOffset(LayoutUnit(312), LayoutUnit(52)),
+               CrossGap::EdgeIntersectionState::kEnd)};
+
+  const Vector<CrossGap>& column_gaps = gap_geometry->GetCrossGaps();
+  EXPECT_EQ(column_gaps.size(), 7);
+
+  // Validate per-line effective gap sizes (column-gap + content distribution
+  // space). Line 1: 5 items, free = 50px, space-between = 12.5px.
+  // Line 2: 4 items, free = 120px, space-between = 40px.
+  EXPECT_EQ(gap_geometry->GetFlexCrossGapSize(0), LayoutUnit(12.5));
+  EXPECT_EQ(gap_geometry->GetFlexCrossGapSize(1), LayoutUnit(40));
+
+  VerifyCrossGaps(expected_column_gaps, column_gaps);
+}
+
+TEST_F(FlexLayoutAlgorithmTest,
+       GapDecorationsContentDistributionGapsBetweenLines) {
+  ScopedCSSGapDecorationForTest scoped_gap_decoration(true);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+    body {
+        margin: 0px;
+    }
+
+    #flexbox {
+        width: 140px;
+        background-color: #fff;
+        display: flex;
+        flex-wrap: wrap;
+        row-rule: 5px solid gold;
+        height: 120px;
+    }
+
+    .item {
+        width: 70px;
+        height: 50px;
+        background-color: #007bff;
+        color: white;
+        display: flex;
+    }
+</style>
+<div id="flexbox">
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+</div>
+  )HTML");
+
+  BlockNode node(GetLayoutBoxByElementId("flexbox"));
+
+  ConstraintSpace space = ConstructBlockLayoutTestConstraintSpace(
+      {WritingMode::kHorizontalTb, TextDirection::kLtr},
+      LogicalSize(LayoutUnit(200), LayoutUnit(200)),
+      /* stretch_inline_size_if_auto */ true,
+      /* is_new_formatting_context */ true);
+
+  FragmentGeometry fragment_geometry =
+      CalculateInitialFragmentGeometry(space, node, /* break_token */
+                                       nullptr);
+
+  FlexLayoutAlgorithm algorithm({node, fragment_geometry, space});
+
+  algorithm.Layout();
+
+  const GapGeometry* gap_geometry = algorithm.GetGapGeometry();
+
+  const Vector<MainGap> expected_row_gaps = {MainGap(LayoutUnit(60))};
+
+  const Vector<MainGap>& row_gaps = gap_geometry->GetMainGaps();
+  EXPECT_EQ(row_gaps.size(), 1);
+
+  EXPECT_EQ(gap_geometry->GetBlockGapSize(), LayoutUnit(0));
+
+  VerifyMainGaps(expected_row_gaps, gap_geometry->GetMainGaps());
+}
+
 TEST_F(FlexLayoutAlgorithmTest, DevtoolsBasic) {
   const DevtoolsFlexInfo* devtools = LayoutForDevtools(R"HTML(
     <div style="display:flex; width: 100px;" id=flexbox>
@@ -980,6 +1131,48 @@ TEST_F(FlexLayoutAlgorithmTest, DevtoolsAutoScrollbar) {
 
   devtools = LayoutForDevtools();
   EXPECT_TRUE(devtools);
+}
+
+TEST_F(FlexLayoutAlgorithmTest, SingleAxisScrollerAutoMinSizeUseCount) {
+  ScopedSingleAxisScrollContainersForTest single_axis_scroll_containers(true);
+
+  SetBodyInnerHTML(R"HTML(
+    <div style='display: flex'>
+      <div style='overflow-x: clip; overflow-y: auto; min-width: 0'></div>
+    </div>
+  )HTML");
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kSingleAxisScrollerAutoMinSize));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kSingleAxisScrollerAutoMinSize);
+
+  SetBodyInnerHTML(R"HTML(
+    <div style='display: flex'>
+      <div style='overflow-x: clip; overflow-y: auto'></div>
+    </div>
+  )HTML");
+  EXPECT_TRUE(
+      GetDocument().IsUseCounted(WebFeature::kSingleAxisScrollerAutoMinSize));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kSingleAxisScrollerAutoMinSize);
+
+  SetBodyInnerHTML(R"HTML(
+    <div style='display: flex; flex-direction: column'>
+      <div style='overflow-x: auto; overflow-y: clip'></div>
+    </div>
+  )HTML");
+  EXPECT_TRUE(
+      GetDocument().IsUseCounted(WebFeature::kSingleAxisScrollerAutoMinSize));
+  GetDocument().ClearUseCounterForTesting(
+      WebFeature::kSingleAxisScrollerAutoMinSize);
+
+  SetBodyInnerHTML(R"HTML(
+    <div style='display: flex'>
+      <div style='overflow-y: auto'></div>
+    </div>
+  )HTML");
+  EXPECT_FALSE(
+      GetDocument().IsUseCounted(WebFeature::kSingleAxisScrollerAutoMinSize));
 }
 
 }  // namespace

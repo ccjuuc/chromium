@@ -22,7 +22,7 @@ LocalTabID FromJavaTabId(int tab_id);
 
 // Converts a local tab ID in native to its Java counterpart. If tab ID isn't
 // present, -1 will be returned.
-jint ToJavaTabId(const std::optional<LocalTabID>& tab_id);
+int32_t ToJavaTabId(const std::optional<LocalTabID>& tab_id);
 
 // Converts a base::Uuid to a Java string.
 ScopedJavaLocalRef<jstring> UuidToJavaString(JNIEnv* env,
@@ -34,7 +34,7 @@ base::Uuid JavaStringToUuid(JNIEnv* env, const JavaRef<jstring>& j_uuid);
 // Converts a Java sync or local group ID to EitherGroupID.
 EitherGroupID JavaSyncOrLocalGroupIdToEitherGroupId(
     JNIEnv* env,
-    const JavaRef<jstring>& j_sync_group_id,
+    const std::string& sync_group_id,
     const JavaRef<jobject>& j_local_group_id);
 
 }  // namespace tab_groups

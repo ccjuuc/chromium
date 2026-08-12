@@ -15,6 +15,7 @@
 #include "remoting/protocol/client_video_stats_dispatcher.h"
 #include "remoting/protocol/video_stats_stub.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/video/video_sink_interface.h"
 
 namespace base {
@@ -76,7 +77,7 @@ class WebrtcVideoRendererAdapter
 
   std::string label_;
 
-  webrtc::scoped_refptr<webrtc::MediaStreamInterface> media_stream_;
+  webrtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_;
   raw_ptr<VideoRenderer> video_renderer_;
 
   std::unique_ptr<ClientVideoStatsDispatcher> video_stats_dispatcher_;

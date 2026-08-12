@@ -15,10 +15,11 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/containers/lru_cache.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/hashing_lru_cache.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/discardable_memory.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/ref_counted.h"
@@ -111,8 +112,7 @@ class RasterDarkModeFilter;
 //      |persistent_cache_| or |in_use_cache_|.
 class CC_EXPORT GpuImageDecodeCache
     : public ImageDecodeCache,
-      public base::trace_event::MemoryDumpProvider,
-      public base::MemoryPressureListener {
+      public base::trace_event::MemoryDumpProvider {
  public:
   explicit GpuImageDecodeCache(viz::RasterContextProvider* context,
                                SkColorType color_type,
@@ -151,10 +151,6 @@ class CC_EXPORT GpuImageDecodeCache
   // MemoryDumpProvider overrides.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
-
-  // TODO(gyuyoung): OnMemoryPressure is deprecated. So this should be removed
-  // when the memory coordinator is enabled by default.
-  void OnMemoryPressure(base::MemoryPressureLevel level) override;
 
   // Called by Decode / Upload tasks.
   void DecodeImageInTask(const DrawImage& image, TaskType task_type);
@@ -672,6 +668,12 @@ class CC_EXPORT GpuImageDecodeCache
   // be accessed without a lock since they are thread safe.
   mutable base::Lock lock_;
 
+  // A map that maps from a ContentId to all of the FrameKeys that have that
+  // ContentId and are stored in `persisent_cache_`. This allows for O(1)
+  // removal of all cache entries that have a given ContentId.
+  base::flat_map<PaintImage::ContentId, base::flat_set<PaintImage::FrameKey>>
+      content_id_to_frame_keys_ GUARDED_BY(lock_);
+
   bool has_pending_purge_task_ GUARDED_BY(lock_) = false;
 
   PersistentCache persistent_cache_ GUARDED_BY(lock_);
@@ -714,8 +716,6 @@ class CC_EXPORT GpuImageDecodeCache
   std::vector<uint32_t> ids_pending_unlock_;
   std::vector<uint32_t> ids_pending_deletion_;
 
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
   base::WeakPtrFactory<GpuImageDecodeCache> weak_ptr_factory_{this};
 };
 

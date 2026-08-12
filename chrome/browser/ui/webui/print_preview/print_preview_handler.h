@@ -18,6 +18,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/unguessable_token.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/enterprise/buildflags/buildflags.h"
@@ -34,12 +35,6 @@ namespace base {
 class TimeTicks;
 }  // namespace base
 
-#if BUILDFLAG(IS_CHROMEOS)
-namespace crosapi::mojom {
-class LocalPrinter;
-}
-
-#endif
 
 namespace content {
 class WebContents;
@@ -78,7 +73,8 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   void OnInvalidPrinterSettings(int request_id);
 
   // Called when print preview is ready.
-  void OnPrintPreviewReady(int preview_uid, int request_id);
+  void OnPrintPreviewReady(const base::UnguessableToken& preview_uid,
+                           int request_id);
 
   // Called when a print request is cancelled due to its initiator closing.
   void OnPrintRequestCancelled();
@@ -95,14 +91,14 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
                           int request_id);
 
   // Send the default page layout
-  void SendPageLayoutReady(base::Value::Dict layout,
+  void SendPageLayoutReady(base::DictValue layout,
                            bool all_pages_have_custom_size,
                            bool all_pages_have_custom_orientation,
                            int request_id);
 
   // Notify the WebUI that the page preview is ready.
   void SendPagePreviewReady(int page_index,
-                            int preview_uid,
+                            const base::UnguessableToken& preview_uid,
                             int preview_request_id);
 
   // Notifies PDF Printer Handler that |path| was selected. Used for tests.
@@ -125,7 +121,7 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   // Initiates print after any content analysis checks have been passed
   // successfully.
   virtual void FinishHandleDoPrint(UserActionBuckets user_action,
-                                   base::Value::Dict settings,
+                                   base::DictValue settings,
                                    scoped_refptr<base::RefCountedMemory> data,
                                    const std::string& callback_id);
 
@@ -151,7 +147,9 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
 
   PrintPreviewUI* print_preview_ui();
 
-  const mojom::RequestPrintPreviewParams* GetRequestParams();
+  // Returns whether `this` is printing a PDF or not. Returns std::nullopt if
+  // the associated Print Preview dialog does not exist.
+  std::optional<bool> IsPrintingPdf();
 
   PrefService* GetPrefs();
 
@@ -176,60 +174,60 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
 
   // Gets the list of printers. First element of |args| is the Javascript
   // callback, second element of |args| is the printer type to fetch.
-  void HandleGetPrinters(const base::Value::List& args);
+  void HandleGetPrinters(const base::ListValue& args);
 
   // Asks the initiator renderer to generate a preview.  First element of |args|
   // is a job settings JSON string.
-  void HandleGetPreview(const base::Value::List& args);
+  void HandleGetPreview(const base::ListValue& args);
 
   // Gets the job settings from Web UI and initiate printing. First element of
   // |args| is a job settings JSON string.
-  void HandleDoPrint(const base::Value::List& args);
+  void HandleDoPrint(const base::ListValue& args);
 
   // Handles the request to hide the preview dialog for printing.
   // |args| is unused.
-  void HandleHidePreview(const base::Value::List& args);
+  void HandleHidePreview(const base::ListValue& args);
 
   // Handles the request to cancel the pending print request. |args| is unused.
-  void HandleCancelPendingPrintRequest(const base::Value::List& args);
+  void HandleCancelPendingPrintRequest(const base::ListValue& args);
 
   // Handles a request to store data that the web ui wishes to persist.
   // First element of |args| is the data to persist.
-  void HandleSaveAppState(const base::Value::List& args);
+  void HandleSaveAppState(const base::ListValue& args);
 
   // Gets the printer capabilities. Fist element of |args| is the Javascript
   // callback, second element is the printer ID of the printer whose
   // capabilities are requested, and the third element is the type of the
   // printer whose capabilities are requested.
-  void HandleGetPrinterCapabilities(const base::Value::List& args);
+  void HandleGetPrinterCapabilities(const base::ListValue& args);
 
 #if BUILDFLAG(ENABLE_BASIC_PRINT_DIALOG)
   // Asks the initiator renderer to show the native print system dialog. |args|
   // is unused.
-  void HandleShowSystemDialog(const base::Value::List& args);
+  void HandleShowSystemDialog(const base::ListValue& args);
 #endif
 
   // Gathers UMA stats when the print preview dialog is about to close.
   // |args| is unused.
-  void HandleClosePreviewDialog(const base::Value::List& args);
+  void HandleClosePreviewDialog(const base::ListValue& args);
 
   // Asks the browser for several settings that are needed before the first
   // preview is displayed.
-  void HandleGetInitialSettings(const base::Value::List& args);
+  void HandleGetInitialSettings(const base::ListValue& args);
 
-  // Opens printer settings in the Chrome OS Settings App or OS's printer manger
-  // dialog. |args| is unused.
-  void HandleManagePrinters(const base::Value::List& args);
+  // Opens printer settings in the Chrome OS Settings App or OS's printer
+  // manager dialog. |args| is unused.
+  void HandleManagePrinters(const base::ListValue& args);
 
   void SendInitialSettings(const std::string& callback_id,
-                           base::Value::Dict policies,
+                           base::DictValue policies,
                            const std::string& default_printer);
 
   // Sends the printer capabilities to the Web UI. |settings_info| contains
   // printer capabilities information. If |settings_info| is empty, sends
   // error notification to the Web UI instead.
   void SendPrinterCapabilities(const std::string& callback_id,
-                               base::Value::Dict settings_info);
+                               base::DictValue settings_info);
 
   // Closes the preview dialog.
   void ClosePreviewDialog();
@@ -238,10 +236,10 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   void ClearInitiatorDetails();
 
   // Populates |settings| according to the current locale.
-  void GetLocaleInformation(base::Value::Dict* settings);
+  void GetLocaleInformation(base::DictValue* settings);
 
   // Populates |settings| with the list of logged in accounts.
-  void GetUserAccountList(base::Value::Dict* settings);
+  void GetUserAccountList(base::DictValue* settings);
 
   PdfPrinterHandler* GetPdfPrinterHandler();
 
@@ -250,7 +248,7 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   // |printers|: A non-empty list containing information about the printer or
   //     printers that have been added.
   void OnAddedPrinters(mojom::PrinterType printer_type,
-                       base::Value::List printers);
+                       base::ListValue printers);
 
   // Called when printer search is done for some destination type.
   // |callback_id|: The javascript callback to call.
@@ -269,7 +267,7 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   // Calls FinishHandleDoPrint() if it's allowed or calls OnPrintResult() to
   // report print not allowed.
   void OnVerdictByEnterprisePolicy(UserActionBuckets user_action,
-                                   base::Value::Dict settings,
+                                   base::DictValue settings,
                                    scoped_refptr<base::RefCountedMemory> data,
                                    const std::string& callback_id,
                                    bool allowed);
@@ -285,7 +283,7 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
   bool has_logged_printers_count_ = false;
 
   // The settings used for the most recent preview request.
-  std::optional<base::Value::Dict> last_preview_settings_;
+  std::optional<base::DictValue> last_preview_settings_;
 
   // Handles requests for extension printers. Created lazily by calling
   // GetPrinterHandler().
@@ -310,15 +308,6 @@ class PrintPreviewHandler : public content::WebUIMessageHandler {
 
   // Used to transmit mojo interface method calls to the associated receiver.
   mojo::AssociatedRemote<mojom::PrintRenderFrame> print_render_frame_;
-
-#if BUILDFLAG(IS_CHROMEOS)
-  // Used to transmit mojo interface method calls to ash chrome. Null if
-  // CrosapiManager is unavailable. In the post-Lacros world, it still bears the
-  // responsibility of talking to other parts of Ash for printer related
-  // business logic.
-  raw_ptr<crosapi::mojom::LocalPrinter, DanglingUntriaged> local_printer_ =
-      nullptr;
-#endif
 
   base::WeakPtrFactory<PrintPreviewHandler> weak_factory_{this};
 };

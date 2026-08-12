@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
@@ -17,8 +16,6 @@
 #include "chrome/browser/ash/child_accounts/time_limits/app_time_limit_utils.h"
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/ash/child_accounts/time_limits/web_time_navigation_observer.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -114,7 +111,7 @@ void WebTimeActivityProvider::OnWebActivityChanged(
 
   // The browser window is not active. This may happen when a navigation
   // finishes in the background.
-  if (!browser || !base::Contains(active_browsers_, &browser->GetBrowser())) {
+  if (!browser || !active_browsers_.contains(&browser->GetBrowser())) {
     return;
   }
 
@@ -144,7 +141,7 @@ void WebTimeActivityProvider::OnTabStripModelChanged(
       GetBrowserForTabStripModel(tab_strip_model);
 
   // If the Browser is not the active browser, simply return.
-  if (!base::Contains(active_browsers_, browser_window_interface)) {
+  if (!active_browsers_.contains(browser_window_interface)) {
     return;
   }
 
@@ -163,17 +160,15 @@ void WebTimeActivityProvider::OnTabStripModelChanged(
 
 void WebTimeActivityProvider::OnBrowserCreated(
     ash::BrowserDelegate* browser_delegate) {
-  Browser* browser = &browser_delegate->GetBrowser();
-  browser->tab_strip_model()->AddObserver(this);
+  browser_delegate->GetBrowser().GetTabStripModel()->AddObserver(this);
 }
 
 void WebTimeActivityProvider::OnBrowserClosed(
     ash::BrowserDelegate* browser_delegate) {
-  Browser* browser = &browser_delegate->GetBrowser();
-  if (!base::Contains(active_browsers_, browser)) {
+  if (!active_browsers_.contains(&browser_delegate->GetBrowser())) {
     return;
   }
-  active_browsers_.erase(browser);
+  active_browsers_.erase(&browser_delegate->GetBrowser());
   MaybeNotifyStateChange(base::Time::Now());
 }
 

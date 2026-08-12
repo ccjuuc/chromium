@@ -11,6 +11,7 @@
 #include "base/containers/fixed_flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/self_deleting.h"
 #include "chrome/browser/persisted_state_db/session_proto_db_factory.h"
 #include "components/commerce/core/proto/merchant_signal_db_content.pb.h"
 #include "content/public/browser/android/browser_context_handle.h"
@@ -65,18 +66,20 @@ void OnUpdateCallback(
     bool success) {
   DCHECK(success) << "There was an error modifying MerchantSignalDB";
   if (joncomplete_for_testing)
-    base::android::RunRunnableAndroid(joncomplete_for_testing);
+    jni_zero::RunRunnable(joncomplete_for_testing);
 }
 }  // namespace
 
-MerchantSignalDB::MerchantSignalDB(content::BrowserContext* browser_context)
-    : proto_db_(SessionProtoDBFactory<MerchantSignalProto>::GetInstance()
+MerchantSignalDB::MerchantSignalDB(content::BrowserContext* browser_context,
+                                   base::SelfDeletingPassKey key)
+    : base::SelfDeleting(key),
+      proto_db_(SessionProtoDBFactory<MerchantSignalProto>::GetInstance()
                     ->GetForProfile(browser_context)) {}
 MerchantSignalDB::~MerchantSignalDB() = default;
 
 void MerchantSignalDB::Save(JNIEnv* env,
-                            std::string& key,
-                            const jlong jtimestamp,
+                            const std::string& key,
+                            const int64_t jtimestamp,
                             const base::android::JavaRef<jobject>& jcallback) {
   MerchantSignalProto proto;
   proto.set_key(key);
@@ -88,7 +91,7 @@ void MerchantSignalDB::Save(JNIEnv* env,
 }
 
 void MerchantSignalDB::Load(JNIEnv* env,
-                            std::string& key,
+                            const std::string& key,
                             const base::android::JavaRef<jobject>& jcallback) {
   proto_db_->LoadOneEntry(
       key,
@@ -98,7 +101,7 @@ void MerchantSignalDB::Load(JNIEnv* env,
 
 void MerchantSignalDB::LoadWithPrefix(
     JNIEnv* env,
-    std::string& prefix,
+    const std::string& prefix,
     const base::android::JavaRef<jobject>& jcallback) {
   proto_db_->LoadContentWithPrefix(
       prefix,
@@ -108,7 +111,7 @@ void MerchantSignalDB::LoadWithPrefix(
 
 void MerchantSignalDB::Delete(
     JNIEnv* env,
-    std::string& key,
+    const std::string& key,
     const base::android::JavaRef<jobject>& joncomplete_for_testing) {
   proto_db_->DeleteOneEntry(
       key, base::BindOnce(&OnUpdateCallback,
@@ -124,13 +127,17 @@ void MerchantSignalDB::DeleteAll(
       base::android::ScopedJavaGlobalRef<jobject>(joncomplete_for_testing)));
 }
 
+void MerchantSignalDB::Destroy(JNIEnv* env) {
+  delete this;
+}
+
 static void JNI_MerchantTrustSignalsEventStorage_Init(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& obj,
     const base::android::JavaRef<jobject>& jprofile) {
   Java_MerchantTrustSignalsEventStorage_setNativePtr(
       env, obj,
-      reinterpret_cast<intptr_t>(new MerchantSignalDB(
+      reinterpret_cast<intptr_t>(base::MakeSelfDeleting<MerchantSignalDB>(
           content::BrowserContextFromJavaHandle(jprofile))));
 }
 

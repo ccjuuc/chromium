@@ -27,8 +27,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_ELEMENT_STACK_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_ELEMENT_STACK_H_
 
+#include <initializer_list>
+
 #include "third_party/blink/renderer/core/html/parser/html_stack_item.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
@@ -120,18 +121,8 @@ class HTMLElementStack {
   bool InScope(html_names::HTMLTag tag) const;
   bool InListItemScope(html_names::HTMLTag tag) const;
   bool InTableScope(html_names::HTMLTag tag) const;
+  bool InTableScope(std::initializer_list<html_names::HTMLTag> tags) const;
   bool InButtonScope(html_names::HTMLTag tag) const;
-  bool InParsePartsScope() const {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled() || !parse_parts_count_);
-    return parse_parts_count_;
-  }
-  void SetDOMPartsAllowedState(DOMPartsAllowed state) {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    dom_parts_allowed_state_ = state;
-    if (state == DOMPartsAllowed::kAlways) {
-      parse_parts_count_ = 1;
-    }
-  }
 
   bool HasNumberedHeaderElementInScope() const;
 

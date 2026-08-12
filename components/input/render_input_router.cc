@@ -9,7 +9,9 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/safety_checks.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
@@ -28,6 +30,7 @@
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/latency/latency_info.h"
@@ -60,6 +63,8 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
                          const gfx::Range& range,
                          int32_t start,
                          int32_t end,
+                         blink::mojom::ImeState ime_state,
+                         const blink::DOMNodeIdType& target_dom_node_id,
                          ImeSetCompositionCallback callback) override {
     DLOG(WARNING) << "Input request on unbound interface";
   }
@@ -67,7 +72,12 @@ class UnboundWidgetInputHandler : public blink::mojom::WidgetInputHandler {
                      const std::vector<ui::ImeTextSpan>& ime_text_spans,
                      const gfx::Range& range,
                      int32_t relative_cursor_position,
+                     const blink::DOMNodeIdType& target_dom_node_id,
                      ImeCommitTextCallback callback) override {
+    DLOG(WARNING) << "Input request on unbound interface";
+  }
+  void PasteIntoNode(const std::u16string& text,
+                     const blink::DOMNodeIdType& target_dom_node_id) override {
     DLOG(WARNING) << "Input request on unbound interface";
   }
   void ImeFinishComposingText(bool keep_selection) override {
@@ -321,6 +331,12 @@ void RenderInputRouter::OnUnconfirmedTapConvertedToTap() {
   }
 }
 
+void RenderInputRouter::OnInputRouterActive() {
+  if (delegate_) {
+    delegate_->OnInputRouterActive();
+  }
+}
+
 blink::mojom::InputEventResultState RenderInputRouter::FilterInputEvent(
     const blink::WebInputEvent& event,
     const ui::LatencyInfo& latency_info) {
@@ -346,7 +362,6 @@ blink::mojom::InputEventResultState RenderInputRouter::FilterInputEvent(
   // confused about how many touches are active.
   if ((is_blocked_ || delegate_->IsIgnoringWebInputEvents(event)) &&
       event.GetType() != WebInputEvent::Type::kTouchCancel) {
-    delegate_->OnInputIgnored(event);
     return blink::mojom::InputEventResultState::kNoConsumerExists;
   }
 
@@ -492,6 +507,10 @@ void RenderInputRouter::ForwardGestureEvent(
 void RenderInputRouter::ForwardGestureEventWithLatencyInfo(
     const blink::WebGestureEvent& gesture_event,
     const ui::LatencyInfo& latency_info) {
+  // Input comes from the OS (trusted) and is critical for user interaction, we
+  // exclude free-d memory from additional safety checks.
+  // TODO(crbug.com/478562227): Optimize and remove if possible.
+  base::ScopedSafetyChecksExclusion excluded;
   TRACE_EVENT1("input", "RenderInputRouter::ForwardGestureEvent", "type",
                WebInputEvent::GetName(gesture_event.GetType()));
 
@@ -642,6 +661,10 @@ void RenderInputRouter::ForwardTouchEventWithLatencyInfo(
     const blink::WebTouchEvent& touch_event,
     const ui::LatencyInfo& latency) {
   TRACE_EVENT0("input,input.scrolling", "RenderInputRouter::ForwardTouchEvent");
+  // Input comes from the OS (trusted) and is critical for user interaction, we
+  // exclude free-d memory from additional safety checks.
+  // TODO(crbug.com/478562227): Optimize and remove if possible.
+  base::ScopedSafetyChecksExclusion excluded;
 
   // Always forward TouchEvents for touch stream consistency. They will be
   // ignored if appropriate in FilterInputEvent().
@@ -783,6 +806,11 @@ void RenderInputRouter::RenderProcessBlockedStateChanged(bool blocked) {
   is_blocked_ = blocked;
   is_blocked_ ? StopInputEventAckTimeout()
               : RestartInputEventAckTimeoutIfNecessary();
+}
+
+void RenderInputRouter::SetHungRendererDelay(base::TimeDelta delay) {
+  CHECK_LE(delay, input::kHungRendererDelay);
+  hung_renderer_delay_ = delay;
 }
 
 void RenderInputRouter::SetInputTargetClientForTesting(

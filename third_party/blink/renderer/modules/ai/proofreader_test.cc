@@ -16,13 +16,13 @@ String ApplyCorrections(Vector<Correction> corrections, const String& input) {
     auto start_index = c.error_start;
     auto end_index = c.error_end;
     if (index < start_index) {
-      result = result + input.Substring(index, start_index - index);
+      result = result + input.subview(index, start_index - index);
     }
     result = result + c.correction;
     index = end_index;
   }
   if (index < input.length()) {
-    result = result + input.Substring(index);
+    result = result + input.substr(index);
   }
 
   return result;

@@ -28,7 +28,7 @@ void GraphicsDelegateWin::Initialize(base::OnceClosure on_initialized) {
 
   context_provider_ = viz::ContextProviderCommandBuffer::CreateForGL(
       gpu_channel_host_, content::kGpuStreamIdDefault,
-      content::kGpuStreamPriorityUI, GURL(std::string("chrome://gpu/VrUiWin")),
+      content::kGpuStreamPriorityUI, GURL("chrome://gpu/VrUiWin"),
       viz::command_buffer_metrics::ContextType::XR_COMPOSITING);
 
   if (context_provider_->BindToCurrentSequence() ==
@@ -154,8 +154,8 @@ bool GraphicsDelegateWin::EnsureMemoryBuffer() {
 
 void GraphicsDelegateWin::ResetMemoryBuffer() {
   if (client_shared_image_) {
-    sii_->DestroySharedImage(access_done_sync_token_,
-                             std::move(client_shared_image_));
+    client_shared_image_->UpdateDestructionSyncToken(access_done_sync_token_);
+    client_shared_image_.reset();
   }
   access_done_sync_token_.Clear();
 }

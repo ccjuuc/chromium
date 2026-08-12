@@ -12,6 +12,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/task/single_thread_task_runner.h"
@@ -71,19 +72,18 @@ class HeadlessCommandBrowserTest : public HeadlessBrowserTest,
   void RunTest() {
     ASSERT_TRUE(embedded_test_server()->Start());
 
-    HeadlessBrowserContext::Builder context_builder =
-        browser()->CreateBrowserContextBuilder();
-    HeadlessBrowserContext* browser_context = context_builder.Build();
+    HeadlessBrowserContext* browser_context = browser()->CreateBrowserContext();
+    ASSERT_TRUE(browser_context);
+
     browser()->SetDefaultBrowserContext(browser_context);
 
-    GURL handler_url = HeadlessCommandHandler::GetHandlerUrl();
-    HeadlessWebContents::Builder builder(
-        browser_context->CreateWebContentsBuilder());
-    HeadlessWebContents* web_contents =
-        builder.SetInitialURL(handler_url).Build();
+    HeadlessWebContents* web_contents = browser_context->CreateWebContents(
+        HeadlessCommandHandler::GetHandlerUrl());
+    ASSERT_TRUE(web_contents);
 
     content::WebContents* content_web_contents =
         HeadlessWebContentsImpl::From(web_contents)->web_contents();
+    ASSERT_TRUE(content_web_contents);
 
     content::WebContentsObserver::Observe(content_web_contents);
 
@@ -650,5 +650,73 @@ IN_PROC_BROWSER_TEST_F(HeadlessCommandSignalBrowserTest, SendCtrlCSignal) {
 }
 
 #endif  // #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
+
+class HeadlessCommandHandlerInjectionBrowserTest
+    : public HeadlessCommandBrowserTest {
+ public:
+  HeadlessCommandHandlerInjectionBrowserTest() = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    HeadlessCommandBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kDumpDom);
+  }
+
+  void SetDelimeter(char c) { delimeter_ = c; }
+
+  GURL GetTargetUrl() override {
+    // This URL contains a payload that attempts to hijack window.dumpDOM.
+    // If the injection is successful, dumpDOM will return "INJECTED".
+    // If the fix works, the payload will be safely escaped and dumpDOM
+    // will return the actual page content.
+    std::string payload =
+        "(window.dumpDOM=function(dp){return(String.fromCharCode(73,78,74,69,"
+        "67,"
+        "84,69,68))},'')";
+
+    std::string url_spec =
+        base::StrCat({embedded_test_server()->GetURL("/hello.html").spec(), "#",
+                      delimeter_, "+", payload, "+", delimeter_});
+    return GURL(url_spec);
+  }
+
+  void RunInjectionTest() {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+
+    CaptureStdOut capture_stdout;
+    capture_stdout.StartCapture();
+    RunTest();
+    capture_stdout.StopCapture();
+
+    ASSERT_THAT(result(),
+                testing::Eq(HeadlessCommandHandler::Result::kSuccess));
+
+    std::string captured_stdout = capture_stdout.TakeCapturedData();
+
+    // The captured output contains the content from the page, and does not
+    // contain the injection.
+    EXPECT_THAT(captured_stdout, testing::HasSubstr("Hello headless world!"));
+    EXPECT_THAT(captured_stdout, testing::Not(testing::HasSubstr("INJECTED")));
+  }
+
+ private:
+  std::string delimeter_ = "\'";
+};
+
+IN_PROC_BROWSER_TEST_F(HeadlessCommandHandlerInjectionBrowserTest,
+                       SingleQuote) {
+  SetDelimeter('\'');
+  RunInjectionTest();
+}
+
+IN_PROC_BROWSER_TEST_F(HeadlessCommandHandlerInjectionBrowserTest,
+                       DoubleQuote) {
+  SetDelimeter('"');
+  RunInjectionTest();
+}
+
+IN_PROC_BROWSER_TEST_F(HeadlessCommandHandlerInjectionBrowserTest, Backtic) {
+  SetDelimeter('`');
+  RunInjectionTest();
+}
 
 }  // namespace headless

@@ -136,7 +136,7 @@ bool IsEnrolledWithGoogleMdm(const std::wstring& mdm_url) {
   return is_enrolled;
 }
 
-HRESULT ExtractRegistrationData(const base::Value::Dict& registration_data,
+HRESULT ExtractRegistrationData(const base::DictValue& registration_data,
                                 std::wstring* out_email,
                                 std::wstring* out_id_token,
                                 std::wstring* out_access_token,
@@ -198,9 +198,8 @@ HRESULT ExtractRegistrationData(const base::Value::Dict& registration_data,
   return S_OK;
 }
 
-HRESULT RegisterWithGoogleDeviceManagement(
-    const std::wstring& mdm_url,
-    const base::Value::Dict& properties) {
+HRESULT RegisterWithGoogleDeviceManagement(const std::wstring& mdm_url,
+                                           const base::DictValue& properties) {
   // Make sure all the needed data is present in the dictionary.
   std::wstring email;
   std::wstring id_token;
@@ -256,7 +255,7 @@ HRESULT RegisterWithGoogleDeviceManagement(
 
   // Build the json data needed by the server.
   auto registration_data =
-      base::Value::Dict()
+      base::DictValue()
           .Set("id_token", base::WideToUTF8(id_token))
           .Set("access_token", base::WideToUTF8(access_token))
           .Set("sid", base::WideToUTF8(sid))
@@ -428,28 +427,31 @@ bool IsGemEnabled() {
 bool IsOnlineLoginEnforced(const std::wstring& sid) {
   DWORD global_flag = GetGlobalFlagOrDefault(kRegMdmEnforceOnlineLogin, 0);
 
-  // Return true if global flag is set. If it is not set check for
-  // the user flag.
-  if (global_flag)
+  if (global_flag) {
+    LOGFN(VERBOSE) << "GetGlobalFlagOrDefault for " << kRegMdmEnforceOnlineLogin
+                   << " returned value: true. Enforcing online login.";
     return true;
-
+  }
 
   DWORD is_online_login_enforced_for_user = 0;
   HRESULT hr = GetUserProperty(sid, kRegMdmEnforceOnlineLogin,
-                       &is_online_login_enforced_for_user);
+                               &is_online_login_enforced_for_user);
 
   if (FAILED(hr)) {
-    LOGFN(VERBOSE) << "GetUserProperty for " << kRegMdmEnforceOnlineLogin
-                << " failed. hr=" << putHR(hr);
-    // Fallback to the less obstructive option to not enforce login via google
-    // when fetching the registry entry fails.
+    // Silently fall back to not enforcing online login if the registry entry is
+    // missing.
     return false;
   }
+
+  LOGFN(VERBOSE) << "GetUserProperty for " << kRegMdmEnforceOnlineLogin
+                 << " found for user: " << sid.c_str()
+                 << ", Value: " << is_online_login_enforced_for_user
+                 << ". Enforcing online login.";
 
   return is_online_login_enforced_for_user;
 }
 
-HRESULT EnrollToGoogleMdmIfNeeded(const base::Value::Dict& properties) {
+HRESULT EnrollToGoogleMdmIfNeeded(const base::DictValue& properties) {
   LOGFN(VERBOSE);
 
   if (UserPoliciesManager::Get()->CloudPoliciesEnabled()) {

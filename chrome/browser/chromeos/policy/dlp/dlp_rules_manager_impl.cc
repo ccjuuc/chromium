@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
@@ -23,7 +23,6 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_scoped_file_access_delegate.h"
 #include "chrome/browser/enterprise/data_controls/chrome_dlp_rules_manager.h"
 #include "chrome/browser/enterprise/data_controls/dlp_reporting_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "chromeos/dbus/dlp/dlp_client.h"
 #include "chromeos/dbus/dlp/dlp_service.pb.h"
 #include "components/enterprise/data_controls/core/browser/component.h"
@@ -76,7 +75,7 @@ scoped_refptr<url_matcher::URLMatcherConditionSet> CreateConditionSet(
 // `patterns_mapping`, and saves conditions ids to rules ids mapping in `map`.
 void AddUrlConditions(url_matcher::URLMatcher* matcher,
                       UrlConditionId& condition_id,
-                      const base::Value::List* urls,
+                      const base::ListValue* urls,
                       url_matcher::URLMatcherConditionSet::Vector& conditions,
                       std::map<UrlConditionId, std::string>& patterns_mapping,
                       RuleId rule_id,
@@ -123,7 +122,7 @@ void AddAssociatedUrlConditions(
     std::map<UrlConditionId, std::string>& patterns_mapping,
     RuleId rule_id,
     std::map<UrlConditionId, RuleId>& map) {
-  base::Value::List destinations_urls;
+  base::ListValue destinations_urls;
 
   for (const auto& url : GetAssociatedUrlsConditions(component)) {
     destinations_urls.Append(url);
@@ -287,9 +286,8 @@ size_t DlpRulesManagerImpl::GetClipboardCheckSizeLimitInBytes() const {
 
 bool DlpRulesManagerImpl::IsFilesPolicyEnabled() const {
   return base::FeatureList::IsEnabled(
-             features::kDataLeakPreventionFilesRestriction) &&
-         base::Contains(restrictions_map_,
-                        DlpRulesManager::Restriction::kFiles) &&
+             ash::features::kDataLeakPreventionFilesRestriction) &&
+         restrictions_map_.contains(DlpRulesManager::Restriction::kFiles) &&
          chromeos::DlpClient::Get() && chromeos::DlpClient::Get()->IsAlive();
 }
 
@@ -320,7 +318,7 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
   rules_id_metadata_mapping_.clear();
   files_controller_ = nullptr;
 
-  const base::Value::List& rules_list =
+  const base::ListValue& rules_list =
       g_browser_process->local_state()->GetList(policy_prefs::kDlpRulesList);
 
   data_controls::DlpBooleanHistogram(data_controls::dlp::kDlpPolicyPresentUMA,
@@ -338,10 +336,10 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
   ::dlp::SetDlpFilesPolicyRequest request_to_daemon;
 
   for (const base::Value& rule_value : rules_list) {
-    const base::Value::Dict& rule = rule_value.GetDict();
-    const base::Value::Dict* sources = rule.FindDict("sources");
+    const base::DictValue& rule = rule_value.GetDict();
+    const base::DictValue* sources = rule.FindDict("sources");
     DCHECK(sources);
-    const base::Value::List* sources_urls = sources->FindList("urls");
+    const base::ListValue* sources_urls = sources->FindList("urls");
     DCHECK(sources_urls);  // This DCHECK should be removed when other types are
                            // supported as sources.
 
@@ -349,8 +347,8 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
                      src_conditions_, src_patterns_mapping_, rules_counter,
                      src_url_rules_mapping_);
 
-    const base::Value::Dict* destinations = rule.FindDict("destinations");
-    const base::Value::List* destinations_urls =
+    const base::DictValue* destinations = rule.FindDict("destinations");
+    const base::ListValue* destinations_urls =
         destinations ? destinations->FindList("urls") : nullptr;
     if (destinations_urls) {
       AddUrlConditions(dst_url_matcher_.get(), dst_url_condition_id,
@@ -358,7 +356,7 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
                        dst_patterns_mapping_, rules_counter,
                        dst_url_rules_mapping_);
     }
-    const base::Value::List* destinations_components =
+    const base::ListValue* destinations_components =
         destinations ? destinations->FindList("components") : nullptr;
     if (destinations_components) {
       for (const auto& component : *destinations_components) {
@@ -382,10 +380,10 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
                                          RuleMetadata(*rule_name, *rule_id));
     }
 
-    const base::Value::List* restrictions = rule.FindList("restrictions");
+    const base::ListValue* restrictions = rule.FindList("restrictions");
     DCHECK(restrictions);
     for (const auto& restriction_value : *restrictions) {
-      const base::Value::Dict& restriction = restriction_value.GetDict();
+      const base::DictValue& restriction = restriction_value.GetDict();
       const std::string* rule_class_str = restriction.FindString("class");
       DCHECK(rule_class_str);
       const std::string* rule_level_str = restriction.FindString("level");
@@ -445,9 +443,9 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
 
   src_url_matcher_->AddConditionSets(src_conditions_);
   dst_url_matcher_->AddConditionSets(dst_conditions_);
-  if (base::Contains(restrictions_map_, Restriction::kClipboard) ||
+  if (restrictions_map_.contains(Restriction::kClipboard) ||
       (base::FeatureList::IsEnabled(
-           features::kDataLeakPreventionFilesRestriction) &&
+           ash::features::kDataLeakPreventionFilesRestriction) &&
        request_to_daemon.rules_size() > 0)) {
     DataTransferDlpController::Init(*this);
   } else {
@@ -455,7 +453,7 @@ void DlpRulesManagerImpl::OnDataLeakPreventionRulesUpdate() {
   }
 
   if (base::FeatureList::IsEnabled(
-          features::kDataLeakPreventionFilesRestriction)) {
+          ash::features::kDataLeakPreventionFilesRestriction)) {
     if (request_to_daemon.rules_size() > 0) {
       // Start and/or activate the daemon.
       data_controls::DlpBooleanHistogram(

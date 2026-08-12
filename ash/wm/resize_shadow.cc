@@ -140,7 +140,7 @@ ResizeShadow::ResizeShadow(aura::Window* window,
     : window_(window), params_(params), type_(type) {
   // Use a NinePatchLayer to tile the shadow image (which is simply a
   // roundrect).
-  layer_ = std::make_unique<ui::Layer>(ui::LAYER_NINE_PATCH);
+  layer_ = std::make_unique<ui::LayerNinePatch>();
   layer_->SetName("WindowResizeShadow");
   layer_->SetFillsBoundsOpaquely(false);
   layer_->SetOpacity(0.f);
@@ -172,13 +172,13 @@ ResizeShadow::~ResizeShadow() = default;
 void ResizeShadow::OnColorProviderChanged() {
   // This function will also be called when the color provider source is
   // destroyed. We should guarantee the color provider exists.
-  if (params_.color.IsSemantic() && GetColorProviderSource()) {
+  if (params_.color.IsLogical() && GetColorProviderSource()) {
     UpdateShadowLayer();
   }
 }
 
 void ResizeShadow::OnWindowParentToRootWindow() {
-  if (params_.color.IsSemantic()) {
+  if (params_.color.IsLogical()) {
     Observe(RootWindowController::ForWindow(window_)->color_provider_source());
   }
 }

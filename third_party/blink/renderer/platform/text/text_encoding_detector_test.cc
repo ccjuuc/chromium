@@ -17,7 +17,7 @@ TEST(TextEncodingDetectorTest, RespectIso2022Jp) {
       "$BKL3$F;F|K\\%O%`%U%!%$%?!<%:$,%=%U%H%P%s%/$H$N%W%l!<%*%U$r@)$7!\"";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(iso2022jp), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_TRUE(result);
   EXPECT_EQ(TextEncoding("ISO-2022-JP"), encoding);
 }
@@ -29,12 +29,12 @@ TEST(TextEncodingDetectorTest, Ignore7BitEncoding) {
       " ~{\x54\x42\x31\x7D\x37\x22\x55\x39\x35\x3D\x3D\x71~} abc";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(hz_gb2312), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_TRUE(result);
   EXPECT_EQ(TextEncoding("US-ASCII"), encoding);
 }
 
-TEST(TextEncodingDetectorTest, NonWHATWGEncodingBecomesAscii) {
+TEST(TextEncodingDetectorTest, NonWhatwgEncodingBecomesAscii) {
   std::string pseudo_jpg =
       "\xff\xd8\xff\xe0\x00\x10JFIF foo bar baz\xff\xe1\x00\xa5"
       "\x01\xd7\xff\x01\x57\x33\x44\x55\x66\x77\xed\xcb\xa9\x87"
@@ -42,12 +42,12 @@ TEST(TextEncodingDetectorTest, NonWHATWGEncodingBecomesAscii) {
       "\x87\x01\xd7\xff\x01\x57\x33\x44\x55\x66\x77\xed\xcb\xa9";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(pseudo_jpg), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_TRUE(result);
   EXPECT_EQ(TextEncoding("US-ASCII"), encoding);
 }
 
-TEST(TextEncodingDetectorTest, UrlHintHelpsEUCJP) {
+TEST(TextEncodingDetectorTest, UrlHintHelpsEucJp) {
   std::string eucjp_bytes =
       "<TITLE>"
       "\xA5\xD1\xA5\xEF\xA1\xBC\xA5\xC1\xA5\xE3\xA1\xBC\xA5\xC8\xA1\xC3\xC5\xEA"
@@ -55,7 +55,7 @@ TEST(TextEncodingDetectorTest, UrlHintHelpsEUCJP) {
       "TITLE>";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(eucjp_bytes), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_TRUE(result);
   EXPECT_EQ(TextEncoding("GBK"), encoding)
       << "Without language hint, it's detected as GBK";
@@ -68,7 +68,7 @@ TEST(TextEncodingDetectorTest, UrlHintHelpsEUCJP) {
       << "With URL hint including '.jp', it's detected as EUC-JP";
 }
 
-TEST(TextEncodingDetectorTest, LanguageHintHelpsEUCJP) {
+TEST(TextEncodingDetectorTest, LanguageHintHelpsEucJp) {
   std::string eucjp_bytes =
       "<TITLE>"
       "\xA5\xD1\xA5\xEF\xA1\xBC\xA5\xC1\xA5\xE3\xA1\xBC\xA5\xC8\xA1\xC3\xC5\xEA"
@@ -76,7 +76,7 @@ TEST(TextEncodingDetectorTest, LanguageHintHelpsEUCJP) {
       "TITLE>";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(eucjp_bytes), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_TRUE(result);
   EXPECT_EQ(TextEncoding("GBK"), encoding)
       << "Without language hint, it's detected as GBK";
@@ -96,17 +96,17 @@ TEST(TextEncodingDetectorTest, LanguageHintHelpsEUCJP) {
       << "Language hint works for file resource. Should be detected as EUC-JP";
 }
 
-TEST(TextEncodingDetectorTest, UTF8DetectionShouldFail) {
+TEST(TextEncodingDetectorTest, Utf8DetectionShouldFail) {
   std::string utf8_bytes =
       "tnegirjji gosa gii beare s\xC3\xA1htt\xC3\xA1 \xC4\x8D\xC3"
       "\xA1llit artihkkaliid. Maid don s\xC3\xA1ht\xC3\xA1t dievasmah";
   TextEncoding encoding;
   bool result = DetectTextEncoding(base::as_byte_span(utf8_bytes), nullptr,
-                                   NullURL(), nullptr, &encoding);
+                                   NullUrl(), nullptr, &encoding);
   EXPECT_FALSE(result);
 }
 
-TEST(TextEncodingDetectorTest, RespectUTF8DetectionForFileResource) {
+TEST(TextEncodingDetectorTest, RespectUtf8DetectionForFileResource) {
   std::string utf8_bytes =
       "tnegirjji gosa gii beare s\xC3\xA1htt\xC3\xA1 \xC4\x8D\xC3"
       "\xA1llit artihkkaliid. Maid don s\xC3\xA1ht\xC3\xA1t dievasmah";

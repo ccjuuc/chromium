@@ -12,20 +12,38 @@
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/stack_allocated.h"
+#include "base/no_destructor.h"
+#include "base/synchronization/lock.h"
+#include "net/base/ip_address.h"
+#include "net/base/ip_endpoint.h"
 #include "services/network/public/mojom/ip_address_space.mojom-forward.h"
 #include "services/network/public/mojom/parsed_headers.mojom-forward.h"
+#include "services/network/public/mojom/url_loader_network_service_observer.mojom-forward.h"
 
 class GURL;
 
 namespace net {
 
-class IPAddress;
-class IPEndPoint;
 struct TransportInfo;
 
 }  // namespace net
 
 namespace network {
+
+// Returns true if `str` represents a valid IP address space override, as
+// described in services/network/public/cpp/network_switches.cc
+bool COMPONENT_EXPORT(NETWORK_CPP)
+    IsAddressSpaceOverrideValid(std::string_view str);
+
+// Returns a human-readable string representing `result`, suitable for logging.
+std::string_view COMPONENT_EXPORT(NETWORK_CPP)
+    LocalNetworkAccessResultToStringPiece(
+        mojom::LocalNetworkAccessResult result);
+
+// Returns a human-readable string representing `transport_type`, suitable for
+// logging.
+std::string_view COMPONENT_EXPORT(NETWORK_CPP)
+    TransportTypeToStringPiece(mojom::TransportType transport_type);
 
 // Returns a human-readable string representing `space`, suitable for logging.
 std::string_view COMPONENT_EXPORT(NETWORK_CPP)
@@ -59,7 +77,7 @@ mojom::IPAddressSpace COMPONENT_EXPORT(NETWORK_CPP)
 // `info.endpoint`. This returns `kUnknown` for invalid IP addresses. Otherwise,
 // takes into account the `--ip-address-space-overrides` command-line switch. If
 // no override applies, then follows this algorithm:
-// https://wicg.github.io/private-network-access/#determine-the-ip-address-space
+// https://wicg.github.io/local-network-access/#determine-the-ip-address-space
 //
 // `info.endpoint`'s port is only used for matching to command-line overrides.
 // It is ignored otherwise. In particular, if no overrides are specified on the
@@ -78,14 +96,14 @@ mojom::IPAddressSpace COMPONENT_EXPORT(NETWORK_CPP)
 // Address spaces go from most public to least public in the following order:
 //
 //  - public and unknown (equivalent)
-//  - private
+//  - local
 //  - loopback
 //
 bool COMPONENT_EXPORT(NETWORK_CPP)
     IsLessPublicAddressSpace(mojom::IPAddressSpace lhs,
                              mojom::IPAddressSpace rhs);
 
-// Returns whether `lhs` is less public than `rhs`, but collapses the private
+// Returns whether `lhs` is less public than `rhs`, but collapses the local
 // and loopback address spaces into the same bucket.
 //
 // This comparator is compatible with std::less.
@@ -93,7 +111,7 @@ bool COMPONENT_EXPORT(NETWORK_CPP)
 // Address spaces go from most public to least public in the following order:
 //
 //  - public and unknown (equivalent)
-//  - private and loopback (equivalent)
+//  - local and loopback (equivalent)
 //
 bool COMPONENT_EXPORT(NETWORK_CPP)
     IsLessPublicAddressSpaceLNA(mojom::IPAddressSpace lhs,
@@ -129,7 +147,7 @@ struct COMPONENT_EXPORT(NETWORK_CPP) CalculateClientAddressSpaceParams {
 // concepts too (documents and worker global scopes), it should probably only be
 // used at the content/ layer or above.
 //
-// See: https://wicg.github.io/cors-rfc1918/#address-space
+// See: https://wicg.github.io/local-network-access/#ip-address-space-section
 mojom::IPAddressSpace COMPONENT_EXPORT(NETWORK_CPP) CalculateClientAddressSpace(
     const GURL& url,
     std::optional<CalculateClientAddressSpaceParams> params);
@@ -141,17 +159,11 @@ mojom::IPAddressSpace COMPONENT_EXPORT(NETWORK_CPP) CalculateClientAddressSpace(
 // determine the address space of the *target* of a fetch, for comparison with
 // that of the client of the fetch.
 //
-// See: https://wicg.github.io/cors-rfc1918/#integration-fetch
+// See: https://wicg.github.io/local-network-access/#integration-with-fetch
 mojom::IPAddressSpace COMPONENT_EXPORT(NETWORK_CPP)
     CalculateResourceAddressSpace(const GURL& url,
                                   const net::IPEndPoint& endpoint);
 
-// Return the IP address of the host if the host is a private IP address
-// literal, otherwise returns std::nullopt.
-//
-// This does not apply any IP address space overrides.
-std::optional<net::IPAddress> COMPONENT_EXPORT(NETWORK_CPP)
-    ParsePrivateIpFromUrl(const GURL& url);
 
 // Return the IP address space of the host if we can determine it from the URL,
 // otherwise returns std::nullopt.
@@ -165,6 +177,87 @@ std::optional<net::IPAddress> COMPONENT_EXPORT(NETWORK_CPP)
 // This function will apply IP address space overrides.
 std::optional<mojom::IPAddressSpace> COMPONENT_EXPORT(NETWORK_CPP)
     GetAddressSpaceFromUrl(const GURL& url);
+
+class COMPONENT_EXPORT(NETWORK_CPP) IPAddressSpaceOverrides {
+ public:
+  static IPAddressSpaceOverrides& GetInstance();
+
+  ~IPAddressSpaceOverrides() = delete;
+  IPAddressSpaceOverrides(const IPAddressSpaceOverrides&) = delete;
+  IPAddressSpaceOverrides& operator=(const IPAddressSpaceOverrides&) = delete;
+
+  struct CIDR {
+    net::IPAddress ip_address;
+    size_t mask_bits;
+  };
+
+  // Represents a single command-line-specified override. Exactly one of
+  // endpoint or cidr should be specified.
+  struct AddressSpaceOverride {
+    AddressSpaceOverride();
+    ~AddressSpaceOverride();
+    AddressSpaceOverride(const AddressSpaceOverride&);
+    AddressSpaceOverride& operator=(const AddressSpaceOverride& other);
+    AddressSpaceOverride(AddressSpaceOverride&&);
+    AddressSpaceOverride& operator=(AddressSpaceOverride&& other);
+
+    // The IP endpoint to override the address space for, if present.
+    std::optional<net::IPEndPoint> endpoint;
+    // The CIDR range to override the address space for, if present.
+    std::optional<CIDR> cidr;
+
+    // The IP address space to which `endpoint` should be mapped.
+    mojom::IPAddressSpace space;
+  };
+
+  // Checks to see if there is an IP Address Space override for the given
+  // endpoint, and if so, returns it. Returns std::nullopt if there is no
+  // override. Overrides are checked in-order (with command-line overrides
+  // being checked first), first override that matches wins.
+  //
+  // This method is safe to be called from any thread.
+  std::optional<mojom::IPAddressSpace> HasOverride(
+      const net::IPEndPoint& endpoint);
+
+  // Returns the current overrides, combining 1) the
+  // --ip-address-space-overrides command-line parameter, 2) the
+  // argument passed to SetAuxiliaryOverrides (which is generally the value
+  // taken from the enterprise policy).
+  //
+  // This method is safe to be called from any thread.
+  std::vector<std::string> GetCurrentOverrides();
+
+  // Allows setting overrides from an additional source (e.g. from an enterprise
+  // policy).
+  //
+  // Overrides will be parsed, and any overrides that fail validation will be
+  // appended to the optional |rejected_overrides| output parameter.
+  //
+  // This method is safe to be called from any thread.
+  void SetAuxiliaryOverrides(const std::string& auxiliary_overrides,
+                             std::vector<std::string>* rejected_overrides);
+
+  // Empties the overrides list.
+  //
+  // This function is safe to be called from any thread.
+  void ResetForTesting();
+
+ private:
+  friend class base::NoDestructor<IPAddressSpaceOverrides>;
+  IPAddressSpaceOverrides();
+
+  void ParseCmdlineIfNeeded() EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  base::Lock lock_;
+
+  bool has_cmdline_been_parsed_ GUARDED_BY(lock_) = false;
+  std::vector<std::string> cmdline_overrides_ GUARDED_BY(lock_);
+  std::vector<AddressSpaceOverride> parsed_cmdline_overrides_ GUARDED_BY(lock_);
+
+  std::vector<std::string> auxiliary_overrides_ GUARDED_BY(lock_);
+  std::vector<AddressSpaceOverride> parsed_auxiliary_overrides_
+      GUARDED_BY(lock_);
+};
 
 }  // namespace network
 

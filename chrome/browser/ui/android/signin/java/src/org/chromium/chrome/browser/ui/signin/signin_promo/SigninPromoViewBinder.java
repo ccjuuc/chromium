@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.ui.signin.signin_promo;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.drawable.Drawable;
 import android.view.Gravity;
 import android.view.View;
@@ -15,9 +16,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.DimenRes;
-import androidx.annotation.Nullable;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.signin.services.DisplayableProfileData;
 import org.chromium.chrome.browser.ui.signin.PersonalizedSigninPromoView;
 import org.chromium.chrome.browser.ui.signin.R;
@@ -28,6 +29,10 @@ import org.chromium.ui.widget.ButtonCompat;
 
 @NullMarked
 final class SigninPromoViewBinder {
+    private static final float ALPHA_DISABLED_BUTTON = 0.9f;
+    private static final float ALPHA_DISABLED_SELECTED_ACCOUNT_VIEW = 0.6f;
+    private static final float ALPHA_ENABLED = 1.0f;
+
     public static void bind(
             PropertyModel model, PersonalizedSigninPromoView view, PropertyKey key) {
         Context context = view.getContext();
@@ -59,6 +64,15 @@ final class SigninPromoViewBinder {
                     TextView accountTextPrimary = view.findViewById(R.id.account_text_primary);
                     TextView accountTextSecondary = view.findViewById(R.id.account_text_secondary);
                     accountTextPrimary.setText(profileData.getFullName());
+                    String fullName = profileData.getFullName();
+                    // If no displayable name is available, we hide it to make the email address
+                    // vertically centered.
+                    if (fullName != null && !fullName.isEmpty()) {
+                        accountTextPrimary.setText(fullName);
+                        accountTextPrimary.setVisibility(View.VISIBLE);
+                    } else {
+                        accountTextPrimary.setVisibility(View.GONE);
+                    }
                     accountTextSecondary.setText(profileData.getAccountEmail());
                     view.getSignedInPromoProfileImage().setImageDrawable(accountImage);
                 }
@@ -102,11 +116,11 @@ final class SigninPromoViewBinder {
         } else if (key == SigninPromoProperties.SHOULD_HIDE_DISMISS_BUTTON) {
             // We use View.INVISIBLE instead of View.GONE to ensure that the layout height remains
             // consistent even when the button is hidden.
-            int dismissButtonVisibility =
-                    model.get(SigninPromoProperties.SHOULD_HIDE_DISMISS_BUTTON)
-                            ? View.INVISIBLE
-                            : View.VISIBLE;
-            view.getDismissButton().setVisibility(dismissButtonVisibility);
+            boolean shouldHideDismissButton =
+                    model.get(SigninPromoProperties.SHOULD_HIDE_DISMISS_BUTTON);
+            view.getDismissButton()
+                    .setVisibility(shouldHideDismissButton ? View.INVISIBLE : View.VISIBLE);
+            view.getDismissButton().setEnabled(!shouldHideDismissButton);
         } else if (key == SigninPromoProperties.SHOULD_SHOW_HEADER_WITH_AVATAR) {
             if (seamlessSigninPromoType == SigninFeatureMap.SeamlessSigninPromoType.COMPACT) {
                 if (model.get(SigninPromoProperties.SHOULD_SHOW_HEADER_WITH_AVATAR)) {
@@ -130,6 +144,15 @@ final class SigninPromoViewBinder {
                 } else {
                     showRegularState(seamlessSigninPromoType, view);
                 }
+            }
+        } else if (key == SigninPromoProperties.SELECTED_ACCOUNT_VIEW_BACKGROUND) {
+            if (seamlessSigninPromoType == SigninFeatureMap.SeamlessSigninPromoType.COMPACT) {
+                view.getSelectedAccountView()
+                        .setBackgroundTintList(
+                                ColorStateList.valueOf(
+                                        model.get(
+                                                SigninPromoProperties
+                                                        .SELECTED_ACCOUNT_VIEW_BACKGROUND)));
             }
         } else {
             throw new IllegalArgumentException("Unknown property key: " + key);
@@ -215,17 +238,17 @@ final class SigninPromoViewBinder {
             PersonalizedSigninPromoView view) {
         assert promoType != SigninFeatureMap.SeamlessSigninPromoType.NON_SEAMLESS;
         ButtonCompat primaryButton = view.getPrimaryButton();
-        primaryButton.setAlpha(0.9f);
+        primaryButton.setAlpha(ALPHA_DISABLED_BUTTON);
         primaryButton.setEnabled(false);
         if (promoType == SigninFeatureMap.SeamlessSigninPromoType.COMPACT) {
             View selectedAccountView = view.getSelectedAccountView();
-            selectedAccountView.setAlpha(0.6f);
+            selectedAccountView.setAlpha(ALPHA_DISABLED_SELECTED_ACCOUNT_VIEW);
             selectedAccountView.setEnabled(false);
         } else if (promoType == SigninFeatureMap.SeamlessSigninPromoType.TWO_BUTTONS) {
             Button secondaryButton = view.getSecondaryButton();
-            secondaryButton.setAlpha(0.9f);
+            secondaryButton.setAlpha(ALPHA_DISABLED_BUTTON);
             secondaryButton.setEnabled(false);
-            view.getImage().setAlpha(0.6f);
+            view.getImage().setAlpha(ALPHA_DISABLED_SELECTED_ACCOUNT_VIEW);
         }
     }
 
@@ -234,17 +257,17 @@ final class SigninPromoViewBinder {
             PersonalizedSigninPromoView view) {
         assert promoType != SigninFeatureMap.SeamlessSigninPromoType.NON_SEAMLESS;
         ButtonCompat primaryButton = view.getPrimaryButton();
-        primaryButton.setAlpha(1.0f);
+        primaryButton.setAlpha(ALPHA_ENABLED);
         primaryButton.setEnabled(true);
         if (promoType == SigninFeatureMap.SeamlessSigninPromoType.COMPACT) {
             View selectedAccountView = view.getSelectedAccountView();
-            selectedAccountView.setAlpha(1.0f);
+            selectedAccountView.setAlpha(ALPHA_ENABLED);
             selectedAccountView.setEnabled(true);
         } else if (promoType == SigninFeatureMap.SeamlessSigninPromoType.TWO_BUTTONS) {
             Button secondaryButton = view.getSecondaryButton();
-            secondaryButton.setAlpha(1.0f);
+            secondaryButton.setAlpha(ALPHA_ENABLED);
             secondaryButton.setEnabled(true);
-            view.getImage().setAlpha(1.0f);
+            view.getImage().setAlpha(ALPHA_ENABLED);
         }
     }
 }

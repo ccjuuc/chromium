@@ -55,6 +55,14 @@ BASE_DECLARE_FEATURE(kEnableWebInspector);
 // viewport adjustment experiment is selected via command line switches.
 BASE_DECLARE_FEATURE(kSmoothScrollingDefault);
 
+// When enabled, the SmoothScrollingDefault experiment uses the regular
+// UIScrollViewDelegate instead of KVO and broadcasting.
+BASE_DECLARE_FEATURE(kSmoothScrollingUseDelegate);
+
+// Returns true if the broadcaster should be used for the smooth scrolling
+// experiment.
+bool ShouldUseBroadcasterForSmoothScrolling();
+
 // Feature flag to enable a scroll threshold before entering or exiting
 // fullscreen.
 BASE_DECLARE_FEATURE(kFullscreenScrollThreshold);
@@ -74,9 +82,6 @@ BASE_DECLARE_FEATURE(kDisableRaccoon);
 // Feature flag adds bugfix numbers to the iOS User-Agent header for Chrome
 BASE_DECLARE_FEATURE(kUserAgentBugFixVersion);
 
-// Enables logging JavaScript errors.
-BASE_DECLARE_FEATURE(kLogJavaScriptErrors);
-
 // Feature flag to let WebKit handle MarketplaceKit links. This is intended to
 // be used as a kill switch.
 BASE_DECLARE_FEATURE(kWebKitHandlesMarketplaceKitLinks);
@@ -90,9 +95,6 @@ BASE_DECLARE_FEATURE(kLogCrWebJavaScriptErrors);
 // When enabled, JavaScript errors will crash the application.
 BASE_DECLARE_FEATURE(kAssertOnJavaScriptErrors);
 
-// Feature controlling when to create TabHelpers.
-BASE_DECLARE_FEATURE(kCreateTabHelperOnlyForRealizedWebStates);
-
 // A flag parameter to set the number of pixels to use as the threshold.
 inline constexpr char kFullscreenScrollThresholdAmount[] =
     "fullscreen_scroll_threshold_amount";
@@ -104,14 +106,50 @@ bool IsFullscreenScrollThresholdEnabled();
 // When true, an option to enable Web Inspector should be present in Settings.
 bool IsWebInspectorSupportEnabled();
 
-// Returns whether the TabHelpers should only be created for realized WebStates.
-bool CreateTabHelperOnlyForRealizedWebStates();
-
 // TODO(crbug.com/449156290): Clean up the kill switch for updating SSL status
 // on navigation item creation.
 // When enabled, trigger an update of the SSL status on navigation item
 // lazy creation. This is intended to be used as a kill switch.
 BASE_DECLARE_FEATURE(kUpdateSSLStatusOnNavigationItemLazyCreation);
+
+// Feature flag to enable BEContextMenuConfiguration.
+// This is used as a kill switch and should not be removed.
+BASE_DECLARE_FEATURE(kEnableBEContextMenuConfiguration);
+
+// Feature flag to enable a fix for a crash in
+// DownloadTaskImpl::GenerateFileName.
+BASE_DECLARE_FEATURE(kIOSDownloadSanitizeFilename);
+
+// TODO(crbug.com/487947859): Clean up the kill switch once confirmed this is
+// not causing regressions.
+// When enabled, NetErrorFromError searches the entire NSError chain for the
+// first translatable error code. This ensures accurate error mapping on iOS
+// 26.4+, where specific network failures are often nested within generic
+// container errors. When disabled, it only attempts to translate the final
+// underlying error in the chain, which was the pre-existing behavior.
+BASE_DECLARE_FEATURE(kNetErrorFromErrorChainKillSwitch);
+
+// Feature flag to enable Cobalt on iOS.
+BASE_DECLARE_FEATURE(kIOSCobalt);
+// Feature flag to enable the developer mode of Cobalt on iOS.
+BASE_DECLARE_FEATURE(kIOSCobaltDeveloperMode);
+
+// Returns whether Cobalt is enabled on iOS.
+bool IsCobaltEnabled();
+// Returns whether the developer mode of Cobalt is enabled on iOS.
+bool IsCobaltDeveloperModeEnabled();
+
+// Feature flag to enable the workaround for SecTrust evaluation inconsistency.
+// TODO(crbug.com/485184282): Remove this flag once it's confirmed that the
+// workaround is working as intended.
+BASE_DECLARE_FEATURE(kCertVerificationWorkaroundKillSwitch);
+
+// Feature flag to enable logging the time it takes to convert a WKScriptMessage
+// object into a web::ScriptMessage object.
+BASE_DECLARE_FEATURE(kIOSScriptMessageConversionDurationLogging);
+
+// Feature flag to enable the isolated world parent-child frame tree handshake.
+BASE_DECLARE_FEATURE(kWebFrameTree);
 
 }  // namespace web::features
 

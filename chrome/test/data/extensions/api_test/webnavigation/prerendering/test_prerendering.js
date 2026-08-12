@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 const inServiceWorker = 'ServiceWorkerGlobalScope' in self;
-const scriptUrl = '_test_resources/api_test/webnavigation/framework.js';
+const SCRIPT_URL = '_test_resources/api_test/webnavigation/framework.js';
 let ready;
-const onScriptLoad = chrome.test.loadScript(scriptUrl);
+const onScriptLoad = chrome.test.loadScript(SCRIPT_URL);
 
 if (inServiceWorker) {
   ready = onScriptLoad;
 } else {
-  let onWindowLoad = new Promise((resolve) => {
+  const onWindowLoad = new Promise((resolve) => {
     window.onload = resolve;
   });
   ready = Promise.all([onWindowLoad, onScriptLoad]);
@@ -29,12 +29,12 @@ ready.then(async function() {
   // triggered from an inactive RenderFrameHost.
   chrome.test.runTests([
     async function testVerifyPrerenderingFramesCallbackOrder() {
-      const urlPrefix =
-          `http://a.test:${port}/extensions/api_test/webnavigation/prerendering/`;
-      const prerenderTargetUrl = urlPrefix + 'a.html';
-      const initiatorUrl = urlPrefix + 'prerender.html';
+      const urlPrefix = `http://a.test:${
+          port}/extensions/api_test/webnavigation/prerendering/`;
+      const prerenderTargetUrl = `${urlPrefix}a.html`;
+      const initiatorUrl = `${urlPrefix}prerender.html`;
 
-      let expectedEvents = [
+      const expectedEvents = [
         // events
         {
           label: 'onBeforeNavigate-1',
@@ -47,8 +47,8 @@ ready.then(async function() {
             processId: -1,
             tabId: 0,
             timeStamp: 0,
-            url: initiatorUrl
-          }
+            url: initiatorUrl,
+          },
         },
         {
           label: 'onCommitted-1',
@@ -62,10 +62,10 @@ ready.then(async function() {
             processId: 0,
             tabId: 0,
             timeStamp: 0,
-            transitionQualifiers:[],
-            transitionType:"link",
-            url: initiatorUrl
-          }
+            transitionQualifiers: [],
+            transitionType: 'link',
+            url: initiatorUrl,
+          },
         },
         {
           label: 'onDOMContentLoaded-1',
@@ -79,8 +79,8 @@ ready.then(async function() {
             processId: 0,
             tabId: 0,
             timeStamp: 0,
-            url: initiatorUrl
-          }
+            url: initiatorUrl,
+          },
         },
         {
           label: 'onCompleted-1',
@@ -94,8 +94,8 @@ ready.then(async function() {
             processId: 0,
             tabId: 0,
             timeStamp: 0,
-            url: initiatorUrl
-          }
+            url: initiatorUrl,
+          },
         },
         {
           label: 'onBeforeNavigate-2',
@@ -108,8 +108,8 @@ ready.then(async function() {
             processId: -1,
             tabId: 0,
             timeStamp: 0,
-            url: prerenderTargetUrl
-          }
+            url: prerenderTargetUrl,
+          },
         },
         {
           label: 'onCommitted-2',
@@ -123,10 +123,10 @@ ready.then(async function() {
             processId: 1,
             tabId: 0,
             timeStamp: 0,
-            transitionQualifiers:[],
-            transitionType:"link",
-            url: prerenderTargetUrl
-          }
+            transitionQualifiers: [],
+            transitionType: 'link',
+            url: prerenderTargetUrl,
+          },
         },
         {
           label: 'onBeforeNavigate-3',
@@ -139,8 +139,8 @@ ready.then(async function() {
             processId: -1,
             tabId: 0,
             timeStamp: 0,
-            url: prerenderTargetUrl
-          }
+            url: prerenderTargetUrl,
+          },
         },
         {
           label: 'onCommitted-3',
@@ -154,10 +154,10 @@ ready.then(async function() {
             processId: 1,
             tabId: 0,
             timeStamp: 0,
-            transitionQualifiers:[],
-            transitionType:"link",
-            url: prerenderTargetUrl
-          }
+            transitionQualifiers: [],
+            transitionType: 'link',
+            url: prerenderTargetUrl,
+          },
         },
         {
           label: 'onDOMContentLoaded-3',
@@ -171,8 +171,8 @@ ready.then(async function() {
             processId: 1,
             tabId: 0,
             timeStamp: 0,
-            url: prerenderTargetUrl
-          }
+            url: prerenderTargetUrl,
+          },
         },
         {
           label: 'onCompleted-3',
@@ -186,12 +186,12 @@ ready.then(async function() {
             processId: 1,
             tabId: 0,
             timeStamp: 0,
-            url: prerenderTargetUrl
-          }
+            url: prerenderTargetUrl,
+          },
         },
       ];
 
-      let expectedPrerenderedOrder = ['onBeforeNavigate-2', 'onCommitted-2'];
+      const expectedPrerenderedOrder = ['onBeforeNavigate-2', 'onCommitted-2'];
 
       expect(
           expectedEvents,
@@ -200,30 +200,38 @@ ready.then(async function() {
             // *-1: for navigate to the initiator page.
             // *-2: for prerendering.
             // *-3: for prerendering activation.
-            ['onBeforeNavigate-1', 'onCommitted-1',
-            'onDOMContentLoaded-1', 'onCompleted-1'],
+            [
+              'onBeforeNavigate-1',
+              'onCommitted-1',
+              'onDOMContentLoaded-1',
+              'onCompleted-1',
+            ],
             expectedPrerenderedOrder,
-            ['onBeforeNavigate-3', 'onCommitted-3',
-            'onDOMContentLoaded-3', 'onCompleted-3'],
-            ['onBeforeNavigate-1', 'onBeforeNavigate-2', 'onBeforeNavigate-3']
+            [
+              'onBeforeNavigate-3',
+              'onCommitted-3',
+              'onDOMContentLoaded-3',
+              'onCompleted-3',
+            ],
+            ['onBeforeNavigate-1', 'onBeforeNavigate-2', 'onBeforeNavigate-3'],
           ],
-          { urls: ['<all_urls>'] },  // filter
+          {urls: ['<all_urls>']},  // filter
           []);
 
       const activationCallback = details => {
         chrome.test.assertEq('prerender', details.documentLifecycle);
         chrome.tabs.executeScript({
           code: `location.href = '${prerenderTargetUrl}';`,
-          runAt: 'document_idle'
+          runAt: 'document_idle',
         });
         chrome.webNavigation.onCommitted.removeListener(activationCallback);
       };
 
       chrome.webNavigation.onCommitted.addListener(
-        activationCallback, {url: [{pathContains: '/a.html'}]});
+          activationCallback, {url: [{pathContains: '/a.html'}]});
 
-      // Navigate to a page that initiates prerendering "a.html".
-      let tab = await promise(chrome.tabs.create, {"url": initiatorUrl});
+      // Navigate to a page that initiates prerendering 'a.html'.
+      const tab = await promise(chrome.tabs.create, {url: initiatorUrl});
     },
   ]);
 });

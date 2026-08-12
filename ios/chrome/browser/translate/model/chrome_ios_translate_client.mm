@@ -9,6 +9,7 @@
 
 #import "base/check_op.h"
 #import "base/feature_list.h"
+#import "base/functional/callback.h"
 #import "base/memory/ptr_util.h"
 #import "base/notreached.h"
 #import "components/infobars/core/infobar.h"

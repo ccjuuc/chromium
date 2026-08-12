@@ -5,6 +5,7 @@
 #include "components/enterprise/connectors/core/analysis_service_settings_base.h"
 
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/url_matcher/url_util.h"
@@ -44,7 +45,7 @@ AnalysisServiceSettingsBase::AnalysisServiceSettingsBase(
 }
 
 bool AnalysisServiceSettingsBase::TryParseServiceProviderData(
-    const base::Value::Dict& settings_dict,
+    const base::DictValue& settings_dict,
     const ServiceProviderConfig& service_provider_config) {
   // The service provider identifier should always be there, and it should match
   // an existing provider.
@@ -54,10 +55,15 @@ bool AnalysisServiceSettingsBase::TryParseServiceProviderData(
     return false;
   }
 
-  service_provider_name_ = *service_provider_name;
-  if (service_provider_config.count(service_provider_name_)) {
-    analysis_config_ =
-        service_provider_config.at(service_provider_name_).analysis;
+  return SetServiceProvider(*service_provider_name, service_provider_config);
+}
+
+bool AnalysisServiceSettingsBase::SetServiceProvider(
+    const std::string& service_provider_name,
+    const ServiceProviderConfig& config) {
+  service_provider_name_ = service_provider_name;
+  if (auto it = config.find(service_provider_name_); it != config.end()) {
+    analysis_config_ = it->second.analysis;
   }
   if (!analysis_config_) {
     DLOG(ERROR) << "No analysis config for corresponding service provider";
@@ -68,14 +74,14 @@ bool AnalysisServiceSettingsBase::TryParseServiceProviderData(
 }
 
 void AnalysisServiceSettingsBase::ParseUrlPatternSettings(
-    const base::Value::List* pattern_settings_list,
+    const base::ListValue* pattern_settings_list,
     bool is_enabled_pattern) {
   if (!pattern_settings_list || pattern_settings_list->empty()) {
     return;
   }
 
   for (const base::Value& pattern_setting : *pattern_settings_list) {
-    const base::Value::Dict* pattern_dict = pattern_setting.GetIfDict();
+    const base::DictValue* pattern_dict = pattern_setting.GetIfDict();
     if (!pattern_dict) {
       continue;
     }
@@ -94,7 +100,7 @@ void AnalysisServiceSettingsBase::ParseUrlPatternSettings(
 }
 
 void AnalysisServiceSettingsBase::ParseBlockSettings(
-    const base::Value::Dict& settings_dict) {
+    const base::DictValue& settings_dict) {
   // The block settings are optional, so a default is used if they can't be
   // found.
   block_until_verdict_ =
@@ -116,21 +122,21 @@ void AnalysisServiceSettingsBase::ParseBlockSettings(
 }
 
 void AnalysisServiceSettingsBase::ParseMinimumDataSize(
-    const base::Value::Dict& settings_dict) {
+    const base::DictValue& settings_dict) {
   minimum_data_size_ = settings_dict.FindInt(kKeyMinimumDataSize)
                            .value_or(kDefaultMinimumDataSize);
 }
 
 void AnalysisServiceSettingsBase::ParseCustomMessages(
-    const base::Value::Dict& settings_dict) {
-  const base::Value::List* custom_messages =
+    const base::DictValue& settings_dict) {
+  const base::ListValue* custom_messages =
       settings_dict.FindList(kKeyCustomMessages);
   if (!custom_messages) {
     return;
   }
 
   for (const base::Value& value : *custom_messages) {
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
 
     // As of now, this list will contain one message per tag. At some point,
     // the server may start sending one message per language/tag pair. If this
@@ -159,8 +165,8 @@ void AnalysisServiceSettingsBase::ParseCustomMessages(
 }
 
 void AnalysisServiceSettingsBase::ParseJustificationTags(
-    const base::Value::Dict& settings_dict) {
-  const base::Value::List* require_justification_tags =
+    const base::DictValue& settings_dict) {
+  const base::ListValue* require_justification_tags =
       settings_dict.FindList(kKeyRequireJustificationTags);
   if (!require_justification_tags) {
     return;
@@ -172,7 +178,7 @@ void AnalysisServiceSettingsBase::ParseJustificationTags(
 }
 
 void AnalysisServiceSettingsBase::AddUrlPatternSettings(
-    const base::Value::Dict& url_settings_dict,
+    const base::DictValue& url_settings_dict,
     bool enabled) {
   CHECK(analysis_config_);
   if (enabled) {
@@ -183,7 +189,7 @@ void AnalysisServiceSettingsBase::AddUrlPatternSettings(
 
   URLPatternSettings setting;
 
-  const base::Value::List* tags = url_settings_dict.FindList(kKeyTags);
+  const base::ListValue* tags = url_settings_dict.FindList(kKeyTags);
   if (!tags) {
     return;
   }
@@ -199,7 +205,7 @@ void AnalysisServiceSettingsBase::AddUrlPatternSettings(
   }
 
   // Add the URL patterns to the matcher and store the condition set IDs.
-  const base::Value::List* url_list = url_settings_dict.FindList(kKeyUrlList);
+  const base::ListValue* url_list = url_settings_dict.FindList(kKeyUrlList);
   if (!url_list) {
     return;
   }
@@ -243,6 +249,14 @@ AnalysisServiceSettingsBase::GetAnalysisSettings(const GURL& url,
       CloudOrLocalAnalysisSettings(GetCloudAnalysisSettings(data_region));
 
   return settings;
+}
+
+std::optional<AnalysisSettings>
+AnalysisServiceSettingsBase::GetNetworkRequestAnalysisSettings(
+    const GURL& tab_url,
+    const GURL& request_url,
+    DataRegion data_region) const {
+  NOTREACHED();
 }
 
 std::optional<AnalysisSettings>
@@ -323,8 +337,8 @@ std::map<std::string, TagSettings> AnalysisServiceSettingsBase::GetTags(
 
   std::map<std::string, TagSettings> output;
   for (const std::string& tag : enable_tags) {
-    if (tags_.count(tag)) {
-      output[tag] = tags_.at(tag);
+    if (auto it = tags_.find(tag); it != tags_.end()) {
+      output[tag] = it->second;
     } else {
       output[tag] = TagSettings();
     }
@@ -339,8 +353,8 @@ AnalysisServiceSettingsBase::GetPatternSettings(
     const PatternSettings& patterns,
     base::MatcherStringPattern::ID match) {
   // If the pattern exists directly in the map, return its settings.
-  if (patterns.count(match) == 1) {
-    return patterns.at(match);
+  if (auto it = patterns.find(match); it != patterns.end()) {
+    return it->second;
   }
 
   // If the pattern doesn't exist in the map, it might mean that it wasn't the
@@ -409,6 +423,7 @@ bool AnalysisServiceSettingsBase::is_local_analysis() const {
   return analysis_config_ && analysis_config_->local_path != nullptr;
 }
 
+AnalysisServiceSettingsBase::AnalysisServiceSettingsBase() = default;
 AnalysisServiceSettingsBase::AnalysisServiceSettingsBase(
     AnalysisServiceSettingsBase&&) = default;
 AnalysisServiceSettingsBase& AnalysisServiceSettingsBase::operator=(

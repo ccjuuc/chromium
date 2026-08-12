@@ -9,6 +9,7 @@
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/window_observer.h"
@@ -65,7 +66,7 @@ class COMPONENT_EXPORT(UI_WM) CaptureController
   bool destroying_ = false;
 
   // The current capture window. NULL if there is no capture window.
-  raw_ptr<aura::Window> capture_window_;
+  base::WeakPtr<aura::Window> capture_window_;
 
   // The capture delegate for the root window with native capture. The root
   // window with native capture may not contain |capture_window_|. This occurs
@@ -78,7 +79,13 @@ class COMPONENT_EXPORT(UI_WM) CaptureController
            raw_ptr<aura::client::CaptureDelegate, CtnExperimental>>
       delegates_;
 
-  base::ObserverList<aura::client::CaptureClientObserver>::Unchecked observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      aura::client::CaptureClientObserver,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observers_;
 };
 
 // ScopedCaptureClient is responsible for creating a CaptureClient for a

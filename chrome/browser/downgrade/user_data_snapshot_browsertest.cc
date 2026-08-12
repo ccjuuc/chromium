@@ -22,6 +22,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/downgrade/downgrade_manager.h"
+#include "chrome/browser/downgrade/downgrade_manager_delegate_impl.h"
 #include "chrome/browser/downgrade/user_data_downgrade.h"
 #include "chrome/browser/first_run/scoped_relaunch_chrome_browser_override.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -206,7 +207,7 @@ class BookmarksSnapshotTest : public UserDataSnapshotBrowserTestBase {
   // |_ www.mobile.com
   void SimulateUserActions() override {
     bookmarks::BookmarkModel* bookmark_model =
-        BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+        BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
     auto* folder = bookmark_model->AddFolder(
         bookmark_model->bookmark_bar_node(), 0, folder_title_);
@@ -228,7 +229,7 @@ class BookmarksSnapshotTest : public UserDataSnapshotBrowserTestBase {
 
   void ValidateUserActions() override {
     bookmarks::BookmarkModel* bookmark_model =
-        BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+        BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model);
     ASSERT_TRUE(bookmark_model->bookmark_bar_node()->children().size() == 2);
 
@@ -314,7 +315,7 @@ class HistorySnapshotTest : public UserDataSnapshotBrowserTestBase {
  protected:
   void SimulateUserActions() override {
     auto* history_service = HistoryServiceFactory::GetForProfile(
-        browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+        browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
     for (const auto& entry : history_entries_) {
       history_service->AddPage(entry.url, entry.time, entry.source);
       history_service->SetPageTitle(entry.url, entry.title);
@@ -323,7 +324,7 @@ class HistorySnapshotTest : public UserDataSnapshotBrowserTestBase {
 
   void ValidateUserActions() override {
     auto* history_service = HistoryServiceFactory::GetForProfile(
-        browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+        browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
 
     history::QueryResults history_query_results;
     base::RunLoop run_loop;
@@ -406,7 +407,8 @@ class TabsSnapshotTest : public UserDataSnapshotBrowserTestBase {
   }
 
   void SimulateUserActions() override {
-    browser()->profile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup, 1);
+    browser()->GetProfile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup,
+                                                    1);
     browser()->OpenURL(
         content::OpenURLParams(embedded_test_server()->GetURL("/title1.html"),
                                content::Referrer(),
@@ -422,9 +424,9 @@ class TabsSnapshotTest : public UserDataSnapshotBrowserTestBase {
   }
 
   void ValidateUserActions() override {
-    EXPECT_EQ(
-        browser()->profile()->GetPrefs()->GetInteger(prefs::kRestoreOnStartup),
-        1);
+    EXPECT_EQ(browser()->GetProfile()->GetPrefs()->GetInteger(
+                  prefs::kRestoreOnStartup),
+              1);
     auto* tab_strip = browser()->tab_strip_model();
     // There are 2 tabs that need to be preserved. There might be a 3rd tab,
     // about:blank that is opened by the test itself. That 3rd tab may or may
@@ -472,8 +474,9 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, SameMilestoneSnapshot) {
   // No snapshots for same version.
   base::WriteFile(user_data_dir.Append(kDowngradeLastVersionFile),
                   current_version);
+  downgrade::DowngradeManagerDelegateImpl delegate;
   EXPECT_FALSE(downgrade_manager.PrepareUserDataDirectoryForCurrentVersion(
-      user_data_dir));
+      user_data_dir, &delegate));
   EXPECT_FALSE(
       base::PathExists(user_data_dir.Append(downgrade::kSnapshotsDir)));
 
@@ -491,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, SameMilestoneSnapshot) {
                   last_minor_version);
 
   EXPECT_FALSE(downgrade_manager.PrepareUserDataDirectoryForCurrentVersion(
-      user_data_dir));
+      user_data_dir, &delegate));
   EXPECT_FALSE(
       base::PathExists(user_data_dir.Append(downgrade::kSnapshotsDir)));
 }
@@ -512,8 +515,10 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, CanarySameMilestoneSnapshot) {
   // No snapshots for same version.
   base::WriteFile(user_data_dir.Append(kDowngradeLastVersionFile),
                   current_version);
+
+  downgrade::DowngradeManagerDelegateImpl delegate;
   EXPECT_FALSE(downgrade_manager.PrepareUserDataDirectoryForCurrentVersion(
-      user_data_dir));
+      user_data_dir, &delegate));
   EXPECT_FALSE(
       base::PathExists(user_data_dir.Append(downgrade::kSnapshotsDir)));
 
@@ -531,7 +536,7 @@ IN_PROC_BROWSER_TEST_F(InProcessBrowserTest, CanarySameMilestoneSnapshot) {
                   last_minor_version);
 
   EXPECT_FALSE(downgrade_manager.PrepareUserDataDirectoryForCurrentVersion(
-      user_data_dir));
+      user_data_dir, &delegate));
   EXPECT_TRUE(base::PathExists(user_data_dir.Append(downgrade::kSnapshotsDir)));
 }
 #endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)

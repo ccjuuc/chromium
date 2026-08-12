@@ -25,11 +25,13 @@
 #pragma mark - Public
 
 - (BOOL)useIncognitoViewFallback {
-  return _isNTP && _incognito;
+  return _isNTP && _incognito &&
+         _inputPlatePosition != ComposeboxInputPlatePosition::kiPad;
 }
 
 - (BOOL)isTopInputPlate {
-  return _inputPlatePosition == ComposeboxInputPlatePosition::kTop;
+  return _inputPlatePosition == ComposeboxInputPlatePosition::kTop ||
+         _inputPlatePosition == ComposeboxInputPlatePosition::kiPad;
 }
 
 - (UIColor*)composeboxBackgroundColor {
@@ -62,44 +64,26 @@
   return [UIColor colorNamed:kTextfieldBackgroundColor];
 }
 
-- (UIColor*)aimButtonTextColorWithAIMEnabled:(BOOL)AIMEnabled {
-  if (AIMEnabled) {
-    return [UIColor colorNamed:kBlue600Color];
+- (UIColor*)toolButtonBackgroundColorWithActiveState:(BOOL)active {
+  if (self.isTopInputPlate) {
+    return active ? [UIColor colorNamed:kAimComposeboxButtonBackgroundColor]
+                  : [UIColor clearColor];
   } else {
-    return [UIColor colorNamed:kTextPrimaryColor];
+    return active ? [UIColor colorNamed:kSecondaryBackgroundColor]
+                  : [UIColor clearColor];
   }
 }
 
-- (UIColor*)aimButtonBackgroundColorWithAIMEnabled:(BOOL)AIMEnabled {
-  if (AIMEnabled) {
-    if (self.isTopInputPlate) {
-      return [UIColor colorNamed:kAimComposeboxButtonBackgroundColor];
-    } else {
-      return [UIColor colorNamed:kBlueHaloColor];
-    }
-  } else {
-    return [UIColor clearColor];
-  }
+- (UIColor*)toolButtonTextColorWithActiveState:(BOOL)active {
+  return [UIColor colorNamed:kTextPrimaryColor];
 }
 
-- (UIColor*)aimButtonBorderColorWithAIMEnabled:(BOOL)AIMEnabled {
-  if (AIMEnabled) {
+- (UIColor*)toolButtonBorderColorWithActiveState:(BOOL)active {
+  if (active) {
     return [UIColor clearColor];
   } else {
     return [UIColor colorNamed:kGrey400Color];
   }
-}
-
-- (UIColor*)imageGenerationButtonBackgroundColor {
-  if (self.isTopInputPlate) {
-    return [UIColor colorNamed:kAimComposeboxButtonBackgroundColor];
-  } else {
-    return [UIColor colorNamed:kSecondaryBackgroundColor];
-  }
-}
-
-- (UIColor*)imageGenerationButtonTextColor {
-  return [UIColor colorNamed:kTextPrimaryColor];
 }
 
 - (UIColor*)sendButtonForegroundColorHighlighted:(BOOL)highlighted {

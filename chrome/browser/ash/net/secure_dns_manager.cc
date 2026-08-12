@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -20,11 +21,11 @@
 #include "base/values.h"
 #include "chrome/browser/ash/net/ash_dns_over_https_config_source.h"
 #include "chrome/browser/ash/net/dns_over_https/templates_uri_resolver_impl.h"
+#include "chrome/browser/ash/policy/core/device_attributes.h"
 #include "chrome/browser/net/secure_dns_config.h"
 #include "chrome/browser/net/secure_dns_util.h"
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_event_log.h"
@@ -59,7 +60,7 @@ void MigratePrefIfNecessary(const std::string& pref_name,
 
 bool IsUserSetSecureDnsConfigInvalid(const PrefService* local_state) {
   const base::Value* secure_dns_mode =
-      local_state->GetUserPrefValue(::prefs::kDnsOverHttpsMode);
+      local_state->GetUserPrefValue(ash::chrome_prefs::kDnsOverHttpsMode);
 
   // Can be missing in tests.
   if (!secure_dns_mode) {
@@ -70,7 +71,7 @@ bool IsUserSetSecureDnsConfigInvalid(const PrefService* local_state) {
   }
 
   const base::Value* secure_dns_template =
-      local_state->GetUserPrefValue(::prefs::kDnsOverHttpsTemplates);
+      local_state->GetUserPrefValue(ash::chrome_prefs::kDnsOverHttpsTemplates);
   if (!secure_dns_template || *secure_dns_template == base::Value()) {
     return true;
   }
@@ -87,31 +88,35 @@ void MigrateDnsOverHttpsPrefs(PrefService* from_local_state,
                               PrefService* to_profile_prefs) {
   if (IsUserSetSecureDnsConfigInvalid(from_local_state)) {
     // Remove the invalid config. See b/335400734.
-    from_local_state->ClearPref(::prefs::kDnsOverHttpsMode);
+    from_local_state->ClearPref(ash::chrome_prefs::kDnsOverHttpsMode);
     return;
   }
   // Migrate local state to user pref.
-  MigratePrefIfNecessary(::prefs::kDnsOverHttpsTemplates, from_local_state,
-                         to_profile_prefs);
-  MigratePrefIfNecessary(::prefs::kDnsOverHttpsMode, from_local_state,
+  MigratePrefIfNecessary(ash::chrome_prefs::kDnsOverHttpsTemplates,
+                         from_local_state, to_profile_prefs);
+  MigratePrefIfNecessary(ash::chrome_prefs::kDnsOverHttpsMode, from_local_state,
                          to_profile_prefs);
 }
 }  // namespace
 namespace ash {
 
-SecureDnsManager::SecureDnsManager(PrefService* local_state,
-                                   user_manager::User& user,
-                                   bool is_profile_managed)
+SecureDnsManager::SecureDnsManager(
+    PrefService* local_state,
+    std::unique_ptr<policy::DeviceAttributes> device_attributes,
+    user_manager::User& user,
+    bool is_profile_managed)
     : local_state_(local_state),
       user_(user),
       is_profile_managed_(is_profile_managed) {
+  CHECK(device_attributes);
   auto* profile_prefs = user.GetProfilePrefs();
   if (!is_profile_managed) {
     CHECK(profile_prefs) << "Profile prefs cannot be empty for unmanaged users";
     MigrateDnsOverHttpsPrefs(local_state, profile_prefs);
   }
   doh_templates_uri_resolver_ =
-      std::make_unique<dns_over_https::TemplatesUriResolverImpl>();
+      std::make_unique<dns_over_https::TemplatesUriResolverImpl>(
+          std::move(device_attributes));
 
   LoadProviders();
 
@@ -154,25 +159,27 @@ void SecureDnsManager::SetPrimaryProfilePropertiesForTesting(
 void SecureDnsManager::MonitorUserPrefs() {
   auto* profile_prefs = user_->GetProfilePrefs();
   profile_prefs->SetDefaultPrefValue(
-      ::prefs::kDnsOverHttpsMode,
-      local_state_->GetDefaultPrefValue(::prefs::kDnsOverHttpsMode)->Clone());
+      ash::chrome_prefs::kDnsOverHttpsMode,
+      local_state_->GetDefaultPrefValue(ash::chrome_prefs::kDnsOverHttpsMode)
+          ->Clone());
 
   profile_prefs_registrar_.Init(profile_prefs);
   profile_prefs_registrar_.Add(
-      ::prefs::kDnsOverHttpsMode,
+      ash::chrome_prefs::kDnsOverHttpsMode,
       base::BindRepeating(&SecureDnsManager::OnPrefChanged,
                           base::Unretained(this)));
   profile_prefs_registrar_.Add(
-      ::prefs::kDnsOverHttpsTemplates,
+      ash::chrome_prefs::kDnsOverHttpsTemplates,
       base::BindRepeating(&SecureDnsManager::OnPrefChanged,
                           base::Unretained(this)));
 }
 void SecureDnsManager::MonitorLocalStatePrefs() {
   local_state_registrar_.Init(local_state_);
   static constexpr std::array<const char*, 4> secure_dns_pref_names = {
-      ::prefs::kDnsOverHttpsMode, ::prefs::kDnsOverHttpsTemplates,
-      ::prefs::kDnsOverHttpsTemplatesWithIdentifiers,
-      ::prefs::kDnsOverHttpsSalt};
+      ash::chrome_prefs::kDnsOverHttpsMode,
+      ash::chrome_prefs::kDnsOverHttpsTemplates,
+      ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+      ash::prefs::kDnsOverHttpsSalt};
   for (auto* const pref_name : secure_dns_pref_names) {
     local_state_registrar_.Add(
         pref_name,
@@ -198,9 +205,9 @@ SecureDnsManager::~SecureDnsManager() {
       ->SetOverrideDnsOverHttpsConfigSource(nullptr);
 
   // `local_state_` outlives the SecureDnsManager instance. The value of
-  // `::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS` should not outlive the
-  // current instance of SecureDnsManager.
-  local_state_->ClearPref(::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS);
+  // `ash::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS` should not outlive
+  // the current instance of SecureDnsManager.
+  local_state_->ClearPref(ash::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS);
 
   // Reset Shill's state in order for the secure DNS configuration to not leak
   // to the login screen.
@@ -235,10 +242,10 @@ void SecureDnsManager::LoadProviders() {
   }
 }
 
-base::Value::Dict SecureDnsManager::GetProviders(
+base::DictValue SecureDnsManager::GetProviders(
     const std::string& mode,
     const std::string& templates) const {
-  base::Value::Dict doh_providers;
+  base::DictValue doh_providers;
 
   if (mode == SecureDnsConfig::kModeOff) {
     return doh_providers;
@@ -285,7 +292,8 @@ void SecureDnsManager::RemoveObserver(Observer* observer) {
 }
 
 void SecureDnsManager::DefaultNetworkChanged(const NetworkState* network) {
-  const std::string& mode = local_state_->GetString(::prefs::kDnsOverHttpsMode);
+  const std::string& mode =
+      local_state_->GetString(ash::chrome_prefs::kDnsOverHttpsMode);
   if (mode == SecureDnsConfig::kModeOff) {
     return;
   }
@@ -293,8 +301,8 @@ void SecureDnsManager::DefaultNetworkChanged(const NetworkState* network) {
   // Network updates are only relevant for determining the effective DoH
   // template URI if the admin has configured the
   // DnsOverHttpsTemplatesWithIdentifiers policy to include the IP addresses.
-  std::string templates_with_identifiers =
-      local_state_->GetString(::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  std::string templates_with_identifiers = local_state_->GetString(
+      ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
   if (!dns_over_https::TemplatesUriResolverImpl::
           IsDeviceIpAddressIncludedInUriTemplate(templates_with_identifiers)) {
     return;
@@ -304,8 +312,9 @@ void SecureDnsManager::DefaultNetworkChanged(const NetworkState* network) {
 
 void SecureDnsManager::OnPrefChanged() {
   const auto* profile_prefs = user_->GetProfilePrefs();
-  UpdateDoHConfig(profile_prefs->GetString(::prefs::kDnsOverHttpsMode),
-                  profile_prefs->GetString(::prefs::kDnsOverHttpsTemplates));
+  UpdateDoHConfig(
+      profile_prefs->GetString(ash::chrome_prefs::kDnsOverHttpsMode),
+      profile_prefs->GetString(ash::chrome_prefs::kDnsOverHttpsTemplates));
 }
 
 void SecureDnsManager::OnLocalStatePrefsChanged() {
@@ -316,8 +325,8 @@ void SecureDnsManager::OnLocalStatePrefsChanged() {
 void SecureDnsManager::ToggleNetworkMonitoring() {
   // If DoH with identifiers are active, verify if network changes need to be
   // observed for URI template placeholder replacement.
-  std::string templates_with_identifiers =
-      local_state_->GetString(::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  std::string templates_with_identifiers = local_state_->GetString(
+      ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
 
   bool template_uri_includes_network_identifiers =
       doh_templates_uri_resolver_->GetDohWithIdentifiersActive() &&
@@ -326,7 +335,7 @@ void SecureDnsManager::ToggleNetworkMonitoring() {
 
   bool should_observe_default_network_changes =
       template_uri_includes_network_identifiers &&
-      (local_state_->GetString(::prefs::kDnsOverHttpsMode) !=
+      (local_state_->GetString(ash::chrome_prefs::kDnsOverHttpsMode) !=
        SecureDnsConfig::kModeOff);
 
   if (!should_observe_default_network_changes) {
@@ -342,7 +351,7 @@ void SecureDnsManager::ToggleNetworkMonitoring() {
 }
 
 void SecureDnsManager::OnDoHIncludedDomainsPrefChanged() {
-  base::Value::List included_domains =
+  base::ListValue included_domains =
       local_state_->GetList(prefs::kDnsOverHttpsIncludedDomains).Clone();
   NetworkHandler::Get()->network_configuration_handler()->SetManagerProperty(
       shill::kDOHIncludedDomainsProperty,
@@ -351,7 +360,7 @@ void SecureDnsManager::OnDoHIncludedDomainsPrefChanged() {
 }
 
 void SecureDnsManager::OnDoHExcludedDomainsPrefChanged() {
-  base::Value::List excluded_domains =
+  base::ListValue excluded_domains =
       local_state_->GetList(prefs::kDnsOverHttpsExcludedDomains).Clone();
   NetworkHandler::Get()->network_configuration_handler()->SetManagerProperty(
       shill::kDOHExcludedDomainsProperty,
@@ -444,7 +453,7 @@ void SecureDnsManager::UpdateChromeDoHConfig(
   // TODO(acostinas, b/331903009): Storing the effective DoH providers in a
   // local_state pref on Chrome OS has downsides. Replace this pref with an
   // in-memory mechanism to sync effective DoH prefs.
-  local_state_->SetString(::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
+  local_state_->SetString(ash::prefs::kDnsOverHttpsEffectiveTemplatesChromeOS,
                           cached_chrome_template_uris_);
 }
 
@@ -453,18 +462,21 @@ void SecureDnsManager::UpdateTemplateUri() {
 
   std::string new_templates =
       doh_templates_uri_resolver_->GetEffectiveTemplates();
-  std::string new_mode = local_state_->GetString(::prefs::kDnsOverHttpsMode);
+  std::string new_mode =
+      local_state_->GetString(ash::chrome_prefs::kDnsOverHttpsMode);
 
   // The DoH config is stored in the local_state only when controlled by policy.
   // If the local_state DoH pref is user-set, it should be ignored.
-  if (!local_state_->IsManagedPreference(::prefs::kDnsOverHttpsMode)) {
+  if (!local_state_->IsManagedPreference(
+          ash::chrome_prefs::kDnsOverHttpsMode)) {
     new_mode = SecureDnsConfig::kModeOff;
     new_templates = std::string();
   }
 
   bool prev_is_config_managed = cached_is_config_managed_;
   cached_is_config_managed_ =
-      local_state_->FindPreference(::prefs::kDnsOverHttpsMode)->IsManaged();
+      local_state_->FindPreference(ash::chrome_prefs::kDnsOverHttpsMode)
+          ->IsManaged();
 
   // Force DoH config update if the managedness of the config changed.
   UpdateDoHConfig(new_mode, new_templates,
@@ -479,7 +491,8 @@ void SecureDnsManager::UpdateTemplateUri() {
         ->network_metadata_store()
         ->SetSecureDnsTemplatesWithIdentifiersActive(
             doh_templates_uri_resolver_->GetDohWithIdentifiersActive() &&
-            local_state_->IsManagedPreference(::prefs::kDnsOverHttpsMode));
+            local_state_->IsManagedPreference(
+                ash::chrome_prefs::kDnsOverHttpsMode));
   }
 }
 
@@ -489,9 +502,9 @@ void SecureDnsManager::ResetShillState() {
   }
   auto* handler = NetworkHandler::Get()->network_configuration_handler();
   handler->SetManagerProperty(shill::kDOHIncludedDomainsProperty,
-                              base::Value(base::Value::List()));
+                              base::Value(base::ListValue()));
   handler->SetManagerProperty(shill::kDOHExcludedDomainsProperty,
-                              base::Value(base::Value::List()));
+                              base::Value(base::ListValue()));
   handler->SetManagerProperty(
       shill::kDNSProxyDOHProvidersProperty,
       base::Value(GetProviders(SecureDnsConfig::kModeOff, /*templates=*/"")));
@@ -499,14 +512,16 @@ void SecureDnsManager::ResetShillState() {
 
 // static
 void SecureDnsManager::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterStringPref(::prefs::kDnsOverHttpsMode, std::string());
-  registry->RegisterStringPref(::prefs::kDnsOverHttpsTemplates, std::string());
+  registry->RegisterStringPref(ash::chrome_prefs::kDnsOverHttpsMode,
+                               std::string());
+  registry->RegisterStringPref(ash::chrome_prefs::kDnsOverHttpsTemplates,
+                               std::string());
 }
 // static
 void SecureDnsManager::RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterStringPref(::prefs::kDnsOverHttpsSalt, std::string());
-  registry->RegisterStringPref(::prefs::kDnsOverHttpsTemplatesWithIdentifiers,
-                               std::string());
+  registry->RegisterStringPref(ash::prefs::kDnsOverHttpsSalt, std::string());
+  registry->RegisterStringPref(
+      ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers, std::string());
 }
 
 std::optional<std::string>

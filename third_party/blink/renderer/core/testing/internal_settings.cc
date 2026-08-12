@@ -61,16 +61,17 @@ void InternalSettings::ResetToConsistentState() {
 
 void InternalSettings::setViewportStyle(const String& style,
                                         ExceptionState& exception_state) {
-  if (EqualIgnoringASCIICase(style, "default")) {
+  if (EqualIgnoringAsciiCase(style, "default")) {
     GetSettings().SetViewportStyle(mojom::blink::ViewportStyle::kDefault);
-  } else if (EqualIgnoringASCIICase(style, "mobile")) {
+  } else if (EqualIgnoringAsciiCase(style, "mobile")) {
     GetSettings().SetViewportStyle(mojom::blink::ViewportStyle::kMobile);
-  } else if (EqualIgnoringASCIICase(style, "television")) {
+  } else if (EqualIgnoringAsciiCase(style, "television")) {
     GetSettings().SetViewportStyle(mojom::blink::ViewportStyle::kTelevision);
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The viewport style type provided ('" + style + "') is invalid.");
+        StrCat(
+            {"The viewport style type provided ('", style, "') is invalid."}));
   }
 }
 
@@ -124,11 +125,6 @@ void InternalSettings::setMathFontFamily(const AtomicString& family,
   SetFontFamily(family, script, &GenericFontFamilySettings::UpdateMath);
 }
 
-void InternalSettings::setTextAutosizingWindowSizeOverride(int width,
-                                                           int height) {
-  GetSettings().SetTextAutosizingWindowSizeOverride(gfx::Size(width, height));
-}
-
 void InternalSettings::setTextTrackKindUserPreference(
     const String& preference,
     ExceptionState& exception_state) {
@@ -144,8 +140,8 @@ void InternalSettings::setTextTrackKindUserPreference(
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The user preference for text track kind " + preference +
-            ")' is invalid.");
+        StrCat({"The user preference for text track kind ", preference,
+                ")' is invalid."}));
     return;
   }
 
@@ -154,25 +150,26 @@ void InternalSettings::setTextTrackKindUserPreference(
 
 void InternalSettings::setEditingBehavior(const String& editing_behavior,
                                           ExceptionState& exception_state) {
-  if (EqualIgnoringASCIICase(editing_behavior, "win")) {
+  if (EqualIgnoringAsciiCase(editing_behavior, "win")) {
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingWindowsBehavior);
-  } else if (EqualIgnoringASCIICase(editing_behavior, "mac")) {
+  } else if (EqualIgnoringAsciiCase(editing_behavior, "mac")) {
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingMacBehavior);
-  } else if (EqualIgnoringASCIICase(editing_behavior, "unix")) {
+  } else if (EqualIgnoringAsciiCase(editing_behavior, "unix")) {
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingUnixBehavior);
-  } else if (EqualIgnoringASCIICase(editing_behavior, "android")) {
+  } else if (EqualIgnoringAsciiCase(editing_behavior, "android")) {
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingAndroidBehavior);
-  } else if (EqualIgnoringASCIICase(editing_behavior, "chromeos")) {
+  } else if (EqualIgnoringAsciiCase(editing_behavior, "chromeos")) {
     GetSettings().SetEditingBehaviorType(
         mojom::EditingBehavior::kEditingChromeOSBehavior);
   } else {
-    exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
-                                      "The editing behavior type provided ('" +
-                                          editing_behavior + "') is invalid.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kSyntaxError,
+        StrCat({"The editing behavior type provided ('", editing_behavior,
+                "') is invalid."}));
   }
 }
 
@@ -181,12 +178,11 @@ void InternalSettings::setAvailablePointerTypes(
     ExceptionState& exception_state) {
   // Allow setting multiple pointer types by passing comma seperated list
   // ("coarse,fine").
-  Vector<String> tokens;
-  pointers.Split(",", false, tokens);
+  Vector<StringView> tokens = StringView(pointers).SplitSkippingEmpty(',');
 
   int pointer_types = 0;
-  for (const String& split_token : tokens) {
-    String token = split_token.StripWhiteSpace();
+  for (const StringView& split_token : tokens) {
+    StringView token = split_token.StripWhiteSpace();
 
     if (token == "coarse") {
       pointer_types |= static_cast<int>(PointerType::kPointerCoarseType);
@@ -197,7 +193,7 @@ void InternalSettings::setAvailablePointerTypes(
     } else {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kSyntaxError,
-          "The pointer type token ('" + token + ")' is invalid.");
+          StrCat({"The pointer type token ('", token, ")' is invalid."}));
       return;
     }
   }
@@ -219,12 +215,12 @@ void InternalSettings::setDisplayModeOverride(const String& display_mode,
     mode = blink::mojom::DisplayMode::kFullscreen;
   } else if (token == "window-controls-overlay") {
     mode = blink::mojom::DisplayMode::kWindowControlsOverlay;
-  } else if (token == "borderless") {
-    mode = blink::mojom::DisplayMode::kBorderless;
+  } else if (token == "unframed") {
+    mode = blink::mojom::DisplayMode::kUnframed;
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The display-mode token ('" + token + ")' is invalid.");
+        StrCat({"The display-mode token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -244,7 +240,7 @@ void InternalSettings::setPrimaryPointerType(const String& pointer,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The pointer type token ('" + token + ")' is invalid.");
+        StrCat({"The pointer type token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -255,12 +251,11 @@ void InternalSettings::setAvailableHoverTypes(const String& types,
                                               ExceptionState& exception_state) {
   // Allow setting multiple hover types by passing comma seperated list
   // ("on-demand,none").
-  Vector<String> tokens;
-  types.Split(",", false, tokens);
+  Vector<StringView> tokens = StringView(types).SplitSkippingEmpty(',');
 
   int hover_types = 0;
-  for (const String& split_token : tokens) {
-    String token = split_token.StripWhiteSpace();
+  for (const StringView& split_token : tokens) {
+    StringView token = split_token.StripWhiteSpace();
     if (token == "none") {
       hover_types |= static_cast<int>(HoverType::kHoverNone);
     } else if (token == "hover") {
@@ -268,7 +263,7 @@ void InternalSettings::setAvailableHoverTypes(const String& types,
     } else {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kSyntaxError,
-          "The hover type token ('" + token + ")' is invalid.");
+          StrCat({"The hover type token ('", token, ")' is invalid."}));
       return;
     }
   }
@@ -287,7 +282,7 @@ void InternalSettings::setPrimaryHoverType(const String& type,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The hover type token ('" + token + ")' is invalid.");
+        StrCat({"The hover type token ('", token, ")' is invalid."}));
     return;
   }
 
@@ -297,19 +292,20 @@ void InternalSettings::setPrimaryHoverType(const String& type,
 void InternalSettings::setImageAnimationPolicy(
     const String& policy,
     ExceptionState& exception_state) {
-  if (EqualIgnoringASCIICase(policy, "allowed")) {
+  if (EqualIgnoringAsciiCase(policy, "allowed")) {
     GetSettings().SetImageAnimationPolicy(
         mojom::blink::ImageAnimationPolicy::kImageAnimationPolicyAllowed);
-  } else if (EqualIgnoringASCIICase(policy, "once")) {
+  } else if (EqualIgnoringAsciiCase(policy, "once")) {
     GetSettings().SetImageAnimationPolicy(
         mojom::blink::ImageAnimationPolicy::kImageAnimationPolicyAnimateOnce);
-  } else if (EqualIgnoringASCIICase(policy, "none")) {
+  } else if (EqualIgnoringAsciiCase(policy, "none")) {
     GetSettings().SetImageAnimationPolicy(
         mojom::blink::ImageAnimationPolicy::kImageAnimationPolicyNoAnimation);
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The image animation policy provided ('" + policy + "') is invalid.");
+        StrCat({"The image animation policy provided ('", policy,
+                "') is invalid."}));
     return;
   }
 }
@@ -326,7 +322,8 @@ void InternalSettings::setAutoplayPolicy(const String& policy_str,
   } else {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
-        "The autoplay policy ('" + policy_str + ")' is invalid.");
+        StrCat({"The autoplay policy ('", policy_str, ")' is invalid."}));
+    return;
   }
 
   GetSettings().SetAutoplayPolicy(policy);

@@ -60,10 +60,6 @@ class AIWritingAssistanceCreateClient
       if (options->monitor()->Invoke(nullptr, monitor_).IsNothing()) {
         return;
       }
-      HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
-          AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
-      ai_manager_remote->AddModelDownloadProgressObserver(
-          monitor_->BindRemote());
     }
 
     RemoteCanCreate(BindOnce(&AIWritingAssistanceCreateClient::Create,
@@ -152,12 +148,6 @@ class AIWritingAssistanceCreateClient
             static_cast<double>(quota_error_info->requested));
         break;
       }
-      case AIManagerCreateClientError::kUnsupportedLanguage: {
-        this->GetResolver()->RejectWithDOMException(
-            DOMExceptionCode::kNotSupportedError,
-            kExceptionMessageUnsupportedLanguages);
-        break;
-      }
     }
   }
 
@@ -181,7 +171,7 @@ class AIWritingAssistanceCreateClient
     auto availability = ConvertModelAvailabilityCheckResult(result);
     if (availability == Availability::kUnavailable) {
       this->GetResolver()->RejectWithDOMException(
-          DOMExceptionCode::kNotAllowedError,
+          DOMExceptionCode::kNotSupportedError,
           ConvertModelAvailabilityCheckResultToDebugString(result));
       return;
     }

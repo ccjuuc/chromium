@@ -25,8 +25,7 @@ class GURL;
 namespace extensions {
 
 // Used to test the chrome.userScripts API.
-class UserScriptsAPITest : public ExtensionApiTest,
-                           public testing::WithParamInterface<bool> {
+class UserScriptsAPITest : public ExtensionApiTest {
  public:
   UserScriptsAPITest();
   UserScriptsAPITest(const UserScriptsAPITest&) = delete;
@@ -59,9 +58,6 @@ class UserScriptsAPITest : public ExtensionApiTest,
   testing::AssertionResult RunUserScriptsExtensionTestImpl(
       const base::FilePath& extension_path,
       bool allow_api);
-
-  // Some userScripts API methods are currently behind a feature restriction.
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 }  // namespace extensions

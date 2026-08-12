@@ -5,7 +5,6 @@
 #include "chrome/browser/ash/arc/vmm/arcvm_working_set_trim_executor.h"
 
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/memory/arc_memory_bridge.h"
@@ -125,8 +124,7 @@ void ArcVmWorkingSetTrimExecutor::OnDropArcVmCaches(
 
     const bool should_reclaim_from_host =
         reclaim_type == ArcVmReclaimType::kReclaimAll &&
-        arc::kVirtualSwapEnabled.Get() &&
-        !base::FeatureList::IsEnabled(arc::kLockGuestMemory);
+        arc::kVirtualSwapEnabled.Get();
 
     bridge->Reclaim(
         std::move(reclaim_request),

@@ -9,9 +9,10 @@
 #include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
-#include "base/android/jni_callback.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/functional/bind.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/modal_dialog_manager_bridge.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -21,10 +22,12 @@
 #include "ui/color/color_provider.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/display/screen.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/strings/grit/ui_strings.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
@@ -63,6 +66,7 @@ ModalDialogWrapper::ModalDialogWrapper(
     std::unique_ptr<DialogModel> dialog_model,
     ui::WindowAndroid* window_android)
     : dialog_model_(std::move(dialog_model)), window_android_(window_android) {
+  dialog_model_->set_host(DialogModelHost::GetPassKey(), this);
   JNIEnv* env = base::android::AttachCurrentThread();
   java_obj_ = Java_ModalDialogWrapper_create(
       env, reinterpret_cast<uintptr_t>(this), window_android_->GetJavaObject());
@@ -70,6 +74,8 @@ ModalDialogWrapper::ModalDialogWrapper(
 
 ModalDialogWrapper::~ModalDialogWrapper() {
   dialog_model_->OnDialogDestroying(DialogModelHost::GetPassKey());
+  Java_ModalDialogWrapper_clearNativePtr(base::android::AttachCurrentThread(),
+                                         java_obj_);
 }
 
 namespace {  // private helper for ModalDialogWrapper::BuildPropertyModel
@@ -153,15 +159,22 @@ ParagraphData getParagraphData(DialogModelField* field) {
   return data;
 }
 
-const SkBitmap* getIconBitmap(const ui::ImageModel& icon_model) {
+SkBitmap getIconBitmap(const ui::ImageModel& icon_model, float scale) {
+  if (icon_model.IsEmpty()) {
+    return SkBitmap();
+  }
+
   auto key = ui::ColorProviderKey();
   ui::ColorProvider* color_provider =
       ui::ColorProviderManager::Get().GetColorProviderFor(key);
   CHECK(color_provider);
 
   gfx::ImageSkia image_skia = icon_model.Rasterize(color_provider);
-  // Returns the 1x Skia if it exists. See ImageSkia.bitmap() for details.
-  return image_skia.bitmap();
+  if (image_skia.isNull()) {
+    return SkBitmap();
+  }
+
+  return image_skia.GetRepresentation(scale).GetBitmap();
 }
 
 }  // anonymous namespace
@@ -177,7 +190,7 @@ ModalDialogWrapper::GetButtonStyles() const {
       dialog_model_->cancel_button(DialogModelHost::GetPassKey());
 
   const ButtonStyle ok_button_style =
-      ok_button->style().value_or(ButtonStyle::kDefault);
+      ok_button->style().value_or(ButtonStyle::kProminent);
   const ButtonStyle cancel_button_style =
       cancel_button ? cancel_button->style().value_or(ui::ButtonStyle::kDefault)
                     : ButtonStyle::kDefault;
@@ -212,11 +225,16 @@ ModalDialogWrapper::GetButtonStyles() const {
   return ModalDialogButtonStyles::kPrimaryOutlineNegativeOutline;
 }
 
+float GetScaleFactor(WindowAndroid* window) {
+  display::Screen* screen = display::Screen::Get();
+  if (!screen || !window) {
+    return 1.0f;
+  }
+  return screen->GetPreferredScaleFactorForWindow(window).value_or(1.0f);
+}
+
 void ModalDialogWrapper::BuildPropertyModel() {
   JNIEnv* env = base::android::AttachCurrentThread();
-
-  ScopedJavaLocalRef<jstring> title = ConvertUTF16ToJavaString(
-      env, dialog_model_->title(DialogModelHost::GetPassKey()));
 
   ScopedJavaLocalRef<jstring> ok_button_label = GetButtonLabel(
       env, dialog_model_->ok_button(DialogModelHost::GetPassKey()), IDS_APP_OK);
@@ -227,21 +245,21 @@ void ModalDialogWrapper::BuildPropertyModel() {
   ModalDialogButtonStyles buttonStyles = GetButtonStyles();
 
   Java_ModalDialogWrapper_withTitleAndButtons(
-      env, java_obj_, title, ok_button_label, cancel_button_label,
-      static_cast<int>(buttonStyles));
+      env, java_obj_, dialog_model_->title(DialogModelHost::GetPassKey()),
+      ok_button_label, cancel_button_label, static_cast<int>(buttonStyles));
 
-  const SkBitmap* bitmap =
-      getIconBitmap(dialog_model_->icon(DialogModelHost::GetPassKey()));
-  if (!bitmap->isNull()) {
-    Java_ModalDialogWrapper_withTitleIcon(env, java_obj_,
-                                          gfx::ConvertToJavaBitmap(*bitmap));
+  float scale = GetScaleFactor(window_android_);
+  SkBitmap bitmap =
+      getIconBitmap(dialog_model_->icon(DialogModelHost::GetPassKey()), scale);
+  if (!bitmap.isNull()) {
+    Java_ModalDialogWrapper_withTitleIcon(env, java_obj_, bitmap);
   }
 
   std::u16string checkbox_text;
-  jboolean checked = false;
+  bool checked = false;
   std::vector<std::vector<std::u16string>> all_paragraph_spans;
   std::vector<std::vector<base::RepeatingClosure>> all_paragraph_closures;
-  std::vector<const SkBitmap*> menu_item_icons;
+  std::vector<SkBitmap> menu_item_icons;
   std::vector<std::u16string> menu_item_labels;
   menu_items_.clear();
 
@@ -274,10 +292,10 @@ void ModalDialogWrapper::BuildPropertyModel() {
       }
       case DialogModelField::kMenuItem: {
         DialogModelMenuItem* menu_item = field->AsMenuItem();
-        const SkBitmap* icon_bitmap = getIconBitmap(menu_item->icon());
+        SkBitmap icon_bitmap = getIconBitmap(menu_item->icon(), scale);
         // Menu items without icons are not yet handled on Android.
-        if (icon_bitmap && !icon_bitmap->isNull()) {
-          menu_item_icons.push_back(icon_bitmap);
+        if (!icon_bitmap.isNull()) {
+          menu_item_icons.push_back(std::move(icon_bitmap));
           menu_item_labels.push_back(menu_item->label());
           menu_items_.push_back(menu_item);
         }
@@ -292,51 +310,36 @@ void ModalDialogWrapper::BuildPropertyModel() {
 
   if (!all_paragraph_spans.empty()) {
     // vector<vector<u16string>> -> String[][]
-    ScopedJavaLocalRef<jclass> string_array_class =
-        base::android::GetClass(env, "[Ljava/lang/String;");
-    auto java_spans_array = ScopedJavaLocalRef<jobjectArray>::Adopt(
-        env, env->NewObjectArray(all_paragraph_spans.size(),
-                                 string_array_class.obj(), nullptr));
-    for (size_t i = 0; i < all_paragraph_spans.size(); ++i) {
-      ScopedJavaLocalRef<jobjectArray> inner_array =
-          base::android::ToJavaArrayOfStrings(env, all_paragraph_spans[i]);
-      env->SetObjectArrayElement(java_spans_array.obj(), i, inner_array.obj());
+    ScopedJavaLocalRef<jobjectArray> first_spans_array = jni_zero::ToJniArray(
+        env, all_paragraph_spans[0], jni_zero::g_string_class);
+    jclass string_array_class = env->GetObjectClass(first_spans_array.obj());
+    ScopedJavaLocalRef<jobjectArray> java_spans_array =
+        jni_zero::NewArray<jobjectArray>(env, all_paragraph_spans.size(),
+                                         string_array_class);
+    java_spans_array.Set(env, 0, first_spans_array);
+
+    for (size_t i = 1; i < all_paragraph_spans.size(); ++i) {
+      ScopedJavaLocalRef<jobjectArray> spans_array = jni_zero::ToJniArray(
+          env, all_paragraph_spans[i], jni_zero::g_string_class);
+      java_spans_array.Set(env, i, spans_array);
     }
 
-    // Create the 2D Java array for callbacks.
-    ScopedJavaLocalRef<jclass> jni_callback_class =
-        base::android::GetClass(env, "org/chromium/base/JniRepeatingCallback");
+    jclass jni_callback_class =
+        org_chromium_base_JniRepeatingCallback_clazz(env);
+    ScopedJavaLocalRef<jobjectArray> first_callbacks_array =
+        jni_zero::ToJniArray(env, all_paragraph_closures[0],
+                             jni_callback_class);
+    jclass callback_array_class =
+        env->GetObjectClass(first_callbacks_array.obj());
+    ScopedJavaLocalRef<jobjectArray> java_callbacks_array =
+        jni_zero::NewArray<jobjectArray>(env, all_paragraph_closures.size(),
+                                         callback_array_class);
+    java_callbacks_array.Set(env, 0, first_callbacks_array);
 
-    // To get the class for an array of JniRepeatingCallback, we can create a
-    // dummy array and get its class. This is necessary because the standard
-    // "[Lorg/chromium/base/JniRepeatingCallback;" does not work.
-    ScopedJavaLocalRef<jobjectArray> dummy_array =
-        ScopedJavaLocalRef<jobjectArray>::Adopt(
-            env, env->NewObjectArray(0, jni_callback_class.obj(), nullptr));
-    CHECK(dummy_array);
-    ScopedJavaLocalRef<jclass> jni_callback_array_class =
-        ScopedJavaLocalRef<jclass>::Adopt(
-            env, env->GetObjectClass(dummy_array.obj()));
-    CHECK(jni_callback_array_class);
-
-    auto java_callbacks_array = ScopedJavaLocalRef<jobjectArray>::Adopt(
-        env, env->NewObjectArray(all_paragraph_closures.size(),
-                                 jni_callback_array_class.obj(), nullptr));
-
-    for (size_t i = 0; i < all_paragraph_closures.size(); ++i) {
-      std::vector<ScopedJavaLocalRef<jobject>> jobjects;
-      for (const auto& closure : all_paragraph_closures[i]) {
-        if (closure) {
-          jobjects.push_back(base::android::ToJniCallback(env, closure));
-        } else {
-          jobjects.push_back(nullptr);
-        }
-      }
-      ScopedJavaLocalRef<jobjectArray> inner_array =
-          base::android::ToJavaArrayOfObjects(env, jni_callback_class.obj(),
-                                              jobjects);
-      env->SetObjectArrayElement(java_callbacks_array.obj(), i,
-                                 inner_array.obj());
+    for (size_t i = 1; i < all_paragraph_closures.size(); ++i) {
+      ScopedJavaLocalRef<jobjectArray> callbacks_array = jni_zero::ToJniArray(
+          env, all_paragraph_closures[i], jni_callback_class);
+      java_callbacks_array.Set(env, i, callbacks_array);
     }
 
     Java_ModalDialogWrapper_withMessageParagraphs(
@@ -344,29 +347,13 @@ void ModalDialogWrapper::BuildPropertyModel() {
   }
 
   if (!checkbox_text.empty()) {
-    ScopedJavaLocalRef<jstring> java_checkbox_label =
-        ConvertUTF16ToJavaString(env, checkbox_text);
-    Java_ModalDialogWrapper_withCheckbox(env, java_obj_, java_checkbox_label,
+    Java_ModalDialogWrapper_withCheckbox(env, java_obj_, checkbox_text,
                                          checked);
   }
 
   if (!menu_item_icons.empty()) {
-    ScopedJavaLocalRef<jclass> bitmap_class =
-        base::android::GetClass(env, "android/graphics/Bitmap");
-    auto java_icons_array = ScopedJavaLocalRef<jobjectArray>::Adopt(
-        env, env->NewObjectArray(menu_item_icons.size(), bitmap_class.obj(),
-                                 nullptr));
-    for (size_t i = 0; i < menu_item_icons.size(); ++i) {
-      env->SetObjectArrayElement(
-          java_icons_array.obj(), i,
-          gfx::ConvertToJavaBitmap(*menu_item_icons[i]).obj());
-    }
-
-    ScopedJavaLocalRef<jobjectArray> java_labels_array =
-        base::android::ToJavaArrayOfStrings(env, menu_item_labels);
-
-    Java_ModalDialogWrapper_withMenuItems(env, java_obj_, java_icons_array,
-                                          java_labels_array);
+    Java_ModalDialogWrapper_withMenuItems(env, java_obj_, menu_item_icons,
+                                          menu_item_labels);
   }
 }
 
@@ -378,22 +365,22 @@ void ModalDialogWrapper::NegativeButtonClicked(JNIEnv* env) {
   dialog_model_->OnDialogCancelAction(DialogModelHost::GetPassKey());
 }
 
-void ModalDialogWrapper::CheckboxToggled(JNIEnv* env, jboolean is_checked) {
+void ModalDialogWrapper::CheckboxToggled(JNIEnv* env, bool is_checked) {
   if (!checkbox_id_) {
     return;
   }
   dialog_model_->GetCheckboxByUniqueId(checkbox_id_)
-      ->OnChecked(DialogModelFieldHost::GetPassKey(),
-                  static_cast<bool>(is_checked));
+      ->OnChecked(DialogModelFieldHost::GetPassKey(), is_checked);
 }
 
-void ModalDialogWrapper::MenuItemClicked(JNIEnv* env, jint index) {
+void ModalDialogWrapper::MenuItemClicked(JNIEnv* env, int32_t index) {
   CHECK_GE(index, 0);
   CHECK_LT(static_cast<size_t>(index), menu_items_.size());
   menu_items_[index]->OnActivated(DialogModelFieldHost::GetPassKey(), 0);
 }
 
-void ModalDialogWrapper::Dismissed(JNIEnv* env) {
+void ModalDialogWrapper::Dismissed(JNIEnv* env, int32_t dismissalCause) {
+  dismissal_cause_ = dismissalCause;
   dialog_model_->OnDialogCloseAction(DialogModelHost::GetPassKey());
 }
 

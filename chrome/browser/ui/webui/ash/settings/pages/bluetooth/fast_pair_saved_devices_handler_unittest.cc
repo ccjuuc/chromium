@@ -134,12 +134,12 @@ class TestFastPairSavedDevicesHandler : public FastPairSavedDevicesHandler {
 
 const char* GetExpectedImageDataUrl() {
   return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/"
-         "gAIDAAAA10lEQVR4nOzQMQEAMAjAMA78W94s0D+"
-         "RkJ03HO1wJiuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrE"
-         "BWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQF"
-         "cgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWy"
-         "AlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFXwAAAD//"
-         "yb4x2UAAAAGSURBVAMAZRgCkGqWb1EAAAAASUVORK5CYII=";
+         "gAIDAAAA10lEQVR4nOzQQQ0AIAwAsYXg3zJY2P1bCb3zhqUzrMkKZAWyAlmBrEBWICuQ"
+         "FcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWy"
+         "AlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEB"
+         "WICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQFcgKZAWyAlmBrEBWICuQF"
+         "cgKZAWyAlmBrEBWICuQFcgKZAUfAAD//"
+         "7xo61IAAAAGSURBVAMA6ioByljQE+sAAAAASUVORK5CYII=";
 }
 
 }  // namespace
@@ -219,7 +219,7 @@ class FastPairSavedDevicesHandlerTest : public testing::Test {
 
     // Size should be in sync with size of devices list created in
     // |InitializeSavedDevicesList|
-    const base::Value::List* saved_devices_list =
+    const base::ListValue* saved_devices_list =
         saved_devices_list_call_data.arg2()->GetIfList();
     ASSERT_EQ(3u, saved_devices_list->size());
 
@@ -241,7 +241,7 @@ class FastPairSavedDevicesHandlerTest : public testing::Test {
       const content::TestWebUI::CallData& saved_devices_list_call_data) {
     ASSERT_EQ(kSavedDevicesListMessage,
               saved_devices_list_call_data.arg1()->GetString());
-    const base::Value::List* saved_devices_list =
+    const base::ListValue* saved_devices_list =
         saved_devices_list_call_data.arg2()->GetIfList();
     ASSERT_TRUE(saved_devices_list->empty());
   }
@@ -258,14 +258,14 @@ class FastPairSavedDevicesHandlerTest : public testing::Test {
   }
 
   void LoadPage() {
-    // `HandleReceivedMessages` has to use a Value::List due to the API.
-    base::Value::List args;
+    // `HandleReceivedMessages` has to use a base::ListValue due to the API.
+    base::ListValue args;
     test_web_ui()->HandleReceivedMessage(kLoadSavedDevicePage, args);
   }
 
   void RemoveDevice(const std::vector<uint8_t>& account_key) {
-    // `HandleReceivedMessages` has to use a Value::List due to the API.
-    base::Value::List args;
+    // `HandleReceivedMessages` has to use a base::ListValue due to the API.
+    base::ListValue args;
     args.Append(EncodeKey(account_key));
     test_web_ui()->HandleReceivedMessage(kRemoveSavedDevice, args);
   }
@@ -613,7 +613,7 @@ TEST_F(FastPairSavedDevicesHandlerTest, RemoveSavedDevice) {
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(4u, test_web_ui()->call_data().size());
 
-  const base::Value::List* saved_devices_list =
+  const base::ListValue* saved_devices_list =
       test_web_ui()->call_data()[3]->arg2()->GetIfList();
   ASSERT_EQ(2u, saved_devices_list->size());
   AssertDeviceInList(/*device=*/*(saved_devices_list->begin()),

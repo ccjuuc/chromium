@@ -10,7 +10,6 @@
 #import "base/notreached.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/badges/ui_bundled/badge_constants.h"
-#import "ios/chrome/browser/badges/ui_bundled/badges_histograms.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -19,8 +18,7 @@ namespace {
 
 // The image used for password related badges.
 UIImage* GetPasswordImage() {
-  return CustomSymbolTemplateWithPointSize(kPasswordSymbol,
-                                           kInfobarSymbolPointSize);
+  return SymbolTemplateWithPointSize(SymbolPassword, kInfobarSymbolPointSize);
 }
 
 // The menu element for `badgeType` shown in the overflow menu when the overflow
@@ -31,7 +29,6 @@ UIAction* GetOverflowMenuElementForBadgeType(
   NSString* title;
   UIActionIdentifier action_identifier;
   UIImage* image;
-  MobileMessagesInfobarType histogram_type = MobileMessagesInfobarType::Confirm;
 
   switch (badge_type) {
     case kBadgeTypePasswordSave:
@@ -39,50 +36,41 @@ UIAction* GetOverflowMenuElementForBadgeType(
       title =
           l10n_util::GetNSString(IDS_IOS_PASSWORD_MANAGER_SAVE_PASSWORD_TITLE);
       image = GetPasswordImage();
-      histogram_type = MobileMessagesInfobarType::SavePassword;
       break;
     case kBadgeTypePasswordUpdate:
       action_identifier = kBadgeButtonUpdatePasswordActionIdentifier;
       title = l10n_util::GetNSString(
           IDS_IOS_PASSWORD_MANAGER_UPDATE_PASSWORD_TITLE);
       image = GetPasswordImage();
-      histogram_type = MobileMessagesInfobarType::UpdatePassword;
       break;
     case kBadgeTypeSaveAddressProfile:
       action_identifier = kBadgeButtonSaveAddressProfileActionIdentifier;
       title =
           l10n_util::GetNSString(IDS_IOS_AUTOFILL_SAVE_ADDRESS_PROMPT_TITLE);
-      image =
-          CustomSymbolWithPointSize(kLocationSymbol, kInfobarSymbolPointSize);
-      histogram_type = MobileMessagesInfobarType::AutofillSaveAddressProfile;
+      image = SymbolWithPointSize(SymbolLocation, kInfobarSymbolPointSize);
       break;
     case kBadgeTypeSaveCard:
       action_identifier = kBadgeButtonSaveCardActionIdentifier;
       title = l10n_util::GetNSString(IDS_IOS_AUTOFILL_SAVE_CARD);
-      image = DefaultSymbolWithPointSize(kCreditCardSymbol,
-                                         kInfobarSymbolPointSize);
-      histogram_type = MobileMessagesInfobarType::SaveCard;
+      image = SymbolWithPointSize(SymbolCreditCard, kInfobarSymbolPointSize);
       break;
     case kBadgeTypeTranslate:
       action_identifier = kBadgeButtonTranslateActionIdentifier;
       title = l10n_util::GetNSString(IDS_IOS_TRANSLATE_INFOBAR_MODAL_TITLE);
-      image =
-          CustomSymbolWithPointSize(kTranslateSymbol, kInfobarSymbolPointSize);
+      image = SymbolWithPointSize(SymbolTranslate, kInfobarSymbolPointSize);
       break;
     case kBadgeTypePermissionsCamera:
       action_identifier = kBadgeButtonPermissionsActionIdentifier;
       title = l10n_util::GetNSString(
           IDS_IOS_PERMISSIONS_INFOBAR_OVERFLOW_POPUP_TITLE);
-      image = CustomSymbolWithPointSize(kCameraSymbol, kInfobarSymbolPointSize);
-      histogram_type = MobileMessagesInfobarType::Permissions;
+      image = SymbolWithPointSize(SymbolCamera, kInfobarSymbolPointSize);
       break;
     case kBadgeTypePermissionsMicrophone:
       action_identifier = kBadgeButtonPermissionsActionIdentifier;
       title = l10n_util::GetNSString(
           IDS_IOS_PERMISSIONS_INFOBAR_OVERFLOW_POPUP_TITLE);
-      image = DefaultSymbolTemplateWithPointSize(kMicrophoneSymbol,
-                                                 kInfobarSymbolPointSize);
-      histogram_type = MobileMessagesInfobarType::Permissions;
+      image = SymbolTemplateWithPointSize(SymbolMicrophone,
+                                          kInfobarSymbolPointSize);
       break;
     case kBadgeTypeReaderMode:
       NOTREACHED() << "Reader Mode badge should not be in overflow menu";
@@ -95,8 +83,6 @@ UIAction* GetOverflowMenuElementForBadgeType(
   }
 
   UIActionHandler handler = ^(UIAction* action) {
-    base::UmaHistogramEnumeration(kInfobarOverflowMenuTappedHistogram,
-                                  histogram_type);
     show_modal_function(badge_type);
   };
 

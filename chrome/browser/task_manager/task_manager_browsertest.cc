@@ -30,8 +30,8 @@
 #include "chrome/browser/task_manager/task_manager_tester.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/task_manager/task_manager_table_model.h"
@@ -39,7 +39,6 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -243,7 +242,7 @@ INSTANTIATE_TEST_SUITE_P(SitePerProcess,
 #define MAYBE_ShutdownWhileOpen ShutdownWhileOpen
 #endif
 
-// Regression test for http://crbug.com/13361
+// Regression test for http://crbug.com/40847504
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_ShutdownWhileOpen) {
   ShowTaskManager();
 }
@@ -296,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, KillTab) {
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(2, MatchAnyTab()));
 }
 
-// Regression test for http://crbug.com/444945.
+// Regression test for http://crbug.com/41149820.
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NavigateAwayFromHungRenderer) {
   ShowTaskManager();
 
@@ -601,7 +600,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeHostedAppTabBeforeReload) {
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyExtension()));
 }
 
-// Regression test for http://crbug.com/18693.
+// Regression test for http://crbug.com/40970634.
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, ReloadExtension) {
   ShowTaskManager();
   ASSERT_TRUE(LoadExtension(
@@ -625,7 +624,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, ReloadExtension) {
 }
 
 // Checks that task manager counts a worker thread JS heap size.
-// http://crbug.com/241066
+// http://crbug.com/41012512
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, WebWorkerJSHeapMemory) {
   // Workers require a trustworthy (e.g. https) context.
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
@@ -701,8 +700,8 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, JSHeapMemory) {
 }
 
 #if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// This tests times out when MSan is enabled. See https://crbug.com/890313.
-// Failing on Linux CFI. See https://crbug.com/995132.
+// This tests times out when MSan is enabled. See https://crbug.com/41417851.
+// Failing on Linux CFI. See https://crbug.com/41476833.
 #define MAYBE_SentDataObserved DISABLED_SentDataObserved
 #else
 #define MAYBE_SentDataObserved SentDataObserved
@@ -739,16 +738,14 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_SentDataObserved) {
   // There shouldn't be too much usage on the browser process. Note that it
   // should be the first row since tasks are sorted by process ID then by task
   // ID.
-  if (base::FeatureList::IsEnabled(features::kTaskManagerDesktopRefresh)) {
-    model()->UpdateModel(DisplayCategory::kSystem, u"");
-  }
+  model()->UpdateModel(DisplayCategory::kSystem, u"");
   EXPECT_GE(20000,
             model()->GetColumnValue(ColumnSpecifier::TOTAL_NETWORK_USE, 0));
 }
 
 #if defined(MEMORY_SANITIZER) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// This tests times out when MSan is enabled. See https://crbug.com/890313.
-// Failing on Linux CFI. See https://crbug.com/995132.
+// This tests times out when MSan is enabled. See https://crbug.com/41417851.
+// Failing on Linux CFI. See https://crbug.com/41476833.
 #define MAYBE_TotalSentDataObserved DISABLED_TotalSentDataObserved
 #else
 #define MAYBE_TotalSentDataObserved TotalSentDataObserved
@@ -803,9 +800,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_TotalSentDataObserved) {
   // There shouldn't be too much usage on the browser process. Note that it
   // should be the first row since tasks are sorted by process ID then by task
   // ID.
-  if (base::FeatureList::IsEnabled(features::kTaskManagerDesktopRefresh)) {
-    model()->UpdateModel(DisplayCategory::kSystem, u"");
-  }
+  model()->UpdateModel(DisplayCategory::kSystem, u"");
   EXPECT_GE(20000,
             model()->GetColumnValue(ColumnSpecifier::TOTAL_NETWORK_USE, 0));
 }
@@ -848,7 +843,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_IdleWakeups) {
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchTab("title1.html")));
 }
 
-// Crashes on multiple builders.  http://crbug.com/1025346
+// Crashes on multiple builders.  http://crbug.com/40107830
 // Checks that task manager counts utility process JS heap size.
 IN_PROC_BROWSER_TEST_F(TaskManagerUtilityProcessBrowserTest,
                        DISABLED_UtilityJSHeapMemory) {
@@ -926,7 +921,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, HistoryNavigationInNewTab) {
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchTab("title1.html")));
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(2, MatchAnyTab()));
 
-  // In http://crbug.com/738169, the task_manager::Task for the background tab
+  // In http://crbug.com/40088230, the task_manager::Task for the background tab
   // was created with process id 0, resulting in zero values for all process
   // metrics. Ensure that this is not the case.
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerStatToExceed(
@@ -1075,7 +1070,7 @@ IN_PROC_BROWSER_TEST_P(TaskManagerOOPIFBrowserTest, KillSubframe) {
   // Remember |b_url| to be able to later renavigate to the same URL without
   // doing any process swaps (we want to avoid redirects that would happen
   // when going through /cross-site/foo.com/..., because
-  // https://crbug.com/642958 wouldn't repro in presence of process swaps).
+  // https://crbug.com/40483075 wouldn't repro in presence of process swaps).
   navigation_observer.Wait();
   auto* b_frame =
       ChildFrameAt(browser()->tab_strip_model()->GetActiveWebContents(), 0);
@@ -1105,7 +1100,7 @@ IN_PROC_BROWSER_TEST_P(TaskManagerOOPIFBrowserTest, KillSubframe) {
       WaitForTaskManagerRows(1, MatchTab("cross-site iframe test")));
 
   // Reload the subframe and verify it has re-appeared in the task manager.
-  // This is a regression test for https://crbug.com/642958.
+  // This is a regression test for https://crbug.com/40483075.
   ASSERT_TRUE(content::ExecJs(
       browser()
           ->tab_strip_model()
@@ -1540,7 +1535,7 @@ class PrerenderTaskBrowserTest : public TaskManagerBrowserTest {
 
   predictors::AutocompleteActionPredictor* GetAutocompleteActionPredictor() {
     return predictors::AutocompleteActionPredictorFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void WaitForAutocompleteActionPredictorInitialization() {
@@ -1638,7 +1633,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderTaskBrowserTest, MAYBE_ProperlyShowsTasks) {
       url_formatter::FormatUrl(embedded_test_server()->GetURL(kPrerenderURL));
   ASSERT_NO_FATAL_FAILURE(
       WaitForTaskManagerRows(1, MatchTab(base::UTF16ToUTF8(tab_title))));
-  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault() &&
+  if (content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          browser()->GetProfile()) &&
       !server_port.empty()) {
     // When kOriginKeyedProcessesByDefault is enabled, we need to include the
     // port number as the SiteInstance's site_url will include it.
@@ -1871,6 +1867,102 @@ IN_PROC_BROWSER_TEST_F(PrerenderTaskBrowserTest,
       MatchTab(base::UTF16ToUTF8(url_formatter::FormatUrl(prerender_gurl)))));
 }
 
+// TODO(crbug.com/40232771): Flaky on Windows7.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_NewTabPrerenderShowsTask DISABLED_NewTabPrerenderShowsTask
+#else
+#define MAYBE_NewTabPrerenderShowsTask NewTabPrerenderShowsTask
+#endif
+// Tests that prerendering a new tab (target_hint=_blank) shows a "Prerender:"
+// entry in the task manager, and that the entry disappears after activation and
+// is replaced by a regular tab entry.
+IN_PROC_BROWSER_TEST_F(PrerenderTaskBrowserTest,
+                       MAYBE_NewTabPrerenderShowsTask) {
+  ShowTaskManager();
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAboutBlankTab()));
+
+  // Navigate to a page with target=_blank links.
+  const GURL initial_url =
+      embedded_test_server()->GetURL("/prerender/simple_links.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyTab()));
+
+  // Start prerendering with target_hint=_blank.
+  const GURL prerender_url =
+      embedded_test_server()->GetURL("/prerender/empty.html");
+  content::PrerenderHostId host_id = prerender_helper()->AddPrerender(
+      prerender_url, /*eagerness=*/std::nullopt, "_blank");
+  ASSERT_TRUE(host_id);
+
+  auto* prerender_web_contents =
+      content::test::PrerenderTestHelper::GetPrerenderWebContents(host_id);
+  ASSERT_NE(prerender_web_contents, GetActiveWebContents());
+
+  // The prerender should show up in the task manager.
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyTab()));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyPrerender()));
+  ASSERT_NO_FATAL_FAILURE(
+      WaitForTaskManagerRows(1, MatchPrerender(prerender_url.spec())));
+
+  // Click the target=_blank link to activate the prerendered page.
+  content::TestNavigationObserver activation_observer(prerender_url);
+  activation_observer.WatchExistingWebContents();
+  content::test::PrerenderHostObserver prerender_observer(
+      *prerender_web_contents, host_id);
+  EXPECT_TRUE(ExecJs(GetActiveWebContents(),
+                     "clickSameSiteNewWindowWithNoopenerLink();"));
+  activation_observer.WaitForNavigationFinished();
+  EXPECT_TRUE(prerender_observer.was_activated());
+
+  // After activation, the prerender entry should disappear and a new tab entry
+  // should appear instead.
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyPrerender()));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(2, MatchAnyTab()));
+}
+
+// TODO(crbug.com/40232771): Flaky on Windows7.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_NewTabPrerenderDeletesTaskOnCancel \
+  DISABLED_NewTabPrerenderDeletesTaskOnCancel
+#else
+#define MAYBE_NewTabPrerenderDeletesTaskOnCancel \
+  NewTabPrerenderDeletesTaskOnCancel
+#endif
+// Tests that cancelling a new tab prerender removes its entry from the task
+// manager.
+IN_PROC_BROWSER_TEST_F(PrerenderTaskBrowserTest,
+                       MAYBE_NewTabPrerenderDeletesTaskOnCancel) {
+  ShowTaskManager();
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAboutBlankTab()));
+
+  // Navigate to a page with target=_blank links.
+  const GURL initial_url =
+      embedded_test_server()->GetURL("/prerender/simple_links.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyTab()));
+
+  // Start prerendering with target_hint=_blank.
+  const GURL prerender_url =
+      embedded_test_server()->GetURL("/prerender/empty.html");
+  content::PrerenderHostId host_id = prerender_helper()->AddPrerender(
+      prerender_url, /*eagerness=*/std::nullopt, "_blank");
+  ASSERT_TRUE(host_id);
+
+  // The prerender should show up in the task manager.
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyTab()));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyPrerender()));
+  ASSERT_NO_FATAL_FAILURE(
+      WaitForTaskManagerRows(1, MatchPrerender(prerender_url.spec())));
+
+  // Navigate the initiator page away, which cancels the prerender.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+
+  // The prerender task should be removed.
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAnyTab()));
+  ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyPrerender()));
+}
+
 //==============================================================================
 // FencedFrame tasks test.
 namespace {
@@ -1912,8 +2004,8 @@ class FencedFrameTaskBrowserTest : public TaskManagerBrowserTest {
     GURL::Replacements replacements;
     replacements.ClearPath();
     replacements.ClearRef();
-    if (!content::SiteIsolationPolicy::
-            AreOriginKeyedProcessesEnabledByDefault()) {
+    if (!content::SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+            browser()->GetProfile())) {
       // Only include the port for origin-isolated urls.
       replacements.ClearPort();
     }
@@ -2249,35 +2341,9 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest,
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnySubframe()));
 }
 
-//==============================================================================
-// Desktop refreshed task manager test.
-class TaskManagerDesktopRefreshBrowserTest : public TaskManagerBrowserTest {
- public:
-  TaskManagerDesktopRefreshBrowserTest() {
-    feature_list_.InitWithFeaturesAndParameters(
-        {{features::kTaskManagerDesktopRefresh, {}}},
-        /*disabled_features=*/{});
-    EXPECT_TRUE(
-        base::FeatureList::IsEnabled(features::kTaskManagerDesktopRefresh));
-  }
-  TaskManagerDesktopRefreshBrowserTest(
-      const TaskManagerDesktopRefreshBrowserTest&) = delete;
-  TaskManagerDesktopRefreshBrowserTest& operator=(
-      const TaskManagerDesktopRefreshBrowserTest&) = delete;
-  ~TaskManagerDesktopRefreshBrowserTest() override = default;
-
-  void UpdateModel(const DisplayCategory display_category,
-                   std::u16string_view search_term) {
-    model()->UpdateModel(display_category, search_term);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // Testing that the refreshed task manager properly displays tasks on different
 // tabs.
-IN_PROC_BROWSER_TEST_F(TaskManagerDesktopRefreshBrowserTest,
+IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest,
                        FilterTasksByCategoryAndSearchTerm) {
   ShowTaskManager();
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchAboutBlankTab()));
@@ -2317,19 +2383,19 @@ IN_PROC_BROWSER_TEST_F(TaskManagerDesktopRefreshBrowserTest,
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyUtility()));
 
   // Switch to `System` tab, the extension and tabs should not be shown.
-  UpdateModel(DisplayCategory::kSystem, u"");
+  model()->UpdateModel(DisplayCategory::kSystem, u"");
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyTab()));
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyExtension()));
 
   // Input search terms, all matched tasks would be shown no matter which tab
   // they lie in.
-  UpdateModel(DisplayCategory::kAll, u"title");
+  model()->UpdateModel(DisplayCategory::kAll, u"title");
   ASSERT_NO_FATAL_FAILURE(
       WaitForTaskManagerRows(1, MatchTab("Title Of Awesomeness")));
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyExtension()));
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(0, MatchAnyUtility()));
 
-  UpdateModel(DisplayCategory::kAll, u"EN");
+  model()->UpdateModel(DisplayCategory::kAll, u"EN");
   ASSERT_NO_FATAL_FAILURE(
       WaitForTaskManagerRows(1, MatchTab("Title Of Awesomeness")));
   ASSERT_NO_FATAL_FAILURE(WaitForTaskManagerRows(1, MatchExtension("Foobar")));

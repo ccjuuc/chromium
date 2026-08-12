@@ -31,7 +31,6 @@
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/websocket_handshake_throttle_provider.h"
-#include "third_party/blink/public/web/web_link_preview_triggerer.h"
 #include "third_party/blink/public/web/web_navigation_policy.h"
 #include "third_party/blink/public/web/web_navigation_type.h"
 #include "ui/base/page_transition_types.h"
@@ -249,15 +248,8 @@ class CONTENT_EXPORT ContentRendererClient {
                                 blink::WebFrame* frame,
                                 const blink::WebURLRequest& request,
                                 blink::WebNavigationType type,
-                                blink::WebNavigationPolicy default_policy,
-                                bool is_redirect);
+                                blink::WebNavigationPolicy default_policy);
 #endif
-
-  // Waits for critical security settings to be processed by the renderer.
-  // These settings (such as cross-origin isolation) are sent via
-  // `RenderProcessHostImpl::NotifyRendererOfLockedStateUpdate()` and must be
-  // in place before the renderer can safely process web content.
-  virtual void WaitForProcessReady();
 
   // Notifies the embedder that the given frame is requesting the resource at
   // `target_url`. If the function returns a valid `new_url`, the request must
@@ -363,10 +355,6 @@ class CONTENT_EXPORT ContentRendererClient {
   // started.
   virtual void SetRuntimeFeaturesDefaultsBeforeBlinkInitialization() {}
 
-  // Returns whether or not V8 script extensions should be allowed for a
-  // service worker.
-  virtual bool AllowScriptExtensionForServiceWorker(
-      const url::Origin& script_origin);
 
   // Notifies that a service worker context is going to be initialized. No
   // meaningful task has run on the worker thread at this point. This
@@ -399,7 +387,8 @@ class CONTENT_EXPORT ContentRendererClient {
   virtual void DidStartServiceWorkerContextOnWorkerThread(
       int64_t service_worker_version_id,
       const GURL& service_worker_scope,
-      const GURL& script_url) {}
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) {}
 
   // Notifies that a service worker context will be destroyed. This function
   // is called from the worker thread.
@@ -407,7 +396,8 @@ class CONTENT_EXPORT ContentRendererClient {
       v8::Local<v8::Context> context,
       int64_t service_worker_version_id,
       const GURL& service_worker_scope,
-      const GURL& script_url) {}
+      const GURL& script_url,
+      const blink::ServiceWorkerToken& service_worker_token) {}
 
   // Whether this renderer should enforce preferences related to the WebRTC
   // routing logic, i.e. allowing multiple routes and non-proxied UDP.
@@ -480,12 +470,6 @@ class CONTENT_EXPORT ContentRendererClient {
   CreateCastStreamingResourceProvider();
 #endif
 
-  // Creates a WebLinkPreviewTriggerer if an embedder wants to observe events
-  // and trigger preview. It is allowed to return nullptr.
-  //
-  // See blink::WebLinkPreviewTriggerer for more details.
-  virtual std::unique_ptr<blink::WebLinkPreviewTriggerer>
-  CreateLinkPreviewTriggerer();
 };
 
 }  // namespace content

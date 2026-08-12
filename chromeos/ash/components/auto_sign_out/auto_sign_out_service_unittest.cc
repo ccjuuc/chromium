@@ -16,6 +16,7 @@
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_device_info/fake_device_info_sync_service.h"
 #include "components/sync_device_info/fake_device_info_tracker.h"
+#include "components/sync_device_info/test_device_info_builder.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -124,31 +125,12 @@ class AutoSignOutTest : public testing::Test {
   // simulate a random change to the local DeviceInfo.
   void CreateFakeDeviceInfo(const std::string& guid,
                             base::Time signin_timestamp) {
-    std::unique_ptr<syncer::DeviceInfo> device_info = std::make_unique<
-        syncer::DeviceInfo>(
-        /*guid=*/guid,
-        /*client_name=*/"device_name",
-        /*chrome_version=*/"chrome_version",
-        /*sync_user_agent=*/"user_agent",
-        /*device_type=*/sync_pb::SyncEnums::TYPE_CROS,
-        /*os_type=*/syncer::DeviceInfo::OsType::kChromeOsAsh,
-        /*form_factor=*/syncer::DeviceInfo::FormFactor::kUnknown,
-        /*signin_scoped_device_id=*/"device_id",
-        /*manufacturer_name=*/"manufacturer_name",
-        /*model_name=*/"model_name",
-        /*full_hardware_class=*/"full_hardware_class",
-        /*last_updated_timestamp=*/base::Time::Now(),
-        /*pulse_interval=*/base::Minutes(60),
-        /*send_tab_to_self_receiving_enabled=*/false,
-        /*send_tab_to_self_receiving_type=*/
-        sync_pb::
-            SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-        /*sharing_info=*/std::nullopt,
-        /*paask_info=*/std::nullopt,
-        /*fcm_registration_token=*/"token",
-        /*interested_data_types=*/syncer::DataTypeSet(),
-        /*auto_sign_out_last_signin_timestamp=*/signin_timestamp,
-        /*desktop_to_ios_promo_receiving_enabled=*/false);
+    std::unique_ptr<syncer::DeviceInfo> device_info =
+        syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kChromeOsAsh)
+            .WithGuid(guid)
+            .WithClientName("device_name")
+            .WithAutoSignOutLastSigninTimestamp(signin_timestamp)
+            .Build();
     fake_device_info_tracker()->Add(std::move(device_info));
   }
 

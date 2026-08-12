@@ -232,7 +232,7 @@ const media_control::MediaBlocker* CastWebContentsImpl::media_blocker() const {
   return media_blocker_.get();
 }
 
-void CastWebContentsImpl::AddRendererFeatures(base::Value::Dict features) {
+void CastWebContentsImpl::AddRendererFeatures(base::DictValue features) {
   renderer_features_ = std::move(features);
 }
 
@@ -474,10 +474,6 @@ InterfaceBundle* CastWebContentsImpl::local_interfaces() {
   return &local_interfaces_;
 }
 
-bool CastWebContentsImpl::is_websql_enabled() {
-  return params_->enable_websql;
-}
-
 bool CastWebContentsImpl::is_mixer_audio_enabled() {
   return params_->enable_mixer_audio;
 }
@@ -557,13 +553,13 @@ CastWebContentsImpl::GetRendererFeatures() {
   for (const auto pair : renderer_features_) {
     const std::string& name = pair.first;
     const base::Value& config_value = pair.second;
-    const base::Value::Dict* maybe_config_dict = config_value.GetIfDict();
+    const base::DictValue* maybe_config_dict = config_value.GetIfDict();
 
     // There are only 2 callers of `AddRendererFeatures` (both in
     // `runtime_application_service_impl.cc`) and they always provide
     // well-formed dictionaries as values.
     DCHECK(maybe_config_dict);
-    base::Value::Dict config_dict = maybe_config_dict->Clone();
+    base::DictValue config_dict = maybe_config_dict->Clone();
 
     features.push_back(
         chromecast::shell::mojom::Feature::New(name, std::move(config_dict)));
@@ -894,6 +890,7 @@ void CastWebContentsImpl::NotifyPageState() {
 void CastWebContentsImpl::ResourceLoadComplete(
     content::RenderFrameHost* render_frame_host,
     const content::GlobalRequestID& request_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
   if (!web_contents_ ||
       render_frame_host != web_contents_->GetPrimaryMainFrame()) {
@@ -907,7 +904,7 @@ void CastWebContentsImpl::ResourceLoadComplete(
       metrics::CastMetricsHelper::GetInstance();
   metrics_helper->RecordApplicationEventWithValue(
       "Cast.Platform.ResourceRequestError", net_error);
-  LOG(ERROR) << "Resource \"" << resource_load_info.original_url << "\""
+  LOG(ERROR) << "Resource \"" << original_url << "\""
              << " failed to load with net_error=" << net_error
              << ", description=" << net::ErrorToShortString(net_error);
   shell::CastBrowserProcess::GetInstance()->connectivity_checker()->Check();
@@ -976,7 +973,8 @@ void CastWebContentsImpl::WebContentsDestroyed() {
 
 void CastWebContentsImpl::DidUpdateFaviconURL(
     content::RenderFrameHost* render_frame_host,
-    const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
+    const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+    blink::mojom::FaviconUpdateReason reason) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (candidates.empty()) {

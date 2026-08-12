@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ref.h"
@@ -123,13 +124,19 @@ class ProfileAttributesStorageIOS {
   // profile entry with this name must already exist.
   void SetPersonalProfileName(std::string_view profile_name);
 
+  // Returns the names for all the profiles; exposed as a static method so that
+  // it can be called very early in Chrome initialization.
+  static base::flat_set<std::string> GetAllProfileNames(
+      PrefService* local_prefs);
+
   // Register cache related preferences in Local State.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
  protected:
   const raw_ref<PrefService> prefs_;
 
-  base::ObserverList<ProfileAttributesStorageObserverIOS, /*check_empty=*/true>
+  base::ReentrantObserverList<ProfileAttributesStorageObserverIOS,
+                              /*check_empty=*/true>
       observers_;
 };
 

@@ -50,7 +50,7 @@ IN_PROC_BROWSER_TEST_F(NavigationMetricsRecorderBrowserTest, TestMetrics) {
       navigation_metrics::kMainFrameSchemeDifferentPage, 5 /* data: */, 1);
 }
 
-// crbug.com/1292471: the test is flaky on Mac.
+// crbug.com/40213146: the test is flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_Navigation_EngagementLevel DISABLED_Navigation_EngagementLevel
 #else
@@ -73,7 +73,7 @@ IN_PROC_BROWSER_TEST_F(NavigationMetricsRecorderBrowserTest,
   histograms.ExpectBucketCount("Navigation.MainFrame.SiteEngagementLevel",
                                blink::mojom::EngagementLevel::NONE, 1);
 
-  site_engagement::SiteEngagementService::Get(browser()->profile())
+  site_engagement::SiteEngagementService::Get(browser()->GetProfile())
       ->ResetBaseScoreForURL(url, kHighEngagementScore);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   histograms.ExpectTotalCount("Navigation.MainFrame.SiteEngagementLevel", 2);
@@ -135,7 +135,7 @@ IN_PROC_BROWSER_TEST_F(NavigationMetricsRecorderPrerenderBrowserTest,
 
   // Load a prerender page and prerendering should not increase the total count.
   GURL prerender_url = embedded_test_server()->GetURL("/title1.html");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_test_helper().AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*GetWebContents(),
                                                      host_id);

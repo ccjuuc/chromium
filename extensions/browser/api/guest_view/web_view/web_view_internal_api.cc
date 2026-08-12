@@ -5,12 +5,13 @@
 #include "extensions/browser/api/guest_view/web_view/web_view_internal_api.h"
 
 #include <memory>
-#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_deref.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -38,7 +39,9 @@
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/user_script.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "url/origin.h"
 
 using content::WebContents;
 using extensions::ExtensionResource;
@@ -53,6 +56,10 @@ namespace errors = extensions::manifest_errors;
 namespace web_view_internal = extensions::api::web_view_internal;
 
 namespace {
+
+// Kill switch for the fix for https://crbug.com/496016840
+// TODO(crbug.com/496016840): Remove in M151 or later.
+BASE_FEATURE(kWebviewScriptFileOriginCheck, base::FEATURE_ENABLED_BY_DEFAULT);
 
 constexpr std::string_view kCacheKey = "cache";
 constexpr std::string_view kCookiesKey = "cookies";
@@ -104,9 +111,9 @@ std::optional<extensions::mojom::HostID> GenerateHostIDFromEmbedder(
   }
 
   if (embedder_rfh && embedder_rfh->GetMainFrame()->GetWebUI()) {
-    const GURL& url = embedder_rfh->GetSiteInstance()->GetSiteURL();
     return extensions::mojom::HostID(
-        extensions::mojom::HostID::HostType::kWebUi, url.spec());
+        extensions::mojom::HostID::HostType::kWebUi,
+        embedder_rfh->GetLastCommittedOrigin().Serialize());
   }
 
   if (embedder_rfh->GetWebExposedIsolationLevel() >=
@@ -132,6 +139,10 @@ void ParseScriptFiles(const GURL& owner_base_url,
   if (items.files) {
     for (const std::string& relative : *items.files) {
       GURL url = owner_base_url.Resolve(relative);
+      if (!url::IsSameOriginWith(owner_base_url, url) &&
+          base::FeatureList::IsEnabled(kWebviewScriptFileOriginCheck)) {
+        continue;
+      }
       if (extension) {
         ExtensionResource resource = extension->GetResource(relative);
         contents->push_back(UserScript::Content::CreateFile(
@@ -266,7 +277,7 @@ std::unique_ptr<extensions::UserScriptList> ParseContentScripts(
 
   std::unique_ptr<extensions::UserScriptList> result(
       new extensions::UserScriptList());
-  std::set<std::string> names;
+  absl::flat_hash_set<std::string_view> names;
   for (const ContentScriptDetails& script_value : content_script_list) {
     const std::string& name = script_value.name;
     if (!names.insert(name).second) {
@@ -365,13 +376,10 @@ bool WebViewInternalCaptureVisibleRegionFunction::ShouldSkipQuotaLimiting()
   return user_gesture();
 }
 
-WebContentsCaptureClient::ScreenshotAccess
+base::expected<void, ScreenshotAccessError>
 WebViewInternalCaptureVisibleRegionFunction::GetScreenshotAccess(
     content::WebContents* web_contents) const {
-  if (ExtensionsBrowserClient::Get()->IsScreenshotRestricted(web_contents))
-    return ScreenshotAccess::kDisabledByDlp;
-
-  return ScreenshotAccess::kEnabled;
+  return ExtensionsBrowserClient::Get()->IsScreenshotRestricted(web_contents);
 }
 
 bool WebViewInternalCaptureVisibleRegionFunction::ClientAllowsTransparency() {
@@ -543,6 +551,11 @@ bool WebViewInternalExecuteCodeFunction::LoadFileForEmbedder(
   GURL owner_base_url(guest->GetOwnerSiteURL().GetWithEmptyPath());
   GURL file_url(owner_base_url.Resolve(file_src));
 
+  if (!url::IsSameOriginWith(owner_base_url, file_url) &&
+      base::FeatureList::IsEnabled(kWebviewScriptFileOriginCheck)) {
+    return false;
+  }
+
   switch (host_id().type) {
     case mojom::HostID::HostType::kExtensions:
       NOTREACHED();
@@ -621,8 +634,12 @@ WebViewInternalAddContentScriptsFunction::Run() {
   if (!params->instance_id)
     return RespondNow(Error(kViewInstanceIdError));
 
-  GURL owner_base_url(
-      render_frame_host()->GetSiteInstance()->GetSiteURL().GetWithEmptyPath());
+  // Use GetTupleOrPrecursorTupleIfOpaque() so that this works properly if
+  // the owner is in a sandboxed frame, which has an opaque origin.
+  GURL owner_base_url(render_frame_host()
+                          ->GetLastCommittedOrigin()
+                          .GetTupleOrPrecursorTupleIfOpaque()
+                          .GetURL());
   std::optional<extensions::mojom::HostID> host_id =
       GenerateHostIDFromEmbedder(extension(), render_frame_host());
   if (!host_id) {
@@ -825,7 +842,7 @@ WebViewInternalFindFunction::WebViewInternalFindFunction() {
 WebViewInternalFindFunction::~WebViewInternalFindFunction() {
 }
 
-void WebViewInternalFindFunction::ForwardResponse(base::Value::Dict results) {
+void WebViewInternalFindFunction::ForwardResponse(base::DictValue results) {
   Respond(WithArguments(std::move(results)));
 }
 

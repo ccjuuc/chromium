@@ -4,6 +4,8 @@
 
 #include "extensions/browser/scripting_utils.h"
 
+#include <algorithm>
+
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "content/public/browser/browser_context.h"
@@ -126,56 +128,6 @@ bool CollectFramesForInjection(const scripting::InjectionTarget& target,
   return true;
 }
 
-// Returns true if the `permissions` allow for injection into the given `frame`.
-// If false, populates `error`.
-bool HasPermissionToInjectIntoFrame(const PermissionsData& permissions,
-                                    int tab_id,
-                                    content::RenderFrameHost* frame,
-                                    std::string* error) {
-  GURL committed_url = frame->GetLastCommittedURL();
-  if (committed_url.is_empty()) {
-    if (!frame->IsInPrimaryMainFrame()) {
-      // We can't check the pending URL for subframes from the //chrome layer.
-      // Assume the injection is allowed; the renderer has additional checks
-      // later on.
-      return true;
-    }
-    // Unknown URL, e.g. because no load was committed yet. In this case we look
-    // for any pending entry on the NavigationController associated with the
-    // WebContents for the frame.
-    content::WebContents* web_contents =
-        content::WebContents::FromRenderFrameHost(frame);
-    content::NavigationEntry* pending_entry =
-        web_contents->GetController().GetPendingEntry();
-    if (!pending_entry) {
-      *error = manifest_errors::kCannotAccessPage;
-      return false;
-    }
-    GURL pending_url = pending_entry->GetURL();
-    if (pending_url.SchemeIsHTTPOrHTTPS() &&
-        !permissions.CanAccessPage(pending_url, tab_id, error)) {
-      // This catches the majority of cases where an extension tried to inject
-      // on a newly-created navigating tab, saving us a potentially-costly IPC
-      // and, maybe, slightly reducing (but not by any stretch eliminating) an
-      // attack surface.
-      *error = GetCannotAccessPageErrorMessage(permissions, pending_url);
-      return false;
-    }
-
-    // Otherwise allow for now. The renderer has additional checks and will
-    // fail the injection if needed.
-    return true;
-  }
-
-  // We set `allow_inaccessible_parents` to `true`, since this matches the
-  // behavior of statically registered content scripts. We should be able to
-  // inject into a frame even without access to its parent.
-  GURL effective_url = ContentScriptInjectionUrlGetter::Get(
-      BrowserFrameContextData(frame), committed_url,
-      mojom::MatchOriginAsFallbackBehavior::kAlways,
-      /*allow_inaccessible_parents=*/true);
-  return permissions.CanAccessPage(effective_url, tab_id, error);
-}
 
 // Constructs an array of file sources from the read file `data`.
 std::vector<InjectedFileSource> ConstructFileSources(
@@ -314,7 +266,7 @@ bool RemoveScripts(
     // `existing_script_ids`.
     std::string id_with_prefix =
         scripting::AddPrefixToDynamicScriptId(id, source);
-    if (!base::Contains(existing_script_ids, id_with_prefix)) {
+    if (!existing_script_ids.contains(id_with_prefix)) {
       *error =
           ErrorUtils::FormatErrorMessage(kNonExistentScriptIdError, id.c_str());
       return false;
@@ -493,8 +445,8 @@ bool GetFileResources(const std::vector<std::string>& files,
     }
 
     // ExtensionResource doesn't implement an operator==.
-    if (base::Contains(resources, resource.relative_path(),
-                       &ExtensionResource::relative_path)) {
+    if (std::ranges::contains(resources, resource.relative_path(),
+                              &ExtensionResource::relative_path)) {
       // Disallow duplicates. Note that we could allow this, if we wanted (and
       // there *might* be reason to with JS injection, to perform an operation
       // twice?). However, this matches content script behavior, and injecting
@@ -545,6 +497,59 @@ void ExecuteScript(const ExtensionId& extension_id,
       frame_scope, frame_ids, mojom::MatchOriginAsFallbackBehavior::kAlways,
       run_location, ScriptExecutor::DEFAULT_PROCESS,
       /*webview_src=*/GURL(), std::move(callback));
+}
+
+bool HasPermissionToInjectIntoFrame(const PermissionsData& permissions,
+                                    int tab_id,
+                                    content::RenderFrameHost* frame,
+                                    std::string* error) {
+  GURL url = frame->GetLastCommittedURL();
+  if (url.is_empty()) {
+    // Main frame cases. Check if the extension can inject into the pending
+    // load.
+    if (frame->IsInPrimaryMainFrame()) {
+      // Unknown URL, e.g. because no load was committed yet. In this case we
+      // look for any pending entry on the NavigationController associated with
+      // the WebContents for the frame.
+      content::WebContents* web_contents =
+          content::WebContents::FromRenderFrameHost(frame);
+      content::NavigationEntry* pending_entry =
+          web_contents->GetController().GetPendingEntry();
+      if (!pending_entry) {
+        *error = manifest_errors::kCannotAccessPage;
+        return false;  // ScriptAccess::kDenied;
+      }
+      GURL pending_url = pending_entry->GetURL();
+      if (pending_url.SchemeIsHTTPOrHTTPS() &&
+          !permissions.CanAccessPage(pending_url, tab_id, error)) {
+        // This catches the majority of cases where an extension tried to inject
+        // on a newly-created navigating tab, saving us a potentially-costly IPC
+        // and, maybe, slightly reducing (but not by any stretch eliminating) an
+        // attack surface.
+        *error = GetCannotAccessPageErrorMessage(permissions, pending_url);
+        return false;  // ScriptAccess::kDenied;
+      }
+
+      // Otherwise allow for now. The renderer has additional checks and will
+      // fail the injection if needed.
+      return true;
+    }
+
+    // Non-main-frame case. For these, pretend the uncommitted URL is
+    // about:blank for the permission evaluation below. We'll get the
+    // "effective" URL below, which will map to the frame's origin or precursor
+    // origin.
+    url = GURL(url::kAboutBlankURL);
+  }
+
+  // We set `allow_inaccessible_parents` to `true`, since this matches the
+  // behavior of statically registered content scripts. We should be able to
+  // inject into a frame even without access to its parent.
+  GURL effective_url = ContentScriptInjectionUrlGetter::Get(
+      BrowserFrameContextData(frame), url,
+      mojom::MatchOriginAsFallbackBehavior::kAlways,
+      /*allow_inaccessible_parents=*/true);
+  return permissions.CanAccessPage(effective_url, tab_id, error);
 }
 
 }  // namespace extensions::scripting

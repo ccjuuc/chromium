@@ -190,7 +190,8 @@ class WebTestControlHost : public WebContentsObserver,
   void WebContentsDestroyed() override;
   void DidUpdateFaviconURL(
       RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
   void RenderFrameHostChanged(RenderFrameHost* old_host,
                               RenderFrameHost* new_host) override;
   void RenderViewDeleted(RenderViewHost* render_view_host) override;
@@ -230,6 +231,10 @@ class WebTestControlHost : public WebContentsObserver,
   void SetPopupBlockingEnabled(bool block_popups) override;
   void LoadURLForFrame(const GURL& url, const std::string& frame_name) override;
   void SimulateScreenOrientationChanged() override;
+  void SimulateScreenOrientationLockChanged(
+      const blink::LocalFrameToken& frame_token,
+      bool locked,
+      device::mojom::ScreenOrientationLockType orientation) override;
   void SetPermission(const std::string& name,
                      blink::mojom::PermissionStatus status,
                      const GURL& origin,
@@ -252,7 +257,7 @@ class WebTestControlHost : public WebContentsObserver,
                                     bool by_user) override;
   void SimulateWebContentIndexDelete(const std::string& id) override;
   void WebTestRuntimeFlagsChanged(
-      base::Value::Dict changed_web_test_runtime_flags) override;
+      base::DictValue changed_web_test_runtime_flags) override;
   void RegisterIsolatedFileSystem(
       const std::vector<base::FilePath>& file_paths,
       RegisterIsolatedFileSystemCallback callback) override;
@@ -263,11 +268,14 @@ class WebTestControlHost : public WebContentsObserver,
   void WorkItemAdded(mojom::WorkItemPtr work_item) override;
   void RequestWorkItem() override;
   void WorkQueueStatesChanged(
-      base::Value::Dict changed_work_queue_states) override;
+      base::DictValue changed_work_queue_states) override;
   void SetAcceptLanguages(const std::string& accept_languages) override;
   void EnableAutoResize(const gfx::Size& min_size,
                         const gfx::Size& max_size) override;
   void DisableAutoResize(const gfx::Size& new_size) override;
+  void GetClipboardReadState(GetClipboardReadStateCallback callback) override;
+  void ResetClipboardReadTracking() override;
+  void SetIsXrOverlaySetup() override;
   void SetLCPPNavigationHint(
       blink::mojom::LCPCriticalPathPredictorNavigationTimeHintPtr hint)
       override;
@@ -409,7 +417,7 @@ class WebTestControlHost : public WebContentsObserver,
   // Changes reported by WebTestRuntimeFlagsChanged() that have accumulated
   // since PrepareForWebTest (i.e. changes that need to be sent to a fresh
   // renderer created while test is in progress).
-  base::Value::Dict accumulated_web_test_runtime_flags_changes_;
+  base::DictValue accumulated_web_test_runtime_flags_changes_;
 
   // A snasphot of the current runtime flags.
   WebTestRuntimeFlags web_test_runtime_flags_;
@@ -419,7 +427,7 @@ class WebTestControlHost : public WebContentsObserver,
   base::circular_deque<mojom::WorkItemPtr> work_queue_;
 
   // Properties of the work queue.
-  base::Value::Dict work_queue_states_;
+  base::DictValue work_queue_states_;
 
   mojom::WebTestRendererDumpResultPtr renderer_dump_result_;
   std::string navigation_history_dump_;

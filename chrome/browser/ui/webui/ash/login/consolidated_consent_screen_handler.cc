@@ -6,11 +6,11 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/command_line.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/consolidated_consent_screen.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 #include "ui/chromeos/devicetype_utils.h"
@@ -142,7 +142,7 @@ void ConsolidatedConsentScreenHandler::DeclareLocalizedValues(
                IDS_CONSOLIDATED_CONSENT_PRIVACY_POLICY_TITLE);
 }
 
-void ConsolidatedConsentScreenHandler::Show(base::Value::Dict data) {
+void ConsolidatedConsentScreenHandler::Show(base::DictValue data) {
   ShowInWebUI(std::move(data));
 }
 

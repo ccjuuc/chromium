@@ -5,14 +5,12 @@
 #include "chrome/browser/ui/views/save_to_drive/account_chooser_util.h"
 
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/flex_layout.h"
-#include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
@@ -29,14 +27,15 @@ std::unique_ptr<views::View> CreateAccountRow(const AccountInfo& account) {
           // Avatar image.
           views::Builder<views::ImageView>().SetImage(
               ui::ImageModel::FromImage(GetSizedAvatarIcon(
-                  account.account_image, kAvatarSize, kAvatarSize,
-                  profiles::AvatarShape::SHAPE_CIRCLE))),
+                  account.GetAvatarImage().value_or(gfx::Image()), kAvatarSize,
+                  kAvatarSize, profiles::AvatarShape::SHAPE_CIRCLE))),
           views::Builder<views::BoxLayoutView>()
               .SetOrientation(views::BoxLayout::Orientation::kVertical)
               .AddChildren(
                   // Full name.
                   views::Builder<views::Label>()
-                      .SetText(base::UTF8ToUTF16(account.full_name))
+                      .SetText(
+                          base::UTF8ToUTF16(account.GetFullName().value_or("")))
                       .SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT)
                       .SetTextStyle(views::style::STYLE_BODY_3_MEDIUM)
                       .SetEnabledColor(ui::kColorSysOnSurface)
@@ -44,7 +43,7 @@ std::unique_ptr<views::View> CreateAccountRow(const AccountInfo& account) {
                           gfx::HorizontalAlignment::ALIGN_LEFT),
                   // Email.
                   views::Builder<views::Label>()
-                      .SetText(base::UTF8ToUTF16(account.email))
+                      .SetText(base::UTF8ToUTF16(account.GetEmail()))
                       .SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT)
                       .SetTextStyle(views::style::STYLE_BODY_4)
                       .SetEnabledColor(ui::kColorSysOnSurfaceSubtle)

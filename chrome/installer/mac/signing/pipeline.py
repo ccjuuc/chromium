@@ -160,12 +160,21 @@ def _create_pkgbuild_scripts(paths, dist_config):
             '@APP_DIR@': dist_config.app_dir,
             '@APP_PRODUCT@': dist_config.app_product,
             '@BRAND_CODE@': dist_config.distribution.branding_code or '',
+            '@BUNDLE_ID@': dist_config.base_bundle_id,
             '@FRAMEWORK_DIR@': dist_config.framework_dir
         }
         for key, value in substitutions.items():
             script = script.replace(key, value)
 
         return script
+
+    preinstall_src_path = os.path.join(packaging_dir, 'pkg_preinstall.in')
+    preinstall_dest_path = os.path.join(scripts_path, 'preinstall')
+
+    preinstall = commands.read_file(preinstall_src_path)
+    preinstall = do_substitutions(preinstall)
+    commands.write_file(preinstall_dest_path, preinstall)
+    commands.set_executable(preinstall_dest_path)
 
     postinstall_src_path = os.path.join(packaging_dir, 'pkg_postinstall.in')
     postinstall_dest_path = os.path.join(scripts_path, 'postinstall')
@@ -338,18 +347,10 @@ def _package_and_sign_pkg(paths, dist_config):
             'pkgbuild', '--root', root_directory, '--component-plist',
             component_property_path, '--identifier', dist_config.base_bundle_id,
             '--version', dist_config.version, '--install-location',
-            '/Applications', '--scripts', scripts_path
+            '/Applications', '--scripts', scripts_path, '--compression',
+            'latest', '--min-os-version',
+            _minimum_os_version(paths, dist_config), component_pkg_path
         ]
-        # The pkgbuild command on macOS 12 Monterey gained the ability to
-        # compress component packages based on the minimum OS requirement for
-        # their contents. If running under at least macOS 12, take advantage of
-        # this.
-        if commands.macos_version() >= [12, 0]:
-            command.append('--compression')
-            command.append('latest')
-            command.append('--min-os-version')
-            command.append(_minimum_os_version(paths, dist_config))
-        command.append(component_pkg_path)
         commands.run_command(command)
 
         ## The distribution package.

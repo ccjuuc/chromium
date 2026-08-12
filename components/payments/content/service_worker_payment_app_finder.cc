@@ -9,7 +9,6 @@
 
 #include "base/base64.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -21,11 +20,11 @@
 #include "components/payments/content/developer_console_logger.h"
 #include "components/payments/content/installable_payment_app_crawler.h"
 #include "components/payments/content/manifest_verifier.h"
+#include "components/payments/content/payment_manifest_downloader.h"
 #include "components/payments/content/utility/payment_manifest_parser.h"
 #include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/features.h"
 #include "components/payments/core/method_strings.h"
-#include "components/payments/core/payment_manifest_downloader.h"
 #include "components/payments/core/url_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -34,6 +33,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/stored_payment_app.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "ui/gfx/image/image.h"
@@ -437,11 +437,11 @@ void ServiceWorkerPaymentAppFinder::GetAllPaymentApps(
     return;
 
   // Do not look up payment handlers for ignored payment methods.
-  std::erase_if(requested_method_data,
-                [&](const mojom::PaymentMethodDataPtr& method_data) {
-                  return base::Contains(ignored_methods_,
-                                        method_data->supported_method);
-                });
+  std::erase_if(
+      requested_method_data,
+      [&](const mojom::PaymentMethodDataPtr& method_data) {
+        return ignored_methods_.contains(method_data->supported_method);
+      });
   if (requested_method_data.empty()) {
     std::move(callback).Run(
         content::InstalledPaymentAppsFinder::PaymentApps(),
@@ -462,12 +462,17 @@ void ServiceWorkerPaymentAppFinder::GetAllPaymentApps(
     downloader = std::move(test_downloader_);
     self_delete_factory->IgnorePortInOriginComparisonForTesting();
   } else {
+    mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory;
+    render_frame_host().CreateNetworkServiceDefaultFactory(
+        url_loader_factory.BindNewPipeAndPassReceiver());
     downloader = std::make_unique<payments::PaymentManifestDownloader>(
         std::make_unique<DeveloperConsoleLogger>(web_contents), csp_checker,
         render_frame_host()
             .GetBrowserContext()
             ->GetDefaultStoragePartition()
-            ->GetURLLoaderFactoryForBrowserProcess());
+            ->GetURLLoaderFactoryForBrowserProcess(),
+        std::move(url_loader_factory),
+        render_frame_host().GetWeakDocumentPtr());
   }
 
   self_delete_factory->GetAllPaymentApps(
@@ -490,22 +495,11 @@ void ServiceWorkerPaymentAppFinder::RemoveAppsWithoutMatchingMethodData(
   }
 }
 
-void ServiceWorkerPaymentAppFinder::IgnorePaymentMethodForTest(
-    const std::string& method) {
-  ignored_methods_.insert(method);
-}
-
 ServiceWorkerPaymentAppFinder::ServiceWorkerPaymentAppFinder(
     content::RenderFrameHost* rfh)
     : content::DocumentUserData<ServiceWorkerPaymentAppFinder>(rfh),
       ignored_methods_({methods::kGooglePlayBilling}),
       test_downloader_(nullptr) {}
-
-void ServiceWorkerPaymentAppFinder::
-    SetDownloaderAndIgnorePortInOriginComparisonForTesting(
-        std::unique_ptr<PaymentManifestDownloader> downloader) {
-  test_downloader_ = std::move(downloader);
-}
 
 DOCUMENT_USER_DATA_KEY_IMPL(ServiceWorkerPaymentAppFinder);
 

@@ -5,6 +5,8 @@
 #include "chrome/browser/ash/net/dns_over_https/templates_uri_resolver_impl.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
@@ -14,7 +16,7 @@
 #include "base/values.h"
 #include "chrome/browser/ash/policy/core/device_attributes_fake.h"
 #include "chrome/browser/net/secure_dns_config.h"
-#include "chrome/common/pref_names.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/shill/shill_property_changed_observer.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/network/network_device_handler.h"
@@ -24,10 +26,11 @@
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "chromeos/ash/components/network/network_ui_data.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "components/account_id/account_id_literal.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "components/prefs/testing_pref_service.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
+#include "components/prefs/pref_service.h"
+#include "components/session_manager/test/test_user_session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -44,6 +47,9 @@ using ::testing::UnorderedElementsAre;
 
 constexpr const char kGoogleDns[] = "https://dns.google/dns-query{?dns}";
 constexpr const char kTestSalt[] = "test-salt";
+constexpr AccountId::Literal kTestAccountId =
+    AccountId::Literal::FromUserEmailGaiaId("test-user@testdomain.com",
+                                            GaiaId::Literal("1234567890"));
 
 constexpr char kTemplateIdentifiers[] =
     "https://dns.google.alternativeuri/"
@@ -186,6 +192,10 @@ constexpr char kTestDeviceAssetId[] = "admin-provided-test-asset-ID";
 constexpr char kTestDeviceAnnotatedLocation[] = "admin-provided-test-location";
 constexpr char kTestSerialNumber[] = "serial-number";
 
+PrefService* local_state() {
+  return TestingBrowserProcess::GetGlobal()->local_state();
+}
+
 class DevicePropertyObserver : public ash::ShillPropertyChangedObserver {
  public:
   explicit DevicePropertyObserver(const std::string& path) : path_(path) {
@@ -213,7 +223,7 @@ bool SetIpAddress(const std::string& device_path,
                   const std::string& ipconfig_path,
                   const std::string& ip_address) {
   DevicePropertyObserver property_observer(device_path);
-  base::Value::List ip_configs;
+  base::ListValue ip_configs;
   ip_configs.Append(ipconfig_path);
   ShillDeviceClient::Get()->GetTestInterface()->SetDeviceProperty(
       device_path, shill::kIPConfigsProperty,
@@ -240,19 +250,12 @@ class TemplatesUriResolverImplTest : public testing::Test {
       delete;
 
   void SetUp() override {
-    local_state_.registry()->RegisterStringPref(prefs::kDnsOverHttpsMode,
-                                                SecureDnsConfig::kModeOff);
-    local_state_.registry()->RegisterStringPref(prefs::kDnsOverHttpsTemplates,
-                                                "");
-    local_state_.registry()->RegisterStringPref(
-        prefs::kDnsOverHttpsTemplatesWithIdentifiers, "");
-    local_state_.registry()->RegisterStringPref(prefs::kDnsOverHttpsSalt, "");
+    network_handler_test_helper_ =
+        std::make_unique<ash::NetworkHandlerTestHelper>();
+    network_handler_test_helper_->AddDefaultProfiles();
 
-    user_manager::UserManagerImpl::RegisterPrefs(local_state_.registry());
-    fake_user_manager_.Reset(
-        std::make_unique<user_manager::FakeUserManager>(&local_state_));
-
-    doh_template_uri_resolver_ = std::make_unique<TemplatesUriResolverImpl>();
+    test_user_session_manager_ =
+        std::make_unique<ash::test::TestUserSessionManager>(local_state());
 
     // Set up fake device attributes.
     std::unique_ptr<policy::FakeDeviceAttributes> device_attributes =
@@ -263,34 +266,30 @@ class TemplatesUriResolverImplTest : public testing::Test {
         kTestDeviceAnnotatedLocation);
     device_attributes->SetFakeDeviceSerialNumber(kTestSerialNumber);
 
-    network_handler_test_helper_ =
-        std::make_unique<ash::NetworkHandlerTestHelper>();
-    network_handler_test_helper_->AddDefaultProfiles();
-
-    doh_template_uri_resolver_->SetDeviceAttributesForTesting(
+    doh_template_uri_resolver_ = std::make_unique<TemplatesUriResolverImpl>(
         std::move(device_attributes));
   }
 
   void TearDown() override {
-    user_ = nullptr;
-    fake_user_manager_.Reset();
+    doh_template_uri_resolver_.reset();
+    test_user_session_manager_.reset();
+    network_handler_test_helper_.reset();
   }
 
   const user_manager::User* SetUpAffiliatedUser() {
-    const AccountId account_id(AccountId::FromUserEmailGaiaId(
-        "test-user@testdomain.com", GaiaId("1234567890")));
-    auto* user = fake_user_manager_->AddGaiaUser(
-        account_id, user_manager::UserType::kRegular);
-    fake_user_manager_->SetUserPolicyStatus(account_id, /*is_managed=*/true,
-                                            /*is_affiliated=*/true);
+    auto* user = test_user_session_manager_->AddRegularUser(kTestAccountId);
+    EXPECT_TRUE(user);
+    // TODO(crbug.com/534323787): In production, policy status is updated after
+    // log-in. Consider updating this helper to mirror production sequence.
+    user_manager::UserManager::Get()->SetUserPolicyStatus(
+        kTestAccountId, /*is_managed=*/true, /*is_affiliated=*/true);
     return user;
   }
 
   const user_manager::User* SetUpUnaffiliatedUser() {
-    const AccountId account_id(AccountId::FromUserEmailGaiaId(
-        "test-user@testdomain.com", GaiaId("1234567890")));
-    return fake_user_manager_->AddGaiaUser(account_id,
-                                           user_manager::UserType::kRegular);
+    auto* user = test_user_session_manager_->AddRegularUser(kTestAccountId);
+    EXPECT_TRUE(user);
+    return user;
   }
 
   void ChangeNetworkOncSource(const std::string& path,
@@ -302,18 +301,19 @@ class TemplatesUriResolverImplTest : public testing::Test {
   }
 
   void SetUpDOHSecureModeWithSalt(std::string salt) {
-    local_state()->Set(prefs::kDnsOverHttpsMode,
+    local_state()->Set(ash::chrome_prefs::kDnsOverHttpsMode,
                        base::Value(SecureDnsConfig::kModeSecure));
-    local_state()->Set(prefs::kDnsOverHttpsSalt, base::Value(salt));
+    local_state()->Set(ash::prefs::kDnsOverHttpsSalt, base::Value(salt));
   }
 
   void SetUpDOHTemplatesWithIdentifiers(std::string_view identifier) {
-    local_state()->Set(prefs::kDnsOverHttpsTemplatesWithIdentifiers,
+    local_state()->Set(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers,
                        base::Value(identifier));
   }
 
   void SetUpDOHGoogleDnsTemplate() {
-    local_state()->Set(prefs::kDnsOverHttpsTemplates, base::Value(kGoogleDns));
+    local_state()->Set(ash::chrome_prefs::kDnsOverHttpsTemplates,
+                       base::Value(kGoogleDns));
   }
 
   std::string GetDisplayTemplates() {
@@ -324,23 +324,13 @@ class TemplatesUriResolverImplTest : public testing::Test {
     return doh_template_uri_resolver_->GetEffectiveTemplates();
   }
 
-  PrefService* local_state() { return &local_state_; }
-  user_manager::FakeUserManager* user_manager() {
-    return fake_user_manager_.Get();
-  }
-
  protected:
   base::test::TaskEnvironment task_environment_;
-  std::unique_ptr<TemplatesUriResolverImpl> doh_template_uri_resolver_;
-  std::unique_ptr<ash::NetworkHandlerTestHelper> network_handler_test_helper_;
-
- private:
-  TestingPrefServiceSimple local_state_;
-  user_manager::TypedScopedUserManager<user_manager::FakeUserManager>
-      fake_user_manager_;
-  raw_ptr<user_manager::User> user_ = nullptr;
   ScopedStubInstallAttributes test_install_attributes_{
       StubInstallAttributes::CreateCloudManaged("fake-domain", "fake-id")};
+  std::unique_ptr<ash::NetworkHandlerTestHelper> network_handler_test_helper_;
+  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
+  std::unique_ptr<TemplatesUriResolverImpl> doh_template_uri_resolver_;
 };
 
 // Test that verifies the correct substitution of placeholders in the template
@@ -359,8 +349,8 @@ TEST_F(TemplatesUriResolverImplTest, TemplatesWithIdentifiers) {
   EXPECT_TRUE(doh_template_uri_resolver_->GetDohWithIdentifiersActive());
 
   // `prefs::kDnsOverHttpsTemplates` should apply when
-  // `prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
-  local_state()->ClearPref(prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  // `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
+  local_state()->ClearPref(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
   doh_template_uri_resolver_->Update(*local_state(), *user);
   EXPECT_EQ(GetEffectiveTemplates(), kGoogleDns);
   EXPECT_FALSE(doh_template_uri_resolver_->GetDohWithIdentifiersActive());
@@ -384,8 +374,8 @@ TEST_F(TemplatesUriResolverImplTest, TemplatesWithThreeUnknownIdentifiers) {
   EXPECT_TRUE(doh_template_uri_resolver_->GetDohWithIdentifiersActive());
 
   // `prefs::kDnsOverHttpsTemplates` should apply when
-  // `prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
-  local_state()->ClearPref(prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  // `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
+  local_state()->ClearPref(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
 
   doh_template_uri_resolver_->Update(*local_state(), *user);
 
@@ -394,7 +384,8 @@ TEST_F(TemplatesUriResolverImplTest, TemplatesWithThreeUnknownIdentifiers) {
 }
 
 // Tests that only user indentifiers are replaced in
-// `prefs::kDnsOverHttpsTemplatesWithIdentifiers` if the user is not affiliated.
+// `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` if the user is not
+// affiliated.
 TEST_F(TemplatesUriResolverImplTest,
        TemplatesWithUnknownIdentifiersUnaffiliated) {
   const auto* user = SetUpUnaffiliatedUser();
@@ -413,7 +404,8 @@ TEST_F(TemplatesUriResolverImplTest,
 }
 
 // Tests that only user indentifiers are replaced in
-// `prefs::kDnsOverHttpsTemplatesWithIdentifiers` if the user is not affiliated.
+// `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` if the user is not
+// affiliated.
 TEST_F(TemplatesUriResolverImplTest, TemplatesWithIdentifiersUnaffiliated) {
   const auto* user = SetUpUnaffiliatedUser();
   ASSERT_TRUE(user);
@@ -482,8 +474,8 @@ TEST_F(TemplatesUriResolverImplTest, TemplatesWithIdentifiersNoSalt) {
   EXPECT_TRUE(doh_template_uri_resolver_->GetDohWithIdentifiersActive());
 
   // `prefs::kDnsOverHttpsTemplates` should apply when
-  // `prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
-  local_state()->ClearPref(prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  // `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
+  local_state()->ClearPref(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
   doh_template_uri_resolver_->Update(*local_state(), *user);
   EXPECT_EQ(GetEffectiveTemplates(), kGoogleDns);
 }
@@ -505,8 +497,8 @@ TEST_F(TemplatesUriResolverImplTest, TemplatesWithUnknownIdentifiersNoSalt) {
   EXPECT_TRUE(doh_template_uri_resolver_->GetDohWithIdentifiersActive());
 
   // `prefs::kDnsOverHttpsTemplates` should apply when
-  // `prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
-  local_state()->ClearPref(prefs::kDnsOverHttpsTemplatesWithIdentifiers);
+  // `ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers` is cleared.
+  local_state()->ClearPref(ash::prefs::kDnsOverHttpsTemplatesWithIdentifiers);
   doh_template_uri_resolver_->Update(*local_state(), *user);
   EXPECT_EQ(GetEffectiveTemplates(), kGoogleDns);
 }

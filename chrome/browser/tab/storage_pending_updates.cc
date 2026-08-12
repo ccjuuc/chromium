@@ -66,15 +66,22 @@ class SaveNodeUpdateUnit : public StorageUpdateUnit {
 // StorageUpdateUnit to save a payload.
 class SavePayloadUpdateUnit : public StorageUpdateUnit {
  public:
-  SavePayloadUpdateUnit(StorageId id, std::unique_ptr<Payload> payload)
-      : id_(id), payload_(std::move(payload)) {}
+  SavePayloadUpdateUnit(StorageId id,
+                        std::string window_tag,
+                        bool is_off_the_record,
+                        std::unique_ptr<Payload> payload)
+      : id_(id),
+        window_tag_(std::move(window_tag)),
+        is_off_the_record_(is_off_the_record),
+        payload_(std::move(payload)) {}
 
   ~SavePayloadUpdateUnit() override = default;
 
   bool Execute(TabStateStorageDatabase* db,
                OpenTransaction* transaction) override {
     bool success =
-        db->SaveNodePayload(transaction, id_, payload_->SerializePayload());
+        db->SaveNodePayload(transaction, id_, window_tag_, is_off_the_record_,
+                            payload_->SerializePayload());
     if (!success) {
       DLOG(ERROR) << "Could not perform node payload update operation.";
     }
@@ -83,6 +90,8 @@ class SavePayloadUpdateUnit : public StorageUpdateUnit {
 
  private:
   StorageId id_;
+  std::string window_tag_;
+  const bool is_off_the_record_;
   std::unique_ptr<Payload> payload_;
 };
 
@@ -106,6 +115,38 @@ class SaveChildrenUpdateUnit : public StorageUpdateUnit {
 
  private:
   StorageId id_;
+  std::unique_ptr<Payload> children_;
+};
+
+// StorageUpdateUnit to save divergent children.
+class SaveDivergentChildrenUpdateUnit : public StorageUpdateUnit {
+ public:
+  SaveDivergentChildrenUpdateUnit(StorageId id,
+                                  std::string window_tag,
+                                  bool is_off_the_record,
+                                  std::unique_ptr<Payload> children)
+      : id_(id),
+        window_tag_(std::move(window_tag)),
+        is_off_the_record_(is_off_the_record),
+        children_(std::move(children)) {}
+
+  ~SaveDivergentChildrenUpdateUnit() override = default;
+
+  bool Execute(TabStateStorageDatabase* db,
+               OpenTransaction* transaction) override {
+    bool success =
+        db->SaveDivergentNode(transaction, id_, window_tag_, is_off_the_record_,
+                              children_->SerializePayload());
+    if (!success) {
+      DLOG(ERROR) << "Could not perform save divergent children operation.";
+    }
+    return success;
+  }
+
+ private:
+  StorageId id_;
+  std::string window_tag_;
+  const bool is_off_the_record_;
   std::unique_ptr<Payload> children_;
 };
 
@@ -173,10 +214,14 @@ std::unique_ptr<StorageUpdateUnit> SaveNodePendingUpdate::CreateUnit() {
 
 SavePayloadPendingUpdate::SavePayloadPendingUpdate(
     StorageId id,
+    std::string window_tag,
+    bool is_off_the_record,
     TabStoragePackager* packager,
     StorageIdMapping& mapping,
     TabCollectionNodeHandle handle)
     : StoragePendingUpdate(id),
+      window_tag_(std::move(window_tag)),
+      is_off_the_record_(is_off_the_record),
       mapping_(mapping),
       packager_(packager),
       handle_(std::move(handle)) {}
@@ -198,7 +243,8 @@ std::unique_ptr<StorageUpdateUnit> SavePayloadPendingUpdate::CreateUnit() {
     TabHandle tab_handle = std::get<TabHandle>(handle_);
     payload = packager_->Package(tab_handle.Get());
   }
-  return std::make_unique<SavePayloadUpdateUnit>(id_, std::move(payload));
+  return std::make_unique<SavePayloadUpdateUnit>(
+      id_, std::move(window_tag_), is_off_the_record_, std::move(payload));
 }
 
 SaveChildrenPendingUpdate::SaveChildrenPendingUpdate(
@@ -220,6 +266,34 @@ UnitType SaveChildrenPendingUpdate::type() const {
 std::unique_ptr<StorageUpdateUnit> SaveChildrenPendingUpdate::CreateUnit() {
   return std::make_unique<SaveChildrenUpdateUnit>(
       id_, packager_->PackageChildren(handle_.Get(), mapping_.get()));
+}
+
+SaveDivergentChildrenPendingUpdate::SaveDivergentChildrenPendingUpdate(
+    StorageId id,
+    std::string window_tag,
+    bool is_off_the_record,
+    TabStoragePackager* packager,
+    StorageIdMapping& mapping,
+    TabCollectionHandle handle)
+    : StoragePendingUpdate(id),
+      window_tag_(std::move(window_tag)),
+      is_off_the_record_(is_off_the_record),
+      packager_(packager),
+      mapping_(mapping),
+      handle_(std::move(handle)) {}
+
+SaveDivergentChildrenPendingUpdate::~SaveDivergentChildrenPendingUpdate() =
+    default;
+
+UnitType SaveDivergentChildrenPendingUpdate::type() const {
+  return UnitType::kSaveDivergentChildren;
+}
+
+std::unique_ptr<StorageUpdateUnit>
+SaveDivergentChildrenPendingUpdate::CreateUnit() {
+  return std::make_unique<SaveDivergentChildrenUpdateUnit>(
+      id_, std::move(window_tag_), is_off_the_record_,
+      packager_->PackageChildren(handle_.Get(), mapping_.get()));
 }
 
 RemoveNodePendingUpdate::RemoveNodePendingUpdate(StorageId id)

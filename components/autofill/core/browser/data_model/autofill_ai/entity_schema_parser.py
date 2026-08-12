@@ -179,14 +179,13 @@ def _validate_entity(entity):
           for msg in _validate_attributes(entity, constraint, allow_empty=False)
       )
 
+  if not entity['merge constraints']:
+    yield '"merge constraints": value must not be empty'
+
   if not isinstance(entity['read only'], bool):
     yield '"read only": value is not a Boolean'
 
   if entity['read only']:
-    if entity['import constraints']:
-      yield '"import constraints": value must be empty if "read only" is true'
-    if entity['merge constraints']:
-      yield '"merge constraints": value must be empty if "read only" is true'
     if entity['strike keys']:
       yield '"strike keys": value must be empty if "read only" is true'
 

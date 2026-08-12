@@ -31,7 +31,7 @@ suite('SiteListEntry', function() {
     document.body.appendChild(testElement);
   });
 
-  test('fires show-tooltip when mouse over policy indicator', function() {
+  test('fires show-tooltip when mouse over policy indicator', async function() {
     testElement.model = {
       category: ContentSettingsTypes.NOTIFICATIONS,
       controlledBy: chrome.settingsPrivate.ControlledBy.USER_POLICY,
@@ -54,9 +54,8 @@ suite('SiteListEntry', function() {
     const wait = eventToPromise('show-tooltip', document);
     icon.$.indicator.dispatchEvent(
         new MouseEvent('mouseenter', {bubbles: true, composed: true}));
-    return wait.then(() => {
-      assertTooltipIsHidden(crTooltip);
-    });
+    await wait;
+    assertTooltipIsHidden(crTooltip);
   });
 
   test('not valid origin does not go to site details page', async function() {
@@ -148,26 +147,6 @@ suite('SiteListEntry', function() {
     testElement.cookiesExceptionType = CookiesExceptionType.THIRD_PARTY;
     testElement.model = {
       category: ContentSettingsTypes.COOKIES,
-      controlledBy: chrome.settingsPrivate.ControlledBy.OWNER,
-      displayName: '',
-      embeddingOrigin: 'http://example.com',
-      description: '',
-      enforcement: null,
-      incognito: false,
-      isEmbargoed: false,
-      origin: SITE_EXCEPTION_WILDCARD,
-      setting: ContentSetting.DEFAULT,
-    };
-    flush();
-    const siteDescription = testElement.$$('#siteDescription')!;
-    assertEquals('', siteDescription.textContent);
-  });
-
-  // Verify that tracking protection exceptions don't have an embedding-origin
-  // description.
-  test('tracking protection exception', function() {
-    testElement.model = {
-      category: ContentSettingsTypes.TRACKING_PROTECTION,
       controlledBy: chrome.settingsPrivate.ControlledBy.OWNER,
       displayName: '',
       embeddingOrigin: 'http://example.com',

@@ -91,11 +91,11 @@ class MEDIA_EXPORT DemuxerManager {
                                         bool /*is_static*/)>;
 
   DemuxerManager(Client* client,
+                 url::Origin security_origin,
                  scoped_refptr<base::SequencedTaskRunner> media_task_runner,
                  MediaLog* log,
                  std::unique_ptr<Demuxer> demuxer_override);
   ~DemuxerManager();
-  void InvalidateWeakPtrs();
 
   void OnPipelineError(PipelineStatus error);
   void SetLoadedUrl(GURL url);
@@ -114,12 +114,10 @@ class MEDIA_EXPORT DemuxerManager {
 
   // Returns a forwarded error/success from |on_demuxer_created|, or an error
   // if a demuxer couldn't be created.
-  PipelineStatus CreateDemuxer(
-      bool load_media_source,
-      DataSource::Preload preload,
-      bool needs_first_frame,
-      DemuxerCreatedCB on_demuxer_created,
-      base::flat_map<std::string, std::string> headers);
+  PipelineStatus CreateDemuxer(bool load_media_source,
+                               DataSource::Preload preload,
+                               bool needs_first_frame,
+                               DemuxerCreatedCB on_demuxer_created);
 
   // Methods that help manage or access |data_source_|
   DataSource* GetDataSourceForTesting() const;
@@ -142,6 +140,7 @@ class MEDIA_EXPORT DemuxerManager {
   bool DataSourceFullyBuffered() const;
   bool IsStreaming() const;
   bool IsLiveContent() const;
+  bool IsManifestDemuxerURL() const;
 
  private:
   // Demuxer creation and helper methods
@@ -174,7 +173,7 @@ class MEDIA_EXPORT DemuxerManager {
   void DemuxerRequestsSeek(base::TimeDelta time);
 
   // This is usually just the WebMediaPlayerImpl.
-  raw_ptr<Client, DanglingUntriaged> client_;
+  raw_ptr<Client> client_ = nullptr;
 
   // The demuxers need access the the media task runner and media log.
   const scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
@@ -184,6 +183,11 @@ class MEDIA_EXPORT DemuxerManager {
   // objects.
   // Note: this may be very large, take care when making copies.
   GURL loaded_url_;
+
+  // The security origin of the frame. HLS tracks the security origin for
+  // manifests, and since manifests can exist as data: urls with no security
+  // origin, we need to use the frame origin instead.
+  url::Origin security_origin_;
 
   // The data source for creating a demuxer. This should be null when using
   // ChunkDemuxer.
@@ -203,7 +207,9 @@ class MEDIA_EXPORT DemuxerManager {
   // which becomes the default demuxer to use.
   std::unique_ptr<Demuxer> demuxer_override_;
 
+#if BUILDFLAG(ENABLE_HLS_DEMUXER)
   bool hls_fallback_ = false;
+#endif  // BUILDFLAG(ENABLE_HLS_DEMUXER)
 
   // Are we allowed to switch demuxer mid-stream when fallback error codes
   // are encountered

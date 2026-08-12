@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/time/time.h"
@@ -58,7 +58,7 @@ bool IsBatterySaverModeManagedByOS() {
 #endif
 }
 
-base::ByteCount GetDiscardedMemoryEstimateForPage(const PageNode* node) {
+base::ByteSize GetDiscardedMemoryEstimateForPage(const PageNode* node) {
   DCHECK_ON_GRAPH_SEQUENCE(node->GetGraph());
 
   return node->EstimatePrivateFootprintSize();
@@ -81,7 +81,7 @@ std::vector<std::string> GetCannotDiscardReasonsForPageNode(
   std::vector<policies::CannotDiscardReason> cannot_discard_reasons;
   discarding_helper->CanDiscard(
       page_node, policies::DiscardEligibilityPolicy::DiscardReason::PROACTIVE,
-      policies::kNonVisiblePagesUrgentProtectionTime, &cannot_discard_reasons);
+      /*ignore_recent_visibility=*/false, &cannot_discard_reasons);
 
   std::vector<std::string> results;
   results.reserve(cannot_discard_reasons.size());  // Reserve space
@@ -100,9 +100,7 @@ void DiscardPage(const PageNode* page_node,
   CHECK(page_node);
   discarding_helper->ImmediatelyDiscardMultiplePages(
       {page_node}, reason,
-      ignore_minimum_time_in_background
-          ? base::TimeDelta()
-          : policies::kNonVisiblePagesUrgentProtectionTime);
+      /*ignore_recent_visibility=*/ignore_minimum_time_in_background);
 }
 
 void DiscardAnyPage(::mojom::LifecycleUnitDiscardReason reason,
@@ -111,9 +109,7 @@ void DiscardAnyPage(::mojom::LifecycleUnitDiscardReason reason,
       PerformanceManager::GetGraph());
   CHECK(discarding_helper);
   discarding_helper->DiscardAPage(
-      reason, ignore_minimum_time_in_background
-                  ? base::TimeDelta()
-                  : policies::kNonVisiblePagesUrgentProtectionTime);
+      reason, /*ignore_recent_visibility=*/ignore_minimum_time_in_background);
 }
 
 }  //  namespace performance_manager::user_tuning

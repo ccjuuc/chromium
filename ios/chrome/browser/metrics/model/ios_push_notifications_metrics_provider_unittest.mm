@@ -8,6 +8,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "components/signin/public/base/signin_metrics.h"
+#import "components/sync/test/test_sync_service.h"
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/metrics/model/constants.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_util.h"
@@ -21,6 +22,8 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/testing_application_context.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -80,17 +83,13 @@ class IOSPushNotificationsMetricsProviderTest : public PlatformTest {
     FakeSystemIdentityManager::FromSystemIdentityManager(
         GetApplicationContext()->GetSystemIdentityManager())
         ->AddIdentity(identity);
-    std::string profile_name;
-    if (AreSeparateProfilesForManagedAccountsEnabled()) {
-      std::optional<std::string> assigned_profile_name =
-          GetApplicationContext()
-              ->GetAccountProfileMapper()
-              ->FindProfileNameForGaiaID(identity.gaiaId);
-      CHECK(assigned_profile_name.has_value());
-      profile_name = *assigned_profile_name;
-    } else {
-      profile_name = profile_manager_.ReserveNewProfileName();
-    }
+    std::optional<std::string> assigned_profile_name =
+        GetApplicationContext()
+            ->GetAccountProfileMapper()
+            ->FindProfileNameForGaiaID(identity.gaiaId);
+    CHECK(assigned_profile_name.has_value());
+    std::string profile_name = *assigned_profile_name;
+
     CHECK(!profile_name.empty());
 
     ProfileIOS* profile = AddProfileImpl(profile_name);
@@ -107,8 +106,10 @@ class IOSPushNotificationsMetricsProviderTest : public PlatformTest {
     builder.SetName(name);
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
     return profile_manager_.AddProfileWithBuilder(std::move(builder));
   }

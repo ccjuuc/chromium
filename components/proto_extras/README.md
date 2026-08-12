@@ -14,7 +14,7 @@ The `proto_extras` library was created to solve these problems. It is a code gen
 
 ## Features
 
-- Serialization of a proto message to `base::Value::Dict`
+- Serialization of a proto message to `base::DictValue`
 - `operator<<` stream support for printing a proto message.
 - `operator==` and `operator!=` equality support for proto messages.
 - `gmock` matchers for testing proto messages.
@@ -38,7 +38,7 @@ proto_extras("my_proto_extras") {
 By default, all functionality is generated. To disable functionality, the
 following properties can be set:
 
-- `omit_to_value_serialization`: Disables serialization to `base::Value::Dict`.
+- `omit_to_value_serialization`: Disables serialization to `base::DictValue`.
 - `omit_stream_operators`: Disables `operator<<` stream support.
 - `omit_equality`: Disables `operator==` and `operator!=` equality support.
 
@@ -68,7 +68,7 @@ This will generate a `<name>.test.h` file that can be included in test files.
 
 ## Generated Code Examples
 
-### `base::Value::Dict` Serialization
+### `base::DictValue` Serialization
 
 Given the following proto:
 
@@ -119,7 +119,7 @@ message.set_name("test");
 message.set_id(123);
 
 // The `Serialize` function is in the same namespace as the message.
-base::Value::Dict dict = my_package::proto::Serialize(message);
+base::DictValue dict = my_package::proto::Serialize(message);
 // dict is now: {"name": "test", "id": 123}
 ```
 
@@ -161,7 +161,7 @@ message.set_id(123);
 
 // The stream operator is in the same namespace as the message.
 std::cout << message;
-// This will print the same JSON representation as `base::Value::Dict`
+// This will print the same JSON representation as `base::DictValue`
 ```
 
 ### Equality Operator
@@ -226,15 +226,6 @@ message, which allows gtest to pretty-print the message on test failures.
 The matcher handles all field types, including repeated fields, maps, and
 oneofs.
 
-## Forcing full protobuf library support
-
-For cases where the message uses the full `google::protobuf::Message` type,
-the `protobuf_full_support` option can be used in the `proto_extras` GN target
-to ensure the generated code with the full protobuf library. Due to android
-build complications, this also requires the `use_fuzzing_engine_with_lpm` build
-flag to be set. This option is relevant for `base::Value` serialization and
-equality.
-
 ## AI Agent Guide
 
 This section contains information for AI agents that are tasked with working on
@@ -259,12 +250,6 @@ The generated code relies on a support library for common functionality:
   the generated code, such as `ToNumericTypeForValue` for converting between
   numeric types and `SerializeUnknownFields` for serializing unknown fields in
   `MessageLite` protos.
-- **`protobuf_full_support.h/.cc`**: These files provide an alternative
-  implementation of some of the helper functions in `proto_extras_lib.h` for
-  messages that use the full `google::protobuf::Message` type. This is
-  necessary for fuzzing targets and other cases where the full protobuf library
-  is used. It also provides `MessageDifferencerEquals` to compare two full
-  protobuf messages.
 - **`proto_matchers.h`**: This file contains helper `gmock` matchers that are
   used by the generated test code.
 
@@ -273,12 +258,12 @@ The generated code relies on a support library for common functionality:
 When tasked with modifying the `proto_extras` library, it is important to
 understand which file is responsible for the desired functionality.
 
-- For changes to the `base::Value::Dict` serialization, stream operator, or
+- For changes to the `base::DictValue` serialization, stream operator, or
   equality operators, the relevant file is `proto_extras_plugin.cc`.
 - For changes to the `gmock` matchers, the relevant files are
   `proto_test_extras_plugin.cc` and `proto_matchers.h`.
 - For changes to the helper functions used by the generated code, the relevant
-  file is `proto_extras_lib.h` or `protobuf_full_support.h`/`.cc`.
+  file is `proto_extras_lib.h`.
 
 When adding new functionality, it is recommended to follow the existing pattern
 of creating a new generation function in the appropriate plugin file and adding

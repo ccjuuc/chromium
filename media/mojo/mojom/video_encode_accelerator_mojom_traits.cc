@@ -4,6 +4,7 @@
 
 #include "media/mojo/mojom/video_encode_accelerator_mojom_traits.h"
 
+#include <cmath>
 #include <optional>
 
 #include "base/notreached.h"
@@ -38,26 +39,23 @@ EnumTraits<media::mojom::VideoEncodeAcceleratorSupportedRateControlMode,
 }
 
 // static
-bool EnumTraits<media::mojom::VideoEncodeAcceleratorSupportedRateControlMode,
-                media::VideoEncodeAccelerator::SupportedRateControlMode>::
-    FromMojom(media::mojom::VideoEncodeAcceleratorSupportedRateControlMode mode,
-              media::VideoEncodeAccelerator::SupportedRateControlMode* out) {
+media::VideoEncodeAccelerator::SupportedRateControlMode
+EnumTraits<media::mojom::VideoEncodeAcceleratorSupportedRateControlMode,
+           media::VideoEncodeAccelerator::SupportedRateControlMode>::
+    FromMojom(
+        media::mojom::VideoEncodeAcceleratorSupportedRateControlMode mode) {
   switch (mode) {
     case media::mojom::VideoEncodeAcceleratorSupportedRateControlMode::kNoMode:
-      *out = media::VideoEncodeAccelerator::kNoMode;
-      return true;
+      return media::VideoEncodeAccelerator::kNoMode;
     case media::mojom::VideoEncodeAcceleratorSupportedRateControlMode::
         kConstantMode:
-      *out = media::VideoEncodeAccelerator::kConstantMode;
-      return true;
+      return media::VideoEncodeAccelerator::kConstantMode;
     case media::mojom::VideoEncodeAcceleratorSupportedRateControlMode::
         kVariableMode:
-      *out = media::VideoEncodeAccelerator::kVariableMode;
-      return true;
+      return media::VideoEncodeAccelerator::kVariableMode;
     case media::mojom::VideoEncodeAcceleratorSupportedRateControlMode::
         kExternalMode:
-      *out = media::VideoEncodeAccelerator::kExternalMode;
-      return true;
+      return media::VideoEncodeAccelerator::kExternalMode;
   }
   NOTREACHED();
 }
@@ -179,12 +177,7 @@ bool StructTraits<media::mojom::VideoEncodeOptionsDataView,
     Read(media::mojom::VideoEncodeOptionsDataView data,
          media::VideoEncoder::EncodeOptions* out_options) {
   out_options->key_frame = data.force_keyframe();
-  int32_t quantizer = data.quantizer();
-  if (quantizer < 0) {
-    out_options->quantizer.reset();
-  } else {
-    out_options->quantizer = quantizer;
-  }
+  out_options->quantizer = data.quantizer();
 
   out_options->update_buffer = data.update_buffer();
   if (!data.ReadReferenceBuffers(&out_options->reference_buffers)) {
@@ -216,6 +209,30 @@ bool UnionTraits<media::mojom::OptionalMetadataDataView,
   NOTREACHED();
 }
 
+bool StructTraits<media::mojom::YuvPsnrDataView, media::YuvPsnr>::Read(
+    media::mojom::YuvPsnrDataView data,
+    media::YuvPsnr* out_psnr) {
+  double y = data.y();
+  if (std::isnan(y) || y < 0.0) {
+    return false;
+  }
+
+  double u = data.u();
+  if (std::isnan(u) || u < 0.0) {
+    return false;
+  }
+
+  double v = data.v();
+  if (std::isnan(v) || v < 0.0) {
+    return false;
+  }
+
+  out_psnr->y = y;
+  out_psnr->u = u;
+  out_psnr->v = v;
+  return true;
+}
+
 // static
 bool StructTraits<media::mojom::BitstreamBufferMetadataDataView,
                   media::BitstreamBufferMetadata>::
@@ -234,6 +251,9 @@ bool StructTraits<media::mojom::BitstreamBufferMetadataDataView,
     return false;
   }
   if (!data.ReadSvcGeneric(&metadata->svc_generic)) {
+    return false;
+  }
+  if (!data.ReadYuvPsnr(&metadata->yuv_psnr)) {
     return false;
   }
 
@@ -320,19 +340,17 @@ EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_StorageType,
 }
 
 // static
-bool EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_StorageType,
-                media::VideoEncodeAccelerator::Config::StorageType>::
-    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_StorageType input,
-              media::VideoEncodeAccelerator::Config::StorageType* output) {
+media::VideoEncodeAccelerator::Config::StorageType
+EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_StorageType,
+           media::VideoEncodeAccelerator::Config::StorageType>::
+    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_StorageType input) {
   switch (input) {
     case media::mojom::VideoEncodeAcceleratorConfig_StorageType::kShmem:
-      *output = media::VideoEncodeAccelerator::Config::StorageType::kShmem;
-      return true;
+      return media::VideoEncodeAccelerator::Config::StorageType::kShmem;
     case media::mojom::VideoEncodeAcceleratorConfig_StorageType::
         kGpuMemoryBuffer:
-      *output =
-          media::VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer;
-      return true;
+      return media::VideoEncodeAccelerator::Config::StorageType::
+          kGpuMemoryBuffer;
   }
   NOTREACHED();
 }
@@ -355,21 +373,17 @@ EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_EncoderType,
 }
 
 // static
-bool EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_EncoderType,
-                media::VideoEncodeAccelerator::Config::EncoderType>::
-    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_EncoderType input,
-              media::VideoEncodeAccelerator::Config::EncoderType* output) {
+media::VideoEncodeAccelerator::Config::EncoderType
+EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_EncoderType,
+           media::VideoEncodeAccelerator::Config::EncoderType>::
+    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_EncoderType input) {
   switch (input) {
     case media::mojom::VideoEncodeAcceleratorConfig_EncoderType::kHardware:
-      *output = media::VideoEncodeAccelerator::Config::EncoderType::kHardware;
-      return true;
+      return media::VideoEncodeAccelerator::Config::EncoderType::kHardware;
     case media::mojom::VideoEncodeAcceleratorConfig_EncoderType::kSoftware:
-      *output = media::VideoEncodeAccelerator::Config::EncoderType::kSoftware;
-      return true;
+      return media::VideoEncodeAccelerator::Config::EncoderType::kSoftware;
     case media::mojom::VideoEncodeAcceleratorConfig_EncoderType::kNoPreference:
-      *output =
-          media::VideoEncodeAccelerator::Config::EncoderType::kNoPreference;
-      return true;
+      return media::VideoEncodeAccelerator::Config::EncoderType::kNoPreference;
   }
   NOTREACHED();
 }
@@ -389,17 +403,15 @@ EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_ContentType,
 }
 
 // static
-bool EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_ContentType,
-                media::VideoEncodeAccelerator::Config::ContentType>::
-    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_ContentType input,
-              media::VideoEncodeAccelerator::Config::ContentType* output) {
+media::VideoEncodeAccelerator::Config::ContentType
+EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_ContentType,
+           media::VideoEncodeAccelerator::Config::ContentType>::
+    FromMojom(media::mojom::VideoEncodeAcceleratorConfig_ContentType input) {
   switch (input) {
     case media::mojom::VideoEncodeAcceleratorConfig_ContentType::kCamera:
-      *output = media::VideoEncodeAccelerator::Config::ContentType::kCamera;
-      return true;
+      return media::VideoEncodeAccelerator::Config::ContentType::kCamera;
     case media::mojom::VideoEncodeAcceleratorConfig_ContentType::kDisplay:
-      *output = media::VideoEncodeAccelerator::Config::ContentType::kDisplay;
-      return true;
+      return media::VideoEncodeAccelerator::Config::ContentType::kDisplay;
   }
   NOTREACHED();
 }

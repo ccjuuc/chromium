@@ -16,6 +16,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "crypto/signature_verifier.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/oauth2_api_call_flow.h"
 #include "net/cookies/canonical_cookie.h"
@@ -108,7 +109,8 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintTokenFlow
         std::string_view version,
         std::string_view channel,
         std::string_view device_id = {},
-        std::string_view bound_oauth_token = {});
+        std::string_view bound_oauth_token = {},
+        bool use_mtls_endpoints = false);
 
     Parameters(Parameters&& other) noexcept;
     Parameters& operator=(Parameters&& other) noexcept;
@@ -132,6 +134,8 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintTokenFlow
     GaiaId selected_user_id;
     std::string consent_result;
     std::string bound_oauth_token;
+    bool use_mtls_endpoints = false;
+    bool check_bound_token_upgrade_eligibility = false;
 
    private:
     // Only an explicit copy with `Clone()` is allowed.
@@ -153,6 +157,9 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintTokenFlow
     std::set<std::string> granted_scopes;
     base::TimeDelta time_to_live;
     bool is_token_encrypted = false;
+    std::string bound_token_upgrade_challenge;
+    std::vector<crypto::SignatureVerifier::SignatureAlgorithm>
+        bound_token_upgrade_supported_algorithms;
   };
 
   class COMPONENT_EXPORT(GOOGLE_APIS) Delegate {
@@ -178,6 +185,7 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintTokenFlow
  protected:
   // Implementation of template methods in OAuth2ApiCallFlow.
   GURL CreateApiCallUrl() override;
+  network::mojom::CredentialsMode GetCredentialsMode() const override;
   net::HttpRequestHeaders CreateApiCallHeaders() override;
   std::string CreateApiCallBody() override;
   std::string CreateAuthorizationHeaderValue(
@@ -200,11 +208,11 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintTokenFlow
   void ReportFailure(const GoogleServiceAuthError& error);
 
   static bool ParseRemoteConsentResponse(
-      const base::Value::Dict& dict,
+      const base::DictValue& dict,
       RemoteConsentResolutionData* resolution_data);
 
   static std::optional<MintTokenResult> ParseMintTokenResponse(
-      const base::Value::Dict& dict);
+      const base::DictValue& dict);
 
   raw_ptr<Delegate> delegate_;
   Parameters parameters_;

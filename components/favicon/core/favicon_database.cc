@@ -239,7 +239,6 @@ bool FaviconDatabase::IconMappingEnumerator::GetNextIconMapping(
 
 FaviconDatabase::FaviconDatabase()
     : db_(sql::DatabaseOptions()
-              .set_preload(true)
               // Favicons db only stores favicons, so we don't need that big a
               // page size or cache.
               .set_page_size(2048)
@@ -299,10 +298,6 @@ void FaviconDatabase::Vacuum() {
   DCHECK(db_.transaction_nesting() == 0)
       << "Can not have a transaction when vacuuming.";
   std::ignore = db_.Execute("VACUUM");
-}
-
-void FaviconDatabase::TrimMemory() {
-  db_.TrimMemory();
 }
 
 std::map<favicon_base::FaviconID, IconMappingsForExpiry>

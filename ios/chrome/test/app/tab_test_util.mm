@@ -10,9 +10,9 @@
 #import "ios/chrome/app/main_controller.h"
 #import "ios/chrome/browser/metrics/model/tab_usage_recorder_browser_agent.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
+#import "ios/chrome/browser/scene/coordinator/scene_coordinator.h"
 #import "ios/chrome/browser/sessions/model/session_restoration_service.h"
 #import "ios/chrome/browser/sessions/model/session_restoration_service_factory.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller_testing.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
@@ -22,9 +22,9 @@
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_coordinator.h"
 #import "ios/chrome/browser/tabs/model/tab_title_util.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/browser/web_state_list/model/web_usage_enabler/web_usage_enabler_browser_agent.h"
@@ -70,8 +70,7 @@ void OpenNewTab() {
                     withURLLoadParams:params];
       return;
     }
-    id<ApplicationCommands, BrowserCommands> handler =
-        chrome_test_util::HandlerForActiveBrowser();
+    id<SceneCommands> handler = chrome_test_util::HandlerForActiveBrowser();
     [handler openURLInNewTab:command];
   }
 }
@@ -98,8 +97,7 @@ void OpenNewIncognitoTab() {
                                                       withURLLoadParams:params];
       return;
     }
-    id<ApplicationCommands, BrowserCommands> handler =
-        chrome_test_util::HandlerForActiveBrowser();
+    id<SceneCommands> handler = chrome_test_util::HandlerForActiveBrowser();
     [handler openURLInNewTab:command];
   }
 }
@@ -199,9 +197,9 @@ void CloseAllTabs() {
     CloseAllTabsForBrowser(GetMainBrowser());
   }
   if (GetInactiveTabCount() && GetForegroundActiveScene()) {
-    CloseAllTabsForBrowser(
-        GetForegroundActiveScene()
-            .browserProviderInterface.mainBrowserProvider.inactiveBrowser);
+    CloseAllTabsForBrowser(GetForegroundActiveScene()
+                               .browserProviderInterface.mainBrowserProvider
+                               .browser->GetInactiveBrowser());
   }
 }
 
@@ -219,7 +217,8 @@ NSUInteger GetMainTabCount() {
 
 NSUInteger GetInactiveTabCount() {
   return GetForegroundActiveScene()
-      .browserProviderInterface.mainBrowserProvider.inactiveBrowser
+      .browserProviderInterface.mainBrowserProvider.browser
+      ->GetInactiveBrowser()
       ->GetWebStateList()
       ->count();
 }

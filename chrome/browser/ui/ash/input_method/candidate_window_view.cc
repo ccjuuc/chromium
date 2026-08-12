@@ -10,6 +10,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/input_method/text_field_contextual_info_fetcher.h"
@@ -239,8 +240,9 @@ CandidateWindowView::CandidateWindowView(gfx::NativeView parent)
 
 CandidateWindowView::~CandidateWindowView() = default;
 
-views::Widget* CandidateWindowView::InitWidget() {
-  views::Widget* widget = BubbleDialogDelegateView::CreateBubble(this);
+std::unique_ptr<views::Widget> CandidateWindowView::InitWidget() {
+  std::unique_ptr<views::Widget> widget =
+      BubbleDialogDelegate::CreateBubble(this);
 
   wm::SetWindowVisibilityAnimationTransition(widget->GetNativeView(),
                                              wm::ANIMATE_NONE);
@@ -346,13 +348,17 @@ void CandidateWindowView::UpdateCandidates(
         candidate_view->SetEnabled(false);
         candidate_view->SetInfolistIcon(false);
       }
+      int shortcut_width = 0;
+      int candidate_width = 0;
+      candidate_views_[i]->GetPreferredWidths(&shortcut_width,
+                                              &candidate_width);
       if (new_candidate_window.orientation() == ui::CandidateWindow::VERTICAL) {
-        int shortcut_width = 0;
-        int candidate_width = 0;
-        candidate_views_[i]->GetPreferredWidths(&shortcut_width,
-                                                &candidate_width);
         max_shortcut_width = std::max(max_shortcut_width, shortcut_width);
         max_candidate_width = std::max(max_candidate_width, candidate_width);
+      } else {
+        // For horizontal mode, each candidate uses its natural width instead of
+        // max width
+        candidate_views_[i]->SetWidths(shortcut_width, candidate_width);
       }
     }
     if (new_candidate_window.orientation() == ui::CandidateWindow::VERTICAL) {

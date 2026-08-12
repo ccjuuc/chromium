@@ -1,5 +1,4 @@
 include_rules = [
-  "+chromeos/crosapi",
   "+components/dbus",
   "+components/system_cpu",
   "+components/variations",
@@ -11,11 +10,11 @@ include_rules = [
   "+services/network/test",
   "+testing/gmock/include/gmock/gmock.h",
   "+third_party/ocmock",
-  "+ui/gfx/native_widget_types.h",
+  "+ui/gfx/native_ui_types.h",
 ]
 
 specific_include_rules = {
-  "NfcBlocklist\.java": [
+  "NfcBlocklist\\.java": [
     "+components/variations/android/java",
   ],
 }

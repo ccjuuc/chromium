@@ -12,7 +12,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
-#include "base/not_fatal_until.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/propvarutil.h"
 #include "base/win/scoped_bstr.h"
@@ -59,13 +58,8 @@ HRESULT CreateVideoCapability(const CdmConfig& cdm_config,
 
   base::win::ScopedPropVariant robustness;
   if (cdm_config.use_hw_secure_codecs) {
-    // TODO(xhwang): Provide a way to support other robustness strings.
-    if (MediaFoundationCdmModule::GetInstance()->IsOsCdm()) {
-      // Use hardware secure PlayReady robustness
-      SetBSTR(L"3000", robustness.Receive());
-    } else {
-      SetBSTR(L"HW_SECURE_ALL", robustness.Receive());
-    }
+    // Use hardware secure PlayReady robustness.
+    SetBSTR(L"3000", robustness.Receive());
     RETURN_IF_FAILED(
         temp_video_capability->SetValue(MF_EME_ROBUSTNESS, robustness.get()));
   }

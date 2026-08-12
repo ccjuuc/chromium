@@ -30,7 +30,7 @@ class WebAppScopeTest : public WebAppTest {
   void SetUp() override {
     WebAppTest::SetUp();
     auto fake_association_manager =
-        std::make_unique<FakeWebAppOriginAssociationManager>();
+        std::make_unique<FakeWebAppOriginAssociationManager>(*profile());
     fake_association_manager->set_pass_through(true);
     fake_provider().SetOriginAssociationManager(
         std::move(fake_association_manager));
@@ -139,6 +139,147 @@ TEST_F(WebAppScopeTest, IsInScopeWithScopeExtensions) {
   EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://example.net/")));
   EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://sub.example.org/")));
   EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://another.com/")));
+}
+
+TEST_F(WebAppScopeTest, WildcardScopeExtensionPortMatching) {
+  const GURL app_scope("https://example.com:8080/");
+
+  // Wildcard scope extension declared for port 8080.
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::CreateFromNormalizedTuple("https", "example.com", 8080),
+          /*has_origin_wildcard=*/true)};
+
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(app_scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // Same port (8080) subdomain should match.
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://sub.example.com:8080/page")));
+
+  // Multi-level subdomain on same port should match.
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://a.b.example.com:8080/page")));
+
+  // Default port (443) subdomain must NOT match a port-8080 extension.
+  EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://sub.example.com/page")));
+
+  // Different non-default port must not match.
+  EXPECT_FALSE(
+      web_app_scope->IsInScope(GURL("https://sub.example.com:9090/page")));
+
+  // The app's own scope (exact match on port 8080) should still match.
+  EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://example.com:8080/path")));
+
+  // The extension host itself on a non-default port is within the app's own
+  // scope, so it matches via the scope path (not the wildcard branch).
+  EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://example.com:8080/other")));
+}
+
+TEST_F(WebAppScopeTest, WildcardScopeExtensionDefaultPort) {
+  const GURL app_scope("https://example.com/");
+
+  // Wildcard scope extension declared for default port (443).
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::Create(GURL("https://example.com")),
+          /*has_origin_wildcard=*/true)};
+
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(app_scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // Default port subdomain should match default port extension.
+  EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://sub.example.com/page")));
+
+  // Non-default port subdomain must NOT match default port extension.
+  EXPECT_FALSE(
+      web_app_scope->IsInScope(GURL("https://sub.example.com:8080/page")));
+}
+
+TEST_F(WebAppScopeTest, NonWildcardScopeExtensionPortMismatch) {
+  const GURL app_scope("https://example.com/");
+
+  // Non-wildcard scope extension for a specific origin on port 8080.
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::CreateFromNormalizedTuple("https", "other.com", 8080),
+          /*has_origin_wildcard=*/false)};
+
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(app_scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // Exact origin match on same port should match (via scope prefix check).
+  EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://other.com:8080/page")));
+
+  // Same host on default port must NOT match a port-8080 extension.
+  EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://other.com/page")));
+
+  // Same host on different non-default port must not match.
+  EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://other.com:9090/page")));
+}
+
+TEST_F(WebAppScopeTest, WildcardScopeExtensionExactHostOnNonDefaultPort) {
+  const GURL app_scope("https://example.com/");
+
+  // Wildcard scope extension for a *different* domain on a non-default port.
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::CreateFromNormalizedTuple("https", "other.com", 8080),
+          /*has_origin_wildcard=*/true)};
+
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(app_scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // Subdomain on same port should match via the wildcard branch.
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://sub.other.com:8080/page")));
+
+  // Exact host on same port should match via scope prefix check, not wildcard.
+  EXPECT_TRUE(web_app_scope->IsInScope(GURL("https://other.com:8080/page")));
+
+  // Exact host on default port must NOT match.
+  EXPECT_FALSE(web_app_scope->IsInScope(GURL("https://other.com/page")));
+
+  // Subdomain on wrong port must NOT match.
+  EXPECT_FALSE(
+      web_app_scope->IsInScope(GURL("https://sub.other.com:9090/page")));
+}
+
+TEST_F(WebAppScopeTest, WildcardScopeExtensionCaseNormalization) {
+  const GURL app_scope("https://example.com:8080/");
+
+  // Wildcard scope extension declared for port 8080.
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::CreateFromNormalizedTuple("https", "example.com", 8080),
+          /*has_origin_wildcard=*/true)};
+
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(app_scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // Mixed-case hostnames should match because url::Origin canonicalizes hosts
+  // to lowercase for https schemes, making SENSITIVE comparison safe.
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://Sub.Example.Com:8080/page")));
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://SUB.EXAMPLE.COM:8080/page")));
+  EXPECT_TRUE(
+      web_app_scope->IsInScope(GURL("https://A.B.Example.COM:8080/page")));
 }
 
 TEST_F(WebAppScopeTest, LongerScopeWins) {
@@ -257,6 +398,68 @@ TEST_F(WebAppScopeTest, RegularScopeHasHigherScoreThanExtendedScope) {
   // score_a should be larger than score_b, even though the match for app b
   // would have been longer.
   EXPECT_GT(score_a, score_b);
+}
+
+using WebAppScopeScoreOnlyScopeExtensionsTest = WebAppScopeTest;
+
+TEST_F(WebAppScopeScoreOnlyScopeExtensionsTest, NoPrimaryScopeMatch) {
+  const GURL scope("https://example.com/");
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::Create(GURL("https://example.org")))};
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // A URL in the primary scope should have 0 score when only considering scope
+  // extensions.
+  EXPECT_EQ(
+      web_app_scope->GetScopeScore(
+          GURL("https://example.com/page.html"),
+          WebAppScopeScoreOptions{.only_consider_scope_extensions = true}),
+      0);
+}
+
+TEST_F(WebAppScopeScoreOnlyScopeExtensionsTest, PrimaryScopeMatchNoExtensions) {
+  const GURL scope("https://example.com/");
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::Create(GURL("https://example.org")))};
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // A URL in the primary scope should have a score when not considering scope
+  // extensions.
+  EXPECT_GT(
+      web_app_scope->GetScopeScore(
+          GURL("https://example.com/page.html"),
+          WebAppScopeScoreOptions{.only_consider_scope_extensions = false}),
+      0);
+}
+
+TEST_F(WebAppScopeScoreOnlyScopeExtensionsTest, CrossOriginExtensionsOnly) {
+  const GURL scope("https://example.com/");
+  const std::vector<ScopeExtensionInfo> scope_extensions = {
+      ScopeExtensionInfo::CreateForOrigin(
+          url::Origin::Create(GURL("https://example.org")))};
+  webapps::AppId app_id =
+      InstallWebAppWithScopeExtensions(scope, scope_extensions);
+  std::optional<WebAppScope> web_app_scope =
+      registrar().GetEffectiveScope(app_id);
+  ASSERT_TRUE(web_app_scope);
+
+  // A URL in the extended scope SHOULD have a score when only considering scope
+  // extensions.
+  EXPECT_GT(
+      web_app_scope->GetScopeScore(
+          GURL("https://example.org/page.html"),
+          WebAppScopeScoreOptions{.only_consider_scope_extensions = true}),
+      0);
 }
 
 }  // namespace

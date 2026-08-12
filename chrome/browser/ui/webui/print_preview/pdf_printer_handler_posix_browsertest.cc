@@ -84,7 +84,7 @@ class FakePdfPrinterHandler : public PdfPrinterHandler {
 
     scoped_refptr<base::RefCountedMemory> dummy_data =
         base::MakeRefCounted<base::RefCountedStaticMemory>(kDummyData);
-    StartPrint(u"dummy-job-title", /*settings=*/base::Value::Dict(), dummy_data,
+    StartPrint(u"dummy-job-title", /*settings=*/base::DictValue(), dummy_data,
                base::DoNothing());
     run_loop_.Run();
   }
@@ -117,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(PdfPrinterHandlerPosixTest, SaveAsPdfFilePermissions) {
   base::ScopedAllowBlockingForTesting allow_blocking;
   ScopedUmaskSetter permissive_umask(0022);
 
-  // Saved PDF files are not executable files, and should be readable/writeable
+  // Saved PDF files are not executable files, and should be readable/writable
   // for the user.  It should also have group readable permissions to match the
   // behavior seen for downloaded files.  Note that this is the desired case
   // regardless of the directory permissions.

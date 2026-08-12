@@ -84,13 +84,12 @@ pub fn get_pix_qr_code_type(code: &[u8]) -> PixQrCodeResult {
                     detected_qr_code_type = Some(qr_code_type);
                 }
             }
-            ADDITIONAL_DATA_FIELD_TEMPLATE_DATA_OBJECT_ID => {
+            ADDITIONAL_DATA_FIELD_TEMPLATE_DATA_OBJECT_ID
                 // 4.8.1.1: If present, the Additional Data Field Template shall contain at
                 // least 1 data object.
-                if !contains_valid_data_objects(next_data_object.value) {
+                if !contains_valid_data_objects(next_data_object.value) => {
                     return Err(Error::EmptyAdditionalDataFieldTemplate);
                 }
-            }
             CRC16_DATA_OBJECT_ID => {
                 // 4.6.1.2 The CRC (ID "63") shall be the last data object in the QR Code
                 if !next_rest.is_empty() {
@@ -121,7 +120,13 @@ fn parse_next_data_object(input: &str) -> Option<(Section<'_>, &str)> {
     // - The value field has a minimum length of one character and maximum length of
     //   99 characters.
     let (id, rest) = input.split_at_checked(2)?;
+    if id.chars().any(|c| !c.is_ascii_digit()) {
+        return None;
+    }
     let (length, rest) = rest.split_at_checked(2)?;
+    if length.starts_with('+') {
+        return None;
+    }
     let length: usize = length.parse().ok()?;
     let (value, rest) = rest.split_at_checked(length)?;
     Some((Section { id, value }, rest))

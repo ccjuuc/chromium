@@ -56,7 +56,7 @@ public class ChromeStrictMode {
         if (TextUtils.isEmpty(stackTrace)) {
             Log.d(TAG, "StrictMode violation stack trace was empty.");
         } else {
-            Log.d(TAG, "Upload stack trace: " + stackTrace);
+            Log.d(TAG, "Upload stack trace: %s", stackTrace);
             JavaExceptionReporter.reportStackTrace(stackTrace);
         }
     }
@@ -89,7 +89,7 @@ public class ChromeStrictMode {
     private static void turnOnDetection(StrictMode.VmPolicy.Builder vmPolicy) {
         // Do not enable detectUntaggedSockets(). It does not support native (the vast majority
         // of our sockets), and we have not bothered to tag our Java uses.
-        // https://crbug.com/770792
+        // https://crbug.com/40542768
         // Also: Do not enable detectCleartextNetwork(). We can't prevent websites from using
         // non-https.
         vmPolicy.detectActivityLeaks()
@@ -101,7 +101,7 @@ public class ChromeStrictMode {
         vmPolicy.detectCredentialProtectedWhileLocked().detectImplicitDirectBoot();
 
         // File URI leak detection, has false positives when file URI intents are passed between
-        // Chrome activities in separate processes. See http://crbug.com/508282#c11.
+        // Chrome activities in separate processes. See http://crbug.com/40425941#comment12.
         vmPolicy.detectFileUriExposure();
     }
 

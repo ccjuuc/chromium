@@ -6,10 +6,8 @@ import 'chrome://new-tab-page/lazy_load.js';
 
 import type {MiddleSlotPromoElement} from 'chrome://new-tab-page/lazy_load.js';
 import {PromoDismissAction} from 'chrome://new-tab-page/lazy_load.js';
-import type {CrAutoImgElement} from 'chrome://new-tab-page/new_tab_page.js';
-import {$$, BrowserCommandProxy, NewTabPageProxy} from 'chrome://new-tab-page/new_tab_page.js';
-import type {PageRemote, Promo} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import type {CrAutoImgElement, PageRemote, Promo} from 'chrome://new-tab-page/new_tab_page.js';
+import {$$, BrowserCommandProxy, NewTabPageProxy, PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {Command, CommandHandlerRemote} from 'chrome://resources/js/browser_command.mojom-webui.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {isMac} from 'chrome://resources/js/platform.js';
@@ -45,35 +43,33 @@ suite('NewTabPageMiddleSlotPromoTest', () => {
   function createPromo() {
     return {
       id: '7',
-      logUrl: {
-        url:
-            'https://www.google.com/gen_204?ei=AsDMYoL9DtzVkPIP19ScaA&cad=i&id=19030295&ogprm=up&ct=16&prid=243',
-      },
+      logUrl:
+          'https://www.google.com/gen_204?ei=AsDMYoL9DtzVkPIP19ScaA&cad=i&id=19030295&ogprm=up&ct=16&prid=243',
       middleSlotParts: [
-        {image: {imageUrl: {url: 'https://image'}, target: {url: ''}}},
+        {image: {imageUrl: 'https://image', target: ''}},
         {
           image: {
-            imageUrl: {url: 'https://image'},
-            target: {url: 'https://link'},
+            imageUrl: 'https://image',
+            target: 'https://link',
           },
         },
         {
           image: {
-            imageUrl: {url: 'https://image'},
-            target: {url: 'command:123'},
+            imageUrl: 'https://image',
+            target: 'command:123',
           },
         },
         {text: {text: 'text', color: 'red'}},
         {
           link: {
-            url: {url: 'https://link'},
+            url: 'https://link',
             text: 'link',
             color: 'green',
           },
         },
         {
           link: {
-            url: {url: 'command:123'},
+            url: 'command:123',
             text: 'command',
             color: 'blue',
           },
@@ -84,8 +80,8 @@ suite('NewTabPageMiddleSlotPromoTest', () => {
 
   async function createMiddleSlotPromo(
       canShowPromo: boolean, hasPromoId: boolean = true) {
-    promoBrowserCommandHandler.setResultFor(
-        'canExecuteCommand', Promise.resolve({canExecute: canShowPromo}));
+    promoBrowserCommandHandler.setPromiseResolveFor(
+        'canExecuteCommand', {canExecute: canShowPromo});
 
     middleSlotPromo = document.createElement('ntp-middle-slot-promo');
     document.body.appendChild(middleSlotPromo);
@@ -160,8 +156,7 @@ suite('NewTabPageMiddleSlotPromoTest', () => {
 
   test('clicking on command', async () => {
     await createMiddleSlotPromoWithData();
-    promoBrowserCommandHandler.setResultFor(
-        'executeCommand', Promise.resolve());
+    promoBrowserCommandHandler.setPromiseResolveFor('executeCommand');
     const promoContainer = $$(middleSlotPromo, '#promoContainer');
     assertTrue(!!promoContainer);
 

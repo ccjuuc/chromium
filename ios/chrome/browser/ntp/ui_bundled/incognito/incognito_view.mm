@@ -168,10 +168,9 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
           configurationWithPointSize:kIncognitoSymbolImagePointSize
                               weight:UIImageSymbolWeightLight
                                scale:UIImageSymbolScaleMedium];
-      incognitoImage =
-          SymbolWithPalette(CustomSymbolWithConfiguration(
-                                kIncognitoCircleFillSymbol, configuration),
-                            LargeIncognitoPalette());
+      incognitoImage = SymbolWithPalette(
+          SymbolWithConfiguration(SymbolIncognitoCircleFill, configuration),
+          LargeIncognitoPalette());
 
       UIImageView* incognitoImageView =
           [[UIImageView alloc] initWithImage:incognitoImage];
@@ -268,9 +267,8 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
     ];
     ApplyVisualConstraints(constraints, viewsDictionary);
 
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class ]);
-    [self registerForTraitChanges:traits
+    [self registerForTraitChanges:
+              @[UITraitVerticalSizeClass.class, UITraitHorizontalSizeClass.class]
                        withAction:@selector(updateToolbarMargins)];
   }
   return self;
@@ -381,6 +379,7 @@ NSAttributedString* FormatHTMLListForUILabel(NSString* listString) {
     titleLabel.numberOfLines = 0;
     titleLabel.textAlignment = NSTextAlignmentCenter;
     titleLabel.text = l10n_util::GetNSString(IDS_NEW_TAB_OTR_TITLE);
+    titleLabel.accessibilityTraits = UIAccessibilityTraitHeader;
     titleLabel.adjustsFontForContentSizeCategory = YES;
     [_stackView addArrangedSubview:titleLabel];
   }

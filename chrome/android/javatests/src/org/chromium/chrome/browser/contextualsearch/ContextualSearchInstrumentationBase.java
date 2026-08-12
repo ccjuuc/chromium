@@ -27,19 +27,19 @@ import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.chrome.browser.app.ChromeActivity;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelContentProgressObserver;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManager;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManagerWrapper;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelContentProgressObserver;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelManager;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelManagerWrapper;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.content.WebContentsFactory;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchFakeServer.ContextualSearchTestHost;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchFakeServer.FakeResolveSearch;
@@ -48,6 +48,7 @@ import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.locale.LocaleManagerDelegate;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
@@ -72,6 +73,8 @@ import java.util.concurrent.TimeoutException;
 
 /** This is a base class for various Contextual Search instrumentation tests. */
 public class ContextualSearchInstrumentationBase {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Rule
     public final AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
@@ -117,6 +120,8 @@ public class ContextualSearchInstrumentationBase {
 
     /** ContextualSearchManager wrapper that prevents network requests and most native calls. */
     protected static class ContextualSearchManagerWrapper extends ContextualSearchManager {
+        private WebContents mWebContents;
+
         public ContextualSearchManagerWrapper(ChromeActivity activity) {
             super(
                     activity,
@@ -131,21 +136,30 @@ public class ContextualSearchInstrumentationBase {
                     activity.getEdgeToEdgeControllerSupplierForTesting());
             setSelectionController(new MockCSSelectionController(activity, this));
             Profile profile = ProfileManager.getLastUsedRegularProfile();
-            WebContents webContents = WebContentsFactory.createWebContents(profile, false, false);
-            ContentView cv = ContentView.createContentView(activity, webContents);
-            webContents.setDelegates(
+            mWebContents = WebContentsFactory.createWebContents(profile, false, false);
+            ContentView cv = ContentView.createContentView(activity, mWebContents);
+            mWebContents.setDelegates(
                     null,
                     ViewAndroidDelegate.createBasicDelegate(cv),
                     null,
                     activity.getWindowAndroid(),
                     WebContents.createDefaultInternalsHolder());
             SelectionPopupController selectionPopupController =
-                    WebContentsUtils.createSelectionPopupController(webContents);
+                    WebContentsUtils.createSelectionPopupController(mWebContents);
             selectionPopupController.setSelectionClient(this.getContextualSearchSelectionClient());
 
             MockContextualSearchPolicy policy =
                     new MockContextualSearchPolicy(profile, getSelectionController());
             setContextualSearchPolicy(policy);
+        }
+
+        @Override
+        public void destroy() {
+            if (mWebContents != null) {
+                mWebContents.destroy();
+                mWebContents = null;
+            }
+            super.destroy();
         }
 
         @Override
@@ -367,7 +381,7 @@ public class ContextualSearchInstrumentationBase {
 
         mActivityTestRule.loadUrl(mTestServer.getURL(mTestPage));
         // DOMUtils sometimes hits the wrong node due to an incorrect page scale factor,
-        // so wait until that is set. https://crbug.com/1327063
+        // so wait until that is set. https://crbug.com/40840940
         mActivityTestRule.assertWaitForPageScaleFactorMatch(1.0f);
 
         mManager = mActivityTestRule.getActivity().getContextualSearchManagerForTesting();
@@ -413,8 +427,6 @@ public class ContextualSearchInstrumentationBase {
         // again.
         // If Related Searches is enabled we need to also set that it's OK to send page content.
         mPolicy.overrideAllowSendingPageUrlForTesting(true);
-
-        MockitoAnnotations.openMocks(this);
     }
 
     @After
@@ -425,6 +437,9 @@ public class ContextualSearchInstrumentationBase {
 
                     if (mManager != null) mManager.dismissContextualSearchBar();
                     if (mPanel != null) mPanel.closePanel(StateChangeReason.UNKNOWN, false);
+                    if (mContextualSearchManager != null) {
+                        mContextualSearchManager.destroy();
+                    }
                 });
         if (mActivityMonitor != null) {
             InstrumentationRegistry.getInstrumentation().removeMonitor(mActivityMonitor);
@@ -1014,7 +1029,7 @@ public class ContextualSearchInstrumentationBase {
     /**
      * Waits for a Normal priority URL to be loaded, or asserts that the load never happened. This
      * is needed when we test with a live internet connection and an invalid url fails to load (as
-     * expected. See crbug.com/682953 for background.
+     * expected. See crbug.com/40502510 for background.
      */
     protected void waitForNormalPriorityUrlLoaded() {
         CriteriaHelper.pollInstrumentationThread(

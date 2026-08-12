@@ -70,8 +70,8 @@ const int kMinNoteCharAmountForWarning = 901;
 
 }  // namespace
 
-@interface AddPasswordViewController () <TableViewTextEditItemDelegate,
-                                         TableViewMultiLineTextEditItemDelegate>
+@interface AddPasswordViewController () <TableViewMultiLineTextEditItemDelegate,
+                                         TableViewTextEditItemDelegate>
 
 // The text item related to the username value.
 @property(nonatomic, strong) TableViewTextEditItem* usernameTextItem;
@@ -151,10 +151,9 @@ const int kMinNoteCharAmountForWarning = 901;
 
   // Adds 'Cancel' and 'Save' buttons to Navigation bar.
   self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
-      initWithTitle:l10n_util::GetNSString(IDS_IOS_NAVIGATION_BAR_CANCEL_BUTTON)
-              style:UIBarButtonItemStylePlain
-             target:self
-             action:@selector(didTapCancelButton:)];
+      initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+                           target:self
+                           action:@selector(didTapCancelButton:)];
   self.navigationItem.leftBarButtonItem.accessibilityIdentifier =
       kPasswordsAddPasswordCancelButtonID;
 
@@ -208,13 +207,10 @@ const int kMinNoteCharAmountForWarning = 901;
   [model addItem:_passwordTextItem
       toSectionWithIdentifier:SectionIdentifierPassword];
 
-  if (password_manager::features::
-          IsSuggestStrongPasswordInAddPasswordEnabled()) {
-    if ([self.delegate shouldShowSuggestPasswordItem]) {
-      _suggestPasswordTextItem = [self suggestPasswordItem];
-      [model addItem:_suggestPasswordTextItem
-          toSectionWithIdentifier:SectionIdentifierPassword];
-    }
+  if ([self.delegate shouldShowSuggestPasswordItem]) {
+    _suggestPasswordTextItem = [self suggestPasswordItem];
+    [model addItem:_suggestPasswordTextItem
+        toSectionWithIdentifier:SectionIdentifierPassword];
   }
 
   _noteTextItem = [self noteItem];
@@ -286,10 +282,9 @@ const int kMinNoteCharAmountForWarning = 901;
 
   // During editing password is exposed so eye icon shouldn't be shown.
   if (!self.tableView.editing) {
-    UIImage* image =
-        [self isPasswordShown]
-            ? DefaultSymbolWithPointSize(kHideActionSymbol, kSymbolSize)
-            : DefaultSymbolWithPointSize(kShowActionSymbol, kSymbolSize);
+    UIImage* image = [self isPasswordShown]
+                         ? SymbolWithPointSize(SymbolHideAction, kSymbolSize)
+                         : SymbolWithPointSize(SymbolShowAction, kSymbolSize);
     item.identifyingIcon = image;
     item.identifyingIconEnabled = YES;
     item.identifyingIconAccessibilityLabel = l10n_util::GetNSString(
@@ -342,7 +337,7 @@ const int kMinNoteCharAmountForWarning = 901;
         IDS_IOS_SETTINGS_PASSWORDS_DUPLICATE_SECTION_ALERT_DESCRIPTION_WITHOUT_USERNAME,
         base::SysNSStringToUTF16(_websiteTextItem.textFieldValue));
   }
-  item.image = DefaultSymbolWithPointSize(kErrorCircleFillSymbol, kSymbolSize);
+  item.image = SymbolWithPointSize(SymbolErrorCircleFill, kSymbolSize);
   item.imageViewTintColor = [UIColor colorNamed:kRedColor];
   return item;
 }
@@ -868,7 +863,7 @@ const int kMinNoteCharAmountForWarning = 901;
       _passwordTextItem.textFieldValue = kMaskedPassword;
     }
     _passwordTextItem.identifyingIcon =
-        DefaultSymbolWithPointSize(kShowActionSymbol, kSymbolSize);
+        SymbolWithPointSize(SymbolShowAction, kSymbolSize);
     _passwordTextItem.identifyingIconAccessibilityLabel =
         l10n_util::GetNSString(IDS_IOS_SETTINGS_PASSWORD_SHOW_BUTTON);
     [self reconfigureCellsForItems:@[ _passwordTextItem ]];
@@ -880,7 +875,7 @@ const int kMinNoteCharAmountForWarning = 901;
       _passwordTextItem.textFieldValue = _passwordForTesting;
     }
     _passwordTextItem.identifyingIcon =
-        DefaultSymbolWithPointSize(kHideActionSymbol, kSymbolSize);
+        SymbolWithPointSize(SymbolHideAction, kSymbolSize);
     _passwordTextItem.identifyingIconAccessibilityLabel =
         l10n_util::GetNSString(IDS_IOS_SETTINGS_PASSWORD_HIDE_BUTTON);
     [self reconfigureCellsForItems:@[ _passwordTextItem ]];

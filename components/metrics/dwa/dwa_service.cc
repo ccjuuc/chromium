@@ -322,9 +322,8 @@ DwaService::BuildPrivateMetricEndpointPayloadFromEncryptedReport(
     case ::private_metrics::EncryptedPrivateMetricReport::DWA:
       report_type = ::private_metrics::PrivateMetricEndpointPayload::DWA;
       break;
+    // TODO(b/540830448): Remove
     case ::private_metrics::EncryptedPrivateMetricReport::DKM:
-      report_type = ::private_metrics::PrivateMetricEndpointPayload::DKM;
-      break;
     case ::private_metrics::EncryptedPrivateMetricReport::REPORT_TYPE_INVALID:
       return std::nullopt;
   }
@@ -383,9 +382,9 @@ std::optional<uint64_t> DwaService::HashRepeatedFieldTrials(
 
   std::sort(field_trials_vector.begin(), field_trials_vector.end());
 
-  base::Value::List value_list;
+  base::ListValue value_list;
   for (const auto& field_trials : field_trials_vector) {
-    base::Value::List field_trial_pair;
+    base::ListValue field_trial_pair;
     field_trial_pair.Append(base::NumberToString(field_trials.first));
     field_trial_pair.Append(base::NumberToString(field_trials.second));
     value_list.Append(std::move(field_trial_pair));

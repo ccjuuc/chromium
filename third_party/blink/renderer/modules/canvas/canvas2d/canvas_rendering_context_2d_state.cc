@@ -45,7 +45,6 @@
 #include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector.h"
 #include "third_party/blink/renderer/platform/fonts/text_rendering_mode.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_high_entropy_op_type.h"
 #include "third_party/blink/renderer/platform/graphics/draw_looper_builder.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter_effect.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
@@ -285,7 +284,7 @@ void CanvasRenderingContext2DState::SetLineDash(const Vector<double>& dash) {
   // Spec requires the concatenation of two copies the dash list when the
   // number of elements is odd
   if (dash.size() % 2)
-    line_dash_.AppendVector(dash);
+    line_dash_.append_range(dash);
   // clamp the double values to float
   std::ranges::transform(line_dash_, line_dash_.begin(),
                          [](double d) { return ClampTo<float>(d); });
@@ -408,7 +407,7 @@ void CanvasRenderingContext2DState::SetFont(
       CanvasTextRenderingToTextRenderingMode(text_rendering_mode_));
   font_variant_caps_ = font_description.VariantCaps();
   std::optional<V8CanvasFontStretch> font_value = V8CanvasFontStretch::Create(
-      FontDescription::ToString(font_description.Stretch()).LowerASCII());
+      FontDescription::ToString(font_description.Stretch()).ToAsciiLower());
   if (font_value.has_value()) {
     font_stretch_ = font_value->AsEnum();
   } else {
@@ -725,15 +724,11 @@ void CanvasRenderingContext2DState::SetShadowOffsetY(double y) {
 void CanvasRenderingContext2DState::SetShadowBlur(double shadow_blur) {
   shadow_blur_ = ClampTo<float>(shadow_blur);
   ShadowParameterChanged();
-  if (shadow_blur_ > 0) {
-    AddHighEntropyCanvasOpTypes(HighEntropyCanvasOpType::kSetShadowBlur);
-  }
 }
 
 void CanvasRenderingContext2DState::SetShadowColor(Color shadow_color) {
   shadow_color_ = shadow_color;
   ShadowParameterChanged();
-  AddHighEntropyCanvasOpTypes(HighEntropyCanvasOpType::kSetShadowColor);
 }
 
 void CanvasRenderingContext2DState::SetCSSFilter(const CSSValue* filter_value) {
@@ -753,10 +748,6 @@ void CanvasRenderingContext2DState::SetGlobalComposite(SkBlendMode mode) {
   stroke_flags_.setBlendMode(mode);
   fill_flags_.setBlendMode(mode);
   image_flags_.setBlendMode(mode);
-  if (mode != SkBlendMode::kSrcOver) {
-    AddHighEntropyCanvasOpTypes(
-        HighEntropyCanvasOpType::kGlobalCompositionOperation);
-  }
 }
 
 SkBlendMode CanvasRenderingContext2DState::GlobalComposite() const {

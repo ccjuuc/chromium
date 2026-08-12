@@ -36,7 +36,6 @@ import org.mockito.quality.Strictness;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.BookmarkListEntry.ViewType;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
@@ -59,7 +58,6 @@ import org.chromium.url.JUnitTestGURLs;
 import java.util.Arrays;
 
 /** Unit tests for {@link BookmarkFolderPickerMediator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
 public class BookmarkFolderPickerMediatorUnitTest {
     @Rule
@@ -377,8 +375,7 @@ public class BookmarkFolderPickerMediatorUnitTest {
                 mMobileFolderItem.getTitle(),
                 mModel.get(BookmarkFolderPickerProperties.TOOLBAR_TITLE));
         // First simulate a long click to verify it does nothing.
-        var unused =
-                model.get(ImprovedBookmarkRowProperties.ROW_LONG_CLICK_LISTENER).getAsBoolean();
+        var _ = model.get(ImprovedBookmarkRowProperties.ROW_LONG_CLICK_LISTENER).getAsBoolean();
         assertEquals(
                 mMobileFolderItem.getTitle(),
                 mModel.get(BookmarkFolderPickerProperties.TOOLBAR_TITLE));

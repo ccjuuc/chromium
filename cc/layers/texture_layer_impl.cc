@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "cc/base/features.h"
@@ -48,14 +47,20 @@ bool TextureLayerImpl::IsSnappedToPixelGridInTarget() {
   return true;
 }
 
-void TextureLayerImpl::PushPropertiesTo(LayerImpl* layer) {
-  LayerImpl::PushPropertiesTo(layer);
+void TextureLayerImpl::CopyPropertiesTo(LayerImpl* layer) const {
+  LayerImpl::CopyPropertiesTo(layer);
   TextureLayerImpl* texture_layer = static_cast<TextureLayerImpl*>(layer);
   texture_layer->SetUVTopLeft(uv_top_left_);
   texture_layer->SetUVBottomRight(uv_bottom_right_);
   texture_layer->SetBlendBackgroundColor(blend_background_color_);
   texture_layer->SetForceTextureToOpaque(force_texture_to_opaque_);
+}
+
+void TextureLayerImpl::MovePropertiesToActiveLayer(LayerImpl* active_layer) {
+  LayerImpl::MovePropertiesToActiveLayer(active_layer);
   if (needs_set_resource_push_) {
+    TextureLayerImpl* texture_layer =
+        static_cast<TextureLayerImpl*>(active_layer);
     texture_layer->SetTransferableResource(transferable_resource_,
                                            std::move(release_callback_));
     needs_set_resource_push_ = false;

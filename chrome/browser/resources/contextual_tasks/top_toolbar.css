@@ -15,32 +15,85 @@
   --mwb-primary-text-font-size: 12px;
   --mwb-secondary-text-font-size: 11px;
 
-  align-items: center;
-  background-color: var(--cr-fallback-color-surface);
-  color: var(--cr-fallback-color-on-surface);
+  background-color: var(--toolbar-background-color);
+  color: var(--toolbar-text-color);
   display: flex;
-  height: 20px;
+  flex-direction: column;
+  height: auto;
   padding: 7px 12px;
-  margin: 6px 4px 0px 4px;
+  margin: 6px 4px 0 4px;
+}
+
+#top-row {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  height: 20px;
+  width: 100%;
 }
 
 .top-toolbar-title {
   overflow: hidden;
   align-items: center;
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 500;
   flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.top-toolbar-logo {
-  flex:0;
-  box-sizing: border-box;
-  display: inline-block;
+.top-toolbar-logo-container {
+  flex: 0;
+  height: 18px;
   margin-right: 8px;
-  --cr-icon-size: 20px;
-  width: 20px;
-  height: 20px;
+  position: relative;
+  width: 18px;
+}
+
+.top-toolbar-logo-button {
+  align-items: center;
+  display: flex;
+  height: 18px;
+  justify-content: center;
+  width: 18px;
+}
+
+.top-toolbar-logo-button.clickable {
+  --cr-button-height: 28px;
+  align-items: center;
+  background: var(--toolbar-background-color, #FFF);
+  border: none;
+  border-radius: 100px;
+  box-shadow: 0 2px 6px 0 rgba(0, 0, 0, 0.2), 0 0 2px 0 rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  left: -5px;
+  min-width: 28px;
+  padding: 0;
+  position: absolute;
+  top: -5px;
+  width: 28px;
+}
+
+:host([dark-mode]) .top-toolbar-logo-button.clickable {
+  background: var(--toolbar-background-color, #292a2d);
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.6);
+}
+
+.top-toolbar-logo-button.clickable:focus-visible {
+  outline: 2px solid var(--cr-focus-outline-color, #1a73e8);
+  outline-offset: 2px;
+}
+
+.top-toolbar-logo {
+  --cr-icon-size: 18px;
+  box-sizing: border-box;
+  display: block;
+  flex: 0;
+  height: 18px;
+  width: 18px;
 }
 
 .chrome-logo-dark {
@@ -52,7 +105,7 @@
 }
 
 :host([dark-mode]) .chrome-logo-dark {
-  display: inline-block;
+  display: block;
 }
 
 .top-toolbar-action-buttons {
@@ -61,52 +114,37 @@
   flex-direction: row;
 }
 
-.dropdown-item {
-  display: flex;
-  align-items: center;
+.top-toolbar-action-buttons> :not(:first-child) {
+  /**
+  * cr-icon is 20px and cr-icon-button is 32px
+  * Add another 4px to visually make the margin 16px.
+  */
+  margin-inline-start: 4px;
 }
 
-cr-action-menu {
-  --cr-menu-border-radius: 16px;
-}
-
-cr-action-menu > button {
-  padding: 4px 16px;
-  min-width: 230px;
-}
-
-button > cr-icon {
-  width: 20px;
-  height: 20px;
+.top-toolbar-action-buttons>contextual-tasks-favicon-group {
+  /* Add horizontal padding to match cr-icon-button. */
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 cr-icon-button {
-  --cr-icon-button-margin-start: 12px;
   --cr-icon-button-icon-size: 20px;
-  color: var(--color-sys-on-surface-subtle);
+  --cr-icon-button-fill-color: var(--toolbar-button-icon-color);
+}
+
+#closeButton:not(:hover)[rounded-corner='true'] {
+  background-color: var(--cr-fallback-color-base-container);
+}
+
+#closeButton[rounded-corner='true'] {
+  border-radius: 6px;
 }
 
 cr-icon-button[hidden] {
   display: none;
 }
 
-.dropdown-item cr-icon {
-  margin-inline-end: 10px;
+#overflowMenuButton.active {
+  background-color: var(--cr-active-background-color);
 }
-
-.dropdown-divider {
-  background-color: var(--cr-fallback-color-divider);
-  height: 1px;
-  width: 100%;
-}
-
-<if expr="_google_chrome">
-.google-g-icon {
-  --cr-icon-image: url(chrome://resources/cr_components/searchbox/icons/google_g_cr23.svg);
-
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  margin-inline-end: 10px;
-}
-</if>

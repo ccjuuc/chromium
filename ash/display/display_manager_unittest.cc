@@ -40,6 +40,8 @@
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_chromeos_version_info.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chromeos/ui/base/app_types.h"
@@ -102,28 +104,28 @@ class DisplayManagerObserverValidator : public display::DisplayObserver,
 
   // display::DisplayObserver:
   void OnDisplayAdded(const display::Display& new_display) override {
-    if (!base::Contains(added_displays_, new_display)) {
-      EXPECT_TRUE(base::Contains(active_display_list(), new_display));
+    if (!std::ranges::contains(added_displays_, new_display)) {
+      EXPECT_TRUE(std::ranges::contains(active_display_list(), new_display));
       added_displays_.push_back(new_display);
     }
   }
   void OnWillRemoveDisplays(const Displays& removed_displays) override {
     for (const auto& display : removed_displays) {
-      EXPECT_TRUE(base::Contains(active_display_list(), display));
+      EXPECT_TRUE(std::ranges::contains(active_display_list(), display));
     }
   }
   void OnDisplaysRemoved(const display::Displays& removed_displays) override {
     for (const auto& display : removed_displays) {
-      EXPECT_FALSE(base::Contains(active_display_list(), display));
-      if (!base::Contains(added_displays_, display)) {
+      EXPECT_FALSE(std::ranges::contains(active_display_list(), display));
+      if (!std::ranges::contains(added_displays_, display)) {
         removed_displays_.push_back(display);
       }
     }
   }
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override {
-    EXPECT_TRUE(base::Contains(active_display_list(), display));
-    if (!base::Contains(changed_displays_, display)) {
+    EXPECT_TRUE(std::ranges::contains(active_display_list(), display));
+    if (!std::ranges::contains(changed_displays_, display)) {
       changed_displays_.push_back(display);
     }
     if (!changed_metrics_.try_emplace(display.id(), changed_metrics).second) {
@@ -158,7 +160,7 @@ class DisplayManagerObserverValidator : public display::DisplayObserver,
     EXPECT_EQ(changed_metrics_.size(),
               configuration_change.display_metrics_changes.size());
     for (const auto& change : configuration_change.display_metrics_changes) {
-      EXPECT_TRUE(base::Contains(changed_metrics_, change.display->id()));
+      EXPECT_TRUE(changed_metrics_.contains(change.display->id()));
       EXPECT_EQ(changed_metrics_[change.display->id()], change.changed_metrics);
     }
 
@@ -3776,7 +3778,7 @@ class FontTestHelper : public AshTestBase {
   enum DisplayType { INTERNAL, EXTERNAL };
 
   FontTestHelper(float scale, DisplayType display_type) {
-    gfx::ClearFontRenderParamsCacheForTest();
+    gfx::ClearFontRenderParamsCache();
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     if (display_type == INTERNAL)
       command_line->AppendSwitch(::switches::kUseFirstDisplayAsInternal);
@@ -4213,19 +4215,19 @@ TEST_F(DisplayManagerOrientationTest, SaveRestoreUserRotationLock) {
   orientation_controller->AddObserver(&test_observer);
 
   // Set up windows with portrait, landscape, and any.
-  aura::Window* window_a = CreateTestWindowInShell({.window_id = 0});
+  aura::Window* window_a = CreateTestWindowInShell({.window_id = 0}).release();
   {
     window_a->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
     orientation_controller->LockOrientationForWindow(
         window_a, chromeos::OrientationType::kAny);
   }
-  aura::Window* window_p = CreateTestWindowInShell({.window_id = 0});
+  aura::Window* window_p = CreateTestWindowInShell({.window_id = 0}).release();
   {
     window_p->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
     orientation_controller->LockOrientationForWindow(
         window_p, chromeos::OrientationType::kPortrait);
   }
-  aura::Window* window_l = CreateTestWindowInShell({.window_id = 0});
+  aura::Window* window_l = CreateTestWindowInShell({.window_id = 0}).release();
   {
     window_l->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
     orientation_controller->LockOrientationForWindow(
@@ -4333,7 +4335,7 @@ TEST_F(DisplayManagerOrientationTest, UserRotationLockReverse) {
       shell->screen_orientation_controller();
 
   // Set up windows with portrait, landscape, and any.
-  aura::Window* window = CreateTestWindowInShell({.window_id = 0});
+  aura::Window* window = CreateTestWindowInShell({.window_id = 0}).release();
   window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
   display::Screen* screen = display::Screen::Get();
 
@@ -4375,7 +4377,7 @@ TEST_F(DisplayManagerOrientationTest, LockToSpecificOrientation) {
       shell->screen_orientation_controller();
   ScreenOrientationControllerTestApi test_api(orientation_controller);
 
-  aura::Window* window_a = CreateTestWindowInShell({.window_id = 0});
+  aura::Window* window_a = CreateTestWindowInShell({.window_id = 0}).release();
   {
     window_a->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
     orientation_controller->LockOrientationForWindow(
@@ -4391,10 +4393,12 @@ TEST_F(DisplayManagerOrientationTest, LockToSpecificOrientation) {
 
   orientation_controller->OnAccelerometerUpdated(portrait_secondary);
 
-  aura::Window* window_lsc = CreateTestWindowInShell({.window_id = 1});
+  aura::Window* window_lsc =
+      CreateTestWindowInShell({.window_id = 1}).release();
   window_lsc->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
 
-  aura::Window* window_psc = CreateTestWindowInShell({.window_id = 1});
+  aura::Window* window_psc =
+      CreateTestWindowInShell({.window_id = 1}).release();
   window_psc->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
 
   orientation_controller->LockOrientationForWindow(
@@ -5253,7 +5257,7 @@ TEST_F(DisplayManagerTest, ExitMirrorModeInTabletMode) {
   EXPECT_TRUE(display_manager()->IsInSoftwareMirrorMode());
 
   // Create a window to force in-app shelf.
-  std::unique_ptr<aura::Window> window = CreateTestWindow();
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
 
   // Exit mirror mode.
   display_manager()->SetMirrorMode(display::MirrorMode::kOff, std::nullopt);
@@ -5338,11 +5342,11 @@ TEST_F(DisplayManagerTest, DisplayManagerObserverNestedChangesOrdering) {
 
       // If correctly ordered observers should be notified of added displays
       // before any changes to the metrics for these displays.
-      std::ranges::for_each(configuration_change.display_metrics_changes,
-                            [this](const auto& change) {
-                              EXPECT_TRUE(base::Contains(tracked_display_ids_,
-                                                         change.display->id()));
-                            });
+      std::ranges::for_each(
+          configuration_change.display_metrics_changes,
+          [this](const auto& change) {
+            EXPECT_TRUE(tracked_display_ids_.contains(change.display->id()));
+          });
 
       if (on_processed_cb_) {
         std::move(on_processed_cb_).Run();
@@ -5420,24 +5424,84 @@ TEST_F(DisplayManagerTest, VirtualDisplayUtilAddRemove) {
 }
 
 TEST_F(DisplayManagerTest, FontConfig) {
+  base::test::ScopedCommandLine scoped_command_line;
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+
+  // Configure the first display as internal
+  display::test::DisplayManagerTestApi(display_manager())
+      .SetFirstDisplayAsInternalDisplay();
+
+  // Default to Clamshell and unrotated displays
+  command_line->AppendSwitchASCII("form-factor", "CLAMSHELL");
+  UpdateDisplay("400x300,800x600");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  // Rotating the internal display should force disable subpixel font rendering
+  UpdateDisplay("400x300/r,800x600");
+  display_manager()->RefreshFontParams();
+  EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  // Rotating ONLY the external display should NOT force disable subpixel font
+  // rendering
+  UpdateDisplay("400x300,800x600/r");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  // Reset back to unrotated displays
+  UpdateDisplay("400x300,800x600");
+
+  // CHROMEBASE, CHROMESLATE, CONVERTIBLE and DETACHABLE form factors should
+  // allow subpixel font rendering
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "CHROMEBASE");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "CHROMESLATE");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "CONVERTIBLE");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "DETACHABLE");
+  display_manager()->RefreshFontParams();
+  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+
+  // CHROMEBOX form factor should force disable it
+  command_line->RemoveSwitch("form-factor");
   command_line->AppendSwitchASCII("form-factor", "CHROMEBOX");
   display_manager()->RefreshFontParams();
-  EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabledForTesting());
+  EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
 
-  command_line->AppendSwitchASCII("form-factor", "CLAMSHELL");
+  // OTHER form factors should force disable it
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "OTHER");
   display_manager()->RefreshFontParams();
-  EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabledForTesting());
+  EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
 
   {
     base::test::ScopedFeatureList feature_list_;
     feature_list_.InitAndEnableFeature(
         display::features::kOledScaleFactorEnabled);
     display_manager()->RefreshFontParams();
-    EXPECT_TRUE(gfx::GetFontRenderParamsSubpixelRenderingEnabledForTesting());
+    EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
   }
-  display_manager()->RefreshFontParams();
-  EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabledForTesting());
+
+  // Qualcomm Snapdragon devices should force disable it
+  command_line->RemoveSwitch("form-factor");
+  command_line->AppendSwitchASCII("form-factor", "CLAMSHELL");
+  {
+    base::test::ScopedChromeOSVersionInfo version_info(
+        "CHROMEOS_RELEASE_BOARD=trogdor\n", base::Time());
+    display_manager()->RefreshFontParams();
+    EXPECT_FALSE(gfx::GetFontRenderParamsSubpixelRenderingEnabled());
+  }
 }
 
 // This test tests the behavior of going to one or zero display in the Unified

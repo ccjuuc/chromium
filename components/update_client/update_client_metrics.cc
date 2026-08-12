@@ -12,20 +12,6 @@
 
 namespace update_client::metrics {
 
-void RecordCRXDownloadComplete(bool had_error) {
-  base::UmaHistogramBoolean(
-      "UpdateClient.CrxDownloader.DownloadCompleteSuccess", !had_error);
-}
-
-void RecordUpdateCheckResult(UpdateCheckResult result) {
-  base::UmaHistogramEnumeration("UpdateClient.Component.UpdateCheckResult",
-                                result);
-}
-
-void RecordComponentUpdated() {
-  base::UmaHistogramBoolean("UpdateClient.Component.Updated", true);
-}
-
 void RecordCRXDownloadTime(base::TimeDelta time, const std::string& app_id) {
   base::UmaHistogramLongTimes(
       base::StrCat({"UpdateClient.DownloadTime2.", app_id}), time);
@@ -36,6 +22,19 @@ void RecordCRXUnzipTime(base::TimeDelta time, const std::string& app_id) {
   base::UmaHistogramMediumTimes(
       base::StrCat({"UpdateClient.UnzipTime.", app_id}), time);
   base::UmaHistogramMediumTimes("UpdateClient.UnzipTime", time);
+}
+
+void RecordCupValidationResult(bool valid) {
+  base::UmaHistogramBoolean("UpdateClient.CupValidationResult", valid);
+}
+
+void RecordCupValidationTime(base::TimeDelta time) {
+  base::UmaHistogramTimes("UpdateClient.CupValidationTime", time);
+}
+
+void RecordCupFallbackToEtag2(bool fallback_occurred) {
+  base::UmaHistogramBoolean("UpdateClient.CupFallbackToEtag2",
+                            fallback_occurred);
 }
 
 }  // namespace update_client::metrics

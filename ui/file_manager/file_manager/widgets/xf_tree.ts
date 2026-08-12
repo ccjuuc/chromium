@@ -61,6 +61,8 @@ export class XfTree extends XfBase {
   }
 
   /** The default unnamed slot to let consumer pass children tree items. */
+  // TODO(crbug.com/493886981): Fix members asserted as non-null.
+  /* eslint-disable-next-line no-restricted-syntax */
   @query('slot') private $childrenSlot_!: HTMLSlotElement;
 
   /** The child tree items. */
@@ -103,7 +105,7 @@ export class XfTree extends XfBase {
         aria-setsize=${this.ariaSetSize_}
         @tree_item_collapsed=${this.onTreeItemCollapsed_}
       >
-        <slot @slotchange=${this.onSlotChanged_}></slot>
+        <slot role="none" @slotchange=${this.onSlotChanged_}></slot>
       </ul>
     `;
   }

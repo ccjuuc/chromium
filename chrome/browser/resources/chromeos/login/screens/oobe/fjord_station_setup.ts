@@ -49,6 +49,20 @@ export class FjordStationSetupScreen extends
   private currentPage: StationSetupPage;
   private handler: FjordStationSetupPageHandlerRemote;
 
+  /**
+   * Returns the control which should receive initial focus.
+   */
+  override get defaultControl(): HTMLElement|null {
+    return this.shadowRoot!.querySelector('#primaryButton');
+  }
+
+  override onBeforeShow(): void {
+    super.onBeforeShow();
+    // Trigger a reload because at the time the dialog is created, the web
+    // server is not up yet and will show an error page.
+    this.webview.reload();
+  }
+
   override ready(): void {
     super.ready();
     this.handler = new FjordStationSetupPageHandlerRemote();

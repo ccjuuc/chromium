@@ -72,8 +72,7 @@ AccountChecker::AccountChecker(
 AccountChecker::~AccountChecker() = default;
 
 bool AccountChecker::IsSignedIn() {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     return identity_manager_ &&
            identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin);
   }
@@ -116,7 +115,7 @@ bool AccountChecker::IsSubjectToParentalControls() {
       identity_manager_
           ->FindExtendedAccountInfo(identity_manager_->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin))
-          .capabilities;
+          .GetAccountCapabilities();
 
   return capabilities.is_subject_to_parental_controls() ==
          signin::Tribool::kTrue;
@@ -131,7 +130,7 @@ bool AccountChecker::CanUseModelExecutionFeatures() {
       identity_manager_
           ->FindExtendedAccountInfo(identity_manager_->GetPrimaryAccountInfo(
               signin::ConsentLevel::kSignin))
-          .capabilities;
+          .GetAccountCapabilities();
 
   return capabilities.can_use_model_execution_features() ==
          signin::Tribool::kTrue;
@@ -198,7 +197,7 @@ void AccountChecker::FetchPriceEmailPref() {
 void AccountChecker::HandleFetchPriceEmailPrefResponse(
     std::unique_ptr<EndpointFetcher> endpoint_fetcher,
     std::unique_ptr<EndpointResponse> responses) {
-  std::optional<base::Value::Dict> result =
+  std::optional<base::DictValue> result =
       base::JSONReader::ReadDict(responses->response, base::JSON_PARSE_RFC);
 
   // Only update the pref if we're still waiting for the pref fetch completion.
@@ -237,9 +236,9 @@ void AccountChecker::OnPriceEmailPrefChanged() {
   }
 
   // Send the new value to server.
-  base::Value::Dict post_json = base::Value::Dict().Set(
+  base::DictValue post_json = base::DictValue().Set(
       kPreferencesKey,
-      base::Value::Dict().Set(
+      base::DictValue().Set(
           kPriceTrackEmailPref,
           pref_service_->GetBoolean(kPriceEmailNotificationsEnabled)));
   std::string post_data = base::WriteJson(post_json).value_or("");
@@ -286,7 +285,7 @@ void AccountChecker::OnPriceEmailPrefChanged() {
 void AccountChecker::HandleSendPriceEmailPrefResponse(
     std::unique_ptr<EndpointFetcher> endpoint_fetcher,
     std::unique_ptr<EndpointResponse> responses) {
-  std::optional<base::Value::Dict> result =
+  std::optional<base::DictValue> result =
       base::JSONReader::ReadDict(responses->response, base::JSON_PARSE_RFC);
   if (pref_service_ && result.has_value()) {
     if (auto* preferences_map = result->FindDict(kPreferencesKey)) {
@@ -313,7 +312,7 @@ std::unique_ptr<EndpointFetcher> AccountChecker::CreateEndpointFetcher(
   // kReplaceSyncPromosWithSignInPromos is launched on all platforms. See
   // ConsentLevel::kSync documentation for details.
   signin::ConsentLevel consent_level =
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? signin::ConsentLevel::kSignin
           : signin::ConsentLevel::kSync;
   EndpointFetcher::RequestParams::Builder request_params =

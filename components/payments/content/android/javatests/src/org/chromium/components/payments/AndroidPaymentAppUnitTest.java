@@ -11,6 +11,7 @@ import android.os.Bundle;
 import androidx.test.annotation.UiThreadTest;
 import androidx.test.filters.SmallTest;
 
+import org.chromium.components.payments.intent.WebPaymentIntentHelper;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -26,6 +27,7 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.payments.mojom.PaymentCurrencyAmount;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 import org.chromium.payments.mojom.PaymentItem;
 import org.chromium.payments.mojom.PaymentMethodData;
 import org.chromium.payments.mojom.PaymentOptions;
@@ -97,23 +99,9 @@ public class AndroidPaymentAppUnitTest {
     public void testSetHasEnrolledInstrument() throws Exception {
         AndroidPaymentApp app =
                 createApp(
-                        /* allowShowWithoutReadyToPay= */ true,
                         /* showReadyToPayDebugInfo= */ false);
         Assert.assertFalse(app.hasEnrolledInstrument());
         app.setHasEnrolledInstrument(true);
-        Assert.assertTrue(app.hasEnrolledInstrument());
-    }
-
-    @SmallTest
-    @Test
-    @UiThreadTest
-    public void testCannotSetHasEnrolledInstrument() throws Exception {
-        AndroidPaymentApp app =
-                createApp(
-                        /* allowShowWithoutReadyToPay= */ false,
-                        /* showReadyToPayDebugInfo= */ false);
-        Assert.assertTrue(app.hasEnrolledInstrument());
-        app.setHasEnrolledInstrument(false);
         Assert.assertTrue(app.hasEnrolledInstrument());
     }
 
@@ -144,12 +132,22 @@ public class AndroidPaymentAppUnitTest {
         Assert.assertNull(mPaymentDetails);
     }
 
-    private AndroidPaymentApp createApp(boolean showReadyToPayDebugInfo) {
-        return createApp(/* allowShowWithoutReadyToPay= */ false, showReadyToPayDebugInfo);
+    @SmallTest
+    @Test
+    @UiThreadTest
+    public void testInternalAppErrorPayment() throws Exception {
+        AndroidPaymentApp app = createApp(/* showReadyToPayDebugInfo= */ false);
+        queryReadyToPay(app);
+        invokePaymentApp(app, WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR);
+        Assert.assertEquals(
+                "Payment app returned RESULT_INTERNAL_APP_ERROR code. Native payment app"
+                        + " encountered an internal app error.",
+                mErrorMessage);
+        Assert.assertNull(mPaymentMethodName);
+        Assert.assertNull(mPaymentDetails);
     }
 
-    private AndroidPaymentApp createApp(
-            boolean allowShowWithoutReadyToPay, boolean showReadyToPayDebugInfo) {
+    private AndroidPaymentApp createApp(boolean showReadyToPayDebugInfo) {
         AndroidPaymentApp app =
                 new AndroidPaymentApp(
                         mLauncherMock,
@@ -163,7 +161,6 @@ public class AndroidPaymentAppUnitTest {
                         /* isIncognito= */ false,
                         /* appToHide= */ null,
                         new SupportedDelegations(),
-                        allowShowWithoutReadyToPay,
                         showReadyToPayDebugInfo,
                         /* removeDeprecatedFields= */ false,
                         /* paymentDetailsUpdateServiceMaxRetryNumber= */ 0);
@@ -219,7 +216,8 @@ public class AndroidPaymentAppUnitTest {
                     }
 
                     @Override
-                    public void onInstrumentDetailsError(String errorMessage) {
+                    public void onInstrumentDetailsError(
+                            @PaymentEventResponseType.EnumType int error, String errorMessage) {
                         mErrorMessage = errorMessage;
                         mInvokePaymentAppFinished = true;
                     }

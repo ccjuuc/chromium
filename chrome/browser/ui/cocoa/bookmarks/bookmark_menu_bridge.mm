@@ -15,7 +15,6 @@
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser_list.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_cocoa_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
@@ -25,6 +24,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/mac/menu_text_elider_mac.h"
 #include "ui/resources/grit/ui_resources.h"
 
 using bookmarks::BookmarkModel;
@@ -47,7 +47,7 @@ void ClearDelegatesFromSubmenu(NSMenu* menu) {
 }
 
 NSString* MenuTitleForNode(const BookmarkNode* node) {
-  return base::SysUTF16ToNSString(node->GetTitle());
+  return base::SysUTF16ToNSString(gfx::ElideMenuItemTitle(node->GetTitle()));
 }
 
 }  // namespace

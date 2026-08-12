@@ -3,6 +3,10 @@
 // found in the LICENSE file.
 package org.chromium.chrome.browser.lens;
 
+import android.content.Context;
+
+import androidx.annotation.DrawableRes;
+
 import org.chromium.base.Callback;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ServiceLoaderUtil;
@@ -37,6 +41,15 @@ public class LensController {
             delegate = new LensControllerDelegate();
         }
         mDelegate = delegate;
+    }
+
+    /**
+     * Retrieve the Lens icon resource id.
+     *
+     * @return The resource id for the Lens icon.
+     */
+    public @DrawableRes int getLensIconResourceId() {
+        return mDelegate.getLensIconResourceId();
     }
 
     /**
@@ -95,6 +108,16 @@ public class LensController {
      */
     public void startLens(WindowAndroid window, LensIntentParams lensIntentParams) {
         mDelegate.startLens(window, lensIntentParams);
+    }
+
+    /**
+     * Launch lens with an intent.
+     *
+     * @param context The current context.
+     * @param lensIntentParams The intent parameters for Lens
+     */
+    public void startLens(Context context, LensIntentParams lensIntentParams) {
+        mDelegate.startLens(context, lensIntentParams);
     }
 
     /** Starts the Lens connection. */

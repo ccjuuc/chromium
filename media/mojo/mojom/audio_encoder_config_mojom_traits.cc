@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/base/limits.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
@@ -26,17 +27,15 @@ media::mojom::AacOutputFormat EnumTraits<media::mojom::AacOutputFormat,
 }
 
 // static
-bool EnumTraits<media::mojom::AacOutputFormat,
-                media::AudioEncoder::AacOutputFormat>::
-    FromMojom(media::mojom::AacOutputFormat format,
-              media::AudioEncoder::AacOutputFormat* output) {
+media::AudioEncoder::AacOutputFormat
+EnumTraits<media::mojom::AacOutputFormat,
+           media::AudioEncoder::AacOutputFormat>::
+    FromMojom(media::mojom::AacOutputFormat format) {
   switch (format) {
     case media::mojom::AacOutputFormat::kADTS:
-      *output = media::AudioEncoder::AacOutputFormat::ADTS;
-      return true;
+      return media::AudioEncoder::AacOutputFormat::ADTS;
     case media::mojom::AacOutputFormat::kAAC:
-      *output = media::AudioEncoder::AacOutputFormat::AAC;
-      return true;
+      return media::AudioEncoder::AacOutputFormat::AAC;
   }
   NOTREACHED();
 }
@@ -73,8 +72,10 @@ bool StructTraits<media::mojom::AudioEncoderConfigDataView,
   if (input.bitrate() > 0)
     output->bitrate = base::saturated_cast<int>(input.bitrate());
 
-  if (input.channel_count() > media::limits::kMaxChannels)
+  if (input.channel_count() == 0 ||
+      input.channel_count() > media::limits::kMaxChannels) {
     return false;
+  }
   output->channels = input.channel_count();
 
   media::AudioEncoder::AacOptions aac;

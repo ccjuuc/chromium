@@ -5,16 +5,26 @@
 #ifndef CHROME_BROWSER_UI_EXCLUSIVE_ACCESS_EXCLUSIVE_ACCESS_MANAGER_H_
 #define CHROME_BROWSER_UI_EXCLUSIVE_ACCESS_EXCLUSIVE_ACCESS_MANAGER_H_
 
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_permission_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/exclusive_access/keyboard_lock_controller.h"
 #include "chrome/browser/ui/exclusive_access/pointer_lock_controller.h"
 #include "components/input/native_web_keyboard_event.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "url/origin.h"
 
+class BookmarkBarController;
+class BrowserWindowInterface;
 class ExclusiveAccessContext;
+
+namespace chrome {
+class BrowserCommandController;
+}
 
 namespace content {
 class WebContents;
@@ -25,6 +35,18 @@ class WebContents;
 // updates the exit bubble to reflect the combined state.
 class ExclusiveAccessManager {
  public:
+  DECLARE_USER_DATA(ExclusiveAccessManager);
+
+  static ExclusiveAccessManager* From(BrowserWindowInterface* browser);
+  static const ExclusiveAccessManager* From(
+      const BrowserWindowInterface* browser);
+
+  ExclusiveAccessManager(
+      BrowserWindowInterface* browser,
+      ExclusiveAccessContext* exclusive_access_context,
+      chrome::BrowserCommandController* browser_command_controller,
+      BookmarkBarController* bookmark_bar_controller);
+
   explicit ExclusiveAccessManager(
       ExclusiveAccessContext* exclusive_access_context);
 
@@ -107,6 +129,11 @@ class ExclusiveAccessManager {
   base::flat_set<raw_ptr<ExclusiveAccessControllerBase>>
       exclusive_access_controllers_;
   ExclusiveAccessPermissionManager permission_manager_;
+
+  std::optional<ui::ScopedUnownedUserData<ExclusiveAccessManager>>
+      scoped_unowned_user_data_;
+
+  base::WeakPtrFactory<ExclusiveAccessManager> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_EXCLUSIVE_ACCESS_EXCLUSIVE_ACCESS_MANAGER_H_

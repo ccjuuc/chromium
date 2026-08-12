@@ -536,6 +536,14 @@ void Label::SetElideBehavior(gfx::ElideBehavior elide_behavior) {
   OnDisplayTextTruncation();
 }
 
+void Label::SetDirectionalityMode(gfx::DirectionalityMode mode) {
+  full_text_->SetDirectionalityMode(mode);
+}
+
+gfx::DirectionalityMode Label::GetDirectionalityMode() const {
+  return full_text_->directionality_mode();
+}
+
 void Label::SetCustomTooltipText(std::u16string_view tooltip_text) {
   custom_tooltip_text_ = std::u16string(tooltip_text);
 
@@ -1254,7 +1262,7 @@ void Label::OnAfterPointerAction(bool text_changed, bool selection_changed) {
   }
 }
 
-bool Label::PasteSelectionClipboard() {
+void Label::PasteSelectionClipboard(base::OnceCallback<void(bool)> callback) {
   NOTREACHED();
 }
 
@@ -1581,7 +1589,7 @@ void Label::OnDisplayTextTruncation() {
 }
 
 BEGIN_METADATA(Label)
-ADD_PROPERTY_METADATA(std::u16string_view, Text)
+ADD_PROPERTY_METADATA(std::u16string, Text)
 ADD_PROPERTY_METADATA(int, TextContext)
 ADD_PROPERTY_METADATA(int, TextStyle)
 ADD_PROPERTY_METADATA(bool, AutoColorReadabilityEnabled)

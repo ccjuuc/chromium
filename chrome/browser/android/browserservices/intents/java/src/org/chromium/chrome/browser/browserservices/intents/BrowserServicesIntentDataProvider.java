@@ -13,18 +13,18 @@ import static androidx.browser.customtabs.CustomTabsIntent.SHARE_STATE_OFF;
 
 import android.app.PendingIntent;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
 import android.widget.RemoteViews;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.browser.customtabs.CustomContentAction;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.browser.customtabs.CustomTabsIntent.CloseButtonPosition;
 import androidx.browser.customtabs.CustomTabsIntent.OpenInBrowserState;
-import androidx.browser.customtabs.ExperimentalCustomContentAction;
-import androidx.browser.customtabs.ExperimentalOpenInBrowser;
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode;
 import androidx.browser.trusted.TrustedWebActivityDisplayMode;
@@ -35,6 +35,8 @@ import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ActivityType;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.util.WindowFeatures;
 import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.device.mojom.ScreenOrientationLockType;
@@ -45,6 +47,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /** Base class for model classes which parse incoming intent for customization data. */
 @NullMarked
@@ -54,7 +57,6 @@ public abstract class BrowserServicesIntentDataProvider {
         CustomTabsUiType.DEFAULT,
         CustomTabsUiType.MEDIA_VIEWER,
         CustomTabsUiType.INFO_PAGE,
-        CustomTabsUiType.READER_MODE,
         CustomTabsUiType.MINIMAL_UI_WEBAPP,
         CustomTabsUiType.OFFLINE_PAGE,
         CustomTabsUiType.AUTH_TAB,
@@ -67,10 +69,10 @@ public abstract class BrowserServicesIntentDataProvider {
         int DEFAULT = 0;
         int MEDIA_VIEWER = 1;
         int INFO_PAGE = 2;
-        int READER_MODE = 3;
+        // int READER_MODE = 3; // Deprecated.
         int MINIMAL_UI_WEBAPP = 4;
         int OFFLINE_PAGE = 5;
-        int READ_LATER = 6;
+        // int READ_LATER = 6; // Unused.
         int AUTH_TAB = 7;
         int NETWORK_BOUND_TAB = 8;
         int POPUP = 9;
@@ -98,22 +100,6 @@ public abstract class BrowserServicesIntentDataProvider {
     @Retention(RetentionPolicy.SOURCE)
     public @interface ActivitySideSheetSlideInBehavior {}
 
-    // The type of Profile and UI that is used by the custom tab.
-    @IntDef({
-        CustomTabProfileType.REGULAR,
-        CustomTabProfileType.INCOGNITO,
-        CustomTabProfileType.EPHEMERAL
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface CustomTabProfileType {
-        // The normal user profile.
-        int REGULAR = 0;
-        // An off-the-record profile with incognito UI.
-        int INCOGNITO = 1;
-        // An off-the-record profile without references to incognito mode.
-        int EPHEMERAL = 2;
-    }
-
     /**
      * Represents apps that launch Incognito CCT. DO NOT reorder items in this interface, because
      * it's mirrored to UMA (as {@link IncognitoCctCallerId}). Values should be enumerated from 0.
@@ -123,7 +109,6 @@ public abstract class BrowserServicesIntentDataProvider {
         IncognitoCctCallerId.OTHER_APPS,
         IncognitoCctCallerId.GOOGLE_APPS,
         IncognitoCctCallerId.OTHER_CHROME_FEATURES,
-        IncognitoCctCallerId.READER_MODE,
         IncognitoCctCallerId.READ_LATER,
         IncognitoCctCallerId.EPHEMERAL_TAB,
         IncognitoCctCallerId.DOWNLOAD_HOME,
@@ -139,7 +124,7 @@ public abstract class BrowserServicesIntentDataProvider {
         int OTHER_CHROME_FEATURES = 2;
 
         // Chrome Features
-        int READER_MODE = 3;
+        // int READER_MODE = 3; // Deprecated.
         int READ_LATER = 4;
 
         // An ephemeral custom tab without incognito branding.
@@ -710,8 +695,16 @@ public abstract class BrowserServicesIntentDataProvider {
     }
 
     /**
+     * Returns the background color in ARGB format. For now, used only by Partial Custom Tabs to
+     * have a transparency to keep the host app visible while the page is loading.
+     */
+    public @ColorInt int getTranslucentBackgroundColor(Context context) {
+        return 0;
+    }
+
+    /**
      * @return true, as by default having a PCCT launched still allows interaction with the
-     * background application
+     *     background application
      */
     public boolean canInteractWithBackground() {
         return false;
@@ -818,7 +811,6 @@ public abstract class BrowserServicesIntentDataProvider {
      *
      * @return {@link OpenInBrowserState} the desired settings for the Open in Browser button.
      */
-    @ExperimentalOpenInBrowser
     public @OpenInBrowserState int getOpenInBrowserButtonState() {
         return OPEN_IN_BROWSER_STATE_OFF;
     }
@@ -833,7 +825,6 @@ public abstract class BrowserServicesIntentDataProvider {
     /**
      * @return {@link List<CustomContentAction>} the developer defined contextual menu items.
      */
-    @ExperimentalCustomContentAction
     public List<CustomContentAction> getCustomContentActions() {
         return List.of();
     }
@@ -873,4 +864,14 @@ public abstract class BrowserServicesIntentDataProvider {
     public @IncognitoCctCallerId int getFeatureIdForMetricsCollection() {
         return IncognitoCctCallerId.OTHER_APPS;
     }
+
+    /**
+     * Adds additional content to the Intent, if present.
+     *
+     * @param tabProvider The tab provider for which the content should be retrieved.
+     * @param outboundIntent The intent to add the content to.
+     * @param viewId The ID of the view clicked.
+     */
+    public void maybeAddAdditionalContentExtrasToOutboundIntent(
+            Supplier<@Nullable Tab> tabProvider, Intent outboundIntent, int viewId) {}
 }

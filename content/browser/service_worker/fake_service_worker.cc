@@ -14,7 +14,7 @@
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom.h"
-#include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app_events.mojom.h"
 #include "third_party/blink/public/mojom/push_messaging/push_messaging.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/dispatch_fetch_event_params.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_fetch_response_callback.mojom.h"
@@ -145,7 +145,8 @@ void FakeServiceWorker::DispatchFetchEventForMainResource(
   auto now = base::TimeTicks::Now();
   timing->respond_with_settled_time = now;
   timing->dispatch_event_time = now;
-  response_callback->OnResponse(std::move(response), std::move(timing));
+  response_callback->OnResponse(std::move(response), std::move(timing),
+                                /*errors=*/nullptr);
   std::move(callback).Run(blink::mojom::ServiceWorkerEventStatus::COMPLETED);
 }
 
@@ -253,7 +254,7 @@ void FakeServiceWorker::SetIdleDelay(base::TimeDelta delay) {
   idle_delay_ = delay;
 }
 
-void FakeServiceWorker::AddKeepAlive() {
+void FakeServiceWorker::AddKeepAlive(uint64_t /*keepalive_sequence_number*/) {
   idle_delay_.reset();
 }
 

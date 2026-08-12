@@ -22,12 +22,13 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tabs/public/split_tab_collection.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_group_tab_collection.h"
 #include "components/web_modal/modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -44,30 +45,6 @@ namespace {
 
 bool g_disable_tab_feature_initialization = false;
 
-// This class exists to allow consumers to look up a TabInterface from an
-// instance of WebContents. This is necessary while transitioning features to
-// use TabInterface and TabModel instead of WebContents.
-class TabLookupFromWebContents
-    : public content::WebContentsUserData<TabLookupFromWebContents> {
- public:
-  ~TabLookupFromWebContents() override = default;
-
-  TabModel* model() { return model_; }
-  const TabModel* model() const { return model_; }
-
- private:
-  friend WebContentsUserData;
-  TabLookupFromWebContents(content::WebContents* contents, TabModel* model)
-      : content::WebContentsUserData<TabLookupFromWebContents>(*contents),
-        model_(model) {}
-
-  // Semantically owns this class.
-  raw_ptr<TabModel> model_;
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
-};
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(TabLookupFromWebContents);
-
 }  // namespace
 
 TabModel::TabModel(std::unique_ptr<content::WebContents> contents,
@@ -75,7 +52,7 @@ TabModel::TabModel(std::unique_ptr<content::WebContents> contents,
     : contents_owned_(std::move(contents)),
       contents_(contents_owned_.get()),
       soon_to_be_owning_model_(soon_to_be_owning_model) {
-  TabLookupFromWebContents::CreateForWebContents(contents_, this);
+  tabs::TabLookupFromWebContents::CreateForWebContents(contents_, this);
 
   // TODO(https://crbug.com/362038317): Tab-helpers should be created in exactly
   // one place, which is here.
@@ -94,7 +71,7 @@ TabModel::TabModel(std::unique_ptr<content::WebContents> contents,
 }
 
 TabModel::~TabModel() {
-  contents_->RemoveUserData(TabLookupFromWebContents::UserDataKey());
+  contents_->RemoveUserData(tabs::TabLookupFromWebContents::UserDataKey());
 }
 
 void TabModel::OnAddedToModel(TabStripModel* owning_model) {
@@ -102,7 +79,6 @@ void TabModel::OnAddedToModel(TabStripModel* owning_model) {
   CHECK(!owning_model_);
   CHECK(owning_model);
   owning_model_ = owning_model;
-  owning_model_->AddObserver(this);
 
   // Being detached is equivalent to being in the background. So after
   // detachment, if the tab is in the foreground, we must send a notification.
@@ -119,14 +95,13 @@ void TabModel::OnRemovedFromModel() {
   // Going through each field here:
   // Keep `contents_`, obviously.
 
-  owning_model_->RemoveObserver(this);
   owning_model_ = nullptr;
 
   // At this point tab is detached.
   will_be_detaching_ = false;
 
   // Opener stuff doesn't make sense to transfer between browsers.
-  opener_ = nullptr;
+  opener_handle_ = tabs::TabHandle::Null();
   reset_opener_on_active_tab_change_ = false;
 
   // Blocked state is preserved, at
@@ -137,6 +112,14 @@ void TabModel::OnRemovedFromModel() {
 
   // Remove visibility observers.
   WebContentsObserver::Observe(nullptr);
+}
+
+tabs::TabInterface* TabModel::opener() const {
+  return opener_handle_.Get();
+}
+
+void TabModel::set_opener(tabs::TabInterface* opener) {
+  opener_handle_ = opener ? opener->GetHandle() : tabs::TabHandle::Null();
 }
 
 TabCollection* TabModel::GetParentCollection(
@@ -182,6 +165,15 @@ void TabModel::SetGroup(std::optional<tab_groups::TabGroupId> group) {
   group_changed_callback_list_.Notify(this, group_);
 }
 
+void TabModel::SetBlocked(bool blocked) {
+  if (blocked_ == blocked) {
+    return;
+  }
+
+  blocked_ = blocked;
+  blocked_state_changed_callback_list_.Notify(this, blocked_);
+}
+
 void TabModel::WillBecomeHidden(base::PassKey<TabStripModel>) {
   will_become_hidden_callback_list_.Notify(this);
 }
@@ -206,6 +198,28 @@ base::WeakPtr<TabInterface> TabModel::GetWeakPtr() {
 
 content::WebContents* TabModel::GetContents() const {
   return contents_;
+}
+
+void TabModel::LoadIfNeeded() {
+  if (contents_ && contents_->GetController().NeedsReload()) {
+    contents_->GetController().LoadIfNecessary();
+  }
+}
+
+std::u16string TabModel::GetTitle() const {
+  return contents_ ? contents_->GetTitle() : std::u16string();
+}
+
+GURL TabModel::GetURL() const {
+  return contents_ ? contents_->GetLastCommittedURL() : GURL();
+}
+
+base::Time TabModel::GetLastActiveTime() const {
+  return contents_ ? contents_->GetLastActiveTime() : base::Time();
+}
+
+Profile* TabModel::GetProfile() const {
+  return Profile::FromBrowserContext(contents_->GetBrowserContext());
 }
 
 base::CallbackListSubscription TabModel::RegisterWillDiscardContents(
@@ -269,6 +283,11 @@ base::CallbackListSubscription TabModel::RegisterGroupChanged(
   return group_changed_callback_list_.Add(std::move(callback));
 }
 
+base::CallbackListSubscription TabModel::RegisterBlockedStateChanged(
+    TabInterface::BlockedStateChangedCallback callback) {
+  return blocked_state_changed_callback_list_.Add(std::move(callback));
+}
+
 bool TabModel::CanShowModalUI() const {
   return !showing_modal_ui_;
 }
@@ -287,11 +306,14 @@ bool TabModel::IsInNormalWindow() const {
 }
 
 BrowserWindowInterface* TabModel::GetBrowserWindowInterface() {
-  return GetModelForTabInterface()->delegate()->GetBrowserWindowInterface();
+  if (soon_to_be_owning_model_ || owning_model_) {
+    return GetModelForTabInterface()->delegate()->GetBrowserWindowInterface();
+  }
+  return nullptr;
 }
 
 const BrowserWindowInterface* TabModel::GetBrowserWindowInterface() const {
-  return GetModelForTabInterface()->delegate()->GetBrowserWindowInterface();
+  return const_cast<TabModel*>(this)->GetBrowserWindowInterface();
 }
 
 tabs::TabFeatures* TabModel::GetTabFeatures() {
@@ -331,18 +353,8 @@ void TabModel::Close() {
   tab_strip->CloseWebContentsAt(tab_idx, TabCloseTypes::CLOSE_NONE);
 }
 
-void TabModel::OnTabStripModelChanged(
-    TabStripModel* tab_strip_model,
-    const TabStripModelChange& change,
-    const TabStripSelectionChange& selection) {
-  if (!selection.active_tab_changed()) {
-    return;
-  }
-
-  if (selection.new_contents == GetContents()) {
-    did_enter_foreground_callback_list_.Notify(this);
-    return;
-  }
+void TabModel::DidEnterForeground(base::PassKey<TabStripModel>) {
+  did_enter_foreground_callback_list_.Notify(this);
 }
 
 void TabModel::OnVisibilityChanged(content::Visibility visibility) {
@@ -373,13 +385,10 @@ TabStripModel* TabModel::GetModelForTabInterface() const {
   return soon_to_be_owning_model_ ? soon_to_be_owning_model_ : owning_model_;
 }
 
-// TODO(crbug.com/392950857): Consider making collections responsible for
-// updating the properties of their children. TabModel::OnAddedToModel could be
-// called from here instead of manually doing it in TabStripModel.
 void TabModel::UpdateProperties() {
   bool pinned = false;
-  std::optional<tab_groups::TabGroupId> group = std::nullopt;
-  std::optional<split_tabs::SplitTabId> split = std::nullopt;
+  std::optional<tab_groups::TabGroupId> group;
+  std::optional<split_tabs::SplitTabId> split;
 
   TabCollection* ancestor = parent_collection_;
   while (ancestor) {
@@ -434,18 +443,20 @@ void TabModel::WriteIntoTrace(perfetto::TracedValue context) const {
 
 std::unique_ptr<content::WebContents> TabModel::DiscardContents(
     std::unique_ptr<content::WebContents> contents) {
+  CHECK_EQ(contents_->GetBrowserContext(), contents->GetBrowserContext());
   will_discard_contents_callback_list_.Notify(this, contents_, contents.get());
-  contents_->RemoveUserData(TabLookupFromWebContents::UserDataKey());
+  contents_->RemoveUserData(tabs::TabLookupFromWebContents::UserDataKey());
   std::unique_ptr<content::WebContents> old_contents =
       std::move(contents_owned_);
   contents_owned_ = std::move(contents);
   contents_ = contents_owned_.get();
+  WebContentsObserver::Observe(contents_);
 
   const SessionID session_id = sessions::SessionTabHelper::IdForTab(contents_);
   CHECK(session_id.is_valid());
   SetSessionId(session_id.id());
 
-  TabLookupFromWebContents::CreateForWebContents(contents_, this);
+  tabs::TabLookupFromWebContents::CreateForWebContents(contents_, this);
   return old_contents;
 }
 
@@ -459,29 +470,6 @@ std::unique_ptr<content::WebContents> TabModel::DestroyAndTakeWebContents(
 
 void TabModel::DestroyTabFeatures() {
   tab_features_.reset();
-}
-
-// static
-TabInterface* TabInterface::GetFromContents(
-    content::WebContents* web_contents) {
-  return TabLookupFromWebContents::FromWebContents(web_contents)->model();
-}
-
-// static
-const TabInterface* TabInterface::GetFromContents(
-    const content::WebContents* web_contents) {
-  return TabLookupFromWebContents::FromWebContents(web_contents)->model();
-}
-
-// static
-TabInterface* TabInterface::MaybeGetFromContents(
-    content::WebContents* web_contents) {
-  TabLookupFromWebContents* lookup =
-      TabLookupFromWebContents::FromWebContents(web_contents);
-  if (!lookup) {
-    return nullptr;
-  }
-  return lookup->model();
 }
 
 }  // namespace tabs

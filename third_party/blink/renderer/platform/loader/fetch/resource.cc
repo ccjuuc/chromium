@@ -33,11 +33,14 @@
 #include <variant>
 
 #include "base/feature_list.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_clock.h"
 #include "build/build_config.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/scheme_registry.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-shared.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -59,7 +62,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -70,6 +72,46 @@
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
+
+// TODO(crbug.com/507483993): Enable these behaviors by default and remove the
+// feature flags after monitoring for regressions.
+
+// Feature that prevents an extension resource (chrome-extension://...) from
+// being fetched across isolated worlds.
+BASE_FEATURE(kPreventExtensionResourceFetchAcrossIsolatedWorlds,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Feature that prevents resources fetched via a Service Worker from being
+// reused across different script worlds.
+BASE_FEATURE(kPreventCrossWorldServiceWorkerResourceReuse,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+String GetAsAttributeFromResourceType(ResourceType type) {
+  switch (type) {
+    case ResourceType::kImage:
+      return "image";
+    case ResourceType::kScript:
+      return "script";
+    case ResourceType::kCSSStyleSheet:
+      return "style";
+    case ResourceType::kTextTrack:
+      return "track";
+    case ResourceType::kFont:
+      return "font";
+    case ResourceType::kRaw:
+    case ResourceType::kMock:
+      return "fetch";
+    case ResourceType::kAudio:
+    case ResourceType::kVideo:
+    case ResourceType::kManifest:
+    case ResourceType::kSpeculationRules:
+    case ResourceType::kDictionary:
+    case ResourceType::kSVGDocument:
+    case ResourceType::kXSLStyleSheet:
+    case ResourceType::kLinkPrefetch:
+      NOTREACHED();
+  }
+}
 
 namespace {
 
@@ -121,13 +163,13 @@ const auto kHeaderPrefixesToIgnoreAfterRevalidation =
 
 inline bool ShouldUpdateHeaderAfterRevalidation(const AtomicString& header) {
   for (const auto* header_to_ignore : kHeadersToIgnoreAfterRevalidation) {
-    if (EqualIgnoringASCIICase(header, header_to_ignore)) {
+    if (EqualIgnoringAsciiCase(header, header_to_ignore)) {
       return false;
     }
   }
   for (const auto* header_prefix_to_ignore :
        kHeaderPrefixesToIgnoreAfterRevalidation) {
-    if (header.StartsWithIgnoringASCIICase(header_prefix_to_ignore)) {
+    if (header.StartsWithIgnoringAsciiCase(header_prefix_to_ignore)) {
       return false;
     }
   }
@@ -135,6 +177,22 @@ inline bool ShouldUpdateHeaderAfterRevalidation(const AtomicString& header) {
 }
 
 const base::Clock* g_clock_for_testing = nullptr;
+
+constexpr base::MemoryConsumerTraits kResourceTraits(
+    // Encoded and decoded data size varies widely, can reach tens of MBs.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
+    // Pruning destroys decoded data without traversing complex structures.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kFreesPagesWithoutTraversal,
+    // Data can be re-decoded from the encoded payload.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Pruning runs synchronously on the renderer thread.
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous,
+    // Holds references managed by Blink Oilpan GC.
+    base::MemoryConsumerTraits::ReleaseGCReferences::kYes,
+    // Does not maintain a lasting memory limit; performs one-time eviction.
+    base::MemoryConsumerTraits::IsStateful::kNo,
+    // Re-decoding from the encoded payload is computationally expensive.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kExpensive);
 
 }  // namespace
 
@@ -154,10 +212,11 @@ Resource::Resource(const ResourceRequestHead& request,
       response_timestamp_(Now()),
       resource_request_(request),
       overhead_size_(CalculateOverheadSize()),
-      memory_pressure_listener_registration_(
-          FROM_HERE,
-          base::MemoryPressureListenerTag::kResource,
-          this) {
+      memory_consumer_registration_(
+          "Resource",
+          kResourceTraits,
+          this,
+          MemoryConsumerRegistration::CheckUnregister::kDisabled) {
   InstanceCounters::IncrementCounter(InstanceCounters::kResourceCounter);
 }
 
@@ -175,7 +234,7 @@ void Resource::Trace(Visitor* visitor) const {
 }
 
 void Resource::Dispose() {
-  memory_pressure_listener_registration_.Dispose();
+  memory_consumer_registration_.Dispose();
 }
 
 void Resource::SetLoader(ResourceLoader* loader) {
@@ -201,10 +260,7 @@ void Resource::CheckResourceIntegrity() {
 
   // Check `Unencoded-Digest` headers. If the digest doesn't match, fail.
   // Otherwise, fall through to validating SRI.
-  const FeatureContext* feature_context =
-      loader_ ? loader_->GetFeatureContext() : nullptr;
-  if (RuntimeEnabledFeatures::UnencodedDigestEnabled(feature_context) &&
-      !SubresourceIntegrity::CheckUnencodedDigests(
+  if (!SubresourceIntegrity::CheckUnencodedDigests(
           GetResponse().GetUnencodedDigests(), Data())) {
     integrity_disposition_ =
         ResourceIntegrityDisposition::kFailedUnencodedDigest;
@@ -215,18 +271,21 @@ void Resource::CheckResourceIntegrity() {
     return;
   }
 
+  const FeatureContext* feature_context =
+      loader_ ? loader_->GetFeatureContext() : nullptr;
+
   HashMap<HashAlgorithm, String> integrity_hashes;
   bool is_cors_same_origin = response_.IsCorsSameOrigin();
   HashSet<HashAlgorithm> csp_hash_reports_needed;
   if ((type_ == ResourceType::kScript) && loader_) {
     csp_hash_reports_needed = loader_->Fetcher()->Context().CSPHashesToReport();
   }
-  if (IntegrityMetadata().empty()) {
+  if (GetIntegrityMetadata().empty()) {
     // No integrity attributes to check? Then we're passing.
     integrity_disposition_ = ResourceIntegrityDisposition::kPassed;
   } else {
     if (SubresourceIntegrity::CheckSubresourceIntegrity(
-            IntegrityMetadata(), Data(), Url(), *this, feature_context,
+            GetIntegrityMetadata(), Data(), Url(), *this, feature_context,
             integrity_report_, &integrity_hashes)) {
       integrity_disposition_ = ResourceIntegrityDisposition::kPassed;
     } else {
@@ -434,10 +493,11 @@ bool Resource::ForceIntegrityChecks() const {
 
 bool Resource::MustRefetchDueToIntegrityMetadata(
     const FetchParameters& params) const {
-  if (params.IntegrityMetadata().empty())
+  if (params.GetIntegrityMetadata().empty()) {
     return false;
+  }
 
-  return IntegrityMetadata() != params.IntegrityMetadata();
+  return GetIntegrityMetadata() != params.GetIntegrityMetadata();
 }
 
 const scoped_refptr<const SecurityOrigin>& Resource::GetOrigin() const {
@@ -470,9 +530,10 @@ static base::TimeDelta FreshnessLifetime(const ResourceResponse& response,
 #endif
 
   // Cache other non-http / non-filesystem resources liberally.
-  if (!response.CurrentRequestUrl().ProtocolIsInHTTPFamily() &&
-      !response.CurrentRequestUrl().ProtocolIs("filesystem"))
+  if (!response.CurrentRequestUrl().ProtocolIsInHttpFamily() &&
+      !response.CurrentRequestUrl().ProtocolIs("filesystem")) {
     return base::TimeDelta::Max();
+  }
 
   // RFC2616 13.2.4
   std::optional<base::TimeDelta> max_age_value = response.CacheControlMaxAge();
@@ -813,7 +874,40 @@ Resource::MatchStatus Resource::CanReuse(const FetchParameters& params) const {
   // Use GetResourceRequest to get the const resource_request_.
   const ResourceRequestHead& current_request = GetResourceRequest();
 
-  // If credentials mode is defferent from the the previous request, re-fetch
+  // We need two distinct checks here to prevent unexpected cross-world
+  // resource reuse.
+  //
+  // 1. The extension-specific check prevents sharing of extension
+  //    resources (chrome-extension://...) across different script worlds,
+  //    even for standard network loads.
+  //    For example, if a main world page preloads a web-accessible extension
+  //    resource, reusing that cached resource in the extension's isolated
+  //    world could bypass world-specific loader checks.
+  //    This behavior is tested in
+  //    `ResourceFetcherTest.CrossWorldExtensionResourceMismatch`.
+  if (base::FeatureList::IsEnabled(
+          kPreventExtensionResourceFetchAcrossIsolatedWorlds) &&
+      CommonSchemeRegistry::IsExtensionScheme(
+          current_request.Url().Protocol().Ascii()) &&
+      options_.world_for_csp != new_options.world_for_csp) {
+    return MatchStatus::kCrossWorldExtensionResourceMismatch;
+  }
+
+  // 2. The Service Worker check prevents sharing of any resource that was
+  //    fetched via a Service Worker across different script worlds. This is
+  //    necessary because a Service Worker in one world (e.g., the main world)
+  //    could modify the response of a resource that is later loaded by an
+  //    isolated world (e.g., an extension, DevTools, or a userscript), leading
+  //    to unexpected code execution in that world.
+  //    This behavior is tested in `ResourceTest.CanReuseServiceWorkerResource`.
+  if (base::FeatureList::IsEnabled(
+          kPreventCrossWorldServiceWorkerResourceReuse) &&
+      GetResponse().WasFetchedViaServiceWorker() &&
+      options_.world_for_csp != new_options.world_for_csp) {
+    return MatchStatus::kCrossWorldServiceWorkerResourceMismatch;
+  }
+
+  // If credentials mode is different from the the previous request, re-fetch
   // the resource.
   //
   // This helps with the case where the server sends back
@@ -899,14 +993,15 @@ void Resource::Prune() {
   DestroyDecodedDataIfPossible();
 }
 
-void Resource::OnMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL &&
+void Resource::OnReleaseMemory() {
+  if (memory_limit() <= base::kCriticalMemoryPressureThreshold &&
       base::FeatureList::IsEnabled(
           features::kReleaseResourceDecodedDataOnMemoryPressure)) {
     Prune();
   }
 }
+
+void Resource::OnUpdateMemoryLimit() {}
 
 void Resource::OnMemoryDump(WebMemoryDumpLevelOfDetail level_of_detail,
                             WebProcessMemoryDump* memory_dump) const {
@@ -923,8 +1018,8 @@ void Resource::OnMemoryDump(WebMemoryDumpLevelOfDetail level_of_detail,
   if (level_of_detail == WebMemoryDumpLevelOfDetail::kDetailed) {
     String url_to_report = Url().GetString();
     if (url_to_report.length() > kMaxURLReportLength) {
-      url_to_report.Truncate(kMaxURLReportLength);
-      url_to_report = StrCat({url_to_report, "..."});
+      url_to_report =
+          StrCat({StringView(url_to_report, 0, kMaxURLReportLength), "..."});
     }
     dump->AddString("url", "", url_to_report);
 
@@ -1161,9 +1256,6 @@ static const char* InitiatorTypeNameToString(
   if (initiator_type_name == fetch_initiator_type_names::kAudio) {
     return "Audio";
   }
-  if (initiator_type_name == fetch_initiator_type_names::kAttributionsrc) {
-    return "Attribution resource";
-  }
   if (initiator_type_name == fetch_initiator_type_names::kCSS) {
     return "CSS resource";
   }
@@ -1212,7 +1304,7 @@ static const char* InitiatorTypeNameToString(
   }
 
   static_assert(
-      fetch_initiator_type_names::kNamesCount == 20,
+      fetch_initiator_type_names::kNamesCount == 19,
       "New FetchInitiatorTypeNames should be handled correctly here.");
 
   return "Resource";
@@ -1286,12 +1378,21 @@ void Resource::SetClockForTesting(const base::Clock* clock) {
   g_clock_for_testing = clock;
 }
 
-void Resource::SetIsAdResource() {
-  resource_request_.SetIsAdResource();
+void Resource::SetIsAdResource(AdProvenance ad_provenance) {
+  resource_request_.SetIsAdResource(std::move(ad_provenance));
 }
 
 void Resource::UpdateMemoryCacheLastAccessedTime() {
-  memory_cache_last_accessed_ = base::TimeTicks::Now();
+  base::TimeTicks now = base::TimeTicks::Now();
+  double decay_rate = features::kMemoryCacheDecayRate.Get();
+  if (memory_cache_last_accessed_.is_null()) {
+    decayed_hit_score_ = 1.0;
+  } else {
+    double elapsed_seconds = (now - memory_cache_last_accessed_).InSecondsF();
+    double decay = std::exp(-decay_rate * elapsed_seconds);
+    decayed_hit_score_ = decayed_hit_score_ * decay + 1.0;
+  }
+  memory_cache_last_accessed_ = now;
   IncrementMemoryCacheHitCount();
 }
 

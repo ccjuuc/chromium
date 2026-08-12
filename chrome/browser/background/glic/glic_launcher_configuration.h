@@ -24,7 +24,7 @@ class GlicLauncherConfiguration {
   class Observer : public base::CheckedObserver {
    public:
     virtual void OnEnabledChanged(bool enabled) {}
-    virtual void OnGlobalHotkeyChanged(ui::Accelerator hotkey) {}
+    virtual void OnGlobalHotkeyChanged() {}
   };
 
   explicit GlicLauncherConfiguration(Observer* manager);
@@ -35,10 +35,9 @@ class GlicLauncherConfiguration {
   // pref is the default value.
   static bool IsEnabled(bool* is_default_value = nullptr);
 
-  static ui::Accelerator GetGlobalHotkey();
+  static ui::Accelerator GetToggleHotkey();
 
-  // Returns the default hotkey for the glic launcher.
-  static ui::Accelerator GetDefaultHotkey();
+  static ui::Accelerator GetSelectionHotkey();
 
   // Checks if the browser is the default browser and enables the launcher if it
   // is.
@@ -53,8 +52,6 @@ class GlicLauncherConfiguration {
       base::RepeatingClosure callback);
 
  private:
-  friend class GlicFreControllerTest;
-
   void OnEnabledPrefChanged();
   void OnGlobalHotkeyPrefChanged();
 

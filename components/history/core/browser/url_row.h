@@ -9,8 +9,10 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ref.h"
 #include "base/time/time.h"
 #include "components/query_parser/snippet.h"
@@ -155,6 +157,10 @@ typedef std::vector<URLRow> URLRows;
 //
 // These values are persisted in database. Entries should not be renumbered and
 // numeric values should never be reused.
+//
+// This enum is currently retained for potential future flags. If it remains
+// unused, we should consider removing the enum entirely along with the
+// `annotation_flags` database field (requires a DB migration).
 enum VisitContentAnnotationFlag : uint64_t {
   kNone = 0,
 
@@ -162,15 +168,8 @@ enum VisitContentAnnotationFlag : uint64_t {
   // test.
   kDeprecatedFlocEligibleRelaxed = 1ULL << 0,
 
-  // Indicates that the annotated page can be included in browsing topics
-  // calculation (https://github.com/jkarlin/topics). A page visit is eligible
-  // for browsing topics calculation if all of the conditions hold:
-  // 1. The IP of this visit is publicly routable, i.e. the IP is NOT within
-  // the ranges reserved for "private" internet
-  // (https://tools.ietf.org/html/rfc1918).
-  // 2. The browsing-topics Permissions Policy feature is allowed in the page.
-  // 3. Page opted in: document.browsingTopics() API is used in the page.
-  kBrowsingTopicsEligible = 1ULL << 1,
+  // Deprecated.
+  kDeprecatedBrowsingTopicsEligible = 1ULL << 1,
 };
 
 using VisitContentAnnotationFlags = uint64_t;
@@ -187,8 +186,8 @@ struct VisitContentModelAnnotations {
     Category(const std::string& id, int weight);
     // |vector| is expected to be of size 2 with the first entry being an ID of
     // string or int type and the second entry indicating an integer weight.
-    static std::optional<Category> FromStringVector(
-        const std::vector<std::string>& vector);
+    static std::optional<Category> FromStringViewVector(
+        base::span<const std::string_view> vector);
     std::string ToString() const;
     friend bool operator==(const Category&, const Category&) = default;
 

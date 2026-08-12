@@ -7,7 +7,6 @@
 #include <iterator>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -44,14 +43,17 @@
 #include "components/download/public/common/url_download_handler_factory.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/data_url_loader_factory.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/download/embedder_download_data.pb.h"
 #include "content/browser/file_system/file_system_url_loader_factory.h"
 #include "content/browser/loader/file_url_loader_factory.h"
+#include "content/browser/loader/response_head_update_params.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/service_worker/service_worker_context_wrapper.h"
+#include "content/browser/service_worker/service_worker_main_resource_handle.h"
+#include "content/browser/service_worker/service_worker_main_resource_loader_interceptor.h"
 #include "content/browser/site_info.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -70,6 +72,7 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_ui_url_loader_factory.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -80,6 +83,7 @@
 #include "net/base/request_priority.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -101,6 +105,174 @@ namespace {
 // PDF MIME type.
 constexpr char kPdfMimeType[] = "application/pdf";
 #endif  // BUILDFLAG(IS_ANDROID)
+
+// A SharedURLLoaderFactory that accepts CreateLoaderAndStart calls on the UI
+// thread and forwards them to the IO thread, where the wrapped
+// PendingSharedURLLoaderFactory is materialized. This is needed for the
+// Service Worker download fallback path: Fallback() runs on the UI thread, but
+// the network-service factory (ReconnectableURLLoaderFactoryForIOThread)
+// requires IO-thread materialisation.
+//
+// Single-use: CreateLoaderAndStart() consumes the wrapped
+// PendingSharedURLLoaderFactory by moving it into the IO-thread task, so a
+// second call would dereference a null pending factory. A CHECK guards
+// against this misuse; callers must construct a fresh instance per request.
+//
+// Lifetime: the materialised factory is parked in an IO-thread-resident
+// IOState struct so its mojo::Remote outlives the synchronous
+// CreateLoaderAndStart call (the network-service-side URLLoaderFactory may
+// observe a receiver disconnect otherwise). IOState is owned by the wrapper
+// via a unique_ptr with OnTaskRunnerDeleter targeting the IO sequence, so
+// destruction of IOState — and release of the materialised factory's
+// scoped_refptr — happens on IO regardless of which thread destroys the
+// wrapper.
+//
+// The wrapper itself is not ref-counted across threads: SharedURLLoaderFactory
+// uses single-thread base::RefCounted, so AddRef/Release must stay on the
+// sequence that created the first ref. The IO-thread task captures only a
+// raw IOState* (base::Unretained), valid because the wrapper's
+// OnTaskRunnerDeleter posts IOState destruction to the same IO sequence and
+// PostTask is FIFO — IOState deletion is ordered strictly after this task.
+class DeferredIOThreadURLLoaderFactory
+    : public network::SharedURLLoaderFactory {
+ public:
+  explicit DeferredIOThreadURLLoaderFactory(
+      std::unique_ptr<network::PendingSharedURLLoaderFactory> pending)
+      : pending_(std::move(pending)),
+        io_state_(new IOState,
+                  base::OnTaskRunnerDeleter(GetIOThreadTaskRunner({}))) {}
+
+  DeferredIOThreadURLLoaderFactory(const DeferredIOThreadURLLoaderFactory&) =
+      delete;
+  DeferredIOThreadURLLoaderFactory& operator=(
+      const DeferredIOThreadURLLoaderFactory&) = delete;
+
+  // network::SharedURLLoaderFactory:
+  void CreateLoaderAndStart(
+      mojo::PendingReceiver<network::mojom::URLLoader> loader,
+      int32_t request_id,
+      uint32_t options,
+      const network::ResourceRequest& request,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK(pending_);
+    GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            &DeferredIOThreadURLLoaderFactory::CreateLoaderAndStartOnIO,
+            base::Unretained(io_state_.get()), std::move(pending_),
+            std::move(loader), request_id, options, request, std::move(client),
+            traffic_annotation));
+  }
+
+  void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory>) override {
+    NOTREACHED();
+  }
+
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> Clone() override {
+    NOTREACHED();
+  }
+
+ private:
+  // IO-thread-resident state. `materialized` is default-constructed (null)
+  // on the wrapper's construction thread and only assigned/read/destroyed on
+  // the IO thread.
+  struct IOState {
+    scoped_refptr<network::SharedURLLoaderFactory> materialized;
+  };
+
+  ~DeferredIOThreadURLLoaderFactory() override = default;
+
+  static void CreateLoaderAndStartOnIO(
+      IOState* io_state,
+      std::unique_ptr<network::PendingSharedURLLoaderFactory> pending,
+      mojo::PendingReceiver<network::mojom::URLLoader> loader,
+      int32_t request_id,
+      uint32_t options,
+      const network::ResourceRequest& request,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    DCHECK(!io_state->materialized);
+    io_state->materialized =
+        network::SharedURLLoaderFactory::Create(std::move(pending));
+    io_state->materialized->CreateLoaderAndStart(
+        std::move(loader), request_id, options, request, std::move(client),
+        traffic_annotation);
+  }
+
+  // UI thread: set in the constructor, moved into the IO-thread task.
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> pending_;
+  // Holds the materialised factory on the IO thread for the wrapper's
+  // lifetime. Destruction is posted to the IO sequence by
+  // OnTaskRunnerDeleter.
+  std::unique_ptr<IOState, base::OnTaskRunnerDeleter> io_state_;
+};
+
+// A SharedURLLoaderFactory that wraps the service worker's
+// SingleRequestURLLoaderFactory and extends the lifetime of the interceptor
+// and handle across the download's async URLLoader invocation. The interceptor
+// transitively owns the ServiceWorkerMainResourceLoader (via its
+// ServiceWorkerControlleeRequestHandler and
+// ServiceWorkerMainResourceLoaderWrapper); the wrapped
+// SingleRequestURLLoaderFactory only holds a WeakPtr to that loader, so if the
+// interceptor is dropped the factory's bound callback becomes a no-op. The
+// handle owns the ServiceWorkerClient that the loader dispatches against, so
+// it must outlive the loader as well.
+class ServiceWorkerDownloadURLLoaderFactory
+    : public network::SharedURLLoaderFactory {
+ public:
+  ServiceWorkerDownloadURLLoaderFactory(
+      scoped_refptr<network::SharedURLLoaderFactory> wrapped,
+      scoped_refptr<network::SharedURLLoaderFactory> network_fallback_factory,
+      std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor> interceptor,
+      std::unique_ptr<ServiceWorkerMainResourceHandle> handle)
+      : wrapped_(std::move(wrapped)),
+        network_fallback_factory_(std::move(network_fallback_factory)),
+        interceptor_(std::move(interceptor)),
+        handle_(std::move(handle)) {}
+
+  ServiceWorkerDownloadURLLoaderFactory(
+      const ServiceWorkerDownloadURLLoaderFactory&) = delete;
+  ServiceWorkerDownloadURLLoaderFactory& operator=(
+      const ServiceWorkerDownloadURLLoaderFactory&) = delete;
+
+  // network::SharedURLLoaderFactory:
+  void CreateLoaderAndStart(
+      mojo::PendingReceiver<network::mojom::URLLoader> loader,
+      int32_t request_id,
+      uint32_t options,
+      const network::ResourceRequest& request,
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override {
+    wrapped_->CreateLoaderAndStart(std::move(loader), request_id, options,
+                                   request, std::move(client),
+                                   traffic_annotation);
+  }
+
+  void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
+      override {
+    wrapped_->Clone(std::move(receiver));
+  }
+
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> Clone() override {
+    // Downloads don't need to clone across threads at this level — the outer
+    // CrossThreadPendingSharedURLLoaderFactory handles that.
+    NOTREACHED();
+  }
+
+ private:
+  ~ServiceWorkerDownloadURLLoaderFactory() override = default;
+
+  scoped_refptr<network::SharedURLLoaderFactory> wrapped_;
+  // Keeps the FallbackCallback's returned raw pointer valid.
+  scoped_refptr<network::SharedURLLoaderFactory> network_fallback_factory_;
+  std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor> interceptor_;
+  std::unique_ptr<ServiceWorkerMainResourceHandle> handle_;
+};
 
 void DeleteDownloadedFileOnUIThread(const base::FilePath& file_path) {
   if (!file_path.empty()) {
@@ -245,7 +417,19 @@ CreatePendingSharedURLLoaderFactory(StoragePartitionImpl* storage_partition,
         ukm::kInvalidSourceIdObj, factory_builder, /*header_client=*/nullptr,
         /*bypass_redirect_checks=*/nullptr, /*disable_secure_dns=*/nullptr,
         /*factory_override=*/nullptr,
-        /*navigation_response_task_runner=*/nullptr);
+        /*navigation_response_task_runner=*/nullptr,
+        /*is_for_network_service=*/true);
+  }
+
+  if (factory_builder.RequiresFreshFactory()) {
+    network::mojom::URLLoaderFactoryParamsPtr params =
+        storage_partition->CreateURLLoaderFactoryParams();
+    auto factory =
+        std::move(factory_builder)
+            .Finish<mojo::PendingRemote<network::mojom::URLLoaderFactory>>(
+                storage_partition->GetNetworkContext(), std::move(params));
+    return std::make_unique<network::WrapperPendingSharedURLLoaderFactory>(
+        std::move(factory));
   }
 
   return std::make_unique<network::PendingSharedURLLoaderFactoryWithBuilder>(
@@ -326,7 +510,7 @@ download::DownloadItemImpl* DownloadManagerImpl::CreateActiveItem(
     const download::DownloadCreateInfo& info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  if (base::Contains(downloads_by_guid_, info.guid))
+  if (downloads_by_guid_.contains(info.guid))
     return nullptr;
 
   download::DownloadItemImpl* download =
@@ -931,7 +1115,7 @@ void DownloadManagerImpl::CreateSavePackageDownloadItemWithId(
     uint32_t id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_NE(download::DownloadItem::kInvalidId, id);
-  DCHECK(!base::Contains(downloads_, id));
+  DCHECK(!downloads_.contains(id));
 
   download::DownloadItemImpl* download_item = item_factory_->CreateSavePageItem(
       this, id, main_file_path, main_file_display_name, page_url, mime_type,
@@ -1044,11 +1228,21 @@ void DownloadManagerImpl::InterceptNavigation(
       mime_type, transition_type, std::move(on_download_checks_done));
 }
 
-int DownloadManagerImpl::RemoveDownloadsByURLAndTime(
+void DownloadManagerImpl::RemoveDownloadsByURLAndTime(
     const base::RepeatingCallback<bool(const GURL&)>& url_filter,
     base::Time remove_begin,
-    base::Time remove_end) {
-  int count = 0;
+    base::Time remove_end,
+    base::OnceClosure callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  if (!IsManagerInitialized()) {
+    on_initialized_callbacks_.push_back(
+        base::BindOnce(&DownloadManagerImpl::RemoveDownloadsByURLAndTime,
+                       weak_factory_.GetWeakPtr(), url_filter, remove_begin,
+                       remove_end, std::move(callback)));
+    return;
+  }
+
   auto it = downloads_by_guid_.begin();
   while (it != downloads_by_guid_.end()) {
     download::DownloadItemImpl* download = it->second;
@@ -1061,10 +1255,12 @@ int DownloadManagerImpl::RemoveDownloadsByURLAndTime(
         download->GetStartTime() >= remove_begin &&
         (remove_end.is_null() || download->GetStartTime() < remove_end)) {
       download->Remove();
-      count++;
     }
   }
-  return count;
+
+  if (callback) {
+    std::move(callback).Run();
+  }
 }
 
 bool DownloadManagerImpl::CanDownload(
@@ -1137,7 +1333,7 @@ download::DownloadItem* DownloadManagerImpl::CreateDownloadItem(
   auto in_progress_download = RetrieveInProgressDownload(id);
 
   // Return null to clear cancelled or non-resumable download.
-  if (base::Contains(cleared_download_guids_on_startup_, guid)) {
+  if (cleared_download_guids_on_startup_.contains(guid)) {
     return nullptr;
   }
 
@@ -1199,8 +1395,8 @@ download::DownloadItem* DownloadManagerImpl::CreateDownloadItem(
 
 void DownloadManagerImpl::OnDownloadCreated(
     std::unique_ptr<download::DownloadItemImpl> download) {
-  DCHECK(!base::Contains(downloads_, download->GetId()));
-  DCHECK(!base::Contains(downloads_by_guid_, download->GetGuid()));
+  DCHECK(!downloads_.contains(download->GetId()));
+  DCHECK(!downloads_by_guid_.contains(download->GetGuid()));
   download::DownloadItemImpl* item = download.get();
   downloads_[item->GetId()] = std::move(download);
   downloads_by_guid_[item->GetGuid()] = item;
@@ -1235,7 +1431,8 @@ void DownloadManagerImpl::PostInitialization(
 
   // Download manager is only initialized if both history db and in progress
   // cache are initialized.
-  bool history_loaded = history_db_initialized_ || IsOffTheRecord();
+  bool history_loaded = history_db_initialized_ || IsOffTheRecord() ||
+                        !delegate_ || !delegate_->SupportsHistoryLoading();
   if (!history_loaded || !in_progress_cache_initialized_)
     return;
 
@@ -1279,6 +1476,12 @@ void DownloadManagerImpl::OnDownloadManagerInitialized() {
   in_progress_manager_->OnAllInprogressDownloadsLoaded();
   for (auto& observer : observers_)
     observer.OnManagerInitialized();
+
+  std::vector<base::OnceClosure> callbacks =
+      std::move(on_initialized_callbacks_);
+  for (auto& callback : callbacks) {
+    std::move(callback).Run();
+  }
 }
 
 bool DownloadManagerImpl::IsManagerInitialized() {
@@ -1383,8 +1586,9 @@ void DownloadManagerImpl::InterceptNavigationOnChecksComplete(
     if (render_frame_host) {
       render_process_id = render_frame_host->GetProcess()->GetDeprecatedID();
       render_frame_id = render_frame_host->GetRoutingID();
-      storage_partition_config =
-          render_frame_host->GetSiteInstance()->GetStoragePartitionConfig();
+      storage_partition_config = render_frame_host->GetSiteInstance()
+                                     ->GetSecurityPrincipal()
+                                     .GetStoragePartitionConfig();
     }
     auto* web_contents = WebContentsImpl::FromFrameTreeNode(ftn);
     DCHECK(web_contents);
@@ -1447,7 +1651,9 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
   DCHECK_EQ(params->url().SchemeIsBlob(), bool{blob_url_loader_factory});
   std::unique_ptr<network::PendingSharedURLLoaderFactory>
       pending_url_loader_factory;
-  if (blob_url_loader_factory) {
+  if (params->url_loader_factory()) {
+    pending_url_loader_factory = params->take_url_loader_factory();
+  } else if (blob_url_loader_factory) {
     DCHECK(params->url().SchemeIsBlob());
     pending_url_loader_factory = blob_url_loader_factory->Clone();
   } else if (params->url().SchemeIsFile()) {
@@ -1497,8 +1703,136 @@ void DownloadManagerImpl::BeginResourceDownloadOnChecksComplete(
       return;
     }
   } else {
+    // Resumes of network-fetched downloads opt out via
+    // skip_service_worker_interception() so Range/If-Range continuation
+    // isn't intercepted by a SW that would return an unrelated full body.
+    if (!params->skip_service_worker_interception() &&
+        base::FeatureList::IsEnabled(
+            features::kServiceWorkerInterceptDownloads) &&
+        params->url().SchemeIsHTTPOrHTTPS()) {
+      StoragePartitionImpl* storage_partition = GetStoragePartitionForConfig(
+          browser_context_, storage_partition_config);
+      auto* sw_context = static_cast<ServiceWorkerContextWrapper*>(
+          storage_partition->GetServiceWorkerContext());
+      if (sw_context && sw_context->context()) {
+        std::unique_ptr<network::ResourceRequest> resource_request =
+            download::CreateResourceRequest(params.get());
+        // Use kEmpty destination per Fetch spec for explicit downloads. The
+        // service worker's FetchEvent will have request.destination === "".
+        resource_request->destination =
+            network::mojom::RequestDestination::kEmpty;
+
+        auto handle = std::make_unique<ServiceWorkerMainResourceHandle>(
+            sw_context, base::DoNothing(),
+            /*fetch_event_client_id=*/std::string());
+
+        auto interceptor =
+            ServiceWorkerMainResourceLoaderInterceptor::CreateForDownload(
+                *resource_request, handle->AsWeakPtr());
+
+        if (interceptor) {
+          // Fallback factory bridged to the IO thread; see
+          // DeferredIOThreadURLLoaderFactory.
+          scoped_refptr<network::SharedURLLoaderFactory> fallback_factory =
+              base::MakeRefCounted<DeferredIOThreadURLLoaderFactory>(
+                  CreatePendingSharedURLLoaderFactory(storage_partition, rfh));
+          // Explicit copy: C++ does not order argument evaluation, so we
+          // cannot mix copy and std::move of the same scoped_refptr in one
+          // call.
+          scoped_refptr<network::SharedURLLoaderFactory>
+              fallback_callback_factory = fallback_factory;
+
+          auto* interceptor_ptr = interceptor.get();
+          interceptor_ptr->MaybeCreateLoader(
+              *resource_request, browser_context_,
+              base::BindOnce(
+                  [](base::WeakPtr<DownloadManagerImpl> manager,
+                     std::unique_ptr<download::DownloadUrlParameters> params,
+                     bool is_new_download,
+                     StoragePartitionConfig storage_partition_config,
+                     GURL tab_url, GURL tab_referrer_url,
+                     std::unique_ptr<ServiceWorkerMainResourceLoaderInterceptor>
+                         interceptor,
+                     std::unique_ptr<ServiceWorkerMainResourceHandle> handle,
+                     scoped_refptr<network::SharedURLLoaderFactory>
+                         fallback_factory,
+                     std::optional<NavigationLoaderInterceptor::Result>
+                         result) {
+                    if (!manager) {
+                      return;
+                    }
+                    scoped_refptr<network::SharedURLLoaderFactory> sw_factory;
+                    if (result.has_value() && result->single_request_factory) {
+                      // Wrap the SW factory so the interceptor and handle
+                      // outlive the async URLLoader invocation. See
+                      // ServiceWorkerDownloadURLLoaderFactory's class-level
+                      // comment for the ownership chain. Owns the network
+                      // factory referenced by the FallbackCallback.
+                      sw_factory = base::MakeRefCounted<
+                          ServiceWorkerDownloadURLLoaderFactory>(
+                          std::move(result->single_request_factory),
+                          std::move(fallback_factory), std::move(interceptor),
+                          std::move(handle));
+                    }
+                    manager
+                        ->ContinueResourceDownloadAfterServiceWorkerIntercept(
+                            std::move(params), is_new_download,
+                            storage_partition_config, tab_url, tab_referrer_url,
+                            std::move(sw_factory));
+                  },
+                  weak_factory_.GetWeakPtr(), std::move(params),
+                  is_new_download, storage_partition_config, tab_url,
+                  tab_referrer_url, std::move(interceptor), std::move(handle),
+                  std::move(fallback_factory)),
+              base::BindOnce(
+                  [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+                     ResponseHeadUpdateParams)
+                      -> network::mojom::URLLoaderFactory* {
+                    return factory.get();
+                  },
+                  std::move(fallback_callback_factory)));
+          return;
+        }
+      }
+    }
+
     StoragePartitionImpl* storage_partition = GetStoragePartitionForConfig(
         browser_context_, storage_partition_config);
+    pending_url_loader_factory =
+        CreatePendingSharedURLLoaderFactory(storage_partition, rfh);
+  }
+
+  in_progress_manager_->BeginDownload(
+      std::move(params), std::move(pending_url_loader_factory), is_new_download,
+      StoragePartitionConfigToSerializedEmbedderDownloadData(
+          storage_partition_config),
+      tab_url, tab_referrer_url);
+}
+
+void DownloadManagerImpl::ContinueResourceDownloadAfterServiceWorkerIntercept(
+    std::unique_ptr<download::DownloadUrlParameters> params,
+    bool is_new_download,
+    const StoragePartitionConfig& storage_partition_config,
+    const GURL& tab_url,
+    const GURL& tab_referrer_url,
+    scoped_refptr<network::SharedURLLoaderFactory> sw_factory) {
+  std::unique_ptr<network::PendingSharedURLLoaderFactory>
+      pending_url_loader_factory;
+
+  if (sw_factory) {
+    // The service worker handled the request — wrap its factory in a
+    // CrossThreadPendingSharedURLLoaderFactory so it can be used on the IO
+    // thread where the download pipeline runs, while the SW URLLoader stays
+    // on the UI thread.
+    pending_url_loader_factory =
+        std::make_unique<network::CrossThreadPendingSharedURLLoaderFactory>(
+            std::move(sw_factory));
+  } else {
+    // No service worker interception — fall back to the network factory.
+    StoragePartitionImpl* storage_partition = GetStoragePartitionForConfig(
+        browser_context_, storage_partition_config);
+    auto* rfh = RenderFrameHost::FromID(params->render_process_host_id(),
+                                        params->render_frame_host_routing_id());
     pending_url_loader_factory =
         CreatePendingSharedURLLoaderFactory(storage_partition, rfh);
   }
@@ -1531,8 +1865,9 @@ void DownloadManagerImpl::BeginDownloadInternal(
 
   StoragePartitionConfig storage_partition_config;
   if (rfh && serialized_embedder_download_data.empty()) {
-    storage_partition_config =
-        rfh->GetSiteInstance()->GetStoragePartitionConfig();
+    storage_partition_config = rfh->GetSiteInstance()
+                                   ->GetSecurityPrincipal()
+                                   .GetStoragePartitionConfig();
   } else {
     storage_partition_config =
         SerializedEmbedderDownloadDataToStoragePartitionConfig(

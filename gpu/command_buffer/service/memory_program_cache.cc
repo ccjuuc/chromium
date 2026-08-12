@@ -6,14 +6,21 @@
 
 #include <stddef.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 #include "base/base64.h"
-#include "base/check_op.h"
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
@@ -93,7 +100,6 @@ void FillShaderInterfaceBlockProto(ShaderInterfaceBlockProto* proto,
   proto->set_instance_name(interfaceBlock.instanceName);
   proto->set_array_size(interfaceBlock.arraySize);
   proto->set_layout(interfaceBlock.layout);
-  proto->set_is_row_major_layout(interfaceBlock.isRowMajorLayout);
   proto->set_static_use(interfaceBlock.staticUse);
   for (size_t ii = 0; ii < interfaceBlock.fields.size(); ++ii) {
     ShaderInterfaceBlockFieldProto* field = proto->add_fields();
@@ -189,7 +195,6 @@ void RetrieveShaderInterfaceBlockInfo(const ShaderInterfaceBlockProto& proto,
   interface_block.instanceName = proto.instance_name();
   interface_block.arraySize = proto.array_size();
   interface_block.layout = static_cast<sh::BlockLayoutType>(proto.layout());
-  interface_block.isRowMajorLayout = proto.is_row_major_layout();
   interface_block.staticUse = proto.static_use();
   interface_block.fields.resize(proto.fields_size());
   for (int ii = 0; ii < proto.fields_size(); ++ii) {
@@ -255,6 +260,18 @@ bool CompressProgramBinaries() {
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
 
+constexpr base::MemoryConsumerTraits kMemoryProgramCacheTraits(
+    // Default capacity is small, under 10MB.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    // Evicting entries requires traversing the LRU cache.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Shaders can be re-compiled and re-linked if evicted.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Asynchronous since AsyncMemoryConsumerRegistration is used.
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // Compiling and linking shaders is highly CPU intensive.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kExpensive);
+
 }  // namespace
 
 MemoryProgramCache::MemoryProgramCache(
@@ -269,13 +286,26 @@ MemoryProgramCache::MemoryProgramCache(
       compress_program_binaries_(CompressProgramBinaries()),
       curr_size_bytes_(0),
       store_(ProgramLRUCache::NO_AUTO_EVICT),
-      use_shader_cache_shm_count_(use_shader_cache_shm_count) {}
+      use_shader_cache_shm_count_(use_shader_cache_shm_count),
+      memory_consumer_registration_(
+          "MemoryProgramCache",
+          kMemoryProgramCacheTraits,
+          this,
+          base::AsyncMemoryConsumerRegistration::CheckUnregister::kDisabled),
+      current_max_size_bytes_(max_cache_size_bytes) {}
 
 MemoryProgramCache::~MemoryProgramCache() = default;
 
 void MemoryProgramCache::ClearBackend() {
   store_.Clear();
   DCHECK_EQ(0U, curr_size_bytes_);
+}
+
+size_t MemoryProgramCache::GetCurrentMaxSizeBytes() const {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return current_max_size_bytes_;
+  }
+  return max_size_bytes();
 }
 
 ProgramCache::ProgramLoadResult MemoryProgramCache::LoadLinkedProgram(
@@ -313,7 +343,7 @@ ProgramCache::ProgramLoadResult MemoryProgramCache::LoadLinkedProgram(
   const std::vector<uint8_t>& decoded =
       value->is_compressed()
           ? DecompressData(value->data(), value->decompressed_length(),
-                           max_size_bytes())
+                           GetCurrentMaxSizeBytes())
           : value->data();
   if (decoded.empty()) {
     // Decompression failure.
@@ -380,7 +410,8 @@ void MemoryProgramCache::SaveLinkedProgram(
   GLenum format;
   GLsizei length = 0;
   glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &length);
-  if (length == 0 || static_cast<unsigned int>(length) > max_size_bytes()) {
+  if (length == 0 ||
+      static_cast<unsigned int>(length) > GetCurrentMaxSizeBytes()) {
     return;
   }
   std::vector<uint8_t> binary(length);
@@ -392,8 +423,9 @@ void MemoryProgramCache::SaveLinkedProgram(
   }
 
   // If the binary is so big it will never fit in the cache, throw it away.
-  if (binary.size() > max_size_bytes())
+  if (binary.size() > GetCurrentMaxSizeBytes()) {
     return;
+  }
 
   Hash a_sha;
   Hash b_sha;
@@ -416,8 +448,8 @@ void MemoryProgramCache::SaveLinkedProgram(
     store_.Erase(existing);
 
   // If the cache is overflowing, remove some old entries.
-  DCHECK(max_size_bytes() >= binary.size());
-  Trim(max_size_bytes() - binary.size());
+  DCHECK(GetCurrentMaxSizeBytes() >= binary.size());
+  Trim(GetCurrentMaxSizeBytes() - binary.size());
 
   if (!disable_gpu_shader_disk_cache_) {
     std::unique_ptr<GpuProgramProto> proto(
@@ -435,7 +467,7 @@ void MemoryProgramCache::SaveLinkedProgram(
 
   store_.Put(
       program_sha,
-      new ProgramCacheValue(
+      base::MakeRefCounted<ProgramCacheValue>(
           format, std::move(binary), compress_program_binaries_, length,
           program_sha, a_sha, shader_a->attrib_map(), shader_a->uniform_map(),
           shader_a->varying_map(), shader_a->output_variable_list(),
@@ -533,7 +565,7 @@ void MemoryProgramCache::LoadProgram(const std::string& key,
   }
   store_.Put(
       SpanToArray(program_sha.value()),
-      new ProgramCacheValue(
+      base::MakeRefCounted<ProgramCacheValue>(
           proto->format(), std::move(binary),
           proto->has_program_is_compressed() && proto->program_is_compressed(),
           proto->program_decompressed_length(), program_sha.value(),
@@ -551,6 +583,34 @@ size_t MemoryProgramCache::Trim(size_t limit) {
     store_.Erase(store_.rbegin());
   }
   return initial_size - curr_size_bytes_;
+}
+
+void MemoryProgramCache::OnUpdateMemoryLimit() {
+  if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return;
+  }
+  // To match previous behavior, the size must be 1/4 at 50% memory limit.
+  double ratio = std::clamp(memory_limit_ratio(), 0.0, 1.0);
+  size_t target_size = max_size_bytes() * std::pow(ratio, 2.0);
+  current_max_size_bytes_ = std::max(curr_size_bytes_, target_size);
+}
+
+void MemoryProgramCache::OnReleaseMemory() {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    // To match previous behavior, the size must be 1/4 at 50% memory limit.
+    double ratio = std::clamp(memory_limit_ratio(), 0.0, 1.0);
+    size_t target_size = max_size_bytes() * std::pow(ratio, 2.0);
+    current_max_size_bytes_ = target_size;
+    Trim(current_max_size_bytes_);
+    return;
+  }
+
+  int limit = memory_limit();
+  if (limit <= base::kCriticalMemoryPressureThreshold) {
+    Trim(0);
+  } else if (limit <= base::kModerateMemoryPressureThreshold) {
+    Trim(max_size_bytes() / 4);
+  }
 }
 
 MemoryProgramCache::ProgramCacheValue::ProgramCacheValue(

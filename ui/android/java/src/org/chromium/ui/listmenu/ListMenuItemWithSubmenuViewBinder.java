@@ -10,13 +10,20 @@ import static android.view.View.VISIBLE;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.CONTENT_DESCRIPTION;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.GENERIC_MOTION_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.HOVER_LISTENER;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.IS_HIGHLIGHTED;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.KEY_LISTENER;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.LONG_CLICK_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.START_ICON_BITMAP;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.TEXT_APPEARANCE_ID;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TOOLTIP;
+import static org.chromium.ui.listmenu.ListMenuItemProperties.TOUCH_LISTENER;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.IS_EXPANDED;
 
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -25,8 +32,12 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.ColorRes;
+import androidx.annotation.StyleRes;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.R;
+import org.chromium.ui.hierarchicalmenu.MenuItemWithSubmenuView;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -46,7 +57,7 @@ class ListMenuItemWithSubmenuViewBinder {
         } else if (propertyKey == TOOLTIP) {
             view.setTooltipText(model.get(TOOLTIP));
         } else if (propertyKey == START_ICON_BITMAP) {
-            ImageView icon = view.findViewById(org.chromium.ui.R.id.menu_item_icon);
+            ImageView icon = view.findViewById(R.id.menu_item_icon);
             Bitmap bitmap = model.get(ListMenuItemProperties.START_ICON_BITMAP);
             if (bitmap == null) {
                 icon.setVisibility(GONE);
@@ -63,6 +74,8 @@ class ListMenuItemWithSubmenuViewBinder {
             view.setOnHoverListener(model.get(HOVER_LISTENER));
         } else if (propertyKey == IS_HIGHLIGHTED) {
             view.setHovered(model.get(IS_HIGHLIGHTED));
+        } else if (propertyKey == IS_EXPANDED) {
+            ((MenuItemWithSubmenuView) view).setIsExpanded(model.get(IS_EXPANDED));
         } else if (propertyKey == ListMenuItemProperties.IS_TEXT_ELLIPSIZED_AT_END) {
             if (model.get(ListMenuItemProperties.IS_TEXT_ELLIPSIZED_AT_END)) {
                 textView.setMaxLines(1);
@@ -73,6 +86,20 @@ class ListMenuItemWithSubmenuViewBinder {
             }
         } else if (propertyKey == KEY_LISTENER) {
             view.setOnKeyListener(model.get(KEY_LISTENER));
+        } else if (propertyKey == TOUCH_LISTENER) {
+            view.setOnTouchListener(model.get(TOUCH_LISTENER));
+        } else if (propertyKey == GENERIC_MOTION_LISTENER) {
+            view.setOnGenericMotionListener(model.get(GENERIC_MOTION_LISTENER));
+        } else if (propertyKey == LONG_CLICK_LISTENER) {
+            view.setOnLongClickListener(model.get(LONG_CLICK_LISTENER));
+        } else if (propertyKey == TEXT_APPEARANCE_ID) {
+            @StyleRes int textAppearanceId = model.get(TEXT_APPEARANCE_ID);
+            if (textAppearanceId != Resources.ID_NULL) {
+                textView.setTextAppearance(textAppearanceId);
+            }
+        } else if (propertyKey == ICON_TINT_COLOR_STATE_LIST_ID) {
+            @ColorRes int iconTintColorId = model.get(ICON_TINT_COLOR_STATE_LIST_ID);
+            ListMenuUtils.applyTintToAllIcons(view, iconTintColorId);
         }
     }
 }

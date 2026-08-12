@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
+#include "base/base_switches.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/rand_util.h"
 #include "chrome/browser/about_flags.h"
@@ -17,7 +17,6 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/channel_info.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/variations/variations_switches.h"
 #include "components/webui/flags/feature_entry.h"
 #include "components/webui/flags/pref_service_flags_storage.h"
 
@@ -71,7 +70,7 @@ void UpdateChromeLabsNewBadgePrefs(Profile* profile) {
                               chrome_labs_prefs::kChromeLabsNewBadgeDict);
 #endif
 
-  base::Value::Dict& new_badge_prefs = update.Get();
+  base::DictValue& new_badge_prefs = update.Get();
 
   std::vector<std::string> lab_internal_names;
   const std::vector<LabInfo>& all_labs =
@@ -89,7 +88,7 @@ void UpdateChromeLabsNewBadgePrefs(Profile* profile) {
   std::vector<std::string> entries_to_remove;
   for (auto pref : new_badge_prefs) {
     // The size of |lab_internal_names| is capped around 3-5 elements.
-    if (!base::Contains(lab_internal_names, pref.first)) {
+    if (!std::ranges::contains(lab_internal_names, pref.first)) {
       entries_to_remove.push_back(pref.first);
     }
   }
@@ -123,7 +122,7 @@ bool AreNewChromeLabsExperimentsAvailable(Profile* profile) {
                               chrome_labs_prefs::kChromeLabsNewBadgeDict);
 #endif
 
-  base::Value::Dict& new_badge_prefs = update.Get();
+  base::DictValue& new_badge_prefs = update.Get();
 
   std::vector<std::string> lab_internal_names;
   const std::vector<LabInfo>& all_labs =
@@ -145,7 +144,7 @@ bool IsChromeLabsEnabled() {
     return false;
   }
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          variations::switches::kEnableBenchmarking)) {
+          ::switches::kEnableBenchmarking)) {
     return true;
   }
   // Could be null in unit tests.
@@ -157,7 +156,7 @@ bool IsChromeLabsEnabled() {
       chrome_labs_prefs::kChromeLabsActivationThresholdDefaultValue) {
     g_browser_process->local_state()->SetInteger(
         chrome_labs_prefs::kChromeLabsActivationThreshold,
-        base::RandInt(1, 100));
+        base::RandIntInclusive(1, 100));
   }
 
   // The percentage of users that should see the feature.

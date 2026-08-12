@@ -9,8 +9,10 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/protobuf_matchers.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -18,17 +20,22 @@
 #include "chrome/browser/ai/ai_test_utils.h"
 #include "chrome/browser/ai/features.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
+#include "components/optimization_guide/core/model_execution/manifest_broker/test/scenario_builder.h"
 #include "components/optimization_guide/core/model_execution/test/mock_on_device_capability.h"
 #include "components/optimization_guide/core/model_execution/test/substitution_builder.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
+#include "components/optimization_guide/proto/feature_configs.pb.h"
 #include "components/optimization_guide/proto/features/writing_assistance_api.pb.h"
 #include "components/optimization_guide/proto/string_value.pb.h"
-#include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "services/on_device_model/public/cpp/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/ai/ai_manager.mojom.h"
 #include "third_party/blink/public/mojom/ai/model_streaming_responder.mojom.h"
 
@@ -126,33 +133,43 @@ optimization_guide::proto::FeatureTextSafetyConfiguration CreateSafetyConfig() {
   return safety_config;
 }
 
+optimization_guide::proto::OnDeviceModelExecutionFeatureConfig
+CreateWriterConfig() {
+  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config;
+  config.set_can_skip_text_safety(true);
+  config.set_feature(optimization_guide::proto::ModelExecutionFeature::
+                         MODEL_EXECUTION_FEATURE_WRITING_ASSISTANCE_API);
+
+  auto& input_config = *config.mutable_input_config();
+  input_config.set_request_base_name(
+      WritingAssistanceApiRequest().GetTypeName());
+
+  *input_config.add_execute_substitutions() = FieldSubstitution(
+      "%s", ProtoField({WritingAssistanceApiRequest::kContextFieldNumber}));
+  *input_config.add_execute_substitutions() = FieldSubstitution(
+      "%s",
+      ProtoField({WritingAssistanceApiRequest::kSharedContextFieldNumber}));
+  *input_config.add_execute_substitutions() = FieldSubstitution(
+      "%s",
+      ProtoField({WritingAssistanceApiRequest::kInstructionsFieldNumber}));
+
+  auto& output_config = *config.mutable_output_config();
+  output_config.set_proto_type(WritingAssistanceApiResponse().GetTypeName());
+  *output_config.mutable_proto_field() = optimization_guide::ProtoField({1});
+
+  return config;
+}
+
 class AIWriterTest : public AITestUtils::AITestBase {
+ public:
+  AIWriterTest() {
+    scoped_feature_list_.InitAndEnableFeature(blink::features::kAIWriterAPI);
+  }
+
  protected:
   optimization_guide::proto::OnDeviceModelExecutionFeatureConfig CreateConfig()
       override {
-    optimization_guide::proto::OnDeviceModelExecutionFeatureConfig config;
-    config.set_can_skip_text_safety(true);
-    config.set_feature(optimization_guide::proto::ModelExecutionFeature::
-                           MODEL_EXECUTION_FEATURE_WRITING_ASSISTANCE_API);
-
-    auto& input_config = *config.mutable_input_config();
-    input_config.set_request_base_name(
-        WritingAssistanceApiRequest().GetTypeName());
-
-    *input_config.add_execute_substitutions() = FieldSubstitution(
-        "%s", ProtoField({WritingAssistanceApiRequest::kContextFieldNumber}));
-    *input_config.add_execute_substitutions() = FieldSubstitution(
-        "%s",
-        ProtoField({WritingAssistanceApiRequest::kSharedContextFieldNumber}));
-    *input_config.add_execute_substitutions() = FieldSubstitution(
-        "%s",
-        ProtoField({WritingAssistanceApiRequest::kInstructionsFieldNumber}));
-
-    auto& output_config = *config.mutable_output_config();
-    output_config.set_proto_type(WritingAssistanceApiResponse().GetTypeName());
-    *output_config.mutable_proto_field() = optimization_guide::ProtoField({1});
-
-    return config;
+    return CreateWriterConfig();
   }
 
   optimization_guide::proto::OnDeviceModelExecutionFeatureConfig
@@ -166,7 +183,8 @@ class AIWriterTest : public AITestUtils::AITestBase {
       blink::mojom::AIWriterCreateOptionsPtr options = GetDefaultOptions()) {
     TestCreateWriterClient create_writer_client;
     GetAIManagerRemote()->CreateWriter(
-        create_writer_client.BindNewPipeAndPassRemote(), std::move(options));
+        create_writer_client.BindNewPipeAndPassRemote(), std::move(options),
+        /*monitor=*/mojo::NullRemote());
 
     CreateWriterResult result = create_writer_client.result().Take();
     EXPECT_OK(result);
@@ -200,45 +218,64 @@ class AIWriterTest : public AITestUtils::AITestBase {
     // Return Writer's response without the final empty string chunk.
     return responder.responses_without_last();
   }
+
+  void EnsureModelIsReady() {
+    TestCreateWriterClient writer_client;
+    GetAIManagerRemote()->CreateWriter(writer_client.BindNewPipeAndPassRemote(),
+                                       GetDefaultOptions(),
+                                       /*monitor=*/mojo::NullRemote());
+
+    auto result = writer_client.result().Take();
+    EXPECT_OK(result);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(AIWriterTest, CanCreateDefaultOptions) {
-  EXPECT_CALL(*mock_optimization_guide_keyed_service_,
-              GetOnDeviceModelEligibilityAsync(_, _, _))
-      .WillOnce([](auto feature, auto capabilities, auto callback) {
-        std::move(callback).Run(
-            optimization_guide::OnDeviceModelEligibilityReason::kSuccess);
-      });
-  base::MockCallback<AIManager::CanCreateWriterCallback> callback;
-  EXPECT_CALL(callback,
-              Run(blink::mojom::ModelAvailabilityCheckResult::kAvailable));
-  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(), callback.Get());
+  {
+    base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+    GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
+                                             future.GetCallback());
+    EXPECT_EQ(future.Get(),
+              blink::mojom::ModelAvailabilityCheckResult::kDownloadable);
+  }
+
+  // After model is ready, `CanCreateWriter` should return available.
+  EnsureModelIsReady();
+
+  {
+    base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+    GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
+                                             future.GetCallback());
+    EXPECT_EQ(future.Get(),
+              blink::mojom::ModelAvailabilityCheckResult::kAvailable);
+  }
 }
 
 TEST_F(AIWriterTest, CanCreateIsLanguagesSupported) {
-  EXPECT_CALL(*mock_optimization_guide_keyed_service_,
-              GetOnDeviceModelEligibilityAsync(_, _, _))
-      .WillOnce([](auto feature, auto capabilities, auto callback) {
-        std::move(callback).Run(
-            optimization_guide::OnDeviceModelEligibilityReason::kSuccess);
-      });
+  EnsureModelIsReady();
+
   auto options = GetDefaultOptions();
   options->output_language = AILanguageCode::New("en");
   options->expected_input_languages =
       AITestUtils::ToMojoLanguageCodes({"en-US", ""});
   options->expected_context_languages =
       AITestUtils::ToMojoLanguageCodes({"en-GB", ""});
-  base::MockCallback<AIManager::CanCreateWriterCallback> callback;
-  EXPECT_CALL(callback,
-              Run(blink::mojom::ModelAvailabilityCheckResult::kAvailable));
-  GetAIManagerInterface()->CanCreateWriter(std::move(options), callback.Get());
+
+  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+  GetAIManagerInterface()->CanCreateWriter(std::move(options),
+                                           future.GetCallback());
+  EXPECT_EQ(future.Get(),
+            blink::mojom::ModelAvailabilityCheckResult::kAvailable);
 }
 
 TEST_F(AIWriterTest, CanCreateUnIsLanguagesSupported) {
   auto options = GetDefaultOptions();
   options->output_language = AILanguageCode::New("es-ES");
   options->expected_input_languages =
-      AITestUtils::ToMojoLanguageCodes({"en", "fr", "ja"});
+      AITestUtils::ToMojoLanguageCodes({"en", "tlh", "ja"});
   options->expected_context_languages =
       AITestUtils::ToMojoLanguageCodes({"ar", "zh", "hi"});
   base::MockCallback<AIManager::CanCreateWriterCallback> callback;
@@ -267,7 +304,8 @@ TEST_F(AIWriterTest, CreateWriterNoService) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   CreateWriterResult result = create_writer_client.result().Take();
   EXPECT_FALSE(result.has_value());
@@ -275,44 +313,21 @@ TEST_F(AIWriterTest, CreateWriterNoService) {
             blink::mojom::AIManagerCreateClientError::kUnableToCreateSession);
 }
 
-TEST_F(AIWriterTest, CanCreateWaitsForEligibility) {
-  base::test::TestFuture<base::OnceCallback<void(
-      optimization_guide::OnDeviceModelEligibilityReason)>>
-      eligibility_future;
+TEST_F(AIWriterTest, WriterTelemetry) {
+  base::HistogramTester histogram_tester;
+  EXPECT_CALL(
+      *mock_optimization_guide_keyed_service_,
+      GetOnDeviceModelEligibility(
+          optimization_guide::mojom::OnDeviceFeature::kWritingAssistanceApi))
+      .WillRepeatedly(testing::Return(
+          optimization_guide::OnDeviceModelEligibilityReason::kSuccess));
+  EnsureModelIsReady();
+  GetAIWriterRemote();
 
-  EXPECT_CALL(*mock_optimization_guide_keyed_service_,
-              GetOnDeviceModelEligibilityAsync(_, _, _))
-      .WillOnce([&](auto feature, auto capabilities, auto callback) {
-        eligibility_future.SetValue(std::move(callback));
-      });
-
-  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult>
-      result_future;
-  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
-                                           result_future.GetCallback());
-  // Session should not be ready until eligibility callback has run.
-  EXPECT_FALSE(result_future.IsReady());
-  eligibility_future.Take().Run(
-      optimization_guide::OnDeviceModelEligibilityReason::kSuccess);
-  EXPECT_EQ(result_future.Get(),
-            blink::mojom::ModelAvailabilityCheckResult::kAvailable);
-}
-
-TEST_F(AIWriterTest, CanCreateUnavailableWhenAdaptationNotAvailable) {
-  EXPECT_CALL(*mock_optimization_guide_keyed_service_,
-              GetOnDeviceModelEligibilityAsync(_, _, _))
-      .WillOnce([&](auto feature, auto capabilities, auto callback) {
-        std::move(callback).Run(
-            optimization_guide::OnDeviceModelEligibilityReason::
-                kModelAdaptationNotAvailable);
-      });
-
-  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult>
-      result_future;
-  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
-                                           result_future.GetCallback());
-  EXPECT_EQ(result_future.Get(), blink::mojom::ModelAvailabilityCheckResult::
-                                     kUnavailableModelAdaptationNotAvailable);
+  histogram_tester.ExpectUniqueSample(
+      "OptimizationGuide.ModelExecution."
+      "OnDeviceModelEligibilityReason.WritingAssistanceApi",
+      optimization_guide::OnDeviceModelEligibilityReason::kSuccess, 2);
 }
 
 TEST_F(AIWriterTest, CreateWriterModelNotEligible) {
@@ -327,7 +342,8 @@ TEST_F(AIWriterTest, CreateWriterModelNotEligible) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   CreateWriterResult result = create_writer_client.result().Take();
   EXPECT_EQ(result.error().error,
@@ -339,7 +355,8 @@ TEST_F(AIWriterTest, CreateWriterWaitsForBaseModel) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   TestFuture<CreateWriterResult>& future = create_writer_client.result();
   task_environment()->FastForwardBy(base::Hours(1));
@@ -358,7 +375,8 @@ TEST_F(AIWriterTest, CreateWriterWaitsForModelAdaptation) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   TestFuture<CreateWriterResult>& future = create_writer_client.result();
   task_environment()->FastForwardBy(base::Hours(1));
@@ -378,7 +396,8 @@ TEST_F(AIWriterTest, CreateWriterWaitsForTextSafetyModel) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   TestFuture<CreateWriterResult>& future = create_writer_client.result();
   task_environment()->FastForwardBy(base::Hours(1));
@@ -405,7 +424,8 @@ TEST_F(AIWriterTest, CreateWriterSafetyConfigNotAvailable) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   CreateWriterResult result = create_writer_client.result().Take();
   EXPECT_EQ(result.error().error,
@@ -424,7 +444,8 @@ TEST_F(AIWriterTest, CreateWriterUnableToCalculateTokenSize) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   CreateWriterResult result = create_writer_client.result().Take();
   EXPECT_EQ(
@@ -438,7 +459,8 @@ TEST_F(AIWriterTest, CreateWriterContextLimitExceededError) {
 
   TestCreateWriterClient create_writer_client;
   GetAIManagerRemote()->CreateWriter(
-      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions());
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
 
   CreateWriterResult result = create_writer_client.result().Take();
   EXPECT_EQ(result.error().error,
@@ -541,11 +563,11 @@ TEST_F(AIWriterTest, Priority) {
   EXPECT_THAT(Write(*writer_remote, kInputString, kContextString),
               ElementsAre("hi"));
 
-  main_rfh()->GetRenderWidgetHost()->GetView()->Hide();
+  web_contents()->WasHidden();
   EXPECT_THAT(Write(*writer_remote, kInputString, kContextString),
               ElementsAre("Priority: background", "hi"));
 
-  main_rfh()->GetRenderWidgetHost()->GetView()->Show();
+  web_contents()->WasShown();
   EXPECT_THAT(Write(*writer_remote, kInputString, kContextString),
               ElementsAre("hi"));
 }
@@ -669,8 +691,10 @@ TEST_F(AIWriterTest, ServiceCrash) {
   fake_broker_->CrashService();
 
   EXPECT_FALSE(responder.WaitForCompletion());
-  EXPECT_EQ(responder.error_status(),
-            blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+  // TODO(crbug.com/494980521): Crashes should be yield kErrorSessionDestroyed.
+  EXPECT_EQ(
+      responder.error_status(),
+      blink::mojom::ModelStreamingResponseStatus::kErrorFailedToCountTokens);
 
   writer_remote = GetAIWriterRemote();
   EXPECT_THAT(Write(*writer_remote, kInputString, kContextString),
@@ -689,6 +713,179 @@ TEST_F(AIWriterTest, CrashRecoveryMeasureInputUsage) {
               std::string(kContextString).size() +
               std::string(kInputString).size();
   EXPECT_EQ(measure_future.Get(), size);
+}
+
+TEST_F(AIWriterTest, CanCreatePermissionsPolicyDisabled) {
+  DisablePolicy(network::mojom::PermissionsPolicyFeature::kWriter);
+  mojo::test::BadMessageObserver observer;
+  GetAIManagerRemote()->CanCreateWriter(GetDefaultOptions(), base::DoNothing());
+  EXPECT_EQ(observer.WaitForBadMessage(), "Permissions policy disabled");
+}
+
+TEST_F(AIWriterTest, CreatePermissionsPolicyDisabled) {
+  DisablePolicy(network::mojom::PermissionsPolicyFeature::kWriter);
+  mojo::test::BadMessageObserver observer;
+  TestCreateWriterClient create_writer_client;
+  GetAIManagerRemote()->CreateWriter(
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
+  EXPECT_EQ(observer.WaitForBadMessage(), "Policy or user setting disabled");
+}
+
+TEST_F(AIWriterTest, CreateBuiltInAIAPIsEnterprisePolicyDisabled) {
+  SetBuiltInAIAPIsEnterprisePolicy(false);
+  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
+                                           future.GetCallback());
+  EXPECT_EQ(future.Get(), blink::mojom::ModelAvailabilityCheckResult::
+                              kUnavailableEnterprisePolicyDisabled);
+
+  mojo::test::BadMessageObserver observer;
+  TestCreateWriterClient create_writer_client;
+  GetAIManagerRemote()->CreateWriter(
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
+  EXPECT_EQ(observer.WaitForBadMessage(), "Policy or user setting disabled");
+  SetBuiltInAIAPIsEnterprisePolicy(true);
+}
+
+TEST_F(AIWriterTest, CreateGenAILocalEnterprisePolicyDisabled) {
+  SetGenAILocalEnterprisePolicy(false);
+  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
+                                           future.GetCallback());
+  EXPECT_EQ(future.Get(), blink::mojom::ModelAvailabilityCheckResult::
+                              kUnavailableEnterprisePolicyDisabled);
+
+  mojo::test::BadMessageObserver observer;
+  TestCreateWriterClient create_writer_client;
+  GetAIManagerRemote()->CreateWriter(
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
+  EXPECT_EQ(observer.WaitForBadMessage(), "Policy or user setting disabled");
+  SetGenAILocalEnterprisePolicy(true);
+}
+
+TEST_F(AIWriterTest, CreateOnDeviceAiUserSettingDisabled) {
+  SetOnDeviceAiUserSetting(false);
+  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+  GetAIManagerInterface()->CanCreateWriter(GetDefaultOptions(),
+                                           future.GetCallback());
+  EXPECT_EQ(future.Get(), blink::mojom::ModelAvailabilityCheckResult::
+                              kUnavailableFeatureNotEnabled);
+
+  mojo::test::BadMessageObserver observer;
+  TestCreateWriterClient create_writer_client;
+  GetAIManagerRemote()->CreateWriter(
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
+  EXPECT_EQ(observer.WaitForBadMessage(), "Policy or user setting disabled");
+  SetOnDeviceAiUserSetting(true);
+}
+
+class AIWriterManifestTest : public AITestUtils::AITestManifestBase {
+ protected:
+  AIWriterManifestTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {blink::features::kAIWriterAPI,
+         optimization_guide::kOptimizationGuideManifestBroker,
+         on_device_model::features::kOnDeviceModelLitertLmBackend},
+        {});
+  }
+
+  void SetupManifest() override {
+    optimization_guide::proto::WritingAssistanceApiFeatureConfig writer_cfg;
+    writer_cfg.set_default_use_case("writing_assistance_api");
+    (*writer_cfg.mutable_experimental_use_cases())["v4"] =
+        "writing_assistance_gemma4";
+
+    optimization_guide::proto::Any any_cfg;
+    any_cfg.set_type_url(
+        "type.googleapis.com/"
+        "chrome_intelligence_proto_features.WritingAssistanceApiFeatureConfig");
+    any_cfg.set_value(writer_cfg.SerializeAsString());
+
+    optimization_guide::proto::SolutionConfig solution_config;
+    *solution_config.mutable_feature() = CreateConfig();
+
+    optimization_guide::ScenarioBuilder(
+        fake_manifest_broker_->component_state())
+        .AddBaseModel(
+            "writing_assistance_base_model",
+            optimization_guide::BaseModelRecipeArgs(
+                optimization_guide::proto::BaseModelRecipe::BACKEND_TYPE_GPU,
+                optimization_guide::proto::BaseModelRecipe::
+                    PERFORMANCE_HINT_HIGHEST_QUALITY,
+                {}, 8096))
+        .AddBaseModel(
+            "writing_assistance_gemma4_base_model",
+            optimization_guide::BaseModelRecipeArgs(
+                optimization_guide::proto::BaseModelRecipe::BACKEND_TYPE_GPU,
+                optimization_guide::proto::BaseModelRecipe::
+                    PERFORMANCE_HINT_HIGHEST_QUALITY,
+                {}, 8096))
+        .AddSafetyModel("safety_model")
+        .AddSafeSolution("writing_assistance_api",
+                         "writing_assistance_base_model", "safety_model",
+                         solution_config)
+        .AddSafeSolution("writing_assistance_gemma4",
+                         "writing_assistance_gemma4_base_model", "safety_model",
+                         solution_config)
+        .SetFeatureConfig(optimization_guide::DeviceCategory::kGpuHighTier,
+                          "writing_assistance_api", any_cfg)
+        .Finish();
+
+    fake_manifest_broker_->settings().performance_class =
+        on_device_model::mojom::PerformanceClass::kHigh;
+  }
+
+  optimization_guide::proto::OnDeviceModelExecutionFeatureConfig CreateConfig()
+      override {
+    return CreateWriterConfig();
+  }
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(AIWriterManifestTest, CanCreateAndCreateWithManifestGemma4) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kAIApiFoundationalModel, {{"model_version", "v4"}});
+
+  ASSERT_TRUE(fake_manifest_broker_);
+  fake_manifest_broker_->client().RequestAssetsFor("writing_assistance_gemma4");
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+    ai_manager_->CanCreateWriter(GetDefaultOptions(), future.GetCallback());
+    return future.Get() ==
+           blink::mojom::ModelAvailabilityCheckResult::kAvailable;
+  }));
+
+  // Verify CreateWriter can retrieve the model successfully.
+  TestCreateWriterClient create_writer_client;
+  GetAIManagerRemote()->CreateWriter(
+      create_writer_client.BindNewPipeAndPassRemote(), GetDefaultOptions(),
+      /*monitor=*/mojo::NullRemote());
+
+  auto result = create_writer_client.result().Take();
+  EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(AIWriterManifestTest, CanCreateBeforeDownloadGemma4) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      kAIApiFoundationalModel, {{"model_version", "v4"}});
+
+  ASSERT_TRUE(fake_manifest_broker_);
+
+  fake_manifest_broker_->client().RequestAssetsFor("writing_assistance_api");
+
+  // Verify CanCreateWriter check returns kDownloadable before assets are
+  // requested.
+  base::test::TestFuture<blink::mojom::ModelAvailabilityCheckResult> future;
+  ai_manager_->CanCreateWriter(GetDefaultOptions(), future.GetCallback());
+  EXPECT_EQ(future.Get(),
+            blink::mojom::ModelAvailabilityCheckResult::kDownloadable);
 }
 
 }  // namespace

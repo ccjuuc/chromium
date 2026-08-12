@@ -17,8 +17,14 @@ namespace autofill {
 using AutoselectFirstSuggestion =
     base::StrongAlias<struct AutoselectFirstSuggestionTag, bool>;
 
+// Specifies whether the Autofill suggestion UI should close on focus loss.
+using AutofillSuggestionsIgnoreFocusLoss =
+    base::StrongAlias<struct AutofillSuggestionsIgnoreFocusLossTag, bool>;
+
 using AutofillSuggestionTriggerSource =
     ::autofill::mojom::AutofillSuggestionTriggerSource;
+
+using IsAsync = base::StrongAlias<struct IsAsyncTag, bool>;
 
 }  // namespace autofill
 

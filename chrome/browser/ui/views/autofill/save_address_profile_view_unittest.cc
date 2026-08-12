@@ -11,9 +11,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -131,9 +131,9 @@ void SaveAddressProfileViewTest::CreateViewAndShow(
   anchor_widget_->Init(std::move(params));
   anchor_widget_->Show();
 
-  view_ = new SaveAddressProfileView(anchor_widget_->GetContentsView(),
-                                     std::move(controller),
-                                     test_web_contents_.get());
+  view_ = new SaveAddressProfileView(
+      views::BubbleAnchor(anchor_widget_->GetContentsView()),
+      std::move(controller), test_web_contents_.get());
   views::BubbleDialogDelegateView::CreateBubble(view_)->Show();
 }
 

@@ -20,7 +20,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -78,13 +78,16 @@ constexpr char kExp[] = "12/2035";
 constexpr char kCvc[] = "123";
 
 // Adds waiting capabilities to BrowserAutofillManager.
-class TestAutofillManager : public BrowserAutofillManager {
+class TestAutofillManager : public BrowserAutofillManager,
+                            public AutofillManager::Observer {
  public:
   explicit TestAutofillManager(ContentAutofillDriver* driver)
       : BrowserAutofillManager(driver) {
     test_api(test_api(*this).form_filler())
         .set_limit_before_refill(base::Hours(1));
+    AddObserver(this);
   }
+  ~TestAutofillManager() override { RemoveObserver(this); }
 
   static TestAutofillManager& GetForRenderFrameHost(
       content::RenderFrameHost* rfh) {
@@ -106,9 +109,8 @@ class TestAutofillManager : public BrowserAutofillManager {
     return form_submitted_.Wait(num_awaited_calls);
   }
 
-  void OnFormSubmittedImpl(const FormData& form,
-                           mojom::SubmissionSource source) override {
-    BrowserAutofillManager::OnFormSubmittedImpl(form, source);
+  void OnAfterFormSubmitted(AutofillManager& manager,
+                            const FormData& form) override {
     // The submitted form does not end up in the form cache, so we need to catch
     // it here.
     submitted_form_ = form;
@@ -134,9 +136,10 @@ void FillCard(content::RenderFrameHost* rfh,
   test::SetCreditCardInfo(&card, kNameFull, kNumber, kExpMonth, kExpYear, "",
                           base::ASCIIToUTF16(std::string_view(kCvc)));
   auto& manager = TestAutofillManager::GetForRenderFrameHost(rfh);
-  manager.FillOrPreviewForm(mojom::ActionPersistence::kFill, form,
+  manager.FillOrPreviewForm(mojom::ActionPersistence::kFill, form.global_id(),
                             triggered_field.global_id(), &card,
-                            AutofillTriggerSource::kPopup);
+                            AutofillTriggerSource::kPopup,
+                            /*blocked_fields=*/{});
 }
 
 // Returns the values of all fields in the  frames of `web_contents`.
@@ -249,8 +252,8 @@ class AutofillAcrossIframesTest : public InProcessBrowserTest {
   void TearDownOnMainThread() override {
     base::RunLoop().RunUntilIdle();
     // Make sure to close any showing popups prior to tearing down the UI.
-    main_autofill_manager().client().HideAutofillSuggestions(
-        SuggestionHidingReason::kTabGone);
+    main_autofill_manager().client().HideSuggestions(
+        SuggestionHidingReason::kTabGone, /*product=*/std::nullopt);
     InProcessBrowserTest::TearDownOnMainThread();
   }
 

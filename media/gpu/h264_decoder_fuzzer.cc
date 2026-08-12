@@ -2,15 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/h264_decoder.h"
 
 #include <stddef.h>
 
+#include "base/containers/span.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/base/decoder_buffer.h"
@@ -18,6 +14,7 @@
 #include "media/base/video_codecs.h"
 #include "media/base/video_types.h"
 #include "media/gpu/h264_dpb.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
 
 namespace {
 
@@ -70,16 +67,15 @@ class FakeH264Accelerator : public media::H264Decoder::H264Accelerator {
 
 }  // namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  if (!size) {
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(const base::span<const uint8_t> data) {
+  if (data.empty()) {
     return 0;
   }
 
   media::H264Decoder decoder(std::make_unique<FakeH264Accelerator>(),
                              media::H264PROFILE_MAIN);
   auto external_memory =
-      std::make_unique<media::ExternalMemoryAdapterForTesting>(
-          base::span(data, size));
+      std::make_unique<media::ExternalMemoryAdapterForTesting>(data);
   scoped_refptr<media::DecoderBuffer> decoder_buffer =
       media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
   decoder.SetStream(1, decoder_buffer);

@@ -7,22 +7,26 @@
 #include <memory>
 #include <numeric>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include "ash/constants/ash_switches.h"
-#include "ash/public/ash_interfaces.h"
+#include "ash/display/cros_display_config.h"
 #include "ash/public/cpp/test/shell_test_api.h"
+#include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/strings/safe_sprintf.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "cc/base/math_util.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -32,10 +36,9 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "chromeos/crosapi/mojom/cros_display_config.mojom-test-utils.h"
-#include "chromeos/crosapi/mojom/cros_display_config.mojom.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/request_type.h"
@@ -536,7 +539,7 @@ class TopControlsSlideControllerTest : public InProcessBrowserTest {
   // given |target_state|.
   void ScrollAndExpectTopChromeToBe(ScrollDirection direction,
                                     TopChromeShownState target_state) {
-    aura::Window* browser_window = browser()->window()->GetNativeWindow();
+    aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
     ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                              browser_window);
     const gfx::Point start_point =
@@ -574,17 +577,18 @@ class TopControlsSlideControllerTest : public InProcessBrowserTest {
 namespace {
 
 IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, DisabledForHostedApps) {
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
 
   // Open a new app window.
-  Browser::CreateParams params = Browser::CreateParams::CreateForApp(
-      "test_browser_app", true /* trusted_source */, gfx::Rect(),
-      browser()->profile(), true);
+  BrowserWindowCreateParams params = BrowserWindowCreateParams::CreateForApp(
+      "test_browser_app", /*trusted_source=*/true, gfx::Rect(),
+      browser()->GetProfile(), /*user_gesture=*/true);
   params.initial_show_state = ui::mojom::WindowShowState::kDefault;
-  Browser* browser = Browser::Create(params);
+  Browser* browser =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
   AddBlankTabAndShow(browser);
 
-  ASSERT_TRUE(browser->is_type_app());
+  ASSERT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
   // No slide controller gets created for hosted apps.
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
@@ -686,7 +690,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestCtrlL) {
   // Hit Ctrl+L which should focus the omnibox. This should unhide the top
   // controls.
   SCOPED_TRACE("Firing Ctrl+L.");
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                            browser_window);
   TopControlsShownRatioWaiter waiter(top_controls_slide_controller());
@@ -708,7 +712,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
 
   // Add a new tab (index 1), navigate it to the scrollable test page,
   // making it the active tab.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   NavigateActiveTabToUrl(
       embedded_test_server()->GetURL("/top_controls_scroll.html"));
   ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
@@ -773,7 +777,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestClosingATab) {
   // Simulate (Ctrl + T) by inserting a new tab. Expect top-chrome to be fully
   // shown.
   TopControlsShownRatioWaiter waiter(top_controls_slide_controller());
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   waiter.WaitForRatio(1.f);
   EXPECT_EQ(browser()->tab_strip_model()->active_index(), 1);
   EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
@@ -925,7 +929,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, DisplayRotation) {
   NavigateActiveTabToUrl(
       embedded_test_server()->GetURL("/top_controls_scroll.html"));
 
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                            browser_window);
   gfx::Point start_point = event_generator.current_screen_location();
@@ -938,37 +942,27 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, DisplayRotation) {
 
   // Try all possible rotations. Changing display rotation should *not* unhide
   // top chrome.
-  const std::vector<crosapi::mojom::DisplayRotationOptions> rotations_to_try = {
-      crosapi::mojom::DisplayRotationOptions::k90Degrees,
-      crosapi::mojom::DisplayRotationOptions::k180Degrees,
-      crosapi::mojom::DisplayRotationOptions::k270Degrees,
-      crosapi::mojom::DisplayRotationOptions::kZeroDegrees,
+  const std::vector<ash::DisplayRotationOptions> rotations_to_try = {
+      ash::DisplayRotationOptions::k90Degrees,
+      ash::DisplayRotationOptions::k180Degrees,
+      ash::DisplayRotationOptions::k270Degrees,
+      ash::DisplayRotationOptions::kZeroDegrees,
   };
 
-  mojo::Remote<crosapi::mojom::CrosDisplayConfigController> cros_display_config;
-  ash::BindCrosDisplayConfigController(
-      cros_display_config.BindNewPipeAndPassReceiver());
-
-  base::test::TestFuture<std::vector<crosapi::mojom::DisplayUnitInfoPtr>>
-      info_list_future;
-  cros_display_config->GetDisplayUnitInfoList(false /* single_unified */,
-                                              info_list_future.GetCallback());
-  auto info_list = info_list_future.Take();
-  for (const crosapi::mojom::DisplayUnitInfoPtr& display_unit_info :
-       info_list) {
-    const std::string display_id = display_unit_info->id;
+  ash::CrosDisplayConfig* cros_display_config =
+      ash::Shell::Get()->cros_display_config();
+  std::vector<ash::DisplayUnitInfo> info_list =
+      cros_display_config->GetDisplayUnitInfoList(/*single_unified=*/false);
+  for (const auto& display_unit_info : info_list) {
     for (const auto& rotation : rotations_to_try) {
       BrowserViewLayoutWaiter browser_view_layout_waiter(browser_view());
-      auto config_properties = crosapi::mojom::DisplayConfigProperties::New();
-      config_properties->rotation =
-          crosapi::mojom::DisplayRotation::New(rotation);
-      base::test::TestFuture<crosapi::mojom::DisplayConfigResult> result_future;
-      cros_display_config->SetDisplayProperties(
-          display_id, std::move(config_properties),
-          crosapi::mojom::DisplayConfigSource::kUser,
-          result_future.GetCallback());
-      EXPECT_EQ(result_future.Take(),
-                crosapi::mojom::DisplayConfigResult::kSuccess);
+      ash::DisplayConfigProperties config_properties;
+      config_properties.rotation = rotation;
+      ash::DisplayConfigResult result =
+          cros_display_config->SetDisplayProperties(
+              display_unit_info.id, config_properties,
+              ash::DisplayConfigSource::kUser);
+      EXPECT_EQ(result, ash::DisplayConfigResult::kSuccess);
 
       // Wait for the browser view to change its bounds as a result of display
       // rotation.
@@ -1042,7 +1036,7 @@ class PageStateUpdateWaiter : content::WebContentsObserver {
 
 // Verifies that we ignore the shown ratios sent from widgets other than that of
 // the main frame (such as widgets of the drop-down menus in web pages).
-// https://crbug.com/891471.
+// https://crbug.com/41418552.
 IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestDropDowns) {
   browser_view()->browser_widget()->Maximize();
   ToggleTabletMode();
@@ -1074,7 +1068,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestDropDowns) {
 
   // Hit <enter> on the keyboard, then <down> three times, then <enter> again to
   // select the fourth option.
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow());
   auto send_key_event = [&event_generator](ui::KeyboardCode keycode) {
     event_generator.PressKey(keycode, ui::EF_NONE);
@@ -1217,7 +1211,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
   EXPECT_TRUE(
       browser_view()->DoBrowserControlsShrinkRendererSize(active_contents));
 
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                            browser_window);
   const gfx::Point start_point = event_generator.current_screen_location();
@@ -1335,7 +1329,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
         EXPECT_TRUE(slide_controller->IsTopControlsGestureScrollInProgress());
       };
 
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                            browser_window);
   const gfx::Point start_point = event_generator.current_screen_location();
@@ -1392,12 +1386,11 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestPermissionBubble) {
 
   // Fire a geolocation permission request, which should show a permission
   // request bubble resulting in top chrome unhiding.
-  auto decided = [](PermissionDecision, bool,
+  auto decided = [](const permissions::PermissionPromptDecision&,
                     const permissions::PermissionRequestData&) {};
   auto permission_request = std::make_unique<permissions::PermissionRequest>(
       std::make_unique<permissions::PermissionRequestData>(
-          std::make_unique<permissions::ContentSettingPermissionResolver>(
-              ContentSettingsType::GEOLOCATION),
+          permissions::RequestType::kGeolocation,
           /*user_gesture*/ true, url),
       base::BindRepeating(decided));
   auto* permission_manager =
@@ -1416,7 +1409,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestPermissionBubble) {
                                TopChromeShownState::kFullyShown);
 
   // Dismiss the bubble.
-  permission_manager->Dismiss();
+  permission_manager->Dismiss(/*prompt_options=*/std::monostate());
   EXPECT_FALSE(permission_manager->IsRequestInProgress());
   SynchronizeBrowserWithRenderer(active_contents);
 
@@ -1425,7 +1418,10 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestPermissionBubble) {
                                TopChromeShownState::kFullyHidden);
 }
 
-IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestToggleChromeVox) {
+// This test is failing on the linux-chromeos-chrome bot.
+// TODO(crbug.com/473938088): Re-enable the test.
+IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
+                       DISABLED_TestToggleChromeVox) {
   ToggleTabletMode();
   ASSERT_TRUE(GetTabletModeEnabled());
   EXPECT_TRUE(top_controls_slide_controller()->IsEnabled());
@@ -1466,7 +1462,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest, TestToggleChromeVox) {
                                TopChromeShownState::kFullyHidden);
 }
 
-// Regression test for https://crbug.com/1163276.
+// Regression test for https://crbug.com/40740045.
 IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
                        NoCrashOnNewTabWhileScrolling) {
   ToggleTabletMode();
@@ -1478,7 +1474,7 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
       embedded_test_server()->GetURL("/top_controls_scroll.html"));
   ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
 
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
                                            browser_window);
   const gfx::Point start_point = event_generator.current_screen_location();
@@ -1503,5 +1499,64 @@ IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
 }
 
 // TODO(crbug.com/40638200): Add test coverage that covers using WebUITabStrip.
+
+// Regression test for crbug.com/470873053.
+IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
+                       LayerWithoutCompositorIsHandledSafely) {
+  auto layer = std::make_unique<ui::LayerSolidColor>();
+  EXPECT_EQ(nullptr, layer->GetCompositor());
+
+  ui::Layer* browser_layer = browser_view()->browser_widget()->GetLayer();
+  ASSERT_NE(nullptr, browser_layer);
+  EXPECT_NE(nullptr, browser_layer->GetCompositor());
+
+  browser_layer->SetMasksToBounds(true);
+  EXPECT_TRUE(browser_layer->GetMasksToBounds());
+  browser_layer->SetMasksToBounds(false);
+  EXPECT_FALSE(browser_layer->GetMasksToBounds());
+}
+
+// Regression test for crbug.com/470873053.
+IN_PROC_BROWSER_TEST_F(TopControlsSlideControllerTest,
+                       NoCrashOnSetMasksToBoundsDuringSliding) {
+  ToggleTabletMode();
+  ASSERT_TRUE(GetTabletModeEnabled());
+  EXPECT_TRUE(top_controls_slide_controller()->IsEnabled());
+  EXPECT_FLOAT_EQ(top_controls_slide_controller()->GetShownRatio(), 1.f);
+
+  NavigateActiveTabToUrl(
+      embedded_test_server()->GetURL("/top_controls_scroll.html"));
+  auto* active_contents = browser_view()->GetActiveWebContents();
+
+  for (int i = 0; i < 3; ++i) {
+    SCOPED_TRACE(base::StringPrintf("Scroll cycle %d", i));
+    ScrollAndExpectTopChromeToBe(ScrollDirection::kDown,
+                                 TopChromeShownState::kFullyHidden);
+    SynchronizeBrowserWithRenderer(active_contents);
+    ScrollAndExpectTopChromeToBe(ScrollDirection::kUp,
+                                 TopChromeShownState::kFullyShown);
+    SynchronizeBrowserWithRenderer(active_contents);
+  }
+
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
+  ui::test::EventGenerator event_generator(browser_window->GetRootWindow(),
+                                           browser_window);
+  const gfx::Point start_point = event_generator.current_screen_location();
+
+  event_generator.PressTouch();
+  SynchronizeBrowserWithRenderer(active_contents);
+
+  auto current_point = start_point;
+  for (int j = 0; j < 50; ++j) {
+    current_point += gfx::Vector2d(0, -2);
+    event_generator.MoveTouch(current_point);
+  }
+
+  event_generator.ReleaseTouch();
+
+  TopControlsShownRatioWaiter waiter(top_controls_slide_controller());
+  waiter.WaitForRatio(0.f);
+  EXPECT_FLOAT_EQ(top_controls_slide_controller()->GetShownRatio(), 0.f);
+}
 
 }  // namespace

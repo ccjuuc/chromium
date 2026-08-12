@@ -11,6 +11,8 @@ source_set("model") {
     "find_in_page_model.h",
     "find_in_page_model.mm",
     "find_in_page_response_delegate.h",
+    "find_in_page_util.h",
+    "find_in_page_util.mm",
     "find_tab_helper.h",
     "find_tab_helper.mm",
   ]
@@ -18,10 +20,13 @@ source_set("model") {
     "//base",
     "//components/strings:components_strings_grit",
     "//components/ukm/ios:ukm_url_recorder",
+    "//ios/chrome/browser/fullscreen/public:metrics",
     "//ios/chrome/browser/fullscreen/ui_bundled",
     "//ios/chrome/browser/ntp/model:util",
+    "//ios/chrome/browser/reader_mode/model",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
+    "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/tab_switcher/ui_bundled:utils",
     "//ios/chrome/browser/web/model",
@@ -45,7 +50,6 @@ source_set("eg2_tests") {
     "//ios/chrome/test/earl_grey:eg_test_support+eg2",
     "//ios/testing/earl_grey:eg_test_support+eg2",
     "//ios/web/public/test:element_selector",
-    "//ios/web/public/test/http_server",
     "//net:test_support",
   ]
   frameworks = [ "UIKit.framework" ]

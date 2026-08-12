@@ -9,7 +9,9 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/test_constants.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/public/provider/chrome/browser/signin/signin_error_api.h"
+#import "ui/base/device_form_factor.h"
 
 namespace {
 
@@ -41,7 +43,7 @@ BOOL gUsingUnknownCapabilities;
 - (void)viewDidLoad {
   [super viewDidLoad];
 
-  // Obnovious color, this is a test screen.
+  // Obnoxious color, this is a test screen.
   UIView* mainView = self.view;
   mainView.backgroundColor = [UIColor magentaColor];
   mainView.accessibilityIdentifier = kFakeAuthActivityViewIdentifier;
@@ -49,23 +51,23 @@ BOOL gUsingUnknownCapabilities;
   UIButton* addAccountButton =
       [self createButtonWithTitle:@"Add Account"
                            action:@selector(didTapAddAccount:)
-           accessibilitIdentifier:kFakeAuthAddAccountButtonIdentifier];
+          accessibilityIdentifier:kFakeAuthAddAccountButtonIdentifier];
   UIButton* cancelButton =
       [self createButtonWithTitle:@"Cancel"
                            action:@selector(didTapCancel:)
-           accessibilitIdentifier:kFakeAuthCancelButtonIdentifier];
+          accessibilityIdentifier:kFakeAuthCancelButtonIdentifier];
   NSMutableArray<UIButton*>* subviews =
       [NSMutableArray arrayWithObjects:addAccountButton, cancelButton, nil];
   if (!@available(iOS 26, *)) {
     // Up to iOS 18, the view can disappear without calling the callback. This
-    // occur when the user turn off and on the screen while iOS asks whether
-    // they accept to use google.com to authentify. This button simulate this
+    // occurs when the user turns off and on the screen while iOS asks whether
+    // they accept to use google.com to authenticate. This button simulates this
     // issue. It can be removed once the minimal version is iOS 26.  See
     // crbug.com/395959814.
     UIButton* dismissButton =
         [self createButtonWithTitle:@"Dismiss without callback"
                              action:@selector(didTapDismiss:)
-             accessibilitIdentifier:kFakeAuthDismissButtonIdentifier];
+            accessibilityIdentifier:kFakeAuthDismissButtonIdentifier];
     [subviews addObject:dismissButton];
   }
   // Container StackView
@@ -75,22 +77,18 @@ BOOL gUsingUnknownCapabilities;
   stackView.translatesAutoresizingMaskIntoConstraints = false;
   [self.view addSubview:stackView];
   // Set up constraints.
-  NSMutableArray* constraints = [[NSMutableArray alloc] init];
-  [constraints addObject:[stackView.topAnchor
-                             constraintEqualToAnchor:self.view.topAnchor]];
-  [constraints addObject:[stackView.leadingAnchor
-                             constraintEqualToAnchor:self.view.leadingAnchor]];
-  [NSLayoutConstraint activateConstraints:constraints];
+  AddSameConstraintsToSides(stackView, self.view,
+                            LayoutSides::kTop | LayoutSides::kLeading);
 }
 
 #pragma mark - Private methods
 
 - (UIButton*)createButtonWithTitle:(NSString*)title
                             action:(SEL)action
-            accessibilitIdentifier:(NSString*)accessibilityIdentitier {
+           accessibilityIdentifier:(NSString*)accessibilityIdentifier {
   UIButton* button = [UIButton buttonWithType:UIButtonTypeCustom];
   [button setTitle:title forState:UIControlStateNormal];
-  [button setAccessibilityIdentifier:accessibilityIdentitier];
+  [button setAccessibilityIdentifier:accessibilityIdentifier];
   [button addTarget:self
                 action:action
       forControlEvents:UIControlEventTouchUpInside];
@@ -175,8 +173,8 @@ BOOL gUsingUnknownCapabilities;
 - (void)startAuthActivityWithViewController:(UIViewController*)viewController
                                   userEmail:(NSString*)userEmail
                                  completion:(SigninCompletionBlock)completion {
-  CHECK(completion, base::NotFatalUntil::M140);
-  CHECK(viewController, base::NotFatalUntil::M140);
+  CHECK(completion);
+  CHECK(viewController);
   _lastStartAuthActivityUserEmail = userEmail;
   if (userEmail.length) {
     [FakeSystemIdentityInteractionManager
@@ -186,8 +184,7 @@ BOOL gUsingUnknownCapabilities;
   _signinCompletion = completion;
   _authActivityViewController =
       [[FakeAuthActivityViewController alloc] initWithManager:self];
-  BOOL isIPad =
-      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
+  BOOL isIPad = ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET;
   _authActivityViewController.modalPresentationStyle =
       isIPad ? UIModalPresentationFormSheet : UIModalPresentationFullScreen;
 

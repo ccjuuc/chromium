@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
@@ -46,7 +47,7 @@ constexpr uint64_t kMetricFiveHash = 8665976921794972190ull;
 constexpr char kProjectFourId[] = "FBBBB6DE2AA74C3C";
 
 std::string HashToHex(const uint64_t hash) {
-  return base::HexEncode(&hash, sizeof(uint64_t));
+  return base::HexEncode(base::byte_span_from_ref(hash));
 }
 
 class TestRecorder : public StructuredMetricsClient::RecordingDelegate {
@@ -92,7 +93,7 @@ class ChromeStructuredMetricsRecorderTest : public testing::Test {
     key.set_last_rotation(today);
     key.set_rotation_period(90);
 
-    base::Value::Dict dict =
+    base::DictValue dict =
         prefs_.GetDict(prefs::kDeviceKeyDataPrefName).Clone();
     const validator::Validators* validators = validator::Validators::Get();
     auto project_name = validators->GetProjectName(kProjectFourHash);
@@ -105,8 +106,19 @@ class ChromeStructuredMetricsRecorderTest : public testing::Test {
 
   ChromeUserMetricsExtension GetUmaProto() {
     ChromeUserMetricsExtension uma_proto;
-    recorder_->ProvideEventMetrics(uma_proto);
+
+    std::optional<StructuredDataProto> events_proto;
+    recorder_->ProvideEventMetrics(base::BindOnce(
+        [](std::optional<StructuredDataProto>* out_proto,
+           StructuredDataProto proto) { *out_proto = std::move(proto); },
+        &events_proto));
+
     Wait();
+
+    if (events_proto.has_value()) {
+      uma_proto.mutable_structured_data()->MergeFrom(events_proto.value());
+    }
+
     return uma_proto;
   }
 
@@ -120,13 +132,13 @@ class ChromeStructuredMetricsRecorderTest : public testing::Test {
   }
 
   void CreateAndEnableRecorder() {
-    recorder_ = base::MakeRefCounted<ChromeStructuredMetricsRecorder>(&prefs_);
+    recorder_ = std::make_unique<ChromeStructuredMetricsRecorder>(&prefs_);
     RecordingEnabled();
     ExpectNoErrors();
   }
 
  protected:
-  scoped_refptr<ChromeStructuredMetricsRecorder> recorder_;
+  std::unique_ptr<ChromeStructuredMetricsRecorder> recorder_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::MainThreadType::UI,
       base::test::TaskEnvironment::ThreadPoolExecutionMode::QUEUED,

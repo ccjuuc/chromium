@@ -10,7 +10,7 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/ptr_util.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -18,6 +18,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 
 namespace drive {
 
@@ -43,7 +44,7 @@ DriveIntegrationService* DriveIntegrationServiceFactory::GetForProfile(
 // static
 DriveIntegrationService* DriveIntegrationServiceFactory::FindForProfile(
     Profile* profile) {
-  if (!profile) {  // crbug.com/1254581
+  if (!profile) {  // crbug.com/40794425
     return nullptr;
   }
   return static_cast<DriveIntegrationService*>(
@@ -52,7 +53,8 @@ DriveIntegrationService* DriveIntegrationServiceFactory::FindForProfile(
 
 // static
 DriveIntegrationServiceFactory* DriveIntegrationServiceFactory::GetInstance() {
-  return base::Singleton<DriveIntegrationServiceFactory>::get();
+  static base::NoDestructor<DriveIntegrationServiceFactory> instance;
+  return instance.get();
 }
 
 DriveIntegrationServiceFactory::DriveIntegrationServiceFactory()
@@ -76,8 +78,12 @@ DriveIntegrationServiceFactory::~DriveIntegrationServiceFactory() = default;
 std::unique_ptr<KeyedService>
 DriveIntegrationServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  Profile* profile = Profile::FromBrowserContext(context);
+  // Ignore signin and lock screen apps profile.
+  if (!ash::IsUserBrowserContext(context)) {
+    return nullptr;
+  }
 
+  Profile* profile = Profile::FromBrowserContext(context);
   if (!factory_for_test_) {
     return std::make_unique<DriveIntegrationService>(
         g_browser_process->local_state(), profile, std::string(),

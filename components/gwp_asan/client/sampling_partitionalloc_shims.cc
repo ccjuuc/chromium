@@ -5,6 +5,7 @@
 #include "components/gwp_asan/client/sampling_partitionalloc_shims.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "components/crash/core/common/crash_key.h"
@@ -13,7 +14,7 @@
 #include "components/gwp_asan/client/sampling_state.h"
 #include "components/gwp_asan/common/crash_key_name.h"
 #include "partition_alloc/flags.h"
-#include "partition_alloc/partition_alloc.h"
+#include "partition_alloc/partition_alloc_hooks.h"
 
 namespace gwp_asan {
 namespace internal {
@@ -30,7 +31,8 @@ GuardedPageAllocator* gpa = nullptr;
 bool AllocationHook(void** out,
                     partition_alloc::AllocFlags flags,
                     size_t size,
-                    const char* type_name) {
+                    const char* type_name,
+                    std::optional<size_t> alignment) {
   if (sampling_state.Sample(size)) [[unlikely]] {
     // Ignore allocation requests with unknown flags.
     // TODO(crbug.com/40277643): Add support for memory tagging in GWP-Asan.
@@ -42,7 +44,8 @@ bool AllocationHook(void** out,
       return false;
     }
 
-    if (void* allocation = gpa->Allocate(size, 0, type_name)) {
+    if (void* allocation =
+            gpa->Allocate(size, alignment.value_or(0), type_name)) {
       *out = allocation;
       return true;
     }

@@ -12,17 +12,21 @@ assert(is_android)
 source_set("auxiliary_search") {
   sources = [
     "auxiliary_search_donation_service.h",
+    "auxiliary_search_donation_service_bridge.h",
     "auxiliary_search_donation_service_factory.h",
     "auxiliary_search_provider.h",
     "auxiliary_search_top_site_provider_bridge.h",
     "fetch_and_rank_helper.h",
   ]
   public_deps = [
+    ":jni_headers",
     "//base",
+    "//chrome/browser/ntp_tiles",
     "//chrome/browser/profiles:profile",
     "//components/keyed_service/core",
     "//components/ntp_tiles",
     "//components/page_content_annotations/core",
+    "//components/signin/public/identity_manager",
     "//components/visited_url_ranking/public",
   ]
 }
@@ -30,6 +34,7 @@ source_set("auxiliary_search") {
 source_set("impl") {
   sources = [
     "auxiliary_search_donation_service.cc",
+    "auxiliary_search_donation_service_bridge.cc",
     "auxiliary_search_donation_service_factory.cc",
     "auxiliary_search_provider.cc",
     "auxiliary_search_top_site_provider_bridge.cc",
@@ -40,10 +45,12 @@ source_set("impl") {
     ":auxiliary_search_enums_srcjar",
     ":jni_headers",
     "//base",
+    "//chrome/browser/android:tabs_public",
     "//chrome/browser/auxiliary_search/proto",
     "//chrome/browser/flags:flags_android",
     "//chrome/browser/page_content_annotations",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/visited_url_ranking",
     "//components/ntp_tiles",
     "//components/visited_url_ranking/public",
     "//url",
@@ -64,6 +71,7 @@ source_set("unit_tests") {
     "//components/ntp_tiles",
     "//components/page_content_annotations/core:test_support",
     "//components/prefs:test_support",
+    "//components/signin/public/identity_manager:test_support",
     "//components/visited_url_ranking/public:test_support",
     "//testing/gmock",
     "//testing/gtest",
@@ -79,6 +87,7 @@ source_set("browser_tests") {
     ":auxiliary_search_enums_srcjar",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/android:tabs_public",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/android/tab_model",
     "//chrome/browser/ui/android/tab_model:enums_java",
@@ -89,6 +98,10 @@ source_set("browser_tests") {
     "//net/android:net_java_test_support_enums_srcjar",
     "//url",
   ]
+
+  if (is_android) {
+    deps += [ "//chrome/browser/android" ]
+  }
 }
 
 android_library("java") {
@@ -97,6 +110,7 @@ android_library("java") {
     ":jni_headers",
   ]
   sources = [
+    "java/src/org/chromium/chrome/browser/auxiliary_search/AppSearchStorageFactory.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchBackgroundTask.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchBridge.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchConfigManager.java",
@@ -104,6 +118,7 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchControllerFactory.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchControllerImpl.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDataEntry.java",
+    "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDonationServiceBridge.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDonor.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchHooks.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchMetrics.java",
@@ -145,6 +160,8 @@ android_library("java") {
     "//components/background_task_scheduler:factory_java",
     "//components/background_task_scheduler:public_java",
     "//components/segmentation_platform/public:public_java",
+    "//components/signin/public/android:java",
+    "//google_apis/gaia/android:java",
     "//third_party/android_deps:guava_android_java",
     "//third_party/android_deps:protobuf_lite_runtime_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
@@ -164,6 +181,7 @@ android_library("java") {
 generate_jni("jni_headers") {
   sources = [
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchBridge.java",
+    "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDonationServiceBridge.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchTopSiteProviderBridge.java",
     "java/src/org/chromium/chrome/browser/auxiliary_search/FetchAndRankHelper.java",
   ]
@@ -191,6 +209,7 @@ robolectric_library("junit") {
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchConfigManagerUnitTest.java",
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchControllerFactoryUnitTest.java",
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchControllerImplUnitTest.java",
+    "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDonationServiceBridgeUnitTest.java",
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchDonorUnitTest.java",
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchMetricsUnitTest.java",
     "junit/src/org/chromium/chrome/browser/auxiliary_search/AuxiliarySearchMultiDataControllerImplUnitTest.java",
@@ -212,6 +231,7 @@ robolectric_library("junit") {
     "//base:base_junit_test_support",
     "//base:base_shared_preferences_java",
     "//base:callback_java",
+    "//base:service_loader_java",
     "//base:time_utils_java",
     "//chrome/browser/android/lifecycle:java",
     "//chrome/browser/auxiliary_search/proto:proto_java",
@@ -228,6 +248,8 @@ robolectric_library("junit") {
     "//components/background_task_scheduler:public_java",
     "//components/browser_ui/theme/android:java_resources",
     "//components/segmentation_platform/public:public_java",
+    "//components/signin/public/android:java",
+    "//google_apis/gaia/android:java",
     "//third_party/android_deps:guava_android_java",
     "//third_party/android_deps:protobuf_lite_runtime_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
@@ -239,6 +261,7 @@ robolectric_library("junit") {
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
     "//ui/android:ui_java",
+    "//ui/android:ui_java_test_support",
     "//url:gurl_junit_test_support",
     "//url:url_java",
   ]

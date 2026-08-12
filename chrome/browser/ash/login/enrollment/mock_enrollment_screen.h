@@ -13,13 +13,30 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
+class PrefService;
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
 namespace ash {
 
 class MockEnrollmentScreen : public EnrollmentScreen {
  public:
-  MockEnrollmentScreen(base::WeakPtr<EnrollmentScreenView> view,
-                       ErrorScreen* error_screen,
-                       const ScreenExitCallback& exit_callback);
+  // `local_state` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  MockEnrollmentScreen(
+      PrefService* local_state,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      base::WeakPtr<EnrollmentScreenView> view,
+      ErrorScreen* error_screen,
+      const ScreenExitCallback& exit_callback);
   ~MockEnrollmentScreen() override;
 
   MOCK_METHOD(void, ShowImpl, ());

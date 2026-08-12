@@ -122,7 +122,7 @@ class CastActivityManager : public CastActivityManagerBase,
                                const CastSession& session) override;
   void OnSessionRemoved(const MediaSinkInternal& sink) override;
   void OnMediaStatusUpdated(const MediaSinkInternal& sink,
-                            const base::Value::Dict& media_status,
+                            const base::DictValue& media_status,
                             std::optional<int> request_id) override;
 
   void OnSourceChanged(const std::string& media_route_id,
@@ -143,9 +143,14 @@ class CastActivityManager : public CastActivityManagerBase,
   MirroringActivity* FindMirroringActivityByRouteId(
       const std::string& route_id);
 
-  void AddMirroringActivityForTest(
-      const MediaRoute::Id& route_id,
-      std::unique_ptr<MirroringActivity> mirroring_activity);
+  using ActivityMap =
+      base::flat_map<MediaRoute::Id, std::unique_ptr<CastActivity>>;
+  using AppActivityMap = base::flat_map<MediaRoute::Id, AppActivity*>;
+
+  const ActivityMap& activities_for_testing() const { return activities_; }
+  const AppActivityMap& app_activities_for_testing() const {
+    return app_activities_;
+  }
 
  private:
   friend class CastActivityManagerTest;
@@ -158,23 +163,6 @@ class CastActivityManager : public CastActivityManagerBase,
   FRIEND_TEST_ALL_PREFIXES(CastActivityManagerTest, SendMediaRequestToReceiver);
   FRIEND_TEST_ALL_PREFIXES(CastActivityManagerTest,
                            StartSessionAndRemoveExistingSessionOnSink);
-
-  using ActivityMap =
-      base::flat_map<MediaRoute::Id, std::unique_ptr<CastActivity>>;
-  using AppActivityMap = base::flat_map<MediaRoute::Id, AppActivity*>;
-
-  void SendRouteJsonMessage(const std::string& media_route_id,
-                            const std::string& message,
-                            data_decoder::DataDecoder::ValueOrError result);
-
-  void LaunchSessionParsed(
-      const CastMediaSource& cast_source,
-      const MediaSinkInternal& sink,
-      const std::string& presentation_id,
-      const url::Origin& origin,
-      content::FrameTreeNodeId frame_tree_node_id,
-      mojom::MediaRouteProvider::CreateRouteCallback callback,
-      data_decoder::DataDecoder::ValueOrError result);
 
   // Bundle of parameters for DoLaunchSession().
   struct DoLaunchSessionParams {

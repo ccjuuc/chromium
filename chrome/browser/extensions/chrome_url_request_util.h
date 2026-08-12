@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_CHROME_URL_REQUEST_UTIL_H_
 #define CHROME_BROWSER_EXTENSIONS_CHROME_URL_REQUEST_UTIL_H_
 
+#include "content/public/common/child_process_id.h"
 #include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -22,6 +23,10 @@ class FilePath;
 
 namespace net {
 class HttpResponseHeaders;
+}
+
+namespace content {
+class BrowserContext;
 }
 
 namespace network {
@@ -44,7 +49,7 @@ bool AllowCrossRendererResourceLoad(
     const network::ResourceRequest& request,
     network::mojom::RequestDestination destination,
     ui::PageTransition page_transition,
-    int child_id,
+    content::ChildProcessId child_id,
     bool is_incognito,
     const Extension* extension,
     const ExtensionSet& extensions,
@@ -72,7 +77,8 @@ void LoadResourceFromResourceBundle(
     const base::FilePath& resource_relative_path,
     int resource_id,
     scoped_refptr<net::HttpResponseHeaders> headers,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client);
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    content::BrowserContext* browser_context);
 
 }  // namespace chrome_url_request_util
 }  // namespace extensions

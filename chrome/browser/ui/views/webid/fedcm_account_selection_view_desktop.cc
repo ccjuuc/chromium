@@ -8,18 +8,23 @@
 #include <optional>
 
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/actor/actor_util.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/tabs/inactive_window_mouse_event_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_dialog_manager.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/views/webid/account_selection_bubble_view.h"
 #include "chrome/browser/ui/views/webid/account_selection_modal_view.h"
@@ -32,16 +37,43 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/common/content_features.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom-shared.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
+
+namespace {
+
+// We could have a situation where the WebContents with an actor task opens a
+// popup which then triggers the dialog, so we need to check the opener.
+tabs::TabInterface* InitiatingTaskTab(tabs::TabInterface* source_tab) {
+  if (!base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin)) {
+    return nullptr;
+  }
+
+  CHECK(source_tab);
+
+  if (actor::HaveActiveTaskForContents(source_tab->GetContents())) {
+    return source_tab;
+  }
+  content::WebContents* opener =
+      source_tab->GetContents()->GetFirstWebContentsInLiveOriginalOpenerChain();
+  if (actor::HaveActiveTaskForContents(opener)) {
+    return tabs::TabInterface::GetFromContents(opener);
+  }
+  return nullptr;
+}
+
+}  // namespace
 
 // static
 int AccountSelectionView::GetBrandIconMinimumSize(
@@ -68,12 +100,21 @@ namespace webid {
 
 using DismissReason = content::IdentityRequestDialogController::DismissReason;
 
+FedCmAccountSelectionView::WithheldPopupState::WithheldPopupState() = default;
+FedCmAccountSelectionView::WithheldPopupState::WithheldPopupState(
+    const GURL& url,
+    base::OnceCallback<void(content::WebContents*)> on_shown)
+    : url(url), on_shown(std::move(on_shown)) {}
+FedCmAccountSelectionView::WithheldPopupState::~WithheldPopupState() = default;
+
 FedCmAccountSelectionView::FedCmAccountSelectionView(
     AccountSelectionView::Delegate* delegate,
     tabs::TabInterface* tab)
     : AccountSelectionView(delegate),
-      content::WebContentsObserver(delegate->GetWebContents()),
-      tab_(tab) {
+      content::WebContentsObserver(tab->GetContents()),
+      page_actions::PageActionObserver(kActionFederation),
+      tab_(tab),
+      scoped_user_data_(std::in_place, tab->GetUnownedUserDataHost(), *this) {
   tab_subscriptions_.push_back(tab_->RegisterDidActivate(
       base::BindRepeating(&FedCmAccountSelectionView::TabForegrounded,
                           weak_ptr_factory_.GetWeakPtr())));
@@ -89,6 +130,58 @@ FedCmAccountSelectionView::FedCmAccountSelectionView(
 
 FedCmAccountSelectionView::~FedCmAccountSelectionView() {
   Close(/*notify_delegate=*/false, /*hide_widget=*/false);
+}
+
+void FedCmAccountSelectionView::OnPageActionClicked() {
+  if (!delegate_ || idp_list_.empty() || accounts_.empty() || !rp_data_ ||
+      !tab_) {
+    return;
+  }
+
+  bool is_returning = accounts_.size() == 1u &&
+                      accounts_[0]->idp_claimed_login_state.value_or(
+                          accounts_[0]->browser_trusted_login_state) ==
+                          content::IdentityRequestAccount::LoginState::kSignIn;
+
+  auto* features = tab_->GetTabFeatures();
+  auto* controller = features->page_action_controller();
+
+  // Passing false to hide_dialog_widget_after_idp_login_popup_ to ensure the
+  // widget is shown.
+  hide_dialog_widget_after_idp_login_popup_ = false;
+
+  if (is_returning) {
+    // For sign-in users with only one account logged-in we show a chip by
+    // default.
+    // If the user doesn't interact with the chip, it gets collapsed after a
+    // timeout into an icon in the omnibox.
+    // If the user clicks on the icon, we open the anchored message.
+    base::UmaHistogramEnumeration(
+        "Blink.FedCm.Ambient.ClickSource",
+        GetCurrentPageActionState().anchored_message_showing
+            ? AmbientClick::kSignInAnchoredMessage
+            : (GetCurrentPageActionState().chip_showing
+                   ? AmbientClick::kSignInChip
+                   : AmbientClick::kSignInIcon));
+
+    // After clicking on the chip or the icon, we sign the user in and show the
+    // "Signing in ..." text.
+    state_ = State::VERIFYING;
+    controller->OverrideText(
+        kActionFederation,
+        l10n_util::GetStringUTF16(IDS_FEDERATION_SIGNING_IN_TITLE));
+    controller->ShowSuggestionChip(kActionFederation);
+    controller->Show(kActionFederation);
+    NotifyDelegateOfAccountSelection(*accounts_[0],
+                                     *accounts_[0]->identity_provider);
+  } else {
+    // For sign-up users, we show a full modal dialog that gathers the necessary
+    // permission from the user (e.g. privacy policies and terms of services).
+    base::UmaHistogramEnumeration("Blink.FedCm.Ambient.ClickSource",
+                                  AmbientClick::kSignUpChip);
+    Show(*rp_data_, idp_list_, accounts_, blink::mojom::RpMode::kActive,
+         new_accounts_);
+  }
 }
 
 void FedCmAccountSelectionView::ShowDialogWidget() {
@@ -171,7 +264,7 @@ bool FedCmAccountSelectionView::Show(
   idp_list_ = idp_list;
   accounts_ = accounts;
   new_accounts_ = new_accounts;
-  rp_icon_ = rp_data.rp_icon;
+  rp_data_ = rp_data;
 
   size_t accounts_or_mismatches_size = accounts.size();
   blink::mojom::RpContext rp_context = blink::mojom::RpContext::kSignIn;
@@ -182,10 +275,25 @@ bool FedCmAccountSelectionView::Show(
     if (identity_provider->has_login_status_mismatch) {
       ++accounts_or_mismatches_size;
     }
-
     // TODO(crbug.com/40252518): Decide what we should display if the IdPs use
     // different contexts here.
     rp_context = identity_provider->rp_context;
+  }
+
+  if (IsAmbientEnabled()) {
+    if (rp_mode == blink::mojom::RpMode::kPassive) {
+      if (ShowPageAction(idp_list, accounts)) {
+        dialog_type_ = DialogType::AMBIENT;
+        return true;
+      }
+      if (tab_) {
+        if (auto* features = tab_->GetTabFeatures()) {
+          if (auto* controller = features->page_action_controller()) {
+            controller->Hide(kActionFederation);
+          }
+        }
+      }
+    }
   }
 
   bool has_filtered_out_accounts = false;
@@ -259,7 +367,7 @@ bool FedCmAccountSelectionView::Show(
         // with most recently signed in accounts at the top to reduce the
         // exposure of extra UI surfaces and to work around the account picker
         // not having a back button.
-        ShowMultiAccountPicker(accounts_, idp_list_, rp_icon_,
+        ShowMultiAccountPicker(accounts_, idp_list_, rp_data_->rp_icon,
                                /*show_back_button=*/false);
       }
     } else {
@@ -275,7 +383,8 @@ bool FedCmAccountSelectionView::Show(
                 supports_add_account);
       } else {
         ShowMultiAccountPicker(
-            new_accounts_, {new_accounts_[0]->identity_provider}, rp_icon_,
+            new_accounts_, {new_accounts_[0]->identity_provider},
+            rp_data_->rp_icon,
             /*show_back_button=*/accounts_or_mismatches_size >
                 new_accounts_.size());
         // Override the state to NEWLY_LOGGED_IN_ACCOUNT_PICKER so the back
@@ -287,7 +396,7 @@ bool FedCmAccountSelectionView::Show(
     if (dialog_type_ == DialogType::BUBBLE && has_filtered_out_accounts) {
       // The logic to support add account is in ShowMultiAccountPicker for the
       // bubble dialog.
-      ShowMultiAccountPicker(accounts_, idp_list_, rp_icon_,
+      ShowMultiAccountPicker(accounts_, idp_list_, rp_data_->rp_icon,
                              /*show_back_button=*/false);
     } else {
       state_ = State::SINGLE_ACCOUNT_PICKER;
@@ -296,7 +405,7 @@ bool FedCmAccountSelectionView::Show(
           /*show_back_button=*/false);
     }
   } else {
-    ShowMultiAccountPicker(accounts_, idp_list_, rp_icon_,
+    ShowMultiAccountPicker(accounts_, idp_list_, rp_data_->rp_icon,
                            /*show_back_button=*/false);
   }
   UpdateDialogVisibilityAndPosition();
@@ -426,6 +535,14 @@ bool FedCmAccountSelectionView::ShowLoadingDialog(
   return true;
 }
 
+void FedCmAccountSelectionView::SetCanShowUi(bool can_show_ui) {
+  if (can_show_ui == can_show_ui_) {
+    return;
+  }
+  can_show_ui_ = can_show_ui;
+  UpdateDialogVisibilityAndPosition();
+}
+
 bool FedCmAccountSelectionView::ShowVerifyingDialog(
     const content::RelyingPartyData& rp_data,
     const IdentityProviderDataPtr& idp_data,
@@ -483,8 +600,10 @@ bool FedCmAccountSelectionView::ShowVerifyingDialog(
 }
 
 void FedCmAccountSelectionView::ShowUrl(LinkType link_type, const GURL& url) {
-  Browser* browser = chrome::FindBrowserWithTab(delegate_->GetWebContents());
-  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          delegate_->GetWebContents());
+  TabStripModel* tab_strip_model = browser->GetTabStripModel();
 
   DCHECK(tab_strip_model);
   // Add a tab for the URL at the end of the tab strip, in the foreground.
@@ -637,7 +756,7 @@ void FedCmAccountSelectionView::OnBackButtonClicked() {
     UpdateDialogPosition();
     return;
   }
-  ShowMultiAccountPicker(accounts_, idp_list_, rp_icon_,
+  ShowMultiAccountPicker(accounts_, idp_list_, rp_data_->rp_icon,
                          /*show_back_button=*/false);
   UpdateDialogPosition();
 }
@@ -687,8 +806,6 @@ void FedCmAccountSelectionView::OnLoginToIdP(const GURL& idp_config_url,
     return;
   }
 
-  delegate_->OnLoginToIdP(idp_config_url, idp_login_url);
-
   if (state_ == State::IDP_SIGNIN_STATUS_MISMATCH) {
     is_mismatch_continue_clicked_ = true;
     popup_window_state_ =
@@ -702,6 +819,8 @@ void FedCmAccountSelectionView::OnLoginToIdP(const GURL& idp_config_url,
     modal_account_chooser_state_ =
         webid::AccountChooserResult::kUseOtherAccountButton;
   }
+
+  delegate_->OnLoginToIdP(idp_config_url, idp_login_url);
 }
 
 void FedCmAccountSelectionView::OnGotIt(const ui::Event& event) {
@@ -727,7 +846,9 @@ void FedCmAccountSelectionView::OnMoreDetails(const ui::Event& event) {
 
 content::WebContents* FedCmAccountSelectionView::ShowModalDialog(
     const GURL& url,
-    blink::mojom::RpMode rp_mode) {
+    blink::mojom::RpMode rp_mode,
+    content::IdentityRequestDialogController::ShownModalAsyncCallback
+        on_shown_async) {
   if (popup_window_) {
     // TODO(crbug.com/324052630): Support add account with multi IDP API. An add
     // account pop-up of a different IDP might be open, so this might need to
@@ -753,13 +874,30 @@ content::WebContents* FedCmAccountSelectionView::ShowModalDialog(
   // better UX.
   UpdateDialogVisibilityAndPosition();
 
-  // The FedCM dialog should not be dismissed if the use other account pop-up is
-  // closed, which can only be triggered from account selection. On the other
-  // hand, if the popup is from another flow, then closing the popup should also
-  // exit out of the entire FedCM flow.
-  bool user_close_cancels_flow =
-      GetSheetType() != webid::SheetType::kAccountSelection;
-  return popup_window_->ShowPopupWindow(url, user_close_cancels_flow);
+  if (tabs::TabInterface* initiating_task_tab = InitiatingTaskTab(tab_)) {
+    content::WebContents* initiating_contents =
+        initiating_task_tab->GetContents();
+    // We check `GetDisplayMode` to track both tab and browser fullscreen.
+    bool in_fullscreen =
+        initiating_contents->GetDelegate() &&
+        initiating_contents->GetDelegate()->GetDisplayMode(
+            initiating_contents) == blink::mojom::DisplayMode::kFullscreen;
+    // If the tab is running a background actor task and is not in fullscreen,
+    // withhold the pop-up until the tab is foregrounded. Fullscreen tabs are
+    // not withheld because in that case we'd open a new tab instead of a pop-up
+    // window, so there's no need to withhold.
+    if (actor::IsRunningBackgroundActorTask(*initiating_contents) &&
+        !in_fullscreen) {
+      tab_subscriptions_.push_back(
+          initiating_task_tab->RegisterDidActivate(base::BindRepeating(
+              &FedCmAccountSelectionView::BackgroundTaskTabForegrounded,
+              weak_ptr_factory_.GetWeakPtr())));
+      withheld_popup_state_.emplace(url, std::move(on_shown_async));
+      return nullptr;
+    }
+  }
+
+  return ShowPopupWindow(url);
 }
 
 void FedCmAccountSelectionView::CloseModalDialog() {
@@ -870,6 +1008,18 @@ void FedCmAccountSelectionView::ModalUIChanged(tabs::TabInterface* tab) {
   }
 }
 
+void FedCmAccountSelectionView::BackgroundTaskTabForegrounded(
+    tabs::TabInterface* tab) {
+  if (withheld_popup_state_) {
+    GURL url = withheld_popup_state_->url;
+    auto on_shown = std::move(withheld_popup_state_->on_shown);
+    withheld_popup_state_.reset();
+    if (popup_window_) {
+      std::move(on_shown).Run(ShowPopupWindow(url));
+    }
+  }
+}
+
 FedCmModalDialogView* FedCmAccountSelectionView::GetPopupWindowForTesting() {
   return popup_window_.get();
 }
@@ -897,7 +1047,7 @@ bool FedCmAccountSelectionView::NotifyDelegateOfAccountSelection(
                                    account.browser_trusted_login_state));
 
   // AccountSelectionView::Delegate::OnAccountSelected() might delete this.
-  // See https://crbug.com/1393650 for details.
+  // See https://crbug.com/40248291 for details.
   return static_cast<bool>(weak_ptr);
 }
 
@@ -936,8 +1086,25 @@ SheetType FedCmAccountSelectionView::GetSheetType() {
 }
 
 void FedCmAccountSelectionView::Close(bool notify_delegate, bool hide_widget) {
+  scoped_user_data_.reset();
+  if (IsAmbientEnabled() && tab_) {
+    if (auto* features = tab_->GetTabFeatures()) {
+      if (auto* controller = features->page_action_controller()) {
+        controller->Hide(kActionFederation);
+        controller->HideSuggestionChip(kActionFederation);
+        controller->HideAnchoredMessage(kActionFederation);
+      }
+    }
+  }
+
   if (!GetDialogWidget()) {
     CHECK(!account_selection_view_);
+    // When the UI is in the AMBIENT state (omnibox chip), there is no widget
+    // to trigger the standard destruction sequence. We must notify the delegate
+    // here to ensure the request is properly terminated.
+    if (dialog_type_ == DialogType::AMBIENT && notify_delegate) {
+      delegate_->OnDismiss(DismissReason::kOther);
+    }
     return;
   }
 
@@ -966,9 +1133,10 @@ std::unique_ptr<views::Widget> FedCmAccountSelectionView::CreateDialogWidget() {
         base::WrapUnique(views::AsViewClass<AccountSelectionBubbleView>(
             parked_dialog_view_.release())),
         GetAnchorView());
-    dialog_widget = base::WrapUnique(views::BubbleDialogDelegate::CreateBubble(
-        widget_delegate_.get()->AsBubbleDialogDelegate(),
-        views::Widget::InitParams::CLIENT_OWNS_WIDGET));
+    dialog_widget =
+        base::WrapUnique(views::BubbleDialogDelegate::CreateBubbleDeprecated(
+            widget_delegate_.get()->AsBubbleDialogDelegate(),
+            views::Widget::InitParams::CLIENT_OWNS_WIDGET));
   } else {
     // Create and show the dialog widget. This is functionally a tab-modal
     // dialog.
@@ -1271,6 +1439,9 @@ void FedCmAccountSelectionView::UpdateDialogVisibilityAndPosition() {
 void FedCmAccountSelectionView::ResetDialogWidgetStateOnAnyShow() {
   accounts_widget_shown_callback_.Reset();
   hide_dialog_widget_after_idp_login_popup_ = false;
+  chip_impression_recorded_ = false;
+  icon_impression_recorded_ = false;
+  chip_requested_for_flow_ = false;
 }
 
 gfx::Rect FedCmAccountSelectionView::GetDialogBounds() {
@@ -1281,6 +1452,11 @@ gfx::Rect FedCmAccountSelectionView::GetDialogBounds() {
 }
 
 void FedCmAccountSelectionView::ShouldShowDialog(bool& should_show) {
+  if (!can_show_ui_) {
+    should_show = false;
+    return;
+  }
+
   if (dialog_type_ == DialogType::BUBBLE) {
     // Hide the bubble dialog if it can't fit.
     if (!CanFitInWebContents()) {
@@ -1301,6 +1477,161 @@ void FedCmAccountSelectionView::ShouldShowDialog(bool& should_show) {
       should_show = false;
     }
   }
+}
+
+content::WebContents* FedCmAccountSelectionView::ShowPopupWindow(
+    const GURL& url) {
+  CHECK(popup_window_);
+  // The FedCM dialog should not be dismissed if the use other account pop-up
+  // is closed, which can only be triggered from account selection. On the
+  // other hand, if the popup is from another flow, then closing the popup
+  // should also exit out of the entire FedCM flow.
+  bool user_close_cancels_flow =
+      GetSheetType() != webid::SheetType::kAccountSelection;
+  return popup_window_->ShowPopupWindow(url, user_close_cancels_flow);
+}
+
+bool FedCmAccountSelectionView::ShowPageAction(
+    const std::vector<IdentityProviderDataPtr>& idp_list,
+    const std::vector<IdentityRequestAccountPtr>& accounts) {
+  if (!tab_) {
+    return false;
+  }
+
+  auto* features = tab_->GetTabFeatures();
+  if (!features) {
+    return false;
+  }
+
+  auto* controller = features->page_action_controller();
+  if (!controller) {
+    return false;
+  }
+
+  // We currently only support showing the page action when there is exactly one
+  // IDP and one account. If there are multiple IDPs or accounts, we fall back
+  // to the standard UI. Note that idp_list.size() != 1u is not redundant with
+  // accounts.size() != 1u because an IDP can be in a mismatch state (and thus
+  // contribute 0 accounts).
+  if (idp_list.size() != 1u || accounts.size() != 1u) {
+    return false;
+  }
+
+  // If the account picture hasn't been decoded yet, we can't show the page
+  // action icon.
+  if (accounts[0]->decoded_picture.IsEmpty()) {
+    return false;
+  }
+
+  bool is_returning = accounts[0]->idp_claimed_login_state.value_or(
+                          accounts[0]->browser_trusted_login_state) ==
+                      content::IdentityRequestAccount::LoginState::kSignIn;
+
+  std::u16string idp_name =
+      base::UTF8ToUTF16(accounts[0]->identity_provider->idp_for_display);
+  if (is_returning) {
+    controller->SetAnchoredMessageText(kActionFederation,
+                                       base::UTF8ToUTF16(accounts[0]->email));
+    controller->SetAnchoredMessageAction(
+        kActionFederation, page_actions::AnchoredMessageActionIconType::kClose,
+        /*model=*/nullptr);
+    controller->OverrideText(
+        kActionFederation,
+        l10n_util::GetStringFUTF16(IDS_FEDERATION_SIGN_IN_TITLE, idp_name));
+  } else {
+    controller->OverrideText(
+        kActionFederation,
+        l10n_util::GetStringFUTF16(IDS_FEDERATION_SIGN_UP_TITLE, idp_name));
+  }
+
+  gfx::ImageSkia avatar = webid::ComputeAccountCircleCroppedPicture(
+      *accounts[0], ui::SimpleMenuModel::kDefaultIconSize,
+      /*idp_image=*/std::nullopt, 1.0f);
+  controller->OverrideImage(kActionFederation,
+                            ui::ImageModel::FromImageSkia(avatar));
+
+  // Registers this class as an observer of the page action, so that we can
+  // determine the state of the page action when the user clicks on it.
+  RegisterAsPageActionObserver(*controller);
+  chip_requested_for_flow_ = true;
+  controller->Show(kActionFederation);
+  controller->ShowSuggestionChip(kActionFederation);
+  return true;
+}
+
+bool FedCmAccountSelectionView::IsAmbientEnabled() const {
+  return base::FeatureList::IsEnabled(features::kFedCmAmbientUI) ||
+         (delegate_ && delegate_->GetPassiveDialogVolume() ==
+                           content::IdentityRequestDialogController::
+                               PassiveDialogVolume::kAmbient);
+}
+
+void FedCmAccountSelectionView::RecordPageActionImpression(
+    const page_actions::PageActionState& page_action,
+    AmbientImpression signin,
+    AmbientImpression signup) {
+  bool is_returning = accounts_.size() == 1u &&
+                      accounts_[0]->idp_claimed_login_state.value_or(
+                          accounts_[0]->browser_trusted_login_state) ==
+                          content::IdentityRequestAccount::LoginState::kSignIn;
+  base::UmaHistogramEnumeration("Blink.FedCm.Ambient.Impression",
+                                is_returning ? signin : signup);
+}
+
+void FedCmAccountSelectionView::OnPageActionIconShown(
+    const page_actions::PageActionState& next) {
+  // When the user clicks on the UI, the state transitions to `VERIFYING` and
+  // the page action is updated to show a "Signing in..." chip. This is part of
+  // the authentication process and should not be recorded as a new impression.
+  if (state_ == State::VERIFYING || icon_impression_recorded_) {
+    return;
+  }
+  // If we requested the page action to be shown as a chip, we ignore this
+  // initial icon shown notification because the UI is supposed to show a
+  // suggestion chip. We will log the icon impression later if and when the chip
+  // collapses.
+  if (chip_requested_for_flow_) {
+    return;
+  }
+  icon_impression_recorded_ = true;
+  RecordPageActionImpression(next, AmbientImpression::kSignInIcon,
+                             AmbientImpression::kSignUpIcon);
+}
+
+void FedCmAccountSelectionView::OnPageActionChipShown(
+    const page_actions::PageActionState& next) {
+  // When the user clicks on the UI, the state transitions to `VERIFYING` and
+  // the page action is updated to show a "Signing in..." chip. This is part of
+  // the authentication process and should not be recorded as a new impression.
+  if (state_ == State::VERIFYING || chip_impression_recorded_) {
+    return;
+  }
+  chip_impression_recorded_ = true;
+  RecordPageActionImpression(next, AmbientImpression::kSignInChip,
+                             AmbientImpression::kSignUpChip);
+}
+
+void FedCmAccountSelectionView::OnPageActionChipHidden(
+    const page_actions::PageActionState& next) {
+  // When the user clicks on the UI, the state transitions to `VERIFYING` and
+  // the page action is updated to show a "Signing in..." chip. This is part of
+  // the authentication process and should not be recorded as a new impression.
+  if (state_ == State::VERIFYING) {
+    return;
+  }
+  // If the chip is hidden, but the icon is still showing, then it has collapsed
+  // to a static icon. This is when the user actually sees it as an icon.
+  if (next.showing && !icon_impression_recorded_) {
+    icon_impression_recorded_ = true;
+    RecordPageActionImpression(next, AmbientImpression::kSignInIcon,
+                               AmbientImpression::kSignUpIcon);
+  }
+}
+
+void FedCmAccountSelectionView::OnPageActionAnchoredMessageShown(
+    const page_actions::PageActionState& next) {
+  RecordPageActionImpression(next, AmbientImpression::kSignInAnchoredMessage,
+                             AmbientImpression::kSignUpAnchoredMessage);
 }
 
 }  // namespace webid

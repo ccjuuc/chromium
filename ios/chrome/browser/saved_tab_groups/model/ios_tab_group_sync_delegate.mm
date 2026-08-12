@@ -36,8 +36,8 @@
 #import "ios/chrome/browser/shared/model/web_state_list/tab_group.h"
 #import "ios/chrome/browser/shared/model/web_state_list/tab_utils.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -166,9 +166,9 @@ IOSTabGroupSyncDelegate::HandleOpenTabGroupRequest(
       }
 
       CommandDispatcher* dispatcher = target_browser->GetCommandDispatcher();
-      id<ApplicationCommands> applicationHandler =
-          HandlerForProtocol(dispatcher, ApplicationCommands);
-      [applicationHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
+      id<SceneCommands> sceneHandler =
+          HandlerForProtocol(dispatcher, SceneCommands);
+      [sceneHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
       id<TabGroupsCommands> tabGroupsHandler =
           HandlerForProtocol(dispatcher, TabGroupsCommands);
       [tabGroupsHandler showTabGroup:group];
@@ -190,9 +190,9 @@ IOSTabGroupSyncDelegate::HandleOpenTabGroupRequest(
   }
 
   CommandDispatcher* dispatcher = target_browser->GetCommandDispatcher();
-  id<ApplicationCommands> applicationHandler =
-      HandlerForProtocol(dispatcher, ApplicationCommands);
-  [applicationHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(dispatcher, SceneCommands);
+  [sceneHandler displayTabGridInMode:TabGridOpeningMode::kRegular];
 
   id<TabGroupsCommands> tabGroupsHandler =
       HandlerForProtocol(dispatcher, TabGroupsCommands);
@@ -224,13 +224,9 @@ void IOSTabGroupSyncDelegate::CreateLocalTabGroup(
     return;
   }
 
-  // Check if auto open remote tab groups feature is enabled and respect users'
-  // preference.
-  if (IsAutoOpenRemoteTabGroupsSettingsFeatureEnabled()) {
-    PrefService* pref_service = browser->GetProfile()->GetPrefs();
-    if (!pref_service->GetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled)) {
-      return;
-    }
+  PrefService* pref_service = browser->GetProfile()->GetPrefs();
+  if (!pref_service->GetBoolean(prefs::kAutomaticallyOpenTabGroupsEnabled)) {
+    return;
   }
 
   CreateLocalTabGroupImpl(saved_tab_group, browser);

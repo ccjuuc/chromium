@@ -92,6 +92,19 @@ CSSStyleValue* CreateStyleValueWithPropertyInternal(CSSPropertyID property_id,
       }
       return nullptr;
     }
+    case CSSPropertyID::kBackgroundSize:
+    case CSSPropertyID::kMaskSize: {
+      // A one-value <bg-size> is stored as the pair "<size> auto"; reify it as
+      // the single value. The genuine two-value form remains unsupported in
+      // Typed OM level 1 (reified as a generic CSSStyleValue).
+      if (const auto* pair = DynamicTo<CSSValuePair>(value)) {
+        const auto* second = DynamicTo<CSSIdentifierValue>(&pair->Second());
+        if (second && second->GetValueID() == CSSValueID::kAuto) {
+          return CreateStyleValue(pair->First());
+        }
+      }
+      return nullptr;
+    }
     case CSSPropertyID::kAccentColor:
     case CSSPropertyID::kCaretColor: {
       // caret-color and accent-color also support 'auto'
@@ -205,7 +218,8 @@ CSSStyleValue* CreateStyleValueWithPropertyInternal(CSSPropertyID property_id,
       }
       return CreateStyleValue(value);
     }
-    case CSSPropertyID::kTextDecorationLine: {
+    case CSSPropertyID::kTextDecorationLine:
+    case CSSPropertyID::kTextTransform: {
       if (value.IsIdentifierValue()) {
         return CreateStyleValue(value);
       }
@@ -219,7 +233,7 @@ CSSStyleValue* CreateStyleValueWithPropertyInternal(CSSPropertyID property_id,
       return nullptr;
     }
     case CSSPropertyID::kTextIndent: {
-      if (value.IsIdentifierValue()) {
+      if (value.IsIdentifierValue() || value.IsPrimitiveValue()) {
         return CreateStyleValue(value);
       }
 
@@ -396,7 +410,7 @@ CSSStyleValueVector StyleValueFactory::CoerceStyleValuesOrStrings(
         }
 
         DCHECK(!subvalues.Contains(nullptr));
-        style_values.AppendVector(subvalues);
+        style_values.append_range(subvalues);
         break;
       }
     }

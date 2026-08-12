@@ -5,7 +5,6 @@
 #include "chrome/browser/ash/extensions/file_manager/drivefs_event_router.h"
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -220,7 +219,11 @@ void DriveFsEventRouter::OnError(const drivefs::mojom::DriveError& error) {
 void DriveFsEventRouter::Observe(
     drive::DriveIntegrationService* const service) {
   DCHECK(service);
-  drive::DriveIntegrationService::Observer::Observe(service);
+  if (service != drive_observation_.GetSource()) {
+    drive_observation_.Reset();
+    drive_observation_.Observe(service);
+  }
+
   drivefs::DriveFsHost* const host = service->GetDriveFsHost();
   drivefs::DriveFsHost::Observer::Observe(host);
   host->set_dialog_handler(
@@ -233,7 +236,7 @@ void DriveFsEventRouter::Reset() {
     host->set_dialog_handler({});
   }
   drivefs::DriveFsHost::Observer::Reset();
-  drive::DriveIntegrationService::Observer::Reset();
+  drive_observation_.Reset();
 }
 
 void DriveFsEventRouter::OnDriveIntegrationServiceDestroyed() {

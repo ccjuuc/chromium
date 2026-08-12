@@ -34,8 +34,6 @@ class TestBrokerServicesDelegateBase : public BrokerServicesDelegate {
         std::move(task), std::move(reply));
   }
 
-  void AfterTargetProcessCreateOnCreationThread(const void* trace_id,
-                                                DWORD process_id) override {}
   void OnCreateThreadActionCreateFailure(DWORD last_error) override {}
   void OnCreateThreadActionDuplicateFailure(DWORD last_error) override {}
 };
@@ -68,8 +66,7 @@ class ParallelLaunchTest : public testing::Test {
 class SingleLaunch_TestBrokerServicesDelegate
     : public TestBrokerServicesDelegateBase {
  public:
-  void BeforeTargetProcessCreateOnCreationThread(
-      const void* trace_id) override {
+  void BeforeTargetProcessCreateOnCreationThread() override {
     creation_thread_id_ = ::GetCurrentThreadId();
   }
 
@@ -86,13 +83,8 @@ TEST_F(ParallelLaunchTest, SingleLaunch) {
   static_cast<BrokerServicesBase*>(broker)->SetBrokerServicesDelegateForTesting(
       std::unique_ptr<BrokerServicesDelegate>(delegate));
 
-  // Get the path to the sandboxed app.
-  wchar_t prog_name[MAX_PATH];
-  GetModuleFileNameW(nullptr, prog_name, MAX_PATH);
-
-  std::wstring arguments(L"\"");
-  arguments += prog_name;
-  arguments += L"\" -child 0 wait";  // Don't care about the "state" argument.
+  base::CommandLine cmd_line =
+      WaitCommandTestRunner::CreateCommandLineForTesting();
 
   auto policy = broker->CreatePolicy();
   EXPECT_EQ(SBOX_ALL_OK, policy->GetConfig()->SetTokenLevel(USER_INTERACTIVE,
@@ -104,7 +96,7 @@ TEST_F(ParallelLaunchTest, SingleLaunch) {
   base::RunLoop run_loop;
   int launches_remaining_count = 1;
   broker->SpawnTargetAsync(
-      prog_name, arguments, std::move(policy),
+      cmd_line, std::move(policy),
       base::BindOnce(&FinishSpawnTargetAsync, base::Unretained(&spawn_result),
                      base::Unretained(&run_loop),
                      base::Unretained(&launches_remaining_count)));
@@ -131,17 +123,14 @@ TEST_F(ParallelLaunchTest, SingleLaunch) {
 class ParallelLaunch_TestBrokerServicesDelegate
     : public TestBrokerServicesDelegateBase {
  public:
-  void BeforeTargetProcessCreateOnCreationThread(
-      const void* trace_id) override {
+  void BeforeTargetProcessCreateOnCreationThread() override {
     if (first_launch_) {
       first_creation_thread_id_ = ::GetCurrentThreadId();
-      first_trace_id_ = reinterpret_cast<uintptr_t>(trace_id);
       first_launch_ = false;
       EXPECT_TRUE(::SetEvent(reached_first_creation_event_));
       ::WaitForSingleObject(first_block_event_, INFINITE);
     } else {
       second_creation_thread_id_ = ::GetCurrentThreadId();
-      second_trace_id_ = reinterpret_cast<uintptr_t>(trace_id);
       EXPECT_TRUE(::SetEvent(first_block_event_));
     }
   }
@@ -151,8 +140,6 @@ class ParallelLaunch_TestBrokerServicesDelegate
   HANDLE first_block_event_;
   DWORD first_creation_thread_id_;
   DWORD second_creation_thread_id_;
-  uintptr_t first_trace_id_;
-  uintptr_t second_trace_id_;
 };
 
 // This test launches two processes and synchronizes the target creation threads
@@ -165,13 +152,8 @@ TEST_F(ParallelLaunchTest, ParallelLaunch) {
   static_cast<BrokerServicesBase*>(broker)->SetBrokerServicesDelegateForTesting(
       std::unique_ptr<BrokerServicesDelegate>(delegate));
 
-  // Get the path to the sandboxed app.
-  wchar_t prog_name[MAX_PATH];
-  GetModuleFileNameW(nullptr, prog_name, MAX_PATH);
-
-  std::wstring arguments(L"\"");
-  arguments += prog_name;
-  arguments += L"\" -child 0 wait";  // Don't care about the "state" argument.
+  base::CommandLine cmd_line =
+      WaitCommandTestRunner::CreateCommandLineForTesting();
 
   base::RunLoop run_loop;
   int launches_remaining_count = 2;
@@ -190,7 +172,7 @@ TEST_F(ParallelLaunchTest, ParallelLaunch) {
                                                               USER_LOCKDOWN));
 
     broker->SpawnTargetAsync(
-        prog_name, arguments, std::move(policy),
+        cmd_line, std::move(policy),
         base::BindOnce(&FinishSpawnTargetAsync,
                        base::Unretained(&first_spawn_result),
                        base::Unretained(&run_loop),
@@ -208,7 +190,7 @@ TEST_F(ParallelLaunchTest, ParallelLaunch) {
                                                               USER_LOCKDOWN));
 
     broker->SpawnTargetAsync(
-        prog_name, arguments, std::move(policy),
+        cmd_line, std::move(policy),
         base::BindOnce(&FinishSpawnTargetAsync,
                        base::Unretained(&second_spawn_result),
                        base::Unretained(&run_loop),
@@ -220,8 +202,6 @@ TEST_F(ParallelLaunchTest, ParallelLaunch) {
   // Targets should be created on different threads.
   EXPECT_NE(delegate->first_creation_thread_id_,
             delegate->second_creation_thread_id_);
-
-  EXPECT_NE(delegate->first_trace_id_, delegate->second_trace_id_);
 
   EXPECT_EQ(SBOX_ALL_OK, first_spawn_result.result_code);
   EXPECT_EQ(SBOX_ALL_OK, second_spawn_result.result_code);

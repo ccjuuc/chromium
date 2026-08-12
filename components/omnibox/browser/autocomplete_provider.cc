@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <string>
 
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/time_formatting.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -21,6 +23,7 @@
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/history_provider.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/url_formatter/url_fixer.h"
 #include "url/gurl.h"
 
@@ -90,6 +93,8 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "ContextualSearch";
     case TYPE_TAB_GROUP:
       return "TabGroup";
+    case TYPE_CROSS_DEVICE_TAB:
+      return "CrossDeviceTab";
     default:
       DUMP_WILL_BE_NOTREACHED()
           << "Unhandled AutocompleteProvider::Type " << type;
@@ -113,7 +118,10 @@ const std::u16string AutocompleteProvider::LocalizedLastModifiedString(
     }
 
     // Same year but not the same day: use abbreviated month/day ("Jan 1").
-    return base::LocalizedTimeFormatWithPattern(modified_time, "MMMd");
+    using base::i18n::IcuBridge;
+    using base::i18n::datetime_options::MD;
+    return IcuBridge::GetInstance().date_time_formatter().Format(modified_time,
+                                                                 MD::Medium());
   }
 
   // No shorthand; display full MM/DD/YYYY.
@@ -203,6 +211,8 @@ AutocompleteProvider::AsOmniboxEventProviderType() const {
       return metrics::OmniboxEventProto::CONTEXTUAL_SEARCH_PROVIDER;
     case TYPE_TAB_GROUP:
       return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
+    case TYPE_CROSS_DEVICE_TAB:
+      return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
     default:
       // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
       //   help debug crbug.com/1499235 since NOTREACHED's don't log their
@@ -244,12 +254,14 @@ AutocompleteProvider::AdjustedInputAndStarterPackKeyword
 AutocompleteProvider::AdjustInputForStarterPackKeyword(
     const AutocompleteInput& input,
     const TemplateURLService* turl_service) {
-  if (input.prefer_keyword()) {
+  if (input.in_keyword_mode()) {
     AutocompleteInput keyword_input = input;
     const TemplateURL* template_url =
         AutocompleteInput::GetSubstitutingTemplateURLForInput(turl_service,
                                                               &keyword_input);
-    if (template_url && template_url->starter_pack_id() > 0) {
+    if (template_url &&
+        template_url->starter_pack_id() !=
+            template_url_starter_pack_data::StarterPackId::kNone) {
       return {keyword_input, template_url};
     }
   }
@@ -264,7 +276,7 @@ AutocompleteProvider::FixupReturn AutocompleteProvider::FixupUserInput(
 
   // Fixup and canonicalize user input.
   const GURL canonical_gurl(
-      url_formatter::FixupURL(base::UTF16ToUTF8(input_text), std::string()));
+      url_formatter::FixupURL(base::UTF16ToUTF8(input_text)));
   std::string canonical_gurl_str(canonical_gurl.possibly_invalid_spec());
   if (canonical_gurl_str.empty()) {
     // This probably won't happen, but there are no guarantees.

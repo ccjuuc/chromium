@@ -67,7 +67,8 @@ BaseSafeBrowsingErrorUI::SBErrorDisplayOptions GetDefaultDisplayOptions(
             SECURITY_SENSITIVE_SAFE_BROWSING_INTERSTITIAL);
   }
   return BaseSafeBrowsingErrorUI::SBErrorDisplayOptions(
-      UnsafeResource::IsMainPageLoadPendingWithSyncCheck(resource.threat_type),
+      UnsafeResource::IsMainPageLoadPendingWithSyncCheck(
+          resource.threat_type, resource.threat_source),
       /*is_extended_reporting_opt_in_allowed=*/false,
       /*is_off_the_record=*/false,
       /*is_extended_reporting=*/false,
@@ -122,7 +123,8 @@ SafeBrowsingBlockingPage::SafeBrowsingBlockingPage(
                                   client),
       is_main_page_load_blocked_(
           UnsafeResource::IsMainPageLoadPendingWithSyncCheck(
-              resource.threat_type)),
+              resource.threat_type,
+              resource.threat_source)),
       error_ui_(std::make_unique<SafeBrowsingLoudErrorUI>(
           resource.url,
           GetUnsafeResourceInterstitialReason(resource),
@@ -130,7 +132,10 @@ SafeBrowsingBlockingPage::SafeBrowsingBlockingPage(
           client->GetApplicationLocale(),
           base::Time::NowFromSystemTime(),
           client,
-          is_main_page_load_blocked_)) {}
+          is_main_page_load_blocked_)) {
+  SafeBrowsingTabHelper::ReportSecurityInterstitialShown(
+      resource.weak_web_state.get(), resource);
+}
 
 SafeBrowsingBlockingPage::~SafeBrowsingBlockingPage() = default;
 
@@ -140,7 +145,7 @@ void SafeBrowsingBlockingPage::SetClient(
 }
 
 std::string SafeBrowsingBlockingPage::GetHtmlContents() const {
-  base::Value::Dict load_time_data;
+  base::DictValue load_time_data;
   PopulateInterstitialStrings(load_time_data);
   webui::SetLoadTimeDataDefaults(client_->GetApplicationLocale(),
                                  &load_time_data);
@@ -167,7 +172,7 @@ bool SafeBrowsingBlockingPage::ShouldCreateNewNavigation() const {
 }
 
 void SafeBrowsingBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) const {
+    base::DictValue& load_time_data) const {
   load_time_data.Set("url_to_reload", request_url().spec());
   error_ui_->PopulateStringsForHtml(load_time_data);
 }

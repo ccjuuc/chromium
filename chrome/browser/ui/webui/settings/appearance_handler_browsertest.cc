@@ -9,10 +9,10 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_prefs.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -39,7 +39,7 @@ class AppearanceHandlerTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(AppearanceHandlerTest,
                        OpenCustomizeChromeToolbarSection) {
-  base::Value::List args;
+  base::ListValue args;
   browser()
       ->tab_strip_model()
       ->GetActiveWebContents()
@@ -53,23 +53,19 @@ IN_PROC_BROWSER_TEST_F(AppearanceHandlerTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AppearanceHandlerTest, ResetPinnedToolbarActions) {
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   prefs->SetBoolean(prefs::kShowHomeButton, true);
   prefs->SetBoolean(prefs::kShowForwardButton, false);
 
   PinnedToolbarActionsModel* const actions_model =
-      PinnedToolbarActionsModel::Get(browser()->profile());
+      PinnedToolbarActionsModel::Get(browser()->GetProfile());
   actions_model->UpdatePinnedState(kActionSidePanelShowBookmarks, true);
 
   EXPECT_TRUE(prefs->GetBoolean(prefs::kShowHomeButton));
   EXPECT_FALSE(prefs->GetBoolean(prefs::kShowForwardButton));
-  if (features::HasTabSearchToolbarButton()) {
-    EXPECT_EQ(3u, actions_model->PinnedActionIds().size());
-  } else {
-    EXPECT_EQ(2u, actions_model->PinnedActionIds().size());
-  }
+  EXPECT_EQ(2u, actions_model->PinnedActionIds().size());
 
-  base::Value::List args;
+  base::ListValue args;
   browser()
       ->tab_strip_model()
       ->GetActiveWebContents()
@@ -79,14 +75,8 @@ IN_PROC_BROWSER_TEST_F(AppearanceHandlerTest, ResetPinnedToolbarActions) {
 
   EXPECT_FALSE(prefs->GetBoolean(prefs::kShowHomeButton));
   EXPECT_TRUE(prefs->GetBoolean(prefs::kShowForwardButton));
-  if (features::HasTabSearchToolbarButton()) {
-    ASSERT_EQ(2u, actions_model->PinnedActionIds().size());
-    EXPECT_EQ(kActionShowChromeLabs, actions_model->PinnedActionIds()[0]);
-    EXPECT_EQ(kActionTabSearch, actions_model->PinnedActionIds()[1]);
-  } else {
-    ASSERT_EQ(1u, actions_model->PinnedActionIds().size());
-    EXPECT_EQ(kActionShowChromeLabs, actions_model->PinnedActionIds()[0]);
-  }
+  ASSERT_EQ(1u, actions_model->PinnedActionIds().size());
+  EXPECT_EQ(kActionShowChromeLabs, actions_model->PinnedActionIds()[0]);
 }
 
 }  // namespace settings

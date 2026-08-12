@@ -13,6 +13,7 @@
 #include "content/browser/devtools/protocol/target_handler.h"
 #include "content/browser/devtools/protocol/tracing_handler.h"
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
+#include "content/browser/preloading/prerender/prerender_host_registry.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/common/content_features.h"
@@ -94,6 +95,15 @@ class WebContentsDevToolsAgentHost::AutoAttacher
       if (!base::FeatureList::IsEnabled(features::kGuestViewMPArch)) {
         hosts.insert(RenderFrameDevToolsAgentHost::GetOrCreateFor(
             rfh->frame_tree_node()));
+      }
+      // Include prerender targets from new-tab prerenders
+      // (target_hint="_blank") that live in separate WebContents.
+      auto* wci = static_cast<WebContentsImpl*>(web_contents_.get());
+      if (auto* registry = wci->GetPrerenderHostRegistry()) {
+        for (FrameTreeNode* ftn :
+             registry->GetNewTabPrerenderFrameTreeNodes()) {
+          hosts.insert(RenderFrameDevToolsAgentHost::GetOrCreateFor(ftn));
+        }
       }
     }
     DispatchSetAttachedTargetsOfType(hosts, DevToolsAgentHost::kTypePage);
@@ -193,7 +203,7 @@ void WebContentsDevToolsAgentHost::InnerDetach() {
   auto_attacher_->SetWebContents(nullptr);
   GetAgentHostInstances().erase(web_contents());
   Observe(nullptr);
-  // We may or may not be destruced here, depending on embedders
+  // We may or may not be destructed here, depending on embedders
   // potentially retaining references.
   Release();
 }
@@ -384,10 +394,22 @@ DevToolsSession::Mode WebContentsDevToolsAgentHost::GetSessionMode() {
 }
 
 bool WebContentsDevToolsAgentHost::AttachSession(DevToolsSession* session) {
-  if (web_contents() && !RenderFrameDevToolsAgentHost::ShouldAllowSession(
-                            web_contents()->GetPrimaryMainFrame(), session)) {
+  auto* wc = web_contents();
+  if (wc && !RenderFrameDevToolsAgentHost::ShouldAllowSession(
+                wc->GetPrimaryMainFrame(), session)) {
     return false;
   }
+  // Force WebContents to render if it does not have a live renderer.
+  // This is a sign that the page is backgrounded and unloaded
+  // from memory usually when re-opening a saved browser session.
+  // We should not force a reload if there is already an uncommitted navigation,
+  // as this can re-enter the navigation controller and crash.
+  if (wc && !wc->GetPrimaryMainFrame()->IsRenderFrameLive() &&
+      !wc->HasUncommittedNavigationInPrimaryMainFrame()) {
+    wc->GetController().SetNeedsReload();
+    wc->GetController().LoadIfNecessary();
+  }
+
   session->SetBrowserOnly(true);
   const bool may_attach_to_browser = session->GetClient()->IsTrusted();
   session->CreateAndAddHandler<protocol::TargetHandler>(

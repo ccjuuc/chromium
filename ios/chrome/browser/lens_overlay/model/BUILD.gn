@@ -21,6 +21,8 @@ source_set("model") {
     ":detent_state_header",
     "//base",
     "//components/google/core/common",
+    "//ios/chrome/browser/fullscreen/model",
+    "//ios/chrome/browser/fullscreen/public:metrics",
     "//ios/chrome/browser/fullscreen/ui_bundled",
     "//ios/chrome/browser/ntp/model:util",
     "//ios/chrome/browser/shared/model/profile",
@@ -30,6 +32,7 @@ source_set("model") {
     "//ios/chrome/browser/snapshots/model",
     "//ios/chrome/common:string_conversions",
     "//ios/chrome/common/ui/colors",
+    "//ios/chrome/common/ui/util",
     "//ios/public/provider/chrome/browser/lens:lens_overlay_api",
     "//ios/web/public",
     "//ui/base",
@@ -44,7 +47,7 @@ source_set("model") {
     ":presentation_type",
     ":utils",
     "//base",
-    "//ios/chrome/browser/lens_overlay/coordinator:lens_overlay_availability",
+    "//ios/chrome/browser/lens_overlay/public:lens_overlay_availability",
   ]
 }
 
@@ -72,7 +75,7 @@ source_set("overflow_menu_factory") {
   deps = [
     "//base",
     "//ios/chrome/app/strings:ios_strings_grit",
-    "//ios/chrome/browser/lens_overlay/coordinator:lens_overlay_availability",
+    "//ios/chrome/browser/lens_overlay/public:lens_overlay_availability",
     "//ios/chrome/browser/menu/ui_bundled",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
@@ -103,9 +106,10 @@ source_set("configuration_factory") {
     "lens_overlay_configuration_factory.mm",
   ]
   deps = [
-    ":entrypoint",
     "//base",
+    "//components/signin/public/base",
     "//ios/chrome/browser/lens/ui_bundled:lens_entrypoint",
+    "//ios/chrome/browser/lens_overlay/public:entrypoint",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/public/features",
@@ -125,6 +129,7 @@ source_set("detents_manager") {
   deps = [
     ":detent_state_header",
     "//base",
+    "//ios/chrome/browser/lens/ui_bundled:features",
     "//ui/base",
   ]
   public_deps = [
@@ -161,26 +166,15 @@ source_set("metrics_recorder") {
     ":detent_state_header",
     "//base",
     "//components/ukm/ios:ukm_url_recorder",
+    "//ios/chrome/browser/lens/ui_bundled:lens_entrypoint",
     "//ios/chrome/browser/shared/model/utils",
     "//ios/web/public",
     "//ui/base",
   ]
   public_deps = [
-    ":entrypoint",
     "//components/lens",
+    "//ios/chrome/browser/lens_overlay/public:entrypoint",
   ]
-}
-
-source_set("entrypoint") {
-  sources = [
-    "lens_overlay_entrypoint.h",
-    "lens_overlay_entrypoint.mm",
-  ]
-  deps = [
-    "//base",
-    "//components/lens",
-  ]
-  public_deps = [ "//base" ]
 }
 
 source_set("unit_tests") {

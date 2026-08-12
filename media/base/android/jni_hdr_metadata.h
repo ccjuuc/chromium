@@ -11,12 +11,9 @@
 
 namespace media {
 
-class VideoColorSpace;
-
 class JniHdrMetadata {
  public:
-  JniHdrMetadata(const VideoColorSpace& color_space,
-                 const gfx::HDRMetadata& hdr_metadata);
+  explicit JniHdrMetadata(const gfx::HDRMetadata& hdr_metadata);
 
   JniHdrMetadata(const JniHdrMetadata&) = delete;
   JniHdrMetadata& operator=(const JniHdrMetadata&) = delete;
@@ -27,25 +24,20 @@ class JniHdrMetadata {
 
   // Java HdrMetadata implementation.
 
-  jint Primaries(JNIEnv* env);
-  jint ColorTransfer(JNIEnv* env);
-  jint Range(JNIEnv* env);
-
-  jfloat PrimaryRChromaticityX(JNIEnv* env);
-  jfloat PrimaryRChromaticityY(JNIEnv* env);
-  jfloat PrimaryGChromaticityX(JNIEnv* env);
-  jfloat PrimaryGChromaticityY(JNIEnv* env);
-  jfloat PrimaryBChromaticityX(JNIEnv* env);
-  jfloat PrimaryBChromaticityY(JNIEnv* env);
-  jfloat WhitePointChromaticityX(JNIEnv* env);
-  jfloat WhitePointChromaticityY(JNIEnv* env);
-  jfloat MaxColorVolumeLuminance(JNIEnv* env);
-  jfloat MinColorVolumeLuminance(JNIEnv* env);
-  jint MaxContentLuminance(JNIEnv* env);
-  jint MaxFrameAverageLuminance(JNIEnv* env);
+  float PrimaryRChromaticityX(JNIEnv* env);
+  float PrimaryRChromaticityY(JNIEnv* env);
+  float PrimaryGChromaticityX(JNIEnv* env);
+  float PrimaryGChromaticityY(JNIEnv* env);
+  float PrimaryBChromaticityX(JNIEnv* env);
+  float PrimaryBChromaticityY(JNIEnv* env);
+  float WhitePointChromaticityX(JNIEnv* env);
+  float WhitePointChromaticityY(JNIEnv* env);
+  float MaxColorVolumeLuminance(JNIEnv* env);
+  float MinColorVolumeLuminance(JNIEnv* env);
+  int32_t MaxContentLuminance(JNIEnv* env);
+  int32_t MaxFrameAverageLuminance(JNIEnv* env);
 
  private:
-  const raw_ref<const VideoColorSpace> color_space_;
   const raw_ref<const gfx::HDRMetadata> hdr_metadata_;
   base::android::ScopedJavaLocalRef<jobject> jobject_;
 };

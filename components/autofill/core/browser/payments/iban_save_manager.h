@@ -5,17 +5,26 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_IBAN_SAVE_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_IBAN_SAVE_MANAGER_H_
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
+#include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
-#include "components/autofill/core/browser/payments/payments_request_details.h"
-#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 #include "components/autofill/core/browser/strike_databases/payments/iban_save_strike_database.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/autofill/core/common/signatures.h"
+
+namespace syncer {
+class SyncService;
+}  // namespace syncer
 
 namespace autofill {
 
@@ -27,8 +36,9 @@ inline constexpr int kMaxNumServerIbans = 99;
 class AutofillClient;
 class PaymentsDataManager;
 
-// Decides whether an IBAN local save should be offered and handles the workflow
-// for local saves.
+// Decides whether an IBAN save (local or upload to Google Payments) should be
+// offered and handles the workflow for saving IBANs.
+// One per WebContents, owned by AutofillClient.
 class IbanSaveManager {
  public:
   // An observer class used by browsertests that gets notified whenever
@@ -77,57 +87,9 @@ class IbanSaveManager {
   // the save prompt manually.
   [[nodiscard]] bool AttemptToOfferSave(Iban& import_candidate);
 
-  // TODO(b/352643261): Add TestApi for below ForTesting methods.
-  void OnUserDidDecideOnLocalSaveForTesting(
-      const Iban& import_candidate,
-      payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
-      std::u16string_view nickname = u"") {
-    OnUserDidDecideOnLocalSave(import_candidate, user_decision, nickname);
-  }
-
-  void OnUserDidDecideOnUploadSaveForTesting(
-      const Iban& import_candidate,
-      bool show_save_prompt,
-      payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
-      std::u16string_view nickname = u"") {
-    OnUserDidDecideOnUploadSave(import_candidate, show_save_prompt,
-                                user_decision, nickname);
-  }
-
-  // Returns the IbanSaveStrikeDatabase for `client_`.
-  IbanSaveStrikeDatabase* GetIbanSaveStrikeDatabaseForTesting() {
-    return GetIbanSaveStrikeDatabase();
-  }
-
-  void SetEventObserverForTesting(ObserverForTest* observer) {
-    observer_for_testing_ = observer;
-  }
-
-  // TODO(crbug.com/b/40937065): Iban needs to be immutable reference
-  // and pass it by value in this case.
-  bool AttemptToOfferLocalSaveForTesting(Iban& iban) {
-    return AttemptToOfferLocalSave(iban);
-  }
-
-  bool AttemptToOfferUploadSaveForTesting(Iban& iban) {
-    return AttemptToOfferUploadSave(iban);
-  }
-
-  TypeOfOfferToSave DetermineHowToSaveIbanForTesting(
-      const Iban& import_candidate) {
-    return DetermineHowToSaveIban(import_candidate);
-  }
-
-  void OnDidUploadIbanForTesting(
-      const Iban& import_candidate,
-      bool show_save_prompt,
-      payments::PaymentsAutofillClient::PaymentsRpcResult result) {
-    OnDidUploadIban(import_candidate, show_save_prompt, result);
-  }
-
-  bool HasContextTokenForTesting() const { return !context_token_.empty(); }
-
  private:
+  friend class IbanSaveManagerTestApi;
+
   // Sets the `record_type` of this given `import_candidate`.
   void UpdateRecordType(Iban& import_candidate);
 
@@ -139,13 +101,13 @@ class IbanSaveManager {
   bool MatchesExistingServerIban(const Iban& import_candidate) const;
 
   // Returns true if the local save prompt was shown, and false otherwise.
-  bool AttemptToOfferLocalSave(Iban& import_candidate);
+  bool AttemptToOfferLocalSave(const Iban& import_candidate);
 
   // Asynchronously attempts to offer an upload save prompt to the user. Will
   // fall back to a local save prompt if unable to offer server save.
   // Returns true if there will likely be a save prompt shown, and false if we
   // will definitely not be showing one.
-  bool AttemptToOfferUploadSave(Iban& import_candidate);
+  bool AttemptToOfferUploadSave(const Iban& import_candidate);
 
   // Returns the IbanSaveStrikeDatabase for `client_`;
   IbanSaveStrikeDatabase* GetIbanSaveStrikeDatabase();
@@ -157,9 +119,12 @@ class IbanSaveManager {
       Iban import_candidate,
       payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
       std::u16string_view nickname = u"");
-  void OnUserDidDecideOnUploadSave(
+
+  // Called once the user makes a decision for an upload save offer.
+  // Returns the accepted candidate if `user_decision` is `kAccepted` (with
+  // nickname applied if present), or `nullptr` otherwise.
+  std::unique_ptr<Iban> OnUserDidDecideOnUploadSave(
       Iban import_candidate,
-      bool show_save_prompt,
       payments::PaymentsAutofillClient::SaveIbanOfferUserDecision user_decision,
       std::u16string_view nickname = u"");
 
@@ -175,26 +140,26 @@ class IbanSaveManager {
   // parsed successfully. In all other cases, local save will be offered if
   // applicable.
   void OnDidGetUploadDetails(
+      const Iban& import_candidate,
+      std::vector<ClientBehaviorConstants> client_behavior_signals,
       bool show_save_prompt,
-      Iban import_candidate,
       payments::PaymentsAutofillClient::PaymentsRpcResult result,
       const std::u16string& validation_regex,
       const std::u16string& context_token,
-      std::unique_ptr<base::Value::Dict> legal_message);
-
-  // Add `risk_data` to `UploadIbanRequestDetails` and send upload IBAN request
-  // if the user has accepted the save prompt.
-  void OnDidGetUploadRiskData(bool show_save_prompt,
-                              const Iban& import_candidate,
-                              const std::string& risk_data);
+      std::unique_ptr<base::DictValue> legal_message);
 
   // Construct `UploadIbanRequestDetails` and send upload IBAN request via
   // PaymentsNetworkInterface.
-  void SendUploadRequest(const Iban& import_candidate, bool show_save_prompt);
+  void SendUploadRequest(
+      std::unique_ptr<Iban> import_candidate,
+      std::u16string context_token,
+      std::vector<ClientBehaviorConstants> client_behavior_signals,
+      bool show_save_prompt,
+      std::unique_ptr<std::string> risk_data);
 
   // Called when an UploadIban call is completed.
   void OnDidUploadIban(
-      const Iban& import_candidate,
+      std::unique_ptr<Iban> import_candidate,
       bool show_save_prompt,
       payments::PaymentsAutofillClient::PaymentsRpcResult result);
 
@@ -206,14 +171,6 @@ class IbanSaveManager {
 
   // StrikeDatabase used to check whether to offer to save the IBAN or not.
   std::unique_ptr<IbanSaveStrikeDatabase> iban_save_strike_database_;
-
-  // The context token returned from GetIbanUploadDetails.
-  std::u16string context_token_;
-
-  payments::UploadIbanRequestDetails upload_request_details_;
-
-  // `true` if the user has opted to upload save the IBAN to Google Payments.
-  bool user_did_accept_upload_prompt_ = false;
 
   // May be null.
   raw_ptr<ObserverForTest> observer_for_testing_ = nullptr;

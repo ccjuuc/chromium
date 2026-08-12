@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/core/html/anchor_element_metrics_sender.h"
 
-#include "base/containers/contains.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
@@ -39,7 +38,7 @@
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "ui/gfx/geometry/transform.h"
@@ -155,12 +154,13 @@ class AnchorElementMetricsSenderTest : public SimTest {
   static constexpr int kViewportHeight = 600;
 
  protected:
-  AnchorElementMetricsSenderTest() = default;
+  AnchorElementMetricsSenderTest()
+      : SimTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
   void SetUp() override {
     SimTest::SetUp();
     // Allows WidgetInputHandlerManager::InitOnInputHandlingThread() to run.
-    platform_->RunForPeriod(base::Milliseconds(1));
+    task_environment().FastForwardBy(base::Milliseconds(1));
     // Report all anchors to avoid non-deterministic behavior.
     std::map<std::string, std::string> nav_predictor_params;
     nav_predictor_params["random_anchor_sampling_period"] = "1";
@@ -254,7 +254,7 @@ class AnchorElementMetricsSenderTest : public SimTest {
     while (expected_anchors > 0 &&
            (hosts_.empty() || expected_anchors > hosts_[0]->elements_.size())) {
       // Wait 50ms.
-      platform_->RunForPeriodSeconds(0.05);
+      task_environment().FastForwardBy(base::Seconds(0.05));
       GetDocument().View()->UpdateAllLifecyclePhasesForTest();
       GetDocument().View()->UpdateAllLifecyclePhasesForTest();
       base::RunLoop().RunUntilIdle();
@@ -283,12 +283,15 @@ class AnchorElementMetricsSenderTest : public SimTest {
   }
 
   void ProcessPositionUpdates() {
-    platform_->RunForPeriodSeconds(ConvertDOMHighResTimeStampToSeconds(
-        AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(GetDocument())
-            ->GetIntersectionObserverForTesting()
-            ->delay()));
+    task_environment().FastForwardBy(
+        base::Seconds(ConvertDOMHighResTimeStampToSeconds(
+            AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(
+                GetDocument())
+                ->GetIntersectionObserverForTesting()
+                ->delay())));
     GetDocument().View()->UpdateAllLifecyclePhasesForTest();
-    platform_->RunForPeriod(AnchorElementMetricsSender::kUpdateMetricsTimeGap);
+    task_environment().FastForwardBy(
+        AnchorElementMetricsSender::kUpdateMetricsTimeGap);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -311,8 +314,7 @@ class AnchorElementMetricsSenderTest : public SimTest {
 
   base::test::ScopedFeatureList feature_list_;
   std::vector<std::unique_ptr<MockAnchorElementMetricsHost>> hosts_;
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform_;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
   base::SimpleTestTickClock clock_;
 };
 
@@ -366,7 +368,7 @@ TEST_F(AnchorElementMetricsSenderTest, AddAnchorElementAfterLoad) {
   )HTML");
 
   // Wait until the script has had time to run.
-  platform_->RunForPeriodSeconds(5.);
+  task_environment().FastForwardBy(base::Seconds(5.));
   ProcessEvents(1);
 
   EXPECT_EQ(1u, hosts_.size());
@@ -1014,7 +1016,7 @@ TEST_F(AnchorElementMetricsSenderTest, AnchorElementClicked) {
   EXPECT_LE(base::TimeDelta(),
             mock_host->clicks_[0]->navigation_start_to_click);
   // Wait until the script has had time to run.
-  platform_->RunForPeriodSeconds(5.);
+  task_environment().FastForwardBy(base::Seconds(5.));
   next_page.Complete("empty");
   ProcessEvents(0);
   // The second page load has no anchor elements and therefore no host is bound.
@@ -1383,7 +1385,7 @@ TEST_F(AnchorElementMetricsSenderTest, PositionUpdate) {
   EXPECT_FLOAT_EQ(7.5f * unit / kViewportHeight,
                   get_position_ratio((anchor_2_id)));
   // anchor_3 is not in the viewport, so a ratio isn't reported.
-  EXPECT_TRUE(!base::Contains(positions, anchor_3_id));
+  EXPECT_TRUE(!positions.contains(anchor_3_id));
   positions.clear();
 
   // Zoom (visual as opposed to logical), and scroll up by 2 units post-zoom.
@@ -1423,7 +1425,7 @@ TEST_F(AnchorElementMetricsSenderTest, PositionUpdate) {
                   get_distance_ratio(anchor_2_id));
   EXPECT_FLOAT_EQ(13.0f * unit / kViewportHeight,
                   get_position_ratio(anchor_2_id));
-  EXPECT_TRUE(!base::Contains(positions, anchor_3_id));
+  EXPECT_TRUE(!positions.contains(anchor_3_id));
 }
 
 // TODO(crbug.com/347719430): This test can be removed if
@@ -1778,8 +1780,7 @@ TEST_F(AnchorElementMetricsSenderTest, SubframeWithObservedAnchorsDetached) {
 
   EXPECT_EQ(1u, mock_host->positions_.size());
   EXPECT_EQ(1u, mock_host->removed_anchor_ids_.size());
-  EXPECT_TRUE(
-      base::Contains(mock_host->removed_anchor_ids_, subframe_anchor_id));
+  EXPECT_TRUE(mock_host->removed_anchor_ids_.contains(subframe_anchor_id));
 }
 
 TEST_F(AnchorElementMetricsSenderTest,
@@ -1903,7 +1904,7 @@ TEST_F(AnchorElementMetricsSenderTest,
 
   // Runs some queued tasks that will eventually allow `subframe_document`
   // and `anchor_1` to be GCed.
-  platform_->RunForPeriod(base::Milliseconds(1));
+  task_environment().FastForwardBy(base::Milliseconds(1));
   ThreadState::Current()->CollectAllGarbageForTesting();
   ASSERT_FALSE(subframe_document);
   ASSERT_FALSE(anchor_1);
@@ -1954,7 +1955,7 @@ TEST_F(AnchorElementMetricsSenderTest,
     anchor.href = "https://foo.com/one";
     document.body.appendChild(anchor);
   )js"));
-  platform_->RunForPeriod(base::Milliseconds(10));
+  task_environment().FastForwardBy(base::Milliseconds(10));
   ASSERT_EQ(GetDocument().links()->length(), 1u);
 
   // Run a lifecycle update, FCP should happen.
@@ -1966,12 +1967,12 @@ TEST_F(AnchorElementMetricsSenderTest,
 
   // Wait for the delay configured with "post_fcp_observation_delay". The
   // IntersectionObserver should now be initialized.
-  platform_->RunForPeriod(base::Milliseconds(200));
+  task_environment().FastForwardBy(base::Milliseconds(200));
   EXPECT_NE(tracker->GetIntersectionObserverForTesting(), nullptr);
 
   // Just sanity check that things still work.
   ProcessEvents(1);
-  platform_->RunForPeriod(base::Milliseconds(1));
+  task_environment().FastForwardBy(base::Milliseconds(1));
   ASSERT_EQ(hosts_.size(), 1u);
   EXPECT_EQ(hosts_[0]->elements_.size(), 1u);
   EXPECT_EQ(hosts_[0]->entered_viewport_.size(), 1u);
@@ -2000,14 +2001,14 @@ TEST_F(AnchorElementMetricsSenderTest, RegressionTestForCrbug384610894) {
       <h1>Foo</h1>
     </body>
   )html"));
-  platform_->RunForPeriod(base::Milliseconds(10));
+  task_environment().FastForwardBy(base::Milliseconds(10));
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
   ASSERT_FALSE(PaintTiming::From(GetDocument())
                    .FirstContentfulPaintRenderedButNotPresentedAsMonotonicTime()
                    .is_null());
 
   // Wait for delay configured with "post_fcp_observation_delay".
-  platform_->RunForPeriod(base::Milliseconds(200));
+  task_environment().FastForwardBy(base::Milliseconds(200));
 }
 
 }  // namespace blink

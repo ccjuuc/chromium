@@ -17,12 +17,13 @@
 #include "base/notreached.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_view_util.h"
 #include "base/time/time.h"
 #include "components/cbor/writer.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "crypto/aead.h"
 #include "crypto/hash.h"
-#include "crypto/hkdf.h"
+#include "crypto/kdf.h"
 #include "crypto/keypair.h"
 #include "crypto/random.h"
 #include "crypto/sign.h"
@@ -37,9 +38,6 @@
 namespace webauthn::passkey_model_utils {
 
 namespace {
-
-// The byte length of the WebauthnCredentialSpecifics `credential_id` field.
-constexpr size_t kCredentialIdLength = 16u;
 
 // The length of the nonce prefix used for AES-256-GCM encryption of
 // `WebAuthnCredentialSpecifics.encrypted_data` (both `private_key` and
@@ -70,32 +68,14 @@ struct PasskeyComparator {
   }
 };
 
-bool DecryptAes256Gcm(base::span<const uint8_t> key,
-                      std::string_view ciphertext,
-                      std::string_view nonce,
-                      std::string_view aad,
-                      std::string* plaintext) {
-  crypto::Aead aead(crypto::Aead::AES_256_GCM);
-  aead.Init(key);
-  return aead.Open(ciphertext, nonce, aad, plaintext);
-}
 
-bool EncryptAes256Gcm(base::span<const uint8_t> key,
-                      std::string_view plaintext,
-                      std::string_view nonce,
-                      std::string_view aad,
-                      std::string* ciphertext) {
-  crypto::Aead aead(crypto::Aead::AES_256_GCM);
-  aead.Init(key);
-  return aead.Seal(plaintext, nonce, aad, ciphertext);
-}
 
 std::array<uint8_t, kEncryptionSecretSize> DerivePasskeyEncryptionSecret(
     base::span<const uint8_t> trusted_vault_key) {
   constexpr std::string_view kHkdfInfo =
       "KeychainApplicationKey:gmscore_module:com.google.android.gms.fido";
-  return crypto::HkdfSha256<kEncryptionSecretSize>(
-      trusted_vault_key,
+  return crypto::kdf::Hkdf<kEncryptionSecretSize>(
+      crypto::hash::kSha256, trusted_vault_key,
       /*salt=*/base::span<const uint8_t>(),
       base::as_bytes(base::span(kHkdfInfo)));
 }
@@ -104,8 +84,8 @@ std::array<uint8_t, kHmacSecretSize> DeriveHmacSecretFromPrivateKey(
     base::span<const uint8_t> private_key) {
   CHECK(!private_key.empty());
   constexpr std::string_view kHkdfInfo = "derived PRF HMAC secret";
-  return crypto::HkdfSha256<kEncryptionSecretSize>(
-      private_key,
+  return crypto::kdf::Hkdf<kHmacSecretSize>(
+      crypto::hash::kSha256, private_key,
       /*salt=*/base::span<const uint8_t>(),
       base::as_bytes(base::span(kHkdfInfo)));
 }
@@ -128,6 +108,7 @@ PRFInputData::PRFInputData(
 
 PRFInputData::PRFInputData(const PRFInputData&) = default;
 PRFInputData::PRFInputData(PRFInputData&&) = default;
+PRFInputData& PRFInputData::operator=(PRFInputData&&) = default;
 PRFInputData::~PRFInputData() = default;
 
 ExtensionInputData::ExtensionInputData(PRFInputData prf_input_data)
@@ -194,12 +175,18 @@ std::vector<sync_pb::WebauthnCredentialSpecifics> FilterShadowedCredentials(
       std::make_move_iterator(grouped.end()));
 }
 
-bool IsGpmPasskeyValid(const sync_pb::WebauthnCredentialSpecifics& passkey) {
+bool IsPasskeyValid(const sync_pb::WebauthnCredentialSpecifics& passkey) {
+  const size_t cred_id_size = passkey.credential_id().size();
   return passkey.sync_id().size() == kSyncIdLength &&
-         passkey.credential_id().size() == kCredentialIdLength &&
-         !passkey.rp_id().empty() &&
+         !passkey.rp_id().empty() && cred_id_size >= kCredentialIdMinLength &&
+         cred_id_size <= kCredentialIdMaxLength &&
          passkey.user_id().length() <= kUserIdMaxLength &&
          (passkey.has_private_key() || passkey.has_encrypted());
+}
+
+bool IsGpmPasskeyValid(const sync_pb::WebauthnCredentialSpecifics& passkey) {
+  return IsPasskeyValid(passkey) &&
+         passkey.credential_id().size() == kGpmCreatedCredentialIdLength;
 }
 
 std::pair<sync_pb::WebauthnCredentialSpecifics, std::vector<uint8_t>>
@@ -211,7 +198,8 @@ GeneratePasskeyAndEncryptSecrets(std::string_view rp_id,
                                  ExtensionOutputData* extension_output_data) {
   sync_pb::WebauthnCredentialSpecifics specifics;
   specifics.set_sync_id(base::RandBytesAsString(kSyncIdLength));
-  specifics.set_credential_id(base::RandBytesAsString(kCredentialIdLength));
+  specifics.set_credential_id(
+      base::RandBytesAsString(kGpmCreatedCredentialIdLength));
   specifics.set_rp_id(std::string(rp_id));
   specifics.set_user_id(user_entity.id.data(), user_entity.id.size());
   specifics.set_user_name(user_entity.name);
@@ -250,21 +238,19 @@ bool DecryptWebauthnCredentialSpecificsData(
         DVLOG(1) << "WebauthnCredentialSpecifics.encrypted has invalid length";
         return false;
       }
-      std::string_view nonce =
-          std::string_view(in.encrypted())
-              .substr(0, kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
-      std::string_view ciphertext =
-          std::string_view(in.encrypted())
-              .substr(kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
-      std::string plaintext;
-      if (!DecryptAes256Gcm(
-              DerivePasskeyEncryptionSecret(trusted_vault_key), ciphertext,
-              nonce, kAadWebauthnCredentialSpecificsEncrypted, &plaintext)) {
+      const auto [nonce, ciphertext] =
+          base::as_byte_span(in.encrypted())
+              .split_at(kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
+      auto decrypted = crypto::aead::Open(
+          crypto::aead::AES_256_GCM,
+          DerivePasskeyEncryptionSecret(trusted_vault_key), ciphertext, nonce,
+          base::as_byte_span(kAadWebauthnCredentialSpecificsEncrypted));
+      if (!decrypted) {
         DVLOG(1) << "Decrypting WebauthnCredentialSpecifics.encrypted failed";
         return false;
       }
       sync_pb::WebauthnCredentialSpecifics_Encrypted msg;
-      if (!msg.ParseFromString(plaintext)) {
+      if (!msg.ParseFromString(base::as_string_view(*decrypted))) {
         DVLOG(1) << "Parsing WebauthnCredentialSpecifics.encrypted failed";
         return false;
       }
@@ -278,21 +264,19 @@ bool DecryptWebauthnCredentialSpecificsData(
             << "WebauthnCredentialSpecifics.private_key has invalid length";
         return false;
       }
-      std::string_view nonce =
-          std::string_view(in.private_key())
-              .substr(0, kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
-      std::string_view ciphertext =
-          std::string_view(in.private_key())
-              .substr(kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
-      std::string plaintext;
-      if (!DecryptAes256Gcm(
-              DerivePasskeyEncryptionSecret(trusted_vault_key), ciphertext,
-              nonce, kAadWebauthnCredentialSpecificsPrivateKey, &plaintext)) {
+      const auto [nonce, ciphertext] =
+          base::as_byte_span(in.private_key())
+              .split_at(kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
+      auto decrypted = crypto::aead::Open(
+          crypto::aead::AES_256_GCM,
+          DerivePasskeyEncryptionSecret(trusted_vault_key), ciphertext, nonce,
+          base::as_byte_span(kAadWebauthnCredentialSpecificsPrivateKey));
+      if (!decrypted) {
         DVLOG(1) << "Decrypting WebauthnCredentialSpecifics.private_key failed";
         return false;
       }
       *out = sync_pb::WebauthnCredentialSpecifics_Encrypted();
-      out->set_private_key(plaintext);
+      out->set_private_key(base::as_string_view(*decrypted));
       return true;
     }
     case sync_pb::WebauthnCredentialSpecifics::kSecurityDomainEncrypted: {
@@ -319,15 +303,15 @@ bool EncryptWebauthnCredentialSpecificsData(
   }
   const std::string nonce = base::RandBytesAsString(
       kWebAuthnCredentialSpecificsEncryptedDataNonceLength);
-  std::string ciphertext;
-  if (!EncryptAes256Gcm(
-          DerivePasskeyEncryptionSecret(trusted_vault_key), plaintext, nonce,
-          kAadWebauthnCredentialSpecificsEncrypted, &ciphertext)) {
-    return false;
-  }
+  std::vector<uint8_t> encrypted = crypto::aead::Seal(
+      crypto::aead::AES_256_GCM,
+      DerivePasskeyEncryptionSecret(trusted_vault_key),
+      base::as_byte_span(plaintext), base::as_byte_span(nonce),
+      base::as_byte_span(kAadWebauthnCredentialSpecificsEncrypted));
   // TODO(crbug.com/405036010): Implement encrypting with the new encryption
   // scheme.
-  *out->mutable_encrypted() = base::StrCat({nonce, ciphertext});
+  *out->mutable_encrypted() =
+      base::StrCat({nonce, base::as_string_view(encrypted)});
   return true;
 }
 

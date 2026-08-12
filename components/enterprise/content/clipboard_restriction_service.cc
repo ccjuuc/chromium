@@ -4,6 +4,7 @@
 
 #include "components/enterprise/content/clipboard_restriction_service.h"
 
+#include "base/no_destructor.h"
 #include "components/enterprise/content/pref_names.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -70,11 +71,11 @@ void ClipboardRestrictionService::UpdateSettings() {
     return;
   }
 
-  const base::Value::Dict& settings =
+  const base::DictValue& settings =
       pref_service_->GetDict(enterprise::content::kCopyPreventionSettings);
-  const base::Value::List* enable = settings.FindList(
+  const base::ListValue* enable = settings.FindList(
       enterprise::content::kCopyPreventionSettingsEnableFieldName);
-  const base::Value::List* disable = settings.FindList(
+  const base::ListValue* disable = settings.FindList(
       enterprise::content::kCopyPreventionSettingsDisableFieldName);
 
   DCHECK(enable);
@@ -107,7 +108,8 @@ void ClipboardRestrictionService::UpdateSettings() {
 // static
 ClipboardRestrictionServiceFactory*
 ClipboardRestrictionServiceFactory::GetInstance() {
-  return base::Singleton<ClipboardRestrictionServiceFactory>::get();
+  static base::NoDestructor<ClipboardRestrictionServiceFactory> instance;
+  return instance.get();
 }
 
 // static

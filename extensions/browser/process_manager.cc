@@ -4,11 +4,12 @@
 
 #include "extensions/browser/process_manager.h"
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
-#include <unordered_set>
+#include <set>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -22,6 +23,8 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/uuid.h"
+#include "components/back_forward_cache/back_forward_cache_disable.h"
+#include "components/back_forward_cache/disabled_reason_id.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -48,6 +51,7 @@
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/browser/service_worker/service_worker_task_queue.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
@@ -243,6 +247,11 @@ void ProcessManager::RegisterRenderFrameHost(
   // UnregisterRenderFrame.
   AcquireLazyKeepaliveCountForFrame(render_frame_host);
 
+  content::BackForwardCache::DisableForRenderFrameHost(
+      render_frame_host->GetGlobalId(),
+      back_forward_cache::DisabledReason(
+          back_forward_cache::DisabledReasonId::kExtensionFrame));
+
   for (auto& observer : observer_list_)
     observer.OnExtensionFrameRegistered(extension->id(), render_frame_host);
 }
@@ -282,7 +291,7 @@ ProcessManager::FrameSet ProcessManager::GetRenderFrameHostsForExtension(
 
 bool ProcessManager::IsRenderFrameHostRegistered(
     content::RenderFrameHost* render_frame_host) {
-  return base::Contains(all_extension_frames_, render_frame_host);
+  return all_extension_frames_.contains(render_frame_host);
 }
 
 void ProcessManager::AddObserver(ProcessManagerObserver* observer) {
@@ -482,13 +491,15 @@ void ProcessManager::IncrementLazyKeepaliveCount(
   }
 }
 
-void ProcessManager::DecrementLazyKeepaliveCount(
+bool ProcessManager::DecrementLazyKeepaliveCount(
     const Extension* extension,
     Activity::Type activity_type,
     const std::string& extra_data) {
   if (BackgroundInfo::HasLazyBackgroundPage(extension)) {
-    DecrementLazyKeepaliveCount(extension->id(), activity_type, extra_data);
+    return DecrementLazyKeepaliveCount(extension->id(), activity_type,
+                                       extra_data);
   }
+  return false;
 }
 
 void ProcessManager::NotifyExtensionProcessTerminated(
@@ -566,7 +577,7 @@ void ProcessManager::NetworkRequestDone(
   ExtensionHost* host = result->second;
   pending_network_requests_.erase(result);
 
-  if (!base::Contains(background_hosts_, host)) {
+  if (!background_hosts_.contains(host)) {
     return;
   }
 
@@ -673,7 +684,7 @@ void ProcessManager::CloseBackgroundHost(ExtensionHost* host) {
         mojom::ViewType::kExtensionBackgroundPage);
   delete host;
   // |host| should deregister itself from our structures.
-  CHECK(!base::Contains(background_hosts_, host));
+  CHECK(!background_hosts_.contains(host));
 
   for (auto& observer : observer_list_)
     observer.OnBackgroundHostClose(extension_id);
@@ -737,30 +748,37 @@ base::Uuid ProcessManager::IncrementServiceWorkerKeepaliveCount(
       util::GetServiceWorkerContextForExtensionId(extension->id(),
                                                   browser_context_);
 
-  content::ServiceWorkerExternalRequestResult start_result =
-      service_worker_context->StartingExternalRequest(
-          service_worker_version_id, timeout_type, request_uuid);
+  service_worker_context->StartingExternalRequest(service_worker_version_id,
+                                                  timeout_type, request_uuid);
 
   service_worker_keepalives_[request_uuid] = ServiceWorkerKeepaliveData{
-      worker_id, activity_type, extra_data, timeout_type, start_result};
+      worker_id, activity_type, extra_data, timeout_type};
 
   return request_uuid;
 }
 
-void ProcessManager::DecrementLazyKeepaliveCount(
+bool ProcessManager::DecrementLazyKeepaliveCount(
     const ExtensionId& extension_id,
     Activity::Type activity_type,
     const std::string& extra_data) {
-  BackgroundPageData& data = background_page_data_[extension_id];
+  auto map_it = background_page_data_.find(extension_id);
+  if (map_it == background_page_data_.end()) {
+    return false;
+  }
+  BackgroundPageData& data = map_it->second;
 
+  // Only decrement counts that correspond to a precisely tracked increment.
+  // Renderer IPCs are untrusted and must not be able to balance or drain other
+  // legitimate keepalive activity types.
+  const auto activity = std::make_pair(activity_type, extra_data);
+  const auto it = data.activities.find(activity);
+  if (it == data.activities.end()) {
+    return false;
+  }
   DCHECK(data.lazy_keepalive_count > 0 ||
          !extension_registry_->enabled_extensions().Contains(extension_id));
   --data.lazy_keepalive_count;
-  const auto it =
-      data.activities.find(std::make_pair(activity_type, extra_data));
-  if (it != data.activities.end()) {
-    data.activities.erase(it);
-  }
+  data.activities.erase(it);
 
   // If we reach a zero keepalive count when the lazy background page is about
   // to be closed, incrementing close_sequence_id will cancel the close
@@ -779,6 +797,7 @@ void ProcessManager::DecrementLazyKeepaliveCount(
           g_event_page_idle_time);
     }
   }
+  return true;
 }
 
 void ProcessManager::DecrementServiceWorkerKeepaliveCount(
@@ -801,8 +820,6 @@ void ProcessManager::DecrementServiceWorkerKeepaliveCount(
   CHECK_EQ(iter->second.worker_id, worker_id);
   CHECK_EQ(iter->second.activity_type, activity_type);
   CHECK_EQ(iter->second.extra_data, extra_data);
-  content::ServiceWorkerExternalRequestResult start_result =
-      iter->second.start_result;
   service_worker_keepalives_.erase(iter);
 
   int64_t service_worker_version_id = worker_id.version_id;
@@ -813,18 +830,6 @@ void ProcessManager::DecrementServiceWorkerKeepaliveCount(
   content::ServiceWorkerExternalRequestResult finish_result =
       service_worker_context->FinishedExternalRequest(service_worker_version_id,
                                                       request_uuid);
-
-  if (start_result == content::ServiceWorkerExternalRequestResult::kOk) {
-    base::UmaHistogramEnumeration(
-        "Extensions.ServiceWorkerBackground."
-        "ProcessManagerFinishedExternalRequestResultWithSuccessfulStart",
-        finish_result);
-  } else {
-    base::UmaHistogramEnumeration(
-        "Extensions.ServiceWorkerBackground."
-        "ProcessManagerFinishedExternalRequestResultWithUnsuccessfulStart",
-        finish_result);
-  }
 
   // Example of when kWorkerNotRunning can happen is when the renderer process
   // is killed while handling a service worker request (e.g. because of a bad
@@ -884,7 +889,7 @@ void ProcessManager::CloseLazyBackgroundPageNow(const ExtensionId& extension_id,
       return;
     }
 
-    // Close remaining views.
+    // Close remaining views. First, collect frames to unregister.
     std::vector<content::RenderFrameHost*> frames_to_close;
     for (const auto& key_value : all_extension_frames_) {
       if (key_value.second.CanKeepalive() &&
@@ -893,13 +898,28 @@ void ProcessManager::CloseLazyBackgroundPageNow(const ExtensionId& extension_id,
         frames_to_close.push_back(key_value.first);
       }
     }
+    // Collect unique WebContents and unregister frames.
+    std::set<content::WebContents*> raw_web_contents;
     for (content::RenderFrameHost* frame : frames_to_close) {
-      content::WebContents::FromRenderFrameHost(frame)->ClosePage();
-      // WebContents::ClosePage() may result in calling
-      // UnregisterRenderFrameHost() asynchronously and may cause race
-      // conditions when the background page is reloaded.
-      // To avoid this, unregister the view now.
+      if (content::WebContents* web_contents =
+              content::WebContents::FromRenderFrameHost(frame)) {
+        raw_web_contents.insert(web_contents);
+      }
       UnregisterRenderFrameHost(frame);
+    }
+    // Safely close the collected pages using WeakPtrs. WebContents::ClosePage()
+    // can execute synchronously and destroy WebContents and frames, which would
+    // lead to a UAF if iterating over frames or raw pointers while calling
+    // ClosePage(). See crbug.com/513156160.
+    std::vector<base::WeakPtr<content::WebContents>> safe_web_contents;
+    safe_web_contents.reserve(raw_web_contents.size());
+    std::ranges::transform(
+        raw_web_contents, std::back_inserter(safe_web_contents),
+        [](content::WebContents* contents) { return contents->GetWeakPtr(); });
+    for (const auto& web_contents : safe_web_contents) {
+      if (web_contents) {
+        web_contents->ClosePage();
+      }
     }
 
     host = GetBackgroundHostForExtension(extension_id);
@@ -975,13 +995,12 @@ void ProcessManager::StartTrackingServiceWorkerRunningInstance(
   worker_context_ids_[worker_id] = base::Uuid::GenerateRandomV4();
 
   // Observe the RenderProcessHost for cleaning up on process shutdown.
-  int render_process_id = worker_id.render_process_id;
-  bool inserted = worker_process_to_extension_ids_[render_process_id]
+  bool inserted = worker_process_to_extension_ids_[worker_id.render_process_id]
                       .insert(worker_id.extension_id)
                       .second;
   if (inserted) {
     content::RenderProcessHost* render_process_host =
-        content::RenderProcessHost::FromID(render_process_id);
+        content::RenderProcessHost::FromID(worker_id.render_process_id);
     DCHECK(render_process_host);
     if (!process_observations_.IsObservingSource(render_process_host)) {
       // These will be cleaned up in RenderProcessExited().
@@ -997,7 +1016,7 @@ void ProcessManager::RenderProcessExited(
     const content::ChildProcessTerminationInfo& info) {
   DCHECK(process_observations_.IsObservingSource(host));
   process_observations_.RemoveObservation(host);
-  const int render_process_id = host->GetDeprecatedID();
+  const content::ChildProcessId render_process_id = host->GetID();
   // Look up and then clean up the entries that are affected by
   // |render_process_id| destruction.
   //
@@ -1036,7 +1055,7 @@ void ProcessManager::OnExtensionHostDestroyed(ExtensionHost* host) {
   TRACE_EVENT0("browser,startup", "ProcessManager::OnExtensionHostDestroyed");
   host->RemoveObserver(this);
 
-  DCHECK(base::Contains(background_hosts_, host));
+  DCHECK(background_hosts_.contains(host));
   background_hosts_.erase(host);
   // Note: |host->extension()| may be null at this point.
   ClearBackgroundPageData(host->extension_id());
@@ -1065,14 +1084,20 @@ void ProcessManager::StopTrackingServiceWorkerRunningInstance(
   all_running_extension_workers_.Remove(worker_id);
   worker_context_ids_.erase(worker_id);
   for (auto& observer : observer_list_)
-    observer.OnStoppedTrackingServiceWorkerInstance(worker_id);
+    observer.OnStoppedTrackingServiceWorkerInstance(*browser_context(),
+                                                    worker_id);
 }
 
 // TODO(crbug.com/40936639): Deduplicate this method with it's other overload
 // once multi workers per extension is fixed.
 void ProcessManager::StopTrackingServiceWorkerRunningInstance(
     const ExtensionId& extension_id,
-    int64_t worker_version_id) {
+    int64_t worker_version_id,
+    const blink::ServiceWorkerToken& service_worker_token) {
+  // NOTE: Multiple notifications can try to remove a worker when the worker
+  // stops (DidStopServiceWorkerContext(), ProcessManager::RenderProcessExit(),
+  // or extension uninstall/disable).
+
   // We need the specific version because an extension could be
   // re-activated before StopTrackingServiceWorkerRunningInstance() is called.
   // In that case we might try to stop tracking the new version instance of the
@@ -1081,23 +1106,13 @@ void ProcessManager::StopTrackingServiceWorkerRunningInstance(
       all_running_extension_workers_.GetAllForExtension(extension_id,
                                                         worker_version_id);
 
-  if (worker_ids_for_extension.empty()) {
-    // Multiple notifications can try to remove a worker when the worker
-    // stops (DidStopServiceWorkerContext(),
-    // ProcessManager::RenderProcessExit(), or extension uninstall/disable).
-    return;
-  }
-
   // TODO(crbug.com/40936639): After the fix releases there should only be one
-  // worker instance tracked for each extension at any time. If there is still
-  // more than one then do not delete it so we will count it and know about it.
-  // Confirm more thoroughly with DUMP_WILL_BE_CHECK() if metrics look
-  // promising.
-  if (worker_ids_for_extension.size() > 1u) {
-    return;
+  // worker instance tracked for each extension at any time.
+  for (const WorkerId& worker_id : worker_ids_for_extension) {
+    if (worker_id.start_token == service_worker_token) {
+      StopTrackingServiceWorkerRunningInstance(worker_id);
+    }
   }
-
-  StopTrackingServiceWorkerRunningInstance(worker_ids_for_extension[0]);
 }
 
 bool ProcessManager::HasServiceWorker(const WorkerId& worker_id) const {
@@ -1130,6 +1145,17 @@ ProcessManager::GetServiceWorkerKeepaliveDataForRecords(
 
 std::vector<WorkerId> ProcessManager::GetAllWorkersIdsForTesting() {
   return all_running_extension_workers_.GetAllForTesting();  // IN-TEST
+}
+
+void ProcessManager::ReleaseLazyKeepaliveCountForFrameForTesting(
+    content::RenderFrameHost* render_frame_host) {
+  ReleaseLazyKeepaliveCountForFrame(render_frame_host);
+}
+
+void ProcessManager::CloseLazyBackgroundPageNowForTesting(
+    const ExtensionId& extension_id) {
+  CloseLazyBackgroundPageNow(
+      extension_id, background_page_data_[extension_id].close_sequence_id);
 }
 
 void ProcessManager::ClearBackgroundPageData(const ExtensionId& extension_id) {

@@ -10,7 +10,7 @@
 #include "ios/chrome/browser/signin/model/system_identity.h"
 
 // A fake SystemIdentity used for testing.
-@interface FakeSystemIdentity : NSObject <SystemIdentity, NSSecureCoding>
+@interface FakeSystemIdentity : NSObject <NSSecureCoding, SystemIdentity>
 
 // Encodes `identities` into a string, using NSKeyedArchiver.
 + (std::string)encodeIdentitiesToBase64:
@@ -45,6 +45,12 @@
 // For simplicity, both `userGivenName` and `userFullName` properties use
 // `name` from the email address.
 + (instancetype)identityWithEmail:(NSString*)email gaiaID:(const GaiaId&)gaiaID;
+
+// Returns a fake identity with given name as nil.
++ (instancetype)fakeIdentityWithMissingGivenName;
+
+// Returns a fake identity with both names as nil.
++ (instancetype)fakeIdentityWithMissingNames;
 
 - (instancetype)init NS_UNAVAILABLE;
 

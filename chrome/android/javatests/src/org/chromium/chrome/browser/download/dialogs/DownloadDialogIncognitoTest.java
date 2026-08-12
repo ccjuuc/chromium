@@ -19,26 +19,28 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mockito;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.download.DuplicateDownloadDialog;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.OtrProfileId;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
 import org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils;
 import org.chromium.components.browser_ui.modaldialog.ModalDialogView;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.test.util.MockitoHelper;
 
 /** Test to verify download dialog scenarios. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class DownloadDialogIncognitoTest {
     private static final long TOTAL_BYTES = 1024L;
     private static final String DOWNLOAD_PATH = "/android/Download";
@@ -48,12 +50,12 @@ public class DownloadDialogIncognitoTest {
     public static final int ICON_ID = R.drawable.btn_close;
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     private ModalDialogManager mModalDialogManager;
 
-    private final Callback<Boolean> mResultCallback = Mockito.mock(Callback.class);
+    private final Callback<Boolean> mResultCallback = MockitoHelper.mockCallback();
 
     @Before
     public void setUpTest() throws Exception {
@@ -61,11 +63,11 @@ public class DownloadDialogIncognitoTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AppModalPresenter mAppModalPresenter =
+                    AppModalPresenter appModalPresenter =
                             new AppModalPresenter(mActivityTestRule.getActivity());
                     mModalDialogManager =
                             new ModalDialogManager(
-                                    mAppModalPresenter, ModalDialogManager.ModalDialogType.APP);
+                                    appModalPresenter, ModalDialogManager.ModalDialogType.APP);
                 });
         ModalDialogView.disableButtonTapProtectionForTesting();
     }
@@ -140,12 +142,12 @@ public class DownloadDialogIncognitoTest {
     }
 
     private void showDuplicateDialog(OtrProfileId otrProfileId) {
-        Context mContext = mActivityTestRule.getActivity().getApplicationContext();
+        Context context = mActivityTestRule.getActivity().getApplicationContext();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     new DuplicateDownloadDialog()
                             .show(
-                                    mContext,
+                                    context,
                                     mModalDialogManager,
                                     DOWNLOAD_PATH,
                                     PAGE_URL,
@@ -159,10 +161,10 @@ public class DownloadDialogIncognitoTest {
     private void showInsecureDownloadDialog() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Context mContext = mActivityTestRule.getActivity().getApplicationContext();
+                    Context context = mActivityTestRule.getActivity().getApplicationContext();
                     new InsecureDownloadDialog()
                             .show(
-                                    mContext,
+                                    context,
                                     mModalDialogManager,
                                     FILE_NAME,
                                     TOTAL_BYTES,
@@ -173,16 +175,17 @@ public class DownloadDialogIncognitoTest {
     private void showDangerousContentDialog() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Context mContext = mActivityTestRule.getActivity().getApplicationContext();
+                    Context context = mActivityTestRule.getActivity().getApplicationContext();
                     new DangerousDownloadDialog()
                             .show(
-                                    mContext,
+                                    context,
                                     mModalDialogManager,
                                     FILE_NAME,
                                     TOTAL_BYTES,
                                     DOWNLOAD_DOMAIN,
                                     ICON_ID,
-                                    mResultCallback);
+                                    mResultCallback,
+                                    true);
                 });
     }
 }

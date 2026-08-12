@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_SETTINGS_METRICS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_SETTINGS_METRICS_H_
 
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 
 namespace autofill::autofill_metrics {
@@ -91,7 +92,13 @@ void LogIsAutofillPaymentMethodsEnabledAtPageLoad(
     AutofillMetrics::PaymentsSigninState sync_state);
 
 // This should be called each time a new chrome profile is launched.
-void LogIsAutofillEnabledAtStartup(bool enabled);
+// Evaluates all autofill preferences and logs whether autofill is enabled
+// overall.
+void LogIsAutofillEnabledAtStartup(const PrefService& prefs);
+
+// This should be called each time a new chrome profile is launched.
+// Logs the source that disabled Autofill AI data types on startup.
+void LogAutofillAiSettingsAtStartup(const PrefService& prefs);
 
 // This should be called each time a new chrome profile is launched.
 void LogIsAutofillProfileEnabledAtStartup(bool enabled);
@@ -105,8 +112,7 @@ void LogAutofillProfileDisabledReasonAtStartup(const PrefService& pref_service);
 
 // Logs the source that disabled Autofill Profile, on page load for a page
 // containing forms.
-void LogAutofillProfileDisabledReasonAtPageLoad(
-    const PrefService& pref_service);
+void LogAutofillProfileDisabledReasonAtPageLoad(const AutofillClient& client);
 
 // Logs the source that disabled payment method Autofill, on startup. This
 // should be called each time a new chrome profile is launched.
@@ -116,7 +122,11 @@ void LogAutofillPaymentMethodsDisabledReasonAtStartup(
 // Logs the source that disabled payment method Autofill, on page load for a
 // page containing forms.
 void LogAutofillPaymentMethodsDisabledReasonAtPageLoad(
-    const PrefService& pref_service);
+    const AutofillClient& client);
+
+// Logs the source that disabled Autofill AI types (identity docs, travel,
+// shopping), on page load for a page containing forms.
+void LogAutofillAiSettingsAtPageLoad(const AutofillClient& client);
 
 // Logs user action "Autofill_ProfileDisabled" if
 // `prefs::kAutofillProfileEnabled` is disabled and controlled by the user or an

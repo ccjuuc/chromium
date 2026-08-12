@@ -16,9 +16,9 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
 #include "chrome/browser/password_manager/factories/bulk_leak_check_service_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/safety_hub/password_status_check_result.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
@@ -30,6 +30,7 @@
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check_service.h"
 #include "components/password_manager/core/browser/leak_detection/leak_detection_request_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/ui/bulk_leak_check_service_adapter.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
@@ -135,7 +136,7 @@ bool ShouldFindNewCheckTime(Profile* profile) {
   //   },
   //   ...
   // }
-  const base::Value::Dict& check_schedule_dict = profile->GetPrefs()->GetDict(
+  const base::DictValue& check_schedule_dict = profile->GetPrefs()->GetDict(
       safety_hub_prefs::kBackgroundPasswordCheckTimeAndInterval);
 
   // If the check time is not set yet, a new check time should be found.
@@ -179,8 +180,8 @@ bool ShouldFindNewCheckTime(Profile* profile) {
 }
 
 // Helper functions for displaying passwords in the UI
-base::Value::Dict GetCompromisedPasswordCardData(int compromised_count) {
-  base::Value::Dict result;
+base::DictValue GetCompromisedPasswordCardData(int compromised_count) {
+  base::DictValue result;
 
   result.Set(safety_hub::kCardHeaderKey,
              l10n_util::GetPluralStringFUTF16(
@@ -195,8 +196,8 @@ base::Value::Dict GetCompromisedPasswordCardData(int compromised_count) {
   return result;
 }
 
-base::Value::Dict GetReusedPasswordCardData(int reused_count, bool signed_in) {
-  base::Value::Dict result;
+base::DictValue GetReusedPasswordCardData(int reused_count, bool signed_in) {
+  base::DictValue result;
 
   result.Set(safety_hub::kCardHeaderKey,
              l10n_util::GetPluralStringFUTF16(
@@ -212,8 +213,8 @@ base::Value::Dict GetReusedPasswordCardData(int reused_count, bool signed_in) {
   return result;
 }
 
-base::Value::Dict GetWeakPasswordCardData(int weak_count, bool signed_in) {
-  base::Value::Dict result;
+base::DictValue GetWeakPasswordCardData(int weak_count, bool signed_in) {
+  base::DictValue result;
 
   result.Set(safety_hub::kCardHeaderKey,
              l10n_util::GetPluralStringFUTF16(
@@ -229,8 +230,8 @@ base::Value::Dict GetWeakPasswordCardData(int weak_count, bool signed_in) {
   return result;
 }
 
-base::Value::Dict GetSafePasswordCardData(base::Time last_check) {
-  base::Value::Dict result;
+base::DictValue GetSafePasswordCardData(base::Time last_check) {
+  base::DictValue result;
 
   result.Set(safety_hub::kCardHeaderKey,
              l10n_util::GetPluralStringFUTF16(
@@ -257,8 +258,8 @@ base::Value::Dict GetSafePasswordCardData(base::Time last_check) {
   return result;
 }
 
-base::Value::Dict GetNoWeakOrReusedPasswordCardData(bool signed_in) {
-  base::Value::Dict result;
+base::DictValue GetNoWeakOrReusedPasswordCardData(bool signed_in) {
+  base::DictValue result;
   result.Set(
       safety_hub::kCardHeaderKey,
       l10n_util::GetStringUTF16(
@@ -274,8 +275,8 @@ base::Value::Dict GetNoWeakOrReusedPasswordCardData(bool signed_in) {
   return result;
 }
 
-base::Value::Dict GetNoPasswordCardData(bool password_saving_allowed) {
-  base::Value::Dict result;
+base::DictValue GetNoPasswordCardData(bool password_saving_allowed) {
+  base::DictValue result;
 
   result.Set(safety_hub::kCardHeaderKey,
              l10n_util::GetStringUTF16(
@@ -292,8 +293,8 @@ base::Value::Dict GetNoPasswordCardData(bool password_saving_allowed) {
 }
 
 bool ShouldAddToCompromisedPasswords(
-    const password_manager::PasswordForm form) {
-  auto& issues = form.password_issues;
+    const password_manager::StoredCredential& cred) {
+  auto& issues = cred.password_issues;
 
   // If the password is leaked but muted, then do not add to compromised
   // passwords.
@@ -520,45 +521,36 @@ void PasswordStatusCheckService::OnLoginsChanged(
     return;
   }
 
-  std::vector<password_manager::PasswordForm> forms_to_add;
-  std::vector<password_manager::PasswordForm> forms_to_remove;
+  std::set<PasswordPair> updated_passwords =
+      latest_result_->GetCompromisedPasswords();
+
   for (const password_manager::PasswordStoreChange& change : changes) {
+    const auto& cred = change.credential();
     // Ignore federated or blocked entries.
-    const auto& form = change.form();
-    if (form.IsFederatedCredential() || form.blocked_by_user) {
+    if (cred.federation_origin.IsValid() || cred.blocked_by_user) {
       continue;
     }
+
+    PasswordPair password_pair(cred.url.spec(),
+                               base::UTF16ToUTF8(cred.username_value));
+
     switch (change.type()) {
       case password_manager::PasswordStoreChange::ADD:
-        forms_to_add.push_back(form);
+        saved_credential_count_++;
+        if (ShouldAddToCompromisedPasswords(cred)) {
+          updated_passwords.insert(std::move(password_pair));
+        }
         break;
       case password_manager::PasswordStoreChange::UPDATE:
-        forms_to_remove.push_back(form);
-        forms_to_add.push_back(form);
+        updated_passwords.erase(password_pair);
+        if (ShouldAddToCompromisedPasswords(cred)) {
+          updated_passwords.insert(std::move(password_pair));
+        }
         break;
       case password_manager::PasswordStoreChange::REMOVE:
-        forms_to_remove.push_back(form);
+        saved_credential_count_--;
+        updated_passwords.erase(std::move(password_pair));
         break;
-    }
-  }
-
-  const std::set<PasswordPair>& stored_password =
-      latest_result_->GetCompromisedPasswords();
-  std::set<PasswordPair> updated_passwords = stored_password;
-
-  // Remove deleted forms
-  for (const auto& form : forms_to_remove) {
-    saved_credential_count_--;
-    updated_passwords.erase(
-        PasswordPair(form.url.spec(), base::UTF16ToUTF8(form.username_value)));
-  }
-
-  // Add new forms
-  for (const auto& form : forms_to_add) {
-    saved_credential_count_++;
-    if (ShouldAddToCompromisedPasswords(form)) {
-      updated_passwords.insert(PasswordPair(
-          form.url.spec(), base::UTF16ToUTF8(form.username_value)));
     }
   }
 
@@ -574,7 +566,8 @@ void PasswordStatusCheckService::OnLoginsChanged(
 
 void PasswordStatusCheckService::OnLoginsRetained(
     password_manager::PasswordStoreInterface* store,
-    const std::vector<password_manager::PasswordForm>& retained_passwords) {}
+    const std::vector<password_manager::StoredCredential>& retained_passwords) {
+}
 
 void PasswordStatusCheckService::OnInsecureCredentialsChanged() {
   CHECK(IsInfrastructureReady());
@@ -684,7 +677,7 @@ void PasswordStatusCheckService::SetPasswordCheckSchedulePrefsWithInterval(
   base::TimeDelta check_interval =
       safety_check::features::kBackgroundPasswordCheckInterval.Get();
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(safety_hub_prefs::kNextPasswordCheckTimeKey,
            base::TimeToValue(check_time));
   dict.Set(safety_hub_prefs::kPasswordCheckIntervalKey,
@@ -701,7 +694,7 @@ void PasswordStatusCheckService::SetPasswordCheckSchedulePrefsWithInterval(
 }
 
 base::Time PasswordStatusCheckService::GetScheduledPasswordCheckTime() const {
-  const base::Value::Dict& check_schedule_dict = profile_->GetPrefs()->GetDict(
+  const base::DictValue& check_schedule_dict = profile_->GetPrefs()->GetDict(
       safety_hub_prefs::kBackgroundPasswordCheckTimeAndInterval);
   std::optional<base::Time> check_time = base::ValueToTime(
       check_schedule_dict.Find(safety_hub_prefs::kNextPasswordCheckTimeKey));
@@ -711,7 +704,7 @@ base::Time PasswordStatusCheckService::GetScheduledPasswordCheckTime() const {
 
 base::TimeDelta PasswordStatusCheckService::GetScheduledPasswordCheckInterval()
     const {
-  const base::Value::Dict& check_schedule_dict = profile_->GetPrefs()->GetDict(
+  const base::DictValue& check_schedule_dict = profile_->GetPrefs()->GetDict(
       safety_hub_prefs::kBackgroundPasswordCheckTimeAndInterval);
   std::optional<base::TimeDelta> check_interval = base::ValueToTimeDelta(
       check_schedule_dict.Find(safety_hub_prefs::kPasswordCheckIntervalKey));
@@ -719,7 +712,7 @@ base::TimeDelta PasswordStatusCheckService::GetScheduledPasswordCheckInterval()
   return check_interval.value();
 }
 
-base::Value::Dict PasswordStatusCheckService::GetPasswordCardData(
+base::DictValue PasswordStatusCheckService::GetPasswordCardData(
     bool signed_in) {
   if (no_passwords_saved()) {
     bool password_saving_allowed = profile_->GetPrefs()->GetBoolean(
@@ -753,7 +746,7 @@ base::Value::Dict PasswordStatusCheckService::GetPasswordCardData(
   return GetNoWeakOrReusedPasswordCardData(signed_in);
 }
 
-base::Value::Dict PasswordStatusCheckService::GetPasswordCardData() {
+base::DictValue PasswordStatusCheckService::GetPasswordCardData() {
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile_);
   bool signed_in = identity_manager && identity_manager->HasPrimaryAccount(

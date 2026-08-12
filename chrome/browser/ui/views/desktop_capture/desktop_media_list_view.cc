@@ -6,26 +6,22 @@
 
 #include <algorithm>
 #include <string>
-#include <utility>
 
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/media/webrtc/window_icon_util.h"
-#include "chrome/browser/ui/views/desktop_capture/desktop_media_picker_views.h"
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_source_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/common/chrome_switches.h"
-#include "chrome/grit/theme_resources.h"
-#include "extensions/grit/extensions_browser_resources.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/table_layout.h"
 #include "ui/views/view_utils.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/grit/theme_resources.h"
+#include "extensions/grit/extensions_browser_resources.h"
 #include "ui/aura/window.h"
+#include "ui/base/resource/resource_bundle.h"
 #endif
 
 using content::DesktopMediaID;
@@ -48,7 +44,9 @@ gfx::ImageSkia LoadDefaultIcon(aura::Window* window) {
   // Technically dev tool is actually a special app, but we would like to
   // display product logo for it, because intuitively it is internal to browser.
   bool is_app =
-      !browser || browser->is_type_app() || browser->is_type_app_popup();
+      !browser ||
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP;
   int idr = is_app ? IDR_APP_DEFAULT_ICON : IDR_PRODUCT_LOGO_32;
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();

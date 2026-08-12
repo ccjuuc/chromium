@@ -10,7 +10,10 @@
 #include "third_party/blink/renderer/modules/ai/ai_interface_proxy.h"
 #include "third_party/blink/renderer/modules/ai/ai_metrics.h"
 #include "third_party/blink/renderer/modules/ai/ai_writing_assistance_create_client.h"
+#include "third_party/blink/renderer/modules/ai/feedback_helpers.h"
 #include "third_party/blink/renderer/modules/ai/model_execution_responder.h"
+#include "third_party/blink/renderer/platform/json/json_parser.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -57,7 +60,7 @@ Vector<String> Tokenize(const String& text) {
   // create substrings, which we consider as tokens.
   int32_t start = it->first();
   for (int32_t end = it->next(); end != -1; end = it->next()) {
-    tokens.push_back(text.Substring(start, end - start));
+    tokens.push_back(text.substr(start, end - start));
     start = end;
   }
 
@@ -86,8 +89,8 @@ MatchingBlock LongestCommonSubsequence(base::span<const String> a,
         ++size;
       }
       if (size > result.size) {
-        result.start_a = i;
-        result.start_b = j;
+        result.start_a = base::checked_cast<uint32_t>(i);
+        result.start_b = base::checked_cast<uint32_t>(j);
         result.size = size;
       }
     }
@@ -120,10 +123,10 @@ Vector<MatchingBlock> GetMatchingBlocks(Vector<String> seq_1,
     }
     // Calculate the location of the matching block in the two original
     // sequences.
-    uint32_t matching_start_in_seq_1 =
-        block_pair.start_a + matching_block.start_a;
-    uint32_t matching_start_in_seq_2 =
-        block_pair.start_b + matching_block.start_b;
+    uint32_t matching_start_in_seq_1 = base::checked_cast<uint32_t>(
+        block_pair.start_a + matching_block.start_a);
+    uint32_t matching_start_in_seq_2 = base::checked_cast<uint32_t>(
+        block_pair.start_b + matching_block.start_b);
     matching_blocks.push_back(MatchingBlock(
         matching_start_in_seq_1, matching_start_in_seq_2, matching_block.size));
     // Push the remaining of the blocks to the left of the longest matching
@@ -248,7 +251,7 @@ HeapVector<Member<ProofreadCorrection>> ToProofreadCorrections(
   return corrections;
 }
 
-V8CorrectionType GetV8CorrectionTypeFromString(const String& type) {
+V8CorrectionType GetV8CorrectionTypeFromString(StringView type) {
   if (type == "Spelling") {
     return V8CorrectionType(V8CorrectionType::Enum::kSpelling);
   }
@@ -279,7 +282,8 @@ void AIWritingAssistanceCreateClient<
   HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
       AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
   ai_manager_remote->CreateProofreader(
-      std::move(client_remote), ToMojoProofreaderCreateOptions(options_));
+      std::move(client_remote), ToMojoProofreaderCreateOptions(options_),
+      monitor_ ? monitor_->BindRemote() : mojo::NullRemote());
 }
 
 template <>
@@ -371,6 +375,7 @@ ScriptPromise<Proofreader> Proofreader::create(
     ScriptState* script_state,
     ProofreaderCreateOptions* options,
     ExceptionState& exception_state) {
+  MaybeRequestFeedback(script_state, AIMetrics::AISessionType::kProofreader);
   if (!script_state->ContextIsValid()) {
     ThrowInvalidContextException(exception_state);
     return ScriptPromise<Proofreader>();
@@ -450,10 +455,10 @@ ScriptPromise<ProofreadResult> Proofreader::proofread(
   auto pending_remote = CreateModelExecutionResponder(
       script_state, composite_signal, task_runner_,
       AIMetrics::AISessionType::kProofreader,
-
       BindOnce(&Proofreader::OnProofreadComplete, WrapPersistent(this),
                WrapPersistent(resolver), WrapPersistent(script_state),
                WrapPersistent(composite_signal), input),
+      /*tool_call_callback=*/base::NullCallback(),
       /*overflow_callback=*/base::DoNothingWithBoundArgs(WrapPersistent(this)),
       BindOnce(&Proofreader::OnProofreadError, WrapPersistent(this),
                WrapPersistent(resolver)),
@@ -548,10 +553,11 @@ void Proofreader::OnProofreadComplete(
     return;
   }
   auto* proofread_result = MakeGarbageCollected<ProofreadResult>();
-  proofread_result->setCorrectedInput(corrected_input);
+  String trimmed_corrected_input = corrected_input.StripWhiteSpace();
+  proofread_result->setCorrectedInput(trimmed_corrected_input);
   // Step 2: Find list of corrections by comparing original input and fully
   // corrected input from model execution
-  auto raw_corrections = GetCorrections(input, corrected_input);
+  auto raw_corrections = GetCorrections(input, trimmed_corrected_input);
   auto corrections = ToProofreadCorrections(raw_corrections);
   proofread_result->setCorrections(corrections);
 
@@ -562,11 +568,10 @@ void Proofreader::OnProofreadComplete(
   }
 
   // Step 3: Fetch correction type labels for all corrections, if requested.
-  // Labels are fetched one-by-one, and when all labels are received,
-  // GetCorrectionTypes will be responsible for resolving the promise for
+  // GetCorrectionsTypes will be responsible for resolving the promise for
   // proofread() with the `proofread_result`.
-  GetCorrectionTypes(resolver, script_state, signal, proofread_result,
-                     raw_corrections, input, 0);
+  GetCorrectionsTypes(resolver, script_state, signal, proofread_result,
+                      raw_corrections, input);
 }
 
 void Proofreader::OnProofreadError(
@@ -582,30 +587,20 @@ void Proofreader::OnProofreadAbort(
   resolver->Reject(signal->reason(script_state));
 }
 
-void Proofreader::GetCorrectionTypes(
+void Proofreader::GetCorrectionsTypes(
     ScriptPromiseResolver<ProofreadResult>* resolver,
     ScriptState* script_state,
     AbortSignal* signal,
     ProofreadResult* result,
-    Vector<Correction> raw_corrections,
-    const String& input,
-    uint32_t correction_index) {
-  // Done getting all correction type labels.
-  if (correction_index == result->corrections().size()) {
-    resolver->Resolve(result);
-    return;
-  }
-
-  // Get correction type label for the next correction.
-  auto correction = raw_corrections[correction_index];
-
+    Vector<Correction> corrections,
+    const String& input) {
   auto pending_remote = CreateModelExecutionResponder(
       script_state, signal, task_runner_,
       AIMetrics::AISessionType::kProofreader,
-      BindOnce(&Proofreader::OnLabelComplete, WrapPersistent(this),
+      BindOnce(&Proofreader::OnLabelsComplete, WrapPersistent(this),
                WrapPersistent(resolver), WrapPersistent(script_state),
-               WrapPersistent(signal), WrapPersistent(result), raw_corrections,
-               input, correction_index),
+               WrapPersistent(signal), WrapPersistent(result), corrections),
+      /*tool_call_callback=*/base::NullCallback(),
       /*overflow_callback=*/
       base::DoNothingWithBoundArgs(WrapPersistent(this)),
       /*error_callback=*/
@@ -621,35 +616,26 @@ void Proofreader::GetCorrectionTypes(
           WrapPersistent(resolver), WrapPersistent(signal),
           WrapPersistent(script_state)));
 
-  String from = input.Substring(correction.error_start,
-                                correction.error_end - correction.error_start);
-  String to = correction.correction;
-  String correction_instruction =
-      StrCat({"Correcting `", from, "` to `", to, "`"});
+  auto corrections_json_array = std::make_unique<JSONArray>();
+  for (const Correction& correction : corrections) {
+    // TODO(crbug.com/501129860): Escape backticks from input.
+    StringView from_text(input, correction.error_start,
+                         correction.error_end - correction.error_start);
 
-  // Annotate the current error in the original input.
-  String input_with_error =
-      StrCat({input.Substring(0, correction.error_start), "`", from, "`",
-              input.Substring(correction.error_end)});
-
-  // Annotate the current correction in the corrected input.
-  String corrected_input = result->correctedInput();
-  String corrected_input_with_correction =
-      StrCat({corrected_input.Substring(0, correction.correction_start), "`",
-              to, "`", corrected_input.Substring(correction.correction_end)});
-
-  remote_->GetCorrectionType(input_with_error, corrected_input_with_correction,
-                             correction_instruction, std::move(pending_remote));
+    corrections_json_array->PushString(StrCat(
+        {"Correcting `", from_text, "` to `", correction.correction, "`"}));
+  }
+  String serialized_corrections = corrections_json_array->ToJSONString();
+  remote_->GetCorrectionsTypes(serialized_corrections,
+                               std::move(pending_remote));
 }
 
-void Proofreader::OnLabelComplete(
+void Proofreader::OnLabelsComplete(
     ScriptPromiseResolver<ProofreadResult>* resolver,
     ScriptState* script_state,
     AbortSignal* signal,
     ProofreadResult* result,
-    Vector<Correction> raw_corrections,
-    const String& input,
-    uint32_t correction_index,
+    Vector<Correction> corrections,
     const String& model_response,
     mojom::blink::ModelExecutionContextInfoPtr context_info) {
   DCHECK(resolver);
@@ -658,24 +644,51 @@ void Proofreader::OnLabelComplete(
     return;
   }
 
-  // Default correction type
-  String label = "Grammar";
+  // Parse the model response of the format ["label0,label1", ...].
+  std::unique_ptr<JSONValue> root = ParseJSON(model_response);
 
-  // Parse the label from the response of the format {"label": "label0"}
-  RE2 pattern("{\"label\":\\s*\"([^\"]+)\"}");
-  StringUtf8Adaptor adaptor(model_response);
-  std::string_view response = adaptor.AsStringView();
-  std::string_view label_value;
-  if (RE2::FullMatch(response, pattern, &label_value)) {
-    label = String::FromUTF8(label_value);
+  if (!root || root->GetType() != JSONValue::ValueType::kTypeArray) {
+    // If parsing fails, log a warning and return the result without types.
+    ExecutionContext::From(script_state)
+        ->AddConsoleMessage(mojom::blink::ConsoleMessageSource::kJavaScript,
+                            mojom::blink::ConsoleMessageLevel::kWarning,
+                            "Proofreader: Failed to parse model response");
+    resolver->Resolve(result);
+    return;
   }
-  result->corrections()[correction_index]->setType(
-      GetV8CorrectionTypeFromString(label));
 
-  uint32_t next_index = correction_index + 1;
+  JSONArray* labels_array = JSONArray::Cast(root.get());
+  if (labels_array->size() != corrections.size()) {
+    // If parsing count doesn't match, log a warning and return the
+    // result without types.
+    ExecutionContext::From(script_state)
+        ->AddConsoleMessage(mojom::blink::ConsoleMessageSource::kJavaScript,
+                            mojom::blink::ConsoleMessageLevel::kWarning,
+                            "Proofreader: Model provided wrong label count");
+    resolver->Resolve(result);
+    return;
+  }
 
-  GetCorrectionTypes(resolver, script_state, signal, result, raw_corrections,
-                     input, next_index);
+  for (wtf_size_t i = 0; i < corrections.size(); ++i) {
+    JSONValue* entry = labels_array->at(i);
+    String labels_string;
+
+    // Each entry in the JSON list should be a string (e.g., "Grammar" or
+    // "Spelling,Punctuation").
+    if (entry && entry->AsString(&labels_string)) {
+      Vector<V8CorrectionType> types;
+
+      for (StringView label : StringView(labels_string).Split(',')) {
+        StringView trimmed = label.StripWhiteSpace();
+        if (!trimmed.empty()) {
+          types.push_back(GetV8CorrectionTypeFromString(trimmed));
+        }
+      }
+      result->corrections()[i]->setTypes(std::move(types));
+    }
+  }
+
+  resolver->Resolve(result);
 }
 
 }  // namespace blink

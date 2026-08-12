@@ -10,6 +10,7 @@ import './managed_user_profile_notice_disclosure.js';
 import './managed_user_profile_notice_value_prop.js';
 import './managed_user_profile_notice_state.js';
 import './managed_user_profile_notice_data_handling.js';
+import './signals_disclaimer.js';
 
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
@@ -88,6 +89,7 @@ export class ManagedUserProfileNoticeAppElement extends
 
       disableProceedButton_: {type: Boolean},
       currentState_: {type: Number},
+      showValueProposition_: {type: Boolean},
       showDisclosure_: {type: Boolean},
       showProcessing_: {type: Boolean},
       showSuccess_: {type: Boolean},
@@ -96,6 +98,7 @@ export class ManagedUserProfileNoticeAppElement extends
       processingSubtitle_: {type: String},
       showUserDataHandling_: {type: Boolean},
       selectedDataHandling_: {type: String},
+      showSignalsDisclaimer_: {type: Boolean},
 
       valuePropTitle_: {type: String},
       valuePropSubtitle_: {type: String},
@@ -106,11 +109,13 @@ export class ManagedUserProfileNoticeAppElement extends
       separateDataChoiceDetails_: {type: String},
       mergeDataChoiceTitle_: {type: String},
       mergeDataChoiceDetails_: {type: String},
+      email_: {type: String},
+      accountName_: {type: String},
     };
   }
 
-  protected email_: string = '';
-  protected accountName_: string = '';
+  protected accessor email_: string = '';
+  protected accessor accountName_: string = '';
   private accessor continueAs_: string = '';
   protected accessor showEnterpriseBadge_: boolean = false;
   protected accessor pictureUrl_: string = '';
@@ -124,16 +129,17 @@ export class ManagedUserProfileNoticeAppElement extends
   protected accessor errorSubtitle_: string = '';
   protected accessor disableProceedButton_: boolean = false;
   private accessor currentState_: State = State.DISCLOSURE;
-  protected showValueProposition_: boolean = false;
+  protected accessor showValueProposition_: boolean = false;
   protected accessor showDisclosure_: boolean = false;
   protected accessor showProcessing_: boolean = false;
   protected accessor showSuccess_: boolean = false;
   protected accessor showTimeout_: boolean = false;
   protected accessor showError_: boolean = false;
+  protected accessor showSignalsDisclaimer_: boolean = false;
   protected accessor processingSubtitle_: string =
       loadTimeData.getString('processingSubtitle');
   protected accessor showUserDataHandling_: boolean = false;
-  protected accessor selectedDataHandling_: BrowsingDataHandling|null = null;
+  protected accessor selectedDataHandling_: BrowsingDataHandling|undefined;
 
   protected accessor valuePropTitle_: string = '';
   protected accessor valuePropSubtitle_: string = '';
@@ -191,7 +197,7 @@ export class ManagedUserProfileNoticeAppElement extends
   }
 
   /** Called when the proceed button is clicked. */
-  protected onProceed_() {
+  protected onProceedClick_() {
     this.disableProceedButton_ = true;
     const linkData = this.selectedDataHandling_ === BrowsingDataHandling.MERGE;
     this.managedUserProfileNoticeBrowserProxy_.proceed(
@@ -199,7 +205,7 @@ export class ManagedUserProfileNoticeAppElement extends
   }
 
   /** Called when the cancel button is clicked. */
-  protected onCancel_() {
+  protected onCancelClick_() {
     if (this.allowValuePropStateBackFromDisclosure_()) {
       this.updateCurrentState_(State.VALUE_PROPOSITION);
       return;
@@ -251,6 +257,7 @@ export class ManagedUserProfileNoticeAppElement extends
     this.showTimeout_ = state === State.TIMEOUT;
     this.showError_ = state === State.ERROR;
     this.showUserDataHandling_ = state === State.USER_DATA_HANDLING;
+    this.showSignalsDisclaimer_ = state === State.SIGNALS_DISCLAIMER;
     this.disableProceedButton_ = false;
   }
 
@@ -261,10 +268,14 @@ export class ManagedUserProfileNoticeAppElement extends
 
   protected allowCancel_() {
     return this.showDisclosure_ || this.showValueProposition_ ||
-        this.showUserDataHandling_ || this.showTimeout_ || this.showProcessing_;
+        this.showUserDataHandling_ || this.showTimeout_ ||
+        this.showProcessing_ || this.showSignalsDisclaimer_;
   }
 
   private computeCancelLabel_() {
+    if (this.currentState_ === State.SIGNALS_DISCLAIMER) {
+      return this.i18n('signalsDisclaimerCancelLabel');
+    }
     if (this.currentState_ === State.VALUE_PROPOSITION &&
         !loadTimeData.getBoolean('enforcedByPolicy')) {
       return this.i18n('cancelValueProp');
@@ -282,6 +293,8 @@ export class ManagedUserProfileNoticeAppElement extends
 
   private computeProceedLabel_() {
     switch (this.currentState_) {
+      case State.SIGNALS_DISCLAIMER:
+        return this.i18n('signalsDisclaimerContinueLabel');
       case State.VALUE_PROPOSITION:
         return this.continueAs_;
       case State.DISCLOSURE:
@@ -303,9 +316,19 @@ export class ManagedUserProfileNoticeAppElement extends
     this.processingSubtitle_ = this.i18n('longProcessingSubtitle');
   }
 
-  protected onDataHandlingChanged_(
+  protected onSelectedDataHandlingChanged_(
       e: CustomEvent<{value: BrowsingDataHandling}>) {
     this.selectedDataHandling_ = e.detail.value;
+  }
+
+  protected getActionContainerId_(): string {
+    if (this.showTimeout_) {
+      return 'timeout-action-container';
+    } else if (this.showSignalsDisclaimer_) {
+      return 'signals-disclaimer-action-container';
+    } else {
+      return '';
+    }
   }
 }
 

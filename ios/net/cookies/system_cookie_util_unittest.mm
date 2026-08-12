@@ -25,12 +25,8 @@ const char kCookiePath[] = "path/";
 const char kCookieValue[] = "value";
 const char kCookieValueInvalidUtf8[] = "\x81r\xe4\xbd\xa0\xe5\xa5\xbd";
 
-void CheckSystemCookie(const base::Time& expires, bool secure, bool httponly) {
-  net::CookieSameSite same_site = net::CookieSameSite::NO_RESTRICTION;
-  if (@available(iOS 13, *)) {
-    // SamesitePolicy property of NSHTTPCookieStore is available on iOS 13+.
-    same_site = net::CookieSameSite::LAX_MODE;
-  }
+void CheckSystemCookie(base::Time expires, bool secure, bool httponly) {
+  net::CookieSameSite same_site = net::CookieSameSite::LAX_MODE;
   // Generate a canonical cookie.
   std::unique_ptr<net::CanonicalCookie> canonical_cookie =
       net::CanonicalCookie::CreateUnsafeCookieForTesting(
@@ -39,7 +35,8 @@ void CheckSystemCookie(const base::Time& expires, bool secure, bool httponly) {
           expires,
           base::Time(),  // last_access
           base::Time(),  // last_update
-          secure, httponly, same_site, net::COOKIE_PRIORITY_DEFAULT);
+          secure, httponly, same_site, net::COOKIE_PRIORITY_DEFAULT,
+          net::CookieSourceType::kOther);
   // Convert it to system cookie.
   NSHTTPCookie* system_cookie =
       SystemCookieFromCanonicalCookie(*canonical_cookie);
@@ -54,9 +51,7 @@ void CheckSystemCookie(const base::Time& expires, bool secure, bool httponly) {
   EXPECT_EQ(httponly, [system_cookie isHTTPOnly]);
   EXPECT_EQ(expires.is_null(), [system_cookie isSessionOnly]);
 
-  if (@available(iOS 13, *)) {
-    EXPECT_NSEQ(NSHTTPCookieSameSiteLax, [system_cookie sameSitePolicy]);
-  }
+  EXPECT_NSEQ(NSHTTPCookieSameSiteLax, [system_cookie sameSitePolicy]);
   // Allow 1 second difference as iOS rounds expiry time to the nearest second.
   base::Time system_cookie_expire_date = base::Time::FromSecondsSinceUnixEpoch(
       [[system_cookie expiresDate] timeIntervalSince1970]);
@@ -82,10 +77,7 @@ TEST_F(CookieUtil, CanonicalCookieFromSystemCookie) {
         NSHTTPCookieExpires : system_expire_date,
         @"HttpOnly" : @YES,
       }];
-  if (@available(iOS 13, *)) {
-    // sameSitePolicy is only available on iOS 13+.
-    properties[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteStrict;
-  }
+  properties[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteStrict;
 
   NSHTTPCookie* system_cookie =
       [[NSHTTPCookie alloc] initWithProperties:properties];
@@ -106,9 +98,7 @@ TEST_F(CookieUtil, CanonicalCookieFromSystemCookie) {
   EXPECT_FALSE(chrome_cookie->SecureAttribute());
   EXPECT_TRUE(chrome_cookie->IsHttpOnly());
   EXPECT_EQ(net::COOKIE_PRIORITY_DEFAULT, chrome_cookie->Priority());
-  if (@available(iOS 13, *)) {
-    EXPECT_EQ(net::CookieSameSite::STRICT_MODE, chrome_cookie->SameSite());
-  }
+  EXPECT_EQ(net::CookieSameSite::STRICT_MODE, chrome_cookie->SameSite());
 
   // Test session and secure cookie.
   system_cookie = [[NSHTTPCookie alloc] initWithProperties:@{
@@ -155,7 +145,8 @@ TEST_F(CookieUtil, SystemCookieFromBadCanonicalCookie) {
           base::Time(),  // last_update
           false,         // secure
           false,         // httponly
-          net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT);
+          net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT,
+          net::CookieSourceType::kOther);
   // Convert it to system cookie.
   NSHTTPCookie* system_cookie =
       SystemCookieFromCanonicalCookie(*bad_canonical_cookie);
@@ -173,7 +164,8 @@ TEST_F(CookieUtil, SystemCookiesFromCanonicalCookieList) {
           base::Time(),  // last_update
           false,         // secure
           false,         // httponly
-          net::CookieSameSite::UNSPECIFIED, net::COOKIE_PRIORITY_DEFAULT),
+          net::CookieSameSite::UNSPECIFIED, net::COOKIE_PRIORITY_DEFAULT,
+          net::CookieSourceType::kOther),
       *net::CanonicalCookie::CreateUnsafeCookieForTesting(
           "name2", "value2", "domain2", "path2/",
           base::Time(),  // creation
@@ -182,7 +174,8 @@ TEST_F(CookieUtil, SystemCookiesFromCanonicalCookieList) {
           base::Time(),  // last_update
           false,         // secure
           false,         // httponly
-          net::CookieSameSite::UNSPECIFIED, net::COOKIE_PRIORITY_DEFAULT),
+          net::CookieSameSite::UNSPECIFIED, net::COOKIE_PRIORITY_DEFAULT,
+          net::CookieSourceType::kOther),
   };
 
   NSArray<NSHTTPCookie*>* system_cookies =

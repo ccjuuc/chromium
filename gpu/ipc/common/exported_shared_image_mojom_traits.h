@@ -8,7 +8,6 @@
 #include <optional>
 
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/ipc/common/exported_shared_image.mojom-shared.h"
 #include "gpu/ipc/common/gpu_ipc_common_export.h"
@@ -24,14 +23,14 @@ template <>
 struct GPU_IPC_COMMON_EXPORT StructTraits<
     gpu::mojom::SharedImageExportResultDataView,
     gpu::SharedImageExportResult> {
-  static const gpu::SyncToken& sync_token(
+  static const std::vector<gpu::SyncToken>& sync_tokens(
       const gpu::SharedImageExportResult& shared_image_exported_result) {
-    return shared_image_exported_result.sync_token_;
+    return shared_image_exported_result.sync_tokens_;
   }
 
   static bool Read(gpu::mojom::SharedImageExportResultDataView data,
                    gpu::SharedImageExportResult* out) {
-    if (!data.ReadSyncToken(&out->sync_token_)) {
+    if (!data.ReadSyncTokens(&out->sync_tokens_)) {
       return false;
     }
     return true;
@@ -80,7 +79,7 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
 
   static bool Read(gpu::mojom::ExportedSharedImageDataView data,
                    gpu::ExportedSharedImage* out) {
-    if (!data.ReadMailbox(&out->mailbox_) ||
+    if (!data.ReadMailbox(&out->mailbox_) || out->mailbox_.IsZero() ||
         !data.ReadMetadata(&out->metadata_) ||
         !data.ReadDebugLabel(&out->debug_label_) ||
         !data.ReadCreationSyncToken(&out->creation_sync_token_) ||
@@ -92,7 +91,18 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
     if (out->buffer_handle_ && !out->buffer_usage_) {
       return false;
     }
+    if (out->buffer_handle_ && out->buffer_handle_->type == gfx::EMPTY_BUFFER) {
+      return false;
+    }
     out->texture_target_ = data.texture_target();
+#if !BUILDFLAG(IS_FUCHSIA)
+    // On Fuchsia, it is possible for texture_target_ to be 0 because Fuchsia
+    // does not support import of external images to GL for usage with external
+    // sampling. For other platforms, texture_target_ should always be non-zero.
+    if (out->texture_target_ == 0) {
+      return false;
+    }
+#endif
     out->is_software_ = data.is_software();
     return true;
   }

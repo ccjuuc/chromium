@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/modules/media_controls/media_controls_shared_helper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "ui/display/screen_info.h"
 #include "ui/strings/grit/ax_strings.h"
 
@@ -171,7 +172,7 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
     return;
   }
 
-  double time = Value().ToDouble();
+  double time = StringToDouble(Value()).value_or(0);
   double duration = MediaElement().duration();
   // Workaround for floating point error - it's possible for this element's max
   // attribute to be rounded to a value slightly higher than the duration. If
@@ -219,14 +220,22 @@ void MediaControlTimelineElement::RenderTimelineTimerFired(TimerBase*) {
 }
 
 void MediaControlTimelineElement::MaybeUpdateTimelineInterval() {
-  if (!is_live_ || !MediaElement().seekable()->length() || !live_anchor_time_)
+  if (!is_live_ || !live_anchor_time_) {
     return;
+  }
 
-  int last_seekable = MediaElement().seekable()->length() - 1;
+  TimeRanges* seekable_ranges = MediaElement().seekable();
+  DCHECK(seekable_ranges != nullptr);
+
+  if (seekable_ranges->length() == 0u) {
+    return;
+  }
+
+  int last_seekable = seekable_ranges->length() - 1;
   double seekable_start =
-      MediaElement().seekable()->start(last_seekable, ASSERT_NO_EXCEPTION);
+      seekable_ranges->start(last_seekable, ASSERT_NO_EXCEPTION);
   double seekable_end =
-      MediaElement().seekable()->end(last_seekable, ASSERT_NO_EXCEPTION);
+      seekable_ranges->end(last_seekable, ASSERT_NO_EXCEPTION);
   double expected_media_time_now =
       live_anchor_time_->media_time_ +
       (base::TimeTicks::Now() - live_anchor_time_->clock_time_).InSecondsF();
@@ -257,8 +266,8 @@ void MediaControlTimelineElement::RenderBarSegments() {
   // Calculate |current_time| and |duration| for live media base on the timeline
   // value since timeline's minimum value is not necessarily zero.
   if (is_live_) {
-    current_time =
-        Value().ToDouble() - GetFloatingPointAttribute(html_names::kMinAttr);
+    current_time = StringToDouble(Value()).value_or(0) -
+                   GetFloatingPointAttribute(html_names::kMinAttr);
     duration = GetFloatingPointAttribute(html_names::kMaxAttr) -
                GetFloatingPointAttribute(html_names::kMinAttr);
   }

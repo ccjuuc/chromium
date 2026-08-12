@@ -17,7 +17,9 @@ import org.chromium.base.TraceEvent;
 import org.chromium.base.UserData;
 import org.chromium.base.UserDataHost;
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
@@ -53,7 +55,8 @@ public abstract class PersistedTabData implements UserData {
     private final String mPersistedTabDataId;
     private long mLastUpdatedMs = LAST_UPDATE_UNKNOWN;
 
-    @VisibleForTesting public @Nullable ObservableSupplierImpl<Boolean> mIsTabSaveEnabledSupplier;
+    @VisibleForTesting
+    public @Nullable MonotonicObservableSupplier<Boolean> mIsTabSaveEnabledSupplier;
 
     private @Nullable Callback<Boolean> mTabSaveEnabledToggleCallback;
     private boolean mFirstSaveDone;
@@ -124,29 +127,17 @@ public abstract class PersistedTabData implements UserData {
                 tabDataCreator.onResult(
                         (tabData) -> {
                             if (tab.isDestroyed()) {
-                                PostTask.postTask(
-                                        TaskTraits.UI_DEFAULT,
-                                        () -> {
-                                            callback.onResult(null);
-                                        });
+                                PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(null));
                                 return;
                             }
                             updateLastUpdatedMs(tabData);
                             if (tabData != null) {
                                 setUserData(tab, clazz, tabData);
                             }
-                            PostTask.postTask(
-                                    TaskTraits.UI_DEFAULT,
-                                    () -> {
-                                        callback.onResult(tabData);
-                                    });
+                            PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(tabData));
                         });
             } else {
-                PostTask.postTask(
-                        TaskTraits.UI_DEFAULT,
-                        () -> {
-                            callback.onResult(persistedTabDataFromTab);
-                        });
+                PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(persistedTabDataFromTab));
             }
             return;
         }
@@ -194,11 +185,7 @@ public abstract class PersistedTabData implements UserData {
         T userData = getUserData(tab, clazz);
         // {@link PersistedTabData} already attached to {@link Tab}
         if (userData != null) {
-            PostTask.postTask(
-                    TaskTraits.UI_DEFAULT,
-                    () -> {
-                        callback.onResult(userData);
-                    });
+            PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(userData));
             return;
         }
         String key = String.format(Locale.ENGLISH, "%d-%s", tab.getId(), clazz);
@@ -250,11 +237,7 @@ public abstract class PersistedTabData implements UserData {
     }
 
     private static <T extends PersistedTabData> void onInvalidTab(Callback<@Nullable T> callback) {
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                () -> {
-                    callback.onResult(null);
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(null));
     }
 
     private static <T extends PersistedTabData> void onPersistedTabDataRetrieved(
@@ -308,9 +291,12 @@ public abstract class PersistedTabData implements UserData {
         if (persistedTabData != null) {
             setUserData(tab, clazz, persistedTabData);
         }
-        for (Callback<@Nullable T> cachedCallback : assumeNonNull(sCachedCallbacks.get(key))) {
-            PostTask.postTask(
-                    TaskTraits.UI_DEFAULT, () -> cachedCallback.onResult(persistedTabData));
+        // Callback type varies per key; map stores raw Callback.
+        @SuppressWarnings("unchecked")
+        List<Callback<@Nullable T>> callbacks =
+                (List<Callback<@Nullable T>>) (List<?>) assumeNonNull(sCachedCallbacks.get(key));
+        for (Callback<@Nullable T> cachedCallback : callbacks) {
+            PostTask.postTask(TaskTraits.UI_DEFAULT, cachedCallback.bind(persistedTabData));
         }
         sCachedCallbacks.remove(key);
     }
@@ -372,12 +358,15 @@ public abstract class PersistedTabData implements UserData {
         return tab.getUserDataHost().setUserData(clazz, persistedTabData);
     }
 
+    /** Returns the associated tab. */
+    public Tab getTab() {
+        return mTab;
+    }
+
     /** Save {@link PersistedTabData} to storage */
     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)
     public void save() {
-        if (mIsTabSaveEnabledSupplier != null
-                && mIsTabSaveEnabledSupplier.get() != null
-                && mIsTabSaveEnabledSupplier.get()) {
+        if (SupplierUtils.getOr(mIsTabSaveEnabledSupplier, false)) {
             mPersistedTabDataStorage.save(
                     mTab.getId(), mPersistedTabDataId, getOomAndMetricsWrapper());
         }
@@ -517,12 +506,12 @@ public abstract class PersistedTabData implements UserData {
     }
 
     /**
-     * @param isTabSaveEnabledSupplier {@link ObservableSupplierImpl} which provides
-     * access to the flag indicating if the {@link Tab} metadata will be saved and
-     * forward changes to the flag's value.
+     * @param isTabSaveEnabledSupplier {@link NonNullObservableSupplier} which provides access to
+     *     the flag indicating if the {@link Tab} metadata will be saved and forward changes to the
+     *     flag's value.
      */
     public void registerIsTabSaveEnabledSupplier(
-            ObservableSupplierImpl<Boolean> isTabSaveEnabledSupplier) {
+            MonotonicObservableSupplier<Boolean> isTabSaveEnabledSupplier) {
         mIsTabSaveEnabledSupplier = isTabSaveEnabledSupplier;
         mTabSaveEnabledToggleCallback =
                 (isTabSaveEnabled) -> {
@@ -533,7 +522,7 @@ public abstract class PersistedTabData implements UserData {
                         delete();
                     }
                 };
-        mIsTabSaveEnabledSupplier.addObserver(mTabSaveEnabledToggleCallback);
+        mIsTabSaveEnabledSupplier.addSyncObserverAndPostIfNonNull(mTabSaveEnabledToggleCallback);
     }
 
     /** Delete all {@link PersistedTabData} when a {@link Tab} is closed. */
@@ -575,7 +564,6 @@ public abstract class PersistedTabData implements UserData {
         }
     }
 
-    @VisibleForTesting
     protected static Set<Class<? extends PersistedTabData>>
             getSupportedMaintenanceClassesForTesting() {
         return sSupportedMaintenanceClasses;

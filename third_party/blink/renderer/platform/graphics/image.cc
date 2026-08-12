@@ -252,7 +252,16 @@ void Image::DrawPattern(GraphicsContext& context,
   if (dest_rect.IsEmpty())
     return;  // nothing to draw
 
-  PaintImage image = PaintImageForCurrentFrame();
+  PaintImage image;
+  if (auto* bitmap = DynamicTo<BitmapImage>(this);
+      bitmap && draw_options.image_node_animation_info &&
+      draw_options.image_node_animation_info->node_id != kInvalidDOMNodeId) {
+    image = bitmap->PaintImageForCurrentFrameWithInfo(
+        draw_options.image_node_animation_info);
+  } else {
+    image = PaintImageForCurrentFrame();
+  }
+
   if (!image)
     return;  // nothing to draw
 
@@ -324,9 +333,8 @@ void Image::DrawPattern(GraphicsContext& context,
   StartAnimation();
 
   if (IsLazyDecoded()) {
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                         "Draw LazyPixelRef", TRACE_EVENT_SCOPE_THREAD,
-                         "LazyPixelRef", image_id);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                        "Draw LazyPixelRef", "LazyPixelRef", image_id);
   }
 }
 
@@ -340,13 +348,15 @@ scoped_refptr<Image> Image::ImageForDefaultFrame() {
   return image;
 }
 
-PaintImageBuilder Image::CreatePaintImageBuilder() {
+PaintImageBuilder Image::CreatePaintImageBuilder(
+    std::optional<PaintImage::Id> paint_id) {
   auto animation_type = MaybeAnimated() ? PaintImage::AnimationType::kAnimated
                                         : PaintImage::AnimationType::kStatic;
-  return PaintImageBuilder::WithDefault()
-      .set_id(stable_image_id_)
-      .set_animation_type(animation_type)
-      .set_is_multipart(is_multipart_);
+  auto builder = PaintImageBuilder::WithDefault();
+  builder.set_id(paint_id.value_or(stable_image_id_));
+  builder.set_animation_type(animation_type).set_is_multipart(is_multipart_);
+
+  return builder;
 }
 
 bool Image::ApplyShader(cc::PaintFlags& flags,
@@ -355,7 +365,15 @@ bool Image::ApplyShader(cc::PaintFlags& flags,
                         const ImageDrawOptions& draw_options) {
   // Default shader impl: attempt to build a shader based on the current frame
   // SkImage.
-  PaintImage image = PaintImageForCurrentFrame();
+  PaintImage image;
+  if (auto* bitmap = DynamicTo<BitmapImage>(this);
+      bitmap && draw_options.image_node_animation_info &&
+      draw_options.image_node_animation_info->node_id != kInvalidDOMNodeId) {
+    image = bitmap->PaintImageForCurrentFrameWithInfo(
+        draw_options.image_node_animation_info);
+  } else {
+    image = PaintImageForCurrentFrame();
+  }
   if (!image)
     return false;
 

@@ -159,53 +159,53 @@ export class WallpaperGridItemElement extends PolymerElement {
    * four images tiled.
    * @default null
    */
-  src: Url|Url[]|null;
+  declare src: Url|Url[]|null;
 
   /** The index of the grid item within its parent grid. */
-  index: number;
+  declare index: number;
 
   /** The primary text to render for the grid item. */
-  primaryText: string|undefined;
+  declare primaryText: string|undefined;
 
   /** The secondary text to render for the grid item. */
-  secondaryText: string|undefined;
+  declare secondaryText: string|undefined;
 
   /** Additional informational text about the item. */
-  infoText: string|undefined;
+  declare infoText: string|undefined;
 
   /**
    * Passed to cr-auto-img to send google photos auth token on image request.
    */
-  isGooglePhotos: boolean;
+  declare isGooglePhotos: boolean;
 
   /**
    * Whether the wallpaper grid image is sea pen image. It's used to determine
    * the check mark icon type.
    */
-  dataSeaPenImage: boolean;
+  declare dataSeaPenImage: boolean;
 
   /**
    * Whether the grid item is currently selected. Controls the aria-selected
    * html attribute. When undefined, aria-selected will be removed.
    */
-  selected: boolean|undefined;
+  declare selected: boolean|undefined;
 
   /**
    * Whether the grid item is currently disabled. Automatically sets the
    * aria-disabled attribute for screen readers and targeting with CSS.
    * @default false
    */
-  disabled: boolean;
+  declare disabled: boolean;
 
   /**
    * Whether to display 2 images side by side in split Dark/Light mode,
    * or 4 images in a collage.
    * @default false
    */
-  collage: boolean;
+  declare collage: boolean;
 
   // Track if images are loaded, failed, or ready to display.
-  private imageStatus_: ImageStatus[];
+  declare private imageStatus_: ImageStatus[];
 
   override ready() {
     super.ready();
@@ -231,8 +231,8 @@ export class WallpaperGridItemElement extends PolymerElement {
   private onImageSrcChanged_(src: Url|Url[]|null, old: Url|Url[]|null) {
     // Set loading status if src has just changed while we wait for new images.
     const oldSrcArray = this.getSrcArray_(old, this.collage);
-    this.imageStatus_ = this.getSrcArray_(src, this.collage).map(({url}, i) => {
-      if (oldSrcArray.length > i && oldSrcArray[i].url === url) {
+    this.imageStatus_ = this.getSrcArray_(src, this.collage).map((url, i) => {
+      if (oldSrcArray.length > i && oldSrcArray[i] === url) {
         // If the underlying url has not changed, keep the prior image status.
         // If we have a new |Url| object but the underlying url is the same, the
         // img onload event will not fire and reset the status to ready.

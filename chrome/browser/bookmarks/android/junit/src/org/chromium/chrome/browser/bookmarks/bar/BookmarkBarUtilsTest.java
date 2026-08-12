@@ -29,13 +29,10 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.FeatureOverrides;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
@@ -49,7 +46,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Unit tests for {@link BookmarkBarUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
 public class BookmarkBarUtilsTest {
 
     private static final String PHONE_QUALIFIER =
@@ -74,7 +70,7 @@ public class BookmarkBarUtilsTest {
 
     private final AtomicBoolean mSetting = new AtomicBoolean();
 
-    private ObservableSupplierImpl<ProfileProvider> mProfileProviderSupplier;
+    private NonNullObservableSupplier<ProfileProvider> mProfileProviderSupplier;
 
     /** Helper class to mock different policy configurations for the bookmark bar. */
     private class BookmarkBarPolicyBuilder {
@@ -109,7 +105,7 @@ public class BookmarkBarUtilsTest {
 
             when(mPrefService.hasRecommendation(Pref.SHOW_BOOKMARK_BAR))
                     .thenReturn(mHasRecommendation);
-            when(mPrefService.isRecommendedPreference(Pref.SHOW_BOOKMARK_BAR))
+            when(mPrefService.isFollowingRecommendation(Pref.SHOW_BOOKMARK_BAR))
                     .thenReturn(mIsFromRecommendation);
         }
     }
@@ -127,13 +123,7 @@ public class BookmarkBarUtilsTest {
 
         UserPrefsJni.setInstanceForTesting(mUserPrefsJni);
 
-        mProfileProviderSupplier = new ObservableSupplierImpl<>(mProfileProvider);
-
-        // Explicitly override FeatureParam for consistency.
-        FeatureOverrides.Builder overrides = FeatureOverrides.newBuilder();
-        overrides =
-                overrides.param(ChromeFeatureList.ANDROID_BOOKMARK_BAR, "show_bookmark_bar", true);
-        overrides.apply();
+        mProfileProviderSupplier = ObservableSuppliers.createNonNull(mProfileProvider);
     }
 
     @After
@@ -147,17 +137,17 @@ public class BookmarkBarUtilsTest {
     public void testIsBookmarkBarManagedByPolicy() {
         assertFalse(
                 "Should be false for null profile.",
-                BookmarkBarUtils.isBookmarkBarManagedByPolicy(null));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarManagedByPolicy(null));
 
         when(mPrefService.isManagedPreference(Pref.SHOW_BOOKMARK_BAR)).thenReturn(true);
         assertTrue(
                 "Should be true when preference is managed.",
-                BookmarkBarUtils.isBookmarkBarManagedByPolicy(mProfile));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarManagedByPolicy(mProfile));
 
         when(mPrefService.isManagedPreference(Pref.SHOW_BOOKMARK_BAR)).thenReturn(false);
         assertFalse(
                 "Should be false when preference is not managed.",
-                BookmarkBarUtils.isBookmarkBarManagedByPolicy(mProfile));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarManagedByPolicy(mProfile));
     }
 
     @Test
@@ -165,17 +155,17 @@ public class BookmarkBarUtilsTest {
     public void testIsBookmarkBarRecommended() {
         assertFalse(
                 "Should be false for null profile.",
-                BookmarkBarUtils.isBookmarkBarRecommended(null));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarRecommended(null));
 
         when(mPrefService.hasRecommendation(Pref.SHOW_BOOKMARK_BAR)).thenReturn(true);
         assertTrue(
                 "Should be true when pref service has a recommendation.",
-                BookmarkBarUtils.isBookmarkBarRecommended(mProfile));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarRecommended(mProfile));
 
         when(mPrefService.hasRecommendation(Pref.SHOW_BOOKMARK_BAR)).thenReturn(false);
         assertFalse(
                 "Should be false when pref service has no recommendation.",
-                BookmarkBarUtils.isBookmarkBarRecommended(mProfile));
+                BookmarkBarUtils.isUserPrefsShowBookmarkBarRecommended(mProfile));
     }
 
     @Test
@@ -212,7 +202,7 @@ public class BookmarkBarUtilsTest {
         // Sets the shadow SharedPref (a simple hashmap in memory) to disabled and mSetting (pref
         // service simulation) variable to false.
         BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                mProfile, /* enabled= */ false, /* fromKeyboardShortcut= */ false);
+                /* enabled= */ false, /* fromKeyboardShortcut= */ false);
 
         // Simulates the policy configuration.
         new BookmarkBarPolicyBuilder()
@@ -226,11 +216,35 @@ public class BookmarkBarUtilsTest {
                 "Should be false when user overrides recommendation to off.",
                 BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
 
-        // Case 5: No policies, user preference is on.
+        // Case 5: Recommended policy exists (toggle off) and user has not set a preference.
+        ContextUtils.getAppSharedPreferences().edit().clear().apply();
+        mSetting.set(false); // mock mPrefService.getBoolean(Pref.SHOW_BOOKMARK_BAR)
+        new BookmarkBarPolicyBuilder()
+                .setManaged(/* isManaged= */ false, /* value= */ false)
+                .setRecommended(/* hasRecommendation= */ true, /* isFromRecommendation= */ true)
+                .build();
+        assertFalse(
+                "Should be false when value is from recommendation (off).",
+                BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
+
+        // Case 6: Recommended policy exists (toggle off) but user has overridden it to on.
+        BookmarkBarUtils.setDevicePrefShowBookmarksBar(
+                /* enabled= */ true, /* fromKeyboardShortcut= */ false);
+
+        new BookmarkBarPolicyBuilder()
+                .setManaged(/* isManaged= */ false, /* value= */ false)
+                .setRecommended(/* hasRecommendation= */ true, /* isFromRecommendation= */ false)
+                .build();
+
+        assertTrue(
+                "Should be true when user overrides recommendation to on.",
+                BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
+
+        // Case 7: No policies, user preference is on.
 
         // Write true to both the shadow SharedPref and mSettings (our PrefService mock).
         BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                mProfile, /* enabled= */ true, /* fromKeyboardShortcut= */ false);
+                /* enabled= */ true, /* fromKeyboardShortcut= */ false);
 
         // Resets configurations and applies default (all false).
         new BookmarkBarPolicyBuilder().build();
@@ -240,7 +254,7 @@ public class BookmarkBarUtilsTest {
                 "Should be true when user pref is on and no policies exist.",
                 BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
 
-        // Case 6: No policies, no user preference, default is on (from setUp).
+        // Case 8: No policies, no user preference, default is off.
 
         // Grabs the shadow SharedPref and wipes it clean, simulating the fresh install state where
         // the user has no preference saved.
@@ -248,9 +262,8 @@ public class BookmarkBarUtilsTest {
 
         new BookmarkBarPolicyBuilder().build();
 
-        // We have the feature param set to true in setUp() in this test file.
-        assertTrue(
-                "Should be true from feature param when no policies or user pref exist.",
+        assertFalse(
+                "Should be false by default when no policies or user pref exist.",
                 BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
     }
 
@@ -263,28 +276,26 @@ public class BookmarkBarUtilsTest {
         // User should not have set any preference yet.
         assertFalse(BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 
-        //  Even though user has not set a device preference, should fallback to true because of the
-        // FeatureParam in setUp().
-        assertTrue(
-                "Initial state should be true due to feature param.",
-                BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
-
-        // First toggle: true -> false.
-        BookmarkBarUtils.toggleDevicePrefShowBookmarksBar(
-                mProfile, /* fromKeyboardShortcut= */ false);
+        // Even though user has not set a device preference, should fall back to false because
+        // that's the default now.
         assertFalse(
-                "Should be false after first toggle.",
+                "Initial state should be false.",
+                BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
+
+        // First toggle: false -> true.
+        BookmarkBarUtils.toggleShowBookmarksBar(mProfile, /* fromKeyboardShortcut= */ false);
+        assertTrue(
+                "Should be true after first toggle.",
                 BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
 
         assertTrue(
-                "After the first toggle, the user should now have set pa reference.",
+                "After the first toggle, the user should now have set preference.",
                 BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 
-        // Second toggle: false -> true.
-        BookmarkBarUtils.toggleDevicePrefShowBookmarksBar(
-                mProfile, /* fromKeyboardShortcut= */ false);
-        assertTrue(
-                "Should be true after second toggle.",
+        // Second toggle: true -> false.
+        BookmarkBarUtils.toggleShowBookmarksBar(mProfile, /* fromKeyboardShortcut= */ false);
+        assertFalse(
+                "Should be false after second toggle.",
                 BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
         assertTrue(
                 "After the second toggle, the user should still have set preference.",
@@ -329,20 +340,7 @@ public class BookmarkBarUtilsTest {
     @Test
     @SmallTest
     @Config(qualifiers = PHONE_QUALIFIER)
-    @DisableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
-    public void testIsFeatureEnabledWhenFlagIsDisabledOnPhone() {
-        mActivityScenarioRule
-                .getScenario()
-                .onActivity(
-                        activity ->
-                                assertFalse(
-                                        BookmarkBarUtils.isDeviceBookmarkBarCompatible(activity)));
-    }
-
-    @Test
-    @SmallTest
-    @Config(qualifiers = PHONE_QUALIFIER)
-    public void testIsFeatureEnabledWhenFlagIsEnabledOnPhone() {
+    public void testIsDeviceBookmarkBarCompatibleOnPhone() {
         mActivityScenarioRule
                 .getScenario()
                 .onActivity(
@@ -354,20 +352,7 @@ public class BookmarkBarUtilsTest {
     @Test
     @SmallTest
     @Config(qualifiers = TABLET_QUALIFIER)
-    @DisableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
-    public void testIsFeatureEnabledWhenFlagIsDisabledOnTablet() {
-        mActivityScenarioRule
-                .getScenario()
-                .onActivity(
-                        activity ->
-                                assertFalse(
-                                        BookmarkBarUtils.isDeviceBookmarkBarCompatible(activity)));
-    }
-
-    @Test
-    @SmallTest
-    @Config(qualifiers = TABLET_QUALIFIER)
-    public void testIsFeatureEnabledWhenFlagIsEnabledOnTablet() {
+    public void testIsDeviceBookmarkBarCompatibleOnTablet() {
         mActivityScenarioRule
                 .getScenario()
                 .onActivity(
@@ -387,20 +372,28 @@ public class BookmarkBarUtilsTest {
                             // Case: feature disallowed and setting disabled.
                             BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
                             BookmarkBarUtils.setSettingEnabledForTesting(false);
-                            assertFalse(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
 
                             // Case: feature disallowed and setting enabled.
                             BookmarkBarUtils.setSettingEnabledForTesting(true);
-                            assertFalse(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
 
                             // Case: feature allowed and setting disabled.
                             BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
                             BookmarkBarUtils.setSettingEnabledForTesting(false);
-                            assertFalse(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
 
                             // Case feature allowed and setting enabled.
                             BookmarkBarUtils.setSettingEnabledForTesting(true);
-                            assertTrue(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertTrue(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
                         });
     }
 
@@ -414,28 +407,51 @@ public class BookmarkBarUtilsTest {
                         activity -> {
                             // Case: feature disallowed.
                             BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(false);
-                            assertFalse(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
 
-                            // Case: feature allowed no device pref (FeatureParam = true).
+                            // Case: feature allowed no device pref (default is false).
                             BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
-                            assertTrue(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
-
-                            // Apply new FeatureParam override.
-                            FeatureOverrides.Builder overrides = FeatureOverrides.newBuilder();
-                            overrides =
-                                    overrides.param(
-                                            ChromeFeatureList.ANDROID_BOOKMARK_BAR,
-                                            "show_bookmark_bar",
-                                            false);
-                            overrides.apply();
-
-                            // Case: feature allowed no device pref (FeatureParam = false).
-                            assertFalse(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
 
                             // Case: feature allowed explicit device pref
                             BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                                    mProfile, true, /* fromKeyboardShortcut= */ false);
-                            assertTrue(BookmarkBarUtils.isBookmarkBarVisible(activity, mProfile));
+                                    true, /* fromKeyboardShortcut= */ false);
+                            assertTrue(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
+                        });
+    }
+
+    @Test
+    @SmallTest
+    public void testIsBookmarkBarVisible_XR() {
+        mOverrideContextRule.setIsDesktop(false);
+        mActivityScenarioRule
+                .getScenario()
+                .onActivity(
+                        activity -> {
+                            BookmarkBarUtils.setActivityStateBookmarkBarCompatibleForTesting(true);
+                            BookmarkBarUtils.setDevicePrefShowBookmarksBar(
+                                    true, /* fromKeyboardShortcut= */ false);
+
+                            // Case: XR full space mode is enabled.
+                            assertFalse(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, true));
+
+                            // Case: XR full space mode is disabled.
+                            assertTrue(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
+
+                            // Case: XR supplier is null.
+                            assertTrue(
+                                    BookmarkBarUtils.isBookmarkBarVisible(
+                                            activity, mProfile, false));
                         });
     }
 
@@ -497,10 +513,10 @@ public class BookmarkBarUtilsTest {
         mSetting.set(false);
         assertFalse(BookmarkBarUtils.isUserPrefsShowBookmarksBarEnabled(mProfile));
 
-        BookmarkBarUtils.toggleUserPrefsShowBookmarksBar(mProfile, true);
+        BookmarkBarUtils.toggleShowBookmarksBar(mProfile, true);
         assertTrue(BookmarkBarUtils.isUserPrefsShowBookmarksBarEnabled(mProfile));
 
-        BookmarkBarUtils.toggleUserPrefsShowBookmarksBar(mProfile, false);
+        BookmarkBarUtils.toggleShowBookmarksBar(mProfile, false);
         assertFalse(BookmarkBarUtils.isUserPrefsShowBookmarksBarEnabled(mProfile));
     }
 
@@ -514,15 +530,7 @@ public class BookmarkBarUtilsTest {
         // User should not have set any preference yet.
         assertFalse(BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 
-        // Even though user has not set a device preference, the FeatureParam will make it true.
-        assertTrue(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
-
-        // Apply new FeatureParam override.
-        FeatureOverrides.Builder overrides = FeatureOverrides.newBuilder();
-        overrides =
-                overrides.param(ChromeFeatureList.ANDROID_BOOKMARK_BAR, "show_bookmark_bar", false);
-        overrides.apply();
-
+        // Even though user has not set a device preference, the default is false.
         assertFalse(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
     }
 
@@ -533,8 +541,8 @@ public class BookmarkBarUtilsTest {
         // User should not have set any preference yet.
         assertFalse(BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 
-        // Even though user has not set a device preference, the FeatureParam will make it true.
-        assertTrue(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
+        // Even though user has not set a device preference, the default is false.
+        assertFalse(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder()
@@ -543,8 +551,7 @@ public class BookmarkBarUtilsTest {
                         .expectNoRecords(BookmarkBarUtils.TOGGLED_IN_SETTINGS)
                         .build();
 
-        BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                mProfile, true, /* fromKeyboardShortcut= */ true);
+        BookmarkBarUtils.setDevicePrefShowBookmarksBar(true, /* fromKeyboardShortcut= */ true);
         assertTrue(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
         assertTrue(BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 
@@ -556,8 +563,7 @@ public class BookmarkBarUtilsTest {
                         .expectNoRecords(BookmarkBarUtils.TOGGLED_BY_KEYBOARD_SHORTCUT)
                         .build();
 
-        BookmarkBarUtils.setDevicePrefShowBookmarksBar(
-                mProfile, false, /* fromKeyboardShortcut= */ false);
+        BookmarkBarUtils.setDevicePrefShowBookmarksBar(false, /* fromKeyboardShortcut= */ false);
         assertFalse(BookmarkBarUtils.isDevicePrefShowBookmarksBarEnabled(mProfile));
         assertTrue(BookmarkBarUtils.hasUserSetDevicePrefShowBookmarksBar());
 

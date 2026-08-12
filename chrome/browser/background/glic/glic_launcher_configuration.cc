@@ -4,11 +4,13 @@
 
 #include "chrome/browser/background/glic/glic_launcher_configuration.h"
 
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
 #include "base/version_info/channel.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/glic/glic_pref_names.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
@@ -21,6 +23,23 @@
 namespace glic {
 
 namespace {
+
+ui::Accelerator GetAcceleratorFromPreference(const char* pref_name) {
+  PrefService* const local_state = g_browser_process->local_state();
+  if (!local_state) {
+    return ui::Accelerator();
+  }
+  const ui::Accelerator hotkey =
+      ui::Command::StringToAccelerator(local_state->GetString(pref_name));
+
+  // Return empty accelerator if an invalid modifier was set.
+  if (!hotkey.IsEmpty() &&
+      ui::Accelerator::MaskOutKeyEventFlags(hotkey.modifiers()) == 0) {
+    return ui::Accelerator();
+  }
+
+  return hotkey;
+}
 
 base::RepeatingClosure& GetCheckDefaultBrowserTestOverride() {
   static base::NoDestructor<base::RepeatingClosure> callback;
@@ -39,6 +58,23 @@ GlicLauncherConfiguration::GlicLauncherConfiguration(Observer* manager)
                                        base::Value(default_hotkey));
     }
 
+    if (base::FeatureList::IsEnabled(features::kGlicHotkeyLocalScope) &&
+        !local_state->GetBoolean(prefs::kGlicHotkeyGlobalScopeMigrated)) {
+      std::string hotkey_str =
+          local_state->GetString(prefs::kGlicLauncherHotkey);
+      bool is_default_or_empty = hotkey_str.empty();
+      if (!is_default_or_empty) {
+        const base::Value* default_value =
+            local_state->GetDefaultPrefValue(prefs::kGlicLauncherHotkey);
+        if (default_value && default_value->GetString() == hotkey_str) {
+          is_default_or_empty = true;
+        }
+      }
+      local_state->SetBoolean(prefs::kGlicHotkeyGlobalScopeEnabled,
+                              !is_default_or_empty);
+      local_state->SetBoolean(prefs::kGlicHotkeyGlobalScopeMigrated, true);
+    }
+
     pref_registrar_.Init(local_state);
     pref_registrar_.Add(
         prefs::kGlicLauncherEnabled,
@@ -46,6 +82,16 @@ GlicLauncherConfiguration::GlicLauncherConfiguration(Observer* manager)
                             base::Unretained(this)));
     pref_registrar_.Add(
         prefs::kGlicLauncherHotkey,
+        base::BindRepeating(
+            &GlicLauncherConfiguration::OnGlobalHotkeyPrefChanged,
+            base::Unretained(this)));
+    pref_registrar_.Add(
+        prefs::kGlicSelectionHotkey,
+        base::BindRepeating(
+            &GlicLauncherConfiguration::OnGlobalHotkeyPrefChanged,
+            base::Unretained(this)));
+    pref_registrar_.Add(
+        prefs::kGlicHotkeyGlobalScopeEnabled,
         base::BindRepeating(
             &GlicLauncherConfiguration::OnGlobalHotkeyPrefChanged,
             base::Unretained(this)));
@@ -57,6 +103,12 @@ GlicLauncherConfiguration::~GlicLauncherConfiguration() = default;
 // static
 bool GlicLauncherConfiguration::IsEnabled(bool* is_default_value) {
   PrefService* const pref_service = g_browser_process->local_state();
+  if (!pref_service) {
+    if (is_default_value) {
+      *is_default_value = false;
+    }
+    return false;
+  }
   if (is_default_value) {
     *is_default_value =
         pref_service->FindPreference(prefs::kGlicLauncherEnabled)
@@ -67,31 +119,16 @@ bool GlicLauncherConfiguration::IsEnabled(bool* is_default_value) {
 }
 
 // static
-ui::Accelerator GlicLauncherConfiguration::GetGlobalHotkey() {
-  const ui::Accelerator hotkey = ui::Command::StringToAccelerator(
-      g_browser_process->local_state()->GetString(prefs::kGlicLauncherHotkey));
-
-  // Return empty accelerator if an invalid modifier was set.
-  if (!hotkey.IsEmpty() &&
-      ui::Accelerator::MaskOutKeyEventFlags(hotkey.modifiers()) == 0) {
-    return ui::Accelerator();
-  }
-
-  return hotkey;
+ui::Accelerator GlicLauncherConfiguration::GetToggleHotkey() {
+  return GetAcceleratorFromPreference(prefs::kGlicLauncherHotkey);
 }
 
 // static
-ui::Accelerator GlicLauncherConfiguration::GetDefaultHotkey() {
-#if BUILDFLAG(IS_MAC)
-  const ui::EventFlags modifiers = ui::EF_CONTROL_DOWN;
-#elif BUILDFLAG(IS_CHROMEOS)
-  // This is the search key on ChromeOS keyboard.
-  const ui::EventFlags modifiers = ui::EF_COMMAND_DOWN;
-#else
-  const ui::EventFlags modifiers = ui::EF_ALT_DOWN;
-#endif
-
-  return ui::Accelerator(ui::KeyboardCode::VKEY_G, modifiers);
+ui::Accelerator GlicLauncherConfiguration::GetSelectionHotkey() {
+  if (!base::FeatureList::IsEnabled(features::kGlicCaptureRegion)) {
+    return ui::Accelerator();
+  }
+  return GetAcceleratorFromPreference(prefs::kGlicSelectionHotkey);
 }
 
 // static
@@ -144,7 +181,7 @@ void GlicLauncherConfiguration::OnEnabledPrefChanged() {
 }
 
 void GlicLauncherConfiguration::OnGlobalHotkeyPrefChanged() {
-  manager_->OnGlobalHotkeyChanged(GetGlobalHotkey());
+  manager_->OnGlobalHotkeyChanged();
 }
 
 }  // namespace glic

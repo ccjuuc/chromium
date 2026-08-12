@@ -9,6 +9,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -22,6 +23,7 @@
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/timer/elapsed_timer.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/login/configuration_keys.h"
 #include "chrome/browser/ash/login/enrollment/enrollment_uma.h"
 #include "chrome/browser/ash/login/enrollment/timebound_user_context_holder.h"
@@ -38,8 +40,6 @@
 #include "chrome/browser/ash/policy/enrollment/enrollment_status.h"
 #include "chrome/browser/ash/policy/handlers/tpm_auto_update_mode_policy_handler.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/webui_login_view.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
@@ -53,6 +53,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/user_manager/user_manager.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/chromeos/devicetype_utils.h"
 
 namespace ash {
@@ -90,14 +91,6 @@ constexpr char kUserActionUsingSamlApi[] = "using-saml-api";
 
 // Max number of retries to check install attributes state.
 constexpr int kMaxInstallAttributesStateCheckRetries = 60;
-
-// Returns the manager of the domain (either the domain name or the email of the
-// admin of the domain) after enrollment, or an empty string.
-std::string GetEnterpriseDomainManager() {
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  return connector->GetEnterpriseDomainManager();
-}
 
 bool IsOnEnrollmentScreen() {
   return LoginDisplayHost::default_host()->GetOobeUI()->current_screen() ==
@@ -143,19 +136,26 @@ EnrollmentScreen* EnrollmentScreen::Get(ScreenManager* manager) {
       manager->GetScreen(EnrollmentScreenView::kScreenId));
 }
 
-EnrollmentScreen::EnrollmentScreen(base::WeakPtr<EnrollmentScreenView> view,
-                                   ErrorScreen* error_screen,
-                                   const ScreenExitCallback& exit_callback)
+EnrollmentScreen::EnrollmentScreen(
+    PrefService* local_state,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    base::WeakPtr<EnrollmentScreenView> view,
+    ErrorScreen* error_screen,
+    const ScreenExitCallback& exit_callback)
     : BaseScreen(EnrollmentScreenView::kScreenId, OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
       view_(std::move(view)),
       error_screen_(error_screen),
       exit_callback_(exit_callback),
-      tpm_updater_(base::BindRepeating([]() {
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetTPMAutoUpdateModePolicyHandler()
-            ->UpdateOnEnrollmentIfNeeded();
-      })),
+      tpm_updater_(base::BindRepeating(
+          [](const policy::BrowserPolicyConnectorAsh* connector) {
+            connector->GetTPMAutoUpdateModePolicyHandler()
+                ->UpdateOnEnrollmentIfNeeded();
+          },
+          browser_policy_connector_ash)),
       histogram_helper_(
           ErrorScreensHistogramHelper::ErrorParentScreen::kEnrollment) {
   retry_policy_.num_errors_to_ignore = 0;
@@ -174,7 +174,7 @@ EnrollmentScreen::EnrollmentScreen(base::WeakPtr<EnrollmentScreenView> view,
 EnrollmentScreen::~EnrollmentScreen() {
   scoped_network_observation_.Reset();
   DCHECK(!enrollment_launcher_ || g_browser_process->IsShuttingDown() ||
-         browser_shutdown::IsTryingToQuit() ||
+         ash::BrowserController::GetInstance()->IsTryingToQuit() ||
          DBusThreadManager::Get()->IsUsingFakes());
 }
 
@@ -210,7 +210,7 @@ void EnrollmentScreen::SetConfig() {
   effective_config_ = prescribed_config_;
   if (current_auth_ == AUTH_OAUTH &&
       effective_config_.is_mode_with_manual_fallback()) {
-    effective_config_ = effective_config_.GetManualFallbackConfig();
+    effective_config_ = effective_config_.GetManualFallbackConfig().value();
   }
   // TODO(crbug.com/40805389): Logging as "WARNING" to make sure it's preserved
   // in the logs.
@@ -235,8 +235,10 @@ bool EnrollmentScreen::AdvanceToNextAuth() {
 
 void EnrollmentScreen::CreateEnrollmentLauncher() {
   if (!enrollment_launcher_) {
-    enrollment_launcher_ = EnrollmentLauncher::Create(this, effective_config_,
-                                                      enrolling_user_domain_);
+    enrollment_launcher_ = EnrollmentLauncher::Create(
+        &local_state_.get(), shared_url_loader_factory_,
+        &browser_policy_connector_ash_.get(), this, effective_config_,
+        enrolling_user_domain_);
   }
 }
 
@@ -302,7 +304,9 @@ void EnrollmentScreen::UpdateFlowType() {
     return;
   }
 
-  const bool cfm = policy::EnrollmentRequisitionManager::IsMeetDevice();
+  const bool cfm =
+      policy::EnrollmentRequisitionManager::IsMeetDevice(local_state_.get());
+  const bool is_squid = policy::EnrollmentRequisitionManager::IsSquidDevice();
   if (cfm) {
     view_->SetFlowType(EnrollmentScreenView::FlowType::kCFM);
     view_->SetGaiaButtonsType(EnrollmentScreenView::GaiaButtonsType::kDefault);
@@ -316,6 +320,10 @@ void EnrollmentScreen::UpdateFlowType() {
         WizardContext::EnrollmentPreference::kKiosk) {
       view_->SetGaiaButtonsType(
           EnrollmentScreenView::GaiaButtonsType::kKioskPreferred);
+    } else if (is_squid) {
+      // Use default Gaia buttons for squid devices to match cfm.
+      view_->SetGaiaButtonsType(
+          EnrollmentScreenView::GaiaButtonsType::kDefault);
     } else {
       view_->SetGaiaButtonsType(
           EnrollmentScreenView::GaiaButtonsType::kEnterprisePreferred);
@@ -599,7 +607,7 @@ void EnrollmentScreen::OnCancel() {
 }
 
 void EnrollmentScreen::OnConfirmationClosed() {
-  StartupUtils::MarkEulaAccepted();
+  StartupUtils::MarkEulaAccepted(local_state_.get());
 
   // TODO(crbug.com/40805389): Logging as "WARNING" to make sure it's preserved
   // in the logs.
@@ -661,7 +669,11 @@ void EnrollmentScreen::OnDeviceEnrolled() {
   enrollment_succeeded_ = true;
   // Some info to be shown on the success screen.
   if (view_) {
-    view_->SetEnterpriseDomainInfo(GetEnterpriseDomainManager(),
+    // The manager of the domain (either the domain name or the email of the
+    // admin of the domain) after enrollment, or an empty string.
+    std::string enterprise_domain_manager =
+        browser_policy_connector_ash_->GetEnterpriseDomainManager();
+    view_->SetEnterpriseDomainInfo(enterprise_domain_manager,
                                    ui::GetChromeOSDeviceName());
   }
 
@@ -676,7 +688,9 @@ void EnrollmentScreen::OnIdentifierEntered(const std::string& email) {
   auto callback = base::BindOnce(&EnrollmentScreen::OnAccountStatusFetched,
                                  base::Unretained(this), email);
   status_checker_.reset();
-  status_checker_ = std::make_unique<AccountStatusCheckFetcher>(email);
+  status_checker_ = std::make_unique<AccountStatusCheckFetcher>(
+      shared_url_loader_factory_,
+      browser_policy_connector_ash_->device_management_service(), email);
   status_checker_->Fetch(std::move(callback),
                          /*fetch_enrollment_nudge_policy=*/false);
 }
@@ -725,10 +739,12 @@ void EnrollmentScreen::OnDeviceAttributeUpdatePermission(bool granted) {
   // Show attribute prompt screen
   if (granted && !WizardController::skip_enrollment_prompts_for_testing()) {
     StartupUtils::MarkDeviceRegistered(
+        local_state_.get(),
         base::BindOnce(&EnrollmentScreen::ShowAttributePromptScreen,
                        weak_ptr_factory_.GetWeakPtr()));
   } else {
     StartupUtils::MarkDeviceRegistered(
+        local_state_.get(),
         base::BindOnce(&EnrollmentScreen::ShowEnrollmentStatusOnSuccess,
                        weak_ptr_factory_.GetWeakPtr()));
   }
@@ -737,10 +753,9 @@ void EnrollmentScreen::OnDeviceAttributeUpdatePermission(bool granted) {
 void EnrollmentScreen::OnDeviceAttributeUploadCompleted(bool success) {
   if (success) {
     // If the device attributes have been successfully uploaded, fetch policy.
-    policy::BrowserPolicyConnectorAsh* connector =
-        g_browser_process->platform_part()->browser_policy_connector_ash();
-    connector->GetDeviceCloudPolicyManager()->core()->RefreshSoon(
-        policy::PolicyFetchReason::kDeviceEnrollment);
+    browser_policy_connector_ash_->GetDeviceCloudPolicyManager()
+        ->core()
+        ->RefreshSoon(policy::PolicyFetchReason::kDeviceEnrollment);
     if (view_) {
       view_->ShowEnrollmentStatus(policy::EnrollmentStatus::ForEnrollmentCode(
           policy::EnrollmentStatus::Code::kSuccess));
@@ -752,10 +767,8 @@ void EnrollmentScreen::OnDeviceAttributeUploadCompleted(bool success) {
 }
 
 void EnrollmentScreen::ShowAttributePromptScreen() {
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
   policy::DeviceCloudPolicyManagerAsh* policy_manager =
-      connector->GetDeviceCloudPolicyManager();
+      browser_policy_connector_ash_->GetDeviceCloudPolicyManager();
 
   std::string asset_id;
   std::string location;
@@ -844,7 +857,7 @@ void EnrollmentScreen::OnBrowserRestart() {
   }
 }
 
-void EnrollmentScreen::OnUserAction(const base::Value::List& args) {
+void EnrollmentScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionCancelTPMCheck) {
     OnCancel();
@@ -901,6 +914,8 @@ void EnrollmentScreen::SetNetworkStateForTesting(const NetworkState* state) {
 // should be refactored in the future.
 void EnrollmentScreen::UpdateStateInternal(NetworkError::ErrorReason reason,
                                            bool force_update) {
+  CHECK_NE(reason, NetworkError::ERROR_REASON_FRAME_ERROR);
+
   if (!force_update && !IsOnEnrollmentScreen() &&
       !IsEnrollmentScreenHiddenByError()) {
     return;
@@ -914,7 +929,6 @@ void EnrollmentScreen::UpdateStateInternal(NetworkError::ErrorReason reason,
   const bool is_online = (state == NetworkStateInformer::ONLINE);
   const bool is_behind_captive_portal =
       (state == NetworkStateInformer::CAPTIVE_PORTAL);
-  const bool is_frame_error = reason == NetworkError::ERROR_REASON_FRAME_ERROR;
 
   LOG(WARNING) << "EnrollmentScreen::UpdateStateInternal(): "
                << "state=" << state << ", "
@@ -924,27 +938,21 @@ void EnrollmentScreen::UpdateStateInternal(NetworkError::ErrorReason reason,
     error_screen_->HideCaptivePortal();
   }
 
-  if (is_frame_error) {
-    LOG(WARNING) << "Retry page load";
-    // TODO(rsorokin): Too many consecutive reloads.
-    view_->ReloadSigninScreen();
-  }
-
-  if (!is_online || is_frame_error) {
-    SetupAndShowOfflineMessage(state, reason);
-  } else {
+  if (is_online) {
     HideOfflineMessage(state, reason);
+  } else {
+    SetupAndShowOfflineMessage(state, reason);
   }
 }
 
 void EnrollmentScreen::SetupAndShowOfflineMessage(
     NetworkStateInformer::State state,
     NetworkError::ErrorReason reason) {
+  CHECK_NE(reason, NetworkError::ERROR_REASON_FRAME_ERROR);
   const std::string network_path = network_state_informer_->network_path();
   const bool is_behind_captive_portal =
       state == NetworkStateInformer::CAPTIVE_PORTAL;
   const bool is_proxy_error = NetworkStateInformer::IsProxyError(state, reason);
-  const bool is_frame_error = reason == NetworkError::ERROR_REASON_FRAME_ERROR;
 
   if (is_proxy_error) {
     error_screen_->SetErrorState(NetworkError::ERROR_STATE_PROXY,
@@ -962,11 +970,6 @@ void EnrollmentScreen::SetupAndShowOfflineMessage(
         NetworkStateInformer::GetNetworkName(network_path);
     error_screen_->SetErrorState(NetworkError::ERROR_STATE_PORTAL,
                                  network_name);
-  } else if (is_frame_error) {
-    // TODO(b/249996052): Clean up dead code, this method is never called with
-    // `NetworkError::ERROR_REASON_FRAME_ERROR`.
-    error_screen_->SetErrorState(NetworkError::ERROR_STATE_LOADING_TIMEOUT,
-                                 std::string());
   } else {
     error_screen_->SetErrorState(NetworkError::ERROR_STATE_OFFLINE,
                                  std::string());
@@ -1027,7 +1030,8 @@ void EnrollmentScreen::MaybeStoreUserContextInWizardContext() {
   // Make sure we aren't overwriting any existing information.
   CHECK(!wizard_context->user_context);
   wizard_context->timebound_user_context_holder =
-      std::make_unique<TimeboundUserContextHolder>(std::move(user_context));
+      std::make_unique<TimeboundUserContextHolder>(shared_url_loader_factory_,
+                                                   std::move(user_context));
 
   return;
 }

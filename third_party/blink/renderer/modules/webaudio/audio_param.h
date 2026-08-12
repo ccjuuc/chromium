@@ -32,6 +32,7 @@
 #include <sys/types.h>
 
 #include "base/memory/scoped_refptr.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param_handler.h"
@@ -44,10 +45,9 @@
 
 namespace blink {
 
-class V8AutomationRate;
-
 // AudioParam class represents web-exposed AudioParam interface.
-class AudioParam final : public ScriptWrappable, public InspectorHelperMixin {
+class MODULES_EXPORT AudioParam final : public ScriptWrappable,
+                                        public InspectorHelperMixin {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -56,7 +56,7 @@ class AudioParam final : public ScriptWrappable, public InspectorHelperMixin {
       const String& parent_uuid,
       AudioParamHandler::AudioParamType,
       double default_value,
-      AudioParamHandler::AutomationRate rate,
+      V8AutomationRate::Enum rate,
       AudioParamHandler::AutomationRateMode rate_mode,
       float min_value = -std::numeric_limits<float>::max(),
       float max_value = std::numeric_limits<float>::max());
@@ -65,7 +65,7 @@ class AudioParam final : public ScriptWrappable, public InspectorHelperMixin {
              const String& parent_uuid,
              AudioParamHandler::AudioParamType,
              double default_value,
-             AudioParamHandler::AutomationRate rate,
+             V8AutomationRate::Enum rate,
              AudioParamHandler::AutomationRateMode rate_mode,
              float min,
              float max);

@@ -18,7 +18,7 @@
 namespace content {
 
 class PrefetchContainer;
-class PrefetchServingPageMetricsContainer;
+class PrefetchService;
 class ServiceWorkerMainResourceHandle;
 
 using PrefetchCompleteCallbackForTesting =
@@ -33,9 +33,7 @@ class CONTENT_EXPORT PrefetchURLLoaderInterceptor final
       base::WeakPtr<ServiceWorkerMainResourceHandle>
           service_worker_handle_for_navigation,
       FrameTreeNodeId frame_tree_node_id,
-      std::optional<blink::DocumentToken> initiator_document_token,
-      base::WeakPtr<PrefetchServingPageMetricsContainer>
-          serving_page_metrics_container);
+      std::optional<blink::DocumentToken> initiator_document_token);
   ~PrefetchURLLoaderInterceptor() override;
 
   PrefetchURLLoaderInterceptor(const PrefetchURLLoaderInterceptor&) = delete;
@@ -63,7 +61,8 @@ class CONTENT_EXPORT PrefetchURLLoaderInterceptor final
   // from `PrefetchService` and then goes through other checks in
   // `PrefetchUrlLoaderHelper`.
   // The |get_prefetch_callback| is called with this associated prefetch.
-  void GetPrefetch(const GURL& url,
+  void GetPrefetch(PrefetchService& prefetch_service,
+                   const GURL& url,
                    base::OnceCallback<void(PrefetchServingHandle)>
                        get_prefetch_callback) const;
 
@@ -91,10 +90,6 @@ class CONTENT_EXPORT PrefetchURLLoaderInterceptor final
   // https://wicg.github.io/nav-speculation/prefetch.html
   const std::optional<blink::DocumentToken> initiator_document_token_;
 
-  // The `PrefetchServingPageMetricsContainer` associated with the current
-  // navigation and to be set to the selected `PrefetchContainer` if any.
-  base::WeakPtr<PrefetchServingPageMetricsContainer>
-      serving_page_metrics_container_;
 
   // Called once |this| has decided whether to intercept or not intercept the
   // navigation.

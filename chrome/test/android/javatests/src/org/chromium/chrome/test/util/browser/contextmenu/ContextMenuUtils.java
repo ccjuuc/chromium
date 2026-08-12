@@ -157,19 +157,6 @@ public class ContextMenuUtils {
      * @param expectedIntentPackage If firing an external intent the expected package name of the
      *     target.
      */
-    public static void selectAlreadyOpenedContextMenuChipWithExpectedIntent(
-            Instrumentation instrumentation,
-            Activity expectedActivity,
-            ContextMenuCoordinator menuCoordinator,
-            String openerDOMNodeId,
-            final int itemId,
-            String expectedIntentPackage)
-            throws TimeoutException {
-        Assert.assertNotNull("Menu coordinator was not provided.", menuCoordinator);
-
-        selectAlreadyOpenedContextMenuChip(
-                instrumentation, expectedActivity, menuCoordinator, itemId, expectedIntentPackage);
-    }
 
     /**
      * Long presses to open and selects an item from a context menu.
@@ -235,7 +222,15 @@ public class ContextMenuUtils {
         selectOpenContextMenuItem(instrumentation, activity, menuCoordinator, itemId);
     }
 
-    private static void selectOpenContextMenuItem(
+    /**
+     * Selects an item from an already open context menu.
+     *
+     * @param instrumentation Instrumentation module used for executing test behavior.
+     * @param activity The activity to assert for gaining focus after click or null.
+     * @param menuCoordinator The menu coordinator which manages the context menu.
+     * @param itemId The context menu item ID to select.
+     */
+    public static void selectOpenContextMenuItem(
             Instrumentation instrumentation,
             final Activity activity,
             final ContextMenuCoordinator menuCoordinator,
@@ -243,7 +238,18 @@ public class ContextMenuUtils {
         selectOpenContextMenuItem(instrumentation, activity, menuCoordinator, itemId, null);
     }
 
-    private static void selectOpenContextMenuItem(
+    /**
+     * Selects an item from an already open context menu asserting that an intent will be sent with
+     * a specific package name.
+     *
+     * @param instrumentation Instrumentation module used for executing test behavior.
+     * @param expectedActivity The activity to assert for gaining focus after click or null.
+     * @param menuCoordinator The menu coordinator which manages the context menu.
+     * @param itemId The context menu item ID to select.
+     * @param expectedIntentPackage If firing an external intent the expected package name of the
+     *     target.
+     */
+    public static void selectOpenContextMenuItem(
             Instrumentation instrumentation,
             final Activity expectedActivity,
             final ContextMenuCoordinator menuCoordinator,
@@ -254,30 +260,6 @@ public class ContextMenuUtils {
         }
 
         instrumentation.runOnMainSync(() -> menuCoordinator.clickListItemForTesting(itemId));
-
-        if (expectedActivity != null) {
-            CriteriaHelper.pollInstrumentationThread(expectedActivity::hasWindowFocus);
-        }
-
-        if (expectedIntentPackage != null) {
-            // This line must only execute after all test behavior has completed
-            // or it will intefere with the expected behavior.
-            intended(IntentMatchers.hasPackage(expectedIntentPackage));
-            Intents.release();
-        }
-    }
-
-    private static void selectAlreadyOpenedContextMenuChip(
-            Instrumentation instrumentation,
-            final Activity expectedActivity,
-            final ContextMenuCoordinator menuCoordinator,
-            final int itemId,
-            final String expectedIntentPackage) {
-        if (expectedIntentPackage != null) {
-            Intents.init();
-        }
-
-        instrumentation.runOnMainSync(() -> menuCoordinator.clickChipForTesting());
 
         if (expectedActivity != null) {
             CriteriaHelper.pollInstrumentationThread(expectedActivity::hasWindowFocus);

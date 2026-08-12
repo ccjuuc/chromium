@@ -15,6 +15,7 @@
 #include "net/dns/dns_config.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/public/dns_config_overrides.h"
+#include "net/dns/public/insecure_dns_mode.h"
 
 namespace url {
 
@@ -41,6 +42,21 @@ enum class DnsConfigLocalNameserverState {
   kMaxValue = kLoopbackAndNonLoopback,
 };
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(FallbackFromSecureTransactionPreferredReason)
+enum class FallbackFromSecureTransactionPreferredReason {
+  kFallbackNotPreferred = 0,
+  kFallbackPreferredCannotUseSecureDns = 1,
+  kFallbackPreferredCanaryDomainCheckPending = 2,
+  kFallbackPreferredCanaryDomainCheckNegative = 3,
+  kFallbackPreferredNoAvailableDohServers = 4,
+  // kFallbackPreferredDohFallbackUpgradeNotAllowed = 5,
+  // kFallbackPreferredDohFallbackExperimentDisabled = 6,
+  kMaxValue = kFallbackPreferredNoAvailableDohServers,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:FallbackFromSecureTransactionPreferredReason)
+
 // Entry point for HostResolverManager to interact with the built-in async
 // resolver, as implemented by DnsTransactionFactory. Manages configuration and
 // status of the resolver.
@@ -56,12 +72,12 @@ class NET_EXPORT DnsClient {
   virtual bool CanUseSecureDnsTransactions() const = 0;
 
   // Returns true if the DnsClient is able and allowed to make insecure DNS
-  // transactions. If false, insecure transactions should not be created. Will
-  // always be false unless SetInsecureEnabled(true) has been called.
+  // transactions. If false, insecure transactions should not be created.
   virtual bool CanUseInsecureDnsTransactions() const = 0;
   virtual bool CanQueryAdditionalTypesViaInsecureDns() const = 0;
-  virtual void SetInsecureEnabled(bool enabled,
+  virtual void SetInsecureEnabled(InsecureDnsMode mode,
                                   bool additional_types_enabled) = 0;
+  virtual InsecureDnsMode GetInsecureDnsMode() const = 0;
 
   // When true, DoH should not be used in AUTOMATIC mode since no DoH servers
   // have a successful probe state.
@@ -114,7 +130,7 @@ class NET_EXPORT DnsClient {
   // Return the effective DNS configuration as a value that can be recorded in
   // the NetLog. This also synthesizes interpretative data to the Value, e.g.
   // whether secure and insecure transactions are enabled.
-  virtual base::Value::Dict GetDnsConfigAsValueForNetLog() const = 0;
+  virtual base::DictValue GetDnsConfigAsValueForNetLog() const = 0;
 
   virtual std::optional<DnsConfig> GetSystemConfigForTesting() const = 0;
   virtual DnsConfigOverrides GetConfigOverridesForTesting() const = 0;

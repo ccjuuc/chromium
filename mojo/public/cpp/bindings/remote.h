@@ -6,6 +6,7 @@
 #define MOJO_PUBLIC_CPP_BINDINGS_REMOTE_H_
 
 #include <cstdint>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -22,6 +23,8 @@
 #include "mojo/public/cpp/system/message_pipe.h"
 
 namespace mojo {
+
+class MessageFilter;
 
 // A Remote is used to issue Interface method calls to a single connected
 // Receiver or PendingReceiver. The Remote must be bound in order to issue those
@@ -218,11 +221,20 @@ class Remote {
   }
 
   // Similar to the method above, but also specifies a disconnect reason.
-  void ResetWithReason(uint32_t custom_reason, const std::string& description) {
+  void ResetWithReason(uint32_t custom_reason, std::string_view description) {
     if (internal_state_.is_bound()) {
       internal_state_.CloseWithReason(custom_reason, description);
     }
     reset();
+  }
+
+  // Sets the message filter to be notified of each outgoing message before
+  // dispatch. If a filter returns |false| from WillDispatch(), the message is
+  // not dispatched and the pip is closed. Filters cannot be removed once
+  // added and only one can be set.
+  void SetFilter(std::unique_ptr<MessageFilter> filter) {
+    CHECK(is_bound()) << "Remote must be bound before setting the filter";
+    internal_state_.SetFilter(std::move(filter));
   }
 
   // Returns the version of Interface used by this Remote. Defaults to 0 but can

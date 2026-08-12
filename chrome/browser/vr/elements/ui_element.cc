@@ -8,7 +8,6 @@
 #include <limits>
 
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/notreached.h"
 #include "base/numerics/angle_conversions.h"
 #include "base/strings/string_split.h"
@@ -99,7 +98,7 @@ void UiElement::Render(UiElementRenderer* renderer,
   NOTREACHED() << "element: " << DebugName();
 }
 
-void UiElement::Initialize(SkiaSurfaceProvider* provider) {}
+void UiElement::Initialize() {}
 
 bool UiElement::DoBeginFrame(const gfx::Transform& head_pose,
                              bool force_animations_to_completion) {

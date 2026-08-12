@@ -4,35 +4,43 @@
 
 #include "components/autofill/core/browser/metrics/payments/card_unmask_authentication_metrics.h"
 
-#include <string>
+#include <string_view>
 
+#include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
 
 namespace autofill::autofill_metrics {
 
 void LogCvcAuthAttempt(CreditCard::RecordType card_type) {
-  std::string card_type_histogram_string =
+  std::string_view card_type_histogram_string =
       AutofillMetrics::GetHistogramStringForCardType(card_type);
   base::UmaHistogramBoolean(
-      "Autofill.CvcAuth" + card_type_histogram_string + ".Attempt", true);
+      base::StrCat(
+          {"Autofill.CvcAuth", card_type_histogram_string, ".Attempt"}),
+      true);
 }
 
 void LogCvcAuthResult(CreditCard::RecordType card_type, CvcAuthEvent event) {
-  std::string card_type_histogram_string =
+  std::string_view card_type_histogram_string =
       AutofillMetrics::GetHistogramStringForCardType(card_type);
   base::UmaHistogramEnumeration(
-      "Autofill.CvcAuth" + card_type_histogram_string + ".Result", event);
+      base::StrCat({"Autofill.CvcAuth", card_type_histogram_string, ".Result"}),
+      event);
 }
 
 void LogCvcAuthRetryableError(CreditCard::RecordType card_type,
                               CvcAuthEvent event) {
-  std::string card_type_histogram_string =
+  std::string_view card_type_histogram_string =
       AutofillMetrics::GetHistogramStringForCardType(card_type);
   base::UmaHistogramEnumeration(
-      "Autofill.CvcAuth" + card_type_histogram_string + ".RetryableError",
+      base::StrCat(
+          {"Autofill.CvcAuth", card_type_histogram_string, ".RetryableError"}),
       event);
 }
 
@@ -105,9 +113,9 @@ void LogOtpInputDialogResult(CreditCard::RecordType card_type,
                              CardUnmaskChallengeOptionType type) {
   DCHECK_GT(result, OtpInputDialogResult::kUnknown);
   DCHECK_LE(result, OtpInputDialogResult::kMaxValue);
-  std::string temporary_error_shown_suffix = temporary_error_shown
-                                                 ? ".WithPreviousTemporaryError"
-                                                 : ".WithNoTemporaryError";
+  std::string_view temporary_error_shown_suffix =
+      temporary_error_shown ? ".WithPreviousTemporaryError"
+                            : ".WithNoTemporaryError";
   base::UmaHistogramEnumeration(
       base::StrCat({"Autofill.OtpInputDialog",
                     AutofillMetrics::GetHistogramStringForCardType(card_type),
@@ -142,7 +150,7 @@ void LogOtpInputDialogNewOtpRequested(CreditCard::RecordType card_type,
       true);
 }
 
-std::string GetOtpAuthType(CardUnmaskChallengeOptionType type) {
+std::string_view GetOtpAuthType(CardUnmaskChallengeOptionType type) {
   if (type == CardUnmaskChallengeOptionType::kSmsOtp) {
     return "SmsOtp";
   } else if (type == CardUnmaskChallengeOptionType::kEmailOtp) {
@@ -152,7 +160,7 @@ std::string GetOtpAuthType(CardUnmaskChallengeOptionType type) {
 }
 
 void LogRiskBasedAuthAttempt(CreditCard::RecordType card_type) {
-  std::string card_type_histogram_string =
+  std::string_view card_type_histogram_string =
       AutofillMetrics::GetHistogramStringForCardType(card_type);
   base::UmaHistogramBoolean(
       base::StrCat(
@@ -162,7 +170,7 @@ void LogRiskBasedAuthAttempt(CreditCard::RecordType card_type) {
 
 void LogRiskBasedAuthResult(CreditCard::RecordType card_type,
                             RiskBasedAuthEvent event) {
-  std::string card_type_histogram_string =
+  std::string_view card_type_histogram_string =
       AutofillMetrics::GetHistogramStringForCardType(card_type);
   base::UmaHistogramEnumeration(
       base::StrCat(
@@ -173,9 +181,9 @@ void LogRiskBasedAuthResult(CreditCard::RecordType card_type,
 void LogRiskBasedAuthLatency(base::TimeDelta duration,
                              CreditCard::RecordType card_type) {
   base::UmaHistogramLongTimes(
-      "Autofill.RiskBasedAuth" +
-          AutofillMetrics::GetHistogramStringForCardType(card_type) +
-          ".Latency",
+      base::StrCat({"Autofill.RiskBasedAuth",
+                    AutofillMetrics::GetHistogramStringForCardType(card_type),
+                    ".Latency"}),
       duration);
 }
 

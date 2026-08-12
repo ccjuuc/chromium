@@ -25,10 +25,10 @@ public interface ImeAdapter {
 
     /**
      * @param webContents {@link WebContents} object.
-     * @return {@link ImeAdapter} object used for the give WebContents. {@code null} if not
+     * @return {@link ImeAdapter} object used for the given WebContents. {@code null} if not
      *     available.
      */
-    static ImeAdapter fromWebContents(WebContents webContents) {
+    static @Nullable ImeAdapter fromWebContents(WebContents webContents) {
         return ImeAdapterImpl.fromWebContents(webContents);
     }
 
@@ -108,10 +108,11 @@ public interface ImeAdapter {
 
     /**
      * Replace the currently composing text with the given text, and set the new cursor position.
+     *
      * @param text The composing text.
      * @param newCursorPosition The new cursor position around the text.
      */
-    void setComposingTextForTest(final CharSequence text, final int newCursorPosition);
+    void setComposingTextForTest(CharSequence text, int newCursorPosition);
 
     /**
      * Call this when we get result from ResultReceiver passed in calling showSoftInput().
@@ -123,4 +124,24 @@ public interface ImeAdapter {
 
     /** Resets IME adapter and hides the keyboard. This will unblock input connection. */
     void resetAndHideKeyboard();
+
+    /**
+     * Sets whether to allow fullscreen IME when space is limited.
+     *
+     * @param allow True to allow, false to prevent.
+     */
+    void setAllowFullscreenIme(boolean allow);
+
+    /**
+     * Sets whether the soft keyboard should be suppressed. When suppressed, calls to show the soft
+     * keyboard will be blocked, and any active keyboard will be immediately hidden.
+     *
+     * @param suppressed True to suppress the soft keyboard, false to allow it.
+     */
+    void setKeyboardSuppressed(boolean suppressed);
+
+    /**
+     * @return the active {@link InputMethodManagerWrapper} that the ImeAdapter uses.
+     */
+    InputMethodManagerWrapper getInputMethodManagerWrapper();
 }

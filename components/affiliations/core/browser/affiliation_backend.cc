@@ -28,6 +28,7 @@
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/affiliations/core/browser/facet_manager.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace affiliations {
 
@@ -46,8 +47,7 @@ AffiliationBackend::AffiliationBackend(
     const base::TickClock* time_tick_source)
     : task_runner_(task_runner),
       clock_(time_source),
-      tick_clock_(time_tick_source),
-      construction_time_(clock_->Now()) {
+      tick_clock_(time_tick_source) {
   DCHECK_LT(base::Time(), clock_->Now());
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
@@ -179,7 +179,7 @@ void AffiliationBackend::TrimUnusedCache(std::vector<FacetURI> facet_uris) {
 std::vector<GroupedFacets> AffiliationBackend::GetGroupingInfo(
     std::vector<FacetURI> facet_uris) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::unordered_set<std::string> facets_in_response;
+  absl::flat_hash_set<std::string> facets_in_response;
   std::vector<GroupedFacets> result;
 
   for (FacetURI& facet : facet_uris) {
@@ -310,7 +310,7 @@ void AffiliationBackend::ProcessSuccessfulFetch(
     cache_->UpdatePslExtensions(result.psl_extensions);
   }
 
-  auto psl_extensions = base::MakeFlatSet<std::string>(result.psl_extensions);
+  base::flat_set<std::string> psl_extensions(result.psl_extensions);
   result.groupings = MergeRelatedGroups(psl_extensions, result.groupings);
   std::map<std::string, const GroupedFacets*> map_facet_to_group;
   for (const GroupedFacets& grouped_facets : result.groupings) {
@@ -325,10 +325,12 @@ void AffiliationBackend::ProcessSuccessfulFetch(
     affiliation.last_update_time = clock_->Now();
     std::vector<AffiliatedFacetsWithUpdateTime> obsoleted_affiliations;
     GroupedFacets group;
-    if (map_facet_to_group.count(affiliated_facets[0].uri.canonical_spec())) {
+    auto group_it =
+        map_facet_to_group.find(affiliated_facets[0].uri.canonical_spec());
+    if (group_it != map_facet_to_group.end()) {
       // Affiliations are subset of group. So |map_facet_to_group| must hold a
       // vector to the whole group.
-      group = *map_facet_to_group[affiliated_facets[0].uri.canonical_spec()];
+      group = *group_it->second;
     }
     cache_->StoreAndRemoveConflicting(affiliation, group,
                                       &obsoleted_affiliations);
@@ -420,19 +422,6 @@ bool AffiliationBackend::OnCanSendNetworkRequest() {
 void AffiliationBackend::ReportStatistics(size_t requested_facet_uri_count) {
   UMA_HISTOGRAM_COUNTS_100("PasswordManager.AffiliationBackend.FetchSize",
                            requested_facet_uri_count);
-
-  if (last_request_time_.is_null()) {
-    base::TimeDelta delay = clock_->Now() - construction_time_;
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-        "PasswordManager.AffiliationBackend.FirstFetchDelay", delay,
-        base::Seconds(1), base::Days(3), 50);
-  } else {
-    base::TimeDelta delay = clock_->Now() - last_request_time_;
-    UMA_HISTOGRAM_CUSTOM_TIMES(
-        "PasswordManager.AffiliationBackend.SubsequentFetchDelay", delay,
-        base::Seconds(1), base::Days(3), 50);
-  }
-  last_request_time_ = clock_->Now();
 }
 
 }  // namespace affiliations

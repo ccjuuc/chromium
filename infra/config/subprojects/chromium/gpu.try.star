@@ -2,18 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-load("@chromium-luci//builders.star", "builders", "cpu", "os")
+load("@chromium-luci//builders.star", "cpu")
 load("@chromium-luci//gn_args.star", "gn_args")
 load("@chromium-luci//try.star", "try_")
+load("//lib/gpu.star", "gpu")
 load("//lib/siso.star", "siso")
 
 try_.defaults.set(
     bucket = "try",
     executable = "recipe:chromium_trybot",
-    pool = "luci.chromium.try",
-    cores = 8,
-    os = os.LINUX_DEFAULT,
-    cpu = cpu.X86_64,
     build_numbers = True,
     contact_team_email = "chrome-gpu-infra@google.com",
     cq_group = "cq",
@@ -21,10 +18,7 @@ try_.defaults.set(
     experiments = {
         "chromium_tests.resultdb_module": 100,
     },
-    # Max. pending time for builds. CQ considers builds pending >2h as timed
-    # out: http://shortn/_8PaHsdYmlq. Keep this in sync.
     expiration_timeout = 2 * time.hour,
-    service_account = "chromium-try-gpu-builder@chops-service-accounts.iam.gserviceaccount.com",
     siso_project = siso.project.DEFAULT_UNTRUSTED,
     subproject_list_view = "luci.chromium.try",
     task_template_canary_percentage = 5,
@@ -42,27 +36,10 @@ try_.defaults.set(
 # functions for specializing on OS: XXX_builder and XXX_YYY_builder where XXX is
 # the part after the last dot in the builder group and YYY is the OS
 
-def gpu_android_builder(*, name, **kwargs):
-    return try_.builder(
-        name = name,
-        pool = "luci.chromium.gpu.try",
-        builder_group = "tryserver.chromium.android",
-        builderless = True,
-        max_concurrent_builds = 1,
-        os = os.LINUX_DEFAULT,
-        siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
-        ssd = None,
-        **kwargs
-    )
-
-gpu_android_builder(
-    name = "gpu-fyi-try-android-nvidia-shield-tv",
-    mirrors = [
-        "ci/GPU FYI Android arm Builder",
-        "ci/Android FYI Release (NVIDIA Shield TV)",
-    ],
-    gn_args = "ci/GPU FYI Android arm Builder",
-)
+def gpu_android_builder(*args, **kwargs):
+    kwargs.setdefault("builder_group", "tryserver.chromium.android")
+    kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
+    return gpu.try_.linux_manual_builder(*args, **kwargs)
 
 gpu_android_builder(
     name = "gpu-fyi-try-android-q-pixel-2-32",
@@ -148,18 +125,10 @@ gpu_android_builder(
     gn_args = "ci/Android Release (Pixel 2)",
 )
 
-def gpu_chromeos_builder(*, name, **kwargs):
-    return try_.builder(
-        name = name,
-        pool = "luci.chromium.gpu.try",
-        builder_group = "tryserver.chromium.chromiumos",
-        builderless = True,
-        max_concurrent_builds = 1,
-        os = os.LINUX_DEFAULT,
-        siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
-        ssd = None,
-        **kwargs
-    )
+def gpu_chromeos_builder(*args, **kwargs):
+    kwargs.setdefault("builder_group", "tryserver.chromium.chromiumos")
+    kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
+    return gpu.try_.linux_manual_builder(*args, **kwargs)
 
 gpu_chromeos_builder(
     name = "gpu-fyi-try-chromeos-amd64-generic",
@@ -169,18 +138,10 @@ gpu_chromeos_builder(
     gn_args = "ci/ChromeOS FYI Release (amd64-generic)",
 )
 
-def gpu_linux_builder(*, name, **kwargs):
-    return try_.builder(
-        name = name,
-        pool = "luci.chromium.gpu.try",
-        builder_group = "tryserver.chromium.linux",
-        builderless = True,
-        max_concurrent_builds = 1,
-        os = os.LINUX_DEFAULT,
-        siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
-        ssd = None,
-        **kwargs
-    )
+def gpu_linux_builder(*args, **kwargs):
+    kwargs.setdefault("builder_group", "tryserver.chromium.linux")
+    kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
+    return gpu.try_.linux_manual_builder(*args, **kwargs)
 
 gpu_linux_builder(
     name = "gpu-fyi-try-linux-wayland-amd-rel",
@@ -212,6 +173,26 @@ gpu_linux_builder(
 )
 
 gpu_linux_builder(
+    name = "gpu-fyi-try-linux-amd-rx-5500xt-exp",
+    description_html = "Runs release GPU tests on experimental Linux/AMD RX 5500XT configs",
+    mirrors = [
+        "ci/GPU FYI Linux Builder",
+        "ci/Linux FYI Experimental Release (AMD RX 5500XT)",
+    ],
+    gn_args = "ci/GPU FYI Linux Builder",
+)
+
+gpu_linux_builder(
+    name = "gpu-fyi-try-linux-amd-rx-9070xt-exp",
+    description_html = "Runs release GPU tests on experimental Linux/AMD RX 9070XT configs",
+    mirrors = [
+        "ci/GPU FYI Linux Builder",
+        "ci/Linux FYI Experimental Release (AMD RX 9070XT)",
+    ],
+    gn_args = "ci/GPU FYI Linux Builder",
+)
+
+gpu_linux_builder(
     name = "gpu-fyi-try-linux-amd-rx-7600-rel",
     mirrors = [
         "ci/GPU FYI Linux Builder",
@@ -236,16 +217,6 @@ gpu_linux_builder(
         "ci/Linux FYI Experimental Release (AMD 890M)",
     ],
     gn_args = "ci/GPU FYI Linux Builder",
-)
-
-gpu_linux_builder(
-    name = "gpu-fyi-try-linux-intel-arc-140v-exp",
-    mirrors = [
-        "ci/GPU FYI Linux Builder",
-        "ci/Linux FYI Experimental Release (Intel Arc 140V)",
-    ],
-    gn_args = "ci/GPU FYI Linux Builder",
-    execution_timeout = 12 * time.hour,
 )
 
 gpu_linux_builder(
@@ -313,6 +284,16 @@ gpu_linux_builder(
 )
 
 gpu_linux_builder(
+    name = "gpu-fyi-try-linux-nvidia-rtx-5080-exp",
+    description_html = "Runs release GPU tests on experimental Linux/NVIDIA RTX 5080 configs",
+    mirrors = [
+        "ci/GPU FYI Linux Builder",
+        "ci/Linux FYI Experimental Release (NVIDIA RTX 5080)",
+    ],
+    gn_args = "ci/GPU FYI Linux Builder",
+)
+
+gpu_linux_builder(
     name = "gpu-fyi-try-linux-nvidia-tsn",
     mirrors = [
         "ci/Linux FYI GPU TSAN Release",
@@ -343,29 +324,10 @@ gpu_linux_builder(
     ),
 )
 
-def gpu_mac_builder(*, name, **kwargs):
-    kwargs.setdefault("cpu", "arm64")
-    return try_.builder(
-        name = name,
-        builder_group = "tryserver.chromium.mac",
-        builderless = True,
-        cores = None,
-        os = os.MAC_ANY,
-        pool = "luci.chromium.gpu.try",
-        max_concurrent_builds = 1,
-        ssd = None,
-        siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
-        **kwargs
-    )
-
-gpu_mac_builder(
-    name = "gpu-fyi-try-mac-amd-pro-rel",
-    mirrors = [
-        "ci/GPU FYI Mac Builder",
-        "ci/Mac Pro FYI Release (AMD)",
-    ],
-    gn_args = "ci/GPU FYI Mac Builder",
-)
+def gpu_mac_builder(*args, **kwargs):
+    kwargs.setdefault("builder_group", "tryserver.chromium.mac")
+    kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
+    return gpu.try_.mac_manual_builder(*args, **kwargs)
 
 gpu_mac_builder(
     name = "gpu-fyi-try-mac-amd-retina-asan",
@@ -432,6 +394,16 @@ gpu_mac_builder(
         "ci/Mac FYI Release (Apple M1)",
     ],
     gn_args = "ci/GPU FYI Mac arm64 Builder",
+)
+
+gpu_mac_builder(
+    name = "gpu-fyi-try-mac-arm64-apple-m2-asan",
+    description_html = "Runs release GPU tests with ASan enabled on stable Mac/M2 Macbook Pro configs",
+    mirrors = [
+        "ci/GPU FYI Mac arm64 Builder (asan)",
+        "ci/Mac FYI Retina Release ASAN (Apple M2)",
+    ],
+    gn_args = "ci/GPU FYI Mac arm64 Builder (asan)",
 )
 
 gpu_mac_builder(
@@ -520,19 +492,10 @@ gpu_mac_builder(
     gn_args = "ci/GPU Mac Builder (dbg)",
 )
 
-def gpu_win_builder(*, name, **kwargs):
-    return try_.builder(
-        name = name,
-        pool = "luci.chromium.gpu.try",
-        builder_group = "tryserver.chromium.win",
-        builderless = True,
-        max_concurrent_builds = 1,
-        os = os.WINDOWS_ANY,
-        siso_remote_jobs = siso.remote_jobs.LOW_JOBS_FOR_CQ,
-        ssd = builders.with_expiration(True, expiration = 5 * time.minute),
-        free_space = None,
-        **kwargs
-    )
+def gpu_win_builder(*args, **kwargs):
+    kwargs.setdefault("builder_group", "tryserver.chromium.win")
+    kwargs.setdefault("siso_remote_jobs", siso.remote_jobs.LOW_JOBS_FOR_CQ)
+    return gpu.try_.win_manual_builder(*args, **kwargs)
 
 gpu_win_builder(
     name = "gpu-fyi-try-win10-amd-rel-64",
@@ -635,6 +598,16 @@ gpu_win_builder(
 )
 
 gpu_win_builder(
+    name = "gpu-fyi-try-win11-amd-rx-5500xt-exp",
+    description_html = "Runs release GPU tests on experimental Win/AMD RX 5500XT configs",
+    mirrors = [
+        "ci/GPU FYI Win x64 Builder",
+        "ci/Win11 FYI x64 Experimental Release (AMD RX 5500XT)",
+    ],
+    gn_args = "ci/GPU FYI Win x64 Builder",
+)
+
+gpu_win_builder(
     name = "gpu-fyi-try-win11-x64-amd-780m-exp",
     description_html = "Runs release GPU tests on experimental Win/AMD 780M configs",
     mirrors = [
@@ -655,13 +628,13 @@ gpu_win_builder(
 )
 
 gpu_win_builder(
-    name = "gpu-fyi-try-win11-x64-intel-arc-140v-exp",
+    name = "gpu-fyi-try-win11-x64-amd-rx-9070xt-exp",
+    description_html = "Runs release GPU tests on experimental Win/AMD 9070XT configs",
     mirrors = [
         "ci/GPU FYI Win x64 Builder",
-        "ci/Win11 FYI x64 Experimental Release (Intel Arc 140V)",
+        "ci/Win11 FYI x64 Experimental Release (AMD 9070XT)",
     ],
     gn_args = "ci/GPU FYI Win x64 Builder",
-    execution_timeout = 12 * time.hour,
 )
 
 gpu_win_builder(
@@ -675,6 +648,16 @@ gpu_win_builder(
 )
 
 gpu_win_builder(
+    name = "gpu-fyi-try-win11-x64-nvidia-rtx-5080-exp",
+    description_html = "Runs release GPU tests on experimental Win/NVIDIA RTX 5080 configs",
+    mirrors = [
+        "ci/GPU FYI Win x64 Builder",
+        "ci/Win11 FYI x64 Experimental Release (NVIDIA RTX 5080)",
+    ],
+    gn_args = "ci/GPU FYI Win x64 Builder",
+)
+
+gpu_win_builder(
     name = "gpu-fyi-try-win11-nvidia-4070-rel-64",
     description_html = "Runs GPU tests on NVIDIA RTX 4070 Super GPUs",
     mirrors = [
@@ -682,16 +665,6 @@ gpu_win_builder(
         "ci/Win11 FYI x64 Release (NVIDIA RTX 4070 Super)",
     ],
     gn_args = "ci/GPU FYI Win x64 Builder",
-)
-
-gpu_win_builder(
-    name = "gpu-fyi-try-win11-qualcomm-rel-64",
-    description_html = "Triggers GPU tests on Windows arm64 devices with Adreno 690 GPUs",
-    mirrors = [
-        "ci/GPU FYI Win arm64 Builder",
-        "ci/Win11 FYI arm64 Release (Qualcomm Adreno 690)",
-    ],
-    gn_args = "ci/GPU FYI Win arm64 Builder",
 )
 
 gpu_win_builder(

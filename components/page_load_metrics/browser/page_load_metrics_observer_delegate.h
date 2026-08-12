@@ -9,9 +9,10 @@
 
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
+#include "components/page_load_metrics/browser/interaction_to_next_paint_calculator.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
 #include "components/page_load_metrics/browser/resource_tracker.h"
-#include "components/page_load_metrics/browser/responsiveness_metrics_normalization.h"
 #include "components/page_load_metrics/common/page_end_reason.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/base/scoped_visibility_tracker.h"
@@ -40,9 +41,7 @@ enum class PageVisibility {
 };
 
 // Represents the page's state of prerendering.
-// If the page is previewed, the state starts with kInPreview, and may be
-// transitted to kNoPrerendering after its activation and promotion.
-// If the page is prerendereed, the state starts with kInPrerendering, and may
+// If the page is prerendered, the state starts with kInPrerendering, and may
 // be transmitted to kActivatedNoActivationStart, and kActivated.
 // Otherwise, it sticks on kNoPrerendering.
 //
@@ -50,8 +49,6 @@ enum class PageVisibility {
 enum class PrerenderingState {
   // Not prerenedered
   kNoPrerendering,
-  // Previewed before acitvation and promotion
-  kInPreview,
   // Prerendered before activation
   kInPrerendering,
   // Prerendered and activated, but `PageLoadTiming.activation_start` is not
@@ -116,11 +113,20 @@ class PageLoadMetricsObserverDelegate {
   // The state of index-th restore from the back-forward cache.
   virtual const BackForwardCacheRestore& GetBackForwardCacheRestore(
       size_t index) const = 0;
+  // Get the number of back-forward cache restores recognized thus far.
+  virtual size_t GetNumBackForwardCacheRestores() const = 0;
 
   // True if the page load started in the foreground.
   virtual bool StartedInForeground() const = 0;
   // Page's visibility at activation.
   virtual PageVisibility GetVisibilityAtActivation() const = 0;
+
+  // Returns the navigation scenario classification associated with this page
+  // load.
+  //
+  // Observers query this method to slice metrics based on navigation scenarios
+  // such as browser startup, new window creation, or same-window navigations.
+  virtual NavigationScenario GetNavigationScenario() const = 0;
 
   // True if the page load is a reload of a page that was discarded.
   virtual bool IsReloadAfterDiscard() const = 0;
@@ -196,21 +202,20 @@ class PageLoadMetricsObserverDelegate {
       BfcacheStrategy bfcache_strategy) const = 0;
   virtual const NormalizedCLSData& GetSoftNavigationIntervalNormalizedCLSData()
       const = 0;
-  // Returns normalized responsiveness metrics data. Normalization explained in
+  // Returns Interaction to Next Paint (INP) data. Details in
   // https://web.dev/inp.
-  virtual const ResponsivenessMetricsNormalization&
-  GetResponsivenessMetricsNormalization() const = 0;
+  virtual const InteractionToNextPaintCalculator&
+  GetInteractionToNextPaintCalculator() const = 0;
 
-  virtual const ResponsivenessMetricsNormalization&
-  GetSoftNavigationIntervalResponsivenessMetricsNormalization() const = 0;
+  virtual const InteractionToNextPaintCalculator&
+  GetSoftNavigationIntervalInteractionToNextPaintCalculator() const = 0;
 
-  // InputTiming data accumulated across all frames.
-  virtual const mojom::InputTiming& GetPageInputTiming() const = 0;
   virtual const PageRenderData& GetMainFrameRenderData() const = 0;
   virtual const ui::ScopedVisibilityTracker& GetVisibilityTracker() const = 0;
   virtual const ResourceTracker& GetResourceTracker() const = 0;
   virtual const std::optional<blink::SubresourceLoadMetrics>&
   GetSubresourceLoadMetrics() const = 0;
+  virtual const mojom::FontLoadingMetricsPtr& GetFontLoadingMetrics() const = 0;
 
   // Returns a shared LargestContentfulPaintHandler for page load metrics.
   virtual const LargestContentfulPaintHandler&
@@ -221,11 +226,20 @@ class PageLoadMetricsObserverDelegate {
   virtual const LargestContentfulPaintHandler&
   GetExperimentalLargestContentfulPaintHandler() const = 0;
 
-  // Returns the current soft navigation count - https://bit.ly/soft-navigation
-  // Soft navigations are JS-driven same-document navigations that are using the
-  // history API or the new Navigation API, triggered by a user gesture and
-  // meaningfully modify the DOM, replacing the previous content with new one.
-  virtual mojom::SoftNavigationMetrics& GetSoftNavigationMetrics() const = 0;
+  // Returns the current soft navigation related Largest Contentful Paint info.
+  virtual const ContentfulPaintTimingInfo&
+  GetSoftNavigationLargestContentfulPaint() const = 0;
+
+  // Returns the current soft navigation - Soft navigations are JS-driven
+  // same-document navigations that are using the history API or the new
+  // Navigation API, triggered by a user gesture and meaningfully modify the
+  // DOM, replacing the previous content with new one.
+  // See https://github.com/WICG/soft-navigations for more details.
+  virtual const mojom::SoftNavigationMetrics& GetSoftNavigationMetrics()
+      const = 0;
+
+  // The number of soft navigations that have occurred in the page load.
+  virtual uint64_t GetSoftNavigationCount() const = 0;
 
   // Maps main-frame same-document navigation identified
   // by |same_document_metrics_token| to its UKM source id.

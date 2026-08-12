@@ -6,11 +6,11 @@
 #import "ios/chrome/app/tests_hook.h"
 // clang-format on
 
+#import <algorithm>
 #import <string_view>
 
 #import "base/apple/foundation_util.h"
 #import "base/command_line.h"
-#import "base/containers/contains.h"
 #import "base/files/file_path.h"
 #import "base/files/file_util.h"
 #import "base/logging.h"
@@ -26,7 +26,6 @@
 #import "components/feature_engagement/public/feature_activation.h"
 #import "components/password_manager/core/browser/sharing/fake_recipients_fetcher.h"
 #import "components/password_manager/ios/fake_bulk_leak_check_service.h"
-#import "components/plus_addresses/core/browser/fake_plus_address_service.h"
 #import "components/saved_tab_groups/delegate/tab_group_sync_delegate.h"
 #import "components/saved_tab_groups/internal/saved_tab_group_model.h"
 #import "components/saved_tab_groups/internal/tab_group_sync_coordinator.h"
@@ -39,11 +38,11 @@
 #import "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
 #import "components/sync_device_info/device_info_sync_service.h"
 #import "ios/chrome/browser/aim/model/mock_ios_chrome_aim_eligibility_service.h"
+#import "ios/chrome/browser/composebox/model/mock_ios_contextual_search_service.h"
 #import "ios/chrome/browser/drive/model/test_drive_service.h"
 #import "ios/chrome/browser/flags/chrome_switches.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service.h"
 #import "ios/chrome/browser/optimization_guide/model/optimization_guide_service_factory.h"
-#import "ios/chrome/browser/plus_addresses/model/plus_address_setting_service_factory.h"
 #import "ios/chrome/browser/policy/model/test_platform_policy_provider.h"
 #import "ios/chrome/browser/saved_tab_groups/model/ios_tab_group_sync_delegate.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_local_update_observer.h"
@@ -59,33 +58,13 @@
 #import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/sync/model/data_type_store_service_factory.h"
 #import "ios/chrome/browser/sync/model/device_info_sync_service_factory.h"
+#import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/signin_test_util.h"
 #import "ios/chrome/test/earl_grey/test_switches.h"
 #import "ios/chrome/test/providers/signin/fake_trusted_vault_client_backend.h"
 #import "testing/gmock/include/gmock/gmock.h"
 #import "ui/base/test/ios/ui_image_test_utils.h"
-
-namespace {
-
-// Loads a very simple UILabel with a teapot emoji in it as the main
-// UI for the given window.
-void LoadMinimalAppUIInWindow(UIWindow* window) {
-  UIViewController* viewController = [[UIViewController alloc] init];
-  UILabel* label =
-      [[UILabel alloc] initWithFrame:window.windowScene.screen.bounds];
-  label.text = @"🫖";
-  label.textAlignment = NSTextAlignmentCenter;
-  label.textColor = [UIColor whiteColor];
-  label.backgroundColor = [UIColor darkGrayColor];
-  label.font = [UIFont boldSystemFontOfSize:80];
-  viewController.view = label;
-  window.rootViewController = viewController;
-  [window addSubview:viewController.view];
-  [window makeKeyAndVisible];
-}
-
-}  // namespace
 
 namespace tests_hook {
 
@@ -172,31 +151,29 @@ bool NeverPurgeDiscardedSessionsData() {
   return true;
 }
 
-bool LoadMinimalAppUI() {
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          test_switches::kLoadMinimalAppUI)) {
-    return false;
-  }
-  static bool minimal_ui_loaded = false;
-  if (!minimal_ui_loaded) {
-    NSSet<UIScene*>* scenes = UIApplication.sharedApplication.connectedScenes;
-    for (UIScene* scene in scenes) {
-      UIWindowScene* window_scene = base::apple::ObjCCast<UIWindowScene>(scene);
-      if (!window_scene) {
-        continue;
-      }
-      for (UIWindow* window in window_scene.windows) {
-        if (window.canBecomeKeyWindow) {
-          LoadMinimalAppUIInWindow(window);
-          minimal_ui_loaded = true;
-          return true;
-        };
-      }
-    }
-    // There should have been a window.
-    NOTREACHED();
-  };
-  return true;
+bool ShouldLoadMinimalAppUI() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      test_switches::kLoadMinimalAppUI);
+}
+
+void LoadMinimalAppUI(UIWindow* window) {
+  UIViewController* viewController = [[UIViewController alloc] init];
+  viewController.view.backgroundColor = [UIColor darkGrayColor];
+  UILabel* label = [[UILabel alloc] init];
+  label.text = @"🫖";
+  label.textAlignment = NSTextAlignmentCenter;
+  label.textColor = [UIColor whiteColor];
+  label.font = [UIFont boldSystemFontOfSize:80];
+  label.translatesAutoresizingMaskIntoConstraints = NO;
+  [viewController.view addSubview:label];
+  [NSLayoutConstraint activateConstraints:@[
+    [label.centerXAnchor
+        constraintEqualToAnchor:viewController.view.centerXAnchor],
+    [label.centerYAnchor
+        constraintEqualToAnchor:viewController.view.centerYAnchor],
+  ]];
+  window.rootViewController = viewController;
+  [window makeKeyAndVisible];
 }
 
 policy::ConfigurationPolicyProvider* GetOverriddenPlatformPolicyProvider() {
@@ -341,11 +318,6 @@ GetOverriddenBulkLeakCheckService() {
   return std::make_unique<password_manager::FakeBulkLeakCheckService>();
 }
 
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService() {
-  return std::make_unique<plus_addresses::FakePlusAddressService>();
-}
-
 std::unique_ptr<password_manager::RecipientsFetcher>
 GetOverriddenRecipientsFetcher() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -427,7 +399,7 @@ void DeleteFilesRecursively(NSString* directoryPath) {
 
 void WipeProfileIfRequested(base::span<const char* const> args) {
   static constexpr std::string_view kWipeArg = "-EGTestWipeProfile";
-  if (!base::Contains(args, kWipeArg)) {
+  if (!std::ranges::contains(args, kWipeArg)) {
     return;
   }
 
@@ -471,6 +443,19 @@ std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
     ProfileIOS* profile) {
   return MockIOSChromeAimEligibilityService::CreateTestingProfileService(
       profile);
+}
+
+std::unique_ptr<contextual_search::ContextualSearchService>
+CreateContextualSearchService(ProfileIOS* profile) {
+  return MockIOSContextualSearchService::CreateTestingProfileService(profile);
+}
+
+void InjectFakeTabsInBrowser(Browser* browser) {
+  // No-op for internal EG2 tests.
+}
+
+id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
+  return [[MockReauthenticationModule alloc] init];
 }
 
 }  // namespace tests_hook

@@ -215,19 +215,19 @@ export class PinKeyboardElement extends PinKeyboardElementBase {
     };
   }
 
-  enablePassword: boolean;
-  allowNonDigit: boolean;
-  hasError: boolean;
-  disabled: boolean;
-  passwordElement: HTMLElement|undefined;
-  value: string;
-  enablePlaceholder: boolean;
-  enableVisibilityIcon: boolean;
+  declare enablePassword: boolean;
+  declare allowNonDigit: boolean;
+  declare hasError: boolean;
+  declare disabled: boolean;
+  declare passwordElement: HTMLElement|undefined;
+  declare value: string;
+  declare enablePlaceholder: boolean;
+  declare enableVisibilityIcon: boolean;
 
-  private repeatBackspaceIntervalId_: number;
-  private startAutoBackspaceId_: number;
-  private focused_: boolean;
-  private isPinVisible_: boolean;
+  declare private repeatBackspaceIntervalId_: number;
+  declare private startAutoBackspaceId_: number;
+  declare private focused_: boolean;
+  declare private isPinVisible_: boolean;
 
   override ready(): void {
     super.ready();
@@ -467,13 +467,11 @@ export class PinKeyboardElement extends PinKeyboardElementBase {
       return true;
     }
 
-    // Valid if the key is a number, and shift is not pressed.
-    if ((event.keyCode >= 48 && event.keyCode <= 57) && !event.shiftKey) {
-      return true;
-    }
-
-    // Valid if the key is a numpad number, and shift is not pressed.
-    if ((event.keyCode >= 96 && event.keyCode <= 105) && !event.shiftKey) {
+    // Valid if the key is a digit. This includes both main digit row on the
+    // keyboard as well as digits on the Numpad.
+    // Note that in French/Belgian layouts require using Shift to enter digits.
+    if ((typeof event.key === 'string') && (event.key.length == 1) &&
+        (event.key >= '0' && event.key <= '9')) {
       return true;
     }
 

@@ -41,6 +41,8 @@ interface FindElementImgResult {
   title?: string;
   // The alternative text given with the image.
   alt?: string;
+  // The frame ID of the frame where the context menu was triggered.
+  frameId?: string;
 }
 
 /**
@@ -59,6 +61,8 @@ interface FindElementLinkResult {
   href: string;
   // The inner text of the link.
   innerText?: string;
+  // The frame ID of the frame where the context menu was triggered.
+  frameId?: string;
 }
 
 /**
@@ -80,6 +84,8 @@ interface FindElementTextResult {
   // Note that `innerText` is contained in `surroundingText`.
   surroundingText?: string;
   surroundingTextOffset?: number;
+  // The frame ID of the frame where the context menu was triggered.
+  frameId?: string;
 }
 
 /**
@@ -87,6 +93,8 @@ interface FindElementTextResult {
  */
 interface FindElementFailResult {
   requestId?: string;
+  // The frame ID of the frame where the context menu was triggered.
+  frameId?: string;
 }
 
 type FindElementResult = FindElementImgResult|FindElementLinkResult|
@@ -387,11 +395,14 @@ function processElementForFindElementAtPoint(
 
   // if element is a frame, tell it to respond to this element request
   if (tagName === 'iframe' || tagName === 'frame') {
+    const rect = element.getBoundingClientRect();
+    const absoluteLeft = rect.left + window.pageXOffset;
+    const absoluteTop = rect.top + window.pageYOffset;
     const payload = {
       type: 'org.chromium.contextMenuMessage',
       requestId: requestId,
-      x: centerX - element.offsetLeft,
-      y: centerY - element.offsetTop,
+      x: centerX - absoluteLeft,
+      y: centerY - absoluteTop,
     };
     // The message will not be sent if `targetOrigin` is null or "about:blank",
     // so use * which allows the message to be delievered to the contentWindow
@@ -456,6 +467,7 @@ function isTextElement(node: Node) {
 function sendFindElementAtPointResponse(
     requestId: string, response: FindElementResult): void {
   response.requestId = requestId;
+  response.frameId = gCrWeb.getFrameId();
   sendWebKitMessage('FindElementResultHandler', response);
 }
 
@@ -644,11 +656,11 @@ window.addEventListener('message', function(message) {
   }
 });
 
-const contextMenuAllFrames = new CrWebApi();
+const contextMenuAllFrames = new CrWebApi('contextMenuAllFrames');
 
 contextMenuAllFrames.addFunction(
     'findElementAtPointInPageCoordinates', findElementAtPointInPageCoordinates);
 // For testing only
 contextMenuAllFrames.addFunction('getSurroundingText', getSurroundingText);
 
-gCrWeb.registerApi('contextMenuAllFrames', contextMenuAllFrames);
+gCrWeb.registerApi(contextMenuAllFrames);

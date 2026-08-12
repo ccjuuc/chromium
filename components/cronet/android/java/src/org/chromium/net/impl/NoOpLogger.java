@@ -26,4 +26,17 @@ public final class NoOpLogger extends CronetLogger {
 
     @Override
     public void logCronetTrafficInfo(long cronetEngineId, CronetTrafficInfo trafficInfo) {}
+
+    @Override
+    public void logCronetAdaptiveTrafficAlternateNetworkComputation(
+            CronetSource cronetSource,
+            long numberOfAvailableNetworks,
+            boolean defaultNetworkIsKnown,
+            boolean fallbackNetworkCacheHit) {}
+
+    @Override
+    public void logCronetAdaptiveTrafficTerminated(CronetAdaptiveTrafficTerminatedInfo info) {}
+
+    @Override
+    public void logCronetUmaHistogram(long metricHash, int value, CronetSource source) {}
 }

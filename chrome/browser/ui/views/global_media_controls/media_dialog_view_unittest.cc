@@ -14,21 +14,19 @@
 #include "components/global_media_controls/public/media_session_notification_item.h"
 #include "components/global_media_controls/public/test/mock_media_session_notification_item_delegate.h"
 #include "components/global_media_controls/public/views/media_item_ui_updated_view.h"
-#include "components/global_media_controls/public/views/media_item_ui_view.h"
 #include "components/media_router/browser/test/mock_media_router.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
-#include "media/base/media_switches.h"
 #include "services/media_session/public/cpp/test/test_media_controller.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/test/button_test_api.h"
 
-class MediaDialogViewTest : public ChromeViewsTestBase,
-                            public testing::WithParamInterface<bool> {
+class MediaDialogViewTest : public ChromeViewsTestBase {
  public:
   MediaDialogViewTest() = default;
   MediaDialogViewTest(const MediaDialogViewTest&) = delete;
@@ -37,8 +35,6 @@ class MediaDialogViewTest : public ChromeViewsTestBase,
 
   void SetUp() override {
     ChromeViewsTestBase::SetUp();
-    feature_list_.InitWithFeatureState(media::kGlobalMediaControlsUpdatedUI,
-                                       UseUpdatedUI());
     web_contents_ =
         content::WebContentsTester::CreateTestWebContents(profile(), nullptr);
     media_router::ChromeMediaRouterFactory::GetInstance()->SetTestingFactory(
@@ -49,14 +45,14 @@ class MediaDialogViewTest : public ChromeViewsTestBase,
     notification_service_ =
         std::make_unique<MediaNotificationService>(profile(), false);
     anchor_widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET,
                          views::Widget::InitParams::TYPE_WINDOW);
     anchor_widget_->Show();
     soda_installer_impl_ = std::make_unique<speech::SodaInstallerImpl>();
 
-    MediaDialogView::ShowDialogFromToolbar(anchor_widget_->GetContentsView(),
-                                           notification_service_.get(),
-                                           profile());
+    MediaDialogView::ShowDialogFromToolbar(
+        views::BubbleAnchor(anchor_widget_->GetContentsView()),
+        notification_service_.get(), profile());
     view_ = MediaDialogView::GetDialogViewForTesting();
   }
 
@@ -66,8 +62,6 @@ class MediaDialogViewTest : public ChromeViewsTestBase,
     anchor_widget_->Close();
     ChromeViewsTestBase::TearDown();
   }
-
-  bool UseUpdatedUI() { return GetParam(); }
 
   std::unique_ptr<global_media_controls::MediaSessionNotificationItem>
   SimulateMediaSessionNotificationItem() {
@@ -115,12 +109,8 @@ class MediaDialogViewTest : public ChromeViewsTestBase,
     return route;
   }
 
-  global_media_controls::MediaItemUIView* media_item_ui_view() {
-    return view_->GetItemsForTesting().begin()->second;
-  }
-
   global_media_controls::MediaItemUIUpdatedView* media_item_ui_updated_view() {
-    return view_->GetUpdatedItemsForTesting().begin()->second;
+    return view_->GetItemsForTesting().begin()->second;
   }
 
   Profile* profile() { return &profile_; }
@@ -144,40 +134,26 @@ class MediaDialogViewTest : public ChromeViewsTestBase,
   std::unique_ptr<speech::SodaInstallerImpl> soda_installer_impl_;
 };
 
-INSTANTIATE_TEST_SUITE_P(GlobalMediaControlsUpdatedUI,
-                         MediaDialogViewTest,
-                         testing::Bool());
-
-TEST_P(MediaDialogViewTest, BuildDeviceSelectorView_RemotePlaybackSource) {
+TEST_F(MediaDialogViewTest, BuildDeviceSelectorView_RemotePlaybackSource) {
   auto item = SimulateMediaSessionNotificationItem();
 
   view()->ShowMediaItem(
       content::MediaSession::GetRequestIdFromWebContents(web_contents())
           .ToString(),
       item->GetWeakPtr());
-  if (UseUpdatedUI()) {
-    EXPECT_FALSE(media_item_ui_updated_view()->GetFooterForTesting());
-    EXPECT_TRUE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
-  } else {
-    EXPECT_FALSE(media_item_ui_view()->footer_view_for_testing());
-    EXPECT_TRUE(media_item_ui_view()->device_selector_view_for_testing());
-  }
+  EXPECT_FALSE(media_item_ui_updated_view()->GetFooterForTesting());
+  EXPECT_TRUE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
 
   SimulateMediaRouteUpdate({CreateRemotePlaybackRoute()});
   view()->RefreshMediaItem(
       content::MediaSession::GetRequestIdFromWebContents(web_contents())
           .ToString(),
       item->GetWeakPtr());
-  if (UseUpdatedUI()) {
-    EXPECT_TRUE(media_item_ui_updated_view()->GetFooterForTesting());
-    EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
-  } else {
-    EXPECT_TRUE(media_item_ui_view()->footer_view_for_testing());
-    EXPECT_FALSE(media_item_ui_view()->device_selector_view_for_testing());
-  }
+  EXPECT_TRUE(media_item_ui_updated_view()->GetFooterForTesting());
+  EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
 }
 
-TEST_P(MediaDialogViewTest, BuildDeviceSelectorView_TabMirroringSource) {
+TEST_F(MediaDialogViewTest, BuildDeviceSelectorView_TabMirroringSource) {
   auto item = SimulateMediaSessionNotificationItem();
   SimulateMediaRouteUpdate({CreateTabMirroringRoute()});
 
@@ -185,16 +161,11 @@ TEST_P(MediaDialogViewTest, BuildDeviceSelectorView_TabMirroringSource) {
       content::MediaSession::GetRequestIdFromWebContents(web_contents())
           .ToString(),
       item->GetWeakPtr());
-  if (UseUpdatedUI()) {
-    EXPECT_TRUE(media_item_ui_updated_view()->GetFooterForTesting());
-    EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
-  } else {
-    EXPECT_TRUE(media_item_ui_view()->footer_view_for_testing());
-    EXPECT_FALSE(media_item_ui_view()->device_selector_view_for_testing());
-  }
+  EXPECT_TRUE(media_item_ui_updated_view()->GetFooterForTesting());
+  EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
 }
 
-TEST_P(MediaDialogViewTest, TerminateSession) {
+TEST_F(MediaDialogViewTest, TerminateSession) {
   auto item = SimulateMediaSessionNotificationItem();
   SimulateMediaRouteUpdate({CreateRemotePlaybackRoute()});
 
@@ -202,26 +173,14 @@ TEST_P(MediaDialogViewTest, TerminateSession) {
       content::MediaSession::GetRequestIdFromWebContents(web_contents())
           .ToString(),
       item->GetWeakPtr());
-  if (UseUpdatedUI()) {
-    auto* footer_view = media_item_ui_updated_view()->GetFooterForTesting();
-    EXPECT_TRUE(footer_view && footer_view->GetVisible());
-    EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
-  } else {
-    auto* footer_view = media_item_ui_view()->footer_view_for_testing();
-    EXPECT_TRUE(footer_view && footer_view->GetVisible());
-    EXPECT_FALSE(media_item_ui_view()->device_selector_view_for_testing());
-  }
+  auto* footer_view = media_item_ui_updated_view()->GetFooterForTesting();
+  EXPECT_TRUE(footer_view && footer_view->GetVisible());
+  EXPECT_FALSE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
 
   EXPECT_CALL(*media_router(),
               TerminateRoute(CreateRemotePlaybackRoute().media_route_id()));
-  views::Button* stop_casting_button;
-  if (UseUpdatedUI()) {
-    stop_casting_button = static_cast<views::Button*>(
-        media_item_ui_updated_view()->GetFooterForTesting()->children()[2]);
-  } else {
-    stop_casting_button = static_cast<views::Button*>(
-        media_item_ui_view()->footer_view_for_testing()->children()[0]);
-  }
+  views::Button* stop_casting_button = static_cast<views::Button*>(
+      media_item_ui_updated_view()->GetFooterForTesting()->children()[2]);
   views::test::ButtonTestApi(stop_casting_button)
       .NotifyClick(ui::MouseEvent(
           ui::EventType::kMousePressed, gfx::Point(0, 0), gfx::Point(0, 0),
@@ -232,11 +191,6 @@ TEST_P(MediaDialogViewTest, TerminateSession) {
       content::MediaSession::GetRequestIdFromWebContents(web_contents())
           .ToString(),
       item->GetWeakPtr());
-  if (UseUpdatedUI()) {
-    EXPECT_FALSE(media_item_ui_updated_view()->GetFooterForTesting());
-    EXPECT_TRUE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
-  } else {
-    EXPECT_FALSE(media_item_ui_view()->footer_view_for_testing());
-    EXPECT_TRUE(media_item_ui_view()->device_selector_view_for_testing());
-  }
+  EXPECT_FALSE(media_item_ui_updated_view()->GetFooterForTesting());
+  EXPECT_TRUE(media_item_ui_updated_view()->GetDeviceSelectorForTesting());
 }

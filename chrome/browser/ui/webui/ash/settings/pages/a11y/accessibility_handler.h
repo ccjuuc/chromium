@@ -8,14 +8,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/webui/settings/settings_page_ui_handler.h"
 #include "components/soda/soda_installer.h"
+#include "content/public/browser/web_ui_message_handler.h"
 
 class Profile;
 
 namespace ash::settings {
 
-class AccessibilityHandler : public ::settings::SettingsPageUIHandler,
+class AccessibilityHandler : public content::WebUIMessageHandler,
                              public speech::SodaInstaller::Observer {
  public:
   explicit AccessibilityHandler(Profile* profile);
@@ -25,26 +25,23 @@ class AccessibilityHandler : public ::settings::SettingsPageUIHandler,
 
   ~AccessibilityHandler() override;
 
-  // SettingsPageUIHandler implementation.
+  // content::WebUIMessageHandler implementation.
   void RegisterMessages() override;
   void OnJavascriptAllowed() override;
   void OnJavascriptDisallowed() override;
 
   // Callback which updates if startup sound is enabled. Visible for testing.
-  void HandleManageA11yPageReady(const base::Value::List& args);
+  void HandleManageA11yPageReady(const base::ListValue& args);
 
  private:
   friend class AccessibilityHandlerTest;
 
-  void HandleRecordSelectedShowShelfNavigationButtonsValue(
-      const base::Value::List& args);
-  void HandleShowBrowserAppearanceSettings(const base::Value::List& args);
-  void HandleShowChromeVoxTutorial(const base::Value::List& args);
-  void HandleSetStartupSoundEnabled(const base::Value::List& args);
-  void HandleUpdateBluetoothBrailleDisplayAddress(
-      const base::Value::List& args);
-  void HandleGetStartupSoundEnabled(const base::Value::List& args);
-  void HandlePreviewFlashNotification(const base::Value::List& args);
+  void HandleShowBrowserAppearanceSettings(const base::ListValue& args);
+  void HandleShowChromeVoxTutorial(const base::ListValue& args);
+  void HandleSetStartupSoundEnabled(const base::ListValue& args);
+  void HandleUpdateBluetoothBrailleDisplayAddress(const base::ListValue& args);
+  void HandleGetStartupSoundEnabled(const base::ListValue& args);
+  void HandlePreviewFlashNotification(const base::ListValue& args);
 
   void OpenExtensionOptionsPage(const char extension_id[]);
 
@@ -62,12 +59,6 @@ class AccessibilityHandler : public ::settings::SettingsPageUIHandler,
   std::u16string GetDictationLocaleDisplayName();
 
   raw_ptr<Profile> profile_;  // Weak pointer.
-
-  // Timer to record user changed value for the accessibility setting to turn
-  // shelf navigation buttons on in tablet mode. The metric is recorded with 10
-  // second delay to avoid overreporting when the user keeps toggling the
-  // setting value in the screen UI.
-  base::OneShotTimer a11y_nav_buttons_toggle_metrics_reporter_timer_;
 
   base::ScopedObservation<speech::SodaInstaller,
                           speech::SodaInstaller::Observer>

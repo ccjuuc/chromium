@@ -15,7 +15,9 @@
 #import "base/synchronization/waitable_event.h"
 #import "base/test/test_waitable_event.h"
 #import "components/version_info/version_info.h"
+#import "ios/chrome/browser/omnibox/eg_tests/omnibox_earl_grey.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
@@ -27,8 +29,6 @@
 #import "net/test/embedded_test_server/http_request.h"
 #import "net/test/embedded_test_server/http_response.h"
 #import "url/gurl.h"
-
-using chrome_test_util::OmniboxText;
 
 namespace {
 
@@ -150,6 +150,11 @@ class PausableRequestHandler {
 
 @implementation VisibleURLWithCachedRestoreTestCase
 
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  return config;
+}
+
 - (void)setUp {
   [super setUp];
   _requestHandler = std::make_unique<PausableRequestHandler>();
@@ -166,8 +171,7 @@ class PausableRequestHandler {
   [ChromeEarlGrey loadURL:_testURL2];
 }
 
-#pragma mark -
-#pragma mark Tests
+#pragma mark - Tests
 
 // Tests that visible URL is always the committed URL during
 // pending back and forward navigations.
@@ -181,12 +185,11 @@ class PausableRequestHandler {
       performAction:grey_tap()];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL1],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
+
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
 
   [ChromeEarlGrey purgeCachedWebViewPages];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
@@ -197,12 +200,10 @@ class PausableRequestHandler {
       performAction:grey_tap()];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL2],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage2];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
 }
 
 // Tests that visible URL is always the comitted URL during
@@ -220,12 +221,10 @@ class PausableRequestHandler {
                      URL1Title)] performAction:grey_tap()];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL1],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
 }
 
 // Tests that stopping a pending Back navigation and reloading reloads the
@@ -252,8 +251,7 @@ class PausableRequestHandler {
 
   // Verifies that page2 was reloaded.
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage2];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
 }
 
 // Tests that visible URL correct during back forward navigations initiated with
@@ -269,12 +267,10 @@ class PausableRequestHandler {
       tapWebStateElementWithID:base::SysUTF8ToNSString(kGoBackLink)];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL1],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
 
   [ChromeEarlGrey purgeCachedWebViewPages];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
@@ -286,12 +282,10 @@ class PausableRequestHandler {
       tapWebStateElementWithID:base::SysUTF8ToNSString(kGoForwardLink)];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL2],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage2];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
 }
 
 // Tests that visible URL is always correct with go navigations initiated with
@@ -307,12 +301,10 @@ class PausableRequestHandler {
       tapWebStateElementWithID:base::SysUTF8ToNSString(kGoNegativeDeltaLink)];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL1],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
 
   [ChromeEarlGrey purgeCachedWebViewPages];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
@@ -324,12 +316,10 @@ class PausableRequestHandler {
       tapWebStateElementWithID:base::SysUTF8ToNSString(kGoPositiveDeltaLink)];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL2],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage2];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL2.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL2.GetContent()];
 }
 
 // Tests that visible URL is always the same as last committed URL if user
@@ -356,8 +346,7 @@ class PausableRequestHandler {
   // Make sure that kChromeUIVersionURL URL is displayed in the omnibox.
   std::string expectedText =
       base::SysNSStringToUTF8([ChromeEarlGrey displayTitleForURL:URL]);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(expectedText)]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:expectedText];
 }
 
 // Tests calling window.history.back() twice.
@@ -373,16 +362,13 @@ class PausableRequestHandler {
                                                kGoNegativeDeltaTwiceLink)];
   GREYAssert([self waitForServerToReceiveRequestWithURL:_testURL1],
              @"Last request URL: %@", self.lastRequestURLSpec);
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL3.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL3.GetContent()];
   [self setServerPaused:NO];
   [ChromeEarlGrey waitForWebStateContainingText:kTestPage1];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(_testURL1.GetContent())]
-      assertWithMatcher:grey_notNil()];
+  [self assertFocusedOmniboxText:_testURL1.GetContent()];
 }
 
-#pragma mark -
-#pragma mark Private
+#pragma mark - Private
 
 - (NSString*)lastRequestURLSpec {
   return base::SysUTF8ToNSString(_requestHandler->GetLastRequestUrl().spec());
@@ -400,18 +386,25 @@ class PausableRequestHandler {
                   }] waitWithTimeout:10];
 }
 
+- (void)assertFocusedOmniboxText:(const std::string&)expectedText {
+  [ChromeEarlGreyUI focusOmnibox];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      assertWithMatcher:chrome_test_util::OmniboxText(expectedText)];
+  [OmniboxEarlGrey defocusOmnibox];
+}
+
 @end
 
 // Test using synthesized restore.
-@interface VisibleURLWithWithSynthesizedRestoreTestCase
+@interface VisibleURLWithSynthesizedRestoreTestCase
     : VisibleURLWithCachedRestoreTestCase
 @end
 
-@implementation VisibleURLWithWithSynthesizedRestoreTestCase
+@implementation VisibleURLWithSynthesizedRestoreTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_disabled.push_back(
+  config.features_enabled.push_back(
       web::features::kForceSynthesizedRestoreSession);
   return config;
 }

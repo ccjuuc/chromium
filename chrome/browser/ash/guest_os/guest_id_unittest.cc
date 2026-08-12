@@ -34,7 +34,7 @@ TEST_F(GuestIdTest, GuestIdEquality) {
 
 TEST_F(GuestIdTest, GuestIdFromDictValue) {
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
     EXPECT_TRUE(GuestId(base::Value(std::move(dict))) ==
@@ -42,7 +42,7 @@ TEST_F(GuestIdTest, GuestIdFromDictValue) {
   }
 
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmTypeKey, 0)
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
@@ -51,7 +51,7 @@ TEST_F(GuestIdTest, GuestIdFromDictValue) {
   }
 
   {
-    auto dict = base::Value::Dict()
+    auto dict = base::DictValue()
                     .Set(prefs::kVmTypeKey, 1)
                     .Set(prefs::kVmNameKey, "foo")
                     .Set(prefs::kContainerNameKey, "bar");
@@ -97,6 +97,32 @@ TEST_F(GuestIdTest, RoundTripViaPrefs) {
   auto list = GetContainers(&profile_, VmType::PLUGIN_VM);
   ASSERT_EQ(list.size(), 1u);
   EXPECT_EQ(list[0], id);
+}
+
+TEST_F(GuestIdTest, UpdateContainerVmType) {
+  auto pref = base::JSONReader::Read(R"([
+    {"vm_name": "vm1", "container_name": "c1"},
+    {"vm_name": "vm2", "container_name": "c2"},
+    {"vm_name": "vm3"}
+  ])",
+                                     base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  ASSERT_TRUE(pref.has_value());
+  profile_.GetPrefs()->Set(prefs::kGuestOsContainers, std::move(*pref));
+  std::vector<GuestId> expected = {GuestId(VmType::TERMINA, "vm1", "c1"),
+                                   GuestId(VmType::TERMINA, "vm2", "c2"),
+                                   GuestId(VmType::TERMINA, "vm3", "")};
+  EXPECT_EQ(GetContainers(&profile_, VmType::TERMINA), expected);
+
+  bool updated = UpdateContainerVmType(
+      &profile_, static_cast<int>(VmType::BAGUETTE), "vm1");
+  std::vector<GuestId> expected_baguette = {
+      GuestId(VmType::BAGUETTE, "vm1", "c1")};
+  std::vector<GuestId> expected_termina = {
+      GuestId(VmType::TERMINA, "vm2", "c2"),
+      GuestId(VmType::TERMINA, "vm3", "")};
+  EXPECT_TRUE(updated);
+  EXPECT_EQ(GetContainers(&profile_, VmType::TERMINA), expected_termina);
+  EXPECT_EQ(GetContainers(&profile_, VmType::BAGUETTE), expected_baguette);
 }
 
 }  // namespace guest_os

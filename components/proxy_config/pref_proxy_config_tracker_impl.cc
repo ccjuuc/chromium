@@ -120,7 +120,7 @@ ValueToDnsCondition(const base::Value& value) {
   // }
   // For now "DnsProbe" is always expected, but eventually other types of
   // conditions will be possible.
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   auto* dns_probe_value = dict.FindDict(proxy_config::kKeyDnsProbe);
   if (!dns_probe_value) {
     return std::nullopt;
@@ -159,7 +159,7 @@ ValueToDnsCondition(const base::Value& value) {
 // Implicit rules are not applied to URL pattern listsof the
 // "ProxyOverrideRules" policy, so on a valid `value` there is always an extra
 // rule added to subtract them from the matcher evaluation.
-bool AddUrlMatcher(const base::Value::Dict& value,
+bool AddUrlMatcher(const base::DictValue& value,
                    net::ProxyHostMatchingRules& rules,
                    const std::string& key,
                    bool optional_field) {
@@ -188,7 +188,7 @@ bool AddUrlMatcher(const base::Value::Dict& value,
 }
 
 // Returns false if an unexpected value was found in the passed `value`.
-bool AddDestinationMatchers(const base::Value::Dict& value,
+bool AddDestinationMatchers(const base::DictValue& value,
                             net::ProxyConfig::ProxyOverrideRule& rule) {
   return AddUrlMatcher(value, rule.destination_matchers,
                        proxy_config::kKeyDestinationMatchers,
@@ -196,7 +196,7 @@ bool AddDestinationMatchers(const base::Value::Dict& value,
 }
 
 // Returns false if an unexpected value was found in the passed `value`.
-bool AddExcludeDestinationMatchers(const base::Value::Dict& value,
+bool AddExcludeDestinationMatchers(const base::DictValue& value,
                                    net::ProxyConfig::ProxyOverrideRule& rule) {
   return AddUrlMatcher(value, rule.exclude_destination_matchers,
                        proxy_config::kKeyExcludeDestinationMatchers,
@@ -205,7 +205,7 @@ bool AddExcludeDestinationMatchers(const base::Value::Dict& value,
 
 // Returns false if an unexpected value was found in the passed `value`, or if
 // the "ProxyList" key is missing.
-bool AddProxyChain(const base::Value::Dict& value,
+bool AddProxyChain(const base::DictValue& value,
                    net::ProxyConfig::ProxyOverrideRule& rule) {
   // Expected schema:
   // {
@@ -242,7 +242,7 @@ bool AddProxyChain(const base::Value::Dict& value,
 }
 
 // Returns false if an unexpected value was found in the passed `value`.
-bool AddConditions(const base::Value::Dict& value,
+bool AddConditions(const base::DictValue& value,
                    net::ProxyConfig::ProxyOverrideRule& rule) {
   // Expected schema:
   // {
@@ -295,7 +295,7 @@ std::optional<net::ProxyConfig::ProxyOverrideRule> ValueToOverrideRule(
   //        }
   //   ]
   // }
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   net::ProxyConfig::ProxyOverrideRule rule;
 
   if (!AddDestinationMatchers(dict, rule) ||
@@ -309,7 +309,8 @@ std::optional<net::ProxyConfig::ProxyOverrideRule> ValueToOverrideRule(
 
 // Returns true if proxy override rules were written to `config`.
 bool SetProxyOverrideRules(const PrefService* pref_service,
-                           net::ProxyConfigWithAnnotation* config) {
+                           net::ProxyConfigWithAnnotation* config,
+                           policy::PolicyService* policy_service) {
   const PrefService::Preference* pref =
       pref_service->FindPreference(proxy_config::prefs::kProxyOverrideRules);
   DCHECK(pref);
@@ -318,16 +319,16 @@ bool SetProxyOverrideRules(const PrefService* pref_service,
     return false;
   }
 
-  const base::Value::List& rules_list =
+  const base::ListValue& rules_list =
       pref_service->GetList(proxy_config::prefs::kProxyOverrideRules);
   if (rules_list.empty() ||
       !base::FeatureList::IsEnabled(kEnableProxyOverrideRules)) {
     return false;
   }
 
-  // TODO(crbug.com/419548922): Check affiliation status is allowed by the
-  // "EnableProxyOverrideRulesForAllUsers" policy and return "false" if it's
-  // not.
+  if (!proxy_config::ProxyOverrideRulesAllowed(pref_service, policy_service)) {
+    return false;
+  }
 
   net::ProxyConfig new_config(config->value());
   std::vector<net::ProxyConfig::ProxyOverrideRule> proxy_override_rules;
@@ -346,6 +347,30 @@ bool SetProxyOverrideRules(const PrefService* pref_service,
   *config =
       net::ProxyConfigWithAnnotation(new_config, config->traffic_annotation());
   return true;
+}
+
+// Returns true if the proxy config contains active dynamic routing rules or
+// an in-progress update.
+bool HasDynamicProxyRules(const net::ProxyConfig& config) {
+  return !config.dynamic_routing_config().routing_rules.empty() ||
+         config.dynamic_routing_config().is_update_in_progress;
+}
+
+// Returns true if the proxy config contains explicit proxy rules (Proxy
+// Override Rules or PvD dynamic routing rules) that should overlay baseline
+// configs.
+bool HasExplicitProxyRules(const net::ProxyConfig& config) {
+  return !config.proxy_override_rules().empty() || HasDynamicProxyRules(config);
+}
+
+// Returns true if `active_config` has dynamic routing rules that need to be
+// attached to `config`.
+bool ShouldAttachDynamicRoutingRules(
+    const net::ProxyConfig& config,
+    const net::ProxyConfig::DynamicRoutingConfig& active_config) {
+  return !HasDynamicProxyRules(config) &&
+         (!active_config.routing_rules.empty() ||
+          active_config.is_update_in_progress);
 }
 
 }  // namespace
@@ -481,11 +506,14 @@ base::WeakPtr<ProxyConfigServiceImpl> ProxyConfigServiceImpl::AsWeakPtr() {
 PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
     PrefService* pref_service,
     scoped_refptr<base::SingleThreadTaskRunner>
-        proxy_config_service_task_runner)
+        proxy_config_service_task_runner,
+    policy::PolicyService* policy_service)
     : pref_service_(pref_service),
+      policy_service_(policy_service),
       proxy_config_service_impl_(nullptr),
       proxy_config_service_task_runner_(proxy_config_service_task_runner) {
-  pref_config_state_ = ReadPrefConfig(pref_service_, &pref_config_);
+  pref_config_state_ =
+      ReadPrefConfig(pref_service_, &pref_config_, policy_service_);
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   VLOG(1) << "[LEAF_PROXY_DEBUG] PrefProxyConfigTrackerImpl startup "
                << "pref_config_state=" << static_cast<int>(pref_config_state_)
@@ -518,6 +546,24 @@ PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
 #endif
 }
 
+#if BUILDFLAG(ENTERPRISE_PROXY)
+PrefProxyConfigTrackerImpl::PrefProxyConfigTrackerImpl(
+    PrefService* pref_service,
+    scoped_refptr<base::SingleThreadTaskRunner>
+        proxy_config_service_task_runner,
+    policy::PolicyService* policy_service,
+    enterprise_net::EnterpriseProxyService* enterprise_proxy_service)
+    : PrefProxyConfigTrackerImpl(pref_service,
+                                 proxy_config_service_task_runner,
+                                 policy_service) {
+  if (enterprise_proxy_service) {
+    enterprise_proxy_observation_.Observe(enterprise_proxy_service);
+    active_dynamic_routing_config_ =
+        enterprise_proxy_observation_.GetSource()->GetDynamicRoutingConfig();
+  }
+}
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
+
 PrefProxyConfigTrackerImpl::~PrefProxyConfigTrackerImpl() {
   DCHECK(pref_service_ == nullptr);
 }
@@ -541,12 +587,16 @@ void PrefProxyConfigTrackerImpl::DetachFromPrefService() {
   proxy_prefs_.RemoveAll();
   pref_service_ = nullptr;
   proxy_config_service_impl_ = nullptr;
+#if BUILDFLAG(ENTERPRISE_PROXY)
+  enterprise_proxy_observation_.Reset();
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
 }
 
 // static
 bool PrefProxyConfigTrackerImpl::PrefPrecedes(
     ProxyPrefs::ConfigState config_state) {
   return config_state == ProxyPrefs::CONFIG_POLICY ||
+         config_state == ProxyPrefs::CONFIG_POLICY_DYNAMIC_ROUTING ||
          config_state == ProxyPrefs::CONFIG_EXTENSION ||
          config_state == ProxyPrefs::CONFIG_OTHER_PRECEDE;
 }
@@ -608,7 +658,7 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
   }
 
   *effective_config_state = ProxyPrefs::CONFIG_SYSTEM;
-  if (pref_config.value().proxy_override_rules().empty()) {
+  if (!HasExplicitProxyRules(pref_config.value())) {
     *effective_config = system_config;
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
     VLOG(1) << "[LEAF_PROXY_DEBUG] GetEffectiveProxyConfig branch=UseSystemProxy "
@@ -618,9 +668,14 @@ PrefProxyConfigTrackerImpl::GetEffectiveProxyConfig(
                "proxy must be unset.";
 #endif
   } else {
+    // When system proxy settings are active, overlay explicit rules (Proxy
+    // Override Rules and PvD dynamic routing rules) onto the baseline system
+    // configuration.
     net::ProxyConfig new_config = system_config.value();
     new_config.set_proxy_override_rules(
         pref_config.value().proxy_override_rules());
+    new_config.set_dynamic_routing_config(
+        pref_config.value().dynamic_routing_config());
     *effective_config = net::ProxyConfigWithAnnotation(
         new_config, system_config.traffic_annotation());
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -650,6 +705,8 @@ void PrefProxyConfigTrackerImpl::RegisterPrefs(PrefRegistrySimple* registry) {
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   registry->RegisterIntegerPref(
       proxy_config::prefs::kEnableProxyOverrideRulesForAllUsers, 0);
+  registry->RegisterIntegerPref(proxy_config::prefs::kProxyOverrideRulesScope,
+                                0);
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   registry->RegisterStringPref(proxy_config::prefs::kChromiumLeafVlessUri, "");
@@ -674,10 +731,12 @@ void PrefProxyConfigTrackerImpl::RegisterProfilePrefs(
 #endif
   registry->RegisterBooleanPref(proxy_config::prefs::kUseSharedProxies, false);
   registry->RegisterListPref(proxy_config::prefs::kProxyOverrideRules);
-#if !BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  registry->RegisterIntegerPref(
+      proxy_config::prefs::kEnableProxyOverrideRulesForAllUsers, 0);
   registry->RegisterIntegerPref(proxy_config::prefs::kProxyOverrideRulesScope,
                                 0);
-#endif  // !BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
   registry->RegisterStringPref(proxy_config::prefs::kChromiumLeafVlessUri, "");
   registry->RegisterStringPref(
@@ -688,14 +747,15 @@ void PrefProxyConfigTrackerImpl::RegisterProfilePrefs(
 // static
 ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
     const PrefService* pref_service,
-    net::ProxyConfigWithAnnotation* config) {
+    net::ProxyConfigWithAnnotation* config,
+    policy::PolicyService* policy_service) {
   // Clear the configuration and source.
   *config = net::ProxyConfigWithAnnotation();
   const PrefService::Preference* pref =
       pref_service->FindPreference(proxy_config::prefs::kProxy);
   DCHECK(pref);
 
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       pref_service->GetDict(proxy_config::prefs::kProxy);
   ProxyConfigDictionary proxy_dict(dict.Clone());
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -719,9 +779,15 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::ReadPrefConfig(
     }
   }
 
-  if (SetProxyOverrideRules(pref_service, config) &&
+  const PrefService::Preference* proxy_override_pref =
+      pref_service->FindPreference(proxy_config::prefs::kProxyOverrideRules);
+  if (SetProxyOverrideRules(pref_service, config, policy_service) &&
       state == ProxyPrefs::CONFIG_UNSET) {
-    state = ProxyPrefs::CONFIG_POLICY_OVERRIDE;
+    if (proxy_override_pref->IsManaged()) {
+      state = ProxyPrefs::CONFIG_POLICY_OVERRIDE;
+    } else {
+      state = ProxyPrefs::CONFIG_EXTENSION_OVERRIDE;
+    }
   }
 
 #if BUILDFLAG(ENABLE_CHROMIUM_LEAF)
@@ -745,16 +811,37 @@ ProxyPrefs::ConfigState PrefProxyConfigTrackerImpl::GetProxyConfig(
 void PrefProxyConfigTrackerImpl::OnProxyConfigChanged(
     ProxyPrefs::ConfigState config_state,
     const net::ProxyConfigWithAnnotation& config) {
+  net::ProxyConfigWithAnnotation config_with_dynamic_routes = config;
+
+  if (ShouldAttachDynamicRoutingRules(config.value(),
+                                      active_dynamic_routing_config_)) {
+    // When no other proxy rules (e.g. CONFIG_UNSET), create proxy config with
+    // DIRECT and CONFIG_POLICY_DYNAMIC_ROUTING state. This ensures transmission
+    // to the Network Process and fallback to DIRECT connection (or system OS
+    // proxy if configured), in cases such as  the clearing of proxy
+    // preferences.
+    if (config_state == ProxyPrefs::CONFIG_UNSET) {
+      config_with_dynamic_routes =
+          net::ProxyConfigWithAnnotation::CreateDirect();
+      config_state = ProxyPrefs::CONFIG_POLICY_DYNAMIC_ROUTING;
+    }
+
+    net::ProxyConfig pc = config_with_dynamic_routes.value();
+    pc.set_dynamic_routing_config(active_dynamic_routing_config_);
+    config_with_dynamic_routes = net::ProxyConfigWithAnnotation(
+        pc, config_with_dynamic_routes.traffic_annotation());
+  }
+
   // If the configuration hasn't changed, do nothing.
   if (active_config_state_ == config_state &&
       (active_config_state_ == ProxyPrefs::CONFIG_UNSET ||
-       active_config_.value().Equals(config.value()))) {
+       active_config_.value().Equals(config_with_dynamic_routes.value()))) {
     return;
   }
 
   active_config_state_ = config_state;
   if (active_config_state_ != ProxyPrefs::CONFIG_UNSET) {
-    active_config_ = config;
+    active_config_ = config_with_dynamic_routes;
   }
 
   if (!proxy_config_service_impl_) {
@@ -768,15 +855,33 @@ void PrefProxyConfigTrackerImpl::OnProxyConfigChanged(
   // ProxyConfigServiceImpl into the tracker, and make the class talk over the
   // Mojo pipe directly, at that point.
   if (!proxy_config_service_task_runner_) {
-    proxy_config_service_impl_->UpdateProxyConfig(config_state, config);
+    proxy_config_service_impl_->UpdateProxyConfig(config_state,
+                                                  config_with_dynamic_routes);
     return;
   }
 
   proxy_config_service_task_runner_->PostTask(
-      FROM_HERE,
-      base::BindOnce(&ProxyConfigServiceImpl::UpdateProxyConfig,
-                     proxy_config_service_impl_, config_state, config));
+      FROM_HERE, base::BindOnce(&ProxyConfigServiceImpl::UpdateProxyConfig,
+                                proxy_config_service_impl_, config_state,
+                                config_with_dynamic_routes));
 }
+
+#if BUILDFLAG(ENTERPRISE_PROXY)
+void PrefProxyConfigTrackerImpl::OnDynamicProxyConfigsStatusChanged() {
+  if (!enterprise_proxy_observation_.GetSource()) {
+    return;
+  }
+  active_dynamic_routing_config_ =
+      enterprise_proxy_observation_.GetSource()->GetDynamicRoutingConfig();
+  net::ProxyConfigWithAnnotation config;
+  ProxyPrefs::ConfigState config_state = GetProxyConfig(&config);
+  OnProxyConfigChanged(config_state, config);
+}
+
+void PrefProxyConfigTrackerImpl::OnEnterpriseProxyServiceDestroyed() {
+  enterprise_proxy_observation_.Reset();
+}
+#endif  // BUILDFLAG(ENTERPRISE_PROXY)
 
 bool PrefProxyConfigTrackerImpl::PrefConfigToNetConfig(
     const ProxyConfigDictionary& proxy_dict,
@@ -872,7 +977,7 @@ void PrefProxyConfigTrackerImpl::OnProxyPrefChanged() {
   DCHECK(thread_checker_.CalledOnValidThread());
   net::ProxyConfigWithAnnotation new_config;
   ProxyPrefs::ConfigState config_state =
-      ReadPrefConfig(pref_service_, &new_config);
+      ReadPrefConfig(pref_service_, &new_config, policy_service_);
   if (pref_config_state_ != config_state ||
       (pref_config_state_ != ProxyPrefs::CONFIG_UNSET &&
        !pref_config_.value().Equals(new_config.value()))) {

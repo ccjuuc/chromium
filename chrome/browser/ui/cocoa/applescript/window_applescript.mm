@@ -10,27 +10,27 @@
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/time/time.h"
 #import "chrome/browser/app_controller_mac.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/cocoa/applescript/constants_applescript.h"
 #include "chrome/browser/ui/cocoa/applescript/error_applescript.h"
 #import "chrome/browser/ui/cocoa/applescript/tab_applescript.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/web_contents.h"
 
@@ -92,18 +92,20 @@
     // Since AppleScript requests can arrive at any time, including during
     // browser shutdown or profile deletion, we have to check whether it's okay
     // to spawn a new browser for the specified profile or not.
-    if (Browser::GetCreationStatusForProfile(aProfile) !=
-        Browser::CreationStatus::kOk) {
+    if (GetBrowserWindowCreationStatusForProfile(*aProfile) !=
+        BrowserWindowInterface::CreationStatus::kOk) {
       self = nil;
       return nil;
     }
 
-    Browser* browser = Browser::Create(
-        Browser::CreateParams(aProfile, /*user_gesture=*/false));
+    Browser* browser =
+        CreateBrowserWindow(
+            BrowserWindowCreateParams(aProfile, /*user_gesture=*/false))
+            ->GetBrowserForMigrationOnly();
     // TODO(crbug.com/452431839): Make a new NewTabTypes enum value
     // for new tabs made with AppleScript requests.
     chrome::NewTab(browser, NewTabTypes::kNewTabCommand);
-    browser->window()->Show();
+    browser->GetWindow()->Show();
 
     _browser = browser->GetWeakPtr();
     self.uniqueID =
@@ -176,7 +178,7 @@
   }
 
   return base::SysUTF8ToNSString(
-      _browser->GetBrowserForMigrationOnly()->user_title());
+      WindowMetadataController::From(_browser.get())->user_title());
 }
 
 - (void)setGivenName:(NSString*)name {
@@ -184,8 +186,8 @@
     return;
   }
 
-  _browser->GetBrowserForMigrationOnly()->SetWindowUserTitle(
-      base::SysNSStringToUTF8(name));
+  WindowMetadataController::From(_browser.get())
+      ->SetWindowUserTitle(base::SysNSStringToUTF8(name));
 }
 
 - (NSString*)mode {
@@ -250,13 +252,9 @@
   // the container and property are set here.
   [aTab setContainer:self property:AppleScript::kTabsProperty];
 
-  // Set how long it takes a tab to be created.
-  base::TimeTicks newTabStartTime = base::TimeTicks::Now();
   content::WebContents* contents = chrome::AddSelectedTabWithURL(
       _browser->GetBrowserForMigrationOnly(), GURL(chrome::kChromeUINewTabURL),
       ui::PAGE_TRANSITION_TYPED);
-  CoreTabHelper* core_tab_helper = CoreTabHelper::FromWebContents(contents);
-  core_tab_helper->set_new_tab_start_time(newTabStartTime);
   [aTab setWebContents:contents];
 }
 
@@ -269,16 +267,11 @@
   // the container and property are set here.
   [aTab setContainer:self property:AppleScript::kTabsProperty];
 
-  // Set how long it takes a tab to be created.
-  base::TimeTicks newTabStartTime = base::TimeTicks::Now();
   NavigateParams params(_browser.get(), GURL(chrome::kChromeUINewTabURL),
                         ui::PAGE_TRANSITION_TYPED);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   params.tabstrip_index = index;
   Navigate(&params);
-  CoreTabHelper* core_tab_helper =
-      CoreTabHelper::FromWebContents(params.navigated_or_inserted_contents);
-  core_tab_helper->set_new_tab_start_time(newTabStartTime);
 
   [aTab setWebContents:params.navigated_or_inserted_contents];
 }
@@ -301,7 +294,9 @@
 
 - (void)setOrderedIndex:(NSNumber*)anIndex {
   int index = anIndex.intValue - 1;
-  if (index < 0 || index >= static_cast<int>(chrome::GetTotalBrowserCount())) {
+  if (index < 0 ||
+      index >=
+          static_cast<int>(GlobalBrowserCollection::GetInstance()->GetSize())) {
     AppleScript::SetError(AppleScript::Error::kWrongIndex);
     return;
   }

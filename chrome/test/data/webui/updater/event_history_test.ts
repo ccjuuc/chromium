@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {expect} from '//webui-test/chai.js';
-import type {ActivateEndEvent, ActivateStartEvent, AppCommandEndEvent, AppCommandStartEvent, HistoryEvent, InstallEndEvent, InstallStartEvent, LoadPolicyEndEvent, LoadPolicyStartEvent, MergedInstallEvent, MergedUpdaterProcessEvent, PersistedDataEvent, PostRequestEndEvent, PostRequestStartEvent, QualifyEndEvent, QualifyStartEvent, UninstallEndEvent, UninstallStartEvent, UpdateEndEvent, UpdaterProcessEndEvent, UpdaterProcessStartEvent, UpdateStartEvent} from 'chrome://updater/event_history.js';
-import {deduplicateEvents, mergeEvents, parseEvent, UpdaterProcessMap} from 'chrome://updater/event_history.js';
+import type {ActivateEndEvent, ActivateStartEvent, AppCommandEndEvent, AppCommandStartEvent, HistoryEvent, InstallEndEvent, InstallStartEvent, LoadPolicyEndEvent, LoadPolicyStartEvent, MergedHistoryEvent, MergedInstallEvent, MergedUpdateEvent, MergedUpdaterProcessEvent, PersistedDataEvent, PostRequestEndEvent, PostRequestStartEvent, QualifyEndEvent, QualifyStartEvent, UninstallEndEvent, UninstallStartEvent, UpdateEndEvent, UpdaterProcessEndEvent, UpdaterProcessStartEvent, UpdateStartEvent} from 'chrome://updater/event_history.js';
+import {deduplicateEvents, getUpdateOutcome, mergeEvents, parseEvent, UpdaterProcessMap} from 'chrome://updater/event_history.js';
+import {assertArrayEquals, assertDeepEquals, assertEquals, assertFalse, assertThrows, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 suite('parseEvent', () => {
   test('should parse a valid INSTALL START event', () => {
@@ -18,14 +18,14 @@ suite('parseEvent', () => {
       'appId': '{app1}',
     };
     const event = parseEvent(message) as InstallStartEvent;
-    expect(event.eventType).to.equal('INSTALL');
-    expect(event.bound).to.equal('START');
-    expect(event.eventId).to.equal('event1');
-    expect(event.deviceUptime).to.equal(12345);
-    expect(event.pid).to.equal(123);
-    expect(event.processToken).to.equal('token1');
-    expect(event.appId).to.equal('{app1}');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('INSTALL', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('event1', event.eventId);
+    assertEquals(12345, event.deviceUptime);
+    assertEquals(123, event.pid);
+    assertEquals('token1', event.processToken);
+    assertEquals('{app1}', event.appId);
+    assertArrayEquals([], event.errors);
   });
 
   test('should parse a valid INSTALL END event', () => {
@@ -39,11 +39,11 @@ suite('parseEvent', () => {
       'version': '1.0',
     };
     const event = parseEvent(message) as InstallEndEvent;
-    expect(event.eventType).to.equal('INSTALL');
-    expect(event.bound).to.equal('END');
-    expect(event.eventId).to.equal('event1');
-    expect(event.version).to.equal('1.0');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('INSTALL', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals('event1', event.eventId);
+    assertEquals('1.0', event.version);
+    assertArrayEquals([], event.errors);
   });
 
   test('should parse a valid UNINSTALL START event', () => {
@@ -59,13 +59,13 @@ suite('parseEvent', () => {
       'reason': 'UNINSTALLED',
     };
     const event = parseEvent(message) as UninstallStartEvent;
-    expect(event.eventType).to.equal('UNINSTALL');
-    expect(event.bound).to.equal('START');
-    expect(event.eventId).to.equal('event2');
-    expect(event.appId).to.equal('{app2}');
-    expect(event.version).to.equal('1.0');
-    expect(event.reason).to.equal('UNINSTALLED');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('UNINSTALL', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('event2', event.eventId);
+    assertEquals('{app2}', event.appId);
+    assertEquals('1.0', event.version);
+    assertEquals('UNINSTALLED', event.reason);
+    assertArrayEquals([], event.errors);
   });
 
   test(
@@ -83,7 +83,7 @@ suite('parseEvent', () => {
           'reason': 'SOME_OTHER_REASON',
         };
         const event = parseEvent(message) as UninstallStartEvent;
-        expect(event.reason).to.equal('SOME_OTHER_REASON');
+        assertEquals('SOME_OTHER_REASON', event.reason);
       });
 
   test('should parse a valid UNINSTALL END event', () => {
@@ -96,10 +96,10 @@ suite('parseEvent', () => {
       'bound': 'END',
     };
     const event = parseEvent(message) as UninstallEndEvent;
-    expect(event.eventType).to.equal('UNINSTALL');
-    expect(event.bound).to.equal('END');
-    expect(event.eventId).to.equal('event2');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('UNINSTALL', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals('event2', event.eventId);
+    assertArrayEquals([], event.errors);
   });
 
   test('should parse a valid UPDATE START event', () => {
@@ -114,12 +114,12 @@ suite('parseEvent', () => {
       'priority': 'BACKGROUND',
     };
     const event = parseEvent(message) as UpdateStartEvent;
-    expect(event.eventType).to.equal('UPDATE');
-    expect(event.bound).to.equal('START');
-    expect(event.eventId).to.equal('event3');
-    expect(event.appId).to.equal('{app3}');
-    expect(event.priority).to.equal('BACKGROUND');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('UPDATE', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('event3', event.eventId);
+    assertEquals('{app3}', event.appId);
+    assertEquals('BACKGROUND', event.priority);
+    assertArrayEquals([], event.errors);
   });
 
   test('should parse a valid UPDATE END event', () => {
@@ -130,19 +130,24 @@ suite('parseEvent', () => {
       'pid': 125,
       'processToken': 'token3',
       'bound': 'END',
-      'outcome': 'UPDATED',
+      'updateStates': [
+        {'deviceUptime': '323456', 'state': 'UPDATED'},
+      ],
+      'result': 'SUCCESS',
       'nextVersion': '2.0',
     };
     const event = parseEvent(message) as UpdateEndEvent;
-    expect(event.eventType).to.equal('UPDATE');
-    expect(event.bound).to.equal('END');
-    expect(event.eventId).to.equal('event3');
-    expect(event.outcome).to.equal('UPDATED');
-    expect(event.nextVersion).to.equal('2.0');
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('UPDATE', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals('event3', event.eventId);
+    assertArrayEquals(
+        [{deviceUptime: 323456, state: 'UPDATED'}], event.updateStates);
+    assertEquals('SUCCESS', event.result);
+    assertEquals('2.0', event.nextVersion);
+    assertArrayEquals([], event.errors);
   });
 
-  test('should parse an UPDATE END event with arbitrary outcome string', () => {
+  test('should parse an UPDATE END event with multiple updateStates', () => {
     const message: Record<string, unknown> = {
       'eventType': 'UPDATE',
       'eventId': 'event3',
@@ -150,11 +155,37 @@ suite('parseEvent', () => {
       'pid': 125,
       'processToken': 'token3',
       'bound': 'END',
-      'outcome': 'SOME_OTHER_OUTCOME',
-      'nextVersion': '2.0',
+      'updateStates': [
+        {'deviceUptime': '323450', 'state': 'DOWNLOADING'},
+        {'deviceUptime': '323456', 'state': 'UPDATED'},
+      ],
+      'result': 'SUCCESS',
     };
     const event = parseEvent(message) as UpdateEndEvent;
-    expect(event.outcome).to.equal('SOME_OTHER_OUTCOME');
+    assertArrayEquals(
+        [
+          {deviceUptime: 323450, state: 'DOWNLOADING'},
+          {deviceUptime: 323456, state: 'UPDATED'},
+        ],
+        event.updateStates);
+    assertEquals('SUCCESS', event.result);
+    assertEquals(undefined, event.nextVersion);
+  });
+
+  test('should parse an UPDATE END event with arbitrary state string', () => {
+    const message: Record<string, unknown> = {
+      'eventType': 'UPDATE',
+      'eventId': 'event3',
+      'deviceUptime': '323456',
+      'pid': 125,
+      'processToken': 'token3',
+      'bound': 'END',
+      'updateStates': [
+        {'deviceUptime': '323456', 'state': 'SOME_OTHER_STATE'},
+      ],
+    };
+    const event = parseEvent(message) as UpdateEndEvent;
+    assertEquals('SOME_OTHER_STATE', event.updateStates[0]!.state);
   });
 
   test('should parse a valid PERSISTED_DATA event', () => {
@@ -181,27 +212,29 @@ suite('parseEvent', () => {
       ],
     };
     const event = parseEvent(message) as PersistedDataEvent;
-    expect(event.eventType).to.equal('PERSISTED_DATA');
-    expect(event.bound).to.equal('INSTANT');
-    expect(event.eventId).to.equal('event4');
-    expect(event.eulaRequired).to.be.true;
-    expect(event.lastChecked).to.deep.equal(new Date('2025-11-24T12:00:00Z'));
-    expect(event.lastStarted).to.deep.equal(new Date('2025-11-24T11:00:00Z'));
-    expect(event.registeredApps).to.deep.equal([
-      {
-        appId: '{app4}',
-        version: '1.0',
-        cohort: 'cohort1',
-        brandCode: 'brand1',
-      },
-      {
-        appId: '{app5}',
-        version: '2.0',
-        cohort: undefined,
-        brandCode: undefined,
-      },
-    ]);
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('PERSISTED_DATA', event.eventType);
+    assertEquals('INSTANT', event.bound);
+    assertEquals('event4', event.eventId);
+    assertTrue(event.eulaRequired);
+    assertDeepEquals(new Date('2025-11-24T12:00:00Z'), event.lastChecked);
+    assertDeepEquals(new Date('2025-11-24T11:00:00Z'), event.lastStarted);
+    assertArrayEquals(
+        [
+          {
+            appId: '{app4}',
+            version: '1.0',
+            cohort: 'cohort1',
+            brandCode: 'brand1',
+          },
+          {
+            appId: '{app5}',
+            version: '2.0',
+            cohort: undefined,
+            brandCode: undefined,
+          },
+        ],
+        event.registeredApps);
+    assertArrayEquals([], event.errors);
   });
 
   test('should parse PERSISTED_DATA with missing optional fields', () => {
@@ -214,14 +247,14 @@ suite('parseEvent', () => {
       'eulaRequired': false,
     };
     const event = parseEvent(message) as PersistedDataEvent;
-    expect(event.eventType).to.equal('PERSISTED_DATA');
-    expect(event.bound).to.equal('INSTANT');
-    expect(event.eventId).to.equal('event4');
-    expect(event.eulaRequired).to.be.false;
-    expect(event.lastChecked).to.be.undefined;
-    expect(event.lastStarted).to.be.undefined;
-    expect(event.registeredApps).to.deep.equal([]);
-    expect(event.errors).to.deep.equal([]);
+    assertEquals('PERSISTED_DATA', event.eventType);
+    assertEquals('INSTANT', event.bound);
+    assertEquals('event4', event.eventId);
+    assertFalse(event.eulaRequired);
+    assertEquals(undefined, event.lastChecked);
+    assertEquals(undefined, event.lastStarted);
+    assertArrayEquals([], event.registeredApps);
+    assertArrayEquals([], event.errors);
   });
 
   test('should use INSTANT as default bound if not present', () => {
@@ -235,10 +268,9 @@ suite('parseEvent', () => {
     // The parser will throw because UNINSTALL/INSTANT is not supported,
     // but if it didn't, it would parse bound as INSTANT.
     // The error message for unimplemented parser confirms this:
-    expect(() => parseEvent(message))
-        .to.throw(
-            'No parser implemented for UNINSTALL with bound INSTANT',
-        );
+    assertThrows(
+        () => parseEvent(message),
+        'No parser implemented for UNINSTALL with bound INSTANT');
   });
 
   test('should parse errors field when present', () => {
@@ -256,10 +288,12 @@ suite('parseEvent', () => {
       ],
     };
     const event = parseEvent(message) as InstallStartEvent;
-    expect(event.errors).to.deep.equal([
-      {category: 1, code: 2, extracode1: 3},
-      {category: 4, code: 5, extracode1: 6},
-    ]);
+    assertArrayEquals(
+        [
+          {category: 1, code: 2, extracode1: 3},
+          {category: 4, code: 5, extracode1: 6},
+        ],
+        event.errors);
   });
 
   test('should parse pid as string', () => {
@@ -273,7 +307,7 @@ suite('parseEvent', () => {
       'appId': '{app1}',
     };
     const event = parseEvent(message) as InstallStartEvent;
-    expect(event.pid).to.equal(123);
+    assertEquals(123, event.pid);
   });
 
   test('should parse a valid QUALIFY START event', () => {
@@ -286,8 +320,8 @@ suite('parseEvent', () => {
       'bound': 'START',
     };
     const event = parseEvent(message) as QualifyStartEvent;
-    expect(event.eventType).to.equal('QUALIFY');
-    expect(event.bound).to.equal('START');
+    assertEquals('QUALIFY', event.eventType);
+    assertEquals('START', event.bound);
   });
 
   test('should parse a valid QUALIFY END event', () => {
@@ -301,9 +335,9 @@ suite('parseEvent', () => {
       'qualified': true,
     };
     const event = parseEvent(message) as QualifyEndEvent;
-    expect(event.eventType).to.equal('QUALIFY');
-    expect(event.bound).to.equal('END');
-    expect(event.qualified).to.be.true;
+    assertEquals('QUALIFY', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals(true, event.qualified);
   });
 
   test('should parse a valid ACTIVATE START event', () => {
@@ -316,8 +350,8 @@ suite('parseEvent', () => {
       'bound': 'START',
     };
     const event = parseEvent(message) as ActivateStartEvent;
-    expect(event.eventType).to.equal('ACTIVATE');
-    expect(event.bound).to.equal('START');
+    assertEquals('ACTIVATE', event.eventType);
+    assertEquals('START', event.bound);
   });
 
   test('should parse a valid ACTIVATE END event', () => {
@@ -331,9 +365,9 @@ suite('parseEvent', () => {
       'activated': true,
     };
     const event = parseEvent(message) as ActivateEndEvent;
-    expect(event.eventType).to.equal('ACTIVATE');
-    expect(event.bound).to.equal('END');
-    expect(event.activated).to.be.true;
+    assertEquals('ACTIVATE', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals(true, event.activated);
   });
 
   test('should parse a valid POST_REQUEST START event', () => {
@@ -347,9 +381,9 @@ suite('parseEvent', () => {
       'request': 'foo',
     };
     const event = parseEvent(message) as PostRequestStartEvent;
-    expect(event.eventType).to.equal('POST_REQUEST');
-    expect(event.bound).to.equal('START');
-    expect(event.request).to.equal('foo');
+    assertEquals('POST_REQUEST', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('foo', event.request);
   });
 
   test('should parse a valid POST_REQUEST END event', () => {
@@ -363,9 +397,9 @@ suite('parseEvent', () => {
       'response': 'bar',
     };
     const event = parseEvent(message) as PostRequestEndEvent;
-    expect(event.eventType).to.equal('POST_REQUEST');
-    expect(event.bound).to.equal('END');
-    expect(event.response).to.equal('bar');
+    assertEquals('POST_REQUEST', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals('bar', event.response);
   });
 
   test('should parse a valid LOAD_POLICY START event', () => {
@@ -378,8 +412,8 @@ suite('parseEvent', () => {
       'bound': 'START',
     };
     const event = parseEvent(message) as LoadPolicyStartEvent;
-    expect(event.eventType).to.equal('LOAD_POLICY');
-    expect(event.bound).to.equal('START');
+    assertEquals('LOAD_POLICY', event.eventType);
+    assertEquals('START', event.bound);
   });
 
   test('should parse a valid LOAD_POLICY END event', () => {
@@ -408,24 +442,26 @@ suite('parseEvent', () => {
       },
     };
     const event = parseEvent(message) as LoadPolicyEndEvent;
-    expect(event.eventType).to.equal('LOAD_POLICY');
-    expect(event.bound).to.equal('END');
-    expect(event.policySet).to.deep.equal({
-      policiesByName: {
-        'policy1': {
-          valuesBySource: {'default': 1},
-          prevailingSource: 'default',
-        },
-      },
-      policiesByAppId: {
-        '{app1}': {
-          'policy2': {
-            valuesBySource: {'platform': 2},
-            prevailingSource: 'platform',
+    assertEquals('LOAD_POLICY', event.eventType);
+    assertEquals('END', event.bound);
+    assertDeepEquals(
+        {
+          policiesByName: {
+            'policy1': {
+              valuesBySource: {'default': 1},
+              prevailingSource: 'default',
+            },
+          },
+          policiesByAppId: {
+            '{app1}': {
+              'policy2': {
+                valuesBySource: {'platform': 2},
+                prevailingSource: 'platform',
+              },
+            },
           },
         },
-      },
-    });
+        event.policySet);
   });
 
   test('should parse a valid UPDATER_PROCESS START event', () => {
@@ -447,17 +483,17 @@ suite('parseEvent', () => {
       'parentPid': 1,
     };
     const event = parseEvent(message) as UpdaterProcessStartEvent;
-    expect(event.eventType).to.equal('UPDATER_PROCESS');
-    expect(event.bound).to.equal('START');
-    expect(event.commandLine).to.equal('foo --bar');
-    expect(event.timestamp).to.deep.equal(new Date('2025-11-24T12:00:00Z'));
-    expect(event.updaterVersion).to.equal('1.0');
-    expect(event.scope).to.equal('USER');
-    expect(event.osPlatform).to.equal('Mac');
-    expect(event.osVersion).to.equal('10.15.7');
-    expect(event.osArchitecture).to.equal('x86_64');
-    expect(event.updaterArchitecture).to.equal('x86_64');
-    expect(event.parentPid).to.equal(1);
+    assertEquals('UPDATER_PROCESS', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('foo --bar', event.commandLine);
+    assertDeepEquals(new Date('2025-11-24T12:00:00Z'), event.timestamp);
+    assertEquals('1.0', event.updaterVersion);
+    assertEquals('USER', event.scope);
+    assertEquals('Mac', event.osPlatform);
+    assertEquals('10.15.7', event.osVersion);
+    assertEquals('x86_64', event.osArchitecture);
+    assertEquals('x86_64', event.updaterArchitecture);
+    assertEquals(1, event.parentPid);
   });
 
   test('should parse a valid UPDATER_PROCESS END event', () => {
@@ -471,9 +507,9 @@ suite('parseEvent', () => {
       'exitCode': 0,
     };
     const event = parseEvent(message) as UpdaterProcessEndEvent;
-    expect(event.eventType).to.equal('UPDATER_PROCESS');
-    expect(event.bound).to.equal('END');
-    expect(event.exitCode).to.equal(0);
+    assertEquals('UPDATER_PROCESS', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals(0, event.exitCode);
   });
 
   test('should parse a valid APP_COMMAND START event', () => {
@@ -488,10 +524,10 @@ suite('parseEvent', () => {
       'commandLine': 'foo --bar',
     };
     const event = parseEvent(message) as AppCommandStartEvent;
-    expect(event.eventType).to.equal('APP_COMMAND');
-    expect(event.bound).to.equal('START');
-    expect(event.appId).to.equal('{app1}');
-    expect(event.commandLine).to.equal('foo --bar');
+    assertEquals('APP_COMMAND', event.eventType);
+    assertEquals('START', event.bound);
+    assertEquals('{app1}', event.appId);
+    assertEquals('foo --bar', event.commandLine);
   });
 
   test('should parse a valid APP_COMMAND END event', () => {
@@ -506,10 +542,10 @@ suite('parseEvent', () => {
       'output': 'foo',
     };
     const event = parseEvent(message) as AppCommandEndEvent;
-    expect(event.eventType).to.equal('APP_COMMAND');
-    expect(event.bound).to.equal('END');
-    expect(event.exitCode).to.equal(0);
-    expect(event.output).to.equal('foo');
+    assertEquals('APP_COMMAND', event.eventType);
+    assertEquals('END', event.bound);
+    assertEquals(0, event.exitCode);
+    assertEquals('foo', event.output);
   });
 
   suite('error handling', () => {
@@ -524,19 +560,14 @@ suite('parseEvent', () => {
     };
 
     for (const field
-             of ['eventType',
-                 'eventId',
-                 'deviceUptime',
-                 'pid',
-                 'processToken',
-    ]) {
+             of ['eventType', 'eventId', 'deviceUptime', 'pid',
+                 'processToken']) {
       test(`should throw if required base field '${field}' is missing`, () => {
         const message: Record<string, unknown> = {...baseInstallStart};
         delete message[field];
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message missing required field '${field}'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message missing required field '${field}'`);
       });
     }
 
@@ -545,10 +576,9 @@ suite('parseEvent', () => {
         () => {
           const message: Record<string, unknown> = {...baseInstallStart};
           delete message['appId'];
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'appId'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'appId'`);
         });
 
     test(
@@ -562,10 +592,9 @@ suite('parseEvent', () => {
             'processToken': 'token1',
             'bound': 'END',
           };
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'version'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'version'`);
         });
 
     test(
@@ -582,10 +611,9 @@ suite('parseEvent', () => {
             'reason': 'UNINSTALLED',
           };
           delete message['appId'];
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'appId'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'appId'`);
         });
     test(
         `should throw if required field 'version' is missing for UNINSTALL START`,
@@ -601,10 +629,9 @@ suite('parseEvent', () => {
             'reason': 'UNINSTALLED',
           };
           delete message['version'];
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'version'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'version'`);
         });
     test(
         `should throw if required field 'reason' is missing for UNINSTALL START`,
@@ -620,11 +647,51 @@ suite('parseEvent', () => {
             'version': '1.0',
           };
           delete message['reason'];
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'reason'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'reason'`);
         });
+
+    suite('UPDATE END message validation', () => {
+      const baseUpdateEndMessage: Record<string, unknown> = {
+        'eventType': 'UPDATE',
+        'eventId': 'event3',
+        'deviceUptime': '323456',
+        'pid': 125,
+        'processToken': 'token3',
+        'bound': 'END',
+      };
+
+      test('should throw if updateStates is not an array', () => {
+        const message: Record<string, unknown> = {
+          ...baseUpdateEndMessage,
+          'updateStates': {},
+        };
+        assertThrows(
+            () => parseEvent(message),
+            `Message has field 'updateStates' of unexpected non-array type 'object'.`);
+      });
+
+      test('should throw if an updateState item is missing state', () => {
+        const message: Record<string, unknown> = {
+          ...baseUpdateEndMessage,
+          'updateStates': [{'deviceUptime': '12345'}],
+        };
+        assertThrows(
+            () => parseEvent(message),
+            `Message missing required field 'state'`);
+      });
+
+      test('should throw if result is not a string', () => {
+        const message: Record<string, unknown> = {
+          ...baseUpdateEndMessage,
+          'result': 123,
+        };
+        assertThrows(
+            () => parseEvent(message),
+            `Message has field result with unexpected type 'number', expected 'string'`);
+      });
+    });
 
     test(
         `should throw if required field 'eulaRequired' is missing for PERSISTED_DATA`,
@@ -636,10 +703,9 @@ suite('parseEvent', () => {
             'pid': 126,
             'processToken': 'token4',
           };
-          expect(() => parseEvent(message))
-              .to.throw(
-                  `Message missing required field 'eulaRequired'`,
-              );
+          assertThrows(
+              () => parseEvent(message),
+              `Message missing required field 'eulaRequired'`);
         });
 
     test('should throw for unknown eventType', () => {
@@ -647,10 +713,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'eventType': 'UNKNOWN',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              'Message contains unknown eventType: UNKNOWN',
-          );
+      assertThrows(
+          () => parseEvent(message),
+          'Message contains unknown eventType: UNKNOWN');
     });
 
     test('should throw for unknown bound', () => {
@@ -658,18 +723,15 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'bound': 'UNKNOWN',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              'Message contains unknown bound: UNKNOWN',
-          );
+      assertThrows(
+          () => parseEvent(message), 'Message contains unknown bound: UNKNOWN');
     });
 
     test('should throw for invalid pid type', () => {
       const message: Record<string, unknown> = {...baseInstallStart, 'pid': {}};
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'pid' with unexpected type 'object', expected 'number' or 'string'`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'pid' with unexpected type 'object', expected 'number' or 'string'`);
     });
 
     test('should throw for non-finite pid', () => {
@@ -677,10 +739,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'pid': Infinity,
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'pid' with a numeric value that is not an integer.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'pid' with a numeric value that is not an integer.`);
     });
 
     test('should throw for string pid that is not a number', () => {
@@ -688,10 +749,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'pid': 'abc',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'pid' with a numeric value that is not an integer.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'pid' with a numeric value that is not an integer.`);
     });
 
     test('should throw for decimal pid', () => {
@@ -699,10 +759,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'pid': 123.45,
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'pid' with a numeric value that is not an integer.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'pid' with a numeric value that is not an integer.`);
     });
 
     test('should throw for string pid that is a decimal number', () => {
@@ -710,10 +769,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'pid': '123.45',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'pid' with a numeric value that is not an integer.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'pid' with a numeric value that is not an integer.`);
     });
 
     test('should throw for invalid eventId type', () => {
@@ -721,10 +779,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'eventId': 123,
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field eventId with unexpected type 'number', expected 'string'`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field eventId with unexpected type 'number', expected 'string'`);
     });
 
     test('should throw if errors is not an array', () => {
@@ -732,10 +789,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': {},
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'errors' of unexpected non-array type 'object'.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'errors' of unexpected non-array type 'object'.`);
     });
 
     test('should throw if errors contains non-object', () => {
@@ -743,10 +799,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': [123],
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'errors' containing an element of unexpected type 'number', expected 'object'.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'errors' containing an element of unexpected type 'number', expected 'object'.`);
     });
 
     test('should throw if errors contains an array', () => {
@@ -754,10 +809,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': [[]],
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'errors' of unexpected array type.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'errors' of unexpected array type.`);
     });
 
     test('should throw if error item is missing category', () => {
@@ -765,10 +819,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': [{'code': 2, 'extracode1': 3}],
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message missing required field 'category'`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message missing required field 'category'`);
     });
 
     test('should parse numeric error fields from strings', () => {
@@ -777,9 +830,7 @@ suite('parseEvent', () => {
         'errors': [{'category': '1', 'code': '2', 'extracode1': '3'}],
       };
       const event = parseEvent(message);
-      expect(event.errors).to.deep.equal([
-        {category: 1, code: 2, extracode1: 3},
-      ]);
+      assertArrayEquals([{category: 1, code: 2, extracode1: 3}], event.errors);
     });
 
     test('should throw if error item has non-numeric type for category', () => {
@@ -787,10 +838,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': [{'category': {}, 'code': 2, 'extracode1': 3}],
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'category' with unexpected type 'object', expected 'number' or 'string'`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'category' with unexpected type 'object', expected 'number' or 'string'`);
     });
 
     test('should throw if error item has decimal type for category', () => {
@@ -798,10 +848,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'errors': [{'category': 1.23, 'code': 2, 'extracode1': 3}],
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'category' with a numeric value that is not an integer.`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'category' with a numeric value that is not an integer.`);
     });
 
     test('should throw for unimplemented event type', () => {
@@ -809,10 +858,9 @@ suite('parseEvent', () => {
         ...baseInstallStart,
         'eventType': 'FOOBAR',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              'Message contains unknown eventType: FOOBAR',
-          );
+      assertThrows(
+          () => parseEvent(message),
+          'Message contains unknown eventType: FOOBAR');
     });
 
     test('should throw if date field has invalid date string', () => {
@@ -825,10 +873,9 @@ suite('parseEvent', () => {
         'eulaRequired': true,
         'lastChecked': 'not-a-number',
       };
-      expect(() => parseEvent(message))
-          .to.throw(
-              `Message has field 'lastChecked' with unparsable datetime value 'not-a-number'`,
-          );
+      assertThrows(
+          () => parseEvent(message),
+          `Message has field 'lastChecked' with unparsable datetime value 'not-a-number'`);
     });
 
     suite('LOAD_POLICY END message validation', () => {
@@ -846,10 +893,9 @@ suite('parseEvent', () => {
           ...baseLoadPolicyEndMessage,
           'policySet': 123,
         };
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message has field policySet with unexpected type 'number', expected 'object'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message has field policySet with unexpected type 'number', expected 'object'`);
       });
 
       test(`should throw if 'policiesByName' is missing`, () => {
@@ -857,10 +903,9 @@ suite('parseEvent', () => {
           ...baseLoadPolicyEndMessage,
           'policySet': {'policiesByAppId': {}},
         };
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message missing required field 'policiesByName'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message missing required field 'policiesByName'`);
       });
 
       test(`should throw if 'policiesByAppId' is missing`, () => {
@@ -868,10 +913,9 @@ suite('parseEvent', () => {
           ...baseLoadPolicyEndMessage,
           'policySet': {'policiesByName': {}},
         };
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message missing required field 'policiesByAppId'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message missing required field 'policiesByAppId'`);
       });
 
       test(`should throw if a policy in 'policiesByName' is not an object`, () => {
@@ -882,10 +926,9 @@ suite('parseEvent', () => {
             'policiesByAppId': {},
           },
         };
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message has field policy1 with unexpected type 'number', expected 'object'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message has field policy1 with unexpected type 'number', expected 'object'`);
       });
 
       test(
@@ -898,10 +941,9 @@ suite('parseEvent', () => {
                 'policiesByAppId': {},
               },
             };
-            expect(() => parseEvent(message))
-                .to.throw(
-                    `Message missing required field 'valuesBySource'`,
-                );
+            assertThrows(
+                () => parseEvent(message),
+                `Message missing required field 'valuesBySource'`);
           });
 
       test(
@@ -915,10 +957,9 @@ suite('parseEvent', () => {
                 'policiesByAppId': {},
               },
             };
-            expect(() => parseEvent(message))
-                .to.throw(
-                    `Message missing required field 'prevailingSource'`,
-                );
+            assertThrows(
+                () => parseEvent(message),
+                `Message missing required field 'prevailingSource'`);
           });
 
       test(
@@ -931,10 +972,9 @@ suite('parseEvent', () => {
                 'policiesByAppId': {'{app1}': 123},
               },
             };
-            expect(() => parseEvent(message))
-                .to.throw(
-                    `Message has field {app1} with unexpected type 'number', expected 'object'`,
-                );
+            assertThrows(
+                () => parseEvent(message),
+                `Message has field {app1} with unexpected type 'number', expected 'object'`);
           });
 
       test(`should throw if a policy in 'policiesByAppId' is not an object`, () => {
@@ -945,10 +985,9 @@ suite('parseEvent', () => {
             'policiesByAppId': {'{app1}': {'policy2': 123}},
           },
         };
-        expect(() => parseEvent(message))
-            .to.throw(
-                `Message has field policy2 with unexpected type 'number', expected 'object'`,
-            );
+        assertThrows(
+            () => parseEvent(message),
+            `Message has field policy2 with unexpected type 'number', expected 'object'`);
       });
 
       test(
@@ -963,10 +1002,9 @@ suite('parseEvent', () => {
                 },
               },
             };
-            expect(() => parseEvent(message))
-                .to.throw(
-                    `Message missing required field 'valuesBySource'`,
-                );
+            assertThrows(
+                () => parseEvent(message),
+                `Message missing required field 'valuesBySource'`);
           });
 
       test(
@@ -981,10 +1019,9 @@ suite('parseEvent', () => {
                 },
               },
             };
-            expect(() => parseEvent(message))
-                .to.throw(
-                    `Message missing required field 'prevailingSource'`,
-                );
+            assertThrows(
+                () => parseEvent(message),
+                `Message missing required field 'prevailingSource'`);
           });
     });
   });
@@ -1069,7 +1106,7 @@ suite('event processor', () => {
 
   suite('deduplicateEvents', () => {
     test('should return an empty array when given an empty array', () => {
-      expect(deduplicateEvents([])).to.deep.equal([]);
+      assertArrayEquals([], deduplicateEvents([]));
     });
 
     test('should not remove events that are not duplicates', () => {
@@ -1078,7 +1115,7 @@ suite('event processor', () => {
         EVENT1_INSTALL_END,
         EVENT2_UNINSTALL_START,
       ];
-      expect(deduplicateEvents(events)).to.deep.equal(events);
+      assertArrayEquals(events, deduplicateEvents(events));
     });
 
     test('should remove duplicate events', () => {
@@ -1087,10 +1124,12 @@ suite('event processor', () => {
         EVENT1_INSTALL_START_DUP,
         EVENT1_INSTALL_END,
       ];
-      expect(deduplicateEvents(events)).to.deep.equal([
-        EVENT1_INSTALL_START,
-        EVENT1_INSTALL_END,
-      ]);
+      assertArrayEquals(
+          [
+            EVENT1_INSTALL_START,
+            EVENT1_INSTALL_END,
+          ],
+          deduplicateEvents(events));
     });
 
     test('should handle multiple duplicate events', () => {
@@ -1100,51 +1139,50 @@ suite('event processor', () => {
         EVENT1_INSTALL_START_DUP,
         EVENT1_INSTALL_END,
       ];
-      expect(deduplicateEvents(events)).to.deep.equal([
-        EVENT1_INSTALL_START,
-        EVENT1_INSTALL_END,
-      ]);
+      assertArrayEquals(
+          [
+            EVENT1_INSTALL_START,
+            EVENT1_INSTALL_END,
+          ],
+          deduplicateEvents(events));
     });
   });
 
   suite('mergeEvents', () => {
     test('should return empty arrays when given an empty array', () => {
-      expect(mergeEvents([])).to.deep.equal({paired: [], unpaired: []});
+      assertDeepEquals({paired: [], unpaired: []}, mergeEvents([]));
     });
 
     test('should return INSTANT events as unpaired', () => {
-      expect(mergeEvents([EVENT4_PERSISTED_DATA])).to.deep.equal({
-        paired: [],
-        unpaired: [EVENT4_PERSISTED_DATA],
-      });
+      assertDeepEquals(
+          {
+            paired: [],
+            unpaired: [EVENT4_PERSISTED_DATA],
+          },
+          mergeEvents([EVENT4_PERSISTED_DATA]));
     });
 
     test('should pair START and END events with the same key', () => {
-      expect(mergeEvents([
-        EVENT1_INSTALL_START,
-        EVENT1_INSTALL_END,
-      ])).to.deep.equal({
-        paired: [
+      assertDeepEquals(
           {
-            eventType: 'INSTALL',
-            startEvent: EVENT1_INSTALL_START,
-            endEvent: EVENT1_INSTALL_END,
+            paired: [
+              {
+                eventType: 'INSTALL',
+                startEvent: EVENT1_INSTALL_START,
+                endEvent: EVENT1_INSTALL_END,
+              },
+            ],
+            unpaired: [],
           },
-        ],
-        unpaired: [],
-      });
-    });
-
-    test('should handle multiple pairs', () => {
-      expect(
           mergeEvents([
             EVENT1_INSTALL_START,
             EVENT1_INSTALL_END,
-            EVENT2_UNINSTALL_START,
-            EVENT2_UNINSTALL_END,
-          ]),
-          )
-          .to.deep.equal({
+          ]));
+    });
+
+    test('should handle multiple pairs', () => {
+      assertDeepEquals(
+          {
             paired: [
               {
                 eventType: 'INSTALL',
@@ -1158,36 +1196,40 @@ suite('event processor', () => {
               },
             ],
             unpaired: [],
-          });
+          },
+          mergeEvents([
+            EVENT1_INSTALL_START,
+            EVENT1_INSTALL_END,
+            EVENT2_UNINSTALL_START,
+            EVENT2_UNINSTALL_END,
+          ]));
     });
 
     test(
         'should return START event as unpaired if no matching END event',
         () => {
-          expect(mergeEvents([EVENT1_INSTALL_START])).to.deep.equal({
-            paired: [],
-            unpaired: [EVENT1_INSTALL_START],
-          });
+          assertDeepEquals(
+              {
+                paired: [],
+                unpaired: [EVENT1_INSTALL_START],
+              },
+              mergeEvents([EVENT1_INSTALL_START]));
         });
 
     test(
         'should return END event as unpaired if no matching START event',
         () => {
-          expect(mergeEvents([EVENT1_INSTALL_END])).to.deep.equal({
-            paired: [],
-            unpaired: [EVENT1_INSTALL_END],
-          });
+          assertDeepEquals(
+              {
+                paired: [],
+                unpaired: [EVENT1_INSTALL_END],
+              },
+              mergeEvents([EVENT1_INSTALL_END]));
         });
 
     test('should pair one START and END, leaving extra END as unpaired', () => {
-      expect(
-          mergeEvents([
-            EVENT1_INSTALL_START,
-            EVENT1_INSTALL_END,
-            EVENT1_INSTALL_END,
-          ]),
-          )
-          .to.deep.equal({
+      assertDeepEquals(
+          {
             paired: [
               {
                 eventType: 'INSTALL',
@@ -1196,20 +1238,19 @@ suite('event processor', () => {
               },
             ],
             unpaired: [EVENT1_INSTALL_END],
-          });
+          },
+          mergeEvents([
+            EVENT1_INSTALL_START,
+            EVENT1_INSTALL_END,
+            EVENT1_INSTALL_END,
+          ]));
     });
 
     test(
         'should pair one START and END, leaving extra START as unpaired',
         () => {
-          expect(
-              mergeEvents([
-                EVENT1_INSTALL_START,
-                EVENT1_INSTALL_START,
-                EVENT1_INSTALL_END,
-              ]),
-              )
-              .to.deep.equal({
+          assertDeepEquals(
+              {
                 paired: [
                   {
                     eventType: 'INSTALL',
@@ -1218,7 +1259,12 @@ suite('event processor', () => {
                   },
                 ],
                 unpaired: [EVENT1_INSTALL_START],
-              });
+              },
+              mergeEvents([
+                EVENT1_INSTALL_START,
+                EVENT1_INSTALL_START,
+                EVENT1_INSTALL_END,
+              ]));
         });
 
     test(
@@ -1231,18 +1277,22 @@ suite('event processor', () => {
             EVENT3_UPDATE_START,
             EVENT4_PERSISTED_DATA,
           ]);
-          expect(result.paired).to.deep.equal([
-            {
-              eventType: 'INSTALL',
-              startEvent: EVENT1_INSTALL_START,
-              endEvent: EVENT1_INSTALL_END,
-            },
-          ]);
-          expect(result.unpaired).to.have.deep.members([
-            EVENT4_PERSISTED_DATA,
-            EVENT2_UNINSTALL_END,
-            EVENT3_UPDATE_START,
-          ]);
+          assertArrayEquals(
+              [
+                {
+                  eventType: 'INSTALL',
+                  startEvent: EVENT1_INSTALL_START,
+                  endEvent: EVENT1_INSTALL_END,
+                },
+              ],
+              result.paired);
+          assertArrayEquals(
+              [
+                EVENT4_PERSISTED_DATA,
+                EVENT2_UNINSTALL_END,
+                EVENT3_UPDATE_START,
+              ],
+              result.unpaired);
         });
   });
 });
@@ -1351,23 +1401,21 @@ suite('UpdaterProcessMap', () => {
 
   test('should be empty when initialized with no events', () => {
     const map = new UpdaterProcessMap([]);
-    expect(map.getUpdaterProcessForEvent(INSTALL1_MERGED)).to.be.undefined;
+    assertEquals(undefined, map.getUpdaterProcessForEvent(INSTALL1_MERGED));
   });
 
   test(
       'should be empty when initialized with no UPDATER_PROCESS events', () => {
         const map = new UpdaterProcessMap([INSTALL1_MERGED]);
-        expect(map.getUpdaterProcessForEvent(INSTALL1_MERGED)).to.be.undefined;
+        assertEquals(undefined, map.getUpdaterProcessForEvent(INSTALL1_MERGED));
       });
 
   test(
       'should retrieve the updater process for an event in that process',
       () => {
         const map = new UpdaterProcessMap([PROCESS1_MERGED, INSTALL1_MERGED]);
-        expect(map.getUpdaterProcessForEvent(INSTALL1_MERGED))
-            .to.equal(
-                PROCESS1_MERGED,
-            );
+        assertEquals(
+            PROCESS1_MERGED, map.getUpdaterProcessForEvent(INSTALL1_MERGED));
       });
 
   test(
@@ -1378,17 +1426,15 @@ suite('UpdaterProcessMap', () => {
           PROCESS2_MERGED,
           INSTALL1_MERGED,
         ]);
-        expect(map.getUpdaterProcessForEvent(INSTALL1_MERGED))
-            .to.equal(
-                PROCESS1_MERGED,
-            );
+        assertEquals(
+            PROCESS1_MERGED, map.getUpdaterProcessForEvent(INSTALL1_MERGED));
       });
 
   test(
       'should return undefined for an event whose process is not in map',
       () => {
         const map = new UpdaterProcessMap([PROCESS1_MERGED, INSTALL2_MERGED]);
-        expect(map.getUpdaterProcessForEvent(INSTALL2_MERGED)).to.be.undefined;
+        assertEquals(undefined, map.getUpdaterProcessForEvent(INSTALL2_MERGED));
       });
 
   test('should handle multiple updater processes and events', () => {
@@ -1423,26 +1469,19 @@ suite('UpdaterProcessMap', () => {
       INSTALL1_MERGED,
       INSTALL_IN_PROCESS2_MERGED,
     ]);
-    expect(map.getUpdaterProcessForEvent(INSTALL1_MERGED))
-        .to.equal(
-            PROCESS1_MERGED,
-        );
-    expect(map.getUpdaterProcessForEvent(INSTALL_IN_PROCESS2_MERGED))
-        .to.equal(
-            PROCESS2_MERGED,
-        );
+    assertEquals(
+        PROCESS1_MERGED, map.getUpdaterProcessForEvent(INSTALL1_MERGED));
+    assertEquals(
+        PROCESS2_MERGED,
+        map.getUpdaterProcessForEvent(INSTALL_IN_PROCESS2_MERGED));
   });
 
   test('an UPDATER_PROCESS event should retrieve itself', () => {
     const map = new UpdaterProcessMap([PROCESS1_MERGED, PROCESS2_MERGED]);
-    expect(map.getUpdaterProcessForEvent(PROCESS1_MERGED))
-        .to.equal(
-            PROCESS1_MERGED,
-        );
-    expect(map.getUpdaterProcessForEvent(PROCESS2_MERGED))
-        .to.equal(
-            PROCESS2_MERGED,
-        );
+    assertEquals(
+        PROCESS1_MERGED, map.getUpdaterProcessForEvent(PROCESS1_MERGED));
+    assertEquals(
+        PROCESS2_MERGED, map.getUpdaterProcessForEvent(PROCESS2_MERGED));
   });
 
   test('should retrieve updater process for unmerged events', () => {
@@ -1451,21 +1490,19 @@ suite('UpdaterProcessMap', () => {
       PROCESS2_MERGED,
       INSTALL1_MERGED,
     ]);
-    expect(map.getUpdaterProcessForEvent(INSTALL1_START))
-        .to.equal(PROCESS1_MERGED);
-    expect(map.getUpdaterProcessForEvent(INSTALL1_END))
-        .to.equal(PROCESS1_MERGED);
-    expect(map.getUpdaterProcessForEvent(PROCESS1_START))
-        .to.equal(PROCESS1_MERGED);
-    expect(map.getUpdaterProcessForEvent(PROCESS1_END))
-        .to.equal(PROCESS1_MERGED);
-    expect(map.getUpdaterProcessForEvent(INSTALL2_START)).to.be.undefined;
+    assertEquals(
+        PROCESS1_MERGED, map.getUpdaterProcessForEvent(INSTALL1_START));
+    assertEquals(PROCESS1_MERGED, map.getUpdaterProcessForEvent(INSTALL1_END));
+    assertEquals(
+        PROCESS1_MERGED, map.getUpdaterProcessForEvent(PROCESS1_START));
+    assertEquals(PROCESS1_MERGED, map.getUpdaterProcessForEvent(PROCESS1_END));
+    assertEquals(undefined, map.getUpdaterProcessForEvent(INSTALL2_START));
   });
 
   suite('eventDate', () => {
     test('should return undefined if event has no updater process', () => {
       const map = new UpdaterProcessMap([PROCESS1_MERGED]);
-      expect(map.eventDate(INSTALL2_MERGED)).to.be.undefined;
+      assertEquals(undefined, map.eventDate(INSTALL2_MERGED));
     });
 
     test('should return undefined if updater process has no timestamp', () => {
@@ -1504,23 +1541,17 @@ suite('UpdaterProcessMap', () => {
         appId: 'app0',
       };
       const map = new UpdaterProcessMap([PROCESS_NO_TIMESTAMP_MERGED]);
-      expect(map.eventDate(INSTALL_NO_TIMESTAMP_START)).to.be.undefined;
+      assertEquals(undefined, map.eventDate(INSTALL_NO_TIMESTAMP_START));
     });
 
     test('should calculate event date for an event in a process', () => {
       const map = new UpdaterProcessMap([PROCESS1_MERGED]);
-      expect(map.eventDate(INSTALL1_START))
-          .to.deep.equal(
-              new Date('2025-11-24T12:00:00.100Z'),
-          );
-      expect(map.eventDate(INSTALL1_END))
-          .to.deep.equal(
-              new Date('2025-11-24T12:00:00.200Z'),
-          );
-      expect(map.eventDate(INSTALL1_MERGED))
-          .to.deep.equal(
-              new Date('2025-11-24T12:00:00.100Z'),
-          );
+      assertDeepEquals(
+          new Date('2025-11-24T12:00:00.100Z'), map.eventDate(INSTALL1_START));
+      assertDeepEquals(
+          new Date('2025-11-24T12:00:00.200Z'), map.eventDate(INSTALL1_END));
+      assertDeepEquals(
+          new Date('2025-11-24T12:00:00.100Z'), map.eventDate(INSTALL1_MERGED));
     });
   });
 
@@ -1531,20 +1562,270 @@ suite('UpdaterProcessMap', () => {
           [INSTALL1_END, INSTALL1_START],
           [PROCESS2_MERGED, PROCESS1_MERGED],
       );
-      expect(result.sortedEventsWithDates).to.deep.equal([
-        PROCESS2_MERGED,
-        INSTALL1_END,
-        INSTALL1_START,
-        PROCESS1_MERGED,
-      ]);
-      expect(result.unsortedEventsWithoutDates).to.deep.equal([]);
+      assertArrayEquals(
+          [
+            PROCESS2_MERGED,
+            INSTALL1_END,
+            INSTALL1_START,
+            PROCESS1_MERGED,
+          ],
+          result.sortedEventsWithDates);
+      assertArrayEquals([], result.unsortedEventsWithoutDates);
     });
 
     test('should handle events without dates', () => {
       const map = new UpdaterProcessMap([PROCESS1_MERGED]);
       const result = map.sortEventsByDate([INSTALL2_START], [INSTALL1_MERGED]);
-      expect(result.sortedEventsWithDates).to.deep.equal([INSTALL1_MERGED]);
-      expect(result.unsortedEventsWithoutDates).to.deep.equal([INSTALL2_START]);
+      assertArrayEquals([INSTALL1_MERGED], result.sortedEventsWithDates);
+      assertArrayEquals([INSTALL2_START], result.unsortedEventsWithoutDates);
     });
+  });
+
+  suite('effectivePolicySet', () => {
+    const LOAD_POLICY_START: LoadPolicyStartEvent = {
+      eventType: 'LOAD_POLICY',
+      eventId: 'p1',
+      pid: 100,
+      processToken: 'abc',
+      deviceUptime: 1050000,
+      bound: 'START',
+      errors: [],
+    };
+    const LOAD_POLICY_END: LoadPolicyEndEvent = {
+      eventType: 'LOAD_POLICY',
+      eventId: 'p1',
+      pid: 100,
+      processToken: 'abc',
+      deviceUptime: 1060000,
+      bound: 'END',
+      errors: [],
+      policySet: {
+        policiesByName: {
+          'policy1': {
+            valuesBySource: {'default': 1},
+            prevailingSource: 'default',
+          },
+        },
+        policiesByAppId: {},
+      },
+    };
+    const LOAD_POLICY_MERGED: MergedHistoryEvent = {
+      eventType: 'LOAD_POLICY',
+      startEvent: LOAD_POLICY_START,
+      endEvent: LOAD_POLICY_END,
+    };
+
+    test('should return undefined if no updater process', () => {
+      const map = new UpdaterProcessMap([]);
+      assertEquals(
+          undefined,
+          map.effectivePolicySet(INSTALL1_MERGED, [LOAD_POLICY_MERGED]));
+    });
+
+    test('should return undefined if no LOAD_POLICY events exist', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      assertEquals(
+          undefined,
+          map.effectivePolicySet(INSTALL1_MERGED, [INSTALL1_MERGED]));
+    });
+
+    suite(
+        'should return undefined if LOAD_POLICY event is in different process',
+        () => {
+          const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+
+          test('by pid', () => {
+            const OTHER_PROCESS_LOAD_POLICY_START: LoadPolicyStartEvent = {
+              ...LOAD_POLICY_START,
+              pid: 999,
+            };
+            const OTHER_PROCESS_LOAD_POLICY_END: LoadPolicyEndEvent = {
+              ...LOAD_POLICY_END,
+              pid: 999,
+            };
+            const OTHER_PROCESS_LOAD_POLICY_MERGED: MergedHistoryEvent = {
+              eventType: 'LOAD_POLICY',
+              startEvent: OTHER_PROCESS_LOAD_POLICY_START,
+              endEvent: OTHER_PROCESS_LOAD_POLICY_END,
+            };
+
+            assertEquals(
+                undefined,
+                map.effectivePolicySet(
+                    INSTALL1_MERGED, [OTHER_PROCESS_LOAD_POLICY_MERGED]));
+          });
+
+          test('by processToken', () => {
+            const OTHER_PROCESS_LOAD_POLICY_START: LoadPolicyStartEvent = {
+              ...LOAD_POLICY_START,
+              processToken: 'differentToken',
+            };
+            const OTHER_PROCESS_LOAD_POLICY_END: LoadPolicyEndEvent = {
+              ...LOAD_POLICY_END,
+              processToken: 'differentToken',
+            };
+            const OTHER_PROCESS_LOAD_POLICY_MERGED: MergedHistoryEvent = {
+              eventType: 'LOAD_POLICY',
+              startEvent: OTHER_PROCESS_LOAD_POLICY_START,
+              endEvent: OTHER_PROCESS_LOAD_POLICY_END,
+            };
+
+            assertEquals(
+                undefined,
+                map.effectivePolicySet(
+                    INSTALL1_MERGED, [OTHER_PROCESS_LOAD_POLICY_MERGED]));
+          });
+        });
+
+    test('should return undefined if LOAD_POLICY event is after event', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      const LATE_LOAD_POLICY_START: LoadPolicyStartEvent = {
+        ...LOAD_POLICY_START,
+        deviceUptime: INSTALL1_START.deviceUptime + 1,
+      };
+      const LATE_LOAD_POLICY_END: LoadPolicyEndEvent = {
+        ...LOAD_POLICY_END,
+        deviceUptime: INSTALL1_START.deviceUptime + 10,
+      };
+      const LATE_LOAD_POLICY_MERGED: MergedHistoryEvent = {
+        eventType: 'LOAD_POLICY',
+        startEvent: LATE_LOAD_POLICY_START,
+        endEvent: LATE_LOAD_POLICY_END,
+      };
+
+      assertEquals(
+          undefined,
+          map.effectivePolicySet(INSTALL1_MERGED, [LATE_LOAD_POLICY_MERGED]));
+    });
+
+    test('should return undefined if LOAD_POLICY has no policy set', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      const EMPTY_LOAD_POLICY_END: LoadPolicyEndEvent = {
+        ...LOAD_POLICY_END,
+        policySet: undefined,
+      };
+      const LATE_LOAD_POLICY_MERGED: MergedHistoryEvent = {
+        eventType: 'LOAD_POLICY',
+        startEvent: LOAD_POLICY_START,
+        endEvent: EMPTY_LOAD_POLICY_END,
+      };
+
+      assertEquals(
+          undefined,
+          map.effectivePolicySet(INSTALL1_MERGED, [LATE_LOAD_POLICY_MERGED]));
+    });
+
+    test('should return policy set', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      assertDeepEquals(
+          LOAD_POLICY_END.policySet,
+          map.effectivePolicySet(INSTALL1_MERGED, [LOAD_POLICY_MERGED]));
+    });
+
+    test('should return most recent policy set', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      const OLDER_LOAD_POLICY_START: LoadPolicyStartEvent = {
+        ...LOAD_POLICY_START,
+        eventId: 'p0',
+        deviceUptime: LOAD_POLICY_START.deviceUptime - 100,
+      };
+      const OLDER_LOAD_POLICY_END: LoadPolicyEndEvent = {
+        ...LOAD_POLICY_END,
+        eventId: 'p0',
+        deviceUptime: LOAD_POLICY_END.deviceUptime - 100,
+        policySet: {
+          policiesByName: {
+            'policy1': {
+              valuesBySource: {'default': 0},
+              prevailingSource: 'default',
+            },
+          },
+          policiesByAppId: {},
+        },
+      };
+      const OLDER_LOAD_POLICY_MERGED: MergedHistoryEvent = {
+        eventType: 'LOAD_POLICY',
+        startEvent: OLDER_LOAD_POLICY_START,
+        endEvent: OLDER_LOAD_POLICY_END,
+      };
+
+      assertDeepEquals(
+          LOAD_POLICY_END.policySet,
+          map.effectivePolicySet(
+              INSTALL1_MERGED, [OLDER_LOAD_POLICY_MERGED, LOAD_POLICY_MERGED]));
+    });
+
+    test('should return policy set for LOAD_POLICY event', () => {
+      const map = new UpdaterProcessMap([PROCESS1_MERGED]);
+      assertDeepEquals(
+          LOAD_POLICY_END.policySet,
+          map.effectivePolicySet(LOAD_POLICY_MERGED, [LOAD_POLICY_MERGED]));
+    });
+  });
+});
+
+suite('getUpdateOutcome', () => {
+  const baseUpdateEnd: UpdateEndEvent = {
+    eventType: 'UPDATE',
+    eventId: '3',
+    pid: 101,
+    processToken: 'def',
+    deviceUptime: 1005,
+    bound: 'END',
+    errors: [],
+    updateStates: [],
+  };
+
+  test('should return the last state from updateStates', () => {
+    const event: UpdateEndEvent = {
+      ...baseUpdateEnd,
+      updateStates: [
+        {deviceUptime: 1000, state: 'DOWNLOADING'},
+        {deviceUptime: 1005, state: 'UPDATED'},
+      ],
+    };
+    assertEquals('UPDATED', getUpdateOutcome(event));
+  });
+
+  test('should return result if updateStates is empty', () => {
+    const event: UpdateEndEvent = {
+      ...baseUpdateEnd,
+      updateStates: [],
+      result: 'SUCCESS',
+    };
+    assertEquals('SUCCESS', getUpdateOutcome(event));
+  });
+
+  test(
+      'should return undefined if both updateStates and result are missing',
+      () => {
+        const event: UpdateEndEvent = {
+          ...baseUpdateEnd,
+          updateStates: [],
+        };
+        assertEquals(undefined, getUpdateOutcome(event));
+      });
+
+  test('should work with MergedUpdateEvent', () => {
+    const startEvent: UpdateStartEvent = {
+      eventType: 'UPDATE',
+      eventId: '3',
+      pid: 101,
+      processToken: 'def',
+      deviceUptime: 1000,
+      bound: 'START',
+      errors: [],
+      appId: 'app1',
+    };
+    const endEvent: UpdateEndEvent = {
+      ...baseUpdateEnd,
+      updateStates: [{deviceUptime: 1005, state: 'UPDATED'}],
+    };
+    const mergedEvent: MergedUpdateEvent = {
+      eventType: 'UPDATE',
+      startEvent,
+      endEvent,
+    };
+    assertEquals('UPDATED', getUpdateOutcome(mergedEvent));
   });
 });

@@ -47,6 +47,9 @@ class TestFileUtil : public LocalFileUtil {
                                      const FileSystemURL& file_system_url,
                                      base::FilePath* local_file_path) override {
     *local_file_path = base_path_.Append(file_system_url.path());
+    if (IsHiddenItem(*local_file_path)) {
+      return base::File::FILE_ERROR_NOT_FOUND;
+    }
     return base::File::FILE_OK;
   }
 
@@ -103,14 +106,31 @@ class TestFileSystemBackend::QuotaUtil : public FileSystemQuotaUtil,
   }
 
   // FileUpdateObserver overrides.
-  void OnStartUpdate(const FileSystemURL& url) override {}
+  void AddRef() const override {}
+  void Release() const override {}
+
+  void Disable() override { is_disabled_ = true; }
+
+  void OnStartUpdate(const FileSystemURL& url) override {
+    if (is_disabled_) {
+      return;
+    }
+  }
   void OnUpdate(const FileSystemURL& url, int64_t delta) override {
+    if (is_disabled_) {
+      return;
+    }
     usage_ += delta;
   }
-  void OnEndUpdate(const FileSystemURL& url) override {}
+  void OnEndUpdate(const FileSystemURL& url) override {
+    if (is_disabled_) {
+      return;
+    }
+  }
 
  private:
   int64_t usage_;
+  bool is_disabled_ = false;
 };
 
 TestFileSystemBackend::TestFileSystemBackend(

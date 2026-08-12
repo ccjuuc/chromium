@@ -11,15 +11,16 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -32,17 +33,21 @@
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
+#include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/views/interaction/element_tracker_views.h"
 
 namespace web_app {
 
@@ -65,7 +70,7 @@ SkBitmap GetBitmapForInstalledAppOnDisk(const webapps::AppId& app_id,
   base::test::TestFuture<IconMetadataFromDisk> future;
   icon_manager.ReadTrustedIconsWithFallbackToManifestIcons(
       app_id, {kIconSizeToTest}, IconPurpose::ANY, future.GetCallback());
-  web_app::SizeToBitmap icon_bitmaps = std::move(future.Take().icons_map);
+  OrderedSizeToBitmap icon_bitmaps = std::move(future.Take().icons_map);
   CHECK(!icon_bitmaps.empty());
   return icon_bitmaps[kIconSizeToTest];
 }
@@ -74,28 +79,20 @@ SkBitmap GetBitmapForInstalledAppOnDisk(const webapps::AppId& app_id,
 
 class ManifestSilentUpdateCommandBrowserTest : public WebAppBrowserTestBase {
  public:
-  ManifestSilentUpdateCommandBrowserTest() {
-    feature_list_.InitWithFeatures({features::kWebAppPredictableAppUpdating,
-                                    features::kWebAppUsePrimaryIcon},
-                                   {});
-  }
-  ~ManifestSilentUpdateCommandBrowserTest() override = default;
-
   void SetUpOnMainThread() override {
     clock_ = std::make_unique<base::SimpleTestClock>();
     provider().SetClockForTesting(clock_.get());
     WebAppBrowserTestBase::SetUpOnMainThread();
   }
 
+ protected:
   std::unique_ptr<base::SimpleTestClock> clock_;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
   clock_->SetNow(base::Time::Now());
-  const GURL app_url = https_server()->GetURL("/web_apps/updating/index.html");
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
@@ -103,10 +100,11 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Menu button should not have update available.
-  WebAppMenuButton* const menu_button =
-      static_cast<WebAppMenuButton*>(app_browser->GetBrowserView()
-                                         .toolbar_button_provider()
-                                         ->GetAppMenuButton());
+  WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
 
   EXPECT_EQ(
@@ -115,8 +113,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
 
   EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
 
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/new_start_url_page.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_start_url_page.html");
 
   {
     UpdateAwaiter awaiter(provider().install_manager());
@@ -136,7 +134,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, SilentUpdate) {
 
 IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
   clock_->SetNow(base::Time::Now());
-  const GURL app_url = https_server()->GetURL("/web_apps/updating/index.html");
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
@@ -144,10 +143,11 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Menu button should not have update available.
-  WebAppMenuButton* const menu_button =
-      static_cast<WebAppMenuButton*>(app_browser->GetBrowserView()
-                                         .toolbar_button_provider()
-                                         ->GetAppMenuButton());
+  WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
 
   EXPECT_EQ(
@@ -156,8 +156,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
 
   EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
 
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/new_icon_page.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_icon_page.html");
 
   {
     UpdateAwaiter awaiter(provider().install_manager());
@@ -182,34 +182,37 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest, PendingUpdate) {
 IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
                        ToolbarVisibilityUpdatedOnScopeChange) {
   const GURL app_url =
-      https_server()->GetURL("/web_apps/scope_updating/page.html");
+      embedded_https_test_server().GetURL("/web_apps/scope_updating/page.html");
   const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
-  EXPECT_FALSE(app_browser->app_controller()->ShouldShowCustomTabBar());
+  EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
+                   ->ShouldShowCustomTabBar());
 
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/scope_updating/page_update.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/scope_updating/page_update.html");
 
   {
     UpdateAwaiter awaiter(
-        WebAppProvider::GetForTest(browser()->profile())->install_manager());
+        WebAppProvider::GetForTest(browser()->GetProfile())->install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
     awaiter.AwaitUpdate();
   }
 
   // After update, we are on the update page, which is in scope.
-  EXPECT_FALSE(app_browser->app_controller()->ShouldShowCustomTabBar());
+  EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
+                   ->ShouldShowCustomTabBar());
 
   // Now navigate to the out-of-scope URL and check that the toolbar is
   // hidden because the scope has been widened.
-  const GURL out_of_scope_url =
-      https_server()->GetURL("/web_apps/scope_updating/out-of-scope.html");
+  const GURL out_of_scope_url = embedded_https_test_server().GetURL(
+      "/web_apps/scope_updating/out-of-scope.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, out_of_scope_url));
-  EXPECT_FALSE(app_browser->app_controller()->ShouldShowCustomTabBar());
+  EXPECT_FALSE(web_app::AppBrowserController::From(app_browser)
+                   ->ShouldShowCustomTabBar());
 }
 
 IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
@@ -217,14 +220,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // First install the app.
   clock_->SetNow(base::Time::Now());
   const GURL app_url =
-      https_server()->GetURL("/web_apps/updating/index_blue.html");
+      embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+      InstallWebAppInNewTabAndClose(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
-  EXPECT_TRUE(provider().registrar_unsafe().IsInRegistrar(app_id));
+  EXPECT_TRUE(
+      provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
       web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
@@ -232,8 +236,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   // Second, trigger an update to an app that has an icon of diff less than 10%.
   // Verify app gets updated silently.
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/index_blue_white.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_white.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
@@ -254,10 +258,10 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // get applied automatically, and that the pending icon info is stored in the
   // web app instead.
   clock_->Advance(base::Hours(12));
-  const GURL update_url2 =
-      https_server()->GetURL("/web_apps/updating/index_blue_red.html");
-  const GURL pending_update_icon =
-      https_server()->GetURL("/web_apps/updating/blue-red-192.png");
+  const GURL update_url2 = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_red.html");
+  const GURL pending_update_icon = embedded_https_test_server().GetURL(
+      "/web_apps/updating/blue-red-192.png");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url2));
@@ -293,14 +297,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // First install the app.
   clock_->SetNow(base::Time::Now());
   const GURL app_url =
-      https_server()->GetURL("/web_apps/updating/index_blue.html");
+      embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+      InstallWebAppInNewTabAndClose(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
-  EXPECT_TRUE(provider().registrar_unsafe().IsInRegistrar(app_id));
+  EXPECT_TRUE(
+      provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
       web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
@@ -308,8 +313,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   // Second, trigger an update to an app that has an icon of diff less than 10%.
   // Verify app gets updated silently.
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/index_blue_white.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_white.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
@@ -329,8 +334,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // time of a different icon that is still <10% diff away. Verify that the
   // update succeeds silently, and a pending update info is not stored.
   clock_->Advance(base::Hours(28));
-  const GURL update_url2 =
-      https_server()->GetURL("/web_apps/updating/index_blue_red.html");
+  const GURL update_url2 = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_red.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url2));
@@ -358,26 +363,28 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
                        MenuButtonClearedDynamically) {
   // First, install a web app.
   clock_->SetNow(base::Time::Now());
-  const GURL app_url = https_server()->GetURL("/web_apps/updating/index.html");
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+      InstallWebAppInNewTabAndClose(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
 
   // Menu button should not have update available.
-  WebAppMenuButton* const menu_button =
-      static_cast<WebAppMenuButton*>(app_browser->GetBrowserView()
-                                         .toolbar_button_provider()
-                                         ->GetAppMenuButton());
+  WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
   EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
 
   // Second, trigger a security sensitive update, verify pending update stored
   // in the app, and menu button has the "App Update Available" expanded state.
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/new_icon_page.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_icon_page.html");
   {
     base::test::TestFuture<void> update_future;
     UpdateAwaiter awaiter(provider().install_manager());
@@ -402,8 +409,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // Third, trigger a non-security sensitive update, and revert the name changes
   // back. Verify that the menu button no longer has the "App Update Available"
   // expanded state.
-  const GURL update_url2 =
-      https_server()->GetURL("/web_apps/updating/new_start_url_page.html");
+  const GURL update_url2 = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_start_url_page.html");
   {
     base::test::TestFuture<void> update_future;
     UpdateAwaiter awaiter(provider().install_manager());
@@ -429,9 +436,10 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
                        MenuButtonDoesNotShowUpAfterInstall) {
   // First, install a web app, set it to open in a browser tab.
   clock_->SetNow(base::Time::Now());
-  const GURL app_url = https_server()->GetURL("/web_apps/updating/index.html");
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
   const webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+      InstallWebAppInNewTabAndClose(browser(), app_url);
   base::test::TestFuture<void> test_future;
   provider().scheduler().SetUserDisplayMode(
       app_id, mojom::UserDisplayMode::kBrowser, test_future.GetCallback());
@@ -439,8 +447,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
 
   // Second, navigate to app url in scope, and verify a pending update is stored
   // in the web app.
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/new_icon_page.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_icon_page.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), update_url));
@@ -456,7 +464,7 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
                   ->pending_update_info()
                   .has_value());
   const webapps::AppId new_installed_app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), update_url);
+      InstallWebAppInNewTabAndClose(browser(), update_url);
   ASSERT_EQ(new_installed_app_id, app_id);
   EXPECT_FALSE(provider()
                    .registrar_unsafe()
@@ -471,11 +479,76 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
   // button should not be updated.
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
-  WebAppMenuButton* const menu_button =
-      static_cast<WebAppMenuButton*>(app_browser->GetBrowserView()
-                                         .toolbar_button_provider()
-                                         ->GetAppMenuButton());
+  WebAppMenuButton* const menu_button = views::AsViewClass<WebAppMenuButton>(
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          views::ElementTrackerViews::GetContextForView(
+              BrowserView::GetBrowserViewForBrowser(app_browser))));
   EXPECT_FALSE(menu_button->IsLabelPresentAndVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
+                       UpdateFromNonInScopePage) {
+  clock_->SetNow(base::Time::Now());
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
+  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+
+  EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
+
+  // Navigate the normal browser to a page that is out of scope for the web app
+  // but links to the web app's manifest, specifying a different start_url.
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating_out_of_scope_page.html");
+  const GURL new_start_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_start_url_page.html");
+  {
+    UpdateAwaiter awaiter(provider().install_manager());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), update_url));
+    awaiter.AwaitUpdate();
+    // Wait for the command to complete so all data is saved.
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
+  EXPECT_EQ(new_start_url,
+            provider().registrar_unsafe().GetAppStartUrl(app_id));
+}
+
+IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
+                       UpdateFromEachManifestSeen) {
+  clock_->SetNow(base::Time::Now());
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
+  const webapps::AppId app_id =
+      InstallWebAppInNewTabAndClose(browser(), app_url);
+
+  EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
+
+  // Navigate the normal browser to a page that updates the start_url.
+  const GURL new_start_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_start_url_page.html");
+  {
+    UpdateAwaiter awaiter(provider().install_manager());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), new_start_url));
+    awaiter.AwaitUpdate();
+    // Wait for the command to complete so all data is saved.
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
+  EXPECT_EQ(new_start_url,
+            provider().registrar_unsafe().GetAppStartUrl(app_id));
+
+  // Now, change the manifest link in that page to the old start_url manifest,
+  // and verify that the app is updated without any new navigation.
+  {
+    UpdateAwaiter awaiter(provider().install_manager());
+    EXPECT_TRUE(
+        content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                        "document.querySelector('link[rel=manifest]').href = "
+                        "'first_manifest.json'"));
+    awaiter.AwaitUpdate();
+    // Wait for the command to complete so all data is saved.
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
+  EXPECT_EQ(app_url, provider().registrar_unsafe().GetAppStartUrl(app_id));
 }
 
 // Used to verify that if the `kBypassSmallIconDiffThrottle` flag is used,
@@ -497,14 +570,15 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
   // First install the app.
   clock_->SetNow(base::Time::Now());
   const GURL app_url =
-      https_server()->GetURL("/web_apps/updating/index_blue.html");
+      embedded_https_test_server().GetURL("/web_apps/updating/index_blue.html");
   const webapps::AppId app_id =
-      InstallWebAppFromPageAndCloseAppBrowser(browser(), app_url);
+      InstallWebAppInNewTabAndClose(browser(), app_url);
   Browser* app_browser = LaunchWebAppBrowser(app_id);
   // TODO(crbug.com/442643377): Delete this wait after the update runs for every
   // navigation.
   provider().command_manager().AwaitAllCommandsCompleteForTesting();
-  EXPECT_TRUE(provider().registrar_unsafe().IsInRegistrar(app_id));
+  EXPECT_TRUE(
+      provider().registrar_unsafe().GetInstallState(app_id).has_value());
   EXPECT_TRUE(gfx::test::AreBitmapsClose(
       web_app::test::LoadTestImageFromDisk(kBlueIcon).AsBitmap(),
       GetBitmapForInstalledAppOnDisk(app_id, provider().icon_manager()),
@@ -512,8 +586,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
 
   // Second, trigger an update to an app that has an icon of diff less than 10%.
   // Verify app gets updated silently.
-  const GURL update_url =
-      https_server()->GetURL("/web_apps/updating/index_blue_white.html");
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_white.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url));
@@ -533,8 +607,8 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
   // time of a different icon that is still <10% diff away. Verify that the
   // update succeeds silently, and a pending update info is not stored.
   clock_->Advance(base::Hours(12));
-  const GURL update_url2 =
-      https_server()->GetURL("/web_apps/updating/index_blue_red.html");
+  const GURL update_url2 = embedded_https_test_server().GetURL(
+      "/web_apps/updating/index_blue_red.html");
   {
     UpdateAwaiter awaiter(provider().install_manager());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(app_browser, update_url2));
@@ -556,6 +630,40 @@ IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandLineTests,
   const WebApp* web_app = provider().registrar_unsafe().GetAppById(app_id);
   ASSERT_NE(nullptr, web_app);
   ASSERT_FALSE(web_app->pending_update_info().has_value());
+}
+
+IN_PROC_BROWSER_TEST_F(ManifestSilentUpdateCommandBrowserTest,
+                       UpdateSuggestedFromMigrationApp) {
+  clock_->SetNow(base::Time::Now());
+  const GURL app_url =
+      embedded_https_test_server().GetURL("/web_apps/updating/index.html");
+  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+
+  {
+    ScopedRegistryUpdate update = provider().sync_bridge_unsafe().BeginUpdate();
+    WebApp* app = update->UpdateApp(app_id);
+    app->RemoveSource(WebAppManagement::kSync);
+    app->SetInstallState(proto::InstallState::SUGGESTED_FROM_MIGRATION);
+  }
+
+  // Navigate to a page that has a different name in the manifest.
+  const GURL update_url = embedded_https_test_server().GetURL(
+      "/web_apps/updating/new_name_page.html");
+  {
+    UpdateAwaiter awaiter(provider().install_manager());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), update_url));
+    awaiter.AwaitUpdate();
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
+
+  EXPECT_EQ(
+      provider().registrar_unsafe().GetAppById(app_id)->manifest_update_time(),
+      clock_->Now());
+  // The name should be updated because the app is in SUGGESTED_FROM_MIGRATION
+  // state.
+  EXPECT_EQ(
+      "New Name",
+      provider().registrar_unsafe().GetAppById(app_id)->untranslated_name());
 }
 
 }  // namespace web_app

@@ -3,6 +3,9 @@ specific_include_rules = {
   "browser_frame_view_chromeos\\..*": [
     "+ash",
   ],
+  "immersive_mode_controller_chromeos\\..*": [
+    "+ash",
+  ],
   "browser_frame_view_chromeos_browsertest\\.cc": [
     "+ash/multi_user/multi_user_window_manager.h",
   ],
@@ -26,6 +29,8 @@ specific_include_rules = {
     "+ash",
   ],
   "top_controls_slide_controller_chromeos_browsertest\\.cc": [
+    "+ash/display/cros_display_config.h",
+    "+ash/shell.h",
     "+cc/base/math_util.h",
   ],
   "system_menu_model_builder\\.cc": [

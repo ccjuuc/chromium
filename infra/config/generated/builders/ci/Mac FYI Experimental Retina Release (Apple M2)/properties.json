@@ -54,7 +54,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           }
         ]
@@ -72,8 +73,7 @@
           "group": "tryserver.chromium.mac"
         }
       ],
-      "targets_spec_directory": "infra/config/generated/builders/ci/Mac FYI Experimental Retina Release (Apple M2)/targets",
-      "targets_spec_directory_relative_to_source_dir": true
+      "targets_spec_directory": "infra/config/generated/builders/ci/Mac FYI Experimental Retina Release (Apple M2)/targets"
     }
   },
   "$recipe_engine/resultdb/test_presentation": {

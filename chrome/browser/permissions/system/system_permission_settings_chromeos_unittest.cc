@@ -9,12 +9,13 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/geolocation_access_level.h"
+#include "base/command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/privacy_hub/privacy_hub_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/content_settings/core/common/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "media/base/media_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class ChromeOsSystemSettingsTest
@@ -22,10 +23,8 @@ class ChromeOsSystemSettingsTest
       public testing::WithParamInterface<ContentSettingsType> {
  public:
   ChromeOsSystemSettingsTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {ash::features::kCrosPrivacyHub,
-         content_settings::features::kCrosSystemLevelPermissionBlockedWarnings},
-        {});
+    scoped_feature_list_.InitWithFeatures({ash::features::kCrosPrivacyHub}, {});
+    SetUseFakeMediaStreamDevices(false);
   }
 
   ~ChromeOsSystemSettingsTest() override = default;

@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_ASH_APP_MODE_CONSUMER_KIOSK_TEST_HELPER_H_
-#define CHROME_BROWSER_ASH_APP_MODE_CONSUMER_KIOSK_TEST_HELPER_H_
-
 #include "chrome/browser/ash/app_mode/consumer_kiosk_test_helper.h"
 
 #include <algorithm>
@@ -88,20 +85,12 @@ void RemoveConsumerKioskChromeAppForTesting(KioskChromeAppManager& manager,
     return;
   }
 
-  // TODO(crbug.com/358022471) Stop using multiple Kiosk apps with the same ID.
-  // Remove the first device local account with the given `chrome_app_id`.
-  auto it = std::ranges::find_if(
-      device_local_accounts, [chrome_app_id](const auto& account) {
-        return account.type == policy::DeviceLocalAccountType::kKioskApp &&
-               account.kiosk_app_id == chrome_app_id;
-      });
-  if (it != std::end(device_local_accounts)) {
-    device_local_accounts.erase(it);
-  }
+  std::erase_if(device_local_accounts, [chrome_app_id](const auto& account) {
+    return account.type == policy::DeviceLocalAccountType::kKioskApp &&
+           account.kiosk_app_id == chrome_app_id;
+  });
 
   policy::SetDeviceLocalAccountsForTesting(&service, device_local_accounts);
 }
 
 }  // namespace ash
-
-#endif  // CHROME_BROWSER_ASH_APP_MODE_CONSUMER_KIOSK_TEST_HELPER_H_

@@ -11,7 +11,8 @@
 #include "chrome/common/channel_info.h"
 #include "components/version_info/version_info.h"
 #include "extensions/buildflags/buildflags.h"
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/updater/extension_updater_switches.h"
 #endif
 
@@ -34,7 +35,7 @@ ChromeUpdateQueryParamsDelegate::GetInstance() {
 
 std::string ChromeUpdateQueryParamsDelegate::GetExtraParams() {
   std::string channel_name;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   channel_name = extensions::GetChannelForExtensionUpdates();
 #else
   channel_name = chrome::GetChannelName(chrome::WithExtendedStable(true));
@@ -45,6 +46,6 @@ std::string ChromeUpdateQueryParamsDelegate::GetExtraParams() {
 }
 
 // static
-const char* ChromeUpdateQueryParamsDelegate::GetLang() {
-  return g_browser_process->GetApplicationLocale().c_str();
+const std::string& ChromeUpdateQueryParamsDelegate::GetLang() {
+  return g_browser_process->GetApplicationLocale();
 }

@@ -31,10 +31,10 @@
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/content_security_policy.mojom-blink.h"
@@ -199,7 +199,7 @@ String ContentSecurityPolicy::StripURLForUseInReport(
   // > 1. If url's scheme is not "`https`", "'http'", "`wss`" or "`ws`" then
   // >    return url's scheme.
   static const char* const allow_list[] = {"http", "https", "ws", "wss"};
-  if (!base::Contains(allow_list, url.Protocol())) {
+  if (!std::ranges::contains(allow_list, url.Protocol())) {
     return url.Protocol();
   }
 
@@ -221,6 +221,21 @@ String ContentSecurityPolicy::StripURLForUseInReport(
   return CSPStripURL(url).GetString();
 }
 
+// static
+bool ContentSecurityPolicy::ContainsDanglingMarkupSignal(
+    const String& attribute_name,
+    const String& attribute_value) {
+  static const char kScriptString[] = "<SCRIPT";
+  static const char kStyleString[] = "<STYLE";
+  static const char kLinkString[] = "<LINK";
+  return attribute_name.FindIgnoringAsciiCase(kScriptString) != kNotFound ||
+         attribute_name.FindIgnoringAsciiCase(kStyleString) != kNotFound ||
+         attribute_name.FindIgnoringAsciiCase(kLinkString) != kNotFound ||
+         attribute_value.FindIgnoringAsciiCase(kScriptString) != kNotFound ||
+         attribute_value.FindIgnoringAsciiCase(kStyleString) != kNotFound ||
+         attribute_value.FindIgnoringAsciiCase(kLinkString) != kNotFound;
+}
+
 bool ContentSecurityPolicy::IsNonceableElement(const Element* element) {
   if (element->nonce().IsNull())
     return false;
@@ -229,8 +244,8 @@ bool ContentSecurityPolicy::IsNonceableElement(const Element* element) {
 
   // To prevent an attacker from hijacking an existing nonce via a dangling
   // markup injection, we walk through the attributes of each nonced script
-  // element: if their names or values contain "<script" or "<style", we won't
-  // apply the nonce when loading script.
+  // element: if their names or values contain "<script", "<style", or "<link",
+  // we won't apply the nonce when loading script.
   //
   // See http://blog.innerht.ml/csp-2015/#danglingmarkupinjection for an example
   // of the kind of attack this is aimed at mitigating.
@@ -239,15 +254,8 @@ bool ContentSecurityPolicy::IsNonceableElement(const Element* element) {
     nonceable = false;
 
   if (nonceable) {
-    static const char kScriptString[] = "<SCRIPT";
-    static const char kStyleString[] = "<STYLE";
     for (const Attribute& attr : element->Attributes()) {
-      const AtomicString& name = attr.LocalName();
-      const AtomicString& value = attr.Value();
-      if (name.FindIgnoringASCIICase(kScriptString) != kNotFound ||
-          name.FindIgnoringASCIICase(kStyleString) != kNotFound ||
-          value.FindIgnoringASCIICase(kScriptString) != kNotFound ||
-          value.FindIgnoringASCIICase(kStyleString) != kNotFound) {
+      if (ContainsDanglingMarkupSignal(attr.LocalName(), attr.Value())) {
         nonceable = false;
         break;
       }
@@ -311,7 +319,20 @@ void ContentSecurityPolicy::ApplyPolicySideEffectsToDelegate() {
     Count(WebFeature::kTrustedTypesEnabled);
   }
 
-  delegate_->AddInsecureRequestPolicy(insecure_request_policy_);
+  // Update the delegate's local SecurityContext state only. Do NOT notify
+  // the browser here: this function runs from BindToDelegate() during
+  // DocumentLoader::DidInstallNewDocument, i.e. before the new document has
+  // committed. Sending EnforceInsecureRequestPolicy /
+  // EnforceInsecureNavigationsSet IPCs here would route via
+  // GetLocalFrameHostRemote() to the previously committed document's
+  // RenderFrameHost and corrupt browser-side replicated state, causing
+  // spurious same-document commit mismatches (crbug/40580002). The browser
+  // learns the authoritative values from DidCommitProvisionalLoadParams
+  // once the commit happens (see Navigator::DidNavigate).
+  //
+  // The post-bind dynamic <meta> path (AddPolicies() below, when called on
+  // an already-bound CSP) explicitly notifies the browser after this call.
+  delegate_->ApplyInsecureRequestPolicy(insecure_request_policy_);
 
   for (const auto& console_message : console_messages_)
     delegate_->AddConsoleMessage(console_message);
@@ -331,6 +352,9 @@ void ContentSecurityPolicy::ReportUseCounters(
     const Vector<network::mojom::blink::ContentSecurityPolicyPtr>& policies) {
   for (const auto& policy : policies) {
     Count(GetUseCounterType(policy->header->type));
+    if (policy->treat_as_public_address) {
+      Count(WebFeature::kLocalNetworkAccessShouldTreatAsPublicAddressCsp);
+    }
     if (CSPDirectiveListAllowDynamic(*policy,
                                      CSPDirectiveName::ScriptSrcAttr) ||
         CSPDirectiveListAllowDynamic(*policy,
@@ -467,6 +491,13 @@ void ContentSecurityPolicy::AddPolicies(
     return;
 
   ApplyPolicySideEffectsToDelegate();
+  // If this CSP is already bound, this call represents a post-bind dynamic
+  // policy addition (e.g. <meta http-equiv>). For document loads, header
+  // policies are added before BindToDelegate() and are propagated to the
+  // browser via commit params instead. Because we are past bind, the mojo
+  // remote now correctly routes to this document's RenderFrameHost, so it
+  // is safe to notify the browser directly. See crbug/40580002.
+  delegate_->NotifyBrowserOfInsecureRequestPolicy(insecure_request_policy_);
   ReportUseCounters(policies_to_report);
 
   delegate_->DidAddContentSecurityPolicies(std::move(policies_to_report));
@@ -563,7 +594,7 @@ void ContentSecurityPolicy::ComputeInternalStateForParsedPolicy(
       disallow_script_for_synthetic_response_ = false;
       base::UmaHistogramCounts100(
           kSyntheticResponseBlockedResourceCountHistogramName,
-          blocked_count_for_synthetic_response_);
+          base::saturated_cast<int>(blocked_count_for_synthetic_response_));
     }
   }
 }
@@ -754,7 +785,10 @@ void ContentSecurityPolicy::AddHashReportIfNeeded(
       }
 
       CSPHashReportBody* body = MakeGarbageCollected<CSPHashReportBody>(
-          url, integrity_hash, "subresource", "script");
+          StripURLForUseInReport(
+              window->GetContentSecurityPolicyDelegate().GetSecurityOrigin(),
+              KURL(url), CSPDirectiveName::DefaultSrc),
+          integrity_hash, "subresource", "script");
       Report* report_to_queue = MakeGarbageCollected<Report>(
           ReportType::kCSPHash,
           StripURLForUseInReport(
@@ -798,15 +832,15 @@ std::optional<CSPDirectiveName> GetDirectiveTypeFromRequestContextType(
     case mojom::blink::RequestContextType::VIDEO:
       return CSPDirectiveName::MediaSrc;
 
-    case mojom::blink::RequestContextType::ATTRIBUTION_SRC:
     case mojom::blink::RequestContextType::BEACON:
     case mojom::blink::RequestContextType::EVENT_SOURCE:
     case mojom::blink::RequestContextType::FETCH:
     case mojom::blink::RequestContextType::JSON:
     case mojom::blink::RequestContextType::PING:
-    case mojom::blink::RequestContextType::XML_HTTP_REQUEST:
     case mojom::blink::RequestContextType::SUBRESOURCE:
     case mojom::blink::RequestContextType::SUBRESOURCE_WEBBUNDLE:
+    case mojom::blink::RequestContextType::TEXT:
+    case mojom::blink::RequestContextType::XML_HTTP_REQUEST:
       return CSPDirectiveName::ConnectSrc;
 
     case mojom::blink::RequestContextType::EMBED:
@@ -1039,6 +1073,22 @@ bool ContentSecurityPolicy::AllowBaseURI(const KURL& url) {
                          RedirectStatus::kNoRedirect);
 }
 
+// static
+bool ContentSecurityPolicy::AllowBaseURI(
+    const KURL& url,
+    const Vector<network::mojom::blink::ContentSecurityPolicyPtr>& policies) {
+  for (const auto& policy : policies) {
+    if (!CSPDirectiveListAllowFromSource(
+             *policy, /*policy=*/nullptr, CSPDirectiveName::BaseURI,
+             /*document_url=*/KURL(), url, url, RedirectStatus::kNoRedirect,
+             ReportingDisposition::kSuppressReporting)
+             .IsAllowed()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ContentSecurityPolicy::AllowConnectToSource(
     const KURL& url,
     const KURL& url_before_redirects,
@@ -1190,9 +1240,10 @@ SourceLocation* GatherSecurityPolicyViolationEventData(
     ContentSecurityPolicyType header_type,
     ContentSecurityPolicyViolationType violation_type,
     SourceLocation* source_location,
-    const String& script_source,
-    const String& sample_prefix,
-    const std::optional<String> eval_hash) {
+    const StringView& script_source,
+    const StringView& sample_prefix,
+    const std::optional<String> eval_hash,
+    const std::optional<String> url_hash) {
   if (effective_type == CSPDirectiveName::FrameAncestors) {
     // If this load was blocked via 'frame-ancestors', then the URL of
     // |document| has not yet been initialized. In this case, we'll set both
@@ -1228,6 +1279,9 @@ SourceLocation* GatherSecurityPolicyViolationEventData(
         // redirects).
         init->setBlockedURI(ContentSecurityPolicy::StripURLForUseInReport(
             delegate->GetSecurityOrigin(), blocked_url, effective_type));
+        if (url_hash.has_value() && !url_hash->IsNull()) {
+          init->setUrlHash(url_hash.value());
+        }
         break;
       case ContentSecurityPolicyViolationType::kTrustedTypesSinkViolation:
         init->setBlockedURI("trusted-types-sink");
@@ -1305,13 +1359,13 @@ SourceLocation* GatherSecurityPolicyViolationEventData(
   // separately.
   StringBuilder sample;
   if (!sample_prefix.empty()) {
-    sample.Append(sample_prefix.StripWhiteSpace().Left(
-        ContentSecurityPolicy::kMaxSampleLength));
+    sample.Append(sample_prefix.StripWhiteSpace().substr(
+        0, ContentSecurityPolicy::kMaxSampleLength));
     sample.Append("|");
   }
   if (!script_source.empty()) {
-    sample.Append(script_source.StripWhiteSpace().Left(
-        ContentSecurityPolicy::kMaxSampleLength));
+    sample.Append(script_source.StripWhiteSpace().substr(
+        0, ContentSecurityPolicy::kMaxSampleLength));
   }
   if (!sample.empty())
     init->setSample(sample.ToString());
@@ -1336,7 +1390,8 @@ void ContentSecurityPolicy::ReportViolation(
     const String& source,
     const String& source_prefix,
     std::optional<base::UnguessableToken> issue_id,
-    std::optional<String> eval_hash) {
+    std::optional<String> eval_hash,
+    std::optional<String> url_hash) {
   CHECK(violation_type == kURLViolation || blocked_url.IsEmpty() ||
         violation_type == kSRIViolation);
 
@@ -1369,7 +1424,7 @@ void ContentSecurityPolicy::ReportViolation(
   source_location = GatherSecurityPolicyViolationEventData(
       violation_data, relevant_delegate, directive_text, effective_type,
       blocked_url, header, header_type, violation_type, source_location, source,
-      source_prefix, eval_hash);
+      source_prefix, eval_hash, url_hash);
 
   // TODO(mkwst): Obviously, we shouldn't hit this check, as extension-loaded
   // resources should be allowed regardless. We apparently do, however, so
@@ -1438,6 +1493,9 @@ void ContentSecurityPolicy::PostViolationReport(
   csp_report->SetString("script-sample", violation_data->sample());
   if (violation_data->hasEvalHash() && !violation_data->evalHash().empty()) {
     csp_report->SetString("eval-hash", violation_data->evalHash());
+  }
+  if (violation_data->hasUrlHash() && !violation_data->urlHash().empty()) {
+    csp_report->SetString("url-hash", violation_data->urlHash());
   }
 
   auto report_object = std::make_unique<JSONObject>();
@@ -1545,6 +1603,10 @@ void ContentSecurityPolicy::ReportBlockedScriptExecutionToInspector(
 bool ContentSecurityPolicy::ExperimentalFeaturesEnabled() const {
   return RuntimeEnabledFeatures::
       ExperimentalContentSecurityPolicyFeaturesEnabled();
+}
+
+bool ContentSecurityPolicy::ScriptSrcExtendedHashesEnabled() const {
+  return delegate_ && delegate_->ScriptSrcExtendedHashesEnabled();
 }
 
 // static

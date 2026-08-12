@@ -4,12 +4,14 @@
 
 #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
 
+#include <algorithm>
+
 #include "base/android/android_info.h"
 #include "base/android/device_info.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -53,9 +55,10 @@ RequestDesktopSiteWebContentsObserverAndroid::
 void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
     content::NavigationHandle* navigation_handle) {
   // A webpage could contain multiple frames, which will trigger this observer
-  // multiple times. Only need to override user agent for the main frame of the
-  // webpage; since the child iframes inherit from the main frame.
-  if (!navigation_handle->IsInMainFrame()) {
+  // multiple times. Only need to override user agent for outermost main frames
+  // of the webpage; since child iframes inherit from the main frame, and fenced
+  // frames should maintain a privacy boundary.
+  if (!navigation_handle->IsInOutermostMainFrame()) {
     return;
   }
 
@@ -94,7 +97,7 @@ void RequestDesktopSiteWebContentsObserverAndroid::DidStartNavigation(
 
   // Override UA for renderer initiated navigation only. UA override for browser
   // initiated navigation is handled on Java side. This is to workaround known
-  // issues crbug.com/1265751 and crbug.com/1261939.
+  // issues crbug.com/40801643 and crbug.com/40799177.
   if (navigation_handle->IsRendererInitiated()) {
     navigation_handle->SetIsOverridingUserAgent(desktop_mode);
   }
@@ -147,7 +150,7 @@ bool RequestDesktopSiteWebContentsObserverAndroid::ShouldAllowOnExternalDisplay(
   double diagonal_inches =
       std::sqrt(std::pow(width_inches, 2) + std::pow(height_inches, 2));
   bool is_on_eligible_external_display =
-      display.id() != display::kDefaultDisplayId &&
+      display.id() != kPrimaryDisplayId &&
       diagonal_inches >= kDesktopSiteDisplaySizeThresholdInches;
   if (!is_on_eligible_external_display) {
     return false;
@@ -166,7 +169,7 @@ bool RequestDesktopSiteWebContentsObserverAndroid::ShouldAllowOnExternalDisplay(
       std::string manufacturer = base::android::android_info::manufacturer();
       base::ToLowerASCII(manufacturer);
       s_is_oem_allowlisted_for_external_display_desktop_ua =
-          base::Contains(allowlist, manufacturer);
+          std::ranges::contains(allowlist, manufacturer);
     }
   }
   return s_is_oem_allowlisted_for_external_display_desktop_ua.value();

@@ -4,30 +4,25 @@
 
 #include "chrome/browser/ui/views/passwords/move_to_account_store_bubble_view.h"
 
-#include <algorithm>
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/ui/passwords/bubble_controllers/move_to_account_store_bubble_controller.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -157,7 +152,9 @@ gfx::ImageSkia ImageWithBadge::GetBadge() const {
   }
   // If there is no badge set, fallback to the default globe icon.
   const SkColor color = GetColorProvider()->GetColor(ui::kColorIcon);
-  return gfx::CreateVectorIcon(kGlobeIcon, gfx::kFaviconSize, color);
+  return gfx::CreateVectorIcon(
+      features::IsRoundedIconsEnabled() ? kGlobeIcon : kGlobeOldIcon,
+      gfx::kFaviconSize, color);
 }
 
 void ImageWithBadge::Render() {
@@ -238,7 +235,9 @@ MoveToAccountStoreBubbleView::MovingBannerView::MovingBannerView(
 
   auto arrow_view =
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          kChevronRightIcon, ui::kColorIcon, gfx::kFaviconSize));
+          features::IsRoundedIconsEnabled() ? kChevronRightIcon
+                                            : kChevronRightOldIcon,
+          ui::kColorIcon, gfx::kFaviconSize));
   arrow_view->SetFlipCanvasOnPaintForRTLUI(true);
   AddChildView(std::move(arrow_view));
 
@@ -280,7 +279,7 @@ MoveToAccountStoreBubbleView::MoveToAccountStoreBubbleView(
   AddChildView(CreateDescription(controller_.GetProfileEmail()));
 
   auto computer_view =
-      std::make_unique<ImageWithBadge>(kHardwareComputerSmallIcon);
+      std::make_unique<ImageWithBadge>(kHardwareComputerSmallCustomIcon);
   auto avatar_view = std::make_unique<ImageWithBadge>(
       *controller_.GetProfileIcon(kImageSize).ToImageSkia());
 

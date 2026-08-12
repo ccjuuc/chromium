@@ -16,6 +16,7 @@ class SkPath;
 
 namespace blink {
 
+class Color;
 class ComputedStyle;
 class DisplayItemClient;
 class GraphicsContext;
@@ -33,12 +34,22 @@ class CORE_EXPORT OutlinePainter {
                                 const LayoutObject::OutlineInfo&,
                                 const ComputedStyle&);
 
+  // Overload that takes a LayoutObject for border-shape support.
+  static void PaintOutlineRects(const PaintInfo&,
+                                const DisplayItemClient&,
+                                const Vector<PhysicalRect>&,
+                                const LayoutObject::OutlineInfo&,
+                                const ComputedStyle&,
+                                const LayoutObject*);
+
   static void PaintFocusRingPath(GraphicsContext&,
                                  const Path&,
                                  const ComputedStyle&);
 
   static int OutlineOutsetExtent(const ComputedStyle&,
                                  const LayoutObject::OutlineInfo&);
+
+  static Color FocusRingInnerColorForTesting(const ComputedStyle&);
 
   struct Line {
     SkPoint start;

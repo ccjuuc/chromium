@@ -11,10 +11,10 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
-#include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
+#include "chrome/common/actor.mojom-forward.h"
 #include "chrome/renderer/actor/click_dispatcher.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 
 namespace content {
 class RenderFrame;
@@ -34,18 +34,19 @@ class ClickTool : public ToolBase {
   ~ClickTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   std::string DebugString() const override;
   bool SupportsPaintStability() const override;
   void Cancel() override;
 
  private:
-  using ValidatedResult =
-      base::expected<ResolvedTarget, mojom::ActionResultPtr>;
-  ValidatedResult Validate() const;
+  ResolveResult ResolveValidatedClickTarget(
+      TargetOcclusionMode occlusion_mode) const;
 
   mojom::ClickActionPtr action_;
   std::optional<ClickDispatcher> click_dispatcher_;
+  std::optional<ResolvedTarget> validated_target_;
 
   base::WeakPtrFactory<ClickTool> weak_ptr_factory_{this};
 };

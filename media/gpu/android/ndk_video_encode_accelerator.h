@@ -5,7 +5,6 @@
 #ifndef MEDIA_GPU_ANDROID_NDK_VIDEO_ENCODE_ACCELERATOR_H_
 #define MEDIA_GPU_ANDROID_NDK_VIDEO_ENCODE_ACCELERATOR_H_
 
-#include <android/native_window.h>
 #include <media/NdkMediaCodec.h>
 #include <stdint.h>
 
@@ -16,17 +15,24 @@
 #include "base/android/requires_api.h"
 #include "base/containers/circular_deque.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "gpu/command_buffer/service/memory_tracking.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "media/base/bitrate.h"
 #include "media/base/media_log.h"
 #include "media/base/video_encoder.h"
+#include "media/base/video_frame_converter.h"
 #include "media/gpu/android/ndk_media_codec_wrapper.h"
-#include "media/gpu/android/video_frame_gl_surface_renderer.h"
 #include "media/gpu/media_gpu_export.h"
 #include "media/video/video_encode_accelerator.h"
-#include "ui/gl/android/scoped_a_native_window.h"
+
+namespace gpu {
+class SharedImageManager;
+}
 
 namespace media {
 
@@ -40,8 +46,9 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
  public:
   // |runner| - a task runner that will be used for all callbacks and external
   // calls to this instance.
-  explicit NdkVideoEncodeAccelerator(
-      scoped_refptr<base::SequencedTaskRunner> runner);
+  NdkVideoEncodeAccelerator(
+      scoped_refptr<base::SequencedTaskRunner> runner,
+      const gpu::GpuDriverBugWorkarounds& gpu_workarounds);
 
   NdkVideoEncodeAccelerator(const NdkVideoEncodeAccelerator&) = delete;
   NdkVideoEncodeAccelerator& operator=(const NdkVideoEncodeAccelerator&) =
@@ -73,9 +80,21 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
   void OnOutputAvailable() override;
   void OnError(media_status_t error) override;
 
-  // Returns `true` if NdkVideoEncodeAccelerator will be using the Surface
-  // instead of input buffers as a way to send frames to the MediaCodec.
-  static bool ShouldUseSurfaceInput();
+
+  // Returns per-layer bitrate allocation factors (summing to 1.0).
+  static std::vector<double> GetDefaultSvcBitrateRatios(
+      int num_temporal_layers);
+
+  /**
+   * Converts per-layer bitrate distribution factors into the cumulative string
+   * format expected by Android MediaCodec (KEY_VIDEO_BITRATE_LAYERING).
+   *
+   * The format is "ratio1;ratio2;...;ratioN", where N is the number of temporal
+   * layers - 1. Each ratio represents the cumulative bitrate allocation for the
+   * current layer and all lower layers, as a fraction of the total bitrate.
+   */
+  static std::string GetSvcBitrateRatiosString(
+      const std::vector<double>& ratios);
 
  private:
   struct FrameTimestampInfo {
@@ -120,10 +139,6 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
   // Called when the sync token for a shared image frame has been waited on.
   void OnSyncDone(VideoFrame::ID frame_id);
 
-  // Renders the `frame` onto the encoder's input surface using the
-  // `gl_renderer_` and passes the `timestamp` to the encoder.
-  void FeedGLSurface(scoped_refptr<VideoFrame> frame,
-                     base::TimeDelta timestamp);
   // Copies the `frame` into an available MediaCodec input buffer and
   // queues it for the encoder with the given `timestamp`.
   void FeedInputBuffer(scoped_refptr<VideoFrame> frame,
@@ -140,9 +155,6 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
   // chunks.
   bool DrainConfig();
 
-  void NotifyMediaCodecError(EncoderStatus encoder_status,
-                             media_status_t media_codec_status,
-                             std::string message);
   void NotifyErrorStatus(EncoderStatus status);
 
   // Generates a monotonically increasing timestamp to be used when feeding
@@ -164,6 +176,10 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
 
   void OnCommandBufferHelperAvailable(
       scoped_refptr<CommandBufferHelper> command_buffer_helper);
+
+  scoped_refptr<VideoFrame> MapSharedImage(const VideoFrame& frame);
+
+  std::vector<VideoPixelFormat> GetSupportedSharedImagePixelFormats();
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -234,18 +250,20 @@ class REQUIRES_ANDROID_API(NDK_MEDIA_CODEC_MIN_API) MEDIA_GPU_EXPORT
   // True if any frames have been sent to the encoder.
   bool have_encoded_frames_ = false;
 
-  // Fields related to sending frame to the encoder via the Surface instead of
-  // input buffers.
-  const bool use_surface_as_input_;
-  std::unique_ptr<VideoFrameGLSurfaceRenderer> gl_renderer_;
-  gl::ScopedANativeWindow input_surface_;
-
   media::VideoEncoderInfo encoder_info_;
 
   scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner_;
   scoped_refptr<CommandBufferHelper> command_buffer_helper_;
 
   std::unique_ptr<VEAEncodingLatencyMetricsHelper> metrics_helper_;
+
+  VideoFrameConverter video_frame_converter_;
+
+  raw_ptr<gpu::SharedImageManager> shared_image_manager_ = nullptr;
+  gpu::MemoryTypeTracker memory_type_tracker_{nullptr};
+
+  // The GPU driver bug workarounds.
+  const gpu::GpuDriverBugWorkarounds gpu_workarounds_;
 
   base::WeakPtrFactory<NdkVideoEncodeAccelerator> weak_ptr_factory_{this};
 };

@@ -76,7 +76,8 @@ ArchivableCredential* TestPasswordCredential() {
                                            serviceName:@"example.com"
                               registryControlledDomain:@"example.com"
                                               username:@"username_value"
-                                                  note:@"note"];
+                                                  note:@"note"
+                                          lastUsedTime:0];
 }
 
 ArchivableCredential* TestPasswordCredential2() {
@@ -90,7 +91,8 @@ ArchivableCredential* TestPasswordCredential2() {
                                         serviceName:@"example2.com"
                            registryControlledDomain:@"example2.com"
                                            username:@"username_value2"
-                                               note:@"note2"];
+                                               note:@"note2"
+                                       lastUsedTime:0];
 }
 
 NSArray<ASCredentialServiceIdentifier*>* ServiceIdentifierWithName(
@@ -308,11 +310,6 @@ TEST_F(CredentialListMediatorTest, FetchAllCredentialsPasskeysOnly) {
 
 // Tests that fetching all credentials filters out hidden passkeys.
 TEST_F(CredentialListMediatorTest, FetchAllCredentialsWithHiddenPasskeys) {
-  NSUserDefaults* defaults = app_group::GetGroupUserDefaults();
-  [defaults setBool:YES
-             forKey:AppGroupUserDefaulsCredentialProviderSignalAPIEnabled()];
-  [defaults synchronize];
-
   ArchivableCredential* passkey_credential = TestPasskeyCredential();
   ArchivableCredential* hidden_passkey = TestPasskeyCredential(/*hidden=*/YES);
 
@@ -431,6 +428,288 @@ TEST_F(CredentialListMediatorTest, FilterPasskeyAndPasswordCredentials) {
   ASSERT_EQ(filtered_credentials.count, 2u);
   EXPECT_NSEQ(filtered_credentials[0], password_credential_1);
   EXPECT_NSEQ(filtered_credentials[1], passkey_credential);
+}
+
+// Tests that filtering password credentials works properly for subdomains.
+TEST_F(CredentialListMediatorTest, FilterPasswordCredentialsSubdomain) {
+  ArchivableCredential* credential =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"http://example.com"
+                                        serviceName:@"example.com"
+                           registryControlledDomain:@"example.com"
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+
+  NSMutableArray<id<Credential>>* credentials = [NSMutableArray array];
+  [credentials addObject:credential];
+  id<CredentialStore> credentialStore =
+      [[MockCredentialStore alloc] initWithCredentials:credentials];
+
+  ASCredentialServiceIdentifier* serviceIdentifier =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"login.example.com"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  NSArray* serviceIdentifiers = [NSArray arrayWithObject:serviceIdentifier];
+
+  CredentialListMediator* credentialListMediator =
+      [[CredentialListMediator alloc] initWithConsumer:nil
+                                             UIHandler:nil
+                                       credentialStore:credentialStore
+                                    serviceIdentifiers:serviceIdentifiers
+                             credentialResponseHandler:nil];
+
+  credentialListMediator.allCredentials =
+      [credentialListMediator fetchAllCredentials];
+
+  NSArray<id<Credential>>* filteredCredentials =
+      [credentialListMediator filterCredentials];
+  ASSERT_EQ(filteredCredentials.count, 1u);
+  EXPECT_NSEQ(filteredCredentials[0], credential);
+}
+
+// Tests that filtering password credentials rejects false matches.
+TEST_F(CredentialListMediatorTest, FilterPasswordCredentialsNoFalseMatch) {
+  ArchivableCredential* credential =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"http://example.com"
+                                        serviceName:@"example.com"
+                           registryControlledDomain:@"example.com"
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+
+  NSMutableArray<id<Credential>>* credentials = [NSMutableArray array];
+  [credentials addObject:credential];
+  id<CredentialStore> credentialStore =
+      [[MockCredentialStore alloc] initWithCredentials:credentials];
+
+  ASCredentialServiceIdentifier* serviceIdentifier1 =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"evil-example.com"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+
+  ASCredentialServiceIdentifier* serviceIdentifier2 =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"example.com.evil"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+
+  ASCredentialServiceIdentifier* serviceIdentifier3 =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"evil.com/login?target=example.com"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+
+  NSArray* serviceIdentifiers =
+      [NSArray arrayWithObjects:serviceIdentifier1, serviceIdentifier2,
+                                serviceIdentifier3, nil];
+
+  CredentialListMediator* credentialListMediator =
+      [[CredentialListMediator alloc] initWithConsumer:nil
+                                             UIHandler:nil
+                                       credentialStore:credentialStore
+                                    serviceIdentifiers:serviceIdentifiers
+                             credentialResponseHandler:nil];
+
+  credentialListMediator.allCredentials =
+      [credentialListMediator fetchAllCredentials];
+
+  NSArray<id<Credential>>* filteredCredentials =
+      [credentialListMediator filterCredentials];
+  ASSERT_EQ(filteredCredentials.count, 0u);
+}
+
+// Tests that an Android-app credential is not suggested to an unrelated
+// web origin whose DNS hostname happens to be lexically equal to the Android
+// package name, when there's no matching registry controlled domain.
+TEST_F(CredentialListMediatorTest,
+       FilterAndroidCredentialsRejectsCollidingWebOrigin) {
+  ArchivableCredential* androidCredential = [[ArchivableCredential alloc]
+               initWithFavicon:nil
+                          gaia:nil
+                      password:@"password"
+                          rank:1
+              recordIdentifier:@"android://hash@example.com"
+             serviceIdentifier:@"android://hash@example.com"
+                   serviceName:@"android://hash@example.com"
+      registryControlledDomain:@""
+                      username:@"uesrname_value"
+                          note:@""
+                  lastUsedTime:0];
+
+  NSMutableArray<id<Credential>>* credentials = [NSMutableArray array];
+  [credentials addObject:androidCredential];
+  id<CredentialStore> credentialStore =
+      [[MockCredentialStore alloc] initWithCredentials:credentials];
+
+  // iOS hands the CPE the *page origin's host* as the service identifier.
+  // A request for example.com should not be matched.
+  ASCredentialServiceIdentifier* requestedSite =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"example.com"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  NSArray* serviceIdentifiers = @[ requestedSite ];
+
+  CredentialListMediator* mediator =
+      [[CredentialListMediator alloc] initWithConsumer:nil
+                                             UIHandler:nil
+                                       credentialStore:credentialStore
+                                    serviceIdentifiers:serviceIdentifiers
+                             credentialResponseHandler:nil];
+  mediator.allCredentials = [mediator fetchAllCredentials];
+  EXPECT_EQ([mediator filterCredentials].count, 0u);
+}
+
+// Tests that password credential matches registry controlled domain correctly.
+TEST_F(CredentialListMediatorTest,
+       PasswordCredentialMatchesRegistryControlledDomain) {
+  ArchivableCredential* credential =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"https://railway.app/"
+                                        serviceName:@"railway.app"
+                           registryControlledDomain:@"railway.app"
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+
+  CredentialListMediator* credentialListMediator =
+      [[CredentialListMediator alloc] initWithConsumer:nil
+                                             UIHandler:nil
+                                       credentialStore:nil
+                                    serviceIdentifiers:nil
+                             credentialResponseHandler:nil];
+
+  // Exact match.
+  EXPECT_TRUE([credentialListMediator passwordCredential:credential
+                         matchesRegistryControlledDomain:@"railway.app"]);
+
+  // Subdomain match.
+  EXPECT_TRUE([credentialListMediator passwordCredential:credential
+                         matchesRegistryControlledDomain:@"login.railway.app"]);
+
+  // Attacker website (e.g. attacker app hosted on private public suffix).
+  // The test should expect the attacker website to fail to match.
+  EXPECT_FALSE([credentialListMediator
+                   passwordCredential:credential
+      matchesRegistryControlledDomain:@"attacker.up.railway.app"]);
+
+  // False matches.
+  EXPECT_FALSE([credentialListMediator passwordCredential:credential
+                          matchesRegistryControlledDomain:@"evil-railway.app"]);
+  EXPECT_FALSE([credentialListMediator
+                   passwordCredential:credential
+      matchesRegistryControlledDomain:@"railway.app.evil.com"]);
+  EXPECT_FALSE([credentialListMediator passwordCredential:credential
+                          matchesRegistryControlledDomain:@"railway.app.evil"]);
+  EXPECT_FALSE([credentialListMediator passwordCredential:credential
+                          matchesRegistryControlledDomain:@"evil.com"]);
+
+  // Empty registryControlledDomain should not match anything.
+  ArchivableCredential* credentialWithEmptyDomain =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"https://railway.app/"
+                                        serviceName:@"railway.app"
+                           registryControlledDomain:@""
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+  EXPECT_FALSE([credentialListMediator
+                   passwordCredential:credentialWithEmptyDomain
+      matchesRegistryControlledDomain:@"railway.app"]);
+
+  // Nil registryControlledDomain should not match anything.
+  ArchivableCredential* credentialWithNilDomain =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"https://railway.app/"
+                                        serviceName:@"railway.app"
+                           registryControlledDomain:nil
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+  EXPECT_FALSE([credentialListMediator
+                   passwordCredential:credentialWithNilDomain
+      matchesRegistryControlledDomain:@"railway.app"]);
+}
+
+// Tests that fallback password credential matching (when
+// registryControlledDomain is empty) matches domain subdomains correctly but
+// rejects public suffix / private registry subdomains.
+TEST_F(CredentialListMediatorTest,
+       PasswordCredentialMatchesFallbackServiceIdentifiers) {
+  ArchivableCredential* credential =
+      [[ArchivableCredential alloc] initWithFavicon:nil
+                                               gaia:nil
+                                           password:@"qwerty123"
+                                               rank:1
+                                   recordIdentifier:@"recordIdentifier"
+                                  serviceIdentifier:@"https://railway.app/"
+                                        serviceName:@"railway.app"
+                           registryControlledDomain:@""
+                                           username:@"username_value"
+                                               note:@"note"
+                                       lastUsedTime:0];
+
+  CredentialListMediator* credentialListMediator =
+      [[CredentialListMediator alloc] initWithConsumer:nil
+                                             UIHandler:nil
+                                       credentialStore:nil
+                                    serviceIdentifiers:nil
+                             credentialResponseHandler:nil];
+
+  // Exact matches.
+  ASCredentialServiceIdentifier* serviceIdentifierExact =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"railway.app"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  EXPECT_TRUE([credentialListMediator
+             passwordCredential:credential
+      matchesServiceIdentifiers:@[ serviceIdentifierExact ]]);
+
+  // Subdomain matches.
+  ASCredentialServiceIdentifier* serviceIdentifierSubdomain =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"login.railway.app"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  EXPECT_TRUE([credentialListMediator
+             passwordCredential:credential
+      matchesServiceIdentifiers:@[ serviceIdentifierSubdomain ]]);
+
+  // Attacker matches (should NOT match!).
+  ASCredentialServiceIdentifier* serviceIdentifierAttacker =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"attacker.up.railway.app"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  EXPECT_FALSE([credentialListMediator
+             passwordCredential:credential
+      matchesServiceIdentifiers:@[ serviceIdentifierAttacker ]]);
+
+  // False matches.
+  ASCredentialServiceIdentifier* serviceIdentifierEvilSuffix =
+      [[ASCredentialServiceIdentifier alloc]
+          initWithIdentifier:@"railway.app.evil.com"
+                        type:ASCredentialServiceIdentifierTypeDomain];
+  EXPECT_FALSE([credentialListMediator
+             passwordCredential:credential
+      matchesServiceIdentifiers:@[ serviceIdentifierEvilSuffix ]]);
 }
 
 }  // namespace credential_provider_extension

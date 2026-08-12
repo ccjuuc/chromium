@@ -20,13 +20,14 @@
 #include "base/time/time.h"
 #include "chrome/common/actor.mojom-shared.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/actor_logging.h"
-#include "chrome/common/actor/journal_details_builder.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/renderer/actor/click_dispatcher.h"
 #include "chrome/renderer/actor/click_tool.h"
 #include "chrome/renderer/actor/key_dispatcher.h"
 #include "chrome/renderer/actor/tool_utils.h"
+#include "components/actor/core/actor_logging.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
@@ -35,7 +36,6 @@
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/public/web/web_element.h"
-#include "third_party/blink/public/web/web_form_control_element.h"
 #include "third_party/blink/public/web/web_frame_widget.h"
 #include "third_party/blink/public/web/web_hit_test_result.h"
 #include "third_party/blink/public/web/web_input_element.h"
@@ -51,7 +51,6 @@ namespace actor {
 
 using ::blink::WebCoalescedInputEvent;
 using ::blink::WebElement;
-using ::blink::WebFormControlElement;
 using ::blink::WebInputEvent;
 using ::blink::WebInputEventResult;
 using ::blink::WebKeyboardEvent;
@@ -251,7 +250,7 @@ const absl::flat_hash_map<char16_t, char16_t>& GetAltGrMap() {
 bool PrepareTargetForMode(WebLocalFrame& frame, mojom::TypeAction::Mode mode) {
   // TODO(crbug.com/409570203): Use DELETE_EXISTING regardless of `mode` but
   // we'll have to implement the different insertion modes.
-  frame.ExecuteCommand(WebString::FromUTF8("SelectAll"));
+  frame.ExecuteCommand(WebString("SelectAll"));
   return true;
 }
 
@@ -389,8 +388,14 @@ WebInputEventResult TypeTool::CreateAndDispatchKeyEvent(
   key_event.text[0] = key_params.text;
   key_event.unmodified_text[0] = key_params.unmodified_text;
 
+  base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
   WebInputEventResult result = widget.HandleInputEvent(
       WebCoalescedInputEvent(key_event, ui::LatencyInfo()));
+
+  if (!weak_this) {
+    return result;
+  }
+
   journal_->Log(task_id_, WebInputEvent::GetName(type),
                 JournalDetailsBuilder()
                     .Add("key", key_params.dom_key)
@@ -410,8 +415,13 @@ mojom::ActionResultPtr TypeTool::SimulateKeyPress(
                       "No widget during simulate key down");
   }
 
+  base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
   WebInputEventResult down_result = CreateAndDispatchKeyEvent(
       *widget, WebInputEvent::Type::kRawKeyDown, params);
+
+  if (!weak_this) {
+    return nullptr;
+  }
 
   // Only the KeyDown event will check for and report failure. The reason the
   // other events don't is that if the KeyDown event was dispatched to the page,
@@ -439,6 +449,9 @@ mojom::ActionResultPtr TypeTool::SimulateKeyPress(
   if (params.dom_key != "Dead") {
     WebInputEventResult char_result =
         CreateAndDispatchKeyEvent(*widget, WebInputEvent::Type::kChar, params);
+    if (!weak_this) {
+      return nullptr;
+    }
     if (char_result == WebInputEventResult::kHandledSuppressed) {
       ACTOR_LOG() << "Warning: Char event for key " << params.dom_key
                   << " suppressed.";
@@ -456,6 +469,9 @@ mojom::ActionResultPtr TypeTool::SimulateKeyPress(
 
   WebInputEventResult up_result =
       CreateAndDispatchKeyEvent(*widget, WebInputEvent::Type::kKeyUp, params);
+  if (!weak_this) {
+    return nullptr;
+  }
   if (up_result == WebInputEventResult::kHandledSuppressed) {
     ACTOR_LOG() << "Warning: KeyUp event for key " << params.dom_key
                 << " suppressed.";
@@ -465,14 +481,9 @@ mojom::ActionResultPtr TypeTool::SimulateKeyPress(
 }
 
 void TypeTool::Execute(ToolFinishedCallback callback) {
-  ValidatedResult validated_target = Validate();
-  if (!validated_target.has_value()) {
-    std::move(callback).Run(std::move(validated_target.error()));
-    return;
-  }
-
+  CHECK(resolved_target_.has_value())
+      << "Execute tool was called before validation";
   // Injecting a click to get focus.
-  resolved_target_ = validated_target.value();
   journal_->Log(task_id_, "TypeTool::Execute::Focus",
                 JournalDetailsBuilder()
                     .Add("coord", resolved_target_->widget_point)
@@ -488,13 +499,22 @@ void TypeTool::Cancel() {
   // Clicking is completed before key dispatching, so there shouldn't be both.
   CHECK(!(click_dispatcher_ && key_dispatcher_));
 
+  // click_dispatcher_->Cancel() or key_dispatcher_->Cancel() synchronously
+  // dispatches DOM events that might destroy the owning frame and this tool.
+  // Use a weak pointer to detect if `this` is still valid.
+  base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
+
   if (click_dispatcher_) {
     click_dispatcher_->Cancel();
-    click_dispatcher_.reset();
+    if (weak_this) {
+      click_dispatcher_.reset();
+    }
   }
   if (key_dispatcher_) {
     key_dispatcher_->Cancel();
-    key_dispatcher_.reset();
+    if (weak_this) {
+      key_dispatcher_.reset();
+    }
   }
 }
 
@@ -549,7 +569,11 @@ void TypeTool::OnFocusingClickComplete(ToolFinishedCallback callback,
     journal_->Log(
         task_id_, "TypeTool::Execute::FocusElementEditable",
         JournalDetailsBuilder().Add("focus", focused_element).Build());
+    base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
     PrepareTargetForMode(*focused_frame, action_->mode);
+    if (!weak_this) {
+      return;
+    }
   } else {
     if (focused_element) {
       journal_->Log(
@@ -587,8 +611,12 @@ void TypeTool::OnFocusingClickComplete(ToolFinishedCallback callback,
 
   if (can_simulate_typing) {
     if (!base::FeatureList::IsEnabled(features::kGlicActorIncrementalTyping)) {
+      base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
       for (const auto& param : key_sequence_) {
         mojom::ActionResultPtr result = SimulateKeyPress(param);
+        if (!weak_this) {
+          return;
+        }
         if (!IsOk(*result)) {
           // The initial click may have changed the page.
           result->requires_page_stabilization = true;
@@ -617,8 +645,12 @@ void TypeTool::OnFocusingClickComplete(ToolFinishedCallback callback,
                       .Add("text", action_->text)
                       .Add("focus", focused_element)
                       .Build());
-    focused_element.PasteText(WebString::FromUTF8(action_->text),
-                              /*replace_all=*/false);
+    base::WeakPtr<TypeTool> weak_this = weak_ptr_factory_.GetWeakPtr();
+    focused_element.PasteText(WebString::FromUtf8(action_->text),
+                              /*replace_all=*/false, /*smart_replace=*/true);
+    if (!weak_this) {
+      return;
+    }
     std::move(callback).Run(MakeOkResult());
   } else {
     std::move(callback).Run(MakeResult(
@@ -644,7 +676,7 @@ bool TypeTool::SupportsPaintStability() const {
   return true;
 }
 
-TypeTool::ValidatedResult TypeTool::Validate() const {
+ValidationResult TypeTool::Validate() {
   CHECK(frame_->GetWebFrame());
   CHECK(frame_->GetWebFrame()->FrameWidget());
 
@@ -652,26 +684,38 @@ TypeTool::ValidatedResult TypeTool::Validate() const {
 
   auto resolved_target = ValidateAndResolveTarget();
   if (!resolved_target.has_value()) {
-    return base::unexpected(std::move(resolved_target.error()));
+    return ValidationResult(std::move(resolved_target.error()));
   }
 
+  const WebNode& node = resolved_target->node;
   if (target_->is_dom_node_id()) {
-    const WebNode& node = resolved_target->node;
     if (!node.IsElementNode()) {
-      return base::unexpected(
+      return ValidationResult(
           MakeResult(mojom::ActionResultCode::kTypeTargetNotElement));
     }
-
-    WebElement element = node.To<WebElement>();
-    if (WebFormControlElement form_control =
-            element.DynamicTo<WebFormControlElement>()) {
-      if (!form_control.IsEnabled()) {
-        return base::unexpected(
-            MakeResult(mojom::ActionResultCode::kElementDisabled));
-      }
-    }
   }
-  return resolved_target;
+
+  // Type dispatch follows normal DOM-event behavior, so it skips ARIA checks.
+  // The rollout flag only controls non-disabled Blink-disallowed states.
+  // This also covers coordinate targets. Legacy coordinate-based typing skipped
+  // the early disabled-control check and reached Blink event dispatch; this now
+  // fails validation like DOM-node type targets.
+  const bool reject_non_disabled_reasons = base::FeatureList::IsEnabled(
+      features::kGlicActorRejectInteractionDisallowedTargets);
+  std::optional<blink::WebElementInteractionDisallowedReason>
+      disallowed_reason = GetInteractionDisallowedReason(
+          *resolved_target, /*check_aria=*/false, reject_non_disabled_reasons);
+  if (disallowed_reason.has_value()) {
+    return ValidationResult(MakeResult(
+        mojom::ActionResultCode::kElementDisabled,
+        /*requires_page_stabilization=*/false,
+        absl::StrFormat("The target element is unavailable because it is %s.",
+                        WebElementInteractionDisallowedReasonToString(
+                            *disallowed_reason))));
+  }
+
+  resolved_target_ = std::move(resolved_target.value());
+  return ValidationResult(MakeOkResult(), resolved_target_->widget_point);
 }
 
 bool TypeTool::ProcessInputText(

@@ -5,8 +5,6 @@
 #include "base/command_line.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -17,7 +15,6 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 namespace {
@@ -45,18 +42,15 @@ struct StartupPrefs {
 
 struct LaunchNavigationBrowserTestParam {
   LaunchNavigationBrowserTestParam(
-      bool enable_feature,
       StartupPrefs prefs,
       const std::vector<std::string>& urls,
       const std::vector<std::string>& urls_after_restart = {},
       const std::vector<std::string>& cmd_line_switches = {})
-      : enable_feature(enable_feature),
-        startup_prefs(prefs),
+      : startup_prefs(prefs),
         cmd_line_urls(std::move(urls)),
         cmd_line_urls_after_restart(std::move(urls_after_restart)),
         cmd_line_switches(std::move(cmd_line_switches)) {}
 
-  const bool enable_feature;
   const StartupPrefs startup_prefs;
   const std::vector<std::string> cmd_line_urls;
   // `cmd_line_urls_after_restart` is only applicable to test cases under
@@ -73,43 +67,30 @@ void AppendUrlsToCmdLine(base::CommandLine* command_line,
   }
 }
 
-base::Value::List ListValueFromTestUrls(
+base::ListValue ListValueFromTestUrls(
     const std::vector<std::string>& test_urls,
     net::EmbeddedTestServer* embedded_test_server) {
-  base::Value::List url_list;
+  base::ListValue url_list;
   for (const std::string& url : test_urls) {
     url_list.Append(base::Value(embedded_test_server->GetURL(url).spec()));
   }
   return url_list;
 }
 
-bool IsPerformanceNavigationTimingConfidenceEnabled() {
-  return base::FeatureList::IsEnabled(
-      blink::features::kPerformanceNavigationTimingConfidence);
-}
 }  // namespace
 
 class LaunchNavigationBrowserTest
     : public InProcessBrowserTest,
-      public BrowserListObserver,
       public testing::WithParamInterface<LaunchNavigationBrowserTestParam> {
  public:
   LaunchNavigationBrowserTest() {
-    if (GetParam().enable_feature) {
-      // Set the noise probability to 18.0 to ensure we always get the
-      // computed value back.
-      scoped_feature_list_.InitWithFeaturesAndParameters(
-          /*enabled_features=*/{{features::kNavigationConfidenceEpsilon,
-                                 {{"navigation-confidence-epsilon-value",
-                                   "18.0"}}},
-                                {blink::features::
-                                     kPerformanceNavigationTimingConfidence,
-                                 {}}},
-          /*disabled_features=*/{});
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          blink::features::kPerformanceNavigationTimingConfidence);
-    }
+    // Set the noise probability to 18.0 to ensure we always get the computed
+    // value back.
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/{{features::kNavigationConfidenceEpsilon,
+                               {{"navigation-confidence-epsilon-value",
+                                 "18.0"}}}},
+        /*disabled_features=*/{});
   }
 
   ~LaunchNavigationBrowserTest() override = default;
@@ -134,7 +115,7 @@ class LaunchNavigationBrowserTest
   void CheckActivePageNavigationConfidence(
       const std::string& expected_navigation_confidence) {
     CheckPageNavigationConfidenceForWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         expected_navigation_confidence);
   }
 
@@ -161,7 +142,7 @@ class LaunchNavigationBrowserTest
       int tab_index,
       const std::string& expected_navigation_confidence) {
     CheckPageNavigationConfidenceForWebContents(
-        browser()->tab_strip_model()->GetWebContentsAt(tab_index),
+        browser()->GetTabStripModel()->GetWebContentsAt(tab_index),
         expected_navigation_confidence);
   }
 
@@ -216,14 +197,9 @@ class LaunchNavigationBrowserBasicTest : public LaunchNavigationBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserBasicTest, CmdLineLaunch) {
-  std::vector<size_t> expected_usecounter_count = {0, 0, 0};
-  std::vector<std::string> expected_navigation_confidence = {
-      "undefined", "undefined", "undefined"};
-
-  if (IsPerformanceNavigationTimingConfidenceEnabled()) {
-    expected_navigation_confidence = {"low", "high", "high"};
-    expected_usecounter_count = {1, 2, 3};
-  }
+  std::vector<size_t> expected_usecounter_count = {1, 2, 3};
+  std::vector<std::string> expected_navigation_confidence = {"low", "high",
+                                                             "high"};
 
   CheckActivePageNavigationConfidence(expected_navigation_confidence[0]);
   CheckUseCounterCount(expected_usecounter_count[0]);
@@ -238,33 +214,14 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserBasicTest, CmdLineLaunch) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLBasicTestFeatureEnabled,
+    CmdLineURLBasicTest,
     LaunchNavigationBrowserBasicTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/true,
-                                                     StartupPrefs(),
-                                                     {url1})));
+    testing::Values(LaunchNavigationBrowserTestParam(StartupPrefs(), {url1})));
 
 INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLBasicTestFeatureDisabled,
+    CmdLineURLIncognitoBasicTest,
     LaunchNavigationBrowserBasicTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/false,
-                                                     StartupPrefs(),
-                                                     {url1})));
-
-INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLIncognitoBasicTestFeatureEnabled,
-    LaunchNavigationBrowserBasicTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/true,
-                                                     StartupPrefs(),
-                                                     {url1},
-                                                     {},
-                                                     {switches::kIncognito})));
-
-INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLIncognitoBasicTestFeatureDisabled,
-    LaunchNavigationBrowserBasicTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/false,
-                                                     StartupPrefs(),
+    testing::Values(LaunchNavigationBrowserTestParam(StartupPrefs(),
                                                      {url1},
                                                      {},
                                                      {switches::kIncognito})));
@@ -312,14 +269,9 @@ class LaunchNavigationBrowserRestartTest : public LaunchNavigationBrowserTest {
 
 IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserRestartTest,
                        PRE_CmdLineURLRestartTest) {
-  std::vector<size_t> expected_usecounter_count = {0, 0, 0};
-  std::vector<std::string> expected_navigation_confidence = {
-      "undefined", "undefined", "undefined"};
-
-  if (IsPerformanceNavigationTimingConfidenceEnabled()) {
-    expected_navigation_confidence = {"high", "high", "high"};
-    expected_usecounter_count = {1, 2, 3};
-  }
+  std::vector<size_t> expected_usecounter_count = {1, 2, 3};
+  std::vector<std::string> expected_navigation_confidence = {"high", "high",
+                                                             "high"};
 
   Navigate("/hello.html");
   CheckActivePageNavigationConfidence(expected_navigation_confidence[0]);
@@ -334,9 +286,9 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserRestartTest,
   CheckUseCounterCount(expected_usecounter_count[2]);
 
   // Set browser startup behavior here for the non-PRE split test.
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       prefs::kRestoreOnStartup, GetParam().startup_prefs.restore_on_startup);
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kURLsToRestoreOnStartup,
       ListValueFromTestUrls(GetParam().startup_prefs.urls_to_restore,
                             embedded_test_server()));
@@ -347,21 +299,16 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserRestartTest,
                        CmdLineURLRestartTest) {
   const ParamType& test_params = GetParam();
   const size_t expected_initial_tab_count = GetExpectedTabCountFromRestore();
-  const bool expect_valid_navigation_confidence =
-      IsPerformanceNavigationTimingConfidenceEnabled();
-  std::string expected_initial_navigation_confidence_value =
-      expect_valid_navigation_confidence ? "low" : "undefined";
-
   std::vector<std::string> expected_initial_navigation_confidence;
   expected_initial_navigation_confidence.insert(
       expected_initial_navigation_confidence.end(), expected_initial_tab_count,
-      expected_initial_navigation_confidence_value);
+      "low");
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   ASSERT_EQ(prefs->GetUserPrefValue(prefs::kRestoreOnStartup)->GetInt(),
             test_params.startup_prefs.restore_on_startup);
   ASSERT_EQ(expected_initial_tab_count,
-            static_cast<size_t>(browser()->tab_strip_model()->count()));
+            static_cast<size_t>(browser()->GetTabStripModel()->count()));
   ASSERT_EQ(expected_initial_tab_count,
             expected_initial_navigation_confidence.size());
 
@@ -373,16 +320,7 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserRestartTest,
 
   // Confirm new navigations get "high" navigation confidence.
   {
-    std::vector<size_t> expected_usecounter_count = {0, 0};
-    std::vector<std::string> expected_navigation_confidence = {"undefined",
-                                                               "undefined"};
-
-    if (IsPerformanceNavigationTimingConfidenceEnabled()) {
-      expected_navigation_confidence = {"high", "high"};
-      expected_usecounter_count = {expected_initial_tab_count + 1,
-                                   expected_initial_tab_count + 2};
-    }
-
+    std::vector<std::string> expected_navigation_confidence = {"high", "high"};
     Navigate("/page_with_image.html");
     CheckActivePageNavigationConfidence(expected_navigation_confidence[0]);
 
@@ -396,7 +334,6 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserRestartTest,
 INSTANTIATE_TEST_SUITE_P(CmdLineURLRestartTestRestorePreviousSession,
                          LaunchNavigationBrowserRestartTest,
                          testing::Values(LaunchNavigationBrowserTestParam(
-                             /*enable_feature=*/true,
                              StartupPrefs(kRestoreLastSession),
                              {url1},
                              {url1, url2})));
@@ -407,20 +344,18 @@ INSTANTIATE_TEST_SUITE_P(CmdLineURLRestartTestRestorePreviousSession,
 INSTANTIATE_TEST_SUITE_P(CmdLineURLRestartTestRestoreUrlList,
                          LaunchNavigationBrowserRestartTest,
                          testing::Values(LaunchNavigationBrowserTestParam(
-                             /*enable_feature=*/true,
                              StartupPrefs(kRestoreUrls, {url1, url2}),
                              {url1},
                              {url1, url2})));
 
 // Tests navigation type for pages when the browser is restarted with
 // session.restore_on_startup pref set to open NTP on startup.
-INSTANTIATE_TEST_SUITE_P(CmdLineURLRestartTestBasic,
-                         LaunchNavigationBrowserRestartTest,
-                         testing::Values(LaunchNavigationBrowserTestParam(
-                             /*enable_feature=*/true,
-                             StartupPrefs(),
-                             {url1},
-                             {url1, url2})));
+INSTANTIATE_TEST_SUITE_P(
+    CmdLineURLRestartTestBasic,
+    LaunchNavigationBrowserRestartTest,
+    testing::Values(LaunchNavigationBrowserTestParam(StartupPrefs(),
+                                                     {url1},
+                                                     {url1, url2})));
 
 class LaunchNavigationBrowserWithIFrameTest
     : public LaunchNavigationBrowserTest {
@@ -428,7 +363,7 @@ class LaunchNavigationBrowserWithIFrameTest
   void CheckActivePageFrameNavigationConfidence(
       const std::string& expected_navigation_confidence) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     content::RenderFrameHost* main_rfh = web_contents->GetPrimaryMainFrame();
     AwaitDocumentOnLoadCompleted(web_contents);
 
@@ -450,15 +385,10 @@ class LaunchNavigationBrowserWithIFrameTest
 
 IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserWithIFrameTest,
                        CmdLineLaunchWithIFrame) {
-  std::vector<std::string> expected_main_frame_navigation_confidence = {
-      "undefined", "undefined"};
-  std::vector<std::string> expected_iframe_navigation_confidence = {
-      "undefined", "undefined"};
-
-  if (IsPerformanceNavigationTimingConfidenceEnabled()) {
-    expected_main_frame_navigation_confidence = {"low", "high"};
-    expected_iframe_navigation_confidence = {"null", "null"};
-  }
+  std::vector<std::string> expected_main_frame_navigation_confidence = {"low",
+                                                                        "high"};
+  std::vector<std::string> expected_iframe_navigation_confidence = {"null",
+                                                                    "null"};
 
   CheckActivePageNavigationConfidence(
       expected_main_frame_navigation_confidence[0]);
@@ -475,36 +405,25 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserWithIFrameTest,
 IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserWithIFrameTest,
                        CreateEmptyFrame) {
   Navigate("/launch_navigation_frame.html");
-  CheckActivePageNavigationConfidence(
-      IsPerformanceNavigationTimingConfidenceEnabled() ? "high" : "undefined");
-  CheckActivePageFrameNavigationConfidence(
-      IsPerformanceNavigationTimingConfidenceEnabled() ? "null" : "undefined");
+  CheckActivePageNavigationConfidence("high");
+  CheckActivePageFrameNavigationConfidence("null");
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLIFrameTestFeatureEnabled,
+    CmdLineURLIFrameTest,
     LaunchNavigationBrowserWithIFrameTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/true,
-                                                     StartupPrefs(),
-                                                     {url3})));
-
-INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLIFrameTestFeatureDisabled,
-    LaunchNavigationBrowserWithIFrameTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/false,
-                                                     StartupPrefs(),
-                                                     {url3})));
+    testing::Values(LaunchNavigationBrowserTestParam(StartupPrefs(), {url3})));
 
 class LaunchNavigationBrowserWithPopupTest
     : public LaunchNavigationBrowserTest {
  protected:
   content::WebContents* OpenPopupFromActiveWebContents() const {
-    auto* contents = browser()->tab_strip_model()->GetActiveWebContents();
+    auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
     content::ExecuteScriptAsync(
         contents, "w = open('about:blank', '', 'width=200,height=200');");
     Browser* popup = ui_test_utils::WaitForBrowserToOpen();
     EXPECT_NE(popup, browser());
-    auto* popup_contents = popup->tab_strip_model()->GetActiveWebContents();
+    auto* popup_contents = popup->GetTabStripModel()->GetActiveWebContents();
     EXPECT_TRUE(WaitForLoadStop(popup_contents));
     EXPECT_TRUE(WaitForRenderFrameReady(popup_contents->GetPrimaryMainFrame()));
     return popup_contents;
@@ -521,15 +440,10 @@ class LaunchNavigationBrowserWithPopupTest
 
 IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserWithPopupTest,
                        CmdLineLaunchWithPopup) {
-  std::vector<std::string> expected_main_frame_navigation_confidence = {
-      "undefined", "undefined"};
-  std::vector<std::string> expected_popup_navigation_confidence = {"undefined",
-                                                                   "undefined"};
-
-  if (IsPerformanceNavigationTimingConfidenceEnabled()) {
-    expected_main_frame_navigation_confidence = {"low", "high"};
-    expected_popup_navigation_confidence = {"high", "high"};
-  }
+  std::vector<std::string> expected_main_frame_navigation_confidence = {"low",
+                                                                        "high"};
+  std::vector<std::string> expected_popup_navigation_confidence = {"high",
+                                                                   "high"};
 
   {
     auto* popup_contents = OpenPopupFromActiveWebContents();
@@ -550,15 +464,6 @@ IN_PROC_BROWSER_TEST_P(LaunchNavigationBrowserWithPopupTest,
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLPopupTestFeatureEnabled,
+    CmdLineURLPopupTest,
     LaunchNavigationBrowserWithPopupTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/true,
-                                                     StartupPrefs(),
-                                                     {url1})));
-
-INSTANTIATE_TEST_SUITE_P(
-    CmdLineURLPopupTestFeatureDisabled,
-    LaunchNavigationBrowserWithPopupTest,
-    testing::Values(LaunchNavigationBrowserTestParam(/*enable_feature=*/false,
-                                                     StartupPrefs(),
-                                                     {url1})));
+    testing::Values(LaunchNavigationBrowserTestParam(StartupPrefs(), {url1})));

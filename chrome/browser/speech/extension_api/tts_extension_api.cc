@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/lazy_instance.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
@@ -24,12 +26,13 @@
 #include "extensions/browser/extension_function_registry.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/common/constants.h"
 #include "third_party/blink/public/mojom/speech/speech_synthesis.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_extension_constants.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos_factory.h"
-#include "chrome/common/extensions/extension_constants.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace constants = tts_extension_api_constants;
@@ -140,7 +143,7 @@ class TtsExtensionEventHandler : public content::UtteranceEventDelegate {
       return;
     }
 
-    base::Value::Dict details;
+    base::DictValue details;
     if (char_index >= 0) {
       details.Set(constants::kCharIndexKey, char_index);
     }
@@ -154,7 +157,7 @@ class TtsExtensionEventHandler : public content::UtteranceEventDelegate {
     details.Set(constants::kSrcIdKey, utterance->GetSrcId());
     details.Set(constants::kIsFinalEventKey, utterance->IsFinished());
 
-    base::Value::List arguments;
+    base::ListValue arguments;
     arguments.Append(std::move(details));
 
     auto event = std::make_unique<extensions::Event>(
@@ -181,7 +184,7 @@ ExtensionFunction::ResponseAction TtsSpeakFunction::Run() {
     return RespondNow(Error(constants::kErrorUtteranceTooLong));
   }
 
-  base::Value::Dict options;
+  base::DictValue options;
   if (args().size() >= 2 && args()[1].is_dict())
     options = args()[1].GetDict().Clone();
 
@@ -196,7 +199,9 @@ ExtensionFunction::ResponseAction TtsSpeakFunction::Run() {
     EXTENSION_FUNCTION_VALIDATE(lang_value->is_string());
     lang = lang_value->GetString();
   }
-  if (!lang.empty() && !l10n_util::IsValidLocaleSyntax(lang)) {
+  if (!lang.empty() && !base::i18n::LanguageTagConverter::GetInstance()
+                            .FromString(lang)
+                            .has_value()) {
     return RespondNow(Error(constants::kErrorInvalidLang));
   }
 
@@ -234,8 +239,7 @@ ExtensionFunction::ResponseAction TtsSpeakFunction::Run() {
 
   base::flat_set<content::TtsEventType> required_event_types;
   if (options.contains(constants::kRequiredEventTypesKey)) {
-    base::Value::List* list =
-        options.FindList(constants::kRequiredEventTypesKey);
+    base::ListValue* list = options.FindList(constants::kRequiredEventTypesKey);
     EXTENSION_FUNCTION_VALIDATE(list);
     for (const base::Value& i : *list) {
       const std::string* event_type = i.GetIfString();
@@ -247,8 +251,7 @@ ExtensionFunction::ResponseAction TtsSpeakFunction::Run() {
 
   base::flat_set<content::TtsEventType> desired_event_types;
   if (options.contains(constants::kDesiredEventTypesKey)) {
-    base::Value::List* list =
-        options.FindList(constants::kDesiredEventTypesKey);
+    base::ListValue* list = options.FindList(constants::kDesiredEventTypesKey);
     EXTENSION_FUNCTION_VALIDATE(list);
     for (const base::Value& i : *list) {
       const std::string* event_type = i.GetIfString();
@@ -353,10 +356,10 @@ ExtensionFunction::ResponseAction TtsGetVoicesFunction::Run() {
   content::TtsController::GetInstance()->GetVoices(browser_context(),
                                                    source_url(), &voices);
 
-  base::Value::List result_voices;
+  base::ListValue result_voices;
   for (size_t i = 0; i < voices.size(); ++i) {
     const content::VoiceData& voice = voices[i];
-    base::Value::Dict result_voice;
+    base::DictValue result_voice;
     result_voice.Set(constants::kVoiceNameKey, voice.name);
     result_voice.Set(constants::kRemoteKey, voice.remote);
     if (!voice.lang.empty())
@@ -364,7 +367,7 @@ ExtensionFunction::ResponseAction TtsGetVoicesFunction::Run() {
     if (!voice.engine_id.empty())
       result_voice.Set(constants::kExtensionIdKey, voice.engine_id);
 
-    base::Value::List event_types;
+    base::ListValue event_types;
     for (auto& event : voice.events) {
       event_types.Append(TtsEventTypeToString(event));
     }
@@ -421,7 +424,7 @@ void TtsAPI::OnVoicesChanged() {
   }
   auto event = std::make_unique<extensions::Event>(
       events::TTS_ON_VOICES_CHANGED, ::events::kOnVoicesChanged,
-      base::Value::List());
+      base::ListValue());
   event_router_->BroadcastEvent(std::move(event));
 }
 

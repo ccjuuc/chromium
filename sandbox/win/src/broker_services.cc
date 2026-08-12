@@ -11,11 +11,11 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/platform_thread.h"
+#include "base/trace_event/trace_event.h"
 #include "base/win/access_token.h"
 #include "base/win/current_module.h"
 #include "base/win/scoped_handle.h"
@@ -151,7 +151,8 @@ DWORD WINAPI TargetEventsThread(PVOID param) {
       // (as the key is no longer valid). We therefore check if the tracker has
       // already been deleted. Note that Windows may emit notifications after
       // 'job finished' (active process zero), so not every case is unexpected.
-      if (!base::Contains(jobs, tracker, &std::unique_ptr<JobTracker>::get)) {
+      if (!std::ranges::contains(jobs, tracker,
+                                 &std::unique_ptr<JobTracker>::get)) {
         // CHECK if job already deleted.
         CHECK_NE(static_cast<int>(event), JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO);
         // Continue to next notification otherwise.
@@ -262,8 +263,7 @@ bool CheckImpersonationToken(HANDLE thread) {
 // object. The `command_line` parameter is intentionally not const so that
 // it can be passed directly to CreateProcessAsUser.
 ResultCode CreateSandboxProcess(
-    const std::wstring& exe_path,
-    std::wstring& command_line,
+    const base::CommandLine& command_line,
     const TargetTokens& tokens,
     StartupInformationHelper* startup_info_helper,
     base::win::ScopedProcessInformation& process_info,
@@ -278,11 +278,12 @@ ResultCode CreateSandboxProcess(
   if (startup_info->has_extended_startup_info()) {
     flags |= EXTENDED_STARTUPINFO_PRESENT;
   }
-
   bool inherit_handles = startup_info_helper->ShouldInheritHandles();
   PROCESS_INFORMATION temp_process_info = {};
+  std::wstring args = command_line.GetCommandLineString();
   if (!::CreateProcessAsUserW(
-          tokens.lockdown_.get(), exe_path.c_str(), std::data(command_line),
+          tokens.lockdown_.get(), command_line.GetProgram().value().c_str(),
+          std::data(args),
           nullptr,  // No security attribute.
           nullptr,  // No thread attribute.
           inherit_handles, flags, startup_info_helper->GetEnvironment(),
@@ -454,24 +455,18 @@ std::unique_ptr<TargetPolicy> BrokerServicesBase::CreatePolicy(
   return policy;
 }
 
-void BrokerServicesBase::SpawnTargetAsync(std::wstring_view exe_path,
-                                          std::wstring_view command_line,
+void BrokerServicesBase::SpawnTargetAsync(const base::CommandLine& command_line,
                                           std::unique_ptr<TargetPolicy> policy,
                                           SpawnTargetCallback result_callback) {
   // The `policy` downcast is safe as long as we control CreatePolicy().
   SpawnTargetAsyncImpl(
-      exe_path, command_line,
+      command_line,
       base::WrapUnique(static_cast<PolicyBase*>(policy.release())),
       std::move(result_callback));
 }
 
 base::expected<BrokerServicesBase::CreateTargetInfo, ResultCode>
-BrokerServicesBase::PreSpawnTarget(std::wstring_view exe_path,
-                                   std::wstring_view command_line,
-                                   PolicyBase* policy_base) {
-  if (exe_path.empty() || command_line.empty()) {
-    return base::unexpected(SBOX_ERROR_BAD_PARAMS);
-  }
+BrokerServicesBase::PreSpawnTarget(PolicyBase* policy_base) {
   // This code should only be called from the exe, ensure that this is always
   // the case.
   HMODULE exe_module = nullptr;
@@ -544,9 +539,11 @@ BrokerServicesBase::PreSpawnTarget(std::wstring_view exe_path,
   startup_info->SetStdHandles(policy_base->GetStdoutHandle(),
                               policy_base->GetStderrHandle());
   // Add any additional handles that were requested.
-  const auto& policy_handle_list = policy_base->GetHandlesBeingShared();
-  for (HANDLE handle : policy_handle_list) {
+  for (HANDLE handle : policy_base->GetHandlesBeingShared()) {
     startup_info->AddInheritedHandle(handle);
+  }
+  for (const auto& handle : config_base->shared_handles()) {
+    startup_info->AddInheritedHandle(handle.get());
   }
 
   AppContainer* container = config_base->GetAppContainer();
@@ -569,11 +566,10 @@ BrokerServicesBase::PreSpawnTarget(std::wstring_view exe_path,
 // Does all the interesting sandbox setup and creates the target process inside
 // the sandbox.
 void BrokerServicesBase::SpawnTargetAsyncImpl(
-    std::wstring_view exe_path,
-    std::wstring_view command_line,
+    const base::CommandLine& command_line,
     std::unique_ptr<PolicyBase> policy_base,
     SpawnTargetCallback result_callback) {
-  auto result = PreSpawnTarget(exe_path, command_line, policy_base.get());
+  auto result = PreSpawnTarget(policy_base.get());
   if (!result.has_value()) {
     std::move(result_callback)
         .Run(base::win::ScopedProcessInformation(), ::GetLastError(),
@@ -584,32 +580,26 @@ void BrokerServicesBase::SpawnTargetAsyncImpl(
   broker_services_delegate_->ParallelLaunchPostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&BrokerServicesBase::CreateTarget, base::Unretained(this),
-                     std::wstring(exe_path), std::wstring(command_line),
-                     std::move(result.value())),
+                     command_line, std::move(result.value())),
       base::BindOnce(&BrokerServicesBase::FinishSpawnTarget,
                      base::Unretained(this), std::move(policy_base),
                      std::move(result_callback)));
 }
 
 CreateTargetResult BrokerServicesBase::CreateTarget(
-    std::wstring exe_path,
-    std::wstring command_line,
+    base::CommandLine command_line,
     CreateTargetInfo target_info) {
-  // A trace ID for the current scope is generated from the address of a local
-  // variable to ensure uniqueness across threads.
-  const void* trace_id = &target_info;
-  broker_services_delegate_->BeforeTargetProcessCreateOnCreationThread(
-      trace_id);
+  TRACE_EVENT_BEGIN("startup", "TargetProcess::Create");
+  broker_services_delegate_->BeforeTargetProcessCreateOnCreationThread();
 
   // Spawn the target process suspended.
   CreateTargetResult result;
   result.result_code = CreateSandboxProcess(
-      exe_path, command_line, std::get<TargetTokens>(target_info),
+      command_line, std::get<TargetTokens>(target_info),
       std::get<std::unique_ptr<StartupInformationHelper>>(target_info).get(),
       result.process_info, result.last_error);
 
-  broker_services_delegate_->AfterTargetProcessCreateOnCreationThread(
-      trace_id, result.process_info.process_id());
+  TRACE_EVENT_END("startup", "pid", result.process_info.process_id());
 
   return result;
 }

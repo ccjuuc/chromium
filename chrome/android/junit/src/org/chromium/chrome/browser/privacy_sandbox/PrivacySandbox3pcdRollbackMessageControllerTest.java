@@ -32,11 +32,9 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.ActivityTabProvider.ActivityTabTabObserver;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
@@ -52,14 +50,12 @@ import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.content_public.browser.NavigationHandle;
-import org.chromium.content_public.browser.Page;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link PrivacySandbox3pcdRollbackMessageController}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@Features.EnableFeatures(ChromeFeatureList.ROLL_BACK_MODE_B)
 public class PrivacySandbox3pcdRollbackMessageControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -103,20 +99,7 @@ public class PrivacySandbox3pcdRollbackMessageControllerTest {
     private void navigate(boolean hasCommitted) {
         NavigationHandle navigation =
                 NavigationHandle.createForTesting(JUnitTestGURLs.EXAMPLE_URL, false, 0, false);
-        navigation.didFinish(
-                JUnitTestGURLs.EXAMPLE_URL,
-                /* isErrorPage= */ false,
-                hasCommitted,
-                /* isPrimaryMainFrameFragmentNavigation= */ false,
-                /* isDownload= */ false,
-                /* isValidSearchFormUrl= */ false,
-                /* transition= */ 0,
-                /* errorCode= */ 0,
-                /* httpStatuscode= */ 200,
-                /* isExternalProtocol= */ false,
-                /* isPdf= */ false,
-                /* mimeType= */ "",
-                Page.createForTesting());
+        navigation.callDidFinishForTesting(JUnitTestGURLs.EXAMPLE_URL, hasCommitted);
         ActivityTabTabObserver observer = assertNonNull(mController.getActivityTabTabObserver());
         observer.onDidFinishNavigationInPrimaryMainFrame(mTab, navigation);
     }
@@ -199,7 +182,8 @@ public class PrivacySandbox3pcdRollbackMessageControllerTest {
                                     return fragmentArgs
                                             .getString(SingleCategorySettings.EXTRA_CATEGORY)
                                             .equals("third_party_cookies");
-                                }));
+                                }),
+                        eq(false));
     }
 
     @Test

@@ -15,7 +15,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/values_test_util.h"
 #include "build/build_config.h"
 #include "components/image_fetcher/core/fake_image_decoder.h"
 #include "components/image_fetcher/core/image_data_fetcher.h"
@@ -26,11 +28,12 @@
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher.h"
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher_gaia.h"
 #include "components/signin/internal/identity_manager/account_fetcher_service.h"
-#include "components/signin/internal/identity_manager/fake_account_capabilities_fetcher_factory.h"
+#include "components/signin/internal/identity_manager/fake_account_fetcher_factory.h"
 #include "components/signin/internal/identity_manager/fake_profile_oauth2_token_service.h"
 #include "components/signin/public/base/avatar_icon_util.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/base/test_signin_client.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
@@ -271,7 +274,7 @@ class AccountTrackerServiceTest : public testing::Test {
     AccountCapabilitiesTestMutator mutator(&expected_capabilities);
     mutator.SetAllSupportedCapabilities(
         AccountKeyToAccountCapability(account_key));
-    EXPECT_EQ(info.capabilities, expected_capabilities);
+    EXPECT_EQ(info.GetAccountCapabilities(), expected_capabilities);
   }
 
   testing::AssertionResult CheckAccountTrackerEvents(
@@ -296,13 +299,15 @@ class AccountTrackerServiceTest : public testing::Test {
   void ClearAccountTrackerEvents() { account_tracker_events_.clear(); }
 
   void OnAccountUpdated(const AccountInfo& ids) {
-    account_tracker_events_.emplace_back(UPDATED, ids.account_id, ids.gaia,
-                                         ids.email);
+    account_tracker_events_.emplace_back(UPDATED, ids.GetAccountId(),
+                                         ids.GetGaiaId(),
+                                         std::string(ids.GetEmail()));
   }
 
   void OnAccountRemoved(const AccountInfo& ids) {
-    account_tracker_events_.emplace_back(REMOVED, ids.account_id, ids.gaia,
-                                         ids.email);
+    account_tracker_events_.emplace_back(REMOVED, ids.GetAccountId(),
+                                         ids.GetGaiaId(),
+                                         std::string(ids.GetEmail()));
   }
 
   // Helpers to fake access token and user info fetching
@@ -318,8 +323,8 @@ class AccountTrackerServiceTest : public testing::Test {
   void SimulateIssueAccessTokenPersistentError(AccountKey account_key) {
     fake_oauth2_token_service_.IssueErrorForAllPendingRequestsForAccount(
         AccountKeyToAccountId(account_key),
-        GoogleServiceAuthError(
-            GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+        GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+            GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   }
 
   std::string GenerateValidTokenInfoResponse(AccountKey account_key) {
@@ -346,6 +351,10 @@ class AccountTrackerServiceTest : public testing::Test {
   void ReturnAccountImageFetchSuccess(AccountKey account_key);
   void ReturnAccountImageFetchFailure(AccountKey account_key);
   void ReturnAccountCapabilitiesFetchSuccess(AccountKey account_key);
+  void UpdateAccountCapabilities(AccountKey account_key,
+                                 const AccountCapabilities& capabilities);
+  void CompleteAccountCapabilitiesFetchWithoutCapabilities(
+      AccountKey account_key);
   void SimulateParentalSupervisionCheckComplete(
       AccountKey account_key,
       bool is_subject_to_parental_controls);
@@ -389,32 +398,27 @@ class AccountTrackerServiceTest : public testing::Test {
                              AccountTrackerService::MIGRATION_NOT_STARTED);
 #endif
 
-    account_tracker_ = std::make_unique<AccountTrackerService>();
-    account_fetcher_ = std::make_unique<AccountFetcherService>();
-
-    // Register callbacks before initialisation to allow the tests to check the
-    // events that are triggered during the initialisation.
+    account_tracker_ = std::make_unique<AccountTrackerService>(&pref_service_,
+                                                               std::move(path));
     account_tracker_->SetOnAccountUpdatedCallback(base::BindRepeating(
         &AccountTrackerServiceTest::OnAccountUpdated, base::Unretained(this)));
     account_tracker_->SetOnAccountRemovedCallback(base::BindRepeating(
         &AccountTrackerServiceTest::OnAccountRemoved, base::Unretained(this)));
-
-    account_tracker_->Initialize(&pref_service_, std::move(path));
-    auto account_capabilities_fetcher_factory =
-        std::make_unique<FakeAccountCapabilitiesFetcherFactory>();
-    fake_account_capabilities_fetcher_factory_ =
-        account_capabilities_fetcher_factory.get();
+    account_fetcher_ = std::make_unique<AccountFetcherService>();
+    auto account_fetcher_factory = std::make_unique<FakeAccountFetcherFactory>(
+        *token_service(), *signin_client());
+    fake_account_fetcher_factory_ = account_fetcher_factory.get();
     account_fetcher_->Initialize(
         signin_client(), token_service(), account_tracker_.get(),
         std::make_unique<image_fetcher::FakeImageDecoder>(),
-        std::move(account_capabilities_fetcher_factory));
+        std::move(account_fetcher_factory));
     if (network_enabled) {
       account_fetcher_->EnableNetworkFetchesForTest();
     }
   }
 
   void DeleteAccountTracker() {
-    fake_account_capabilities_fetcher_factory_ = nullptr;
+    fake_account_fetcher_factory_ = nullptr;
     account_fetcher_.reset();
     account_tracker_.reset();
     // Allow residual |account_tracker_| posted tasks to run.
@@ -426,8 +430,7 @@ class AccountTrackerServiceTest : public testing::Test {
   FakeProfileOAuth2TokenService fake_oauth2_token_service_;
   std::unique_ptr<AccountFetcherService> account_fetcher_;
   std::unique_ptr<AccountTrackerService> account_tracker_;
-  raw_ptr<FakeAccountCapabilitiesFetcherFactory>
-      fake_account_capabilities_fetcher_factory_;
+  raw_ptr<FakeAccountFetcherFactory> fake_account_fetcher_factory_;
   std::vector<TrackingEvent> account_tracker_events_;
 };
 
@@ -487,8 +490,25 @@ void AccountTrackerServiceTest::ReturnAccountCapabilitiesFetchSuccess(
   AccountCapabilitiesTestMutator mutator(&capabilities);
   mutator.SetAllSupportedCapabilities(
       AccountKeyToAccountCapability(account_key));
-  fake_account_capabilities_fetcher_factory_->CompleteAccountCapabilitiesFetch(
+  fake_account_fetcher_factory_->CompleteAccountCapabilitiesFetch(
       AccountKeyToAccountId(account_key), capabilities);
+}
+
+void AccountTrackerServiceTest::UpdateAccountCapabilities(
+    AccountKey account_key,
+    const AccountCapabilities& capabilities) {
+  IssueAccessToken(account_key);
+  fake_account_fetcher_factory_->UpdateAccountCapabilities(
+      AccountKeyToAccountId(account_key), capabilities);
+}
+
+void AccountTrackerServiceTest::
+    CompleteAccountCapabilitiesFetchWithoutCapabilities(
+        AccountKey account_key) {
+  IssueAccessToken(account_key);
+  fake_account_fetcher_factory_
+      ->CompleteAccountCapabilitiesFetchWithoutCapabilities(
+          AccountKeyToAccountId(account_key));
 }
 
 void AccountTrackerServiceTest::SimulateParentalSupervisionCheckComplete(
@@ -504,7 +524,7 @@ void AccountTrackerServiceTest::SimulateParentalSupervisionCheckComplete(
   AccountCapabilities capabilities;
   AccountCapabilitiesTestMutator mutator(&capabilities);
   mutator.set_is_subject_to_parental_controls(is_subject_to_parental_controls);
-  fake_account_capabilities_fetcher_factory_->CompleteAccountCapabilitiesFetch(
+  fake_account_fetcher_factory_->CompleteAccountCapabilitiesFetch(
       AccountKeyToAccountId(account_key), capabilities);
 #endif
 }
@@ -537,7 +557,7 @@ void AccountTrackerServiceTest::
 void AccountTrackerServiceTest::ReturnAccountCapabilitiesFetchFailure(
     AccountKey account_key) {
   IssueAccessToken(account_key);
-  fake_account_capabilities_fetcher_factory_->CompleteAccountCapabilitiesFetch(
+  fake_account_fetcher_factory_->CompleteAccountCapabilitiesFetch(
       AccountKeyToAccountId(account_key), std::nullopt);
 }
 
@@ -571,7 +591,7 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfo_ImageSuccess) {
 
   AccountInfo account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_TRUE(account_info.account_image.IsEmpty());
+  EXPECT_FALSE(account_info.GetAvatarImage().has_value());
   EXPECT_FALSE(account_info.GetLastDownloadedAvatarUrlWithSize().has_value());
   ReturnAccountImageFetchSuccess(kAccountKeyAlpha);
   EXPECT_TRUE(CheckAccountTrackerEvents({
@@ -581,13 +601,11 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfo_ImageSuccess) {
   }));
   account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_FALSE(account_info.account_image.IsEmpty());
+  EXPECT_TRUE(account_info.GetAvatarImage().has_value());
   EXPECT_EQ(account_info.GetLastDownloadedAvatarUrlWithSize(),
             AccountKeyToPictureURLWithSize(kAccountKeyAlpha));
   histogram_tester.ExpectTotalCount(
       "Signin.AccountFetcher.AccountUserInfoFetchTime", 1);
-  histogram_tester.ExpectTotalCount(
-      "Signin.AccountFetcher.AccountAvatarFetchTime", 1);
 }
 
 TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfo_ImageFailure) {
@@ -603,17 +621,15 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfo_ImageFailure) {
 
   AccountInfo account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_TRUE(account_info.account_image.IsEmpty());
+  EXPECT_FALSE(account_info.GetAvatarImage().has_value());
   EXPECT_FALSE(account_info.GetLastDownloadedAvatarUrlWithSize().has_value());
   ReturnAccountImageFetchFailure(kAccountKeyAlpha);
   account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_TRUE(account_info.account_image.IsEmpty());
+  EXPECT_FALSE(account_info.GetAvatarImage().has_value());
   EXPECT_FALSE(account_info.GetLastDownloadedAvatarUrlWithSize().has_value());
   histogram_tester.ExpectTotalCount(
       "Signin.AccountFetcher.AccountUserInfoFetchTime", 1);
-  histogram_tester.ExpectTotalCount(
-      "Signin.AccountFetcher.AccountAvatarFetchTime", 0);
 }
 
 TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfo_Revoked) {
@@ -641,8 +657,6 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_UserInfoFailed) {
   EXPECT_TRUE(CheckAccountTrackerEvents({}));
   histogram_tester.ExpectTotalCount(
       "Signin.AccountFetcher.AccountInfoFetchTime", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.AccountFetcher.AccountAvatarFetchTime", 0);
 }
 
 TEST_F(AccountTrackerServiceTest, TokenAvailable_AccountCapabilitiesSuccess) {
@@ -693,7 +707,7 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_AccountCapabilitiesFailed) {
   EXPECT_TRUE(CheckAccountTrackerEvents({}));
   AccountInfo account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_FALSE(account_info.capabilities.AreAllCapabilitiesKnown());
+  EXPECT_FALSE(account_info.GetAccountCapabilities().AreAllCapabilitiesKnown());
 }
 
 TEST_F(AccountTrackerServiceTest, TokenAvailable_AccountCapabilitiesCancelled) {
@@ -708,7 +722,7 @@ TEST_F(AccountTrackerServiceTest, TokenAvailable_AccountCapabilitiesCancelled) {
   EXPECT_TRUE(CheckAccountTrackerEvents({}));
   AccountInfo account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_FALSE(account_info.capabilities.AreAllCapabilitiesKnown());
+  EXPECT_FALSE(account_info.GetAccountCapabilities().AreAllCapabilitiesKnown());
 }
 
 TEST_F(AccountTrackerServiceTest,
@@ -731,6 +745,36 @@ TEST_F(AccountTrackerServiceTest,
   ClearAccountTrackerEvents();
 
   ReturnAccountCapabilitiesFetchSuccess(kAccountKeyAlpha);
+  EXPECT_TRUE(account_fetcher()->AreAllAccountCapabilitiesFetched());
+}
+
+TEST_F(AccountTrackerServiceTest,
+       TokenAvailable_AccountCapabilitiesMultiPhase) {
+  SimulateTokenAvailable(kAccountKeyAlpha);
+  EXPECT_FALSE(account_fetcher()->AreAllAccountCapabilitiesFetched());
+
+  ReturnAccountInfoFetchSuccess(kAccountKeyAlpha);
+  ClearAccountTrackerEvents();
+
+  // Phase 1: update capabilities but do not complete fetch.
+  AccountCapabilities capabilities;
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.set_can_fetch_family_member_info(true);
+
+  UpdateAccountCapabilities(kAccountKeyAlpha, capabilities);
+
+  // The capabilities should be updated in AccountTrackerService, but
+  // AreAllAccountCapabilitiesFetched() should still be false because the
+  // fetcher is not complete/destroyed.
+  EXPECT_FALSE(account_fetcher()->AreAllAccountCapabilitiesFetched());
+  AccountInfo account_info = account_tracker()->GetAccountInfo(
+      AccountKeyToAccountId(kAccountKeyAlpha));
+  EXPECT_EQ(
+      account_info.GetAccountCapabilities().can_fetch_family_member_info(),
+      signin::Tribool::kTrue);
+
+  // Phase 2: complete the fetch.
+  CompleteAccountCapabilitiesFetchWithoutCapabilities(kAccountKeyAlpha);
   EXPECT_TRUE(account_fetcher()->AreAllAccountCapabilitiesFetched());
 }
 
@@ -815,8 +859,10 @@ TEST_F(AccountTrackerServiceTest, RefreshAccount_FetchImageSuccess) {
   ReturnAccountInfoFetchSuccess(kAccountKeyAlpha);
   ReturnAccountImageFetchFailure(kAccountKeyAlpha);
   ASSERT_TRUE(account_tracker()->GetAccountInfo(account_id).IsValid());
-  ASSERT_TRUE(
-      account_tracker()->GetAccountInfo(account_id).account_image.IsEmpty());
+  ASSERT_FALSE(account_tracker()
+                   ->GetAccountInfo(account_id)
+                   .GetAvatarImage()
+                   .has_value());
 
   // Account fetcher should fetch the account image even when user info if
   // the account image was not fetched before.
@@ -824,7 +870,7 @@ TEST_F(AccountTrackerServiceTest, RefreshAccount_FetchImageSuccess) {
   ReturnAccountImageFetchSuccess(kAccountKeyAlpha);
   AccountInfo account_info = account_tracker()->GetAccountInfo(
       AccountKeyToAccountId(kAccountKeyAlpha));
-  EXPECT_FALSE(account_info.account_image.IsEmpty());
+  EXPECT_TRUE(account_info.GetAvatarImage().has_value());
   EXPECT_EQ(account_info.GetLastDownloadedAvatarUrlWithSize(),
             AccountKeyToPictureURLWithSize(kAccountKeyAlpha));
 }
@@ -947,14 +993,13 @@ TEST_F(AccountTrackerServiceTest, Persistence) {
   ClearAccountTrackerEvents();
   ResetAccountTrackerWithPersistence(scoped_user_data_dir.GetPath());
 
-  EXPECT_TRUE(CheckAccountTrackerEvents({
-      TrackingEvent(UPDATED, AccountKeyToAccountId(kAccountKeyAlpha),
-                    AccountKeyToGaiaId(kAccountKeyAlpha),
-                    AccountKeyToEmail(kAccountKeyAlpha)),
-      TrackingEvent(UPDATED, AccountKeyToAccountId(kAccountKeyBeta),
-                    AccountKeyToGaiaId(kAccountKeyBeta),
-                    AccountKeyToEmail(kAccountKeyBeta)),
-  }));
+  std::vector<AccountInfo> infos = account_tracker()->GetAccounts();
+  ASSERT_EQ(2u, infos.size());
+  CheckAccountDetails(kAccountKeyAlpha, infos[0]);
+  CheckAccountDetails(kAccountKeyBeta, infos[1]);
+  CheckAccountCapabilities(kAccountKeyAlpha, infos[0]);
+  CheckAccountCapabilities(kAccountKeyBeta, infos[1]);
+
   // Wait until all account images are loaded.
   task_environment_.RunUntilIdle();
   EXPECT_TRUE(CheckAccountTrackerEvents({
@@ -965,13 +1010,6 @@ TEST_F(AccountTrackerServiceTest, Persistence) {
                     AccountKeyToGaiaId(kAccountKeyBeta),
                     AccountKeyToEmail(kAccountKeyBeta)),
   }));
-
-  std::vector<AccountInfo> infos = account_tracker()->GetAccounts();
-  ASSERT_EQ(2u, infos.size());
-  CheckAccountDetails(kAccountKeyAlpha, infos[0]);
-  CheckAccountDetails(kAccountKeyBeta, infos[1]);
-  CheckAccountCapabilities(kAccountKeyAlpha, infos[0]);
-  CheckAccountCapabilities(kAccountKeyBeta, infos[1]);
 
   // Remove an account.
   // This will allow testing removal as well as child accounts which is only
@@ -997,9 +1035,9 @@ TEST_F(AccountTrackerServiceTest, Persistence) {
   CheckAccountCapabilities(kAccountKeyBeta, infos[0]);
   EXPECT_EQ(infos[0].IsChildAccount(), signin::Tribool::kTrue);
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  EXPECT_TRUE(infos[0].is_under_advanced_protection);
+  EXPECT_TRUE(infos[0].IsUnderAdvancedProtection());
 #else
-  EXPECT_FALSE(infos[0].is_under_advanced_protection);
+  EXPECT_FALSE(infos[0].IsUnderAdvancedProtection());
 #endif
 
   // Delete the account tracker before cleaning up |scoped_user_data_dir| so
@@ -1032,7 +1070,7 @@ TEST_F(AccountTrackerServiceTest, Persistence_DeleteEmpty) {
   // the accounts from prefs.
   std::vector<AccountInfo> infos = account_tracker()->GetAccounts();
   ASSERT_EQ(1u, infos.size());
-  EXPECT_EQ(a.account_id, infos[0].account_id);
+  EXPECT_EQ(a.GetAccountId(), infos[0].GetAccountId());
 
   // Delete the account tracker before cleaning up |scoped_user_data_dir| so
   // that all in-use files are closed.
@@ -1093,10 +1131,12 @@ TEST_F(AccountTrackerServiceTest, SeedAccountInfo) {
   account_tracker()->SeedAccountInfo(gaia_id, email);
   auto infos = account_tracker()->GetAccounts();
   ASSERT_EQ(1u, infos.size());
-  EXPECT_EQ(account_id, infos[0].account_id);
-  EXPECT_EQ(gaia_id, infos[0].gaia);
-  EXPECT_EQ(email, infos[0].email);
-  EXPECT_EQ(signin_metrics::AccessPoint::kUnknown, infos[0].access_point);
+  EXPECT_EQ(account_id, infos[0].GetAccountId());
+  EXPECT_EQ(gaia_id, infos[0].GetGaiaId());
+  EXPECT_EQ(email, infos[0].GetEmail());
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  EXPECT_FALSE(infos[0].GetLastAuthenticationAccessPoint().has_value());
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   EXPECT_TRUE(CheckAccountTrackerEvents({
       TrackingEvent(UPDATED, account_id, gaia_id, email),
   }));
@@ -1105,11 +1145,11 @@ TEST_F(AccountTrackerServiceTest, SeedAccountInfo) {
   infos = account_tracker()->GetAccounts();
   ASSERT_EQ(1u, infos.size()) << "Seeding information to an existing account "
                                  "should not add a new account";
-  EXPECT_EQ(account_id, infos[0].account_id)
+  EXPECT_EQ(account_id, infos[0].GetAccountId())
       << "Account id is either the canonicalized email or gaia, it should "
          "remain the same";
-  EXPECT_EQ(gaia_id, infos[0].gaia);
-  EXPECT_EQ(email_dotted, infos[0].email) << "Email should be changed";
+  EXPECT_EQ(gaia_id, infos[0].GetGaiaId());
+  EXPECT_EQ(email_dotted, infos[0].GetEmail()) << "Email should be changed";
   EXPECT_TRUE(CheckAccountTrackerEvents({
       TrackingEvent(UPDATED, account_id, gaia_id, email_dotted),
   }));
@@ -1125,12 +1165,14 @@ TEST_F(AccountTrackerServiceTest, SeedAccountInfoFull) {
 
   // Validate that seeding an unexisting account works and sends a
   // notification.
-  AccountInfo stored_info = account_tracker()->GetAccountInfo(info.account_id);
-  EXPECT_EQ(info.gaia, stored_info.gaia);
-  EXPECT_EQ(info.email, stored_info.email);
-  EXPECT_EQ(info.full_name, stored_info.full_name);
+  AccountInfo stored_info =
+      account_tracker()->GetAccountInfo(info.GetAccountId());
+  EXPECT_EQ(info.GetGaiaId(), stored_info.GetGaiaId());
+  EXPECT_EQ(info.GetEmail(), stored_info.GetEmail());
+  EXPECT_EQ(info.GetFullName(), stored_info.GetFullName());
   EXPECT_TRUE(CheckAccountTrackerEvents({
-      TrackingEvent(UPDATED, info.account_id, info.gaia, info.email),
+      TrackingEvent(UPDATED, info.GetAccountId(), info.GetGaiaId(),
+                    std::string(info.GetEmail())),
   }));
 
   // Validate that seeding new full informations to an existing account works
@@ -1142,21 +1184,23 @@ TEST_F(AccountTrackerServiceTest, SeedAccountInfoFull) {
              .SetAvatarUrl(AccountKeyToPictureURL(kAccountKeyAlpha))
              .Build();
   account_tracker()->SeedAccountInfo(info);
-  stored_info = account_tracker()->GetAccountInfo(info.account_id);
-  EXPECT_EQ(info.gaia, stored_info.gaia);
-  EXPECT_EQ(info.email, stored_info.email);
-  EXPECT_EQ(info.given_name, stored_info.given_name);
+  stored_info = account_tracker()->GetAccountInfo(info.GetAccountId());
+  EXPECT_EQ(info.GetGaiaId(), stored_info.GetGaiaId());
+  EXPECT_EQ(info.GetEmail(), stored_info.GetEmail());
+  EXPECT_EQ(info.GetGivenName(), stored_info.GetGivenName());
   EXPECT_TRUE(CheckAccountTrackerEvents({
-      TrackingEvent(UPDATED, info.account_id, info.gaia, info.email),
+      TrackingEvent(UPDATED, info.GetAccountId(), info.GetGaiaId(),
+                    std::string(info.GetEmail())),
   }));
 
   // Validate that seeding invalid information to an existing account doesn't
   // work and doesn't send a notification.
-  info.given_name = std::string();
-  account_tracker()->SeedAccountInfo(info);
-  stored_info = account_tracker()->GetAccountInfo(info.account_id);
-  EXPECT_EQ(info.gaia, stored_info.gaia);
-  EXPECT_NE(info.given_name, stored_info.given_name);
+  AccountInfo invalid_info =
+      AccountInfo::Builder(info.GetGaiaId(), info.GetEmail()).Build();
+  account_tracker()->SeedAccountInfo(invalid_info);
+  stored_info = account_tracker()->GetAccountInfo(info.GetAccountId());
+  EXPECT_EQ(info.GetGaiaId(), stored_info.GetGaiaId());
+  EXPECT_NE(invalid_info.GetGivenName(), stored_info.GetGivenName());
   EXPECT_TRUE(CheckAccountTrackerEvents({}));
 }
 
@@ -1188,11 +1232,6 @@ TEST_F(AccountTrackerServiceTest, UpgradeToFullAccountInfo) {
   ClearAccountTrackerEvents();
   ResetAccountTrackerNetworkDisabled();
 
-  EXPECT_TRUE(CheckAccountTrackerEvents({
-      TrackingEvent(UPDATED, AccountKeyToAccountId(kAccountKeyIncomplete),
-                    AccountKeyToGaiaId(kAccountKeyIncomplete),
-                    AccountKeyToEmail(kAccountKeyIncomplete)),
-  }));
 
   // Enabling network fetches shouldn't cause any actual fetch since the
   // AccountInfos loaded from prefs should be valid.
@@ -1257,8 +1296,133 @@ TEST_F(AccountTrackerServiceTest, TimerRefresh) {
   EXPECT_FALSE(account_fetcher()->AreAllAccountCapabilitiesFetched());
 }
 
+TEST_F(AccountTrackerServiceTest, FetchAccountInfoOnRestart) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kFetchAccountInfoOnRestart);
+
+  // Setup tracker with a valid, persisted account whose UserInfo and
+  // Capabilities are known.
+  ResetAccountTracker();
+  SimulateTokenAvailable(kAccountKeyAlpha);
+  ReturnAccountInfoFetchSuccess(kAccountKeyAlpha);
+  ReturnAccountCapabilitiesFetchSuccess(kAccountKeyAlpha);
+
+  // Rewind time by 12 hours (not enough to trigger the legacy 24h timer).
+  base::Time fake_update = base::Time::Now() - base::Hours(12);
+  signin_client()->GetPrefs()->SetTime(AccountFetcherService::kLastUpdatePref,
+                                       fake_update);
+
+  // Reinstantiate ATS with network disabled.
+  ResetAccountTrackerNetworkDisabled();
+  EXPECT_TRUE(account_fetcher()->IsAllUserInfoFetched());
+  EXPECT_TRUE(account_fetcher()->AreAllAccountCapabilitiesFetched());
+
+  // Enable network fetches (simulating startup completion).
+  account_fetcher()->EnableNetworkFetchesForTest();
+
+  // BOTH UserInfo and Capabilities MUST be fetching due to the restart feature
+  // flag.
+  EXPECT_FALSE(account_fetcher()->IsAllUserInfoFetched());
+  EXPECT_FALSE(account_fetcher()->AreAllAccountCapabilitiesFetched());
+}
+
+TEST_F(AccountTrackerServiceTest, LoadFromPrefs_RemovesAccountsWithoutGaiaId) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kGaiaAccountIdEnforcement);
+
+  const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
+  const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
+  const std::string email_beta = AccountKeyToEmail(kAccountKeyBeta);
+
+  ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
+  update->Append(base::DictValue()
+                     .Set("account_id", gaia_alpha.ToString())
+                     .Set("email", email_alpha)
+                     .Set("gaia", gaia_alpha.ToString()));
+
+  // This account has no Gaia ID. It should be removed when loaded.
+  update->Append(base::DictValue()
+                     .Set("account_id", email_beta)
+                     .Set("email", email_beta)
+                     .Set("gaia", ""));
+
+  ResetAccountTracker();
+
+  std::vector<AccountInfo> accounts = account_tracker()->GetAccounts();
+  ASSERT_EQ(1u, accounts.size());
+  EXPECT_EQ(accounts[0].GetGaiaId(), gaia_alpha);
+}
+
 #if BUILDFLAG(IS_CHROMEOS)
+TEST_F(AccountTrackerServiceTest, LoadFromPrefs_MigratesAccountsOnEnforcement) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kGaiaAccountIdEnforcement);
+
+  const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
+  const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
+
+  ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
+
+  // This account is keyed by email in prefs (account_id is email_alpha).
+  update->Append(base::DictValue()
+                     .Set("account_id", email_alpha)
+                     .Set("email", email_alpha)
+                     .Set("gaia", gaia_alpha.ToString()));
+
+  ResetAccountTracker();
+
+  std::vector<AccountInfo> accounts = account_tracker()->GetAccounts();
+  EXPECT_EQ(account_tracker()->GetMigrationState(),
+            AccountTrackerService::MIGRATION_IN_PROGRESS);
+  ASSERT_EQ(1u, accounts.size());
+  EXPECT_EQ(accounts[0].GetGaiaId(), gaia_alpha);
+  EXPECT_EQ(accounts[0].GetAccountId(), CoreAccountId::FromGaiaId(gaia_alpha));
+
+  // Verify that it has been updated in prefs to be keyed by Gaia ID.
+  const base::ListValue& list = prefs()->GetList(prefs::kAccountInfo);
+  ASSERT_EQ(1u, list.size());
+  EXPECT_THAT(list[0], base::test::DictionaryHasValue(
+                           "account_id", base::Value(gaia_alpha.ToString())));
+}
+
+TEST_F(AccountTrackerServiceTest, LoadFromPrefs_PartialMigration) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kGaiaAccountIdEnforcement);
+
+  const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
+  const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
+
+  ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
+
+  // Unmigrated account with stale info.
+  update->Append(base::DictValue()
+                     .Set("account_id", email_alpha)
+                     .Set("email", email_alpha)
+                     .Set("gaia", gaia_alpha.ToString())
+                     .Set("given_name", "StaleName"));
+
+  // Migrated account with fresh info.
+  update->Append(base::DictValue()
+                     .Set("account_id", gaia_alpha.ToString())
+                     .Set("email", email_alpha)
+                     .Set("gaia", gaia_alpha.ToString())
+                     .Set("given_name", "FreshName"));
+
+  ResetAccountTracker();
+
+  std::vector<AccountInfo> accounts = account_tracker()->GetAccounts();
+  EXPECT_EQ(account_tracker()->GetMigrationState(),
+            AccountTrackerService::MIGRATION_IN_PROGRESS);
+  ASSERT_EQ(1u, accounts.size());
+  EXPECT_EQ(accounts[0].GetGaiaId(), gaia_alpha);
+  EXPECT_EQ(accounts[0].GetAccountId(), CoreAccountId::FromGaiaId(gaia_alpha));
+  EXPECT_EQ(accounts[0].GetGivenName(), "FreshName");
+}
+
 TEST_F(AccountTrackerServiceTest, MigrateAccountIdToGaiaId) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kGaiaAccountIdEnforcement);
   const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
   const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
   const std::string email_beta = AccountKeyToEmail(kAccountKeyBeta);
@@ -1266,12 +1430,12 @@ TEST_F(AccountTrackerServiceTest, MigrateAccountIdToGaiaId) {
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_alpha)
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_beta)
                      .Set("email", email_beta)
                      .Set("gaia", gaia_beta.ToString()));
@@ -1302,18 +1466,21 @@ TEST_F(AccountTrackerServiceTest, MigrateAccountIdToGaiaId) {
 }
 
 TEST_F(AccountTrackerServiceTest, CanNotMigrateAccountIdToGaiaId) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kGaiaAccountIdEnforcement);
   const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
   const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
   const std::string email_beta = AccountKeyToEmail(kAccountKeyBeta);
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_alpha)
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_beta)
                      .Set("email", email_beta)
                      .Set("gaia", ""));
@@ -1343,6 +1510,9 @@ TEST_F(AccountTrackerServiceTest, CanNotMigrateAccountIdToGaiaId) {
 }
 
 TEST_F(AccountTrackerServiceTest, GaiaIdMigrationCrashInTheMiddle) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kGaiaAccountIdEnforcement);
   const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
   const GaiaId gaia_alpha = AccountKeyToGaiaId(kAccountKeyAlpha);
   const std::string email_beta = AccountKeyToEmail(kAccountKeyBeta);
@@ -1350,18 +1520,18 @@ TEST_F(AccountTrackerServiceTest, GaiaIdMigrationCrashInTheMiddle) {
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_alpha)
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_beta)
                      .Set("email", email_beta)
                      .Set("gaia", gaia_beta.ToString()));
 
   // Succeed miggrated account.
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", gaia_alpha.ToString())
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
@@ -1599,11 +1769,11 @@ TEST_F(AccountTrackerServiceTest, AdvancedProtectionAccountBasic) {
       AccountKeyToAccountId(kAccountKeyAdvancedProtection);
   account_tracker()->SetIsAdvancedProtectionAccount(account_id, true);
   AccountInfo info = account_tracker()->GetAccountInfo(account_id);
-  EXPECT_TRUE(info.is_under_advanced_protection);
+  EXPECT_TRUE(info.IsUnderAdvancedProtection());
 
   account_tracker()->SetIsAdvancedProtectionAccount(account_id, false);
   info = account_tracker()->GetAccountInfo(account_id);
-  EXPECT_FALSE(info.is_under_advanced_protection);
+  EXPECT_FALSE(info.IsUnderAdvancedProtection());
 
   SimulateTokenRevoked(kAccountKeyAdvancedProtection);
 }
@@ -1631,12 +1801,12 @@ TEST_F(AccountTrackerServiceTest, CountOfLoadedAccounts_TwoAccounts) {
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", gaia_alpha.ToString())
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", gaia_beta.ToString())
                      .Set("email", email_beta)
                      .Set("gaia", gaia_beta.ToString()));
@@ -1649,6 +1819,66 @@ TEST_F(AccountTrackerServiceTest, CountOfLoadedAccounts_TwoAccounts) {
       testing::ElementsAre(base::Bucket(2, 1)));
 }
 
+TEST_F(AccountTrackerServiceTest, SaveToPrefs_CapabilityOverridesOverwritten) {
+  base::ScopedTempDir scoped_user_data_dir;
+  ASSERT_TRUE(scoped_user_data_dir.CreateUniqueTempDir());
+
+  ResetAccountTrackerWithPersistence(scoped_user_data_dir.GetPath());
+
+  // Set an override.
+  AccountCapabilities capabilities;
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.SetCapabilityOverride(
+      kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
+      signin::Tribool::kTrue);
+
+  AccountInfo account_info =
+      AccountInfo::Builder(AccountKeyToGaiaId(kAccountKeyAlpha),
+                           AccountKeyToEmail(kAccountKeyAlpha))
+          .SetAccountId(AccountKeyToAccountId(kAccountKeyAlpha))
+          .SetAccountCapabilities(capabilities)
+          .Build();
+
+  // Save to prefs.
+  SaveToPrefs(account_info);
+
+  // Verify that it is loaded back correctly from prefs.
+  ResetAccountTrackerWithPersistence(scoped_user_data_dir.GetPath());
+  std::vector<AccountInfo> infos = account_tracker()->GetAccounts();
+  ASSERT_EQ(1u, infos.size());
+  EXPECT_EQ(
+      infos[0]
+          .GetAccountCapabilities()
+          .can_show_history_sync_opt_ins_without_minor_mode_restrictions(),
+      signin::Tribool::kTrue);
+
+  // Clear the overrides.
+  AccountCapabilities capabilities_updated;
+  AccountInfo account_info_updated =
+      AccountInfo::Builder(AccountKeyToGaiaId(kAccountKeyAlpha),
+                           AccountKeyToEmail(kAccountKeyAlpha))
+          .SetAccountId(AccountKeyToAccountId(kAccountKeyAlpha))
+          .SetAccountCapabilities(capabilities_updated)
+          .Build();
+
+  // Save to prefs again.
+  SaveToPrefs(account_info_updated);
+
+  // Reload and verify that the capability override was cleared.
+  ResetAccountTrackerWithPersistence(scoped_user_data_dir.GetPath());
+  infos = account_tracker()->GetAccounts();
+  ASSERT_EQ(1u, infos.size());
+  EXPECT_EQ(
+      infos[0]
+          .GetAccountCapabilities()
+          .can_show_history_sync_opt_ins_without_minor_mode_restrictions(),
+      signin::Tribool::kUnknown);
+
+  // Clean up.
+  ResetAccountTracker();
+  ASSERT_TRUE(scoped_user_data_dir.Delete());
+}
+
 #if BUILDFLAG(IS_CHROMEOS)
 TEST_F(AccountTrackerServiceTest, Migrate_CountOfLoadedAccounts_TwoAccounts) {
   const std::string email_alpha = AccountKeyToEmail(kAccountKeyAlpha);
@@ -1658,12 +1888,12 @@ TEST_F(AccountTrackerServiceTest, Migrate_CountOfLoadedAccounts_TwoAccounts) {
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_alpha)
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_beta)
                      .Set("email", email_beta)
                      .Set("gaia", gaia_beta.ToString()));
@@ -1685,14 +1915,14 @@ TEST_F(AccountTrackerServiceTest,
 
   ScopedListPrefUpdate update(prefs(), prefs::kAccountInfo);
 
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_alpha)
                      .Set("email", email_alpha)
                      .Set("gaia", gaia_alpha.ToString()));
 
   // This account is invalid because the account_id is a non-canonicalized
   // version of the email.
-  update->Append(base::Value::Dict()
+  update->Append(base::DictValue()
                      .Set("account_id", email_foobar)
                      .Set("email", email_foobar)
                      .Set("gaia", gaia_foobar.ToString()));

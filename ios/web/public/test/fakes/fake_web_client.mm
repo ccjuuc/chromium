@@ -6,7 +6,9 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/memory/ref_counted_memory.h"
 #import "base/strings/sys_string_conversions.h"
+#import "ios/web/common/features.h"
 #import "ios/web/common/uikit_ui_util.h"
 #import "ios/web/public/test/error_test_util.h"
 #import "ios/web/public/test/fakes/crw_fake_find_session.h"
@@ -37,7 +39,7 @@ std::string FakeWebClient::GetUserAgent(UserAgentType type) const {
   return "Chromium/66.0.3333.0 CFNetwork/893.14 Darwin/16.7.0 Mobile";
 }
 
-base::RefCountedMemory* FakeWebClient::GetDataResourceBytes(
+scoped_refptr<base::RefCountedMemory> FakeWebClient::GetDataResourceBytes(
     int resource_id) const {
   if (!ui::ResourceBundle::HasSharedInstance()) {
     return nullptr;
@@ -85,6 +87,10 @@ bool FakeWebClient::EnableWebInspector(web::BrowserState* browser_state) const {
 UserAgentType FakeWebClient::GetDefaultUserAgent(web::WebState* web_state,
                                                  const GURL& url) const {
   return default_user_agent_;
+}
+
+bool FakeWebClient::IsSmoothScrollingSupported() const {
+  return base::FeatureList::IsEnabled(web::features::kSmoothScrollingDefault);
 }
 
 }  // namespace web

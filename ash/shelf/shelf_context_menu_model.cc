@@ -13,7 +13,6 @@
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/model/app_list_model.h"
 #include "ash/constants/ash_pref_names.h"
-#include "ash/constants/personalization_entry_point.h"
 #include "ash/public/cpp/app_menu_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/shelf_item_delegate.h"
@@ -120,9 +119,6 @@ void ShelfContextMenuModel::ExecuteCommand(int command_id, int event_flags) {
       SetShelfAlignmentPref(prefs, display_id_, ShelfAlignment::kBottom);
       break;
     case MENU_PERSONALIZATION_HUB:
-      // Record entry point metric to Personalization Hub through Home Screen.
-      base::UmaHistogramEnumeration(kPersonalizationEntryPointHistogramName,
-                                    PersonalizationEntryPoint::kHomeScreen);
       NewWindowDelegate::GetInstance()->OpenPersonalizationHub();
       break;
     case MENU_HIDE_CONTINUE_SECTION:
@@ -139,6 +135,12 @@ void ShelfContextMenuModel::ExecuteCommand(int command_id, int event_flags) {
       break;
     case MENU_SHOW_DESK_NAME:
       SetShowDeskButtonInShelfPref(prefs, true);
+      break;
+    case MENU_TASK_MANAGER:
+      base::RecordAction(
+          base::UserMetricsAction("Shelf_ContextMenu_Task_Manager"));
+      NewWindowDelegate::GetInstance()->ShowTaskManager(
+          /*from_context_menu=*/true);
       break;
     // Using reorder CommandId in ash/public/cpp/app_menu_constants.h
     case REORDER_BY_NAME_ALPHABETICAL:
@@ -232,6 +234,9 @@ void ShelfContextMenuModel::AddShelfAndWallpaperItems() {
                                          ui::kColorAshSystemUIMenuIcon));
     }
   }
+
+  AddItemWithStringId(MENU_TASK_MANAGER,
+                      IDS_ASH_SHELF_CONTEXT_MENU_TASK_MANAGER);
 }
 
 }  // namespace ash

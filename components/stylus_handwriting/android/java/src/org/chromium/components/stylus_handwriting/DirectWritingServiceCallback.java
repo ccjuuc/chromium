@@ -12,11 +12,13 @@ import android.graphics.PointF;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.directwriting.IDirectWritingServiceCallback;
 
 import androidx.annotation.BinderThread;
 
@@ -39,8 +41,7 @@ import org.chromium.mojo_base.mojom.String16;
  * when requested on the {@link BinderThread}.
  */
 @NullMarked
-class DirectWritingServiceCallback
-        extends android.widget.directwriting.IDirectWritingServiceCallback.Stub {
+class DirectWritingServiceCallback extends IDirectWritingServiceCallback.Stub {
     static final String BUNDLE_KEY_SHOW_KEYBOARD = "showKeyboard";
     private static final String TAG = "DwCallbackImpl";
 
@@ -90,7 +91,7 @@ class DirectWritingServiceCallback
     }
 
     private final Handler mHandler =
-            new Handler(android.os.Looper.getMainLooper()) {
+            new Handler(Looper.getMainLooper()) {
                 @Override
                 public void handleMessage(Message msg) {
                     if (mStylusWritingImeCallback == null) return;
@@ -132,7 +133,7 @@ class DirectWritingServiceCallback
     private void handleDwGesture(Bundle bundle) {
         if (mStylusWritingImeCallback == null) return;
         String gestureType = bundle.getString(GESTURE_BUNDLE_KEY_GESTURE_TYPE, "");
-        Log.d(TAG, "Received Direct Writing gesture of type: " + gestureType);
+        Log.d(TAG, "Received Direct Writing gesture of type: %s", gestureType);
         if (TextUtils.isEmpty(gestureType)) return;
 
         // When the gesture recognized is not at a valid character position in the HTML input field,
@@ -176,7 +177,7 @@ class DirectWritingServiceCallback
             if (!TextUtils.isEmpty(textAlternative)) {
                 // Commit fallback text if available for unsupported gesture. This is to provide
                 // default behaviour for any unsupported gesture which is yet to be implemented.
-                Log.d(TAG, "Commit fallback text for unsupported gesture: " + gestureType);
+                Log.d(TAG, "Commit fallback text for unsupported gesture: %s", gestureType);
                 mStylusWritingImeCallback.sendCompositionToNative(
                         textAlternative, textAlternative.length(), /* isCommit= */ true);
             } else {

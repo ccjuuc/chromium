@@ -9,14 +9,14 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/pinned_tab_codec.h"
 #include "chrome/browser/ui/tabs/pinned_tab_service_factory.h"
 #include "chrome/browser/ui/tabs/pinned_tab_test_utils.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
-#include "chrome/browser/ui/test/test_browser_closed_waiter.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -25,9 +25,9 @@
 using PinnedTabServiceBrowserTest = InProcessBrowserTest;
 
 // Makes sure pinned tabs are updated when tabstrip is empty.
-// http://crbug.com/71939
+// http://crbug.com/40519327
 IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, TabStripEmpty) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   GURL url("https://www.google.com");
   NavigateParams params(browser(), url, ui::PAGE_TRANSITION_TYPED);
   ui_test_utils::NavigateToURL(&params);
@@ -44,12 +44,12 @@ IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, TabStripEmpty) {
   // must update data on this event.
   ScopedProfileKeepAlive profile_keep_alive(
       profile, ProfileKeepAliveOrigin::kBrowserWindow);
-  TestBrowserClosedWaiter waiter(browser());
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   tab_strip_model->SetTabPinned(0, false);
   int previous_tab_count = tab_strip_model->count();
   tab_strip_model->CloseWebContentsAt(0, TabCloseTypes::CLOSE_NONE);
   EXPECT_EQ(previous_tab_count - 1, tab_strip_model->count());
-  ASSERT_TRUE(waiter.WaitUntilClosed());
+  observer.Wait();
 
   // Let's see it's cleared out properly.
   result =
@@ -58,7 +58,7 @@ IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, TabStripEmpty) {
 }
 
 IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, CloseWindow) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   EXPECT_TRUE(PinnedTabServiceFactory::GetForProfile(profile));
   EXPECT_TRUE(profile->GetPrefs());
 
@@ -71,9 +71,9 @@ IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, CloseWindow) {
 
   ScopedProfileKeepAlive profile_keep_alive(
       profile, ProfileKeepAliveOrigin::kBrowserWindow);
-  TestBrowserClosedWaiter waiter(browser());
-  browser()->window()->Close();
-  ASSERT_TRUE(waiter.WaitUntilClosed());
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
+  browser()->GetWindow()->Close();
+  observer.Wait();
 
   std::string result =
       PinnedTabTestUtils::TabsToString(PinnedTabCodec::ReadPinnedTabs(profile));
@@ -82,7 +82,7 @@ IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, CloseWindow) {
 
 // Makes sure closing a popup triggers writing pinned tabs.
 IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, Popup) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   EXPECT_TRUE(PinnedTabServiceFactory::GetForProfile(profile));
   EXPECT_TRUE(profile->GetPrefs());
 
@@ -94,13 +94,17 @@ IN_PROC_BROWSER_TEST_F(PinnedTabServiceBrowserTest, Popup) {
   tab_strip_model->SetTabPinned(0, true);
 
   // Create a popup browser.
-  Browser* popup_browser = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true));
-  ASSERT_TRUE(popup_browser->is_type_popup());
+  Browser* popup_browser =
+      CreateBrowserWindow(
+          BrowserWindowCreateParams(BrowserWindowInterface::TYPE_POPUP,
+                                    browser()->GetProfile(),
+                                    /*from_user_gesture=*/true))
+          ->GetBrowserForMigrationOnly();
+  ASSERT_EQ(popup_browser->GetType(), BrowserWindowInterface::Type::TYPE_POPUP);
 
   // Close the browser. This should trigger saving the tabs. No need to destroy
   // the browser (this happens automatically in the test destructor).
-  browser()->OnWindowClosing();
+  UnloadController::From(browser())->OnWindowClosing();
 
   std::string result =
       PinnedTabTestUtils::TabsToString(PinnedTabCodec::ReadPinnedTabs(profile));

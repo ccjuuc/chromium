@@ -6,7 +6,10 @@
 
 #include <utility>
 
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 // Tests that the returns async schema format behaves similar to how a callback
 // parameter would. See callbacks_unittest.cc for the standard callback
@@ -17,9 +20,9 @@ TEST(JsonSchemaCompilerReturnsAsyncTest, ReturnsObjectResultCreate) {
   base::Value results(
       test::api::returns_async::SupportsPromises::Results::Create(some_object));
 
-  base::Value::Dict expected_dict;
+  base::DictValue expected_dict;
   expected_dict.Set("state", "foo");
-  base::Value::List expected;
+  base::ListValue expected;
   expected.Append(std::move(expected_dict));
   EXPECT_EQ(expected, results);
 }

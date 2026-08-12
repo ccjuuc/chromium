@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
@@ -18,7 +17,7 @@
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/session_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/dom_storage_context.h"
 #include "mojo/public/cpp/bindings/message.h"
@@ -48,8 +47,7 @@ class StoragePartitionImpl;
 // RemoveNamespace methods.
 class CONTENT_EXPORT DOMStorageContextWrapper
     : public DOMStorageContext,
-      public base::RefCountedThreadSafe<DOMStorageContextWrapper>,
-      public base::MemoryPressureListener {
+      public base::RefCountedThreadSafe<DOMStorageContextWrapper> {
  public:
   // Option for PurgeMemory.
   enum PurgeOption {
@@ -138,7 +136,7 @@ class CONTENT_EXPORT DOMStorageContextWrapper
 
   ~DOMStorageContextWrapper() override;
 
-  void MaybeBindSessionStorageControl();
+  void MaybeBindSessionStorageControl(bool clear_on_open);
   void MaybeBindLocalStorageControl();
   scoped_refptr<SessionStorageNamespaceImpl> MaybeGetExistingNamespace(
       const std::string& namespace_id) const;
@@ -149,10 +147,6 @@ class CONTENT_EXPORT DOMStorageContextWrapper
 
   // Note: can be called on multiple threads, protected by a mutex.
   void RemoveNamespace(const std::string& namespace_id);
-
-  // Called on UI thread when the system is under memory pressure.
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
 
   void PurgeMemory(PurgeOption purge_option);
 
@@ -190,10 +184,6 @@ class CONTENT_EXPORT DOMStorageContextWrapper
   // reset to null if/when the partition is destroyed. May also be null in
   // tests.
   raw_ptr<StoragePartitionImpl> partition_;
-
-  // To receive memory pressure signals.
-  std::unique_ptr<base::MemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
 
   // Connections to the partition's Session and Local Storage control interfaces
   // within the Storage Service.

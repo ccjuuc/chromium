@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/login/login_display_host_common.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,10 +13,12 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/login_accelerators.h"
 #include "ash/public/cpp/wallpaper/wallpaper_controller.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -32,7 +35,6 @@
 #include "chrome/browser/ash/login/choobe_flow_controller.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/lock_screen_utils.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_cros_events_metrics.h"
 #include "chrome/browser/ash/login/oobe_metrics_helper.h"
 #include "chrome/browser/ash/login/oobe_quick_start/second_device_auth_broker.h"
@@ -54,8 +56,6 @@
 #include "chrome/browser/ash/profiles/signin_profile_handler.h"
 #include "chrome/browser/ash/system/device_disabling_manager.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
@@ -69,13 +69,13 @@
 #include "chrome/browser/ui/webui/ash/login/management_transition_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/offline_login_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/password_selection_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/remove_local_auth_factors_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/saml_confirm_password_handler.h"
 #include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_allowlist_check_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/attestation/attestation_flow_adaptive.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -83,6 +83,7 @@
 #include "chromeos/ash/components/language_preferences/language_preferences.h"
 #include "chromeos/ash/components/login/auth/auth_performer.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/strings/grit/components_strings.h"
 #include "extensions/common/features/feature_session_type.h"
@@ -105,12 +106,14 @@ void PushFrontImIfNotExists(const std::string& input_method_id,
     return;
   }
 
-  if (!base::Contains(*input_method_ids, input_method_id)) {
+  if (!std::ranges::contains(*input_method_ids, input_method_id)) {
     input_method_ids->insert(input_method_ids->begin(), input_method_id);
   }
 }
 
-void SetGaiaInputMethods(const AccountId& account_id) {
+void SetGaiaInputMethods(PrefService& local_state,
+                         const std::string& application_locale,
+                         const AccountId& account_id) {
   input_method::InputMethodManager* imm =
       input_method::InputMethodManager::Get();
 
@@ -121,7 +124,8 @@ void SetGaiaInputMethods(const AccountId& account_id) {
 
   // Set Least Recently Used input method for the user.
   if (account_id.is_valid()) {
-    lock_screen_utils::SetUserInputMethod(account_id, gaia_ime_state.get(),
+    lock_screen_utils::SetUserInputMethod(local_state, account_id,
+                                          gaia_ime_state.get(),
                                           true /*honor_device_policy*/);
   } else {
     lock_screen_utils::EnforceDevicePolicyInputMethods(std::string());
@@ -133,16 +137,15 @@ void SetGaiaInputMethods(const AccountId& account_id) {
     }
     const std::string owner_input_method_id =
         lock_screen_utils::GetUserLastInputMethodId(
-            user_manager::UserManager::Get()->GetOwnerAccountId());
+            local_state, user_manager::UserManager::Get()->GetOwnerAccountId());
     const std::string system_input_method_id =
-        g_browser_process->local_state()->GetString(
-            language_prefs::kPreferredKeyboardLayout);
+        local_state.GetString(language_prefs::kPreferredKeyboardLayout);
 
     PushFrontImIfNotExists(owner_input_method_id, &input_method_ids);
     PushFrontImIfNotExists(system_input_method_id, &input_method_ids);
 
-    gaia_ime_state->EnableOobeInputMethods(
-        g_browser_process->GetApplicationLocale(), input_method_ids);
+    gaia_ime_state->EnableOobeInputMethods(application_locale,
+                                           input_method_ids);
 
     if (!system_input_method_id.empty()) {
       gaia_ime_state->ChangeInputMethod(system_input_method_id,
@@ -227,10 +230,20 @@ CreateSecondDeviceAuthBroker() {
 }  // namespace
 
 LoginDisplayHostCommon::LoginDisplayHostCommon(
+    PrefService* local_state,
+    ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
     bool update_geolocation_usage_allowed)
-    : keep_alive_(KeepAliveOrigin::LOGIN_DISPLAY_HOST_WEBUI,
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      keep_alive_(KeepAliveOrigin::LOGIN_DISPLAY_HOST_WEBUI,
                   KeepAliveRestartOption::DISABLED),
+      kiosk_app_menu_controller_(local_state),
       login_ui_pref_controller_(std::make_unique<LoginUIPrefController>(
+          local_state,
           update_geolocation_usage_allowed)),
       wizard_context_(std::make_unique<WizardContext>()),
       // TODO(crbug.com/446058312): OobeMetricsHelper ctor should take a
@@ -246,16 +259,19 @@ LoginDisplayHostCommon::LoginDisplayHostCommon(
               []() { return g_browser_process->local_state(); }),
           base::BindRepeating(
               []() { return g_browser_process->metrics_service(); }))) {
+  CHECK(shared_url_loader_factory_);
+
   if (features::IsOobeCrosEventsEnabled()) {
-    oobe_cros_events_metrics_ =
-        std::make_unique<OobeCrosEventsMetrics>(oobe_metrics_helper_.get());
+    oobe_cros_events_metrics_ = std::make_unique<OobeCrosEventsMetrics>(
+        &local_state_.get(), oobe_metrics_helper_.get());
   }
+
+  browser_controller_observation_.Observe(BrowserController::GetInstance());
+
   // Close the login screen on app termination (for the case where shutdown
   // occurs before login completes).
-  app_terminating_subscription_ =
-      browser_shutdown::AddAppTerminatingCallback(base::BindOnce(
-          &LoginDisplayHostCommon::OnAppTerminating, base::Unretained(this)));
-  browser_controller_observation_.Observe(BrowserController::GetInstance());
+  session_termination_observation_.Observe(
+      ash::SessionTerminationManager::Get());
 }
 
 LoginDisplayHostCommon::~LoginDisplayHostCommon() = default;
@@ -303,16 +319,14 @@ void LoginDisplayHostCommon::StartSignInScreen() {
   // Fix for users who updated device and thus never passed register screen.
   // If we already have users, we assume that it is not a second part of
   // OOBE. See http://crosbug.com/6289
-  if (!StartupUtils::IsDeviceRegistered() && !users.empty()) {
+  if (!StartupUtils::IsDeviceRegistered(local_state_.get()) && !users.empty()) {
     VLOG(1) << "Mark device registered because there are remembered users: "
             << users.size();
-    StartupUtils::MarkDeviceRegistered(base::OnceClosure());
+    StartupUtils::MarkDeviceRegistered(local_state_.get(), base::OnceClosure());
   }
 
   // Initiate device policy fetching.
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
-  connector->ScheduleServiceInitialization(
+  browser_policy_connector_ash_->ScheduleServiceInitialization(
       kPolicyServiceInitializationDelayMilliseconds);
 
   // Run UI-specific logic.
@@ -326,7 +340,7 @@ void LoginDisplayHostCommon::StartSignInScreen() {
 void LoginDisplayHostCommon::StartKiosk(const KioskAppId& kiosk_app_id,
                                         bool is_auto_launch) {
   VLOG(1) << "Login >> start kiosk of type "
-          << static_cast<int>(kiosk_app_id.type);
+          << std::to_underlying(kiosk_app_id.type);
 
   SetKioskLaunchStateCrashKey(KioskLaunchState::kAttemptToLaunch);
 
@@ -418,7 +432,8 @@ void LoginDisplayHostCommon::OnGaiaScreenReady() {
   if (GetExistingUserController()) {
     GetExistingUserController()->OnGaiaScreenReady();
   } else {
-    // Used to debug crbug.com/902315. Feel free to remove after that is fixed.
+    // Used to debug crbug.com/41424664. Feel free to remove after that is
+    // fixed.
     LOG(ERROR) << "OnGaiaScreenReady: there is no existing user controller";
   }
 }
@@ -537,16 +552,16 @@ void LoginDisplayHostCommon::OnPowerwashAllowedCallback(
   }
   if (tpm_firmware_update_mode.has_value()) {
     // Force the TPM firmware update option to be enabled.
-    g_browser_process->local_state()->SetInteger(
-        ::prefs::kFactoryResetTPMFirmwareUpdateMode,
-        static_cast<int>(tpm_firmware_update_mode.value()));
+    local_state_->SetInteger(
+        ash::prefs::kFactoryResetTPMFirmwareUpdateMode,
+        std::to_underlying(tpm_firmware_update_mode.value()));
   }
   StartWizard(ResetView::kScreenId);
 }
 
 void LoginDisplayHostCommon::StartUserOnboarding() {
   oobe_metrics_helper_->RecordOnboardingStart(
-      g_browser_process->local_state()->GetTime(prefs::kOobeStartTime));
+      local_state_->GetTime(prefs::kOobeStartTime));
   StartWizard(LocaleSwitchView::kScreenId);
 }
 
@@ -587,6 +602,10 @@ void LoginDisplayHostCommon::ShowPasswordSelectionScreen() {
   StartWizard(PasswordSelectionScreenView::kScreenId);
 }
 
+void LoginDisplayHostCommon::ShowRemoveLocalAuthFactorsScreen() {
+  StartWizard(RemoveLocalAuthFactorsScreenView::kScreenId);
+}
+
 void LoginDisplayHostCommon::SetAuthSessionForOnboarding(
     const UserContext& user_context) {
   wizard_context_->extra_factors_token = AuthSessionStorage::Get()->Store(
@@ -619,7 +638,7 @@ void LoginDisplayHostCommon::StartEncryptionMigration(
 
 void LoginDisplayHostCommon::ShowSigninError(SigninError error,
                                              const std::string& details) {
-  VLOG(1) << "Show error, error_id: " << static_cast<int>(error);
+  VLOG(1) << "Show error, error_id: " << std::to_underlying(error);
 
   if (error == SigninError::kKnownUserFailedNetworkNotConnected ||
       error == SigninError::kKnownUserFailedNetworkConnected) {
@@ -671,8 +690,7 @@ void LoginDisplayHostCommon::ShowSigninError(SigninError error,
 
 void LoginDisplayHostCommon::ShowOobeNotCompletedError() {
   GetWizardController()->GetScreen<SignInFatalErrorScreen>()->SetErrorState(
-      SignInFatalErrorScreen::Error::kOobeCompletionSkipped,
-      base::Value::Dict());
+      SignInFatalErrorScreen::Error::kOobeCompletionSkipped, base::DictValue());
   StartWizard(SignInFatalErrorView::kScreenId);
 }
 
@@ -683,6 +701,13 @@ void LoginDisplayHostCommon::SAMLConfirmPassword(
       ->GetScreen<SamlConfirmPasswordScreen>()
       ->SetContextAndPasswords(std::move(user_context),
                                std::move(scraped_passwords));
+  StartWizard(SamlConfirmPasswordView::kScreenId);
+}
+
+void LoginDisplayHostCommon::ShowSamlConfirmPassword(
+    std::unique_ptr<UserContext> user_context) {
+  CHECK(features::IsManagedLocalPinAndPasswordEnabled());
+  wizard_context_->user_context = std::move(user_context);
   StartWizard(SamlConfirmPasswordView::kScreenId);
 }
 
@@ -699,7 +724,7 @@ void LoginDisplayHostCommon::OnBrowserCreated(BrowserDelegate* browser) {
     // yet. Lock window has to be closed at this point so that a browser window
     // exists and the window can acquire input focus.
     OnBrowserCreated();
-    app_terminating_subscription_ = {};
+    session_termination_observation_.Reset();
     browser_controller_observation_.Reset();
   }
 }
@@ -738,7 +763,8 @@ void LoginDisplayHostCommon::ShowGaiaDialogCommon(
   if (GetExistingUserController()->IsSigninInProgress()) {
     return;
   }
-  SetGaiaInputMethods(prefilled_account);
+  SetGaiaInputMethods(local_state_.get(), application_locale_storage_->Get(),
+                      prefilled_account);
 
   if (!prefilled_account.is_valid()) {
     StartWizard(UserCreationView::kScreenId);
@@ -768,7 +794,7 @@ LoginDisplayHostCommon::GetQuickStartBootstrapController() {
 
     bootstrap_controller_ =
         std::make_unique<ash::quick_start::TargetDeviceBootstrapController>(
-            CreateSecondDeviceAuthBroker(),
+            &local_state_.get(), CreateSecondDeviceAuthBroker(),
             std::make_unique<AccessibilityManagerWrapper>(), service);
   }
   return bootstrap_controller_->GetAsWeakPtrForClient();
@@ -786,7 +812,7 @@ void LoginDisplayHostCommon::Cleanup() {
   }
 
   SigninProfileHandler::Get()->ClearSigninProfile(base::DoNothing());
-  app_terminating_subscription_ = {};
+  session_termination_observation_.Reset();
   browser_controller_observation_.Reset();
   login_ui_pref_controller_.reset();
 

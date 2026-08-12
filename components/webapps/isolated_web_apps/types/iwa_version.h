@@ -12,12 +12,13 @@
 #include <string_view>
 #include <vector>
 
+#include "base/component_export.h"
 #include "base/types/expected.h"
 #include "base/version.h"
 
 namespace web_app {
 
-class IwaVersion {
+class COMPONENT_EXPORT(ISOLATED_WEB_APPS) IwaVersion {
  public:
   // Enum for parsing errors
   enum class IwaVersionParseError {
@@ -48,7 +49,7 @@ class IwaVersion {
   friend bool operator==(const IwaVersion& lhs,
                          const IwaVersion& rhs) = default;
   friend auto operator<=>(const IwaVersion& lhs, const IwaVersion& rhs) {
-    return lhs.version_.components() <=> rhs.version_.components();
+    return lhs.version_.CompareTo(rhs.version_) <=> 0;
   }
 
  private:
@@ -57,6 +58,7 @@ class IwaVersion {
   base::Version version_;
 };
 
+COMPONENT_EXPORT(ISOLATED_WEB_APPS)
 std::ostream& operator<<(std::ostream& stream, const IwaVersion& v);
 
 }  // namespace web_app

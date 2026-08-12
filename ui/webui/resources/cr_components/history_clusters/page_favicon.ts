@@ -19,12 +19,6 @@ import {getHtml} from './page_favicon.html.js';
  * @fileoverview This file provides a custom element displaying a page favicon.
  */
 
-declare global {
-  interface HTMLElementTagNameMap {
-    'page-favicon': PageFaviconElement;
-  }
-}
-
 /**
  * TODO(tommycli): This element should be renamed to reflect the reality that
  * it's used to both render the visit's "important image" if it exists, and
@@ -56,7 +50,7 @@ export class PageFaviconElement extends CrLitElement {
       /**
        * The URL for which the favicon is shown.
        */
-      url: {type: Object},
+      url: {type: String},
 
       /**
        * Whether this visit is known to sync already. Used for the purpose of
@@ -67,8 +61,9 @@ export class PageFaviconElement extends CrLitElement {
       /**
        * The URL of the representative image for the page. Not every page has
        * this defined, in which case we fallback to the favicon.
+       * Mojo Url type is type mapped to a TS string.
        */
-      imageUrl_: {type: Object},
+      imageUrl_: {type: String},
 
       isImageCover_: {
         type: Boolean,
@@ -103,7 +98,7 @@ export class PageFaviconElement extends CrLitElement {
 
     if (changedProperties.has('url') ||
         (changedProperties as Map<PropertyKey, unknown>).has('imageUrl_')) {
-      if ((this.imageUrl_ && this.imageUrl_.url) || !this.url) {
+      if (this.imageUrl_ || !this.url) {
         // Pages with a pre-set image URL or no favicon URL don't show the
         // favicon.
         this.style.setProperty('background-image', '');
@@ -111,7 +106,7 @@ export class PageFaviconElement extends CrLitElement {
         this.style.setProperty(
             'background-image',
             getFaviconForPageURL(
-                this.url.url, this.isKnownToSync, '',
+                this.url, this.isKnownToSync, '',
                 /* --favicon-size */ 16));
       }
     }
@@ -142,6 +137,12 @@ export class PageFaviconElement extends CrLitElement {
       // reuse the same element for the infinite scrolling list.
       this.imageUrl_ = null;
     }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'page-favicon': PageFaviconElement;
   }
 }
 

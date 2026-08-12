@@ -165,12 +165,12 @@ class WebSocketBasicStreamSocketTest : public TestWithTaskEnvironment {
     ClientSocketPool::GroupId group_id(
         url::SchemeHostPort(url::kHttpScheme, "a", 80),
         PrivacyMode::PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
-        SecureDnsPolicy::kAllow, /*disable_cert_network_fetches=*/false);
+        SecureDnsPolicy::kAllow, /*disable_cert_network_fetches=*/false,
+        handles::kInvalidNetworkHandle);
     transport_socket->Init(
         group_id, null_params, std::nullopt /* proxy_annotation_tag */, MEDIUM,
         SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
-        CompletionOnceCallback(), ClientSocketPool::ProxyAuthCallback(),
-        /*fail_if_alias_requires_proxy_override=*/false, &pool_,
+        CompletionOnceCallback(), ClientSocketPool::ProxyAuthCallback(), &pool_,
         NetLogWithSource());
     return transport_socket;
   }
@@ -290,7 +290,7 @@ class WebSocketBasicStreamSwitchTest : public WebSocketBasicStreamSocketTest {
   // This is used to specify the read start/end time.
   base::TimeTicks MicrosecondsFromStart(int microseconds) {
     static const base::TimeTicks kStartPoint =
-        base::TimeTicks::UnixEpoch() + base::Seconds(60);
+        base::TimeTicks() + base::Seconds(60);
     return kStartPoint + base::Microseconds(microseconds);
   }
 

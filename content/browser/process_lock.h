@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "content/browser/embedder_isolation_info.h"
 #include "content/browser/site_info.h"
 #include "content/browser/url_info.h"
 #include "content/browser/web_exposed_isolation_info.h"
@@ -52,7 +53,7 @@ class CONTENT_EXPORT ProcessLock {
       const WebExposedIsolationInfo& web_exposed_isolation_info,
       const std::optional<AgentClusterKey::CrossOriginIsolationKey>&
           cross_origin_isolation_key,
-      const std::string& browser_context_id);
+      const base::UnguessableToken& browser_context_id);
 
   // Create a lock for a specific UrlInfo. This method can be called from both
   // the UI and IO threads. Locks created with the same parameters must always
@@ -120,7 +121,7 @@ class CONTENT_EXPORT ProcessLock {
   // future if required for sandboxed iframes that are restricted with different
   // sandbox flags.
   bool is_sandboxed() const {
-    return site_info_.has_value() && site_info_->is_sandboxed();
+    return site_info_.has_value() && site_info_->IsSandboxed();
   }
 
   // If this ProcessLock is for a sandboxed iframe without allow-same-origin,
@@ -136,6 +137,14 @@ class CONTENT_EXPORT ProcessLock {
   // Returns whether this ProcessLock is specific to PDF contents.
   bool is_pdf() const { return site_info_.has_value() && site_info_->is_pdf(); }
 
+  // Returns the embedder-specified process isolation policy of the SiteInfo
+  // associated with this lock. See
+  // //content/browser/embedder_isolation_info.h.
+  EmbedderIsolationInfo embedder_isolation_info() const {
+    return site_info_.has_value() ? site_info_->embedder_isolation_info()
+                                  : EmbedderIsolationInfo::CreateNone();
+  }
+
   // Returns whether this ProcessLock can only be used for error pages.
   bool is_error_page() const {
     return site_info_.has_value() && site_info_->is_error_page();
@@ -144,7 +153,16 @@ class CONTENT_EXPORT ProcessLock {
   // Returns whether this ProcessLock is used for a <webview> guest process.
   // This may be false for other types of GuestView.
   bool is_guest() const {
-    return site_info_.has_value() && site_info_->is_guest();
+    return site_info_.has_value() && site_info_->IsGuest();
+  }
+
+  // Returns whether this ProcessLock is used for a privileged process (e.g.,
+  // for a WebContents created with PrivilegedParams). Privileged content always
+  // requires a dedicated process, so such a process hosts only privileged
+  // content.
+  bool is_privileged() const {
+    return site_info_.has_value() &&
+           site_info_->embedder_isolation_info().is_privileged();
   }
 
   // Returns whether this ProcessLock is used for a process that exclusively

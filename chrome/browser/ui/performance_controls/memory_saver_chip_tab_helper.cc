@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check_is_test.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -43,27 +43,18 @@ void MemorySaverChipTabHelper::DidStartNavigation(
     return;
   }
 
-  was_rendered_ = false;
-
   ComputeChipState(navigation_handle);
 }
 
 void MemorySaverChipTabHelper::OnVisibilityChanged(
     content::Visibility visibility) {
   if (visibility == content::Visibility::HIDDEN) {
-    was_rendered_ = false;
     if (chip_state_ == memory_saver::ChipState::EXPANDED_WITH_SAVINGS ||
         chip_state_ == memory_saver::ChipState::EXPANDED_EDUCATION) {
       chip_state_ = memory_saver::ChipState::COLLAPSED_FROM_EXPANDED;
       UpdatePageActionState();
     }
   }
-}
-
-bool MemorySaverChipTabHelper::ShouldChipAnimate() {
-  bool should_animate = !was_rendered_;
-  was_rendered_ = true;
-  return should_animate;
 }
 
 MemorySaverChipTabHelper::MemorySaverChipTabHelper(tabs::TabInterface& tab)
@@ -113,11 +104,11 @@ bool MemorySaverChipTabHelper::ComputeShouldHighlightMemorySavings() {
 }
 
 bool MemorySaverChipTabHelper::ComputeShouldEducateAboutMemorySavings() {
-  int times_rendered =
+  int times_shown =
       pref_service_->GetInteger(prefs::kMemorySaverChipExpandedCount);
-  if (times_rendered < kChipAnimationCount) {
+  if (times_shown < kEducationCount) {
     pref_service_->SetInteger(prefs::kMemorySaverChipExpandedCount,
-                              times_rendered + 1);
+                              times_shown + 1);
     return true;
   }
   return false;
@@ -150,10 +141,6 @@ void MemorySaverChipTabHelper::ComputeChipState(
 }
 
 void MemorySaverChipTabHelper::UpdatePageActionState() {
-  if (!IsPageActionMigrated(PageActionIconType::kMemorySaver)) {
-    return;
-  }
-
   tabs::TabFeatures* tab_features = tab().GetTabFeatures();
   if (!tab_features) {
     // Tab features may not be present at shutdown.
@@ -161,6 +148,9 @@ void MemorySaverChipTabHelper::UpdatePageActionState() {
   }
   memory_saver::MemorySaverChipController* controller =
       tab_features->memory_saver_chip_controller();
+  if (!controller) {
+    return;
+  }
   switch (chip_state_) {
     case memory_saver::ChipState::HIDDEN:
       controller->Hide();
@@ -174,7 +164,7 @@ void MemorySaverChipTabHelper::UpdatePageActionState() {
       break;
 
     case memory_saver::ChipState::EXPANDED_WITH_SAVINGS:
-      const base::ByteCount bytes_saved =
+      const base::ByteSize bytes_saved =
           memory_saver::GetDiscardedMemorySavings(web_contents());
       controller->ShowMemorySavedChip(bytes_saved);
       break;

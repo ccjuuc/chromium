@@ -19,18 +19,14 @@
 #include "content/public/test/web_contents_tester.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
-
 #if BUILDFLAG(IS_ANDROID)
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/android/tab_android.h"
-#include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_test_helper.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#else
-#include "chrome/test/base/browser_with_test_window_test.h"
+
 #endif
 
 namespace performance_manager {
@@ -275,9 +271,6 @@ class PageLiveStateDecoratorHelperTabsTest
 };
 
 TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTab) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      chrome::android::kProcessRankPolicyAndroid);
   auto helper = std::make_unique<PageLiveStateDecoratorHelper>();
   TestTabModel tab_model(profile());
   TabModelList::AddTabModel(&tab_model);
@@ -327,9 +320,6 @@ TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTab) {
 }
 
 TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTabAfterRemoved) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      chrome::android::kProcessRankPolicyAndroid);
   auto helper = std::make_unique<PageLiveStateDecoratorHelper>();
   TestTabModel tab_model(profile());
   TabModelList::AddTabModel(&tab_model);
@@ -384,9 +374,6 @@ TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTabAfterRemoved) {
 }
 
 TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTabWithMultipleTabModels) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      chrome::android::kProcessRankPolicyAndroid);
   auto helper = std::make_unique<PageLiveStateDecoratorHelper>();
   TestTabModel tab_model1(profile());
   TestTabModel tab_model2(profile());
@@ -449,9 +436,6 @@ TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTabWithMultipleTabModels) {
 
 TEST_F(PageLiveStateDecoratorHelperTabsTest,
        ActiveTabTrackerAfterTabModelRemoved) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      chrome::android::kProcessRankPolicyAndroid);
   auto helper = std::make_unique<PageLiveStateDecoratorHelper>();
   TestTabModel tab_model(profile());
   TabModelList::AddTabModel(&tab_model);
@@ -462,106 +446,7 @@ TEST_F(PageLiveStateDecoratorHelperTabsTest,
 
   EXPECT_FALSE(tab_model.GetObserver());
 }
-#else
-// The behavior tested here isn't yet available on Android
-class PageLiveStateDecoratorHelperTabsTest : public BrowserWithTestWindowTest {
- private:
-  void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
-    pm_harness_.SetUp();
-    helper_ = std::make_unique<PageLiveStateDecoratorHelper>();
-  }
 
-  void TearDown() override {
-    helper_.reset();
-    pm_harness_.TearDown();
-    BrowserWithTestWindowTest::TearDown();
-  }
-
-  PerformanceManagerTestHarnessHelper pm_harness_;
-  std::unique_ptr<PageLiveStateDecoratorHelper> helper_;
-};
-
-TEST_F(PageLiveStateDecoratorHelperTabsTest, IsActiveTab) {
-  // Create a tab, it's associated PageNode should be the active one.
-  AddTab(browser(), GURL("http://foo/1"));
-  content::WebContents* contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, true);
-
-  // Create another tab. This immediately makes it the active tab. Note that
-  // `AddTab` inserts in front of the list, so the newly created tab is at index
-  // 0.
-  AddTab(browser(), GURL("http://foo/2"));
-  content::WebContents* other_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
-  EXPECT_NE(contents, other_contents);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, false);
-  testing::TestPageNodeProperty(
-      other_contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, true);
-
-  // Reactivate the initial tab, the previously active tab is now inactive.
-  browser()->tab_strip_model()->ActivateTabAt(1);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, true);
-  testing::TestPageNodeProperty(
-      other_contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, false);
-
-  // Deleting a tab automatically makes another one active.
-  browser()->tab_strip_model()->DetachAndDeleteWebContentsAt(1);
-  testing::TestPageNodeProperty(
-      other_contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsActiveTab, true);
-}
-
-TEST_F(PageLiveStateDecoratorHelperTabsTest, IsPinnedTab) {
-  // Create a tab, it's associated PageNode should be the active one.
-  AddTab(browser(), GURL("http://foo/1"));
-  content::WebContents* contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsPinnedTab, false);
-
-  browser()->tab_strip_model()->SetTabPinned(0, true);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsPinnedTab, true);
-
-  browser()->tab_strip_model()->SetTabPinned(0, false);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsPinnedTab, false);
-}
-
-TEST_F(PageLiveStateDecoratorHelperTabsTest, ReplacePinnedTab) {
-  AddTab(browser(), GURL("http://foo/1"));
-  content::WebContents* contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
-
-  // Pin tab. Check status.
-  browser()->tab_strip_model()->SetTabPinned(0, true);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsPinnedTab, true);
-
-  // Replace with new contents.
-  browser()->tab_strip_model()->DiscardWebContentsAt(
-      0, content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
-
-  // Check pinned status of replaced contents.
-  contents = browser()->tab_strip_model()->GetWebContentsAt(0);
-  testing::TestPageNodeProperty(
-      contents, &PageLiveStateDecorator::Data::GetOrCreateForPageNode,
-      &PageLiveStateDecorator::Data::IsPinnedTab, true);
-}
 #endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace performance_manager

@@ -21,7 +21,10 @@ process_version("remoting_base_version") {
 
 buildflag_header("buildflags") {
   header = "buildflags.h"
-  flags = [ "REMOTING_INTERNAL=$remoting_internal" ]
+  flags = [
+    "REMOTING_INTERNAL=$remoting_internal",
+    "REMOTING_MULTI_PROCESS=$remoting_multi_process",
+  ]
 }
 
 source_set("http_status") {
@@ -36,18 +39,47 @@ source_set("http_status") {
   ]
 }
 
+source_set("authentication_method") {
+  sources = [
+    "authentication_method.cc",
+    "authentication_method.h",
+  ]
+  deps = [
+    ":name_value_map",
+    "//base",
+  ]
+}
+
+source_set("remoting_export") {
+  sources = [ "remoting_export.h" ]
+  if (is_linux || is_mac || is_win) {
+    configs += [ "//remoting/build/config:host_implementation" ]
+  }
+}
+
+if (is_posix) {
+  source_set("security_key_socket_name") {
+    sources = [
+      "security_key_socket_name.cc",
+      "security_key_socket_name.h",
+    ]
+    deps = [
+      ":remoting_export",
+      "//base",
+    ]
+  }
+}
+
 source_set("base") {
   sources = [
     "async_file_util.cc",
     "async_file_util.h",
-    "authentication_method.cc",
-    "authentication_method.h",
     "auto_thread.cc",
     "auto_thread.h",
     "auto_thread_task_runner.cc",
     "auto_thread_task_runner.h",
-    "buffered_socket_writer.cc",
-    "buffered_socket_writer.h",
+    "branding.cc",
+    "branding.h",
     "capabilities.cc",
     "capabilities.h",
     "certificate_helpers.cc",
@@ -76,8 +108,11 @@ source_set("base") {
     "cpu_utils.h",
     "directory_service_client.cc",
     "directory_service_client.h",
+    "ecdh_key_exchange.cc",
+    "ecdh_key_exchange.h",
     "environment_details.cc",
     "environment_details.h",
+    "fifo_buffer.h",
     "fqdn.cc",
     "fqdn.h",
     "instance_identity_token.cc",
@@ -86,6 +121,8 @@ source_set("base") {
     "instance_identity_token_getter_impl.cc",
     "instance_identity_token_getter_impl.h",
     "internal_headers.h",
+    "ipc_fifo_buffer.cc",
+    "ipc_fifo_buffer.h",
     "is_google_email.cc",
     "is_google_email.h",
     "leaky_bucket.cc",
@@ -93,6 +130,8 @@ source_set("base") {
     "local_session_policies_provider.cc",
     "local_session_policies_provider.h",
     "logging_service_client.h",
+    "memory_consumer_registry.cc",
+    "memory_consumer_registry.h",
     "protobuf_http_client.cc",
     "protobuf_http_client.h",
     "protobuf_http_request.cc",
@@ -123,8 +162,8 @@ source_set("base") {
     "session_authz_service_client_factory.h",
     "session_options.cc",
     "session_options.h",
-    "socket_reader.cc",
-    "socket_reader.h",
+    "session_options_constants.cc",
+    "session_options_constants.h",
     "source_location.cc",
     "source_location.h",
     "task_util.h",
@@ -133,6 +172,8 @@ source_set("base") {
     "url_loader_network_service_observer.h",
     "url_request_context_getter.cc",
     "url_request_context_getter.h",
+    "username.cc",
+    "username.h",
     "util.cc",
     "util.h",
     "vlog_net_log.cc",
@@ -147,7 +188,10 @@ source_set("base") {
   ]
 
   public_deps = [
+    ":authentication_method",
+    ":buildflags",
     ":http_status",
+    ":loggable",
     "//base",
     "//net",
     "//remoting/proto",
@@ -155,14 +199,15 @@ source_set("base") {
   ]
   deps = [
     ":authorization",
-    ":buildflags",
     ":logging",
     ":name_value_map",
     ":protobuf_http_client_messages_proto",
     ":remoting_base_version",
     ":session_policies",
+    "//crypto",
     "//google_apis",
     "//google_apis/common:request_util",
+    "//mojo/public/cpp/system",
     "//remoting/proto:internal_structs",
     "//remoting/proto/google/internal/remoting/cloud/v1alpha:messages",
     "//remoting/proto/google/remoting/cloud/v1:messages",
@@ -185,6 +230,13 @@ source_set("base") {
     deps += [
       ":api_key_stubs",
       "//remoting/proto:internal_stubs",
+    ]
+  }
+
+  if (is_posix) {
+    sources += [
+      "passwd_utils.cc",
+      "passwd_utils.h",
     ]
   }
 
@@ -216,6 +268,14 @@ source_set("errors") {
   ]
 }
 
+source_set("loggable") {
+  sources = [
+    "loggable.cc",
+    "loggable.h",
+  ]
+  deps = [ "//base" ]
+}
+
 source_set("session_policies") {
   public = [
     "port_range.h",
@@ -225,6 +285,7 @@ source_set("session_policies") {
     "port_range.cc",
     "session_policies.cc",
   ]
+  public_deps = [ ":loggable" ]
   deps = [ "//base" ]
 }
 
@@ -390,6 +451,9 @@ source_set("run_all_unittests") {
     "//mojo/core/embedder",
     "//testing/gtest",
   ]
+  if (is_posix) {
+    deps += [ ":security_key_socket_name" ]
+  }
   if (is_chromeos) {
     deps += [ "//chromeos/ash/components:test_support" ]
     data = [ "$root_out_dir/locales/en-US.pak" ]
@@ -403,10 +467,12 @@ source_set("unit_tests") {
   sources = [
     "auto_thread_task_runner_unittest.cc",
     "auto_thread_unittest.cc",
-    "buffered_socket_writer_unittest.cc",
     "capabilities_unittest.cc",
     "compound_buffer_unittest.cc",
+    "ecdh_key_exchange_unittest.cc",
+    "fifo_buffer_test_base.h",
     "instance_identity_token_getter_impl_unittest.cc",
+    "ipc_fifo_buffer_unittest.cc",
     "leaky_bucket_unittest.cc",
     "local_session_policies_provider_unittest.cc",
     "oauth_token_getter_proxy_unittest.cc",

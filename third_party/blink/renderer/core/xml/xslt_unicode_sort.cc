@@ -87,8 +87,8 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
   }
 
   // SAFETY: sorts_ptr points to nbsorts elements.
-  auto sorts =
-      UNSAFE_BUFFERS(base::span(sorts_ptr, static_cast<size_t>(nbsorts)));
+  auto sorts = UNSAFE_BUFFERS(
+      base::span(base::unchecked, sorts_ptr, static_cast<size_t>(nbsorts)));
 
   if (!sorts[0])
     return;
@@ -113,10 +113,10 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
         } else if (xmlStrEqual(comp->stype, ToXMLChar("number"))) {
           comp->number = 1;
         } else {
-          xsltTransformError(
+          UNSAFE_TODO(xsltTransformError(
               ctxt, nullptr, sorts[j],
               "xsltDoSortFunction: no support for data-type = %s\n",
-              comp->stype);
+              comp->stype));
           comp->number = 0;  // Use default.
         }
       }
@@ -132,9 +132,9 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
         } else if (xmlStrEqual(comp->order, ToXMLChar("descending"))) {
           comp->descending = 1;
         } else {
-          xsltTransformError(ctxt, nullptr, sorts[j],
-                             "xsltDoSortFunction: invalid value %s for order\n",
-                             comp->order);
+          UNSAFE_TODO(xsltTransformError(
+              ctxt, nullptr, sorts[j],
+              "xsltDoSortFunction: invalid value %s for order\n", comp->order));
           comp->descending = 0;  // Use default.
         }
       }
@@ -153,7 +153,8 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
 
   // SAFETY: xsltComputeSortResult() returns a list of buffers that
   // have the same length as it's input - `list->nodeNr` (aka `len`).
-  auto results = UNSAFE_BUFFERS(base::span(results_tab[0], len));
+  auto results =
+      UNSAFE_BUFFERS(base::span(base::unchecked, results_tab[0], len));
 
   comp = static_cast<xsltStylePreComp*>(sorts[0]->psvi);
   int descending = comp->descending;
@@ -207,7 +208,9 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
   // Shell's sort of node-set.
   for (size_t incr = len / 2; incr > 0; incr /= 2) {
     for (size_t i = incr; i < len; ++i) {
-      int j = i - incr;
+      // `i` and `incr` are at most `len` (from `list->nodeNr` which is `int`),
+      // so the difference fits in `int`.
+      int j = static_cast<int>(i - incr);
       if (!results[i])
         continue;
 
@@ -236,10 +239,10 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
           } else {
             Vector<UChar> string1;
             Vector<UChar> string2;
-            String::FromUTF8(
+            String::FromUtf8(
                 reinterpret_cast<const char*>(results[j]->stringval))
                 .AppendTo(string1);
-            String::FromUTF8(
+            String::FromUtf8(
                 reinterpret_cast<const char*>(results[j + incr]->stringval))
                 .AppendTo(string2);
             tst = ucol_strcoll(*collator, string1.data(), string1.size(),
@@ -270,7 +273,8 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
             }
 
             // SAFETY: should points to len elements.
-            auto res = UNSAFE_BUFFERS(base::span(res_ptr, len));
+            auto res =
+                UNSAFE_BUFFERS(base::span(base::unchecked, res_ptr, len));
             if (!res[j]) {
               if (res[j + incr])
                 tst = 1;
@@ -295,10 +299,10 @@ void XsltUnicodeSortFunction(xsltTransformContextPtr ctxt,
               } else {
                 Vector<UChar> string1;
                 Vector<UChar> string2;
-                String::FromUTF8(
+                String::FromUtf8(
                     reinterpret_cast<const char*>(res[j]->stringval))
                     .AppendTo(string1);
-                String::FromUTF8(
+                String::FromUtf8(
                     reinterpret_cast<const char*>(res[j + incr]->stringval))
                     .AppendTo(string2);
                 tst = ucol_strcoll(*collator, string1.data(), string1.size(),

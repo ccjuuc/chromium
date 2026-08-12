@@ -155,11 +155,9 @@ TEST_F(BorealisInstallerTest, BorealisNotAllowed) {
 }
 
 TEST_F(BorealisInstallerTest, DeviceOfflineInstallationFails) {
-  std::unique_ptr<network::TestNetworkConnectionTracker>
-      network_connection_tracker =
-          network::TestNetworkConnectionTracker::CreateInstance();
+  CHECK(network::TestNetworkConnectionTracker::HasInstance());
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_NONE);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
 
   StartAndRunToCompletion();
 

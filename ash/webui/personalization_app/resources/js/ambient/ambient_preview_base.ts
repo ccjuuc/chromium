@@ -81,16 +81,16 @@ export class AmbientPreviewBase extends WithPersonalizationStore {
     };
   }
 
-  protected ambientModeEnabled_: boolean|null;
-  protected previewImages_: Url[]|null;
-  protected previewAlbums_: AmbientModeAlbum[]|null;
-  protected topicSource_: TopicSource|null;
+  declare protected ambientModeEnabled_: boolean|null;
+  declare protected previewImages_: Url[]|null;
+  declare protected previewAlbums_: AmbientModeAlbum[]|null;
+  declare protected topicSource_: TopicSource|null;
 
-  private albums_: AmbientModeAlbum[]|null;
-  private firstPreviewAlbum_: AmbientModeAlbum|null;
-  private isAmbientModeAllowed_: boolean;
-  private loading_: boolean;
-  private shouldShowLoadingAnimation_: boolean;
+  declare private albums_: AmbientModeAlbum[]|null;
+  declare private firstPreviewAlbum_: AmbientModeAlbum|null;
+  declare private isAmbientModeAllowed_: boolean;
+  declare private loading_: boolean;
+  declare private shouldShowLoadingAnimation_: boolean;
 
   private loadingTimeoutIds_: LoadingTimeoutIds|null = null;
 
@@ -195,9 +195,8 @@ export class AmbientPreviewBase extends WithPersonalizationStore {
     // Replace the resolution suffix appended at the end of the images
     // with a new resolution suffix of 512px so that we do not download very
     // large images. This won't impact images with no resolution suffix.
-    return album && album.url ?
-        replaceResolutionSuffix(album.url.url, '=s512') :
-        '';
+    return album && album.url ? replaceResolutionSuffix(album.url, '=s512') :
+                                '';
   }
 
   private getPreviewTextAriaLabel_(): string {

@@ -10,8 +10,10 @@
 #include <string_view>
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "crypto/signature_verifier.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher.h"
 #include "google_apis/gaia/oauth2_mint_token_flow.h"
@@ -39,6 +41,7 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintAccessTokenFetcherAdapter
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const GaiaId& user_gaia_id,
       const std::string& refresh_token,
+      bool use_mtls_endpoints_for_fetching_tokens,
       bool is_refresh_token_bound,
       const std::string& device_id,
       const std::string& client_version,
@@ -61,6 +64,13 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintAccessTokenFetcherAdapter
   virtual void SetBindingKeyAssertion(std::string assertion);
   virtual void SetTokenDecryptor(TokenDecryptor decryptor);
 
+  using TokenUpgradeCallback = base::OnceCallback<void(
+      std::string_view challenge,
+      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+          supported_algorithms)>;
+  virtual void EnableTokenUpgradeEligibility(
+      TokenUpgradeCallback token_upgrade_callback);
+
   void SetOAuth2MintTokenFlowFactoryForTesting(
       OAuth2MintTokenFlowFactory factory);
 
@@ -77,13 +87,16 @@ class COMPONENT_EXPORT(GOOGLE_APIS) OAuth2MintAccessTokenFetcherAdapter
   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   const GaiaId user_gaia_id_;
   const std::string refresh_token_;
-  const bool is_refresh_token_bound_;
+  const bool use_mtls_endpoints_for_fetching_tokens_ = false;
+  const bool is_refresh_token_bound_ = false;
   const std::string device_id_;
   const std::string client_version_;
   const std::string client_channel_;
 
   std::string binding_key_assertion_;
   TokenDecryptor token_decryptor_;
+
+  TokenUpgradeCallback token_upgrade_callback_;
 
   OAuth2MintTokenFlowFactory mint_token_flow_factory_for_testing_;
 

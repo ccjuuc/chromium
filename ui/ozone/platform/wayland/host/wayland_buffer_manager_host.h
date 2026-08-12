@@ -64,8 +64,9 @@ class WaylandBufferManagerHost : public ozone::mojom::WaylandBufferManagerHost {
   // Called by WaylandFrameManager if overlay data is invalid.
   void OnCommitOverlayError(const std::string& message);
 
-  // Returns supported buffer formats either from zwp_linux_dmabuf or wl_drm.
-  wl::BufferFormatsWithModifiersMap GetSupportedBufferFormats() const;
+  // Returns supported shared image formats either from zwp_linux_dmabuf or
+  // wl_drm.
+  wl::SharedImageFormatsWithModifiersMap GetSupportedSharedImageFormats() const;
 
   bool SupportsDmabuf() const;
   bool SupportsAcquireFence() const;
@@ -127,10 +128,6 @@ class WaylandBufferManagerHost : public ozone::mojom::WaylandBufferManagerHost {
   // Gets the WaylandBufferHandle of |buffer_id| used for |requestor|.
   WaylandBufferHandle* GetBufferHandle(WaylandSurface* requestor,
                                        uint32_t buffer_id);
-
-  // Gets the buffer format of |buffer_id| used for |requestor| if it is a
-  // DMA based buffer.
-  uint32_t GetBufferFormat(WaylandSurface* requestor, uint32_t buffer_id);
 
   // Tells the |buffer_manager_gpu_ptr_| the result of a swap call and provides
   // it with the presentation feedback.

@@ -12,8 +12,8 @@ export type {BeforeUnloadProxy} from './before_unload_proxy.js';
 export type {Bookmark} from './bookmark_type.js';
 export {BrowserApi, ZoomBehavior} from './browser_api.js';
 // <if expr="enable_pdf_ink2">
-export {AnnotationBrushType, TextAlignment, TextStyle, TextTypeface} from './constants.js';
-export type {AnnotationBrush, Color, TextAnnotation, TextAttributes} from './constants.js';
+export {AnnotationBrushType, TextAlignment, TextAnnotationSource, TextStyle, TextTypeface} from './constants.js';
+export type {AnnotationBrush, Color, TextAnnotation, TextAnnotationMessageData, TextAttributes, TextBoxRect} from './constants.js';
 // </if>
 // <if expr="enable_pdf_ink2">
 export {AnnotationMode} from './constants.js';
@@ -24,13 +24,16 @@ export type {Attachment, Point, Rect} from './constants.js';
 export {SaveToDriveBubbleRequestType, SaveToDriveState} from './constants.js';
 // </if>
 export {PluginController} from './controller.js';
+export type {SaveMessage} from './controller.js';
 // <if expr="enable_pdf_ink2">
 export {PluginControllerEventType} from './controller.js';
+export type {AnnotationBrushMessage} from './controller.js';
 export {HIGHLIGHTER_COLORS, InkAnnotationBrushMixin, PEN_COLORS} from './elements/ink_annotation_brush_mixin.js';
 export {InkAnnotationTextMixin, TEXT_COLORS, TEXT_SIZES} from './elements/ink_annotation_text_mixin.js';
 export {InkBrushSelectorElement} from './elements/ink_brush_selector.js';
 export {InkColorSelectorElement} from './elements/ink_color_selector.js';
 export {InkSizeSelectorElement, HIGHLIGHTER_SIZES, PEN_SIZES} from './elements/ink_size_selector.js';
+export {InkTextAnnotationsElement} from './elements/ink_text_annotations.js';
 export {InkTextBoxElement, TextBoxState} from './elements/ink_text_box.js';
 export {SelectableIconButtonElement} from './elements/selectable_icon_button.js';
 export {TextAlignmentSelectorElement} from './elements/text_alignment_selector.js';
@@ -67,9 +70,11 @@ export type {PinchEventDetail} from './gesture_detector.js';
 // <if expr="enable_pdf_ink2">
 export {DEFAULT_TEXTBOX_WIDTH, Ink2Manager, MIN_TEXTBOX_SIZE_PX} from './ink2_manager.js';
 export type {TextBoxInit} from './ink2_manager.js';
+export {UndoRedoStack} from './undo_redo_stack.js';
+export type {UndoRedoState, UndoRedoStateChangedDetail} from './undo_redo_stack.js';
 // </if>
 export type {PdfPluginElement} from './internal_plugin.js';
-export {record, recordFitTo, resetForTesting, UserAction} from './metrics.js';
+export {PostMessageDataType, record, recordFitTo, resetForTesting, UserAction} from './metrics.js';
 export {PdfNavigatorImpl, WindowOpenDisposition} from './navigator.js';
 export type {NavigatorDelegate, PdfNavigator} from './navigator.js';
 export {OpenPdfParamsParser, ViewMode} from './open_pdf_params_parser.js';
@@ -80,6 +85,7 @@ export {PdfViewerPrivateProxyImpl} from './pdf_viewer_private_proxy.js';
 export type {PdfViewerPrivateProxy} from './pdf_viewer_private_proxy.js';
 // </if>
 // <if expr="enable_pdf_ink2">
+export {convertRotatedCoordinates, pageToScreenCoordinates, screenToPageCoordinates} from './ink_text_annotation_utils.js';
 export {hexToColor} from './pdf_viewer_utils.js';
 // </if>
 export {shouldIgnoreKeyEvents} from './pdf_viewer_utils.js';

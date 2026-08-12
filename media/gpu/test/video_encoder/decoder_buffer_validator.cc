@@ -7,7 +7,6 @@
 #include <set>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
@@ -200,9 +199,7 @@ bool H264Validator::Validate(const DecoderBuffer* buffer,
   }
 
   CHECK(buffer);
-  const DecoderBuffer& decoder_buffer = *buffer;
-  auto decoder_buffer_span = base::span(decoder_buffer);
-  parser_.SetStream(decoder_buffer_span.data(), decoder_buffer_span.size());
+  parser_.SetStream(*buffer);
 
   if (num_temporal_layers_ > 1) {
     if (!metadata.h264) {
@@ -366,6 +363,16 @@ bool H264Validator::Validate(const DecoderBuffer* buffer,
           return false;
         }
 
+        bool vaapi_video_encoder = false;
+#if BUILDFLAG(USE_VAAPI)
+        vaapi_video_encoder = true;
+#endif
+        if (!vaapi_video_encoder) {
+          // Skip Prefix NALU check: Trogdor's v4l2 video encoder produces an
+          // invalid prefix NALU. (b/477359926)
+          break;
+        }
+
         std::optional<H264PrefixNALU> prefix_nalu = ParseH264Prefix(nalu);
         if (!prefix_nalu) {
           LOG(ERROR) << "Failed parsing prefix NALU";
@@ -493,15 +500,12 @@ bool VP8Validator::Validate(const DecoderBuffer* buffer,
   }
 
   CHECK(buffer);
-  const DecoderBuffer& decoder_buffer = *buffer;
-  auto decoder_buffer_span = base::span(decoder_buffer);
 
   // TODO(hiroh): We could be getting more frames in the buffer, but there is
   // no simple way to detect this. We'd need to parse the frames and go through
   // partition numbers/sizes. For now assume one frame per buffer.
   Vp8FrameHeader header;
-  if (!parser_.ParseFrame(decoder_buffer_span.data(),
-                          decoder_buffer_span.size(), &header)) {
+  if (!parser_.ParseFrame(*buffer, &header)) {
     LOG(ERROR) << "Failed parsing";
     return false;
   }
@@ -662,13 +666,11 @@ bool VP9Validator::Validate(const DecoderBuffer* buffer,
   }
 
   CHECK(buffer);
-  const DecoderBuffer& decoder_buffer = *buffer;
-  auto decoder_buffer_span = base::span(decoder_buffer);
 
   // See Annex B "Superframes" in VP9 spec.
   constexpr uint8_t kSuperFrameMarkerMask = 0b11100000;
   constexpr uint8_t kSuperFrameMarker = 0b11000000;
-  if ((decoder_buffer_span.back() & kSuperFrameMarkerMask) ==
+  if ((base::span(*buffer).back() & kSuperFrameMarkerMask) ==
       kSuperFrameMarker) {
     LOG(ERROR) << "Support for super-frames not yet implemented.";
     return false;
@@ -689,8 +691,7 @@ bool VP9Validator::Validate(const DecoderBuffer* buffer,
   auto& parser = *parsers_[parser_index];
   Vp9FrameHeader header;
   gfx::Size allocate_size;
-  parser.SetStream(decoder_buffer_span.data(), decoder_buffer_span.size(),
-                   nullptr);
+  parser.SetStream(*buffer, nullptr);
   if (parser.ParseNextFrame(&header, &allocate_size, nullptr) ==
       Vp9Parser::kInvalidStream) {
     LOG(ERROR) << "Failed parsing";
@@ -716,11 +717,11 @@ bool VP9Validator::Validate(const DecoderBuffer* buffer,
   }
 
   if (s_mode_) {
-    return ValidateSmodeStream(decoder_buffer, metadata, header);
+    return ValidateSmodeStream(*buffer, metadata, header);
   } else if (svc_encoding) {
-    return ValidateSVCStream(decoder_buffer, metadata, header);
+    return ValidateSVCStream(*buffer, metadata, header);
   }
-  return ValidateVanillaStream(decoder_buffer, metadata, header);
+  return ValidateVanillaStream(*buffer, metadata, header);
 }
 
 bool VP9Validator::ValidateVanillaStream(
@@ -902,7 +903,7 @@ bool VP9Validator::ValidateSVCStream(const DecoderBuffer& decoder_buffer,
                    << static_cast<int>(ref_frame_index);
         return false;
       }
-      if (base::Contains(used_indices, ref_frame_index)) {
+      if (used_indices.contains(ref_frame_index)) {
         // |header.ref_frame_index| might have the same indices because an
         // encoder fills the same index if the actually used ref frames is less
         // than |kVp9NumRefsPerFrame|.
@@ -1074,7 +1075,7 @@ bool VP9Validator::ValidateSmodeStream(const DecoderBuffer& decoder_buffer,
                    << static_cast<int>(ref_frame_index);
         return false;
       }
-      if (base::Contains(used_indices, ref_frame_index)) {
+      if (used_indices.contains(ref_frame_index)) {
         // |header.ref_frame_index| might have the same indices because an
         // encoder fills the same index if the actually used ref frames is less
         // than |kVp9NumRefsPerFrame|.
@@ -1165,8 +1166,7 @@ bool AV1Validator::Validate(const DecoderBuffer* buffer,
   }
 
   CHECK(buffer);
-  const DecoderBuffer& decoder_buffer = *buffer;
-  auto decoder_buffer_span = base::span(decoder_buffer);
+  auto decoder_buffer_span = base::span(*buffer);
   libgav1::ObuParser av1_parser(decoder_buffer_span.data(),
                                 decoder_buffer_span.size(), 0, &buffer_pool_,
                                 &decoder_state_);
@@ -1220,8 +1220,7 @@ bool AV1Validator::Validate(const DecoderBuffer* buffer,
   }
 
   if (metadata.svc_generic) {
-    ValidateTemporalSVCStream(decoder_buffer, metadata,
-                              av1_parser.frame_header());
+    ValidateTemporalSVCStream(*buffer, metadata, av1_parser.frame_header());
   }
 
   decoder_state_.UpdateReferenceFrames(
@@ -1268,7 +1267,7 @@ bool AV1Validator::ValidateTemporalSVCStream(
                    << static_cast<int>(ref_frame_index);
         return false;
       }
-      if (base::Contains(used_indices, ref_frame_index)) {
+      if (used_indices.contains(ref_frame_index)) {
         // |header.ref_frame_index| might have the same indices because an
         // encoder fills the same index if the actually used ref frames is less
         // than |kNumReferenceFrameTypes|.

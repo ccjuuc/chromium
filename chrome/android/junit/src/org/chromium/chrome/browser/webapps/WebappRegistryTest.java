@@ -21,12 +21,10 @@ import org.junit.runner.RunWith;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.task.test.BackgroundShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
@@ -50,14 +48,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Tests the WebappRegistry class by ensuring that it persists data to
- * SharedPreferences as expected.
+ * Tests the WebappRegistry class by ensuring that it persists data to SharedPreferences as
+ * expected.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {BackgroundShadowAsyncTask.class})
-@LooperMode(LooperMode.Mode.LEGACY)
+@Config(manifest = Config.NONE)
 public class WebappRegistryTest {
     // These were copied from WebappRegistry for backward compatibility checking.
     private static final String REGISTRY_FILE_NAME = "webapp_registry";
@@ -134,8 +129,7 @@ public class WebappRegistryTest {
 
         // Run background tasks to make sure the data is committed. Run UI thread tasks to make sure
         // the last used time is updated.
-        BackgroundShadowAsyncTask.runBackgroundTasks();
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(callback.getCallbackCalled());
     }
 
@@ -198,8 +192,8 @@ public class WebappRegistryTest {
     }
 
     /**
-     * Test behaviour when there is a webapp with a null id registered. See crbug.com/1055566
-     * for details of the bug which caused this to occur.
+     * Test behaviour when there is a webapp with a null id registered. See crbug.com/40676347 for
+     * details of the bug which caused this to occur.
      */
     @Test
     @Feature({"Webapp"})
@@ -825,6 +819,67 @@ public class WebappRegistryTest {
         final String anotherManifestId = START_URL + "/test_page.html";
         assertNull(
                 WebappRegistry.getInstance().getWebappDataStorageForManifestId(anotherManifestId));
+    }
+
+    @Test
+    @Feature({"WebApk"})
+    public void testPendingWebApkRegistration() {
+        final String testManifestId = START_URL + "/id";
+        final String testPackageName = "org.chromium.webapk";
+
+        assertNull(WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+
+        WebappRegistry.getInstance().registerPendingWebApk(testManifestId, testPackageName);
+        assertEquals(
+                testPackageName,
+                WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+    }
+
+    @Test
+    @Feature({"WebApk"})
+    public void testRemovePendingWebApk() {
+        final String testManifestId = START_URL + "/id";
+        final String testPackageName = "org.chromium.webapk";
+
+        WebappRegistry.getInstance().registerPendingWebApk(testManifestId, testPackageName);
+        assertEquals(
+                testPackageName,
+                WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+
+        WebappRegistry.getInstance().removePendingWebApk(testManifestId);
+        assertNull(WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+    }
+
+    @Test
+    @Feature({"WebApk"})
+    public void testPendingWebApkClearedOnRegister() throws Exception {
+        final String testManifestId = START_URL + "/id";
+        final String testPackageName = "org.chromium.webapk";
+
+        WebappRegistry.getInstance().registerPendingWebApk(testManifestId, testPackageName);
+        assertEquals(
+                testPackageName,
+                WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+
+        BrowserServicesIntentDataProvider intentDataProvider =
+                new WebApkIntentDataProviderBuilder(testPackageName, START_URL)
+                        .setWebApkManifestId(testManifestId)
+                        .build();
+        registerWebapp(intentDataProvider);
+
+        // It should still be found because it is now registered.
+        assertEquals(
+                testPackageName,
+                WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+
+        WebappRegistry.getInstance()
+                .removePendingWebApk(testManifestId); // Should be no-op if already removed
+        assertEquals(
+                testPackageName,
+                WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
+
+        WebappRegistry.getInstance().clearForTesting();
+        assertNull(WebappRegistry.getInstance().findWebApkWithManifestId(testManifestId));
     }
 
     @Test

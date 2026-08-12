@@ -6,18 +6,20 @@
 #define COMPONENTS_SPELLCHECK_RENDERER_SPELLCHECK_PROVIDER_H_
 
 #include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "base/containers/id_map.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "components/spellcheck/common/spellcheck.mojom.h"
+#include "components/spellcheck/common/spelling_marker.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
 #include "content/public/renderer/render_frame_observer.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
-#include "ui/gfx/range/range.h"
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
 #include <unordered_map>
@@ -70,7 +72,7 @@ class SpellCheckProvider : public content::RenderFrameObserver,
   // when typing in the middle of a word.
   void RequestTextChecking(
       const std::u16string& text,
-      const std::vector<gfx::Range>& spelling_markers,
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers,
       blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
           should_force_refresh,
       std::unique_ptr<blink::WebTextCheckingCompletion> completion);
@@ -85,9 +87,16 @@ class SpellCheckProvider : public content::RenderFrameObserver,
 
   // content::RenderFrameObserver:
   void FocusedElementChanged(const blink::WebElement& element) override;
+  void DidCreateNewDocument() override;
 
   // Returns the SpellCheckHost.
   spellcheck::mojom::SpellCheckHost& GetSpellCheckHost();
+
+  // The per-document custom dictionary word set supplied by the
+  // SpellCheckCustomDictionary web API.
+  const std::set<std::u16string>& document_custom_words() const {
+    return document_custom_words_;
+  }
 
  private:
   friend class TestingSpellCheckProvider;
@@ -120,10 +129,21 @@ class SpellCheckProvider : public content::RenderFrameObserver,
       std::vector<blink::WebString>* optional_suggestions) override;
   void RequestCheckingOfText(
       const blink::WebString& text,
-      const std::vector<gfx::Range>& spelling_markers,
+      const std::vector<blink::WebSpellingMarker>& spelling_markers,
       blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
           should_force_refresh,
       std::unique_ptr<blink::WebTextCheckingCompletion> completion) override;
+
+  void SpellCheckCustomDictionaryChanged(
+      const std::vector<std::string>& words_added,
+      const std::vector<std::string>& words_removed) override;
+
+  // If the misspelled span [offset, offset+length) of |word| matches an entry
+  // in |document_custom_words_|, clears |offset|/|length| so the word counts
+  // as correctly spelled.
+  void ApplyDocumentCustomWords(const std::u16string& word,
+                                size_t& offset,
+                                size_t& length) const;
 
 #if BUILDFLAG(USE_RENDERER_SPELLCHECKER)
   void OnRespondSpellingService(int identifier,
@@ -144,7 +164,7 @@ class SpellCheckProvider : public content::RenderFrameObserver,
   // Makes mojo calls to the browser process to perform platform spellchecking.
   void RequestTextCheckingFromBrowser(
       const std::u16string& text,
-      const std::vector<gfx::Range>& spelling_markers);
+      const std::vector<spellcheck::SpellingMarker>& spelling_markers);
 
 #if BUILDFLAG(IS_WIN)
   // Callback for when spellcheck service has been initialized on demand.
@@ -181,6 +201,16 @@ class SpellCheckProvider : public content::RenderFrameObserver,
 
   // Dictionary updated observer.
   std::unique_ptr<DictionaryUpdateObserverImpl> dictionary_update_observer_;
+
+  // Live per-document word set supplied by the SpellCheckCustomDictionary web
+  // API. Maintained on every platform: its size enforces
+  // kMaxDocumentCustomDictionaryWords, and because additions and removals both
+  // move the size, the cap bounds the resident set rather than lifetime churn.
+  std::set<std::u16string> document_custom_words_;
+
+  // Tracks whether a console warning has already been emitted for this
+  // document.
+  bool document_custom_dictionary_overflow_warned_ = false;
 
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
   std::unordered_map<int, HybridSpellCheckRequestInfo> hybrid_requests_info_;

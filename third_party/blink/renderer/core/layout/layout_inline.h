@@ -117,7 +117,7 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   void Trace(Visitor*) const override;
 
-  static LayoutInline* CreateAnonymous(Document*);
+  static LayoutInline* CreateAnonymous(Document&);
 
   LayoutObject* FirstChild() const {
     NOT_DESTROYED();
@@ -137,21 +137,12 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
   void AddChild(LayoutObject* new_child,
                 LayoutObject* before_child = nullptr) override;
 
-  // A block-in-inline became floated or out-of-flow positioned. The anonymous
-  // wrapper around it may therefore need to be removed, if it no longer
-  // contains any in-flow blocks at all.
-  void BlockInInlineBecameFloatingOrOutOfFlow(
-      LayoutBlockFlow* anonymous_block_child);
-
   Element* GetNode() const {
     NOT_DESTROYED();
     return To<Element>(LayoutBoxModelObject::GetNode());
   }
 
-  LayoutUnit MarginLeft() const final;
-  LayoutUnit MarginRight() const final;
-  LayoutUnit MarginTop() const final;
-  LayoutUnit MarginBottom() const final;
+  PhysicalBoxStrut MarginOutsets() const final;
 
   // Returns the bounding box of all quads returned by `LocalQuadsForSelf`.
   gfx::RectF LocalBoundingBoxRectF() const;
@@ -214,7 +205,7 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
   }
 
   PhysicalRect AbsoluteBoundingBoxRectHandlingEmptyInline(
-      MapCoordinatesFlags = 0) const final;
+      MapCoordinatesFlags = {}) const final;
 
   const char* GetName() const override {
     NOT_DESTROYED();
@@ -230,19 +221,22 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   void InvalidateDisplayItemClients(PaintInvalidationReason) const override;
 
   void QuadsInAncestorInternal(Vector<gfx::QuadF>&,
                                const LayoutBoxModelObject* ancestor,
-                               MapCoordinatesFlags) const override;
+                               MapCoordinatesFlags,
+                               BoxQuadType) const override;
 
  private:
   void QuadsForSelfInternal(Vector<gfx::QuadF>& quads,
                             const LayoutBoxModelObject* ancestor,
                             MapCoordinatesFlags mode,
-                            bool map_to_ancestor) const;
+                            bool map_to_ancestor,
+                            BoxQuadType box_type = BoxQuadType::kBorder) const;
 
   // Collects rectangles that the outline of this object would be drawing along
   // the outside of, even if the object isn't styled with a outline for now.
@@ -308,25 +302,18 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   PaintLayerType LayerTypeRequired() const override;
 
-  LayoutUnit OffsetLeft(const Element*) const final;
-  LayoutUnit OffsetTop(const Element*) const final;
+  PhysicalOffset OffsetPoint(const Element*) const final;
 
   PhysicalRect BoundingBoxRelativeToFirstFragment() const final;
 
   bool MapToVisualRectInAncestorSpaceInternal(
       const LayoutBoxModelObject* ancestor,
       TransformState&,
-      VisualRectFlags = kDefaultVisualRectFlags) const final;
+      VisualRectFlags) const final;
 
   PositionWithAffinity PositionForPoint(const PhysicalOffset&) const override;
 
   void DirtyLinesFromChangedChild(LayoutObject*) final;
-
-  // TODO(leviw): This should probably be an int. We don't snap equivalent lines
-  // to different heights.
-  LayoutUnit FirstLineHeight() const final;
-
-  void ChildBecameNonInline(LayoutObject* child) final;
 
   void UpdateHitTestResult(HitTestResult&, const PhysicalOffset&) const final;
 
@@ -341,7 +328,6 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
     // regardless of CSS 'display'.
     return true;
   }
-  void UpdateFromStyle() final;
   bool AnonymousHasStylePropagationOverride() final {
     NOT_DESTROYED();
     return true;

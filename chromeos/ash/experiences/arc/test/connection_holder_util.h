@@ -10,6 +10,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "chromeos/ash/experiences/arc/session/connection_holder.h"
 
 namespace arc {
@@ -24,13 +25,13 @@ class ReadinessObserver
   ReadinessObserver(ConnectionHolder<InstanceType, HostType>* holder,
                     base::OnceClosure closure)
       : holder_(holder), closure_(std::move(closure)) {
-    holder_->AddObserver(this);
+    observation_.Observe(holder_);
   }
 
   ReadinessObserver(const ReadinessObserver&) = delete;
   ReadinessObserver& operator=(const ReadinessObserver&) = delete;
 
-  ~ReadinessObserver() override { holder_->RemoveObserver(this); }
+  ~ReadinessObserver() override = default;
 
  private:
   void OnConnectionReady() override {
@@ -43,9 +44,51 @@ class ReadinessObserver
   const raw_ptr<ConnectionHolder<InstanceType, HostType>>
       holder_;  // Owned by caller
   base::OnceClosure closure_;
+  base::ScopedObservation<
+      ConnectionHolder<InstanceType, HostType>,
+      typename ConnectionHolder<InstanceType, HostType>::Observer>
+      observation_{this};
 };
 
 }  // namespace internal
+
+// Waiter for tests that need to trigger an instance close after registering for
+// the close notification.
+template <typename InstanceType, typename HostType>
+class InstanceClosedWaiter
+    : public ConnectionHolder<InstanceType, HostType>::Observer {
+ public:
+  explicit InstanceClosedWaiter(
+      ConnectionHolder<InstanceType, HostType>* holder)
+      : holder_(holder) {
+    if (holder_->IsConnected()) {
+      observation_.Observe(holder_);
+    }
+  }
+
+  InstanceClosedWaiter(const InstanceClosedWaiter&) = delete;
+  InstanceClosedWaiter& operator=(const InstanceClosedWaiter&) = delete;
+
+  ~InstanceClosedWaiter() override = default;
+
+  void Wait() {
+    if (!holder_->IsConnected()) {
+      return;
+    }
+    run_loop_.Run();
+  }
+
+ private:
+  void OnConnectionClosed() override { run_loop_.Quit(); }
+
+  const raw_ptr<ConnectionHolder<InstanceType, HostType>>
+      holder_;  // Owned by caller
+  base::RunLoop run_loop_;
+  base::ScopedObservation<
+      ConnectionHolder<InstanceType, HostType>,
+      typename ConnectionHolder<InstanceType, HostType>::Observer>
+      observation_{this};
+};
 
 // Waits for the instance to be ready.
 template <typename InstanceType, typename HostType>

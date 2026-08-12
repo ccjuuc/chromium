@@ -180,8 +180,8 @@ public class RestoreTabsTest {
         doReturn(true).when(mMockTracker).shouldTriggerHelpUi(eq(RESTORE_TABS_FEATURE));
         doAnswer(
                         invocation -> {
-                            List<ForeignSession> invoked_sessions = invocation.getArgument(1);
-                            invoked_sessions.addAll(sessions);
+                            List<ForeignSession> invokedSessions = invocation.getArgument(1);
+                            invokedSessions.addAll(sessions);
                             return true;
                         })
                 .when(mForeignSessionHelperJniSpy)
@@ -253,7 +253,9 @@ public class RestoreTabsTest {
         // With the addition of hub search, check that the last tab is completely visible to verify.
         onView(
                         allOf(
-                                withId(org.chromium.chrome.test.R.id.tab_list_recycler_view),
+                                withId(
+                                        org.chromium.chrome.browser.recent_tabs.R.id
+                                                .tab_list_recycler_view),
                                 isDescendantOfA(withId(tabSwitcherAncestorViewId))))
                 .check(
                         (v, noMatchException) -> {
@@ -468,8 +470,8 @@ public class RestoreTabsTest {
         doReturn(true).when(mMockTracker).shouldTriggerHelpUi(eq(RESTORE_TABS_FEATURE));
         doAnswer(
                         invocation -> {
-                            List<ForeignSession> invoked_sessions = invocation.getArgument(1);
-                            invoked_sessions.addAll(sessions);
+                            List<ForeignSession> invokedSessions = invocation.getArgument(1);
+                            invokedSessions.addAll(sessions);
                             return true;
                         })
                 .when(mForeignSessionHelperJniSpy)

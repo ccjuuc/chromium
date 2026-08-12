@@ -9,46 +9,52 @@ import android.content.Context;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Token;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabGroupUtils;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
+import java.util.Collection;
 import java.util.List;
 
 /** Handles the actions for the tab group related menu items in the app menu. */
 @NullMarked
 public class TabGroupMenuActionHandler {
     private final Context mContext;
-    private final TabGroupModelFilter mFilter;
+    private final TabModel mTabModel;
     private final BottomSheetController mBottomSheetController;
     private final ModalDialogManager mModalDialogManager;
     private final Profile mProfile;
     private final TabGroupListBottomSheetCoordinatorFactory mFactory;
 
-    private final ObservableSupplierImpl<TabGroupListBottomSheetCoordinator>
-            mTabGroupListBottomSheetCoordinatorSupplier = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<TabGroupListBottomSheetCoordinator>
+            mTabGroupListBottomSheetCoordinatorSupplier = ObservableSuppliers.createMonotonic();
 
     /**
      * @param context The context for the app menu.
-     * @param filter Used to interact with tab groups.
+     * @param tabModel Used to interact with tab groups.
      * @param bottomSheetController For interacting with the bottom sheet.
      * @param modalDialogManager For showing the tab group creation dialog.
      * @param profile The current profile.
      */
     public TabGroupMenuActionHandler(
             Context context,
-            TabGroupModelFilter filter,
+            TabModel tabModel,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
             Profile profile) {
         this(
                 context,
-                filter,
+                tabModel,
                 bottomSheetController,
                 modalDialogManager,
                 profile,
@@ -58,13 +64,13 @@ public class TabGroupMenuActionHandler {
     @VisibleForTesting
     TabGroupMenuActionHandler(
             Context context,
-            TabGroupModelFilter filter,
+            TabModel tabModel,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
             Profile profile,
             TabGroupListBottomSheetCoordinatorFactory factory) {
         mContext = context;
-        mFilter = filter;
+        mTabModel = tabModel;
         mBottomSheetController = bottomSheetController;
         mModalDialogManager = modalDialogManager;
         mProfile = profile;
@@ -82,8 +88,12 @@ public class TabGroupMenuActionHandler {
      * @param tab The tab to be added to a group.
      */
     public void handleAddToGroupAction(Tab tab) {
-        if (mFilter.getTabGroupCount() == 0) {
-            mFilter.createSingleTabGroup(tab);
+        Collection<TabModelSelector> selectors =
+                ChromeFeatureList.sCrossWindowTabGroupOperations.isEnabled()
+                        ? TabWindowManagerSingleton.getInstance().getAllTabModelSelectors()
+                        : null;
+        if (!TabGroupUtils.hasTabGroups(mTabModel, selectors)) {
+            mTabModel.createSingleTabGroup(tab);
             @Nullable Token groupId = tab.getTabGroupId();
             if (groupId != null) {
                 onTabGroupCreation(groupId);
@@ -95,10 +105,11 @@ public class TabGroupMenuActionHandler {
                             mProfile,
                             this::onTabGroupCreation,
                             /* tabMovedCallback= */ null,
-                            mFilter,
+                            mTabModel,
                             mBottomSheetController,
-                            true,
-                            true);
+                            /* supportsShowNewGroup= */ true,
+                            /* destroyOnHide= */ true,
+                            tab.getWindowAndroid());
             mTabGroupListBottomSheetCoordinatorSupplier.set(tabGroupListBottomSheetCoordinator);
             tabGroupListBottomSheetCoordinator.showBottomSheet(List.of(tab));
         }
@@ -111,6 +122,6 @@ public class TabGroupMenuActionHandler {
     private void onTabGroupCreation(Token tabGroupId) {
         TabGroupCreationDialogManager manager =
                 new TabGroupCreationDialogManager(mContext, mModalDialogManager, null);
-        manager.showDialog(tabGroupId, mFilter);
+        manager.showDialog(tabGroupId, mTabModel);
     }
 }

@@ -55,12 +55,21 @@ class StubResolverConfigReader {
     // The mode is controlled by the user and is set to 'automatic with
     // fallback to well-known DoH provider'.
     kAutomaticWithDohFallbackByUser = 8,
-    // The mode is controlled via enterprise policy and is set to 'automatic
-    // with fallback to well-known DoH provider'.
-    kAutomaticWithDohFallbackByEnterprisePolicy = 9,
-    kMaxValue = kAutomaticWithDohFallbackByEnterprisePolicy,
+
+    // Deprecated since this hasn't been implemented yet: The mode is controlled
+    // via enterprise policy and is set to 'automatic with fallback to
+    // well-known DoH provider'.
+    // kAutomaticWithDohFallbackByEnterprisePolicy = 9,
+
+    // (Obsolete) The mode was set to 'automatic with fallback to well-known DoH
+    // provider' because kAutomatic mode was in use and the UI setting for the
+    // DoH fallback upgrade functionality wasn't enabled. Used for the DoH
+    // fallback upgrade experiment.
+    // kAutomaticWithDohFallbackForExperiment = 10,
+
+    kMaxValue = kAutomaticWithDohFallbackByUser,
   };
-  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/histograms.xml:SecureDnsModeDetails)
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:SecureDnsModeDetails)
 
   static constexpr base::TimeDelta kParentalControlsCheckDelay =
       base::Seconds(2);
@@ -106,10 +115,10 @@ class StubResolverConfigReader {
   virtual bool ShouldDisableDohForParentalControls();
 
 #if BUILDFLAG(IS_ANDROID)
-  // Updates the android owned state and network service if the device/prfile is
+  // Updates the android owned state and network service if the device/profile is
   // owned.
-  void OnAndroidOwnedStateCheckComplete(bool has_profile_owner,
-                                        bool has_device_owner);
+  void OnAndroidOwnedStateCheckComplete(bool has_device_owner,
+                                        bool has_profile_owner);
 #endif
 
   void OverrideParentalControlsForTesting(bool parental_controls_override) {
@@ -179,7 +188,7 @@ class StubResolverConfigReader {
 #if BUILDFLAG(IS_ANDROID)
   // Whether or not an Android device or profile is owned.
   // A nullopt indicates this value has not been determined yet.
-  std::optional<bool> android_has_owner_ = std::nullopt;
+  std::optional<bool> android_has_owner_;
 #endif
 
 #if BUILDFLAG(IS_WIN)

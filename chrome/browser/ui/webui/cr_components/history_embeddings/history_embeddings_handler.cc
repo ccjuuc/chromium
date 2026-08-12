@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ui/webui/cr_components/history_embeddings/history_embeddings_handler.h"
 
+#include "base/check.h"
 #include "base/i18n/time_formatting.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -12,17 +14,18 @@
 #include "chrome/browser/history_embeddings/history_embeddings_service_factory.h"
 #include "chrome/browser/history_embeddings/history_embeddings_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "components/history_clusters/core/history_clusters_util.h"
-#include "components/history_embeddings/history_embeddings_features.h"
-#include "components/history_embeddings/history_embeddings_service.h"
+#include "components/history_embeddings/content/history_embeddings_service.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/url_formatter.h"
 #include "history_embeddings_handler.h"
@@ -72,20 +75,17 @@ history_embeddings::mojom::AnswerStatus AnswererAnswerStatusToMojoAnswerStatus(
 HistoryEmbeddingsHandler::HistoryEmbeddingsHandler(
     mojo::PendingReceiver<history_embeddings::mojom::PageHandler>
         pending_page_handler,
+    mojo::PendingRemote<history_embeddings::mojom::Page> pending_page,
     base::WeakPtr<Profile> profile,
     content::WebUI* web_ui,
     bool for_side_panel)
     : page_handler_(this, std::move(pending_page_handler)),
+      page_(std::move(pending_page)),
       for_side_panel_(for_side_panel),
       profile_(std::move(profile)),
       web_ui_(web_ui) {}
 
 HistoryEmbeddingsHandler::~HistoryEmbeddingsHandler() = default;
-
-void HistoryEmbeddingsHandler::SetPage(
-    mojo::PendingRemote<history_embeddings::mojom::Page> pending_page) {
-  page_.Bind(std::move(pending_page));
-}
 
 void HistoryEmbeddingsHandler::Search(
     history_embeddings::mojom::SearchQueryPtr query) {
@@ -101,7 +101,7 @@ void HistoryEmbeddingsHandler::Search(
   last_result_ = service->Search(
       &last_result_, query->query, query->time_range_start,
       history_embeddings::GetFeatureParameters().search_result_item_count,
-      /*skip_answering=*/false,
+      /*skip_answering=*/false, /*url_id_filter=*/{},
       base::BindRepeating(&HistoryEmbeddingsHandler::OnReceivedSearchResult,
                           weak_ptr_factory_.GetWeakPtr()));
   VLOG(3) << "HistoryEmbeddingsHandler::Search started for '"
@@ -259,7 +259,8 @@ void HistoryEmbeddingsHandler::SetUserFeedback(
   user_feedback_ = OptimizationFeedbackFromMojoUserFeedback(user_feedback);
   if (user_feedback ==
       history_embeddings::mojom::UserFeedback::kUserFeedbackNegative) {
-    Browser* browser = chrome::FindLastActive();
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
     if (!browser) {
       return;
     }
@@ -271,7 +272,7 @@ void HistoryEmbeddingsHandler::SetUserFeedback(
         l10n_util::GetStringUTF8(IDS_HISTORY_EMBEDDINGS_FEEDBACK_PLACEHOLDER),
         /*category_tag=*/"genai_history",
         /*extra_diagnostics=*/std::string(),
-        /*autofill_metadata=*/base::Value::Dict(), base::Value::Dict());
+        /*autofill_metadata=*/base::DictValue(), base::DictValue());
   }
 }
 

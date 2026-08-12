@@ -7,14 +7,15 @@
 #include <memory>
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/grit/slow_resources.h"
+#include "chrome/grit/slow_resources_map.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
@@ -39,8 +40,8 @@ const char kJsApiLoadComplete[] = "loadComplete";
 namespace ash {
 
 void CreateAndAddSlowUIHTMLSource(Profile* profile) {
-  content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      profile, chrome::kChromeUISlowHost);
+  content::WebUIDataSource* source =
+      content::WebUIDataSource::CreateAndAdd(profile, ash::kChromeUISlowHost);
 
   static constexpr webui::LocalizedString kStrings[] = {
       {"slowDisable", IDS_SLOW_DISABLE},
@@ -50,9 +51,8 @@ void CreateAndAddSlowUIHTMLSource(Profile* profile) {
   };
   source->AddLocalizedStrings(kStrings);
 
-  source->AddResourcePath("slow.js", IDR_SLOW_JS);
-  source->AddResourcePath("slow.css", IDR_SLOW_CSS);
-  source->SetDefaultResource(IDR_SLOW_HTML);
+  source->AddResourcePaths(kSlowResources);
+  source->SetDefaultResource(IDR_SLOW_SLOW_HTML);
 }
 
 // The handler for Javascript messages related to the "slow" view.
@@ -74,9 +74,9 @@ class SlowHandler : public WebUIMessageHandler {
   void UpdatePage();
 
   // Handlers for JS WebUI messages.
-  void HandleDisable(const base::Value::List& args);
-  void HandleEnable(const base::Value::List& args);
-  void LoadComplete(const base::Value::List& args);
+  void HandleDisable(const base::ListValue& args);
+  void HandleEnable(const base::ListValue& args);
+  void LoadComplete(const base::ListValue& args);
 
   raw_ptr<Profile> profile_;
   std::unique_ptr<PrefChangeRegistrar> user_pref_registrar_;
@@ -105,7 +105,7 @@ void SlowHandler::RegisterMessages() {
 
 void SlowHandler::OnJavascriptAllowed() {
   user_pref_registrar_->Add(
-      prefs::kPerformanceTracingEnabled,
+      ash::prefs::kPerformanceTracingEnabled,
       base::BindRepeating(&SlowHandler::UpdatePage, base::Unretained(this)));
 }
 
@@ -113,24 +113,25 @@ void SlowHandler::OnJavascriptDisallowed() {
   user_pref_registrar_->RemoveAll();
 }
 
-void SlowHandler::HandleDisable(const base::Value::List& args) {
+void SlowHandler::HandleDisable(const base::ListValue& args) {
   PrefService* pref_service = profile_->GetPrefs();
-  pref_service->SetBoolean(prefs::kPerformanceTracingEnabled, false);
+  pref_service->SetBoolean(ash::prefs::kPerformanceTracingEnabled, false);
 }
 
-void SlowHandler::HandleEnable(const base::Value::List& args) {
+void SlowHandler::HandleEnable(const base::ListValue& args) {
   PrefService* pref_service = profile_->GetPrefs();
-  pref_service->SetBoolean(prefs::kPerformanceTracingEnabled, true);
+  pref_service->SetBoolean(ash::prefs::kPerformanceTracingEnabled, true);
 }
 
-void SlowHandler::LoadComplete(const base::Value::List& args) {
+void SlowHandler::LoadComplete(const base::ListValue& args) {
   AllowJavascript();
   UpdatePage();
 }
 
 void SlowHandler::UpdatePage() {
   PrefService* pref_service = profile_->GetPrefs();
-  bool enabled = pref_service->GetBoolean(prefs::kPerformanceTracingEnabled);
+  bool enabled =
+      pref_service->GetBoolean(ash::prefs::kPerformanceTracingEnabled);
   base::Value pref_value(enabled);
   FireWebUIListener("tracing-pref-changed", pref_value);
 }

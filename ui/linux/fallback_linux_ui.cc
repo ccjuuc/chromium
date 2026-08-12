@@ -125,6 +125,8 @@ void FallbackLinuxUi::SetDarkTheme(bool dark) {
   theme_is_dark_ = dark;
 }
 
+void FallbackLinuxUi::SetColorScheme(std::optional<bool> prefer_dark) {}
+
 void FallbackLinuxUi::SetAccentColor(std::optional<SkColor> accent_color) {}
 
 bool FallbackLinuxUi::AnimationsEnabled() const {
@@ -137,12 +139,13 @@ void FallbackLinuxUi::AddWindowButtonOrderObserver(
 void FallbackLinuxUi::RemoveWindowButtonOrderObserver(
     ui::WindowButtonOrderObserver* observer) {}
 
-std::unique_ptr<ui::NavButtonProvider>
-FallbackLinuxUi::CreateNavButtonProvider() {
+std::unique_ptr<ui::NavButtonProvider> FallbackLinuxUi::CreateNavButtonProvider(
+    ui::FrameType type) {
   return nullptr;
 }
 
 ui::WindowFrameProvider* FallbackLinuxUi::GetWindowFrameProvider(
+    FrameType type,
     bool solid_frame,
     bool tiled,
     bool maximized) {

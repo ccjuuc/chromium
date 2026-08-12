@@ -9,7 +9,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
@@ -17,14 +16,12 @@
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/permissions/system/system_permission_settings.h"
-#include "chrome/browser/privacy_sandbox/mock_privacy_sandbox_service.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
 #include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
-#include "chrome/browser/ui/views/controls/page_switcher_view.h"
 #include "chrome/browser/ui/views/controls/rich_controls_container_view.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/browser/ui/views/page_info/chosen_object_view.h"
@@ -37,61 +34,54 @@
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/views/chrome_test_views_delegate.h"
+#include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/cookie_controls_state.h"
-#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/page_info/core/features.h"
+#include "components/page_info/page_info_ui_delegate.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_recovery_success_rate_tracker.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
+#include "components/permissions/permissions_client.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/strings/grit/privacy_sandbox_strings.h"
 #include "components/ukm/test_ukm_recorder.h"
-#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/common/buildflags.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_web_contents_factory.h"
-#include "google_apis/gaia/gaia_id.h"
 #include "media/base/media_switches.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/test/cert_test_util.h"
-#include "net/test/test_certificate_data.h"
 #include "net/test/test_data_directory.h"
 #include "services/device/public/cpp/test/fake_usb_device_manager.h"
-#include "services/device/public/mojom/usb_device.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/event_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/toggle_button.h"
-#include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/link.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/scoped_views_test_helper.h"
-#include "ui/views/test/test_views_delegate.h"
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "chrome/browser/plugins/chrome_plugin_service_filter.h"
@@ -129,8 +119,8 @@ class PageInfoBubbleViewTestApi {
     }
 
     std::unique_ptr<PageInfoBubbleSpecification> specification =
-        PageInfoBubbleSpecification::Builder(nullptr, parent_, web_contents_,
-                                             GURL(kUrl))
+        PageInfoBubbleSpecification::Builder(views::BubbleAnchor(), parent_,
+                                             web_contents_, GURL(kUrl))
             .AddPageInfoClosingCallback(base::BindOnce(
                 &PageInfoBubbleViewTestApi::OnPageInfoBubbleClosed,
                 base::Unretained(this), run_loop_.QuitClosure()))
@@ -599,6 +589,42 @@ TEST_F(PageInfoBubbleViewTest, SetPermissionInfo) {
   // permission is not being omitted from the UI.
   api_->SetPermissionInfo(list);
   EXPECT_EQ(num_expected_children, api_->GetPermissionsCount());
+}
+
+TEST_F(PageInfoBubbleViewTest, ResetEmbargoedPermission) {
+  GURL url(kUrl);
+  permissions::PermissionDecisionAutoBlocker* autoblocker =
+      permissions::PermissionsClient::Get()->GetPermissionDecisionAutoBlocker(
+          web_contents_helper_->profile());
+
+  // Place under embargo for multiple dismissals.
+  autoblocker->RecordDismissAndEmbargo(url, ContentSettingsType::NOTIFICATIONS,
+                                       /*dismissed_prompt_was_quiet=*/false);
+  autoblocker->RecordDismissAndEmbargo(url, ContentSettingsType::NOTIFICATIONS,
+                                       /*dismissed_prompt_was_quiet=*/false);
+  bool embargoed = autoblocker->RecordDismissAndEmbargo(
+      url, ContentSettingsType::NOTIFICATIONS,
+      /*dismissed_prompt_was_quiet=*/false);
+  EXPECT_TRUE(embargoed);
+  EXPECT_TRUE(
+      autoblocker->IsEmbargoed(url, ContentSettingsType::NOTIFICATIONS));
+
+  // Create the bubble.
+  api_->CreateView();
+
+  // Reset button should be enabled because Notifications is under embargo
+  // (non-default state).
+  EXPECT_TRUE(api_->reset_permissions_button()->GetEnabled());
+
+  // Click the reset button.
+  ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                       ui::EventTimeForNow(), 0, 0);
+  views::test::ButtonTestApi(api_->reset_permissions_button())
+      .NotifyClick(event);
+
+  // The embargo should be cleared.
+  EXPECT_FALSE(
+      autoblocker->IsEmbargoed(url, ContentSettingsType::NOTIFICATIONS));
 }
 
 TEST_F(PageInfoBubbleViewTest, CheckToggleSettingForCapturedSurfaceControl) {
@@ -1132,7 +1158,7 @@ TEST_F(PageInfoBubbleViewTest, CertificateButtonShowsEvCertDetails) {
             api_->GetCertificateButtonSubtitleText());
 }
 
-// Regression test for crbug.com/1069113. Test cert includes country and state
+// Regression test for crbug.com/40683846. Test cert includes country and state
 // but not locality.
 TEST_F(PageInfoBubbleViewTest, EvDetailsShowForCertWithStateButNoLocality) {
   ChromeSecurityStateTabHelper::CreateForWebContents(
@@ -1249,4 +1275,98 @@ TEST_F(PageInfoBubbleViewAutoPipTest, CheckSubpageForAutoPictureInPicture) {
   ASSERT_TRUE(page_view);
 
   EXPECT_NE(page_view->GetToggleButtonForTesting(), nullptr);
+}
+
+namespace {
+
+class MockPageInfoUiDelegate : public PageInfoUiDelegate {
+ public:
+#if !BUILDFLAG(IS_ANDROID)
+  MOCK_METHOD(bool, IsBlockAutoPlayEnabled, (), (override));
+  MOCK_METHOD(bool, IsMultipleTabsOpen, (), (override));
+  MOCK_METHOD(void, OpenSiteSettingsFileSystem, (), (override));
+#endif
+  MOCK_METHOD(content::PermissionResult,
+              GetPermissionResult,
+              (blink::PermissionType permission),
+              (override));
+  MOCK_METHOD(std::optional<content::PermissionResult>,
+              GetEmbargoResult,
+              (ContentSettingsType type),
+              (override));
+  MOCK_METHOD(void,
+              GetMerchantTrustInfo,
+              (page_info::MerchantDataCallback callback),
+              (override));
+};
+
+class PageInfoUIAutoBlockedToUIStringTest : public testing::Test {
+ public:
+  PageInfoUIAutoBlockedToUIStringTest() = default;
+};
+
+}  // namespace
+
+TEST_F(PageInfoUIAutoBlockedToUIStringTest, PermissionAutoBlockedToUIString) {
+  content_settings::ContentSettingsRegistry::GetInstance();
+  MockPageInfoUiDelegate delegate;
+  PageInfo::PermissionInfo permission;
+  permission.type = ContentSettingsType::GEOLOCATION;
+
+  // 1. Returns empty string when permission.setting is not set.
+  permission.setting = std::nullopt;
+  EXPECT_EQ(std::u16string(),
+            PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 2. Returns empty string when permission.setting is already blocked.
+  permission.setting = CONTENT_SETTING_BLOCK;
+  EXPECT_EQ(std::u16string(),
+            PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 3. Returns empty string if auto-blocker is disabled for the type.
+  // ContentSettingsType::COOKIES is not a permission type and thus doesn't
+  // support auto-blocking.
+  permission.type = ContentSettingsType::COOKIES;
+  permission.setting = CONTENT_SETTING_ASK;
+  EXPECT_EQ(std::u16string(),
+            PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 4. Returns blocked string for standard permission with multiple dismissals.
+  permission.type = ContentSettingsType::GEOLOCATION;
+  EXPECT_CALL(delegate, GetPermissionResult(blink::PermissionType::GEOLOCATION))
+      .WillOnce(Return(content::PermissionResult(
+          content::PermissionStatus::ASK,
+          content::PermissionStatusSource::MULTIPLE_DISMISSALS)));
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_PERMISSION_AUTOMATICALLY_BLOCKED),
+      PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 5. Returns blocked string for standard permission with multiple ignores.
+  EXPECT_CALL(delegate, GetPermissionResult(blink::PermissionType::GEOLOCATION))
+      .WillOnce(Return(content::PermissionResult(
+          content::PermissionStatus::ASK,
+          content::PermissionStatusSource::MULTIPLE_IGNORES)));
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_PERMISSION_AUTOMATICALLY_BLOCKED),
+      PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 6. Returns blocked string for Federated Identity API with embargo.
+  permission.type = ContentSettingsType::FEDERATED_IDENTITY_API;
+  EXPECT_CALL(delegate,
+              GetEmbargoResult(ContentSettingsType::FEDERATED_IDENTITY_API))
+      .WillOnce(Return(content::PermissionResult(
+          content::PermissionStatus::ASK,
+          content::PermissionStatusSource::MULTIPLE_DISMISSALS)));
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_PERMISSION_AUTOMATICALLY_BLOCKED),
+      PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
+
+  // 7. Returns empty string for other sources.
+  permission.type = ContentSettingsType::GEOLOCATION;
+  EXPECT_CALL(delegate, GetPermissionResult(blink::PermissionType::GEOLOCATION))
+      .WillOnce(Return(content::PermissionResult(
+          content::PermissionStatus::ASK,
+          content::PermissionStatusSource::UNSPECIFIED)));
+  EXPECT_EQ(std::u16string(),
+            PageInfoUI::PermissionAutoBlockedToUIString(&delegate, permission));
 }

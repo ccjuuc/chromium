@@ -10,6 +10,7 @@
 #include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -25,7 +26,6 @@ using sync_pb::ContactInfoSpecifics;
 
 constexpr char kGuid[] = "00000000-0000-0000-0000-000000000001";
 constexpr char kInvalidGuid[] = "1234";
-constexpr int kNonChromeModifier = 1234;
 const auto kUseDate = base::Time::FromSecondsSinceUnixEpoch(123);
 const auto kModificationDate = base::Time::FromSecondsSinceUnixEpoch(456);
 
@@ -41,16 +41,14 @@ AutofillProfile ConstructBaseProfile(
   profile.usage_history().set_modification_date(kModificationDate);
   profile.set_language_code("en");
   profile.set_profile_label("profile_label");
-  profile.set_initial_creator_id(
-      AutofillProfile::kInitialCreatorOrModifierChrome);
-  profile.set_last_modifier_id(kNonChromeModifier);
+  profile.set_initial_creator_id(AutofillProfile::kInitialCreatorChrome);
 
   // Set name-related values and statuses.
   profile.SetRawInfoWithVerificationStatus(NAME_FIRST, u"John",
                                            VerificationStatus::kObserved);
   profile.SetRawInfoWithVerificationStatus(NAME_MIDDLE, u"K.",
                                            VerificationStatus::kObserved);
-  profile.SetRawInfoWithVerificationStatus(NAME_LAST, u"von Doe",
+  profile.SetRawInfoWithVerificationStatus(NAME_LAST, u"Doe",
                                            VerificationStatus::kFormatted);
   profile.SetRawInfoWithVerificationStatus(NAME_LAST_FIRST, u"D",
                                            VerificationStatus::kParsed);
@@ -58,11 +56,7 @@ AutofillProfile ConstructBaseProfile(
                                            VerificationStatus::kParsed);
   profile.SetRawInfoWithVerificationStatus(NAME_LAST_SECOND, u"e",
                                            VerificationStatus::kParsed);
-  profile.SetRawInfoWithVerificationStatus(NAME_LAST_PREFIX, u"von",
-                                           VerificationStatus::kParsed);
-  profile.SetRawInfoWithVerificationStatus(NAME_LAST_CORE, u"Doe",
-                                           VerificationStatus::kParsed);
-  profile.SetRawInfoWithVerificationStatus(NAME_FULL, u"John K. von Doe",
+  profile.SetRawInfoWithVerificationStatus(NAME_FULL, u"John K. Doe",
                                            VerificationStatus::kUserVerified);
   profile.SetRawInfoWithVerificationStatus(ALTERNATIVE_FAMILY_NAME, u"Doe",
                                            VerificationStatus::kParsed);
@@ -358,28 +352,22 @@ ContactInfoSpecifics ConstructBaseSpecifics() {
   specifics.set_date_modified_unix_epoch_seconds(kModificationDate.ToTimeT());
   specifics.set_language_code("en");
   specifics.set_profile_label("profile_label");
-  specifics.set_initial_creator_id(
-      AutofillProfile::kInitialCreatorOrModifierChrome);
-  specifics.set_last_modifier_id(kNonChromeModifier);
+  specifics.set_initial_creator_id(AutofillProfile::kInitialCreatorChrome);
 
   // Set name-related values and statuses.
   SetToken(specifics.mutable_name_first(), "John",
            ContactInfoSpecifics::OBSERVED);
   SetToken(specifics.mutable_name_middle(), "K.",
            ContactInfoSpecifics::OBSERVED);
-  SetToken(specifics.mutable_name_last(), "von Doe",
+  SetToken(specifics.mutable_name_last(), "Doe",
            ContactInfoSpecifics::FORMATTED);
-  SetToken(specifics.mutable_name_last_prefix(), "von",
-           ContactInfoSpecifics::PARSED);
-  SetToken(specifics.mutable_name_last_core(), "Doe",
-           ContactInfoSpecifics::PARSED);
   SetToken(specifics.mutable_name_last_first(), "D",
            ContactInfoSpecifics::PARSED);
   SetToken(specifics.mutable_name_last_conjunction(), "o",
            ContactInfoSpecifics::PARSED);
   SetToken(specifics.mutable_name_last_second(), "e",
            ContactInfoSpecifics::PARSED);
-  SetToken(specifics.mutable_name_full(), "John K. von Doe",
+  SetToken(specifics.mutable_name_full(), "John K. Doe",
            ContactInfoSpecifics::USER_VERIFIED);
   SetToken(specifics.mutable_alternative_family_name(), "",
            ContactInfoSpecifics::VERIFICATION_STATUS_UNSPECIFIED);
@@ -732,8 +720,6 @@ class ContactInfoSyncUtilTest
  public:
   ContactInfoSyncUtilTest() {
     features_.InitWithFeatures({features::kAutofillUseINAddressModel,
-                                features::kAutofillSupportPhoneticNameForJP,
-                                features::kAutofillSupportLastNamePrefix,
                                 features::kAutofillSupportSplitZipCode},
                                {});
   }
@@ -821,8 +807,6 @@ TEST_F(ContactInfoSyncUtilTest,
 // ContactInfoSpecifics::address_type correctly.
 TEST_F(ContactInfoSyncUtilTest,
        CreateContactInfoEntityDataFromAutofillProfile_HWRecordTypes) {
-  base::test::ScopedFeatureList feature(
-      features::kAutofillEnableSupportForHomeAndWork);
   AutofillProfile profile = ConstructBaseProfile();
 
   test_api(profile).set_record_type(AutofillProfile::RecordType::kAccountHome);

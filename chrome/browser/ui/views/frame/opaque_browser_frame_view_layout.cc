@@ -5,19 +5,14 @@
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
 
 #include <algorithm>
-#include <string>
+#include <ranges>
 #include <vector>
 
-#include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/i18n/rtl.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/frame/caption_button_placeholder_container.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
-#include "ui/gfx/font.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
@@ -88,45 +83,14 @@ const views::Button* OpaqueBrowserFrameViewLayout::GetFrameButton(
   }
 }
 
-gfx::Rect OpaqueBrowserFrameViewLayout::GetBoundsForTabStripRegion(
-    const gfx::Size& tabstrip_minimum_size,
-    int total_width) const {
-  const int x = available_space_leading_x_;
-  const int available_width = available_space_trailing_x_ - x;
-  return gfx::Rect(x, NonClientTopHeight(false), std::max(0, available_width),
-                   tabstrip_minimum_size.height());
-}
-
-gfx::Rect OpaqueBrowserFrameViewLayout::GetBoundsForWebAppFrameToolbar(
-    const gfx::Size& toolbar_preferred_size) const {
-  // Adding 2px of vertical padding puts at least 1 px of space on the top and
-  // bottom of the element.
-  constexpr int kVerticalPadding = 2;
-
-  const int x = available_space_leading_x_;
-  const int available_width = available_space_trailing_x_ - x;
-  return gfx::Rect(x, FrameEdgeInsets(false).top(),
-                   std::max(0, available_width),
-                   toolbar_preferred_size.height() + kVerticalPadding +
-                       kContentEdgeShadowThickness);
-}
-
 gfx::Size OpaqueBrowserFrameViewLayout::GetMinimumSize(
     const views::View* host) const {
   // Ensure that we can fit the main browser view.
   gfx::Size min_size = delegate_->GetBrowserViewMinimumSize();
-  if (delegate_->GetBorderlessModeEnabled()) {
-    // In borderless mode the window doesn't have the window controls or tab
-    // strip.
+  if (delegate_->GetUnframedModeEnabled()) {
+    // In unframed mode the window has no window controls or tab strip.
     return min_size;
   }
-
-  // Ensure that we can, at minimum, hold our window controls and a tab strip.
-  int top_width = minimum_size_for_buttons_;
-  if (delegate_->IsTabStripVisible()) {
-    top_width += delegate_->GetTabstripMinimumSize().width();
-  }
-  min_size.set_width(std::max(min_size.width(), top_width));
 
   // Account for the frame.
   const auto border_insets = FrameBorderInsets(false);
@@ -211,7 +175,7 @@ gfx::Rect OpaqueBrowserFrameViewLayout::CalculateClientAreaBounds(
     int height) const {
   auto border_thickness = FrameBorderInsets(false);
   int top_height =
-      (is_window_controls_overlay_enabled_ || is_borderless_mode_enabled_ ||
+      (is_window_controls_overlay_enabled_ || is_unframed_mode_enabled_ ||
        delegate_->WebAppButtonHeight() > 0)
           ? border_thickness.top()
           : NonClientTopHeight(false);
@@ -267,9 +231,9 @@ void OpaqueBrowserFrameViewLayout::SetWindowControlsOverlayEnabled(
   }
 }
 
-void OpaqueBrowserFrameViewLayout::SetBorderlessModeEnabled(bool enabled,
-                                                            views::View* host) {
-  is_borderless_mode_enabled_ = enabled;
+void OpaqueBrowserFrameViewLayout::SetUnframedModeEnabled(bool enabled,
+                                                          views::View* host) {
+  is_unframed_mode_enabled_ = enabled;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -317,7 +281,7 @@ void OpaqueBrowserFrameViewLayout::LayoutWindowControls() {
       std::erase(buttons_not_shown, button);
     }
 
-    for (const auto& button : base::Reversed(trailing_buttons_)) {
+    for (const auto& button : std::views::reverse(trailing_buttons_)) {
       ConfigureButton(button, ButtonAlignment::kAlignTrailing);
       std::erase(buttons_not_shown, button);
     }

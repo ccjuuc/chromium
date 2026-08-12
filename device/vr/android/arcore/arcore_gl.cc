@@ -11,17 +11,16 @@
 
 #include "base/android/jni_android.h"
 #include "base/barrier_callback.h"
-#include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/angle_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
+#include "components/viz/common/gpu/context_provider.h"
 #include "device/vr/android/arcore/ar_image_transport.h"
 #include "device/vr/android/arcore/arcore.h"
 #include "device/vr/android/arcore/arcore_math_utils.h"
@@ -49,7 +48,7 @@
 #include "ui/gl/init/gl_factory.h"
 
 namespace {
-// TODO(crbug.com/40757470): Some pages can hang if we try to wait for
+// TODO(crbug.com/528412711): Some pages can hang if we try to wait for
 // the compositor to acknowledge receipt of a frame before moving it to the
 // "rendering" state of the state machine. However, not doing so could increase
 // the latency of frames under heavy load as we aren't listening to back
@@ -225,11 +224,11 @@ void ArCoreGl::Initialize(
 
   device::DomOverlaySetup dom_setup = device::DomOverlaySetup::kNone;
   if (CanRenderDOMContent()) {
-    if (base::Contains(required_features,
-                       device::mojom::XRSessionFeature::DOM_OVERLAY)) {
+    if (required_features.contains(
+            device::mojom::XRSessionFeature::DOM_OVERLAY)) {
       dom_setup = device::DomOverlaySetup::kRequired;
-    } else if (base::Contains(optional_features,
-                              device::mojom::XRSessionFeature::DOM_OVERLAY)) {
+    } else if (optional_features.contains(
+                   device::mojom::XRSessionFeature::DOM_OVERLAY)) {
       dom_setup = device::DomOverlaySetup::kOptional;
     }
   }
@@ -248,9 +247,6 @@ void ArCoreGl::Initialize(
 
   initialized_callback_ = std::move(callback);
 
-  // TODO(crbug.com/41453315): start using the list to control the
-  // behavior of local and unbounded spaces & send appropriate data back in
-  // GetFrameData().
   enabled_features_ = maybe_initialize_result->enabled_features;
   depth_configuration_ = maybe_initialize_result->depth_configuration;
 
@@ -933,25 +929,37 @@ void ArCoreGl::FinishRenderingFrame(WebXrFrame* frame) {
 
   TRACE_EVENT1("gpu", "ArCoreGl::FinishRenderingFrame", "frame", frame->index);
 
+  std::vector<WebXrSharedBuffer*> reclaimed_buffers;
+  if (frame->shared_buffer &&
+      frame->shared_buffer->reclaimed_sync_token.HasData()) {
+    reclaimed_buffers.push_back(frame->shared_buffer.get());
+  }
+  if (frame->camera_image_shared_buffer &&
+      frame->camera_image_shared_buffer->reclaimed_sync_token.HasData()) {
+    reclaimed_buffers.push_back(frame->camera_image_shared_buffer.get());
+  }
+
   // Even though we may be told that the frame is done, it may still actually
   // be in use. In this case, we'll have received sync tokens to wait on until
   // the GPU is *actually* done with the resources associated with the frame.
-  if (!frame->reclaimed_sync_tokens.empty()) {
+  if (!reclaimed_buffers.empty()) {
     auto barrier_callback =
         base::BarrierCallback<std::unique_ptr<gfx::GpuFence>>(
-            frame->reclaimed_sync_tokens.size(),
+            reclaimed_buffers.size(),
             base::BindOnce(&ArCoreGl::OnReclaimedGpuFenceAvailable,
                            GetWeakPtr(), frame));
     // We'll have to wait until the latest fence resolves and any earlier waits
     // will simply become no-ops if they are waited on after that fence, so we
     // don't need to try to do anything fancy with regards to the ordering of
     // the tokens.
-    for (const auto& reclaimed_sync_token : frame->reclaimed_sync_tokens) {
-      ar_image_transport_->WaitSyncToken(reclaimed_sync_token);
-      ar_image_transport_->CreateGpuFenceForSyncToken(reclaimed_sync_token,
-                                                      barrier_callback);
+    viz::ContextProvider* provider = ar_image_transport_->GetContextProvider();
+    for (const auto& reclaimed_buffer : reclaimed_buffers) {
+      gpu::ClientSharedImage::CreateGpuFenceForSyncTokens(
+          {reclaimed_buffer->shared_image},
+          {reclaimed_buffer->reclaimed_sync_token}, provider->ContextGL(),
+          provider->ContextSupport(), barrier_callback);
+      reclaimed_buffer->reclaimed_sync_token.Clear();
     }
-    frame->reclaimed_sync_tokens.clear();
   } else {
     // We didn't have any frame tokens, so just finish up this frame now.
     if (!frame->render_completion_fence) {
@@ -976,7 +984,7 @@ void ArCoreGl::OnReclaimedGpuFenceAvailable(
   // its usage is now appropriately synchronized; however, we have no way of
   // getting the time that the gpu fence triggered, which we need for the
   // rendered frame stats that drive dynamic viewport scaling.
-  // TODO(crbug.com/40754792): It appears as though we are actually
+  // TODO(crbug.com/528413359): It appears as though we are actually
   // placing/waiting on this fence after the frame *after* this current frame.
   frame->render_completion_fence = gl::GLFence::CreateForGpuFence();
 
@@ -1035,7 +1043,7 @@ void ArCoreGl::GetRenderedFrameStats(WebXrFrame* frame) {
   // the WritesDone time reported via OnBeginFrame's timing_data instead, but
   // those aren't guaranteed to be available. See also the GPU load
   // estimate in rendering_time_ratio_ which uses a different calculation.
-  // TODO(crbug.com/40877379): revisit this calculation?
+  // TODO(crbug.com/528413359): revisit this calculation?
   base::TimeTicks completion_time = now;
   DCHECK(frame->render_completion_fence);
   completion_time = static_cast<gl::GLFenceAndroidNativeFenceSync*>(
@@ -1109,17 +1117,33 @@ void ArCoreGl::GetRenderedFrameStats(WebXrFrame* frame) {
                   completion_time, "frame", frame->index);
 }
 
-void ArCoreGl::SubmitFrameMissing(int16_t frame_index,
-                                  const gpu::SyncToken& sync_token) {
+void ArCoreGl::SubmitFrameMissing(
+    int16_t frame_index,
+    gpu::SharedImageExportResult camera_export_multi_result) {
   TRACE_EVENT1("gpu", "ArCoreGl::SubmitFrameMissing", "frame", frame_index);
   DVLOG(2) << __func__;
 
   if (!IsSubmitFrameExpected(frame_index))
     return;
 
-  if (ar_compositor_) {
-    ar_image_transport_->WaitSyncToken(sync_token);
+  std::vector<gpu::SyncToken> camera_sync_tokens;
+  auto camera_image =
+      webxr_->GetAnimatingFrame()->camera_image_shared_buffer->shared_image;
+  if (camera_image) {
+    camera_sync_tokens =
+        camera_image->EndExportAsVector(std::move(camera_export_multi_result));
+  }
 
+  for (auto& camera_sync_token : camera_sync_tokens) {
+    ar_image_transport_->WaitSyncToken(camera_sync_token);
+  }
+
+  // This sync token is ordered after all camera sync tokens, so following code
+  // will only have to wait this one sync token.
+  webxr_->GetAnimatingFrame()->camera_image_shared_buffer->sync_token =
+      ar_image_transport_->GenSyncToken();
+
+  if (ar_compositor_) {
     if (have_camera_image_) {
       webxr_->ProcessOrDefer(base::BindOnce(
           &ArCoreGl::SubmitVizFrame, weak_ptr_factory_.GetWeakPtr(),
@@ -1140,7 +1164,6 @@ void ArCoreGl::SubmitFrameMissing(int16_t frame_index,
     }
   } else {
     webxr_->RecycleUnusedAnimatingFrame();
-    ar_image_transport_->WaitSyncToken(sync_token);
     CopyCameraImageToFramebuffer();
     FinishFrame(frame_index);
     DVLOG(3) << __func__ << ": frame=" << frame_index << " SwapBuffers";
@@ -1166,7 +1189,6 @@ void ArCoreGl::DidNotProduceVizFrame(int16_t frame_index) {
 }
 
 void ArCoreGl::SubmitFrame(int16_t frame_index,
-                           const gpu::MailboxHolder& mailbox,
                            base::TimeDelta time_waited) {
   NOTREACHED();
 }
@@ -1209,15 +1231,16 @@ void ArCoreGl::TransitionProcessingFrameToRendering() {
 
 void ArCoreGl::SubmitFrameDrawnIntoTexture(
     int16_t frame_index,
-    const std::vector<LayerId>& layer_ids,
-    const gpu::SyncToken& sync_token,
+    std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
+    gpu::SharedImageExportResult camera_export_multi_result,
     base::TimeDelta time_waited) {
   TRACE_EVENT1("gpu", "ArCoreGl::SubmitFrameDrawnIntoTexture", "frame",
                frame_index);
   DVLOG(2) << __func__ << ": frame=" << frame_index;
   DCHECK(ar_compositor_);
 
-  if (!layer_ids.empty()) {
+  // |layer_updates| is expected to contain only the base layer.
+  if (layer_updates.size() != 1) {
     presentation_receiver_.ReportBadMessage(
         "Layers feature not enabled for this session");
     return;
@@ -1226,11 +1249,29 @@ void ArCoreGl::SubmitFrameDrawnIntoTexture(
   if (!IsSubmitFrameExpected(frame_index))
     return;
 
+  std::vector<gpu::SyncToken> camera_sync_tokens;
+  auto camera_image =
+      webxr_->GetAnimatingFrame()->camera_image_shared_buffer->shared_image;
+  if (camera_image) {
+    camera_sync_tokens =
+        camera_image->EndExportAsVector(std::move(camera_export_multi_result));
+  }
+
+  for (auto& camera_sync_token : camera_sync_tokens) {
+    ar_image_transport_->WaitSyncToken(camera_sync_token);
+  }
+
+  // This sync token is ordered after all camera sync tokens, so following code
+  // will only have to wait this one sync token.
+  gpu::SyncToken camera_sync_token = ar_image_transport_->GenSyncToken();
+
   // The previous sync token has been consumed by the renderer process, so we
   // need to set this one for use by the compositor.
-  webxr_->GetAnimatingFrame()->shared_buffer->sync_token = sync_token;
+  webxr_->GetAnimatingFrame()->shared_buffer->sync_token =
+      webxr_->GetAnimatingFrame()->shared_buffer->shared_image->EndExport(
+          std::move(layer_updates[0]->shared_image_export_result));
   webxr_->GetAnimatingFrame()->camera_image_shared_buffer->sync_token =
-      sync_token;
+      camera_sync_token;
 
   const ArCompositorFrameSink::FrameType frame_type =
       ar_image_transport_->IsWebGPUSession()
@@ -1486,7 +1527,7 @@ void ArCoreGl::OnScreenTouch(bool is_primary,
            << ", pointer_id=" << pointer_id << ", touching=" << touching
            << ", touch_point=" << touch_point.ToString();
 
-  if (!base::Contains(pointer_id_to_input_source_id_, pointer_id)) {
+  if (!pointer_id_to_input_source_id_.contains(pointer_id)) {
     // assign ID
     DCHECK(next_input_source_id_ != 0) << "ID equal to 0 cannot be used!";
     pointer_id_to_input_source_id_[pointer_id] = next_input_source_id_;
@@ -1667,7 +1708,7 @@ std::vector<mojom::XRInputSourceStatePtr> ArCoreGl::GetInputSourceStates() {
 }
 
 bool ArCoreGl::IsFeatureEnabled(mojom::XRSessionFeature feature) {
-  return base::Contains(enabled_features_, feature);
+  return enabled_features_.contains(feature);
 }
 
 void ArCoreGl::Pause() {

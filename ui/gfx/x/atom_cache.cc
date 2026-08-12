@@ -114,6 +114,7 @@ constexpr auto kAtomsToCache = std::to_array<const char* const>({
     "_NET_ACTIVE_WINDOW",
     "_NET_CURRENT_DESKTOP",
     "_NET_FRAME_EXTENTS",
+    "_NET_STARTUP_ID",
     "_NET_STARTUP_INFO",
     "_NET_STARTUP_INFO_BEGIN",
     "_NET_SUPPORTED",
@@ -125,6 +126,7 @@ constexpr auto kAtomsToCache = std::to_array<const char* const>({
     "_NET_WM_CM_S0",
     "_NET_WM_DESKTOP",
     "_NET_WM_ICON",
+    "_NET_WM_ICON_NAME",
     "_NET_WM_MOVERESIZE",
     "_NET_WM_NAME",
     "_NET_WM_OPAQUE_REGION",
@@ -157,15 +159,16 @@ constexpr auto kAtomsToCache = std::to_array<const char* const>({
     "application/octet-stream",
     "application/vnd.chromium.test",
     "chromium/filename",
+    "chromium/from-privileged",
     "chromium/x-bookmark-entries",
     "chromium/x-browser-actions",
     "chromium/x-file-system-files",
     "chromium/x-internal-source-rfh-token",
-    "chromium/x-pepper-custom-data",
     "chromium/x-renderer-taint",
     "chromium/x-source-url",
     "chromium/x-web-custom-data",
     "chromium/x-webkit-paste",
+    "chromium/x-window-drag",
     "image/png",
     "image/svg+xml",
     "marker_event",
@@ -212,6 +215,7 @@ AtomCache::AtomCache(Connection* connection) : connection_(connection) {
 AtomCache::~AtomCache() = default;
 
 Atom AtomCache::GetAtom(const char* name) {
+  CHECK(name);
   const auto it = cached_atoms_.find(name);
   if (it != cached_atoms_.end()) {
     return it->second;

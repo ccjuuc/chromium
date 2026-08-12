@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
 class MockTabDragContext : public TabDragContext {
@@ -33,13 +34,10 @@ class MockTabDragContext : public TabDragContext {
               IsTabDetachable,
               (const TabSlotView* view),
               (const, override));
-  MOCK_METHOD(int, GetTabCount, (), (const, override));
-  MOCK_METHOD(bool, IsTabPinned, (const TabSlotView* tab), (const, override));
-  MOCK_METHOD(int, GetPinnedTabCount, (), (const, override));
-  MOCK_METHOD(TabGroupHeader*,
+  MOCK_METHOD(TabSlotView*,
               GetTabGroupHeader,
               (const tab_groups::TabGroupId& group),
-              (const, override));
+              (override));
   MOCK_METHOD(TabStripModel*, GetTabStripModel, (), (override));
   MOCK_METHOD(TabDragController*, GetDragController, (), (override));
   MOCK_METHOD(void,
@@ -64,6 +62,11 @@ class MockTabDragContext : public TabDragContext {
   MOCK_METHOD(TabDragPositioningDelegate*,
               GetPositioningDelegate,
               (),
+              (override));
+  MOCK_METHOD(bool,
+              NotifyCustomEvent,
+              (ui::CustomElementEventType event_type,
+               TabSlotView* tab_slot_view),
               (override));
 };
 

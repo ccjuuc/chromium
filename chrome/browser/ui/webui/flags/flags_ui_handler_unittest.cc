@@ -4,7 +4,9 @@
 
 #include "chrome/browser/ui/webui/flags/flags_ui_handler.h"
 
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "components/webui/flags/flags_storage.h"
 #include "components/webui/flags/flags_ui_constants.h"
 #include "content/public/common/content_switches.h"
@@ -49,6 +51,23 @@ class TestFlagStorage : public flags_ui::FlagsStorage {
     SetOriginListFlag(internal_entry_name, value);
   }
 
+  base::DictValue GetCustomizedFlags() const override {
+    base::DictValue customized_flags;
+    for (const auto& [name, value] : origin_list_flags_) {
+      customized_flags.Set(name, value);
+    }
+    return customized_flags;
+  }
+
+  void SetCustomizedFlags(const base::DictValue& customized_flags) override {
+    origin_list_flags_.clear();
+    for (const auto [name, value] : customized_flags) {
+      if (value.is_string()) {
+        origin_list_flags_[name] = value.GetString();
+      }
+    }
+  }
+
   // Lands pending changes to disk immediately.
   void CommitPendingWrites() override {}
 
@@ -83,6 +102,16 @@ class FlagsUIHandlerTest : public testing::Test {
   raw_ptr<TestFlagStorage> storage_;
 };
 
+class FlagsUIHandlerWithImportExportTest : public FlagsUIHandlerTest {
+ public:
+  FlagsUIHandlerWithImportExportTest() {
+    feature_list_.InitAndEnableFeature(features::kImportExportFlags);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
 TEST_F(FlagsUIHandlerTest, HandlesSetString) {
   // Need to use an actual feature name for ChromeOS.
   const std::string kTestFeature = "protected-audience-debug-token";
@@ -90,7 +119,7 @@ TEST_F(FlagsUIHandlerTest, HandlesSetString) {
 
   web_ui_.HandleReceivedMessage(
       flags_ui::kSetStringFlag,
-      base::Value::List().Append(kTestFeature).Append("value"));
+      base::ListValue().Append(kTestFeature).Append("value"));
   EXPECT_EQ("value", storage_->GetStringFlag(kTestFeature));
 }
 
@@ -101,7 +130,7 @@ TEST_F(FlagsUIHandlerTest, HandlesSetOriginList) {
 
   web_ui_.HandleReceivedMessage(
       flags_ui::kSetOriginListFlag,
-      base::Value::List()
+      base::ListValue()
           .Append(kTestFeature)
           .Append("https://foo.com,invalid,http://bar.org"));
   EXPECT_EQ("https://foo.com,http://bar.org",
@@ -109,7 +138,7 @@ TEST_F(FlagsUIHandlerTest, HandlesSetOriginList) {
 }
 
 TEST_F(FlagsUIHandlerTest, HandleRequestExperimentalFeatures) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append("callbackId");
   web_ui_.HandleReceivedMessage(flags_ui::kRequestExperimentalFeatures, args);
 
@@ -118,21 +147,21 @@ TEST_F(FlagsUIHandlerTest, HandleRequestExperimentalFeatures) {
   EXPECT_EQ("cr.webUIResponse", call_data.function_name());
   EXPECT_EQ("callbackId", call_data.arg1()->GetString());
   EXPECT_TRUE(call_data.arg2()->GetBool());
-  const base::Value::Dict& response = call_data.arg3()->GetDict();
+  const base::DictValue& response = call_data.arg3()->GetDict();
 
   // Check that entries for both "supported_features" and "unsupported_features"
   // exist.
-  const base::Value::List& supported =
+  const base::ListValue& supported =
       *response.FindList(flags_ui::kSupportedFeatures);
   EXPECT_GT(supported.size(), 0u);
-  const base::Value::List& unsupported =
+  const base::ListValue& unsupported =
       *response.FindList(flags_ui::kUnsupportedFeatures);
   EXPECT_GT(unsupported.size(), 0u);
 }
 
 // Tests for chrome://flags/deprecated
 TEST_F(FlagsUIHandlerTest, HandleRequestDeprecatedFeatures) {
-  base::Value::List args;
+  base::ListValue args;
   args.Append("callbackId");
   web_ui_.HandleReceivedMessage("requestDeprecatedFeatures", args);
 
@@ -141,20 +170,66 @@ TEST_F(FlagsUIHandlerTest, HandleRequestDeprecatedFeatures) {
   EXPECT_EQ("cr.webUIResponse", call_data.function_name());
   EXPECT_EQ("callbackId", call_data.arg1()->GetString());
   EXPECT_TRUE(call_data.arg2()->GetBool());
-  const base::Value::Dict& response = call_data.arg3()->GetDict();
+  const base::DictValue& response = call_data.arg3()->GetDict();
 
   // Check that exactly 1 entry is returned as part of "supported_features".
-  const base::Value::List& supported =
+  const base::ListValue& supported =
       *response.FindList(flags_ui::kSupportedFeatures);
   EXPECT_EQ(1u, supported.size());
-  const base::Value::Dict& feature = supported[0].GetDict();
+  const base::DictValue& feature = supported[0].GetDict();
   const std::string& internal_name = *feature.FindString("internal_name");
   EXPECT_EQ("deprecate-unload", internal_name);
 
   // Check that no entry is returned as part of "unsupported_features".
-  const base::Value::List& unsupported =
+  const base::ListValue& unsupported =
       *response.FindList(flags_ui::kUnsupportedFeatures);
   EXPECT_EQ(0u, unsupported.size());
+}
+
+TEST_F(FlagsUIHandlerWithImportExportTest, ExportImportFeature) {
+  // Set flags.
+  const std::string kTestFlag = "test-flag";
+  const std::string kTestOriginListFlag = "isolate-origins";
+  const std::string kTestOriginListValue = "https://foo.com";
+
+  storage_->SetFlags({kTestFlag});
+  storage_->SetOriginListFlag(kTestOriginListFlag, kTestOriginListValue);
+
+  // Export flags.
+  base::ListValue export_args;
+  export_args.Append("exportCallback");
+  web_ui_.HandleReceivedMessage("exportFlags", export_args);
+
+  EXPECT_EQ(1u, web_ui_.call_data().size());
+  auto& export_call_data = *(web_ui_.call_data().back());
+  EXPECT_EQ("cr.webUIResponse", export_call_data.function_name());
+  EXPECT_EQ("exportCallback", export_call_data.arg1()->GetString());
+  EXPECT_TRUE(export_call_data.arg2()->GetBool());
+  base::DictValue exported_data = export_call_data.arg3()->GetDict().Clone();
+
+  // Clear flags.
+  storage_->SetFlags({});
+  storage_->SetCustomizedFlags(base::DictValue());
+  EXPECT_EQ(0u, storage_->GetFlags().size());
+  EXPECT_EQ("", storage_->GetOriginListFlag(kTestOriginListFlag));
+
+  // Import flags.
+  base::ListValue import_args;
+  import_args.Append("importCallback");
+  import_args.Append(std::move(exported_data));
+  web_ui_.HandleReceivedMessage("importFlags", import_args);
+
+  EXPECT_EQ(2u, web_ui_.call_data().size());
+  auto& import_call_data = *(web_ui_.call_data().back());
+  EXPECT_EQ("cr.webUIResponse", import_call_data.function_name());
+  EXPECT_EQ("importCallback", import_call_data.arg1()->GetString());
+  EXPECT_TRUE(import_call_data.arg2()->GetBool());
+
+  // Verify restored.
+  EXPECT_EQ(1u, storage_->GetFlags().size());
+  EXPECT_TRUE(storage_->GetFlags().count(kTestFlag));
+  EXPECT_EQ(kTestOriginListValue,
+            storage_->GetOriginListFlag(kTestOriginListFlag));
 }
 
 }  // namespace

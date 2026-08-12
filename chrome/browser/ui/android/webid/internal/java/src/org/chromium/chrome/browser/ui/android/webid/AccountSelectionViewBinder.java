@@ -706,6 +706,8 @@ class AccountSelectionViewBinder {
      * @param view The view to be bound.
      * @param key The key of the property to be bound.
      */
+    @SuppressWarnings(
+            "unchecked") // PropertyKey erases generics; item sub-models are PropertyModel.
     static void bindContentView(PropertyModel model, View view, PropertyKey key) {
         View itemView = null;
         if (key == ItemProperties.SPINNER_ENABLED) {
@@ -927,11 +929,19 @@ class AccountSelectionViewBinder {
 
             final Runnable closeOnClickRunnable =
                     (Runnable) model.get(HeaderProperties.CLOSE_ON_CLICK_LISTENER);
-            view.findViewById(R.id.close_button)
-                    .setOnClickListener(
-                            clickedView -> {
-                                closeOnClickRunnable.run();
-                            });
+            View closeButton = view.findViewById(R.id.close_button);
+            if (closeOnClickRunnable == null) {
+                // We remove the default close button if a floating 'X' is provided by the
+                // framework, which happens when the large form factor UI is active.
+                closeButton.setVisibility(View.GONE);
+                closeButton.setOnClickListener(null);
+            } else {
+                closeButton.setVisibility(View.VISIBLE);
+                closeButton.setOnClickListener(
+                        clickedView -> {
+                            closeOnClickRunnable.run();
+                        });
+            }
         } else {
             assert false : "Unhandled update to property:" + key;
         }

@@ -27,7 +27,6 @@
 #include "chrome/browser/ash/printing/synced_printers_manager_factory.h"
 #include "chrome/browser/ash/printing/usb_printer_notification_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/printing/cups_printer_status.h"
 #include "chromeos/printing/printing_constants.h"
 #include "chromeos/printing/uri.h"
@@ -162,7 +161,8 @@ class PrintServersManagerImpl : public PrintServersManager {
   // The IDs of the currently selected print servers.
   std::vector<std::string> selected_print_server_ids_;
 
-  ServerPrintersFetchingMode fetching_mode_;
+  ServerPrintersFetchingMode fetching_mode_ =
+      ServerPrintersFetchingMode::kStandard;
 
   std::optional<std::map<std::string, PrintServer>> print_servers_;
 

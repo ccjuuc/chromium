@@ -30,23 +30,16 @@
   return self;
 }
 
-- (void)configureCell:(TableViewIdentityCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
-  [self configureCell:cell completion:nil];
+- (void)configureCell:(TableViewIdentityCell*)cell {
+  // Nit: technically this super call is not necessary as it is duplicated in
+  // configureCell:withCompletion: but it is required by the method.
+  [super configureCell:cell];
+  [self configureCell:cell withCompletion:nil];
 }
 
 - (void)configureCell:(TableViewIdentityCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler
-           completion:(ProceduralBlock)completion {
-  [super configureCell:cell withStyler:styler];
-  [self configureCell:cell completion:completion];
-}
-
-#pragma mark - Private
-
-- (void)configureCell:(TableViewIdentityCell*)cell
-           completion:(ProceduralBlock)completion {
+       withCompletion:(ProceduralBlock)completion {
+  [super configureCell:cell];
   NSString* title = self.name;
   NSString* subtitle = self.email;
   if (!title.length) {
@@ -58,7 +51,7 @@
   // Add a custom accessibility label for managed accounts to append "managed by
   // your organization" so that the screen readers read this cell as "name,
   // email, managed by your organization".
-  if (AreSeparateProfilesForManagedAccountsEnabled() && self.managed) {
+  if (self.managed) {
     cell.accessibilityLabel =
         self.name
             ? l10n_util::GetNSStringF(

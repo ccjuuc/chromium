@@ -36,7 +36,6 @@ import org.chromium.components.commerce.core.CommerceSubscription;
 import org.chromium.components.commerce.core.ShoppingService;
 import org.chromium.components.commerce.core.SubscriptionsObserver;
 import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.base.LocalizationUtils;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -73,7 +72,8 @@ public class BookmarkSaveFlowMediator extends BookmarkModelObserver
      * @param context The {@link Context} associated with this mediator.
      * @param closeRunnable A {@link Runnable} which closes the bookmark save flow.
      * @param shoppingService Used to manage the price-tracking subscriptions.
-     * @param bookmarkImageFetcher Used to fetch images/favicons for bookmarks.
+     * @param bookmarkImageFetcher Used to fetch images/favicons for bookmarks. This class takes
+     *     ownership of it (will call destroy() on it).
      * @param profile The current chrome profile.
      * @param identityManager The {@link IdentityManager} which supplies the account data.
      * @param bookmarkManagerOpener The BookmarkManagerOpener used to open bookmark activites.
@@ -98,9 +98,7 @@ public class BookmarkSaveFlowMediator extends BookmarkModelObserver
         mCloseRunnable = closeRunnable;
 
         mShoppingService = shoppingService;
-        if (mShoppingService != null) {
-            mShoppingService.addSubscriptionsObserver(this);
-        }
+        mShoppingService.addSubscriptionsObserver(this);
 
         mBookmarkImageFetcher = bookmarkImageFetcher;
         mProfile = profile;
@@ -195,8 +193,7 @@ public class BookmarkSaveFlowMediator extends BookmarkModelObserver
             boolean wasBookmarkMoved, boolean isAccountBookmark) {
         if (mBookmarkModel.areAccountBookmarkFoldersActive()) {
             return isAccountBookmark
-                    ? assumeNonNull(mIdentityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN))
-                            .getEmail()
+                    ? assumeNonNull(mIdentityManager.getPrimaryAccountInfo()).getEmail()
                     : mContext.getString(R.string.account_bookmark_save_flow_subtitle_local);
         } else {
             String folderDisplayTextRaw = getFolderDisplayTextRaw(wasBookmarkMoved);
@@ -254,10 +251,9 @@ public class BookmarkSaveFlowMediator extends BookmarkModelObserver
 
     private void bindImage(BookmarkItem item) {
         Callback<Drawable> callback =
-                drawable -> {
-                    mPropertyModel.set(
-                            ImprovedBookmarkSaveFlowProperties.BOOKMARK_ROW_ICON, drawable);
-                };
+                (Drawable drawable) ->
+                        mPropertyModel.set(
+                                ImprovedBookmarkSaveFlowProperties.BOOKMARK_ROW_ICON, drawable);
 
         mBookmarkImageFetcher.fetchImageForBookmarkWithFaviconFallback(
                 item,
@@ -298,15 +294,12 @@ public class BookmarkSaveFlowMediator extends BookmarkModelObserver
     @SuppressWarnings("NullAway")
     void destroy() {
         mBookmarkModel.removeObserver(this);
-        if (mShoppingService != null) {
-            mShoppingService.removeSubscriptionsObserver(this);
-        }
+        mShoppingService.removeSubscriptionsObserver(this);
 
         mBookmarkId = null;
 
-        if (mCallbackController != null) {
-            mCallbackController.destroy();
-        }
+        mCallbackController.destroy();
+        mBookmarkImageFetcher.destroy();
     }
 
     @VisibleForTesting

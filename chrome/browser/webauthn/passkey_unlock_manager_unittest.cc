@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/rand_util.h"
+#include "base/scoped_observation.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/webauthn/enclave_manager.h"
@@ -15,6 +16,7 @@
 #include "chrome/browser/webauthn/mock_enclave_manager.h"
 #include "chrome/browser/webauthn/passkey_unlock_manager_factory.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/sync/base/pref_names.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/webauthn/core/browser/passkey_model.h"
@@ -46,7 +48,7 @@ sync_pb::WebauthnCredentialSpecifics CreatePasskey() {
 
 class MockPasskeyUnlockManagerObserver : public PasskeyUnlockManager::Observer {
  public:
-  MOCK_METHOD(void, OnPasskeyUnlockManagerStateChanged, (), (override));
+  MOCK_METHOD(void, OnPasskeyErrorUiStateChanged, (), (override));
   MOCK_METHOD(void, OnPasskeyUnlockManagerShuttingDown, (), (override));
   MOCK_METHOD(void, OnPasskeyUnlockManagerIsReady, (), (override));
 };
@@ -62,7 +64,11 @@ class PasskeyUnlockManagerTest : public testing::Test {
   void ConfigureProfileAndSyncService(
       EnclaveManagerStatus enclave_manager_status,
       PasskeyModelStatus passkey_model_status,
-      GpmPinStatus gpm_pin_status) {
+      GpmPinStatus gpm_pin_status,
+      syncer::PassphraseType passphrase_type =
+          syncer::PassphraseType::kKeystorePassphrase,
+      bool trusted_vault_key_required = false,
+      syncer::DataTypeSet inactive_sync_data_types = {}) {
     test_enclave_manager_ = CreateMockEnclaveManager(
         /*is_enclave_manager_loaded=*/true,
         /*is_enclave_manager_ready=*/enclave_manager_status == kEnclaveReady,
@@ -70,6 +76,10 @@ class PasskeyUnlockManagerTest : public testing::Test {
     test_passkey_model_ =
         CreateMockPasskeyModel(passkey_model_status == kPasskeyModelReady);
     test_sync_service_ = CreateTestSyncService();
+    test_sync_service()->GetUserSettings()->SetPassphraseType(passphrase_type);
+    test_sync_service()->GetUserSettings()->SetTrustedVaultKeyRequired(
+        trusted_vault_key_required);
+    test_sync_service()->SetFailedDataTypes(inactive_sync_data_types);
     passkey_unlock_manager_ = std::make_unique<PasskeyUnlockManager>(
         test_enclave_manager_.get(), test_passkey_model_.get(),
         test_sync_service_.get());
@@ -100,6 +110,8 @@ class PasskeyUnlockManagerTest : public testing::Test {
             [gpm_pin_status](
                 EnclaveManager::GpmPinAvailabilityCallback callback) {
               std::move(callback).Run(gpm_pin_status);
+              return std::make_unique<
+                  trusted_vault::TrustedVaultConnection::Request>();
             });
     EXPECT_CALL(*enclave_manager_mock, CheckGpmPinAvailability(_));
     return enclave_manager_mock;
@@ -149,7 +161,7 @@ class PasskeyUnlockManagerTest : public testing::Test {
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_list_{device::kPasskeyUnlockManager};
+  base::test::ScopedFeatureList feature_list_;
   std::map<std::string, std::string> feature_params_;
   std::unique_ptr<EnclaveManagerInterface> test_enclave_manager_;
   std::unique_ptr<PasskeyModel> test_passkey_model_;
@@ -161,6 +173,244 @@ class PasskeyUnlockManagerTest : public testing::Test {
       fake_provider_;
 };
 
+struct PasskeyUnlockManagerErrorUiTestParams {
+  std::string name;
+  // The error UI should be shown only if the enclave manager is not ready.
+  EnclaveManagerStatus enclave_status;
+  // The error UI should be shown if there is a way to unlock passkeys via GPM
+  // PIN or system UV.
+  GpmPinStatus gpm_pin_status;
+  bool uv_keys_supported;
+  // Disallowing sync should cause the error UI to be hidden.
+  bool sync_allowed;
+  // The error UI should not be shown when trusted vault key is required because
+  // that error has a higher priority.
+  bool trusted_vault_key_required;
+  // The error UI should not be shown when trusted vault recoverability is
+  // degraded because that error has a higher priority.
+  bool trusted_vault_recoverability_degraded;
+  // Stopping passkeys sync should cause the error UI to be hidden.
+  bool passkeys_sync_allowed;
+  bool should_display_error_ui;
+};
+
+class PasskeyUnlockManagerErrorUiTest
+    : public PasskeyUnlockManagerTest,
+      public testing::WithParamInterface<
+          PasskeyUnlockManagerErrorUiTestParams> {};
+
+TEST_P(PasskeyUnlockManagerErrorUiTest, ShouldDisplayErrorUi) {
+  const auto& param = GetParam();
+  if (!param.uv_keys_supported) {
+    DisableUVKeySupport();
+  }
+  ConfigureProfileAndSyncService(param.enclave_status, kPasskeyModelReady,
+                                 param.gpm_pin_status);
+  test_sync_service()->SetAllowedByEnterprisePolicy(param.sync_allowed);
+  test_sync_service()->GetUserSettings()->SetTrustedVaultKeyRequired(
+      param.trusted_vault_key_required);
+  test_sync_service()->GetUserSettings()->SetTrustedVaultRecoverabilityDegraded(
+      param.trusted_vault_recoverability_degraded);
+  if (!param.passkeys_sync_allowed) {
+    test_sync_service()->GetUserSettings()->SetSelectedTypes(
+        /*sync_everything=*/false,
+        /*types=*/{syncer::UserSelectableType::kPreferences});
+  }
+  test_sync_service()->FireStateChanged();
+  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer;
+  base::ScopedObservation<PasskeyUnlockManager, PasskeyUnlockManager::Observer>
+      observation(&observer);
+  observation.Observe(passkey_unlock_manager());
+
+  if (param.should_display_error_ui) {
+    EXPECT_CALL(observer, OnPasskeyErrorUiStateChanged());
+  }
+
+  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
+
+  EXPECT_EQ(passkey_unlock_manager()->ShouldDisplayErrorUi(),
+            param.should_display_error_ui);
+}
+
+const PasskeyUnlockManagerErrorUiTestParams kErrorUiTestParams[] = {
+    {"ShownWithPasskeysAndActiveSync", EnclaveManagerStatus::kEnclaveNotReady,
+     GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/true},
+    {"NotShownWithPasskeysAndActiveSyncWithEnclaveReady",
+     EnclaveManagerStatus::kEnclaveReady, GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/false},
+    {"ErrorUiHiddenWhenSyncDisallowed", EnclaveManagerStatus::kEnclaveNotReady,
+     GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/false,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/false},
+    {"ErrorUiHiddenWhenTrustedVaultKeyRequired",
+     EnclaveManagerStatus::kEnclaveNotReady, GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/true,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/false},
+    {"ErrorUiHiddenWhenTrustedVaultRecoverabilityDegraded",
+     EnclaveManagerStatus::kEnclaveNotReady, GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/true,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/false},
+    {"ErrorUiHiddenWhenPasskeysNotSynced",
+     EnclaveManagerStatus::kEnclaveNotReady, GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/true,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/false,
+     /*should_display_error_ui=*/false},
+
+// On Chrome OS, AreUserVerifyingKeysSupported always returns true, thus this
+// tests cannot establish the preconditions.
+#if !BUILDFLAG(IS_CHROMEOS)
+    {"HiddenWithoutUVKeysWithoutGpmPin", EnclaveManagerStatus::kEnclaveNotReady,
+     GpmPinStatus::kGpmPinUnset,
+     /*uv_keys_supported=*/false,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/false},
+    {"VisibleWithoutUVKeysWithGpmPin", EnclaveManagerStatus::kEnclaveNotReady,
+     GpmPinStatus::kGpmPinSetAndUsable,
+     /*uv_keys_supported=*/false,
+     /*sync_allowed=*/true,
+     /*trusted_vault_key_required=*/false,
+     /*trusted_vault_recoverability_degraded=*/false,
+     /*passkeys_sync_allowed=*/true,
+     /*should_display_error_ui=*/true},
+#endif
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PasskeyUnlockManagerErrorUiTest,
+    testing::ValuesIn(kErrorUiTestParams),
+    [](const testing::TestParamInfo<PasskeyUnlockManagerErrorUiTestParams>&
+           info) { return info.param.name; });
+
+struct PasskeyUnlockManagerHistogramTestParams {
+  std::string name;
+  // The error UI should be shown only if the enclave manager is not ready.
+  EnclaveManagerStatus enclave_status;
+  // The passkey model is used for checking if the user has passkeys.
+  PasskeyModelStatus passkey_model_status;
+  // The error UI should be shown if there is a way to unlock passkeys, for
+  // example using the GPM PIN.
+  GpmPinStatus gpm_pin_status;
+  // The number of passkeys to add to the passkey model.
+  int num_passkeys_to_add = 0;
+  // If true, the passkey model used for testing will become ready, simulating
+  // that the model has finished loading state from disk and is ready to sync.
+  // Only when passkey model is ready, the passkey count histogram is logged.
+  bool trigger_passkey_model_ready = false;
+  bool expected_passkey_readiness;
+};
+
+class PasskeyUnlockManagerHistogramTest
+    : public PasskeyUnlockManagerTest,
+      public testing::WithParamInterface<
+          PasskeyUnlockManagerHistogramTestParams> {};
+
+TEST_P(PasskeyUnlockManagerHistogramTest, LogsHistograms) {
+  const auto& param = GetParam();
+  ConfigureProfileAndSyncService(
+      param.enclave_status, param.passkey_model_status, param.gpm_pin_status);
+
+  for (int i = 0; i < param.num_passkeys_to_add; ++i) {
+    passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
+  }
+
+  base::HistogramTester histogram_tester;
+
+  passkey_model()->SetReady(param.trigger_passkey_model_ready);
+
+  AdvanceClock(base::Seconds(31));
+
+  histogram_tester.ExpectUniqueSample("WebAuthentication.PasskeyCount",
+                                      param.num_passkeys_to_add, 1);
+  histogram_tester.ExpectBucketCount("WebAuthentication.PasskeyReadiness",
+                                     param.expected_passkey_readiness, 1);
+  histogram_tester.ExpectUniqueSample("WebAuthentication.GpmPinStatus",
+                                      param.gpm_pin_status, 1);
+}
+
+const PasskeyUnlockManagerHistogramTestParams kHistogramTestParams[] = {
+    {"PasskeyCount_NoPasskeys", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+    {"PasskeyCount_WithPasskeys", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/1,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+    {"PasskeyReadiness_Ready", EnclaveManagerStatus::kEnclaveReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/true},
+    {"PasskeyReadiness_Locked", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+    {"PasskeyCount_ModelBecomesReady", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelNotReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/1,
+     /*trigger_passkey_model_ready=*/true,
+     // The passkey readiness was already recorded as not ready at the time of
+     // startup, so if the model becomes ready later it doesn't get recorded
+     // again.
+     /*expected_passkey_readiness=*/false},
+    {"GpmPinStatus_Unset", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+    {"GpmPinStatus_SetAndUsable", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady, GpmPinStatus::kGpmPinSetAndUsable,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+    {"GpmPinStatus_SetAndNotUsable", EnclaveManagerStatus::kEnclaveNotReady,
+     PasskeyModelStatus::kPasskeyModelReady,
+     GpmPinStatus::kGpmPinSetButNotUsable,
+     /*num_passkeys_to_add=*/0,
+     /*trigger_passkey_model_ready=*/false,
+     /*expected_passkey_readiness=*/false},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PasskeyUnlockManagerHistogramTest,
+    testing::ValuesIn(kHistogramTestParams),
+    [](const testing::TestParamInfo<PasskeyUnlockManagerHistogramTestParams>&
+           info) { return info.param.name; });
+
 TEST_F(PasskeyUnlockManagerTest, IsCreated) {
   ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
                                  GpmPinStatus::kGpmPinUnset);
@@ -171,199 +421,14 @@ TEST_F(PasskeyUnlockManagerTest, IsCreated) {
 TEST_F(PasskeyUnlockManagerTest, NotifyOnPasskeysChangedWhenPasskeyAdded) {
   ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
                                  GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
+  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer;
+  base::ScopedObservation<PasskeyUnlockManager, PasskeyUnlockManager::Observer>
+      observation(&observer);
+  observation.Observe(passkey_unlock_manager());
 
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
+  EXPECT_CALL(observer, OnPasskeyErrorUiStateChanged());
   sync_pb::WebauthnCredentialSpecifics passkey = CreatePasskey();
   passkey_model()->AddNewPasskeyForTesting(passkey);
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest, ErrorUiShownWithPasskeysAndActiveSync) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  // With passkeys and active sync, the manager should notify and the error UI
-  // should be shown.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  EXPECT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest,
-       ErrorUiNotShownWithPasskeysAndActiveSyncWithEnclaveReady) {
-  ConfigureProfileAndSyncService(kEnclaveReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-}
-
-TEST_F(PasskeyUnlockManagerTest, ErrorUiHiddenWhenTrustedVaultKeyRequired) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  // Start with a passkey and active sync.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  ASSERT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  // Passkey unlock error UI should not be shown when trusted vault key is
-  // required because that error has a higher priority.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  test_sync_service()->GetUserSettings()->SetTrustedVaultKeyRequired(true);
-  test_sync_service()->FireStateChanged();
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest, ErrorUiHiddenWhenSyncDisallowed) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  // Start with a passkey and active sync.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  ASSERT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  // Disallowing sync should cause the error UI to be hidden.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  test_sync_service()->SetAllowedByEnterprisePolicy(false);
-  test_sync_service()->FireStateChanged();
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest,
-       ErrorUiHiddenWhenTrustedVaultRecoverabilityDegraded) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  // Start with a passkey and active sync.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  ASSERT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  // Passkey unlock error UI should not be shown when trusted vault
-  // recoverability is degraded because that error has a higher priority.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  test_sync_service()->GetUserSettings()->SetTrustedVaultRecoverabilityDegraded(
-      true);
-  test_sync_service()->FireStateChanged();
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest, ErrorUiHiddenWhenPasskeysNotSynced) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  // Start with a passkey and active sync.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  ASSERT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  // Stopping passkeys sync should cause the error UI to be hidden.
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  test_sync_service()->GetUserSettings()->SetSelectedTypes(
-      /*sync_everything=*/false,
-      /*types=*/{syncer::UserSelectableType::kPreferences});
-  test_sync_service()->FireStateChanged();
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-#if BUILDFLAG(IS_CHROMEOS)
-// On Chrome OS, AreUserVerifyingKeysSupported always returns true, thus this
-// test cannot establish its preconditions.
-#define MAYBE_ErrorUiHiddenWithoutUVKeysWithoutGpmPin \
-  DISABLED_ErrorUiHiddenWithoutUVKeysWithoutGpmPin
-#define MAYBE_ErrorUiVisibleWithoutUVKeysWithGpmPin \
-  DISABLED_ErrorUiVisibleWithoutUVKeysWithGpmPin
-#else
-#define MAYBE_ErrorUiHiddenWithoutUVKeysWithoutGpmPin \
-  ErrorUiHiddenWithoutUVKeysWithoutGpmPin
-#define MAYBE_ErrorUiVisibleWithoutUVKeysWithGpmPin \
-  ErrorUiVisibleWithoutUVKeysWithGpmPin
-#endif
-
-TEST_F(PasskeyUnlockManagerTest,
-       MAYBE_ErrorUiHiddenWithoutUVKeysWithoutGpmPin) {
-  DisableUVKeySupport();
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-
-  EXPECT_FALSE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-}
-
-TEST_F(PasskeyUnlockManagerTest, MAYBE_ErrorUiVisibleWithoutUVKeysWithGpmPin) {
-  DisableUVKeySupport();
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinSetAndUsable);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-
-  EXPECT_TRUE(passkey_unlock_manager()->ShouldDisplayErrorUi());
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest, LogsPasskeyCountHistogramWithoutPasskeys) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-
-  // The histogram should be logged on startup even if there are no passkeys.
-  base::HistogramTester histogram_tester;
-
-  AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectUniqueSample("WebAuthentication.PasskeyCount", 0, 1);
-}
-
-TEST_F(PasskeyUnlockManagerTest, LogsPasskeyCountHistogramWithPasskeys) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
-
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  // The histogram should be logged on startup.
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
-  base::HistogramTester histogram_tester;
-
-  AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectUniqueSample("WebAuthentication.PasskeyCount", 1, 1);
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
 }
 
 TEST_F(PasskeyUnlockManagerTest, TextLablesForDifferentUiExperimentArms) {
@@ -402,57 +467,84 @@ TEST_F(PasskeyUnlockManagerTest, TextLablesForDifferentUiExperimentArms) {
 }
 
 TEST_F(PasskeyUnlockManagerTest,
-       LogsPasskeyReadinessHistogramWhenPasskeysReady) {
-  ConfigureProfileAndSyncService(kEnclaveReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
+       LogsPasswordReadinessHistogram_PasswordsAreReady) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      password_manager::features::kRecordPasswordReadiness};
 
   base::HistogramTester histogram_tester;
+  ConfigureProfileAndSyncService(
+      kEnclaveNotReady, kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+      syncer::PassphraseType::kTrustedVaultPassphrase,
+      /*trusted_vault_key_required=*/false);
 
   AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectBucketCount("WebAuthentication.PasskeyReadiness", true,
-                                     1);
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.TrustedVaultPasswordReadiness",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
 }
 
 TEST_F(PasskeyUnlockManagerTest,
-       LogsPasskeyReadinessHistogramWhenPasskeysLocked) {
+       LogsPasswordReadinessHistogram_PasswordsAreNotReady) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      password_manager::features::kRecordPasswordReadiness};
+
+  base::HistogramTester histogram_tester;
+  ConfigureProfileAndSyncService(
+      kEnclaveNotReady, kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+      syncer::PassphraseType::kTrustedVaultPassphrase,
+      /*trusted_vault_key_required=*/true);
+
+  AdvanceClock(base::Seconds(31));
+
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.TrustedVaultPasswordReadiness",
+      /*sample=*/false,
+      /*expected_bucket_count=*/1);
+}
+
+TEST_F(PasskeyUnlockManagerTest,
+       DoesNotLogPasswordReadinessHistogramWhenNotTrustedVault) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      password_manager::features::kRecordPasswordReadiness};
+
+  base::HistogramTester histogram_tester;
   ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelReady,
-                                 GpmPinStatus::kGpmPinUnset);
-
-  base::HistogramTester histogram_tester;
+                                 GpmPinStatus::kGpmPinUnset,
+                                 syncer::PassphraseType::kKeystorePassphrase);
 
   AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectBucketCount("WebAuthentication.PasskeyReadiness",
-                                     false, 1);
+
+  histogram_tester.ExpectTotalCount(
+      "PasswordManager.TrustedVaultPasswordReadiness", 0);
 }
 
 TEST_F(PasskeyUnlockManagerTest,
-       LogsPasskeyCountHistogramWhenPasskeyModelReady) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelNotReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  testing::StrictMock<MockPasskeyUnlockManagerObserver> observer =
-      testing::StrictMock<MockPasskeyUnlockManagerObserver>();
-  passkey_unlock_manager()->AddObserver(&observer);
+       DoesNotLogPasswordReadinessHistogramUntilPasswordsAreActive) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      password_manager::features::kRecordPasswordReadiness};
 
-  EXPECT_CALL(observer, OnPasskeyUnlockManagerStateChanged());
-  passkey_model()->AddNewPasskeyForTesting(CreatePasskey());
   base::HistogramTester histogram_tester;
-
-  passkey_model()->SetReady(true);
-  AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectUniqueSample("WebAuthentication.PasskeyCount", 1, 1);
-
-  passkey_unlock_manager()->RemoveObserver(&observer);
-}
-
-TEST_F(PasskeyUnlockManagerTest,
-       LogsGpmPinStatusHistogramWhenGpmPinStatusUnset) {
-  ConfigureProfileAndSyncService(kEnclaveNotReady, kPasskeyModelNotReady,
-                                 GpmPinStatus::kGpmPinUnset);
-  base::HistogramTester histogram_tester;
+  ConfigureProfileAndSyncService(
+      kEnclaveNotReady, kPasskeyModelReady, GpmPinStatus::kGpmPinUnset,
+      syncer::PassphraseType::kTrustedVaultPassphrase,
+      /*trusted_vault_key_required=*/false,
+      /*inactive_sync_data_types=*/{syncer::PASSWORDS});
 
   AdvanceClock(base::Seconds(31));
-  histogram_tester.ExpectUniqueSample("WebAuthentication.GpmPinStatus",
-                                      GpmPinStatus::kGpmPinUnset, 1);
+  histogram_tester.ExpectTotalCount(
+      "PasswordManager.TrustedVaultPasswordReadiness", 0);
+
+  // This makes `PASSWORDS` an active sync data type.
+  test_sync_service()->SetFailedDataTypes({});
+  test_sync_service()->FireStateChanged();
+
+  AdvanceClock(base::Seconds(31));
+  histogram_tester.ExpectUniqueSample(
+      "PasswordManager.TrustedVaultPasswordReadiness",
+      /*sample=*/true,
+      /*expected_bucket_count=*/1);
 }
 
 }  // namespace

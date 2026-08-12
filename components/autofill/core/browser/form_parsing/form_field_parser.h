@@ -5,6 +5,9 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_PARSING_FORM_FIELD_PARSER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_PARSING_FORM_FIELD_PARSER_H_
 
+#include <stddef.h>
+
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,7 +16,8 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/lru_cache.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/hashing_lru_cache.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/function_ref.h"
@@ -21,11 +25,15 @@
 #include "base/memory/raw_ref.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/form_parsing/field_candidates.h"
 #include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/is_required.h"
 #include "components/autofill/core/common/language_code.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
@@ -108,11 +116,6 @@ struct ParsingContext {
   // FormFieldData::name().
   base::flat_map<FieldGlobalId, std::u16string> name_overrides;
 
-  // Contains the parseable labels that override FormFieldData::label().
-  // Parsing code should prefer these labels but fall back to
-  // FormFieldData::label().
-  base::flat_map<FieldGlobalId, std::u16string> label_overrides;
-
   const GeoIpCountryCode client_country;
   const LanguageCode page_language;
   // Mutable so that the caches can be reused across different pattern files
@@ -129,7 +132,7 @@ struct ParsingContext {
   const bool better_placeholder_support{base::FeatureList::IsEnabled(
       features::kAutofillBetterLocalHeuristicPlaceholderSupport)};
 
-  std::optional<RegexMatchesCache> matches_cache;
+  RegexMatchesCache matches_cache{1000};
   raw_ref<AutofillRegexCache> regex_cache;
 
   raw_ptr<LogManager> log_manager;
@@ -140,23 +143,6 @@ struct ParsingContext {
 // name, phone number, or address field.
 class FormFieldParser {
  public:
-  struct MatchInfo {
-    // This is different from `autofill::MatchAttribute`, since it further
-    // distinguishes between high and low quality labels. Low quality label
-    // matches are deprioritized during scoring (`AddClassification()`), so a
-    // different parser can overwrite the label match with e.g. a name match.
-    // High quality labels are labels for which we have high confidence that the
-    // label value is visible to the user and associated with the form control.
-    // Low quality labels are heuristically determined labels which may be
-    // incorrectly attributed to the form control.
-    enum class MatchAttribute {
-      kName = 0,
-      kHighQualityLabel = 1,
-      kLowQualityLabel = 2
-    } matched_attribute = internal::IsRequired();
-    // TODO(crbug.com/320965828): Add other details such as the regex that
-    // matched or how well the regex matched to improve match prioritisation.
-  };
   struct FieldAndMatchInfo {
     FieldAndMatchInfo(const FormFieldData* field LIFETIME_BOUND,
                       MatchInfo match_info)
@@ -170,12 +156,16 @@ class FormFieldParser {
 
   virtual ~FormFieldParser() = default;
 
-  // Classifies each field in |fields| with its heuristically detected type.
+  // Classifies each field in `fields` with its heuristically detected type.
   // Each field has a derived unique name that is used as the key into
-  // |field_candidates|.
+  // `field_candidates`. If `ignore_small_forms` is true, the address
+  // predictions will be cleared from fields in forms that are smaller than
+  // `kMinRequiredFieldsForHeuristics`, otherwise the address predictions will
+  // stay as predicted, no matter the form size.
   static void ParseFormFields(ParsingContext& context,
                               base::span<const FormFieldData> fields,
-                              FieldCandidatesMap& field_candidates);
+                              FieldCandidatesMap& field_candidates,
+                              bool ignore_small_forms);
 
   // Looks for types that are allowed to appear in solitary (such as merchant
   // promo codes) inside |fields|. Each field has a derived unique name that is
@@ -220,7 +210,8 @@ class FormFieldParser {
           {});
 
   // Removes entries from `field_candidates` in case
-  // - not enough fields were classified by local heuristics.
+  // - not enough fields were classified by local heuristics and
+  // `ignore_small_forms` was true.
   // - fields were not explicitly allow-listed because they appear in
   //   contexts that don't contain enough fields (e.g. forms with only an
   //   email address).
@@ -228,28 +219,11 @@ class FormFieldParser {
       base::span<const FormFieldData> fields,
       FieldCandidatesMap& field_candidates,
       GeoIpCountryCode client_country,
-      LogManager* log_manager);
+      LogManager* log_manager,
+      bool ignore_small_forms);
 
  protected:
   friend class FormFieldParserTestApi;
-
-  // Initial values assigned to FieldCandidates by their corresponding parsers.
-  // There's an implicit precedence determined by the values assigned here.
-  // Email is currently the most important followed by Phone, Travel, Address,
-  // Credit Card, IBAN, Price, Loyalty Card, Name, Merchant promo code, and
-  // Search.
-  static constexpr float kBaseEmailParserScore = 1.4f;
-  static constexpr float kBasePhoneParserScore = 1.3f;
-  static constexpr float kBaseTravelParserScore = 1.2f;
-  static constexpr float kBaseAddressParserScore = 1.1f;
-  static constexpr float kBaseCreditCardParserScore = 1.0f;
-  static constexpr float kBaseIbanParserScore = 0.975f;
-  static constexpr float kBasePriceParserScore = 0.95f;
-  static constexpr float kBaseLoyaltyCardParserScore = 0.95f;
-  static constexpr float kBaseNameParserScore = 0.9f;
-  static constexpr float kBaseMerchantPromoCodeParserScore = 0.85f;
-  static constexpr float kBaseSearchParserScore = 0.8f;
-  static constexpr float kBaseImprovedPredictionsScore = 0.7f;
 
   // Only derived classes may instantiate.
   FormFieldParser() = default;
@@ -290,13 +264,13 @@ class FormFieldParser {
                               std::optional<FieldAndMatchInfo>* match);
 
   // Adds an association between a `match` and a `type` into `field_candidates`.
-  // This association is weighted by `parser_score`, the higher the stronger the
-  // association.
+  // Multiple matches for the same `type` are prioritized by `match->match_info`
+  // and `parser_type`.
   // TODO(crbug.com/320965828): Don't just weight classifications based on a
   // `parser_score`, but also using `match.match_info`.
   static void AddClassification(const std::optional<FieldAndMatchInfo>& match,
                                 FieldType type,
-                                float parser_score,
+                                HeuristicParser parser_type,
                                 FieldCandidatesMap& field_candidates);
 
   // Returns true iff `type` matches `match_type`.

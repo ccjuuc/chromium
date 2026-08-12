@@ -129,10 +129,9 @@ void InlineBoxFragmentPainter::PaintMask(const PaintInfo& paint_info,
   SlicePaintingType border_painting_type =
       GetSlicePaintType(style_.MaskBoxImage(), adjusted_frame_rect,
                         adjusted_clip_rect, object_may_have_multiple_boxes);
-  String failing_url;
   if (border_painting_type == kDontPaint ||
       (paint_info.IsPrivacyPreserving() && style_.MaskBoxImage().GetImage() &&
-       !style_.MaskBoxImage().GetImage()->IsAccessAllowed(failing_url))) {
+       !style_.MaskBoxImage().GetImage()->IsCorsSameOrigin())) {
     return;
   }
   GraphicsContextStateSaver state_saver(paint_info.context, false);
@@ -157,6 +156,18 @@ void InlineBoxFragmentPainterBase::PaintBackgroundBorderShadow(
   if (inline_box_fragment_.Style().Visibility() != EVisibility::kVisible ||
       inline_box_fragment_.IsOpaque()) {
     return;
+  }
+
+  // Record tracked element data if associated with element
+  Element* element = DynamicTo<Element>(node_);
+  if (element && element->GetTrackedElementSubRects()) {
+    const auto* sub_rects = element->GetTrackedElementSubRects();
+    PhysicalRect frame_rect = inline_box_fragment_.LocalRect();
+    PhysicalRect adjusted_frame_rect(paint_offset, frame_rect.size);
+
+    paint_info.context.GetPaintController().RecordTrackedElementData(
+        GetDisplayItemClient(), ToPixelSnappedRect(adjusted_frame_rect),
+        *sub_rects);
   }
 
   // You can use p::first-line to specify a background. If so, the direct child
@@ -404,8 +415,13 @@ void InlineBoxFragmentPainterBase::PaintInsetBoxShadow(
     const PaintInfo& info,
     const ComputedStyle& s,
     const PhysicalRect& paint_rect) {
-  BoxPainterBase::PaintInsetBoxShadowWithBorderRect(info, paint_rect, s,
-                                                    SidesToInclude());
+  std::optional<BorderShapeReferenceRects> border_shape_rects;
+  if (inline_box_fragment_.GetLayoutObject()) {
+    border_shape_rects = ComputeBorderShapeReferenceRects(
+        paint_rect, s, *inline_box_fragment_.GetLayoutObject());
+  }
+  BoxPainterBase::PaintInsetBoxShadowWithBorderRect(
+      info, paint_rect, s, border_shape_rects, SidesToInclude());
 }
 
 void InlineBoxFragmentPainterBase::PaintBoxDecorationBackground(

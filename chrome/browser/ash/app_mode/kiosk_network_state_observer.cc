@@ -8,9 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
 #include "chromeos/ash/components/network/network_configuration_handler.h"
 #include "chromeos/ash/components/network/network_handler.h"
@@ -31,8 +31,8 @@ constexpr char kConfigFailureTemporaryServiceConfiguredButNotUsable[] =
     "Config.CreateConfiguration Temporary service configured but not usable";
 
 void CopyPropertyIfExists(std::string_view key,
-                          const base::Value::Dict& shill_properties,
-                          base::Value::Dict& new_properties) {
+                          const base::DictValue& shill_properties,
+                          base::DictValue& new_properties) {
   const base::Value* property_value = shill_properties.Find(key);
   if (property_value) {
     new_properties.Set(key, (*property_value).Clone());
@@ -46,7 +46,7 @@ KioskNetworkStateObserver::KioskNetworkStateObserver(PrefService* pref_service)
   CHECK(pref_service_);
   pref_change_registrar_.Init(pref_service);
   pref_change_registrar_.Add(
-      prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled,
+      ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled,
       base::BindRepeating(
           &KioskNetworkStateObserver::PolicyChanged,
           // It is safe to use `base::Unretained` since this class
@@ -62,7 +62,7 @@ KioskNetworkStateObserver::~KioskNetworkStateObserver() = default;
 
 bool KioskNetworkStateObserver::IsPolicyEnabled() const {
   return pref_service_->GetBoolean(
-      prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled);
+      ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled);
 }
 
 void KioskNetworkStateObserver::SetWifiExposureAttemptCallbackForTesting(
@@ -130,13 +130,13 @@ void KioskNetworkStateObserver::OnGetWifiPassphraseError(
 void KioskNetworkStateObserver::ReceiveProperties(
     const std::string& passphrase,
     const std::string& service_path,
-    std::optional<base::Value::Dict> optional_shill_properties) {
+    std::optional<base::DictValue> optional_shill_properties) {
   if (!optional_shill_properties) {
     NET_LOG(ERROR) << "Received shill properties are empty.";
     return;
   }
-  const base::Value::Dict& shill_properties = optional_shill_properties.value();
-  base::Value::Dict properties;
+  const base::DictValue& shill_properties = optional_shill_properties.value();
+  base::DictValue properties;
 
   properties.Set(shill::kProfileProperty,
                  NetworkProfileHandler::GetSharedProfilePath());

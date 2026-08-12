@@ -119,6 +119,9 @@ class VizProcessTransportFactory : public ui::ContextFactory,
       scoped_refptr<gpu::GpuChannelHost> gpu_channel_host);
 
 #if BUILDFLAG(IS_MAC)
+  void CreateDisplayLinkMacMojoIfNeeded(
+      base::WeakPtr<ui::Compositor> compositor);
+
   std::unique_ptr<ui::DisplayLinkMacMojo> display_link_mac_mojo_{nullptr};
 #endif
 

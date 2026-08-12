@@ -20,7 +20,7 @@ class PasskeyKeychainProvider {
   // Types for the different callbacks.
   using CheckEnrolledCallback = base::OnceCallback<void(BOOL, NSError*)>;
   using EnrollCallback = base::OnceCallback<void(NSError*)>;
-  using KeysMarkedAsAsStaleCallback = base::OnceCallback<void(void)>;
+  using KeysMarkedAsAsStaleCallback = base::OnceClosure;
   using CheckDegradedRecoverabilityCallback =
       base::OnceCallback<void(BOOL, NSError*)>;
   using FixDegradedRecoverabilityCallback = base::OnceCallback<void(NSError*)>;
@@ -30,14 +30,14 @@ class PasskeyKeychainProvider {
   PasskeyKeychainProvider(const PasskeyKeychainProvider&) = delete;
   PasskeyKeychainProvider& operator=(const PasskeyKeychainProvider&) = delete;
 
-  ~PasskeyKeychainProvider();
+  virtual ~PasskeyKeychainProvider();
 
   // Checks if the identity identified by `gaia` is enrolled and invokes
   // `callback` with the result.
   // - "gaia" is used to identify the account.
   // - "callback" is called once the enrollment status is known and receives
   // the result and the potential error as input.
-  void CheckEnrolled(NSString* gaia, CheckEnrolledCallback callback);
+  virtual void CheckEnrolled(NSString* gaia, CheckEnrolledCallback callback);
 
   // Asynchronously enrolls the identity identified by `gaia` and invokes
   // `callback`.
@@ -61,9 +61,9 @@ class PasskeyKeychainProvider {
   //   fetched keys.
   // - "callback" is called once the keys are fetched and receives the fetched
   //   keys as input (the array will be empty on failure).
-  void FetchKeys(NSString* gaia,
-                 webauthn::ReauthenticatePurpose purpose,
-                 webauthn::KeysFetchedCallback callback);
+  virtual void FetchKeys(NSString* gaia,
+                         webauthn::ReauthenticatePurpose purpose,
+                         webauthn::KeysFetchedCallback callback);
 
   // Asynchronously marks the keys as stale for the identity identified by
   // `gaia` and invokes `callback` after completion. This should be invoked
@@ -96,7 +96,7 @@ class PasskeyKeychainProvider {
   // - "gaia" is used to identify the account.
   // - "callback" is called once the degraded recoverability status is known and
   // receives the result and the potential error as input.
-  void CheckDegradedRecoverability(
+  virtual void CheckDegradedRecoverability(
       NSString* gaia,
       CheckDegradedRecoverabilityCallback callback);
 

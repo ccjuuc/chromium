@@ -67,17 +67,15 @@ TEST(RuleMetaDataTest, DefaultConstructor) {
   EXPECT_EQ(metadata.session_model(), mojom::SessionModel::DURABLE);
   EXPECT_EQ(metadata.lifetime(), base::TimeDelta());
   EXPECT_FALSE(metadata.decided_by_related_website_sets());
-  EXPECT_TRUE(metadata.rule_options().is_none());
+  EXPECT_FALSE(metadata.autorevocation_bypassed_by_user());
 }
 
 TEST(RuleMetaDataTest, SetFromConstraints) {
-  {
     ContentSettingConstraints constraints(
         base::Time::FromSecondsSinceUnixEpoch(12345));
     constraints.set_session_model(mojom::SessionModel::USER_SESSION);
     constraints.set_lifetime(base::Days(10));
     constraints.set_decided_by_related_website_sets(true);
-    constraints.set_options(base::Value(true));
 
     RuleMetaData metadata;
     metadata.SetFromConstraints(constraints);
@@ -87,8 +85,6 @@ TEST(RuleMetaDataTest, SetFromConstraints) {
               base::Time::FromSecondsSinceUnixEpoch(12345) + base::Days(10));
     EXPECT_EQ(metadata.lifetime(), base::Days(10));
     EXPECT_EQ(metadata.decided_by_related_website_sets(), true);
-    EXPECT_EQ(metadata.rule_options(), base::Value(true));
-  }
 }
 
 TEST(RuleMetaDataTest, SetExpirationAndLifetime) {
@@ -97,6 +93,69 @@ TEST(RuleMetaDataTest, SetExpirationAndLifetime) {
   metadata.SetExpirationAndLifetime(now + base::Days(1), base::Days(2));
   EXPECT_EQ(metadata.expiration(), now + base::Days(1));
   EXPECT_EQ(metadata.lifetime(), base::Days(2));
+}
+
+TEST(RuleMetaDataTest, Comparison) {
+  RuleMetaData m1;
+  RuleMetaData m2;
+  EXPECT_EQ(m1, m2);
+
+  void (*modifiers[])(RuleMetaData&) = {
+      [](RuleMetaData& m) {
+        m.set_last_modified(base::Time::FromSecondsSinceUnixEpoch(123));
+      },
+      [](RuleMetaData& m) {
+        m.set_last_used(base::Time::FromSecondsSinceUnixEpoch(234));
+      },
+      [](RuleMetaData& m) {
+        m.set_last_visited(base::Time::FromSecondsSinceUnixEpoch(345));
+      },
+      [](RuleMetaData& m) {
+        m.SetExpirationAndLifetime(base::Time::FromSecondsSinceUnixEpoch(345),
+                                   base::Days(2));
+      },
+      [](RuleMetaData& m) {
+        m.set_session_model(mojom::SessionModel::USER_SESSION);
+      },
+      [](RuleMetaData& m) {
+        m.set_tpcd_metadata_rule_source(
+            mojom::TpcdMetadataRuleSource::SOURCE_TEST);
+      },
+      [](RuleMetaData& m) {
+        m.set_tpcd_metadata_cohort(
+            mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+      },
+      [](RuleMetaData& m) { m.set_tpcd_metadata_elected_dtrp(42); },
+      [](RuleMetaData& m) { m.set_decided_by_related_website_sets(true); },
+      [](RuleMetaData& m) { m.set_autorevocation_bypassed_by_user(true); },
+  };
+
+  for (void (*modifier)(RuleMetaData&) : modifiers) {
+    modifier(m1);
+    EXPECT_NE(m1, m2);
+    m1 = m2.Clone();
+    EXPECT_EQ(m1, m2);
+  }
+}
+
+TEST(RuleMetaDataTest, Clone) {
+  RuleMetaData metadata;
+  metadata.set_last_modified(base::Time::FromSecondsSinceUnixEpoch(123));
+  metadata.set_last_used(base::Time::FromSecondsSinceUnixEpoch(234));
+  metadata.set_last_visited(base::Time::FromSecondsSinceUnixEpoch(345));
+  metadata.SetExpirationAndLifetime(base::Time::FromSecondsSinceUnixEpoch(456),
+                                    base::Days(2));
+  metadata.set_session_model(mojom::SessionModel::USER_SESSION);
+  metadata.set_tpcd_metadata_rule_source(
+      mojom::TpcdMetadataRuleSource::SOURCE_TEST);
+  metadata.set_tpcd_metadata_cohort(
+      mojom::TpcdMetadataCohort::GRACE_PERIOD_FORCED_OFF);
+  metadata.set_tpcd_metadata_elected_dtrp(42);
+  metadata.set_decided_by_related_website_sets(true);
+  metadata.set_autorevocation_bypassed_by_user(true);
+
+  RuleMetaData clone = metadata.Clone();
+  EXPECT_EQ(metadata, clone);
 }
 
 }  // namespace content_settings

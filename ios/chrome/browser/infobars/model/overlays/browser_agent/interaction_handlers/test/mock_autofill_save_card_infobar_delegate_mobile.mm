@@ -25,7 +25,9 @@ MockAutofillSaveCardInfoBarDelegateMobile::
         std::variant<autofill::payments::PaymentsAutofillClient::
                          LocalSaveCardPromptCallback,
                      autofill::payments::PaymentsAutofillClient::
-                         UploadSaveCardPromptCallback> callback,
+                         UploadSaveCardPromptCallback,
+                     autofill::payments::PaymentsAutofillClient::
+                         CardSaveAndFillDialogCallback> callback,
         const autofill::LegalMessageLines& legal_message_lines,
         const AccountInfo& displayed_target_account)
     : AutofillSaveCardInfoBarDelegateIOS(
@@ -49,8 +51,7 @@ MockAutofillSaveCardInfoBarDelegateMobile::
 
 MockAutofillSaveCardInfoBarDelegateMobileFactory::
     MockAutofillSaveCardInfoBarDelegateMobileFactory()
-    : credit_card_(base::Uuid::GenerateRandomV4().AsLowercaseString(),
-                   "https://www.example.com/") {}
+    : credit_card_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {}
 
 MockAutofillSaveCardInfoBarDelegateMobileFactory::
     ~MockAutofillSaveCardInfoBarDelegateMobileFactory() {}
@@ -64,7 +65,9 @@ MockAutofillSaveCardInfoBarDelegateMobileFactory::
             options) {
   using Variant = std::variant<
       autofill::payments::PaymentsAutofillClient::LocalSaveCardPromptCallback,
-      autofill::payments::PaymentsAutofillClient::UploadSaveCardPromptCallback>;
+      autofill::payments::PaymentsAutofillClient::UploadSaveCardPromptCallback,
+      autofill::payments::PaymentsAutofillClient::
+          CardSaveAndFillDialogCallback>;
   autofill::payments::PaymentsAutofillClient::UploadSaveCardPromptCallback
       upload_cb = base::DoNothing();
   autofill::payments::PaymentsAutofillClient::LocalSaveCardPromptCallback

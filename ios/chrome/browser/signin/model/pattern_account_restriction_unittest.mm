@@ -19,7 +19,7 @@ class PatternAccountRestrictionTest : public PlatformTest {};
 // Tests that the PatternAccountRestriction filters email correctly when
 // restrictions are set.
 TEST_F(PatternAccountRestrictionTest, FilterEmailsWithRestrictions) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append("*gmail.com");
   list.Append("*google.com");
   auto restriction = PatternAccountRestrictionFromValue(list);
@@ -32,7 +32,7 @@ TEST_F(PatternAccountRestrictionTest, FilterEmailsWithRestrictions) {
 // Tests that the PatternAccountRestriction does not filter emails when
 // restrictions are not set.
 TEST_F(PatternAccountRestrictionTest, FilterEmailsWithoutRestriction) {
-  base::Value::List list;
+  base::ListValue list;
   auto restriction = PatternAccountRestrictionFromValue(list);
 
   EXPECT_EQ(restriction.IsAccountRestricted(email1), false);
@@ -43,7 +43,7 @@ TEST_F(PatternAccountRestrictionTest, FilterEmailsWithoutRestriction) {
 // Tests that the PatternAccountRestriction does not filter emails when the
 // restriction is not correctly formatted.
 TEST_F(PatternAccountRestrictionTest, FilterEmailsWithBadPattern) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append("*gmail.com\\");
   list.Append("*google.com");
   auto restriction = PatternAccountRestrictionFromValue(list);
@@ -53,9 +53,9 @@ TEST_F(PatternAccountRestrictionTest, FilterEmailsWithBadPattern) {
   EXPECT_EQ(restriction.IsAccountRestricted(email3), true);
 }
 
-// Tests that the pattern created by PatternFromString(chunk) correctlty matches
+// Tests that the pattern created by PatternFromString(chunk) correctly matches
 // the given email. The wildcard character '*' matches zero or more arbitrary
-// characters.The escape character is '\', so to match actual '*' or '\'
+// characters. The escape character is '\', so to match actual '*' or '\'
 // characters, put a '\' in front of them.
 TEST_F(PatternAccountRestrictionTest, PatternMatchChunck) {
   auto pattern = PatternFromString("*gmail.com");

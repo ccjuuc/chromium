@@ -22,12 +22,14 @@
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/test_sea_pen_observer.h"
 #include "chrome/browser/ash/wallpaper_handlers/test_wallpaper_fetcher_delegate.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#include "components/variations/pref_names.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_web_ui.h"
@@ -68,6 +70,9 @@ class VcBackgroundUISeaPenProviderImplTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
+    PrefService* local_state = g_browser_process->local_state();
+    local_state->SetString(variations::prefs::kVariationsCountry, "us");
+
     ASSERT_TRUE(embedded_test_server()->Start());
 
     // Setup  `sea_pen_provider_ `.
@@ -87,10 +92,10 @@ class VcBackgroundUISeaPenProviderImplTest : public InProcessBrowserTest {
     camera_effects_controller->bypass_set_camera_effects_for_testing(true);
 
     const base::FilePath camera_background_img_dir =
-        browser()->profile()->GetPath().AppendASCII(
+        browser()->GetProfile()->GetPath().AppendASCII(
             "camera_background_img_dir");
     const base::FilePath camera_background_run_dir =
-        browser()->profile()->GetPath().AppendASCII(
+        browser()->GetProfile()->GetPath().AppendASCII(
             "camera_background_run_dir");
     ASSERT_TRUE(base::CreateDirectory(camera_background_img_dir));
     ASSERT_TRUE(base::CreateDirectory(camera_background_run_dir));
@@ -238,10 +243,10 @@ IN_PROC_BROWSER_TEST_F(VcBackgroundUISeaPenProviderImplTest, ObserverTests) {
 IN_PROC_BROWSER_TEST_F(VcBackgroundUISeaPenProviderImplTest,
                        ManagedUsersTests) {
   browser()
-      ->profile()
+      ->GetProfile()
       ->GetProfilePolicyConnector()
       ->OverrideIsManagedForTesting(true);
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       ash::prefs::kGenAIVcBackgroundSettings,
       static_cast<int>(
           ash::personalization_app::ManagedSeaPenSettings::kAllowed));
@@ -252,7 +257,7 @@ IN_PROC_BROWSER_TEST_F(VcBackgroundUISeaPenProviderImplTest,
       << " SeaPen VC Background feedback should be enabled for managed users "
          "with setting kAllowed";
 
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       ash::prefs::kGenAIVcBackgroundSettings,
       static_cast<int>(ash::personalization_app::ManagedSeaPenSettings::
                            kAllowedWithoutLogging));
@@ -264,7 +269,7 @@ IN_PROC_BROWSER_TEST_F(VcBackgroundUISeaPenProviderImplTest,
          "users with setting kAllowedWithoutLogging";
   ;
 
-  browser()->profile()->GetPrefs()->SetInteger(
+  browser()->GetProfile()->GetPrefs()->SetInteger(
       ash::prefs::kGenAIVcBackgroundSettings,
       static_cast<int>(
           ash::personalization_app::ManagedSeaPenSettings::kDisabled));

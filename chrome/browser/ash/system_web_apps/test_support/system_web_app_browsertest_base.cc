@@ -6,20 +6,23 @@
 
 #include <algorithm>
 
-#include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "base/check_deref.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/types_util.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -32,7 +35,7 @@ SystemWebAppBrowserTestBase::SystemWebAppBrowserTestBase() = default;
 SystemWebAppBrowserTestBase::~SystemWebAppBrowserTestBase() = default;
 
 SystemWebAppManager& SystemWebAppBrowserTestBase::GetManager() {
-  auto* swa_manager = SystemWebAppManager::Get(browser()->profile());
+  auto* swa_manager = SystemWebAppManager::Get(browser()->GetProfile());
   DCHECK(swa_manager);
   return *swa_manager;
 }
@@ -72,20 +75,20 @@ content::WebContents* SystemWebAppBrowserTestBase::LaunchApp(
   // AppServiceProxyFactory will DCHECK when called with wrong profile. In
   // normal scenarios, no code path should trigger this.
   DCHECK(apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-      browser()->profile()));
+      browser()->GetProfile()));
 
   if (!params.launch_files.empty()) {
     // SWA browser tests bypass the code in `WebAppPublisherHelper` that fills
     // in `override_url`, so fill it in here, assuming the file handler action
     // URL matches the start URL.
-    params.override_url =
-        web_app::WebAppProvider::GetForLocalAppsUnchecked(browser()->profile())
-            ->registrar_unsafe()
-            .GetAppStartUrl(params.app_id);
+    params.override_url = web_app::WebAppProvider::GetForLocalAppsUnchecked(
+                              browser()->GetProfile())
+                              ->registrar_unsafe()
+                              .GetAppStartUrl(params.app_id);
   }
 
   content::WebContents* web_contents =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
           ->BrowserAppLauncher()
           ->LaunchAppWithParamsForTesting(std::move(params));
 
@@ -95,8 +98,13 @@ content::WebContents* SystemWebAppBrowserTestBase::LaunchApp(
   }
 
   if (out_browser) {
+    BrowserWindowInterface* target_browser =
+        web_contents
+            ? GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+                  web_contents)
+            : nullptr;
     *out_browser =
-        web_contents ? chrome::FindBrowserWithTab(web_contents) : nullptr;
+        target_browser ? target_browser->GetBrowserForMigrationOnly() : nullptr;
   }
 
   return web_contents;
@@ -131,7 +139,7 @@ GURL SystemWebAppBrowserTestBase::GetStartUrl(
   return params.override_url.is_valid()
              ? params.override_url
              : web_app::WebAppProvider::GetForLocalAppsUnchecked(
-                   browser()->profile())
+                   browser()->GetProfile())
                    ->registrar_unsafe()
                    .GetAppStartUrl(params.app_id);
 }
@@ -148,7 +156,10 @@ size_t SystemWebAppBrowserTestBase::GetSystemWebAppBrowserCount(
     SystemWebAppType type) {
   auto browsers = ui_test_utils::FindMatchingBrowsers(
       [type](BrowserWindowInterface* browser) {
-        return ash::IsBrowserForSystemWebApp(browser, type);
+        return ash::IsBrowserForSystemWebApp(
+            CHECK_DEREF(
+                ash::BrowserController::GetInstance()->GetDelegate(browser)),
+            type);
       });
   return browsers.size();
 }

@@ -14,11 +14,13 @@ namespace autofill {
 
 // This class displays a confirmation bubble view after a save card or IBAN
 // upload or virtual card enrollment.
+// TODO(crbug.com/524740910): Rename to a more generic name as more projects
+// (such as churned users) are using this.
 class SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews
     : public AutofillLocationBarBubble {
  public:
   SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews(
-      views::View* anchor_view,
+      views::BubbleAnchor anchor,
       content::WebContents* web_contents,
       base::OnceCallback<void(PaymentsUiClosedReason)> controller_hide_callback,
       SavePaymentMethodAndVirtualCardEnrollConfirmationUiParams ui_params);
@@ -37,7 +39,6 @@ class SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews
   void AddedToWidget() override;
   std::u16string GetWindowTitle() const override;
   void WindowClosing() override;
-  void OnWidgetInitialized() override;
 
  private:
   ~SavePaymentMethodAndVirtualCardEnrollConfirmationBubbleViews() override;

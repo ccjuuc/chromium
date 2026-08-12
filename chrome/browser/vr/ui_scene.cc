@@ -7,7 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
@@ -84,10 +83,10 @@ bool AnyVisibleElementSatisfiesPredicate(UiElement* root, P predicate) {
   return false;
 }
 
-void InitializeElementRecursive(UiElement* e, SkiaSurfaceProvider* provider) {
-  e->Initialize(provider);
+void InitializeElementRecursive(UiElement* e) {
+  e->Initialize();
   for (auto& child : e->children())
-    InitializeElementRecursive(child.get(), provider);
+    InitializeElementRecursive(child.get());
 }
 
 }  // namespace
@@ -257,10 +256,9 @@ UiScene::UiScene() {
 
 UiScene::~UiScene() = default;
 
-void UiScene::OnGlInitialized(SkiaSurfaceProvider* provider) {
+void UiScene::OnGlInitialized() {
   gl_initialized_ = true;
-  provider_ = provider;
-  InitializeElementRecursive(root_element_.get(), provider_);
+  InitializeElementRecursive(root_element_.get());
 }
 
 void UiScene::AddPerFrameCallback(PerFrameCallback callback) {
@@ -273,7 +271,7 @@ void UiScene::InitializeElement(UiElement* element) {
   CHECK_EQ(GetUiElementById(element->id()), nullptr);
   CHECK_GE(element->draw_phase(), 0);
   if (gl_initialized_)
-    InitializeElementRecursive(element, provider_);
+    InitializeElementRecursive(element);
 }
 
 void UiScene::RunFirstFrameForTest() {

@@ -4,7 +4,7 @@
 
 import("//components/signin/features.gni")
 
-assert(enable_dice_support)
+assert(enable_dice_support || is_chromeos)
 
 source_set("batch_upload_promo") {
   sources = [
@@ -17,11 +17,30 @@ source_set("batch_upload_promo") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/profiles/batch_upload",
     "//chrome/browser/sync",
+    "//chrome/browser/ui/browser_window",
     "//components/sync/base",
     "//components/sync/service",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
     "//ui/webui",
+    "//ui/webui/resources/js/batch_upload_promo:mojo_bindings",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "batch_upload_promo_handler_unittest.cc" ]
+  deps = [
+    ":batch_upload_promo",
+    "//chrome/browser/profiles/batch_upload",
+    "//chrome/browser/profiles/batch_upload:test_support",
+    "//chrome/browser/sync",
+    "//chrome/test:test_support",
+    "//components/sync:test_support",
+    "//components/sync/base",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gtest",
     "//ui/webui/resources/js/batch_upload_promo:mojo_bindings",
   ]
 }

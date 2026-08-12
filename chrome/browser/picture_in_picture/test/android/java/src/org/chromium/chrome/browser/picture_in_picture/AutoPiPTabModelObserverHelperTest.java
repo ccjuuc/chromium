@@ -8,7 +8,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper.moveActivityToFront;
 import static org.chromium.ui.test.util.DeviceRestriction.RESTRICTION_TYPE_NON_AUTO;
 
@@ -27,18 +26,20 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.multiwindow.MultiWindowTestHelper;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
+import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.hub.RegularTabSwitcherStation;
@@ -49,6 +50,7 @@ import org.chromium.chrome.test.util.MenuUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 
+import java.util.Collections;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -60,7 +62,7 @@ import java.util.concurrent.TimeoutException;
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING
 })
-@Restriction({RESTRICTION_TYPE_NON_AUTO, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+@Restriction(RESTRICTION_TYPE_NON_AUTO)
 @Batch(Batch.PER_CLASS)
 public class AutoPiPTabModelObserverHelperTest {
     @Rule
@@ -194,10 +196,10 @@ public class AutoPiPTabModelObserverHelperTest {
         assertFalse(mOnActivationChangedCallbackHelper.isActivated());
     }
 
-    /** Tests that closing the observed tab does not trigger a callback. */
+    /** Tests that closing the observed tab via tab switcher does not trigger a callback. */
     @Test
     @MediumTest
-    public void testCloseTab() throws TimeoutException {
+    public void testCloseTabViaTabSwitcher() throws TimeoutException {
         int callCount = startObservingAndAssertInitialCallback(/* expectedIsActivated= */ true);
 
         // Open a second tab and switch to it
@@ -213,6 +215,38 @@ public class AutoPiPTabModelObserverHelperTest {
         // Close the active tab should not trigger a callback
         RegularTabSwitcherStation regularTabSwitcher = page.openRegularTabSwitcher();
         regularTabSwitcher = regularTabSwitcher.closeTabAtIndex(0, RegularTabSwitcherStation.class);
+        assertEquals(
+                "Closing the observed tab should not trigger a callback.",
+                callCount,
+                mOnActivationChangedCallbackHelper.getCallCount());
+    }
+
+    /** Tests that closing the observed tab via tab remover does not trigger a callback. */
+    @Test
+    @MediumTest
+    public void testCloseTabViaTabRemover() throws TimeoutException {
+        int callCount = startObservingAndAssertInitialCallback(/* expectedIsActivated= */ true);
+
+        // Open a second tab and switch to it
+        CtaPageStation page = mInitialPage.openNewTabFast();
+        mOnActivationChangedCallbackHelper.waitForCallback(callCount++);
+        assertFalse(mOnActivationChangedCallbackHelper.isActivated());
+
+        // Switch back to the original tab
+        page = page.openRegularTabSwitcher().selectTabAtIndex(0, WebPageStation.newBuilder());
+        mOnActivationChangedCallbackHelper.waitForCallback(callCount++);
+        assertTrue(mOnActivationChangedCallbackHelper.isActivated());
+
+        // Close the active tab directly
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mInitialActivity
+                            .getCurrentTabModel()
+                            .getTabRemover()
+                            .closeTabs(
+                                    TabClosureParams.closeTab(mInitialTab).build(),
+                                    /* allowDialog= */ false);
+                });
         assertEquals(
                 "Closing the observed tab should not trigger a callback.",
                 callCount,
@@ -302,11 +336,34 @@ public class AutoPiPTabModelObserverHelperTest {
      */
     @Test
     @MediumTest
-    @DisabledTest(
-            message = "Background tab reparenting test support not added. See crbug.com/425983853")
-    public void testMoveInactiveObservedTabToNewWindow() {
-        // TODO(crbug.com/421608904): test moving observed tab in the background to another window.
-        // The tab should be activated.
+    public void testMoveInactiveObservedTabToNewWindow() throws TimeoutException {
+        // Multi-instance tab reparenting via MultiInstanceOrchestrator is only supported
+        // on Android S+ (API 31+).
+        if (!MultiWindowUtils.isMultiInstanceApi31Enabled()) {
+            return;
+        }
+
+        int callCount = startObservingAndAssertInitialCallback(/* expectedIsActivated= */ true);
+
+        // Open a new tab in the original window so that mInitialTab becomes inactive.
+        CtaPageStation page = mInitialPage.openNewTabFast();
+        mOnActivationChangedCallbackHelper.waitForCallback(callCount++);
+        assertFalse(mOnActivationChangedCallbackHelper.isActivated());
+
+        // Move the inactive observed tab (mInitialTab) to a new window.
+        // Reparenting mInitialTab to a new window makes it active in the new window.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    MultiInstanceOrchestratorFactory.getInstance()
+                            .moveTabsToNewWindow(
+                                    mInitialActivity,
+                                    Collections.singletonList(mInitialTab),
+                                    /* finalizeCallback= */ null,
+                                    NewWindowAppSource.UNKNOWN);
+                });
+
+        mOnActivationChangedCallbackHelper.waitForCallback(callCount++);
+        assertTrue(mOnActivationChangedCallbackHelper.isActivated());
     }
 
     /**

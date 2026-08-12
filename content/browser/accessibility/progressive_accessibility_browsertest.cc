@@ -10,30 +10,33 @@
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/features.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/shell/browser/shell.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
 
 namespace {
 
-class ProgressiveAccessibilityTest
-    : public ContentBrowserTest,
-      public testing::WithParamInterface<
-          features::ProgressiveAccessibilityMode> {
+class ProgressiveAccessibilityTest : public ContentBrowserTest,
+                                     public testing::WithParamInterface<bool> {
  protected:
   ProgressiveAccessibilityTest() {
-    feature_list_.InitAndEnableFeatureWithParameters(
-        features::kProgressiveAccessibility,
-        {{"progressive_accessibility_mode",
-          GetParam() == features::ProgressiveAccessibilityMode::kDisableOnHide
-              ? "disable_on_hide"
-              : "only_enable"}});
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(
+          features::kProgressiveAccessibilityPhase2);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          features::kProgressiveAccessibilityPhase2);
+    }
   }
 
  private:
@@ -105,15 +108,12 @@ IN_PROC_BROWSER_TEST_P(ProgressiveAccessibilityTest, DisableAfterHide) {
     EXPECT_EQ(shell->web_contents()->GetAccessibilityMode(), ui::kAXModeBasic);
   });
 
-  // The initial WebContents does not if this is the DisableOnHide variant.
-  switch (GetParam()) {
-    case features::ProgressiveAccessibilityMode::kOnlyEnable:
-      EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(),
-                ui::kAXModeBasic);
-      break;
-    case features::ProgressiveAccessibilityMode::kDisableOnHide:
-      EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(), ui::AXMode());
-      break;
+  // The initial WebContents does not if kProgressiveAccessibilityPhase2 is on.
+  if (!GetParam()) {
+    EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(),
+              ui::kAXModeBasic);
+  } else {
+    EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(), ui::AXMode());
   }
 }
 
@@ -203,14 +203,84 @@ IN_PROC_BROWSER_TEST_P(ProgressiveAccessibilityTest,
   EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(), ui::kAXModeBasic);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    OnlyEnable,
-    ProgressiveAccessibilityTest,
-    testing::Values(features::ProgressiveAccessibilityMode::kOnlyEnable));
-INSTANTIATE_TEST_SUITE_P(
-    DisableOnHide,
-    ProgressiveAccessibilityTest,
-    testing::Values(features::ProgressiveAccessibilityMode::kDisableOnHide));
+// Tests that accessibility is disabled for a hidden WebContents even if its
+// renderer process has crashed, and that the BrowserAccessibilityManager is
+// correctly destroyed.
+IN_PROC_BROWSER_TEST_P(ProgressiveAccessibilityTest,
+                       DisableAfterHideWithCrash) {
+  if (!GetParam()) {
+    GTEST_SKIP();
+  }
+
+  // Navigate to a simple page first to ensure process is ready.
+  ASSERT_TRUE(embedded_test_server()->Start());
+  ASSERT_TRUE(NavigateToURL(shell()->web_contents(),
+                            embedded_test_server()->GetURL("/title1.html")));
+
+  RenderFrameHostImpl* rfhi = static_cast<RenderFrameHostImpl*>(
+      shell()->web_contents()->GetPrimaryMainFrame());
+  ASSERT_TRUE(rfhi->GetProcess()->IsReady());
+
+  // Create five WebContentses (in addition to the initial one).
+  std::array<Shell*, BrowserAccessibilityStateImpl::kMaxPreservedWebContents>
+      shells;
+  std::ranges::generate(
+      shells,
+      [browser_context = shell()->web_contents()->GetBrowserContext()]() {
+        return Shell::CreateNewWindow(browser_context, GURL(), nullptr,
+                                      gfx::Size());
+      });
+
+  // Enable accessibility.
+  ScopedAccessibilityModeOverride basic(ui::kAXModeBasic);
+
+  // The initial WebContents has received the new mode.
+  EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(), ui::kAXModeBasic);
+
+  // Force creation of the manager.
+  EXPECT_NE(rfhi->GetOrCreateBrowserAccessibilityManager(), nullptr);
+  EXPECT_NE(rfhi->browser_accessibility_manager(), nullptr);
+
+  // Crash the initial WebContents' renderer while it is still visible.
+  // This ensures that on Android, the termination is detected as abnormal
+  // (OOM protected) rather than normal termination, which would fail the
+  // assertions in CrashTab.
+  CrashTab(shell()->web_contents());
+
+  // Enable mock time only for the disabler delay.
+  base::ScopedMockTimeMessageLoopTaskRunner mock_time_runner;
+
+  // Hide all six, starting with the initial one.
+  shell()->web_contents()->WasHidden();
+  std::ranges::for_each(
+      shells, [](Shell* shell) { shell->web_contents()->WasHidden(); });
+
+  // At this point, the frame is not live.
+  EXPECT_FALSE(rfhi->IsRenderFrameLive());
+  // The manager should still exist.
+  EXPECT_NE(rfhi->browser_accessibility_manager(), nullptr);
+
+  // Let time pass to trigger the disabler.
+  mock_time_runner->FastForwardBy(
+      BrowserAccessibilityStateImpl::GetMaxDisableDelay());
+
+  // The initial WebContents should have accessibility disabled.
+  EXPECT_EQ(shell()->web_contents()->GetAccessibilityMode(), ui::AXMode());
+
+  // The manager should have been destroyed.
+  EXPECT_EQ(rfhi->browser_accessibility_manager(), nullptr);
+
+  // Verify that calling GetOrCreateBrowserAccessibilityManager does not crash
+  // (via CHECK/DCHECK) and returns nullptr when accessibility is disabled.
+  EXPECT_EQ(rfhi->GetOrCreateBrowserAccessibilityManager(), nullptr);
+}
+
+INSTANTIATE_TEST_SUITE_P(Default,
+                         ProgressiveAccessibilityTest,
+                         testing::Values(false));
+INSTANTIATE_TEST_SUITE_P(DisableOnHide,
+                         ProgressiveAccessibilityTest,
+                         testing::Values(true));
 
 }  // namespace
 

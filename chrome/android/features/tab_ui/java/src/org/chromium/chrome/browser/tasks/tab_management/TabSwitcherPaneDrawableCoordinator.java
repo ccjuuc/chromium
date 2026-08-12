@@ -6,12 +6,12 @@ package org.chromium.chrome.browser.tasks.tab_management;
 
 import android.content.Context;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable;
-import org.chromium.chrome.browser.toolbar.TabSwitcherDrawable.TabSwitcherDrawableLocation;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable;
+import org.chromium.chrome.browser.ui.android.bars_common.TabSwitcherDrawable.TabSwitcherDrawableLocation;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -33,7 +33,7 @@ public class TabSwitcherPaneDrawableCoordinator {
     public TabSwitcherPaneDrawableCoordinator(
             Context context,
             TabModelSelector tabModelSelector,
-            ObservableSupplier<TabModelDotInfo> notificationDotSupplier) {
+            MonotonicObservableSupplier<TabModelDotInfo> notificationDotSupplier) {
         @BrandedColorScheme int brandedColorScheme = BrandedColorScheme.APP_DEFAULT;
         @TabSwitcherDrawableLocation
         int tabSwitcherDrawableLocation = TabSwitcherDrawableLocation.HUB_TOOLBAR;

@@ -20,6 +20,8 @@
 
 namespace local_network_access {
 
+std::vector<blink::mojom::WebFeature> AllAddressSpaceFeatures();
+
 class LocalNetworkAccessBrowserTestBase : public policy::PolicyTest {
  public:
   using WebFeature = blink::mojom::WebFeature;
@@ -35,6 +37,9 @@ class LocalNetworkAccessBrowserTestBase : public policy::PolicyTest {
 
   net::EmbeddedTestServer& https_server() { return https_server_; }
   net::EmbeddedTestServer& https_local_server() { return https_local_server_; }
+  net::EmbeddedTestServer& https_public_server() {
+    return https_public_server_;
+  }
 
   // Fetch the Blink.UseCounter.Features histogram in every renderer process
   // until reaching, but not exceeding, |expected_count|.
@@ -57,6 +62,7 @@ class LocalNetworkAccessBrowserTestBase : public policy::PolicyTest {
   const bool map_all_hosts_to_localhost_;
   net::EmbeddedTestServer https_server_;
   net::EmbeddedTestServer https_local_server_;
+  net::EmbeddedTestServer https_public_server_;
   base::test::ScopedFeatureList features_;
   base::HistogramTester histogram_;
   std::unique_ptr<permissions::MockPermissionPromptFactory>

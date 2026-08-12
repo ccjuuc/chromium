@@ -4,6 +4,7 @@
 
 #import "ios/chrome/test/ios_chrome_scoped_testing_variations_service.h"
 
+#import "components/metrics/startup_visibility.h"
 #import "components/network_time/network_time_tracker.h"
 #import "components/variations/service/variations_service.h"
 #import "components/variations/service/variations_service_client.h"
@@ -12,7 +13,6 @@
 #import "services/network/test/test_network_connection_tracker.h"
 #import "testing/gtest/include/gtest/gtest.h"
 
-using variations::UIStringOverrider;
 using variations::VariationsService;
 using variations::VariationsServiceClient;
 
@@ -42,8 +42,6 @@ class TestVariationsServiceClient : public VariationsServiceClient {
     return false;
   }
   bool IsEnterprise() override { return false; }
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-      PrefService* local_state) override {}
 
  private:
   // VariationsServiceClient:
@@ -69,7 +67,6 @@ IOSChromeScopedTestingVariationsService::
       TestingApplicationContext::GetGlobal()->GetLocalState(),
       metrics_state_manager_.get(),
       /*disable_network_switch=*/"dummy-disable-background-switch",
-      UIStringOverrider(),
       network::TestNetworkConnectionTracker::CreateGetter());
   TestingApplicationContext::GetGlobal()->SetVariationsService(
       variations_service_.get());

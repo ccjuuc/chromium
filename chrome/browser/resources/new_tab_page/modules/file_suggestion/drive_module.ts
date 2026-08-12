@@ -20,7 +20,7 @@ import type {FileSuggestionElement} from './file_suggestion.js';
 export interface DriveModuleElement {
   $: {
     fileSuggestion: FileSuggestionElement,
-    moduleHeaderElementV2: ModuleHeaderElement,
+    moduleHeader: ModuleHeaderElement,
   };
 }
 
@@ -32,7 +32,7 @@ const DriveModuleElementBase = I18nMixinLit(CrLitElement);
  */
 export class DriveModuleElement extends DriveModuleElementBase {
   static get is() {
-    return 'ntp-drive-module-redesigned';
+    return 'ntp-drive-module';
   }
 
   override render() {
@@ -43,31 +43,40 @@ export class DriveModuleElement extends DriveModuleElementBase {
     return {
       files: {type: Array},
       showInfoDialog_: {type: Boolean},
+      showDriveModuleSeeMoreLink_: {type: Boolean},
     };
   }
 
   accessor files: File[] = [];
   protected accessor showInfoDialog_: boolean = false;
+  protected accessor showDriveModuleSeeMoreLink_: boolean =
+      loadTimeData.getBoolean('showDriveModuleSeeMoreLink');
 
   protected getMenuItems_(): MenuItem[] {
     return [
-        {
-          action: 'dismiss',
-          icon: 'modules:visibility_off',
-          text: this.i18nRecursive(
-              '', 'modulesDismissForHoursButtonText',
-              'fileSuggestionDismissHours'),
-        },
-        {
-          action: 'disable',
-          icon: 'modules:block',
-          text: this.i18n('modulesDriveDisableButtonTextV2'),
-        },
-        {
-          action: 'info',
-          icon: 'modules:info',
-          text: this.i18n('moduleInfoButtonTitle'),
-        },
+      {
+        action: 'dismiss',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:visibility-off' :
+            'modules:visibility_off-old',
+        text: this.i18nRecursive(
+            '', 'modulesDismissForHoursButtonText',
+            'fileSuggestionDismissHours'),
+      },
+      {
+        action: 'disable',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
+        text: this.i18n('modulesDriveDisableButtonTextV2'),
+      },
+      {
+        action: 'info',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:info' :
+            'modules:info-old',
+        text: this.i18n('moduleInfoButtonTitle'),
+      },
     ];
   }
 
@@ -86,16 +95,12 @@ export class DriveModuleElement extends DriveModuleElementBase {
 
   protected onDismissButtonClick_() {
     FileProxy.getHandler().dismissModule();
-    this.dispatchEvent(new CustomEvent('dismiss-module-instance', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        message: loadTimeData.getStringF(
-            'dismissModuleToastMessage',
-            loadTimeData.getString('modulesFilesSentence')),
-        restoreCallback: () => FileProxy.getHandler().restoreModule(),
-      },
-    }));
+    this.fire('dismiss-module-instance', {
+      message: loadTimeData.getStringF(
+          'dismissModuleToastMessage',
+          loadTimeData.getString('modulesFilesSentence')),
+      restoreCallback: () => FileProxy.getHandler().restoreModule(),
+    });
   }
 
   protected onInfoButtonClick_() {
@@ -104,6 +109,12 @@ export class DriveModuleElement extends DriveModuleElementBase {
 
   protected onInfoDialogClose_() {
     this.showInfoDialog_ = false;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-drive-module': DriveModuleElement;
   }
 }
 

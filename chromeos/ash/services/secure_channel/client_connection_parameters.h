@@ -8,11 +8,11 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 
 #include "base/observer_list.h"
 #include "base/unguessable_token.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -23,10 +23,12 @@ namespace ash::secure_channel {
 // to the associated communication channel.
 class ClientConnectionParameters {
  public:
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
-    virtual ~Observer() = default;
     virtual void OnConnectionRequestCanceled() = 0;
+
+   protected:
+    ~Observer() override = default;
   };
 
   explicit ClientConnectionParameters(const std::string& feature);
@@ -96,12 +98,12 @@ class ClientConnectionParameters {
   void NotifyConnectionRequestCanceled();
 
  private:
-  void VerifyDelegateWaitingForResponse(const std::string& function_name);
+  void VerifyDelegateWaitingForResponse(std::string_view function_name);
 
   std::string feature_;
   base::UnguessableToken id_;
 
-  base::ObserverList<Observer>::Unchecked observer_list_;
+  base::ObserverList<Observer> observer_list_;
 
   bool has_invoked_delegate_function_ = false;
 };

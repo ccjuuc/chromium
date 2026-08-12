@@ -17,6 +17,7 @@
 #import "components/prefs/pref_service.h"
 #import "components/reading_list/core/reading_list_entry.h"
 #import "components/send_tab_to_self/features.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/sync/base/user_selectable_type.h"
@@ -39,8 +40,6 @@
 #import "ios/chrome/browser/metrics/model/new_tab_page_uma.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
-#import "ios/chrome/browser/reading_list/model/offline_page_tab_helper.h"
-#import "ios/chrome/browser/reading_list/model/offline_url_utils.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_model_factory.h"
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_list_item.h"
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_list_item_factory.h"
@@ -52,14 +51,15 @@
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_table_view_controller.h"
 #import "ios/chrome/browser/reminder_notifications/coordinator/reminder_notifications_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_navigation_controller.h"
@@ -79,6 +79,7 @@
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/common/features.h"
 #import "ios/web/public/navigation/referrer.h"
+#import "ios/web/public/web_state.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "ui/strings/grit/ui_strings.h"
 #import "url/gurl.h"
@@ -88,11 +89,12 @@
 // to the view.
 @interface ReadingListCoordinator () <AccountSettingsPresenter,
                                       AuthenticationServiceObserving,
-                                      IdentityManagerObserverBridgeDelegate,
+                                      IdentityManagerObserving,
                                       ReadingListMenuProvider,
                                       ReadingListListItemFactoryDelegate,
                                       ReadingListListViewControllerAudience,
                                       ReadingListListViewControllerDelegate,
+                                      ReadingListMenuProvider,
                                       SigninPromoViewConsumer,
                                       SigninPromoViewMediatorDelegate,
                                       UIAdaptivePresentationControllerDelegate>
@@ -121,7 +123,7 @@
   // The mediator that updates the sign-in promo view.
   SigninPromoViewMediator* _signinPromoViewMediator;
   // Handler for sign-in commands.
-  id<ApplicationCommands> _applicationCommandsHandler;
+  id<SceneCommands> _sceneHandler;
   // Authentication Service to retrieve the user's signed-in state.
   raw_ptr<AuthenticationService> _authService;
   // Observer for auth service status changes.
@@ -162,8 +164,8 @@
                                                faviconLoader:faviconLoader
                                              listItemFactory:itemFactory];
   // Initialize services.
-  _applicationCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), ApplicationCommands);
+  _sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
   _authService = AuthenticationServiceFactory::GetForProfile(profile);
   _authServiceObserverBridge =
       std::make_unique<AuthenticationServiceObserverBridge>(_authService, self);
@@ -280,8 +282,8 @@
 }
 
 - (void)dealloc {
-  CHECK(!_authServiceObserverBridge, base::NotFatalUntil::M145);
-  CHECK(!self.mediator, base::NotFatalUntil::M145);
+  CHECK(!_authServiceObserverBridge);
+  CHECK(!self.mediator);
 }
 
 #pragma mark - ReadingListListViewControllerAudience
@@ -306,10 +308,7 @@
     [self.tableViewController reloadData];
     return;
   }
-  [self loadEntryURL:entry->URL()
-      loadOfflineVersion:NO
-                inNewTab:NO
-               incognito:NO];
+  [self loadEntryURL:entry->URL() inNewTab:NO incognito:NO];
 }
 
 - (void)readingListListViewController:(UIViewController*)viewController
@@ -322,22 +321,12 @@
     [self.tableViewController reloadData];
     return;
   }
-  [self loadEntryURL:entry->URL()
-      loadOfflineVersion:NO
-                inNewTab:YES
-               incognito:incognito];
-}
-
-- (void)readingListListViewController:(UIViewController*)viewController
-              openItemOfflineInNewTab:(id<ReadingListListItem>)item {
-  CHECK_EQ(self.tableViewController, viewController);
-  [self openItemOfflineInNewTab:item];
+  [self loadEntryURL:entry->URL() inNewTab:YES incognito:incognito];
 }
 
 - (void)readingListListViewController:(UIViewController*)viewController
           showSetTabReminderUIForItem:(id<ReadingListListItem>)item {
-  CHECK(
-      send_tab_to_self::IsSendTabIOSPushNotificationsEnabledWithTabReminders());
+  CHECK(send_tab_to_self::AreIOSTabRemindersEnabled());
   CHECK_EQ(self.tableViewController, viewController);
 
   scoped_refptr<const ReadingListEntry> entry =
@@ -377,13 +366,10 @@
 
 #pragma mark - URL Loading Helpers
 
-// Loads reading list URLs. If `offlineURL` is valid and `loadOfflineVersion` is
-// true, the item will be loaded offline; otherwise `entryURL` is loaded.
-// `newTab` and `incognito` can be used to optionally open the URL in a new tab
-// or in incognito.  The coordinator is also stopped after the load is
-// requested.
+// Loads reading list URLs. `newTab` and `incognito` can be used to optionally
+// open the URL in a new tab or in incognito. The coordinator is also stopped
+// after the load is requested.
 - (void)loadEntryURL:(const GURL&)entryURL
-    loadOfflineVersion:(BOOL)loadOfflineVersion
               inNewTab:(BOOL)newTab
              incognito:(BOOL)incognito {
   // Override incognito opening using enterprise policy.
@@ -392,17 +378,17 @@
   // Only open a new incognito tab when incognito is authenticated. Prompt for
   // auth otherwise.
   if (incognito) {
-    IncognitoReauthSceneAgent* reauthAgent = [IncognitoReauthSceneAgent
-        agentFromScene:self.browser->GetSceneState()];
-    __weak ReadingListCoordinator* weakSelf = self;
-    if (reauthAgent.authenticationRequired) {
+    SceneState* scene = self.browser->GetSceneState();
+    if (scene.incognitoState.authenticationRequired) {
+      IncognitoReauthSceneAgent* reauthAgent =
+          [IncognitoReauthSceneAgent agentFromScene:scene];
+      __weak ReadingListCoordinator* weakSelf = self;
       // Copy C++ args to call later from the block.
       GURL copyEntryURL = GURL(entryURL);
       [reauthAgent
           authenticateIncognitoContentWithCompletionBlock:^(BOOL success) {
             if (success) {
               [weakSelf loadEntryURL:copyEntryURL
-                  loadOfflineVersion:YES
                             inNewTab:newTab
                            incognito:incognito];
             }
@@ -423,17 +409,7 @@
   // Prepare the table for dismissal.
   [self.tableViewController willBeDismissed];
 
-  if (loadOfflineVersion) {
-    DCHECK(!newTab);
-    OfflinePageTabHelper* offlinePageTabHelper =
-        OfflinePageTabHelper::FromWebState(activeWebState);
-    if (offlinePageTabHelper &&
-        offlinePageTabHelper->CanHandleErrorLoadingURL(entryURL)) {
-      offlinePageTabHelper->LoadOfflinePage(entryURL);
-    }
-    // Use a referrer with a specific URL to signal that this entry should not
-    // be taken into account for the Most Visited tiles.
-  } else if (newTab) {
+  if (newTab) {
     UrlLoadParams params = UrlLoadParams::InNewTab(entryURL, entryURL);
     params.in_incognito = incognito;
     params.web_params.referrer = web::Referrer(GURL(kReadingListReferrerURL),
@@ -450,23 +426,6 @@
   [_delegate closeReadingList];
 }
 
-- (void)openItemOfflineInNewTab:(id<ReadingListListItem>)item {
-  scoped_refptr<const ReadingListEntry> entry =
-      [self.mediator entryFromItem:item];
-  if (!entry) {
-    return;
-  }
-
-  BOOL offTheRecord = self.isOffTheRecord;
-
-  if (entry->DistilledState() == ReadingListEntry::PROCESSED) {
-    const GURL entryURL = entry->URL();
-    [self loadEntryURL:entryURL
-        loadOfflineVersion:YES
-                  inNewTab:NO
-                 incognito:offTheRecord];
-  }
-}
 
 #pragma mark - ReadingListMenuProvider
 
@@ -502,7 +461,6 @@
       }
 
       [weakSelf loadEntryURL:item.entryURL
-          loadOfflineVersion:NO
                     inNewTab:YES
                    incognito:NO];
     }];
@@ -518,7 +476,6 @@
           }
 
           [weakSelf loadEntryURL:item.entryURL
-              loadOfflineVersion:NO
                         inNewTab:YES
                        incognito:YES];
         }];
@@ -527,14 +484,7 @@
     }
     [menuElements addObject:openInNewIncognitoTab];
 
-    scoped_refptr<const ReadingListEntry> entry =
-        [self.mediator entryFromItem:item];
-    if (entry && entry->DistilledState() == ReadingListEntry::PROCESSED) {
-      [menuElements addObject:[actionFactory
-                                  actionToOpenOfflineVersionInNewTabWithBlock:^{
-                                    [weakSelf openItemOfflineInNewTab:item];
-                                  }]];
-    }
+
 
     if (base::ios::IsMultipleScenesSupported()) {
       [menuElements
@@ -620,11 +570,8 @@
 #pragma mark - SigninPromoViewConsumer
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)configurator
-                             identityChanged:(BOOL)identityChanged {
-  [self.tableViewController
-      configureSigninPromoWithConfigurator:configurator
-                           identityChanged:identityChanged];
+    (SigninPromoViewConfigurator*)configurator {
+  [self.tableViewController configureSigninPromoWithConfigurator:configurator];
 }
 
 - (void)promoProgressStateDidChange {
@@ -638,10 +585,10 @@
 
 // TODO(crbug.com/40898970): This delegate's implementation will be moved to
 // SigninPromoViewMediator.
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when a user changes the syncing state.
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kSet:
@@ -666,7 +613,7 @@
 #pragma mark - Private
 
 - (void)dismissReadingList {
-  CHECK([self canDismiss], base::NotFatalUntil::M145);
+  CHECK([self canDismiss]);
   [self.tableViewController willBeDismissed];
   [_delegate closeReadingList];
 }
@@ -742,7 +689,7 @@
   if (shouldShowSignInPromo) {
     [_signinPromoViewMediator signinPromoViewIsVisible];
   } else {
-    if (!_signinPromoViewMediator.invalidClosedOrNeverVisible) {
+    if (_signinPromoViewMediator.isUsable) {
       [_signinPromoViewMediator signinPromoViewIsHidden];
     }
   }
@@ -757,11 +704,12 @@
       [[SharingParams alloc] initWithURL:URL
                                    title:title
                                 scenario:SharingScenario::ReadingListEntry];
+  [self.sharingCoordinator stop];
   self.sharingCoordinator = [[SharingCoordinator alloc]
       initWithBaseViewController:self.tableViewController
                          browser:self.browser
                           params:params
-                      originView:view];
+                      sourceItem:view];
   [self.sharingCoordinator start];
 }
 

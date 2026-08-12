@@ -12,9 +12,12 @@
 #include "base/message_loop/message_pump_for_io.h"
 #include "base/message_loop/message_pump_for_ui.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/message_loop/message_pump_wakeup_counter.h"
+#include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
@@ -198,6 +201,20 @@ class MessagePumpTest : public ::testing::TestWithParam<MessagePumpType> {
 };
 
 }  // namespace
+
+TEST(MessagePumpTest, NextWorkInfoRemainingDelay) {
+  MessagePump::Delegate::NextWorkInfo info;
+  info.recent_now = TimeTicks::Now();
+
+  info.delayed_run_time = TimeTicks::Max();
+  EXPECT_EQ(info.remaining_delay(), TimeDelta::Max());
+
+  info.delayed_run_time = info.recent_now + Milliseconds(10);
+  EXPECT_EQ(info.remaining_delay(), Milliseconds(10));
+
+  info.recent_now -= Milliseconds(5);
+  EXPECT_EQ(info.remaining_delay(), Milliseconds(15));
+}
 
 TEST_P(MessagePumpTest, QuitStopsWork) {
   testing::InSequence sequence;
@@ -463,38 +480,239 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 // On iOS, MessagePumpDefault is not used.
 #if !BUILDFLAG(IS_IOS)
-TEST(MessagePumpDefaultTest, BusyLoop) {
-  MessagePumpDefault message_pump;
 
-  EXPECT_FALSE(message_pump.ShouldBusyLoop());
+class MessagePumpDefaultTest : public ::testing::Test {
+ protected:
+  void VerifyBusyWaitHistogramExpectations(bool task_arrived) {
+    histogram_tester_.ExpectTotalCount(
+        "Scheduling.MessagePumpDefault.BusyLoop.Duration.TimedOut",
+        task_arrived ? 0 : 1);
+    histogram_tester_.ExpectTotalCount(
+        "Scheduling.MessagePumpDefault.BusyLoop.Duration.TaskArrived",
+        task_arrived ? 1 : 0);
+    histogram_tester_.ExpectBucketCount(
+        "Scheduling.MessagePumpDefault.BusyLoop.TaskArrived", task_arrived, 1);
+    histogram_tester_.ExpectTotalCount(
+        "Scheduling.MessagePumpDefault.BusyLoop.TargetDuration", 1);
+  }
+
+  base::MetricsSubSampler::ScopedAlwaysSampleForTesting always_sample_;
+  base::HistogramTester histogram_tester_;
+  MessagePumpDefault message_pump_;
+};
+
+TEST_F(MessagePumpDefaultTest, BusyWaitOnEventRespectsNextWorkDelay) {
+  // Very large, to make the test less flaky.
+  TimeDelta max_busy_loop_time = Milliseconds(100);
+  message_pump_.SetBusyLoop(max_busy_loop_time);
+
+  TimeTicks before = TimeTicks::Now();
+  // `next_work_delay` is smaller than `max_busy_loop_time`, so we expect to
+  // busy loop for next_work_delay and not `max_busy_loop_time`.
+  TimeDelta next_work_delay = Milliseconds(2);
+
+  bool signaled = message_pump_.BusyWaitOnEvent(before, next_work_delay);
+  ASSERT_FALSE(signaled);
+  TimeDelta busy_loop_duration = TimeTicks::Now() - before;
+  EXPECT_LT(busy_loop_duration, max_busy_loop_time);
+  EXPECT_GE(busy_loop_duration, next_work_delay);
+
+  VerifyBusyWaitHistogramExpectations(/*task_arrived=*/false);
+}
+
+TEST_F(MessagePumpDefaultTest, BusyWaitOnEventDoesNotLoopForMoreThanRequired) {
+  TimeDelta max_busy_loop_time = Milliseconds(2);
+  message_pump_.SetBusyLoop(max_busy_loop_time);
+
+  TimeTicks before = TimeTicks::Now();
+  TimeDelta next_work_delay = Milliseconds(100);
+
+  bool signaled = message_pump_.BusyWaitOnEvent(before, next_work_delay);
+  ASSERT_FALSE(signaled);
+  TimeDelta busy_loop_duration = TimeTicks::Now() - before;
+  EXPECT_GE(busy_loop_duration, max_busy_loop_time);
+  EXPECT_LT(busy_loop_duration, next_work_delay);
+
+  VerifyBusyWaitHistogramExpectations(/*task_arrived=*/false);
+}
+
+TEST_F(MessagePumpDefaultTest, BusyWaitOnEventStopsIfSignaled) {
+  TimeDelta max_busy_loop_time = Milliseconds(50);
+  message_pump_.SetBusyLoop(max_busy_loop_time);
+
+  TimeTicks before = TimeTicks::Now();
+  TimeDelta next_work_delay = Milliseconds(100);
+
+  message_pump_.ScheduleWork();
+  bool signaled = message_pump_.BusyWaitOnEvent(before, next_work_delay);
+  EXPECT_TRUE(signaled);
+  // Could expect it to be smaller, since it should return immediately, but this
+  // is to avoid flakiness.
+  EXPECT_LT(TimeTicks::Now() - before, max_busy_loop_time);
+
+  VerifyBusyWaitHistogramExpectations(/*task_arrived=*/true);
+}
+
+TEST_F(MessagePumpDefaultTest, ShouldBusyLoopHeuristic) {
+  EXPECT_FALSE(message_pump_.ShouldBusyLoop());
 
   base::TimeDelta busy_loop_for = base::Milliseconds(1);
-  message_pump.SetBusyLoop(busy_loop_for);
-  EXPECT_TRUE(message_pump.ShouldBusyLoop());
+  message_pump_.SetBusyLoop(busy_loop_for);
+  EXPECT_TRUE(message_pump_.ShouldBusyLoop());
 
   // Many long waits, no more busy looping.
   for (int i = 0; i < 10; i++) {
-    message_pump.RecordWaitTime(busy_loop_for * 10);
+    message_pump_.RecordWaitTime(busy_loop_for * 10);
   }
-  EXPECT_FALSE(message_pump.ShouldBusyLoop());
+  EXPECT_FALSE(message_pump_.ShouldBusyLoop());
 
   // One short wait, busy loop.
-  message_pump.RecordWaitTime(busy_loop_for / 1.5);
-  EXPECT_TRUE(message_pump.ShouldBusyLoop());
+  message_pump_.RecordWaitTime(busy_loop_for / 1.5);
+  EXPECT_TRUE(message_pump_.ShouldBusyLoop());
   // But as long as the moving average is high enough, don't loop.
-  message_pump.RecordWaitTime(busy_loop_for * 1.5);
-  EXPECT_FALSE(message_pump.ShouldBusyLoop());
+  message_pump_.RecordWaitTime(busy_loop_for * 1.5);
+  EXPECT_FALSE(message_pump_.ShouldBusyLoop());
 
   // Eventually, the moving average gets low enough
   for (int i = 0; i < 100; i++) {
-    message_pump.RecordWaitTime(busy_loop_for / 10);
+    message_pump_.RecordWaitTime(busy_loop_for / 10);
   }
-  EXPECT_TRUE(message_pump.ShouldBusyLoop());
+  EXPECT_TRUE(message_pump_.ShouldBusyLoop());
 
   // Even if the last wait time was higher than the limit.
-  message_pump.RecordWaitTime(busy_loop_for * 1.5);
-  EXPECT_TRUE(message_pump.ShouldBusyLoop());
+  message_pump_.RecordWaitTime(busy_loop_for * 1.5);
+  EXPECT_TRUE(message_pump_.ShouldBusyLoop());
+}
+
+TEST_F(MessagePumpDefaultTest, BusyLoopPredictionAccuracyHistogram) {
+  constexpr base::TimeDelta kBusyLoopMaxDuration = base::Milliseconds(1);
+  constexpr std::string_view kHistogramName =
+      "Scheduling.MessagePumpDefault.BusyLoop.PredictionAccuracy";
+
+  testing::StrictMock<MockMessagePumpDelegate> delegate(
+      MessagePumpType::DEFAULT);
+  testing::InSequence sequence;
+
+  auto run_message_pump = [&](bool task_arrived) {
+    EXPECT_CALL(delegate, DoWork).WillOnce([&] {
+      if (task_arrived) {
+        message_pump_.ScheduleWork();
+      }
+      // Schedule a delayed task to arrive after the busy loop max duration.
+      auto now = base::TimeTicks::Now();
+      return MessagePump::Delegate::NextWorkInfo{
+          .delayed_run_time = now + kBusyLoopMaxDuration * 10,
+          .recent_now = now};
+    });
+    EXPECT_CALL(delegate, DoIdleWork);
+    EXPECT_CALL(delegate, DoWork).WillOnce([&] {
+      message_pump_.Quit();
+      return MessagePump::Delegate::NextWorkInfo{base::TimeTicks::Max()};
+    });
+    message_pump_.Run(&delegate);
+  };
+
+  // Update the moving average to be above or below the limit.
+  auto modify_moving_average = [&](bool lower) {
+    for (int i = 0; i < 100; i++) {
+      message_pump_.RecordWaitTime(lower ? kBusyLoopMaxDuration / 2
+                                         : kBusyLoopMaxDuration * 2);
+    }
+  };
+
+  message_pump_.SetBusyLoop(kBusyLoopMaxDuration);
+
+  // 1. True Positive: Heuristic says busy loop and a task arrived within the
+  //    max busy loop duration.
+  modify_moving_average(/*lower=*/true);
+  ASSERT_TRUE(message_pump_.ShouldBusyLoop());
+  run_message_pump(/*task_arrived=*/true);
+  histogram_tester_.ExpectTotalCount(kHistogramName, 1);
+  histogram_tester_.ExpectBucketCount(kHistogramName, 1 /*kTruePositive*/, 1);
+
+  // 2. False Positive: Heuristic says busy loop but no task arrived within the
+  //    max busy loop duration.
+  modify_moving_average(/*lower=*/true);
+  ASSERT_TRUE(message_pump_.ShouldBusyLoop());
+  run_message_pump(/*task_arrived=*/false);
+  histogram_tester_.ExpectTotalCount(kHistogramName, 2);
+  histogram_tester_.ExpectBucketCount(kHistogramName, 0 /*kFalsePositive*/, 1);
+
+  // 3. True Negative: Heuristic says don't busy loop and no task arrived within
+  //    the max busy loop duration.
+  modify_moving_average(/*lower=*/false);
+  ASSERT_FALSE(message_pump_.ShouldBusyLoop());
+  run_message_pump(/*task_arrived=*/false);
+  histogram_tester_.ExpectTotalCount(kHistogramName, 3);
+  histogram_tester_.ExpectBucketCount(kHistogramName, 3 /*kTrueNegative*/, 1);
+
+  // 4. False Negative: Heuristic says don't busy loop but a task arrived within
+  //    the max busy loop duration.
+  modify_moving_average(/*lower=*/false);
+  ASSERT_FALSE(message_pump_.ShouldBusyLoop());
+  run_message_pump(/*task_arrived=*/true);
+  histogram_tester_.ExpectTotalCount(kHistogramName, 4);
+  histogram_tester_.ExpectBucketCount(kHistogramName, 2 /*kFalseNegative*/, 1);
 }
 #endif  // !BUILDFLAG(IS_IOS)
+
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_APPLE)
+class MessagePumpWakeupCounterTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    MessagePumpWakeupCounter::GetForCurrentThread().ResetForTesting();
+  }
+};
+
+TEST_F(MessagePumpWakeupCounterTest, IoPumpRecordsWakeup) {
+  SingleThreadTaskExecutor executor(MessagePumpType::IO);
+  MessagePumpWakeupCounter::InitializeForCurrentThread("TestIO");
+  HistogramTester histogram_tester;
+
+  base::RunLoop run_loop;
+  base::Thread background_thread("BackgroundThread");
+  background_thread.Start();
+
+  background_thread.task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](scoped_refptr<SingleThreadTaskRunner> io_runner,
+             base::OnceClosure quit_closure) {
+            base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
+            io_runner->PostTask(FROM_HERE, std::move(quit_closure));
+          },
+          executor.task_runner(), run_loop.QuitClosure()));
+  run_loop.Run();
+
+  histogram_tester.ExpectBucketCount(
+      "Scheduling.MessagePump.WakeupCount.TestIO", 1, 1);
+}
+
+TEST_F(MessagePumpWakeupCounterTest, BusyLoopSkipsRecordingSample) {
+  MessagePumpWakeupCounter::InitializeForCurrentThread("BusyLoopThread");
+  MessagePumpDefault pump;
+  pump.SetBusyLoop(Milliseconds(10));
+  pump.SetShouldBusyLoopForTesting(true);
+  ASSERT_TRUE(pump.ShouldBusyLoop());
+  testing::NiceMock<MockMessagePumpDelegate> delegate(MessagePumpType::DEFAULT);
+  EXPECT_CALL(delegate, DoWork)
+      .WillOnce([&] {
+        pump.ScheduleWork();
+        return MessagePump::Delegate::NextWorkInfo{
+            .delayed_run_time =
+                TimeTicks::Now() + TestTimeouts::tiny_timeout()};
+      })
+      .WillOnce([&] {
+        pump.Quit();
+        return MessagePump::Delegate::NextWorkInfo{TimeTicks::Max()};
+      });
+  HistogramTester histogram_tester;
+
+  pump.Run(&delegate);
+
+  histogram_tester.ExpectBucketCount(
+      "Scheduling.MessagePump.WakeupCount.BusyLoopThread", 1, 0);
+}
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_FUCHSIA) && !BUILDFLAG(IS_APPLE)
 
 }  // namespace base

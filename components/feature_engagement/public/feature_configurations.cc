@@ -10,14 +10,12 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/group_constants.h"
+#include "components/segmentation_platform/public/features.h"
 
 #if BUILDFLAG(IS_IOS)
 #include "base/metrics/field_trial_params.h"
 #include "components/feature_engagement/public/ios_promo_feature_configuration.h"
 #endif  // BUILDFLAG(IS_IOS)
-#if BUILDFLAG(IS_CHROMEOS)
-#include "components/feature_engagement/public/scalable_iph_feature_configurations.h"
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -103,24 +101,6 @@ std::optional<FeatureConfig> CreateNewUserGestureInProductHelpConfig(
 
 std::optional<FeatureConfig> GetClientSideFeatureConfig(
     const base::Feature* feature) {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-
-  // The IPH bubble for link capturing has a trigger set to ANY so that it
-  // always shows up. The per app specific guardrails are independently stored
-  // under the web_app_prefs.
-  if (kIPHDesktopPWAsLinkCapturingLaunch.name == feature->name) {
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(ANY, 0);
-    config.trigger = EventConfig("desktop_pwa_launch_link_capturing",
-                                 Comparator(ANY, 0), 0, 0);
-    config.used = EventConfig("desktop_pwa_launch_link_capturing_used",
-                              Comparator(ANY, 0), 0, 0);
-    return config;
-  }
-
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
   if (kIPHPasswordsManagementBubbleAfterSaveFeature.name == feature->name) {
@@ -367,6 +347,42 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
+  if (kIPHSmartTabSharingTryItFeature.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    // Show the promo max 3 times total (per year), once per week.
+    config.trigger = EventConfig("smart_tab_sharing_try_it_trigger",
+                                 Comparator(EQUAL, 0), 7, 7);
+    config.event_configs.insert(EventConfig("smart_tab_sharing_try_it_trigger",
+                                            Comparator(LESS_THAN, 3), 360,
+                                            360));
+    config.used = EventConfig("smart_tab_sharing_try_it_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHSmartTabSharingDefaultOnFeature.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    // Show the promo max 3 times total (per year), once per week.
+    // Repeated activation of smart tab sharing is also required.
+    config.trigger = EventConfig("smart_tab_sharing_default_on_trigger",
+                                 Comparator(EQUAL, 0), 7, 7);
+    config.event_configs.insert(
+        EventConfig("smart_tab_sharing_default_on_trigger",
+                    Comparator(LESS_THAN, 3), 360, 360));
+    config.event_configs.insert(
+        EventConfig("smart_tab_sharing_activated",
+                    Comparator(GREATER_THAN_OR_EQUAL, 3), 360, 360));
+    config.used = EventConfig("smart_tab_sharing_default_on_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   if (kIPHExtensionsMenuFeature.name == feature->name) {
     FeatureConfig config;
@@ -398,7 +414,30 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
                               Comparator(EQUAL, 0), 360, 360);
     return config;
   }
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // This is enabled on both Desktop and Desktop Android. However, this feature
+  // is auto-configured dynamically by the Feature Engagement service on Desktop
+  // (see
+  // components/feature_engagement/browser/user_data/feature_engagement_tracker.h).
+  // Manual configuration is explicitly bypassed on Desktop to prevent test
+  // failures in
+  // BrowserUserEducationServiceTest.PreventNewHardCodedConfigurations. This
+  // block is scoped strictly to Android where auto-configuration is not
+  // supported by the Feature Engagement tracker.
+  if (kIPHExtensionsPinnedByDefaultFeature.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger = EventConfig("extensions_pinned_by_default_trigger",
+                                 Comparator(LESS_THAN, 1), 360, 360);
+    config.used = EventConfig("extensions_pinned_by_default_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+#endif  // BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   if (kIPHCompanionSidePanelFeature.name == feature->name) {
     FeatureConfig config;
@@ -587,20 +626,6 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
-  if (kIPHTabOrganizationSuccessFeature.name == feature->name) {
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(ANY, 0);
-    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
-    // Show the IPH once per year.
-    config.trigger = EventConfig("iph_tab_organization_success_trigger",
-                                 Comparator(EQUAL, 0), 360, 360);
-    config.used =
-        EventConfig("tab_group_editor_shown", Comparator(EQUAL, 0), 360, 360);
-    return config;
-  }
-
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
   // BUILDFLAG(IS_CHROMEOS)
 
@@ -713,6 +738,148 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
+  // CONFIGURATION_ANDROID_START
+  if (kIPHAndroidBottomBarAim.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+
+    // IPH is always available at start-up.
+    config.availability = Comparator(ANY, 0);
+
+    // IPH only shows if no other IPH has shown this session.
+    config.session_rate = Comparator(EQUAL, 0);
+
+    // IPH only shows once per 360 days.
+    config.trigger = EventConfig("android_bottom_bar_aim_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+
+    // IPH will not show if the user has interacted with the AI Mode button.
+    config.used = EventConfig("android_bottom_bar_aim_used",
+                              Comparator(EQUAL, 0), 360, 360);
+
+    // Require that the aim promo dialog IPH has been shown at least once.
+    config.event_configs.insert(
+        EventConfig("android_bottom_bar_aim_promo_dialog_trigger",
+                    Comparator(GREATER_THAN_OR_EQUAL, 1), 360, 360));
+    return config;
+  }
+
+  if (kIPHAndroidBottomBarAimPromoDialog.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+
+    // IPH is always available at start-up.
+    config.availability = Comparator(ANY, 0);
+
+    // IPH only shows if no other IPH has shown this session.
+    config.session_rate = Comparator(EQUAL, 0);
+    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
+
+    // IPH only shows once per 360 days.
+    config.trigger = EventConfig("android_bottom_bar_aim_promo_dialog_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+
+    // IPH will not show if the user has interacted with the AIM Promo Dialog.
+    config.used = EventConfig("android_bottom_bar_aim_promo_dialog_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHAndroidBottomBarGlic.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+
+    // IPH is always available at start-up.
+    config.availability = Comparator(ANY, 0);
+
+    // IPH only shows if no other IPH has shown this session.
+    config.session_rate = Comparator(EQUAL, 0);
+
+    // IPH only shows once per 360 days.
+    config.trigger = EventConfig("android_bottom_bar_glic_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+
+    // IPH will not show if the user has interacted with the GLIC button.
+    config.used = EventConfig("android_bottom_bar_glic_used",
+                              Comparator(EQUAL, 0), 360, 360);
+
+    // Require that the promo dialog IPH has been shown at least once.
+    config.event_configs.insert(
+        EventConfig("android_bottom_bar_promo_dialog_trigger",
+                    Comparator(GREATER_THAN_OR_EQUAL, 1), 360, 360));
+    return config;
+  }
+
+  if (kIPHAndroidBottomBarNewTab.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+
+    // IPH is always available at start-up.
+    config.availability = Comparator(ANY, 0);
+
+    // IPH can show even if other IPHs have shown this session.
+    config.session_rate = Comparator(ANY, 0);
+
+    // IPH only shows once per 360 days.
+    config.trigger = EventConfig("android_bottom_bar_new_tab_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+
+    // IPH will not show if the user has interacted with the New Tab button.
+    config.used = EventConfig("android_bottom_bar_new_tab_used",
+                              Comparator(EQUAL, 0), 360, 360);
+
+    return config;
+  }
+
+  if (kIPHAndroidBottomBarPromoDialog.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
+    // IPH only shows once per 360 days.
+    config.trigger = EventConfig("android_bottom_bar_promo_dialog_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+
+    // IPH will not show if the user has interacted with the Promo Dialog.
+    config.used = EventConfig("android_bottom_bar_promo_dialog_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHAimActivationHint.name == feature->name) {
+    // A config that changes the omnibox hint text to activate the AI Mode chip
+    // on Android Desktop via keystrokes.
+    // * Show at most 3 times per day.
+    // * Show at most 15 times total.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    config.trigger = EventConfig("aim_activation_hint_trigger",
+                                 Comparator(LESS_THAN, 3), 1, 360);
+    config.event_configs.insert(EventConfig(
+        "aim_activation_hint_trigger", Comparator(LESS_THAN, 15), 360, 360));
+    return config;
+  }
+
+  if (kIPHFuseboxAttachmentFeature.name == feature->name) {
+    // A config that allows measurement for user engagement on the fusebox
+    // attachment button by checking:
+    // * Interacted with attachment popup at least 1 time in 90 days.
+
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    config.trigger =
+        EventConfig("fusebox_attachment_popup_shown", Comparator(ANY, 0), 0, 0);
+    config.used = EventConfig("fusebox_attachment_popup_interacted_with",
+                              Comparator(ANY, 0), 0, 0);
+    config.event_configs.insert(EventConfig(
+        "fusebox_attachment_popup_used", Comparator(GREATER_THAN, 0), 28, 360));
+    return config;
+  }
 
   if (kIPHAccountSettingsHistorySync.name == feature->name) {
     // A config that allows the history sync opt-in toggle IPH to be shown
@@ -728,6 +895,49 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
                     k10YearsInDays, k10YearsInDays);
     config.used = EventConfig("instance_switcher_used", Comparator(EQUAL, 0),
                               k10YearsInDays, k10YearsInDays);
+    return config;
+  }
+
+  if (kIPHExtensionsManageToolbarFeature.name == feature->name) {
+    // Allows an IPH to be shown after a user installs an extension to inform
+    // them where it can be managed.
+    // Constraints:
+    // - Show at most once per year (360 days).
+    // - Only show if the user hasn't already clicked the extensions menu
+    //   button (puzzle piece) on their own.
+    // - session_rate is set to EQUAL, 0 to ensure we don't show this if another
+    //   IPH was already shown in the same session.
+    std::optional<FeatureConfig> config = FeatureConfig();
+    config->valid = true;
+    config->availability = Comparator(ANY, 0);
+    config->session_rate = Comparator(EQUAL, 0);
+    config->trigger = EventConfig("manage_extensions_toolbar_iph_triggered",
+                                  Comparator(LESS_THAN, 1), 360, 360);
+    // Only show if the user hasn't already clicked the extension menu button.
+    config->used = EventConfig("extensions_menu_button_clicked",
+                               Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHExtensionsManageAppMenuFeature.name == feature->name) {
+    // Allows an IPH to be shown after a user unpins the extensions menu to
+    // inform them where it can be managed.
+    // Constraints:
+    // - Show at most once per year (360 days).
+    // - Only show if the user hasn't already clicked open the Chrome app menu
+    //   button on their own.
+    // - session_rate is set to EQUAL, 0 to ensure we don't show this if another
+    //   IPH was already shown in the same session.
+    std::optional<FeatureConfig> config = FeatureConfig();
+    config->valid = true;
+    config->availability = Comparator(ANY, 0);
+    config->session_rate = Comparator(EQUAL, 0);
+    config->trigger = EventConfig("manage_extensions_app_menu_iph_triggered",
+                                  Comparator(LESS_THAN, 1), 360, 360);
+    // Only show if the user hasn't already clicked the "Extensions" section in
+    // the Chrome app menu.
+    config->used = EventConfig("extensions_row_in_app_menu_clicked",
+                               Comparator(EQUAL, 0), 360, 360);
     return config;
   }
 
@@ -747,6 +957,47 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
         EventConfig("android_tab_declutter_iph_triggered",
                     Comparator(LESS_THAN, 3), 360, 360));
     config.used = EventConfig("android_tab_declutter_button_clicked",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHAndroidVerticalTabsPromoFeature.name == feature->name) {
+    // A config that allows the Vertical Tabs promo IPH on Android tab strip:
+    // * Only once per week.
+    // * Up to 3 times per year.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger = EventConfig("android_vertical_tabs_promo_iph_triggered",
+                                 Comparator(EQUAL, 0), 7, 360);
+    config.event_configs.insert(
+        EventConfig("android_vertical_tabs_promo_iph_triggered",
+                    Comparator(LESS_THAN, 3), 360, 360));
+    config.used = EventConfig("android_vertical_tabs_promo_used",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHIncognitoIndicatorCloseAllWindows.name == feature->name) {
+    // Allows an IPH to inform users they can close all Incognito windows:
+    // - Only once per week.
+    // - Up to 3 times per year.
+    // - Only as long as the user has not manually clicked the Incognito
+    // indicator in the last year.
+    // - session_rate is set to EQUAL, 0 to ensure we don't show this if another
+    //   IPH was already shown in the same session.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger =
+        EventConfig("incognito_indicator_close_all_windows_trigger",
+                    Comparator(EQUAL, 0), 7, 360);
+    config.event_configs.insert(
+        EventConfig("incognito_indicator_close_all_windows_trigger",
+                    Comparator(LESS_THAN, 3), 360, 360));
+    config.used = EventConfig("incognito_indicator_close_all_windows_used",
                               Comparator(EQUAL, 0), 360, 360);
     return config;
   }
@@ -840,6 +1091,19 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
+  if (kIPHAppRatingPromptFeature.name == feature->name) {
+    // A config that allows the App Rating Prompt IPH to be shown only if
+    // no other startup promos have been shown in the last 3 days.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    // Ensure no other startup promos were shown in the last 72 hours (3 days).
+    config.trigger = EventConfig("android_startup_promo_shown",
+                                 Comparator(EQUAL, 0), 3, 360);
+    return config;
+  }
+
   if (kIPHAppSpecificHistory.name == feature->name) {
     // A config that allows the AppSpecificHistory IPH to be shown once
     // a week, up to 3 times, unless the button is clicked at least once.
@@ -852,6 +1116,18 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     config.event_configs.insert(EventConfig("app_specific_history_iph_trigger",
                                             Comparator(LESS_THAN, 1), 7, 360));
     config.used = EventConfig("history_toolbar_search_menu_item_clicked",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+  if (kIPHSiteControlsFeature.name == feature->name) {
+    // A config that allows the site controls IPH to be shown at most once.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger = EventConfig("site_controls_iph_trigger",
+                                 Comparator(LESS_THAN, 1), 360, 360);
+    config.used = EventConfig("site_controls_menu_item_clicked",
                               Comparator(EQUAL, 0), 360, 360);
     return config;
   }
@@ -1038,6 +1314,49 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
                     Comparator(LESS_THAN, 3), 90, 360));
     return config;
   }
+
+  if (kIPHAdaptiveButtonPinGlicToolbarButtonFeature.name == feature->name) {
+    // A config that defines when the Glic adaptive toolbar button should be
+    // auto-pinned:
+    // * If no other adaptive toolbar button has been used in the last 90 days.
+    // * If the Glic button itself hasn't been used.
+    // * Only once in its lifetime.
+    // * Other IPHs do not impact triggering.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
+    config.blocked_by.type = BlockedBy::Type::NONE;
+    config.blocking.type = Blocking::Type::NONE;
+    config.trigger =
+        EventConfig("adaptive_toolbar_glic_iph_trigger", Comparator(EQUAL, 0),
+                    k10YearsInDays, k10YearsInDays);
+    config.used = EventConfig("adaptive_toolbar_customization_glic_clicked",
+                              Comparator(EQUAL, 0), 90, 360);
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_new_tab_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_open_in_browser_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_share_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_voice_search_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_translate_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_read_aloud_clicked",
+                    Comparator(EQUAL, 0), 90, 360));
+    config.event_configs.insert(
+        EventConfig("adaptive_toolbar_customization_add_to_bookmarks_opened",
+                    Comparator(EQUAL, 0), 90, 360));
+    return config;
+  }
   if (kIPHMenuAddToGroup.name == feature->name) {
     // Allows an IPH for the main app menu 'Add to Group' entry:
     // * Only once per year.
@@ -1054,33 +1373,48 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
   if (kIPHMostVisitedTilesCustomizationPinFeature.name == feature->name) {
+    // Allows an IPH for the MVT customization "Pin this shortcut" feature.
+    // * Only once in its lifetime.
+    // * (Per trigger logic) Only if the user has no Custom Tiles.
     FeatureConfig config;
     config.valid = true;
     config.availability = Comparator(ANY, 0);
     config.session_rate = Comparator(EQUAL, 0);
     config.trigger =
         EventConfig("most_visited_tiles_customization_pin_triggered",
-                    Comparator(LESS_THAN, 1), 1, 360);
-    config.used = EventConfig("most_visited_tiles_customization_pin_clicked",
-                              Comparator(EQUAL, 0), 90, 360);
+                    Comparator(EQUAL, 0), k10YearsInDays, k10YearsInDays);
+    config.used =
+        EventConfig("most_visited_tiles_customization_pin_clicked",
+                    Comparator(EQUAL, 0), k10YearsInDays, k10YearsInDays);
     return config;
   }
 
   if (kIPHNewTabPageThemeCustomizationFeature.name == feature->name) {
     // Allows an IPH for the theme customization entry point.
-    // * Only once in its lifetime.
-    // * Only as long as the user hasn't opened the NTP customization bottom
-    // sheet.
+    // Once per kNewTabPageCustomizationV2IphDisplayIntervalDays days.
+    // kNewTabPageCustomizationV2IphMaxImpression times as maximum for lifetime.
     FeatureConfig config;
     config.valid = true;
     config.availability = Comparator(ANY, 0);
     config.session_rate = Comparator(EQUAL, 0);
-    config.trigger =
-        EventConfig("ntp_theme_customization_iph_triggered",
-                    Comparator(EQUAL, 0), k10YearsInDays, k10YearsInDays);
+    // TODO(https://crbug.com/423579377): Clean up these feature params and use
+    // the default values after the feature NewTabPageCustomizationV2 is fully
+    // launched.
+    config.trigger = EventConfig(
+        "ntp_theme_customization_iph_triggered",
+        Comparator(LESS_THAN,
+                   segmentation_platform::features::
+                       kNewTabPageCustomizationV2IphMaxImpression.Get()),
+        k10YearsInDays, k10YearsInDays);
     config.used =
         EventConfig("ntp_theme_customization_iph_used", Comparator(EQUAL, 0),
                     k10YearsInDays, k10YearsInDays);
+
+    config.event_configs.insert(EventConfig(
+        "ntp_theme_customization_iph_triggered", Comparator(LESS_THAN, 1),
+        segmentation_platform::features::
+            kNewTabPageCustomizationV2IphDisplayIntervalDays.Get(),
+        k10YearsInDays));
     return config;
   }
   if (kIPHPageSummaryWebMenuFeature.name == feature->name) {
@@ -1119,6 +1453,22 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
   // A generic feature that always returns true.
   if (kIPHGenericAlwaysTriggerHelpUiFeature.name == feature->name) {
     return CreateAlwaysTriggerConfig(feature);
+  }
+
+  if (kIPHGlicPromoAndroidFeature.name == feature->name) {
+    // A config that allows the GLIC promo IPH to be shown.
+    // * Only once in its lifetime.
+    // * Only as long as the user hasn't opened the glic feature on Android.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger =
+        EventConfig("glic_promo_android_iph_trigger", Comparator(LESS_THAN, 1),
+                    k10YearsInDays, k10YearsInDays);
+    config.used = EventConfig("glic_android_used", Comparator(EQUAL, 0),
+                              k10YearsInDays, k10YearsInDays);
+    return config;
   }
 
   if (kIPHLowUserEngagementDetectorFeature.name == feature->name) {
@@ -1162,28 +1512,6 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     // because the trigger event is already reported the first time the feed is
     // being used, which corresponds to a used event.
     config.used = EventConfig("iph_feed_header_menu_used", Comparator(EQUAL, 0),
-                              k10YearsInDays, k10YearsInDays);
-    return config;
-  }
-
-  if (kIPHWebFeedAwarenessFeature.name == feature->name) {
-    // A config that allows the web feed IPH to be shown up to three times
-    // total, no more than once per session.
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-
-    config.session_rate = Comparator(LESS_THAN, 1);
-    SessionRateImpact session_rate_impact;
-    session_rate_impact.type = SessionRateImpact::Type::ALL;
-    config.session_rate_impact = session_rate_impact;
-
-    // Keep the IPH trigger event for 10 years, which is a relatively long time
-    // period that we could consider as being "forever".
-    config.trigger =
-        EventConfig("iph_web_feed_awareness_triggered",
-                    Comparator(LESS_THAN, 3), k10YearsInDays, k10YearsInDays);
-    config.used = EventConfig("web_feed_awareness_used", Comparator(ANY, 0),
                               k10YearsInDays, k10YearsInDays);
     return config;
   }
@@ -1333,49 +1661,6 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
                               Comparator(EQUAL, 0), 14, 90);
     config.snooze_params.snooze_interval = 7;
     config.snooze_params.max_limit = 3;
-    return config;
-  }
-  if (kIPHWebFeedFollowFeature.name == feature->name) {
-    // A config that allows the WebFeed follow intro to be shown up to 5x per
-    // week.
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(ANY, 0);
-    config.trigger = EventConfig("web_feed_follow_intro_trigger",
-                                 Comparator(LESS_THAN, 5), 7, 360);
-    config.used = EventConfig("web_feed_follow_intro_clicked",
-                              Comparator(ANY, 0), 360, 360);
-    return config;
-  }
-
-  if (kIPHWebFeedPostFollowDialogFeature.name == feature->name) {
-    // A config that allows one of the WebFeed post follow dialogs to be
-    // presented 3 times.
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(ANY, 0);
-    config.trigger = EventConfig("web_feed_post_follow_dialog_trigger",
-                                 Comparator(LESS_THAN, 3), 360, 360);
-    config.used = EventConfig("web_feed_post_follow_dialog_shown",
-                              Comparator(ANY, 0), 360, 360);
-    return config;
-  }
-
-  if (kIPHWebFeedPostFollowDialogFeatureWithUIUpdate.name == feature->name) {
-    // A config that allows one of the WebFeed post follow dialogs to be
-    // presented 3 times after the UI update.
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(ANY, 0);
-    config.trigger =
-        EventConfig("web_feed_post_follow_dialog_trigger_with_ui_update",
-                    Comparator(LESS_THAN, 3), 360, 360);
-    config.used =
-        EventConfig("web_feed_post_follow_dialog_shown_with_ui_update",
-                    Comparator(ANY, 0), 360, 360);
     return config;
   }
 
@@ -1634,6 +1919,23 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
+  if (kIPHRecentTabsFeature.name == feature->name) {
+    // A config that allows the 'Recent tabs' text bubble IPH to be shown
+    // only once to inform users about the recently closed tabs/windows.
+
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    config.trigger =
+        EventConfig("recent_tabs_iph_trigger", Comparator(LESS_THAN, 1),
+                    k10YearsInDays, k10YearsInDays);
+    config.used =
+        EventConfig("recent_tabs_used_with_closed_windows",
+                    Comparator(EQUAL, 0), k10YearsInDays, k10YearsInDays);
+    return config;
+  }
+
   if (kIPHReadLaterAppMenuBookmarkThisPageFeature.name == feature->name) {
     // A config that allows the reading list IPH bubble to prompt the user to
     // bookmark this page.
@@ -1739,25 +2041,6 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
         EventConfig("page_zoom_iph_trigger", Comparator(EQUAL, 0), 1440, 1440);
     config.used =
         EventConfig("page_zoom_opened", Comparator(EQUAL, 0), 1440, 1440);
-    return config;
-  }
-
-  if (kIPHBookmarksBarFeature.name == feature->name) {
-    FeatureConfig config;
-    config.valid = true;
-    // This feature is available to show immediately upon release and we are not
-    // adding an organic discovery period.
-    config.availability = Comparator(ANY, 0);
-    // The IPH will only be shown if no other IPHs have been shown in the
-    // current session.
-    config.session_rate = Comparator(EQUAL, 0);
-    // Once the trigger event is fired, remember it for 360 days.
-    config.trigger =
-        EventConfig("bookmark_bar_iph_triggered", Comparator(ANY, 0), 0, 360);
-    // The IPH will only be shown if a trigger condition is met + the user has
-    // not opened Appearance in Settings in 360 days.
-    config.used = EventConfig("settings_appearance_opened",
-                              Comparator(EQUAL, 0), 360, 360);
     return config;
   }
 
@@ -1923,6 +2206,35 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
 
     return config;
   }
+
+  if (kIPHAutofillAtMemoryFeature.name == feature->name) {
+    // A config that allows the Autofill At Memory IPH to be shown when:
+    // * it has been shown less than 3 times in the last 90 days;
+    // * the feature has not been used yet.
+    // The IPH will not be shown if any other IPH has been shown in the same
+    // session.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger = EventConfig("autofill_at_memory_iph_trigger",
+                                 Comparator(LESS_THAN, 3), 90, 360);
+    config.used = EventConfig("autofill_at_memory_iph_used",
+                              Comparator(EQUAL, 0), 90, 360);
+
+    // This promo blocks specific promos in the same session.
+    config.session_rate_impact.type = SessionRateImpact::Type::EXPLICIT;
+    config.session_rate_impact.affected_features.emplace();
+    config.session_rate_impact.affected_features->push_back(
+        "IPH_AutofillVirtualCardSuggestion");
+    config.session_rate_impact.affected_features->push_back(
+        "IPH_AutofillVirtualCardCVCSuggestion");
+    config.session_rate_impact.affected_features->push_back(
+        "IPH_AutofillCardInfoRetrievalSuggestion");
+
+    return config;
+  }
+
   if (kIPHAutofillCardInfoRetrievalSuggestionFeature.name == feature->name) {
     // A config that allows the card info retrieval suggestion IPH to be shown
     // when it has been shown less than three times in last 90 days and only
@@ -2043,6 +2355,45 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
                     Comparator(LESS_THAN, 3), 360, 360));
     return config;
   }
+
+  if (kIPHThreeDotMenuBackButton.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability =
+        Comparator(GREATER_THAN_OR_EQUAL,
+                   4);  // Available after greater than three days
+    config.session_rate = Comparator(
+        EQUAL, 0);  // Only shows when no other IPH has been shown this session
+
+    // Only show the IPH no more than 2 times per year
+    config.trigger = EventConfig("three_dot_menu_back_button_trigger",
+                                 Comparator(LESS_THAN, 2), 360, 360);
+
+    // The IPH will only be shown if the back button has not been used in the
+    // last 360 days.
+    config.used = EventConfig("three_dot_menu_back_button_clicked",
+                              Comparator(EQUAL, 0), 360, 360);
+    return config;
+  }
+
+  if (kIPHGestureUserEducation.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(
+        GREATER_THAN_OR_EQUAL, 4);  // Available after greater than 3 days.
+    config.session_rate = Comparator(
+        EQUAL, 0);  // Only shows when no other IPH has been shown this session
+
+    // Only show the IPH once per year
+    config.trigger = EventConfig("gesture_user_education_trigger",
+                                 Comparator(EQUAL, 0), 360, 360);
+    // The IPH will only be shown if the back swipe has been used less than two
+    // times in the last 360 days.
+    config.used = EventConfig("swipe_on_left_edge_for_navigation_used",
+                              Comparator(LESS_THAN, 2), 360, 360);
+    return config;
+  }
+// CONFIGURATION_ANDROID_END
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
@@ -2150,23 +2501,6 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
         "IPH_KeyboardAccessoryBarSwiping");
 #endif  // BUILDFLAG(IS_ANDROID)
 
-    return config;
-  }
-
-  if (kIPHCookieControlsFeature.name == feature->name) {
-    FeatureConfig config;
-    config.valid = true;
-    config.availability = Comparator(ANY, 0);
-    config.session_rate = Comparator(EQUAL, 0);
-    // Show promo up to 3 times per year and only if user hasn't interacted with
-    // the cookie controls bubble in the last week.
-    config.trigger = EventConfig("iph_cookie_controls_triggered",
-                                 Comparator(LESS_THAN, 3), 360, 360);
-#if !BUILDFLAG(IS_ANDROID)
-    config.used =
-        EventConfig(feature_engagement::events::kCookieControlsBubbleShown,
-                    Comparator(EQUAL, 0), 7, 7);
-#endif  // !BUILDFLAG(IS_ANDROID)
     return config;
   }
 
@@ -2411,10 +2745,11 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     // Cooldowns from other default browser promos.
     config.event_configs.insert(EventConfig("default_browser_promo_shown",
                                             Comparator(EQUAL, 0), 14, 360));
-    config.event_configs.insert(EventConfig("default_browser_fre_shown",
+    config.event_configs.insert(EventConfig(events::kIOSDefaultBrowserFREShown,
                                             Comparator(EQUAL, 0), 21, 360));
-    config.event_configs.insert(EventConfig(
-        "default_browser_promos_group_trigger", Comparator(EQUAL, 0), 14, 360));
+    config.event_configs.insert(
+        EventConfig(events::kDefaultBrowserPromosGroupTrigger,
+                    Comparator(EQUAL, 0), 14, 360));
     config.event_configs.insert(
         EventConfig(feature_engagement::events::kChromeOpened,
                     Comparator(GREATER_THAN_OR_EQUAL, 7), 360, 360));
@@ -2885,8 +3220,11 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     config.availability = Comparator(ANY, 0);
     config.session_rate = Comparator(ANY, 0);
 
-    // This IPH showing does not affect the session count for other IPHs.
-    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
+    // This promo blocks the Gemini Image Remix IPH in the same session.
+    config.session_rate_impact.type = SessionRateImpact::Type::EXPLICIT;
+    config.session_rate_impact.affected_features.emplace();
+    config.session_rate_impact.affected_features->push_back(
+        kIPHiOSGeminiImageRemixFeature.name);
     config.blocked_by.type = BlockedBy::Type::NONE;
     config.blocking.type = Blocking::Type::NONE;
 
@@ -2901,15 +3239,53 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
+  if (kIPHiOSGeminiExternalAppStoreEvent.name == feature->name) {
+    // A config to show an IPH promoting the Gemini feature in the Page Action
+    // Menu when the user enters via a promotional external App Store event.
+    // The IPH is shown at most once within a 40-day window, and only if the
+    // Page Action Menu IPH or Gemini Image Remix IPH was not triggered in the
+    // last 3 days.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    config.blocked_by.type = BlockedBy::Type::NONE;
+    config.blocking.type = Blocking::Type::NONE;
+
+    config.trigger = EventConfig("gemini_external_app_store_event_trigger",
+                                 Comparator(LESS_THAN, 1), 40,
+                                 feature_engagement::kMaxStoragePeriod);
+    config.used =
+        EventConfig("gemini_external_app_store_event_used", Comparator(ANY, 0),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod);
+    config.event_configs.insert(EventConfig(
+        feature_engagement::events::kIOSPageActionMenuIPHTrigger,
+        Comparator(EQUAL, 0), 3, feature_engagement::kMaxStoragePeriod));
+    config.event_configs.insert(EventConfig(
+        feature_engagement::events::kIOSGeminiImageRemixIPHTrigger,
+        Comparator(EQUAL, 0), 3, feature_engagement::kMaxStoragePeriod));
+    return config;
+  }
+
   if (kIPHiOSAIHubNewBadge.name == feature->name) {
     FeatureConfig config;
     config.valid = true;
     config.availability = Comparator(ANY, 0);
     config.session_rate = Comparator(ANY, 0);
 
-    // This badge showing does not affect the session count for other IPHs.
-    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
-    config.blocked_by.type = BlockedBy::Type::NONE;
+    // This promo impacts/blocks the Gemini Image Remix IPH in the same session.
+    config.session_rate_impact.type = SessionRateImpact::Type::EXPLICIT;
+    config.session_rate_impact.affected_features.emplace();
+    config.session_rate_impact.affected_features->push_back(
+        kIPHiOSGeminiImageRemixFeature.name);
+
+    // This promo is blocked by the Gemini Image Remix IPH being shown at the
+    // same time.
+    config.blocked_by.type = BlockedBy::Type::EXPLICIT;
+    config.blocked_by.affected_features.emplace();
+    config.blocked_by.affected_features->push_back(
+        kIPHiOSGeminiImageRemixFeature.name);
     config.blocking.type = Blocking::Type::NONE;
 
     // Feature should show as long as the AI Hub was never used.
@@ -2997,14 +3373,123 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     return config;
   }
 
-#endif  // BUILDFLAG(IS_IOS)
-
-#if BUILDFLAG(IS_CHROMEOS)
-  if (std::optional<FeatureConfig> scalable_iph_feature_config =
-          GetScalableIphFeatureConfig(feature)) {
-    return scalable_iph_feature_config;
+  if (kIPHiOSGeminiWhatCanGeminiDo.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+    // Limit showing the suggestion to less than 5 times.
+    config.trigger = EventConfig(events::kIOSGeminiWhatCanGeminiDoTriggered,
+                                 Comparator(LESS_THAN, 5),
+                                 feature_engagement::kMaxStoragePeriod,
+                                 feature_engagement::kMaxStoragePeriod);
+    config.used =
+        EventConfig(events::kIOSGeminiWhatCanGeminiDoTapped, Comparator(ANY, 0),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod);
+    return config;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+
+  if (kIPHiOSGeminiImageRemixFeature.name == feature->name) {
+    // Show the entry point once a year, but block it for 3 days if the user has
+    // seen another Gemini-related IPH.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.storage_type = StorageType::DEVICE;
+    config.trigger = EventConfig(events::kIOSGeminiImageRemixIPHTrigger,
+                                 Comparator(LESS_THAN, 1), 365, 365);
+    config.event_configs.insert(EventConfig(
+        events::kIOSPageActionMenuIPHTrigger, Comparator(EQUAL, 0), 3, 365));
+    config.event_configs.insert(
+        EventConfig(events::kIOSGeminiFullscreenPromoTriggered,
+                    Comparator(EQUAL, 0), 3, 365));
+    config.event_configs.insert(
+        EventConfig("gemini_external_app_store_event_trigger",
+                    Comparator(EQUAL, 0), 3, 365));
+    config.event_configs.insert(
+        EventConfig("new_ia_promo_trigger", Comparator(EQUAL, 0), 3, 365));
+    return config;
+  }
+
+  if (kIPHiOSGeminiLiveNewBadgeFeature.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(ANY, 0);
+
+    config.session_rate_impact.type = SessionRateImpact::Type::NONE;
+    config.blocked_by.type = BlockedBy::Type::NONE;
+    config.blocking.type = Blocking::Type::NONE;
+
+    config.trigger =
+        EventConfig(events::kIOSGeminiLiveNewBadgeTriggered, Comparator(ANY, 0),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod);
+    config.used = EventConfig(events::kIOSGeminiLiveUsed, Comparator(EQUAL, 0),
+                              feature_engagement::kMaxStoragePeriod,
+                              feature_engagement::kMaxStoragePeriod);
+
+    // After the user has seen the Live 1st-time IPH (at least 1 time in last 14
+    // days).
+    config.event_configs.insert(
+        EventConfig(events::kIOSGeminiLiveIPHTriggered,
+                    Comparator(GREATER_THAN_OR_EQUAL, 1), 14,
+                    feature_engagement::kMaxStoragePeriod));
+    // Show the "new" badge the next day (0 times today).
+    config.event_configs.insert(
+        EventConfig(events::kIOSGeminiLiveIPHTriggered, Comparator(EQUAL, 0), 1,
+                    feature_engagement::kMaxStoragePeriod));
+    return config;
+  }
+
+  if (kIPHiOSGeminiLiveIPHFeature.name == feature->name) {
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+
+    config.trigger =
+        EventConfig(events::kIOSGeminiLiveIPHTriggered, Comparator(EQUAL, 0),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod);
+    config.used = EventConfig(events::kIOSGeminiLiveUsed, Comparator(EQUAL, 0),
+                              feature_engagement::kMaxStoragePeriod,
+                              feature_engagement::kMaxStoragePeriod);
+
+    // Seen Gemini Image Remix (Nano Banana) IPH at least once in the past.
+    config.event_configs.insert(
+        EventConfig(events::kIOSGeminiImageRemixIPHTrigger,
+                    Comparator(GREATER_THAN_OR_EQUAL, 1),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod));
+    // After 3 days since they've seen Gemini Image Remix IPH (0 times in the
+    // last 3 days).
+    config.event_configs.insert(EventConfig(
+        events::kIOSGeminiImageRemixIPHTrigger, Comparator(EQUAL, 0), 3,
+        feature_engagement::kMaxStoragePeriod));
+    return config;
+  }
+
+  if (kIPHiOSPinMostVisitedSiteFeature.name == feature->name) {
+    // Show the in-product help if 1) it has never been triggered, and 2) user
+    // has not pinned any site to the most visited tile.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger =
+        EventConfig("ios_pin_mvt_site_triggered", Comparator(EQUAL, 0),
+                    feature_engagement::kMaxStoragePeriod,
+                    feature_engagement::kMaxStoragePeriod);
+    config.used = EventConfig(events::kIOSPinMVTSiteUsed, Comparator(EQUAL, 0),
+                              feature_engagement::kMaxStoragePeriod,
+                              feature_engagement::kMaxStoragePeriod);
+    return config;
+  }
+
+#endif  // BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (kIPHLauncherSearchHelpUiFeature.name == feature->name) {
@@ -3032,20 +3517,22 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  if (kIPHPlusAddressCreateSuggestionFeature.name == feature->name) {
-    // A config that allows a user education bubble to be shown for the plus
-    // address feature. Will be shown up to 9 times in the 90 day window with
-    // the exception of 2 times if the user accepted the suggestion.
 
+  if (kIPHSendTabToSelfOmnibox.name == feature->name) {
+    // A config that allows the Send Tab to Self Omnibox IPH to be shown once
+    // per week, up to 3 times per year, unless the user actually taps the
+    // "Send to your device" option in the omnibox long-press menu.
     FeatureConfig config;
     config.valid = true;
     config.availability = Comparator(ANY, 0);
     config.session_rate = Comparator(EQUAL, 0);
-    config.trigger =
-        EventConfig("plus_address_create_suggestion_feature_trigger",
-                    Comparator(LESS_THAN, 9), 90, 360);
-    config.used = EventConfig("plus_address_create_suggestion_feature_used",
-                              Comparator(LESS_THAN, 2), 90, 360);
+    config.trigger = EventConfig("send_tab_to_self_omnibox_iph_triggered",
+                                 Comparator(LESS_THAN, 3), 360, 360);
+    config.event_configs.insert(
+        EventConfig("send_tab_to_self_omnibox_iph_triggered",
+                    Comparator(EQUAL, 0), 7, 360));
+    config.used = EventConfig("send_tab_to_self_omnibox_used",
+                              Comparator(EQUAL, 0), 360, 360);
     return config;
   }
 
@@ -3079,6 +3566,23 @@ std::optional<FeatureConfig> GetClientSideFeatureConfig(
     config.used =
         EventConfig("account_name_email_create_suggestion_feature_used",
                     Comparator(EQUAL, 0), k10YearsInDays, k10YearsInDays);
+
+    return config;
+  }
+
+  if (kIPHAutofillAiValuablesFeature.name == feature->name) {
+    // Allows an IPH for showing information when an Autofill AI suggestion
+    // comes from Google Wallet.
+    FeatureConfig config;
+    config.valid = true;
+    config.availability = Comparator(ANY, 0);
+    config.session_rate = Comparator(EQUAL, 0);
+    config.trigger =
+        EventConfig("autofill_ai_valuables_feature_trigger",
+                    Comparator(LESS_THAN, 1), k10YearsInDays, k10YearsInDays);
+    config.used =
+        EventConfig("autofill_ai_valuables_feature_used", Comparator(EQUAL, 0),
+                    k10YearsInDays, k10YearsInDays);
 
     return config;
   }

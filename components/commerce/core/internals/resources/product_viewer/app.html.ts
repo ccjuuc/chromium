@@ -16,7 +16,7 @@ export function getHtml(this: ProductViewerAppElement) {
   <div class="url-input">
     <span>Product URL: </span>
     <input id="productUrl" type="text">
-    <button @click="${this.loadProduct_}">Load product</button>
+    <button @click="${this.onLoadProductClick_}">Load product</button>
   </div>
   <div>
     ${this.product_ ? html`
@@ -35,8 +35,8 @@ export function getHtml(this: ProductViewerAppElement) {
         </tr>
         <tr>
           <td>Image URL: </td>
-          <td><a href="${this.product_.imageUrl.url}" target="_blank">${
-                            this.product_.imageUrl.url}</a></td>
+          <td><a href="${this.product_.imageUrl}" target="_blank">${
+                            this.product_.imageUrl}</a></td>
         </tr>
         <tr>
           <td>Price: </td>

@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_effect_parameters.h"
 #include "third_party/blink/renderer/core/svg/svg_length_context.h"
+#include "third_party/blink/renderer/core/svg/svg_zoom_migration.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -211,6 +212,12 @@ const CSSParserContext* GetSVGAttributeParserContext() {
 }  // namespace
 
 SVGParsingError SVGLength::SetValueAsString(const String& string) {
+  return SetValueAsString(string, nullptr);
+}
+
+SVGParsingError SVGLength::SetValueAsString(
+    const String& string,
+    const CSSParserContext* parser_context) {
   // TODO(fs): Preferably we wouldn't need to special-case the null
   // string (which we'll get for example for removeAttribute.)
   // Hopefully work on crbug.com/225807 can help here.
@@ -239,9 +246,16 @@ SVGParsingError SVGLength::SetValueAsString(const String& string) {
       if (!variable_data || important) {
         return SVGParseStatus::kExpectedLength;
       }
-
+      // The SVG parser context allows unitless lengths, but CSS variable
+      // resolution occurs during the cascade phase where unitless lengths
+      // are forbidden. To maintain consistent CSS behavior and avoid SVG-
+      // specific quirks, we pass the document's parser context here, when
+      // available.
+      //
+      // https://github.com/web-platform-tests/wpt/pull/56390#issuecomment-3656298717
       auto* unparsed_value = MakeGarbageCollected<CSSUnparsedDeclarationValue>(
-          variable_data, GetSVGAttributeParserContext());
+          variable_data,
+          parser_context ? parser_context : GetSVGAttributeParserContext());
 
       value_ = unparsed_value;
       return SVGParseStatus::kNoError;
@@ -295,17 +309,18 @@ bool SVGLength::NegativeValuesForbiddenForAnimatedLengthAttribute(
   return no_negative_values_set.Contains(attr_name);
 }
 
-void SVGLength::Add(const SVGPropertyBase* other,
+bool SVGLength::Add(const SVGPropertyBase* other,
                     const SVGElement* context_element) {
   SVGLengthContext length_context(context_element);
   const float sum =
       Value(length_context) + To<SVGLength>(other)->Value(length_context);
   if (IsCalculated()) {
-    SetValueAsNumber(sum);
-    return;
+    SetValueAsNumber(NoopWillBeInvScaleScalar(sum, length_context.GetZoom()));
+    return true;
   }
   SetValueInSpecifiedUnits(length_context.ConvertValueFromUserUnits(
       sum, UnitMode(), NumericLiteralType()));
+  return true;
 }
 
 void SVGLength::CalculateAnimatedValue(
@@ -348,8 +363,9 @@ float SVGLength::CalculateDistance(const SVGPropertyBase* to_value,
                                    const SVGElement* context_element) const {
   SVGLengthContext length_context(context_element);
   auto* to_length = To<SVGLength>(to_value);
-
-  return fabsf(to_length->Value(length_context) - Value(length_context));
+  const float distance =
+      std::fabsf(to_length->Value(length_context) - Value(length_context));
+  return NoopWillBeInvScaleScalar(distance, length_context.GetZoom());
 }
 
 void SVGLength::SetInitial(unsigned initial_value) {

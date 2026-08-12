@@ -7,6 +7,7 @@
 
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/views_export.h"
 
@@ -38,6 +39,24 @@ VIEWS_EXPORT gfx::Rect GetHeadlessWindowBounds(HWND window);
 // coordinates).
 VIEWS_EXPORT void ShowSystemMenuAtScreenPixelLocation(HWND window,
                                                       const gfx::Point& point);
+
+// Returns the IAccessible* for the parent HWND of a View. The returned pointer
+// is valid only for the lifetime of the WindowTreeHost in which the View
+// resides.
+VIEWS_EXPORT gfx::NativeViewAccessible HWNDNativeViewAccessibleForView(
+    const View* view);
+
+// Returns the IAccessible* for the parent HWND of a Widget. The returned
+// pointer is valid only for the lifetime of the WindowTreeHost in which the
+// Widget resides.
+VIEWS_EXPORT gfx::NativeViewAccessible HWNDNativeViewAccessibleForWidget(
+    const Widget* widget);
+
+// Inflates client-area size constraints by the window's frame border/insets
+// so they can be applied to the HWND.
+VIEWS_EXPORT void InflateClientSizeConstraintsInPixels(HWND hwnd,
+                                                       gfx::Size& min,
+                                                       gfx::Size& max);
 
 }  // namespace views
 

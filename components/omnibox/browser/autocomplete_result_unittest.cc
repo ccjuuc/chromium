@@ -25,6 +25,7 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/actions/omnibox_action_in_suggest.h"
 #include "components/omnibox/browser/autocomplete_input.h"
@@ -121,6 +122,7 @@ class AutocompleteResultForTesting : public AutocompleteResult {
   using AutocompleteResult::matches_;
   using AutocompleteResult::max_url_matches_;
   using AutocompleteResult::MaybeCullTailSuggestions;
+  using AutocompleteResult::UndedupeTopSearchEntityMatch;
 };
 
 class AutocompleteResultTest : public testing::Test {
@@ -373,6 +375,48 @@ void AutocompleteResultTest::SortMatchesAndVerifyOrder(
       result, std::back_inserter(actual),
       [](const auto& match) { return match.destination_url.spec(); });
   EXPECT_THAT(actual, testing::ElementsAreArray(expected));
+}
+
+class AutocompleteResultTimeTest : public testing::Test {
+ protected:
+  base::test::SingleThreadTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+TEST_F(AutocompleteResultTimeTest, ResultReadyTime) {
+  AutocompleteResult result;
+  EXPECT_TRUE(result.result_ready_time().is_null());
+}
+
+TEST_F(AutocompleteResultTimeTest, RefreshReadyState) {
+  AutocompleteResult result;
+
+  auto now = task_environment_.NowTicks();
+  result.RefreshReadyState();
+  EXPECT_EQ(result.result_ready_time(), now);
+
+  task_environment_.FastForwardBy(base::Seconds(1));
+  result.RefreshReadyState();
+  EXPECT_EQ(result.result_ready_time(), now + base::Seconds(1));
+}
+
+TEST_F(AutocompleteResultTimeTest, ResultReadyTimeSwapAndCopy) {
+  AutocompleteResult r1;
+  AutocompleteResult r2;
+
+  r1.RefreshReadyState();
+  r2.RefreshReadyState();
+
+  auto r1_time = r1.result_ready_time();
+  auto r2_time = r2.result_ready_time();
+
+  r1.SwapMatchesWith(&r2);
+  EXPECT_EQ(r1.result_ready_time(), r2_time);
+  EXPECT_EQ(r2.result_ready_time(), r1_time);
+
+  AutocompleteResult r3;
+  r3.CopyMatchesFrom(r1);
+  EXPECT_EQ(r3.result_ready_time(), r1.result_ready_time());
 }
 
 // Assertion testing for AutocompleteResult::SwapMatchesWith.
@@ -1302,7 +1346,8 @@ TEST_F(AutocompleteResultTest, DemoteByType) {
   matches[0].allowed_to_be_default_match = false;
   matches[2].allowed_to_be_default_match = false;
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)) || \
+    BUILDFLAG(IS_DESKTOP_ANDROID)
   // Where Grouping suggestions by Search vs URL kicks in, search gets
   // promoted to the top of the list.
 
@@ -2088,7 +2133,8 @@ TEST_F(AutocompleteResultTest, SortAndCullMaxURLMatches) {
   // Case 1: Eject URL match for a search.
   // Does not apply to Android and iOS which picks top N matches and performs
   // group by search vs URL separately (Adaptive Suggestions).
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)) || \
+    BUILDFLAG(IS_DESKTOP_ANDROID)
   {
     ACMatches matches;
     const AutocompleteMatchTestData data[] = {
@@ -2196,11 +2242,6 @@ TEST_F(AutocompleteResultTest, ConvertsOpenTabsCorrectly) {
 
 #if BUILDFLAG(IS_ANDROID)
 TEST_F(AutocompleteResultTest, ConvertOpenTabMatches_AttachTabSwitchAction) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      omnibox::kOmniboxImprovementForLFF,
-      {{OmniboxFieldTrial::kOmniboxImprovementForLFFSwitchToTabChip.name,
-        "true"}});
 
   AutocompleteResult result;
   ACMatches matches;
@@ -2226,7 +2267,59 @@ TEST_F(AutocompleteResultTest, ConvertOpenTabMatches_AttachTabSwitchAction) {
       action_in_suggest->template_action.action_type(),
       omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CHROME_TAB_SWITCH);
 }
+
+TEST_F(AutocompleteResultTest,
+       ConvertOpenTabMatches_DoNotAttachTabSwitchActionInKeywordMode) {
+
+  AutocompleteResult result;
+  ACMatches matches;
+  AutocompleteMatch match;
+  match.destination_url = GURL("http://this-site-matches.com");
+  match.type = AutocompleteMatchType::OPEN_TAB;
+  match.from_keyword = true;
+  matches.push_back(match);
+  result.AppendMatches(matches);
+
+  // Have IsTabOpenWithURL() return true for the URL.
+  FakeAutocompleteProviderClient client;
+  static_cast<FakeTabMatcher&>(const_cast<TabMatcher&>(client.GetTabMatcher()))
+      .set_url_substring_match("matches");
+
+  AutocompleteInput input(u"query", metrics::OmniboxEventProto::OTHER,
+                          TestSchemeClassifier());
+  result.ConvertOpenTabMatches(&client, &input);
+
+  ASSERT_TRUE(result.match_at(0)->has_tab_match.value_or(false));
+  // Should NOT attach the action because it's OPEN_TAB in keyword mode.
+  EXPECT_EQ(result.match_at(0)->actions.size(), 0u);
+}
 #endif
+
+TEST_F(AutocompleteResultTest,
+       ConvertOpenTabMatches_WebUiNtpEnabled_DoNotAttachTabSwitchAction) {
+  AutocompleteResult result;
+  ACMatches matches;
+  AutocompleteMatch match;
+  match.destination_url = GURL("http://this-site-matches.com");
+  matches.push_back(match);
+  result.AppendMatches(matches);
+
+  FakeAutocompleteProviderClient client;
+  static_cast<FakeTabMatcher&>(const_cast<TabMatcher&>(client.GetTabMatcher()))
+      .set_url_substring_match("matches");
+
+  ON_CALL(client, IsWebUiNtpEnabledForDesktopAndroid())
+      .WillByDefault(testing::Return(true));
+
+  AutocompleteInput input(u"a", metrics::OmniboxEventProto::NTP_REALBOX,
+                          TestSchemeClassifier());
+  result.ConvertOpenTabMatches(&client, &input);
+
+  ASSERT_TRUE(result.match_at(0)->has_tab_match.value_or(false));
+  // Should NOT attach the action because IsWebUiNtpEnabledForDesktopAndroid()
+  // is true.
+  EXPECT_EQ(result.match_at(0)->actions.size(), 0u);
+}
 
 TEST_F(AutocompleteResultTest, AttachesPedals) {
   FakeAutocompleteProviderClient client;
@@ -3240,7 +3333,7 @@ TEST_F(AutocompleteResultTest, Android_UndedupTopSearch) {
   // matches we want to see.
   for (const auto& test_case : test_cases) {
     auto result = test_case.input;
-    AutocompleteResult::UndedupTopSearchEntityMatch(&result);
+    AutocompleteResultForTesting::UndedupeTopSearchEntityMatch(&result);
 
     EXPECT_EQ(result.size(), test_case.expected_result.size());
     for (size_t index = 0u; index < result.size(); ++index) {
@@ -3309,7 +3402,8 @@ TEST_F(AutocompleteResultTest, IOS_InspireMe) {
 }
 #endif
 
-#if (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS))
+#if (BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)) && \
+    !BUILDFLAG(IS_DESKTOP_ANDROID)
 
 TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
   scoped_refptr<FakeAutocompleteProvider> provider =
@@ -3325,6 +3419,7 @@ TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
     std::vector<std::vector<OmniboxActionId>> result_matches_and_actions_zps;
     std::vector<std::vector<OmniboxActionId>> result_matches_and_actions_typed;
     bool include_url = false;
+    bool use_tab_switch = false;
   } test_cases[]{
       {"No actions attached to matches",
        {{}, {}, {}, {}},
@@ -3337,6 +3432,37 @@ TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
        // Typed
        {{PEDAL}, {PEDAL}, {PEDAL}, {}}},
       {"Actions are shown only in first position",
+       {{ACTION_IN_SUGGEST}, {}, {ACTION_IN_SUGGEST}, {ACTION_IN_SUGGEST}},
+#if BUILDFLAG(IS_ANDROID)
+       // ZPS
+       {{ACTION_IN_SUGGEST}, {}, {}, {}},
+       // Typed
+       {{ACTION_IN_SUGGEST}, {}, {}, {}}
+#else
+       // ZPS
+       {{}, {}, {}, {}},
+       // Typed
+       {{ACTION_IN_SUGGEST}, {}, {}, {}}
+#endif
+      },
+      {"Actions are promoted over Pedals; positions dictate preference",
+       {{ACTION_IN_SUGGEST, PEDAL},
+        {PEDAL},
+        {ACTION_IN_SUGGEST, PEDAL},
+        {ACTION_IN_SUGGEST, PEDAL}},
+#if BUILDFLAG(IS_ANDROID)
+       // ZPS
+       {{ACTION_IN_SUGGEST}, {PEDAL}, {}, {}},
+       // Typed
+       {{ACTION_IN_SUGGEST}, {PEDAL}, {}, {}}
+#else
+       // ZPS
+       {{PEDAL}, {PEDAL}, {PEDAL}, {}},
+       // Typed
+       {{ACTION_IN_SUGGEST}, {PEDAL}, {PEDAL}, {}}
+#endif
+      },
+      {"Tab Switch actions can appear at any index on Android",
        {{ACTION_IN_SUGGEST},
         {ACTION_IN_SUGGEST},
         {ACTION_IN_SUGGEST},
@@ -3358,30 +3484,9 @@ TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
        // Typed
        {{ACTION_IN_SUGGEST}, {}, {}, {}}
 #endif
-      },
-      {"Actions are promoted over Pedals; positions dictate preference",
-       {{ACTION_IN_SUGGEST, PEDAL},
-        {ACTION_IN_SUGGEST, PEDAL},
-        {ACTION_IN_SUGGEST, PEDAL},
-        {ACTION_IN_SUGGEST, PEDAL}},
-#if BUILDFLAG(IS_ANDROID)
-       // ZPS
-       {{ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST}},
-       // Typed
-       {{ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST},
-        {ACTION_IN_SUGGEST}}
-#else
-       // ZPS
-       {{PEDAL}, {PEDAL}, {PEDAL}, {}},
-       // Typed
-       {{ACTION_IN_SUGGEST}, {PEDAL}, {PEDAL}, {}}
-#endif
-      },
+       ,
+       false,
+       true},
   };
 
   // Crete matches following the `input_matches_and_actions` input.
@@ -3402,8 +3507,11 @@ TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
         if (action_id == OmniboxActionId::ACTION_IN_SUGGEST) {
           omnibox::SuggestTemplateInfo::TemplateAction action;
           action.set_action_type(
-              omnibox::
-                  SuggestTemplateInfo_TemplateAction_ActionType_DIRECTIONS);
+              data.use_tab_switch
+                  ? omnibox::
+                        SuggestTemplateInfo_TemplateAction_ActionType_CHROME_TAB_SWITCH
+                  : omnibox::
+                        SuggestTemplateInfo_TemplateAction_ActionType_DIRECTIONS);
           match.actions.push_back(base::MakeRefCounted<OmniboxActionInSuggest>(
               std::move(action), std::nullopt));
         } else {
@@ -3426,7 +3534,8 @@ TEST_F(AutocompleteResultTest, Mobile_TrimOmniboxActions) {
             const auto* match = result.match_at(index);
             const auto& expected_actions_at_position = expected_actions[index];
             EXPECT_EQ(match->actions.size(),
-                      expected_actions_at_position.size());
+                      expected_actions_at_position.size())
+                << " while testing variant: " << data.test_name;
             for (size_t action_index = 0u;
                  action_index < expected_actions_at_position.size();
                  ++action_index) {
@@ -3657,135 +3766,6 @@ TEST_F(AutocompleteResultTest, ContextualSearchAblateOthers_AblateUrlOnly) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-TEST_F(AutocompleteResultTest, AttachAimAction) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(omnibox::kOmniboxAimShortcutTypedState);
-
-  TestData data[] = {
-      {0, 1, 1300, true, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-      {1, 1, 1200, false, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-  };
-
-  ACMatches matches;
-  PopulateAutocompleteMatches(data, &matches);
-  matches[0].contents = u"eligible for aim action";
-
-  AutocompleteInput input(u"eligible for aim action",
-                          metrics::OmniboxEventProto::OTHER,
-                          TestSchemeClassifier());
-  AutocompleteResult result;
-  result.AppendMatches(matches);
-  result.SortAndCull(input, &template_url_service(),
-                     triggered_feature_service(), /*is_lens_active=*/false,
-                     /*can_show_contextual_suggestions=*/false,
-                     /*mia_enabled=*/false, /*is_incognito=*/false);
-
-  ASSERT_EQ(2U, result.size());
-  EXPECT_TRUE(result.match_at(0)->actions.empty());
-  EXPECT_TRUE(result.match_at(1)->actions.empty());
-
-  FakeAutocompleteProviderClient client;
-  MockAimEligibilityService* mock_aim_eligibility_service =
-      static_cast<MockAimEligibilityService*>(
-          client.GetAimEligibilityService());
-  EXPECT_CALL(*mock_aim_eligibility_service, IsAimLocallyEligible())
-      .WillRepeatedly(testing::Return(true));
-  result.AttachAimAction(&template_url_service(), &client);
-
-  ui::DeviceFormFactor factor = ui::GetDeviceFormFactor();
-  if (factor == ui::DEVICE_FORM_FACTOR_PHONE ||
-      factor == ui::DEVICE_FORM_FACTOR_FOLDABLE) {
-    ASSERT_EQ(1U, result.match_at(0)->actions.size());
-    const auto* action_in_suggest = OmniboxActionInSuggest::FromAction(
-        result.match_at(0)->actions[0].get());
-    ASSERT_TRUE(action_in_suggest);
-    EXPECT_EQ(
-        action_in_suggest->template_action.action_type(),
-        omnibox::SuggestTemplateInfo_TemplateAction_ActionType_CHROME_AIM);
-    EXPECT_TRUE(result.match_at(1)->actions.empty());
-  } else {
-    ASSERT_EQ(0U, result.match_at(0)->actions.size());
-  }
-}
-
-TEST_F(AutocompleteResultTest, AttachAimAction_AimNotEligible) {
-  base::test::ScopedFeatureList feature_list;
-  // Not overriding the feature allows testing the eligibility service logic.
-
-  TestData data[] = {
-      {0, 1, 1300, true, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-      {1, 1, 1200, false, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-  };
-
-  ACMatches matches;
-  PopulateAutocompleteMatches(data, &matches);
-  matches[0].contents = u"eligible for aim action";
-
-  AutocompleteInput input(u"eligible for aim action",
-                          metrics::OmniboxEventProto::OTHER,
-                          TestSchemeClassifier());
-  AutocompleteResult result;
-  result.AppendMatches(matches);
-  result.SortAndCull(input, &template_url_service(),
-                     triggered_feature_service(), /*is_lens_active=*/false,
-                     /*can_show_contextual_suggestions=*/false,
-                     /*mia_enabled=*/false, /*is_incognito=*/false);
-
-  FakeAutocompleteProviderClient client;
-  MockAimEligibilityService* mock_aim_eligibility_service =
-      static_cast<MockAimEligibilityService*>(
-          client.GetAimEligibilityService());
-  EXPECT_CALL(*mock_aim_eligibility_service, IsServerEligibilityEnabled())
-      .WillRepeatedly(testing::Return(true));
-  EXPECT_CALL(*mock_aim_eligibility_service, IsAimLocallyEligible())
-      .WillRepeatedly(testing::Return(true));
-  EXPECT_CALL(*mock_aim_eligibility_service, IsAimEligible())
-      .WillRepeatedly(testing::Return(false));
-  result.AttachAimAction(&template_url_service(), &client);
-
-  ASSERT_EQ(0U, result.match_at(0)->actions.size());
-}
-
-TEST_F(AutocompleteResultTest, AttachAimAction_AimNotLocallyEligible) {
-  base::test::ScopedFeatureList feature_list;
-  // Not overriding the feature allows testing the eligibility service logic.
-
-  TestData data[] = {
-      {0, 1, 1300, true, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-      {1, 1, 1200, false, {}, AutocompleteMatchType::SEARCH_SUGGEST},
-  };
-
-  ACMatches matches;
-  PopulateAutocompleteMatches(data, &matches);
-  matches[0].contents = u"eligible for aim action";
-
-  AutocompleteInput input(u"eligible for aim action",
-                          metrics::OmniboxEventProto::OTHER,
-                          TestSchemeClassifier());
-  AutocompleteResult result;
-  result.AppendMatches(matches);
-  result.SortAndCull(input, &template_url_service(),
-                     triggered_feature_service(), /*is_lens_active=*/false,
-                     /*can_show_contextual_suggestions=*/false,
-                     /*mia_enabled=*/false, /*is_incognito=*/false);
-
-  FakeAutocompleteProviderClient client;
-  MockAimEligibilityService* mock_aim_eligibility_service =
-      static_cast<MockAimEligibilityService*>(
-          client.GetAimEligibilityService());
-  EXPECT_CALL(*mock_aim_eligibility_service, IsServerEligibilityEnabled())
-      .WillRepeatedly(testing::Return(false));
-  EXPECT_CALL(*mock_aim_eligibility_service, IsAimLocallyEligible())
-      .WillRepeatedly(testing::Return(false));
-  EXPECT_CALL(*mock_aim_eligibility_service, IsAimEligible())
-      .WillRepeatedly(testing::Return(true));
-  result.AttachAimAction(&template_url_service(), &client);
-
-  ASSERT_EQ(0U, result.match_at(0)->actions.size());
-}
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
 TEST_F(AutocompleteResultTest, AttachContextualSearchOpenLensActionToMatches) {
   AutocompleteResult result;
   ACMatches matches;
@@ -3830,4 +3810,55 @@ TEST_F(AutocompleteResultTest, AttachContextualSearchOpenLensActionToMatches) {
   EXPECT_FALSE(result.match_at(1)->takeover_action);
   EXPECT_FALSE(result.match_at(2)->takeover_action);
   EXPECT_FALSE(result.match_at(3)->takeover_action);
+}
+
+TEST_F(AutocompleteResultTest, AttachSiteSearchActionToMatches) {
+  // Register a template URL that corresponds to 'foo' search engine.
+  TemplateURLData url_data;
+  url_data.SetShortName(u"unittest");
+  url_data.SetKeyword(u"foo");
+  url_data.SetURL("http://www.foo.com/s?q={searchTerms}");
+  template_url_service().Add(std::make_unique<TemplateURL>(url_data));
+
+  AutocompleteResult result;
+  ACMatches matches;
+
+  // Match 0: No keyword
+  AutocompleteMatch match0;
+  matches.push_back(match0);
+
+  // Match 1: Valid keyword that exists in TemplateURLService
+  AutocompleteMatch match1;
+  match1.associated_keyword = u"foo";
+  matches.push_back(match1);
+
+  // Match 2: Duplicate of valid keyword
+  AutocompleteMatch match2;
+  match2.associated_keyword = u"foo";
+  matches.push_back(match2);
+
+  // Match 3: Keyword that doesn't exist in TemplateURLService
+  AutocompleteMatch match3;
+  match3.associated_keyword = u"bar";
+  matches.push_back(match3);
+
+  result.AppendMatches(matches);
+  result.AttachSiteSearchActionToMatches(&template_url_service());
+
+  ASSERT_EQ(4u, result.size());
+
+  // Match 0 should have no action attached
+  EXPECT_TRUE(result.match_at(0)->actions.empty());
+
+  // Match 1 should have the Site Search action attached
+  ASSERT_EQ(1u, result.match_at(1)->actions.size());
+  EXPECT_EQ(OmniboxActionId::SITE_SEARCH,
+            result.match_at(1)->actions[0]->ActionId());
+
+  // Match 2 should have no action attached because the 'foo' keyword was
+  // already seen
+  EXPECT_TRUE(result.match_at(2)->actions.empty());
+
+  // Match 3 should have no action attached because 'bar' keyword does not exist
+  EXPECT_TRUE(result.match_at(3)->actions.empty());
 }

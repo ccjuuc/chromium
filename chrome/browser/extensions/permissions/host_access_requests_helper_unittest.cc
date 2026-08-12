@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
+#include "base/auto_reset.h"
+#include "base/time/time.h"
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "components/crx_file/id_util.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/web_contents_tester.h"
@@ -15,13 +19,18 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
+#include "extensions/browser/permissions/permissions_updater.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/unloaded_extension_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/url_pattern.h"
 #include "extensions/test/permissions_manager_waiter.h"
+#include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -48,20 +57,31 @@ class HostAccessRequestsHelperUnittest : public ExtensionServiceTestBase {
   // associated with it.
   content::WebContents* AddTab(const GURL& url);
 
-  // Returns the browser. Creates a new one if it doesn't exist.
-  Browser* browser();
-
   PermissionsManager* permissions_manager() { return permissions_manager_; }
 
-  // ExtensionServiceTestBase:
   void SetUp() override;
   void TearDown() override;
 
  private:
-  std::unique_ptr<Browser> browser_;
-
-  raw_ptr<PermissionsManager> permissions_manager_;
+  std::vector<std::unique_ptr<content::WebContents>> web_contents_collection_;
+  raw_ptr<PermissionsManager> permissions_manager_ = nullptr;
+  std::optional<base::AutoReset<base::TimeDelta>> cooldown_reset_;
 };
+
+void HostAccessRequestsHelperUnittest::SetUp() {
+  ExtensionServiceTestBase::SetUp();
+  InitializeEmptyExtensionService();
+  permissions_manager_ = PermissionsManager::Get(profile());
+  cooldown_reset_.emplace(
+      HostAccessRequestsHelper::SetCooldownForTesting(base::Seconds(0)));
+}
+
+void HostAccessRequestsHelperUnittest::TearDown() {
+  cooldown_reset_.reset();
+  web_contents_collection_.clear();
+  permissions_manager_ = nullptr;
+  ExtensionServiceTestBase::TearDown();
+}
 
 scoped_refptr<const Extension>
 HostAccessRequestsHelperUnittest::InstallExtensionAndWithholdHostPermissions(
@@ -71,11 +91,14 @@ HostAccessRequestsHelperUnittest::InstallExtensionAndWithholdHostPermissions(
                        .AddHostPermission(host_permission)
                        .SetID(crx_file::id_util::GenerateId(name))
                        .Build();
-  registrar()->AddExtension(extension);
+
+  PermissionsUpdater updater(profile());
+  updater.InitializePermissions(extension.get());
 
   ScriptingPermissionsModifier(profile(), extension)
       .SetWithholdHostPermissions(true);
 
+  registrar()->AddExtension(extension);
   return extension;
 }
 
@@ -86,54 +109,34 @@ HostAccessRequestsHelperUnittest::InstallExtensionWithActiveTab(
                        .SetID(crx_file::id_util::GenerateId(name))
                        .AddAPIPermission("activeTab")
                        .Build();
-  registrar()->AddExtension(extension);
 
+  PermissionsUpdater updater(profile());
+  updater.InitializePermissions(extension.get());
+
+  registrar()->AddExtension(extension);
   return extension;
 }
 
 content::WebContents* HostAccessRequestsHelperUnittest::AddTab(
     const GURL& url) {
-  std::unique_ptr<content::WebContents> web_contents(
+  std::unique_ptr<content::WebContents> test_web_contents(
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
-  content::WebContents* raw_contents = web_contents.get();
+  content::WebContents* raw_contents = test_web_contents.get();
 
-  browser()->tab_strip_model()->AppendWebContents(std::move(web_contents),
-                                                  true);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents(), raw_contents);
+  sessions::SessionTabHelper::CreateForWebContents(
+      raw_contents, sessions::SessionTabHelper::DelegateLookup());
+  int tab_id = sessions::SessionTabHelper::IdForTab(raw_contents).id();
+  ActiveTabPermissionGranter::CreateForWebContents(raw_contents, tab_id,
+                                                   profile());
+  extensions::TabHelper::CreateForWebContents(raw_contents);
 
+  web_contents_collection_.push_back(std::move(test_web_contents));
+
+  raw_contents->WasShown();
   content::NavigationSimulator::NavigateAndCommitFromBrowser(raw_contents, url);
   EXPECT_EQ(url, raw_contents->GetLastCommittedURL());
 
   return raw_contents;
-}
-
-Browser* HostAccessRequestsHelperUnittest::browser() {
-  if (!browser_) {
-    Browser::CreateParams params(profile(), true);
-    auto browser_window = std::make_unique<TestBrowserWindow>();
-    params.window = browser_window.release();
-    browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
-  }
-  return browser_.get();
-}
-
-void HostAccessRequestsHelperUnittest::SetUp() {
-  ExtensionServiceTestBase::SetUp();
-  InitializeEmptyExtensionService();
-
-  permissions_manager_ = PermissionsManager::Get(profile());
-}
-
-void HostAccessRequestsHelperUnittest::TearDown() {
-  // Remove any tabs in the tab strip; else the test crashes.
-  if (browser_) {
-    while (!browser_->tab_strip_model()->empty()) {
-      browser_->tab_strip_model()->DetachAndDeleteWebContentsAt(0);
-    }
-  }
-  permissions_manager_ = nullptr;
-
-  ExtensionServiceTestBase::TearDown();
 }
 
 // Tests host access requests are properly added and removed.
@@ -147,8 +150,9 @@ TEST_F(HostAccessRequestsHelperUnittest, AddAndRemoveRequests) {
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
   // Try to remove a non-existent host access request. Verify nothing happens.
-  EXPECT_FALSE(permissions_manager()->RemoveHostAccessRequest(
-      tab_id, extension_A->id()));
+  EXPECT_EQ(
+      permissions_manager()->RemoveHostAccessRequest(tab_id, extension_A->id()),
+      PermissionsManager::RemoveRequestResult::kNotFound);
   EXPECT_FALSE(permissions_manager()->HasActiveHostAccessRequest(
       tab_id, extension_A->id()));
   EXPECT_FALSE(permissions_manager()->HasActiveHostAccessRequest(
@@ -174,8 +178,9 @@ TEST_F(HostAccessRequestsHelperUnittest, AddAndRemoveRequests) {
 
   // Remove host access request for extension A. Verify only extension B has an
   // active request.
-  EXPECT_TRUE(permissions_manager()->RemoveHostAccessRequest(
-      tab_id, extension_A->id()));
+  EXPECT_EQ(
+      permissions_manager()->RemoveHostAccessRequest(tab_id, extension_A->id()),
+      PermissionsManager::RemoveRequestResult::kSuccess);
   EXPECT_FALSE(permissions_manager()->HasActiveHostAccessRequest(
       tab_id, extension_A->id()));
   EXPECT_TRUE(permissions_manager()->HasActiveHostAccessRequest(
@@ -234,8 +239,9 @@ TEST_F(HostAccessRequestsHelperUnittest,
   // Remove a host access request for extension without specifying a filter.
   // Verify request is no longer active, since a request without filter matches
   // all patterns.
-  EXPECT_TRUE(
-      permissions_manager()->RemoveHostAccessRequest(tab_id, extension->id()));
+  EXPECT_EQ(
+      permissions_manager()->RemoveHostAccessRequest(tab_id, extension->id()),
+      PermissionsManager::RemoveRequestResult::kSuccess);
   EXPECT_FALSE(permissions_manager()->HasActiveHostAccessRequest(
       tab_id, extension->id()));
 }
@@ -285,8 +291,6 @@ TEST_F(HostAccessRequestsHelperUnittest,
 
   content::WebContents* web_contents =
       AddTab(GURL("http://www.same-origin.com/a"));
-  content::WebContentsTester* web_contents_tester =
-      content::WebContentsTester::For(web_contents);
   int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
   // Add host access request for extension.
@@ -295,12 +299,14 @@ TEST_F(HostAccessRequestsHelperUnittest,
       tab_id, extension->id()));
 
   // Same-origin navigation should retain request.
-  web_contents_tester->NavigateAndCommit(GURL("http://www.same-origin.com/b"));
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents, GURL("http://www.same-origin.com/b"));
   EXPECT_TRUE(permissions_manager()->HasActiveHostAccessRequest(
       tab_id, extension->id()));
 
   // Cross-origin navigation should remove request.
-  web_contents_tester->NavigateAndCommit(GURL("http://www.cross-origin.com/c"));
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents, GURL("http://www.cross-origin.com/c"));
   EXPECT_FALSE(permissions_manager()->HasActiveHostAccessRequest(
       tab_id, extension->id()));
 }
@@ -365,8 +371,9 @@ TEST_F(HostAccessRequestsHelperUnittest,
   // Grant "always on this host" access to the extension.
   PermissionsManagerWaiter waiter(PermissionsManager::Get(profile()));
   SitePermissionsHelper permissions(profile());
-  permissions.UpdateSiteAccess(*extension, web_contents,
-                               PermissionsManager::UserSiteAccess::kOnSite);
+  permissions.UpdateSiteAccess(
+      *extension, web_contents, PermissionsManager::UserSiteAccess::kOnSite,
+      web_contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   waiter.WaitForExtensionPermissionsUpdate();
 
   // Request should be removed since extension has granted host access.
@@ -399,10 +406,11 @@ TEST_F(HostAccessRequestsHelperUnittest,
 
   // Grant tab permission to extension.
   ActiveTabPermissionGranter* active_tab_permission_granter =
-      ActiveTabPermissionGranter::FromWebContents(
-          browser()->tab_strip_model()->GetActiveWebContents());
+      ActiveTabPermissionGranter::FromWebContents(web_contents);
   ASSERT_TRUE(active_tab_permission_granter);
+  PermissionsManagerWaiter waiter(PermissionsManager::Get(profile()));
   active_tab_permission_granter->GrantIfRequested(extension.get());
+  waiter.WaitForActiveTabPermissionGranted(extension->id());
 
   // Request should be removed since extension has granted host access.
   // Even though the extension was only granted activeTab (and not persistent

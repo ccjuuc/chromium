@@ -17,7 +17,7 @@ export function assert<T>(value: T, message?: string): asserts value {
 }
 
 export function assertInstanceof<T>(
-    value: unknown, type: {new (...args: any): T},
+    value: unknown, type: {new (...args: any[]): T},
     message?: string): asserts value is T {
   if (value instanceof type) {
     return;
@@ -73,4 +73,12 @@ export function assertNotReached(message: string = 'Unreachable code hit'):
  */
 export function assertNotReachedCase(_param: never, message?: string): never {
   assertNotReached(message);
+}
+
+/**
+ * Verify |value| is not null or undefined.
+ */
+export function assertNonNull<T>(
+    value: T, message?: string): asserts value is NonNullable<T> {
+  assert(value !== null && value !== undefined, message);
 }

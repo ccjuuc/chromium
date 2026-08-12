@@ -24,6 +24,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.core.text.BidiFormatter;
 import androidx.test.InstrumentationRegistry;
 import androidx.test.filters.SmallTest;
 
@@ -68,6 +69,7 @@ public class ContextMenuHeaderViewTest {
 
     private View mHeaderView;
     private TextView mTitle;
+    private TextView mPageTitle;
     private TextView mUrl;
     private TextView mSecondaryUrl;
     private TextView mTertiaryUrl;
@@ -89,7 +91,8 @@ public class ContextMenuHeaderViewTest {
                 () -> {
                     sActivity.setContentView(R.layout.context_menu_header);
                     mHeaderView = sActivity.findViewById(android.R.id.content);
-                    mTitle = mHeaderView.findViewById(R.id.menu_header_title);
+                    mTitle = mHeaderView.findViewById(R.id.menu_header_alt_text);
+                    mPageTitle = mHeaderView.findViewById(R.id.menu_header_page_title);
                     mUrl = mHeaderView.findViewById(R.id.menu_header_url);
                     mSecondaryUrl = mHeaderView.findViewById(R.id.menu_header_secondary_url);
                     mTertiaryUrl = mHeaderView.findViewById(R.id.menu_header_tertiary_url);
@@ -99,6 +102,7 @@ public class ContextMenuHeaderViewTest {
                     mImageContainer = mHeaderView.findViewById(R.id.menu_header_image_container);
                     mModel =
                             new PropertyModel.Builder(ContextMenuHeaderProperties.ALL_KEYS)
+                                    .with(ContextMenuHeaderProperties.PAGE_TITLE, "")
                                     .with(ListMenuItemProperties.TITLE, "")
                                     .with(ContextMenuHeaderProperties.URL, "")
                                     .with(ContextMenuHeaderProperties.SECONDARY_URL, "")
@@ -124,6 +128,34 @@ public class ContextMenuHeaderViewTest {
 
     @Test
     @SmallTest
+    public void testPageTitle() {
+        assertThat(
+                "Incorrect initial page title visibility.",
+                mPageTitle.getVisibility(),
+                equalTo(View.GONE));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModel.set(ContextMenuHeaderProperties.PAGE_TITLE, SHORT_TITLE_STRING);
+                    mModel.set(ContextMenuHeaderProperties.PAGE_TITLE_MAX_LINES, 2);
+                });
+
+        assertThat(
+                "Incorrect page title visibility.",
+                mPageTitle.getVisibility(),
+                equalTo(View.VISIBLE));
+        assertThat(
+                "Incorrect page title string.", mPageTitle.getText(), equalTo(SHORT_TITLE_STRING));
+        assertThat(
+                "Incorrect max line count for page title.", mPageTitle.getMaxLines(), equalTo(2));
+        assertThat(
+                "Incorrect page title ellipsize mode.",
+                mPageTitle.getEllipsize(),
+                equalTo(TextUtils.TruncateAt.END));
+    }
+
+    @Test
+    @SmallTest
     public void testTitle() {
         assertThat(
                 "Incorrect initial title visibility.", mTitle.getVisibility(), equalTo(View.GONE));
@@ -131,7 +163,7 @@ public class ContextMenuHeaderViewTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mModel.set(ListMenuItemProperties.TITLE, SHORT_TITLE_STRING);
-                    mModel.set(ContextMenuHeaderProperties.TITLE_MAX_LINES, 2);
+                    mModel.set(ContextMenuHeaderProperties.ALT_TEXT_MAX_LINES, 2);
                 });
 
         assertThat("Incorrect title visibility.", mTitle.getVisibility(), equalTo(View.VISIBLE));
@@ -155,7 +187,10 @@ public class ContextMenuHeaderViewTest {
                 });
 
         assertThat("Incorrect URL visibility.", mUrl.getVisibility(), equalTo(View.VISIBLE));
-        assertThat("Incorrect URL string.", mUrl.getText(), equalTo(SHORT_URL_STRING));
+        assertThat(
+                "Incorrect URL string.",
+                mUrl.getText().toString(),
+                equalTo(BidiFormatter.getInstance().unicodeWrap(SHORT_URL_STRING)));
         assertThat("Incorrect max line count for URL.", mUrl.getMaxLines(), equalTo(1));
         assertThat(
                 "Incorrect URL ellipsize mode.",
@@ -192,8 +227,8 @@ public class ContextMenuHeaderViewTest {
                 equalTo(View.VISIBLE));
         assertThat(
                 "Incorrect secondary URL string.",
-                mSecondaryUrl.getText(),
-                equalTo(SECONDARY_URL_STRING));
+                mSecondaryUrl.getText().toString(),
+                equalTo(BidiFormatter.getInstance().unicodeWrap(SECONDARY_URL_STRING)));
         assertThat(
                 "Incorrect max line count for secondary URL.",
                 mSecondaryUrl.getMaxLines(),
@@ -246,8 +281,8 @@ public class ContextMenuHeaderViewTest {
                 equalTo(View.VISIBLE));
         assertThat(
                 "Incorrect tertiary URL string.",
-                mTertiaryUrl.getText(),
-                equalTo(TERTIARY_URL_STRING));
+                mTertiaryUrl.getText().toString(),
+                equalTo(BidiFormatter.getInstance().unicodeWrap(TERTIARY_URL_STRING)));
         assertThat(
                 "Incorrect max line count for tertiary URL.",
                 mTertiaryUrl.getMaxLines(),
@@ -407,7 +442,7 @@ public class ContextMenuHeaderViewTest {
                     mModel.set(
                             ListMenuItemProperties.TITLE,
                             longTitle ? LONG_TITLE_STRING : SHORT_TITLE_STRING);
-                    mModel.set(ContextMenuHeaderProperties.TITLE_MAX_LINES, 1);
+                    mModel.set(ContextMenuHeaderProperties.ALT_TEXT_MAX_LINES, 1);
                     mModel.set(
                             ContextMenuHeaderProperties.URL,
                             longUrl ? LONG_URL_STRING : SHORT_URL_STRING);
@@ -417,12 +452,12 @@ public class ContextMenuHeaderViewTest {
                             (v) -> {
                                 if (mModel.get(ContextMenuHeaderProperties.URL_MAX_LINES)
                                         == Integer.MAX_VALUE) {
-                                    mModel.set(ContextMenuHeaderProperties.TITLE_MAX_LINES, 1);
+                                    mModel.set(ContextMenuHeaderProperties.ALT_TEXT_MAX_LINES, 1);
                                     mModel.set(ContextMenuHeaderProperties.URL_MAX_LINES, 1);
                                     mModel.set(ContextMenuHeaderProperties.IS_EXPANDED, false);
                                 } else {
                                     mModel.set(
-                                            ContextMenuHeaderProperties.TITLE_MAX_LINES,
+                                            ContextMenuHeaderProperties.ALT_TEXT_MAX_LINES,
                                             Integer.MAX_VALUE);
                                     mModel.set(
                                             ContextMenuHeaderProperties.URL_MAX_LINES,

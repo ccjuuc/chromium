@@ -5,7 +5,9 @@
 #include "chrome/browser/extensions/api/input_ime/input_ime_api.h"
 
 #include <utility>
+
 #include "base/lazy_instance.h"
+#include "base/memory/singleton.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/common/extensions/api/input_method_private.h"
@@ -80,8 +82,9 @@ InputImeEventRouterFactory::InputImeEventRouterFactory() = default;
 InputImeEventRouterFactory::~InputImeEventRouterFactory() = default;
 
 InputImeEventRouter* InputImeEventRouterFactory::GetRouter(Profile* profile) {
-  if (!profile)
+  if (!profile) {
     return nullptr;
+  }
   // The |router_map_| is keyed by the original profile.
   // Refers to the comments in |RemoveProfile| method for the reason.
   profile = profile->GetOriginalProfile();
@@ -101,8 +104,9 @@ InputImeEventRouter* InputImeEventRouterFactory::GetRouter(Profile* profile) {
 }
 
 void InputImeEventRouterFactory::RemoveProfile(Profile* profile) {
-  if (!profile || router_map_.empty())
+  if (!profile || router_map_.empty()) {
     return;
+  }
   auto it = router_map_.find(profile);
   // The routers are common between an incognito profile and its original
   // profile, and are keyed on the original profiles.
@@ -120,8 +124,9 @@ ExtensionFunction::ResponseAction InputImeKeyEventHandledFunction::Run() {
   std::string error;
   InputMethodEngine* engine = GetEngineIfActive(
       Profile::FromBrowserContext(browser_context()), extension_id(), &error);
-  if (!engine)
+  if (!engine) {
     return RespondNow(Error(InformativeError(error, static_function_name())));
+  }
 
   engine->KeyEventHandled(extension_id(), params->request_id, params->response);
   return RespondNow(NoArguments());
@@ -131,8 +136,9 @@ ExtensionFunction::ResponseAction InputImeSetCompositionFunction::Run() {
   std::string error;
   InputMethodEngine* engine = GetEngineIfActive(
       Profile::FromBrowserContext(browser_context()), extension_id(), &error);
-  if (!engine)
+  if (!engine) {
     return RespondNow(Error(InformativeError(error, static_function_name())));
+  }
 
   std::optional<SetComposition::Params> parent_params =
       SetComposition::Params::Create(args());
@@ -163,7 +169,7 @@ ExtensionFunction::ResponseAction InputImeSetCompositionFunction::Run() {
   if (!engine->SetComposition(params.context_id, params.text.c_str(),
                               selection_start, selection_end, params.cursor,
                               segments, &error)) {
-    base::Value::List results;
+    base::ListValue results;
     results.Append(false);
     return RespondNow(ErrorWithArgumentsDoNotUse(
         std::move(results), InformativeError(error, static_function_name())));
@@ -175,15 +181,16 @@ ExtensionFunction::ResponseAction InputImeCommitTextFunction::Run() {
   std::string error;
   InputMethodEngine* engine = GetEngineIfActive(
       Profile::FromBrowserContext(browser_context()), extension_id(), &error);
-  if (!engine)
+  if (!engine) {
     return RespondNow(Error(InformativeError(error, static_function_name())));
+  }
 
   std::optional<CommitText::Params> parent_params =
       CommitText::Params::Create(args());
   const CommitText::Params::Parameters& params = parent_params->parameters;
   if (!engine->CommitText(params.context_id, base::UTF8ToUTF16(params.text),
                           &error)) {
-    base::Value::List results;
+    base::ListValue results;
     results.Append(false);
     return RespondNow(ErrorWithArgumentsDoNotUse(
         std::move(results), InformativeError(error, static_function_name())));
@@ -195,8 +202,9 @@ ExtensionFunction::ResponseAction InputImeSendKeyEventsFunction::Run() {
   std::string error;
   InputMethodEngine* engine = GetEngineIfActive(
       Profile::FromBrowserContext(browser_context()), extension_id(), &error);
-  if (!engine)
+  if (!engine) {
     return RespondNow(Error(InformativeError(error, static_function_name())));
+  }
 
   std::optional<SendKeyEvents::Params> parent_params =
       SendKeyEvents::Params::Create(args());
@@ -246,8 +254,9 @@ BrowserContextKeyedAPIFactory<InputImeAPI>* InputImeAPI::GetFactoryInstance() {
 }
 
 InputImeEventRouter* GetInputImeEventRouter(Profile* profile) {
-  if (!profile)
+  if (!profile) {
     return nullptr;
+  }
   return InputImeEventRouterFactory::GetInstance()->GetRouter(profile);
 }
 

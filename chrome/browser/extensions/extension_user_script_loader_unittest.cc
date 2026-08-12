@@ -21,13 +21,23 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
+#include "chrome/browser/extensions/chrome_extension_system_factory.h"
+#include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/component_extension_resource_manager.h"
 #include "extensions/browser/content_verifier/content_verifier.h"
+#include "extensions/browser/extension_pref_value_map.h"
+#include "extensions/browser/extension_pref_value_map_factory.h"
+#include "extensions/browser/test_extensions_browser_client.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/grit/extensions_browser_resources.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::URLPatternSet;
 
@@ -333,6 +343,66 @@ TEST_F(ExtensionUserScriptLoaderTest, LeaveBOMNotAtTheBeginning) {
 }
 
 TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
+  class MockResourceManager : public ComponentExtensionResourceManager {
+   public:
+    bool IsComponentExtensionResource(const base::FilePath& extension_path,
+                                      const base::FilePath& resource_path,
+                                      int* resource_id) const override {
+      if (extension_path.BaseName().value() == FILE_PATH_LITERAL("pdf") &&
+          resource_path.value() == FILE_PATH_LITERAL("main.js")) {
+        *resource_id = IDR_EXTENSION_DEFAULT_ICON;
+        return true;
+      }
+      return false;
+    }
+    const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
+        const ExtensionId& extension_id,
+        const content::BrowserContext* context) const override {
+      return nullptr;
+    }
+    bool IsDynamicComponentExtensionResource(
+        const ExtensionId& extension_id,
+        const std::string& path,
+        const content::BrowserContext* context) const override {
+      return false;
+    }
+    std::string GetDynamicResourceContent(
+        const ExtensionId& extension_id,
+        const std::string& path,
+        const content::BrowserContext* context) const override {
+      return "";
+    }
+    [[nodiscard]] base::ScopedClosureRunner RegisterTemplateDataProvider(
+        const ExtensionId& extension_id,
+        const content::BrowserContext* context,
+        TemplateDataProvider provider) const override {
+      return base::ScopedClosureRunner();
+    }
+  };
+
+  class TestClient : public TestExtensionsBrowserClient {
+   public:
+    TestClient() = default;
+    const ComponentExtensionResourceManager*
+    GetComponentExtensionResourceManager() override {
+      return &mock_manager_;
+    }
+    content::BrowserContext* GetOriginalContext(
+        content::BrowserContext* context) override {
+      return context;
+    }
+    bool IsValidContext(void* context) override { return context != nullptr; }
+
+   private:
+    MockResourceManager mock_manager_;
+  };
+
+  TestClient client;
+  client.set_extension_system_factory(
+      ChromeExtensionSystemFactory::GetInstance());
+  ExtensionsBrowserClient* old_client = ExtensionsBrowserClient::Get();
+  ExtensionsBrowserClient::Set(&client);
+
   base::FilePath resources_dir;
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_RESOURCES, &resources_dir));
 
@@ -347,10 +417,21 @@ TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
   UserScriptList user_scripts;
   user_scripts.push_back(std::move(user_script));
 
-  TestingProfile profile;
+  TestingProfile::Builder profile_builder;
+  profile_builder.AddTestingFactory(
+      ChromeExtensionSystemFactory::GetInstance(),
+      base::BindRepeating(&TestExtensionSystem::Build));
+  profile_builder.AddTestingFactory(
+      ExtensionPrefValueMapFactory::GetInstance(),
+      base::BindRepeating([](content::BrowserContext* context)
+                              -> std::unique_ptr<KeyedService> {
+        return std::make_unique<ExtensionPrefValueMap>();
+      }));
+  std::unique_ptr<TestingProfile> profile = profile_builder.Build();
+
   base::HistogramTester histogram_tester;
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
-  ExtensionUserScriptLoader loader(&profile, *extension,
+  ExtensionUserScriptLoader loader(profile.get(), *extension,
                                    /*state_store=*/nullptr,
                                    /*content_verifier=*/nullptr);
   user_scripts = loader.LoadScriptsForTest(std::move(user_scripts));
@@ -364,6 +445,8 @@ TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
       "Extensions.ContentScripts.ManifestContentScriptsLengthPerLoad", 0);
   histogram_tester.ExpectTotalCount(
       "Extensions.ContentScripts.DynamicContentScriptsLengthPerLoad", 1);
+
+  ExtensionsBrowserClient::Set(old_client);
 }
 
 TEST_F(ExtensionUserScriptLoaderTest, RecordScriptLengthUmas) {

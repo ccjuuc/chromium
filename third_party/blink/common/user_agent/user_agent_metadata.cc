@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/pickle.h"
 #include "net/http/structured_headers.h"
@@ -107,7 +106,7 @@ std::optional<std::string> UserAgentMetadata::Marshal(
   for (const auto& form_factors : in->form_factors) {
     out.WriteString(form_factors);
   }
-  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+  return std::string(out.AsStringView());
 }
 
 // static
@@ -117,9 +116,8 @@ std::optional<UserAgentMetadata> UserAgentMetadata::Demarshal(
     return std::nullopt;
   }
 
-  base::Pickle pickle =
-      base::Pickle::WithUnownedBuffer(base::as_byte_span(encoded.value()));
-  base::PickleIterator in(pickle);
+  base::PickleIterator in =
+      base::PickleIterator::WithData(base::as_byte_span(encoded.value()));
 
   uint32_t version;
   UserAgentMetadata out;
@@ -198,7 +196,7 @@ std::optional<UserAgentMetadata> UserAgentMetadata::Demarshal(
 
 // static
 bool UserAgentMetadata::IsValidFormFactor(std::string_view form_factor) {
-  return base::Contains(kValidFormFactors, form_factor);
+  return std::ranges::contains(kValidFormFactors, form_factor);
 }
 
 bool UserAgentBrandVersion::operator==(const UserAgentBrandVersion& a) const {

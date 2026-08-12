@@ -221,7 +221,7 @@ class Annotator : public mojom::Annotator {
   // Called once a response comes back from anchovy_provider_.
   void OnMantaResponseReceived(const RequestKey& request_key,
                                base::Time request_time,
-                               base::Value::Dict dict,
+                               base::DictValue dict,
                                manta::MantaStatus status);
 
   // Called when the data decoder service provides parsed JSON data for a server
@@ -251,7 +251,7 @@ class Annotator : public mojom::Annotator {
   const std::unique_ptr<Client> client_;
 
   // Maps from request key to previously-obtained annotation results.
-  // TODO(crbug.com/41432508): periodically clear entries from this cache.
+  // Note: We could periodically clear entries from this cache.
   std::map<RequestKey, mojom::AnnotateImageResultPtr> cached_results_;
 
   // Maps from request key to its list of request infos (i.e. info of clients

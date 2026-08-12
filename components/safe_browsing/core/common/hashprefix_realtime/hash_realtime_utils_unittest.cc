@@ -16,15 +16,6 @@
 
 namespace safe_browsing {
 
-TEST(HashRealTimeUtilsTest, TestGetHashPrefix) {
-  EXPECT_EQ(
-      hash_realtime_utils::GetHashPrefix("abcd1111111111111111111111111111"),
-      "abcd");
-  EXPECT_EQ(
-      hash_realtime_utils::GetHashPrefix("dcba1111111111111111111111111111"),
-      "dcba");
-}
-
 TEST(HashRealTimeUtilsTest, TestCanCheckUrl) {
   auto can_check_url = [](std::string url) {
     EXPECT_TRUE(GURL(url).is_valid());
@@ -106,7 +97,7 @@ TEST(HashRealTimeUtilsTest, TestIsHashDetailRelevant) {
   EXPECT_FALSE(hash_realtime_utils::IsHashDetailRelevant(create_hash_detail(
       V5::ThreatType::POTENTIALLY_HARMFUL_APPLICATION, std::nullopt)));
   EXPECT_FALSE(hash_realtime_utils::IsHashDetailRelevant(
-      create_hash_detail(V5::ThreatType::API_ABUSE, std::nullopt)));
+      create_hash_detail(V5::ThreatType::NOTIFICATION_ABUSE, std::nullopt)));
   EXPECT_FALSE(hash_realtime_utils::IsHashDetailRelevant(create_hash_detail(
       V5::ThreatType::ABUSIVE_EXPERIENCE_VIOLATION, std::nullopt)));
   EXPECT_FALSE(hash_realtime_utils::IsHashDetailRelevant(

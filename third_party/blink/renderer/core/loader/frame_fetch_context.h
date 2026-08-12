@@ -98,6 +98,10 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
                          const AtomicString& initiator_type) override;
   bool AllowImage() const override;
 
+  void CheckGuardrailsPolicyForAssetSize(GuardrailPolicyAssetType asset_type,
+                                         size_t bytes,
+                                         const KURL& url) override;
+
   void CheckGuardrailsPolicyForRequest(
       ResourceType resource_type,
       mojom::blink::RequestContextType request_context,
@@ -136,13 +140,14 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
 
   void Trace(Visitor*) const override;
 
-  bool CalculateIfAdSubresource(
+  bool IsFrameContext() const override { return true; }
+
+  ResourceAnnotations CalculateResourceAnnotations(
       const ResourceRequestHead& resource_request,
       base::optional_ref<const KURL> alias_url,
       ResourceType type,
       const FetchInitiatorInfo& initiator_info,
-      bool scan_stack_for_ads,
-      subresource_filter::ScopedRule* out_rule) override;
+      bool scan_javascript_stack) override;
 
   // LoadingBehaviorObserver overrides:
   void DidObserveLoadingBehavior(LoadingBehaviorFlag) override;
@@ -217,7 +222,7 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
       const HashMap<HashAlgorithm, String>& integrity_hashes) override;
   String GetSVGCacheIdentifier() const override;
 
-  const ClientHintsPreferences GetClientHintsPreferences() const;
+  const ClientHintsPreferences& GetClientHintsPreferences() const;
   float GetDevicePixelRatio() const;
   String GetReducedAcceptLanguage() const;
 
@@ -240,6 +245,14 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
   // Serializing the brand major version list is expensive, so it's cached.
   std::optional<UserAgentMetadata> last_ua_;
   std::optional<AtomicString> last_ua_serialized_brand_major_version_list_;
+  std::optional<AtomicString> last_ua_serialized_platform_;
+
+  // Killswitch for a feature that disables the logic that would upgrade
+  // requests with "RequiresUpgradeForLoader" when DevTools is attached
+  // just for devtools to show full request headers (that aren't used) for
+  // resources that are served from memory cache.
+  // https://crbug.com/512514655
+  bool is_fast_memory_cache_with_devtools_enabled_ = false;
 };
 
 }  // namespace blink

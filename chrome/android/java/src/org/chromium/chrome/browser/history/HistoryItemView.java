@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.history;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
@@ -13,7 +15,6 @@ import android.widget.ImageButton;
 import android.widget.ImageView.ScaleType;
 
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.view.ViewCompat;
 import androidx.core.widget.ImageViewCompat;
 import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
@@ -32,6 +33,7 @@ import org.chromium.components.browser_ui.widget.chips.ChipView;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableItemView;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListUtils;
 
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /** The SelectableItemView for items displayed in the browsing history UI. */
@@ -40,6 +42,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
     private ImageButton mRemoveButton;
     private @Nullable VectorDrawableCompat mBlockedVisitDrawable;
     private AppInfoCache mAppInfoCache;
+    private @Nullable Runnable mClusterToggleHandler;
 
     private final RoundedIconGenerator mIconGenerator;
     private DefaultFaviconHelper mFaviconHelper;
@@ -52,6 +55,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
     private boolean mIsItemRemoved;
     private BooleanSupplier mShowSourceApp;
     private ChipView mChipView;
+    private View mSparkContainer;
 
     public HistoryItemView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -74,8 +78,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
         mRemoveButton.setContentDescription(getContext().getString(R.string.remove));
         ImageViewCompat.setImageTintList(
                 mRemoveButton,
-                AppCompatResources.getColorStateList(
-                        getContext(), R.color.default_icon_color_secondary_tint_list));
+                getContext().getColorStateList(R.color.default_icon_color_secondary_tint_list));
         mRemoveButton.setOnClickListener(v -> remove());
         mRemoveButton.setScaleType(ScaleType.CENTER_INSIDE);
         mRemoveButton.setPaddingRelative(
@@ -88,6 +91,12 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
 
         mChipView = findViewById(R.id.chip);
         mChipView.getPrimaryTextView().setEllipsize(TextUtils.TruncateAt.END);
+
+        mSparkContainer = findViewById(R.id.spark_container);
+        // Ensure the spark is drawn on top of the favicon and its background. This is needed
+        // because the content of xml is added first, then the content from code is added next (on
+        // top of the xml children).
+        mSparkContainer.bringToFront();
     }
 
     @Override
@@ -96,7 +105,7 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
 
         super.setItem(item);
 
-        mTitleView.setText(item.getTitle());
+        mTitleView.setText(item.isClusterHead() ? item.getDomain() : item.getTitle());
         mDescriptionView.setText(item.getDomain());
         // Try to make the TLD part of the URL string visible.
         mDescriptionView.setEllipsize(TextUtils.TruncateAt.START);
@@ -124,9 +133,55 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
             requestIcon();
 
             mTitleView.setTextColor(
-                    AppCompatResources.getColorStateList(
-                            getContext(), R.color.default_text_color_list));
+                    getContext().getColorStateList(R.color.default_text_color_list));
         }
+
+        if (item.isClusterHead()) {
+            List<HistoryItem> subItems = item.getSubItems();
+            assumeNonNull(subItems);
+
+            int count = subItems.size();
+            mDescriptionView.setText(
+                    getContext()
+                            .getResources()
+                            .getQuantityString(
+                                    R.plurals.history_clusters_item_count, count, count));
+
+            mRemoveButton.setImageResource(
+                    item.isExpanded()
+                            ? R.drawable.ic_expand_less_black_24dp
+                            : R.drawable.ic_expand_more_black_24dp);
+            mRemoveButton.setOnClickListener(
+                    v -> {
+                        if (mClusterToggleHandler != null) mClusterToggleHandler.run();
+                    });
+            mRemoveButton.setContentDescription(
+                    getContext()
+                            .getString(
+                                    item.isExpanded()
+                                            ? R.string.accessibility_collapse_section
+                                            : R.string.accessibility_expand_section));
+        } else {
+            mRemoveButton.setImageResource(R.drawable.btn_delete_24dp);
+            mRemoveButton.setOnClickListener(v -> remove());
+            mRemoveButton.setContentDescription(getContext().getString(R.string.remove));
+        }
+        updateSparkVisibility();
+    }
+
+    @Override
+    protected void updateView(boolean animate) {
+        super.updateView(animate);
+        updateSparkVisibility();
+    }
+
+    private void updateSparkVisibility() {
+        HistoryItem item = getItem();
+        // The spark should be shown only if the item is not selected (checked), blocked, and is an
+        // actor visit.
+        boolean showSpark =
+                item != null && item.isActorVisit() && !item.wasBlockedVisit() && !isChecked();
+        mSparkContainer.setVisibility(showSpark ? View.VISIBLE : View.GONE);
     }
 
     @Initializer
@@ -167,6 +222,13 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
     @Initializer
     public void setFaviconHelper(DefaultFaviconHelper helper) {
         mFaviconHelper = helper;
+    }
+
+    /**
+     * @param handler The handler for toggling cluster expansion.
+     */
+    public void setClusterToggleHandler(@Nullable Runnable handler) {
+        mClusterToggleHandler = handler;
     }
 
     /** Removes the item associated with this view. */
@@ -218,7 +280,13 @@ public class HistoryItemView extends SelectableItemView<HistoryItem> {
                 });
     }
 
+    @VisibleForTesting
     View getRemoveButtonForTests() {
         return mRemoveButton;
+    }
+
+    @VisibleForTesting
+    View getSparkContainerForTests() {
+        return mSparkContainer;
     }
 }

@@ -23,7 +23,9 @@ suite('SpeechController', () => {
   let readAloudModel: TestReadAloudModelBrowserProxy;
   let app: AppElement;
   let isSpeechActiveChanged: boolean;
+  let audioCurrentlyPlayingChanged: boolean;
   let onPlayingFromSelection: boolean;
+  let onWordBoundary: boolean;
 
   function onPlayPauseToggle(text: string) {
     const element = document.createElement('p');
@@ -46,7 +48,9 @@ suite('SpeechController', () => {
       isSpeechActiveChanged = true;
     },
 
-    onIsAudioCurrentlyPlayingChange() {},
+    onIsAudioCurrentlyPlayingChange() {
+      audioCurrentlyPlayingChanged = true;
+    },
 
     onEngineStateChange() {},
 
@@ -54,6 +58,10 @@ suite('SpeechController', () => {
 
     onPlayingFromSelection() {
       onPlayingFromSelection = true;
+    },
+
+    onWordBoundary() {
+      onWordBoundary = true;
     },
   };
 
@@ -85,6 +93,9 @@ suite('SpeechController', () => {
     ContentController.setInstance(new ContentController());
     speechController.addListener(speechListener);
     speech.reset();
+    onWordBoundary = false;
+    isSpeechActiveChanged = false;
+    onPlayingFromSelection = false;
 
     app = await createApp();
   });
@@ -132,44 +143,48 @@ suite('SpeechController', () => {
       assertEquals(1, readAloudModel.getCallCount('init'));
     });
 
-    test('updateContent resets the read aloud model with ts flag', async () => {
-      chrome.readingMode.isTsTextSegmentationEnabled = true;
-      await createApp();
-      assertEquals(1, readAloudModel.getCallCount('resetModel'));
+    test('updateContent resets the read aloud model', () => {
+      const initialResetCallCount = readAloudModel.getCallCount('resetModel');
 
       setContent('hello', readAloudModel);
       app.updateContent();
-      assertEquals(2, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount + 1, readAloudModel.getCallCount('resetModel'));
 
       setContent('hello, it\'s me', readAloudModel);
       app.updateContent();
-      assertEquals(3, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount + 2, readAloudModel.getCallCount('resetModel'));
     });
 
-    test('updateContent does not reset the model without ts flag', async () => {
-      chrome.readingMode.isTsTextSegmentationEnabled = false;
-      await createApp();
-      assertEquals(0, readAloudModel.getCallCount('resetModel'));
+    test('updateContent does not reset the model with phrase highlighting flag', () => {
+      chrome.readingMode.isPhraseHighlightingEnabled = true;
+      const initialResetCallCount = readAloudModel.getCallCount('resetModel');
 
       setContent('hello', readAloudModel);
       app.updateContent();
-      assertEquals(0, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount, readAloudModel.getCallCount('resetModel'));
 
       setContent('hello, it\'s me', readAloudModel);
       app.updateContent();
-      assertEquals(0, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount, readAloudModel.getCallCount('resetModel'));
     });
 
-    test('showLoading resets the read aloud model with ts flag', () => {
-      chrome.readingMode.isTsTextSegmentationEnabled = true;
+    test('showLoading resets the read aloud model', () => {
+      const initialResetCallCount = readAloudModel.getCallCount('resetModel');
       app.showLoading();
-      assertEquals(1, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount + 1, readAloudModel.getCallCount('resetModel'));
     });
 
-    test('showLoading does not reset the model without ts flag', () => {
-      chrome.readingMode.isTsTextSegmentationEnabled = false;
+    test('showLoading does not reset the model with phrase highlighting flag', () => {
+      chrome.readingMode.isPhraseHighlightingEnabled = true;
+      const initialResetCallCount = readAloudModel.getCallCount('resetModel');
       app.showLoading();
-      assertEquals(0, readAloudModel.getCallCount('resetModel'));
+      assertEquals(
+          initialResetCallCount, readAloudModel.getCallCount('resetModel'));
     });
   });
 
@@ -177,6 +192,7 @@ suite('SpeechController', () => {
     const text = 'And I am a massive deal';
     const node: Node = setContent(text, readAloudModel);
     wordBoundaries.updateBoundary(4);
+    speechController.setHasSpeechBeenTriggered(true);
     chrome.readingMode.onHighlightGranularityChanged(
         chrome.readingMode.sentenceHighlighting);
     speechController.onHighlightGranularityChange(
@@ -201,14 +217,6 @@ suite('SpeechController', () => {
   });
 
   test('onPlayPauseToggle propagates state', async () => {
-    let propagatedSpeechActive = false;
-    let propagatedAudioPlaying = false;
-    chrome.readingMode.onIsSpeechActiveChanged = () => {
-      propagatedSpeechActive = true;
-    };
-    chrome.readingMode.onIsAudioCurrentlyPlayingChanged = () => {
-      propagatedAudioPlaying = true;
-    };
     const text = 'You bring the corsets';
     readAloudModel.setInitialized(true);
     const node = setContent(text, readAloudModel);
@@ -218,8 +226,9 @@ suite('SpeechController', () => {
     assertTrue(!!spoken.onstart);
     spoken.onstart(new SpeechSynthesisEvent('type', {utterance: spoken}));
 
-    assertTrue(propagatedSpeechActive);
-    assertTrue(propagatedAudioPlaying);
+    assertTrue(isSpeechActiveChanged);
+    assertTrue(audioCurrentlyPlayingChanged);
+    assertTrue(onWordBoundary);
   });
 
   test('onPlayPauseToggle ignores hidden nodes', () => {
@@ -265,7 +274,24 @@ suite('SpeechController', () => {
         assertEquals(1, speech.getCallCount('cancel'));
       });
 
+  test(
+      'onPlayPauseToggle resume with word boundaries notifies of change',
+      () => {
+        const textContent = 'And our fame and our faces';
+        const node = setContent(textContent, readAloudModel);
+        speechController.onPlayPauseToggle(node as HTMLElement);
+        speechController.onPlayPauseToggle(node as HTMLElement);
+        wordBoundaries.updateBoundary(10);
+        speech.reset();
+        onWordBoundary = false;
+
+        speechController.onPlayPauseToggle(node as HTMLElement);
+
+        assertTrue(onWordBoundary);
+      });
+
   test('onPlayPauseToggle with selection reads from there', async () => {
+    chrome.readingMode.isImmersiveEnabled = true;
     const id = 35;
     const p = document.createElement('p');
     const text1 = 'And our fame. ';
@@ -274,18 +300,16 @@ suite('SpeechController', () => {
     const textNode = document.createTextNode(text1 + text2 + text3);
     p.appendChild(textNode);
     document.body.appendChild(p);
-    chrome.readingMode.startNodeId = id;
-    chrome.readingMode.startOffset = text1.length + text2.length + 3;
-    chrome.readingMode.endNodeId = id;
-    chrome.readingMode.endOffset = text1.length + text2.length + 8;
     nodeStore.setDomNode(textNode, id);
     const selection = document.getSelection();
     assertTrue(!!selection);
     const range = new Range();
-    range.setStart(textNode, chrome.readingMode.startOffset);
-    range.setEnd(textNode, chrome.readingMode.endOffset);
+    range.setStart(textNode, text1.length + text2.length + 3);
+    range.setEnd(textNode, text1.length + text2.length + 8);
     selection.addRange(range);
     selectionController.onSelectionChange(selection);
+    speechController.onSelectionChange(
+        selectionController.getCurrentSelectionStart());
     readAloudModel.setInitialized(true);
     readAloudModel.setCurrentTextContent(text3);
     const node = ReadAloudNode.create(textNode);
@@ -318,6 +342,7 @@ suite('SpeechController', () => {
   });
 
   test('onPlayPauseToggle with selection resets word boundaries', async () => {
+    chrome.readingMode.isImmersiveEnabled = true;
     const id = 35;
     const p = document.createElement('p');
     const text1 = 'And the disgraces. ';
@@ -326,47 +351,64 @@ suite('SpeechController', () => {
     const textNode = document.createTextNode(text1 + text2 + text3);
     p.appendChild(textNode);
     document.body.appendChild(p);
+
+    const node = ReadAloudNode.create(textNode);
+    assertTrue(!!node);
+    readAloudModel.setInitialized(true);
+    readAloudModel.setCurrentTextContent(text1);
+    readAloudModel.setCurrentTextSegments(
+        [{node, start: 0, length: text1.length}]);
+
     // Start playing and then pause
     speechController.onPlayPauseToggle(p);
     wordBoundaries.updateBoundary(2);
     speechController.onPlayPauseToggle(p);
     assertTrue(wordBoundaries.hasBoundaries());
     // Now select text and play from there.
-    chrome.readingMode.startNodeId = id;
-    chrome.readingMode.startOffset = text1.length + text2.length + 3;
-    chrome.readingMode.endNodeId = id;
-    chrome.readingMode.endOffset = text1.length + text2.length + 8;
-    nodeStore.setDomNode(textNode, id);
+    // Restore DOM to clear highlights before selection
+    p.replaceChildren();
+    const newTextNode = document.createTextNode(text1 + text2 + text3);
+    p.appendChild(newTextNode);
+    nodeStore.setDomNode(newTextNode, id);
+    const newNode = ReadAloudNode.create(newTextNode);
+    assertTrue(!!newNode);
+    readAloudModel.setCurrentTextSegments(
+        [{node: newNode, start: 0, length: text1.length}]);
+
     const selection = document.getSelection();
     assertTrue(!!selection);
     const range = new Range();
-    range.setStart(textNode, chrome.readingMode.startOffset);
-    range.setEnd(textNode, chrome.readingMode.endOffset);
+    selection.removeAllRanges();
+    range.setStart(newTextNode, text1.length + text2.length + 3);
+    range.setEnd(newTextNode, text1.length + text2.length + 8);
     selection.addRange(range);
     selectionController.onSelectionChange(selection);
-    readAloudModel.setInitialized(true);
+    speechController.onSelectionChange(
+        selectionController.getCurrentSelectionStart());
     readAloudModel.setCurrentTextContent(text3);
-    const node = ReadAloudNode.create(textNode);
-    assertTrue(!!node);
-    readAloudModel.setCurrentTextSegments(
-        [{node, start: 0, length: text1.length}]);
+
     let calls = 0;
     readAloudModel.moveSpeechForward = () => {
       readAloudModel.methodCalled('moveSpeechForward');
       calls++;
       if (calls === 1) {
         readAloudModel.setCurrentTextSegments(
-            [{node, start: text1.length, length: text2.length}]);
-      } else {
+            [{node: newNode, start: text1.length, length: text2.length}]);
+      } else if (calls === 2) {
         readAloudModel.setCurrentTextSegments([
-          {node, start: text1.length + text2.length, length: text3.length},
+          {
+            node: newNode,
+            start: text1.length + text2.length,
+            length: text3.length,
+          },
         ]);
+      } else {
+        readAloudModel.setCurrentTextSegments([]);
       }
     };
-
-    speechController.onPlayPauseToggle(p);
     const mockTimer = new MockTimer();
     mockTimer.install();
+    speechController.onPlayPauseToggle(p);
     mockTimer.tick(playFromSelectionTimeout);
     mockTimer.uninstall();
     await speech.whenCalled('speak');
@@ -426,6 +468,7 @@ suite('SpeechController', () => {
     const text = 'But I took your hand';
     setContent(text, readAloudModel);
     wordBoundaries.updateBoundary(4);
+    speechController.setHasSpeechBeenTriggered(true);
     chrome.readingMode.onHighlightGranularityChanged(
         chrome.readingMode.sentenceHighlighting);
     speechController.onHighlightGranularityChange(
@@ -448,6 +491,7 @@ suite('SpeechController', () => {
     const text = 'And promised I\'d withstand';
     setContent(text, readAloudModel);
     wordBoundaries.updateBoundary(4);
+    speechController.setHasSpeechBeenTriggered(true);
     chrome.readingMode.onHighlightGranularityChanged(
         chrome.readingMode.sentenceHighlighting);
     speechController.onHighlightGranularityChange(

@@ -10,10 +10,12 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "media/base/video_frame_metadata.h"
 #include "media/capture/video/video_capture_buffer_pool_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_track.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
@@ -43,6 +45,23 @@ using testing::_;
 
 namespace blink {
 
+class ConfigurableVideoSource : public PushableMediaStreamVideoSource {
+ public:
+  explicit ConfigurableVideoSource(bool allows_override)
+      : PushableMediaStreamVideoSource(
+            scheduler::GetSingleThreadTaskRunnerForTesting()),
+        allows_override_(allows_override) {}
+  bool AllowsVideoThreadTypeOverride() const override {
+    return allows_override_;
+  }
+  void SetAllowsOverride(bool allows_override) {
+    allows_override_ = allows_override;
+  }
+
+ private:
+  bool allows_override_;
+};
+
 class MediaStreamVideoTrackUnderlyingSourceTest : public testing::Test {
  public:
   MediaStreamVideoTrackUnderlyingSourceTest()
@@ -61,12 +80,8 @@ class MediaStreamVideoTrackUnderlyingSourceTest : public testing::Test {
   }
 
   MediaStreamTrack* CreateTrack(ExecutionContext* execution_context) {
-    return MakeGarbageCollected<MediaStreamTrackImpl>(
-        execution_context,
-        MediaStreamVideoTrack::CreateVideoTrack(
-            pushable_video_source_,
-            MediaStreamVideoSource::ConstraintsOnceCallback(),
-            /*enabled=*/true));
+    return CreateVideoMediaStreamTrack(execution_context,
+                                       pushable_video_source_);
   }
 
   MediaStreamVideoTrackUnderlyingSource* CreateSource(ScriptState* script_state,
@@ -81,7 +96,7 @@ class MediaStreamVideoTrackUnderlyingSourceTest : public testing::Test {
     return CreateSource(script_state, track, 1u);
   }
 
- private:
+ protected:
   void RunIOUntilIdle() const {
     // Make sure that tasks on IO thread are completed before moving on.
     base::RunLoop run_loop;
@@ -92,16 +107,19 @@ class MediaStreamVideoTrackUnderlyingSourceTest : public testing::Test {
     base::RunLoop().RunUntilIdle();
   }
 
- protected:
-  void PushFrame(
-      const std::optional<base::TimeDelta>& timestamp = std::nullopt) {
+  void PushFrame(scoped_refptr<media::VideoFrame> frame,
+                 base::TimeTicks estimated_capture_time = base::TimeTicks()) {
+    pushable_video_source_->PushFrame(std::move(frame), estimated_capture_time);
+    RunIOUntilIdle();
+  }
+
+  void PushFrame(std::optional<base::TimeDelta> timestamp = std::nullopt) {
     const scoped_refptr<media::VideoFrame> frame =
         media::VideoFrame::CreateBlackFrame(gfx::Size(10, 5));
     if (timestamp) {
       frame->set_timestamp(*timestamp);
     }
-    pushable_video_source_->PushFrame(frame, base::TimeTicks());
-    RunIOUntilIdle();
+    PushFrame(std::move(frame));
   }
 
   static MediaStreamSource* CreateDevicePushableSource(
@@ -639,5 +657,162 @@ TEST_F(MediaStreamVideoTrackUnderlyingSourceTest,
   source->Close();
   track->stopTrack(v8_scope.GetExecutionContext());
 }
+
+TEST_F(MediaStreamVideoTrackUnderlyingSourceTest,
+       VideoFrameTimestampIsClamped) {
+  V8TestingScope v8_scope;
+  ScriptState* script_state = v8_scope.GetScriptState();
+  auto* track = CreateTrack(v8_scope.GetExecutionContext());
+  auto* source = CreateSource(script_state, track);
+  auto* stream =
+      ReadableStream::CreateWithCountQueueingStrategy(script_state, source, 0);
+
+  NonThrowableExceptionState exception_state;
+  auto* reader =
+      stream->GetDefaultReaderForTesting(script_state, exception_state);
+
+  // Use timestamps that are not multiples of the coarse resolution (100us).
+  const base::TimeDelta kUnclampedTimestamp1 = base::Microseconds(123456);
+  const base::TimeDelta kUnclampedTimestamp2 = base::Microseconds(234567);
+  const base::TimeDelta kUnclampedTimestamp3 = base::Microseconds(345678);
+  const base::TimeDelta kUnclampedTimestamp4 = base::Microseconds(456789);
+
+  ASSERT_FALSE(v8_scope.GetExecutionContext()->CrossOriginIsolatedCapability());
+  int resolution = TimeClamper::kCoarseResolutionMicroseconds;
+
+  // Frame 1: capture_begin_time only
+  auto video_frame1 = media::VideoFrame::CreateBlackFrame(gfx::Size(10, 10));
+  video_frame1->metadata().capture_begin_time =
+      base::TimeTicks() + kUnclampedTimestamp1;
+  PushFrame(std::move(video_frame1), base::TimeTicks::Now());
+
+  VideoFrame* web_video_frame1 =
+      ReadObjectFromStream<VideoFrame>(v8_scope, reader);
+  int64_t exposed_timestamp1 = web_video_frame1->timestamp();
+  EXPECT_EQ(exposed_timestamp1 % resolution, 0);
+  EXPECT_NE(exposed_timestamp1, kUnclampedTimestamp1.InMicroseconds());
+
+  // Frame 2: reference_time only
+  auto video_frame2 = media::VideoFrame::CreateBlackFrame(gfx::Size(10, 10));
+  video_frame2->metadata().reference_time =
+      base::TimeTicks() + kUnclampedTimestamp2;
+  PushFrame(std::move(video_frame2), base::TimeTicks::Now());
+
+  VideoFrame* web_video_frame2 =
+      ReadObjectFromStream<VideoFrame>(v8_scope, reader);
+  int64_t exposed_timestamp2 = web_video_frame2->timestamp();
+  EXPECT_EQ(exposed_timestamp2 % resolution, 0);
+  EXPECT_NE(exposed_timestamp2, kUnclampedTimestamp2.InMicroseconds());
+
+  // Frame 3: both set (should prefer capture_begin_time)
+  auto video_frame3 = media::VideoFrame::CreateBlackFrame(gfx::Size(10, 10));
+  video_frame3->metadata().capture_begin_time =
+      base::TimeTicks() + kUnclampedTimestamp3;
+  video_frame3->metadata().reference_time =
+      base::TimeTicks() + kUnclampedTimestamp4;
+  PushFrame(std::move(video_frame3), base::TimeTicks::Now());
+
+  VideoFrame* web_video_frame3 =
+      ReadObjectFromStream<VideoFrame>(v8_scope, reader);
+  int64_t exposed_timestamp3 = web_video_frame3->timestamp();
+  EXPECT_EQ(exposed_timestamp3 % resolution, 0);
+  EXPECT_NE(exposed_timestamp3, kUnclampedTimestamp3.InMicroseconds());
+  // It should be close to kUnclampedTimestamp3, not kUnclampedTimestamp4.
+  EXPECT_GT(kUnclampedTimestamp4.InMicroseconds() - exposed_timestamp3,
+            resolution * 2);
+
+  source->Close();
+  track->stopTrack(v8_scope.GetExecutionContext());
+}
+
+class MediaStreamVideoTrackUnderlyingSourceLeaseTest
+    : public testing::Test,
+      public testing::WithParamInterface<std::tuple<bool, bool, bool>> {
+ public:
+  MediaStreamVideoTrackUnderlyingSourceLeaseTest() = default;
+
+  ~MediaStreamVideoTrackUnderlyingSourceLeaseTest() override {
+    media_stream_source_.Clear();
+    platform_source_ = nullptr;
+    WebHeap::CollectAllGarbageForTesting();
+  }
+
+  void Initialize(bool allows_override) {
+    auto platform_source =
+        std::make_unique<ConfigurableVideoSource>(allows_override);
+    platform_source_ = platform_source.get();
+    media_stream_source_ = MakeGarbageCollected<MediaStreamSource>(
+        "dummy_source_id", MediaStreamSource::kTypeVideo, "dummy_source_name",
+        false /* remote */, std::move(platform_source));
+  }
+
+ protected:
+  test::TaskEnvironment task_environment_;
+  ScopedTestingPlatformSupport<IOTaskRunnerTestingPlatformSupport> platform_;
+  // The implementation of the video source (C++ layer). Controlled by the test
+  // to push frames and toggle override support.
+  raw_ptr<ConfigurableVideoSource> platform_source_;
+  // The Blink-layer wrapper object that represents the source in the web
+  // platform.
+  Persistent<MediaStreamSource> media_stream_source_;
+};
+
+TEST_P(MediaStreamVideoTrackUnderlyingSourceLeaseTest, CheckThreadTypeLease) {
+  const bool feature_enabled = std::get<0>(GetParam());
+  const bool is_worker = std::get<1>(GetParam());
+  const bool allows_override = std::get<2>(GetParam());
+
+  base::test::ScopedFeatureList feature_list;
+  if (feature_enabled) {
+    feature_list.InitAndEnableFeature(features::kWebRtcUseMediaThreadTypes);
+  } else {
+    feature_list.InitAndDisableFeature(features::kWebRtcUseMediaThreadTypes);
+  }
+
+  Initialize(allows_override);
+  V8TestingScope v8_scope;
+  ScriptState* script_state = v8_scope.GetScriptState();
+
+  MediaStreamTrack* track = MakeGarbageCollected<MediaStreamTrackImpl>(
+      v8_scope.GetExecutionContext(),
+      MediaStreamVideoTrack::CreateVideoTrack(
+          platform_source_.get(),
+          MediaStreamVideoSource::ConstraintsOnceCallback(),
+          /*enabled=*/true));
+
+  auto* source = MakeGarbageCollected<MediaStreamVideoTrackUnderlyingSource>(
+      script_state, track->Component(), nullptr, 1u);
+  source->SetRealmIsBoostableContextForTesting(is_worker);
+
+  // Create stream and read
+  auto* stream =
+      ReadableStream::CreateWithCountQueueingStrategy(script_state, source, 0);
+  NonThrowableExceptionState exception_state;
+  auto* reader =
+      stream->GetDefaultReaderForTesting(script_state, exception_state);
+  ScriptPromiseTester tester(script_state,
+                             reader->read(script_state, exception_state));
+  platform_source_->PushFrame(
+      media::VideoFrame::CreateBlackFrame(gfx::Size(10, 5)), base::TimeTicks());
+  tester.WaitUntilSettled();
+  EXPECT_TRUE(tester.IsFulfilled());
+
+  const bool should_have_lease =
+      feature_enabled && is_worker && allows_override;
+  EXPECT_EQ(source->GetRealmThreadTypeLeasedForTesting(),
+            should_have_lease
+                ? std::make_optional(base::ThreadType::kPresentation)
+                : std::nullopt);
+
+  source->Close();
+  track->stopTrack(v8_scope.GetExecutionContext());
+  source = nullptr;
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         MediaStreamVideoTrackUnderlyingSourceLeaseTest,
+                         testing::Combine(testing::Bool(),
+                                          testing::Bool(),
+                                          testing::Bool()));
 
 }  // namespace blink

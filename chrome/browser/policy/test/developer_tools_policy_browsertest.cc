@@ -7,6 +7,7 @@
 #include "base/strings/to_string.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
@@ -21,7 +22,6 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
@@ -446,7 +446,7 @@ IN_PROC_BROWSER_TEST_F(PolicyTest,
   base::FilePath crx_path(chrome_test_utils::GetTestFilePath(
       base::FilePath().AppendASCII("devtools").AppendASCII("extensions"),
       base::FilePath().AppendASCII("options.crx")));
-  extensions::ChromeTestExtensionLoader loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
   // TODO(crbug.com/40269105): We shouldn't need to ignore manifest warnings
   // here, but there's an issue related to the _metadata folder added for
   // content verification when force-installing an off-store crx in a branded

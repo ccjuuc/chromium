@@ -4,6 +4,8 @@
 
 #include "ash/wm/workspace/multi_window_resize_controller.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/shelf_config.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/shell.h"
@@ -18,14 +20,16 @@
 #include "ash/wm/wm_metrics.h"
 #include "ash/wm/workspace_controller.h"
 #include "ash/wm/workspace_controller_test_api.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "chromeos/ui/base/chromeos_ui_constants.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/client/capture_client.h"
 #include "ui/aura/test/test_window_delegate.h"
+#include "ui/aura/window_observer.h"
 #include "ui/base/class_property.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
@@ -39,6 +43,8 @@ using chromeos::WindowStateType;
 
 namespace ash {
 
+using chromeos::AppType;
+
 class MultiWindowResizeControllerTest : public AshTestBase {
  public:
   MultiWindowResizeControllerTest() = default;
@@ -48,40 +54,33 @@ class MultiWindowResizeControllerTest : public AshTestBase {
       const MultiWindowResizeControllerTest&) = delete;
   ~MultiWindowResizeControllerTest() override = default;
 
-  // AshTestBase:
-  void SetUp() override {
-    AshTestBase::SetUp();
-    WorkspaceController* wc = ShellTestApi().workspace_controller();
-    WorkspaceEventHandler* event_handler =
-        WorkspaceControllerTestApi(wc).GetEventHandler();
-    resize_controller_ = event_handler->multi_window_resize_controller();
-  }
-
  protected:
-  void ShowNow() { resize_controller_->ShowNow(); }
+  void ShowNow() { resize_controller()->ShowNow(); }
 
-  bool IsShowing() { return resize_controller_->IsShowing(); }
+  bool IsShowing() { return resize_controller()->IsShowing(); }
 
   bool HasTarget(aura::Window* window) {
-    if (!resize_controller_->windows_.is_valid())
+    if (!resize_controller()->windows_.is_valid()) {
       return false;
-    if (resize_controller_->windows_.window1 == window ||
-        resize_controller_->windows_.window2 == window) {
+    }
+    if (resize_controller()->windows_.window1 == window ||
+        resize_controller()->windows_.window2 == window) {
       return true;
     }
-    return base::Contains(resize_controller_->windows_.other_windows, window);
+    return std::ranges::contains(resize_controller()->windows_.other_windows,
+                                 window);
   }
 
   bool IsOverWindows(const gfx::Point& loc) {
-    return resize_controller_->IsOverWindows(loc);
+    return resize_controller()->IsOverWindows(loc);
   }
 
   views::Widget* resize_widget() {
-    return resize_controller_->resize_widget_.get();
+    return resize_controller()->resize_widget_.get();
   }
 
   base::OneShotTimer* GetShowTimer() {
-    return &(resize_controller_->show_timer_);
+    return &(resize_controller()->show_timer_);
   }
 
   bool IsShowTimerRunning() {
@@ -91,8 +90,12 @@ class MultiWindowResizeControllerTest : public AshTestBase {
                MultiWindowResizeController::kShowDelay;
   }
 
-  raw_ptr<MultiWindowResizeController, DanglingUntriaged> resize_controller_ =
-      nullptr;
+  MultiWindowResizeController* resize_controller() {
+    WorkspaceController* wc = ShellTestApi().workspace_controller();
+    WorkspaceEventHandler* event_handler =
+        WorkspaceControllerTestApi(wc).GetEventHandler();
+    return event_handler->multi_window_resize_controller();
+  }
 };
 
 // Assertions around moving mouse over 2 windows.
@@ -118,7 +121,7 @@ TEST_F(MultiWindowResizeControllerTest, BasicTests) {
   EXPECT_FALSE(IsOverWindows(gfx::Point(200, 200)));
 
   // Have to explicitly invoke this as MouseWatcher listens for native events.
-  resize_controller_->MouseMovedOutOfHost();
+  resize_controller()->MouseMovedOutOfHost();
   EXPECT_FALSE(IsShowTimerRunning());
   EXPECT_FALSE(IsShowing());
 }
@@ -347,6 +350,129 @@ TEST_F(MultiWindowResizeControllerTest, Three) {
   EXPECT_FALSE(WindowState::Get(w3.get())->is_dragged());
 
   generator->PressLeftButton();
+}
+
+// This test ensures that multi window resizing will not cause a crash/UAF if an
+// attribute of the window involved in the multi resizing (visibility, property
+// or capture) has changed while resizing.
+TEST_F(MultiWindowResizeControllerTest, ModifyWindowDuringResize) {
+  static auto release_capture = [](aura::Window* window) {
+    auto* capture_client =
+        aura::client::GetCaptureClient(window->GetRootWindow());
+    auto* capture_window = capture_client->GetCaptureWindow();
+    capture_window->ReleaseCapture();
+  };
+
+  enum TestCase {
+    kVisibilityChange,
+    kPropertyChange,
+    kLostCaptureInside,
+    // Following happens outside of event handling.
+    kLostCaptureOutside,
+    kDestroyOutside,
+  };
+
+  class WindowChangeObserver : public aura::WindowObserver {
+   public:
+    explicit WindowChangeObserver(TestCase test_case) : test_case_(test_case) {}
+    ~WindowChangeObserver() override {
+      CHECK(fired_ || test_case_ == kLostCaptureOutside ||
+            test_case_ == kDestroyOutside);
+    }
+    void OnWindowBoundsChanged(aura::Window* window,
+                               const gfx::Rect& old_bounds,
+                               const gfx::Rect& new_bounds,
+                               ui::PropertyChangeReason reason) override {
+      if (fired_) {
+        return;
+      }
+      fired_ = true;
+      switch (test_case_) {
+        case kVisibilityChange:
+          window->Hide();
+          break;
+        case kPropertyChange:
+          window->SetProperty(aura::client::kResizeBehaviorKey, 0);
+          break;
+        case kLostCaptureInside: {
+          release_capture(window);
+        } break;
+        case kLostCaptureOutside:
+        case kDestroyOutside:
+          break;
+      }
+    }
+    bool fired_ = false;
+    const TestCase test_case_;
+  };
+
+  for (auto test_case : {kVisibilityChange, kPropertyChange, kLostCaptureInside,
+                         kLostCaptureOutside, kDestroyOutside}) {
+    std::string_view test_name;
+    switch (test_case) {
+      case kVisibilityChange:
+        test_name = "VisibilityChange";
+        break;
+      case kPropertyChange:
+        test_name = "PropertyChange";
+        break;
+      case kLostCaptureInside:
+        test_name = "LostCaptureInside";
+        break;
+      case kLostCaptureOutside:
+        test_name = "LostCaptureOutside";
+        break;
+      case kDestroyOutside:
+        test_name = "DestroyOutside";
+    };
+    SCOPED_TRACE(test_name);
+
+    aura::test::TestWindowDelegate delegate1;
+    std::unique_ptr<aura::Window> w1(CreateTestWindowInShell(
+        {.delegate = &delegate1, .bounds = {100, 100}}));
+    delegate1.set_window_component(HTRIGHT);
+    aura::test::TestWindowDelegate delegate2;
+    std::unique_ptr<aura::Window> w2(
+        CreateTestWindowInShell({.delegate = &delegate2,
+                                 .bounds = {100, 0, 100, 100},
+                                 .window_id = -2}));
+    delegate2.set_window_component(HTRIGHT);
+
+    ASSERT_FALSE(resize_controller()->is_resizing());
+
+    WindowChangeObserver obs(test_case);
+    w2->AddObserver(&obs);
+
+    ui::test::EventGenerator* generator = GetEventGenerator();
+    generator->MoveMouseTo(w1->bounds().CenterPoint());
+    ShowNow();
+    generator->MoveMouseTo(
+        resize_controller()
+            ->resize_widget_show_bounds_in_screen_for_testing()
+            .CenterPoint());
+    generator->PressLeftButton();
+    EXPECT_TRUE(resize_controller()->is_resizing());
+    if (test_case == kLostCaptureOutside) {
+      release_capture(w2.get());
+    } else if (test_case == kDestroyOutside) {
+      w2->RemoveObserver(&obs);
+      w2.reset();
+    } else {
+      // Updating bounds triggers the cancel scenario.
+      generator->MoveMouseBy(10, 0);
+    }
+    EXPECT_FALSE(resize_controller()->is_resizing());
+    // Make sure an extra mouse move will not cause any issue.
+    generator->MoveMouseBy(10, 0);
+    EXPECT_FALSE(resize_controller()->is_resizing());
+    generator->ReleaseLeftButton();
+    EXPECT_FALSE(resize_controller()->resize_widget_for_testing());
+    EXPECT_FALSE(resize_controller()->window_resizer_for_testing());
+
+    if (test_case != kDestroyOutside) {
+      w2->RemoveObserver(&obs);
+    }
+  }
 }
 
 // Tests that clicking outside of the resize handle dismisses it.
@@ -630,8 +756,9 @@ TEST_F(MultiWindowResizeControllerTest, HiddenInOverview) {
   // Create two windows side by side, but not overlapping horizontally. Note
   // that when creating a window, the window is slightly larger than the given
   // bounds so position |window2| accordingly.
-  auto window1 = CreateAppWindow(gfx::Rect(0, 0, 100, 100));
-  auto window2 = CreateAppWindow(gfx::Rect(104, 0, 100, 100));
+  auto window1 = CreateWindowWithAppType(AppType::SYSTEM_APP, {100, 100});
+  auto window2 =
+      CreateWindowWithAppType(AppType::SYSTEM_APP, {104, 0, 100, 100});
 
   // Move the mouse to the middle of the two windows. The multi window resizer
   // should appear.

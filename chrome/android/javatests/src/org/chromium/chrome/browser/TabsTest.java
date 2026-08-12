@@ -17,7 +17,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.test.util.ChromeTabUtils.getTabCountOnUiThread;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
@@ -50,8 +49,10 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
@@ -63,18 +64,17 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorImpl;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tabpersistence.TabStateDirectory;
 import org.chromium.chrome.browser.tabpersistence.TabStateFileManager;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.transit.page.WebPageStation;
+import org.chromium.chrome.test.util.BottomBarTestUtils;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.components.javascript_dialogs.JavascriptTabModalDialog;
@@ -85,6 +85,7 @@ import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.content_public.browser.test.util.UiUtils;
+import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
@@ -99,9 +100,10 @@ import java.util.concurrent.atomic.AtomicReference;
 /** General Tab tests. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableFeatures({ContentFeatures.ANDROID_DESKTOP_ZOOM_SCALING})
 @DoNotBatch(
         reason =
-                "https://crbug.com/1347598: Side effects are causing flakes in CI and failures"
+                "https://crbug.com/40854790: Side effects are causing flakes in CI and failures"
                         + " locally. Unbatched to isolate flakes before batching again.")
 public class TabsTest {
     @Rule
@@ -159,7 +161,6 @@ public class TabsTest {
     @Test
     @LargeTest
     @Feature({"Navigation"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
     @CommandLineFlags.Add(ContentSwitches.DISABLE_POPUP_BLOCKING)
     // TODO(crbug.com/457847264): Change to @Restriction(DeviceFormFactor.PHONE) after launch
     @DisableFeatures(ChromeFeatureList.ANDROID_OPEN_INCOGNITO_AS_WINDOW)
@@ -242,14 +243,20 @@ public class TabsTest {
                         () -> {
                             return mActivityTestRule.getActivity().getCurrentTabModel().getCount();
                         });
-        onViewWaiting(withId(R.id.tab_switcher_button))
-                .check(matches(isDisplayed()))
-                .perform(click());
+        View tabSwitcherBtn =
+                BottomBarTestUtils.findViewById(
+                        mActivityTestRule.getActivity(), R.id.tab_switcher_button);
+        onViewWaiting(Matchers.is(tabSwitcherBtn)).check(matches(isDisplayed())).perform(click());
         LayoutTestUtils.waitForLayout(
-                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.TAB_SWITCHER);
+                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.HUB);
 
-        int newTabButtonId = R.id.toolbar_action_button;
-        onViewWaiting(withId(newTabButtonId)).check(matches(isDisplayed())).perform(click());
+        int newTabButtonId =
+                BottomBarTestUtils.isBottomBarVisible(mActivityTestRule.getActivity())
+                        ? R.id.new_tab_button
+                        : R.id.toolbar_action_button;
+        View newTabBtn =
+                BottomBarTestUtils.findViewById(mActivityTestRule.getActivity(), newTabButtonId);
+        onViewWaiting(Matchers.is(newTabBtn)).check(matches(isDisplayed())).perform(click());
         LayoutTestUtils.waitForLayout(
                 mActivityTestRule.getActivity().getLayoutManager(), LayoutType.BROWSING);
 
@@ -285,7 +292,9 @@ public class TabsTest {
                             mActivityTestRule
                                     .getKeyboardDelegate()
                                     .isKeyboardShowing(
-                                            mActivityTestRule.getActivity().getTabsView());
+                                            mActivityTestRule
+                                                    .getActivity()
+                                                    .getTabsViewForTesting());
                     Criteria.checkThat(isKeyboardShowing, Matchers.is(show));
                 });
     }
@@ -298,7 +307,7 @@ public class TabsTest {
     @LargeTest
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
     @Feature({"Android-TabSwitcher"})
-    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // crbug.com/353910783
+    @DisabledTest(message = "crbug.com/353910783")
     public void testHideKeyboard() throws Exception {
         // Open a new tab(The 1st tab) and click node.
         mActivityTestRule.loadUrlInNewTab(getUrl(TEST_FILE_PATH), false);
@@ -394,7 +403,7 @@ public class TabsTest {
 
     /**
      * Verify that the selection is collapsed when switching to the tab-switcher mode then switching
-     * back. https://crbug.com/697756
+     * back. https://crbug.com/40508949
      */
     @Test
     @MediumTest
@@ -415,7 +424,7 @@ public class TabsTest {
 
     /**
      * Verify that opening a new tab and navigating immediately sets a size on the newly created
-     * renderer. https://crbug.com/434477.
+     * renderer. https://crbug.com/41143678.
      */
     @Test
     @SmallTest
@@ -459,7 +468,7 @@ public class TabsTest {
     /** Enters the tab switcher without animation. */
     private void showOverviewWithNoAnimation() {
         LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.TAB_SWITCHER, false);
+                mActivityTestRule.getActivity().getLayoutManager(), LayoutType.HUB, false);
     }
 
     /** Exits the tab switcher without animation. */
@@ -483,11 +492,16 @@ public class TabsTest {
                                     .getEventForwarder()
                                     .startFling(
                                             SystemClock.uptimeMillis(),
+                                            /* x= */ 0f,
+                                            /* y= */ 0f,
+                                            /* rawX= */ 0f,
+                                            /* rawY= */ 0f,
                                             0,
                                             -2000,
-                                            false,
-                                            true,
-                                            false);
+                                            /* syntheticScroll= */ false,
+                                            /* preventBoosting= */ true,
+                                            /* isTouchpadEvent= */ false,
+                                            /* targetViewport= */ true);
                         });
         ChromeTabUtils.closeCurrentTab(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
@@ -496,7 +510,7 @@ public class TabsTest {
     @Test
     @MediumTest
     @Restriction(DeviceFormFactor.PHONE)
-    @DisabledTest(message = "https://crbug.com/1347598")
+    @DisabledTest(message = "https://crbug.com/40854790")
     public void testQuickSwitchBetweenTabAndSwitcherMode() {
         final String[] urls = {
             getUrl("/chrome/test/data/android/navigate/one.html"),
@@ -544,7 +558,7 @@ public class TabsTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287759
     public void testOrientationChangeCausesLiveTabReflowInNormalView()
             throws InterruptedException, TimeoutException {
         mActivityTestRule
@@ -632,10 +646,10 @@ public class TabsTest {
         }
     }
 
-    // Regression test for https://crbug.com/1394372.
+    // Regression test for https://crbug.com/40881554.
     @Test
     @MediumTest
-    @Restriction({DeviceFormFactor.PHONE, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+    @Restriction(DeviceFormFactor.PHONE)
     @Feature({"Android-TabSwitcher"})
     @DisabledTest(message = "https://crbug.com/373446108")
     public void testRequestFocusOnCloseTab() throws Exception {
@@ -739,7 +753,7 @@ public class TabsTest {
 
     @Test
     @MediumTest
-    @Restriction({DeviceFormFactor.PHONE, RESTRICTION_TYPE_NON_LOW_END_DEVICE})
+    @Restriction(DeviceFormFactor.PHONE)
     @Feature({"Android-TabSwitcher"})
     public void testRequestFocusOnSwitchTab() {
         final TabModel model =
@@ -806,7 +820,7 @@ public class TabsTest {
     @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    public void testLastClosedTabTriggersNotifyChangedCall() {
+    public void testLastClosedTabTriggersCurrentTabSupplierCall() {
         final TabModel model =
                 mActivityTestRule.getActivity().getTabModelSelector().getCurrentModel();
         final Tab tab = mActivityTestRule.getActivityTab();
@@ -815,13 +829,13 @@ public class TabsTest {
 
         runOnUiThreadBlocking(
                 () -> {
-                    selector.addObserver(
-                            new TabModelSelectorObserver() {
-                                @Override
-                                public void onChange() {
-                                    mNotifyChangedCalled = true;
-                                }
-                            });
+                    selector.getCurrentTabSupplier()
+                            .addSyncObserver(
+                                    (t) -> {
+                                        if (t == null) {
+                                            mNotifyChangedCalled = true;
+                                        }
+                                    });
                 });
 
         assertEquals("Too many tabs at startup", 1, getTabCountOnUiThread(model));
@@ -834,7 +848,7 @@ public class TabsTest {
                                                 TabClosureParams.closeTab(tab).build(),
                                                 /* allowDialog= */ false));
 
-        assertTrue("notifyChanged() was not called", mNotifyChangedCalled);
+        assertTrue("getCurrentTabSupplier() was not called with null", mNotifyChangedCalled);
     }
 
     @Test
@@ -873,9 +887,60 @@ public class TabsTest {
     }
 
     @Test
+    @LargeTest
+    @Feature({"Android-TabSwitcher"})
+    @EnableFeatures(ChromeFeatureList.TAB_ANDROID_GRACEFUL_SHUTDOWN)
+    public void testTabsWithUnloadHandlerAreKeptAliveOnShutdown() throws Exception {
+        final Tab tab = mActivityTestRule.getActivityTab();
+
+        // Register an unload handler so FastShutdownIfPossible returns false.
+        JavaScriptUtils.executeJavaScriptAndWaitForResult(
+                tab.getWebContents(),
+                "window.addEventListener('unload', function(event) { "
+                        + "console.log('unload'); "
+                        + "});");
+
+        final CallbackHelper webContentsDestroyed = new CallbackHelper();
+
+        runOnUiThreadBlocking(
+                () -> {
+                    @SuppressWarnings("unused") // Avoid GC of observer
+                    WebContentsObserver observer =
+                            new WebContentsObserver(tab.getWebContents()) {
+                                @Override
+                                public void webContentsDestroyed() {
+                                    webContentsDestroyed.notifyCalled();
+                                }
+                            };
+
+                    assertNotNull("No initial tab at startup", tab);
+                    assertNotNull("Tab does not have a web contents", tab.getWebContents());
+                    assertTrue("Tab is destroyed", tab.isInitialized());
+                });
+
+        ApplicationTestUtils.finishActivity(mActivityTestRule.getActivity());
+
+        // The WebContents should be kept alive by TabWebContentsDestroyer,
+        // but the Tab itself should have dropped its reference.
+        runOnUiThreadBlocking(
+                () -> {
+                    assertNull("Tab still has a web contents", tab.getWebContents());
+                    assertFalse("Tab was not destroyed", tab.isInitialized());
+                });
+
+        // Ensure GracefulShutdownService was started because of the Activity finishing.
+        // We can check if it's running using ForegroundServiceUtils or just checking if the service
+        // intent was sent, but since we can't easily assert on Android Services in this test
+        // framework, we can just wait for the WebContents to be destroyed.
+
+        // Wait for the delayed destruction (1500-2000ms).
+        webContentsDestroyed.waitForOnly();
+    }
+
+    @Test
     @MediumTest
     @Feature({"Android-TabSwitcher"})
-    @DisabledTest(message = "https://crbug.com/471243722")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/471243722
     public void testIncognitoTabsNotRestoredAfterSwipe() throws Exception {
         mActivityTestRule.loadUrl(getUrl(TEST_PAGE_FILE_PATH));
 

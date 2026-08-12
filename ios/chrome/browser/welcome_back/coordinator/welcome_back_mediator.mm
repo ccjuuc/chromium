@@ -10,9 +10,10 @@
 #import "ios/chrome/browser/first_run/public/features.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/constants.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/welcome_back/model/features.h"
 #import "ios/chrome/browser/welcome_back/model/welcome_back_prefs.h"
 #import "ios/chrome/browser/welcome_back/ui/welcome_back_screen_consumer.h"
@@ -52,19 +53,18 @@
   _consumer = consumer;
   [_consumer setWelcomeBackItems:[self itemsToDisplay]];
 
-  bool isSignedIn =
-      _authenticationService->HasPrimaryIdentity(signin::ConsentLevel::kSignin);
+  bool isSignedIn = _authenticationService->HasPrimaryIdentity();
   // Feed the correct string and avatar (if applicable) to the consumer.
   if (isSignedIn) {
-    id<SystemIdentity> identity = _authenticationService->GetPrimaryIdentity(
-        signin::ConsentLevel::kSignin);
+    id<SystemIdentity> identity = _authenticationService->GetPrimaryIdentity();
     UIImage* avatarImage =
         GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
             identity, IdentityAvatarSize::Large);
 
     [_consumer setTitle:l10n_util::GetNSStringF(
                             IDS_IOS_WELCOME_BACK_TITLE_SIGNED_IN,
-                            base::SysNSStringToUTF16(identity.userGivenName))];
+                            base::SysNSStringToUTF16(
+                                UserGivenNameFullNameOrEmail(identity)))];
     [_consumer setAvatar:avatarImage];
   } else {
     [_consumer

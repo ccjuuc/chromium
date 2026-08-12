@@ -3,7 +3,6 @@
 # found in the LICENSE file.
 
 import("//build/buildflag_header.gni")
-import("//chrome/android/modules/buildflags.gni")
 import("//chrome/common/features.gni")
 import("//device/vr/buildflags/buildflags.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
@@ -17,6 +16,22 @@ if (is_android) {
 source_set("vr") {
   public = [ "vr_tab_helper.h" ]
   public_deps = [ "//content/public/browser" ]
+
+  if (enable_vr) {
+    public += [ "chrome_xr_integration_client.h" ]
+    public_deps += [ "//base" ]
+  }
+}
+
+# Header-only target so non-:browser targets can include this header
+# without depending on :browser. The .cc file remains in
+# //chrome/browser:browser.
+source_set("chrome_xr_integration_client") {
+  public = [ "chrome_xr_integration_client.h" ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
 }
 
 source_set("impl") {
@@ -24,7 +39,7 @@ source_set("impl") {
   deps = [
     ":vr",
     "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/ui",
+    "//chrome/browser/ui/browser_window",
     "//device/vr/buildflags",
     "//third_party/blink/public/common:headers",
   ]
@@ -34,6 +49,8 @@ source_set("impl") {
       "//base",
       "//chrome/browser/flags:flags_android",
     ]
+  } else {
+    deps += [ "//chrome/browser/ui/tabs:tab_strip" ]
   }
 }
 
@@ -102,9 +119,6 @@ if (enable_vr) {
       "renderers/radial_gradient_quad_renderer.h",
       "renderers/textured_quad_renderer.cc",
       "renderers/textured_quad_renderer.h",
-      "skia_surface_provider.cc",
-      "skia_surface_provider.h",
-      "skia_surface_provider_factory.h",
       "target_property.cc",
       "target_property.h",
       "ui.cc",
@@ -147,34 +161,9 @@ if (enable_vr) {
 
     defines = [ "VR_UI_IMPLEMENTATION" ]
 
-    if (use_native_partitions) {
-      # Mark symbols in this library as belonging to the VR partition. Only
-      # exported symbols (module entrypoints) are affected.
-      cflags = [ "-fsymbol-partition=vr_partition" ]
-    }
-
     if (is_android) {
       sources += [ "jni_onload.cc" ]
       deps += [ "//third_party/jni_zero" ]
-    }
-
-    if (use_command_buffer) {
-      sources += [
-        "cmd_buffer_surface_provider.cc",
-        "cmd_buffer_surface_provider.h",
-        "skia_surface_provider_factory_cmd_buffer.cc",
-      ]
-      deps += [
-        "//gpu/command_buffer/client:gles2_implementation",
-        "//gpu/skia_bindings",
-      ]
-    } else {
-      sources += [
-        "native_gl_surface_provider.cc",
-        "native_gl_surface_provider.h",
-        "skia_surface_provider_factory_native_gl.cc",
-      ]
-      deps += [ "//ui/gl/init" ]
     }
   }
 
@@ -245,8 +234,8 @@ if (enable_vr) {
     }
   }
 
-  # vr_base contains common dependencies of vr_common and vr_ui. It exists because
-  # vr_ui must not depend on vr_common.
+  # vr_base contains common dependencies of vr_common and vr_ui. It exists
+  # because vr_ui must not depend on vr_common.
   component("vr_base") {
     sources = [
       "browser_ui_interface.h",
@@ -279,7 +268,6 @@ if (enable_vr) {
 
     deps = [
       "//base",
-      "//chrome/app:generated_resources",
       "//components/security_state/core",
       "//components/ukm/content",
       "//components/url_formatter",
@@ -322,7 +310,6 @@ if (enable_vr) {
     deps = [
       ":vr_test_support",
       "//chrome/app/vector_icons",
-      "//chrome/browser",
       "//chrome/test:test_support",
       "//components/url_formatter",
       "//components/vector_icons",
@@ -391,7 +378,8 @@ if (enable_vr) {
       "//ui/accessibility:ax_enums_mojo",
       "//ui/gfx:test_support",
 
-      # TODO(mthiesse, crbug.com/769373): Remove dependency on device/vr:fakes.
+      # TODO(mthiesse, crbug.com/41346944): Remove dependency on
+      # device/vr:fakes.
       "//device/vr:vr_fakes",
 
       # TODO(cjgrant): Figure out why including //ui/android:ui_java here
@@ -451,8 +439,8 @@ if (enable_vr) {
   }
 
   if (!is_android) {
-    # This should only contain that files that are useful if enable_vr = true. For
-    # tests/infrastructure that can be used with enable_vr = false, see
+    # This should only contain that files that are useful if enable_vr = true.
+    # For tests/infrastructure that can be used with enable_vr = false, see
     # //chrome/test:xr_browser_tests_common.
     source_set("xr_browser_tests_vr_required") {
       testonly = true
@@ -493,6 +481,7 @@ if (enable_vr) {
           "webxr_vr_indicators_browser_test.cc",
           "webxr_vr_input_browser_test.cc",
           "webxr_vr_isolated_device_service_test.cc",
+          "webxr_vr_lifecycle_browser_test.cc",
           "webxr_vr_permission_browser_test.cc",
           "webxr_vr_permission_request_browser_test.cc",
           "webxr_vr_pixel_browser_test.cc",
@@ -510,7 +499,10 @@ if (enable_vr) {
         ]
 
         if (enable_openxr) {
-          deps += [ "//third_party/openxr" ]
+          deps += [
+            "//device/vr:openxr_test_helper",
+            "//third_party/openxr",
+          ]
           data_deps += [ "//device/vr:openxr_mock" ]
         }
       }

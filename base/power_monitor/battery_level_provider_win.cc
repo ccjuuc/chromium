@@ -14,6 +14,10 @@
 #include <setupapi.h>
 #include <winioctl.h>
 
+// LogSeverity is both a macro in setupapi.h and an enum in absl, which is used
+// indirectly via //base.
+#undef LogSeverity
+
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -25,6 +29,7 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/win/scoped_devinfo.h"
 #include "base/win/scoped_handle.h"
 
@@ -219,7 +224,7 @@ class BatteryLevelProviderWin : public BatteryLevelProvider {
   // to avoid the performance cost of concurrent calls.
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_{
       base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(),
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})};
 
   base::WeakPtrFactory<BatteryLevelProviderWin> weak_ptr_factory_{this};
@@ -236,6 +241,10 @@ BatteryLevelProviderWin::GetBatteryStateImpl() {
   // trigger ScopedBlockingCall.
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
+
+  // Mitigate the issues caused by loading DLLs on a background thread
+  // (http://crbug/973868).
+  SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
 
   // Battery interfaces are enumerated at every sample to detect when a new
   // interface is added, and avoid holding dangling handles when a battery is

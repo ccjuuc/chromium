@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 
+#include "base/containers/adapters.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/typed_macros.h"
 #include "components/viz/common/quads/frame_interval_inputs.h"
@@ -160,29 +161,24 @@ void FrameIntervalMatcher::Inputs::WriteIntoTrace(
     perfetto::TracedValue trace_context) const {
   auto dict = std::move(trace_context).WriteDictionary();
   for (const auto& [frame_sink_id, interval_inputs] : inputs_map) {
-    // frame_sink_dict needs to be enclosed in a dedicated code block so that it
-    // would go out of scope and be destructed before content_info_dict is
-    // created. See https://crbug.com/371227621.
-    {
-      std::string frame_sink_str = frame_sink_id.ToString();
-      auto frame_sink_dict =
-          dict.AddDictionary(perfetto::DynamicString(frame_sink_str));
-      frame_sink_dict.Add("time_diff_us",
-                          (aggregated_frame_time - interval_inputs.frame_time)
-                              .InMicroseconds());
-      frame_sink_dict.Add("has_input", interval_inputs.has_input);
-      frame_sink_dict.Add(
-          "only_content",
-          interval_inputs.has_only_content_frame_interval_updates);
-    }
+    std::string frame_sink_str = frame_sink_id.ToString();
+    auto frame_sink_dict =
+        dict.AddDictionary(perfetto::DynamicString(frame_sink_str));
+    frame_sink_dict.Add(
+        "time_diff_us",
+        (aggregated_frame_time - interval_inputs.frame_time).InMicroseconds());
+    frame_sink_dict.Add("has_input", interval_inputs.has_input);
+    frame_sink_dict.Add(
+        "only_content",
+        interval_inputs.has_only_content_frame_interval_updates);
 
     int index = 0;
     for (const ContentFrameIntervalInfo& content_info :
          interval_inputs.content_interval_info) {
       std::string content_info_str =
           base::StringPrintf("content_info_%d", index);
-      auto content_info_dict =
-          dict.AddDictionary(perfetto::DynamicString(content_info_str));
+      auto content_info_dict = frame_sink_dict.AddDictionary(
+          perfetto::DynamicString(content_info_str));
       content_info_dict.Add(
           "type", ContentFrameIntervalTypeToString(content_info.type));
       content_info_dict.Add("interval_us",
@@ -411,9 +407,18 @@ std::optional<FrameIntervalMatcher::Result> UserInputBoostMatcher::Match(
   return std::nullopt;
 }
 
-SlowScrollThrottleMatcher::SlowScrollThrottleMatcher(float device_scale_factor)
+SlowScrollThrottleMatcher::SlowScrollThrottleMatcher(
+    float device_scale_factor,
+    std::vector<mojom::FrameRateVelocityPoint> velocity_points)
     : FrameIntervalMatcher(FrameIntervalMatcherType::kSlowScrollThrottle),
-      device_scale_factor_(device_scale_factor) {}
+      device_scale_factor_(device_scale_factor),
+      velocity_points_(std::move(velocity_points)) {
+  // Sort by decreasing velocity.
+  std::sort(velocity_points_.begin(), velocity_points_.end(),
+            [](const auto& a, const auto& b) {
+              return a.dp_per_second > b.dp_per_second;
+            });
+}
 SlowScrollThrottleMatcher::~SlowScrollThrottleMatcher() = default;
 
 std::optional<FrameIntervalMatcher::Result> SlowScrollThrottleMatcher::Match(
@@ -462,14 +467,14 @@ std::optional<FrameIntervalMatcher::Result> SlowScrollThrottleMatcher::Match(
     last_frame_id_matched_without_extra_update_ = matcher_inputs.frame_id;
   }
   float speed_dps = scroll_speed / device_scale_factor_;
-  // The hard-coded values are copied from AOSP View.convertVelocityToFrameRate.
-  if (speed_dps > 300) {
-    return FrameIntervalClass::kBoost;
-  } else if (speed_dps > 125) {
-    return ResultInterval{base::Hertz(80), ResultIntervalType::kAtLeast};
-  } else {
-    return ResultInterval{base::Hertz(60), ResultIntervalType::kAtLeast};
+
+  for (const auto& velocity_point : velocity_points_) {
+    if (speed_dps >= velocity_point.dp_per_second) {
+      return ResultInterval{base::Hertz(velocity_point.frame_per_second),
+                            ResultIntervalType::kAtLeast};
+    }
   }
+  return std::nullopt;
 }
 
 }  // namespace viz

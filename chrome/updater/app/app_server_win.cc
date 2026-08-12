@@ -27,6 +27,7 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/expected_macros.h"
 #include "base/win/atl.h"
@@ -151,8 +152,7 @@ bool AddSwapGoogleUpdateWorkItems(UpdaterScope scope,
   stop_google_update_processes->set_best_effort(true);
   stop_google_update_processes->set_rollback_enabled(false);
 
-  list->AddCopyTreeWorkItem(updater_path, *target_path, temp_path,
-                            WorkItem::ALWAYS);
+  list->AddCopyTreeWorkItem(updater_path, *target_path, temp_path);
 
   const std::wstring google_update_appid_key =
       GetAppClientsKey(kLegacyGoogleUpdateAppID);
@@ -260,14 +260,22 @@ void AppServerWin::PostOnTaskRunner(
 }
 
 void AppServerWin::Stop() {
+  VLOG(2) << __func__ << ": COM server is shutting down.";
   if (IsSystemInstall(updater_scope())) {
     // Call `on_service_stopping_` to allow for incoming COM activation requests
     // received while the service is shutting down to be handled by a new
     // service process.
-    std::move(on_service_stopping_).Run();
+    // It is possible for `Stop` to be called multiple times, so check for a
+    // valid `on_service_stopping_` callback before calling `Run`.
+    base::OnceClosure on_service_stopping;
+    {
+      base::AutoLock lock(on_service_stopping_lock_);
+      on_service_stopping = std::move(on_service_stopping_);
+    }
+    if (on_service_stopping) {
+      std::move(on_service_stopping).Run();
+    }
   }
-
-  VLOG(2) << __func__ << ": COM server is shutting down.";
   UnregisterClassObjects();
   main_task_runner_->PostTask(FROM_HERE, base::BindOnce([] {
                                 scoped_refptr<AppServerWin> this_server =
@@ -281,8 +289,12 @@ void AppServerWin::Stop() {
 }
 
 HRESULT AppServerWin::RunCOMServer(base::OnceClosure on_service_stopping) {
-  on_service_stopping_ = std::move(on_service_stopping);
+  {
+    base::AutoLock lock(on_service_stopping_lock_);
+    on_service_stopping_ = std::move(on_service_stopping);
+  }
   absl::Cleanup reset_on_service_stopping = [&] {
+    base::AutoLock lock(on_service_stopping_lock_);
     on_service_stopping_.Reset();
   };
   return Run();

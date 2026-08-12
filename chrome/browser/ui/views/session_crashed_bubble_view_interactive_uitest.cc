@@ -7,6 +7,7 @@
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "chrome/browser/ui/focus/browser_focus_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/session_crashed_bubble_view.h"
@@ -32,7 +33,8 @@ class SessionCrashedBubbleViewTest : public DialogBrowserTest {
   void ShowUi(const std::string& name) override {
     // TODO(pbos): Set up UMA opt-in conditions instead of providing this bool.
     crash_bubble_ = SessionCrashedBubbleView::ShowBubble(
-        browser(), name == "SessionCrashedBubbleOfferUma");
+        browser(), /*uma_opted_in_already=*/false,
+        /*offer_uma_optin=*/name == "SessionCrashedBubbleOfferUma");
   }
 
  protected:
@@ -49,8 +51,8 @@ IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest,
   ShowAndVerifyUi();
 }
 
-// Regression test for https://crbug.com/1042010, it should be possible to focus
-// the bubble with the "focus dialog" hotkey combination (Alt+Shift+A).
+// Regression test for https://crbug.com/40668249, it should be possible to
+// focus the bubble with the "focus dialog" hotkey combination (Alt+Shift+A).
 IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest,
                        CanFocusBubbleWithFocusDialogHotkey) {
   ShowUi("SessionCrashedBubble");
@@ -62,12 +64,13 @@ IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest,
   focus_manager->ClearFocus();
   EXPECT_FALSE(bubble_focused_view->HasFocus());
 
-  browser_view->FocusInactivePopupForAccessibility();
+  BrowserFocusController::From(browser_view->browser())
+      ->FocusInactivePopupForAccessibility();
   EXPECT_TRUE(bubble_focused_view->HasFocus());
 }
 
-// Regression test for https://crbug.com/1042010, it should be possible to focus
-// the bubble with the "rotate pane focus" (F6) hotkey.
+// Regression test for https://crbug.com/40668249, it should be possible to
+// focus the bubble with the "rotate pane focus" (F6) hotkey.
 // TODO(crbug.com/40852599): Flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CanFocusBubbleWithRotatePaneFocusHotkey \
@@ -87,10 +90,10 @@ IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest,
   focus_manager->ClearFocus();
   EXPECT_FALSE(bubble_focused_view->HasFocus());
 
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   // Rotate pane focus is expected to keep the bubble focused until the user
   // deals with it, so a second call should have no effect.
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   EXPECT_TRUE(bubble_focused_view->HasFocus());
 }
 
@@ -101,7 +104,7 @@ IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest, AlertAccessibleEvent) {
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kAlert));
 }
 
-// Regression test for https://crbug.com/1081393.
+// Regression test for https://crbug.com/40130503.
 IN_PROC_BROWSER_TEST_F(SessionCrashedBubbleViewTest, HasCloseButton) {
   ShowUi("SessionCrashedBubble");
   EXPECT_TRUE(crash_bubble_->ShouldShowCloseButton());

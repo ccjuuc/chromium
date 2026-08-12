@@ -14,7 +14,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
 import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM;
 import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM_WITH_SUBMENU;
 import static org.chromium.ui.listmenu.ListItemType.SUBMENU_HEADER;
@@ -22,7 +21,7 @@ import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.MENU_ITEM_ID;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
-import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_ITEMS;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_PROVIDER;
 
 import android.app.Activity;
 import android.view.View.OnClickListener;
@@ -37,9 +36,11 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
+import org.chromium.base.FeatureList;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.contextmenu.ContextMenuCoordinator.ContextMenuItemType;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
 import org.chromium.ui.listmenu.ListItemType;
@@ -55,7 +56,7 @@ import java.util.List;
 
 /** Unit tests for the context menu mediator. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(UNIT_TESTS)
+@DisableFeatures({ChromeFeatureList.ENABLE_DOWNLOAD_SAVE_AS_CONTEXT_MENU})
 public class ContextMenuMediatorTest {
 
     // For submenu navigation tests
@@ -85,13 +86,18 @@ public class ContextMenuMediatorTest {
     private ListItem mSubmenuLevel0;
     private ListItem mListItemWithoutModelClickCallback;
 
-    private HierarchicalMenuController mHierarchicalMenuController;
+    private HierarchicalMenuController<?> mHierarchicalMenuController;
 
     @Before
     public void setup() {
+        FeatureList.setDisableNativeForTesting(true);
         mMediator =
                 new ContextMenuMediator(
-                        mActivity, mHeaderCoordinator, mClickCallback, mDismissDialog);
+                        mActivity,
+                        mHeaderCoordinator,
+                        /* isIncognito= */ false,
+                        mClickCallback,
+                        mDismissDialog);
 
         mListItemWithModelClickCallback =
                 new ListItem(
@@ -108,7 +114,9 @@ public class ContextMenuMediatorTest {
                         new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
                                 .with(TITLE, SUBMENU_LEVEL_1)
                                 .with(ENABLED, true)
-                                .with(SUBMENU_ITEMS, List.of(mListItemWithModelClickCallback))
+                                .with(
+                                        SUBMENU_PROVIDER,
+                                        () -> List.of(mListItemWithModelClickCallback))
                                 .build());
 
         mSubmenu0Child1 =
@@ -125,7 +133,9 @@ public class ContextMenuMediatorTest {
                         new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
                                 .with(TITLE, SUBMENU_LEVEL_0)
                                 .with(ENABLED, true)
-                                .with(SUBMENU_ITEMS, List.of(mSubmenuLevel1, mSubmenu0Child1))
+                                .with(
+                                        SUBMENU_PROVIDER,
+                                        () -> List.of(mSubmenuLevel1, mSubmenu0Child1))
                                 .build());
 
         // Add an item with no click callback
@@ -246,6 +256,7 @@ public class ContextMenuMediatorTest {
         // Video items
         ModelList groupOne = new ModelList();
         groupOne.add(createListItem(ChromeContextMenuItem.Item.SAVE_VIDEO));
+        groupOne.add(createListItem(ChromeContextMenuItem.Item.COPY_VIDEO_FRAME));
         groupOne.add(
                 createListItem(
                         ChromeContextMenuItem.Item.PICTURE_IN_PICTURE, "Picture in Picture"));
@@ -256,6 +267,7 @@ public class ContextMenuMediatorTest {
         assertThat(itemList.get(1).type, equalTo(ListItemType.DIVIDER));
         assertThat(itemList.get(2).type, equalTo(ListItemType.MENU_ITEM));
         assertThat(itemList.get(3).type, equalTo(ListItemType.MENU_ITEM));
+        assertThat(itemList.get(4).type, equalTo(ListItemType.MENU_ITEM));
     }
 
     @Test
@@ -331,6 +343,9 @@ public class ContextMenuMediatorTest {
         inputModelList.add(mSubmenuLevel0);
         inputModelList.add(mListItemWithoutModelClickCallback);
         getItemList(List.of(inputModelList), /* hasHeader= */ false);
+
+        // This item is at the root level, so its callback is attached immediately
+        // during setup. Clicking it will trigger both the result and the dismiss.
         activateClickListener(mListItemWithoutModelClickCallback);
         verify(mClickCallback, times(1)).onResult(TEST_MENU_ITEM_ID);
         verify(mDismissDialog, times(1)).run();
@@ -342,9 +357,25 @@ public class ContextMenuMediatorTest {
         inputModelList.add(mSubmenuLevel0);
         inputModelList.add(mListItemWithoutModelClickCallback);
         getItemList(List.of(inputModelList), /* hasHeader= */ false);
+
+        // Before expansion, the nested item is untouched by the lazy-loading architecture.  Its
+        // click listener is just the original one, so clicking it will NOT trigger the dismiss
+        // runnable.
+        activateClickListener(mListItemWithModelClickCallback);
+        verify(mDismissDialog, never()).run();
+
+        // Navigate through the submenus to trigger the just-in-time loading.
+        activateClickListener(mSubmenuLevel0);
+        activateClickListener(mSubmenuLevel1);
+
+        // After expansion, the callback has now been wrapped. Clicking it will execute both the
+        // original listener AND the dismiss runnable.
         activateClickListener(mListItemWithModelClickCallback);
         verify(mClickCallback, never()).onResult(any());
         verify(mDismissDialog, times(1)).run();
+
+        // Ensure the original click listener was still executed in both cases.
+        verify(mItemClickListener, times(2)).onClick(mListView);
     }
 
     private ModelList getItemList(List<ModelList> items, boolean hasHeader) {

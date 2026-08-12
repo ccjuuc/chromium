@@ -24,10 +24,12 @@
 #include "content/browser/renderer_host/media/media_stream_ui_proxy.h"
 #include "content/browser/speech/network_speech_recognition_engine_impl.h"
 #include "content/browser/speech/speech_recognizer_impl.h"
+#include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/document_user_data.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/speech_recognition_audio_forwarder_config.h"
 #include "content/public/browser/speech_recognition_event_listener.h"
@@ -39,6 +41,7 @@
 #include "content/public/common/content_client.h"
 #include "media/audio/audio_device_description.h"
 #include "media/base/limits.h"
+#include "media/base/media_switches.h"
 #include "media/mojo/mojom/speech_recognition.mojom.h"
 #include "media/mojo/mojom/speech_recognition_audio_forwarder.mojom.h"
 #include "media/mojo/mojom/speech_recognition_error.mojom.h"
@@ -56,7 +59,6 @@
 #include "components/soda/soda_util.h"
 #include "content/browser/speech/on_device_speech_recognition_engine_impl.h"
 #include "content/browser/speech/soda_speech_recognition_engine_impl.h"
-#include "media/base/media_switches.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
@@ -77,13 +79,37 @@ constexpr char kWebSpeechCanRenderFrameUseOnDeviceHistogram[] =
     "Accessibility.WebSpeech.CanRenderFrameUseOnDevice";
 constexpr char kWebSpeechIsOnDeviceSpeechRecognitionInstalledHistogram[] =
     "Accessibility.WebSpeech.IsOnDeviceSpeechRecognitionInstalled";
+constexpr char kWebSpeechIsGeminiNanoModelAvailableHistogram[] =
+    "Accessibility.WebSpeech.IsGeminiNanoModelAvailable";
+constexpr char kWebSpeechIsTinyGemmaModelAvailableHistogram[] =
+    "Accessibility.WebSpeech.IsTinyGemmaModelAvailable";
 
 }  // namespace
+
+void SpeechRecognitionManagerImpl::LogBackendSpecificErrorOccurred(
+    const SpeechRecognitionSessionConfig& config,
+    media::mojom::SpeechRecognitionErrorCode error_code) {
+  std::string backend_name = "Cloud";
+  if (UseOnDeviceSpeechRecognition(config)) {
+    if (IsOptimizationGuideSpeechModel(config)) {
+      const bool use_gemini_nano =
+          base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano) &&
+          config.quality ==
+              media::mojom::SpeechRecognitionQuality::kConversation;
+      backend_name = use_gemini_nano ? "GeminiNano" : "TinyGemma";
+    } else {
+      backend_name = "SODA";
+    }
+  }
+  base::UmaHistogramEnumeration(
+      "Accessibility.WebSpeech." + backend_name + ".ErrorOccurred", error_code);
+}
 
 int SpeechRecognitionManagerImpl::next_requester_id_ = 0;
 
 class FrameSessionTracker
-    : public content::DocumentUserData<FrameSessionTracker> {
+    : public content::DocumentUserData<FrameSessionTracker>,
+      public content::WebContentsObserver {
  public:
   using FrameDeletedCallback =
       base::RepeatingCallback<void(int /* session_id */)>;
@@ -97,16 +123,49 @@ class FrameSessionTracker
     }
   }
 
-  static void CreateObserverForSession(int render_process_id,
-                                       int render_frame_id,
+  void OnVisibilityChanged(content::Visibility visibility) override {
+#if BUILDFLAG(IS_ANDROID)
+    // On Android, background speech recognition is not permitted. (Desktop
+    // intentionally allows background recognition).
+    // The session is terminated and remains terminated even if the page
+    // becomes visible again. The web application must explicitly call start()
+    // again to initiate a new session.
+    WebContentsImpl* web_contents_impl =
+        static_cast<WebContentsImpl*>(web_contents());
+    if (!web_contents_impl || web_contents_impl->GetPageVisibilityState() !=
+                                  PageVisibilityState::kVisible) {
+      for (int session : sessions_) {
+        GetIOThreadTaskRunner({})->PostTask(
+            FROM_HERE, base::BindOnce(frame_deleted_callback_, session));
+      }
+      sessions_.clear();
+    }
+#else
+    (void)visibility;  // Suppress unused parameter warning
+#endif
+  }
+
+  static void CreateObserverForSession(GlobalRenderFrameHostId global_id,
                                        int session_id,
                                        FrameDeletedCallback callback) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-    RenderFrameHost* render_frame_host =
-        RenderFrameHost::FromID(render_process_id, render_frame_id);
+    RenderFrameHost* render_frame_host = RenderFrameHost::FromID(global_id);
     if (!render_frame_host)
       return;
+
+#if BUILDFLAG(IS_ANDROID)
+    // On Android, background speech recognition is not permitted. (Desktop
+    // intentionally allows background recognition).
+    WebContentsImpl* web_contents = static_cast<WebContentsImpl*>(
+        content::WebContents::FromRenderFrameHost(render_frame_host));
+    if (!web_contents || web_contents->GetPageVisibilityState() !=
+                             PageVisibilityState::kVisible) {
+      GetIOThreadTaskRunner({})->PostTask(FROM_HERE,
+                                          base::BindOnce(callback, session_id));
+      return;
+    }
+#endif
 
     FrameSessionTracker* tracker =
         GetOrCreateForCurrentDocument(render_frame_host);
@@ -117,13 +176,11 @@ class FrameSessionTracker
     tracker->AddSession(session_id);
   }
 
-  static void RemoveObserverForSession(int render_process_id,
-                                       int render_frame_id,
+  static void RemoveObserverForSession(GlobalRenderFrameHostId global_id,
                                        int session_id) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-    RenderFrameHost* render_frame_host =
-        RenderFrameHost::FromID(render_process_id, render_frame_id);
+    RenderFrameHost* render_frame_host = RenderFrameHost::FromID(global_id);
     if (!render_frame_host)
       return;
 
@@ -133,9 +190,20 @@ class FrameSessionTracker
     tracker->RemoveSession(session_id);
   }
 
+  static int GetSessionCountForTesting(  // IN-TEST
+      GlobalRenderFrameHostId global_id) {
+    RenderFrameHost* render_frame_host = RenderFrameHost::FromID(global_id);
+    if (!render_frame_host) {
+      return 0;
+    }
+    FrameSessionTracker* tracker = GetForCurrentDocument(render_frame_host);
+    return tracker ? tracker->sessions_.size() : 0;
+  }
+
  private:
   explicit FrameSessionTracker(content::RenderFrameHost* rfh)
-      : DocumentUserData<FrameSessionTracker>(rfh) {}
+      : DocumentUserData<FrameSessionTracker>(rfh),
+        WebContentsObserver(content::WebContents::FromRenderFrameHost(rfh)) {}
 
   friend class content::DocumentUserData<FrameSessionTracker>;
   DOCUMENT_USER_DATA_KEY_DECL();
@@ -165,6 +233,26 @@ void SpeechRecognitionManager::SetManagerForTesting(
   manager_for_tests_ = manager;
 }
 
+// static
+int SpeechRecognitionManagerImpl::GetSessionTrackerCountForTesting(  // IN-TEST
+    GlobalRenderFrameHostId global_id) {
+  return FrameSessionTracker::GetSessionCountForTesting(  // IN-TEST
+      global_id);
+}
+
+// static
+bool SpeechRecognitionManagerImpl::IsOptimizationGuideSpeechModel(
+    const SpeechRecognitionSessionConfig& config) {
+  const bool use_gemini_nano =
+      base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano) &&
+      config.quality == media::mojom::SpeechRecognitionQuality::kConversation;
+  const bool use_tinygemma =
+      base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechSmallExpertModel) &&
+      config.quality == media::mojom::SpeechRecognitionQuality::kDictation;
+  return use_gemini_nano || use_tinygemma;
+}
+
+// static
 SpeechRecognitionManagerImpl* SpeechRecognitionManagerImpl::GetInstance() {
   return g_speech_recognition_manager_impl;
 }
@@ -261,8 +349,8 @@ void SpeechRecognitionManagerImpl::RecognitionAllowedCallback(int session_id,
   if (ask_user) {
     SpeechRecognitionSessionContext& context = session->context;
     context.label = media_stream_manager_->MakeMediaAccessRequest(
-        {context.render_process_id, context.render_frame_id}, requester_id_,
-        session_id, blink::StreamControls(true, false), context.security_origin,
+        context.global_id, requester_id_, session_id,
+        blink::StreamControls(true, false), context.security_origin,
         base::BindOnce(
             &SpeechRecognitionManagerImpl::MediaRequestPermissionCallback,
             weak_factory_.GetWeakPtr(), session_id));
@@ -327,11 +415,9 @@ void SpeechRecognitionManagerImpl::AbortSession(int session_id) {
     return;
 
   GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&FrameSessionTracker::RemoveObserverForSession,
-                     iter->second->config.initial_context.render_process_id,
-                     iter->second->config.initial_context.render_frame_id,
-                     session_id));
+      FROM_HERE, base::BindOnce(&FrameSessionTracker::RemoveObserverForSession,
+                                iter->second->config.initial_context.global_id,
+                                session_id));
 
   AbortSessionImpl(session_id);
 }
@@ -364,11 +450,9 @@ void SpeechRecognitionManagerImpl::StopAudioCaptureForSession(int session_id) {
     return;
 
   GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&FrameSessionTracker::RemoveObserverForSession,
-                     iter->second->config.initial_context.render_process_id,
-                     iter->second->config.initial_context.render_frame_id,
-                     session_id));
+      FROM_HERE, base::BindOnce(&FrameSessionTracker::RemoveObserverForSession,
+                                iter->second->config.initial_context.global_id,
+                                session_id));
 
   iter->second->ui.reset();
 
@@ -487,6 +571,9 @@ void SpeechRecognitionManagerImpl::OnRecognitionError(
   if (!SessionExists(session_id))
     return;
 
+  Session* session = GetSession(session_id);
+  LogBackendSpecificErrorOccurred(session->config, error.code);
+
   if (SpeechRecognitionEventListener* delegate_listener = GetDelegateListener())
     delegate_listener->OnRecognitionError(session_id, error);
   if (SpeechRecognitionEventListener* listener = GetListener(session_id))
@@ -539,6 +626,21 @@ int SpeechRecognitionManagerImpl::CreateSession(
     base::UmaHistogramBoolean(
         kWebSpeechIsOnDeviceSpeechRecognitionInstalledHistogram,
         is_on_device_speech_recognition_installed);
+
+    if (IsOptimizationGuideSpeechModel(config)) {
+      const bool use_gemini_nano =
+          base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano) &&
+          config.quality ==
+              media::mojom::SpeechRecognitionQuality::kConversation;
+      if (use_gemini_nano) {
+        base::UmaHistogramBoolean(kWebSpeechIsGeminiNanoModelAvailableHistogram,
+                                  is_on_device_speech_recognition_installed);
+      } else {
+        base::UmaHistogramBoolean(kWebSpeechIsTinyGemmaModelAvailableHistogram,
+                                  is_on_device_speech_recognition_installed);
+      }
+    }
+
     // Set the error if on-device speech recognition must be used but is not
     // available.
     if (!is_on_device_speech_recognition_installed) {
@@ -565,6 +667,7 @@ int SpeechRecognitionManagerImpl::CreateSession(
 
   // Throw the error and do not create the session if error is found.
   if (error != media::mojom::SpeechRecognitionErrorCode::kNone) {
+    LogBackendSpecificErrorOccurred(config, error);
     mojo::Remote<media::mojom::SpeechRecognitionSessionClient> client(
         std::move(client_remote));
     if (client.is_bound()) {
@@ -594,9 +697,15 @@ int SpeechRecognitionManagerImpl::CreateSession(
 
 #if !BUILDFLAG(IS_ANDROID)
 #if !BUILDFLAG(IS_FUCHSIA)
+  const bool use_gemini_nano =
+      base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano) &&
+      config.quality == media::mojom::SpeechRecognitionQuality::kConversation;
+  const bool use_tinygemma =
+      base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechSmallExpertModel) &&
+      config.quality == media::mojom::SpeechRecognitionQuality::kDictation;
+  const bool uses_optimization_guide_model = use_gemini_nano || use_tinygemma;
   if (UseOnDeviceSpeechRecognition(config) &&
-      audio_forwarder_config.has_value() &&
-      !base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano)) {
+      audio_forwarder_config.has_value() && !uses_optimization_guide_model) {
     CHECK_GT(audio_forwarder_config.value().channel_count, 0);
     CHECK_GT(audio_forwarder_config.value().sample_rate, 0);
     // The speech recognition service process will create and manage the speech
@@ -604,31 +713,30 @@ int SpeechRecognitionManagerImpl::CreateSession(
     // directly to the speech recognition process and speech recognition events
     // will be returned directly to the renderer, bypassing the browser
     // entirely.
-    if (!speech_recognition_context_.is_bound()) {
-      raw_ptr<SpeechRecognitionManagerDelegate>
-          speech_recognition_mgr_delegate =
-              SpeechRecognitionManagerImpl::GetInstance()
-                  ? SpeechRecognitionManagerImpl::GetInstance()->delegate()
-                  : nullptr;
+    raw_ptr<SpeechRecognitionManagerDelegate> speech_recognition_mgr_delegate =
+        SpeechRecognitionManagerImpl::GetInstance()
+            ? SpeechRecognitionManagerImpl::GetInstance()->delegate()
+            : nullptr;
 
-      CHECK(speech_recognition_mgr_delegate);
-      mojo::PendingReceiver<media::mojom::SpeechRecognitionContext>
-          speech_recognition_context_receiver =
-              speech_recognition_context_.BindNewPipeAndPassReceiver();
-      speech_recognition_mgr_delegate->BindSpeechRecognitionContext(
-          std::move(speech_recognition_context_receiver), config.language);
-    }
+    CHECK(speech_recognition_mgr_delegate);
+    mojo::Remote<media::mojom::SpeechRecognitionContext>
+        speech_recognition_context;
+    speech_recognition_mgr_delegate->BindSpeechRecognitionContext(
+        speech_recognition_context.BindNewPipeAndPassReceiver(),
+        config.language, config.initial_context.global_id);
 
     media::mojom::SpeechRecognitionOptionsPtr options =
         media::mojom::SpeechRecognitionOptions::New();
     options->recognition_mode = media::mojom::SpeechRecognitionMode::kCaption;
-    options->enable_formatting = false;
+    options->enable_formatting = config.unspoken_punctuation;
+    options->language = config.language;
     options->recognizer_client_type =
         media::mojom::RecognizerClientType::kLiveCaption;
     options->skip_continuously_empty_audio = true;
     options->recognition_context = config.recognition_context;
+    options->allow_multi_language = false;
 
-    speech_recognition_context_->BindWebSpeechRecognizer(
+    speech_recognition_context->BindWebSpeechRecognizer(
         std::move(session_receiver), std::move(client_remote),
         std::move(audio_forwarder_config.value().audio_forwarder),
         audio_forwarder_config.value().channel_count,
@@ -645,7 +753,7 @@ int SpeechRecognitionManagerImpl::CreateSession(
 
 #if !BUILDFLAG(IS_FUCHSIA)
   if (UseOnDeviceSpeechRecognition(config)) {
-    if (base::FeatureList::IsEnabled(media::kOnDeviceWebSpeechGeminiNano)) {
+    if (IsOptimizationGuideSpeechModel(config)) {
       speech_recognition_engine =
           std::make_unique<OnDeviceSpeechRecognitionEngine>(config);
     } else {
@@ -710,8 +818,7 @@ int SpeechRecognitionManagerImpl::CreateSession(
       FROM_HERE,
       base::BindOnce(
           &FrameSessionTracker::CreateObserverForSession,
-          config.initial_context.render_process_id,
-          config.initial_context.render_frame_id, session_id,
+          config.initial_context.global_id, session_id,
           base::BindRepeating(&SpeechRecognitionManagerImpl::AbortSessionImpl,
                               weak_factory_.GetWeakPtr())));
 
@@ -749,14 +856,12 @@ bool SpeechRecognitionManagerImpl::UseOnDeviceSpeechRecognition(
 }
 
 void SpeechRecognitionManagerImpl::AbortAllSessionsForRenderFrame(
-    int render_process_id,
-    int render_frame_id) {
+    GlobalRenderFrameHostId global_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   for (const auto& session_pair : sessions_) {
     Session* session = session_pair.second.get();
-    if (session->context.render_process_id == render_process_id &&
-        session->context.render_frame_id == render_frame_id) {
+    if (session->context.global_id == global_id) {
       AbortSession(session->id);
     }
   }
@@ -918,6 +1023,11 @@ void SpeechRecognitionManagerImpl::SessionDelete(Session* session) {
   }
   if (!session->context.label.empty())
     media_stream_manager_->CancelRequest(session->context.label);
+  GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&FrameSessionTracker::RemoveObserverForSession,
+                     session->config.initial_context.global_id, session->id));
+
   sessions_.erase(session->id);
 }
 

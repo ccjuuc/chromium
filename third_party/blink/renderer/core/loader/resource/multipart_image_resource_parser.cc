@@ -32,7 +32,7 @@ void MultipartImageResourceParser::AppendData(base::span<const char> bytes) {
   // does, we just throw it away.
   if (saw_last_boundary_)
     return;
-  data_.AppendSpan(bytes);
+  data_.append_range(bytes);
 
   if (is_parsing_top_) {
     // Eat leading \r\n
@@ -112,7 +112,8 @@ void MultipartImageResourceParser::AppendData(base::span<const char> bytes) {
     auto send_data =
         base::as_byte_span(data_).first(data_.size() - boundary_.size() - 2);
     client_->MultipartDataReceived(send_data);
-    data_.EraseAt(0, send_data.size());
+    // send_data.size() is at most data_.size() which fits in wtf_size_t.
+    data_.EraseAt(0, static_cast<wtf_size_t>(send_data.size()));
   }
 }
 
@@ -183,7 +184,7 @@ wtf_size_t MultipartImageResourceParser::FindBoundary(const Vector<char>& data,
         data[boundary_position - 2] == '-') {
       boundary_position -= 2;
       Vector<char> v(2, '-');
-      v.AppendVector(*boundary);
+      v.append_range(*boundary);
       *boundary = v;
     }
   }

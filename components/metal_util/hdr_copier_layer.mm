@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "components/metal_util/hdr_copier_layer.h"
 
 #include <CoreGraphics/CoreGraphics.h>
@@ -17,6 +12,7 @@
 #include "base/apple/bridging.h"
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/build_config.h"
@@ -209,7 +205,7 @@ bool IOSurfaceGetMTLPixelFormat(IOSurfaceRef buffer,
                                 bool& is_unorm) {
   num_planes = 1;
   format[0] = MTLPixelFormatInvalid;
-  format[1] = MTLPixelFormatInvalid;
+  UNSAFE_TODO(format[1]) = MTLPixelFormatInvalid;
   is_unorm = true;
   switch (IOSurfaceGetPixelFormat(buffer)) {
     case kCVPixelFormatType_64RGBAHalf:
@@ -230,14 +226,14 @@ bool IOSurfaceGetMTLPixelFormat(IOSurfaceRef buffer,
     case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:
       num_planes = 2;
       format[0] = MTLPixelFormatR8Unorm;
-      format[1] = MTLPixelFormatRG8Unorm;
+      UNSAFE_TODO(format[1]) = MTLPixelFormatRG8Unorm;
       return true;
     case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
     case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
     case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
       num_planes = 2;
       format[0] = MTLPixelFormatR16Unorm;
-      format[1] = MTLPixelFormatRG16Unorm;
+      UNSAFE_TODO(format[1]) = MTLPixelFormatRG16Unorm;
       return true;
     default:
       break;
@@ -294,9 +290,7 @@ id<MTLRenderPipelineState> CreateRenderPipelineState(id<MTLDevice> device) {
   if ((self = [super init])) {
     id<MTLDevice> device = metal::GetDefaultDevice();
 #if !BUILDFLAG(IS_IOS_TVOS)
-    if (@available(iOS 16.0, *)) {
-      self.wantsExtendedDynamicRangeContent = YES;
-    }
+    self.wantsExtendedDynamicRangeContent = YES;
 #endif
     self.device = device;
     self.opaque = NO;
@@ -348,25 +342,23 @@ id<MTLRenderPipelineState> CreateRenderPipelineState(id<MTLDevice> device) {
 
   // Set metadata for tone mapping.
 #if !BUILDFLAG(IS_IOS_TVOS)
-  if (@available(iOS 16.0, *)) {
-    if (_colorSpace != colorSpace || _hdrMetadata != hdrMetadata) {
-      CAEDRMetadata* edrMetadata = nil;
-      if (colorSpace.GetTransferID() == gfx::ColorSpace::TransferID::PQ) {
-        base::apple::ScopedCFTypeRef<CFDataRef> display_info =
-            gfx::GenerateMasteringDisplayColorVolume(hdrMetadata);
-        base::apple::ScopedCFTypeRef<CFDataRef> content_info =
-            gfx::GenerateContentLightLevelInfo(hdrMetadata);
-        edrMetadata = [CAEDRMetadata
-            HDR10MetadataWithDisplayInfo:base::apple::CFToNSPtrCast(
-                                             display_info.get())
-                             contentInfo:base::apple::CFToNSPtrCast(
-                                             content_info.get())
-                      opticalOutputScale:203];
-      }
-      self.EDRMetadata = edrMetadata;
-      _colorSpace = colorSpace;
-      _hdrMetadata = hdrMetadata;
+  if (_colorSpace != colorSpace || _hdrMetadata != hdrMetadata) {
+    CAEDRMetadata* edrMetadata = nil;
+    if (colorSpace.GetTransferID() == gfx::ColorSpace::TransferID::PQ) {
+      base::apple::ScopedCFTypeRef<CFDataRef> display_info =
+          gfx::GenerateMasteringDisplayColorVolume(hdrMetadata);
+      base::apple::ScopedCFTypeRef<CFDataRef> content_info =
+          gfx::GenerateContentLightLevelInfo(hdrMetadata);
+      edrMetadata = [CAEDRMetadata
+          HDR10MetadataWithDisplayInfo:base::apple::CFToNSPtrCast(
+                                           display_info.get())
+                           contentInfo:base::apple::CFToNSPtrCast(
+                                           content_info.get())
+                    opticalOutputScale:203];
     }
+    self.EDRMetadata = edrMetadata;
+    _colorSpace = colorSpace;
+    _hdrMetadata = hdrMetadata;
   }
 #endif
 
@@ -399,7 +391,7 @@ id<MTLRenderPipelineState> CreateRenderPipelineState(id<MTLDevice> device) {
     MTLTextureDescriptor* texDesc = [[MTLTextureDescriptor alloc] init];
     texDesc.textureType = MTLTextureType2D;
     texDesc.usage = MTLTextureUsageShaderRead;
-    texDesc.pixelFormat = mtlFormat[i];
+    texDesc.pixelFormat = UNSAFE_TODO(mtlFormat[i]);
     texDesc.width = IOSurfaceGetWidthOfPlane(buffer, i);
     texDesc.height = IOSurfaceGetHeightOfPlane(buffer, i);
     texDesc.depth = 1;
@@ -409,9 +401,9 @@ id<MTLRenderPipelineState> CreateRenderPipelineState(id<MTLDevice> device) {
 #if BUILDFLAG(IS_MAC)
     texDesc.storageMode = MTLStorageModeManaged;
 #endif
-    bufferTexture[i] = [device newTextureWithDescriptor:texDesc
-                                              iosurface:buffer
-                                                  plane:i];
+    UNSAFE_TODO(bufferTexture[i]) = [device newTextureWithDescriptor:texDesc
+                                                           iosurface:buffer
+                                                               plane:i];
   }
 
   // Create a texture to wrap the drawable.

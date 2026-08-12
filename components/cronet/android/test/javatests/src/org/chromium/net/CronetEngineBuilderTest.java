@@ -7,36 +7,39 @@ package org.chromium.net;
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assume.assumeFalse;
 
 import static org.chromium.net.CronetProvider.PROVIDER_NAME_APP_PACKAGED;
 import static org.chromium.net.CronetProvider.PROVIDER_NAME_FALLBACK;
 
 import android.content.Context;
+import android.os.Build;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
-
-import com.google.common.truth.Correspondence;
 
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.net.CronetTestFramework.CronetImplementation;
+import org.chromium.net.CronetTestRule.Flags;
 import org.chromium.net.CronetTestRule.IgnoreFor;
+import org.chromium.net.CronetTestRule.RequiresMinAndroidApi;
+import org.chromium.net.CronetTestRule.StringFlag;
 import org.chromium.net.impl.CronetLibraryLoader;
+import org.chromium.net.impl.HttpEngineNativeProvider;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 /** Tests {@link CronetEngine.Builder}. */
 @RunWith(AndroidJUnit4.class)
 @IgnoreFor(
         implementations = {CronetImplementation.FALLBACK},
         reason = "These tests don't depend on Cronet's impl")
-@Batch(Batch.UNIT_TESTS)
+@DoNotBatch(reason = "HttpFlags")
 public class CronetEngineBuilderTest {
     @Rule public final CronetTestRule mTestRule = CronetTestRule.withManualEngineStartup();
 
@@ -44,8 +47,8 @@ public class CronetEngineBuilderTest {
     @Test
     @SmallTest
     public void testVersionComparison() {
-        assertVersionIsHigher("22.44", "22.43.12");
-        assertVersionIsLower("22.43.12", "022.124");
+        assertVersionIsHigher("22.44.00", "22.43.12");
+        assertVersionIsLower("22.43.12", "022.124.00");
         assertVersionIsLower("22.99", "22.100");
         assertVersionIsHigher("22.100", "22.99");
         assertVersionIsEqual("11.2.33", "11.2.33");
@@ -60,47 +63,128 @@ public class CronetEngineBuilderTest {
         CronetLibraryLoader.preload();
     }
 
-    /**
-     * Tests the correct ordering of the providers. The platform provider should be the last in the
-     * list. Other providers should be ordered by placing providers with the higher version first.
-     */
     @Test
     @SmallTest
-    public void testProviderOrdering() {
+    public void testHttpEngineProviderScoreBasedNoHttpEngineOnDevice() {
+        assumeFalse(
+                "This test runs only on Android devices that do not have HttpEngine available.",
+                HttpEngineNativeProvider.isHttpEngineAvailable());
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.3"))
+                .isEqualTo(Integer.MIN_VALUE);
+    }
+
+    @Test
+    @SmallTest
+    @RequiresMinAndroidApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void testHttpEngineProviderScoreBasedOnVersionNoFlag() {
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.3"))
+                .isEqualTo(CronetProvider.PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.4"))
+                .isEqualTo(CronetProvider.PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.2"))
+                .isEqualTo(CronetProvider.NOT_PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+    }
+
+    @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = CronetProvider.PREFERRED_MINIMUM_HTTPENGINE_VERSION_HTTP_FLAG_NAME,
+                        value = "133.0.6876.4")
+            })
+    @RequiresMinAndroidApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void testHttpEngineProviderScoreBasedOnVersionWithFlag() {
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.3"))
+                .isEqualTo(CronetProvider.NOT_PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.4"))
+                .isEqualTo(CronetProvider.PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+        assertThat(
+                        CronetProvider.calculateHttpEngineNativeProviderScoreInternal(
+                                mTestRule.getTestFramework().getContext(), "133.0.6876.2"))
+                .isEqualTo(CronetProvider.NOT_PREFERRED_HTTP_ENGINE_PROVIDER_SCORE);
+    }
+
+    @Test
+    @SmallTest
+    @RequiresMinAndroidApi(Build.VERSION_CODES.N)
+    public void testSmartLogicSorting() {
         var providerInfo1 = new CronetProvider.ProviderInfo();
+        providerInfo1.providerScore = 2;
         providerInfo1.provider =
+                new FakeProvider(
+                        mTestRule.getTestFramework().getContext(),
+                        PROVIDER_NAME_APP_PACKAGED,
+                        "99.99",
+                        true);
+        var providerInfo2 = new CronetProvider.ProviderInfo();
+        providerInfo2.providerScore = 1;
+        providerInfo2.provider =
                 new FakeProvider(
                         mTestRule.getTestFramework().getContext(),
                         PROVIDER_NAME_APP_PACKAGED,
                         "99.77",
                         true);
-        var providerInfo2 = new CronetProvider.ProviderInfo();
-        providerInfo2.provider =
+
+        CronetProvider.ProviderInfo orderedProvider =
+                CronetEngine.Builder.getPreferredCronetProvider(
+                        mTestRule.getTestFramework().getContext(),
+                        new ArrayList<>(
+                                Arrays.asList(
+                                        new CronetProvider.ProviderInfo[] {
+                                            providerInfo2, providerInfo1
+                                        })));
+
+        assertThat(orderedProvider).isEqualTo(providerInfo1);
+    }
+
+    @Test
+    @SmallTest
+    @RequiresMinAndroidApi(Build.VERSION_CODES.N)
+    public void testSmartLogicSortingShouldFetchFirstEnabledOnly() {
+        var providerInfo1 = new CronetProvider.ProviderInfo();
+        providerInfo1.providerScore = 2;
+        FakeProvider provider1 =
                 new FakeProvider(
                         mTestRule.getTestFramework().getContext(),
-                        PROVIDER_NAME_FALLBACK,
+                        PROVIDER_NAME_APP_PACKAGED,
                         "99.99",
                         true);
-        var providerInfo3 = new CronetProvider.ProviderInfo();
-        providerInfo3.provider =
+        providerInfo1.provider = provider1;
+        var providerInfo2 = new CronetProvider.ProviderInfo();
+        providerInfo2.providerScore = 1;
+        FakeProvider provider2 =
                 new FakeProvider(
                         mTestRule.getTestFramework().getContext(),
-                        "Some other provider",
-                        "99.88",
-                        true);
+                        PROVIDER_NAME_APP_PACKAGED,
+                        "99.77",
+                        false);
+        providerInfo2.provider = provider2;
 
-        List<CronetProvider.ProviderInfo> orderedProviders =
-                CronetEngine.Builder.getEnabledCronetProviders(
+        CronetProvider.ProviderInfo orderedProvider =
+                CronetEngine.Builder.getPreferredCronetProvider(
                         mTestRule.getTestFramework().getContext(),
-                        Arrays.asList(
-                                new CronetProvider.ProviderInfo[] {
-                                    providerInfo1, providerInfo2, providerInfo3
-                                }));
+                        new ArrayList<>(
+                                Arrays.asList(
+                                        new CronetProvider.ProviderInfo[] {
+                                            providerInfo2, providerInfo1
+                                        })));
 
-        // Check the result
-        assertThat(orderedProviders)
-                .containsExactly(providerInfo3, providerInfo1, providerInfo2)
-                .inOrder();
+        assertThat(orderedProvider).isEqualTo(providerInfo1);
+        assertThat(provider1.mIsEnabledCalled).isTrue();
+        assertThat(provider2.mIsEnabledCalled).isFalse();
     }
 
     /**
@@ -132,8 +216,8 @@ public class CronetEngineBuilderTest {
                         "99.88",
                         false);
 
-        List<CronetProvider.ProviderInfo> orderedProviders =
-                CronetEngine.Builder.getEnabledCronetProviders(
+        CronetProvider.ProviderInfo orderedProvider =
+                CronetEngine.Builder.getPreferredCronetProvider(
                         mTestRule.getTestFramework().getContext(),
                         new ArrayList<>(
                                 Arrays.asList(
@@ -141,32 +225,23 @@ public class CronetEngineBuilderTest {
                                             providerInfo1, providerInfo2, providerInfo3
                                         })));
 
-        Correspondence<CronetProvider.ProviderInfo, String> providerName =
-                Correspondence.transforming(
-                        providerInfo -> providerInfo.provider.getName(),
-                        "The name of the provider");
-
-        assertThat(orderedProviders)
-                .comparingElementsUsing(providerName)
-                .containsExactly(PROVIDER_NAME_APP_PACKAGED, PROVIDER_NAME_FALLBACK)
-                .inOrder();
+        assertThat(orderedProvider).isNotEqualTo(providerInfo3);
     }
 
     private void assertVersionIsHigher(String s1, String s2) {
-        assertThat(CronetEngine.Builder.compareVersions(s1, s2)).isEqualTo(1);
+        assertThat(CronetProvider.compareVersions(s1, s2)).isEqualTo(1);
     }
 
     private void assertVersionIsLower(String s1, String s2) {
-        assertThat(CronetEngine.Builder.compareVersions(s1, s2)).isEqualTo(-1);
+        assertThat(CronetProvider.compareVersions(s1, s2)).isEqualTo(-1);
     }
 
     private void assertVersionIsEqual(String s1, String s2) {
-        assertThat(CronetEngine.Builder.compareVersions(s1, s2)).isEqualTo(0);
+        assertThat(CronetProvider.compareVersions(s1, s2)).isEqualTo(0);
     }
 
     private void assertIllegalArgumentException(String s1, String s2) {
-        assertThrows(
-                IllegalArgumentException.class, () -> CronetEngine.Builder.compareVersions(s1, s2));
+        assertThrows(IllegalArgumentException.class, () -> CronetProvider.compareVersions(s1, s2));
     }
 
     // TODO(kapishnikov): Replace with a mock when mockito is supported.
@@ -174,6 +249,7 @@ public class CronetEngineBuilderTest {
         private final String mName;
         private final String mVersion;
         private final boolean mEnabled;
+        public boolean mIsEnabledCalled;
 
         protected FakeProvider(Context context, String name, String version, boolean enabled) {
             super(context);
@@ -199,6 +275,7 @@ public class CronetEngineBuilderTest {
 
         @Override
         public boolean isEnabled() {
+            mIsEnabledCalled = true;
             return mEnabled;
         }
 

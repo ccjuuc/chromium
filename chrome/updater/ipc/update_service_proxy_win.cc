@@ -18,14 +18,16 @@
 
 #include "base/check_op.h"
 #include "base/containers/flat_map.h"
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/version.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_safearray.h"
@@ -34,6 +36,7 @@
 #include "chrome/updater/ipc/update_service_proxy.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/service_proxy_factory.h"
+#include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/win_util.h"
 #include "chrome/updater/win/win_constants.h"
@@ -210,13 +213,13 @@ class UpdaterObserver : public DYNAMICIIDSIMPL(IUpdaterObserver) {
 
   static UpdateService::Result QueryResult(ICompleteStatus* complete_status) {
     CHECK(complete_status);
-
     LONG code = 0;
     base::win::ScopedBstr message;
-    CHECK(SUCCEEDED(complete_status->get_statusCode(&code)));
-
-    VLOG(2) << "ICompleteStatus::OnComplete(" << code << ")";
-    return static_cast<UpdateService::Result>(code);
+    HRESULT hr = complete_status->get_statusCode(&code);
+    VLOG(2) << "ICompleteStatus::OnComplete: code=" << code
+            << ", hr=" << std::hex << hr;
+    return SUCCEEDED(hr) ? static_cast<UpdateService::Result>(code)
+                         : UpdateService::Result::kIPCConnectionFailed;
   }
 
   // Called by IUpdaterObserver::OnStateChange when update state changes occur.
@@ -564,25 +567,11 @@ class UpdateServiceProxyImplImpl
                        this, std::move(callback)));
   }
 
-  void GetUpdaterPolicies(
-      base::OnceCallback<
-          void(base::expected<
-               base::flat_map<std::string, UpdateService::PolicyValue>,
-               RpcError>)> callback) {
-    PostRPCTask(base::BindOnce(
-        &UpdateServiceProxyImplImpl::GetUpdaterPoliciesOnTaskRunner, this,
-        std::move(callback)));
-  }
-
-  void GetAppPolicies(
-      base::OnceCallback<
-          void(base::expected<
-               base::flat_map<
-                   std::string,
-                   base::flat_map<std::string, UpdateService::PolicyValue>>,
-               RpcError>)> callback) {
+  void GetPoliciesJson(
+      base::OnceCallback<void(base::expected<std::string, RpcError>)>
+          callback) {
     PostRPCTask(
-        base::BindOnce(&UpdateServiceProxyImplImpl::GetAppPoliciesOnTaskRunner,
+        base::BindOnce(&UpdateServiceProxyImplImpl::GetPoliciesJsonOnTaskRunner,
                        this, std::move(callback)));
   }
 
@@ -778,7 +767,7 @@ class UpdateServiceProxyImplImpl
                                                           std::move(callback));
     if (interface2_) {
       HRESULT hr = interface2_->CheckForUpdate2(
-          app_id_w.c_str(), static_cast<int>(priority),
+          app_id_w.c_str(), std::to_underlying(priority),
           policy_same_version_update ==
               UpdateService::PolicySameVersionUpdate::kAllowed,
           language_w.c_str(), observer.Get());
@@ -790,7 +779,7 @@ class UpdateServiceProxyImplImpl
       }
     } else {
       HRESULT hr = get_interface()->CheckForUpdate(
-          app_id_w.c_str(), static_cast<int>(priority),
+          app_id_w.c_str(), std::to_underlying(priority),
           policy_same_version_update ==
               UpdateService::PolicySameVersionUpdate::kAllowed,
           observer.Get());
@@ -846,7 +835,7 @@ class UpdateServiceProxyImplImpl
     if (interface2_) {
       HRESULT hr = interface2_->Update2(
           app_id_w.c_str(), install_data_index_w.c_str(),
-          static_cast<int>(priority),
+          std::to_underlying(priority),
           policy_same_version_update ==
               UpdateService::PolicySameVersionUpdate::kAllowed,
           language_w.c_str(), observer.Get());
@@ -858,7 +847,7 @@ class UpdateServiceProxyImplImpl
     } else {
       HRESULT hr = get_interface()->Update(
           app_id_w.c_str(), install_data_index_w.c_str(),
-          static_cast<int>(priority),
+          std::to_underlying(priority),
           policy_same_version_update ==
               UpdateService::PolicySameVersionUpdate::kAllowed,
           observer.Get());
@@ -965,8 +954,8 @@ class UpdateServiceProxyImplImpl
           app_id_w.c_str(), brand_code_w.c_str(), brand_path_w.c_str(),
           ap_w.c_str(), version_w.c_str(), existence_checker_path_w.c_str(),
           client_install_data_w.c_str(), install_data_index_w.c_str(),
-          install_id_w.c_str(), static_cast<int>(priority), language_w.c_str(),
-          observer.Get());
+          install_id_w.c_str(), std::to_underlying(priority),
+          language_w.c_str(), observer.Get());
       if (FAILED(hr)) {
         VLOG(2) << "Failed to call IUpdater2::Install2: " << std::hex << hr;
         observer->Disconnect().Run(base::unexpected(hr));
@@ -977,7 +966,7 @@ class UpdateServiceProxyImplImpl
           app_id_w.c_str(), brand_code_w.c_str(), brand_path_w.c_str(),
           ap_w.c_str(), version_w.c_str(), existence_checker_path_w.c_str(),
           client_install_data_w.c_str(), install_data_index_w.c_str(),
-          static_cast<int>(priority), observer.Get());
+          std::to_underlying(priority), observer.Get());
       if (FAILED(hr)) {
         VLOG(2) << "Failed to call IUpdater::Install: " << std::hex << hr;
         observer->Disconnect().Run(base::unexpected(hr));
@@ -1083,24 +1072,9 @@ class UpdateServiceProxyImplImpl
     return;
   }
 
-  void GetUpdaterPoliciesOnTaskRunner(
-      base::OnceCallback<
-          void(base::expected<
-               base::flat_map<std::string, UpdateService::PolicyValue>,
-               RpcError>)> callback) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    VLOG(2) << __func__ << ": This method is only implemented in mojo";
-    std::move(callback).Run(base::unexpected(E_NOTIMPL));
-    return;
-  }
-
-  void GetAppPoliciesOnTaskRunner(
-      base::OnceCallback<
-          void(base::expected<
-               base::flat_map<
-                   std::string,
-                   base::flat_map<std::string, UpdateService::PolicyValue>>,
-               RpcError>)> callback) {
+  void GetPoliciesJsonOnTaskRunner(
+      base::OnceCallback<void(base::expected<std::string, RpcError>)>
+          callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     VLOG(2) << __func__ << ": This method is only implemented in mojo";
     std::move(callback).Run(base::unexpected(E_NOTIMPL));
@@ -1258,26 +1232,11 @@ void UpdateServiceProxyWinImpl::GetUpdaterState(
       base::BindPostTaskToCurrentDefault(std::move(callback)));
 }
 
-void UpdateServiceProxyWinImpl::GetUpdaterPolicies(
-    base::OnceCallback<void(
-        base::expected<base::flat_map<std::string, UpdateService::PolicyValue>,
-                       RpcError>)> callback) {
+void UpdateServiceProxyWinImpl::GetPoliciesJson(
+    base::OnceCallback<void(base::expected<std::string, RpcError>)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   VLOG(1) << __func__;
-  impl_->GetUpdaterPolicies(
-      base::BindPostTaskToCurrentDefault(std::move(callback)));
-}
-
-void UpdateServiceProxyWinImpl::GetAppPolicies(
-    base::OnceCallback<
-        void(base::expected<
-             base::flat_map<
-                 std::string,
-                 base::flat_map<std::string, UpdateService::PolicyValue>>,
-             RpcError>)> callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  VLOG(1) << __func__;
-  impl_->GetAppPolicies(
+  impl_->GetPoliciesJson(
       base::BindPostTaskToCurrentDefault(std::move(callback)));
 }
 

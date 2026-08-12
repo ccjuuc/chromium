@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.toolbar.forward_button;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
-import android.view.KeyEvent;
 import android.view.View;
 
 import androidx.core.widget.ImageViewCompat;
@@ -16,7 +15,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.omnibox.LocationBar;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -25,7 +23,8 @@ import org.chromium.chrome.browser.toolbar.ToolbarTabController;
 import org.chromium.chrome.browser.toolbar.top.NavigationPopup;
 import org.chromium.chrome.browser.toolbar.top.ToolbarChildButton;
 import org.chromium.chrome.browser.toolbar.top.ToolbarUtils;
-import org.chromium.components.omnibox.AutocompleteRequestType;
+import org.chromium.ui.util.KeyEventUtils;
+import org.chromium.ui.util.MotionEventUtils;
 import org.chromium.ui.widget.ChromeImageButton;
 
 import java.util.function.Supplier;
@@ -45,6 +44,7 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
     private final NavigationPopup.HistoryDelegate mHistoryDelegate;
 
     private @Nullable NavigationPopup mNavigationPopup;
+    private boolean mHasSpaceToShow;
 
     /**
      * Creates a ForwardButtonCoordinator for managing the forward button on the tablet toolbar.
@@ -87,7 +87,9 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
                 mTopUiThemeColorProvider.getBrandedColorScheme());
         onIncognitoStateChanged(mIncognitoStateProvider.isIncognitoSelected());
 
-        mImageButton.setClickCallback(metaState -> forward(metaState, "MobileToolbarForward"));
+        mImageButton.setClickCallback(
+                (metaState, buttonState) ->
+                        forward(metaState, buttonState, "MobileToolbarForward"));
         mImageButton.setLongClickable(true);
     }
 
@@ -128,7 +130,13 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
     }
 
     @Override
+    public boolean hasSpaceToShow() {
+        return mHasSpaceToShow;
+    }
+
+    @Override
     public void setHasSpaceToShow(boolean hasSpaceToShow) {
+        mHasSpaceToShow = hasSpaceToShow;
         setVisibility(hasSpaceToShow);
     }
 
@@ -169,13 +177,15 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
      *
      * @return Whether or not the current Tab did go forward.
      */
-    protected boolean forward(int metaState, String reportingTagPrefix) {
+    protected boolean forward(int metaState, int buttonState, String reportingTagPrefix) {
         if (!mActivityLifecycleDispatcher.isNativeInitializationFinished()) return false;
 
         maybeUnfocusUrlBar();
-        boolean hasControl = (metaState & KeyEvent.META_CTRL_ON) != 0;
-        boolean hasShift = (metaState & KeyEvent.META_SHIFT_ON) != 0;
-        if (hasControl && hasShift) {
+        boolean hasControl = KeyEventUtils.isCtrlOn(metaState);
+        boolean hasShift = KeyEventUtils.isShiftOn(metaState);
+        boolean isMiddleClick = MotionEventUtils.isTertiaryButton(buttonState);
+
+        if ((hasControl && hasShift) || (isMiddleClick && hasShift)) {
             // Holding ALT is allowed as well (reference desktop behavior).
 
             // Note on recording user actions: "forward" is recorded regardless of whether it
@@ -183,7 +193,7 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
             // https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/top/ToolbarTablet.java;l=196;drc=14aab80e079b7db3e85a8302da6d660bafeddfbc
             RecordUserAction.record(reportingTagPrefix + "InNewForegroundTab");
             return mToolbarTabController.forwardInNewTab(/* foregroundNewTab= */ true);
-        } else if (hasControl) {
+        } else if (hasControl || isMiddleClick) {
             RecordUserAction.record(reportingTagPrefix + "InNewBackgroundTab");
             return mToolbarTabController.forwardInNewTab(/* foregroundNewTab= */ false);
         } else if (hasShift) {
@@ -198,13 +208,7 @@ public class ForwardButtonCoordinator extends ToolbarChildButton {
     private void maybeUnfocusUrlBar() {
         LocationBar locationBar = mLocationBarSupplier.get();
         if (locationBar != null && locationBar.getOmniboxStub() != null) {
-            locationBar
-                    .getOmniboxStub()
-                    .setUrlBarFocus(
-                            false,
-                            null,
-                            OmniboxFocusReason.UNFOCUS,
-                            AutocompleteRequestType.SEARCH);
+            locationBar.getOmniboxStub().endInput();
         }
     }
 

@@ -417,6 +417,13 @@ constexpr auto kRoleNames = std::to_array<const char*>({
 });
 
 const char* AtkRoleToString(AtkRole role) {
+  // Role strings in test output need to be stable across systems.
+  //
+  // ATK also provides `atk_role_get_name()` for human-readable output, but its
+  // returned string has not historically been stable across ATK versions /
+  // distributions (e.g. some environments return "button" for
+  // ATK_ROLE_PUSH_BUTTON where others return "push button"). For accessibility
+  // tree dumps and their expectations, prefer this fixed mapping.
   if (role < G_N_ELEMENTS(kRoleNames))
     return kRoleNames[role];
   return "<unknown AtkRole>";
@@ -539,7 +546,7 @@ AtspiAccessible* FindAccessible(const AXTreeSelector& selector) {
     }
   }
 
-  if (matched_children.size() == 0) {
+  if (matched_children.empty()) {
     std::string selectorType;
     if (selector.widget) {
       selectorType = "the provided pid.";

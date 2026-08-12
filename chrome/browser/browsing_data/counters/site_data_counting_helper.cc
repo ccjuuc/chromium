@@ -31,7 +31,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "components/cdm/browser/media_drm_storage_impl.h"  // nogncheck crbug.com/1125897
+#include "components/cdm/browser/media_drm_storage_impl.h"  // nogncheck crbug.com/40147906
 #endif
 
 using content::BrowserThread;
@@ -103,11 +103,11 @@ void SiteDataCountingHelper::CountAndDestroySelfWhenFinished() {
       std::move(cdm_storage_callback), begin_, end_);
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
-  // Counting site usage data and durable permissions.
+  // Counting site usage data and persistent permissions.
   auto* hcsm = HostContentSettingsMapFactory::GetForProfile(profile_);
   const ContentSettingsType content_settings[] = {
-    ContentSettingsType::DURABLE_STORAGE,
-    ContentSettingsType::APP_BANNER,
+      ContentSettingsType::PERSISTENT_STORAGE,
+      ContentSettingsType::APP_BANNER,
   };
   for (auto type : content_settings) {
     tasks_ += 1;

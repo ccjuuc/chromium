@@ -8,19 +8,22 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 #include "chromeos/ash/components/language_preferences/language_preferences.h"
-#include "chromeos/crosapi/mojom/cros_display_config.mojom.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "components/sync_preferences/pref_service_syncable_observer.h"
 #include "components/user_manager/user_manager.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/media_session/public/mojom/audio_focus.mojom.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 
+class ApplicationLocaleStorage;
 class ContentTracingManager;
 class PrefRegistrySimple;
+class PrefService;
 
 namespace chromeos {
 class User;
@@ -36,6 +39,10 @@ class PrefRegistrySyncable;
 
 namespace ash {
 
+namespace system {
+class TimeZoneResolverManager;
+}
+
 namespace input_method {
 class InputMethodSyncer;
 }
@@ -48,9 +55,18 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
                     public user_manager::UserManager::UserSessionStateObserver,
                     public UpdateEngineClient::Observer {
  public:
-  Preferences();
-  explicit Preferences(
-      input_method::InputMethodManager* input_method_manager);  // for testing
+  // `local_state` and `application_locale_storage` must be non-null and must
+  // outlive `this`.
+  // `timezone_resolver_manager` must outlive `this`. It must be non-null in
+  // production, but may be null in unit tests.
+  Preferences(PrefService* local_state,
+              ApplicationLocaleStorage* application_locale_storage,
+              system::TimeZoneResolverManager* timezone_resolver_manager);
+  // for testing
+  Preferences(PrefService* local_state,
+              ApplicationLocaleStorage* application_locale_storage,
+              system::TimeZoneResolverManager* timezone_resolver_manager,
+              input_method::InputMethodManager* input_method_manager);
 
   Preferences(const Preferences&) = delete;
   Preferences& operator=(const Preferences&) = delete;
@@ -59,7 +75,8 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
 
   // These method will register the prefs associated with Chrome OS settings.
   static void RegisterPrefs(PrefRegistrySimple* registry);
-  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+  static void RegisterProfilePrefs(PrefService& local_state,
+                                   user_prefs::PrefRegistrySyncable* registry);
 
   // This method will initialize Chrome OS settings to values in user prefs.
   // |user| is the user owning this preferences.
@@ -126,6 +143,10 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   // underlying XKB API requires it.
   void UpdateAutoRepeatRate();
 
+  // Binds the AudioFocusManager remote if not already bound.
+  void EnsureAudioFocusManagerBound();
+  void OnAudioFocusManagerDisconnected();
+
   // Force natural scroll to on if --enable-natural-scroll-default is specified
   // on the cmd line.
   void ForceNaturalScrollDefault();
@@ -139,6 +160,10 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   // UpdateEngineClient::Observer implementation.
   void UpdateStatusChanged(const update_engine::StatusResult& status) override;
   void OnIsConsumerAutoUpdateEnabled(std::optional<bool> enabled);
+
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+  const raw_ptr<system::TimeZoneResolverManager> timezone_resolver_manager_;
 
   raw_ptr<sync_preferences::PrefServiceSyncable> prefs_;
 
@@ -191,6 +216,11 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
 
   BooleanPrefMember consumer_auto_update_toggle_pref_;
 
+  BooleanPrefMember audio_focus_enforcement_enabled_;
+
+  // Remote to the global AudioFocusManager service.
+  mojo::Remote<media_session::mojom::AudioFocusManager> audio_focus_manager_;
+
   PrefChangeRegistrar pref_change_registrar_;
 
   // User owning these preferences.
@@ -203,9 +233,6 @@ class Preferences : public sync_preferences::PrefServiceSyncableObserver,
   scoped_refptr<input_method::InputMethodManager::State> ime_state_;
 
   std::unique_ptr<input_method::InputMethodSyncer> input_method_syncer_;
-
-  mojo::Remote<crosapi::mojom::CrosDisplayConfigController>
-      cros_display_config_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

@@ -119,13 +119,21 @@ class LauncherNudgeControllerTest : public AshTestBase {
         scrollable_shelf_view_->shelf_view());
   }
 
-  // Advances the mock clock in the task environment and wait until it is idle.
+  void TearDown() override {
+    scrollable_shelf_view_ = nullptr;
+    nudge_controller_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
+  // Advances the mock clock in the task environment and runs ready work.
   // Note that AdvanceClock is used here instead of FastForwardBy because
   // `delay` used in test cases are too long for FastForwardBy to process and
   // will cause timeout running the tests.
   void AdvanceClock(base::TimeDelta delay) {
     task_environment()->AdvanceClock(delay);
-    task_environment()->RunUntilIdle();
+    // Run timers that became due at the advanced mock time without moving past
+    // the long nudge intervals used by callers.
+    task_environment()->FastForwardBy(base::TimeDelta());
   }
 
   int GetNudgeShownCount() {
@@ -143,10 +151,9 @@ class LauncherNudgeControllerTest : public AshTestBase {
     test_api_->RunMessageLoopUntilAnimationsDone();
   }
 
-  raw_ptr<LauncherNudgeController, DanglingUntriaged> nudge_controller_;
+  raw_ptr<LauncherNudgeController> nudge_controller_;
   std::unique_ptr<TestNudgeAnimationObserver> observer_;
-  raw_ptr<ScrollableShelfView, DanglingUntriaged> scrollable_shelf_view_ =
-      nullptr;
+  raw_ptr<ScrollableShelfView> scrollable_shelf_view_ = nullptr;
   std::unique_ptr<ShelfViewTestAPI> test_api_;
 };
 

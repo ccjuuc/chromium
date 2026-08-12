@@ -5,6 +5,7 @@
 #include "ui/accessibility/ax_assistant_structure.h"
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/logging.h"
@@ -79,8 +80,8 @@ std::u16string GetInnerText(const AXNode* node) {
 }
 
 std::u16string GetValue(const AXNode* node) {
-  std::u16string value =
-      node->GetString16Attribute(ax::mojom::StringAttribute::kValue);
+  std::u16string value = base::UTF8ToUTF16(
+      node->GetAriaValueTextOrValue().value_or(std::string()));
 
   if (value.empty() && (IsTextField(node) || IsRichTextEditable(node)) &&
       !IsAtomicTextField(node)) {
@@ -372,7 +373,7 @@ std::unique_ptr<AssistantTree> CreateAssistantTree(const AXTreeUpdate& update) {
   return assistant_tree;
 }
 
-std::u16string AXUrlBaseText(std::u16string url) {
+std::u16string AXUrlBaseText(std::u16string_view url) {
   // Given a url like http://foo.com/bar/baz.png, just return the
   // base text, e.g., "baz".
   int trailing_slashes = 0;
@@ -388,7 +389,7 @@ std::u16string AXUrlBaseText(std::u16string url) {
   size_t dot_index = url.rfind('.');
   if (dot_index != std::string::npos)
     url = url.substr(0, dot_index);
-  return url;
+  return std::u16string(url);
 }
 
 const char* AXRoleToAndroidClassName(ax::mojom::Role role, bool has_parent) {
@@ -430,7 +431,11 @@ const char* AXRoleToAndroidClassName(ax::mojom::Role role, bool has_parent) {
     case ax::mojom::Role::kProgressIndicator:
       return kAXProgressBarClassname;
     case ax::mojom::Role::kTabList:
-      return kAXTabWidgetClassname;
+      // TODO(crbug.com/474135469): Investigate mapping kTabList to a more
+      // specific class (e.g., TabLayout). Currently, mapping to TabWidget
+      // causes TalkBack to suppress CollectionInfo metadata, losing the "X of
+      // N" announcement.
+      return kAXViewGroupClassname;
     case ax::mojom::Role::kGrid:
     case ax::mojom::Role::kTreeGrid:
     case ax::mojom::Role::kTable:

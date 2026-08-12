@@ -5,3 +5,15 @@
 -TracingScenarioSystemBackendTest.ScenarioConfigWithoutSystemBackend
 -TracingScenarioSystemBackendTest.StartStop
 -TracingScenarioSystemBackendTest.SystemConsumerNotAllowedByCallback
+
+# TODO(crbug.com/499834466): These tests have been failing since
+# https://crrev.com/c/7679167.
+-PermissionServiceImplTest.AddPermissionObserver
+-PermissionServiceImplTest.HasPermission
+-PermissionServiceImplTest.RequestPermission
+-PermissionServiceImplTest.RequestPermissions
+-PermissionServiceImplTest.RevokePermission
+
+#TODO(crbug.com/539754134): The test has been failing since
+# https://crrev.com/c/8145304.
+-BrowserAccessibilityTest.NonWebContentBoundsResolveWithinTheirOwnTree

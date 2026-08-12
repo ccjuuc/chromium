@@ -118,12 +118,7 @@
 
   _navigationController =
       [[TableViewNavigationController alloc] initWithTable:_viewController];
-  BOOL isIPad =
-      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
-  _navigationController.modalPresentationStyle =
-      isIPad ? UIModalPresentationFormSheet : UIModalPresentationPageSheet;
-  _navigationController.modalTransitionStyle =
-      UIModalTransitionStyleCoverVertical;
+  _navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
   _navigationController.presentationController.delegate = self;
 
   [self.baseViewController presentViewController:_navigationController
@@ -140,6 +135,7 @@
                          completion:nil];
   _navigationController.presentationController.delegate = nil;
   _viewController = nil;
+  [_autofillProfileEditMediator disconnect];
   _autofillProfileEditMediator = nil;
 }
 

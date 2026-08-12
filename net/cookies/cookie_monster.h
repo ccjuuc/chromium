@@ -70,10 +70,10 @@ class NET_EXPORT CookieMonster : public CookieStore {
     virtual ~PrefDelegate() = default;
 
     // Returns a dict of all domains under legacy mode.
-    virtual const base::Value::Dict& GetLegacyDomains() const = 0;
+    virtual const base::DictValue& GetLegacyDomains() const = 0;
 
     // Sets a dict of domain names under legacy scope mode.
-    virtual void SetLegacyDomains(base::Value::Dict dict) = 0;
+    virtual void SetLegacyDomains(base::DictValue dict) = 0;
 
     // Starts listening for prefs to be loaded. If prefs are already loaded,
     // `pref_loaded_callback` will be invoked asynchronously. Callback will be
@@ -186,12 +186,20 @@ class NET_EXPORT CookieMonster : public CookieStore {
                 NetLog* net_log,
                 std::unique_ptr<PrefDelegate> pref_delegate = nullptr);
 
-  // Only used during unit testing.
-  // |net_log| must outlive the CookieMonster.
-  CookieMonster(scoped_refptr<PersistentCookieStore> store,
+  // Internal ctor, exposed publicly only for std::make_unique.
+  // `net_log` must outlive the CookieMonster.
+  CookieMonster(base::PassKey<CookieMonster>,
+                scoped_refptr<PersistentCookieStore> store,
                 base::TimeDelta last_access_threshold,
                 NetLog* net_log,
                 std::unique_ptr<PrefDelegate> pref_delegate);
+
+  // `net_log` must outlive the CookieMonster.
+  static std::unique_ptr<CookieMonster> CreateForTesting(
+      scoped_refptr<PersistentCookieStore> store,
+      base::TimeDelta last_access_threshold,
+      NetLog* net_log,
+      std::unique_ptr<PrefDelegate> pref_delegate);
 
   CookieMonster(const CookieMonster&) = delete;
   CookieMonster& operator=(const CookieMonster&) = delete;
@@ -212,8 +220,7 @@ class NET_EXPORT CookieMonster : public CookieStore {
       const GURL& source_url,
       const CookieOptions& options,
       SetCookiesCallback callback,
-      std::optional<CookieAccessResult> cookie_access_result =
-          std::nullopt) override;
+      std::optional<CookieAccessResult> cookie_access_result) override;
   void SetUnsafeCanonicalCookieForTestAsync(
       std::unique_ptr<CanonicalCookie> cookie,
       SetCookiesCallback callback) override;
@@ -242,6 +249,8 @@ class NET_EXPORT CookieMonster : public CookieStore {
   std::optional<bool> SiteHasCookieInOtherPartition(
       const net::SchemefulSite& site,
       const CookiePartitionKey& partition_key) const override;
+
+  void OnPreconnect(const GURL& url) override;
 
   // Enables writing session cookies into the cookie database. If this this
   // method is called, it must be called before first use of the instance
@@ -788,13 +797,6 @@ class NET_EXPORT CookieMonster : public CookieStore {
   // cookies. Returns whether stats were recorded.
   bool DoRecordPeriodicStats();
 
-  // Records periodic stats related to First-Party Sets usage. Note that since
-  // First-Party Sets presents a potentially asynchronous interface, these stats
-  // may be collected asynchronously w.r.t. the rest of the stats collected by
-  // `RecordPeriodicStats`.
-  void RecordPeriodicFirstPartySetsStats(
-      base::flat_map<SchemefulSite, FirstPartySetEntry> sets) const;
-
   // Defers the callback until the full coookie database has been loaded. If
   // it's already been loaded, runs the callback synchronously.
   void DoCookieCallback(base::OnceClosure callback);
@@ -897,7 +899,7 @@ class NET_EXPORT CookieMonster : public CookieStore {
   const base::TimeDelta last_access_threshold_;
 
   // Local copy of pref's dictionary.
-  std::unique_ptr<base::Value::Dict> pref_delegate_dict_;
+  std::unique_ptr<base::DictValue> pref_delegate_dict_;
 
   // Approximate date of access time of least recently accessed cookie
   // in |cookies_|.  Note that this is not guaranteed to be accurate, only a)
@@ -915,8 +917,6 @@ class NET_EXPORT CookieMonster : public CookieStore {
   base::Time last_statistic_record_time_;
 
   bool persist_session_cookies_ = false;
-
-  base::MetricsSubSampler metrics_subsampler_;
 
   THREAD_CHECKER(thread_checker_);
 

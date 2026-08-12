@@ -8,9 +8,12 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/notifier_catalogs.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
@@ -20,9 +23,6 @@
 #include "chrome/browser/ash/login/signin/legacy_token_handle_fetcher.h"
 #include "chrome/browser/ash/login/signin/token_handle_store_factory.h"
 #include "chrome/browser/ash/login/signin/token_handle_util.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
@@ -30,29 +30,28 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
 #include "chromeos/ash/components/account_manager/account_manager_factory.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/account_id/account_id.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
+#include "components/sync/base/features.h"
 #include "components/user_manager/user_manager.h"
 #include "components/vector_icons/vector_icons.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
@@ -66,7 +65,7 @@ bool g_ignore_sync_errors_for_test_ = false;
 
 void HandleDeviceAccountReauthNotificationClick(
     std::optional<int> button_index) {
-  chrome::AttemptUserExit();
+  session_manager::SessionManager::Get()->RequestSignOut();
 }
 
 bool AreAllAccountsMigrated(
@@ -93,7 +92,7 @@ bool IsSecondaryEduAccountMigratedForChildUser(Profile* profile,
   }
 
   return profile->GetPrefs()->GetBoolean(
-      prefs::kEduCoexistenceArcMigrationCompleted);
+      ash::prefs::kEduCoexistenceArcMigrationCompleted);
 }
 
 std::unique_ptr<message_center::Notification>
@@ -124,7 +123,9 @@ CreateDeviceAccountErrorNotification(
           GURL(device_account_notification_id), notifier_id, data,
           new message_center::HandleNotificationClickDelegate(
               base::BindRepeating(&HandleDeviceAccountReauthNotificationClick)),
-          vector_icons::kNotificationWarningIcon,
+          ::features::IsRoundedIconsEnabled()
+              ? vector_icons::kInfoFilledIcon
+              : vector_icons::kNotificationWarningOldIcon,
           message_center::SystemNotificationWarningLevel::WARNING);
   notification->SetSystemPriority();
 
@@ -143,14 +144,24 @@ std::u16string GetMessageBodyForSecondaryAccountErrors() {
       IDS_SIGNIN_ERROR_SECONDARY_ACCOUNT_BUBBLE_VIEW_MESSAGE);
 }
 
+bool IsNewSignInNonSyncingUser(
+    const signin::IdentityManager* identity_manager) {
+  return identity_manager &&
+         !identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSync) &&
+         syncer::IsReplaceSyncPromosWithSignInPromosEnabled();
+}
+
 std::u16string GetMessageBodyForDeviceAccountErrors(
+    const signin::IdentityManager* identity_manager,
     const GoogleServiceAuthError::State& error_state) {
   switch (error_state) {
     // User credentials are invalid (bad acct, etc).
     case GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS:
     case GoogleServiceAuthError::SERVICE_ERROR:
       return l10n_util::GetStringUTF16(
-          IDS_SYNC_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE);
+          IsNewSignInNonSyncingUser(identity_manager)
+              ? IDS_SYNC_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE_2
+              : IDS_SYNC_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE);
 
     // Sync service is not available for this account's domain.
     case GoogleServiceAuthError::SERVICE_UNAVAILABLE:
@@ -160,7 +171,9 @@ std::u16string GetMessageBodyForDeviceAccountErrors(
     // Generic message for "other" errors.
     default:
       return l10n_util::GetStringUTF16(
-          IDS_SYNC_OTHER_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE);
+          IsNewSignInNonSyncingUser(identity_manager)
+              ? IDS_SYNC_OTHER_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE_2
+              : IDS_SYNC_OTHER_SIGN_IN_ERROR_BUBBLE_VIEW_MESSAGE);
   }
 }
 
@@ -175,14 +188,15 @@ std::unique_ptr<LegacyTokenHandleFetcher> CreateTokenHandleFetcher(
 
 }  // namespace
 
-SigninErrorNotifier::SigninErrorNotifier(SigninErrorController* controller,
+SigninErrorNotifier::SigninErrorNotifier(PrefService* local_state,
+                                         SigninErrorController* controller,
                                          Profile* profile)
-    : error_controller_(controller),
+    : local_state_(CHECK_DEREF(local_state)),
+      error_controller_(controller),
       profile_(profile),
       identity_manager_(IdentityManagerFactory::GetForProfile(profile_)),
-      account_manager_(g_browser_process->platform_part()
-                           ->GetAccountManagerFactory()
-                           ->GetAccountManager(profile_->GetPath().value())),
+      account_manager_(AccountManagerFactory::Get()->GetAccountManager(
+          profile_->GetPath().value())),
       token_handle_store_(
           TokenHandleStoreFactory::Get()->GetTokenHandleStore()),
       token_handle_fetcher_(
@@ -212,9 +226,8 @@ void SigninErrorNotifier::OnTokenHandleCheck(const AccountId& account_id,
                                              bool reauth_required) {
   if (ash::features::IsUseTokenHandleStoreEnabled()) {
     account_manager::AccountManager* account_manager =
-        g_browser_process->platform_part()
-            ->GetAccountManagerFactory()
-            ->GetAccountManager(profile_->GetPath().value());
+        AccountManagerFactory::Get()->GetAccountManager(
+            profile_->GetPath().value());
 
     token_handle_store_->DiagnoseTokenHandleMapping(
         profile_->GetPrefs(), account_manager, account_id, token);
@@ -224,7 +237,8 @@ void SigninErrorNotifier::OnTokenHandleCheck(const AccountId& account_id,
   if (!reauth_required) {
     return;
   }
-  RecordReauthReason(account_id, ReauthReason::kInvalidTokenHandle);
+  RecordReauthReason(local_state_.get(), account_id,
+                     ReauthReason::kInvalidTokenHandle);
   HandleDeviceAccountError(/*error_message=*/l10n_util::GetStringUTF16(
       IDS_SYNC_TOKEN_HANDLE_ERROR_BUBBLE_VIEW_MESSAGE));
 }
@@ -248,8 +262,8 @@ bool SigninErrorNotifier::ShouldIgnoreSyncErrorsForTesting() {
 
 // static
 void SigninErrorNotifier::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kEduCoexistenceArcMigrationCompleted,
-                                false);
+  registry->RegisterBooleanPref(
+      ash::prefs::kEduCoexistenceArcMigrationCompleted, false);
 }
 
 void SigninErrorNotifier::Shutdown() {
@@ -281,9 +295,11 @@ void SigninErrorNotifier::OnErrorChanged() {
   if (!IsAccountManagerAvailable(profile_)) {
     // If this flag is disabled, Chrome OS does not have a concept of Secondary
     // Accounts. Preserve existing behavior.
-    RecordReauthReason(account_id, ReauthReason::kSyncFailed);
+    RecordReauthReason(local_state_.get(), account_id,
+                       ReauthReason::kSyncFailed);
     HandleDeviceAccountError(
         /*error_message=*/GetMessageBodyForDeviceAccountErrors(
+            identity_manager_,
             /*error=*/error_controller_->auth_error().state()));
     return;
   }
@@ -292,9 +308,11 @@ void SigninErrorNotifier::OnErrorChanged() {
   const CoreAccountId primary_account_id =
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
   if (error_account_id == primary_account_id) {
-    RecordReauthReason(account_id, ReauthReason::kSyncFailed);
+    RecordReauthReason(local_state_.get(), account_id,
+                       ReauthReason::kSyncFailed);
     HandleDeviceAccountError(
         /*error_message=*/GetMessageBodyForDeviceAccountErrors(
+            identity_manager_,
             /*error=*/error_controller_->auth_error().state()));
   } else {
     HandleSecondaryAccountError(error_account_id);
@@ -306,7 +324,7 @@ void SigninErrorNotifier::HandleDeviceAccountError(
   // If this error has occurred because a user's account has just been converted
   // to a Family Link Supervised account, then suppress the notification.
   supervised_user::SupervisedUserService* service =
-      SupervisedUserServiceFactory::GetForProfile(profile_);
+      supervised_user::SupervisedUserServiceFactory::GetForProfile(profile_);
   if (service->signout_required_after_supervision_enabled())
     return;
 
@@ -373,7 +391,8 @@ void SigninErrorNotifier::OnCheckDummyGaiaTokenForAllAccounts(
       new message_center::HandleNotificationClickDelegate(base::BindRepeating(
           &SigninErrorNotifier::HandleSecondaryAccountReauthNotificationClick,
           weak_factory_.GetWeakPtr())),
-      vector_icons::kSettingsIcon,
+      ::features::IsRoundedIconsEnabled() ? vector_icons::kSettingsFilledIcon
+                                          : vector_icons::kSettingsOldIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
   notification.SetSystemPriority();
 
@@ -385,8 +404,14 @@ void SigninErrorNotifier::OnCheckDummyGaiaTokenForAllAccounts(
 
 void SigninErrorNotifier::HandleSecondaryAccountReauthNotificationClick(
     std::optional<int> button_index) {
-  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      profile_, chromeos::settings::mojom::kPeopleSectionPath);
+  auto* user =
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_.get());
+  if (user) {
+    // TODO(crbug.com/447287122): Revisit here to see if there's a case where no
+    // active session is there.
+    ash::SettingsAppManager::Get()->Open(
+        *user, {.sub_page = chromeos::settings::mojom::kPeopleSectionPath});
+  }
 }
 
 }  // namespace ash

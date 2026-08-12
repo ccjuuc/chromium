@@ -54,6 +54,7 @@ class CORE_EXPORT LayoutVideo final : public LayoutMedia {
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   const char* GetName() const override {
@@ -83,6 +84,8 @@ class CORE_EXPORT LayoutVideo final : public LayoutMedia {
     NOT_DESTROYED();
     return true;
   }
+  bool IsReplacedNormalFlowStackingContext(
+      const ComputedStyle& style) const final;
 
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;

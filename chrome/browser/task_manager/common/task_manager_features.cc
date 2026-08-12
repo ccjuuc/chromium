@@ -11,15 +11,8 @@ namespace features {
 #if BUILDFLAG(IS_ANDROID)
 // Enables the Task Manager on Clank.
 BASE_FEATURE(kTaskManagerClank,
-#if BUILDFLAG(IS_DESKTOP_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
              base::FEATURE_DISABLED_BY_DEFAULT
-#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
 );
-#else
-// Enables the Task Manager Desktop Refresh project.
-BASE_FEATURE(kTaskManagerDesktopRefresh, base::FEATURE_ENABLED_BY_DEFAULT);
 #endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace features

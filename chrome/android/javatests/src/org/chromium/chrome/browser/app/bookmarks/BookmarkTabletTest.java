@@ -15,6 +15,7 @@ import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.CoreMatchers.allOf;
+import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
@@ -35,24 +36,27 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerCoordinator;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.BookmarkPage;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.TabStripUtils;
 import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.DeviceInput;
 
 /** Tests for the bookmark manager on tablet. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -60,6 +64,7 @@ import org.chromium.ui.base.DeviceFormFactor;
 @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
 // TODO(crbug.com/40899175): Investigate batching.
 @DoNotBatch(reason = "Test has side-effects (bookmarks, pageloads) and thus can't be batched.")
+@DisableFeatures({ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT})
 public class BookmarkTabletTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
@@ -83,15 +88,19 @@ public class BookmarkTabletTest {
         BookmarkTestUtil.waitForBookmarkModelLoaded();
 
         mActivityTestRule.loadUrl(getOriginalNativeBookmarksUrl());
-        mItemsContainer =
-                mActivityTestRule.getActivity().findViewById(R.id.selectable_list_recycler_view);
-        mItemsContainer.setItemAnimator(null); // Disable animation to reduce flakiness.
-        mBookmarkManagerCoordinator =
-                ((BookmarkPage) mActivityTestRule.getActivityTab().getNativePage())
-                        .getManagerForTesting();
-
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(false));
+                () -> {
+                    mItemsContainer =
+                            mActivityTestRule
+                                    .getActivity()
+                                    .findViewById(R.id.selectable_list_recycler_view);
+                    mItemsContainer.setItemAnimator(null); // Disable animation to reduce flakiness.
+                    mBookmarkManagerCoordinator =
+                            ((BookmarkPage) mActivityTestRule.getActivityTab().getNativePage())
+                                    .getManagerForTesting();
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            false);
+                });
     }
 
     /**
@@ -177,13 +186,54 @@ public class BookmarkTabletTest {
 
     @Test
     @MediumTest
-    public void testSearchBarAutoFocus() throws Exception {
+    public void testSearchBarAutoFocusWithoutKeyboard() throws Exception {
+        DeviceInput.setSupportsKeyboardForTesting(false);
         openBookmarkManager();
+        boolean isKeyboardAttached =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> DeviceInput.supportsKeyboard(mActivityTestRule.getActivity()));
 
-        // The search bar should be focused automatically.
-        onView(withId(R.id.row_search_text)).check(matches(isFocused()));
+        if (isKeyboardAttached) return;
+
+        // The search bar should not be automatically focused on devices without physical keyboard
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(not(isFocused())));
         // users should be able to directly type "google" in the search bar
-        onView(withId(R.id.row_search_text)).perform(replaceText("google"));
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(replaceText("google"));
+        onView(allOf(isDescendantOfA(withId(R.id.action_bar)), withText("Bookmarks")))
+                .check(matches(isDisplayed()));
+
+        onView(allOf(withId(R.id.clear_text_button), isDisplayed())).perform(click());
+        onView(withText("Mobile bookmarks")).perform(click());
+        onView(allOf(isDescendantOfA(withId(R.id.action_bar)), withText("Mobile bookmarks")))
+                .check(matches(isDisplayed()));
+
+        // After navigating to a new folder, the search bar should not be focused.
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(not(isFocused())));
+        // And the search text should be cleared.
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(withText("")));
+        // go back to the bookmark page
+        onView(withId(R.id.back_button)).perform(click());
+        // user's query is empty in the search bar
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(replaceText(""));
+        // user's query is empty the context inside bookmarks should not change
+        onView(withText("Mobile bookmarks")).check(matches(isDisplayed()));
+    }
+
+    @Test
+    @MediumTest
+    public void testSearchBarAutoFocusWithKeyboard() throws Exception {
+        DeviceInput.setSupportsKeyboardForTesting(true);
+        openBookmarkManager();
+        boolean isKeyboardAttached =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> DeviceInput.supportsKeyboard(mActivityTestRule.getActivity()));
+
+        if (!isKeyboardAttached) return;
+
+        // The search bar should be focused automatically
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(isFocused()));
+        // users should be able to directly type "google" in the search bar
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(replaceText("google"));
         onView(allOf(isDescendantOfA(withId(R.id.action_bar)), withText("Bookmarks")))
                 .check(matches(isDisplayed()));
 
@@ -193,13 +243,13 @@ public class BookmarkTabletTest {
                 .check(matches(isDisplayed()));
 
         // After navigating to a new folder, the search bar should be focused again.
-        onView(withId(R.id.row_search_text)).check(matches(isFocused()));
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(isFocused()));
         // And the search text should be cleared.
-        onView(withId(R.id.row_search_text)).check(matches(withText("")));
+        BookmarkTestUtil.getSearchBoxViewInteraction().check(matches(withText("")));
         // go back to the bookmark page
         onView(withId(R.id.back_button)).perform(click());
         // user's query is empty in the search bar
-        onView(withId(R.id.row_search_text)).perform(replaceText(""));
+        BookmarkTestUtil.getSearchBoxViewInteraction().perform(replaceText(""));
         // user's query is empty the context inside bookmarks should not change
         onView(withText("Mobile bookmarks")).check(matches(isDisplayed()));
     }

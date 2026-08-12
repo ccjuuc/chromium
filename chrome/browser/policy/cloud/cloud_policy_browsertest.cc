@@ -175,7 +175,7 @@ void GetExpectedTestPolicy(PolicyMap* expected, const char* homepage) {
   expected->Set(key::kDefaultPopupsSetting, POLICY_LEVEL_MANDATORY,
                 POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(4),
                 nullptr);
-  base::Value::List list;
+  base::ListValue list;
   list.Append("dev.chromium.org");
   list.Append("youtube.com");
   expected->Set(key::kURLBlocklist, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
@@ -371,7 +371,7 @@ class CloudPolicyTest : public PlatformBrowserTest,
     base::RunLoop run_loop;
     profile()
         ->GetUserCloudPolicyManager()
-        ->user_store()
+        ->store()
         ->background_task_runner()
         ->PostDelayedTask(FROM_HERE, run_loop.QuitClosure(),
                           base::Milliseconds(0));

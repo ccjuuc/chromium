@@ -4,11 +4,13 @@
 
 #include "gpu/command_buffer/service/shared_image/dcomp_image_backing_factory.h"
 
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -29,6 +31,7 @@
 #include "ui/gfx/image/image_unittest_util.h"
 #include "ui/gfx/test/sk_color_eq.h"
 #include "ui/gl/child_window_win.h"
+#include "ui/gl/dc_surface_solid_color_pool.h"
 #include "ui/gl/direct_composition_support.h"
 #include "ui/gl/gl_angle_util_win.h"
 #include "ui/gl/gl_context.h"
@@ -74,12 +77,14 @@ class DCompImageBackingFactoryTest : public testing::Test {
         /*use_virtualized_gl_contexts=*/false, base::DoNothing(),
         GrContextType::kGL);
     context_state_->InitializeSkia(GpuPreferences(), workarounds);
-    auto feature_info =
-        base::MakeRefCounted<gles2::FeatureInfo>(workarounds, GpuFeatureInfo());
-    context_state_->InitializeGL(GpuPreferences(), std::move(feature_info));
+    context_state_->InitializeGL(GpuPreferences(), workarounds,
+                                 GpuFeatureInfo());
 
     d3d11_device_ = gl::QueryD3D11DeviceObjectFromANGLE();
-    gl::InitializeDirectComposition(d3d11_device_);
+    gl::InitializeDirectComposition(
+        d3d11_device_,
+        /*d3d12_command_queue=*/nullptr,
+        gl::CreateDCSurfaceSolidColorPoolFactory(d3d11_device_));
 
     memory_type_tracker_ = std::make_unique<MemoryTypeTracker>(nullptr);
     shared_image_representation_factory_ =
@@ -106,11 +111,12 @@ class DCompImageBackingFactoryTest : public testing::Test {
     Mailbox mailbox = Mailbox::Generate();
     std::unique_ptr<SharedImageBacking> backing =
         shared_image_factory_->CreateSharedImage(
-            mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-            gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-            kTopLeft_GrSurfaceOrigin,
-            has_alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType,
-            kDXGISwapChainUsage, "TestLabel", false);
+            mailbox,
+            {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+             gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+             has_alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType,
+             kDXGISwapChainUsage, "TestLabel"},
+            nullptr, false);
     ASSERT_NE(nullptr, backing);
     std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
         shared_image_manager_.Register(std::move(backing),
@@ -202,10 +208,11 @@ TEST_F(DCompImageBackingFactoryTest, CanReadDXGISwapChain) {
   Mailbox mailbox = Mailbox::Generate();
   std::unique_ptr<SharedImageBacking> backing =
       shared_image_factory_->CreateSharedImage(
-          mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-          gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-          kTopLeft_GrSurfaceOrigin, kOpaque_SkAlphaType, kDXGISwapChainUsage,
-          "TestLabel", false);
+          mailbox,
+          {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+           kOpaque_SkAlphaType, kDXGISwapChainUsage, "TestLabel"},
+          nullptr, false);
   ASSERT_NE(nullptr, backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing),
@@ -259,10 +266,11 @@ TEST_F(DCompImageBackingFactoryTest, DCompSurfaceRestoresGLSurfaceAfterDraw) {
   Mailbox mailbox = Mailbox::Generate();
   std::unique_ptr<SharedImageBacking> backing =
       shared_image_factory_->CreateSharedImage(
-          mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-          gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-          kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, kDCompSurfaceUsage,
-          "TestLabel", false);
+          mailbox,
+          {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+           kPremul_SkAlphaType, kDCompSurfaceUsage, "TestLabel"},
+          nullptr, false);
   ASSERT_NE(nullptr, backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing),
@@ -298,10 +306,11 @@ TEST_F(DCompImageBackingFactoryTest,
   Mailbox mailbox = Mailbox::Generate();
   std::unique_ptr<SharedImageBacking> backing =
       shared_image_factory_->CreateSharedImage(
-          mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-          gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-          kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, kDCompSurfaceUsage,
-          "TestLabel", false);
+          mailbox,
+          {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+           kPremul_SkAlphaType, kDCompSurfaceUsage, "TestLabel"},
+          nullptr, false);
   ASSERT_NE(nullptr, backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing),
@@ -360,10 +369,11 @@ TEST_F(DCompImageBackingFactoryBufferCountTest, RootSwapChainBufferCount) {
   Mailbox mailbox = Mailbox::Generate();
   std::unique_ptr<SharedImageBacking> backing =
       shared_image_factory_->CreateSharedImage(
-          mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-          gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-          kTopLeft_GrSurfaceOrigin, kOpaque_SkAlphaType, kDXGISwapChainUsage,
-          "TestLabel", false);
+          mailbox,
+          {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+           kOpaque_SkAlphaType, kDXGISwapChainUsage, "TestLabel"},
+          nullptr, false);
   ASSERT_NE(nullptr, backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing),
@@ -516,10 +526,11 @@ class DCompImageBackingFactoryVisualTreeTest
     Mailbox mailbox = Mailbox::Generate();
     std::unique_ptr<SharedImageBacking> backing =
         shared_image_factory_->CreateSharedImage(
-            mailbox, format, nullptr, window_size_, color_space,
-            kTopLeft_GrSurfaceOrigin,
-            has_alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType,
-            SharedImageUsageSet(usage), "TestLabel", false);
+            mailbox,
+            {format, window_size_, color_space, kTopLeft_GrSurfaceOrigin,
+             has_alpha ? kPremul_SkAlphaType : kOpaque_SkAlphaType,
+             SharedImageUsageSet(usage), "TestLabel"},
+            nullptr, false);
     ASSERT_NE(nullptr, backing);
     std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
         shared_image_manager_.Register(std::move(backing),
@@ -780,10 +791,11 @@ TEST_F(DCompImageBackingFactoryVisualTreeTest,
   Mailbox mailbox = Mailbox::Generate();
   std::unique_ptr<SharedImageBacking> backing =
       shared_image_factory_->CreateSharedImage(
-          mailbox, viz::SinglePlaneFormat::kRGBA_8888, nullptr,
-          gfx::Size(100, 100), gfx::ColorSpace::CreateSRGB(),
-          kTopLeft_GrSurfaceOrigin, kOpaque_SkAlphaType, kDXGISwapChainUsage,
-          "TestLabel", false);
+          mailbox,
+          {viz::SinglePlaneFormat::kRGBA_8888, gfx::Size(100, 100),
+           gfx::ColorSpace::CreateSRGB(), kTopLeft_GrSurfaceOrigin,
+           kOpaque_SkAlphaType, kDXGISwapChainUsage, "TestLabel"},
+          nullptr, false);
   ASSERT_NE(nullptr, backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> factory_ref =
       shared_image_manager_.Register(std::move(backing),

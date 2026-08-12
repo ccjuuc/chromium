@@ -55,6 +55,10 @@ const char* GetMotionEventActionName(MotionEvent::Action action) {
       return "Action::BUTTON_PRESS";
     case MotionEvent::Action::BUTTON_RELEASE:
       return "Action::BUTTON_RELEASE";
+    case MotionEvent::Action::OUTSIDE:
+      return "Action::OUTSIDE";
+    case MotionEvent::Action::SCROLL:
+      return "Action::SCROLL";
   }
   return "";
 }
@@ -408,6 +412,9 @@ class GestureProvider::GestureListenerImpl : public ScaleGestureListener,
       distance_y = delta.y();
     }
 
+    float unconstrained_distance_x = distance_x;
+    float unconstrained_distance_y = distance_y;
+
     snap_scroll_controller_.UpdateSnapScrollMode(
         distance_x, distance_y, EffectiveSlopDistance(e2, config_));
     if (snap_scroll_controller_.IsSnappingScrolls()) {
@@ -417,8 +424,9 @@ class GestureProvider::GestureListenerImpl : public ScaleGestureListener,
         distance_x = 0;
     }
 
-    if (!distance_x && !distance_y)
+    if (!unconstrained_distance_x && !unconstrained_distance_y) {
       return true;
+    }
 
     if (!scroll_event_sent_) {
       // Note that scroll start hints are in distance traveled, where
@@ -443,6 +451,8 @@ class GestureProvider::GestureListenerImpl : public ScaleGestureListener,
 
     GestureEventDetails scroll_details = CreateTouchGestureDetails(
         EventType::kGestureScrollUpdate, -distance_x, -distance_y);
+    scroll_details.set_scroll_x_unconstrained(-unconstrained_distance_x);
+    scroll_details.set_scroll_y_unconstrained(-unconstrained_distance_y);
     const gfx::RectF bounding_box = GetBoundingBox(e2, scroll_details.type());
     const gfx::PointF raw_center =
         scroll_focus_point_ +
@@ -943,8 +953,7 @@ GestureDetector* GestureProvider::GetGestureDetectorForTesting() {
   if (!gesture_listener_) {
     return nullptr;
   }
-  return static_cast<GestureListenerImpl*>(gesture_listener_.get())
-      ->GetGestureDetectorForTesting();  // IN-TEST
+  return gesture_listener_->GetGestureDetectorForTesting();  // IN-TEST
 }
 
 bool GestureProvider::CanHandle(const MotionEvent& event) const {
@@ -995,6 +1004,8 @@ void GestureProvider::OnTouchEventHandlingBegin(const MotionEvent& event) {
     case MotionEvent::Action::HOVER_MOVE:
     case MotionEvent::Action::BUTTON_PRESS:
     case MotionEvent::Action::BUTTON_RELEASE:
+    case MotionEvent::Action::OUTSIDE:
+    case MotionEvent::Action::SCROLL:
       NOTREACHED();
   }
 }
@@ -1045,6 +1056,8 @@ void GestureProvider::OnTouchEventHandlingEnd(const MotionEvent& event) {
     case MotionEvent::Action::HOVER_MOVE:
     case MotionEvent::Action::BUTTON_PRESS:
     case MotionEvent::Action::BUTTON_RELEASE:
+    case MotionEvent::Action::OUTSIDE:
+    case MotionEvent::Action::SCROLL:
       NOTREACHED();
   }
 }

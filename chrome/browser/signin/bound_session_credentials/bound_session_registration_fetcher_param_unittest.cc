@@ -4,18 +4,14 @@
 
 #include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher_param.h"
 
+#include <vector>
+
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/strcat.h"
-#include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
-#include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher.h"
 #include "crypto/signature_verifier.h"
 #include "net/http/http_response_headers.h"
-#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
-#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 
 namespace {
 

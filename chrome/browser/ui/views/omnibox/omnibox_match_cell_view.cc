@@ -7,33 +7,25 @@
 #include <algorithm>
 #include <optional>
 
-#include "base/metrics/field_trial_params.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "components/omnibox/browser/actions/omnibox_action.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
-#include "components/omnibox/common/omnibox_features.h"
 #include "content/public/common/color_parser.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/omnibox_proto/answer_type.pb.h"
 #include "third_party/omnibox_proto/rich_answer_template.pb.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
@@ -289,7 +281,9 @@ void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
             icon)));
   };
   if (match.type == AutocompleteMatchType::CALCULATOR) {
-    apply_vector_icon(omnibox::kAnswerCalculatorIcon);
+    apply_vector_icon(features::IsRoundedIconsEnabled()
+                          ? omnibox::kEqualIcon
+                          : omnibox::kAnswerCalculatorOldIcon);
     separator_view_->SetSize(gfx::Size());
   } else if (layout_style_ != LayoutStyle::SEARCH_SUGGESTION_WITH_IMAGE) {
     answer_image_view_->SetImage(ui::ImageModel());
@@ -345,6 +339,10 @@ void OmniboxMatchCellView::OnMatchUpdate(const OmniboxResultView* result_view,
     description_view_->SetTextWithStyling(match.description,
                                           match.description_class);
   }
+}
+
+void OmniboxMatchCellView::OnSecondaryTextVisibilityChanged() {
+  PreferredSizeChanged();
 }
 
 void OmniboxMatchCellView::SetIcon(const gfx::ImageSkia& image,
@@ -456,7 +454,7 @@ gfx::Insets OmniboxMatchCellView::GetInsets() const {
           ? kToolbeltTextInsetRight
       : layout_style_ == LayoutStyle::IPH_SUGGESTION
           ? OmniboxMatchCellView::kMarginLeft + kIphTextIndent
-          : 7;
+          : kMarginRight;
   return gfx::Insets::TLBR(vertical_margin, OmniboxMatchCellView::kMarginLeft,
                            vertical_margin, right_margin);
 }
@@ -510,7 +508,9 @@ void OmniboxMatchCellView::Layout(PassKey) {
   }
 
   int content_width = content_view_->GetPreferredSize().width();
-  int description_width = description_view_->GetPreferredSize().width();
+  int description_width = description_view_->GetVisible()
+                              ? description_view_->GetPreferredSize().width()
+                              : 0;
   const gfx::Size separator_size = separator_view_->GetPreferredSize();
   int iph_link_width = iph_link_view_->GetPreferredSize().width();
   ComputeMatchMaxWidths(
@@ -562,7 +562,10 @@ gfx::Size OmniboxMatchCellView::CalculatePreferredSize(
             tail_suggest_common_prefix_width_ +
             content_view_->GetPreferredSize().width() +
             iph_link_view_->GetPreferredSize().width();
-    const int description_width = description_view_->GetPreferredSize().width();
+    const int description_width =
+        description_view_->GetVisible()
+            ? description_view_->GetPreferredSize().width()
+            : 0;
     if (description_width > 0) {
       width += separator_view_->GetPreferredSize().width() + description_width;
     }

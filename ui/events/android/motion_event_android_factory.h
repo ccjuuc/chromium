@@ -14,6 +14,7 @@
 #include "base/time/time.h"
 #include "ui/events/android/motion_event_android.h"
 #include "ui/events/events_export.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace ui {
 
@@ -24,44 +25,44 @@ class EVENTS_EXPORT MotionEventAndroidFactory {
   static std::unique_ptr<MotionEventAndroid> CreateFromJava(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& event,
-      jfloat pix_to_dip,
-      jfloat ticks_x,
-      jfloat ticks_y,
-      jfloat tick_multiplier,
+      float pix_to_dip,
+      float ticks_x,
+      float ticks_y,
+      float tick_multiplier,
       base::TimeTicks oldest_event_time,
-      jint android_action,
-      jint pointer_count,
-      jint history_size,
-      jint action_index,
-      jint android_action_button,
-      jint android_gesture_classification,
-      jint android_button_state,
-      jfloat raw_offset_x_pixels,
-      jfloat raw_offset_y_pixels,
-      jboolean for_touch_handle,
+      int32_t android_action,
+      int32_t pointer_count,
+      int32_t history_size,
+      int32_t action_index,
+      int32_t android_action_button,
+      int32_t android_gesture_classification,
+      int32_t android_button_state,
+      float raw_offset_x_pixels,
+      float raw_offset_y_pixels,
+      bool for_touch_handle,
       const MotionEventAndroid::Pointer* const pointer0,
       const MotionEventAndroid::Pointer* const pointer1);
 
   static std::unique_ptr<MotionEventAndroid> CreateFromJava(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& event,
-      jfloat pix_to_dip,
-      jfloat ticks_x,
-      jfloat ticks_y,
-      jfloat tick_multiplier,
+      float pix_to_dip,
+      float ticks_x,
+      float ticks_y,
+      float tick_multiplier,
       base::TimeTicks oldest_event_time,
       base::TimeTicks latest_event_time,
       base::TimeTicks down_time_ms,
-      jint android_action,
-      jint pointer_count,
-      jint history_size,
-      jint action_index,
-      jint android_action_button,
-      jint android_gesture_classification,
-      jint android_button_state,
-      jfloat raw_offset_x_pixels,
-      jfloat raw_offset_y_pixels,
-      jboolean for_touch_handle,
+      int32_t android_action,
+      int32_t pointer_count,
+      int32_t history_size,
+      int32_t action_index,
+      int32_t android_action_button,
+      int32_t android_gesture_classification,
+      int32_t android_button_state,
+      float raw_offset_x_pixels,
+      float raw_offset_y_pixels,
+      bool for_touch_handle,
       const MotionEventAndroid::Pointer* const pointer0,
       const MotionEventAndroid::Pointer* const pointer1,
       bool is_latest_event_time_resampled);
@@ -72,7 +73,7 @@ class EVENTS_EXPORT MotionEventAndroidFactory {
   static std::unique_ptr<MotionEventAndroid> CreateFromNative(
       base::android::ScopedInputEvent input_event,
       float pix_to_dip,
-      float y_offset_pix,
+      gfx::PointF offset,
       std::optional<MotionEventAndroid::EventTimes> event_times);
 };
 

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/version.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,6 +26,14 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 namespace {
+
+template <typename T>
+T& GArrayFirst(GArray* array) {
+  CHECK(array);
+  CHECK_GT(array->len, 0u);
+  CHECK_EQ(sizeof(T), g_array_get_element_size(array));
+  return *reinterpret_cast<T*>(array->data);
+}
 
 // ATK window activated event will be held until AT-SPI bridge is ready. For
 // those tests using this event, we work that around by faking the state of the
@@ -1468,6 +1477,63 @@ TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkTextCharacterGranularity) {
   g_object_unref(root_obj);
 }
 
+TEST_F(AXPlatformNodeAuraLinuxTest,
+       AtkTextLineBoundaryRequestsInlineTextBoxes) {
+  TestAXNodeWrapper::SetGlobalIsWebContent(true);
+  Init(BuildTextField());
+
+  AtkObject* root_obj = GetRootAtkObject();
+  ASSERT_TRUE(ATK_IS_TEXT(root_obj));
+  AtkText* atk_text = ATK_TEXT(root_obj);
+
+  const int initial_call_count =
+      AXPlatformForTest::GetInstance()
+          .inline_text_boxes_used_in_web_content_count();
+
+  EXPECT_GT(atk_text_get_character_count(atk_text), 0);
+  EXPECT_EQ(initial_call_count,
+            AXPlatformForTest::GetInstance()
+                .inline_text_boxes_used_in_web_content_count());
+
+  int start_offset = -1;
+  int end_offset = -1;
+  char* text = atk_text_get_text_at_offset(
+      atk_text, 0, ATK_TEXT_BOUNDARY_LINE_START, &start_offset, &end_offset);
+  g_free(text);
+  EXPECT_EQ(initial_call_count + 1,
+            AXPlatformForTest::GetInstance()
+                .inline_text_boxes_used_in_web_content_count());
+}
+
+TEST_F(AXPlatformNodeAuraLinuxTest, AtkTextGeometryRequestsInlineTextBoxes) {
+  TestAXNodeWrapper::SetGlobalIsWebContent(true);
+  Init(BuildTextField());
+
+  AtkObject* root_obj = GetRootAtkObject();
+  ASSERT_TRUE(ATK_IS_TEXT(root_obj));
+  AtkText* atk_text = ATK_TEXT(root_obj);
+
+  const int initial_call_count =
+      AXPlatformForTest::GetInstance()
+          .inline_text_boxes_used_in_web_content_count();
+
+  int x;
+  int y;
+  int width;
+  int height;
+  atk_text_get_character_extents(atk_text, 0, &x, &y, &width, &height,
+                                 ATK_XY_SCREEN);
+
+  AtkTextRectangle rectangle;
+  atk_text_get_range_extents(atk_text, 0, 1, ATK_XY_SCREEN, &rectangle);
+
+  atk_text_get_offset_at_point(atk_text, 0, 0, ATK_XY_SCREEN);
+
+  EXPECT_EQ(initial_call_count + 3,
+            AXPlatformForTest::GetInstance()
+                .inline_text_boxes_used_in_web_content_count());
+}
+
 struct GetTextSegmentTest {
   int offset;
   const char* content;
@@ -1594,6 +1660,47 @@ TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkTextSentenceGranularity) {
     ASSERT_EQ(end_offset, test.end_offset);
     g_free(content);
   }
+#endif
+
+  g_object_unref(root_obj);
+}
+
+TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkTextInvalidBoundaryAndGranularity) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kTextField;
+  root.AddStringAttribute(ax::mojom::StringAttribute::kValue,
+                          "A decently long string.");
+  Init(root);
+
+  AtkObject* root_obj(GetRootAtkObject());
+  ASSERT_TRUE(ATK_IS_OBJECT(root_obj));
+  g_object_ref(root_obj);
+
+  ASSERT_TRUE(ATK_IS_TEXT(root_obj));
+  AtkText* atk_text = ATK_TEXT(root_obj);
+
+  // The AT-SPI bridge can pass a boundary as an unvalidated integer.
+  // No text is returned for an unrecognized boundary (7 in this case).
+  int start_offset = 0, end_offset = 0;
+  char* content = atk_text_get_text_at_offset(
+      atk_text, 0, static_cast<AtkTextBoundary>(7), &start_offset, &end_offset);
+  EXPECT_EQ(content, nullptr);
+  EXPECT_EQ(start_offset, -1);
+  EXPECT_EQ(end_offset, -1);
+  g_free(content);
+
+#if ATK_CHECK_VERSION(2, 10, 0)
+  // Likewise for an unrecognized granularity (5 in this case).
+  start_offset = 0;
+  end_offset = 0;
+  content = atk_text_get_string_at_offset(atk_text, 0,
+                                          static_cast<AtkTextGranularity>(5),
+                                          &start_offset, &end_offset);
+  EXPECT_EQ(content, nullptr);
+  EXPECT_EQ(start_offset, -1);
+  EXPECT_EQ(end_offset, -1);
+  g_free(content);
 #endif
 
   g_object_unref(root_obj);
@@ -2254,6 +2361,94 @@ TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkSelectionInterface) {
   g_object_unref(root_atk_object);
 }
 
+TEST_F(AXPlatformNodeAuraLinuxTest, SelectionEventReflectsSelectedState) {
+  AXNodeData list_box;
+  list_box.id = 1;
+  list_box.role = ax::mojom::Role::kListBox;
+  list_box.child_ids = {2, 3, 4};
+
+  AXNodeData selected_option;
+  selected_option.id = 2;
+  selected_option.role = ax::mojom::Role::kListBoxOption;
+  selected_option.AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, true);
+
+  AXNodeData deselected_option;
+  deselected_option.id = 3;
+  deselected_option.role = ax::mojom::Role::kListBoxOption;
+  deselected_option.AddBoolAttribute(ax::mojom::BoolAttribute::kSelected,
+                                     false);
+
+  AXNodeData option_without_selected_state;
+  option_without_selected_state.id = 4;
+  option_without_selected_state.role = ax::mojom::Role::kListBoxOption;
+
+  AXTreeUpdate update;
+  update.root_id = list_box.id;
+  update.nodes = {list_box, selected_option, deselected_option,
+                  option_without_selected_state};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+  Init(update);
+
+  struct StateChangeCount {
+    int selected = 0;
+    int unselected = 0;
+  };
+
+  auto selected_state_change_callback = [](StateChangeCount* count) {
+    return base::BindRepeating(
+        +[](StateChangeCount* count, AtkObject*, gchar* state_changed,
+            gboolean new_value) {
+          if (g_strcmp0(state_changed, "selected")) {
+            return;
+          }
+
+          if (new_value) {
+            ++count->selected;
+          } else {
+            ++count->unselected;
+          }
+        },
+        count);
+  };
+
+  StateChangeCount selected_count;
+  AtkObject* selected_atk_object = AtkObjectFromNode(GetNode(2));
+  ASSERT_TRUE(ATK_IS_OBJECT(selected_atk_object));
+  ScopedGSignal selected_signal(
+      selected_atk_object, "state-change",
+      selected_state_change_callback(&selected_count));
+  ASSERT_TRUE(selected_signal.Connected());
+  GetPlatformNode(GetNode(2))
+      ->NotifyAccessibilityEvent(ax::mojom::Event::kSelection);
+  EXPECT_EQ(1, selected_count.selected);
+  EXPECT_EQ(0, selected_count.unselected);
+
+  StateChangeCount deselected_count;
+  AtkObject* deselected_atk_object = AtkObjectFromNode(GetNode(3));
+  ASSERT_TRUE(ATK_IS_OBJECT(deselected_atk_object));
+  ScopedGSignal deselected_signal(
+      deselected_atk_object, "state-change",
+      selected_state_change_callback(&deselected_count));
+  ASSERT_TRUE(deselected_signal.Connected());
+  GetPlatformNode(GetNode(3))
+      ->NotifyAccessibilityEvent(ax::mojom::Event::kSelection);
+  EXPECT_EQ(0, deselected_count.selected);
+  EXPECT_EQ(1, deselected_count.unselected);
+
+  StateChangeCount no_state_count;
+  AtkObject* no_state_atk_object = AtkObjectFromNode(GetNode(4));
+  ASSERT_TRUE(ATK_IS_OBJECT(no_state_atk_object));
+  ScopedGSignal no_state_signal(
+      no_state_atk_object, "state-change",
+      selected_state_change_callback(&no_state_count));
+  ASSERT_TRUE(no_state_signal.Connected());
+  GetPlatformNode(GetNode(4))
+      ->NotifyAccessibilityEvent(ax::mojom::Event::kSelection);
+  EXPECT_EQ(1, no_state_count.selected);
+  EXPECT_EQ(0, no_state_count.unselected);
+}
+
 // Tests GetPosInSet() and GetSetSize() functions of AXPlatformNodeBase.
 // PosInSet and SetSize must be tested separately from other IntAttributes
 // because they can be either assigned values or calculated dynamically.
@@ -2530,6 +2725,199 @@ TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkRelationsTargetIndex) {
   test_index(atk_button3, atk_label2, ATK_RELATION_LABELLED_BY, 2);
 
   g_object_unref(root_atk_object);
+}
+
+TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkDocumentTextSelections) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+  root_data.child_ids = {2, 4};
+
+  AXNodeData heading_data;
+  heading_data.id = 2;
+  heading_data.role = ax::mojom::Role::kHeading;
+  heading_data.child_ids = {3};
+
+  AXNodeData text1_data;
+  text1_data.id = 3;
+  text1_data.role = ax::mojom::Role::kStaticText;
+  text1_data.SetName("a😀b");
+
+  AXNodeData paragraph_data;
+  paragraph_data.id = 4;
+  paragraph_data.role = ax::mojom::Role::kParagraph;
+  paragraph_data.child_ids = {5};
+
+  AXNodeData text2_data;
+  text2_data.id = 5;
+  text2_data.role = ax::mojom::Role::kStaticText;
+  text2_data.SetName("c😀d");
+
+  AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data, heading_data, text1_data, paragraph_data,
+                  text2_data};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+  update.tree_data.sel_anchor_object_id = text1_data.id;
+  update.tree_data.sel_anchor_offset = 3;
+  update.tree_data.sel_focus_object_id = text2_data.id;
+  update.tree_data.sel_focus_offset = 1;
+  AXTree* tree = Init(update);
+
+  AXPlatformNodeAuraLinux* document = GetRootPlatformNode();
+  AtkObject* heading = AtkObjectFromNode(GetRoot()->children()[0]);
+  AtkObject* paragraph = AtkObjectFromNode(GetRoot()->children()[1]);
+
+  GArray* selections = document->GetDocumentTextSelections();
+  ASSERT_TRUE(selections);
+  ASSERT_EQ(1u, selections->len);
+  const auto& selection = GArrayFirst<AtkTextSelectionCompat>(selections);
+  EXPECT_EQ(heading, selection.start_object);
+  EXPECT_EQ(2, selection.start_offset);
+  EXPECT_EQ(paragraph, selection.end_object);
+  EXPECT_EQ(1, selection.end_offset);
+  EXPECT_FALSE(selection.start_is_active);
+  g_array_free(selections, true);
+
+  AtkTextSelectionCompat new_selection = {
+      .start_object = heading,
+      .start_offset = 1,
+      .end_object = paragraph,
+      .end_offset = 2,
+      .start_is_active = true,
+  };
+  selections = g_array_new(false, true, sizeof(AtkTextSelectionCompat));
+  g_array_append_vals(selections, &new_selection, 1);
+  EXPECT_TRUE(document->SetDocumentTextSelections(selections));
+  EXPECT_EQ(text2_data.id, tree->data().sel_anchor_object_id);
+  EXPECT_EQ(3, tree->data().sel_anchor_offset);
+  EXPECT_EQ(text1_data.id, tree->data().sel_focus_object_id);
+  EXPECT_EQ(1, tree->data().sel_focus_offset);
+
+  new_selection.start_offset = 5;
+  GArrayFirst<AtkTextSelectionCompat>(selections) = new_selection;
+  EXPECT_FALSE(document->SetDocumentTextSelections(selections));
+
+  new_selection = {
+      .start_object = heading,
+      .start_offset = 1,
+      .end_object = heading,
+      .end_offset = 1,
+      .start_is_active = false,
+  };
+  GArrayFirst<AtkTextSelectionCompat>(selections) = new_selection;
+  EXPECT_TRUE(document->SetDocumentTextSelections(selections));
+  EXPECT_EQ(text1_data.id, tree->data().sel_anchor_object_id);
+  EXPECT_EQ(1, tree->data().sel_anchor_offset);
+  EXPECT_EQ(text1_data.id, tree->data().sel_focus_object_id);
+  EXPECT_EQ(1, tree->data().sel_focus_offset);
+
+  GArray* collapsed_selections = document->GetDocumentTextSelections();
+  ASSERT_TRUE(collapsed_selections);
+  EXPECT_EQ(0u, collapsed_selections->len);
+  g_array_free(collapsed_selections, true);
+  g_array_free(selections, true);
+}
+
+TEST_F(AXPlatformNodeAuraLinuxTest,
+       TestAtkDocumentTextSelectionsNestedHypertextRoundTrip) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+  root_data.child_ids = {2};
+
+  AXNodeData paragraph_data;
+  paragraph_data.id = 2;
+  paragraph_data.role = ax::mojom::Role::kParagraph;
+  paragraph_data.child_ids = {3, 4, 6};
+
+  AXNodeData text_before_data;
+  text_before_data.id = 3;
+  text_before_data.role = ax::mojom::Role::kStaticText;
+  text_before_data.SetName("abc");
+
+  AXNodeData link_data;
+  link_data.id = 4;
+  link_data.role = ax::mojom::Role::kLink;
+  link_data.child_ids = {5};
+
+  AXNodeData link_text_data;
+  link_text_data.id = 5;
+  link_text_data.role = ax::mojom::Role::kStaticText;
+  link_text_data.SetName("def");
+
+  AXNodeData text_after_data;
+  text_after_data.id = 6;
+  text_after_data.role = ax::mojom::Role::kStaticText;
+  text_after_data.SetName("ghi");
+
+  AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data, paragraph_data, text_before_data,
+                  link_data, link_text_data, text_after_data};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+  update.tree_data.sel_anchor_object_id = link_text_data.id;
+  update.tree_data.sel_anchor_offset = 1;
+  update.tree_data.sel_focus_object_id = text_after_data.id;
+  update.tree_data.sel_focus_offset = 0;
+  Init(update);
+
+  AXPlatformNodeAuraLinux* document = GetRootPlatformNode();
+  AXNode* paragraph_node = GetRoot()->children()[0];
+  AtkObject* paragraph = AtkObjectFromNode(paragraph_node);
+  AtkObject* link = AtkObjectFromNode(paragraph_node->children()[1]);
+
+  GArray* selections = document->GetDocumentTextSelections();
+  ASSERT_TRUE(selections);
+  ASSERT_EQ(1u, selections->len);
+  const auto& selection = GArrayFirst<AtkTextSelectionCompat>(selections);
+  EXPECT_EQ(link, selection.start_object);
+  EXPECT_EQ(1, selection.start_offset);
+  EXPECT_EQ(paragraph, selection.end_object);
+  EXPECT_EQ(4, selection.end_offset);
+  EXPECT_TRUE(document->SetDocumentTextSelections(selections));
+  g_array_free(selections, true);
+}
+
+TEST_F(AXPlatformNodeAuraLinuxTest,
+       TestAtkDocumentTextSelectionsCollapsedAtLeafBoundary) {
+  AXNodeData root_data;
+  root_data.id = 1;
+  root_data.role = ax::mojom::Role::kRootWebArea;
+  root_data.child_ids = {2};
+
+  AXNodeData paragraph_data;
+  paragraph_data.id = 2;
+  paragraph_data.role = ax::mojom::Role::kParagraph;
+  paragraph_data.child_ids = {3, 4};
+
+  AXNodeData text1_data;
+  text1_data.id = 3;
+  text1_data.role = ax::mojom::Role::kStaticText;
+  text1_data.SetName("abc");
+
+  AXNodeData text2_data;
+  text2_data.id = 4;
+  text2_data.role = ax::mojom::Role::kStaticText;
+  text2_data.SetName("def");
+
+  AXTreeUpdate update;
+  update.root_id = root_data.id;
+  update.nodes = {root_data, paragraph_data, text1_data, text2_data};
+  update.has_tree_data = true;
+  update.tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
+  update.tree_data.sel_anchor_object_id = text1_data.id;
+  update.tree_data.sel_anchor_offset = 3;
+  update.tree_data.sel_focus_object_id = text2_data.id;
+  update.tree_data.sel_focus_offset = 0;
+  Init(update);
+
+  GArray* selections = GetRootPlatformNode()->GetDocumentTextSelections();
+  ASSERT_TRUE(selections);
+  EXPECT_EQ(0u, selections->len);
+  g_array_free(selections, true);
 }
 
 TEST_F(AXPlatformNodeAuraLinuxTest, TestAtkTextTextFieldGetNSelectionsZero) {

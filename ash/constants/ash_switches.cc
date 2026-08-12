@@ -195,10 +195,6 @@ const char kArcVmUreadaheadMode[] = "arcvm-ureadahead-mode";
 // Madvises the kernel to use Huge Pages for guest memory.
 const char kArcVmUseHugePages[] = "arcvm-use-hugepages";
 
-// Clear the fast ink buffer upon creation. This is needed on some devices that
-// do not zero out new buffers.
-const char kAshClearFastInkBuffer[] = "ash-clear-fast-ink-buffer";
-
 // Force the pointer (cursor) position to be kept inside root windows.
 const char kAshConstrainPointerToRoot[] = "ash-constrain-pointer-to-root";
 
@@ -493,9 +489,6 @@ const char kEnableArcVmDlc[] = "enable-arcvm-dlc";
 // for the ARCVM DLC.
 const char kArcVmDlcHardwareRequirementSatisfied[] =
     "arcvm-dlc-hardware-satisfied";
-
-// Enables ARCVM realtime VCPU feature.
-const char kEnableArcVmRtVcpu[] = "enable-arcvm-rt-vcpu";
 
 // Used to override `kDisableBirchWeatherApiForTesting` for specific tast tests.
 const char kEnableBirchWeatherApiForTestingOverride[] =
@@ -1006,6 +999,9 @@ const char kTemporaryAllowEmptyPasswordsInTests[] =
 // Enables testing for encryption migration UI.
 const char kTestEncryptionMigrationUI[] = "test-encryption-migration-ui";
 
+// Passes the name of the current running automated test to Chrome.
+const char kTestName[] = "test-name";
+
 // Enables the wallpaper picker to fetch images from the test server.
 const char kTestWallpaperServer[] = "test-wallpaper-server";
 
@@ -1080,6 +1076,28 @@ const char kAllowDefaultShelfPinLayoutIgnoringSync[] =
 // On devices that support refresh rate throttling, force the throttling
 // behavior to be active regardless of system state.
 const char kForceRefreshRateThrottle[] = "force-refresh-rate-throttle";
+
+// Value of GAIA auth code for --force-app-mode.
+const char kAppModeAuthCode[] = "app-mode-auth-code";
+
+// Value of OAuth2 refresh token for --force-app-mode.
+const char kAppModeOAuth2Token[] = "app-mode-oauth-token";
+
+// Allows setting a different destination ID for connection-monitoring GCM
+// messages. Useful when running against a non-prod management server.
+const char kMonitoringDestinationID[] = "monitoring-destination-id";
+
+// Frequency in Milliseconds for system log uploads. Should only be used for
+// testing purposes.
+const char kSystemLogUploadFrequency[] = "system-log-upload-frequency";
+
+// When specified with a url string as parameter, the given url overrides the
+// Android Messages for Web PWA installation and app urls using a base of the
+// given domain with approrpiate suffixes.
+const char kCustomAndroidMessagesDomain[] = "custom-android-messages-domain";
+
+// Enables verbose logging level for Nearby Share.
+const char kNearbyShareVerboseLogging[] = "nearby-share-verbose-logging";
 
 bool IsAuthSessionCryptohomeEnabled() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -1231,11 +1249,6 @@ bool IsUsingShelfAutoDim() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(kEnableDimShelf);
 }
 
-bool ShouldClearFastInkBuffer() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kAshClearFastInkBuffer);
-}
-
 bool HasHps() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(kHasHps);
 }
@@ -1276,6 +1289,16 @@ bool IsCampbellSecretKeyMatched() {
   }
 
   return key_matched;
+}
+
+bool IsPerUserTimezoneEnabled() {
+  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kDisablePerUserTimezone);
+}
+
+bool IsFineGrainedTimeZoneDetectionEnabled() {
+  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+      kDisableFineGrainedTimeZoneDetection);
 }
 
 }  // namespace ash::switches

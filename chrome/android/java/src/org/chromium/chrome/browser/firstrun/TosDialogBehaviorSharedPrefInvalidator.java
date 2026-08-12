@@ -14,9 +14,9 @@ import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
 import org.chromium.chrome.browser.policy.PolicyServiceFactory;
 import org.chromium.chrome.browser.signin.AppRestrictionSupplier;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.components.policy.PolicyService;
 
 /**
@@ -70,7 +70,7 @@ public class TosDialogBehaviorSharedPrefInvalidator {
         // Run cleanup in a separate task, otherwise the CallbackController inside
         // SkipTosDialogPolicyListener will deadlock. It currently holds a read lock because it is
         // what invoked us. Calling destroy requires a write lock, so the post allows the read lock
-        // to be released first. See https://crbug.com/1201279 for more details.
+        // to be released first. See https://crbug.com/40178618 for more details.
         new Handler(Looper.getMainLooper()).post(this::destroy);
     }
 

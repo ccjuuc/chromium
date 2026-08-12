@@ -267,6 +267,26 @@ bool WasLaunchedAsHiddenLoginItem() {
 }
 
 bool RemoveQuarantineAttribute(const FilePath& file_path) {
+  // It is critical that NSURLQuarantinePropertiesKey not be used here; it is
+  // irredeemably broken.
+  //
+  // Before macOS 26.1, attempting to remove a quarantine attribute using
+  // NSURLQuarantinePropertiesKey would fail if the file didn't already have a
+  // quarantine attribute. But even after that, while
+  // NSURLQuarantinePropertiesKey appears to successfully remove the quarantine
+  // attribute in testing, in deployment it fails to reliably do so, and in the
+  // process that breaks the updater (no bug filed as it was caught early in a
+  // panic) and app links (https://crbug.com/488020336).
+  //
+  // It's not clear how to test NSURLQuarantinePropertiesKey for any further
+  // attempt to use it. The previous land/revert cycle
+  // (https://crrev.com/c/7551491 and https://crrev.com/c/7602582) came with
+  // extensive testing that passed, and in informal experience, things would
+  // work fine for, say, seven times before failing on the eighth.
+  //
+  // Given the criticality of the updater, it's hard to find an incentive to do
+  // experimentation in this area. Stay away.
+
   const char kQuarantineAttrName[] = "com.apple.quarantine";
   int status = removexattr(file_path.value().c_str(), kQuarantineAttrName, 0);
   return status == 0 || errno == ENOATTR;
@@ -360,6 +380,22 @@ bool IsVirtualMachine() {
   return ret;
 }
 
+MacOS26LiquidGlassPreferredLook GetMacOS26LiquidGlassPreferredLook() {
+  CHECK_EQ(MacOSMajorVersion(), 26);
+  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+  NSNumber* setting = base::apple::ObjCCast<NSNumber>(
+      [defaults objectForKey:@"NSGlassDiffusionSetting"]);
+  if (!setting) {
+    setting = base::apple::ObjCCast<NSNumber>(
+        [defaults objectForKey:@"NSLiquidGlassSetting"]);
+  }
+  if (setting) {
+    return [setting boolValue] ? MacOS26LiquidGlassPreferredLook::kTint
+                               : MacOS26LiquidGlassPreferredLook::kClear;
+  }
+  return MacOS26LiquidGlassPreferredLook::kDefault;
+}
+
 namespace {
 
 #if defined(ARCH_CPU_X86_64)
@@ -418,199 +454,103 @@ std::string GetPlatformSerialNumber() {
 void OpenSystemSettingsPane(SystemSettingsPane pane,
                             const std::string& id_param) {
   NSString* url = nil;
-  NSString* pane_file = nil;
-  NSData* subpane_data = nil;
-  // On macOS 13 and later, System Settings are implemented with app extensions
-  // found at /System/Library/ExtensionKit/Extensions/. URLs to open them are
-  // constructed with a scheme of "x-apple.systempreferences" and a body of the
-  // the bundle ID of the app extension. (In the Info.plist there is an
+
+  // System Settings are implemented with app extensions found at
+  // /System/Library/ExtensionKit/Extensions/. URLs to open them are constructed
+  // with a scheme of "x-apple.systempreferences" and a body of the the bundle
+  // ID of the app extension. (In the Info.plist there is an
   // EXAppExtensionAttributes dictionary with legacy identifiers, but given that
   // those are explicitly named "legacy", this code prefers to use the bundle
   // IDs for the URLs it uses.) It is not yet known how to definitively identify
   // the query string used to open sub-panes; the ones used below were
   // determined from historical usage, disassembly of related code, and
   // guessing. Clarity was requested from Apple in FB11753405. The current best
-  // guess is to analyze the method named -revealElementForKey:, but because
-  // the extensions are all written in Swift it's hard to confirm this is
-  // correct or to use this knowledge.
+  // guess is to analyze the method named -revealElementForKey:, but because the
+  // extensions are all written in Swift it's hard to confirm this is correct or
+  // to use this knowledge.
   //
-  // For macOS 12 and earlier, to determine the `subpane_data`, find a method
-  // named -handleOpenParameter: which takes an AEDesc as a parameter.
+  // These values have been tested on macOS 13, 14, 15, and 26. Be sure to
+  // verify them on new releases of macOS.
   switch (pane) {
     case SystemSettingsPane::kAccessibility_Captions:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.Accessibility-Settings."
-              @"extension?Captioning";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.universalaccess?"
-              @"Captioning";
-      }
+      url = @"x-apple.systempreferences:com.apple.Accessibility-Settings."
+            @"extension?Captioning";
       break;
-    case SystemSettingsPane::kDateTime:
-      if (MacOSMajorVersion() >= 13) {
-        url =
-            @"x-apple.systempreferences:com.apple.Date-Time-Settings.extension";
-      } else {
-        pane_file = @"/System/Library/PreferencePanes/DateAndTime.prefPane";
-      }
+    case SystemSettingsPane::kGeneral_DateTime:
+      url = @"x-apple.systempreferences:com.apple.Date-Time-Settings.extension";
       break;
-    case SystemSettingsPane::kNetwork_Proxies:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.Network-Settings.extension?"
-              @"Proxies";
+    case SystemSettingsPane::kGeneral_LoginItems_Extensions_Sharing:
+      if (MacOSMajorVersion() >= 15) {
+        // See ShareKit, -[SHKSharingServicePicker openAppExtensionsPrefpane].
+        url = @"x-apple.systempreferences:com.apple.ExtensionsPreferences?"
+              @"extensionPointIdentifier=com.apple.share-services";
       } else {
-        pane_file = @"/System/Library/PreferencePanes/Network.prefPane";
-        subpane_data = [@"Proxies" dataUsingEncoding:NSASCIIStringEncoding];
-      }
-      break;
-    case SystemSettingsPane::kNotifications:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.Notifications-Settings."
-              @"extension";
-        if (!id_param.empty()) {
-          url = [url stringByAppendingFormat:@"?id=%s", id_param.c_str()];
-        }
-      } else {
-        pane_file = @"/System/Library/PreferencePanes/Notifications.prefPane";
-        NSDictionary* subpane_dict = @{
-          @"command" : @"show",
-          @"identifier" : SysUTF8ToNSString(id_param)
-        };
-        subpane_data = [NSPropertyListSerialization
-            dataWithPropertyList:subpane_dict
-                          format:NSPropertyListXMLFormat_v1_0
-                         options:0
-                           error:nil];
-      }
-      break;
-    case SystemSettingsPane::kPrintersScanners:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.Print-Scan-Settings."
-              @"extension";
-      } else {
-        pane_file = @"/System/Library/PreferencePanes/PrintAndFax.prefPane";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity_Accessibility:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_Accessibility";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_Accessibility";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity_Bluetooth:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_Bluetooth";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_Bluetooth";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity_Camera:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_Camera";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_Camera";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity_Extensions_Sharing:
-      if (MacOSMajorVersion() >= 13) {
         // See ShareKit, -[SHKSharingServicePicker openAppExtensionsPrefpane].
         url = @"x-apple.systempreferences:com.apple.ExtensionsPreferences?"
               @"Sharing";
-      } else {
-        // This is equivalent to the implementation of AppKit's
-        // +[NSSharingServicePicker openAppExtensionsPrefPane].
-        pane_file = @"/System/Library/PreferencePanes/Extensions.prefPane";
-        NSDictionary* subpane_dict = @{
-          @"action" : @"revealExtensionPoint",
-          @"protocol" : @"com.apple.share-services"
-        };
-        subpane_data = [NSPropertyListSerialization
-            dataWithPropertyList:subpane_dict
-                          format:NSPropertyListXMLFormat_v1_0
-                         options:0
-                           error:nil];
       }
+      break;
+    case SystemSettingsPane::kNetwork_Proxies:
+      url = @"x-apple.systempreferences:com.apple.Network-Settings.extension?"
+            @"Proxies";
+      break;
+    case SystemSettingsPane::kNotifications:
+      url = @"x-apple.systempreferences:com.apple.Notifications-Settings."
+            @"extension";
+      if (!id_param.empty()) {
+        url = [url stringByAppendingFormat:@"?id=%s", id_param.c_str()];
+      }
+      break;
+    case SystemSettingsPane::kPrintersScanners:
+      url = @"x-apple.systempreferences:com.apple.Print-Scan-Settings."
+            @"extension";
+      break;
+    case SystemSettingsPane::kPrivacySecurity:
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy";
+      break;
+    case SystemSettingsPane::kPrivacySecurity_Accessibility:
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_Accessibility";
+      break;
+    case SystemSettingsPane::kPrivacySecurity_Bluetooth:
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_Bluetooth";
+      break;
+    case SystemSettingsPane::kPrivacySecurity_Camera:
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_Camera";
       break;
     case SystemSettingsPane::kPrivacySecurity_LocationServices:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_LocationServices";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_LocationServices";
-      }
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_LocationServices";
       break;
     case SystemSettingsPane::kPrivacySecurity_Microphone:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_Microphone";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_Microphone";
-      }
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_Microphone";
       break;
-    case SystemSettingsPane::kPrivacySecurity_ScreenRecording:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
-              @"extension?Privacy_ScreenCapture";
-      } else {
-        url = @"x-apple.systempreferences:com.apple.preference.security?"
-              @"Privacy_ScreenCapture";
-      }
-      break;
-    case SystemSettingsPane::kTrackpad:
-      if (MacOSMajorVersion() >= 13) {
-        url = @"x-apple.systempreferences:com.apple.Trackpad-Settings."
-              @"extension";
-      } else {
-        pane_file = @"/System/Library/PreferencePanes/Trackpad.prefPane";
-      }
-      break;
-    case SystemSettingsPane::kPrivacySecurity_Pasteboard:
+    case SystemSettingsPane::kPrivacySecurity_PasteFromOtherApps:
       // Pasteboard permissions were added in macOS 15.
       DCHECK_GE(MacOSMajorVersion(), 15);
       url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
             @"extension?Privacy_Pasteboard";
       break;
+    case SystemSettingsPane::kPrivacySecurity_ScreenRecording:
+      url = @"x-apple.systempreferences:com.apple.settings.PrivacySecurity."
+            @"extension?Privacy_ScreenCapture";
+      break;
+    case SystemSettingsPane::kTrackpad:
+      url = @"x-apple.systempreferences:com.apple.Trackpad-Settings."
+            @"extension";
+      break;
+    default:
+      NOTREACHED();
   }
 
-  DCHECK(url != nil ^ pane_file != nil);
-
-  if (url) {
-    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:url]];
-    return;
-  }
-
-  NSAppleEventDescriptor* subpane_descriptor;
-  NSArray* pane_file_urls = @[ [NSURL fileURLWithPath:pane_file] ];
-
-  LSLaunchURLSpec launchSpec = {0};
-  launchSpec.itemURLs = apple::NSToCFPtrCast(pane_file_urls);
-  if (subpane_data) {
-    subpane_descriptor =
-        [[NSAppleEventDescriptor alloc] initWithDescriptorType:'ptru'
-                                                          data:subpane_data];
-    launchSpec.passThruParams = subpane_descriptor.aeDesc;
-  }
-  launchSpec.launchFlags = kLSLaunchAsync | kLSLaunchDontAddToRecents;
-
-  LSOpenFromURLSpec(&launchSpec, nullptr);
+  [NSWorkspace.sharedWorkspace
+                openURL:[NSURL URLWithString:url]
+          configuration:[NSWorkspaceOpenConfiguration configuration]
+      completionHandler:nil];
 }
 
 }  // namespace base::mac

@@ -8,6 +8,7 @@
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/task/current_thread.h"
@@ -37,9 +38,11 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -68,7 +71,7 @@ class SyncConfirmationClosedObserver : public LoginUIService::Observer {
       : browser_(browser) {
     DCHECK(browser_);
     login_ui_service_observation_.Observe(
-        LoginUIServiceFactory::GetForProfile(browser_->profile()));
+        LoginUIServiceFactory::GetForProfile(browser_->GetProfile()));
   }
 
   LoginUIService::SyncConfirmationUIClosedResult WaitForConfirmationClosed() {
@@ -103,11 +106,11 @@ class SignInViewControllerBrowserTest : public InProcessBrowserTest {
     // also why this test must be an interactive_ui_test rather than a browser
     // test.
     ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(
-        browser()->window()->GetNativeWindow()));
+        browser()->GetWindow()->GetNativeWindow()));
   }
 
   signin::IdentityManager* GetIdentityManager() {
-    return IdentityManagerFactory::GetForProfile(browser()->profile());
+    return IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   }
 };
 
@@ -131,35 +134,6 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest, Accelerators) {
   wait_for_new_tab.Wait();
 
   EXPECT_EQ(2, browser()->tab_strip_model()->count());
-}
-
-// Tests that the confirm button is focused by default in the sync confirmation
-// dialog.
-IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest,
-                       // TODO(crbug.com/40927355): Re-enable this test
-                       DISABLED_SyncConfirmationDefaultFocus) {
-  signin::MakePrimaryAccountAvailable(GetIdentityManager(), "alice@gmail.com",
-                                      signin::ConsentLevel::kSync);
-  content::TestNavigationObserver content_observer(
-      GURL("chrome://sync-confirmation/"));
-  content_observer.StartWatchingNewWebContents();
-  auto* signin_view_controller =
-      browser()->GetFeatures().signin_view_controller();
-  signin_view_controller->ShowModalSyncConfirmationDialog(
-      /*is_signin_intercept=*/false, /*is_sync_promo=*/false);
-  EXPECT_TRUE(signin_view_controller->ShowsModalDialog());
-  content_observer.Wait();
-
-  SyncConfirmationClosedObserver sync_confirmation_observer(browser());
-  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
-                                              /*control=*/false,
-                                              /*shift=*/false, /*alt=*/false,
-                                              /*command=*/false));
-
-  LoginUIService::SyncConfirmationUIClosedResult result =
-      sync_confirmation_observer.WaitForConfirmationClosed();
-  EXPECT_EQ(result, LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
-  EXPECT_FALSE(signin_view_controller->ShowsModalDialog());
 }
 
 class SignInViewControllerInteractiveBrowserTest
@@ -258,6 +232,14 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest,
   EXPECT_TRUE(signin_view_controller->ShowsModalDialog());
   content_observer.Wait();
 
+  // Wait for the modal dialog sheet window to be presented and receive focus.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* web_contents =
+        signin_view_controller->GetModalDialogWebContentsForTesting();
+    return web_contents && web_contents->GetRenderWidgetHostView() &&
+           web_contents->GetRenderWidgetHostView()->HasFocus();
+  }));
+
   content::WebContentsDestroyedWatcher dialog_destroyed_watcher(
       signin_view_controller->GetModalDialogWebContentsForTesting());
 
@@ -288,12 +270,32 @@ enum class ButtonToClick : int {
 class HistorySyncOptinViewControllerInteractiveBrowserTest
     : public SigninBrowserTestBaseT<InteractiveBrowserTest>,
       public testing::WithParamInterface<ButtonToClick> {
- public:
-  const InteractiveBrowserTest::DeepQuery kHistoryOptinAcceptButton = {
-      "history-sync-optin-app", "#acceptButton"};
-  const InteractiveBrowserTest::DeepQuery kHistoryOptinRejectButton = {
-      "history-sync-optin-app", "#rejectButton"};
+ protected:
   const char* kIsDisabledFn = "(e) => { return e.disabled; }";
+
+  const InteractiveBrowserTest::DeepQuery& GetHistoryOptinAcceptButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app-refresh", "#acceptButton"});
+      return *kQuery;
+    } else {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app", "#acceptButton"});
+      return *kQuery;
+    }
+  }
+
+  const InteractiveBrowserTest::DeepQuery& GetHistoryOptinRejectButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app-refresh", "#rejectButton"});
+      return *kQuery;
+    } else {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app", "#rejectButton"});
+      return *kQuery;
+    }
+  }
 
   auto ClickButton(ui::ElementIdentifier parent_element_id,
                    DeepQuery button_query) {
@@ -304,18 +306,19 @@ class HistorySyncOptinViewControllerInteractiveBrowserTest
   auto CheckButtonsState(ui::ElementIdentifier parent_element_id,
                          DialogButtonEnableState state) {
     bool is_disabled = state == DialogButtonEnableState::kDisabled;
-    return Steps(CheckJsResultAt(parent_element_id, kHistoryOptinAcceptButton,
-                                 kIsDisabledFn, is_disabled),
-                 CheckJsResultAt(parent_element_id, kHistoryOptinRejectButton,
-                                 kIsDisabledFn, is_disabled));
+    return Steps(
+        CheckJsResultAt(parent_element_id, GetHistoryOptinAcceptButtonQuery(),
+                        kIsDisabledFn, is_disabled),
+        CheckJsResultAt(parent_element_id, GetHistoryOptinRejectButtonQuery(),
+                        kIsDisabledFn, is_disabled));
   }
 
   const InteractiveBrowserTest::DeepQuery& GetButtonToClick() {
     switch (GetParam()) {
       case ButtonToClick::kAcceptButton:
-        return kHistoryOptinAcceptButton;
+        return GetHistoryOptinAcceptButtonQuery();
       case ButtonToClick::kRejectButton:
-        return kHistoryOptinRejectButton;
+        return GetHistoryOptinRejectButtonQuery();
     }
   }
 

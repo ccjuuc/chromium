@@ -12,7 +12,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -27,7 +26,7 @@
 #include "cc/test/fake_layer_tree_host.h"
 #include "cc/test/fake_rendering_stats_instrumentation.h"
 #include "cc/test/layer_test_common.h"
-#include "cc/test/stub_layer_tree_host_single_thread_client.h"
+#include "cc/test/stub_layer_tree_host_single_thread_delegate.h"
 #include "cc/test/test_task_graph_runner.h"
 #include "cc/trees/compositor_commit_data.h"
 #include "cc/trees/effect_node.h"
@@ -80,13 +79,10 @@ class MockLayer : public Layer {
     return MockLayerImpl::Create(tree_impl, id());
   }
 
-  void PushDirtyPropertiesTo(
-      LayerImpl* layer_impl,
-      uint8_t dirty_flag,
-      const CommitState& commit_state,
-      const ThreadUnsafeCommitState& unsafe_state) override {
-    Layer::PushDirtyPropertiesTo(layer_impl, dirty_flag, commit_state,
-                                 unsafe_state);
+  void PushDirtyPropertiesTo(LayerImpl* layer_impl,
+                             uint8_t dirty_flag,
+                             CommitState& commit_state) override {
+    Layer::PushDirtyPropertiesTo(layer_impl, dirty_flag, commit_state);
 
     MockLayerImpl* mock_layer_impl = static_cast<MockLayerImpl*>(layer_impl);
     mock_layer_impl->SetLayerImplDestructionList(layer_impl_destruction_list_);
@@ -127,10 +123,10 @@ class TreeSynchronizerTest : public testing::Test {
     // on animation_host_ that was installed by the newly created
     // LayerTreeHost.
     host_.reset();
-    host_ = FakeLayerTreeHost::Create(&client_, &task_graph_runner_,
+    host_ = FakeLayerTreeHost::Create(&delegate_, &task_graph_runner_,
                                       animation_host_.get(), settings);
     host_->InitializeSingleThreaded(
-        &single_thread_client_,
+        &single_thread_delegate_,
         base::SingleThreadTaskRunner::GetCurrentDefault());
     host_->host_impl()->CreatePendingTree();
   }
@@ -172,8 +168,8 @@ class TreeSynchronizerTest : public testing::Test {
 
   const FakeLayerTreeHost* const_host() const { return host_.get(); }
 
-  FakeLayerTreeHostClient client_;
-  StubLayerTreeHostSingleThreadClient single_thread_client_;
+  FakeLayerTreeHostDelegate delegate_;
+  StubLayerTreeHostSingleThreadDelegate single_thread_delegate_;
   TestTaskGraphRunner task_graph_runner_;
   std::unique_ptr<AnimationHost> animation_host_;
   std::unique_ptr<FakeLayerTreeHost> host_;
@@ -203,7 +199,7 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeFromEmpty) {
                                      host_->pending_tree());
 
   LayerImpl* root = host_->pending_tree()->root_layer();
-  EXPECT_TRUE(base::Contains(
+  EXPECT_TRUE(std::ranges::contains(
       host_->pending_tree()->LayersThatShouldPushProperties(), root));
 
   ExpectTreesAreIdentical(layer_tree_root.get(),
@@ -230,7 +226,7 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndPushPropertiesFromEmpty) {
   // layers are created on pending tree and they all need to push properties to
   // active tree.
   LayerImpl* root = host_->pending_tree()->root_layer();
-  EXPECT_TRUE(base::Contains(
+  EXPECT_TRUE(std::ranges::contains(
       host_->pending_tree()->LayersThatShouldPushProperties(), root));
 
   ExpectTreesAreIdentical(layer_tree_root.get(),
@@ -238,9 +234,11 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndPushPropertiesFromEmpty) {
                           host_->pending_tree());
 
   // Push properties to make pending tree have valid property tree index.
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->pending_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->pending_tree());
 
   // Now sync from pending tree to active tree. This would clear the map of
   // layers that need push properties.
@@ -248,24 +246,27 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndPushPropertiesFromEmpty) {
                                      host_->active_tree());
   TreeSynchronizer::PushLayerProperties(host_->pending_tree(),
                                         host_->active_tree());
-  EXPECT_FALSE(base::Contains(
+  EXPECT_FALSE(std::ranges::contains(
       host_->pending_tree()->LayersThatShouldPushProperties(), root));
 
   // Set the main thread root layer needs push properties.
   layer_tree_root->SetNeedsPushProperties();
-  EXPECT_TRUE(base::Contains(
-      const_host()->pending_commit_state()->layers_that_should_push_properties,
-      layer_tree_root.get()));
+  EXPECT_TRUE(const_host()
+                  ->pending_commit_state()
+                  ->layer_ids_that_should_push_properties.contains(
+                      layer_tree_root->id()));
 
   // When sync from main thread, the needs push properties status is carried
   // over to pending tree.
   TreeSynchronizer::SynchronizeTrees(*const_host()->pending_commit_state(),
                                      host_->GetThreadUnsafeCommitState(),
                                      host_->pending_tree());
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->pending_tree());
-  EXPECT_TRUE(base::Contains(
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->pending_tree());
+  EXPECT_TRUE(std::ranges::contains(
       host_->pending_tree()->LayersThatShouldPushProperties(), root));
 }
 
@@ -287,17 +288,19 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeReusingLayers) {
                                      host_->GetThreadUnsafeCommitState(),
                                      host_->pending_tree());
   LayerImpl* layer_impl_tree_root = host_->pending_tree()->root_layer();
-  EXPECT_TRUE(
-      base::Contains(host_->pending_tree()->LayersThatShouldPushProperties(),
-                     layer_impl_tree_root));
+  EXPECT_TRUE(std::ranges::contains(
+      host_->pending_tree()->LayersThatShouldPushProperties(),
+      layer_impl_tree_root));
 
   ExpectTreesAreIdentical(layer_tree_root.get(), layer_impl_tree_root,
                           host_->pending_tree());
 
   // We have to push properties to pick up the destruction list pointer.
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->pending_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->pending_tree());
 
   // Add a new layer to the Layer side
   layer_tree_root->children()[0]->AddChild(
@@ -348,9 +351,11 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndTrackStackingOrderChange) {
                           host_->active_tree());
 
   // We have to push properties to pick up the destruction list pointer.
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->active_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->active_tree());
   host_->active_tree()->ResetAllChangeTracking();
 
   // re-insert the layer and sync again.
@@ -365,10 +370,13 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndTrackStackingOrderChange) {
                           host_->active_tree());
 
   host_->active_tree()->SetPropertyTrees(
-      *layer_tree_root->layer_tree_host()->property_trees());
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->active_tree());
+      *layer_tree_root->layer_tree_host()->property_trees(),
+      layer_tree_root->layer_tree_host()->viewport_property_ids());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->active_tree());
 
   // Check that the impl thread properly tracked the change.
   EXPECT_FALSE(layer_impl_tree_root->LayerPropertyChanged());
@@ -409,9 +417,11 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeAndProperties) {
   ExpectTreesAreIdentical(layer_tree_root.get(), layer_impl_tree_root,
                           host_->active_tree());
 
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->active_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->active_tree());
 
   // Check that the property values we set on the Layer tree are reflected in
   // the LayerImpl tree.
@@ -459,9 +469,11 @@ TEST_F(TreeSynchronizerTest, ReuseLayerImplsAfterStructuralChange) {
                           host_->active_tree());
 
   // We have to push properties to pick up the destruction list pointer.
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->active_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->active_tree());
 
   // Now restructure the tree to look like this:
   // root --- D ---+--- A
@@ -519,9 +531,11 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeThenDestroy) {
                           host_->active_tree());
 
   // We have to push properties to pick up the destruction list pointer.
-  TreeSynchronizer::PushLayerProperties(*host_->GetPendingCommitState(),
-                                        host_->GetThreadUnsafeCommitState(),
-                                        host_->active_tree());
+  TreeSynchronizer::PushLayerProperties(
+      *host_->GetPendingCommitState(),
+      const_cast<const FakeLayerTreeHost*>(host_.get())
+          ->thread_unsafe_commit_state(),
+      host_->active_tree());
 
   // Remove all children on the Layer side.
   old_layer_tree_root->RemoveAllChildren();
@@ -541,12 +555,12 @@ TEST_F(TreeSynchronizerTest, SyncSimpleTreeThenDestroy) {
 
   ASSERT_EQ(3u, layer_impl_destruction_list.size());
 
-  EXPECT_TRUE(
-      base::Contains(layer_impl_destruction_list, old_tree_root_layer_id));
-  EXPECT_TRUE(base::Contains(layer_impl_destruction_list,
-                             old_tree_first_child_layer_id));
-  EXPECT_TRUE(base::Contains(layer_impl_destruction_list,
-                             old_tree_second_child_layer_id));
+  EXPECT_TRUE(std::ranges::contains(layer_impl_destruction_list,
+                                    old_tree_root_layer_id));
+  EXPECT_TRUE(std::ranges::contains(layer_impl_destruction_list,
+                                    old_tree_first_child_layer_id));
+  EXPECT_TRUE(std::ranges::contains(layer_impl_destruction_list,
+                                    old_tree_second_child_layer_id));
 }
 
 // Constructs+syncs a tree with mask layer.
@@ -594,7 +608,7 @@ TEST_F(TreeSynchronizerTest, SyncMaskLayer) {
 
 TEST_F(TreeSynchronizerTest, SynchronizeCurrentlyScrollingNode) {
   LayerTreeSettings settings;
-  FakeLayerTreeHostImplClient client;
+  FakeLayerTreeHostImplDelegate delegate;
   FakeImplTaskRunnerProvider task_runner_provider;
   FakeRenderingStatsInstrumentation stats_instrumentation;
   TestTaskGraphRunner task_graph_runner;
@@ -621,10 +635,11 @@ TEST_F(TreeSynchronizerTest, SynchronizeCurrentlyScrollingNode) {
                           host_impl->active_tree()->root_layer(),
                           host_impl->active_tree());
 
-  ScrollNode* scroll_node =
-      host_impl->active_tree()->property_trees()->scroll_tree_mutable().Node(
-          scroll_layer->scroll_tree_index());
-  host_impl->active_tree()->SetCurrentlyScrollingNode(scroll_node);
+  ScrollNode& scroll_node = host_impl->active_tree()
+                                ->property_trees()
+                                ->scroll_tree_mutable()
+                                .MutableNode(scroll_layer->scroll_tree_index());
+  host_impl->active_tree()->SetCurrentlyScrollingNode(&scroll_node);
   transient_scroll_layer->SetScrollable(gfx::Size(0, 0));
   host_->BuildPropertyTreesForTesting();
 
@@ -638,7 +653,7 @@ TEST_F(TreeSynchronizerTest, SynchronizeCurrentlyScrollingNode) {
 
 TEST_F(TreeSynchronizerTest, SynchronizeScrollTreeScrollOffsetMap) {
   LayerTreeSettings settings;
-  FakeLayerTreeHostImplClient client;
+  FakeLayerTreeHostImplDelegate delegate;
   FakeImplTaskRunnerProvider task_runner_provider;
   FakeRenderingStatsInstrumentation stats_instrumentation;
   TestTaskGraphRunner task_graph_runner;
@@ -719,8 +734,9 @@ TEST_F(TreeSynchronizerTest, SynchronizeScrollTreeScrollOffsetMap) {
   // More update to ScrollOffset active delta: gfx::Vector2dF(20, 20)
   scroll_tree.SetScrollOffset(scroll_layer_impl->element_id(),
                               gfx::PointF(40, 50));
+  // TODO(500458345): Convert this to const ref.
   host_impl->active_tree()->SetCurrentlyScrollingNode(
-      scroll_tree.Node(scroll_layer_impl->scroll_tree_index()));
+      &scroll_tree.Node(scroll_layer_impl->scroll_tree_index()));
 
   // Change the scroll tree topology by removing transient_scroll_layer.
   transient_scroll_layer->RemoveFromParent();
@@ -753,7 +769,7 @@ TEST_F(TreeSynchronizerTest, SynchronizeScrollTreeScrollOffsetMap) {
 
 TEST_F(TreeSynchronizerTest, RefreshPropertyTreesCachedData) {
   LayerTreeSettings settings;
-  FakeLayerTreeHostImplClient client;
+  FakeLayerTreeHostImplDelegate delegate;
   FakeImplTaskRunnerProvider task_runner_provider;
   FakeRenderingStatsInstrumentation stats_instrumentation;
   TestTaskGraphRunner task_graph_runner;

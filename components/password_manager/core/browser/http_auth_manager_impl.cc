@@ -62,9 +62,13 @@ void HttpAuthManagerImpl::SetObserverAndDeliverCredentials(
   if (observer_) {
     observer_->OnLoginModelDestroying();
   }
+  if (authenticator_) {
+    authenticator_->Cancel();
+  }
   observer_ = observer;
+  observed_origin_ = url::Origin::Create(observed_form.url);
 
-  if (!client_->IsFillingEnabled(observed_form.url)) {
+  if (!client_->IsFillingEnabled(observed_origin_)) {
     return;
   }
   // Initialize the form manager.
@@ -88,7 +92,7 @@ void HttpAuthManagerImpl::Autofill(const PasswordForm& preferred_match,
     return;
   }
 
-  if (!client_->IsFillingEnabled(form_manager_->GetURL())) {
+  if (!client_->IsFillingEnabled(observed_origin_, form_manager_->GetURL())) {
     return;
   }
 
@@ -107,7 +111,7 @@ void HttpAuthManagerImpl::Autofill(const PasswordForm& preferred_match,
   auto filling_callback = base::BindOnce(
       &HttpAuthManagerImpl::OnReauthCompleted, weak_ptr_factory_.GetWeakPtr(),
       preferred_match.username_value, preferred_match.password_value,
-      std::move(on_filling_complete));
+      url::Origin::Create(preferred_match.url), std::move(on_filling_complete));
   if (authenticator_) {
     authenticator_->Cancel();
   }
@@ -116,7 +120,7 @@ void HttpAuthManagerImpl::Autofill(const PasswordForm& preferred_match,
   std::u16string message;
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
   const std::u16string origin = base::UTF8ToUTF16(
-      GetShownOrigin(url::Origin::Create(client_->GetLastCommittedURL())));
+      GetShownOrigin(url::Origin::Create(form_manager_->GetURL())));
   message =
       l10n_util::GetStringFUTF16(IDS_PASSWORD_MANAGER_FILLING_REAUTH, origin);
 #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
@@ -126,9 +130,17 @@ void HttpAuthManagerImpl::Autofill(const PasswordForm& preferred_match,
 void HttpAuthManagerImpl::OnReauthCompleted(
     const std::u16string& username,
     const std::u16string& password,
+    const url::Origin& credential_origin,
     base::OnceClosure on_filling_complete,
     bool auth_result) {
   if (observer_ && auth_result) {
+    if (observed_origin_ != credential_origin) {
+      return;
+    }
+    if (form_manager_ &&
+        url::Origin::Create(form_manager_->GetURL()) != credential_origin) {
+      return;
+    }
     observer_->OnAutofillDataAvailable(username, password);
     std::move(on_filling_complete).Run();
   }
@@ -136,7 +148,7 @@ void HttpAuthManagerImpl::OnReauthCompleted(
 
 void HttpAuthManagerImpl::OnPasswordFormSubmitted(
     const PasswordForm& password_form) {
-  if (client_->IsSavingAndFillingEnabled(password_form.url) &&
+  if (client_->IsSavingAndFillingEnabled(observed_origin_, password_form.url) &&
       !password_form.password_value.empty()) {
     ProvisionallySaveForm(password_form);
   }
@@ -173,8 +185,8 @@ void HttpAuthManagerImpl::OnDidFinishMainFrameNavigation() {
 
 void HttpAuthManagerImpl::OnLoginSuccesfull() {
   LogMessage(Logger::STRING_HTTPAUTH_ON_ASK_USER_OR_SAVE_PASSWORD);
-  if (!form_manager_ ||
-      !client_->IsSavingAndFillingEnabled(form_manager_->GetURL())) {
+  if (!form_manager_ || !client_->IsSavingAndFillingEnabled(
+                            observed_origin_, form_manager_->GetURL())) {
     return;
   }
 
@@ -184,8 +196,7 @@ void HttpAuthManagerImpl::OnLoginSuccesfull() {
     return;
   }
 
-  if (form_manager_->GetFormFetcher()->GetState() ==
-      FormFetcher::State::WAITING) {
+  if (!form_manager_->IsFetchCompleted()) {
     // We have a provisional save manager, but it didn't finish matching yet.
     // We just give up.
     return;

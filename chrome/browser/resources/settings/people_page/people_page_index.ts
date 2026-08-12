@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import 'chrome://resources/cr_elements/cr_view_manager/cr_view_manager.js';
-import '/shared/settings/prefs/prefs.js';
 import './people_page.js';
 import '../settings_shared.css.js';
 
@@ -42,29 +41,22 @@ export class SettingsPeoplePageIndexElement extends
 
   static get properties() {
     return {
-      prefs: Object,
-
       routes_: {
         type: Object,
         value: () => routes,
       },
 
-      // <if expr="not is_chromeos">
       replaceSyncPromosWithSignInPromos_: {
         type: Boolean,
         value: () =>
             loadTimeData.getBoolean('replaceSyncPromosWithSignInPromos'),
       },
-      // </if>
     };
   }
 
-  declare prefs: {[key: string]: any};
   declare private routes_: SettingsRoutes;
 
-  // <if expr="not is_chromeos">
   declare private replaceSyncPromosWithSignInPromos_: boolean;
-  // </if>
 
   override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
     super.currentRouteChanged(newRoute, oldRoute);
@@ -90,14 +82,6 @@ export class SettingsPeoplePageIndexElement extends
           this.$.viewManager.switchView(
               'syncControls', 'no-animation', 'no-animation');
           break;
-        // <if expr="not is_chromeos">
-        case routes.IMPORT_DATA:
-        case routes.SIGN_OUT:
-          // Switch to settings-people-page since these dialogs reside
-          // there, otherwise they will not be visible even if open.
-          this.$.viewManager.switchView(
-              'parent', 'no-animation', 'no-animation');
-          break;
         case routes.ACCOUNT:
           assert(this.replaceSyncPromosWithSignInPromos_);
           this.$.viewManager.switchView(
@@ -107,6 +91,14 @@ export class SettingsPeoplePageIndexElement extends
           assert(this.replaceSyncPromosWithSignInPromos_);
           this.$.viewManager.switchView(
               'googleServices', 'no-animation', 'no-animation');
+          break;
+        // <if expr="not is_chromeos">
+        case routes.IMPORT_DATA:
+        case routes.SIGN_OUT:
+          // Switch to settings-people-page since these dialogs reside
+          // there, otherwise they will not be visible even if open.
+          this.$.viewManager.switchView(
+              'parent', 'no-animation', 'no-animation');
           break;
         case routes.MANAGE_PROFILE:
           this.$.viewManager.switchView(

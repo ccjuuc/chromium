@@ -14,7 +14,6 @@
 
 #include "base/command_line.h"
 #include "base/containers/span.h"
-#include "base/metrics/histogram_base.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "components/webui/flags/feature_entry.h"
@@ -66,8 +65,8 @@ std::vector<std::string> RegisterAllFeatureVariationParameters(
 // to |unsupported_entries|.
 void GetFlagFeatureEntries(flags_ui::FlagsStorage* flags_storage,
                            flags_ui::FlagAccess access,
-                           base::Value::List& supported_entries,
-                           base::Value::List& unsupported_entries);
+                           base::ListValue& supported_entries,
+                           base::ListValue& unsupported_entries);
 
 // Gets the list of feature entries for the deprecated flags page. Entries that
 // are available for the current platform are appended to |supported_entries|;
@@ -75,8 +74,8 @@ void GetFlagFeatureEntries(flags_ui::FlagsStorage* flags_storage,
 void GetFlagFeatureEntriesForDeprecatedPage(
     flags_ui::FlagsStorage* flags_storage,
     flags_ui::FlagAccess access,
-    base::Value::List& supported_entries,
-    base::Value::List& unsupported_entries);
+    base::ListValue& supported_entries,
+    base::ListValue& unsupported_entries);
 
 // Gets the FlagsState used in about_flags.
 flags_ui::FlagsState* GetCurrentFlagsState();

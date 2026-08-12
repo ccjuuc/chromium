@@ -10,6 +10,7 @@
 
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/file_suggest/file_suggestion_provider.h"
 #include "chromeos/ash/components/drivefs/drivefs_host.h"
@@ -18,7 +19,6 @@
 class Profile;
 
 namespace ash {
-class FileSuggestKeyedService;
 
 // A suggestion provider for most recently used drive files.
 class DriveRecentFileSuggestionProvider
@@ -37,8 +37,6 @@ class DriveRecentFileSuggestionProvider
 
   // FileSuggestionProvider:
   void GetSuggestFileData(GetSuggestFileDataCallback callback) override;
-  void MaybeUpdateItemSuggestCache(
-      base::PassKey<FileSuggestKeyedService>) override;
 
   // drive::DriveIntegrationService::Observer:
   void OnDriveIntegrationServiceDestroyed() override;
@@ -87,6 +85,10 @@ class DriveRecentFileSuggestionProvider
       std::optional<std::vector<drivefs::mojom::QueryItemPtr>> items);
 
   const raw_ptr<Profile> profile_;
+
+  base::ScopedObservation<drive::DriveIntegrationService,
+                          drive::DriveIntegrationService::Observer>
+      drive_observation_{this};
 
   // The time delta within which a valid file suggestion needs to be viewed or
   // modified.

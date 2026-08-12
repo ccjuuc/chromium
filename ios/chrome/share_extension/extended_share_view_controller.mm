@@ -16,7 +16,7 @@
 #import "ios/chrome/common/crash_report/crash_helper.h"
 #import "ios/chrome/common/extension_open_url.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
-#import "ios/chrome/share_extension/account_info.h"
+#import "ios/chrome/share_extension/share_extension_account_info.h"
 #import "ios/chrome/share_extension/share_extension_delegate.h"
 #import "ios/chrome/share_extension/share_extension_sheet.h"
 #import "ios/chrome/share_extension/ui_util.h"
@@ -27,8 +27,6 @@ using ItemBlock = void (^)(id idResponse, NSError* error);
 
 namespace {
 
-const CGFloat kShareSheetCornerRadius = 20;
-
 const CGFloat kShareImageTargetHeight = 1024;
 const CGFloat kShareImageTargetWidth = 1024;
 
@@ -37,8 +35,8 @@ const NSUInteger kSearchCharacterLimit = 1000;
 
 }  // namespace
 
-@interface ExtendedShareViewController () <ShareExtensionDelegate,
-                                           NSURLSessionDelegate>
+@interface ExtendedShareViewController () <NSURLSessionDelegate,
+                                           ShareExtensionDelegate>
 
 // The sheet to display when an item is shared.
 @property(nonatomic, strong) ShareExtensionSheet* shareSheet;
@@ -118,13 +116,6 @@ const NSUInteger kSearchCharacterLimit = 1000;
   _navigationController = [[UINavigationController alloc]
       initWithRootViewController:self.shareSheet];
   _navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
-  UISheetPresentationController* presentationController =
-      _navigationController.sheetPresentationController;
-  presentationController.prefersEdgeAttachedInCompactHeight = YES;
-  presentationController.detents = @[
-    [UISheetPresentationControllerDetent largeDetent]
-  ];
-  presentationController.preferredCornerRadius = kShareSheetCornerRadius;
   if (@available(iOS 26, *)) {
     [self addChildViewController:_navigationController];
   }
@@ -364,7 +355,8 @@ const NSUInteger kSearchCharacterLimit = 1000;
                                                                @".png"]];
     UIImage* avatar = [UIImage imageWithContentsOfFile:[avatarDirectory path]];
 
-    AccountInfo* account = [[AccountInfo alloc] init];
+    ShareExtensionAccountInfo* account =
+        [[ShareExtensionAccountInfo alloc] init];
     account.gaiaIDString = gaiaID;
     account.avatar = avatar;
     account.fullName = accounts[gaiaID][app_group::kFullName];
@@ -377,7 +369,8 @@ const NSUInteger kSearchCharacterLimit = 1000;
   }
 
   if (!self.shareSheet.selectedAccountInfo) {
-    AccountInfo* accountInfo = [[AccountInfo alloc] init];
+    ShareExtensionAccountInfo* accountInfo =
+        [[ShareExtensionAccountInfo alloc] init];
     accountInfo.gaiaIDString = app_group::kNoAccount;
     self.shareSheet.selectedAccountInfo = accountInfo;
     [loadedAccounts addObject:accountInfo];
@@ -567,19 +560,48 @@ const NSUInteger kSearchCharacterLimit = 1000;
                 withError:(NSError*)error {
   if ([idImage isKindOfClass:[UIImage class]]) {
     self.shareImage = base::apple::ObjCCast<UIImage>(idImage);
+    [self continueHandlingSharedImageForItem:item];
   } else if ([idImage isKindOfClass:[NSURL class]]) {
-    self.shareImage = [UIImage
-        imageWithData:[NSData
-                          dataWithContentsOfURL:base::apple::ObjCCast<NSURL>(
-                                                    idImage)]];
-    if (!self.shareImage) {
-      // If the data for a given URL is nil, consider the URL to no longer be an
-      // image.
-      [self handleURL:idImage forItem:item];
-      return;
-    }
+    // Load image data on a background queue to avoid blocking the main
+    // thread, as shared images can be large.
+    NSURL* imageURL = base::apple::ObjCCast<NSURL>(idImage);
+    __weak ExtendedShareViewController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      [weakSelf loadImageDataFromURL:imageURL forItem:item];
+    });
+  } else {
+    [self continueHandlingSharedImageForItem:item];
   }
+}
 
+// Loads image data from `imageURL` on a background thread and dispatches
+// the result back to the main thread for processing.
+- (void)loadImageDataFromURL:(NSURL*)imageURL forItem:(NSExtensionItem*)item {
+  NSData* data = [NSData dataWithContentsOfURL:imageURL];
+  UIImage* image = data ? [UIImage imageWithData:data] : nil;
+  __weak ExtendedShareViewController* weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [weakSelf didLoadImage:image fromURL:imageURL forItem:item];
+  });
+}
+
+// Called on the main thread after the image data has been loaded.
+- (void)didLoadImage:(UIImage*)image
+             fromURL:(NSURL*)imageURL
+             forItem:(NSExtensionItem*)item {
+  self.shareImage = image;
+  if (!self.shareImage) {
+    // If the data for a given URL is nil, consider the URL to no
+    // longer be an image.
+    [self handleURL:imageURL forItem:item];
+    return;
+  }
+  [self continueHandlingSharedImageForItem:item];
+}
+
+// Continues processing the shared item by displaying the share sheet or
+// an error view.
+- (void)continueHandlingSharedImageForItem:(NSExtensionItem*)item {
   self.shareItem = item;
   if (self.shareImage) {
     [self resizeAndScaleShareImage];

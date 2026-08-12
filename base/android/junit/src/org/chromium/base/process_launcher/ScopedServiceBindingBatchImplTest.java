@@ -44,7 +44,6 @@ import java.util.List;
         shadows = {ShadowLooper.class},
         sdk = VERSION_CODES.UPSIDE_DOWN_CAKE)
 @Features.EnableFeatures({
-    BaseFeatures.EFFECTIVE_BINDING_STATE,
     BaseFeatures.REBINDING_CHILD_SERVICE_CONNECTION_CONTROLLER,
     BaseFeatures.REBIND_SERVICE_BATCH_API
 })
@@ -193,6 +192,7 @@ public class ScopedServiceBindingBatchImplTest {
     @Test
     @Features.DisableFeatures(BaseFeatures.REBIND_SERVICE_BATCH_API)
     public void testFeatureDisabled() {
+        ScopedServiceBindingBatchImpl.setBindingRequestQueueForTesting(null);
         assertFalse(ScopedServiceBindingBatchImpl.tryActivate(mLauncherHandler));
 
         try (ScopedServiceBindingBatchImpl batch = ScopedServiceBindingBatchImpl.scoped()) {

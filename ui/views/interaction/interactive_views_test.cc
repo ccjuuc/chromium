@@ -9,28 +9,27 @@
 #include <string_view>
 #include <variant>
 
+#include "base/command_line.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
+#include "base/test/test_switches.h"
 #include "build/build_config.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/interaction/interaction_test_util.h"
+#include "ui/base/interaction/state_observer.h"
 #include "ui/base/test/ui_controls.h"
-#include "ui/views/interaction/interaction_test_util_mouse.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/interaction/accelerator_observer.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/interaction/interactive_views_test_internal.h"
 #include "ui/views/view_tracker.h"
 
-#if BUILDFLAG(IS_MAC)
-#include "ui/base/interaction/interaction_test_util_mac.h"
-#endif
-
 namespace views::test {
-
-using GestureParams = InteractionTestUtilMouse::GestureParams;
 
 using ui::test::internal::kInteractiveTestPivotElementId;
 
@@ -89,126 +88,34 @@ InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::ScrollIntoView(
                    }).SetDescription("ScrollIntoView()"));
 }
 
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::MoveMouseTo(
-    ElementSpecifier reference,
-    RelativePositionSpecifier position) {
-  RequireInteractiveTest();
-  StepBuilder step;
-  step.SetDescription("MoveMouseTo()");
-  step.SetElement(reference);
-  step.SetStartCallback(base::BindOnce(
-      [](InteractiveViewsTestApi* test, RelativePositionCallback pos_callback,
-         ui::InteractionSequence* seq, ui::TrackedElement* el) {
-        test->test_impl_->mouse_error_message_.clear();
-        const auto weak_seq = seq->AsWeakPtr();
-        if (!test->mouse_util().PerformGestures(
-                test->test_impl_->GetGestureParamsForStep(el, seq),
-                InteractionTestUtilMouse::MoveTo(
-                    std::move(pos_callback).Run(el)))) {
-          if (weak_seq) {
-            weak_seq->FailForTesting();
-          }
-        }
+InteractiveViewsTestApi::StepBuilder
+InteractiveViewsTestApi::MaybeEnterInteractiveMode(
+    ElementSpecifier target,
+    ui::Accelerator exit_accelerator) {
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(AcceleratorObserver,
+                                      kExitInteractiveModeObserver);
+  return If(
+      [] {
+        return base::CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kTestLauncherInteractive);
       },
-      base::Unretained(this), GetPositionCallback(std::move(position))));
-  return step;
-}
-
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::MoveMouseTo(
-    AbsolutePositionSpecifier position) {
-  return MoveMouseTo(kInteractiveTestPivotElementId,
-                     GetPositionCallback(std::move(position)));
-}
-
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::ClickMouse(
-    ui_controls::MouseButton button,
-    bool release,
-    int modifier_keys) {
-  RequireInteractiveTest();
-  StepBuilder step;
-  step.SetDescription("ClickMouse()");
-  step.SetElementID(kInteractiveTestPivotElementId);
-  step.SetStartCallback(base::BindOnce(
-      [](InteractiveViewsTestApi* test, ui_controls::MouseButton button,
-         bool release, int modifier_keys, ui::InteractionSequence* seq,
-         ui::TrackedElement* el) {
-        test->test_impl_->mouse_error_message_.clear();
-        const auto weak_seq = seq->AsWeakPtr();
-        if (!test->mouse_util().PerformGestures(
-                test->test_impl_->GetGestureParamsForStep(el, seq),
-                release ? InteractionTestUtilMouse::Click(button, modifier_keys)
-                        : InteractionTestUtilMouse::MouseGestures{
-                              InteractionTestUtilMouse::MouseDown(
-                                  button, modifier_keys)})) {
-          if (weak_seq) {
-            weak_seq->FailForTesting();
-          }
-        }
-      },
-      base::Unretained(this), button, release, modifier_keys));
-  step.SetMustRemainVisible(false);
-  return step;
-}
-
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::DragMouseTo(
-    ElementSpecifier reference,
-    RelativePositionSpecifier position,
-    bool release) {
-  RequireInteractiveTest();
-  StepBuilder step;
-  step.SetDescription("DragMouseTo()");
-  step.SetElement(reference);
-  step.SetStartCallback(base::BindOnce(
-      [](InteractiveViewsTestApi* test, RelativePositionCallback pos_callback,
-         bool release, ui::InteractionSequence* seq, ui::TrackedElement* el) {
-        test->test_impl_->mouse_error_message_.clear();
-        const gfx::Point target = std::move(pos_callback).Run(el);
-        const auto weak_seq = seq->AsWeakPtr();
-        if (!test->mouse_util().PerformGestures(
-                test->test_impl_->GetGestureParamsForStep(el, seq),
-                release ? InteractionTestUtilMouse::DragAndRelease(target)
-                        : InteractionTestUtilMouse::DragAndHold(target))) {
-          if (weak_seq) {
-            weak_seq->FailForTesting();
-          }
-        }
-      },
-      base::Unretained(this), GetPositionCallback(std::move(position)),
-      release));
-  return step;
-}
-
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::DragMouseTo(
-    AbsolutePositionSpecifier position,
-    bool release) {
-  return DragMouseTo(kInteractiveTestPivotElementId,
-                     GetPositionCallback(std::move(position)), release);
-}
-
-InteractiveViewsTestApi::StepBuilder InteractiveViewsTestApi::ReleaseMouse(
-    ui_controls::MouseButton button,
-    int modifier_keys) {
-  RequireInteractiveTest();
-  StepBuilder step;
-  step.SetDescription("ReleaseMouse()");
-  step.SetElementID(kInteractiveTestPivotElementId);
-  step.SetStartCallback(base::BindOnce(
-      [](InteractiveViewsTestApi* test, ui_controls::MouseButton button,
-         int modifier_keys, ui::InteractionSequence* seq,
-         ui::TrackedElement* el) {
-        test->test_impl_->mouse_error_message_.clear();
-        const auto weak_seq = seq->AsWeakPtr();
-        if (!test->mouse_util().PerformGestures(
-                test->test_impl_->GetGestureParamsForStep(el, seq),
-                InteractionTestUtilMouse::MouseUp(button, modifier_keys))) {
-          if (weak_seq) {
-            weak_seq->FailForTesting();
-          }
-        }
-      },
-      base::Unretained(this), button, modifier_keys));
-  step.SetMustRemainVisible(false);
-  return step;
+      Then(Log("\n-----------------------------------"
+               "\nEntering interactive mode. Press ",
+               exit_accelerator.GetShortcutText(),
+               " to exit."
+               "\n-----------------------------------"),
+           CheckElement(
+               target,
+               [=, this](ui::TrackedElement* el) {
+                 return private_test_impl().AddStateObserver(
+                     kExitInteractiveModeObserver.identifier(), el->context(),
+                     std::make_unique<AcceleratorObserver>(
+                         el, private_test_impl().GetNativeWindowFor(el),
+                         exit_accelerator));
+               }),
+           WaitForState(kExitInteractiveModeObserver,
+                        testing::Ne(AcceleratorObserverState::kWaiting)),
+           StopObservingState(kExitInteractiveModeObserver)));
 }
 
 // static
@@ -295,58 +202,18 @@ View* InteractiveViewsTestApi::FindMatchingView(const View* from,
 }
 
 void InteractiveViewsTestApi::SetContextWidget(Widget* widget) {
-  context_widget_ = widget ? widget->GetWeakPtr() : nullptr;
+  CHECK(!widget || !private_test_impl().default_context())
+      << "Changing the context widget during a test is not supported.";
   if (widget) {
-    private_test_impl().set_default_context(
-        ElementTrackerViews::GetContextForWidget(widget));
-    CHECK(!test_impl_->mouse_util_)
-        << "Changing the context widget during a test is not supported.";
-    test_impl_->mouse_util_ =
-        std::make_unique<InteractionTestUtilMouse>(widget);
+    context_widget_ = widget->GetWeakPtr();
+    private_test_impl().SetDefaultContext(
+        ElementTrackerViews::GetContextForWidget(widget),
+        widget->GetNativeWindow());
   } else {
-    private_test_impl().set_default_context(ui::ElementContext());
-    test_impl_->mouse_util_.reset();
+    context_widget_.reset();
+    private_test_impl().SetDefaultContext(ui::ElementContext(),
+                                          gfx::NativeWindow());
   }
-}
-
-// static
-InteractiveViewsTestApi::RelativePositionCallback
-InteractiveViewsTestApi::GetPositionCallback(AbsolutePositionSpecifier spec) {
-  return std::visit(
-      absl::Overload{
-          [](const gfx::Point& point) {
-            return base::BindOnce(
-                [](gfx::Point p, ui::TrackedElement*) { return p; }, point);
-          },
-          [](std::reference_wrapper<gfx::Point> point) {
-            return base::BindOnce([](std::reference_wrapper<gfx::Point> p,
-                                     ui::TrackedElement*) { return p.get(); },
-                                  point);
-          },
-          [](AbsolutePositionCallback& callback) {
-            return base::RectifyCallback<RelativePositionCallback>(
-                std::move(callback));
-          }},
-      spec);
-}
-
-// static
-InteractiveViewsTestApi::RelativePositionCallback
-InteractiveViewsTestApi::GetPositionCallback(RelativePositionSpecifier spec) {
-  return std::visit(
-      absl::Overload{[](RelativePositionCallback& callback) {
-                       return std::move(callback);
-                     },
-                     [](CenterPoint) {
-                       return base::BindOnce([](ui::TrackedElement* el) {
-                         CHECK(el->IsA<views::TrackedElementViews>());
-                         return el->AsA<views::TrackedElementViews>()
-                             ->view()
-                             ->GetBoundsInScreen()
-                             .CenterPoint();
-                       });
-                     }},
-      spec);
 }
 
 }  // namespace views::test

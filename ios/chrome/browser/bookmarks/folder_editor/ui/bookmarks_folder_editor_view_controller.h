@@ -8,6 +8,7 @@
 
 #import <set>
 
+#import "base/memory/raw_ptr.h"
 #import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_controller.h"
 
 class AuthenticationService;
@@ -28,12 +29,13 @@ class SyncService;
 
 // Used to show the folder chooser UI when the user decides to update the
 // parent folder.
-- (void)showBookmarksFolderChooserWithParentFolder:
-            (const bookmarks::BookmarkNode*)parent
-                                       hiddenNodes:
-                                           (const std::set<
-                                               const bookmarks::BookmarkNode*>&)
-                                               hiddenNodes;
+- (void)
+    showBookmarksFolderChooserWithParentFolder:
+        (const bookmarks::BookmarkNode*)parent
+                                   editedNodes:
+                                       (const std::set<raw_ptr<
+                                            const bookmarks::BookmarkNode>>&)
+                                           editedNodes;
 // Called when the controller successfully created or edited `folder`.
 - (void)bookmarksFolderEditor:(BookmarksFolderEditorViewController*)folderEditor
        didFinishEditingFolder:(const bookmarks::BookmarkNode*)folder;
@@ -65,6 +67,9 @@ class SyncService;
 
 @property(nonatomic, weak) id<BookmarksFolderEditorViewControllerDelegate>
     delegate;
+
+// Whether the UI is disabled.
+@property(nonatomic, assign) BOOL UIDisabled;
 
 // Snackbar commands handler for this ViewController.
 @property(nonatomic, weak) id<SnackbarCommands> snackbarCommandsHandler;

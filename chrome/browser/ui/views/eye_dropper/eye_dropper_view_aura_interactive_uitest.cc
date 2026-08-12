@@ -9,6 +9,13 @@
 #include "content/public/browser/eye_dropper.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/test/browser_test.h"
+#include "ui/events/event.h"
+#include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/environment.h"
+#include "base/nix/xdg_util.h"
+#endif
 
 class EyeDropperViewAuraInteractiveTest : public InProcessBrowserTest {
  public:
@@ -23,9 +30,20 @@ class EyeDropperViewAuraInteractiveTest : public InProcessBrowserTest {
    private:
     bool is_canceled_ = false;
   };
+
+ protected:
+  void MaybeSkipForWayland() {
+#if BUILDFLAG(IS_LINUX)
+    if (base::nix::GetSessionType(*base::Environment::Create()) ==
+        base::nix::SessionType::kWayland) {
+      GTEST_SKIP() << "Wayland uses out-of-process portal-based eye dropper.";
+    }
+#endif
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, ActiveChangeCancel) {
+  MaybeSkipForWayland();
   EyeDropperListener listener;
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -35,15 +53,16 @@ IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, ActiveChangeCancel) {
       ShowEyeDropper(web_contents->GetPrimaryMainFrame(), &listener);
   ASSERT_TRUE(eye_dropper);
   EXPECT_FALSE(listener.IsCanceled());
-  web_contents->GetRenderWidgetHostView()->Hide();
+  web_contents->WasHidden();
   EXPECT_TRUE(listener.IsCanceled());
 }
 
 IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, InactiveWindow) {
+  MaybeSkipForWayland();
   EyeDropperListener listener;
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  web_contents->GetRenderWidgetHostView()->Hide();
+  web_contents->WasHidden();
   ASSERT_FALSE(web_contents->GetPrimaryMainFrame()->GetView()->HasFocus());
   std::unique_ptr<content::EyeDropper> eye_dropper =
       ShowEyeDropper(web_contents->GetPrimaryMainFrame(), &listener);
@@ -51,6 +70,7 @@ IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, InactiveWindow) {
 }
 
 IN_PROC_BROWSER_TEST_F(EyeDropperViewAuraInteractiveTest, MoveMouseAndTouch) {
+  MaybeSkipForWayland();
   EyeDropperListener listener;
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();

@@ -608,6 +608,7 @@
     "lowercase",
     //none
     "math-auto",
+    "full-size-kana",
     //
     // visibility
     //
@@ -787,8 +788,12 @@
     "max-content",
     "fit-content",
 
-    // contain-intrinsic-size
-    "from-element",
+    // frame-sizing
+    // "auto",
+    "content-width",
+    "content-height",
+    "content-block-size",
+    "content-inline-size",
 
     //
     // text-autospace
@@ -834,6 +839,15 @@
     //
     // auto
     // none
+    // all
+
+    //
+    // text-decoration-skip-spaces
+    //
+    // none
+    // start
+    // end
+    // all
 
     //
     // text-decoration-thickness
@@ -929,6 +943,11 @@
     "padding",
     "padding-box",
 
+    // background-clip: border-area (CSS Backgrounds Level 4)
+    // NOTE: This must be outside the kBorder..kPaddingBox range used by
+    // ConsumePrefixedBackgroundBox's ConsumeIdentRange.
+    "border-area",
+
     // CSS 3 SHAPES
     "margin-box",
 
@@ -975,6 +994,7 @@
     //
     "running",
     "paused",
+    "stopped",
 
     //
     // transform-style
@@ -1133,6 +1153,7 @@
     //optimizespeed
     "optimizequality",
     "pixelated",
+    "crisp-edges",
     "-webkit-optimize-contrast",
 
     // image-orientation
@@ -1153,7 +1174,6 @@
     "alphabetic",
 
     // (display-mode:) media feature
-    "borderless",
     "fullscreen",
     "standalone",
     "minimal-ui",
@@ -1161,6 +1181,7 @@
     "window-controls-overlay",
     "tabbed",
     "picture-in-picture",
+    "unframed",
 
     // (display-state:) media feature
     // normal
@@ -1229,14 +1250,15 @@
     "span",
 
     // grid-lanes-direction
-    // row
-    // row-reverse
-    // column
-    // column-reverse
-
-    // grid-lanes-fill
     // normal
-    // reverse
+    // row
+    // column
+    "fill-reverse",
+    "track-reverse",
+
+    // grid-lanes-pack
+    // normal
+    // dense
 
     // grid-template-{columns|rows}
     "minmax",
@@ -1291,30 +1313,31 @@
     "hanging",
     "mathematical",
 
-    // gap-rule-overlap
+    // rule-overlap
     "row-over-column",
     "column-over-row",
 
     // column-rule-break
-    // auto
     // none
     "intersection",
-    "spanning-item",
+    // normal
 
     // row-rule-break
-    // auto
     // none
     // intersection
-    // spanning-item
+    // normal
+
+    // rule-inset
+    "overlap-join",
 
     // column-rule-visibility-items
-    // none
+    // normal
     // all
     "around",
     "between",
 
     // row-rule-visibility-items
-    // none
+    // normal
     // all
     // around
     // between
@@ -1333,11 +1356,6 @@
     // vector-effect
     // none
     "non-scaling-stroke",
-
-    //
-    // CSS3 viewport-length keywords
-    //
-    "-internal-extend-to-zoom",
 
     // isolation
     // auto
@@ -1402,6 +1420,7 @@
     "paint",
     "cross-fade",
     "-webkit-cross-fade",
+    "image",
     "-webkit-gradient",
     "-webkit-linear-gradient",
     "-webkit-radial-gradient",
@@ -1450,6 +1469,7 @@
     "with",
 
     // @font-face src
+    "avar2",
     "format",
     "collection",
     "embedded-opentype",
@@ -1486,7 +1506,6 @@
 
     // Route matching, such as @route, @navigation, and :link-to().
     "url-pattern",
-    "navigation-param",
 
     // colors
     "rgb",
@@ -1644,6 +1663,7 @@
     // both
     "mandatory",
     "proximity",
+    "pair",
 
     // scroll-snap-align
     // none
@@ -1662,7 +1682,6 @@
     "size",
     "block-size",
     "inline-size",
-    "view-transition",
 
     // @container
     // size
@@ -1685,6 +1704,9 @@
     "var",
     "-internal-variable-value",
     "env",
+
+    // CSS Link Parameters
+    "param",
 
     // CSS Functions
     "arg",
@@ -1709,6 +1731,7 @@
     // auto,
     // contain
     // none
+    "chain",
 
     //scroll-customization
     // auto
@@ -1787,6 +1810,8 @@
     "numeric",
     "additive",
     "extends",
+    // symbols() function (https://drafts.csswg.org/css-counter-styles-3/#symbols-function)
+    "symbols",
     // Predefined counter styles that don't use the above systems
     "-internal-simp-chinese-informal",
     "-internal-simp-chinese-formal",
@@ -1827,13 +1852,8 @@
     // @import scope()
     "scope",
 
-    // color-contrast()
-    "color-contrast",
-    "vs",
-    "AA",
-    "AA-large",
-    "AAA",
-    "AAA-large",
+    // contrast-color()
+    "contrast-color",
 
     // initial-letter
     "drop",
@@ -1888,6 +1908,7 @@
     // @view-transition navigation
     // auto
     // none
+    "preview",
 
     // view-transition-capture-mode
     "layered",
@@ -1919,10 +1940,6 @@
     "x-end",
     "span-x-start",
     "span-x-end",
-    "x-self-start",
-    "x-self-end",
-    "span-x-self-start",
-    "span-x-self-end",
     "self-x-start",
     "self-x-end",
     "span-self-x-start",
@@ -1936,10 +1953,6 @@
     "y-end",
     "span-y-start",
     "span-y-end",
-    "y-self-start",
-    "y-self-end",
-    "span-y-self-start",
-    "span-y-self-end",
     "self-y-start",
     "self-y-end",
     "span-self-y-start",
@@ -2016,13 +2029,12 @@
     "context-fill",
     "context-stroke",
 
-    // text-grow / text-shrink
+    // text-fit
+    "grow",
+    "shrink",
     "per-line",
+    "per-line-all",
     "consistent",
-    // "scale",
-    "font-size",
-    "scale-inline",
-    "letter-spacing",
 
     // media-progress()
     "media-progress",
@@ -2078,6 +2090,10 @@
     // block-ellipsis
     "no-ellipsis",
 
+    // text-indent
+    "each-line",
+    // "hanging",
+
     // text-justify
     // "auto",
     // "none",
@@ -2099,5 +2115,42 @@
 
     // counter-reset
     "reversed",
+
+    // https://drafts.csswg.org/css-conditional-5/#typedef-supports-named-feature-fn
+    "named-feature",
+    "anchor-position-follows-transforms",
+    "single-axis-scroll-container",
+
+    // hanging-punctuation
+    // "first",
+    // "last",
+    // not for the initial version
+    // "force-end"
+    "allow-end",
+
+    // https://drafts.csswg.org/css-values-5/#request-url-modifiers
+    // URL modifier function names
+    "cross-origin",
+    "integrity",
+    "referrer-policy",
+    // cross-origin() values
+    "anonymous",
+    "use-credentials",
+    // referrer-policy() values
+    "no-referrer",
+    "no-referrer-when-downgrade",
+    "same-origin",
+    // "origin" already exists above
+    "strict-origin",
+    "origin-when-cross-origin",
+    "strict-origin-when-cross-origin",
+    "unsafe-url",
+
+    // ruby-overhang
+    // "auto",
+    "spaces",
+
+    // max-content-sizing
+    "shrink-to-fit",
   ],
 }

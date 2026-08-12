@@ -24,18 +24,18 @@
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
 #include "chrome/browser/new_tab_page/modules/new_tab_page_modules.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/search/background/ntp_background_service_factory.h"
 #include "chrome/browser/search/background/ntp_custom_background_service.h"
-#include "chrome/browser/search/background/ntp_custom_background_service_observer.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/search/ntp_user_data_types.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome.mojom.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_section.h"
 #include "chrome/common/pref_names.h"
@@ -53,6 +53,7 @@
 #include "components/search/ntp_features.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/themes/ntp_background_data.h"
+#include "components/themes/ntp_custom_background_service_observer.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/scoped_web_ui_controller_factory_registration.h"
@@ -319,10 +320,11 @@ class CustomizeChromePageHandlerTest : public testing::Test {
     EXPECT_EQ(handler_.get(), ntp_custom_background_service_observer_);
 
     auto browser_window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams browser_params(profile_.get(), true);
-    browser_params.type = Browser::TYPE_NORMAL;
+    BrowserWindowCreateParams browser_params(profile_.get(), true);
+    browser_params.type = BrowserWindowInterface::Type::TYPE_NORMAL;
     browser_params.window = browser_window.release();
-    browser_ = Browser::DeprecatedCreateOwnedForTesting(browser_params);
+    browser_ =
+        DeprecatedCreateOwnedBrowserWindowForTesting(std::move(browser_params));
 
     application_locale_storage_->Set("foo");
 
@@ -377,8 +379,8 @@ class CustomizeChromePageHandlerTest : public testing::Test {
 
   void SetEnterpriseShortcutsPolicy(bool has_policy) {
     if (has_policy) {
-      base::Value::List enterprise_shortcuts;
-      enterprise_shortcuts.Append(base::Value::Dict()
+      base::ListValue enterprise_shortcuts;
+      enterprise_shortcuts.Append(base::DictValue()
                                       .Set("title", "test")
                                       .Set("url", "https://test.com"));
       profile().GetPrefs()->SetList(
@@ -386,8 +388,7 @@ class CustomizeChromePageHandlerTest : public testing::Test {
           std::move(enterprise_shortcuts));
     } else {
       profile().GetPrefs()->SetList(
-          ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
-          base::Value::List());
+          ntp_tiles::prefs::kEnterpriseShortcutsPolicyList, base::ListValue());
     }
   }
 
@@ -618,8 +619,6 @@ INSTANTIATE_TEST_SUITE_P(
 struct UpdateMostVisitedSettingsTestCase {
   std::string test_name;
   // Initial state
-  bool enterprise_shortcuts_feature_enabled;
-  bool enterprise_shortcuts_mixing_enabled;
   bool has_enterprise_policy;
   bool custom_links_visible;
   bool enterprise_shortcuts_visible;
@@ -637,21 +636,6 @@ class CustomizeChromePageHandlerUpdateMostVisitedTest
 TEST_P(CustomizeChromePageHandlerUpdateMostVisitedTest,
        UpdateMostVisitedSettings) {
   const auto& test_case = GetParam();
-
-  base::test::ScopedFeatureList features;
-  if (test_case.enterprise_shortcuts_feature_enabled) {
-    if (test_case.enterprise_shortcuts_mixing_enabled) {
-      features.InitAndEnableFeatureWithParameters(
-          ntp_tiles::kNtpEnterpriseShortcuts,
-          {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name, "true"}});
-    } else {
-      features.InitAndEnableFeatureWithParameters(
-          ntp_tiles::kNtpEnterpriseShortcuts,
-          {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name, "false"}});
-    }
-  } else {
-    features.InitAndDisableFeature(ntp_tiles::kNtpEnterpriseShortcuts);
-  }
 
   std::vector<ntp_tiles::TileType> types;
   bool visible;
@@ -677,60 +661,7 @@ TEST_P(CustomizeChromePageHandlerUpdateMostVisitedTest,
 }
 
 const UpdateMostVisitedSettingsTestCase kUpdateMostVisitedSettingsTestCases[] =
-    {{.test_name = "EnterpriseFeatureDisabled_PersonalShortcutsVisible",
-      .enterprise_shortcuts_feature_enabled = false,
-      .enterprise_shortcuts_mixing_enabled = false,
-      .has_enterprise_policy = true,
-      .custom_links_visible = true,
-      .enterprise_shortcuts_visible = true,
-      .personal_shortcuts_visible = true,
-      .expected_types = {ntp_tiles::TileType::kCustomLinks,
-                         ntp_tiles::TileType::kEnterpriseShortcuts},
-      .expected_disabled_shortcuts =
-          {ntp_tiles::TileType::kEnterpriseShortcuts}},
-     {.test_name = "EnterpriseFeatureDisabled_PersonalShortcutsNotVisible",
-      .enterprise_shortcuts_feature_enabled = false,
-      .enterprise_shortcuts_mixing_enabled = false,
-      .has_enterprise_policy = true,
-      .custom_links_visible = true,
-      .enterprise_shortcuts_visible = true,
-      .personal_shortcuts_visible = false,
-      .expected_types = {ntp_tiles::TileType::kCustomLinks,
-                         ntp_tiles::TileType::kEnterpriseShortcuts},
-      .expected_disabled_shortcuts =
-          {ntp_tiles::TileType::kEnterpriseShortcuts}},
-     {.test_name = "EnterpriseMixingFeatureDisabled_EnterprisePolicyEmpty",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = false,
-      .has_enterprise_policy = false,
-      .custom_links_visible = true,
-      .enterprise_shortcuts_visible = true,
-      .personal_shortcuts_visible = true,
-      .expected_types = {ntp_tiles::TileType::kEnterpriseShortcuts},
-      .expected_disabled_shortcuts =
-          {ntp_tiles::TileType::kEnterpriseShortcuts}},
-     {.test_name = "EnterpriseMixingFeatureDisabled_PersonalShortcutsVisible",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = false,
-      .has_enterprise_policy = true,
-      .custom_links_visible = true,
-      .enterprise_shortcuts_visible = true,
-      .personal_shortcuts_visible = true,
-      .expected_types = {ntp_tiles::TileType::kEnterpriseShortcuts},
-      .expected_disabled_shortcuts = {}},
-     {.test_name =
-          "EnterpriseMixingFeatureDisabled_PersonalShortcutsNotVisible",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = false,
-      .has_enterprise_policy = true,
-      .custom_links_visible = true,
-      .enterprise_shortcuts_visible = true,
-      .personal_shortcuts_visible = false,
-      .expected_types = {ntp_tiles::TileType::kEnterpriseShortcuts},
-      .expected_disabled_shortcuts = {}},
-     {.test_name = "EnterpriseMixingFeatureEnabled_EnteprisePolicyEmpty",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = true,
+    {{.test_name = "EnterprisePolicyEmpty",
       .has_enterprise_policy = false,
       .custom_links_visible = true,
       .enterprise_shortcuts_visible = true,
@@ -739,9 +670,7 @@ const UpdateMostVisitedSettingsTestCase kUpdateMostVisitedSettingsTestCases[] =
                          ntp_tiles::TileType::kCustomLinks},
       .expected_disabled_shortcuts =
           {ntp_tiles::TileType::kEnterpriseShortcuts}},
-     {.test_name = "EnterpriseMixingFeatureEnabled_PersonalShortcutsVisible",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = true,
+     {.test_name = "PersonalShortcutsVisible",
       .has_enterprise_policy = true,
       .custom_links_visible = true,
       .enterprise_shortcuts_visible = true,
@@ -749,9 +678,7 @@ const UpdateMostVisitedSettingsTestCase kUpdateMostVisitedSettingsTestCases[] =
       .expected_types = {ntp_tiles::TileType::kEnterpriseShortcuts,
                          ntp_tiles::TileType::kCustomLinks},
       .expected_disabled_shortcuts = {}},
-     {.test_name = "EnterpriseMixingFeatureEnabled_PersonalShortcutsNotVisible",
-      .enterprise_shortcuts_feature_enabled = true,
-      .enterprise_shortcuts_mixing_enabled = true,
+     {.test_name = "PersonalShortcutsNotVisible",
       .has_enterprise_policy = true,
       .custom_links_visible = true,
       .enterprise_shortcuts_visible = true,
@@ -777,66 +704,6 @@ TEST_F(CustomizeChromePageHandlerTest,
       .WillRepeatedly(DoAll(SaveArg<0>(&types), SaveArg<1>(&visible),
                             SaveArg<2>(&personal_shortcuts_visible),
                             SaveArg<3>(&disabled_shortcuts)));
-
-  // Enable enterprise shortcuts policy with mixing disabled.
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeatureWithParameters(
-      ntp_tiles::kNtpEnterpriseShortcuts,
-      {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name, "false"}});
-
-  SetEnterpriseShortcutsPolicy(true);
-  SetMostVisitedPrefs(
-      /*custom_links_visible=*/true, /*enterprise_shortcuts_visible=*/true,
-      /*shortcuts_visible=*/true, /*personal_shortcuts_visible=*/true);
-  mock_page_.FlushForTesting();
-
-  // The enterprise shortcuts option should be visible.
-  EXPECT_EQ(0u, disabled_shortcuts.size());
-
-  // Set shortcut type to enterprise.
-  handler().SetMostVisitedSettings(
-      /*types=*/{ntp_tiles::TileType::kEnterpriseShortcuts}, /*visible=*/true,
-      /*personal_shortcuts_visible=*/true);
-  mock_page_.FlushForTesting();
-
-  // Verify state.
-  EXPECT_THAT(types, testing::UnorderedElementsAre(
-                         ntp_tiles::TileType::kEnterpriseShortcuts));
-  EXPECT_TRUE(personal_shortcuts_visible);
-  EXPECT_EQ(0u, disabled_shortcuts.size());
-
-  // Set enterprise shortcuts policy to empty list.
-  SetEnterpriseShortcutsPolicy(false);
-  mock_page_.FlushForTesting();
-
-  // Verify state is updated. The type should still contain enterprise shortcuts
-  // since the pref hasn't been updated yet, but it should be disabled.
-  // Personal shortcuts should become visible.
-  EXPECT_THAT(types, testing::UnorderedElementsAre(
-                         ntp_tiles::TileType::kEnterpriseShortcuts));
-  EXPECT_TRUE(visible);
-  EXPECT_TRUE(personal_shortcuts_visible);
-  EXPECT_THAT(
-      disabled_shortcuts,
-      testing::UnorderedElementsAre(ntp_tiles::TileType::kEnterpriseShortcuts));
-}
-
-TEST_F(CustomizeChromePageHandlerTest,
-       UpdateMostVisitedSettingsOnPolicyChange_MixingEnabled) {
-  std::vector<ntp_tiles::TileType> types;
-  bool visible;
-  bool personal_shortcuts_visible;
-  std::vector<ntp_tiles::TileType> disabled_shortcuts;
-  EXPECT_CALL(mock_page_, SetMostVisitedSettings)
-      .WillRepeatedly(DoAll(SaveArg<0>(&types), SaveArg<1>(&visible),
-                            SaveArg<2>(&personal_shortcuts_visible),
-                            SaveArg<3>(&disabled_shortcuts)));
-
-  // Enable enterprise shortcuts policy.
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeatureWithParameters(
-      ntp_tiles::kNtpEnterpriseShortcuts,
-      {{ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.name, "true"}});
 
   SetEnterpriseShortcutsPolicy(true);
   SetMostVisitedPrefs(
@@ -1022,7 +889,7 @@ TEST_P(CustomizeChromePageHandlerSetThemeTest, SetThirdPartyTheme) {
   auto* extension_registry = extensions::ExtensionRegistry::Get(profile_.get());
   scoped_refptr<const extensions::Extension> extension;
   extension = extensions::ExtensionBuilder()
-                  .SetManifest(base::Value::Dict()
+                  .SetManifest(base::DictValue()
                                    .Set("name", "Foo Extension")
                                    .Set("version", "1.0.0")
                                    .Set("manifest_version", 2))
@@ -1308,13 +1175,13 @@ TEST_F(CustomizeChromePageHandlerTest, AttachedTabStateUpdated) {
           {side_panel::mojom::NewTabPageType::kNone,
            GURL("chrome-extension://someinvaldextension/index.html")},
           {side_panel::mojom::NewTabPageType::kFirstPartyWebUI,
-           GURL(chrome::kChromeUINewTabPageURL)},
+           chrome::ChromeUINewTabPageURLAsGURL()},
           {side_panel::mojom::NewTabPageType::kThirdPartyWebUI,
            GURL(chrome::kChromeUINewTabPageThirdPartyURL)},
           {side_panel::mojom::NewTabPageType::kIncognito,
-           GURL(chrome::kChromeUINewTabURL)},
+           chrome::ChromeUINewTabURLAsGURL()},
           {side_panel::mojom::NewTabPageType::kGuestMode,
-           GURL(chrome::kChromeUINewTabURL)}};
+           chrome::ChromeUINewTabURLAsGURL()}};
 
   for (const auto& ntp_type_and_url : ntp_types_and_urls) {
     if (ntp_type_and_url.first ==
@@ -1568,7 +1435,7 @@ TEST_F(CustomizeChromePageHandlerWithModulesTest,
             modules_settings = std::move(modules_settings_arg);
           });
 
-  base::Value::List hidden_modules_list;
+  base::ListValue hidden_modules_list;
   hidden_modules_list.Append(ntp_modules::kMostRelevantTabResumptionModuleId);
 
   profile().GetPrefs()->SetList(prefs::kNtpHiddenModules,

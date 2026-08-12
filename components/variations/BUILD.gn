@@ -10,6 +10,7 @@ import("//testing/test.gni")
 import("//third_party/libprotobuf-mutator/fuzzable_proto_library.gni")
 
 mojom("variations_mojom") {
+  generate_java = true
   sources = [ "variations.mojom" ]
 }
 
@@ -60,7 +61,6 @@ component("variations") {
     "metrics.cc",
     "metrics.h",
     "platform_field_trials.h",
-    "pref_names.cc",
     "pref_names.h",
     "processed_study.cc",
     "processed_study.h",
@@ -91,9 +91,8 @@ component("variations") {
     "variations_murmur_hash.h",
     "variations_request_scheduler.cc",
     "variations_request_scheduler.h",
+    "variations_safe_seed_store.cc",
     "variations_safe_seed_store.h",
-    "variations_safe_seed_store_local_state.cc",
-    "variations_safe_seed_store_local_state.h",
     "variations_seed_processor.cc",
     "variations_seed_processor.h",
     "variations_seed_simulator.cc",
@@ -231,10 +230,6 @@ static_library("test_support") {
     "//services/network/public/cpp",
     "//third_party/zlib/google:compression_utils",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("unit_tests") {
@@ -271,14 +266,6 @@ source_set("unit_tests") {
   if (is_android || is_ios) {
     sources += [ "variations_request_scheduler_mobile_unittest.cc" ]
   }
-
-  if (use_blink) {
-    sources += [
-      "net/omnibox_autofocus_http_headers_unittest.cc",
-      "net/omnibox_autofocus_url_loader_throttle_unittest.cc",
-    ]
-  }
-
   if (is_chromeos) {
     sources += [ "variations_crash_keys_chromeos_unittest.cc" ]
   }
@@ -287,8 +274,8 @@ source_set("unit_tests") {
   # build returns the crash keys in the unit-test, not the "variations"
   # target. The test verifies the keys in the "variations" target, not the
   # test. As such, it fails in component builds.
-  # TODO(crbug.com/40172607): Enable this unittest for is_fuchsia when crash keys
-  # are supported on Fuchsia.
+  # TODO(crbug.com/40172607): Enable this unittest for is_fuchsia when crash
+  # keys are supported on Fuchsia.
   if (!is_component_build && !is_fuchsia) {
     sources += [ "variations_crash_keys_unittest.cc" ]
   }
@@ -303,8 +290,12 @@ source_set("unit_tests") {
     "//base:build_time",
     "//base/test:test_support",
     "//components/crash/core/common:crash_key",
+    "//components/metrics",
     "//components/prefs:test_support",
     "//components/variations/field_trial_config",
+    "//components/variations/service",
+    "//net:test_support",
+    "//net/traffic_annotation:test_support",
     "//services/network:test_support",
     "//services/network/public/cpp:cpp_base",
     "//testing/gmock",
@@ -317,10 +308,6 @@ source_set("unit_tests") {
   if (use_blink) {
     deps += [ "//third_party/blink/public/common" ]
   }
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 # Convenience testing target
@@ -337,37 +324,48 @@ test("variations_unittests") {
 if (use_fuzzing_engine_with_lpm) {
   fuzzable_proto_library("test_cases_proto") {
     sources = [ "fuzzers/create_trials_from_seed_test_case.proto" ]
-
-    import_dirs = [ "//components/variations/proto" ]
-
     deps = [ "//components/variations/proto" ]
+    proto_in_dir = "//"
   }
+
   fuzzer_test("create_trial_from_study_fuzzer") {
     sources = [ "fuzzers/create_trial_from_study_fuzzer.cc" ]
     deps = [
       ":variations",
       "proto",
+      "proto:proto_fuzzable",
       "//base/test:test_support",
       "//third_party/libprotobuf-mutator",
     ]
+
+    # TODO(crbug.com/505034799): Migrate to FUZZ_TEST.
+    is_fuzztest_compatible = false
   }
+
   fuzzer_test("create_trials_from_seed_fuzzer") {
     sources = [ "fuzzers/create_trials_from_seed_fuzzer.cc" ]
     deps = [
       ":test_support",
       ":variations",
       "proto",
+      "proto:proto_fuzzable",
       "//base/test:test_support",
       "//third_party/libprotobuf-mutator",
     ]
+
+    # TODO(crbug.com/505034799): Migrate to FUZZ_TEST.
+    is_fuzztest_compatible = false
   }
+
   fuzzer_test("create_trials_from_seed_v2_fuzzer") {
     sources = [ "fuzzers/create_trials_from_seed_fuzzer_v2.cc" ]
     deps = [
       ":test_cases_proto",
+      ":test_cases_proto_fuzzable",
       ":test_support",
       ":variations",
       "proto",
+      "proto:proto_fuzzable",
       "//base/test:test_support",
       "//components/metrics",
       "//components/metrics:test_support",
@@ -375,6 +373,10 @@ if (use_fuzzing_engine_with_lpm) {
       "//components/variations/service",
       "//third_party/libprotobuf-mutator",
     ]
+    if (is_android) {
+      # Provides org.chromium.components.metrics.LowEntropySource.
+      deps += [ "//components/metrics:metrics_java" ]
+    }
     seed_corpus = "fuzzers/testcases/create_trials_from_seed/"
   }
 }

@@ -12,7 +12,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_base.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -222,7 +222,7 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
           "various Apps on ChromeOS devices only. The apps platform includes, "
           "but is not limited to, progressive web apps (PWA), Chrome apps, and "
           "apps from the various VMs / GuestOS's: Android (ARC++), Linux "
-          "(Crostini), Windows (Parallels), and Steam (Borealis). Usage "
+          "(Crostini), and Steam (Borealis). Usage "
           "statistics are tied to a pseudonymous machine identifier and not to "
           "your email address."
         trigger:

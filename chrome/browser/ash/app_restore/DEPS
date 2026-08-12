@@ -20,7 +20,6 @@ include_rules = [
   "+chrome/browser/ash/profiles",
   "+chrome/browser/ash/system_web_apps",
   "+chrome/browser/first_run",
-  "+chrome/browser/lifetime",
   "+chrome/browser/notifications",
   "+chrome/browser/policy",
   "+chrome/browser/prefs",
@@ -38,9 +37,6 @@ include_rules = [
   "+chrome/common/buildflags.h",
   "+chrome/common/chrome_features.h",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
-  "+chrome/common/webui_url_constants.h",
-  "+chrome/grit",
 ]
 
 specific_include_rules = {
@@ -52,20 +48,19 @@ specific_include_rules = {
   # Handles web browser restoring so depending on //chrome.
   "browser_restore_observer\\.cc": [
     "+chrome/browser/custom_handlers/protocol_handler_registry_factory.h",
-    "+chrome/browser/ui/browser.h",
-    "+chrome/browser/ui/browser_navigator.h",
-    "+chrome/browser/ui/browser_navigator_params.h",
+    "+chrome/browser/ui/browser_window/public/browser_window_interface.h",
+    "+chrome/browser/ui/browser_window/public/create_browser_window.h",
+    "+chrome/browser/ui/navigator/browser_navigator.h",
+    "+chrome/browser/ui/navigator/browser_navigator_params.h",
     "+chrome/browser/ui/tabs/tab_enums.h",
   ],
 
   ".*test\\.cc": [
     "+chrome/browser/browser_process.h",
     "+chrome/browser/ui/browser.h",
-    "+chrome/browser/ui/browser_finder.h",
     "+chrome/browser/ui/browser_tabstrip.h",
     "+chrome/browser/ui/browser_window.h",
     "+chrome/browser/ui/browser_window/public",
-    "+chrome/browser/ui/settings_window_manager_chromeos.h",
     "+chrome/browser/ui/web_applications/test",
     "+chrome/browser/web_applications/test",
     "+chrome/test/base",

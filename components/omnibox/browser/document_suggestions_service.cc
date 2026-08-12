@@ -47,14 +47,14 @@ constexpr int chromeOmniboxClientId = 6;
 //       }
 //     }
 std::string BuildDocumentSuggestionRequest(const std::u16string& query) {
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set("query", base::Value(query));
   // The API supports pagination. We're always concerned with the first N
   // results on the first page.
   root.Set("start", base::Value(0));
   root.Set("pageSize", base::Value(10));
 
-  base::Value::Dict request_options;
+  base::DictValue request_options;
   request_options.Set("searchApplicationId",
                       base::Value("searchapplications/chrome"));
   // While the searchApplicationId is a specific config being used by a client
@@ -181,7 +181,8 @@ signin::Tribool DocumentSuggestionsService::IsAccountWorkspaceManaged() {
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
   const auto& account_info =
       identity_manager_->FindExtendedAccountInfoByAccountId(account_id);
-  return account_info.capabilities.is_subject_to_enterprise_features();
+  return account_info.GetAccountCapabilities()
+      .is_subject_to_enterprise_features();
 }
 
 void DocumentSuggestionsService::AccessTokenAvailable(
@@ -240,7 +241,7 @@ void DocumentSuggestionsService::OnPrimaryAccountChanged(
 void DocumentSuggestionsService::OnExtendedAccountInfoUpdated(
     const AccountInfo& account_info) {
   account_is_workspace_managed_ =
-      account_info.capabilities.is_subject_to_enterprise_features();
+      account_info.GetAccountCapabilities().is_subject_to_enterprise_features();
 }
 
 void DocumentSuggestionsService::OnIdentityManagerShutdown(

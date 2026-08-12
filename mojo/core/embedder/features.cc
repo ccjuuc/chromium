@@ -9,24 +9,23 @@
 namespace mojo {
 namespace core {
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kMojoUseEventFd, base::FEATURE_ENABLED_BY_DEFAULT);
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 BASE_FEATURE(kMojoUseEventFd, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 const base::FeatureParam<int> kMojoUseEventFdPages{&kMojoUseEventFd,
                                                    "MojoUseEventFdPages", 4};
+const char kSuppressEventfdUpgradeForWebview[] =
+    "suppress-eventfd-upgrade-for-webview";
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_ANDROID)
 
-BASE_FEATURE(kMojoInlineMessagePayloads, base::FEATURE_DISABLED_BY_DEFAULT);
-
-#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-#if BUILDFLAG(IS_CHROMEOS)
-BASE_FEATURE(kMojoIpcz, base::FEATURE_DISABLED_BY_DEFAULT);
-#else
-BASE_FEATURE(kMojoIpcz, base::FEATURE_ENABLED_BY_DEFAULT);
-#endif
-#endif  // BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
-
 BASE_FEATURE(kMojoIpczMemV2, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kMojoFixGeometricBufferGrowth, base::FEATURE_DISABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_WIN)
 // If enabled, then only handles of types Section, File, Directory and

@@ -9,31 +9,31 @@
 #include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/persistence/key_persistence_delegate_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/signals/signals_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/signals/signals_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/enterprise/device_trust/core/attestation/attestation_service.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/signals/signals_service.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "content/public/browser/browser_context.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/browser_attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/device_attester.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/profile_attester.h"
 #include "chrome/browser/enterprise/identifiers/profile_id_service_factory.h"
 #include "chrome/browser/enterprise/signals/signals_aggregator_factory.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/browser/controller/chrome_browser_cloud_management_controller.h"
-#include "components/enterprise/browser/device_trust/device_trust_key_manager.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
+#include "components/enterprise/device_trust/core/attestation/browser_attestation_service.h"
+#include "components/enterprise/device_trust/core/attestation/device_attester.h"
+#include "components/enterprise/device_trust/core/attestation/profile_attester.h"
+#include "components/enterprise/device_trust/core/device_trust_key_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
@@ -42,8 +42,12 @@
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"
 #include "chrome/browser/enterprise/connectors/device_trust/ash/ash_attestation_policy_observer.h"
 #include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/ash_attestation_service_impl.h"
+#include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/flex_attester.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "components/enterprise/device_trust/core/attestation/browser_attestation_service.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
@@ -143,13 +147,23 @@ DeviceTrustServiceFactory::BuildServiceInstanceForBrowserContext(
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
-  std::unique_ptr<AshAttestationServiceImpl> ash_attestation_service =
-      std::make_unique<AshAttestationServiceImpl>(profile);
-  dt_connector_service->AddObserver(
-      std::make_unique<AshAttestationPolicyObserver>(
-          ash_attestation_service->GetWeakPtr()));
-  std::unique_ptr<AttestationService> attestation_service =
-      std::move(ash_attestation_service);
+  std::unique_ptr<AttestationService> attestation_service;
+  if (ash::switches::IsRevenBranding()) {
+    std::vector<std::unique_ptr<Attester>> attesters;
+    attesters.push_back(std::make_unique<FlexAttester>(profile));
+    attestation_service = std::make_unique<BrowserAttestationService>(
+        std::move(attesters),
+        ash::InstallAttributes::Get()->IsEnterpriseManaged()
+            ? ENTERPRISE_MACHINE
+            : DEVICE_TRUST_CONNECTOR);
+  } else {
+    std::unique_ptr<AshAttestationServiceImpl> ash_attestation_service =
+        std::make_unique<AshAttestationServiceImpl>(profile);
+    dt_connector_service->AddObserver(
+        std::make_unique<AshAttestationPolicyObserver>(
+            ash_attestation_service->GetWeakPtr()));
+    attestation_service = std::move(ash_attestation_service);
+  }
 #else
   DeviceTrustKeyManager* key_manager = nullptr;
   policy::CloudPolicyStore* browser_cloud_policy_store = nullptr;
@@ -181,7 +195,7 @@ DeviceTrustServiceFactory::BuildServiceInstanceForBrowserContext(
       GetUserCloudPolicyStore(profile)));
 
   auto attestation_service =
-      std::make_unique<BrowserAttestationService>(std::move(attesters));
+      std::make_unique<BrowserAttestationService>(std::move(attesters), CBCM);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   auto signals_service = CreateSignalsService(profile);

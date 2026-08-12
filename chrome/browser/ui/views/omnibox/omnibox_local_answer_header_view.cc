@@ -11,8 +11,8 @@
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
-#include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -46,7 +46,9 @@ OmniboxLocalAnswerHeaderView::OmniboxLocalAnswerHeaderView() {
 void OmniboxLocalAnswerHeaderView::OnThemeChanged() {
   views::View::OnThemeChanged();
   icon_->SetImage(ui::ImageModel::FromVectorIcon(
-      omnibox::kSummarizeAutoIcon, kColorOmniboxResultsIcon, kIconSize));
+      features::IsRoundedIconsEnabled() ? omnibox::kSummarizeAutoIcon
+                                        : omnibox::kSummarizeAutoOldIcon,
+      kColorOmniboxResultsIcon, kIconSize));
   text_->SetEnabledColor(
       GetColorProvider()->GetColor(kColorOmniboxResultsTextDimmed));
 }

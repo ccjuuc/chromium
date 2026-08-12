@@ -102,13 +102,13 @@ export class DemoPreferencesScreen extends DemoPreferencesScreenBase {
     };
   }
 
-  languages: OobeTypes.LanguageDsc[];
-  countries: OobeTypes.DemoCountryDsc[];
-  private isCountrySelected: boolean;
-  private userCanContinue: boolean;
-  retailerNameInput: string;
-  storeNumberInput: string;
-  private storeNumberInputInvalid: boolean;
+  declare languages: OobeTypes.LanguageDsc[];
+  declare countries: OobeTypes.DemoCountryDsc[];
+  declare private isCountrySelected: boolean;
+  declare private userCanContinue: boolean;
+  declare retailerNameInput: string;
+  declare storeNumberInput: string;
+  declare private storeNumberInputInvalid: boolean;
   private configurationApplied: boolean;
   private countryNotSelectedId: string;
 
@@ -215,7 +215,7 @@ export class DemoPreferencesScreen extends DemoPreferencesScreenBase {
   private userCanContinue_(
       retailerNameInput: string, storeNumberInput: string,
       isCountrySelected: boolean): boolean {
-    return !!retailerNameInput && !!isCountrySelected && !!storeNumberInput &&
+    return !!retailerNameInput && isCountrySelected && !!storeNumberInput &&
         isCountrySelected &&
         storeNumberInput.length <= STORE_NUMBER_INPUT_MAX_LENGTH &&
         retailerNameInput.length <= RETAILER_NAME_INPUT_MAX_LENGTH &&

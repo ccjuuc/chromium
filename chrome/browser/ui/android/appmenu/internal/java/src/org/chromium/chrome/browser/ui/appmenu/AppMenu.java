@@ -4,10 +4,9 @@
 
 package org.chromium.chrome.browser.ui.appmenu;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.animation.Animator;
 import android.animation.AnimatorSet;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
@@ -35,6 +34,7 @@ import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.Callback;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.SysUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
@@ -52,11 +52,10 @@ import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightParams;
 import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightShape;
 import org.chromium.ui.UiUtils;
-import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.hierarchicalmenu.FlyoutController;
 import org.chromium.ui.hierarchicalmenu.FlyoutController.FlyoutHandler;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
-import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+import org.chromium.ui.interpolators.Interpolators;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.FlyoutPopupSpecCalculator;
 import org.chromium.ui.widget.RectProvider;
@@ -243,6 +242,7 @@ class AppMenu implements OnKeyListener {
     }
 
     private static final float LAST_ITEM_SHOW_FRACTION = 0.5f;
+    private static final int DRILLDOWN_HEIGHT_UPDATE_DURATION_IN_MS = 300;
 
     /** A means of reporting an exception/stack without crashing. */
     private static @MonotonicNonNull Callback<Throwable> sExceptionReporter;
@@ -253,6 +253,7 @@ class AppMenu implements OnKeyListener {
     private final int[] mTempLocation;
     private final AppMenuVisibilityDelegate mVisibilityDelegate;
     private final boolean mDisableVerticalScrollbar;
+    private final boolean mPositionBelowAnchor;
 
     private @Nullable Context mContext;
     private @Nullable ListView mListView;
@@ -265,7 +266,8 @@ class AppMenu implements OnKeyListener {
     private boolean mSelectedItemBeforeDismiss;
     private InitialSizingHelper mInitialSizingHelper;
     private @Nullable MenuSpec mMenuSpec;
-    private final HierarchicalMenuController mHierarchicalMenuController;
+    private final HierarchicalMenuController<AppMenuPopup> mHierarchicalMenuController;
+    private @Nullable ValueAnimator mHeightAnimator;
 
     /**
      * Creates and sets up the App Menu.
@@ -276,7 +278,7 @@ class AppMenu implements OnKeyListener {
     AppMenu(
             AppMenuVisibilityDelegate visibilityDelegate,
             Resources res,
-            HierarchicalMenuController hierarchicalMenuController,
+            HierarchicalMenuController<AppMenuPopup> hierarchicalMenuController,
             boolean disableVerticalScrollbar) {
         mVisibilityDelegate = visibilityDelegate;
         mDisableVerticalScrollbar = disableVerticalScrollbar;
@@ -289,6 +291,7 @@ class AppMenu implements OnKeyListener {
 
         mTempLocation = new int[2];
         mHierarchicalMenuController = hierarchicalMenuController;
+        mPositionBelowAnchor = DeviceInfo.isDesktop();
     }
 
     /**
@@ -324,7 +327,8 @@ class AppMenu implements OnKeyListener {
             boolean isMenuIconAtStart,
             @ControlsPosition int controlsPosition,
             boolean addTopPaddingBeforeFirstRow,
-            FlyoutHandler flyoutHandler) {
+            boolean isFromBottomBar,
+            FlyoutHandler<AppMenuPopup> flyoutHandler) {
         mContext = context;
         PopupWindow popup = new PopupWindow(context);
         popup.setFocusable(true);
@@ -341,6 +345,7 @@ class AppMenu implements OnKeyListener {
                     }
 
                     if (mMenuItemEnterAnimator != null) mMenuItemEnterAnimator.cancel();
+                    if (mHeightAnimator != null) mHeightAnimator.cancel();
 
                     mVisibilityDelegate.appMenuDismissed();
                     mVisibilityDelegate.onMenuVisibilityChanged(false);
@@ -354,6 +359,7 @@ class AppMenu implements OnKeyListener {
                     mListView = null;
                     mFooterView = null;
                     mMenuItemEnterAnimator = null;
+                    mHeightAnimator = null;
                     mMenuSpec = null;
                 });
 
@@ -373,9 +379,9 @@ class AppMenu implements OnKeyListener {
             popup.setAnimationStyle(
                     isMenuIconAtStart
                             ? R.style.StartIconMenuAnim
-                            : (controlsPosition == ControlsPosition.TOP
-                                    ? R.style.EndIconMenuAnim
-                                    : R.style.EndIconMenuAnimBottom));
+                            : (isFromBottomBar || controlsPosition == ControlsPosition.BOTTOM
+                                    ? R.style.EndIconMenuAnimBottom
+                                    : R.style.EndIconMenuAnim));
         }
 
         // Turn off window animations for low end devices.
@@ -385,6 +391,13 @@ class AppMenu implements OnKeyListener {
         mIsByPermanentButton = isByPermanentButton;
 
         View contentView = createAppMenuContentView(context, addTopPaddingBeforeFirstRow);
+        mListView = contentView.findViewById(R.id.app_menu_list);
+
+        if (mDisableVerticalScrollbar) {
+            // TODO(crbug.com/465107697) Move code to xml file once the feature is launched.
+            // Cleanup AppMenuDelegate too.
+            mListView.setVerticalScrollBarEnabled(false);
+        }
 
         if (SysUtils.isLowEndDevice()) {
             var sharedDrawable = AppCompatResources.getDrawable(context, R.drawable.popup_bg_8dp);
@@ -399,12 +412,18 @@ class AppMenu implements OnKeyListener {
         Rect bgPadding = new Rect();
         contentView.getBackground().getPadding(bgPadding);
 
-        int menuWidth;
-        if (DeviceFormFactor.isNonMultiDisplayContextOnTablet(context)) {
-            menuWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width_lff);
-        } else {
-            menuWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width);
-        }
+        assert mAdapter != null;
+        int itemWidth = UiUtils.computeListAdapterContentDimensions(mAdapter, mListView)[0];
+        int contentWidth = itemWidth + bgPadding.left + bgPadding.right;
+        int minWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width_min);
+        int menuMaxWidth = context.getResources().getDimensionPixelSize(R.dimen.menu_width_max);
+        int margin = context.getResources().getDimensionPixelSize(R.dimen.menu_horizontal_margin);
+        int windowSpaceWidth = visibleDisplayFrame.width() - 2 * margin;
+        int maxWidth = Math.min(menuMaxWidth, windowSpaceWidth);
+        // We deliberately don't use Math.clamp because maxWidth might end up being smaller than
+        // minWidth because of a very narrow window.
+        int menuWidth = Math.min(Math.max(contentWidth, minWidth), maxWidth);
+
         int popupWidth = menuWidth + bgPadding.left + bgPadding.right;
 
         popup.setWidth(popupWidth);
@@ -417,12 +436,16 @@ class AppMenu implements OnKeyListener {
             padding.bottom = originalPadding.bottom;
         }
 
-        mListView = contentView.findViewById(R.id.app_menu_list);
-        if (mDisableVerticalScrollbar) {
-            // TODO(crbug.com/465107697) Move code to xml file once the feature is launched.
-            // Cleanup AppMenuDelegate too.
-            mListView.setVerticalScrollBarEnabled(false);
+        View innerContainer = contentView.findViewById(R.id.app_menu_content_container);
+        if (footer != null) {
+            innerContainer.setPadding(
+                    innerContainer.getPaddingLeft(),
+                    innerContainer.getPaddingTop(),
+                    innerContainer.getPaddingRight(),
+                    0);
         }
+        padding.top += innerContainer.getPaddingTop();
+        padding.bottom += innerContainer.getPaddingBottom();
 
         int footerHeight = attachFooter(footer, (ViewGroup) contentView, menuWidth);
         int headerHeight = attachHeader(header, menuWidth);
@@ -447,7 +470,7 @@ class AppMenu implements OnKeyListener {
         }
 
         // Set the adapter after the header is added to avoid crashes on JellyBean.
-        // See crbug.com/761726.
+        // See crbug.com/41342640.
         assert mAdapter != null;
         mListView.setAdapter(mAdapter);
 
@@ -471,25 +494,36 @@ class AppMenu implements OnKeyListener {
                         anchorView,
                         anchorViewOffset);
 
-        popup.setHeight(calculateMenuHeight());
+        int popupHeight = calculateMenuHeight();
+        popup.setHeight(popupHeight);
 
         int[] popupPosition =
                 getPopupPosition(
                         mTempLocation,
                         mIsByPermanentButton,
+                        isFromBottomBar,
                         mNegativeSoftwareVerticalOffset,
                         mCurrentScreenRotation,
                         visibleDisplayFrame,
                         padding,
                         anchorView,
                         popupWidth,
-                        anchorView.getRootView().getLayoutDirection());
+                        popupHeight,
+                        anchorView.getRootView().getLayoutDirection(),
+                        mPositionBelowAnchor);
         popup.setContentView(contentView);
 
         mHierarchicalMenuController.setupFlyoutController(
                 /* flyoutHandler= */ flyoutHandler,
                 new AppMenuPopup(popup),
+                (listener) -> {
+                    assert mListView != null;
+                    mListView.setOnScrollChangeListener(listener);
+                },
                 /* drillDownOverrideValue= */ null);
+
+        mHierarchicalMenuController.setupBackPressBehaviorForPopupWindow(
+                contentView, this::dismiss);
 
         showPopup(anchorView, popupPosition);
 
@@ -521,8 +555,13 @@ class AppMenu implements OnKeyListener {
                                 int oldTop,
                                 int oldRight,
                                 int oldBottom) {
-                            assumeNonNull(mListView);
-                            mListView.removeOnLayoutChangeListener(this);
+                            v.removeOnLayoutChangeListener(this);
+
+                            // If a view layout pass was not completed before the popup dismissal,
+                            // this listener may trigger after mListView is set to null.
+                            // If this is the case, since the popup is already dismissed, we won't
+                            // need to run the menu item enter animations.
+                            if (mListView == null) return;
                             runMenuItemEnterAnimations();
                         }
                     });
@@ -535,12 +574,14 @@ class AppMenu implements OnKeyListener {
      *
      * @param adapter The {@link ListAdapter} containing the items to display in the new flyout.
      * @param view The menu item {@link View} that is triggering this flyout (used as the anchor).
-     * @param item The {@link ListItem} model associated with the anchor {@code view}, used for
-     *     tracking.
      * @param dismissRunnable The runnable to run after the window is dismissed.
+     * @param scrollListener The scroll listener to attach to the flyout popup.
      */
     public AppMenuPopup createAndShowFlyoutPopup(
-            ListAdapter adapter, View view, ListItem item, Runnable dismissRunnable) {
+            ListAdapter adapter,
+            View view,
+            Runnable dismissRunnable,
+            View.OnScrollChangeListener scrollListener) {
         assert mContext != null;
         View contentView =
                 createAppMenuContentView(mContext, /* addTopPaddingBeforeFirstRow= */ true);
@@ -548,6 +589,7 @@ class AppMenu implements OnKeyListener {
         ListView listView = contentView.findViewById(R.id.app_menu_list);
         listView.setAdapter(adapter);
         listView.setItemsCanFocus(true);
+        listView.setOnScrollChangeListener(scrollListener);
 
         final int lateralPadding = contentView.getPaddingLeft() + contentView.getPaddingRight();
         int maxWidth =
@@ -573,7 +615,11 @@ class AppMenu implements OnKeyListener {
                         .setTouchModal(false)
                         .setAnimateFromAnchor(false)
                         .setAnimationStyle(R.style.PopupWindowAnimFade)
-                        .setSpecCalculator(new FlyoutPopupSpecCalculator())
+                        .setSpecCalculator(
+                                new FlyoutPopupSpecCalculator(
+                                        contentView
+                                                .findViewById(R.id.app_menu_content_container)
+                                                .getPaddingTop()))
                         .setWindowLayoutType(WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL)
                         .addOnDismissListener(
                                 () -> {
@@ -603,13 +649,16 @@ class AppMenu implements OnKeyListener {
     static int[] getPopupPosition(
             int[] tempLocation,
             boolean isByPermanentButton,
+            boolean isFromBottomBar,
             int negativeSoftwareVerticalOffset,
             int screenRotation,
             Rect appRect,
             Rect padding,
             View anchorView,
             int popupWidth,
-            int viewLayoutDirection) {
+            int popupHeight,
+            int viewLayoutDirection,
+            boolean positionBelowAnchor) {
         anchorView.getLocationInWindow(tempLocation);
         int anchorViewX = tempLocation[0];
         int anchorViewY = tempLocation[1];
@@ -637,17 +686,36 @@ class AppMenu implements OnKeyListener {
             // The menu is displayed above the anchored view, so shift the menu up by the bottom
             // padding of the background.
             offsets[1] = -padding.bottom;
+            int xPos = anchorViewX + offsets[0];
+            int yPos = anchorViewY + offsets[1];
+            return new int[] {xPos, yPos};
+        } else if (isFromBottomBar) {
+            int margin =
+                    anchorView
+                            .getContext()
+                            .getResources()
+                            .getDimensionPixelSize(R.dimen.bottom_bar_app_menu_lateral_margin);
+            // Adjust xPos by lateral padding so the visible menu boundary aligns with the margin.
+            int xPos =
+                    (viewLayoutDirection == View.LAYOUT_DIRECTION_RTL)
+                            ? appRect.left + margin - padding.left
+                            : appRect.right - margin - popupWidth + padding.right;
+            // Shift yPos down by bottom padding to align the visible menu with the anchor view.
+            int yPos = anchorViewY - popupHeight + padding.bottom;
+            return new int[] {xPos, yPos};
         } else {
-            offsets[1] = -negativeSoftwareVerticalOffset;
+            if (positionBelowAnchor) {
+                offsets[1] = anchorView.getHeight() - padding.top;
+            } else {
+                offsets[1] = -negativeSoftwareVerticalOffset;
+            }
             if (viewLayoutDirection != View.LAYOUT_DIRECTION_RTL) {
                 offsets[0] = anchorView.getWidth() - popupWidth;
             }
+            int xPos = anchorViewX + offsets[0];
+            int yPos = anchorViewY + offsets[1];
+            return new int[] {xPos, yPos};
         }
-
-        int xPos = anchorViewX + offsets[0];
-        int yPos = anchorViewY + offsets[1];
-        int[] position = {xPos, yPos};
-        return position;
     }
 
     /** Marks whether an item was selected prior to dismissal. */
@@ -658,20 +726,34 @@ class AppMenu implements OnKeyListener {
     @Override
     public boolean onKey(View v, int keyCode, KeyEvent event) {
         if (mListView == null) return false;
-        if (event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                event.startTracking();
-                v.getKeyDispatcherState().startTracking(event, this);
-                return true;
-            } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                v.getKeyDispatcherState().handleUpEvent(event);
-                if (event.isTracking() && !event.isCanceled()) {
-                    dismiss();
-                    return true;
-                }
-            }
+        if (event.getKeyCode() != KeyEvent.KEYCODE_MENU
+                && event.getKeyCode() != KeyEvent.KEYCODE_BACK) {
+            return false;
         }
-        return false;
+
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            event.startTracking();
+            v.getKeyDispatcherState().startTracking(event, this);
+            return true;
+        }
+
+        if (event.getAction() != KeyEvent.ACTION_UP) {
+            return false;
+        }
+
+        v.getKeyDispatcherState().handleUpEvent(event);
+
+        // TODO(crbug.com/530498012): Investigate if {@code isCanceled()} is really necessary.
+        if (!event.isTracking() || event.isCanceled()) {
+            return false;
+        }
+
+        if (event.getKeyCode() == KeyEvent.KEYCODE_MENU
+                || !mHierarchicalMenuController.handleBackPress()) {
+            dismiss();
+        }
+
+        return true;
     }
 
     /**
@@ -721,11 +803,30 @@ class AppMenu implements OnKeyListener {
         return mListView;
     }
 
-    /** Recalculates and updates the height of the popup window while it is showing. */
-    public void updateMenuHeight() {
+    /**
+     * Recalculates and updates the height of the popup window while it is showing with an
+     * animation.
+     */
+    public void updateMenuHeightWithAnimation() {
+        if (mHeightAnimator != null && mHeightAnimator.isRunning()) {
+            mHeightAnimator.cancel();
+        }
+
         PopupWindow mainPopup = getPopup();
         assert mainPopup != null && mainPopup.isShowing();
-        mainPopup.update(mainPopup.getWidth(), calculateMenuHeight());
+
+        mHeightAnimator = ValueAnimator.ofInt(mainPopup.getHeight(), calculateMenuHeight());
+        mHeightAnimator.setDuration(DRILLDOWN_HEIGHT_UPDATE_DURATION_IN_MS);
+        mHeightAnimator.setInterpolator(Interpolators.STANDARD_INTERPOLATOR);
+        mHeightAnimator.addUpdateListener(
+                new ValueAnimator.AnimatorUpdateListener() {
+                    @Override
+                    public void onAnimationUpdate(ValueAnimator animation) {
+                        mainPopup.update(mainPopup.getWidth(), (int) animation.getAnimatedValue());
+                    }
+                });
+
+        mHeightAnimator.start();
     }
 
     private int calculateMenuHeight() {
@@ -735,7 +836,10 @@ class AppMenu implements OnKeyListener {
             return 0;
         }
 
-        int anchorViewImpactHeight = mIsByPermanentButton ? mMenuSpec.anchorView.getHeight() : 0;
+        int anchorViewImpactHeight =
+                (mIsByPermanentButton || mPositionBelowAnchor)
+                        ? mMenuSpec.anchorView.getHeight()
+                        : 0;
 
         int availableScreenSpace =
                 mMenuSpec.visibleDisplayFrame.height()
@@ -860,11 +964,15 @@ class AppMenu implements OnKeyListener {
     private View createAppMenuContentView(Context context, boolean addTopPaddingBeforeFirstRow) {
         ViewGroup contentView =
                 (ViewGroup) LayoutInflater.from(context).inflate(R.layout.app_menu_layout, null);
-        if (addTopPaddingBeforeFirstRow) {
-            contentView.setBackgroundResource(R.drawable.default_popup_menu_bg);
-        } else {
-            contentView.setBackgroundResource(R.drawable.app_menu_bottom_padding_bg);
-        }
+
+        ViewGroup innerContainer = contentView.findViewById(R.id.app_menu_content_container);
+
+        // Ensure the inner shape has standard padding, and conditionally add visual menu top
+        // padding.
+        int padding = context.getResources().getDimensionPixelSize(R.dimen.app_menu_padding);
+        int topPadding = addTopPaddingBeforeFirstRow ? padding : 0;
+        innerContainer.setPadding(0, topPadding, 0, padding);
+
         return contentView;
     }
 
@@ -876,8 +984,10 @@ class AppMenu implements OnKeyListener {
 
         mFooterView = footer;
         mFooterView.setId(R.id.app_menu_footer);
-        contentView.addView(
-                footer, contentView.indexOfChild(contentView.findViewById(R.id.app_menu_list)) + 1);
+        ViewGroup innerContainer = contentView.findViewById(R.id.app_menu_content_container);
+        innerContainer.addView(
+                footer,
+                innerContainer.indexOfChild(innerContainer.findViewById(R.id.app_menu_list)) + 1);
 
         int widthMeasureSpec = MeasureSpec.makeMeasureSpec(menuWidth, MeasureSpec.EXACTLY);
         int heightMeasureSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
@@ -901,6 +1011,7 @@ class AppMenu implements OnKeyListener {
 
     void finishAnimationsForTests() {
         if (mMenuItemEnterAnimator != null) mMenuItemEnterAnimator.end();
+        if (mHeightAnimator != null) mHeightAnimator.end();
     }
 
     private void recordTimeToTakeActionHistogram() {
@@ -931,7 +1042,7 @@ class AppMenu implements OnKeyListener {
         } catch (WindowManager.BadTokenException e) {
             // Intentionally ignore BadTokenException. This can happen in a real
             // edge case where parent.getWindowToken is not valid. See
-            // http://crbug.com/826052 & https://crbug.com/1105831.
+            // http://crbug.com/41379062 & https://crbug.com/40706027.
             return;
         }
     }

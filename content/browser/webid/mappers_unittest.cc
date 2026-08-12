@@ -11,14 +11,15 @@
 #include "base/test/scoped_feature_list.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
-
-using Field = content::IdentityRequestDialogDisclosureField;
-using LoginState = content::IdentityRequestAccount::LoginState;
-using ::testing::ElementsAre;
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace content {
 namespace webid {
+
+using ::testing::ElementsAre;
+using Field = IdentityRequestDialogDisclosureField;
+using IdentityRequestAccountPtr = scoped_refptr<IdentityRequestAccount>;
+using LoginState = IdentityRequestAccount::LoginState;
 
 namespace {
 IdentityRequestAccountPtr CreateEmptyAccount() {
@@ -27,7 +28,8 @@ IdentityRequestAccountPtr CreateEmptyAccount() {
       /*id=*/"",
       /*display_identifier=*/"", /*display_name=*/"", /*email=*/"",
       /*name=*/"", /*given_name=*/"", /*picture=*/GURL(), /*phone=*/"",
-      /*username=*/"", /*login_hints=*/empty, /*domain_hints=*/empty,
+      /*username=*/"", /*potentially_approved_site_hashes=*/empty,
+      /*login_hints=*/empty, /*domain_hints=*/empty,
       /*labels=*/empty);
 }
 }  // namespace
@@ -44,12 +46,12 @@ TEST(FedCmMappersTest, GetDisclosureFieldsEmpty) {
 
 TEST(FedCmMappersTest, GetDisclosureFields) {
   // When a superset of the supported fields is passed, we should mediate the
-  // supported fields.
-  std::vector<std::string> fields = {"name", "email", "picture", "locale",
-                                     "tel"};
+  // supported fields in enum order.
+  std::vector<std::string> fields = {"name",   "email", "picture",
+                                     "locale", "tel",   "username"};
   EXPECT_THAT(GetDisclosureFields(std::make_optional(fields)),
-              ElementsAre(Field::kName, Field::kEmail, Field::kPicture,
-                          Field::kPhoneNumber));
+              ElementsAre(Field::kName, Field::kEmail, Field::kUsername,
+                          Field::kPhoneNumber, Field::kPicture));
 }
 
 TEST(FedCmMappersTest, GetDisclosureFieldsSubsetOfDefault) {
@@ -57,6 +59,25 @@ TEST(FedCmMappersTest, GetDisclosureFieldsSubsetOfDefault) {
   std::vector<std::string> fields = {"name", "locale"};
   EXPECT_THAT(GetDisclosureFields(std::make_optional(fields)),
               ElementsAre(Field::kName));
+}
+
+TEST(FedCmMappersTest, GetDisclosureFieldsDuplicates) {
+  // Duplicate fields should be deduplicated.
+  std::vector<std::string> fields = {"name", "email", "name", "picture",
+                                     "email"};
+  EXPECT_THAT(GetDisclosureFields(std::make_optional(fields)),
+              ElementsAre(Field::kName, Field::kEmail, Field::kPicture));
+}
+
+TEST(FedCmMappersTest, GetDisclosureFieldsOrdering) {
+  // Passing fields in arbitrary/unordered sequence should produce output
+  // strictly ordered by the enum value definition: kName, kEmail, kUsername,
+  // kPhoneNumber, kPicture.
+  std::vector<std::string> fields = {"picture", "tel", "username", "email",
+                                     "name"};
+  EXPECT_THAT(GetDisclosureFields(std::make_optional(fields)),
+              ElementsAre(Field::kName, Field::kEmail, Field::kUsername,
+                          Field::kPhoneNumber, Field::kPicture));
 }
 
 TEST(FedCmMappersTest, ComputeAccountFields) {

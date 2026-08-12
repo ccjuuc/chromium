@@ -23,7 +23,7 @@ namespace content {
 // go/preloading-dashboard-updates to update the mapping reflected in dashboard,
 // or if you are not a Googler, please file an FYI bug on https://crbug.new with
 // component Internals>Preload.
-// LINT.IfChange
+// LINT.IfChange(PrefetchStatus)
 enum class PrefetchStatus {
   // Deprecated. Replaced by `kPrefetchResponseUsed`.
   //
@@ -238,8 +238,7 @@ enum class PrefetchStatus {
   kPrefetchIneligibleRedirectToServiceWorker = 53,
 
   // The url was not eligible to be prefetched because there was a registered
-  // service worker with no fetch handler (when
-  // `kPrefetchServiceWorkerNoFetchHandlerFix` is enabled).
+  // service worker with no fetch handler.
   // This case was previously counted as
   // `kPrefetchIneligibleUserHasServiceWorker`.
   // Even after the initial ServiceWorker support (https://crbug.com/40947546),
@@ -249,10 +248,18 @@ enum class PrefetchStatus {
   // The prefetch canceled by clearing cache from browsing data removal.
   kPrefetchEvictedAfterBrowsingDataRemoved = 55,
 
+  // The prefetch canceled to prevent network congestion with user-initiated
+  // navigation.
+  kPrefetchCancelledOnUserNavigation = 56,
+
+  // The URL is not allowed by connection allowlist.
+  // See https://github.com/WICG/connection-allowlists.
+  kPrefetchIneligibleBlockedByConnectionAllowlist = 57,
+
   // The max value of the PrefetchStatus. Update this when new enums are added.
-  kMaxValue = kPrefetchEvictedAfterBrowsingDataRemoved,
+  kMaxValue = kPrefetchIneligibleBlockedByConnectionAllowlist,
 };
-// LINT.ThenChange(/tools/metrics/histograms/enums.xml)
+// LINT.ThenChange(/tools/metrics/histograms/enums.xml:PrefetchProxyPrefetchStatus)
 
 // Mapping from `PrefetchStatus` to `PreloadingFailureReason`.
 static_assert(

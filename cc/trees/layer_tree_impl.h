@@ -197,12 +197,10 @@ class CC_EXPORT LayerTreeImpl {
 
   OwnedLayerImplList DetachLayers();
   OwnedLayerImplList DetachLayersKeepingRootLayerForTesting();
-
-  void SetPropertyTrees(const PropertyTrees& property_trees,
-                        PropertyTreesChangeState& change_state,
-                        bool preserve_change_tracking);
+  OwnedLayerImplList SwapLayers(OwnedLayerImplList new_layers);
 
   void SetPropertyTrees(PropertyTrees& property_trees,
+                        const ViewportPropertyIds& viewport_property_ids,
                         bool preserve_change_tracking = false);
 
   PropertyTrees* property_trees() {
@@ -256,6 +254,7 @@ class CC_EXPORT LayerTreeImpl {
    private:
     Iterator it_;
   };
+  size_t num_layers() const { return layer_list_.size(); }
   using const_iterator = IteratorAdapter<OwnedLayerImplList::const_iterator>;
   using const_reverse_iterator =
       IteratorAdapter<OwnedLayerImplList::const_reverse_iterator>;
@@ -385,7 +384,8 @@ class CC_EXPORT LayerTreeImpl {
   void SetPageScaleOnActiveTree(float active_page_scale);
   void PushPageScaleFromMainThread(float page_scale_factor,
                                    float min_page_scale_factor,
-                                   float max_page_scale_factor);
+                                   float max_page_scale_factor,
+                                   bool limits_set = true);
   const LayerSelection& selection() const { return selection_; }
   float current_page_scale_factor() const {
     return page_scale_factor()->Current(IsActiveTree());
@@ -548,13 +548,14 @@ class CC_EXPORT LayerTreeImpl {
 
   void AddLayerShouldPushProperties(LayerImpl* layer);
   void ClearLayersThatShouldPushProperties();
-  const base::flat_set<LayerImpl*>& LayersThatShouldPushProperties() const {
-    return layers_that_should_push_properties_;
+  auto LayersThatShouldPushProperties() const {
+    return layer_list_.LayersThatShouldPushProperties();
   }
 
-  // These should be called by LayerImpl's ctor/dtor.
-  void RegisterLayer(LayerImpl* layer);
-  void UnregisterLayer(LayerImpl* layer);
+  // Reserve memory for the total number of layers that will be added
+  // with AddLayer(). This is only for performance reasons, and has no
+  // functional effect.
+  void ReserveLayers(size_t count);
 
   // Append a layer to the list.
   void AddLayer(std::unique_ptr<LayerImpl> layer);
@@ -606,19 +607,16 @@ class CC_EXPORT LayerTreeImpl {
 
   bool IsUIResourceOpaque(UIResourceId uid) const;
 
-  void RegisterPictureLayerImpl(PictureLayerImpl* layer);
-  void UnregisterPictureLayerImpl(PictureLayerImpl* layer);
-  const std::vector<raw_ptr<PictureLayerImpl, VectorExperimental>>&
-  picture_layers() const {
-    return picture_layers_;
+  auto picture_layers() const { return layer_list_.PictureLayers(); }
+  auto picture_layers_with_paint_worklets() const {
+    return layer_list_.PictureLayersWithWorklets();
   }
 
+  void NotifyLayerHasAnimatedImagesChanged(PictureLayerImpl* layer,
+                                           bool has_animated_images);
+  void AnnotateAnimatedImages(AnimatedImageDriverMap&) const;
   void NotifyLayerHasPaintWorkletsChanged(PictureLayerImpl* layer,
                                           bool has_worklets);
-  const base::flat_set<raw_ptr<PictureLayerImpl, CtnExperimental>>&
-  picture_layers_with_paint_worklets() const {
-    return picture_layers_with_paint_worklets_;
-  }
 
   void RegisterScrollbar(ScrollbarLayerImplBase* scrollbar_layer);
   void UnregisterScrollbar(ScrollbarLayerImplBase* scrollbar_layer);
@@ -826,6 +824,14 @@ class CC_EXPORT LayerTreeImpl {
   // output of the current frame.
   bool HasViewTransitionSaveRequest() const;
 
+  // Returns true if there is a HUD layer and it has animating contents.
+  bool IsAnimatingHUDContents() const;
+
+  void set_is_animating_hud_contents(bool is_animating_hud_contents) {
+    DCHECK(settings().trees_in_viz_in_viz_process);
+    is_animating_hud_contents_ = is_animating_hud_contents;
+  }
+
   // Returns a set of all view transition tokens that are currently in the
   // capture phase.
   base::flat_set<blink::ViewTransitionToken> GetCaptureViewTransitionTokens()
@@ -864,16 +870,18 @@ class CC_EXPORT LayerTreeImpl {
 
    private:
     LayerTreeImpl* const layer_tree_impl_;
-    std::vector<PictureLayerImpl*> layers_needing_update_;
+    std::vector<raw_ptr<PictureLayerImpl>> layers_needing_update_;
   };
 
  protected:
   float ClampPageScaleFactorToLimits(float page_scale_factor) const;
   void PushPageScaleFactorAndLimits(const float* page_scale_factor,
                                     float min_page_scale_factor,
-                                    float max_page_scale_factor);
+                                    float max_page_scale_factor,
+                                    bool limits_set);
   bool SetPageScaleFactorLimits(float min_page_scale_factor,
-                                float max_page_scale_factor);
+                                float max_page_scale_factor,
+                                bool limits_set);
   void DidUpdatePageScale();
   void PushBrowserControls(const float* top_controls_shown_ratio,
                            const float* bottom_controls_shown_ratio);
@@ -910,6 +918,10 @@ class CC_EXPORT LayerTreeImpl {
   LayerSelection selection_;
 
   scoped_refptr<SyncedScale> page_scale_factor_;
+
+  // True if the minimum and maximum page scale factors have been explicitly
+  // set.
+  bool page_scale_factor_limits_set_ = false;
   float min_page_scale_factor_;
   float max_page_scale_factor_;
   float external_page_scale_factor_;
@@ -950,6 +962,15 @@ class CC_EXPORT LayerTreeImpl {
   // frame.
   bool force_send_metadata_request_ : 1 = false;
 
+  // This is only used in TreesInViz.
+  // It is Equivalent to LayerTreeImpl::hud_layer() &&
+  // LayerTreeImpl::hud_layer()->IsAnimatingHUDContents().
+  // It is always false in renderer process, but is wired to viz process
+  // and used to replace the above logic. This is because hud layers aren't
+  // deserialized as HeadsUoDisplayLayerImpl so LayerTreeImpl::hud_layer()
+  // always returns false in viz.
+  bool is_animating_hud_contents_ : 1 = false;
+
   PropertyChangeForcesCommitCriteria property_change_forces_commit_criteria_ =
       PropertyChangeForcesCommitCriteria::kNone;
 
@@ -966,12 +987,7 @@ class CC_EXPORT LayerTreeImpl {
 
   OwnedLayerImplList layer_list_;
   // Maps from layer id to layer.
-  LayerImplMap layer_id_map_;
-
-  // Set of layers that need to push properties.
-  // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of MotionMark).
-  RAW_PTR_EXCLUSION base::flat_set<LayerImpl*>
-      layers_that_should_push_properties_;
+  // LayerImplMap layer_id_map_;
 
   struct ScrollbarLayerIds {
     int horizontal = Layer::INVALID_ID;
@@ -986,14 +1002,6 @@ class CC_EXPORT LayerTreeImpl {
   // scrollbar layer and consumed by PushPropertiesTo() and
   // HandleScrollbarShowRequests().
   base::flat_set<ElementId> show_scrollbar_requests_;
-
-  std::vector<raw_ptr<PictureLayerImpl, VectorExperimental>> picture_layers_;
-
-  // After commit (or impl-side invalidation), the LayerTreeHostImpl must walk
-  // all PictureLayerImpls that have PaintWorklets to ensure they are painted.
-  // To avoid unnecessary walking, we track that set here.
-  base::flat_set<raw_ptr<PictureLayerImpl, CtnExperimental>>
-      picture_layers_with_paint_worklets_;
 
   base::flat_set<viz::SurfaceRange> surface_layer_ranges_;
 

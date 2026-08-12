@@ -8,15 +8,19 @@
 
 #include "base/debug/crash_logging.h"
 #include "cc/paint/paint_flags.h"
-#include "chrome/browser/glic/browser_ui/tab_underline_view_controller.h"
+#include "chrome/browser/glic/browser_ui/tab_underline_controller.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/tabs/tab.h"
+#include "chrome/browser/ui/tabs/tab_style.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/favicon_size.h"
+#include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/view_class_properties.h"
 
 namespace glic {
@@ -35,12 +39,6 @@ constexpr static int kMinUnderlineWidth = kSmallUnderlineWidth - 4;
 // The threshold for tab width at which `kMinUnderlineWidth` should be used.
 constexpr static int kMinimumTabWidthThreshold = 42;
 
-// The height of the underline effect.
-constexpr static int kEffectThickness = 2;
-
-// The radius to use for rounded corners of the underline effect.
-constexpr static float kCornerRadius = kEffectThickness / 2.0f;
-
 }  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TabUnderlineView,
@@ -49,23 +47,25 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(TabUnderlineView,
 TabUnderlineView::Factory* TabUnderlineView::Factory::factory_ = nullptr;
 
 std::unique_ptr<TabUnderlineView> TabUnderlineView::Factory::Create(
-    std::unique_ptr<TabUnderlineViewController> controller,
-    Browser* browser,
+    std::unique_ptr<TabUnderlineController> controller,
+    BrowserWindowInterface* browser_window_interface,
     tabs::TabHandle tab_handle) {
   if (factory_) [[unlikely]] {
-    return factory_->CreateUnderlineView(std::move(controller), browser,
-                                         tab_handle);
+    return factory_->CreateUnderlineView(std::move(controller),
+                                         browser_window_interface, tab_handle);
   }
-  return base::WrapUnique(new TabUnderlineView(std::move(controller), browser,
+  return base::WrapUnique(new TabUnderlineView(std::move(controller),
+                                               browser_window_interface,
                                                tab_handle, /*tester=*/nullptr));
 }
 
 TabUnderlineView::TabUnderlineView(
-    std::unique_ptr<TabUnderlineViewController> controller,
-    Browser* browser,
+    std::unique_ptr<TabUnderlineController> controller,
+    BrowserWindowInterface* browser_window_interface,
     tabs::TabHandle tab_handle,
     std::unique_ptr<Tester> tester)
-    : AnimatedEffectView(browser, std::move(tester)),
+    : AnimatedEffectView(browser_window_interface->GetProfile(),
+                         std::move(tester)),
       controller_(std::move(controller)),
       tab_handle_(tab_handle) {
   SetProperty(views::kElementIdentifierKey, kGlicTabUnderlineElementId);
@@ -77,16 +77,37 @@ TabUnderlineView::TabUnderlineView(
   // `glic_tab_underline_view_` should never receive input events.
   SetCanProcessEventsWithinSubtree(false);
 
+  // Register for active tab changes.
+  active_tab_subscription_ =
+      browser_window_interface->RegisterActiveTabDidChange(base::BindRepeating(
+          &TabUnderlineView::OnActiveTabChanged, base::Unretained(this)));
+
   // Post-initialization updates. Don't do the update in the controller's ctor
   // because at that time TabUnderlineView isn't fully initialized, which
   // can lead to undefined behavior.
-  controller_->Initialize(this, browser);
+  controller_->Initialize(this);
 }
 
 TabUnderlineView::~TabUnderlineView() = default;
 
-tabs::TabInterface* TabUnderlineView::GetTabInterface() {
-  return tab_handle_.Get();
+void TabUnderlineView::Show() {
+  AnimatedEffectView::Show();
+}
+
+void TabUnderlineView::StopShowing() {
+  AnimatedEffectView::StopShowing();
+}
+
+void TabUnderlineView::ResetAnimationCycle() {
+  AnimatedEffectView::ResetAnimationCycle();
+}
+
+void TabUnderlineView::StartRampingDown() {
+  AnimatedEffectView::StartRampingDown();
+}
+
+bool TabUnderlineView::IsShowing() const {
+  return AnimatedEffectView::IsShowing();
 }
 
 bool TabUnderlineView::IsCycleDone(base::TimeTicks timestamp) {
@@ -137,6 +158,12 @@ void TabUnderlineView::PopulateShaderUniforms(
 void TabUnderlineView::OnThemeChanged() {
   View::OnThemeChanged();
   colors_ = GetEffectColors();
+  SchedulePaint();
+}
+
+void TabUnderlineView::AddedToWidget() {
+  View::AddedToWidget();
+  controller_->OnUiReady();
 }
 
 std::vector<SkColor> TabUnderlineView::GetEffectColors() {
@@ -144,10 +171,21 @@ std::vector<SkColor> TabUnderlineView::GetEffectColors() {
   // kGlicParameterizedShader feature values.
   const ui::ColorProvider* color_provider = GetColorProvider();
   std::vector<SkColor> colors;
-  if (color_provider) {
-    colors = {color_provider->GetColor(ui::kColorRefPrimary50),
-              color_provider->GetColor(ui::kColorRefPrimary60),
-              color_provider->GetColor(ui::kColorRefPrimary70)};
+
+  if (color_provider && tab_handle_.Get()) {
+    // Different sets of colors are used for underlines on active vs inactive
+    // tabs if a custom theme is being used.
+    bool is_tab_active = tab_handle_.Get()->IsActivated();
+    colors = {
+        color_provider->GetColor(is_tab_active
+                                     ? kColorGlicActiveTabUnderlineGradient1
+                                     : kColorGlicInactiveTabUnderlineGradient1),
+        color_provider->GetColor(is_tab_active
+                                     ? kColorGlicActiveTabUnderlineGradient2
+                                     : kColorGlicInactiveTabUnderlineGradient2),
+        color_provider->GetColor(
+            is_tab_active ? kColorGlicActiveTabUnderlineGradient3
+                          : kColorGlicInactiveTabUnderlineGradient3)};
   } else {
     // If there is no ColorProvider available, fall back to
     // -gem-sys-color--brand-blue.
@@ -188,24 +226,22 @@ void TabUnderlineView::DrawEffect(gfx::Canvas* canvas,
   int dimension = ComputeDimension();
 
   gfx::Rect effect_bounds;
-
   if (orientation_ == Orientation::kHorizontal) {
     int underline_x = (size().width() - dimension + 1) / 2;
-    gfx::Point origin(underline_x, size().height() - kEffectThickness);
-    gfx::Size size(dimension, kEffectThickness);
-    effect_bounds = gfx::Rect(origin, size);
+    effect_bounds = gfx::Rect(underline_x, size().height() - kEffectThickness,
+                              dimension, kEffectThickness);
   } else {
     // Vertical orientation: Draw on the left.
     int underline_y = (size().height() - dimension + 1) / 2;
-    gfx::Point origin(kEffectThickness, underline_y);
-    gfx::Size size(kEffectThickness, dimension);
-    effect_bounds = gfx::Rect(origin, size);
+    effect_bounds = gfx::Rect(0, underline_y, kEffectThickness, dimension);
   }
 
   cc::PaintFlags new_flags(flags);
+
   const int kNumDefaultColors = 3;
-  // At small sizes, paint the underline as a solid color instead of a gradient.
-  // We also draw a solid color if we've got no shader and fewer than 3 colors.
+  // At small sizes, paint the underline as a solid color instead of a
+  // gradient. We also draw a solid color if we've got no shader and fewer
+  // than 3 colors.
   if (dimension < gfx::kFaviconSize * 2 ||
       (!new_flags.getShader() && colors_.size() < kNumDefaultColors)) {
     new_flags.setShader(nullptr);
@@ -216,6 +252,12 @@ void TabUnderlineView::DrawEffect(gfx::Canvas* canvas,
   }
 
   canvas->DrawRoundRect(gfx::RectF(effect_bounds), kCornerRadius, new_flags);
+}
+
+void TabUnderlineView::OnActiveTabChanged(
+    BrowserWindowInterface* browser_window_interface) {
+  colors_ = GetEffectColors();
+  SchedulePaint();
 }
 
 BEGIN_METADATA(TabUnderlineView)

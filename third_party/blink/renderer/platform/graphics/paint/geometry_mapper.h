@@ -50,6 +50,21 @@ class PLATFORM_EXPORT GeometryMapper {
       const TransformPaintPropertyNode& source,
       const TransformPaintPropertyNode& destination);
 
+  // The function is the same as gfx::Transform SourceToDestinationProjection
+  // but uses an out-param for the transform, and returns a bool indicating
+  // success
+  static bool SourceToDestinationProjection(
+      const TransformPaintPropertyNodeOrAlias& source,
+      const TransformPaintPropertyNodeOrAlias& destination,
+      gfx::Transform& projection) {
+    return SourceToDestinationProjection(source.Unalias(),
+                                         destination.Unalias(), projection);
+  }
+  static bool SourceToDestinationProjection(
+      const TransformPaintPropertyNode& source,
+      const TransformPaintPropertyNode& destination,
+      gfx::Transform& projection);
+
   // Same as SourceToDestinationProjection() except that it maps the rect
   // rather than returning the matrix.
   // |mapping_rect| is both input and output. Its type can be gfx::RectF,
@@ -141,7 +156,7 @@ class PLATFORM_EXPORT GeometryMapper {
       const PropertyTreeStateOrAlias& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior clip = kIgnoreOverlayScrollbarSize,
-      VisualRectFlags flags = kDefaultVisualRectFlags) {
+      VisualRectFlags flags = {}) {
     return LocalToAncestorVisualRect(local_state.Unalias(),
                                      ancestor_state.Unalias(), mapping_rect,
                                      clip, flags);
@@ -151,7 +166,7 @@ class PLATFORM_EXPORT GeometryMapper {
       const PropertyTreeState& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
-      VisualRectFlags flags = kDefaultVisualRectFlags);
+      VisualRectFlags flags = {});
   // Maps |local_state| to the local root's viewport using the GeometryMapper
   // fast path. This stops at the remote boundary; callers must perform any
   // remote-frame mapping (e.g. MapToVisualRectInRemoteRootFrame) to reach the
@@ -160,7 +175,7 @@ class PLATFORM_EXPORT GeometryMapper {
       const PropertyTreeState& local_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
-      VisualRectFlags flags = kDefaultVisualRectFlags);
+      VisualRectFlags flags = {});
 
   static bool MightOverlapForCompositing(const gfx::RectF& rect1,
                                          const PropertyTreeState& state1,
@@ -207,7 +222,7 @@ class PLATFORM_EXPORT GeometryMapper {
       const ClipPaintPropertyNode& ancestor_clip,
       const TransformPaintPropertyNode& ancestor_transform,
       OverlayScrollbarClipBehavior,
-      VisualRectFlags flags = kDefaultVisualRectFlags);
+      VisualRectFlags flags = {});
 
   // The return value has the same meaning as that for
   // LocalToAncestorVisualRect.
@@ -217,7 +232,7 @@ class PLATFORM_EXPORT GeometryMapper {
       const PropertyTreeState& ancestor_state,
       FloatClipRect& mapping_rect,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize,
-      VisualRectFlags flags = kDefaultVisualRectFlags);
+      VisualRectFlags flags = {});
 
   template <ForCompositingOverlap>
   static bool SlowLocalToAncestorVisualRectWithPixelMovingFilters(

@@ -6,7 +6,6 @@
 
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/shell.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/float/float_controller.h"
 #include "ash/wm/float/float_test_api.h"
 #include "ash/wm/window_state.h"
@@ -17,9 +16,9 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_chromeos.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
 #include "chrome/test/base/ash/util/ash_test_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "content/public/test/browser_test.h"
 #include "ui/aura/window.h"
 #include "ui/events/test/event_generator.h"
@@ -51,27 +50,27 @@ using FloatControllerBrowserTest = InProcessBrowserTest;
 // the window to freeze. Regression test for b/278917878.
 IN_PROC_BROWSER_TEST_F(FloatControllerBrowserTest,
                        TuckingBrowserDoesNotFreezeWindow) {
-  ash::test::InstallSystemAppsForTesting(browser()->profile());
+  ash::test::InstallSystemAppsForTesting(browser()->GetProfile());
 
   // Open two SWAs. The bug was a result of the window targeters installed by
   // the window tucker and immersive mode not being reinstalled in the correct
   // order. More details in b/278917878.
-  ash::test::CreateSystemWebApp(browser()->profile(),
+  ash::test::CreateSystemWebApp(browser()->GetProfile(),
                                 ash::SystemWebAppType::FILE_MANAGER);
   aura::Window* browser_window1 =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile()
           ->GetWindow()
           ->GetNativeWindow();
 
-  ash::test::CreateSystemWebApp(browser()->profile(),
+  ash::test::CreateSystemWebApp(browser()->GetProfile(),
                                 ash::SystemWebAppType::SETTINGS);
   aura::Window* browser_window2 =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile()
           ->GetWindow()
           ->GetNativeWindow();
 
-  ASSERT_NE(browser()->window()->GetNativeWindow(), browser_window1);
-  ASSERT_NE(browser()->window()->GetNativeWindow(), browser_window2);
+  ASSERT_NE(browser()->GetWindow()->GetNativeWindow(), browser_window1);
+  ASSERT_NE(browser()->GetWindow()->GetNativeWindow(), browser_window2);
   ASSERT_NE(browser_window1, browser_window2);
 
   auto* float_controller = ash::Shell::Get()->float_controller();

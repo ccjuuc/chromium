@@ -4,19 +4,42 @@
 
 #include "third_party/blink/renderer/core/html/canvas/unique_font_selector.h"
 
+#include "base/feature_list.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
+#include "base/memory_coordinator/traits.h"
+#include "base/memory_coordinator/utils.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/fonts/font_selector.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
+namespace {
+
+constexpr base::MemoryConsumerTraits kUniqueFontSelectorTraits{
+    // Bounded by CanvasFontCache::MaxFonts(), keeping footprint under 10MB.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kSmall,
+    // Iterates hash map and list to erase keys.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Evicted elements can be reconstructed.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Synchronous capacity trimming.
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous,
+    // Re-instantiating a Font from a description needs minimal CPU overhead.
+    base::MemoryConsumerTraits::RecreateMemoryCost::kCheap,
+    // Holds references managed by Blink Oilpan GC.
+    base::MemoryConsumerTraits::ReleaseGCReferences::kYes};
+
+}  // namespace
+
 UniqueFontSelector::UniqueFontSelector(FontSelector* base_selector)
-    : base_selector_(base_selector) {
+    : base_selector_(base_selector),
+      current_max_fonts_(CanvasFontCache::MaxFonts()) {
   if (base_selector_) {
-    memory_pressure_listener_registration_.emplace(
-        FROM_HERE, base::MemoryPressureListenerTag::kUniqueFontSelector, this);
+    memory_consumer_registration_.emplace(
+        "UniqueFontSelector", kUniqueFontSelectorTraits, this,
+        MemoryConsumerRegistration::CheckUnregister::kDisabled);
   }
 }
 
@@ -26,8 +49,9 @@ void UniqueFontSelector::Trace(Visitor* visitor) const {
 }
 
 void UniqueFontSelector::Dispose() {
-  if (memory_pressure_listener_registration_) {
-    memory_pressure_listener_registration_->Dispose();
+  if (memory_consumer_registration_) {
+    memory_consumer_registration_->Dispose();
+    memory_consumer_registration_.reset();
   }
 }
 
@@ -49,22 +73,9 @@ const Font* UniqueFontSelector::FindOrCreateFont(
     add_result.stored_value->value.list_index = lru_list_.begin().GetIndex();
   }
 
-  wtf_size_t max_size = CanvasFontCache::MaxFonts();
-  while (lru_list_.size() > max_size) {
-    auto& value = lru_list_.back();
-    // Allow the cache size to exceed MaxFonts() within the same frame.
-    if (value.generation == frame_generation_) {
-      // However, it should not exceed MaxFonts() * 2.
-      if (!RuntimeEnabledFeatures::CanvasTextTexImage2DFixEnabled() ||
-          lru_list_.size() <= max_size * 2) {
-        break;
-      }
-    }
-    font_cache_.erase(value.description);
-    lru_list_.pop_back();
-  }
+  // We might have exceeded the size limit of the cache.
+  EvictExcessEntries();
 
-  DCHECK_EQ(font_cache_.size(), lru_list_.size());
   return font;
 }
 
@@ -79,12 +90,46 @@ void UniqueFontSelector::RegisterForInvalidationCallbacks(
   }
 }
 
-void UniqueFontSelector::OnMemoryPressure(
-    base::MemoryPressureLevel memory_pressure_level) {
-  if (memory_pressure_level == base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
+void UniqueFontSelector::OnUpdateMemoryLimit() {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    unsigned target_max = static_cast<unsigned>(CanvasFontCache::MaxFonts() *
+                                                memory_limit_ratio());
+    current_max_fonts_ =
+        std::max(static_cast<unsigned>(lru_list_.size()), target_max);
+  }
+}
+
+void UniqueFontSelector::OnReleaseMemory() {
+  if (base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    current_max_fonts_ = static_cast<unsigned>(CanvasFontCache::MaxFonts() *
+                                               memory_limit_ratio());
+    EvictExcessEntries();
+  } else if (memory_limit() <= base::kCriticalMemoryPressureThreshold) {
     font_cache_.clear();
     lru_list_.clear();
   }
+}
+
+unsigned UniqueFontSelector::GetCurrentMaxFonts() const {
+  return current_max_fonts_;
+}
+
+void UniqueFontSelector::EvictExcessEntries() {
+  wtf_size_t max_size = GetCurrentMaxFonts();
+  while (lru_list_.size() > max_size) {
+    auto& value = lru_list_.back();
+    // Allow the cache size to exceed `max_size` within the same frame.
+    if (value.generation == frame_generation_) {
+      // However, it should not exceed `max_size` * 2.
+      if (lru_list_.size() <= max_size * 2) {
+        break;
+      }
+    }
+    font_cache_.erase(value.description);
+    lru_list_.pop_back();
+  }
+
+  DCHECK_EQ(font_cache_.size(), lru_list_.size());
 }
 
 void UniqueFontSelector::CacheValue::Trace(Visitor* visitor) const {

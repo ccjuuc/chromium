@@ -37,6 +37,8 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFacto
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.base.ImmutableWeakReference;
+import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.util.ArrayList;
@@ -98,14 +100,21 @@ public class AppFilterCoordinatorTest {
         ViewGroup activityContentView = getActivity().findViewById(android.R.id.content);
         ScrimManager scrimManager =
                 new ScrimManager(getActivity(), activityContentView, ScrimClient.NONE);
+        InsetObserver insetObserver =
+                new InsetObserver(
+                        new ImmutableWeakReference<>(getActivity().getWindow().getDecorView()),
+                        new ImmutableWeakReference<>(getActivity().getApplicationContext()),
+                        /* enableKeyboardOverlayMode= */ false,
+                        /* enableExtraEdgeToEdgeLogging= */ false);
         return BottomSheetControllerFactory.createBottomSheetController(
                 () -> scrimManager,
-                (unused) -> {},
                 getActivity().getWindow(),
                 KeyboardVisibilityDelegate.getInstance(),
                 () -> activityContentView,
                 () -> 0,
-                /* desktopWindowStateManager= */ null);
+                /* desktopWindowStateManager= */ null,
+                insetObserver,
+                /* enableLargeFormFactorUi= */ false);
     }
 
     private void onAppUpdated(AppInfo appInfo) {

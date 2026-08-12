@@ -23,9 +23,8 @@ struct EnumTraits<media::mojom::VideoEncodeAcceleratorSupportedRateControlMode,
   static media::mojom::VideoEncodeAcceleratorSupportedRateControlMode ToMojom(
       media::VideoEncodeAccelerator::SupportedRateControlMode mode);
 
-  static bool FromMojom(
-      media::mojom::VideoEncodeAcceleratorSupportedRateControlMode input,
-      media::VideoEncodeAccelerator::SupportedRateControlMode* out);
+  static media::VideoEncodeAccelerator::SupportedRateControlMode FromMojom(
+      media::mojom::VideoEncodeAcceleratorSupportedRateControlMode input);
 };
 
 template <>
@@ -141,8 +140,9 @@ class StructTraits<media::mojom::VideoEncodeOptionsDataView,
     return options.key_frame;
   }
 
-  static int32_t quantizer(const media::VideoEncoder::EncodeOptions& options) {
-    return options.quantizer.value_or(-1);
+  static std::optional<int32_t> quantizer(
+      const media::VideoEncoder::EncodeOptions& options) {
+    return options.quantizer;
   }
 
   // Return the optional update_buffer.
@@ -212,6 +212,17 @@ struct UnionTraits<media::mojom::OptionalMetadataDataView,
 };
 
 template <>
+class StructTraits<media::mojom::YuvPsnrDataView, media::YuvPsnr> {
+ public:
+  static double y(const media::YuvPsnr& psnr) { return psnr.y; }
+  static double u(const media::YuvPsnr& psnr) { return psnr.u; }
+  static double v(const media::YuvPsnr& psnr) { return psnr.v; }
+
+  static bool Read(media::mojom::YuvPsnrDataView data,
+                   media::YuvPsnr* out_psnr);
+};
+
+template <>
 class StructTraits<media::mojom::BitstreamBufferMetadataDataView,
                    media::BitstreamBufferMetadata> {
  public:
@@ -242,6 +253,10 @@ class StructTraits<media::mojom::BitstreamBufferMetadataDataView,
   static std::optional<gfx::ColorSpace> encoded_color_space(
       const media::BitstreamBufferMetadata& bbm) {
     return bbm.encoded_color_space;
+  }
+  static std::optional<media::YuvPsnr> yuv_psnr(
+      const media::BitstreamBufferMetadata& bbm) {
+    return bbm.yuv_psnr;
   }
 
   static bool Read(media::mojom::BitstreamBufferMetadataDataView data,
@@ -370,9 +385,8 @@ struct EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_StorageType,
   static media::mojom::VideoEncodeAcceleratorConfig_StorageType ToMojom(
       media::VideoEncodeAccelerator::Config::StorageType input);
 
-  static bool FromMojom(
-      media::mojom::VideoEncodeAcceleratorConfig_StorageType,
-      media::VideoEncodeAccelerator::Config::StorageType* output);
+  static media::VideoEncodeAccelerator::Config::StorageType FromMojom(
+      media::mojom::VideoEncodeAcceleratorConfig_StorageType);
 };
 
 template <>
@@ -381,9 +395,8 @@ struct EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_EncoderType,
   static media::mojom::VideoEncodeAcceleratorConfig_EncoderType ToMojom(
       media::VideoEncodeAccelerator::Config::EncoderType input);
 
-  static bool FromMojom(
-      media::mojom::VideoEncodeAcceleratorConfig_EncoderType,
-      media::VideoEncodeAccelerator::Config::EncoderType* output);
+  static media::VideoEncodeAccelerator::Config::EncoderType FromMojom(
+      media::mojom::VideoEncodeAcceleratorConfig_EncoderType);
 };
 
 template <>
@@ -392,9 +405,8 @@ struct EnumTraits<media::mojom::VideoEncodeAcceleratorConfig_ContentType,
   static media::mojom::VideoEncodeAcceleratorConfig_ContentType ToMojom(
       media::VideoEncodeAccelerator::Config::ContentType input);
 
-  static bool FromMojom(
-      media::mojom::VideoEncodeAcceleratorConfig_ContentType,
-      media::VideoEncodeAccelerator::Config::ContentType* output);
+  static media::VideoEncodeAccelerator::Config::ContentType FromMojom(
+      media::mojom::VideoEncodeAcceleratorConfig_ContentType);
 };
 
 template <>

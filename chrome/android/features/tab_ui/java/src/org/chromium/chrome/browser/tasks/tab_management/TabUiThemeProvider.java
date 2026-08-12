@@ -9,7 +9,6 @@ import android.content.res.ColorStateList;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.material.color.MaterialColors;
@@ -26,15 +25,6 @@ import org.chromium.components.tab_groups.TabGroupColorId;
 @NullMarked
 public class TabUiThemeProvider {
     private static final String TAG = "TabUiThemeProvider";
-
-    /**
-     * Returns the semantic color value that corresponds to colorPrimaryContainer.
-     *
-     * @param context {@link Context} used to retrieve color.
-     */
-    public static @ColorInt int getDefaultNtbContainerColor(Context context) {
-        return MaterialColors.getColor(context, R.attr.colorPrimaryContainer, TAG);
-    }
 
     public static @ColorInt int getGridTabSwitcherBackgroundColor(
             Context context, boolean isIncognito) {
@@ -54,8 +44,7 @@ public class TabUiThemeProvider {
     public static ColorStateList getToggleActionButtonCheckedDrawableTintList(
             Context context, boolean isIncognito) {
         if (isIncognito) {
-            return AppCompatResources.getColorStateList(
-                    context, R.color.incognito_tab_bg_selected_color);
+            return context.getColorStateList(R.color.incognito_tab_bg_selected_color);
         }
         return ColorStateList.valueOf(MaterialColors.getColor(context, R.attr.colorPrimary, TAG));
     }
@@ -104,7 +93,7 @@ public class TabUiThemeProvider {
                     isSelected
                             ? R.color.incognito_tab_group_hovered_bg_selected_color
                             : R.color.incognito_tab_group_hovered_bg_color;
-            return AppCompatResources.getColorStateList(context, colorRes);
+            return context.getColorStateList(colorRes);
         } else {
             if (isSelected) {
                 @ColorInt
@@ -236,14 +225,13 @@ public class TabUiThemeProvider {
     }
 
     /**
-     * Returns the {@link ColorStateList} to use for the strip tab hover card based on the incognito
-     * mode.
+     * Returns the {@link ColorStateList} to use for the tab hover card based on the incognito mode.
      *
      * @param context {@link Context} used to retrieve color.
      * @param isIncognito Whether the color is used for incognito mode.
-     * @return The {@link ColorStateList} for the strip tab hover card.
+     * @return The {@link ColorStateList} for the tab hover card.
      */
-    public static ColorStateList getStripTabHoverCardBackgroundTintList(
+    public static ColorStateList getTabHoverCardBackgroundTintList(
             Context context, boolean isIncognito) {
         int backgroundTint =
                 isIncognito
@@ -271,13 +259,13 @@ public class TabUiThemeProvider {
     }
 
     /**
-     * Returns the text color for the strip tab hover card title based on the incognito mode.
+     * Returns the text color for the tab hover card title based on the incognito mode.
      *
      * @param context {@link Context} used to retrieve color.
      * @param isIncognito Whether the color is used for incognito mode.
-     * @return The text color for the strip tab hover card title.
+     * @return The text color for the tab hover card title.
      */
-    public static @ColorInt int getStripTabHoverCardTextColorPrimary(
+    public static @ColorInt int getTabHoverCardTextColorPrimary(
             Context context, boolean isIncognito) {
         return isIncognito
                 ? context.getColor(R.color.default_text_color_light)
@@ -285,13 +273,13 @@ public class TabUiThemeProvider {
     }
 
     /**
-     * Returns the text color for the strip tab hover card URL based on the incognito mode.
+     * Returns the text color for the tab hover card URL based on the incognito mode.
      *
      * @param context {@link Context} used to retrieve color.
      * @param isIncognito Whether the color is used for incognito mode.
-     * @return The text color for the strip tab hover card URL.
+     * @return The text color for the tab hover card URL.
      */
-    public static @ColorInt int getStripTabHoverCardTextColorSecondary(
+    public static @ColorInt int getTabHoverCardTextColorSecondary(
             Context context, boolean isIncognito) {
         return isIncognito
                 ? context.getColor(R.color.default_text_color_secondary_light)
@@ -320,12 +308,11 @@ public class TabUiThemeProvider {
      * @param context {@link Context} used to retrieve color.
      * @param isIncognito Whether the color is used for incognito mode.
      * @return The {@link ColorStateList} for icons on the toolbar when tab switcher is in selection
-     *         edit mode.
+     *     edit mode.
      */
     public static ColorStateList getTabSelectionToolbarIconTintList(
             Context context, boolean isIncognito) {
-        return AppCompatResources.getColorStateList(
-                context,
+        return context.getColorStateList(
                 isIncognito
                         ? R.color.default_text_color_light_list
                         : R.color.default_text_color_list);
@@ -458,27 +445,17 @@ public class TabUiThemeProvider {
      */
     public static ColorStateList getMessageCardCloseButtonTintList(
             Context context, boolean isIncognito) {
-        return AppCompatResources.getColorStateList(
-                context,
+        return context.getColorStateList(
                 isIncognito
                         ? R.color.default_icon_color_light
                         : R.color.default_icon_color_tint_list);
     }
 
     /**
-     * Return the size represented by dimension for padding between tab cards.
+     * Return the space represented by dimension for spaces between mini thumbnails in a group tab.
      *
      * @param context {@link Context} to retrieve dimension.
-     * @return The padding between tab cards in float number.
-     */
-    public static float getTabCardPaddingDimension(Context context) {
-        return context.getResources().getDimension(R.dimen.tab_grid_card_between_card_padding);
-    }
-
-    /**
-     * Return the space represented by dimension for spaces between mini thumbnails in a group tab.
-     * @param context {@link Context} to retrieve dimension.
-     * @return The padding between between mini thumbnails in float number.
+     * @return The padding between mini thumbnails in float number.
      */
     public static float getTabMiniThumbnailPaddingDimension(Context context) {
         return context.getResources().getDimension(R.dimen.tab_grid_card_thumbnail_margin);
@@ -493,15 +470,6 @@ public class TabUiThemeProvider {
      */
     public static float getTabGridCardMargin(Context context) {
         return context.getResources().getDimension(R.dimen.tab_grid_card_margin);
-    }
-
-    /**
-     * Return the size represented by dimension for margin around message cards.
-     * @param context {@link Context} to retrieve dimension.
-     * @return The margin around message cards in float number.
-     */
-    public static float getMessageCardMarginDimension(Context context) {
-        return context.getResources().getDimension(R.dimen.tab_list_selected_inset);
     }
 
     /**
@@ -590,8 +558,7 @@ public class TabUiThemeProvider {
      */
     public static @ColorInt int getPaneHairlineColor(Context context, boolean isIncognito) {
         return isIncognito
-                ? ContextCompat.getColor(
-                        context, org.chromium.chrome.tab_ui.R.color.divider_color_light)
+                ? ContextCompat.getColor(context, R.color.divider_color_light)
                 : SemanticColorUtils.getDividerColor(context);
     }
 }

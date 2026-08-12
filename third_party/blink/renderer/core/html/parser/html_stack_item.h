@@ -27,10 +27,13 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_PARSER_HTML_STACK_ITEM_H_
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/html/parser/atomic_html_token.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
+#include "third_party/blink/renderer/core/sanitizer/sanitizer.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -44,19 +47,36 @@ class ContainerNode;
 // also saves a little bit of memory, as a side effect.)
 class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
  public:
-  enum ItemType { kItemForContextElement, kItemForDocumentFragmentNode };
+  // You cannot call this constructor directly (but it must be public so that
+  // MakeGarbageCollected() can); use CreateForDocumentFragment() below instead.
+  // (It isn't needed for this constructor since there's no extra space for
+  // attributes, but we use the same patten as the other two constructors,
+  // which do need this.)
+  HTMLStackItem(base::PassKey<HTMLStackItem>,
+                DocumentFragment* document_fragment)
+      : node_(document_fragment),
+        token_name_(html_names::HTMLTag::kUnknown),
+        is_document_fragment_node_(true) {}
 
-  HTMLStackItem(ContainerNode* node, ItemType type)
-      : node_(node), token_name_(html_names::HTMLTag::kUnknown) {
-    switch (type) {
-      case kItemForDocumentFragmentNode:
-        is_document_fragment_node_ = true;
-        break;
-      case kItemForContextElement:
-        token_name_ = HTMLTokenName::FromLocalName(GetElement()->localName());
-        namespace_uri_ = GetElement()->namespaceURI();
-        is_document_fragment_node_ = false;
-        break;
+  // You cannot call this constructor directly (but it must be public so that
+  // MakeGarbageCollected() can); use CreateForContextElement() below instead.
+  HTMLStackItem(base::PassKey<HTMLStackItem>, Element* context_element)
+      : node_(context_element),
+        token_name_(HTMLTokenName::FromLocalName(context_element->localName())),
+        namespace_uri_(context_element->namespaceURI()),
+        num_token_attributes_(context_element->Attributes().size()),
+        is_document_fragment_node_(false) {
+    // We need to store the attributes because we sometimes make decisions
+    // based on attributes of the context elements, for example the encoding
+    // attribute of <mathml:annotation-xml> elements.
+    //
+    // We rely on Create() allocating extra memory past our end for the
+    // attributes.
+    const AttributeCollection element_attributes =
+        context_element->Attributes();
+    auto attributes = TokenAttributesSpan();
+    for (wtf_size_t i = 0; i < element_attributes.size(); ++i) {
+      new (&attributes[i]) Attribute(element_attributes[i]);
     }
   }
 
@@ -73,9 +93,9 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
         is_document_fragment_node_(false) {
     // We rely on Create() allocating extra memory past our end for the
     // attributes.
+    auto attributes = TokenAttributesSpan();
     for (wtf_size_t i = 0; i < token->Attributes().size(); ++i) {
-      new (UNSAFE_TODO(TokenAttributesData() + i))
-          Attribute(token->Attributes()[i]);
+      new (&attributes[i]) Attribute(token->Attributes()[i]);
     }
   }
 
@@ -98,6 +118,19 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
         base::PassKey<HTMLStackItem>(), node, token, namespace_uri);
   }
 
+  static HTMLStackItem* CreateForDocumentFragment(
+      DocumentFragment* document_fragment) {
+    return MakeGarbageCollected<HTMLStackItem>(base::PassKey<HTMLStackItem>(),
+                                               document_fragment);
+  }
+
+  static HTMLStackItem* CreateForContextElement(Element* context_element) {
+    return MakeGarbageCollected<HTMLStackItem>(
+        AdditionalBytes(context_element->Attributes().size() *
+                        sizeof(Attribute)),
+        base::PassKey<HTMLStackItem>(), context_element);
+  }
+
   Element* GetElement() const { return To<Element>(node_.Get()); }
   ContainerNode* GetNode() const { return node_.Get(); }
 
@@ -109,13 +142,13 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
 
   const HTMLTokenName& GetTokenName() const { return token_name_; }
 
-  const base::span<Attribute> Attributes() {
+  base::span<Attribute> Attributes() {
     DCHECK(LocalName());
-    return UNSAFE_TODO({TokenAttributesData(), num_token_attributes_});
+    return TokenAttributesSpan();
   }
-  const base::span<const Attribute> Attributes() const {
+  base::span<const Attribute> Attributes() const {
     DCHECK(LocalName());
-    return UNSAFE_TODO({TokenAttributesData(), num_token_attributes_});
+    return TokenAttributesSpan();
   }
   Vector<Attribute> TakeAttributes() {
     Vector<Attribute> attributes;
@@ -129,12 +162,6 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   Attribute* GetAttributeItem(const QualifiedName& attribute_name) {
     DCHECK(LocalName());
     return FindAttributeInVector(Attributes(), attribute_name);
-  }
-  bool HasParsePartsAttribute() {
-    if (!LocalName() || !RuntimeEnabledFeatures::DOMPartsAPIEnabled()) {
-      return false;
-    }
-    return GetAttributeItem(html_names::kParsepartsAttr);
   }
 
   html_names::HTMLTag GetHTMLTag() const { return token_name_.GetHTMLTag(); }
@@ -235,7 +262,6 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
         case html_names::HTMLTag::kCenter:
         case html_names::HTMLTag::kCol:
         case html_names::HTMLTag::kColgroup:
-        case html_names::HTMLTag::kCommand:
         case html_names::HTMLTag::kDd:
         case html_names::HTMLTag::kDetails:
         case html_names::HTMLTag::kDir:
@@ -300,6 +326,8 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
         case html_names::HTMLTag::kWbr:
         case html_names::HTMLTag::kXmp:
           return true;
+        case html_names::HTMLTag::kCommand:
+          return !RuntimeEnabledFeatures::HTMLCommandElementRemovalEnabled();
         default:
           return false;
       }
@@ -331,25 +359,12 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   void Trace(Visitor* visitor) const {
     visitor->Trace(node_);
     visitor->Trace(next_item_in_stack_);
-    visitor->Trace(adjusted_insertion_target_);
-    visitor->Trace(adjusted_insertion_next_child_);
+    visitor->Trace(sanitizer_);
   }
 
-  void SetAdjustedInsertionTarget(ContainerNode* target) {
-    adjusted_insertion_target_ = target;
-  }
+  void SetSanitizer(StreamingSanitizer* sanitizer) { sanitizer_ = sanitizer; }
 
-  ContainerNode* AdjustedInsertionTarget() const {
-    return adjusted_insertion_target_.Get();
-  }
-
-  void SetAdjustedInsertionNextChild(Node* child) {
-    adjusted_insertion_next_child_ = child;
-  }
-
-  Node* AdjustedInsertionNextChild() const {
-    return adjusted_insertion_next_child_.Get();
-  }
+  StreamingSanitizer* GetSanitizer() const { return sanitizer_.Get(); }
 
  private:
   void SetNextItemInStack(HTMLStackItem* item) {
@@ -367,13 +382,21 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   // The attributes are stored directly after the HTMLStackItem in memory
   // (using Oilpan's AdditionalBytes system). Space for this is guaranteed
   // by Create().
-  Attribute* TokenAttributesData() {
+  base::span<Attribute> TokenAttributesSpan() {
     static_assert(alignof(HTMLStackItem) >= alignof(Attribute));
-    return reinterpret_cast<Attribute*>(UNSAFE_TODO(this + 1));
+    // SAFETY: Create() allocates num_token_attributes_ * sizeof(Attribute)
+    // extra bytes immediately after this object via AdditionalBytes.
+    return UNSAFE_BUFFERS(base::span(base::unchecked,
+                                     reinterpret_cast<Attribute*>(this + 1),
+                                     num_token_attributes_));
   }
-  const Attribute* TokenAttributesData() const {
+  base::span<const Attribute> TokenAttributesSpan() const {
     static_assert(alignof(HTMLStackItem) >= alignof(Attribute));
-    return reinterpret_cast<const Attribute*>(UNSAFE_TODO(this + 1));
+    // SAFETY: Create() allocates num_token_attributes_ * sizeof(Attribute)
+    // extra bytes immediately after this object via AdditionalBytes.
+    return UNSAFE_BUFFERS(base::span(
+        base::unchecked, reinterpret_cast<const Attribute*>(this + 1),
+        num_token_attributes_));
   }
 
   Member<ContainerNode> node_;
@@ -381,8 +404,7 @@ class HTMLStackItem final : public GarbageCollected<HTMLStackItem> {
   // This member is maintained by HTMLElementStack.
   Member<HTMLStackItem> next_item_in_stack_{nullptr};
 
-  Member<ContainerNode> adjusted_insertion_target_;
-  Member<Node> adjusted_insertion_next_child_;
+  Member<StreamingSanitizer> sanitizer_;
 
   HTMLTokenName token_name_;
   AtomicString namespace_uri_;

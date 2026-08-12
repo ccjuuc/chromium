@@ -13,16 +13,18 @@
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/auth/cryptohome_pin_engine.h"
-#include "chrome/browser/ash/login/screens/base_screen.h"
+#include "chrome/browser/ash/login/screens/osauth/base_osauth_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
+
+class PrefService;
 
 namespace ash {
 
 class PinSetupScreenView;
 class WizardContext;
 
-class PinSetupScreen : public BaseScreen {
+class PinSetupScreen : public BaseOSAuthSetupScreen {
  public:
   using TView = PinSetupScreenView;
   enum class Result {
@@ -46,6 +48,7 @@ class PinSetupScreen : public BaseScreen {
     kUsupportedHardware,
     kNotSupportedAsPrimaryFactor,
     kNotSupportedAsPrimaryFactorForManagedUsers,
+    kNotAllowedByPolicyAsPrimaryFactor,
   };
 
   // This enum is tied directly to a UMA enum defined in
@@ -69,7 +72,10 @@ class PinSetupScreen : public BaseScreen {
   SetForceNoSkipBecauseOfPolicyForTests(bool value);
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
-  PinSetupScreen(base::WeakPtr<PinSetupScreenView> view,
+
+  // `local_state` must be non-null and must outlive `this`.
+  PinSetupScreen(PrefService* local_state,
+                 base::WeakPtr<PinSetupScreenView> view,
                  const ScreenExitCallback& exit_callback);
 
   PinSetupScreen(const PinSetupScreen&) = delete;
@@ -91,13 +97,16 @@ class PinSetupScreen : public BaseScreen {
   }
 
  protected:
-  // BaseScreen:
+  // BaseOSAuthSetupScreen:
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
  private:
+  void InspectContext(UserContext* user_context);
+  void DoShow();
+
   // Checks if the screen should be skipped by returning a detailed reason.
   std::optional<PinSetupScreen::SkipReason> GetSkipReason(
       WizardContext& context);
@@ -128,6 +137,9 @@ class PinSetupScreen : public BaseScreen {
   // is necessary because the screens yields a Result::NotApplicable when
   // skipped.
   std::optional<SkipReason> skip_reason_for_testing_;
+
+  std::optional<AccountId> account_id_;
+  std::optional<bool> is_saml_flow_;
 
   base::WeakPtrFactory<PinSetupScreen> weak_ptr_factory_{this};
 };

@@ -15,14 +15,14 @@ import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {SkColor} from '//resources/mojo/skia/public/mojom/skcolor.mojom-webui.js';
 import type {BrowserColorVariant} from '//resources/mojo/ui/base/mojom/themes.mojom-webui.js';
 
-import {ThemeColorPickerBrowserProxy} from './browser_proxy.js';
 import {EMPTY_COLOR} from './color_utils.js';
 import type {Color, SelectedColor} from './color_utils.js';
 import {ColorType, DARK_BASELINE_BLUE_COLOR, DARK_BASELINE_GREY_COLOR, LIGHT_BASELINE_BLUE_COLOR, LIGHT_BASELINE_GREY_COLOR} from './color_utils.js';
 import type {ThemeColorElement} from './theme_color.js';
 import {getCss} from './theme_color_picker.css.js';
 import {getHtml} from './theme_color_picker.html.js';
-import type {ChromeColor, Theme, ThemeColorPickerHandlerRemote} from './theme_color_picker.mojom-webui.js';
+import {browserProxyFactory} from './theme_color_picker.mojom-webui.js';
+import type {ChromeColor, Theme, ThemeColorPickerHandlerInterface} from './theme_color_picker.mojom-webui.js';
 import type {ThemeHueSliderDialogElement} from './theme_hue_slider_dialog.js';
 
 const ThemeColorPickerElementBase = I18nMixinLit(CrLitElement);
@@ -78,14 +78,14 @@ export class ThemeColorPickerElement extends ThemeColorPickerElementBase {
   protected accessor showManagedDialog_: boolean = false;
   accessor columns: number = 4;
 
-  private handler_: ThemeColorPickerHandlerRemote =
-      ThemeColorPickerBrowserProxy.getInstance().handler;
+  private handler_: ThemeColorPickerHandlerInterface =
+      browserProxyFactory.getInstance().handler;
 
   override connectedCallback() {
     super.connectedCallback();
     this.setThemeListenerId_ =
-        ThemeColorPickerBrowserProxy.getInstance()
-            .callbackRouter.setTheme.addListener((theme: Theme) => {
+        browserProxyFactory.getInstance().callbackRouter.setTheme.addListener(
+            theme => {
               this.theme_ = theme;
             });
     this.handler_.updateTheme();
@@ -93,7 +93,7 @@ export class ThemeColorPickerElement extends ThemeColorPickerElementBase {
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    ThemeColorPickerBrowserProxy.getInstance().callbackRouter.removeListener(
+    browserProxyFactory.getInstance().callbackRouter.removeListener(
         this.setThemeListenerId_!);
   }
 
@@ -149,6 +149,9 @@ export class ThemeColorPickerElement extends ThemeColorPickerElementBase {
   private computeSelectedColor_(): SelectedColor {
     if (!this.colors_ || !this.theme_) {
       return {type: ColorType.NONE};
+    }
+    if (this.theme_.followDeviceTheme) {
+      return {type: ColorType.CUSTOM};
     }
     if (this.theme_.isGreyBaseline) {
       return {type: ColorType.GREY};
@@ -245,8 +248,7 @@ export class ThemeColorPickerElement extends ThemeColorPickerElementBase {
       return;
     }
 
-    ThemeColorPickerBrowserProxy.getInstance().handler.setSeedColorFromHue(
-        selectedHue);
+    browserProxyFactory.getInstance().handler.setSeedColorFromHue(selectedHue);
   }
 
   private updateCustomColor_() {
@@ -272,7 +274,7 @@ export class ThemeColorPickerElement extends ThemeColorPickerElementBase {
         (await this.handler_.getChromeColors(this.theme_.isDarkMode)).colors;
   }
 
-  protected onManagedDialogClosed_() {
+  protected onManagedDialogClose_() {
     this.showManagedDialog_ = false;
   }
 

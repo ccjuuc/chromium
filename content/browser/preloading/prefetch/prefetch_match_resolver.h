@@ -7,9 +7,11 @@
 
 #include <map>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "content/browser/preloading/prefetch/no_vary_search_helper.h"
 #include "content/browser/preloading/prefetch/prefetch_container.h"
+#include "content/browser/preloading/prefetch/prefetch_container_observer.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/prefetch/prefetch_servable_state.h"
 #include "content/browser/preloading/prefetch/prefetch_serving_handle.h"
@@ -31,7 +33,7 @@ class PrefetchService;
 // purpose.
 //
 // This is a value per (prefetch matching, `PrefetchContainer`) representing the
-// result of `PrefetchScheduler::CollectMatchCandidate()`. This is typically
+// result of `PrefetchService::CollectMatchCandidate()`. This is typically
 // used as follows:
 //
 // - To record trace events for `CollectPotentialMatchPrefetchContainers()`
@@ -60,6 +62,10 @@ enum class PrefetchPotentialCandidateCollectResult {
   kMaxValue = kUnavailablePrefetchStatusNotUsedCookiesChanged,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/prefetch/enums.xml)
+
+CONTENT_EXPORT std::ostream& operator<<(
+    std::ostream& ostream,
+    PrefetchPotentialCandidateCollectResult collect_result);
 
 // Represents the serving result with the detailed reason per potentially
 // matching candidate. Only used for metrics purpose.
@@ -114,12 +120,12 @@ enum class PrefetchPotentialCandidateServingResult {
   kNotServedBlockUntilHeadTimeout = 8,
 
   // The candidate is not served because
-  // `PrefetchContainer::Observer::OnDeterminedHead()` is called with
+  // `PrefetchContainerObserver::OnDeterminedHead()` is called with
   // `PrefetchServableState::kShouldBlockUntilHeadReceived`. Basically, we don't
   // expect to enter this path, but there is a buggy corner case.
   kNotServedOnDeterminedHeadWithShouldBlockUntilHeadReceived = 9,
   // The candidate is not served because
-  // `PrefetchContainer::Observer::OnDeterminedHead()` is called but the
+  // `PrefetchContainerObserver::OnDeterminedHead()` is called but the
   // prefetch has been expired.
   kNotServedOnDeterminedHeadWithServableExpired = 10,
   // The candidate is not served due to ineligible redirect.
@@ -129,7 +135,7 @@ enum class PrefetchPotentialCandidateServingResult {
   // Deprecated
   //
   // The candidate is not served because
-  // `PrefetchContainer::Observer::OnDeterminedHead()` is called with
+  // `PrefetchContainerObserver::OnDeterminedHead()` is called with
   // `PrefetchServableState::kNotServable` except for expired nor failure. We
   // don't expect to enter this path.
   // kNotServedOnDeterminedHeadWithNotServableUnknown = 13,
@@ -140,6 +146,10 @@ enum class PrefetchPotentialCandidateServingResult {
   kMaxValue = kNotServedNoCandidates,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/prefetch/enums.xml)
+
+CONTENT_EXPORT std::ostream& operator<<(
+    std::ostream& ostream,
+    PrefetchPotentialCandidateServingResult serving_result);
 
 // Manages matching process of prefetch
 // https://wicg.github.io/nav-speculation/prefetch.html#wait-for-a-matching-prefetch-record
@@ -152,7 +162,7 @@ enum class PrefetchPotentialCandidateServingResult {
 // Lifetime of this class is from the call of `FindPrefetch()` to calling
 // `callback_`. This is owned by itself. See the comment on `self_`.
 class CONTENT_EXPORT PrefetchMatchResolver final
-    : public PrefetchContainer::Observer {
+    : public PrefetchContainerObserver {
  public:
   using Callback =
       base::OnceCallback<void(PrefetchServingHandle serving_handle)>;
@@ -165,15 +175,13 @@ class CONTENT_EXPORT PrefetchMatchResolver final
   PrefetchMatchResolver(const PrefetchMatchResolver&) = delete;
   PrefetchMatchResolver& operator=(const PrefetchMatchResolver&) = delete;
 
-  // PrefetchContainer::Observer implementation
-  void OnWillBeDestroyed(PrefetchContainer& prefetch_container) override;
-  void OnGotInitialEligibility(PrefetchContainer& prefetch_container,
-                               PreloadingEligibility eligibility) override;
-  void OnDeterminedHead(PrefetchContainer& prefetch_container) override;
+  // PrefetchContainerObserver implementation
+  void OnWillBeDestroyed(const PrefetchContainer& prefetch_container) override;
+  void OnGotInitialEligibility(
+      const PrefetchContainer& prefetch_container) override;
+  void OnDeterminedHead(const PrefetchContainer& prefetch_container) override;
   void OnPrefetchCompletedOrFailed(
-      PrefetchContainer& prefetch_container,
-      const network::URLLoaderCompletionStatus& completion_status,
-      const std::optional<int>& response_code) override;
+      const PrefetchContainer& prefetch_container) override;
 
   // Finds prefetch that matches to a navigation and is servable.
   //
@@ -190,8 +198,6 @@ class CONTENT_EXPORT PrefetchMatchResolver final
       PrefetchService& prefetch_service,
       PrefetchKey navigated_key,
       PrefetchServiceWorkerState expected_service_worker_state,
-      base::WeakPtr<PrefetchServingPageMetricsContainer>
-          serving_page_metrics_container,
       Callback callback,
       perfetto::Flow flow);
   static void FindPrefetchForTesting(
@@ -199,8 +205,6 @@ class CONTENT_EXPORT PrefetchMatchResolver final
       PrefetchKey navigated_key,
       PrefetchServiceWorkerState expected_service_worker_state,
       bool is_nav_prerender,
-      base::WeakPtr<PrefetchServingPageMetricsContainer>
-          serving_page_metrics_container,
       Callback callback);
 
   void AttachPrefetchMatchPrerenderDebugMetrics();
@@ -221,8 +225,8 @@ class CONTENT_EXPORT PrefetchMatchResolver final
       PrefetchServiceWorkerState expected_service_worker_state,
       bool is_nav_prerender,
       base::WeakPtr<PrerenderHost> prerender_host,
-      base::WeakPtr<PrefetchServingPageMetricsContainer>
-          serving_page_metrics_container,
+      PrerenderHostId prerender_host_id,
+      scoped_refptr<PreloadPipelineInfoImpl> preload_pipeline_info,
       Callback callback,
       perfetto::Flow flow);
 
@@ -233,6 +237,8 @@ class CONTENT_EXPORT PrefetchMatchResolver final
       PrefetchServiceWorkerState expected_service_worker_state,
       bool is_nav_prerender,
       base::WeakPtr<PrerenderHost> prerender_host,
+      PrerenderHostId prerender_host_id,
+      scoped_refptr<PreloadPipelineInfoImpl> preload_pipeline_info,
       Callback callback,
       perfetto::Flow flow);
 
@@ -242,7 +248,7 @@ class CONTENT_EXPORT PrefetchMatchResolver final
   // Helpers of `FindPrefetch()`.
   //
   // Control flow starts with `FindPrefetchInternal()` and ends with
-  // `UnblockInternal()`.
+  // `UnblockInternal2()`.
   //
   // Actually, it is different from
   // https://wicg.github.io/nav-speculation/prefetch.html#wait-for-a-matching-prefetch-record
@@ -251,9 +257,7 @@ class CONTENT_EXPORT PrefetchMatchResolver final
   // - This implementation has timeout: `CandidateData::timeout_timer`.
   // - This implementation collects candidate prefetches first. So, it doesn't
   //   handle prefetches started after this method started.
-  void FindPrefetchInternal2(PrefetchService& prefetch_service,
-                             base::WeakPtr<PrefetchServingPageMetricsContainer>
-                                 serving_page_metrics_container);
+  void FindPrefetchInternal2(PrefetchService& prefetch_service);
   // Each candidate `PrefetchContainer` proceeds to
   //
   //    `RegisterCandidate()` (required)
@@ -277,6 +281,7 @@ class CONTENT_EXPORT PrefetchMatchResolver final
       PrefetchPotentialCandidateServingResult serving_result);
   void UnblockForCookiesChanged(const PrefetchKey& key);
   void UnblockInternal(PrefetchServingHandle serving_handle);
+  void UnblockInternal2(PrefetchServingHandle serving_handle);
 
   // Lifetime of this class is from the call of `FindPrefetch()` to calling
   // `callback_`. Note that
@@ -322,6 +327,13 @@ class CONTENT_EXPORT PrefetchMatchResolver final
   // initial navigation. Otherwise, `nullptr`. Also this is nullptr if
   // `PreloadServingMetricsCapsule::IsFeatureEnabled()` is false.
   base::WeakPtr<PrerenderHost> prerender_host_for_metrics_;
+
+  // Attributes of prerender if the navigation is prerender.
+  //
+  // Non-null iff the navigation is prerender.
+  const PrerenderHostId prerender_host_id_;
+  const scoped_refptr<PreloadPipelineInfoImpl> preload_pipeline_info_;
+
   std::unique_ptr<PrefetchMatchMetrics> prefetch_match_metrics_;
 
   // Potentially matching candidates.
@@ -343,6 +355,67 @@ class CONTENT_EXPORT PrefetchMatchResolver final
           PrefetchPotentialCandidateCollectResult::kUninitialized;
 };
 
+// Context to collect prefetch matching candidates and their details.
+//
+// This is used to pass candidate details to the caller, e.g. for metrics.
+template <typename T>
+class PrefetchCandidateCollectHelper {
+ public:
+  struct CollectDetails {
+    // Safety: `CollectDetails`'s lifetime is bounded by
+    // `PrefetchMatchResolver::FindPrefetchInternal2()`. `PrefetchContainer`'s
+    // dtor is not called in it.
+    raw_ptr<T> candidate;
+    PrefetchServableState servable_state;
+    PrefetchPotentialCandidateCollectResult collect_result;
+  };
+
+  PrefetchCandidateCollectHelper() = default;
+  ~PrefetchCandidateCollectHelper() = default;
+
+  // Movable but not copyable.
+  PrefetchCandidateCollectHelper(const PrefetchCandidateCollectHelper&) =
+      delete;
+  PrefetchCandidateCollectHelper& operator=(
+      const PrefetchCandidateCollectHelper&) = delete;
+  PrefetchCandidateCollectHelper(PrefetchCandidateCollectHelper&&) = default;
+  PrefetchCandidateCollectHelper& operator=(PrefetchCandidateCollectHelper&&) =
+      default;
+
+  void AddCandidate(CollectDetails details) {
+    candidates_.push_back(std::move(details));
+  }
+
+  const std::vector<CollectDetails>& GetCandidates() const {
+    return candidates_;
+  }
+
+  std::vector<T*> GetMatchedCandidates() const {
+    std::vector<T*> matched;
+    for (const auto& details : candidates_) {
+      if (details.collect_result ==
+          PrefetchPotentialCandidateCollectResult::kAvailable) {
+        matched.push_back(details.candidate.get());
+      }
+    }
+    return matched;
+  }
+
+  base::flat_map<PrefetchKey, PrefetchServableState> GetServableStates() const {
+    base::flat_map<PrefetchKey, PrefetchServableState> states;
+    for (const auto& details : candidates_) {
+      if (details.collect_result ==
+          PrefetchPotentialCandidateCollectResult::kAvailable) {
+        states.emplace(details.candidate->key(), details.servable_state);
+      }
+    }
+    return states;
+  }
+
+ private:
+  std::vector<CollectDetails> candidates_;
+};
+
 // Abstracts required operations for `PrefetchContainer` that is used to collect
 // match candidates in the first phase of
 // `PrefetchMatchResolver::FindPrefetch()`. Used for unit testing.
@@ -351,21 +424,17 @@ concept MatchCandidate =
     requires(T& t,
              const GURL& url,
              base::TimeDelta cacheable_duration,
-             base::WeakPtr<PrefetchServingPageMetricsContainer>
-                 serving_page_metrics_container,
              std::ostream& ostream) {
       t.key();
       t.request();
       t.GetURL();
-      t.GetServableState(cacheable_duration);
+      t.GetMatchResolverAction();
       t.GetNoVarySearchHint();
       t.IsNoVarySearchHeaderMatch(url);
       t.ShouldWaitForNoVarySearchHeader(url);
       t.HasPrefetchStatus();
       t.GetPrefetchStatus();
       t.IsDecoy();
-      t.SetServingPageMetrics(serving_page_metrics_container);
-      t.UpdateServingPageMetrics();
       ostream << t;
     };
 
@@ -418,19 +487,13 @@ std::vector<T*> CollectPotentialMatchPrefetchContainers(
 // future. See implementation for the detailed conditions.
 template <class T>
   requires MatchCandidate<T>
-bool IsCandidateAvailable(
+PrefetchPotentialCandidateCollectResult JudgeCandidateCollectResult(
     const T& candidate,
     PrefetchServableState servable_state,
-    bool is_nav_prerender,
-    PrefetchPotentialCandidateCollectResult* collect_result) {
+    bool is_nav_prerender) {
   switch (servable_state) {
     case PrefetchServableState::kNotServable:
-      DVLOG(1) << "CollectMatchCandidatesGeneric: skipped because not "
-                  "servable: candidate = "
-               << candidate;
-      *collect_result =
-          PrefetchPotentialCandidateCollectResult::kUnavailableNotServable;
-      return false;
+      return PrefetchPotentialCandidateCollectResult::kUnavailableNotServable;
     case PrefetchServableState::kShouldBlockUntilEligibilityGot:
     case PrefetchServableState::kShouldBlockUntilHeadReceived:
     case PrefetchServableState::kServable:
@@ -440,13 +503,8 @@ bool IsCandidateAvailable(
   switch (servable_state) {
     case PrefetchServableState::kShouldBlockUntilEligibilityGot:
       if (!is_nav_prerender) {
-        DVLOG(1)
-            << "CollectMatchCandidatesGeneric: skipped because it's checking "
-               "eligibility and the navigation is not a prerender: candidate = "
-            << candidate;
-        *collect_result = PrefetchPotentialCandidateCollectResult::
+        return PrefetchPotentialCandidateCollectResult::
             kUnavailableNavigationIsNotPrerenderAndPrefetchEligibilityNotGotYet;
-        return false;
       }
       break;
     case PrefetchServableState::kServable:
@@ -456,12 +514,7 @@ bool IsCandidateAvailable(
   }
 
   if (candidate.IsDecoy()) {
-    DVLOG(1) << "CollectMatchCandidatesGeneric: skipped because prefetch is a "
-                "decoy: candidate = "
-             << candidate;
-    *collect_result =
-        PrefetchPotentialCandidateCollectResult::kUnavailablePrefetchIsDecoy;
-    return false;
+    return PrefetchPotentialCandidateCollectResult::kUnavailablePrefetchIsDecoy;
   }
 
   if (candidate.HasPrefetchStatus() &&
@@ -471,93 +524,65 @@ bool IsCandidateAvailable(
     // second NavigationRequest to this prefetch's URL. The first
     // NavigationRequest would call GetPrefetch, which might set this
     // PrefetchContainer's status to kPrefetchNotUsedCookiesChanged.
-    DVLOG(1) << "CollectMatchCandidatesGeneric: skipped because cookies for "
-                "url have changed since prefetch completed: candidate = "
-             << candidate;
-    *collect_result = PrefetchPotentialCandidateCollectResult::
+    return PrefetchPotentialCandidateCollectResult::
         kUnavailablePrefetchStatusNotUsedCookiesChanged;
-    return false;
   }
 
-  DVLOG(1) << "CollectMatchCandidatesGeneric: matched: candidate = "
-           << candidate;
-  *collect_result = PrefetchPotentialCandidateCollectResult::kAvailable;
-  return true;
+  return PrefetchPotentialCandidateCollectResult::kAvailable;
 }
 
-// Collects `PrefetchContainer`s that are expected to match to `navigated_key`.
+// Collects initial data for matching process.
+//
+// Corresponds to 5.1.1 and 5.1.3 of
+// https://wicg.github.io/nav-speculation/prefetch.html#wait-for-a-matching-prefetch-record
+//
+// The main purpose is getting `PrefetchContainer`s that are expected to match
+// to `navigated_key`, but it also collects data for not-matched ones for, e.g.
+// metrics. This just collects data into `PrefetchCandidateCollectHelper, and
+// actual filtering is done by
+// `PrefetchCandidateCollectHelper::GetCandidates()/GetMatchedCandidates()`.
+//
+// Note that `PrefetchContainer::GetMatchResolverAction().ToServableState()`
+// depends on `base::TimeTicks::now()` and can expire (can change from
+// `kServable` to `kNotServable`) in the minute between two calls. Deciding
+// something with multiple
+// ``PrefetchContainer::GetMatchResolverAction().ToServableState()` calls can
+// lead inconsistent state. To avoid that, we record
+// `PrefetchServableState` to `CandidateDetails.servable_state` at the beginning
+// of matching process and refer to it.
 //
 // This is defined with the template for testing the first phase of
 // `PrefetchMatchResolver::FindPrefetch()` with mock `PrefetchContainer`.
-//
-// If `key_ahead_of_prerender` and `collect_result_ahead_of_prerender` are
-// given, fill the `PrefetchPotentialCandidateCollectResult` to the latter.
 template <class T>
   requires MatchCandidate<T>
-std::pair<std::vector<T*>, base::flat_map<PrefetchKey, PrefetchServableState>>
-CollectMatchCandidatesGeneric(
+void CollectMatchCandidatesGeneric(
+    PrefetchCandidateCollectHelper<T>& helper,
     const std::map<PrefetchKey, std::unique_ptr<T>>& prefetches,
     const PrefetchKey& navigated_key,
-    bool is_nav_prerender,
-    base::WeakPtr<PrefetchServingPageMetricsContainer>
-        serving_page_metrics_container,
-    const PrefetchKey* key_ahead_of_prerender,
-    PrefetchPotentialCandidateCollectResult*
-        collect_result_ahead_of_prerender) {
+    bool is_nav_prerender) {
   std::vector<T*> candidates =
       CollectPotentialMatchPrefetchContainers(prefetches, navigated_key);
 
   for (T* candidate : candidates) {
-    candidate->SetServingPageMetrics(serving_page_metrics_container);
-    candidate->UpdateServingPageMetrics();
-  }
-
-  // Debug: Fill `kUnavailablePrefetchIsNotInPrefetchService` if prefetch ahead
-  // of prerender is not in `candidates`.
-  [&]() {
-    if (key_ahead_of_prerender) {
-      for (T* candidate : candidates) {
-        if (candidate->key() == *key_ahead_of_prerender) {
-          return;
-        }
-      }
-
-      *collect_result_ahead_of_prerender =
-          PrefetchPotentialCandidateCollectResult::
-              kUnavailablePrefetchIsNotInPrefetchService;
-    }
-  }();
-
-  std::vector<T*> candidates_available;
-  // See the comment of `PrefetchService::CollectMatchCandidates()`.
-  base::flat_map<PrefetchKey, PrefetchServableState> servable_states;
-  for (T* candidate : candidates) {
-    PrefetchPotentialCandidateCollectResult collect_result =
-        PrefetchPotentialCandidateCollectResult::kUninitialized;
-
     PrefetchServableState servable_state =
-        candidate->GetServableState(PrefetchCacheableDuration());
-    const bool is_available = IsCandidateAvailable(
-        *candidate, servable_state, is_nav_prerender, &collect_result);
-    if (is_available) {
-      candidates_available.push_back(candidate);
-      servable_states.emplace(candidate->key(), servable_state);
-    }
+        candidate->GetMatchResolverAction().ToServableState();
+    PrefetchPotentialCandidateCollectResult collect_result =
+        JudgeCandidateCollectResult(*candidate, servable_state,
+                                    is_nav_prerender);
+    helper.AddCandidate(
+        typename PrefetchCandidateCollectHelper<T>::CollectDetails{
+            .candidate = candidate,
+            .servable_state = servable_state,
+            .collect_result = collect_result,
+        });
+    DVLOG(1) << "Serving " << *candidate
+             << ": collect_result=" << collect_result;
 
     TRACE_EVENT("loading",
                 "PrefetchMatchResolver::CollectMatchCandidatesGeneric", "url",
                 candidate->GetURL(), "collect_result", collect_result,
                 candidate->request().preload_pipeline_info().GetFlow());
-
-    // Debug: Fill `PrefetchPotentialCandidateCollectResult` if the navigation
-    // is prerender.
-    if (key_ahead_of_prerender && candidate->key() == *key_ahead_of_prerender) {
-      *collect_result_ahead_of_prerender = collect_result;
-    }
   }
-
-  return std::make_pair(std::move(candidates_available),
-                        std::move(servable_states));
 }
 
 }  // namespace content

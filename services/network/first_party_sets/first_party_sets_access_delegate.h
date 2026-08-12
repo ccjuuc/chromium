@@ -14,13 +14,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
-#include "base/timer/elapsed_timer.h"
 #include "base/types/optional_ref.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/first_party_sets/first_party_sets_cache_filter.h"
 #include "services/network/first_party_sets/first_party_sets_manager.h"
-#include "services/network/public/mojom/first_party_sets_access_delegate.mojom-forward.h"
 #include "services/network/public/mojom/first_party_sets_access_delegate.mojom.h"
 
 namespace net {
@@ -34,8 +32,6 @@ namespace network {
 class FirstPartySetsAccessDelegate
     : public mojom::FirstPartySetsAccessDelegate {
  public:
-  using EntriesResult = FirstPartySetsManager::EntriesResult;
-
   // Construct a FirstPartySetsAccessDelegate that provides customizations
   // and serves mojo requests for the underlying First-Party Sets info.
   // `*manager` outlives this object.
@@ -55,56 +51,15 @@ class FirstPartySetsAccessDelegate
   void SetEnabled(bool enabled) override;
 
   // Computes the First-Party Set metadata and cache filter match info related
-  // to the given context.
-  //
-  // This may return a result synchronously, or asynchronously invoke `callback`
-  // with the result. The callback will be invoked iff the return value is
-  // nullopt; i.e. a result will be provided via return value or callback, but
-  // not both, and not neither.
-  [[nodiscard]] std::optional<
-      std::pair<net::FirstPartySetMetadata,
-                net::FirstPartySetsCacheFilter::MatchInfo>>
-  ComputeMetadata(
-      const net::SchemefulSite& site,
-      base::optional_ref<const net::SchemefulSite> top_frame_site,
-      base::OnceCallback<void(net::FirstPartySetMetadata,
-                              net::FirstPartySetsCacheFilter::MatchInfo)>
-          callback);
-
-  // Calls FirstPartySetsManager::FindEntries either asynchronously or
-  // synchronously, once initialization is complete.
-  //
-  // This may return a result synchronously, or asynchronously invoke `callback`
-  // with the result. The callback will be invoked iff the return value is
-  // nullopt; i.e. a result will be provided via return value or callback, but
-  // not both, and not neither.
-  [[nodiscard]] std::optional<EntriesResult> FindEntries(
-      const base::flat_set<net::SchemefulSite>& sites,
-      base::OnceCallback<void(EntriesResult)> callback);
+  // to the given context. If `NotifyReady` has not yet been called or this
+  // instance is disabled, returns default-constructed output.
+  [[nodiscard]]
+  std::pair<net::FirstPartySetMetadata,
+            net::FirstPartySetsCacheFilter::MatchInfo>
+  ComputeMetadata(const net::SchemefulSite& site,
+                  base::optional_ref<const net::SchemefulSite> top_frame_site);
 
  private:
-  // Same as `ComputeMetadata`, but plumbs the result into the callback. Must
-  // only be called once the instance is fully initialized.
-  void ComputeMetadataAndInvoke(
-      const net::SchemefulSite& site,
-      base::optional_ref<const net::SchemefulSite> top_frame_site,
-      base::OnceCallback<void(net::FirstPartySetMetadata,
-                              net::FirstPartySetsCacheFilter::MatchInfo)>
-          callback) const;
-
-  // Same as `FindEntries`, but plumbs the result into the callback. Must only
-  // be called once the instance is fully initialized.
-  void FindEntriesAndInvoke(
-      const base::flat_set<net::SchemefulSite>& sites,
-      base::OnceCallback<void(EntriesResult)> callback) const;
-
-  // Runs all pending queries. Must not be called until the instance is fully
-  // initialized.
-  void InvokePendingQueries();
-
-  // Enqueues a query to be answered once the instance is fully initialized.
-  void EnqueuePendingQuery(base::OnceClosure run_query);
-
   net::FirstPartySetsContextConfig* context_config() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return ready_event_.has_value() ? &(ready_event_.value()->config) : nullptr;
@@ -126,25 +81,13 @@ class FirstPartySetsAccessDelegate
   // `SetEnabled`.
   bool enabled_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // Whether this instance should wait for First-Party Sets initialization (in
-  // the browser process) before responding to queries.
-  const bool wait_for_init_ GUARDED_BY_CONTEXT(sequence_checker_);
-
   // The first ReadyEvent received. This is set at most once, and is immutable
   // thereafter.
   std::optional<mojom::FirstPartySetsReadyEventPtr> ready_event_
       GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // The queue of queries that are waiting for the instance to be initialized.
-  // This is non-null exactly when `ready_event_` is nullopt.
-  std::unique_ptr<base::circular_deque<base::OnceClosure>> pending_queries_
-      GUARDED_BY_CONTEXT(sequence_checker_);
-
   mojo::Receiver<mojom::FirstPartySetsAccessDelegate> receiver_
       GUARDED_BY_CONTEXT(sequence_checker_){this};
-
-  // Timer starting when the instance is constructed. Used for metrics.
-  base::ElapsedTimer construction_timer_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

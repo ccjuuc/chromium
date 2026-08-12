@@ -32,6 +32,7 @@
 #include "components/enterprise/browser/controller/fake_browser_dm_token_storage.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/prefs/pref_service.h"
@@ -42,13 +43,6 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chromeos/dbus/missive/fake_missive_client.h"
-#include "chromeos/dbus/missive/missive_client.h"
-#include "components/reporting/proto/synced/record_constants.pb.h"
-#include "components/reporting/util/status.h"
-#endif
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -94,13 +88,11 @@ std::unique_ptr<KeyedService> CreateProfileIDService(
   return std::make_unique<enterprise::ProfileIdService>(kFakeProfileID);
 }
 
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 constexpr char kNoError[] = "";
 
-#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) ||
-        // BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 #if !BUILDFLAG(IS_CHROMEOS)
 
@@ -172,7 +164,7 @@ class EnterpriseReportingPrivateDeviceDataFunctionsTest
 TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, StoreDeviceData) {
   auto function =
       base::MakeRefCounted<EnterpriseReportingPrivateSetDeviceDataFunction>();
-  base::Value::List values;
+  base::ListValue values;
   values.Append("a");
   values.Append(base::Value::BlobStorage({1, 2, 3}));
   api_test_utils::RunFunction(function.get(), std::move(values), profile(),
@@ -185,7 +177,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, StoreDeviceData) {
 TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DeviceDataMissing) {
   auto function =
       base::MakeRefCounted<EnterpriseReportingPrivateGetDeviceDataFunction>();
-  base::Value::List values;
+  base::ListValue values;
   values.Append("b");
   api_test_utils::RunFunction(function.get(), std::move(values), profile(),
                               extensions::api_test_utils::FunctionMode::kNone);
@@ -201,7 +193,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DeviceDataMissing) {
 TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DeviceBadId) {
   auto set_function =
       base::MakeRefCounted<EnterpriseReportingPrivateSetDeviceDataFunction>();
-  base::Value::List set_values;
+  base::ListValue set_values;
   set_values.Append("a/b");
   set_values.Append(base::Value::BlobStorage({1, 2, 3}));
   api_test_utils::RunFunction(set_function.get(), std::move(set_values),
@@ -212,7 +204,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DeviceBadId) {
   // Try to read the directory as a file and should fail.
   auto function =
       base::MakeRefCounted<EnterpriseReportingPrivateGetDeviceDataFunction>();
-  base::Value::List values;
+  base::ListValue values;
   values.Append("a");
   api_test_utils::RunFunction(function.get(), std::move(values), profile(),
                               extensions::api_test_utils::FunctionMode::kNone);
@@ -221,10 +213,37 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DeviceBadId) {
   EXPECT_FALSE(function->GetError().empty());
 }
 
+TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, DevicePathTraversal) {
+  auto set_function =
+      base::MakeRefCounted<EnterpriseReportingPrivateSetDeviceDataFunction>();
+  base::ListValue set_values;
+  set_values.Append("../traversal");
+  set_values.Append(base::Value::BlobStorage({1, 2, 3}));
+  api_test_utils::RunFunction(set_function.get(), std::move(set_values),
+                              profile(),
+                              extensions::api_test_utils::FunctionMode::kNone);
+  // It should fail and set an error.
+  EXPECT_FALSE(set_function->GetError().empty());
+
+  auto get_function =
+      base::MakeRefCounted<EnterpriseReportingPrivateGetDeviceDataFunction>();
+  base::ListValue get_values;
+  get_values.Append("../traversal");
+  api_test_utils::RunFunction(get_function.get(), std::move(get_values),
+                              profile(),
+                              extensions::api_test_utils::FunctionMode::kNone);
+  // It should also fail or return empty blob. Based on our implementation,
+  // it returns kDataRecordNotFound which translates to empty blob in API.
+  ASSERT_TRUE(get_function->GetResultListForTest());
+  const base::Value& single_result = (*get_function->GetResultListForTest())[0];
+  ASSERT_TRUE(single_result.is_blob());
+  EXPECT_EQ(base::Value::BlobStorage(), single_result.GetBlob());
+}
+
 TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, RetrieveDeviceData) {
   auto set_function =
       base::MakeRefCounted<EnterpriseReportingPrivateSetDeviceDataFunction>();
-  base::Value::List set_values;
+  base::ListValue set_values;
   set_values.Append("c");
   set_values.Append(base::Value::BlobStorage({1, 2, 3}));
   api_test_utils::RunFunction(set_function.get(), std::move(set_values),
@@ -234,7 +253,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, RetrieveDeviceData) {
 
   auto get_function =
       base::MakeRefCounted<EnterpriseReportingPrivateGetDeviceDataFunction>();
-  base::Value::List values;
+  base::ListValue values;
   values.Append("c");
   api_test_utils::RunFunction(get_function.get(), std::move(values), profile(),
                               extensions::api_test_utils::FunctionMode::kNone);
@@ -247,7 +266,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, RetrieveDeviceData) {
   // Clear the data and check that it is gone.
   auto set_function2 =
       base::MakeRefCounted<EnterpriseReportingPrivateSetDeviceDataFunction>();
-  base::Value::List reset_values;
+  base::ListValue reset_values;
   reset_values.Append("c");
   api_test_utils::RunFunction(set_function2.get(), std::move(reset_values),
                               profile(),
@@ -256,7 +275,7 @@ TEST_F(EnterpriseReportingPrivateDeviceDataFunctionsTest, RetrieveDeviceData) {
 
   auto get_function2 =
       base::MakeRefCounted<EnterpriseReportingPrivateGetDeviceDataFunction>();
-  base::Value::List values2;
+  base::ListValue values2;
   values2.Append("c");
   api_test_utils::RunFunction(get_function2.get(), std::move(values2),
                               profile(),
@@ -742,14 +761,14 @@ class EnterpriseReportingPrivateGetContextInfoChromeRemoteDesktopAppBlockedTest
       public testing::WithParamInterface<const char*> {
  public:
   void SetURLBlockedPolicy(const std::string& url) {
-    base::Value::List blocklist;
+    base::ListValue blocklist;
     blocklist.Append(url);
 
     profile()->GetPrefs()->SetList(policy::policy_prefs::kUrlBlocklist,
                                    std::move(blocklist));
   }
   void SetURLAllowedPolicy(const std::string& url) {
-    base::Value::List allowlist;
+    base::ListValue allowlist;
     allowlist.Append(url);
 
     profile()->GetPrefs()->SetList(policy::policy_prefs::kUrlAllowlist,
@@ -782,7 +801,7 @@ TEST_P(
     EnterpriseReportingPrivateGetContextInfoChromeRemoteDesktopAppBlockedTest,
     BlockedURL) {
   SetURLBlockedPolicy(GetParam());
-
+  task_environment()->RunUntilIdle();
   enterprise_reporting_private::ContextInfo info = GetContextInfo();
 
   ExpectDefaultPolicies(info);
@@ -793,6 +812,7 @@ TEST_P(
     EnterpriseReportingPrivateGetContextInfoChromeRemoteDesktopAppBlockedTest,
     AllowedURL) {
   SetURLAllowedPolicy(GetParam());
+  task_environment()->RunUntilIdle();
 
   enterprise_reporting_private::ContextInfo info = GetContextInfo();
 
@@ -805,6 +825,7 @@ TEST_P(
     BlockedAndAllowedURL) {
   SetURLBlockedPolicy(GetParam());
   SetURLAllowedPolicy(GetParam());
+  task_environment()->RunUntilIdle();
 
   enterprise_reporting_private::ContextInfo info = GetContextInfo();
 
@@ -979,221 +1000,6 @@ TEST_P(EnterpriseReportingPrivateGetContextInfoRealTimeURLCheckTest, Test) {
   EXPECT_TRUE(info.enterprise_profile_id);
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
-
-// Test for API enterprise.reportingPrivate.enqueueRecord
-class EnterpriseReportingPrivateEnqueueRecordFunctionTest
-    : public ExtensionApiUnittest {
- protected:
-  static constexpr char kTestDMTokenValue[] = "test_dm_token_value";
-
-  EnterpriseReportingPrivateEnqueueRecordFunctionTest() = default;
-
-  void SetUp() override {
-    ExtensionApiUnittest::SetUp();
-    ::chromeos::MissiveClient::InitializeFake();
-    function_ =
-        base::MakeRefCounted<EnterpriseReportingPrivateEnqueueRecordFunction>();
-    const auto record = GetTestRecord();
-    serialized_record_data_.resize(record.ByteSizeLong());
-    ASSERT_TRUE(record.SerializeToArray(serialized_record_data_.data(),
-                                        serialized_record_data_.size()));
-  }
-
-  void TearDown() override {
-    function_.reset();
-    ::chromeos::MissiveClient::Shutdown();
-    ExtensionApiUnittest::TearDown();
-  }
-
-  ::reporting::Record GetTestRecord() const {
-    base::Value::Dict data;
-    data.Set("TEST_KEY", base::Value("TEST_VALUE"));
-
-    ::reporting::Record record;
-    record.set_data(base::WriteJson(data).value());
-    record.set_destination(::reporting::Destination::TELEMETRY_METRIC);
-    record.set_timestamp_us(base::Time::Now().InMillisecondsSinceUnixEpoch() *
-                            base::Time::kMicrosecondsPerMillisecond);
-
-    return record;
-  }
-
-  void VerifyNoRecordsEnqueued(::reporting::Priority priority =
-                                   ::reporting::Priority::BACKGROUND_BATCH) {
-    ::chromeos::MissiveClient::TestInterface* const missive_test_interface =
-        ::chromeos::MissiveClient::Get()->GetTestInterface();
-    ASSERT_TRUE(missive_test_interface);
-
-    const std::vector<::reporting::Record>& records =
-        missive_test_interface->GetEnqueuedRecords(priority);
-
-    ASSERT_THAT(records, IsEmpty());
-  }
-
-  std::vector<uint8_t> serialized_record_data_;
-  scoped_refptr<extensions::EnterpriseReportingPrivateEnqueueRecordFunction>
-      function_;
-};
-
-TEST_F(EnterpriseReportingPrivateEnqueueRecordFunctionTest,
-       ValidRecordSuccessfullyEnqueued) {
-  function_->SetProfileIsAffiliatedForTesting(/*is_affiliated=*/true);
-
-  api::enterprise_reporting_private::EnqueueRecordRequest
-      enqueue_record_request;
-  enqueue_record_request.record_data = serialized_record_data_;
-  enqueue_record_request.priority = ::reporting::Priority::BACKGROUND_BATCH;
-  enqueue_record_request.event_type =
-      api::enterprise_reporting_private::EventType::kUser;
-
-  base::Value::List params;
-  params.Append(enqueue_record_request.ToValue());
-
-  // Set up DM token
-  const auto dm_token = policy::DMToken::CreateValidToken(kTestDMTokenValue);
-  policy::SetDMTokenForTesting(dm_token);
-
-  api_test_utils::RunFunction(function_.get(), std::move(params), profile(),
-                              extensions::api_test_utils::FunctionMode::kNone);
-  EXPECT_EQ(function_->GetError(), kNoError);
-
-  ::chromeos::MissiveClient::TestInterface* const missive_test_interface =
-      ::chromeos::MissiveClient::Get()->GetTestInterface();
-  ASSERT_TRUE(missive_test_interface);
-
-  const std::vector<::reporting::Record>& background_batch_records =
-      missive_test_interface->GetEnqueuedRecords(
-          ::reporting::Priority::BACKGROUND_BATCH);
-
-  ASSERT_THAT(background_batch_records, SizeIs(1));
-  EXPECT_THAT(background_batch_records[0].destination(),
-              Eq(::reporting::Destination::TELEMETRY_METRIC));
-  EXPECT_THAT(background_batch_records[0].dm_token(), StrEq(dm_token.value()));
-  EXPECT_THAT(background_batch_records[0].data(),
-              StrEq(GetTestRecord().data()));
-}
-
-TEST_F(EnterpriseReportingPrivateEnqueueRecordFunctionTest,
-       InvalidPriorityReturnsError) {
-  function_->SetProfileIsAffiliatedForTesting(true);
-
-  api::enterprise_reporting_private::EnqueueRecordRequest
-      enqueue_record_request;
-  enqueue_record_request.record_data = serialized_record_data_;
-
-  // Set priority to invalid enum value
-  enqueue_record_request.priority = -1;
-
-  enqueue_record_request.event_type =
-      api::enterprise_reporting_private::EventType::kUser;
-
-  base::Value::List params;
-  params.Append(enqueue_record_request.ToValue());
-
-  policy::SetDMTokenForTesting(
-      policy::DMToken::CreateValidToken(kTestDMTokenValue));
-
-  api_test_utils::RunFunction(function_.get(), std::move(params), profile(),
-                              extensions::api_test_utils::FunctionMode::kNone);
-
-  EXPECT_EQ(function_->GetError(),
-            EnterpriseReportingPrivateEnqueueRecordFunction::
-                kErrorInvalidEnqueueRecordRequest);
-
-  VerifyNoRecordsEnqueued();
-}
-
-TEST_F(EnterpriseReportingPrivateEnqueueRecordFunctionTest,
-       NonAffiliatedUserReturnsError) {
-  function_->SetProfileIsAffiliatedForTesting(false);
-
-  api::enterprise_reporting_private::EnqueueRecordRequest
-      enqueue_record_request;
-  enqueue_record_request.record_data = serialized_record_data_;
-
-  enqueue_record_request.priority = ::reporting::Priority::BACKGROUND_BATCH;
-
-  enqueue_record_request.event_type =
-      api::enterprise_reporting_private::EventType::kUser;
-
-  base::Value::List params;
-  params.Append(enqueue_record_request.ToValue());
-
-  policy::SetDMTokenForTesting(
-      policy::DMToken::CreateValidToken(kTestDMTokenValue));
-
-  api_test_utils::RunFunction(function_.get(), std::move(params), profile(),
-                              extensions::api_test_utils::FunctionMode::kNone);
-
-  EXPECT_EQ(function_->GetError(),
-            EnterpriseReportingPrivateEnqueueRecordFunction::
-                kErrorProfileNotAffiliated);
-
-  VerifyNoRecordsEnqueued();
-}
-
-TEST_F(EnterpriseReportingPrivateEnqueueRecordFunctionTest,
-       InvalidDMTokenReturnsError) {
-  function_->SetProfileIsAffiliatedForTesting(true);
-  api::enterprise_reporting_private::EnqueueRecordRequest
-      enqueue_record_request;
-  enqueue_record_request.record_data = serialized_record_data_;
-  enqueue_record_request.priority = ::reporting::Priority::BACKGROUND_BATCH;
-  enqueue_record_request.event_type =
-      api::enterprise_reporting_private::EventType::kUser;
-
-  base::Value::List params;
-  params.Append(enqueue_record_request.ToValue());
-
-  // Set up invalid DM token
-  policy::SetDMTokenForTesting(policy::DMToken::CreateInvalidToken());
-
-  api_test_utils::RunFunction(function_.get(), std::move(params), profile(),
-                              extensions::api_test_utils::FunctionMode::kNone);
-
-  EXPECT_EQ(function_->GetError(),
-            EnterpriseReportingPrivateEnqueueRecordFunction::
-                kErrorCannotAssociateRecordWithUser);
-
-  VerifyNoRecordsEnqueued();
-}
-
-TEST_F(EnterpriseReportingPrivateEnqueueRecordFunctionTest,
-       InvalidRecordWithMissingTimestampReturnsError) {
-  function_->SetProfileIsAffiliatedForTesting(true);
-  api::enterprise_reporting_private::EnqueueRecordRequest
-      enqueue_record_request;
-  // Clear timestamp from test record and set up serialized record
-  auto record = GetTestRecord();
-  record.clear_timestamp_us();
-  serialized_record_data_.clear();
-  serialized_record_data_.resize(record.ByteSizeLong());
-  ASSERT_TRUE(record.SerializeToArray(serialized_record_data_.data(),
-                                      serialized_record_data_.size()));
-  enqueue_record_request.record_data = serialized_record_data_;
-  enqueue_record_request.priority = ::reporting::Priority::BACKGROUND_BATCH;
-  enqueue_record_request.event_type =
-      api::enterprise_reporting_private::EventType::kUser;
-
-  base::Value::List params;
-  params.Append(enqueue_record_request.ToValue());
-
-  // Set up invalid DM token
-  policy::SetDMTokenForTesting(
-      policy::DMToken::CreateValidToken(kTestDMTokenValue));
-
-  api_test_utils::RunFunction(function_.get(), std::move(params), profile(),
-                              extensions::api_test_utils::FunctionMode::kNone);
-
-  EXPECT_EQ(function_->GetError(),
-            EnterpriseReportingPrivateEnqueueRecordFunction::
-                kErrorInvalidEnqueueRecordRequest);
-
-  VerifyNoRecordsEnqueued();
-}
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 namespace {
@@ -1273,7 +1079,7 @@ class EnterpriseReportingPrivateGetFileSystemInfoTest
     enterprise_reporting_private::GetFileSystemInfoRequest request;
     request.user_context = GetFakeUserContext();
     request.options.push_back(GetFakeFileSystemOptionsParam());
-    base::Value::List params;
+    base::ListValue params;
     params.Append(request.ToValue());
     return base::WriteJson(params).value_or("");
   }
@@ -1303,7 +1109,7 @@ TEST_F(EnterpriseReportingPrivateGetFileSystemInfoTest, Success) {
 
   ASSERT_TRUE(response);
   ASSERT_TRUE(response->is_list());
-  const base::Value::List& list_value = response->GetList();
+  const base::ListValue& list_value = response->GetList();
   ASSERT_EQ(list_value.size(), signal_response.file_system_items.size());
 
   const base::Value& file_system_value = list_value.front();
@@ -1335,6 +1141,25 @@ TEST_F(EnterpriseReportingPrivateGetFileSystemInfoTest, Success) {
       "Enterprise.DeviceSignals.Collection.Failure", 0);
   histogram_tester_.ExpectTotalCount(
       "Enterprise.DeviceSignals.Collection.Failure.FileSystemInfo.Latency", 0);
+}
+
+TEST_F(EnterpriseReportingPrivateGetFileSystemInfoTest,
+       NetworkPathFailsGracefully) {
+  enterprise_reporting_private::GetFileSystemInfoRequest request;
+  request.user_context = GetFakeUserContext();
+
+  enterprise_reporting_private::GetFileSystemInfoOptions option;
+  option.path = "//server/share/file.txt";
+  request.options.push_back(std::move(option));
+
+  base::ListValue args;
+  args.Append(request.ToValue());
+  std::string json_args = base::WriteJson(args).value_or("");
+
+  std::string error = api_test_utils::RunFunctionAndReturnError(
+      function_.get(), json_args, profile());
+
+  EXPECT_EQ(error, "Network paths are not supported.");
 }
 
 TEST_F(EnterpriseReportingPrivateGetFileSystemInfoTest, TopLevelError) {
@@ -1443,7 +1268,7 @@ class EnterpriseReportingPrivateGetSettingsTest : public UserContextGatedTest {
     enterprise_reporting_private::GetSettingsRequest request;
     request.user_context = GetFakeUserContext();
     request.options.push_back(GetFakeSettingsOptionsParam());
-    base::Value::List params;
+    base::ListValue params;
     params.Append(request.ToValue());
     return base::WriteJson(params).value_or("");
   }
@@ -1476,7 +1301,7 @@ TEST_F(EnterpriseReportingPrivateGetSettingsTest, Success) {
 
   ASSERT_TRUE(response);
   ASSERT_TRUE(response->is_list());
-  const base::Value::List& list_value = response->GetList();
+  const base::ListValue& list_value = response->GetList();
   ASSERT_EQ(list_value.size(), signal_response.settings_items.size());
 
   const base::Value& settings_value = list_value.front();
@@ -1592,7 +1417,7 @@ TEST_F(EnterpriseReportingPrivateGetSettingsTest, CollectionError) {
 
 std::string GetFakeUserContextJsonParams() {
   auto user_context = GetFakeUserContext();
-  base::Value::List params;
+  base::ListValue params;
   params.Append(user_context.ToValue());
   return base::WriteJson(params).value_or("");
 }
@@ -1635,7 +1460,7 @@ TEST_F(EnterpriseReportingPrivateGetAvInfoTest, Success) {
 
   ASSERT_TRUE(response);
   ASSERT_TRUE(response->is_list());
-  const base::Value::List& list_value = response->GetList();
+  const base::ListValue& list_value = response->GetList();
   ASSERT_EQ(list_value.size(), av_response.av_products.size());
 
   const base::Value& av_value = list_value.front();
@@ -1761,7 +1586,7 @@ TEST_F(EnterpriseReportingPrivateGetHotfixesTest, Success) {
 
   ASSERT_TRUE(response);
   ASSERT_TRUE(response->is_list());
-  const base::Value::List& list_value = response->GetList();
+  const base::ListValue& list_value = response->GetList();
   ASSERT_EQ(list_value.size(), hotfix_response.hotfixes.size());
 
   const base::Value& hotfix_value = list_value.front();

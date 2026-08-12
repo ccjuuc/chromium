@@ -8,7 +8,6 @@
 
 #include "components/metrics/clean_exit_beacon.h"
 #include "components/metrics/metrics_service.h"
-#include "components/variations/service/ui_string_overrider.h"
 #include "components/variations/service/variations_service_client.h"
 #include "components/web_resource/resource_request_allowed_notifier_test_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -38,8 +37,6 @@ class TestVariationsServiceClient : public VariationsServiceClient {
     return false;
   }
   bool IsEnterprise() override { return false; }
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-      PrefService* local_state) override {}
 
  private:
   version_info::Channel GetChannel() override {
@@ -58,8 +55,7 @@ TestVariationsService::TestVariationsService(
               prefs,
               network::TestNetworkConnectionTracker::GetInstance()),
           prefs,
-          state_manager,
-          variations::UIStringOverrider()) {}
+          state_manager) {}
 
 TestVariationsService::~TestVariationsService() = default;
 

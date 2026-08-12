@@ -75,11 +75,6 @@ ContentVerifier* MockExtensionSystem::content_verifier() {
   return nullptr;
 }
 
-std::unique_ptr<ExtensionSet> MockExtensionSystem::GetDependentExtensions(
-    const Extension* extension) {
-  return nullptr;
-}
-
 void MockExtensionSystem::InstallUpdate(
     const ExtensionId& extension_id,
     const std::string& public_key,
@@ -91,6 +86,6 @@ void MockExtensionSystem::InstallUpdate(
 
 void MockExtensionSystem::PerformActionBasedOnOmahaAttributes(
     const ExtensionId& extension_id,
-    const base::Value::Dict& attributes) {}
+    const base::DictValue& attributes) {}
 
 }  // namespace extensions

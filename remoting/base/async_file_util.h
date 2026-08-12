@@ -11,13 +11,40 @@
 #include "base/files/file_error_or.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/types/expected.h"
+#include "build/build_config.h"
+
+namespace base {
+class SequencedTaskRunner;
+}  // namespace base
+
+#if BUILDFLAG(IS_POSIX)
+#include <sys/types.h>
+#endif
 
 namespace remoting {
 
 void WriteFileAsync(const base::FilePath& file,
                     std::string_view content,
                     base::OnceCallback<void(base::FileErrorOr<void>)> on_done);
+
+// Writes the file atomically using base::ImportantFileWriter, ensuring the
+// parent directory exists first (with secure default 0700 permissions).
+// Runs on the provided sequenced task runner to prevent race conditions.
+void WriteImportantFileAndEnsureParentDirAsync(
+    const base::FilePath& file,
+    std::string content,
+    scoped_refptr<base::SequencedTaskRunner> task_runner,
+    base::OnceCallback<void(base::FileErrorOr<void>)> on_done);
+
+#if BUILDFLAG(IS_POSIX)
+void WriteFileWithPermissionsAsync(
+    const base::FilePath& file,
+    std::string_view content,
+    mode_t permissions,
+    base::OnceCallback<void(base::FileErrorOr<void>)> on_done);
+#endif
 
 void ReadFileAsync(
     const base::FilePath& file,

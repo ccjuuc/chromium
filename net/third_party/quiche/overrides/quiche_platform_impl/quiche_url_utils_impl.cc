@@ -25,13 +25,9 @@ bool ExpandURITemplateImpl(
     const absl::flat_hash_map<std::string, std::string>& parameters,
     std::string* target,
     absl::flat_hash_set<std::string>* vars_found) {
-  std::unordered_map<std::string, std::string> std_parameters;
-  for (const auto& pair : parameters) {
-    std_parameters[pair.first] = pair.second;
-  }
   std::set<std::string> std_vars_found;
   const bool result =
-      uri_template::Expand(uri_template, std_parameters, target,
+      uri_template::Expand(uri_template, parameters, target,
                            vars_found != nullptr ? &std_vars_found : nullptr);
   if (vars_found != nullptr) {
     for (const std::string& var_found : std_vars_found) {
@@ -42,12 +38,10 @@ bool ExpandURITemplateImpl(
 }
 
 std::optional<std::string> AsciiUrlDecodeImpl(std::string_view input) {
-  url::RawCanonOutputW<1024> canon_output;
-  url::DecodeURLEscapeSequences(input, url::DecodeURLMode::kUTF8,
-                                &canon_output);
+  url::UrlEscapeDecoder decoder(input, url::DecodeUrlMode::kUtf8);
   std::string output;
-  output.reserve(canon_output.length());
-  for (uint16_t c : canon_output.view()) {
+  output.reserve(decoder.view().length());
+  for (uint16_t c : decoder.view()) {
     if (c > std::numeric_limits<signed char>::max()) {
       return std::nullopt;
     }

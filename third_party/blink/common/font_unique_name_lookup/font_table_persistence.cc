@@ -9,6 +9,7 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/hash/hash.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/pickle.h"
 #include "base/threading/scoped_blocking_call.h"
 
@@ -32,15 +33,15 @@ bool LoadFromFile(base::FilePath file_path,
       return false;
     }
 
-    file_contents.resize(table_cache_file.GetLength());
+    file_contents.resize(
+        base::checked_cast<size_t>(table_cache_file.GetLength()));
 
     if (table_cache_file.Read(0, file_contents).value_or(0) == 0) {
       return false;
     }
   }
 
-  base::Pickle pickle = base::Pickle::WithUnownedBuffer(file_contents);
-  base::PickleIterator pickle_iterator(pickle);
+  base::PickleIterator pickle_iterator = base::PickleIterator::WithData(file_contents);
 
   uint32_t checksum = 0;
   if (!pickle_iterator.ReadUInt32(&checksum)) {
@@ -62,7 +63,7 @@ bool LoadFromFile(base::FilePath file_path,
   }
 
   blink::FontUniqueNameTable font_table;
-  if (!font_table.ParseFromArray(proto.data(), proto.size())) {
+  if (!font_table.ParseFromString(base::as_string_view(proto))) {
     return false;
   }
 

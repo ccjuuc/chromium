@@ -11,7 +11,7 @@ import static androidx.test.espresso.action.ViewActions.pressKey;
 import static androidx.test.espresso.action.ViewActions.replaceText;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
-import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
+import static androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.isFocused;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
@@ -21,6 +21,8 @@ import static androidx.test.espresso.matcher.ViewMatchers.withParentIndex;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.CoreMatchers.allOf;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -29,10 +31,16 @@ import static org.chromium.chrome.test.util.ChromeTabUtils.getTabCountOnUiThread
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.view.KeyEvent;
+import android.view.View;
+import android.widget.ListView;
 
+import androidx.test.espresso.ViewAssertion;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.hamcrest.BaseMatcher;
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
 import org.junit.After;
 import org.junit.Before;
@@ -40,31 +48,32 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tasks.tab_management.color_picker.TabGroupColorPickerContainer;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
+import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.components.tab_groups.TabGroupColorId;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
@@ -72,14 +81,15 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 // TODO(crbug.com/419289558): Re-enable color surface feature flags
-@Features.DisableFeatures({
+@DisableFeatures({
     ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE,
     ChromeFeatureList.ANDROID_THEME_MODULE,
+    TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS,
 })
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/511288697
 public class TabStripGroupContextMenuTest {
     @Rule
     public AutoResetCtaTransitTestRule mActivityTestRule =
@@ -89,11 +99,12 @@ public class TabStripGroupContextMenuTest {
     private Token mTabGroupId;
     private ModalDialogManager mModalDialogManager;
     private ChromeTabbedActivity mInitialRegularActivity;
+    private CtaPageStation mPage;
 
     @Before
     public void setUp() throws Exception {
-        mInitialRegularActivity =
-                (ChromeTabbedActivity) mActivityTestRule.getActivityTestRule().getActivity();
+        mPage = mActivityTestRule.startOnBlankPage();
+        mInitialRegularActivity = (ChromeTabbedActivity) mPage.getActivity();
         mStripLayoutHelper =
                 TabStripTestUtils.getActiveStripLayoutHelper(mActivityTestRule.getActivity());
         mModalDialogManager = mActivityTestRule.getActivity().getModalDialogManager();
@@ -125,12 +136,11 @@ public class TabStripGroupContextMenuTest {
         showMenu();
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Verify and click "New tab in group".
@@ -140,8 +150,7 @@ public class TabStripGroupContextMenuTest {
 
         // Verify the grouped tab count is incremented.
         int finalTabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 3 tabs in group", tabCount + 1, finalTabCount);
     }
 
@@ -153,12 +162,11 @@ public class TabStripGroupContextMenuTest {
         showMenu();
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Verify and click "Ungroup".
@@ -170,17 +178,15 @@ public class TabStripGroupContextMenuTest {
         verifyModalDialog(/* shouldShow= */ true);
         onView(withText(R.string.ungroup_tab_group_action)).perform(click());
         int finalTabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("Tab group should be ungrouped", 0, finalTabCount);
 
         // Verify no tab group exists.
-        TabModel tabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         for (int i = 0; i < getTabCountOnUiThread(tabModel); i++) {
             int j = i;
             boolean isTabInGroup =
                     ThreadUtils.runOnUiThreadBlocking(
-                            () -> tabGroupModelFilter.isTabInTabGroup(tabModel.getTabAt(j)));
+                            () -> tabModel.isTabInTabGroup(tabModel.getTabAt(j)));
             assertFalse("Tab should not be grouped", isTabInGroup);
         }
     }
@@ -196,12 +202,11 @@ public class TabStripGroupContextMenuTest {
         onView(withText(R.string.tab_grid_dialog_toolbar_delete_group)).check(doesNotExist());
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ true);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Verify and click "Ungroup".
@@ -212,17 +217,15 @@ public class TabStripGroupContextMenuTest {
         // ungrouped.
         verifyModalDialog(/* shouldShow= */ false);
         int finalTabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("Tab group should be ungrouped", 0, finalTabCount);
 
         // Verify no tab group exists.
-        TabModel tabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         for (int i = 0; i < getTabCountOnUiThread(tabModel); i++) {
             int j = i;
             boolean isTabInGroup =
                     ThreadUtils.runOnUiThreadBlocking(
-                            () -> tabGroupModelFilter.isTabInTabGroup(tabModel.getTabAt(j)));
+                            () -> tabModel.isTabInTabGroup(tabModel.getTabAt(j)));
             assertFalse("Tab should not be grouped", isTabInGroup);
         }
     }
@@ -235,21 +238,18 @@ public class TabStripGroupContextMenuTest {
         showMenu();
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Assert last tab is an ungrouped tab.
-        TabModel tabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         Tab ungroupedTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(2));
         assertFalse(
                 "Last tab should not be grouped",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.isTabInTabGroup(ungroupedTab)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.isTabInTabGroup(ungroupedTab)));
 
         // Verify and click "Close group".
         onView(withText(R.string.tab_grid_dialog_toolbar_close_group))
@@ -259,8 +259,7 @@ public class TabStripGroupContextMenuTest {
         // Assert tab group is closed and undo option showed.
         assertFalse(
                 "Tab group should be closed",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.tabGroupExists(mTabGroupId)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.tabGroupExists(mTabGroupId)));
         assertEquals("Expected only one tab to be present", 1, getTabCountOnUiThread(tabModel));
         Tab firstTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(0));
         assertEquals(
@@ -281,21 +280,18 @@ public class TabStripGroupContextMenuTest {
         onView(withText(R.string.tab_grid_dialog_toolbar_delete_group)).check(doesNotExist());
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ true);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Assert last tab is an ungrouped tab.
-        TabModel tabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         Tab ungroupedTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(2));
         assertFalse(
                 "Last tab should not be grouped",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.isTabInTabGroup(ungroupedTab)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.isTabInTabGroup(ungroupedTab)));
 
         // Verify and click "Close group".
         onView(withText(R.string.tab_grid_dialog_toolbar_close_group))
@@ -305,8 +301,7 @@ public class TabStripGroupContextMenuTest {
         // Assert tab group is closed and undo option not showed.
         assertFalse(
                 "Tab group should be closed",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.tabGroupExists(mTabGroupId)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.tabGroupExists(mTabGroupId)));
         assertEquals("Expected only one tab to be present", 1, getTabCountOnUiThread(tabModel));
         Tab firstTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(0));
         assertEquals(
@@ -324,21 +319,18 @@ public class TabStripGroupContextMenuTest {
         showMenu();
 
         // Assert there are 2 grouped tabs.
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
         int tabCount =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabCountForGroup(mTabGroupId));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabCountForGroup(mTabGroupId));
         assertEquals("There should be 2 tabs in group", 2, tabCount);
 
         // Assert last tab is an ungrouped tab.
-        TabModel tabModel = mActivityTestRule.getActivity().getCurrentTabModel();
         Tab ungroupedTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(2));
         assertFalse(
                 "Last tab should not be grouped",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.isTabInTabGroup(ungroupedTab)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.isTabInTabGroup(ungroupedTab)));
 
         // Verify and click "Delete group".
         onView(withText(R.string.tab_grid_dialog_toolbar_delete_group))
@@ -351,8 +343,7 @@ public class TabStripGroupContextMenuTest {
         onView(withText(R.string.delete_tab_group_action)).perform(click());
         assertFalse(
                 "Tab group should be deleted",
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.tabGroupExists(mTabGroupId)));
+                ThreadUtils.runOnUiThreadBlocking(() -> tabModel.tabGroupExists(mTabGroupId)));
         assertEquals("Expected only one tab to be present", 1, getTabCountOnUiThread(tabModel));
         Tab firstTab = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabAt(0));
         assertEquals(
@@ -375,11 +366,13 @@ public class TabStripGroupContextMenuTest {
         // Update tab group title and verify.
         title = "newTitle";
         updateGroupTitle(title);
+        showMenu();
         onView(withText(title)).check(matches(isDisplayed()));
 
         // Delete the group title by clearing the edit box and verify its default to "N tabs".
         title = "";
         updateGroupTitle(title);
+        showMenu();
         onView(withText("2 tabs")).check(matches(isDisplayed()));
     }
 
@@ -389,33 +382,31 @@ public class TabStripGroupContextMenuTest {
         // Prepare standard state and show menu.
         prepareStandardState();
         showMenu();
-        TabGroupModelFilter tabGroupModelFilter =
-                TabStripTestUtils.getTabGroupModelFilter(
+        TabModel tabModel =
+                TabStripTestUtils.getTabModel(
                         mActivityTestRule.getActivity(), /* isIncognito= */ false);
 
         // Verify the default grey color is selected.
         @TabGroupColorId
-        int color =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabGroupColor(mTabGroupId));
+        int color = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabGroupColor(mTabGroupId));
         assertEquals("The default grey color should be selected", TabGroupColorId.GREY, color);
 
         // Select the blue color.
         String blueColor = mActivityTestRule.getActivity().getString(R.string.tab_group_color_blue);
-        String notSelectedStringBlue =
-                mActivityTestRule
-                        .getActivity()
-                        .getString(
-                                R.string
-                                        .accessibility_tab_group_color_picker_color_item_not_selected_description,
-                                blueColor);
-        onView(withContentDescription(notSelectedStringBlue)).perform(click());
+        onView(withContentDescription(blueColor)).perform(click());
 
         // Verify the blue color is selected.
-        color =
-                ThreadUtils.runOnUiThreadBlocking(
-                        () -> tabGroupModelFilter.getTabGroupColor(mTabGroupId));
+        color = ThreadUtils.runOnUiThreadBlocking(() -> tabModel.getTabGroupColor(mTabGroupId));
         assertEquals("The blue color should be selected", TabGroupColorId.BLUE, color);
+    }
+
+    private static ViewAssertion matchesWithMessage(Matcher<? super View> matcher, String message) {
+        return (view, noViewFoundException) -> {
+            if (noViewFoundException != null) {
+                throw new AssertionError(message, noViewFoundException);
+            }
+            assertThat(message, view, matcher);
+        };
     }
 
     @Test
@@ -431,53 +422,228 @@ public class TabStripGroupContextMenuTest {
         // Start with the edit text box. Click to focus, then hit down arrow.
         onView(withId(R.id.tab_group_title)).perform(click());
         onView(withId(R.id.tab_group_title)).perform(pressKey(KeyEvent.KEYCODE_DPAD_DOWN));
-        // One of the color picker circles should be focused.
-        onView(allOf(isDescendantOfA(withId(R.id.color_picker_container)), isFocused()))
-                .check(matches(isDisplayed()));
-        // Hit down arrow a 2nd time.
+
+        // One of the color picker circles should be focused in the first row.
+        onView(isFocused())
+                .check(
+                        (view, noViewFoundException) -> {
+                            View parent = (View) view.getParent();
+                            assertTrue(parent instanceof TabGroupColorPickerContainer);
+                            TabGroupColorPickerContainer container =
+                                    (TabGroupColorPickerContainer) parent;
+                            float firstY = container.getChildAt(0).getY();
+                            assertEquals(
+                                    "Focused view should be in first row",
+                                    firstY,
+                                    view.getY(),
+                                    0.1);
+                        });
+
+        // Check if there's a second row of colors and navigate accordingly.
+        final boolean[] hasSecondRow = new boolean[1];
+        onView(isAssignableFrom(TabGroupColorPickerContainer.class))
+                .check(
+                        (view, noViewFoundException) -> {
+                            if (view instanceof TabGroupColorPickerContainer container) {
+                                if (container.getChildCount() > 0) {
+                                    float firstY = container.getChildAt(0).getY();
+                                    for (int i = 1; i < container.getChildCount(); i++) {
+                                        if (container.getChildAt(i).getY() > firstY) {
+                                            hasSecondRow[0] = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+
+        if (hasSecondRow[0]) {
+            // Hit down arrow to move from the first row to the second row of the color picker.
+            onView(isFocused()).perform(pressKey(KeyEvent.KEYCODE_DPAD_DOWN));
+            onView(isFocused())
+                    .check(
+                            (view, noViewFoundException) -> {
+                                View parent = (View) view.getParent();
+                                assertTrue(parent instanceof TabGroupColorPickerContainer);
+                                TabGroupColorPickerContainer container =
+                                        (TabGroupColorPickerContainer) parent;
+                                float firstY = container.getChildAt(0).getY();
+                                assertTrue(
+                                        "Focused view should be in second row (Y > firstY)",
+                                        view.getY() > firstY);
+                            });
+        }
+
+        // Hit down arrow to move from the color picker to the action menu list.
         onView(isFocused()).perform(pressKey(KeyEvent.KEYCODE_DPAD_DOWN));
-        // TODO(crbug.com/385172744): This may need to be updated for color picker taking up 2 rows
+
         // The second element of tab_group_action_menu_list should be focused (skip divider).
         onView(allOf(withParent(withId(R.id.tab_group_action_menu_list)), withParentIndex(1)))
-                .check(matches(isFocused()));
+                .check(
+                        matchesWithMessage(
+                                isFocused(),
+                                "The second element of tab_group_action_menu_list should be"
+                                        + " focused."));
+
         // Now hit the button.
         onView(isFocused()).perform(pressKey(KeyEvent.KEYCODE_SPACE));
 
         assertEquals(
+                "Tab count should increase by 1 after activating 'New tab in group'.",
                 numTabsBeforeClick + 1,
                 getTabCountOnUiThread(mActivityTestRule.getActivity().getCurrentTabModel()));
     }
 
+    @Test
+    @SmallTest
+    public void testSubMenuScrollability() throws InterruptedException {
+        // Specifically test the drill-down case.
+        HierarchicalMenuController.setDrillDownOverrideValueForTesting(true);
+
+        // Open a new window so we'll get a submenu for "Move to another window"
+        mPage = mActivityTestRule.startOnBlankPage().openNewWindowFast();
+
+        // Switch the "main" activity to the newly-opened window, which is now focused.
+        mActivityTestRule.getActivityTestRule().setActivity(mPage.getActivity());
+
+        BaseMatcher<View> isScrollContainerMatcher =
+                new BaseMatcher<>() {
+                    @Override
+                    public void describeTo(Description description) {
+                        description.appendText("isScrollContainer");
+                    }
+
+                    @Override
+                    public boolean matches(Object o) {
+                        if (o instanceof ListView listView) {
+                            return listView.isScrollContainer();
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void describeMismatch(Object o, Description description) {
+                        description.appendText(
+                                "Expected "
+                                        + o
+                                        + " to be a listView where isScrollContainer was true");
+                    }
+                };
+
+        BaseMatcher<View> layoutParamsMatcher =
+                new BaseMatcher<>() {
+                    @Override
+                    public void describeTo(Description description) {
+                        description.appendText("has no excess space");
+                    }
+
+                    @Override
+                    public boolean matches(Object o) {
+                        if (o instanceof ListView listView) {
+                            View lastChild = listView.getChildAt(listView.getChildCount() - 1);
+                            return listView.getHeight()
+                                            - listView.getPaddingBottom()
+                                            - (lastChild.getY() + lastChild.getHeight())
+                                    < 10;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void describeMismatch(Object o, Description description) {
+                        description.appendText(
+                                "Expected "
+                                        + o
+                                        + " to be a ListView without excess space at the bottom,"
+                                        + " but ");
+                        if (o instanceof ListView listView) {
+                            View lastChild = listView.getChildAt(listView.getChildCount() - 1);
+                            description.appendText(
+                                    "the height of the ListView (minus padding) was at "
+                                            + (listView.getHeight() - listView.getPaddingBottom())
+                                            + " and its last child's bottom was at "
+                                            + (lastChild.getY() + lastChild.getHeight())
+                                            + ", I think the last child is = "
+                                            + lastChild);
+                        } else {
+                            description.appendText(o + " was not a ListView");
+                        }
+                    }
+                };
+
+        // Set up the test as usual.
+        prepareStandardState();
+
+        // Show the menu on the tab group now that it is in a new window.
+        showMenu();
+
+        // Get the ListView of the context menu.
+        onView(withId(R.id.tab_group_action_menu_list))
+                .check(matches(not(isScrollContainerMatcher)));
+
+        String moveToAnotherWindow =
+                mActivityTestRule
+                        .getActivity()
+                        .getResources()
+                        .getQuantityString(
+                                R.plurals.move_group_to_another_window_context_menu_item, 2);
+
+        // Click on "Move tab to other window" to open a submenu.
+        onView(withText(moveToAnotherWindow)).perform(click());
+
+        // Sub-menu should be scrollable and should not have excess space.
+        onView(withId(R.id.tab_group_action_menu_list)).check(matches(isScrollContainerMatcher));
+        onView(withId(R.id.tab_group_action_menu_list)).check(matches(layoutParamsMatcher));
+
+        // Go back to the main menu.
+        onView(withText(moveToAnotherWindow)).perform(click());
+
+        // Main menu should not be scrollable again.
+        onView(withId(R.id.tab_group_action_menu_list))
+                .check(matches(not(isScrollContainerMatcher)));
+    }
+
     private void prepareStandardState() {
-        TabStripTestUtils.createTabs(
-                mActivityTestRule.getActivity(), /* isIncognito= */ false, /* numOfTabs= */ 3);
+        // mPage is initialized in setUp() or updated by the test.
+        mPage = mPage.openNewTabFast().loadAboutBlank();
+        mPage = mPage.openNewTabFast().loadAboutBlank();
+
+        ChromeTabbedActivity activity = (ChromeTabbedActivity) mPage.getActivity();
+        // Wait for the activity to be fully initialized before accessing TabModelSelector.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    try {
+                        return activity.getTabModelSelector() != null;
+                    } catch (IllegalStateException e) {
+                        return false;
+                    }
+                });
+
         TabStripTestUtils.createTabGroup(
-                mActivityTestRule.getActivity(),
-                /* isIncognito= */ false,
-                /* firstIndex= */ 0,
-                /* secondIndex= */ 1);
+                activity, /* isIncognito= */ false, /* firstIndex= */ 0, /* secondIndex= */ 1);
+
+        // Re-initialize helper and manager for the current activity.
+        if (mInitialRegularActivity.getTabModelSelector().isIncognitoBrandedModelSelected()) {
+            mStripLayoutHelper = TabStripTestUtils.getActiveStripLayoutHelper(activity);
+            mModalDialogManager = activity.getModalDialogManager();
+        }
     }
 
     private void prepareIncognitoState() {
-        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
-            IncognitoNewTabPageStation incognitoNtp =
-                    mActivityTestRule.startOnBlankPage().openNewIncognitoTabOrWindowFast();
-            incognitoNtp = incognitoNtp.openNewIncognitoTabFast();
-            incognitoNtp.openNewIncognitoTabFast();
-            mActivityTestRule
-                    .getActivityTestRule()
-                    .setActivity(
-                            (ChromeTabbedActivity)
-                                    ApplicationStatus.getLastTrackedFocusedActivity());
-        } else {
-            TabStripTestUtils.createTabs(
-                    mActivityTestRule.getActivity(), /* isIncognito= */ true, /* numOfTabs= */ 3);
-        }
+        // Transition to incognito from the current regular page.
+        mPage = mPage.openNewIncognitoTabOrWindowFast();
+        mPage = mPage.openNewIncognitoTabFast();
+        mPage = mPage.openNewIncognitoTabFast();
+
+        ChromeTabbedActivity activity = (ChromeTabbedActivity) mPage.getActivity();
+        // If we opened a new window, ensure the rule tracks it for cleanup.
+        mActivityTestRule.getActivityTestRule().setActivity(activity);
+
         TabStripTestUtils.createTabGroup(
-                mActivityTestRule.getActivity(),
-                /* isIncognito= */ true,
-                /* firstIndex= */ 0,
-                /* secondIndex= */ 1);
+                activity, /* isIncognito= */ true, /* firstIndex= */ 0, /* secondIndex= */ 1);
+
+        mStripLayoutHelper = TabStripTestUtils.getActiveStripLayoutHelper(activity);
+        mModalDialogManager = activity.getModalDialogManager();
     }
 
     private void verifyModalDialog(boolean shouldShow) {

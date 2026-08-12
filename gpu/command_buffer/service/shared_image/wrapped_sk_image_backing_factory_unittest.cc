@@ -10,6 +10,7 @@
 #include "cc/test/pixel_test_utils.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -97,9 +98,10 @@ TEST_P(WrappedSkImageBackingFactoryTest, Basic) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, gpu::kNullSurfaceHandle, size, kColorSpace,
-      kSurfaceOrigin, kAlphaType, kUsage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, kColorSpace, kSurfaceOrigin, kAlphaType, kUsage,
+       "TestLabel"},
+      gpu::kNullSurfaceHandle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
@@ -175,9 +177,10 @@ TEST_P(WrappedSkImageBackingFactoryTest, Upload) {
   gfx::Size size(100, 100);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, gpu::kNullSurfaceHandle, size, kColorSpace,
-      kSurfaceOrigin, kAlphaType, kUsage, "TestLabel",
-      /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, kColorSpace, kSurfaceOrigin, kAlphaType, kUsage,
+       "TestLabel"},
+      gpu::kNullSurfaceHandle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   std::vector<SkBitmap> bitmaps = AllocateRedBitmaps(format, size);
@@ -190,6 +193,48 @@ TEST_P(WrappedSkImageBackingFactoryTest, Upload) {
       shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
 
   VerifyPixelsWithReadback(mailbox, bitmaps);
+}
+
+TEST_P(WrappedSkImageBackingFactoryTest, UploadAndReadback) {
+  auto format = GetFormat();
+  auto mailbox = Mailbox::Generate();
+  gfx::Size size(100, 100);
+
+  auto backing = backing_factory_->CreateSharedImage(
+      mailbox,
+      {format, size, kColorSpace, kSurfaceOrigin, kAlphaType, kUsage,
+       "TestLabel"},
+      gpu::kNullSurfaceHandle, /*is_thread_safe=*/false);
+  ASSERT_TRUE(backing);
+
+  std::vector<SkBitmap> upload_bitmaps = AllocateRedBitmaps(format, size);
+  std::vector<SkPixmap> upload_pixmaps = GetSkPixmaps(upload_bitmaps);
+
+  // Upload.
+  ASSERT_TRUE(backing->UploadFromMemory(upload_pixmaps));
+  backing->SetCleared();
+
+  // Allocate destination bitmaps.
+  int num_planes = format.NumberOfPlanes();
+  std::vector<SkBitmap> readback_bitmaps(num_planes);
+  for (int plane = 0; plane < num_planes; ++plane) {
+    SkColorType plane_color_type = viz::ToClosestSkColorType(format, plane);
+    gfx::Size plane_size = format.GetPlaneSize(plane, size);
+    readback_bitmaps[plane].allocPixels(SkImageInfo::Make(
+        plane_size.width(), plane_size.height(), plane_color_type, kAlphaType));
+  }
+  std::vector<SkPixmap> readback_pixmaps = GetSkPixmaps(readback_bitmaps);
+
+  // Readback.
+  ASSERT_TRUE(backing->ReadbackToMemory(readback_pixmaps));
+
+  // Verify.
+  for (int plane = 0; plane < num_planes; ++plane) {
+    EXPECT_TRUE(cc::MatchesBitmap(readback_bitmaps[plane],
+                                  upload_bitmaps[plane],
+                                  cc::ExactPixelComparator()))
+        << "plane=" << plane;
+  }
 }
 
 std::string TestParamToString(

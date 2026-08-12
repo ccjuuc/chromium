@@ -19,6 +19,7 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
+#import "base/not_fatal_until.h"
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
@@ -40,7 +41,10 @@
 #import "ios/chrome/browser/download/ui/unopened_downloads_tracker.h"
 #import "ios/chrome/browser/drive/model/drive_service_factory.h"
 #import "ios/chrome/browser/drive/model/upload_task.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/overlays/model/public/common/confirmation/confirmation_overlay_response.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_callback_manager.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
@@ -54,14 +58,17 @@
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/auto_deletion_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/download_list_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/shared/public/commands/save_to_drive_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/store_kit/model/store_kit_coordinator.h"
 #import "ios/chrome/browser/store_kit/model/store_kit_coordinator_delegate.h"
@@ -71,6 +78,7 @@
 #import "ios/web/public/download/download_task.h"
 #import "ios/web/public/web_client.h"
 #import "net/base/apple/url_conversions.h"
+#import "net/base/filename_util.h"
 #import "net/base/net_errors.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
@@ -93,13 +101,15 @@
   // in progress.
   // Restart when the animation ends.
   BOOL _restartPending;
+  // Handler for Gemini commands.
+  __weak id<GeminiCommands> _geminiHandler;
 }
 @end
 
 @implementation DownloadManagerCoordinator
 
 - (void)dealloc {
-  DCHECK(_stopped);
+  CHECK(_stopped, base::NotFatalUntil::M150);
 }
 
 - (void)start {
@@ -108,9 +118,12 @@
 
 // Similar to start but can be called after pause.
 - (void)restart {
-  DCHECK(self.presenter);
-  DCHECK(self.browser);
-
+  CHECK(self.presenter, base::NotFatalUntil::M150);
+  CHECK(self.browser, base::NotFatalUntil::M150);
+  if (IsPageActionMenuEnabled()) {
+    _geminiHandler = HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                                        GeminiCommands);
+  }
   if (_stopped && self.presenter.presentedViewController) {
     // Stopping animation is still in progress. Wait until it is done to
     // restart.
@@ -123,6 +136,10 @@
                     selector:@selector(applicationDidEnterBackground:)
                         name:UIApplicationDidEnterBackgroundNotification
                       object:nil];
+  [defaultCenter addObserver:self
+                    selector:@selector(applicationWillEnterForeground:)
+                        name:UIApplicationWillEnterForegroundNotification
+                      object:nil];
 
   BOOL isIncognito = self.isOffTheRecord;
   _viewController = [[DownloadManagerViewController alloc] init];
@@ -131,9 +148,15 @@
   _viewController.incognito = isIncognito;
 
   if (_shouldObserveFullscreen) {
-    FullscreenController* fullscreenController =
-        FullscreenController::FromBrowser(self.browser);
-    [_viewController setFullscreenController:fullscreenController];
+    if (IsFullscreenRefactoringEnabled()) {
+      FullscreenBrowserAgent* fullscreenBrowserAgent =
+          FullscreenBrowserAgent::FromBrowser(self.browser);
+      [_viewController setFullscreenBrowserAgent:fullscreenBrowserAgent];
+    } else {
+      FullscreenController* fullscreenController =
+          FullscreenController::FromBrowser(self.browser);
+      [_viewController setFullscreenController:fullscreenController];
+    }
   }
 
   _mediator.SetIsIncognito(isIncognito);
@@ -141,16 +164,15 @@
   _mediator.SetIdentityManager(IdentityManagerFactory::GetForProfile(profile));
   _mediator.SetDriveService(drive::DriveServiceFactory::GetForProfile(profile));
   _mediator.SetPrefService(profile->GetPrefs());
+  _mediator.SetAuthenticationService(
+      AuthenticationServiceFactory::GetForProfile(profile));
   if (IsDownloadListEnabled()) {
     _mediator.SetDownloadRecordService(
         DownloadRecordServiceFactory::GetForProfile(profile));
   }
 
-  _mediator.SetDownloadTask(_downloadTask);
+  _mediator.SetDownloadTask(_downloadTask.get());
   _mediator.SetConsumer(_viewController);
-  if (base::FeatureList::IsEnabled(kIOSDownloadNoUIUpdateInBackground)) {
-    _mediator.StartObservingNotifications();
-  }
 
   self.presenter.baseViewController = self.baseViewController;
   self.presenter.presentedViewController = _viewController;
@@ -165,6 +187,7 @@
 
 - (void)stop {
   [self pause];
+  _geminiHandler = nil;
 }
 
 // Similar to stop, but the coordinator can be restarted later.
@@ -175,19 +198,21 @@
 
   _mediator.SetDriveService(nullptr);
   _mediator.SetPrefService(nullptr);
+  _mediator.SetAuthenticationService(nullptr);
   _mediator.SetIdentityManager(nullptr);
   if (IsDownloadListEnabled()) {
     _mediator.SetDownloadRecordService(nullptr);
-  }
-  if (base::FeatureList::IsEnabled(kIOSDownloadNoUIUpdateInBackground)) {
-    _mediator.StopObservingNotifications();
   }
 
   if (_viewController) {
     [self.presenter dismissAnimated:self.animatesPresentation];
     // Prevent delegate callbacks for stopped coordinator.
     _viewController.delegate = nil;
-    [_viewController setFullscreenController:nullptr];
+    if (IsFullscreenRefactoringEnabled()) {
+      [_viewController setFullscreenBrowserAgent:nullptr];
+    } else {
+      [_viewController setFullscreenController:nullptr];
+    }
     _viewController = nil;
   }
 
@@ -199,6 +224,7 @@
   [self stopStoreKitCoordinator];
 
   [[InstallationNotifier sharedInstance] unregisterForNotifications:self];
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   _stopped = YES;
 }
 
@@ -221,7 +247,7 @@
   }
 
   BOOL replacingExistingDownload = _downloadTask ? YES : NO;
-  _downloadTask = download;
+  _downloadTask = download->GetWeakPtr();
 
   if (web::GetWebClient()->EnableFullscreenAPI()) {
     // Exit fullscreen since download UI will be behind fullscreen mode.
@@ -230,7 +256,7 @@
   }
 
   if (replacingExistingDownload) {
-    _mediator.SetDownloadTask(_downloadTask);
+    _mediator.SetDownloadTask(_downloadTask.get());
   } else {
     self.animatesPresentation = YES;
     [self restart];
@@ -270,7 +296,7 @@
 - (void)downloadManagerTabHelper:(DownloadManagerTabHelper*)tabHelper
                  didHideDownload:(web::DownloadTask*)download
                         animated:(BOOL)animated {
-  DCHECK_EQ(_downloadTask, download);
+  CHECK_EQ(_downloadTask.get(), download, base::NotFatalUntil::M150);
   self.animatesPresentation = animated;
   [self stop];
   self.animatesPresentation = YES;
@@ -279,8 +305,8 @@
 - (void)downloadManagerTabHelper:(DownloadManagerTabHelper*)tabHelper
                  didShowDownload:(web::DownloadTask*)download
                         animated:(BOOL)animated {
-  DCHECK_NE(_downloadTask, download);
-  _downloadTask = download;
+  CHECK_NE(_downloadTask.get(), download, base::NotFatalUntil::M150);
+  _downloadTask = download->GetWeakPtr();
   self.animatesPresentation = animated;
   [self start];
   self.animatesPresentation = YES;
@@ -294,7 +320,7 @@
     // observer is called.
     return;
   }
-  DCHECK_EQ(_downloadTask, download);
+  CHECK_EQ(_downloadTask.get(), download, base::NotFatalUntil::M150);
   self.animatesPresentation = NO;
   [self pause];
   self.animatesPresentation = YES;
@@ -304,33 +330,70 @@
                adaptToFullscreen:(bool)adaptToFullscreen {
   _shouldObserveFullscreen = adaptToFullscreen;
   if (adaptToFullscreen) {
-    FullscreenController* fullscreenController =
-        FullscreenController::FromBrowser(self.browser);
-    [_viewController setFullscreenController:fullscreenController];
+    if (IsFullscreenRefactoringEnabled()) {
+      FullscreenBrowserAgent* fullscreenBrowserAgent =
+          FullscreenBrowserAgent::FromBrowser(self.browser);
+      [_viewController setFullscreenBrowserAgent:fullscreenBrowserAgent];
+    } else {
+      FullscreenController* fullscreenController =
+          FullscreenController::FromBrowser(self.browser);
+      [_viewController setFullscreenController:fullscreenController];
+    }
   } else {
-    [_viewController setFullscreenController:nullptr];
+    if (IsFullscreenRefactoringEnabled()) {
+      [_viewController setFullscreenBrowserAgent:nullptr];
+    } else {
+      [_viewController setFullscreenController:nullptr];
+    }
   }
 }
 
 - (void)downloadManagerTabHelper:(DownloadManagerTabHelper*)tabHelper
             wantsToStartDownload:(web::DownloadTask*)download {
-  DCHECK_EQ(_downloadTask, download);
+  CHECK_EQ(_downloadTask.get(), download, base::NotFatalUntil::M150);
   [self tryDownload];
+}
+
+- (void)downloadManagerTabHelperDidChangeState:
+    (DownloadManagerTabHelper*)tabHelper {
+  _mediator.UpdateConsumer();
 }
 
 #pragma mark - ContainedPresenterDelegate
 
+- (void)containedPresenterWillPresent:(id<ContainedPresenter>)presenter {
+  if (IsPageActionMenuEnabled() &&
+      [_geminiHandler
+          respondsToSelector:@selector(
+                                 hideFloatyIfInvokedAnimated:fromSource:)]) {
+    [_geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::Banner];
+  }
+}
+
 - (void)containedPresenterDidPresent:(id<ContainedPresenter>)presenter {
-  DCHECK(presenter == self.presenter);
+  CHECK_EQ(presenter, self.presenter, base::NotFatalUntil::M150);
+  [_viewController disableCurrentButtonTemporarily];
 }
 
 - (void)containedPresenterDidDismiss:(id<ContainedPresenter>)presenter {
-  DCHECK(presenter == self.presenter);
+  CHECK_EQ(presenter, self.presenter, base::NotFatalUntil::M150);
   // The view controller may not be dealloced immediately.
   presenter.presentedViewController = nil;
   if (_restartPending) {
     _restartPending = NO;
     [self start];
+  }
+
+  if (IsPageActionMenuEnabled() &&
+      [_geminiHandler
+          respondsToSelector:@selector(updateFloatyVisibilityIfEligibleAnimated:
+                                       fromSource:)]) {
+    [_geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     Banner];
   }
 }
 
@@ -364,7 +427,8 @@
         }
       }));
 
-  web::WebState* webState = self.downloadTask->GetWebState();
+  CHECK(_downloadTask);
+  web::WebState* webState = _downloadTask->GetWebState();
   OverlayRequestQueue::FromWebState(webState, OverlayModality::kWebContentArea)
       ->AddRequest(std::move(request));
 }
@@ -383,7 +447,7 @@
   }
   id<SaveToDriveCommands> saveToDriveHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), SaveToDriveCommands);
-  [saveToDriveHandler showSaveToDriveForDownload:_downloadTask];
+  [saveToDriveHandler showSaveToDriveForDownload:_downloadTask.get()];
 }
 
 - (void)downloadManagerViewControllerDidRetry:(UIViewController*)controller {
@@ -410,7 +474,10 @@
   base::RecordAction(base::UserMetricsAction("IOSDownloadOpenInDriveApp"));
   std::optional<GURL> openFileInDriveURL =
       uploadTask->GetResponseLink(/* add_user_identifier= */ true);
-  CHECK(openFileInDriveURL);
+  if (!openFileInDriveURL) {
+    // TODO(crbug.com/324897399): investigate and remove early return.
+    return;
+  }
   [UIApplication.sharedApplication
                 openURL:net::NSURLWithGURL(*openFileInDriveURL)
                 options:@{UIApplicationOpenURLOptionUniversalLinksOnly : @YES}
@@ -427,7 +494,12 @@
   }
   base::RecordAction(base::UserMetricsAction("IOSDownloadOpenIn"));
   base::FilePath path = _mediator.GetDownloadPath();
-  NSURL* URL = [NSURL fileURLWithPath:base::SysUTF8ToNSString(path.value())];
+  NSURL* URL = base::apple::FilePathToNSURL(path);
+  base::UmaHistogramBoolean("Download.IOSDownloadOpenInHasFilePath", URL);
+  if (!URL) {
+    // Final file path is not ready yet, so do nothing for now.
+    return;
+  }
 
   NSArray* customActions = @[ URL ];
   NSArray* activities = nil;
@@ -459,8 +531,7 @@
     (UIViewController*)controller {
   base::RecordAction(base::UserMetricsAction("IOSDownloadOpen"));
   base::FilePath path = _mediator.GetDownloadPath();
-  GURL filePathURL =
-      GURL(base::StringPrintf("%s://%s", "file", path.value().c_str()));
+  GURL filePathURL = net::FilePathToFileURL(path);
   GURL virtualFilePathURL = GURL(
       base::StringPrintf("%s://%s/%s", kChromeUIScheme, kChromeUIDownloadsHost,
                          filePathURL.ExtractFileName().c_str()));
@@ -471,9 +542,9 @@
                                  inIncognito:self.isOffTheRecord
                                 inBackground:NO
                                     appendTo:OpenPosition::kCurrentTab];
-  id<ApplicationCommands> applicationHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), ApplicationCommands);
-  [applicationHandler openURLInNewTab:command];
+  id<SceneCommands> sceneHandler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  [sceneHandler openURLInNewTab:command];
 }
 
 #pragma mark - Private
@@ -481,6 +552,7 @@
 // Attempts to start the current download task, either for the first time or
 // after one or several previously failed attempts.
 - (void)tryDownload {
+  CHECK(_downloadTask);
   DownloadManagerTabHelper* tabHelper =
       DownloadManagerTabHelper::FromWebState(_downloadTask->GetWebState());
   if (_downloadTask->GetErrorCode() != net::OK) {
@@ -490,7 +562,7 @@
         base::UserMetricsAction("IOSDownloadStartDownloadToDrive"));
   } else {
     base::RecordAction(base::UserMetricsAction("IOSDownloadStartDownload"));
-    _unopenedDownloads.Add(_downloadTask);
+    _unopenedDownloads.Add(_downloadTask.get());
     [self maybePresentAutoDeletionActionSheet];
   }
   _mediator.StartDownloading();
@@ -507,7 +579,7 @@
     return;
   }
   // Copy the task pointer before pause nullifies _downloadTask.
-  web::DownloadTask* downloadTask = _downloadTask;
+  web::DownloadTask* downloadTask = _downloadTask.get();
   [self pause];
 
   DownloadManagerTabHelper* tabHelper =
@@ -520,7 +592,7 @@
   // `pause` nulls-our _downloadTask and `Cancel` destroys the task. Call `stop`
   // first to perform all coordinator cleanups, but copy `_downloadTask`
   // pointer to destroy the task.
-  web::DownloadTask* downloadTask = _downloadTask;
+  web::DownloadTask* downloadTask = _downloadTask.get();
   [self pause];
 
   // The pointer may be null if -stop was called before -cancelDownload.
@@ -543,7 +615,6 @@
       DownloadFileUIGoogleDrive::GoogleDriveInstalledAfterDisplay,
       DownloadFileUIGoogleDrive::Count);
   _mediator.SetGoogleDriveAppInstalled(true);
-  _mediator.UpdateConsumer();
 }
 
 // Presents StoreKit dialog for Google Drive application.
@@ -574,8 +645,7 @@
 
   id<AutoDeletionCommands> autoDeletionHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), AutoDeletionCommands);
-  [autoDeletionHandler
-      presentAutoDeletionActionSheetWithDownloadTask:_downloadTask];
+  [autoDeletionHandler presentAutoDeletionActionSheet];
 }
 
 #pragma mark - Notification callback
@@ -584,6 +654,10 @@
   [_openInController.presentingViewController
       dismissViewControllerAnimated:YES
                          completion:nil];
+}
+
+- (void)applicationWillEnterForeground:(NSNotification*)note {
+  _mediator.SetGoogleDriveAppInstalled(IsGoogleDriveAppInstalled());
 }
 
 #pragma mark - StoreKitCoordinatorDelegate

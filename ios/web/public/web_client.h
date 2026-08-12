@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "ios/web/common/user_agent.h"
 #include "mojo/public/cpp/bindings/generic_pending_receiver.h"
@@ -43,10 +44,23 @@ namespace web {
 
 class BrowserState;
 class BrowserURLRewriter;
+class CobaltController;
 class JavaScriptFeature;
 class WebClient;
 class WebMainParts;
 class WebState;
+
+// Enum type specifying the JavaScript Error logging level.
+enum class JSErrorReportLoggingLevel : short {
+  // No logging.
+  NONE = 0,
+
+  // A report without the webpage URL.
+  REPORT_WITHOUT_URL,
+
+  // A full report may be sent, including webpage URL.
+  FULL
+};
 
 // Setter and getter for the client.  The client should be set early, before any
 // web code is called.
@@ -113,7 +127,8 @@ class WebClient {
       ui::ResourceScaleFactor scale_factor) const;
 
   // Returns the raw bytes of a scale independent data resource.
-  virtual base::RefCountedMemory* GetDataResourceBytes(int resource_id) const;
+  virtual scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id) const;
 
   // Returns a list of additional WebUI schemes, if any. These additional
   // schemes act as aliases to the about: scheme. The additional schemes may or
@@ -219,6 +234,16 @@ class WebClient {
       WKFrameInfo* frame,
       base::OnceCallback<void(NSArray<NSURL*>*)> completion) const
       API_AVAILABLE(ios(18.4));
+
+  virtual JSErrorReportLoggingLevel GetJSErrorReportLoggingLevel(
+      BrowserState* browser_state) const;
+
+  // Returns the Cobalt controller for the given `browser_state`.
+  virtual CobaltController* GetCobaltController(
+      BrowserState* browser_state) const;
+
+  // Returns whether smooth scrolling is supported.
+  virtual bool IsSmoothScrollingSupported() const;
 };
 
 }  // namespace web

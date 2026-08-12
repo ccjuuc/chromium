@@ -28,37 +28,27 @@
 namespace {
 
 // Returns the dependency parser model for this renderer process.
-DependencyParserModel& GetDependencyParserModel_() {
-  static base::NoDestructor<DependencyParserModel> instance;
+// All access to this model is asynchronous and safely executed on a background
+// sequenced task runner.
+base::SequenceBound<DependencyParserModel>& GetDependencyParserModel_() {
+  static base::NoDestructor<base::SequenceBound<DependencyParserModel>>
+      instance(base::ThreadPool::CreateSequencedTaskRunner(
+          {base::MayBlock(), base::TaskPriority::BEST_EFFORT}));
   return *instance;
-}
-
-std::vector<size_t> GetDependencyHeads(base::span<const std::string> input) {
-  DependencyParserModel& dependency_parser_model = GetDependencyParserModel_();
-  return dependency_parser_model.IsAvailable()
-             ? dependency_parser_model.GetDependencyHeads(input)
-             : std::vector<size_t>();
 }
 
 }  // namespace
 
 ReadAloudAppModel::ReadAloudAppModel() {
-  for (const auto& [metric, count] : metric_to_count_map_) {
-    metric_to_single_sample_[metric] =
-        base::SingleSampleMetricsFactory::Get()->CreateCustomCountsMetric(
-            metric, min_sample, max_sample, buckets);
-    // We want to know if the counts are never incremented, so set the minimum
-    // sample in case IncrementMetric is never called.
-    metric_to_single_sample_[metric]->SetSample(min_sample);
-  }
+  ResetAndLogSingleSampleMetrics();
 }
 
 ReadAloudAppModel::~ReadAloudAppModel() = default;
 
 void ReadAloudAppModel::OnSettingsRestoredFromPrefs(
     double speech_rate,
-    base::Value::List* languages_enabled_in_pref,
-    base::Value::Dict* voices,
+    base::ListValue* languages_enabled_in_pref,
+    base::DictValue* voices,
     read_anything::mojom::HighlightGranularity granularity) {
   speech_rate_ = speech_rate;
   languages_enabled_in_pref_ = languages_enabled_in_pref->Clone();
@@ -87,7 +77,7 @@ void ReadAloudAppModel::ResetGranularityIndex() {
 void ReadAloudAppModel::InitAXPositionWithNode(
     ui::AXNode* ax_node,
     const ui::AXTreeID& active_tree_id) {
-  if (IsTsTextSegmentationEnabled()) {
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled()) {
     return;
   }
 
@@ -119,7 +109,7 @@ a11y::ReadAloudCurrentGranularity ReadAloudAppModel::GetCurrentText(
     bool is_pdf,
     bool is_docs,
     const std::set<ui::AXNodeID>* current_nodes) {
-  if (IsTsTextSegmentationEnabled()) {
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled()) {
     return a11y::ReadAloudCurrentGranularity();
   }
   while (processed_granularities_on_current_page_.size() <=
@@ -146,7 +136,7 @@ void ReadAloudAppModel::PreprocessTextForSpeech(
     bool is_pdf,
     bool is_docs,
     const std::set<ui::AXNodeID>* current_nodes) {
-  if (IsTsTextSegmentationEnabled()) {
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled()) {
     return;
   }
   a11y::ReadAloudCurrentGranularity current_granularity =
@@ -163,7 +153,8 @@ void ReadAloudAppModel::PreprocessTextForSpeech(
   }
 }
 
-DependencyParserModel& ReadAloudAppModel::GetDependencyParserModel() {
+base::SequenceBound<DependencyParserModel>&
+ReadAloudAppModel::GetDependencyParserModel() {
   return GetDependencyParserModel_();
 }
 
@@ -217,11 +208,11 @@ void ReadAloudAppModel::CalculatePhrases(
       static_cast<std::string (*)(std::u16string_view)>(&base::UTF16ToUTF8));
 
   // Perform computation of dependency heads asynchronously.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
-      base::BindOnce(&GetDependencyHeads, phrase_tokens),
-      base::BindOnce(&ReadAloudAppModel::UpdatePhraseBoundaries,
-                     weak_ptr_factory_.GetWeakPtr(), phrase_tokens));
+  GetDependencyParserModel_()
+      .AsyncCall(&DependencyParserModel::GetDependencyHeads)
+      .WithArgs(phrase_tokens)
+      .Then(base::BindOnce(&ReadAloudAppModel::UpdatePhraseBoundaries,
+                           weak_ptr_factory_.GetWeakPtr(), phrase_tokens));
 }
 
 static const Strategy kPhraseStrategy = Strategy::kWords;
@@ -600,7 +591,7 @@ ReadAloudAppModel::GetNextValidPositionFromCurrentPosition(
 }
 
 int ReadAloudAppModel::GetCurrentTextStartIndex(const ui::AXNodeID& node_id) {
-  if (IsTsTextSegmentationEnabled() ||
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled() ||
       processed_granularities_on_current_page_.size() < 1 ||
       processed_granularity_index_ >=
           processed_granularities_on_current_page_.size()) {
@@ -618,7 +609,7 @@ int ReadAloudAppModel::GetCurrentTextStartIndex(const ui::AXNodeID& node_id) {
 }
 
 int ReadAloudAppModel::GetCurrentTextEndIndex(const ui::AXNodeID& node_id) {
-  if (IsTsTextSegmentationEnabled() ||
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled() ||
       processed_granularities_on_current_page_.size() < 1 ||
       processed_granularity_index_ >=
           processed_granularities_on_current_page_.size()) {
@@ -638,11 +629,11 @@ int ReadAloudAppModel::GetCurrentTextEndIndex(const ui::AXNodeID& node_id) {
 bool ReadAloudAppModel::NodeBeenOrWillBeSpoken(
     const a11y::ReadAloudCurrentGranularity& current_granularity,
     const ui::AXNodeID& id) const {
-  if (base::Contains(current_granularity.segments, id)) {
+  if (current_granularity.segments.contains(id)) {
     return true;
   }
   for (const auto& granularity : processed_granularities_on_current_page_) {
-    if (base::Contains(granularity.segments, id)) {
+    if (granularity.segments.contains(id)) {
       return true;
     }
   }
@@ -651,7 +642,7 @@ bool ReadAloudAppModel::NodeBeenOrWillBeSpoken(
 }
 
 void ReadAloudAppModel::ResetReadAloudState() {
-  if (IsTsTextSegmentationEnabled()) {
+  if (!features::IsReadAnythingReadAloudPhraseHighlightingEnabled()) {
     return;
   }
 
@@ -660,6 +651,17 @@ void ReadAloudAppModel::ResetReadAloudState() {
   processed_granularity_index_ = 0;
   processed_granularities_on_current_page_.clear();
   speech_tree_initialized_ = false;
+}
+
+void ReadAloudAppModel::ResetAndLogSingleSampleMetrics() {
+  metric_to_single_sample_.clear();
+  for (auto& [metric, count] : metric_to_count_map_) {
+    count = 0;
+    metric_to_single_sample_[metric] =
+        base::SingleSampleMetricsFactory::Get()->CreateCustomCountsMetric(
+            metric, min_sample, max_sample, buckets);
+    metric_to_single_sample_[metric]->SetSample(min_sample);
+  }
 }
 
 bool ReadAloudAppModel::IsValidAXPosition(
@@ -679,7 +681,7 @@ bool ReadAloudAppModel::IsValidAXPosition(
   bool was_previously_spoken =
       NodeBeenOrWillBeSpoken(current_granularity, anchor_node->id());
   bool is_text_node = a11y::IsTextForReadAnything(anchor_node, is_pdf, is_docs);
-  bool contains_node = base::Contains(*current_nodes, anchor_node->id());
+  bool contains_node = current_nodes->contains(anchor_node->id());
   bool is_ignored = a11y::IsIgnored(anchor_node, is_pdf);
 
   return !is_ignored && !was_previously_spoken && is_text_node &&
@@ -762,6 +764,10 @@ void ReadAloudAppModel::SetAudioCurrentlyPlaying(bool is_playing) {
 }
 
 void ReadAloudAppModel::IncrementMetric(const std::string& metric_name) {
+  if (!metric_to_count_map_.contains(metric_name)) {
+    return;
+  }
+
   metric_to_count_map_[metric_name]++;
   // Update the count that will be logged on destruction.
   if (metric_to_single_sample_[metric_name]) {
@@ -771,10 +777,6 @@ void ReadAloudAppModel::IncrementMetric(const std::string& metric_name) {
 }
 
 void ReadAloudAppModel::LogSpeechStop(ReadAloudStopSource source) {
-  if (!features::IsReadAnythingReadAloudEnabled()) {
-    return;
-  }
-
   base::UmaHistogramEnumeration(kSpeechStopSourceHistogramName, source);
   // If speech started but audio is not playing yet when speech is stopped, log
   // the audio delay indicating that the user may have stopped speech because
@@ -785,10 +787,6 @@ void ReadAloudAppModel::LogSpeechStop(ReadAloudStopSource source) {
 }
 
 void ReadAloudAppModel::LogAudioDelay(bool success) {
-  if (!features::IsReadAnythingReadAloudEnabled()) {
-    return;
-  }
-
   const base::TimeDelta delay = base::TimeTicks::Now() - speech_active_time_ms_;
   if (success) {
     base::UmaHistogramLongTimes(kAudioStartTimeSuccessHistogramName, delay);
@@ -797,6 +795,10 @@ void ReadAloudAppModel::LogAudioDelay(bool success) {
   }
 }
 
-bool ReadAloudAppModel::IsTsTextSegmentationEnabled() const {
-  return features::IsReadAnythingReadAloudTSTextSegmentationEnabled();
+// Functionally acts as a session-start setter and logger. Safe because playback
+// context remains constant and this is only called once per speech session.
+void ReadAloudAppModel::LogPlaybackContext(
+    ReadAnythingPlaybackContext context) {
+  current_session_context_for_testing_ = context;
+  base::UmaHistogramEnumeration(kPlaybackContextHistogramName, context);
 }

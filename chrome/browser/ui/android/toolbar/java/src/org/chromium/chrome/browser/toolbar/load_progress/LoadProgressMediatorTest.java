@@ -68,7 +68,7 @@ public class LoadProgressMediatorTest {
     }
 
     private void initMediator() {
-        // ObservableSupplierImpl needs initialization in UI thread.
+        // ObservableSupplier needs initialization in UI thread.
         mTabSupplier = ObservableSuppliers.createNullable();
         mMediator = new LoadProgressMediator(mTabSupplier, mModel);
         mTabSupplier.set(mTab);
@@ -232,6 +232,37 @@ public class LoadProgressMediatorTest {
                 LoadProgressMediator.MINIMUM_LOAD_PROGRESS,
                 mModel.get(LoadProgressProperties.PROGRESS),
                 MathUtils.EPSILON);
+    }
+
+    @Test
+    @SmallTest
+    public void loadingTabProgressUpdateStartsProgressBar() {
+        initMediator();
+        doReturn(true).when(mTab).isLoading();
+        assertEquals(
+                CompletionState.FINISHED_DONT_ANIMATE,
+                mModel.get(LoadProgressProperties.COMPLETION_STATE));
+
+        mTabObserver.onLoadProgressChanged(mTab, 0.7f);
+
+        assertEquals(0.7f, mModel.get(LoadProgressProperties.PROGRESS), MathUtils.EPSILON);
+        assertEquals(
+                CompletionState.UNFINISHED, mModel.get(LoadProgressProperties.COMPLETION_STATE));
+    }
+
+    @Test
+    @SmallTest
+    public void nonLoadingTabProgressUpdateDoesNotStartProgressBar() {
+        initMediator();
+        assertEquals(
+                CompletionState.FINISHED_DONT_ANIMATE,
+                mModel.get(LoadProgressProperties.COMPLETION_STATE));
+
+        mTabObserver.onLoadProgressChanged(mTab, 0.7f);
+
+        assertEquals(
+                CompletionState.FINISHED_DONT_ANIMATE,
+                mModel.get(LoadProgressProperties.COMPLETION_STATE));
     }
 
     @Test

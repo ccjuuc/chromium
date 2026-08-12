@@ -48,10 +48,7 @@ namespace blink {
 static inline String LanguageFromLocale(const String& locale) {
   String normalized_locale = locale;
   normalized_locale.Replace('-', '_');
-  wtf_size_t separator_position = normalized_locale.find('_');
-  if (separator_position == kNotFound)
-    return normalized_locale;
-  return normalized_locale.Left(separator_position);
+  return normalized_locale.substr(0, normalized_locale.find('_'));
 }
 
 static NSLocale* DetermineLocale(const String& locale) {
@@ -166,7 +163,7 @@ unsigned LocaleMac::FirstDayOfWeek() {
   return static_cast<unsigned>(gregorian_calendar_.firstWeekday - 1);
 }
 
-bool LocaleMac::IsRTL() {
+bool LocaleMac::IsRtl() {
   return NSLocaleLanguageDirectionRightToLeft ==
          [NSLocale characterDirectionForLanguage:
                        [NSLocale canonicalLanguageIdentifierFromString:
@@ -299,7 +296,7 @@ const Vector<String>& LocaleMac::ShortStandAloneMonthLabels() {
   return short_stand_alone_month_labels_;
 }
 
-const Vector<String>& LocaleMac::TimeAMPMLabels() {
+const Vector<String>& LocaleMac::TimeAmPmLabels() {
   if (!time_ampm_labels_.empty())
     return time_ampm_labels_;
   time_ampm_labels_.reserve(2);
@@ -325,7 +322,7 @@ void LocaleMac::InitializeLocaleData() {
     return;
   Vector<String, kDecimalSymbolsSize> symbols;
   for (unsigned i = 0; i < 10; ++i)
-    symbols.push_back(nine_to_zero.Substring(9 - i, 1));
+    symbols.push_back(nine_to_zero.substr(9 - i, 1));
   DCHECK(symbols.size() == kDecimalSeparatorIndex);
   symbols.push_back([formatter decimalSeparator]);
   DCHECK(symbols.size() == kGroupSeparatorIndex);

@@ -13,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
@@ -75,7 +74,7 @@ bool IsGenericUsbDescription(const std::string& make_and_model) {
           "seiko epson usb mfp",
           "oki data corp usb device",
       });
-  return base::Contains(kGenericUsbModels, make_and_model);
+  return kGenericUsbModels.contains(make_and_model);
 }
 
 // Callback for device.mojom.UsbDevice.ControlTransferIn.
@@ -233,9 +232,7 @@ std::string CreateUsbPrinterId(const UsbDeviceInfo& device_info) {
 // Creates a mojom filter which can be used to identify a basic USB printer.
 mojo::StructPtr<device::mojom::UsbDeviceFilter> CreatePrinterFilter() {
   auto printer_filter = device::mojom::UsbDeviceFilter::New();
-  printer_filter->has_class_code = true;
   printer_filter->class_code = kPrinterInterfaceClass;
-  printer_filter->has_subclass_code = true;
   printer_filter->subclass_code = kPrinterInterfaceSubclass;
 
   return printer_filter;
@@ -243,7 +240,6 @@ mojo::StructPtr<device::mojom::UsbDeviceFilter> CreatePrinterFilter() {
 
 bool UsbDeviceSupportsIppusb(const UsbDeviceInfo& device_info) {
   auto printer_filter = CreatePrinterFilter();
-  printer_filter->has_protocol_code = true;
   printer_filter->protocol_code = kPrinterIppusbProtocol;
 
   return device::UsbDeviceFilterMatches(*printer_filter, device_info);

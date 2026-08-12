@@ -4,33 +4,50 @@
 
 package org.chromium.chrome.browser.signin.services;
 
+import android.content.Context;
 import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.google_apis.gaia.CoreAccountId;
 
 /** Immutable holder for displayable profile data. */
 @NullMarked
 public class DisplayableProfileData {
+    private final CoreAccountId mAccountId;
     private final String mAccountEmail;
     private final Drawable mImage;
     private final @Nullable String mFullName;
     private final @Nullable String mGivenName;
     private final boolean mHasDisplayableEmailAddress;
+    private final boolean mHasAiTierRing;
 
     public DisplayableProfileData(
+            CoreAccountId accountId,
             String accountEmail,
             @Nullable Drawable image,
             @Nullable String fullName,
             @Nullable String givenName,
-            boolean hasDisplayableEmailAddress) {
+            boolean hasDisplayableEmailAddress,
+            boolean hasAiTierRing) {
+        assert accountId != null;
         assert accountEmail != null;
         assert image != null;
+        mAccountId = accountId;
         mAccountEmail = accountEmail;
         mImage = image;
         mFullName = fullName;
         mGivenName = givenName;
         mHasDisplayableEmailAddress = hasDisplayableEmailAddress;
+        mHasAiTierRing = hasAiTierRing;
+    }
+
+    /**
+     * @return The account id of the user.
+     */
+    public CoreAccountId getAccountId() {
+        return mAccountId;
     }
 
     /**
@@ -62,10 +79,20 @@ public class DisplayableProfileData {
     }
 
     /**
+     * @return The full name of the user (e.g., "John Doe") or a default account name if the full
+     *     name wasn't fetched.
+     */
+    public String getFullNameOrFallbackName(Context context) {
+        return TextUtils.isEmpty(mFullName)
+                ? context.getString(R.string.default_google_account_username)
+                : mFullName;
+    }
+
+    /**
      * @return The full name of the user if it is available or the email otherwise.
      */
     public String getFullNameOrEmail() {
-        if (mFullName == null) {
+        if (TextUtils.isEmpty(mFullName)) {
             return mAccountEmail;
         }
         return mFullName;
@@ -85,7 +112,7 @@ public class DisplayableProfileData {
      * Returns the given name of the user if it is available or the full name or email otherwise.
      */
     public String getGivenNameOrFullNameOrEmail() {
-        if (mGivenName != null) {
+        if (!TextUtils.isEmpty(mGivenName)) {
             return mGivenName;
         }
         return getFullNameOrEmail();
@@ -96,5 +123,12 @@ public class DisplayableProfileData {
      */
     public boolean hasDisplayableEmailAddress() {
         return mHasDisplayableEmailAddress;
+    }
+
+    /**
+     * @return Whether this profile image was wrapped with an AI tier ring.
+     */
+    public boolean hasAiTierRing() {
+        return mHasAiTierRing;
     }
 }

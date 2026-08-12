@@ -26,13 +26,14 @@ namespace extensions {
 WindowController::TypeFilter WindowController::GetAllWindowFilter() {
   // This needs to be updated if there is a change to
   // extensions::api::windows:WindowType.
-  static_assert(std::to_underlying(api::windows::WindowType::kMaxValue) == 5,
+  static_assert(std::to_underlying(api::windows::WindowType::kMaxValue) == 6,
                 "Update extensions WindowController to match WindowType");
   return ((1 << std::to_underlying(api::windows::WindowType::kNormal)) |
           (1 << std::to_underlying(api::windows::WindowType::kPanel)) |
           (1 << std::to_underlying(api::windows::WindowType::kPopup)) |
           (1 << std::to_underlying(api::windows::WindowType::kApp)) |
-          (1 << std::to_underlying(api::windows::WindowType::kDevtools)));
+          (1 << std::to_underlying(api::windows::WindowType::kDevtools)) |
+          (1 << std::to_underlying(api::windows::WindowType::kCustomTab)));
 }
 
 // static
@@ -46,7 +47,7 @@ WindowController::TypeFilter WindowController::GetFilterFromWindowTypes(
 
 // static
 WindowController::TypeFilter WindowController::GetFilterFromWindowTypesValues(
-    const base::Value::List* types) {
+    const base::ListValue* types) {
   WindowController::TypeFilter filter = WindowController::kNoWindowFilter;
   if (!types) {
     return filter;

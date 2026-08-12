@@ -11,16 +11,15 @@
 
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "base/types/expected.h"
 #include "components/autofill/core/browser/ml_model/autofill_ai/autofill_ai_model_executor.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/core/model_quality/model_quality_logs_uploader_service.h"
 #include "components/optimization_guide/proto/features/forms_classifications.pb.h"
-#include "components/optimization_guide/proto/features/model_prototyping.pb.h"
 
 namespace autofill {
 
@@ -48,6 +47,9 @@ enum class AutofillAiModelExecutionStatus {
 
 inline constexpr std::string_view kUmaAutofillAiModelExecutionStatus =
     "Autofill.Ai.ModelExecutionStatus";
+inline constexpr std::string_view
+    kUmaAutofillAiModelExecutionPiShadowPrediction =
+        "Autofill.Ai.ModelExecution.PiShadowPrediction";
 
 class AutofillAiModelExecutorImpl : public AutofillAiModelExecutor {
  public:
@@ -68,12 +70,20 @@ class AutofillAiModelExecutorImpl : public AutofillAiModelExecutor {
  private:
   // Writes the model execution response into the cache.
   void OnModelExecuted(
-      FormData form_data,
+      const FormData form_data,
+      const optimization_guide::proto::AutofillAiTypeRequest request,
       optimization_guide::OptimizationGuideModelExecutionResult
           execution_result,
       std::unique_ptr<
           optimization_guide::proto::FormsClassificationsLoggingData>
           logging_data);
+
+  // Computes a metric determining if sending the `request` through the PI and
+  // non-PI inference stack yields the same result, assuming the right flags are
+  // enabled.
+  void MaybeComputePrivateAiShadowMetric(
+      const optimization_guide::proto::AutofillAiTypeRequest& request,
+      const optimization_guide::proto::AutofillAiTypeResponse& response);
 
   // Uploads a stripped request and the response of a model run to MQLS.
   void LogModelPredictions(

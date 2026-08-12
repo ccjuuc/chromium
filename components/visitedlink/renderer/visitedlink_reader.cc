@@ -24,6 +24,12 @@ VisitedLinkReader::~VisitedLinkReader() {
   FreeTable();
 }
 
+bool VisitedLinkReader::UsePartitionedDatabase() const {
+  return base::FeatureList::IsEnabled(
+             blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks) ||
+         is_pseudo_partitioned_;
+}
+
 base::RepeatingCallback<
     void(mojo::PendingReceiver<mojom::VisitedLinkNotificationSink>)>
 VisitedLinkReader::GetBindCallback() {
@@ -60,8 +66,7 @@ void VisitedLinkReader::UpdateVisitedLinks(
   // to free old objects.
   FreeTable();
   DCHECK(hash_table_ == nullptr);
-  if (base::FeatureList::IsEnabled(
-          blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks)) {
+  if (UsePartitionedDatabase()) {
     return UpdatePartitionedVisitedLinks(std::move(table_region));
   }
   return UpdateUnpartitionedVisitedLinks(std::move(table_region));
@@ -81,7 +86,7 @@ void VisitedLinkReader::UpdateUnpartitionedVisitedLinks(
     const SharedHeader* header =
         static_cast<const SharedHeader*>(header_mapping.memory());
     table_len = header->length;
-    UNSAFE_TODO(memcpy(salt_, header->salt, sizeof(salt_)));
+    salt_ = header->salt;
   }
 
   // Now we know the length, so map the table contents.

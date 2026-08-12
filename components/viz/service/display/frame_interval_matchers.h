@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
@@ -18,12 +19,14 @@
 #include "components/viz/common/quads/frame_interval_inputs.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "components/viz/service/viz_service_export.h"
+#include "services/viz/privileged/mojom/compositing/display_private.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 
 namespace viz {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(FrameIntervalMatcherType)
 enum class FrameIntervalMatcherType {
   kNone = 0,
   kInputBoost = 1,
@@ -35,6 +38,7 @@ enum class FrameIntervalMatcherType {
   kSlowScrollThrottle = 7,
   kMaxValue = kSlowScrollThrottle,
 };
+// LINT.ThenChange(//base/tracing/protos/chrome_track_event.proto:FrameIntervalMatcherType)
 
 // Works with `FrameIntervalDecider` to compute the ideal frame interval.
 // Matchers are independent and each matcher matches a specific scenario. Note
@@ -46,16 +50,23 @@ class VIZ_SERVICE_EXPORT FrameIntervalMatcher {
  public:
   // Result can either be an interval class or a specific frame interval,
   // depending on setting and the inputs.
+
+  // LINT.IfChange(FrameIntervalClass)
   enum class FrameIntervalClass {
     // These are ordered from lowest frame interval to highest.
     kBoost,    // Used for latency or smoothness sensitive situation such as
                // scrolling.
     kDefault,  // Used if nothing matched.
   };
+  // LINT.ThenChange(//base/tracing/protos/chrome_track_event.proto:FrameIntervalClass)
+
+  // LINT.IfChange(ResultIntervalType)
   enum class ResultIntervalType {
     kExact,
     kAtLeast,
   };
+  // LINT.ThenChange(//base/tracing/protos/chrome_track_event.proto:ResultIntervalType)
+
   struct ResultInterval {
     base::TimeDelta interval;
     ResultIntervalType type = ResultIntervalType::kExact;
@@ -182,12 +193,15 @@ DECLARE_SIMPLE_FRAME_INTERVAL_MATCHER(UserInputBoostMatcher);
 class VIZ_SERVICE_EXPORT SlowScrollThrottleMatcher
     : public FrameIntervalMatcher {
  public:
-  explicit SlowScrollThrottleMatcher(float device_scale_factor);
+  SlowScrollThrottleMatcher(
+      float device_scale_factor,
+      std::vector<mojom::FrameRateVelocityPoint> velocity_points);
   ~SlowScrollThrottleMatcher() override;
   std::optional<Result> Match(const Inputs& matcher_inputs) override;
 
  private:
   const float device_scale_factor_;
+  std::vector<mojom::FrameRateVelocityPoint> velocity_points_;
   uint64_t last_frame_id_matched_without_extra_update_ = 0u;
 };
 

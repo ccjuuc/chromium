@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.download;
 
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -24,7 +26,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.download.dialogs.DownloadLocationDialogCoordinator;
@@ -64,7 +65,6 @@ public class DownloadDialogBridgeUnitTest {
 
     @Before
     public void setUp() {
-        ShadowLog.stream = System.out;
         DownloadDialogBridgeJni.setInstanceForTesting(mNativeMock);
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mBridge = new DownloadDialogBridge(FAKE_NATIVE_HOLDER, mLocationDialog);
@@ -169,5 +169,48 @@ public class DownloadDialogBridgeUnitTest {
 
         showDialog();
         verify(mNativeMock).onCanceled(anyLong());
+    }
+
+    @Test
+    public void testContextClearedAfterComplete() {
+        doAnswer(
+                        invocation -> {
+                            assertNotNull(mBridge.getContextForTesting());
+                            mBridge.onDownloadLocationDialogComplete(
+                                    NEW_SUGGESTED_PATH, /* didUserConfirm= */ true);
+                            return null;
+                        })
+                .when(mLocationDialog)
+                .showDialog(
+                        any(),
+                        any(),
+                        eq(TOTAL_BYTES),
+                        eq(LOCATION_DIALOG_TYPE),
+                        eq(SUGGESTED_PATH),
+                        eq(mProfile));
+
+        showDialog();
+        assertNull(mBridge.getContextForTesting());
+    }
+
+    @Test
+    public void testContextClearedAfterCancel() {
+        doAnswer(
+                        invocation -> {
+                            assertNotNull(mBridge.getContextForTesting());
+                            mBridge.onDownloadLocationDialogCanceled();
+                            return null;
+                        })
+                .when(mLocationDialog)
+                .showDialog(
+                        any(),
+                        any(),
+                        eq(TOTAL_BYTES),
+                        eq(LOCATION_DIALOG_TYPE),
+                        eq(SUGGESTED_PATH),
+                        eq(mProfile));
+
+        showDialog();
+        assertNull(mBridge.getContextForTesting());
     }
 }

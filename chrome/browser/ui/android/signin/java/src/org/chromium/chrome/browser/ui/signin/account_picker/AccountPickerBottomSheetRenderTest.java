@@ -11,7 +11,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import static org.hamcrest.core.AllOf.allOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 
@@ -37,15 +36,16 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.ParameterAnnotations;
 import org.chromium.base.test.params.ParameterAnnotations.UseMethodParameter;
 import org.chromium.base.test.params.ParameterizedRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.night_mode.ChromeNightModeTestUtils;
+import org.chromium.chrome.browser.signin.services.AccountPreviewDataService;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
@@ -54,8 +54,8 @@ import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.signin.SigninFeatures;
+import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
-import org.chromium.components.signin.test.util.FakeIdentityManager;
 import org.chromium.components.signin.test.util.SigninMatchers;
 import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.ui.test.util.DeviceRestriction;
@@ -70,12 +70,10 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(ParameterizedRunner.class)
 @ParameterAnnotations.UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@Batch(Batch.PER_CLASS)
+@DoNotBatch(reason = "Cascading failures across tests in this suite, see crbug.com/509527338")
 // TODO(crbug.com/354128847): Fix NPE when launching DeviceLockActivity on automotive.
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
 public class AccountPickerBottomSheetRenderTest {
-    private final FakeIdentityManager mIdentityManager = new FakeIdentityManager();
-
     @Rule
     public final RenderTestRule mRenderTestRule =
             RenderTestRule.Builder.withPublicCorpus()
@@ -93,11 +91,46 @@ public class AccountPickerBottomSheetRenderTest {
     @Rule
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Mock private AccountPickerDelegate mAccountPickerDelegateMock;
+    private static class FakeAccountPickerDelegate implements AccountPickerDelegate {
+        private final @PostSigninOperationResult Integer mPostSigninOperationResult;
+
+        public FakeAccountPickerDelegate(
+                @PostSigninOperationResult Integer postSigninOperationResult) {
+            mPostSigninOperationResult = postSigninOperationResult;
+        }
+
+        @Override
+        public void onAccountPickerDestroy() {}
+
+        @Override
+        public boolean canHandleAddAccount() {
+            return false;
+        }
+
+        @Override
+        public void addAccount() {}
+
+        @Override
+        public void runPostSigninAction(
+                CoreAccountInfo signedInAccount,
+                Callback<@PostSigninOperationResult Integer> onComplete) {
+            onComplete.onResult(mPostSigninOperationResult);
+        }
+
+        @Override
+        public void onSignInComplete(
+                CoreAccountInfo accountInfo,
+                AccountPickerDelegate.SigninStateController controller) {}
+    }
+
+    private FakeAccountPickerDelegate mAccountPickerDelegate =
+            new FakeAccountPickerDelegate(PostSigninOperationResult.SUCCESS);
 
     // TODO(crbug.com/433919394): Use FakeSigninManager instead.
     @Mock(strictness = Mock.Strictness.LENIENT)
     private SigninManager mSigninManagerMock;
+
+    @Mock private AccountPreviewDataService mAccountPreviewDataServiceMock;
 
     private final AtomicReference<Boolean> mIsNextSigninSuccessful = new AtomicReference<>();
     private WebPageStation mPage;
@@ -307,15 +340,8 @@ public class AccountPickerBottomSheetRenderTest {
     public void testSigninAuthErrorView(boolean nightModeEnabled) throws IOException {
         mAccountManagerTestRule.addAccount(TestAccounts.ACCOUNT1);
         mIsNextSigninSuccessful.set(true);
-        doAnswer(
-                        invocation -> {
-                            AccountPickerDelegate.SigninStateController controller =
-                                    invocation.getArgument(1);
-                            controller.showAuthError();
-                            return null;
-                        })
-                .when(mAccountPickerDelegateMock)
-                .onSignInComplete(any(), any());
+        mAccountPickerDelegate =
+                new FakeAccountPickerDelegate(PostSigninOperationResult.AUTH_ERROR);
         buildAndShowCollapsedBottomSheet();
         clickContinueButtonAndWaitForErrorView();
         mRenderTestRule.render(
@@ -414,10 +440,11 @@ public class AccountPickerBottomSheetRenderTest {
                     mCoordinator =
                             new AccountPickerBottomSheetCoordinator(
                                     mActivityTestRule.getActivity().getWindowAndroid(),
-                                    mIdentityManager,
+                                    mAccountManagerTestRule.getIdentityManager(),
                                     mSigninManagerMock,
+                                    mAccountPreviewDataServiceMock,
                                     getBottomSheetController(),
-                                    mAccountPickerDelegateMock,
+                                    mAccountPickerDelegate,
                                     AccountPickerBottomSheetTestUtil.getBottomSheetStrings(
                                             mActivityTestRule.getActivity(), mSigninAccessPoint),
                                     null,

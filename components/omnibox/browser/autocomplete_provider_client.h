@@ -17,13 +17,14 @@
 #include "components/omnibox/browser/lens_suggest_inputs_utils.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
+class AiModeButtonService;
+class AimEligibilityService;
 class AutocompleteClassifier;
 class AutocompleteSchemeClassifier;
 class AutocompleteScoringModelService;
 class DocumentSuggestionsService;
-class UnscopedExtensionProvider;
-class UnscopedExtensionProviderDelegate;
 class GURL;
+class GeolocationHeaderService;
 class InMemoryURLIndex;
 class KeywordExtensionsDelegate;
 class KeywordProvider;
@@ -34,10 +35,12 @@ class PrefService;
 class RemoteSuggestionsService;
 class ShortcutsBackend;
 class TabMatcher;
+class UnscopedExtensionProvider;
+class UnscopedExtensionProviderDelegate;
 class ZeroSuggestCacheService;
+
 struct AutocompleteMatch;
 struct ProviderStateService;
-class AimEligibilityService;
 
 namespace bookmarks {
 class BookmarkModel;
@@ -54,7 +57,7 @@ class HistoryClustersService;
 }
 
 namespace history_embeddings {
-class HistoryEmbeddingsService;
+class HistoryEmbeddingsSearch;
 }
 
 namespace network {
@@ -69,6 +72,10 @@ namespace signin {
 class IdentityManager;
 }
 
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
+
 namespace tab_groups {
 class TabGroupSyncService;
 }
@@ -77,7 +84,7 @@ class TemplateURLService;
 
 class AutocompleteProviderClient : public OmniboxAction::Client {
  public:
-  virtual ~AutocompleteProviderClient() = default;
+  ~AutocompleteProviderClient() override = default;
 
   virtual scoped_refptr<network::SharedURLLoaderFactory>
   GetURLLoaderFactory() = 0;
@@ -88,14 +95,15 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
   virtual AutocompleteClassifier* GetAutocompleteClassifier() = 0;
   virtual history::HistoryService* GetHistoryService() = 0;
   virtual history_clusters::HistoryClustersService* GetHistoryClustersService();
-  virtual history_embeddings::HistoryEmbeddingsService*
-  GetHistoryEmbeddingsService();
+  virtual history_embeddings::HistoryEmbeddingsSearch*
+  GetHistoryEmbeddingsSearch();
   virtual scoped_refptr<history::TopSites> GetTopSites() = 0;
   virtual bookmarks::BookmarkModel* GetBookmarkModel() = 0;
   virtual history::URLDatabase* GetInMemoryDatabase() = 0;
   virtual InMemoryURLIndex* GetInMemoryURLIndex() = 0;
   virtual TemplateURLService* GetTemplateURLService() = 0;
   virtual const TemplateURLService* GetTemplateURLService() const = 0;
+  virtual GeolocationHeaderService* GetGeolocationHeaderService() const;
   virtual DocumentSuggestionsService* GetDocumentSuggestionsService() const;
   virtual RemoteSuggestionsService* GetRemoteSuggestionsService(
       bool create_if_necessary) const = 0;
@@ -117,7 +125,9 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
   virtual base::CallbackListSubscription GetLensSuggestInputsWhenReady(
       LensOverlaySuggestInputsCallback callback) const = 0;
   virtual tab_groups::TabGroupSyncService* GetTabGroupSyncService() const = 0;
+  virtual sync_sessions::SessionSyncService* GetSessionSyncService() const = 0;
   virtual AimEligibilityService* GetAimEligibilityService() const = 0;
+  virtual AiModeButtonService* GetAiModeButtonService() const;
 
   // The value to use for Accept-Languages HTTP header when making an HTTP
   // request.
@@ -178,16 +188,13 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
   // This function returns true if the user is signed in.
   virtual bool IsAuthenticated() const = 0;
 
-  // Determines whether sync is enabled.
-  virtual bool IsSyncActive() const = 0;
-
   virtual std::string ProfileUserName() const;
 
   // Given some string |text| that the user wants to use for navigation,
   // determines how it should be interpreted.
   virtual void Classify(
       const std::u16string& text,
-      bool prefer_keyword,
+      bool in_keyword_mode,
       bool allow_exact_keyword_match,
       metrics::OmniboxEventProto::PageClassification page_classification,
       AutocompleteMatch* match,
@@ -206,6 +213,10 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
   // mode. On platforms where this is supported, the service worker lookup can
   // be expensive so this method should only be called once per input session.
   virtual void StartServiceWorker(const GURL& destination_url) {}
+
+  // Resets the DSE geolocation permission status to ASK if it is currently
+  // DENY.
+  virtual void ResetGeolocationPermissionToAsk(const GURL& url) const {}
 
   // Called after creation of |keyword_provider| to allow the client to
   // configure the provider if desired.
@@ -261,9 +272,25 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
   // Whether the "Omnibox Next" Lens search chip feature is enabled.
   virtual bool IsOmniboxNextLensSearchChipEnabled() const;
 
+  // Whether the "Omnibox Next" AIM popup is enabled.
+  virtual bool IsOmniboxNextAimPopupEnabled() const;
+
+  // Returns whether the Gemini starter pack is enabled by enterprise policy.
+  virtual bool IsGeminiStarterPackEnabled() const;
+
   // Gets a weak pointer to the client. Used when providers need to use the
   // client when the client may no longer be around.
   virtual base::WeakPtr<AutocompleteProviderClient> GetWeakPtr();
+
+  // Returns whether the Web UI NTP is enabled for Desktop Android. In all other
+  // cases and platforms, it returns false.
+  virtual bool IsWebUiNtpEnabledForDesktopAndroid() const;
+
+  // OmniboxAction::Client overrides:
+  bool ShouldOpenCoBrowsePanel() const override;
+  void OpenCoBrowsePanel() override;
+  bool ShouldOpenComposeboxForAskG() const override;
+  void OpenComposeboxForAskG() override;
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_AUTOCOMPLETE_PROVIDER_CLIENT_H_

@@ -31,7 +31,7 @@ class PerformanceScriptTiming final : public PerformanceEntry {
                           base::TimeTicks time_origin,
                           bool cross_origin_isolated_capability,
                           DOMWindow* source,
-                          uint32_t navigation_id);
+                          uint64_t navigation_id);
   ~PerformanceScriptTiming() override;
 
   const AtomicString& entryType() const override;
@@ -39,6 +39,8 @@ class PerformanceScriptTiming final : public PerformanceEntry {
 
   DOMHighResTimeStamp executionStart() const { return execution_start_; }
   DOMHighResTimeStamp forcedStyleAndLayoutDuration() const;
+  DOMHighResTimeStamp forcedStyleDuration() const;
+  DOMHighResTimeStamp forcedLayoutDuration() const;
   DOMHighResTimeStamp pauseDuration() const;
   LocalDOMWindow* window() const;
   String sourceURL() const;
@@ -57,6 +59,7 @@ class PerformanceScriptTiming final : public PerformanceEntry {
   Member<ScriptTimingInfo> info_;
   V8ScriptWindowAttribution::Enum window_attribution_;
   DOMHighResTimeStamp execution_start_;
+  bool cross_origin_isolated_capability_;
 };
 
 }  // namespace blink

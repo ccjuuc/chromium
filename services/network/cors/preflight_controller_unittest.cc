@@ -31,6 +31,7 @@
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/cors/cors.h"
 #include "services/network/public/cpp/features.h"
+#include "services/network/public/mojom/device_bound_sessions.mojom.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/http_raw_headers.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -280,7 +281,6 @@ TEST(PreflightControllerOptionsTest, CheckOptions) {
       NonWildcardRequestHeadersSupport(false),
       /*tainted=*/false, TRAFFIC_ANNOTATION_FOR_TESTS, &url_loader_factory,
       net::IsolationInfo(),
-      /*client_security_state=*/nullptr,
       /*devtools_observer=*/
       base::WeakPtr<mojo::Remote<mojom::DevToolsObserver>>(), net_log, true,
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());
@@ -291,7 +291,6 @@ TEST(PreflightControllerOptionsTest, CheckOptions) {
       NonWildcardRequestHeadersSupport(false),
       /*tainted=*/false, TRAFFIC_ANNOTATION_FOR_TESTS, &url_loader_factory,
       net::IsolationInfo(),
-      /*client_security_state=*/nullptr,
       /*devtools_observer=*/
       base::WeakPtr<mojo::Remote<mojom::DevToolsObserver>>(), net_log, true,
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());
@@ -353,6 +352,8 @@ class MockDevToolsObserver : public mojom::DevToolsObserver {
       const net::CookieAccessResultList& cookies_with_access_result,
       std::vector<network::mojom::HttpRawHeaderPairPtr> headers,
       const base::TimeTicks timestamp,
+      std::vector<network::mojom::DeviceBoundSessionWithUsagePtr>
+          device_bound_session_usages,
       network::mojom::ClientSecurityStatePtr client_security_state,
       network::mojom::OtherPartitionInfoPtr other_partition_info,
       const std::optional<base::UnguessableToken>&
@@ -413,6 +414,11 @@ class MockDevToolsObserver : public mojom::DevToolsObserver {
       const GURL& url,
       network::mojom::UnencodedDigestIssue issue) override {}
 
+  void OnConnectionAllowlistIssue(
+      const std::string& devtool_request_id,
+      const GURL& url,
+      network::mojom::ConnectionAllowlistIssue issue) override {}
+
   void OnCorsError(const std::optional<std::string>& devtool_request_id,
                    const std::optional<::url::Origin>& initiator_origin,
                    mojom::ClientSecurityStatePtr client_security_state,
@@ -426,7 +432,7 @@ class MockDevToolsObserver : public mojom::DevToolsObserver {
   void Clone(mojo::PendingReceiver<DevToolsObserver> observer) override {
     receivers_.Add(this, std::move(observer));
   }
-  void OnPrivateNetworkRequest(
+  void OnLocalNetworkRequest(
       const std::optional<std::string>& devtool_request_id,
       const GURL& url,
       bool is_warning,
@@ -471,7 +477,7 @@ class PreflightControllerTest : public testing::Test {
 
     network::mojom::URLLoaderFactoryParamsPtr params =
         network::mojom::URLLoaderFactoryParams::New();
-    params->process_id = mojom::kBrowserProcessId;
+    params->process_id = OriginatingProcessId::browser();
     // We use network::CorsURLLoaderFactory for "internal" URLLoaderFactory
     // used by the PreflightController. Hence here we disable CORS as otherwise
     // the URLLoader would create a CORS-preflight for the preflight request.
@@ -507,8 +513,7 @@ class PreflightControllerTest : public testing::Test {
   void PerformPreflightCheck(
       const ResourceRequest& request,
       bool tainted = false,
-      net::IsolationInfo isolation_info = net::IsolationInfo(),
-      mojom::ClientSecurityStatePtr client_security_state = nullptr) {
+      net::IsolationInfo isolation_info = net::IsolationInfo()) {
     DCHECK(preflight_controller_);
     run_loop_ = std::make_unique<base::RunLoop>();
 
@@ -522,8 +527,7 @@ class PreflightControllerTest : public testing::Test {
         0, request, WithTrustedHeaderClient(false),
         non_wildcard_request_headers_support_, tainted,
         TRAFFIC_ANNOTATION_FOR_TESTS, url_loader_factory_remote_.get(),
-        isolation_info, std::move(client_security_state),
-        weak_devtools_observer_factory.GetWeakPtr(),
+        isolation_info, weak_devtools_observer_factory.GetWeakPtr(),
         net::NetLogWithSource::Make(net::NetLog::Get(),
                                     net::NetLogSourceType::URL_REQUEST),
         true, mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());

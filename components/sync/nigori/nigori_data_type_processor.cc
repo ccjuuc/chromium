@@ -132,8 +132,8 @@ void NigoriDataTypeProcessor::OnUpdateReceived(
     return;
   }
 
-  // TODO(crbug.com/40860698): validate incoming updates, e.g. `gc_directive`
-  // must be empty for Nigori.
+  // TODO(crbug.com/40860698): validate incoming updates, e.g.
+  // `gc_directive.version_watermark` must be empty for Nigori.
   std::optional<ModelError> error;
 
   const bool is_initial_sync =
@@ -158,6 +158,18 @@ void NigoriDataTypeProcessor::OnUpdateReceived(
       ReportError(*error);
     }
     return;
+  }
+
+  if (gc_directive && gc_directive->clear_metadata()) {
+    if (updates.empty()) {
+      ReportError({FROM_HERE,
+                   ModelError::Type::kNigoriEmptyEntityDataDuringInitialSync});
+      return;
+    }
+    if (entity_) {
+      entity_->OverrideServerMetadata(updates[0].entity.id,
+                                      updates[0].response_version - 1);
+    }
   }
 
   if (updates.empty()) {
@@ -271,7 +283,7 @@ void NigoriDataTypeProcessor::GetAllNodesForDebugging(
 
   std::unique_ptr<EntityData> entity_data = bridge_->GetDataForDebugging();
   if (!entity_data) {
-    std::move(callback).Run(base::Value::List());
+    std::move(callback).Run(base::ListValue());
     return;
   }
 
@@ -283,7 +295,7 @@ void NigoriDataTypeProcessor::GetAllNodesForDebugging(
     entity_data->modification_time =
         ProtoTimeToTime(metadata.modification_time());
   }
-  base::Value::Dict root_node = entity_data->ToDictionaryValue();
+  base::DictValue root_node = entity_data->ToDictionaryValue();
   if (entity_) {
     root_node.Set("metadata", EntityMetadataToValue(entity_->metadata()));
   }
@@ -296,7 +308,7 @@ void NigoriDataTypeProcessor::GetAllNodesForDebugging(
   root_node.Set("UNIQUE_SERVER_TAG", "Nigori");
   root_node.Set("dataType", DataTypeToDebugString(NIGORI));
 
-  base::Value::List all_nodes;
+  base::ListValue all_nodes;
   all_nodes.Append(std::move(root_node));
   std::move(callback).Run(std::move(all_nodes));
 }

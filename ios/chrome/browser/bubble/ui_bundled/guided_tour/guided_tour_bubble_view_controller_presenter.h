@@ -10,7 +10,15 @@
 #import "base/ios/block_types.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
 
+@class GuidedTourBubbleViewControllerPresenter;
 enum class GuidedTourStep;
+
+@protocol GuidedTourBubbleViewControllerPresenterDelegate
+// The anchor point for the bubble view, which may update as the views change
+// (e.g. after rotation).
+- (CGPoint)anchorPointForGuidedTourBubbleViewControllerPresenter:
+    (GuidedTourBubbleViewControllerPresenter*)presenter;
+@end
 
 // A subclass implementation that presents the BubbleView in front of a
 // background dimmed view with a cutout of the view that the IPH is pointed and
@@ -32,8 +40,6 @@ enum class GuidedTourStep;
                        alignment:(BubbleAlignment)alignment
                       bubbleType:(BubbleViewType)type
     backgroundCutoutCornerRadius:(CGFloat)cornerRadius
-               dismissalCallback:
-                   (CallbackWithIPHDismissalReasonType)dismissalCallback
               completionCallback:(ProceduralBlock)completionCallback
     NS_DESIGNATED_INITIALIZER;
 
@@ -47,7 +53,46 @@ enum class GuidedTourStep;
                (CallbackWithIPHDismissalReasonType)dismissalCallback
     NS_UNAVAILABLE;
 
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)arrowDirection
+                   alignment:(BubbleAlignment)alignment
+                  bubbleType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+           dismissalCallback:
+               (CallbackWithIPHDismissalReasonType)dismissalCallback
+    NS_UNAVAILABLE;
+
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)arrowDirection
+                   alignment:(BubbleAlignment)alignment
+                  bubbleType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       totalPageControlPages:(NSInteger)totalPageControlPages
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+           dismissalCallback:
+               (CallbackWithIPHDismissalReasonType)dismissalCallback
+    NS_UNAVAILABLE;
+
+// Presents the bubble in `parentViewController`'s view. The underlying
+// BubbleViewController is added as a child view controller of
+// `parentViewController`. `anchorPoint` determines where the bubble is anchored
+// in window coordinates. `anchorView` is the view the bubble is anchored to,
+// and is used to allow the bubble to respond to device rotations.
+- (void)presentInViewController:(UIViewController*)parentViewController
+                    anchorPoint:(CGPoint)anchorPoint
+                     anchorView:(UIView*)anchorView;
+
+// Dismisses the bubble.
 - (void)dismiss;
+
+// Dismisses the bubble and don't call the `dismissalCallback`.
+- (void)dismissWithoutCallback;
+
+@property(nonatomic, weak) id<GuidedTourBubbleViewControllerPresenterDelegate>
+    delegate;
 
 @end
 

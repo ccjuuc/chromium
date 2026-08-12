@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/messaging/incognito_connectability.h"
@@ -26,6 +25,10 @@
 #include "extensions/common/extension_id.h"
 #include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/api/messaging/android/native_message_android_port.h"
+#endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -46,30 +49,30 @@ ChromeMessagingDelegate::IsNativeMessagingHostAllowed(
   PolicyPermission allow_result = PolicyPermission::ALLOW_ALL;
   if (pref_service->IsManagedPreference(
           pref_names::kNativeMessagingUserLevelHosts)) {
-    if (!pref_service->GetBoolean(pref_names::kNativeMessagingUserLevelHosts))
+    if (!pref_service->GetBoolean(pref_names::kNativeMessagingUserLevelHosts)) {
       allow_result = PolicyPermission::ALLOW_SYSTEM_ONLY;
+    }
   }
 
   // All native messaging hosts are allowed if there is no blocklist.
-  if (!pref_service->IsManagedPreference(pref_names::kNativeMessagingBlocklist))
+  if (!pref_service->IsManagedPreference(
+          pref_names::kNativeMessagingBlocklist)) {
     return allow_result;
-  const base::Value::List& blocklist =
+  }
+  const base::ListValue& blocklist =
       pref_service->GetList(pref_names::kNativeMessagingBlocklist);
 
   // Check if the name or the wildcard is in the blocklist.
-  base::Value name_value(native_host_name);
-  base::Value wildcard_value("*");
-  if (!base::Contains(blocklist, name_value) &&
-      !base::Contains(blocklist, wildcard_value)) {
+  if (!blocklist.contains(native_host_name) && !blocklist.contains("*")) {
     return allow_result;
   }
 
   // The native messaging host is blocklisted. Check the allowlist.
   if (pref_service->IsManagedPreference(
           pref_names::kNativeMessagingAllowlist)) {
-    const base::Value::List& allowlist =
+    const base::ListValue& allowlist =
         pref_service->GetList(pref_names::kNativeMessagingAllowlist);
-    if (base::Contains(allowlist, name_value)) {
+    if (allowlist.contains(native_host_name)) {
       return allow_result;
     }
   }
@@ -77,7 +80,7 @@ ChromeMessagingDelegate::IsNativeMessagingHostAllowed(
   return PolicyPermission::DISALLOW;
 }
 
-std::optional<base::Value::Dict> ChromeMessagingDelegate::MaybeGetTabInfo(
+std::optional<base::DictValue> ChromeMessagingDelegate::MaybeGetTabInfo(
     content::WebContents* web_contents) {
   // Add info about the opener's tab (if it was a tab).
   if (web_contents && ExtensionTabUtil::GetTabId(web_contents) >= 0) {
@@ -121,16 +124,24 @@ ChromeMessagingDelegate::CreateReceiverForNativeApp(
     const std::string& native_app_name,
     bool allow_user_level,
     std::string* error_out) {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, `native_app_name` represents the target package name.
+  return std::make_unique<NativeMessageAndroidPort>(
+      browser_context, channel_delegate, receiver_port_id, extension_id,
+      native_app_name);
+#else
   DCHECK(error_out);
   gfx::NativeView native_view =
       source ? source->GetNativeView() : gfx::NativeView();
   std::unique_ptr<NativeMessageHost> native_host =
       NativeMessageHost::Create(browser_context, native_view, extension_id,
                                 native_app_name, allow_user_level, error_out);
-  if (!native_host.get())
+  if (!native_host.get()) {
     return nullptr;
+  }
   return std::make_unique<NativeMessagePort>(channel_delegate, receiver_port_id,
                                              std::move(native_host));
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void ChromeMessagingDelegate::QueryIncognitoConnectability(

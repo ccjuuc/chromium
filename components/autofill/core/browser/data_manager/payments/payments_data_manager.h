@@ -5,17 +5,24 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_PAYMENTS_PAYMENTS_DATA_MANAGER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_PAYMENTS_PAYMENTS_DATA_MANAGER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "base/containers/span.h"
 #include "base/functional/function_ref.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
-#include "components/autofill/core/browser/autofill_shared_storage_handler.h"
+#include "base/scoped_observation.h"
+#include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_offer_data.h"
 #include "components/autofill/core/browser/data_model/payments/autofill_wallet_usage_data.h"
@@ -32,10 +39,15 @@
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/service/sync_service_observer.h"
+#include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace syncer {
 class SyncService;
@@ -84,7 +96,6 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
       scoped_refptr<AutofillWebDataService> profile_database,
       scoped_refptr<AutofillWebDataService> account_database,
       AutofillImageFetcherBase* image_fetcher,
-      std::unique_ptr<AutofillSharedStorageHandler> shared_storage_handler,
       PrefService* pref_service,
       syncer::SyncService* sync_service,
       signin::IdentityManager* identity_manager,
@@ -177,11 +188,11 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
       CreditCardBenefitBase::LinkedCardInstrumentId instrument_id,
       const url::Origin& merchant_origin) const;
 
-  // Returns an applicable benefit description string to display to the user
-  // based on the combination of `credit_card` and `origin`. However, if
+  // Returns an applicable `CreditCardBenefit` to display to the user based on
+  // the combination of `credit_card` and `origin`. However, if
   // `credit_card.IsCardEligibleForBenefits()` == false, the benefit description
   // will still be returned but not displayed to users.
-  std::u16string GetApplicableBenefitDescriptionForCardAndOrigin(
+  std::optional<CreditCardBenefit> GetApplicableBenefitForCardAndOrigin(
       const CreditCard& credit_card,
       const url::Origin& origin,
       const AutofillOptimizationGuideDecider* optimization_guide) const;
@@ -260,6 +271,10 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // The returned span may be invalidated asynchronously.
   base::span<const BnplIssuer> GetUnlinkedBnplIssuers() const;
 
+  // Returns the eWallet creation options.
+  // The returned span may be invalidated asynchronously.
+  base::span<const Ewallet> GetEwalletCreationOptions() const;
+
   // Returns all BNPL issuers, both linked and unlinked.
   virtual std::vector<BnplIssuer> GetBnplIssuers() const;
 
@@ -287,6 +302,9 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // Delete all local credit cards.
   void DeleteAllLocalCreditCards();
 
+  // Checks whether all credit cards are local.
+  bool HasAllLocalCreditCards() const;
+
   // Updates |credit_card| which already exists in the web database. This
   // can only be used on local credit cards.
   virtual void UpdateCreditCard(const CreditCard& credit_card);
@@ -309,10 +327,6 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // Method to clear all local CVCs from the local web database.
   virtual void ClearLocalCvcs();
 
-  // Method to clear all local CVCs created before mid-May 2025. For more
-  // information, see crbug.com/411681430.
-  virtual void ClearLocalCvcsUpToMay2025();
-
 #if BUILDFLAG(IS_IOS)
   // Method to clean up for crbug.com/445879524.
   virtual void CleanupForCrbug445879524();
@@ -320,10 +334,6 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
 
   // Deletes all server cards (both masked and unmasked).
   void ClearAllServerDataForTesting();
-
-  // Sets |credit_cards_| to the contents of |credit_cards| and updates the web
-  // database by adding, updating and removing credit cards.
-  void SetCreditCards(std::vector<CreditCard>* credit_cards);
 
   // Try to save a credit card locally. If the card already exists, do nothing
   // and return false. If the card is new, save it locally and return true.
@@ -358,10 +368,6 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // id.
   bool IsCardEligibleForBenefits(const CreditCard& card) const;
 
-  // Checks if the user is in an experiment for seeing credit card benefits in
-  // Autofill suggestions.
-  bool IsCardBenefitsFeatureEnabled();
-
   // Returns the value of the PaymentsCardBenefits pref.
   // `IsCardBenefitsPrefEnabled() == false` indicates the user does not see card
   // benefits and will not have card benefit metrics logged.
@@ -376,16 +382,11 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // Sets the value of the kAutofillHasSeenIban pref to true.
   void SetAutofillHasSeenIban();
 
-  // TODO(crbug.com/430575808): Remove build flags.
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Returns the value of the kAutofillHasSeenBnpl pref.
   virtual bool IsAutofillHasSeenBnplPrefEnabled() const;
 
   // Sets the value of the kAutofillHasSeenBnpl pref to true.
   void SetAutofillHasSeenBnpl();
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 
   // Returns the value of the kAutofillAmountExtractionAiTermsSeen pref.
   virtual bool IsAutofillAmountExtractionAiTermsSeenPrefEnabled() const;
@@ -424,7 +425,7 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
 
   // Called when the user accepts the prompt to save the credit card locally.
   // Records some metrics and attempts to save the imported card. Returns the
-  // guid of the new or updated card, or the empty string if no card was saved.
+  // guid of the new or updated card.
   std::string OnAcceptedLocalCreditCardSave(
       const CreditCard& imported_credit_card);
 
@@ -516,6 +517,10 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // PaymentsDataManager.
   void AddEwalletForTest(const Ewallet& ewallet);
 
+  // Add an eWallet creation option to the cached list of creation options in
+  // `PaymentsDataManager`.
+  void AddEwalletCreationOptionForTest(Ewallet ewallet);
+
   // Sets a server credit card for test.
   //
   // TODO(crbug.com/330865438): This method currently sets `server_cards_`
@@ -549,7 +554,11 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // user.
   virtual bool ShouldSuggestServerPaymentMethods() const;
 
-  base::WeakPtr<const PaymentsDataManager> GetWeakPtr() const;
+  // Adds a callback that gets executed immediately if no `Refresh()` operation
+  // is active, or otherwise once a pending `Refresh()` operation is completed.
+  void AddCallbackAfterRefreshCompleted(base::OnceClosure callback);
+
+  base::WeakPtr<PaymentsDataManager> GetWeakPtr();
 
  protected:
   friend class PaymentsDataManagerTestApi;
@@ -627,6 +636,9 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
 
   // Cached versions of the unlinked buy-now-pay-later issuers.
   std::vector<BnplIssuer> unlinked_bnpl_issuers_;
+
+  // Cached versions of the eWallet creation options.
+  std::vector<Ewallet> ewallet_creation_options_;
 
   // Cached version of the CreditCardCloudTokenData obtained from the database.
   std::vector<std::unique_ptr<CreditCardCloudTokenData>>
@@ -706,6 +718,9 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // Whether eWallet accounts are supported for the platform OS.
   bool AreEwalletAccountsSupported() const;
 
+  // Whether eWallet creation options are supported for the platform OS.
+  bool AreEwalletCreationOptionsSupported() const;
+
   // Whether buy-now-pay-later issuers are supported for the platform OS.
   // Checks if the user's locale is supported for BNPL, and if the BNPL feature
   // is enabled.
@@ -725,14 +740,10 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
   // Clears all credit card benefits in `credit_card_benefits_`.
   void ClearAllCreditCardBenefits();
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Monitors the `kAutofillBnplEnabled` preference for changes and controls the
   // clearing/loading of payment instruments accordingly. Will also log the
   // `Autofill.SettingsPage.BnplToggled` metric.
   void OnBnplEnabledPrefChange();
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
 
   // Saves |imported_credit_card| to the WebDB if it exists. Returns the guid of
   // the new or updated card, or the empty string if no card was saved.
@@ -775,6 +786,13 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
       const sync_pb::PaymentInstrumentCreationOption&
           payment_instrument_creation_option);
 
+  // Checks whether a payment instrument creation option contains eWallet
+  // options. If it does, it caches relevant information in
+  // `ewallet_creation_options_`.
+  void CacheIfEwalletCreationOption(
+      const sync_pb::PaymentInstrumentCreationOption&
+          payment_instrument_creation_option);
+
   // Checks whether at least one eligible price range specifies `currency_code`
   // as the currency.
   bool HasEligibleCurrencyPriceRangeForBnplIssuer(
@@ -783,9 +801,6 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
 
   // Decides which database type to use for server and local cards.
   std::unique_ptr<PaymentsDatabaseHelper> database_helper_;
-
-  // The shared storage handler this instance uses.
-  std::unique_ptr<AutofillSharedStorageHandler> shared_storage_handler_;
 
   // The sync service this instance uses. Must outlive this instance.
   raw_ptr<syncer::SyncService> sync_service_ = nullptr;
@@ -819,6 +834,8 @@ class PaymentsDataManager : public AutofillWebDataServiceObserverOnUISequence,
 
   // Whether sync should be considered on in a test.
   bool is_syncing_for_test_ = false;
+
+  std::vector<base::OnceClosure> refresh_complete_callbacks_;
 
   base::WeakPtrFactory<PaymentsDataManager> weak_ptr_factory_{this};
 };

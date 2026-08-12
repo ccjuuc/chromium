@@ -242,7 +242,8 @@
 <translation id="2497706219848005458">그린 옐로우</translation>
 <translation id="2512979179176933762">창을 표시합니다</translation>
 <translation id="2523609930580546572">ChromeVox 가이드</translation>
-<translation id="2525706221823668172">Chromebook 단축키</translation>
+<translation id="2523760288355306549">점자 입력은 아직 지원되지 않습니다.</translation>
+<translation id="2525706221823668172">Chromebook 키보드 단축키</translation>
 <translation id="2553108862507765288">grammatical mistake</translation>
 <translation id="2556326187583116255">현재 음성을 중지하려면 두 손가락으로 탭하세요.</translation>
 <translation id="2573256689920773241">기본 탐색</translation>
@@ -828,7 +829,7 @@
 <translation id="6295699829709583154">필수 키: 검색 키</translation>
 <translation id="6305702903308659374">ChromeVox 음성이 나올 때도 보통 볼륨으로 재생합니다.</translation>
 <translation id="6307969636681130414">누름</translation>
-<translation id="6315652249189065725">단축키 메뉴 열기</translation>
+<translation id="6315652249189065725">키보드 단축키 메뉴 열기</translation>
 <translation id="6320690422100602757">다음 목록 항목이 없습니다</translation>
 <translation id="6322856989298155004">사운드</translation>
 <translation id="6324551002951139333">문법 오류 발견됨</translation>
@@ -1063,7 +1064,7 @@
 <translation id="7972507042926081808">초콜릿</translation>
 <translation id="7974390230414479278">메뉴 항목</translation>
 <translation id="8004507136466386272">단어</translation>
-<translation id="8004512796067398576">올리기</translation>
+<translation id="8004512796067398576">늘리기</translation>
 <translation id="8007540374018858731">h3</translation>
 <translation id="8017588669690167134">음성 사용 중지</translation>
 <translation id="801990297710781303">각주</translation>

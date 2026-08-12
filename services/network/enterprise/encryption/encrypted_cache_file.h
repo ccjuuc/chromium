@@ -7,17 +7,46 @@
 
 #include <memory>
 
+#include "base/component_export.h"
+#include "crypto/process_bound_string.h"
 #include "net/disk_cache/cache_file.h"
+#include "net/disk_cache/disk_cache.h"
+#include "services/network/enterprise/encryption/chunked_encryptor.h"
 
 namespace network::enterprise_encryption {
 
+// Detailed failure reason for decryption failures. Do not reorder or delete
+// existing values.
+// LINT.IfChange(EnterpriseDiskCacheDecryptionFailureReason)
+enum class DecryptionFailureReason {
+  kReadPastEof = 0,
+  kUnderlyingReadFailed = 1,
+  kCiphertextTooShort = 2,
+  kAeadOpenFailed = 3,
+  kMaxValue = kAeadOpenFailed,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/enums.xml:EnterpriseDiskCacheDecryptionFailureReason)
+
+// Source path trigger that caused decryption of a chunk.
+// Do not reorder or delete existing values.
+// LINT.IfChange(EncryptedCacheDecryptionSource)
+enum class DecryptionSource {
+  kRead = 0,
+  kWrite = 1,
+  kEnsurePreviousNotLast = 2,
+  kTruncate = 3,
+  kMaxValue = kTruncate,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/histograms.xml:EncryptedCacheDecryptionSource)
+
 // A decorator implementation of `CacheFile` that adds an encryption layer on
 // top of another `CacheFile` instance.
-// TODO(crbug.com/460509865): Currently a pass-through. Implement actual
-// encryption/decryption logic.
-class EncryptedCacheFile : public disk_cache::CacheFile {
+class COMPONENT_EXPORT(NETWORK_SERVICE) EncryptedCacheFile
+    : public disk_cache::CacheFile {
  public:
-  explicit EncryptedCacheFile(std::unique_ptr<disk_cache::CacheFile> file);
+  EncryptedCacheFile(std::unique_ptr<disk_cache::CacheFile> file,
+                     const crypto::ProcessBoundString& primary_key);
+
   ~EncryptedCacheFile() override;
 
   bool IsValid() const override;
@@ -35,7 +64,36 @@ class EncryptedCacheFile : public disk_cache::CacheFile {
   bool WriteAndCheck(int64_t offset, base::span<const uint8_t> data) override;
 
  private:
+  // Checks lazily that the file is initialized (header read/written,
+  // encryptor created).
+  bool EnsureInitialized();
+
+  // Helper to write data into a specific chunk.
+  // Handles partial updates (Read-Modify-Write) and new chunk creation.
+  // |is_new_chunk|: For optimization purposes. If true, assumes the chunk is
+  // currently empty/non-existent. |is_last_chunk|: Encrypts the chunk with the
+  // "last chunk" flag in the nonce.
+  bool WriteChunk(uint32_t chunk_index,
+                  size_t offset_in_chunk,
+                  base::span<const uint8_t> data_to_write,
+                  bool is_new_chunk,
+                  bool is_last_chunk);
+
+  // Reads and decrypts the specified chunk.
+  base::expected<std::vector<uint8_t>, EncryptionError> ReadAndDecryptChunk(
+      uint32_t chunk_index,
+      DecryptionSource source);
+
+  // Handles the transition of the previous last chunk to an intermediate chunk.
+  // When extending the file, the old "last chunk" must be padded to the full
+  // chunk size and re-encrypted with `is_last_chunk=false` to allow subsequent
+  // chunks to be valid.
+  bool EnsurePreviousChunkNotLast(int64_t new_logical_length);
+
   std::unique_ptr<disk_cache::CacheFile> file_;
+  const crypto::ProcessBoundString key_;
+  std::unique_ptr<ChunkedEncryptor> encryptor_;
+  bool initialized_ = false;
 };
 
 }  // namespace network::enterprise_encryption

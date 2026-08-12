@@ -7,6 +7,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/password_manager/android/password_manager_lifecycle_helper_impl.h"
 #include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/sync/password_proto_utils.h"
 
 namespace password_manager {
 
@@ -27,7 +28,6 @@ PasswordStoreAndroidLocalBackend::PasswordStoreAndroidLocalBackend(
 PasswordStoreAndroidLocalBackend::~PasswordStoreAndroidLocalBackend() = default;
 
 void PasswordStoreAndroidLocalBackend::InitBackend(
-    AffiliatedMatchHelper* affiliated_match_helper,
     RemoteChangesReceived remote_form_changes_received,
     base::RepeatingClosure sync_enabled_or_disabled_cb,
     base::OnceCallback<void(bool)> completion) {
@@ -42,28 +42,29 @@ void PasswordStoreAndroidLocalBackend::Shutdown(
   PasswordStoreAndroidBackend::Shutdown(std::move(shutdown_completed));
 }
 
-bool PasswordStoreAndroidLocalBackend::IsAbleToSavePasswords() {
-  return !should_disable_saving_due_to_error_;
+ActionableError PasswordStoreAndroidLocalBackend::GetError() {
+  return last_error();
 }
 
 void PasswordStoreAndroidLocalBackend::GetAllLoginsAsync(
-    LoginsOrErrorReply callback) {
+    BackendLoginsOrErrorReply callback) {
   GetAllLoginsInternal(std::string(), std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::
-    GetAllLoginsWithAffiliationAndBrandingAsync(LoginsOrErrorReply callback) {
+    GetAllLoginsWithAffiliationAndBrandingAsync(
+        BackendLoginsOrErrorReply callback) {
   GetAllLoginsWithAffiliationAndBrandingInternal(std::string(),
                                                  std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::GetAutofillableLoginsAsync(
-    LoginsOrErrorReply callback) {
+    BackendLoginsOrErrorReply callback) {
   GetAutofillableLoginsInternal(std::string(), std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::FillMatchingLoginsAsync(
-    LoginsOrErrorReply callback,
+    BackendLoginsOrErrorReply callback,
     bool include_psl,
     const std::vector<PasswordFormDigest>& forms) {
   FillMatchingLoginsInternal(std::string(), std::move(callback), include_psl,
@@ -72,39 +73,38 @@ void PasswordStoreAndroidLocalBackend::FillMatchingLoginsAsync(
 
 void PasswordStoreAndroidLocalBackend::GetGroupedMatchingLoginsAsync(
     const PasswordFormDigest& form_digest,
-    LoginsOrErrorReply callback) {
+    BackendLoginsOrErrorReply callback) {
   GetGroupedMatchingLoginsInternal(std::string(), form_digest,
                                    std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::AddLoginAsync(
-    const PasswordForm& form,
+    StoredCredential cred,
     PasswordChangesOrErrorReply callback) {
-  AddLoginInternal(std::string(), form, std::move(callback));
+  AddLoginInternal(std::string(), std::move(cred), std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::UpdateLoginAsync(
-    const PasswordForm& form,
+    StoredCredential cred,
     PasswordChangesOrErrorReply callback) {
-  UpdateLoginInternal(std::string(), form, std::move(callback));
+  UpdateLoginInternal(std::string(), std::move(cred), std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::RemoveLoginAsync(
     const base::Location& location,
-    const PasswordForm& form,
+    StoredCredential cred,
     PasswordChangesOrErrorReply callback) {
-  RemoveLoginInternal(std::string(), form, std::move(callback));
+  RemoveLoginInternal(std::string(), std::move(cred), location,
+                      std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::RemoveLoginsCreatedBetweenAsync(
     const base::Location& location,
     base::Time delete_begin,
     base::Time delete_end,
-    base::OnceCallback<void(bool)> sync_completion,
     PasswordChangesOrErrorReply callback) {
-  CHECK(!sync_completion);
-  RemoveLoginsCreatedBetweenInternal(std::string(), delete_begin, delete_end,
-                                     std::move(callback));
+  RemoveLoginsCreatedBetweenInternal(std::string(), location, delete_begin,
+                                     delete_end, std::move(callback));
 }
 
 void PasswordStoreAndroidLocalBackend::DisableAutoSignInForOriginsAsync(
@@ -133,14 +133,7 @@ PasswordStoreAndroidLocalBackend::AsWeakPtr() {
 }
 
 void PasswordStoreAndroidLocalBackend::RecoverOnError(
-    AndroidBackendAPIErrorCode error) {
-  should_disable_saving_due_to_error_ = true;
-}
-
-void PasswordStoreAndroidLocalBackend::OnCallToGMSCoreSucceeded() {
-  // Since the API call has succeeded, it's safe to reenable saving.
-  should_disable_saving_due_to_error_ = false;
-}
+    AndroidBackendAPIErrorCode error) {}
 
 std::string PasswordStoreAndroidLocalBackend::GetAccountToRetryOperation() {
   return std::string();

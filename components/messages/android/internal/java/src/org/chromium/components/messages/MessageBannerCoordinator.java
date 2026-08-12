@@ -11,11 +11,11 @@ import android.view.accessibility.AccessibilityEvent;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.core.view.ViewCompat;
-import androidx.core.view.accessibility.AccessibilityEventCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.messages.MessageStateHandler.Position;
+import org.chromium.ui.UiUtils;
 import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.listmenu.ListMenuHost.PopupMenuShownListener;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -83,6 +83,8 @@ class MessageBannerCoordinator {
         view.setSwipeHandler(mMediator);
         view.setPopupMenuShownListener(
                 createPopupMenuShownListener(mTimer, mAutodismissDurationMs.get(), mOnTimeUp));
+
+        UiUtils.disableLigaturesForSecurity(view);
     }
 
     /**
@@ -235,15 +237,13 @@ class MessageBannerCoordinator {
      * @param isShowing Whether the message is visible. {@code true} if shown, {@code false} if
      *     hidden.
      */
-    @SuppressWarnings("WrongConstant")
     private void sendPaneChangeAccessibilityEvent(boolean isShowing) {
         AccessibilityEvent event =
                 AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
         if (isShowing) {
-            event.setContentChangeTypes(AccessibilityEventCompat.CONTENT_CHANGE_TYPE_PANE_APPEARED);
+            event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED);
         } else {
-            event.setContentChangeTypes(
-                    AccessibilityEventCompat.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED);
+            event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED);
         }
         AccessibilityState.sendAccessibilityEvent(event);
     }

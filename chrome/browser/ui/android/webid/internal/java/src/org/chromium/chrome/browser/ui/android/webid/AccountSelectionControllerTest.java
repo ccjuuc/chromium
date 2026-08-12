@@ -19,6 +19,7 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties.ACCOUNT;
+import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.CLOSE_ON_CLICK_LISTENER;
 import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.HEADER_ICON;
 import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IDP_FOR_DISPLAY;
 import static org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.HeaderProperties.IFRAME_FOR_DISPLAY;
@@ -43,11 +44,13 @@ import org.mockito.ArgumentMatcher;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.blink.mojom.RpMode;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.AccountProperties;
 import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ButtonData;
 import org.chromium.chrome.browser.ui.android.webid.AccountSelectionProperties.ContinueButtonProperties;
@@ -74,7 +77,6 @@ import java.util.Collections;
  */
 @RunWith(ParameterizedRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBase {
     @Parameters
     public static Collection<Object> data() {
@@ -110,7 +112,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
         assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
@@ -135,7 +137,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
         assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
@@ -167,7 +169,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
         assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
@@ -186,6 +188,38 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                 /* expectShowIdp= */ false);
     }
 
+    @Test
+    public void testCloseOnClickRunnableFormFactor() {
+        // By default, the Desktop windowing flag and DeviceInfo.isDesktop are not mocked
+        // to true in this test, so it is treated as a small form factor.
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNotNull(headerModel.get(CLOSE_ON_CLICK_LISTENER));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.BOTTOM_SHEET_ON_DESKTOP_WINDOWING)
+    public void testCloseOnClickRunnableLargeFormFactor() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        when(mMockBottomSheetController.isLargeFormFactorUiEnabled(any())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+
+        PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
+        assertNull(headerModel.get(CLOSE_ON_CLICK_LISTENER));
+        DeviceInfo.setIsDesktopForTesting(false);
+    }
+
     /**
      * Test that the FedCM account picker does not display the brand icon placeholder if the brand
      * icon is null.
@@ -197,7 +231,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccountWithoutBrandIcons),
                 Arrays.asList(mIdpDataWithoutIcons),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
         assertNull(headerModel.get(HEADER_ICON));
@@ -210,7 +244,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         PropertyModel headerModel = mModel.get(ItemProperties.HEADER);
         assertEquals(HeaderType.SIGN_IN, headerModel.get(TYPE));
@@ -223,7 +257,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Header + two accounts. Also drag handlebar in active mode.
         int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
         assertEquals(expectedItemCount, countAllItems());
@@ -238,7 +272,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Collections.singletonList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Header + Account + Continue Button. Also drag handlebar in active mode.
         int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
         assertEquals(1, mSheetAccountItems.size());
@@ -251,7 +285,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Collections.singletonList(mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Header + Account + Continue Button. Also drag handlebar in active mode.
         assertEquals(expectedItemCount, countAllItems());
         assertEquals(1, mSheetAccountItems.size());
@@ -267,7 +301,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mCarlAccount, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         verify(mMockBottomSheetController, times(1)).requestShowContent(any(), eq(true));
 
         assertFalse(mMediator.wasDismissed());
@@ -281,7 +315,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Do not let test inputs be ignored.
         mMediator.setComponentShowTime(-1000);
         assertFalse(mMediator.wasDismissed());
@@ -308,7 +342,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mCarlAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Do not let test inputs be ignored.
         mMediator.setComponentShowTime(-1000);
         assertFalse(mMediator.wasDismissed());
@@ -333,7 +367,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         pressBack();
         verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
         assertTrue(mMediator.wasDismissed());
@@ -347,7 +381,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         pressBack();
         verify(mMockDelegate).onDismissed(IdentityRequestDialogDismissReason.OTHER);
         assertTrue(mMediator.wasDismissed());
@@ -361,7 +395,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         mMediator.onAccountSelected(new ButtonData(mAnaAccount, /* idpMetadata= */ null));
         verify(mMockDelegate).onAccountSelected(mAnaAccount);
         assertFalse(mMediator.wasDismissed());
@@ -377,7 +411,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         mMediator.onAccountSelected(new ButtonData(mNewUserAccount, /* idpMetadata= */ null));
 
         assertFalse(mMediator.wasDismissed());
@@ -394,7 +428,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         mMediator.onAccountSelected(new ButtonData(mNewUserAccount, /* idpMetadata= */ null));
 
         pressBack();
@@ -416,7 +450,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount, mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         assertEquals(2, mSheetAccountItems.size());
         mMediator.onAccountSelected(new ButtonData(mAnaAccount, /* idpMetadata= */ null));
 
@@ -433,7 +467,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                 mAnaAccount,
                 /* isAutoReauthn= */ true);
         // Auto reauthenticates if no action is taken.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertFalse(mMediator.wasDismissed());
         assertEquals(HeaderType.VERIFY_AUTO_REAUTHN, mMediator.getHeaderType());
 
@@ -457,7 +491,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
         verifyNoMoreInteractions(mMockDelegate);
         assertTrue(mMediator.wasDismissed());
         // The delayed task should not call delegate after user dismissing.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
     }
 
     @Test
@@ -467,7 +501,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // For new user we expect header + account + consent text + continue btn. Also drag
         // handlebar in active mode.
         int expectedItemCount = mRpMode == RpMode.PASSIVE ? 4 : 5;
@@ -501,7 +535,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccountWithoutFields),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // Because disclosureFields are empty, we expect header + account + continue btn, and drag
         // handlebar in active mode.
         int expectedItemCount = mRpMode == RpMode.PASSIVE ? 3 : 4;
@@ -519,8 +553,9 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccountWithoutFields, mBobAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
-        mMediator.onAccountSelected(new ButtonData(mNewUserAccountWithoutFields, /* idpMetadata= */ null));
+                /* newAccounts= */ Collections.emptyList());
+        mMediator.onAccountSelected(
+                new ButtonData(mNewUserAccountWithoutFields, /* idpMetadata= */ null));
         verify(mMockDelegate).onAccountSelected(mNewUserAccountWithoutFields);
         assertFalse(mMediator.wasDismissed());
         mMediator.close();
@@ -594,7 +629,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         KeyboardVisibilityListener listener = mMediator.getKeyboardEventListener();
         listener.keyboardVisibilityChanged(true);
         verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
@@ -612,7 +647,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         mMediator.getTabObserver().onInteractabilityChanged(mTab, false);
         verify(mMockBottomSheetController).hideContent(mBottomSheetContent, false);
         mMediator.getTabObserver().onInteractabilityChanged(mTab, true);
@@ -628,7 +663,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         // We pass null as |mMediatior| does not really care about where we navigate to.
         mMediator.getTabObserver().onDidStartNavigationInPrimaryMainFrame(mTab, null);
         assertTrue(mMediator.wasDismissed());
@@ -643,7 +678,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         KeyboardVisibilityListener listener = mMediator.getKeyboardEventListener();
         listener.keyboardVisibilityChanged(true);
         verify(mMockBottomSheetController).hideContent(mBottomSheetContent, true);
@@ -666,7 +701,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mAnaAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
         verify(mMockBottomSheetController, never()).requestShowContent(any(), anyBoolean());
         mMediator.getTabObserver().onInteractabilityChanged(mTab, true);
         verify(mMockBottomSheetController, times(1)).requestShowContent(mBottomSheetContent, true);
@@ -680,7 +715,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccount),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
 
         assertNotNull(mModel.get(ItemProperties.HEADER).get(SET_FOCUS_VIEW_CALLBACK));
         assertNotNull(
@@ -715,7 +750,8 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mAnaAccountWithUseDifferentAccount,
                         mFilteredOutAccountWithUseDifferentAccount),
                 Arrays.asList(mIdpDataWithUseDifferentAccount),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Account chooser is shown.
         assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
@@ -785,6 +821,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                 Arrays.asList(mFilteredOutAccountWithUseDifferentAccount),
                 Arrays.asList(mIdpDataWithUseDifferentAccount),
                 Arrays.asList(mFilteredOutAccountWithUseDifferentAccount));
+        RobolectricUtil.runAllBackgroundAndUi();
         // Account chooser is shown.
         assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
         int expectedCount = mRpMode == RpMode.PASSIVE ? 3 : 2;
@@ -841,7 +878,8 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mNewUserAccount, mAnaAccountWithUseDifferentAccount),
                 Arrays.asList(mIdpData, mIdpDataWithUseDifferentAccount),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Dragbar should be shown when multiple identity providers are shown.
         assertTrue(mModel.get(ItemProperties.DRAGBAR_HANDLE_VISIBLE));
@@ -947,7 +985,8 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                         mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
                 Arrays.asList(mSingleIdentifierAccount, mSingleIdentifierAccountFilteredOut),
                 Arrays.asList(mIdpData),
-                /* newAccounts= */ Collections.EMPTY_LIST);
+                /* newAccounts= */ Collections.emptyList());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Account chooser is shown.
         assertEquals(HeaderType.SIGN_IN, mModel.get(ItemProperties.HEADER).get(TYPE));
@@ -995,6 +1034,7 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
                 Arrays.asList(mSingleIdentifierAccount),
                 Arrays.asList(mIdpData),
                 /* newAccounts= */ Arrays.asList(mSingleIdentifierAccount));
+        RobolectricUtil.runAllBackgroundAndUi();
 
         if (mRpMode == RpMode.PASSIVE) {
             // Account chooser is shown.
@@ -1030,6 +1070,27 @@ public class AccountSelectionControllerTest extends AccountSelectionJUnitTestBas
             TextView textView = accountChip.findViewById(R.id.description);
             assertEquals("username", textView.getText());
         }
+    }
+
+    @Test
+    public void testSetCanShowUi() {
+        when(mMockBottomSheetController.requestShowContent(any(), anyBoolean())).thenReturn(true);
+        mMediator.showAccounts(
+                new RelyingPartyData(
+                        mTestEtldPlusOne, /* iframeForDisplay= */ "", /* rpIcon= */ null),
+                Arrays.asList(mAnaAccount),
+                Arrays.asList(mIdpData),
+                /* newAccounts= */ Collections.emptyList());
+        verify(mMockBottomSheetController, times(1)).requestShowContent(any(), eq(true));
+
+        // Setting can show UI to false hides content.
+        mMediator.setCanShowUi(false);
+        verify(mMockBottomSheetController, times(1)).hideContent(mBottomSheetContent, true);
+
+        // Setting can show UI to true shows content again.
+        when(mTab.isUserInteractable()).thenReturn(true);
+        mMediator.setCanShowUi(true);
+        verify(mMockBottomSheetController, times(2)).requestShowContent(mBottomSheetContent, true);
     }
 
     private void pressBack() {

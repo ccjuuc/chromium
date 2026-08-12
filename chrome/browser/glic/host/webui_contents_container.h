@@ -7,8 +7,10 @@
 
 #include <memory>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+#include "base/time/time.h"
+#include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents_observer.h"
 
 class Profile;
@@ -16,21 +18,49 @@ class Profile;
 namespace glic {
 class Host;
 
+class WebUIContentsContainer {
+ public:
+  WebUIContentsContainer();
+  virtual ~WebUIContentsContainer();
+
+  // Attaches this container's WebContents to the provided Host. This must be
+  // called exactly once.
+  virtual void AttachToHost(Host* host) = 0;
+  virtual void SetVisibility(content::Visibility visibility) = 0;
+  virtual content::WebContents* web_contents() const = 0;
+  virtual void OnActuatingChanged(bool actuating) = 0;
+  virtual void OnTaskTabsVisibilityChanged(bool has_visible_tab) = 0;
+  virtual std::unique_ptr<content::WebContents> ReleaseWebContents() = 0;
+  virtual void ReclaimWebContents(
+      std::unique_ptr<content::WebContents> web_contents) = 0;
+  base::TimeTicks creation_time() const { return creation_time_; }
+
+ protected:
+  const base::TimeTicks creation_time_;
+};
+
 // Owns the `WebContents` that houses the chrome://glic WebUI.
-class WebUIContentsContainer : public content::WebContentsObserver {
+class WebUIContentsContainerImpl : public content::WebContentsObserver,
+                                   public WebUIContentsContainer {
  public:
   // `initially_hidden` value is only relevant when
   // `kGlicGuestContentsVisibilityState` flag is enabled, otherwise the default
   // value is used (i.e. false).
-  WebUIContentsContainer(Profile* profile, bool initially_hidden);
-  ~WebUIContentsContainer() override;
+  WebUIContentsContainerImpl(Profile* profile, bool initially_hidden);
+  ~WebUIContentsContainerImpl() override;
+  WebUIContentsContainerImpl(const WebUIContentsContainerImpl&) = delete;
+  WebUIContentsContainerImpl& operator=(const WebUIContentsContainerImpl&) =
+      delete;
 
-  // Attaches this container's WebContents to the provided Host. This must be
-  // called exactly once.
-  void AttachToHost(Host* host);
-
-  WebUIContentsContainer(const WebUIContentsContainer&) = delete;
-  WebUIContentsContainer& operator=(const WebUIContentsContainer&) = delete;
+  // WebUIContentsContainer impl.
+  void AttachToHost(Host* host) override;
+  void SetVisibility(content::Visibility visibility) override;
+  content::WebContents* web_contents() const override;
+  void OnActuatingChanged(bool actuating) override;
+  void OnTaskTabsVisibilityChanged(bool has_visible_tab) override;
+  std::unique_ptr<content::WebContents> ReleaseWebContents() override;
+  void ReclaimWebContents(
+      std::unique_ptr<content::WebContents> web_contents) override;
 
  private:
   // content::WebContentsObserver:
@@ -38,24 +68,25 @@ class WebUIContentsContainer : public content::WebContentsObserver {
       base::TerminationStatus status) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void PrimaryMainDocumentElementAvailable() override;
+  void DocumentOnLoadCompletedInPrimaryMainFrame() override;
+  void WebContentsDestroyed() override;
+  void UpdateActuationTracker();
 
-  ScopedProfileKeepAlive profile_keep_alive_;
-  const std::unique_ptr<content::WebContents> web_contents_;
+  base::TimeTicks navigation_commit_time_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  raw_ptr<content::WebContents> web_contents_ptr_ = nullptr;
   const raw_ptr<Profile> profile_;
   // Raw pointer to the host this UI is attached to. This object is not owned
-  // by GlicUI. Its lifetime is managed by GlicKeyedService (single-instance) or
-  // GlicInstanceImpl (multi-instance).
-  //
-  // In the single-instance path, `HostManager` (owned by `GlicKeyedService`)
-  // owns `Host`s. `HostManager::Shutdown()` is called during
-  // `GlicKeyedService::Shutdown()`, which destroys all hosts and thus their
-  // associated WebUIs.
-  //
-  // In the multi-instance path, `GlicInstanceImpl` owns `Host`. The
-  // `GlicInstanceImpl` calls `Shutdown()` on the `Host` in its destructor,
-  // which destroys the WebUI (and thus this `GlicUI`), ensuring `host_`
-  // outlives `this`.
+  // by GlicUI. Its lifetime is managed by GlicInstanceImpl (multi-instance),
+  // which owns Host.
   raw_ptr<Host> host_ = nullptr;
+
+  base::ScopedClosureRunner webui_capture_runner_;
+  base::ScopedClosureRunner guest_capture_runner_;
+
+  bool is_actuating_ = false;
+  bool is_actuating_on_visible_tab_ = false;
 };
 
 }  // namespace glic

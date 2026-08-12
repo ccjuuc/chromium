@@ -4,10 +4,22 @@
 
 #include "components/autofill/core/browser/form_qualifiers.h"
 
+#include <stddef.h>
+
+#include <algorithm>
+#include <concepts>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
+#include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
 #include "components/autofill/core/common/autofill_regex_constants.h"
@@ -15,7 +27,10 @@
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/html_field_types.h"
+#include "components/autofill/core/common/logging/log_macros.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -159,10 +174,13 @@ bool ShouldBeParsed(const T& form,
 
 template <typename T>
   requires IsForm<T>
-bool ShouldRunHeuristics(const T& form) {
-  return AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForHeuristics,
-                                 is_active) &&
-         HasAllowedScheme(url(form));
+bool ShouldRunHeuristics(const T& form, bool ignore_small_forms) {
+  if (ignore_small_forms &&
+      !AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForHeuristics,
+                               is_active)) {
+    return false;
+  }
+  return HasAllowedScheme(url(form));
 }
 
 template <typename T>
@@ -172,7 +190,9 @@ bool ShouldRunHeuristicsForSingleFields(const T& form) {
          HasAllowedScheme(url(form));
 }
 
-bool ShouldBeQueried(const FormStructure& form) {
+template <typename T>
+  requires IsForm<T>
+bool ShouldBeQueried(const T& form) {
   return (AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForQuery,
                                   is_active) ||
           std::ranges::any_of(fields(form), is_password_field)) &&
@@ -192,14 +212,14 @@ bool ShouldUploadUkm(const FormStructure& form, bool require_classified_field) {
 
   auto is_focusable_text_field =
       [](const std::unique_ptr<AutofillField>& field) {
-        return field->IsTextInputElement() && field->IsFocusable();
+        return field->IsTextInputElement() && field->is_focusable();
       };
 
   // Return true if the field is a visible text input field which has predicted
   // types from heuristics or the server.
   auto is_focusable_predicted_text_field =
       [](const std::unique_ptr<AutofillField>& field) {
-        return field->IsTextInputElement() && field->IsFocusable() &&
+        return field->IsTextInputElement() && field->is_focusable() &&
                ((field->server_type() != NO_SERVER_DATA &&
                  field->server_type() != UNKNOWN_TYPE) ||
                 field->heuristic_type() != UNKNOWN_TYPE ||
@@ -248,12 +268,12 @@ bool ShouldBeParsed(const FormStructure& form, LogManager* log_manager) {
   return internal::ShouldBeParsed(form, {}, log_manager);
 }
 
-bool ShouldRunHeuristics(const FormData& form) {
-  return internal::ShouldRunHeuristics(form);
+bool ShouldRunHeuristics(const FormData& form, bool ignore_small_forms) {
+  return internal::ShouldRunHeuristics(form, ignore_small_forms);
 }
 
-bool ShouldRunHeuristics(const FormStructure& form) {
-  return internal::ShouldRunHeuristics(form);
+bool ShouldRunHeuristics(const FormStructure& form, bool ignore_small_forms) {
+  return internal::ShouldRunHeuristics(form, ignore_small_forms);
 }
 
 bool ShouldRunHeuristicsForSingleFields(const FormData& form) {
@@ -262,6 +282,10 @@ bool ShouldRunHeuristicsForSingleFields(const FormData& form) {
 
 bool ShouldRunHeuristicsForSingleFields(const FormStructure& form) {
   return internal::ShouldRunHeuristicsForSingleFields(form);
+}
+
+bool ShouldBeQueried(const FormData& form) {
+  return internal::ShouldBeQueried(form);
 }
 
 bool ShouldBeQueried(const FormStructure& form) {

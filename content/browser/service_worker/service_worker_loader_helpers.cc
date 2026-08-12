@@ -7,7 +7,9 @@
 #include <optional>
 #include <string_view>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
+#include "base/containers/lru_cache.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -17,10 +19,15 @@
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/loader/browser_initiated_resource_request.h"
 #include "content/browser/service_worker/service_worker_consts.h"
+#include "content/browser/service_worker/service_worker_context_core.h"
+#include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/browser/service_worker/service_worker_synthetic_response_manager.h"
+#include "content/browser/storage_partition_impl.h"
 #include "content/common/features.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/referrer.h"
@@ -35,9 +42,7 @@
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 
-namespace content {
-
-namespace service_worker_loader_helpers {
+namespace content::service_worker_loader_helpers {
 
 namespace {
 
@@ -281,7 +286,7 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
   // Propagate the actual permissions policy once it is available.
   request.permissions_policy =
       *network::PermissionsPolicy::CreateFromParsedPolicy(
-          {}, {}, url::Origin::Create(request.url));
+          {}, url::Origin::Create(request.url));
 
   request.site_for_cookies = storage_key.ToNetSiteForCookies();
   request.do_not_prompt_for_login = true;
@@ -300,11 +305,12 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
                             network::kDefaultAcceptHeaderValue);
 
   request.referrer_policy = Referrer::ReferrerPolicyForUrlRequest(
-      fetch_client_settings_object.referrer_policy);
+      fetch_client_settings_object.policy_container_policies->referrer_policy);
   request.referrer =
       Referrer::SanitizeForRequest(
           script_url, Referrer(fetch_client_settings_object.outgoing_referrer,
-                               fetch_client_settings_object.referrer_policy))
+                               fetch_client_settings_object
+                                   .policy_container_policies->referrer_policy))
           .url;
   request.upgrade_if_insecure =
       fetch_client_settings_object.insecure_requests_policy ==
@@ -402,6 +408,34 @@ bool IsPathRestrictionSatisfiedWithoutHeader(const GURL& scope,
                                             std::nullopt, error_message);
 }
 
+ServiceWorkerMainScriptRequestValidationResult ValidateMainScriptRequest(
+    const network::ResourceRequest& resource_request,
+    const ServiceWorkerVersion& version) {
+  const bool is_url_match = (resource_request.url == version.script_url());
+  const bool is_dest_match =
+      (resource_request.destination ==
+       network::mojom::RequestDestination::kServiceWorker);
+  const bool is_mode_match =
+      (resource_request.mode == network::mojom::RequestMode::kSameOrigin);
+
+  if (is_dest_match) {
+    if (!is_mode_match) {
+      return ServiceWorkerMainScriptRequestValidationResult::kForgedMode;
+    }
+    if (!is_url_match) {
+      return ServiceWorkerMainScriptRequestValidationResult::kForgedUrl;
+    }
+    return ServiceWorkerMainScriptRequestValidationResult::kOk;
+  }
+
+  if (is_mode_match && is_url_match) {
+    return ServiceWorkerMainScriptRequestValidationResult::kForgedDestination;
+  }
+
+  // Not a main script request (or not forged in a way we track).
+  return ServiceWorkerMainScriptRequestValidationResult::kOk;
+}
+
 const base::flat_set<std::string> FetchHandlerBypassedHashStrings() {
   const static base::NoDestructor<base::flat_set<std::string>> result(
       base::SplitString(
@@ -412,18 +446,20 @@ const base::flat_set<std::string> FetchHandlerBypassedHashStrings() {
 }
 
 bool IsEligibleForSyntheticResponse(BrowserContext* browser_context,
+                                    StoragePartitionImpl* storage_partition,
                                     const GURL& client_url) {
   if (!base::FeatureList::IsEnabled(
           blink::features::kServiceWorkerSyntheticResponse)) {
     return false;
   }
   return IsEligibleForSyntheticResponseInternal(
-      browser_context, client_url, GetSyntheticResponseAllowedUrl(),
-      GetSyntheticResponseDeniedUrlParams());
+      browser_context, storage_partition, client_url,
+      GetSyntheticResponseAllowedUrl(), GetSyntheticResponseDeniedUrlParams());
 }
 
 bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
     BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
     const GURL& client_url,
     const std::string& allowed_url,
     const std::string& denied_url_params) {
@@ -431,15 +467,21 @@ bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
       denied_url_params, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
   return IsEligibleForSyntheticResponseInternal(
-      browser_context, client_url, allowed_url,
+      browser_context, storage_partition, client_url, allowed_url,
       base::flat_set<std::string>(params.begin(), params.end()));
 }
 
 bool IsEligibleForSyntheticResponseInternal(
     BrowserContext* browser_context,
+    StoragePartitionImpl* storage_partition,
     const GURL& client_url,
     const std::string& allowed_url,
     const base::flat_set<std::string>& denied_url_params) {
+  // If this StoragePartition is for guests (e.g., for a <webview>
+  // tag). We don't enable it because the embedder may intercept the request.
+  if (storage_partition && storage_partition->is_guest()) {
+    return false;
+  }
   // If `client_url` should be either 1) allowed by the browser content
   // client, or 2) listed in the allowlist.
   if ((browser_context &&
@@ -466,6 +508,157 @@ bool IsSyntheticResponseDryRunModeEnabled() {
   return is_dry_run;
 }
 
-}  // namespace service_worker_loader_helpers
+storage::mojom::ServiceWorkerFindRegistrationResultPtr
+GetOrCreateSyntheticRegistration(ServiceWorkerContextCore* context,
+                                 const GURL& client_url,
+                                 const blink::StorageKey& key) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // Extract the first path segment (e.g. "/foo" from
+  // "https://example.com/foo/bar") to establish a broader synthetic scope. This
+  // guarantees that subsequent navigations across different paths within the
+  // same search feature (e.g. "/foo/baz") successfully match the registration
+  // scope without triggering longest-scope mismatch crashes.
+  std::string_view path = client_url.path();
+  size_t second_slash = path.find('/', 1);
+  std::string first_path_segment(path.substr(0, second_slash));
 
-}  // namespace content
+  GURL::Replacements replacements_for_scope;
+  replacements_for_scope.ClearQuery();
+  replacements_for_scope.SetPathStr(first_path_segment);
+  const auto kScope = client_url.ReplaceComponents(replacements_for_scope);
+
+  // Cache registration IDs based on the StorageKey so that subsequent calls
+  // for the same key return the same registration object. Using LRUCache to
+  // prevent unbounded memory growth.
+  constexpr int kMaxCachedRegistrations = 100;
+  static base::NoDestructor<base::LRUCache<blink::StorageKey, int64_t>>
+      key_to_registration_id_map(kMaxCachedRegistrations);
+
+  static int64_t synthetic_id_counter = 0;
+  int64_t registration_id;
+
+  auto it = key_to_registration_id_map->Get(key);
+  if (it != key_to_registration_id_map->end()) {
+    registration_id = it->second;
+    // If an in-memory registration already exists but its scope does not match
+    // the requested synthetic scope (e.g. navigation across independent search
+    // paths like /foo vs /baz), evict the cached ID and allocate a new one.
+    // This prevents longest-scope mismatch crashes during navigation
+    // validation.
+    if (context) {
+      if (scoped_refptr<ServiceWorkerRegistration> live_reg =
+              context->GetLiveRegistration(registration_id);
+          live_reg && live_reg->scope() != kScope) {
+        key_to_registration_id_map->Erase(it);
+        it = key_to_registration_id_map->end();
+      }
+    }
+  }
+
+  if (it == key_to_registration_id_map->end()) {
+    registration_id =
+        blink::mojom::kSyntheticResponseServiceWorkerRegistrationId -
+        synthetic_id_counter;
+    synthetic_id_counter++;
+    key_to_registration_id_map->Put(key, registration_id);
+  }
+
+  GURL::Replacements replacements_for_script;
+  replacements_for_script.ClearQuery();
+  replacements_for_script.SetPathStr(
+      "/service-worker-for-synthetic-response.js");
+  const auto kScript = client_url.ReplaceComponents(replacements_for_script);
+
+  std::vector<storage::mojom::ServiceWorkerResourceRecordPtr> resources;
+  {
+    auto resource = storage::mojom::ServiceWorkerResourceRecord::New(
+        blink::mojom::kSyntheticResponseServiceWorkerResourceId, kScript,
+        base::ByteSize(0),
+        /*sha256_checksum=*/"");
+    resources.push_back(std::move(resource));
+  }
+
+  auto data = storage::mojom::ServiceWorkerRegistrationData::New();
+  data->registration_id = registration_id;
+  data->scope = kScope;
+  data->key = key;
+  data->script = kScript;
+  data->script_type = blink::mojom::ScriptType::kModule;
+  data->update_via_cache = blink::mojom::ServiceWorkerUpdateViaCache::kNone;
+  // Use `registration_id` as `version_id` to ensure each distinct StorageKey
+  // gets its own unique ServiceWorkerVersion instance in memory, avoiding
+  // cross-origin collisions in ServiceWorkerContextCore::live_versions_
+  // (crbug.com/513205374).
+  data->version_id = registration_id;
+  data->is_active = true;
+  data->fetch_handler_type =
+      blink::mojom::ServiceWorkerFetchHandlerType::kNoHandler;
+  data->last_update_check = base::Time::Now();
+  data->navigation_preload_state = blink::mojom::NavigationPreloadState::New();
+
+  {
+    base::ByteSize resources_total_size;
+    for (auto& resource : resources) {
+      // `resource->size` can be unknown; sub in 0 here if so.
+      // TODO(https://crbug.com/474382520): Add in error handling.
+      resources_total_size += resource->size.value_or(base::ByteSize(0));
+    }
+    data->resources_total_size = resources_total_size;
+  }
+
+  data->script_response_time = base::Time::Now();
+  data->ancestor_frame_type = blink::mojom::AncestorFrameType::kNormalFrame;
+  data->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
+
+  // Add the router rules to let all requests go to network source.
+  {
+    blink::ServiceWorkerRouterRules router_rules;
+    {
+      blink::ServiceWorkerRouterRule rule;
+      {
+        blink::ServiceWorkerRouterOrCondition or_condition;
+        {
+          blink::ServiceWorkerRouterRequestCondition request;
+          request.mode = network::mojom::RequestMode::kNavigate;
+          or_condition.conditions.push_back(
+              blink::ServiceWorkerRouterCondition::WithRequest(
+                  std::move(request)));
+        }
+        {
+          blink::ServiceWorkerRouterNotCondition not_condition;
+          {
+            blink::ServiceWorkerRouterRequestCondition request;
+            request.mode = network::mojom::RequestMode::kNavigate;
+            not_condition.condition =
+                std::make_unique<blink::ServiceWorkerRouterCondition>(
+                    blink::ServiceWorkerRouterCondition::WithRequest(
+                        std::move(request)));
+          }
+          or_condition.conditions.push_back(
+              blink::ServiceWorkerRouterCondition::WithNotCondition(
+                  std::move(not_condition)));
+        }
+        rule.condition = blink::ServiceWorkerRouterCondition::WithOrCondition(
+            std::move(or_condition));
+      }
+      {
+        blink::ServiceWorkerRouterSource source;
+        source.type = network::mojom::ServiceWorkerRouterSourceType::kNetwork;
+        source.network_source = blink::ServiceWorkerRouterNetworkSource{};
+        rule.sources.emplace_back(std::move(source));
+      }
+      router_rules.rules.emplace_back(std::move(rule));
+    }
+    data->router_rules = std::move(router_rules);
+  }
+
+  mojo::PendingRemote<storage::mojom::ServiceWorkerLiveVersionRef>
+      remote_reference;
+  // We don't need to care about the receiver since this is a fake one.
+  std::ignore = remote_reference.InitWithNewPipeAndPassReceiver();
+  return storage::mojom::ServiceWorkerFindRegistrationResult::New(
+      std::move(remote_reference), std::move(data), std::move(resources));
+}
+
+}  // namespace content::service_worker_loader_helpers

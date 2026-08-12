@@ -13,7 +13,6 @@
 
 #include "base/base64.h"
 #include "base/check.h"
-#include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
@@ -26,8 +25,8 @@
 #include "chrome/updater/constants.h"
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/external_constants_default.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/updater_branding.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/util/util.h"
 #include "components/crx_file/crx_verifier.h"
@@ -42,10 +41,10 @@
 namespace {
 
 // Developer override file name, relative to app data directory.
-const char kDevOverrideFileName[] = "overrides.json";
+constexpr char kDevOverrideFileName[] = "overrides.json";
 
 std::vector<GURL> GURLVectorFromStringList(
-    const base::Value::List& update_url_list) {
+    const base::ListValue& update_url_list) {
   std::vector<GURL> ret;
   ret.reserve(update_url_list.size());
   for (const base::Value& url : update_url_list) {
@@ -85,7 +84,7 @@ std::optional<base::FilePath> GetOverrideFilePath(UpdaterScope scope) {
 }
 
 ExternalConstantsOverrider::ExternalConstantsOverrider(
-    base::Value::Dict override_values,
+    base::DictValue override_values,
     scoped_refptr<ExternalConstants> next_provider)
     : ExternalConstants(std::move(next_provider)),
       override_values_(std::move(override_values)) {}
@@ -261,7 +260,7 @@ ExternalConstantsOverrider::GetEventLoggingPermissionProvider() const {
   return provider;
 }
 
-base::Value::Dict ExternalConstantsOverrider::DictPolicies() const {
+base::DictValue ExternalConstantsOverrider::DictPolicies() const {
   if (!override_values_.contains(kDevOverrideKeyDictPolicies)) {
     return next_provider_->DictPolicies();
   }

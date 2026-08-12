@@ -16,6 +16,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -88,19 +89,185 @@ void LogMakeAudioOutputStreamResult(MakeAudioStreamResult result) {
                                 result);
 }
 
-PRINTF_FORMAT(2, 3)
 void SendLogMessage(const AudioManagerBase::LogCallback& callback,
-                    const char* format,
-                    ...) {
-  if (callback.is_null())
-    return;
-  va_list args;
-  va_start(args, format);
-  callback.Run("AMB::" + base::StringPrintV(format, args));
-  va_end(args);
+                    const std::string& message) {
+  if (!callback.is_null()) {
+    callback.Run("AMB::" + message);
+  }
+}
+
+// Used to log outcomes of audio device enumeration. These values are persisted
+// to logs. Entries should not be renumbered and numeric values should never be
+// reused.
+enum class AudioDeviceEnumerationOutcome {
+  kSuccessEmptyResult = 0,
+  kSuccessNonEmptyResult = 1,
+  kFailureEmptyResult = 2,
+  kFailureNonEmptyResult = 3,
+  kMaxValue = kFailureNonEmptyResult
+};
+
+AudioDeviceEnumerationOutcome GetAudioEnumerationOutcome(bool success,
+                                                         bool has_devices) {
+  if (success) {
+    return has_devices ? AudioDeviceEnumerationOutcome::kSuccessNonEmptyResult
+                       : AudioDeviceEnumerationOutcome::kSuccessEmptyResult;
+  } else {
+    return has_devices ? AudioDeviceEnumerationOutcome::kFailureNonEmptyResult
+                       : AudioDeviceEnumerationOutcome::kFailureEmptyResult;
+  }
 }
 
 }  // namespace
+
+class AudioManagerBase::DeviceLogHelper {
+ public:
+  explicit DeviceLogHelper(std::unique_ptr<AudioLog> audio_log)
+      : audio_log_(std::move(audio_log)) {
+    if (audio_log_) {
+      // Safe to capture raw pointer because `audio_log_` is owned by this
+      // class.
+      log_callback_ = base::BindRepeating(
+          [](AudioLog* log, const std::string& message) {
+            if (log) {
+              log->OnLogMessage("DeviceEnum::" + message);
+            }
+          },
+          audio_log_.get());
+    } else {
+      log_callback_ = base::NullCallback();
+    }
+  }
+
+  const AudioManager::LogCallback& GetLogCallback() const {
+    return log_callback_;
+  }
+
+  void LogDeviceList(bool is_input,
+                     const char* func_name,
+                     const AudioDeviceDescriptions& devices) {
+    if (log_callback_.is_null()) {
+      return;
+    }
+
+    AudioDeviceNames* prev_snapshot =
+        is_input ? &input_device_snapshot_ : &output_device_snapshot_;
+
+    AudioDeviceNames new_snapshot;
+    for (const auto& device : devices) {
+      new_snapshot.emplace_back(device.device_name, device.unique_id);
+    }
+
+    int added = 0;
+    int modified = 0;
+    for (const auto& device : devices) {
+      auto it = std::ranges::find_if(
+          *prev_snapshot, [&](const AudioDeviceName& prev) {
+            return prev.unique_id == device.unique_id;
+          });
+      if (it == prev_snapshot->end()) {
+        added++;
+      } else if (it->device_name != device.device_name) {
+        modified++;
+      }
+    }
+
+    int removed = 0;
+    AudioDeviceNames removed_devices;
+    for (const auto& prev : *prev_snapshot) {
+      auto it = std::ranges::find_if(devices,
+                                     [&](const AudioDeviceDescription& curr) {
+                                       return curr.unique_id == prev.unique_id;
+                                     });
+      if (it == devices.end()) {
+        removed++;
+        removed_devices.push_back(prev);
+      }
+    }
+
+    // Avoid logging the full list if nothing changed to reduce noise.
+    // Device enumeration can be triggered frequently by:
+    // 1. MediaStreamManager initializing or refreshing the list.
+    // 2. enumerateDevices() from JS.
+    // 3. Internal components checking for devices.
+    // 4. Audio device change notifications (plug/unplug).
+    if (added == 0 && removed == 0 && modified == 0) {
+      log_callback_.Run(base::StrCat({func_name, " => (Found ",
+                                      base::NumberToString(devices.size()),
+                                      " devices, No changes)"}));
+      return;
+    }
+
+    log_callback_.Run(base::StrCat(
+        {func_name, " => (Found ", base::NumberToString(devices.size()),
+         " devices, ", base::NumberToString(added), " added, ",
+         base::NumberToString(removed), " removed, ",
+         base::NumberToString(modified), " modified)"}));
+
+    // Print new and modified devices.
+    for (const auto& device : devices) {
+      auto it = std::ranges::find_if(
+          *prev_snapshot, [&](const AudioDeviceName& prev) {
+            return prev.unique_id == device.unique_id;
+          });
+      std::string suffix;
+      if (it == prev_snapshot->end()) {
+        suffix = " [NEW]";
+      } else if (it->device_name != device.device_name) {
+        suffix = " [MODIFIED]";
+      }
+
+      std::string name = device.device_name;
+      if (AudioDeviceDescription::IsDefaultDevice(device.unique_id)) {
+        name = "Default - " + name;
+      } else if (AudioDeviceDescription::IsCommunicationsDevice(
+                     device.unique_id)) {
+        name = "Communications - " + name;
+      }
+      log_callback_.Run(
+          base::StrCat({func_name, " => (device_name=[", name, "])", suffix}));
+    }
+
+    // Print the removed devices.
+    for (const auto& prev : removed_devices) {
+      std::string name = prev.device_name;
+      if (AudioDeviceDescription::IsDefaultDevice(prev.unique_id)) {
+        name = "Default - " + name;
+      } else if (AudioDeviceDescription::IsCommunicationsDevice(
+                     prev.unique_id)) {
+        name = "Communications - " + name;
+      }
+      log_callback_.Run(base::StrCat(
+          {func_name, " => (device_name=[", name, "]) [REMOVED]"}));
+    }
+
+    *prev_snapshot = std::move(new_snapshot);
+  }
+
+  std::string GetDeviceName(const std::string& device_id, bool is_input) const {
+    const AudioDeviceNames& snapshot =
+        is_input ? input_device_snapshot_ : output_device_snapshot_;
+    for (const auto& device : snapshot) {
+      if (device.unique_id == device_id) {
+        return device.device_name;
+      }
+    }
+    return std::string();
+  }
+
+  // Allows system-level logs to bypass the "DeviceEnum::" prefix.
+  void LogMessage(const char* func_name, const std::string& message) {
+    if (audio_log_) {
+      audio_log_->OnLogMessage(base::StrCat({func_name, " => ", message}));
+    }
+  }
+
+ private:
+  std::unique_ptr<AudioLog> audio_log_;
+  AudioManager::LogCallback log_callback_;
+  AudioDeviceNames input_device_snapshot_;
+  AudioDeviceNames output_device_snapshot_;
+};
 
 struct AudioManagerBase::DispatcherParams {
   DispatcherParams(const AudioParameters& input,
@@ -138,35 +305,50 @@ AudioManagerBase::~AudioManagerBase() {
   CHECK(input_streams_.empty());
 }
 
+void AudioManagerBase::LogAudioManagerStartup() {
+  GetDeviceLogHelper()->LogMessage("AMB::LogAudioManagerStartup",
+                                   "AudioManager starts.");
+}
+
 void AudioManagerBase::GetAudioInputDeviceDescriptions(
     AudioDeviceDescriptions* device_descriptions) {
   CHECK(GetTaskRunner()->BelongsToCurrentThread());
-  GetAudioDeviceDescriptions(device_descriptions,
-                             &AudioManagerBase::GetAudioInputDeviceNames,
-                             &AudioManagerBase::GetDefaultInputDeviceID,
-                             &AudioManagerBase::GetCommunicationsInputDeviceID,
-                             &AudioManagerBase::GetGroupIDInput);
+  bool success = GetAudioDeviceDescriptions(
+      device_descriptions, &AudioManagerBase::GetAudioInputDeviceNames,
+      &AudioManagerBase::GetDefaultInputDeviceID,
+      &AudioManagerBase::GetCommunicationsInputDeviceID,
+      &AudioManagerBase::GetGroupIDInput);
+  base::UmaHistogramEnumeration(
+      "Media.Audio.InputDeviceEnumerationOutcome",
+      GetAudioEnumerationOutcome(
+          success, /*has_devices=*/!device_descriptions->empty()));
+  GetDeviceLogHelper()->LogDeviceList(true, __func__, *device_descriptions);
 }
 
 void AudioManagerBase::GetAudioOutputDeviceDescriptions(
     AudioDeviceDescriptions* device_descriptions) {
   CHECK(GetTaskRunner()->BelongsToCurrentThread());
-  GetAudioDeviceDescriptions(device_descriptions,
-                             &AudioManagerBase::GetAudioOutputDeviceNames,
-                             &AudioManagerBase::GetDefaultOutputDeviceID,
-                             &AudioManagerBase::GetCommunicationsOutputDeviceID,
-                             &AudioManagerBase::GetGroupIDOutput);
+  bool success = GetAudioDeviceDescriptions(
+      device_descriptions, &AudioManagerBase::GetAudioOutputDeviceNames,
+      &AudioManagerBase::GetDefaultOutputDeviceID,
+      &AudioManagerBase::GetCommunicationsOutputDeviceID,
+      &AudioManagerBase::GetGroupIDOutput);
+  base::UmaHistogramEnumeration(
+      "Media.Audio.OutputDeviceEnumerationOutcome",
+      GetAudioEnumerationOutcome(
+          success, /*has_devices=*/!device_descriptions->empty()));
+  GetDeviceLogHelper()->LogDeviceList(false, __func__, *device_descriptions);
 }
 
-void AudioManagerBase::GetAudioDeviceDescriptions(
+bool AudioManagerBase::GetAudioDeviceDescriptions(
     AudioDeviceDescriptions* device_descriptions,
-    void (AudioManagerBase::*get_device_names)(AudioDeviceNames*),
+    bool (AudioManagerBase::*get_device_names)(AudioDeviceNames*),
     std::string (AudioManagerBase::*get_default_device_id)(),
     std::string (AudioManagerBase::*get_communications_device_id)(),
     std::string (AudioManagerBase::*get_group_id)(const std::string&)) {
   CHECK(GetTaskRunner()->BelongsToCurrentThread());
   AudioDeviceNames device_names;
-  (this->*get_device_names)(&device_names);
+  bool success = (this->*get_device_names)(&device_names);
   std::string real_default_device_id = (this->*get_default_device_id)();
   std::string real_communications_device_id =
       (this->*get_communications_device_id)();
@@ -208,6 +390,8 @@ void AudioManagerBase::GetAudioDeviceDescriptions(
         is_virtual_system_default || is_real_system_default,
         is_virtual_communications_device || is_real_communications_device);
   }
+
+  return success;
 }
 
 AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
@@ -224,8 +408,10 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     return nullptr;
   }
 
-  SendLogMessage(log_callback, "%s({device_id=%s}, {params=[%s]})", __func__,
-                 device_id.c_str(), params.AsHumanReadableString().c_str());
+  SendLogMessage(
+      log_callback,
+      base::StrCat({__func__, "({device_id=", device_id, "}, {params=[",
+                    params.AsHumanReadableString(), "]})"}));
 
   // Limit the number of audio streams opened. This is to prevent using
   // excessive resources for a large number of audio streams. More
@@ -250,14 +436,20 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
     case AudioParameters::AUDIO_PCM_LOW_LATENCY:
       stream = MakeLowLatencyOutputStream(params, device_id, log_callback);
       break;
+
     case AudioParameters::AUDIO_BITSTREAM_AC3:
     case AudioParameters::AUDIO_BITSTREAM_EAC3:
     case AudioParameters::AUDIO_BITSTREAM_DTS:
     case AudioParameters::AUDIO_BITSTREAM_DTS_HD:
     case AudioParameters::AUDIO_BITSTREAM_DTSX_P2:
     case AudioParameters::AUDIO_BITSTREAM_IEC61937:
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
       stream = MakeBitstreamOutputStream(params, device_id, log_callback);
       break;
+#else
+      // This is forbidden by IPC validation.
+      NOTREACHED() << "Bitstream audio output is not supported.";
+#endif
     case AudioParameters::AUDIO_FAKE:
       stream = FakeAudioOutputStream::MakeFakeStream(this, params);
       break;
@@ -268,8 +460,10 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
 
   if (stream) {
     ++num_output_streams_;
-    SendLogMessage(log_callback, "%s => (number of streams=%d)", __func__,
-                   output_stream_count());
+    SendLogMessage(
+        log_callback,
+        base::StrCat({__func__, " => (number of streams=",
+                      base::NumberToString(output_stream_count()), ")"}));
   }
   LogMakeAudioOutputStreamResult(
       stream ? MakeAudioStreamResult::kNoError
@@ -278,12 +472,14 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStream(
   return stream;
 }
 
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
 AudioOutputStream* AudioManagerBase::MakeBitstreamOutputStream(
     const AudioParameters& params,
     const std::string& device_id,
     const LogCallback& log_callback) {
   return nullptr;
 }
+#endif
 
 AudioInputStream* AudioManagerBase::MakeAudioInputStream(
     const AudioParameters& input_params,
@@ -305,8 +501,10 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
     params.set_format(AudioParameters::AUDIO_FAKE);
   }
 
-  SendLogMessage(log_callback, "%s({device_id=%s}, {params=[%s]})", __func__,
-                 device_id.c_str(), params.AsHumanReadableString().c_str());
+  SendLogMessage(
+      log_callback,
+      base::StrCat({__func__, "({device_id=", device_id, "}, {params=[",
+                    params.AsHumanReadableString(), "]})"}));
 
   if (!params.IsValid() || (params.channels() > kMaxInputChannels) ||
       device_id.empty()) {
@@ -347,8 +545,10 @@ AudioInputStream* AudioManagerBase::MakeAudioInputStream(
   if (stream) {
     input_streams_.insert(stream);
     if (!log_callback.is_null()) {
-      SendLogMessage(log_callback, "%s => (number of streams=%d)", __func__,
-                     input_stream_count());
+      SendLogMessage(
+          log_callback,
+          base::StrCat({__func__, " => (number of streams=",
+                        base::NumberToString(input_stream_count()), ")"}));
     }
 
     if (!params.IsBitstreamFormat() && debug_recording_manager_) {
@@ -521,12 +721,14 @@ AudioOutputStream* AudioManagerBase::MakeAudioOutputStreamProxy(
   return output_dispatchers_.back()->dispatcher->CreateStreamProxy();
 }
 
-void AudioManagerBase::GetAudioInputDeviceNames(
+bool AudioManagerBase::GetAudioInputDeviceNames(
     AudioDeviceNames* device_names) {
+  return true;
 }
 
-void AudioManagerBase::GetAudioOutputDeviceNames(
+bool AudioManagerBase::GetAudioOutputDeviceNames(
     AudioDeviceNames* device_names) {
+  return true;
 }
 
 void AudioManagerBase::ReleaseOutputStream(AudioOutputStream* stream) {
@@ -649,6 +851,42 @@ std::string AudioManagerBase::GetCommunicationsOutputDeviceID() {
   return std::string();
 }
 
+std::string AudioManagerBase::GetDeviceNameFromCache(
+    const std::string& device_id,
+    bool is_input) {
+  // Accessing the device name cache requires strict thread safety because
+  // the snapshots inside `device_log_helper_` are updated dynamically
+  // during device enumerations. By enforcing execution on the audio thread,
+  // we avoid data races without the need for expensive thread locks.
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+
+  std::string prefix;
+
+  // Intercept virtual device IDs to prepend a recognizable prefix for the logs.
+  if (media::AudioDeviceDescription::IsDefaultDevice(device_id)) {
+    prefix = "Default - ";
+  } else if (media::AudioDeviceDescription::IsCommunicationsDevice(device_id)) {
+    prefix = "Communications - ";
+  } else if (media::AudioDeviceDescription::IsLoopbackDevice(device_id)) {
+    // Loopback devices are virtual and not enumerated, so they won't exist in
+    // the cache. For application loopback devices, anonymize the log by
+    // stripping the PID.
+    return device_id.substr(0, device_id.find(':'));
+  }
+
+  // Attempt to find the device ID directly in the cache.
+  if (device_log_helper_) {
+    std::string name = device_log_helper_->GetDeviceName(device_id, is_input);
+    if (!name.empty()) {
+      return prefix + name;  // e.g. "Default - Microphone Array"
+    }
+  }
+
+  // Fallback if the cache hasn't been populated yet (e.g., stream created
+  // before the first enumeration) or if the ID is unrecognized.
+  return prefix + "Unknown";
+}
+
 // static
 int AudioManagerBase::GetUserBufferSize() {
   const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
@@ -694,6 +932,42 @@ AudioDebugRecordingManager* AudioManagerBase::GetAudioDebugRecordingManager() {
 void AudioManagerBase::SetAecDumpRecordingManager(
     base::WeakPtr<AecdumpRecordingManager>) {
   // This is no-op by default.
+}
+
+const AudioManager::LogCallback& AudioManagerBase::GetEnumerationLogCallback() {
+  return GetDeviceLogHelper()->GetLogCallback();
+}
+
+AudioManagerBase::DeviceLogHelper* AudioManagerBase::GetDeviceLogHelper() {
+  DCHECK(GetTaskRunner()->BelongsToCurrentThread());
+  if (!device_log_helper_) {
+    // Note: device_log_helper_ is lazily initialized here to avoid crashes
+    // during construction. Many AudioManager implementations (especially in
+    // tests) pass a factory that is a member of the derived class; since base
+    // classes are constructed first, dereferencing that factory in the
+    // constructor would be unsafe.
+    //
+    // Create a dedicated AudioLog instance for device enumeration logging.
+    //
+    // a) We are using this AudioLog instance strictly as a Mojo pipe
+    //    (communication channel) to forward raw text strings to the Browser
+    //    process.
+    // b) Because we only call OnLogMessage() (which blindly forwards to
+    //    MediaStreamManager::SendMessageToNativeLog()), we bypass the
+    //    structured metadata and cache key logic used by
+    //    chrome://media-internals.
+    // c) Therefore, using kAudioInputController with component_id=-1 here is
+    //    perfectly safe and won't conflict with real input controllers.
+    std::unique_ptr<AudioLog> enumeration_log =
+        audio_log_factory_
+            ? CreateAudioLog(
+                  AudioLogFactory::AudioComponent::kAudioInputController, -1)
+            : nullptr;
+    device_log_helper_ =
+        std::make_unique<DeviceLogHelper>(std::move(enumeration_log));
+  }
+
+  return device_log_helper_.get();
 }
 
 }  // namespace media

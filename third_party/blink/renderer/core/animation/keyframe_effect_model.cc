@@ -47,7 +47,6 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "ui/gfx/geometry/transform.h"
 
@@ -71,8 +70,12 @@ std::optional<int> GetQuantizedLength(const CSSValue& value) {
     return result;
   }
 
-  result = static_cast<int>(
-      std::round(LayoutUnit::kFixedPointDenominator * primitive_value.value()));
+  int limit =
+      std::numeric_limits<int>::max() / LayoutUnit::kFixedPointDenominator;
+  result = (primitive_value.value() > limit)
+               ? std::numeric_limits<int>::max()
+               : std::round(LayoutUnit::kFixedPointDenominator *
+                            primitive_value.value());
   return result;
 }
 
@@ -182,7 +185,7 @@ template <class K>
 void KeyframeEffectModelBase::SetFrames(HeapVector<K>& keyframes) {
   // TODO(samli): Should also notify/invalidate the animation
   keyframes_.clear();
-  keyframes_.AppendVector(keyframes);
+  keyframes_.append_range(keyframes);
   IndexKeyframesAndResolveComputedOffsets();
   ClearCachedData();
 }
@@ -533,6 +536,7 @@ void KeyframeEffectModelBase::EnsureKeyframeGroups() const {
                                                    computed_offset);
       has_revert_ |= property_specific_keyframe->IsRevert();
       has_revert_ |= property_specific_keyframe->IsRevertLayer();
+      has_revert_ |= property_specific_keyframe->IsRevertRule();
       group->AppendKeyframe(property_specific_keyframe);
     }
   }
@@ -550,12 +554,12 @@ void KeyframeEffectModelBase::EnsureKeyframeGroups() const {
 
 bool KeyframeEffectModelBase::RequiresPropertyNode() const {
   for (const auto& property : DynamicProperties()) {
-    if (!property.IsCSSProperty() ||
-        (property.GetCSSProperty().PropertyID() != CSSPropertyID::kVariable &&
-         property.GetCSSProperty().PropertyID() !=
-             CSSPropertyID::kBackgroundColor &&
-         property.GetCSSProperty().PropertyID() != CSSPropertyID::kClipPath))
+    if (property.GetCSSProperty().PropertyID() != CSSPropertyID::kVariable &&
+        property.GetCSSProperty().PropertyID() !=
+            CSSPropertyID::kBackgroundColor &&
+        property.GetCSSProperty().PropertyID() != CSSPropertyID::kClipPath) {
       return true;
+    }
   }
   return false;
 }
@@ -572,7 +576,7 @@ void KeyframeEffectModelBase::EnsureInterpolationEffectPopulated() const {
     // present, we expect the computed style to reflect an explicit
     // cross-fade.
     PropertyHandle handle = entry.key;
-    if (entry.value->IsStrictlyStatic() && handle.IsCSSProperty() &&
+    if (entry.value->IsStrictlyStatic() &&
         handle.GetCSSProperty().PropertyID() !=
             CSSPropertyID::kListStyleImage) {
       // All keyframes have the same property value.
@@ -741,11 +745,6 @@ bool KeyframeEffectModelBase::PropertySpecificKeyframeGroup::
       // TOOD(kevers): Can likely determine in RecalcOwnStyle if
       // BaseComputedStyle has changed and only recheck if the underlying style
       // has changed.
-
-      // Limit support for provisionally static properties to CSS properties.
-      if (!property.IsCSSProperty()) {
-        return false;
-      }
 
       // Update status check to be either kDynamic or kProvisionalChecked.
       const ComputedStyle* style = element->GetComputedStyle();

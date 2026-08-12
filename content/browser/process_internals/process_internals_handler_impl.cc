@@ -12,14 +12,14 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/process_internals/process_internals.mojom.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/agent_scheduling_group_host.h"
-#include "content/browser/renderer_host/back_forward_cache_impl.h"
 #include "content/browser/renderer_host/navigation_controller_impl.h"
 #include "content/browser/renderer_host/navigation_entry_impl.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/site_isolation_policy.h"
@@ -60,10 +60,11 @@ using IsolatedOriginSource = ChildProcessSecurityPolicy::IsolatedOriginSource;
       site_instance->HasSite()
           ? std::make_optional(site_instance->GetSiteInfo().site_url())
           : std::nullopt;
-  frame_info->site_instance->is_guest = site_instance->IsGuest();
+  frame_info->site_instance->is_guest =
+      site_instance->GetSecurityPrincipal().IsGuest();
   frame_info->site_instance->is_pdf = site_instance->IsPdf();
   frame_info->site_instance->is_sandbox_for_iframes =
-      site_instance->GetSiteInfo().is_sandboxed();
+      site_instance->GetSecurityPrincipal().IsSandboxed();
   frame_info->site_instance->are_javascript_optimizers_enabled =
       !site_instance->GetSiteInfo().are_v8_optimizations_disabled();
   frame_info->site_instance->site_instance_group_id =
@@ -74,7 +75,8 @@ using IsolatedOriginSource = ChildProcessSecurityPolicy::IsolatedOriginSource;
   // If the SiteInstance has a non-default StoragePartition, include a basic
   // string representation of it.  Skip cases where the StoragePartition is
   // already conveyed in the site URL to avoid redundancy.
-  const auto& partition = site_instance->GetStoragePartitionConfig();
+  const auto& partition =
+      site_instance->GetSecurityPrincipal().GetStoragePartitionConfig();
   if (!partition.is_default() &&
       site_instance->GetSiteInfo().site_url().spec().find(
           partition.partition_domain()) == std::string::npos) {
@@ -135,7 +137,7 @@ using IsolatedOriginSource = ChildProcessSecurityPolicy::IsolatedOriginSource;
             RenderFrameHostToFrameInfoNoTraverse(rfh, type);
         all_frame_info[rfh] = frame_info.get();
         RenderFrameHostImpl* parent = rfh->GetParentOrOuterDocumentOrEmbedder();
-        DCHECK(base::Contains(all_frame_info, parent));
+        DCHECK(all_frame_info.contains(parent));
         all_frame_info[parent]->subframes.push_back(std::move(frame_info));
         return RenderFrameHost::FrameIterationAction::kContinue;
       });
@@ -212,7 +214,8 @@ void ProcessInternalsHandlerImpl::GetIsolationMode(
   if (SiteIsolationPolicy::AreIsolatedOriginsEnabled()) {
     modes.push_back("Isolate Origins");
   }
-  if (SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault()) {
+  if (SiteIsolationPolicy::AreOriginKeyedProcessesEnabledByDefault(
+          browser_context_)) {
     modes.push_back("Origin Keyed Processes by Default");
   }
   if (SiteIsolationPolicy::IsStrictOriginIsolationEnabled()) {
@@ -307,7 +310,7 @@ void ProcessInternalsHandlerImpl::GetGloballyIsolatedOrigins(
 void ProcessInternalsHandlerImpl::GetAllWebContentsInfo(
     GetAllWebContentsInfoCallback callback) {
   std::vector<::mojom::WebContentsInfoPtr> infos;
-  std::vector<WebContentsImpl*> all_contents =
+  std::vector<raw_ptr<WebContentsImpl>> all_contents =
       WebContentsImpl::GetAllWebContents();
 
   for (WebContentsImpl* web_contents : all_contents) {
@@ -332,10 +335,10 @@ void ProcessInternalsHandlerImpl::GetAllWebContentsInfo(
     }
 
     // Retrieve prerendering root frames.
-    web_contents->ForEachRenderFrameHostImpl(
+    web_contents->ForEachRenderFrameHostImplWithAction(
         [web_contents, &prerender_root_frames = info->prerender_root_frames](
             RenderFrameHostImpl* rfh) {
-          CollectPrerenders(web_contents, rfh, prerender_root_frames);
+          return CollectPrerenders(web_contents, rfh, prerender_root_frames);
         });
 
     infos.push_back(std::move(info));

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
@@ -88,7 +89,8 @@ TEST_F(QuicSocketDataProviderTest, LinearSequenceSync) {
       FROM_HERE, base::BindLambdaForTesting([&]() {
         std::unique_ptr<DatagramClientSocket> socket =
             socket_factory.CreateDatagramClientSocket(
-                DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+                DatagramSocket::BindType::DEFAULT_BIND,
+                handles::kInvalidNetworkHandle, nullptr,
                 net_log_with_source_.source());
         socket->Connect(IPEndPoint());
 
@@ -120,7 +122,8 @@ TEST_F(QuicSocketDataProviderTest, LinearSequenceAsync) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -154,7 +157,8 @@ TEST_F(QuicSocketDataProviderTest, ReadTos) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -180,7 +184,8 @@ TEST_F(QuicSocketDataProviderTest, AddReadError) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -204,7 +209,8 @@ TEST_F(QuicSocketDataProviderTest, AddReadQuicReceivedPacketGetsEcn) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -231,7 +237,8 @@ TEST_F(QuicSocketDataProviderTest, MismatchedWrite) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -256,7 +263,8 @@ TEST_F(QuicSocketDataProviderTest, NotAllConsumed) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -282,7 +290,8 @@ TEST_F(QuicSocketDataProviderTest, ReadBlocksWrite) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -308,7 +317,8 @@ TEST_F(QuicSocketDataProviderTest, WriteDelaysRead) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -352,7 +362,8 @@ TEST_F(QuicSocketDataProviderTest, PauseDelaysCalls) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -427,7 +438,8 @@ TEST_F(QuicSocketDataProviderTest, ParallelReadAndWrite) {
     socket_factory.AddSocketDataProvider(&socket_data);
     std::unique_ptr<DatagramClientSocket> socket =
         socket_factory.CreateDatagramClientSocket(
-            DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+            DatagramSocket::BindType::DEFAULT_BIND,
+            handles::kInvalidNetworkHandle, nullptr,
             net_log_with_source_.source());
     socket->Connect(IPEndPoint());
 
@@ -483,7 +495,8 @@ TEST_F(QuicSocketDataProviderTest, MultipleReadsReady) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
 
@@ -508,7 +521,8 @@ TEST_F(QuicSocketDataProviderTest, PrintHTTPHeadersPacket) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
   std::unique_ptr<quic::QuicReceivedPacket> packet = TestPacket(999);
@@ -520,7 +534,7 @@ TEST_F(QuicSocketDataProviderTest, PrintHTTPHeadersPacket) {
                 socket->Write(buffer.get(), packet->length(), base::DoNothing(),
                               TRAFFIC_ANNOTATION_FOR_TESTS)),
       // Path should be decoded by the server session and appear in the output.
-      std::format(":path={0}", path));
+      base::StringPrintf(":path=%s", path));
 }
 
 // Test an HTTP's initial settings packet is decoded by the server session.
@@ -533,7 +547,8 @@ TEST_F(QuicSocketDataProviderTest, PrintInitialSettingsPacket) {
   socket_factory.AddSocketDataProvider(&socket_data);
   std::unique_ptr<DatagramClientSocket> socket =
       socket_factory.CreateDatagramClientSocket(
-          DatagramSocket::BindType::DEFAULT_BIND, nullptr,
+          DatagramSocket::BindType::DEFAULT_BIND,
+          handles::kInvalidNetworkHandle, nullptr,
           net_log_with_source_.source());
   socket->Connect(IPEndPoint());
   std::unique_ptr<quic::QuicReceivedPacket> packet = TestPacket(999);

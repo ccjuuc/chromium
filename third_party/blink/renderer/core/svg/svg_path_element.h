@@ -22,12 +22,15 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SVG_SVG_PATH_ELEMENT_H_
 
 #include "third_party/blink/renderer/core/svg/svg_geometry_element.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
 class SVGAnimatedPath;
 class SVGPathByteStream;
+class SVGPathDataSettings;
+class SVGPathSegment;
 class StylePath;
 
 class SVGPathElement final : public SVGGeometryElement {
@@ -35,13 +38,21 @@ class SVGPathElement final : public SVGGeometryElement {
 
  public:
   explicit SVGPathElement(Document&);
+  ElementType GetElementType() const final {
+    return ElementType::kSVGPathElement;
+  }
 
   Path AsPath() const override;
   PathBuilder AsMutablePath() const override;
-  Path AttributePath() const;
+
+  const Path& GetUnzoomedAsPath() const;
 
   float getTotalLength(ExceptionState&) override;
   SVGPointTearOff* getPointAtLength(float distance, ExceptionState&) override;
+
+  HeapVector<Member<SVGPathSegment>> getPathData(
+      const SVGPathDataSettings* settings);
+  void setPathData(const HeapVector<Member<SVGPathSegment>>& path_data);
 
   SVGAnimatedPath* GetPath() const { return path_.Get(); }
 
@@ -55,6 +66,7 @@ class SVGPathElement final : public SVGGeometryElement {
  private:
   const StylePath* GetStylePath() const;
 
+  void DidRecalcStyle(const StyleRecalcChange) override;
   void SvgAttributeChanged(const SvgAttributeChangedParams&) override;
 
   Node::InsertionNotificationRequest InsertedInto(ContainerNode&) override;

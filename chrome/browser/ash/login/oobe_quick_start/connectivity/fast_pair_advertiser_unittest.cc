@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_base.h"
@@ -436,7 +437,7 @@ TEST_F(FastPairAdvertiserTest, TestFastPairAdvertisingRegisteringErrors) {
 }
 
 // Regression tests for crashes when accessing member variables after
-// destruction, e.g. crbug.com/1109581.
+// destruction, e.g. crbug.com/40708077.
 TEST_F(FastPairAdvertiserTest, TestStartAdvertising_DeleteInErrorCallback) {
   fast_pair_advertiser_->StartAdvertising(
       base::DoNothing(),

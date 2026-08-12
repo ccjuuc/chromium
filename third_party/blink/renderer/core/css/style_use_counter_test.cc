@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
@@ -63,6 +64,37 @@ TEST_F(StyleUseCounterTest, ViewportUnitVariants) {
   EXPECT_TRUE(IsCountedOnParsing(feature, "body { top: 10svh; }"));
   EXPECT_TRUE(IsCountedOnParsing(feature, "body { top: 10lvi; }"));
   EXPECT_TRUE(IsCountedOnParsing(feature, "body { top: 10dvmax; }"));
+}
+
+TEST_F(StyleUseCounterTest, CSSURLRequestModifiers) {
+  ScopedCSSURLRequestModifiersForTest scoped(true);
+
+  EXPECT_FALSE(
+      IsCountedOnParsing(WebFeature::kCSSURLRequestModifierCrossOrigin,
+                         "body { background-image: url('/image.png'); }"));
+  EXPECT_TRUE(IsCountedOnParsing(
+      WebFeature::kCSSURLRequestModifierCrossOrigin,
+      "body { background-image: url('/image.png' cross-origin(anonymous)); }"));
+  EXPECT_TRUE(IsCountedOnParsing(
+      WebFeature::kCSSURLRequestModifierIntegrity,
+      "body { background-image: url('/image.png' integrity('sha256-abc')); }"));
+  EXPECT_TRUE(IsCountedOnParsing(
+      WebFeature::kCSSURLRequestModifierReferrerPolicy,
+      "body { background-image: url('/image.png' referrer-policy(origin)); }"));
+
+  EXPECT_TRUE(
+      IsCountedOnParsing(WebFeature::kCSSURLRequestModifierCrossOrigin,
+                         "@import url('/style.css' cross-origin(anonymous));"));
+  EXPECT_TRUE(
+      IsCountedOnParsing(WebFeature::kCSSURLRequestModifierIntegrity,
+                         "@import url('/style.css' integrity('sha256-abc'));"));
+  EXPECT_TRUE(
+      IsCountedOnParsing(WebFeature::kCSSURLRequestModifierReferrerPolicy,
+                         "@import url('/style.css' referrer-policy(origin));"));
+
+  EXPECT_FALSE(IsCountedOnParsing(
+      WebFeature::kCSSURLRequestModifierCrossOrigin,
+      "body { background-image: url('/image.png' cross-origin(invalid)); }"));
 }
 
 }  // namespace blink

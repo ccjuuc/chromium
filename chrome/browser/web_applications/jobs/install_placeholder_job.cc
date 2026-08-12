@@ -7,16 +7,18 @@
 #include <memory>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/custom_icon_fetcher.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/install_bounce_metric.h"
+#include "chrome/browser/web_applications/jobs/finalize_install_or_update_job.h"
 #include "chrome/browser/web_applications/locks/shared_web_contents_with_app_lock.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
@@ -43,7 +45,7 @@ const base::TimeDelta ICON_DOWNLOAD_RETRY_DELAY = base::Seconds(5);
 
 InstallPlaceholderJob::InstallPlaceholderJob(
     Profile* profile,
-    base::Value::Dict& debug_value,
+    base::DictValue& debug_value,
     const ExternalInstallOptions& install_options,
     InstallAndReplaceCallback callback,
     SharedWebContentsWithAppLock& lock)
@@ -56,6 +58,9 @@ InstallPlaceholderJob::InstallPlaceholderJob(
       install_options_(install_options),
       callback_(std::move(callback)),
       web_contents_(&lock_->shared_web_contents()),
+      url_loader_(WebAppProvider::GetForWebApps(&profile_.get())
+                      ->web_contents_manager()
+                      .CreateUrlLoader()),
       data_retriever_(WebAppProvider::GetForWebApps(&profile_.get())
                           ->web_contents_manager()
                           .CreateDataRetriever()) {
@@ -66,7 +71,6 @@ InstallPlaceholderJob::InstallPlaceholderJob(
 InstallPlaceholderJob::~InstallPlaceholderJob() = default;
 
 void InstallPlaceholderJob::Start() {
-  url_loader_ = lock_->web_contents_manager().CreateUrlLoader();
   url_loader_->LoadUrl(install_options_.install_url, web_contents_,
                        webapps::WebAppUrlLoader::UrlComparison::kSameOrigin,
                        base::BindOnce(&InstallPlaceholderJob::OnUrlLoaded,
@@ -76,6 +80,11 @@ void InstallPlaceholderJob::Start() {
 void InstallPlaceholderJob::SetDataRetrieverForTesting(
     std::unique_ptr<WebAppDataRetriever> data_retriever) {
   data_retriever_ = std::move(data_retriever);
+}
+
+void InstallPlaceholderJob::SetUrlLoaderForTesting(
+    std::unique_ptr<webapps::WebAppUrlLoader> url_loader) {
+  url_loader_ = std::move(url_loader);
 }
 
 void InstallPlaceholderJob::Abort(webapps::InstallResultCode code) {
@@ -104,39 +113,44 @@ void InstallPlaceholderJob::OnUrlLoaded(
 
 void InstallPlaceholderJob::FetchCustomIcon(const GURL& url, int retries_left) {
   CHECK(web_contents_ && !web_contents_->IsBeingDestroyed());
-
-  data_retriever_->GetIcons(
-      web_contents_.get(), {IconUrlWithSize::CreateForUnspecifiedSize(url)},
-      /*download_page_favicons=*/false,
-      /*fail_all_if_any_fail=*/false,
-      base::BindOnce(&InstallPlaceholderJob::OnCustomIconFetched,
+  custom_icon_fetcher_ = std::make_unique<CustomIconFetcher>(
+      &profile_.get(), url, install_options_.override_icon_hash);
+  custom_icon_fetcher_->StartRequest(
+      base::BindOnce(&InstallPlaceholderJob::OnCustomIconDecoded,
                      weak_factory_.GetWeakPtr(), url, retries_left));
 }
 
-void InstallPlaceholderJob::OnCustomIconFetched(
-    const GURL& image_url,
+void InstallPlaceholderJob::OnCustomIconDecoded(
+    const GURL& url,
     int retries_left,
-    IconsDownloadedResult result,
-    IconsMap icons_map,
-    DownloadedIconsHttpResults icons_http_results) {
-  auto bitmaps_it = icons_map.find(image_url);
-  if (bitmaps_it != icons_map.end() && !bitmaps_it->second.empty()) {
-    // Download succeeded.
+    std::optional<SkBitmap> bitmap) {
+  custom_icon_fetcher_.reset();
+
+  if (bitmap) {
+    CHECK(!bitmap->drawsNothing());
     debug_value_->Set("custom_icon_download_success", true);
-    FinalizeInstall(bitmaps_it->second);
+    custom_icon_bitmaps_ = {bitmap.value()};
+    FinalizeInstall(custom_icon_bitmaps_);
     return;
   }
+
+  MaybeRetryFetchCustomIcon(url, retries_left);
+}
+
+void InstallPlaceholderJob::MaybeRetryFetchCustomIcon(const GURL& url,
+                                                      int retries_left) {
   if (retries_left <= 0) {
     // Download failed.
     debug_value_->Set("custom_icon_download_success", false);
     FinalizeInstall(std::nullopt);
     return;
   }
+
   // Retry download.
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&InstallPlaceholderJob::FetchCustomIcon,
-                     weak_factory_.GetWeakPtr(), image_url, retries_left - 1),
+                     weak_factory_.GetWeakPtr(), url, retries_left - 1),
       ICON_DOWNLOAD_RETRY_DELAY);
 }
 
@@ -175,9 +189,8 @@ void InstallPlaceholderJob::FinalizeInstall(
 
   web_app_info->user_display_mode = install_options_.user_display_mode;
 
-  WebAppInstallFinalizer::FinalizeOptions options(
-      ConvertExternalInstallSourceToInstallSource(
-          install_options_.install_source));
+  FinalizeJobOptions options(ConvertExternalInstallSourceToInstallSource(
+      install_options_.install_source));
   // Overwrite fields if we are doing a forced reinstall, because some
   // values (custom name or icon) might have changed.
   options.overwrite_existing_manifest_fields = install_options_.force_reinstall;
@@ -188,15 +201,17 @@ void InstallPlaceholderJob::FinalizeInstall(
 
   web_app_info->is_placeholder = true;
 
-  lock_->install_finalizer().FinalizeInstall(
-      *web_app_info, options,
-      base::BindOnce(&InstallPlaceholderJob::OnInstallFinalized,
-                     weak_factory_.GetWeakPtr()));
+  install_job_ = std::make_unique<FinalizeInstallOrUpdateJob>(
+      profile_.get(), &lock_.get(), &lock_.get(), *web_app_info, options);
+
+  install_job_->Start(base::BindOnce(&InstallPlaceholderJob::OnInstallFinalized,
+                                     weak_factory_.GetWeakPtr()));
 }
 
 void InstallPlaceholderJob::OnInstallFinalized(
     const webapps::AppId& app_id,
     webapps::InstallResultCode code) {
+  install_job_.reset();
   debug_value_->Set("result_code", base::ToString(code));
 
   CHECK(web_contents_ && !web_contents_->IsBeingDestroyed());

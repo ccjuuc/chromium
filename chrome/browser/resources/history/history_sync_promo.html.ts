@@ -60,7 +60,7 @@ ${this.shown_ ? html`
       ${this.accountInfo_ &&
         this.isSignInState_(HistorySignInState.WEB_ONLY_SIGNED_IN) ? html`
           <div id="profile-info-row" class="profile-row">
-            <img class="avatar" src="${this.accountInfo_.accountImageSrc.url}"
+            <img class="avatar" src="${this.accountInfo_.accountImageSrc}"
                 alt="">
             <div>
               <div class="account-name">${this.accountInfo_.name}</div>
@@ -72,10 +72,10 @@ ${this.shown_ ? html`
       <!-- Button -->
       ${this.isSignInState_(HistorySignInState.SIGN_IN_PENDING) &&
         this.isHistorySyncTurnedOn_() ? html`
-          <cr-button id="verify-its-you-button"
+          <cr-button id="verify-its-you-button" class="action-button"
               @click="${this.onTurnOnHistorySyncClick_}">$i18n{verifyItsYou}
           </cr-button>` : html`
-          <cr-button id="sync-history-button"
+          <cr-button id="sync-history-button" class="action-button"
               @click="${this.onTurnOnHistorySyncClick_}">
             $i18n{turnOnSyncHistoryButton}
           </cr-button>`}
@@ -84,5 +84,5 @@ ${this.shown_ ? html`
   </div>
 </div>` : ''}
 <!--_html_template_end_-->`;
-// clang-format on
+  // clang-format on
 }

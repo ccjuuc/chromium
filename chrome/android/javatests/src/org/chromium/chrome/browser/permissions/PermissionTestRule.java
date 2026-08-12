@@ -4,41 +4,64 @@
 
 package org.chromium.chrome.browser.permissions;
 
+import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
+import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withTagValue;
+import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.is;
 
+import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
+
 import androidx.annotation.IdRes;
 import androidx.annotation.IntDef;
+import androidx.test.espresso.ViewAction;
 
 import org.hamcrest.Matchers;
 import org.junit.Assert;
+import org.junit.rules.TestRule;
+import org.junit.runner.Description;
+import org.junit.runners.model.Statement;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.CriteriaNotSatisfiedException;
+import org.chromium.base.test.util.ForgivingClickAction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
+import org.chromium.chrome.browser.omnibox.LocationBarCoordinator;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
+import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
-import org.chromium.chrome.test.util.InfoBarTestAnimationListener;
-import org.chromium.chrome.test.util.InfoBarUtil;
-import org.chromium.components.browser_ui.modaldialog.ModalDialogTestUtils;
 import org.chromium.components.browser_ui.modaldialog.ModalDialogView;
-import org.chromium.components.infobars.InfoBar;
+import org.chromium.components.browser_ui.site_settings.GeolocationSetting;
+import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
+import org.chromium.components.content_settings.ContentSetting;
+import org.chromium.components.content_settings.ContentSettingsType;
+import org.chromium.components.messages.MessagesTestHelper;
 import org.chromium.components.permissions.PermissionDialogController;
-import org.chromium.content_public.browser.test.util.TouchCommon;
+import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.net.test.EmbeddedTestServerRule;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
-import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.test.util.ViewUtils;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.concurrent.TimeoutException;
 
 /**
  * TestRule for permissions UI testing on Android.
@@ -57,9 +80,71 @@ import java.lang.annotation.RetentionPolicy;
  * persistence toggle is expected, whether it should be explicitly toggled, whether to trigger the
  * JS call with a gesture, and whether an infobar or a dialog is expected.
  */
-public class PermissionTestRule extends ChromeTabbedActivityTestRule {
-    private InfoBarTestAnimationListener mListener;
+public class PermissionTestRule implements TestRule {
+    private final ChromeActivityTestRule<? extends ChromeActivity> mActivityTestRule;
+    private final EmbeddedTestServerRule mEmbeddedTestServerRule = new EmbeddedTestServerRule();
 
+    /** Content description for the "allowed" notification icon/status. */
+    public static final int NOTIFICATIONS_ALLOWED_ID =
+            R.string.permissions_notification_allowed_confirmation_screenreader_announcement;
+
+    /** Content description for the "blocked" notification icon/status. */
+    public static final int NOTIFICATIONS_NOT_ALLOWED_ID =
+            R.string.permissions_notification_not_allowed_confirmation_screenreader_announcement;
+
+    /** Text ID for when a permission is blocked at the Android OS level. */
+    public static final int ANDROID_SETTINGS_BLOCKED_ID =
+            R.string.page_info_android_permission_blocked;
+
+    /** Title ID for the notifications permission setting. */
+    public static final int NOTIFICATIONS_TITLE_ID = R.string.push_notifications_permission_title;
+
+    /** Summary text ID for allowed permissions in Page Info. */
+    public static final int PERMISSIONS_SUMMARY_ALLOWED_ID =
+            R.string.page_info_permissions_summary_1_allowed;
+
+    /** Summary text ID for blocked permissions in Page Info. */
+    public static final int PERMISSIONS_SUMMARY_BLOCKED_ID =
+            R.string.page_info_permissions_summary_1_blocked;
+
+    /** Warning text ID shown in Page Info when OS level settings conflict. */
+    public static final int PERMISSIONS_OS_WARNING_ID = R.string.page_info_permissions_os_warning;
+
+    /** View ID for the "Allow" button in the Clapper Loud UI message. */
+    public static final int CLAPPER_LOUD_ALLOW_BUTTON_ID = R.id.message_primary_button;
+
+    /** View ID for the gear (settings) button in the Clapper Loud UI message. */
+    public static final int CLAPPER_LOUD_GEAR_BUTTON_ID = R.id.message_secondary_button;
+
+    /** Text for the "Manage" button in Clapper Loud UI. */
+    public static final String CLAPPER_LOUD_MANAGE_BUTTON_TEXT = "Manage";
+
+    /** Text for the "Reset" button in the Page Info reset dialog. */
+    public static final String CLAPPER_PAGE_INFO_RESET_DIALOG_BUTTON_TEXT = "Reset";
+
+    /** Text for the "Cancel" button in the Page Info reset dialog. */
+    public static final String CLAPPER_PAGE_INFO_CANCEL_DIALOG_BUTTON_TEXT = "Cancel";
+
+    /** Text ID for the subscribe button in Page Info. */
+    public static final int CLAPPER_PAGE_INFO_SUBSCRIBE_BUTTON_TEXT_ID =
+            R.string.notifications_permission_subscribe;
+
+    /** Text ID for the reset button in Page Info. */
+    public static final int CLAPPER_PAGE_INFO_RESET_BUTTON_TEXT_ID =
+            R.string.page_info_permissions_reset;
+
+    /** Text ID for the "Don't Allow" button. */
+    public static final int CLAPPER_LOUD_DONT_ALLOW_BUTTON_TEXT_ID = R.string.permission_dont_allow;
+
+    /**
+     * Enumeration of the possible decisions that can be made by the user on a permission prompt.
+     * These values are used to drive the test harness to simulate user interaction (e.g. clicking a
+     * specific button).
+     *
+     * <p>These values map to methods on the {@code PermissionPrompt::Delegate} interface in C++
+     * (defined in //components/permissions/permission_prompt.h), such as {@code Accept()}, {@code
+     * AcceptThisTime()}, and {@code Deny()}.
+     */
     @IntDef({
         PromptDecision.ALLOW,
         PromptDecision.ALLOW_ONCE,
@@ -72,6 +157,27 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
         int ALLOW_ONCE = 1;
         int DENY = 2;
         int NONE = 3;
+    }
+
+    /**
+     * Enumeration of the possible actions that can be taken on a permission prompt. These values
+     * correspond to the values used in UMA histograms.
+     *
+     * <p>These values correspond to the {@code PermissionAction} enum in C++ (defined in
+     * //components/permissions/permission_util.h).
+     */
+    @IntDef({
+        PromptAction.GRANTED,
+        PromptAction.DENIED,
+        PromptAction.DISMISSED,
+        PromptAction.IGNORED
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PromptAction {
+        int GRANTED = 0;
+        int DENIED = 1;
+        int DISMISSED = 2;
+        int IGNORED = 3;
     }
 
     /**
@@ -123,26 +229,96 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
         }
     }
 
-    public PermissionTestRule() {
-        this(false);
+    public PermissionTestRule(ChromeActivityTestRule<? extends ChromeActivity> activityTestRule) {
+        this(activityTestRule, false);
     }
 
-    public PermissionTestRule(boolean useHttpsServer) {
-        getEmbeddedTestServerRule().setServerUsesHttps(useHttpsServer);
+    public PermissionTestRule(
+            ChromeActivityTestRule<? extends ChromeActivity> activityTestRule,
+            boolean useHttpsServer) {
+        mActivityTestRule = activityTestRule;
+        mEmbeddedTestServerRule.setServerUsesHttps(useHttpsServer);
     }
 
     @Override
-    protected void before() throws Throwable {
-        super.before();
-        ModalDialogView.disableButtonTapProtectionForTesting();
+    public Statement apply(Statement base, Description description) {
+        return mEmbeddedTestServerRule.apply(
+                new Statement() {
+                    @Override
+                    public void evaluate() throws Throwable {
+                        ModalDialogView.disableButtonTapProtectionForTesting();
+                        base.evaluate();
+                    }
+                },
+                description);
+    }
+
+    public ChromeActivity getActivity() {
+        return mActivityTestRule.getActivity();
+    }
+
+    public EmbeddedTestServer getTestServer() {
+        return mEmbeddedTestServerRule.getServer();
+    }
+
+    public EmbeddedTestServerRule getEmbeddedTestServerRule() {
+        return mEmbeddedTestServerRule;
+    }
+
+    public ChromeActivityTestRule<? extends ChromeActivity> getActivityTestRule() {
+        return mActivityTestRule;
+    }
+
+    public LoadUrlResult loadUrl(String url) {
+        return mActivityTestRule.loadUrl(url);
+    }
+
+    public String runJavaScriptCodeInCurrentTab(String js) throws TimeoutException {
+        return mActivityTestRule.runJavaScriptCodeInCurrentTab(js);
+    }
+
+    public void runJavaScriptCodeWithUserGestureInCurrentTab(String js) throws TimeoutException {
+        mActivityTestRule.runJavaScriptCodeWithUserGestureInCurrentTab(js);
+    }
+
+    public WebContents getWebContents() {
+        return mActivityTestRule.getWebContents();
+    }
+
+    public Tab getActivityTab() {
+        return mActivityTestRule.getActivityTab();
+    }
+
+    @SuppressWarnings("unchecked")
+    public void setActivity(ChromeActivity activity) {
+        ((ChromeActivityTestRule<ChromeActivity>) mActivityTestRule).setActivity(activity);
+    }
+
+    public Tab newIncognitoTabFromMenu() {
+        if (mActivityTestRule instanceof ChromeTabbedActivityTestRule ctaRule) {
+            return ctaRule.newIncognitoTabFromMenu();
+        }
+        throw new UnsupportedOperationException(
+                "Activity test rule does not support incognito tabs");
+    }
+
+    public ChromeActivity newIncognitoWindowFromMenu() {
+        if (mActivityTestRule instanceof ChromeTabbedActivityTestRule ctaRule) {
+            return ctaRule.newIncognitoWindowFromMenu();
+        }
+        throw new UnsupportedOperationException(
+                "Activity test rule does not support incognito windows");
     }
 
     /** Starts an activity and listens for info-bars appearing/disappearing. */
     public void setUpActivity() throws InterruptedException {
-        startMainActivityOnBlankPage();
-        mListener = new InfoBarTestAnimationListener();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> getInfoBarContainer().addAnimationListener(mListener));
+        if (getActivity() == null) {
+            if (mActivityTestRule instanceof ChromeTabbedActivityTestRule ctaRule) {
+                ctaRule.startMainActivityOnBlankPage();
+            } else {
+                mActivityTestRule.startActivityCompletely(null);
+            }
+        }
     }
 
     /**
@@ -181,6 +357,254 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
     }
 
     /**
+     * Sets up the page and triggers a notification permission request.
+     *
+     * <p>This method loads the test page (either via HTTP or file URL) and injects a click handler
+     * into the page's window object. This click handler is necessary because
+     * `Notification.requestPermission()` requires a user gesture to show the prompt.
+     *
+     * @param url The relative URL to load.
+     * @throws Exception If an error occurs during javascript execution.
+     */
+    public void setupPageAndTriggerNotificationPermissionRequest(String url) throws Exception {
+        if (url.startsWith("http")) {
+            loadUrl(url);
+        } else {
+            setUpUrl(url);
+        }
+
+        // Trigger notification permission with a gesture.
+        runJavaScriptCodeWithUserGestureInCurrentTab("Notification.requestPermission()");
+    }
+
+    /** Waits for the Page Info UI to be opened. */
+    public void waitForPageInfoOpen() {
+        onViewWaiting(withId(R.id.page_info_url_wrapper));
+    }
+
+    /** Waits for the Page Info UI to be closed. */
+    public void waitForPageInfoClose() {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        onView(withId(R.id.page_info_url_wrapper)).check(doesNotExist());
+                    } catch (AssertionError e) {
+                        throw new CriteriaNotSatisfiedException(e);
+                    }
+                });
+    }
+
+    /** Opens the Page Info UI by clicking on the location bar status icon. */
+    public void openPageInfoFromStatusIcon() {
+        onViewWaiting(withId(R.id.location_bar_status_icon)).perform(click());
+        waitForPageInfoOpen();
+    }
+
+    /**
+     * Verifies that the permissions row in Page Info displays the expected text.
+     *
+     * @param permissionNameId Resource ID for the permission name (e.g. "Notifications").
+     * @param statusFormatId Resource ID for the status format string (e.g. "%s allowed").
+     */
+    public void verifyPageInfoPermissionsRow(int permissionNameId, int statusFormatId) {
+        String permissionName = getActivity().getString(permissionNameId);
+        String expectedText = getActivity().getString(statusFormatId, permissionName);
+        onViewWaiting(withText(expectedText));
+    }
+
+    /**
+     * Verifies that no permissions row exists for the given permission name in Page Info.
+     *
+     * @param permissionNameId Resource ID for the permission name.
+     */
+    public void verifyNoPageInfoPermissionsRow(int permissionNameId) {
+        String permissionName = getActivity().getString(permissionNameId);
+        onView(withText(permissionName)).check(doesNotExist());
+    }
+
+    /**
+     * Waits for a view with the given content description to appear.
+     *
+     * @param contentDescriptionRes Resource ID for the content description.
+     */
+    public void waitForStatusIcon(int contentDescriptionRes) {
+        onViewWaiting(withContentDescription(contentDescriptionRes));
+    }
+
+    /**
+     * Waits for a view with the given content description to disappear.
+     *
+     * @param contentDescriptionRes Resource ID for the content description.
+     */
+    public void waitForStatusIconGone(int contentDescriptionRes) {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        onView(withContentDescription(contentDescriptionRes)).check(doesNotExist());
+                    } catch (AssertionError e) {
+                        throw new CriteriaNotSatisfiedException(e);
+                    }
+                });
+    }
+
+    /**
+     * Resets notification settings for the test profile.
+     *
+     * @param enable_quiet_ui Whether to enable Quiet UI.
+     */
+    public void resetNotificationsSettingsForTest(boolean enableQuietUi) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    WebsitePreferenceBridge.resetNotificationsSettingsForTest(
+                            ProfileManager.getLastUsedRegularProfile());
+                    UserPrefs.get(ProfileManager.getLastUsedRegularProfile())
+                            .setBoolean(
+                                    "profile.content_settings.enable_quiet_permission_ui.notifications",
+                                    enableQuietUi);
+                });
+    }
+
+    /**
+     * Sets the permission setting for a specific origin.
+     *
+     * @param url The origin URL.
+     * @param setting The ContentSetting to apply.
+     * @param contentSettingsType The ContentSettingsType to apply.
+     */
+    public void setPermissionSettingForOrigin(
+            String url,
+            @ContentSetting int setting,
+            @ContentSettingsType.EnumType int contentSettingsType) {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    WebsitePreferenceBridge.setPermissionSettingForOrigin(
+                            /* browserContextHandle= */ ProfileManager.getLastUsedRegularProfile(),
+                            contentSettingsType,
+                            /* origin= */ url,
+                            /* embedder= */ url,
+                            setting);
+                });
+    }
+
+    /**
+     * Returns the permission setting for the given origin and content settings type.
+     *
+     * @param contentSettingsType The ContentSettingsType to check.
+     * @param pageUrl The origin URL of the page.
+     */
+    public @ContentSetting int getPermissionSettingWithEmbargo(
+            @ContentSettingsType.EnumType int contentSettingsType, String pageUrl) {
+        String url = getURL(pageUrl);
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return WebsitePreferenceBridge.getContentSettingWithEmbargo(
+                            /* browserContextHandle= */ ProfileManager.getLastUsedRegularProfile(),
+                            /* contentSettingsType= */ contentSettingsType,
+                            /* origin= */ url,
+                            /* embedder= */ url);
+                });
+    }
+
+    /**
+     * Returns the geolocation permission setting for the given origin.
+     *
+     * @param pageUrl The origin URL of the page.
+     */
+    public GeolocationSetting getGeolocationSettingForOrigin(String pageUrl) {
+        String url = getURL(pageUrl);
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return WebsitePreferenceBridge.getGeolocationSettingForOrigin(
+                            /* browserContextHandle= */ ProfileManager.getLastUsedRegularProfile(),
+                            /* origin= */ url,
+                            /* embedder= */ url);
+                });
+    }
+
+    /**
+     * Checks the permission setting for the given origin and content settings type.
+     *
+     * @param contentSettingsType The ContentSettingsType to check.
+     * @param expectedSetting The expected content setting.
+     * @param pageUrl The origin URL of the page.
+     */
+    public void checkPermissionSettingForOrigin(
+            @ContentSettingsType.EnumType int contentSettingsType,
+            @ContentSetting int expectedSetting,
+            String pageUrl) {
+        String url = getURL(pageUrl);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    @ContentSetting
+                    int currentSetting =
+                            getPermissionSettingWithEmbargo(contentSettingsType, pageUrl);
+                    Assert.assertEquals(expectedSetting, currentSetting);
+                });
+    }
+
+    /**
+     * Checks the geolocation permission setting for the given origin.
+     *
+     * @param usePrecise If true, use precise location, otherwise approximate.
+     * @param expectedSetting The expected content setting.
+     * @param pageUrl The origin URL of the page.
+     */
+    public void checkGeolocationSettingForOrigin(
+            boolean usePrecise, @ContentSetting int expectedSetting, String pageUrl) {
+        GeolocationSetting currentSetting = getGeolocationSettingForOrigin(pageUrl);
+        Assert.assertNotNull("Geolocation setting is null", currentSetting);
+        if (usePrecise) {
+            Assert.assertEquals(
+                    "Precise setting mismatch", expectedSetting, currentSetting.mPrecise);
+        } else {
+            Assert.assertEquals(
+                    "Approximate setting mismatch", expectedSetting, currentSetting.mApproximate);
+        }
+    }
+
+    /**
+     * Wait for the permission setting for the given origin to change to the expected setting.
+     *
+     * @param contentSettingsType The ContentSettingsType to wait for.
+     * @param expectedSetting The expected content setting.
+     * @param pageUrl The origin URL of the page.
+     */
+    public void waitForPermissionSettingForOrigin(
+            @ContentSettingsType.EnumType int contentSettingsType,
+            @ContentSetting int expectedSetting,
+            String pageUrl) {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        checkPermissionSettingForOrigin(
+                                contentSettingsType, expectedSetting, pageUrl);
+                    } catch (AssertionError e) {
+                        throw new CriteriaNotSatisfiedException(e);
+                    }
+                });
+    }
+
+    /**
+     * Wait for the geolocation permission setting for the given origin to change to the expected
+     * setting.
+     *
+     * @param usePrecise If true, use precise location, otherwise approximate.
+     * @param expectedSetting The expected content setting.
+     * @param pageUrl The origin URL of the page.
+     */
+    public void waitForGeolocationSettingForOrigin(
+            boolean usePrecise, @ContentSetting int expectedSetting, String pageUrl) {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        checkGeolocationSettingForOrigin(usePrecise, expectedSetting, pageUrl);
+                    } catch (AssertionError e) {
+                        throw new CriteriaNotSatisfiedException(e);
+                    }
+                });
+    }
+
+    /**
      * Runs a permission prompt test that grants the permission and expects the page title to be
      * updated in response.
      *
@@ -197,16 +621,15 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
             final String url,
             String javascript,
             int nUpdates,
-            boolean withGesture,
-            boolean isDialog)
+            boolean withGesture)
             throws Exception {
         setUpUrl(url);
         if (withGesture) {
-            runJavaScriptCodeInCurrentTabWithGesture(javascript);
+            runJavaScriptCodeWithUserGestureInCurrentTab(javascript);
         } else {
             runJavaScriptCodeInCurrentTab(javascript);
         }
-        replyToPromptAndWaitForUpdates(updateWaiter, PromptDecision.ALLOW, nUpdates, isDialog);
+        replyToPromptAndWaitForUpdates(updateWaiter, PromptDecision.ALLOW, nUpdates);
     }
 
     /**
@@ -226,16 +649,15 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
             final String url,
             String javascript,
             int nUpdates,
-            boolean withGesture,
-            boolean isDialog)
+            boolean withGesture)
             throws Exception {
         setUpUrl(url);
         if (withGesture) {
-            runJavaScriptCodeInCurrentTabWithGesture(javascript);
+            runJavaScriptCodeWithUserGestureInCurrentTab(javascript);
         } else {
             runJavaScriptCodeInCurrentTab(javascript);
         }
-        replyToPromptAndWaitForUpdates(updateWaiter, PromptDecision.DENY, nUpdates, isDialog);
+        replyToPromptAndWaitForUpdates(updateWaiter, PromptDecision.DENY, nUpdates);
     }
 
     /**
@@ -255,72 +677,31 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
             final String url,
             String javascript,
             int nUpdates,
-            boolean withGesture,
-            boolean isDialog)
+            boolean withGesture)
             throws Exception {
         setUpUrl(url);
         if (withGesture) {
-            runJavaScriptCodeInCurrentTabWithGesture(javascript);
+            runJavaScriptCodeWithUserGestureInCurrentTab(javascript);
         } else {
             runJavaScriptCodeInCurrentTab(javascript);
         }
-        waitForUpdatesAndAssertNoPrompt(updateWaiter, nUpdates, isDialog);
+        waitForUpdatesAndAssertNoPrompt(updateWaiter, nUpdates);
     }
 
     private void replyToPromptAndWaitForUpdates(
-            PermissionUpdateWaiter updateWaiter,
-            @PromptDecision int decision,
-            int nUpdates,
-            boolean isDialog)
+            PermissionUpdateWaiter updateWaiter, @PromptDecision int decision, int nUpdates)
             throws Exception {
-        if (isDialog) {
-            waitForDialogShownState(true);
-            replyToDialogAndWaitForUpdates(updateWaiter, nUpdates, decision);
-        } else {
-            replyToInfoBarAndWaitForUpdates(updateWaiter, nUpdates, decision);
-        }
+        waitForDialogShownState(true);
+        replyToDialogAndWaitForUpdates(updateWaiter, nUpdates, decision);
     }
 
-    private void waitForUpdatesAndAssertNoPrompt(
-            PermissionUpdateWaiter updateWaiter, int nUpdates, boolean isDialog) throws Exception {
+    private void waitForUpdatesAndAssertNoPrompt(PermissionUpdateWaiter updateWaiter, int nUpdates)
+            throws Exception {
         updateWaiter.waitForNumUpdates(nUpdates);
 
-        if (isDialog) {
-            Assert.assertFalse(
-                    "Modal permission prompt shown when none expected",
-                    PermissionDialogController.getInstance().isDialogShownForTest());
-        } else {
-            Assert.assertEquals(
-                    "Permission infobar shown when none expected", 0, getInfoBars().size());
-        }
-    }
-
-    public void runJavaScriptCodeInCurrentTabWithGesture(String javascript)
-            throws java.util.concurrent.TimeoutException {
-        runJavaScriptCodeInCurrentTab("functionToRun = '" + javascript + "'");
-        TouchCommon.singleClickView(getActivityTab().getView());
-    }
-
-    /**
-     * Replies to an infobar permission prompt and waits for a provided number of updates to the
-     * page title in response.
-     */
-    private void replyToInfoBarAndWaitForUpdates(
-            PermissionUpdateWaiter updateWaiter, int nUpdates, @PromptDecision int decison)
-            throws Exception {
-        mListener.addInfoBarAnimationFinished("InfoBar not added.");
-        InfoBar infobar = getInfoBars().get(0);
-        Assert.assertNotNull(infobar);
-
-        switch (decison) {
-            case PromptDecision.ALLOW -> Assert.assertTrue(
-                    "Allow button wasn't found", InfoBarUtil.clickPrimaryButton(infobar));
-            case PromptDecision.ALLOW_ONCE -> throw new AssertionError(
-                    "Allowing once is not supported on infobars.");
-            case PromptDecision.DENY -> Assert.assertTrue(
-                    "Block button wasn't found", InfoBarUtil.clickSecondaryButton(infobar));
-        }
-        updateWaiter.waitForNumUpdates(nUpdates);
+        Assert.assertFalse(
+                "Modal permission prompt shown when none expected",
+                PermissionDialogController.getInstance().isDialogShownForTest());
     }
 
     /**
@@ -344,6 +725,18 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
     /** Utility functions to support permissions testing in other contexts. */
     public static void replyToDialog(
             final @PermissionTestRule.PromptDecision int decision, ChromeActivity activity) {
+        replyToDialogInternal(decision, activity, false);
+    }
+
+    public static void replyToDialogForgiving(
+            final @PermissionTestRule.PromptDecision int decision, ChromeActivity activity) {
+        replyToDialogInternal(decision, activity, true);
+    }
+
+    private static void replyToDialogInternal(
+            final @PermissionTestRule.PromptDecision int decision,
+            ChromeActivity activity,
+            boolean useForgivingClick) {
         // Wait for button view to appear in view hierarchy. If the browser controls are not visible
         // then ModalDialogPresenter will first trigger animation for showing browser controls and
         // only then add modal dialog view into the container.
@@ -351,17 +744,21 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
         int buttonId =
                 switch (decision) {
                     case PromptDecision.ALLOW -> ModalDialogProperties.ButtonType.POSITIVE;
-                    case PromptDecision.ALLOW_ONCE -> ModalDialogProperties.ButtonType
-                            .POSITIVE_EPHEMERAL;
+                    case PromptDecision.ALLOW_ONCE ->
+                            ModalDialogProperties.ButtonType.POSITIVE_EPHEMERAL;
                     case PromptDecision.DENY -> ModalDialogProperties.ButtonType.NEGATIVE;
                     default -> throw new IllegalStateException("Unexpected value: " + decision);
                 };
+
+        // TODO(crbug.com/531793849): See if we want to keep using ForgivingClickAction.
+        ViewAction clickAction =
+                useForgivingClick ? ForgivingClickAction.forgivingClick() : click();
 
         ViewUtils.onViewWaiting(
                         allOf(
                                 withTagValue(is(ModalDialogView.getTagForButtonType(buttonId))),
                                 isDisplayed()))
-                .perform(click());
+                .perform(clickAction);
     }
 
     /** Wait for the permission dialog to be in the expected shown state. */
@@ -372,10 +769,6 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
                 () -> {
                     boolean isDialogShownForTest =
                             PermissionDialogController.getInstance().isDialogShownForTest();
-                    if (isDialogShownForTest) {
-                        ModalDialogTestUtils.checkCurrentPresenter(
-                                dialogManager, ModalDialogType.TAB);
-                    }
                     Criteria.checkThat(isDialogShownForTest, Matchers.is(expectedShowState));
                 });
     }
@@ -383,5 +776,42 @@ public class PermissionTestRule extends ChromeTabbedActivityTestRule {
     /** Wait for the permission dialog to be shown. */
     public static void waitForDialog(ChromeActivity activity) {
         waitForDialogShownState(activity, true);
+    }
+
+    /** Verify the shown state of the message. */
+    protected void waitForMessageShownState(boolean expectedShowState) {
+        waitForMessageShownState(getActivity(), expectedShowState);
+    }
+
+    /** Wait for the message to be in the expected shown state. */
+    public static void waitForMessageShownState(
+            ChromeActivity activity, boolean expectedShowState) {
+        WindowAndroid windowAndroid = activity.getWindowAndroid();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    int messageCount = MessagesTestHelper.getMessageCount(windowAndroid);
+                    Criteria.checkThat(
+                            "Message shown state does not match expectation",
+                            messageCount > 0,
+                            Matchers.is(expectedShowState));
+                });
+    }
+
+    /** Wait for a specific permission state in the omnibox. */
+    public void waitForOmniboxPermissionState(
+            @ContentSettingsType.EnumType int contentSettingsType) {
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    LocationBarCoordinator locationBar =
+                            (LocationBarCoordinator)
+                                    getActivity().getToolbarManager().getLocationBar();
+                    int lastPermission =
+                            locationBar
+                                    .getStatusCoordinator()
+                                    .getMediatorForTesting()
+                                    .getPermissionStatusHandlerForTesting()
+                                    .getLastPermissionForTest();
+                    Criteria.checkThat(lastPermission, Matchers.is(contentSettingsType));
+                });
     }
 }

@@ -49,67 +49,6 @@ public final class SyncTestUtil {
                 });
     }
 
-    /**
-     * Returns whether the user has sync consent.
-     *
-     * <p>TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is deleted from the
-     * codebase. See ConsentLevel::kSync documentation for details.
-     */
-    public static boolean hasSyncConsent() {
-        return ThreadUtils.runOnUiThreadBlocking(
-                () -> getSyncServiceForLastUsedProfile().hasSyncConsent());
-    }
-
-    /** Returns whether sync-the-feature is enabled. */
-    public static boolean isSyncFeatureEnabled() {
-        return ThreadUtils.runOnUiThreadBlocking(
-                () -> getSyncServiceForLastUsedProfile().isSyncFeatureEnabled());
-    }
-
-    /** Returns whether sync-the-feature is active. */
-    public static boolean isSyncFeatureActive() {
-        return ThreadUtils.runOnUiThreadBlocking(
-                () -> getSyncServiceForLastUsedProfile().isSyncFeatureActive());
-    }
-
-    /**
-     * Waits for sync-the-feature to become enabled.
-     * WARNING: This is does not wait for the feature to be active, see the distinction in
-     * components/sync/service/sync_service.h. If the FakeServer isn't running - e.g. because of
-     * SyncTestRule - this is all you can hope for. For tests that don't rely on sync data this
-     * might just be enough.
-     */
-    public static void waitForSyncFeatureEnabled() {
-        CriteriaHelper.pollUiThread(
-                () -> getSyncServiceForLastUsedProfile().isSyncFeatureEnabled(),
-                "Timed out waiting for sync to become enabled.",
-                TIMEOUT_MS,
-                INTERVAL_MS);
-    }
-
-    /** Waits for sync-the-feature to become active. */
-    public static void waitForSyncFeatureActive() {
-        CriteriaHelper.pollUiThread(
-                () -> getSyncServiceForLastUsedProfile().isSyncFeatureActive(),
-                "Timed out waiting for sync to become active.",
-                TIMEOUT_MS,
-                INTERVAL_MS);
-    }
-
-    /**
-     * Waits for hasSyncConsent() to return true.
-     *
-     * <p>TODO(crbug.com/40066949): Remove once kSync becomes unreachable or is deleted from the
-     * codebase. See ConsentLevel::kSync documentation for details.
-     */
-    public static void waitForSyncConsent() {
-        CriteriaHelper.pollUiThread(
-                () -> getSyncServiceForLastUsedProfile().hasSyncConsent(),
-                "Timed out waiting for sync consent.",
-                TIMEOUT_MS,
-                INTERVAL_MS);
-    }
-
     /** Waits for sync machinery to become active. */
     public static void waitForSyncTransportActive() {
         CriteriaHelper.pollUiThread(
@@ -326,7 +265,7 @@ public final class SyncTestUtil {
      * data is a JSONObject representing the datatype-specific information for the entity. This data
      * is the same as the data stored in a specifics protocol buffer (e.g., ReadingListSpecifics).
      *
-     * @param context the Context used to retreive the correct SyncService
+     * @param context the Context used to retrieve the correct SyncService
      * @param typeString a String representing a specific datatype.
      *     <p>TODO(pvalenzuela): Replace typeString with the native DataType enum or something else
      *     that will avoid callers needing to specify the native string version.

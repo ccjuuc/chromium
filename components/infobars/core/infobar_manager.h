@@ -65,7 +65,7 @@ class InfoBarManager {
   // If infobars are disabled for this tab, this will do nothing, on the
   // assumption that the matching AddInfoBar() call will have already deleted
   // the infobar (see above).
-  void RemoveInfoBar(InfoBar* infobar);
+  virtual void RemoveInfoBar(InfoBar* infobar);
 
   // Removes all the infobars.
   void RemoveAllInfoBars(bool animate);
@@ -103,7 +103,15 @@ class InfoBarManager {
   virtual int GetActiveEntryID() = 0;
 
   // Opens a URL according to the specified |disposition|.
-  virtual void OpenURL(const GURL& url, WindowOpenDisposition disposition) = 0;
+  // `text_fragment` is an optional text fragment to scroll to.
+  virtual void OpenURL(const GURL& url,
+                       WindowOpenDisposition disposition,
+                       const std::string& text_fragment) = 0;
+
+  // Opens a URL according to the specified `disposition`.
+  void OpenURL(const GURL& url, WindowOpenDisposition disposition) {
+    OpenURL(url, disposition, std::string());
+  }
 
   bool ShouldHideInFullscreen() const;
 

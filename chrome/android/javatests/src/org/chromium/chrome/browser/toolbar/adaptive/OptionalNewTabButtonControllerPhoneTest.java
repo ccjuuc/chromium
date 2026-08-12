@@ -16,6 +16,7 @@ import static org.hamcrest.CoreMatchers.allOf;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
@@ -39,17 +40,16 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ActivityTestUtils;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
-import org.chromium.ui.test.util.ViewUtils;
 
 /**
  * Tests {@link OptionalNewTabButtonController}. See also {@link
@@ -58,6 +58,7 @@ import org.chromium.ui.test.util.ViewUtils;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
+@Features.DisableFeatures({ChromeFeatureList.ANDROID_BOTTOM_BAR})
 @Features.EnableFeatures(
         ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2 + ":mode/always-new-tab")
 @Restriction({DeviceFormFactor.PHONE})
@@ -222,7 +223,7 @@ public class OptionalNewTabButtonControllerPhoneTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "crbug.com/1450561")
+    @DisabledTest(message = "crbug.com/40915363")
     public void testButton_hidesOnNtp() {
         mActivityTestRule.loadUrl(mTestPageUrl, /* secondsToWait= */ 10);
         ThreadUtils.runOnUiThreadBlocking(
@@ -236,7 +237,6 @@ public class OptionalNewTabButtonControllerPhoneTest {
 
         mActivityTestRule.loadUrl(getOriginalNativeNtpUrl());
 
-        ViewUtils.waitForViewCheckingState(
-                withId(R.id.optional_toolbar_button), ViewUtils.VIEW_GONE | ViewUtils.VIEW_NULL);
+        waitForNoView(withId(R.id.optional_toolbar_button));
     }
 }

@@ -1,9 +1,14 @@
+function getPixelFromImageData(imageData, x, y) {
+  const index = (y * imageData.width + x) * 4;
+  return imageData.data.slice(index, index + 4);
+}
+
 function resizeToPixelGrid(canvas) {
   return new Promise(resolve => {
     new ResizeObserver(entries => {
       canvas.width = entries[0].devicePixelContentBoxSize[0].inlineSize;
       canvas.height = entries[0].devicePixelContentBoxSize[0].blockSize;
-      resolve();
+      setTimeout(resolve);
     }).observe(canvas);
   });
 }
@@ -96,6 +101,67 @@ void main(){
     this.texLoc = gl.getUniformLocation(this.program, 'u_tex');
   }
 
+  renderWithSize(target, destWidth, destHeight, explicitScale, sx, sy, swidth, sheight) {
+    const gl = this.gl;
+    gl.useProgram(this.program);
+    const cvs = gl.canvas;
+
+    const explicitSourceRect = (sx !== undefined && sy !== undefined
+                                && swidth !== undefined && sheight !== undefined);
+
+    // Destination rect in GL clip space, placed at top left
+    const xMin = -1;
+    const xMax = (2 * destWidth / cvs.width) - 1.0;
+    const yMin = 1.0 - (2 * destHeight / cvs.height);
+    const yMax = 1;
+
+    gl.bindVertexArray(this.vertArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vertBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      xMin, yMin, 0, 0,
+      xMax, yMin, 1, 0,
+      xMin, yMax, 0, 1,
+      xMin, yMax, 0, 1,
+      xMax, yMin, 1, 0,
+      xMax, yMax, 1, 1
+    ]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(this.positionLoc);
+    gl.vertexAttribPointer(this.positionLoc, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(this.texOffsetLoc);
+    gl.vertexAttribPointer(this.texOffsetLoc, 2, gl.FLOAT, false, 16, 8);
+
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    const internalformat = gl.RGBA8;
+
+    const config = {};
+    let hasConfig = false;
+    if (explicitSourceRect) {
+      config.sx = sx;
+      config.sy = sy;
+      config.swidth = swidth;
+      config.sheight = sheight;
+      hasConfig = true;
+    }
+    if (explicitScale) {
+      config.width = destWidth;
+      config.height = destHeight;
+      hasConfig = true;
+    }
+    if (hasConfig) {
+      gl.texElementImage2D(gl.TEXTURE_2D, internalformat, target, config);
+    } else {
+      gl.texElementImage2D(gl.TEXTURE_2D, internalformat, target);
+    }
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.uniform1i(this.texLoc, 0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
   render(target, scaleX, scaleY, sx, sy, swidth, sheight) {
     const gl = this.gl;
     gl.useProgram(this.program);
@@ -138,36 +204,31 @@ void main(){
 
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     const level = 0;
-    const internalformat = gl.RGBA;
+    const internalformat = gl.RGBA8;
     const format = gl.RGBA;
     const type = gl.UNSIGNED_BYTE;
 
     if (target instanceof Element) {
+      const config = {};
+      let hasConfig = false;
       if (explicitSourceRect) {
-        if (explicitScale) {
-          gl.texElementImage2D(
-            gl.TEXTURE_2D, level, internalformat,
-            sx, sy, swidth, sheight,
-            destWidth, destHeight,
-            format, type, target);
-        } else {
-          gl.texElementImage2D(
-            gl.TEXTURE_2D, level, internalformat,
-            sx, sy, swidth, sheight,
-            format, type, target);
-        }
+        config.sx = sx;
+        config.sy = sy;
+        config.swidth = swidth;
+        config.sheight = sheight;
+        hasConfig = true;
+      }
+      if (explicitScale) {
+        config.width = destWidth;
+        config.height = destHeight;
+        hasConfig = true;
+      }
+      if (hasConfig) {
+        gl.texElementImage2D(gl.TEXTURE_2D, internalformat, target, config);
       } else {
-        if (explicitScale) {
-          gl.texElementImage2D(
-            gl.TEXTURE_2D, level, internalformat,
-            destWidth, destHeight,
-            format, type, target);
-        } else {
-          gl.texElementImage2D(
-            gl.TEXTURE_2D, level, internalformat,
-            format, type, target);
-        }
+        gl.texElementImage2D(gl.TEXTURE_2D, internalformat, target);
       }
     }
 
@@ -187,22 +248,34 @@ void main(){
 
 function copyElementImageToWebGPUCanvas(queue, ctx, target, scaleX, scaleY,
                                         sx, sy, swidth, sheight) {
+  const sourceDict = { source: target };
+  if (sx !== undefined) sourceDict.sx = sx;
+  if (sy !== undefined) sourceDict.sy = sy;
+  if (swidth !== undefined) sourceDict.swidth = swidth;
+  if (sheight !== undefined) sourceDict.sheight = sheight;
+
+  const destDict = { destination: { texture: ctx.getCurrentTexture() } };
+
   if (scaleX !== undefined && scaleY !== undefined) {
-    const [destWidth, destHeight] =
-          computeScaledDestinationSize(ctx.canvas, target, scaleX, scaleY);
-    queue.copyElementImageToTexture(
-      target, destWidth, destHeight, { texture: ctx.getCurrentTexture() });
-  } else if (sx !== undefined && sy !== undefined &&
-             swidth !== undefined && sheight !== undefined) {
-    queue.copyElementImageToTexture(
-      target, sx, sy, swidth, sheight, { texture: ctx.getCurrentTexture() });
-  } else {
-    queue.copyElementImageToTexture(
-      target, { texture: ctx.getCurrentTexture() });
+    let destWidth, destHeight;
+    if (sx !== undefined && sy !== undefined && swidth !== undefined && sheight !== undefined) {
+      const cvs = ctx.canvas;
+      destWidth = swidth * scaleX * (cvs.width / cvs.clientWidth);
+      destHeight = sheight * scaleY * (cvs.height / cvs.clientHeight);
+    } else {
+      [destWidth, destHeight] =
+            computeScaledDestinationSize(ctx.canvas, target, scaleX, scaleY);
+    }
+    destDict.width = destWidth;
+    destDict.height = destHeight;
   }
+
+  queue.copyElementImageToTexture(sourceDict, destDict);
 }
 
-export { resizeToPixelGrid,
+export { getPixelFromImageData,
+         resizeToPixelGrid,
          computeScaledDestinationSize,
+         computeExplicitDestinationSize,
          SimpleGLProgram,
          copyElementImageToWebGPUCanvas };

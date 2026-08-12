@@ -66,12 +66,6 @@ class ChromePasswordProtectionServiceSyncBrowserTest : public SyncTest {
   ChromePasswordProtectionServiceSyncBrowserTest& operator=(
       const ChromePasswordProtectionServiceSyncBrowserTest&) = delete;
 
-  void SetUpOnMainThread() override {
-    SyncTest::SetUpOnMainThread();
-
-    ASSERT_TRUE(embedded_test_server()->Start());
-  }
-
   safe_browsing::ChromePasswordProtectionService* GetService(
       bool is_incognito) {
     return ChromePasswordProtectionService::GetPasswordProtectionService(
@@ -97,7 +91,6 @@ IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceSyncBrowserTest,
   ConfigureEnterprisePasswordProtection(
       PasswordProtectionTrigger::PASSWORD_REUSE);
   ChromePasswordProtectionService* service = GetService(/*is_incognito=*/false);
-  chrome::NewTab(GetBrowser(0));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       GetBrowser(0), embedded_test_server()->GetURL(kLoginPageUrl)));
   base::HistogramTester histograms;

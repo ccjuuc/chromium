@@ -9,6 +9,7 @@ import "gpu/ipc/common/mailbox.mojom";
 import "gpu/ipc/common/sync_token.mojom";
 import "gpu/ipc/common/vulkan_ycbcr_info.mojom";
 import "media/mojo/mojom/audio_data.mojom";
+import "media/mojo/mojom/channel_layout.mojom";
 import "media/mojo/mojom/encryption_pattern.mojom";
 import "mojo/public/mojom/base/byte_string.mojom";
 import "mojo/public/mojom/base/shared_memory.mojom";
@@ -31,10 +32,6 @@ enum AudioCodecProfile;
 enum BufferingState;
 [Native]
 enum BufferingStateChangeReason;
-
-// See media/base/channel_layout.h for descriptions.
-[Native]
-enum ChannelLayout;
 
 // See media/base/media_content_type.h for descriptions.
 [Native]
@@ -91,9 +88,36 @@ struct VideoTransformation {
   bool mirrored;
 };
 
+// See media/base/video_spatial_format.h for descriptions.
+enum VideoStereoMode {
+  kMono,
+  kSideBySideLeftFirst,
+  kTopBottomLeftFirst,
+};
+
+// See media/base/video_spatial_format.h for descriptions.
+enum VideoProjectionType {
+  kNone,
+  kEquirect180,
+  kEquirect360,
+};
+
+// See media/base/video_spatial_format.h for descriptions.
+struct VideoSpatialFormat {
+  VideoProjectionType projection_type;
+  VideoStereoMode stereo_mode;
+};
+
 // See media/base/waiting.h for descriptions.
 [Native]
 enum WaitingReason;
+
+// See media/base/overlay_info.h for descriptions.
+struct OverlayInfo {
+  mojo_base.mojom.UnguessableToken? routing_token;
+  bool is_fullscreen;
+  bool is_persistent_video;
+};
 
 // See media/base/watch_time_keys.h for descriptions.
 [Native]
@@ -108,8 +132,11 @@ enum MediaContainerName;
 enum MediaStatusState;
 
 // See media/base/encryption_scheme.h for description.
-[Native]
-enum EncryptionScheme;
+enum EncryptionScheme {
+  kUnencrypted,
+  kCenc,
+  kCbcs,
+};
 
 // See media::EncryptionType for descriptions.
 enum EncryptionType {
@@ -192,30 +219,25 @@ struct VideoColorSpace {
   [Native]
   enum MatrixID;
 
-  [Native]
-  enum RangeID;
-
   PrimaryID primaries;
   TransferID transfer;
   MatrixID matrix;
-  RangeID range;
+  gfx.mojom.ColorSpaceRangeID range;
 };
 
 // This defines a mojo transport format for media::AudioDecoderConfig.
 // See media/base/audio_decoder_config.h for descriptions.
-// TODO(crbug.com/40191032): Support `channels_` set by
-// SetChannelsForDiscrete().
 struct AudioDecoderConfig {
   AudioCodec codec;
   SampleFormat sample_format;
-  ChannelLayout channel_layout;
+  ChannelLayoutConfig channel_layout_config;
   int32 samples_per_second;
   array<uint8> extra_data;
   EncryptionScheme encryption_scheme;
   mojo_base.mojom.TimeDelta seek_preroll;
   int32 codec_delay;
   AudioCodecProfile profile;
-  ChannelLayout target_output_channel_layout;
+  ChannelLayoutConfig target_output_channel_layout;
   SampleFormat target_output_sample_format;
   bool should_discard_decoder_delay;
 };
@@ -236,6 +258,7 @@ struct VideoDecoderConfig {
   EncryptionScheme encryption_scheme;
   VideoColorSpace color_space_info;
   gfx.mojom.HDRMetadata hdr_metadata;
+  VideoSpatialFormat spatial_format;
 };
 
 // Native struct media::SubsampleEntry;
@@ -281,6 +304,9 @@ struct DecoderBufferSideData {
   // VP9 specific information.
   array<uint32> spatial_layers;
   array<uint8> alpha_data;
+
+  // Container-level HDR metadata.
+  gfx.mojom.HDRMetadata hdr_metadata;
 
   // Secure buffer handle corresponding to the decrypted contents of the
   // associated DecoderBuffer. A non-zero value indicates this was set.
@@ -369,15 +395,13 @@ struct CaptureVersion {
 };
 
 // See media/base/video_frame_metadata.h for a description of fields.
-// TODO(crbug.com/40489779): Remove |has_*| values and use nullable types.
 struct VideoFrameMetadata {
   bool allow_overlay;
 
   mojo_base.mojom.TimeTicks? capture_begin_time;
   mojo_base.mojom.TimeTicks? capture_end_time;
 
-  bool has_capture_counter;
-  int32 capture_counter;
+  int32? capture_counter;
 
   gfx.mojom.Rect? capture_update_rect;
 
@@ -392,8 +416,7 @@ struct VideoFrameMetadata {
 
   mojo_base.mojom.TimeDelta? frame_duration;
 
-  bool has_frame_rate;
-  double frame_rate;
+  double? frame_rate;
 
   bool interactive_content;
 
@@ -419,28 +442,22 @@ struct VideoFrameMetadata {
 
   bool power_efficient;
 
-  bool has_device_scale_factor;
-  double device_scale_factor;
+  double? device_scale_factor;
 
-  bool has_page_scale_factor;
-  double page_scale_factor;
+  double? page_scale_factor;
 
-  bool has_root_scroll_offset_x;
-  double root_scroll_offset_x;
+  double? root_scroll_offset_x;
 
-  bool has_root_scroll_offset_y;
-  double root_scroll_offset_y;
+  double? root_scroll_offset_y;
 
-  bool has_top_controls_visible_height;
-  double top_controls_visible_height;
+  double? top_controls_visible_height;
 
   mojo_base.mojom.TimeTicks? decode_begin_time;
   mojo_base.mojom.TimeTicks? decode_end_time;
 
   mojo_base.mojom.TimeDelta? processing_time;
 
-  bool has_rtp_timestamp;
-  double rtp_timestamp;
+  double? rtp_timestamp;
 
   mojo_base.mojom.TimeTicks? receive_time;
 
@@ -450,6 +467,9 @@ struct VideoFrameMetadata {
   uint64? source_id;
 
   EffectState background_blur;
+
+  [EnableIf=is_android]
+  gpu.mojom.VulkanYCbCrInfo? ycbcr_info;
 };
 
 // This defines a mojo transport format for media::VideoFrame.
@@ -500,7 +520,7 @@ struct SharedMemoryVideoFrameData {
 
   // Stride and offsets for each plane. Offsets are relative to the start
   // of |frame_data|.
-  array<int32> strides;
+  array<uint32> strides;
   array<uint32> offsets;
 };
 
@@ -509,10 +529,6 @@ struct SharedImageVideoFrameData {
   gpu.mojom.ExportedSharedImage shared_image;
   gpu.mojom.SyncToken sync_token;
   bool is_mappable;
-  // |ycbcr_data| is present on Android when the
-  // video is hardware decoded and the display compositor uses Vulkan.
-  [EnableIf=is_android]
-  gpu.mojom.VulkanYCbCrInfo? ycbcr_data;
 };
 
 // An empty structure used for STORAGE_OPAQUE VideoFrame.
@@ -638,6 +654,7 @@ enum InputStreamErrorCode {
   kSystemPermissions = 1,
   kDeviceInUse = 2,
   kSocketError = 3,
+  kDeviceRemoved = 4,
 };
 
 // See media/base/renderer.h for description.

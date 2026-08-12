@@ -27,7 +27,6 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {assertExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
-import {isBatteryChargeLimitAvailable} from '../common/load_time_booleans.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import type {SettingsToggleV2Element} from '../controls/v2/settings_toggle_v2.js';
@@ -193,13 +192,6 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
         },
       },
 
-      batteryChargeLimitAvailable_: {
-        type: Boolean,
-        value() {
-          return isBatteryChargeLimitAvailable();
-        },
-      },
-
       optimizedChargingDialogVisible_: {
         type: Boolean,
         value: false,
@@ -217,12 +209,6 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
         type: String,
         computed:
             'computeOptimizedChargingSublabel_(selectedOptimizedChargingStrategy_)',
-      },
-
-      optimizedChargingHidden_: {
-        type: Boolean,
-        computed:
-            'computeOptimizedChargingHidden_(adaptiveChargingSupported_, batteryChargeLimitAvailable_)',
       },
 
       optimizedChargingEnabled_: {
@@ -251,36 +237,34 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
     Setting.kChargeLimit,
   ]);
 
-  private acIdleManaged_: boolean;
-  private acIdleOptions_: IdleOption[];
-  private adaptiveChargingSupported_: boolean;
-  private adaptiveChargingManaged_: boolean;
-  private adaptiveChargingPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private chargeLimitPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private readonly batteryChargeLimitAvailable_: boolean;
-  private optimizedChargingSublabel_: string;
-  private optimizedChargingHidden_: boolean;
-  private optimizedChargingDialogVisible_: boolean;
-  private selectedOptimizedChargingStrategy_: OptimizedChargingStrategy;
-  private optimizedChargingEnabled_: boolean;
-  private batteryIdleManaged_: boolean;
-  private batteryIdleOptions_: IdleOption[];
-  private batterySaverHidden_: boolean;
-  private batteryStatus_: BatteryStatus|undefined;
+  declare private acIdleManaged_: boolean;
+  declare private acIdleOptions_: IdleOption[];
+  declare private adaptiveChargingSupported_: boolean;
+  declare private adaptiveChargingManaged_: boolean;
+  declare private adaptiveChargingPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private chargeLimitPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private optimizedChargingSublabel_: string;
+  declare private optimizedChargingDialogVisible_: boolean;
+  declare private selectedOptimizedChargingStrategy_: OptimizedChargingStrategy;
+  declare private optimizedChargingEnabled_: boolean;
+  declare private batteryIdleManaged_: boolean;
+  declare private batteryIdleOptions_: IdleOption[];
+  declare private batterySaverHidden_: boolean;
+  declare private batteryStatus_: BatteryStatus|undefined;
   private browserProxy_: DevicePageBrowserProxy;
-  private hasLid_: boolean;
-  private lidClosedLabel_: string;
-  private lidClosedPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private isExternalPowerUSB_: boolean;
-  private isExternalPowerAC_: boolean;
-  private powerSourceLabel_: string;
-  private powerSourceName_: string;
-  private powerSources_: PowerSource[]|undefined;
-  private shouldAcIdleSelectBeDisabled_: boolean;
-  private shouldBatteryIdleSelectBeDisabled_: boolean;
-  private showPowerSourceDropdown_: boolean;
-  private selectedPowerSourceId_: string;
-  private batterySaverFeatureEnabled_: boolean;
+  declare private hasLid_: boolean;
+  declare private lidClosedLabel_: string;
+  declare private lidClosedPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private isExternalPowerUSB_: boolean;
+  declare private isExternalPowerAC_: boolean;
+  declare private powerSourceLabel_: string;
+  declare private powerSourceName_: string;
+  declare private powerSources_: PowerSource[]|undefined;
+  declare private shouldAcIdleSelectBeDisabled_: boolean;
+  declare private shouldBatteryIdleSelectBeDisabled_: boolean;
+  declare private showPowerSourceDropdown_: boolean;
+  declare private selectedPowerSourceId_: string;
+  declare private batterySaverFeatureEnabled_: boolean;
 
   constructor() {
     super();
@@ -381,14 +365,6 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
         // Return empty string if no policy is selected.
         return '';
     }
-  }
-
-  private computeOptimizedChargingHidden_(
-      adaptiveChargingSupported: boolean,
-      batteryChargeLimitAvailable: boolean): boolean {
-    // Hidden if adaptive charging is not supported, or if the feature flag is
-    // not enabled.
-    return !adaptiveChargingSupported || !batteryChargeLimitAvailable;
   }
 
   private computeOptimizedChargingToggleState_(
@@ -602,8 +578,8 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
    *
    * @param powerManagementSettings Current power management settings.
    */
-  private powerManagementSettingsChanged_(powerManagementSettings:
-                                              PowerManagementSettings): void {
+  private powerManagementSettingsChanged_(
+      powerManagementSettings: PowerManagementSettings): void {
     this.updateIdleOptions_(
         powerManagementSettings.possibleAcIdleBehaviors || [],
         powerManagementSettings.possibleBatteryIdleBehaviors || [],
@@ -674,25 +650,25 @@ export class SettingsPowerElement extends SettingsPowerElementBase {
         }
         break;
       case 'batterySaver':
-        if (!batteryPresent && this.optimizedChargingHidden_) {
+        if (!batteryPresent && !this.adaptiveChargingSupported_) {
           classes.push('first');
         }
         break;
       case 'adaptiveCharging':
-        if (!batteryPresent && this.optimizedChargingHidden_ &&
+        if (!batteryPresent && !this.adaptiveChargingSupported_ &&
             this.batterySaverHidden_) {
           classes.push('first');
         }
         break;
       case 'idle':
-        if (!batteryPresent && this.optimizedChargingHidden_ &&
-            this.batterySaverHidden_ && !this.adaptiveChargingSupported_) {
+        if (!batteryPresent && !this.adaptiveChargingSupported_ &&
+            this.batterySaverHidden_) {
           classes.push('first');
         }
         break;
       case 'acIdle':
-        if (!batteryPresent && this.optimizedChargingHidden_ &&
-            this.batterySaverHidden_ && !this.adaptiveChargingSupported_) {
+        if (!batteryPresent && !this.adaptiveChargingSupported_ &&
+            this.batterySaverHidden_) {
           classes.push('first');
         }
         classes.push('dropdown-row');

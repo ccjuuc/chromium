@@ -85,6 +85,8 @@ class CORE_EXPORT HighlightPainter {
     // ops done while rotated need coordinates in this rotated space, but ops
     // done outside of these rotations need the original physical rect.
     const PhysicalRect& PhysicalSelectionRect();
+    PhysicalRect ComputePhysicalSelectionRect(unsigned start,
+                                              unsigned end) const;
     const LineRelativeRect& LineRelativeSelectionRect();
 
     void PaintSelectionBackground(
@@ -92,6 +94,7 @@ class CORE_EXPORT HighlightPainter {
         Node* node,
         const Document& document,
         const ComputedStyle& style,
+        const PaintInfo& paint_info,
         const std::optional<AffineTransform>& rotation);
 
     void PaintSelectedText(TextPainter& text_painter,
@@ -209,6 +212,12 @@ class CORE_EXPORT HighlightPainter {
 
   SelectionPaintState* Selection() { return selection_; }
 
+  // Sets the decoration rect for the originating content, pre-trimmed by
+  // text-decoration-skip-spaces.
+  void SetOriginatingDecorationRect(const LineRelativeRect& rect) {
+    originating_decoration_rect_ = rect;
+  }
+
  private:
   struct HighlightEdgeInfo {
     unsigned offset;
@@ -274,7 +283,6 @@ class CORE_EXPORT HighlightPainter {
   TextDecorationPainter& decoration_painter_;
   const PaintInfo& paint_info_;
   const InlineCursor& cursor_;
-  InlineCursor root_inline_cursor_;
   const FragmentItem& fragment_item_;
   const PhysicalOffset& box_origin_;
   const ComputedStyle& originating_style_;
@@ -294,6 +302,7 @@ class CORE_EXPORT HighlightPainter {
   HeapVector<HighlightPart> parts_;
   Vector<HighlightEdgeInfo> edges_info_;
   Case paint_case_;
+  std::optional<LineRelativeRect> originating_decoration_rect_;
 };
 
 }  // namespace blink

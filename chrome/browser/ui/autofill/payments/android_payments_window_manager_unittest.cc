@@ -36,6 +36,7 @@ class MockPaymentsWindowDelegate : public PaymentsWindowDelegate {
               (content::WebContents&),
               (override));
   MOCK_METHOD(void, WebContentsDestroyed, (), (override));
+  MOCK_METHOD(void, OnUserDeniedTabOpening, (), (override));
 };
 
 class MockPaymentsWindowBridge : public PaymentsWindowBridge {
@@ -137,6 +138,35 @@ TEST_F(AndroidPaymentsWindowManagerTest, InitBnplFlow) {
             GURL(kBnplFailureUrlPrefix));
   histogram_tester_.ExpectUniqueSample("Autofill.Bnpl.PopupWindowShown.Affirm",
                                        true, 1);
+}
+
+// Test that calling InitBnplFlow() when a flow is already ongoing safely
+// resets the previous flow state and initializes the new flow context.
+TEST_F(AndroidPaymentsWindowManagerTest, InitBnplFlow_WhenFlowAlreadyOngoing) {
+  SetUpMockPaymentsWindowBridge();
+  EXPECT_CALL(static_cast<MockPaymentsWindowBridge&>(
+                  test_api(window_manager()).GetPaymentsWindowBridge()),
+              OpenEphemeralTab)
+      .Times(2);
+
+  // Initialize the first flow.
+  InitBnplFlowForTest();
+  EXPECT_FALSE(test_api(window_manager()).NoOngoingFlow());
+  EXPECT_EQ(test_api(window_manager()).GetBnplContext()->initial_url,
+            GURL(kBnplInitialUrl));
+
+  // Initialize a second flow while the first flow's state is still present.
+  PaymentsWindowManager::BnplContext second_context;
+  second_context.issuer_id = BnplIssuer::IssuerId::kBnplZip;
+  second_context.initial_url = GURL("https://www.zipinitialurl.com/");
+  window_manager().InitBnplFlow(std::move(second_context));
+
+  // Verify that the second flow context cleanly replaced the first flow
+  // context.
+  EXPECT_FALSE(test_api(window_manager()).NoOngoingFlow());
+  ASSERT_TRUE(test_api(window_manager()).GetBnplContext().has_value());
+  EXPECT_EQ(test_api(window_manager()).GetBnplContext()->initial_url,
+            GURL("https://www.zipinitialurl.com/"));
 }
 
 // Test that OnWebContentsObservationStarted disables payments autofill.
@@ -374,6 +404,26 @@ TEST_F(
   const GURL late_redirect_url("https://www.example.com/late-redirect");
   window_manager().OnDidFinishNavigationForBnpl(late_redirect_url);
 
+  EXPECT_TRUE(test_api(window_manager()).NoOngoingFlow());
+}
+
+// Test that when the user denies tab opening, the flow is cancelled and metrics
+// are logged.
+TEST_F(AndroidPaymentsWindowManagerTest, OnUserDeniedTabOpening) {
+  InitBnplFlowForTest();
+
+  EXPECT_CALL(bnpl_tab_closed_callback_,
+              Run(PaymentsWindowManager::BnplFlowResult::kFailure, GURL()));
+
+  // Simulate user denial.
+  window_manager().OnUserDeniedTabOpening();
+
+  // Verify metrics and state reset.
+  histogram_tester_.ExpectUniqueSample(
+      "Autofill.Bnpl.PopupWindowResult.Affirm",
+      PaymentsWindowManager::BnplFlowResult::kFailure, 1);
+  histogram_tester_.ExpectTotalCount(
+      "Autofill.Bnpl.PopupWindowLatency.Affirm.Failure", 0);
   EXPECT_TRUE(test_api(window_manager()).NoOngoingFlow());
 }
 

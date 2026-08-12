@@ -25,6 +25,7 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -35,6 +36,9 @@ namespace content_settings {
 namespace {
 constexpr char kGeolocationMigrateDefaultValue[] =
     "profile.default_content_setting_values.migrate_geolocation";
+
+constexpr char kLocalNetworkAccessMigrateDefaultValuePref[] =
+    "profile.default_content_setting_values.has_migrated_local_network_access";
 }
 
 class ContentSettingsDefaultProviderTest : public testing::Test {
@@ -177,7 +181,7 @@ TEST_F(ContentSettingsDefaultProviderTest, ObservePref) {
 }
 
 // Tests that fullscreen, obsolete NFC (with the old semantics, see
-// crbug.com/1275576), and obsolete content settings (plugins, mouselock,
+// crbug.com/40808369), and obsolete content settings (plugins, mouselock,
 // installed web app metadata) are cleared.
 TEST_F(ContentSettingsDefaultProviderTest, DiscardObsoletePreferences) {
   static const char kNfcPrefPath[] =
@@ -346,6 +350,33 @@ TEST_F(ContentSettingsDefaultProviderTest,
       TestUtils::GetContentSetting(&provider, GURL(), GURL(),
                                    ContentSettingsType::GEOLOCATION, false));
   EXPECT_FALSE(prefs->GetBoolean(kGeolocationMigrateDefaultValue));
+}
+
+TEST_F(ContentSettingsDefaultProviderTest,
+       MigrateLocalNetworkAccessDisabledToEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{network::features::kLocalNetworkAccessChecks},
+      /*disabled_features=*/{});
+  auto* prefs = profile_.GetPrefs();
+  prefs->SetBoolean(kLocalNetworkAccessMigrateDefaultValuePref, false);
+  prefs->SetInteger(
+      "profile.default_content_setting_values.local_network_access",
+      CONTENT_SETTING_BLOCK);
+
+  DefaultProvider provider(prefs, false, false);
+
+  // Migrate LOCAL_NETWORK default.
+  EXPECT_EQ(
+      CONTENT_SETTING_BLOCK,
+      TestUtils::GetContentSetting(&provider, GURL(), GURL(),
+                                   ContentSettingsType::LOCAL_NETWORK, false));
+  // Don't migrate LOOPBACK_NETWORK default.
+  EXPECT_EQ(CONTENT_SETTING_ASK,
+            TestUtils::GetContentSetting(&provider, GURL(), GURL(),
+                                         ContentSettingsType::LOOPBACK_NETWORK,
+                                         false));
+  EXPECT_TRUE(prefs->GetBoolean(kLocalNetworkAccessMigrateDefaultValuePref));
 }
 
 }  // namespace content_settings

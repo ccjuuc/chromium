@@ -115,10 +115,6 @@ bool TextTrack::IsVisualKind() const {
          kind() == V8TextTrackKind::Enum::kCaptions;
 }
 
-bool TextTrack::IsSpokenKind() const {
-  return kind() == V8TextTrackKind::Enum::kDescriptions;
-}
-
 void TextTrack::setMode(const V8TextTrackMode& mode) {
   // On setting, if the new value isn't equal to what the attribute would
   // currently return, the new value must be processed as follows ...
@@ -197,14 +193,17 @@ TextTrackCueList* TextTrack::activeCues() {
   // order. Otherwise, it must return null. When an object is returned, the same
   // object must be returned each time.
   // http://www.whatwg.org/specs/web-apps/current-work/#dom-texttrack-activecues
-  if (!cues_ || mode_ == TextTrackMode::kDisabled)
+  if (mode_ == TextTrackMode::kDisabled) {
     return nullptr;
+  }
 
   if (!active_cues_) {
     active_cues_ = MakeGarbageCollected<TextTrackCueList>();
   }
 
-  cues_->CollectActiveCues(*active_cues_);
+  if (cues_) {
+    cues_->CollectActiveCues(*active_cues_);
+  }
   return active_cues_.Get();
 }
 
@@ -323,20 +322,12 @@ void TextTrack::InvalidateTrackIndex() {
 }
 
 bool TextTrack::IsRendered() const {
-  if (features::IsTextBasedAudioDescriptionEnabled()) {
-    return mode_ == TextTrackMode::kShowing &&
-           (IsVisualKind() || IsSpokenKind());
-  }
   return mode_ == TextTrackMode::kShowing && IsVisualKind();
 }
 
 bool TextTrack::CanBeRendered() const {
   // A track can be displayed when it's of kind captions, subtitles, or
   // descriptions and hasn't failed to load.
-  if (features::IsTextBasedAudioDescriptionEnabled()) {
-    return GetReadinessState() != kFailedToLoad &&
-           (IsVisualKind() || IsSpokenKind());
-  }
   return GetReadinessState() != kFailedToLoad && IsVisualKind();
 }
 
@@ -351,9 +342,10 @@ TextTrackCueList* TextTrack::EnsureTextTrackCueList() {
 int TextTrack::TrackIndexRelativeToRenderedTracks() {
   DCHECK(track_list_);
 
-  if (rendered_track_index_ == kInvalidTrackIndex)
+  if (rendered_track_index_ == kInvalidTrackIndex) {
     rendered_track_index_ =
         track_list_->GetTrackIndexRelativeToRenderedTracks(this);
+  }
 
   return rendered_track_index_;
 }

@@ -18,6 +18,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/timer/wall_clock_timer.h"
 #include "components/sync/base/sync_mode.h"
 #include "components/sync/model/data_type_store.h"
 #include "components/sync/model/data_type_sync_bridge.h"
@@ -32,7 +33,6 @@ class SequencedTaskRunner;
 
 namespace sync_pb {
 class DeviceInfoSpecifics;
-enum SyncEnums_DeviceType : int;
 }  // namespace sync_pb
 
 namespace syncer {
@@ -81,7 +81,6 @@ class DeviceInfoSyncBridge : public DataTypeSyncBridge,
 
   // DataTypeSyncBridge implementation.
   void OnSyncStarting(const DataTypeActivationRequest& request) override;
-  std::unique_ptr<MetadataChangeList> CreateMetadataChangeList() override;
   std::optional<ModelError> MergeFullSyncData(
       std::unique_ptr<MetadataChangeList> metadata_change_list,
       EntityChangeList entity_data) override;
@@ -93,6 +92,8 @@ class DeviceInfoSyncBridge : public DataTypeSyncBridge,
   std::unique_ptr<DataBatch> GetAllDataForDebugging() override;
   std::string GetClientTag(const EntityData& entity_data) const override;
   std::string GetStorageKey(const EntityData& entity_data) const override;
+  sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
+      const sync_pb::EntitySpecifics& entity_specifics) const override;
   bool IsEntityDataValid(const EntityData& entity_data) const override;
   void ApplyDisableSyncChanges(
       std::unique_ptr<MetadataChangeList> delete_metadata_change_list) override;
@@ -216,6 +217,8 @@ class DeviceInfoSyncBridge : public DataTypeSyncBridge,
 
   // Used to update our local device info once every pulse interval.
   base::OneShotTimer pulse_timer_ GUARDED_BY_CONTEXT(sequence_checker_);
+  base::WallClockTimer wall_clock_pulse_timer_
+      GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Callback that's set by ForcePulseForTest() to run after `pulse_timer_`
   // fires. This lets the test wait until the pulse finishes.
@@ -238,6 +241,9 @@ class DeviceInfoSyncBridge : public DataTypeSyncBridge,
 
   base::WeakPtrFactory<DeviceInfoSyncBridge> weak_ptr_factory_{this};
 };
+
+std::string DeriveAndroidBuildFingerprintPrefixForTesting(
+    const std::string& fingerprint);
 
 }  // namespace syncer
 

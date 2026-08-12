@@ -20,12 +20,16 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.LazyOneshotSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.chrome.browser.ui.actions.button.DisplayButtonData;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler.BackPressResult;
 
 /** Tests for {@link PaneBackStackHandler}. */
@@ -38,19 +42,18 @@ public class PaneBackStackHandlerUnitTest {
     @Mock private Pane mBookmarksPane;
     @Mock private DisplayButtonData mReferenceButtonData;
 
-    private final ObservableSupplierImpl<DisplayButtonData> mEmptyReferenceButtonDataSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<DisplayButtonData> mReferenceButtonDataSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<Boolean> mHubVisibilitySupplier =
-            new ObservableSupplierImpl<>();
+    private final MonotonicObservableSupplier<DisplayButtonData> mEmptyReferenceButtonDataSupplier =
+            ObservableSuppliers.alwaysNull();
+    private SettableMonotonicObservableSupplier<DisplayButtonData> mReferenceButtonDataSupplier;
+    private final SettableNonNullObservableSupplier<Boolean> mHubVisibilitySupplier =
+            ObservableSuppliers.createNonNull(false);
 
     private PaneManager mPaneManager;
     private PaneBackStackHandler mBackStackHandler;
 
     @Before
     public void setUp() {
-        mReferenceButtonDataSupplier.set(mReferenceButtonData);
+        mReferenceButtonDataSupplier = ObservableSuppliers.createMonotonic(mReferenceButtonData);
         when(mTabSwitcherPane.getPaneId()).thenReturn(PaneId.TAB_SWITCHER);
         when(mTabSwitcherPane.getReferenceButtonDataSupplier())
                 .thenReturn(mReferenceButtonDataSupplier);
@@ -88,7 +91,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testReset() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
@@ -124,7 +127,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testBackStack() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
@@ -156,7 +159,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testRepeatedlyFocusSamePane() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
@@ -189,7 +192,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testDeduplicatedOldEntries() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
@@ -218,7 +221,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testSkipOnFailToFocus() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
         // Mock focusing each of three panes.
@@ -269,7 +272,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testCompletelyFailToFocus() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
         // Mock focusing on tab switcher and bookmarks.
@@ -305,7 +308,7 @@ public class PaneBackStackHandlerUnitTest {
     public void testBackStackIsIgnoredByEscape() {
         mBackStackHandler = new PaneBackStackHandler(mPaneManager);
         assertTrue(hasObservers(mPaneManager.getFocusedPaneSupplier()));
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mBackStackHandler.getHandleBackPressChangedSupplier().get());
 
@@ -328,7 +331,7 @@ public class PaneBackStackHandlerUnitTest {
         assertEquals(mIncognitoTabSwitcherPane, mPaneManager.getFocusedPaneSupplier().get());
     }
 
-    private boolean hasObservers(ObservableSupplier<Pane> paneSupplier) {
-        return ((ObservableSupplierImpl<Pane>) paneSupplier).hasObservers();
+    private boolean hasObservers(NullableObservableSupplier<Pane> paneSupplier) {
+        return paneSupplier.hasObservers();
     }
 }

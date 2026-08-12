@@ -4,10 +4,11 @@
 
 #include "third_party/blink/renderer/platform/graphics/paint/effect_paint_property_node.h"
 
+#include "base/memory/values_equivalent.h"
 #include "third_party/blink/renderer/platform/graphics/paint/clip_paint_property_node.h"
 #include "third_party/blink/renderer/platform/graphics/paint/property_tree_state.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -21,6 +22,9 @@ PaintPropertyChangeType ComputeFilterChange(
     return PaintPropertyChangeType::kUnchanged;
   }
   if (!a || !b || a->output_bounds != b->output_bounds) {
+    return PaintPropertyChangeType::kChangedOnlyValues;
+  }
+  if (a->operations.OriginTainted() != b->operations.OriginTainted()) {
     return PaintPropertyChangeType::kChangedOnlyValues;
   }
   if (a->operations != b->operations) {
@@ -59,8 +63,14 @@ PaintPropertyChangeType EffectPaintPropertyNode::State::ComputeChange(
       compositor_element_id != other.compositor_element_id ||
       view_transition_element_resource_id !=
           other.view_transition_element_resource_id ||
+      restriction_target_id != other.restriction_target_id ||
+      !base::ValuesEquivalent(canvas_child_state, other.canvas_child_state) ||
       self_or_ancestor_participates_in_view_transition !=
-          other.self_or_ancestor_participates_in_view_transition) {
+          other.self_or_ancestor_participates_in_view_transition ||
+      needs_effect_for_2d_scale_transform !=
+          other.needs_effect_for_2d_scale_transform ||
+      is_in_tainted_subtree != other.is_in_tainted_subtree ||
+      is_in_canvas_subtree != other.is_in_canvas_subtree) {
     return PaintPropertyChangeType::kChangedOnlyValues;
   }
   bool opacity_changed = opacity != other.opacity;
@@ -106,15 +116,21 @@ bool EffectPaintPropertyNode::State::IsOpacityChangeSimple(
     CompositingReasons new_direct_compositing_reasons) {
   bool opacity_changed = opacity != new_opacity;
   return opacity_changed && ((opacity != 1.f && new_opacity != 1.f) ||
-                             ((direct_compositing_reasons &
-                               CompositingReason::kActiveOpacityAnimation) &&
-                              (new_direct_compositing_reasons &
-                               CompositingReason::kActiveOpacityAnimation)));
+                             (direct_compositing_reasons.Has(
+                                  CompositingReason::kActiveOpacityAnimation) &&
+                              new_direct_compositing_reasons.Has(
+                                  CompositingReason::kActiveOpacityAnimation)));
 }
 
 void EffectPaintPropertyNode::State::Trace(Visitor* visitor) const {
   visitor->Trace(local_transform_space);
   visitor->Trace(output_clip);
+  visitor->Trace(canvas_child_state);
+}
+
+void EffectPaintPropertyNode::CanvasChildState::Trace(Visitor* visitor) const {
+  visitor->Trace(content_effect);
+  visitor->Trace(content_clip);
 }
 
 EffectPaintPropertyNode::EffectPaintPropertyNode(RootTag)
@@ -219,11 +235,23 @@ gfx::Rect EffectPaintPropertyNode::MapRect(const gfx::Rect& input_rect) const {
   return state_.filter_info->operations.MapRect(input_rect);
 }
 
+const EffectPaintPropertyNode&
+EffectPaintPropertyNode::CanvasChildContentEffect() const {
+  CHECK(HasCanvasChildState());
+  return state_.canvas_child_state->content_effect->Unalias();
+}
+
+const ClipPaintPropertyNode& EffectPaintPropertyNode::CanvasChildContentClip()
+    const {
+  CHECK(HasCanvasChildState());
+  return state_.canvas_child_state->content_clip->Unalias();
+}
+
 std::unique_ptr<JSONObject> EffectPaintPropertyNode::ToJSON() const {
   auto json = EffectPaintPropertyNodeOrAlias::ToJSON();
   json->SetString("localTransformSpace",
-                  String::Format("%p", state_.local_transform_space.Get()));
-  json->SetString("outputClip", String::Format("%p", state_.output_clip.Get()));
+                  Format("{}", state_.local_transform_space.Get()));
+  json->SetString("outputClip", Format("{}", state_.output_clip.Get()));
   if (state_.filter_info) {
     json->SetString("filter", state_.filter_info->operations.ToString());
   }
@@ -233,14 +261,16 @@ std::unique_ptr<JSONObject> EffectPaintPropertyNode::ToJSON() const {
     json->SetDouble("opacity", state_.opacity);
   if (state_.blend_mode != SkBlendMode::kSrcOver)
     json->SetString("blendMode", SkBlendMode_Name(state_.blend_mode));
-  if (state_.direct_compositing_reasons != CompositingReason::kNone) {
-    json->SetString(
-        "directCompositingReasons",
-        CompositingReason::ToString(state_.direct_compositing_reasons));
+  if (!state_.direct_compositing_reasons.empty()) {
+    json->SetString("directCompositingReasons",
+                    blink::ToString(state_.direct_compositing_reasons));
   }
   if (state_.compositor_element_id) {
     json->SetString("compositorElementId",
                     state_.compositor_element_id.ToString().c_str());
+  }
+  if (state_.is_in_canvas_subtree) {
+    json->SetBoolean("is_in_canvas_subtree", true);
   }
   return json;
 }

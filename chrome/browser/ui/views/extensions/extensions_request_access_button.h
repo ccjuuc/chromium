@@ -8,10 +8,19 @@
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/extensions_container.h"
+#include "chrome/browser/ui/extensions/extensions_toolbar_view_model.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_chip_button.h"
 #include "extensions/common/extension_id.h"
+#include "ui/views/input_event_activation_protector.h"
+#include "ui/views/view_observer.h"
+
+namespace ui {
+class Event;
+}  // namespace ui
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "url/origin.h"
 
@@ -19,27 +28,28 @@ namespace content {
 class WebContents;
 }  // namespace content
 
-class Browser;
 class ExtensionsContainerViews;
 class ExtensionsRequestAccessHoverCardCoordinator;
 
 // Button in the toolbar bar that displays the extensions that requests
 // access, and are allowed to do so, and grants them access.
-class ExtensionsRequestAccessButton : public ToolbarChipButton,
-                                      public TabStripModelObserver {
+class ExtensionsRequestAccessButton : public ToolbarChipButton {
   METADATA_HEADER(ExtensionsRequestAccessButton, ToolbarChipButton)
 
  public:
   explicit ExtensionsRequestAccessButton(
-      Browser* browser,
-      ExtensionsContainerViews* extensions_container);
+      BrowserWindowInterface* browser,
+      ExtensionsToolbarViewModel* extensions_toolbar_view_model,
+      ExtensionsContainerViews* extensions_container_views);
   ExtensionsRequestAccessButton(const ExtensionsRequestAccessButton&) = delete;
   const ExtensionsRequestAccessButton& operator=(
       const ExtensionsRequestAccessButton&) = delete;
   ~ExtensionsRequestAccessButton() override;
 
-  // Updates the button visibility and content given `extension_ids`.
-  void Update(std::vector<extensions::ExtensionId>& extension_ids);
+  // Updates the button visibility and content given
+  // `request_access_button_params`.
+  void Update(const ExtensionsToolbarViewModel::RequestAccessButtonParams&
+                  request_access_button_params);
 
   // Displays the button's hover card, if possible.
   void MaybeShowHoverCard();
@@ -59,15 +69,6 @@ class ExtensionsRequestAccessButton : public ToolbarChipButton,
   // ToolbarButton:
   bool ShouldShowInkdropAfterIphInteraction() override;
 
-  // TabStripModelObserver:
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
-  void OnTabChangedAt(tabs::TabInterface* tab,
-                      int index,
-                      TabChangeType change_type) override;
-
   // Accessors used by tests:
   std::vector<extensions::ExtensionId> GetExtensionIdsForTesting() {
     return extension_ids_;
@@ -81,16 +82,21 @@ class ExtensionsRequestAccessButton : public ToolbarChipButton,
   }
 
  private:
-  void UpdateTooltipText();
-
   // Grants one-time site access to `extension_ids` and shows a confirmation
   // message on the button.
-  void OnButtonPressed();
+  void OnButtonPressed(const ui::Event& event);
 
   content::WebContents* GetActiveWebContents() const;
 
-  raw_ptr<Browser> browser_;
-  raw_ptr<ExtensionsContainerViews> extensions_container_;
+  // views::View:
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override;
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  void AddedToWidget() override;
+  void RemovedFromWidget() override;
+
+  raw_ptr<BrowserWindowInterface> browser_;
+  raw_ptr<ExtensionsToolbarViewModel> extensions_toolbar_view_model_;
+  raw_ptr<ExtensionsContainerViews> extensions_container_views_;
 
   std::unique_ptr<ExtensionsRequestAccessHoverCardCoordinator>
       hover_card_coordinator_;
@@ -107,6 +113,29 @@ class ExtensionsRequestAccessButton : public ToolbarChipButton,
 
   // Flag to not show confirmation message in tests.
   bool remove_confirmation_for_testing_{false};
+
+  std::unique_ptr<views::InputEventActivationProtector> input_protector_;
+
+  class SiblingObserver : public views::ViewObserver {
+   public:
+    explicit SiblingObserver(ExtensionsRequestAccessButton* button);
+    ~SiblingObserver() override;
+
+    // views::ViewObserver:
+    void OnViewBoundsChanged(views::View* observed_view) override;
+    void OnViewIsDeleting(views::View* observed_view) override;
+
+   private:
+    raw_ptr<ExtensionsRequestAccessButton> button_;
+  };
+
+  void OnSiblingDeleting();
+
+  SiblingObserver sibling_observer_{this};
+  base::ScopedObservation<views::View, views::ViewObserver>
+      sibling_observation_{&sibling_observer_};
+
+  void UpdateClipPath(views::View* extensions_button);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_REQUEST_ACCESS_BUTTON_H_

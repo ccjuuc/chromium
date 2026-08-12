@@ -169,29 +169,30 @@ TEST_F(PagePrintRequestHandlerTest, Test) {
   base::RunLoop run_loop;
   auto validator = helper_->CreateValidator();
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEvent(
-      /*url*/
-      kUrl,
-      /*tab_url*/ kTabUrl,
-      /*source*/ "",
-      /*destination*/ "printer_name",
-      /*filename*/ "tab_title",
-      /*sha*/ "",
-      /*trigger*/ "PAGE_PRINT",
-      /*dlp_verdict*/
-      CreateResult(ContentAnalysisResponse::Result::TriggeredRule::BLOCK),
-      /*mimetype*/
-      []() {
-        static std::set<std::string> set = {""};
-        return &set;
-      }(),
-      /*size*/ std::nullopt,
-      /*result*/ EventResultToString(EventResult::BLOCKED),
-      /*username*/ "test-user@chromium.org",
-      /*profile_identifier*/ profile_->GetPath().AsUTF8Unsafe(),
-      /*scan_id*/ "",
-      /*content_transfer_method*/ std::nullopt,
-      /*user_justification*/ std::nullopt);
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_url(kUrl);
+  expected_event.set_tab_url(kTabUrl);
+  expected_event.set_source("");
+  expected_event.set_destination("printer_name");
+  expected_event.set_content_type("");
+  expected_event.set_file_name("tab_title");
+
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
+
+  chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_name("print_rule_name");
+  triggered_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(profile_->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name("test-user@chromium.org");
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   EXPECT_TRUE(handler->UploadData());
   run_loop.Run();
@@ -206,29 +207,33 @@ TEST_F(PagePrintRequestHandlerTest, Test) {
   base::RunLoop run_loop_bypass;
   auto validator_bypass = helper_->CreateValidator();
   validator_bypass.SetDoneClosure(run_loop_bypass.QuitClosure());
-  validator_bypass.ExpectSensitiveDataEvent(
-      /*url*/
-      kUrl,
-      /*tab_url*/ kTabUrl,
-      /*source*/ "",
-      /*destination*/ "printer_name",
-      /*filename*/ "tab_title",
-      /*sha*/ "",
-      /*trigger*/ "PAGE_PRINT",
-      /*dlp_verdict*/
-      CreateResult(ContentAnalysisResponse::Result::TriggeredRule::BLOCK),
-      /*mimetype*/
-      []() {
-        static std::set<std::string> set = {""};
-        return &set;
-      }(),
-      /*size*/ std::nullopt,
-      /*result*/ EventResultToString(EventResult::BYPASSED),
-      /*username*/ "test-user@chromium.org",
-      /*profile_identifier*/ profile_->GetPath().AsUTF8Unsafe(),
-      /*scan_id*/ "",
-      /*content_transfer_method*/ std::nullopt,
-      /*user_justification*/ kJustification);
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_bypass_event;
+  expected_bypass_event.set_url(kUrl);
+  expected_bypass_event.set_tab_url(kTabUrl);
+  expected_bypass_event.set_source("");
+  expected_bypass_event.set_destination("printer_name");
+  expected_bypass_event.set_content_type("");
+  expected_bypass_event.set_file_name("tab_title");
+
+  expected_bypass_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_bypass_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BYPASSED);
+  expected_bypass_event.set_clicked_through(true);
+  expected_bypass_event.set_user_justification("justification");
+
+  chrome::cros::reporting::proto::TriggeredRuleInfo expected_bypass_rule;
+  expected_bypass_rule.set_rule_name("print_rule_name");
+  expected_bypass_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+
+  *expected_bypass_event.add_triggered_rule_info() = expected_bypass_rule;
+  expected_bypass_event.set_profile_identifier(
+      profile_->GetPath().AsUTF8Unsafe());
+  expected_bypass_event.set_profile_user_name("test-user@chromium.org");
+
+  validator_bypass.ExpectSensitiveDataEvent(std::move(expected_bypass_event));
   handler->ReportWarningBypass(kJustification);
   run_loop_bypass.Run();
 }
@@ -256,29 +261,30 @@ TEST_F(PagePrintRequestHandlerTest, TestNewLimit) {
   base::RunLoop run_loop;
   auto validator = helper_->CreateValidator();
   validator.SetDoneClosure(run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEvent(
-      /*url*/
-      kUrl,
-      /*tab_url*/ kTabUrl,
-      /*source*/ "",
-      /*destination*/ "printer_name",
-      /*filename*/ "tab_title",
-      /*sha*/ "",
-      /*trigger*/ "PAGE_PRINT",
-      /*dlp_verdict*/
-      CreateResult(ContentAnalysisResponse::Result::TriggeredRule::BLOCK),
-      /*mimetype*/
-      []() {
-        static std::set<std::string> set = {""};
-        return &set;
-      }(),
-      /*size*/ std::nullopt,
-      /*result*/ EventResultToString(EventResult::BLOCKED),
-      /*username*/ "test-user@chromium.org",
-      /*profile_identifier*/ profile_->GetPath().AsUTF8Unsafe(),
-      /*scan_id*/ "",
-      /*content_transfer_method*/ std::nullopt,
-      /*user_justification*/ std::nullopt);
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_url(kUrl);
+  expected_event.set_tab_url(kTabUrl);
+  expected_event.set_source("");
+  expected_event.set_destination("printer_name");
+  expected_event.set_content_type("");
+  expected_event.set_file_name("tab_title");
+
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
+
+  chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_name("print_rule_name");
+  triggered_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(profile_->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name("test-user@chromium.org");
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   EXPECT_TRUE(handler->UploadData());
   run_loop.Run();
@@ -293,31 +299,74 @@ TEST_F(PagePrintRequestHandlerTest, TestNewLimit) {
   base::RunLoop run_loop_bypass;
   auto validator_bypass = helper_->CreateValidator();
   validator_bypass.SetDoneClosure(run_loop_bypass.QuitClosure());
-  validator_bypass.ExpectSensitiveDataEvent(
-      /*url*/
-      kUrl,
-      /*tab_url*/ kTabUrl,
-      /*source*/ "",
-      /*destination*/ "printer_name",
-      /*filename*/ "tab_title",
-      /*sha*/ "",
-      /*trigger*/ "PAGE_PRINT",
-      /*dlp_verdict*/
-      CreateResult(ContentAnalysisResponse::Result::TriggeredRule::BLOCK),
-      /*mimetype*/
-      []() {
-        static std::set<std::string> set = {""};
-        return &set;
-      }(),
-      /*size*/ std::nullopt,
-      /*result*/ EventResultToString(EventResult::BYPASSED),
-      /*username*/ "test-user@chromium.org",
-      /*profile_identifier*/ profile_->GetPath().AsUTF8Unsafe(),
-      /*scan_id*/ "",
-      /*content_transfer_method*/ std::nullopt,
-      /*user_justification*/ kJustification);
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_bypass_event;
+  expected_bypass_event.set_url(kUrl);
+  expected_bypass_event.set_tab_url(kTabUrl);
+  expected_bypass_event.set_source("");
+  expected_bypass_event.set_destination("printer_name");
+  expected_bypass_event.set_content_type("");
+  expected_bypass_event.set_file_name("tab_title");
+
+  expected_bypass_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_bypass_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BYPASSED);
+  expected_bypass_event.set_clicked_through(true);
+  expected_bypass_event.set_user_justification("justification");
+
+  chrome::cros::reporting::proto::TriggeredRuleInfo expected_bypass_rule;
+  expected_bypass_rule.set_rule_name("print_rule_name");
+  expected_bypass_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+
+  *expected_bypass_event.add_triggered_rule_info() = expected_bypass_rule;
+  expected_bypass_event.set_profile_identifier(
+      profile_->GetPath().AsUTF8Unsafe());
+  expected_bypass_event.set_profile_user_name("test-user@chromium.org");
+
+  validator_bypass.ExpectSensitiveDataEvent(std::move(expected_bypass_event));
   handler->ReportWarningBypass(kJustification);
   run_loop_bypass.Run();
+}
+
+TEST_F(PagePrintRequestHandlerTest, CancelledByUser) {
+  binary_upload_service_.SetResponse(ScanRequestUploadResult::kUserCancelled,
+                                     ContentAnalysisResponse());
+
+  auto page = CreatePageRegion(kMaxSize);
+  auto handler = PagePrintRequestHandler::Create(
+      &info_, &binary_upload_service_, profile_.get(), GURL(kUrl),
+      "printer_name", "page_content_type", std::move(page.region),
+      base::BindOnce([](RequestHandlerResult result) {
+        EXPECT_EQ(result.final_result, FinalContentAnalysisResult::CANCELLED);
+        EXPECT_EQ(result.complies, false);
+      }));
+
+  base::RunLoop run_loop;
+  auto validator = helper_->CreateValidator();
+  validator.SetDoneClosure(run_loop.QuitClosure());
+
+  chrome::cros::reporting::proto::UnscannedFileEvent expected_event;
+  expected_event.set_url(kUrl);
+  expected_event.set_tab_url(kTabUrl);
+  expected_event.set_source("");
+  expected_event.set_destination("printer_name");
+  expected_event.set_content_type("");
+  expected_event.set_file_name("tab_title");
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(chrome::cros::reporting::proto::EventResult::
+                                      EVENT_RESULT_CANCELLED_BY_USER);
+  expected_event.set_unscanned_reason(
+      chrome::cros::reporting::proto::UnscannedFileEvent::USER_CANCELLED);
+  expected_event.set_profile_identifier(profile_->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name("test-user@chromium.org");
+
+  validator.ExpectUnscannedFileEvent(std::move(expected_event));
+
+  EXPECT_TRUE(handler->UploadData());
+  run_loop.Run();
 }
 
 }  // namespace enterprise_connectors

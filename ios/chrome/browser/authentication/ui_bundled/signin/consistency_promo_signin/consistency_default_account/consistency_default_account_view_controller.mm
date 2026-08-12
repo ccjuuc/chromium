@@ -188,20 +188,14 @@ UIFont* GetNavigationBarTitleFont() {
   [scrollView addSubview:self.contentView];
   UILayoutGuide* contentLayoutGuide = scrollView.contentLayoutGuide;
   UILayoutGuide* frameLayoutGuide = scrollView.safeAreaLayoutGuide;
-  [NSLayoutConstraint activateConstraints:@[
-    [contentLayoutGuide.topAnchor
-        constraintEqualToAnchor:self.contentView.topAnchor
-                       constant:-kContentMargin],
-    [contentLayoutGuide.bottomAnchor
-        constraintEqualToAnchor:self.contentView.bottomAnchor
-                       constant:kContentMargin],
-    [frameLayoutGuide.leadingAnchor
-        constraintEqualToAnchor:self.contentView.leadingAnchor
-                       constant:-kContentMargin],
-    [frameLayoutGuide.trailingAnchor
-        constraintEqualToAnchor:self.contentView.trailingAnchor
-                       constant:kContentMargin],
-  ]];
+  AddSameConstraintsToSidesWithInsets(
+      self.contentView, contentLayoutGuide,
+      LayoutSides::kTop | LayoutSides::kBottom,
+      NSDirectionalEdgeInsets{kContentMargin, 0, kContentMargin, 0});
+  AddSameConstraintsToSidesWithInsets(
+      self.contentView, frameLayoutGuide,
+      LayoutSides::kLeading | LayoutSides::kTrailing,
+      NSDirectionalEdgeInsets{0, kContentMargin, 0, kContentMargin});
 
   // Add the label.
   if (self.labelText) {
@@ -334,8 +328,15 @@ UIFont* GetNavigationBarTitleFont() {
     // Load the view.
     [self view];
   }
+  NSString* nameOrEmail = givenName;
+  if (!nameOrEmail) {
+    nameOrEmail = fullName;
+  }
+  if (!nameOrEmail) {
+    nameOrEmail = email;
+  }
   self.continueAsTitle = l10n_util::GetNSStringF(
-      IDS_IOS_SIGNIN_PROMO_CONTINUE_AS, base::SysNSStringToUTF16(givenName));
+      IDS_IOS_SIGNIN_PROMO_CONTINUE_AS, base::SysNSStringToUTF16(nameOrEmail));
 
   [self.identityButtonControl setIdentityName:fullName
                                         email:email

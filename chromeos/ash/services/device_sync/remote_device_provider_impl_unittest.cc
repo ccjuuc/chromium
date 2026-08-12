@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -73,17 +72,18 @@ multidevice::RemoteDevice CreateRemoteDeviceForTest(const std::string& suffix,
 //   2. "" /* instance_id */ , "publicKey-2"
 //   3. "" /* instance_id */ , "publicKey-v1-only"
 const multidevice::RemoteDeviceList& GetV1RemoteDevices() {
-  static const multidevice::RemoteDeviceList devices{
-      CreateRemoteDeviceForTest("0", false /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("1", false /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("2", false /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("v1-only", false /* has_instance_id */,
-                                true /* has_public_key */),
-  };
-  return devices;
+  static const base::NoDestructor<multidevice::RemoteDeviceList> devices(
+      multidevice::RemoteDeviceList{
+          CreateRemoteDeviceForTest("0", false /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("1", false /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("2", false /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("v1-only", false /* has_instance_id */,
+                                    true /* has_public_key */),
+      });
+  return *devices;
 }
 
 // Provide five fake RemoteDevices associated with a v2 DeviceSync. These
@@ -94,20 +94,21 @@ const multidevice::RemoteDeviceList& GetV1RemoteDevices() {
 //   3. "instanceId-v2-only", "publicKey-v2-only"
 //   4. "instanceId-v2-only_no-public-key", "" /* public_key */
 const multidevice::RemoteDeviceList& GetV2RemoteDevices() {
-  static const multidevice::RemoteDeviceList devices{
-      CreateRemoteDeviceForTest("0", true /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("1", true /* has_instance_id */,
-                                false /* has_public_key */),
-      CreateRemoteDeviceForTest("2", true /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("v2-only", true /* has_instance_id */,
-                                true /* has_public_key */),
-      CreateRemoteDeviceForTest("v2-only_no-public-key",
-                                true /* has_instance_id */,
-                                false /* has_public_key */),
-  };
-  return devices;
+  static const base::NoDestructor<multidevice::RemoteDeviceList> devices(
+      multidevice::RemoteDeviceList{
+          CreateRemoteDeviceForTest("0", true /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("1", true /* has_instance_id */,
+                                    false /* has_public_key */),
+          CreateRemoteDeviceForTest("2", true /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("v2-only", true /* has_instance_id */,
+                                    true /* has_public_key */),
+          CreateRemoteDeviceForTest("v2-only_no-public-key",
+                                    true /* has_instance_id */,
+                                    false /* has_public_key */),
+      });
+  return *devices;
 }
 
 CryptAuthDevice ConvertRemoteDeviceToCryptAuthDevice(
@@ -248,8 +249,9 @@ class DeviceSyncRemoteDeviceProviderImplTest : public ::testing::Test {
   // |num_devices| of GetV2RemoteDevices().
   void SetV2ManagerDevices(size_t num_devices) {
     DCHECK_EQ(5u, GetV2RemoteDevices().size());
-    static const CryptAuthDeviceRegistry::InstanceIdToDeviceMap
-        cryptauth_devices{
+    static const base::NoDestructor<
+        CryptAuthDeviceRegistry::InstanceIdToDeviceMap>
+        cryptauth_devices(CryptAuthDeviceRegistry::InstanceIdToDeviceMap{
             {GetV2RemoteDevices()[0].instance_id,
              ConvertRemoteDeviceToCryptAuthDevice(GetV2RemoteDevices()[0])},
             {GetV2RemoteDevices()[1].instance_id,
@@ -260,18 +262,18 @@ class DeviceSyncRemoteDeviceProviderImplTest : public ::testing::Test {
              ConvertRemoteDeviceToCryptAuthDevice(GetV2RemoteDevices()[3])},
             {GetV2RemoteDevices()[4].instance_id,
              ConvertRemoteDeviceToCryptAuthDevice(GetV2RemoteDevices()[4])},
-        };
+        });
 
     if (num_devices == 0) {
       fake_v2_device_manager_->synced_devices().clear();
       return;
     }
 
-    DCHECK_LE(num_devices, cryptauth_devices.size());
+    DCHECK_LE(num_devices, cryptauth_devices->size());
     fake_v2_device_manager_->synced_devices() =
         CryptAuthDeviceRegistry::InstanceIdToDeviceMap(
-            cryptauth_devices.cbegin(),
-            cryptauth_devices.cbegin() + num_devices);
+            cryptauth_devices->cbegin(),
+            cryptauth_devices->cbegin() + num_devices);
   }
 
   void CreateRemoteDeviceProvider() {
@@ -316,8 +318,7 @@ class DeviceSyncRemoteDeviceProviderImplTest : public ::testing::Test {
     multidevice::RemoteDeviceList loaded_remote_devices;
     for (const multidevice::RemoteDevice& remote_device :
          GetV2RemoteDevices()) {
-      if (base::Contains(*loader->id_to_device_map(),
-                         remote_device.instance_id)) {
+      if (loader->id_to_device_map()->contains(remote_device.instance_id)) {
         loaded_remote_devices.push_back(remote_device);
       }
     }

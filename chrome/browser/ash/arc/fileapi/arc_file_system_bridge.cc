@@ -14,7 +14,7 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/escape.h"
 #include "base/system/sys_info.h"
@@ -66,12 +66,6 @@ namespace {
 // number is randomly chosen not to block usual user flows.
 constexpr size_t kMaxNumberOfSharedMonikers = 1024;
 
-// Returns true if it's OK to allow ARC apps to read the given URL.
-bool IsUrlAllowed(const GURL& url) {
-  // Currently, only externalfile URLs are allowed.
-  return url.SchemeIs(content::kExternalFileScheme);
-}
-
 // Returns true if this is a testimage build.
 bool IsTestImageBuild() {
   std::string track;
@@ -85,6 +79,13 @@ bool IsMediaStoreDownloadMetadataValid(
   // Download should have non-empty display name and owner package name.
   if (download->display_name.empty() || download->owner_package_name.empty())
     return false;
+
+  // `display_name` should be a single path component.
+  const base::FilePath display_name(download->display_name);
+  if (display_name != display_name.BaseName() ||
+      display_name.ReferencesParent()) {
+    return false;
+  }
 
   // Download should have path relative to "Download/" which is the download
   // directory for the associated profile.
@@ -150,11 +151,12 @@ class ArcFileSystemBridgeFactory
   static constexpr const char* kName = "ArcFileSystemBridgeFactory";
 
   static ArcFileSystemBridgeFactory* GetInstance() {
-    return base::Singleton<ArcFileSystemBridgeFactory>::get();
+    static base::NoDestructor<ArcFileSystemBridgeFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcFileSystemBridgeFactory>;
+  friend base::NoDestructor<ArcFileSystemBridgeFactory>;
   ArcFileSystemBridgeFactory() = default;
   ~ArcFileSystemBridgeFactory() override = default;
 };
@@ -673,6 +675,21 @@ void ArcFileSystemBridge::OnConnectionClosed() {
   LOG(WARNING) << "FileSystem connection has been closed. "
                << "Closing SelectFileDialogs owned by ARC apps, if any.";
   select_files_handlers_manager_->DeleteAllHandlers();
+}
+
+bool ArcFileSystemBridge::IsUrlAllowed(const GURL& url) {
+  if (!url.SchemeIs(content::kExternalFileScheme)) {
+    return false;
+  }
+  if (!arc::IsArcVmEnabled()) {
+    return true;
+  }
+  base::FilePath fs_path = GetLinuxVFSPathFromExternalFileURL(profile_, url);
+  if (fs_path.empty()) {
+    return true;
+  }
+  return guest_os::GuestOsSharePathFactory::GetForProfile(profile_)
+      ->IsPathShared(kArcVmName, fs_path);
 }
 
 base::FilePath ArcFileSystemBridge::GetLinuxVFSPathFromExternalFileURL(

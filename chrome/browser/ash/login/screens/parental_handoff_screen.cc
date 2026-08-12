@@ -11,8 +11,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/parental_handoff_screen_handler.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/supervised_user/core/common/features.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -81,7 +79,7 @@ void ParentalHandoffScreen::ShowImpl() {
 
 void ParentalHandoffScreen::HideImpl() {}
 
-void ParentalHandoffScreen::OnUserAction(const base::Value::List& args) {
+void ParentalHandoffScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionNext) {
     exit_callback_.Run(Result::kDone);

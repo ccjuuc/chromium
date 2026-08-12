@@ -4,91 +4,382 @@
 
 #include "ui/webui/tracked_element/tracked_element_handler.h"
 
+#include "base/check_is_test.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/notreached.h"
+#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_controller.h"
+#include "ui/base/interaction/element_highlighter.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
+#include "ui/webui/tracked_element/element_highlighter_webui.h"
 #include "ui/webui/tracked_element/tracked_element_web_ui.h"
 
 namespace ui {
 
 TrackedElementHandler::TrackedElementHandler(
-    content::WebContents* web_contents,
-    mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
-        receiver,
-    ui::ElementContext context,
-    const std::vector<ui::ElementIdentifier>& identifiers)
-    : context_(context),
-      web_contents_(web_contents),
-      receiver_(this, std::move(receiver)) {
-  for (const ui::ElementIdentifier& id : identifiers) {
-    elements_[id] = std::make_unique<TrackedElementWebUI>(this, id, context);
+    content::WebUIController* controller)
+    : TrackedElementHandler(
+          controller->web_ui()->GetWebContents(),
+          ui::ElementContext(controller,
+                             base::PassKey<TrackedElementHandler>())) {}
+
+TrackedElementHandler::TrackedElementHandler(content::WebContents* web_contents,
+                                             ui::ElementContext context)
+    : context_(context), receiver_(this) {
+  ui::ElementHighlighter::GetElementHighlighter()
+      ->MaybeRegisterBackend<ElementHighlighterWebUI>();
+
+  if (web_contents) {
+    Observe(web_contents);
+    is_web_contents_visible_ =
+        web_contents->GetVisibility() == content::Visibility::VISIBLE;
   }
 }
 
 TrackedElementHandler::~TrackedElementHandler() = default;
 
-void TrackedElementHandler::TrackedElementVisibilityChanged(
-    const std::string& identifier_name,
-    bool visible,
-    const gfx::RectF& rect) {
-  TrackedElementWebUI* element = GetElement(identifier_name);
-  if (!element) {
+void TrackedElementHandler::BindInterface(
+    mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
+        receiver) {
+  receiver_.Bind(std::move(receiver));
+}
+
+void TrackedElementHandler::OnVisibilityChanged(
+    content::Visibility new_visibility) {
+  const bool visible = new_visibility == content::Visibility::VISIBLE;
+  if (visible == is_web_contents_visible_) {
     return;
   }
-  element->SetVisible(visible, rect);
+  is_web_contents_visible_ = visible;
+  UpdateAllEffectiveVisibilities();
+}
+
+void TrackedElementHandler::UpdateAllEffectiveVisibilities() {
+  // This is complicated because it is possible that UpdateEffectiveVisibility
+  // could invoke this class's destructor.
+  auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
+  for (auto& [_, elements] : elements_) {
+    for (auto& [_, element] : elements) {
+      element->UpdateEffectiveVisibility();
+      if (!weak_ptr) {
+        return;
+      }
+    }
+  }
+}
+
+void TrackedElementHandler::SetHighlightState(
+    TrackedElementWebUI& element,
+    bool highlight,
+    base::PassKey<TrackedElementWebUI>) {
+  if (manager_remote_) {
+    manager_remote_->OnElementHighlightChanged(
+        tracked_element::mojom::TrackedElementIdentifier::New(
+            element.identifier().GetName(), element.GetSecondaryIdentifier()),
+        highlight);
+  }
+}
+
+void TrackedElementHandler::FlushManagerRemoteForTesting() {
+  manager_remote_.FlushForTesting();  // IN-TEST
+}
+
+bool TrackedElementHandler::ClickElement(TrackedElementWebUI& element) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->ClickElement(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+bool TrackedElementHandler::FocusElement(TrackedElementWebUI& element) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->FocusElement(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+bool TrackedElementHandler::SelectTab(TrackedElementWebUI& element,
+                                      size_t index) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->SelectTab(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      index,
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+bool TrackedElementHandler::SelectDropdownItem(TrackedElementWebUI& element,
+                                               size_t index) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->SelectDropdownItem(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      index,
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+bool TrackedElementHandler::EnterText(
+    TrackedElementWebUI& element,
+    const std::u16string& text,
+    tracked_element::mojom::TextEntryMode mode) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->EnterText(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      text, mode,
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+bool TrackedElementHandler::Confirm(TrackedElementWebUI& element) {
+  CHECK_IS_TEST();
+  if (!manager_remote_) {
+    return false;
+  }
+  bool success = false;
+  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+  manager_remote_->Confirm(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          element.identifier().GetName(), element.GetSecondaryIdentifier()),
+      base::BindOnce(
+          [](bool* success_ptr, base::OnceClosure quit_closure, bool result) {
+            *success_ptr = result;
+            std::move(quit_closure).Run();
+          },
+          &success, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
+
+void TrackedElementHandler::SetManager(
+    mojo::PendingRemote<tracked_element::mojom::TrackedElementManager>
+        manager) {
+  manager_remote_.reset();
+  manager_remote_.Bind(std::move(manager));
+}
+
+void TrackedElementHandler::TrackedElementVisibilityChanged(
+    tracked_element::mojom::TrackedElementIdentifierPtr id,
+    bool visible,
+    const gfx::RectF& rect) {
+  TrackedElementWebUI* const element =
+      GetElement(id, /*create_if_not_present=*/visible);
+  if (!element) {
+    if (visible) {
+      ReportBadMessage(
+          "TrackedElementVisibilityChanged(true) for invalid element.", id);
+    }
+    return;
+  }
+
+  std::unique_ptr<TrackedElementWebUI> to_be_discarded;
+  if (!visible) {
+    // There are a finite and small number of registered `ui::ElementIdentifier`
+    // values, so the top-level map of `elements_` stays small regardless of how
+    // many elements are created or destroyed.
+    //
+    // However, since many elements may be created or destroyed in the same
+    // WebUI, the size of each secondary ID map is potentially unbounded and
+    // could grow with each new element created.
+    //
+    // To avoid this, and because `ui::TrackedElement` objects aren't guaranteed
+    // to stick around after loss of visibility, we delete elements that have
+    // lost visibility.
+
+    // Pull the no-longer-visible element out of the map and let it go away at
+    // the end of the function, after the visibility is set and callbacks have
+    // been called.
+    //
+    // This ensures that if there are other changes to the map (up to and
+    // including another element being created with the same secondary
+    // identifier), everything should continue to function as normal.
+    auto& secondary_map = elements_[id->native_identifier];
+    const auto it = secondary_map.find(id->secondary_identifier);
+    CHECK(it != secondary_map.end());
+    to_be_discarded = std::move(it->second);
+    secondary_map.erase(it);
+  }
+
+  element->SetRawVisible(visible, rect);
 }
 
 void TrackedElementHandler::TrackedElementActivated(
-    const std::string& identifier_name) {
-  TrackedElementWebUI* const element = GetElement(identifier_name);
-  if (!element) {
-    return;
-  }
-  if (!element->visible()) {
-    receiver_.ReportBadMessage(
-        base::StringPrintf("TrackedElementActivated message received for "
-                           "anchor element \"%s\" but element was not visible.",
-                           identifier_name.c_str()));
+    tracked_element::mojom::TrackedElementIdentifierPtr id) {
+  TrackedElementWebUI* const element = GetElement(id);
+  if (!element || !element->visible()) {
+    ReportBadMessage(
+        "TrackedElementActivated for nonexistent or non-visible element.", id);
     return;
   }
   element->Activate();
 }
 
 void TrackedElementHandler::TrackedElementCustomEvent(
-    const std::string& identifier_name,
+    tracked_element::mojom::TrackedElementIdentifierPtr id,
     const std::string& event_name) {
-  TrackedElementWebUI* const element = GetElement(identifier_name);
-  if (!element) {
-    return;
-  }
-  if (!element->visible()) {
-    receiver_.ReportBadMessage(
-        base::StringPrintf("TrackedElementCustomEvent message received for "
-                           "anchor element \"%s\" but element was not visible.",
-                           identifier_name.c_str()));
+  TrackedElementWebUI* const element = GetElement(id);
+  if (!element || !element->visible()) {
+    const auto message = base::StringPrintf(
+        "TrackedElementCustomEvent of type \"%s\" for nonexistent or "
+        "non-visible element.",
+        event_name);
+    ReportBadMessage(message, id);
     return;
   }
   const ui::CustomElementEventType event_type =
       ui::CustomElementEventType::FromName(event_name.c_str());
   if (!event_type) {
+    ReportBadMessage(
+        base::StringPrintf(
+            "TrackedElementCustomEvent received invalid event name \"%s\".",
+            event_name),
+        id);
     return;
   }
   element->CustomEvent(event_type);
 }
 
-TrackedElementWebUI* TrackedElementHandler::GetElement(
-    const std::string& identifier_name) {
-  for (const auto& [id, element] : elements_) {
-    if (id.GetName() == identifier_name) {
-      return element.get();
+void TrackedElementHandler::TrackedElementCanHighlightChanged(
+    tracked_element::mojom::TrackedElementIdentifierPtr id,
+    bool can_highlight) {
+  CHECK(id);
+  TrackedElementWebUI* const element =
+      GetElement(id,
+                 /*create_if_not_present=*/can_highlight);
+  if (!element) {
+    if (can_highlight) {
+      ReportBadMessage("TrackedElementCanHighlightChanged for invalid element.",
+                       id);
     }
+    return;
   }
+  element->set_can_highlight(can_highlight);
+}
 
-  LOG(ERROR) << "TrackedElement message received for element \""
-             << identifier_name
-             << "\" but element was not known to the handler.";
-  return nullptr;
+void TrackedElementHandler::RegisterIdentifier(ui::ElementIdentifier id) {
+  elements_.emplace(id.GetName(), SecondaryIdentifierMapType());
+}
+
+std::vector<std::string> TrackedElementHandler::GetIdentifiers() {
+  std::vector<std::string> identifiers;
+  identifiers.reserve(elements_.size());
+  for (const auto& [identifier, _] : elements_) {
+    identifiers.emplace_back(identifier);
+  }
+  return identifiers;
+}
+
+TrackedElementWebUI* TrackedElementHandler::GetElement(
+    const tracked_element::mojom::TrackedElementIdentifierPtr& id,
+    bool create_if_not_present) {
+  const std::string& name = id->native_identifier;
+  const std::string& secondary_identifier = id->secondary_identifier;
+  if (name.empty()) {
+    LOG(ERROR) << "Empty ElementIdentifier for TrackedElement via IPC.";
+    return nullptr;
+  }
+  if (secondary_identifier.empty()) {
+    LOG(ERROR)
+        << "Empty sub-identifier received via IPC for TrackedElement of type \""
+        << secondary_identifier << "\"";
+    return nullptr;
+  }
+  auto it = elements_.find(name);
+  if (it == elements_.end()) {
+    NOTREACHED(base::NotFatalUntil::M153)
+        << "ElementIdentifier \"" << name << "\" not registered for "
+        << web_contents()->GetURL();
+    return nullptr;
+  }
+  auto it2 = it->second.find(secondary_identifier);
+  if (it2 == it->second.end()) {
+    if (!create_if_not_present) {
+      return nullptr;
+    }
+    it2 = it->second
+              .emplace(secondary_identifier,
+                       std::make_unique<TrackedElementWebUI>(
+                           this, ElementIdentifier::FromName(name.c_str()),
+                           secondary_identifier, context()))
+              .first;
+  }
+  return it2->second.get();
+}
+
+void TrackedElementHandler::ReportBadMessage(
+    std::string_view description,
+    const tracked_element::mojom::TrackedElementIdentifierPtr& id) {
+  receiver_.ReportBadMessage(base::StringPrintf(
+      "%s Element has native id \"%s\" and secondary identifier "
+      "\"%s\"",
+      description, id->native_identifier, id->secondary_identifier));
 }
 
 }  // namespace ui

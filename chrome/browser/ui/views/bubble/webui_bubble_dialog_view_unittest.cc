@@ -60,7 +60,7 @@ class WebUIBubbleDialogViewTest : public ChromeViewsTestBase,
     profile_ = std::make_unique<TestingProfile>();
 
     anchor_widget_ =
-        CreateTestWidget(Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
                          Widget::InitParams::TYPE_WINDOW);
     anchor_widget_->Show();
     contents_wrapper_ = std::make_unique<TestWebUIContentsWrapper>(
@@ -184,6 +184,25 @@ TEST_P(WebUIBubbleDialogViewTest, DestroyingContentsWrapperDoesNotSegfault) {
       anchor_widget->GetContentsView(), contents_wrapper->GetWeakPtr(), anchor);
 
   contents_wrapper.reset();
+}
+
+TEST_P(WebUIBubbleDialogViewTest, ShowUIAndCloseUIWithoutWidget) {
+  UniqueWidgetPtr anchor_widget = std::make_unique<Widget>();
+  Widget::InitParams params =
+      CreateParams(Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+                   Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Init(std::move(params));
+  auto profile = std::make_unique<TestingProfile>();
+  auto contents_wrapper =
+      std::make_unique<TestWebUIContentsWrapper>(profile.get());
+
+  gfx::Rect anchor(666, 666, 0, 0);
+  auto bubble_dialog = std::make_unique<WebUIBubbleDialogView>(
+      anchor_widget->GetContentsView(), contents_wrapper->GetWeakPtr(), anchor);
+
+  EXPECT_EQ(nullptr, bubble_dialog->GetWidget());
+  bubble_dialog->ShowUI();
+  bubble_dialog->CloseUI();
 }
 
 TEST_P(WebUIBubbleDialogViewTest, DraggableRegionIsReflectedInHitTest) {

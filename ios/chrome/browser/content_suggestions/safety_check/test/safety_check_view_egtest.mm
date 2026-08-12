@@ -106,6 +106,7 @@ void ScrollToSafetyCheckModule() {
 
   // Intentionally forces a Safety Check error to ensure module visibility in
   // the Magic Stack.
+  [ChromeEarlGrey setBoolValue:NO forUserPref:prefs::kSafeBrowsingEnabled];
   [ChromeEarlGrey
          setStringValue:NameForSafetyCheckState(
                             SafeBrowsingSafetyCheckState::kUnsafe)

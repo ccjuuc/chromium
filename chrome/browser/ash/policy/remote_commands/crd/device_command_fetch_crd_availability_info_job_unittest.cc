@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
@@ -23,7 +24,6 @@
 #include "chrome/browser/ash/policy/remote_commands/fake_cros_network_config.h"
 #include "chrome/browser/ash/policy/remote_commands/user_session_type_test_util.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -69,8 +69,8 @@ test::NetworkBuilder CreateNetwork(NetworkType type = NetworkType::kWiFi) {
   return test::NetworkBuilder(type);
 }
 
-base::Value::List ToList(std::vector<CrdSessionType> input) {
-  base::Value::List result;
+base::ListValue ToList(std::vector<CrdSessionType> input) {
+  base::ListValue result;
   for (CrdSessionType type : input) {
     result.Append(static_cast<int>(type));
   }
@@ -79,7 +79,7 @@ base::Value::List ToList(std::vector<CrdSessionType> input) {
 
 MATCHER_P(ListContains, expected_type, "") {
   base::Value expected_value(expected_type);
-  base::Value::List* list = arg;
+  base::ListValue* list = arg;
 
   if (!list) {
     *result_listener << "List is null";
@@ -132,7 +132,8 @@ class DeviceCommandFetchCrdAvailabilityInfoJobTest
   }
 
   Result CreateAndRunJob() {
-    DeviceCommandFetchCrdAvailabilityInfoJob job;
+    DeviceCommandFetchCrdAvailabilityInfoJob job(
+        TestingBrowserProcess::GetGlobal()->local_state());
 
     bool initialized = job.Init(base::TimeTicks::Now(), GenerateCommandProto(),
                                 enterprise_management::SignedData());
@@ -253,7 +254,8 @@ class DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType
 };
 
 TEST_F(DeviceCommandFetchCrdAvailabilityInfoJobTest, GetType) {
-  DeviceCommandFetchCrdAvailabilityInfoJob job;
+  DeviceCommandFetchCrdAvailabilityInfoJob job(
+      TestingBrowserProcess::GetGlobal()->local_state());
   EXPECT_EQ(job.GetType(), RemoteCommand::FETCH_CRD_AVAILABILITY_INFO);
 }
 
@@ -309,7 +311,8 @@ TEST_F(DeviceCommandFetchCrdAvailabilityInfoJobTest,
        ShouldRespectDisabledByPolicy) {
   StartSessionOfType(kAnySessionType);
 
-  DisablePref(prefs::kRemoteAccessHostAllowEnterpriseRemoteSupportConnections);
+  DisablePref(
+      ash::prefs::kRemoteAccessHostAllowEnterpriseRemoteSupportConnections);
 
   Result result = CreateAndRunJob();
 
@@ -359,7 +362,7 @@ TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
   AddActiveManagedNetwork();
   Result result = CreateAndRunJob();
 
-  const base::Value::List expected = [&]() {
+  const base::ListValue expected = [&]() {
     switch (session_type) {
       case TestSessionType::kNoSession:
         return ToList({
@@ -381,9 +384,9 @@ TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
     }
   }();
 
-  const base::Value::List actual = ParseJsonDict(result.payload)
-                                       .EnsureList("supportedCrdSessionTypes")
-                                       ->Clone();
+  const base::ListValue actual = ParseJsonDict(result.payload)
+                                     .EnsureList("supportedCrdSessionTypes")
+                                     ->Clone();
 
   EXPECT_EQ(actual, expected);
 }
@@ -445,7 +448,7 @@ TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
 TEST_P(
     DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
     DeviceRemoteAccessPolicyShouldNotEffectRemoteSupportAvailabilityIfDisabled) {
-  DisablePref(prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
+  DisablePref(ash::prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
   TestSessionType session_type = GetParam();
   SCOPED_TRACE(base::StringPrintf("Testing session type %s",
                                   SessionTypeToString(session_type)));
@@ -461,7 +464,7 @@ TEST_P(
 TEST_P(
     DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
     DeviceRemoteAccessPolicyShouldNotEffectRemoteSupportAvailabilityIfEnabled) {
-  EnablePref(prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
+  EnablePref(ash::prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
   TestSessionType session_type = GetParam();
   SCOPED_TRACE(base::StringPrintf("Testing session type %s",
                                   SessionTypeToString(session_type)));
@@ -476,7 +479,7 @@ TEST_P(
 
 TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
        ShouldRespectDisabledByDeviceRemoteAccessPolicy) {
-  DisablePref(prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
+  DisablePref(ash::prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
   TestSessionType session_type = GetParam();
   StartSessionOfType(session_type);
 
@@ -535,7 +538,7 @@ TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
 
 TEST_P(DeviceCommandFetchCrdAvailabilityInfoJobTestParameterizedOverSessionType,
        ShouldReturnRemoteAccessAvailabilityWhenPolicyIsEnabled) {
-  EnablePref(prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
+  EnablePref(ash::prefs::kDeviceAllowEnterpriseRemoteAccessConnections);
   TestSessionType session_type = GetParam();
   SCOPED_TRACE(base::StringPrintf("Testing session type %s",
                                   SessionTypeToString(session_type)));

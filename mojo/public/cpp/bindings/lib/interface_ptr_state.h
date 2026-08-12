@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check.h"
@@ -185,7 +186,7 @@ class InterfacePtrState : public InterfacePtrStateBase {
     endpoint_client()->FlushAsyncForTesting(std::move(callback));
   }
 
-  void CloseWithReason(uint32_t custom_reason, const std::string& description) {
+  void CloseWithReason(uint32_t custom_reason, std::string_view description) {
     ConfigureProxyIfNecessary();
     endpoint_client()->CloseWithReason(custom_reason, description);
   }
@@ -194,6 +195,11 @@ class InterfacePtrState : public InterfacePtrStateBase {
     using std::swap;
     swap(other->proxy_, proxy_);
     InterfacePtrStateBase::Swap(other);
+  }
+
+  void SetFilter(std::unique_ptr<MessageFilter> filter) {
+    ConfigureProxyIfNecessary();
+    endpoint_client()->SetFilter(std::move(filter));
   }
 
   void Bind(PendingRemoteState* remote_state,

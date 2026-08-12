@@ -20,7 +20,6 @@
 #include "chrome/browser/chromeos/extensions/telemetry/api/routines/diagnostic_routine_info.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chromeos/extensions/api/diagnostics.h"
-#include "chromeos/crosapi/mojom/telemetry_diagnostic_routine_service.mojom.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/event_router.h"
@@ -28,8 +27,6 @@
 
 namespace chromeos {
 namespace {
-
-namespace crosapi = ::crosapi::mojom;
 
 // An `EventRouterObserver` that runs a callback once a callback is registered
 // for the provided `event_name`. This class is used in tests to execute code
@@ -79,14 +76,14 @@ class TelemetryExtensionDiagnosticRoutineObserverBrowserTest
     // Use an arbitrary value for `argument_tag_for_legacy_finished_events`.
     DiagnosticRoutineInfo info(
         extension_id(), uuid_, profile(),
-        crosapi::TelemetryDiagnosticRoutineArgument::Tag::kMemory);
+        ash::cros_healthd::mojom::RoutineArgument::Tag::kMemory);
     observation_ = std::make_unique<DiagnosticRoutineObservation>(
         info, on_finished_future_.GetCallback(),
         remote_.BindNewPipeAndPassReceiver());
   }
 
   void SetLegacyFinishedEventRoutineObservation(
-      crosapi::TelemetryDiagnosticRoutineArgument::Tag
+      ash::cros_healthd::mojom::RoutineArgument::Tag
           argument_tag_for_legacy_finished_events) {
     DiagnosticRoutineInfo info(extension_id(), uuid_, profile(),
                                argument_tag_for_legacy_finished_events);
@@ -109,7 +106,7 @@ class TelemetryExtensionDiagnosticRoutineObserverBrowserTest
   }
 
   base::Uuid uuid_{base::Uuid::GenerateRandomV4()};
-  mojo::Remote<crosapi::TelemetryDiagnosticRoutineObserver> remote_;
+  mojo::Remote<ash::cros_healthd::mojom::RoutineObserver> remote_;
 
  private:
   base::test::TestFuture<DiagnosticRoutineInfo> on_finished_future_;
@@ -125,10 +122,10 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineInitialized::kEventName,
       base::BindLambdaForTesting([this] {
-        auto init_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto init_state = ash::cros_healthd::mojom::RoutineState::New();
         init_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewInitialized(
-                crosapi::TelemetryDiagnosticRoutineStateInitialized::New());
+            ash::cros_healthd::mojom::RoutineStateUnion::NewInitialized(
+                ash::cros_healthd::mojom::RoutineStateInitialized::New());
         init_state->percentage = 0;
 
         remote_->OnRoutineStateChange(std::move(init_state));
@@ -157,10 +154,10 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineRunning::kEventName,
       base::BindLambdaForTesting([this] {
-        auto running_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto running_state = ash::cros_healthd::mojom::RoutineState::New();
         running_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewRunning(
-                crosapi::TelemetryDiagnosticRoutineStateRunning::New());
+            ash::cros_healthd::mojom::RoutineStateUnion::NewRunning(
+                ash::cros_healthd::mojom::RoutineStateRunning::New());
         running_state->percentage = 50;
 
         remote_->OnRoutineStateChange(std::move(running_state));
@@ -190,22 +187,21 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineRunning::kEventName,
       base::BindLambdaForTesting([this] {
-        auto network_bandwidth_info = crosapi::
-            TelemetryDiagnosticNetworkBandwidthRoutineRunningInfo::New();
-        network_bandwidth_info->type =
-            crosapi::TelemetryDiagnosticNetworkBandwidthRoutineRunningInfo::
-                Type::kDownload;
+        auto network_bandwidth_info =
+            ash::cros_healthd::mojom::NetworkBandwidthRoutineRunningInfo::New();
+        network_bandwidth_info->type = ash::cros_healthd::mojom::
+            NetworkBandwidthRoutineRunningInfo::Type::kDownload;
         network_bandwidth_info->speed_kbps = 100.0;
 
         auto running_state =
-            crosapi::TelemetryDiagnosticRoutineStateRunning::New();
+            ash::cros_healthd::mojom::RoutineStateRunning::New();
         running_state->info =
-            crosapi::TelemetryDiagnosticRoutineRunningInfo::NewNetworkBandwidth(
+            ash::cros_healthd::mojom::RoutineRunningInfo::NewNetworkBandwidth(
                 std::move(network_bandwidth_info));
 
-        auto state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto state = ash::cros_healthd::mojom::RoutineState::New();
         state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewRunning(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewRunning(
                 std::move(running_state));
         state->percentage = 50;
 
@@ -242,11 +238,11 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineWaiting::kEventName,
       base::BindLambdaForTesting([this] {
-        auto waiting_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto waiting_state = ash::cros_healthd::mojom::RoutineState::New();
         waiting_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewWaiting(
-                crosapi::TelemetryDiagnosticRoutineStateWaiting::New(
-                    crosapi::TelemetryDiagnosticRoutineStateWaiting::Reason::
+            ash::cros_healthd::mojom::RoutineStateUnion::NewWaiting(
+                ash::cros_healthd::mojom::RoutineStateWaiting::New(
+                    ash::cros_healthd::mojom::RoutineStateWaiting::Reason::
                         kWaitingToBeScheduled,
                     "TEST"));
         waiting_state->percentage = 50;
@@ -277,32 +273,32 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
 IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
                        CanObserveLegacyOnMemoryRoutineFinished) {
   SetLegacyFinishedEventRoutineObservation(
-      crosapi::TelemetryDiagnosticRoutineArgument::Tag::kMemory);
+      ash::cros_healthd::mojom::RoutineArgument::Tag::kMemory);
   RegisterEventObserver(
       api::os_diagnostics::OnMemoryRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
         auto memtester_result =
-            crosapi::TelemetryDiagnosticMemtesterResult::New();
+            ash::cros_healthd::mojom::MemtesterResult::New();
         memtester_result->passed_items = {
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareDIV,
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareMUL};
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareDIV,
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareMUL};
         memtester_result->failed_items = {
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareAND,
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareSUB};
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareAND,
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareSUB};
 
         auto memory_detail =
-            crosapi::TelemetryDiagnosticMemoryRoutineDetail::New();
+            ash::cros_healthd::mojom::MemoryRoutineDetail::New();
         memory_detail->bytes_tested = 500;
         memory_detail->result = std::move(memtester_result);
 
         auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewMemory(
+            ash::cros_healthd::mojom::RoutineDetail::NewMemory(
                 std::move(memory_detail));
 
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, std::move(finished_detail)));
         finished_state->percentage = 100;
 
@@ -348,65 +344,15 @@ IN_PROC_BROWSER_TEST_F(
     TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
     CanObserveLegacyOnVolumeButtonRoutineFinishedWithoutRoutineDetail) {
   SetLegacyFinishedEventRoutineObservation(
-      crosapi::TelemetryDiagnosticRoutineArgument::Tag::kVolumeButton);
+      ash::cros_healthd::mojom::RoutineArgument::Tag::kVolumeButton);
   RegisterEventObserver(
       api::os_diagnostics::OnVolumeButtonRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, /*detail=*/nullptr));
-        finished_state->percentage = 100;
-
-        remote_->OnRoutineStateChange(std::move(finished_state));
-      }));
-
-  CreateExtensionAndRunServiceWorker(
-      base::StringPrintf(R"(
-    chrome.test.runTests([
-      async function canObserveOnVolumeButtonRoutineFinished() {
-        chrome.os.diagnostics.onVolumeButtonRoutineFinished.addListener(
-          (event) => {
-            chrome.test.assertEq(event, {
-              "has_passed": true,
-              "uuid":"%s"
-            });
-
-            chrome.test.succeed();
-        });
-      }
-    ]);
-  )",
-                         uuid_.AsLowercaseString().c_str()));
-
-  auto info = WaitForFinishedReport();
-  EXPECT_EQ(info.extension_id, extension_id());
-  EXPECT_EQ(info.uuid, uuid_);
-}
-
-// In older implementation of healthd, a finished volume button routine contains
-// a routine detail.
-IN_PROC_BROWSER_TEST_F(
-    TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
-    CanObserveLegacyOnVolumeButtonRoutineFinishedWithRoutineDetail) {
-  SetLegacyFinishedEventRoutineObservation(
-      crosapi::TelemetryDiagnosticRoutineArgument::Tag::kVolumeButton);
-  RegisterEventObserver(
-      api::os_diagnostics::OnVolumeButtonRoutineFinished::kEventName,
-      base::BindLambdaForTesting([this] {
-        auto volume_button_detail =
-            crosapi::TelemetryDiagnosticVolumeButtonRoutineDetail::New();
-
-        auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewVolumeButton(
-                std::move(volume_button_detail));
-
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
-        finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
-                    /*has_passed=*/true, std::move(finished_detail)));
         finished_state->percentage = 100;
 
         remote_->OnRoutineStateChange(std::move(finished_state));
@@ -438,24 +384,23 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
                        CanObserveLegacyOnFanRoutineFinished) {
   SetLegacyFinishedEventRoutineObservation(
-      crosapi::TelemetryDiagnosticRoutineArgument::Tag::kFan);
+      ash::cros_healthd::mojom::RoutineArgument::Tag::kFan);
   RegisterEventObserver(
       api::os_diagnostics::OnFanRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
-        auto fan_detail = crosapi::TelemetryDiagnosticFanRoutineDetail::New();
+        auto fan_detail = ash::cros_healthd::mojom::FanRoutineDetail::New();
         fan_detail->passed_fan_ids = {0};
         fan_detail->failed_fan_ids = {1};
         fan_detail->fan_count_status =
-            crosapi::TelemetryDiagnosticHardwarePresenceStatus::kMatched;
+            ash::cros_healthd::mojom::HardwarePresenceStatus::kMatched;
 
-        auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewFan(
-                std::move(fan_detail));
+        auto finished_detail = ash::cros_healthd::mojom::RoutineDetail::NewFan(
+            std::move(fan_detail));
 
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, std::move(finished_detail)));
         finished_state->percentage = 100;
 
@@ -493,10 +438,10 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, /*detail=*/nullptr));
         finished_state->percentage = 100;
 
@@ -532,27 +477,27 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
       api::os_diagnostics::OnRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
         auto memtester_result =
-            crosapi::TelemetryDiagnosticMemtesterResult::New();
+            ash::cros_healthd::mojom::MemtesterResult::New();
         memtester_result->passed_items = {
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareDIV,
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareMUL};
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareDIV,
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareMUL};
         memtester_result->failed_items = {
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareAND,
-            crosapi::TelemetryDiagnosticMemtesterTestItemEnum::kCompareSUB};
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareAND,
+            ash::cros_healthd::mojom::MemtesterTestItemEnum::kCompareSUB};
 
         auto memory_detail =
-            crosapi::TelemetryDiagnosticMemoryRoutineDetail::New();
+            ash::cros_healthd::mojom::MemoryRoutineDetail::New();
         memory_detail->bytes_tested = 500;
         memory_detail->result = std::move(memtester_result);
 
         auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewMemory(
+            ash::cros_healthd::mojom::RoutineDetail::NewMemory(
                 std::move(memory_detail));
 
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, std::move(finished_detail)));
         finished_state->percentage = 100;
 
@@ -596,74 +541,25 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
   EXPECT_EQ(info.uuid, uuid_);
 }
 
-// In older implementation of healthd, a finished volume button routine contains
-// a routine detail.
-IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
-                       CanObserveOnRoutineFinishedWithVolumeButtonDetail) {
-  SetRoutineObservation();
-  RegisterEventObserver(
-      api::os_diagnostics::OnRoutineFinished::kEventName,
-      base::BindLambdaForTesting([this] {
-        auto volume_button_detail =
-            crosapi::TelemetryDiagnosticVolumeButtonRoutineDetail::New();
-
-        auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewVolumeButton(
-                std::move(volume_button_detail));
-
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
-        finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
-                    /*has_passed=*/true, std::move(finished_detail)));
-        finished_state->percentage = 100;
-
-        remote_->OnRoutineStateChange(std::move(finished_state));
-      }));
-
-  CreateExtensionAndRunServiceWorker(
-      base::StringPrintf(R"(
-    chrome.test.runTests([
-      async function canObserveOnRoutineFinishedWithVolumeButtonDetail() {
-        chrome.os.diagnostics.onRoutineFinished.addListener(
-          (event) => {
-            chrome.test.assertEq(event, {
-              "hasPassed": true,
-              "uuid":"%s"
-            });
-
-            chrome.test.succeed();
-        });
-      }
-    ]);
-  )",
-                         uuid_.AsLowercaseString().c_str()));
-
-  auto info = WaitForFinishedReport();
-  EXPECT_EQ(info.extension_id, extension_id());
-  EXPECT_EQ(info.uuid, uuid_);
-}
-
 IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
                        CanObserveOnRoutineFinishedWithFanDetail) {
   SetRoutineObservation();
   RegisterEventObserver(
       api::os_diagnostics::OnRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
-        auto fan_detail = crosapi::TelemetryDiagnosticFanRoutineDetail::New();
+        auto fan_detail = ash::cros_healthd::mojom::FanRoutineDetail::New();
         fan_detail->passed_fan_ids = {0};
         fan_detail->failed_fan_ids = {1};
         fan_detail->fan_count_status =
-            crosapi::TelemetryDiagnosticHardwarePresenceStatus::kMatched;
+            ash::cros_healthd::mojom::HardwarePresenceStatus::kMatched;
 
-        auto finished_detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewFan(
-                std::move(fan_detail));
+        auto finished_detail = ash::cros_healthd::mojom::RoutineDetail::NewFan(
+            std::move(fan_detail));
 
-        auto finished_state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto finished_state = ash::cros_healthd::mojom::RoutineState::New();
         finished_state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
-                crosapi::TelemetryDiagnosticRoutineStateFinished::New(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
+                ash::cros_healthd::mojom::RoutineStateFinished::New(
                     /*has_passed=*/true, std::move(finished_detail)));
         finished_state->percentage = 100;
 
@@ -706,20 +602,20 @@ IN_PROC_BROWSER_TEST_F(TelemetryExtensionDiagnosticRoutineObserverBrowserTest,
       api::os_diagnostics::OnRoutineFinished::kEventName,
       base::BindLambdaForTesting([this] {
         auto network_bandwidth_detail =
-            crosapi::TelemetryDiagnosticNetworkBandwidthRoutineDetail::New();
+            ash::cros_healthd::mojom::NetworkBandwidthRoutineDetail::New();
         network_bandwidth_detail->download_speed_kbps = 123.0;
         network_bandwidth_detail->upload_speed_kbps = 456.0;
 
         auto finished_state =
-            crosapi::TelemetryDiagnosticRoutineStateFinished::New();
+            ash::cros_healthd::mojom::RoutineStateFinished::New();
         finished_state->detail =
-            crosapi::TelemetryDiagnosticRoutineDetail::NewNetworkBandwidth(
+            ash::cros_healthd::mojom::RoutineDetail::NewNetworkBandwidth(
                 std::move(network_bandwidth_detail));
         finished_state->has_passed = true;
 
-        auto state = crosapi::TelemetryDiagnosticRoutineState::New();
+        auto state = ash::cros_healthd::mojom::RoutineState::New();
         state->state_union =
-            crosapi::TelemetryDiagnosticRoutineStateUnion::NewFinished(
+            ash::cros_healthd::mojom::RoutineStateUnion::NewFinished(
                 std::move(finished_state));
         state->percentage = 100;
 

@@ -17,7 +17,6 @@
 #include "base/logging.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -35,6 +34,7 @@
 
 #include "base/strings/string_util_win.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/win/registry.h"
 #endif
 
@@ -196,7 +196,7 @@ std::unique_ptr<base::Value> MaybeGetFileContents(
     RecordBeaconFileState(BeaconFileState::kMissingDictionary);
     return nullptr;
   }
-  const base::Value::Dict& beacon_dict = beacon_file_contents->GetDict();
+  const base::DictValue& beacon_dict = beacon_file_contents->GetDict();
   if (!beacon_dict.FindInt(kVariationsCrashStreak)) {
     RecordBeaconFileState(BeaconFileState::kMissingCrashStreak);
     return nullptr;
@@ -430,7 +430,7 @@ bool CleanExitBeacon::IsBeaconFileSupported() const {
 }
 
 void CleanExitBeacon::WriteBeaconFile(bool exited_cleanly) const {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(prefs::kStabilityExitedCleanly, exited_cleanly);
   dict.Set(kVariationsCrashStreak,
            local_state_->GetInteger(kVariationsCrashStreak));

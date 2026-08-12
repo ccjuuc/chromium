@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.notifications;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -16,7 +15,6 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.notifications.PendingIntentProvider;
@@ -30,12 +28,11 @@ public class PendingIntentProviderTest {
 
     @Before
     public void setUp() throws Exception {
-        ShadowLog.stream = System.out;
         mContext = ApplicationProvider.getApplicationContext();
     }
 
     @Test
-    @Config(sdk = Build.VERSION_CODES.Q)
+    @Config(sdk = BaseRobolectricTestRunner.MIN_SDK)
     public void testPendingIntentFlags_AndroidQ() {
         Intent contentIntent = new Intent(TEST_ACTION);
 

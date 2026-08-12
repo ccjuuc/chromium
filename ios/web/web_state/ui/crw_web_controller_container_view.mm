@@ -7,10 +7,11 @@
 #import "base/check.h"
 #import "base/notreached.h"
 #import "base/time/time.h"
-#import "ios/web/common/crw_content_view.h"
 #import "ios/web/common/crw_viewport_adjustment_container.h"
-#import "ios/web/common/crw_web_view_content_view.h"
 #import "ios/web/common/features.h"
+#import "ios/web/public/web_client.h"
+#import "ios/web/web_state/ui/crw_content_view.h"
+#import "ios/web/web_state/ui/crw_web_view_content_view.h"
 #import "ios/web/web_state/ui/crw_web_view_proxy_impl.h"
 
 namespace {
@@ -29,7 +30,10 @@ constexpr base::TimeDelta kFixZoomScaleOnRotationDelay = base::Seconds(0.1);
 
 @end
 
-@implementation CRWWebControllerContainerView
+@implementation CRWWebControllerContainerView {
+  // YES if the webView should cover the entire screen and ignore the safe area.
+  BOOL _viewportFitCover;
+}
 
 @synthesize webViewContentView = _webViewContentView;
 @synthesize delegate = _delegate;
@@ -155,6 +159,13 @@ constexpr base::TimeDelta kFixZoomScaleOnRotationDelay = base::Seconds(0.1);
 
 #pragma mark Content Setters
 
+- (void)setViewportFitCover:(BOOL)viewportFitCover {
+  if (_viewportFitCover != viewportFitCover) {
+    _viewportFitCover = viewportFitCover;
+    [self setNeedsLayout];
+  }
+}
+
 - (void)resetContentForShutdown:(BOOL)shutdown {
   self.webViewContentView = nil;
   [self.contentViewProxy clearContentViewAndAddPlaceholder:!shutdown];
@@ -198,21 +209,16 @@ constexpr base::TimeDelta kFixZoomScaleOnRotationDelay = base::Seconds(0.1);
 
 // Update the content view frame.
 - (void)updateWebViewContentViewFrame {
-  if (base::FeatureList::IsEnabled(web::features::kSmoothScrollingDefault)) {
+  BOOL shouldUseFullBounds = _viewportFitCover;
+  if (!shouldUseFullBounds && web::GetWebClient()) {
+    shouldUseFullBounds = web::GetWebClient()->IsSmoothScrollingSupported();
+  }
+
+  if (shouldUseFullBounds) {
     [self.webViewContentView setFrame:self.bounds];
   } else {
-    // TODO(crbug.com/425651125): There appears to be a timing issue causing UI
-    // glitches when a website uses viewport-fit=cover. We suspect this is
-    // because our JavaScript injection, which detects viewport-fit=cover, isn't
-    // always resizing the container at the optimal moment. We aim to eliminate
-    // these glitches once viewport-fit=cover can be directly managed by the web
-    // view.
-    if (self.cover) {
-      [self.webViewContentView setFrame:self.bounds];
-    } else {
-      [self.webViewContentView
-          setFrame:UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets)];
-    }
+    [self.webViewContentView
+        setFrame:UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets)];
   }
 }
 

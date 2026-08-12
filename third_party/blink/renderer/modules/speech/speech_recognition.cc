@@ -27,6 +27,7 @@
 
 #include <algorithm>
 
+#include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
@@ -49,8 +50,10 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_track_settings.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_observable_array_speech_recognition_phrase.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_speech_recognition_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_speech_recognition_quality.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/modules/mediastream/media_stream_track.h"
 #include "third_party/blink/renderer/modules/mediastream/speech_recognition_media_stream_audio_sink.h"
@@ -60,6 +63,7 @@
 #include "third_party/blink/renderer/modules/speech/speech_recognition_phrase.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
@@ -80,6 +84,8 @@ blink::V8AvailabilityStatus AvailabilityStatusToV8(
       return blink::V8AvailabilityStatus(
           blink::V8AvailabilityStatus::Enum::kUnavailable);
     case media::mojom::blink::AvailabilityStatus::kDownloadable:
+    case media::mojom::blink::AvailabilityStatus::
+        kDownloadableWithoutUserActivation:
       return blink::V8AvailabilityStatus(
           blink::V8AvailabilityStatus::Enum::kDownloadable);
     case media::mojom::blink::AvailabilityStatus::kDownloading:
@@ -89,6 +95,19 @@ blink::V8AvailabilityStatus AvailabilityStatusToV8(
       return blink::V8AvailabilityStatus(
           blink::V8AvailabilityStatus::Enum::kAvailable);
   }
+}
+
+media::mojom::blink::SpeechRecognitionQuality SpeechRecognitionQualityToMojom(
+    blink::V8SpeechRecognitionQuality quality) {
+  switch (quality.AsEnum()) {
+    case blink::V8SpeechRecognitionQuality::Enum::kCommand:
+      return media::mojom::blink::SpeechRecognitionQuality::kCommand;
+    case blink::V8SpeechRecognitionQuality::Enum::kDictation:
+      return media::mojom::blink::SpeechRecognitionQuality::kDictation;
+    case blink::V8SpeechRecognitionQuality::Enum::kConversation:
+      return media::mojom::blink::SpeechRecognitionQuality::kConversation;
+  }
+  NOTREACHED();
 }
 }  // namespace
 
@@ -151,6 +170,7 @@ void SpeechRecognition::stopFunction() {
   if (started_ && !stopping_) {
     stopping_ = true;
     session_->StopCapture();
+    ResetAudioSink();
   }
 }
 
@@ -169,6 +189,7 @@ void SpeechRecognition::abort() {
   if (started_ && !stopping_) {
     stopping_ = true;
     session_->Abort();
+    ResetAudioSink();
   }
 }
 
@@ -179,6 +200,7 @@ ScriptPromise<V8AvailabilityStatus> SpeechRecognition::available(
     const blink::SpeechRecognitionOptions* options,
     ExceptionState& exception_state) {
   LocalDOMWindow& window = *LocalDOMWindow::From(script_state);
+  UseCounter::Count(window, WebFeature::kWebSpeechSttAvailable);
   auto* controller = SpeechRecognitionController::From(window);
   if (!controller || !script_state->ContextIsValid()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -208,8 +230,12 @@ ScriptPromise<V8AvailabilityStatus> SpeechRecognition::available(
   }
 
   if (options->processLocally()) {
+    V8SpeechRecognitionQuality quality =
+        options->hasQuality() ? options->quality()
+                              : V8SpeechRecognitionQuality(
+                                    V8SpeechRecognitionQuality::Enum::kCommand);
     controller->AvailableOnDevice(
-        options->langs(),
+        options->langs(), SpeechRecognitionQualityToMojom(quality),
         BindOnce(
             [](ScriptPromiseResolver<V8AvailabilityStatus>* resolver,
                media::mojom::blink::AvailabilityStatus status) {
@@ -270,39 +296,87 @@ ScriptPromise<IDLBoolean> SpeechRecognition::install(
     return result;
   }
 
+  V8SpeechRecognitionQuality quality =
+      options->hasQuality() ? options->quality()
+                            : V8SpeechRecognitionQuality(
+                                  V8SpeechRecognitionQuality::Enum::kCommand);
   controller->AvailableOnDevice(
-      options->langs(),
+      options->langs(), SpeechRecognitionQualityToMojom(quality),
       BindOnce(
           [](ScriptPromiseResolver<IDLBoolean>* resolver,
-             ScriptState* script_state, const Vector<String>& languages,
+             ScriptState* script_state,
+             const blink::SpeechRecognitionOptions* options,
              media::mojom::blink::AvailabilityStatus status) {
             LocalDOMWindow& window = *LocalDOMWindow::From(script_state);
             auto* controller = SpeechRecognitionController::From(window);
-            if (!window.IsServiceWorkerGlobalScope() &&
-                status ==
-                    media::mojom::blink::AvailabilityStatus::kDownloadable &&
-                !LocalFrame::ConsumeTransientUserActivation(
-                    window.GetFrame())) {
-              resolver->RejectWithDOMException(
-                  DOMExceptionCode::kNotAllowedError,
-                  "Requires handling a user gesture when availability is "
-                  "\"downloadable\".");
-              return;
+            if (!window.IsServiceWorkerGlobalScope()) {
+              switch (status) {
+                case media::mojom::blink::AvailabilityStatus::kDownloadable: {
+                  bool has_transient_user_activation =
+                      LocalFrame::ConsumeTransientUserActivation(
+                          window.GetFrame());
+                  if (!has_transient_user_activation) {
+                    base::UmaHistogramBoolean(
+                        "Accessibility.WebSpeech.DownloadRelaxed", false);
+                    resolver->RejectWithDOMException(
+                        DOMExceptionCode::kNotAllowedError,
+                        "Requires handling a user gesture when availability is "
+                        "\"downloadable\".");
+                    return;
+                  }
+                  break;
+                }
+                case media::mojom::blink::AvailabilityStatus::
+                    kDownloadableWithoutUserActivation: {
+                  bool has_transient_user_activation =
+                      LocalFrame::HasTransientUserActivation(window.GetFrame());
+                  if (!has_transient_user_activation) {
+                    // We intentionally do not consume the transient user
+                    // activation in the relaxed flow, allowing the gesture to
+                    // be used for other APIs. We also intentionally only log
+                    // the UMA when the relaxation explicitly saved a blocked
+                    // request (i.e. when there was no transient user
+                    // activation).
+                    base::UmaHistogramBoolean(
+                        "Accessibility.WebSpeech.DownloadRelaxed", true);
+                  }
+                  break;
+                }
+                case media::mojom::blink::AvailabilityStatus::kUnavailable:
+                  resolver->Resolve(false);
+                  return;
+                case media::mojom::blink::AvailabilityStatus::kDownloading:
+                case media::mojom::blink::AvailabilityStatus::kAvailable:
+                  // These statuses don't require special user activation checks
+                  // for installation.
+                  break;
+              }
             }
+
+            V8SpeechRecognitionQuality callback_quality =
+                options->hasQuality()
+                    ? options->quality()
+                    : V8SpeechRecognitionQuality(
+                          V8SpeechRecognitionQuality::Enum::kCommand);
             controller->Install(
-                languages,
+                options->langs(),
+                SpeechRecognitionQualityToMojom(callback_quality),
                 BindOnce([](ScriptPromiseResolver<IDLBoolean>* resolver,
                             bool success) { resolver->Resolve(success); },
                          WrapPersistent(resolver)));
           },
           WrapPersistent(resolver), WrapPersistent(script_state),
-          options->langs()));
+          WrapPersistent(options)));
 
   return result;
 }
 
 void SpeechRecognition::ResultRetrieved(
     Vector<media::mojom::blink::WebSpeechRecognitionResultPtr> results) {
+  if (GetExecutionContext()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kWebSpeechSttResultRetrieved);
+  }
   auto it = std::stable_partition(
       results.begin(), results.end(),
       [](const auto& result) { return !result->is_provisional; });
@@ -321,7 +395,8 @@ void SpeechRecognition::ResultRetrieved(
           hypothesis->utterance, hypothesis->confidence));
     }
     aggregated_results.push_back(SpeechRecognitionResult::Create(
-        std::move(alternatives), !result->is_provisional));
+        std::move(alternatives), !result->is_provisional,
+        result->audio_start_time, result->audio_end_time));
   }
 
   // |aggregated_results| now contains the following (in the given order):
@@ -331,12 +406,9 @@ void SpeechRecognition::ResultRetrieved(
   // (3) new provisional results from |results|
 
   // |final_results_| = (1) + (2).
-  HeapVector<Member<SpeechRecognitionResult>> new_final_results;
-  new_final_results.ReserveInitialCapacity(aggregated_results.size() -
-                                           provisional_count);
-  new_final_results.AppendRange(
-      aggregated_results.begin(),
-      UNSAFE_TODO(aggregated_results.end() - provisional_count));
+  HeapVector<Member<SpeechRecognitionResult>> new_final_results(
+      base::span(aggregated_results)
+          .first(aggregated_results.size() - provisional_count));
   final_results_ = std::move(new_final_results);
 
   // We dispatch an event with (1) + (2) + (3).
@@ -347,6 +419,9 @@ void SpeechRecognition::ResultRetrieved(
 
 void SpeechRecognition::ErrorOccurred(
     media::mojom::blink::SpeechRecognitionErrorPtr error) {
+  if (GetExecutionContext()) {
+    UseCounter::Count(GetExecutionContext(), WebFeature::kWebSpeechSttError);
+  }
   base::UmaHistogramEnumeration(kWebSpeechErrorOccurredHistogram, error->code);
   if (error->code ==
       media::mojom::blink::SpeechRecognitionErrorCode::kNoMatch) {
@@ -379,11 +454,24 @@ void SpeechRecognition::AudioEnded() {
   DispatchEvent(*Event::Create(event_type_names::kAudioend));
 }
 
+void SpeechRecognition::ResetAudioSink() {
+  if (audio_sink_) {
+    // WebMediaStreamAudioSink is part of the Blink public API, so it expects a
+    // WebMediaStreamTrack wrapper rather than the internal MediaStreamComponent
+    // object. We create a temporary wrapper to pass the component pointer.
+    WebMediaStreamAudioSink::RemoveFromAudioTrack(
+        audio_sink_.Get(), WebMediaStreamTrack(stream_track_->Component()));
+    stream_track_->UnregisterSink(audio_sink_.Get());
+    audio_sink_ = nullptr;
+  }
+}
+
 void SpeechRecognition::Ended() {
   started_ = false;
   stopping_ = false;
   session_.reset();
   receiver_.reset();
+  ResetAudioSink();
   DispatchEvent(*Event::Create(event_type_names::kEnd));
 }
 
@@ -396,6 +484,7 @@ ExecutionContext* SpeechRecognition::GetExecutionContext() const {
 }
 
 void SpeechRecognition::ContextDestroyed() {
+  ResetAudioSink();
   controller_ = nullptr;
 }
 
@@ -471,9 +560,15 @@ void SpeechRecognition::OnPhrasesDelete(
 }
 
 void SpeechRecognition::OnConnectionError() {
+  // On-device recognition (`process_locally_`) has no network, so a dropped
+  // pipe (e.g. an unexpected service crash) maps to "aborted" instead of the
+  // default "network" code, which only applies to cloud-based recognition.
+  media::mojom::blink::SpeechRecognitionErrorCode error_code =
+      process_locally_
+          ? media::mojom::blink::SpeechRecognitionErrorCode::kAborted
+          : media::mojom::blink::SpeechRecognitionErrorCode::kNetwork;
   ErrorOccurred(media::mojom::blink::SpeechRecognitionError::New(
-      media::mojom::blink::SpeechRecognitionErrorCode::kNetwork,
-      media::mojom::blink::SpeechAudioErrorDetails::kNone));
+      error_code, media::mojom::blink::SpeechAudioErrorDetails::kNone));
   Ended();
 }
 
@@ -503,9 +598,24 @@ void SpeechRecognition::CheckAvailabilityAndStart(
     return;
   }
 
+  bool can_use_on_device_recognition = DomWindow()->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kOnDeviceSpeechRecognition);
+
+  if (process_locally_ && !can_use_on_device_recognition) {
+    if (exception_state) {
+      exception_state->ThrowDOMException(DOMExceptionCode::kNotAllowedError,
+                                         kExceptionMessagePermissionPolicy);
+    } else {
+      ErrorOccurred(media::mojom::blink::SpeechRecognitionError::New(
+          media::mojom::blink::SpeechRecognitionErrorCode::kNotAllowed,
+          media::mojom::blink::SpeechAudioErrorDetails::kNone));
+    }
+    return;
+  }
+
   if (process_locally_ && lang_) {
     controller_->AvailableOnDevice(
-        Vector<String>{lang_},
+        Vector<String>{lang_}, SpeechRecognitionQualityToMojom(quality_),
         BindOnce(
             [](SpeechRecognition* speech_recognition,
                media::mojom::blink::AvailabilityStatus status) {
@@ -533,6 +643,25 @@ void SpeechRecognition::CheckAvailabilityAndStart(
 }
 
 void SpeechRecognition::StartInternal() {
+  // If this is called from a bound task (eg. from
+  // SpeechRecognitionController::AvailableOnDevice), the caller must not invoke
+  // it after the ExecutionContext is destroyed.
+  CHECK(GetExecutionContext());
+
+  if (auto* window = DomWindow()) {
+    if (!lang_.empty() && window->navigator()) {
+      bool is_relaxed_lang = false;
+      for (const String& accept_lang : window->navigator()->languages()) {
+        if (EqualIgnoringAsciiCase(accept_lang, lang_)) {
+          is_relaxed_lang = true;
+          break;
+        }
+      }
+      base::UmaHistogramBoolean("Accessibility.WebSpeech.RelaxedLanguageUsed",
+                                is_relaxed_lang);
+    }
+  }
+
   final_results_.clear();
 
   auto task_runner =
@@ -547,6 +676,7 @@ void SpeechRecognition::StartInternal() {
     WebMediaStreamAudioSink::AddToAudioTrack(
         sink, WebMediaStreamTrack(stream_track_->Component()));
     stream_track_->RegisterSink(sink);
+    audio_sink_ = sink;
   } else {
     StartController(session_.BindNewPipeAndPassReceiver(task_runner));
   }
@@ -557,9 +687,19 @@ void SpeechRecognition::StartInternal() {
 void SpeechRecognition::StartController(
     mojo::PendingReceiver<media::mojom::blink::SpeechRecognitionSession>
         session_receiver,
-    std::optional<media::AudioParameters> audio_parameters,
     mojo::PendingReceiver<media::mojom::blink::SpeechRecognitionAudioForwarder>
-        audio_forwarder_receiver) {
+        audio_forwarder_receiver,
+    std::optional<media::AudioParameters> audio_parameters) {
+  // If this is called from a bound task (eg. from
+  // SpeechRecognitionMediaStreamAudioSink), the caller must not invoke it after
+  // the ExecutionContext is destroyed.
+  CHECK(GetExecutionContext());
+  UseCounter::Count(GetExecutionContext(), WebFeature::kWebSpeechSttStart);
+
+  LocalDOMWindow* window = DomWindow();
+  bool can_use_on_device_recognition = window->IsFeatureEnabled(
+      network::mojom::PermissionsPolicyFeature::kOnDeviceSpeechRecognition);
+
   mojo::PendingRemote<media::mojom::blink::SpeechRecognitionSessionClient>
       session_client;
   // See https://bit.ly/2S0zRAS for task types.
@@ -571,8 +711,9 @@ void SpeechRecognition::StartController(
   auto params = controller_->BuildStartSpeechRecognitionRequestParams(
       std::move(session_receiver), std::move(session_client), *grammars_,
       phrases_.Get(), lang_, continuous_, interim_results_, max_alternatives_,
-      /*on_device=*/true,  // On-device speech recognition is always preferred.
+      unspoken_punctuation_, can_use_on_device_recognition,
       /*allow_cloud_fallback=*/!process_locally_,
+      SpeechRecognitionQualityToMojom(quality_),
       std::move(audio_forwarder_receiver), std::move(audio_parameters));
   controller_->Start(std::move(params));
 }
@@ -595,6 +736,7 @@ SpeechRecognition::~SpeechRecognition() = default;
 
 void SpeechRecognition::Trace(Visitor* visitor) const {
   visitor->Trace(stream_track_);
+  visitor->Trace(audio_sink_);
   visitor->Trace(grammars_);
   visitor->Trace(phrases_);
   visitor->Trace(controller_);

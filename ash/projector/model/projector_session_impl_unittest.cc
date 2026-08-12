@@ -4,7 +4,6 @@
 
 #include "ash/projector/model/projector_session_impl.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/projector/projector_metrics.h"
 #include "ash/public/cpp/projector/projector_session.h"
 #include "ash/test/ash_test_base.h"
@@ -12,7 +11,6 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 
 namespace ash {
 
@@ -32,16 +30,18 @@ class ProjectorSessionImplTest : public AshTestBase {
 
   // AshTestBase:
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kProjectorManagedUser},
-        /*disabled_features=*/{});
     AshTestBase::SetUp();
     session_ = static_cast<ProjectorSessionImpl*>(ProjectorSession::Get());
   }
 
+  // AshTestBase:
+  void TearDown() override {
+    session_ = nullptr;
+    AshTestBase::TearDown();
+  }
+
  protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  raw_ptr<ProjectorSessionImpl, DanglingUntriaged> session_;
+  raw_ptr<ProjectorSessionImpl> session_;
 };
 
 TEST_F(ProjectorSessionImplTest, Start) {

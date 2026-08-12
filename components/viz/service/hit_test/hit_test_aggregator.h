@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/types/expected.h"
 #include "components/viz/common/hit_test/aggregated_hit_test_region.h"
 #include "components/viz/common/hit_test/hit_test_query.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
@@ -16,6 +17,10 @@
 #include "components/viz/service/hit_test/hit_test_manager.h"
 #include "components/viz/service/surfaces/surface_observer.h"
 #include "components/viz/service/viz_service_export.h"
+
+namespace gfx {
+class RRectF;
+}  // namespace gfx
 
 namespace viz {
 
@@ -58,6 +63,11 @@ class VIZ_SERVICE_EXPORT HitTestAggregator : public HitTestQuery::DataProvider {
  private:
   friend class TestHitTestAggregator;
 
+  // TODO(jonross): add the capacity error to this and handle that.
+  enum class AggregationError {
+    INVALID_CHILD_REGION,
+  };
+
   void SendHitTestData();
 
   // Appends the root element to the AggregatedHitTestRegion array.
@@ -65,15 +75,19 @@ class VIZ_SERVICE_EXPORT HitTestAggregator : public HitTestQuery::DataProvider {
 
   // Appends a |region| to the HitTestRegionList structure to recursively
   // build the tree. |region_index| indicates the current index of the end of
-  // the list.
-  size_t AppendRegion(size_t region_index, const HitTestRegion& region);
+  // the list. |submitting_frame_sink_id| is the FrameSinkId that submitted the
+  // HitTestRegionList containing |region|.
+  base::expected<size_t, AggregationError> AppendRegion(
+      size_t region_index,
+      const HitTestRegion& region,
+      const FrameSinkId& submitting_frame_sink_id);
 
   // Populates the HitTestRegion element at the given element |index|.
   void SetRegionAt(size_t index,
                    const FrameSinkId& frame_sink_id,
                    uint32_t flags,
                    uint32_t reasons,
-                   const gfx::Rect& rect,
+                   const gfx::RRectF& rect,
                    const gfx::Transform& transform,
                    int32_t child_count);
 

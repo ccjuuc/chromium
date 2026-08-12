@@ -72,6 +72,10 @@ class TextFragmentGenerationNavigationTest
 void TextFragmentGenerationNavigationTest::SetUp() {
   SimTest::SetUp();
   WebView().MainFrameViewWidget()->Resize(gfx::Size(800, 600));
+  if (WebView().GetPage()) {
+    WebView().GetPage()->related_pages_mutation_from_previous_page_finalized_ =
+        true;
+  }
 }
 
 void TextFragmentGenerationNavigationTest::RunAsyncMatchingTasks() {
@@ -178,7 +182,7 @@ TextFragmentGenerationNavigationTest::GenerateAndNavigate(
     std::string selected_text,
     std::string* highlight_text) {
   String base_url = "https://example.com/test.html";
-  String html_content_wtf = String::FromUTF8(html_content.c_str());
+  String html_content_wtf = String::FromUtf8(html_content);
   LoadHTML(base_url, html_content_wtf);
 
   RangeInFlatTree* selection_range = GetSelectionRange(
@@ -204,8 +208,7 @@ TextFragmentGenerationNavigationTest::GenerateAndNavigate(
                                        : String();
 
   String expected_highlighted_text =
-      highlight_text != nullptr ? String::FromUTF8(highlight_text->c_str())
-                                : String();
+      highlight_text != nullptr ? String::FromUtf8(*highlight_text) : String();
 
   return shared_highlighting::SharedHighlightingDataDrivenTestResults{
       .generation_success = true,

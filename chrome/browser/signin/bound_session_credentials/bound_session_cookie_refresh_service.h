@@ -12,6 +12,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list_types.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_key.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_params.pb.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher_param.h"
 #include "chrome/common/renderer_configuration.mojom.h"
@@ -19,7 +20,6 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 
 struct BoundSessionDebugInfo;
-struct BoundSessionKey;
 
 // BoundSessionCookieRefreshService is responsible for maintaining cookies
 // associated with bound sessions. This class does the following:
@@ -73,6 +73,9 @@ class BoundSessionCookieRefreshService
   virtual std::vector<chrome::mojom::BoundSessionThrottlerParamsPtr>
   GetBoundSessionThrottlerParams() const = 0;
 
+  // Returns all active bound sessions.
+  virtual std::vector<BoundSessionKey> GetAllSessions() const = 0;
+
   virtual void CreateRegistrationRequest(
       BoundSessionRegistrationFetcherParam registration_params) = 0;
 
@@ -100,7 +103,7 @@ class BoundSessionCookieRefreshService
  private:
   friend class RendererUpdater;
   friend class BoundSessionCookieRefreshServiceImplBrowserTest;
-  friend class BoundSessionOAuthMultiloginPrototypeTest;
+  friend class BoundSessionOAuthMultiloginBaseTest;
 
   // `RendererUpdater` class that is responsible for pushing updates to all
   // renderers calls this setter to subscribe for bound session throttler params

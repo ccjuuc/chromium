@@ -266,8 +266,16 @@ ScriptPromise<ImageBitmap> ImageBitmapFactories::CreateImageBitmap(
     const ImageBitmapOptions* options,
     ExceptionState& exception_state) {
   if (crop_rect && (crop_rect->width() == 0 || crop_rect->height() == 0)) {
-    exception_state.ThrowRangeError(String::Format(
-        "The crop rect %s is 0.", crop_rect->width() ? "height" : "width"));
+    exception_state.ThrowRangeError(UNSAFE_TODO(String::Format(
+        "The crop rect %s is 0.", crop_rect->width() ? "height" : "width")));
+    return EmptyPromise();
+  }
+
+  if ((options->hasResizeWidth() && options->resizeWidth() == 0) ||
+      (options->hasResizeHeight() && options->resizeHeight() == 0)) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "The options's resizeWidth or "
+                                      "resizeHeight is 0.");
     return EmptyPromise();
   }
 

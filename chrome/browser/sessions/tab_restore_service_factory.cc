@@ -6,9 +6,13 @@
 
 #include <utility>
 
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/chrome_tab_restore_service_client.h"
+#include "chrome/common/buildflags.h"
 #include "components/sessions/core/tab_restore_service_impl.h"
+
 
 namespace {
 
@@ -18,7 +22,8 @@ std::unique_ptr<KeyedService> BuildTemplateService(
   DCHECK(!profile->IsOffTheRecord());
   auto client = std::make_unique<ChromeTabRestoreServiceClient>(profile);
   return std::make_unique<sessions::TabRestoreServiceImpl>(
-      std::move(client), profile->GetPrefs(), nullptr);
+      std::move(client), profile->GetPrefs(), /*time_factory=*/nullptr,
+      g_browser_process->os_crypt_async());
 }
 
 }  // namespace
@@ -66,7 +71,9 @@ TabRestoreServiceFactory::TabRestoreServiceFactory()
               // TODO(crbug.com/41488885): Check if this service is needed for
               // Ash Internals.
               .WithAshInternals(ProfileSelection::kOriginalOnly)
-              .Build()) {}
+              .Build()) {
+  DependsOn(glic::GlicKeyedServiceFactory::GetInstance());
+}
 
 TabRestoreServiceFactory::~TabRestoreServiceFactory() = default;
 

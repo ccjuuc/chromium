@@ -4,9 +4,12 @@
 
 package org.chromium.chrome.browser.sync.settings;
 
+import android.app.Activity;
+
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -15,13 +18,16 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.components.sync.BookmarksLimitExceededHelpClickedSource;
 import org.chromium.components.sync.SyncService;
 import org.chromium.components.sync.UserActionableError;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 /** Unit tests for {@link SyncSettingsUtils}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -33,6 +39,11 @@ public class SyncSettingsUtilsTest {
     @Mock private Profile mProfile;
 
     @Mock private SyncService mSyncService;
+
+    @Before
+    public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
+    }
 
     @Test
     @SmallTest
@@ -57,5 +68,25 @@ public class SyncSettingsUtilsTest {
                             UserActionableError.SIGN_IN_NEEDS_UPDATE,
                             SyncSettingsUtils.getSyncError(mProfile));
                 });
+    }
+
+    @Test
+    @SmallTest
+    public void testOpenBookmarkLimitHelpPage() {
+        Activity activity = Mockito.mock(Activity.class);
+        Mockito.when(activity.getPackageName())
+                .thenReturn(ContextUtils.getApplicationContext().getPackageName());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    SyncSettingsUtils.openBookmarkLimitHelpPage(
+                            activity,
+                            mSyncService,
+                            BookmarksLimitExceededHelpClickedSource.SETTINGS);
+                });
+
+        Mockito.verify(mSyncService)
+                .acknowledgeBookmarksLimitExceededError(
+                        BookmarksLimitExceededHelpClickedSource.SETTINGS);
     }
 }

@@ -12,6 +12,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/download/bubble/download_display_controller.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
-#include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_item_web_app_data.h"
 #include "chrome/browser/download/download_ui_model.h"
@@ -32,17 +32,25 @@
 #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
+#include "chrome/browser/ui/views/download/download_cuj_event_emitter.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "components/download/content/public/all_download_item_notifier.h"
+#include "components/download/public/common/download_danger_type.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_item.h"
 #include "components/offline_items_collection/core/offline_content_provider.h"
 #include "components/offline_items_collection/core/offline_item.h"
 #include "content/public/browser/download_manager.h"
+#include "extensions/browser/extension_util.h"
 
 namespace {
+
+const char kDownloadCUJEventEmittedKey[] = "DownloadCUJEventEmitted";
+class CUJEventEmittedData : public base::SupportsUserData::Data {};
 
 using ::offline_items_collection::ContentId;
 using ::offline_items_collection::OfflineContentProvider;
@@ -165,6 +173,11 @@ void UpdateInfoForModel(const DownloadUIModel& model,
       model.GetState() != download::DownloadItem::CANCELLED) {
     info.has_deep_scanning = true;
   }
+  if (model.GetDangerType() ==
+          download::DOWNLOAD_DANGER_TYPE_MAYBE_DANGEROUS_CONTENT &&
+      model.GetState() != download::DownloadItem::CANCELLED) {
+    info.has_content_check = true;
+  }
   if (!model.WasActionedOn()) {
     info.has_unactioned = true;
   }
@@ -190,11 +203,18 @@ void UpdateInfoForModel(const DownloadUIModel& model,
   }
 }
 
-bool BrowserMatchesWebAppData(const Browser* browser,
+bool BrowserMatchesWebAppData(const BrowserWindowInterface* browser,
                               const DownloadItemWebAppData* data) {
   return data != nullptr
              ? web_app::AppBrowserController::IsForWebApp(browser, data->id())
              : !web_app::AppBrowserController::IsWebApp(browser);
+}
+
+DownloadBubbleUIController* GetBubbleController(
+    BrowserWindowInterface* browser) {
+  auto* download_controller = DownloadToolbarUIController::From(browser);
+  return download_controller ? download_controller->bubble_controller()
+                             : nullptr;
 }
 
 }  // namespace
@@ -329,26 +349,10 @@ DownloadBubbleUpdateService::GetAllCacheManagers() {
   return cache_managers;
 }
 
-void DownloadBubbleUpdateService::ObserveDownloadHistory() {
-  // If OTR, this is the original profile. Otherwise, this is just the profile
-  // itself.
-  Profile* profile = profile_->GetOriginalProfile();
-  if (DownloadCoreService* dcs =
-          DownloadCoreServiceFactory::GetForBrowserContext(profile);
-      dcs && dcs->GetDownloadHistory()) {
-    download_history_observation_.Observe(dcs->GetDownloadHistory());
-  }
-}
-
 void DownloadBubbleUpdateService::Initialize(
     content::DownloadManager* manager) {
   CHECK(manager);
   CHECK(!download_item_notifier_);
-
-  // This is safe to do here because we know the DownloadManager has been
-  // created by now. If we did this earlier, then it might trigger early
-  // initialization of the DownloadManager and ChromeDownloadManagerDelegate.
-  ObserveDownloadHistory();
 
   // Assume we have an original profile and it has an OTR profile.
   // If the original profile's DownloadBubbleUpdateService is Initialize()'d
@@ -383,6 +387,13 @@ void DownloadBubbleUpdateService::Initialize(
   // with the current profile's downloads. If we get an original manager in the
   // future, we will initialize from scratch at that time.
   InitializeDownloadItemsCache();
+  if (!base::FeatureList::IsEnabled(
+          download::features::kDeferredDownloadHistoryLoading)) {
+    StartInitializeOfflineItemsCache();
+  }
+}
+
+void DownloadBubbleUpdateService::InitializeOfflineItemsIfNecessary() {
   StartInitializeOfflineItemsCache();
 }
 
@@ -759,7 +770,7 @@ void DownloadBubbleUpdateService::OnDownloadCreated(
   if (!download_item_notifier_) {
     return;
   }
-  if (download_crx_util::IsExtensionDownload(*item) &&
+  if (extensions::util::IsExtensionDownload(*item) &&
       delayed_crx_guids_.size() < kMaxDelayedCrxGuids) {
     const std::string& guid = item->GetGuid();
     CHECK(!delayed_crx_guids_.contains(guid));
@@ -774,7 +785,8 @@ void DownloadBubbleUpdateService::OnDownloadCreated(
   }
   GetCacheForItem(item).MaybeAddDownloadItemToCache(
       item, /*is_new=*/true,
-      /*maybe_add_alert=*/download_history_loaded_);
+      /*maybe_add_alert=*/item->GetDownloadCreationType() !=
+          download::DownloadItem::TYPE_HISTORY_IMPORT);
   // NotifyWindowsOfDownloadItemAdded() is called from
   // DownloadBubbleUIControllerDelegate for new non-crx downloads.
 }
@@ -795,7 +807,8 @@ void DownloadBubbleUpdateService::OnDelayedCrxDownloadCreated(
   if (item && !item->IsDone()) {
     GetCacheForItem(item).MaybeAddDownloadItemToCache(
         item, /*is_new=*/true,
-        /*maybe_add_alert=*/download_history_loaded_);
+        /*maybe_add_alert=*/item->GetDownloadCreationType() !=
+            download::DownloadItem::TYPE_HISTORY_IMPORT);
     NotifyWindowsOfDownloadItemAdded(item);
   }
   size_t erased = delayed_crx_guids_.erase(guid);
@@ -804,17 +817,20 @@ void DownloadBubbleUpdateService::OnDelayedCrxDownloadCreated(
 
 void DownloadBubbleUpdateService::NotifyWindowsOfDownloadItemAdded(
     download::DownloadItem* item) {
-  Browser* browser_to_show_animation =
+  BrowserWindowInterface* browser_to_show_animation =
       FindBrowserToShowAnimation(item, profile_);
   auto* web_app_data = DownloadItemWebAppData::Get(item);
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        BrowserMatchesWebAppData(browser, web_app_data)) {
-      browser->window()->GetDownloadBubbleUIController()->OnDownloadItemAdded(
-          item, /*may_show_animation=*/browser == browser_to_show_animation);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            BrowserMatchesWebAppData(browser, web_app_data)) {
+          bubble_controller->OnDownloadItemAdded(
+              item,
+              /*may_show_animation=*/browser == browser_to_show_animation);
+        }
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::OnDownloadUpdated(
@@ -847,14 +863,28 @@ void DownloadBubbleUpdateService::OnDownloadUpdated(
   cache.OnDownloadItemUpdated(item);
 
   auto* web_app_data = DownloadItemWebAppData::Get(item);
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        BrowserMatchesWebAppData(browser, web_app_data)) {
-      browser->window()->GetDownloadBubbleUIController()->OnDownloadItemUpdated(
-          item);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            BrowserMatchesWebAppData(browser, web_app_data)) {
+          bubble_controller->OnDownloadItemUpdated(item);
+        }
+
+        if (item->GetState() == download::DownloadItem::COMPLETE) {
+          // A download completion event can be completed multiple times. To
+          // prevent notification spam, only send a single event for this
+          // `item`.
+          if (!item->GetUserData(&kDownloadCUJEventEmittedKey) &&
+              download::EmitElementTrackerEvent(browser,
+                                                kDownloadEndedCustomEventId)) {
+            item->SetUserData(&kDownloadCUJEventEmittedKey,
+                              std::make_unique<CUJEventEmittedData>());
+          }
+        }
+
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::CacheManager::OnDownloadItemUpdated(
@@ -863,7 +893,8 @@ void DownloadBubbleUpdateService::CacheManager::OnDownloadItemUpdated(
   bool removed_item = RemoveDownloadItemFromCache(item);
   bool added_back_at_end = MaybeAddDownloadItemToCache(
       item, /*is_new=*/false,
-      /*maybe_add_alert=*/update_service_->download_history_loaded());
+      /*maybe_add_alert=*/item->GetDownloadCreationType() !=
+          download::DownloadItem::TYPE_HISTORY_IMPORT);
   if (cache_was_at_max && removed_item && added_back_at_end) {
     CHECK_EQ(download_items_.size(), GetNumItemsToCache());
     const ItemSortKey& last_key =
@@ -885,14 +916,15 @@ void DownloadBubbleUpdateService::OnDownloadRemoved(
   GetCacheForItem(item).OnDownloadItemRemoved(item);
 
   auto* web_app_data = DownloadItemWebAppData::Get(item);
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        BrowserMatchesWebAppData(browser, web_app_data)) {
-      browser->window()->GetDownloadBubbleUIController()->OnDownloadItemRemoved(
-          item);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            BrowserMatchesWebAppData(browser, web_app_data)) {
+          bubble_controller->OnDownloadItemRemoved(item);
+        }
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::CacheManager::OnDownloadItemRemoved(
@@ -937,14 +969,15 @@ void DownloadBubbleUpdateService::OnItemsAdded(
                                            /*maybe_add_alert=*/true);
   }
 
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        !web_app::AppBrowserController::IsWebApp(browser)) {
-      browser->window()->GetDownloadBubbleUIController()->OnOfflineItemsAdded(
-          items);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            !web_app::AppBrowserController::IsWebApp(browser)) {
+          bubble_controller->OnOfflineItemsAdded(items);
+        }
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::OnItemRemoved(const ContentId& id) {
@@ -959,14 +992,15 @@ void DownloadBubbleUpdateService::OnItemRemoved(const ContentId& id) {
   }
   main_cache_.OnOfflineItemRemoved(id);
 
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        !web_app::AppBrowserController::IsWebApp(browser)) {
-      browser->window()->GetDownloadBubbleUIController()->OnOfflineItemRemoved(
-          id);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            !web_app::AppBrowserController::IsWebApp(browser)) {
+          bubble_controller->OnOfflineItemRemoved(id);
+        }
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::CacheManager::OnOfflineItemRemoved(
@@ -993,14 +1027,15 @@ void DownloadBubbleUpdateService::OnItemUpdated(
   }
   main_cache_.OnOfflineItemUpdated(item);
 
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        !web_app::AppBrowserController::IsWebApp(browser)) {
-      browser->window()->GetDownloadBubbleUIController()->OnOfflineItemUpdated(
-          item);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            !web_app::AppBrowserController::IsWebApp(browser)) {
+          bubble_controller->OnOfflineItemUpdated(item);
+        }
+        return true;
+      });
 }
 
 void DownloadBubbleUpdateService::CacheManager::OnOfflineItemUpdated(
@@ -1019,14 +1054,6 @@ void DownloadBubbleUpdateService::CacheManager::OnOfflineItemUpdated(
 void DownloadBubbleUpdateService::OnContentProviderGoingDown() {
   is_shut_down_ = true;
   main_cache_.DropAllOfflineItems();
-}
-
-void DownloadBubbleUpdateService::OnHistoryQueryComplete() {
-  download_history_loaded_ = true;
-}
-
-void DownloadBubbleUpdateService::OnDownloadHistoryDestroyed() {
-  download_history_observation_.Reset();
 }
 
 bool DownloadBubbleUpdateService::CacheManager::MaybeAddDownloadItemToCache(
@@ -1257,9 +1284,10 @@ void DownloadBubbleUpdateService::StartInitializeOfflineItemsCache() {
   if (IsShutDown()) {
     return;
   }
-  if (offline_items_initialized_) {
+  if (offline_items_initialized_ || offline_items_initializing_) {
     return;
   }
+  offline_items_initializing_ = true;
   offline_items_collection::OfflineContentProvider* provider =
       OfflineContentAggregatorFactory::GetForKey(profile_->GetProfileKey());
   provider->GetAllItems(
@@ -1275,6 +1303,18 @@ void DownloadBubbleUpdateService::InitializeOfflineItemsCache(
                                            /*maybe_add_alert=*/false);
   }
   offline_items_initialized_ = true;
+  offline_items_initializing_ = false;
+
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            !web_app::AppBrowserController::IsWebApp(browser)) {
+          bubble_controller->OnOfflineItemsInitialized();
+        }
+        return true;
+      });
+
   for (auto& callback : offline_item_callbacks_) {
     std::move(callback).Run();
   }
@@ -1374,14 +1414,15 @@ void DownloadBubbleUpdateService::OnEphemeralWarningExpired(
   GetCacheForItem(item).UpdateDisplayInfo(guid);
 
   auto* web_app_data = DownloadItemWebAppData::Get(item);
-  for (Browser* browser : chrome::FindAllBrowsersWithProfile(profile_)) {
-    if (browser->window() &&
-        browser->window()->GetDownloadBubbleUIController() &&
-        BrowserMatchesWebAppData(browser, web_app_data)) {
-      browser->window()->GetDownloadBubbleUIController()->OnDownloadItemRemoved(
-          item);
-    }
-  }
+  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        auto* bubble_controller = GetBubbleController(browser);
+        if (bubble_controller &&
+            BrowserMatchesWebAppData(browser, web_app_data)) {
+          bubble_controller->OnDownloadItemRemoved(item);
+        }
+        return true;
+      });
 }
 
 #if DCHECK_IS_ON()

@@ -8,6 +8,7 @@
 #include <optional>
 #include <variant>
 
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/no_destructor.h"
 #include "base/rand_util.h"
@@ -26,9 +27,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
-#include "third_party/blink/public/mojom/webauthn/authenticator.mojom-shared.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "url/gurl.h"
 
@@ -327,11 +326,8 @@ void WebAuthenticationProxyService::CompleteCreateRequest(
         .Run("Missing CreateResponseDetails.responseJson");
     return;
   }
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      *details.response_json,
-      base::BindOnce(&WebAuthenticationProxyService::OnParseCreateResponse,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     std::move(respond_callback), details.request_id));
+  ParseCreateResponseSync(std::move(respond_callback), details.request_id,
+                          *details.response_json);
 }
 
 void WebAuthenticationProxyService::CompleteGetRequest(
@@ -360,11 +356,8 @@ void WebAuthenticationProxyService::CompleteGetRequest(
     std::move(respond_callback).Run("Missing GetResponseDetails.responseJson");
     return;
   }
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      *details.response_json,
-      base::BindOnce(&WebAuthenticationProxyService::OnParseGetResponse,
-                     weak_ptr_factory_.GetWeakPtr(),
-                     std::move(respond_callback), details.request_id));
+  ParseGetResponseSync(std::move(respond_callback), details.request_id,
+                       *details.response_json);
 }
 
 bool WebAuthenticationProxyService::CompleteIsUvpaaRequest(
@@ -449,24 +442,26 @@ WebAuthenticationProxyService::NewRequestId() {
   // Technically, this could spin forever if there are 4 billion active
   // requests. However, there's no real risk to this happening (no security or
   // DOS concerns).
-  while (base::Contains(pending_callbacks_, request_id)) {
+  while (pending_callbacks_.contains(request_id)) {
     request_id = base::RandGenerator(std::numeric_limits<uint32_t>::max()) + 1;
   }
   return request_id;
 }
 
-void WebAuthenticationProxyService::OnParseCreateResponse(
+void WebAuthenticationProxyService::ParseCreateResponseSync(
     RespondCallback respond_callback,
     RequestId request_id,
-    data_decoder::DataDecoder::ValueOrError value_or_error) {
+    const std::string& response_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!value_or_error.has_value()) {
+  base::JSONReader::Result result =
+      base::JSONReader::ReadAndReturnValueWithError(response_json,
+                                                    base::JSON_PARSE_RFC);
+  if (!result.has_value()) {
     std::move(respond_callback)
-        .Run("Parsing responseJson failed: " + value_or_error.error());
+        .Run("Parsing responseJson failed: " + result.error().message);
     return;
   }
-  auto [response, error] =
-      webauthn::MakeCredentialResponseFromValue(*value_or_error);
+  auto [response, error] = webauthn::MakeCredentialResponseFromValue(*result);
   if (!response) {
     std::move(respond_callback).Run("Invalid responseJson: " + error);
     return;
@@ -488,18 +483,20 @@ void WebAuthenticationProxyService::OnParseCreateResponse(
   std::move(respond_callback).Run(std::nullopt);
 }
 
-void WebAuthenticationProxyService::OnParseGetResponse(
+void WebAuthenticationProxyService::ParseGetResponseSync(
     RespondCallback respond_callback,
     RequestId request_id,
-    data_decoder::DataDecoder::ValueOrError value_or_error) {
+    const std::string& response_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!value_or_error.has_value()) {
+  base::JSONReader::Result result =
+      base::JSONReader::ReadAndReturnValueWithError(response_json,
+                                                    base::JSON_PARSE_RFC);
+  if (!result.has_value()) {
     std::move(respond_callback)
-        .Run("Parsing responseJson failed: " + value_or_error.error());
+        .Run("Parsing responseJson failed: " + result.error().message);
     return;
   }
-  auto [response, error] =
-      webauthn::GetAssertionResponseFromValue(*value_or_error);
+  auto [response, error] = webauthn::GetAssertionResponseFromValue(*result);
   if (!response) {
     std::move(respond_callback).Run("Invalid responseJson: " + error);
     return;

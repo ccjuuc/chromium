@@ -6,6 +6,7 @@
 #define CHROME_RENDERER_ACCESSIBILITY_READ_ANYTHING_READ_ALOUD_APP_MODEL_H_
 
 #include "base/metrics/single_sample_metrics.h"
+#include "base/threading/sequence_bound.h"
 #include "base/values.h"
 #include "chrome/common/read_anything/read_anything.mojom.h"
 #include "chrome/renderer/accessibility/phrase_segmentation/dependency_parser_model.h"
@@ -41,30 +42,46 @@ class ReadAloudAppModel {
   };
   // LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingSpeechStopSource)
 
+  // LINT.IfChange(ReadAnythingPlaybackContext)
+  enum class ReadAnythingPlaybackContext {
+    kSidePanel = 0,
+    kImmersive = 1,
+
+    kMinValue = kSidePanel,
+    kMaxValue = kImmersive,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:ReadAnythingPlaybackContext)
+
   static constexpr char kSpeechStopSourceHistogramName[] =
       "Accessibility.ReadAnything.SpeechStopSource";
   static constexpr char kAudioStartTimeFailureHistogramName[] =
       "Accessibility.ReadAnything.AudioStartTime.Failure";
   static constexpr char kAudioStartTimeSuccessHistogramName[] =
       "Accessibility.ReadAnything.AudioStartTime.Success";
+  static constexpr char kPlaybackContextHistogramName[] =
+      "Accessibility.ReadAnything.ReadAloud.PlaybackContext";
 
   ReadAloudAppModel();
   ~ReadAloudAppModel();
   ReadAloudAppModel(const ReadAloudAppModel& other) = delete;
   ReadAloudAppModel& operator=(const ReadAloudAppModel&) = delete;
 
-  bool speech_tree_initialized() { return speech_tree_initialized_; }
-  bool speech_playing() { return speech_playing_; }
+  bool speech_tree_initialized() const { return speech_tree_initialized_; }
+  bool speech_playing() const { return speech_playing_; }
   void SetSpeechPlaying(bool is_playing);
-  bool audio_currently_playing() { return audio_currently_playing_; }
+  ReadAnythingPlaybackContext current_session_context_for_testing() const {
+    return current_session_context_for_testing_;
+  }
+
+  bool audio_currently_playing() const { return audio_currently_playing_; }
   void SetAudioCurrentlyPlaying(bool is_playing);
   double speech_rate() const { return speech_rate_; }
   void set_speech_rate(double rate) { speech_rate_ = rate; }
-  const base::Value::List& languages_enabled_in_pref() const {
+  const base::ListValue& languages_enabled_in_pref() const {
     return languages_enabled_in_pref_;
   }
   void SetLanguageEnabled(const std::string& lang, bool enabled);
-  const base::Value::Dict& voices() const { return voices_; }
+  const base::DictValue& voices() const { return voices_; }
   void SetVoice(const std::string& voice, const std::string& lang) {
     voices_.Set(lang, voice);
   }
@@ -82,8 +99,8 @@ class ReadAloudAppModel {
   bool IsHighlightOn();
   void OnSettingsRestoredFromPrefs(
       double speech_rate,
-      base::Value::List* languages_enabled_in_pref,
-      base::Value::Dict* voices,
+      base::ListValue* languages_enabled_in_pref,
+      base::DictValue* voices,
       read_anything::mojom::HighlightGranularity granularity);
 
   // Returns the next valid AXNodePosition.
@@ -120,7 +137,7 @@ class ReadAloudAppModel {
                                const std::set<ui::AXNodeID>* current_nodes);
 
   // Get the dependency parsing model for this renderer process.
-  DependencyParserModel& GetDependencyParserModel();
+  base::SequenceBound<DependencyParserModel>& GetDependencyParserModel();
 
   // Increments the processed_granularity_index_, updating ReadAloud's state of
   // the current granularity to refer to the next granularity. The current
@@ -145,6 +162,7 @@ class ReadAloudAppModel {
   int GetCurrentTextEndIndex(const ui::AXNodeID& node_id);
 
   void ResetReadAloudState();
+  void ResetAndLogSingleSampleMetrics();
 
   // Returns a list of segments representing the next nodes and ranges
   // that should be spoken and highlighted with Read Aloud. The text ranges
@@ -183,6 +201,7 @@ class ReadAloudAppModel {
   void IncrementMetric(const std::string& metric_name);
 
   void LogSpeechStop(ReadAloudStopSource source);
+  void LogPlaybackContext(ReadAnythingPlaybackContext context);
 
  private:
   friend ReadAnythingReadAloudAppModelTest;
@@ -318,11 +337,11 @@ class ReadAloudAppModel {
   double speech_rate_ = 1.0;
 
   // The languages that the user has enabled for reading aloud.
-  base::Value::List languages_enabled_in_pref_;
+  base::ListValue languages_enabled_in_pref_;
 
   // The user's preferred voices. Maps from a language to the last chosen
   // voice for that language.
-  base::Value::Dict voices_;
+  base::DictValue voices_;
 
   // The current granularity being used for the reading highlight.
   int highlight_granularity_ =
@@ -343,7 +362,9 @@ class ReadAloudAppModel {
       {"Accessibility.ReadAnything.ReadAloudNextButtonSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPauseSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPlaySessionCount", 0},
+      {"Accessibility.ReadAnything.ReadAloudPlayFromSelectionSessionCount", 0},
       {"Accessibility.ReadAnything.ReadAloudPreviousButtonSessionCount", 0},
+      {"Accessibility.ReadAnything.ReadAloud.VoiceLanguageChange", 0},
   };
   std::map<std::string, std::unique_ptr<base::SingleSampleMetric>>
       metric_to_single_sample_;
@@ -383,6 +404,12 @@ class ReadAloudAppModel {
       processed_granularities_on_current_page_;
 
   ui::AXTreeID active_tree_id_ = ui::AXTreeIDUnknown();
+
+  // NOTE: This context is set at playback start. It can be used in the future
+  // to segment duration metrics (SpeechPlaybackSession) or errors by surface
+  // (Side Panel vs. Immersive).
+  ReadAnythingPlaybackContext current_session_context_for_testing_ =
+      ReadAnythingPlaybackContext::kSidePanel;
 
   base::WeakPtrFactory<ReadAloudAppModel> weak_ptr_factory_{this};
 };

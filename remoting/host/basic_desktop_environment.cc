@@ -19,14 +19,15 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "remoting/base/fifo_buffer.h"
+#include "remoting/base/ipc_fifo_buffer.h"
 #include "remoting/host/action_executor.h"
 #include "remoting/host/active_display_monitor.h"
 #include "remoting/host/audio_capturer.h"
+#include "remoting/host/audio_injector.h"
 #include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/base/screen_controls.h"
 #include "remoting/host/client_session_control.h"
-#include "remoting/host/desktop_capturer_proxy.h"
-#include "remoting/host/desktop_capturer_wrapper.h"
 #include "remoting/host/desktop_display_info_monitor.h"
 #include "remoting/host/desktop_interaction_strategy.h"
 #include "remoting/host/file_transfer/file_operations.h"
@@ -39,6 +40,8 @@
 #include "remoting/host/webauthn/remote_webauthn_extension_notifier.h"
 #include "remoting/host/webauthn/remote_webauthn_state_change_notifier.h"
 #include "remoting/protocol/desktop_capturer.h"
+#include "remoting/protocol/desktop_capturer_proxy.h"
+#include "remoting/protocol/desktop_capturer_wrapper.h"
 #include "remoting/protocol/mouse_cursor_monitor.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
@@ -105,7 +108,8 @@ DesktopDisplayInfoMonitor* BasicDesktopEnvironment::GetDisplayInfoMonitor() {
           video_layout_callback.Run(info->GetVideoLayoutProto());
         },
         display_info_monitor_.get(), std::move(video_layout_callback));
-    display_info_monitor_->AddCallback(std::move(callback));
+    display_info_subscription_ =
+        display_info_monitor_->AddCallback(std::move(callback));
   }
   return display_info_monitor_.get();
 }
@@ -145,13 +149,16 @@ std::string BasicDesktopEnvironment::GetCapabilities() const {
 void BasicDesktopEnvironment::SetCapabilities(const std::string& capabilities) {
 }
 
-std::uint32_t BasicDesktopEnvironment::GetDesktopSessionId() const {
-  return UINT32_MAX;
-}
-
 std::unique_ptr<RemoteWebAuthnStateChangeNotifier>
 BasicDesktopEnvironment::CreateRemoteWebAuthnStateChangeNotifier() {
   return std::make_unique<RemoteWebAuthnExtensionNotifier>();
+}
+
+std::unique_ptr<AudioInjector> BasicDesktopEnvironment::CreateAudioInjector(
+    std::unique_ptr<IpcFifoBufferReader> reader) {
+  DCHECK(caller_task_runner_->BelongsToCurrentThread());
+
+  return AudioInjector::Create(std::move(reader));
 }
 
 std::unique_ptr<DesktopCapturer> BasicDesktopEnvironment::CreateVideoCapturer(

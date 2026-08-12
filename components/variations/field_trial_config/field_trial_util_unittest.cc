@@ -9,12 +9,12 @@
 #include <optional>
 #include <utility>
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_span.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/variations/client_filterable_state.h"
@@ -45,9 +45,10 @@ class ExperimentBuilder {
         enable_features,
         disable_features,
         forcing_flag,
-        override_ui_string,
         hardware_classes,
         exclude_hardware_classes,
+        hardware_manufacturers,
+        exclude_hardware_manufacturers,
     };
   }
 
@@ -61,38 +62,10 @@ class ExperimentBuilder {
   base::raw_span<const char*> enable_features = {};
   base::raw_span<const char*> disable_features = {};
   const char* forcing_flag = nullptr;
-  base::raw_span<const OverrideUIString> override_ui_string = {};
   base::raw_span<const char*> hardware_classes = {};
   base::raw_span<const char*> exclude_hardware_classes = {};
-};
-
-class TestOverrideStringCallback {
- public:
-  typedef std::map<uint32_t, std::u16string> OverrideMap;
-
-  TestOverrideStringCallback()
-      : callback_(base::BindRepeating(&TestOverrideStringCallback::Override,
-                                      base::Unretained(this))) {}
-
-  TestOverrideStringCallback(const TestOverrideStringCallback&) = delete;
-  TestOverrideStringCallback& operator=(const TestOverrideStringCallback&) =
-      delete;
-
-  virtual ~TestOverrideStringCallback() = default;
-
-  const VariationsSeedProcessor::UIStringOverrideCallback& callback() const {
-    return callback_;
-  }
-
-  const OverrideMap& overrides() const { return overrides_; }
-
- private:
-  void Override(uint32_t hash, const std::u16string& string) {
-    overrides_[hash] = string;
-  }
-
-  VariationsSeedProcessor::UIStringOverrideCallback callback_;
-  OverrideMap overrides_;
+  base::raw_span<const char*> hardware_manufacturers = {};
+  base::raw_span<const char*> exclude_hardware_manufacturers = {};
 };
 
 // TODO(crbug.com/40742801): Remove when fake VariationsServiceClient created.
@@ -117,8 +90,6 @@ class TestVariationsServiceClient : public VariationsServiceClient {
     return false;
   }
   bool IsEnterprise() override { return false; }
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-      PrefService* local_state) override {}
 
  private:
   // VariationsServiceClient:
@@ -142,7 +113,6 @@ class FieldTrialUtilTest : public ::testing::Test {
   }
 
  protected:
-  TestOverrideStringCallback override_callback_;
   TestVariationsServiceClient variation_service_client_;
 };
 
@@ -207,8 +177,8 @@ TEST_F(FieldTrialUtilTest, AssociateParamsFromFieldTrialConfig) {
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial1", "x"));
   EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial1", "y"));
@@ -315,8 +285,8 @@ TEST_F(FieldTrialUtilTest, FieldTrialConfigSkipOverridden) {
 
   // Associate the |kConfig| field trial config.
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   // Expect only TestTrial2 to have been registered as it is the only study to
   // not enable/disable features A or B.
@@ -329,10 +299,8 @@ TEST_F(FieldTrialUtilTest,
        AssociateParamsFromFieldTrialConfigWithEachPlatform) {
   const Study::Platform all_platforms[] = {
       Study::PLATFORM_ANDROID,  // Comment to prevent clang format bin packing.
-      Study::PLATFORM_ANDROID_WEBLAYER,
       Study::PLATFORM_ANDROID_WEBVIEW,
       Study::PLATFORM_CHROMEOS,
-      Study::PLATFORM_CHROMEOS_LACROS,
       Study::PLATFORM_FUCHSIA,
       Study::PLATFORM_IOS,
       Study::PLATFORM_LINUX,
@@ -363,8 +331,8 @@ TEST_F(FieldTrialUtilTest,
 
     base::FeatureList feature_list;
     AssociateParamsFromFieldTrialConfig(
-        kConfig, override_callback_.callback(), platform,
-        variation_service_client_.GetCurrentFormFactor(), &feature_list);
+        kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+        &feature_list);
 
     EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
     EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -398,7 +366,7 @@ TEST_F(FieldTrialUtilTest,
   // The platforms don't match, so trial shouldn't be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), Study::PLATFORM_ANDROID_WEBVIEW,
+      kConfig, Study::PLATFORM_ANDROID_WEBVIEW,
       variation_service_client_.GetCurrentFormFactor(), &feature_list);
 
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
@@ -430,7 +398,7 @@ TEST_F(FieldTrialUtilTest,
   // One of the platforms matches, so trial should be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), Study::PLATFORM_ANDROID_WEBVIEW,
+      kConfig, Study::PLATFORM_ANDROID_WEBVIEW,
       variation_service_client_.GetCurrentFormFactor(), &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
@@ -472,8 +440,8 @@ TEST_F(FieldTrialUtilTest,
   // One of the form_factors matches, so trial should be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -509,8 +477,8 @@ TEST_F(FieldTrialUtilTest,
   // One of the form_factors matches, so trial should be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -556,7 +524,7 @@ TEST_F(FieldTrialUtilTest,
     // The form factor don't match, so trial shouldn't be added.
     base::FeatureList feature_list;
     AssociateParamsFromFieldTrialConfig(
-        kConfig, override_callback_.callback(), Study::PLATFORM_ANDROID_WEBVIEW,
+        kConfig, Study::PLATFORM_ANDROID_WEBVIEW,
         variation_service_client_.GetCurrentFormFactor(), &feature_list);
 
     EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
@@ -607,8 +575,8 @@ TEST_F(FieldTrialUtilTest, AssociateFeaturesFromFieldTrialConfig) {
 
   std::unique_ptr<base::FeatureList> feature_list(new base::FeatureList);
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), feature_list.get());
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      feature_list.get());
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatureList(std::move(feature_list));
 
@@ -672,57 +640,12 @@ TEST_F(FieldTrialUtilTest, AssociateForcingFlagsFromFieldTrialConfig) {
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("TestGroup1", base::FieldTrialList::FindFullName("TestTrial1"));
   EXPECT_EQ("ForcedGroup2", base::FieldTrialList::FindFullName("TestTrial2"));
   EXPECT_EQ("ForcedGroup3", base::FieldTrialList::FindFullName("TestTrial3"));
-}
-
-TEST_F(FieldTrialUtilTest,
-       AssociateParamsFromFieldTrialConfigWithUIStringOverrides) {
-  const Study::Platform platform = Study::PLATFORM_WINDOWS;
-  const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params[] =
-        {{"x", "1"}, {"y", "2"}};
-  const OverrideUIString array_kFieldTrialConfig_override_ui_string[] =
-        {{1234, "test1"}, {5678, "test2"}};
-  ExperimentBuilder experiment_builder;
-  experiment_builder.name = "TestGroup";
-  experiment_builder.platforms = base::span_from_ref(platform);
-  experiment_builder.params = array_kFieldTrialConfig_params;
-  experiment_builder.override_ui_string =
-      array_kFieldTrialConfig_override_ui_string;
-  const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
-      experiment_builder.Build(),
-  };
-  const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
-      {"TestTrial", array_kFieldTrialConfig_experiments}};
-  const FieldTrialTestingConfig kConfig = {array_kFieldTrialConfig_studies};
-
-  // One of the form_factors matches, so trial should be added.
-  base::FeatureList feature_list;
-  AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
-
-  EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
-  EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
-
-  std::map<std::string, std::string> params;
-  EXPECT_TRUE(base::GetFieldTrialParams("TestTrial", &params));
-  EXPECT_EQ(2U, params.size());
-  EXPECT_EQ("1", params["x"]);
-  EXPECT_EQ("2", params["y"]);
-
-  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
-  const TestOverrideStringCallback::OverrideMap& overrides =
-      override_callback_.overrides();
-  EXPECT_EQ(2u, overrides.size());
-  auto it = overrides.find(1234);
-  EXPECT_EQ(u"test1", it->second);
-  it = overrides.find(5678);
-  EXPECT_EQ(u"test2", it->second);
 }
 
 TEST_F(FieldTrialUtilTest,
@@ -745,8 +668,8 @@ TEST_F(FieldTrialUtilTest,
   // The is_low_end_device filter matches, so trial should be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -780,8 +703,8 @@ TEST_F(FieldTrialUtilTest,
   // The is_low_end_device don't match, so trial shouldn't be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -814,8 +737,8 @@ TEST_F(FieldTrialUtilTest,
   // The min_os_version filter matches, so trial should be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("1", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("2", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -843,7 +766,7 @@ TEST_F(
   // When both enable-benchmarking and 'disable_benchmarking' are set,
   // the trial should not be added.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableBenchmarking);
+      ::switches::kEnableBenchmarking);
   experiment_builder.disable_benchmarking = true;
 
   const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
@@ -857,8 +780,8 @@ TEST_F(
   // added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -883,7 +806,7 @@ TEST_F(
   // If enable-benchmarking is set, and the experiment doesn't set
   // 'disable_benchmarking', the trial should be added.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      switches::kEnableBenchmarking);
+      ::switches::kEnableBenchmarking);
   experiment_builder.disable_benchmarking = false;
 
   const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
@@ -897,8 +820,84 @@ TEST_F(
   // added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
+
+  std::map<std::string, std::string> params;
+  EXPECT_TRUE(base::GetFieldTrialParams("TestTrial", &params));
+  EXPECT_EQ(2U, params.size());
+  EXPECT_EQ("1", params["x"]);
+  EXPECT_EQ("2", params["y"]);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithEnableFieldTrialConfigBenchmarkingAndDisableBenchmarking) {
+  const Study::Platform platform = Study::PLATFORM_WINDOWS;
+  const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params[] = {
+      {"x", "1"}, {"y", "2"}};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = base::span_from_ref(platform);
+  experiment_builder.params = array_kFieldTrialConfig_params;
+
+  // When --enable-field-trial-config=benchmarking and 'disable_benchmarking'
+  // are set, the trial should not be added.
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kEnableFieldTrialTestingConfig, "benchmarking");
+  experiment_builder.disable_benchmarking = true;
+
+  const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
+      experiment_builder.Build(),
+  };
+  const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
+      {"TestTrial", array_kFieldTrialConfig_experiments}};
+  const FieldTrialTestingConfig kConfig = {array_kFieldTrialConfig_studies};
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
+
+  EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
+  EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "y"));
+
+  std::map<std::string, std::string> params;
+  EXPECT_FALSE(base::GetFieldTrialParams("TestTrial", &params));
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithEnableFieldTrialConfigBenchmarkingAndNoDisableBenchmarking) {
+  const Study::Platform platform = Study::PLATFORM_WINDOWS;
+  const FieldTrialTestingExperimentParams array_kFieldTrialConfig_params[] = {
+      {"x", "1"}, {"y", "2"}};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = base::span_from_ref(platform);
+  experiment_builder.params = array_kFieldTrialConfig_params;
+
+  // If --enable-field-trial-config=benchmarking is set, and the experiment
+  // doesn't set 'disable_benchmarking', the trial should be added.
+  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kEnableFieldTrialTestingConfig, "benchmarking");
+  experiment_builder.disable_benchmarking = false;
+
+  const FieldTrialTestingExperiment array_kFieldTrialConfig_experiments[] = {
+      experiment_builder.Build(),
+  };
+  const FieldTrialTestingStudy array_kFieldTrialConfig_studies[] = {
+      {"TestTrial", array_kFieldTrialConfig_experiments}};
+  const FieldTrialTestingConfig kConfig = {array_kFieldTrialConfig_studies};
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   std::map<std::string, std::string> params;
   EXPECT_TRUE(base::GetFieldTrialParams("TestTrial", &params));
@@ -934,8 +933,8 @@ TEST_F(
   // added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   std::map<std::string, std::string> params;
   EXPECT_TRUE(base::GetFieldTrialParams("TestTrial", &params));
@@ -970,8 +969,8 @@ TEST_F(FieldTrialUtilTest,
   // The min_os_version doesn't match, so trial shouldn't be added.
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      kConfig, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      kConfig, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "x"));
   EXPECT_EQ("", base::GetFieldTrialParamValue("TestTrial", "y"));
@@ -1023,8 +1022,8 @@ TEST_F(FieldTrialUtilTest,
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      config, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      config, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
 }
@@ -1055,8 +1054,8 @@ TEST_F(FieldTrialUtilTest,
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      config, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      config, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
 }
@@ -1088,8 +1087,8 @@ TEST_F(FieldTrialUtilTest,
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      config, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      config, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
 }
@@ -1120,11 +1119,152 @@ TEST_F(FieldTrialUtilTest,
 
   base::FeatureList feature_list;
   AssociateParamsFromFieldTrialConfig(
-      config, override_callback_.callback(), platform,
-      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+      config, platform, variation_service_client_.GetCurrentFormFactor(),
+      &feature_list);
 
   EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithHardwareManufacturerMatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      hardware_manufacturer.c_str(),
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithHardwareManufacturerMismatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(FieldTrialUtilTest,
+       AssociateParamsFromFieldTrialConfigWithExcludHardwareManufacturerMatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      hardware_manufacturer.c_str(),
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.exclude_hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("", base::FieldTrialList::FindFullName("TestTrial"));
+}
+
+TEST_F(
+    FieldTrialUtilTest,
+    AssociateParamsFromFieldTrialConfigWithExcludHardwareManufacturerMismatch) {
+  std::string hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
+  std::string unmatched_hardware_manufacturer = hardware_manufacturer + "foo";
+  const char* manufacturers[] = {
+      unmatched_hardware_manufacturer.c_str(),
+  };
+
+  const Study::Platform platforms[] = {Study::PLATFORM_ANDROID,
+                                       Study::PLATFORM_ANDROID_WEBVIEW};
+  ExperimentBuilder experiment_builder;
+  experiment_builder.name = "TestGroup";
+  experiment_builder.platforms = platforms;
+  experiment_builder.exclude_hardware_manufacturers = manufacturers;
+  FieldTrialTestingExperiment experiment[]{experiment_builder.Build()};
+
+  FieldTrialTestingStudy study[]{{
+      /*name=*/"TestTrial",
+      /*experiments=*/experiment,
+  }};
+
+  FieldTrialTestingConfig config = {
+      /*studies=*/study,
+  };
+
+  base::FeatureList feature_list;
+  AssociateParamsFromFieldTrialConfig(
+      config, Study::PLATFORM_ANDROID_WEBVIEW,
+      variation_service_client_.GetCurrentFormFactor(), &feature_list);
+
+  EXPECT_EQ("TestGroup", base::FieldTrialList::FindFullName("TestTrial"));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace variations

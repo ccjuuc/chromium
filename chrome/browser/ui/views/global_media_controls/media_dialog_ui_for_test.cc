@@ -11,6 +11,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_dialog_view.h"
 #include "chrome/browser/ui/views/global_media_controls/media_dialog_view_observer.h"
+#include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
 #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -18,7 +19,8 @@
 #include "components/global_media_controls/public/media_item_manager_observer.h"
 #include "components/global_media_controls/public/views/media_item_ui_updated_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/test/ui_controls.h"
+#include "ui/views/bubble/bubble_anchor.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -209,8 +211,8 @@ class MediaToolbarButtonWatcher
   // Checks the label texts of each media item to see if |text| is contained
   // anywhere in the dialog.
   bool DialogContainsText(const std::u16string& text) {
-    for (const auto& item_pair : MediaDialogView::GetDialogViewForTesting()
-                                     ->GetUpdatedItemsForTesting()) {
+    for (const auto& item_pair :
+         MediaDialogView::GetDialogViewForTesting()->GetItemsForTesting()) {
       global_media_controls::MediaItemUIUpdatedView* view = item_pair.second;
       if (view->GetSourceLabelForTesting()->GetText().find(text) !=
               std::string::npos ||
@@ -227,7 +229,7 @@ class MediaToolbarButtonWatcher
   bool CheckPictureInPictureButtonVisibility(bool visible) {
     global_media_controls::MediaItemUIUpdatedView* view =
         MediaDialogView::GetDialogViewForTesting()
-            ->GetUpdatedItemsForTesting()
+            ->GetItemsForTesting()
             .begin()
             ->second;
     global_media_controls::MediaActionButton* button =
@@ -242,7 +244,7 @@ class MediaToolbarButtonWatcher
 
   int GetItemCount() {
     return MediaDialogView::GetDialogViewForTesting()
-        ->GetUpdatedItemsForTesting()
+        ->GetItemsForTesting()
         .size();
   }
 
@@ -269,16 +271,23 @@ class MediaToolbarButtonWatcher
 }  // namespace
 
 MediaDialogUiForTest::MediaDialogUiForTest(
-    base::RepeatingCallback<Browser*()> callback)
+    base::RepeatingCallback<BrowserWindowInterface*()> callback)
     : browser_callback_(callback) {}
 
 MediaDialogUiForTest::~MediaDialogUiForTest() = default;
 
 MediaToolbarButtonView* MediaDialogUiForTest::GetToolbarIcon() {
   LayoutBrowserIfNecessary();
-  return BrowserView::GetBrowserViewForBrowser(browser_callback_.Run())
-      ->toolbar()
-      ->media_button();
+  auto* media_button =
+      BrowserView::GetBrowserViewForBrowser(browser_callback_.Run())
+          ->toolbar()
+          ->media_button();
+  if (!media_button) {
+    return nullptr;
+  }
+  views::BubbleAnchor anchor = media_button->GetBubbleAnchor();
+  CHECK(anchor.GetIfView());
+  return views::AsViewClass<MediaToolbarButtonView>(anchor.GetIfView());
 }
 
 void MediaDialogUiForTest::LayoutBrowserIfNecessary() {
@@ -335,6 +344,6 @@ void MediaDialogUiForTest::WaitForPictureInPictureButtonVisibility(
 global_media_controls::MediaItemManager* MediaDialogUiForTest::GetItemManager()
     const {
   return MediaNotificationServiceFactory::GetForProfile(
-             browser_callback_.Run()->profile())
+             browser_callback_.Run()->GetProfile())
       ->media_item_manager();
 }

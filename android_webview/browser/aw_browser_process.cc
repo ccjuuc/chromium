@@ -6,8 +6,8 @@
 
 #include "android_webview/browser/aw_browser_context.h"
 #include "android_webview/browser/aw_content_browser_client.h"
+#include "base/android/pre_freeze_background_memory_trimmer.h"
 #include "android_webview/browser/aw_enterprise_authentication_app_link_manager.h"
-#include "android_webview/browser/component_updater/registration.h"
 #include "android_webview/browser/lifecycle/aw_contents_lifecycle_notifier.h"
 #include "android_webview/browser/metrics/visibility_metrics_logger.h"
 #include "android_webview/common/crash_reporter/crash_keys.h"
@@ -16,13 +16,16 @@
 #include "base/android/path_utils.h"
 #include "base/base_paths_posix.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "components/component_updater/android/component_loader_policy.h"
+#include "base/time/time.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/embedder_support/origin_trials/origin_trials_settings_storage.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
@@ -81,7 +84,14 @@ void recordCacheQuotaFreshness(CacheQuotaFreshness state) {
   base::UmaHistogramEnumeration("Android.WebView.CacheQuotaFreshness", state);
 }
 
-bool g_did_early_perfetto_initialization = false;
+base::WaitableEvent* GetTracingInitEvent() {
+  static base::NoDestructor<base::WaitableEvent> event;
+  return event.get();
+}
+
+bool g_init_tracing_during_browser_main = true;
+bool g_initializing_tracing_on_background_thread = false;
+bool g_is_native_webview_zygote_enabled = false;
 
 }  // namespace
 
@@ -105,8 +115,7 @@ AwBrowserProcess::AwBrowserProcess(AwContentBrowserClient* browser_client)
   origin_trials_settings_storage_ =
       std::make_unique<embedder_support::OriginTrialsSettingsStorage>();
 
-  // Initialize OSCryptAsync with a PosixKeyProvider. Initialization always
-  // succeeds, so encryption is never delegated to synchronous OSCrypt.
+  // Initialize OSCryptAsync with a PosixKeyProvider.
   auto key_provider = std::make_unique<os_crypt_async::PosixKeyProvider>();
   std::vector<std::pair<size_t, std::unique_ptr<os_crypt_async::KeyProvider>>>
       key_providers;
@@ -116,10 +125,12 @@ AwBrowserProcess::AwBrowserProcess(AwContentBrowserClient* browser_client)
 }
 
 AwBrowserProcess::~AwBrowserProcess() {
+  aw_contents_lifecycle_notifier_->RemoveObserver(this);
   g_aw_browser_process = nullptr;
 }
 
 void AwBrowserProcess::PreMainMessageLoopRun() {
+  aw_contents_lifecycle_notifier_->AddObserver(this);
   pref_change_registrar_.Init(local_state());
   auto auth_pref_callback = base::BindRepeating(
       &AwBrowserProcess::OnAuthPrefsChanged, base::Unretained(this));
@@ -149,6 +160,35 @@ void AwBrowserProcess::CreateLocalState() {
 void AwBrowserProcess::OnLoseForeground() {
   if (local_state_)
     local_state_->CommitPendingWrite();
+}
+
+void AwBrowserProcess::OnAppStateChanged(State state) {
+  if (!base::android::PreFreezeBackgroundMemoryTrimmer::SupportsModernTrim()) {
+    return;
+  }
+
+  if (!base::FeatureList::IsEnabled(
+          features::kWebViewPurgeMemoryInBackground)) {
+    return;
+  }
+
+  if (state != State::kBackground) {
+    purge_memory_timer_.Stop();
+    return;
+  }
+
+  if (purge_memory_timer_.IsRunning()) {
+    return;
+  }
+
+  purge_memory_timer_.Start(
+      FROM_HERE, features::kWebViewPurgeMemoryInBackgroundDelay.Get(), this,
+      &AwBrowserProcess::PurgeMemory);
+}
+
+void AwBrowserProcess::PurgeMemory() {
+  base::MemoryPressureListenerRegistry::NotifyMemoryPressure(
+      base::MEMORY_PRESSURE_LEVEL_CRITICAL);
 }
 
 AwBrowserPolicyConnector* AwBrowserProcess::browser_policy_connector() {
@@ -353,34 +393,69 @@ static void JNI_AwBrowserProcess_OnStartupComplete(JNIEnv* env) {
   AwBrowserProcess::GetInstance()->GetBrowserClient()->OnStartupComplete();
 }
 
+static void JNI_AwBrowserProcess_SetNativeWebViewZygoteEnabled(JNIEnv* env,
+                                                               bool enabled) {
+  AwBrowserProcess::SetNativeWebViewZygoteEnabled(enabled);
+}
+
 static void JNI_AwBrowserProcess_SetProcessNameCrashKey(
     JNIEnv* env,
-    std::string& processName) {
+    const std::string& processName) {
   static ::crash_reporter::CrashKeyString<64> crash_key(
       crash_keys::kAppProcessName);
   crash_key.Set(processName);
 }
 
-static base::android::ScopedJavaLocalRef<jobjectArray>
-JNI_AwBrowserProcess_GetComponentLoaderPolicies(JNIEnv* env) {
-  return component_updater::AndroidComponentLoaderPolicy::
-      ToJavaArrayOfAndroidComponentLoaderPolicy(env,
-                                                GetComponentLoaderPolicies());
-}
-
-static void JNI_AwBrowserProcess_InitPerfetto(JNIEnv* env,
-                                              bool enable_system_backend) {
+static void JNI_AwBrowserProcess_InitTracing(JNIEnv* env,
+                                             bool enable_system_backend,
+                                             bool called_on_background_thread) {
   tracing::InitTracing(/*enable_consumer=*/true,
                        /*will_trace_thread_restart=*/false,
                        /*enable_system_backend=*/enable_system_backend ||
                            tracing::ShouldSetupSystemTracing(),
                        base::NullCallback());
-  g_did_early_perfetto_initialization = true;
+  if (called_on_background_thread) {
+    GetTracingInitEvent()->Signal();
+  }
+}
+
+static void JNI_AwBrowserProcess_MarkTracingInitializedOnBackground(
+    JNIEnv* env) {
+  g_initializing_tracing_on_background_thread = true;
+}
+
+static void JNI_AwBrowserProcess_DisableTracingInitDuringBrowserMain(
+    JNIEnv* env) {
+  g_init_tracing_during_browser_main = false;
 }
 
 // static
-bool AwBrowserProcess::DidEarlyPerfettoInitialization() {
-  return g_did_early_perfetto_initialization;
+void AwBrowserProcess::WaitForBackgroundTracingInit() {
+  if (g_initializing_tracing_on_background_thread) {
+    base::TimeTicks wait_start = base::TimeTicks::Now();
+    GetTracingInitEvent()->Wait();
+    // We only want to log the wait time if the init happened on a background
+    // thread.
+    base::TimeDelta init_wait_time = base::TimeTicks::Now() - wait_start;
+    base::UmaHistogramTimes(
+        "Android.WebView.TracingInit.BackgroundInitMainThreadWaitTime",
+        init_wait_time);
+  }
+}
+
+// static
+bool AwBrowserProcess::ShouldInitTracingDuringBrowserMain() {
+  return g_init_tracing_during_browser_main;
+}
+
+// static
+void AwBrowserProcess::SetNativeWebViewZygoteEnabled(bool enabled) {
+  g_is_native_webview_zygote_enabled = enabled;
+}
+
+// static
+bool AwBrowserProcess::IsNativeWebViewZygoteEnabled() {
+  return g_is_native_webview_zygote_enabled;
 }
 
 }  // namespace android_webview

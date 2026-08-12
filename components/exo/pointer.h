@@ -67,7 +67,7 @@ class Pointer : public SurfaceTreeHost,
 
   ~Pointer() override;
 
-  PointerDelegate* delegate() const { return delegate_; }
+  PointerDelegate* delegate() const { return delegate_.get(); }
 
   // Set the pointer surface, i.e., the surface that contains the pointer image
   // (cursor). The |hotspot| argument defines the position of the pointer
@@ -151,6 +151,11 @@ class Pointer : public SurfaceTreeHost,
     return capture_window_ != nullptr;
   }
 
+  int button_flags_on_drag_drop_start_for_testing() const {
+    return button_flags_on_drag_drop_start_;
+  }
+  Surface* focus_surface_for_testing() const { return focus_surface_; }
+
  private:
   class ScopedCursorLocker;
 
@@ -231,7 +236,7 @@ class Pointer : public SurfaceTreeHost,
                            const gfx::PointF& location_in_target);
 
   // The delegate instance that all events are dispatched to.
-  const raw_ptr<PointerDelegate, DanglingUntriaged> delegate_;
+  base::WeakPtr<PointerDelegate> delegate_;
 
   const raw_ptr<Seat> seat_;
 
@@ -271,6 +276,12 @@ class Pointer : public SurfaceTreeHost,
   // The window with pointer capture. Pointer capture is enabled if and only if
   // this is not null.
   raw_ptr<aura::Window> capture_window_ = nullptr;
+
+  // True iff `this` is currently registered as a pre-target handler on
+  // aura::Env. Tracked explicitly because EnablePointerCapture() can be called
+  // for multiple surfaces without an intervening DisablePointerCapture(), and
+  // EventTarget permits duplicate handlers but only removes one per call.
+  bool env_pre_target_handler_added_ = false;
 
   // True if this pointer is permitted to be captured.
   //

@@ -57,9 +57,7 @@ NotificationTelemetryServiceFactory::BuildServiceInstanceForBrowserContext(
   if (base::FeatureList::IsEnabled(
           kGlobalCacheListForGatingNotificationProtections)) {
     return std::make_unique<NotificationTelemetryService>(
-        Profile::FromBrowserContext(context),
-        g_browser_process->shared_url_loader_factory(), nullptr,
-        isEsb ? std::make_unique<NotificationTelemetryStore>(profile) : nullptr,
+        Profile::FromBrowserContext(context), nullptr,
         isEsb ? g_browser_process->safe_browsing_service()->ui_manager()
               : nullptr);
   }
@@ -71,9 +69,7 @@ NotificationTelemetryServiceFactory::BuildServiceInstanceForBrowserContext(
   }
 
   return std::make_unique<NotificationTelemetryService>(
-      profile, g_browser_process->shared_url_loader_factory(),
-      g_browser_process->safe_browsing_service()->database_manager(),
-      isEsb ? std::make_unique<NotificationTelemetryStore>(profile) : nullptr,
+      profile, g_browser_process->safe_browsing_service()->database_manager(),
       isEsb ? g_browser_process->safe_browsing_service()->ui_manager()
             : nullptr);
 #else

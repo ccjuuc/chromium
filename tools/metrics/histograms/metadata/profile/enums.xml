@@ -26,10 +26,28 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
-<enum name="BooleanStale">
-  <int value="0" label="Fresh"/>
-  <int value="1" label="Stale"/>
+<!-- LINT.IfChange(FeatureShowcaseStep) -->
+
+<enum name="FeatureShowcaseStep">
+  <summary>Steps shown in the Feature Showcase.</summary>
+  <int value="0" label="DefaultBrowser"/>
+  <int value="1" label="GoogleLens"/>
+  <int value="2" label="PasswordManager"/>
+  <int value="3" label="ThemesAndCustomization"/>
+  <int value="4" label="Gemini"/>
 </enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/views/profiles/feature_showcase/feature_showcase_metrics.h:FeatureShowcaseStep) -->
+
+<!-- LINT.IfChange(FeatureShowcaseStepUserAction) -->
+
+<enum name="FeatureShowcaseStepUserAction">
+  <summary>Action taken by the user on a Feature Showcase step</summary>
+  <int value="0" label="Declined"/>
+  <int value="1" label="Accepted"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/views/profiles/feature_showcase/feature_showcase_metrics.h:FeatureShowcaseStepUserAction) -->
 
 <enum name="FirstRunCloudPolicyStoreState">
   <int value="0" label="Loaded before initialization">
@@ -216,12 +234,6 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Add new signed-in profile from the Profile picker"/>
 </enum>
 
-<enum name="ProfileAllAccountsNames">
-  <int value="0" label="At most one name (or a rare hash collision)"/>
-  <int value="1" label="Multiple names (no sync)"/>
-  <int value="2" label="Multiple names (sync enabled for one of them)"/>
-</enum>
-
 <enum name="ProfileAvatar">
   <int value="0" label="Generic"/>
   <int value="1" label="Generic Aqua"/>
@@ -263,6 +275,24 @@ chromium-metrics-reviews@google.com.
   <int value="37" label="Origami Pink Butterfly"/>
   <int value="38" label="Origami Rabbit"/>
   <int value="39" label="Origami Unicorn"/>
+  <int value="40" label="Illustration Basketball"/>
+  <int value="41" label="Illustration Bike"/>
+  <int value="42" label="Illustration Bird"/>
+  <int value="43" label="Illustration Cheese"/>
+  <int value="44" label="Illustration Football"/>
+  <int value="45" label="Illustration Ramen"/>
+  <int value="46" label="Illustration Sunglasses"/>
+  <int value="47" label="Illustration Sushi"/>
+  <int value="48" label="Illustration Tamagotchi"/>
+  <int value="49" label="Illustration Vinyl"/>
+  <int value="50" label="Abstract Avocado"/>
+  <int value="51" label="Abstract Cappuccino"/>
+  <int value="52" label="Abstract Ice Cream"/>
+  <int value="53" label="Abstract Ice Water"/>
+  <int value="54" label="Abstract Melon"/>
+  <int value="55" label="Abstract Onigiri"/>
+  <int value="56" label="Abstract Pizza"/>
+  <int value="57" label="Abstract Sandwich"/>
 </enum>
 
 <enum name="ProfileDeleteAction">
@@ -344,21 +374,10 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Create failure all"/>
   <int value="8" label="Webdata payment manifest DB error"/>
   <int value="9" label="Webdata account autofill DB error"/>
+  <int value="10" label="Web App DB error"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/profiles/profile_error_dialog.h:ProfileErrorType) -->
-
-<!-- LINT.IfChange(ProfileGaiaNameShareStatus) -->
-
-<enum name="ProfileGaiaNameShareStatus">
-  <int value="0" label="Not shared"/>
-  <int value="1" label="Shared by non managed profiles"/>
-  <int value="2"
-      label="Appears at most once in non managed profiles, but shared when
-             including managed profiles"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/profiles/profile_metrics.h:GaiaNameShareStatus) -->
 
 <enum name="ProfileKeepAliveOrigin">
   <int value="0" label="kWaitingForFirstBrowserWindow"/>
@@ -404,7 +423,21 @@ chromium-metrics-reviews@google.com.
   <int value="40" label="kGlicView"/>
   <int value="41" label="kWaitingForGlicView"/>
   <int value="42" label="kWaitingForBookmarksImportOnFirstRun"/>
+  <int value="43" label="kSkillsDialog"/>
+  <int value="44" label="kWebAppDatabaseCorruptionRecovery"/>
+  <int value="45" label="kFetchKeepAlive"/>
 </enum>
+
+<!-- LINT.IfChange(ProfileLockStatus) -->
+
+<enum name="ProfileLockStatus">
+  <int value="0" label="Acquired"/>
+  <int value="1" label="AcquiredSystemCrash"/>
+  <int value="2" label="FailedInUse"/>
+  <int value="3" label="FailedUnknown"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/profiles/profile_load_tracker_win.h:ProfileLockStatus) -->
 
 <!-- LINT.IfChange(ProfileManagementFlowStep) -->
 
@@ -425,6 +458,9 @@ chromium-metrics-reviews@google.com.
     Not an actual user facing step; the user has no input, it will open the
     browser.
   </int>
+  <int value="10" label="Feature Showcase"/>
+  <int value="11" label="Finish Or Continue"/>
+  <int value="12" label="Device Signals Disclaimer"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/views/profiles/profile_management_flow_controller.h:Step) -->
@@ -465,6 +501,7 @@ chromium-metrics-reviews@google.com.
   <int value="30"
       label="Batch Upload for Windows Deprecation as primary button"/>
   <int value="31" label="Passkey unlock button"/>
+  <int value="32" label="Sign-in on phone button"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/views/profiles/profile_menu_view_base.h:ActionableItem) -->
@@ -507,18 +544,10 @@ chromium-metrics-reviews@google.com.
   <int value="15" label="Add new profile item in the app menu"/>
   <int value="16" label="Glic Manager"/>
   <int value="17" label="On startup create profile with email"/>
+  <int value="18" label="Omnibox Everywhere"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/ui/profiles/profile_picker.h:EntryPoint) -->
-
-<!-- LINT.IfChange(ProfilePickerOpenAllProfilesButtonAction) -->
-
-<enum name="ProfilePickerOpenAllProfilesButtonAction">
-  <int value="0" label="Open All Profiles button was shown"/>
-  <int value="1" label="Open All Profiles button was clicked"/>
-</enum>
-
-<!-- LINT.ThenChange(//chrome/browser/ui/webui/signin/profile_picker_handler.h:ProfilePickerOpenAllProfilesButtonAction) -->
 
 <enum name="ProfilePickerPages">
   <int value="0" label="mainView"/>
@@ -546,6 +575,17 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Finish flow: Sync conformation"/>
   <int value="4" label="Finish flow: History optin"/>
 </enum>
+
+<!-- LINT.IfChange(ProfilePreviousExitStatus) -->
+
+<enum name="ProfilePreviousExitStatus">
+  <int value="0" label="NoCrash"/>
+  <int value="1" label="NoCrashDidNotAck"/>
+  <int value="2" label="Dirty"/>
+  <int value="3" label="DirtyDidNotAck"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/profiles/profile_load_tracker_win.h:ProfilePreviousExitStatus) -->
 
 <enum name="ProfileSignedInFlowOutcome">
   <int value="0" label="A consumer account is added and syncing"/>
@@ -585,6 +625,24 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Child account"/>
   <int value="3" label="No account (signed-out)"/>
 </enum>
+
+<!-- LINT.IfChange(SigninUIErrorType) -->
+
+<enum name="SigninUIErrorType">
+  <int value="0" label="OK"/>
+  <int value="1" label="UsernameNotAllowedByPatternFromPrefs"/>
+  <int value="2" label="WrongReauthAccount"/>
+  <int value="3" label="AccountAlreadyUsedByAnotherProfile"/>
+  <int value="4" label="ProfileWasUsedByAnotherAccount"/>
+  <int value="5" label="FromGoogleServiceAuthError"/>
+  <int value="6" label="FromCredentialProviderUiExitCode"/>
+  <int value="7" label="NoProfile"/>
+  <int value="8" label="SigninDisallowed"/>
+  <int value="9" label="SigninCookiesDisallowed"/>
+  <int value="10" label="NoIdentityManager"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/webui/signin/signin_ui_error.h:SigninUIErrorType) -->
 
 </enums>
 

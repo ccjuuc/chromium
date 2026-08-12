@@ -108,14 +108,11 @@ class SingleClientDictionaryTransportModeSyncTest
 
 IN_PROC_BROWSER_TEST_P(SingleClientDictionaryTransportModeSyncTest,
                        ShouldStartDataTypeInTransportModeIfFeatureEnabled) {
-  ASSERT_TRUE(SetupClients());
-
   // Sign in the primary account.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
+  ASSERT_TRUE(SignIn());
   // Enable history to enable DICTIONARY.
   GetSyncService(0)->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kHistory, true);
-
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
 
   // Whether or not the type is enabled in transport mode depends on the
@@ -312,12 +309,16 @@ IN_PROC_BROWSER_TEST_P(SingleClientDictionaryWithAccountStorageSyncTest,
 
   ASSERT_THAT(dictionary_helper::GetDictionaryWords(0),
               UnorderedElementsAre(kLocalWord, kAccountWord));
+
+  // Set HTTP error to be persisted to disk, which ensures it is active on
+  // startup in the next test.
+  GetFakeServer()->SetHttpError(net::HTTP_REQUEST_TIMEOUT);
 }
 
 IN_PROC_BROWSER_TEST_P(SingleClientDictionaryWithAccountStorageSyncTest,
                        ShouldPersistAccountWordsOverRestarts) {
-  // Mimics network issues on restart.
-  GetFakeServer()->SetHttpError(net::HTTP_REQUEST_TIMEOUT);
+  // Verify that the HTTP error was persisted and is active on startup.
+  ASSERT_EQ(GetFakeServer()->GetHttpError(), net::HTTP_REQUEST_TIMEOUT);
 
   ASSERT_TRUE(SetupClients());
   dictionary_helper::LoadDictionaries();

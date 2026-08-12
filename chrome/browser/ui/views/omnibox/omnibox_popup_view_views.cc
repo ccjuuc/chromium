@@ -14,11 +14,10 @@
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "build/build_config.h"
-#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/page_load_metrics/observers/top_chrome_webui_metrics_observer.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
@@ -34,7 +33,8 @@
 #include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/browser/ui/views/theme_copying_widget.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
-#include "components/omnibox/common/omnibox_features.h"
+#include "components/omnibox/common/omnibox_metrics_utils.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/compositor/closure_animation_observer.h"
@@ -119,7 +119,7 @@ class OmniboxPopupViewViews::PopupWidget final : public ThemeCopyingWidget {
 #if BUILDFLAG(IS_WIN)
     // On Windows use the software compositor to ensure that we don't block
     // the UI thread during command buffer creation. We can revert this change
-    // once http://crbug.com/125248 is fixed.
+    // once http://crbug.com/40198772 is fixed.
     params.force_software_compositing = !base::FeatureList::IsEnabled(
         kOmniboxRemovePopupWidgetSoftwareCompositing);
 #endif
@@ -333,7 +333,7 @@ bool OmniboxPopupViewViews::IsOpen() const {
 }
 
 void OmniboxPopupViewViews::InvalidateLine(size_t line) {
-  // TODO(tommycli): This is weird, but https://crbug.com/1063071 shows that
+  // TODO(tommycli): This is weird, but https://crbug.com/40680508 shows that
   // crashes like this have happened, so we add this to avoid it for now.
   if (line >= row_views_.size()) {
     return;
@@ -357,6 +357,9 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
       if (!widget_->ShouldHandleNativeWidgetActivationChanged(false)) {
         return;
       }
+      // Drop stale metrics callbacks.
+      metrics_weak_factory_.InvalidateWeakPtrs();
+
       widget_->CloseAnimated();  // This will eventually delete the popup.
       widget_->RemoveObserver(&widget_observer_helper_);
       widget_.reset();
@@ -388,6 +391,9 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
   // Ensure that we have an existing popup widget prior to creating the result
   // views to ensure the proper initialization of the views hierarchy.
   if (!was_open) {
+    // Drop stale metrics callbacks.
+    metrics_weak_factory_.InvalidateWeakPtrs();
+
     views::Widget* popup_parent = location_bar_view_->GetWidget();
 
     // If the popup is currently closed, we need to create it.
@@ -427,7 +433,7 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
   for (size_t i = 0; i < result_size; ++i) {
     // Create child views lazily.  Since especially the first result view may
     // be expensive to create due to loading font data, this saves time and
-    // memory during browser startup. https://crbug.com/1021323
+    // memory during browser startup. https://crbug.com/40657008
     // If the row group view is created, it should not be counted in the number
     // of children.
     if (children().size() - contextual_group_view_count == i) {
@@ -471,7 +477,6 @@ void OmniboxPopupViewViews::UpdatePopupAppearance() {
     OmniboxResultView* result_view = result_view_at(0);
     if (result_view) {
       result_view->GetViewAccessibility().SetIsSelected(true);
-      FireAXEventsForNewActiveDescendant(result_view);
     }
 
     // Update the popup state manager that the classic popup is opening.
@@ -518,9 +523,8 @@ std::u16string_view OmniboxPopupViewViews::GetAccessibleButtonTextForResult(
   return static_cast<const views::LabelButton*>(button)->GetText();
 }
 
-raw_ptr<OmniboxPopupViewWebUI>
-OmniboxPopupViewViews::GetOmniboxPopupViewWebUI() {
-  return nullptr;
+bool OmniboxPopupViewViews::IsSelectionPopupControlled() const {
+  return false;
 }
 
 bool OmniboxPopupViewViews::OnMouseDragged(const ui::MouseEvent& event) {
@@ -568,7 +572,7 @@ void OmniboxPopupViewViews::OnGestureEvent(ui::GestureEvent* event) {
 void OmniboxPopupViewViews::OnWidgetBoundsChanged(views::Widget* widget,
                                                   const gfx::Rect& new_bounds) {
   // Because we don't directly control the lifetime of the widget, gracefully
-  // handle "stale" notifications by ignoring them. https://crbug.com/1108762
+  // handle "stale" notifications by ignoring them. https://crbug.com/40707636
   if (!widget_ || widget_.get() != widget) {
     return;
   }
@@ -590,22 +594,23 @@ void OmniboxPopupViewViews::OnWidgetVisibilityChanged(views::Widget* widget,
     return;
   }
 
-  if (visible && popup_create_start_time_.has_value()) {
+  if (visible) {
+    has_logged_content_ready_since_open_ = false;
     // Use the popup's compositor. The next presentation time will correspond to
     // the first visual presentation of the bubble's content after the Widget
     // has been created.
     widget_->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
-        base::BindOnce(
-            [](base::TimeTicks popup_create_start_time,
-               const viz::FrameTimingDetails& frame_timing_details) {
-              base::TimeTicks presentation_timestamp =
-                  frame_timing_details.presentation_feedback.timestamp;
-              base::UmaHistogramTimes(
-                  "Omnibox.Views.PopupFirstPaint",
-                  presentation_timestamp - popup_create_start_time);
-            },
-            popup_create_start_time_.value()));
+        base::BindOnce(&OmniboxPopupViewViews::OnPopupFirstPaintPresented,
+                       metrics_weak_factory_.GetWeakPtr(),
+                       controller()
+                           ->autocomplete_controller()
+                           ->result()
+                           .result_ready_time(),
+                       popup_create_start_time_));
     popup_create_start_time_.reset();
+  } else {
+    // Drop metrics callbacks if the widget is not visible.
+    metrics_weak_factory_.InvalidateWeakPtrs();
   }
 }
 
@@ -615,6 +620,9 @@ void OmniboxPopupViewViews::OnWidgetDestroying(views::Widget* widget) {
     widget_->RemoveObserver(&widget_observer_helper_);
     widget_ = nullptr;
   }
+  // Drop metrics callbacks when the widget is destroyed.
+  metrics_weak_factory_.InvalidateWeakPtrs();
+
   UpdateAccessibleStates();
 
   // Update the popup state manager if widget was destroyed externally, e.g., by
@@ -654,9 +662,57 @@ void OmniboxPopupViewViews::OnContentsChanged() {
   UpdatePopupAppearance();
 }
 
+void OmniboxPopupViewViews::OnPopupFirstPaintPresented(
+    base::TimeTicks request_start_time,
+    std::optional<base::TimeTicks> popup_create_start_time,
+    const viz::FrameTimingDetails& frame_timing_details) {
+  if (popup_create_start_time.has_value()) {
+    base::TimeTicks presentation_timestamp =
+        frame_timing_details.presentation_feedback.timestamp;
+    base::TimeDelta delta =
+        presentation_timestamp - popup_create_start_time.value();
+    base::UmaHistogramTimes("Omnibox.Views.PopupFirstPaint", delta);
+
+    // Record metrics via TopChromeWebUIMetricsObserver to allow
+    // comparison between WebUI and Views Omnibox versions.
+    // This is recorded at most once per window (View lifetime) to
+    // align with the WebUI behavior.
+    if (!recorded_first_paint_) {
+      recorded_first_paint_ = true;
+      TopChromeWebUIMetricsObserver::RecordFirstContentfulPaint("OmniboxPopup",
+                                                                delta);
+    }
+  }
+
+  if (request_start_time.is_null()) {
+    omnibox::LogResultToContentReadyEarlyExitReason(
+        omnibox::ResultToContentReadyEarlyExitReason::kNoResultReadyTime,
+        "Omnibox.Popup");
+    return;
+  }
+
+  base::TimeTicks presentation_timestamp =
+      frame_timing_details.presentation_feedback.timestamp;
+
+  base::TimeDelta delta_request = presentation_timestamp - request_start_time;
+  if (!has_logged_content_ready_since_open_) {
+    has_logged_content_ready_since_open_ = true;
+    base::UmaHistogramTimes("Omnibox.Popup.ResultToContentReadyPerShow",
+                            delta_request);
+  }
+
+  if (!has_logged_first_content_ready_) {
+    has_logged_first_content_ready_ = true;
+    base::UmaHistogramTimes("Omnibox.Popup.ResultToContentReadyOnFirstShow",
+                            delta_request);
+  }
+}
+
 void OmniboxPopupViewViews::FireAXEventsForNewActiveDescendant(
     View* descendant_view) {
-  // Selected children changed is fired on the popup.
+  // For normal selections, kSelectedChildrenChanged is auto-fired by
+  // ViewAccessibility::SetIsSelected. This method is still needed for
+  // non-selection callers like ProvideButtonFocusHint and popup close.
   NotifyAccessibilityEventDeprecated(ax::mojom::Event::kSelectedChildrenChanged,
                                      true);
 }
@@ -679,7 +735,7 @@ gfx::Rect OmniboxPopupViewViews::GetTargetBounds() const {
   // Add space at the bottom for aesthetic reasons. It's expected that this
   // space is dead unclickable/unhighlightable space. This extra padding is not
   // added if the results section has no height (result set is empty or all
-  // results are hidden). See https://crbug.com/1076646 for additional context.
+  // results are hidden). See https://crbug.com/40128770 for additional context.
   if (popup_height != 0) {
     // The amount of extra space is dependent on whether the last match is the
     // toolbelt or not. The toolbelt doesn't have an icon or image on the left
@@ -702,8 +758,8 @@ gfx::Rect OmniboxPopupViewViews::GetTargetBounds() const {
       -RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets());
   content_rect.set_height(popup_height);
 
-  if (base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxPopup) &&
-      !base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxFullPopup) &&
+  if (omnibox::IsWebUIOmniboxPopupEnabled() &&
+      !omnibox::IsWebUIOmniboxFullPopupEnabled() &&
       !omnibox::IsAimPopupFeatureEnabled() &&
       base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxPopupDebug) &&
       omnibox::kWebUIOmniboxPopupDebugSxSParam.Get()) {
@@ -818,7 +874,7 @@ std::u16string OmniboxPopupViewViews::UpdateRowView(
     const AutocompleteMatch& match,
     const std::u16string& previous_row_header) {
   std::u16string current_row_header =
-      controller()->edit_model()->GetSuggestionGroupHeaderText(
+      controller()->autocomplete_controller()->GetSuggestionGroupHeaderText(
           match.suggestion_group_id);
   // Show the header if it's distinct from the previous match's header.
   if (!current_row_header.empty() &&

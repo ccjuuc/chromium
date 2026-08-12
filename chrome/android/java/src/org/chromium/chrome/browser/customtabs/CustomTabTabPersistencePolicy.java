@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.util.Pair;
 import android.util.SparseBooleanArray;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApplicationStatus;
@@ -18,6 +19,7 @@ import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.StreamUtil;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.BackgroundOnlyAsyncTask;
 import org.chromium.base.task.SequencedTaskRunner;
@@ -58,6 +60,23 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
     private static final Object CLEAN_UP_TASK_LOCK = new Object();
 
     private static @Nullable AsyncTask<@Nullable Void> sCleanupTask;
+
+    // LINT.IfChange(CustomTabsOpenType)
+    @IntDef({
+        CustomTabsOpenType.NEW,
+        CustomTabsOpenType.OMNIBOX,
+        CustomTabsOpenType.RESTORE_OK,
+        CustomTabsOpenType.RESTORE_FAIL,
+    })
+    @interface CustomTabsOpenType {
+        int NEW = 0;
+        int OMNIBOX = 1;
+        int RESTORE_OK = 2;
+        int RESTORE_FAIL = 3;
+        int COUNT = 4;
+    }
+
+    // LINT.ThenChange(/tools/metrics/histograms/metadata/custom_tabs/enums.xml:CustomTabsOpenType)
 
     private final int mTaskId;
     private final boolean mShouldRestore;
@@ -113,6 +132,27 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
                     protected @Nullable Void doInBackground() {
                         File stateDir = getOrCreateStateDirectory();
                         File metadataFile = new File(stateDir, getMetadataFileName());
+                        if (!metadataFile.exists() && !mShouldRestore) {
+                            RecordHistogram.recordEnumeratedHistogram(
+                                    "CustomTabs.OpenType",
+                                    CustomTabsOpenType.NEW,
+                                    CustomTabsOpenType.COUNT);
+                        } else if (metadataFile.exists() && !mShouldRestore) {
+                            RecordHistogram.recordEnumeratedHistogram(
+                                    "CustomTabs.OpenType",
+                                    CustomTabsOpenType.OMNIBOX,
+                                    CustomTabsOpenType.COUNT);
+                        } else if (metadataFile.exists() && mShouldRestore) {
+                            RecordHistogram.recordEnumeratedHistogram(
+                                    "CustomTabs.OpenType",
+                                    CustomTabsOpenType.RESTORE_OK,
+                                    CustomTabsOpenType.COUNT);
+                        } else if (!metadataFile.exists() && mShouldRestore) {
+                            RecordHistogram.recordEnumeratedHistogram(
+                                    "CustomTabs.OpenType",
+                                    CustomTabsOpenType.RESTORE_FAIL,
+                                    CustomTabsOpenType.COUNT);
+                        }
                         if (metadataFile.exists()) {
                             if (mShouldRestore) {
                                 if (!metadataFile.setLastModified(System.currentTimeMillis())) {
@@ -247,6 +287,19 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
             mTabDataToDeleteCallback = storedTabDataToDeleteCallback;
         }
 
+        /**
+         * Releases the static reference to this task (and the external callback it retains). Only
+         * clears {@link #sCleanupTask} if it still points to this task, to avoid wiping out a newer
+         * task scheduled while this one was still finishing.
+         */
+        private void clearCleanupTask() {
+            synchronized (CLEAN_UP_TASK_LOCK) {
+                if (sCleanupTask == this) {
+                    sCleanupTask = null;
+                }
+            }
+        }
+
         @Override
         protected @Nullable Void doInBackground() {
             if (mDestroyed) return null;
@@ -293,6 +346,7 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
             TabPersistenceFileInfo tabDataToDelete = new TabPersistenceFileInfo();
             if (mDestroyed) {
                 mTabDataToDeleteCallback.onResult(tabDataToDelete);
+                clearCleanupTask();
                 return;
             }
 
@@ -301,6 +355,7 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
             assumeNonNull(mTabIdsByMetadataFile);
             if (mUnreferencedTabIds.isEmpty() && mDeletableMetadataFiles.isEmpty()) {
                 mTabDataToDeleteCallback.onResult(tabDataToDelete);
+                clearCleanupTask();
                 return;
             }
 
@@ -342,9 +397,7 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
 
             mTabDataToDeleteCallback.onResult(tabDataToDelete);
 
-            synchronized (CLEAN_UP_TASK_LOCK) {
-                sCleanupTask = null; // Release static reference to external callback
-            }
+            clearCleanupTask();
         }
 
         private void getTabsFromStateFile(SparseBooleanArray tabIds, File metadataFile) {
@@ -364,9 +417,7 @@ public class CustomTabTabPersistencePolicy implements TabPersistencePolicy {
         @Override
         protected void onCancelled(@Nullable Void result) {
             super.onCancelled(null);
-            synchronized (CLEAN_UP_TASK_LOCK) {
-                sCleanupTask = null;
-            }
+            clearCleanupTask();
         }
     }
 

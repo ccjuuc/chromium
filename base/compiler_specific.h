@@ -792,6 +792,9 @@ inline constexpr bool AnalyzerAssumeTrue(bool arg) {
 // is considered to be dangling. Useful to diagnose some cases of lifetime
 // errors.
 //
+// Note: LIFETIME_CAPTURE_BY(this) is deprecated; use LIFETIME_CAPTURE_BY_THIS.
+// See https://github.com/llvm/llvm-project/pull/196635
+//
 // See also
 //   https://clang.llvm.org/docs/AttributeReference.html#lifetime-capture-by
 //
@@ -813,6 +816,12 @@ inline constexpr bool AnalyzerAssumeTrue(bool arg) {
 #define LIFETIME_CAPTURE_BY(x) [[clang::lifetime_capture_by(x)]]
 #else
 #define LIFETIME_CAPTURE_BY(x)
+#endif
+
+#if __has_cpp_attribute(clang::lifetime_capture_by_this)
+#define LIFETIME_CAPTURE_BY_THIS [[clang::lifetime_capture_by_this]]
+#else
+#define LIFETIME_CAPTURE_BY_THIS LIFETIME_CAPTURE_BY(this)
 #endif
 
 // Annotates a function or variable to indicate that it should have weak
@@ -1158,6 +1167,15 @@ inline constexpr bool AnalyzerAssumeTrue(bool arg) {
 #define ENABLE_IF_ATTR(cond, msg) __attribute__((enable_if(cond, msg)))
 #else
 #define ENABLE_IF_ATTR(cond, msg)
+#endif
+
+// Hints to the optimizer that `x` is always true. This is potentially unsafe,
+// since it can lead to otherwise load-bearing checks being optimized out. Use
+// sparingly with caution and only with demonstrated impact.
+#if defined(__clang__)
+#define UNSAFE_ASSUME(x) __builtin_assume(x)
+#else
+#define UNSAFE_ASSUME(x)
 #endif
 
 #endif  // BASE_COMPILER_SPECIFIC_H_

@@ -60,6 +60,7 @@ class CSSConditionRule;
 class CSSContainerRule;
 class CSSFunctionRule;
 class CSSKeyframesRule;
+class CSSNavigationRule;
 class CSSPropertyName;
 class CSSRule;
 class CSSStyleRule;
@@ -117,6 +118,7 @@ class CORE_EXPORT InspectorCSSAgent final
   static CSSMediaRule* AsCSSMediaRule(CSSRule*);
   static CSSContainerRule* AsCSSContainerRule(CSSRule*);
   static CSSSupportsRule* AsCSSSupportsRule(CSSRule*);
+  static CSSNavigationRule* AsCSSNavigationRule(CSSRule*);
   static CSSScopeRule* AsCSSScopeRule(CSSRule*);
 
   static void CollectAllDocumentStyleSheets(Document*,
@@ -128,11 +130,23 @@ class CORE_EXPORT InspectorCSSAgent final
                                   String* computed_font_weight,
                                   float* text_opacity);
 
+  // Collect all StyleRuleFunction rules across the stylesheets of the Document
+  // and build a "reverse" mapping, from StyleRuleFunction to CSSFunctionRule.
+  //
+  // This is needed because we need to find the CSSFunctionRule
+  // (not the StyleRuleFunction) resulting from a function lookup
+  // (StyleEngine::FindFunctionAcrossScopes()).
+  HeapHashMap<Member<StyleRuleFunction>, Member<CSSFunctionRule>>
+  BuildFunctionRuleMap(Document& document);
+  static HeapHashMap<Member<StyleRuleFunction>, Member<CSSFunctionRule>>
+  BuildFunctionRuleMap(
+      const HeapHashSet<Member<CSSStyleSheet>>& document_style_sheets);
+
   // Collects all function references (i.e. <dashed-ident>s) within
   // the rule list, and the CSSFunctionRules that resulted from looking up
   // those function references.
   static void CollectReferencedFunctionRules(
-      const HeapHashSet<Member<CSSStyleSheet>>& document_style_sheets,
+      const HeapHashMap<Member<StyleRuleFunction>, Member<CSSFunctionRule>>&,
       const RuleIndexList&,
       HeapHashMap<Member<const ScopedCSSName>, Member<CSSFunctionRule>>&
           result);
@@ -163,6 +177,7 @@ class CORE_EXPORT InspectorCSSAgent final
   void SetCoverageEnabled(bool);
   void WillChangeStyleElement(Element*);
   void DidMutateStyleSheet(CSSStyleSheet* css_style_sheet);
+  void DidInvalidateStyleAttr(Element* element);
   void GetTextPosition(wtf_size_t offset,
                        const String* text,
                        TextPosition* result);
@@ -267,6 +282,11 @@ class CORE_EXPORT InspectorCSSAgent final
       std::unique_ptr<protocol::CSS::SourceRange>,
       const String& text,
       std::unique_ptr<protocol::CSS::CSSContainerQuery>*) override;
+  protocol::Response setContainerQueryConditionText(
+      const String& style_sheet_id,
+      std::unique_ptr<protocol::CSS::SourceRange>,
+      const String& text,
+      std::unique_ptr<protocol::CSS::CSSContainerQuery>*) override;
   protocol::Response setScopeText(
       const String& style_sheet_id,
       std::unique_ptr<protocol::CSS::SourceRange>,
@@ -277,6 +297,11 @@ class CORE_EXPORT InspectorCSSAgent final
       std::unique_ptr<protocol::CSS::SourceRange>,
       const String& text,
       std::unique_ptr<protocol::CSS::CSSSupports>*) override;
+  protocol::Response setNavigationText(
+      const String& style_sheet_id,
+      std::unique_ptr<protocol::CSS::SourceRange>,
+      const String& text,
+      std::unique_ptr<protocol::CSS::CSSNavigation>*) override;
   protocol::Response createStyleSheet(const String& frame_id,
                                       std::optional<bool> force,
                                       String* style_sheet_id) override;
@@ -405,6 +430,8 @@ class CORE_EXPORT InspectorCSSAgent final
       std::unique_ptr<protocol::Array<protocol::CSS::CSSPropertyRegistration>>>
   CustomPropertiesForNode(Element* element);
   std::unique_ptr<protocol::Array<protocol::CSS::CSSAtRule>>
+  CounterAtRulesForElement(Element* element);
+  std::unique_ptr<protocol::Array<protocol::CSS::CSSAtRule>>
   FontAtRulesForNodes(HeapVector<Member<Element>>& elements);
 
   // If the |animating_element| is a pseudo-element, then |element| is a
@@ -505,6 +532,14 @@ class CORE_EXPORT InspectorCSSAgent final
                              protocol::Array<protocol::CSS::CSSScope>*,
                              protocol::Array<protocol::CSS::CSSRuleType>*);
 
+  // Navigation at-rule implementation
+  std::unique_ptr<protocol::CSS::CSSNavigation> BuildNavigationObject(
+      CSSNavigationRule* rule);
+  void CollectNavigationQueriesFromRule(
+      CSSRule*,
+      protocol::Array<protocol::CSS::CSSNavigation>*,
+      protocol::Array<protocol::CSS::CSSRuleType>*);
+
   // Function at-rule implementation
   std::unique_ptr<protocol::CSS::CSSFunctionRule> BuildObjectForFunctionRule(
       CSSFunctionRule*);
@@ -517,6 +552,7 @@ class CORE_EXPORT InspectorCSSAgent final
   void DidAddDocument(Document*) override;
   void WillRemoveDOMNode(Node*) override;
   void DidModifyDOMAttr(Element*) override;
+  void InvalidateInlineStyleCacheForElement(Element&);
 
   // InspectorStyleSheet::Listener implementation
   void StyleSheetChanged(InspectorStyleSheetBase*) override;

@@ -2,22 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/chromeos/extensions/login_screen/login/login_api.h"
-
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/existing_user_controller.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/extensions/login_screen/login/login_api.h"
 #include "chrome/browser/chromeos/extensions/login_screen/login_screen_apitest_base.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/policy/extension_force_install_mixin.h"
@@ -111,6 +110,18 @@ class LoginApitest : public LoginScreenApitestBase {
 
   ~LoginApitest() override = default;
 
+  void SetUpOnMainThread() override {
+    LoginScreenApitestBase::SetUpOnMainThread();
+
+    scoped_request_lock_screen_override_.emplace();
+  }
+
+  void TearDownOnMainThread() override {
+    scoped_request_lock_screen_override_.reset();
+
+    LoginScreenApitestBase::TearDownOnMainThread();
+  }
+
   void SetUpDeviceLocalAccountPolicy() {
     enterprise_management::ChromeDeviceSettingsProto& proto(
         device_policy()->payload());
@@ -195,9 +206,11 @@ class LoginApitest : public LoginScreenApitestBase {
   std::unique_ptr<policy::UserPolicyBuilder> user_policy_builder_;
 
  private:
+  std::optional<ash::ScreenLockerTester::ScopedRequestLockScreenOverride>
+      scoped_request_lock_screen_override_;
   ash::EmbeddedPolicyTestServerMixin policy_test_server_mixin_{&mixin_host_};
   ExtensionForceInstallMixin extension_force_install_mixin_{&mixin_host_};
-  base::Value::Dict config_;
+  base::DictValue config_;
 };
 
 IN_PROC_BROWSER_TEST_F(LoginApitest, LaunchManagedGuestSession) {
@@ -461,7 +474,7 @@ class LoginApitestWithEnterpriseUser : public LoginApitest {
         user_policy_builder_->payload(), account_id.GetUserEmail());
     session_manager_client()->set_user_policy(
         cryptohome::CreateAccountIdentifierFromAccountId(account_id),
-        user_policy_builder_->GetBlob());
+        login_manager::POLICY_DOMAIN_CHROME, user_policy_builder_->GetBlob());
     RefreshPolicies();
 
     registry_observer->WaitForExtensionReady();

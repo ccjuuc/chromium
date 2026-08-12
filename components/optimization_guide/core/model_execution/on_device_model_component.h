@@ -9,8 +9,8 @@
 #include <optional>
 #include <string>
 
-#include "base/byte_count.h"
-#include "base/containers/enum_set.h"
+#include "base/byte_size.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -25,12 +25,14 @@
 #include "base/types/pass_key.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
 #include "components/optimization_guide/core/model_execution/usage_tracker.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/on_device_base_model_metadata.pb.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom-forward.h"
+#include "components/optimization_guide/public/mojom/model_broker_debug.mojom-forward.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class PrefService;
@@ -43,6 +45,20 @@ namespace optimization_guide {
 
 inline constexpr std::string_view kOnDeviceModelCrxId =
     "fklghjjljmnfjoepjmlobpekiapffcja";
+
+// Files expected to be in the on device model bundle.
+inline constexpr base::FilePath::CharType kWeightsFile[] =
+    FILE_PATH_LITERAL("weights.bin");
+inline constexpr base::FilePath::CharType kWeightCacheFile[] =
+    FILE_PATH_LITERAL("cache.bin");
+inline constexpr base::FilePath::CharType kEncoderCacheFile[] =
+    FILE_PATH_LITERAL("encoder_cache.bin");
+inline constexpr base::FilePath::CharType kAdapterCacheFile[] =
+    FILE_PATH_LITERAL("adapter_cache.bin");
+inline constexpr base::FilePath::CharType kProgramCacheFile[] =
+    FILE_PATH_LITERAL("program_cache.bin");
+inline constexpr base::FilePath::CharType kOnDeviceModelExecutionConfigFile[] =
+    FILE_PATH_LITERAL("on_device_model_execution_config.pb");
 
 class UsageTracker;
 
@@ -73,12 +89,14 @@ enum class OnDeviceModelStatus {
   // Criteria to install are met, but model is not downloaded because there was
   // no on-device feature usage.
   kNoOnDeviceFeatureUsed = 7,
+  // The device doesn't have enough disk space to build model caches.
+  kInsufficientDiskSpaceForCaches = 8,
 
   // This must be kept in sync with
   // OptimizationGuideOnDeviceModelStatus in optimization/enums.xml.
 
   // Insert new values before this line.
-  kMaxValue = kNoOnDeviceFeatureUsed,
+  kMaxValue = kInsufficientDiskSpaceForCaches,
 };
 
 std::ostream& operator<<(std::ostream& out, OnDeviceModelStatus status);
@@ -86,18 +104,6 @@ std::ostream& operator<<(std::ostream& out, OnDeviceModelStatus status);
 // Identifies a specific on-device base model and the performance hint that
 // it will be used with.
 struct OnDeviceBaseModelSpec {
-  using PerformanceHints =
-      base::EnumSet<proto::OnDeviceModelPerformanceHint,
-                    proto::OnDeviceModelPerformanceHint_MIN,
-                    proto::OnDeviceModelPerformanceHint_MAX>;
-
-  OnDeviceBaseModelSpec(
-      const std::string& model_name,
-      const std::string& model_version,
-      proto::OnDeviceModelPerformanceHint selected_performance_hint);
-  ~OnDeviceBaseModelSpec();
-  OnDeviceBaseModelSpec(const OnDeviceBaseModelSpec&);
-
   bool operator==(const OnDeviceBaseModelSpec& other) const;
 
   // The name of the base model currently available on-device.
@@ -105,7 +111,8 @@ struct OnDeviceBaseModelSpec {
   // The version of the base model currently available on-device.
   std::string model_version;
   // The selected performance hint for this device and base model.
-  proto::OnDeviceModelPerformanceHint selected_performance_hint;
+  proto::OnDeviceModelPerformanceHint selected_performance_hint =
+      proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_UNSPECIFIED;
 };
 
 // State of the on-device model component.
@@ -123,6 +130,9 @@ class OnDeviceModelComponentState {
   }
   const OnDeviceBaseModelSpec& GetBaseModelSpec() const { return model_spec_; }
 
+  bool has_caches() const { return has_caches_; }
+  void set_has_caches(bool has_caches) { has_caches_ = has_caches; }
+
  private:
   friend class OnDeviceModelAdaptationLoaderTest;
 
@@ -131,6 +141,16 @@ class OnDeviceModelComponentState {
   base::FilePath install_dir_;
   base::Version component_version_;
   OnDeviceBaseModelSpec model_spec_;
+  bool has_caches_ = false;
+};
+
+enum class ModelInstallMode {
+  // Install the model with on-demand install (foreground download).
+  kOnDemand = 0,
+  // Install the model by registering the component and wait for regular
+  // schedule.
+  kRegisterOnly = 1,
+  kMaxValue = kRegisterOnly,
 };
 
 // The attributes selected when registering an on-device model component.
@@ -139,7 +159,7 @@ struct OnDeviceModelRegistrationAttributes {
   using Hint = optimization_guide::proto::OnDeviceModelPerformanceHint;
 
   explicit OnDeviceModelRegistrationAttributes(
-      std::vector<Hint> supported_hints);
+      base::flat_set<Hint> supported_hints);
   OnDeviceModelRegistrationAttributes(
       const OnDeviceModelRegistrationAttributes&);
   OnDeviceModelRegistrationAttributes& operator=(
@@ -149,7 +169,7 @@ struct OnDeviceModelRegistrationAttributes {
       OnDeviceModelRegistrationAttributes&&);
   ~OnDeviceModelRegistrationAttributes();
   // The performance hints that are supported by this device.
-  std::vector<Hint> supported_hints;
+  base::flat_set<Hint> supported_hints;
 };
 
 using MaybeOnDeviceModelComponentState =
@@ -172,7 +192,7 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
     // and calls `callback`.
     virtual void GetFreeDiskSpace(
         const base::FilePath& path,
-        base::OnceCallback<void(std::optional<base::ByteCount>)> callback) = 0;
+        base::OnceCallback<void(std::optional<base::ByteSize>)> callback) = 0;
 
     // Registers the component installer. Calls
     // `OnDeviceModelComponentStateManager::SetReady` when the component is
@@ -186,6 +206,13 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
     // completes.
     virtual void Uninstall(
         base::WeakPtr<OnDeviceModelComponentStateManager> state_manager) = 0;
+
+    // Request on demand update. Assumes that `RegisterInstaller` has already
+    // been called.
+    virtual void RequestUpdate(bool is_background) = 0;
+
+    // Gets the base model component ID.
+    virtual std::string GetComponentId() = 0;
   };
 
   class Observer : public base::CheckedObserver {
@@ -196,12 +223,36 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
   };
 
   struct RegistrationCriteria {
+    // `UninstallReason` is deliberately made to be the same as
+    // an enum class of the same name in
+    // components/optimization_guide/core/model_execution/manifest_broker/manifest.h.
+    // This is to allow logging model deletion reasons regardless of which model
+    // management scheme is used.
+    enum class UninstallReason {
+      kUnknown = 0,
+      kInsufficientDisk = 1,
+      kPolicyNotAllowed = 2,
+      kDeviceNotCapable = 3,
+      kParseError = 4,
+      kUserSettingNotAllowed = 5,
+      kMaxValue = kUserSettingNotAllowed,
+    };
+    RegistrationCriteria();
+    ~RegistrationCriteria();
+    RegistrationCriteria(const RegistrationCriteria&);
+    RegistrationCriteria& operator=(const RegistrationCriteria&);
+    RegistrationCriteria(RegistrationCriteria&&);
+    RegistrationCriteria& operator=(RegistrationCriteria&&);
+
     // Requirements for install. Please update `LogInstallCriteria()` when
     // updating this.
     bool device_capable = false;
     bool on_device_feature_recently_used = false;
     bool enabled_by_feature = false;
     bool enabled_by_enterprise_policy = false;
+    bool enabled_by_user_setting = false;
+    // Criteria for background download.
+    bool is_on_external_power = false;
 
     // Reasons to uninstall. TODO(302327114): Add UMA for uninstall reason.
     bool out_of_retention = false;
@@ -212,37 +263,108 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
     // The component may or may not be ready.
     bool is_already_installing = false;
 
+    // Whether background download was requested.
+    bool background_download_requested = false;
+
     // Most recently queried disk space available for model install.
-    base::ByteCount disk_space_free;
+    std::optional<base::ByteSize> disk_space_free;
 
     bool is_disk_space_available() const {
+      if (!disk_space_free) {
+        // TODO(https://crbug.com/438265416): Handle failure to get free disk
+        // space.
+        return false;
+      }
       return features::IsFreeDiskSpaceSufficientForOnDeviceModelInstall(
-          disk_space_free);
+          *disk_space_free);
+    }
+
+    bool is_disk_space_too_low_for_caches() const {
+      if (!base::FeatureList::IsEnabled(
+              features::kOnDeviceModelCachesDiskSpaceCheck)) {
+        return false;
+      }
+      if (!disk_space_free) {
+        // TODO(https://crbug.com/438265416): Handle failure to get free disk
+        // space.
+        return true;
+      }
+      return features::IsFreeDiskSpaceTooLowForOnDeviceModelCachesBuild(
+          *disk_space_free);
     }
 
     bool is_running_out_of_disk_space() const {
+      if (!disk_space_free) {
+        // TODO(https://crbug.com/438265416): Handle failure to get free disk
+        // space.
+        return true;
+      }
       return features::IsFreeDiskSpaceTooLowForOnDeviceModelInstall(
-          disk_space_free);
+          *disk_space_free);
     }
 
     bool is_model_allowed() const {
       return device_capable && enabled_by_feature &&
-             enabled_by_enterprise_policy;
+             enabled_by_enterprise_policy && enabled_by_user_setting;
     }
 
-    bool should_install() const {
-      if (should_uninstall()) {
-        return false;
+    std::optional<ModelInstallMode> get_install_mode() const {
+      if (should_uninstall().has_value() || !is_disk_space_available() ||
+          !is_model_allowed()) {
+        return std::nullopt;
       }
-      return (is_disk_space_available() && is_model_allowed() &&
-              on_device_feature_recently_used);
+      if (on_device_feature_recently_used) {
+        return ModelInstallMode::kOnDemand;
+      }
+      if (background_download_requested &&
+          base::FeatureList::IsEnabled(
+              features::kOnDeviceModelBackgroundDownload)) {
+        if (is_on_external_power && disk_space_free &&
+            features::
+                IsFreeDiskSpaceSufficientForBackgroundOnDeviceModelInstall(
+                    *disk_space_free)) {
+          return ModelInstallMode::kRegisterOnly;
+        }
+      }
+      return std::nullopt;
     }
 
-    bool should_uninstall() const {
-      return (is_already_installing &&
-              (is_running_out_of_disk_space() || out_of_retention ||
-               !enabled_by_enterprise_policy));
+    // Returns the reason of uninstall if the component should be uninstalled.
+    // nullopt is returned otherwise.
+    std::optional<UninstallReason> should_uninstall() const {
+      if (!is_already_installing) {
+        return std::nullopt;
+      }
+      if (!enabled_by_enterprise_policy) {
+        return UninstallReason::kPolicyNotAllowed;
+      }
+      if (!enabled_by_user_setting) {
+        return UninstallReason::kUserSettingNotAllowed;
+      }
+      if (is_running_out_of_disk_space()) {
+        return UninstallReason::kInsufficientDisk;
+      }
+      if (out_of_retention && !base::FeatureList::IsEnabled(
+                                  features::kOnDeviceModelBackgroundDownload)) {
+        return UninstallReason::kUnknown;
+      }
+      return std::nullopt;
     }
+  };
+
+  enum class ComponentInstallerState {
+    // Component not registered, e.g, already uninstalled, never installed.
+    kNotRegistered,
+    // RegisterInstaller called, waiting for completion.
+    kRegistering,
+    // Registration completed, installation may or may not be happening yet.
+    kRegistered,
+    // Registered and requested on demand update with foreground priority.
+    kOnDemandDownloading,
+    // Component is fully installed.
+    kInstalled,
+    // Uninstall called, waiting for completion.
+    kUninstalling,
   };
 
   OnDeviceModelComponentStateManager(
@@ -254,7 +376,7 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
 
   // Returns whether the component installation is valid.
   static bool VerifyInstallation(const base::FilePath& install_dir,
-                                 const base::Value::Dict& manifest);
+                                 const base::DictValue& manifest);
 
   // Returns the current state. Null if the component is not available.
   const OnDeviceModelComponentState* GetState();
@@ -264,7 +386,7 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
 
   // Exposed internal state for chrome://on-device-internals
   struct DebugState {
-    base::ByteCount disk_space_available_;
+    std::optional<base::ByteSize> disk_space_available_;
     raw_ptr<const RegistrationCriteria> criteria_;
     OnDeviceModelStatus status_;
     bool has_override_;
@@ -276,16 +398,21 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
     return GetDebugState();
   }
 
+  // Get free disk space available for on device model for logging in global
+  // state.
+  void GetFreeDiskSpaceForLogging(
+      base::OnceCallback<void(std::optional<base::ByteSize>)> callback);
+
   // Functions called by the component installer:
 
   // Creates the on-device component state, only called after VerifyInstallation
   // returns true.
   void SetReady(const base::Version& version,
                 const base::FilePath& install_dir,
-                const base::Value::Dict& manifest);
+                const base::DictValue& manifest);
 
   // Called after the installer is successfully registered.
-  void InstallerRegistered();
+  void InstallerRegistered(bool is_already_installed);
 
   // Called when the on-device component has been uninstalled.
   void UninstallComplete();
@@ -293,28 +420,44 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
   // Used by the chrome://on-device-internals page to uninstall the model.
   void ForceUninstall();
 
+  // Starts the background model download. No-op if the component is already
+  // installed. Used for proactively downloading the model.
+  void MaybeBeginBackgroundModelDownload();
+
   base::WeakPtr<OnDeviceModelComponentStateManager> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
 
- private:
   DebugState GetDebugState();
 
+  std::vector<mojom::BrokerPropertyInfoPtr> GetBrokerProperties() const;
+  std::vector<mojom::BrokerAssetInfoPtr> GetBrokerAssets() const;
+
+  base::SafeRef<PerformanceClassifier> performance_classifier() const;
+
+ private:
   // Should be called whenever the device performance class changes.
   void OnPerformanceClassAvailable();
 
   void OnGenAILocalFoundationalModelEnterprisePolicyChanged();
 
+  void OnGenAILocalFoundationalModelUserSettingChanged();
+
   // UsageTracker::Observer:
-  void OnDeviceEligibleFeatureUsed(mojom::OnDeviceFeature feature) override;
+  void OnDeviceEligibleUseCaseUsed(const std::string& use_case_name,
+                                   bool is_first_usage) override;
 
   // Installs the component installer if it needs installed.
   void BeginUpdateRegistration();
   RegistrationCriteria ComputeRegistrationCriteria(
-      base::ByteCount disk_space_free_bytes);
+      std::optional<base::ByteSize> disk_space_free);
   // Continuation of `UpdateRegistration()` after async work.
   void CompleteUpdateRegistration(
-      std::optional<base::ByteCount> disk_space_free);
+      std::optional<base::ByteSize> disk_space_free);
+
+  void UpdateRegistrationCriteria(
+      std::optional<base::ByteSize> disk_space_free);
+  void UpdateRegistration();
 
   // Uninstalls the component.
   void UninstallComponent();
@@ -326,12 +469,17 @@ class OnDeviceModelComponentStateManager final : public UsageTracker::Observer {
   // Returns the current OnDeviceModelStatus.
   OnDeviceModelStatus GetOnDeviceModelStatus();
 
+  static bool CheckCachesExist(const base::FilePath& install_dir);
+  void OnCachesExistChecked(bool caches_exist);
+
   raw_ptr<PrefService> local_state_ GUARDED_BY_CONTEXT(sequence_checker_);
   base::SafeRef<PerformanceClassifier> performance_classifier_
       GUARDED_BY_CONTEXT(sequence_checker_);
   std::unique_ptr<Delegate> delegate_ GUARDED_BY_CONTEXT(sequence_checker_);
   base::ObserverList<Observer> observers_ GUARDED_BY_CONTEXT(sequence_checker_);
-  bool component_installer_registered_ GUARDED_BY_CONTEXT(sequence_checker_) =
+  ComponentInstallerState component_installer_state_ GUARDED_BY_CONTEXT(
+      sequence_checker_) = ComponentInstallerState::kNotRegistered;
+  bool background_download_requested_ GUARDED_BY_CONTEXT(sequence_checker_) =
       false;
   PrefChangeRegistrar pref_change_registrar_
       GUARDED_BY_CONTEXT(sequence_checker_);

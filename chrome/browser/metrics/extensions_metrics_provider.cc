@@ -33,6 +33,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/install_prefs_helper.h"
 #include "extensions/browser/install_verifier.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/features/feature_developer_mode_only.h"
@@ -40,6 +41,8 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/manifest_handlers/background_info.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::Extension;
 using extensions::Manifest;
@@ -137,28 +140,28 @@ ExtensionState CheckForOffStore(const extensions::ExtensionSet& extensions,
 
 ExtensionInstallProto::Type GetType(Manifest::Type type) {
   switch (type) {
-    case Manifest::TYPE_UNKNOWN:
+    case Manifest::Type::kUnknown:
       return ExtensionInstallProto::UNKNOWN_TYPE;
-    case Manifest::TYPE_EXTENSION:
+    case Manifest::Type::kExtension:
       return ExtensionInstallProto::EXTENSION;
-    case Manifest::TYPE_THEME:
+    case Manifest::Type::kTheme:
       return ExtensionInstallProto::THEME;
-    case Manifest::TYPE_USER_SCRIPT:
+    case Manifest::Type::kUserScript:
       return ExtensionInstallProto::USER_SCRIPT;
-    case Manifest::TYPE_HOSTED_APP:
+    case Manifest::Type::kHostedApp:
       return ExtensionInstallProto::HOSTED_APP;
-    case Manifest::TYPE_LEGACY_PACKAGED_APP:
+    case Manifest::Type::kLegacyPackagedApp:
       return ExtensionInstallProto::LEGACY_PACKAGED_APP;
-    case Manifest::TYPE_PLATFORM_APP:
+    case Manifest::Type::kPlatformApp:
       return ExtensionInstallProto::PLATFORM_APP;
-    case Manifest::TYPE_SHARED_MODULE:
+    case Manifest::Type::kSharedModule:
       return ExtensionInstallProto::SHARED_MODULE;
-    case Manifest::TYPE_LOGIN_SCREEN_EXTENSION:
+    case Manifest::Type::kLoginScreenExtension:
       return ExtensionInstallProto::LOGIN_SCREEN_EXTENSION;
-    case Manifest::TYPE_CHROMEOS_SYSTEM_EXTENSION:
+    case Manifest::Type::kChromeOSSystemExtension:
       // TODO(mgawad): introduce new CHROMEOS_SYSTEM_EXTENSION type.
       return ExtensionInstallProto::EXTENSION;
-    case Manifest::NUM_LOAD_TYPES:
+    case Manifest::Type::kNumLoadTypes:
       NOTREACHED();
   }
   return ExtensionInstallProto::UNKNOWN_TYPE;

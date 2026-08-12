@@ -14,6 +14,7 @@
 class BrowserWindowInterface;
 class ExtensionFunction;
 class GURL;
+struct NavigateParams;
 
 namespace content {
 class WebContents;
@@ -36,6 +37,8 @@ class OpenTabHelper {
 #if !BUILDFLAG(IS_ANDROID)
   // Finds the current browser or creates a new browser that's appropriate to
   // show the given `validated_url`. Returns an error on failure.
+  // This variant is only available on non-Android platforms. On Android, window
+  // creation / initialization is an async process.
   static base::expected<BrowserWindowInterface*, std::string>
   FindOrCreateBrowser(const GURL& validated_url,
                       ExtensionFunction& function,
@@ -53,6 +56,12 @@ class OpenTabHelper {
       BrowserWindowInterface& browser,
       const ExtensionFunction& function,
       const Params& params);
+
+  // If `function` is for the PDF Viewer, then mark the PDF-initiated navigation
+  // as renderer-initiated in `navigate_params` and return true. Otherwise
+  // return false and `navigate_params` remains the same.
+  static bool MaybeSetPdfNavigateParams(const ExtensionFunction& function,
+                                        NavigateParams& navigate_params);
 };
 
 }  // namespace extensions

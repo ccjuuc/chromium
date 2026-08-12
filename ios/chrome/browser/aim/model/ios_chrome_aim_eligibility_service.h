@@ -13,6 +13,10 @@
 class PrefService;
 class TemplateURLService;
 
+namespace variations {
+class VariationsService;
+}
+
 namespace network {
 class SharedURLLoaderFactory;
 }
@@ -26,12 +30,12 @@ class IOSChromeAimEligibilityService : public AimEligibilityService {
       TemplateURLService* template_url_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       signin::IdentityManager* identity_manager,
-      bool is_off_the_record);
+      Configuration configuration);
   ~IOSChromeAimEligibilityService() override;
 
   // AimEligibilityService:
-  std::string GetCountryCode() const override;
-  std::string GetLocale() const override;
+  std::string GetLocaleImpl() const override;
+  variations::VariationsService* GetVariationsService() const override;
 };
 
 #endif  // IOS_CHROME_BROWSER_AIM_MODEL_IOS_CHROME_AIM_ELIGIBILITY_SERVICE_H_

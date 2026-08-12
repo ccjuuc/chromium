@@ -18,12 +18,13 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.UnownedUserDataHost;
+import org.chromium.base.UnownedUserDataKey;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.printing.PrintDocumentAdapterWrapper.PdfGenerator;
+import org.chromium.ui.base.WindowAndroid;
 
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,18 +35,43 @@ import java.util.Iterator;
 /**
  * Controls the interactions with Android framework related to printing.
  *
- * This class is singleton, since at any point at most one printing dialog can exist. Also, since
- * this dialog is modal, user can't interact with the browser unless they close the dialog or press
- * the print button. The singleton object lives in UI thread. Interaction with the native side is
- * carried through PrintingContext class.
+ * <p>This class is scoped to a {@link WindowAndroid} via {@link UnownedUserDataKey}. It manages the
+ * printing dialog and interactions with the native side.
+ *
+ * <p>Key characteristics:
+ *
+ * <ul>
+ *   <li><b>Per-Window:</b> Each browser window (WindowAndroid) has its own instance of this
+ *       controller.
+ *   <li><b>Lifecycle:</b> Instances are created on demand when first accessed. Because they
+ *       register as an {@link WindowAndroid.ActivityStateObserver}, they are kept alive strongly by
+ *       the {@link WindowAndroid} until it is destroyed. Upon destruction, they are detached from
+ *       the host and cleaned up.
+ *   <li><b>Busy State:</b> Tracks whether a print job is currently active for this window to
+ *       prevent re-entrancy or concurrent conflicting print jobs within the same window.
+ *   <li><b>Thread Safety:</b> Designed to be used on the UI thread.
+ * </ul>
+ *
+ * <p>Usage:
+ *
+ * <pre>
+ * PrintingController controller = PrintingControllerImpl.getInstance(window);
+ * if (controller != null && !controller.isBusy()) {
+ *     controller.startPrint(...);
+ * }
+ * </pre>
  */
 @NullMarked
-public class PrintingControllerImpl implements PrintingController, PdfGenerator {
+public class PrintingControllerImpl
+        implements PrintingController, PdfGenerator, WindowAndroid.ActivityStateObserver {
     private static final String TAG = "printing";
+    private static final UnownedUserDataKey<PrintingControllerImpl> KEY =
+            new UnownedUserDataKey<PrintingControllerImpl>(
+                    PrintingControllerImpl::onDetachedFromHost);
 
     /**
-     * This is used for both initial state and a completed state (i.e. starting from either
-     * onLayout or onWrite, a PDF generation cycle is completed another new one can safely start).
+     * This is used for both initial state and a completed state (i.e. starting from either onLayout
+     * or onWrite, a PDF generation cycle is completed another new one can safely start).
      */
     private static final int PRINTING_STATE_READY = 0;
 
@@ -56,10 +82,8 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
 
     private static final int BUFFER_SIZE = 8 * 1024; // 8 KB
 
-    /** The singleton instance for this class. */
-    @VisibleForTesting protected static @Nullable PrintingController sInstance;
-
-    private static @Nullable PrintingController sInstanceForTesting;
+    /** Constant for invalid file descriptor- equivalent to base::kInvalidFd (-1) in C++. */
+    public static final int INVALID_FD = -1;
 
     private @Nullable String mErrorMessage;
 
@@ -101,30 +125,82 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
 
     private @Nullable PrintManagerDelegate mPrintManager;
 
-    @VisibleForTesting
-    protected PrintingControllerImpl() {
-        mPrintDocumentAdapterWrapper = new PrintDocumentAdapterWrapper(this);
-    }
+    private final WindowAndroid mWindowAndroid;
 
-    public static void setInstanceForTesting(PrintingController instanceForTesting) {
-        sInstanceForTesting = instanceForTesting;
-        ResettersForTesting.register(() -> sInstanceForTesting = null);
+    private @Nullable Runnable mPendingPrintCallback;
+
+    /**
+     * Sets a test instance for a specific window.
+     *
+     * @param window The window to attach the test instance to.
+     * @param instance The test instance.
+     */
+    public static void setPrintingControllerForTesting(
+            WindowAndroid window, PrintingControllerImpl instance) {
+        UnownedUserDataHost host = window.getUnownedUserDataHost();
+        KEY.attachToHost(host, instance);
+        ResettersForTesting.register(() -> KEY.detachFromHost(host));
     }
 
     /**
-     * Returns the singleton instance, lazily creating one if needed.
+     * Retrieves the {@link PrintingController} associated with the given {@link WindowAndroid}. If
+     * no instance exists, one is created and attached.
      *
-     * @return The singleton instance.
+     * @param window The window to get the controller for.
+     * @return The controller instance.
      */
-    public static PrintingController getInstance() {
+    public static PrintingController getInstance(WindowAndroid window) {
         ThreadUtils.assertOnUiThread();
-
-        if (sInstanceForTesting != null) return sInstanceForTesting;
-
-        if (sInstance == null) {
-            sInstance = new PrintingControllerImpl();
+        UnownedUserDataHost host = window.getUnownedUserDataHost();
+        PrintingControllerImpl controller = KEY.retrieveDataFromHost(host);
+        if (controller == null) {
+            controller = new PrintingControllerImpl(window);
+            KEY.attachToHost(host, controller);
         }
-        return sInstance;
+        return controller;
+    }
+
+    @VisibleForTesting
+    protected PrintingControllerImpl(WindowAndroid window) {
+        mPrintDocumentAdapterWrapper = new PrintDocumentAdapterWrapper(this);
+        mWindowAndroid = window;
+        mWindowAndroid.addActivityStateObserver(this);
+    }
+
+    public void onDetachedFromHost(UnownedUserDataHost host) {
+        mWindowAndroid.removeActivityStateObserver(this);
+        mIsBusy = false;
+        mPrintingState = PRINTING_STATE_FINISHED;
+        closeFileDescriptor();
+        resetCallbacks();
+        if (mPendingPrintCallback != null) {
+            mPendingPrintCallback.run();
+            mPendingPrintCallback = null;
+        }
+        if (sOnDetachCallbackForTesting != null) sOnDetachCallbackForTesting.run();
+    }
+
+    private static @Nullable Runnable sOnDetachCallbackForTesting;
+
+    /**
+     * Sets a callback to be invoked when {@link #onDetachedFromHost(UnownedUserDataHost)} is
+     * called.
+     *
+     * @param callback The callback to run.
+     */
+    public static void setOnDetachCallbackForTesting(Runnable callback) {
+        sOnDetachCallbackForTesting = callback;
+        ResettersForTesting.register(() -> sOnDetachCallbackForTesting = null);
+    }
+
+    @Override
+    public void onActivityDestroyed() {
+        // If the activity is destroyed, ensure we clean up any pending print jobs to avoid leaks or
+        // crashes.
+        mIsBusy = false;
+        mPrintingState = PRINTING_STATE_FINISHED;
+        closeFileDescriptor();
+        // No need to reset callbacks or call onFinish as the system is destroying us.
     }
 
     @Override
@@ -138,8 +214,8 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
     }
 
     @Override
-    public int getFileDescriptor() {
-        return assumeNonNull(mFileDescriptor).getFd();
+    public @Nullable ParcelFileDescriptor getParcelFileDescriptor() {
+        return mFileDescriptor;
     }
 
     @Override
@@ -160,6 +236,11 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
     @Override
     public boolean isBusy() {
         return mIsBusy;
+    }
+
+    @Override
+    public void setPendingPrintCallback(Runnable callback) {
+        mPendingPrintCallback = callback;
     }
 
     @VisibleForTesting
@@ -197,7 +278,13 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
             canStartPrint = true;
         }
 
-        if (!canStartPrint) return;
+        if (!canStartPrint) {
+            if (mPendingPrintCallback != null) {
+                mPendingPrintCallback.run();
+                mPendingPrintCallback = null;
+            }
+            return;
+        }
 
         mIsBusy = true;
         assert mPrintManager != null;
@@ -280,6 +367,11 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
         // TODO(cimamoglu): Make use of CancellationSignal.
         if (ranges == null || ranges.length == 0) {
             callback.onWriteFailed(null);
+            try {
+                destination.close();
+            } catch (IOException e) {
+                /* ignore */
+            }
             return;
         }
 
@@ -293,14 +385,19 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
             mOnWriteCallback.onWriteFailed("ParcelFileDescriptor.dup() failed: " + e.toString());
             resetCallbacks();
             return;
+        } finally {
+            try {
+                destination.close();
+            } catch (IOException e) {
+                /* ignore */
+            }
         }
         mPages = convertPageRangesToIntegerArray(ranges);
-        String pdfFilePath = assumeNonNull(mPrintable).getPdfFilePath();
+        InputStream pdfInputStream = assumeNonNull(mPrintable).getPdfInputStream();
 
-        if (pdfFilePath == null) {
+        if (pdfInputStream == null) {
             // mRenderProcessId and mRenderFrameId could be invalid values, in this case we are
-            // going to
-            // print the main frame.
+            // going to print the main frame.
             if (mPrintable.print(mRenderProcessId, mRenderFrameId)) {
                 mPrintingState = PRINTING_STATE_STARTED_FROM_ONWRITE;
             } else {
@@ -311,8 +408,8 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
             // We may get a CancellationSignal, after replying it (via WriteResultCallback) we might
             // get another onWrite call.
         } else {
-            // The print job is already a pdf. Copy to destination from the provided filepath.
-            onWriteForPdfPage(pdfFilePath, cancellationSignal);
+            // The print job is already a pdf. Copy to destination from the provided InputStream.
+            onWriteForPdfPage(pdfInputStream, cancellationSignal);
         }
     }
 
@@ -331,16 +428,18 @@ public class PrintingControllerImpl implements PrintingController, PdfGenerator 
         // The printmanager contract is that onFinish() is always called as the last
         // callback. We set busy to false here.
         mIsBusy = false;
+
+        if (mPendingPrintCallback != null) {
+            mPendingPrintCallback.run();
+            mPendingPrintCallback = null;
+        }
     }
 
     private void onWriteForPdfPage(
-            final String pdfFilePath, final CancellationSignal cancellationSignal) {
+            final InputStream inputStream, final CancellationSignal cancellationSignal) {
         mPrintingState = PRINTING_STATE_STARTED_FROM_ONWRITE;
-        InputStream inputStream = null;
         OutputStream outputStream = null;
         try {
-            File file = new File(pdfFilePath);
-            inputStream = new FileInputStream(file);
             outputStream = new FileOutputStream(assumeNonNull(mFileDescriptor).getFileDescriptor());
 
             int count;

@@ -15,14 +15,14 @@
 #include "base/one_shot_event.h"
 #include "base/scoped_observation.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/launch_result_type.h"
 #include "chrome/browser/apps/app_service/publishers/app_publisher.h"
 #include "chrome/browser/web_applications/app_service/web_app_publisher_helper.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
+#include "components/services/app_service/public/cpp/launch_result.h"
 #include "components/services/app_service/public/cpp/menu.h"
 #include "components/services/app_service/public/cpp/permission.h"
 #include "components/webapps/common/web_app_id.h"
@@ -47,6 +47,9 @@ class WebApp;
 class WebAppProvider;
 
 // An app publisher (in the App Service sense) of Web Apps.
+// Note: Logic to check if a URL is in a Web App's extended scope
+// (IsWebAppInExtendedScope) is currently implemented in AppServiceProxyBase
+// to keep complexity out of publisher subclasses.
 class WebApps final : public apps::AppPublisher,
                       public WebAppPublisherHelper::Delegate {
  public:

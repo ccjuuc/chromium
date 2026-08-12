@@ -51,7 +51,6 @@ class NetworkConfigurationHandler;
 class NetworkConnectionHandler;
 class NetworkDeviceHandler;
 class NetworkDeviceHandlerImpl;
-class NetworkLoginScreenProtocolHandlerObserver;
 class NetworkMetadataStore;
 class NetworkProfileHandler;
 class NetworkStateHandler;
@@ -86,6 +85,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkHandler {
 
   // Returns true if the global instance has been initialized.
   static bool IsInitialized();
+
+  // Returns true if the global instance has ever been initialized, even if
+  // Shutdown() was called.
+  static bool HasEverBeenInitialized();
 
   // Called whenever the pref services change, e.g. on login. Initializes
   // services with PrefService dependencies (i.e. ui_proxy_config_service).
@@ -218,9 +221,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkHandler {
       ephemeral_network_policies_enablement_handler_;
   std::unique_ptr<EphemeralNetworkConfigurationHandler>
       ephemeral_network_configuration_handler_;
-
-  std::unique_ptr<NetworkLoginScreenProtocolHandlerObserver>
-      network_login_screen_protocol_handler_observer_;
 
   // True when the device is managed by policy.
   bool is_enterprise_managed_ = false;

@@ -69,7 +69,7 @@ AutomationInternalPerformActionFunction::Result ConvertToAXActionData(
     int32_t automation_node_id,
     const std::string& action_type_string,
     int request_id,
-    const base::Value::Dict& additional_properties,
+    const base::DictValue& additional_properties,
     const ExtensionId& extension_id,
     ui::AXActionData* action) {
   AutomationInternalPerformActionFunction::Result validation_error_result;
@@ -194,6 +194,41 @@ AutomationInternalPerformActionFunction::Result ConvertToAXActionData(
       }
       action->action = ax::mojom::Action::kCustomAction;
       action->custom_action_id = perform_custom_action_params->custom_action_id;
+      break;
+    }
+    case api::automation::ActionType::kReplaceRanges: {
+      auto replace_ranges_params =
+          api::automation_internal::ReplaceRangesParams::FromValue(
+              additional_properties);
+      if (!replace_ranges_params) {
+        return validation_error_result;
+      }
+
+      size_t size = replace_ranges_params->replacement_strings.size();
+      if (replace_ranges_params->start_anchor_ids.size() != size ||
+          replace_ranges_params->start_offsets.size() != size ||
+          replace_ranges_params->end_anchor_ids.size() != size ||
+          replace_ranges_params->end_offsets.size() != size) {
+        return validation_error_result;
+      }
+
+      action->action = ax::mojom::Action::kReplaceRanges;
+      action->AddStringListAttribute(
+          ax::mojom::StringListAttribute::kTextOperationReplacementStrings,
+          replace_ranges_params->replacement_strings);
+      action->AddIntListAttribute(
+          ax::mojom::IntListAttribute::kTextOperationStartAnchorIds,
+          replace_ranges_params->start_anchor_ids);
+      action->AddIntListAttribute(
+          ax::mojom::IntListAttribute::kTextOperationStartOffsets,
+          replace_ranges_params->start_offsets);
+      action->AddIntListAttribute(
+          ax::mojom::IntListAttribute::kTextOperationEndAnchorIds,
+          replace_ranges_params->end_anchor_ids);
+      action->AddIntListAttribute(
+          ax::mojom::IntListAttribute::kTextOperationEndOffsets,
+          replace_ranges_params->end_offsets);
+
       break;
     }
     case api::automation::ActionType::kReplaceSelectedText: {
@@ -645,8 +680,11 @@ AutomationInternalEnableDesktopFunction::Run() {
     return RespondNow(Error("desktop permission must be requested"));
 
   // This gets removed when the extension process dies.
+  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
   AutomationEventRouter::GetInstance()->RegisterListenerWithDesktopPermission(
-      extension_id(), source_process_id(), GetSenderWebContents());
+      extension_id(),
+      content::ChildProcessId::FromUnsafeValue(source_process_id()),
+      GetSenderWebContents());
 
   AutomationInternalApiDelegate* automation_api_delegate =
       ExtensionsAPIClient::Get()->GetAutomationInternalApiDelegate();
@@ -667,8 +705,9 @@ AutomationInternalDisableDesktopFunction::Run() {
   if (!automation_info || !automation_info->desktop)
     return RespondNow(Error("desktop permission must be requested"));
 
+  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
   AutomationEventRouter::GetInstance()->UnregisterListenerWithDesktopPermission(
-      source_process_id());
+      content::ChildProcessId::FromUnsafeValue(source_process_id()));
   return RespondNow(NoArguments());
 #else
   return RespondNow(Error("getDesktop is unsupported by this platform"));

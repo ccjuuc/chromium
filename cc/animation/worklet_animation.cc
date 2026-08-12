@@ -71,7 +71,8 @@ bool WorkletAnimation::Tick(base::TimeTicks monotonic_time) {
   // animations lifecycle. To avoid this we pause the underlying keyframe effect
   // at the local time obtained from the user script - essentially turning each
   // call to |WorkletAnimation::Tick| into a seek in the effect.
-  keyframe_effect()->Pause(base::TimeTicks() + local_time_.Read(*this).value());
+  keyframe_effect()->Pause(local_time_.Read(*this).value(),
+                           gfx::KeyframeModel::RunState::PAUSED);
   keyframe_effect()->Tick(base::TimeTicks());
   return true;
 }
@@ -86,8 +87,8 @@ void WorkletAnimation::UpdateState(bool start_ready_animations,
 void WorkletAnimation::TakeTimeUpdatedEvent(AnimationEvents* events) {
   DCHECK(events->needs_time_updated_events());
   if (last_synced_local_time_.Read(*this) != local_time_.Read(*this)) {
-    events->events().emplace_back(animation_timeline()->id(), id_,
-                                  local_time_.Read(*this));
+    events->events().emplace_back(AnimationPlaybackEvent(
+        animation_timeline()->id(), id_, local_time_.Read(*this)));
     last_synced_local_time_.Write(*this) = local_time_.Read(*this);
   }
 }

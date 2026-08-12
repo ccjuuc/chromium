@@ -9,14 +9,15 @@ import static org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil.FO
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.content.Context;
+import android.content.res.Resources;
 import android.content.res.TypedArray;
-import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.FloatProperty;
 import android.util.Size;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.ColorRes;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
@@ -26,24 +27,25 @@ import org.chromium.base.ObserverList;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.compositor.layouts.LayoutRenderHost;
+import org.chromium.chrome.browser.actor.ui.TabIndicatorStatus;
 import org.chromium.chrome.browser.compositor.layouts.LayoutUpdateHost;
 import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
 import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton.ButtonType;
 import org.chromium.chrome.browser.compositor.layouts.components.TintedCompositorButton;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTabDelegate.VisualState;
 import org.chromium.chrome.browser.compositor.overlays.strip.TabLoadTracker.TabLoadTrackerCallback;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimator;
 import org.chromium.chrome.browser.layouts.components.VirtualView;
+import org.chromium.chrome.browser.tab.MediaState;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.Tab.MediaState;
+import org.chromium.chrome.browser.tab.TabUtils;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.base.LocalizationUtils;
-import org.chromium.ui.util.ColorUtils;
 import org.chromium.ui.util.MotionEventUtils;
+import org.chromium.ui.util.StyleUtils;
 
 import java.util.List;
 
@@ -103,17 +105,55 @@ public class StripLayoutTab extends StripLayoutView {
                 }
             };
 
+    /** A property for animations to use for changing the Glic underline opacity. */
+    public static final FloatProperty<StripLayoutTab> UNDERLINE_OPACITY =
+            new FloatProperty<>("underlineOpacity") {
+                @Override
+                public void setValue(StripLayoutTab object, float value) {
+                    object.mUnderlineOpacity = value;
+                }
+
+                @Override
+                public Float get(StripLayoutTab object) {
+                    return object.getUnderlineOpacity();
+                }
+            };
+
+    /**
+     * A property for animations to use for changing the Glic underline shimmer offset. The shimmer
+     * offset drives a left-to-right "wave/shimmer" effect where parts of the underline dynamically
+     * get lighter or darker.
+     */
+    public static final FloatProperty<StripLayoutTab> UNDERLINE_SHIMMER_OFFSET =
+            new FloatProperty<>("underlineShimmerOffset") {
+                @Override
+                public void setValue(StripLayoutTab object, float value) {
+                    object.mUnderlineShimmerOffset = value;
+                }
+
+                @Override
+                public Float get(StripLayoutTab object) {
+                    return object.getUnderlineShimmerOffset();
+                }
+            };
+
     // Animation/Timer Constants
     private static final int ANIM_TAB_CLOSE_BUTTON_FADE_MS = 150;
+    private static final int ANIM_UNDERLINE_RAMP_UP_MS = 500;
+    private static final int ANIM_UNDERLINE_RAMP_DOWN_MS = 200;
+    private static final int ANIM_UNDERLINE_SHIMMER_CYCLE_MS = 3000;
 
     // Close Button Constants
     // Close button padding value comes from the built-in padding in the source png.
+    private static final int CLOSE_BUTTON_PADDING_DESKTOP_DP = 5;
     private static final int CLOSE_BUTTON_PADDING_DP = 7;
-    // 16dp(Folio foot) + 10dp(Close end offset) - 7dp(Close icon padding) = 19dp.
-    private static final int DESKTOP_CLOSE_BUTTON_OFFSET_X_DP = 19;
-    // 7dp(ContentOffsetY) - (24dp(Close button height) - 20dp(Divider height)) / 2 + 2dp(TabDrawY)
-    // = 7dp.
-    private static final int DESKTOP_CLOSE_BUTTON_OFFSET_Y_DP = 7;
+    private static final int CLOSE_BUTTON_EXTRA_OFFSET_DESKTOP_DP = 3;
+    // 16dp(Folio foot) + 10dp(Close end offset) - 5dp(Close icon padding) + 3dp(desktop close
+    // button extra offset) = 24dp.
+    private static final int CLOSE_BUTTON_OFFSET_X_DESKTOP_DP = 24;
+    // 7dp(ContentOffsetY) - (20dp(Close button height) - 20dp(Divider height)) / 2 + 2dp(TabDrawY)
+    // = 9dp.
+    private static final int CLOSE_BUTTON_OFFSET_Y_DESKTOP_DP = 9;
 
     // Strip Tab Offset Constants
     protected static final float TOP_MARGIN_DP = 2.f;
@@ -121,21 +161,39 @@ public class StripLayoutTab extends StripLayoutView {
     private static final int TAB_TOUCH_TARGET_END_OFFSET_X_DP = 12;
 
     // Visibility Constants.
-    private static final float FAVICON_WIDTH = 16.f;
+    public static final float FAVICON_WIDTH = 16.f;
     private static final float FAVICON_PADDING = 26.f;
     protected static final float MIN_WIDTH = FAVICON_WIDTH + (FOLIO_FOOT_LENGTH_DP * 2);
-    // TODO(crbug.com/454048975): Check media indicator constants with UX.
-    private static final float MEDIA_INDICATOR_WIDTH = 16.f;
     private static final float WIDTH_TO_HIDE_ICON = 86.f;
+
+    // Media Indicator Constants.
+    private static final float MEDIA_INDICATOR_WIDTH = 16.f;
+    private static final float DYNAMIC_GLIC_ACTUATION_INDICATOR_WIDTH = 14.f;
+    private static final float TAB_INDICATOR_OVERLAY_WIDTH = 24.f;
+    // Spacing between the media indicator and the close button.
+    private static final float MEDIA_INDICATOR_TO_CLOSE_BUTTON_SPACING_DP = 12.f;
+    // The media indicator icon has internal padding of approx 2dp when scaled to 16dp.
+    private static final float MEDIA_INDICATOR_INTERNAL_PADDING_DP = 2.f;
+    // We want the visual gap between title and media indicator to be the same as the visual gap
+    // between title and close button (which is CLOSE_BUTTON_PADDING_DP).
+    private static final float TITLE_TO_MEDIA_INDICATOR_SPACING_DP =
+            getCloseButtonPadding() - MEDIA_INDICATOR_INTERNAL_PADDING_DP;
     private static final float WIDTH_TO_HIDE_FAVICON_FOR_MEDIA_INDICATOR =
-            WIDTH_TO_HIDE_ICON + MEDIA_INDICATOR_WIDTH;
+            WIDTH_TO_HIDE_ICON
+                    + MEDIA_INDICATOR_WIDTH
+                    + (MEDIA_INDICATOR_TO_CLOSE_BUTTON_SPACING_DP
+                            - getCloseButtonPadding()
+                            - MEDIA_INDICATOR_INTERNAL_PADDING_DP);
+
+    // Tab Underline Constants
+    public static final float TAB_UNDERLINE_THICKNESS_DP = 2.f;
+    public static final float TAB_UNDERLINE_CORNER_RADIUS_DP = TAB_UNDERLINE_THICKNESS_DP / 2;
+    // Used to ensure a 2dp gap between tab group underline and Glic underline.
+    public static final float TAB_UNDERLINE_BOTTOM_MARGIN_DP =
+            StripLayoutGroupTitle.BOTTOM_INDICATOR_HEIGHT_DP + 2.f;
 
     // Divider Constants
     private static final int DIVIDER_OFFSET_X = 13;
-
-    // Close button hover highlight alpha
-    private static final float CLOSE_BUTTON_HOVER_BACKGROUND_PRESSED_OPACITY = 0.12f;
-    private static final float CLOSE_BUTTON_HOVER_BACKGROUND_DEFAULT_OPACITY = 0.08f;
 
     // Tab's ID this view refers to.
     private int mTabId;
@@ -145,7 +203,6 @@ public class StripLayoutTab extends StripLayoutView {
     private final Size mCloseButtonSize;
     private TintedCompositorButton mCloseButton;
 
-    private boolean mIsClosed;
     private boolean mIsSelected;
     private boolean mIsPinned;
     private boolean mIsHovered;
@@ -155,10 +212,17 @@ public class StripLayoutTab extends StripLayoutView {
     private boolean mStartDividerVisible;
     private boolean mEndDividerVisible;
     private boolean mForceHideEndDivider;
-    private boolean mSkipAsyncClosure;
     private float mBottomMargin;
     private float mContainerOpacity;
     private @MediaState int mMediaState;
+    private @TabIndicatorStatus int mTabIndicatorStatus;
+    private float mTabIndicatorOverlayRotation;
+    private boolean mIsUnderlined;
+    // The offset of the left-to-right wave/shimmer effect on the tab underline (from 0.f to 1.f).
+    private float mUnderlineShimmerOffset;
+    private float mUnderlineOpacity;
+    private @Nullable CompositorAnimator mUnderlineOpacityAnimator;
+    private @Nullable CompositorAnimator mUnderlineShimmerAnimator;
 
     // For avoiding unnecessary accessibility description updates.
     private @Nullable String mCachedA11yDescriptionTitle;
@@ -170,7 +234,7 @@ public class StripLayoutTab extends StripLayoutView {
     private boolean mShowingCloseButton = true;
 
     // Content Animations
-    private @Nullable CompositorAnimator mButtonOpacityAnimation;
+    private @Nullable CompositorAnimator mButtonOpacityAnimator;
 
     private float mLoadingSpinnerRotationDegrees;
 
@@ -187,79 +251,72 @@ public class StripLayoutTab extends StripLayoutView {
      * @param context An Android context for accessing system resources.
      * @param id The id of the {@link Tab} to visually represent.
      * @param clickHandler Handles clicks on this {@link StripLayoutTab}.
+     * @param longClickHandler Handles long clicks on this {@link StripLayoutTab}.
      * @param keyboardFocusHandler Handles keyboard focus gain/loss on this {@link StripLayoutTab}.
+     * @param accessibilityFocusHandler Handles accessibility focus on this {@link StripLayoutTab}.
      * @param loadTrackerCallback The {@link TabLoadTrackerCallback} to be notified of loading state
      *     changes.
-     * @param updateHost The {@link LayoutRenderHost}.
+     * @param updateHost The {@link LayoutUpdateHost}.
      * @param incognito Whether or not this layout tab is incognito.
+     * @param isPinned Whether or not this tab is pinned.
+     * @param mediaState The media state of the tab.
      */
     public StripLayoutTab(
             Context context,
             int id,
             StripLayoutViewOnClickHandler clickHandler,
+            @Nullable StripLayoutViewOnLongClickHandler longClickHandler,
             StripLayoutViewOnKeyboardFocusHandler keyboardFocusHandler,
+            StripLayoutViewOnAccessibilityFocusHandler accessibilityFocusHandler,
             TabLoadTrackerCallback loadTrackerCallback,
             LayoutUpdateHost updateHost,
             boolean incognito,
-            boolean isPinned) {
-        super(incognito, clickHandler, keyboardFocusHandler, context);
+            boolean isPinned,
+            @MediaState int mediaState) {
+        super(
+                incognito,
+                clickHandler,
+                longClickHandler,
+                keyboardFocusHandler,
+                accessibilityFocusHandler,
+                context);
         mTabId = id;
+        mMediaState = mediaState;
         mIsPinned = isPinned;
         mLoadTracker = new TabLoadTracker(id, loadTrackerCallback);
         mUpdateHost = updateHost;
         mCloseButton =
                 new TintedCompositorButton(
                         context,
+                        incognito,
                         ButtonType.TAB_CLOSE,
-                        this,
+                        /* parentView= */ this,
                         /* width= */ 0,
                         /* height= */ 0,
                         /* tooltipHandler= */ null,
                         clickHandler,
                         keyboardFocusHandler,
-                        R.drawable.btn_tab_close_normal,
-                        0f);
-        mCloseButton.setTintResources(
-                R.color.default_icon_color_tint_list,
-                R.color.default_icon_color_tint_list,
-                R.color.default_icon_color_light,
-                R.color.default_icon_color_light);
+                        StyleUtils.shouldApplyDesktopDensity()
+                                ? R.drawable.ic_tab_close_tabstrip_20dp
+                                : R.drawable.ic_tab_close_tabstrip_24dp,
+                        StyleUtils.shouldApplyDesktopDensity()
+                                ? R.drawable.tab_close_button_bg_20dp
+                                : R.drawable.tab_close_button_bg_24dp,
+                        /* clickSlopDp= */ 0f,
+                        /* hasLongClickAction= */ true);
+        mCloseButton.setOnLongClickHandler(longClickHandler);
 
-        mCloseButton.setBackgroundResourceId(R.drawable.tab_close_button_bg);
-        @ColorInt
-        int apsBackgroundHoveredTint =
-                ColorUtils.setAlphaComponentWithFloat(
-                        SemanticColorUtils.getDefaultTextColor(context),
-                        CLOSE_BUTTON_HOVER_BACKGROUND_DEFAULT_OPACITY);
-        @ColorInt
-        int apsBackgroundPressedTint =
-                ColorUtils.setAlphaComponentWithFloat(
-                        SemanticColorUtils.getDefaultTextColor(context),
-                        CLOSE_BUTTON_HOVER_BACKGROUND_PRESSED_OPACITY);
+        @ColorRes
+        int iconTintRes =
+                incognito ? R.color.default_icon_color_light : R.color.default_icon_color_tint_list;
+        @ColorRes
+        int bgTintRes =
+                incognito
+                        ? R.color.tab_strip_close_bg_incognito_tint_list
+                        : R.color.tab_strip_close_bg_tint_list;
+        mCloseButton.setTint(context.getColor(iconTintRes));
+        mCloseButton.setBackgroundTint(context.getColorStateList(bgTintRes));
 
-        @ColorInt
-        int apsBackgroundIncognitoHoveredTint =
-                ColorUtils.setAlphaComponentWithFloat(
-                        context.getColor(R.color.tab_strip_button_hover_bg_color),
-                        CLOSE_BUTTON_HOVER_BACKGROUND_DEFAULT_OPACITY);
-        @ColorInt
-        int apsBackgroundIncognitoPressedTint =
-                ColorUtils.setAlphaComponentWithFloat(
-                        context.getColor(R.color.tab_strip_button_hover_bg_color),
-                        CLOSE_BUTTON_HOVER_BACKGROUND_PRESSED_OPACITY);
-
-        // Only set color for hover bg.
-        mCloseButton.setBackgroundTint(
-                Color.TRANSPARENT,
-                Color.TRANSPARENT,
-                Color.TRANSPARENT,
-                Color.TRANSPARENT,
-                apsBackgroundHoveredTint,
-                apsBackgroundPressedTint,
-                apsBackgroundIncognitoHoveredTint,
-                apsBackgroundIncognitoPressedTint);
-
-        mCloseButton.setIncognito(incognito);
         mCloseButtonSize = getCloseButtonSize();
         resetCloseRect();
     }
@@ -322,7 +379,7 @@ public class StripLayoutTab extends StripLayoutView {
      * @param isPinned whether this tab has been pinned.
      */
     public void setIsPinned(boolean isPinned) {
-        mIsPinned = StripLayoutUtils.isTabPinningFromStripEnabled() ? isPinned : false;
+        mIsPinned = isPinned;
     }
 
     /** Gets whether this tab has been pinned */
@@ -336,6 +393,186 @@ public class StripLayoutTab extends StripLayoutView {
 
     public @MediaState int getMediaState() {
         return mMediaState;
+    }
+
+    /**
+     * Sets the status of the tab's indicator. This is only used for Glic actuation indicators and
+     * is separate from media indicators.
+     *
+     * @param status The {@link TabIndicatorStatus} to set.
+     */
+    /* package */ void setTabIndicatorStatus(@TabIndicatorStatus int status) {
+        mTabIndicatorStatus = status;
+    }
+
+    /** Returns the width of the tab indicator overlay. */
+    public float getTabIndicatorOverlayWidth() {
+        return TAB_INDICATOR_OVERLAY_WIDTH;
+    }
+
+    /** Returns the rotation of the tab indicator overlay. */
+    public float getTabIndicatorOverlayRotation() {
+        return mTabIndicatorOverlayRotation;
+    }
+
+    /**
+     * Adds rotation to the tab indicator overlay.
+     *
+     * @param degrees The degrees to add to the rotation.
+     */
+    public void addTabIndicatorOverlayRotation(float degrees) {
+        mTabIndicatorOverlayRotation = (mTabIndicatorOverlayRotation + degrees) % 1080;
+    }
+
+    /**
+     * @return The {@link TabIndicatorStatus} representing the actuation state of the tab.
+     */
+    public @TabIndicatorStatus int getTabIndicatorStatus() {
+        return mTabIndicatorStatus;
+    }
+
+    /**
+     * @return Whether some tab indicator (actuation or media) should be shown.
+     */
+    public boolean shouldShowIndicator() {
+        return getTabIndicatorStatus() != TabIndicatorStatus.NONE
+                || (mMediaState != MediaState.NONE && !shouldHideMediaIndicator());
+    }
+
+    private boolean isRecordingOrSharingMedia() {
+        return mMediaState == MediaState.RECORDING || mMediaState == MediaState.SHARING;
+    }
+
+    /**
+     * @return The resource ID of the indicator to show, prioritizing active media recording, then
+     *     actuation, then other media indicators. For desktop counterpart, see tab alert priority
+     *     in {@code chrome/browser/ui/tabs/alert/tab_alert_controller.cc}.
+     */
+    public @DrawableRes int getIndicatorRes() {
+        if (isRecordingOrSharingMedia() && shouldShowIndicator()) {
+            return TabUtils.getMediaIndicatorDrawable(mMediaState);
+        }
+        if (getTabIndicatorStatus() == TabIndicatorStatus.DYNAMIC) {
+            return R.drawable.ic_arrow_selector_spark_14dp;
+        } else if (getTabIndicatorStatus() == TabIndicatorStatus.STATIC) {
+            return R.drawable.ic_arrow_selector_spark_16dp;
+        }
+        if (shouldShowIndicator()) {
+            return TabUtils.getMediaIndicatorDrawable(mMediaState);
+        }
+        return Resources.ID_NULL;
+    }
+
+    /**
+     * @return The tint color for the active indicator.
+     */
+    public @ColorInt int getIndicatorTint() {
+        if (isRecordingOrSharingMedia()) {
+            return TabUtils.getMediaIndicatorTintColor(
+                    mContext, mMediaState, getCloseButton().getTint());
+        }
+        if (getTabIndicatorStatus() != TabIndicatorStatus.NONE) {
+            return SemanticColorUtils.getColorPrimary(mContext);
+        }
+        return TabUtils.getMediaIndicatorTintColor(
+                mContext, mMediaState, getCloseButton().getTint());
+    }
+
+    /**
+     * @return The resource ID of the indicator overlay to show.
+     */
+    public @DrawableRes int getIndicatorOverlayRes() {
+        if (isRecordingOrSharingMedia()) {
+            return Resources.ID_NULL;
+        }
+        if (getTabIndicatorStatus() == TabIndicatorStatus.DYNAMIC) {
+            return R.drawable.tab_indicator_spinner;
+        }
+        return Resources.ID_NULL;
+    }
+
+    /**
+     * Sets whether this tab is underlined, with optional opacity and motion animations.
+     *
+     * @param isUnderlined whether this tab is underlined.
+     */
+    public void setIsUnderlined(boolean isUnderlined) {
+        if (mIsUnderlined == isUnderlined) return;
+        mIsUnderlined = isUnderlined;
+
+        if (mUnderlineOpacityAnimator != null) {
+            mUnderlineOpacityAnimator.cancel();
+        }
+        if (mUnderlineShimmerAnimator != null) {
+            mUnderlineShimmerAnimator.cancel();
+        }
+
+        float targetOpacity = isUnderlined ? 1.0f : 0.0f;
+        if (!AccessibilityState.prefersReducedMotion()) {
+            // 1. Opacity Transition
+            int duration = isUnderlined ? ANIM_UNDERLINE_RAMP_UP_MS : ANIM_UNDERLINE_RAMP_DOWN_MS;
+            mUnderlineOpacityAnimator =
+                    CompositorAnimator.ofFloatProperty(
+                            mUpdateHost.getAnimationHandler(),
+                            this,
+                            UNDERLINE_OPACITY,
+                            mUnderlineOpacity,
+                            targetOpacity,
+                            duration);
+            mUnderlineOpacityAnimator.start();
+
+            // 2. Motion Transition
+            if (isUnderlined) {
+                if (mUnderlineShimmerAnimator == null) {
+                    mUnderlineShimmerAnimator =
+                            CompositorAnimator.ofFloatProperty(
+                                    mUpdateHost.getAnimationHandler(),
+                                    this,
+                                    UNDERLINE_SHIMMER_OFFSET,
+                                    0.0f,
+                                    1.0f,
+                                    ANIM_UNDERLINE_SHIMMER_CYCLE_MS);
+                }
+                mUnderlineShimmerAnimator.start();
+            }
+        } else {
+            mUnderlineOpacity = targetOpacity;
+            mUnderlineShimmerOffset = 0.0f;
+            mUpdateHost.requestUpdate();
+        }
+    }
+
+    /** Retriggers the underline animation cycle. */
+    public void resetUnderlineAnimationCycle() {
+        if (mIsUnderlined
+                && mUnderlineShimmerAnimator != null
+                && !AccessibilityState.prefersReducedMotion()) {
+            mUnderlineShimmerAnimator.cancel();
+            mUnderlineShimmerAnimator.start();
+        }
+    }
+
+    /**
+     * Returns the fraction (from 0.f to 1.f) of how opaque the Glic underline should be.
+     *
+     * @return The underline opacity.
+     */
+    public float getUnderlineOpacity() {
+        return mUnderlineOpacity;
+    }
+
+    /**
+     * Returns the shimmer offset (from 0.f to 1.f) of the Glic underline.
+     *
+     * @return The underline shimmer offset.
+     */
+    public float getUnderlineShimmerOffset() {
+        return mUnderlineShimmerOffset;
+    }
+
+    /** Gets whether this tab is underlined. */
+    public boolean isUnderlinedForTesting() {
+        return mIsUnderlined;
     }
 
     /**
@@ -358,6 +595,15 @@ public class StripLayoutTab extends StripLayoutView {
         if (mShowingCloseButton || mIsSelected) mCloseButton.getVirtualViews(views);
     }
 
+    @Override
+    public int getVirtualViewPriority() {
+        // Pinned tabs are foregrounded, meaning they show above all other views, so HIGH priority.
+        if (mIsPinned) return VirtualViewPriority.HIGH;
+        // Shows beneath the foregrounded buttons when scrolling offscreen, beneath groups when the
+        // group is collapsed, and beneath the tab's close button, so LOW priority.
+        return VirtualViewPriority.LOW;
+    }
+
     /**
      * Set strip tab and close button accessibility description.
      *
@@ -372,7 +618,7 @@ public class StripLayoutTab extends StripLayoutView {
         String closeButtonDescription =
                 ContextUtils.getApplicationContext()
                         .getString(R.string.accessibility_tabstrip_btn_close_tab, title);
-        mCloseButton.setAccessibilityDescription(closeButtonDescription, closeButtonDescription);
+        mCloseButton.setAccessibilityDescription(closeButtonDescription);
 
         // Cache the title + resource ID used to create this description so we can avoid unnecessary
         // updates.
@@ -564,45 +810,6 @@ public class StripLayoutTab extends StripLayoutView {
     }
 
     /**
-     * Mark this tab as closed. We can't immediately remove the tab from the TabModel, since doing
-     * so may result in a concurrent modification exception. Track here to treat as removed.
-     *
-     * @param isClosed Whether or not the tab should be treated as closed.
-     */
-    public void setIsClosed(boolean isClosed) {
-        mIsClosed = isClosed;
-    }
-
-    /**
-     * Closed tabs should have been removed from the TabModel and mStripTabs. We can't do so
-     * immediately, however, since we may try to do so when we are committing all tab closures,
-     * resulting in a concurrent modification exception. We instead post the removal and mark such
-     * tabs as closed.
-     *
-     * @return Whether or not the tab should be treated as closed.
-     */
-    public boolean isClosed() {
-        return mIsClosed;
-    }
-
-    /**
-     * Mark that this tab is closing through the new tab closure flow, and needs to skip the async
-     * closure from the old tab closure flow. Can be removed once the migration is complete. See
-     * crbug.com/443337907.
-     */
-    public void setSkipAsyncClosure(boolean skipAsyncClosure) {
-        mSkipAsyncClosure = skipAsyncClosure;
-    }
-
-    /**
-     * Returns true if the tab should skip the async closure from the old tab closure flow. Can be
-     * removed once the migration is complete. See crbug.com/443337907.
-     */
-    public boolean shouldSkipAsyncClosure() {
-        return mSkipAsyncClosure;
-    }
-
-    /**
      * @return Whether or not this tab should be visually represented as loading.
      */
     public boolean isLoading() {
@@ -656,7 +863,7 @@ public class StripLayoutTab extends StripLayoutView {
     /**
      * @return How far to vertically offset the tab content.
      */
-    public float getContentOffsetY() {
+    public static float getContentOffsetY() {
         return FOLIO_CONTENT_OFFSET_Y - (TOP_MARGIN_DP / 2);
     }
 
@@ -684,7 +891,7 @@ public class StripLayoutTab extends StripLayoutView {
     /**
      * @return How far to offset the top of the tab container from the top of the tab strip.
      */
-    public float getTopMargin() {
+    public static float getTopMargin() {
         return TOP_MARGIN_DP;
     }
 
@@ -865,9 +1072,9 @@ public class StripLayoutTab extends StripLayoutView {
         }
 
         mClosePlacement.top =
-                StripLayoutUtils.shouldApplyMoreDensity() ? DESKTOP_CLOSE_BUTTON_OFFSET_Y_DP : 0;
+                StyleUtils.shouldApplyDesktopDensity() ? CLOSE_BUTTON_OFFSET_Y_DESKTOP_DP : 0;
         mClosePlacement.bottom =
-                StripLayoutUtils.shouldApplyMoreDensity()
+                StyleUtils.shouldApplyDesktopDensity()
                         ? mClosePlacement.top + closeButtonHeight
                         : getHeight();
 
@@ -886,8 +1093,14 @@ public class StripLayoutTab extends StripLayoutView {
         return new Size(Math.round(widthPx / dpToPx), Math.round(heightPx / dpToPx));
     }
 
-    public int getCloseButtonPadding() {
-        return CLOSE_BUTTON_PADDING_DP;
+    public static int getCloseButtonPadding() {
+        return StyleUtils.shouldApplyDesktopDensity()
+                ? CLOSE_BUTTON_PADDING_DESKTOP_DP
+                : CLOSE_BUTTON_PADDING_DP;
+    }
+
+    public static int getCloseButtonExtraOffset() {
+        return StyleUtils.shouldApplyDesktopDensity() ? CLOSE_BUTTON_EXTRA_OFFSET_DESKTOP_DP : 0;
     }
 
     public int getTabTouchTargetEndOffsetX() {
@@ -895,8 +1108,8 @@ public class StripLayoutTab extends StripLayoutView {
     }
 
     public int getCloseButtonOffsetX() {
-        return StripLayoutUtils.shouldApplyMoreDensity()
-                ? DESKTOP_CLOSE_BUTTON_OFFSET_X_DP
+        return StyleUtils.shouldApplyDesktopDensity()
+                ? CLOSE_BUTTON_OFFSET_X_DESKTOP_DP
                 : getTabTouchTargetEndOffsetX();
     }
 
@@ -918,14 +1131,30 @@ public class StripLayoutTab extends StripLayoutView {
     }
 
     public boolean shouldHideMediaIndicator() {
-        if (!ChromeFeatureList.sMediaIndicatorsAndroid.isEnabled()) return true;
-
         final boolean closeButtonVisible = mCloseButton.getOpacity() > 0.f;
         return closeButtonVisible && getWidth() <= WIDTH_TO_HIDE_ICON;
     }
 
     public float getMediaIndicatorWidth() {
+        if (isRecordingOrSharingMedia()) {
+            return MEDIA_INDICATOR_WIDTH;
+        }
+        if (getTabIndicatorStatus() == TabIndicatorStatus.DYNAMIC) {
+            return DYNAMIC_GLIC_ACTUATION_INDICATOR_WIDTH;
+        }
         return MEDIA_INDICATOR_WIDTH;
+    }
+
+    public float getMediaIndicatorToCloseButtonSpacing() {
+        return MEDIA_INDICATOR_TO_CLOSE_BUTTON_SPACING_DP;
+    }
+
+    public float getTitleToMediaIndicatorSpacing() {
+        return TITLE_TO_MEDIA_INDICATOR_SPACING_DP;
+    }
+
+    public float getMediaIndicatorInternalPadding() {
+        return MEDIA_INDICATOR_INTERNAL_PADDING_DP;
     }
 
     @Override
@@ -953,10 +1182,10 @@ public class StripLayoutTab extends StripLayoutView {
         boolean shouldShow = mCanShowCloseButton && !mIsPlaceholder;
 
         if (shouldShow != mShowingCloseButton) {
-            float opacity = shouldShow ? 1.f : 0.f;
+            float opacity = shouldShow ? 1.0f : 0.0f;
             if (animate) {
-                if (mButtonOpacityAnimation != null) mButtonOpacityAnimation.end();
-                mButtonOpacityAnimation =
+                if (mButtonOpacityAnimator != null) mButtonOpacityAnimator.end();
+                mButtonOpacityAnimator =
                         CompositorAnimator.ofFloatProperty(
                                 mUpdateHost.getAnimationHandler(),
                                 mCloseButton,
@@ -964,14 +1193,14 @@ public class StripLayoutTab extends StripLayoutView {
                                 mCloseButton.getOpacity(),
                                 opacity,
                                 ANIM_TAB_CLOSE_BUTTON_FADE_MS);
-                mButtonOpacityAnimation.addListener(
+                mButtonOpacityAnimator.addListener(
                         new AnimatorListenerAdapter() {
                             @Override
                             public void onAnimationEnd(Animator animation) {
-                                mButtonOpacityAnimation = null;
+                                mButtonOpacityAnimator = null;
                             }
                         });
-                mButtonOpacityAnimation.start();
+                mButtonOpacityAnimator.start();
             } else {
                 mCloseButton.setOpacity(opacity);
             }

@@ -130,7 +130,7 @@ TEST_F(NativeRendererMessagingServiceTest, OpenMessagePort) {
   tab_connection_info.frame_id = 0;
   const int tab_id = 10;
   GURL source_url("http://example.com");
-  tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+  tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
   external_connection_info.target_id = extension()->id();
   external_connection_info.source_endpoint =
       MessagingEndpoint::ForExtension(extension()->id());
@@ -174,10 +174,10 @@ TEST_F(NativeRendererMessagingServiceTest, OpenMessagePort) {
 
   EXPECT_EQ("true", GetStringPropertyFromObject(context->Global(), context,
                                                 "eventFired"));
-  base::Value::Dict expected_sender =
-      base::Value::Dict()
+  base::DictValue expected_sender =
+      base::DictValue()
           .Set("frameId", 0)
-          .Set("tab", base::Value::Dict().Set("tabId", tab_id))
+          .Set("tab", base::DictValue().Set("tabId", tab_id))
           .Set("url", source_url.spec())
           .Set("id", extension()->id());
   EXPECT_EQ(ValueToString(base::Value(std::move(expected_sender))),
@@ -248,8 +248,8 @@ TEST_F(NativeRendererMessagingServiceTest, DeliverMessageToPort) {
   const char kMessageString[] = R"({"data":"hello"})";
   messaging_service()->DeliverMessage(
       script_context_set(), port_id1,
-      Message(kMessageString, mojom::SerializationFormat::kJson, false),
-      nullptr);
+      Message(kMessageString, /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
 
   // Only port1 should have been notified of the message (ports only receive
   // messages directed to themselves).
@@ -356,8 +356,8 @@ TEST_F(NativeRendererMessagingServiceTest, PostMessageFromJS) {
 
   base::RunLoop run_loop;
   EXPECT_CALL(mock_message_port_host,
-              PostMessage(Message(R"({"data":"hello"})",
-                                  mojom::SerializationFormat::kJson, false)))
+              PostMessage(testing::Property(
+                  &Message::data, std::string(R"({"data":"hello"})"))))
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   RunFunctionOnGlobal(post_message, context, std::size(args), args);
   run_loop.Run();
@@ -444,7 +444,7 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithCallback) {
 
   // Send a message and expect a reply to a passed in callback. A new port
   // should be created, and should remain open until the response is sent.
-  const Message message("\"hi\"", mojom::SerializationFormat::kJson, false);
+  Message message("\"hi\"", /*user_gesture=*/false);
   MessageTarget target(MessageTarget::ForExtension(extension()->id()));
   MockMessagePortHost mock_message_port_host;
   auto run_loop = std::make_unique<base::RunLoop>();
@@ -464,11 +464,12 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithCallback) {
         port_host.EnableUnassociatedUsage();
         mock_message_port_host.BindReceiver(std::move(port_host));
       });
-  EXPECT_CALL(mock_message_port_host, PostMessage(message))
+  EXPECT_CALL(mock_message_port_host,
+              PostMessage(testing::Property(&Message::data, message.data())))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
 
   v8::Local<v8::Promise> promise = messaging_service()->SendOneTimeMessage(
-      script_context(), target, kChannel, message,
+      script_context(), target, kChannel, std::move(message),
       binding::AsyncResponseType::kCallback, response_callback);
   // Since this is a callback based request, the returned promise should be
   // empty.
@@ -489,7 +490,8 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithCallback) {
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
-      Message("\"reply\"", mojom::SerializationFormat::kJson, false), nullptr);
+      Message("\"reply\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   run_loop->Run();
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
@@ -511,7 +513,7 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithPromise) {
 
   // Send a message and expect a reply fulfilling a promise. A new port should
   // be created, and should remain open until the response is sent.
-  const Message message("\"hi\"", mojom::SerializationFormat::kJson, false);
+  Message message("\"hi\"", /*user_gesture=*/false);
   MessageTarget target(MessageTarget::ForExtension(extension()->id()));
   MockMessagePortHost mock_message_port_host;
   auto run_loop = std::make_unique<base::RunLoop>();
@@ -531,10 +533,11 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithPromise) {
             port_host.EnableUnassociatedUsage();
             mock_message_port_host.BindReceiver(std::move(port_host));
           });
-  EXPECT_CALL(mock_message_port_host, PostMessage(message))
+  EXPECT_CALL(mock_message_port_host,
+              PostMessage(testing::Property(&Message::data, message.data())))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
   v8::Local<v8::Promise> promise = messaging_service()->SendOneTimeMessage(
-      script_context(), target, kChannel, message,
+      script_context(), target, kChannel, std::move(message),
       binding::AsyncResponseType::kPromise, v8::Local<v8::Function>());
   ASSERT_FALSE(promise.IsEmpty());
   EXPECT_EQ(v8::Promise::kPending, promise->State());
@@ -554,7 +557,8 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithPromise) {
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
-      Message("\"reply\"", mojom::SerializationFormat::kJson, false), nullptr);
+      Message("\"reply\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   run_loop->Run();
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
@@ -596,7 +600,7 @@ TEST_F(NativeRendererMessagingServiceTest, ReceiveOneTimeMessage) {
   tab_connection_info.frame_id = 0;
   const int tab_id = 10;
   GURL source_url("http://example.com");
-  tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+  tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
   external_connection_info.target_id = extension()->id();
   external_connection_info.source_endpoint =
       MessagingEndpoint::ForExtension(extension()->id());
@@ -633,8 +637,8 @@ TEST_F(NativeRendererMessagingServiceTest, ReceiveOneTimeMessage) {
   // Post the message to the receiver. The receiver should respond, and the
   // port should close.
   EXPECT_CALL(mock_message_port_host,
-              PostMessage(Message(R"({"data":"hi"})",
-                                  mojom::SerializationFormat::kJson, false)));
+              PostMessage(testing::Property(&Message::data,
+                                            std::string(R"({"data":"hi"})"))));
   EXPECT_CALL(mock_message_port_host,
               ClosePort(
                   /*close_channel=*/true,
@@ -642,8 +646,8 @@ TEST_F(NativeRendererMessagingServiceTest, ReceiveOneTimeMessage) {
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
-      Message("\"message\"", mojom::SerializationFormat::kJson, false),
-      nullptr);
+      Message("\"message\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   run_loop.Run();
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
@@ -694,7 +698,7 @@ TEST_F(NativeRendererMessagingServiceTest, TestExternalOneTimeMessages) {
         tab_connection_info.frame_id = 0;
         const int tab_id = 10;
         GURL source_url("http://example.com");
-        tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+        tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
 
         external_connection_info.target_id = extension()->id();
         external_connection_info.source_endpoint =
@@ -746,8 +750,8 @@ TEST_F(NativeRendererMessagingServiceTest, TestExternalOneTimeMessages) {
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), on_message_port_id,
-      Message("\"onMessage\"", mojom::SerializationFormat::kJson, false),
-      nullptr);
+      Message("\"onMessage\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   EXPECT_EQ("\"onMessage\"",
             GetStringPropertyFromObject(context->Global(), context,
                                         "onMessageReceived"));
@@ -759,9 +763,8 @@ TEST_F(NativeRendererMessagingServiceTest, TestExternalOneTimeMessages) {
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
   messaging_service()->DeliverMessage(
       script_context_set(), on_message_external_port_id,
-      Message("\"onMessageExternal\"", mojom::SerializationFormat::kJson,
-              false),
-      nullptr);
+      Message("\"onMessageExternal\"", /*user_gesture=*/false),
+      /*restrict_to_render_frame=*/nullptr);
   EXPECT_EQ("\"onMessage\"",
             GetStringPropertyFromObject(context->Global(), context,
                                         "onMessageReceived"));
@@ -814,6 +817,48 @@ TEST_F(NativeRendererMessagingServiceTest, DestroyContext) {
       FunctionFromString(context, kGetOnMessage);
   RunFunctionAndExpectError(get_on_message, context, std::size(args), args,
                             "Uncaught Error: Extension context invalidated.");
+}
+
+// Tests that a disconnected port doesn't crash when the messaging service is
+// destroyed before the port is garbage collected. Regression test for
+// https://crbug.com/476266939.
+TEST_F(NativeRendererMessagingServiceTest, DisconnectAndDestroy) {
+  {
+    v8::HandleScope handle_scope(isolate());
+    v8::Local<v8::Context> context = MainContext();
+
+    base::UnguessableToken other_context_id = base::UnguessableToken::Create();
+    const PortId port_id(other_context_id, 0, false,
+                         mojom::SerializationFormat::kJson);
+
+    mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
+    mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+        message_port_host_receiver;
+    GinPort* port = messaging_service()->CreatePortForTesting(
+        script_context(), "channel", mojom::ChannelType::kSendMessage, port_id,
+        message_port_remote, message_port_host_receiver);
+    message_port_remote.EnableUnassociatedUsage();
+    message_port_host_receiver.EnableUnassociatedUsage();
+
+    v8::Local<v8::Object> port_object =
+        port->GetWrapper(isolate()).ToLocalChecked();
+
+    // Disconnect the port.
+    port->DispatchOnDisconnect(context);
+
+    // Release references.
+    port = nullptr;
+    port_object.Clear();
+
+    // Destroy the bindings system (and the messaging service).
+    DestroyBindingsSystem();
+  }
+
+  // Dispose all contexts. This will release the `ScriptContext` (which holds
+  // a strong reference to the `v8::Context`) and trigger garbage collection.
+  // This verifies that the `GinPort` (which is collected during this GC)
+  // doesn't crash when it finds the messaging service destroyed.
+  DisposeAllContexts();
 }
 
 }  // namespace extensions

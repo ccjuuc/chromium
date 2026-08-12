@@ -4,26 +4,38 @@
 
 #include "components/autofill/core/browser/metrics/form_events/address_form_event_logger.h"
 
-#include <algorithm>
-#include <iterator>
-#include <memory>
-#include <string>
+#include <stdint.h>
 
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "base/check.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
+#include "base/strings/strcat.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_trigger_source.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
-#include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/form_events/form_event_logger_base.h"
+#include "components/autofill/core/browser/metrics/form_events/form_events.h"
 #include "components/autofill/core/browser/metrics/form_interactions_ukm_logger.h"
 #include "components/autofill/core/browser/suggestions/addresses/address_suggestion_generator.h"
+#include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill::autofill_metrics {
@@ -82,11 +94,6 @@ void AddressFormEventLogger::OnDidShowSuggestions(
       form, field, field.Type().GetAddressType(), form_parsed_timestamp,
       off_the_record, suggestions);
 
-  if (!base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork)) {
-    return;
-  }
-
   const AddressDataManager& address_data_manager =
       client().GetPersonalDataManager().address_data_manager();
 
@@ -122,11 +129,7 @@ void AddressFormEventLogger::OnDidFillFormFillingSuggestion(
   FieldType field_type = field.Type().GetAddressType();
   field_types_with_shown_suggestions_.erase(field_type);
   field_types_with_accepted_suggestions_.insert(field_type);
-
-  if (trigger_source != AutofillTriggerSource::kFastCheckout) {
-    ++form_interaction_counts_.autofill_fills;
-  }
-  UpdateFlowId();
+  ++form_interaction_counts_.autofill_fills;
 
   profile_categories_filled_.insert(GetCategoryOfProfile(profile));
 }
@@ -139,9 +142,7 @@ void AddressFormEventLogger::OnDidUndoAutofill() {
 void AddressFormEventLogger::OnDestroyed() {
   FormEventLoggerBase::OnDestroyed();
 
-  if (base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork) &&
-      has_logged_suggestions_shown_) {
+  if (has_logged_suggestions_shown_) {
     if (profile_categories_available_.contains(
             AutofillProfileRecordTypeCategory::kAccountHome)) {
       base::UmaHistogramBoolean("Autofill.HomeAndWork.SuggestionPresent.Home",
@@ -160,8 +161,8 @@ void AddressFormEventLogger::OnLog(const std::string& name,
                                    const FormStructure& form) const {
   uint32_t groups = data_util::DetermineGroups(form);
   base::UmaHistogramEnumeration(
-      name + data_util::GetSuffixForProfileFormType(groups), event,
-      NUM_FORM_EVENTS);
+      base::StrCat({name, data_util::GetSuffixForProfileFormType(groups)}),
+      event, NUM_FORM_EVENTS);
   if (data_util::ContainsAddress(groups) &&
       (data_util::ContainsPhone(groups) || data_util::ContainsEmail(groups))) {
     base::UmaHistogramEnumeration(name + ".AddressPlusContact", event,
@@ -226,8 +227,9 @@ AddressFormEventLogger::GetSupportedFormTypeNamesForLogging() const {
 }
 
 DenseSet<FormTypeNameForLogging> AddressFormEventLogger::GetFormTypesForLogging(
-    const FormStructure& form) const {
-  return GetAddressFormTypesForLogging(form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) const {
+  return GetAddressFormTypesForLogging(form, ac_unrecognized_behavior);
 }
 
 }  // namespace autofill::autofill_metrics

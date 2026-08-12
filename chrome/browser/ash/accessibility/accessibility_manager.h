@@ -26,6 +26,7 @@
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/common/extensions/api/accessibility_private.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
@@ -117,6 +118,8 @@ using InstallFaceGazeAssetsCallback = base::OnceCallback<void(
     std::optional<::extensions::api::accessibility_private::FaceGazeAssets>)>;
 using InstallPumpkinCallback = base::OnceCallback<void(
     std::optional<::extensions::api::accessibility_private::PumpkinData>)>;
+using InstallTenjiCallback = base::OnceCallback<void(
+    std::optional<::extensions::api::accessibility_private::TenjiData>)>;
 
 class AccessibilityPanelWidgetObserver;
 
@@ -133,6 +136,7 @@ enum class PlaySoundOption {
 // watching profile notifications and pref-changes.
 class AccessibilityManager
     : public session_manager::SessionManagerObserver,
+      public ash::SessionTerminationManager::Observer,
       public extensions::api::braille_display_private::BrailleObserver,
       public extensions::ExtensionRegistryObserver,
       public user_manager::UserManager::UserSessionStateObserver,
@@ -362,6 +366,14 @@ class AccessibilityManager
   // Notify accessibility when locale changes occur.
   void OnLocaleChanged();
 
+  // Called when we first detect two fingers are held down, which can be
+  // used to toggle spoken feedback on some touch-only devices.
+  void OnTwoFingerTouchStart();
+
+  // Called when the user is no longer holding down two fingers (including
+  // releasing one, holding down three, or moving them).
+  void OnTwoFingerTouchStop();
+
   // Whether or not to enable toggling spoken feedback via holding down
   // two fingers on the screen.
   bool ShouldToggleSpokenFeedbackViaTouch();
@@ -534,6 +546,11 @@ class AccessibilityManager
   // object otherwise.
   void InstallPumpkinForDictation(InstallPumpkinCallback callback);
 
+  // Triggers a request to install Tenji DLC. Runs `callback` with the file
+  // bytes if the DLC was successfully downloaded. Runs `callback` with an empty
+  // object otherwise.
+  void InstallTenji(InstallTenjiCallback callback);
+
   // Reads the contents of a DLC file and runs `callback` with the results.
   void GetTtsDlcContents(
       ::extensions::api::accessibility_private::DlcType dlc,
@@ -650,6 +667,9 @@ class AccessibilityManager
   // ProfileObserver:
   void OnProfileWillBeDestroyed(Profile* profile) override;
 
+  // ash::SessionTerminationManager::Observer:
+  void OnAppTerminating() override;
+
   // Dictation dialog methods.
   bool ShouldShowNetworkDictationDialog(const std::string& locale);
   void ShowNetworkDictationDialog();
@@ -687,7 +707,12 @@ class AccessibilityManager
       std::optional<::extensions::api::accessibility_private::PumpkinData>
           data);
 
-  void OnAppTerminating();
+  // Tenji-related methods.
+  void OnTenjiInstalled(bool success, const std::string& root_path);
+  void OnTenjiError(std::string_view error);
+  void OnTenjiDataCreated(
+      std::optional<::extensions::api::accessibility_private::TenjiData>
+          assets);
 
   void MaybeLogBrailleDisplayConnectedTime();
 
@@ -703,6 +728,9 @@ class AccessibilityManager
   base::ScopedObservation<session_manager::SessionManager,
                           session_manager::SessionManagerObserver>
       session_observation_{this};
+  base::ScopedObservation<ash::SessionTerminationManager,
+                          ash::SessionTerminationManager::Observer>
+      session_termination_observation_{this};
 
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
   std::unique_ptr<PrefChangeRegistrar> local_state_pref_change_registrar_;
@@ -798,11 +826,11 @@ class AccessibilityManager
   InstallPumpkinCallback install_pumpkin_callback_;
   bool is_pumpkin_installed_for_testing_ = false;
 
+  InstallTenjiCallback install_tenji_callback_;
+
   base::FilePath dlc_path_for_test_;
 
   base::CallbackListSubscription focus_changed_subscription_;
-
-  base::CallbackListSubscription on_app_terminating_subscription_;
 
   base::WeakPtrFactory<AccessibilityManager> weak_ptr_factory_{this};
 

@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/json/json_file_value_serializer.h"
@@ -379,6 +378,9 @@ std::ostream& operator<<(std::ostream& output, LoadRulesetResult result) {
     case LoadRulesetResult::kErrorChecksumNotFound:
       output << "kErrorChecksumNotFound";
       break;
+    case LoadRulesetResult::kErrorRulesetFileSizeLimitExceeded:
+      output << "kErrorRulesetFileSizeLimitExceeded";
+      break;
   }
   return output;
 }
@@ -431,7 +433,7 @@ bool CreateVerifiedMatcher(const std::vector<TestRule>& rules,
   using IndexStatus = IndexAndPersistJSONRulesetResult::Status;
 
   // Serialize |rules|.
-  base::Value::List builder;
+  base::ListValue builder;
   for (const auto& rule : rules) {
     builder.Append(rule.ToValue());
   }
@@ -441,7 +443,7 @@ bool CreateVerifiedMatcher(const std::vector<TestRule>& rules,
   auto parse_flags = FileBackedRulesetSource::kRaiseErrorOnInvalidRules |
                      FileBackedRulesetSource::kRaiseWarningOnLargeRegexRules;
   IndexAndPersistJSONRulesetResult result =
-      source.IndexAndPersistJSONRulesetUnsafe(parse_flags);
+      source.IndexAndPersistJSONRuleset(parse_flags);
   if (result.status == IndexStatus::kError) {
     DCHECK(result.error.empty()) << result.error;
     return false;
@@ -572,7 +574,7 @@ void WarningServiceObserver::WaitForWarning() {
 
 void WarningServiceObserver::ExtensionWarningsChanged(
     const ExtensionIdSet& affected_extensions) {
-  if (!base::Contains(affected_extensions, extension_id_)) {
+  if (!affected_extensions.contains(extension_id_)) {
     return;
   }
 

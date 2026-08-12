@@ -9,6 +9,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
@@ -47,7 +48,7 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
       CreditCard* card);
 
   // Returns true if personal data manager has loaded the initial data.
-  jboolean IsDataLoaded(JNIEnv* env) const;
+  bool IsDataLoaded(JNIEnv* env) const;
 
   // These functions act on "web profiles" aka "LOCAL_PROFILE" profiles.
   // -------------------------
@@ -66,11 +67,11 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // be returned.
   base::android::ScopedJavaLocalRef<jobject> GetProfileByGUID(
       JNIEnv* env,
-      std::string& guid);
+      const std::string& guid);
 
   // Determines whether the logged in user (if any) is eligible to store
   // Autofill address profiles to their account.
-  jboolean IsEligibleForAddressAccountStorage(JNIEnv* env);
+  bool IsEligibleForAddressAccountStorage(JNIEnv* env);
 
   // Determines the country for for the newly created address profile.
   std::string GetDefaultCountryCodeForNewAddress(JNIEnv* env) const;
@@ -80,12 +81,12 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // the GUID for this profile; the GUID it may have just been created.
   std::string SetProfile(JNIEnv* env,
                          const base::android::JavaRef<jobject>& jprofile,
-                         std::string& guid);
+                         const std::string& guid);
   // Adds or modifies a profile like SetProfile interface if `jprofile` is
   // local. Otherwise it creates a local copy of it.
   std::string SetProfileToLocal(JNIEnv* env,
                                 const base::android::JavaRef<jobject>& jprofile,
-                                std::string& guid);
+                                const std::string& guid);
 
   // Gets the labels for all known profiles. These labels are useful for
   // distinguishing the profiles from one another.
@@ -96,7 +97,8 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
 
   // Gets the summary of the profile which will be displayed in the editor.
   // This is currently used only for Home & Work profiles.
-  std::u16string GetProfileDescriptionForEditor(JNIEnv* env, std::string& guid);
+  std::u16string GetProfileDescriptionForEditor(JNIEnv* env,
+                                                const std::string& guid);
 
   // Gets the labels for the profiles to suggest to the user. These labels are
   // useful for distinguishing the profiles from one another.
@@ -112,7 +114,7 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   std::u16string GetShippingAddressLabelForPaymentRequest(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jprofile,
-      std::string& guid,
+      const std::string& guid,
       bool include_country_in_label);
 
   // These functions act on local credit cards.
@@ -132,7 +134,7 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // no credit card with the specified `guid`.
   base::android::ScopedJavaLocalRef<jobject> GetCreditCardByGUID(
       JNIEnv* env,
-      std::string& guid);
+      const std::string& guid);
 
   // Returns a credit card with the specified `jcard_number`. This is used for
   // determining the card's obfuscated number, issuer icon, and type in one go.
@@ -140,7 +142,7 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // used for cards that are not saved.
   base::android::ScopedJavaLocalRef<jobject> GetCreditCardForNumber(
       JNIEnv* env,
-      std::u16string& jcard_number);
+      const std::u16string& jcard_number);
 
   // Adds or modifies a local credit card.  If `guid` is an empty string, we
   // are creating a new card. Else we are updating an existing card. Always
@@ -171,12 +173,12 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
   // Records the use and log usage metrics for the profile associated with the
   // `guid`. Increments the use count of the profile and sets its use date to
   // the current time.
-  void RecordAndLogProfileUse(JNIEnv* env, std::string& guid);
+  void RecordAndLogProfileUse(JNIEnv* env, const std::string& guid);
 
   // Records the use and log usage metrics for the credit card associated with
   // the `guid`. Increments the use count of the credit card and sets its use
   // date to the current time.
-  void RecordAndLogCreditCardUse(JNIEnv* env, std::string& guid);
+  void RecordAndLogCreditCardUse(JNIEnv* env, const std::string& guid);
 
   static base::android::ScopedJavaLocalRef<jobject> CreateJavaIbanFromNative(
       JNIEnv* env,
@@ -193,8 +195,9 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
 
   // Return IBAN with the specified `guid`, or Null if there is no IBAN with
   // the specified `guid`.
-  base::android::ScopedJavaLocalRef<jobject> GetIbanByGuid(JNIEnv* env,
-                                                           std::string& guid);
+  base::android::ScopedJavaLocalRef<jobject> GetIbanByGuid(
+      JNIEnv* env,
+      const std::string& guid);
 
   // Returns an array of all stored IBANs.
   base::android::ScopedJavaLocalRef<jobjectArray> GetIbansForSettings(
@@ -208,17 +211,17 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
       const base::android::JavaRef<jobject>& jiban);
 
   // Checks if `jiban_value` is a valid IBAN.
-  static jboolean IsValidIban(JNIEnv* env, std::u16string& jiban_value);
+  static bool IsValidIban(JNIEnv* env, const std::u16string& jiban_value);
 
   // Returns whether the `Add IBAN` button should be shown on the payment
   // methods settings page.
-  jboolean ShouldShowAddIbanButtonOnSettingsPage(JNIEnv* env);
+  bool ShouldShowAddIbanButtonOnSettingsPage(JNIEnv* env);
 
   // Returns whether the Autofill feature for profiles is managed.
-  jboolean IsAutofillProfileManaged(JNIEnv* env);
+  bool IsAutofillProfileManaged(JNIEnv* env);
 
   // Returns whether the Autofill feature for credit cards is managed.
-  jboolean IsAutofillCreditCardManaged(JNIEnv* env);
+  bool IsAutofillCreditCardManaged(JNIEnv* env);
 
   // Returns an array of BankAccount objects retrieved from the
   // PersonalDataManager.
@@ -235,29 +238,31 @@ class PersonalDataManagerAndroid : public PersonalDataManagerObserver {
       const base::android::JavaRef<jobject>& jbank_account);
 
   // Returns an array of Ewallet objects retrieved from the PersonalDataManager.
-  base::android::ScopedJavaLocalRef<jobjectArray> GetEwallets(JNIEnv* env);
-
-  // Create an object of Java Ewallet from native Ewallet.
-  static base::android::ScopedJavaLocalRef<jobject> CreateJavaEwalletFromNative(
-      JNIEnv* env,
-      const Ewallet& ewallet);
-
-  // Create an object of native Ewallet from Java Ewallet.
-  static Ewallet CreateNativeEwalletFromJava(
-      JNIEnv* env,
-      const base::android::JavaRef<jobject>& jewallet);
+  base::span<const Ewallet> GetEwallets();
 
   // Returns whether a card with the specified `guid` is eligible for card
   // benefits.
-  jboolean IsCardEligibleForBenefits(JNIEnv* env, const std::string& guid);
+  bool IsCardEligibleForBenefits(JNIEnv* env, const std::string& guid);
 
   // Returns whether the BNPL preference should be shown on the settings page.
-  jboolean ShouldShowBnplSettings(JNIEnv* env);
+  bool ShouldShowBnplSettings(JNIEnv* env);
 
   // Returns an array of BnplIssuerForSettings objects retrieved from the
   // PersonalDataManager to be shown on the settings page.
   base::android::ScopedJavaLocalRef<jobjectArray> GetBnplIssuersForSettings(
       JNIEnv* env);
+
+  // Returns whether the user has seen the Amount Extraction AI terms.
+  bool IsAutofillAmountExtractionAiTermsSeenPrefEnabled(JNIEnv* env);
+
+  // Returns all email addresses that have email verification enabled.
+  std::vector<std::string> GetEmailVerificationAddresses(JNIEnv* env);
+
+  // Returns the verification issuer for a given `email` address.
+  std::string GetEmailVerificationIssuer(JNIEnv* env, const std::string& email);
+
+  // Removes the given `email` address from the user's email verification state.
+  void RemoveEmailVerificationAddress(JNIEnv* env, const std::string& email);
 
  private:
   ~PersonalDataManagerAndroid() override;

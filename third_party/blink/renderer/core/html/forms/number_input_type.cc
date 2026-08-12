@@ -47,6 +47,7 @@
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -192,8 +193,9 @@ bool NumberInputType::GetSizeWithDecoration(int default_size,
 
   const String step_string =
       GetElement().FastGetAttribute(html_names::kStepAttr);
-  if (EqualIgnoringASCIICase(step_string, "any"))
+  if (EqualIgnoringAsciiCase(step_string, "any")) {
     return false;
+  }
 
   const Decimal minimum = ParseToDecimalForNumberType(
       GetElement().FastGetAttribute(html_names::kMinAttr));
@@ -252,8 +254,8 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
 
   // Get left and right of cursor
   String original_value = GetElement().InnerEditorValue();
-  String left_half = original_value.Substring(0, GetElement().selectionStart());
-  String right_half = original_value.Substring(GetElement().selectionEnd());
+  String left_half = original_value.substr(0, GetElement().selectionStart());
+  String right_half = original_value.substr(GetElement().selectionEnd());
 
   // Process 1 char at a time
   unsigned len = updated_event_text.length();
@@ -288,12 +290,18 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
     // - Reject if the editing value already contains two signs
     // - Reject if the editing value contains 'e' and the caret is placed
     // neither at the beginning of the value nor just after 'e'
+    // - Reject if there is already a sign immediately following the caret.
+    // - Reject leading '+' insertion when 'e' is already present.
     else if (locale.IsSignPrefix(c)) {
       String both_halves = StrCat({left_half, right_half});
       if (locale.HasTwoSignChars(both_halves) ||
           (both_halves.Find(IsE) != kNotFound &&
-           !(left_half == "" || IsE(left_half[left_half.length() - 1]))))
+           !(left_half == "" || IsE(left_half[left_half.length() - 1]))) ||
+          (!right_half.empty() && locale.IsSignPrefix(right_half[0])) ||
+          (c == '+' && both_halves.Find(IsE) != kNotFound &&
+           left_half.empty())) {
         continue;
+      }
     }
     // For a digit input:
     // - Reject if the first letter of the editing value is a sign and the
@@ -426,5 +434,6 @@ void NumberInputType::StepAttributeChanged() {
 bool NumberInputType::SupportsSelectionAPI() const {
   return false;
 }
+
 
 }  // namespace blink

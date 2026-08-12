@@ -20,14 +20,13 @@ import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
-import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncCoordinator;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncView;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 
 @NullMarked
@@ -81,9 +80,21 @@ public class HistorySyncFirstRunFragment extends Fragment
                 assumeNonNull(delegate.getProfileProviderSupplier().get()).getOriginalProfile();
         SigninManager signinManager =
                 assumeNonNull(IdentityServicesProvider.get().getSigninManager(profile));
-        if (signinManager.getIdentityManager().getPrimaryAccountInfo(ConsentLevel.SIGNIN) == null) {
-            Log.w(TAG, "No primary account set, dismissing the history sync screen.");
-            getPageDelegate().advanceToNextPage();
+
+        // When the user stays signed out and rotates the screen on the promo fragment,
+        // #onConfigurationChanged (and subsequent lifecycle calls) of hidden fragments like History
+        // Sync are triggered. To prevent these background fragments from incorrectly advancing the
+        // pager to the NTP, we skip calling advanceToNextPage() unless this fragment is actively
+        // resumed. Note that this is a safeguard -- FirstRunActivity#setCurrentItemForPager already
+        // contains logic to handle page mismatches, but this prevents the redundant advance trigger
+        // from occurring in the first place.
+        boolean canSkipAdvanceToNextPage = isFrePromoEnabled() && !isResumed();
+
+        if (signinManager.getIdentityManager().getPrimaryAccountInfo() == null) {
+            if (!canSkipAdvanceToNextPage) {
+                Log.w(TAG, "No primary account set, dismissing the history sync screen.");
+                getPageDelegate().advanceToNextPage();
+            }
             return;
         }
         mHistorySyncCoordinator =
@@ -97,6 +108,7 @@ public class HistorySyncFirstRunFragment extends Fragment
                         SigninAccessPoint.START_PAGE,
                         false,
                         false,
+                        /* isFre= */ true,
                         null);
     }
 
@@ -113,21 +125,24 @@ public class HistorySyncFirstRunFragment extends Fragment
     /** Implements {@link HistorySyncDelegate} */
     @Override
     public void dismissHistorySync(boolean didSignOut, boolean isHistorySyncAccepted) {
-        assumeNonNull(getPageDelegate()).advanceToNextPage();
+        FirstRunPageDelegate delegate = getPageDelegate();
+        if (delegate == null) return;
+
+        if (isHistorySyncAccepted) {
+            delegate.recordFreProgressHistogram(MobileFreProgress.HISTORY_SYNC_ACCEPTED);
+        } else {
+            delegate.recordFreProgressHistogram(MobileFreProgress.HISTORY_SYNC_DISMISSED);
+        }
+
+        // We mark the step as completed no matter what the user chose.
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)) {
+            delegate.setHistorySyncStepCompleted(true);
+        }
+
+        delegate.advanceToNextPage();
         if (mHistorySyncCoordinator != null) {
             mHistorySyncCoordinator.destroy();
             mHistorySyncCoordinator = null;
-        }
-    }
-
-    /** Implements {@link HistorySyncDelegate} */
-    @Override
-    public void recordHistorySyncOptIn(
-            @SigninAccessPoint int accessPoint, boolean isHistorySyncAccepted) {
-        if (isHistorySyncAccepted) {
-            SigninMetricsUtils.logHistorySyncAcceptButtonClicked(accessPoint);
-        } else {
-            SigninMetricsUtils.logHistorySyncDeclineButtonClicked(accessPoint);
         }
     }
 
@@ -138,5 +153,9 @@ public class HistorySyncFirstRunFragment extends Fragment
             mHistorySyncCoordinator.destroy();
             mHistorySyncCoordinator = null;
         }
+    }
+
+    private boolean isFrePromoEnabled() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE);
     }
 }

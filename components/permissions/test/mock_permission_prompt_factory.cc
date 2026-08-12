@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
@@ -58,6 +57,10 @@ std::unique_ptr<PermissionPrompt> MockPermissionPromptFactory::Create(
     show_bubble_quit_closure_.Run();
 
   manager_->set_auto_response_for_test(response_type_);
+  if (response_prompt_options_) {
+    manager_->set_auto_response_prompt_options_for_test(
+        response_prompt_options_.value());
+  }
   return base::WrapUnique(prompt);
 }
 
@@ -81,11 +84,11 @@ int MockPermissionPromptFactory::TotalRequestCount() {
 }
 
 bool MockPermissionPromptFactory::RequestTypeSeen(RequestType type) {
-  return base::Contains(request_types_seen_, type);
+  return std::ranges::contains(request_types_seen_, type);
 }
 
 bool MockPermissionPromptFactory::RequestOriginSeen(const GURL& origin) {
-  return base::Contains(request_origins_seen_, origin);
+  return std::ranges::contains(request_origins_seen_, origin);
 }
 
 void MockPermissionPromptFactory::WaitForPermissionBubble() {

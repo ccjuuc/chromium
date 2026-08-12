@@ -9,6 +9,8 @@
 #include <memory>
 #include <utility>
 
+#include "ash/constants/ash_extension_constants.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/apps/app_service/app_icon_source.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
@@ -21,7 +23,6 @@
 #include "chrome/browser/ash/file_system_provider/throttled_file_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "extensions/browser/event_router.h"
@@ -47,10 +48,10 @@ IconSet DefaultIconSet(const extensions::ExtensionId& extension_id) {
   IconSet icon_set;
   icon_set.SetIcon(
       IconSet::IconSize::SIZE_16x16,
-      GURL(std::string("chrome://extension-icon/") + extension_id + "/16/1"));
+      GURL(base::StrCat({"chrome://extension-icon/", extension_id, "/16/1"})));
   icon_set.SetIcon(
       IconSet::IconSize::SIZE_32x32,
-      GURL(std::string("chrome://extension-icon/") + extension_id + "/32/1"));
+      GURL(base::StrCat({"chrome://extension-icon/", extension_id, "/32/1"})));
   return icon_set;
 }
 

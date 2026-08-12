@@ -14,6 +14,7 @@
 #include "components/contextual_search/contextual_search_metrics_recorder.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/lens/lens_overlay_invocation_source.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/channel.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -44,8 +45,13 @@ class ContextualSearchService : public KeyedService {
       TemplateURLService* template_url_service,
       variations::VariationsClient* variations_client,
       version_info::Channel channel,
-      const std::string& locale);
+      const std::string& locale,
+      std::unique_ptr<ContextualSearchSessionHandle::TabValidator>
+          tab_validator);
   ~ContextualSearchService() override;
+
+  // KeyedService:
+  void Shutdown() override;
 
   // Register profile related prefs.
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
@@ -53,14 +59,16 @@ class ContextualSearchService : public KeyedService {
   static bool IsContextSharingEnabled(const PrefService* prefs);
 
   // Creates a new session and returns a handle to it.
-  std::unique_ptr<ContextualSearchSessionHandle> CreateSession(
+  virtual std::unique_ptr<ContextualSearchSessionHandle> CreateSession(
       std::unique_ptr<ContextualSearchContextController::ConfigParams>
           query_controller_config_params,
-      ContextualSearchSource source);
+      ContextualSearchSource source,
+      std::optional<lens::LensOverlayInvocationSource> invocation_source);
   // Returns a new handle for an existing session. Returns nullptr if the
   // session does not exist (e.g. has been released).
   std::unique_ptr<ContextualSearchSessionHandle> GetSession(
-      const SessionId& session_id);
+      const SessionId& session_id,
+      std::optional<lens::LensOverlayInvocationSource> invocation_source);
 
   std::unique_ptr<ContextualSearchSessionHandle> CreateSessionForTesting(
       std::unique_ptr<ContextualSearchContextController> controller,
@@ -83,14 +91,16 @@ class ContextualSearchService : public KeyedService {
   ContextualSearchMetricsRecorder* GetSessionMetricsRecorder(
       const SessionId& session_id);
 
+  // Called by SessionHandle to retrieve the tab validator.
+  ContextualSearchSessionHandle::TabValidator* GetTabValidator() const;
+
   // Called by SessionHandle to manage ref counts.
   void ReleaseSession(const SessionId& session_id);
 
-  // KeyedService:
-  void Shutdown() override;
-
   // Map of active sessions, keyed by the session ID.
   std::map<SessionId, ContextualSearchSessionEntry> sessions_;
+
+  std::unique_ptr<ContextualSearchSessionHandle::TabValidator> tab_validator_;
 
   raw_ptr<signin::IdentityManager> identity_manager_;
   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;

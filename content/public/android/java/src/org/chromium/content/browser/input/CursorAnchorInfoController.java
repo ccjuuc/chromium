@@ -13,8 +13,10 @@ import android.view.inputmethod.EditorBoundsInfo;
 import android.view.inputmethod.TextAppearanceInfo;
 
 import org.chromium.blink.mojom.InputCursorAnchorInfo;
+import org.chromium.blink_public.common.BlinkFeatures;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.content_public.browser.InputMethodManagerWrapper;
 import org.chromium.gfx.mojom.Rect;
 
@@ -61,6 +63,11 @@ final class CursorAnchorInfoController {
     private float mInsertionMarkerBottom;
 
     private @Nullable CursorAnchorInfo mLastCursorAnchorInfo;
+
+    // Most recent selection bounds, used to detect cursor moves.
+    private boolean mHasLastSelection;
+    private int mLastSelectionStart;
+    private int mLastSelectionEnd;
 
     // Data which has come through the new code path from the renderer. Eventually, other data like
     // visible line bounds, composition bounds and editor bounds will be removed in favour of this.
@@ -167,11 +174,13 @@ final class CursorAnchorInfoController {
             mScale = scale;
             mTranslationX = translationX;
             mTranslationY = translationY;
-            mHasInsertionMarker = hasInsertionMarker;
-            mIsInsertionMarkerVisible = isInsertionMarkerVisible;
-            mInsertionMarkerHorizontal = insertionMarkerHorizontal;
-            mInsertionMarkerTop = insertionMarkerTop;
-            mInsertionMarkerBottom = insertionMarkerBottom;
+            if (!ContentFeatureMap.isEnabled(BlinkFeatures.INPUT_CURSOR_ANCHOR_INFO_MIGRATION)) {
+                mHasInsertionMarker = hasInsertionMarker;
+                mIsInsertionMarkerVisible = isInsertionMarkerVisible;
+                mInsertionMarkerHorizontal = insertionMarkerHorizontal;
+                mInsertionMarkerTop = insertionMarkerTop;
+                mInsertionMarkerBottom = insertionMarkerBottom;
+            }
         }
 
         // Notify to IME if there is a pending request, or if it is in monitor mode and we have
@@ -205,12 +214,45 @@ final class CursorAnchorInfoController {
         return true;
     }
 
-    public void updateCursorAnchorInfoData(InputCursorAnchorInfo cursorAnchorInfo, View view) {
+    /** Did the selection move since the last cursor anchor info update? */
+    private boolean didSelectionMove(InputCursorAnchorInfo cursorAnchorInfo) {
+        // No selection move if no current selection.
+        if (cursorAnchorInfo.insertionMarker == null) {
+            mHasLastSelection = false;
+            return false;
+        }
+
+        // Check current selection bounds against previous bounds.
+        int selectionStart = mComposingTextDelegate.getSelectionStart();
+        int selectionEnd = mComposingTextDelegate.getSelectionEnd();
+        boolean didMove =
+                !mHasLastSelection
+                        || selectionStart != mLastSelectionStart
+                        || selectionEnd != mLastSelectionEnd;
+
+        // Reset previous bounds and return.
+        mHasLastSelection = true;
+        mLastSelectionStart = selectionStart;
+        mLastSelectionEnd = selectionEnd;
+        return didMove;
+    }
+
+    /**
+     * Updates the CursorAnchorInfo instance if necessary to match the provided information.
+     *
+     * @return Did the selection move since the last update?
+     */
+    public boolean updateCursorAnchorInfoData(InputCursorAnchorInfo cursorAnchorInfo, View view) {
+        // Check selection move before previous information is overwritten.
+        boolean isSelectionMove = didSelectionMove(cursorAnchorInfo);
+
         mInputCursorAnchorInfo = cursorAnchorInfo;
         mLastCursorAnchorInfo = null;
         if (cursorAnchorInfo.requested || mMonitorModeEnabled) {
             updateCursorAnchorInfo(view);
         }
+
+        return isSelectionMove;
     }
 
     /** Computes the CursorAnchorInfo instance and notify to InputMethodManager if needed. */
@@ -249,15 +291,26 @@ final class CursorAnchorInfoController {
             mMatrix.setScale(mScale, mScale);
             mMatrix.postTranslate(mTranslationX, mTranslationY);
             mCursorAnchorInfoBuilder.setMatrix(mMatrix);
-            if (mHasInsertionMarker) {
+            if (!ContentFeatureMap.isEnabled(BlinkFeatures.INPUT_CURSOR_ANCHOR_INFO_MIGRATION)) {
+                if (mHasInsertionMarker) {
+                    mCursorAnchorInfoBuilder.setInsertionMarkerLocation(
+                            mInsertionMarkerHorizontal,
+                            mInsertionMarkerTop,
+                            mInsertionMarkerBottom,
+                            mInsertionMarkerBottom,
+                            mIsInsertionMarkerVisible
+                                    ? CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION
+                                    : CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION);
+                }
+            } else if (mInputCursorAnchorInfo != null
+                    && mInputCursorAnchorInfo.insertionMarker != null) {
+                Rect marker = mInputCursorAnchorInfo.insertionMarker;
                 mCursorAnchorInfoBuilder.setInsertionMarkerLocation(
-                        mInsertionMarkerHorizontal,
-                        mInsertionMarkerTop,
-                        mInsertionMarkerBottom,
-                        mInsertionMarkerBottom,
-                        mIsInsertionMarkerVisible
-                                ? CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION
-                                : CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION);
+                        marker.x,
+                        marker.y,
+                        marker.y + marker.height,
+                        marker.y + marker.height,
+                        CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION);
             }
             if (mInputCursorAnchorInfo != null) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

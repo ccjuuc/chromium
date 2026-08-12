@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner_helpers.h"
@@ -100,6 +102,15 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
     MAX_VALUE = UNSUPPORTED_MEDIACRYPTO_SCHEME,
   };
 
+  // Reasons for CDM session closed unique to MediaDrm.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
+  enum class MediaDrmCdmSessionClosedReason {
+    CLOSE = 0,
+    SESSION_RECLAIMED = 1,
+    SESSION_LOST = 2,
+    MAX_VALUE = SESSION_LOST,
+  };
+
   using MediaCryptoReadyCB = MediaCryptoContext::MediaCryptoReadyCB;
   using CdmCreationResult =
       CreateCdmTypedStatus::Or<scoped_refptr<MediaDrmBridge>>;
@@ -113,6 +124,13 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   static bool IsKeySystemSupportedWithType(
       const std::string& key_system,
       const std::string& container_mime_type);
+
+  using SupportedContainers = base::flat_set<std::string>;
+
+  // Returns the supported container MIME types (e.g. "video/webm", "video/mp4")
+  // for the specified |key_system|.
+  static SupportedContainers GetSupportedContainers(
+      const std::string& key_system);
 
   // Returns true if this device supports per-application provisioning, false
   // otherwise.
@@ -129,10 +147,9 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
 
   // Gets the current version for `key_system`. Returns an error if unable
   // to create a MediaDrm object, signifying that the device does not support
-  // `security_level`. May return an invalid base::Version if the string
-  // returned does not appear to be a version. For key systems other than
-  // Widevine, base::Version() is returned.
-  static GetVersionResult GetVersion(
+  // `security_level`. For key systems other than Widevine, base::Version() is
+  // returned. Note, this may be invalid.
+  static GetVersionResult MaybeGetVersion(
       const std::string& key_system,
       MediaDrmBridge::SecurityLevel security_level);
 
@@ -269,12 +286,10 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
       bool success);
 
   // Callbacks to resolve the promise for |promise_id|.
-  void OnPromiseResolved(
-      JNIEnv* env,
-      jint j_promise_id);
+  void OnPromiseResolved(JNIEnv* env, int32_t j_promise_id);
   void OnPromiseResolvedWithSession(
       JNIEnv* env,
-      jint j_promise_id,
+      int32_t j_promise_id,
       const base::android::JavaRef<jbyteArray>& j_session_id);
 
   // Callback to reject the promise for |promise_id| with |error_message|.
@@ -282,18 +297,19 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   // TODO(xhwang): Implement Exception code.
   void OnPromiseRejected(
       JNIEnv* env,
-      jint j_promise_id,
-      jint j_system_code,
+      int32_t j_promise_id,
+      int32_t j_system_code,
       const base::android::JavaRef<jstring>& j_error_message);
 
   // Session event callbacks.
 
   void OnSessionMessage(JNIEnv* env,
                         const base::android::JavaRef<jbyteArray>& j_session_id,
-                        jint j_message_type,
+                        int32_t j_message_type,
                         const base::android::JavaRef<jbyteArray>& j_message);
   void OnSessionClosed(JNIEnv* env,
-                       const base::android::JavaRef<jbyteArray>& j_session_id);
+                       const base::android::JavaRef<jbyteArray>& j_session_id,
+                       int32_t j_reason);
 
   // Called when key statuses of session are changed. |is_key_release| is set to
   // true when releasing keys. Some of the MediaDrm key status codes should be
@@ -312,14 +328,15 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   void OnSessionExpirationUpdate(
       JNIEnv* env,
       const base::android::JavaRef<jbyteArray>& j_session_id,
-      jlong expiry_time_ms);
+      int64_t expiry_time_ms);
 
   // Called when an error happens during creation of the MediaDrmBridge Java
   // object.
-  void OnCreateError(JNIEnv* env, jint j_error_code);
+  void OnCreateError(JNIEnv* env, int32_t j_error_code);
 
  private:
   friend class MediaDrmBridgeFactory;
+  FRIEND_TEST_ALL_PREFIXES(MediaDrmBridgeTest, MaybeParseCdmVersion);
   // For DeleteSoon() in DeleteOnCorrectThread().
   friend class base::DeleteHelper<MediaDrmBridge>;
 
@@ -337,6 +354,11 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
       const SessionExpirationUpdateCB& session_expiration_update_cb);
 
   ~MediaDrmBridge() override;
+
+  // Parses a version string, handling potential non-numeric suffixes.
+  // This returns an invalid version to be handled by the caller if the
+  // version string cannot be parsed.
+  static base::Version MaybeParseCdmVersion(std::string_view version_str);
 
   // Get the security level of the media. Only valid for Widevine.
   SecurityLevel GetSecurityLevel();

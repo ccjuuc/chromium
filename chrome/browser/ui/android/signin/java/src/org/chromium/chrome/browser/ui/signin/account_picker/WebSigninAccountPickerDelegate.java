@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.ui.signin.account_picker;
 
+import android.os.Bundle;
+
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.NullMarked;
@@ -13,6 +15,10 @@ import org.chromium.chrome.browser.signin.services.SigninFlowTimestampsLogger.Fl
 import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
 import org.chromium.chrome.browser.signin.services.WebSigninBridge;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
+import org.chromium.chrome.browser.ui.signin.DelegateContext;
+import org.chromium.chrome.browser.ui.signin.SigninSurveyController;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.browser.WebSigninTrackerResult;
 import org.chromium.components.signin.metrics.AccountConsistencyPromoAction;
@@ -20,16 +26,42 @@ import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.url.GURL;
 
-/** Implementation of {@link AccountPickerDelegate} for the web-signin flow. */
+import java.util.function.Function;
+
+/**
+ * Implementation of {@link AccountPickerDelegate} for the web-signin flow.
+ *
+ * <p>TODO(crbug.com/469772349): Remove {@link AccountPickerDelegate} in preference of {@link
+ * BottomSheetSigninAndHistorySyncCoordinator.Delegate} to handle sign-in callbacks.
+ * go/activityless-signin
+ */
 @NullMarked
-public class WebSigninAccountPickerDelegate implements AccountPickerDelegate {
-    private final Tab mCurrentTab;
+public class WebSigninAccountPickerDelegate
+        implements AccountPickerDelegate, BottomSheetSigninAndHistorySyncCoordinator.Delegate {
+
     private final Profile mProfile;
+    private final @Nullable TabModelSelector mTabModelSelector;
     private final WebSigninBridge.Factory mWebSigninBridgeFactory;
-    private final GURL mContinueUrl;
     private @Nullable WebSigninBridge mWebSigninBridge;
+    // TODO(crbug.com/469772349): Remove deprecated constructor fields after activityless-signin
+    // launch.
+    private final @Nullable Tab mCurrentTab;
+    private final @Nullable GURL mContinueUrl;
+
+    /** Constructor for the activity-less sign-in flow. */
+    public WebSigninAccountPickerDelegate(
+            Profile profile,
+            TabModelSelector tabModelSelector,
+            WebSigninBridge.Factory webSigninBridgeFactory) {
+        mProfile = profile;
+        mTabModelSelector = tabModelSelector;
+        mWebSigninBridgeFactory = webSigninBridgeFactory;
+        mCurrentTab = null;
+        mContinueUrl = null;
+    }
 
     /**
+     * @deprecated Prefer {@link #WebSigninAccountPickerDelegate(WebSigninBridge.Factory)}.
      * @param currentTab The current tab where the account picker bottom sheet is displayed.
      * @param webSigninBridgeFactory A {@link WebSigninBridge.Factory} to create {@link
      *     WebSigninBridge} instances.
@@ -41,6 +73,7 @@ public class WebSigninAccountPickerDelegate implements AccountPickerDelegate {
         mProfile = currentTab.getProfile();
         mWebSigninBridgeFactory = webSigninBridgeFactory;
         mContinueUrl = continueUrl;
+        mTabModelSelector = null;
     }
 
     /** Implements {@link AccountPickerDelegate}. */
@@ -58,30 +91,105 @@ public class WebSigninAccountPickerDelegate implements AccountPickerDelegate {
     /** Implements {@link AccountPickerDelegate}. */
     @Override
     public void addAccount() {
-        // TODO(b/326019991): Remove this exception along with the delegate implementation once
-        // all bottom sheet entry points will be started from `SigninAndHistorySyncActivity`.
+        // TODO(crbug.com/469772349): Remove after activity-less sign-in launch.
         throw new UnsupportedOperationException(
                 "WebSigninAccountPickerDelegate.addAccount() should never be called.");
     }
 
-    /** Implements {@link AccountPickerDelegate}. */
-    @Override
-    public void onSignoutBeforeSignin() {
-        // Destroy WebSigninBridge in case it is still alive to avoid interference with the new
-        // sign-in.
-        destroyWebSigninBridge();
-    }
-
-    /** Implements {@link AccountPickerDelegate}. */
+    /**
+     * Implements {@link AccountPickerDelegate}.
+     *
+     * <p>TODO(crbug.com/469772349): Remove after activity-less sign-in launch.
+     */
     @Override
     public void onSignInComplete(
             CoreAccountInfo accountInfo, AccountPickerDelegate.SigninStateController controller) {
+        assert mCurrentTab != null;
+        assert mContinueUrl != null;
+        // Destroy WebSigninBridge in case it is still alive to avoid interference with the new
+        // sign-in.
+        destroyWebSigninBridge();
         // Create WebSigninBridge and wait for redirect to the continue url.
         mWebSigninBridge =
                 mWebSigninBridgeFactory.createWithCoreAccountId(
                         mProfile,
                         accountInfo.getId(),
                         createWebSigninBridgeCallback(mCurrentTab, mContinueUrl, controller));
+    }
+
+    /** Implements {@link BottomSheetSigninAndHistorySyncCoordinator.Delegate}. */
+    @Override
+    public void runPostSigninAction(
+            CoreAccountInfo signedInAccount,
+            @Nullable DelegateContext delegateContext,
+            Callback<@PostSigninOperationResult Integer> onComplete) {
+        assert delegateContext != null;
+        SigninDelegateContext signinDelegateContext = (SigninDelegateContext) delegateContext;
+
+        // Destroy WebSigninBridge in case it is still alive to avoid interference with the new
+        // sign-in.
+        destroyWebSigninBridge();
+
+        assert mTabModelSelector != null;
+        @Nullable Tab resolvedTab = mTabModelSelector.getTabById(signinDelegateContext.getTabId());
+
+        // Create WebSigninBridge and wait for it to redirect to the continue url.
+        mWebSigninBridge =
+                mWebSigninBridgeFactory.createWithCoreAccountId(
+                        mProfile,
+                        signedInAccount.getId(),
+                        createWebSigninBridgeCallback(
+                                resolvedTab, signinDelegateContext.getContinueUrl(), onComplete));
+    }
+
+    /**
+     * Implements {@link AccountPickerDelegate} and {@link
+     * BottomSheetSigninAndHistorySyncCoordinator.Delegate}.
+     */
+    @Override
+    public @FlowVariant String getSigninFlowVariant() {
+        return FlowVariant.WEB;
+    }
+
+    /** Implements {@link BottomSheetSigninAndHistorySyncCoordinator.Delegate}. */
+    @Override
+    public @Nullable Function<Bundle, DelegateContext> getDelegateContextFactory() {
+        return SigninDelegateContext::fromBundle;
+    }
+
+    private Callback<@WebSigninTrackerResult Integer> createWebSigninBridgeCallback(
+            @Nullable Tab tab,
+            GURL continueUrl,
+            Callback<@PostSigninOperationResult Integer> onComplete) {
+        return (result) -> {
+            ThreadUtils.assertOnUiThread();
+            switch (result) {
+                case WebSigninTrackerResult.SUCCESS:
+                    onComplete.onResult(PostSigninOperationResult.SUCCESS);
+                    if (tab != null && !tab.isDestroyed()) {
+                        // This code path may be called asynchronously, so check
+                        // that the tab is still alive.
+                        tab.loadUrl(new LoadUrlParams(continueUrl));
+                    }
+                    SigninSurveyController.registerTrigger(
+                            mProfile, SigninSurveyController.SigninSurveyType.WEB);
+                    break;
+                case WebSigninTrackerResult.AUTH_ERROR:
+                    SigninMetricsUtils.logAccountConsistencyPromoAction(
+                            AccountConsistencyPromoAction.AUTH_ERROR_SHOWN,
+                            SigninAccessPoint.WEB_SIGNIN);
+                    onComplete.onResult(PostSigninOperationResult.AUTH_ERROR);
+                    break;
+                case WebSigninTrackerResult.OTHER_ERROR:
+                    SigninMetricsUtils.logAccountConsistencyPromoAction(
+                            AccountConsistencyPromoAction.GENERIC_ERROR_SHOWN,
+                            SigninAccessPoint.WEB_SIGNIN);
+                    onComplete.onResult(PostSigninOperationResult.OTHER_ERROR);
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected result: " + result);
+            }
+        };
     }
 
     private Callback<@WebSigninTrackerResult Integer> createWebSigninBridgeCallback(
@@ -110,7 +218,6 @@ public class WebSigninAccountPickerDelegate implements AccountPickerDelegate {
                     controller.showGenericError();
                     break;
             }
-            destroyWebSigninBridge();
         };
     }
 
@@ -119,10 +226,5 @@ public class WebSigninAccountPickerDelegate implements AccountPickerDelegate {
             mWebSigninBridge.destroy();
             mWebSigninBridge = null;
         }
-    }
-
-    @Override
-    public @FlowVariant String getSigninFlowVariant() {
-        return FlowVariant.WEB;
     }
 }

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/fonts/script_run_iterator.h"
 
+#include <array>
 #include <utility>
 
 #include "base/compiler_specific.h"
@@ -34,8 +35,8 @@ struct ScriptExpectedRun {
 };
 
 std::ostream& operator<<(std::ostream& output, const ScriptExpectedRun& run) {
-  return output << String::Format("%d:%d (%s)", run.limit, run.code,
-                                  uscript_getName(run.code));
+  return output << UNSAFE_TODO(String::Format("%d:%d (%s)", run.limit, run.code,
+                                              uscript_getName(run.code)));
 }
 
 class MockScriptData : public ScriptData {
@@ -110,9 +111,14 @@ class MockScriptData : public ScriptData {
     return PairedBracketType::kBracketTypeOpen;
   }
 
+  RunExtensionLookups GetSafeToExtendExistingRun(
+      UScriptCode script) const override {
+    return {nullptr, nullptr};
+  }
+
   static int TableLookup(int value) {
     for (int i = 0; i < 16; ++i) {
-      if (UNSAFE_TODO(kTable[i]) == value) {
+      if (kTable[i] == value) {
         return i;
       }
     }
@@ -264,7 +270,7 @@ class MockScriptData : public ScriptData {
   static const int kListShift = 2;
   static const int kListMask = 0x3;
   static const int kBracketDelta = kCodeBracketCloseBit;
-  static const int kTable[16];
+  static const std::array<int, 16> kTable;
 
   static const int kSawBracket = 0x1;
   static const int kSawSpecial = 0x2;
@@ -279,7 +285,7 @@ static const int kGreek2 = MockScriptData::kGreek << 2;
 static const int kLatin3 = MockScriptData::kLatin << 4;
 static const int kHan3 = MockScriptData::kHan << 4;
 static const int kGreek3 = MockScriptData::kGreek << 4;
-const int MockScriptData::kTable[] = {
+const std::array<int, 16> MockScriptData::kTable = {{
     0,
     kLatin,
     kHan,
@@ -296,7 +302,7 @@ const int MockScriptData::kTable[] = {
     kHan3 + kGreek2 + kLatin,
     kGreek3 + kLatin2 + kHan,
     kGreek3 + kHan2 + kLatin,
-};
+}};
 
 class ScriptRunIteratorTest : public testing::Test {
  protected:
@@ -305,7 +311,7 @@ class ScriptRunIteratorTest : public testing::Test {
     text.Ensure16Bit();
     Vector<ScriptExpectedRun> expect;
     for (auto& run : runs) {
-      text.Append(String::FromUTF8(run.text));
+      text.Append(String::FromUtf8(run.text));
       expect.push_back(ScriptExpectedRun(text.length(), run.code));
     }
     ScriptRunIterator script_run_iterator(text.Span16());
@@ -779,6 +785,13 @@ TEST_F(ScriptRunIteratorTest, OddLatinString) {
 
 TEST_F(ScriptRunIteratorTest, CommonMalayalam) {
   CHECK_SCRIPT_RUNS({{"100-ാം", USCRIPT_MALAYALAM}});
+}
+
+TEST_F(ScriptRunIteratorTest, IdeographicCommaDoesNotCountAsLatin) {
+  CHECK_SCRIPT_RUNS({{"也：", USCRIPT_HAN},
+                     {"ABC", USCRIPT_LATIN},
+                     {"、", USCRIPT_BOPOMOFO},
+                     {"DEF", USCRIPT_LATIN}});
 }
 
 std::pair<int, UChar32> MaximumScriptExtensions() {

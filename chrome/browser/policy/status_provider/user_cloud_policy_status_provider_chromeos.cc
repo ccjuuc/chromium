@@ -12,19 +12,22 @@
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 
 UserCloudPolicyStatusProviderChromeOS::UserCloudPolicyStatusProviderChromeOS(
-    policy::CloudPolicyCore* core,
+    policy::CloudPolicyManager* cloud_policy_manager,
     Profile* profile)
-    : UserCloudPolicyStatusProvider(core, profile) {
+    // TODO(b/486888143): ChromeOS only supports user policies, so there is no
+    // extension install core.
+    : UserCloudPolicyStatusProvider(cloud_policy_manager, profile) {
   profile_ = profile;
 }
 
 UserCloudPolicyStatusProviderChromeOS::
     ~UserCloudPolicyStatusProviderChromeOS() = default;
 
-base::Value::Dict UserCloudPolicyStatusProviderChromeOS::GetStatus() {
-  if (!core_->store()->is_managed())
+base::DictValue UserCloudPolicyStatusProviderChromeOS::GetStatus() {
+  if (!core()->store()->is_managed()) {
     return {};
-  base::Value::Dict dict = UserCloudPolicyStatusProvider::GetStatus();
+  }
+  base::DictValue dict = UserCloudPolicyStatusProvider::GetStatus();
   GetUserAffiliationStatus(&dict, profile_);
   GetUserManager(&dict, profile_);
   dict.Set(policy::kPolicyDescriptionKey, kUserPolicyStatusDescription);

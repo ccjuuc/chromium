@@ -4,14 +4,19 @@
 
 package org.chromium.chrome.browser.url_constants;
 
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalBookmarksUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalHistoryUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeHistoryUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpGurl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeBookmarksUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeHistoryUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpGurl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalWebUiNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isBookmarksPageOverrideEnabled;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isHistoryPageOverrideEnabled;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isIncognitoBookmarksPageOverrideEnabled;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isIncognitoNtpOverrideEnabled;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isNtpOverrideEnabled;
+import static org.chromium.chrome.browser.url_constants.UrlOverrideUtils.isWebUiNtpOverrideEnabled;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -19,15 +24,16 @@ import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.url_constants.UrlConstantResolver.PreNativeGurlHolder;
 
 /**
- * This factory creates and keeps a single ExtensionsUrlOverrideRegistryManager for incognito
- * profiles and non-incognito profiles respectively.
+ * Factory class that creates, configures, and caches {@link UrlConstantResolver} instances for
+ * standard (non-incognito) and incognito profiles.
+ *
+ * <p>This factory initializes each resolver with profile-specific overrides (such as bookmarks,
+ * NTP, and history overrides).
  */
 @NullMarked
 public class UrlConstantResolverFactory {
-    private static @Nullable PreNativeGurlHolder sPreNativeNtpGurl;
     private static @Nullable UrlConstantResolver sOriginalResolver;
     private static @Nullable UrlConstantResolver sIncognitoResolver;
     private static @Nullable UrlConstantResolver sResolverForTesting;
@@ -47,10 +53,7 @@ public class UrlConstantResolverFactory {
         return getIncognitoResolver();
     }
 
-    /**
-     * Returns the resolver associated with the primary profile. Should be used for pre-native
-     * functionality.
-     */
+    /** Returns the resolver associated with the primary profile. */
     public static UrlConstantResolver getOriginalResolver() {
         if (sOriginalResolver == null) {
             sOriginalResolver = buildOriginalResolver();
@@ -58,10 +61,7 @@ public class UrlConstantResolverFactory {
         return sOriginalResolver;
     }
 
-    /**
-     * Returns the resolver associated with the incognito profile. Should be used for pre-native
-     * functionality.
-     */
+    /** Returns the resolver associated with the incognito profile. */
     public static UrlConstantResolver getIncognitoResolver() {
         if (sIncognitoResolver == null) {
             sIncognitoResolver = buildIncognitoResolver();
@@ -71,45 +71,36 @@ public class UrlConstantResolverFactory {
 
     private static UrlConstantResolver buildOriginalResolver() {
         UrlConstantResolver resolver = new UrlConstantResolver();
-        resolver.registerPreNativeGurl(getOriginalNativeNtpUrl(), getPreNativeNtpGurlHolder());
-
         resolver.registerOverride(
                 getOriginalNativeNtpUrl(),
-                () ->
-                        ExtensionsUrlOverrideRegistry.getNtpOverrideEnabled()
-                                ? getOriginalNonNativeNtpUrl()
-                                : null);
+                () -> {
+                    // Returns 'chrome://newtab' even when WebUI NTP is enabled in order to respect
+                    // extensions/NTP location overrides.
+                    if (isNtpOverrideEnabled()) {
+                        return getOriginalNtpUrl();
+                    } else if (isWebUiNtpOverrideEnabled()) {
+                        return getOriginalWebUiNtpUrl();
+                    } else {
+                        return null;
+                    }
+                });
         resolver.registerOverride(
                 getOriginalNativeBookmarksUrl(),
-                () ->
-                        ExtensionsUrlOverrideRegistry.getBookmarksPageOverrideEnabled()
-                                ? getOriginalNonNativeBookmarksUrl()
-                                : null);
+                () -> isBookmarksPageOverrideEnabled() ? getOriginalBookmarksUrl() : null);
         resolver.registerOverride(
                 getOriginalNativeHistoryUrl(),
-                () ->
-                        ExtensionsUrlOverrideRegistry.getHistoryPageOverrideEnabled()
-                                ? getOriginalNonNativeHistoryUrl()
-                                : null);
+                () -> isHistoryPageOverrideEnabled() ? getOriginalHistoryUrl() : null);
         return resolver;
     }
 
     private static UrlConstantResolver buildIncognitoResolver() {
         UrlConstantResolver resolver = new UrlConstantResolver();
-        resolver.registerPreNativeGurl(getOriginalNativeNtpUrl(), getPreNativeNtpGurlHolder());
-
         resolver.registerOverride(
                 getOriginalNativeNtpUrl(),
-                () ->
-                        ExtensionsUrlOverrideRegistry.getIncognitoNtpOverrideEnabled()
-                                ? getOriginalNonNativeNtpUrl()
-                                : null);
+                () -> isIncognitoNtpOverrideEnabled() ? getOriginalNtpUrl() : null);
         resolver.registerOverride(
                 getOriginalNativeBookmarksUrl(),
-                () ->
-                        ExtensionsUrlOverrideRegistry.getIncognitoBookmarksPageOverrideEnabled()
-                                ? getOriginalNonNativeBookmarksUrl()
-                                : null);
+                () -> isIncognitoBookmarksPageOverrideEnabled() ? getOriginalBookmarksUrl() : null);
         return resolver;
     }
 
@@ -122,16 +113,5 @@ public class UrlConstantResolverFactory {
     public static void resetResolvers() {
         sOriginalResolver = null;
         sIncognitoResolver = null;
-    }
-
-    private static PreNativeGurlHolder getPreNativeNtpGurlHolder() {
-        if (sPreNativeNtpGurl == null) {
-            sPreNativeNtpGurl = buildPreNativeNtpGurlHolder();
-        }
-        return sPreNativeNtpGurl;
-    }
-
-    private static PreNativeGurlHolder buildPreNativeNtpGurlHolder() {
-        return new PreNativeGurlHolder(getOriginalNativeNtpGurl(), getOriginalNonNativeNtpGurl());
     }
 }

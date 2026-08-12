@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_visibility_configuration.h"
 
+
 @implementation ToolbarButtonVisibilityConfiguration
 
 - (instancetype)initWithType:(ToolbarType)type {

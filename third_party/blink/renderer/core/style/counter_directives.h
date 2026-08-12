@@ -28,13 +28,13 @@
 #include <memory>
 #include <optional>
 
-#include "base/memory/ptr_util.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/clamped_math.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
@@ -61,9 +61,16 @@ class CounterDirectives {
   // Returns an optional <integer> value of `counter-reset`. The return value is
   // `nullopt` if the reversed function is specified and the <integer> is
   // omitted(e.g., `counter-reset: reversed(list-item)`).
-  std::optional<int> ResetValue() const { return reset_value_; }
-  void SetResetValue(int value) { reset_value_ = value; }
+  std::optional<int> ResetValue() const {
+    return reset_value_.transform(
+        [](int64_t v) { return base::saturated_cast<int>(v); });
+  }
+  std::optional<int64_t> ResetValueInt64() const { return reset_value_; }
+  void SetResetValue(int64_t value) { reset_value_ = value; }
   bool IsResetReversed() const { return is_reset_reversed_; }
+  bool IsContentBasedReset() const {
+    return is_reset_reversed_ && !reset_value_.has_value();
+  }
   void SetIsResetReversed() { is_reset_reversed_ = true; }
   void ClearReset() {
     reset_value_.reset();
@@ -113,25 +120,46 @@ class CounterDirectives {
     // According to the spec, if an increment would overflow or underflow the
     // counter, we are allowed to ignore the increment.
     // https://drafts.csswg.org/css-lists-3/#valdef-counter-reset-custom-ident-integer
-    return base::CheckAdd(reset_value_.value_or(0),
-                          increment_value_.value_or(0))
-        .ValueOrDefault(reset_value_.value_or(0));
+    return base::saturated_cast<int>(ResetValueInt64().value_or(0) +
+                                     increment_value_.value_or(0));
   }
 
   bool operator==(const CounterDirectives&) const = default;
 
  private:
-  std::optional<int> reset_value_;
+  std::optional<int64_t> reset_value_;
   std::optional<int> increment_value_;
   std::optional<int> set_value_;
   bool is_reset_reversed_ = false;
+};
+
+// The computed value of counter-{increment,reset,set} is an ordered list
+// that preserves source order and duplicate counter names.
+// CounterPropertyList stores the complete list and is used by
+// getComputedStyle(), whereas CounterDirectiveMap stores the collapsed
+// list used by layout.
+// https://drafts.csswg.org/css-lists-3/
+struct CounterPropertyEntry {
+  AtomicString name;
+  std::optional<int> value;  // Empty for `reversed(name)` without an integer.
+  bool is_reversed = false;  // Used by counter-reset.
+
+  bool operator==(const CounterPropertyEntry&) const = default;
+};
+
+// Not to be deleted through a pointer to Vector.
+class CounterPropertyList : public Vector<CounterPropertyEntry> {
+ public:
+  std::unique_ptr<CounterPropertyList> Clone() const {
+    return std::make_unique<CounterPropertyList>(*this);
+  }
 };
 
 // Not to be deleted through a pointer to HashMap.
 class CounterDirectiveMap : public HashMap<AtomicString, CounterDirectives> {
  public:
   std::unique_ptr<CounterDirectiveMap> Clone() const {
-    return base::WrapUnique(new CounterDirectiveMap(*this));
+    return std::make_unique<CounterDirectiveMap>(*this);
   }
 };
 

@@ -108,14 +108,17 @@ TEST(SharedBufferTest, getPartAsBytes) {
 
 TEST(SharedBufferTest, getAsBytesLargeSegments) {
   Vector<char> vector0(0x4000);
-  for (size_t i = 0; i < vector0.size(); ++i)
+  for (wtf_size_t i = 0; i < vector0.size(); ++i) {
     vector0[i] = 'a';
+  }
   Vector<char> vector1(0x4000);
-  for (size_t i = 0; i < vector1.size(); ++i)
+  for (wtf_size_t i = 0; i < vector1.size(); ++i) {
     vector1[i] = 'b';
+  }
   Vector<char> vector2(0x4000);
-  for (size_t i = 0; i < vector2.size(); ++i)
+  for (wtf_size_t i = 0; i < vector2.size(); ++i) {
     vector2[i] = 'c';
+  }
 
   scoped_refptr<SharedBuffer> shared_buffer =
       SharedBuffer::Create(std::move(vector0));
@@ -160,7 +163,7 @@ TEST(SharedBufferTest, copy) {
   ASSERT_EQ(contiguous.size(), shared_buffer->size());
   ASSERT_EQ(clone, contiguous);
 
-  clone.AppendVector(test_data);
+  clone.append_range(test_data);
   ASSERT_EQ(test_data.size() * 5, clone.size());
 }
 
@@ -168,13 +171,13 @@ TEST(SharedBufferTest, constructorWithFlatData) {
   Vector<char> data;
 
   while (data.size() < 10000ul) {
-    data.AppendSpan(base::span_from_cstring("FooBarBaz"));
+    data.append_range(base::span_from_cstring("FooBarBaz"));
     auto shared_buffer = SharedBuffer::Create(base::span(data));
 
     Vector<Vector<char>> segments;
     for (const auto& span : *shared_buffer) {
       segments.emplace_back();
-      segments.back().AppendSpan(span);
+      segments.back().append_range(span);
     }
 
     // Shared buffers constructed from flat data should stay flat.

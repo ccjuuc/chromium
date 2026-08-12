@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "ash/constants/ash_features.h"
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
@@ -30,7 +31,6 @@
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_key.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
@@ -47,7 +47,7 @@ namespace {
 // Should be synced with the value in the chromiumos repo:
 // src/platform2/vtpm/backends/attested_virtual_endorsement.cc
 constexpr char kVtpmEkLabel[] = "vtpm-ek";
-constexpr base::ByteCount kBruschettaRequiredMemory = base::GiB(12);
+constexpr base::ByteSize kBruschettaRequiredMemory = base::GiBU(12);
 
 std::unique_ptr<BruschettaInstallerImpl::Fds> OpenFdsBlocking(
     base::FilePath boot_disk_path,
@@ -97,11 +97,11 @@ void BruschettaInstallerImpl::Install(std::string vm_name,
                                       std::string config_id) {
   if (!base::FeatureList::IsEnabled(
           ash::features::kDisableBruschettaInstallChecks)) {
-    base::ByteCount physical_memory = base::SysInfo::AmountOfPhysicalMemory();
+    base::ByteSize physical_memory =
+        base::SysInfo::AmountOfTotalPhysicalMemory();
     // Physical memory reporting never lines up with exact GB definitions, allow
     // for some wiggle room.
-    if (physical_memory.InBytes() <
-        kBruschettaRequiredMemory.InBytes() * 0.85) {
+    if (physical_memory < kBruschettaRequiredMemory * 0.85) {
       Error(BruschettaInstallResult::kNotEnoughMemoryError);
       LOG(ERROR) << "System memory of " << physical_memory.InBytes()
                  << " less than required "
@@ -303,7 +303,7 @@ void BruschettaInstallerImpl::OnBootDiskDownloaded(base::FilePath path,
 void BruschettaInstallerImpl::DownloadPflash() {
   VLOG(2) << "Downloading pflash";
   NotifyObserver(State::kPflashDownload);
-  const base::Value::Dict* pflash = config_.FindDict(prefs::kPolicyPflashKey);
+  const base::DictValue* pflash = config_.FindDict(prefs::kPolicyPflashKey);
   if (!pflash) {
     VLOG(2) << "No pflash file set, skipping to OpenFds";
 
@@ -631,8 +631,6 @@ void BruschettaInstallerImpl::OnStartVm(
 
   BruschettaServiceFactory::GetForProfile(profile_)->RegisterVmLaunch(
       vm_name_, launch_policy);
-  profile_->GetPrefs()->SetBoolean(bruschetta::prefs::kBruschettaInstalled,
-                                   true);
 
   LaunchTerminal();
 }
@@ -641,15 +639,77 @@ void BruschettaInstallerImpl::LaunchTerminal() {
   VLOG(2) << "Launching terminal";
   NotifyObserver(State::kLaunchTerminal);
 
-  // TODO(b/231899688): Implement Bruschetta sending an RPC when installation
-  // finishes so that we only add to prefs on success.
-  auto guest_id = MakeBruschettaId(std::move(vm_name_));
-  BruschettaServiceFactory::GetForProfile(profile_)->RegisterInPrefs(
-      guest_id, std::move(config_id_));
+  vm_observation_.Observe(ash::ConciergeClient::Get());
+
+  auto guest_id = MakeBruschettaId(vm_name_);
 
   guest_id.container_name = "";
 
   // kInvalidDisplayId will launch terminal on the current active display.
+  guest_os::LaunchTerminal(profile_, display::kInvalidDisplayId, guest_id);
+}
+
+void BruschettaInstallerImpl::OnVmInstallState(
+    const vm_tools::concierge::VmInstallStateSignal& signal) {
+  switch (signal.state()) {
+    case vm_tools::concierge::VmInstallStateSignal::UNKNOWN:
+      LOG(ERROR) << "Received UNKNOWN VM install state";
+      break;
+    case vm_tools::concierge::VmInstallStateSignal::IN_PROGRESS:
+      VLOG(2) << "VM installation at step " << signal.in_progress_step()
+              << ", progress: " << signal.in_progress_percent() << "%";
+      break;
+    case vm_tools::concierge::VmInstallStateSignal::SUCCEEDED:
+      HandleVmInstallSucceeded();
+      break;
+    case vm_tools::concierge::VmInstallStateSignal::FAILED:
+      HandleVmInstallFailed();
+      break;
+    default:
+      NOTREACHED();
+  }
+}
+
+void BruschettaInstallerImpl::HandleVmInstallSucceeded() {
+  auto guest_id = MakeBruschettaId(vm_name_);
+  BruschettaServiceFactory::GetForProfile(profile_)->RegisterInPrefs(
+      guest_id, std::move(config_id_));
+  profile_->GetPrefs()->SetBoolean(bruschetta::prefs::kBruschettaInstalled,
+                                   true);
+
+  auto* client = ash::ConciergeClient::Get();
+  DCHECK(client);
+  vm_tools::concierge::StopVmRequest request;
+  request.set_name(vm_name_);
+  request.set_owner_id(ash::ProfileHelper::GetUserIdHashFromProfile(profile_));
+
+  client->StopVm(std::move(request),
+                 base::BindOnce(&BruschettaInstallerImpl::OnStopVm,
+                                weak_ptr_factory_.GetWeakPtr()));
+}
+
+void BruschettaInstallerImpl::HandleVmInstallFailed() {
+  install_running_ = false;
+  BruschettaServiceFactory::GetForProfile(profile_)->RemoveVm(
+      MakeBruschettaId(vm_name_), base::DoNothing());
+  Error(BruschettaInstallResult::kInstallationFailed);
+}
+
+void BruschettaInstallerImpl::OnStopVm(
+    std::optional<vm_tools::concierge::SuccessFailureResponse> result) {
+  if (MaybeClose()) {
+    return;
+  }
+
+  vm_observation_.Reset();
+
+  if (!result || !result->success()) {
+    install_running_ = false;
+    Error(BruschettaInstallResult::kStartVmFailed);
+    return;
+  }
+
+  auto guest_id = MakeBruschettaId(vm_name_);
   guest_os::LaunchTerminal(profile_, display::kInvalidDisplayId, guest_id);
 
   // Close dialog.

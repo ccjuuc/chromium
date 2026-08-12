@@ -275,11 +275,15 @@ std::optional<SkColor> GetAccentColor(
 
   // We should not allow the system accent color to be rendered in image
   // contexts because it could be read back by the page and used for
-  // fingerprinting.
+  // fingerprinting. We also only allow the system accent color to be used in
+  // web app contexts on the initial profile, where fingerprinting risk is not
+  // as large of a concern and cross-profile fingerprinting is prevented.
   if (!accent_color &&
       !document.GetPage()->GetChromeClient().IsIsolatedSVGChromeClient()) {
     if (!document.InForcedColorsMode() &&
         RuntimeEnabledFeatures::CSSSystemAccentColorEnabled() &&
+        (!RuntimeEnabledFeatures::WebAppScopeSystemAccentColorEnabled() ||
+         (document.IsInWebAppScope() && document.IsInitialProfile())) &&
         layout_theme.IsAccentColorCustomized(color_scheme)) {
       SkColor system_accent_color =
           layout_theme.GetSystemAccentColor(color_scheme).Rgb();
@@ -306,9 +310,10 @@ std::optional<SkColor> GetAccentColor(
   if (!accent_color->IsOpaque()) {
     SkColor background_color =
         layout_theme
-            .SystemColor(CSSValueID::kCanvas, color_scheme,
-                         document.GetColorProviderForPainting(color_scheme),
-                         document.IsInWebAppScope())
+            .SystemColor(
+                CSSValueID::kCanvas, color_scheme,
+                document.GetColorProviderForPainting(color_scheme),
+                document.IsInWebAppScope() && document.IsInitialProfile())
             .Rgb();
     return color_utils::GetResultingPaintColor(accent_color->Rgb(),
                                                background_color);
@@ -452,8 +457,8 @@ bool ThemePainterDefault::PaintTextField(const Element& element,
       style.VisitedDependentColor(GetCSSPropertyBackgroundColor());
   text_field.background_color = background_color.Rgb();
   text_field.auto_complete_active =
-      DynamicTo<HTMLFormControlElement>(element)->IsAutofilled() ||
-      DynamicTo<HTMLFormControlElement>(element)->IsPreviewed();
+      To<HTMLFormControlElement>(element).IsAutofilled() ||
+      To<HTMLFormControlElement>(element).IsPreviewed();
 
   WebThemeEngine::ExtraParams extra_params(text_field);
   mojom::blink::ColorScheme color_scheme = style.UsedColorScheme();
@@ -636,12 +641,11 @@ bool ThemePainterDefault::PaintSliderTrack(const Element& element,
     LayoutBox* thumb = thumb_element ? thumb_element->GetLayoutBox() : nullptr;
     LayoutBox* input_box = input->GetLayoutBox();
     if (thumb) {
-      gfx::Rect thumb_rect = ToPixelSnappedRect(
-          PhysicalRect(thumb->PhysicalLocation(), thumb->StitchedSize()));
-      slider.thumb_x = thumb_rect.x() + input_box->PaddingLeft().ToInt() +
-                       input_box->BorderLeft().ToInt();
-      slider.thumb_y = thumb_rect.y() + input_box->PaddingTop().ToInt() +
-                       input_box->BorderTop().ToInt();
+      const gfx::Point thumb_position = ToRoundedPoint(
+          thumb->PhysicalLocation() +
+          (input_box->BorderOutsets() + input_box->PaddingOutsets()).Offset());
+      slider.thumb_x = thumb_position.x();
+      slider.thumb_y = thumb_position.y();
     }
   }
   WebThemeEngine::ExtraParams extra_params(slider);
@@ -687,12 +691,10 @@ bool ThemePainterDefault::PaintSliderThumb(const Element& element,
   // The element passed in is inside the user agent shadow DOM of the input
   // element, so we have to access the parent input element in order to get the
   // accent-color style set by the page.
-  const SliderThumbElement* slider_element =
-      DynamicTo<SliderThumbElement>(&element);
-  DCHECK(slider_element);  // PaintSliderThumb should always be passed a
-                           // SliderThumbElement
+  // PaintSliderThumb should always be passed a SliderThumbElement.
+  const auto& slider_element = To<SliderThumbElement>(element);
   std::optional<SkColor> accent_color =
-      GetAccentColor(*slider_element->HostInput()->EnsureComputedStyle(),
+      GetAccentColor(*slider_element.HostInput()->EnsureComputedStyle(),
                      element.GetDocument());
   WebThemeEngine::ExtraParams extra_params(slider);
   mojom::blink::ColorScheme color_scheme = style.UsedColorScheme();

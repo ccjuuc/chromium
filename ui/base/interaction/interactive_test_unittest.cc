@@ -8,7 +8,9 @@
 #include <list>
 #include <memory>
 #include <string>
+#include <string_view>
 
+#include "base/auto_reset.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -68,6 +70,9 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestId3);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestId4);
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kTestEvent1);
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kTestEvent2);
+INTERACTIVE_TEST_TEMPORARY_VALUE(int, kIntVariable);
+INTERACTIVE_TEST_TEMPORARY_VALUE(std::string, kStringVariable);
+INTERACTIVE_TEST_TEMPORARY_VALUE(base::AutoReset<bool>, kAutoResetValue);
 
 constexpr char kSetOnIncompatibleActionMessage[] =
     "Explicitly testing incompatibility-handling.";
@@ -562,6 +567,35 @@ TEST_F(InteractiveTestTest, CheckVariable) {
                            CheckVariable(text, kNewValue));
 }
 
+TEST_F(InteractiveTestTest, TemporaryValues) {
+  RunTestSequenceInContext(
+      kTestContext1, Do([this] {
+        EXPECT_EQ(1, SetTemporaryValue(kIntVariable, 1));
+        EXPECT_EQ(1, GetTemporaryValue(kIntVariable));
+        EXPECT_EQ(2, SetTemporaryValue(kIntVariable, 2));
+        EXPECT_EQ(2, GetTemporaryValue(kIntVariable));
+        SetTemporaryValue(kStringVariable, "foo");
+      }),
+      CheckResult([this] { return GetTemporaryValue(kStringVariable); },
+                  testing::HasSubstr("fo")));
+}
+
+TEST_F(InteractiveTestTest, ValueFreed) {
+  bool value = false;
+  RunTestSequenceInContext(kTestContext1, Do([this, &value] {
+                             EXPECT_EQ(false, value);
+                             SetTemporaryValue(kAutoResetValue,
+                                               base::AutoReset(&value, true));
+                             EXPECT_EQ(true, value);
+                           }),
+                           Do([this, &value] {
+                             EXPECT_EQ(true, value);
+                             ClearTemporaryValue(kAutoResetValue);
+                             EXPECT_EQ(false, value);
+                           }));
+  EXPECT_EQ(false, value);
+}
+
 TEST_F(InteractiveTestTest, CheckVariableFails) {
   int x = 0;
 
@@ -756,6 +790,356 @@ TEST_F(InteractiveTestTest, EnsurePresentFails) {
     EXPECT_FALSE(RunTestSequenceInContext(
         kTestContext2, InAnyContext(EnsurePresent(kTestId2))));
   });
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_FromBelow) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  // These elements should be irrelevant.
+  TestElement e4(kTestId1, kTestContext2);
+  TestElement e5(kTestId2, kTestContext1);
+  e4.Show();
+  e5.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); }, [&e2] { e2.Hide(); },
+               [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementCount(kTestId1, 3U),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_FromAbove) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  // These elements should be irrelevant.
+  TestElement e4(kTestId1, kTestContext2);
+  TestElement e5(kTestId2, kTestContext1);
+  e4.Show();
+  e5.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Hide(); }, [&e1] { e1.Show(); }, [&e2] { e2.Hide(); },
+               [&e1, &expect_done] {
+                 expect_done = true;
+                 e1.Hide();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementCount(kTestId1, 1U),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_InAnyContext_FromBelow) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext2);
+
+  // This element should be irrelevant.
+  TestElement e4(kTestId2, kTestContext1);
+  e4.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); }, [&e2] { e2.Hide(); },
+               [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(WaitForElementCount(kTestId1, 3U)),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementCount_InAnyContext_FromAbove) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext2);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  // This element should be irrelevant.
+  TestElement e4(kTestId2, kTestContext1);
+  e4.Show();
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e2] { e2.Hide(); }, [&e2] { e2.Show(); }, [&e1] { e1.Hide(); },
+               [&e2, &expect_done] {
+                 expect_done = true;
+                 e2.Hide();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(WaitForElementCount(kTestId1, 1U)),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_Poll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(
+          WaitForElementMatching(
+              kTestId1, [&e3](const TrackedElement* el) { return el == &e3; }),
+          Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_NoPoll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+
+  std::set<const TestElement*> elements;
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions(
+      [&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+      // This should not trigger since we only transition on elements appearing.
+      [&] { elements.insert(&e1); },
+      [&] {
+        elements.insert(&e3);
+        expect_done = true;
+        e3.Show();
+      });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      WithoutDelay(WaitForElementMatching(
+                       kTestId1,
+                       [&](const TrackedElement* el) {
+                         return elements.contains(el->AsA<TestElement>());
+                       },
+                       /*poll=*/false),
+                   Check([&expect_done] { return expect_done; })));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_InAnyContext_Poll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2);
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(WithoutDelay(
+          WaitForElementMatching(
+              kTestId1, [&e3](const TrackedElement* el) { return el == &e3; }),
+          Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, WaitForElementMatching_InAnyContext_NoPoll) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2);
+
+  std::set<const TestElement*> elements;
+
+  // This gets set right before the change that will trigger the relevant step.
+  bool expect_done = false;
+
+  QueueActions(
+      [&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+      // This should not trigger since we only transition on elements appearing.
+      [&] { elements.insert(&e1); },
+      [&] {
+        elements.insert(&e3);
+        expect_done = true;
+        e3.Show();
+      });
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      // Do these without delay so that we can't accidentally succeed due to a
+      // race condition.
+      InAnyContext(
+          WithoutDelay(WaitForElementMatching(
+                           kTestId1,
+                           [&](const TrackedElement* el) {
+                             return elements.contains(el->AsA<TestElement>());
+                           },
+                           /*poll=*/false),
+                       Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, NameElementMatching) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      NameElementMatching(kTestId1, kName,
+                          [&](const TrackedElement* el) { return el == &e2; }),
+      CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2));
+}
+
+TEST_F(InteractiveTestTest, NameElementMatching_InAnyContext) {
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(
+          NameElementMatching(
+              kTestId1, kName,
+              [&](const TrackedElement* el) { return el == &e2; }),
+          CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2)));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_NoWait) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1, kSecondaryId);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      NameElementWithSecondaryId(kTestId1, kSecondaryId, kName,
+                                 /*wait_for_present=*/false),
+      CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e3));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_NoWait_InAnyContext) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext2, kSecondaryId);
+  TestElement e3(kTestId1, kTestContext1);
+  e1.Show();
+  e2.Show();
+  e3.Show();
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName,
+                                     /*wait_for_present=*/false),
+          CheckElement(kName, [](ui::TrackedElement* el) { return el; }, &e2)));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_Wait) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext1, kSecondaryId);
+
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(WithoutDelay(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName),
+          Check([&expect_done] { return expect_done; }))));
+}
+
+TEST_F(InteractiveTestTest, NameElementWithSecondaryId_Wait_InAnyContext) {
+  constexpr std::string_view kSecondaryId = "secondary-id";
+  TestElement e1(kTestId1, kTestContext1);
+  TestElement e2(kTestId1, kTestContext1);
+  TestElement e3(kTestId1, kTestContext2, kSecondaryId);
+
+  bool expect_done = false;
+
+  QueueActions([&e1] { e1.Show(); }, [&e2] { e2.Show(); },
+               [&e3, &expect_done] {
+                 expect_done = true;
+                 e3.Show();
+               });
+
+  constexpr std::string_view kName = "name";
+
+  RunTestSequenceInContext(
+      kTestContext1,
+      InAnyContext(WithoutDelay(
+          NameElementWithSecondaryId(kTestId1, kSecondaryId, kName),
+          Check([&expect_done] { return expect_done; }))));
 }
 
 TEST_F(InteractiveTestTest, NameElementWithPointer) {
@@ -1767,7 +2151,8 @@ TEST_F(InteractiveTestTest, StopObservingState) {
       ObserveState(kIntTestState,
                    std::make_unique<TestStateObserver<int>>(&observable)),
       WaitForState(kIntTestState, 1), StopObservingState(kIntTestState),
-      EnsureNotPresent(kIntTestState.identifier()),
+      EnsureNotPresent(internal::InteractiveTestPrivate::StateToElementId(
+          kIntTestState.identifier())),
       Check([this]() { return state_observers().empty(); }));
 }
 

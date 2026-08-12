@@ -7,12 +7,12 @@
 
 #include <jni.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
@@ -21,33 +21,49 @@
 #include "base/supports_user_data.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/android/tab_android_data_provider.h"
-#include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
+#include "chrome/browser/tab/tab_destroy_status.h"
 #include "chrome/browser/tab/web_contents_state.h"
-#include "components/infobars/core/infobar_manager.h"
 #include "components/sessions/core/session_id.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/token_id.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 class GURL;
+class TabAndroidDataProvider;
+class TabInterfaceAndroid;
+class TabModelJniBridge;
 class Profile;
 
 namespace cc::slim {
 class Layer;
-}
+}  // namespace cc::slim
 
 namespace android {
 class TabWebContentsDelegateAndroid;
-}
+}  // namespace android
+
+namespace browser_sync {
+class SyncedTabDelegateAndroid;
+}  // namespace browser_sync
 
 namespace content {
 class DevToolsAgentHost;
 class WebContents;
 }  // namespace content
 
+namespace sync_sessions {
+class SyncedTabDelegate;
+}  // namespace sync_sessions
+
+namespace glic {
+class GlicTabIndicatorHelper;
+}
+
 namespace tabs {
+enum class TabAlert;
+class TabAlertController;
 class TabCollection;
 class TabFeatures;
 }  // namespace tabs
@@ -62,9 +78,14 @@ class TabAndroid : public tabs::TabInterface,
     virtual void OnInitWebContents(TabAndroid* tab) = 0;
   };
 
+  // Denotes an invalid Tab Id.
+  static constexpr int kInvalidTabId = -1;
+
   // Convenience method to retrieve the Tab associated with the passed
-  // WebContents.  Can return NULL.
-  static TabAndroid* FromWebContents(const content::WebContents* web_contents);
+  // WebContents. Can return nullptr.
+  static TabAndroid* FromWebContents(content::WebContents* web_contents);
+  static const TabAndroid* FromWebContents(
+      const content::WebContents* web_contents);
 
   // Returns the native TabAndroid associated with the given `handle`.
   // Returns nullptr if the `handle` is not associated with a TabAndroid.
@@ -75,13 +96,8 @@ class TabAndroid : public tabs::TabInterface,
   static TabAndroid* GetNativeTab(JNIEnv* env,
                                   const base::android::JavaRef<jobject>& obj);
 
-  // Returns the a vector of native TabAndroid stored in the Java Tab array
-  // represented by |obj_array|.
-  static std::vector<raw_ptr<TabAndroid, VectorExperimental>> GetAllNativeTabs(
-      JNIEnv* env,
-      const base::android::ScopedJavaLocalRef<jobjectArray>& obj_array);
 
-  // Function to attach helpers to the contentView.
+  // Function to attach helpers to the `web_contents`.
   static void AttachTabHelpers(content::WebContents* web_contents);
 
   TabAndroid(JNIEnv* env,
@@ -103,7 +119,7 @@ class TabAndroid : public tabs::TabInterface,
   SessionID GetWindowId() const override;
   int GetAndroidId() const override;
   std::unique_ptr<WebContentsStateByteBuffer> GetWebContentsByteBuffer()
-      override;
+      const override;
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject() const;
@@ -125,15 +141,12 @@ class TabAndroid : public tabs::TabInterface,
   int GetLaunchType() const;
   int GetUserAgent() const;
 
-  // Return the tab title.
-  std::u16string GetTitle() const;
-
-  // Return the tab url.
-  GURL GetURL() const;
-
   // Return whether the tab is currently visible and the user can interact with
   // it.
   bool IsUserInteractable() const;
+
+  // Return whether the tab is currently being used for offscreen rendering.
+  bool IsOffscreenRendering() const;
 
   sync_sessions::SyncedTabDelegate* GetSyncedTabDelegate() const;
 
@@ -166,6 +179,16 @@ class TabAndroid : public tabs::TabInterface,
   // Set the media state of the tab. This is called by MediaStateObserver.
   void SetMediaState(int media_state);
 
+  // Sets and resets the TabInterfaceAndroid object for this TabAndroid. There
+  // should only ever be one TabInterfaceAndroid object for each TabAndroid.
+  // However, based on experience with crbug.com/488398095, there have been
+  // cases where there are multiple TabInterfaceAndroid objects for a single
+  // TabAndroid. Investigation is ongoing.
+  void SetTabInterfaceAndroid(TabInterfaceAndroid* tab_interface_android,
+                              base::PassKey<TabInterfaceAndroid>);
+  void ResetTabInterfaceAndroid(TabInterfaceAndroid* tab_interface_android,
+                                base::PassKey<TabInterfaceAndroid>);
+
   // Observers -----------------------------------------------------------------
 
   // Adds/Removes an Observer.
@@ -175,37 +198,57 @@ class TabAndroid : public tabs::TabInterface,
   // Methods called from Java via JNI -----------------------------------------
 
   void Destroy();
+  void AttachWebContentsToContentLayer(JNIEnv* env,
+                                       content::WebContents* web_contents);
   bool HasParentCollection();
   void InitWebContents(
       JNIEnv* env,
-      jboolean incognito,
-      jboolean is_background_tab,
+      bool incognito,
+      bool is_background_tab,
       const base::android::JavaRef<jobject>& jweb_contents,
       const base::android::JavaRef<jobject>& jweb_contents_delegate,
       const base::android::JavaRef<jobject>& jcontext_menu_populator_factory);
   void InitializeAutofillIfNecessary();
+  void GetMemoryUsageBytes(JNIEnv* env,
+                           const base::android::JavaRef<jobject>& j_callback);
+  void OnAlertStateChanged(std::optional<tabs::TabAlert> alert_state);
   void UpdateDelegates(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jweb_contents_delegate,
       const base::android::JavaRef<jobject>& jcontext_menu_populator_factory);
-  void DestroyWebContents();
+  void SendDidActivateUpdate(JNIEnv* env);
+  void SendWillDeactivateUpdate(JNIEnv* env);
+  void SendWillDetachUpdate(JNIEnv* env, int32_t detach_reason);
+  void SendDidInsertUpdate(JNIEnv* env);
+  tabs::TabDestroyStatus DestroyWebContents();
+  tabs::TabDestroyStatus DestroyWebContentsSlowShutdownForTesting();
   void ReleaseWebContents();
+
+  // Properly releases the WebContents from both native and Java sides. Should
+  // be called only when the tab has been removed from the tab model.
+  static std::unique_ptr<content::WebContents> TakeWebContentsAndDestroyTab(
+      TabAndroid* tab,
+      base::PassKey<TabModelJniBridge>);
+
   bool IsPhysicalBackingSizeEmpty(
       const base::android::JavaRef<jobject>& jweb_contents);
   void OnPhysicalBackingSizeChanged(
       const base::android::JavaRef<jobject>& jweb_contents,
-      jint width,
-      jint height);
-  void SetActiveNavigationEntryTitleForUrl(std::string& jurl,
-                                           std::u16string& jtitle);
+      int32_t width,
+      int32_t height);
+  void SetActiveNavigationEntryTitleForUrl(const std::string& jurl,
+                                           std::u16string jtitle);
   void LoadOriginalImage();
   void OnShow();
-  void NotifyPinnedStateChanged(jboolean is_pinned);
+  void NotifyPinnedStateChanged(bool is_pinned);
   void NotifyTabGroupChanged(std::optional<base::Token> tab_group_id);
   bool IsDragging() const;
-  void OnDraggingStateChanged(jboolean is_dragging);
+  void OnDraggingStateChanged(bool is_dragging);
+  using DraggingChangedCallback =
+      base::RepeatingCallback<void(TabInterface*, bool)>;
   base::CallbackListSubscription RegisterDraggingChanged(
-      base::RepeatingCallback<void(TabInterface*, bool)> callback);
+      DraggingChangedCallback callback);
+  bool HasTabInterfaceAndroid() const;
 
   scoped_refptr<content::DevToolsAgentHost> GetDevToolsAgentHost();
 
@@ -216,9 +259,14 @@ class TabAndroid : public tabs::TabInterface,
   // TabInterface overrides:
   base::WeakPtr<tabs::TabInterface> GetWeakPtr() override;
   content::WebContents* GetContents() const override;
+  void LoadIfNeeded() override;
+  std::u16string GetTitle() const override;
+  GURL GetURL() const override;
+  base::Time GetLastActiveTime() const override;
+  Profile* GetProfile() const override;
   // This implementation of close immediately closes the tab without undo
   // support and without a warning dialog when closing the last tab in a tab
-  // group. For more granualar control it is strongly recommended to close tabs
+  // group. For more granular control it is strongly recommended to close tabs
   // from Java instead. This operation may fail if the TabModel for this tab is
   // not found for some reason.
   void Close() override;
@@ -243,11 +291,15 @@ class TabAndroid : public tabs::TabInterface,
       PinnedStateChangedCallback callback) override;
   base::CallbackListSubscription RegisterGroupChanged(
       GroupChangedCallback callback) override;
+  base::CallbackListSubscription RegisterBlockedStateChanged(
+      BlockedStateChangedCallback callback) override;
   bool CanShowModalUI() const override;
   std::unique_ptr<tabs::ScopedTabModalUI> ShowModalUI() override;
   base::CallbackListSubscription RegisterModalUIChanged(
       TabInterfaceCallback callback) override;
   bool IsInNormalWindow() const override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
+  const BrowserWindowInterface* GetBrowserWindowInterface() const override;
   tabs::TabFeatures* GetTabFeatures() override;
   const tabs::TabFeatures* GetTabFeatures() const override;
   bool IsPinned() const override;
@@ -269,12 +321,19 @@ class TabAndroid : public tabs::TabInterface,
  private:
   // This constructor bypassing JVM setup is for CreateForTesting only.
   TabAndroid(Profile* profile, int tab_id);
-  JavaObjectWeakGlobalRef weak_java_tab_;
 
   void UpdateProperties();
   void SetIsPinned(bool pinned);
   void SetIsDragging(bool dragging);
   void SetTabGroupId(std::optional<tab_groups::TabGroupId> tab_group_id);
+
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env) const;
+
+  tabs::TabDestroyStatus DestroyWebContentsSlowShutdown();
+
+  std::unique_ptr<content::WebContents> ReleaseWebContentsInternal(
+      bool keep_session_id,
+      bool clear_delegate);
 
   int tab_id_;
 
@@ -292,20 +351,33 @@ class TabAndroid : public tabs::TabInterface,
   // Holds tab-scoped state. Constructed after tab_helpers.
   std::unique_ptr<tabs::TabFeatures> tab_features_;
 
+  raw_ptr<TabInterfaceAndroid> last_tab_interface_android_ = nullptr;
   raw_ptr<tabs::TabCollection> parent_collection_ = nullptr;
 
   base::ObserverList<Observer> observers_;
 
   base::RepeatingCallbackList<void(TabInterface*, bool)>
       pinned_state_changed_callback_list_;
-
   base::RepeatingCallbackList<void(TabInterface*,
                                    std::optional<tab_groups::TabGroupId>)>
       group_changed_callback_list_;
-
   base::RepeatingCallbackList<void(TabInterface*, bool)>
       dragging_changed_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)> did_activate_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      will_deactivate_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      did_become_visible_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)>
+      will_become_hidden_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*,
+                                   tabs::TabInterface::DetachReason)>
+      will_detach_callback_list_;
+  base::RepeatingCallbackList<void(TabInterface*)> did_insert_callback_list_;
 
+  std::unique_ptr<glic::GlicTabIndicatorHelper> glic_tab_indicator_helper_;
+  std::unique_ptr<tabs::TabAlertController> tab_alert_controller_;
+  base::CallbackListSubscription alert_to_show_subscription_;
   const base::WeakPtr<Profile> profile_;
   ui::UnownedUserDataHost unowned_user_data_host_;
   base::WeakPtrFactory<TabAndroid> weak_ptr_factory_{this};

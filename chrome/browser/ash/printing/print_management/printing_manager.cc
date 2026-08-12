@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ash/printing/print_management/printing_manager.h"
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/ash/printing/cups_print_job.h"
 #include "chrome/browser/ash/printing/history/print_job_history_service.h"
@@ -12,7 +12,6 @@
 #include "chrome/browser/ash/printing/print_management/print_job_info_mojom_conversions.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_service.h"
@@ -40,10 +39,10 @@ PrintingManager::PrintingManager(
   history_service_observation_.Observe(history_service_.get());
   cups_print_job_manager_->AddObserver(this);
 
-  delete_print_job_history_allowed_.Init(prefs::kDeletePrintJobHistoryAllowed,
-                                         pref_service);
+  delete_print_job_history_allowed_.Init(
+      ash::prefs::kDeletePrintJobHistoryAllowed, pref_service);
   print_job_history_expiration_period_.Init(
-      prefs::kPrintJobHistoryExpirationPeriod, pref_service);
+      ash::prefs::kPrintJobHistoryExpirationPeriod, pref_service);
 }
 
 PrintingManager::~PrintingManager() {
@@ -77,7 +76,7 @@ void PrintingManager::CancelPrintJob(const std::string& id,
                                      CancelPrintJobCallback callback) {
   // Checks if the print job is still stored in the local cache and the validity
   // of the WeakPtr and do not attempt to cancel an invalid print job.
-  if (!base::Contains(active_print_jobs_, id) || !active_print_jobs_[id]) {
+  if (!active_print_jobs_.contains(id) || !active_print_jobs_[id]) {
     std::move(callback).Run(/*attempted_cancel=*/false);
     return;
   }
@@ -212,6 +211,7 @@ bool PrintingManager::IsHistoryDeletionAllowedByPolicy() {
 
 void PrintingManager::Shutdown() {
   receiver_.reset();
+  history_service_observation_.Reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 

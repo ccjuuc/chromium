@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "base/time/time.h"
 
 #include <windows.h>
@@ -17,10 +12,12 @@
 #include <windows.foundation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/threading/platform_thread.h"
 #include "base/win/registry.h"
 #include "build/build_config.h"
@@ -122,7 +119,7 @@ TEST(TimeTicks, MAYBE_WinRollover) {
     // Setup
     MockTimeTicks::InstallTicker();
     g_rollover_test_start = CreateEvent(0, TRUE, FALSE, 0);
-    HANDLE threads[kThreads];
+    std::array<HANDLE, kThreads> threads;
 
     for (int index = 0; index < kThreads; index++) {
       void* argument = reinterpret_cast<void*>(kChecks);
@@ -256,8 +253,8 @@ TEST(TimeTicks, TimerPerformance) {
     // slow, and there is really no value for checking against a max timer.
     // const int kMaxTime = 35;  // Maximum acceptible milliseconds for test.
     // EXPECT_LT((stop - start).InMilliseconds(), kMaxTime);
-    printf("%s: %1.2fus per call\n", test_case.description,
-           (stop - start).InMillisecondsF() * 1000 / kLoops);
+    UNSAFE_TODO(printf("%s: %1.2fus per call\n", test_case.description,
+                       (stop - start).InMillisecondsF() * 1000 / kLoops));
   }
 }
 
@@ -428,41 +425,6 @@ TEST(TimeDelta, ToWinrtTimeSpan) {
 
   // 10 microseconds = 100 * 100 ns.
   EXPECT_EQ(100, time_delta.ToWinrtTimeSpan().Duration);
-}
-
-TEST(HighResolutionTimer, GetUsage) {
-  Time::ResetHighResolutionTimerUsage();
-
-  // 0% usage since the timer isn't activated regardless of how much time has
-  // elapsed.
-  EXPECT_EQ(0.0, Time::GetHighResolutionTimerUsage());
-  Sleep(10);
-  EXPECT_EQ(0.0, Time::GetHighResolutionTimerUsage());
-
-  Time::ActivateHighResolutionTimer(true);
-  Time::ResetHighResolutionTimerUsage();
-
-  Sleep(20);
-  // 100% usage since the timer has been activated entire time.
-  EXPECT_EQ(100.0, Time::GetHighResolutionTimerUsage());
-
-  Time::ActivateHighResolutionTimer(false);
-  Sleep(20);
-  double usage1 = Time::GetHighResolutionTimerUsage();
-  // usage1 should be about 50%.
-  EXPECT_LT(usage1, 100.0);
-  EXPECT_GT(usage1, 0.0);
-
-  Time::ActivateHighResolutionTimer(true);
-  Sleep(10);
-  Time::ActivateHighResolutionTimer(false);
-  double usage2 = Time::GetHighResolutionTimerUsage();
-  // usage2 should be about 60%.
-  EXPECT_LT(usage2, 100.0);
-  EXPECT_GT(usage2, usage1);
-
-  Time::ResetHighResolutionTimerUsage();
-  EXPECT_EQ(0.0, Time::GetHighResolutionTimerUsage());
 }
 
 }  // namespace base

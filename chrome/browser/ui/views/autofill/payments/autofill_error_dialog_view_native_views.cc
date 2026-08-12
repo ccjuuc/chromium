@@ -18,6 +18,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/vector_icon_utils.h"
 #include "ui/views/bubble/bubble_frame_view.h"
@@ -72,8 +73,12 @@ views::View* AutofillErrorDialogViewNativeViews::GetContentsView() {
 
   auto* icon = AddChildView(
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          vector_icons::kErrorIcon, ui::kColorAlertHighSeverity,
-          gfx::GetDefaultSizeOfVectorIcon(vector_icons::kErrorIcon))));
+          ::features::IsRoundedIconsEnabled() ? vector_icons::kErrorFilledIcon
+                                              : vector_icons::kErrorOldIcon,
+          ui::kColorAlertHighSeverity,
+          gfx::GetDefaultSizeOfVectorIcon(::features::IsRoundedIconsEnabled()
+                                              ? vector_icons::kErrorFilledIcon
+                                              : vector_icons::kErrorOldIcon))));
 
   if (controller_) {
     auto* label = AddChildView(std::make_unique<views::Label>(
@@ -82,6 +87,7 @@ views::View* AutofillErrorDialogViewNativeViews::GetContentsView() {
         views::style::STYLE_SECONDARY));
     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     label->SetMultiLine(true);
+    label->SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
 
     // Center-align the error icon vertically with the first line of the label.
     icon->SetBorder(views::CreateEmptyBorder(gfx::Insets().set_top(
@@ -99,6 +105,13 @@ void AutofillErrorDialogViewNativeViews::AddedToWidget() {
 
 std::u16string AutofillErrorDialogViewNativeViews::GetWindowTitle() const {
   return controller_ ? controller_->GetTitle() : std::u16string();
+}
+
+void AutofillErrorDialogViewNativeViews::OnWidgetInitialized() {
+  views::DialogDelegateView::OnWidgetInitialized();
+  if (auto* cancel_button = GetCancelButton()) {
+    cancel_button->RequestFocus();
+  }
 }
 
 base::WeakPtr<AutofillErrorDialogView>

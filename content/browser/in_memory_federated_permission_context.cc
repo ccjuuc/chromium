@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "content/browser/webid/flags.h"
@@ -17,7 +16,7 @@
 #include "mojo/public/cpp/bindings/message.h"
 #include "third_party/blink/public/common/webid/login_status_account.h"
 #include "third_party/blink/public/common/webid/login_status_options.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace content {
 
@@ -121,11 +120,6 @@ void InMemoryFederatedPermissionContext::OnSetRequiresUserMediation(
     const url::Origin& relying_party,
     base::OnceClosure callback) {
   std::move(callback).Run();
-}
-
-base::Time InMemoryFederatedPermissionContext::GetAutoReauthnEmbargoStartTime(
-    const url::Origin& relying_party_embedder) {
-  return base::Time();
 }
 
 void InMemoryFederatedPermissionContext::RecordEmbargoForAutoReauthn(
@@ -250,9 +244,9 @@ std::optional<bool> InMemoryFederatedPermissionContext::GetIdpSigninStatus(
   }
 }
 
-base::Value::List InMemoryFederatedPermissionContext::GetAccounts(
+base::ListValue InMemoryFederatedPermissionContext::GetAccounts(
     const url::Origin& idp_origin) {
-  base::Value::List result;
+  base::ListValue result;
 
   auto options = idp_login_status_options_.find(idp_origin.Serialize());
   if (options == idp_login_status_options_.end()) {
@@ -260,8 +254,8 @@ base::Value::List InMemoryFederatedPermissionContext::GetAccounts(
   }
 
   for (const auto& account : options->second.accounts) {
-    base::Value::Dict new_account =
-        base::Value::Dict()
+    base::DictValue new_account =
+        base::DictValue()
             .Set(webid::kAccountIdKey, account.id)
             .Set(webid::kAccountEmailKey, account.email)
             .Set(webid::kAccountNameKey, account.name);

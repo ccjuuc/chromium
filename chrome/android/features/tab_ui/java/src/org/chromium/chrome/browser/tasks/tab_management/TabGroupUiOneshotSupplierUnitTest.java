@@ -25,13 +25,14 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
@@ -42,7 +43,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
@@ -70,18 +71,19 @@ public class TabGroupUiOneshotSupplierUnitTest {
     @Mock private UndoBarThrottle mUndoBarThrottle;
 
     @Mock private Tab mTab;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
+    @Mock private TabModel mTabModel;
     @Mock private TabManagementDelegate mTabManagementDelegate;
     @Mock private TabGroupUi mTabGroupUi;
     @Mock private ThemeColorProvider mThemeColorProvider;
-    @Mock private ObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
     @Mock private Supplier<ShareDelegate> mShareDelegateSupplier;
 
     @Captor private ArgumentCaptor<TabObserver> mTabObserverCaptor;
 
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
-    private final ObservableSupplierImpl<Boolean> mOmniboxFocusStateSupplier =
-            new ObservableSupplierImpl<>();
+    private final MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier =
+            ObservableSuppliers.alwaysNull();
+    private final SettableNonNullObservableSupplier<Boolean> mOmniboxFocusStateSupplier =
+            ObservableSuppliers.createNonNull(false);
     private final OneshotSupplier<LayoutStateProvider> mLayoutStateProviderSupplier =
             new OneshotSupplierImpl<>();
 
@@ -89,8 +91,7 @@ public class TabGroupUiOneshotSupplierUnitTest {
 
     @Before
     public void setUp() {
-        when(mTabModelSelector.getTabGroupModelFilter(anyBoolean()))
-                .thenReturn(mTabGroupModelFilter);
+        when(mTabModelSelector.getModel(anyBoolean())).thenReturn(mTabModel);
         when(mTab.isIncognito()).thenReturn(false);
         mTabGroupUiOneshotSupplier =
                 new TabGroupUiOneshotSupplier(
@@ -126,17 +127,17 @@ public class TabGroupUiOneshotSupplierUnitTest {
 
     @Test
     public void testNotInGroupWhenFocusedThenInGroup() {
-        when(mTabGroupModelFilter.isTabInTabGroup(mTab)).thenReturn(false);
+        when(mTabModel.isTabInTabGroup(mTab)).thenReturn(false);
 
         mActivityTabProvider.setForTesting(mTab);
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         verifyNoInteractions(mTabManagementDelegate);
         assertNull(mTabGroupUiOneshotSupplier.get());
 
-        when(mTabGroupModelFilter.isTabInTabGroup(mTab)).thenReturn(true);
+        when(mTabModel.isTabInTabGroup(mTab)).thenReturn(true);
         mTabObserverCaptor.getValue().onTabGroupIdChanged(mTab, null);
 
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mTabManagementDelegate)
                 .createTabGroupUi(
@@ -161,14 +162,14 @@ public class TabGroupUiOneshotSupplierUnitTest {
 
     @Test
     public void testInGroupWhenFocused() {
-        when(mTabGroupModelFilter.isTabInTabGroup(mTab)).thenReturn(true);
+        when(mTabModel.isTabInTabGroup(mTab)).thenReturn(true);
 
         mActivityTabProvider.setForTesting(mTab);
         verify(mTab).addObserver(mTabObserverCaptor.capture());
         verifyNoInteractions(mTabManagementDelegate);
         assertNull(mTabGroupUiOneshotSupplier.get());
 
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mTabManagementDelegate)
                 .createTabGroupUi(

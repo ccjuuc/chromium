@@ -11,16 +11,15 @@ import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static org.hamcrest.core.AllOf.allOf;
 
 import static org.chromium.autofill.mojom.FocusedFieldType.FILLABLE_NON_SEARCH_FIELD;
+import static org.chromium.base.test.transit.ViewFinder.waitForNoView;
 import static org.chromium.base.test.util.CriteriaHelper.pollInstrumentationThread;
 import static org.chromium.base.test.util.CriteriaHelper.pollUiThread;
+import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryTestHelper.accessoryStartedHiding;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryTestHelper.accessoryStartedShowing;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryTestHelper.accessoryViewFullyHidden;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryTestHelper.checkThatAccessoryViewFullyShown;
 import static org.chromium.ui.base.LocalizationUtils.setRtlForTesting;
-import static org.chromium.ui.test.util.ViewUtils.VIEW_GONE;
-import static org.chromium.ui.test.util.ViewUtils.VIEW_INVISIBLE;
-import static org.chromium.ui.test.util.ViewUtils.VIEW_NULL;
 import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 import static org.chromium.ui.test.util.ViewUtils.waitForView;
 
@@ -39,6 +38,7 @@ import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
 import androidx.test.espresso.ViewInteraction;
 import androidx.test.espresso.matcher.BoundedMatcher;
+import androidx.test.espresso.util.HumanReadables;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Description;
@@ -52,6 +52,7 @@ import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ChromeKeyboardVisibilityDelegate;
 import org.chromium.chrome.browser.ChromeWindow;
 import org.chromium.chrome.browser.app.ChromeActivity;
@@ -64,6 +65,8 @@ import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AddressAccessorySheetCoordinator;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.CreditCardAccessorySheetCoordinator;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.PasswordAccessorySheetCoordinator;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.BaseCtaTransitTestRule;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.autofill.AutofillProfile;
@@ -74,7 +77,7 @@ import org.chromium.content_public.browser.test.util.TestInputMethodManagerWrapp
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.net.test.ServerCertificate;
 import org.chromium.ui.DropdownPopupWindowInterface;
-import org.chromium.ui.test.util.ViewUtils;
+import org.chromium.ui.KeyboardVisibilityDelegate;
 
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -88,7 +91,7 @@ public class ManualFillingTestHelper {
     private static final String SUBMIT_NODE_ID = "input_submit_button";
     private static final String NO_COMPLETION_FIELD_ID = "field_without_completion";
 
-    private final FreshCtaTransitTestRule mActivityTestRule;
+    private final BaseCtaTransitTestRule mActivityTestRule;
     private final AtomicReference<WebContents> mWebContentsRef = new AtomicReference<>();
     private TestInputMethodManagerWrapper mInputMethodManagerWrapper;
 
@@ -96,11 +99,14 @@ public class ManualFillingTestHelper {
 
     private RecyclerView mKeyboardAccessoryBarItems;
 
-    public FakeKeyboard getKeyboard() {
-        return (FakeKeyboard) mActivityTestRule.getKeyboardDelegate();
+    public @Nullable FakeKeyboard getKeyboard() {
+        if (mActivityTestRule.getKeyboardDelegate() instanceof FakeKeyboard fakeKeyboard) {
+            return fakeKeyboard;
+        }
+        return null;
     }
 
-    public ManualFillingTestHelper(FreshCtaTransitTestRule activityTestRule) {
+    public ManualFillingTestHelper(BaseCtaTransitTestRule activityTestRule) {
         mActivityTestRule = activityTestRule;
     }
 
@@ -127,11 +133,17 @@ public class ManualFillingTestHelper {
             boolean isRtl,
             boolean waitForNode,
             ChromeWindow.KeyboardVisibilityDelegateFactory keyboardDelegate) {
-        assert mActivityTestRule.getActivity() == null;
         getOrCreateTestServer();
         ChromeWindow.setKeyboardVisibilityDelegateFactory(keyboardDelegate);
 
-        WebPageStation page = mActivityTestRule.startOnUrl(mEmbeddedTestServer.getURL(url));
+        WebPageStation page;
+        if (mActivityTestRule instanceof AutoResetCtaTransitTestRule autoResetCtaTransitTestRule) {
+            page = autoResetCtaTransitTestRule.startOnWebPage(mEmbeddedTestServer.getURL(url));
+        } else if (mActivityTestRule instanceof FreshCtaTransitTestRule freshCtaTransitTestRule) {
+            page = freshCtaTransitTestRule.startOnUrl(mEmbeddedTestServer.getURL(url));
+        } else {
+            throw new IllegalArgumentException("Unsupported rule: " + mActivityTestRule.getClass());
+        }
 
         setRtlForTesting(isRtl);
         updateWebContentsDependentState();
@@ -153,14 +165,42 @@ public class ManualFillingTestHelper {
                     mWebContentsRef.set(activity.getActivityTab().getWebContents());
                     // The TestInputMethodManagerWrapper intercepts showSoftInput so that a keyboard
                     // is never brought up.
-                    final ImeAdapter imeAdapter = ImeAdapter.fromWebContents(mWebContentsRef.get());
+                    WebContents webContents = mWebContentsRef.get();
+                    final ImeAdapter imeAdapter =
+                            assertNonNull(ImeAdapter.fromWebContents(webContents));
                     mInputMethodManagerWrapper = TestInputMethodManagerWrapper.create(imeAdapter);
                     imeAdapter.setInputMethodManagerWrapper(mInputMethodManagerWrapper);
                 });
     }
 
+    private @Nullable View getContentView() {
+        Activity activity = mActivityTestRule.getActivity();
+        if (activity == null) return null;
+        View view = activity.getCurrentFocus();
+        if (view != null) return view;
+        if (activity.getWindow() != null) {
+            return activity.getWindow().getDecorView();
+        }
+        return null;
+    }
+
     public void clear() {
-        ChromeWindow.resetKeyboardVisibilityDelegateFactory();
+        if (mActivityTestRule.getActivity() != null) {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        View view = getContentView();
+                        if (view == null) return;
+                        KeyboardVisibilityDelegate keyboard =
+                                mActivityTestRule.getKeyboardDelegate();
+                        if (keyboard instanceof ChromeKeyboardVisibilityDelegate chromeKeyboard) {
+                            if (chromeKeyboard.isSoftKeyboardShowing(view)) {
+                                chromeKeyboard.hideSoftKeyboardOnly(view);
+                            }
+                        } else if (keyboard != null && keyboard.isKeyboardShowing(view)) {
+                            keyboard.hideKeyboard(view);
+                        }
+                    });
+        }
     }
 
     // --------------------------------------
@@ -199,12 +239,20 @@ public class ManualFillingTestHelper {
                 });
 
         ChromeKeyboardVisibilityDelegate keyboard;
-        if (useFakeKeyboard) {
+        if (useFakeKeyboard && getKeyboard() != null) {
             keyboard = getKeyboard();
+        } else if (mActivityTestRule.getKeyboardDelegate()
+                instanceof ChromeKeyboardVisibilityDelegate chromeKeyboard) {
+            keyboard = chromeKeyboard;
         } else {
-            keyboard = (ChromeKeyboardVisibilityDelegate) mActivityTestRule.getKeyboardDelegate();
+            keyboard = null;
         }
-        keyboard.showKeyboard(mActivityTestRule.getActivity().getCurrentFocus());
+        if (keyboard != null) {
+            View view = getContentView();
+            if (view != null) {
+                keyboard.showKeyboard(view);
+            }
+        }
     }
 
     public String getPasswordText() throws TimeoutException {
@@ -228,7 +276,13 @@ public class ManualFillingTestHelper {
     public void clickNodeAndShowKeyboard(String node, long focusedFieldId, int focusedFieldType)
             throws TimeoutException {
         clickNode(node, focusedFieldId, focusedFieldType);
-        getKeyboard().showKeyboard(mActivityTestRule.getActivity().getCurrentFocus());
+        View view = getContentView();
+        if (view != null) {
+            KeyboardVisibilityDelegate keyboard = mActivityTestRule.getKeyboardDelegate();
+            if (keyboard != null) {
+                keyboard.showKeyboard(view);
+            }
+        }
     }
 
     public void clickNode(String node, long focusedFieldId, int focusedFieldType)
@@ -247,7 +301,14 @@ public class ManualFillingTestHelper {
      */
     public void clickSubmit() throws TimeoutException {
         DOMUtils.clickNode(mWebContentsRef.get(), SUBMIT_NODE_ID);
-        getKeyboard().hideSoftKeyboardOnly(null);
+        View view = getContentView();
+        if (view == null) return;
+        KeyboardVisibilityDelegate keyboard = mActivityTestRule.getKeyboardDelegate();
+        if (keyboard instanceof ChromeKeyboardVisibilityDelegate chromeKeyboard) {
+            chromeKeyboard.hideSoftKeyboardOnly(view);
+        } else if (keyboard != null) {
+            keyboard.hideKeyboard(view);
+        }
     }
 
     // ---------------------------------
@@ -257,8 +318,13 @@ public class ManualFillingTestHelper {
     public void waitForKeyboardToDisappear() {
         pollUiThread(
                 () -> {
-                    Activity activity = mActivityTestRule.getActivity();
-                    return !getKeyboard().isSoftKeyboardShowing(activity.getCurrentFocus());
+                    View view = getContentView();
+                    if (view == null) return true;
+                    KeyboardVisibilityDelegate keyboard = mActivityTestRule.getKeyboardDelegate();
+                    if (keyboard instanceof ChromeKeyboardVisibilityDelegate chromeKeyboard) {
+                        return !chromeKeyboard.isSoftKeyboardShowing(view);
+                    }
+                    return keyboard != null && !keyboard.isKeyboardShowing(view);
                 });
     }
 
@@ -279,7 +345,9 @@ public class ManualFillingTestHelper {
                             mActivityTestRule
                                     .getKeyboardDelegate()
                                     .isKeyboardShowing(
-                                            mActivityTestRule.getActivity().getTabsView());
+                                            mActivityTestRule
+                                                    .getActivity()
+                                                    .getTabsViewForTesting());
                     Criteria.checkThat(isKeyboardShowing, Matchers.is(true));
                 });
     }
@@ -294,6 +362,12 @@ public class ManualFillingTestHelper {
                     },
                     "Waited for suggestions that never appeared.");
         }
+        waitForManualFillingIconsToBeLoaded();
+    }
+
+    private void waitForManualFillingIconsToBeLoaded() {
+        pollUiThread(
+                () -> Criteria.checkThat(getKeyboardAccessoryBar().hasTabs(), Matchers.is(true)));
     }
 
     public DropdownPopupWindowInterface waitForAutofillPopup(String filterInput) {
@@ -308,7 +382,8 @@ public class ManualFillingTestHelper {
                 });
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    ImeAdapter.fromWebContents(webContents).setComposingTextForTest(filterInput, 4);
+                    assertNonNull(ImeAdapter.fromWebContents(webContents))
+                            .setComposingTextForTest(filterInput, 4);
                 });
         pollUiThread(
                 () -> {
@@ -463,40 +538,6 @@ public class ManualFillingTestHelper {
     // Generic helpers to match, check or wait for views.
     // --------------------------------------------------
 
-    /**
-     * Use in a |onView().perform| action to select the tab at |tabIndex| for the found tab layout.
-     *
-     * @param tabIndex The index to be selected.
-     * @return The action executed by |perform|.
-     */
-    public static ViewAction selectTabAtPosition(int tabIndex) {
-        return new ViewAction() {
-            @Override
-            public Matcher<View> getConstraints() {
-                return allOf(
-                        isDisplayed(), isAssignableFrom(KeyboardAccessoryButtonGroupView.class));
-            }
-
-            @Override
-            public String getDescription() {
-                return "with tab at index " + tabIndex;
-            }
-
-            @Override
-            public void perform(UiController uiController, View view) {
-                KeyboardAccessoryButtonGroupView buttonGroupView =
-                        (KeyboardAccessoryButtonGroupView) view;
-                if (tabIndex >= buttonGroupView.getButtons().size()) {
-                    throw new PerformException.Builder()
-                            .withCause(new Throwable("No button at index " + tabIndex))
-                            .build();
-                }
-                PostTask.runOrPostTask(
-                        TaskTraits.UI_DEFAULT,
-                        () -> buttonGroupView.getButtons().get(tabIndex).performClick());
-            }
-        };
-    }
 
     /**
      * Use in a |onView().perform| action to select the tab at |tabIndex| for the found tab layout.
@@ -531,6 +572,8 @@ public class ManualFillingTestHelper {
                     }
                 }
                 throw new PerformException.Builder()
+                        .withActionDescription(getDescription())
+                        .withViewDescription(HumanReadables.describe(view))
                         .withCause(
                                 new Throwable("No button with description: " + descriptionToMatch))
                         .build();
@@ -560,6 +603,8 @@ public class ManualFillingTestHelper {
                 int itemCount = recyclerView.getAdapter().getItemCount();
                 if (itemCount <= 0) {
                     throw new PerformException.Builder()
+                            .withActionDescription(getDescription())
+                            .withViewDescription(HumanReadables.describe(view))
                             .withCause(new Throwable("RecyclerView has no items."))
                             .build();
                 }
@@ -615,7 +660,7 @@ public class ManualFillingTestHelper {
     }
 
     public static void waitToBeHidden(Matcher<View> matcher) {
-        ViewUtils.waitForViewCheckingState(matcher, VIEW_INVISIBLE | VIEW_NULL | VIEW_GONE);
+        waitForNoView(matcher);
     }
 
     public String getAttribute(String node, String attribute)

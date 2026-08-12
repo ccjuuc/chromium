@@ -37,27 +37,27 @@ namespace {
 
 const char* TypeToString(extensions::Manifest::Type type) {
   switch (type) {
-    case extensions::Manifest::TYPE_UNKNOWN:
+    case extensions::Manifest::Type::kUnknown:
       return "TYPE_UNKNOWN";
-    case extensions::Manifest::TYPE_EXTENSION:
+    case extensions::Manifest::Type::kExtension:
       return "TYPE_EXTENSION";
-    case extensions::Manifest::TYPE_THEME:
+    case extensions::Manifest::Type::kTheme:
       return "TYPE_THEME";
-    case extensions::Manifest::TYPE_USER_SCRIPT:
+    case extensions::Manifest::Type::kUserScript:
       return "TYPE_USER_SCRIPT";
-    case extensions::Manifest::TYPE_HOSTED_APP:
+    case extensions::Manifest::Type::kHostedApp:
       return "TYPE_HOSTED_APP";
-    case extensions::Manifest::TYPE_LEGACY_PACKAGED_APP:
+    case extensions::Manifest::Type::kLegacyPackagedApp:
       return "TYPE_LEGACY_PACKAGED_APP";
-    case extensions::Manifest::TYPE_PLATFORM_APP:
+    case extensions::Manifest::Type::kPlatformApp:
       return "TYPE_PLATFORM_APP";
-    case extensions::Manifest::TYPE_SHARED_MODULE:
+    case extensions::Manifest::Type::kSharedModule:
       return "TYPE_SHARED_MODULE";
-    case extensions::Manifest::TYPE_LOGIN_SCREEN_EXTENSION:
+    case extensions::Manifest::Type::kLoginScreenExtension:
       return "TYPE_LOGIN_SCREEN_EXTENSION";
-    case extensions::Manifest::TYPE_CHROMEOS_SYSTEM_EXTENSION:
+    case extensions::Manifest::Type::kChromeOSSystemExtension:
       return "TYPE_CHROMEOS_SYSTEM_EXTENSION";
-    case extensions::Manifest::NUM_LOAD_TYPES:
+    case extensions::Manifest::Type::kNumLoadTypes:
       break;
   }
   NOTREACHED();
@@ -112,8 +112,8 @@ const char* RegistryStatusToString(
   NOTREACHED();
 }
 
-base::Value::List CreationFlagsToList(int creation_flags) {
-  base::Value::List flags_value;
+base::ListValue CreationFlagsToList(int creation_flags) {
+  base::ListValue flags_value;
   if (creation_flags == extensions::Extension::NO_FLAGS) {
     flags_value.Append("NO_FLAGS");
   }
@@ -138,12 +138,6 @@ base::Value::List CreationFlagsToList(int creation_flags) {
   if (creation_flags & extensions::Extension::WAS_INSTALLED_BY_DEFAULT) {
     flags_value.Append("WAS_INSTALLED_BY_DEFAULT");
   }
-  if (creation_flags & extensions::Extension::REQUIRE_PERMISSIONS_CONSENT) {
-    flags_value.Append("REQUIRE_PERMISSIONS_CONSENT");
-  }
-  if (creation_flags & extensions::Extension::IS_EPHEMERAL) {
-    flags_value.Append("IS_EPHEMERAL");
-  }
   if (creation_flags & extensions::Extension::WAS_INSTALLED_BY_OEM) {
     flags_value.Append("WAS_INSTALLED_BY_OEM");
   }
@@ -156,12 +150,12 @@ base::Value::List CreationFlagsToList(int creation_flags) {
   return flags_value;
 }
 
-base::Value::List DisableReasonsToList(
+base::ListValue DisableReasonsToList(
     const extensions::DisableReasonSet& disable_reasons) {
   static_assert(extensions::disable_reason::DISABLE_REASON_LAST == 1 << 27,
                 "Please add your new disable reason here.");
 
-  base::Value::List disable_reasons_value;
+  base::ListValue disable_reasons_value;
   if (disable_reasons.contains(
           extensions::disable_reason::DISABLE_USER_ACTION)) {
     disable_reasons_value.Append("DISABLE_USER_ACTION");
@@ -430,17 +424,17 @@ constexpr std::string_view kTimeoutTypeKey = "timeout_type";
 constexpr std::string_view kTypeKey = "type";
 constexpr std::string_view kRegistryStatus = "registry_status";
 
-base::Value::Dict FormatBackgroundPageKeepaliveData(
+base::DictValue FormatBackgroundPageKeepaliveData(
     extensions::ProcessManager* process_manager,
     const extensions::Extension* extension) {
-  base::Value::Dict keepalive_data;
+  base::DictValue keepalive_data;
   keepalive_data.Set(kCountKey,
                      process_manager->GetLazyKeepaliveCount(extension));
   const extensions::ProcessManager::ActivitiesMultiset activities =
       process_manager->GetLazyKeepaliveActivities(extension);
-  base::Value::List activities_data;
+  base::ListValue activities_data;
   for (const auto& activity : activities) {
-    base::Value::Dict activities_entry;
+    base::DictValue activities_entry;
     activities_entry.Set(kTypeKey,
                          extensions::Activity::ToString(activity.first));
     activities_entry.Set(kExtraDataKey, activity.second);
@@ -450,14 +444,14 @@ base::Value::Dict FormatBackgroundPageKeepaliveData(
   return keepalive_data;
 }
 
-base::Value::Dict FormatServiceWorkerKeepaliveData(
+base::DictValue FormatServiceWorkerKeepaliveData(
     extensions::ProcessManager& process_manager,
     const extensions::ExtensionId& extension_id) {
-  base::Value::Dict keepalive_data;
+  base::DictValue keepalive_data;
   auto keepalives =
       process_manager.GetServiceWorkerKeepaliveDataForRecords(extension_id);
   keepalive_data.Set(kCountKey, base::checked_cast<int>(keepalives.size()));
-  base::Value::List activities_data;
+  base::ListValue activities_data;
 
   auto get_timeout_type_value =
       [](content::ServiceWorkerExternalRequestTimeoutType timeout_type) {
@@ -471,7 +465,7 @@ base::Value::Dict FormatServiceWorkerKeepaliveData(
       };
 
   for (const auto& keepalive : keepalives) {
-    base::Value::Dict activities_entry;
+    base::DictValue activities_entry;
     activities_entry.Set(
         kTypeKey, extensions::Activity::ToString(keepalive.activity_type));
     activities_entry.Set(kExtraDataKey, keepalive.extra_data);
@@ -486,11 +480,11 @@ base::Value::Dict FormatServiceWorkerKeepaliveData(
 // Formats API and Manifest permissions, which can have details that we add as a
 // dictionary rather than just the string name
 template <typename T>
-base::Value::List FormatDetailedPermissionSet(const T& permissions) {
-  base::Value::List value_list;
+base::ListValue FormatDetailedPermissionSet(const T& permissions) {
+  base::ListValue value_list;
   for (const auto& permission : permissions) {
     if (auto detail = permission->ToValue()) {
-      base::Value::Dict tmp;
+      base::DictValue tmp;
       tmp.Set(permission->name(),
               base::Value::FromUniquePtrValue(std::move(detail)));
       value_list.Append(std::move(tmp));
@@ -501,9 +495,9 @@ base::Value::List FormatDetailedPermissionSet(const T& permissions) {
   return value_list;
 }
 
-base::Value::Dict FormatPermissionSet(
+base::DictValue FormatPermissionSet(
     const extensions::PermissionSet& permission_set) {
-  base::Value::Dict value;
+  base::DictValue value;
 
   value.Set(kPermissionsExplicitHostsKey,
             permission_set.explicit_hosts().ToValue());
@@ -517,11 +511,10 @@ base::Value::Dict FormatPermissionSet(
   return value;
 }
 
-base::Value::Dict FormatPermissionsData(
-    const extensions::Extension& extension) {
+base::DictValue FormatPermissionsData(const extensions::Extension& extension) {
   const extensions::PermissionsData& permissions =
       *extension.permissions_data();
-  base::Value::Dict permissions_data;
+  base::DictValue permissions_data;
 
   const extensions::PermissionSet& active_permissions =
       permissions.active_permissions();
@@ -533,7 +526,7 @@ base::Value::Dict FormatPermissionsData(
   permissions_data.Set(kPermissionsWithheldKey,
                        FormatPermissionSet(withheld_permissions));
 
-  base::Value::Dict tab_specific;
+  base::DictValue tab_specific;
   for (const auto& tab : permissions.tab_specific_permissions()) {
     tab_specific.Set(base::NumberToString(tab.first),
                      FormatPermissionSet(*tab.second));
@@ -549,24 +542,24 @@ base::Value::Dict FormatPermissionsData(
 }
 
 void AddEventListenerData(extensions::EventRouter* event_router,
-                          base::Value::List* data) {
+                          base::ListValue* data) {
   // A map of extension ID to the listener data for that extension,
   // which is of type LIST of DICTIONARY.
-  base::flat_map<std::string_view, base::Value::List> listeners_map;
+  base::flat_map<std::string_view, base::ListValue> listeners_map;
 
   // Build the map of extension IDs to the list of events.
   for (const auto& entry : event_router->listeners().listeners()) {
     for (const auto& listener_entry : entry.second) {
       auto& listeners_list = listeners_map[listener_entry->extension_id()];
       // The data for each listener is a dictionary.
-      base::Value::Dict listener_data;
+      base::DictValue listener_data;
       listener_data.Set(kEventNameKey, listener_entry->event_name());
       listener_data.Set(kIsForServiceWorkerKey,
                         listener_entry->is_for_service_worker());
       listener_data.Set(kIsLazyKey, listener_entry->IsLazy());
       listener_data.Set(kListenerUrlKey, listener_entry->listener_url().spec());
       // Add the filter if one exists.
-      const base::Value::Dict* const filter = listener_entry->filter();
+      const base::DictValue* const filter = listener_entry->filter();
       if (filter) {
         listener_data.Set(kFilterKey, filter->Clone());
       }
@@ -580,11 +573,11 @@ void AddEventListenerData(extensions::EventRouter* event_router,
         output_entry.GetDict().Find(kInternalsIdKey);
     CHECK(value && value->is_string());
     const auto it = listeners_map.find(value->GetString());
-    base::Value::Dict event_listeners;
+    base::DictValue event_listeners;
     if (it == listeners_map.end()) {
       // We didn't find any events, so initialize an empty dictionary.
       event_listeners.Set(kCountKey, 0);
-      event_listeners.Set(kListenersKey, base::Value::List());
+      event_listeners.Set(kListenersKey, base::ListValue());
     } else {
       // Set the count and the events values.
       event_listeners.Set(kCountKey,
@@ -641,10 +634,10 @@ std::string ExtensionsInternalsSource::WriteToString() const {
   extensions::ProcessManager* process_manager =
       extensions::ProcessManager::Get(profile_);
   extensions::ExtensionPrefs* prefs = extensions::ExtensionPrefs::Get(profile_);
-  base::Value::List data;
+  base::ListValue data;
   for (const auto& [status, extensions] : status_map) {
     for (const auto& extension : extensions) {
-      base::Value::Dict extension_data;
+      base::DictValue extension_data;
       extension_data.Set(kInternalsIdKey, extension->id());
       extension_data.Set(kInternalsGuidKey, extension->guid());
       extension_data.Set(kInternalsCreationFlagsKey,

@@ -22,9 +22,12 @@
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
+#include "components/autofill/core/browser/form_import/payments/payments_form_data_importer.h"
+#include "components/autofill/core/browser/form_import/payments/payments_form_data_importer_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/foundations/test_autofill_driver.h"
 #include "components/autofill/core/browser/metrics/form_events/credit_card_form_event_logger.h"
+#include "components/autofill/core/browser/metrics/form_events/credit_card_form_event_logger_test_api.h"
 #include "components/autofill/core/browser/metrics/payments/better_auth_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/card_unmask_authentication_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/card_unmask_flow_metrics.h"
@@ -41,6 +44,7 @@
 #include "components/autofill/core/browser/payments/test/mock_virtual_card_enrollment_manager.h"
 #include "components/autofill/core/browser/payments/test/test_credit_card_otp_authenticator.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -100,7 +104,7 @@ class CreditCardAccessManagerAuthFlowTest
 
   void FetchCreditCardAndCompleteRiskBasedAuthIfAvailable(
       const CreditCard* card,
-      base::Value::Dict fido_request_options = base::Value::Dict()) {
+      base::DictValue fido_request_options = base::DictValue()) {
     CreditCardAccessManagerTestBase::FetchCreditCard(card);
     if (!IsMaskedServerCardRiskBasedAuthEnabled()) {
       return;
@@ -157,13 +161,15 @@ TEST_F(CreditCardAccessManagerTest, FetchLocalCardSuccess) {
   FetchCreditCard(card);
   credit_card_access_manager().RemoveObserver(&observer);
 
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   // There was no interactive authentication in this flow, so check that this
   // is signaled correctly.
   std::optional<NonInteractivePaymentMethodType> type =
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed();
   ASSERT_TRUE(type.has_value());
   ASSERT_EQ(type.value(), NonInteractivePaymentMethodType::kLocalCard);
@@ -186,7 +192,8 @@ TEST_F(CreditCardAccessManagerTest, FetchLocalCard_UpdatesPaymentsContext) {
   PrepareToFetchCreditCardAndWaitForCallbacks();
   FetchCreditCard(card);
 
-  const auto& context = form_data_importer->fetched_payments_data_context();
+  const auto& context = form_data_importer->GetPaymentsFormDataImporter()
+                            .fetched_payments_data_context();
   EXPECT_EQ(context.fetched_card_instrument_id, instrument_id);
   ASSERT_TRUE(context.card_was_fetched_from_cache.has_value());
   EXPECT_FALSE(*context.card_was_fetched_from_cache);
@@ -200,7 +207,26 @@ TEST_F(CreditCardAccessManagerTest, CallsObserverOnDestruction) {
     credit_card_access_manager().RemoveObserver(&observer);
   });
   credit_card_access_manager().AddObserver(&observer);
-  autofill_manager().Reset();
+  test_api(autofill_manager()).Reset();
+}
+
+// Tests that UpdateCreditCardFormEventLogger() correctly logs the number of
+// local and server cards.
+TEST_F(CreditCardAccessManagerTest, UpdateCreditCardFormEventLogger) {
+  CreateLocalCard(kTestGUID, kTestNumber);
+  personal_data().test_payments_data_manager().AddServerCreditCard(
+      test::GetMaskedServerCardEnrolledIntoVirtualCardNumber());
+
+  credit_card_access_manager().UpdateCreditCardFormEventLogger();
+
+  EXPECT_EQ(autofill_metrics::test_api(
+                autofill_manager().GetCreditCardFormEventLogger())
+                .local_record_type_count(),
+            1u);
+  EXPECT_EQ(autofill_metrics::test_api(
+                autofill_manager().GetCreditCardFormEventLogger())
+                .server_record_type_count(),
+            1u);
 }
 
 // Ensures that FetchCreditCard() returns the full PAN upon a successful
@@ -225,8 +251,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FetchServerCardCVCSuccess) {
 
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
   credit_card_access_manager().RemoveObserver(&observer);
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   histogram_tester.ExpectBucketCount(
       flow_events_histogram_name,
@@ -237,7 +263,9 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FetchServerCardCVCSuccess) {
   // Expect that we did not signal that there was no interactive
   // authentication.
   EXPECT_FALSE(
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
 }
@@ -300,7 +328,7 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, ResetsOnDestruction) {
   PrepareToFetchCreditCardAndWaitForCallbacks();
   FetchCreditCardAndCompleteRiskBasedAuthIfAvailable(card);
 
-  autofill_manager().Reset();
+  test_api(autofill_manager()).Reset();
 }
 
 // Ensures that a "try again" response from payments does not end the flow.
@@ -320,8 +348,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FetchServerCardCVCTryAgainFailure) {
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
   credit_card_access_manager().RemoveObserver(&observer);
 
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 }
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
 // Ensures that FetchCreditCard() returns the full PAN upon a successful
@@ -353,16 +381,16 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FetchServerCardFIDOSuccess) {
       CreditCardFormEventLogger::UnmaskAuthFlowEvent::kPromptShown, 1);
 
   // FIDO Success.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kAuthenticationFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kAuthenticationFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/true);
   EXPECT_TRUE(GetRealPanForFIDOAuth(PaymentsRpcResult::kSuccess, kTestNumber));
 
-  EXPECT_EQ(kCredentialId,
-            BytesToBase64(GetFIDOAuthenticator()->GetCredentialId()));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(BytesToBase64(GetFIDOAuthenticator()->GetCredentialId()),
+            kCredentialId);
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   histogram_tester.ExpectUniqueSample(
       unmask_decision_histogram_name,
@@ -502,12 +530,12 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   WaitForCallbacks();
 
   // FIDO Success.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kAuthenticationFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kAuthenticationFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/true);
   EXPECT_TRUE(GetRealPanForFIDOAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(u"", accessor().cvc());
+  EXPECT_EQ(accessor().cvc(), u"");
 }
 
 // Ensures that FetchCreditCard() returns the full PAN upon a successful
@@ -539,8 +567,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
                                     kTestCvc));
 
   // Expect accessor to successfully retrieve the DCVV.
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 }
 
 // Ensures that CVC prompt is invoked after WebAuthn fails.
@@ -572,8 +600,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
       CreditCardFormEventLogger::UnmaskAuthFlowEvent::kPromptShown, 1);
 
   // FIDO Failure.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kAuthenticationFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kAuthenticationFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/false);
 
@@ -584,11 +612,11 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   EXPECT_FALSE(GetRealPanForFIDOAuth(PaymentsRpcResult::kSuccess, kTestNumber));
 
   // Followed by a fallback to CVC.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kNoneFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kNoneFlow);
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   histogram_tester.ExpectUniqueSample(
       webauthn_result_histogram_name,
@@ -623,19 +651,19 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   WaitForCallbacks();
 
   // FIDO Failure.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kAuthenticationFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kAuthenticationFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/true);
   EXPECT_TRUE(
       GetRealPanForFIDOAuth(PaymentsRpcResult::kPermanentFailure, kTestNumber));
 
   // Followed by a fallback to CVC.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kNoneFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kNoneFlow);
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   histogram_tester.ExpectUniqueSample(
       histogram_name, autofill_metrics::WebauthnResultMetric::kSuccess, 1);
@@ -667,8 +695,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
 
   // Followed by a fallback to CVC.
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 }
 
 // Ensures that CVC prompt is invoked when the pre-flight call to Google
@@ -690,8 +718,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   WaitForCallbacks();
 
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 }
 
 // Ensures whether user choose a masked server card before or after the
@@ -901,14 +929,14 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDONewCardAuthorization) {
   EXPECT_EQ(accessor().cvc(), std::u16string());
 
   // Mock user response.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kFollowupAfterCvcAuthFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kFollowupAfterCvcAuthFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/true);
   // Ensure that the form is filled after user verification (OnCreditCardFetched
   // is called).
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   // Mock OptChange payments call.
   OptChange(PaymentsRpcResult::kSuccess, true);
@@ -1001,8 +1029,8 @@ TEST_F(CreditCardAccessManagerTest, FetchExpiredServerCardInvokesCvcPrompt) {
 
   // Expect CVC prompt to be invoked.
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1032,8 +1060,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInSuccess_Android) {
 
   // Check current flow to ensure CreditCardFidoAuthenticator::Authorize is
   // called and correct flow is set.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow);
   // Ensure that the form is not filled yet (OnCreditCardFetched is not called).
   EXPECT_EQ(accessor().number(), std::u16string());
   EXPECT_EQ(accessor().cvc(), std::u16string());
@@ -1043,16 +1071,16 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInSuccess_Android) {
                                                 /*did_succeed=*/true);
   // Ensure that the form is filled after user verification (OnCreditCardFetched
   // is called).
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   // Mock OptChange payments call.
   OptChange(PaymentsRpcResult::kSuccess,
             /*user_is_opted_in=*/true);
 
-  EXPECT_EQ(kGooglePaymentsRpid, GetFIDOAuthenticator()->GetRelyingPartyId());
-  EXPECT_EQ(kTestChallenge,
-            BytesToBase64(GetFIDOAuthenticator()->GetChallenge()));
+  EXPECT_EQ(GetFIDOAuthenticator()->GetRelyingPartyId(), kGooglePaymentsRpid);
+  EXPECT_EQ(BytesToBase64(GetFIDOAuthenticator()->GetChallenge()),
+            kTestChallenge);
   EXPECT_TRUE(GetFIDOAuthenticator()->IsUserOptedIn());
 
   histogram_tester.ExpectUniqueSample(
@@ -1108,8 +1136,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInUserVerificationFailure) {
                                    TestFidoRequestOptionsType::kValid));
   // Check current flow to ensure CreditCardFidoAuthenticator::Authorize is
   // called and correct flow is set.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow);
   // Ensure that the form is not filled yet (OnCreditCardFetched is not called).
   EXPECT_EQ(accessor().number(), std::u16string());
   EXPECT_EQ(accessor().cvc(), std::u16string());
@@ -1120,8 +1148,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInUserVerificationFailure) {
   // Ensure that form is still filled even if user verification fails
   // (OnCreditCardFetched is called). Note that this is different behavior than
   // registering a new card.
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   EXPECT_FALSE(GetFIDOAuthenticator()->IsUserOptedIn());
 
@@ -1149,8 +1177,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInServerFailure) {
                                    TestFidoRequestOptionsType::kValid));
   // Check current flow to ensure CreditCardFidoAuthenticator::Authorize is
   // called and correct flow is set.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow);
   // Ensure that the form is not filled yet (OnCreditCardFetched is not called).
   EXPECT_EQ(accessor().number(), std::u16string());
   EXPECT_EQ(accessor().cvc(), std::u16string());
@@ -1160,8 +1188,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptInServerFailure) {
                                                 /*did_succeed=*/true);
   // Ensure that the form is filled after user verification (OnCreditCardFetched
   // is called).
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
   OptChange(PaymentsRpcResult::kPermanentFailure, false);
 
   EXPECT_FALSE(GetFIDOAuthenticator()->IsUserOptedIn());
@@ -1186,12 +1214,12 @@ TEST_P(CreditCardAccessManagerAuthFlowTest, FIDOOptIn_CheckboxDeclined) {
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber,
                                    TestFidoRequestOptionsType::kNotPresent));
   // Ensure that form is filled (OnCreditCardFetched is called).
-  EXPECT_EQ(kTestNumber16, accessor().number());
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().number(), kTestNumber16);
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
   // Check current flow to ensure CreditCardFidoAuthenticator::Authorize is
   // never called.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kNoneFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kNoneFlow);
   EXPECT_FALSE(GetFIDOAuthenticator()->IsUserOptedIn());
 }
 
@@ -1263,18 +1291,18 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
             /*include_creation_options=*/true);
 
   // Mock user response and OptChange payments call.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow);
   TestCreditCardFidoAuthenticator::MakeCredential(GetFIDOAuthenticator(),
                                                   /*did_succeed=*/true);
   OptChange(PaymentsRpcResult::kSuccess,
             /*user_is_opted_in=*/true);
 
-  EXPECT_EQ(kGooglePaymentsRpid, GetFIDOAuthenticator()->GetRelyingPartyId());
-  EXPECT_EQ(kTestChallenge,
-            BytesToBase64(GetFIDOAuthenticator()->GetChallenge()));
+  EXPECT_EQ(GetFIDOAuthenticator()->GetRelyingPartyId(), kGooglePaymentsRpid);
+  EXPECT_EQ(BytesToBase64(GetFIDOAuthenticator()->GetChallenge()),
+            kTestChallenge);
   EXPECT_TRUE(GetFIDOAuthenticator()->IsUserOptedIn());
-  EXPECT_EQ(0, GetStrikes());
+  EXPECT_EQ(GetStrikes(), 0);
   histogram_tester.ExpectUniqueSample(
       webauthn_result_histogram_name,
       autofill_metrics::WebauthnResultMetric::kSuccess, 1);
@@ -1317,8 +1345,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   EXPECT_TRUE(GetRealPanForCVCAuth(PaymentsRpcResult::kSuccess, kTestNumber));
   AcceptWebauthnOfferDialog(/*did_accept=*/false);
   EXPECT_EQ(
-      FidoAuthenticationStrikeDatabase::kStrikesToAddWhenOptInOfferDeclined,
-      GetStrikes());
+      GetStrikes(),
+      FidoAuthenticationStrikeDatabase::kStrikesToAddWhenOptInOfferDeclined);
   histogram_tester.ExpectTotalCount(promo_shown_histogram_name, 1);
   histogram_tester.ExpectUniqueSample(
       promo_user_decision_histogram_name,
@@ -1354,8 +1382,8 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
   AcceptWebauthnOfferDialog(/*did_accept=*/true);
   AcceptWebauthnOfferDialog(/*did_accept=*/false);
   EXPECT_EQ(
-      FidoAuthenticationStrikeDatabase::kStrikesToAddWhenOptInOfferDeclined,
-      GetStrikes());
+      GetStrikes(),
+      FidoAuthenticationStrikeDatabase::kStrikesToAddWhenOptInOfferDeclined);
   histogram_tester.ExpectTotalCount(promo_shown_histogram_name, 1);
   histogram_tester.ExpectUniqueSample(
       promo_user_decision_histogram_name,
@@ -1443,16 +1471,16 @@ TEST_P(CreditCardAccessManagerAuthFlowTest,
             /*include_request_options=*/true);
 
   // Mock user response and OptChange payments call.
-  EXPECT_EQ(CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow,
-            GetFIDOAuthenticator()->current_flow());
+  EXPECT_EQ(GetFIDOAuthenticator()->current_flow(),
+            CreditCardFidoAuthenticator::Flow::kOptInWithChallengeFlow);
   TestCreditCardFidoAuthenticator::GetAssertion(GetFIDOAuthenticator(),
                                                 /*did_succeed=*/true);
   OptChange(PaymentsRpcResult::kSuccess,
             /*user_is_opted_in=*/true);
 
-  EXPECT_EQ(kGooglePaymentsRpid, GetFIDOAuthenticator()->GetRelyingPartyId());
-  EXPECT_EQ(kTestChallenge,
-            BytesToBase64(GetFIDOAuthenticator()->GetChallenge()));
+  EXPECT_EQ(GetFIDOAuthenticator()->GetRelyingPartyId(), kGooglePaymentsRpid);
+  EXPECT_EQ(BytesToBase64(GetFIDOAuthenticator()->GetChallenge()),
+            kTestChallenge);
   EXPECT_TRUE(GetFIDOAuthenticator()->IsUserOptedIn());
 
   histogram_tester.ExpectUniqueSample(
@@ -1766,7 +1794,7 @@ TEST_F(CreditCardAccessManagerTest, FetchCreditCardUsesUnmaskedCardCache) {
 
 TEST_F(CreditCardAccessManagerTest, GetCachedUnmaskedCards) {
   // Assert that there are no cards cached initially.
-  EXPECT_EQ(0U, credit_card_access_manager().GetCachedUnmaskedCards().size());
+  EXPECT_EQ(credit_card_access_manager().GetCachedUnmaskedCards().size(), 0U);
 
   CreditCard unmasked_card = AsFullServerCard(
       *CreateServerCard(kTestGUID, kTestNumber, kTestServerId));
@@ -1775,7 +1803,7 @@ TEST_F(CreditCardAccessManagerTest, GetCachedUnmaskedCards) {
   credit_card_access_manager().CacheUnmaskedCardInfo(unmasked_card, kTestCvc16);
 
   // Verify that only the card added to the cache is returned.
-  ASSERT_EQ(1U, credit_card_access_manager().GetCachedUnmaskedCards().size());
+  ASSERT_EQ(credit_card_access_manager().GetCachedUnmaskedCards().size(), 1U);
   EXPECT_EQ(unmasked_card,
             credit_card_access_manager().GetCachedUnmaskedCards()[0]->card);
 }
@@ -1853,7 +1881,9 @@ TEST_F(CreditCardAccessManagerTest,
   // There was no interactive authentication in this flow, so check that this
   // is signaled correctly.
   std::optional<NonInteractivePaymentMethodType> type =
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed();
   EXPECT_THAT(type,
               testing::Optional(NonInteractivePaymentMethodType::kVirtualCard));
@@ -1892,12 +1922,14 @@ TEST_F(CreditCardAccessManagerTest,
 
   // Expect that we did not signal that there was no interactive authentication.
   EXPECT_FALSE(
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
 
   // Expect accessor to successfully retrieve the CVC.
-  EXPECT_EQ(kTestCvc16, accessor().cvc());
+  EXPECT_EQ(accessor().cvc(), kTestCvc16);
 
   // Expect the metrics are logged correctly.
   histogram_tester.ExpectUniqueSample(
@@ -1931,7 +1963,9 @@ TEST_F(CreditCardAccessManagerTest,
 
   // Expect that we did not signal that there was no interactive authentication.
   EXPECT_FALSE(
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
 
@@ -1982,7 +2016,7 @@ TEST_F(CreditCardAccessManagerTest,
       CreditCardFormEventLogger::UnmaskAuthFlowEvent::kPromptShown, 1);
 }
 
-// Ensures the `kCardInfoRetrievalEnrolledUnmaskProgressDialog` is set if
+// Ensures the `kCardInfoRetrievalEnrolledUnmaskProgressUi` is set if
 // `card_info_retrieval_enrollment_state` is enrolled.
 TEST_F(CreditCardAccessManagerTest, CardInfoRetrievalEnrolledCardUnmasking) {
   base::test::ScopedFeatureList scoped_feature_list{
@@ -2001,20 +2035,16 @@ TEST_F(CreditCardAccessManagerTest, CardInfoRetrievalEnrolledCardUnmasking) {
   EXPECT_EQ(autofill_client()
                 .GetPaymentsAutofillClient()
                 ->autofill_progress_dialog_type(),
-            AutofillProgressDialogType::
-                kCardInfoRetrievalEnrolledUnmaskProgressDialog);
+            AutofillProgressUiType::kCardInfoRetrievalEnrolledUnmaskProgressUi);
 }
 
-// Ensures the `kCardInfoRetrievalEnrolledUnmaskProgressDialog` is not set, even
-// if `kAutofillEnableCardInfoRuntimeRetrieval` is enabled, but
+// Ensures the `kCardInfoRetrievalEnrolledUnmaskProgressUi` is not set if
 // `card_info_retrieval_enrollment_state` is not enrolled.
 TEST_F(CreditCardAccessManagerTest,
        CardInfoRetrievalEnrolledCardUnmaskingDisabled) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/{features::kAutofillEnableCardInfoRuntimeRetrieval},
-      /*disabled_features=*/{
-          features::kAutofillEnableFpanRiskBasedAuthentication});
+  scoped_feature_list.InitAndDisableFeature(
+      features::kAutofillEnableFpanRiskBasedAuthentication);
 
   base::HistogramTester histogram_tester;
   CreditCard server_card = test::GetMaskedServerCard();
@@ -2088,7 +2118,9 @@ TEST_F(CreditCardAccessManagerTest,
 
   // Expect that we did not signal that there was no interactive authentication.
   EXPECT_FALSE(
-      test_api(*autofill_client().GetFormDataImporter())
+      test_api(autofill_client()
+                   .GetFormDataImporter()
+                   ->GetPaymentsFormDataImporter())
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
 
@@ -2274,7 +2306,7 @@ TEST_F(CreditCardAccessManagerTest,
       .OnFIDOAuthenticationComplete(fido_response);
 
   // Expect accessor to successfully retrieve the virtual card CVC.
-  EXPECT_EQ(u"234", accessor().cvc());
+  EXPECT_EQ(accessor().cvc(), u"234");
 
   // Expect the metrics are logged correctly.
   histogram_tester.ExpectUniqueSample(
@@ -2647,17 +2679,18 @@ TEST_F(CreditCardAccessManagerTest,
 // the card that had no interactive authentication flows completed in the
 // associated FormDataImporter.
 TEST_F(CreditCardAccessManagerTest, DestructorResetsCardIdentifier) {
-  auto* form_data_importer = autofill_client().GetFormDataImporter();
-  form_data_importer
-      ->SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+  payments::PaymentsFormDataImporter& payments_form_data_importer =
+      autofill_client().GetFormDataImporter()->GetPaymentsFormDataImporter();
+  payments_form_data_importer
+      .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
           NonInteractivePaymentMethodType::kLocalCard);
   EXPECT_TRUE(
-      test_api(*form_data_importer)
+      test_api(payments_form_data_importer)
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
   DeleteAutofillDriver(autofill_driver());
   EXPECT_FALSE(
-      test_api(*form_data_importer)
+      test_api(payments_form_data_importer)
           .payment_method_type_if_non_interactive_authentication_flow_completed()
           .has_value());
 }

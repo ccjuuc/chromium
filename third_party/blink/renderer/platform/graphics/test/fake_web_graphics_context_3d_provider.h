@@ -10,6 +10,7 @@
 #include "cc/tiles/image_decode_cache.h"
 #include "components/viz/test/test_context_provider.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/client/webgpu_interface_stub.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/config/gpu_feature_info.h"
@@ -69,8 +70,6 @@ class FakeWebGraphicsContext3DProvider : public WebGraphicsContext3DProvider {
   const WebglPreferences& GetWebglPreferences() const override {
     return webgl_preferences_;
   }
-
-  gpu::GLHelper* GetGLHelper() override { return nullptr; }
 
   gpu::InterfaceBase* InterfaceBase() override {
     if (external_raster_interface_) {

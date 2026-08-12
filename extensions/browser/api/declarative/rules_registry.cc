@@ -4,13 +4,12 @@
 
 #include "extensions/browser/api/declarative/rules_registry.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -37,9 +36,9 @@ const char kDuplicateRuleId[] = "Duplicate rule ID: %s";
 const char kErrorCannotRemoveManifestRules[] =
     "Rules declared in the 'event_rules' manifest field cannot be removed";
 
-base::Value::List RulesToValue(
+base::ListValue RulesToValue(
     const std::vector<const api::events::Rule*>& rules) {
-  base::Value::List value;
+  base::ListValue value;
   for (const auto* rule : rules)
     value.Append(rule->ToValue());
   return value;
@@ -166,26 +165,38 @@ std::string RulesRegistry::RemoveRules(
     const std::vector<std::string>& rule_identifiers) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
+  // Deduplicate the list of rule identifiers to prevent removing the same
+  // rule multiple times and invalidating iterators.
+  std::vector<std::string> deduplicated_rule_identifiers = rule_identifiers;
+  std::sort(deduplicated_rule_identifiers.begin(),
+            deduplicated_rule_identifiers.end());
+  deduplicated_rule_identifiers.erase(
+      std::unique(deduplicated_rule_identifiers.begin(),
+                  deduplicated_rule_identifiers.end()),
+      deduplicated_rule_identifiers.end());
+
   // Check if any of the rules are non-removable.
-  for (const RuleId& rule_id : rule_identifiers) {
+  for (const RuleId& rule_id : deduplicated_rule_identifiers) {
     RulesDictionaryKey lookup_key(extension_id, rule_id);
     auto itr = manifest_rules_.find(lookup_key);
     if (itr != manifest_rules_.end())
       return kErrorCannotRemoveManifestRules;
   }
 
-  std::string error = RemoveRulesImpl(extension_id, rule_identifiers);
+  std::string error =
+      RemoveRulesImpl(extension_id, deduplicated_rule_identifiers);
 
   if (!error.empty())
     return error;
 
-  for (auto i = rule_identifiers.cbegin(); i != rule_identifiers.cend(); ++i) {
+  for (auto i = deduplicated_rule_identifiers.cbegin();
+       i != deduplicated_rule_identifiers.cend(); ++i) {
     RulesDictionaryKey lookup_key(extension_id, *i);
     rules_.erase(lookup_key);
   }
 
   MaybeProcessChangedRules(extension_id);
-  RemoveUsedRuleIdentifiers(extension_id, rule_identifiers);
+  RemoveUsedRuleIdentifiers(extension_id, deduplicated_rule_identifiers);
   return kSuccess;
 }
 
@@ -279,7 +290,7 @@ void RulesRegistry::OnExtensionLoaded(const Extension* extension) {
   std::vector<const api::events::Rule*> rules;
   GetAllRules(extension->id(), &rules);
 
-  DeclarativeManifestData* declarative_data =
+  const DeclarativeManifestData* declarative_data =
       DeclarativeManifestData::Get(extension);
   if (declarative_data) {
     std::vector<api::events::Rule> manifest_rules =
@@ -345,7 +356,7 @@ void RulesRegistry::MarkReady() {
 void RulesRegistry::ProcessChangedRules(const ExtensionId& extension_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  DCHECK(base::Contains(process_changed_rules_requested_, extension_id));
+  DCHECK(process_changed_rules_requested_.contains(extension_id));
   process_changed_rules_requested_[extension_id] = NOT_SCHEDULED_FOR_PROCESSING;
 
   std::vector<const api::events::Rule*> new_rules;
@@ -389,7 +400,7 @@ std::string RulesRegistry::CheckAndFillInOptionalRules(
     std::vector<api::events::Rule>* rules) {
   // IDs we have inserted, in case we need to rollback this operation.
   // TODO(rdevlin.cronin, avi): Um, this variable is never inserted into; is
-  // this a bug? https://crbug.com/913655
+  // this a bug? https://crbug.com/40605870
   std::vector<std::string> rollback_log;
 
   // First we insert all rules with existing identifier, so that generated

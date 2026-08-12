@@ -6,11 +6,13 @@
 #define CHROME_BROWSER_COMMAND_UPDATER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/command_updater.h"
+#include "ui/actions/actions.h"
 #include "ui/base/window_open_disposition.h"
 
 class CommandObserver;
@@ -38,20 +40,21 @@ class CommandUpdaterImpl : public CommandUpdater {
   // Overriden from CommandUpdater:
   bool SupportsCommand(int id) const override;
   bool IsCommandEnabled(int id) const override;
-  bool ExecuteCommand(
+  bool ExecuteCommandImpl(
       int id,
-      base::TimeTicks time_stamp = base::TimeTicks::Now()) override;
-  bool ExecuteCommandWithDisposition(
+      base::TimeTicks time_stamp,
+      std::optional<actions::ActionInvocationContext> context) override;
+  bool ExecuteCommandWithDispositionImpl(
       int id,
       WindowOpenDisposition disposition,
-      base::TimeTicks time_stamp = base::TimeTicks::Now()) override;
+      base::TimeTicks time_stamp,
+      std::optional<actions::ActionInvocationContext> context) override;
   void AddCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(int id, CommandObserver* observer) override;
   void RemoveCommandObserver(CommandObserver* observer) override;
   bool UpdateCommandEnabled(int id, bool state) override;
-
-  void DisableAllCommands();
-  std::vector<int> GetAllIds();
+  void DisableAllCommands() override;
+  std::vector<int> GetAllIds() const override;
 
  private:
   // A piece of data about a command - whether or not it is enabled, and a list

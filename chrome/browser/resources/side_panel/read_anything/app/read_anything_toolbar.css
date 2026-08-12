@@ -11,32 +11,36 @@
  * #scheme=relative
  * #css_wrapper_metadata_end */
 
-#play-pause {
+#audio-controls #play-pause {
   --cr-icon-button-icon-size: 20px;
-  --cr-icon-button-fill-color: var(--color-sys-primary);
+  --cr-icon-button-fill-color: var(--play-pause-icon-color);
   --cr-icon-button-size: 28px;
   color: var(--color-side-panel-entry-icon);
 }
 
-@media (forced-colors: active) {
-    #play-pause {
-    --cr-icon-button-fill-color: CanvasText;
-  }
-
-  cr-icon-button#color {
-    display: none;
-  }
+.immersive-toolbar-container #play-pause,
+.immersive-toolbar-container #previousGranularity,
+.immersive-toolbar-container #nextGranularity {
+  --cr-icon-button-focus-outline-color:
+    var(--on-audio-player-focus-outline-color);
 }
 
-.audio-background-when-active-false {
+
+.audio-background-inactive {
   --audio-controls-background: transparent;
   --audio-controls-right-margin: 2px;
   --audio-controls-right-padding: 0px;
 }
 
-.audio-background-when-active-true {
+.audio-background-active {
   --audio-controls-background: var(--color-sys-tonal-container);
   --audio-controls-right-margin: 6px;
+  --audio-controls-right-padding: 4px;
+}
+
+.audio-background-immersive-enabled {
+  --audio-controls-background: var(--audio-player-background-color);
+  --audio-controls-right-margin: 8px;
   --audio-controls-right-padding: 4px;
 }
 
@@ -49,10 +53,33 @@
   height: fit-content;
   margin-inline-end: var(--audio-controls-right-margin);
   padding: 4px var(--audio-controls-right-padding) 4px 4px;
+  position: relative;
+  z-index: 9998;
+}
+
+#audio-controls.audio-background-immersive-enabled {
+  border-radius: 100px;
+  padding: 0 6px;
 }
 
 .audio-controls {
-  margin: 0px;
+  margin: 0;
+}
+
+#audio-controls cr-icon-button {
+  --cr-icon-button-fill-color: var(--audio-controls-icon-color-internal);
+}
+
+#audio-controls.audio-background-immersive-enabled cr-icon-button {
+  margin: 4px 2px;
+}
+
+#line-focus-off {
+  background: var(--audio-player-background-color);
+  border: none;
+  margin-inline-end: 8px;
+  position: relative;
+  z-index: 9998;
 }
 
 /* Separate CSS classes are needed instead of setting the style directly so
@@ -76,8 +103,13 @@
   display: none;
 }
 
+#font-size-increase {
+  --cr-icon-button-fill-color: var(--color-sys-on-surface-subtle);
+}
+
 #font-size-decrease {
   margin-inline-start: 12px;
+  --cr-icon-button-fill-color: var(--color-sys-on-surface-subtle);
 }
 
 #font-size-reset {
@@ -90,6 +122,10 @@
 }
 
 .toolbar-container {
+  --cr-icon-button-fill-color-default: var(--legacy-toolbar-icon-color);
+  --play-pause-icon-color: var(--legacy-audio-player-icon-color);
+  --rate-button-text-color: var(--legacy-toolbar-icon-color);
+  --audio-controls-icon-color-internal: var(--color-sys-on-surface-subtle);
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -99,13 +135,38 @@
 }
 
 .immersive-toolbar-container {
+  --cr-icon-button-fill-color-default: var(--toolbar-icon-color);
+  --play-pause-icon-color: var(--audio-player-icon-color);
+  --rate-button-text-color: var(--audio-controls-icon-color);
+  --audio-controls-icon-color-internal: var(--audio-controls-icon-color);
+  background-color: var(--background-color);
   display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: end;
   overflow: visible;
-  padding: 6px 8px;
+  padding: 16px;
   flex-wrap: var(--toolbar-flex-wrap);
+  font-family: var(--immersive-menu-font);
+  font-size: var(--immersive-menu-font-size);
+  font-style: normal;
+  font-weight: var(--immersive-menu-font-weight);
+  line-height: var(--immersive-menu-font-line-height);
+  outline: none;
+  border: none;
+}
+
+.immersive-toolbar-container cr-icon-button {
+  --cr-icon-button-icon-size: 20px;
+  --cr-icon-button-size: 28px;
+  --cr-icon-button-hover-background-color:
+      var(--toolbar-icon-hover-background-color);
+  --cr-icon-button-focus-outline-color: var(--toolbar-focus-outline-color);
+}
+
+.immersive-toolbar-container cr-button {
+  --cr-focus-outline-color: var(--toolbar-focus-outline-color);
+  --cr-button-text-color: var(--rate-button-text-color);
 }
 
 .announce-block {
@@ -124,7 +185,6 @@
   background-color: transparent;
   border: none;
   border-radius: 50%;
-  --cr-button-text-color: var(--color-sys-on-surface-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -137,12 +197,22 @@
   width: 24px;
 }
 
+.immersive-toolbar-container #rate {
+  --cr-focus-outline-color: var(--on-audio-player-focus-outline-color);
+  height: 28px;
+  width: 28px;
+  margin: 4px 2px;
+}
+
 .separator {
   border: 1px solid var(--color-side-panel-divider);
   display: inline;
   height: 20px;
   margin: 6px 8px;
-  width: 0px;
+  width: 0;
+  /* Ensure this stays above the line focus scrim. */
+  position: relative;
+  z-index: 9998;
 }
 
 .spinner {
@@ -157,4 +227,20 @@
 
 #more-options-menu-dialog::part(dialog) {
   min-width: 92px;
+}
+
+.immersive-font-size-menu::part(dialog) {
+  border-radius: var(--cornerRadii-medium-small, 12px);
+}
+
+@media (forced-colors: active) {
+  cr-icon-button,
+  #audio-controls cr-icon-button,
+  #audio-controls #play-pause {
+    --cr-icon-button-fill-color: CanvasText;
+  }
+
+  cr-icon-button#color {
+    display: none;
+  }
 }

@@ -94,6 +94,53 @@ StringView PlatformEnumToCSSValueString(T e) {
   return GetCSSValueNameAs<StringView>(PlatformEnumToCSSValueID(e));
 }
 
+String SerializeBorderValues(const std::array<String, 3>& values) {
+  static constexpr std::array<const char*, 3> kInitialValues = {
+      "medium",
+      "none",
+      "currentcolor",
+  };
+  StringBuilder result;
+  for (wtf_size_t i = 0; i < values.size(); ++i) {
+    const String& value = values[i];
+    if (value.IsNull() || value == kInitialValues[i]) {
+      continue;
+    }
+    if (!result.empty()) {
+      result.Append(' ');
+    }
+    result.Append(value);
+  }
+  return result.ReleaseString();
+}
+
+bool ShouldSerializeCornerAsNormal(const CSSValuePair& value) {
+  const CSSValuePair& radius = To<CSSValuePair>(value.First());
+  const CSSValue& shape = value.Second();
+  if (!radius.First().IsNumericLiteralValue() ||
+      !radius.Second().IsNumericLiteralValue() ||
+      To<CSSNumericLiteralValue>(radius.First()).DoubleValue() != 0 ||
+      To<CSSNumericLiteralValue>(radius.Second()).DoubleValue() != 0) {
+    return false;
+  }
+  if (const CSSIdentifierValue* id_value =
+          DynamicTo<CSSIdentifierValue>(shape)) {
+    if (id_value->GetValueID() == CSSValueID::kRound) {
+      return true;
+    }
+  }
+  const CSSPrimitiveValue& param =
+      To<cssvalue::CSSSuperellipseValue>(shape).Param();
+  return param.IsNumericLiteralValue() &&
+         To<CSSNumericLiteralValue>(param).DoubleValue() ==
+             Superellipse::Round().Parameter();
+}
+
+String SerializeCornerValue(const CSSValuePair& value) {
+  return ShouldSerializeCornerAsNormal(value) ? String("normal")
+                                              : value.CssText();
+}
+
 }  // namespace
 
 StylePropertySerializer::CSSPropertyValueSetForSerializer::
@@ -114,6 +161,9 @@ StylePropertySerializer::CSSPropertyValueSetForSerializer::
       }
       if (static_cast<unsigned>(all_index_) >= i) {
         continue;
+      }
+      if (IsCSSPropertyIDWithName(property.PropertyID())) {
+        longhand_after_all_.set(GetCSSPropertyIDIndex(property.PropertyID()));
       }
       if (property.Value() == all_property.Value() &&
           property.IsImportant() == all_property.IsImportant()) {
@@ -141,7 +191,7 @@ StylePropertySerializer::CSSPropertyValueSetForSerializer::PropertyCount()
     // When expanding all:* we need to serialize all properties set by the "all"
     // property, but also still walk the actual property set to include any
     // custom property declarations.
-    count += kIntLastCSSProperty - kIntFirstCSSProperty + 1;
+    count += kAllLonghandCount;
   }
   return count;
 }
@@ -149,25 +199,18 @@ StylePropertySerializer::CSSPropertyValueSetForSerializer::PropertyCount()
 StylePropertySerializer::PropertyValueForSerializer
 StylePropertySerializer::CSSPropertyValueSetForSerializer::PropertyAt(
     unsigned index) const {
-  if (IsIndexInPropertySet(index)) {
+  if (!HasExpandedAllProperty()) {
+    DCHECK(IsIndexInPropertySet(index));
     return StylePropertySerializer::PropertyValueForSerializer(
         property_set_->PropertyAt(index));
   }
 
-  // When expanding "all" into longhands, PropertyAt() is called with indices
-  // outside the size of the property_set_ to serialize all longshands.
-  DCHECK(HasExpandedAllProperty());
-  CSSPropertyID property_id = IndexToPropertyID(index);
-  DCHECK(IsCSSPropertyIDWithName(property_id));
-  if (longhand_property_used_.test(GetCSSPropertyIDIndex(property_id))) {
-    // A property declaration for property_id overrides the "all" declaration.
-    // Access that declaration from the property set.
-    int real_index = property_set_->FindPropertyIndex(property_id);
-    DCHECK_NE(real_index, -1);
+  if (IsIndexInPropertySet(index)) {
     return StylePropertySerializer::PropertyValueForSerializer(
-        property_set_->PropertyAt(real_index));
+        property_set_->PropertyAt(index - kAllLonghandCount));
   }
 
+  CSSPropertyID property_id = IndexToPropertyID(index);
   const CSSPropertyValue& property = property_set_->PropertyAt(all_index_);
   return StylePropertySerializer::PropertyValueForSerializer(
       CSSProperty::Get(property_id).GetCSSPropertyName(), property.Value(),
@@ -196,11 +239,29 @@ bool StylePropertySerializer::CSSPropertyValueSetForSerializer::
         GetCSSPropertyIDIndex(property.PropertyID()));
   }
 
-  // Custom property declarations are never overridden by "all" and are only
-  // traversed for the indices into the property set.
   if (IsIndexInPropertySet(index)) {
-    return property_set_->PropertyAt(index).PropertyID() ==
-           CSSPropertyID::kVariable;
+    const CSSPropertyValue& property =
+        property_set_->PropertyAt(index - kAllLonghandCount);
+    // Custom property declarations are never overridden by "all" and are only
+    // traversed in the in-set range.
+    if (property.PropertyID() == CSSPropertyID::kVariable) {
+      return true;
+    }
+    if (property.PropertyID() == CSSPropertyID::kAll) {
+      return false;
+    }
+    if (!IsCSSPropertyIDWithName(property.PropertyID())) {
+      return false;
+    }
+    if (property.IsAffectedByAll()) {
+      return longhand_after_all_.test(
+          GetCSSPropertyIDIndex(property.PropertyID()));
+    }
+    // The all property is a shorthand that resets all CSS properties except
+    // direction and unicode-bidi. It only accepts the CSS-wide keywords.
+    // c.f. https://drafts.csswg.org/css-cascade/#all-shorthand
+    return longhand_property_used_.test(
+        GetCSSPropertyIDIndex(property.PropertyID()));
   }
 
   CSSPropertyID property_id = IndexToPropertyID(index);
@@ -220,7 +281,12 @@ bool StylePropertySerializer::CSSPropertyValueSetForSerializer::
   // direction and unicode-bidi. It only accepts the CSS-wide keywords.
   // c.f. https://drafts.csswg.org/css-cascade/#all-shorthand
   if (!property_class.IsAffectedByAll()) {
-    return longhand_property_used_.test(GetCSSPropertyIDIndex(property_id));
+    return false;
+  }
+
+  // Skip properties that appear after "all" in the property set.
+  if (longhand_after_all_.test(GetCSSPropertyIDIndex(property_id))) {
+    return false;
   }
 
   return true;
@@ -229,10 +295,21 @@ bool StylePropertySerializer::CSSPropertyValueSetForSerializer::
 int StylePropertySerializer::CSSPropertyValueSetForSerializer::
     FindPropertyIndex(const CSSProperty& property) const {
   CSSPropertyID property_id = property.PropertyID();
-  if (!HasExpandedAllProperty()) {
+  if (!need_to_expand_all_) {
+    if (HasAllProperty() && IsCSSPropertyIDWithName(property_id)) {
+      return all_index_;
+    }
     return property_set_->FindPropertyIndex(property_id);
   }
-  return GetCSSPropertyIDIndex(property_id) + property_set_->PropertyCount();
+
+  if (IsCSSPropertyIDWithName(property_id) &&
+      longhand_after_all_.test(GetCSSPropertyIDIndex(property_id))) {
+    int real_index = property_set_->FindPropertyIndex(property_id);
+    DCHECK_GE(real_index, 0);
+    return static_cast<int>(kAllLonghandCount) + real_index;
+  }
+
+  return GetCSSPropertyIDIndex(property_id);
 }
 
 const CSSValue*
@@ -341,7 +418,7 @@ String StylePropertySerializer::AsText() const {
       continue;
     }
 
-    Vector<StylePropertyShorthand, 4> shorthands;
+    MatchingShorthandsVector shorthands;
     getMatchingShorthandsForLonghand(property_id, &shorthands);
     bool serialized_as_shorthand = false;
     for (const StylePropertyShorthand& shorthand : shorthands) {
@@ -538,13 +615,13 @@ String StylePropertySerializer::SerializeShorthand(
     case CSSPropertyID::kBorderImage:
       return BorderImagePropertyValue();
     case CSSPropertyID::kBorderTop:
-      return GetShorthandValue(borderTopShorthand());
+      return GetShorthandValueForBorder(borderTopShorthand());
     case CSSPropertyID::kBorderRight:
-      return GetShorthandValue(borderRightShorthand());
+      return GetShorthandValueForBorder(borderRightShorthand());
     case CSSPropertyID::kBorderBottom:
-      return GetShorthandValue(borderBottomShorthand());
+      return GetShorthandValueForBorder(borderBottomShorthand());
     case CSSPropertyID::kBorderLeft:
-      return GetShorthandValue(borderLeftShorthand());
+      return GetShorthandValueForBorder(borderLeftShorthand());
     case CSSPropertyID::kBorderBlock:
       return BorderPropertyValue(borderBlockWidthShorthand(),
                                  borderBlockStyleShorthand(),
@@ -589,6 +666,14 @@ String StylePropertySerializer::SerializeShorthand(
     case CSSPropertyID::kRowRule:
       return GetShorthandValueForGapDecorationsRule(
           rowRuleShorthand(), CSSGapDecorationPropertyDirection::kRow);
+    case CSSPropertyID::kColumnRuleInsetCap:
+      return GetShorthandValueForGapDecorationsRuleInsetCapJunction(
+          columnRuleInsetCapShorthand(),
+          CSSGapDecorationPropertyDirection::kColumn, /*is_cap=*/true);
+    case CSSPropertyID::kRowRuleInsetCap:
+      return GetShorthandValueForGapDecorationsRuleInsetCapJunction(
+          rowRuleInsetCapShorthand(), CSSGapDecorationPropertyDirection::kRow,
+          /*is_cap=*/true);
     case CSSPropertyID::kColumnRuleInset:
       return GetShorthandValueForGapDecorationsRuleInset(
           columnRuleInsetShorthand(),
@@ -596,6 +681,26 @@ String StylePropertySerializer::SerializeShorthand(
     case CSSPropertyID::kRowRuleInset:
       return GetShorthandValueForGapDecorationsRuleInset(
           rowRuleInsetShorthand(), CSSGapDecorationPropertyDirection::kRow);
+    case CSSPropertyID::kColumnRuleInsetEnd:
+      return GetShorthandValueForGapDecorationsRuleInsetStartEnd(
+          columnRuleInsetEndShorthand());
+    case CSSPropertyID::kColumnRuleInsetStart:
+      return GetShorthandValueForGapDecorationsRuleInsetStartEnd(
+          columnRuleInsetStartShorthand());
+    case CSSPropertyID::kRowRuleInsetEnd:
+      return GetShorthandValueForGapDecorationsRuleInsetStartEnd(
+          rowRuleInsetEndShorthand());
+    case CSSPropertyID::kRowRuleInsetStart:
+      return GetShorthandValueForGapDecorationsRuleInsetStartEnd(
+          rowRuleInsetStartShorthand());
+    case CSSPropertyID::kColumnRuleInsetJunction:
+      return GetShorthandValueForGapDecorationsRuleInsetCapJunction(
+          columnRuleInsetJunctionShorthand(),
+          CSSGapDecorationPropertyDirection::kColumn, /*is_cap=*/false);
+    case CSSPropertyID::kRowRuleInsetJunction:
+      return GetShorthandValueForGapDecorationsRuleInsetCapJunction(
+          rowRuleInsetJunctionShorthand(),
+          CSSGapDecorationPropertyDirection::kRow, /*is_cap=*/false);
     case CSSPropertyID::kColumns:
       return GetShorthandValueForColumns(columnsShorthand());
     case CSSPropertyID::kContainIntrinsicSize:
@@ -614,8 +719,6 @@ String StylePropertySerializer::SerializeShorthand(
       return GetShorthandValueForGridLine(gridColumnShorthand());
     case CSSPropertyID::kGridLanes:
       return GetShorthandValueForGridLanes(gridLanesShorthand());
-    case CSSPropertyID::kGridLanesFlow:
-      return GetShorthandValue(gridLanesFlowShorthand());
     case CSSPropertyID::kGridRow:
       return GetShorthandValueForGridLine(gridRowShorthand());
     case CSSPropertyID::kGridTemplate:
@@ -628,9 +731,9 @@ String StylePropertySerializer::SerializeShorthand(
       return Get2Values(insetBlockShorthand());
     case CSSPropertyID::kInsetInline:
       return Get2Values(insetInlineShorthand());
-    case CSSPropertyID::kLineClamp:
+    case CSSPropertyID::kAlternativeLineClampShorthand:
       return LineClampValue(/* is_webkit_line_clamp */ false);
-    case CSSPropertyID::kAlternativeWebkitLineClamp:
+    case CSSPropertyID::kAlternativeWebkitLineClampShorthand:
       return LineClampValue(/* is_webkit_line_clamp */ true);
     case CSSPropertyID::kPlaceContent:
       return Get2Values(placeContentShorthand());
@@ -679,11 +782,26 @@ String StylePropertySerializer::SerializeShorthand(
       return GetShorthandValueForBidirectionalGapRules(ruleBreakShorthand());
     case CSSPropertyID::kRuleColor:
       return GetShorthandValueForBidirectionalGapRules(ruleColorShorthand());
+    case CSSPropertyID::kRuleInsetCap:
+      return GetShorthandValueForBidirectionalGapRuleInsetCapJunction(
+          ruleInsetCapShorthand());
+    case CSSPropertyID::kRuleInsetJunction:
+      return GetShorthandValueForBidirectionalGapRuleInsetCapJunction(
+          ruleInsetJunctionShorthand());
     case CSSPropertyID::kRuleInset:
       return GetShorthandValueForBidirectionalGapRuleInset(
           ruleInsetShorthand());
+    case CSSPropertyID::kRuleInsetEnd:
+      return GetShorthandValueForBidirectionalGapRuleInsetStartEnd(
+          ruleInsetEndShorthand());
+    case CSSPropertyID::kRuleInsetStart:
+      return GetShorthandValueForBidirectionalGapRuleInsetStartEnd(
+          ruleInsetStartShorthand());
     case CSSPropertyID::kRuleStyle:
       return GetShorthandValueForBidirectionalGapRules(ruleStyleShorthand());
+    case CSSPropertyID::kRuleVisibilityItems:
+      return GetShorthandValueForBidirectionalGapRules(
+          ruleVisibilityItemsShorthand());
     case CSSPropertyID::kRuleWidth:
       return GetShorthandValueForBidirectionalGapRules(ruleWidthShorthand());
     case CSSPropertyID::kTextBox:
@@ -694,9 +812,9 @@ String StylePropertySerializer::SerializeShorthand(
       return TextSpacingValue();
     case CSSPropertyID::kTimelineTrigger:
       return GetLayeredShorthandValue(timelineTriggerShorthand());
-    case CSSPropertyID::kTimelineTriggerRange:
-      return TimelineTriggerRangeShorthandValue();
-    case CSSPropertyID::kTimelineTriggerExitRange:
+    case CSSPropertyID::kTimelineTriggerActivationRange:
+      return TimelineTriggerActivationRangeShorthandValue();
+    case CSSPropertyID::kTimelineTriggerActiveRange:
       return TimelineTriggerExitRangeShorthandValue();
     case CSSPropertyID::kWebkitTextStroke:
       return GetShorthandValue(webkitTextStrokeShorthand());
@@ -717,8 +835,40 @@ String StylePropertySerializer::SerializeShorthand(
     }
     case CSSPropertyID::kBorderRadius:
       return BorderRadiusValue();
-    case CSSPropertyID::kCorners:
+    case CSSPropertyID::kCorner:
       return CornersValue();
+    case CSSPropertyID::kCornerTopLeft:
+      return SingleCornerShorthandValue(cornerTopLeftShorthand());
+    case CSSPropertyID::kCornerTopRight:
+      return SingleCornerShorthandValue(cornerTopRightShorthand());
+    case CSSPropertyID::kCornerBottomLeft:
+      return SingleCornerShorthandValue(cornerBottomLeftShorthand());
+    case CSSPropertyID::kCornerBottomRight:
+      return SingleCornerShorthandValue(cornerBottomRightShorthand());
+    case CSSPropertyID::kCornerStartStart:
+      return SingleCornerShorthandValue(cornerStartStartShorthand());
+    case CSSPropertyID::kCornerStartEnd:
+      return SingleCornerShorthandValue(cornerStartEndShorthand());
+    case CSSPropertyID::kCornerEndStart:
+      return SingleCornerShorthandValue(cornerEndStartShorthand());
+    case CSSPropertyID::kCornerEndEnd:
+      return SingleCornerShorthandValue(cornerEndEndShorthand());
+    case CSSPropertyID::kCornerTop:
+      return CornerPairShorthandValue(cornerTopShorthand());
+    case CSSPropertyID::kCornerRight:
+      return CornerPairShorthandValue(cornerRightShorthand());
+    case CSSPropertyID::kCornerBottom:
+      return CornerPairShorthandValue(cornerBottomShorthand());
+    case CSSPropertyID::kCornerLeft:
+      return CornerPairShorthandValue(cornerLeftShorthand());
+    case CSSPropertyID::kCornerBlockStart:
+      return CornerPairShorthandValue(cornerBlockStartShorthand());
+    case CSSPropertyID::kCornerBlockEnd:
+      return CornerPairShorthandValue(cornerBlockEndShorthand());
+    case CSSPropertyID::kCornerInlineStart:
+      return CornerPairShorthandValue(cornerInlineStartShorthand());
+    case CSSPropertyID::kCornerInlineEnd:
+      return CornerPairShorthandValue(cornerInlineEndShorthand());
     case CSSPropertyID::kCornerShape:
       return CornerShapeValue();
     case CSSPropertyID::kCornerTopShape:
@@ -926,18 +1076,9 @@ bool IsIdentifierPair(const CSSValue& value, CSSValueID ident) {
          IsIdentifier(pair_value->Second(), ident);
 }
 
-CSSValue* TimelineValueItem(wtf_size_t index,
-                            const CSSValueList& name_list,
-                            const CSSValueList& axis_list,
-                            const CSSValueList* inset_list) {
-  DCHECK_LT(index, name_list.length());
-  DCHECK_LT(index, axis_list.length());
-  DCHECK(!inset_list || index < inset_list->length());
-
-  const CSSValue& name = name_list.Item(index);
-  const CSSValue& axis = axis_list.Item(index);
-  const CSSValue* inset = inset_list ? &inset_list->Item(index) : nullptr;
-
+CSSValue* TimelineValueItem(const CSSValue& name,
+                            const CSSValue& axis,
+                            const CSSValue* inset) {
   CSSValueList* list = CSSValueList::CreateSpaceSeparated();
 
   // Note that the name part can never be omitted, since e.g. serializing
@@ -971,21 +1112,22 @@ String StylePropertySerializer::TimelineValue(
           ? To<CSSValueList>(
                 property_set_.GetPropertyCSSValue(*shorthand.properties()[2]))
           : nullptr;
-
-  // The scroll/view-timeline shorthand can not expand to longhands of two
-  // different lengths, so we can also not contract two different-longhands
-  // into a single shorthand.
-  if (name_list.length() != axis_list.length()) {
-    return "";
-  }
-  if (inset_list && name_list.length() != inset_list->length()) {
-    return "";
+  CHECK_NE(axis_list.length(), 0u);
+  if (inset_list) {
+    CHECK_NE(inset_list->length(), 0u);
   }
 
+  // Per https://drafts.csswg.org/css-values-4/#linked-properties,
+  // the *-name property is the coordinating list base property, which
+  // determines the length of the coordinated value list. Other properties
+  // cycle if shorter or are truncated if longer.
   CSSValueList* list = CSSValueList::CreateCommaSeparated();
 
   for (wtf_size_t i = 0; i < name_list.length(); ++i) {
-    list->Append(*TimelineValueItem(i, name_list, axis_list, inset_list));
+    const CSSValue& axis = axis_list.Item(i % axis_list.length());
+    const CSSValue* inset =
+        inset_list ? &inset_list->Item(i % inset_list->length()) : nullptr;
+    list->Append(*TimelineValueItem(name_list.Item(i), axis, inset));
   }
 
   return list->CssText();
@@ -1138,20 +1280,20 @@ String StylePropertySerializer::AnimationRangeShorthandValue() const {
   return list->CssText();
 }
 
-String StylePropertySerializer::TimelineTriggerRangeShorthandValue() const {
-  CHECK_EQ(timelineTriggerRangeShorthand().length(), 2u);
-  CHECK_EQ(timelineTriggerRangeShorthand().properties()[0],
-           &GetCSSPropertyTimelineTriggerRangeStart());
-  CHECK_EQ(timelineTriggerRangeShorthand().properties()[1],
-           &GetCSSPropertyTimelineTriggerRangeEnd());
+String StylePropertySerializer::TimelineTriggerActivationRangeShorthandValue()
+    const {
+  CHECK_EQ(timelineTriggerActivationRangeShorthand().length(), 2u);
+  CHECK_EQ(timelineTriggerActivationRangeShorthand().properties()[0],
+           &GetCSSPropertyTimelineTriggerActivationRangeStart());
+  CHECK_EQ(timelineTriggerActivationRangeShorthand().properties()[1],
+           &GetCSSPropertyTimelineTriggerActivationRangeEnd());
 
   const CSSValueList& start_list =
       To<CSSValueList>(*property_set_.GetPropertyCSSValue(
-          GetCSSPropertyTimelineTriggerRangeStart()));
+          GetCSSPropertyTimelineTriggerActivationRangeStart()));
   const CSSValueList& end_list =
       To<CSSValueList>(*property_set_.GetPropertyCSSValue(
-          GetCSSPropertyTimelineTriggerRangeEnd()));
-
+          GetCSSPropertyTimelineTriggerActivationRangeEnd()));
   if (start_list.length() != end_list.length()) {
     return "";
   }
@@ -1166,19 +1308,18 @@ String StylePropertySerializer::TimelineTriggerRangeShorthandValue() const {
 }
 
 String StylePropertySerializer::TimelineTriggerExitRangeShorthandValue() const {
-  CHECK_EQ(timelineTriggerExitRangeShorthand().length(), 2u);
-  CHECK_EQ(timelineTriggerExitRangeShorthand().properties()[0],
-           &GetCSSPropertyTimelineTriggerExitRangeStart());
-  CHECK_EQ(timelineTriggerExitRangeShorthand().properties()[1],
-           &GetCSSPropertyTimelineTriggerExitRangeEnd());
+  CHECK_EQ(timelineTriggerActiveRangeShorthand().length(), 2u);
+  CHECK_EQ(timelineTriggerActiveRangeShorthand().properties()[0],
+           &GetCSSPropertyTimelineTriggerActiveRangeStart());
+  CHECK_EQ(timelineTriggerActiveRangeShorthand().properties()[1],
+           &GetCSSPropertyTimelineTriggerActiveRangeEnd());
 
   const CSSValueList& start_list =
       To<CSSValueList>(*property_set_.GetPropertyCSSValue(
-          GetCSSPropertyTimelineTriggerExitRangeStart()));
+          GetCSSPropertyTimelineTriggerActiveRangeStart()));
   const CSSValueList& end_list =
       To<CSSValueList>(*property_set_.GetPropertyCSSValue(
-          GetCSSPropertyTimelineTriggerExitRangeEnd()));
-
+          GetCSSPropertyTimelineTriggerActiveRangeEnd()));
   if (start_list.length() != end_list.length()) {
     return "";
   }
@@ -1409,7 +1550,7 @@ String StylePropertySerializer::FontVariantValue() const {
 
   AppendFontLonghandValueIfNotNormal(GetCSSPropertyFontVariantLigatures(),
                                      result);
-  if (result.ToString() == "none") {
+  if (result == "none") {
     is_variant_ligatures_none = true;
   }
   const unsigned variant_ligatures_result_length = result.length();
@@ -1518,10 +1659,10 @@ String StylePropertySerializer::OffsetValue() const {
   const CSSValue* anchor =
       property_set_.GetPropertyCSSValue(GetCSSPropertyOffsetAnchor());
 
-  auto is_initial_identifier_value = [](const CSSValue* value,
+  auto is_initial_identifier_value = [](const CSSValue& value,
                                         CSSValueID id) -> bool {
-    return value->IsIdentifierValue() &&
-           DynamicTo<CSSIdentifierValue>(value)->GetValueID() == id;
+    auto* identifier_value = DynamicTo<CSSIdentifierValue>(value);
+    return identifier_value && identifier_value->GetValueID() == id;
   };
 
   bool use_distance =
@@ -1529,7 +1670,7 @@ String StylePropertySerializer::OffsetValue() const {
                     To<CSSNumericLiteralValue>(*distance).DoubleValue() == 0.0);
   const auto* rotate_list_value = DynamicTo<CSSValueList>(rotate);
   bool is_rotate_auto = rotate_list_value && rotate_list_value->length() == 1 &&
-                        is_initial_identifier_value(&rotate_list_value->First(),
+                        is_initial_identifier_value(rotate_list_value->First(),
                                                     CSSValueID::kAuto);
   bool is_rotate_zero =
       rotate_list_value && rotate_list_value->length() == 1 &&
@@ -1541,20 +1682,20 @@ String StylePropertySerializer::OffsetValue() const {
       rotate_list_value->Item(1).IsNumericLiteralValue() &&
       (To<CSSNumericLiteralValue>(rotate_list_value->Item(1)).DoubleValue() ==
        0.0) &&
-      is_initial_identifier_value(&rotate_list_value->Item(0),
+      is_initial_identifier_value(rotate_list_value->Item(0),
                                   CSSValueID::kAuto);
   bool use_rotate =
       rotate && ((use_distance && is_rotate_zero) ||
-                 (!is_initial_identifier_value(rotate, CSSValueID::kAuto) &&
+                 (!is_initial_identifier_value(*rotate, CSSValueID::kAuto) &&
                   !is_rotate_auto && !is_rotate_auto_zero));
   bool use_path =
       path && (use_rotate || use_distance ||
-               !is_initial_identifier_value(path, CSSValueID::kNone));
+               !is_initial_identifier_value(*path, CSSValueID::kNone));
   bool use_position =
-      position && (!use_path ||
-                   !is_initial_identifier_value(position, CSSValueID::kNormal));
+      position && (!use_path || !is_initial_identifier_value(
+                                    *position, CSSValueID::kNormal));
   bool use_anchor =
-      anchor && (!is_initial_identifier_value(anchor, CSSValueID::kAuto));
+      anchor && (!is_initial_identifier_value(*anchor, CSSValueID::kAuto));
 
   StringBuilder result;
   if (use_position) {
@@ -1937,7 +2078,7 @@ String StylePropertySerializer::GetLayeredShorthandValue(
             omit_value = true;
           }
         } else if (property->IDEquals(
-                       CSSPropertyID::kTimelineTriggerRangeStart)) {
+                       CSSPropertyID::kTimelineTriggerActivationRangeStart)) {
           if (const auto* start_identifier =
                   DynamicTo<CSSIdentifierValue>(value)) {
             // Only 'normal' is stored as an identifier, other values are lists.
@@ -1946,13 +2087,13 @@ String StylePropertySerializer::GetLayeredShorthandValue(
             omit_value = true;
           }
         } else if (property->IDEquals(
-                       CSSPropertyID::kTimelineTriggerRangeEnd)) {
+                       CSSPropertyID::kTimelineTriggerActivationRangeEnd)) {
           if (const auto* end_identifier =
                   DynamicTo<CSSIdentifierValue>(value)) {
             DCHECK(end_identifier->GetValueID() == CSSValueID::kNormal);
             omit_value = true;
           } else {
-            // Get timeline-trigger-range-start.
+            // Get timeline-trigger-activation-range-start.
             // The form "name X name 100%" must contract to "name X".
             //
             // https://github.com/w3c/csswg-drafts/issues/8438
@@ -1965,7 +2106,7 @@ String StylePropertySerializer::GetLayeredShorthandValue(
             omit_value = DropAnimationRangeEndValue(*start_value, *value);
           }
         } else if (property->IDEquals(
-                       CSSPropertyID::kTimelineTriggerExitRangeStart)) {
+                       CSSPropertyID::kTimelineTriggerActiveRangeStart)) {
           if (const auto* start_identifier =
                   DynamicTo<CSSIdentifierValue>(value)) {
             // Only 'normal' and 'auto' are stored as identifiers, other values
@@ -1976,14 +2117,14 @@ String StylePropertySerializer::GetLayeredShorthandValue(
             omit_value = start_identifier->GetValueID() == CSSValueID::kAuto;
           }
         } else if (property->IDEquals(
-                       CSSPropertyID::kTimelineTriggerExitRangeEnd)) {
+                       CSSPropertyID::kTimelineTriggerActiveRangeEnd)) {
           if (const auto* end_identifier =
                   DynamicTo<CSSIdentifierValue>(value)) {
             DCHECK(end_identifier->GetValueID() == CSSValueID::kAuto ||
                    end_identifier->GetValueID() == CSSValueID::kNormal);
             omit_value = end_identifier->GetValueID() == CSSValueID::kAuto;
           } else {
-            // Get timeline-trigger-exit-range-start.
+            // Get timeline-trigger-active-range-start.
             const auto* property_values =
                 To<CSSValueList>(values[property_index - 1].Get());
 
@@ -2004,7 +2145,7 @@ String StylePropertySerializer::GetLayeredShorthandValue(
             layer_result.Append(" 0% 0% / ");
           }
         } else if (property->IDEquals(
-                       CSSPropertyID::kTimelineTriggerExitRangeStart)) {
+                       CSSPropertyID::kTimelineTriggerActiveRangeStart)) {
           layer_result.Append(" / ");
         } else if (!layer_result.empty()) {
           // Do this second to avoid ending up with an extra space in the output
@@ -2066,6 +2207,20 @@ String StylePropertySerializer::GetShorthandValue(
   return result.ReleaseString();
 }
 
+String StylePropertySerializer::GetShorthandValueForBorder(
+    const StylePropertyShorthand& shorthand) const {
+  DCHECK_EQ(shorthand.length(), 3u);
+
+  std::array<String, 3> values;
+  for (size_t i = 0; i < shorthand.length(); i++) {
+    const CSSValue* value =
+        property_set_.GetPropertyCSSValue(*shorthand.properties()[i]);
+    values[i] = value->CssText();
+  }
+
+  return SerializeBorderValues(values);
+}
+
 String StylePropertySerializer::GetShorthandValueForRule(
     const StylePropertyShorthand& row_rule_shorthand,
     const StylePropertyShorthand& column_rule_shorthand) const {
@@ -2094,50 +2249,130 @@ String StylePropertySerializer::GetShorthandValueForBidirectionalGapRuleInset(
   CHECK_EQ(shorthand.length(), 8u);
 
   StringBuilder result;
-  const CSSValue* column_rule_edge_start_inset_value =
+  const CSSValue* column_rule_inset_cap_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
-  const CSSValue* column_rule_edge_end_inset_value =
+  const CSSValue* column_rule_inset_cap_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
-  const CSSValue* column_rule_interior_start_inset_value =
+  const CSSValue* column_rule_inset_junction_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
-  const CSSValue* column_rule_interior_end_inset_value =
+  const CSSValue* column_rule_inset_junction_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[3]);
-  const CSSValue* row_rule_edge_start_inset_value =
+  const CSSValue* row_rule_inset_cap_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[4]);
-  const CSSValue* row_rule_edge_end_inset_value =
+  const CSSValue* row_rule_inset_cap_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[5]);
-  const CSSValue* row_rule_interior_start_inset_value =
+  const CSSValue* row_rule_inset_junction_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[6]);
-  const CSSValue* row_rule_interior_end_inset_value =
+  const CSSValue* row_rule_inset_junction_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[7]);
 
   // The `rule-inset` shorthand is bi-directional, so the values should be
   // equivalent.
   //
   // https://drafts.csswg.org/css-gaps-1/#outset
-  if (!base::ValuesEquivalent(column_rule_edge_start_inset_value,
-                              row_rule_edge_start_inset_value) ||
-      !base::ValuesEquivalent(column_rule_edge_end_inset_value,
-                              row_rule_edge_end_inset_value) ||
-      !base::ValuesEquivalent(column_rule_interior_start_inset_value,
-                              row_rule_interior_start_inset_value) ||
-      !base::ValuesEquivalent(column_rule_interior_end_inset_value,
-                              row_rule_interior_end_inset_value)) {
+  if (!base::ValuesEquivalent(column_rule_inset_cap_start_value,
+                              row_rule_inset_cap_start_value) ||
+      !base::ValuesEquivalent(column_rule_inset_cap_end_value,
+                              row_rule_inset_cap_end_value) ||
+      !base::ValuesEquivalent(column_rule_inset_junction_start_value,
+                              row_rule_inset_junction_start_value) ||
+      !base::ValuesEquivalent(column_rule_inset_junction_end_value,
+                              row_rule_inset_junction_end_value)) {
     return String();
   }
-  if (!column_rule_edge_start_inset_value->IsInitialValue()) {
-    result.Append(column_rule_edge_start_inset_value->CssText());
+  if (AllCSSValuesEqual({column_rule_inset_cap_start_value,
+                         column_rule_inset_cap_end_value,
+                         column_rule_inset_junction_start_value,
+                         column_rule_inset_junction_end_value})) {
+    return column_rule_inset_cap_start_value->CssText();
+  }
+
+  if (!column_rule_inset_cap_start_value->IsInitialValue()) {
+    result.Append(column_rule_inset_cap_start_value->CssText());
     result.Append(' ');
-    result.Append(column_rule_edge_end_inset_value->CssText());
+    result.Append(column_rule_inset_cap_end_value->CssText());
     result.Append(' ');
     result.Append('/');
     result.Append(' ');
-    result.Append(column_rule_interior_start_inset_value->CssText());
+    result.Append(column_rule_inset_junction_start_value->CssText());
     result.Append(' ');
-    result.Append(column_rule_interior_end_inset_value->CssText());
+    result.Append(column_rule_inset_junction_end_value->CssText());
   }
 
   return result.ReleaseString();
+}
+
+String StylePropertySerializer::
+    GetShorthandValueForBidirectionalGapRuleInsetCapJunction(
+        const StylePropertyShorthand& shorthand) const {
+  CHECK_EQ(shorthand.length(), 4u);
+
+  StringBuilder result;
+  const CSSValue* column_rule_inset_cap_junction_start_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
+  const CSSValue* column_rule_inset_cap_junction_end_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
+  const CSSValue* row_rule_inset_cap_junction_start_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
+  const CSSValue* row_rule_inset_cap_junction_end_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[3]);
+
+  // The `rule-inset` shorthand is bi-directional, so the values should be
+  // equivalent.
+  //
+  // https://drafts.csswg.org/css-gaps-1/#inset
+  if (!base::ValuesEquivalent(column_rule_inset_cap_junction_start_value,
+                              row_rule_inset_cap_junction_start_value) ||
+      !base::ValuesEquivalent(column_rule_inset_cap_junction_end_value,
+                              row_rule_inset_cap_junction_end_value) ||
+      !base::ValuesEquivalent(column_rule_inset_cap_junction_start_value,
+                              row_rule_inset_cap_junction_start_value) ||
+      !base::ValuesEquivalent(column_rule_inset_cap_junction_end_value,
+                              row_rule_inset_cap_junction_end_value)) {
+    return String();
+  }
+
+  if (!column_rule_inset_cap_junction_start_value->IsInitialValue()) {
+    result.Append(column_rule_inset_cap_junction_start_value->CssText());
+    // Only serialize the end inset if it differs from the start inset.
+    if (column_rule_inset_cap_junction_start_value !=
+        column_rule_inset_cap_junction_end_value) {
+      result.Append(' ');
+      result.Append(column_rule_inset_cap_junction_end_value->CssText());
+    }
+  }
+  return result.ReleaseString();
+}
+
+String
+StylePropertySerializer::GetShorthandValueForBidirectionalGapRuleInsetStartEnd(
+    const StylePropertyShorthand& shorthand) const {
+  CHECK_EQ(shorthand.length(), 4u);
+
+  const CSSValue* column_cap_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
+  const CSSValue* column_junction_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
+  const CSSValue* row_cap_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
+  const CSSValue* row_junction_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[3]);
+
+  // The shorthand is bi-directional and all four longhands must be equal.
+  //
+  // https://drafts.csswg.org/css-gaps-1/#inset
+  if (!base::ValuesEquivalent(column_cap_inset_value,
+                              column_junction_inset_value) ||
+      !base::ValuesEquivalent(column_cap_inset_value, row_cap_inset_value) ||
+      !base::ValuesEquivalent(column_cap_inset_value,
+                              row_junction_inset_value)) {
+    return String();
+  }
+
+  if (!column_cap_inset_value->IsInitialValue()) {
+    return column_cap_inset_value->CssText();
+  }
+  return String();
 }
 
 String StylePropertySerializer::GetShorthandValueForBidirectionalGapRules(
@@ -2257,12 +2492,6 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
   const wtf_size_t count = width_values->length();
 
   // If the longhands differ in length, return an empty string.
-  // Constructing a shorthand from misaligned longhands is non-trivial and
-  // currently not supported.
-  //
-  // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-  // need to construct the shorthand from individual separate longhands that
-  // don't align.
   if (count != style_values->length() || count != color_values->length()) {
     return String();
   }
@@ -2280,20 +2509,12 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
     if (const auto* width_repeat_value =
             DynamicTo<cssvalue::CSSRepeatValue>(width_values->Item(i))) {
       // Return an empty string if values don't align.
-      //
-      // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-      // need to construct the shorthand from individual separate longhands that
-      // don't align.
       if (!style_repeat_value || !color_repeat_value) {
         return String();
       }
 
       const bool is_auto_repeater = width_repeat_value->IsAutoRepeatValue();
       // Return an empty string if values don't align.
-      //
-      // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-      // need to construct the shorthand from individual separate longhands that
-      // don't align.
       if (is_auto_repeater != style_repeat_value->IsAutoRepeatValue() ||
           is_auto_repeater != color_repeat_value->IsAutoRepeatValue()) {
         return String();
@@ -2303,10 +2524,6 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
       if (!is_auto_repeater) {
         repetitions = width_repeat_value->Repetitions();
         // Return an empty string if values don't align.
-        //
-        // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-        // need to construct the shorthand from individual separate longhands
-        // that don't align.
         if (!base::ValuesEquivalent(repetitions,
                                     style_repeat_value->Repetitions()) ||
             !base::ValuesEquivalent(repetitions,
@@ -2319,10 +2536,6 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
           width_repeat_value->Values().length();
 
       // Return an empty string if values don't align.
-      //
-      // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-      // need to construct the shorthand from individual separate longhands that
-      // don't align.
       if (repeated_values_count != style_repeat_value->Values().length() ||
           repeated_values_count != color_repeat_value->Values().length()) {
         return String();
@@ -2357,10 +2570,6 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
       result.Append(repeat_result.ReleaseString());
     } else {
       // Return an empty string if values don't align.
-      //
-      // TODO(crbug.com/416535734): Figure out a way to handle cases where we
-      // need to construct the shorthand from individual separate longhands
-      // that don't align.
       if (style_repeat_value || color_repeat_value) {
         return String();
       }
@@ -2375,6 +2584,69 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRule(
   return result.ReleaseString();
 }
 
+String
+StylePropertySerializer::GetShorthandValueForGapDecorationsRuleInsetCapJunction(
+    const StylePropertyShorthand& shorthand,
+    CSSGapDecorationPropertyDirection direction,
+    bool is_cap) const {
+  CHECK(RuntimeEnabledFeatures::CSSGapDecorationEnabled());
+  CHECK_EQ(shorthand.length(), 2u);
+
+  CSSGapDecorationPropertyType property_type_start =
+      is_cap ? CSSGapDecorationPropertyType::kInsetCapStart
+             : CSSGapDecorationPropertyType::kInsetJunctionStart;
+  CSSGapDecorationPropertyType property_type_end =
+      is_cap ? CSSGapDecorationPropertyType::kInsetCapEnd
+             : CSSGapDecorationPropertyType::kInsetJunctionEnd;
+
+  CHECK(shorthand.properties()[0]->IDEquals(
+      CSSGapDecorationUtils::GetLonghandProperty(direction,
+                                                 property_type_start)));
+  CHECK(shorthand.properties()[1]->IDEquals(
+      CSSGapDecorationUtils::GetLonghandProperty(direction,
+                                                 property_type_end)));
+
+  const CSSValue* rule_start_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
+  const CSSValue* rule_end_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
+
+  // All values must be specified.
+  CHECK(rule_start_inset_value && rule_end_inset_value);
+
+  StringBuilder result;
+  result.Append(rule_start_inset_value->CssText());
+  // Only serialize the end inset if it differs from the start inset.
+  if (rule_start_inset_value != rule_end_inset_value) {
+    result.Append(' ');
+    result.Append(rule_end_inset_value->CssText());
+  }
+
+  return result.ReleaseString();
+}
+
+String
+StylePropertySerializer::GetShorthandValueForGapDecorationsRuleInsetStartEnd(
+    const StylePropertyShorthand& shorthand) const {
+  CHECK(RuntimeEnabledFeatures::CSSGapDecorationEnabled());
+  CHECK_EQ(shorthand.length(), 2u);
+
+  const CSSValue* cap_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
+  const CSSValue* junction_inset_value =
+      property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
+
+  // All values must be specified.
+  CHECK(cap_inset_value && junction_inset_value);
+
+  // The shorthand can only be serialized if both values are equal.
+  if (cap_inset_value != junction_inset_value) {
+    return String();
+  }
+
+  return cap_inset_value->CssText();
+}
+
 String StylePropertySerializer::GetShorthandValueForGapDecorationsRuleInset(
     const StylePropertyShorthand& shorthand,
     CSSGapDecorationPropertyDirection direction) const {
@@ -2382,40 +2654,46 @@ String StylePropertySerializer::GetShorthandValueForGapDecorationsRuleInset(
   CHECK_EQ(shorthand.length(), 4u);
   CHECK(shorthand.properties()[0]->IDEquals(
       CSSGapDecorationUtils::GetLonghandProperty(
-          direction, CSSGapDecorationPropertyType::kEdgeInsetStart)));
+          direction, CSSGapDecorationPropertyType::kInsetCapStart)));
   CHECK(shorthand.properties()[1]->IDEquals(
       CSSGapDecorationUtils::GetLonghandProperty(
-          direction, CSSGapDecorationPropertyType::kEdgeInsetEnd)));
+          direction, CSSGapDecorationPropertyType::kInsetCapEnd)));
   CHECK(shorthand.properties()[2]->IDEquals(
       CSSGapDecorationUtils::GetLonghandProperty(
-          direction, CSSGapDecorationPropertyType::kInteriorInsetStart)));
+          direction, CSSGapDecorationPropertyType::kInsetJunctionStart)));
   CHECK(shorthand.properties()[3]->IDEquals(
       CSSGapDecorationUtils::GetLonghandProperty(
-          direction, CSSGapDecorationPropertyType::kInteriorInsetEnd)));
+          direction, CSSGapDecorationPropertyType::kInsetJunctionEnd)));
 
-  const CSSValue* rule_edge_start_inset_value =
+  const CSSValue* rule_inset_cap_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
-  const CSSValue* rule_edge_end_inset_value =
+  const CSSValue* rule_inset_cap_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
-  const CSSValue* rule_interior_start_inset_value =
+  const CSSValue* rule_inset_junction_start_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
-  const CSSValue* rule_interior_end_inset_value =
+  const CSSValue* rule_inset_junction_end_value =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[3]);
 
   // All values must be specified.
-  CHECK(rule_edge_start_inset_value && rule_edge_end_inset_value &&
-        rule_interior_start_inset_value && rule_interior_end_inset_value);
+  CHECK(rule_inset_cap_start_value && rule_inset_cap_end_value &&
+        rule_inset_junction_start_value && rule_inset_junction_end_value);
+
+  if (AllCSSValuesEqual({rule_inset_cap_start_value, rule_inset_cap_end_value,
+                         rule_inset_junction_start_value,
+                         rule_inset_junction_end_value})) {
+    return rule_inset_cap_start_value->CssText();
+  }
 
   StringBuilder result;
-  result.Append(rule_edge_start_inset_value->CssText());
+  result.Append(rule_inset_cap_start_value->CssText());
   result.Append(' ');
-  result.Append(rule_edge_end_inset_value->CssText());
+  result.Append(rule_inset_cap_end_value->CssText());
   result.Append(' ');
   result.Append('/');
   result.Append(' ');
-  result.Append(rule_interior_start_inset_value->CssText());
+  result.Append(rule_inset_junction_start_value->CssText());
   result.Append(' ');
-  result.Append(rule_interior_end_inset_value->CssText());
+  result.Append(rule_inset_junction_end_value->CssText());
 
   return result.ReleaseString();
 }
@@ -2477,7 +2755,6 @@ String StylePropertySerializer::GetShorthandValueForColumns(
       property_set_.GetPropertyCSSValue(GetCSSPropertyColumnWidth());
   const CSSValue* count =
       property_set_.GetPropertyCSSValue(GetCSSPropertyColumnCount());
-  const CSSValue* height = nullptr;
 
   auto* width_keyword = DynamicTo<CSSIdentifierValue>(width);
   auto* count_keyword = DynamicTo<CSSIdentifierValue>(count);
@@ -2486,14 +2763,12 @@ String StylePropertySerializer::GetShorthandValueForColumns(
       width_keyword && width_keyword->GetValueID() == CSSValueID::kAuto;
   bool count_is_auto =
       count_keyword && count_keyword->GetValueID() == CSSValueID::kAuto;
-  bool height_is_auto = true;
 
-  if (RuntimeEnabledFeatures::MulticolColumnWrappingEnabled()) {
-    height = property_set_.GetPropertyCSSValue(GetCSSPropertyColumnHeight());
-    auto* height_keyword = DynamicTo<CSSIdentifierValue>(height);
-    height_is_auto =
-        height_keyword && height_keyword->GetValueID() == CSSValueID::kAuto;
-  }
+  const CSSValue* height =
+      property_set_.GetPropertyCSSValue(GetCSSPropertyColumnHeight());
+  auto* height_keyword = DynamicTo<CSSIdentifierValue>(height);
+  bool height_is_auto =
+      height_keyword && height_keyword->GetValueID() == CSSValueID::kAuto;
 
   StringBuilder result;
   if (width_is_auto && count_is_auto) {
@@ -2751,34 +3026,37 @@ String StylePropertySerializer::GetShorthandValueForGridLine(
   return result.ReleaseString();
 }
 
+// TODO(almaher): Update grid-lanes based on new shorthand proposal in
+// https://github.com/w3c/csswg-drafts/issues/12023#issuecomment-3666148876
 String StylePropertySerializer::GetShorthandValueForGridLanes(
     const StylePropertyShorthand& shorthand) const {
   const auto* template_area_values =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[0]);
   DCHECK(template_area_values);
-  // Note: `shorthand.properties()[1]` is intentionally not used here because it
-  // always refers to `grid-template-columns`.
-  // Instead, we use `GetCSSPropertyGridTemplateColumns()` or
-  // `GetCSSPropertyGridTemplateRows()` depending on the `grid-lanes` direction,
-  // since `grid-template-rows` is not listed in the `grid-lanes` shorthand
-  // property.
   const auto* grid_lanes_direction_values =
-      property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
-  DCHECK(grid_lanes_direction_values);
-  const auto* grid_lanes_template_tracks_values =
-      CSSOMUtils::IsGridLanesColumnDirectionValue(grid_lanes_direction_values)
-          ? property_set_.GetPropertyCSSValue(
-                GetCSSPropertyGridTemplateColumns())
-          : property_set_.GetPropertyCSSValue(GetCSSPropertyGridTemplateRows());
-  DCHECK(grid_lanes_template_tracks_values);
-  const auto* grid_lanes_fill_values =
       property_set_.GetPropertyCSSValue(*shorthand.properties()[3]);
-  DCHECK(grid_lanes_fill_values);
+  DCHECK(grid_lanes_direction_values);
+
+  // Retrieve the appropriate template tracks based on the
+  // `grid-lanes-direction`. For normal or column directions, we use
+  // `grid-template-columns` (at index 1). For row direction, we use
+  // `grid-template-rows` (at index 2).
+  const CSSValue* grid_lanes_template_tracks_values = nullptr;
+  if (CSSOMUtils::IsGridLanesNormalDirectionValue(
+          grid_lanes_direction_values) ||
+      CSSOMUtils::IsGridLanesColumnDirectionValue(
+          grid_lanes_direction_values)) {
+    grid_lanes_template_tracks_values =
+        property_set_.GetPropertyCSSValue(*shorthand.properties()[1]);
+  } else {
+    grid_lanes_template_tracks_values =
+        property_set_.GetPropertyCSSValue(*shorthand.properties()[2]);
+  }
 
   const CSSValueList* grid_lanes_list =
       CSSOMUtils::ComputedValueForGridLanesShorthand(
           grid_lanes_template_tracks_values, template_area_values,
-          grid_lanes_direction_values, grid_lanes_fill_values);
+          grid_lanes_direction_values);
   return grid_lanes_list->CssText();
 }
 
@@ -2837,32 +3115,39 @@ String StylePropertySerializer::BorderPropertyValue(
     }
   }
 
-  const StylePropertyShorthand shorthand_properties[3] = {width, style, color};
-  StringBuilder result;
-  for (const auto& shorthand_property : shorthand_properties) {
-    const String value = GetCommonValue(shorthand_property);
+  const std::array<StylePropertyShorthand, 3> shorthands = {width, style,
+                                                            color};
+  std::array<String, 3> values;
+  for (wtf_size_t i = 0; i < shorthands.size(); i++) {
+    String value = GetCommonValue(shorthands[i]);
     if (value.IsNull()) {
       return String();
     }
-    if (value == "initial") {
-      continue;
-    }
-    if (!result.empty()) {
-      result.Append(' ');
-    }
-    result.Append(value);
+    values[i] = std::move(value);
   }
-  return result.empty() ? String() : result.ReleaseString();
+  return SerializeBorderValues(values);
 }
 
 String StylePropertySerializer::BorderImagePropertyValue() const {
+  const StylePropertyShorthand& shorthand = borderImageShorthand();
+
+  bool is_initial = true;
+  for (wtf_size_t i = 1; i < shorthand.length(); ++i) {
+    const CSSValue* value =
+        property_set_.GetPropertyCSSValue(*shorthand.properties()[i]);
+    if (*value != *To<Longhand>(*shorthand.properties()[i]).InitialValue()) {
+      is_initial = false;
+      break;
+    }
+  }
+  if (is_initial) {
+    return property_set_.GetPropertyCSSValue(*shorthand.properties()[0])
+        ->CssText();
+  }
+
   StringBuilder result;
-  const CSSProperty* properties[] = {
-      &GetCSSPropertyBorderImageSource(), &GetCSSPropertyBorderImageSlice(),
-      &GetCSSPropertyBorderImageWidth(), &GetCSSPropertyBorderImageOutset(),
-      &GetCSSPropertyBorderImageRepeat()};
   size_t index = 0;
-  for (const CSSProperty* property : properties) {
+  for (const CSSProperty* property : shorthand.properties()) {
     const CSSValue& value = *property_set_.GetPropertyCSSValue(*property);
     if (!result.empty()) {
       result.Append(" ");
@@ -2982,31 +3267,6 @@ String StylePropertySerializer::CornersValue() const {
   const bool show_bottom_right = show_bottom_left || (top_left != bottom_right);
   const bool show_top_right = show_bottom_right || (top_left != top_right);
 
-  auto ShouldSerializeAsNormal = [](const CSSValuePair& value) {
-    const CSSValuePair& radius = To<CSSValuePair>(value.First());
-    const CSSValue& shape = value.Second();
-    if (!radius.First().IsNumericLiteralValue() ||
-        !radius.Second().IsNumericLiteralValue() ||
-        To<CSSNumericLiteralValue>(radius.First()).DoubleValue() != 0 ||
-        To<CSSNumericLiteralValue>(radius.Second()).DoubleValue() != 0) {
-      return false;
-    }
-    if (const CSSIdentifierValue* id_value =
-            DynamicTo<CSSIdentifierValue>(shape)) {
-      if (id_value->GetValueID() == CSSValueID::kRound) {
-        return true;
-      }
-    }
-    const CSSPrimitiveValue& param =
-        To<cssvalue::CSSSuperellipseValue>(shape).Param();
-    return param.IsNumericLiteralValue() &&
-           To<CSSNumericLiteralValue>(param).DoubleValue() ==
-               Superellipse::Round().Parameter();
-  };
-  auto SerializeCornerValue = [&](const CSSValuePair& value) {
-    return ShouldSerializeAsNormal(value) ? "normal" : value.CssText();
-  };
-
   builder.Append(SerializeCornerValue(top_left));
   if (!show_top_right) {
     return builder.ReleaseString();
@@ -3025,6 +3285,52 @@ String StylePropertySerializer::CornersValue() const {
   builder.Append(SerializeCornerValue(bottom_left));
 
   return builder.ReleaseString();
+}
+
+String StylePropertySerializer::SingleCornerShorthandValue(
+    const StylePropertyShorthand& shorthand) const {
+  const StylePropertyShorthand::Properties& properties = shorthand.properties();
+  DCHECK_EQ(properties.size(), 2u);
+  const CSSValue* radius = property_set_.GetPropertyCSSValue(*properties[0]);
+  const CSSValue* shape = property_set_.GetPropertyCSSValue(*properties[1]);
+  if (!radius || !shape) {
+    return String();
+  }
+
+  const CSSValuePair& corner = *MakeGarbageCollected<CSSValuePair>(
+      radius, shape, CSSValuePair::kKeepIdenticalValues);
+
+  return SerializeCornerValue(corner);
+}
+
+String StylePropertySerializer::CornerPairShorthandValue(
+    const StylePropertyShorthand& shorthand) const {
+  const StylePropertyShorthand::Properties& properties = shorthand.properties();
+  DCHECK_EQ(properties.size(), 4u);
+
+  const CSSValue* first_radius =
+      property_set_.GetPropertyCSSValue(*properties[0]);
+  const CSSValue* first_shape =
+      property_set_.GetPropertyCSSValue(*properties[1]);
+  const CSSValue* second_radius =
+      property_set_.GetPropertyCSSValue(*properties[2]);
+  const CSSValue* second_shape =
+      property_set_.GetPropertyCSSValue(*properties[3]);
+  if (!first_radius || !first_shape || !second_radius || !second_shape) {
+    return String();
+  }
+
+  const CSSValuePair& first_corner = *MakeGarbageCollected<CSSValuePair>(
+      first_radius, first_shape, CSSValuePair::kKeepIdenticalValues);
+  const CSSValuePair& second_corner = *MakeGarbageCollected<CSSValuePair>(
+      second_radius, second_shape, CSSValuePair::kKeepIdenticalValues);
+
+  const String first_text = SerializeCornerValue(first_corner);
+  const String second_text = SerializeCornerValue(second_corner);
+  if (first_text == second_text) {
+    return first_text;
+  }
+  return StrCat({first_text, " / ", second_text});
 }
 
 String StylePropertySerializer::PageBreakPropertyValue(
@@ -3198,22 +3504,28 @@ String StylePropertySerializer::LineClampValue(
   const CSSIdentifierValue* continue_value = To<CSSIdentifierValue>(
       property_set_.GetPropertyCSSValue(GetCSSPropertyContinue()));
 
-  if (continue_value->GetValueID() == CSSValueID::kAuto) {
+  if (continue_value->GetValueID() == CSSValueID::kNormal) {
     if (max_lines->IsIdentifierValue() &&
         block_ellipsis->GetValueID() == CSSValueID::kNoEllipsis) {
       DCHECK_EQ(To<CSSIdentifierValue>(max_lines)->GetValueID(),
-                CSSValueID::kNone);
+                CSSValueID::kAuto);
       return "none";
     }
     return g_empty_string;
   }
 
   CSSValueList* list = CSSValueList::CreateSpaceSeparated();
-  if (max_lines->IsNumericLiteralValue()) {
+  if (!max_lines->IsIdentifierValue() ||
+      block_ellipsis->GetValueID() == CSSValueID::kEllipsis) {
+    if (!max_lines->IsNumericLiteralValue() && is_webkit_line_clamp) {
+      return g_empty_string;
+    }
     list->Append(*max_lines);
+  } else if (is_webkit_line_clamp) {
+    return g_empty_string;
   }
 
-  if (!list->length() || block_ellipsis->GetValueID() != CSSValueID::kAuto) {
+  if (block_ellipsis->GetValueID() != CSSValueID::kEllipsis) {
     if (is_webkit_line_clamp) {
       return g_empty_string;
     }

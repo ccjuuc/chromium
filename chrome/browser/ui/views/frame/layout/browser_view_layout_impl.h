@@ -5,17 +5,17 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_IMPL_H_
 #define CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_IMPL_H_
 
+#include "base/callback_list.h"
+#include "chrome/browser/ui/views/frame/custom_corners_background.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
+#include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/view.h"
 
-// Represents common functionality between browser layouts when one or more of
-// the following flags are enabled:
-//  - `features::kAppBrowserUseNewLayout`
-//  - `features::kPopupBrowserUseNewLayout`
-//  - `features::kTabbedBrowserUseNewLayout`
+// Represents common functionality between different browser layout
+// implementations.
 //
 // Contains a number of common layout and utility methods, as well as constants
 // and structures used across these layouts.
@@ -30,15 +30,14 @@ class BrowserViewLayoutImpl : public BrowserViewLayout {
   ~BrowserViewLayoutImpl() override;
 
   // BrowserViewLayout:
-  void Layout(views::View* host) override;
-
-  // BrowserViewLayout overrides:
-  int GetMinWebContentsWidthForTesting() const override;
+  void Layout(views::View* host) final;
 
  protected:
-  // The minimum width of the contents area itself. Applies even when side
-  // panels are open and prevents zero or negative contents sizes.
-  static constexpr int kContentsContainerMinimumWidth = 200;
+  using WindowState = BrowserViewLayoutDelegate::WindowState;
+  static bool is_fullscreen(WindowState window_state) {
+    return window_state == WindowState::kFullscreen ||
+           window_state == WindowState::kFullscreenWithToolbar;
+  }
 
   // The overlap between a constrained dialog and the toolbar.
   static constexpr int kDialogToolbarOverlap = 3;
@@ -141,12 +140,44 @@ class BrowserViewLayoutImpl : public BrowserViewLayout {
                                                 BrowserLayoutParams params,
                                                 bool needs_exclusion) const = 0;
 
+  // Configures the background of the top container as appropriate for the
+  // window. Since all browsers have a top container, common logic is here.
+  virtual void ConfigureTopContainerBackground(
+      const BrowserLayoutParams& params,
+      CustomCornersBackground* background);
+
+  // Called before any other layout code. Common calculations can be performed
+  // and their values stored here, to prevent repeating them across multiple
+  // calls.
+  //
+  // Note that this data may not be valid outside the layout pass, so it may not
+  // be safe to use in e.g. minimum size calculations.
+  virtual void DoPreLayoutComputations(const BrowserLayoutParams& params);
+
   // Applies additional visual adjustments to UI elements that are not handled
   // by the traditional layout process. This could include clipping, text
   // rendering, overlay configuration, etc.
-  virtual void DoPostLayoutVisualAdjustments() {}
+  virtual void DoPostLayoutVisualAdjustments(const BrowserLayoutParams& params);
+
+  // Clear any transient values that are only valid during layout. This is
+  // performed last after all other layout steps.
+  virtual void DoPostLayoutCleanup();
+
+  // Called when the layout params are updated mid-layout (typically in
+  // fullscreen after a size change in the top container overlay).
+  virtual void OnLayoutParamsChanged(const BrowserLayoutParams& old_params,
+                                     const BrowserLayoutParams& new_params);
+
+  // Respond to changes in glass mode. Will only be called on systems which are
+  // glass-eligible. Use `in_glass_mode()` to determine if glass changed to on
+  // or off.
+  virtual void OnGlassModeChanged();
+
+  bool in_glass_mode() const { return in_glass_mode_; }
 
  private:
+  void OnGlassModeChangedCallback(bool in_glass_mode);
+
   // Retrieve dimensions of modal dialogs.
 
   // Gets the top of the dialog anchoring area, in local coordinates.
@@ -156,8 +187,14 @@ class BrowserViewLayoutImpl : public BrowserViewLayout {
   int GetDialogBottom(const ProposedLayout& layout) const;
 
   // BrowserViewLayout overrides:
-  gfx::Point GetDialogPosition(const gfx::Size& dialog_size) const override;
-  gfx::Size GetMaximumDialogSize() const override;
+  gfx::Point GetDialogPosition(const gfx::Size& dialog_size) const final;
+  gfx::Size GetMaximumDialogSize() const final;
+
+  int dialog_top_ = 0;
+  int dialog_bottom_ = 0;
+  bool in_glass_mode_ = false;
+  base::CallbackListSubscription glass_mode_subscription_;
+  bool reentrancy_guard_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_IMPL_H_

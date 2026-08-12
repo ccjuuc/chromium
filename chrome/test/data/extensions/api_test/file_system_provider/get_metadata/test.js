@@ -10,40 +10,40 @@ let testUtil;
  * @type {Object}
  * @const
  */
-var TESTING_ROOT = Object.freeze({
+const TESTING_ROOT = Object.freeze({
   isDirectory: true,
   name: '',
   size: 0,
-  modificationTime: new Date(2013, 3, 27, 9, 38, 14)
+  modificationTime: new Date(2013, 3, 27, 9, 38, 14),
 });
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_FILE = Object.freeze({
+const TESTING_FILE = Object.freeze({
   isDirectory: false,
   name: 'tiramisu.txt',
   size: 4096,
-  modificationTime: new Date(2014, 4, 28, 10, 39, 15)
+  modificationTime: new Date(2014, 4, 28, 10, 39, 15),
 });
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_WRONG_TIME_FILE = Object.freeze({
+const TESTING_WRONG_TIME_FILE = Object.freeze({
   isDirectory: false,
   name: 'invalid-time.txt',
   size: 4096,
-  modificationTime: new Date('Invalid date.')
+  modificationTime: new Date('Invalid date.'),
 });
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_ONLY_BASIC_FILE = Object.freeze({
+const TESTING_ONLY_BASIC_FILE = Object.freeze({
   isDirectory: false,
   name: 'invalid-time.txt',
 });
@@ -52,22 +52,19 @@ var TESTING_ONLY_BASIC_FILE = Object.freeze({
  * @type {string}
  * @const
  */
-var TESTING_ONLY_BASIC_FILE_NAME = 'basic.txt';
+const TESTING_ONLY_BASIC_FILE_NAME = 'basic.txt';
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_ONLY_SIZE_FILE = Object.freeze({
-  isDirectory: false,
-  size: 4096
-});
+const TESTING_ONLY_SIZE_FILE = Object.freeze({isDirectory: false, size: 4096});
 
 /**
  * @type {string}
  * @const
  */
-var TESTING_ONLY_SIZE_FILE_NAME = 'only-size.txt';
+const TESTING_ONLY_SIZE_FILE_NAME = 'only-size.txt';
 
 /**
  * Returns metadata for a requested entry.
@@ -88,22 +85,22 @@ function onGetMetadataRequested(options, onSuccess, onError) {
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_FILE.name) {
+  if (options.entryPath === `/${TESTING_FILE.name}`) {
     onSuccess(TESTING_FILE);
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_WRONG_TIME_FILE.name) {
+  if (options.entryPath === `/${TESTING_WRONG_TIME_FILE.name}`) {
     onSuccess(TESTING_WRONG_TIME_FILE);
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_ONLY_BASIC_FILE_NAME) {
+  if (options.entryPath === `/${TESTING_ONLY_BASIC_FILE_NAME}`) {
     onSuccess(TESTING_ONLY_BASIC_FILE);
     return;
   }
 
-  if (options.entryPath === '/' + TESTING_ONLY_SIZE_FILE_NAME) {
+  if (options.entryPath === `/${TESTING_ONLY_SIZE_FILE_NAME}`) {
     onSuccess(TESTING_ONLY_SIZE_FILE);
     return;
   }
@@ -131,33 +128,35 @@ function runTests() {
     // Read metadata of the root.
     function getFileMetadataSuccess() {
       testUtil.fileSystem.root.getMetadata(
-        chrome.test.callbackPass(function(metadata) {
-          chrome.test.assertEq(TESTING_ROOT.size, metadata.size);
-          chrome.test.assertEq(
-              TESTING_ROOT.modificationTime.toString(),
-              metadata.modificationTime.toString());
-        }), function(error) {
-          chrome.test.fail(error.name);
-        });
+          chrome.test.callbackPass(function(metadata) {
+            chrome.test.assertEq(TESTING_ROOT.size, metadata.size);
+            chrome.test.assertEq(
+                TESTING_ROOT.modificationTime.toString(),
+                metadata.modificationTime.toString());
+          }),
+          function(error) {
+            chrome.test.fail(error.name);
+          });
     },
 
     // Read metadata of an existing testing file.
     function getFileMetadataSuccess() {
       testUtil.fileSystem.root.getFile(
-          TESTING_FILE.name,
-          {create: false},
+          TESTING_FILE.name, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_FILE.name, fileEntry.name);
             chrome.test.assertEq(
                 TESTING_FILE.isDirectory, fileEntry.isDirectory);
-            fileEntry.getMetadata(chrome.test.callbackPass(function(metadata) {
-              chrome.test.assertEq(TESTING_FILE.size, metadata.size);
-              chrome.test.assertEq(
-                  TESTING_FILE.modificationTime.toString(),
-                  metadata.modificationTime.toString());
-            }), function(error) {
-              chrome.test.fail(error.name);
-            });
+            fileEntry.getMetadata(
+                chrome.test.callbackPass(function(metadata) {
+                  chrome.test.assertEq(TESTING_FILE.size, metadata.size);
+                  chrome.test.assertEq(
+                      TESTING_FILE.modificationTime.toString(),
+                      metadata.modificationTime.toString());
+                }),
+                function(error) {
+                  chrome.test.fail(error.name);
+                });
           }),
           function(error) {
             chrome.test.fail(error.name);
@@ -170,17 +169,19 @@ function runTests() {
     // easy way to verify an incorrect modification time at early stage.
     function getFileMetadataWrongTimeSuccess() {
       testUtil.fileSystem.root.getFile(
-          TESTING_WRONG_TIME_FILE.name,
-          {create: false},
+          TESTING_WRONG_TIME_FILE.name, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertEq(TESTING_WRONG_TIME_FILE.name, fileEntry.name);
-            fileEntry.getMetadata(chrome.test.callbackPass(function(metadata) {
-              chrome.test.assertTrue(
-                  Number.isNaN(metadata.modificationTime.getTime()));
-            }), function(error) {
-              chrome.test.fail(error.name);
-            });
-          }), function(error) {
+            fileEntry.getMetadata(
+                chrome.test.callbackPass(function(metadata) {
+                  chrome.test.assertTrue(
+                      Number.isNaN(metadata.modificationTime.getTime()));
+                }),
+                function(error) {
+                  chrome.test.fail(error.name);
+                });
+          }),
+          function(error) {
             chrome.test.fail(error.name);
           });
     },
@@ -189,12 +190,9 @@ function runTests() {
     // error. DirectoryEntry.getDirectory() causes fetching metadata.
     function getFileMetadataNotFound() {
       testUtil.fileSystem.root.getDirectory(
-          'cranberries',
-          {create: false},
-          function(dirEntry) {
+          'cranberries', {create: false}, function(dirEntry) {
             chrome.test.fail();
-          },
-          chrome.test.callbackPass(function(error) {
+          }, chrome.test.callbackPass(function(error) {
             chrome.test.assertEq('NotFoundError', error.name);
           }));
     },
@@ -204,12 +202,9 @@ function runTests() {
     // fetching metadata.
     function getFileMetadataWrongType() {
       testUtil.fileSystem.root.getDirectory(
-          TESTING_FILE.name,
-          {create: false},
-          function(fileEntry) {
+          TESTING_FILE.name, {create: false}, function(fileEntry) {
             chrome.test.fail();
-          },
-          chrome.test.callbackPass(function(error) {
+          }, chrome.test.callbackPass(function(error) {
             chrome.test.assertEq('TypeMismatchError', error.name);
           }));
     },
@@ -217,8 +212,7 @@ function runTests() {
     // Resolving a file should only request is_directory and name fields.
     function getMetadataForGetFile() {
       testUtil.fileSystem.root.getFile(
-          TESTING_ONLY_BASIC_FILE_NAME,
-          {create: false},
+          TESTING_ONLY_BASIC_FILE_NAME, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.test.assertTrue(!!fileEntry);
           }),
@@ -231,16 +225,13 @@ function runTests() {
     // callback is invoked.
     function getMetadataMissingFields() {
       testUtil.fileSystem.root.getFile(
-          TESTING_ONLY_SIZE_FILE_NAME,
-          {create: false},
+          TESTING_ONLY_SIZE_FILE_NAME, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
-            fileEntry.getMetadata(
-                function(metadata) {
-                  chrome.test.fail('Unexpected success');
-                },
-                chrome.test.callbackPass(function(error) {
-                  chrome.test.assertEq('InvalidStateError', error.name);
-                }));
+            fileEntry.getMetadata(function(metadata) {
+              chrome.test.fail('Unexpected success');
+            }, chrome.test.callbackPass(function(error) {
+              chrome.test.assertEq('InvalidStateError', error.name);
+            }));
           }),
           function(error) {
             chrome.test.fail(error.name);
@@ -250,22 +241,20 @@ function runTests() {
     // Fetch only requested fields.
     function getEntryPropertiesFewFields() {
       testUtil.fileSystem.root.getFile(
-          TESTING_ONLY_SIZE_FILE_NAME,
-          {create: false},
+          TESTING_ONLY_SIZE_FILE_NAME, {create: false},
           chrome.test.callbackPass(function(fileEntry) {
             chrome.fileManagerPrivate.getEntryProperties(
-                [fileEntry],
-                ['size'],
+                [fileEntry], ['size'],
                 chrome.test.callbackPass(function(fileProperties) {
                   chrome.test.assertEq(1, fileProperties.length);
                   chrome.test.assertEq(
                       TESTING_ONLY_SIZE_FILE.size, fileProperties[0].size);
                 }));
-            }),
-            function(error) {
-              chrome.test.fail(error.name);
-            });
-    }
+          }),
+          function(error) {
+            chrome.test.fail(error.name);
+          });
+    },
   ]);
 }
 
@@ -273,7 +262,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

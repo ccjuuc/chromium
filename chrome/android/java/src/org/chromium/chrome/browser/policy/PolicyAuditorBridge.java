@@ -16,43 +16,39 @@ import org.chromium.url.GURL;
 /** Provides native with methods to call to audit events during navigations. */
 @NullMarked
 public class PolicyAuditorBridge {
-    private static void recordErrorInPolicyAuditor(
-            String failingUrl, String description, int errorCode, PolicyAuditor policyAuditor) {
-        assert description != null;
+    @CalledByNative
+    public static @Nullable PolicyAuditor maybeGetPolicyAuditorInstance() {
+        return PolicyAuditor.maybeGetInstance();
+    }
 
-        policyAuditor.notifyAuditEvent(
-                ContextUtils.getApplicationContext(),
-                PolicyAuditor.AuditEvent.OPEN_URL_FAILURE,
-                failingUrl,
-                description);
-        if (errorCode == NetError.ERR_BLOCKED_BY_ADMINISTRATOR) {
+    @CalledByNative
+    public static void notifyAuditEventForDidFinishNavigation(NavigationHandle navigationHandle) {
+        PolicyAuditor policyAuditor = PolicyAuditor.maybeGetInstance();
+        if (policyAuditor == null) return;
+
+        if (navigationHandle.errorCode() != NetError.OK) {
             policyAuditor.notifyAuditEvent(
                     ContextUtils.getApplicationContext(),
-                    PolicyAuditor.AuditEvent.OPEN_URL_BLOCKED,
-                    failingUrl,
-                    "");
-        }
-    }
-
-    @CalledByNative
-    public static @Nullable PolicyAuditor getPolicyAuditor() {
-        return PolicyAuditor.maybeCreate();
-    }
-
-    @CalledByNative
-    public static void notifyAuditEventForDidFinishNavigation(
-            NavigationHandle navigationHandle, PolicyAuditor policyAuditor) {
-        if (navigationHandle.errorCode() != NetError.OK) {
-            recordErrorInPolicyAuditor(
+                    PolicyAuditor.AuditEvent.OPEN_URL_FAILURE,
                     navigationHandle.getUrl().getSpec(),
-                    navigationHandle.errorDescription(),
-                    navigationHandle.errorCode(),
-                    policyAuditor);
+                    navigationHandle.errorDescription() != null
+                            ? navigationHandle.errorDescription()
+                            : "");
+            if (navigationHandle.errorCode() == NetError.ERR_BLOCKED_BY_ADMINISTRATOR) {
+                policyAuditor.notifyAuditEvent(
+                        ContextUtils.getApplicationContext(),
+                        PolicyAuditor.AuditEvent.OPEN_URL_BLOCKED,
+                        navigationHandle.getUrl().getSpec(),
+                        "");
+            }
         }
     }
 
     @CalledByNative
-    public static void notifyAuditEventForDidFinishLoad(GURL url, PolicyAuditor policyAuditor) {
+    public static void notifyAuditEventForDidFinishLoad(GURL url) {
+        PolicyAuditor policyAuditor = PolicyAuditor.maybeGetInstance();
+        if (policyAuditor == null) return;
+
         policyAuditor.notifyAuditEvent(
                 ContextUtils.getApplicationContext(),
                 PolicyAuditor.AuditEvent.OPEN_URL_SUCCESS,

@@ -48,7 +48,6 @@
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
 #include "third_party/blink/renderer/platform/bindings/parkable_string_manager.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
-#include "third_party/blink/renderer/platform/fonts/font_cache_memory_dump_provider.h"
 #include "third_party/blink/renderer/platform/geometry/length.h"
 #include "third_party/blink/renderer/platform/graphics/parkable_image_manager.h"
 #include "third_party/blink/renderer/platform/heap/blink_gc_memory_dump_provider.h"
@@ -136,13 +135,14 @@ WebThemeEngine* Platform::ThemeEngine() {
   return WebThemeEngineHelper::GetNativeThemeEngine();
 }
 
-void Platform::InitializeBlink() {
+void Platform::InitializeBlink(
+    std::optional<cppgc::StackStartMarker> stack_start_marker) {
   DCHECK(!did_initialize_blink_);
   Partitions::Initialize();
   InitializeWtf();
   Length::Initialize();
   ProcessHeap::Init();
-  ThreadState::AttachMainThread();
+  ThreadState::AttachMainThread(std::move(stack_start_marker));
   did_initialize_blink_ = true;
 }
 
@@ -184,9 +184,6 @@ void Platform::InitializeMainThreadCommon(
 
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       PartitionAllocMemoryDumpProvider::Instance(), "PartitionAlloc",
-      base::SingleThreadTaskRunner::GetCurrentDefault());
-  base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-      FontCacheMemoryDumpProvider::Instance(), "FontCaches",
       base::SingleThreadTaskRunner::GetCurrentDefault());
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       MemoryCacheDumpProvider::Instance(), "MemoryCache",
@@ -314,6 +311,12 @@ scoped_refptr<viz::RasterContextProvider>
 Platform::SharedCompositorWorkerContextProvider(
     cc::RasterDarkModeFilter* dark_mode_filter) {
   return nullptr;
+}
+
+void Platform::SharedMediaContextProvider(
+    base::OnceCallback<void(scoped_refptr<viz::RasterContextProvider>)>
+        callback) {
+  std::move(callback).Run(nullptr);
 }
 
 scoped_refptr<gpu::GpuChannelHost> Platform::EstablishGpuChannelSync() {

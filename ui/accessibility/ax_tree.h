@@ -29,7 +29,6 @@
 namespace ui {
 
 struct AXEvent;
-class AXLanguageDetectionManager;
 class AXNode;
 struct AXNodeData;
 class AXTableInfo;
@@ -118,6 +117,10 @@ class AX_EXPORT AXTree {
   // focused element.
   // TODO(nektar): Removed once the feature has been fully tested.
   static void SetFocusedNodeShouldNeverBeIgnored();
+
+  // Returns true if `node_data` could make a node both ignored and the host of
+  // a child tree. This bounds `ComputeNodeIsIgnored` from above.
+  static bool MightBeIgnoredChildTreeHost(const AXNodeData& node_data);
 
   // Determines the ignored state of a node, given information about the node
   // and the tree.
@@ -225,6 +228,21 @@ class AX_EXPORT AXTree {
   // Get all of the child tree IDs referenced by any node in this tree.
   const std::set<AXTreeID> GetAllChildTreeIds() const;
 
+  // The nodes that could be ignored and host a child tree. Such a node is
+  // transparent, and the root of the tree that it hosts takes its place among
+  // the unignored nodes that cross the tree boundary.
+  //
+  // A renderer almost never sends such a node, because Blink removes an
+  // aria-hidden iframe from the tree instead of marking it ignored. This set
+  // holds one node for the web view of a browser window, and it is empty for
+  // nearly every tree that holds web content.
+  const std::set<AXNodeID>& ignored_child_tree_host_ids() const {
+    return ignored_child_tree_host_ids_;
+  }
+  bool HasIgnoredChildTreeHosts() const {
+    return !ignored_child_tree_host_ids_.empty();
+  }
+
   // Map from a relation attribute to a map from a target id to source ids.
   const IntReverseRelationMap& int_reverse_relations() {
     return int_reverse_relations_;
@@ -271,11 +289,6 @@ class AX_EXPORT AXTree {
 
   // Returns true if the tree represents a paginated document
   bool HasPaginationSupport() const;
-
-  // Language detection manager, entry point to language detection features.
-  // TODO(chrishall): Should this be stored by pointer or value?
-  //                  When should we initialize this?
-  std::unique_ptr<AXLanguageDetectionManager> language_detection_manager;
 
   // Event metadata while applying a tree update during unserialization.
   AXEvent* event_data() const { return event_data_.get(); }
@@ -473,6 +486,10 @@ class AX_EXPORT AXTree {
   IntListReverseRelationMap intlist_reverse_relations_;
   // Map from child tree ID to the set of node IDs that contain that attribute.
   std::map<AXTreeID, std::set<AXNodeID>> child_tree_id_reverse_map_;
+  // The nodes that hold both a child tree ID and data that could make them
+  // ignored. `AXNode::IsIgnored` also reads the focus, which can only make a
+  // node unignored, thus this set never lacks a node that is such a host.
+  std::set<AXNodeID> ignored_child_tree_host_ids_;
 
   // Map from node ID to cached table info, if the given node is a table.
   // Invalidated every time the tree is updated.

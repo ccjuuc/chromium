@@ -4,6 +4,7 @@
 
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/test/browser_test.h"
 
 namespace glic::test {
@@ -25,8 +26,7 @@ MultiStep GlicActorMediaControlToolUiTest::MediaControlAction(
   auto media_control_provider =
       base::BindLambdaForTesting([this, media_control]() {
         optimization_guide::proto::Actions action =
-            actor::MakeMediaControl(tab_handle_, media_control);
-        action.set_task_id(task_id_.value());
+            actor::MakeMediaControl(tab_handle_, media_control, task_id_);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(media_control_provider),
@@ -50,12 +50,11 @@ IN_PROC_BROWSER_TEST_F(GlicActorMediaControlToolUiTest, PauseAndPlayMedia) {
       InitializeWithOpenGlicWindow(),
       StartActorTaskInNewTab(url, kNewActorTabId),
       ExecuteJs(kNewActorTabId, "play"),
+      WaitForJsResult(kNewActorTabId, "() => waitForEvent('play')"),
       MediaControlAction(actor::PauseMedia()),
-      WaitForJsResult(kNewActorTabId, "() => { return event_log.join(','); }",
-                      "pause"),
+      WaitForJsResult(kNewActorTabId, "() => waitForEvent('pause')"),
       MediaControlAction(actor::PlayMedia()),
-      WaitForJsResult(kNewActorTabId, "() => { return event_log.join(','); }",
-                      "pause,play"));
+      WaitForJsResult(kNewActorTabId, "() => waitForEvent('play')"));
 }
 
 IN_PROC_BROWSER_TEST_F(GlicActorMediaControlToolUiTest, SeekMedia) {
@@ -65,9 +64,11 @@ IN_PROC_BROWSER_TEST_F(GlicActorMediaControlToolUiTest, SeekMedia) {
       InitializeWithOpenGlicWindow(),
       StartActorTaskInNewTab(url, kNewActorTabId),
       ExecuteJs(kNewActorTabId, "play"),
+      WaitForJsResult(kNewActorTabId, "() => waitForEvent('play')"),
+      ExecuteJs(kNewActorTabId, "() => { video.pause(); }"),
+      WaitForJsResult(kNewActorTabId, "() => waitForEvent('pause')"),
       MediaControlAction(actor::SeekMedia{.seek_time_milliseconds = 1000}),
-      WaitForJsResult(kNewActorTabId, "() => { return event_log.join(','); }",
-                      "seek 1"));
+      WaitForJsResult(kNewActorTabId, "() => waitForSeek(1.0)"));
 }
 
 }  //  namespace

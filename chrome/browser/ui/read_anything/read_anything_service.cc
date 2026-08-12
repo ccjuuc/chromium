@@ -11,14 +11,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/read_anything/read_anything_service_factory.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "extensions/browser/extension_system.h"
@@ -50,16 +44,11 @@ ReadAnythingService::ReadAnythingService(Profile* profile) : profile_(profile) {
     // timer to uninstall it.
     // TODO(https://crbug.com/362787711): This logic also needs to run if the
     // feature is disabled.
-    local_side_panel_switch_delay_timer_.Start(
+    local_reading_mode_switch_delay_timer_.Start(
         FROM_HERE, base::Seconds(kRemoveExtensionDelaySeconds),
         base::BindRepeating(
-            &ReadAnythingService::OnLocalSidePanelSwitchDelayTimeout,
+            &ReadAnythingService::OnLocalReadingModeSwitchDelayTimeout,
             weak_ptr_factory_.GetWeakPtr()));
-  }
-  if (features::IsDataCollectionModeForScreen2xEnabled() &&
-      profile_->AllowsBrowserWindows()) {
-    browser_collection_observer_.Observe(
-        ProfileBrowserCollection::GetForProfile(profile_));
   }
 }
 
@@ -74,7 +63,7 @@ ReadAnythingService* ReadAnythingService::Get(Profile* profile) {
       profile);
 }
 
-void ReadAnythingService::OnReadAnythingSidePanelEntryShown() {
+void ReadAnythingService::OnReadAnythingShown() {
 // The TTS download extension should only be installed on non-ChromeOS devices
 // when the Read Aloud flag is enabled.
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -85,7 +74,7 @@ void ReadAnythingService::OnReadAnythingSidePanelEntryShown() {
     return;
   }
 
-  active_local_side_panel_count_++;
+  active_local_reading_mode_count_++;
   InstallGDocsHelperExtension();
 }
 
@@ -103,8 +92,7 @@ void ReadAnythingService::SetupDesktopEngine() {
 
   // Install the TTS extension via the component updater if the
   // component updater flag is enabled.
-  if (features::IsReadAnythingReadAloudEnabled() &&
-      !features::IsWasmTtsEngineAutoInstallDisabled()) {
+  if (!features::IsWasmTtsEngineAutoInstallDisabled()) {
     // Trigger an on-demand update of the engine to ensure the TTS extension
     // is available to provide natural voices as soon as reading mode is opened.
     component_updater::WasmTtsEngineComponentInstallerPolicy::
@@ -118,13 +106,13 @@ void ReadAnythingService::SetupDesktopEngine() {
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-void ReadAnythingService::OnReadAnythingSidePanelEntryHidden() {
+void ReadAnythingService::OnReadAnythingHidden() {
   if (!features::IsReadAnythingDocsIntegrationEnabled()) {
     return;
   }
 
-  active_local_side_panel_count_--;
-  local_side_panel_switch_delay_timer_.Reset();
+  active_local_reading_mode_count_--;
+  local_reading_mode_switch_delay_timer_.Reset();
 }
 
 void ReadAnythingService::InstallGDocsHelperExtension() {
@@ -165,30 +153,12 @@ void ReadAnythingService::RemoveGDocsHelperExtension() {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-void ReadAnythingService::OnLocalSidePanelSwitchDelayTimeout() {
-  if (active_local_side_panel_count_ > 0) {
+void ReadAnythingService::OnLocalReadingModeSwitchDelayTimeout() {
+  if (active_local_reading_mode_count_ > 0) {
     return;
   }
 
   RemoveGDocsHelperExtension();
-}
-
-void ReadAnythingService::OnBrowserActivated(BrowserWindowInterface* browser) {
-  if (!features::IsDataCollectionModeForScreen2xEnabled()) {
-    return;
-  }
-
-  // This code is called as part of a screen2x data generation workflow, where
-  // the browser is opened by a CLI and the read-anything side panel is
-  // automatically opened. Therefore we force the UI to show right away, as in
-  // tests.
-  // TODO(https://crbug.com/358191922): Remove this code.
-  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
-  if (!side_panel_ui->IsSidePanelEntryShowing(
-          SidePanelEntryKey(SidePanelEntryId::kReadAnything))) {
-    side_panel_ui->SetNoDelaysForTesting(true);  // IN-TEST
-    side_panel_ui->Show(SidePanelEntryId::kReadAnything);
-  }
 }
 
 void ReadAnythingService::RemoveTtsDownloadExtension() {

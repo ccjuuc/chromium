@@ -7,12 +7,13 @@ import 'chrome://settings/lazy_load.js';
 import 'chrome://settings/settings.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import type {AccountManagerBrowserProxy, SettingsPeoplePageElement} from 'chrome://settings/settings.js';
-import {AccountManagerBrowserProxyImpl, loadTimeData, ProfileInfoBrowserProxyImpl, Router, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
+import type {AccountManagerBrowserProxy, CrLinkRowElement, SettingsPeoplePageElement} from 'chrome://settings/settings.js';
+import {AccountManagerBrowserProxyImpl, loadTimeData, PrefService, PrefsBrowserProxy, ProfileInfoBrowserProxyImpl, Router, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 import {simulateSyncStatus} from './sync_test_util.js';
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
 import {TestProfileInfoBrowserProxy} from './test_profile_info_browser_proxy.js';
 import {TestSyncBrowserProxy} from './test_sync_browser_proxy.js';
 
@@ -43,17 +44,30 @@ class TestAccountManagerBrowserProxy extends TestBrowserProxy implements
 
 let accountManagerBrowserProxy: TestAccountManagerBrowserProxy;
 
-// Preferences should exist for embedded 'personalization_options.html'.
-// We don't perform tests on them.
-const DEFAULT_PREFS = {
-  profile: {password_manager_leak_detection: {value: true}},
-  signin: {
-    allowed_on_next_startup:
-        {type: chrome.settingsPrivate.PrefType.BOOLEAN, value: true},
-  },
-  safebrowsing:
-      {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-};
+function getInitialPrefs(): chrome.settingsPrivate.PrefObject[] {
+  return [
+    {
+      key: 'signin.allowed_on_next_startup',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+    {
+      key: 'profile.password_manager_leak_detection',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+    {
+      key: 'safebrowsing.enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+    {
+      key: 'safebrowsing.scout_reporting_enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
+  ];
+}
 
 let peoplePage: SettingsPeoplePageElement;
 let profileInfoBrowserProxy: TestProfileInfoBrowserProxy;
@@ -68,6 +82,11 @@ suite('Chrome OS', function() {
   });
 
   setup(async function() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
     syncBrowserProxy = new TestSyncBrowserProxy();
     SyncBrowserProxyImpl.setInstance(syncBrowserProxy);
 
@@ -79,7 +98,6 @@ suite('Chrome OS', function() {
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     peoplePage = document.createElement('settings-people-page');
-    peoplePage.prefs = DEFAULT_PREFS;
     document.body.appendChild(peoplePage);
 
     await accountManagerBrowserProxy.whenCalled('getAccounts');
@@ -118,6 +136,20 @@ suite('Chrome OS', function() {
     assertTrue(!!subpageArrow);
     assertFalse(subpageArrow.hidden);
   });
+
+  test('SyncSetupSubLabelUpdatedForPassphraseError', () => {
+    simulateSyncStatus({
+      signedInState: SignedInState.SYNCING,
+      hasError: true,
+      statusAction: StatusAction.ENTER_PASSPHRASE,
+      statusText:
+          'To use and save Chromium data in your Google Account, enter your passphrase',
+    });
+
+    const syncSetupRow =
+        peoplePage.shadowRoot!.querySelector<CrLinkRowElement>('#sync-setup')!;
+    assertEquals(peoplePage.syncStatus!.statusText, syncSetupRow.subLabel);
+  });
 });
 
 suite('Chrome OS with account manager disabled', function() {
@@ -129,6 +161,11 @@ suite('Chrome OS with account manager disabled', function() {
   });
 
   setup(async function() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
     syncBrowserProxy = new TestSyncBrowserProxy();
     SyncBrowserProxyImpl.setInstance(syncBrowserProxy);
 
@@ -137,7 +174,6 @@ suite('Chrome OS with account manager disabled', function() {
 
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     peoplePage = document.createElement('settings-people-page');
-    peoplePage.prefs = DEFAULT_PREFS;
     document.body.appendChild(peoplePage);
 
     await syncBrowserProxy.whenCalled('getSyncStatus');
@@ -172,5 +208,56 @@ suite('Chrome OS with account manager disabled', function() {
     const oldRoute = Router.getInstance().getCurrentRoute();
     profileIcon.click();
     assertEquals(oldRoute, Router.getInstance().getCurrentRoute());
+  });
+});
+
+suite('Chrome OS with replaceSyncPromosWithSignInPromos enabled', function() {
+  suiteSetup(function() {
+    loadTimeData.overrideValues({
+      isAccountManagerEnabled: true,
+      replaceSyncPromosWithSignInPromos: true,
+    });
+  });
+
+  setup(async function() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
+    syncBrowserProxy = new TestSyncBrowserProxy();
+    SyncBrowserProxyImpl.setInstance(syncBrowserProxy);
+
+    profileInfoBrowserProxy = new TestProfileInfoBrowserProxy();
+    ProfileInfoBrowserProxyImpl.setInstance(profileInfoBrowserProxy);
+
+    accountManagerBrowserProxy = new TestAccountManagerBrowserProxy();
+    AccountManagerBrowserProxyImpl.setInstance(accountManagerBrowserProxy);
+
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    peoplePage = document.createElement('settings-people-page');
+    document.body.appendChild(peoplePage);
+
+    await accountManagerBrowserProxy.whenCalled('getAccounts');
+    await syncBrowserProxy.whenCalled('getSyncStatus');
+    flush();
+  });
+
+  teardown(function() {
+    peoplePage.remove();
+  });
+
+  test('SyncSetupRowSublabel_PassphraseError', () => {
+    simulateSyncStatus({
+      signedInState: SignedInState.SYNCING,
+      hasError: true,
+      statusAction: StatusAction.ENTER_PASSPHRASE,
+      statusText:
+          'To use and save Chromium data in your Google Account, enter your passphrase',
+    });
+
+    const syncSetupRow =
+        peoplePage.shadowRoot!.querySelector<CrLinkRowElement>('#sync-setup')!;
+    assertEquals(peoplePage.syncStatus!.statusText, syncSetupRow.subLabel);
   });
 });

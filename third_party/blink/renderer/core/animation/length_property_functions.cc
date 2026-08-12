@@ -17,6 +17,7 @@ Length::ValueRange LengthPropertyFunctions::GetValueRange(
     case CSSPropertyID::kBorderRightWidth:
     case CSSPropertyID::kBorderTopWidth:
     case CSSPropertyID::kFlexBasis:
+    case CSSPropertyID::kFlowTolerance:
     case CSSPropertyID::kHeight:
     case CSSPropertyID::kLineHeight:
     case CSSPropertyID::kMaxHeight:
@@ -28,6 +29,7 @@ Length::ValueRange LengthPropertyFunctions::GetValueRange(
     case CSSPropertyID::kPaddingLeft:
     case CSSPropertyID::kPaddingRight:
     case CSSPropertyID::kPaddingTop:
+    case CSSPropertyID::kPathLength:
     case CSSPropertyID::kPerspective:
     case CSSPropertyID::kR:
     case CSSPropertyID::kRx:
@@ -190,6 +192,13 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
       result = style.FlexBasis();
       success = true;
       break;
+    case CSSPropertyID::kFlowTolerance:
+      if (!style.GetFlowTolerance().IsNormal() &&
+          !style.GetFlowTolerance().IsInfinite()) {
+        result = style.GetFlowTolerance().GetLength();
+        success = true;
+      }
+      break;
     case CSSPropertyID::kHeight:
       result = style.Height();
       success = true;
@@ -248,6 +257,10 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
       break;
     case CSSPropertyID::kPaddingTop:
       result = style.PaddingTop();
+      success = true;
+      break;
+    case CSSPropertyID::kPathLength:
+      result = style.PathLength();
       success = true;
       break;
     case CSSPropertyID::kR:
@@ -316,31 +329,19 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
       break;
 
     case CSSPropertyID::kBorderBottomWidth:
-      result =
-          RuntimeEnabledFeatures::DecoupleComputedBorderWidthFromStyleEnabled()
-              ? Length::Fixed(style.BorderBottomWidthInternal())
-              : Length::Fixed(style.BorderBottomWidth());
+      result = Length::Fixed(style.SpecifiedBorderBottomWidth());
       success = true;
       break;
     case CSSPropertyID::kBorderLeftWidth:
-      result =
-          RuntimeEnabledFeatures::DecoupleComputedBorderWidthFromStyleEnabled()
-              ? Length::Fixed(style.BorderLeftWidthInternal())
-              : Length::Fixed(style.BorderLeftWidth());
+      result = Length::Fixed(style.SpecifiedBorderLeftWidth());
       success = true;
       break;
     case CSSPropertyID::kBorderRightWidth:
-      result =
-          RuntimeEnabledFeatures::DecoupleComputedBorderWidthFromStyleEnabled()
-              ? Length::Fixed(style.BorderRightWidthInternal())
-              : Length::Fixed(style.BorderRightWidth());
+      result = Length::Fixed(style.SpecifiedBorderRightWidth());
       success = true;
       break;
     case CSSPropertyID::kBorderTopWidth:
-      result =
-          RuntimeEnabledFeatures::DecoupleComputedBorderWidthFromStyleEnabled()
-              ? Length::Fixed(style.BorderTopWidthInternal())
-              : Length::Fixed(style.BorderTopWidth());
+      result = Length::Fixed(style.SpecifiedBorderTopWidth());
       success = true;
       break;
     case CSSPropertyID::kLetterSpacing:
@@ -352,10 +353,7 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
       success = true;
       break;
     case CSSPropertyID::kOutlineWidth:
-      result =
-          RuntimeEnabledFeatures::DecoupleComputedBorderWidthFromStyleEnabled()
-              ? Length::Fixed(style.OutlineWidthInternal())
-              : Length::Fixed(style.OutlineWidth());
+      result = Length::Fixed(style.OutlineWidth());
       success = true;
       break;
     case CSSPropertyID::kWebkitBorderHorizontalSpacing:
@@ -378,36 +376,36 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
         success = true;
       }
       break;
-    case CSSPropertyID::kColumnRuleEdgeInsetEnd:
-      result = style.ColumnRuleEdgeInsetEnd();
+    case CSSPropertyID::kColumnRuleInsetCapEnd:
+      result = style.ColumnRuleInsetCapEnd();
       success = true;
       break;
-    case CSSPropertyID::kRowRuleEdgeInsetEnd:
-      result = style.RowRuleEdgeInsetEnd();
+    case CSSPropertyID::kRowRuleInsetCapEnd:
+      result = style.RowRuleInsetCapEnd();
       success = true;
       break;
-    case CSSPropertyID::kColumnRuleEdgeInsetStart:
-      result = style.ColumnRuleEdgeInsetStart();
+    case CSSPropertyID::kColumnRuleInsetCapStart:
+      result = style.ColumnRuleInsetCapStart();
       success = true;
       break;
-    case CSSPropertyID::kRowRuleEdgeInsetStart:
-      result = style.RowRuleEdgeInsetStart();
+    case CSSPropertyID::kRowRuleInsetCapStart:
+      result = style.RowRuleInsetCapStart();
       success = true;
       break;
-    case CSSPropertyID::kColumnRuleInteriorInsetEnd:
-      result = style.ColumnRuleInteriorInsetEnd();
+    case CSSPropertyID::kColumnRuleInsetJunctionEnd:
+      result = style.ColumnRuleInsetJunctionEnd();
       success = true;
       break;
-    case CSSPropertyID::kRowRuleInteriorInsetEnd:
-      result = style.RowRuleInteriorInsetEnd();
+    case CSSPropertyID::kRowRuleInsetJunctionEnd:
+      result = style.RowRuleInsetJunctionEnd();
       success = true;
       break;
-    case CSSPropertyID::kColumnRuleInteriorInsetStart:
-      result = style.ColumnRuleInteriorInsetStart();
+    case CSSPropertyID::kColumnRuleInsetJunctionStart:
+      result = style.ColumnRuleInsetJunctionStart();
       success = true;
       break;
-    case CSSPropertyID::kRowRuleInteriorInsetStart:
-      result = style.RowRuleInteriorInsetStart();
+    case CSSPropertyID::kRowRuleInsetJunctionStart:
+      result = style.RowRuleInsetJunctionStart();
       success = true;
       break;
     case CSSPropertyID::kColumnRuleWidth:
@@ -442,7 +440,7 @@ bool LengthPropertyFunctions::GetLength(const CSSProperty& property,
       }
       break;
     case CSSPropertyID::kLineHeight: {
-      const Length& line_height = style.SpecifiedLineHeight();
+      const Length& line_height = style.LineHeight();
       // Percent Lengths are used to represent numbers on line-height.
       if (!line_height.HasPercent()) {
         result = line_height;
@@ -571,6 +569,9 @@ bool LengthPropertyFunctions::SetLength(const CSSProperty& property,
       return true;
     case CSSPropertyID::kPaddingTop:
       builder.SetPaddingTop(value);
+      return true;
+    case CSSPropertyID::kPathLength:
+      builder.SetPathLength(value);
       return true;
     case CSSPropertyID::kR:
       builder.SetR(value);

@@ -12,10 +12,11 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_handle_util.h"
+#include "base/win/windows_version.h"
+#include "content/browser/sandboxed_process_launcher_delegate.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/utility/sandbox_delegate_data.mojom.h"
 #include "sandbox/policy/features.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
@@ -94,7 +95,7 @@ bool NetworkInitializeConfig(sandbox::TargetConfig* config) {
   if (!app_container) {
     return false;
   }
-  app_container->AddCapability(lpac_capability.c_str());
+  app_container->AddCapability(lpac_capability);
 
   // Add capability SID for 'network_service' for loopback access for testing.
   // Run 'checkNetIsolation.exe loopbackExempt -a -n=network_service' while
@@ -166,6 +167,111 @@ bool OnDeviceModelExecutionInitializeConfig(
   if (result != sandbox::SBOX_ALL_OK) {
     return false;
   }
+  return true;
+}
+
+bool WebNNModelCompilationInitializeConfig(sandbox::TargetConfig* config) {
+  DCHECK(!config->IsConfigured());
+
+  // Two-stage WebNN compiler sandbox (see crbug.com/500769395 and
+  // content/utility/webnn/webnn_sandbox_init.cc):
+  //
+  //   1. Process creation: this function. The process runs inside an LPAC
+  //      with the capability set configured by
+  //      sandbox::policy::SandboxWin::SetupAppContainerProfile() (chrome
+  //      install files, registry-read). Token is USER_RESTRICTED_SAME_ACCESS
+  //      (initial) / USER_LOCKDOWN (lockdown). Win32k is disabled as a startup
+  //      mitigation.
+  //   2. Pre-LowerToken: in the child, content/utility/utility_main.cc
+  //      calls webnn::PreSandboxInit() to invoke the helper functions
+  //      that load third-party execution providers (today the ONNX
+  //      Runtime; LiteRT and other backends may follow). LowerToken()
+  //      then drops the token to USER_LOCKDOWN and applies the delayed
+  //      mitigations (MITIGATION_DYNAMIC_CODE_DISABLE, plus
+  //      MITIGATION_FORCE_MS_SIGNED_BINS unless
+  //      --allow-third-party-modules is set). No delayed integrity
+  //      level is configured: under LPAC the integrity is governed by
+  //      the AppContainer token itself, so LowerToken's
+  //      SetProcessIntegrityLevel call is a no-op for this process.
+  //
+  // Pre-launch Code Integrity Guard (MITIGATION_FORCE_MS_SIGNED_BINS as a
+  // startup mitigation) is *not* applied here. Doing so would block the
+  // loader from mapping chrome.dll and chrome_elf.dll, since neither is
+  // Microsoft-signed. Startup CIG is instead wired through
+  // ChromeContentBrowserClient::PreSpawnChild(), which pairs it with
+  // AllowExtraDll() calls for those two DLLs and lets developers opt out
+  // via --allow-third-party-modules (the same switch that disables the
+  // delayed MITIGATION_FORCE_MS_SIGNED_BINS in
+  // sandbox::policy::SandboxWin).
+  //
+  // Because LPAC is enabled (see GetAppContainerId() below) the broker
+  // skips AddDefaultConfigForSandboxedProcess(), so this function is
+  // responsible for the entire per-process configuration. The LPAC
+  // capability SIDs and the LPAC's own integrity-level semantics provide
+  // access control instead of the default INTEGRITY_LEVEL_LOW /
+  // INTEGRITY_LEVEL_UNTRUSTED + kDeviceApi closure that non-LPAC utility
+  // processes inherit; the lockdown DACL is re-applied explicitly below.
+
+  // Rely on LPAC (not USER_LIMITED) to limit access to C:\Users\* during
+  // stage 2, while keeping USER_LOCKDOWN as the post-LowerToken token
+  // level for the tightest restriction (no new handles can be opened).
+  // These are also the same values AddDefaultConfigForSandboxedProcess()
+  // would have set; we set them explicitly here because the default
+  // config is skipped under LPAC.
+  sandbox::ResultCode result = config->SetTokenLevel(
+      sandbox::USER_RESTRICTED_SAME_ACCESS, sandbox::USER_LOCKDOWN);
+  if (result != sandbox::SBOX_ALL_OK) {
+    return false;
+  }
+
+  // Add MITIGATION_WIN32K_DISABLE to the *startup* mitigation set.
+  // The broker passes this through PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY
+  // to CreateProcess, so the kernel rejects every Win32k syscall from the
+  // child from its very first instruction of user code.
+  //
+  // Intentionally NOT calling AddWin32kLockdownPolicy() here because it
+  // may call SetFakeGdiInit(), which installs Export Address Table hooks that
+  // let gdi32.dll appear to load successfully (fake GdiDllInitialize returns
+  // TRUE) while leaving the GDI shared memory section unmapped. ORT's
+  // device discovery through DXGI may call
+  // gdi32!DdQueryDisplaySettingsUniqueness, which reads from that shared
+  // section. The fake-init state causes an AV because the section base is NULL.
+  //
+  // Fake GDI init only exists because winmm.dll (timeGetTime) depended on
+  // user32/gdi32 up to Windows 10 RS1. Skipping it is therefore only safe on
+  // RS1 and later.
+  if (base::win::GetVersion() < base::win::Version::WIN10_RS1) {
+    return false;
+  }
+  // TODO(crbug.com/535696699): Replace this block with
+  // AddWin32kLockdownPolicy() once ORT no longer touches GDI during device
+  // discovery.
+  sandbox::MitigationFlags flags = config->GetProcessMitigations();
+  flags |= sandbox::MITIGATION_WIN32K_DISABLE;
+  result = config->SetProcessMitigations(flags);
+  if (result != sandbox::SBOX_ALL_OK) {
+    return false;
+  }
+
+  // No UI work is permitted; once Win32k is disabled the per-UI job
+  // limits are redundant, so ask for the strictest job level with no UI
+  // flags. The broker's GenerateConfigForSandboxedProcess() already
+  // sets JobLevel::kLockdown for every sandbox; this is a defensive
+  // re-assertion so that any future change to that default does not
+  // silently weaken this profile.
+  result = sandbox::policy::SandboxWin::SetJobLevel(
+      sandbox::mojom::Sandbox::kWebNNModelCompilation,
+      sandbox::JobLevel::kLockdown, /*ui_exceptions=*/0, config);
+  if (result != sandbox::SBOX_ALL_OK) {
+    return false;
+  }
+
+  // Restore the default-DACL hardening normally supplied by
+  // AddDefaultConfigForSandboxedProcess(), which is skipped under LPAC.
+  // This locks down the default DACL of kernel objects this process
+  // creates so that other processes can't open handles into them.
+  config->SetLockdownDefaultDacl();
+
   return true;
 }
 
@@ -247,6 +353,7 @@ bool UtilitySandboxedProcessLauncherDelegate::GetAppContainerId(
     case sandbox::mojom::Sandbox::kNetwork:
     case sandbox::mojom::Sandbox::kOnDeviceModelExecution:
     case sandbox::mojom::Sandbox::kProxyResolver:
+    case sandbox::mojom::Sandbox::kWebNNModelCompilation:
     case sandbox::mojom::Sandbox::kXrCompositing:
       *appcontainer_id = UtilityAppContainerId(cmd_line_);
       return true;
@@ -309,6 +416,12 @@ bool UtilitySandboxedProcessLauncherDelegate::InitializeConfig(
     }
   }
 
+  if (sandbox_type_ == sandbox::mojom::Sandbox::kWebNNModelCompilation) {
+    if (!WebNNModelCompilationInitializeConfig(config)) {
+      return false;
+    }
+  }
+
   if (sandbox_type_ == sandbox::mojom::Sandbox::kXrCompositing) {
     if (!XrCompositingInitializeConfig(config, cmd_line_, sandbox_type_)) {
       return false;
@@ -352,7 +465,10 @@ bool UtilitySandboxedProcessLauncherDelegate::InitializeConfig(
   }
 
   if (sandbox_type_ == sandbox::mojom::Sandbox::kService ||
-      sandbox_type_ == sandbox::mojom::Sandbox::kServiceWithJit) {
+      sandbox_type_ == sandbox::mojom::Sandbox::kServiceWithJit ||
+      (sandbox_type_ == sandbox::mojom::Sandbox::kSpeechRecognition &&
+       base::FeatureList::IsEnabled(
+           sandbox::policy::features::kSpeechRecognitionSandboxHardening))) {
     auto result = sandbox::policy::SandboxWin::AddWin32kLockdownPolicy(config);
     if (result != sandbox::SBOX_ALL_OK) {
       return false;

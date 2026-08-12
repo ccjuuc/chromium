@@ -11,6 +11,7 @@
 #include <array>
 #include <memory>
 
+#include "base/byte_size.h"
 #include "base/containers/queue.h"
 #include "base/containers/span.h"
 #include "base/numerics/byte_conversions.h"
@@ -652,7 +653,7 @@ void NetworkSpeechRecognitionEngineImplTest::CloseMockDownstream(
   ASSERT_TRUE(downstream_request);
 
   network::URLLoaderCompletionStatus status;
-  status.decoded_body_length = response_buffer_.size();
+  status.decoded_body_length = base::ByteSize(response_buffer_.size());
   status.error_code =
       (error == DOWNSTREAM_ERROR_NETWORK) ? net::ERR_FAILED : net::OK;
   downstream_request->client->OnComplete(status);
@@ -763,9 +764,9 @@ std::string NetworkSpeechRecognitionEngineImplTest::SerializeProtobufResponse(
 
   // Prepend 4 byte prefix length indication to the protobuf message as
   // envisaged by the google streaming recognition webservice protocol.
-  msg_string.insert(0u, base::as_string_view(base::U32ToBigEndian(
-                            base::checked_cast<uint32_t>(msg_string.size()))));
-
+  auto msg_size_bytes =
+      base::U32ToBigEndian(base::checked_cast<uint32_t>(msg_string.size()));
+  msg_string.insert(0u, base::as_string_view(msg_size_bytes));
   return msg_string;
 }
 

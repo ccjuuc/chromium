@@ -8,6 +8,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
@@ -20,6 +21,8 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/mojom/page/widget.mojom-shared.h"
+#include "third_party/blink/public/web/web_plugin_params.h"
+#include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/renderer/core/css/properties/css_property_ref.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
@@ -39,6 +42,9 @@
 #include "third_party/blink/renderer/core/input/event_handler.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+#include "third_party/blink/renderer/core/scroll/scrollbar.h"
+#include "third_party/blink/renderer/core/testing/fake_web_plugin.h"
+#include "third_party/blink/renderer/core/testing/scoped_fake_plugin_registry.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
 #include "third_party/blink/renderer/platform/scheduler/test/fake_task_runner.h"
@@ -49,6 +55,7 @@
 #include "third_party/blink/renderer/platform/widget/widget_base.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/base/mojom/window_show_state.mojom-blink.h"
+#include "ui/display/screen_info.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "components/stylus_handwriting/win/features.h"
@@ -129,6 +136,55 @@ TEST_F(WebFrameWidgetSimTest, AutoResizeAllocatedLocalSurfaceId) {
                   ->new_local_surface_id_request_for_testing());
 }
 
+TEST_F(WebFrameWidgetSimTest, ColorGamutChangeTriggersMediaQuery) {
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(R"HTML(
+    <script>
+      window.__changed = false;
+      const mq = window.matchMedia("(color-gamut: p3)");
+      mq.addEventListener("change", () => { window.__changed = true; });
+    </script>
+  )HTML");
+
+  viz::ParentLocalSurfaceIdAllocator allocator;
+  allocator.GenerateId();
+
+  VisualProperties visual_properties;
+  visual_properties.local_surface_id = allocator.GetCurrentLocalSurfaceId();
+
+  display::ScreenInfo screen_info;
+  screen_info.display_color_spaces =
+      gfx::DisplayColorSpaces(gfx::ColorSpace::CreateSRGB());
+  visual_properties.screen_infos = display::ScreenInfos(screen_info);
+
+  WebView().MainFrameWidget()->ApplyVisualProperties(visual_properties);
+  WebView().MainFrameViewWidget()->UpdateSurfaceAndScreenInfo(
+      visual_properties.local_surface_id.value(),
+      visual_properties.compositor_viewport_pixel_rect,
+      visual_properties.screen_infos);
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  screen_info.display_color_spaces =
+      gfx::DisplayColorSpaces(gfx::ColorSpace::CreateDisplayP3D65());
+  visual_properties.screen_infos = display::ScreenInfos(screen_info);
+
+  WebView().MainFrameViewWidget()->UpdateSurfaceAndScreenInfo(
+      visual_properties.local_surface_id.value(),
+      visual_properties.compositor_viewport_pixel_rect,
+      visual_properties.screen_infos);
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  v8::Local<v8::Value> changed = MainFrame().ExecuteScriptAndReturnValue(
+      WebScriptSource("window.__changed"));
+  EXPECT_TRUE(changed->BooleanValue(Window().GetIsolate()));
+}
+
 TEST_F(WebFrameWidgetSimTest, FrameSinkIdHitTestAPI) {
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
@@ -165,6 +221,81 @@ TEST_F(WebFrameWidgetSimTest, FrameSinkIdHitTestAPI) {
           gfx::PointF(150.27, 150.25), &point);
   EXPECT_EQ(main_frame_sink_id, frame_sink_id);
   EXPECT_EQ(gfx::PointF(150.27, 150.25), point);
+}
+
+class FrameSinkIdTestPlugin : public FakeWebPlugin {
+ public:
+  FrameSinkIdTestPlugin(const WebPluginParams& params,
+                        viz::FrameSinkId frame_sink_id)
+      : FakeWebPlugin(params), frame_sink_id_(frame_sink_id) {}
+
+  viz::FrameSinkId GetFrameSinkId() override { return frame_sink_id_; }
+
+ private:
+  viz::FrameSinkId frame_sink_id_;
+};
+
+class FrameSinkIdPluginWebFrameClient
+    : public frame_test_helpers::TestWebFrameClient {
+ public:
+  explicit FrameSinkIdPluginWebFrameClient(viz::FrameSinkId frame_sink_id)
+      : frame_sink_id_(frame_sink_id) {}
+
+  WebPlugin* CreatePlugin(const WebPluginParams& params) override {
+    return new FrameSinkIdTestPlugin(params, frame_sink_id_);
+  }
+
+ private:
+  viz::FrameSinkId frame_sink_id_;
+};
+
+class WebFrameWidgetPluginHitTestTest : public SimTest {
+ public:
+  std::unique_ptr<frame_test_helpers::TestWebFrameClient>
+  CreateWebFrameClientForMainFrame() override {
+    return std::make_unique<FrameSinkIdPluginWebFrameClient>(
+        plugin_frame_sink_id_);
+  }
+
+ protected:
+  viz::FrameSinkId plugin_frame_sink_id_{42, 42};
+  ScopedFakePluginRegistry fake_plugins_;
+};
+
+TEST_F(WebFrameWidgetPluginHitTestTest, GetFrameSinkIdAtPointPlugin) {
+  WebView().GetPage()->GetSettings().SetPluginsEnabled(true);
+
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(
+      R"HTML(
+      <style>
+      html, body {
+        margin: 0px;
+        padding: 0px;
+      }
+      </style>
+      <embed id='plugin' type='application/x-webkit-test-webplugin'
+             style='width: 200px; height: 100px; margin: 0px; padding: 0px;'></embed>
+      )HTML");
+
+  Compositor().BeginFrame();
+  test::RunPendingTasks();
+
+  gfx::PointF point;
+  viz::FrameSinkId frame_sink_id =
+      WebView().MainFrameViewWidget()->GetFrameSinkIdAtPoint(
+          gfx::PointF(100.0f, 50.0f), &point);
+  EXPECT_EQ(plugin_frame_sink_id_, frame_sink_id);
+  EXPECT_EQ(gfx::PointF(100.0f, 50.0f), point);
+
+  // Test a point outside of the plugin.
+  viz::FrameSinkId frame_sink_id_outside =
+      WebView().MainFrameViewWidget()->GetFrameSinkIdAtPoint(
+          gfx::PointF(250.0f, 150.0f), &point);
+  EXPECT_EQ(WebView().MainFrameViewWidget()->GetFrameSinkId(),
+            frame_sink_id_outside);
+  EXPECT_EQ(gfx::PointF(250.0f, 150.0f), point);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -246,9 +377,9 @@ class WebFrameWidgetScrollContainerHitTest : public WebFrameWidgetSimTest {
         widget.GetScrollableContainerIdAt(box1_target_offset);
     EXPECT_EQ(scrollable_id, box1_dom_node_id);
 
-    visual_viewport.SetScrollOffset(ScrollOffset(0, 50),
-                                    mojom::blink::ScrollType::kProgrammatic,
-                                    cc::ScrollSourceType::kNone);
+    visual_viewport.SetScrollOffset(
+        ScrollOffset(0, 50), mojom::blink::ScrollType::kProgrammatic,
+        cc::ScrollSourceType::kNone, mojom::blink::ScrollBehavior::kInstant);
     EXPECT_EQ(visual_viewport.GetScrollOffset(), ScrollOffset(0, 50));
     scrollable_id = widget.GetScrollableContainerIdAt(box2_target_offset);
     EXPECT_EQ(scrollable_id, box2_dom_node_id);
@@ -282,7 +413,6 @@ TEST_F(WebFrameWidgetScrollContainerHitTest, PageScaleHalf) {
   TestScrollContainerHitTest(gfx::PointF(50, 50), gfx::PointF(50, 150));
 }
 
-// A test that forces a RemoteMainFrame to be created.
 class WebFrameWidgetImplRemoteFrameSimTest : public SimTest {
  public:
   void SetUp() override {
@@ -323,21 +453,6 @@ TEST_F(WebFrameWidgetImplRemoteFrameSimTest,
   LocalFrameRootWidget()->ApplyVisualProperties(visual_properties);
   EXPECT_FALSE(layer_tree_host->is_external_pinch_gesture_active_for_testing());
 }
-
-const char EVENT_LISTENER_RESULT_HISTOGRAM[] = "Event.PassiveListeners";
-
-// Keep in sync with enum defined in
-// RenderWidgetInputHandler::LogPassiveEventListenersUma.
-enum {
-  PASSIVE_LISTENER_UMA_ENUM_PASSIVE,
-  PASSIVE_LISTENER_UMA_ENUM_UNCANCELABLE,
-  PASSIVE_LISTENER_UMA_ENUM_SUPPRESSED,
-  PASSIVE_LISTENER_UMA_ENUM_CANCELABLE,
-  PASSIVE_LISTENER_UMA_ENUM_CANCELABLE_AND_CANCELED,
-  PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING,
-  PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_MAIN_THREAD_RESPONSIVENESS_DEPRECATED,
-  PASSIVE_LISTENER_UMA_ENUM_COUNT
-};
 
 // Since std::unique_ptr<InputHandlerProxy::DidOverscrollParams> isn't copyable
 // we can't use the MockCallback template.
@@ -435,13 +550,6 @@ class WebFrameWidgetImplSimTest : public SimTest {
 #endif  // BUILDFLAG(IS_WIN)
         base::DoNothing());
   }
-
-  const base::HistogramTester& histogram_tester() const {
-    return histogram_tester_;
-  }
-
- private:
-  base::HistogramTester histogram_tester_;
 };
 
 TEST_F(WebFrameWidgetImplSimTest, CursorChange) {
@@ -469,69 +577,6 @@ TEST_F(WebFrameWidgetImplSimTest, CursorChange) {
   MockMainFrameWidget()->SetCursor(cursor);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(widget_host.CursorSetCount(), 2u);
-}
-
-TEST_F(WebFrameWidgetImplSimTest, RenderWidgetInputEventUmaMetrics) {
-  SyntheticWebTouchEvent touch;
-  touch.PressPoint(10, 10);
-  touch.touch_start_or_first_touch_move = true;
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .Times(5)
-      .WillRepeatedly(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .Times(5)
-      .WillRepeatedly(::testing::Return(WebInputEventResult::kNotHandled));
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_CANCELABLE, 1);
-
-  touch.dispatch_type = WebInputEvent::DispatchType::kEventNonBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_UNCANCELABLE,
-                                       1);
-
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersNonBlockingPassive;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_PASSIVE, 1);
-
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersForcedNonBlockingDueToFling;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING, 1);
-
-  touch.MovePoint(0, 10, 10);
-  touch.touch_start_or_first_touch_move = true;
-  touch.dispatch_type =
-      WebInputEvent::DispatchType::kListenersForcedNonBlockingDueToFling;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_FORCED_NON_BLOCKING_DUE_TO_FLING, 2);
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .WillOnce(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .WillOnce(::testing::Return(WebInputEventResult::kHandledSuppressed));
-  touch.dispatch_type = WebInputEvent::DispatchType::kBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(EVENT_LISTENER_RESULT_HISTOGRAM,
-                                       PASSIVE_LISTENER_UMA_ENUM_SUPPRESSED, 1);
-
-  EXPECT_CALL(*MockMainFrameWidget(), HandleInputEvent(_))
-      .WillOnce(::testing::Return(WebInputEventResult::kNotHandled));
-  EXPECT_CALL(*MockMainFrameWidget(), DispatchBufferedTouchEvents())
-      .WillOnce(::testing::Return(WebInputEventResult::kHandledApplication));
-  touch.dispatch_type = WebInputEvent::DispatchType::kBlocking;
-  SendInputEvent(touch, base::DoNothing());
-  histogram_tester().ExpectBucketCount(
-      EVENT_LISTENER_RESULT_HISTOGRAM,
-      PASSIVE_LISTENER_UMA_ENUM_CANCELABLE_AND_CANCELED, 1);
 }
 
 // Ensures that the compositor thread gets sent the gesture event & overscroll
@@ -2558,6 +2603,50 @@ TEST_F(WebFrameWidgetSimTest, TestLineBoundsAreClippedInSubframe) {
     EXPECT_EQ(expected.at(i), actual.at(i));
   }
 }
+
+TEST_F(WebFrameWidgetSimTest, TestCursorAnchorInfoWithEditContext) {
+  WebView().ResizeVisualViewport(gfx::Size(1000, 1000));
+  auto* widget = WebView().MainFrameViewWidget();
+  SimRequest request("https://example.com/test.html", "text/html");
+  LoadURL("https://example.com/test.html");
+  request.Complete(
+      R"HTML(
+      <!doctype html>
+      <div id="target" style='width:200px;height:200px'></div>
+      <script>
+        const editContext = new EditContext();
+        const target = document.getElementById('target');
+        target.editContext = editContext;
+        target.focus();
+        let controlBounds = new DOMRect(10, 20, 100, 50);
+        editContext.updateControlBounds(controlBounds);
+        let selectionBounds = new DOMRect(15, 25, 2, 10);
+        editContext.updateSelectionBounds(selectionBounds);
+      </script>
+      )HTML");
+  Compositor().BeginFrame();
+  widget->UpdateAllLifecyclePhases(DocumentUpdateReason::kTest);
+
+  // Directly verify CalculateCursorAnchorInfo using ForTesting helper
+  mojom::blink::InputCursorAnchorInfoPtr info =
+      widget->CalculateCursorAnchorInfoForTesting(/*update_requested=*/true);
+  ASSERT_TRUE(info);
+  EXPECT_EQ(gfx::RectF(10, 20, 100, 50),
+            info->editor_bounds_info->editor_bounds);
+  EXPECT_TRUE(info->insertion_marker.has_value());
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10), info->insertion_marker.value());
+
+  // Also verify UpdateCursorAnchorInfo properly populates
+  // last_cursor_anchor_info_
+  widget->UpdateCursorAnchorInfo(/*update_requested=*/true);
+  mojom::blink::InputCursorAnchorInfoPtr& actual =
+      widget->GetLastCursorAnchorInfoForTesting();
+  ASSERT_TRUE(actual);
+  EXPECT_EQ(gfx::RectF(10, 20, 100, 50),
+            actual->editor_bounds_info->editor_bounds);
+  EXPECT_TRUE(actual->insertion_marker.has_value());
+  EXPECT_EQ(gfx::Rect(15, 25, 2, 10), actual->insertion_marker.value());
+}
 #endif  // BUILDFLAG(IS_ANDROID)
 
 class EventHandlingWebFrameWidgetSimTest : public SimTest {
@@ -2821,5 +2910,171 @@ TEST_F(EventHandlingWebFrameWidgetSimTest, RafAlignedEventWithUpdate) {
   GetTestWebFrameWidget().CompositeAndWaitForPresentation(Compositor());
   EXPECT_EQ(TestSwapPromise::State::kResolved, swap_promise_state);
 }
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+class WebFrameWidgetAdditionalWindowingControlsTest : public SimTest {
+ public:
+  WebFrameWidgetAdditionalWindowingControlsTest()
+      : SimTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  void SetUp() override {
+    feature_list_.InitAndEnableFeature(
+        features::kDesktopPWAsAdditionalWindowingControls);
+    SimTest::SetUp();
+  }
+  void FastForwardBy(base::TimeDelta delta) {
+    task_environment().FastForwardBy(delta);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest, MaximizeCallbackCalled) {
+  using ui::mojom::blink::WindowShowState;
+
+  const std::vector<WindowShowState> start_states = {
+      WindowShowState::kDefault, WindowShowState::kNormal,
+      WindowShowState::kMinimized, WindowShowState::kFullscreen};
+
+  for (const WindowShowState start_state : start_states) {
+    SCOPED_TRACE(testing::Message() << "Testing transition from " << start_state
+                                    << " to " << WindowShowState::kMaximized);
+    base::MockOnceCallback<void(bool)> maximize_callback;
+    EXPECT_CALL(maximize_callback, Run(true));
+
+    WebView().MainFrameViewWidget()->MaximizeRequested(maximize_callback.Get());
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/start_state,
+        /*new_state=*/WindowShowState::kMaximized);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest, MinimizeCallbackCalled) {
+  using ui::mojom::blink::WindowShowState;
+
+  const std::vector<WindowShowState> start_states = {
+      WindowShowState::kDefault, WindowShowState::kNormal,
+      WindowShowState::kMaximized, WindowShowState::kFullscreen};
+
+  for (const WindowShowState start_state : start_states) {
+    SCOPED_TRACE(testing::Message() << "Testing transition from " << start_state
+                                    << " to " << WindowShowState::kMinimized);
+    base::MockOnceCallback<void(bool)> minimize_callback;
+    EXPECT_CALL(minimize_callback, Run(true));
+
+    WebView().MainFrameViewWidget()->MinimizeRequested(minimize_callback.Get());
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/start_state,
+        /*new_state=*/WindowShowState::kMinimized);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest,
+       RestoreToNormalCallbackCalled) {
+  using ui::mojom::blink::WindowShowState;
+
+  const std::vector<WindowShowState> start_states = {
+      WindowShowState::kMinimized, WindowShowState::kMaximized,
+      WindowShowState::kFullscreen};
+
+  for (const WindowShowState start_state : start_states) {
+    SCOPED_TRACE(testing::Message() << "Testing transition from " << start_state
+                                    << " to " << WindowShowState::kNormal);
+    base::MockOnceCallback<void(bool)> restore_callback;
+    EXPECT_CALL(restore_callback, Run(true));
+
+    WebView().MainFrameViewWidget()->RestoreRequested(restore_callback.Get());
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/start_state,
+        /*new_state=*/WindowShowState::kNormal);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest,
+       RestoreToMaximizedCallbackCalled) {
+  using ui::mojom::blink::WindowShowState;
+
+  const std::vector<WindowShowState> start_states = {
+      WindowShowState::kMinimized, WindowShowState::kFullscreen};
+
+  for (const WindowShowState start_state : start_states) {
+    SCOPED_TRACE(testing::Message() << "Testing transition from " << start_state
+                                    << " to " << WindowShowState::kMaximized);
+    base::MockOnceCallback<void(bool)> restore_callback;
+    EXPECT_CALL(restore_callback, Run(true));
+
+    WebView().MainFrameViewWidget()->RestoreRequested(restore_callback.Get());
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/start_state,
+        /*new_state=*/WindowShowState::kMaximized);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest,
+       SetResizableCallbackCalled) {
+  const std::vector<bool> values_to_test = {true, false};
+  for (const bool value_to_test : values_to_test) {
+    base::MockOnceCallback<void(bool)> set_resizable_callback;
+    EXPECT_CALL(set_resizable_callback, Run(true));
+
+    WebView().MainFrameViewWidget()->SetResizableRequested(
+        value_to_test, set_resizable_callback.Get());
+    WebView().MainFrameViewWidget()->OnResizableChanged(
+        /*new_resizable=*/value_to_test);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest,
+       WindowShowStateChangeTimeout) {
+  using ui::mojom::blink::WindowShowState;
+  static constexpr base::TimeDelta kWindowShowStateChangeTimeout =
+      base::Seconds(5);
+
+  {
+    base::MockOnceCallback<void(bool)> maximize_callback;
+    EXPECT_CALL(maximize_callback, Run(false));
+    WebView().MainFrameViewWidget()->MaximizeRequested(maximize_callback.Get());
+    FastForwardBy(kWindowShowStateChangeTimeout + base::Seconds(1));
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/WindowShowState::kNormal,
+        /*new_state=*/WindowShowState::kMaximized);
+  }
+  {
+    base::MockOnceCallback<void(bool)> minimize_callback;
+    EXPECT_CALL(minimize_callback, Run(false));
+    WebView().MainFrameViewWidget()->MinimizeRequested(minimize_callback.Get());
+    FastForwardBy(kWindowShowStateChangeTimeout + base::Seconds(1));
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/WindowShowState::kMaximized,
+        /*new_state=*/WindowShowState::kMinimized);
+  }
+  {
+    base::MockOnceCallback<void(bool)> restore_callback;
+    EXPECT_CALL(restore_callback, Run(false));
+    WebView().MainFrameViewWidget()->RestoreRequested(restore_callback.Get());
+    FastForwardBy(kWindowShowStateChangeTimeout + base::Seconds(1));
+    WebView().MainFrameViewWidget()->OnWindowShowStateChanged(
+        /*old_state=*/WindowShowState::kMinimized,
+        /*new_state=*/WindowShowState::kMaximized);
+  }
+}
+
+TEST_F(WebFrameWidgetAdditionalWindowingControlsTest, SetResizableTimeout) {
+  static constexpr base::TimeDelta kWindowShowStateChangeTimeout =
+      base::Seconds(5);
+  WebView().MainFrameViewWidget()->SetResizableRequested(/*resizable=*/false,
+                                                         base::DoNothing());
+  WebView().MainFrameViewWidget()->OnResizableChanged(/*new_resizable=*/false);
+
+  base::MockOnceCallback<void(bool)> set_resizable_callback;
+  EXPECT_CALL(set_resizable_callback, Run(false));
+  WebView().MainFrameViewWidget()->SetResizableRequested(
+      /*resizable=*/true, set_resizable_callback.Get());
+  FastForwardBy(kWindowShowStateChangeTimeout + base::Seconds(1));
+  WebView().MainFrameViewWidget()->OnResizableChanged(/*new_resizable=*/true);
+}
+
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 }  // namespace blink

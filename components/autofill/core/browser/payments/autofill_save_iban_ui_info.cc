@@ -4,7 +4,9 @@
 
 #include "components/autofill/core/browser/payments/autofill_save_iban_ui_info.h"
 
+#include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/strings/grit/components_strings.h"
@@ -60,10 +62,33 @@ AutofillSaveIbanUiInfo AutofillSaveIbanUiInfo::CreateForLocalSave(
 AutofillSaveIbanUiInfo AutofillSaveIbanUiInfo::CreateForUploadSave(
     const std::u16string& iban_value,
     const LegalMessageLines& legal_message_lines) {
+  bool is_wallet_branding_v2_enabled =
+      base::FeatureList::IsEnabled(features::kAutofillEnableWalletBrandingV2);
+
+  int logo_icon_id;
+  if (base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)) {
+    if (is_wallet_branding_v2_enabled) {
+      logo_icon_id = base::FeatureList::IsEnabled(
+                         features::kAutofillEnableGradientGoogleLogos)
+                         ? IDR_AUTOFILL_GOOGLE_WALLET_ICON_WITH_GRADIENT
+                         : IDR_AUTOFILL_GOOGLE_WALLET_ICON;
+    } else {
+      logo_icon_id = IDR_AUTOFILL_GOOGLE_WALLET;
+    }
+  } else {
+    logo_icon_id = IDR_AUTOFILL_GOOGLE_PAY;
+  }
+
   return CreateAutofillSaveIbanUiInfo(
-      /*is_server_save=*/true, IDR_AUTOFILL_GOOGLE_PAY, iban_value,
-      l10n_util::GetStringUTF16(IDS_AUTOFILL_SAVE_IBAN_PROMPT_TITLE_SERVER),
-      l10n_util::GetStringUTF16(IDS_AUTOFILL_UPLOAD_IBAN_PROMPT_EXPLANATION),
+      /*is_server_save=*/true, logo_icon_id, iban_value,
+      l10n_util::GetStringUTF16(
+          is_wallet_branding_v2_enabled
+              ? IDS_AUTOFILL_SAVE_IBAN_TO_WALLET_PROMPT_TITLE
+              : IDS_AUTOFILL_SAVE_IBAN_PROMPT_TITLE_SERVER),
+      l10n_util::GetStringUTF16(
+          base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
+              ? IDS_AUTOFILL_UPLOAD_IBAN_TO_WALLET_PROMPT_EXPLANATION
+              : IDS_AUTOFILL_UPLOAD_IBAN_PROMPT_EXPLANATION),
       l10n_util::GetStringUTF16(IDS_AUTOFILL_SAVE_IBAN_MOBILE_ACCEPT),
       l10n_util::GetStringUTF16(IDS_AUTOFILL_SAVE_IBAN_MOBILE_NO_THANKS),
       legal_message_lines);

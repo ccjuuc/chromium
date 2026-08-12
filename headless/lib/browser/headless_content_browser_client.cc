@@ -22,12 +22,12 @@
 #include "build/build_config.h"
 #include "components/embedder_support/switches.h"
 #include "components/headless/command_handler/headless_command_switches.h"
-#include "components/policy/content/safe_search_service.h"
-#include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/digital_identity_provider.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/overlay_window.h"
 #include "content/public/browser/render_process_host.h"
@@ -62,20 +62,12 @@
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)) && defined(HEADLESS_USE_PREFS)
-#include "components/os_crypt/sync/os_crypt.h"  // nogncheck
 #include "content/public/browser/network_service_util.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
 #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #endif
-
-#if defined(HEADLESS_USE_POLICY)
-#include "components/policy/content/policy_blocklist_navigation_throttle.h"
-#include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/navigation_throttle.h"
-#include "headless/lib/browser/policy/headless_policy_blocklist_service_factory.h"
-#endif  // defined(HEADLESS_USE_POLICY)
 
 #if BUILDFLAG(ENABLE_PRINTING)
 #include "components/printing/browser/headless/headless_print_manager.h"
@@ -113,6 +105,7 @@ class HeadlessVideoOverlayWindow : public content::VideoOverlayWindow {
   void SetHidePictureInPictureButtonVisibility(bool is_visible) override {}
   void SetMicrophoneMuted(bool muted) override {}
   void SetCameraState(bool turned_on) override {}
+  void SetMediaMuted(bool muted) override {}
   void SetToggleMicrophoneButtonVisibility(bool is_visible) override {}
   void SetToggleCameraButtonVisibility(bool is_visible) override {}
   void SetHangUpButtonVisibility(bool is_visible) override {}
@@ -124,9 +117,46 @@ class HeadlessVideoOverlayWindow : public content::VideoOverlayWindow {
       const std::vector<media_session::MediaImage>& images) override {}
 
   void SetSurfaceId(const viz::SurfaceId& surface_id) override {}
+  void SetPlaybackControlsVisibility(bool is_visible) override {}
+  void SetImmersiveVideoOptions(
+      const content::ImmersiveOptions& options) override {}
 
  private:
   gfx::Size size_;
+};
+
+// A dummy DigitalIdentityProvider that hangs (never invokes the callback) to
+// simulate the browser waiting for user interaction on the selection UI.
+// This is the default expectation for Digital Credential APIs in WPTs when
+// no user interaction is simulated.
+class HeadlessDigitalIdentityProvider
+    : public content::DigitalIdentityProvider {
+ public:
+  HeadlessDigitalIdentityProvider() = default;
+  ~HeadlessDigitalIdentityProvider() override = default;
+
+  bool IsLastCommittedOriginLowRisk(
+      content::RenderFrameHost& render_frame_host) const override {
+    return false;
+  }
+
+  DigitalIdentityInterstitialAbortCallback ShowDigitalIdentityInterstitial(
+      content::WebContents& web_contents,
+      const url::Origin& origin,
+      content::DigitalIdentityInterstitialType interstitial_type,
+      DigitalIdentityInterstitialCallback callback) override {
+    return base::OnceClosure();
+  }
+
+  void Get(content::WebContents* web_contents,
+           const url::Origin& origin,
+           base::ValueView request,
+           DigitalIdentityCallback callback) override {}
+
+  void Create(content::WebContents* web_contents,
+              const url::Origin& origin,
+              base::ValueView request,
+              DigitalIdentityCallback callback) override {}
 };
 
 }  // namespace
@@ -375,48 +405,12 @@ bool HeadlessContentBrowserClient::
   return false;
 }
 
-bool HeadlessContentBrowserClient::IsInterestGroupAPIAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* render_frame_host,
-    content::InterestGroupApiOperation operation,
-    const url::Origin& top_frame_origin,
-    const url::Origin& api_origin) {
-  return true;
-}
-
 bool HeadlessContentBrowserClient::IsPrivacySandboxReportingDestinationAttested(
     content::BrowserContext* browser_context,
     const url::Origin& destination_origin,
     content::PrivacySandboxInvokingAPI invoking_api) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   return command_line->HasSwitch(switches::kForceReportingDestinationAttested);
-}
-
-bool HeadlessContentBrowserClient::IsSharedStorageAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
-bool HeadlessContentBrowserClient::IsSharedStorageSelectURLAllowed(
-    content::BrowserContext* browser_context,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin,
-    std::string* out_debug_message,
-    bool* out_block_is_site_setting_specific) {
-  return true;
-}
-
-bool HeadlessContentBrowserClient::IsFencedStorageReadAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin) {
-  return true;
 }
 
 void HeadlessContentBrowserClient::ConfigureNetworkContextParams(
@@ -488,27 +482,9 @@ void HeadlessContentBrowserClient::SessionEnding(
 }
 #endif
 
-#if defined(HEADLESS_USE_POLICY)
-void HeadlessContentBrowserClient::CreateThrottlesForNavigation(
-    content::NavigationThrottleRegistry& registry) {
-  // Avoid creating naviagtion throttle if preferences are not available
-  // (happens in tests).
-  content::NavigationHandle& handle = registry.GetNavigationHandle();
-  if (browser_->GetPrefs()) {
-    content::BrowserContext* context =
-        handle.GetWebContents()->GetBrowserContext();
-    registry.AddThrottle(std::make_unique<PolicyBlocklistNavigationThrottle>(
-        registry, user_prefs::UserPrefs::Get(context),
-        HeadlessPolicyBlocklistServiceFactory::GetForBrowserContext(context),
-        SafeSearchFactory::GetForBrowserContext(context)));
-  }
-}
-#endif  // defined(HEADLESS_USE_POLICY)
-
 void HeadlessContentBrowserClient::OnNetworkServiceCreated(
     ::network::mojom::NetworkService* network_service) {
   HandleExplicitlyAllowedPorts(network_service);
-  SetEncryptionKey(network_service);
 }
 
 void HeadlessContentBrowserClient::GetHyphenationDictionary(
@@ -555,21 +531,6 @@ void HeadlessContentBrowserClient::HandleExplicitlyAllowedPorts(
   network_service->SetExplicitlyAllowedPorts(explicitly_allowed_ports);
 }
 
-void HeadlessContentBrowserClient::SetEncryptionKey(
-    ::network::mojom::NetworkService* network_service) {
-#if (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)) && defined(HEADLESS_USE_PREFS)
-  // The OSCrypt keys are process bound, so if network service is out of
-  // process, send it the required key if it is available.
-  if (content::IsOutOfProcessNetworkService()
-#if BUILDFLAG(IS_WIN)
-      && OSCrypt::IsEncryptionAvailable()
-#endif
-  ) {
-    network_service->SetEncryptionKey(OSCrypt::GetRawEncryptionKey());
-  }
-#endif
-}
-
 content::BluetoothDelegate*
 HeadlessContentBrowserClient::GetBluetoothDelegate() {
   if (!bluetooth_delegate_) {
@@ -582,6 +543,11 @@ bool HeadlessContentBrowserClient::IsRendererProcessPriorityEnabled() {
   // Since there is no visible window in headless, the renderer process priority
   // policy, which is mostly based on visibility, is not needed.
   return false;
+}
+
+std::unique_ptr<content::DigitalIdentityProvider>
+HeadlessContentBrowserClient::CreateDigitalIdentityProvider() {
+  return std::make_unique<HeadlessDigitalIdentityProvider>();
 }
 
 }  // namespace headless

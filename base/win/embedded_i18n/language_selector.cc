@@ -46,11 +46,9 @@ struct AvailableLanguageAliases {
 #if DCHECK_IS_ON()
 // Returns true if the items in the given range are sorted and lower cased.
 bool IsArraySortedAndLowerCased(span<const LangToOffset> languages_to_offset) {
-  return std::is_sorted(languages_to_offset.begin(),
-                        languages_to_offset.end()) &&
+  return std::ranges::is_sorted(languages_to_offset) &&
          std::ranges::all_of(languages_to_offset, [](const auto& lang) {
-           auto language = AsStringPiece16(lang.first);
-           return ToLowerASCII(language) == language;
+           return ToLowerASCII(lang.first) == lang.first;
          });
 }
 #endif  // DCHECK_IS_ON()
@@ -101,11 +99,8 @@ bool GetExactLanguageOffset(span<const LangToOffset> languages_to_offset,
 
   // Binary search in the sorted arrays to find the offset corresponding
   // to a given language |name|.
-  auto search_result = std::lower_bound(
-      languages_to_offset.begin(), languages_to_offset.end(), language,
-      [](const LangToOffset& left, const std::wstring& to_find) {
-        return left.first < to_find;
-      });
+  auto search_result = std::ranges::lower_bound(languages_to_offset, language,
+                                                {}, &LangToOffset::first);
   if (languages_to_offset.end() != search_result &&
       search_result->first == language) {
     *matched_language_to_offset = &*search_result;
@@ -227,8 +222,7 @@ bool SelectIf(const std::vector<std::wstring>& candidates,
   // An earlier candidate entry matching on an exact match or alias match takes
   // precedence over a later candidate entry matching on an exact match.
   for (const std::wstring& scan : candidates) {
-    std::wstring lower_case_candidate =
-        AsWString(ToLowerASCII(AsStringPiece16(scan)));
+    std::wstring lower_case_candidate = ToLowerASCII(scan);
     if (GetExactLanguageOffset(languages_to_offset, lower_case_candidate,
                                matched_language_to_offset) ||
         GetAliasedLanguageOffset(available_aliases, lower_case_candidate,
@@ -241,8 +235,7 @@ bool SelectIf(const std::vector<std::wstring>& candidates,
   // If no candidate matches exactly or by alias, try to match by locale neutral
   // language.
   for (const std::wstring& scan : candidates) {
-    std::wstring lower_case_candidate =
-        AsWString(ToLowerASCII(AsStringPiece16(scan)));
+    std::wstring lower_case_candidate = ToLowerASCII(scan);
 
     // Extract the locale neutral language from the language to search and try
     // to find an exact match for that language in the provided table.

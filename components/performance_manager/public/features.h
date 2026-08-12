@@ -30,10 +30,6 @@ namespace performance_manager::features {
 BASE_DECLARE_FEATURE(kUnthrottledTabProcessReporting);
 #endif
 
-// Enable background tab loading of pages (restored via session restore)
-// directly from Performance Manager rather than via TabLoader.
-BASE_DECLARE_FEATURE(kBackgroundTabLoadingFromPerformanceManager);
-
 // Make the Battery Saver Modes available to users. If this is enabled, it
 // doesn't mean the mode is enabled, just that the user has the option of
 // toggling it.
@@ -104,6 +100,11 @@ BASE_DECLARE_FEATURE_PARAM(int, kNotificationStringVersion);
 
 #endif
 
+// When enabled, LevelDBSiteDataStore uses BEST_EFFORT priority for its task
+// runner instead of the default USER_BLOCKING, to reduce thread pool contention
+// during startup.
+BASE_DECLARE_FEATURE(kLevelDBSiteDataStoreBestEffort);
+
 // Enable best effort task inhibiting based on performance scenario information.
 BASE_DECLARE_FEATURE(kEnableBestEffortTaskInhibitingPolicy);
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kBestEffortTaskInhibitingPeriod);
@@ -117,13 +118,9 @@ extern const base::FeatureParam<bool> kInheritParentPriority;
 
 extern const base::FeatureParam<bool> kRenderedOutOfViewIsNotVisible;
 
-extern const base::FeatureParam<bool> kNonSpareRendererHighInitialPriority;
+extern const base::FeatureParam<bool> kRendererHighInitialPriority;
 
 BASE_DECLARE_FEATURE(kPMLoadingPageVoter);
-
-// Policy that evicts the BFCache of pages that become non visible or the
-// BFCache of all pages when the system is under memory pressure.
-BASE_DECLARE_FEATURE(kBFCachePerformanceManagerPolicy);
 
 // Whether tabs are discarded under high memory pressure.
 BASE_DECLARE_FEATURE(kUrgentPageDiscarding);
@@ -160,16 +157,6 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kFreezingVisibleProtectionTime);
 
 // Time for which a page cannot be frozen after being audible.
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kFreezingAudioProtectionTime);
-
-// When enabled, browsing instances with high CPU usage in background are frozen
-// when Battery Saver is active. Depends on `kCPUMeasurementInFreezingPolicy`.
-BASE_DECLARE_FEATURE(kFreezingOnBatterySaver);
-
-// This is the similar to `kFreezingOnBatterySaver`, with some changes to
-// facilitate testing:
-// - Pretend that Battery Saver is active even if it's not.
-// - Pretend that all tabs have high CPU usage in background.
-BASE_DECLARE_FEATURE(kFreezingOnBatterySaverForTesting);
 
 // When enabled, the freezing policy won't freeze pages that are opted out of
 // tab discarding.
@@ -215,6 +202,14 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta,
 // enabled.
 BASE_DECLARE_FEATURE_PARAM(int, kInfiniteTabsFreezingOnMemoryPressurePercent);
 
+// If enabled, tabs may be discarded on Windows when the system approaches the
+// commit limit.
+BASE_DECLARE_FEATURE(kDiscardOnCommitLimit);
+
+// The available commit memory percentage below which to trigger discarding when
+// enabled.
+BASE_DECLARE_FEATURE_PARAM(int, kDiscardOnCommitLimit_MinAvailablePercent);
+
 // When enabled, Resource Attribution measurements will include contexts for
 // individual origins.
 BASE_DECLARE_FEATURE(kResourceAttributionIncludeOrigins);
@@ -237,6 +232,11 @@ BASE_DECLARE_FEATURE(kKeepDefaultSearchEngineRendererAlive);
 // A feature to boost the priority of tabs that are being closed.
 BASE_DECLARE_FEATURE(kBoostClosingTabs);
 
+// A feature to force foreground priority for all frames and workers. Intended
+// for ad-hoc debugging, to determine if a background tab issue is caused
+// specifically by low priority.
+BASE_DECLARE_FEATURE(kForceForegroundPriorityForAllTabs);
+
 BASE_DECLARE_FEATURE(kTransientKeepAlivePolicy);
 
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kTransientKeepAlivePolicyDuration);
@@ -246,6 +246,26 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kTransientKeepAlivePolicyMaxCount);
 // A feature to set the the priority of extension service worker processes to
 // USER_BLOCKING.
 BASE_DECLARE_FEATURE(kExtensionServiceWorkerVoter);
+
+#if BUILDFLAG(IS_WIN)
+BASE_DECLARE_FEATURE(kBrowserProcessAboveNormalPriority);
+#endif
+
+BASE_DECLARE_FEATURE(kDisableTabDiscarding);
+
+// When enabled, PageLiveStateDecorator uses the page loading state to avoid
+// treating initial load title/favicon churn as a background update
+// signal (crbug.com/497577319).
+//
+// When disabled, falls back to legacy behavior.
+BASE_DECLARE_FEATURE(kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate);
+
+BASE_DECLARE_FEATURE(kGlicActuationPriorityVoter);
+
+// When enabled, ignores kMediaQueryChange favicon updates (e.g.
+// prefers-color-scheme toggles) when determining whether a background tab
+// updated its favicon.
+BASE_DECLARE_FEATURE(kIgnoreMediaQueryFaviconUpdates);
 
 }  // namespace performance_manager::features
 

@@ -14,14 +14,13 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
-#include "chrome/browser/enterprise/connectors/device_trust/attestation/common/mock_attestation_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/signals/mock_signals_service.h"
 #include "components/device_signals/core/common/signals_constants.h"
+#include "components/enterprise/device_trust/core/attestation/mock_attestation_service.h"
+#include "components/enterprise/device_trust/core/common_types.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/signals/mock_signals_service.h"
 #include "components/enterprise/device_trust/prefs.h"
 #include "components/prefs/testing_pref_service.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,8 +29,8 @@ using testing::NotNull;
 
 namespace {
 
-base::Value::List GetOrigins() {
-  base::Value::List origins;
+base::ListValue GetOrigins() {
+  base::ListValue origins;
   origins.Append("example1.example.com");
   origins.Append("example2.example.com");
   return origins;
@@ -111,9 +110,9 @@ class DeviceTrustServiceTest : public testing::Test,
 
   void DisableServicePolicy() {
     prefs_.SetManagedPref(kBrowserContextAwareAccessSignalsAllowlistPref,
-                          base::Value(base::Value::List()));
+                          base::Value(base::ListValue()));
     prefs_.SetManagedPref(kUserContextAwareAccessSignalsAllowlistPref,
-                          base::Value(base::Value::List()));
+                          base::Value(base::ListValue()));
   }
 
   DeviceTrustService* CreateService() {
@@ -159,7 +158,6 @@ class DeviceTrustServiceTest : public testing::Test,
   std::unique_ptr<DeviceTrustService> device_trust_service_;
   raw_ptr<MockAttestationService> mock_attestation_service_;
   raw_ptr<MockSignalsService> mock_signals_service_;
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder;
   base::HistogramTester histogram_tester_;
   std::set<enterprise_connectors::DTCPolicyLevel> levels_;
 };
@@ -178,8 +176,8 @@ TEST_P(DeviceTrustServiceTest, BuildChallengeResponse) {
   EXPECT_CALL(*mock_signals_service_, CollectSignals(_))
       .WillOnce(
           [&fake_display_name](
-              base::OnceCallback<void(base::Value::Dict)> signals_callback) {
-            auto fake_signals = std::make_unique<base::Value::Dict>();
+              base::OnceCallback<void(base::DictValue)> signals_callback) {
+            auto fake_signals = std::make_unique<base::DictValue>();
             fake_signals->Set(device_signals::names::kDisplayName,
                               fake_display_name);
             std::move(signals_callback).Run(std::move(*fake_signals));
@@ -192,8 +190,7 @@ TEST_P(DeviceTrustServiceTest, BuildChallengeResponse) {
               BuildChallengeResponseForVAChallenge(
                   GetSerializedSignedChallenge(kJsonChallenge), _, levels_, _))
       .WillOnce([&fake_display_name, &attestation_response](
-                    const std::string& challenge,
-                    const base::Value::Dict signals,
+                    const std::string& challenge, const base::DictValue signals,
                     const std::set<DTCPolicyLevel> levels,
                     AttestationService::AttestationCallback callback) {
         EXPECT_EQ(
@@ -223,8 +220,8 @@ TEST_P(DeviceTrustServiceTest, AttestationFailure) {
   EXPECT_CALL(*mock_signals_service_, CollectSignals(_))
       .WillOnce(
           [&fake_display_name](
-              base::OnceCallback<void(base::Value::Dict)> signals_callback) {
-            auto fake_signals = std::make_unique<base::Value::Dict>();
+              base::OnceCallback<void(base::DictValue)> signals_callback) {
+            auto fake_signals = std::make_unique<base::DictValue>();
             fake_signals->Set(device_signals::names::kDisplayName,
                               fake_display_name);
             std::move(signals_callback).Run(std::move(*fake_signals));
@@ -238,8 +235,7 @@ TEST_P(DeviceTrustServiceTest, AttestationFailure) {
               BuildChallengeResponseForVAChallenge(
                   GetSerializedSignedChallenge(kJsonChallenge), _, levels_, _))
       .WillOnce([&attestation_response](
-                    const std::string& challenge,
-                    const base::Value::Dict signals,
+                    const std::string& challenge, const base::DictValue signals,
                     const std::set<DTCPolicyLevel> levels,
                     AttestationService::AttestationCallback callback) {
         std::move(callback).Run(attestation_response);

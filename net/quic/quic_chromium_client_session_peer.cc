@@ -29,7 +29,8 @@ void QuicChromiumClientSessionPeer::SetHostname(
       session->session_key_.network_anonymization_key(),
       session->session_key_.secure_dns_policy(),
       session->session_key_.require_dns_https_alpn(),
-      session->session_key_.disable_cert_verification_network_fetches());
+      session->session_key_.disable_cert_verification_network_fetches(),
+      session->session_key_.target_network());
 }
 
 // static
@@ -37,8 +38,16 @@ QuicChromiumClientStream* QuicChromiumClientSessionPeer::CreateOutgoingStream(
     QuicChromiumClientSession* session) {
   return session->ShouldCreateOutgoingBidirectionalStream()
              ? session->CreateOutgoingReliableStreamImpl(
-                   TRAFFIC_ANNOTATION_FOR_TESTS)
+                   TRAFFIC_ANNOTATION_FOR_TESTS,
+                   /*max_stream_limit_pending_delay=*/base::TimeDelta())
              : nullptr;
+}
+
+// static
+void QuicChromiumClientSessionPeer::SetNumTotalStreamsForTesting(
+    QuicChromiumClientSession* session,
+    size_t num_total_streams) {
+  session->num_total_streams_ = num_total_streams;
 }
 
 // static
@@ -51,6 +60,38 @@ bool QuicChromiumClientSessionPeer::GetSessionGoingAway(
 MigrationCause QuicChromiumClientSessionPeer::GetCurrentMigrationCause(
     QuicChromiumClientSession* session) {
   return session->current_migration_cause_;
+}
+
+// static
+void QuicChromiumClientSessionPeer::DisableConnectionMigration(
+    QuicChromiumClientSession* session) {
+  session->connection_migration_disabled_ = true;
+}
+
+// static
+void QuicChromiumClientSessionPeer::SetDefaultNetwork(
+    QuicChromiumClientSession* session,
+    handles::NetworkHandle network) {
+  session->default_network_ = network;
+}
+
+// static
+bool QuicChromiumClientSessionPeer::IsMigrateBackToDefaultNetworkTimerRunning(
+    QuicChromiumClientSession* session) {
+  return session->migrate_back_to_default_timer_.IsRunning();
+}
+
+// static
+void QuicChromiumClientSessionPeer::OnCryptoHandshakeComplete(
+    QuicChromiumClientSession* session) {
+  session->OnCryptoHandshakeComplete();
+}
+
+// static
+void QuicChromiumClientSessionPeer::SetEchConfigList(
+    QuicChromiumClientSession* session,
+    std::vector<uint8_t> ech_config_list) {
+  session->ech_config_list_ = std::move(ech_config_list);
 }
 
 }  // namespace net::test

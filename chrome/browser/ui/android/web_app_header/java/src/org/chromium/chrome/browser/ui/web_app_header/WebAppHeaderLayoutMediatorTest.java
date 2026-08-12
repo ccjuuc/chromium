@@ -15,7 +15,6 @@ import static org.mockito.Mockito.when;
 import static org.robolectric.Shadows.shadowOf;
 
 import android.graphics.Rect;
-import android.os.Build;
 import android.os.Looper;
 import android.view.View;
 
@@ -27,12 +26,11 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -52,8 +50,7 @@ import org.chromium.ui.util.TokenHolder;
 import java.util.List;
 
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.PAUSED)
-@Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+@Config(sdk = BaseRobolectricTestRunner.MAX_SDK)
 public class WebAppHeaderLayoutMediatorTest {
     private static final int SCREEN_WIDTH = 800;
     private static final int SCREEN_HEIGHT = 1600;
@@ -72,7 +69,7 @@ public class WebAppHeaderLayoutMediatorTest {
     private WebAppHeaderLayoutMediator mMediator;
     private PropertyModel mModel;
     private SettableNullableObservableSupplier<Tab> mTabSupplier;
-    private ObservableSupplierImpl<List<Rect>> mHeaderControlPositionSupplier;
+    private SettableNullableObservableSupplier<List<Rect>> mHeaderControlPositionSupplier;
     @Mock public DesktopWindowStateManager mDesktopWindowStateManager;
     @Mock public ThemeColorProvider mThemeColorProvider;
     @Mock public ScrimManager mScrimManager;
@@ -80,7 +77,7 @@ public class WebAppHeaderLayoutMediatorTest {
     @Mock public Tab mTab;
     @Mock public WebContents mWebContents;
     @Mock public Callback<Boolean> mSetHeaderAsOverlayCallback;
-    private ObservableSupplierImpl<Boolean> mScrimVisibilitySupplier;
+    private SettableNonNullObservableSupplier<Boolean> mScrimVisibilitySupplier;
     private @Nullable AppHeaderState mAppHeaderState;
     private ShadowLooper mShadowLooper;
 
@@ -90,13 +87,13 @@ public class WebAppHeaderLayoutMediatorTest {
         when(mDesktopWindowStateManager.getAppHeaderState()).thenReturn(null);
         when(mThemeColorProvider.getThemeColor()).thenReturn(LIGHT_COLOR);
 
-        mScrimVisibilitySupplier = new ObservableSupplierImpl<>();
+        mScrimVisibilitySupplier = ObservableSuppliers.createNonNull(false);
         when(mScrimManager.getScrimVisibilitySupplier()).thenReturn(mScrimVisibilitySupplier);
 
         when(mTab.getWebContents()).thenReturn(mWebContents);
 
         mTabSupplier = ObservableSuppliers.createNullable(mTab);
-        mHeaderControlPositionSupplier = new ObservableSupplierImpl<>();
+        mHeaderControlPositionSupplier = ObservableSuppliers.createNullable();
         mModel = new PropertyModel.Builder(WebAppHeaderLayoutProperties.ALL_KEYS).build();
         mMediator =
                 new WebAppHeaderLayoutMediator(
@@ -309,8 +306,8 @@ public class WebAppHeaderLayoutMediatorTest {
                 mModel.get(WebAppHeaderLayoutProperties.IS_VISIBLE));
         assertEquals(
                 "Width supplier should report SCREEN_WIDTH.",
-                Integer.valueOf(SCREEN_WIDTH),
-                mMediator.getWidthSupplierForTesting().get());
+                SCREEN_WIDTH,
+                mMediator.getWidthForTesting());
 
         // Change the app header state to have a View.GONE app header view.
         AppHeaderState goneState =
@@ -323,10 +320,7 @@ public class WebAppHeaderLayoutMediatorTest {
         assertFalse(
                 "IS_VISIBLE property should be false.",
                 mModel.get(WebAppHeaderLayoutProperties.IS_VISIBLE));
-        assertEquals(
-                "Width supplier should be zero.",
-                Integer.valueOf(0),
-                mMediator.getWidthSupplierForTesting().get());
+        assertEquals("Width supplier should be zero.", 0, mMediator.getWidthForTesting());
     }
 
     @Test
@@ -529,7 +523,7 @@ public class WebAppHeaderLayoutMediatorTest {
                 "Light color should be set initially",
                 LIGHT_COLOR,
                 mModel.get(WebAppHeaderLayoutProperties.BACKGROUND_COLOR));
-        verify(mDesktopWindowStateManager).updateForegroundColor(LIGHT_COLOR);
+        verify(mDesktopWindowStateManager).onBackgroundColorChanged(LIGHT_COLOR);
     }
 
     @Test
@@ -543,7 +537,7 @@ public class WebAppHeaderLayoutMediatorTest {
                 DARK_COLOR,
                 mModel.get(WebAppHeaderLayoutProperties.BACKGROUND_COLOR));
 
-        verify(mDesktopWindowStateManager).updateForegroundColor(DARK_COLOR);
+        verify(mDesktopWindowStateManager).onBackgroundColorChanged(DARK_COLOR);
     }
 
     @Test

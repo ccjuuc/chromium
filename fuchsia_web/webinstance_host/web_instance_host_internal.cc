@@ -11,7 +11,6 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
@@ -190,9 +189,6 @@ void HandleDisableCodeGenerationParam(
   // Add the JIT-less option to the comma-separated set of V8 flags passed to
   // Blink.
   AppendToSwitch(kJavaScriptFlags, kV8JitlessFlag, launch_args);
-
-  // TODO(crbug.com/42050417): Disable use of VmexResource in this case, once
-  // migrated off of ambient VMEX.
 }
 
 }  // namespace
@@ -211,18 +207,6 @@ void RegisterWebInstanceProductData(std::string_view absolute_component_url) {
       kFeedbackAnnotationsNamespace);
 }
 
-bool IsValidContentDirectoryName(std::string_view file_name) {
-  if (file_name.find_first_of(base::FilePath::kSeparators, 0,
-                              base::FilePath::kSeparatorsLength - 1) !=
-      std::string_view::npos) {
-    return false;
-  }
-  if (file_name == base::FilePath::kCurrentDirectory ||
-      file_name == base::FilePath::kParentDirectory) {
-    return false;
-  }
-  return true;
-}
 
 zx_status_t AppendLaunchArgs(fuchsia::web::CreateContextParams& params,
                              base::CommandLine& launch_args) {

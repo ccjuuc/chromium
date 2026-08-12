@@ -11,7 +11,6 @@
 #import "base/logging.h"
 #import "base/no_destructor.h"
 #import "base/strings/sys_string_conversions.h"
-#import "ios/components/enterprise/data_controls/features.h"
 #import "ios/web/annotations/annotations_java_script_feature.h"
 #import "ios/web/common/annotations_utils.h"
 #import "ios/web/common/features.h"
@@ -25,6 +24,7 @@
 #import "ios/web/js_features/window_error/error_event_listener_java_script_feature.h"
 #import "ios/web/js_features/window_error/script_error_message_handler_java_script_feature.h"
 #import "ios/web/js_messaging/web_frames_manager_java_script_feature.h"
+#import "ios/web/js_messaging/web_frames_tree_java_script_feature.h"
 #import "ios/web/navigation/navigation_java_script_feature.h"
 #import "ios/web/public/js_messaging/content_world.h"
 #import "ios/web/public/js_messaging/java_script_feature.h"
@@ -35,7 +35,6 @@ namespace web {
 namespace {
 
 const char kBaseScriptName[] = "gcrweb";
-const char kCommonScriptName[] = "common";
 
 const char kMainFrameDescription[] = "Main frame";
 const char kIframeDescription[] = "Iframe";
@@ -51,22 +50,30 @@ GetScriptErrorMessageHandlerJavaScriptFeature() {
   // Static storage is ok for `window_error_feature` as it holds no state.
   static base::NoDestructor<ScriptErrorMessageHandlerJavaScriptFeature>
       script_error_message_handler_feature(base::BindRepeating(^(
-          ScriptErrorMessageHandlerJavaScriptFeature::ErrorDetails
-              error_details) {
+          ScriptErrorDetails error_details) {
         // Displays the JavaScript error details in the following format:
         //   _________ JavaScript error: _________
         //     {error_message}
-        //     {url} | {filename}:{line_number}
+        //     {api}:{line_number}
+        //     {stack}
+        //     {crash_keys}
+        //     {url}
         //     {kMainFrameDescription|kIframeDescription}
+        std::string crash_keys_str;
+        for (const auto [key, value] : error_details.crash_keys) {
+          crash_keys_str += "\n " + key + ": " + value;
+        }
         const char* frame_description = error_details.is_main_frame
                                             ? kMainFrameDescription
                                             : kIframeDescription;
         DLOG(ERROR) << "\n_________ JavaScript error: _________" << "\n  "
-                    << base::SysNSStringToUTF8(error_details.message) << "\n"
-                    << base::SysNSStringToUTF8(error_details.stack) << "\n  "
-                    << error_details.url.spec() << " | "
-                    << base::SysNSStringToUTF8(error_details.filename) << ":"
-                    << error_details.line_number << "\n  " << frame_description;
+                    << error_details.message << "\n"
+                    << error_details.api << ":" << error_details.line_number
+                    << "\n  " << error_details.stack << "\n  "
+                    << "Crash Keys:"
+                    << (crash_keys_str.empty() ? "None" : crash_keys_str)
+                    << "\n  " << error_details.url.spec() << "\n  "
+                    << frame_description;
         if (base::FeatureList::IsEnabled(features::kAssertOnJavaScriptErrors)) {
           CHECK(false) << "JavaScript error occurred with "
                           "kAssertOnJavaScriptErrors enabled.";
@@ -83,7 +90,6 @@ std::vector<JavaScriptFeature*> GetBuiltInJavaScriptFeatures(
     BrowserState* browser_state) {
   std::vector<JavaScriptFeature*> features = {
       GetBaseJavaScriptFeature(),
-      GetCommonJavaScriptFeature(),
       ContextMenuJavaScriptFeature::FromBrowserState(browser_state),
       ErrorPageJavaScriptFeature::GetInstance(),
       FindInPageJavaScriptFeature::GetInstance(),
@@ -94,11 +100,11 @@ std::vector<JavaScriptFeature*> GetBuiltInJavaScriptFeatures(
       GetScriptErrorMessageHandlerJavaScriptFeature(),
       NavigationJavaScriptFeature::GetInstance(),
       WebUIMessagingJavaScriptFeature::GetInstance(),
-      AnnotationsJavaScriptFeature::GetInstance()};
+      AnnotationsJavaScriptFeature::GetInstance(),
+      ClipboardJavaScriptFeature::GetInstance()};
 
-  if (base::FeatureList::IsEnabled(
-          data_controls::kEnableClipboardDataControlsIOS)) {
-    features.push_back(ClipboardJavaScriptFeature::GetInstance());
+  if (base::FeatureList::IsEnabled(web::features::kWebFrameTree)) {
+    features.push_back(WebFramesTreeJavaScriptFeature::GetInstance());
   }
 
   auto frames_manager_features = WebFramesManagerJavaScriptFeature::
@@ -127,19 +133,5 @@ JavaScriptFeature* GetBaseJavaScriptFeature() {
               JavaScriptFeature::FeatureScript::TargetFrames::kAllFrames)}));
   return base_feature.get();
 }
-
-JavaScriptFeature* GetCommonJavaScriptFeature() {
-  // Static storage is ok for `common_feature` as it holds no state.
-  static base::NoDestructor<JavaScriptFeature> common_feature(
-      ContentWorld::kAllContentWorlds,
-      std::vector<JavaScriptFeature::FeatureScript>(
-          {JavaScriptFeature::FeatureScript::CreateWithFilename(
-              kCommonScriptName,
-              JavaScriptFeature::FeatureScript::InjectionTime::kDocumentStart,
-              JavaScriptFeature::FeatureScript::TargetFrames::kAllFrames)}),
-      std::vector<const JavaScriptFeature*>({GetBaseJavaScriptFeature()}));
-  return common_feature.get();
-}
-
 }  // namespace java_script_features
 }  // namespace web

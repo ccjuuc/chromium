@@ -5,14 +5,12 @@
 package org.chromium.chrome.browser.omnibox;
 
 import static org.hamcrest.core.IsEqual.equalTo;
-import static org.mockito.Mockito.clearInvocations;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
+import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -21,12 +19,12 @@ import android.view.inputmethod.InputConnection;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
@@ -37,20 +35,20 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
-import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.content_public.common.ContentUrlConstants;
-import org.chromium.ui.base.Clipboard;
+import org.chromium.url.GURL;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -77,8 +75,7 @@ public class UrlBarTest {
     private WebPageStation mStartingPage;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-
-    @Mock private Runnable mListener;
+    @Mock private Callback<String> mUrlTextChangeListener;
 
     @Before
     public void setUpTest() throws Exception {
@@ -224,9 +221,9 @@ public class UrlBarTest {
         final AtomicReference<String> requestedAutocompleteText = new AtomicReference<>();
         final AtomicBoolean didPreventInlineAutocomplete = new AtomicBoolean();
         mUrlBar.setTextChangeListener(
-                (textWithoutAutocomplete) -> {
+                (info) -> {
                     autocompleteHelper.notifyCalled();
-                    requestedAutocompleteText.set(textWithoutAutocomplete);
+                    requestedAutocompleteText.set(info);
                     didPreventInlineAutocomplete.set(!mUrlBar.shouldAutocomplete());
                     mUrlBar.setTextChangeListener(null);
                 });
@@ -470,6 +467,7 @@ public class UrlBarTest {
 
     @Test
     @SmallTest
+    @DisabledTest(message = "Disabled because of crbug.com/477262537")
     public void testAutocorrectionChangesTriggerCorrectSuggestions() {
         mOmnibox.setComposingText("test", 0, 4);
         mOmnibox.setAutocompleteText("ing is fun", null);
@@ -589,17 +587,17 @@ public class UrlBarTest {
     @SmallTest
     @DisabledTest(message = "Disabled because of b/333536371")
     public void testUrlTextChangeListener() {
-        Callback<String> listener = mock(Callback.class);
-        mUrlBar.setTextChangeListener(listener);
+        mUrlBar.setTextChangeListener(mUrlTextChangeListener);
 
         mOmnibox.setText("onomatop");
-        Mockito.verify(listener).onResult("onomatop");
+        Mockito.verify(mUrlTextChangeListener).onResult("onomatop");
 
         // Setting autocomplete does not send a change update.
         mOmnibox.setAutocompleteText("oeia", null);
 
+        clearInvocations(mUrlTextChangeListener);
         mOmnibox.setText("");
-        Mockito.verify(listener).onResult("");
+        Mockito.verify(mUrlTextChangeListener).onResult("");
     }
 
     @Test
@@ -684,217 +682,107 @@ public class UrlBarTest {
 
     @Test
     @SmallTest
-    public void typingStarted_emittedOncePerFocus() {
-        testTypingStarted_emittedOncePerFocus();
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_emittedOncePerFocusWithRetainOmniboxOnFocusDisabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
-        testTypingStarted_emittedOncePerFocus();
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_emittedOncePerFocusWithRetainOmniboxOnFocusEnabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(true);
-        testTypingStarted_emittedOncePerFocus();
-    }
-
-    private void testTypingStarted_emittedOncePerFocus() {
-        var listener = mock(Runnable.class);
+    public void testCopyUrl_SchemePreservation() throws Exception {
+        // Force desktop mode.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> OmniboxCapabilities.setHasDesktopExperienceForTesting(Boolean.TRUE));
 
         mOmnibox.clearFocus();
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        mUrlBar.setTypingStartedListener(listener);
+
+        String url = "https://www.foo.com/index.html";
         mOmnibox.requestFocus();
-
-        verifyNoInteractions(listener);
-
-        // Verify that UrlBar emits a single Typing Started event.
-        mOmnibox.typeText("a", false);
-        verify(listener).run();
-
-        clearInvocations(listener);
-
-        // Verify no subsequent events emitted.
-        mOmnibox.typeText("a", false);
-        verifyNoInteractions(listener);
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_emittedOnceEveryFocus() {
-        testTypingStarted_emittedOnceEveryFocus();
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_emittedOnceEveryFocusWithRetainOmniboxOnFocusDisabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
-        testTypingStarted_emittedOnceEveryFocus();
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_emittedOnceEveryFocusWithRetainOmniboxOnFocusEnabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(true);
-        testTypingStarted_emittedOnceEveryFocus();
-    }
-
-    private void testTypingStarted_emittedOnceEveryFocus() {
-        var listener = mock(Runnable.class);
-
-        mOmnibox.clearFocus();
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        mUrlBar.setTypingStartedListener(listener);
-        mOmnibox.requestFocus();
-
-        verifyNoInteractions(listener);
-
-        // Verify that UrlBar emits a single Typing Started event.
-        mOmnibox.typeText("a", false);
-        verify(listener).run();
-
-        mOmnibox.clearFocus();
-        clearInvocations(listener);
-        mOmnibox.requestFocus();
-
-        // Verify no subsequent events emitted.
-        mOmnibox.typeText("a", false);
-        verify(listener).run();
-    }
-
-    @Test
-    @SmallTest
-    @RequiresRestart("crbug.com/358170962")
-    public void typingStarted_notEmittedForNonTypingCharacters() {
-        testTypingStarted_notEmittedForNonTypingCharacters(
-                /* expectRetainOmniboxOnFocus= */ ThreadUtils.runOnUiThreadBlocking(
-                        OmniboxFeatures::shouldRetainOmniboxOnFocus));
-    }
-
-    @Test
-    @SmallTest
-    @RequiresRestart("crbug.com/358170962")
-    public void typingStarted_notEmittedForNonTypingCharactersWithRetainOmniboxOnFocusDisabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
-        testTypingStarted_notEmittedForNonTypingCharacters(/* expectRetainOmniboxOnFocus= */ false);
-    }
-
-    @Test
-    @SmallTest
-    @RequiresRestart("crbug.com/358170962")
-    public void typingStarted_notEmittedForNonTypingCharactersWithRetainOmniboxOnFocusEnabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(true);
-        testTypingStarted_notEmittedForNonTypingCharacters(/* expectRetainOmniboxOnFocus= */ true);
-    }
-
-    private void testTypingStarted_notEmittedForNonTypingCharacters(
-            boolean expectRetainOmniboxOnFocus) {
-        var listener = mock(Runnable.class);
-
-        mOmnibox.clearFocus();
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        mUrlBar.setTypingStartedListener(listener);
-        mOmnibox.requestFocus();
-
-        var nonTypingKeys =
-                new ArrayList<>(
-                        List.of(
-                                KeyEvent.KEYCODE_F1,
-                                KeyEvent.KEYCODE_SHIFT_LEFT,
-                                KeyEvent.KEYCODE_DEL,
-                                KeyEvent.KEYCODE_PAGE_UP,
-                                KeyEvent.KEYCODE_DPAD_LEFT));
-
-        // When retaining omnibox on focus, the tab key causes selection of the first omnibox
-        // suggestion. This results in a push to the model which, in turn, results in a typing
-        // started event. This is not a real world scenario for the NTP on Large-Form-Factor
-        // devices, where the omnibox is pre-focused and the tab key reveals the suggestions list,
-        // so this is acceptable.
-        if (!expectRetainOmniboxOnFocus) {
-            nonTypingKeys.add(KeyEvent.KEYCODE_TAB);
-        }
-
-        for (int key : nonTypingKeys) {
-            mOmnibox.sendKey(key);
-            verifyNoInteractions(listener);
-        }
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_clipboardPasteTriggersTypingStarted() {
-        testTypingStarted_clipboardPasteTriggersTypingStarted();
-    }
-
-    @Test
-    @SmallTest
-    public void
-            typingStarted_clipboardPasteTriggersTypingStartedWithRetainOmniboxOnFocusDisabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
-        testTypingStarted_clipboardPasteTriggersTypingStarted();
-    }
-
-    @Test
-    @SmallTest
-    public void typingStarted_clipboardPasteTriggersTypingStartedWithRetainOmniboxOnFocusEnabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(true);
-        testTypingStarted_clipboardPasteTriggersTypingStarted();
-    }
-
-    private void testTypingStarted_clipboardPasteTriggersTypingStarted() {
-        var listener = mock(Runnable.class);
-
-        mOmnibox.clearFocus();
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        mUrlBar.setTypingStartedListener(listener);
-        mOmnibox.requestFocus();
-
+        LocationBarCoordinator locationBarCoordinator =
+                (LocationBarCoordinator)
+                        mActivityTestRule
+                                .getActivity()
+                                .getToolbarManager()
+                                .getToolbarLayoutForTesting()
+                                .getLocationBar();
+        UrlBarData urlBarData = UrlBarData.forUrlAndText(new GURL(url), "www.foo.com/index.html");
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Clipboard.getInstance().setText("");
-                    // Paste directly. This is because Keyboard paste normally goes through an IME,
-                    // which requires a lengthier process, rendering test flaky.
-                    mUrlBar.onTextContextMenuItem(android.R.id.paste);
+                    locationBarCoordinator
+                            .getMediatorForTesting()
+                            .setUrlBarText(
+                                    urlBarData,
+                                    UrlBar.ScrollType.NO_SCROLL,
+                                    TextSelection.SELECT_ALL);
                 });
-        verifyNoInteractions(listener);
+
+        String expectedStripped = "www.foo.com/index.html";
+        mOmnibox.checkText(equalTo(expectedStripped), null);
 
         ThreadUtils.runOnUiThreadBlocking(
+                () -> mUrlBar.setSelection(0, mUrlBar.getText().length()));
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.onTextContextMenuItem(android.R.id.copy));
+
+        String clipboardText = getClipboardText();
+        Assert.assertEquals(url, clipboardText);
+
+        mOmnibox.setText("");
+        mOmnibox.typeText("bar", false);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mUrlBar.setSelection(0, mUrlBar.getText().length()));
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.onTextContextMenuItem(android.R.id.copy));
+
+        clipboardText = getClipboardText();
+        Assert.assertEquals("bar", clipboardText);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> OmniboxCapabilities.setHasDesktopExperienceForTesting((Boolean) null));
+    }
+
+    private String getClipboardText() {
+        return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Clipboard.getInstance().setText("asdf");
-                    // Paste directly. This is because Keyboard paste normally goes through an IME,
-                    // which requires a lengthier process, rendering test flaky.
-                    mUrlBar.onTextContextMenuItem(android.R.id.paste);
+                    ClipboardManager clipboard =
+                            (ClipboardManager)
+                                    mUrlBar.getContext()
+                                            .getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clip = clipboard.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        return clip.getItemAt(0).getText().toString();
+                    }
+                    return "";
                 });
-        verify(listener).run();
     }
 
     @Test
     @SmallTest
-    // Added to prevent regression of crbug.com/410642190
-    public void notify_typingStarted_beforeTextChange() {
-        // Setup.
-        AutocompleteEditTextModelBase model = spy(mUrlBar.getModelForTesting());
-        mUrlBar.setModelForTesting(model);
-        InOrder inOrder = inOrder(mListener, model);
-
-        mOmnibox.clearFocus();
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        mUrlBar.setTypingStartedListener(mListener);
+    public void testUrlBarContextMenu() {
         mOmnibox.requestFocus();
-        verifyNoInteractions(mListener);
-        clearInvocations(model);
+        mOmnibox.setText("test context menu");
 
-        // Set text and wait for listeners to be called.
+        // Select all text to ensure copy/cut/share options are available.
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.selectAll());
+
+        // Trigger context menu.
         ThreadUtils.runOnUiThreadBlocking(
-                () -> mUrlBar.onTextChanged(EXAMPLE_STRING, 0, 0, EXAMPLE_STRING.length()));
+                () -> {
+                    float x = mUrlBar.getWidth() / 2f;
+                    float y = mUrlBar.getHeight() / 2f;
+                    mUrlBar.showContextMenu(x, y);
+                });
 
-        // Verify that the typing started listener is called before model.onTextChanged is called.
-        inOrder.verify(mListener).run();
-        inOrder.verify(model, times(1))
-                .onTextChanged(EXAMPLE_STRING, 0, 0, EXAMPLE_STRING.length());
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    UrlBarContextMenuHelper helper = mUrlBar.getContextMenuHelperForTesting();
+                    Criteria.checkThat(
+                            "Helper should not be null", helper, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            "ListMenu should not be empty",
+                            helper.getModelListForTesting().size(),
+                            Matchers.greaterThan(0));
+                });
+
+        // Dismiss it.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    UrlBarContextMenuHelper helper = mUrlBar.getContextMenuHelperForTesting();
+                    if (helper != null) {
+                        helper.destroy();
+                    }
+                });
     }
 }

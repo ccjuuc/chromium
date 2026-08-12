@@ -41,7 +41,7 @@ void NativeMessagingWriterTest::SetUp() {
 }
 
 TEST_F(NativeMessagingWriterTest, GoodMessage) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("foo", 42);
   base::Value message(std::move(dict));
   EXPECT_TRUE(writer_->WriteMessage(message));
@@ -51,15 +51,15 @@ TEST_F(NativeMessagingWriterTest, GoodMessage) {
   auto header_read = read_file_.ReadAtCurrentPos(
       base::as_writable_byte_span(base::span_from_ref(body_length)));
   ASSERT_TRUE(header_read.has_value());
-  ASSERT_EQ(sizeof(body_length), *header_read);
+  ASSERT_EQ(*header_read, sizeof(body_length));
 
   std::string body_buffer(body_length, '\0');
   auto body_read =
       read_file_.ReadAtCurrentPos(base::as_writable_byte_span(body_buffer));
   ASSERT_TRUE(body_read.has_value());
-  ASSERT_EQ(static_cast<size_t>(body_length), *body_read);
+  ASSERT_EQ(*body_read, static_cast<size_t>(body_length));
 
-  base::Value::Dict written = base::test::ParseJsonDict(body_buffer);
+  base::DictValue written = base::test::ParseJsonDict(body_buffer);
   EXPECT_EQ(message, written);
 
   // Ensure no extra data: read returns zero or nullopt on EOF.
@@ -67,13 +67,13 @@ TEST_F(NativeMessagingWriterTest, GoodMessage) {
   std::vector<uint8_t> eof_buffer(1);
   auto eof_read =
       read_file_.ReadAtCurrentPos(base::as_writable_byte_span(eof_buffer));
-  EXPECT_EQ(0u, eof_read.value_or(0u));
+  EXPECT_EQ(eof_read.value_or(0u), 0u);
 }
 
 TEST_F(NativeMessagingWriterTest, SecondMessage) {
   auto messages = std::to_array<base::Value>({
-      base::Value(base::Value::Dict{}),
-      base::Value(base::Value::Dict().Set("foo", 42)),
+      base::Value(base::DictValue{}),
+      base::Value(base::DictValue().Set("foo", 42)),
   });
   EXPECT_TRUE(writer_->WriteMessage(messages[0]));
   EXPECT_TRUE(writer_->WriteMessage(messages[1]));
@@ -84,16 +84,16 @@ TEST_F(NativeMessagingWriterTest, SecondMessage) {
     auto header_read = read_file_.ReadAtCurrentPos(
         base::as_writable_byte_span(base::span_from_ref(length)));
     ASSERT_TRUE(header_read.has_value());
-    ASSERT_EQ(sizeof(length), *header_read) << "i = " << i;
+    ASSERT_EQ(*header_read, sizeof(length)) << "i = " << i;
 
     std::string body_buffer(length, '\0');
     auto body_read =
         read_file_.ReadAtCurrentPos(base::as_writable_byte_span(body_buffer));
     ASSERT_TRUE(body_read.has_value());
-    ASSERT_EQ(static_cast<size_t>(length), *body_read) << "i = " << i;
+    ASSERT_EQ(*body_read, static_cast<size_t>(length)) << "i = " << i;
 
     // Verify message content.
-    base::Value::Dict written = base::test::ParseJsonDict(body_buffer);
+    base::DictValue written = base::test::ParseJsonDict(body_buffer);
     EXPECT_EQ(messages[i], written);
   }
 }
@@ -102,7 +102,7 @@ TEST_F(NativeMessagingWriterTest, FailedWrite) {
   // Close the read end so that writing fails immediately.
   read_file_.Close();
 
-  base::Value message(base::Value::Dict{});
+  base::Value message(base::DictValue{});
   EXPECT_FALSE(writer_->WriteMessage(message));
 }
 

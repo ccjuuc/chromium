@@ -15,7 +15,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -45,7 +45,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -79,7 +79,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -103,7 +103,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -131,7 +131,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -140,36 +140,6 @@
         },
         "test": "services_unittests",
         "test_id_prefix": "ninja://services:services_unittests/"
-      },
-      {
-        "args": [
-          "--enable-gpu",
-          "--test-launcher-bot-mode",
-          "--test-launcher-jobs=1",
-          "--gtest_filter=TabCaptureApiPixelTest.EndToEnd*"
-        ],
-        "merge": {
-          "script": "//testing/merge_scripts/standard_gtest_merge.py"
-        },
-        "module_name": "//chrome/test:browser_tests",
-        "module_scheme": "gtest",
-        "name": "tab_capture_end2end_tests",
-        "swarming": {
-          "containment_type": "AUTO",
-          "dimensions": {
-            "cpu": "arm64",
-            "display_attached": "1",
-            "gpu": "apple:m1",
-            "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
-            "pool": "chromium.tests"
-          },
-          "hard_timeout": 1800,
-          "io_timeout": 1800,
-          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
-        },
-        "test": "browser_tests",
-        "test_id_prefix": "ninja://chrome/test:browser_tests/"
       }
     ],
     "isolated_scripts": [
@@ -181,7 +151,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=4"
         ],
@@ -202,7 +172,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -221,7 +191,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--git-revision=${got_revision}",
           "--dont-restore-color-profile-after-test",
@@ -251,7 +221,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -291,7 +261,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -331,7 +301,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -375,7 +345,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -394,7 +364,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--git-revision=${got_revision}",
           "--dont-restore-color-profile-after-test",
@@ -424,7 +394,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -443,7 +413,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--dont-restore-color-profile-after-test",
           "--jobs=4"
@@ -465,7 +435,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -505,7 +475,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -524,7 +494,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=4"
         ],
@@ -545,7 +515,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -564,12 +534,12 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite --enable-features=EGLDualGPURendering,ForceHighPerformanceGPUForWebGL",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite --enable-features=EGLDualGPURendering,ForceHighPerformanceGPUForWebGL",
           "--enforce-browser-version",
           "--enable-metal-debug-layers",
           "--webgl-conformance-version=2.0.1",
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl2_conformance_mac_runtimes.json",
-          "--jobs=4"
+          "--jobs=1"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -588,7 +558,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -608,11 +578,11 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite --enable-features=EGLDualGPURendering,ForceHighPerformanceGPUForWebGL",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite --enable-features=EGLDualGPURendering,ForceHighPerformanceGPUForWebGL",
           "--enforce-browser-version",
           "--enable-metal-debug-layers",
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl1_conformance_mac_runtimes.json",
-          "--jobs=4"
+          "--jobs=1"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -631,7 +601,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -672,7 +642,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,
@@ -691,7 +661,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --use-angle=metal --enable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=4"
         ],
@@ -712,7 +682,7 @@
             "display_attached": "1",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests"
           },
           "hard_timeout": 1800,

@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/debug/leak_annotations.h"
 #include "base/files/file_path.h"
@@ -22,6 +23,8 @@
 #include "chrome/installer/setup/installer_crash_reporter_client.h"
 #include "chrome/installer/setup/installer_state.h"
 #include "chrome/installer/util/logging_installer.h"
+#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/util/path_util.h"
 #include "components/crash/core/app/crashpad.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/crash/core/common/crash_keys.h"
@@ -91,9 +94,22 @@ void ConfigureCrashReporting(const InitialPreferences& initial_prefs,
     }
   }
 
+  std::vector<base::FilePath> attachments;
+  attachments.push_back(GetLogFilePath(initial_prefs));
+  const updater::UpdaterScope updater_scope =
+      installer_state.system_install() ? updater::UpdaterScope::kSystem
+                                       : updater::UpdaterScope::kUser;
+  if (auto path = updater::GetLogFilePath(updater_scope);
+      path.has_value() && !path->empty()) {
+    attachments.push_back(*std::move(path));
+  }
+  if (auto path = updater::GetHistoryLogFilePath(updater_scope);
+      path.has_value() && !path->empty()) {
+    attachments.push_back(*std::move(path));
+  }
+
   crash_reporter::InitializeCrashpadWithEmbeddedHandler(
-      true, "Chrome Installer", "", base::FilePath(),
-      {GetLogFilePath(initial_prefs)});
+      true, "Chrome Installer", "", base::FilePath(), attachments);
 }
 
 void SetInitialCrashKeys(const InstallerState& state) {
@@ -112,7 +128,7 @@ void SetInitialCrashKeys(const InstallerState& state) {
     state_crash_key.Set(base::WideToUTF8(state_key));
 
   // Set crash keys containing the registry values used to determine Chrome's
-  // update channel at process startup; see https://crbug.com/579504.
+  // update channel at process startup; see https://crbug.com/41235563.
   const auto& details = install_static::InstallDetails::Get();
 
   static CrashKeyString<50> ap_value("ap");

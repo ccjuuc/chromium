@@ -8,14 +8,18 @@
 
 #include <memory>
 
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/resource_coordinator/tab_helper.h"
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_sync_service_initialized_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -60,7 +64,7 @@ class BrowserCommandsTest : public BrowserWithTestWindowTest {
     auto observer =
         std::make_unique<tab_groups::TabGroupSyncServiceInitializedObserver>(
             tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-                browser()->profile()));
+                browser()->GetProfile()));
     observer->Wait();
   }
 };
@@ -78,7 +82,7 @@ TEST_F(BrowserCommandsTest, TabNavigationAccelerators) {
   // Select the second tab.
   browser()->tab_strip_model()->ActivateTabAt(1);
 
-  CommandUpdater* updater = browser()->command_controller();
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser());
 
   // Navigate to the first tab using an accelerator.
   updater->ExecuteCommand(IDC_SELECT_TAB_0);
@@ -95,6 +99,82 @@ TEST_F(BrowserCommandsTest, TabNavigationAccelerators) {
   // Navigate to the last tab using the select last accelerator.
   updater->ExecuteCommand(IDC_SELECT_LAST_TAB);
   ASSERT_EQ(2, browser()->tab_strip_model()->active_index());
+}
+
+// Tests IDC_CYCLE_TO_NEXT_TAB and IDC_CYCLE_TO_PREV_TAB with MRU enabled.
+TEST_F(BrowserCommandsTest, CycleToMruTab) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kCtrlTabMru);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kCtrlTabMru, true);
+
+  GURL about_blank(url::kAboutBlankURL);
+
+  // Create three tabs.
+  AddTab(browser(), about_blank);
+  AddTab(browser(), about_blank);
+  AddTab(browser(), about_blank);
+
+  // For MRU tracking to work in unit tests, we need
+  // ResourceCoordinatorTabHelper.
+  for (int i = 0; i < browser()->tab_strip_model()->count(); ++i) {
+    content::WebContents* contents =
+        browser()->tab_strip_model()->GetWebContentsAt(i);
+    resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
+        contents);
+  }
+
+  // Set times to simulate MRU order: Tab 2 (most recent) -> Tab 0 -> Tab 1
+  browser()->tab_strip_model()->GetWebContentsAt(2)->SetTabSwitchStartTime(
+      base::TimeTicks::Now(), false, false);
+
+  browser()->tab_strip_model()->GetWebContentsAt(0)->SetTabSwitchStartTime(
+      base::TimeTicks::Now() - base::Seconds(1), false, false);
+
+  browser()->tab_strip_model()->GetWebContentsAt(1)->SetTabSwitchStartTime(
+      base::TimeTicks::Now() - base::Seconds(2), false, false);
+
+  // We are currently on tab 2.
+  browser()->tab_strip_model()->ActivateTabAt(2);
+
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser());
+
+  // If MRU is active, the most recently used tab before 2 is 0.
+  updater->ExecuteCommand(IDC_CYCLE_TO_NEXT_TAB);
+  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
+}
+
+// Tests that IDC_SELECT_NEXT_TAB and IDC_SELECT_PREVIOUS_TAB perform
+// linear/adjacent tab selection even when MRU feature is enabled.
+TEST_F(BrowserCommandsTest, DirectionalTabSelectionIgnoresMru) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kCtrlTabMru);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kCtrlTabMru, true);
+
+  GURL about_blank(url::kAboutBlankURL);
+
+  AddTab(browser(), about_blank);
+  AddTab(browser(), about_blank);
+  AddTab(browser(), about_blank);
+
+  for (int i = 0; i < browser()->tab_strip_model()->count(); ++i) {
+    content::WebContents* contents =
+        browser()->tab_strip_model()->GetWebContentsAt(i);
+    resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
+        contents);
+  }
+
+  // Start at tab 0.
+  browser()->tab_strip_model()->ActivateTabAt(0);
+
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser());
+
+  // Directional IDC_SELECT_NEXT_TAB should move to tab 1.
+  updater->ExecuteCommand(IDC_SELECT_NEXT_TAB);
+  EXPECT_EQ(1, browser()->tab_strip_model()->active_index());
+
+  // Directional IDC_SELECT_PREVIOUS_TAB should move back to tab 0.
+  updater->ExecuteCommand(IDC_SELECT_PREVIOUS_TAB);
+  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());
 }
 
 // Tests IDC_DUPLICATE_TAB.
@@ -115,13 +195,14 @@ TEST_F(BrowserCommandsTest, DuplicateTab) {
   EXPECT_EQ(3, orig_controller.GetEntryCount());
   EXPECT_TRUE(orig_controller.GetPendingEntry());
 
-  size_t initial_window_count = chrome::GetTotalBrowserCount();
+  size_t initial_window_count =
+      GlobalBrowserCollection::GetInstance()->GetSize();
 
   // Duplicate the tab.
   chrome::ExecuteCommand(browser(), IDC_DUPLICATE_TAB);
 
   // The duplicated tab should not end up in a new window.
-  size_t window_count = chrome::GetTotalBrowserCount();
+  size_t window_count = GlobalBrowserCollection::GetInstance()->GetSize();
   ASSERT_EQ(initial_window_count, window_count);
 
   // And we should have a newly duplicated tab.
@@ -138,7 +219,7 @@ TEST_F(BrowserCommandsTest, DuplicateTab) {
   EXPECT_FALSE(controller.GetPendingEntry());
 }
 
-// Tests IDC_VIEW_SOURCE (See http://crbug.com/138140).
+// Tests IDC_VIEW_SOURCE (See http://crbug.com/40245175).
 TEST_F(BrowserCommandsTest, ViewSource) {
   GURL url1("http://foo/1");
   GURL url1_subframe("http://foo/subframe");
@@ -163,13 +244,14 @@ TEST_F(BrowserCommandsTest, ViewSource) {
   EXPECT_EQ(1, orig_controller.GetEntryCount());
   EXPECT_TRUE(orig_controller.GetPendingEntry());
 
-  size_t initial_window_count = chrome::GetTotalBrowserCount();
+  size_t initial_window_count =
+      GlobalBrowserCollection::GetInstance()->GetSize();
 
   // View Source.
   chrome::ExecuteCommand(browser(), IDC_VIEW_SOURCE);
 
   // The view source tab should not end up in a new window.
-  size_t window_count = chrome::GetTotalBrowserCount();
+  size_t window_count = GlobalBrowserCollection::GetInstance()->GetSize();
   ASSERT_EQ(initial_window_count, window_count);
 
   // And we should have a newly duplicated tab.
@@ -201,7 +283,7 @@ TEST_F(BrowserCommandsTest, BookmarkCurrentTab) {
   chrome::BookmarkCurrentTab(browser());
 
   // It should now be bookmarked in the bookmark model.
-  EXPECT_EQ(profile(), browser()->profile());
+  EXPECT_EQ(profile(), browser()->GetProfile());
   EXPECT_TRUE(model->IsBookmarked(url1));
 }
 

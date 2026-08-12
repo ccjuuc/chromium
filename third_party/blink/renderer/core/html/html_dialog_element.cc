@@ -46,6 +46,7 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/keywords.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -208,10 +209,11 @@ void HTMLDialogElement::close(const String& return_value,
     Element* previously_focused_element = previously_focused_element_;
     previously_focused_element_ = nullptr;
 
-    bool descendant_is_focused = GetDocument().FocusedElement() &&
-                                 FlatTreeTraversal::IsDescendantOf(
-                                     *GetDocument().FocusedElement(), *this);
-    if (previously_focused_element && (was_modal || descendant_is_focused)) {
+    bool descendant_or_self_is_focused =
+        GetDocument().FocusedElement() &&
+        FlatTreeTraversal::Contains(*this, *GetDocument().FocusedElement());
+    if (previously_focused_element &&
+        (was_modal || descendant_or_self_is_focused)) {
       FocusOptions* focus_options = FocusOptions::Create();
       focus_options->setPreventScroll(true);
       previously_focused_element->Focus(FocusParams(
@@ -237,7 +239,7 @@ void HTMLDialogElement::RequestCloseInternal(const String& return_value,
 
 ClosedByState HTMLDialogElement::ClosedBy() const {
   auto attribute_value =
-      FastGetAttribute(html_names::kClosedbyAttr).LowerASCII();
+      FastGetAttribute(html_names::kClosedbyAttr).ToAsciiLower();
   if (attribute_value == keywords::kAny) {
     return ClosedByState::kAny;
   } else if (attribute_value == keywords::kNone) {
@@ -272,10 +274,16 @@ namespace {
 const HTMLDialogElement* FindNearestDialog(const Node& target_node,
                                            double client_x,
                                            double client_y) {
+  const HTMLDialogElement* dialog = DynamicTo<HTMLDialogElement>(target_node);
+  if (!dialog && target_node.IsBackdropPseudoElement()) {
+    DCHECK(RuntimeEnabledFeatures::CSSPseudoElementBackdropEnabled());
+    dialog =
+        DynamicTo<HTMLDialogElement>(FlatTreeTraversal::Parent(target_node));
+  }
+
   // First check if this is a click on a dialog's backdrop, which will show up
   // as a click on the dialog directly.
-  if (auto* dialog = DynamicTo<HTMLDialogElement>(target_node);
-      dialog && dialog->IsOpenAndActive() && dialog->IsModal()) {
+  if (dialog && dialog->IsOpenAndActive() && dialog->IsModal()) {
     DOMRect* dialog_rect =
         const_cast<HTMLDialogElement*>(dialog)->GetBoundingClientRect();
     if (!dialog_rect->IsPointInside(client_x, client_y)) {
@@ -285,9 +293,9 @@ const HTMLDialogElement* FindNearestDialog(const Node& target_node,
   // Otherwise, walk up the tree looking for an open dialog.
   for (const Node* node = &target_node; node;
        node = FlatTreeTraversal::Parent(*node)) {
-    if (auto* dialog = DynamicTo<HTMLDialogElement>(node);
-        dialog && dialog->IsOpenAndActive()) {
-      return dialog;
+    if (auto* open_dialog = DynamicTo<HTMLDialogElement>(node);
+        open_dialog && open_dialog->IsOpenAndActive()) {
+      return open_dialog;
     }
   }
   return nullptr;
@@ -371,8 +379,7 @@ bool HTMLDialogElement::IsValidBuiltinCommand(HTMLElement& invoker,
   return HTMLElement::IsValidBuiltinCommand(invoker, command) ||
          command == CommandEventType::kShowModal ||
          command == CommandEventType::kClose ||
-         (command == CommandEventType::kRequestClose &&
-          RuntimeEnabledFeatures::HTMLCommandRequestCloseEnabled());
+         command == CommandEventType::kRequestClose;
 }
 
 bool HTMLDialogElement::HandleCommandInternal(HTMLElement& invoker,
@@ -414,7 +421,6 @@ bool HTMLDialogElement::HandleCommandInternal(HTMLElement& invoker,
           "A command attempted to close an already closed Dialog");
     }
   } else if (command == CommandEventType::kRequestClose) {
-    CHECK(RuntimeEnabledFeatures::HTMLCommandRequestCloseEnabled());
     if (open) {
       RequestCloseInternal(return_value, &invoker, ASSERT_NO_EXCEPTION);
       return true;
@@ -466,10 +472,6 @@ void HTMLDialogElement::show(ExceptionState& exception_state) {
     return;
   }
   SetBooleanAttribute(html_names::kOpenAttr, true);
-
-  // The layout must be updated here because setFocusForDialog calls
-  // Element::isFocusable, which requires an up-to-date layout.
-  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kJavaScript);
 
   // Top layer elements like dialogs and fullscreen elements can be nested
   // inside popovers.
@@ -593,7 +595,6 @@ void HTMLDialogElement::showModal(ExceptionState& exception_state,
 
   // Refresh the AX cache first, because most of it is changing.
   InertSubtreesChanged(document, old_modal_dialog);
-  document.UpdateStyleAndLayout(DocumentUpdateReason::kJavaScript);
 
   // Setting the open attribute already created the close watcher.
   DCHECK(close_watcher_);
@@ -708,13 +709,18 @@ void HTMLDialogElement::SetFocusForDialog() {
 bool HTMLDialogElement::DispatchToggleEvents(bool opening,
                                              Element* source,
                                              bool asModal) {
-  String old_state = opening ? "closed" : "open";
-  String new_state = opening ? "open" : "closed";
+  String old_state = opening ? keywords::kClosed : keywords::kOpen;
+  String new_state = opening ? keywords::kOpen : keywords::kClosed;
 
-  if (DispatchEvent(*ToggleEvent::Create(
-          event_type_names::kBeforetoggle,
-          opening ? Event::Cancelable::kYes : Event::Cancelable::kNo, old_state,
-          new_state, source)) != DispatchEventResult::kNotCanceled) {
+  auto* before_event = ToggleEvent::Create(
+      event_type_names::kBeforetoggle,
+      opening ? Event::Cancelable::kYes : Event::Cancelable::kNo, old_state,
+      new_state, source);
+  if (source && RuntimeEnabledFeatures::ShadowRootReferenceTargetEnabled(
+                    source->GetExecutionContext())) {
+    before_event->SetComposed(true);
+  }
+  if (DispatchEvent(*before_event) != DispatchEventResult::kNotCanceled) {
     return false;
   }
   if (opening) {
@@ -732,6 +738,10 @@ bool HTMLDialogElement::DispatchToggleEvents(bool opening,
   pending_toggle_event_ =
       ToggleEvent::Create(event_type_names::kToggle, Event::Cancelable::kNo,
                           old_state, new_state, source);
+  if (source && RuntimeEnabledFeatures::ShadowRootReferenceTargetEnabled(
+                    source->GetExecutionContext())) {
+    pending_toggle_event_->SetComposed(true);
+  }
   pending_toggle_event_task_ = PostCancellableTask(
       *GetDocument().GetTaskRunner(TaskType::kDOMManipulation), FROM_HERE,
       BindOnce(&HTMLDialogElement::DispatchPendingToggleEvent,

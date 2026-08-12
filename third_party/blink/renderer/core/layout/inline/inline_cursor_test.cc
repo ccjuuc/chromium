@@ -163,6 +163,24 @@ TEST_F(InlineCursorTest, BidiLevelSimpleRTL) {
                         "MNO:3", ":1", "jkl:2", ",:1", "123:2"));
 }
 
+TEST_F(InlineCursorTest, BidiLevelFirstLineTextTransform) {
+  InsertStyleElement(
+      "#root { white-space: pre; }"
+      "#root::first-line { text-transform: uppercase; }");
+  InlineCursor cursor = SetupCursor("<div id=root dir=ltr>&szlig;&#9;</div>");
+  Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
+  EXPECT_THAT(list, ElementsAre("#linebox", "SS:0", ":0"));
+}
+
+TEST_F(InlineCursorTest, BidiLevelFirstLineTextTransformBR) {
+  InsertStyleElement(
+      "#root { white-space: pre; }"
+      "#root::first-line { text-transform: uppercase; }");
+  InlineCursor cursor = SetupCursor("<div id=root dir=ltr>&szlig;<br></div>");
+  Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
+  EXPECT_THAT(list, ElementsAre("#linebox", "SS:0", ":0"));
+}
+
 TEST_F(InlineCursorTest, GetLayoutBlockFlowWithScopedCursor) {
   InlineCursor line = SetupCursor("<div id=root>line1<br>line2</div>");
   ASSERT_TRUE(line.Current().IsLineBox()) << line;
@@ -429,9 +447,7 @@ TEST_F(InlineCursorTest, MoveToEndOfLineWithNoCharsLtr) {
   // Preparing the InlineCursor to start from beginning of the second line
   // (Empty Line).
   const LayoutBlockFlow* second_anonymous =
-      RuntimeEnabledFeatures::TextareaMultipleIfcsEnabled()
-          ? To<LayoutBlockFlow>(block_flow.FirstChild()->NextSibling())
-          : nullptr;
+      To<LayoutBlockFlow>(block_flow.FirstChild()->NextSibling());
   InlineCursor move_to_end_of_line(second_anonymous ? *second_anonymous
                                                     : block_flow);
   if (!second_anonymous) {
@@ -448,11 +464,7 @@ TEST_F(InlineCursorTest, MoveToEndOfLineWithNoCharsLtr) {
   }
   const PositionWithAffinity end_position =
       move_to_end_of_line.PositionForEndOfLine();
-  if (RuntimeEnabledFeatures::TextareaLineEndingsAsBrEnabled()) {
-    EXPECT_TRUE(end_position.AnchorNode()->HasTagName(html_names::kBrTag));
-  } else {
-    EXPECT_EQ(4, end_position.GetPosition().OffsetInContainerNode());
-  }
+  EXPECT_TRUE(end_position.AnchorNode()->HasTagName(html_names::kBrTag));
 }
 
 TEST_F(InlineCursorTest, MoveToEndOfLineWithNoCharsRtl) {
@@ -467,9 +479,7 @@ TEST_F(InlineCursorTest, MoveToEndOfLineWithNoCharsRtl) {
   // Preparing the InlineCursor to start from beginning of the second line
   // (Empty Line).
   const LayoutBlockFlow* second_anonymous =
-      RuntimeEnabledFeatures::TextareaMultipleIfcsEnabled()
-          ? To<LayoutBlockFlow>(block_flow.FirstChild()->NextSibling())
-          : nullptr;
+      To<LayoutBlockFlow>(block_flow.FirstChild()->NextSibling());
   InlineCursor move_to_end_of_line(second_anonymous ? *second_anonymous
                                                     : block_flow);
   if (!second_anonymous) {
@@ -486,11 +496,7 @@ TEST_F(InlineCursorTest, MoveToEndOfLineWithNoCharsRtl) {
   }
   const PositionWithAffinity end_position =
       move_to_end_of_line.PositionForEndOfLine();
-  if (RuntimeEnabledFeatures::TextareaLineEndingsAsBrEnabled()) {
-    EXPECT_TRUE(end_position.AnchorNode()->HasTagName(html_names::kBrTag));
-  } else {
-    EXPECT_EQ(4, end_position.GetPosition().OffsetInContainerNode());
-  }
+  EXPECT_TRUE(end_position.AnchorNode()->HasTagName(html_names::kBrTag));
 }
 
 TEST_F(InlineCursorTest, FirstLastLogicalLeafWithInlineBlock) {

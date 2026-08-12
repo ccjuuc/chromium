@@ -4,21 +4,20 @@
 
 #include "chrome/browser/ui/webui/whats_new/whats_new_storage_service_impl.h"
 
-#include "base/containers/contains.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_version.h"
 #include "chrome/common/pref_names.h"
 
 namespace whats_new {
-const base::Value::List& WhatsNewStorageServiceImpl::ReadModuleData() const {
-  const base::Value::List& editions = g_browser_process->local_state()->GetList(
+const base::ListValue& WhatsNewStorageServiceImpl::ReadModuleData() const {
+  const base::ListValue& editions = g_browser_process->local_state()->GetList(
       prefs::kWhatsNewFirstEnabledOrder);
   return editions;
 }
 
-const base::Value::Dict& WhatsNewStorageServiceImpl::ReadEditionData() const {
-  const base::Value::Dict& editions =
+const base::DictValue& WhatsNewStorageServiceImpl::ReadEditionData() const {
+  const base::DictValue& editions =
       g_browser_process->local_state()->GetDict(prefs::kWhatsNewEditionUsed);
   return editions;
 }
@@ -30,7 +29,7 @@ std::optional<int> WhatsNewStorageServiceImpl::ReadVersionData() const {
 
 int WhatsNewStorageServiceImpl::GetModuleQueuePosition(
     std::string_view module_name) const {
-  const base::Value::List& module_data = ReadModuleData();
+  const base::ListValue& module_data = ReadModuleData();
   auto order = std::find_if(module_data.begin(), module_data.end(),
                             [&](auto& ordered_module_name) {
                               return ordered_module_name == module_name;
@@ -46,7 +45,7 @@ std::optional<int> WhatsNewStorageServiceImpl::GetUsedVersion(
 
 std::optional<std::string_view>
 WhatsNewStorageServiceImpl::FindEditionForCurrentVersion() const {
-  const base::Value::Dict& edition_data = ReadEditionData();
+  const base::DictValue& edition_data = ReadEditionData();
   auto edition_for_version = std::find_if(
       edition_data.begin(), edition_data.end(),
       [](auto edition) { return edition.second == CHROME_VERSION_MAJOR; });
@@ -58,8 +57,8 @@ WhatsNewStorageServiceImpl::FindEditionForCurrentVersion() const {
 void WhatsNewStorageServiceImpl::SetModuleEnabled(
     std::string_view module_name) {
   // Ensure active feature is in local state.
-  const base::Value::List& enabled_modules = ReadModuleData();
-  if (!base::Contains(enabled_modules, module_name)) {
+  const base::ListValue& enabled_modules = ReadModuleData();
+  if (!enabled_modules.contains(module_name)) {
     GetEnabledOrder()->Append(module_name);
   }
 }
@@ -81,7 +80,7 @@ void WhatsNewStorageServiceImpl::SetEditionUsed(std::string_view edition_name) {
   }
 
   // No other edition should be marked as used for this version.
-  const base::Value::Dict& edition_data = ReadEditionData();
+  const base::DictValue& edition_data = ReadEditionData();
   auto edition_for_version = std::find_if(
       edition_data.begin(), edition_data.end(),
       [](auto edition) { return edition.second == CHROME_VERSION_MAJOR; });

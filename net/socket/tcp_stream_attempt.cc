@@ -32,10 +32,12 @@ std::string_view TcpStreamAttempt::StateToString(State state) {
 
 TcpStreamAttempt::TcpStreamAttempt(const StreamAttemptParams* params,
                                    IPEndPoint ip_endpoint,
+                                   handles::NetworkHandle target_network,
                                    perfetto::Track track,
                                    const NetLogWithSource* net_log)
     : StreamAttempt(params,
                     ip_endpoint,
+                    target_network,
                     track,
                     NetLogSourceType::TCP_STREAM_ATTEMPT,
                     NetLogEventType::TCP_STREAM_ATTEMPT_ALIVE,
@@ -54,8 +56,8 @@ LoadState TcpStreamAttempt::GetLoadState() const {
   }
 }
 
-base::Value::Dict TcpStreamAttempt::GetInfoAsValue() const {
-  base::Value::Dict dict;
+base::DictValue TcpStreamAttempt::GetInfoAsValue() const {
+  base::DictValue dict;
   dict.Set("next_state", StateToString(next_state_));
   return dict;
 }
@@ -74,7 +76,8 @@ int TcpStreamAttempt::StartInternal() {
 
   std::unique_ptr<TransportClientSocket> stream_socket =
       params().client_socket_factory->CreateTransportClientSocket(
-          AddressList(ip_endpoint()), std::move(socket_performance_watcher),
+          AddressList(ip_endpoint()), target_network(),
+          std::move(socket_performance_watcher),
           params().network_quality_estimator, net_log().net_log(),
           net_log().source());
 
@@ -99,8 +102,8 @@ int TcpStreamAttempt::StartInternal() {
   return rv;
 }
 
-base::Value::Dict TcpStreamAttempt::GetNetLogStartParams() {
-  base::Value::Dict dict;
+base::DictValue TcpStreamAttempt::GetNetLogStartParams() {
+  base::DictValue dict;
   dict.Set("ip_endpoint", ip_endpoint().ToString());
   return dict;
 }

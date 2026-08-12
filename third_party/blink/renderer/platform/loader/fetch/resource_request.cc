@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/network_utils.h"
 #include "third_party/blink/renderer/platform/weborigin/referrer.h"
+#include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
@@ -87,7 +88,7 @@ ResourceRequestHead::WebBundleTokenParams::CloneHandle() const {
 const base::TimeDelta ResourceRequestHead::default_timeout_interval_ =
     base::TimeDelta::Max();
 
-ResourceRequestHead::ResourceRequestHead() : ResourceRequestHead(NullURL()) {}
+ResourceRequestHead::ResourceRequestHead() : ResourceRequestHead(NullUrl()) {}
 
 ResourceRequestHead::ResourceRequestHead(const KURL& url)
     : url_(url),
@@ -99,17 +100,12 @@ ResourceRequestHead::ResourceRequestHead(const KURL& url)
       download_to_blob_(false),
       use_stream_on_response_(false),
       keepalive_(false),
-      browsing_topics_(false),
-      ad_auction_headers_(false),
-      shared_storage_writable_opted_in_(false),
-      shared_storage_writable_eligible_(false),
       allow_stale_response_(false),
       skip_service_worker_(false),
       download_to_cache_only_(false),
       site_for_cookies_set_(false),
       is_form_submission_(false),
       priority_incremental_(net::kDefaultPriorityIncremental),
-      is_ad_resource_(false),
       upgrade_if_insecure_(false),
       is_revalidating_(false),
       is_automatic_upgrade_(false),
@@ -174,7 +170,7 @@ void ResourceRequestBody::SetStreamBody(
   stream_body_ = std::move(stream_body);
 }
 
-ResourceRequest::ResourceRequest() : ResourceRequestHead(NullURL()) {}
+ResourceRequest::ResourceRequest() : ResourceRequestHead(NullUrl()) {}
 
 ResourceRequest::ResourceRequest(const String& url_string)
     : ResourceRequestHead(KURL(url_string)) {}
@@ -223,20 +219,19 @@ std::unique_ptr<ResourceRequest> ResourceRequestHead::CreateRedirectRequest(
   request->SetTargetAddressSpace(GetTargetAddressSpace());
   request->SetCredentialsMode(GetCredentialsMode());
   request->SetKeepalive(GetKeepalive());
-  request->SetBrowsingTopics(GetBrowsingTopics());
-  request->SetAdAuctionHeaders(GetAdAuctionHeaders());
-  request->SetSharedStorageWritableOptedIn(GetSharedStorageWritableOptedIn());
   request->SetPriority(Priority());
   request->SetPriorityIncremental(PriorityIncremental());
 
   request->SetCorsPreflightPolicy(CorsPreflightPolicy());
-  if (IsAdResource())
-    request->SetIsAdResource();
+
+  if (const std::optional<AdProvenance>& ad_provenance = GetAdProvenance()) {
+    request->SetIsAdResource(*ad_provenance);
+  }
+
   request->SetUpgradeIfInsecure(UpgradeIfInsecure());
   request->SetIsAutomaticUpgrade(IsAutomaticUpgrade());
   request->SetRequestedWithHeader(GetRequestedWithHeader());
   request->SetClientDataHeader(GetClientDataHeader());
-  request->SetPurposeHeader(GetPurposeHeader());
   request->SetUkmSourceId(GetUkmSourceId());
   request->SetInspectorId(InspectorId());
   request->SetFromOriginDirtyStyleSheet(IsFromOriginDirtyStyleSheet());
@@ -244,10 +239,6 @@ std::unique_ptr<ResourceRequest> ResourceRequestHead::CreateRedirectRequest(
   request->SetFetchLikeAPI(IsFetchLikeAPI());
   request->SetFetchLaterAPI(IsFetchLaterAPI());
   request->SetFavicon(IsFavicon());
-  request->SetAttributionReportingSupport(GetAttributionReportingSupport());
-  request->SetAttributionReportingEligibility(
-      GetAttributionReportingEligibility());
-  request->SetAttributionReportingSrcToken(GetAttributionSrcToken());
 
   return request;
 }
@@ -343,17 +334,6 @@ void ResourceRequestHead::SetHTTPOrigin(const SecurityOrigin* origin) {
 
 void ResourceRequestHead::ClearHTTPOrigin() {
   http_header_fields_.Remove(http_names::kOrigin);
-}
-
-void ResourceRequestHead::SetHttpOriginIfNeeded(const SecurityOrigin* origin) {
-  if (NeedsHTTPOrigin())
-    SetHTTPOrigin(origin);
-}
-
-void ResourceRequestHead::SetHTTPOriginToMatchReferrerIfNeeded() {
-  if (NeedsHTTPOrigin()) {
-    SetHTTPOrigin(SecurityOrigin::CreateFromString(ReferrerString()).get());
-  }
 }
 
 void ResourceRequestHead::ClearHTTPUserAgent() {
@@ -511,29 +491,5 @@ bool ResourceRequestHead::NeedsHTTPOrigin() const {
   return true;
 }
 
-bool ResourceRequest::IsFeatureEnabledForSubresourceRequestAssumingOptIn(
-    const network::PermissionsPolicy* policy,
-    network::mojom::PermissionsPolicyFeature feature,
-    const url::Origin& origin) {
-  if (!policy) {
-    return false;
-  }
-
-  bool browsing_topics_opted_in =
-      (feature == network::mojom::PermissionsPolicyFeature::kBrowsingTopics ||
-       feature == network::mojom::PermissionsPolicyFeature::
-                      kBrowsingTopicsBackwardCompatible) &&
-      GetBrowsingTopics();
-  bool shared_storage_opted_in =
-      feature == network::mojom::PermissionsPolicyFeature::kSharedStorage &&
-      GetSharedStorageWritableOptedIn();
-
-  if (!browsing_topics_opted_in && !shared_storage_opted_in) {
-    return false;
-  }
-
-  return policy->IsFeatureEnabledForOrigin(
-      feature, origin, /*override_default_policy_to_all=*/true);
-}
 
 }  // namespace blink

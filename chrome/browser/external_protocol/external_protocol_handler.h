@@ -179,7 +179,7 @@ class ExternalProtocolHandler {
   // Creates and runs a External Protocol dialog box.
   // |url| - The url of the request.
   // |render_process_host_id| and |routing_id| are used by
-  // tab_util::GetWebContentsByID to aquire the tab contents associated with
+  // tab_util::GetWebContentsByID to acquire the tab contents associated with
   // this dialog.
   // NOTE: There is a race between the Time of Check and the Time Of Use for
   //       the command line. Since the caller (web page) does not have access
@@ -187,7 +187,7 @@ class ExternalProtocolHandler {
   //       to protect against this scenario.
   // This is implemented separately on each platform.
   // TODO(davidsac): Consider refactoring this to take a WebContents directly.
-  // crbug.com/668289
+  // crbug.com/40495154
   //
   // The dialog displays |initiating_origin| to the user so that they can
   // attribute the external protocol request to a site that initiated it. If an

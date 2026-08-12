@@ -20,8 +20,8 @@ import androidx.viewpager.widget.ViewPager;
 import org.chromium.base.Callback;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.lifetime.Destroyable;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -49,6 +49,7 @@ import org.chromium.ui.AsyncViewStub;
 import org.chromium.ui.ViewProvider;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeSupplier;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.LazyConstructionPropertyMcp;
 import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -68,7 +69,7 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
     private final KeyboardAccessoryButtonGroupCoordinator mButtonGroup;
     private final PropertyModel mModel;
     private @MonotonicNonNull KeyboardAccessoryView mView;
-    private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
+    private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
     private @MonotonicNonNull EdgeToEdgePadObserver mEdgeToEdgePadObserver;
 
     /**
@@ -129,11 +130,29 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         boolean hasTabs();
     }
 
+    /** Interface for callbacks related to the At Memory feature. */
+    public interface AtMemoryDelegate {
+        /**
+         * Set the At Memory enablement.
+         *
+         * @param enabled True if At Memory should be enabled, false otherwise.
+         */
+        void setAtMemoryEnabled(boolean enabled);
+
+        /**
+         * Set the At Memory callback.
+         *
+         * @param callback The callback to be invoked when the At Memory button is clicked.
+         */
+        void setAtMemoryCallback(Runnable callback);
+    }
+
     /**
      * Initializes the component as soon as the native library is loaded by e.g. starting to listen
      * to keyboard visibility events.
      *
      * @param profile The {@link Profile} associated with the data.
+     * @param modalDialogManager The {@link ModalDialogManager} used to display modal dialogs.
      * @param barVisibilityDelegate A {@link BarVisibilityDelegate} for delegating the bar
      *     visibility changes.
      * @param sheetVisibilityDelegate A {@link AccessorySheetCoordinator.SheetVisibilityDelegate}
@@ -147,9 +166,10 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
      */
     public KeyboardAccessoryCoordinator(
             Profile profile,
+            ModalDialogManager modalDialogManager,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
             InsetObserver insetObserver,
             AsyncViewStub barStub,
             Supplier<Boolean> isLargeFormFactorSupplier,
@@ -157,6 +177,7 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         this(
                 barStub.getContext(),
                 profile,
+                modalDialogManager,
                 new KeyboardAccessoryButtonGroupCoordinator(),
                 barVisibilityDelegate,
                 sheetVisibilityDelegate,
@@ -172,6 +193,7 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
      *
      * @param context The {@link Context} associated with the current UI context.
      * @param profile The {@link Profile} associated with the data.
+     * @param modalDialogManager The {@link ModalDialogManager} used to display modal dialogs.
      * @param viewProvider A provider for the accessory.
      * @param edgeToEdgeControllerSupplier A {@link Supplier<EdgeToEdgeController>}.
      * @param insetObserver An {@link InsetObserver}.
@@ -183,10 +205,11 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
     public KeyboardAccessoryCoordinator(
             Context context,
             Profile profile,
+            ModalDialogManager modalDialogManager,
             KeyboardAccessoryButtonGroupCoordinator buttonGroup,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
             InsetObserver insetObserver,
             ViewProvider<KeyboardAccessoryView> viewProvider,
             Supplier<Boolean> isLargeFormFactorSupplier,
@@ -197,8 +220,10 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
 
         mMediator =
                 new KeyboardAccessoryMediator(
+                        context,
                         mModel,
                         profile,
+                        modalDialogManager,
                         barVisibilityDelegate,
                         sheetVisibilityDelegate,
                         mButtonGroup.getTabSwitchingDelegate(),
@@ -312,8 +337,21 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         mButtonGroup.getTabSwitchingDelegate().setTabs(tabs);
     }
 
+    public void setAtMemoryCallback(Runnable callback) {
+        mButtonGroup.getAtMemoryDelegate().setAtMemoryCallback(callback);
+    }
+
+    public void setAtMemoryEnabled(boolean enabled) {
+        mButtonGroup.getAtMemoryDelegate().setAtMemoryEnabled(enabled);
+    }
+
     public void setActiveTab(@AccessoryTabType int tabType) {
         mButtonGroup.getTabSwitchingDelegate().setActiveTab(tabType);
+    }
+
+    @VisibleForTesting
+    public boolean hasTabs() {
+        return mButtonGroup.getTabSwitchingDelegate().hasTabs();
     }
 
     /**
@@ -453,7 +491,8 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
             implements EdgeToEdgeSupplier.ChangeObserver, Destroyable {
         private final View mViewToPad;
         private final int mDefaultBottomPadding;
-        private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
+        private final MonotonicObservableSupplier<EdgeToEdgeController>
+                mEdgeToEdgeControllerSupplier;
         private final NonNullObservableSupplier<Integer> mKeyboardInsetSupplier;
         private @Nullable EdgeToEdgeController mEdgeToEdgeController;
         private final Callback<EdgeToEdgeController> mControllerChangedCallback =
@@ -465,14 +504,15 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
 
         EdgeToEdgePadObserver(
                 View view,
-                ObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
+                MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
                 NonNullObservableSupplier<Integer> keyboardInsetSupplier) {
             mViewToPad = view;
             mDefaultBottomPadding = mViewToPad.getPaddingBottom();
             mEdgeToEdgeControllerSupplier = edgeToEdgeControllerSupplier;
-            mEdgeToEdgeControllerSupplier.addObserver(mControllerChangedCallback);
+            mEdgeToEdgeControllerSupplier.addSyncObserverAndPostIfNonNull(
+                    mControllerChangedCallback);
             mKeyboardInsetSupplier = keyboardInsetSupplier;
-            mKeyboardInsetSupplier.addObserver(mKeyboardInsetChangedCallback);
+            mKeyboardInsetSupplier.addSyncObserverAndPostIfNonNull(mKeyboardInsetChangedCallback);
         }
 
         @Override

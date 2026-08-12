@@ -64,13 +64,17 @@ public class QuickActionSearchWidgetProviderTest {
 
     @Before
     public void setUp() {
-        ShadowLog.stream = System.out;
         mContext = Mockito.spy(ApplicationProvider.getApplicationContext());
         mOptionsWidgetA = new Bundle();
         mOptionsWidgetB = new Bundle();
         mPreferences =
                 new SearchActivityPreferences(
-                        "Search Engine", new GURL("https://search.engine.com"), true, true, true);
+                        null,
+                        "Search Engine",
+                        new GURL("https://search.engine.com"),
+                        true,
+                        true,
+                        true);
 
         // Inflate an actual RemoteViews to avoid stubbing internal methods or making
         // any other assumptions about the class.

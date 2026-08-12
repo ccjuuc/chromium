@@ -10,40 +10,29 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/not_fatal_until.h"
 #include "build/branding_buildflags.h"
-#include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/desktop_to_mobile_promos/promos_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/promos/promos_pref_names.h"
-#include "chrome/browser/promos/promos_utils.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
 #include "chrome/browser/ui/views/promos/ios_promo_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/desktop_to_mobile_promos/features.h"
 #include "components/desktop_to_mobile_promos/promos_types.h"
-#include "components/feature_engagement/public/feature_constants.h"
-#include "components/feature_engagement/public/tracker.h"
 #include "components/prefs/pref_service.h"
 #include "components/qr_code_generator/bitmap_generator.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/browser/page_navigator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
-#include "ui/views/layout/flex_layout_view.h"
-#include "ui/views/layout/layout_types.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -152,7 +141,10 @@ IOSPromoConstants::IOSPromoTypeConfigs SetUpPaymentBubble(
   config.bubble_title_id =
       IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_TITLE_TEXT;
   config.bubble_subtitle_id =
-      IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT;
+      base::FeatureList::IsEnabled(
+          autofill::features::kAutofillEnableWalletBrandingV2)
+          ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT_V2
+          : IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT;
   config.promo_title_id = IDS_IOS_DESKTOP_PAYMENT_PROMO_BUBBLE_FOOTER_TITLE;
   config.promo_description_id =
       IDS_IOS_DESKTOP_PAYMENT_PROMO_BUBBLE_FOOTER_DESCRIPTION_QR;
@@ -237,6 +229,82 @@ IOSPromoConstants::IOSPromoTypeConfigs SetUpLensBubble(BubbleType bubble_type) {
   }
   return config;
 }
+
+// Creates and returns IOSPromoTypeConfigs for the Tab Groups bubble.
+IOSPromoConstants::IOSPromoTypeConfigs SetUpTabGroupsBubble(
+    BubbleType bubble_type) {
+  IOSPromoConstants::IOSPromoTypeConfigs config;
+  config.with_header = false;
+  config.decline_button_text_id = IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_DECLINE;
+  switch (bubble_type) {
+    case BubbleType::kQRCode:
+      config.promo_title_id = IDS_IOS_DESKTOP_TAB_GROUPS_PROMO_BUBBLE_TITLE_QR;
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_TAB_GROUPS_PROMO_BUBBLE_DESCRIPTION_QR;
+      config.accept_button_text_id =
+          IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_ACCEPT_QR;
+      config.promo_image =
+          CreateQrCodeImage(IOSPromoConstants::kIOSPromoTabGroupsQRCodeURL);
+      config.qr_code_url = IOSPromoConstants::kIOSPromoTabGroupsQRCodeURL;
+      break;
+    case BubbleType::kReminder:
+      config.promo_title_id =
+          IDS_IOS_DESKTOP_TAB_GROUPS_PROMO_BUBBLE_TITLE_REMINDER;
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_TAB_GROUPS_PROMO_BUBBLE_DESCRIPTION_REMINDER;
+      config.accept_button_text_id =
+          IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_ACCEPT_REMINDER;
+      config.promo_image =
+          ui::ImageModel::FromResourceId(IDR_TAB_GROUPS_ON_IOS_ICON);
+      break;
+    case BubbleType::kReminderConfirmation: {
+      SetUpBaseReminderConfirmationConfig(config);
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_TAB_GROUPS_REMINDER_CONFIRMATION;
+      break;
+    }
+  }
+  return config;
+}
+
+// Creates and returns IOSPromoTypeConfigs for the Price Tracking bubble.
+IOSPromoConstants::IOSPromoTypeConfigs SetUpPriceTrackingBubble(
+    BubbleType bubble_type) {
+  IOSPromoConstants::IOSPromoTypeConfigs config;
+  config.with_header = false;
+  config.decline_button_text_id = IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_DECLINE;
+  switch (bubble_type) {
+    case BubbleType::kQRCode:
+      config.promo_title_id =
+          IDS_IOS_DESKTOP_PRICE_TRACKING_PROMO_BUBBLE_TITLE_QR;
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_PRICE_TRACKING_DESCRIPTION_QR;
+      config.accept_button_text_id =
+          IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_ACCEPT_QR;
+      config.promo_image =
+          CreateQrCodeImage(IOSPromoConstants::kIOSPromoPriceTrackingQRCodeURL);
+      config.qr_code_url = IOSPromoConstants::kIOSPromoPriceTrackingQRCodeURL;
+      break;
+    case BubbleType::kReminder:
+      config.promo_title_id =
+          IDS_IOS_DESKTOP_PRICE_TRACKING_PROMO_BUBBLE_TITLE_REMINDER;
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_PRICE_TRACKING_PROMO_BUBBLE_DESCRIPTION_REMINDER;
+      config.accept_button_text_id =
+          IDS_IOS_DESKTOP_PROMO_BUBBLE_BUTTON_ACCEPT_REMINDER;
+      config.promo_image =
+          ui::ImageModel::FromResourceId(IDR_PRICE_TRACKING_ON_IOS_ICON);
+      break;
+    case BubbleType::kReminderConfirmation: {
+      SetUpBaseReminderConfirmationConfig(config);
+      config.promo_description_id =
+          IDS_IOS_DESKTOP_PRICE_TRACKING_REMINDER_CONFIRMATION;
+      break;
+    }
+  }
+  return config;
+}
+
 }  // namespace
 
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kIOSPromoBubbleElementId);
@@ -258,11 +326,6 @@ class IOSPromoBubble::IOSPromoBubbleDelegate : public ui::DialogModelDelegate {
 
   // Callback for when the bubble is dismissed.
   void OnDismissal() {
-    feature_engagement::Tracker* tracker =
-        feature_engagement::TrackerFactory::GetForBrowserContext(profile_);
-    if (tracker && ios_promo_prefs_config_.promo_feature) {
-      tracker->Dismissed(*ios_promo_prefs_config_.promo_feature);
-    }
     // Don't record a histogram if either of the buttons' callbacks have run
     // and a histogram has already been recorded.
     if (!impression_histogram_already_recorded_) {
@@ -326,6 +389,10 @@ IOSPromoConstants::IOSPromoTypeConfigs IOSPromoBubble::SetUpBubble(
       return SetUpEnhancedBrowsingBubble(bubble_type);
     case PromoType::kLens:
       return SetUpLensBubble(bubble_type);
+    case PromoType::kTabGroups:
+      return SetUpTabGroupsBubble(bubble_type);
+    case PromoType::kPriceTracking:
+      return SetUpPriceTrackingBubble(bubble_type);
   }
 }
 
@@ -415,15 +482,27 @@ std::unique_ptr<views::View> IOSPromoBubble::CreateImageAndBodyTextView(
     BubbleType bubble_type) {
   views::Builder<views::View> image_view;
   if (!ios_promo_config.promo_image.IsEmpty()) {
+    const int corner_radius =
+        views::LayoutProvider::Get()->GetCornerRadiusMetric(
+            views::Emphasis::kHigh);
     auto image_view_builder =
         views::Builder<views::ImageView>()
             .SetID(IOSPromoConstants::kImageViewID)
             .SetImage(ios_promo_config.promo_image)
             .SetImageSize(gfx::Size(IOSPromoConstants::kImageSize,
                                     IOSPromoConstants::kImageSize))
-            .SetCornerRadius(
-                views::LayoutProvider::Get()->GetCornerRadiusMetric(
-                    views::Emphasis::kHigh));
+            // The QR code images have a border thickness of 1. Adjust the
+            // corner radius to accommodate for the different inner rounding
+            // when the QR code is shown.
+            .SetCornerRadius(bubble_type == BubbleType::kQRCode
+                                 ? corner_radius - 1
+                                 : corner_radius);
+
+    if (bubble_type == BubbleType::kQRCode) {
+      image_view_builder.SetAccessibleName(
+          l10n_util::GetStringUTF16(IDS_IOS_DESKTOP_PROMO_QR_CODE_ALT_TEXT));
+    }
+
     auto image_container_builder =
         views::Builder<views::View>()
             .SetLayoutManager(std::make_unique<views::FillLayout>())
@@ -446,7 +525,7 @@ std::unique_ptr<views::View> IOSPromoBubble::CreateImageAndBodyTextView(
           .SetID(IOSPromoConstants::kDescriptionLabelID)
           .SetText(
               l10n_util::GetStringUTF16(ios_promo_config.promo_description_id))
-          .SetTextContext(views::style::CONTEXT_BUBBLE_FOOTER)
+          .SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT)
           .SetTextStyle(views::style::STYLE_SECONDARY)
           .SetEnabledColor(kColorDesktopToIOSPromoFooterSubtitleLabel)
           .SetMultiLine(true)
@@ -468,11 +547,13 @@ std::unique_ptr<views::View> IOSPromoBubble::CreateImageAndBodyTextView(
 }
 
 // static
-void IOSPromoBubble::ShowPromoBubble(Anchor anchor,
-                                     views::Button* highlighted_button,
-                                     Profile* profile,
-                                     PromoType promo_type,
-                                     BubbleType bubble_type) {
+void IOSPromoBubble::ShowPromoBubble(
+    Anchor anchor,
+    page_actions::PageActionViewInterface* highlighted_button,
+    std::optional<ui::ElementIdentifier> highlighted_element,
+    Profile* profile,
+    PromoType promo_type,
+    BubbleType bubble_type) {
   IOSPromoConstants::IOSPromoTypeConfigs ios_promo_config =
       SetUpBubble(promo_type, bubble_type);
 
@@ -513,7 +594,7 @@ void IOSPromoBubble::ShowPromoBubble(Anchor anchor,
   }
 
   auto promo_bubble = std::make_unique<views::BubbleDialogModelHost>(
-      dialog_model_builder.Build(), anchor.view, anchor.arrow);
+      dialog_model_builder.Build(), anchor.anchor_base, anchor.arrow);
 
   if (ios_promo_config.with_header) {
     promo_bubble->SetFootnoteView(CreateContentView(
@@ -523,14 +604,16 @@ void IOSPromoBubble::ShowPromoBubble(Anchor anchor,
   ios_promo_delegate_ = promo_bubble.get();
   current_promo_type_ = promo_type;
 
-  if (highlighted_button) {
-    promo_bubble->SetHighlightedButton(highlighted_button);
+  if (highlighted_element) {
+    promo_bubble->SetHighlightedElement(*highlighted_element);
   } else {
     promo_bubble->set_highlight_button_when_shown(false);
   }
 
   views::Widget* const widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(promo_bubble));
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          std::move(promo_bubble),
+          views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   widget->Show();
   widget->GetContentsView()->SetProperty(views::kElementIdentifierKey,
                                          kIOSPromoBubbleElementId);

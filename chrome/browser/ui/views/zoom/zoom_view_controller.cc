@@ -12,13 +12,13 @@
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
@@ -26,6 +26,7 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/actions/actions.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
 namespace zoom {
 
@@ -33,60 +34,75 @@ ZoomViewController::ZoomViewController(
     tabs::TabInterface& tab_interface,
     page_actions::PageActionController& page_action_controller)
     : tab_interface_(tab_interface),
-      page_action_controller_(page_action_controller) {
-  DCHECK(IsPageActionMigrated(PageActionIconType::kZoom));
-}
+      page_action_controller_(page_action_controller) {}
 
 ZoomViewController::~ZoomViewController() = default;
 
 void ZoomViewController::UpdatePageActionIconAndBubbleVisibility(
     bool prefer_to_show_bubble,
     bool from_user_gesture) {
-  // Show / hide the bubble first so that UpdatePageActionIcon()
-  // runs with the correct "bubble visible?" state.  This prevents the
-  // icon from being hidden just before we show a bubble (the anchor would
-  // disappear) and also makes sure we hide the icon right after the bubble
-  // is closed while the zoom level is back to default.
+  // Update the page action's accessible/tooltip/icon properties first.
+  //
+  // Showing or refreshing the zoom bubble may synchronously query the anchor's
+  // accessible name/tooltip (and can trigger an accessibility announcement).
+  // If these properties are updated after the bubble visibility update, the
+  // bubble/a11y pipeline can observe stale values from the previous zoom percent.
+  UpdatePageActionIconProperties();
+
+  // Then update bubble visibility so the subsequent icon visibility decision
+  // uses the correct "bubble visible?" state. This prevents the icon from being
+  // hidden just before showing a bubble (the anchor would disappear) and also
+  // ensures the icon is hidden immediately after the bubble is closed when the
+  // zoom level returns to default.
   UpdateBubbleVisibility(prefer_to_show_bubble, from_user_gesture);
-  UpdatePageActionIcon(IsBubbleVisible());
+  UpdatePageActionIconVisibility(IsBubbleVisible());
 }
 
-void ZoomViewController::UpdatePageActionIcon(bool is_bubble_visible) {
+void ZoomViewController::UpdatePageActionIconProperties() {
   zoom::ZoomController* zoom_controller =
       zoom::ZoomController::FromWebContents(GetWebContents());
   CHECK(zoom_controller);
 
-  // Update the tooltip with the current zoom percentage.
-  page_action_controller_->OverrideTooltip(
-      kActionZoomNormal,
-      l10n_util::GetStringFUTF16(
-          IDS_TOOLTIP_ZOOM,
-          base::FormatPercent(zoom_controller->GetZoomPercent())));
+  auto accessible_text = l10n_util::GetStringFUTF16(
+      IDS_TOOLTIP_ZOOM, base::FormatPercent(zoom_controller->GetZoomPercent()));
+
+  page_action_controller_->OverrideTooltip(kActionShowZoomBubble,
+                                           accessible_text);
+  page_action_controller_->OverrideAccessibleName(kActionShowZoomBubble,
+                                                  accessible_text);
 
   switch (zoom_controller->GetZoomRelativeToDefault()) {
     case ZoomController::ZOOM_BELOW_DEFAULT_ZOOM:
       page_action_controller_->OverrideImage(
-          kActionZoomNormal,
-          ui::ImageModel::FromVectorIcon(kZoomMinusChromeRefreshIcon));
+          kActionShowZoomBubble,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kZoomOutIcon
+                                             : kZoomMinusChromeRefreshOldIcon));
       break;
     case ZoomController::ZOOM_AT_DEFAULT_ZOOM:
-      // Default and above share the “zoom plus” icon for simplicity.
     case ZoomController::ZOOM_ABOVE_DEFAULT_ZOOM:
       page_action_controller_->OverrideImage(
-          kActionZoomNormal,
-          ui::ImageModel::FromVectorIcon(kZoomPlusChromeRefreshIcon));
+          kActionShowZoomBubble,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? kZoomInIcon
+                                             : kZoomPlusChromeRefreshOldIcon));
       break;
     default:
       NOTREACHED();
   }
+}
 
-  // Show or hide the page action icon. Hide it if at default zoom and no
-  // bubble.
+void ZoomViewController::UpdatePageActionIconVisibility(
+    bool is_bubble_visible) {
+  zoom::ZoomController* zoom_controller =
+      zoom::ZoomController::FromWebContents(GetWebContents());
+  CHECK(zoom_controller);
+
   const bool is_at_default_zoom = zoom_controller->IsAtDefaultZoom();
   if (is_at_default_zoom && !is_bubble_visible) {
-    page_action_controller_->Hide(kActionZoomNormal);
+    page_action_controller_->Hide(kActionShowZoomBubble);
   } else {
-    page_action_controller_->Show(kActionZoomNormal);
+    page_action_controller_->Show(kActionShowZoomBubble);
   }
 }
 
@@ -116,9 +132,9 @@ void ZoomViewController::UpdateBubbleVisibility(bool prefer_to_show_bubble,
 
 bool ZoomViewController::IsBubbleVisible() const {
   auto* action_item = actions::ActionManager::Get().FindAction(
-      kActionZoomNormal, tab_interface_->GetBrowserWindowInterface()
-                             ->GetActions()
-                             ->root_action_item());
+      kActionShowZoomBubble,
+      BrowserActions::From(tab_interface_->GetBrowserWindowInterface())
+          ->root_action_item());
   return action_item->GetIsShowingBubble();
 }
 
@@ -131,8 +147,7 @@ bool ZoomViewController::CanBubbleBeVisible(bool prefer_to_show_bubble,
   // If neither of these is true, we only show the bubble if the zoom level
   // is not at the default (`!is_zoom_at_default`), indicating that zoom is
   // active.
-  return (prefer_to_show_bubble || IsBubbleVisible()) ? true
-                                                      : !is_zoom_at_default;
+  return prefer_to_show_bubble || IsBubbleVisible() || !is_zoom_at_default;
 }
 
 content::WebContents* ZoomViewController::GetWebContents() const {

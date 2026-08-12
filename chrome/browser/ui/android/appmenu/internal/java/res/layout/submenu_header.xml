@@ -5,7 +5,7 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    style="@style/AppMenuItem"
+    style="@style/OverflowMenuItem"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
@@ -28,8 +28,10 @@ found in the LICENSE file.
         android:layout_width="0dp"
         android:layout_weight="1"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:singleLine="true"
+        android:gravity="center_vertical|start"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textAlignment="viewStart"
         android:paddingStart="@dimen/menu_item_text_padding_start"
         android:minHeight="?attr/listItemHeight"
         android:duplicateParentState="true"

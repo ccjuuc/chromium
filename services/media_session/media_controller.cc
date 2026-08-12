@@ -9,14 +9,12 @@
 #include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/media_session/audio_focus_request.h"
 #include "services/media_session/public/cpp/chapter_information.h"
 #include "services/media_session/public/cpp/media_image_manager.h"
-#include "services/media_session/public/mojom/media_session.mojom-shared.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
 
 namespace media_session {
@@ -326,7 +324,7 @@ void MediaController::MediaSessionImagesChanged(
       // No image is available from the session so we should clear any image the
       // observers might have.
       holder->ClearImage(std::nullopt);
-    } else if (base::Contains(types_changed, holder->type())) {
+    } else if (types_changed.contains(holder->type())) {
       holder->ImagesChanged(it->second, std::nullopt);
     }
   }
@@ -466,6 +464,14 @@ void MediaController::EnterAutoPictureInPicture() {
 
   if (session_) {
     session_->ipc()->EnterAutoPictureInPicture();
+  }
+}
+
+void MediaController::SaveVideoFrame() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (session_) {
+    session_->ipc()->SaveVideoFrame();
   }
 }
 

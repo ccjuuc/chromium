@@ -7,12 +7,15 @@
 #import "base/feature_list.h"
 #import "components/prefs/pref_change_registrar.h"
 #import "components/prefs/pref_service.h"
+#import "components/safe_browsing/core/browser/tailored_security_service/tailored_security_service.h"
 #import "components/safe_browsing/core/common/features.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
 #import "ios/chrome/browser/safe_browsing/model/enhanced_safe_browsing_infobar_delegate.h"
+#import "ios/chrome/browser/safe_browsing/model/tailored_security/tailored_security_service_factory.h"
 #import "ios/chrome/browser/settings/ui_bundled/privacy/privacy_safe_browsing_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -51,8 +54,7 @@
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
     _webStateList = browser->GetWebStateList();
-    _dependencyInstallerBridge.StartObserving(
-        self, browser, TabsDependencyInstaller::Policy::kAccordingToFeature);
+    _dependencyInstallerBridge.StartObserving(self, browser);
 
     // Initialize observations.
     _prefChangeRegistrar.Init(browser->GetProfile()->GetPrefs());
@@ -126,6 +128,17 @@
   // not show one), so reset the pending flag.
   _pendingBannerPreferenceChange = NO;
 
+  PrefService* prefService = profile->GetPrefs();
+
+  // If the pref change was triggered by the Tailored Security Service, then
+  // that service will show its own UI.
+  safe_browsing::TailoredSecurityService* tailored_security_service =
+      TailoredSecurityServiceFactory::GetForProfile(profile);
+  if (safe_browsing::TailoredSecurityService::IsResponsibleForNotification(
+          prefService, tailored_security_service)) {
+    return;
+  }
+
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(profile);
   std::string email;
@@ -139,10 +152,8 @@
   BOOL isSettingsVisible = [self.baseViewController.presentedViewController
       isKindOfClass:[SettingsNavigationController class]];
 
-  PrefService* prefService = profile->GetPrefs();
   bool isEnhancedProtectionEnabled =
       safe_browsing::IsEnhancedProtectionEnabled(*prefService);
-
   if (isEnhancedProtectionEnabled) {
     [self showSafeBrowsingSyncInfobarForState:YES withEmail:email];
   } else if (!isSettingsVisible) {

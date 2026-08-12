@@ -130,13 +130,20 @@ class CORE_EXPORT DataObject : public GarbageCollected<DataObject>,
   int GetModifiers() const { return modifiers_; }
   void SetModifiers(int modifiers) { modifiers_ = modifiers; }
 
+  const String& SourceEffectAllowed() const { return source_effect_allowed_; }
+  void SetSourceEffectAllowed(const String& source_effect_allowed) {
+    source_effect_allowed_ = source_effect_allowed;
+  }
+
   // Adds an observer (and retains a reference to it) that is notified
   // whenever the underlying item_list_ changes.
   void AddObserver(Observer*);
 
   void Trace(Visitor*) const override;
 
-  WebDragData ToWebDragData();
+  // |context| is used to obtain a file-reading task runner for synchronously
+  // reading blob-backed File objects.
+  WebDragData ToWebDragData(ExecutionContext* context);
 
  private:
   DataObjectItem* FindStringItem(const String& type) const;
@@ -151,6 +158,7 @@ class CORE_EXPORT DataObject : public GarbageCollected<DataObject>,
   // State of Shift/Ctrl/Alt/Meta keys and Left/Right/Middle mouse buttons
   int modifiers_;
   String filesystem_id_;
+  String source_effect_allowed_;
 };
 
 }  // namespace blink

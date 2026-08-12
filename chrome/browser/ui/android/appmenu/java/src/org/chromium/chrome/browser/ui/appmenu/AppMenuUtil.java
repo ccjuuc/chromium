@@ -21,6 +21,7 @@ import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /** This is a helper class for app menu. */
 @NullMarked
@@ -148,13 +149,18 @@ public class AppMenuUtil {
         }
 
         @Override
-        public WritableObjectPropertyKey<List<ListItem>> getSubmenuItemsKey() {
-            return AppMenuItemWithSubmenuProperties.SUBMENU_ITEMS;
+        public WritableObjectPropertyKey<Supplier<List<ListItem>>> getSubmenuProviderKey() {
+            return AppMenuItemWithSubmenuProperties.SUBMENU_PROVIDER;
         }
 
         @Override
         public WritableBooleanPropertyKey getIsHighlightedKey() {
             return AppMenuItemProperties.HAS_HOVER_BACKGROUND;
+        }
+
+        @Override
+        public WritableBooleanPropertyKey getIsExpandedKey() {
+            return AppMenuItemWithSubmenuProperties.IS_EXPANDED;
         }
     }
 }

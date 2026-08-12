@@ -12,6 +12,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
@@ -24,6 +25,8 @@
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
+
+class PrefService;
 
 namespace ash::quick_start {
 
@@ -117,7 +120,9 @@ class TargetDeviceBootstrapController
     ~Observer() override = default;
   };
 
+  // `local_state` must be non-null and must outlive `this`.
   TargetDeviceBootstrapController(
+      PrefService* local_state,
       std::unique_ptr<SecondDeviceAuthBroker> auth_broker,
       std::unique_ptr<AccessibilityManagerWrapper>
           accessibility_manager_wrapper,
@@ -229,10 +234,18 @@ class TargetDeviceBootstrapController
     connection_broker_ = std::move(connection_broker);
   }
 
+  const raw_ref<PrefService> local_state_;
+
   std::unique_ptr<TargetDeviceConnectionBroker> connection_broker_;
 
   // TODO: Should we enforce one observer at a time here too?
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   Status status_;
 

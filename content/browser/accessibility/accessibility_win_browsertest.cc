@@ -8,8 +8,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <wrl/client.h>
+#include <wrl/implements.h>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "base/command_line.h"
@@ -24,13 +26,16 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
+#include "base/win/windows_version.h"
 #include "build/build_config.h"
 #include "content/browser/accessibility/accessibility_browsertest.h"
+#include "content/browser/accessibility/accessibility_test_helpers.h"
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
+#include "content/browser/accessibility/browser_accessibility_state_impl_win.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_impl.h"
@@ -55,7 +60,6 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/iaccessible2/ia2_api_all.h"
 #include "third_party/isimpledom/ISimpleDOMNode.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/platform/ax_fragment_root_win.h"
 #include "ui/accessibility/platform/browser_accessibility_manager_win.h"
@@ -73,6 +77,34 @@ using ui::IAccessibleRoleToString;
 using ui::IAccessibleStateToString;
 
 namespace {
+
+class FakeUIAutomationClientInfo final
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IUIAutomationClientInfo> {
+ public:
+  explicit FakeUIAutomationClientInfo(std::wstring process_name)
+      : process_name_(std::move(process_name)) {}
+
+  IFACEMETHODIMP get_ProcessId(DWORD* process_id) override {
+    if (!process_id) {
+      return E_POINTER;
+    }
+    *process_id = 1234;
+    return S_OK;
+  }
+
+  IFACEMETHODIMP get_ProcessName(BSTR* process_name) override {
+    if (!process_name) {
+      return E_POINTER;
+    }
+    *process_name = ::SysAllocString(process_name_.c_str());
+    return *process_name ? S_OK : E_OUTOFMEMORY;
+  }
+
+ private:
+  std::wstring process_name_;
+};
 
 // AccessibilityWinBrowserTest ------------------------------------------------
 
@@ -145,6 +177,20 @@ class AccessibilityWinBrowserTest : public AccessibilityBrowserTest {
       LONG expected_start_offset,
       LONG expected_end_offset,
       const std::wstring& expected_text);
+  static void CheckTextAfterOffset(
+      const Microsoft::WRL::ComPtr<IAccessibleText>& object,
+      LONG offset,
+      IA2TextBoundaryType boundary_type,
+      LONG expected_start_offset,
+      LONG expected_end_offset,
+      const std::wstring& expected_text);
+  static void CheckTextBeforeOffset(
+      const Microsoft::WRL::ComPtr<IAccessibleText>& object,
+      LONG offset,
+      IA2TextBoundaryType boundary_type,
+      LONG expected_start_offset,
+      LONG expected_end_offset,
+      const std::wstring& expected_text);
   static std::vector<base::win::ScopedVariant> GetAllAccessibleChildren(
       IAccessible* element);
 
@@ -153,9 +199,6 @@ class AccessibilityWinBrowserTest : public AccessibilityBrowserTest {
       Microsoft::WRL::ComPtr<IAccessibleText>* input_text);
   void SetUpSampleParagraphHelper(
       Microsoft::WRL::ComPtr<IAccessibleText>* accessible_text);
-  ui::BrowserAccessibility* FindNodeInSubtree(ui::BrowserAccessibility& node,
-                                              ax::mojom::Role role,
-                                              const std::string& name_or_value);
 };
 
 AccessibilityWinBrowserTest::AccessibilityWinBrowserTest() = default;
@@ -447,7 +490,8 @@ ui::BrowserAccessibility* AccessibilityWinBrowserTest::FindNode(
     const std::string& name_or_value) {
   ui::BrowserAccessibility* root = GetManager()->GetBrowserAccessibilityRoot();
   CHECK(root);
-  return FindNodeInSubtree(*root, role, name_or_value);
+  return FindFirstAccessibilityNodeWithRoleAndNameOrValue(*root, role,
+                                                          name_or_value);
 }
 
 // Retrieve the browser accessibility manager object for the current web
@@ -458,36 +502,6 @@ ui::BrowserAccessibilityManager* AccessibilityWinBrowserTest::GetManager() {
   return web_contents->GetOrCreateRootBrowserAccessibilityManager();
 }
 
-// Retrieve the accessibility node in the subtree that matches the accessibility
-// role, name or value.
-ui::BrowserAccessibility* AccessibilityWinBrowserTest::FindNodeInSubtree(
-    ui::BrowserAccessibility& node,
-    ax::mojom::Role role,
-    const std::string& name_or_value) {
-  const std::string& name =
-      node.GetStringAttribute(ax::mojom::StringAttribute::kName);
-  // Note that in the case of a text field,
-  // "BrowserAccessibility::GetValueForControl" has the added functionality of
-  // computing the value of an ARIA text box from its inner text.
-  //
-  // <div contenteditable="true" role="textbox">Hello world.</div>
-  // Will expose no HTML value attribute, but some screen readers, such as Jaws,
-  // VoiceOver and Talkback, require one to be computed.
-  const std::string value = base::UTF16ToUTF8(node.GetValueForControl());
-  if (node.GetRole() == role &&
-      (name == name_or_value || value == name_or_value)) {
-    return &node;
-  }
-
-  for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-    ui::BrowserAccessibility* result =
-        FindNodeInSubtree(*node.PlatformGetChild(i), role, name_or_value);
-    if (result) {
-      return result;
-    }
-  }
-  return nullptr;
-}
 // Static helpers ------------------------------------------------
 
 Microsoft::WRL::ComPtr<IAccessible>
@@ -593,6 +607,60 @@ void AccessibilityWinBrowserTest::CheckTextAtOffset(
   base::win::ScopedBstr text;
   HRESULT hr = object->get_textAtOffset(offset, boundary_type, &start_offset,
                                         &end_offset, text.Receive());
+  EXPECT_EQ(S_OK, hr);
+  EXPECT_EQ(expected_start_offset, start_offset);
+  EXPECT_EQ(expected_end_offset, end_offset);
+  EXPECT_STREQ(expected_text.c_str(), text.Get());
+}
+
+// Ensures that the text and the start and end offsets retrieved using
+// get_textAfterOffset match the expected values.
+void AccessibilityWinBrowserTest::CheckTextAfterOffset(
+    const Microsoft::WRL::ComPtr<IAccessibleText>& object,
+    LONG offset,
+    IA2TextBoundaryType boundary_type,
+    LONG expected_start_offset,
+    LONG expected_end_offset,
+    const std::wstring& expected_text) {
+  ::testing::Message message;
+  message << "While checking for text AFTER offset " << offset
+          << ", expecting \'" << expected_text << "\' at "
+          << expected_start_offset << '-' << expected_end_offset << '.';
+  SCOPED_TRACE(message);
+
+  LONG start_offset = 0;
+  LONG end_offset = 0;
+  base::win::ScopedBstr text;
+
+  HRESULT hr = object->get_textAfterOffset(offset, boundary_type, &start_offset,
+                                           &end_offset, text.Receive());
+  EXPECT_EQ(S_OK, hr);
+  EXPECT_EQ(expected_start_offset, start_offset);
+  EXPECT_EQ(expected_end_offset, end_offset);
+  EXPECT_STREQ(expected_text.c_str(), text.Get());
+}
+
+// Ensures that the text and the start and end offsets retrieved using
+// get_textBeforeOffset match the expected values.
+void AccessibilityWinBrowserTest::CheckTextBeforeOffset(
+    const Microsoft::WRL::ComPtr<IAccessibleText>& object,
+    LONG offset,
+    IA2TextBoundaryType boundary_type,
+    LONG expected_start_offset,
+    LONG expected_end_offset,
+    const std::wstring& expected_text) {
+  ::testing::Message message;
+  message << "While checking for text BEFORE offset " << offset
+          << ", expecting \'" << expected_text << "\' at "
+          << expected_start_offset << '-' << expected_end_offset << '.';
+  SCOPED_TRACE(message);
+
+  LONG start_offset = 0;
+  LONG end_offset = 0;
+  base::win::ScopedBstr text;
+
+  HRESULT hr = object->get_textBeforeOffset(
+      offset, boundary_type, &start_offset, &end_offset, text.Receive());
   EXPECT_EQ(S_OK, hr);
   EXPECT_EQ(expected_start_offset, start_offset);
   EXPECT_EQ(expected_end_offset, end_offset);
@@ -2258,9 +2326,8 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   Microsoft::WRL::ComPtr<IAccessibleText> paragraph_text;
   SetUpSampleParagraph(&paragraph_text);
 
-  AccessibilityNotificationWaiter waiter(
-      shell()->web_contents(),
-      ax::mojom::Event::kLoadComplete);
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ax::mojom::Event::kLoadComplete);
   ScopedAccessibilityModeOverride complete(ui::kAXModeComplete);
 
   // Calling `get_characterExtents` will enable `ui::AXMode::kInlineTextBoxes`
@@ -4534,13 +4601,25 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   // Words with numbers should be treated like ordinary words.
   CheckTextAtOffset(textarea_text, 17, IA2_TEXT_BOUNDARY_WORD, 17, 22,
                     L"WWW33");
-  CheckTextAtOffset(textarea_text, 23, IA2_TEXT_BOUNDARY_WORD, 22, 24, L")\n");
+
+  // 22 = )
+  CheckTextAtOffset(textarea_text, 22, IA2_TEXT_BOUNDARY_WORD, 22, 24, L")\n");
+
+  // 23 = \n
+  CheckTextAtOffset(textarea_text, 23, IA2_TEXT_BOUNDARY_WORD, 23, 24, L"\n");
+
+  CheckTextBeforeOffset(textarea_text, 23, IA2_TEXT_BOUNDARY_WORD, 22, 23,
+                        L")");
+
+  CheckTextAfterOffset(textarea_text, 23, IA2_TEXT_BOUNDARY_WORD, 24, 32,
+                       L"WebKit \n");
 
   // Multiple trailing empty spaces should be part of the word preceding it.
   CheckTextAtOffset(textarea_text, 28, IA2_TEXT_BOUNDARY_WORD, 24, 32,
                     L"WebKit \n");
-  CheckTextAtOffset(textarea_text, 31, IA2_TEXT_BOUNDARY_WORD, 24, 32,
-                    L"WebKit \n");
+
+  // 31 = \n
+  CheckTextAtOffset(textarea_text, 31, IA2_TEXT_BOUNDARY_WORD, 31, 32, L"\n");
   CheckTextAtOffset(textarea_text, 32, IA2_TEXT_BOUNDARY_WORD, 32, 33, L"\"");
 
   // Leading and trailing punctuation such as quotation marks should not be part
@@ -4562,6 +4641,93 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   // Test special offsets.
   CheckTextAtOffset(textarea_text, IA2_TEXT_OFFSET_CARET,
                     IA2_TEXT_BOUNDARY_WORD, 44, contents_string_length, L"\".");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
+                       TestTextAtOffsetWithBoundaryWordAndNewlines) {
+  const std::string text_content = "Hi, how are you?\nHow's life?";
+
+  LoadInitialAccessibilityTreeFromHtml(
+      "<!DOCTYPE html><html><body>"
+      "<textarea autofocus>" +
+      text_content +
+      "</textarea>"
+      "</body></html>");
+
+  Microsoft::WRL::ComPtr<IAccessible> document(GetRendererAccessible());
+  ASSERT_TRUE(document);
+
+  std::vector<base::win::ScopedVariant> document_children =
+      GetAllAccessibleChildren(document.Get());
+  ASSERT_EQ(1u, document_children.size());
+
+  Microsoft::WRL::ComPtr<IAccessible2> body;
+  ASSERT_HRESULT_SUCCEEDED(QueryIAccessible2(
+      GetAccessibleFromVariant(document.Get(), document_children[0].AsInput())
+          .Get(),
+      &body));
+
+  std::vector<base::win::ScopedVariant> body_children =
+      GetAllAccessibleChildren(body.Get());
+  ASSERT_GE(body_children.size(), 1u);
+
+  Microsoft::WRL::ComPtr<IAccessible2> textarea;
+  ASSERT_HRESULT_SUCCEEDED(QueryIAccessible2(
+      GetAccessibleFromVariant(body.Get(), body_children[0].AsInput()).Get(),
+      &textarea));
+
+  LONG role = 0;
+  ASSERT_HRESULT_SUCCEEDED(textarea->role(&role));
+  ASSERT_EQ(ROLE_SYSTEM_TEXT, role);
+
+  Microsoft::WRL::ComPtr<IAccessibleText> input_text;
+  ASSERT_HRESULT_SUCCEEDED(textarea.As(&input_text));
+
+  LONG n_characters = 0;
+  ASSERT_HRESULT_SUCCEEDED(input_text->get_nCharacters(&n_characters));
+  ASSERT_EQ(static_cast<LONG>(text_content.length()), n_characters);
+
+  CheckTextAtOffset(input_text, 0, IA2_TEXT_BOUNDARY_WORD, 0, 2, L"Hi");
+
+  // 2 = ,
+  CheckTextAtOffset(input_text, 2, IA2_TEXT_BOUNDARY_WORD, 2, 4, L", ");
+
+  CheckTextAtOffset(input_text, 4, IA2_TEXT_BOUNDARY_WORD, 4, 8, L"how ");
+
+  // 7 = space - should be included with the previous word, not the next word.
+  CheckTextAtOffset(input_text, 7, IA2_TEXT_BOUNDARY_WORD, 4, 8, L"how ");
+
+  CheckTextAtOffset(input_text, 8, IA2_TEXT_BOUNDARY_WORD, 8, 12, L"are ");
+
+  CheckTextAtOffset(input_text, 12, IA2_TEXT_BOUNDARY_WORD, 12, 15, L"you");
+
+  // 15 = ?
+  CheckTextAtOffset(input_text, 15, IA2_TEXT_BOUNDARY_WORD, 15, 17, L"?\n");
+
+  // 16 = \n
+  CheckTextAtOffset(input_text, 16, IA2_TEXT_BOUNDARY_WORD, 16, 17, L"\n");
+
+  CheckTextAfterOffset(input_text, 16, IA2_TEXT_BOUNDARY_WORD, 17, 23,
+                       L"How's ");
+
+  CheckTextBeforeOffset(input_text, 16, IA2_TEXT_BOUNDARY_WORD, 15, 16, L"?");
+
+  CheckTextBeforeOffset(input_text, 17, IA2_TEXT_BOUNDARY_WORD, 16, 17, L"\n");
+
+  // 20 = ' - should be included with the current word.
+  CheckTextAtOffset(input_text, 20, IA2_TEXT_BOUNDARY_WORD, 17, 23, L"How's ");
+
+  // 22 = space - should be included with the previous word, not the next word.
+  CheckTextAtOffset(input_text, 22, IA2_TEXT_BOUNDARY_WORD, 17, 23, L"How's ");
+
+  CheckTextAtOffset(input_text, 23, IA2_TEXT_BOUNDARY_WORD, 23, 27, L"life");
+
+  // 26 = e of life - should be included with the current word, not the next
+  // punctuation.
+  CheckTextAtOffset(input_text, 26, IA2_TEXT_BOUNDARY_WORD, 23, 27, L"life");
+
+  // 27 = ?
+  CheckTextAtOffset(input_text, 27, IA2_TEXT_BOUNDARY_WORD, 27, 28, L"?");
 }
 
 IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
@@ -4747,31 +4913,24 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   CheckTextAtOffset(textarea_text, 46, IA2_TEXT_BOUNDARY_LINE, 32,
                     contents_string_length, L"\"KHTML, like\".\n");
 
-  // An offset one past the last character should return the last line which is
-  // blank. This is represented by Blink with yet another line break.
-  CheckTextAtOffset(textarea_text, contents_string_length,
-                    IA2_TEXT_BOUNDARY_LINE, contents_string_length,
-                    (contents_string_length + 1), L"\n");
-
   {
-    // There should be no text after the blank line.
+    // There should be no text at an offset one past the last character.
     LONG start_offset = 0;
     LONG end_offset = 0;
     base::win::ScopedBstr text;
     EXPECT_EQ(S_FALSE, textarea_text->get_textAtOffset(
-                           (contents_string_length + 1), IA2_TEXT_BOUNDARY_LINE,
+                           contents_string_length, IA2_TEXT_BOUNDARY_LINE,
                            &start_offset, &end_offset, text.Receive()));
 
     // Test special offsets.
     EXPECT_EQ(S_FALSE, textarea_text->get_textAtOffset(
                            IA2_TEXT_OFFSET_LENGTH, IA2_TEXT_BOUNDARY_LINE,
                            &start_offset, &end_offset, text.Receive()));
-  }
 
-  // The caret should have moved to the blank line.
-  CheckTextAtOffset(textarea_text, IA2_TEXT_OFFSET_CARET,
-                    IA2_TEXT_BOUNDARY_LINE, contents_string_length,
-                    (contents_string_length + 1), L"\n");
+    EXPECT_EQ(S_FALSE, textarea_text->get_textAtOffset(
+                           IA2_TEXT_OFFSET_CARET, IA2_TEXT_BOUNDARY_LINE,
+                           &start_offset, &end_offset, text.Receive()));
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -5100,6 +5259,38 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   EXPECT_EQ(0, n_key_bindings);
   EXPECT_EQ(nullptr, key_bindings);
 
+  // get_keyBinding for aria-actions indices should return S_FALSE (no key
+  // bindings), not E_INVALIDARG.
+  EXPECT_EQ(S_FALSE,
+            div_action->get_keyBinding(2, 100, &key_bindings, &n_key_bindings));
+  EXPECT_EQ(0, n_key_bindings);
+  EXPECT_EQ(nullptr, key_bindings);
+  EXPECT_EQ(S_FALSE,
+            div_action->get_keyBinding(3, 100, &key_bindings, &n_key_bindings));
+  EXPECT_EQ(0, n_key_bindings);
+  EXPECT_EQ(nullptr, key_bindings);
+
+  // Out-of-range index should return E_INVALIDARG.
+  EXPECT_EQ(E_INVALIDARG,
+            div_action->get_keyBinding(4, 100, &key_bindings, &n_key_bindings));
+
+  // get_description returns S_FALSE for all valid indices (no descriptions
+  // are currently defined for any action type).
+  base::win::ScopedBstr action_description;
+  EXPECT_EQ(S_FALSE,
+            div_action->get_description(0, action_description.Receive()));
+  EXPECT_EQ(nullptr, action_description.Get());
+  EXPECT_EQ(S_FALSE,
+            div_action->get_description(2, action_description.Receive()));
+  EXPECT_EQ(nullptr, action_description.Get());
+  EXPECT_EQ(S_FALSE,
+            div_action->get_description(3, action_description.Receive()));
+  EXPECT_EQ(nullptr, action_description.Get());
+
+  // Out-of-range index should return E_INVALIDARG.
+  EXPECT_EQ(E_INVALIDARG,
+            div_action->get_description(4, action_description.Receive()));
+
   base::win::ScopedVariant childid_self(CHILDID_SELF);
 
   // Verify name of the edit button before doAction is called.
@@ -5146,6 +5337,136 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
 
   // There are no more actions, calls for indexes >=4 will fail.
   EXPECT_HRESULT_FAILED(div_action->doAction(4));
+}
+
+IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
+                       TestAriaActionUiaCustomProperty) {
+  if (base::win::GetVersion() < base::win::Version::WIN11) {
+    GTEST_SKIP() << "UIAutomationType_ElementArray custom properties require "
+                    "Windows 11 or later.";
+  }
+
+  LoadInitialAccessibilityTreeFromHtml(
+      R"HTML(<!DOCTYPE html>
+      <html>
+      <body>
+      <div role="textbox" id="my-textbox" aria-label="file viewer"
+           aria-actions="edit open">
+        your-file-name.pdf
+        <button id="edit"
+          onclick="document.getElementById('edit').innerText = 'edit clicked';">
+          Edit
+        </button>
+        <button id="open"
+          onclick="document.getElementById('open').innerText = 'open clicked';">
+          Open
+        </button>
+      </div>
+      </body>
+      </html>)HTML");
+
+  // (a) Get the host element via UIA and verify AccessibleActions custom
+  // property returns an element array of the target nodes.
+  ui::BrowserAccessibility* textbox_ba =
+      FindNode(ax::mojom::Role::kTextField, "file viewer");
+  ASSERT_NE(nullptr, textbox_ba);
+
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> textbox_uia =
+      QueryInterfaceFromNode<IRawElementProviderSimple>(textbox_ba);
+  ASSERT_NE(nullptr, textbox_uia.Get());
+
+  // Query the AccessibleActions custom property.
+  base::win::ScopedVariant aria_actions_value;
+  ASSERT_HRESULT_SUCCEEDED(textbox_uia->GetPropertyValue(
+      ui::UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId(),
+      aria_actions_value.Receive()));
+
+  // Verify property is an element array with 2 elements (Edit, Open buttons).
+  ASSERT_EQ(VT_ARRAY | VT_UNKNOWN, aria_actions_value.type());
+  SAFEARRAY* actions_array = V_ARRAY(aria_actions_value.ptr());
+  ASSERT_NE(nullptr, actions_array);
+
+  LONG lower_bound = 0;
+  LONG upper_bound = 0;
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetLBound(actions_array, 1, &lower_bound));
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetUBound(actions_array, 1, &upper_bound));
+  LONG element_count = upper_bound - lower_bound + 1;
+  EXPECT_EQ(2, element_count);
+
+  // Verify the elements are the expected target nodes by checking their names.
+  ui::BrowserAccessibility* edit_ba =
+      FindNode(ax::mojom::Role::kButton, "Edit");
+  ui::BrowserAccessibility* open_ba =
+      FindNode(ax::mojom::Role::kButton, "Open");
+  ASSERT_NE(nullptr, edit_ba);
+  ASSERT_NE(nullptr, open_ba);
+
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> edit_uia =
+      QueryInterfaceFromNode<IRawElementProviderSimple>(edit_ba);
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> open_uia =
+      QueryInterfaceFromNode<IRawElementProviderSimple>(open_ba);
+
+  // Extract elements from the SAFEARRAY and verify they match targets.
+  Microsoft::WRL::ComPtr<IUnknown> element0;
+  Microsoft::WRL::ComPtr<IUnknown> element1;
+  LONG index0 = 0;
+  LONG index1 = 1;
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetElement(actions_array, &index0,
+                                               static_cast<void**>(&element0)));
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetElement(actions_array, &index1,
+                                               static_cast<void**>(&element1)));
+
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> element0_provider;
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> element1_provider;
+  ASSERT_HRESULT_SUCCEEDED(element0.As(&element0_provider));
+  ASSERT_HRESULT_SUCCEEDED(element1.As(&element1_provider));
+  EXPECT_EQ(edit_uia.Get(), element0_provider.Get());
+  EXPECT_EQ(open_uia.Get(), element1_provider.Get());
+
+  // (b) Verify property is absent on element without aria-actions.
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> button_uia =
+      QueryInterfaceFromNode<IRawElementProviderSimple>(edit_ba);
+  ASSERT_NE(nullptr, button_uia.Get());
+
+  base::win::ScopedVariant button_actions_value;
+  ASSERT_HRESULT_SUCCEEDED(button_uia->GetPropertyValue(
+      ui::UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId(),
+      button_actions_value.Receive()));
+  EXPECT_EQ(VT_EMPTY, button_actions_value.type());
+
+  // (c) Dynamic update: change aria-actions via JS and verify property updates.
+  // Also change aria-label to trigger a NAME_CHANGED event we can wait on,
+  // since changing aria-actions alone does not fire a generator event.
+  {
+    AccessibilityNotificationWaiter waiter(
+        shell()->web_contents(), ui::AXEventGenerator::Event::NAME_CHANGED);
+    ExecuteScript(
+        u"let el = document.getElementById('my-textbox');"
+        u"el.setAttribute('aria-actions', 'edit');"
+        u"el.setAttribute('aria-label', 'file viewer updated');");
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  // Re-query the custom property after dynamic update.
+  base::win::ScopedVariant updated_actions_value;
+  ASSERT_HRESULT_SUCCEEDED(textbox_uia->GetPropertyValue(
+      ui::UiaRegistrarWin::GetInstance().GetAriaActionsPropertyId(),
+      updated_actions_value.Receive()));
+
+  // Should now contain only one element (Edit button).
+  ASSERT_EQ(VT_ARRAY | VT_UNKNOWN, updated_actions_value.type());
+  SAFEARRAY* updated_array = V_ARRAY(updated_actions_value.ptr());
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetLBound(updated_array, 1, &lower_bound));
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetUBound(updated_array, 1, &upper_bound));
+  EXPECT_EQ(1, upper_bound - lower_bound + 1);
+
+  Microsoft::WRL::ComPtr<IUnknown> updated_element;
+  LONG updated_index = 0;
+  ASSERT_HRESULT_SUCCEEDED(SafeArrayGetElement(
+      updated_array, &updated_index, static_cast<void**>(&updated_element)));
+  Microsoft::WRL::ComPtr<IRawElementProviderSimple> updated_provider;
+  ASSERT_HRESULT_SUCCEEDED(updated_element.As(&updated_provider));
+  EXPECT_EQ(edit_uia.Get(), updated_provider.Get());
 }
 
 IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest, HasHWNDAfterNavigation) {
@@ -5484,10 +5805,22 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   win_event_waiter.Wait();
 }
 
-class AccessibilityWinUIABrowserTest : public AccessibilityWinBrowserTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
-};
+class AccessibilityWinUIABrowserTest : public AccessibilityWinBrowserTest {};
+
+IN_PROC_BROWSER_TEST_F(AccessibilityWinUIABrowserTest,
+                       UIAClientDisconnectedHistogram) {
+  base::HistogramTester histogram_tester;
+  const int narrator_hash = internal::HashUiaClientProcessName("narrator.exe");
+
+  histogram_tester.ExpectTotalCount(
+      "Accessibility.WinUIA.ClientProcess.NativeAPIs", 0);
+  histogram_tester.ExpectTotalCount(
+      "Accessibility.WinUIA.ClientProcess.WebContents", 0);
+
+  internal::RecordUiaClientDisconnectedHistogram("narrator.exe");
+  histogram_tester.ExpectUniqueSample("Accessibility.WinUIA.ClientDisconnected",
+                                      narrator_hash, 1);
+}
 
 IN_PROC_BROWSER_TEST_F(AccessibilityWinUIABrowserTest, TestIScrollProvider) {
   LoadInitialAccessibilityTreeFromHtml(
@@ -6127,10 +6460,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinUIABrowserTest,
 }
 
 class AccessibilityWinUIASelectivelyEnabledBrowserTest
-    : public AccessibilityWinUIABrowserTest {
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
+    : public AccessibilityWinUIABrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(AccessibilityWinUIASelectivelyEnabledBrowserTest,
                        RequestingTopLevelElementEnablesWebAccessibility) {
@@ -6627,36 +6957,6 @@ IN_PROC_BROWSER_TEST_F(AccessibilityWinBrowserTest,
   LONG role_button_2 = 0;
   ASSERT_HRESULT_SUCCEEDED(ia2_button_2->role(&role_button_2));
   EXPECT_EQ(role_button_2, ROLE_SYSTEM_PUSHBUTTON);
-}
-
-class AccessibilityWinAriaNotifyBrowserTest
-    : public AccessibilityWinBrowserTest {
- private:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    AccessibilityWinBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
-                                    "AriaNotify");
-    scoped_feature_list_.InitAndDisableFeature(features::kUiaProvider);
-  }
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// IA2 Fallback for Aria-Notify.
-IN_PROC_BROWSER_TEST_F(AccessibilityWinAriaNotifyBrowserTest,
-                       AriaNotification) {
-  LoadInitialAccessibilityTreeFromHtml(R"HTML(
-      <p>Hello world.</p>
-      <p>Another paragraph.</p>
-      <p id="goodbye">Goodbye world.</p>)HTML");
-  WebContentsImpl* web_contents =
-      static_cast<WebContentsImpl*>(shell()->web_contents());
-  ui::BrowserAccessibilityManager* manager =
-      web_contents->GetRootBrowserAccessibilityManager();
-  NativeWinEventWaiter win_event_waiter(
-      manager, "EVENT_OBJECT_LIVEREGIONCHANGED on role=ROLE_SYSTEM_TEXT*");
-  ExecuteScript(
-      u"document.getElementById('goodbye').ariaNotify('hello again');");
-  win_event_waiter.Wait();
 }
 
 }  // namespace content

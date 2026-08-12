@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.customtabs;
 import static org.chromium.build.NullUtil.assertNonNull;
 
 import android.content.Context;
-import android.content.Intent;
 
 import androidx.annotation.IntDef;
 
@@ -18,15 +17,14 @@ import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.customtabs.features.branding.MismatchNotificationSigninDelegate;
 import org.chromium.chrome.browser.customtabs.features.branding.proto.AccountMismatchData.CloseType;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.NoAccountSigninMode;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.WithAccountSigninMode;
-import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetStrings;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.components.messages.DismissReason;
@@ -41,7 +39,6 @@ import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.AccountsChangeObserver;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
-import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.google_apis.gaia.CoreAccountId;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -64,6 +61,10 @@ public class MismatchNotificationController
         SuppressedReason.NOTICE_DISPLAYED_RECENTLY,
         SuppressedReason.FRE_COMPLETED_RECENTLY,
         SuppressedReason.CCT_IS_OFF_THE_RECORD,
+        SuppressedReason.APP_IS_NOT_ALLOWED,
+        SuppressedReason.SIGNIN_NOT_ALLOWED,
+        SuppressedReason.WRONG_MISMATCH_TYPE,
+        SuppressedReason.NOT_SUPPRESSED,
         SuppressedReason.MAX
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -74,7 +75,11 @@ public class MismatchNotificationController
         int NOTICE_DISPLAYED_RECENTLY = 3;
         int FRE_COMPLETED_RECENTLY = 4;
         int CCT_IS_OFF_THE_RECORD = 5;
-        int MAX = 6;
+        int APP_IS_NOT_ALLOWED = 6;
+        int SIGNIN_NOT_ALLOWED = 7;
+        int WRONG_MISMATCH_TYPE = 8;
+        int NOT_SUPPRESSED = 9;
+        int MAX = 10;
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:SuppressedReason)
@@ -84,6 +89,7 @@ public class MismatchNotificationController
     private final CoreAccountId mAppAccountId;
     private final AccountManagerFacade mAccountManagerFacade;
     private final SigninManager mSigninManager;
+    private final MismatchNotificationSigninDelegate mSigninDelegate;
 
     private PropertyModel mMessageProperties;
     private boolean mMessageReachedFullyVisible;
@@ -92,18 +98,26 @@ public class MismatchNotificationController
             sMismatchNotificationControllerForTesting;
 
     public static MismatchNotificationController get(
-            WindowAndroid windowAndroid, Profile profile, String appAccountName) {
+            WindowAndroid windowAndroid,
+            Profile profile,
+            String appAccountName,
+            MismatchNotificationSigninDelegate signinDelegate) {
         if (sMismatchNotificationControllerForTesting != null) {
             return sMismatchNotificationControllerForTesting;
         }
-        return new MismatchNotificationController(windowAndroid, profile, appAccountName);
+        return new MismatchNotificationController(
+                windowAndroid, profile, appAccountName, signinDelegate);
     }
 
     private MismatchNotificationController(
-            WindowAndroid windowAndroid, Profile profile, String appAccountName) {
+            WindowAndroid windowAndroid,
+            Profile profile,
+            String appAccountName,
+            MismatchNotificationSigninDelegate signinDelegate) {
         mWindowAndroid = windowAndroid;
         mProfile = profile;
         mAppAccountEmail = appAccountName;
+        mSigninDelegate = signinDelegate;
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(profile);
         assert identityManager != null;
@@ -165,18 +179,14 @@ public class MismatchNotificationController
     }
 
     private @PrimaryActionClickBehavior int handlePrimaryAction(Context context) {
-        SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher =
-                SigninAndHistorySyncActivityLauncherImpl.get();
-
         // TODO(crbug.com/369562441): Update these strings once specs are finalized.
         AccountPickerBottomSheetStrings bottomSheetStrings =
                 new AccountPickerBottomSheetStrings.Builder(
                                 context.getString(
-                                        org.chromium.chrome.browser.ui.signin.R.string
-                                                .signin_account_picker_bottom_sheet_title))
+                                        R.string.signin_account_picker_bottom_sheet_title))
                         .setSubtitleString(
                                 context.getString(
-                                        org.chromium.chrome.browser.ui.signin.R.string
+                                        R.string
                                                 .signin_account_picker_bottom_sheet_benefits_subtitle))
                         .build();
         BottomSheetSigninAndHistorySyncConfig config =
@@ -190,15 +200,7 @@ public class MismatchNotificationController
                         .selectedCoreAccountId(mAppAccountId)
                         .build();
 
-        @Nullable Intent intent =
-                signinAndHistorySyncActivityLauncher.createBottomSheetSigninIntentOrShowError(
-                        context,
-                        mProfile,
-                        config,
-                        SigninAccessPoint.CCT_ACCOUNT_MISMATCH_NOTIFICATION);
-        if (intent != null) {
-            context.startActivity(intent);
-        }
+        mSigninDelegate.startSignin(config);
 
         return PrimaryActionClickBehavior.DISMISS_IMMEDIATELY;
     }
@@ -238,7 +240,7 @@ public class MismatchNotificationController
     }
 
     @Override
-    public void onCoreAccountInfosChanged() {
+    public void onAccountsChanged() {
         var accountsPromise = mAccountManagerFacade.getAccounts();
         assert accountsPromise.isFulfilled();
         if (AccountUtils.findAccountByEmail(accountsPromise.getResult(), mAppAccountEmail)

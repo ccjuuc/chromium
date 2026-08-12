@@ -35,7 +35,8 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -44,7 +45,7 @@ import org.chromium.chrome.browser.tab_group_suggestion.SuggestionMetricsService
 import org.chromium.chrome.browser.tab_group_suggestion.SuggestionMetricsService.GroupCreationSource;
 import org.chromium.chrome.browser.tab_group_suggestion.SuggestionMetricsServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabSwitcherGroupSuggestionService.SuggestionLifecycleObserver;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.MessageCardView.ServiceDismissActionProvider;
 import org.chromium.chrome.browser.tasks.tab_management.MessageService.MessageModelFactory;
@@ -72,7 +73,6 @@ public class TabGroupSuggestionMessageServiceUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Context mContext;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabModel mTabModel;
     @Mock private Profile mProfile;
     @Mock private Callback<@TabId Integer> mAddOnMessageAfterTabCallback;
@@ -90,17 +90,22 @@ public class TabGroupSuggestionMessageServiceUnitTest {
 
     private TabGroupSuggestionMessageService mTabGroupSuggestionMessageService;
 
+    @SafeVarargs
+    private static <T> void safeReset(T... mocks) {
+        reset(mocks);
+    }
+
     @Before
     public void setUp() {
         SuggestionMetricsServiceFactory.setForTesting(mSuggestionMetricsService);
 
-        ObservableSupplierImpl<TabGroupModelFilter> tabGroupModelFilterSupplier =
-                new ObservableSupplierImpl<>(mTabGroupModelFilter);
+        SettableNonNullObservableSupplier<TabModel> tabModelSupplier =
+                ObservableSuppliers.createNonNull(mTabModel);
         mTabGroupSuggestionMessageService =
                 spy(
                         new TabGroupSuggestionMessageService(
                                 mContext,
-                                tabGroupModelFilterSupplier,
+                                tabModelSupplier,
                                 mAddOnMessageAfterTabCallback,
                                 mStartMergeAnimation));
         mTabGroupSuggestionMessageService.initialize(mServiceDismissActionProvider);
@@ -120,7 +125,6 @@ public class TabGroupSuggestionMessageServiceUnitTest {
                 .thenReturn("Group tabs");
         when(mContext.getString(R.string.no_thanks)).thenReturn("No thanks");
 
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.getTabById(TAB1_ID)).thenReturn(mTab1);
         when(mTabModel.getTabById(TAB2_ID)).thenReturn(mTab2);
         when(mTabModel.getTabById(TAB3_ID)).thenReturn(mTab3);
@@ -147,7 +151,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
         mTabGroupSuggestionMessageService.addGroupMessageForTabs(
                 tabIds, mSuggestionLifecycleObserver);
 
-        verify(mTabGroupSuggestionMessageService).queueMessage(any(MessageModelFactory.class));
+        verify(mTabGroupSuggestionMessageService).queueMessage(mMessageDataCaptor.capture());
         verify(mAddOnMessageAfterTabCallback).onResult(TAB2_ID);
     }
 
@@ -157,7 +161,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
                 Collections.emptyList(), mSuggestionLifecycleObserver);
 
         verify(mTabGroupSuggestionMessageService, never())
-                .queueMessage(any(MessageModelFactory.class));
+                .queueMessage(mMessageDataCaptor.capture());
         verify(mAddOnMessageAfterTabCallback, never()).onResult(any());
     }
 
@@ -168,13 +172,13 @@ public class TabGroupSuggestionMessageServiceUnitTest {
 
         mTabGroupSuggestionMessageService.addGroupMessageForTabs(
                 tabIds1, mSuggestionLifecycleObserver);
-        verify(mTabGroupSuggestionMessageService).queueMessage(any(MessageModelFactory.class));
+        verify(mTabGroupSuggestionMessageService).queueMessage(mMessageDataCaptor.capture());
         verify(mAddOnMessageAfterTabCallback).onResult(TAB2_ID);
 
-        reset(mAddOnMessageAfterTabCallback);
+        safeReset(mAddOnMessageAfterTabCallback);
         mTabGroupSuggestionMessageService.addGroupMessageForTabs(
                 tabIds2, mSuggestionLifecycleObserver);
-        verify(mTabGroupSuggestionMessageService).queueMessage(any(MessageModelFactory.class));
+        verify(mTabGroupSuggestionMessageService).queueMessage(mMessageDataCaptor.capture());
         verify(mAddOnMessageAfterTabCallback, never()).onResult(any());
     }
 
@@ -185,7 +189,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
         mTabGroupSuggestionMessageService.addGroupMessageForTabs(
                 tabIds, mSuggestionLifecycleObserver);
 
-        verify(mTabGroupSuggestionMessageService).queueMessage(any(MessageModelFactory.class));
+        verify(mTabGroupSuggestionMessageService).queueMessage(mMessageDataCaptor.capture());
         verify(mAddOnMessageAfterTabCallback).onResult(TAB3_ID);
     }
 
@@ -224,11 +228,9 @@ public class TabGroupSuggestionMessageServiceUnitTest {
 
         reviewAction.action();
         verify(mSuggestionLifecycleObserver).onSuggestionAccepted();
-        verify(mTabGroupModelFilter)
+        verify(mTabModel)
                 .mergeListOfTabsToGroup(
-                        tabs,
-                        mTab1,
-                        TabGroupModelFilter.MergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
+                        tabs, mTab1, TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
         verify(mTabGroupSuggestionMessageService).dismissMessage(any());
         verify(mSuggestionMetricsService)
                 .onSuggestionAccepted(
@@ -251,7 +253,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
         reviewAction.action();
 
         verify(mSuggestionLifecycleObserver).onSuggestionAccepted();
-        verify(mTabGroupModelFilter, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
+        verify(mTabModel, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
         verify(mTabGroupSuggestionMessageService).dismissMessage(any());
     }
 
@@ -294,7 +296,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
                 inOrder(
                         mSuggestionLifecycleObserver,
                         mStartMergeAnimation,
-                        mTabGroupModelFilter,
+                        mTabModel,
                         mTabGroupSuggestionMessageService);
 
         // Accept callback is called first.
@@ -305,7 +307,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
         inOrder.verify(mStartMergeAnimation)
                 .start(eq(TAB1_ID), eq(shiftedTabIds), onAnimationEndCaptor.capture());
         verify(mTabGroupSuggestionMessageService, never()).dismissMessage(any());
-        verify(mTabGroupModelFilter, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
+        verify(mTabModel, never()).mergeListOfTabsToGroup(any(), any(), anyInt());
 
         // Simulate tab group ID being set.
         doAnswer(
@@ -313,21 +315,17 @@ public class TabGroupSuggestionMessageServiceUnitTest {
                             when(mTab1.getTabGroupId()).thenReturn(Token.createRandom());
                             return null;
                         })
-                .when(mTabGroupModelFilter)
+                .when(mTabModel)
                 .mergeListOfTabsToGroup(
-                        tabs,
-                        mTab1,
-                        TabGroupModelFilter.MergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
+                        tabs, mTab1, TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
 
         // Simulate animation end.
         onAnimationEndCaptor.getValue().run();
 
         // After animation, tabs are grouped and message is dismissed.
-        inOrder.verify(mTabGroupModelFilter)
+        inOrder.verify(mTabModel)
                 .mergeListOfTabsToGroup(
-                        tabs,
-                        mTab1,
-                        TabGroupModelFilter.MergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
+                        tabs, mTab1, TabGroupMergeNotificationType.NOTIFY_IF_NOT_NEW_GROUP);
         inOrder.verify(mTabGroupSuggestionMessageService).dismissMessage(any());
     }
 
@@ -350,7 +348,7 @@ public class TabGroupSuggestionMessageServiceUnitTest {
                 tabIds, mSuggestionLifecycleObserver);
         verify(mTabGroupSuggestionMessageService).queueMessage(mMessageDataCaptor.capture());
 
-        MessageModelFactory modelFactory = mMessageDataCaptor.getValue();
+        MessageModelFactory<@MessageType Integer> modelFactory = mMessageDataCaptor.getValue();
         PropertyModel model = modelFactory.build(mServiceDismissActionProvider);
 
         assertEquals(false, model.get(MessageCardViewProperties.IS_INCOGNITO));

@@ -33,7 +33,6 @@
 #include "ash/system/progress_indicator/progress_ring_animation.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/test/view_drawn_waiter.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -52,7 +51,7 @@
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
 #include "chrome/browser/ash/file_suggest/local_file_suggestion_provider.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
@@ -64,6 +63,7 @@
 #include "chrome/browser/ui/ash/holding_space/holding_space_util.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/test/base/ash/util/ash_test_util.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/user_manager/user.h"
 #include "content/public/browser/download_item_utils.h"
@@ -612,7 +612,7 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDrop) {
 
   // Verify drag-and-drop of pinned file items.
   // NOTE: Dragging a pinned file from a non-top row of the pinned files
-  // container grid previously resulted in a crash (crbug.com/1143426). To
+  // container grid previously resulted in a crash (crbug.com/40155085). To
   // explicitly test against this case we will add and drag a second row item.
   HoldingSpaceItem* const pinned_file = AddPinnedFile();
   AddPinnedFile();
@@ -760,7 +760,9 @@ IN_PROC_BROWSER_TEST_P(HoldingSpaceUiDragAndDropBrowserTest, DragAndDropToPin) {
   // Swap out the registered holding space client with a mock.
   testing::NiceMock<MockHoldingSpaceClient> client;
   HoldingSpaceController::Get()->RegisterClientAndModelForUser(
-      ProfileHelper::Get()->GetUserByProfile(GetProfile())->GetAccountId(),
+      BrowserContextHelper::Get()
+          ->GetUserByBrowserContext(GetProfile())
+          ->GetAccountId(),
       &client, HoldingSpaceController::Get()->model());
   ASSERT_EQ(&client, HoldingSpaceController::Get()->client());
 
@@ -818,7 +820,7 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, LockScreen) {
       gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
 
   ASSERT_TRUE(test_api().IsShowingInShelf());
-  RequestAndAwaitLockScreen();
+  ash::ScreenLockerTester().Lock();
   ASSERT_FALSE(test_api().IsShowingInShelf());
 }
 
@@ -1131,7 +1133,7 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, RemoveItem) {
           .WillOnce([&](const std::vector<const HoldingSpaceItem*>& items) {
             ASSERT_EQ(items.size(), item_ids.size());
             for (const HoldingSpaceItem* item : items) {
-              ASSERT_TRUE(base::Contains(item_ids, item->id()));
+              ASSERT_TRUE(item_ids.contains(item->id()));
             }
             run_loop.Quit();
           });
@@ -2514,7 +2516,7 @@ IN_PROC_BROWSER_TEST_F(HoldingSpaceUiBrowserTest, AddScreenshot) {
   // Move the mouse over to the browser window. The reason for that is the
   // capture mode implementation will not automatically capture the topmost
   // window unless the mouse is hovered above it.
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   ui::test::EventGenerator event_generator(browser_window->GetRootWindow());
   event_generator.MoveMouseTo(
       browser_window->GetBoundsInScreen().CenterPoint());
@@ -2626,8 +2628,8 @@ class HoldingSpaceSuggestionUiBrowserTest : public HoldingSpaceUiBrowserTest {
 
     // Initialize `local_file_directory_`.
     EXPECT_TRUE(local_file_directory_.CreateUniqueTempDirUnderPath(
-        browser()->profile()->GetPath()));
-    EXPECT_TRUE(browser()->profile()->GetMountPoints()->RegisterFileSystem(
+        browser()->GetProfile()->GetPath()));
+    EXPECT_TRUE(browser()->GetProfile()->GetMountPoints()->RegisterFileSystem(
         /*mount_name=*/"archive", storage::kFileSystemTypeLocal,
         storage::FileSystemMountOption(), GetLocalFileMountPath()));
   }

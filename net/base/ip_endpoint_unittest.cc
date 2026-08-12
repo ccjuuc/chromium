@@ -10,8 +10,8 @@
 #include <string>
 #include <tuple>
 
-#include "base/containers/span.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
@@ -24,6 +24,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
+#include "third_party/abseil-cpp/absl/hash/hash_testing.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <winsock2.h>
@@ -495,6 +496,35 @@ TEST_F(IPEndPointTest, FromMalformedValues) {
   *invalid_address_v4.GetDict().Find("address") =
       base::Value("::ffff:169.254.0.1");
   EXPECT_FALSE(IPEndPoint::FromValue(invalid_scope_id).has_value());
+}
+
+TEST_F(IPEndPointTest, CopyWithPort) {
+  IPEndPoint ipv4_endpoint(IPAddress(192, 168, 1, 1), 80);
+  EXPECT_EQ(IPEndPoint(IPAddress(192, 168, 1, 1), 443),
+            ipv4_endpoint.CopyWithPort(443));
+
+  IPEndPoint ipv6_endpoint(
+      IPAddress(0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1), 0,
+      /*scope_id=*/5);
+  IPEndPoint copied = ipv6_endpoint.CopyWithPort(8443);
+  EXPECT_EQ(8443, copied.port());
+  EXPECT_EQ(std::optional<uint32_t>(5), copied.scope_id());
+}
+
+TEST_F(IPEndPointTest, SupportsAbslHash) {
+  constexpr IPAddress kIPv4Address(192, 168, 0, 1);
+  constexpr IPAddress kIPv6Address(0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0,
+                                   0, 0, 0, 0, 0x42);
+  constexpr IPAddress kIPv6LinkLocalAddress(0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0,
+                                            0, 0, 0, 0, 0, 1);
+  EXPECT_TRUE(absl::VerifyTypeImplementsAbslHashCorrectly({
+      IPEndPoint(),
+      IPEndPoint(kIPv4Address, 80),
+      IPEndPoint(kIPv4Address, 8080),
+      IPEndPoint(kIPv6Address, 80),
+      IPEndPoint(kIPv6LinkLocalAddress, 80, 1),
+      IPEndPoint(kIPv6LinkLocalAddress, 80, 2),
+  }));
 }
 
 }  // namespace

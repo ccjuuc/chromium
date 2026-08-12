@@ -13,7 +13,6 @@
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
@@ -40,6 +39,7 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "base/time/time.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/safe_browsing/core/browser/sync/safe_browsing_primary_account_token_fetcher.h"
 #include "components/safe_browsing/core/browser/sync/sync_utils.h"
@@ -175,12 +175,14 @@ bool CheckClientDownloadRequestBase::ShouldSampleUnsupportedFile(
 // archive matches the blocklist flag, return true.
 bool CheckClientDownloadRequestBase::IsDownloadManuallyBlocklisted(
     const ClientDownloadRequest& request) {
-  if (service_->IsHashManuallyBlocklisted(request.digests().sha256()))
+  if (service_->IsHashManuallyBlocklisted(request.digests().sha256())) {
     return true;
+  }
 
   for (const auto& bin_itr : request.archived_binary()) {
-    if (service_->IsHashManuallyBlocklisted(bin_itr.digests().sha256()))
+    if (service_->IsHashManuallyBlocklisted(bin_itr.digests().sha256())) {
       return true;
+    }
   }
   return false;
 }
@@ -239,8 +241,9 @@ void CheckClientDownloadRequestBase::OnUrlAllowlistCheckDone(
 }
 
 void CheckClientDownloadRequestBase::SanitizeRequest() {
-  if (!sampled_unsupported_file_)
+  if (!sampled_unsupported_file_) {
     return;
+  }
 
   client_download_request_->set_download_type(
       ClientDownloadRequest::SAMPLED_UNSUPPORTED_FILE);
@@ -286,7 +289,7 @@ void CheckClientDownloadRequestBase::GetAdditionalPromptResult(
     *reason = DownloadCheckResultReason::REASON_DEEP_SCAN_PROMPT;
     // Always set the token if Chrome should prompt for deep scanning.
     // Otherwise, client Safe Browsing reports may be missed when the
-    // verdict is SAFE. See https://crbug.com/1485218.
+    // verdict is SAFE. See https://crbug.com/40933155.
     *token = response.token();
   }
 
@@ -303,7 +306,7 @@ void CheckClientDownloadRequestBase::GetAdditionalPromptResult(
     *reason = DownloadCheckResultReason::REASON_IMMEDIATE_DEEP_SCAN;
     // Always set the token if Chrome should prompt for deep scanning.
     // Otherwise, client Safe Browsing reports may be missed when the
-    // verdict is SAFE. See https://crbug.com/1485218.
+    // verdict is SAFE. See https://crbug.com/40933155.
     *token = response.token();
   }
 
@@ -505,9 +508,6 @@ void CheckClientDownloadRequestBase::SendRequest() {
   // TODO(chlily): Factor this out into
   // DownloadProtectionDelegate::FinalizeResourceRequest.
   if (!access_token_.empty()) {
-    LogAuthenticatedCookieResets(
-        *resource_request,
-        SafeBrowsingAuthenticatedEndpoint::kDownloadProtection);
     SetAccessToken(resource_request.get(), access_token_);
   }
 #endif
@@ -548,8 +548,9 @@ void CheckClientDownloadRequestBase::OnURLLoaderComplete(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   bool success = loader_->NetError() == net::OK;
   int response_code = 0;
-  if (loader_->ResponseInfo() && loader_->ResponseInfo()->headers)
+  if (loader_->ResponseInfo() && loader_->ResponseInfo()->headers) {
     response_code = loader_->ResponseInfo()->headers->response_code();
+  }
   DVLOG(2) << "Received a response for URL: " << source_url_
            << ": success=" << success << " response_code=" << response_code;
   RecordHttpResponseOrErrorCode("SBClientDownload.DownloadRequestNetworkResult",

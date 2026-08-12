@@ -11,7 +11,6 @@ import "mojo/public/mojom/base/big_buffer.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "gpu/ipc/common/exported_shared_image.mojom";
 import "gpu/ipc/common/shared_image_metadata.mojom";
-import "gpu/ipc/common/mailbox_holder.mojom";
 import "gpu/ipc/common/sync_token.mojom";
 import "ui/display/mojom/display.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
@@ -103,6 +102,10 @@ struct XRSessionDeviceConfig {
   // If the session supports depth-sensing API, the depth configuration must be
   // non-null.
   XRDepthConfig? depth_configuration;
+
+  // The max number of layers that can be enabled at same time. See
+  // SetEnabledCompositionLayers.
+  uint16 max_render_layers = 1;
 };
 
 // This structure contains all the mojo interfaces for different kinds of
@@ -120,7 +123,7 @@ struct XRSessionDeviceConfig {
 struct XRSession {
   pending_remote<XRFrameDataProvider> data_provider;
   pending_remote<XRLayerManager>? layer_manager;
-  // TODO(http://crbug.com/842025) Move where the client_receiver gets set to the
+  // TODO(crbug.com/529477851): Move where the client_receiver gets set to the
   // device process then mark this as non-optional.
   pending_receiver<XRSessionClient>? client_receiver;
   XRPresentationConnection? submit_frame_sink;
@@ -287,6 +290,10 @@ struct PlaneId {
   uint64 id_value;
 };
 
+struct MeshId {
+  uint64 id_value;
+};
+
 struct XrVisibilityMaskId {
   uint64 id_value;
 };
@@ -412,11 +419,14 @@ struct VRStageParameters {
 enum XRPresentationTransportMethod {
   NONE = 0,
 
-  // Renderer should create a new texture handle (Windows) or
-  // texture mailbox (Android Surface path) containing the
+  // Renderer should create a new texture handle containing the
   // frame's image and supply that as a submitFrame argument.
   SUBMIT_AS_TEXTURE_HANDLE = 1,
-  SUBMIT_AS_MAILBOX_HOLDER = 2,
+
+  // Test-only path to create a new texture mailbox containing the
+  // frame's image and supply that as a submitFrame argument.
+  // TODO(crbug.com/476100354): Remove this path if possible.
+  SUBMIT_AS_TEST = 2,
 
   // Renderer should draw directly into a texture mailbox
   // provided for each frame in OnVSync.
@@ -456,6 +466,7 @@ enum XRReferenceSpaceType {
 union XRNativeOriginInformation {
   XRInputSourceSpaceInfo input_source_space_info;
   PlaneId plane_id;
+  MeshId mesh_id;
   AnchorId anchor_id;
   XRReferenceSpaceType reference_space_type;
   XRHandJointSpaceInfo hand_joint_space_info;
@@ -542,6 +553,50 @@ struct XRPlaneDetectionData {
   // of all planes (i.e. for each plane found in updated_planes_data, its ID
   // will be present in all_planes_ids).
   array<XRPlaneData> updated_planes_data;
+};
+
+// Struct containing mesh-related information. A mesh describes a 3D surface
+// detected in the real world by the underlying system, represented as a
+// collection of vertices and indices that form a triangular mesh.
+struct XRMeshData {
+  // Unique (within a session) identifier of the mesh.
+  MeshId id;
+
+  // Pose of the mesh's coordinate space origin. Defines new coordinate space.
+  // Null if the device does not know where the mesh is located in the world
+  // space (tracking loss), but the tracking can still be recovered.
+  Pose? mojo_from_mesh;
+
+  // Vertices of the mesh. Each vertex is represented by 3 consecutive float
+  // values (x, y, z) in the mesh's local coordinate space. The array length
+  // must be a multiple of 3.
+  array<float> vertices;
+
+  // Indices defining the triangular faces of the mesh. Each group of 3
+  // consecutive indices forms a triangle. Indices reference vertices in the
+  // vertices array (0-based indexing). If empty, vertices should be interpreted
+  // as a triangle list where every 3 consecutive vertices form a triangle.
+  array<uint32> indices;
+
+  // A description of what the runtime has determined the mesh may actually
+  // represent (e.g., "floor", "wall", "table"). Null if the runtime does not
+  // support semantic labeling, or does not know what the given mesh represents.
+  XRSemanticLabel? semantic_label;
+};
+
+// Struct containing information about all tracked & updated meshes in a given
+// frame. If a mesh tracked in frame N-1 is no longer being tracked in frame N,
+// its ID will not be present in all_meshes_ids and its XRMeshData will not be
+// present in updated_meshes_data.
+struct XRMeshDetectionData {
+  // Array with ids of all tracked meshes.
+  array<MeshId> all_meshes_ids;
+
+  // Array with mesh data for all updated meshes. Mesh is considered updated
+  // if its vertices, indices, pose, or semantic label has changed. Updated
+  // meshes are always a subset of all meshes (i.e. for each mesh found in
+  // updated_meshes_data, its ID will be present in all_meshes_ids).
+  array<XRMeshData> updated_meshes_data;
 };
 
 // Struct containing anchor-related information. An anchor represents a pose
@@ -775,11 +830,10 @@ union XRLayerSpecificData {
 };
 
 enum XRLayerLayout {
-  kDefault = 0,
-  kMono = 1,
-  kStereo = 2,
-  kStereoLeftRight = 3,
-  kStereoTopBottom = 4,
+  kMono = 0,
+  kStereo = 1,
+  kStereoLeftRight = 2,
+  kStereoTopBottom = 3,
 };
 
 // Read-only data is only used to create a layer,
@@ -791,12 +845,17 @@ struct XRLayerReadOnlyData {
   uint32 texture_width;
   uint32 texture_height;
   bool is_static;
+  // This is used by media layers to match the texture coordinate system used
+  // by some codecs, where (0,0) is the top-left corner of the image.
+  bool flip_y;
+  bool needs_raster_access;
 };
 
 // Mutable layer data. It is used to created a layer,
 // and can also be modified later.
 struct XRLayerMutableData {
   bool blend_texture_source_alpha;
+  bool force_mono_presentation;
   float opacity;
   XRNativeOriginInformation native_origin_information;
   XRLayerSpecificData layer_data;
@@ -897,6 +956,8 @@ struct XRFrameData {
 
   // Detected plane information. Only present if plane detection is enabled.
   XRPlaneDetectionData? detected_planes_data;
+
+  XRMeshDetectionData? detected_meshes_data;
 
   // Tracked anchors information. Only present if anchors are enabled.
   XRAnchorsData? anchors_data;
@@ -1130,6 +1191,12 @@ interface XRFrameDataProvider {
           environment_provider);
 };
 
+// Wrapper for layer's id and associated SharedImageExportResult.
+struct XRLayerUpdate {
+  LayerId layer_id;
+  gpu.mojom.SharedImageExportResult shared_image_export_result;
+};
+
 // Provides the necessary functionality for sending frames to a headset.
 // This interface is hosted in the Browser process, but will move to a sandboxed
 // utility process on Windows.  The render process communicates with it.
@@ -1147,10 +1214,12 @@ interface XRPresentationProvider {
   // SubmitFrameClient methods such as OnSubmitFrameTransferred. This is
   // intended to help separate frames while presenting, it may or may not
   // be called for the last animating frame when presentation ends.
-  SubmitFrameMissing(int16 frame_id, gpu.mojom.SyncToken sync_token);
+  SubmitFrameMissing(
+      int16 frame_id,
+      gpu.mojom.SharedImageExportResult camera_export_multi_result);
 
-  // XRPresentationTransportMethod SUBMIT_AS_MAILBOX_HOLDER
-  SubmitFrame(int16 frame_id, gpu.mojom.MailboxHolder mailbox_holder,
+  // XRPresentationTransportMethod SUBMIT_AS_TEST
+  SubmitFrame(int16 frame_id,
               mojo_base.mojom.TimeDelta time_waited);
 
   // XRPresentationTransportMethod SUBMIT_AS_TEXTURE_HANDLE
@@ -1160,14 +1229,17 @@ interface XRPresentationProvider {
                                gpu.mojom.SyncToken sync_token);
 
   // XRPresentationTransportMethod DRAW_INTO_TEXTURE_MAILBOX
-  // If layer_ids is empty, the base layer will be used.
-  // Only when WebXR Layers feature is enabled, layer_ids can be
+  // If layer_updates is empty, the base layer will be used.
+  // Only when WebXR Layers feature is enabled, layer_updates can be
   // non-empty. In such a case, the Open XR textures of the specified
-  // layers will be updated.
-  SubmitFrameDrawnIntoTexture(int16 frame_id,
-                              array<LayerId> layer_ids,
-                              gpu.mojom.SyncToken sync_token,
-                              mojo_base.mojom.TimeDelta time_waited);
+  // layers will be updated. The export result |camera_export_multi_result|
+  // may contain multiple camera SyncTokens (from multiple contexts) for
+  // ARCore, and should always be empty for Cardboard and OpenXR.
+  SubmitFrameDrawnIntoTexture(
+      int16 frame_id,
+      array<XRLayerUpdate> layer_updates,
+      gpu.mojom.SharedImageExportResult camera_export_multi_result,
+      mojo_base.mojom.TimeDelta time_waited);
 };
 
 // After submitting a frame, the XRPresentationProvider will notify the client
@@ -1188,7 +1260,10 @@ interface XRPresentationClient {
   // When the frame wasn't successfully transferred, the client should create a
   // new mailbox/GpuMemoryBuffer rather than reusing an existing one to recover
   // for subsequent frames.
-  OnSubmitFrameTransferred(bool success);
+  // layer_ids indicates which composition layers are successfully transferred.
+  // succeeded can still be true when layer_ids is empty, which means the base
+  // layer has been successfully transferred.
+  OnSubmitFrameTransferred(bool succeeded, array<LayerId> layer_ids);
 
   // The XRPresentationProvider calls this after the frame was handed off to the
   // underlying VR API. This allows some pipelining of CPU/GPU work, while

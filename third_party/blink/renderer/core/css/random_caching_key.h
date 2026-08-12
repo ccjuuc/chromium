@@ -12,7 +12,7 @@
 
 namespace blink {
 
-class RandomValueSharing;
+class RandomCacheKey;
 
 // RandomCachingKey serves as the key for random base value cache stored in the
 // StyleEngine.
@@ -23,28 +23,28 @@ class RandomCachingKey : public GarbageCollected<RandomCachingKey> {
                    AtomicString name,
                    const Element* element)
       : name_(name), element_(element) {}
-  static RandomCachingKey* Create(
-      const RandomValueSharing& random_value_sharing,
-      const Element* element);
+  static RandomCachingKey* Create(const RandomCacheKey& random_cache_key,
+                                  const Element* element);
   bool operator==(const RandomCachingKey& other) const;
   unsigned GetHash() const;
   void Trace(Visitor* visitor) const;
   AtomicString Name() const { return name_; }
+  const Element* GetElement() const { return element_.Get(); }
 
  private:
   AtomicString name_;
-  Member<const Element> element_;
+  WeakMember<const Element> element_;
 };
 
 template <>
-struct HashTraits<Member<RandomCachingKey>>
-    : MemberHashTraits<RandomCachingKey> {
-  static unsigned GetHash(const Member<RandomCachingKey>& key) {
+struct HashTraits<WeakMember<RandomCachingKey>>
+    : WeakMemberHashTraits<RandomCachingKey> {
+  static unsigned GetHash(const WeakMember<RandomCachingKey>& key) {
     return key ? key->GetHash() : 0;
   }
 
-  static bool Equal(const Member<RandomCachingKey>& a,
-                    const Member<RandomCachingKey>& b) {
+  static bool Equal(const WeakMember<RandomCachingKey>& a,
+                    const WeakMember<RandomCachingKey>& b) {
     if (!a) {
       return !b;
     }
@@ -54,8 +54,8 @@ struct HashTraits<Member<RandomCachingKey>>
     return *a == *b;
   }
 
-  // True because a default-constructed Member (nullptr) is distinct from
-  // any valid Member<RandomCachingKey> instance, and deleted slots are also
+  // True because a default-constructed WeakMember (nullptr) is distinct from
+  // any valid WeakMember<RandomCachingKey> instance, and deleted slots are also
   // distinct.
   static constexpr bool kSafeToCompareToEmptyOrDeleted = false;
 };

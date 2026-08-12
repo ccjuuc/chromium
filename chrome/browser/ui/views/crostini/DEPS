@@ -1,4 +1,6 @@
 include_rules = [
+  "+ash/strings",
+
   # ChromeOS should not depend on //chrome. See //docs/chromeos/code.md for
   # details.
   "-chrome",
@@ -11,6 +13,7 @@ include_rules = [
   # refactor ash codes in //chrome to break these dependencies; see b/332804822.
   # Whenever possible, avoid adding new //chrome dependencies to this list.
   "+chrome/browser/ash/app_list",
+  "+chrome/browser/ash/browser_delegate/browser_delegate.h",
   "+chrome/browser/ash/crostini",
   "+chrome/browser/ash/guest_os",
   "+chrome/browser/ash/system_web_apps",
@@ -20,8 +23,5 @@ include_rules = [
   "+chrome/browser/ui/ash/system_web_apps",
   "+chrome/browser/ui/browser.h",
   "+chrome/browser/ui/test",
-  "+chrome/browser/ui/webui/ash/crostini_upgrader/crostini_upgrader_dialog.h",
-  "+chrome/common",
-  "+chrome/grit",
   "+chrome/test",
 ]

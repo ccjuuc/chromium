@@ -16,7 +16,7 @@
 #include "google_apis/gaia/gaia_urls.h"
 #include "third_party/blink/public/common/webid/login_status_account.h"
 #include "third_party/blink/public/common/webid/login_status_options.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/origin.h"
 
 FederatedIdentityPermissionContext::FederatedIdentityPermissionContext(
@@ -160,7 +160,7 @@ std::optional<bool> FederatedIdentityPermissionContext::GetIdpSigninStatus(
   return idp_signin_context_->GetSigninStatus(idp_origin);
 }
 
-base::Value::List FederatedIdentityPermissionContext::GetAccounts(
+base::ListValue FederatedIdentityPermissionContext::GetAccounts(
     const url::Origin& identity_provider) {
   return idp_signin_context_->GetAccounts(identity_provider);
 }

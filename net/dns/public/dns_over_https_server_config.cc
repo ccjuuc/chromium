@@ -8,13 +8,12 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 
-#include "base/containers/contains.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "net/third_party/uri_template/uri_template.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "url/url_canon.h"
 #include "url/url_canon_stdstring.h"
 #include "url/url_constants.h"
@@ -48,7 +47,7 @@ std::optional<std::string> GetHttpsHost(const std::string& url) {
 bool IsValidDohTemplate(const std::string& server_template, bool* use_post) {
   std::string url_string;
   std::string test_query = "this_is_a_test_query";
-  std::unordered_map<std::string, std::string> template_params(
+  absl::flat_hash_map<std::string, std::string> template_params(
       {{"dns", test_query}});
   std::set<std::string> vars_found;
   bool valid_template = uri_template::Expand(server_template, template_params,
@@ -67,7 +66,7 @@ bool IsValidDohTemplate(const std::string& server_template, bool* use_post) {
     return false;
   }
   // If the template contains a dns variable, use GET, otherwise use POST.
-  *use_post = !base::Contains(vars_found, "dns");
+  *use_post = !vars_found.contains("dns");
   return true;
 }
 
@@ -143,15 +142,15 @@ bool DnsOverHttpsServerConfig::IsSimple() const {
   return endpoints_.empty();
 }
 
-base::Value::Dict DnsOverHttpsServerConfig::ToValue() const {
-  base::Value::Dict value;
+base::DictValue DnsOverHttpsServerConfig::ToValue() const {
+  base::DictValue value;
   value.Set(kJsonKeyTemplate, server_template());
   if (!endpoints_.empty()) {
-    base::Value::List bindings;
+    base::ListValue bindings;
     bindings.reserve(endpoints_.size());
     for (const IPAddressList& ip_list : endpoints_) {
-      base::Value::Dict binding;
-      base::Value::List ips;
+      base::DictValue binding;
+      base::ListValue ips;
       ips.reserve(ip_list.size());
       for (const IPAddress& ip : ip_list) {
         ips.Append(ip.ToString());
@@ -166,7 +165,7 @@ base::Value::Dict DnsOverHttpsServerConfig::ToValue() const {
 
 // static
 std::optional<DnsOverHttpsServerConfig> DnsOverHttpsServerConfig::FromValue(
-    base::Value::Dict value) {
+    base::DictValue value) {
   std::string* server_template = value.FindString(kJsonKeyTemplate);
   if (!server_template) {
     return std::nullopt;
@@ -181,17 +180,17 @@ std::optional<DnsOverHttpsServerConfig> DnsOverHttpsServerConfig::FromValue(
     if (!endpoints_json->is_list()) {
       return std::nullopt;
     }
-    const base::Value::List& json_list = endpoints_json->GetList();
+    const base::ListValue& json_list = endpoints_json->GetList();
     endpoints.reserve(json_list.size());
     for (const base::Value& endpoint : json_list) {
-      const base::Value::Dict* dict = endpoint.GetIfDict();
+      const base::DictValue* dict = endpoint.GetIfDict();
       if (!dict) {
         return std::nullopt;
       }
       IPAddressList parsed_ips;
       const base::Value* ips = dict->Find(kJsonKeyIps);
       if (ips) {
-        const base::Value::List* ip_list = ips->GetIfList();
+        const base::ListValue* ip_list = ips->GetIfList();
         if (!ip_list) {
           return std::nullopt;
         }

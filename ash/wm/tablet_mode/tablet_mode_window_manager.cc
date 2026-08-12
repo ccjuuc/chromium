@@ -31,7 +31,6 @@
 #include "ash/wm/workspace/backdrop_controller.h"
 #include "ash/wm/workspace/workspace_layout_manager.h"
 #include "ash/wm/workspace_controller.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "ui/aura/client/aura_constants.h"
@@ -275,7 +274,7 @@ void TabletModeWindowManager::Shutdown(ShutdownReason shutdown_reason) {
 }
 
 bool TabletModeWindowManager::IsTrackingWindow(aura::Window* window) {
-  return base::Contains(window_state_map_, window);
+  return window_state_map_.contains(window);
 }
 
 int TabletModeWindowManager::GetNumberOfManagedWindows() {
@@ -331,7 +330,8 @@ void TabletModeWindowManager::OnOverviewModeEndingAnimationComplete(
       Shell::Get()->mru_window_tracker()->BuildWindowListIgnoreModal(
           kActiveDesk);
   for (aura::Window* window : windows) {
-    if (split_view_controller->primary_window() != window &&
+    if (!window->is_destroying() &&
+        split_view_controller->primary_window() != window &&
         split_view_controller->secondary_window() != window) {
       MaximizeIfSnapped(window);
     }
@@ -384,8 +384,9 @@ void TabletModeWindowManager::OnSplitViewStateChanged(
     // `EndSplitView` which can trigger activating the overview focus widget,
     // but the pending activable window could be the window on the primary
     // display.
-    if (window->GetRootWindow() != primary_root)
+    if (window->GetRootWindow() != primary_root || window->is_destroying()) {
       continue;
+    }
     MaximizeIfSnapped(window);
   }
 }
@@ -395,7 +396,7 @@ void TabletModeWindowManager::OnWindowDestroying(aura::Window* window) {
     // container window can be removed on display destruction.
     window->RemoveObserver(this);
     observed_container_windows_.erase(window);
-  } else if (base::Contains(windows_to_track_, window)) {
+  } else if (windows_to_track_.contains(window)) {
     // Added window was destroyed before being shown.
     windows_to_track_.erase(window);
     window->RemoveObserver(this);
@@ -415,7 +416,7 @@ void TabletModeWindowManager::OnWindowHierarchyChanged(
     // wait until it becomes visible because the client may update the
     // flag to control if the window should be added.
     if (!params.target->IsVisible()) {
-      if (!base::Contains(windows_to_track_, params.target)) {
+      if (!windows_to_track_.contains(params.target)) {
         windows_to_track_.insert(params.target);
         params.target->AddObserver(this);
       }
@@ -471,7 +472,7 @@ void TabletModeWindowManager::OnWindowVisibilityChanged(aura::Window* window,
     return;
 
   if (IsContainerWindow(window->parent()) &&
-      base::Contains(windows_to_track_, window) && visible) {
+      windows_to_track_.contains(window) && visible) {
     TrackWindow(window);
     // When the state got added, the "WM_EVENT_ADDED_TO_WORKSPACE" event got
     // already sent and we have to notify our state again.
@@ -726,7 +727,7 @@ void TabletModeWindowManager::TrackWindow(aura::Window* window,
                                           bool animate_bounds_on_attach) {
   // Now that we are tracking it (or finding out it cannot be tracked), remove
   // it from `windows_to_track_`.
-  if (base::Contains(windows_to_track_, window)) {
+  if (windows_to_track_.contains(window)) {
     windows_to_track_.erase(window);
     window->RemoveObserver(this);
   }
@@ -776,6 +777,10 @@ void TabletModeWindowManager::ForgetWindow(aura::Window* window,
 bool TabletModeWindowManager::ShouldHandleWindow(aura::Window* window) {
   DCHECK(window);
 
+  if (window->is_destroying()) {
+    return false;
+  }
+
   // Windows that don't have normal z-ordering should be free-floating and thus
   // not managed by us.
   if (window->GetProperty(aura::client::kZOrderingKey) !=
@@ -799,7 +804,7 @@ void TabletModeWindowManager::AddWindowCreationObservers() {
   // windows.
   for (aura::Window* root : Shell::GetAllRootWindows()) {
     for (auto* desk_container : desks_util::GetDesksContainers(root)) {
-      DCHECK(!base::Contains(observed_container_windows_, desk_container));
+      DCHECK(!observed_container_windows_.contains(desk_container));
       desk_container->AddObserver(this);
       observed_container_windows_.insert(desk_container);
     }
@@ -819,7 +824,7 @@ void TabletModeWindowManager::DisplayConfigurationChanged() {
 }
 
 bool TabletModeWindowManager::IsContainerWindow(aura::Window* window) {
-  return base::Contains(observed_container_windows_, window);
+  return observed_container_windows_.contains(window);
 }
 
 }  // namespace ash

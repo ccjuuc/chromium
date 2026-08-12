@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/stl_util.h"
@@ -25,6 +24,7 @@
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -34,7 +34,6 @@
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
-#include "chrome/common/chrome_features.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
@@ -183,7 +182,7 @@ void ExternallyManagedAppManager::SynchronizeInstalledApps(
       }));
   // Only one concurrent SynchronizeInstalledApps() expected per
   // ExternalInstallSource.
-  CHECK(!base::Contains(synchronize_requests_, install_source));
+  CHECK(!synchronize_requests_.contains(install_source));
   provider_->scheduler().ScheduleCallback<AllAppsLock>(
       "ExternallyManagedAppManager::SynchronizeInstalledApps",
       AllAppsLockDescription(),
@@ -278,7 +277,7 @@ void ExternallyManagedAppManager::MaybeStartNext() {
 
 void ExternallyManagedAppManager::MaybeStartNextOnLockAcquired(
     AllAppsLock& lock,
-    base::Value::Dict& debug_value) {
+    base::DictValue& debug_value) {
   if (current_install_metadata_ || IsShuttingDown()) {
     return;
   }
@@ -545,18 +544,15 @@ void ExternallyManagedAppManager::SynchronizeInstalledAppsOnLockAcquired(
     ExternalInstallSource install_source,
     SynchronizeCallback callback,
     AllAppsLock& lock,
-    base::Value::Dict& debug_info) {
+    base::DictValue& debug_info) {
   CHECK(callback);
   debug_info.Set("install_source", base::ToString(install_source));
 
   auto is_app_installed_by_other_sources_or_display_modes =
       [&](const webapps::AppId& app_id,
           std::optional<mojom::UserDisplayMode> desired_display_mode) {
-        if (!lock.registrar().IsInstallState(
-                app_id,
-                {web_app::proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION,
-                 web_app::proto::InstallState::
-                     INSTALLED_WITH_OS_INTEGRATION})) {
+        if (!lock.registrar().AppMatches(app_id,
+                                         WebAppFilter::InstalledInChrome())) {
           return /*keep_old_app=*/false;
         }
         const WebApp* app = lock.registrar().GetAppById(app_id);
@@ -765,7 +761,7 @@ void ExternallyManagedAppManager::ClearSynchronizeRequestsForTesting() {
 std::ostream& operator<<(
     std::ostream& out,
     const ExternallyManagedAppManagerInstallResult& install_result) {
-  base::Value::Dict output;
+  base::DictValue output;
   output.Set("code", base::ToString(install_result.code));
   output.Set("app_id", base::ToString(install_result.app_id));
   output.Set("did_uninstall_and_replace",

@@ -28,6 +28,7 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -47,9 +48,10 @@ import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
-import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
+import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.util.ChromeApplicationTestUtils;
 import org.chromium.chrome.test.util.ChromeTabUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** Tests for startup timing histograms. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -60,20 +62,10 @@ public class StartupLoadingMetricsTest {
     private static final String TEST_PAGE_2 = "/chrome/test/data/android/test.html";
     private static final String ERROR_PAGE = "/close-socket";
     private static final String SLOW_PAGE = "/slow?2";
-    private static final String FIRST_COMMIT_HISTOGRAM =
-            "Startup.Android.Cold.TimeToFirstNavigationCommit";
-    private static final String FIRST_COMMIT_HISTOGRAM2 =
-            "Startup.Android.Cold.TimeToFirstNavigationCommit2.Tabbed";
-    private static final String FIRST_CONTENTFUL_PAINT_HISTOGRAM =
-            "Startup.Android.Cold.TimeToFirstContentfulPaint";
     private static final String FIRST_CONTENTFUL_PAINT_HISTOGRAM3 =
             "Startup.Android.Cold.TimeToFirstContentfulPaint3";
-    private static final String FIRST_VISIBLE_CONTENT_HISTOGRAM2 =
-            "Startup.Android.Cold.TimeToFirstVisibleContent2";
     private static final String FIRST_VISIBLE_CONTENT_COLD_HISTOGRAM4 =
             "Startup.Android.Cold.TimeToFirstVisibleContent4";
-    private static final String VISIBLE_CONTENT_HISTOGRAM =
-            "Startup.Android.Cold.TimeToVisibleContent";
     private static final String TIME_TO_STARTUP_FCP_OR_PAINT_PREVIEW_HISTOGRAM =
             "Startup.Android.Cold.TimeToStartupFcpOrPaintPreview";
     private static final String FIRST_COMMIT_COLD_HISTOGRAM3 =
@@ -88,14 +80,16 @@ public class StartupLoadingMetricsTest {
             "Startup.Android.Cold.NewTabPage.TimeSpentInBinder";
     private static final String NTP_BINDER_COUNTS_COLD_HISTOGRAM =
             "Startup.Android.Cold.NewTabPage.TotalBinderTransactions";
-    private static final String COLD_START_TIME_TO_FIRST_FRAME =
-            "Startup.Android.Cold.TimeToFirstFrame";
+    private static final String COLD_START_TIME_TO_FIRST_FRAME2 =
+            "Startup.Android.Cold.TimeToFirstFrame2";
 
     private static final String TABBED_SUFFIX = ".Tabbed";
     private static final String WEB_APK_SUFFIX = ".WebApk";
 
+    // ApplicationStartInfo is available with Android 15, but getStartComponent is only
+    // available with Android 16.
     private static final boolean APPLICATION_START_INFO_SUPPORTED =
-            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM);
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA);
 
     private CustomTabsConnection mConnectionToCleanup;
 
@@ -114,6 +108,7 @@ public class StartupLoadingMetricsTest {
     public void setUp() {
         ColdStartTracker.setStartedAsColdForTesting();
         SimpleStartupForegroundSessionDetector.resetForTesting();
+        StartupMetricsTracker.setBypassStartChecksForTesting();
     }
 
     @After
@@ -179,13 +174,6 @@ public class StartupLoadingMetricsTest {
     }
 
     private void assertHistogramsRecordedAsExpected(int expectedCount, String histogramSuffix) {
-        boolean isTabbedSuffix = histogramSuffix.equals(TABBED_SUFFIX);
-
-        // Check that the new first navigation commit events are recorded for the tabbed activity.
-        Assert.assertEquals(
-                isTabbedSuffix ? expectedCount : 0,
-                RecordHistogram.getHistogramTotalCountForTesting(FIRST_COMMIT_HISTOGRAM2));
-
         int coldStartFirstCommit4Samples =
                 RecordHistogram.getHistogramTotalCountForTesting(
                         FIRST_COMMIT_COLD_HISTOGRAM3 + histogramSuffix);
@@ -196,46 +184,14 @@ public class StartupLoadingMetricsTest {
                         FIRST_CONTENTFUL_PAINT_HISTOGRAM3 + histogramSuffix);
         Assert.assertTrue(coldStartFirstContentfulPaintSamples < 2);
 
-        int firstCommitSamples =
-                RecordHistogram.getHistogramTotalCountForTesting(
-                        FIRST_COMMIT_HISTOGRAM + histogramSuffix);
-        Assert.assertTrue(firstCommitSamples < 2);
-
-        int firstContentfulPaintSamples =
-                RecordHistogram.getHistogramTotalCountForTesting(
-                        FIRST_CONTENTFUL_PAINT_HISTOGRAM + histogramSuffix);
-        Assert.assertTrue(firstContentfulPaintSamples < 2);
-
-        int visibleContentSamples =
-                RecordHistogram.getHistogramTotalCountForTesting(VISIBLE_CONTENT_HISTOGRAM);
         int timeToStartupFcpOrPaintPreviewSamples =
                 RecordHistogram.getHistogramTotalCountForTesting(
                         TIME_TO_STARTUP_FCP_OR_PAINT_PREVIEW_HISTOGRAM);
-        Assert.assertTrue(visibleContentSamples < 2);
         Assert.assertTrue(timeToStartupFcpOrPaintPreviewSamples < 2);
 
-        if (expectedCount == 1 && firstCommitSamples == 0) {
-            // The startup FCP and 'visible content' also record their samples depending on how fast
-            // they happen in relation to the post-native initialization.
-            Assert.assertTrue(firstCommitSamples <= firstContentfulPaintSamples);
-            Assert.assertTrue(firstCommitSamples <= visibleContentSamples);
-        } else {
-            // Once the racy commit case is excluded, the histograms should record the expected
-            // number of samples.
-            Assert.assertEquals(expectedCount, firstCommitSamples);
-            Assert.assertEquals(expectedCount, firstContentfulPaintSamples);
-            if (isTabbedSuffix) {
-                Assert.assertEquals(expectedCount, visibleContentSamples);
-            }
-        }
-
-        if (isTabbedSuffix) {
+        if (histogramSuffix.equals(TABBED_SUFFIX)) {
             // These tests only exercise the cases when the first visible content is calculated as
             // the first navigation commit.
-            Assert.assertEquals(
-                    expectedCount,
-                    RecordHistogram.getHistogramTotalCountForTesting(
-                            FIRST_VISIBLE_CONTENT_HISTOGRAM2));
             Assert.assertEquals(
                     coldStartFirstCommit4Samples,
                     RecordHistogram.getHistogramTotalCountForTesting(
@@ -257,22 +213,23 @@ public class StartupLoadingMetricsTest {
     /** Tests cold start metrics for main icon shortcut launches recorded correctly. */
     @Test
     @LargeTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // flaky: https://crbug.com/498170975
     public void testStartWithMainLauncerShortcutRecorded() throws Exception {
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newBuilder()
-                        .expectAnyRecordTimes(NTP_TIME_TO_FIRST_DRAW_COLD_HISTOGRAM, 0)
+                        .expectNoRecords(NTP_TIME_TO_FIRST_DRAW_COLD_HISTOGRAM)
                         .expectAnyRecordTimes(
-                                COLD_START_TIME_TO_FIRST_FRAME,
+                                COLD_START_TIME_TO_FIRST_FRAME2,
                                 APPLICATION_START_INFO_SUPPORTED ? 1 : 0)
                         .build();
-        Intent intent = new Intent(LauncherShortcutActivity.ACTION_OPEN_NEW_INCOGNITO_TAB);
+        Intent intent = new Intent(LauncherShortcutActivity.ACTION_OPEN_NEW_TAB);
         intent.setClass(ContextUtils.getApplicationContext(), LauncherShortcutActivity.class);
         runAndWaitForPageLoadMetricsRecorded(
                 () ->
                         mTabbedActivityTestRule
                                 .startWithIntentPlusUrlTo(intent, null)
                                 .arriveAt(
-                                        IncognitoNewTabPageStation.newBuilder()
+                                        RegularNewTabPageStation.newBuilder()
                                                 .withEntryPoint()
                                                 .build()));
         assertMainIntentLaunchColdStartHistogramRecorded(1);
@@ -282,14 +239,12 @@ public class StartupLoadingMetricsTest {
     /** Tests warm start metric for main icon launches recorded correctly. */
     @Test
     @LargeTest
+    @DisabledTest(message = "https://crbug.com/495503159")
     public void testWarmStartMainIntentTimeToFirstDrawRecordedCorrectly() throws Exception {
         // No records made for main intent cold starts.
         HistogramWatcher histogramWatcher =
                 HistogramWatcher.newBuilder()
                         .expectNoRecords(MAIN_INTENT_TIME_TO_FIRST_DRAW_WARM_MS_HISTOGRAM)
-                        .expectAnyRecordTimes(
-                                COLD_START_TIME_TO_FIRST_FRAME,
-                                APPLICATION_START_INFO_SUPPORTED ? 1 : 0)
                         .build();
 
         runAndWaitForPageLoadMetricsRecorded(
@@ -304,7 +259,6 @@ public class StartupLoadingMetricsTest {
         histogramWatcher =
                 HistogramWatcher.newBuilder()
                         .expectAnyRecordTimes(MAIN_INTENT_TIME_TO_FIRST_DRAW_WARM_MS_HISTOGRAM, 2)
-                        .expectAnyRecordTimes(COLD_START_TIME_TO_FIRST_FRAME, 0)
                         .build();
         runAndWaitForPageLoadMetricsRecorded(
                 () -> {
@@ -402,7 +356,7 @@ public class StartupLoadingMetricsTest {
                 HistogramWatcher.newBuilder()
                         .expectAnyRecordTimes(NTP_TIME_TO_FIRST_DRAW_COLD_HISTOGRAM, 1)
                         .expectAnyRecordTimes(
-                                COLD_START_TIME_TO_FIRST_FRAME,
+                                COLD_START_TIME_TO_FIRST_FRAME2,
                                 APPLICATION_START_INFO_SUPPORTED ? 1 : 0)
                         .build();
         runAndWaitForPageLoadMetricsRecorded(() -> mTabbedActivityTestRule.startOnNtp());
@@ -547,22 +501,14 @@ public class StartupLoadingMetricsTest {
 
         // Startup metrics should not have been recorded since the browser does not know it is in
         // the foreground.
-        Assert.assertEquals(
-                0,
-                RecordHistogram.getHistogramTotalCountForTesting(
-                        FIRST_COMMIT_HISTOGRAM + TABBED_SUFFIX));
         assertMainIntentLaunchColdStartHistogramRecorded(0);
 
         // The metric based on early foreground notification should be recorded.
-        Assert.assertEquals(
-                1, RecordHistogram.getHistogramTotalCountForTesting(FIRST_COMMIT_HISTOGRAM2));
         Assert.assertEquals(
                 1,
                 RecordHistogram.getHistogramTotalCountForTesting(
                         FIRST_COMMIT_COLD_HISTOGRAM3 + TABBED_SUFFIX));
         // The startup time is not zero.
-        Assert.assertEquals(
-                0, RecordHistogram.getHistogramValueCountForTesting(FIRST_COMMIT_HISTOGRAM2, 0));
         Assert.assertEquals(
                 0,
                 RecordHistogram.getHistogramValueCountForTesting(
@@ -570,12 +516,6 @@ public class StartupLoadingMetricsTest {
 
         // Trigger the come-to-foreground event. This time it should not be skipped.
         ThreadUtils.runOnUiThreadBlocking(UmaUtils::recordForegroundStartTimeWithNative);
-
-        // Startup metrics should still not have been recorded...
-        Assert.assertEquals(
-                0,
-                RecordHistogram.getHistogramTotalCountForTesting(
-                        FIRST_COMMIT_HISTOGRAM + TABBED_SUFFIX));
     }
 
     @Test
@@ -612,9 +552,12 @@ public class StartupLoadingMetricsTest {
         SimpleStartupForegroundSessionDetector.resetForTesting();
         ColdStartTracker.setStartedAsColdForTesting();
 
+        mCustomTabActivityTestRule.finishActivity();
+
         // Load another URL in a tabbed activity and check that startup metrics are still not
         // recorded.
-        runAndWaitForPageLoadMetricsRecorded(() -> mTabbedActivityTestRule.startOnUrl(TEST_PAGE_2));
+        runAndWaitForPageLoadMetricsRecorded(
+                () -> mTabbedActivityTestRule.startOnUrl(getTestPage2()));
         assertMainIntentLaunchColdStartHistogramRecorded(0);
         waitForHistogram(ntpColdStartWatcher);
         assertHistogramsRecordedAsExpected(0, TABBED_SUFFIX);

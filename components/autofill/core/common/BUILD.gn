@@ -38,8 +38,6 @@ static_library("common") {
     "form_field_data.h",
     "form_field_data_predictions.cc",
     "form_field_data_predictions.h",
-    "form_interactions_flow.cc",
-    "form_interactions_flow.h",
     "html_field_types.cc",
     "html_field_types.h",
     "is_required.h",
@@ -56,7 +54,6 @@ static_library("common") {
     "password_form_generation_data.h",
     "password_generation_util.cc",
     "password_generation_util.h",
-    "plus_address_survey_type.h",
     "save_password_progress_logger.cc",
     "save_password_progress_logger.h",
     "signatures.cc",
@@ -139,6 +136,8 @@ static_library("test_support") {
     "autofill_test_utils.h",
     "form_data_test_api.h",
     "test_matchers.h",
+    "test_utils/autofill_form_test_utils.cc",
+    "test_utils/autofill_form_test_utils.h",
   ]
   deps = [
     "//base",
@@ -155,6 +154,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "autocomplete_parsing_util_unittest.cc",
+    "autofill_data_validation_unittest.cc",
     "autofill_internals/log_message_unittest.cc",
     "autofill_internals/logging_scope_unittest.cc",
     "autofill_prefs_unittest.cc",

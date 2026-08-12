@@ -10,6 +10,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/system/privacy_hub/privacy_hub_controller.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
@@ -25,8 +26,7 @@
 #include "chrome/browser/ash/settings/stats_reporting_controller.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/consent_auditor/consent_auditor_test_utils.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -41,8 +41,8 @@
 #include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_store.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
@@ -73,24 +73,24 @@ using OwnershipStatus = ash::DeviceSettingsService::OwnershipStatus;
 class TestUserMetricsServiceClient
     : public ::metrics::TestMetricsServiceClient {
  public:
-  std::optional<bool> GetCurrentUserMetricsConsent() const override {
-    if (should_use_user_consent_) {
-      return current_user_metrics_consent_;
+  std::optional<bool> GetCurrentUserMetricsChoice() const override {
+    if (should_use_user_choice_) {
+      return current_user_choice_;
     }
     return std::nullopt;
   }
 
-  void UpdateCurrentUserMetricsConsent(bool metrics_consent) override {
-    current_user_metrics_consent_ = metrics_consent;
+  void UpdateCurrentUserMetricsChoice(bool user_choice) override {
+    current_user_choice_ = user_choice;
   }
 
-  void SetShouldUseUserConsent(bool should_use_user_consent) {
-    should_use_user_consent_ = should_use_user_consent;
+  void SetShouldUseUserChoice(bool should_use_user_choice) {
+    should_use_user_choice_ = should_use_user_choice;
   }
 
  private:
-  bool should_use_user_consent_ = false;
-  bool current_user_metrics_consent_ = false;
+  bool should_use_user_choice_ = false;
+  bool current_user_choice_ = false;
 };
 
 class MockErrorDelegate : public ArcSupportHost::ErrorDelegate {
@@ -101,6 +101,10 @@ class MockErrorDelegate : public ArcSupportHost::ErrorDelegate {
   MOCK_METHOD0(OnRunNetworkTestsClicked, void());
   MOCK_METHOD1(OnErrorPageShown, void(bool network_tests_shown));
 };
+
+PrefService* local_state() {
+  return TestingBrowserProcess::GetGlobal()->local_state();
+}
 
 }  // namespace
 
@@ -134,35 +138,32 @@ class ArcTermsOfServiceDefaultNegotiatorTest
     BrowserWithTestWindowTest::SetUp();
 
     ::ash::DeviceSettingsService::Get()->StartProcessing(
-        TestingBrowserProcess::GetGlobal()->local_state(),
-        &session_manager_client_, owner_key_util_);
+        local_state(), &session_manager_client_, owner_key_util_);
 
     // MetricsService.
-    metrics::MetricsService::RegisterPrefs(local_state_.registry());
     test_enabled_state_provider_ =
         std::make_unique<metrics::TestEnabledStateProvider>(true, true);
     test_metrics_state_manager_ = metrics::MetricsStateManager::Create(
-        &local_state_, test_enabled_state_provider_.get(), std::wstring(),
+        local_state(), test_enabled_state_provider_.get(), std::wstring(),
         base::FilePath());
     test_metrics_service_client_ =
         std::make_unique<TestUserMetricsServiceClient>();
     test_metrics_service_ = std::make_unique<metrics::MetricsService>(
         test_metrics_state_manager_.get(), test_metrics_service_client_.get(),
-        &local_state_);
+        local_state());
 
     // Needs to be set for metrics service.
     base::SetRecordActionTaskRunner(
         task_environment()->GetMainThreadTaskRunner());
 
-    signin::MakePrimaryAccountAvailable(
-        IdentityManagerFactory::GetForProfile(profile()), "testing@account.com",
-        signin::ConsentLevel::kSync);
+    ash::StatsReportingController::Initialize(local_state());
 
-    ash::StatsReportingController::RegisterLocalStatePrefs(
-        local_state_.registry());
-    ash::StatsReportingController::Initialize(&local_state_);
-
-    support_host_ = std::make_unique<ArcSupportHost>(profile());
+    support_host_ = std::make_unique<ArcSupportHost>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        profile());
     fake_arc_support_ = std::make_unique<FakeArcSupport>(support_host_.get());
     negotiator_ = std::make_unique<ArcTermsOfServiceDefaultNegotiator>(
         profile()->GetPrefs(), support_host(), test_metrics_service_.get());
@@ -204,14 +205,8 @@ class ArcTermsOfServiceDefaultNegotiatorTest
         ConsentAuditorFactory::GetForProfile(profile()));
   }
 
-  GaiaId GetAuthenticatedGaiaId() {
-    return IdentityManagerFactory::GetForProfile(profile())
-        ->GetPrimaryAccountInfo(signin::ConsentLevel::kSync)
-        .gaia;
-  }
-
   bool GetUserMetricsState() {
-    return *metrics_service_client()->GetCurrentUserMetricsConsent();
+    return *metrics_service_client()->GetCurrentUserMetricsChoice();
   }
 
   // BrowserWithTestWindowTest:
@@ -226,8 +221,6 @@ class ArcTermsOfServiceDefaultNegotiatorTest
   policy::DevicePolicyBuilder device_policy_;
   scoped_refptr<ownership::MockOwnerKeyUtil> owner_key_util_;
   ::ash::FakeSessionManagerClient session_manager_client_;
-
-  TestingPrefServiceSimple local_state_;
 
   // MetricsService.
   std::unique_ptr<metrics::MetricsStateManager> test_metrics_state_manager_;
@@ -286,7 +279,7 @@ ArcGoogleLocationServiceConsent CreateBaseGoogleLocationServiceConsent() {
       IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE);
   google_location_service_consent.add_description_grd_ids(
       ash::features::IsCrosPrivacyHubLocationEnabled()
-          ? IDS_CROS_OPT_IN_LOCATION_SETTING
+          ? IDS_ARC_CROS_OPT_IN_LOCATION_SETTING
           : IDS_ARC_OPT_IN_LOCATION_SETTING);
   return google_location_service_consent;
 }
@@ -333,30 +326,33 @@ ArcTermsOfServiceNegotiator::NegotiationCallback UpdateStatusCallback(
 }
 
 TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, Accept) {
+  GaiaId gaia_id = session_manager::SessionManager::Get()
+                       ->GetPrimarySession()
+                       ->account_id()
+                       .GetGaiaId();
+
   // Configure mock expectations for proper consent recording.
   consent_auditor::FakeConsentAuditor* auditor = consent_auditor();
   Mock::VerifyAndClearExpectations(auditor);
 
   ArcPlayTermsOfServiceConsent play_consent = CreateBasePlayConsent();
   play_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(*auditor, RecordArcPlayConsent(GetAuthenticatedGaiaId(),
-                                             ArcPlayConsentEq(play_consent)));
+  EXPECT_CALL(*auditor,
+              RecordArcPlayConsent(gaia_id, ArcPlayConsentEq(play_consent)));
 
   ArcBackupAndRestoreConsent backup_and_restore_consent =
       CreateBaseBackupAndRestoreConsent();
   backup_and_restore_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(*auditor,
-              RecordArcBackupAndRestoreConsent(
-                  GetAuthenticatedGaiaId(),
-                  ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
+  EXPECT_CALL(
+      *auditor,
+      RecordArcBackupAndRestoreConsent(
+          gaia_id, ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
   ArcGoogleLocationServiceConsent google_location_service_consent =
       CreateBaseGoogleLocationServiceConsent();
   google_location_service_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(
-      *auditor,
-      RecordArcGoogleLocationServiceConsent(
-          GetAuthenticatedGaiaId(),
-          ArcGoogleLocationServiceConsentEq(google_location_service_consent)));
+  EXPECT_CALL(*auditor, RecordArcGoogleLocationServiceConsent(
+                            gaia_id, ArcGoogleLocationServiceConsentEq(
+                                         google_location_service_consent)));
 
   // Show Terms of service page.
   Status status = Status::PENDING;
@@ -491,6 +487,11 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithLocationDisabled) {
 }
 
 TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithUnchecked) {
+  GaiaId gaia_id = session_manager::SessionManager::Get()
+                       ->GetPrimarySession()
+                       ->account_id()
+                       .GetGaiaId();
+
   // Configure the mock consent auditor to make sure consent auditing records
   // the ToS accept as GIVEN, but the other consents as NOT_GIVEN.
   consent_auditor::FakeConsentAuditor* ca = consent_auditor();
@@ -498,26 +499,25 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithUnchecked) {
 
   ArcPlayTermsOfServiceConsent play_consent = CreateBasePlayConsent();
   play_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(*ca, RecordArcPlayConsent(GetAuthenticatedGaiaId(),
-                                        ArcPlayConsentEq(play_consent)));
+  EXPECT_CALL(*ca,
+              RecordArcPlayConsent(gaia_id, ArcPlayConsentEq(play_consent)));
 
   ArcBackupAndRestoreConsent backup_and_restore_consent =
       CreateBaseBackupAndRestoreConsent();
   backup_and_restore_consent.clear_status();
   backup_and_restore_consent.set_status(UserConsentTypes::NOT_GIVEN);
-  EXPECT_CALL(*ca,
-              RecordArcBackupAndRestoreConsent(
-                  GetAuthenticatedGaiaId(),
-                  ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
+  EXPECT_CALL(
+      *ca,
+      RecordArcBackupAndRestoreConsent(
+          gaia_id, ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
 
   ArcGoogleLocationServiceConsent google_location_service_consent =
       CreateBaseGoogleLocationServiceConsent();
   google_location_service_consent.clear_status();
   google_location_service_consent.set_status(UserConsentTypes::NOT_GIVEN);
-  EXPECT_CALL(
-      *ca, RecordArcGoogleLocationServiceConsent(
-               GetAuthenticatedGaiaId(), ArcGoogleLocationServiceConsentEq(
-                                             google_location_service_consent)));
+  EXPECT_CALL(*ca, RecordArcGoogleLocationServiceConsent(
+                       gaia_id, ArcGoogleLocationServiceConsentEq(
+                                    google_location_service_consent)));
 
   // Show Terms of service page.
   Status status = Status::PENDING;
@@ -610,7 +610,7 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorForNonOwnerTest,
   negotiator()->StartNegotiation(UpdateStatusCallback(&status));
 
   // Setup metrics service to use user metrics.
-  metrics_service_client()->SetShouldUseUserConsent(true);
+  metrics_service_client()->SetShouldUseUserChoice(true);
 
   // TERMS page should be shown.
   EXPECT_EQ(status, Status::PENDING);
@@ -645,6 +645,11 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorForNonOwnerTest,
 }
 
 TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithManagedToS) {
+  GaiaId gaia_id = session_manager::SessionManager::Get()
+                       ->GetPrimarySession()
+                       ->account_id()
+                       .GetGaiaId();
+
   consent_auditor::FakeConsentAuditor* auditor = consent_auditor();
   Mock::VerifyAndClearExpectations(auditor);
 
@@ -652,17 +657,15 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithManagedToS) {
   play_consent.clear_play_terms_of_service_text_length();
   play_consent.clear_play_terms_of_service_hash();
   play_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(*auditor, RecordArcPlayConsent(GetAuthenticatedGaiaId(),
-                                             ArcPlayConsentEq(play_consent)));
+  EXPECT_CALL(*auditor,
+              RecordArcPlayConsent(gaia_id, ArcPlayConsentEq(play_consent)));
 
   ArcGoogleLocationServiceConsent google_location_service_consent =
       CreateBaseGoogleLocationServiceConsent();
   google_location_service_consent.set_status(UserConsentTypes::GIVEN);
-  EXPECT_CALL(
-      *auditor,
-      RecordArcGoogleLocationServiceConsent(
-          GetAuthenticatedGaiaId(),
-          ArcGoogleLocationServiceConsentEq(google_location_service_consent)));
+  EXPECT_CALL(*auditor, RecordArcGoogleLocationServiceConsent(
+                            gaia_id, ArcGoogleLocationServiceConsentEq(
+                                         google_location_service_consent)));
 
   // Verifies that we record an empty ToS consent if the ToS is not shown due to
   // a managed user scenario.
@@ -702,30 +705,33 @@ TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithManagedToS) {
 }
 
 TEST_P(ArcTermsOfServiceDefaultNegotiatorTest, Cancel) {
+  GaiaId gaia_id = session_manager::SessionManager::Get()
+                       ->GetPrimarySession()
+                       ->account_id()
+                       .GetGaiaId();
+
   consent_auditor::FakeConsentAuditor* auditor = consent_auditor();
   Mock::VerifyAndClearExpectations(auditor);
 
   ArcPlayTermsOfServiceConsent play_consent = CreateBasePlayConsent();
   play_consent.set_status(UserConsentTypes::NOT_GIVEN);
-  EXPECT_CALL(*auditor, RecordArcPlayConsent(GetAuthenticatedGaiaId(),
-                                             ArcPlayConsentEq(play_consent)));
+  EXPECT_CALL(*auditor,
+              RecordArcPlayConsent(gaia_id, ArcPlayConsentEq(play_consent)));
 
   ArcBackupAndRestoreConsent backup_and_restore_consent =
       CreateBaseBackupAndRestoreConsent();
   backup_and_restore_consent.set_status(UserConsentTypes::NOT_GIVEN);
-  EXPECT_CALL(*auditor,
-              RecordArcBackupAndRestoreConsent(
-                  GetAuthenticatedGaiaId(),
-                  ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
+  EXPECT_CALL(
+      *auditor,
+      RecordArcBackupAndRestoreConsent(
+          gaia_id, ArcBackupAndRestoreConsentEq(backup_and_restore_consent)));
 
   ArcGoogleLocationServiceConsent google_location_service_consent =
       CreateBaseGoogleLocationServiceConsent();
   google_location_service_consent.set_status(UserConsentTypes::NOT_GIVEN);
-  EXPECT_CALL(
-      *auditor,
-      RecordArcGoogleLocationServiceConsent(
-          GetAuthenticatedGaiaId(),
-          ArcGoogleLocationServiceConsentEq(google_location_service_consent)));
+  EXPECT_CALL(*auditor, RecordArcGoogleLocationServiceConsent(
+                            gaia_id, ArcGoogleLocationServiceConsentEq(
+                                         google_location_service_consent)));
 
   // Show Terms of service page.
   Status status = Status::PENDING;

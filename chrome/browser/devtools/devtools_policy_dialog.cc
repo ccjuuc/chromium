@@ -8,8 +8,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/tab_modal_confirm_dialog_views.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/strings/grit/components_strings.h"
@@ -20,6 +21,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -28,6 +30,15 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
+
+namespace {
+
+#if BUILDFLAG(IS_LINUX)
+constexpr int kIconPadding = 4;
+#else
+constexpr int kIconPadding = 2;
+#endif
+}
 
 DevToolsPolicyDialog::DevToolsPolicyDialog(content::WebContents* web_contents) {
 }
@@ -73,23 +84,31 @@ void DevToolsPolicyDialog::Show(content::WebContents* web_contents) {
                   []() {
                     auto view = std::make_unique<views::View>();
                     auto* layout = view->SetLayoutManager(
-                        std::make_unique<views::BoxLayout>(
-                            views::BoxLayout::Orientation::kHorizontal,
-                            gfx::Insets(), 10));
+                        std::make_unique<views::BoxLayout>());
                     layout->set_cross_axis_alignment(
                         views::BoxLayout::CrossAxisAlignment::kStart);
 
                     auto icon = std::make_unique<views::ImageView>();
+                    icon->SetBorder(views::CreateEmptyBorder(
+                        gfx::Insets::TLBR(kIconPadding, 0, 0, 0)));
                     icon->SetImage(ui::ImageModel::FromVectorIcon(
-                        vector_icons::kBusinessIcon, ui::kColorIcon,
-                        extension_misc::EXTENSION_ICON_SMALL));
-                    view->AddChildView(std::move(icon));
+                        features::IsRoundedIconsEnabled()
+                            ? vector_icons::kDomainIcon
+                            : vector_icons::kBusinessOldIcon,
+                        ui::kColorIcon, extension_misc::EXTENSION_ICON_BITTY));
 
                     auto label = std::make_unique<views::Label>(
                         l10n_util::GetStringUTF16(
                             IDS_DEVTOOLS_BLOCKED_BY_POLICY));
                     label->SetMultiLine(true);
                     label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+
+                    int text_padding =
+                        ChromeLayoutProvider::Get()->GetDistanceMetric(
+                            views::DISTANCE_TEXTFIELD_HORIZONTAL_TEXT_PADDING);
+                    layout->set_between_child_spacing(text_padding);
+
+                    view->AddChildView(std::move(icon));
                     view->AddChildView(std::move(label));
                     return view;
                   }(),

@@ -69,6 +69,7 @@
 #include "net/ssl/ssl_server_config.h"
 #include "net/storage_access_api/status.h"
 #include "net/test/embedded_test_server/create_websocket_handler.h"
+#include "net/test/embedded_test_server/default_handlers.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -92,6 +93,16 @@
 #include "url/origin.h"
 #include "url/url_constants.h"
 
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
+#include <winhttp.h>
+
+#include "base/functional/callback_helpers.h"
+#include "base/strings/utf_string_conversions.h"
+#include "components/winhttp/scoped_hinternet.h"
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace net {
 class HttpResponseHeaders;
 class ProxyServer;
@@ -112,6 +123,88 @@ GURL ReplaceUrlScheme(const GURL& in_url, std::string_view scheme) {
   replacements.SetSchemeStr(scheme);
   return in_url.ReplaceComponents(replacements);
 }
+
+#if BUILDFLAG(IS_WIN)
+// Tests if WinHTTP's system proxy resolver correctly resolves the given PAC URL
+// and returns a proxy string containing the expected proxy. This is used to
+// detect cases where WinHTTP ignores our custom PAC URL (e.g., on corporate
+// machines with a system-level PAC URL configured).
+
+bool WinHttpReturnsExpectedProxy(const GURL& pac_url,
+                                 const GURL& test_url,
+                                 std::string_view expected_proxy_host_port) {
+  // Open a WinHTTP session.
+  winhttp::ScopedHInternet session(
+      WinHttpOpen(L"WebSocketEndToEndTest", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
+  if (!session.is_valid()) {
+    LOG(WARNING) << "WinHttpOpen failed: " << GetLastError();
+    // WinHTTP API itself is broken — not a corporate PAC issue.
+    // Return true so the test runs and fails naturally, surfacing real issues.
+    return true;
+  }
+
+  // Store wide strings in local variables to avoid dangling pointers.
+  std::wstring pac_url_wide = base::ASCIIToWide(pac_url.spec());
+  std::wstring test_url_wide = base::ASCIIToWide(test_url.spec());
+
+  // Configure auto-proxy options with our PAC URL.
+  WINHTTP_AUTOPROXY_OPTIONS auto_proxy_options = {0};
+  auto_proxy_options.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL;
+  auto_proxy_options.lpszAutoConfigUrl = pac_url_wide.c_str();
+  auto_proxy_options.dwAutoDetectFlags = 0;
+  auto_proxy_options.fAutoLogonIfChallenged = FALSE;
+
+  WINHTTP_PROXY_INFO proxy_info = {0};
+  base::ScopedClosureRunner proxy_info_cleanup(base::BindOnce(
+      [](WINHTTP_PROXY_INFO* info) {
+        if (info->lpszProxy) {
+          GlobalFree(info->lpszProxy);
+        }
+        if (info->lpszProxyBypass) {
+          GlobalFree(info->lpszProxyBypass);
+        }
+      },
+      &proxy_info));
+
+  if (WinHttpGetProxyForUrl(session.get(), test_url_wide.c_str(),
+                            &auto_proxy_options, &proxy_info)) {
+    if (proxy_info.dwAccessType == WINHTTP_ACCESS_TYPE_NAMED_PROXY &&
+        proxy_info.lpszProxy != nullptr) {
+      std::string proxy_string = base::WideToASCII(proxy_info.lpszProxy);
+      bool match = proxy_string.contains(expected_proxy_host_port);
+      if (!match) {
+        LOG(WARNING) << "WinHTTP ignored custom PAC. Found: " << proxy_string;
+      }
+      return match;
+    }
+    LOG(WARNING) << "WinHTTP returned NO_PROXY or DIRECT instead of using "
+                 << "our PAC URL. dwAccessType=" << proxy_info.dwAccessType;
+    return false;
+  }
+
+  // WinHttpGetProxyForUrl failed.
+  DWORD error = GetLastError();
+  // Only skip for errors that indicate corporate PAC interference.
+  // For unexpected errors, return true so the test runs and fails
+  // naturally to surface real issues.
+  // On corp machines, WinHTTP may return success=FALSE with no error
+  // (ERROR_SUCCESS / 0) when it silently ignores our PAC URL.
+  if (error == ERROR_SUCCESS ||
+      error == ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT ||
+      error == ERROR_WINHTTP_BAD_AUTO_PROXY_SCRIPT ||
+      error == ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR ||
+      error == ERROR_WINHTTP_TIMEOUT) {
+    LOG(WARNING) << "WinHTTP PAC resolution failed (error " << error
+                 << ") — likely corporate PAC interference, skipping test";
+    return false;
+  }
+
+  LOG(WARNING) << "WinHttpGetProxyForUrl failed unexpectedly (error " << error
+               << ") — not skipping, let test fail naturally";
+  return true;
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 // An implementation of WebSocketEventInterface that waits for and records the
 // results of the connect.
@@ -341,6 +434,36 @@ void DelayedOnURLConnectedEventInterface::RunCallback(int net_err) {
   }
 }
 
+class ObserveConnectEventInterface : public ConnectTestingEventInterface {
+ public:
+  ObserveConnectEventInterface() = default;
+  ~ObserveConnectEventInterface() override = default;
+
+  [[nodiscard]] bool WaitForConnectResult() {
+    return connect_result_future_.Get();
+  }
+
+  int OnURLRequestConnected(net::URLRequest* request,
+                            const net::TransportInfo& info,
+                            net::CompletionOnceCallback callback) override {
+    connect_result_future_.SetValue(true);
+    return ConnectTestingEventInterface::OnURLRequestConnected(
+        request, info, std::move(callback));
+  }
+
+  void OnFailChannel(const std::string& message,
+                     int net_error,
+                     std::optional<int> response_code) override {
+    LOG(ERROR) << "Connection failed: " << message << " error: " << net_error;
+    connect_result_future_.SetValue(false);
+    ConnectTestingEventInterface::OnFailChannel(message, net_error,
+                                                response_code);
+  }
+
+ private:
+  base::test::TestFuture<bool> connect_result_future_;
+};
+
 // A subclass of TestNetworkDelegate that additionally implements the
 // OnResolveProxy callback and records the information passed to it.
 class TestProxyDelegateWithProxyInfo : public ProxyDelegate {
@@ -393,13 +516,6 @@ class TestProxyDelegateWithProxyInfo : public ProxyDelegate {
   void SetProxyResolutionService(
       ProxyResolutionService* proxy_resolution_service) override {}
 
-  bool AliasRequiresProxyOverride(
-      const std::string scheme,
-      const std::vector<std::string>& dns_aliases,
-      const net::NetworkAnonymizationKey& network_anonymization_key) override {
-    return false;
-  }
-
  private:
   ResolvedProxyInfo resolved_proxy_info_;
 };
@@ -426,8 +542,6 @@ class WebSocketEndToEndTest : public TestWithTaskEnvironment {
       InitialiseContext();
     }
     url::Origin origin = url::Origin::Create(GURL("http://localhost"));
-    net::SiteForCookies site_for_cookies =
-        net::SiteForCookies::FromOrigin(origin);
     IsolationInfo isolation_info =
         IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin,
                               origin, SiteForCookies::FromOrigin(origin));
@@ -435,8 +549,8 @@ class WebSocketEndToEndTest : public TestWithTaskEnvironment {
     channel_ = std::make_unique<WebSocketChannel>(std::move(event_interface),
                                                   context_.get());
     channel_->SendAddChannelRequest(
-        GURL(socket_url), sub_protocols_, origin, site_for_cookies,
-        StorageAccessApiStatus::kNone, isolation_info, HttpRequestHeaders(),
+        GURL(socket_url), sub_protocols_, origin, StorageAccessApiStatus::kNone,
+        isolation_info, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
         TRAFFIC_ANNOTATION_FOR_TESTS);
   }
 
@@ -689,9 +803,21 @@ TEST_F(WebSocketEndToEndTest, ProxyPacUsed) {
   proxy_server.EnableConnectProxy({HostPortPair::FromURL(ws_url)});
   ASSERT_TRUE(proxy_server.Start());
 
-  ProxyConfig proxy_config =
-      ProxyConfig::CreateFromCustomPacURL(proxy_pac_server.GetURL(base::StrCat(
-          {"/proxy.pac?proxy=", proxy_server.host_port_pair().ToString()})));
+  const auto pac_url = proxy_pac_server.GetURL(base::StrCat(
+      {"/proxy.pac?proxy=", proxy_server.host_port_pair().ToString()}));
+  const auto expected_proxy = proxy_server.host_port_pair().ToString();
+
+#if BUILDFLAG(IS_WIN)
+  // On Windows, verify that WinHTTP correctly resolves our PAC URL before
+  // running the test.
+  if (!WinHttpReturnsExpectedProxy(pac_url, ws_url, expected_proxy)) {
+    GTEST_SKIP() << "WinHTTP does not return expected proxy from test PAC URL. "
+                    "This can happen on machines with a system-level PAC URL "
+                    "configured (e.g., corporate machines).";
+  }
+#endif  // BUILDFLAG(IS_WIN)
+
+  ProxyConfig proxy_config = ProxyConfig::CreateFromCustomPacURL(pac_url);
   proxy_config.set_pac_mandatory(true);
   auto proxy_config_service = std::make_unique<ProxyConfigServiceFixed>(
       ProxyConfigWithAnnotation(proxy_config, TRAFFIC_ANNOTATION_FOR_TESTS));
@@ -749,7 +875,8 @@ TEST_F(WebSocketEndToEndTest, HstsHttpsToWebSocket) {
   GURL https_page =
       https_server.GetURL(test_server_hostname, "/hsts-headers.html");
   std::unique_ptr<URLRequest> request(context_->CreateRequest(
-      https_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
+      https_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS,
+      net::handles::kInvalidNetworkHandle));
   request->Start();
   delegate.RunUntilComplete();
   EXPECT_EQ(OK, delegate.request_status());
@@ -784,7 +911,8 @@ TEST_F(WebSocketEndToEndTest, HstsHttpsToWebSocketNotApplied) {
   TestDelegate delegate;
   GURL https_page = https_server.GetURL("/hsts-headers.html");
   std::unique_ptr<URLRequest> request(context_->CreateRequest(
-      https_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
+      https_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS,
+      net::handles::kInvalidNetworkHandle));
   request->Start();
   delegate.RunUntilComplete();
   EXPECT_EQ(OK, delegate.request_status());
@@ -818,7 +946,8 @@ TEST_F(WebSocketEndToEndTest, HstsWebSocketToHttps) {
       https_server.GetURL(test_server_hostname, "/simple.html"), "http");
   url::Origin http_origin = url::Origin::Create(http_page);
   std::unique_ptr<URLRequest> request(context_->CreateRequest(
-      http_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
+      http_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS,
+      net::handles::kInvalidNetworkHandle));
   request->set_isolation_info(IsolationInfo::Create(
       IsolationInfo::RequestType::kMainFrame, http_origin, http_origin,
       SiteForCookies::FromOrigin(http_origin)));
@@ -1108,6 +1237,79 @@ TEST_F(WebSocketEndToEndTest, WebSocketDelayedConnectionResetChannelTest) {
   Connect(echo_url, std::move(event_interface));
   event_interface_ptr->WaitForConnectedEvent();
   channel_.reset();
+}
+
+TEST_F(WebSocketEndToEndTest, PartitioningByNetworkAnonymizationKey) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+
+  // Set up mock host resolver to resolve our test domains to localhost.
+  auto host_resolver = std::make_unique<MockHostResolver>();
+  host_resolver->rules()->AddRule("a.test", "127.0.0.1");
+  host_resolver->rules()->AddRule("b.test", "127.0.0.1");
+  context_builder_->set_host_resolver(std::move(host_resolver));
+
+  test_server::EmbeddedTestServer embedded_test_server(
+      test_server::EmbeddedTestServer::TYPE_HTTP);
+  test_server::RegisterDefaultHandlers(&embedded_test_server);
+  test_server::InstallDefaultWebSocketHandlers(&embedded_test_server);
+  ASSERT_TRUE(embedded_test_server.Start());
+
+  InitialiseContext();
+
+  GURL hung_url =
+      test_server::GetWebSocketURL(embedded_test_server, "a.test", "/hung");
+  GURL echo_url = test_server::GetWebSocketURL(embedded_test_server, "b.test",
+                                               "/echo-with-no-extension");
+
+  // Connection 1: Hung connection with NAK 1
+  url::Origin origin1 = url::Origin::Create(GURL("http://a.test"));
+  IsolationInfo isolation_info1 =
+      IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin1,
+                            origin1, SiteForCookies::FromOrigin(origin1));
+
+  std::unique_ptr<ObserveConnectEventInterface> event_interface1 =
+      std::make_unique<ObserveConnectEventInterface>();
+  ObserveConnectEventInterface* event_interface1_ptr = event_interface1.get();
+
+  auto channel1 = std::make_unique<WebSocketChannel>(
+      std::move(event_interface1), context_.get());
+
+  channel1->SendAddChannelRequest(
+      hung_url, sub_protocols_, origin1, StorageAccessApiStatus::kNone,
+      isolation_info1, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
+      TRAFFIC_ANNOTATION_FOR_TESTS);
+
+  // Wait for Connection 1 to be connected (lock acquired).
+  ASSERT_TRUE(event_interface1_ptr->WaitForConnectResult());
+
+  // Connection 2: Success connection with NAK 2.
+  // It should succeed immediately because they are partitioned by NAK.
+  url::Origin origin2 = url::Origin::Create(GURL("http://b.test"));
+  IsolationInfo isolation_info2 =
+      IsolationInfo::Create(IsolationInfo::RequestType::kOther, origin2,
+                            origin2, SiteForCookies::FromOrigin(origin2));
+
+  std::unique_ptr<ConnectTestingEventInterface> event_interface2 =
+      std::make_unique<ConnectTestingEventInterface>();
+  ConnectTestingEventInterface* event_interface2_ptr = event_interface2.get();
+
+  auto channel2 = std::make_unique<WebSocketChannel>(
+      std::move(event_interface2), context_.get());
+
+  channel2->SendAddChannelRequest(
+      echo_url, sub_protocols_, origin2, StorageAccessApiStatus::kNone,
+      isolation_info2, HttpRequestHeaders(), WebSocketPriorityHint::kDefault,
+      TRAFFIC_ANNOTATION_FOR_TESTS);
+
+  // Wait for Connection 2 response. It should succeed.
+  event_interface2_ptr->WaitForResponse();
+  EXPECT_FALSE(event_interface2_ptr->failed());
+
+  // Clean up.
+  channel2.reset();
+  channel1.reset();
 }
 
 }  // namespace

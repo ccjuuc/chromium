@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.toolbar;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
@@ -24,9 +25,11 @@ import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import android.content.ComponentCallbacks;
 import android.content.res.Configuration;
+import android.os.Build;
 import android.view.View;
 import android.view.ViewGroup.MarginLayoutParams;
 
+import androidx.activity.BackEventCompat;
 import androidx.annotation.Nullable;
 import androidx.test.annotation.UiThreadTest;
 import androidx.test.core.app.ApplicationProvider;
@@ -50,14 +53,19 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.ImportantFormFactors;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.ui.KeyboardUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.back_press.BackPressManager;
+import org.chromium.chrome.browser.back_press.BackPressMetrics.PredictiveGestureNavPhase;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarSceneLayer;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarSceneLayerJni;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
@@ -67,9 +75,11 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
 import org.chromium.chrome.browser.fullscreen.BrowserControlsManagerSupplier;
+import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabbed_mode.TabbedRootUiCoordinator;
@@ -78,9 +88,7 @@ import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeUtil;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
 import org.chromium.chrome.browser.toolbar.top.tab_strip.TabStripTransitionCoordinator;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -92,9 +100,14 @@ import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxCapabilities;
+import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 /** Tests for toolbar manager behavior. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -163,38 +176,20 @@ public class ToolbarTest {
     @Test
     @MediumTest
     @UiThreadTest
-    @DisableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
-    @Restriction({DeviceFormFactor.PHONE})
-    public void testControlContainerTopMarginWhenBookmarkBarIsDisabledOnPhone() {
-        testControlContainerTopMargin(/* expectBookmarkBar= */ false);
-    }
-
-    @Test
-    @MediumTest
-    @UiThreadTest
-    @DisableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
-    @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
-    public void testControlContainerTopMarginWhenBookmarkBarIsDisabledOnTablet() {
-        testControlContainerTopMargin(/* expectBookmarkBar= */ false);
-    }
-
-    @Test
-    @MediumTest
-    @UiThreadTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
     @Restriction({DeviceFormFactor.PHONE})
     @DisabledTest
     // TODO(crbug.com/447525636): Re-enable tests.
-    public void testControlContainerTopMarginWhenBookmarkBarIsEnabledOnPhone() {
+    public void testControlContainerTopMarginOnPhone() {
         testControlContainerTopMargin(/* expectBookmarkBar= */ false);
     }
 
     @Test
     @MediumTest
     @UiThreadTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_BOOKMARK_BAR)
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
-    public void testControlContainerTopMarginWhenBookmarkBarIsEnabledOnTablet() {
+    public void testControlContainerTopMarginOnTablet() {
+        // Enable the bookmark bar setting for the test.
+        BookmarkBarUtils.setDevicePrefShowBookmarksBar(true, /* fromKeyboardShortcut= */ false);
         testControlContainerTopMargin(/* expectBookmarkBar= */ true);
     }
 
@@ -232,6 +227,7 @@ public class ToolbarTest {
         ToolbarManager toolbarManager = mActivity.getToolbarManager();
         ScrimManager scrimManager = mActivity.getRootUiCoordinatorForTesting().getScrimManager();
         scrimManager.disableAnimationForTesting(true);
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
 
         assertNull("The scrim should be null.", scrimManager.getViewForTesting());
         assertFalse(
@@ -239,7 +235,9 @@ public class ToolbarTest {
                 mActivity.getTabObscuringHandler().isTabContentObscured());
 
         ThreadUtils.runOnUiThreadBlocking(
-                () -> toolbarManager.setUrlBarFocus(true, OmniboxFocusReason.OMNIBOX_TAP));
+                () ->
+                        toolbarManager.beginFuseboxInput(
+                                new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP)));
 
         assertNotNull("The scrim should not be null.", scrimManager.getViewForTesting());
         CriteriaHelper.pollInstrumentationThread(
@@ -250,8 +248,7 @@ public class ToolbarTest {
                             Matchers.is(true));
                 });
 
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> toolbarManager.setUrlBarFocus(false, OmniboxFocusReason.OMNIBOX_TAP));
+        ThreadUtils.runOnUiThreadBlocking(toolbarManager::endFuseboxInput);
         assertNull("The scrim should be null.", scrimManager.getViewForTesting());
         assertFalse(
                 "All tabs should not currently be obscured.",
@@ -260,7 +257,7 @@ public class ToolbarTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1230091")
+    @DisabledTest(message = "https://crbug.com/40190191")
     public void testNtpNavigatesToErrorPageOnDisconnectedNetwork() {
         EmbeddedTestServer testServer =
                 EmbeddedTestServer.createAndStartServer(
@@ -298,6 +295,7 @@ public class ToolbarTest {
     @Test
     @MediumTest
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
+    @DisabledTest(message = "crbug.com/507245181")
     public void testNtpOmniboxFocusAndUnfocusWithHardwareKeyboardConnected() {
         // Simulate availability of a hardware keyboard.
         mActivity.getResources().getConfiguration().keyboard = Configuration.KEYBOARD_QWERTY;
@@ -339,6 +337,7 @@ public class ToolbarTest {
     @Test
     @MediumTest
     @Restriction(DeviceFormFactor.TABLET_OR_DESKTOP)
+    @DisabledTest(message = "crbug.com/522971839")
     public void testMaybeShowUrlBarFocusIfHardwareKeyboardAvailable_newTabFromTabSwitcher() {
         // Simulate availability of a hardware keyboard.
         mActivity.getResources().getConfiguration().keyboard = Configuration.KEYBOARD_QWERTY;
@@ -581,7 +580,7 @@ public class ToolbarTest {
 
         // 4. Enter the tab switcher.
         LayoutTestUtils.startShowingAndWaitForLayout(
-                mActivity.getLayoutManager(), LayoutType.TAB_SWITCHER, false);
+                mActivity.getLayoutManager(), LayoutType.HUB, false);
 
         // 5. Verify accessibility order is reset upon entering tab switcher.
         verifyAccessibilityOrderIsReset(toolbarPhone, null);
@@ -649,10 +648,9 @@ public class ToolbarTest {
 
     @Test
     @LargeTest
-    // Disable opening windows side-by-side because home button might not show up on small windows.
-    @EnableFeatures({
-        ChromeFeatureList.ROBUST_WINDOW_MANAGEMENT_EXPERIMENTAL + ":open_adjacently/false"
-    })
+    @EnableFeatures(
+            ChromeFeatureList.HOME_BUTTON_REMOVAL
+                    + ":set_default_to_false_on_homepage_on_desktop/false")
     @ImportantFormFactors(DeviceFormFactor.TABLET_OR_DESKTOP)
     public void testHomeButton_loadsNtpOnSameTab() {
         WebPageStation webPage = mPage;
@@ -678,9 +676,102 @@ public class ToolbarTest {
         incognitoNtp.homeButtonElement.checkPresent();
     }
 
+    @Test
+    @LargeTest
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+    @EnableFeatures({ChromeFeatureList.HOME_BUTTON_REMOVAL + ":keep_home_button_on_ntp/true"})
+    public void testHomeButtonVisibility_KeepOnNtp() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ChromeSharedPreferences.getInstance()
+                            .writeBoolean(ChromePreferenceKeys.HOMEPAGE_ENABLED, true);
+                });
+
+        // Verify that the home button is NOT visible on a regular web page.
+        onView(allOf(withId(R.id.home_button), isDescendantOfA(withId(R.id.toolbar))))
+                .check(matches(Matchers.not(isDisplayed())));
+
+        // Navigate to NTP.
+        RegularNewTabPageStation ntp = mPage.openNewTabFast();
+
+        // Verify that the home button IS visible on NTP.
+        onView(allOf(withId(R.id.home_button), isDescendantOfA(withId(R.id.toolbar))))
+                .check(matches(isDisplayed()));
+    }
+
+    @Test
+    @LargeTest
+    @DisableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR)
+    @EnableFeatures({
+        ChromeFeatureList.HOME_BUTTON_REMOVAL
+                + ":keep_home_button_on_ntp/true/set_default_to_false_on_homepage_on_desktop/false"
+    })
+    public void testHomeButtonVisibility_KeepOnNtp_Toggle() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    HomepageManager.getInstance().setPrefHomepageEnabled(false);
+                });
+
+        onView(allOf(withId(R.id.home_button), isDescendantOfA(withId(R.id.toolbar))))
+                .check(matches(Matchers.not(isDisplayed())));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    HomepageManager.getInstance().setPrefHomepageEnabled(true);
+                });
+
+        onView(allOf(withId(R.id.home_button), isDescendantOfA(withId(R.id.toolbar))))
+                .check(matches(Matchers.not(isDisplayed())));
+
+        RegularNewTabPageStation ntp = mPage.openNewTabFast();
+
+        onView(allOf(withId(R.id.home_button), isDescendantOfA(withId(R.id.toolbar))))
+                .check(matches(isDisplayed()));
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION})
+    @DisableIf.Build(sdk_is_less_than = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public void testBackPressCancelledOnTabNull() throws Exception {
+        EmbeddedTestServer testServer =
+                EmbeddedTestServer.createAndStartServer(
+                        ApplicationProvider.getApplicationContext());
+        String testUrl = testServer.getURL("/chrome/test/data/android/test.html");
+        mPage = mPage.loadWebPageProgrammatically(testUrl);
+
+        ToolbarManager toolbarManager = mActivity.getToolbarManager();
+        Assert.assertNotNull(toolbarManager);
+
+        // Start a gesture
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    BackPressManager manager = mActivity.getBackPressManagerForTesting();
+                    var backEvent = new BackEventCompat(0, 0, 0, BackEventCompat.EDGE_LEFT);
+                    manager.getCallback().handleOnBackStarted(backEvent);
+                });
+
+        HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.PredictiveGestureNavigation",
+                                PredictiveGestureNavPhase.CANCELLED)
+                        .build();
+
+        // Close all tabs to make current tab null
+        ChromeTabUtils.closeAllTabs(
+                InstrumentationRegistry.getInstrumentation(),
+                mActivity.getTabModelSelectorSupplier());
+
+        // Verify metric
+        watcher.assertExpected();
+
+        testServer.stopAndDestroyServer();
+    }
+
     private void setAccessibilityEnabled(boolean enabled) {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(enabled));
+                () -> AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(enabled));
     }
 
     private void setControlsPosition(@ControlsPosition int position) {

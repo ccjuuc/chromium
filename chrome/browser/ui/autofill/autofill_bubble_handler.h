@@ -9,6 +9,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "components/signin/public/base/signin_buildflags.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 
 namespace content {
 class WebContents;
@@ -26,6 +27,9 @@ class IbanBubbleController;
 class FilledCardInformationBubbleController;
 class VirtualCardEnrollBubbleController;
 class MandatoryReauthBubbleController;
+class OmniboxAutofillBubbleController;
+class PaymentsChurnedUsersBubbleController;
+class WalletReminderNoticeBubbleController;
 enum class IbanBubbleType;
 enum class MandatoryReauthBubbleType;
 
@@ -37,6 +41,8 @@ enum class MandatoryReauthBubbleType;
 // bubbles.
 class AutofillBubbleHandler {
  public:
+  DECLARE_USER_DATA(AutofillBubbleHandler);
+
   AutofillBubbleHandler() = default;
 
   AutofillBubbleHandler(const AutofillBubbleHandler&) = delete;
@@ -60,6 +66,10 @@ class AutofillBubbleHandler {
       bool is_user_gesture) = 0;
 
   virtual AutofillBubbleBase* ShowSaveAutofillAiDataBubble(
+      content::WebContents* web_contents,
+      AutofillAiImportDataController* controller) = 0;
+
+  virtual AutofillBubbleBase* ShowAutofillAiLocalSaveNotification(
       content::WebContents* web_contents,
       AutofillAiImportDataController* controller) = 0;
 
@@ -118,6 +128,24 @@ class AutofillBubbleHandler {
   virtual AutofillBubbleBase* ShowSaveIbanConfirmationBubble(
       content::WebContents* web_contents,
       IbanBubbleController* controller) = 0;
+
+  virtual AutofillBubbleBase* ShowOmniboxAutofillBubble(
+      content::WebContents* web_contents,
+      OmniboxAutofillBubbleController* controller) = 0;
+
+  virtual AutofillBubbleBase* ShowPaymentsChurnedUsersBubble(
+      content::WebContents* web_contents,
+      PaymentsChurnedUsersBubbleController* controller,
+      bool is_user_gesture) = 0;
+
+  virtual AutofillBubbleBase* ShowPaymentsChurnedUsersConfirmationBubble(
+      content::WebContents* web_contents,
+      PaymentsChurnedUsersBubbleController* controller) = 0;
+
+  virtual AutofillBubbleBase* ShowWalletReminderNoticeBubble(
+      content::WebContents* web_contents,
+      WalletReminderNoticeBubbleController* controller,
+      bool is_user_gesture) = 0;
 };
 
 }  // namespace autofill

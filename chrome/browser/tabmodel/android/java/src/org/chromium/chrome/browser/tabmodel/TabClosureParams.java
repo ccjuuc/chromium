@@ -43,8 +43,8 @@ public class TabClosureParams {
      * @return A TabClosureParams for the tab group or null if the group is not found.
      */
     public static TabClosureParams.@Nullable CloseTabsBuilder forCloseTabGroup(
-            TabGroupModelFilter filter, @Nullable Token tabGroupId) {
-        List<Tab> relatedTabs = filter.getTabsInGroup(tabGroupId);
+            TabModel tabModel, @Nullable Token tabGroupId) {
+        List<Tab> relatedTabs = tabModel.getTabsInGroup(tabGroupId);
         if (relatedTabs.isEmpty()) return null;
 
         TabClosureParams.CloseTabsBuilder builder =
@@ -197,6 +197,7 @@ public class TabClosureParams {
     public static class CloseAllTabsBuilder {
         private boolean mUponExit;
         private boolean mAllowUndo = true;
+        private boolean mSaveToTabRestoreService = true;
         private boolean mHideTabGroups;
         private @TabClosingSource int mTabClosingSource = TabClosingSource.UNKNOWN;
         private @Nullable Runnable mUndoRunnable;
@@ -212,6 +213,12 @@ public class TabClosureParams {
         /** Set whether to allow undo. Default is true. */
         public CloseAllTabsBuilder allowUndo(boolean allowUndo) {
             mAllowUndo = allowUndo;
+            return this;
+        }
+
+        /** Set whether to save closure to the tab restore service. Default is true. */
+        public CloseAllTabsBuilder saveToTabRestoreService(boolean saveToTabRestoreService) {
+            mSaveToTabRestoreService = saveToTabRestoreService;
             return this;
         }
 
@@ -242,7 +249,7 @@ public class TabClosureParams {
                     mUponExit,
                     mAllowUndo,
                     mHideTabGroups,
-                    /* saveToTabRestoreService= */ true,
+                    mSaveToTabRestoreService,
                     mTabClosingSource,
                     TabCloseType.ALL,
                     mUndoRunnable,
@@ -250,8 +257,7 @@ public class TabClosureParams {
         }
     }
 
-    // TODO(crbug.com/356445932): Consider package protecting these fields once TabGroupModelFilter
-    // is merged into TabModel.
+    // TODO(crbug.com/356445932): Consider package protecting these fields.
     public final @Nullable List<Tab> tabs;
     public final boolean isAllTabs;
     public final @Nullable Tab recommendedNextTab;

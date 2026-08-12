@@ -17,12 +17,15 @@ import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.Acces
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLEAR_ACCESSIBILITY_FOCUS;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLEAR_FOCUS;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_COLLAPSE;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_COPY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CUT;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_EXPAND;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_FOCUS;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_LONG_CLICK;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_NEXT_AT_MOVEMENT_GRANULARITY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_NEXT_HTML_ELEMENT;
-import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_PAGE_UP;
+import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_PAGE_DOWN;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_PASTE;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY;
 import static androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_PREVIOUS_HTML_ELEMENT;
@@ -51,6 +54,7 @@ import static org.chromium.content.browser.accessibility.AccessibilityContentShe
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellTestUtils.sTextMatcher;
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellTestUtils.sViewIdResourceNameMatcher;
 import static org.chromium.content.browser.accessibility.AccessibilityHistogramRecorder.ACCESSIBILITY_CREATE_ACCESSIBILITY_NODE_INFO_TOTAL_TIME;
+import static org.chromium.content.browser.accessibility.AccessibilityHistogramRecorder.ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_STALE_NODES;
 import static org.chromium.content.browser.accessibility.AccessibilityHistogramRecorder.ACCESSIBILITY_INLINE_TEXT_BOXES_BUNDLE;
 import static org.chromium.content.browser.accessibility.AccessibilityHistogramRecorder.ACCESSIBILITY_INLINE_TEXT_BOXES_COUNT;
 import static org.chromium.content.browser.accessibility.AccessibilityHistogramRecorder.ACCESSIBILITY_TIME_UNTIL_FIRST_ACCESSIBILITY_FOCUS;
@@ -85,7 +89,6 @@ import static org.chromium.content.browser.accessibility.AccessibilityNodeInfoBu
 import static org.chromium.content.browser.accessibility.WebContentsAccessibilityImpl.EXTRA_DATA_ABSOLUTE_DRAWING_ORDER_KEY;
 import static org.chromium.ui.accessibility.AccessibilityState.EVENT_TYPE_MASK_NONE;
 import static org.chromium.ui.accessibility.AccessibilityState.KNOWN_SCREEN_READER_SERVICE_IDS;
-import static org.chromium.ui.accessibility.AccessibilityState.StateIdentifierForTesting.EVENT_TYPE_MASK;
 
 import android.annotation.SuppressLint;
 import android.content.ClipData;
@@ -114,6 +117,7 @@ import android.view.View;
 
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 import androidx.test.filters.LargeTest;
+import androidx.test.filters.MediumTest;
 import androidx.test.filters.SmallTest;
 
 import com.google.common.truth.Expect;
@@ -123,6 +127,7 @@ import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
@@ -134,13 +139,15 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.TestAnimations;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.test.ContentJUnit4ClassRunner;
 import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.ui.accessibility.AccessibilityFeatures;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 
@@ -164,8 +171,18 @@ import java.util.concurrent.ExecutionException;
 @SuppressLint("VisibleForTests")
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
 @TestAnimations.EnableAnimations
+@EnableFeatures({
+    ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION,
+    // This flag is needed to set and read `isTextSelectable` property.
+    ContentFeatureList.ACCESSIBILITY_SET_SELECTABLE_ON_ALL_NODES_WITH_TEXT
+})
 public class WebContentsAccessibilityTest {
     private static final String TAG = "WebContentsAXTest";
+
+    // Extended selection offset types, defined in:
+    // androidx.view.accessibility.AccessibilityNodeInfoCompat
+    private static final int OFFSET_TYPE_TEXT = 0;
+    private static final int OFFSET_TYPE_CHILD = 1;
 
     // Test output error messages
     private static final String DISABLED_COMBOBOX_ERROR =
@@ -184,6 +201,8 @@ public class WebContentsAccessibilityTest {
     private static final String CACHING_ERROR = "AccessibilityNodeInfo cache has stale data";
     private static final String NODE_EXTRAS_UNCLIPPED_ERROR =
             "AccessibilityNodeInfo object should have unclipped bounds in extras bundle";
+    private static final String TEXT_TRAVERSAL_ERROR = "Expected to receive a traversal event";
+    private static final String TEXT_SELECTION_ERROR = "Expected to receive a selection text event";
     private static final String TEXT_SELECTION_AND_TRAVERSAL_ERROR =
             "Expected to receive both a traversal and selection text event";
     private static final String BOUNDING_BOX_ERROR =
@@ -200,6 +219,8 @@ public class WebContentsAccessibilityTest {
             "AccessibilityNodeInfo object does not have Bundle extra containing image data.";
     private static final String FOCUSING_ERROR =
             "Expected focus to be on a different node than it is.";
+    private static final String WINDOW_CONTENT_CHANGED_EVENT_ERROR =
+            "Did not receive enough WindowContentChanged events.";
 
     // Constant values for unit tests
     private static final int UNSUPPRESSED_EXPECTED_COUNT = 15;
@@ -223,6 +244,9 @@ public class WebContentsAccessibilityTest {
      */
     /* @Before */
     protected void setupTestWithHTML(String html) {
+        // To prevent flakes, suppress window content change events from page load.
+        WebContentsAccessibilityImpl.suppressLoadCompleteEventForTesting();
+
         mActivityTestRule.launchContentShellWithUrl(UrlUtils.encodeHtmlDataUri(html));
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         mActivityTestRule.setupTestFramework();
@@ -232,6 +256,9 @@ public class WebContentsAccessibilityTest {
     /* @Before */
     protected void setupTestWithHTMLForFormControlsMode(
             String html, boolean includeEventMaskByDefault) {
+        // To prevent flakes, suppress window content change events from page load.
+        WebContentsAccessibilityImpl.suppressLoadCompleteEventForTesting();
+
         mActivityTestRule.launchContentShellWithUrl(UrlUtils.encodeHtmlDataUri(html));
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         mActivityTestRule.setupTestFrameworkForFormControlsMode(includeEventMaskByDefault);
@@ -240,6 +267,9 @@ public class WebContentsAccessibilityTest {
 
     /* @Before */
     protected void setupTestWithHTMLForBasicMode(String html, boolean includeEventMaskByDefault) {
+        // To prevent flakes, suppress window content change events from page load.
+        WebContentsAccessibilityImpl.suppressLoadCompleteEventForTesting();
+
         mActivityTestRule.launchContentShellWithUrl(UrlUtils.encodeHtmlDataUri(html));
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         mActivityTestRule.setupTestFrameworkForBasicMode(includeEventMaskByDefault);
@@ -249,6 +279,9 @@ public class WebContentsAccessibilityTest {
     /* @Before */
     protected void setupTestWithHTMLForCompleteMode(
             String html, boolean includeEventMaskByDefault) {
+        // To prevent flakes, suppress window content change events from page load.
+        WebContentsAccessibilityImpl.suppressLoadCompleteEventForTesting();
+
         mActivityTestRule.launchContentShellWithUrl(UrlUtils.encodeHtmlDataUri(html));
         mActivityTestRule.waitForActiveShellToBeDoneLoading();
         mActivityTestRule.setupTestFrameworkForCompleteMode(includeEventMaskByDefault);
@@ -293,12 +326,46 @@ public class WebContentsAccessibilityTest {
         return mActivityTestRule.performActionOnUiThread(viewId, action.getId(), args, criteria);
     }
 
+    private boolean performActionOnUiThread(
+            int viewId,
+            AccessibilityNodeInfoCompat.AccessibilityActionCompat action,
+            Bundle args,
+            Callable<Boolean> criteria,
+            String errorMsg)
+            throws ExecutionException, Throwable {
+        return mActivityTestRule.performActionOnUiThread(
+                viewId, action.getId(), args, criteria, errorMsg);
+    }
+
     private void executeJS(String method) {
         mActivityTestRule.executeJS(method);
     }
 
     private void focusNode(int virtualViewId) throws Throwable {
         mActivityTestRule.focusNode(virtualViewId);
+    }
+
+    private boolean isNodeAccessibilityFocused(int virtualViewId) {
+        return createAccessibilityNodeInfo(virtualViewId).isAccessibilityFocused();
+    }
+
+    /**
+     * Set focus to the node and wait until a selection event is received.
+     *
+     * <p>When focus is changed, native eventually sends a selection update event to the focused
+     * node. Tests that rely on receiving one selection event may become flaky if this event is not
+     * received before they start waiting for their own event.
+     *
+     * @param virtualViewId int virtualViewId of the node to focus.
+     */
+    private void focusNodeAndWaitForSelection(int virtualViewId) throws Throwable {
+        mTestData.setReceivedSelectionEvent(false);
+        mActivityTestRule.focusNode(virtualViewId);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return mTestData.hasReceivedSelectionEvent();
+                },
+                NODE_TIMEOUT_ERROR);
     }
 
     public AccessibilityNodeInfoCompat createAccessibilityNodeInfo(int virtualViewId) {
@@ -309,6 +376,11 @@ public class WebContentsAccessibilityTest {
     private void clearNodeInfoCacheForGivenId(int virtualViewId) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mActivityTestRule.mWcax.clearNodeInfoCacheForGivenId(virtualViewId));
+    }
+
+    private Object[] getExtendedSelectionOnUiThread(int rootVvid) throws ExecutionException {
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> mActivityTestRule.mWcax.getExtendedSelection(rootVvid));
     }
 
     /**
@@ -339,6 +411,180 @@ public class WebContentsAccessibilityTest {
                 TEXT_SELECTION_AND_TRAVERSAL_ERROR);
     }
 
+    /**
+     * Helper method for sending text related events and confirming that the associated traversal
+     * event have been dispatched before continuing with test.
+     *
+     * @param viewId int virtualViewId of the text field
+     * @param action AccessibilityActionCompat action to perform
+     * @param args Bundle optional arguments
+     * @throws ExecutionException Error
+     */
+    private void performTextActionOnUiThreadAndWaitForTraversalEvent(
+            int viewId, AccessibilityNodeInfoCompat.AccessibilityActionCompat action, Bundle args)
+            throws ExecutionException {
+        // Reset values for traversal event.
+        mTestData.setReceivedTraversalEvent(false);
+
+        // Perform our text action.
+        mActivityTestRule.performActionOnUiThread(viewId, action.getId(), args);
+
+        // Poll until the event has been confirmed as received.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return mTestData.hasReceivedTraversalEvent();
+                },
+                TEXT_TRAVERSAL_ERROR);
+    }
+
+    /**
+     * Helper method for sending extended selection request and confirming that the associated text
+     * selection event have been dispatched before continuing with test.
+     *
+     * @param viewId int virtualViewId of the node to which selection is assigned.
+     * @param startNodeId int virtualViewId of the start node.
+     * @param startNodeOffset int offset of the start node.
+     * @param endNodeId int virtualViewId of the end node.
+     * @param endNodeOffset int offset of the end node.
+     * @return boolean return value of setting selection.
+     * @throws ExecutionException Error
+     */
+    private boolean selectTextOnUiThreadAndWaitForSelectionEvent(
+            int viewId,
+            int startNodeId,
+            int startNodeOffset,
+            int startOffsetType,
+            int endNodeId,
+            int endNodeOffset,
+            int endOffsetType)
+            throws ExecutionException {
+        // Reset value for selection event.
+        mTestData.setReceivedSelectionEvent(false);
+
+        boolean successful =
+                mActivityTestRule.setSelectionOnUiThread(
+                        viewId,
+                        startNodeId,
+                        startNodeOffset,
+                        startOffsetType,
+                        endNodeId,
+                        endNodeOffset,
+                        endOffsetType);
+
+        if (!successful) {
+            return false;
+        }
+        // Poll until selection event is received.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return mTestData.hasReceivedSelectionEvent();
+                },
+                TEXT_SELECTION_ERROR);
+        return true;
+    }
+
+    /**
+     * Helper method for clearing extended selection and confirming that the associated text
+     * selection event have been dispatched before continuing with test.
+     *
+     * @param viewId int virtualViewId of the node from which selection is cleared.
+     * @throws ExecutionException Error
+     */
+    private void clearSelectionOnUiThreadAndWaitForSelectionEvent(int viewId)
+            throws ExecutionException {
+        // Reset value for selection event.
+        mTestData.setReceivedSelectionEvent(false);
+
+        mActivityTestRule.clearSelectionOnUiThread(viewId);
+
+        // Poll until selection event is received.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return mTestData.hasReceivedSelectionEvent();
+                },
+                TEXT_SELECTION_ERROR);
+    }
+
+    private void setAndAssertExtendedSelection(
+            int rootVvid,
+            int startNodeId,
+            int startOffset,
+            int startOffsetType,
+            int endNodeId,
+            int endOffset,
+            int endOffsetType)
+            throws ExecutionException {
+        setAndAssertExtendedSelection(
+                rootVvid,
+                startNodeId,
+                startOffset,
+                startOffsetType,
+                endNodeId,
+                endOffset,
+                endOffsetType,
+                startNodeId,
+                startOffset,
+                startOffsetType,
+                endNodeId,
+                endOffset,
+                endOffsetType);
+    }
+
+    private void setAndAssertExtendedSelection(
+            int rootVvid,
+            int startNodeId,
+            int startOffset,
+            int startOffsetType,
+            int endNodeId,
+            int endOffset,
+            int endOffsetType,
+            int expectedStartNodeId,
+            int expectedStartOffset,
+            int expectedStartOffsetType,
+            int expectedEndNodeId,
+            int expectedEndOffset,
+            int expectedEndOffsetType)
+            throws ExecutionException {
+        Assert.assertEquals(
+                true,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        startNodeId,
+                        startOffset,
+                        startOffsetType,
+                        endNodeId,
+                        endOffset,
+                        endOffsetType));
+        mNodeInfo = createAccessibilityNodeInfo(rootVvid);
+
+        Object[] selection = getExtendedSelectionOnUiThread(rootVvid);
+        Assert.assertNotNull(PERFORM_ACTION_ERROR, selection);
+
+        AccessibilityNodeInfoCompat startNode =
+                (AccessibilityNodeInfoCompat)
+                        selection[WebContentsAccessibilityImpl.EXT_SEL_START_NODE];
+        int actualStartOffset = (int) selection[WebContentsAccessibilityImpl.EXT_SEL_START_OFFSET];
+        int actualStartOffsetType =
+                (int) selection[WebContentsAccessibilityImpl.EXT_SEL_START_OFFSET_TYPE];
+        AccessibilityNodeInfoCompat endNode =
+                (AccessibilityNodeInfoCompat)
+                        selection[WebContentsAccessibilityImpl.EXT_SEL_END_NODE];
+        int actualEndOffset = (int) selection[WebContentsAccessibilityImpl.EXT_SEL_END_OFFSET];
+        int actualEndOffsetType =
+                (int) selection[WebContentsAccessibilityImpl.EXT_SEL_END_OFFSET_TYPE];
+
+        Assert.assertNotNull(PERFORM_ACTION_ERROR, startNode);
+        Assert.assertEquals(
+                PERFORM_ACTION_ERROR, String.valueOf(expectedStartNodeId), startNode.getUniqueId());
+        Assert.assertEquals(PERFORM_ACTION_ERROR, expectedStartOffset, actualStartOffset);
+        Assert.assertEquals(PERFORM_ACTION_ERROR, expectedStartOffsetType, actualStartOffsetType);
+        Assert.assertNotNull(PERFORM_ACTION_ERROR, endNode);
+        Assert.assertEquals(
+                PERFORM_ACTION_ERROR, String.valueOf(expectedEndNodeId), endNode.getUniqueId());
+        Assert.assertEquals(PERFORM_ACTION_ERROR, expectedEndOffset, actualEndOffset);
+        Assert.assertEquals(PERFORM_ACTION_ERROR, expectedEndOffsetType, actualEndOffsetType);
+    }
+
     private void printAccessibilityNodeInfoTree() {
         Log.d(TAG, "AccessibilityNodeInfo tree:");
         String tree = mActivityTestRule.generateAccessibilityNodeInfoTree();
@@ -348,6 +594,30 @@ public class WebContentsAccessibilityTest {
     }
 
     // ------------------ Tests of WebContentsAccessibilityImpl methods ------------------ //
+
+    /** Test that setNativeHelperForTesting works. */
+    @Test
+    @SmallTest
+    public void testWCAIisWrappedByMock() throws Throwable {
+        setupTestWithHTML("<button id='button' onclick='this.focus()'>Button</button>");
+
+        executeJS("document.getElementById('button').click()");
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    try {
+                        org.mockito.Mockito.verify(
+                                        mActivityTestRule.getWebContentsAccessibility(),
+                                        Mockito.atLeastOnce())
+                                .sendAccessibilityEvent(
+                                        org.mockito.ArgumentMatchers.anyInt(),
+                                        org.mockito.ArgumentMatchers.anyInt());
+                        return true;
+                    } catch (Throwable e) {
+                        return false;
+                    }
+                });
+    }
 
     /** Ensure we throttle TYPE_WINDOW_CONTENT_CHANGED events for large tree updates. */
     @Test
@@ -422,22 +692,94 @@ public class WebContentsAccessibilityTest {
         Assert.assertTrue(lowThresholdError(eventCount), eventCount > UNSUPPRESSED_EXPECTED_COUNT);
     }
 
+    @Test
+    @SmallTest
+    @DisabledTest(message = "crbug.com/490529464")
+    @MinAndroidSdkLevel(Build.VERSION_CODES.TIRAMISU)
+    @EnableFeatures(ContentFeatures.ACCESSIBILITY_REQUEST_SCOPED_CONTENT_CHANGED_EVENTS)
+    public void testStaleNode_LabeledBy() throws Throwable {
+        // HTML from description.
+        String html =
+                """
+                <html>
+                  <body>
+                    <span id="label1">Add Item</span>
+                    <div id="info_panel_1">Status:OK</div>
+                    <div id="info_panel_2">Items: 5</div>
+                    <div id="info_panel_3">Ready</div>
+                    <div id="button1" role="button" aria-labelledby="label1"></div>
+                    <button id="trigger" onclick="update()"></button>
+                    <script>
+                      function update() {
+                        document.getElementById("label1").textContent = "Remove Item";
+                        document.getElementById("info_panel_1").textContent = "Status: Done";
+                        document.getElementById("info_panel_2").textContent = "Items: 6";
+                        document.getElementById("info_panel_3").textContent = "Processing...";
+                      }
+                    </script>
+                  </body>
+                </html>
+                """;
+        setupTestWithHTML(html);
+
+        // To avoid targeting root node
+        mActivityTestRule.mWcax.setMaxContentChangedEventsToFireForTesting(10);
+
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(ACCESSIBILITY_FAKE_CACHE_PERCENTAGE_STALE_NODES, 0)
+                        .build();
+
+        int label1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "label1");
+        int infoPanel1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "info_panel_1");
+        int infoPanel2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "info_panel_2");
+        int infoPanel3Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "info_panel_3");
+        int buttonVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "button1");
+        int triggerVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "trigger");
+
+        mNodeInfo = createAccessibilityNodeInfo(buttonVvid);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo);
+
+        performActionOnUiThread(triggerVvid, ACTION_CLICK, null);
+
+        // Poll until all events have been confirmed as received
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    // we expect to receive 5 events (1 for each node, even for button because of
+                    // its dependency to the label)
+                    return mTestData.getTypeWindowContentChangedCount() == 5;
+                },
+                WINDOW_CONTENT_CHANGED_EVENT_ERROR);
+
+        // Signal end of test to trigger validation.
+        mActivityTestRule.sendEndOfTestSignal();
+
+        // Record histograms.
+        mActivityTestRule.mWcax.forceRecordFakeCacheHistogramsForTesting();
+
+        // Assert histogram was recorded.
+        histogramWatcher.assertExpected();
+    }
+
     /** Test that UMA histograms are recorded for AX Mode Complete. */
     @Test
     @SmallTest
     public void testUMAHistograms_AXModeComplete() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForCompleteMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 true);
 
         // Set the relevant features and accessibility state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -463,16 +805,19 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_AXModeFormControls() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForFormControlsMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 true);
 
         // Set the relevant features and accessibility state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(true);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(true);
                 });
 
         var histogramWatcher =
@@ -499,16 +844,19 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_AXModeBasic() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForBasicMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 true);
 
         // Set the relevant features and screen reader state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -537,18 +885,20 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_AXModeComplete_100Percent() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForCompleteMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 false);
 
         // Set the relevant features and screen reader state, set event type masks to empty.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setStateMaskForTesting(
-                            EVENT_TYPE_MASK, EVENT_TYPE_MASK_NONE);
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_NONE);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -578,18 +928,20 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_AXModeFormControls_100Percent() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForFormControlsMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 false);
 
         // Set the relevant features and screen reader state, set event type masks to empty.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setStateMaskForTesting(
-                            EVENT_TYPE_MASK, EVENT_TYPE_MASK_NONE);
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_NONE);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(true);
                 });
 
         var histogramWatcher =
@@ -616,18 +968,20 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_AXModeBasic_100Percent() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTMLForBasicMode(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>",
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """,
                 false);
 
         // Set the relevant features and screen reader state, set event type masks to empty.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setStateMaskForTesting(
-                            EVENT_TYPE_MASK, EVENT_TYPE_MASK_NONE);
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setEventMaskForTesting(EVENT_TYPE_MASK_NONE);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -648,6 +1002,53 @@ public class WebContentsAccessibilityTest {
         histogramWatcher.assertExpected();
     }
 
+    @Test
+    @SmallTest
+    public void testAccessibilityFocusOnscreenDoesNotScroll() throws Throwable {
+        // Build a simple page with a button at the top (fully onscreen).
+        setupTestWithHTML("<button id='button'>Target Button</button>");
+
+        int buttonVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "button");
+
+        // Perform accessibility focus action.
+        performActionOnUiThread(buttonVvid, ACTION_ACCESSIBILITY_FOCUS, null);
+
+        mActivityTestRule.sendEndOfTestSignal();
+
+        String results = mActivityTestRule.getTrackerResults();
+        // We expect focus events but NO scroll events!
+        Assert.assertFalse(
+                "Focusing an onscreen node should not trigger scrolling:\n" + results,
+                results.contains("TYPE_VIEW_SCROLLED"));
+    }
+
+    @Test
+    @SmallTest
+    public void testAccessibilityFocusDoesNotScrollToTop() throws Throwable {
+        // Build a very tall page with a button at the bottom.
+        setupTestWithHTML(
+                """
+                <div style="height: 2000px;"></div>
+                <button id="button">Request Samsung Pay notification</button>
+                """);
+
+        int buttonVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "button");
+
+        // Initial scroll Y should be 0.
+        Assert.assertEquals(0f, mActivityTestRule.mWcax.getScrollYForTesting(), 0.01f);
+
+        // Perform accessibility focus action.
+        performActionOnUiThread(buttonVvid, ACTION_ACCESSIBILITY_FOCUS, null);
+
+        // Poll until scroll Y is updated. If it over-scrolls to top, scroll Y will remain 0.
+        // If it scrolls correctly to make visible, scroll Y will become > 0.
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    return mActivityTestRule.mWcax.getScrollYForTesting() > 0f;
+                },
+                "Expected view to scroll down to make button visible.");
+    }
+
     /**
      * Test that UMA histograms are recorded for the cache statistics, including the max number of
      * nodes stored in the cache, and percentage of requests retrieved from the cache.
@@ -659,9 +1060,11 @@ public class WebContentsAccessibilityTest {
     public void testUMAHistograms_Cache() throws Throwable {
         // Build a simple web page with a few nodes to traverse.
         setupTestWithHTML(
-                "<p>This is a test 1</p>\n"
-                        + "<p>This is a test 2</p>\n"
-                        + "<p>This is a test 3</p>");
+                """
+                <p>This is a test 1</p>
+                <p>This is a test 2</p>
+                <p>This is a test 3</p>
+                """);
 
         var histogramWatcher =
                 HistogramWatcher.newBuilder()
@@ -701,12 +1104,15 @@ public class WebContentsAccessibilityTest {
                         .build();
 
         // The test suite always initializes native, so mock a call to disable accessibility. We
-        // must update AccessibilityState to ensure the AXMode is propagated through to C++.
+        // must update AccessibilityStateTestHelper to ensure the AXMode is propagated through to
+        // C++.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mActivityTestRule.mWcax.forceAutoDisableAccessibilityForTesting();
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(false);
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
                 });
 
         // Assert that we record initial enabled time and that disabled was called once.
@@ -727,8 +1133,10 @@ public class WebContentsAccessibilityTest {
         // To re-enable native accessibility, we need to make a request from the framework.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
                     mActivityTestRule.mWcax.getAccessibilityNodeProvider();
                 });
 
@@ -750,8 +1158,10 @@ public class WebContentsAccessibilityTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mActivityTestRule.mWcax.forceAutoDisableAccessibilityForTesting();
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(false);
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            false);
                 });
         histogramWatcher.assertExpected();
 
@@ -769,8 +1179,10 @@ public class WebContentsAccessibilityTest {
                         .build();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            true);
                     mActivityTestRule.mWcax.getAccessibilityNodeProvider();
                 });
         histogramWatcher.assertExpected();
@@ -793,8 +1205,9 @@ public class WebContentsAccessibilityTest {
         // Set the relevant features and accessibility state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -831,8 +1244,9 @@ public class WebContentsAccessibilityTest {
         // Set the relevant features and accessibility state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsComplexUserInteractionServiceEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper
+                            .setIsComplexUserInteractionServiceEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
                 });
 
         var histogramWatcher =
@@ -872,9 +1286,10 @@ public class WebContentsAccessibilityTest {
         // Set the relevant features and accessibility state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsKnownScreenReaderEnabledForTesting(true);
-                    AccessibilityState.setIsOnlyPasswordManagersEnabledForTesting(false);
-                    AccessibilityState.setServiceIdsForTesting(KNOWN_SCREEN_READER_SERVICE_IDS);
+                    AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsOnlyPasswordManagersEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setServiceIdsForTesting(
+                            KNOWN_SCREEN_READER_SERVICE_IDS, true);
                 });
 
         var histogramWatcher =
@@ -987,7 +1402,7 @@ public class WebContentsAccessibilityTest {
         // Changing the accessibility state will refresh the native state.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsTextShowPasswordEnabledForTesting(true);
+                    AccessibilityStateTestHelper.setIsTextShowPasswordEnabledForTesting(true);
                 });
 
         Assert.assertFalse(mActivityTestRule.mWcax.hasAnyPendingTimersForTesting());
@@ -1003,10 +1418,12 @@ public class WebContentsAccessibilityTest {
     public void testNodeInfoCache_AccessibilityFocusAndActions() throws Throwable {
         // Build a simple web page with two paragraphs that can be focused.
         setupTestWithHTML(
-                "<div>\n"
-                        + "  <p>Example Paragraph 1</p>\n"
-                        + "  <p>Example Paragraph 2</p>\n"
-                        + "</div>");
+                """
+                <div>
+                  <p>Example Paragraph 1</p>
+                  <p>Example Paragraph 2</p>
+                </div>
+                """);
 
         // Define our root node and paragraph node IDs by looking for their text.
         int vvIdP1 = waitForNodeMatching(sTextMatcher, "Example Paragraph 1");
@@ -1087,15 +1504,15 @@ public class WebContentsAccessibilityTest {
     public void testNodeInfoCache_BoundingBoxUpdatesOnWindowResize() {
         // Build a simple web page with a flex and a will-change: transform button.
         setupTestWithHTML(
-                "<div style=\"display: flex; min-height: 90vh;\">\n"
-                        + " <div style=\"display: flex; flex-grow: 1; align-items: flex-end;\">\n"
-                        + "   <div>\n"
-                        + "     <button style=\"display: inline-flex; will-change: transform;\">\n"
-                        + "       Next\n"
-                        + "     </button>\n"
-                        + "   </div>\n"
-                        + " </div>\n"
-                        + "</div>");
+                """
+                <div style="display: flex; min-height: 90vh">
+                  <div style="display: flex; flex-grow: 1; align-items: flex-end">
+                    <div>
+                      <button style="display: inline-flex; will-change: transform">Next</button>
+                    </div>
+                  </div>
+                </div>
+                """);
 
         // Find the button and get the current bounding box.
         int buttonvvId = waitForNodeMatching(sClassNameMatcher, "android.widget.Button");
@@ -1131,11 +1548,13 @@ public class WebContentsAccessibilityTest {
     public void testEvent_Combobox_disabled() throws Throwable {
         // Build a simple web page with a disabled combobox.
         setupTestWithHTML(
-                "<select disabled>\n"
-                        + "  <option>Volvo</option>\n"
-                        + "  <option>Saab</option>\n"
-                        + "  <option>Mercedes</option>\n"
-                        + "</select>");
+                """
+                <select disabled>
+                  <option>Volvo</option>
+                  <option>Saab</option>
+                  <option>Mercedes</option>
+                </select>
+                """);
 
         // Find the disabled option node and set a delegate to track focus.
         int disabledNodeId = waitForNodeMatching(sTextMatcher, "Volvo");
@@ -1146,7 +1565,7 @@ public class WebContentsAccessibilityTest {
         mTestData.setReceivedAccessibilityFocusEvent(false);
 
         // Perform a click on the node.
-        performActionOnUiThread(disabledNodeId, ACTION_CLICK, null);
+        Assert.assertFalse(performActionOnUiThread(disabledNodeId, ACTION_CLICK, null));
 
         // Signal end of test
         mActivityTestRule.sendEndOfTestSignal();
@@ -1171,23 +1590,12 @@ public class WebContentsAccessibilityTest {
         mNodeInfo = createAccessibilityNodeInfo(editTextVirtualViewId);
         Assert.assertNotEquals(mNodeInfo, null);
 
-        focusNode(editTextVirtualViewId);
+        focusNodeAndWaitForSelection(editTextVirtualViewId);
 
         // Set granularity to CHARACTER, with selection FALSE
         Bundle args = new Bundle();
         args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
         args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
-
-        // Simulate swiping left (backward)
-        for (int i = 7; i > 0; i--) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
-            Assert.assertEquals(i, mTestData.getTraverseToIndex());
-            Assert.assertEquals(i - 1, mTestData.getSelectionFromIndex());
-            Assert.assertEquals(i - 1, mTestData.getSelectionToIndex());
-        }
 
         // Simulate swiping right (forward)
         for (int i = 0; i < 7; i++) {
@@ -1198,6 +1606,17 @@ public class WebContentsAccessibilityTest {
             Assert.assertEquals(i + 1, mTestData.getTraverseToIndex());
             Assert.assertEquals(i + 1, mTestData.getSelectionFromIndex());
             Assert.assertEquals(i + 1, mTestData.getSelectionToIndex());
+        }
+
+        // Simulate swiping left (backward)
+        for (int i = 7; i > 0; i--) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
+            Assert.assertEquals(i, mTestData.getTraverseToIndex());
+            Assert.assertEquals(i - 1, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(i - 1, mTestData.getSelectionToIndex());
         }
     }
 
@@ -1217,66 +1636,203 @@ public class WebContentsAccessibilityTest {
         mNodeInfo = createAccessibilityNodeInfo(editTextVirtualViewId);
         Assert.assertNotEquals(mNodeInfo, null);
 
-        focusNode(editTextVirtualViewId);
+        focusNodeAndWaitForSelection(editTextVirtualViewId);
 
         // Set granularity to CHARACTER, with selection TRUE
         Bundle args = new Bundle();
         args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
         args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, true);
 
-        // Simulate swiping left (backward) (adds to selections)
-        for (int i = 7; i > 0; i--) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
-            Assert.assertEquals(i, mTestData.getTraverseToIndex());
-            Assert.assertEquals(7, mTestData.getSelectionFromIndex());
-            Assert.assertEquals(i - 1, mTestData.getSelectionToIndex());
-        }
-
-        // Simulate swiping right (forward) (removes from selection)
+        // Simulate swiping right (forward) (adds to selections).
         for (int i = 0; i < 7; i++) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
 
             Assert.assertEquals(i, mTestData.getTraverseFromIndex());
             Assert.assertEquals(i + 1, mTestData.getTraverseToIndex());
-            Assert.assertEquals(7, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
             Assert.assertEquals(i + 1, mTestData.getSelectionToIndex());
         }
 
-        // Turn selection mode off and traverse to beginning so we can select forwards
-        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+        // Simulate swiping left (backward) (removes from selection).
         for (int i = 7; i > 0; i--) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
+            Assert.assertEquals(i, mTestData.getTraverseToIndex());
+            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(i - 1, mTestData.getSelectionToIndex());
+        }
+
+        // Turn selection mode off and traverse to the end so we can select backward.
+        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+        for (int i = 7; i > 0; i--) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
         }
 
         // Turn selection mode on
         args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, true);
 
-        // Simulate swiping right (forward) (adds to selection)
-        for (int i = 0; i < 7; i++) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(i, mTestData.getTraverseFromIndex());
-            Assert.assertEquals(i + 1, mTestData.getTraverseToIndex());
-            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
-            Assert.assertEquals(i + 1, mTestData.getSelectionToIndex());
-        }
-
-        // Simulate swiping left (backward) (removes from selections)
+        // Simulate swiping left (backward) (adds to selection)
         for (int i = 7; i > 0; i--) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
 
             Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
             Assert.assertEquals(i, mTestData.getTraverseToIndex());
-            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(7, mTestData.getSelectionFromIndex());
             Assert.assertEquals(i - 1, mTestData.getSelectionToIndex());
         }
+
+        // Simulate swiping right (forward) (removes from selections)
+        for (int i = 0; i < 7; i++) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(i, mTestData.getTraverseFromIndex());
+            Assert.assertEquals(i + 1, mTestData.getTraverseToIndex());
+            Assert.assertEquals(7, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(i + 1, mTestData.getSelectionToIndex());
+        }
+    }
+
+    /**
+     * Ensure traverse starts from the end of existing selection for an editable node. Note that
+     * traverse without existing selection is covered in other tests.
+     */
+    @Test
+    @SmallTest
+    public void testEvent_MovementInitialization_WithExistingSelection() throws Throwable {
+        // Build a simple web page with an input and the text "Testing"
+        setupTestWithHTML("<input id='id1' type=\"text\" value=\"Testing\"><p id='id2'>Text1</p>");
+
+        // Find a node in the accessibility tree with input type TYPE_CLASS_TEXT.
+        int vvid = waitForNodeMatching(sInputTypeMatcher, InputType.TYPE_CLASS_TEXT);
+        mNodeInfo = createAccessibilityNodeInfo(vvid);
+        Assert.assertNotEquals(mNodeInfo, null);
+
+        for (int forward = 0; forward < 2; forward++) {
+            // Select text and wait for result.
+            {
+                Bundle bundle = new Bundle();
+                bundle.putInt(ACTION_ARGUMENT_SELECTION_START_INT, 2);
+                bundle.putInt(ACTION_ARGUMENT_SELECTION_END_INT, 5);
+                Assert.assertTrue(
+                        performActionOnUiThread(
+                                vvid,
+                                ACTION_SET_SELECTION,
+                                bundle,
+                                () -> {
+                                    return createAccessibilityNodeInfo(vvid).getTextSelectionStart()
+                                                    == 2
+                                            && createAccessibilityNodeInfo(vvid)
+                                                            .getTextSelectionEnd()
+                                                    == 5;
+                                }));
+            }
+
+            focusNode(vvid);
+
+            Bundle args = new Bundle();
+            args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
+            args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+
+            if (forward == 1) {
+                Log.d(TAG, "Perforing action next at granularity.");
+                // Simulate swiping right (forward)
+                performTextActionOnUiThread(vvid, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+
+                // Expect traverse to be based on selection end position.
+                Assert.assertEquals(5, mTestData.getTraverseFromIndex());
+                Assert.assertEquals(6, mTestData.getTraverseToIndex());
+            } else {
+                Log.d(TAG, "Perforing action previous at granularity.");
+                // Simulate swiping left (backward)
+                performTextActionOnUiThread(vvid, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+                // Expect traverse to be based on selection end position.
+                Assert.assertEquals(4, mTestData.getTraverseFromIndex());
+                Assert.assertEquals(5, mTestData.getTraverseToIndex());
+            }
+
+            // Focus on another node to reset the status for the next case.
+            if (forward == 0) {
+                int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
+                Assert.assertNotEquals(createAccessibilityNodeInfo(vvid2), null);
+                focusNode(vvid2);
+            }
+        }
+    }
+
+    /**
+     * Ensure traverse events are properly indexed when navigating a non-editable node by character.
+     */
+    @Test
+    @LargeTest
+    public void testEvent_NonEditableNode_CharacterGranularity() throws Throwable {
+        setupTestWithHTML("<p id='id1'>Text1</p>");
+
+        // Find the text node.
+        int nodeVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
+        mNodeInfo = createAccessibilityNodeInfo(nodeVirtualViewId);
+        Assert.assertNotEquals(mNodeInfo, null);
+
+        focusNode(nodeVirtualViewId);
+
+        // Set granularity to CHARACTER.
+        Bundle args = new Bundle();
+        args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
+
+        for (int selection = 0; selection < 2; selection++) {
+            // Movement with granularity on non-editable nodes does not update selection, hene
+            // the argument should have no effect on the result.
+            args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, selection != 0);
+            for (int i = 0; i < 5; i++) {
+                performTextActionOnUiThreadAndWaitForTraversalEvent(
+                        nodeVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+
+                Assert.assertEquals(i, mTestData.getTraverseFromIndex());
+                Assert.assertEquals(i + 1, mTestData.getTraverseToIndex());
+            }
+
+            for (int i = 5; i > 0; i--) {
+                performTextActionOnUiThreadAndWaitForTraversalEvent(
+                        nodeVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+                Assert.assertEquals(i - 1, mTestData.getTraverseFromIndex());
+                Assert.assertEquals(i, mTestData.getTraverseToIndex());
+            }
+        }
+    }
+
+    /**
+     * Ensure traverse events are properly indexed when navigating backward on a non-editable node
+     * by character.
+     */
+    @Test
+    @LargeTest
+    public void testEvent_SelectionOFF_NonEditableNode_CharacterGranularity_BackwardInitilization()
+            throws Throwable {
+        setupTestWithHTML("<p id='id1'>Text1</p>");
+
+        // Find the text node.
+        int nodeVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
+        mNodeInfo = createAccessibilityNodeInfo(nodeVirtualViewId);
+        Assert.assertNotEquals(mNodeInfo, null);
+
+        focusNode(nodeVirtualViewId);
+
+        // Set granularity to CHARACTER.
+        Bundle args = new Bundle();
+        args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
+        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+
+        performTextActionOnUiThreadAndWaitForTraversalEvent(
+                nodeVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+        Assert.assertEquals(4, mTestData.getTraverseFromIndex());
+        Assert.assertEquals(5, mTestData.getTraverseToIndex());
     }
 
     /**
@@ -1296,7 +1852,7 @@ public class WebContentsAccessibilityTest {
         mNodeInfo = createAccessibilityNodeInfo(editTextVirtualViewId);
         Assert.assertNotEquals(mNodeInfo, null);
 
-        focusNode(editTextVirtualViewId);
+        focusNodeAndWaitForSelection(editTextVirtualViewId);
 
         // Set granularity to WORD, with selection FALSE
         Bundle args = new Bundle();
@@ -1305,17 +1861,6 @@ public class WebContentsAccessibilityTest {
 
         int[] wordStarts = new int[] {0, 8, 13, 20, 23};
         int[] wordEnds = new int[] {7, 12, 19, 22, 30};
-
-        // Simulate swiping left (backward) through all 5 words, check indices along the way
-        for (int i = 4; i >= 0; --i) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
-            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
-            Assert.assertEquals(wordStarts[i], mTestData.getSelectionFromIndex());
-            Assert.assertEquals(wordStarts[i], mTestData.getSelectionToIndex());
-        }
 
         // Simulate swiping right (forward) through all 5 words, check indices along the way
         for (int i = 0; i < 5; ++i) {
@@ -1326,6 +1871,17 @@ public class WebContentsAccessibilityTest {
             Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
             Assert.assertEquals(wordEnds[i], mTestData.getSelectionFromIndex());
             Assert.assertEquals(wordEnds[i], mTestData.getSelectionToIndex());
+        }
+
+        // Simulate swiping left (backward) through all 5 words, check indices along the way
+        for (int i = 4; i >= 0; --i) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
+            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
+            Assert.assertEquals(wordStarts[i], mTestData.getSelectionFromIndex());
+            Assert.assertEquals(wordStarts[i], mTestData.getSelectionToIndex());
         }
     }
 
@@ -1345,7 +1901,7 @@ public class WebContentsAccessibilityTest {
         mNodeInfo = createAccessibilityNodeInfo(editTextVirtualViewId);
         Assert.assertNotEquals(mNodeInfo, null);
 
-        focusNode(editTextVirtualViewId);
+        focusNodeAndWaitForSelection(editTextVirtualViewId);
 
         // Set granularity to WORD, with selection TRUE
         Bundle args = new Bundle();
@@ -1355,58 +1911,58 @@ public class WebContentsAccessibilityTest {
         int[] wordStarts = new int[] {0, 8, 13, 20, 23};
         int[] wordEnds = new int[] {7, 12, 19, 22, 30};
 
-        // Simulate swiping left (backward, adds to selection) through all 5 words, check indices
-        for (int i = 4; i >= 0; --i) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
-            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
-            Assert.assertEquals(30, mTestData.getSelectionFromIndex());
-            Assert.assertEquals(wordStarts[i], mTestData.getSelectionToIndex());
-        }
-
-        // Simulate swiping right (forward, removes selection) through all 5 words, check indices
+        // Simulate swiping right (forward, adds to selection) through all 5 words, check indices.
         for (int i = 0; i < 5; ++i) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
 
             Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
             Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
-            Assert.assertEquals(30, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
             Assert.assertEquals(wordEnds[i], mTestData.getSelectionToIndex());
         }
 
-        // Turn selection mode off and traverse to beginning so we can select forwards
-        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
-        for (int i = 4; i >= 0; i--) {
+        // Simulate swiping left (backward, removes selection) through all 5 words, check indices.
+        for (int i = 4; i >= 0; --i) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
+            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
+            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(wordStarts[i], mTestData.getSelectionToIndex());
+        }
+
+        // Turn selection mode off and traverse to the end so we can select backwards.
+        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+        for (int i = 0; i < 5; ++i) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
         }
 
         // Turn selection mode on
         args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, true);
 
-        // Simulate swiping right (forward) (adds to selection)
-        for (int i = 0; i < 5; ++i) {
-            performTextActionOnUiThread(
-                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
-
-            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
-            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
-            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
-            Assert.assertEquals(wordEnds[i], mTestData.getSelectionToIndex());
-        }
-
-        // Simulate swiping left (backward) (removes from selections)
+        // Simulate swiping left (backward) (adds to selection).
         for (int i = 4; i >= 0; --i) {
             performTextActionOnUiThread(
                     editTextVirtualViewId, ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY, args);
 
             Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
             Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
-            Assert.assertEquals(0, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(30, mTestData.getSelectionFromIndex());
             Assert.assertEquals(wordStarts[i], mTestData.getSelectionToIndex());
+        }
+
+        // Simulate swiping right (forward) (removes from selections).
+        for (int i = 0; i < 5; ++i) {
+            performTextActionOnUiThread(
+                    editTextVirtualViewId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+
+            Assert.assertEquals(wordStarts[i], mTestData.getTraverseFromIndex());
+            Assert.assertEquals(wordEnds[i], mTestData.getTraverseToIndex());
+            Assert.assertEquals(30, mTestData.getSelectionFromIndex());
+            Assert.assertEquals(wordEnds[i], mTestData.getSelectionToIndex());
         }
     }
 
@@ -1426,7 +1982,7 @@ public class WebContentsAccessibilityTest {
         mNodeInfo = createAccessibilityNodeInfo(contentEditableVirtualViewId);
         Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo);
 
-        focusNode(contentEditableVirtualViewId);
+        focusNodeAndWaitForSelection(contentEditableVirtualViewId);
 
         // Send an end of test signal to ensure test page has fully started since some bots
         // seem to flake when the page has not fully loaded before testing begins.
@@ -1493,18 +2049,20 @@ public class WebContentsAccessibilityTest {
     }
 
     /**
-     * Ensures paragraph navigation actions correctly navigate to the next paragraph and stop at
-     * the last paragraph.
+     * Ensures paragraph navigation actions correctly navigate to the next paragraph and stop at the
+     * last paragraph.
      */
     @Test
     @SmallTest
     public void testEvent_paragraphGranularity() throws Throwable {
         setupTestWithHTML(
-                "<p>Paragraph 1</p>"
-                        + "<p>Paragraph 2</p>"
-                        + "<p>Paragraph 3</p>"
-                        + "<p>Paragraph 4</p>"
-                        + "<p>Paragraph 5</p>");
+                """
+                <p>Paragraph 1</p>
+                <p>Paragraph 2</p>
+                <p>Paragraph 3</p>
+                <p>Paragraph 4</p>
+                <p>Paragraph 5</p>
+                """);
 
         // Set granularity to PARAGRAPH
         Bundle args = new Bundle();
@@ -1535,6 +2093,62 @@ public class WebContentsAccessibilityTest {
         Assert.assertTrue(lastParagraphNodeInfo.isAccessibilityFocused());
     }
 
+    /** Tests initializeMovementAtGranularityOnSetAccessibilityFocus with selection offset types. */
+    @Test
+    @SmallTest
+    public void testEvent_initializeMovementAtGranularity_withExtendedSelectionOffsetTypes()
+            throws Throwable {
+        // Build a simple web page with a focused container node containing children.
+        setupTestWithHTML(
+                """
+                <p id="text">Some text</p>
+                <img id="image" src="pipe.jpg" alt="pipe" />
+                """);
+
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int textVvId = waitForNodeMatching(sViewIdResourceNameMatcher, "text");
+        int imageVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "image");
+
+        // 1. Set extended selection on the text node.
+        setAndAssertExtendedSelection(
+                rootVvid, textVvId, 1, OFFSET_TYPE_TEXT, textVvId, 3, OFFSET_TYPE_TEXT);
+
+        // Perform focus action to trigger initializeMovementAtGranularityOnSetAccessibilityFocus.
+        performActionOnUiThread(textVvId, ACTION_ACCESSIBILITY_FOCUS, null);
+
+        // Setup GRANULARITY args.
+        Bundle args = new Bundle();
+        args.putInt(ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, MOVEMENT_GRANULARITY_CHARACTER);
+        args.putBoolean(ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+
+        // Swipe forward. Since selection was on the text node, start index should be initialized to
+        // 3.
+        performTextActionOnUiThreadAndWaitForTraversalEvent(
+                textVvId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+        Assert.assertEquals(3, mTestData.getTraverseFromIndex());
+        Assert.assertEquals(4, mTestData.getTraverseToIndex());
+
+        // Focus away to clean up.
+        performActionOnUiThread(rootVvid, ACTION_ACCESSIBILITY_FOCUS, null);
+
+        // 2. Set selection on the image node with child offset types.
+        setAndAssertExtendedSelection(
+                rootVvid, rootVvid, 1, OFFSET_TYPE_CHILD, rootVvid, 2, OFFSET_TYPE_CHILD);
+
+        // Focus on the text node.
+        performActionOnUiThread(textVvId, ACTION_ACCESSIBILITY_FOCUS, null);
+
+        // Clear previous event stats.
+        mTestData.setReceivedTraversalEvent(false);
+
+        // Swipe forward on the text node. Since the selection focus node was the image node,
+        // it shouldn't initialize the granularity index (which remains -1).
+        performTextActionOnUiThreadAndWaitForTraversalEvent(
+                textVvId, ACTION_NEXT_AT_MOVEMENT_GRANULARITY, args);
+        Assert.assertEquals(0, mTestData.getTraverseFromIndex());
+        Assert.assertEquals(1, mTestData.getTraverseToIndex());
+    }
+
     // ------------------ Tests of AccessibilityNodeInfo objects ------------------ //
     // These tests are included here rather than in WebContentsAccessibilityTreeTest because
     // they test the AccessibilityNodeInfo over a series of actions/events, rather than statically.
@@ -1558,7 +2172,9 @@ public class WebContentsAccessibilityTest {
         // Perform a series of slider increments and check results.
         for (int i = 1; i <= 10; i++) {
             // Increment our slider using action, and poll until we receive the scroll event.
-            performActionOnUiThread(inputNodeVirtualViewId, ACTION_SCROLL_FORWARD, new Bundle());
+            Assert.assertTrue(
+                    performActionOnUiThread(
+                            inputNodeVirtualViewId, ACTION_SCROLL_FORWARD, new Bundle()));
             CriteriaHelper.pollUiThread(
                     () -> mTestData.hasReceivedEvent(), INPUT_RANGE_EVENT_ERROR);
 
@@ -1568,7 +2184,7 @@ public class WebContentsAccessibilityTest {
             // Confirm slider values.
             Assert.assertEquals(
                     INPUT_RANGE_VALUE_MISMATCH,
-                    20 + (2 * i),
+                    20 + i,
                     mNodeInfo.getRangeInfo().getCurrent(),
                     0.001);
 
@@ -1579,7 +2195,9 @@ public class WebContentsAccessibilityTest {
         // Perform a series of slider decrements and check results.
         for (int i = 1; i <= 20; i++) {
             // Decrement our slider using action, and poll until we receive the scroll event.
-            performActionOnUiThread(inputNodeVirtualViewId, ACTION_SCROLL_BACKWARD, new Bundle());
+            Assert.assertTrue(
+                    performActionOnUiThread(
+                            inputNodeVirtualViewId, ACTION_SCROLL_BACKWARD, new Bundle()));
             CriteriaHelper.pollUiThread(
                     () -> mTestData.hasReceivedEvent(), INPUT_RANGE_EVENT_ERROR);
 
@@ -1589,7 +2207,7 @@ public class WebContentsAccessibilityTest {
             // Confirm slider values.
             Assert.assertEquals(
                     INPUT_RANGE_VALUE_MISMATCH,
-                    40 - (2 * i),
+                    30 - i,
                     mNodeInfo.getRangeInfo().getCurrent(),
                     0.001);
 
@@ -1659,7 +2277,7 @@ public class WebContentsAccessibilityTest {
     @SmallTest
     public void testNodeInfo_inputTypeRange_withRequiredMin() throws Throwable {
         // Create a basic input range, and find the associated |AccessibilityNodeInfo| object.
-        setupTestWithHTML("<input type='range' min='0' max='1000' step='1'>");
+        setupTestWithHTML("<input type='range' min='0' max='1000' step='50'>");
 
         // Find the input range and assert we have the correct node.
         int inputNodeVirtualViewId = waitForNodeMatching(sRangeInfoMatcher, "");
@@ -1717,6 +2335,7 @@ public class WebContentsAccessibilityTest {
      */
     @Test
     @SmallTest
+    @DisabledTest(message = "crbug.com/521495846")
     public void testNodeInfo_spellingError() throws Throwable {
         setupTestWithHTML("<input type='text' value='one wordd has an error'>");
 
@@ -2012,9 +2631,12 @@ public class WebContentsAccessibilityTest {
     public void testNodeInfo_extraDataAdded_imageData() {
         // Setup test page with example image (20px red square).
         setupTestWithHTML(
-                "<img id='id1' src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEU"
-                        + "gAAABQAAAAUCAIAAAAC64paAAAAGElEQVR4AWOsZiAfDLDmUc2jmk"
-                        + "c1j2oGADloCbFEqE6LAAAAAElFTkSuQmCC\"/>");
+                """
+                <img
+                  id="id1"
+                  src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAAGElEQVR4AWOsZiAfDLDmUc2jmkc1j2oGADloCbFEqE6LAAAAAElFTkSuQmCC"
+                />
+                """);
 
         // Find the image node.
         int imageViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
@@ -2162,20 +2784,37 @@ public class WebContentsAccessibilityTest {
                 },
                 NODE_TIMEOUT_ERROR);
 
-        // Focus the scroll container.
-        focusNode(vvIdDiv);
+        // Find the root WebView node.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
 
-        // Send a scroll event so some elements will be offscreen and poll for results.
-        performActionOnUiThread(
-                vvIdDiv,
-                ACTION_PAGE_UP,
-                null,
+        // Request accessibility focus on the root WebView node directly to prevent auto-focus
+        // scrollback loops.
+        performActionOnUiThread(rootVvid, ACTION_ACCESSIBILITY_FOCUS, null);
+        CriteriaHelper.pollUiThreadLongTimeout(
+                "Timed out waiting for root WebView to acquire accessibility focus.",
                 () -> {
-                    return createAccessibilityNodeInfo(vvIdDiv).getExtras() != null
-                            && createAccessibilityNodeInfo(vvIdDiv)
-                                            .getExtras()
-                                            .getInt(EXTRAS_KEY_UNCLIPPED_TOP, 1)
-                                    < 0;
+                    Criteria.checkThat(
+                            createAccessibilityNodeInfo(rootVvid).isAccessibilityFocused(),
+                            Matchers.is(true));
+                });
+
+        // Send scroll down events on the root WebView so the container moves offscreen at the top.
+        // We perform two page downs to ensure it scrolls past the container's initial top offset
+        // even on high-density emulators with small CSS viewports.
+        performActionOnUiThread(rootVvid, ACTION_PAGE_DOWN, null);
+        CriteriaHelper.pollUiThread(
+                () -> mActivityTestRule.mWcax.getScrollYForTesting() > 0f,
+                "Timed out waiting for first page scroll to complete.");
+
+        performActionOnUiThread(rootVvid, ACTION_PAGE_DOWN, null);
+        CriteriaHelper.pollUiThreadLongTimeout(
+                "Timed out waiting for container to scroll offscreen.",
+                () -> {
+                    AccessibilityNodeInfoCompat info = createAccessibilityNodeInfo(vvIdDiv);
+                    Criteria.checkThat(
+                            info.getExtras() != null
+                                    && info.getExtras().getInt(EXTRAS_KEY_UNCLIPPED_TOP, 1) < 0,
+                            Matchers.is(true));
                 });
 
         // Signal end of test.
@@ -2203,11 +2842,12 @@ public class WebContentsAccessibilityTest {
     public void testNodeInfo_Actions_OverflowHidden() throws Throwable {
         // Build a simple web page with a div and overflow:hidden
         setupTestWithHTML(
-                "<div role='group' title='1234' "
-                        + "style='overflow:hidden; width: 200px; height:50px'>\n"
-                        + "  <p>Example Paragraph 1</p>\n"
-                        + "  <p>Example Paragraph 2</p>\n"
-                        + "</div>");
+                """
+                <div role="group" title="1234" style="overflow: hidden; width: 200px; height: 50px">
+                  <p>Example Paragraph 1</p>
+                  <p>Example Paragraph 2</p>
+                </div>
+                """);
 
         // Define our root node and paragraph node IDs by looking for their text.
         int vvIdDiv = waitForNodeMatching(sTextMatcher, "1234");
@@ -2248,10 +2888,12 @@ public class WebContentsAccessibilityTest {
     public void testNodeInfo_Actions_OverflowScroll() throws Throwable {
         // Build a simple web page with a div and overflow:scroll
         setupTestWithHTML(
-                "<div id='div1' title='1234' style='overflow:scroll; width: 200px; height:50px'>\n"
-                        + "  <p id='p1' tabindex=0>Example Paragraph 1</p>\n"
-                        + "  <p id='p2' tabindex=0>Example Paragraph 2</p>\n"
-                        + "</div>");
+                """
+                <div id="div1" title="1234" style="overflow: scroll; width: 200px; height: 50px">
+                  <p id="p1" tabindex="0">Example Paragraph 1</p>
+                  <p id="p2" tabindex="0">Example Paragraph 2</p>
+                </div>
+                """);
 
         // Define our root node and paragraph node IDs by looking for their ids.
         int vvIdDiv = waitForNodeMatching(sViewIdResourceNameMatcher, "div1");
@@ -2300,37 +2942,231 @@ public class WebContentsAccessibilityTest {
         int vvIdText1 = waitForNodeMatching(sTextMatcher, "1");
         int vvIdText2 = waitForNodeMatching(sTextMatcher, "6");
         int vvIdText3 = waitForNodeMatching(sTextMatcher, "9");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvIdText1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvIdText2);
-        AccessibilityNodeInfoCompat mNodeInfo3 = createAccessibilityNodeInfo(vvIdText3);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo3);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvIdText1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvIdText2);
+        AccessibilityNodeInfoCompat nodeInfo3 = createAccessibilityNodeInfo(vvIdText3);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo3);
 
         // Signal end of test.
         mActivityTestRule.sendEndOfTestSignal();
 
         // Check visibility of each element, all text nodes should be visible.
-        Assert.assertTrue(VISIBLE_TO_USER_ERROR, mNodeInfo1.isVisibleToUser());
-        Assert.assertTrue(VISIBLE_TO_USER_ERROR, mNodeInfo2.isVisibleToUser());
-        Assert.assertTrue(VISIBLE_TO_USER_ERROR, mNodeInfo3.isVisibleToUser());
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, nodeInfo1.isVisibleToUser());
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, nodeInfo2.isVisibleToUser());
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, nodeInfo3.isVisibleToUser());
 
         // Check for offscreen Bundle extra, the second two texts should contain.
         Assert.assertFalse(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
-                mNodeInfo1.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
+                nodeInfo1.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
         Assert.assertTrue(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
-                mNodeInfo2.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
+                nodeInfo2.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
         Assert.assertTrue(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
-                mNodeInfo2.getExtras().getBoolean(EXTRAS_KEY_OFFSCREEN));
+                nodeInfo2.getExtras().getBoolean(EXTRAS_KEY_OFFSCREEN));
         Assert.assertTrue(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
-                mNodeInfo3.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
+                nodeInfo3.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
         Assert.assertTrue(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
-                mNodeInfo3.getExtras().getBoolean(EXTRAS_KEY_OFFSCREEN));
+                nodeInfo3.getExtras().getBoolean(EXTRAS_KEY_OFFSCREEN));
+    }
+
+    /** Test that occluded views are not visible to accessibility. */
+    @Test
+    @SmallTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_HANDLE_OCCLUDING_VIEWS)
+    public void testOcclusion() throws Throwable {
+        setupTestWithHTML(
+                """
+                <button id="button1"
+                    style="position: absolute; left: 10px; top: 10px; width: 100px; height: 50px">
+                  Button 1
+                </button>
+                <button id="button2"
+                    style="position: absolute; left: 10px; top: 70px; width: 100px; height: 50px">
+                  Button 2
+                </button>
+                """);
+
+        // Find the buttons.
+        int button1VvId = waitForNodeMatching(sViewIdResourceNameMatcher, "button1");
+        int button2VvId = waitForNodeMatching(sViewIdResourceNameMatcher, "button2");
+
+        AccessibilityNodeInfoCompat button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        AccessibilityNodeInfoCompat button2NodeInfo = createAccessibilityNodeInfo(button2VvId);
+
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, button1NodeInfo);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, button2NodeInfo);
+
+        // Both buttons should be visible initially.
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button2NodeInfo.isVisibleToUser());
+
+        // Get bounds for button 1 to occlude it.
+        Rect button1Bounds = new Rect();
+        button1NodeInfo.getBoundsInScreen(button1Bounds);
+
+        int occluderViewId = 1;
+
+        // Occlude button 1.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.setOccludingRect(button1Bounds, occluderViewId);
+                });
+
+        // Button 1 should now be invisible, button 2 should still be visible.
+        button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        button2NodeInfo = createAccessibilityNodeInfo(button2VvId);
+        Assert.assertFalse(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button2NodeInfo.isVisibleToUser());
+
+        // Remove occlusion.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.setOccludingRect(null, occluderViewId);
+                });
+
+        // Button 1 should be visible again.
+        button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
+    }
+
+    /** Test that handleHover does not fire events for occluded nodes. */
+    @Test
+    @SmallTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_HANDLE_OCCLUDING_VIEWS)
+    public void testHandleHover_occludedNode() throws Throwable {
+        setupTestWithHTML(
+                """
+                <button id="button1"
+                    style="position: absolute; left: 10px; top: 10px; width: 100px; height: 50px">
+                  Button 1
+                </button>
+                """);
+
+        int button1VvId = waitForNodeMatching(sViewIdResourceNameMatcher, "button1");
+        AccessibilityNodeInfoCompat button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, button1NodeInfo);
+
+        // Get bounds for button 1 to occlude it.
+        Rect button1Bounds = new Rect();
+        button1NodeInfo.getBoundsInScreen(button1Bounds);
+
+        int occluderViewId = 1;
+
+        // Set hover state to true so handleHover can process events.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.onHoverEventNoRenderer(
+                            android.view.MotionEvent.obtain(
+                                    0, 0, android.view.MotionEvent.ACTION_HOVER_ENTER, 0, 0, 0));
+                });
+
+        // Test hover when not occluded.
+        mTestData.setReceivedHoverEvent(false);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.handleHover(button1VvId);
+                });
+        CriteriaHelper.pollUiThread(() -> mTestData.hasReceivedHoverEvent());
+
+        // Clear events.
+        mTestData.setReceivedHoverEvent(false);
+
+        // Hover another node to clear mLastHoverId
+        int rootId = mActivityTestRule.mWcax.getRootIdForTesting();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.handleHover(rootId);
+                });
+        CriteriaHelper.pollUiThread(() -> mTestData.hasReceivedHoverEvent());
+        mTestData.setReceivedHoverEvent(false);
+
+        // Occlude button 1.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.setOccludingRect(button1Bounds, occluderViewId);
+                });
+
+        // Hover button 1 again.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.handleHover(button1VvId);
+                });
+
+        // We shouldn't receive any event.
+        // Check for a short time to verify no event was received.
+        long startTime = System.currentTimeMillis();
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            "Hover event should not be received for an occluded node",
+                            mTestData.hasReceivedHoverEvent(),
+                            Matchers.is(false));
+                    return System.currentTimeMillis() - startTime >= 3000;
+                });
+    }
+
+    /** Test that partially occluded views are handled correctly by accessibility. */
+    @Test
+    @SmallTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_HANDLE_OCCLUDING_VIEWS)
+    public void testPartialOcclusion() throws Throwable {
+        setupTestWithHTML(
+                """
+                <button id="button1"
+                    style="position: absolute; left: 10px; top: 10px; width: 100px; height: 50px">
+                  Button 1
+                </button>
+                """);
+
+        int button1VvId = waitForNodeMatching(sViewIdResourceNameMatcher, "button1");
+        AccessibilityNodeInfoCompat button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, button1NodeInfo);
+
+        // Button should be visible initially.
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
+
+        // Get bounds for button 1 to occlude it.
+        Rect button1Bounds = new Rect();
+        button1NodeInfo.getBoundsInScreen(button1Bounds);
+
+        // Occlude 50% of the button.
+        Rect partialOcclusionRect = new Rect(button1Bounds);
+        partialOcclusionRect.right = partialOcclusionRect.left + (partialOcclusionRect.width() / 2);
+
+        int minorOccluderViewId = 1;
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivityTestRule.mWcax.setOccludingRect(
+                            partialOcclusionRect, minorOccluderViewId);
+                });
+
+        // Button 1 should still be visible.
+        button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        Assert.assertTrue(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
+
+        // Now occlude 80% of the button.
+        Rect largeOcclusionRect = new Rect(button1Bounds);
+        largeOcclusionRect.right =
+                largeOcclusionRect.left + (int) (largeOcclusionRect.width() * 0.8);
+
+        int majorOccluderViewId = 1;
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // First remove the old rect, then add the new one.
+                    mActivityTestRule.mWcax.setOccludingRect(null, minorOccluderViewId);
+                    mActivityTestRule.mWcax.setOccludingRect(
+                            largeOcclusionRect, majorOccluderViewId);
+                });
+
+        // Button 1 should now be invisible.
+        button1NodeInfo = createAccessibilityNodeInfo(button1VvId);
+        Assert.assertFalse(VISIBLE_TO_USER_ERROR, button1NodeInfo.isVisibleToUser());
     }
 
     // ------------------ Tests of performAction method ------------------ //
@@ -2413,6 +3249,603 @@ public class WebContentsAccessibilityTest {
         // Verify results.
         Assert.assertEquals(PERFORM_ACTION_ERROR, 2, mNodeInfo.getTextSelectionStart());
         Assert.assertEquals(PERFORM_ACTION_ERROR, 5, mNodeInfo.getTextSelectionEnd());
+    }
+
+    /** Test extended selection on non-editable text nodes. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_nonEditable() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="paragraph1">Paragraph1</p>
+                <p id="paragraph2">Paragraph2</p>
+                <img id="image" src="pipe.jpg" alt="pipe" />
+                <button id="button">Button</button>
+                <p id="paragraph3">Paragraph3</p>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraph1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph1");
+        int paragraph2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph2");
+        int imageVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "image");
+        int buttonVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "button");
+        int paragraph3Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph3");
+
+        int imageIndex = 2;
+
+        // Select all.
+        setAndAssertExtendedSelection(
+                rootVvid, paragraph1Vvid, 0, OFFSET_TYPE_TEXT, paragraph3Vvid, 5, OFFSET_TYPE_TEXT);
+
+        // Some of the first two paragraphs.
+        setAndAssertExtendedSelection(
+                rootVvid, paragraph1Vvid, 1, OFFSET_TYPE_TEXT, paragraph2Vvid, 3, OFFSET_TYPE_TEXT);
+
+        // Reverse selection.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                paragraph3Vvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                paragraph1Vvid,
+                10,
+                OFFSET_TYPE_TEXT);
+
+        // Image, using child offset.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                imageIndex,
+                OFFSET_TYPE_CHILD,
+                rootVvid,
+                imageIndex + 1,
+                OFFSET_TYPE_CHILD,
+                rootVvid,
+                imageIndex,
+                OFFSET_TYPE_CHILD,
+                buttonVvid,
+                0,
+                OFFSET_TYPE_TEXT);
+
+        // Image, using text offset. Text offset 0 points to the beginning of the non-text nodes.
+        setAndAssertExtendedSelection(
+                rootVvid, imageVvid, 0, OFFSET_TYPE_TEXT, buttonVvid, 0, OFFSET_TYPE_TEXT);
+
+        // Button, although it is a non-text node, selecting by text offset as it
+        // is a leaf.
+        setAndAssertExtendedSelection(
+                rootVvid, buttonVvid, 1, OFFSET_TYPE_TEXT, buttonVvid, 3, OFFSET_TYPE_TEXT);
+
+        // Invalid id, root.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        -1,
+                        paragraph1Vvid,
+                        0,
+                        OFFSET_TYPE_TEXT,
+                        paragraph1Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT));
+
+        // Invalid id, selection start.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid, -1, 0, OFFSET_TYPE_TEXT, paragraph1Vvid, 1, OFFSET_TYPE_TEXT));
+
+        // Invalid id, selection end.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid, paragraph1Vvid, 0, OFFSET_TYPE_TEXT, -1, 1, OFFSET_TYPE_TEXT));
+    }
+
+    /** Test extended selection on editable node. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_simpleEditable() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="paragraph1">Paragraph1</p>
+                <input id='input1' type='text' value='EditableText'>
+                <input id='input2' type='text' value='EditableText'>
+                <p id="paragraph2">Paragraph2</p>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraph1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph1");
+        int input1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "input1");
+        int input2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "input2");
+        int paragraph2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph2");
+
+        int input1Index = 1;
+        int input2Index = 2;
+
+        // Selection inside one editable with text offset.
+        setAndAssertExtendedSelection(
+                rootVvid, input1Vvid, 1, OFFSET_TYPE_TEXT, input1Vvid, 5, OFFSET_TYPE_TEXT);
+
+        // Selection including some editables.
+        setAndAssertExtendedSelection(
+                rootVvid, paragraph1Vvid, 1, OFFSET_TYPE_TEXT, paragraph2Vvid, 5, OFFSET_TYPE_TEXT);
+
+        // Selection from the beginning of one editable to the end of another.
+        // Since the editables are fully selected, this is supported, but selection positions are
+        // specified using child offset.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                input1Index,
+                OFFSET_TYPE_CHILD,
+                rootVvid,
+                input2Index + 1,
+                OFFSET_TYPE_CHILD,
+                input1Vvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                paragraph2Vvid,
+                0,
+                OFFSET_TYPE_TEXT);
+
+        // Selection from non-editable to the beginning of the editable.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                paragraph1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                rootVvid,
+                input1Index,
+                OFFSET_TYPE_CHILD,
+                paragraph1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                input1Vvid,
+                0,
+                OFFSET_TYPE_TEXT);
+
+        // Selection from non-editable to the end of the editable.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                paragraph1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                rootVvid,
+                input2Index + 1,
+                OFFSET_TYPE_CHILD,
+                paragraph1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                paragraph2Vvid,
+                0,
+                OFFSET_TYPE_TEXT);
+
+        // Selection from the beginning of the editable to to a non-editable.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                input1Index,
+                OFFSET_TYPE_CHILD,
+                paragraph2Vvid,
+                10,
+                OFFSET_TYPE_TEXT,
+                input1Vvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                paragraph2Vvid,
+                10,
+                OFFSET_TYPE_TEXT);
+
+        // Selection from inside one editable to inside another.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        input1Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT,
+                        input2Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT));
+
+        // Selection from inside one editable to a non-editable.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        input1Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT,
+                        paragraph2Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT));
+
+        // Selection from a non-editable to inside one editable.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        paragraph1Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT,
+                        input2Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT));
+    }
+
+    /** Test that clearing extended selection clears the selection on the root node. */
+    @Test
+    @SmallTest
+    public void testPerformAction_clearExtendedSelection() throws Throwable {
+        setupTestWithHTML("<p id='p1'>Paragraph1</p>");
+
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraph1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "p1");
+
+        // Select.
+        setAndAssertExtendedSelection(
+                rootVvid, paragraph1Vvid, 1, OFFSET_TYPE_TEXT, paragraph1Vvid, 5, OFFSET_TYPE_TEXT);
+
+        // Clear selection.
+        clearSelectionOnUiThreadAndWaitForSelectionEvent(rootVvid);
+
+        // Expected result: root#getSelection should be null
+        Object[] selection = getExtendedSelectionOnUiThread(rootVvid);
+        Assert.assertNull(selection);
+    }
+
+    /** Test extended selection cross frames. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_crossFrame() throws Throwable {
+        setupTestWithHTML(
+                """
+                  <p id='p1'>Paragraph 1</p>
+                  <iframe id='f1' srcdoc="<p id='p2'>Paragraph 2</p>"></iframe>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int p1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "p1");
+        int p2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "p2");
+
+        // Selection across frame boundaries.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid, p1Vvid, 1, OFFSET_TYPE_TEXT, p2Vvid, 5, OFFSET_TYPE_TEXT));
+    }
+
+    /** Test extended selection on contenteditable. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_contentEditable() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id='p1'>Paragraph 1</p>
+                <div id="contenteditable1" contenteditable>
+                  <p>Some Text</p>
+                  <img src="pipe.jpg" alt="pipe" />
+                </div>
+                <p id='p2'>Paragraph 2</p>
+                <div id="contenteditable2" contenteditable>
+                  <p>Some Text</p>
+                </div>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int p1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "p1");
+        int contenteditable1Vvid =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "contenteditable1");
+        int p2Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "p2");
+        int contenteditable2Vvid =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "contenteditable2");
+
+        int contenteditable1Index = 1;
+
+        // From the beginning of a contenteditable to somewhere inside it.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                contenteditable1Vvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                contenteditable1Vvid,
+                5,
+                OFFSET_TYPE_TEXT);
+
+        // From outside a contenteditable to inside it.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        p1Vvid,
+                        1,
+                        OFFSET_TYPE_TEXT,
+                        contenteditable1Vvid,
+                        5,
+                        OFFSET_TYPE_TEXT));
+
+        // From outside a contenteditable to the beginning of it.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                p1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                rootVvid,
+                contenteditable1Index,
+                OFFSET_TYPE_CHILD,
+                p1Vvid,
+                1,
+                OFFSET_TYPE_TEXT,
+                contenteditable1Vvid,
+                0,
+                OFFSET_TYPE_TEXT);
+
+        // From the end of a contenteditable to outside it.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                contenteditable1Index + 1,
+                OFFSET_TYPE_CHILD,
+                p2Vvid,
+                5,
+                OFFSET_TYPE_TEXT,
+                p2Vvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                p2Vvid,
+                5,
+                OFFSET_TYPE_TEXT);
+
+        // From inside one contenteditable to inside another.
+        Assert.assertEquals(
+                false,
+                selectTextOnUiThreadAndWaitForSelectionEvent(
+                        rootVvid,
+                        contenteditable1Vvid,
+                        5,
+                        OFFSET_TYPE_TEXT,
+                        contenteditable2Vvid,
+                        5,
+                        OFFSET_TYPE_TEXT));
+    }
+
+    /** Test extended selection on a multiline paragraph. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_multilineParagraph() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="paragraph">
+                  Text1
+                  <br>
+                  Text2
+                  <br>
+                  Text3
+                </p>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraphVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph");
+
+        setAndAssertExtendedSelection(
+                rootVvid, paragraphVvid, 0, OFFSET_TYPE_TEXT, paragraphVvid, 4, OFFSET_TYPE_TEXT);
+
+        setAndAssertExtendedSelection(
+                rootVvid, paragraphVvid, 4, OFFSET_TYPE_TEXT, paragraphVvid, 14, OFFSET_TYPE_TEXT);
+    }
+
+    /** Test extended selection on a button with aria label. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_buttonWithAriaLabel() throws Throwable {
+        setupTestWithHTML(
+                """
+                <button id="button" aria-label="Button">Button!</button>
+                """);
+
+        // Find node.
+        int buttonVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "button");
+
+        AccessibilityNodeInfoCompat buttonNode = createAccessibilityNodeInfo(buttonVvid);
+
+        // TODO(crbug.com/500206508): This should be true. Fix the issue and add the rest
+        // of the test to select and verify the button text using text offsets.
+        Assert.assertFalse(buttonNode.isTextSelectable());
+    }
+
+    /** Test extended selection at the beginning and end of an anchor (e.g. image). */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_atBeginningAndEndOfAnchor()
+            throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="paragraph1">Paragraph1</p>
+                <img id="image" src="pipe.jpg" alt="" tabIndex="0" />
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraph1Vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "paragraph1");
+        int imageVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "image");
+
+        int imageIndex = 1;
+
+        // Select before and after the image using root child offsets.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                imageIndex,
+                OFFSET_TYPE_CHILD,
+                rootVvid,
+                imageIndex + 1,
+                OFFSET_TYPE_CHILD);
+    }
+
+    /**
+     * Test extended selection action behavior when crossing form control/widget boundaries and when
+     * staying within the main document context.
+     */
+    @Test
+    @LargeTest
+    public void testPerformAction_setExtendedSelection_widgetBoundaries() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p>Paragraph1</p>
+                <select id="select">
+                  <option>Apple</option>
+                </select>
+                <p>Paragraph2</p>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int paragraph1Vvid = waitForNodeMatching(sTextMatcher, "Paragraph1");
+        int selectVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "select");
+        int optionVvid = waitForNodeMatching(sTextMatcher, "Apple");
+        int paragraph2Vvid = waitForNodeMatching(sTextMatcher, "Paragraph2");
+
+        // Selecting from outside the dropdown to inside the dropdown (crossing widget boundary into
+        // collapsed select MenuListOption) should fail.
+        Assert.assertFalse(
+                mActivityTestRule.setSelectionOnUiThread(
+                        rootVvid,
+                        paragraph1Vvid,
+                        0,
+                        OFFSET_TYPE_TEXT,
+                        optionVvid,
+                        5,
+                        OFFSET_TYPE_TEXT));
+
+        // It should also fail when using child offsets.
+        Assert.assertFalse(
+                mActivityTestRule.setSelectionOnUiThread(
+                        rootVvid,
+                        paragraph1Vvid,
+                        0,
+                        OFFSET_TYPE_TEXT,
+                        selectVvid,
+                        1,
+                        OFFSET_TYPE_CHILD));
+
+        // Selecting from before the dropdown to after the dropdown (staying in the light DOM main
+        // document) should succeed.
+        setAndAssertExtendedSelection(
+                rootVvid, paragraph1Vvid, 0, OFFSET_TYPE_TEXT, paragraph2Vvid, 0, OFFSET_TYPE_TEXT);
+    }
+
+    /** Test extended selection action behavior when crossing video boundaries. */
+    @Test
+    @LargeTest
+    public void testPerformAction_setExtendedSelection_videoBoundaries() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="heading">Header</p>
+                <video id="video" aria-label="Video"></video>
+                """);
+
+        // Find nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int headingVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "heading");
+        int videoVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "video");
+
+        // Selection inside video text should succeed.
+        mActivityTestRule.setSelectionOnUiThread(
+                rootVvid, videoVvid, 0, OFFSET_TYPE_TEXT, videoVvid, 3, OFFSET_TYPE_TEXT);
+
+        // Selection from outside the video to after it should succeed.
+        mActivityTestRule.setSelectionOnUiThread(
+                rootVvid, headingVvid, 0, OFFSET_TYPE_TEXT, rootVvid, 2, OFFSET_TYPE_CHILD);
+
+        // Select from outside the video to inside it should fail because selecting into the video
+        // element crosses widget/UA shadow DOM boundaries and is blocked in IsSelectionValid.
+        Assert.assertFalse(
+                mActivityTestRule.setSelectionOnUiThread(
+                        rootVvid,
+                        headingVvid,
+                        0,
+                        OFFSET_TYPE_TEXT,
+                        videoVvid,
+                        3,
+                        OFFSET_TYPE_TEXT));
+    }
+
+    /** Test extended selection when inline text boxes. */
+    @Test
+    @LargeTest
+    public void testPerformAction_setExtendedSelection_inlineTextBoxes() throws Throwable {
+        setupTestWithHTML("<p>Line one<br /><br />Line two</p>");
+
+        // Find HTML nodes.
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int pVvid = waitForNodeMatching(sTextMatcher, "Line one\n\nLine two");
+
+        // To optimize memory and performance, inline text boxes (Role::kInlineTextBox) are loaded
+        // asynchronously only for the node that currently has accessibility focus.
+        focusNode(pVvid);
+
+        setAndAssertExtendedSelection(
+                rootVvid, pVvid, 0, OFFSET_TYPE_TEXT, pVvid, 8, OFFSET_TYPE_TEXT);
+    }
+
+    /** Test extended selection with a leaf node at the end of root to trigger at_end_of_anchor. */
+    @Test
+    @SmallTest
+    @DisabledTest(message = "crbug.com/511014514")
+    public void testPerformAction_setExtendedSelection_atEndOfEmptyTextAnchor() throws Throwable {
+        setupTestWithHTML(
+                """
+                <p id="paragraph1">Paragraph1</p>
+                <div id="empty" tabIndex="0"></div>
+                """);
+
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int emptyVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "empty");
+
+        // Select after the empty div using root child offsets.
+        // Since the empty div is a TextView, selection is set as text offset, which
+        // does not differentiate between beginning and end of the text on Android.
+        // TODO(crbug.com/443078007): Either with current API or the new API, fix this
+        // to point to the very end of the document.
+        setAndAssertExtendedSelection(
+                rootVvid,
+                rootVvid,
+                2,
+                OFFSET_TYPE_CHILD,
+                rootVvid,
+                2,
+                OFFSET_TYPE_CHILD,
+                emptyVvid,
+                0,
+                OFFSET_TYPE_TEXT,
+                emptyVvid,
+                0,
+                OFFSET_TYPE_TEXT);
+    }
+
+    /** Test extended selection with a contentEditable and a non-text-selectable image. */
+    @Test
+    @SmallTest
+    public void testPerformAction_setExtendedSelection_editableWithImage() throws Throwable {
+        setupTestWithHTML(
+                """
+                <div id="editable" contenteditable>
+                  <img id="image" src="pipe.jpg" alt="" tabIndex="0" />
+                </div>
+                """);
+
+        int rootVvid = waitForNodeMatching(sClassNameMatcher, "android.webkit.WebView");
+        int editableVvid = waitForNodeMatching(sViewIdResourceNameMatcher, "editable");
+        waitForNodeMatching(sViewIdResourceNameMatcher, "image");
+
+        // Select the image within the contentEditable.
+        setAndAssertExtendedSelection(
+                rootVvid, editableVvid, 0, OFFSET_TYPE_CHILD, editableVvid, 1, OFFSET_TYPE_CHILD);
     }
 
     /** Test that the performAction for ACTION_CUT works properly with accessibility. */
@@ -2674,6 +4107,80 @@ public class WebContentsAccessibilityTest {
         Assert.assertEquals(PERFORM_ACTION_ERROR, 50, mNodeInfo.getRangeInfo().getMax(), 0.01);
     }
 
+    /**
+     * Test that performAction for ACTION_EXPAND and ACTION_COLLAPSE on ARIA treeitems, especially
+     * when the item is also an anchor link.
+     */
+    @Test
+    @SmallTest
+    public void testPerformAction_ariaExpandCollapseTreeItem() throws Throwable {
+        // Because AXObject::RequestExpandAction (in Blink) maps kExpand to ArrowRight and
+        // kCollapse to ArrowLeft for ARIA treeitems, we use an onkeydown listener to
+        // mock the response.
+        setupTestWithHTML(
+                "<ul role='tree'>"
+                        + "  <li role='none'>"
+                        + "    <a id='node' role='treeitem' aria-expanded='false'"
+                        + "       href='#placeholder' onkeydown='expandLogic(event)'>"
+                        + "      Expandable Link"
+                        + "    </a>"
+                        + "  </li>"
+                        + "</ul>"
+                        + "<script>"
+                        + "  function expandLogic(e) {"
+                        + "    if (e.key === 'ArrowRight') {"
+                        + "      e.preventDefault();"
+                        + "      e.target.setAttribute('aria-expanded', 'true');"
+                        + "    } else if (e.key === 'ArrowLeft') {"
+                        + "      e.preventDefault();"
+                        + "      e.target.setAttribute('aria-expanded', 'false');"
+                        + "    }"
+                        + "  }"
+                        + "</script>");
+
+        // Find the treeitem node.
+        int vvid = waitForNodeMatching(sViewIdResourceNameMatcher, "node");
+        mNodeInfo = createAccessibilityNodeInfo(vvid);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo);
+
+        // Verify initial state is collapsed.
+        Assert.assertTrue(
+                "Node should initially have ACTION_EXPAND",
+                mNodeInfo.getActionList().contains(ACTION_EXPAND));
+        Assert.assertFalse(
+                "Node should NOT have ACTION_COLLAPSE",
+                mNodeInfo.getActionList().contains(ACTION_COLLAPSE));
+        // 1. Send ACTION_EXPAND and poll for the state to update.
+        Assert.assertTrue(
+                performActionOnUiThread(
+                        vvid,
+                        ACTION_EXPAND,
+                        null,
+                        () ->
+                                createAccessibilityNodeInfo(vvid)
+                                        .getActionList()
+                                        .contains(ACTION_COLLAPSE)));
+        mNodeInfo = createAccessibilityNodeInfo(vvid);
+        Assert.assertTrue(
+                PERFORM_ACTION_ERROR, mNodeInfo.getActionList().contains(ACTION_COLLAPSE));
+        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo.getActionList().contains(ACTION_EXPAND));
+        // 2. Send ACTION_COLLAPSE and poll for the state to update.
+        Assert.assertTrue(
+                performActionOnUiThread(
+                        vvid,
+                        ACTION_COLLAPSE,
+                        null,
+                        () ->
+                                createAccessibilityNodeInfo(vvid)
+                                        .getActionList()
+                                        .contains(ACTION_EXPAND)));
+
+        mNodeInfo = createAccessibilityNodeInfo(vvid);
+        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo.getActionList().contains(ACTION_EXPAND));
+        Assert.assertFalse(
+                PERFORM_ACTION_ERROR, mNodeInfo.getActionList().contains(ACTION_COLLAPSE));
+    }
+
     /** Test that the performAction for ACTION_SET_SELECTION works properly with accessibility. */
     @Test
     @SmallTest
@@ -2684,10 +4191,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Focus our first node.
         focusNode(vvid1);
@@ -2711,12 +4218,12 @@ public class WebContentsAccessibilityTest {
 
         // Send of test signal and update node.
         mActivityTestRule.sendEndOfTestSignal();
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
 
         // Verify results.
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo1.isAccessibilityFocused());
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo2.isAccessibilityFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo1.isAccessibilityFocused());
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo2.isAccessibilityFocused());
     }
 
     /** Test that the performAction for ACTION_SET_SELECTION works properly with accessibility. */
@@ -2729,10 +4236,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Focus our second node.
         focusNode(vvid2);
@@ -2756,12 +4263,12 @@ public class WebContentsAccessibilityTest {
 
         // Send of test signal and update node.
         mActivityTestRule.sendEndOfTestSignal();
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
 
         // Verify results.
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo1.isAccessibilityFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isAccessibilityFocused());
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo1.isAccessibilityFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isAccessibilityFocused());
     }
 
     /**
@@ -2776,10 +4283,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Send an action and poll for update.
         Assert.assertTrue(
@@ -2790,10 +4297,10 @@ public class WebContentsAccessibilityTest {
                         () -> createAccessibilityNodeInfo(vvid1).isAccessibilityFocused()));
 
         // Update nodes and verify results.
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo1.isAccessibilityFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isAccessibilityFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo1.isAccessibilityFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isAccessibilityFocused());
     }
 
     /**
@@ -2809,10 +4316,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Send an action and poll for update.
         Assert.assertTrue(
@@ -2823,10 +4330,10 @@ public class WebContentsAccessibilityTest {
                         () -> createAccessibilityNodeInfo(vvid1).isAccessibilityFocused()));
 
         // Update nodes and verify results.
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo1.isAccessibilityFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isAccessibilityFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo1.isAccessibilityFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isAccessibilityFocused());
 
         // Clear accessibility focus from the node and verify.
         Assert.assertTrue(
@@ -2836,10 +4343,10 @@ public class WebContentsAccessibilityTest {
                         null,
                         () -> !createAccessibilityNodeInfo(vvid1).isAccessibilityFocused()));
 
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo1.isAccessibilityFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isAccessibilityFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo1.isAccessibilityFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isAccessibilityFocused());
     }
 
     /** Test that the performAction for ACTION_FOCUS works properly with accessibility. */
@@ -2852,10 +4359,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Send an action and poll for update.
         Assert.assertTrue(
@@ -2866,10 +4373,61 @@ public class WebContentsAccessibilityTest {
                         () -> createAccessibilityNodeInfo(vvid1).isFocused()));
 
         // Update nodes and verify results.
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo1.isFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo1.isFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isFocused());
+    }
+
+    /** Test that the findFocus method works properly with accessibility. */
+    @Test
+    @SmallTest
+    public void testFindFocus() throws Throwable {
+        // Build a simple web page with elements that can be focused.
+        setupTestWithHTML("<input type='text' id='id1'><input type='text' id='id2'>");
+
+        // Find the relevant nodes.
+        int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
+        int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
+
+        // Send an action to focus the first input using ACTION_ACCESSIBILITY_FOCUS
+        Assert.assertTrue(
+                performActionOnUiThread(
+                        vvid1,
+                        ACTION_ACCESSIBILITY_FOCUS,
+                        null,
+                        () -> createAccessibilityNodeInfo(vvid1).isAccessibilityFocused()));
+
+        // Use findFocus to get the accessibility focused node
+        AccessibilityNodeInfoCompat accessibilityFocusedNode =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                mActivityTestRule.mNodeProvider.findFocus(
+                                        AccessibilityNodeInfoCompat.FOCUS_ACCESSIBILITY));
+        Assert.assertNotNull(FOCUSING_ERROR, accessibilityFocusedNode);
+        Assert.assertEquals(
+                FOCUSING_ERROR, "id1", accessibilityFocusedNode.getViewIdResourceName());
+
+        // Send an action to focus the second input using ACTION_FOCUS
+        Assert.assertTrue(
+                performActionOnUiThread(
+                        vvid2,
+                        ACTION_FOCUS,
+                        null,
+                        () -> createAccessibilityNodeInfo(vvid2).isFocused()));
+
+        // Use findFocus to get the input focused node
+        AccessibilityNodeInfoCompat inputFocusedNode =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                mActivityTestRule.mNodeProvider.findFocus(
+                                        AccessibilityNodeInfoCompat.FOCUS_INPUT));
+        Assert.assertNotNull(FOCUSING_ERROR, inputFocusedNode);
+        Assert.assertEquals(FOCUSING_ERROR, "id2", inputFocusedNode.getViewIdResourceName());
     }
 
     /** Test that the performAction for ACTION_CLEAR_FOCUS works properly with accessibility. */
@@ -2882,10 +4440,10 @@ public class WebContentsAccessibilityTest {
         // Find the relevant nodes.
         int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "id1");
         int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "id2");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
 
         // Send an action and poll for update.
         Assert.assertTrue(
@@ -2896,10 +4454,10 @@ public class WebContentsAccessibilityTest {
                         () -> createAccessibilityNodeInfo(vvid1).isFocused()));
 
         // Update nodes and verify results.
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertTrue(PERFORM_ACTION_ERROR, mNodeInfo1.isFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertTrue(PERFORM_ACTION_ERROR, nodeInfo1.isFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isFocused());
 
         // Clear focus from the node and verify.
         Assert.assertTrue(
@@ -2909,10 +4467,27 @@ public class WebContentsAccessibilityTest {
                         null,
                         () -> !createAccessibilityNodeInfo(vvid1).isFocused()));
 
-        mNodeInfo1 = createAccessibilityNodeInfo(vvid1);
-        mNodeInfo2 = createAccessibilityNodeInfo(vvid2);
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo1.isFocused());
-        Assert.assertFalse(PERFORM_ACTION_ERROR, mNodeInfo2.isFocused());
+        nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo1.isFocused());
+        Assert.assertFalse(PERFORM_ACTION_ERROR, nodeInfo2.isFocused());
+    }
+
+    /** Test that the performAction for ACTION_LONG_CLICK works properly with accessibility. */
+    @Test
+    @SmallTest
+    public void testPerformAction_showContextMenu() throws Throwable {
+        setupTestWithHTML("<button id='btn'>Click Me</button>");
+
+        int btnId = waitForNodeMatching(sViewIdResourceNameMatcher, "btn");
+        mNodeInfo = createAccessibilityNodeInfo(btnId);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo);
+
+        // Send a proper action and verify it returns true.
+        Assert.assertTrue(performActionOnUiThread(btnId, ACTION_LONG_CLICK, null));
+
+        // Verify that invalid ID returns false.
+        Assert.assertFalse(performActionOnUiThread(-999, ACTION_LONG_CLICK, null));
     }
 
     /** Test that the performAction for ACTION_SHOW_ON_SCREEN works properly with accessibility. */
@@ -2957,6 +4532,443 @@ public class WebContentsAccessibilityTest {
         Assert.assertFalse(
                 OFFSCREEN_BUNDLE_EXTRA_ERROR,
                 mNodeInfo.getExtras().containsKey(EXTRAS_KEY_OFFSCREEN));
+    }
+
+    /**
+     * Focuses {@code fromVirtualViewId}. Performs an action and checks that focus does not change.
+     *
+     * @param fromVirtualViewId The view to focus initially.
+     * @param action The {@link AccessibilityActionCompat} action to perform.
+     * @param htmlElementString The {@link
+     *     AccessibilityNodeInfo#ACTION_ARGUMENT_HTML_ELEMENT_STRING}.
+     */
+    private void assertAccessibilityFocusDoesNotMove(
+            int fromVirtualViewId,
+            AccessibilityNodeInfoCompat.AccessibilityActionCompat action,
+            String htmlElementString)
+            throws Throwable {
+        mActivityTestRule.focusNode(fromVirtualViewId);
+
+        Bundle bundle = new Bundle();
+        bundle.putString(ACTION_ARGUMENT_HTML_ELEMENT_STRING, htmlElementString);
+        Assert.assertFalse(performActionOnUiThread(fromVirtualViewId, action, bundle));
+    }
+
+    /**
+     * Focuses {@code fromVirtualViewId}. Performs an action and checks that the expected view is
+     * focused.
+     *
+     * @param fromVirtualViewId The view to focus initially.
+     * @param action The {@link AccessibilityActionCompat} action to perform.
+     * @param htmlElementString The {@link
+     *     AccessibilityNodeInfo#ACTION_ARGUMENT_HTML_ELEMENT_STRING}.
+     * @param expectedNewFocusedVirtualViewId The view which is expected to gain focus.
+     */
+    private void assertAccessibilityFocusMoves(
+            int fromVirtualViewId,
+            AccessibilityNodeInfoCompat.AccessibilityActionCompat action,
+            String htmlElementString,
+            int expectedNewFocusedVirtualViewId)
+            throws Throwable {
+        mActivityTestRule.focusNode(fromVirtualViewId);
+
+        Bundle bundle = new Bundle();
+        bundle.putString(ACTION_ARGUMENT_HTML_ELEMENT_STRING, htmlElementString);
+        Assert.assertTrue(
+                performActionOnUiThread(
+                        fromVirtualViewId,
+                        action,
+                        bundle,
+                        () -> isNodeAccessibilityFocused(expectedNewFocusedVirtualViewId)));
+    }
+
+    /**
+     * Focuses the first element in {@code expectedIdSequence}. Performs {@link
+     * AccessibilityActionCompat#ACTION_NEXT_HTML_ELEMENT} and checks that each of the subsequent
+     * elements in {@code expectedIdSequence} gets accessibility focus. Differs from {@link
+     * assertAccessibilityFocusMoves} in that it passes an empty {@link
+     * AccessibilityNodeInfo#ACTION_ARGUMENT_HTML_ELEMENT_STRING}.
+     */
+    private void assertNextMovesAccessibilityFocusInSequence(String[] expectedIdSequence)
+            throws Throwable {
+        Assert.assertTrue(expectedIdSequence.length > 1);
+
+        String fromId = expectedIdSequence[0];
+        int fromVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, fromId);
+        mActivityTestRule.focusNode(fromVirtualViewId);
+
+        for (int i = 1; i < expectedIdSequence.length; ++i) {
+            fromId = expectedIdSequence[i - 1];
+            fromVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, fromId);
+            String expectedToId = expectedIdSequence[i];
+            int expectedToVirtualViewId =
+                    waitForNodeMatching(sViewIdResourceNameMatcher, expectedToId);
+            Bundle bundle = new Bundle();
+            bundle.putString(ACTION_ARGUMENT_HTML_ELEMENT_STRING, "");
+            String errorMsg =
+                    String.format(
+                            "Expected ACTION_NEXT_HTML_ELEMENT to move focus from %s to %s",
+                            fromId, expectedToId);
+
+            Assert.assertTrue(
+                    performActionOnUiThread(
+                            fromVirtualViewId,
+                            ACTION_NEXT_HTML_ELEMENT,
+                            bundle,
+                            () -> isNodeAccessibilityFocused(expectedToVirtualViewId),
+                            errorMsg));
+        }
+    }
+
+    /**
+     * Tests that TalkBack's Browse Mode table navigation (e.g., Ctrl + Alt + Arrows) correctly
+     * delegates focus to the interactive widget inside a gridcell. This ensures the inner link
+     * receives focus and can be activated, rather than focus getting trapped on the non-interactive
+     * cell wrapper.
+     */
+    @Test
+    @SmallTest
+    public void testPerformAction_nextHtmlElement_gridCellDelegation() throws Throwable {
+        // Build an ARIA grid where each cell contains a single interactive link.
+        setupTestWithHTML(
+                "<div role='grid'>"
+                + "  <div role='row'>"
+                + "    <span role='gridcell' id='cell1'><a id='link1' href='#'>Link 1</a></span>"
+                + "    <span role='gridcell' id='cell2'><a id='link2' href='#'>Link 2</a></span>"
+                + "  </div>"
+                + "</div>");
+
+        // Find the inner link nodes
+        int vvid1 = waitForNodeMatching(sViewIdResourceNameMatcher, "link1");
+        int vvid2 = waitForNodeMatching(sViewIdResourceNameMatcher, "link2");
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvid1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvid2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
+
+        // Assert that the action successfully delegates focus to the inner link of the next cell,
+        // rather than the gridcell wrapper.
+        assertAccessibilityFocusMoves(
+                /* fromVirtualViewId= */ vvid1,
+                ACTION_NEXT_HTML_ELEMENT,
+                "COLUMN",
+                /* expectedNewFocusedVirtualViewId= */ vvid2);
+
+        // Update nodes and verify results.
+        mActivityTestRule.sendEndOfTestSignal();
+        Assert.assertFalse(PERFORM_ACTION_ERROR, isNodeAccessibilityFocused(vvid1));
+        Assert.assertTrue(PERFORM_ACTION_ERROR, isNodeAccessibilityFocused(vvid2));
+    }
+
+    @Test
+    @MediumTest
+    public void testPerformAction_nextHtmlElement_tableNavigation() throws Throwable {
+        setupTestWithHTML(
+                "<table role='table'>"
+                        + "  <tr>"
+                        + "    <td id='topleft'>topleft</td>"
+                        + "    <td id='topright'>topright</td>"
+                        + "  </tr>"
+                        + "  <tr>"
+                        + "    <td id='bottomleft' tabindex='0'>bottomleft</td>"
+                        + "    <td id='bottomright' tabindex='0'>bottomright</td>"
+                        + "  </tr>"
+                        + "</table>");
+
+        int topLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topleft");
+        int topRightVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topright");
+        int bottomLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "bottomleft");
+        int bottomRightVirtualViewId =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "bottomright");
+
+        // Check navigation where top-left cell initially has focus.
+        assertAccessibilityFocusMoves(
+                topLeftVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN", topRightVirtualViewId);
+        assertAccessibilityFocusMoves(
+                topLeftVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "ROW", bottomLeftVirtualViewId);
+
+        // Check navigation where bottom-right cell initially has focus.
+        assertAccessibilityFocusDoesNotMove(
+                bottomRightVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN");
+        assertAccessibilityFocusDoesNotMove(
+                bottomRightVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "ROW");
+    }
+
+    @Test
+    @MediumTest
+    public void testPerformAction_previousHtmlElement_tableNavigation() throws Throwable {
+        setupTestWithHTML(
+                "<table role='table'>"
+                        + "  <tr>"
+                        + "    <td id='topleft'>topleft</td>"
+                        + "    <td id='topright'>topright</td>"
+                        + "  </tr>"
+                        + "  <tr>"
+                        + "    <td id='bottomleft'>bottomleft</td>"
+                        + "    <td id='bottomright'>bottomright</td>"
+                        + "  </tr>"
+                        + "</table>");
+
+        int topLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topleft");
+        int topRightVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topright");
+        int bottomLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "bottomleft");
+        int bottomRightVirtualViewId =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "bottomright");
+
+        // Check navigation where top-left cell initially has focus.
+        assertAccessibilityFocusDoesNotMove(
+                topLeftVirtualViewId, ACTION_PREVIOUS_HTML_ELEMENT, "COLUMN");
+        assertAccessibilityFocusDoesNotMove(
+                topLeftVirtualViewId, ACTION_PREVIOUS_HTML_ELEMENT, "ROW");
+
+        // Check navigation where bottom-right cell initially has focus.
+        assertAccessibilityFocusMoves(
+                bottomRightVirtualViewId,
+                ACTION_PREVIOUS_HTML_ELEMENT,
+                "COLUMN",
+                bottomLeftVirtualViewId);
+        assertAccessibilityFocusMoves(
+                bottomRightVirtualViewId,
+                ACTION_PREVIOUS_HTML_ELEMENT,
+                "ROW",
+                topRightVirtualViewId);
+    }
+
+    /** Tests that navigating to the next row/column takes the column span into account. */
+    @Test
+    @MediumTest
+    public void testPerformAction_nextHtmlElement_tableNavigationWithColspan() throws Throwable {
+        // Build table with cell which spans multiple columns.
+        setupTestWithHTML(
+                "<table role='table'>"
+                        + "  <tr>"
+                        + "    <td colspan=2 id='topleft'>topleft</td>"
+                        + "    <td colspan=2 id='topright'>topright</td>"
+                        + "  </tr>"
+                        + "  <tr>"
+                        + "    <td colspan=2 id='bottomleft'>bottomleft</td>"
+                        + "    <td id='bottomcenter'>bottomcenter</td>"
+                        + "    <td id='bottomright'>bottomright</td>"
+                        + "  </tr>"
+                        + "</table>");
+
+        int topLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topleft");
+        int topRightVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topright");
+        int bottomLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "bottomleft");
+        int bottomCenterVirtualViewId =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "bottomcenter");
+
+        assertAccessibilityFocusMoves(
+                topLeftVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN", topRightVirtualViewId);
+
+        assertAccessibilityFocusDoesNotMove(
+                topRightVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN");
+        assertAccessibilityFocusMoves(
+                topRightVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "ROW", bottomCenterVirtualViewId);
+
+        assertAccessibilityFocusMoves(
+                bottomLeftVirtualViewId,
+                ACTION_NEXT_HTML_ELEMENT,
+                "COLUMN",
+                bottomCenterVirtualViewId);
+    }
+
+    /** Tests that navigating to the previous row/column takes the column span into account. */
+    @Test
+    @MediumTest
+    public void testPerformAction_previousHtmlElement_tableNavigationWithColspan()
+            throws Throwable {
+        // Build table with cell which spans multiple columns.
+        setupTestWithHTML(
+                "<table role='table'>"
+                        + "  <tr>"
+                        + "    <td colspan=2 id='topleft'>topleft</td>"
+                        + "    <td colspan=2 id='topright'>topright</td>"
+                        + "  </tr>"
+                        + "  <tr>"
+                        + "    <td colspan=2 id='bottomleft'>bottomleft</td>"
+                        + "    <td id='bottomcenter'>bottomcenter</td>"
+                        + "    <td id='bottomright'>bottomright</td>"
+                        + "  </tr>"
+                        + "</table>");
+
+        int topLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topleft");
+        int topRightVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topright");
+        int bottomRightVirtualViewId =
+                waitForNodeMatching(sViewIdResourceNameMatcher, "bottomright");
+
+        assertAccessibilityFocusMoves(
+                topRightVirtualViewId,
+                ACTION_PREVIOUS_HTML_ELEMENT,
+                "COLUMN",
+                topLeftVirtualViewId);
+
+        assertAccessibilityFocusMoves(
+                bottomRightVirtualViewId,
+                ACTION_PREVIOUS_HTML_ELEMENT,
+                "ROW",
+                topRightVirtualViewId);
+    }
+
+    /** Tests that navigating to the next row/column takes the row span into account. */
+    @Test
+    @MediumTest
+    public void testPerformAction_nextHtmlElement_tableNavigationWithRowspan() throws Throwable {
+        // Build table with cell which spans 2 rows.
+        setupTestWithHTML(
+                "<table role='table'>"
+                        + "  <tr>"
+                        + "    <td id='topleft'>topleft</td>"
+                        + "    <td rowspan=2 id='right'>right</td>"
+                        + "  </tr>"
+                        + "  <tr>"
+                        + "    <td id='bottomleft'>bottomleft</td>"
+                        + "  </tr>"
+                        + "</table>");
+
+        int topLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "topleft");
+        int bottomLeftVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "bottomleft");
+        int rightVirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "right");
+
+        assertAccessibilityFocusMoves(
+                topLeftVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN", rightVirtualViewId);
+
+        assertAccessibilityFocusMoves(
+                bottomLeftVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "COLUMN", rightVirtualViewId);
+
+        assertAccessibilityFocusDoesNotMove(rightVirtualViewId, ACTION_NEXT_HTML_ELEMENT, "ROW");
+    }
+
+    /** Test that ANDROID_NEXT_HTML_ELEMENT skips all MathML nodes under that math root. */
+    @Test
+    @MediumTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    public void testPerformAction_nextHtmlElement_mathRoot() throws Throwable {
+        setupTestWithHTML(
+"""
+<button id='before_button'>before</button>
+<math id='math_root'>
+  <mrow intent='point($x, $y)'>
+    <mo>(</mo>
+    <mi arg='x'>0</mi>
+    <mo>,</mo>
+    <mi arg='y'>5</mi>
+    <mo>)</mo>"
+  </mrow>
+</math>
+<button id='after_button'>after</button>\
+""");
+        assertNextMovesAccessibilityFocusInSequence(
+                new String[] {"before_button", "math_root", "after_button"});
+    }
+
+    /** Test that ANDROID_NEXT_HTML_ELEMENT visits non-MathML (HTML) nodes under MathML root. */
+    @Test
+    @MediumTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    public void testPerformAction_nextHtmlElement_visitHtmlUnderMathRoot() throws Throwable {
+        setupTestWithHTML(
+"""
+<button id='before_button'>before</button>
+<math id='math_root'>
+  <msqrt>
+    <mn>2</mn>
+    <mtext>
+      <button id='edit_button'>edit</button>
+      <button id='reset_button'>edit</button>
+    </mtext>
+  </msqrt>
+</math>
+<button id='after_button'>after</button>\
+""");
+        assertNextMovesAccessibilityFocusInSequence(
+                new String[] {
+                    "before_button", "math_root", "edit_button", "reset_button", "after_button"
+                });
+    }
+
+    /**
+     * Test that ANDROID_NEXT_HTML_ELEMENT skips the <mtext> node when the <mtext> node has a child
+     * <br>
+     * node.
+     */
+    @Test
+    @MediumTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    public void testPerformAction_nextHtmlElement_mtextHasBr() throws Throwable {
+        setupTestWithHTML(
+"""
+<button id='before_button'>before</button>
+<math id='math_root'>
+  <mtext>
+    Hello<br/>world
+  </mtext>
+</math>
+<button id='after_button'>after</button>\
+""");
+        assertNextMovesAccessibilityFocusInSequence(
+                new String[] {"before_button", "math_root", "after_button"});
+    }
+
+    /** Test that ANDROID_NEXT_HTML_ELEMENTS can skip a large amount of MathML elements. */
+    @Test
+    @MediumTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    public void testPerformAction_nextHtmlElement_largeMathMlMatrix() throws Throwable {
+        // Generate MathML for 10x10 matrix.
+        StringBuilder mtable = new StringBuilder();
+        mtable.append("<mtable>");
+        for (int i = 0; i < 10; ++i) {
+            mtable.append("<mtr>");
+            for (int j = 0; j < 10; ++j) {
+                mtable.append("<mtd><mn>1</mn></mtd>");
+            }
+            mtable.append("</mtr>");
+        }
+        mtable.append("</mtable>");
+
+        setupTestWithHTML(
+"""
+<button id='before_button'>before</button>
+<math id='math_root'>
+  <mrow>
+    <mo>[</mo>\
+"""
+                        + mtable.toString()
+                        +
+"""
+    <mo>]</mo>
+  </mrow>
+</math>
+<button id='after_button'>after</button>\
+""");
+        assertNextMovesAccessibilityFocusInSequence(
+                new String[] {"before_button", "math_root", "after_button"});
+    }
+
+    /** Test that a screen reader can request Chromium to programmatically focus a MathML node. */
+    @Test
+    @MediumTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    public void testMathMlCanBeProgrammaticallyFocused() throws Throwable {
+        setupTestWithHTML(
+"""
+<math>
+  <mn id='mn1'>1</mn>
+  <mn>2</mn>
+  </math>
+<button id='button_id'>button</button>\
+""");
+        int mn1VirtualViewId = waitForNodeMatching(sViewIdResourceNameMatcher, "mn1");
+        int buttonId = waitForNodeMatching(sViewIdResourceNameMatcher, "button_id");
+
+        Assert.assertTrue(
+                performActionOnUiThread(mn1VirtualViewId, ACTION_ACCESSIBILITY_FOCUS, null));
+        CriteriaHelper.pollUiThread(() -> isNodeAccessibilityFocused(mn1VirtualViewId));
+
+        // ACTION_NEXT_HTML_ELEMENT should still ignore MathML nodes.
+        assertAccessibilityFocusMoves(
+                mn1VirtualViewId, ACTION_NEXT_HTML_ELEMENT, /* htmlElementString= */ "", buttonId);
     }
 
     // ------------------ Misc tests that cannot be done as tree/event tests ------------------ //
@@ -3094,6 +5106,7 @@ public class WebContentsAccessibilityTest {
 
     @Test
     @SmallTest
+    @DisabledTest(message = "Flaky, see https://crbug.com/491123600")
     @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_TEXT_FORMATTING)
     public void testAccessibilityNodeInfo_textFormatting() throws Throwable {
         // Build a web page with a variety of text formatting options.
@@ -3574,12 +5587,12 @@ public class WebContentsAccessibilityTest {
         int vvId1 = waitForNodeMatching(sTextMatcher, "This is a test 1");
         int vvId2 = waitForNodeMatching(sTextMatcher, "This is a test 2");
         int vvId3 = waitForNodeMatching(sTextMatcher, "This is a test 3");
-        AccessibilityNodeInfoCompat mNodeInfo1 = createAccessibilityNodeInfo(vvId1);
-        AccessibilityNodeInfoCompat mNodeInfo2 = createAccessibilityNodeInfo(vvId2);
-        AccessibilityNodeInfoCompat mNodeInfo3 = createAccessibilityNodeInfo(vvId3);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo1);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo2);
-        Assert.assertNotNull(NODE_TIMEOUT_ERROR, mNodeInfo3);
+        AccessibilityNodeInfoCompat nodeInfo1 = createAccessibilityNodeInfo(vvId1);
+        AccessibilityNodeInfoCompat nodeInfo2 = createAccessibilityNodeInfo(vvId2);
+        AccessibilityNodeInfoCompat nodeInfo3 = createAccessibilityNodeInfo(vvId3);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo1);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo2);
+        Assert.assertNotNull(NODE_TIMEOUT_ERROR, nodeInfo3);
 
         // Focus each node in turn to generate events.
         focusNode(vvId1);

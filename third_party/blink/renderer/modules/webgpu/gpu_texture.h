@@ -5,7 +5,9 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGPU_GPU_TEXTURE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGPU_GPU_TEXTURE_H_
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_gputextureviewdimension_undefined.h"
 #include "third_party/blink/renderer/modules/webgpu/dawn_object.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 
 namespace blink {
@@ -70,16 +72,21 @@ class GPUTexture : public DawnObject<wgpu::Texture> {
   uint32_t mipLevelCount() const;
   uint32_t sampleCount() const;
   V8GPUTextureDimension dimension() const;
+  V8UnionGPUTextureViewDimensionOrUndefined::Ret textureBindingViewDimension(
+      ScriptState*) const;
   V8GPUTextureFormat format() const;
   uint32_t usage() const;
   // }}} End of WebIDL binding implementation.
 
   wgpu::TextureDimension Dimension() { return dimension_; }
+  wgpu::TextureViewDimension TextureBindingViewDimension() {
+    return texture_binding_view_dimension_;
+  }
   wgpu::TextureFormat Format() { return format_; }
   wgpu::TextureUsage Usage() { return usage_; }
   bool IsDestroyed() { return destroyed_; }
 
-  void DissociateMailbox();
+  gpu::SyncToken DissociateMailbox();
 
   // Returns a shared pointer to the mailbox texture. The mailbox texture
   // remains associated to the GPUTexture.
@@ -91,12 +98,12 @@ class GPUTexture : public DawnObject<wgpu::Texture> {
   void ClearBeforeDestroyCallback();
 
  private:
-  void SetLabelImpl(const String& value) override {
-    std::string utf8_label = value.Utf8();
-    GetHandle().SetLabel(utf8_label.c_str());
+  void SetLabelImpl(std::string_view value) override {
+    GetHandle().SetLabel(value);
   }
 
   wgpu::TextureDimension dimension_;
+  wgpu::TextureViewDimension texture_binding_view_dimension_;
   wgpu::TextureFormat format_;
   wgpu::TextureUsage usage_;
   scoped_refptr<WebGPUMailboxTexture> mailbox_texture_;

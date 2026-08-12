@@ -89,17 +89,44 @@ def get_parts(config):
                 | CodeSignOptions.HARDENED_RUNTIME,
                 entitlements='helper-gpu-entitlements.plist',
                 verify_options=verify_options),
-        'helper-plugin-app':
+        'helper-aperitif-app':
             CodeSignedProduct(
-                '{0.framework_dir}/Helpers/{0.product} Helper (Plugin).app'
+                '{0.framework_dir}/Helpers/{0.product} Helper (Aperitif).app'
                 .format(config),
-                '{}.helper.plugin'.format(uncustomized_bundle_id),
+                '{}.helper'.format(uncustomized_bundle_id),
+                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
+                verify_options=verify_options),
+        'helper-aperitif-renderer-app':
+            CodeSignedProduct(
+                ('{0.framework_dir}/Helpers/'
+                 '{0.product} Helper (Aperitif Renderer).app').format(config),
+                '{}.helper.renderer'.format(uncustomized_bundle_id),
                 # Do not use |CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS|
-                # because library validation is incompatible with the
-                # disable-library-validation entitlement.
+                # because library validation is incompatible with the JIT
+                # entitlement.
                 options=CodeSignOptions.RESTRICT | CodeSignOptions.KILL
                 | CodeSignOptions.HARDENED_RUNTIME,
-                entitlements='helper-plugin-entitlements.plist',
+                entitlements='helper-renderer-entitlements.plist',
+                verify_options=verify_options),
+        'helper-aperitif-gpu-app':
+            CodeSignedProduct(
+                ('{0.framework_dir}/Helpers/'
+                 '{0.product} Helper (Aperitif GPU).app').format(config),
+                '{}.helper'.format(uncustomized_bundle_id),
+                # Do not use |CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS|
+                # because library validation is incompatible with more
+                # permissive code signing entitlements.
+                options=CodeSignOptions.RESTRICT | CodeSignOptions.KILL
+                | CodeSignOptions.HARDENED_RUNTIME,
+                entitlements='helper-gpu-entitlements.plist',
+                verify_options=verify_options),
+        'helper-aperitif-alerts':
+            CodeSignedProduct(
+                ('{0.framework_dir}/Helpers/'
+                 '{0.product} Helper (Aperitif Alerts).app').format(config),
+                '{}.framework.AlertNotificationService'.format(
+                    config.base_bundle_id),
+                options=CodeSignOptions.FULL_HARDENED_RUNTIME_OPTIONS,
                 verify_options=verify_options),
         'helper-alerts':
             CodeSignedProduct(
@@ -135,12 +162,19 @@ def get_parts(config):
             verify_options=verify_options)
 
     dylibs = [
-        'libEGL.dylib',
-        'libGLESv2.dylib',
         'libvk_swiftshader.dylib',
+        'libvulkan.dylib',
     ]
+    if not config.use_static_angle:
+        dylibs.extend([
+            'libEGL.dylib',
+            'libGLESv2.dylib',
+        ])
     if config.is_chrome_branded():
-        dylibs.append('liboptimization_guide_internal.dylib')
+        dylibs.extend((
+            'liboptimization_guide_internal.dylib',
+            'libchromecompaneros.dylib',
+        ))
     for library in dylibs:
         library_basename = os.path.basename(library)
         parts[library_basename] = CodeSignedProduct(

@@ -10,6 +10,7 @@ import static org.chromium.chrome.browser.share.ShareDelegate.ShareOrigin.TAB_ST
 import android.app.Activity;
 import android.content.res.Resources;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.IdRes;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
@@ -18,6 +19,7 @@ import org.chromium.base.Token;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
@@ -25,13 +27,15 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.ShareUtils;
+import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridge;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabClosureParamsUtils;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabGroupUtils;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.widget.ListItemBuilder;
 import org.chromium.components.collaboration.CollaborationService;
@@ -39,8 +43,9 @@ import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.widget.AnchoredPopupWindow.HorizontalOrientation;
-import org.chromium.ui.widget.RectProvider;
+import org.chromium.ui.widget.ViewRectProvider;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -63,18 +68,18 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
 
     private static final String MENU_USER_ACTION_PREFIX = "TabSwitcher.ContextMenu.";
     private final Activity mActivity;
-    private final TabGroupModelFilter mTabGroupModelFilter;
+    private final TabModel mTabModel;
     private final BookmarkModel mBookmarkModel;
     private boolean mIsMenuFocusableUponCreation;
 
     TabGridContextMenuCoordinator(
             Activity activity,
-            Supplier<TabBookmarker> tabBookmarkerSupplier,
+            Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
             Profile profile,
-            TabGroupModelFilter tabGroupModelFilter,
+            TabModel tabModel,
             TabGroupListBottomSheetCoordinator tabGroupListBottomSheetCoordinator,
             TabGroupCreationDialogManager tabGroupCreationDialogManager,
-            Supplier<ShareDelegate> shareDelegateSupplier,
+            Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
             @Nullable TabGroupSyncService tabGroupSyncService,
             CollaborationService collaborationService,
             ShowTabListEditor showTabListEditor) {
@@ -83,25 +88,25 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                 R.layout.tab_switcher_action_menu_layout,
                 getMenuItemClickedCallback(
                         tabBookmarkerSupplier,
-                        tabGroupModelFilter,
+                        tabModel,
                         tabGroupListBottomSheetCoordinator,
                         tabGroupCreationDialogManager,
                         shareDelegateSupplier,
                         showTabListEditor),
-                tabGroupModelFilter::getTabModel,
+                () -> tabModel,
                 /* multiInstanceManager= */ null,
                 tabGroupSyncService,
                 collaborationService,
                 activity);
         mActivity = activity;
-        mTabGroupModelFilter = tabGroupModelFilter;
+        mTabModel = tabModel;
         mBookmarkModel = BookmarkModel.getForProfile(profile);
     }
 
     /**
      * @param activity The activity where this context menu will be shown.
      * @param tabBookmarkerSupplier Supplies the {@link TabBookmarker} used to bookmark tabs.
-     * @param tabGroupModelFilter Supplies the {@link TabModel}.
+     * @param tabModel Supplies the {@link TabModel}.
      * @param tabGroupListBottomSheetCoordinator The {@link TabGroupListBottomSheetCoordinator} that
      *     will be used to show a bottom sheet when the user selects the "Add to group" option.
      * @param tabGroupCreationDialogManager The manager for the dialog showed on tab group creation.
@@ -111,13 +116,13 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
      */
     public static TabGridContextMenuCoordinator createContextMenuCoordinator(
             Activity activity,
-            Supplier<TabBookmarker> tabBookmarkerSupplier,
-            TabGroupModelFilter tabGroupModelFilter,
+            Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
+            TabModel tabModel,
             TabGroupListBottomSheetCoordinator tabGroupListBottomSheetCoordinator,
             TabGroupCreationDialogManager tabGroupCreationDialogManager,
-            Supplier<ShareDelegate> shareDelegateSupplier,
+            Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
             ShowTabListEditor showTabListEditor) {
-        Profile profile = assumeNonNull(tabGroupModelFilter.getTabModel().getProfile());
+        Profile profile = assumeNonNull(tabModel.getProfile());
         @Nullable TabGroupSyncService tabGroupSyncService =
                 profile.isOffTheRecord() ? null : TabGroupSyncServiceFactory.getForProfile(profile);
         CollaborationService collaborationService =
@@ -127,7 +132,7 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                 activity,
                 tabBookmarkerSupplier,
                 profile,
-                tabGroupModelFilter,
+                tabModel,
                 tabGroupListBottomSheetCoordinator,
                 tabGroupCreationDialogManager,
                 shareDelegateSupplier,
@@ -144,10 +149,13 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
      * @param tabId The tab id of the interacting tab group.
      * @param focusable True if the menu should be focusable by default, false otherwise.
      */
-    public void showMenu(RectProvider anchorViewRectProvider, int tabId, boolean focusable) {
+    public void showMenu(ViewRectProvider anchorViewRectProvider, int tabId, boolean focusable) {
         mIsMenuFocusableUponCreation = focusable;
-        boolean isIncognito = mTabGroupModelFilter.getTabModel().isIncognitoBranded();
+        boolean isIncognito = mTabModel.isIncognitoBranded();
         dismiss();
+
+        if (!anchorViewRectProvider.isViewShown()) return;
+
         createAndShowMenu(
                 anchorViewRectProvider,
                 tabId,
@@ -169,28 +177,26 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
 
     @VisibleForTesting
     static OnItemClickedCallback<Integer> getMenuItemClickedCallback(
-            Supplier<TabBookmarker> tabBookmarkerSupplier,
-            TabGroupModelFilter tabGroupModelFilter,
+            Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
+            TabModel tabModel,
             TabGroupListBottomSheetCoordinator coordinator,
             TabGroupCreationDialogManager dialogManager,
-            Supplier<ShareDelegate> shareDelegateSupplier,
+            Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
             ShowTabListEditor showTabListEditor) {
         return (menuId, tabId, collaborationId, listViewTouchTracker) -> {
             if (tabId == Tab.INVALID_TAB_ID) return;
-            TabModel tabModel = tabGroupModelFilter.getTabModel();
-            TabBookmarker tabBookmarker = tabBookmarkerSupplier.get();
+            TabBookmarker tabBookmarker = assumeNonNull(tabBookmarkerSupplier.get());
             @Nullable Tab tab = getTabById(() -> tabModel, tabId);
             if (tab == null) return;
 
             if (menuId == R.id.share_tab) {
-                shareDelegateSupplier
-                        .get()
+                assumeNonNull(shareDelegateSupplier.get())
                         .share(tab, /* shareDirectly= */ false, TAB_STRIP_CONTEXT_MENU);
                 recordUserActionWithPrefix("ShareTab");
             } else if (menuId == R.id.add_to_new_tab_group) {
-                tabGroupModelFilter.createSingleTabGroup(tab);
+                tabModel.createSingleTabGroup(tab);
                 Token groupId = assumeNonNull(tab.getTabGroupId());
-                dialogManager.showDialog(groupId, tabGroupModelFilter);
+                dialogManager.showDialog(groupId, tabModel);
                 recordUserActionWithPrefix("AddToNewGroup");
             } else if (menuId == R.id.add_to_tab_group) {
                 coordinator.showBottomSheet(List.of(tab));
@@ -202,6 +208,12 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
             } else if (menuId == R.id.add_to_bookmarks) {
                 tabBookmarker.addOrEditBookmark(tab);
                 recordUserActionWithPrefix("AddBookmark");
+            } else if (menuId == R.id.send_tab_to_self) {
+                assert ChromeFeatureList.isEnabled(
+                        ChromeFeatureList.SEND_TAB_TO_SELF_EXTRA_ENTRY_POINTS);
+                assert !tab.isIncognitoBranded();
+                assumeNonNull(shareDelegateSupplier.get()).sendTabToSelf(tab);
+                recordUserActionWithPrefix("SendTabToSelf");
             } else if (menuId == R.id.select_tabs) {
                 showTabListEditor.show(tab.getId());
                 recordUserActionWithPrefix("SelectTabs");
@@ -218,27 +230,29 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                                 TabClosureParams.closeTab(tab).allowUndo(allowUndo).build(),
                                 /* allowDialog= */ true);
                 recordUserActionWithPrefix("CloseTab");
+            } else if (menuId == R.id.mute_site) {
+                tabModel.setMuteSetting(List.of(tab), /* mute= */ true);
+                recordUserActionWithPrefix("MuteSite");
+            } else if (menuId == R.id.unmute_site) {
+                tabModel.setMuteSetting(List.of(tab), /* mute= */ false);
+                recordUserActionWithPrefix("UnmuteSite");
             }
         };
     }
 
     @Override
     protected void buildMenuActionItems(ModelList itemList, Integer id) {
-        @Nullable Tab tab = getTabById(mTabGroupModelFilter::getTabModel, id);
+        @Nullable Tab tab = getTabById(() -> mTabModel, id);
         if (tab == null) return;
 
         boolean isIncognito = tab.isIncognitoBranded();
-        if (ShareUtils.shouldEnableShare(tab)) {
-            itemList.add(
-                    new ListItemBuilder()
-                            .withTitleRes(R.string.share)
-                            .withMenuId(R.id.share_tab)
-                            .withStartIconRes(R.drawable.tab_list_editor_share_icon)
-                            .withIsIncognito(isIncognito)
-                            .build());
-        }
 
-        if (mTabGroupModelFilter.getTabGroupCount() == 0) {
+        Collection<TabModelSelector> selectors =
+                ChromeFeatureList.sCrossWindowTabGroupOperations.isEnabled()
+                        ? TabWindowManagerSingleton.getInstance().getAllTabModelSelectors()
+                        : null;
+        boolean hasTabGroups = TabGroupUtils.hasTabGroups(mTabModel, selectors);
+        if (!hasTabGroups) {
             itemList.add(
                     new ListItemBuilder()
                             .withTitleRes(R.string.menu_add_tab_to_new_group)
@@ -249,9 +263,7 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
         } else {
             @StringRes
             int title =
-                    tab.getTabGroupId() == null
-                            ? R.string.menu_add_tab_to_group
-                            : R.string.menu_move_tab_to_group;
+                    TabGroupUiUtils.getAddToGroupMenuItemString(tab.getTabGroupId(), hasTabGroups);
             itemList.add(
                     new ListItemBuilder()
                             .withTitleRes(title)
@@ -279,6 +291,39 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                             .build());
         }
 
+        if (ShareUtils.shouldEnableShare(tab)) {
+            itemList.add(
+                    new ListItemBuilder()
+                            .withTitleRes(R.string.share)
+                            .withMenuId(R.id.share_tab)
+                            .withStartIconRes(R.drawable.tab_list_editor_share_icon)
+                            .withIsIncognito(isIncognito)
+                            .build());
+        }
+
+        if (!isIncognito
+                && ChromeFeatureList.isEnabled(
+                        ChromeFeatureList.SEND_TAB_TO_SELF_EXTRA_ENTRY_POINTS)) {
+            Integer sendTabToSelfDisplayReason =
+                    SendTabToSelfAndroidBridge.getEntryPointDisplayReason(
+                            assumeNonNull(mTabModel.getProfile()), tab.getUrl().getSpec());
+            if (sendTabToSelfDisplayReason != null) {
+                itemList.add(
+                        new ListItemBuilder()
+                                .withTitleRes(
+                                        org.chromium.chrome.R.string
+                                                .send_tab_to_self_context_menu_title)
+                                .withMenuId(R.id.send_tab_to_self)
+                                .withStartIconRes(org.chromium.chrome.R.drawable.send_tab)
+                                .withIsIncognito(isIncognito)
+                                .build());
+            }
+        }
+
+        itemList.add(buildTogglePinStateItem(tab));
+
+        itemList.add(buildMuteUnmuteSiteItem(tab, isIncognito));
+
         itemList.add(
                 new ListItemBuilder()
                         .withTitleRes(R.string.select_tab)
@@ -286,10 +331,6 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                         .withStartIconRes(R.drawable.ic_edit_24dp)
                         .withIsIncognito(isIncognito)
                         .build());
-
-        if (shouldBuildPinTabMenuItem()) {
-            itemList.add(buildTogglePinStateItem(tab));
-        }
 
         itemList.add(
                 new ListItemBuilder()
@@ -303,7 +344,7 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
     @Override
     protected int getMenuWidth(int anchorViewWidthPx) {
         return getDimensionPixelSize(
-                mTabGroupModelFilter.getTabGroupCount() == 0
+                mTabModel.getTabGroupCount() == 0
                         ? R.dimen.tab_grid_context_menu_extended_width
                         : R.dimen.tab_grid_context_menu_max_width);
     }
@@ -311,7 +352,7 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
     @Nullable
     @Override
     protected String getCollaborationIdOrNull(Integer id) {
-        @Nullable Tab tab = getTabById(mTabGroupModelFilter::getTabModel, id);
+        @Nullable Tab tab = getTabById(() -> mTabModel, id);
         if (tab == null) return null;
         return TabShareUtils.getCollaborationIdOrNull(tab.getTabGroupId(), mTabGroupSyncService);
     }
@@ -325,10 +366,6 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
         RecordUserAction.record(MENU_USER_ACTION_PREFIX + action);
     }
 
-    private static boolean shouldBuildPinTabMenuItem() {
-        return ChromeFeatureList.sAndroidPinnedTabs.isEnabled();
-    }
-
     private ListItem buildTogglePinStateItem(Tab tab) {
         boolean isTabPinned = tab.getIsPinned();
         @StringRes int titleRes = isTabPinned ? R.string.unpin_tab : R.string.pin_tab;
@@ -340,6 +377,21 @@ public class TabGridContextMenuCoordinator extends TabOverflowMenuCoordinator<@T
                 .withMenuId(menuId)
                 .withStartIconRes(iconRes)
                 .withIsIncognito(tab.isIncognitoBranded())
+                .build();
+    }
+
+    private ListItem buildMuteUnmuteSiteItem(Tab tab, boolean isIncognito) {
+        boolean showUnmute = mTabModel.isMuted(tab);
+        @StringRes int titleRes = showUnmute ? R.string.unmute_site : R.string.mute_site;
+        @IdRes int menuId = showUnmute ? R.id.unmute_site : R.id.mute_site;
+        @DrawableRes
+        int iconRes = showUnmute ? R.drawable.volume_up_24dp : R.drawable.volume_off_24dp;
+
+        return new ListItemBuilder()
+                .withTitleRes(titleRes)
+                .withMenuId(menuId)
+                .withStartIconRes(iconRes)
+                .withIsIncognito(isIncognito)
                 .build();
     }
 }

@@ -26,12 +26,19 @@ def plist_read(*args):
             {
                 'CFBundleDisplayName': 'Product'
             },
+        '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Info.plist':
+            {
+                'CFBundleIdentifier': bundle_id + '.AlertNotificationService'
+            },
+        '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Resources/base.lproj/InfoPlist.strings':
+            {
+                'CFBundleDisplayName': 'Product'
+            },
         '/$W/app-entitlements.plist': {
             'com.apple.application-identifier': bundle_id
         },
         '/$W/helper-renderer-entitlements.plist': {},
         '/$W/helper-gpu-entitlements.plist': {},
-        '/$W/helper-plugin-entitlements.plist': {},
         '/$W/App Product Canary.app/Contents/Resources/test.signing.bundle_id.canary.manifest/Contents/Resources/test.signing.bundle_id.canary.manifest':
             {
                 'pfm_domain': bundle_id
@@ -101,14 +108,12 @@ class TestModification(unittest.TestCase):
                 'KSChannelID-full': '-full'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -137,14 +142,12 @@ class TestModification(unittest.TestCase):
                 'KSChannelID-full': 'arm64-full'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -171,14 +174,12 @@ class TestModification(unittest.TestCase):
                 'KSChannelID-full': '-full'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -204,14 +205,12 @@ class TestModification(unittest.TestCase):
                 'KSChannelID-full': 'dev-full'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -241,14 +240,12 @@ class TestModification(unittest.TestCase):
                 'KSChannelID-full': 'arm64-dev-full'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -275,14 +272,12 @@ class TestModification(unittest.TestCase):
                 'CrProductDirName': 'Farmland/Cows'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -309,14 +304,12 @@ class TestModification(unittest.TestCase):
                 'CFBundleSignature': 'Mooo'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -343,14 +336,12 @@ class TestModification(unittest.TestCase):
                 'KSBrandID': 'RAWR'
             }, '/$W/App Product.app/Contents/Info.plist', 'xml1')
 
-        self.assertEqual(4, kwargs['copy_files'].call_count)
+        self.assertEqual(3, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -385,14 +376,12 @@ class TestModification(unittest.TestCase):
             ),
         ])
 
-        self.assertEqual(8, kwargs['copy_files'].call_count)
+        self.assertEqual(9, kwargs['copy_files'].call_count)
         kwargs['copy_files'].assert_has_calls([
             mock.call('/$I/Product Packaging/app-entitlements.plist',
                       '/$W/app-entitlements.plist'),
             mock.call('/$I/Product Packaging/helper-gpu-entitlements.plist',
                       '/$W/helper-gpu-entitlements.plist'),
-            mock.call('/$I/Product Packaging/helper-plugin-entitlements.plist',
-                      '/$W/helper-plugin-entitlements.plist'),
             mock.call(
                 '/$I/Product Packaging/helper-renderer-entitlements.plist',
                 '/$W/helper-renderer-entitlements.plist'),
@@ -408,12 +397,20 @@ class TestModification(unittest.TestCase):
             mock.call(
                 '/$I/Product Packaging/app_canary.icns',
                 '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Alerts).app/Contents/Resources/app.icns'
+            ),
+            mock.call(
+                '/$I/Product Packaging/Assets_canary.car',
+                '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Resources/Assets.car'
+            ),
+            mock.call(
+                '/$I/Product Packaging/app_canary.icns',
+                '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Resources/app.icns'
             )
         ])
         kwargs['write_file'].assert_called_once_with(
             '/$W/App Product Canary.app/Contents/PkgInfo', 'APPLMooo')
 
-        self.assertEqual(8, kwargs['write_plist'].call_count)
+        self.assertEqual(9, kwargs['write_plist'].call_count)
         kwargs['write_plist'].assert_has_calls([
             mock.call(
                 {
@@ -425,6 +422,17 @@ class TestModification(unittest.TestCase):
             mock.call({
                 'CFBundleDisplayName': 'Product Canary'
             }, '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Alerts).app/Contents/Resources/base.lproj/InfoPlist.strings',
+                      'binary1'),
+            mock.call(
+                {
+                    'CFBundleIdentifier':
+                        'test.signing.bundle_id.canary.AlertNotificationService'
+                },
+                '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Info.plist',
+                'xml1'),
+            mock.call({
+                'CFBundleDisplayName': 'Product Canary'
+            }, '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Resources/base.lproj/InfoPlist.strings',
                       'binary1'),
             mock.call(
                 {
@@ -444,7 +452,6 @@ class TestModification(unittest.TestCase):
                         'test.signing.bundle_id.canary'
                 }, '/$W/app-entitlements.plist', 'xml1'),
             mock.call({}, '/$W/helper-gpu-entitlements.plist', 'xml1'),
-            mock.call({}, '/$W/helper-plugin-entitlements.plist', 'xml1'),
             mock.call({}, '/$W/helper-renderer-entitlements.plist', 'xml1'),
             mock.call({
                 'pfm_domain': 'test.signing.bundle_id.canary'
@@ -461,7 +468,7 @@ class TestModification(unittest.TestCase):
 
         modification.customize_distribution(self.paths, dist, config)
 
-        self.assertEqual(5, kwargs['write_plist'].call_count)
+        self.assertEqual(4, kwargs['write_plist'].call_count)
         kwargs['write_plist'].assert_has_calls([
             mock.call(
                 {
@@ -479,8 +486,6 @@ class TestModification(unittest.TestCase):
             mock.call({'com.apple.security.get-task-allow': True},
                       '/$W/helper-gpu-entitlements.plist', 'xml1'),
             mock.call({'com.apple.security.get-task-allow': True},
-                      '/$W/helper-plugin-entitlements.plist', 'xml1'),
-            mock.call({'com.apple.security.get-task-allow': True},
                       '/$W/helper-renderer-entitlements.plist', 'xml1'),
         ])
 
@@ -496,7 +501,7 @@ class TestModification(unittest.TestCase):
 
         modification.customize_distribution(self.paths, dist, config)
 
-        self.assertEqual(8, kwargs['write_plist'].call_count)
+        self.assertEqual(9, kwargs['write_plist'].call_count)
         kwargs['write_plist'].assert_has_calls([
             mock.call(
                 {
@@ -508,6 +513,17 @@ class TestModification(unittest.TestCase):
             mock.call({
                 'CFBundleDisplayName': 'Product Canary'
             }, '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Alerts).app/Contents/Resources/base.lproj/InfoPlist.strings',
+                      'binary1'),
+            mock.call(
+                {
+                    'CFBundleIdentifier':
+                        'test.signing.bundle_id.canary.AlertNotificationService'
+                },
+                '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Info.plist',
+                'xml1'),
+            mock.call({
+                'CFBundleDisplayName': 'Product Canary'
+            }, '/$W/App Product Canary.app/Contents/Frameworks/Product Framework.framework/Helpers/Product Helper (Aperitif Alerts).app/Contents/Resources/base.lproj/InfoPlist.strings',
                       'binary1'),
             mock.call(
                 {
@@ -531,11 +547,133 @@ class TestModification(unittest.TestCase):
             mock.call({'com.apple.security.get-task-allow': True},
                       '/$W/helper-gpu-entitlements.plist', 'xml1'),
             mock.call({'com.apple.security.get-task-allow': True},
-                      '/$W/helper-plugin-entitlements.plist', 'xml1'),
-            mock.call({'com.apple.security.get-task-allow': True},
                       '/$W/helper-renderer-entitlements.plist', 'xml1'),
             mock.call({
                 'pfm_domain': 'test.signing.bundle_id.canary'
             }, '/$W/App Product Canary.app/Contents/Resources/test.signing.bundle_id.canary.manifest/Contents/Resources/test.signing.bundle_id.canary.manifest',
                       'xml1')
         ])
+
+    def test_distribution_with_sxs_channel_removes_google_chrome_scheme(
+            self, read_plist, **kwargs):
+
+        def plist_read_with_scheme(*args):
+            plist = plist_read(*args)
+            if 'Info.plist' in args[0]:
+                plist['CFBundleURLTypes'] = [{
+                    'CFBundleURLSchemes': ['google-chrome']
+                }, {
+                    'CFBundleURLSchemes': ['http', 'https']
+                }]
+            return plist
+
+        read_plist.side_effect = plist_read_with_scheme
+
+        # product_dirname implies Side-by-Side installation.
+        dist = model.Distribution(
+            channel='beta', product_dirname='BetaDir', direct_launch_scheme='')
+        config = dist.to_config(self.config)
+
+        modification.customize_distribution(self.paths, dist, config)
+
+        self.assertEqual(1, kwargs['write_plist'].call_count)
+        written_plist = kwargs['write_plist'].call_args[0][0]
+        url_types = written_plist.get('CFBundleURLTypes')
+        self.assertIsNotNone(url_types)
+        # Should be removed.
+        self.assertEqual(len(url_types), 1)
+        self.assertEqual(url_types[0]['CFBundleURLSchemes'], ['http', 'https'])
+
+    def test_distribution_with_floating_channel_keeps_google_chrome_scheme(
+            self, read_plist, **kwargs):
+
+        def plist_read_with_scheme(*args):
+            plist = plist_read(*args)
+            if 'Info.plist' in args[0]:
+                plist['CFBundleURLTypes'] = [{
+                    'CFBundleURLSchemes': ['google-chrome']
+                }, {
+                    'CFBundleURLSchemes': ['http', 'https']
+                }]
+            return plist
+
+        read_plist.side_effect = plist_read_with_scheme
+
+        # No product_dirname implies Floating (replaces Stable).
+        dist = model.Distribution(channel='beta')
+        config = dist.to_config(self.config)
+
+        modification.customize_distribution(self.paths, dist, config)
+
+        self.assertEqual(1, kwargs['write_plist'].call_count)
+        written_plist = kwargs['write_plist'].call_args[0][0]
+        url_types = written_plist.get('CFBundleURLTypes')
+        self.assertIsNotNone(url_types)
+        # Should be kept.
+        self.assertEqual(len(url_types), 2)
+        self.assertEqual(url_types[0]['CFBundleURLSchemes'], ['google-chrome'])
+        self.assertEqual(url_types[1]['CFBundleURLSchemes'], ['http', 'https'])
+
+    def test_distribution_with_explicit_scheme_config(self, read_plist,
+                                                      **kwargs):
+
+        def plist_read_with_scheme(*args):
+            plist = plist_read(*args)
+            if 'Info.plist' in args[0]:
+                plist['CFBundleURLTypes'] = [{
+                    'CFBundleURLSchemes': ['google-chrome']
+                }, {
+                    'CFBundleURLSchemes': ['http', 'https']
+                }]
+            return plist
+
+        read_plist.side_effect = plist_read_with_scheme
+
+        # Explicit config to 'custom-scheme'.
+        # Since tweak_info_plist put 'google-chrome', and it doesn't match
+        # 'custom-scheme', it should be removed.
+        dist = model.Distribution(
+            channel='beta', direct_launch_scheme='custom-scheme')
+        config = dist.to_config(self.config)
+
+        modification.customize_distribution(self.paths, dist, config)
+
+        self.assertEqual(1, kwargs['write_plist'].call_count)
+        written_plist = kwargs['write_plist'].call_args[0][0]
+        url_types = written_plist.get('CFBundleURLTypes')
+        self.assertIsNotNone(url_types)
+        # Should be removed.
+        self.assertEqual(len(url_types), 1)
+        self.assertEqual(url_types[0]['CFBundleURLSchemes'], ['http', 'https'])
+
+    def test_distribution_with_explicit_scheme_overrides_sxs_removal(
+            self, read_plist, **kwargs):
+
+        def plist_read_with_scheme(*args):
+            plist = plist_read(*args)
+            if 'Info.plist' in args[0]:
+                plist['CFBundleURLTypes'] = [{
+                    'CFBundleURLSchemes': ['google-chrome']
+                }, {
+                    'CFBundleURLSchemes': ['http', 'https']
+                }]
+            return plist
+
+        read_plist.side_effect = plist_read_with_scheme
+
+        # SxS (would remove by heuristic) BUT Config says 'google-chrome' (Keep).
+        dist = model.Distribution(
+            channel='beta',
+            product_dirname='BetaDir',
+            direct_launch_scheme='google-chrome')
+        config = dist.to_config(self.config)
+
+        modification.customize_distribution(self.paths, dist, config)
+
+        self.assertEqual(1, kwargs['write_plist'].call_count)
+        written_plist = kwargs['write_plist'].call_args[0][0]
+        url_types = written_plist.get('CFBundleURLTypes')
+        self.assertIsNotNone(url_types)
+        # Should be KEPT.
+        self.assertEqual(len(url_types), 2)
+        self.assertEqual(url_types[0]['CFBundleURLSchemes'], ['google-chrome'])

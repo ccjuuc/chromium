@@ -19,8 +19,6 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
@@ -75,16 +73,11 @@ public class IncognitoInteractionTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({ChromeFeatureList.PROPAGATE_DEVICE_CONTENT_FILTERS_TO_SUPERVISED_USER})
     // This policy explicitly allows incognito mode, and has higher priority over local parental
     // controls.
     @Policies.Add({@Policies.Item(key = "IncognitoModeAvailability", string = "0")})
     public void incognitoTabsNotClosedWhenPolicyAllowsIncognito() throws Exception {
         Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    SupervisedUserServiceTestBridge.init(profile);
-                });
 
         // Create a new incognito tab. This succeeds, as the device is not
         // supervised.
@@ -104,14 +97,9 @@ public class IncognitoInteractionTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({ChromeFeatureList.PROPAGATE_DEVICE_CONTENT_FILTERS_TO_SUPERVISED_USER})
     public void incognitoTabsClosedWhenBrowserContentFilteringIsEnabledWithoutAccount()
             throws Exception {
         Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    SupervisedUserServiceTestBridge.init(profile);
-                });
 
         // Create a new incognito tab. This succeeds, as the device is not
         // supervised.
@@ -132,15 +120,10 @@ public class IncognitoInteractionTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({ChromeFeatureList.PROPAGATE_DEVICE_CONTENT_FILTERS_TO_SUPERVISED_USER})
     public void incognitoTabsClosedWhenBrowserContentFilteringIsEnabledWithAccount()
             throws Exception {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    SupervisedUserServiceTestBridge.init(profile);
-                });
 
         // Create a new incognito tab. This succeeds, as the device is not
         // supervised (however, a regular account is signed in).
@@ -161,15 +144,10 @@ public class IncognitoInteractionTest {
 
     @Test
     @LargeTest
-    @EnableFeatures({ChromeFeatureList.PROPAGATE_DEVICE_CONTENT_FILTERS_TO_SUPERVISED_USER})
     public void incognitoTabsClosedWhenSearchContentFilteringIsEnabledWithAccount()
             throws Exception {
         mSigninTestRule.addAccountThenSignin(TestAccounts.ACCOUNT1);
         Profile profile = mActivityTestRule.getProfile(/* incognito= */ false);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    SupervisedUserServiceTestBridge.init(profile);
-                });
 
         // Create a new incognito tab. This succeeds, as the device is not
         // supervised (however, a regular account is signed in).

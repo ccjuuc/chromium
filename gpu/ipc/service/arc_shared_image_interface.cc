@@ -36,6 +36,16 @@ bool MakeContextCurrentOnGpuThread(SharedContextState* context_state,
   return context_state->MakeCurrent(/*surface=*/nullptr, needs_gl);
 }
 
+void DestroyFactoryOnGpuThread(
+    std::unique_ptr<gpu::SharedImageFactory> shared_image_factory) {
+  if (shared_image_factory && shared_image_factory->HasImages()) {
+    // Some of the backings might require a current GL context to be destroyed.
+    bool have_context = MakeContextCurrentOnGpuThread(
+        shared_image_factory->shared_context_state(), /*needs_gl=*/true);
+    shared_image_factory->DestroyAllSharedImages(have_context);
+  }
+}
+
 }  // namespace
 
 // static
@@ -72,13 +82,13 @@ ArcSharedImageInterface::ArcSharedImageInterface(
       gpu_task_runner_(std::move(gpu_task_runner)) {}
 
 ArcSharedImageInterface::~ArcSharedImageInterface() {
-  CHECK(gpu_task_runner_->BelongsToCurrentThread());
-  if (shared_image_factory_->HasImages()) {
-    // Some of the backings might require a current GL context to be destroyed.
-    bool have_context = MakeContextCurrentOnGpuThread(/*needs_gl=*/true);
-    shared_image_factory_->DestroyAllSharedImages(have_context);
+  if (gpu_task_runner_->BelongsToCurrentThread()) {
+    DestroyFactoryOnGpuThread(std::move(shared_image_factory_));
+  } else {
+    gpu_task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&DestroyFactoryOnGpuThread,
+                                  std::move(shared_image_factory_)));
   }
-  shared_image_factory_.reset();
 }
 
 scoped_refptr<ClientSharedImage> ArcSharedImageInterface::CreateSharedImage(
@@ -95,7 +105,7 @@ scoped_refptr<ClientSharedImage> ArcSharedImageInterface::CreateSharedImage(
   // Copy which can be modified.
   SharedImageInfo si_info_copy = si_info;
   // Set CPU read/write usage based on buffer usage.
-  si_info_copy.meta.usage |= GetCpuSIUsage(buffer_usage);
+  si_info_copy.usage |= GetCpuSIUsage(buffer_usage);
 
   gpu_task_runner_->PostTask(
       FROM_HERE,
@@ -119,11 +129,8 @@ void ArcSharedImageInterface::CreateSharedImageOnGpuThread(
     return;
   }
 
-  if (!shared_image_factory_->CreateSharedImage(
-          mailbox, si_info.meta.format, si_info.meta.size,
-          si_info.meta.color_space, si_info.meta.surface_origin,
-          si_info.meta.alpha_type, si_info.meta.usage,
-          std::move(si_info.debug_label), std::move(buffer_handle))) {
+  if (!shared_image_factory_->CreateSharedImage(mailbox, si_info,
+                                                std::move(buffer_handle))) {
     shared_image_factory_->shared_context_state()->MarkContextLost();
     encountered_error_.store(true, std::memory_order_relaxed);
     return;

@@ -36,7 +36,7 @@ class ONCValidatorTest : public ::testing::Test {
   // validation is stored, so that expectations can be checked afterwards using
   // one of the Expect* functions below.
   void Validate(bool strict,
-                base::Value::Dict onc_object,
+                base::DictValue onc_object,
                 const OncValueSignature* signature,
                 bool managed_onc,
                 ::onc::ONCSource onc_source) {
@@ -70,7 +70,7 @@ class ONCValidatorTest : public ::testing::Test {
         test_utils::Equals(&original_object_, &repaired_object_.value()));
   }
 
-  void ExpectRepairWithWarnings(const base::Value::Dict& expected_repaired) {
+  void ExpectRepairWithWarnings(const base::DictValue& expected_repaired) {
     EXPECT_EQ(Validator::VALID_WITH_WARNINGS, validation_result_);
     EXPECT_TRUE(
         test_utils::Equals(&expected_repaired, &repaired_object_.value()));
@@ -83,8 +83,8 @@ class ONCValidatorTest : public ::testing::Test {
 
  private:
   Validator::Result validation_result_;
-  base::Value::Dict original_object_;
-  std::optional<base::Value::Dict> repaired_object_;
+  base::DictValue original_object_;
+  std::optional<base::DictValue> repaired_object_;
 };
 
 namespace {
@@ -118,11 +118,95 @@ struct OncParams {
 // Ensure that the constant |kEmptyUnencryptedConfiguration| describes a valid
 // ONC toplevel object.
 TEST_F(ONCValidatorTest, EmptyUnencryptedConfiguration) {
-  std::optional<base::Value::Dict> dict =
+  std::optional<base::DictValue> dict =
       ReadDictionaryFromJson(kEmptyUnencryptedConfiguration);
   EXPECT_TRUE(dict.has_value());
   Validate(true, std::move(dict.value()), &kToplevelConfigurationSignature,
            false, ::onc::ONC_SOURCE_NONE);
+  ExpectValid();
+}
+
+// ONC configuration containing the sensitive ${PASSWORD} placeholder.
+const char kOncWithPasswordPlaceholderEAP[] =
+    "{"
+    "  \"GUID\": \"test-guid\","
+    "  \"Type\": \"WiFi\","
+    "  \"Name\": \"Test Network\","
+    "  \"WiFi\": {"
+    "    \"SSID\": \"Test\","
+    "    \"HexSSID\": \"54657374\","
+    "    \"Security\": \"WPA-EAP\","
+    "    \"EAP\": {"
+    "      \"Outer\": \"PEAP\","
+    "      \"Password\": \"${PASSWORD}\""
+    "    }"
+    "  }"
+    "}";
+
+const char kOncWithPasswordPlaceholderL2TP[] =
+    "{"
+    "  \"GUID\": \"test-guid-l2tp\","
+    "  \"Type\": \"VPN\","
+    "  \"Name\": \"Test L2TP Network\","
+    "  \"VPN\": {"
+    "    \"Type\": \"L2TP-IPsec\","
+    "    \"L2TP\": {"
+    "      \"Password\": \"${PASSWORD}\""
+    "    },"
+    "    \"IPsec\": {"
+    "      \"AuthenticationType\": \"PSK\","
+    "      \"PSK\": \"test-psk\","
+    "      \"IKEVersion\": 2"
+    "    }"
+    "  }"
+    "}";
+
+// Ensure that ${PASSWORD} is rejected for L2TP when the source is user import.
+TEST_F(ONCValidatorTest, RejectPasswordPlaceholderInL2TPUserImport) {
+  std::optional<base::DictValue> dict =
+      ReadDictionaryFromJson(kOncWithPasswordPlaceholderL2TP);
+  EXPECT_TRUE(dict.has_value());
+
+  ::onc::ONCSource source = ::onc::ONC_SOURCE_USER_IMPORT;
+  Validate(true, std::move(dict.value()), &kNetworkConfigurationSignature,
+           false, source);
+  ExpectInvalid();
+}
+
+// Ensure that ${PASSWORD} is allowed for L2TP when the source is a managed
+// policy.
+TEST_F(ONCValidatorTest, AllowPasswordPlaceholderInL2TPManagedPolicy) {
+  std::optional<base::DictValue> dict =
+      ReadDictionaryFromJson(kOncWithPasswordPlaceholderL2TP);
+  EXPECT_TRUE(dict.has_value());
+
+  ::onc::ONCSource source = ::onc::ONC_SOURCE_USER_POLICY;
+  Validate(true, std::move(dict.value()), &kNetworkConfigurationSignature,
+           false, source);
+  ExpectValid();
+}
+
+// Ensure that ${PASSWORD} is rejected when the source is user import.
+TEST_F(ONCValidatorTest, RejectPasswordPlaceholderInUserImport) {
+  std::optional<base::DictValue> dict =
+      ReadDictionaryFromJson(kOncWithPasswordPlaceholderEAP);
+  EXPECT_TRUE(dict.has_value());
+
+  ::onc::ONCSource source = ::onc::ONC_SOURCE_USER_IMPORT;
+  Validate(true, std::move(dict.value()), &kNetworkConfigurationSignature,
+           false, source);
+  ExpectInvalid();
+}
+
+// Ensure that ${PASSWORD} is allowed when the source is a managed policy.
+TEST_F(ONCValidatorTest, AllowPasswordPlaceholderInManagedPolicy) {
+  std::optional<base::DictValue> dict =
+      ReadDictionaryFromJson(kOncWithPasswordPlaceholderEAP);
+  EXPECT_TRUE(dict.has_value());
+
+  ::onc::ONCSource source = ::onc::ONC_SOURCE_USER_POLICY;
+  Validate(true, std::move(dict.value()), &kNetworkConfigurationSignature,
+           false, source);
   ExpectValid();
 }
 
@@ -352,12 +436,12 @@ class ONCValidatorTestRepairable
  public:
   // Load the common test data and return the dictionary at the field with
   // name |name|.
-  base::Value::Dict GetDictionaryFromTestFile(const std::string& name) {
-    base::Value::Dict dict =
+  base::DictValue GetDictionaryFromTestFile(const std::string& name) {
+    base::DictValue dict =
         test_utils::ReadTestDictionary("invalid_settings_with_repairs.json");
-    base::Value::Dict* result = dict.FindDict(name);
+    base::DictValue* result = dict.FindDict(name);
     EXPECT_TRUE(result);
-    return result ? std::move(*result) : base::Value::Dict();
+    return result ? std::move(*result) : base::DictValue();
   }
 };
 
@@ -689,5 +773,37 @@ INSTANTIATE_TEST_SUITE_P(
                                  &kNetworkConfigurationSignature,
                                  true),
                        ExpectBothNotValid("", ""))));
+
+TEST_F(ONCValidatorTest, UserImportTrustBits) {
+  const char kAttackOnc[] =
+      "{\"Type\":\"UnencryptedConfiguration\",\"NetworkConfigurations\":[],"
+      "\"Certificates\":[{\"GUID\":\"{malicious-ca-guid}\",\"Type\":"
+      "\"Authority\","
+      "\"TrustBits\":[\"Web\"],\"X509\":\"MII\"}]}";
+
+  // In strict mode, the certificate containing prohibited TrustBits is rejected
+  // and dropped from the Certificates list.
+  const char kStrictRepairedOnc[] =
+      "{\"Type\":\"UnencryptedConfiguration\",\"NetworkConfigurations\":[],"
+      "\"Certificates\":[]}";
+
+  // In liberal mode, prohibited TrustBits are stripped from the certificate,
+  // and the remaining certificate is kept.
+  const char kLiberalRepairedOnc[] =
+      "{\"Type\":\"UnencryptedConfiguration\",\"NetworkConfigurations\":[],"
+      "\"Certificates\":[{\"GUID\":\"{malicious-ca-guid}\",\"Type\":"
+      "\"Authority\","
+      "\"X509\":\"MII\"}]}";
+
+  Validate(true, ReadDictionaryFromJson(kAttackOnc).value(),
+           &kToplevelConfigurationSignature, false,
+           ::onc::ONC_SOURCE_USER_IMPORT);
+  ExpectRepairWithWarnings(ReadDictionaryFromJson(kStrictRepairedOnc).value());
+
+  Validate(false, ReadDictionaryFromJson(kAttackOnc).value(),
+           &kToplevelConfigurationSignature, false,
+           ::onc::ONC_SOURCE_USER_IMPORT);
+  ExpectRepairWithWarnings(ReadDictionaryFromJson(kLiberalRepairedOnc).value());
+}
 
 }  // namespace chromeos::onc

@@ -2,33 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var assertEq = chrome.test.assertEq;
-var assertFalse = chrome.test.assertFalse;
-var assertTrue = chrome.test.assertTrue;
-var callbackFail = chrome.test.callbackFail;
-var callbackPass = chrome.test.callbackPass;
+const assertEq = chrome.test.assertEq;
+const assertFalse = chrome.test.assertFalse;
+const assertTrue = chrome.test.assertTrue;
+const callbackFail = chrome.test.callbackFail;
+const callbackPass = chrome.test.callbackPass;
 
-var RoleType = chrome.automation.RoleType;
+const RoleType = chrome.automation.RoleType;
 
 function canXhr(url) {
   assertFalse(url == null);
-  var xhr = new XMLHttpRequest();
+  const xhr = new XMLHttpRequest();
   xhr.open('GET', url, false);
-  var success = true;
+  let success = true;
   try {
     xhr.send();
-  } catch(e) {
+  } catch (e) {
     assertEq('NetworkError', e.name);
     success = false;
   }
   return success;
 }
 
-var cachedUrl = null;
-var iframeDone = null;
+let cachedUrl = null;
+let iframeDone = null;
 
 chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-  if (request.message == 'xhr') {
+  if (request.message === 'xhr') {
     sendResponse({url: cachedUrl});
   } else {
     assertTrue(request.success);
@@ -36,22 +36,21 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   }
 });
 
-var iframeUrl = chrome.runtime.getURL('iframe.html');
-var injectIframe =
-    'var iframe = document.createElement("iframe");\n' +
-    'iframe.src = "' + iframeUrl + '";\n' +
-    'document.body.appendChild(iframe);\n';
+const iframeUrl = chrome.runtime.getURL('iframe.html');
+const injectIframe = `let iframe = document.createElement('iframe');\n` +
+    `iframe.src = '${iframeUrl}';\n` +
+    `document.body.appendChild(iframe);\n`;
 
-var runCount = 0;
+let runCount = 0;
 chrome.browserAction.onClicked.addListener(function(tab) {
   runCount++;
-  if (runCount == 1) {
+  if (runCount === 1) {
     // First pass is done without granting activeTab permission, the extension
     // shouldn't have access to tab.url here.
     assertFalse(!!tab.url);
     chrome.test.succeed();
     return;
-  } else if (runCount == 3) {
+  } else if (runCount === 3) {
     // Third pass is done in a public session, and activeTab permission is
     // granted to the extension. URL should be scrubbed down to the origin
     // here (tested at the C++ side).
@@ -68,17 +67,18 @@ chrome.browserAction.onClicked.addListener(function(tab) {
   assertTrue(canXhr(tab.url));
 });
 
-var navigationCount = 0;
+let navigationCount = 0;
 chrome.webNavigation.onCompleted.addListener(function(details) {
-  if (!details.url.endsWith('page.html'))
+  if (!details.url.endsWith('page.html')) {
     return;
+  }
 
   navigationCount++;
   chrome.test.sendMessage(navigationCount.toString());
 
   // The second navigation remains on the same site, so we should still have
   // access.
-  var expectHasAccess = navigationCount === 2;
+  const expectHasAccess = navigationCount === 2;
 
   if (expectHasAccess) {
     chrome.tabs.executeScript({code: 'true'}, callbackPass());

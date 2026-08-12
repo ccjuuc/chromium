@@ -5,9 +5,9 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_link_header_footer_item.h"
 
 #import "base/check_op.h"
-#import "base/containers/contains.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/string_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -52,9 +52,8 @@ const CGFloat kHorizontalSpacingToAlignWithItems = 16.0;
 
 #pragma mark CollectionViewItem
 
-- (void)configureHeaderFooterView:(TableViewLinkHeaderFooterView*)headerFooter
-                       withStyler:(ChromeTableViewStyler*)styler {
-  [super configureHeaderFooterView:headerFooter withStyler:styler];
+- (void)configureHeaderFooterView:(TableViewLinkHeaderFooterView*)headerFooter {
+  [super configureHeaderFooterView:headerFooter];
 
   if ([self.urls count] != 0) {
     headerFooter.urls = self.urls;
@@ -110,10 +109,10 @@ const CGFloat kHorizontalSpacingToAlignWithItems = 16.0;
 
     leadingConstraint_ = [_textView.leadingAnchor
         constraintEqualToAnchor:self.contentView.leadingAnchor
-                       constant:HorizontalPadding()];
+                       constant:ChromeTableViewHorizontalPadding()];
     trailingConstraint_ = [_textView.trailingAnchor
         constraintEqualToAnchor:self.contentView.trailingAnchor
-                       constant:-HorizontalPadding()];
+                       constant:-ChromeTableViewHorizontalPadding()];
 
     [NSLayoutConstraint activateConstraints:@[
       [_textView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor
@@ -197,10 +196,12 @@ const CGFloat kHorizontalSpacingToAlignWithItems = 16.0;
 }
 
 - (void)setForceIndents:(BOOL)forceIndents {
-  leadingConstraint_.constant =
-      forceIndents ? kHorizontalSpacingToAlignWithItems : HorizontalPadding();
-  trailingConstraint_.constant =
-      forceIndents ? -kHorizontalSpacingToAlignWithItems : -HorizontalPadding();
+  leadingConstraint_.constant = forceIndents
+                                    ? kHorizontalSpacingToAlignWithItems
+                                    : ChromeTableViewHorizontalPadding();
+  trailingConstraint_.constant = forceIndents
+                                     ? -kHorizontalSpacingToAlignWithItems
+                                     : -ChromeTableViewHorizontalPadding();
 }
 
 - (void)setLinkEnabled:(BOOL)enabled {
@@ -213,7 +214,7 @@ const CGFloat kHorizontalSpacingToAlignWithItems = 16.0;
 
 - (UIAction*)textView:(UITextView*)textView
     primaryActionForTextItem:(UITextItem*)textItem
-               defaultAction:(UIAction*)defaultAction API_AVAILABLE(ios(17.0)) {
+               defaultAction:(UIAction*)defaultAction {
   DCHECK(self.textView == textView);
   CrURL* crurl = [[CrURL alloc] initWithNSURL:textItem.link];
   DCHECK(crurl.gurl.is_valid());

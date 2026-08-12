@@ -7,6 +7,8 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/time/time.h"
+#include "chrome/common/actor.mojom.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 
 namespace actor {
 
@@ -41,10 +43,18 @@ bool RequiresPageStabilization(const mojom::ActionResult& result) {
 }
 
 mojom::ActionResultPtr MakeOkResult(bool requires_page_stabilization) {
+  return MakeOkResultWithMessage(requires_page_stabilization, std::string());
+}
+
+mojom::ActionResultPtr MakeOkResultWithMessage(bool requires_page_stabilization,
+                                               const std::string& message) {
   return mojom::ActionResult::New(
-      mojom::ActionResultCode::kOk, requires_page_stabilization, std::string(),
-      /*script_tool_response=*/std::nullopt,
-      /*execution_end_time=*/base::TimeTicks::Now());
+      mojom::ActionResultCode::kOk, requires_page_stabilization, message,
+      /*script_tool_response=*/nullptr,
+      /*execution_end_time=*/base::TimeTicks::Now(),
+      mojom::ScreenshotPolicy::kRequested,
+      mojom::PageContentExtractionPolicy::kRequested,
+      /*attempt_login_status=*/std::nullopt);
 }
 
 mojom::ActionResultPtr MakeResult(mojom::ActionResultCode code,
@@ -54,8 +64,23 @@ mojom::ActionResultPtr MakeResult(mojom::ActionResultCode code,
   DCHECK(!IsOk(code));
   return mojom::ActionResult::New(
       code, requires_page_stabilization, std::string(msg),
-      /*script_tool_response=*/std::nullopt,
-      /*execution_end_time=*/base::TimeTicks::Now());
+      /*script_tool_response=*/nullptr,
+      /*execution_end_time=*/base::TimeTicks::Now(),
+      mojom::ScreenshotPolicy::kRequested,
+      mojom::PageContentExtractionPolicy::kRequested,
+      /*attempt_login_status=*/std::nullopt);
+}
+
+std::vector<ActionResultWithLatencyInfo> MakeResultVector(
+    mojom::ActionResultPtr result) {
+  const auto now = base::TimeTicks::Now();
+  return std::vector<ActionResultWithLatencyInfo>(
+      {ActionResultWithLatencyInfo(now, now, std::move(result))});
+}
+
+std::vector<ActionResultWithLatencyInfo> MakeResultVector(
+    mojom::ActionResultCode code) {
+  return MakeResultVector(MakeResult(code));
 }
 
 std::string ToDebugString(const mojom::ActionResult& result) {

@@ -7,7 +7,12 @@ package org.chromium.ui;
 import static android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
 import static android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
+import android.app.Activity;
+import android.content.ComponentCallbacks;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
@@ -19,6 +24,7 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.StrictMode;
 import android.text.Spanned;
 import android.text.TextUtils;
@@ -31,6 +37,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.WindowMetrics;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -54,17 +61,17 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.base.UiAndroidFeatureMap;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.WeakHashMap;
 
-/**
- * Utility functions for common Android UI tasks.
- * This class is not supposed to be instantiated.
- */
+/** Utility functions for common Android UI tasks. This class is not supposed to be instantiated. */
 @NullMarked
 public class UiUtils {
     private static final String TAG = "UiUtils";
@@ -77,8 +84,36 @@ public class UiUtils {
     // this long after the prompt is displayed.
     public static long PROMPT_INPUT_PROTECTION_SHORT_DELAY_MS = 600;
 
+    // Font feature setting to disable ligature rendering.
+    private static final String NO_LIGATURES = "\"liga\" 0, \"clig\" 0";
+
+    /**
+     * Cache for window metrics per Activity. Cache this because getMaximumWindowMetrics() triggers
+     * an IPC. The value is cleared when a configuration change happens that affects window sizes.
+     * The WeakHashMap ensures there are no memory leaks when an Activity is destroyed.
+     */
+    private static final WeakHashMap<Activity, GestureNavMetrics> sActivityGestureNavMetrics =
+            new WeakHashMap<>();
+
     /** Guards this class from being instantiated. */
     private UiUtils() {}
+
+    /**
+     * Recursively walks the view tree and disables ligatures on all TextViews
+     *
+     * @param view The root view{@link View}
+     */
+    public static void disableLigaturesForSecurity(View view) {
+        if (view instanceof TextView) {
+            ((TextView) view).setFontFeatureSettings(NO_LIGATURES);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                disableLigaturesForSecurity(group.getChildAt(i));
+            }
+        }
+    }
 
     /**
      * Gets the set of locales supported by the current enabled Input Methods.
@@ -199,7 +234,7 @@ public class UiUtils {
                 screenshot = bitmap;
             }
         } catch (OutOfMemoryError e) {
-            Log.d(TAG, "Unable to capture screenshot and scale it down." + e.getMessage());
+            Log.d(TAG, "Unable to capture screenshot and scale it down. %s", e.getMessage());
         } finally {
             if (!drawingCacheEnabled) currentView.setDrawingCacheEnabled(false);
             prepareViewHierarchyForScreenshot(currentView, false);
@@ -334,13 +369,13 @@ public class UiUtils {
     /**
      * Gets a drawable from the resources and applies the specified tint to it. Uses Support Library
      * for vector drawables and tinting on older Android versions.
+     *
      * @param drawableId The resource id for the drawable.
      * @param tintColorId The resource id for the color to build ColorStateList with.
      */
     public static Drawable getTintedDrawable(
             Context context, @DrawableRes int drawableId, @ColorRes int tintColorId) {
-        return getTintedDrawable(
-                context, drawableId, AppCompatResources.getColorStateList(context, tintColorId));
+        return getTintedDrawable(context, drawableId, context.getColorStateList(tintColorId));
     }
 
     /**
@@ -366,7 +401,7 @@ public class UiUtils {
      * @param lightNavigationBar Whether the navigation bar has a light appearance with dark icons.
      */
     public static void setNavigationBarIconColor(View rootView, boolean lightNavigationBar) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = rootView.getWindowInsetsController();
             if (controller != null) {
                 controller.setSystemBarsAppearance(
@@ -410,7 +445,7 @@ public class UiUtils {
      * @param lightStatusBar Whether the status bar has a light appearance with dark icons.
      */
     public static void setStatusBarIconColor(View rootView, boolean lightStatusBar) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = rootView.getWindowInsetsController();
             if (controller != null) {
                 controller.setSystemBarsAppearance(
@@ -438,15 +473,84 @@ public class UiUtils {
                 != Configuration.KEYBOARD_NOKEYS;
     }
 
+    private static class GestureNavMetrics implements ComponentCallbacks {
+        public @Nullable WindowInsetsCompat windowInsets;
+        private @Nullable Configuration mLastConfig;
+
+        public void updateConfig(Configuration config) {
+            if (mLastConfig == null) {
+                mLastConfig = new Configuration(config);
+            } else {
+                mLastConfig.setTo(config);
+            }
+        }
+
+        @Override
+        public void onConfigurationChanged(Configuration newConfig) {
+            boolean shouldUpdate = true;
+            if (mLastConfig != null) {
+                int diff = mLastConfig.diff(newConfig);
+                int mask =
+                        ActivityInfo.CONFIG_SCREEN_SIZE
+                                | ActivityInfo.CONFIG_ORIENTATION
+                                | ActivityInfo.CONFIG_SCREEN_LAYOUT
+                                | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE
+                                | ActivityInfo.CONFIG_DENSITY
+                                | ActivityInfo.CONFIG_UI_MODE;
+                shouldUpdate = (diff & mask) != 0;
+            }
+            if (shouldUpdate) {
+                windowInsets = null;
+            }
+            updateConfig(newConfig);
+        }
+
+        @Override
+        public void onLowMemory() {}
+    }
+
     /**
      * @param window The application window which includes the decor view.
      * @return True if gesture navigation mode is on.
      */
     public static boolean isGestureNavigationMode(Window window) {
-        // https://stackoverflow.com/a/70514883
-        WindowInsetsCompat windowInsets =
-                WindowInsetsCompat.toWindowInsetsCompat(
-                        window.getDecorView().getRootWindowInsets());
+        WindowInsetsCompat windowInsets;
+        boolean isMultiWindow = false;
+        Activity activity = ContextUtils.activityFromContext(window.getContext());
+        if (activity != null) {
+            isMultiWindow = activity.isInMultiWindowMode();
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && isMultiWindow
+                && UiAndroidFeatureMap.isEnabled(
+                        UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION)) {
+            if (UiAndroidFeatureMap.isEnabled(UiAndroidFeatures.CACHED_GESTURE_NAV_METRICS)) {
+                assertNonNull(activity);
+                GestureNavMetrics cached = sActivityGestureNavMetrics.get(activity);
+                if (cached == null) {
+                    cached = new GestureNavMetrics();
+                    activity.registerComponentCallbacks(cached);
+                    sActivityGestureNavMetrics.put(activity, cached);
+                }
+                if (cached.windowInsets == null) {
+                    WindowMetrics maxMetrics = window.getWindowManager().getMaximumWindowMetrics();
+                    cached.windowInsets =
+                            WindowInsetsCompat.toWindowInsetsCompat(maxMetrics.getWindowInsets());
+                    cached.updateConfig(activity.getResources().getConfiguration());
+                }
+                windowInsets = cached.windowInsets;
+            } else {
+                WindowMetrics maxMetrics = window.getWindowManager().getMaximumWindowMetrics();
+                windowInsets =
+                        WindowInsetsCompat.toWindowInsetsCompat(maxMetrics.getWindowInsets());
+            }
+        } else {
+            // This is not reliable in desktop mode.
+            // https://stackoverflow.com/a/70514883
+            windowInsets =
+                    WindowInsetsCompat.toWindowInsetsCompat(
+                            window.getDecorView().getRootWindowInsets());
+        }
         // Use systemGestures rather than tappableElements.
         // In some devices, like Samsung Fold, which has a dock, the bottom inset of
         // tappableElements is non-zero even when gesture mode is on.

@@ -5,14 +5,9 @@
 source_set("public") {
   sources = [
     "fakebox_focuser.h",
-    "omnibox_position_metrics.h",
-    "omnibox_position_metrics.mm",
-    "omnibox_position_util.h",
-    "omnibox_position_util.mm",
     "side_swipe_toolbar_interacting.h",
     "side_swipe_toolbar_snapshot_providing.h",
     "toolbar_coordinating.h",
-    "toolbar_height_delegate.h",
     "toolbar_omnibox_consumer.h",
     "toolbar_type.h",
     "toolbar_utils.h",

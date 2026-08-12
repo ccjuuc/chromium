@@ -23,8 +23,7 @@ class DPAPIKeyProviderTest;
 
 // The DPAPI Key Provider provides forwards and backwards compatibility with
 // OSCrypt's in-built DPAPI support on Windows. The Key provider will use the
-// key from OSCrypt's storage which is encrypted with DPAPI. OSCrypt::Init
-// should always be called before attempting to obtain a key from this provider.
+// key from OSCrypt's storage which is encrypted with DPAPI.
 class DPAPIKeyProvider : public KeyProvider {
  public:
   explicit DPAPIKeyProvider(PrefService* local_state);
@@ -53,7 +52,6 @@ class DPAPIKeyProvider : public KeyProvider {
   // os_crypt_async::KeyProvider interface.
   void GetKey(KeyCallback callback) override;
   bool UseForEncryption() override;
-  bool IsCompatibleWithOsCryptSync() override;
 
   // Attempt to retrieve `encrypted_key` from `pref_path`. If a key is found
   // that matches and has correct `key_prefix` then the raw encrypted key is

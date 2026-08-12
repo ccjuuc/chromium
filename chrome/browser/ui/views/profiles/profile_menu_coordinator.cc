@@ -16,12 +16,11 @@
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
 #include "chrome/browser/ui/views/profiles/incognito_menu_view.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_view_base.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -41,35 +40,23 @@ ProfileMenuCoordinator::~ProfileMenuCoordinator() {
 void ProfileMenuCoordinator::Show(bool is_source_accelerator,
                                   bool from_avatar_promo) {
   // TODO(crbug.com/425953501): Update this code.
-  Browser* const browser = browser_->GetBrowserForMigrationOnly();
-  auto* avatar_toolbar_button =
-      BrowserElements::From(browser)->GetElement(kToolbarAvatarButtonElementId);
+  auto avatar_toolbar_button = GetAvatarToolbarButton();
 
   // Do not show avatar bubble if there is no avatar menu button or if the
   // bubble is already showing.
-  if (!avatar_toolbar_button || IsShowing()) {
+  if (avatar_toolbar_button.IsNull() || IsShowing()) {
     return;
   }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // Only request promo info if the user is signed in.
-  if (signin_util::GetSignedInState(IdentityManagerFactory::GetForProfile(
-          GetProfile())) == signin_util::SignedInState::kSignedIn) {
-    signin::ComputeProfileMenuAvatarButtonPromoInfo(
-        *GetProfile(),
-        base::BindOnce(&ProfileMenuCoordinator::ShowWithPromoResults,
-                       weak_pointer_factory_.GetWeakPtr(),
-                       is_source_accelerator, from_avatar_promo));
-    return;
-  }
+  signin::ComputeProfileMenuAvatarButtonPromoInfo(
+      *GetProfile(),
+      base::BindOnce(&ProfileMenuCoordinator::ShowWithPromoResults,
+                     weak_pointer_factory_.GetWeakPtr(), is_source_accelerator,
+                     from_avatar_promo));
+#else
+  ShowWithPromoResults(is_source_accelerator, from_avatar_promo);
 #endif
-
-  ShowWithPromoResults(is_source_accelerator, from_avatar_promo
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-                       ,
-                       signin::ProfileMenuAvatarButtonPromoInfo()
-#endif
-  );
 }
 
 void ProfileMenuCoordinator::ShowWithPromoResults(
@@ -80,6 +67,13 @@ void ProfileMenuCoordinator::ShowWithPromoResults(
     signin::ProfileMenuAvatarButtonPromoInfo promo_info
 #endif
 ) {
+  // Results are asynchronous, which can cause the menu to be already shown
+  // before receiving them. If this happens, ignore the second request as the
+  // menu is already shown.
+  if (IsShowing()) {
+    return;
+  }
+
   signin_ui_util::RecordProfileMenuViewShown(GetProfile());
   // Close any existing IPH bubble for the profile menu.
   BrowserUserEducationInterface::From(GetBrowser())
@@ -94,8 +88,7 @@ void ProfileMenuCoordinator::ShowWithPromoResults(
 #endif
 
   Browser* const browser = browser_->GetBrowserForMigrationOnly();
-  auto* avatar_toolbar_button =
-      BrowserElements::From(browser)->GetElement(kToolbarAvatarButtonElementId);
+  auto avatar_toolbar_button = GetAvatarToolbarButton();
   std::unique_ptr<ProfileMenuViewBase> bubble;
   const bool is_incognito = GetProfile()->IsIncognitoProfile();
   if (is_incognito) {
@@ -143,6 +136,18 @@ BrowserWindowInterface* ProfileMenuCoordinator::GetBrowser() {
 
 Profile* ProfileMenuCoordinator::GetProfile() {
   return &profile_.get();
+}
+
+views::BubbleAnchor ProfileMenuCoordinator::GetAvatarToolbarButton() {
+  if (auto* avatar_toolbar_button =
+          BrowserElements::From(GetBrowser())
+              ->GetElement(kToolbarAvatarButtonElementId)) {
+    return views::BubbleAnchor(avatar_toolbar_button);
+  }
+
+  return views::BubbleAnchor(BrowserView::GetBrowserViewForBrowser(GetBrowser())
+                                 ->toolbar()
+                                 ->avatar_toolbar_button());
 }
 
 ProfileMenuCoordinator::ProfileMenuCoordinator(BrowserWindowInterface* browser,

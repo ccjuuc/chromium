@@ -7,19 +7,19 @@
 
 #include <memory>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/webui/webui_toolbar/icon_table.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/interaction/element_tracker.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_source.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
-
-namespace ui {
-class TrackedElement;
-}  // namespace ui
 
 namespace views {
 class NativeWidget;
@@ -28,12 +28,13 @@ class Widget;
 }  // namespace views
 
 class Browser;
-class WebUIBrowserExtensionsContainer;
+class ExtensionsContainer;
+class WebUIToolbarExtensionsContainer;
 class WebUIBrowserModalDialogHost;
 class WebUIBrowserSidePanelUI;
 class WebUIBrowserUI;
 class WebUIBrowserWebContentsDelegate;
-class WebUILocationBar;
+class WebUIStubLocationBar;
 
 // A BrowserWindow implementation that uses WebUI for its primary UI. It still
 // uses views::Widget for windowing management.
@@ -41,7 +42,9 @@ class WebUIBrowserWindow : public BrowserWindow,
                            public ui::ColorProviderSource,
                            public ui::AcceleratorProvider,
                            public ui::AcceleratorTarget,
-                           public views::WidgetObserver {
+                           public views::WidgetObserver,
+                           public BookmarkBarController::Delegate,
+                           public webui_toolbar::IconTable::Delegate {
  public:
   explicit WebUIBrowserWindow(Browser* browser);
   ~WebUIBrowserWindow() override;
@@ -54,6 +57,8 @@ class WebUIBrowserWindow : public BrowserWindow,
   // Returns the WebUIBrowserWindow for a BrowserWindowInterface. If browser
   // does not use WebUIBrowserWindow, returns nullptr.
   static WebUIBrowserWindow* FromBrowser(BrowserWindowInterface* browser);
+  static const WebUIBrowserWindow* FromBrowser(
+      const BrowserWindowInterface* browser);
 
   // Returns the WebUIBrowserWindow for the given `window`.
   static WebUIBrowserWindow* FromNativeWindow(gfx::NativeWindow window);
@@ -72,58 +77,35 @@ class WebUIBrowserWindow : public BrowserWindow,
   void SetTopControlsGestureScrollInProgress(bool in_progress) override;
   std::vector<StatusBubble*> GetStatusBubbles() override;
   void UpdateTitleBar() override;
-  void BookmarkBarStateChanged(
+  void OnBookmarkBarStateChanged(
       BookmarkBar::AnimateChangeType change_type) override;
-  void TemporarilyShowBookmarkBar(base::TimeDelta duration) override;
-  void UpdateDevTools(content::WebContents* inspected_web_contents) override;
-  bool CanDockDevTools() const override;
   void UpdateLoadingAnimations(bool is_visible) override;
-  void SetStarredState(bool is_starred) override;
-  bool IsTabModalPopupDeprecated() const override;
-  void SetIsTabModalPopupDeprecated(
-      bool is_tab_modal_popup_deprecated) override;
   void OnActiveTabChanged(content::WebContents* old_contents,
                           content::WebContents* new_contents,
                           int index,
                           int reason) override;
   void OnTabDetached(content::WebContents* contents, bool was_active) override;
-  void ZoomChangedForActiveTab(bool can_show_bubble) override;
-  bool ShouldHideUIForFullscreen() const override;
-  bool IsFullscreenBubbleVisible() const override;
-  bool IsForceFullscreen() const override;
-  void SetForceFullscreen(bool force_fullscreen) override;
   gfx::Size GetContentsSize() const override;
   void SetContentsSize(const gfx::Size& size) override;
-  void UpdatePageActionIcon(PageActionIconType type) override;
   autofill::AutofillBubbleHandler* GetAutofillBubbleHandler() override;
-  void ExecutePageActionIconForTesting(PageActionIconType type) override;
   LocationBar* GetLocationBar() const override;
   void SetFocusToLocationBar(bool is_user_initiated) override;
   void UpdateReloadStopState(bool is_loading, bool force) override;
   void UpdateToolbar(content::WebContents* contents) override;
   bool UpdateToolbarSecurityState() override;
   void UpdateCustomTabBarVisibility(bool visible, bool animate) override;
-  void SetDevToolsScrimVisibility(bool visible) override;
   void ResetToolbarTabState(content::WebContents* contents) override;
   void FocusToolbar() override;
-  ExtensionsContainer* GetExtensionsContainer() override;
   void ToolbarSizeChanged(bool is_animating) override;
   void TabDraggingStatusChanged(bool is_dragging) override;
   void LinkOpeningFromGesture(WindowOpenDisposition disposition) override;
   void FocusAppMenu() override;
-  void FocusBookmarksToolbar() override;
-  void FocusInactivePopupForAccessibility() override;
-  void RotatePaneFocus(bool forwards) override;
-  void FocusWebContentsPane() override;
-  bool IsBookmarkBarVisible() const override;
-  bool IsBookmarkBarAnimating() const override;
+  void OnFocusBookmarksToolbar() override;
   bool IsTabStripEditable() const override;
   void DisableTabStripEditingForTesting() override;
   bool IsToolbarVisible() const override;
   bool IsToolbarShowing() const override;
   bool IsLocationBarVisible() const override;
-  SharingDialog* ShowSharingDialog(content::WebContents* contents,
-                                   SharingDialogData data) override;
   void ShowUpdateChromeDialog() override;
   void ShowIntentPickerBubble(
       std::vector<apps::IntentPickerAppInfo> app_info,
@@ -133,23 +115,8 @@ class WebUIBrowserWindow : public BrowserWindow,
       const std::optional<url::Origin>& initiating_origin,
       IntentPickerResponse callback) override;
   void ShowBookmarkBubble(const GURL& url, bool already_bookmarked) override;
-  sharing_hub::ScreenshotCapturedBubble* ShowScreenshotCapturedBubble(
-      content::WebContents* contents,
-      const gfx::Image& image) override;
-  qrcode_generator::QRCodeGeneratorBubbleView* ShowQRCodeGeneratorBubble(
-      content::WebContents* contents,
-      const GURL& url,
-      bool show_back_button) override;
-  send_tab_to_self::SendTabToSelfBubbleView*
-  ShowSendTabToSelfDevicePickerBubble(content::WebContents* contents) override;
-  send_tab_to_self::SendTabToSelfBubbleView* ShowSendTabToSelfPromoBubble(
-      content::WebContents* contents,
-      bool show_signin_button) override;
 #if BUILDFLAG(IS_CHROMEOS)
   void ToggleMultitaskMenu() override;
-#else
-  sharing_hub::SharingHubBubbleView* ShowSharingHubBubble(
-      share::ShareAttempt attempt) override;
 #endif  // BUILDFLAG(IS_CHROMEOS)
   ShowTranslateBubbleResult ShowTranslateBubble(
       content::WebContents* contents,
@@ -158,18 +125,12 @@ class WebUIBrowserWindow : public BrowserWindow,
       const std::string& target_language,
       translate::TranslateErrors error_type,
       bool is_user_gesture) override;
-  void StartPartialTranslate(const std::string& source_language,
-                             const std::string& target_language,
-                             const std::u16string& text_selection) override;
-  void ShowOneClickSigninConfirmation(
-      const std::u16string& email,
-      base::OnceCallback<void(bool)> confirmed_callback) override;
+
   DownloadBubbleUIController* GetDownloadBubbleUIController() override;
   void ConfirmBrowserCloseWithPendingDownloads(
       int download_count,
-      Browser::DownloadCloseType dialog_type,
+      UnloadController::DownloadCloseType dialog_type,
       base::OnceCallback<void(bool)> callback) override;
-  void UserChangedTheme(BrowserThemeChangeType theme_change_type) override;
   void ShowAppMenu() override;
   void PreHandleDragUpdate(const content::DropData& drop_data,
                            const gfx::PointF& point) override;
@@ -202,14 +163,11 @@ class WebUIBrowserWindow : public BrowserWindow,
       content::RenderFrameHost* frame,
       content::EyeDropperListener* listener) override;
   void ShowCaretBrowsingDialog() override;
-  void CreateTabSearchBubble(
-      tab_search::mojom::TabSearchSection section,
-      tab_search::mojom::TabOrganizationFeature organization_feature) override;
+  void CreateTabSearchBubble() override;
   void CloseTabSearchBubble() override;
   void ShowIncognitoClearBrowsingDataDialog() override;
   void ShowIncognitoHistoryDisclaimerDialog() override;
-  bool IsBorderlessModeEnabled() const override;
-  void OnWebApiWindowResizableChanged() override;
+  bool IsUnframedModeEnabled() const override;
   bool GetCanResize() override;
   ui::mojom::WindowShowState GetWindowShowState() const override;
   void ShowChromeLabs() override;
@@ -245,6 +203,9 @@ class WebUIBrowserWindow : public BrowserWindow,
       ui::ColorProviderKey::ColorMode color_mode,
       ui::ColorProviderKey::ForcedColors forced_colors) const override;
 
+  // webui_toolbar::IconTable::Delegate:
+  float GetScaleFactor() const override;
+
   // ui::AcceleratorProvider:
   bool GetAcceleratorForCommandId(int command_id,
                                   ui::Accelerator* accelerator) const override;
@@ -262,8 +223,9 @@ class WebUIBrowserWindow : public BrowserWindow,
   Browser* browser() { return browser_.get(); }
   views::Widget* widget() { return widget_.get(); }
 
+  void PaintAsActiveChangedForTesting() { PaintAsActiveChanged(); }
+
   gfx::Rect GetContentsBoundsInScreen() const;
-  ui::TrackedElement* GetExtensionsMenuButtonAnchor() const;
 
  protected:
   // BrowserWindow:
@@ -272,6 +234,12 @@ class WebUIBrowserWindow : public BrowserWindow,
  private:
   class WidgetDelegate;
   friend class WebUIBrowserExclusiveAccessContext;
+
+  // Called by BrowserWindowThemeObserver when the theme changes.
+  void UserChangedTheme(BrowserThemeChangeType theme_change_type);
+
+  // Called by BrowserWindowZoomObserver when zoom changes on the active tab.
+  void ZoomChangedForActiveTab(bool can_show_bubble);
 
   // Called by ExclusiveAccessContext to enter or exit fullscreen.
   void ProcessFullscreen(bool fullscreen);
@@ -299,14 +267,29 @@ class WebUIBrowserWindow : public BrowserWindow,
   ui::ColorProviderKey::ThemeInitializerSupplier* GetThemeInitializerSupplier()
       const;
 
+  // Called when the widget's ShouldPaintAsActive() state changes.
+  // Unlike OnWidgetActivationChanged(), this correctly handles child widget
+  // activation (e.g., modal dialogs) by not marking the browser inactive
+  // when a child widget takes focus.
+  void PaintAsActiveChanged();
+
+  void EnsureActiveTabHasNonZeroSize();
+
   void OnWindowCloseRequested(views::Widget::ClosedReason close_reason);
+
+  bool IsContentsElementReady() const;
+
+  void OnContentsElementShown(ui::TrackedElement* element);
+
+  std::optional<gfx::Size> deferred_contents_size_;
+  ui::ElementTracker::Subscription contents_element_shown_subscription_;
 
   const raw_ptr<Browser> browser_;
   std::unique_ptr<WebUIBrowserWebContentsDelegate> web_contents_delegate_;
   std::unique_ptr<WidgetDelegate> widget_delegate_;
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<views::WebView> web_view_ = nullptr;
-  std::unique_ptr<WebUILocationBar> location_bar_;
+  std::unique_ptr<WebUIStubLocationBar> location_bar_;
 
   // A mapping between accelerators and Chrome command IDs as defined in
   // //chrome/app/chrome_command_ids.h.
@@ -314,7 +297,19 @@ class WebUIBrowserWindow : public BrowserWindow,
   ui::AcceleratorManager accelerator_manager_;
 
   std::unique_ptr<WebUIBrowserModalDialogHost> modal_dialog_host_;
-  std::unique_ptr<WebUIBrowserExtensionsContainer> extensions_container_;
+  std::unique_ptr<webui_toolbar::IconTable> icon_table_;
+  std::unique_ptr<WebUIToolbarExtensionsContainer> extensions_container_;
+  std::unique_ptr<ui::ScopedUnownedUserData<ExtensionsContainer>>
+      scoped_extensions_container_user_data_;
+
+  // Subscription for paint-as-active changes on the widget. Used to call
+  // DidBecomeActive/DidBecomeInactive at the right time, accounting for child
+  // widget focus (e.g., modal dialogs keeping the parent "active").
+  base::CallbackListSubscription paint_as_active_subscription_;
+
+  base::CallbackListSubscription theme_changed_subscription_;
+
+  base::CallbackListSubscription zoom_changed_subscription_;
 };
 
 #endif  // CHROME_BROWSER_UI_WEBUI_BROWSER_WEBUI_BROWSER_WINDOW_H_

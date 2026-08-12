@@ -4,6 +4,7 @@
 
 #include "components/safe_browsing/core/browser/realtime/fake_url_lookup_service.h"
 
+#include "base/functional/callback_helpers.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -19,7 +20,9 @@ FakeRealTimeUrlLookupService::FakeRealTimeUrlLookupService()
           /*referrer_chain_provider=*/nullptr,
           /*token_fetcher=*/nullptr,
           /*pref_service=*/nullptr,
-          /*webui_delegate=*/nullptr) {}
+          /*webui_delegate=*/nullptr,
+          /*intelligent_scan_delegate=*/nullptr,
+          /*network_context_getter=*/base::NullCallback()) {}
 
 bool FakeRealTimeUrlLookupService::CanPerformFullURLLookup() const {
   return true;

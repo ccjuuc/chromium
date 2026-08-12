@@ -19,6 +19,8 @@ const char kEmbeddedExtensionOptions[] = "embedded-extension-options";
 const char kEnableBLEAdvertising[] = "enable-ble-advertising-in-apps";
 const char kEnableExperimentalExtensionApis[] =
     "enable-experimental-extension-apis";
+const char kDisableCrashOnComponentExtensionJsError[] =
+    "disable-crash-on-component-extension-js-error";
 const char kDisableExtensionsFileAccessCheck[] =
     "disable-extensions-file-access-check";
 const char kDisableExtensionsHttpThrottling[] =
@@ -39,6 +41,8 @@ const char kLoadGuestModeTestExtension[] = "load-guest-mode-test-extension";
 #endif
 
 const char kOffscreenDocumentTesting[] = "offscreen-document-testing";
+const char kRefreshComponentExtensionServiceWorkers[] =
+    "refresh-component-extension-service-workers";
 const char kSetExtensionThrottleTestParams[] =
     "set-extension-throttle-test-params";
 const char kShowComponentExtensionOptions[] =
@@ -47,6 +51,8 @@ const char kTraceAppSource[] = "enable-trace-app-source";
 const char kEnableCrxHashCheck[] = "enable-crx-hash-check";
 const char kAllowFutureManifestVersion[] = "allow-future-manifest-version";
 const char kExtensionTestApiOnWebPages[] = "extension-test-api-on-web-pages";
+const char kExtensionTestApiStandardizedBehavior[] =
+    "extension-test-api-standardized-behavior";
 
 const char kZeroStatePromoIphVariantParamName[] =
     "extension-zero-state-iph-variant";
@@ -58,6 +64,9 @@ const char kZeroStatePromoCustomUiPlainLinkIph[] = "custom-ui-plain-link-iph";
 
 const char kExtensionsInstallVerification[] = "extensions-install-verification";
 const char kExtensionsNotWebstore[] = "extensions-not-webstore";
+
+const char kAppsGalleryURL[] = "apps-gallery-url";
+const char kAppsGalleryDownloadURL[] = "apps-gallery-download-url";
 
 bool AreExtensionsOnChromeURLsAllowed() {
   if (base::FeatureList::IsEnabled(

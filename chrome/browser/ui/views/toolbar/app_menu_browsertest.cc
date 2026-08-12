@@ -4,13 +4,14 @@
 
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/containers/contains.h"
+#include "base/check_deref.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -28,6 +29,9 @@
 #include "build/buildflag.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_attributes_entry.h"
+#include "chrome/browser/profiles/profile_attributes_init_params.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
@@ -38,10 +42,12 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
+#include "chrome/browser/ui/profiles/profile_view_utils.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_hats_service.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_hats_service_factory.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_test_util.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/app_menu_button_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -51,21 +57,32 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/commerce/core/commerce_feature_list.h"
 #include "components/password_manager/core/common/password_manager_features.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/subscription_eligibility/subscription_eligibility_prefs.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/accessibility/ax_action_data.h"
+#include "ui/gfx/image/image_unittest_util.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/menu/menu_scroll_view_container.h"
 #include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/test/widget_test.h"
 
 namespace {
+using testing::AllOf;
+using testing::Contains;
+using testing::Eq;
+using testing::Pointee;
+using testing::Property;
 
 class AppMenuBrowserTest : public UiBrowserTest {
  public:
@@ -75,8 +92,7 @@ class AppMenuBrowserTest : public UiBrowserTest {
     // disruptive notification revocation (or other SH feature).
     scoped_feature_list_.InitWithFeatures(
         {}, /*disabled_features=*/{
-            features::kSafetyHubDisruptiveNotificationRevocation,
-            commerce::kProductSpecifications});
+            features::kSafetyHubDisruptiveNotificationRevocation});
   }
 
   // UiBrowserTest:
@@ -97,9 +113,11 @@ class AppMenuBrowserTest : public UiBrowserTest {
   }
 
   BrowserAppMenuButton* menu_button() {
-    return BrowserView::GetBrowserViewForBrowser(browser())
-        ->toolbar()
-        ->app_menu_button();
+    return views::AsViewClass<BrowserAppMenuButton>(
+        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+            kToolbarAppMenuButtonElementId,
+            BrowserView::GetBrowserViewForBrowser(browser())
+                ->GetElementContext()));
   }
 
  private:
@@ -118,24 +136,35 @@ void AppMenuBrowserTest::ShowUi(const std::string& name) {
 
   constexpr auto kSubmenus = base::MakeFixedFlatMap<std::string_view, int>({
       // Submenus present in all versions.
-      {"history", IDC_RECENT_TABS_MENU},
-      {"bookmarks", IDC_BOOKMARKS_MENU},
-      {"bookmarks_comparison_tables", IDC_BOOKMARKS_MENU},
-      {"more_tools", IDC_MORE_TOOLS_MENU},
+      {"history", AppMenuModel::kRecentTabsMenuPlaceholder},
+      {"bookmarks", AppMenuModel::kBookmarksMenuPlaceholder},
+      {"bookmarks_comparison_tables", AppMenuModel::kBookmarksMenuPlaceholder},
+      {"more_tools", AppMenuModel::kMoreToolsMenuPlaceholder},
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-      {"help", IDC_HELP_MENU},
+      {"help", AppMenuModel::kHelpMenuPlaceholder},
 #endif
 
       // Submenus only present after Chrome Refresh.
-      {"passwords_and_autofill", IDC_PASSWORDS_AND_AUTOFILL_MENU},
-      {"reading_list", IDC_READING_LIST_MENU},  // Inside the bookmarks menu.
-      {"extensions", IDC_EXTENSIONS_SUBMENU},
-      {"find_and_edit", IDC_FIND_AND_EDIT_MENU},
-      {"save_and_share", IDC_SAVE_AND_SHARE_MENU},
-      {"profile_menu_in_app_menu_signed_out", IDC_PROFILE_MENU_IN_APP_MENU},
-      {"profile_menu_in_app_menu_signed_in", IDC_PROFILE_MENU_IN_APP_MENU},
+      {"passwords_and_autofill",
+       AppMenuModel::kPasswordsAndAutofillMenuPlaceholder},
+      {"reading_list",
+       AppMenuModel::kReadingListMenuPlaceholder},  // Inside the bookmarks
+                                                    // menu.
+      {"extensions", AppMenuModel::kExtensionsSubmenuPlaceholder},
+      {"find_and_edit", AppMenuModel::kFindAndEditMenuPlaceholder},
+      {"save_and_share", AppMenuModel::kSaveAndShareMenuPlaceholder},
+      {"profile_menu_in_app_menu_signed_out",
+       AppMenuModel::kProfileMenuPlaceholder},
+      {"profile_menu_in_app_menu_signed_in",
+       AppMenuModel::kProfileMenuPlaceholder},
       {"profile_menu_in_app_menu_signin_not_allowed",
-       IDC_PROFILE_MENU_IN_APP_MENU},
+       AppMenuModel::kProfileMenuPlaceholder},
+      {"profile_menu_in_app_menu_no_ring",
+       AppMenuModel::kProfileMenuPlaceholder},
+      {"profile_menu_in_app_menu_single_ring",
+       AppMenuModel::kProfileMenuPlaceholder},
+      {"profile_menu_in_app_menu_two_consecutive_rings",
+       AppMenuModel::kProfileMenuPlaceholder},
   });
   const auto id_entry = kSubmenus.find(name);
   if (id_entry == kSubmenus.end()) {
@@ -194,27 +223,28 @@ void AppMenuBrowserTest::WaitForUserDismissal() {
 // TabRestoreService. This is a regression test to ensure menu code handles this
 // properly (this was triggering a crash in AppMenu where it was trying to make
 // use of RecentTabsMenuModelDelegate before created). See
-// https://crbug.com/1249741 for more.
+// https://crbug.com/40197719 for more.
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, ShowWithRecentlyClosedWindow) {
   // Create an additional browser, close it, and ensure it is added to the
   // TabRestoreService.
   sessions::TabRestoreService* tab_restore_service =
-      TabRestoreServiceFactory::GetForProfile(browser()->profile());
+      TabRestoreServiceFactory::GetForProfile(browser()->GetProfile());
   TabRestoreServiceLoadWaiter tab_restore_service_load_waiter(
       tab_restore_service);
   tab_restore_service_load_waiter.Wait();
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  Browser* second_browser = CreateBrowser(browser()->GetProfile());
   content::WebContents* new_contents = chrome::AddSelectedTabWithURL(
       second_browser,
       chrome_test_utils::GetTestUrl(
           base::FilePath(), base::FilePath().AppendASCII("simple.html")),
       ui::PAGE_TRANSITION_TYPED);
   EXPECT_TRUE(content::WaitForLoadStop(new_contents));
+  ui_test_utils::BrowserDestroyedObserver observer(second_browser);
   chrome::CloseWindow(second_browser);
-  ui_test_utils::WaitForBrowserToClose(second_browser);
-  EXPECT_TRUE(base::Contains(tab_restore_service->entries(),
-                             sessions::tab_restore::Type::WINDOW,
-                             &sessions::tab_restore::Entry::type));
+  observer.Wait();
+  EXPECT_TRUE(std::ranges::contains(tab_restore_service->entries(),
+                                    sessions::tab_restore::Type::WINDOW,
+                                    &sessions::tab_restore::Entry::type));
 
   // Show the AppMenu.
   menu_button()->ShowMenu(views::MenuRunner::NO_FLAGS);
@@ -241,22 +271,20 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_main) {
   ShowAndVerifyUi();
 }
 
-// TODO(crbug.com/343368219): Flaky on Windows 10 x64 builds.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
-#define MAYBE_InvokeUi_main_upgrade_available \
-  DISABLED_InvokeUi_main_upgrade_available
-#else
-#define MAYBE_InvokeUi_main_upgrade_available InvokeUi_main_upgrade_available
-#endif
-IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
-                       MAYBE_InvokeUi_main_upgrade_available) {
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_main_upgrade_available) {
   UpgradeDetector::GetInstance()->set_upgrade_notification_stage_for_testing(
       UpgradeDetector::UPGRADE_ANNOYANCE_CRITICAL);
   UpgradeDetector::GetInstance()->NotifyUpgradeForTesting();
   ShowAndVerifyUi();
 }
 
-IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_main_guest) {
+// TODO(crbug.com/484789570): Flaky on Windows 10 x64 builds.
+#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_X86_64)
+#define MAYBE_InvokeUi_main_guest DISABLED_InvokeUi_main_guest
+#else
+#define MAYBE_InvokeUi_main_guest InvokeUi_main_guest
+#endif
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, MAYBE_InvokeUi_main_guest) {
 // TODO(crbug.com/40899974): ChromeOS specific profile logic still needs to be
 // updated, setup this test for a Guest user session with appropriate command
 // line switches afterwards.
@@ -275,7 +303,10 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, DISABLED_InvokeUi_main_incognito) {
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, DISABLED_InvokeUi_history) {
   ShowAndVerifyUi();
 }
-IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_bookmarks) {
+
+// TODO(crbug.com/520132855): Re-enable test after features::kMenuSimplification
+// is fully enabled
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, DISABLED_InvokeUi_bookmarks) {
   ShowAndVerifyUi();
 }
 // Flaky b/40261456
@@ -291,6 +322,70 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, AppMenuViewAccessibleProperties) {
   ASSERT_TRUE(app_menu_view);
   app_menu_view->GetViewAccessibility().GetAccessibleNodeData(&data);
   EXPECT_EQ(data.role, ax::mojom::Role::kMenu);
+}
+
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, FullscreenButtonState) {
+  menu_button()->ShowMenu(views::MenuRunner::NO_FLAGS);
+  views::View& zoom_view =
+      CHECK_DEREF(menu_button()->app_menu()->GetZoomAppMenuViewForTest());
+
+  EXPECT_THAT(
+      zoom_view.GetChildrenInZOrder(),
+      Contains(Pointee(AllOf(
+          Property(&views::View::GetTooltipText, Eq(u"Full screen")),
+          Property(&views::View::GetViewAccessibility,
+                   Property(&views::ViewAccessibility::GetCachedName,
+                            ::testing::Truly([](std::u16string_view value) {
+                              return value.starts_with(u"Full screen");
+                            }))),
+          Property(&views::View::GetEnabled, Eq(true))))));
+
+  BrowserView::GetBrowserViewForBrowser(browser())->SetCanFullscreen(false);
+
+  EXPECT_THAT(
+      zoom_view.GetChildrenInZOrder(),
+      Contains(Pointee(AllOf(
+          Property(&views::View::GetTooltipText, Eq(u"Full screen disabled")),
+          Property(&views::View::GetViewAccessibility,
+                   Property(&views::ViewAccessibility::GetCachedName,
+                            ::testing::Truly([](std::u16string_view value) {
+                              return value.starts_with(u"Full screen disabled");
+                            }))),
+          Property(&views::View::GetEnabled, Eq(false))))));
+}
+
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, FullscreenButtonStateInFullscreen) {
+  chrome::ToggleFullscreenMode(browser());
+  ASSERT_TRUE(BrowserView::GetBrowserViewForBrowser(browser())->IsFullscreen());
+
+  menu_button()->ShowMenu(views::MenuRunner::NO_FLAGS);
+  views::View& zoom_view =
+      CHECK_DEREF(menu_button()->app_menu()->GetZoomAppMenuViewForTest());
+
+  EXPECT_THAT(
+      zoom_view.GetChildrenInZOrder(),
+      Contains(Pointee(AllOf(
+          Property(&views::View::GetTooltipText, Eq(u"Exit full screen")),
+          Property(&views::View::GetViewAccessibility,
+                   Property(&views::ViewAccessibility::GetCachedName,
+                            ::testing::Truly([](std::u16string_view value) {
+                              return value.starts_with(u"Exit full screen");
+                            }))),
+          Property(&views::View::GetEnabled, Eq(true))))));
+
+  // User should not be trapped in fullscreen mode so button is still enabled
+  BrowserView::GetBrowserViewForBrowser(browser())->SetCanFullscreen(false);
+
+  EXPECT_THAT(
+      zoom_view.GetChildrenInZOrder(),
+      Contains(Pointee(AllOf(
+          Property(&views::View::GetTooltipText, Eq(u"Exit full screen")),
+          Property(&views::View::GetViewAccessibility,
+                   Property(&views::ViewAccessibility::GetCachedName,
+                            ::testing::Truly([](std::u16string_view value) {
+                              return value.starts_with(u"Exit full screen");
+                            }))),
+          Property(&views::View::GetEnabled, Eq(true))))));
 }
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -326,9 +421,12 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_save_and_share) {
 
 #if !BUILDFLAG(IS_CHROMEOS)
 
-IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, InvokeUi_main_profile_signed_in) {
+// TODO(crbug.com/520132855): Re-enable test after features::kMenuSimplification
+// is fully enabled
+IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
+                       DISABLED_InvokeUi_main_profile_signed_in) {
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSignin);
   ShowAndVerifyUi();
@@ -346,7 +444,7 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
                        InvokeUi_profile_menu_in_app_menu_signed_in) {
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(browser()->profile());
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                       signin::ConsentLevel::kSignin);
   ShowAndVerifyUi();
@@ -354,38 +452,112 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest,
                        InvokeUi_profile_menu_in_app_menu_signin_not_allowed) {
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kSigninAllowed, false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSigninAllowed, false);
   ShowAndVerifyUi();
 }
 
-#endif
-
-// Test case for the comparison table submenu under bookmarks. Only appears when
-// the Compare feature is enabled.
-class AppMenuBrowserTestCompareOnly : public AppMenuBrowserTest {
+class AppMenuAiRingBrowserTest : public AppMenuBrowserTest {
  public:
-  AppMenuBrowserTestCompareOnly() {
-    scoped_feature_list_.InitAndEnableFeature(commerce::kProductSpecifications);
+  AppMenuAiRingBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        switches::kEnableAiSubscriptionAvatarRing);
   }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(AppMenuBrowserTestCompareOnly,
-                       InvokeUi_bookmarks_comparison_tables) {
+IN_PROC_BROWSER_TEST_F(AppMenuAiRingBrowserTest,
+                       InvokeUi_profile_menu_in_app_menu_no_ring) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  ProfileAttributesStorage& storage =
+      profile_manager->GetProfileAttributesStorage();
+
+  // Profiles without rings.
+  base::FilePath path1 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params1;
+  params1.profile_path = path1;
+  params1.profile_name = u"Profile 1";
+  storage.AddProfile(std::move(params1));
+
+  base::FilePath path2 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params2;
+  params2.profile_path = path2;
+  params2.profile_name = u"Profile 2";
+  storage.AddProfile(std::move(params2));
+
   ShowAndVerifyUi();
 }
+
+IN_PROC_BROWSER_TEST_F(AppMenuAiRingBrowserTest,
+                       InvokeUi_profile_menu_in_app_menu_single_ring) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  ProfileAttributesStorage& storage =
+      profile_manager->GetProfileAttributesStorage();
+
+  // Profile with ring
+  base::FilePath path1 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params1;
+  params1.profile_path = path1;
+  params1.profile_name = u"Profile 1";
+  storage.AddProfile(std::move(params1));
+  storage.GetProfileAttributesWithPath(path1)->SetAiSubscriptionTier(1);
+
+  // Profile without ring
+  base::FilePath path2 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params2;
+  params2.profile_path = path2;
+  params2.profile_name = u"Profile 2";
+  storage.AddProfile(std::move(params2));
+
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AppMenuAiRingBrowserTest,
+    InvokeUi_profile_menu_in_app_menu_two_consecutive_rings) {
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  ProfileAttributesStorage& storage =
+      profile_manager->GetProfileAttributesStorage();
+
+  // Profile with ring
+  base::FilePath path1 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params1;
+  params1.profile_path = path1;
+  params1.profile_name = u"Profile 1";
+  storage.AddProfile(std::move(params1));
+  storage.GetProfileAttributesWithPath(path1)->SetAiSubscriptionTier(1);
+
+  // Profile with ring
+  base::FilePath path2 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params2;
+  params2.profile_path = path2;
+  params2.profile_name = u"Profile 2";
+  storage.AddProfile(std::move(params2));
+  storage.GetProfileAttributesWithPath(path2)->SetAiSubscriptionTier(1);
+
+  // Profile without ring
+  base::FilePath path3 = profile_manager->GenerateNextProfileDirectoryPath();
+  ProfileAttributesInitParams params3;
+  params3.profile_path = path3;
+  params3.profile_name = u"Profile 3";
+  storage.AddProfile(std::move(params3));
+
+  ShowAndVerifyUi();
+}
+
+#endif
 
 // Test case for Safety Hub notification.
 IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, Safety_Hub_shown_notification) {
   auto* mock_sentiment_service = static_cast<MockTrustSafetySentimentService*>(
       TrustSafetySentimentServiceFactory::GetInstance()
           ->SetTestingFactoryAndUse(
-              browser()->profile(),
+              browser()->GetProfile(),
               base::BindRepeating(&BuildMockTrustSafetySentimentService)));
-  safety_hub_test_util::RunUntilPasswordCheckCompleted(browser()->profile());
-  safety_hub_test_util::GenerateSafetyHubMenuNotification(browser()->profile());
+  safety_hub_test_util::RunUntilPasswordCheckCompleted(browser()->GetProfile());
+  safety_hub_test_util::GenerateSafetyHubMenuNotification(
+      browser()->GetProfile());
   menu_button()->ShowMenu(views::MenuRunner::SHOULD_SHOW_MNEMONICS);
   // Set the elapsed timer of the menu to start 10 seconds ago.
   {
@@ -407,4 +579,91 @@ IN_PROC_BROWSER_TEST_F(AppMenuBrowserTest, Safety_Hub_shown_notification) {
           testing::_));
   menu_button()->CloseMenu();
 }
+
+#if !BUILDFLAG(IS_CHROMEOS)
+class AppMenuProfileGradientRingBrowserTest : public AppMenuBrowserTest {
+ public:
+  AppMenuProfileGradientRingBrowserTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        switches::kEnableAiSubscriptionAvatarRing);
+  }
+
+  void SetAiSubscriptionTierForProfile(int32_t subscription_tier) {
+    browser()->GetProfile()->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier,
+        subscription_tier);
+  }
+
+  int GetProfileIconWidth() {
+    AppMenu* app_menu = menu_button()->app_menu();
+    CHECK(app_menu);
+    views::MenuItemView* menu_root = app_menu->root_menu_item();
+    CHECK(menu_root);
+    views::MenuItemView* profile_item =
+        menu_root->GetMenuItemByID(AppMenuModel::kProfileMenuPlaceholder);
+    CHECK(profile_item);
+    ui::ImageModel icon = profile_item->GetIcon();
+    CHECK(!icon.IsEmpty());
+    return icon.Size().width();
+  }
+
+  void CloseMenuAndWait() {
+    AppMenu* app_menu = menu_button()->app_menu();
+    ASSERT_TRUE(app_menu);
+    views::MenuItemView* menu_root = app_menu->root_menu_item();
+    ASSERT_TRUE(menu_root);
+    views::SubmenuView* submenu = menu_root->GetSubmenu();
+    ASSERT_TRUE(submenu);
+    views::Widget* menu_widget = submenu->GetWidget();
+    ASSERT_TRUE(menu_widget);
+
+    views::test::WidgetDestroyedWaiter waiter(menu_widget);
+    menu_button()->CloseMenu();
+    waiter.Wait();
+    ASSERT_FALSE(menu_button()->IsMenuShowing());
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(AppMenuProfileGradientRingBrowserTest,
+                       ProfileMenuIconHasGradientRing) {
+  // Sign in with an image to get a non-placeholder avatar.
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(browser()->GetProfile());
+  AccountInfo account_info = signin::MakePrimaryAccountAvailable(
+      identity_manager, "user@example.com", signin::ConsentLevel::kSignin);
+
+  // Simulate account image fetch.
+  gfx::Image fake_image = gfx::test::CreateImage(20, 20, SK_ColorBLUE);
+  signin::SimulateAccountImageFetch(identity_manager, account_info.account_id,
+                                    "http://example.com/avatar.jpg",
+                                    fake_image);
+
+  // 1. Get initial size (no subscription).
+  menu_button()->ShowMenu(views::MenuRunner::SHOULD_SHOW_MNEMONICS);
+  ASSERT_TRUE(menu_button()->IsMenuShowing());
+  int initial_size = GetProfileIconWidth();
+  ASSERT_GT(initial_size, 0);
+  CloseMenuAndWait();
+
+  // 2. Set AI subscription and check size increases.
+  SetAiSubscriptionTierForProfile(1);
+  menu_button()->ShowMenu(views::MenuRunner::SHOULD_SHOW_MNEMONICS);
+  ASSERT_TRUE(menu_button()->IsMenuShowing());
+  int size_with_ring = GetProfileIconWidth();
+  EXPECT_GT(size_with_ring, initial_size);
+  CloseMenuAndWait();
+
+  // 3. Clear subscription and check size goes back to initial.
+  SetAiSubscriptionTierForProfile(0);
+  menu_button()->ShowMenu(views::MenuRunner::SHOULD_SHOW_MNEMONICS);
+  ASSERT_TRUE(menu_button()->IsMenuShowing());
+  int final_size = GetProfileIconWidth();
+  EXPECT_EQ(final_size, initial_size);
+  CloseMenuAndWait();
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
 }  // namespace

@@ -24,7 +24,7 @@ void TestEventRouterObserver::ClearEvents() {
 }
 
 void TestEventRouterObserver::WaitForEventWithName(const std::string& name) {
-  while (!base::Contains(events_, name)) {
+  while (!events_.contains(name)) {
     // Create a new `RunLoop` since reuse is not supported.
     run_loop_ = std::make_unique<base::RunLoop>();
     run_loop_->Run();
@@ -34,7 +34,7 @@ void TestEventRouterObserver::WaitForEventWithName(const std::string& name) {
 
 void TestEventRouterObserver::WaitForDispatchedEventWithName(
     const std::string& name) {
-  while (!base::Contains(dispatched_events_, name)) {
+  while (!dispatched_events_.contains(name)) {
     // Create a new `RunLoop` since reuse is not supported.
     run_loop_ = std::make_unique<base::RunLoop>();
     run_loop_->Run();
@@ -56,6 +56,9 @@ void TestEventRouterObserver::OnDidDispatchEventToProcess(const Event& event,
   CHECK(!event.event_name.empty());
   dispatched_events_[event.event_name] = event.DeepCopy();
   all_dispatched_events_.push_back(event.DeepCopy());
+  if (run_loop_) {
+    run_loop_->Quit();
+  }
 }
 
 }  // namespace extensions

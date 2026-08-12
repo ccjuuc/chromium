@@ -4,6 +4,7 @@
 
 #include "ash/display/window_tree_host_manager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -27,8 +28,8 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/wm/window_util.h"
+#include "base/byte_size.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram.h"
@@ -60,7 +61,9 @@
 #include "ui/display/screen.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/util/display_util.h"
+#include "ui/gfx/font_render_params_linux.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/public/activation_client.h"
 
@@ -88,8 +91,8 @@ constexpr int kUICompositorLargeRamMemoryLimitMB = 2048;
 constexpr int kUICompositorMemoryLimitDisplaySizeThreshold = 3500;
 // The RAM capacity threshold. When the device has 16GB+ of memory,
 // configure the compositor to use a higher memory limit.
-constexpr base::ByteCount kUICompositorMemoryLimitRamCapacityThreshold =
-    base::GiB(16);
+constexpr base::ByteSize kUICompositorMemoryLimitRamCapacityThreshold =
+    base::GiBU(16);
 
 // An UMA signal for the current effective resolution/dpi is sent at this rate.
 // This keeps track of the effective resolution/dpi most used on
@@ -229,6 +232,19 @@ void RepeatingEffectiveResolutionUMA(base::RepeatingTimer* timer,
   }
 }
 
+void PropagateFontRenderParamsChange(aura::Window* window) {
+  views::Widget* widget = views::Widget::GetWidgetForNativeView(window);
+  if (widget) {
+    float dsf = widget->GetLayer()->device_scale_factor();
+    // TODO(crbug.com/517630459): Use a more generic solution for updating font
+    // render params.
+    widget->DeviceScaleFactorChanged(dsf, dsf);
+  }
+  for (aura::Window* child : window->children()) {
+    PropagateFontRenderParamsChange(child);
+  }
+}
+
 }  // namespace
 
 // A utility class to store/restore focused/active window
@@ -237,7 +253,6 @@ class FocusActivationStore {
  public:
   FocusActivationStore()
       : activation_client_(nullptr),
-        capture_client_(nullptr),
         focus_client_(nullptr),
         focused_(nullptr),
         active_(nullptr) {}
@@ -246,18 +261,22 @@ class FocusActivationStore {
   FocusActivationStore& operator=(const FocusActivationStore&) = delete;
 
   void Store(bool clear_focus) {
+    aura::Window* root = Shell::GetPrimaryRootWindow();
+    aura::client::CaptureClient* capture_client =
+        aura::client::GetCaptureClient(root);
     if (!activation_client_) {
-      aura::Window* root = Shell::GetPrimaryRootWindow();
       activation_client_ = ::wm::GetActivationClient(root);
-      capture_client_ = aura::client::GetCaptureClient(root);
       focus_client_ = aura::client::GetFocusClient(root);
     }
-    focused_ = focus_client_->GetFocusedWindow();
-    if (focused_)
-      tracker_.Add(focused_);
-    active_ = activation_client_->GetActiveWindow();
-    if (active_ && focused_ != active_)
-      tracker_.Add(active_);
+    aura::Window* focused = focus_client_->GetFocusedWindow();
+    if (focused) {
+      focused_ = focused->GetWeakPtrAsWindow();
+    }
+
+    aura::Window* active = activation_client_->GetActiveWindow();
+    if (active) {
+      active_ = active->GetWeakPtrAsWindow();
+    }
 
     // Deactivate the window to close menu / bubble windows. Deactivating by
     // setting active window to nullptr to avoid side effects of activating an
@@ -266,7 +285,7 @@ class FocusActivationStore {
       activation_client_->ActivateWindow(nullptr);
 
     // Release capture if any.
-    capture_client_->SetCapture(nullptr);
+    capture_client->SetCapture(nullptr);
 
     // Clear the focused window if any. This is necessary because a
     // window may be deleted when losing focus (fullscreen flash for
@@ -278,26 +297,18 @@ class FocusActivationStore {
 
   void Restore() {
     // Restore focused or active window if it's still alive.
-    if (focused_ && tracker_.Contains(focused_)) {
-      focus_client_->FocusWindow(focused_);
-    } else if (active_ && tracker_.Contains(active_)) {
-      activation_client_->ActivateWindow(active_);
+    if (focused_) {
+      focus_client_->FocusWindow(focused_.get());
+    } else if (active_) {
+      activation_client_->ActivateWindow(active_.get());
     }
-    if (focused_)
-      tracker_.Remove(focused_);
-    if (active_)
-      tracker_.Remove(active_);
-    focused_ = nullptr;
-    active_ = nullptr;
   }
 
  private:
   raw_ptr<::wm::ActivationClient> activation_client_;
-  raw_ptr<aura::client::CaptureClient> capture_client_;
   raw_ptr<aura::client::FocusClient> focus_client_;
-  aura::WindowTracker tracker_;
-  raw_ptr<aura::Window, DanglingUntriaged> focused_;
-  raw_ptr<aura::Window, DanglingUntriaged> active_;
+  base::WeakPtr<aura::Window> focused_;
+  base::WeakPtr<aura::Window> active_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -548,8 +559,8 @@ void WindowTreeHostManager::CreateDisplay(const display::Display& display) {
     }
 
     // |to_delete| has already been removed from |window_tree_hosts_|.
-    DCHECK(!base::Contains(window_tree_hosts_, to_delete,
-                           &WindowTreeHostMap::value_type::second));
+    DCHECK(!std::ranges::contains(window_tree_hosts_, to_delete,
+                                  &WindowTreeHostMap::value_type::second));
 
     DeleteHost(to_delete);
     DCHECK(!primary_tree_host_for_replace_);
@@ -809,6 +820,7 @@ void WindowTreeHostManager::CloseMirroringDisplayIfNotNecessary() {
 }
 
 void WindowTreeHostManager::PreDisplayConfigurationChange(bool clear_focus) {
+  in_display_configuration_change_ = true;
   // Pause occlusion tracking during display configuration updates.
   scoped_pause_ = std::make_unique<aura::WindowOcclusionTracker::ScopedPause>();
 
@@ -825,6 +837,30 @@ void WindowTreeHostManager::PreDisplayConfigurationChange(bool clear_focus) {
   ::wm::ConvertPointFromScreen(root_window, &point_in_native);
   root_window->GetHost()->ConvertDIPToScreenInPixels(&point_in_native);
   cursor_location_in_native_coords_for_restore_ = point_in_native;
+}
+
+void WindowTreeHostManager::PostDisplayConfigurationChange() {
+  focus_activation_store_->Restore();
+
+  UpdateMouseLocationAfterDisplayChange();
+
+  // Enable cursor compositing, so that cursor could be mirrored to
+  // destination displays along with other display content.
+  Shell::Get()->UpdateCursorCompositingEnabled();
+
+  // Unpause occlusion tracking.
+  scoped_pause_.reset();
+
+  // Notify all widgets only when font render parameters actually change.
+  const bool current_subpixel_rendering_enabled =
+      gfx::GetFontRenderParamsSubpixelRenderingEnabled();
+  if (subpixel_rendering_enabled_ != current_subpixel_rendering_enabled) {
+    subpixel_rendering_enabled_ = current_subpixel_rendering_enabled;
+    for (aura::Window* root : GetAllRootWindows()) {
+      PropagateFontRenderParamsChange(root);
+    }
+  }
+  in_display_configuration_change_ = false;
 }
 
 void WindowTreeHostManager::SetPrimaryDisplayId(int64_t id) {
@@ -916,19 +952,6 @@ void WindowTreeHostManager::SetPrimaryDisplayId(int64_t id) {
   GetDisplayManager()->set_force_bounds_changed(false);
 }
 
-void WindowTreeHostManager::PostDisplayConfigurationChange() {
-  focus_activation_store_->Restore();
-
-  UpdateMouseLocationAfterDisplayChange();
-
-  // Enable cursor compositing, so that cursor could be mirrored to
-  // destination displays along with other display content.
-  Shell::Get()->UpdateCursorCompositingEnabled();
-
-  // Unpause occlusion tracking.
-  scoped_pause_.reset();
-}
-
 ui::EventDispatchDetails WindowTreeHostManager::DispatchKeyEventPostIME(
     ui::KeyEvent* event) {
   aura::Window* root_window = nullptr;
@@ -985,7 +1008,7 @@ AshWindowTreeHost* WindowTreeHostManager::AddWindowTreeHostForDisplay(
         kUICompositorLargeDisplayMemoryLimitMB;
   }
 
-  if (base::SysInfo::AmountOfPhysicalMemory() >=
+  if (base::SysInfo::AmountOfTotalPhysicalMemory() >=
       kUICompositorMemoryLimitRamCapacityThreshold) {
     params_with_bounds.compositor_memory_limit_mb =
         kUICompositorLargeRamMemoryLimitMB;

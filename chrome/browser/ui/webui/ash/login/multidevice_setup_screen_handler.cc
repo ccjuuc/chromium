@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/login/multidevice_setup_screen_handler.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/screens/multidevice_setup_screen.h"
 #include "chrome/browser/ui/webui/ash/multidevice_setup/multidevice_setup_localized_strings_provider.h"
@@ -41,7 +42,7 @@ MultiDeviceSetupScreenHandler::AsWeakPtr() {
 }
 
 void MultiDeviceSetupScreenHandler::GetAdditionalParameters(
-    base::Value::Dict* dict) {
+    base::DictValue* dict) {
   dict->Set("wifiSyncEnabled",
             base::Value(features::IsWifiSyncAndroidEnabled()));
 }

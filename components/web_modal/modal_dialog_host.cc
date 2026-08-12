@@ -6,12 +6,6 @@
 
 namespace web_modal {
 
-ModalDialogHostObserver::~ModalDialogHostObserver() {
-}
-
-ModalDialogHost::~ModalDialogHost() {
-}
-
 bool ModalDialogHost::ShouldActivateDialog() const {
   return true;
 }
@@ -22,5 +16,7 @@ bool ModalDialogHost::ShouldConstrainDialogBoundsByHost() {
   // false from this function).
   return true;
 }
+
+void ModalDialogHost::NotifyPositionRequiresUpdate() {}
 
 }  // namespace web_modal

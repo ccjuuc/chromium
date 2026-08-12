@@ -23,7 +23,7 @@ TestCreditCardFidoAuthenticator::~TestCreditCardFidoAuthenticator() = default;
 void TestCreditCardFidoAuthenticator::Authenticate(
     CreditCard card,
     base::WeakPtr<Requester> requester,
-    base::Value::Dict request_options,
+    base::DictValue request_options,
     std::optional<std::string> context_token) {
   authenticate_invoked_ = true;
   card_ = std::move(card);
@@ -94,7 +94,7 @@ std::vector<uint8_t> TestCreditCardFidoAuthenticator::GetCredentialId() {
 
 std::vector<uint8_t> TestCreditCardFidoAuthenticator::GetChallenge() {
   if (request_options_) {
-    return *request_options_->challenge;
+    return request_options_->challenge;
   } else {
     DCHECK(creation_options_);
     return creation_options_->challenge;

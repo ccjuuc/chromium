@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/default_browser/model/utils.h"
 
 #import "base/ios/ios_util.h"
+#import "base/test/metrics/histogram_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/time/time.h"
 #import "components/feature_engagement/public/feature_constants.h"
@@ -24,43 +25,16 @@
 
 namespace {
 
-// More than 14 days.
-constexpr base::TimeDelta kMoreThan14Days = base::Days(14) + base::Minutes(1);
-
-// More than 6 hours.
-constexpr base::TimeDelta kMoreThan6Hours = base::Hours(6) + base::Minutes(1);
-
-// About 6 months.
-constexpr base::TimeDelta k6Months = base::Days(6 * 365 / 12);
+// About 5 months.
+constexpr base::TimeDelta k5Months = base::Days(5 * 365 / 12);
 
 // About 1 year.
 constexpr base::TimeDelta kMoreThan1Year = base::Days(365) + base::Days(1);
-
-// About 2 years.
-constexpr base::TimeDelta k2Years = base::Days(2 * 365);
-
-// About 5 years.
-constexpr base::TimeDelta k5Years = base::Days(5 * 365);
 
 // TODO(crbug.com/41496010): We should reuse the ones from utils directly to
 // avoid manual errors. Test key for recording the last time a http link
 // was opened via Chrome, which indicates that it's set as default browser.
 NSString* const kLastHTTPURLOpenTime = @"lastHTTPURLOpenTime";
-
-// Test key in storage for flagging default browser promo interaction.
-NSString* const kUserHasInteractedWithFullscreenPromo =
-    @"userHasInteractedWithFullscreenPromo";
-
-// Test key in storage for the timestamp of last default browser promo
-// interaction.
-NSString* const kLastTimeUserInteractedWithFullscreenPromo =
-    @"lastTimeUserInteractedWithFullscreenPromo";
-
-// Test key in storage for counting past default browser promo interactions.
-NSString* const kGenericPromoInteractionCount = @"genericPromoInteractionCount";
-
-// Test Key in storage for counting all past default browser promo displays.
-NSString* const kDisplayedFullscreenPromoCount = @"displayedPromoCount";
 
 class DefaultBrowserUtilsTest : public PlatformTest {
  protected:
@@ -85,47 +59,6 @@ class DefaultBrowserUtilsTest : public PlatformTest {
   std::unique_ptr<TestingPrefServiceSimple> local_state_;
 };
 
-// Overwrite local storage with the provided interaction information.
-void SimulateUserInteractionWithFullscreenPromo(const base::TimeDelta& timeAgo,
-                                                int count,
-                                                int totalCount) {
-  NSDictionary<NSString*, NSObject*>* values = @{
-    kUserHasInteractedWithFullscreenPromo : @YES,
-    kLastTimeUserInteractedWithFullscreenPromo : (base::Time::Now() - timeAgo)
-        .ToNSDate(),
-    kGenericPromoInteractionCount : [NSNumber numberWithInt:count],
-    kDisplayedFullscreenPromoCount : [NSNumber numberWithInt:totalCount]
-  };
-  SetValuesInStorage(values);
-}
-
-// Tests interesting information for each type.
-TEST_F(DefaultBrowserUtilsTest, LogInterestingActivityEach) {
-  // General promo.
-  EXPECT_FALSE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeGeneral));
-  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeGeneral);
-  EXPECT_TRUE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeGeneral));
-  ClearDefaultBrowserPromoData();
-
-  // Stay safe promo.
-  EXPECT_FALSE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeStaySafe));
-  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeStaySafe);
-  EXPECT_TRUE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeStaySafe));
-  ClearDefaultBrowserPromoData();
-
-  // Made for iOS promo.
-  EXPECT_FALSE(
-      IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeMadeForIOS));
-  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeMadeForIOS);
-  EXPECT_TRUE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeMadeForIOS));
-  ClearDefaultBrowserPromoData();
-
-  // All tabs promo.
-  EXPECT_FALSE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeAllTabs));
-  LogLikelyInterestedDefaultBrowserUserActivity(DefaultPromoTypeAllTabs);
-  EXPECT_TRUE(IsLikelyInterestedDefaultBrowserUser(DefaultPromoTypeAllTabs));
-}
-
 // Tests logging user interactions with a non-modal promo multiple times with
 // the same current interactions count doesn't over-increment the value.
 TEST_F(DefaultBrowserUtilsTest,
@@ -138,119 +71,6 @@ TEST_F(DefaultBrowserUtilsTest,
 
   LogUserInteractionWithNonModalPromo(2);
   EXPECT_EQ(UserInteractionWithNonModalPromoCount(), 3);
-}
-
-// Tests no 2 tailored promos are not shown.
-TEST_F(DefaultBrowserUtilsTest, TailoredPromoDoesNotAppearTwoTimes) {
-  LogUserInteractionWithTailoredFullscreenPromo();
-  EXPECT_TRUE(HasUserInteractedWithTailoredFullscreenPromoBefore());
-}
-
-// Tests that past interactions with the default browser promo are correctly
-// detected when the sliding eligibility window experiment is disabled.
-TEST_F(DefaultBrowserUtilsTest,
-       HasUserInteractedWithFullscreenPromoBeforeSlidingWindowDisabled) {
-  feature_list_.InitWithFeatures({/*enabled=*/},
-                                 {/*disabled=*/feature_engagement::
-                                      kDefaultBrowserEligibilitySlidingWindow});
-
-  // Test when there are no interaction recorded yet.
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test that logging first run doesn't affect it.
-  LogUserInteractionWithFirstRunPromo();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with multiple interactions.
-  SimulateUserInteractionWithFullscreenPromo(kMoreThan6Hours, 1, 2);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(kMoreThan14Days, 2, 3);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with a single, more distant interaction.
-  ClearDefaultBrowserPromoData();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k6Months, 1, 2);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with a single, even more distant interaction.
-  ClearDefaultBrowserPromoData();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k2Years, 1, 2);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-}
-
-// Tests that past interactions with the default browser promo are correctly
-// detected when the sliding eligibility window experiment is enabled and set
-// to 365 days.
-TEST_F(DefaultBrowserUtilsTest,
-       HasUserInteractedWithFullscreenPromoBeforeSlidingWindowEnabled) {
-  base::FieldTrialParams feature_params;
-  feature_params["sliding-window-days"] = "365";
-  feature_list_.InitAndEnableFeatureWithParameters(
-      feature_engagement::kDefaultBrowserEligibilitySlidingWindow,
-      feature_params);
-
-  // Test when there are no interaction recorded yet.
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test that logging first run doesn't affect it.
-  LogUserInteractionWithFirstRunPromo();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with multiple interactions.
-  SimulateUserInteractionWithFullscreenPromo(kMoreThan6Hours, 1, 2);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(kMoreThan14Days, 2, 3);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with a single, more distant interaction (but still within the sliding
-  // window limit).
-  ClearDefaultBrowserPromoData();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k6Months, 1, 2);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with a single interaction that's outside the sliding window limit.
-  ClearDefaultBrowserPromoData();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k2Years, 1, 2);
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test with multiple interactions, some within and some outside the sliding
-  // window limit.
-  ClearDefaultBrowserPromoData();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k5Years, 1, 2);
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k2Years, 2, 3);
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(k6Months, 3, 4);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-  SimulateUserInteractionWithFullscreenPromo(kMoreThan14Days, 4, 5);
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-}
-
-// Tests that sliding window experiment doesn't not affect the cooldown from
-// FRE.
-TEST_F(DefaultBrowserUtilsTest, CooldownFromFRESlidingWindowEnabled) {
-  base::FieldTrialParams feature_params;
-  feature_params["sliding-window-days"] = "365";
-  feature_list_.InitAndEnableFeatureWithParameters(
-      feature_engagement::kDefaultBrowserEligibilitySlidingWindow,
-      feature_params);
-
-  // Test when there are no interaction recorded yet.
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test that logging first run doesn't affect it.
-  LogUserInteractionWithFirstRunPromo();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-
-  // Test that logging a generic promo interaction will affect it.
-  LogUserInteractionWithFullscreenPromo();
-  LogFullscreenDefaultBrowserPromoDisplayed();
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
 }
 
 // Test IsChromeLikelyDefaultBrowser in multiple senarios.
@@ -455,89 +275,6 @@ TEST_F(DefaultBrowserUtilsTest, IsChromePotentiallyNoLongerDefaultBrowser) {
   EXPECT_FALSE(IsChromePotentiallyNoLongerDefaultBrowser(42, 21));
 }
 
-TEST_F(DefaultBrowserUtilsTest, GetDefaultBrowserFREPromoTimestampIfLastTest) {
-  // When total promo count is 0, returns unixepoch.
-  EXPECT_EQ(0, DisplayedFullscreenPromoCount());
-  EXPECT_EQ(base::Time::UnixEpoch(),
-            GetDefaultBrowserFREPromoTimestampIfLast());
-
-  // When total promo count is 1, returns valid timestamp.
-  LogUserInteractionWithFirstRunPromo();
-  EXPECT_EQ(1, DisplayedFullscreenPromoCount());
-  EXPECT_NE(base::Time::UnixEpoch(),
-            GetDefaultBrowserFREPromoTimestampIfLast());
-
-  // When total promo count is 2, returns unixepoch.
-  LogFullscreenDefaultBrowserPromoDisplayed();
-  LogUserInteractionWithFullscreenPromo();
-  EXPECT_EQ(2, DisplayedFullscreenPromoCount());
-  EXPECT_EQ(base::Time::UnixEpoch(),
-            GetDefaultBrowserFREPromoTimestampIfLast());
-}
-
-TEST_F(DefaultBrowserUtilsTest,
-       GetDefaultBrowserFREPromoTimestampIfLastTest_InvalidData) {
-  // When total promo count is 0, returns unixepoch.
-  EXPECT_EQ(0, DisplayedFullscreenPromoCount());
-  EXPECT_EQ(base::Time::UnixEpoch(),
-            GetDefaultBrowserFREPromoTimestampIfLast());
-
-  // When total promo count is 1, but it will return unixepoch because user
-  // hasn't interacted with the FRE.
-  LogFullscreenDefaultBrowserPromoDisplayed();
-  LogUserInteractionWithFullscreenPromo();
-  EXPECT_EQ(1, DisplayedFullscreenPromoCount());
-  EXPECT_EQ(base::Time::UnixEpoch(),
-            GetDefaultBrowserFREPromoTimestampIfLast());
-}
-
-TEST_F(DefaultBrowserUtilsTest, GetGenericDefaultBrowserPromoTimestampTest) {
-  feature_list_.InitWithFeatures({/*enabled=*/},
-                                 {/*disabled=*/feature_engagement::
-                                      kDefaultBrowserEligibilitySlidingWindow});
-  // When user hasn't seen generic promo, returns unixepoch.
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  EXPECT_EQ(base::Time::UnixEpoch(), GetGenericDefaultBrowserPromoTimestamp());
-
-  // When latest is not the generic promo and generic promo hasn't been seen,
-  // returns unixepoch.
-  LogUserInteractionWithTailoredFullscreenPromo();
-  EXPECT_FALSE(HasUserInteractedWithFullscreenPromoBefore());
-  EXPECT_EQ(base::Time::UnixEpoch(), GetGenericDefaultBrowserPromoTimestamp());
-
-  // When user seen a generic promo, returns the latest timestamp.
-  LogUserInteractionWithFullscreenPromo();
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-  EXPECT_NE(base::Time::UnixEpoch(), GetGenericDefaultBrowserPromoTimestamp());
-
-  // When latest is not the generic promo, still returns the latest timestamp.
-  LogUserInteractionWithTailoredFullscreenPromo();
-  EXPECT_TRUE(HasUserInteractedWithFullscreenPromoBefore());
-  EXPECT_NE(base::Time::UnixEpoch(), GetGenericDefaultBrowserPromoTimestamp());
-}
-
-TEST_F(DefaultBrowserUtilsTest, GetTailoredDefaultBrowserPromoTimestampTest) {
-  // When user hasn't seen tailored promo, returns unixepoch.
-  EXPECT_FALSE(HasUserInteractedWithTailoredFullscreenPromoBefore());
-  EXPECT_EQ(base::Time::UnixEpoch(), GetTailoredDefaultBrowserPromoTimestamp());
-
-  // When latest is not the tailored promo and tailored promo hasn't been seen,
-  // returns unixepoch.
-  LogUserInteractionWithFullscreenPromo();
-  EXPECT_FALSE(HasUserInteractedWithTailoredFullscreenPromoBefore());
-  EXPECT_EQ(base::Time::UnixEpoch(), GetTailoredDefaultBrowserPromoTimestamp());
-
-  // When user seen a tailored promo, returns the latest timestamp.
-  LogUserInteractionWithTailoredFullscreenPromo();
-  EXPECT_TRUE(HasUserInteractedWithTailoredFullscreenPromoBefore());
-  EXPECT_NE(base::Time::UnixEpoch(), GetTailoredDefaultBrowserPromoTimestamp());
-
-  // When latest is not the tailored promo, still returns the latest timestamp.
-  LogUserInteractionWithFullscreenPromo();
-  EXPECT_TRUE(HasUserInteractedWithTailoredFullscreenPromoBefore());
-  EXPECT_NE(base::Time::UnixEpoch(), GetTailoredDefaultBrowserPromoTimestamp());
-}
-
 // Test that Blue dot display timestamp is recorded first time and is not
 // updated afterwards.
 TEST_F(DefaultBrowserUtilsTest, TestDefaultBrowserBlueDotFirstDisplay) {
@@ -561,7 +298,7 @@ TEST_F(DefaultBrowserUtilsTest, TestDefaultBrowserBlueDotFirstDisplay) {
 TEST_F(DefaultBrowserUtilsTest,
        TestResetDefaultBrowserBlueDotDisplayTimestampIfNeeded) {
   // It will not recent if the timestamp is less than 1 year old.
-  base::Time timestamp = base::Time::Now() - k6Months;
+  base::Time timestamp = base::Time::Now() - k5Months;
   local_state_->SetTime(prefs::kIosDefaultBrowserBlueDotPromoFirstDisplay,
                         timestamp);
   ResetDefaultBrowserBlueDotDisplayTimestampIfNeeded();
@@ -578,5 +315,78 @@ TEST_F(DefaultBrowserUtilsTest,
 
   // Check that it got reset.
   EXPECT_FALSE(HasDefaultBrowserBlueDotDisplayTimestamp());
+}
+
+// Test LogOpenHTTPURLFromExternalURL conversion metric logging.
+TEST_F(DefaultBrowserUtilsTest,
+       TestLogOpenHTTPURLFromExternalURLConversionMetrics) {
+  // When user opens a link for the first time ever, all conversion
+  // histograms should record true.
+  {
+    base::HistogramTester histogram_tester;
+    LogOpenHTTPURLFromExternalURL();
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion7", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion14", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion28", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion90", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion180", true,
+                                       1);
+  }
+
+  // Opening again immediately should record false for all histograms.
+  {
+    base::HistogramTester histogram_tester;
+    LogOpenHTTPURLFromExternalURL();
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion7", false,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion14", false,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion28", false,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion90", false,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion180",
+                                       false, 1);
+  }
+
+  // Simulate opening a link after 30 days.
+  SetObjectIntoStorageForKey(kLastHTTPURLOpenTime,
+                             (base::Time::Now() - base::Days(30)).ToNSDate());
+  {
+    base::HistogramTester histogram_tester;
+    LogOpenHTTPURLFromExternalURL();
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion7", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion14", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion28", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion90", false,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion180",
+                                       false, 1);
+  }
+
+  // Simulate opening a link after 100 days.
+  SetObjectIntoStorageForKey(kLastHTTPURLOpenTime,
+                             (base::Time::Now() - base::Days(100)).ToNSDate());
+  {
+    base::HistogramTester histogram_tester;
+    LogOpenHTTPURLFromExternalURL();
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion7", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion14", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion28", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion90", true,
+                                       1);
+    histogram_tester.ExpectBucketCount("IOS.DefaultBrowser.Conversion180",
+                                       false, 1);
+  }
 }
 }  // namespace

@@ -4,7 +4,8 @@
 
 #include "content/browser/media/midi_host.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
@@ -12,7 +13,7 @@
 #include "base/trace_event/trace_event.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/browser_main_loop.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_process_host.h"
 #include "media/midi/message_util.h"
@@ -67,11 +68,8 @@ MidiHost::~MidiHost() {
 void MidiHost::BindReceiver(
     ChildProcessId render_process_id,
     midi::MidiService* midi_service,
-    RenderFrameHost*,  // Required for the BinderMapWithContext interface.
     mojo::PendingReceiver<midi::mojom::MidiSessionProvider> receiver) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  // NOTE: This is not the correct sequence to call RenderFrameHost::GetProcess
-  //       hence, we have the render_process_id passed in separately.
   mojo::MakeSelfOwnedReceiver(
       base::WrapUnique(new MidiHost(render_process_id, midi_service)),
       std::move(receiver));
@@ -237,7 +235,7 @@ void MidiHost::SendData(uint32_t port,
   // in JavaScript. The actual permission check for security purposes
   // happens here in the browser process.
   if (base::FeatureList::IsEnabled(blink::features::kBlockMidiByDefault)) {
-    if (!has_midi_permission_ && !base::Contains(data, kSysExByte)) {
+    if (!has_midi_permission_ && !std::ranges::contains(data, kSysExByte)) {
       has_midi_permission_ =
           ChildProcessSecurityPolicyImpl::GetInstance()->CanSendMidiMessage(
               renderer_process_id_);
@@ -251,7 +249,7 @@ void MidiHost::SendData(uint32_t port,
 
   // Check `has_midi_sysex_permission_` here to avoid searching kSysExByte in
   // large bulk data transfers for correct uses.
-  if (!has_midi_sysex_permission_ && base::Contains(data, kSysExByte)) {
+  if (!has_midi_sysex_permission_ && std::ranges::contains(data, kSysExByte)) {
     has_midi_sysex_permission_ =
         ChildProcessSecurityPolicyImpl::GetInstance()->CanSendMidiSysExMessage(
             renderer_process_id_);

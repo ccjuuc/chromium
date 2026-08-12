@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "base/check.h"
 #include "base/compiler_specific.h"
@@ -36,9 +37,20 @@ struct Component {
   constexpr Component(int b, int l) : begin(b), len(l) {}
 
   // Construct a Component covering the whole `view`.
-  template <typename CharT>
-  explicit Component(std::basic_string_view<CharT> view)
+  template <typename T>
+    requires std::is_same_v<T, std::string> ||
+                 std::is_same_v<T, std::string_view> ||
+                 std::is_same_v<T, std::u16string> ||
+                 std::is_same_v<T, std::u16string_view>
+  explicit Component(const T& view)
       : begin(0), len(base::checked_cast<int>(view.size())) {}
+
+  // A size_t variant of `Component(int, int)` constructor.
+  // This crashes if an argument is too large for `int`.
+  constexpr static Component Create(size_t begin, size_t len) {
+    return Component(base::checked_cast<int>(begin),
+                     base::checked_cast<int>(len));
+  }
 
   // Adjusts the beginning of the component by the given offset. This is useful
   // for adjusting component offsets when they are relative to a substring
@@ -74,7 +86,7 @@ struct Component {
 
   // Returns a string_view using `source` as a backend.
   template <typename CharT>
-  std::basic_string_view<CharT> AsViewOn(
+  constexpr std::basic_string_view<CharT> AsViewOn(
       std::basic_string_view<CharT> source) const {
     DCHECK(is_valid());
     return source.substr(static_cast<size_t>(begin), static_cast<size_t>(len));
@@ -96,7 +108,7 @@ struct Component {
     if (!is_valid()) {
       return std::nullopt;
     }
-    return std::basic_string_view(&UNSAFE_TODO(source[begin]), len);
+    return std::basic_string_view(&source[begin], len);
   }
 
   // Returns a std::optional<string_view> using `source` as a backend.
@@ -345,8 +357,9 @@ COMPONENT_EXPORT(URL) Parsed ParseStandardUrl(std::string_view url);
 COMPONENT_EXPORT(URL) Parsed ParseStandardUrl(std::u16string_view url);
 // TODO(crbug.com/325408566): Remove once all third-party libraries use the
 // overloads above.
-COMPONENT_EXPORT(URL)
-void ParseStandardURL(const char* url, int url_len, Parsed* parsed);
+UNSAFE_BUFFER_USAGE COMPONENT_EXPORT(URL) void ParseStandardURL(const char* url,
+                                                                int url_len,
+                                                                Parsed* parsed);
 
 // Non-special URL is for when the scheme is not special, such as "about:",
 // "javascript:". See https://url.spec.whatwg.org/#is-not-special
@@ -374,11 +387,10 @@ Parsed ParsePathUrl(std::u16string_view url, bool trim_path_end);
 // ParseNonSpecialUrl() instead of ParsePathURL().
 // 3. Removing all traces of ParsePathURL() from
 // url/third_party/mozilla/url_parse here in chromium.
-COMPONENT_EXPORT(URL)
-void ParsePathURL(const char* url,
-                  int url_len,
-                  bool trim_path_end,
-                  Parsed* parsed);
+UNSAFE_BUFFER_USAGE COMPONENT_EXPORT(URL) void ParsePathURL(const char* url,
+                                                            int url_len,
+                                                            bool trim_path_end,
+                                                            Parsed* parsed);
 
 // ParseFileUrl is for file URLs. There are some special rules for interpreting
 // these.
@@ -420,8 +432,9 @@ bool ExtractScheme(std::string_view url, Component* scheme);
 COMPONENT_EXPORT(URL)
 bool ExtractScheme(std::u16string_view url, Component* scheme);
 // Deprecated (crbug.com/325408566): Prefer using the overloads above.
-COMPONENT_EXPORT(URL)
-bool ExtractScheme(const char* url, int url_len, Component* scheme);
+UNSAFE_BUFFER_USAGE COMPONENT_EXPORT(URL) bool ExtractScheme(const char* url,
+                                                             int url_len,
+                                                             Component* scheme);
 
 // Returns true if ch is a character that terminates the authority segment
 // of a URL.
@@ -432,13 +445,13 @@ bool IsAuthorityTerminator(char16_t ch, ParserMode parser_mode);
 //
 // These functions are also used in net/third_party code. So removing these
 // functions requires several steps.
-COMPONENT_EXPORT(URL)
-void ParseAuthority(const char* spec,
-                    const Component& auth,
-                    Component* username,
-                    Component* password,
-                    Component* hostname,
-                    Component* port_num);
+UNSAFE_BUFFER_USAGE COMPONENT_EXPORT(URL) void ParseAuthority(
+    const char* spec,
+    const Component& auth,
+    Component* username,
+    Component* password,
+    Component* hostname,
+    Component* port_num);
 
 // Does a best effort parse of input `spec`, in range `auth`. If a particular
 // component is not found, it will be set to invalid. `ParserMode` is used to
@@ -471,7 +484,8 @@ void ParseAuthority(std::u16string_view spec,
 // Overloads for `const char*` and `const char16_t*` are deprecated. Use an
 // overload for `std::string_view` or `std::u16string_view` instead.
 enum SpecialPort { PORT_UNSPECIFIED = -1, PORT_INVALID = -2 };
-COMPONENT_EXPORT(URL) int ParsePort(const char* url, const Component& port);
+UNSAFE_BUFFER_USAGE COMPONENT_EXPORT(URL) int ParsePort(const char* url,
+                                                        const Component& port);
 COMPONENT_EXPORT(URL)
 int ParsePort(std::string_view url, const Component& port);
 COMPONENT_EXPORT(URL)

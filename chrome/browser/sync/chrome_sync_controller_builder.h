@@ -16,16 +16,23 @@
 #include "build/buildflag.h"
 #include "components/prefs/pref_service.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
+#include "components/themes/cross_device/cross_device_theme_tracker.h"
 #include "extensions/buildflags/buildflags.h"
 
 class Profile;
 class SecurityEventRecorder;
+
 
 namespace syncer {
 class DataTypeController;
 class DataTypeStoreService;
 class SyncService;
 }  // namespace syncer
+
+namespace sync_pb {
+class ThemeSpecifics;
+class ThemeAndroidSpecifics;
+}  // namespace sync_pb
 
 namespace webapk {
 class WebApkSyncService;
@@ -81,6 +88,7 @@ class PrefServiceSyncable;
 }  // namespace sync_preferences
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+
 // Class responsible for instantiating sync controllers (DataTypeController)
 // for datatypes / features under chrome/.
 //
@@ -95,8 +103,13 @@ class ChromeSyncControllerBuilder {
   ChromeSyncControllerBuilder();
   ~ChromeSyncControllerBuilder();
 
+  using LocalThemeSpecifics = themes::LocalThemeSpecifics;
+
   // Setters to inject dependencies. Each of these setters must be invoked
   // before invoking `Build()`. In some cases it is allowed to inject nullptr.
+  void SetCrossDeviceThemeTracker(
+      themes::CrossDeviceThemeTracker<LocalThemeSpecifics>*
+          cross_device_theme_tracker);
   void SetDataTypeStoreService(
       syncer::DataTypeStoreService* data_type_store_service);
   void SetSecurityEventRecorder(SecurityEventRecorder* security_event_recorder);
@@ -141,6 +154,7 @@ class ChromeSyncControllerBuilder {
           wifi_configuration_sync_service);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+
   // Actually builds the controllers. All setters above must have been called
   // beforehand (null may or may not be allowed).
   std::vector<std::unique_ptr<syncer::DataTypeController>> Build(
@@ -172,6 +186,8 @@ class ChromeSyncControllerBuilder {
 
   // For all above, nullopt indicates the corresponding setter wasn't invoked.
   // nullptr indicates the setter was invoked with nullptr.
+  SafeOptional<raw_ptr<themes::CrossDeviceThemeTracker<LocalThemeSpecifics>>>
+      cross_device_theme_tracker_;
   SafeOptional<raw_ptr<syncer::DataTypeStoreService>> data_type_store_service_;
   SafeOptional<raw_ptr<SecurityEventRecorder>> security_event_recorder_;
 

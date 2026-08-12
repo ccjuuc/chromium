@@ -125,7 +125,9 @@ class SCTAuditingReporterTest : public testing::Test {
     configuration->traffic_annotation =
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
     return SCTAuditingReporter(
-        network_context_.get(), net::HashValue(), std::move(report),
+        network_context_.get(),
+        net::HashValue(net::HASH_VALUE_SHA256, net::SHA256HashValue()),
+        std::move(report),
         /*is_hashdance=*/true, std::move(metadata), std::move(configuration),
         &url_loader_factory_, base::DoNothing(), base::DoNothing(),
         /*backoff_entry=*/nullptr);
@@ -184,7 +186,7 @@ class SCTAuditingReporterTest : public testing::Test {
 };
 
 TEST_F(SCTAuditingReporterTest, SCTHashdanceMetadataFromValue) {
-  auto valid_value_dict = base::Value::Dict()
+  auto valid_value_dict = base::DictValue()
                               .Set("leaf_hash", kLeafHashBase64)
                               .Set("issued", kIssuedSerialized)
                               .Set("log_id", kLogIdBase64)
@@ -257,7 +259,7 @@ TEST_F(SCTAuditingReporterTest, SCTHashdanceMetadataToValue) {
   metadata.log_mmd = base::Seconds(42);
   metadata.certificate_expiry = base::Time::UnixEpoch() + base::Seconds(10);
   base::Value value = metadata.ToValue();
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   ASSERT_TRUE(dict);
   EXPECT_EQ(*dict->FindString("leaf_hash"), kLeafHashBase64);
   EXPECT_EQ(*dict->FindString("issued"), kIssuedSerialized);

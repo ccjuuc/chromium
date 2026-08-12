@@ -31,10 +31,6 @@ void ResultsWaiter::Wait() {
   run_loop_.Run();
 }
 
-AppListSearchBrowserTest::AppListSearchBrowserTest() {
-  scoped_feature_list_.InitWithFeatures({ash::features::kHelpAppLauncherSearch},
-                                        {});
-}
 
 void AppListSearchBrowserTest::SetUpOnMainThread() {
   InProcessBrowserTest::SetUpOnMainThread();
@@ -98,7 +94,7 @@ ChromeSearchResult* AppListSearchBrowserTest::FindResult(
 }
 
 Profile* AppListSearchBrowserTest::GetProfile() {
-  return browser()->profile();
+  return browser()->GetProfile();
 }
 
 }  // namespace app_list

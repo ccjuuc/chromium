@@ -18,7 +18,6 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interaction_test_util_browser.h"
@@ -33,6 +32,10 @@
 #include "ui/base/ozone_buildflags.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/url_constants.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 namespace enterprise_signin {
 
@@ -87,7 +90,7 @@ class EnterpriseSigninServiceTest : public InteractiveBrowserTest {
 
   void SetUpOnMainThread() override {
     CHECK(browser());
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     CHECK(profile);
 
     sync_service_ = static_cast<syncer::TestSyncService*>(
@@ -96,7 +99,7 @@ class EnterpriseSigninServiceTest : public InteractiveBrowserTest {
         profile);
 
     signin::IdentityManager* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+        IdentityManagerFactory::GetForProfile(browser()->GetProfile());
     signin::MakePrimaryAccountAvailable(identity_manager, "user@example.com",
                                         signin::ConsentLevel::kSignin);
     signin::SetRefreshTokenForPrimaryAccount(identity_manager);
@@ -170,7 +173,7 @@ class EnterpriseSigninServiceTest : public InteractiveBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(EnterpriseSigninServiceTest, DoesNothingIfPolicyNotSet) {
   GURL about_blank = GURL(url::kAboutBlankURL);
-  browser()->profile()->GetPrefs()->ClearPref(prefs::kProfileReauthPrompt);
+  browser()->GetProfile()->GetPrefs()->ClearPref(prefs::kProfileReauthPrompt);
   RunTestSequence(
       SetMaxTransportState(TransportState::START_DEFERRED),
       CheckTabs(browser(), {{about_blank, ACTIVE}}),
@@ -180,7 +183,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseSigninServiceTest, DoesNothingIfPolicyNotSet) {
       Check([this]() {
         EnterpriseSigninService* signin_service =
             EnterpriseSigninServiceFactory::GetInstance()->GetForBrowserContext(
-                browser()->profile());
+                browser()->GetProfile());
         return !sync_service().HasObserver(signin_service);
       }));
 }
@@ -203,16 +206,22 @@ IN_PROC_BROWSER_TEST_F(EnterpriseSigninServiceTest, OpensNewTabOnSyncPaused) {
                   CheckTabs(browser(), {{example_url, ACTIVE}, {auth_url}}));
 }
 
-// TODO(nicolaso): Wayland doesn't support programmatically changing window
-// activation. This test relies on `browser2` having activation, so it doesn't
-// work on Wayland.
-#if !BUILDFLAG(IS_OZONE_WAYLAND)
+// Ensure CurrentlyActiveTabIsAlreadyLoginPage.
 IN_PROC_BROWSER_TEST_F(EnterpriseSigninServiceTest,
                        CurrentlyActiveTabIsAlreadyLoginPage) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(nicolaso): Wayland doesn't support programmatically changing window
+  // activation. This test relies on `browser2` having activation, so it doesn't
+  // work on Wayland.
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support programmatically changing window "
+                    "activation";
+  }
+#endif
   GURL example_url(kExampleUrl);
   GURL auth_url(kAuthUrl);
 
-  Browser* browser2 = CreateBrowser(browser()->profile());
+  Browser* browser2 = CreateBrowser(browser()->GetProfile());
 
   RunTestSequence(
       SetMaxTransportState(TransportState::START_DEFERRED),
@@ -234,6 +243,5 @@ IN_PROC_BROWSER_TEST_F(EnterpriseSigninServiceTest,
       CheckTabs(browser(), {{example_url, ACTIVE}, {example_url}}),
       CheckTabs(browser2, {{example_url, ACTIVE}, {auth_url}}));
 }
-#endif  // !BUILDFLAG(IS_OZONE_WAYLAND)
 
 }  // namespace enterprise_signin

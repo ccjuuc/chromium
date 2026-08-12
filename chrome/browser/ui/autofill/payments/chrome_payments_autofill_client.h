@@ -14,6 +14,7 @@
 #include "base/memory/raw_ref.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
+#include "components/autofill/core/browser/payments/iban_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/ui/payments/autofill_error_dialog_controller_impl.h"
@@ -23,7 +24,7 @@
 #include "content/public/browser/web_contents_observer.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/touch_to_fill/autofill/android/touch_to_fill_payment_method_controller_impl.h"
+#include "chrome/browser/touch_to_fill/autofill/android/touch_to_fill_payment_method_controller.h"
 #include "components/autofill/core/browser/ui/payments/card_expiration_date_fix_flow_controller_impl.h"
 #include "components/autofill/core/browser/ui/payments/card_name_fix_flow_controller_impl.h"
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -46,6 +47,7 @@ class AutofillMessageController;
 #endif
 class AutofillOfferData;
 class AutofillOfferManager;
+enum class AutofillProgressUiType;
 class AutofillSaveCardBottomSheetBridge;
 class AutofillSaveIbanBottomSheetBridge;
 class BnplIssuer;
@@ -58,7 +60,6 @@ class ContentAutofillClient;
 class CreditCardRiskBasedAuthenticator;
 struct FilledCardInformationBubbleOptions;
 class IbanAccessManager;
-class IbanManager;
 class MerchantPromoCodeManager;
 struct OfferNotificationOptions;
 class OtpUnmaskDelegate;
@@ -66,7 +67,7 @@ enum class OtpUnmaskResult;
 class PaymentsDataManager;
 class SaveAndFillDialogControllerImpl;
 class SaveAndFillManager;
-class TouchToFillDelegate;
+class TouchToFillPaymentMethodDelegate;
 struct VirtualCardEnrollmentFields;
 class VirtualCardEnrollmentManager;
 
@@ -78,6 +79,7 @@ struct BnplTosModel;
 class BnplUiDelegate;
 class MandatoryReauthManager;
 class MultipleRequestPaymentsNetworkInterface;
+class PaymentsChurnedUsersManager;
 class PaymentsWindowManager;
 
 // Chrome implementation of PaymentsAutofillClient. Used for Chrome Desktop
@@ -143,8 +145,8 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
       base::OnceClosure accept_virtual_card_callback,
       base::OnceClosure decline_virtual_card_callback) override;
   void VirtualCardEnrollCompleted(PaymentsRpcResult result) override;
-  void OnCardDataAvailable(
-      const FilledCardInformationBubbleOptions& options) override;
+  void OnCardDataAvailable(const FilledCardInformationBubbleOptions& options,
+                           const url::Origin& origin) override;
   void ConfirmSaveIbanLocally(const Iban& iban,
                               bool should_show_prompt,
                               SaveIbanPromptCallback callback) override;
@@ -154,7 +156,7 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
                                 SaveIbanPromptCallback callback) override;
   void IbanUploadCompleted(bool iban_saved, bool hit_max_strikes) override;
   void ShowAutofillProgressDialog(
-      AutofillProgressDialogType autofill_progress_dialog_type,
+      AutofillProgressUiType autofill_progress_dialog_type,
       base::OnceClosure cancel_callback) override;
   void CloseAutofillProgressDialog(
       bool show_confirmation_before_closing,
@@ -184,7 +186,6 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   CreditCardCvcAuthenticator& GetCvcAuthenticator() override;
   CreditCardOtpAuthenticator* GetOtpAuthenticator() override;
   CreditCardRiskBasedAuthenticator* GetRiskBasedAuthenticator() override;
-  bool IsRiskBasedAuthEffectivelyAvailable() const override;
   bool IsMandatoryReauthEnabled() override;
   void ShowMandatoryReauthOptInPrompt(
       base::OnceClosure accept_mandatory_reauth_callback,
@@ -203,26 +204,29 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
       const OfferNotificationOptions& options) override;
   void DismissOfferNotification() override;
   bool ShowTouchToFillCreditCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) override;
   bool ShowTouchToFillIban(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      base::span<const autofill::Iban> ibans_to_suggest) override;
-  bool ShowTouchToFillLoyaltyCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      std::vector<autofill::LoyaltyCard> loyalty_cards_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      base::span<const Iban> ibans_to_suggest) override;
+  bool ShowTouchToFillAffiliatedLoyaltyCard(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
+  bool ShowTouchToFillForAllLoyaltyCards(
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool OnPurchaseAmountExtracted(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       std::optional<int64_t> extracted_amount,
       bool is_amount_supported_by_any_issuer,
       const std::optional<std::string>& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillProgress(base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillBnplIssuers(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       const std::string& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillError(const AutofillErrorDialogContext& context) override;
   bool ShowTouchToFillBnplTos(BnplTosModel bnpl_tos_model,
@@ -244,9 +248,29 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   void ShowCreditCardSaveAndFillPendingDialog(
       CardSaveAndFillDialogCallback callback) override;
   void HideCreditCardSaveAndFillDialog() override;
-  bool IsTabModalPopupDeprecated() const override;
+  bool IsTabModalPopup() const override;
   BnplStrategy* GetBnplStrategy() override;
   BnplUiDelegate* GetBnplUiDelegate() override;
+#if !BUILDFLAG(IS_ANDROID)
+  OmniboxAutofillDelegate* GetOmniboxAutofillDelegate() override;
+  void ShowExpandedOmniboxAutofillChip(
+      std::vector<Suggestion> suggestions,
+      base::OnceClosure on_chip_shown,
+      base::RepeatingCallback<void(base::span<const Suggestion>)>
+          on_suggestions_shown,
+      base::RepeatingCallback<void(SuggestionHidingReason)>
+          on_suggestions_hidden,
+      base::RepeatingCallback<void(const Suggestion&)> did_select_suggestion,
+      base::RepeatingClosure did_deselect_suggestion,
+      base::RepeatingCallback<
+          void(const Suggestion&,
+               const AutofillSuggestionDelegate::SuggestionMetadata&)>
+          did_accept_suggestion) override;
+  void HideOmniboxAutofillChip() override;
+#endif
+  void ShowPaymentsChurnedUsersUI(base::OnceClosure accept_callback,
+                                  base::OnceClosure cancel_callback,
+                                  base::OnceClosure closed_callback) final;
 
   // Begin ChromePaymentsAutofillClient-specific section.
 
@@ -319,9 +343,7 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
       card_expiration_date_fix_flow_controller_;
 
   std::unique_ptr<TouchToFillPaymentMethodController>
-      touch_to_fill_payment_method_controller_ =
-          std::make_unique<TouchToFillPaymentMethodControllerImpl>(
-              &client_.get());
+      touch_to_fill_payment_method_controller_;
 #endif
 
   std::unique_ptr<PaymentsNetworkInterface> payments_network_interface_;
@@ -359,6 +381,7 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   std::unique_ptr<CardUnmaskAuthenticationSelectionDialogControllerImpl>
       card_unmask_authentication_selection_controller_;
 
+  std::unique_ptr<IbanManager> iban_manager_;
   std::unique_ptr<IbanAccessManager> iban_access_manager_;
 
   std::unique_ptr<payments::MandatoryReauthManager>
@@ -369,6 +392,11 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
 
   std::unique_ptr<SaveAndFillManager> save_and_fill_manager_;
 
+  // Manages the flows related to getting users that have payments autofill
+  // turned off back. Initiated upon construction of `this`.
+  std::unique_ptr<payments::PaymentsChurnedUsersManager>
+      payments_churned_users_manager_;
+
   // The BnplStrategy used to determine the next step in a BNPL flow depending
   // on the platform.
   // Lazily initialized: access only through `GetBnplStrategy()`.
@@ -378,6 +406,12 @@ class ChromePaymentsAutofillClient : public PaymentsAutofillClient,
   // platform.
   // Lazily initialized: access only through `GetBnplUiDelegate()`.
   std::unique_ptr<BnplUiDelegate> bnpl_ui_delegate_;
+
+#if !BUILDFLAG(IS_ANDROID)
+  // The OmniboxAutofillDelegate used to handle the logic flow and user
+  // interactions when the user triggers Autofill from the Omnibox.
+  std::unique_ptr<OmniboxAutofillDelegate> omnibox_autofill_delegate_;
+#endif
 
   // Used to cache client side risk data. The cache is invalidated when the
   // chrome browser tab is closed.

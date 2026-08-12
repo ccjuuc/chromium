@@ -9,10 +9,14 @@
 
 namespace policy {
 
-MockProfileCloudPolicyStore::MockProfileCloudPolicyStore()
+MockProfileCloudPolicyStore::MockProfileCloudPolicyStore(
+    const std::string& policy_type,
+    bool is_dasherless)
     : ProfileCloudPolicyStore(base::FilePath(),
                               base::FilePath(),
-                              scoped_refptr<base::SequencedTaskRunner>()) {}
+                              policy_type,
+                              scoped_refptr<base::SequencedTaskRunner>(),
+                              is_dasherless) {}
 
 MockProfileCloudPolicyStore::~MockProfileCloudPolicyStore() = default;
 

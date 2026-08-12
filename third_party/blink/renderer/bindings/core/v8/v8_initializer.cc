@@ -33,7 +33,9 @@
 #include "base/debug/crash_logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_key.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -76,6 +78,7 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/shadow_realm/shadow_realm_global_scope.h"
+#include "third_party/blink/renderer/core/timing/time_clamper.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
@@ -154,18 +157,19 @@ mojom::ConsoleMessageLevel MessageLevelFromNonFatalErrorLevel(int error_level) {
 String ToBlinkString(v8::Local<v8::Context> context,
                      v8::Local<v8::String> source,
                      size_t max_length) {
-  v8::String::Value source_str(v8::Isolate::GetCurrent(), source);
-  size_t len;
-  if (max_length == 0) {
-    len = static_cast<size_t>(source_str.length());
-  } else {
-    len = std::min(max_length, static_cast<size_t>(source_str.length()));
+  uint32_t source_length = source->Length();
+  size_t len = max_length == 0 ? source_length
+                               : std::min<size_t>(max_length, source_length);
+  if (len == 0) {
+    return String();
   }
-  // SAFETY: v8::String::Value guarantees *source_str has source_str.length()
-  // length and we guarantee len is equal to or less than source_str.length().
-  const auto snippet = UNSAFE_BUFFERS(
-      base::span(reinterpret_cast<const UChar*>(*source_str), len));
-  return String(snippet);
+  base::span<UChar> buffer;
+  String result =
+      String::CreateUninitialized(base::checked_cast<uint32_t>(len), buffer);
+  DCHECK_LE(len, std::numeric_limits<uint32_t>::max());
+  source->WriteV2(v8::Isolate::GetCurrent(), 0, static_cast<uint32_t>(len),
+                  reinterpret_cast<uint16_t*>(buffer.data()));
+  return result;
 }
 
 // NOTE: when editing this, please also edit the error messages we throw when
@@ -255,9 +259,6 @@ void V8Initializer::MessageHandlerInMainThread(v8::Local<v8::Message> message,
 
   UseCounter::Count(context, WebFeature::kUnhandledExceptionCountInMainThread);
   base::UmaHistogramBoolean("V8.UnhandledExceptionCountInMainThread", true);
-  // TODO(b/338241225): Reenable the
-  // ThirdPartyCookies.BreakageIndicator.UncaughtJSError event with logic that
-  // caps the number of times the event can be sent per client.
 
   SourceLocation* location = CaptureSourceLocation(isolate, message, context);
 
@@ -330,13 +331,12 @@ static void PromiseRejectHandler(v8::PromiseRejectMessage data,
   if (data.GetEvent() == v8::kPromiseHandlerAddedAfterReject) {
     rejected_promises.HandlerAdded(data);
     return;
-  } else if (data.GetEvent() == v8::kPromiseRejectAfterResolved ||
-             data.GetEvent() == v8::kPromiseResolveAfterResolved) {
-    // Ignore reject/resolve after resolved.
+  } else if (data.GetEvent() != v8::kPromiseRejectWithNoHandler) {
+    // The only other types are kPromiseRejectAfterResolved and
+    // kPromiseResolveAfterResolved. Those are being deprecated in
+    // V8 so we want to avoid explicitly mentioning them here.
     return;
   }
-
-  DCHECK_EQ(v8::kPromiseRejectWithNoHandler, data.GetEvent());
 
   v8::Isolate* isolate = script_state->GetIsolate();
   ExecutionContext* context = ExecutionContext::From(script_state);
@@ -411,10 +411,10 @@ void V8Initializer::ExceptionPropagationCallback(
   String class_name = ToCoreString(isolate, v8_message.GetInterfaceName());
   String property_name = ToCoreString(isolate, v8_message.GetPropertyName());
   if ((context_type == v8::ExceptionContext::kAttributeGet &&
-       property_name.StartsWith("get ")) ||
+       property_name.starts_with("get ")) ||
       (context_type == v8::ExceptionContext::kAttributeSet &&
-       property_name.StartsWith("set "))) {
-    property_name = property_name.Substring(4);
+       property_name.starts_with("set "))) {
+    property_name = property_name.substr(4);
   }
   if (property_name == "[Symbol.toPrimitive]") {
     property_name = String();
@@ -574,6 +574,13 @@ V8Initializer::CodeGenerationCheckCallbackInMainThread(
     v8::Local<v8::Context> context,
     v8::Local<v8::Value> source,
     bool is_code_like) {
+  // The code generation callback should only be installed on "normal" JS
+  // contexts, which in turn should always have an associated ExecutionContext.
+  // If this invariant holds, we can simplify this code a little bit.
+  // We're probing this invariant to ensure it won't cause issues in practice.
+  // See also: Discussion on crrev.com/c/7207201.
+  CHECK(ToExecutionContext(context), base::NotFatalUntil::M150);
+
   // The TC39 "Dynamic Code Brand Check" feature is currently behind a flag.
   if (!RuntimeEnabledFeatures::TrustedTypesUseCodeLikeEnabled())
     is_code_like = false;
@@ -731,7 +738,7 @@ bool WasmCustomDescriptorsEnabledCallback(v8::Local<v8::Context> context) {
   if (!execution_context) {
     return false;
   }
-  return RuntimeEnabledFeatures::WebAssemblyCustomDescriptorsEnabled(
+  return RuntimeEnabledFeatures::WebAssemblyCustomDescriptorsV2Enabled(
       execution_context);
 }
 
@@ -784,7 +791,7 @@ v8::MaybeLocal<v8::Promise> HostImportModuleWithPhaseDynamically(
         ToCoreString(script_state->GetIsolate(),
                      v8::Local<v8::String>::Cast(v8_referrer_resource_url));
     if (!referrer_resource_url_str.empty())
-      referrer_resource_url = KURL(NullURL(), referrer_resource_url_str);
+      referrer_resource_url = KURL(NullUrl(), referrer_resource_url_str);
   }
 
   ModuleRequest module_request(
@@ -874,11 +881,25 @@ std::ostream& operator<<(std::ostream& os, const PrintV8OOM& oom_details) {
 }
 
 void EmitDevToolsEvent(v8::Isolate* isolate) {
-  TRACE_EVENT_INSTANT1(
-      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "UpdateCounters",
-      TRACE_EVENT_SCOPE_THREAD, "data", [&](perfetto::TracedValue context) {
+  TRACE_EVENT_INSTANT(
+      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "UpdateCounters", "data",
+      [&](perfetto::TracedValue context) {
         inspector_update_counters_event::Data(std::move(context), isolate);
       });
+}
+
+int64_t FineTemporalHostSystemUTCEpochNanosecondsCallback(
+    v8::Local<v8::Context> context) {
+  static TimeClamper clamper;
+  base::TimeDelta delta = base::Time::Now() - base::Time::UnixEpoch();
+  return clamper.ClampTimeResolution(delta, true).InNanoseconds();
+}
+
+int64_t CoarseTemporalHostSystemUTCEpochNanosecondsCallback(
+    v8::Local<v8::Context> context) {
+  static TimeClamper clamper;
+  base::TimeDelta delta = base::Time::Now() - base::Time::UnixEpoch();
+  return clamper.ClampTimeResolution(delta, false).InNanoseconds();
 }
 
 }  // namespace
@@ -917,6 +938,16 @@ void V8Initializer::InitializeV8Common(v8::Isolate* isolate) {
     profiler->SetGetDetachednessCallback(
         V8GCController::DetachednessFromWrapper, nullptr);
   }
+}
+
+// static
+void V8Initializer::InitializeContext(v8::Local<v8::Context> context,
+                                      ExecutionContext* execution_context) {
+  DCHECK(execution_context);
+  context->SetTemporalHostSystemUTCEpochNanosecondsCallback(
+      execution_context->CrossOriginIsolatedCapability()
+          ? FineTemporalHostSystemUTCEpochNanosecondsCallback
+          : CoarseTemporalHostSystemUTCEpochNanosecondsCallback);
 }
 
 // Callback functions called when V8 encounters a fatal or OOM error.
@@ -1001,6 +1032,35 @@ class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
   size_t max_allocation_;
 };
 
+#ifdef V8_ENABLE_SANDBOX
+
+// The ArrayBuffer partition is placed inside the V8 sandbox and we can just
+// reuse the ArrayBufferContents as allocator that will delegate to
+// PartitionAlloc.
+class InSandboxAllocator final : public v8::Allocator {
+ public:
+  InSandboxAllocator() = default;
+  void* Allocate(size_t size) override {
+    return ArrayBufferContents::AllocateMemoryOrNull(
+        size, ArrayBufferContents::kZeroInitialize);
+  }
+  void* AllocateUninitialized(size_t size) override {
+    return ArrayBufferContents::AllocateMemoryOrNull(
+        size, ArrayBufferContents::kDontInitialize);
+  }
+  void* AllocateUninitializedOrCrash(size_t size) override {
+    void* result = ArrayBufferContents::AllocateMemoryOrNull(
+        size, ArrayBufferContents::kDontInitialize);
+    if (!result) {
+      OOM_CRASH(size);
+    }
+    return result;
+  }
+  void Free(void* data) override { ArrayBufferContents::FreeMemory(data); }
+};
+
+#endif  // V8_ENABLE_SANDBOX
+
 V8PerIsolateData::V8ContextSnapshotMode GetV8ContextSnapshotMode() {
 #if BUILDFLAG(USE_V8_CONTEXT_SNAPSHOT)
   if (Platform::Current()->IsTakingV8ContextSnapshot())
@@ -1024,6 +1084,12 @@ void V8Initializer::InitializeIsolateHolder(
       reference_table, js_command_line_flags,
       Platform::Current()->DisallowV8FeatureFlagOverrides(), ReportV8FatalError,
       ReportV8OOMError);
+}
+
+void V8Initializer::InitializeInSandboxAllocator() {
+#ifdef V8_ENABLE_SANDBOX
+  v8::V8::SetInSandboxAllocator(std::make_shared<InSandboxAllocator>());
+#endif
 }
 
 v8::Isolate* V8Initializer::InitializeMainThread() {

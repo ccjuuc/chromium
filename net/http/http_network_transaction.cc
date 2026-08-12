@@ -5,25 +5,29 @@
 #include "net/http/http_network_transaction.h"
 
 #include <deque>
+#include <optional>
 #include <queue>
 #include <set>
 #include <utility>
 #include <vector>
 
 #include "base/base64url.h"
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
@@ -89,6 +93,7 @@
 #include "url/url_canon.h"
 
 #if BUILDFLAG(ENABLE_REPORTING)
+#include "base/no_destructor.h"
 #include "net/network_error_logging/network_error_logging_service.h"
 #include "net/reporting/reporting_header_parser.h"
 #include "net/reporting/reporting_service.h"
@@ -101,6 +106,15 @@ namespace {
 // Max number of |retry_attempts| (excluding the initial request) after which
 // we give up and show an error page.
 const size_t kMaxRetryAttempts = 2;
+
+// Max number of `retry_attempts_on_connection_errors_` for connection errors,
+// after which we give up and crash early.
+const size_t kMaxRetryAttemptsOnConnectionErrors = 50;
+
+// The threshold of connection error retry attempts at which we switch to
+// asynchronous retry.
+const size_t kAsyncRetryThresholdOnConnectionErrors =
+    kMaxRetryAttemptsOnConnectionErrors / 2;
 
 // Max number of calls to RestartWith* allowed for a single connection. A single
 // HttpNetworkTransaction should not signal very many restartable errors, but it
@@ -131,11 +145,12 @@ bool EarlyHintsAreAllowedOn(HttpConnectionInfo connection_info) {
 // numeric values should never be reused.
 enum class WebSocketFallbackResult {
   kSuccessHttp11 = 0,
-  kSuccessHttp2,
-  kSuccessHttp11AfterFallback,
-  kFailure,
-  kFailureAfterFallback,
-  kMaxValue = kFailureAfterFallback,
+  kSuccessHttp2 = 1,
+  kSuccessHttp11AfterFallback = 2,
+  kFailure = 3,
+  kFailureAfterFallback = 4,
+  kSuccessHttp3 = 5,
+  kMaxValue = kSuccessHttp3,
 };
 
 WebSocketFallbackResult CalculateWebSocketFallbackResult(
@@ -145,6 +160,9 @@ WebSocketFallbackResult CalculateWebSocketFallbackResult(
   if (result == OK) {
     if (connection_info == HttpConnectionInfoCoarse::kHTTP2) {
       return WebSocketFallbackResult::kSuccessHttp2;
+    }
+    if (connection_info == HttpConnectionInfoCoarse::kQUIC) {
+      return WebSocketFallbackResult::kSuccessHttp3;
     }
     return http_1_1_was_required
                ? WebSocketFallbackResult::kSuccessHttp11AfterFallback
@@ -158,8 +176,6 @@ WebSocketFallbackResult CalculateWebSocketFallbackResult(
 void RecordWebSocketFallbackResult(int result,
                                    bool http_1_1_was_required,
                                    HttpConnectionInfoCoarse connection_info) {
-  CHECK_NE(connection_info, HttpConnectionInfoCoarse::kQUIC);
-
   // `connection_info` could be kOTHER in tests.
   if (connection_info == HttpConnectionInfoCoarse::kOTHER) {
     return;
@@ -331,6 +347,19 @@ HttpNetworkTransaction::HttpNetworkTransaction(RequestPriority priority,
       priority_(priority) {}
 
 HttpNetworkTransaction::~HttpNetworkTransaction() {
+  if (retry_attempts_on_connection_errors_ > 0) {
+    base::UmaHistogramExactLinear(
+        "Net.NetworkTransaction.RetryAttemptsOnConnectionErrors",
+        retry_attempts_on_connection_errors_,
+        kMaxRetryAttemptsOnConnectionErrors + 1);
+    base::UmaHistogramExactLinear(
+        base::StrCat(
+            {"Net.NetworkTransaction.RetryAttemptsOnConnectionErrors.",
+             NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+        retry_attempts_on_connection_errors_,
+        kMaxRetryAttemptsOnConnectionErrors + 1);
+  }
+
 #if BUILDFLAG(ENABLE_REPORTING)
   // If no error or success report has been generated yet at this point, then
   // this network transaction was prematurely cancelled.
@@ -597,8 +626,8 @@ void HttpNetworkTransaction::DidDrainBodyForAuthRestart(bool keep_alive) {
       next_state_ = STATE_CREATE_STREAM;
     } else {
       // Renewed streams shouldn't carry over sent or received bytes.
-      DCHECK_EQ(0, new_stream->GetTotalReceivedBytes());
-      DCHECK_EQ(0, new_stream->GetTotalSentBytes());
+      DCHECK_EQ(base::ByteSize(0), new_stream->GetTotalReceivedBytes());
+      DCHECK_EQ(base::ByteSize(0), new_stream->GetTotalSentBytes());
       next_state_ = STATE_CONNECTED_CALLBACK;
     }
     stream_ = std::move(new_stream);
@@ -650,21 +679,23 @@ int HttpNetworkTransaction::Read(IOBuffer* buf,
 
 void HttpNetworkTransaction::StopCaching() {}
 
-int64_t HttpNetworkTransaction::GetTotalReceivedBytes() const {
-  int64_t total_received_bytes = total_received_bytes_;
-  if (stream_)
+base::ByteSize HttpNetworkTransaction::GetTotalReceivedBytes() const {
+  base::ByteSize total_received_bytes = total_received_bytes_;
+  if (stream_) {
     total_received_bytes += stream_->GetTotalReceivedBytes();
+  }
   return total_received_bytes;
 }
 
-int64_t HttpNetworkTransaction::GetTotalSentBytes() const {
-  int64_t total_sent_bytes = total_sent_bytes_;
-  if (stream_)
+base::ByteSize HttpNetworkTransaction::GetTotalSentBytes() const {
+  base::ByteSize total_sent_bytes = total_sent_bytes_;
+  if (stream_) {
     total_sent_bytes += stream_->GetTotalSentBytes();
+  }
   return total_sent_bytes;
 }
 
-int64_t HttpNetworkTransaction::GetReceivedBodyBytes() const {
+base::ByteSize HttpNetworkTransaction::GetReceivedBodyBytes() const {
   return received_body_bytes_;
 }
 
@@ -725,6 +756,10 @@ bool HttpNetworkTransaction::GetLoadTimingInfo(
 
 void HttpNetworkTransaction::PopulateLoadTimingInternalInfo(
     LoadTimingInternalInfo* load_timing_internal_info) const {
+  if (stream_) {
+    stream_->PopulateLoadTimingInternalInfo(load_timing_internal_info);
+  }
+
   if (!create_stream_start_time_.is_null() &&
       !create_stream_end_time_.is_null()) {
     CHECK_LE(create_stream_start_time_, create_stream_end_time_);
@@ -1665,7 +1700,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
   // Note: This will report a success for a redirect even if an error is
   // encountered later while draining the body.
   int response_code = response_.headers->response_code();
-  std::optional<base::ByteCount> content_length =
+  std::optional<base::ByteSize> content_length =
       response_.headers->GetContentLength();
   if ((response_code >= 400 && response_code < 600) ||
       response_code == HTTP_NO_CONTENT || response_code == HTTP_RESET_CONTENT ||
@@ -1712,12 +1747,12 @@ int HttpNetworkTransaction::DoReadBodyComplete(int result) {
     DCHECK_NE(ERR_IO_PENDING, result);
     done = true;
   } else {
-    received_body_bytes_ += result;
+    received_body_bytes_ += base::ByteSize(base::as_unsigned(result));
   }
 
   TRACE_EVENT("net", "HttpNetworkTransaction::ReadBodyComplete",
               NetLogWithSourceToFlow(net_log_), "result", result,
-              "received_body_bytes", received_body_bytes_);
+              "received_body_bytes", received_body_bytes_.InBytes());
 
   // Clean up connection if we are done.
   if (done) {
@@ -1909,6 +1944,14 @@ void HttpNetworkTransaction::GenerateNetworkErrorLoggingReport(int rv) {
   } else {
     details.server_ip = IPAddress();
   }
+  // Also report any other addresses that were contacted, so that the downgrade
+  // step can take all of them into account when the resolved address list
+  // contained more than one address.
+  for (const auto& attempt : connection_attempts_) {
+    if (attempt.endpoint.address() != details.server_ip) {
+      details.other_server_ips.push_back(attempt.endpoint.address());
+    }
+  }
   // HttpResponseHeaders::response_code() returns 0 if response code couldn't
   // be parsed, which is also how NEL represents the same.
   if (response_.headers) {
@@ -2081,12 +2124,93 @@ int HttpNetworkTransaction::HandleIOError(int error) {
     // preconnected but failed to be used before the server timed it out.
     case RetryReason::kEmptyResponse:
       if (ShouldResendRequest()) {
+        if (retry_attempts_on_connection_errors_ >=
+            kMaxRetryAttemptsOnConnectionErrors) {
+          base::UmaHistogramBoolean(
+              "Net.NetworkTransaction.TooManyRetriesOnConnectionErrors", true);
+          base::UmaHistogramBoolean(
+              base::StrCat(
+                  {"Net.NetworkTransaction.TooManyRetriesOnConnectionErrors.",
+                   NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+              true);
+          return ERR_TOO_MANY_RETRIES;
+        }
+
+        base::UmaHistogramSparse(
+            "Net.NetworkTransaction.RetryOnConnectionErrors", -error);
+        base::UmaHistogramSparse(
+            base::StrCat(
+                {"Net.NetworkTransaction.RetryOnConnectionErrors.",
+                 NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+            -error);
+
+        if (retry_attempts_on_connection_errors_ == 0) {
+          initial_connection_error_ = error;
+        }
+
+        retry_attempts_on_connection_errors_++;
         net_log_.AddEventWithNetErrorCode(
             NetLogEventType::HTTP_TRANSACTION_RESTART_AFTER_ERROR, error);
         ResetConnectionAndRequestForResend(*retry_reason);
-        error = OK;
+        // Workaround for priority starvation: If the Network Service Task
+        // Scheduler is enabled, high-priority retries can repeatedly bypass the
+        // DEFAULT-priority tasks that detect connection closure and clean the
+        // session pool. This creates a cycle where we keep picking the same
+        // stale session. See crbug.com/482074640 for details.
+        //
+        // By yielding (PostTask) at DEFAULT priority after several attempts, we
+        // restore FIFO ordering relative to the cleanup tasks, allowing the
+        // pool to be scrubbed before the next retry.
+        //
+        // TODO(crbug.com/482074640): Write unit tests to reproduce this issue.
+        if (base::FeatureList::IsEnabled(
+                features::kAsyncRetryOnTooManyConnectionErrors) &&
+            // For performance reasons, we initially retry synchronously.
+            // However, after a threshold of attempts, we switch to asynchronous
+            // retry to break potential priority starvation loops as described
+            // above.
+            retry_attempts_on_connection_errors_ >=
+                kAsyncRetryThresholdOnConnectionErrors) {
+          base::UmaHistogramBoolean(
+              "Net.NetworkTransaction.AsyncRetryOnTooManyConnectionErrors."
+              "Every",
+              true);
+          base::UmaHistogramBoolean(
+              base::StrCat(
+                  {"Net.NetworkTransaction.AsyncRetryOnTooManyConnectionErrors."
+                   "Every.",
+                   NegotiatedProtocolToHistogramSuffix(negotiated_protocol_)}),
+              true);
+          if (retry_attempts_on_connection_errors_ ==
+              kAsyncRetryThresholdOnConnectionErrors) {
+            base::UmaHistogramBoolean(
+                kAsyncRetryOnTooManyConnectionErrorsFirstHistogram, true);
+            base::UmaHistogramBoolean(
+                base::StrCat(
+                    {kAsyncRetryOnTooManyConnectionErrorsFirstHistogram, ".",
+                     NegotiatedProtocolToHistogramSuffix(
+                         negotiated_protocol_)}),
+                true);
+            base::UmaHistogramSparse(
+                "Net.NetworkTransaction.InitialErrorOnAsyncRetry",
+                -initial_connection_error_);
+            base::UmaHistogramSparse(
+                base::StrCat(
+                    {"Net.NetworkTransaction.InitialErrorOnAsyncRetry.",
+                     NegotiatedProtocolToHistogramSuffix(
+                         negotiated_protocol_)}),
+                -initial_connection_error_);
+          }
+          // Use WeakPtr to prevent a potential dangling pointer crash. See
+          // http://crbug.com/506964502 for more details.
+          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE, base::BindOnce(&HttpNetworkTransaction::OnIOComplete,
+                                        weak_ptr_factory_.GetWeakPtr(), OK));
+          return ERR_IO_PENDING;
+        }
+        return OK;
       }
-      break;
+      return error;
     case RetryReason::kEarlyDataRejected:
     case RetryReason::kWrongVersionOnEarlyData:
       net_log_.AddEventWithNetErrorCode(
@@ -2094,20 +2218,19 @@ int HttpNetworkTransaction::HandleIOError(int error) {
       // Disable early data on a reset.
       can_send_early_data_ = false;
       ResetConnectionAndRequestForResend(*retry_reason);
-      error = OK;
-      break;
+      return OK;
     case RetryReason::kHttp2PingFailed:
     case RetryReason::kHttp2ServerRefusedStream:
     case RetryReason::kQuicHandshakeFailed:
     case RetryReason::kQuicGoawayRequestCanBeRetried:
-      if (HasExceededMaxRetries())
-        break;
+      if (HasExceededMaxRetries()) {
+        return error;
+      }
       net_log_.AddEventWithNetErrorCode(
           NetLogEventType::HTTP_TRANSACTION_RESTART_AFTER_ERROR, error);
       retry_attempts_++;
       ResetConnectionAndRequestForResend(*retry_reason);
-      error = OK;
-      break;
+      return OK;
     case RetryReason::kQuicProtocolError:
       if (HasExceededMaxRetries() || GetResponseHeaders() != nullptr ||
           !stream_->GetAlternativeService(&retried_alternative_service_)) {
@@ -2115,7 +2238,7 @@ int HttpNetworkTransaction::HandleIOError(int error) {
         // then the request can not be retried. Also, if there was no
         // alternative service used for this request, then there is no
         // alternative service to be disabled.
-        break;
+        return error;
       }
 
       if (session_->http_server_properties()->IsAlternativeServiceBroken(
@@ -2127,7 +2250,7 @@ int HttpNetworkTransaction::HandleIOError(int error) {
             NetLogEventType::HTTP_TRANSACTION_RESTART_AFTER_ERROR, error);
         retry_attempts_++;
         ResetConnectionAndRequestForResend(*retry_reason);
-        error = OK;
+        return OK;
       } else if (session_->context()
                      .quic_context->params()
                      ->retry_without_alt_svc_on_quic_errors) {
@@ -2139,9 +2262,9 @@ int HttpNetworkTransaction::HandleIOError(int error) {
             NetLogEventType::HTTP_TRANSACTION_RESTART_AFTER_ERROR, error);
         retry_attempts_++;
         ResetConnectionAndRequestForResend(*retry_reason);
-        error = OK;
+        return OK;
       }
-      break;
+      return error;
 
     // The following reasons are not covered here.
     case RetryReason::kHttpRequestTimeout:
@@ -2150,7 +2273,7 @@ int HttpNetworkTransaction::HandleIOError(int error) {
     case RetryReason::kSslClientAuthSignatureFailed:
       NOTREACHED();
   }
-  return error;
+  NOTREACHED();
 }
 
 void HttpNetworkTransaction::ResetStateForRestart() {
@@ -2217,8 +2340,6 @@ void HttpNetworkTransaction::ResetConnectionAndRequestForResend(
   TRACE_EVENT("net",
               "HttpNetworkTransaction::ResetConnectionAndRequestForResend",
               NetLogWithSourceToFlow(net_log_), "retry_reason", retry_reason);
-
-  reset_connection_and_request_for_resend_start_time_ = base::TimeTicks::Now();
 
   // TODO:(crbug.com/1495705): Remove this CHECK after fixing the bug.
   CHECK(request_);
@@ -2383,23 +2504,24 @@ bool HttpNetworkTransaction::ContentEncodingsValid() const {
 }
 
 void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
-  // Do not record the elapsed time when this restarted. Restarting usually
-  // involves user interaction and we can't predict how long the interaction
-  // took time.
-  if (num_restarts_ == 0) {
-    base::TimeDelta elapsed = base::TimeTicks::Now() - start_timeticks_;
-    base::UmaHistogramTimes(
-        base::StrCat({"Net.NetworkTransaction.StreamRequestCompleteTime2.",
-                      IsGoogleHostWithAlpnH3(url_.host()) ? "GoogleHost." : "",
-                      result == OK ? "Success" : "Failure"}),
-        elapsed);
+  // Only record the first time the stream request completes.
+  if (num_restarts_ > 0 || retry_attempts_ > 0 ||
+      retry_attempts_on_connection_errors_ > 0) {
+    return;
   }
+
+  base::TimeDelta elapsed = base::TimeTicks::Now() - start_timeticks_;
+  base::UmaHistogramTimes(
+      base::StrCat({"Net.NetworkTransaction.StreamRequestCompleteTime4.",
+                    IsGoogleHostWithAlpnH3(url_.host()) ? "GoogleHost." : "",
+                    result == OK ? "Success" : "Failure"}),
+      elapsed);
 
   if (result == OK) {
     CHECK(stream_);
     base::UmaHistogramEnumeration(
         base::StrCat({
-            "Net.NetworkTransaction.NegotiatedProtocol",
+            "Net.NetworkTransaction.NegotiatedProtocol3",
             IsGoogleHostWithAlpnH3(url_.host()) ? ".GoogleHost" : "",
         }),
         negotiated_protocol_);
@@ -2408,7 +2530,7 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
     int get_endpoint_result = stream_->GetRemoteEndpoint(&endpoint);
     if (get_endpoint_result == OK) {
       base::UmaHistogramEnumeration(
-          "Net.NetworkTransaction.StreamAddressFamily", endpoint.GetFamily(),
+          "Net.NetworkTransaction.StreamAddressFamily3", endpoint.GetFamily(),
           static_cast<AddressFamily>(ADDRESS_FAMILY_LAST + 1));
     }
 
@@ -2418,8 +2540,8 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
         create_stream_end_time_ - create_stream_start_time_;
 
     const std::string_view histogram_base_name =
-        ForWebSocketHandshake() ? "CreateWebSocketStreamTime2"
-                                : "CreateHttpStreamTime2";
+        ForWebSocketHandshake() ? "CreateWebSocketStreamTime4"
+                                : "CreateHttpStreamTime4";
     const std::string_view host_suffix =
         IsGoogleHostWithAlpnH3(url_.host()) ? ".GoogleHost" : "";
     const std::string_view protocol_suffix =
@@ -2434,18 +2556,11 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
     base::UmaHistogramTimes(base::StrCat({histogram_name, ".", address_suffix}),
                             create_time);
 
-    if (!reset_connection_and_request_for_resend_start_time_.is_null()) {
-      base::UmaHistogramTimes(
-          "Net.NetworkTransaction.ResetConnectionAndResendRequestTime",
-          base::TimeTicks::Now() -
-              reset_connection_and_request_for_resend_start_time_);
-    }
-
     CHECK(stream_request_completion_details_.has_value());
     if (stream_request_completion_details_->session_source.has_value()) {
       base::UmaHistogramEnumeration(
           base::StrCat(
-              {"Net.NetworkTransaction.SessionSource2.", protocol_suffix}),
+              {"Net.NetworkTransaction.SessionSource4.", protocol_suffix}),
           *stream_request_completion_details_->session_source);
     }
 
@@ -2466,12 +2581,12 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
       };
       base::UmaHistogramTimes(
           base::StrCat({"Net.NetworkTransaction.", protocol_suffix,
-                        "StreamCreationTime.",
+                        "StreamCreationTime3.",
                         is_existing() ? "Existing" : "New"}),
           create_time);
     }
   } else {
-    base::UmaHistogramSparse("Net.NetworkTransaction.StreamRequestErrorCode2",
+    base::UmaHistogramSparse("Net.NetworkTransaction.StreamRequestErrorCode4",
                              -result);
   }
 }

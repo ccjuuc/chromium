@@ -81,7 +81,7 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::NOTIFICATIONS:
       case ContentSettingsType::MIDI:
       case ContentSettingsType::MIDI_SYSEX:
-      case ContentSettingsType::DURABLE_STORAGE:
+      case ContentSettingsType::PERSISTENT_STORAGE:
       case ContentSettingsType::MEDIASTREAM_CAMERA:
       case ContentSettingsType::MEDIASTREAM_MIC:
       case ContentSettingsType::BACKGROUND_SYNC:
@@ -172,19 +172,15 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::
           FEDERATED_IDENTITY_IDENTITY_PROVIDER_REGISTRATION:
       case ContentSettingsType::ANTI_ABUSE:
-      case ContentSettingsType::THIRD_PARTY_STORAGE_PARTITIONING:
       case ContentSettingsType::HTTPS_ENFORCED:
       case ContentSettingsType::ALL_SCREEN_CAPTURE:
       case ContentSettingsType::COOKIE_CONTROLS_METADATA:
-      case ContentSettingsType::TPCD_HEURISTICS_GRANTS:
-      case ContentSettingsType::TPCD_METADATA_GRANTS:
       case ContentSettingsType::AUTO_PICTURE_IN_PICTURE:
       case ContentSettingsType::FILE_SYSTEM_ACCESS_EXTENDED_PERMISSION:
       case ContentSettingsType::FILE_SYSTEM_ACCESS_RESTORE_PERMISSION:
       case ContentSettingsType::SUB_APP_INSTALLATION_PROMPTS:
       case ContentSettingsType::DIRECT_SOCKETS:
       case ContentSettingsType::REVOKED_ABUSIVE_NOTIFICATION_PERMISSIONS:
-      case ContentSettingsType::TRACKING_PROTECTION:
       case ContentSettingsType::DISPLAY_MEDIA_SYSTEM_AUDIO:
       case ContentSettingsType::JAVASCRIPT_OPTIMIZER:
       case ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL:
@@ -204,6 +200,9 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::DEVICE_ATTRIBUTES:
       case ContentSettingsType::PERMISSION_ACTIONS_HISTORY:
       case ContentSettingsType::SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL:
+      case ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS:
+      case ContentSettingsType::INLINE_CUE_MENU:
+      case ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA:
         break;
 
       default:
@@ -231,7 +230,7 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case blink::PermissionType::GEOLOCATION_APPROXIMATE:
       case blink::PermissionType::PROTECTED_MEDIA_IDENTIFIER:
       case blink::PermissionType::MIDI:
-      case blink::PermissionType::DURABLE_STORAGE:
+      case blink::PermissionType::PERSISTENT_STORAGE:
       case blink::PermissionType::AUDIO_CAPTURE:
       case blink::PermissionType::VIDEO_CAPTURE:
       case blink::PermissionType::BACKGROUND_SYNC:

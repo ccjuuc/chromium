@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "storage/browser/quota/quota_database.h"
 
 #include <stddef.h>
@@ -17,7 +12,7 @@
 #include <memory>
 #include <set>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -118,7 +113,7 @@ class QuotaDatabaseTest : public testing::TestWithParam<bool> {
     template <size_t length>
     explicit EntryVerifier(const EntryType (&entries)[length]) {
       for (size_t i = 0; i < length; ++i) {
-        table.insert(entries[i]->Clone());
+        table.insert(UNSAFE_TODO(entries[i]->Clone()));
       }
     }
 
@@ -384,12 +379,12 @@ TEST_P(QuotaDatabaseTest, GetBucketsForHost) {
   ASSERT_OK_AND_ASSIGN(std::set<BucketInfo> result,
                        db->GetBucketsForHost("example.com"));
   ASSERT_EQ(result.size(), 2U);
-  EXPECT_TRUE(base::Contains(result, example_bucket1));
-  EXPECT_TRUE(base::Contains(result, example_bucket2));
+  EXPECT_TRUE(result.contains(example_bucket1));
+  EXPECT_TRUE(result.contains(example_bucket2));
 
   ASSERT_OK_AND_ASSIGN(result, db->GetBucketsForHost("google.com"));
   ASSERT_EQ(result.size(), 1U);
-  EXPECT_TRUE(base::Contains(result, google_bucket));
+  EXPECT_TRUE(result.contains(google_bucket));
 }
 
 TEST_P(QuotaDatabaseTest, GetBucketsForStorageKey) {
@@ -493,8 +488,8 @@ TEST_P(QuotaDatabaseTest, BucketLastAccessTimeLRU) {
   ASSERT_EQ(1U, result.size());
   EXPECT_EQ(bucket_id2, result.begin()->id);
 
-  // Test that durable origins are excluded from eviction.
-  policy->AddDurable(storage_key2.origin().GetURL());
+  // Test that persistent origins are excluded from eviction.
+  policy->AddPersistent(storage_key2.origin().GetURL());
   ASSERT_OK_AND_ASSIGN(result, db->GetBucketsForEviction(
                                    1, {}, bucket_exceptions, policy.get()));
   ASSERT_EQ(1U, result.size());
@@ -626,8 +621,8 @@ TEST_P(QuotaDatabaseTest, GetAllStorageKeys) {
   std::ignore = db->CreateBucketForTesting(storage_key2, "bucket_b");
 
   ASSERT_OK_AND_ASSIGN(std::set<StorageKey> result, db->GetAllStorageKeys());
-  ASSERT_TRUE(base::Contains(result, storage_key1));
-  ASSERT_TRUE(base::Contains(result, storage_key2));
+  ASSERT_TRUE(result.contains(storage_key1));
+  ASSERT_TRUE(result.contains(storage_key2));
 }
 
 TEST_P(QuotaDatabaseTest, BucketLastModifiedBetween) {
@@ -1159,7 +1154,7 @@ TEST_P(QuotaDatabaseTest, Stale) {
   ASSERT_OK_AND_ASSIGN(stale_buckets, db.GetExpiredBuckets(policy.get()));
   EXPECT_EQ(2U, stale_buckets.size());
   policy = base::MakeRefCounted<MockSpecialStoragePolicy>();
-  policy->AddDurable(default_bucket.storage_key.origin().GetURL());
+  policy->AddPersistent(default_bucket.storage_key.origin().GetURL());
   db.SetAlreadyEvictedStaleStorageForTesting(false);
   ASSERT_OK_AND_ASSIGN(stale_buckets, db.GetExpiredBuckets(policy.get()));
   EXPECT_EQ(2U, stale_buckets.size());
@@ -1171,7 +1166,7 @@ TEST_P(QuotaDatabaseTest, Stale) {
   ASSERT_OK_AND_ASSIGN(stale_buckets, db.GetExpiredBuckets(policy.get()));
   EXPECT_EQ(3U, stale_buckets.size());
   policy = base::MakeRefCounted<MockSpecialStoragePolicy>();
-  policy->AddDurable(named_bucket.storage_key.origin().GetURL());
+  policy->AddPersistent(named_bucket.storage_key.origin().GetURL());
   db.SetAlreadyEvictedStaleStorageForTesting(false);
   ASSERT_OK_AND_ASSIGN(stale_buckets, db.GetExpiredBuckets(policy.get()));
   EXPECT_EQ(3U, stale_buckets.size());
@@ -1336,9 +1331,9 @@ TEST_P(QuotaDatabaseTest, PersistentPolicy) {
   ASSERT_EQ(1U, lru_result.size());
   EXPECT_EQ(default_id, lru_result.begin()->id);
 
-  // Check that durable policy applies to the default bucket but not the non
+  // Check that persistent policy applies to the default bucket but not the non
   // default (non default buckets use the persist columnn in the database).
-  policy->AddDurable(storage_key.origin().GetURL());
+  policy->AddPersistent(storage_key.origin().GetURL());
   ASSERT_OK_AND_ASSIGN(lru_result,
                        db.GetBucketsForEviction(1, {}, {}, policy.get()));
   ASSERT_EQ(1U, lru_result.size());

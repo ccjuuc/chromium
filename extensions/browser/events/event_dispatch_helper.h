@@ -5,12 +5,14 @@
 #ifndef EXTENSIONS_BROWSER_EVENTS_EVENT_DISPATCH_HELPER_H_
 #define EXTENSIONS_BROWSER_EVENTS_EVENT_DISPATCH_HELPER_H_
 
+#include <optional>
 #include <set>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/values.h"
+#include "extensions/browser/event_router.h"
 #include "extensions/browser/lazy_context_id.h"
 #include "extensions/browser/lazy_context_task_queue.h"
 #include "extensions/common/extension_id.h"
@@ -26,7 +28,6 @@ class EventListener;
 class EventListenerMap;
 class Extension;
 class ExtensionRegistry;
-struct Event;
 
 // A unique identifier for an active listener context. This is used to
 // de-duplicate event dispatches to the same active listener context.
@@ -98,20 +99,24 @@ class EventDispatchHelper {
 
   // Attempts to dispatch the given `event` to the specified lazy `listener`.
   // This will queue the event to be dispatched later if the lazy context
-  // is not currently running.
+  // is not currently running. Returns true if the event was handled for any
+  // matching lazy context (for example, it was queued or canceled), false
+  // otherwise.
   //
   // NOTE: this method will not dispatch to a lazy listener if the context
   // is active, so that it can be dispatched to the corresponding active
   // (non-lazy) listener instead.
-  void DispatchEventToLazyListener(const ExtensionId& restrict_to_extension_id,
+  bool DispatchEventToLazyListener(const ExtensionId& restrict_to_extension_id,
                                    const GURL& restrict_to_url,
                                    Event& event,
                                    const EventListener* listener);
 
-  // Dispatches the given `event` to the specified active `listener`. Avoids
-  // dispatching if an event has already been queued for a lazy listener with
-  // the same context.
-  void DispatchEventToActiveListener(
+  // Attempts to dispatch the given `event` to the specified active `listener`.
+  // Avoids dispatching if an event has already been queued for a lazy listener
+  // with the same context. Returns true if the event was handled for this
+  // active context (for example, it was dispatched, canceled, or already
+  // covered by a queued or de-duplicated dispatch), false otherwise.
+  bool DispatchEventToActiveListener(
       const ExtensionId& restrict_to_extension_id,
       const GURL& restrict_to_url,
       const Event& event,
@@ -124,13 +129,15 @@ class EventDispatchHelper {
   // not ready yet.
   //
   // If [dispatch_context| is for a service worker, it ensures the worker is
-  // started before dispatching the event.
+  // started before dispatching the event. Returns true if the event was
+  // handled for this lazy context (either queued or canceled), false
+  // otherwise.
   //
   // NOTE: this method will not dispatch to a lazy listener if the context
   // is active.
-  void TryQueueEventForLazyListener(Event& event,
+  bool TryQueueEventForLazyListener(Event& event,
                                     const LazyContextId& dispatch_context,
-                                    const base::Value::Dict* listener_filter);
+                                    const base::DictValue* listener_filter);
 
   // Possibly loads given extension's background page or extension Service
   // Worker in preparation to dispatch an event. Returns true if the event was
@@ -139,7 +146,7 @@ class EventDispatchHelper {
   bool TryQueueEventDispatch(Event& event,
                              const LazyContextId& dispatch_context,
                              const Extension* extension,
-                             const base::Value::Dict* listener_filter);
+                             const base::DictValue* listener_filter);
 
   // Creates a copy of `event` for dispatching to a specific listener context.
   // If `event` has a `will_dispatch_callback`, it is run before copying. If the
@@ -147,7 +154,7 @@ class EventDispatchHelper {
   // the event with any modifications applied by the callback.
   std::unique_ptr<Event> CreateEventForDispatch(
       const Event& event,
-      const base::Value::Dict* listener_filter,
+      const base::DictValue* listener_filter,
       const Extension* extension,
       content::BrowserContext& listener_context,
       mojom::ContextType target_context_type,
@@ -162,14 +169,21 @@ class EventDispatchHelper {
   bool IsAlreadyQueued(const LazyContextId& dispatch_context) const;
 
   // Returns true if the given `listener` meets dispatch restrictions. Events
-  // may be restricted to a particular extension ID or URL context.
+  // may be restricted to a particular extension ID or URL context, and to a
+  // single dispatch target.
   //
   // If `restrict_to_extension_id` is non-empty, the listener's extension ID
   // must match it. If `restrict_to_url` is non-empty, the listener's URL must
-  // be same-origin with it.
+  // be same-origin with it. If `restrict_to_dispatch_target` is set, the
+  // listener's context identity must match it: an active target matches only
+  // the listener registration with that exact (process, worker thread,
+  // service worker version) identity, and a lazy target matches only lazy
+  // registrations.
   bool ListenerMeetsRestrictions(const EventListener* listener,
                                  const ExtensionId& restrict_to_extension_id,
-                                 const GURL& restrict_to_url) const;
+                                 const GURL& restrict_to_url,
+                                 const std::optional<Event::DispatchTarget>&
+                                     restrict_to_dispatch_target) const;
 
   // Gets off-the-record browser context if
   //     - The extension has incognito mode set to "split"
@@ -196,7 +210,6 @@ class EventDispatchHelper {
 
   std::set<LazyContextId> dispatched_ids_;
   std::set<ActiveContextId> dispatched_active_ids_;
-  std::set<LazyContextId> contexts_pending_dispatch_;
 };
 
 }  // namespace extensions

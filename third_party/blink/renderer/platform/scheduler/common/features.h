@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
@@ -18,7 +19,6 @@ BASE_FEATURE(kDedicatedWorkerThrottling,
 
 // Enable setting high priority database task type from field trial parameters.
 BASE_FEATURE(kHighPriorityDatabaseTaskType,
-             "HighPriorityDatabaseTaskType",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // When features::kIntensiveWakeUpThrottling is enabled, wake ups from timers
@@ -58,8 +58,12 @@ PLATFORM_EXPORT base::TimeDelta GetIntensiveWakeUpThrottlingGracePeriod(
 // base::SequencedTaskRunner::GetCurrentDefault() returns the current active
 // per-ASG task runner instead of the per-thread task runner.
 BASE_FEATURE(kMbiOverrideTaskRunnerHandle,
-             "MbiOverrideTaskRunnerHandle",
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kBusyLoopOnRendererMain);
+PLATFORM_EXPORT BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kBusyLoopTime);
+
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kBusyLoopLessWhenCompositorGesture);
 
 }  // namespace scheduler
 }  // namespace blink

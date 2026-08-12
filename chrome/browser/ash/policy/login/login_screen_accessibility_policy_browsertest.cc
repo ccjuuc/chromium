@@ -22,10 +22,8 @@
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/common/pref_names.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/prefs/pref_change_registrar.h"
@@ -95,8 +93,8 @@ void LoginScreenAccessibilityPolicyBrowsertest::SetUpOnMainThread() {
   magnification_manager->SetProfileForTest(
       ash::ProfileHelper::GetSigninProfile());
 
-  // Disable PolicyRecommendationRestorer. See https://crbug.com/1015763#c13 for
-  // details.
+  // Disable PolicyRecommendationRestorer. See
+  // https://crbug.com/40653903#comment14 for details.
   ash::AccessibilityController::Get()
       ->DisablePolicyRecommendationRestorerForTesting();
 }
@@ -505,7 +503,8 @@ IN_PROC_BROWSER_TEST_F(
 
   em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
   proto.mutable_deviceloginscreentouchvirtualkeyboardenabled()->set_value(true);
-  RefreshDevicePolicyAndWaitForPrefChange(prefs::kTouchVirtualKeyboardEnabled);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kTouchVirtualKeyboardEnabled);
 
   // Verify the virtual keyboard cannot be disabled.
   EXPECT_TRUE(keyboard_client->is_keyboard_enabled());
@@ -522,7 +521,8 @@ IN_PROC_BROWSER_TEST_F(
   em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
   proto.mutable_deviceloginscreentouchvirtualkeyboardenabled()->set_value(
       false);
-  RefreshDevicePolicyAndWaitForPrefChange(prefs::kTouchVirtualKeyboardEnabled);
+  RefreshDevicePolicyAndWaitForPrefChange(
+      ash::prefs::kTouchVirtualKeyboardEnabled);
 
   // Verify the virtual keyboard cannot be enabled.
   EXPECT_FALSE(keyboard_client->is_keyboard_enabled());

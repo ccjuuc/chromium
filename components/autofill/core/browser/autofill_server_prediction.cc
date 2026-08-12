@@ -5,13 +5,10 @@
 #include "components/autofill/core/browser/autofill_server_prediction.h"
 
 #include <optional>
-#include <string>
 #include <vector>
 
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/proto/api_v1.pb.h"
-#include "components/autofill/core/browser/proto/password_requirements.pb.h"
 
 namespace autofill {
 
@@ -38,7 +35,8 @@ AutofillServerPrediction::~AutofillServerPrediction() = default;
 FieldType AutofillServerPrediction::server_type() const {
   return server_predictions.empty()
              ? NO_SERVER_DATA
-             : ToSafeFieldType(server_predictions[0].type(), NO_SERVER_DATA);
+             : ToSafeFieldType(server_predictions[0].type())
+                   .value_or(NO_SERVER_DATA);
 }
 
 bool AutofillServerPrediction::is_override() const {

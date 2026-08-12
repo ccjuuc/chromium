@@ -10,14 +10,12 @@ import android.view.WindowManager;
 import android.view.inspector.WindowInspector;
 
 import androidx.test.espresso.Root;
-import androidx.test.espresso.matcher.RootMatchers;
 
 import com.google.common.collect.Lists;
 
 import org.hamcrest.Matcher;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.transit.RootSpec.RootType;
 import org.chromium.build.annotations.NullMarked;
 
 import java.util.ArrayList;
@@ -43,9 +41,6 @@ class InternalViewFinder {
                     instanceof WindowManager.LayoutParams windowLayoutParams)) {
                 continue;
             }
-            if ((windowLayoutParams.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0) {
-                continue;
-            }
 
             Root root =
                     new Root.Builder()
@@ -53,17 +48,7 @@ class InternalViewFinder {
                             .withWindowLayoutParams(windowLayoutParams)
                             .build();
 
-            boolean rootMatches;
-            if (rootSpec.getType() == RootType.ANY_ROOT) {
-                rootMatches = true;
-            } else if (RootMatchers.isDialog().matches(root) && view.hasWindowFocus()) {
-                rootMatches = rootSpec.allowsFocusedDialogs();
-            } else {
-                // Subwindows of the activity.
-                rootMatches = rootSpec.allowsWindowToken(view.getApplicationWindowToken());
-            }
-
-            if (rootMatches) {
+            if (rootSpec.matches(root)) {
                 matches.add(root);
             }
         }

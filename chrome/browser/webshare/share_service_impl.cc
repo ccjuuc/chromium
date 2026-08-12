@@ -8,19 +8,20 @@
 #include <memory>
 #include <string_view>
 
+#include "base/check.h"
 #include "base/feature_list.h"
 #include "base/files/safe_base_name.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/bad_message.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/common/chrome_features.h"
 #include "components/safe_browsing/buildflags.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
-
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/webshare/mac/sharing_service_operation.h"
 #endif
@@ -32,8 +33,10 @@
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "chrome/browser/safe_browsing/v5_get_hash_protocol_manager_factory.h"
 #include "components/safe_browsing/content/common/file_type_policies.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
+#include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
 #endif
 
 // IsDangerousFilename() and IsDangerousMimeType() should be kept in sync with
@@ -183,6 +186,13 @@ void ShareServiceImpl::Share(const std::string& title,
     return;
   }
 
+  if (!share_url.is_empty() && !share_url.SchemeIsHTTPOrHTTPS()) {
+    std::move(callback).Run(blink::mojom::ShareError::PERMISSION_DENIED);
+    ReportBadMessageAndDeleteThis(
+        "Web Share URL scheme must be http or https.");
+    return;
+  }
+
   content::WebContents* const web_contents =
       content::WebContents::FromRenderFrameHost(&render_frame_host());
   if (!web_contents) {
@@ -235,8 +245,14 @@ void ShareServiceImpl::Share(const std::string& title,
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   DCHECK(!safe_browsing_request_);
   if (should_check_url && g_browser_process->safe_browsing_service()) {
+    auto* v5_manager =
+        web_contents->GetBrowserContext()
+            ? safe_browsing::V5GetHashProtocolManagerFactory::
+                  GetForBrowserContext(web_contents->GetBrowserContext())
+            : nullptr;
     safe_browsing_request_.emplace(
         g_browser_process->safe_browsing_service()->database_manager(),
+        v5_manager ? v5_manager->GetWeakPtr() : nullptr,
         web_contents->GetLastCommittedURL(),
         base::BindOnce(&ShareServiceImpl::RunShareOperation,
                        weak_factory_.GetWeakPtr(), title, text, share_url,
@@ -297,11 +313,12 @@ void ShareServiceImpl::RunShareOperation(
          blink::mojom::ShareError result) { std::move(callback).Run(result); },
       std::move(sharing_service_operation), std::move(callback)));
 #elif BUILDFLAG(IS_WIN)
-  // Drop fullscreen mode so the Share UI can be easily clicked away from,
-  // without clicking back into the web contents
-  base::ScopedClosureRunner fullscreen_block =
-      web_contents->ForSecurityDropFullscreen(
-          /*display_id=*/display::kInvalidDisplayId);
+  auto blocker = web_contents->ForSecurityDropFullscreen(
+      /*display_id=*/display::kInvalidDisplayId);
+  if (!blocker) {
+    std::move(callback).Run(blink::mojom::ShareError::PERMISSION_DENIED);
+    return;
+  }
 
   auto share_operation = std::make_unique<webshare::ShareOperation>(
       title, text, share_url, web_contents);
@@ -315,7 +332,7 @@ void ShareServiceImpl::RunShareOperation(
             fullscreen_block.RunAndReset();
             std::move(callback).Run(result);
           },
-          std::move(share_operation), std::move(fullscreen_block),
+          std::move(share_operation), std::move(*blocker),
           std::move(callback)));
 #else
   NOTREACHED();

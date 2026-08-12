@@ -4,14 +4,12 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 
-#include <algorithm>
 #include <memory>
 
 #include "base/check.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "ui/views/view.h"
 
 PageInfoBubbleSpecification::Builder::Builder(
     views::BubbleAnchor anchor,
@@ -66,20 +64,8 @@ PageInfoBubbleSpecification::Builder::ShowPermissionPage(
   return *this;
 }
 
-PageInfoBubbleSpecification::Builder&
-PageInfoBubbleSpecification::Builder::ShowMerchantTrustPage() {
-  page_info_bubble_specification_->ShowMerchantTrustPage();
-  return *this;
-}
-
 void PageInfoBubbleSpecification::Builder::ValidateSpecification() {
   CHECK(page_info_bubble_specification_->web_contents());
-
-  // Bubbles on creation can show either the content settings page or the
-  // merchant trust page but not both.
-  if (page_info_bubble_specification_->permission_page_type().has_value()) {
-    CHECK(!page_info_bubble_specification_->show_merchant_trust_page());
-  }
 }
 
 std::unique_ptr<PageInfoBubbleSpecification>
@@ -123,10 +109,6 @@ void PageInfoBubbleSpecification::ShowPermissionPage(ContentSettingsType type) {
   permission_page_type_ = type;
 }
 
-void PageInfoBubbleSpecification::ShowMerchantTrustPage() {
-  show_merchant_trust_page_ = true;
-}
-
 views::BubbleAnchor PageInfoBubbleSpecification::anchor() {
   return anchor_;
 }
@@ -166,8 +148,4 @@ bool PageInfoBubbleSpecification::show_extended_site_info() {
 std::optional<ContentSettingsType>
 PageInfoBubbleSpecification::permission_page_type() {
   return permission_page_type_;
-}
-
-bool PageInfoBubbleSpecification::show_merchant_trust_page() {
-  return show_merchant_trust_page_;
 }

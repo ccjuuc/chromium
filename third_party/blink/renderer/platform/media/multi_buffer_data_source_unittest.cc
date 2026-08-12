@@ -13,6 +13,7 @@
 #include "base/containers/heap_array.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -131,8 +132,15 @@ class TestUrlData : public UrlData {
               CorsMode cors_mode,
               base::WeakPtr<UrlIndex> url_index,
               UrlData::CacheMode cache_mode,
-              scoped_refptr<base::SingleThreadTaskRunner> task_runner)
-      : UrlData(url, cors_mode, url_index, cache_mode, task_runner),
+              scoped_refptr<base::SingleThreadTaskRunner> task_runner,
+              media::DataSource::EncodingMode encoding_mode =
+                  media::DataSource::EncodingMode::kIdentity)
+      : UrlData(url,
+                cors_mode,
+                encoding_mode,
+                url_index,
+                cache_mode,
+                task_runner),
         block_shift_(url_index->block_shift()),
         task_runner_(std::move(task_runner)) {}
 
@@ -167,12 +175,15 @@ class TestUrlIndex : public UrlIndex {
       : UrlIndex(fetch_context, task_runner),
         task_runner_(std::move(task_runner)) {}
 
-  scoped_refptr<UrlData> NewUrlData(const KURL& url,
-                                    UrlData::CorsMode cors_mode,
-                                    UrlData::CacheMode cache_mode) override {
+  scoped_refptr<UrlData> NewUrlData(
+      const KURL& url,
+      UrlData::CorsMode cors_mode,
+      UrlData::CacheMode cache_mode,
+      media::DataSource::EncodingMode encoding_mode) override {
     NotifyNewUrlData(url, cors_mode, cache_mode);
     last_url_data_ = base::MakeRefCounted<TestUrlData>(
-        url, cors_mode, weak_factory_.GetWeakPtr(), cache_mode, task_runner_);
+        url, cors_mode, weak_factory_.GetWeakPtr(), cache_mode, task_runner_,
+        encoding_mode);
     return last_url_data_;
   }
 
@@ -491,6 +502,17 @@ class MultiBufferDataSourceTest : public testing::Test {
     is_client_audio_element_ = value;
   }
 
+  media::DataSource::Preload GetPreload(MultiBufferDataSource* source) {
+    return source->preload_;
+  }
+  bool GetIsClientAudioElement(MultiBufferDataSource* source) {
+    return source->is_client_audio_element_;
+  }
+  void CallOnRedirected(MultiBufferDataSource* source,
+                        const scoped_refptr<UrlData>& data) {
+    source->OnRedirected(data);
+  }
+
  protected:
   base::test::SingleThreadTaskEnvironment task_environment_;
   MultiBufferDataSource::Preload preload_;
@@ -564,8 +586,7 @@ TEST_F(MultiBufferDataSourceTest, Range_SupportedButReturned200) {
   Initialize(kHttpUrl, true);
   EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
   WebURLResponse response = response_generator_->Generate200();
-  response.SetHttpHeaderField(WebString::FromUTF8("Accept-Ranges"),
-                              WebString::FromUTF8("bytes"));
+  response.SetHttpHeaderField(WebString("Accept-Ranges"), WebString("bytes"));
   Respond(response);
 
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1091,7 +1112,8 @@ TEST_F(MultiBufferDataSourceTest, Http_ShareData_AtLeastOneProgress) {
   EXPECT_CALL(host_, AddBufferedByteRange(0, testing::Ge(total_bytes)))
       .Times(testing::AtLeast(1));
 
-  auto data = base::HeapArray<char>::Uninit(total_bytes);
+  auto data =
+      base::HeapArray<char>::Uninit(base::checked_cast<size_t>(total_bytes));
   std::ranges::fill(data, 0xA5);  // Arbitrary non-zero value.
   provider1->DidReceiveData(data);
   provider1->DidFinishLoading();
@@ -1630,8 +1652,8 @@ TEST_F(MultiBufferDataSourceTest, PreserveCachingModeAfterRedirect) {
   WebURLResponse data_response(redir);
   data_response.SetHttpStatusCode(200);
   data_response.SetExpectedContentLength(kDataSize);
-  data_response.SetHttpHeaderField(WebString::FromUTF8("Accept-Ranges"),
-                                   WebString::FromUTF8("bytes"));
+  data_response.SetHttpHeaderField(WebString("Accept-Ranges"),
+                                   WebString("bytes"));
 
   // Create a data source for a url which redirects. This will create a new
   // UrlData that bypasses any cache lookups (but can still be added to the
@@ -1730,7 +1752,7 @@ TEST_F(MultiBufferDataSourceTest, LengthKnownAtEOF) {
   Initialize(kHttpUrl, true);
   // Server responds without content-length.
   WebURLResponse response = response_generator_->Generate200();
-  response.ClearHttpHeaderField(WebString::FromUTF8("Content-Length"));
+  response.ClearHttpHeaderField(WebString("Content-Length"));
   response.SetExpectedContentLength(kPositionNotSpecified);
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
@@ -1759,8 +1781,8 @@ TEST_F(MultiBufferDataSourceTest, FileSizeLessThanBlockSize) {
   WebURLResponse response(url);
   response.SetHttpStatusCode(200);
   response.SetHttpHeaderField(
-      WebString::FromUTF8("Content-Length"),
-      WebString::FromUTF8(base::NumberToString(kDataSize / 2)));
+      WebString("Content-Length"),
+      WebString::FromUtf8(base::NumberToString(kDataSize / 2)));
   response.SetExpectedContentLength(kDataSize / 2);
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize / 2));
@@ -1876,8 +1898,7 @@ TEST_F(MultiBufferDataSourceTest, EtagTest) {
   EXPECT_CALL(host_, SetTotalBytes(response_generator_->content_length()));
   WebURLResponse response = response_generator_->Generate206(0);
   const std::string etag("\"arglebargle glop-glyf?\"");
-  response.SetHttpHeaderField(WebString::FromUTF8("Etag"),
-                              WebString::FromUTF8(etag));
+  response.SetHttpHeaderField(WebString("Etag"), WebString::FromUtf8(etag));
   Respond(response);
   EXPECT_CALL(host_, AddBufferedByteRange(0, kDataSize));
   ReceiveData(kDataSize);
@@ -2098,6 +2119,104 @@ TEST_F(MultiBufferDataSourceTest, Http_Seek_Back) {
   EXPECT_EQ(kDataSize * 3, loader()->Tell());
 
   Stop();
+}
+
+TEST_F(MultiBufferDataSourceTest, FactoryCreation) {
+  auto media_log = std::make_unique<NiceMock<media::MockMediaLog>>();
+  bool redirect_called = false;
+  MultiBufferDataSource::Factory factory(
+      std::move(media_log),
+      base::BindRepeating(
+          [](UrlIndex* url_index, const GURL& url,
+             media::DataSource::CacheMode cache_mode,
+             media::DataSource::EncodingMode encoding_mode,
+             base::OnceCallback<void(scoped_refptr<UrlData>)> cb) {
+            std::move(cb).Run(url_index->GetByUrl(
+                KURL(url), UrlData::CORS_UNSPECIFIED,
+                cache_mode == media::DataSource::CacheMode::kBypassCache
+                    ? UrlData::kCacheDisabled
+                    : UrlData::kNormal,
+                encoding_mode));
+          },
+          base::Unretained(&url_index_)),
+      /*is_audio_element=*/true,
+      /*preload=*/media::DataSource::METADATA,
+      base::BindRepeating(
+          [](bool* called, const media::DataSource* source) { *called = true; },
+          base::Unretained(&redirect_called)),
+      /*tick_clock=*/nullptr, task_runner_);
+
+  std::unique_ptr<media::CrossOriginDataSource> created_source;
+  factory.Create(
+      GURL(kHttpUrl), media::DataSource::CacheMode::kHitCache,
+      media::DataSource::EncodingMode::kIdentity,
+      base::BindOnce(
+          [](std::unique_ptr<media::CrossOriginDataSource>* out_source,
+             std::unique_ptr<media::CrossOriginDataSource> source) {
+            *out_source = std::move(source);
+          },
+          &created_source));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(created_source);
+  MultiBufferDataSource* mb_source =
+      static_cast<MultiBufferDataSource*>(created_source.get());
+
+  EXPECT_EQ(GetPreload(mb_source), media::DataSource::METADATA);
+  EXPECT_TRUE(GetIsClientAudioElement(mb_source));
+
+  CallOnRedirected(mb_source, url_index_.GetByUrl(KURL(kHttpDifferentOriginUrl),
+                                                  UrlData::CORS_UNSPECIFIED,
+                                                  UrlData::kNormal));
+  EXPECT_TRUE(redirect_called);
+}
+
+TEST_F(MultiBufferDataSourceTest, FactoryCreationDefault) {
+  auto media_log = std::make_unique<NiceMock<media::MockMediaLog>>();
+  MultiBufferDataSource::Factory factory(
+      /*media_log=*/std::move(media_log),
+      /*get_url_data=*/
+      base::BindRepeating(
+          [](UrlIndex* url_index, const GURL& url,
+             media::DataSource::CacheMode cache_mode,
+             media::DataSource::EncodingMode encoding_mode,
+             base::OnceCallback<void(scoped_refptr<UrlData>)> cb) {
+            std::move(cb).Run(url_index->GetByUrl(
+                KURL(url), UrlData::CORS_UNSPECIFIED,
+                cache_mode == media::DataSource::CacheMode::kBypassCache
+                    ? UrlData::kCacheDisabled
+                    : UrlData::kNormal,
+                encoding_mode));
+          },
+          base::Unretained(&url_index_)),
+      /*is_audio_element=*/false,
+      /*preload=*/media::DataSource::METADATA, base::DoNothing(), nullptr,
+      task_runner_);
+
+  std::unique_ptr<media::CrossOriginDataSource> created_source;
+  factory.Create(
+      GURL(kHttpUrl), media::DataSource::CacheMode::kHitCache,
+      media::DataSource::EncodingMode::kIdentity,
+      base::BindOnce(
+          [](std::unique_ptr<media::CrossOriginDataSource>* out_source,
+             std::unique_ptr<media::CrossOriginDataSource> source) {
+            *out_source = std::move(source);
+          },
+          &created_source));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(created_source);
+  MultiBufferDataSource* mb_source =
+      static_cast<MultiBufferDataSource*>(created_source.get());
+
+  // Default values from media::DataSource::Factory::ClientMetadata
+  EXPECT_EQ(GetPreload(mb_source), media::DataSource::METADATA);
+  EXPECT_FALSE(GetIsClientAudioElement(mb_source));
+
+  // Should not crash if tainted_source_cb is not set.
+  CallOnRedirected(mb_source, url_index_.GetByUrl(KURL(kHttpDifferentPathUrl),
+                                                  UrlData::CORS_UNSPECIFIED,
+                                                  UrlData::kNormal));
 }
 
 }  // namespace blink

@@ -25,10 +25,13 @@
 // TODO(https://crbug.com/410596442): Stop using internal features here.
 #![allow(internal_features)]
 #![feature(rustc_attrs)]
+// TODO(crbug.com/497856781): Document the safety requirements of the C++
+// allocator functions, and then ensure all the blocks in this file are sound.
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 /// Module that provides `#[global_allocator]` / `GlobalAlloc` interface for
 /// using an allocator from C++.
-#[cfg(rust_allocator_uses_allocator_impls_h)]
+#[cfg(RUST_ALLOCATOR_USES_ALLOCATOR_IMPLS_H)]
 mod cpp_allocator {
     use allocator_impls_ffi::root::rust_allocator_internal as ffi;
     use std::alloc::{GlobalAlloc, Layout};
@@ -61,7 +64,7 @@ mod cpp_allocator {
 
 /// Module that provides `#[global_allocator]` / `GlobalAlloc` interface for
 /// using the default Rust allocator.
-#[cfg(not(rust_allocator_uses_allocator_impls_h))]
+#[cfg(not(RUST_ALLOCATOR_USES_ALLOCATOR_IMPLS_H))]
 mod rust_allocator {
     #[global_allocator]
     static GLOBAL: std::alloc::System = std::alloc::System;
@@ -90,7 +93,7 @@ mod both_allocators {
     #[linkage = "weak"]
     fn __rust_no_alloc_shim_is_unstable_v2() {}
 
-    #[cfg(rust_allocator_no_nightly_capability)]
+    #[cfg(not(RUST_ALLOCATOR_NIGHTLY_CAPABILITY))]
     #[rustc_std_internal_symbol]
     #[linkage = "weak"]
     fn __rust_no_alloc_shim_is_unstable() {}
@@ -101,7 +104,7 @@ mod both_allocators {
         0
     }
 
-    #[cfg(rust_allocator_no_nightly_capability)]
+    #[cfg(not(RUST_ALLOCATOR_NIGHTLY_CAPABILITY))]
     #[rustc_std_internal_symbol]
     #[linkage = "weak"]
     fn __rust_alloc_error_handler_should_panic() -> u8 {

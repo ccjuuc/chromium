@@ -7,10 +7,10 @@
 #include <string_view>
 
 #include "base/debug/crash_logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "build/chromeos_buildflags.h"
 #include "content/public/browser/child_process_security_policy.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
@@ -138,7 +138,7 @@ PermissionsData::PageAccess CanExtensionAccessURLInternal(
           web_request_type && IsWebRequestResourceTypeFrame(*web_request_type);
 
       // Only require access to the initiator for sub-resource (non-navigation)
-      // requests. See crbug.com/918137.
+      // requests. See crbug.com/41433450.
       // TODO(karandeepb): Should service worker navigation preload requests be
       // treated similarly?
       if (is_navigation_request) {
@@ -171,7 +171,7 @@ PermissionsData::PageAccess CanExtensionAccessURLInternal(
       // request is withheld but the access to initiator is allowed. In this
       // case, we allow access to the request. This is important for extensions
       // with webRequest to work well with runtime host permissions. See
-      // crbug.com/851722.
+      // crbug.com/40580327.
 
       return GetHostAccessForURL(*extension, initiator->GetURL(), tab_id);
     }
@@ -252,12 +252,33 @@ bool WebRequestPermissions::HideRequest(
     return true;
   }
 
+  // Hide requests for privileged content (see //chrome's
+  // PrivilegedWebContents): privileged content is invisible to the webRequest
+  // API. This covers both a privileged WebContents' own (browser-initiated)
+  // main-frame navigation and requests from its renderer. It is keyed on the
+  // destination, not the URL, so the same URL loaded in an ordinary tab remains
+  // observable. `is_privileged` is computed at request construction, since
+  // there may be no live renderer process to consult here. Checked up front so
+  // a privileged request is always hidden, before any of the `return false`
+  // paths below.
+  if (request.is_privileged) {
+    return true;
+  }
+
   // Requests from <webview> are never hidden.
   if (request.is_web_view) {
     return false;
   }
 
-  bool is_request_from_browser = request.render_process_id == -1;
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue once there is a better way
+  // to identify prefetch requests from the browser.  Changing this to the
+  // correct code of `is_null()` breaks functionality as the magic value 0 is
+  // actually used for prefetches, even though it's usually used by the browser
+  // process.  When uses are correctly ported to content::ChildProcessId we
+  // should be able to fix this.  See also
+  // ChromeExtensionsAPIClient::ShouldHideBrowserNetworkRequest.
+  bool is_request_from_browser =
+      request.global_id.child_id.GetUnsafeValue() == -1;
 
   if (is_request_from_browser) {
     // Browser initiated service worker script requests (e.g., for update check)
@@ -268,7 +289,7 @@ bool WebRequestPermissions::HideRequest(
       return false;
     }
 
-    // Hide all non-navigation requests made by the browser. crbug.com/884932.
+    // Hide all non-navigation requests made by the browser. crbug.com/40092481.
     if (!request.is_navigation_request) {
       return true;
     }
@@ -294,7 +315,7 @@ bool WebRequestPermissions::HideRequest(
   // Hide requests from the Chrome WebStore App.
   if (!is_request_from_browser &&
       permission_helper->process_map()->Contains(extensions::kWebStoreAppId,
-                                                 request.render_process_id)) {
+                                                 request.global_id.child_id)) {
     return true;
   }
 
@@ -311,10 +332,11 @@ bool WebRequestPermissions::HideRequest(
 
   const GURL& url = request.url;
 
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
   bool is_request_from_webui_renderer =
       !is_request_from_browser &&
       content::ChildProcessSecurityPolicy::GetInstance()->HasWebUIBindings(
-          request.render_process_id);
+          request.global_id.child_id.GetUnsafeValue());
 
   if (is_request_from_webui_renderer) {
 #if DCHECK_IS_ON()
@@ -322,7 +344,7 @@ bool WebRequestPermissions::HideRequest(
         url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS();
     if (is_network_request) {
       // WebUI renderers should never be making network requests, but we may
-      // make some exceptions for now. See https://crbug.com/829412 for
+      // make some exceptions for now. See https://crbug.com/40091019 for
       // details.
       //
       // The DCHECK helps avoid proliferation of such behavior.
@@ -330,7 +352,9 @@ bool WebRequestPermissions::HideRequest(
       DCHECK(extensions::ExtensionsBrowserClient::Get()
                  ->IsWebUIAllowedToMakeNetworkRequests(*request.initiator))
           << "Unsupported network request from "
-          << request.initiator->GetURL().spec() << " for " << url.spec();
+          << request.initiator->GetTupleOrPrecursorTupleIfOpaque().GetURL()
+          << " for " << url << " with request type "
+          << WebRequestResourceTypeToString(request.web_request_type);
     }
 #endif  // DCHECK_IS_ON()
 

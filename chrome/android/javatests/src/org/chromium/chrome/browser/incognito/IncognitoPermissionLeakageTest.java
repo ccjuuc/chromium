@@ -4,12 +4,13 @@
 
 package org.chromium.chrome.browser.incognito;
 
-import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.core.AllOf.allOf;
 import static org.hamcrest.core.AnyOf.anyOf;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.StringContains.containsString;
@@ -46,16 +47,18 @@ import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.ForgivingClickAction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.customtabs.IncognitoCustomTabActivityTestRule;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoDataTestUtils.ActivityType;
 import org.chromium.chrome.browser.incognito.IncognitoDataTestUtils.TestParams;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabLoadIfNeededCaller;
 import org.chromium.chrome.browser.ui.hats.SurveyClient;
 import org.chromium.chrome.browser.ui.hats.SurveyClientFactory;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
@@ -77,6 +80,8 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, ChromeSwitches.DISABLE_ALL_IPH})
+// TODO(http://crbug.com/495529795): Enable side panel and fix this test.
+@DisableFeatures({ChromeFeatureList.ENABLE_ANDROID_SIDE_PANEL})
 @Batch(Batch.PER_CLASS)
 public class IncognitoPermissionLeakageTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -120,10 +125,10 @@ public class IncognitoPermissionLeakageTest {
 
     private void requestLocationPermission(Tab tab) throws TimeoutException, ExecutionException {
         // If tab is frozen then getWebContents may return null
-        ThreadUtils.runOnUiThreadBlocking(() -> tab.loadIfNeeded(TabLoadIfNeededCaller.OTHER));
+        ThreadUtils.runOnUiThreadBlocking(() -> tab.loadIfNeeded(/* forceBackingSize= */ false));
         CriteriaHelper.pollUiThread(
                 () -> Criteria.checkThat(tab.getWebContents(), Matchers.notNullValue()));
-        JavaScriptUtils.executeJavaScriptAndWaitForResult(
+        JavaScriptUtils.executeJavaScriptWithUserGestureAndWaitForResult(
                 tab.getWebContents(), "initiate_getCurrentPosition()");
     }
 
@@ -136,12 +141,21 @@ public class IncognitoPermissionLeakageTest {
     }
 
     private void grantPermission() {
-        Espresso.onView(withText(anyOf(is("Allow"), is("Allow this time")))).perform(click());
+        // TODO(crbug.com/531793849): See if we want to keep using ForgivingClickAction.
+        Espresso.onView(allOf(withText(anyOf(is("Allow"), is("Allow this time"))), isDisplayed()))
+                .perform(ForgivingClickAction.forgivingClick());
     }
 
     private void blockPermission() {
-        Espresso.onView(withText(anyOf(containsString("Block"), containsString("Never allow"))))
-                .perform(click());
+        // TODO(crbug.com/531793849): See if we want to keep using ForgivingClickAction.
+        Espresso.onView(
+                        allOf(
+                                withText(
+                                        anyOf(
+                                                containsString("Block"),
+                                                containsString("Never allow"))),
+                                isDisplayed()))
+                .perform(ForgivingClickAction.forgivingClick());
     }
 
     /**

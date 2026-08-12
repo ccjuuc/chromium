@@ -7,15 +7,16 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/zoom/zoom_controller.h"
@@ -23,7 +24,6 @@
 #include "extensions/browser/extension_zoom_request_client.h"
 #include "extensions/common/extension_builder.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
-#include "ui/events/base_event_utils.h"
 #include "ui/views/test/test_widget_observer.h"
 #include "ui/views/test/widget_test.h"
 
@@ -67,7 +67,7 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest, ContentFullscreen) {
 #endif
 
   BrowserView* const browser_view =
-      static_cast<BrowserView*>(browser()->window());
+      BrowserView::GetBrowserViewForBrowser(browser());
   content::WebContents* web_contents = browser_view->GetActiveWebContents();
 
   // The zoom bubble should be anchored when not in fullscreen.
@@ -86,8 +86,8 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest, ContentFullscreen) {
     // notification before testing the zoom bubble visibility.
     ui_test_utils::FullscreenWaiter waiter_f(browser(),
                                              {.tab_fullscreen = true});
-    static_cast<content::WebContentsDelegate*>(browser())
-        ->EnterFullscreenModeForTab(web_contents->GetPrimaryMainFrame(), {});
+    BrowserWebContentsDelegate::From(browser())->EnterFullscreenModeForTab(
+        web_contents->GetPrimaryMainFrame(), {});
     waiter_f.Wait();
   }
 #if !BUILDFLAG(IS_MAC)
@@ -110,33 +110,18 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest, ContentFullscreen) {
 
 // Immersive fullscreen is either/or on Mac. Base class for tests that only
 // apply to non-immersive.
-#if BUILDFLAG(IS_MAC)
-class ZoomBubbleImmersiveDisabledBrowserTest : public ZoomBubbleBrowserTest {
- public:
-  ZoomBubbleImmersiveDisabledBrowserTest() {
-    scoped_feature_list_.InitAndDisableFeature(features::kImmersiveFullscreen);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-#else
 using ZoomBubbleImmersiveDisabledBrowserTest = ZoomBubbleBrowserTest;
-#endif
 
 // Test whether the zoom bubble is anchored to the same location if the toolbar
 // shows in fullscreen. And when the toolbar hides in fullscreen, the zoom
 // bubble should close and re-show in a new un-anchored position.
-//
-// TODO(lgrey): Disable this test for Mac or delete it when immersive is the
-// only code path. This was originally added for a Mac bug that is impossible
-// to trigger in immersive mode, and is very implementation-coupled.
+#if !BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(ZoomBubbleImmersiveDisabledBrowserTest,
                        AnchorPositionsInFullscreen) {
 #if BUILDFLAG(IS_MAC)
   ui::test::ScopedFakeNSWindowFullscreen fake_fullscreen;
 #endif
-  BrowserView* browser_view = static_cast<BrowserView*>(browser()->window());
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   content::WebContents* web_contents = browser_view->GetActiveWebContents();
 
   zoom_bubble_coordinator_->Show(web_contents, ZoomBubbleView::AUTOMATIC);
@@ -163,7 +148,8 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleImmersiveDisabledBrowserTest,
 #else
   const bool should_show_toolbar = false;
 #endif
-  EXPECT_EQ(should_show_toolbar, browser()->window()->IsToolbarVisible());
+  EXPECT_EQ(should_show_toolbar,
+            BrowserWindow::FromBrowser(browser())->IsToolbarVisible());
 
   // The zoom bubble should be anchored to the same anchor view if the toolbar
   // shows.
@@ -201,13 +187,14 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleImmersiveDisabledBrowserTest,
   // Don't leave the browser in fullscreen for subsequent tests.
   ui_test_utils::ToggleFullscreenModeAndWait(browser());
 }
+#endif  // !BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_CHROMEOS)
 // Test whether the zoom bubble is anchored and whether it is visible when in
 // immersive fullscreen.
 IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest, ImmersiveFullscreen) {
   BrowserView* const browser_view =
-      static_cast<BrowserView*>(browser()->window());
+      BrowserView::GetBrowserViewForBrowser(browser());
   content::WebContents* web_contents = browser_view->GetActiveWebContents();
 
   auto* const immersive_controller = ImmersiveModeController::From(browser());
@@ -479,11 +466,43 @@ IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest, FocusPreventsClose) {
 
   // Focus is usually gained via a key combination like alt+shift+a. The test
   // simulates this by focusing the bubble and then sending an empty KeyEvent.
-  focus_manager->SetFocusedView(bubble->GetResetButtonForTesting());
+  // Focus the Zoom In button instead of the Reset button because the Reset
+  // button is disabled at the default zoom level.
+  focus_manager->SetFocusedView(bubble->GetZoomInButtonForTesting());
   bubble->OnKeyEventForTesting(nullptr);
   // |auto_close_timer_| should not be running since focus should prevent the
   // bubble from closing.
   EXPECT_FALSE(bubble->GetAutoCloseTimerForTesting()->IsRunning());
+}
+
+IN_PROC_BROWSER_TEST_F(ZoomBubbleBrowserTest,
+                       ResetButtonDisabledAtDefaultZoom) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  zoom::ZoomController* zoom_controller =
+      zoom::ZoomController::FromWebContents(web_contents);
+  ASSERT_TRUE(zoom_controller);
+
+  // Ensure we are at default zoom.
+  zoom_controller->SetZoomLevel(zoom_controller->GetDefaultZoomLevel());
+
+  zoom_bubble_coordinator_->Show(web_contents, ZoomBubbleView::USER_GESTURE);
+  ZoomBubbleView* bubble = zoom_bubble_coordinator_->bubble();
+  ASSERT_TRUE(bubble);
+
+  views::Button* reset_button = bubble->GetResetButtonForTesting();
+  ASSERT_TRUE(reset_button);
+
+  // At default zoom, reset button should be disabled.
+  EXPECT_FALSE(reset_button->GetEnabled());
+
+  // Change zoom level.
+  zoom_controller->SetZoomLevel(zoom_controller->GetDefaultZoomLevel() + 1.0);
+  EXPECT_TRUE(reset_button->GetEnabled());
+
+  // Reset zoom level.
+  zoom_controller->SetZoomLevel(zoom_controller->GetDefaultZoomLevel());
+  EXPECT_FALSE(reset_button->GetEnabled());
 }
 
 }  // namespace

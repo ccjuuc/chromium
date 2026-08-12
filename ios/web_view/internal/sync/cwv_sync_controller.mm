@@ -9,6 +9,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/autofill/core/browser/studies/autofill_experiments.h"
 #import "components/password_manager/core/browser/features/password_manager_features_util.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/device_accounts_synchronizer.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
@@ -103,7 +104,7 @@ __weak id<CWVSyncControllerDataSource> gSyncDataSource;
 }
 
 - (void)dealloc {
-  _syncService->RemoveObserver(_observer.get());
+  DCHECK(!_syncService) << "-shutDown must be called before -dealloc";
 }
 
 #pragma mark - Public Methods
@@ -143,20 +144,23 @@ __weak id<CWVSyncControllerDataSource> gSyncDataSource;
   _identityManager->GetDeviceAccountsSynchronizer()
       ->ReloadAllAccountsFromSystemWithPrimaryAccount(CoreAccountId());
 
-  const CoreAccountId accountId = _identityManager->PickAccountIdForAccount(
-      GaiaId(identity.gaiaID), base::SysNSStringToUTF8(identity.email));
+  const GaiaId gaiaId(identity.gaiaID);
+  const CoreAccountId accountId = CoreAccountId::FromGaiaId(gaiaId);
   CHECK(_identityManager->HasAccountWithRefreshToken(accountId));
 
   _identityManager->GetPrimaryAccountMutator()->SetPrimaryAccount(
-      accountId, signin::ConsentLevel::kSignin);
+      accountId, signin::ConsentLevel::kSignin,
+      signin_metrics::AccessPoint::kIosChromeWebView);
   CHECK_EQ(_identityManager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
            accountId);
 
   autofill::SetUserOptedInWalletSyncTransport(_prefService, accountId,
                                               /*opted_in=*/true);
   if (!CWVWebView.skipAccountStorageCheckEnabled) {
+    // TODO(crbug.com/470332074): Verify whether this should check for "enabled"
+    // instead of "active".
     CHECK(
-        password_manager::features_util::IsAccountStorageEnabled(_syncService));
+        password_manager::features_util::IsAccountStorageActive(_syncService));
   }
 }
 
@@ -198,6 +202,11 @@ __weak id<CWVSyncControllerDataSource> gSyncDataSource;
   if ([_delegate respondsToSelector:@selector(syncControllerDidUpdateState:)]) {
     [_delegate syncControllerDidUpdateState:self];
   }
+}
+
+- (void)shutDown {
+  _syncService->RemoveObserver(_observer.get());
+  _syncService = nullptr;
 }
 
 @end

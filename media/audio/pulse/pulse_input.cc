@@ -18,11 +18,13 @@
 
 namespace media {
 
+using Error = AudioInputStream::AudioInputCallback::Error;
+
 using pulse::AutoPulseLock;
 using pulse::WaitForOperationCompletion;
 
 // Number of blocks of buffers used in the |fifo_|.
-const int kNumberOfBlocksBufferInFifo = 2;
+constexpr int kNumberOfBlocksBufferInFifo = 2;
 
 constexpr SampleFormat kSampleFormat = pulse::kInputSampleFormat;
 
@@ -56,8 +58,11 @@ PulseAudioInputStream::PulseAudioInputStream(
   DCHECK(mainloop);
   DCHECK(context);
   CHECK(params_.IsValid());
-  SendLogMessage("%s({device_id=%s}, {params=[%s]})", __func__,
-                 source_name.c_str(), params.AsHumanReadableString().c_str());
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s({device_id=%s}, {params=[%s]})",
+                                      __func__, source_name.c_str(),
+                                      params.AsHumanReadableString().c_str()));
+  }
   // TODO(crbug.com/40281249): PulseLoopbackAudioStream gives
   // PulseAudioInputStream a nullptr for `audio_manager`, which is risky.
   // Refactor such that this is not the case, or separate the
@@ -72,17 +77,25 @@ PulseAudioInputStream::~PulseAudioInputStream() {
 
 AudioInputStream::OpenOutcome PulseAudioInputStream::Open() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  SendLogMessage("%s()", __func__);
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s()", __func__));
+  }
   if (source_name_ == AudioDeviceDescription::kDefaultDeviceId &&
       audio_manager_ && audio_manager_->DefaultSourceIsMonitor()) {
-    SendLogMessage("%s => (ERROR: can't open monitor device)", __func__);
+    if (ShouldLog()) {
+      SendLogMessage(base::StringPrintf(
+          "%s => (ERROR: can't open monitor device)", __func__));
+    }
     return OpenOutcome::kFailed;
   }
 
   AutoPulseLock auto_lock(pa_mainloop_);
   if (!pulse::CreateInputStream(pa_mainloop_, pa_context_, &handle_, params_,
                                 source_name_, &StreamNotifyCallback, this)) {
-    SendLogMessage("%s => (ERROR: failed to open PA stream)", __func__);
+    if (ShouldLog()) {
+      SendLogMessage(base::StringPrintf(
+          "%s => (ERROR: failed to open PA stream)", __func__));
+    }
     return OpenOutcome::kFailed;
   }
 
@@ -95,7 +108,9 @@ void PulseAudioInputStream::Start(AudioInputCallback* callback) {
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(callback);
   DCHECK(handle_);
-  SendLogMessage("%s()", __func__);
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s()", __func__));
+  }
 
   // AGC needs to be started out of the lock.
   StartAgc();
@@ -116,13 +131,15 @@ void PulseAudioInputStream::Start(AudioInputCallback* callback) {
 
   if (!WaitForOperationCompletion(pa_mainloop_, operation, pa_context_,
                                   handle_)) {
-    callback_->OnError();
+    callback_->OnError(Error::kStartupFailed);
   }
 }
 
 void PulseAudioInputStream::Stop() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  SendLogMessage("%s()", __func__);
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s()", __func__));
+  }
   AutoPulseLock auto_lock(pa_mainloop_);
   if (!stream_started_)
     return;
@@ -140,7 +157,7 @@ void PulseAudioInputStream::Stop() {
       pa_stream_flush(handle_, &pulse::StreamSuccessCallback, pa_mainloop_);
   if (!WaitForOperationCompletion(pa_mainloop_, operation, pa_context_,
                                   handle_)) {
-    callback_->OnError();
+    callback_->OnError(Error::kRuntimeError);
   }
 
   // Stop the stream.
@@ -149,14 +166,16 @@ void PulseAudioInputStream::Stop() {
       pa_stream_cork(handle_, 1, &pulse::StreamSuccessCallback, pa_mainloop_);
   if (!WaitForOperationCompletion(pa_mainloop_, operation, pa_context_,
                                   handle_)) {
-    callback_->OnError();
+    callback_->OnError(Error::kRuntimeError);
   }
   callback_ = nullptr;
 }
 
 void PulseAudioInputStream::Close() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  SendLogMessage("%s()", __func__);
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s()", __func__));
+  }
   {
     AutoPulseLock auto_lock(pa_mainloop_);
     if (handle_) {
@@ -192,7 +211,9 @@ void PulseAudioInputStream::SetVolume(double volume) {
   AutoPulseLock auto_lock(pa_mainloop_);
   if (!handle_)
     return;
-  SendLogMessage("%s({volume=%.2f})", __func__, volume);
+  if (ShouldLog()) {
+    SendLogMessage(base::StringPrintf("%s({volume=%.2f})", __func__, volume));
+  }
 
   size_t index = pa_stream_get_device_index(handle_);
   pa_operation* operation = nullptr;
@@ -204,8 +225,10 @@ void PulseAudioInputStream::SetVolume(double volume) {
     if (!WaitForOperationCompletion(pa_mainloop_, operation, pa_context_,
                                     handle_) ||
         !channels_) {
-      SendLogMessage("%s => (WARNING: failed to read number of channels)",
-                     __func__);
+      if (ShouldLog()) {
+        SendLogMessage(base::StringPrintf(
+            "%s => (WARNING: failed to read number of channels)", __func__));
+      }
       return;
     }
   }
@@ -251,13 +274,11 @@ void PulseAudioInputStream::SetOutputDeviceForAec(
   // Not supported. Do nothing.
 }
 
-void PulseAudioInputStream::SendLogMessage(const char* format, ...) {
-  if (log_callback_.is_null())
+void PulseAudioInputStream::SendLogMessage(const std::string& message) {
+  if (!ShouldLog()) {
     return;
-  va_list args;
-  va_start(args, format);
-  log_callback_.Run("PAIS::" + base::StringPrintV(format, args));
-  va_end(args);
+  }
+  log_callback_.Run("PAIS::" + message);
 }
 
 // static, used by pa_stream_set_read_callback.
@@ -322,7 +343,7 @@ void PulseAudioInputStream::StreamNotifyCallback(pa_stream* s,
 
   if (s && stream->callback_ &&
       pa_stream_get_state(s) == PA_STREAM_FAILED) {
-    stream->callback_->OnError();
+    stream->callback_->OnError(Error::kRuntimeError);
   }
 
   pa_threaded_mainloop_signal(stream->pa_mainloop_, 0);

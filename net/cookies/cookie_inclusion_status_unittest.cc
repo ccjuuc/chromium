@@ -169,18 +169,18 @@ TEST(CookieInclusionStatusTest, AddExclusionReason) {
 TEST(CookieInclusionStatusTest, ExemptionReason) {
   CookieInclusionStatus status;
   status.MaybeSetExemptionReason(
-      CookieInclusionStatus::ExemptionReason::k3PCDMetadata);
+      CookieInclusionStatus::ExemptionReason::kUserSetting);
   ASSERT_EQ(status.exemption_reason(),
-            CookieInclusionStatus::ExemptionReason::k3PCDMetadata);
+            CookieInclusionStatus::ExemptionReason::kUserSetting);
   ASSERT_TRUE(status.IsInclude());
   ASSERT_EQ(status.GetDebugString(),
-            "INCLUDE, DO_NOT_WARN, Exemption3PCDMetadata");
+            "INCLUDE, DO_NOT_WARN, ExemptionUserSetting");
 
   // Updating exemption reason would be no-op.
   status.MaybeSetExemptionReason(
       CookieInclusionStatus::ExemptionReason::kEnterprisePolicy);
   EXPECT_EQ(status.exemption_reason(),
-            CookieInclusionStatus::ExemptionReason::k3PCDMetadata);
+            CookieInclusionStatus::ExemptionReason::kUserSetting);
 
   // Adding an exclusion reason resets the exemption reason.
   status.AddExclusionReason(
@@ -258,83 +258,6 @@ TEST(CookieInclusionStatusTest, RemoveWarningReason) {
   EXPECT_FALSE(status.HasWarningReason(
       CookieInclusionStatus::WarningReason::
           WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT));
-}
-
-TEST(CookieInclusionStatusTest, HasSchemefulDowngradeWarning) {
-  std::vector<CookieInclusionStatus::WarningReason> downgrade_warnings = {
-      CookieInclusionStatus::WarningReason::
-          WARN_STRICT_LAX_DOWNGRADE_STRICT_SAMESITE,
-      CookieInclusionStatus::WarningReason::
-          WARN_STRICT_CROSS_DOWNGRADE_STRICT_SAMESITE,
-      CookieInclusionStatus::WarningReason::
-          WARN_STRICT_CROSS_DOWNGRADE_LAX_SAMESITE,
-      CookieInclusionStatus::WarningReason::
-          WARN_LAX_CROSS_DOWNGRADE_STRICT_SAMESITE,
-      CookieInclusionStatus::WarningReason::
-          WARN_LAX_CROSS_DOWNGRADE_LAX_SAMESITE,
-  };
-
-  CookieInclusionStatus empty_status;
-  EXPECT_FALSE(empty_status.HasSchemefulDowngradeWarning());
-
-  CookieInclusionStatus not_downgrade;
-  not_downgrade.AddWarningReason(
-      CookieInclusionStatus::WarningReason::
-          WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT);
-  EXPECT_FALSE(not_downgrade.HasSchemefulDowngradeWarning());
-
-  for (auto warning : downgrade_warnings) {
-    CookieInclusionStatus status;
-    status.AddWarningReason(warning);
-    CookieInclusionStatus::WarningReason reason;
-
-    EXPECT_TRUE(status.HasSchemefulDowngradeWarning(&reason));
-    EXPECT_EQ(warning, reason);
-  }
-}
-
-TEST(CookieInclusionStatusTest, ShouldRecordDowngradeMetrics) {
-  EXPECT_TRUE(CookieInclusionStatus::MakeFromReasonsForTesting({})
-                  .ShouldRecordDowngradeMetrics());
-
-  EXPECT_TRUE(
-      CookieInclusionStatus::MakeFromReasonsForTesting(
-          {
-              CookieInclusionStatus::ExclusionReason::EXCLUDE_SAMESITE_STRICT,
-          })
-          .ShouldRecordDowngradeMetrics());
-
-  EXPECT_TRUE(
-      CookieInclusionStatus::MakeFromReasonsForTesting(
-          {
-              CookieInclusionStatus::ExclusionReason::EXCLUDE_SAMESITE_LAX,
-          })
-          .ShouldRecordDowngradeMetrics());
-
-  EXPECT_TRUE(CookieInclusionStatus::MakeFromReasonsForTesting(
-                  {
-                      CookieInclusionStatus::ExclusionReason::
-                          EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX,
-                  })
-                  .ShouldRecordDowngradeMetrics());
-
-  // Note: the following cases cannot occur under normal circumstances.
-  EXPECT_TRUE(
-      CookieInclusionStatus::MakeFromReasonsForTesting(
-          {
-              CookieInclusionStatus::ExclusionReason::
-                  EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX,
-              CookieInclusionStatus::ExclusionReason::EXCLUDE_SAMESITE_LAX,
-          })
-          .ShouldRecordDowngradeMetrics());
-  EXPECT_FALSE(
-      CookieInclusionStatus::MakeFromReasonsForTesting(
-          {
-              CookieInclusionStatus::ExclusionReason::
-                  EXCLUDE_SAMESITE_NONE_INSECURE,
-              CookieInclusionStatus::ExclusionReason::EXCLUDE_SAMESITE_LAX,
-          })
-          .ShouldRecordDowngradeMetrics());
 }
 
 TEST(CookieInclusionStatusTest, RemoveExclusionReasons) {

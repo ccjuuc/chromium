@@ -50,12 +50,10 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
 
 import org.chromium.base.UserDataHost;
-import org.chromium.base.supplier.ObservableSupplierImpl;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
@@ -90,10 +88,7 @@ import org.chromium.ui.insets.InsetObserver.WindowInsetsConsumer.InsetConsumerSo
  * {@link EdgeToEdgeControllerFactory}, along with {@link EdgeToEdgeControllerImpl}
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        sdk = VERSION_CODES.R,
-        manifest = Config.NONE,
-        shadows = EdgeToEdgeControllerTest.ShadowEdgeToEdgeControllerFactory.class)
+@Config(sdk = VERSION_CODES.R, manifest = Config.NONE)
 @Features.DisableFeatures({ChromeFeatureList.EDGE_TO_EDGE_EVERYWHERE})
 public class EdgeToEdgeControllerTest {
 
@@ -224,8 +219,8 @@ public class EdgeToEdgeControllerTest {
 
     private final SettableNullableObservableSupplier<Tab> mTabProvider =
             ObservableSuppliers.createNullable();
-    private final ObservableSupplierImpl<LayoutManager> mLayoutManagerSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<LayoutManager> mLayoutManagerSupplier =
+            ObservableSuppliers.createMonotonic();
 
     private final UserDataHost mTabDataHost = new UserDataHost();
 
@@ -253,14 +248,6 @@ public class EdgeToEdgeControllerTest {
     @Mock private LayoutManager mLayoutManager;
     @Mock private FullscreenManager mFullscreenManager;
 
-    @Implements(EdgeToEdgeControllerFactory.class)
-    static class ShadowEdgeToEdgeControllerFactory extends EdgeToEdgeControllerFactory {
-        @Implementation
-        protected static boolean isGestureNavigationMode(Window window) {
-            return true;
-        }
-    }
-
     @Before
     public void setUp() {
         when(mWindowAndroid.getInsetObserver()).thenReturn(mInsetObserver);
@@ -283,9 +270,7 @@ public class EdgeToEdgeControllerTest {
         when(mTab.getWebContents()).thenReturn(mWebContents);
         when(mKeyNativePage.supportsEdgeToEdge()).thenReturn(true);
 
-        doReturn(EDGE_TO_EDGE_STATUS_TOKEN)
-                .when(mEdgeToEdgeStateProvider)
-                .acquireSetDecorFitsSystemWindowToken();
+        doReturn(EDGE_TO_EDGE_STATUS_TOKEN).when(mEdgeToEdgeStateProvider).acquireEdgeToEdgeToken();
         doReturn(mEdgeToEdgeStateProvider).when(mEdgeToEdgeManager).getEdgeToEdgeStateProvider();
         doNothing().when(mOsWrapper).setPadding(any(), anyInt(), anyInt(), anyInt(), anyInt());
         doNothing()
@@ -294,7 +279,6 @@ public class EdgeToEdgeControllerTest {
                         mWindowInsetsListenerCaptor.capture(),
                         eq(InsetConsumerSource.EDGE_TO_EDGE_CONTROLLER_IMPL));
 
-        EdgeToEdgeUtils.setObservedTappableNavigationBarForTesting(false);
         mEdgeToEdgeControllerImpl =
                 new EdgeToEdgeControllerImpl(
                         mActivity,
@@ -305,7 +289,7 @@ public class EdgeToEdgeControllerTest {
                         mBrowserControlsStateProvider,
                         mLayoutManagerSupplier,
                         mFullscreenManager);
-        verify(mEdgeToEdgeStateProvider, times(1)).acquireSetDecorFitsSystemWindowToken();
+        verify(mEdgeToEdgeStateProvider, times(1)).acquireEdgeToEdgeToken();
 
         if (!EdgeToEdgeUtils.isEdgeToEdgeEverywhereEnabled()) {
             verify(mOsWrapper, times(1))
@@ -474,7 +458,7 @@ public class EdgeToEdgeControllerTest {
     /** Test the OSWrapper implementation without mocking it. Native ToNormal. */
     @Test
     public void onObservingDifferentTab_osWrapperImplToNormal() {
-        ObservableSupplierImpl liveSupplier = new ObservableSupplierImpl();
+        SettableNullableObservableSupplier<Tab> liveSupplier = ObservableSuppliers.createNullable();
         EdgeToEdgeControllerImpl liveController =
                 (EdgeToEdgeControllerImpl)
                         EdgeToEdgeControllerFactory.create(
@@ -614,8 +598,8 @@ public class EdgeToEdgeControllerTest {
     public void testSwitchLayout() {
         Mockito.clearInvocations(mEdgeToEdgeManager);
 
-        doReturn(LayoutType.TAB_SWITCHER).when(mLayoutManager).getActiveLayoutType();
-        mEdgeToEdgeControllerImpl.onStartedShowing(LayoutType.TAB_SWITCHER);
+        doReturn(LayoutType.HUB).when(mLayoutManager).getActiveLayoutType();
+        mEdgeToEdgeControllerImpl.onStartedShowing(LayoutType.HUB);
         assertToEdgeExpectations();
 
         doReturn(LayoutType.BROWSING).when(mLayoutManager).getActiveLayoutType();
@@ -630,9 +614,6 @@ public class EdgeToEdgeControllerTest {
         doReturn(LayoutType.BROWSING).when(mLayoutManager).getActiveLayoutType();
         mEdgeToEdgeControllerImpl.onStartedShowing(LayoutType.BROWSING);
         assertToEdgeExpectations();
-
-        mLayoutManagerSupplier.set(null);
-        assertToNormalExpectations();
     }
 
     @Test
@@ -1019,7 +1000,7 @@ public class EdgeToEdgeControllerTest {
         mockPadAdjuster.checkInsets(BOTTOM_INSET);
 
         // Case 1: Tab Switcher active, Bottom Controls visible. Skip browser control check.
-        when(mLayoutManager.getActiveLayoutType()).thenReturn(LayoutType.TAB_SWITCHER);
+        when(mLayoutManager.getActiveLayoutType()).thenReturn(LayoutType.HUB);
         mEdgeToEdgeControllerImpl.onBottomControlsHeightChanged(browserControlsHeight, unused);
         mockPadAdjuster.checkInsets(BOTTOM_INSET);
 
@@ -1367,8 +1348,7 @@ public class EdgeToEdgeControllerTest {
     }
 
     @Test
-    @DisableFeatures(ChromeFeatureList.EDGE_TO_EDGE_MONITOR_CONFIGURATIONS)
-    public void hasSeenTappableNavigationBarInsets_disabled() {
+    public void hasSeenTappableNavigationBarInsets() {
         EdgeToEdgeUtils.setHas3ButtonNavBarForTesting(null);
         Window window = mockWindowWithRootInsets(SYSTEM_BARS_WITH_TAPPABLE_NAVBAR);
         assertTrue(
@@ -1378,21 +1358,6 @@ public class EdgeToEdgeControllerTest {
         window = mockWindowWithRootInsets(SYSTEM_BARS_WINDOW_INSETS);
         assertFalse(
                 "Insets should be considered not has tappable nav bar.",
-                EdgeToEdgeUtils.hasTappableNavigationBar(window));
-    }
-
-    @Test
-    @EnableFeatures(ChromeFeatureList.EDGE_TO_EDGE_MONITOR_CONFIGURATIONS)
-    public void hasSeenTappableNavigationBarInsets() {
-        EdgeToEdgeUtils.setHas3ButtonNavBarForTesting(null);
-        Window window = mockWindowWithRootInsets(SYSTEM_BARS_WITH_TAPPABLE_NAVBAR);
-        assertTrue(
-                "Insets should be considered has tappable nav bar.",
-                EdgeToEdgeUtils.hasTappableNavigationBar(window));
-
-        window = mockWindowWithRootInsets(SYSTEM_BARS_WINDOW_INSETS);
-        assertTrue(
-                "Has tappable nav bar is seen, so check should be true.",
                 EdgeToEdgeUtils.hasTappableNavigationBar(window));
     }
 

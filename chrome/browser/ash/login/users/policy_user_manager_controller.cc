@@ -10,16 +10,15 @@
 #include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/syslog_logging.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_broker.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -73,8 +72,17 @@ PolicyUserManagerController::PolicyUserManagerController(
     user_manager::UserManager* user_manager,
     CrosSettings* cros_settings,
     DeviceSettingsService* device_settings_service,
-    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler)
-    : user_manager_(user_manager), cros_settings_(cros_settings) {
+    policy::MinimumVersionPolicyHandler* minimum_version_policy_handler,
+    policy::DeviceLocalAccountPolicyService*
+        device_local_account_policy_service)
+    : user_manager_(user_manager),
+      cros_settings_(cros_settings),
+      device_local_account_policy_service_(
+          device_local_account_policy_service) {
+  if (!device_local_account_policy_service_) {
+    CHECK_IS_TEST();
+  }
+
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   // UserManager outlives PolicyUserManagerController, and subscriptions are
@@ -95,13 +103,13 @@ PolicyUserManagerController::PolicyUserManagerController(
   cros_settings_subscriptions_.push_back(cros_settings_->AddSettingsObserver(
       kAccountsPrefUsers,
       base::BindRepeating(
-          &user_manager::UserManager::NotifyUsersSignInConstraintsChanged,
-          base::Unretained(user_manager_.get()))));
+          &PolicyUserManagerController::OnUsersSignInConstraintsUpdated,
+          weak_factory_.GetWeakPtr())));
   cros_settings_subscriptions_.push_back(cros_settings_->AddSettingsObserver(
       kAccountsPrefFamilyLinkAccountsAllowed,
       base::BindRepeating(
-          &user_manager::UserManager::NotifyUsersSignInConstraintsChanged,
-          base::Unretained(user_manager_.get()))));
+          &PolicyUserManagerController::OnUsersSignInConstraintsUpdated,
+          weak_factory_.GetWeakPtr())));
 
   cros_settings_subscriptions_.push_back(cros_settings_->AddSettingsObserver(
       kAccountsPrefEphemeralUsersEnabled,
@@ -144,16 +152,15 @@ PolicyUserManagerController::~PolicyUserManagerController() = default;
 
 void PolicyUserManagerController::OwnershipStatusChanged() {
   if (!device_local_account_policy_service_observation_.IsObserving()) {
+    CHECK(device_local_account_policy_service_);
     device_local_account_policy_service_observation_.Observe(
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetDeviceLocalAccountPolicyService());
+        device_local_account_policy_service_);
   }
   RetrieveTrustedDevicePolicies();
 }
 
 void PolicyUserManagerController::OnMinimumVersionStateChanged() {
-  user_manager_->NotifyUsersSignInConstraintsChanged();
+  OnUsersSignInConstraintsUpdated();
 }
 
 void PolicyUserManagerController::OnPolicyUpdated(const std::string& user_id) {
@@ -248,11 +255,26 @@ void PolicyUserManagerController::UpdateShowUsersOnSignIn() {
 
 void PolicyUserManagerController::OnAccountsPrefAllowGuestUpdated() {
   UpdateGuestSessionAllowed();
-  user_manager_->NotifyUsersSignInConstraintsChanged();
+  OnUsersSignInConstraintsUpdated();
 }
 
 void PolicyUserManagerController::OnAccountsPrefShowUserNamesOnSignInUpdated() {
   UpdateShowUsersOnSignIn();
+}
+
+void PolicyUserManagerController::OnUsersSignInConstraintsUpdated() {
+  const user_manager::UserList& logged_in_users =
+      user_manager_->GetLoggedInUsers();
+  for (user_manager::User* user : logged_in_users) {
+    if (user->IsDeviceLocalAccount()) {
+      continue;
+    }
+    if (!user_manager_->IsUserAllowed(*user)) {
+      SYSLOG(ERROR)
+          << "The current user is not allowed, terminating the session.";
+      session_manager::SessionManager::Get()->RequestSignOut();
+    }
+  }
 }
 
 std::optional<std::u16string> PolicyUserManagerController::GetDisplayName(

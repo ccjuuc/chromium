@@ -16,11 +16,11 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -395,6 +395,7 @@ bool ProgramManager::HasBuiltInPrefix(const std::string& name) {
 Program::Program(ProgramManager* manager, GLuint service_id)
     : manager_(manager),
       use_count_(0),
+      active_transform_feedback_count_(0),
       max_attrib_name_length_(0),
       max_uniform_name_length_(0),
       service_id_(service_id),
@@ -525,6 +526,11 @@ void Program::UpdateUniformBlockSizeInfo() {
         service_id_, ii, GL_UNIFORM_BLOCK_DATA_SIZE, &size);
     uniform_block_size_info_[ii].data_size = static_cast<GLuint>(size);
   }
+}
+
+void Program::DecrementActiveTransformFeedbackCount() {
+  CHECK_GT(active_transform_feedback_count_, 0);
+  --active_transform_feedback_count_;
 }
 
 void Program::SetUniformBlockBinding(GLuint index, GLuint binding) {
@@ -2301,10 +2307,8 @@ void ProgramManager::StopTracking(Program* /* program */) {
 Program* ProgramManager::CreateProgram(
     GLuint client_id, GLuint service_id) {
   std::pair<ProgramMap::iterator, bool> result =
-      programs_.insert(
-          std::make_pair(client_id,
-                         scoped_refptr<Program>(
-                             new Program(this, service_id))));
+      programs_.insert(std::make_pair(
+          client_id, base::MakeRefCounted<Program>(this, service_id)));
   DCHECK(result.second);
   return result.first->second.get();
 }

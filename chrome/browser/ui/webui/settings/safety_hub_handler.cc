@@ -17,12 +17,11 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service.h"
-#include "chrome/browser/ui/promos/ios_promo_trigger_service_factory.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service.h"
+#include "chrome/browser/ui/desktop_to_mobile_promos/ios_promo_trigger_service_factory.h"
 #include "chrome/browser/ui/safety_hub/extensions_result.h"
 #include "chrome/browser/ui/safety_hub/menu_notification_service_factory.h"
 #include "chrome/browser/ui/safety_hub/notification_permission_review_service.h"
@@ -40,7 +39,6 @@
 #include "chrome/browser/ui/webui/settings/site_settings_helper.h"
 #include "chrome/browser/ui/webui/version/version_ui.h"
 #include "chrome/browser/upgrade_detector/build_state.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -57,6 +55,7 @@
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/site_engagement/content/site_engagement_service.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_prefs_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -74,10 +73,10 @@ namespace {
 
 const char kRevocationTypeKey[] = "revocation_type";
 
-// Get values from |UnusedSitePermission| object in
+// Get values from |UnusedSitePermissions| object in
 // safety_hub_browser_proxy.ts.
 PermissionsData GetUnusedSitePermissionsFromDict(
-    const base::Value::Dict& unused_site_permissions) {
+    const base::DictValue& unused_site_permissions) {
   PermissionsData permissions_data;
   const std::string* origin_str =
       unused_site_permissions.FindString(site_settings::kOrigin);
@@ -85,25 +84,23 @@ PermissionsData GetUnusedSitePermissionsFromDict(
   permissions_data.primary_pattern =
       ContentSettingsPattern::FromString(*origin_str);
 
-  const base::Value::List* permissions =
+  const base::ListValue* permissions =
       unused_site_permissions.FindList(site_settings::kPermissions);
   CHECK(permissions);
   for (const auto& permission : *permissions) {
-    CHECK(permission.is_string());
-    const std::string& type_string = permission.GetString();
+    CHECK(permission.is_dict());
+    const std::string* type_string =
+        permission.GetDict().FindString(site_settings::kType);
+    CHECK(type_string);
+    const base::Value* setting_value =
+        permission.GetDict().Find(site_settings::kSettingValue);
     ContentSettingsType type =
-        site_settings::ContentSettingsTypeFromGroupName(type_string);
+        site_settings::ContentSettingsTypeFromGroupName(*type_string);
     CHECK(type != ContentSettingsType::DEFAULT)
         << type_string << " is not expected to have a UI representation.";
-    permissions_data.permission_types.insert(type);
+    permissions_data.permissions.insert(std::make_pair(
+        type, setting_value ? setting_value->Clone() : base::Value()));
   }
-
-  const base::Value::Dict* chooser_permissions_data =
-      unused_site_permissions.FindDict(
-          safety_hub::kSafetyHubChooserPermissionsData);
-  permissions_data.chooser_permissions_data =
-      chooser_permissions_data ? chooser_permissions_data->Clone()
-                               : base::Value::Dict();
 
   // Handle expiration and lifetime for revoked permission.
   const base::Value* js_expiration =
@@ -129,7 +126,7 @@ PermissionsData GetUnusedSitePermissionsFromDict(
 
 // Returns true if the card dict indicates there is something actionable for the
 // user.
-bool CardHasRecommendations(base::Value::Dict card_data) {
+bool CardHasRecommendations(base::DictValue card_data) {
   std::optional<int> state = card_data.FindInt(safety_hub::kCardStateKey);
   CHECK(state.has_value());
   SafetyHubCardState card_state =
@@ -157,11 +154,11 @@ void AppendModuleNameToString(std::u16string& str,
   str.append(l10n_util::GetStringUTF16(lowercase_id));
 }
 
-// Converts the entry point data into a base::Value::Dict.
-base::Value::Dict EntryPointDataToValue(bool has_recommendations,
-                                        std::string header,
-                                        std::string subheader) {
-  base::Value::Dict dict_data;
+// Converts the entry point data into a base::DictValue.
+base::DictValue EntryPointDataToValue(bool has_recommendations,
+                                      std::string header,
+                                      std::string subheader) {
+  base::DictValue dict_data;
 
   dict_data.Set("hasRecommendations", has_recommendations);
   dict_data.Set("header", header);
@@ -190,19 +187,19 @@ std::unique_ptr<SafetyHubHandler> SafetyHubHandler::GetForProfile(
 }
 
 void SafetyHubHandler::HandleGetRevokedUnusedSitePermissionsList(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
 
-  base::Value::List result = PopulateUnusedSitePermissionsData();
+  base::ListValue result = PopulateUnusedSitePermissionsData();
 
   ResolveJavascriptCallback(callback_id, base::Value(std::move(result)));
 }
 
 void SafetyHubHandler::HandleAllowPermissionsAgainForUnusedSite(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   CHECK(args[0].is_string());
   const std::string& origin_str = args[0].GetString();
@@ -218,7 +215,7 @@ void SafetyHubHandler::HandleAllowPermissionsAgainForUnusedSite(
 }
 
 void SafetyHubHandler::HandleUndoAllowPermissionsAgainForUnusedSite(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   CHECK(args[0].is_dict());
 
@@ -234,7 +231,7 @@ void SafetyHubHandler::HandleUndoAllowPermissionsAgainForUnusedSite(
 }
 
 void SafetyHubHandler::HandleAcknowledgeRevokedUnusedSitePermissionsList(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile_);
   CHECK(service);
@@ -244,11 +241,11 @@ void SafetyHubHandler::HandleAcknowledgeRevokedUnusedSitePermissionsList(
 }
 
 void SafetyHubHandler::HandleUndoAcknowledgeRevokedUnusedSitePermissionsList(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   CHECK(args[0].is_list());
 
-  const base::Value::List& unused_site_permissions_list = args[0].GetList();
+  const base::ListValue& unused_site_permissions_list = args[0].GetList();
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile_);
   CHECK(service);
@@ -264,24 +261,27 @@ void SafetyHubHandler::HandleUndoAcknowledgeRevokedUnusedSitePermissionsList(
   SendUnusedSitePermissionsReviewList();
 }
 
-base::Value::List SafetyHubHandler::PopulateUnusedSitePermissionsData() {
-  base::Value::List result;
+base::ListValue SafetyHubHandler::PopulateUnusedSitePermissionsData() {
+  base::ListValue result;
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile_);
   CHECK(service);
   std::unique_ptr<RevokedPermissionsResult> service_result =
       service->GetRevokedPermissions();
   for (const auto& permissions_data : service_result->GetRevokedPermissions()) {
-    base::Value::Dict revoked_permission_value;
+    base::DictValue revoked_permission_value;
     revoked_permission_value.Set(site_settings::kOrigin,
                                  permissions_data.primary_pattern.ToString());
 
-    base::Value::List permissions_value_list;
-    for (ContentSettingsType type : permissions_data.permission_types) {
+    base::ListValue permissions_value_list;
+    for (const auto& [type, value] : permissions_data.permissions) {
       std::string_view permission_str =
           site_settings::ContentSettingsTypeToGroupName(type);
       if (!permission_str.empty()) {
-        permissions_value_list.Append(permission_str);
+        base::DictValue dict;
+        dict.Set(site_settings::kType, permission_str);
+        dict.Set(site_settings::kSettingValue, value.Clone());
+        permissions_value_list.Append(std::move(dict));
       }
     }
 
@@ -307,10 +307,6 @@ base::Value::List SafetyHubHandler::PopulateUnusedSitePermissionsData() {
         base::TimeDeltaToValue(permissions_data.constraints.lifetime()));
 
     revoked_permission_value.Set(
-        safety_hub::kSafetyHubChooserPermissionsData,
-        base::Value(permissions_data.chooser_permissions_data.Clone()));
-
-    revoked_permission_value.Set(
         kRevocationTypeKey, static_cast<int>(permissions_data.revocation_type));
 
     result.Append(std::move(revoked_permission_value));
@@ -320,7 +316,7 @@ base::Value::List SafetyHubHandler::PopulateUnusedSitePermissionsData() {
 }
 
 void SafetyHubHandler::HandleGetNotificationPermissionReviewList(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   const base::Value& callback_id = args[0];
@@ -333,16 +329,15 @@ void SafetyHubHandler::HandleGetNotificationPermissionReviewList(
     RejectJavascriptCallback(callback_id, base::Value());
   }
 
-  base::Value::List result =
-      service->PopulateNotificationPermissionReviewData();
+  base::ListValue result = service->PopulateNotificationPermissionReviewData();
 
   ResolveJavascriptCallback(callback_id, base::Value(std::move(result)));
 }
 
 void SafetyHubHandler::HandleIgnoreOriginsForNotificationPermissionReview(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List& origins = args[0].GetList();
+  const base::ListValue& origins = args[0].GetList();
 
   NotificationPermissionsReviewService* service =
       NotificationPermissionsReviewServiceFactory::GetForProfile(profile_);
@@ -359,9 +354,9 @@ void SafetyHubHandler::HandleIgnoreOriginsForNotificationPermissionReview(
 }
 
 void SafetyHubHandler::HandleResetNotificationPermissionForOrigins(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List& origins = args[0].GetList();
+  const base::ListValue& origins = args[0].GetList();
 
   NotificationPermissionsReviewService* service =
       NotificationPermissionsReviewServiceFactory::GetForProfile(profile_);
@@ -376,29 +371,29 @@ void SafetyHubHandler::HandleResetNotificationPermissionForOrigins(
 }
 
 void SafetyHubHandler::HandleDismissActiveMenuNotification(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   SafetyHubMenuNotificationServiceFactory::GetForProfile(profile_)
       ->DismissActiveNotification();
 }
 
 void SafetyHubHandler::HandleDismissPasswordMenuNotification(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   SafetyHubMenuNotificationServiceFactory::GetForProfile(profile_)
       ->DismissActiveNotificationOfModule(
           safety_hub::SafetyHubModuleType::PASSWORDS);
 }
 
 void SafetyHubHandler::HandleDismissExtensionsMenuNotification(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   SafetyHubMenuNotificationServiceFactory::GetForProfile(profile_)
       ->DismissActiveNotificationOfModule(
           safety_hub::SafetyHubModuleType::EXTENSIONS);
 }
 
 void SafetyHubHandler::HandleBlockNotificationPermissionForOrigins(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List& origins = args[0].GetList();
+  const base::ListValue& origins = args[0].GetList();
 
   NotificationPermissionsReviewService* service =
       NotificationPermissionsReviewServiceFactory::GetForProfile(profile_);
@@ -413,9 +408,9 @@ void SafetyHubHandler::HandleBlockNotificationPermissionForOrigins(
 }
 
 void SafetyHubHandler::HandleAllowNotificationPermissionForOrigins(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List& origins = args[0].GetList();
+  const base::ListValue& origins = args[0].GetList();
 
   NotificationPermissionsReviewService* service =
       NotificationPermissionsReviewServiceFactory::GetForProfile(profile_);
@@ -430,9 +425,9 @@ void SafetyHubHandler::HandleAllowNotificationPermissionForOrigins(
 }
 
 void SafetyHubHandler::HandleUndoIgnoreOriginsForNotificationPermissionReview(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List& origins = args[0].GetList();
+  const base::ListValue& origins = args[0].GetList();
   NotificationPermissionsReviewService* service =
       NotificationPermissionsReviewServiceFactory::GetForProfile(profile_);
   CHECK(service);
@@ -447,7 +442,7 @@ void SafetyHubHandler::HandleUndoIgnoreOriginsForNotificationPermissionReview(
 }
 
 void SafetyHubHandler::HandleGetSafeBrowsingCardData(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
@@ -459,15 +454,14 @@ void SafetyHubHandler::HandleGetSafeBrowsingCardData(
 }
 
 void SafetyHubHandler::HandleGetNumberOfExtensionsThatNeedReview(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const base::Value& callback_id = args[0];
   AllowJavascript();
   ResolveJavascriptCallback(callback_id,
                             base::Value(GetNumberOfExtensionsThatNeedReview()));
 }
 
-void SafetyHubHandler::HandleGetPasswordCardData(
-    const base::Value::List& args) {
+void SafetyHubHandler::HandleGetPasswordCardData(const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
@@ -481,7 +475,7 @@ void SafetyHubHandler::HandleGetPasswordCardData(
                             base::Value(service->GetPasswordCardData()));
 }
 
-void SafetyHubHandler::HandleGetVersionCardData(const base::Value::List& args) {
+void SafetyHubHandler::HandleGetVersionCardData(const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
@@ -492,7 +486,7 @@ void SafetyHubHandler::HandleGetVersionCardData(const base::Value::List& args) {
 }
 
 void SafetyHubHandler::HandleGetSafetyHubEntryPointData(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   CHECK_EQ(1U, args.size());
@@ -598,8 +592,7 @@ SafetyHubHandler::GetSafetyHubModulesWithRecommendations() {
   return modules;
 }
 
-void SafetyHubHandler::HandleRecordSafetyHubVisit(
-    const base::Value::List& args) {
+void SafetyHubHandler::HandleRecordSafetyHubVisit(const base::ListValue& args) {
   if (SafetyHubHatsService* hats_service =
           SafetyHubHatsServiceFactory::GetForProfile(profile_)) {
     hats_service->SafetyHubVisited();
@@ -607,7 +600,7 @@ void SafetyHubHandler::HandleRecordSafetyHubVisit(
 }
 
 void SafetyHubHandler::HandleRecordSafetyHubInteraction(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   if (SafetyHubHatsService* hats_service =
           SafetyHubHatsServiceFactory::GetForProfile(profile_)) {
     hats_service->SafetyHubModuleInteracted();

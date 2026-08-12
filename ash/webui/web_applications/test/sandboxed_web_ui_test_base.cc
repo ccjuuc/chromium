@@ -4,12 +4,12 @@
 
 #include "ash/webui/web_applications/test/sandboxed_web_ui_test_base.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/webui/common/trusted_types_test_util.h"
 #include "ash/webui/web_applications/webui_test_prod_util.h"
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
@@ -19,9 +19,11 @@
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/test/base/ash/js_test_api.h"
+#include "chrome/test/base/web_ui_test_data_source.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -59,7 +61,7 @@ void HandleTestFileRequestCallback(
 bool TestRequestHandlerShouldHandleRequest(
     const std::vector<std::string>& test_paths,
     const std::string& path) {
-  return base::Contains(test_paths, path);
+  return std::ranges::contains(test_paths, path);
 }
 
 std::string DefaultScriptTimeoutLog(const std::string& script,
@@ -241,4 +243,5 @@ content::EvalJsResult SandboxedWebUiAppTestBase::EvalJsInAppFrame(
 void SandboxedWebUiAppTestBase::SetUpOnMainThread() {
   injector_ = std::make_unique<TestCodeInjector>(this);
   MojoWebUIBrowserTest::SetUpOnMainThread();
+  webui::CreateAndAddUntrustedWebUITestDataSource(browser()->GetProfile());
 }

@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
@@ -41,6 +42,10 @@
 #include "remoting/protocol/fake_desktop_capturer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(IS_POSIX)
+#include "remoting/host/security_key/security_key_auth_handler_posix.h"
+#endif
 
 using testing::_;
 using testing::AnyNumber;
@@ -95,7 +100,7 @@ class MockNetworkListener : public IPC::Listener {
   MOCK_METHOD(void, OnChannelConnected, (std::int32_t), (override));
   MOCK_METHOD(void, OnChannelError, (), (override));
 
-  MOCK_METHOD0(OnDesktopEnvironmentCreated, void());
+  MOCK_METHOD(void, OnDesktopEnvironmentCreated, ());
 };
 
 void MockDaemonListener::OnAssociatedInterfaceRequest(
@@ -117,6 +122,7 @@ class DesktopProcessTest : public testing::Test {
  public:
   DesktopProcessTest();
   ~DesktopProcessTest() override;
+  void TearDown() override;
 
   // Methods invoked when MockDaemonListener::ConnectDesktopChannel is called.
   void CreateNetworkChannel(mojo::ScopedMessagePipeHandle desktop_pipe);
@@ -159,6 +165,8 @@ class DesktopProcessTest : public testing::Test {
           pending_remote);
 
  protected:
+  raw_ptr<DesktopProcess> desktop_process_;
+
   // The daemon's end of the daemon-to-desktop channel.
   std::unique_ptr<IPC::ChannelProxy> daemon_channel_;
 
@@ -170,8 +178,8 @@ class DesktopProcessTest : public testing::Test {
   mojo::AssociatedRemote<mojom::WorkerProcessControl> worker_process_control_;
 
   // Runs the daemon's end of the channel.
-  base::test::SingleThreadTaskEnvironment task_environment_{
-      base::test::SingleThreadTaskEnvironment::MainThreadType::UI};
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::MainThreadType::UI};
 
   scoped_refptr<AutoThreadTaskRunner> io_task_runner_;
 
@@ -188,10 +196,16 @@ DesktopProcessTest::DesktopProcessTest() = default;
 
 DesktopProcessTest::~DesktopProcessTest() = default;
 
+void DesktopProcessTest::TearDown() {
+#if BUILDFLAG(IS_POSIX)
+  SecurityKeyAuthHandlerPosix::ResetTaskRunnerForTesting();
+#endif
+}
+
 void DesktopProcessTest::CreateNetworkChannel(
     mojo::ScopedMessagePipeHandle desktop_pipe) {
   network_channel_ = IPC::ChannelProxy::Create(
-      desktop_pipe.release(), IPC::Channel::MODE_CLIENT, &network_listener_,
+      std::move(desktop_pipe), IPC::Channel::MODE_CLIENT, &network_listener_,
       io_task_runner_.get(), base::SingleThreadTaskRunner::GetCurrentDefault());
 }
 
@@ -280,7 +294,7 @@ void DesktopProcessTest::RunDesktopProcess() {
 
   mojo::MessagePipe pipe;
   daemon_channel_ = IPC::ChannelProxy::Create(
-      pipe.handle0.release(), IPC::Channel::MODE_SERVER, &daemon_listener_,
+      std::move(pipe.handle0), IPC::Channel::MODE_SERVER, &daemon_listener_,
       io_task_runner_.get(), base::SingleThreadTaskRunner::GetCurrentDefault());
 
   std::unique_ptr<MockDesktopEnvironmentFactory> desktop_environment_factory(
@@ -295,12 +309,14 @@ void DesktopProcessTest::RunDesktopProcess() {
 
   DesktopProcess desktop_process(ui_task_runner, io_task_runner_,
                                  io_task_runner_, std::move(pipe.handle1));
+  desktop_process_ = &desktop_process;
   EXPECT_TRUE(desktop_process.Start(std::move(desktop_environment_factory)));
 
   daemon_channel_->GetRemoteAssociatedInterface(&worker_process_control_);
 
   ui_task_runner = nullptr;
   run_loop.Run();
+  desktop_process_ = nullptr;
 }
 
 void DesktopProcessTest::RunDeathTest() {

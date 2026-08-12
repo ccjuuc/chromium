@@ -124,7 +124,7 @@ Pointer::Pointer(PointerDelegate* delegate,
                  Seat* seat,
                  std::unique_ptr<aura::Window> host_window)
     : SurfaceTreeHost("ExoPointer", std::move(host_window)),
-      delegate_(delegate),
+      delegate_(delegate->GetWeakPtr()),
       seat_(seat),
       cursor_(ui::mojom::CursorType::kNull),
       cursor_capture_source_id_(base::UnguessableToken::Create()) {
@@ -159,9 +159,14 @@ Pointer::~Pointer() {
   WMHelper* helper = WMHelper::GetInstance();
   // Remove the pretarget handler in case the pointer is deleted
   // w/o disabling pointer capture.
-  aura::Env::GetInstance()->RemovePreTargetHandler(this);
+  if (env_pre_target_handler_added_) {
+    aura::Env::GetInstance()->RemovePreTargetHandler(this);
+    env_pre_target_handler_added_ = false;
+  }
 
-  delegate_->OnPointerDestroying(this);
+  if (delegate_) {
+    delegate_->OnPointerDestroying(this);
+  }
   if (focus_surface_)
     focus_surface_->RemoveSurfaceObserver(this);
   if (pinch_delegate_)
@@ -397,9 +402,11 @@ bool Pointer::EnablePointerCapture(Surface* capture_surface) {
   // Add a pre-target handler that can consume all mouse events before it gets
   // sent to other targets. If there's an ongoing animation, the pre-target
   // handler will be added once `OnDeskSwitchAnimationFinished` is triggered.
-  if (!ash::DesksController::Get()->animation()) {
+  if (!env_pre_target_handler_added_ &&
+      !ash::DesksController::Get()->animation()) {
     aura::Env::GetInstance()->AddPreTargetHandler(
         this, ui::EventTarget::Priority::kSystem);
+    env_pre_target_handler_added_ = true;
   }
 
   location_when_pointer_capture_enabled_ =
@@ -426,7 +433,10 @@ void Pointer::DisablePointerCapture() {
   cursor_locker_.reset();
 
   // Remove the pre-target handler that consumes all mouse events.
-  aura::Env::GetInstance()->RemovePreTargetHandler(this);
+  if (env_pre_target_handler_added_) {
+    aura::Env::GetInstance()->RemovePreTargetHandler(this);
+    env_pre_target_handler_added_ = false;
+  }
 
   aura::Window* root = capture_window_->GetRootWindow();
   gfx::Point p = location_when_pointer_capture_enabled_
@@ -518,9 +528,11 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
     // drop operation.
     int released_button_flags =
         button_flags_on_drag_drop_start_ & ~event->button_flags();
-    delegate_->OnPointerButton(event->time_stamp(), released_button_flags,
-                               false);
-    delegate_->OnPointerFrame();
+    if (delegate_) {
+      delegate_->OnPointerButton(event->time_stamp(), released_button_flags,
+                                 false);
+      delegate_->OnPointerFrame();
+    }
     button_flags_on_drag_drop_start_ = 0;
   }
 
@@ -564,6 +576,14 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
   if (target != focus_surface_) {
     SetFocus(target, location_in_root, location_in_target,
              event->button_flags());
+  }
+
+  // Ensure that a mouse release event aborts any pending drag operation, even
+  // if the cursor is not over an Exo surface. This ensures that maliciously
+  // delayed drags are cancelled when the user releases the button over native
+  // UI.
+  if (event->type() == ui::EventType::kMouseReleased) {
+    seat_->AbortPendingDragOperation();
   }
 
   if (!focus_surface_)
@@ -619,8 +639,10 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
         location_in_surface_ = location_in_target;
       } else if (event->type() != ui::EventType::kMouseExited &&
                  !ignore_motion) {
-        delegate_->OnPointerMotion(event->time_stamp(), location_in_target);
-        needs_frame |= true;
+        if (delegate_) {
+          delegate_->OnPointerMotion(event->time_stamp(), location_in_target);
+          needs_frame |= true;
+        }
         location_in_root_ = location_in_root;
         location_in_surface_ = location_in_target;
       }
@@ -628,8 +650,6 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
   }
   switch (event->type()) {
     case ui::EventType::kMouseReleased:
-      seat_->AbortPendingDragOperation();
-      [[fallthrough]];
     case ui::EventType::kMousePressed: {
       if (!capture_permitted_) {
         // Clicking any surface with a constraint delegate permits capture
@@ -640,10 +660,12 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
           ConstrainPointer(it->second);
         }
       }
-      delegate_->OnPointerButton(event->time_stamp(),
-                                 event->changed_button_flags(),
-                                 event->type() == ui::EventType::kMousePressed);
-      needs_frame |= true;
+      if (delegate_) {
+        delegate_->OnPointerButton(
+            event->time_stamp(), event->changed_button_flags(),
+            event->type() == ui::EventType::kMousePressed);
+        needs_frame |= true;
+      }
       break;
     }
     case ui::EventType::kScroll: {
@@ -653,34 +675,43 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
       // to trigger overview mode.
       if (scroll_event->finger_count() >= 3)
         break;
-      delegate_->OnPointerScroll(
-          event->time_stamp(),
-          gfx::Vector2dF(scroll_event->x_offset(), scroll_event->y_offset()),
-          false);
-      needs_frame |= true;
+      if (delegate_) {
+        delegate_->OnPointerScroll(
+            event->time_stamp(),
+            gfx::Vector2dF(scroll_event->x_offset(), scroll_event->y_offset()),
+            false);
+        needs_frame |= true;
+      }
       break;
     }
     case ui::EventType::kMousewheel: {
-      delegate_->OnPointerScroll(
-          event->time_stamp(),
-          static_cast<ui::MouseWheelEvent*>(event)->offset(), true);
-      needs_frame |= true;
+      if (delegate_) {
+        delegate_->OnPointerScroll(
+            event->time_stamp(),
+            static_cast<ui::MouseWheelEvent*>(event)->offset(), true);
+        needs_frame |= true;
+      }
       break;
     }
     case ui::EventType::kScrollFlingStart: {
       // Fling start in chrome signals the lifting of fingers after scrolling.
       // In wayland terms this signals the end of a scroll sequence.
-      delegate_->OnFingerScrollStop(event->time_stamp());
-      needs_frame |= true;
+      if (delegate_) {
+        delegate_->OnFingerScrollStop(event->time_stamp());
+        needs_frame |= true;
+      }
       break;
     }
     case ui::EventType::kScrollFlingCancel: {
       // We emulate fling cancel by starting a new scroll sequence that
       // scrolls by 0 pixels, effectively stopping any kinetic scroll motion.
-      delegate_->OnPointerScroll(event->time_stamp(), gfx::Vector2dF(), false);
-      delegate_->OnPointerFrame();
-      delegate_->OnFingerScrollStop(event->time_stamp());
-      delegate_->OnPointerFrame();
+      if (delegate_) {
+        delegate_->OnPointerScroll(event->time_stamp(), gfx::Vector2dF(),
+                                   false);
+        delegate_->OnPointerFrame();
+        delegate_->OnFingerScrollStop(event->time_stamp());
+        delegate_->OnPointerFrame();
+      }
       break;
     }
     case ui::EventType::kMouseMoved:
@@ -722,8 +753,9 @@ void Pointer::OnMouseEvent(ui::MouseEvent* event) {
     event->StopPropagation();
   }
 
-  if (needs_frame)
+  if (needs_frame && delegate_) {
     delegate_->OnPointerFrame();
+  }
 }
 
 void Pointer::OnScrollEvent(ui::ScrollEvent* event) {
@@ -745,17 +777,23 @@ void Pointer::OnGestureEvent(ui::GestureEvent* event) {
     case ui::EventType::kGesturePinchBegin:
       pinch_delegate_->OnPointerPinchBegin(event->unique_touch_event_id(),
                                            event->time_stamp(), focus_surface_);
-      delegate_->OnPointerFrame();
+      if (delegate_) {
+        delegate_->OnPointerFrame();
+      }
       break;
     case ui::EventType::kGesturePinchUpdate:
       pinch_delegate_->OnPointerPinchUpdate(event->time_stamp(),
                                             event->details().scale());
-      delegate_->OnPointerFrame();
+      if (delegate_) {
+        delegate_->OnPointerFrame();
+      }
       break;
     case ui::EventType::kGesturePinchEnd:
       pinch_delegate_->OnPointerPinchEnd(event->unique_touch_event_id(),
                                          event->time_stamp());
-      delegate_->OnPointerFrame();
+      if (delegate_) {
+        delegate_->OnPointerFrame();
+      }
       break;
     default:
       break;
@@ -851,9 +889,10 @@ void Pointer::OnRootWindowWillShutdown(aura::Window* root_window) {
 ////////////////////////////////////////////////////////////////////////////////
 // ash::DesksController::Observer:
 void Pointer::OnDeskSwitchAnimationFinished() {
-  if (capture_window_) {
+  if (capture_window_ && !env_pre_target_handler_added_) {
     aura::Env::GetInstance()->AddPreTargetHandler(
         this, ui::EventTarget::Priority::kSystem);
+    env_pre_target_handler_added_ = true;
   }
 }
 
@@ -870,8 +909,10 @@ Surface* Pointer::GetEffectiveTargetForEvent(
   } else {
     target = GetTargetSurfaceForLocatedEvent(event);
 
-    if (!target || !delegate_->CanAcceptPointerEventsForSurface(target))
+    if (!target || !delegate_ ||
+        !delegate_->CanAcceptPointerEventsForSurface(target)) {
       return nullptr;
+    }
   }
 
   if (target) {
@@ -887,11 +928,14 @@ void Pointer::SetFocus(Surface* surface,
                        const gfx::PointF& root_location,
                        const gfx::PointF& surface_location,
                        int button_flags) {
-  DCHECK(!surface || delegate_->CanAcceptPointerEventsForSurface(surface));
+  DCHECK(!surface || !delegate_ ||
+         delegate_->CanAcceptPointerEventsForSurface(surface));
   // First generate a leave event if we currently have a target in focus.
   if (focus_surface_) {
-    delegate_->OnPointerLeave(focus_surface_);
-    delegate_->OnPointerFrame();
+    if (delegate_) {
+      delegate_->OnPointerLeave(focus_surface_);
+      delegate_->OnPointerFrame();
+    }
     // Require SetCursor() to be called and cursor to be re-defined in
     // response to each OnPointerEnter() call.
     Surface* old_surface = focus_surface_;
@@ -907,8 +951,10 @@ void Pointer::SetFocus(Surface* surface,
         aura::client::GetDragDropClient(surface->window()->GetRootWindow()));
     DCHECK(!drag_drop_controller->IsDragDropInProgress());
 #endif
-    delegate_->OnPointerEnter(surface, surface_location, button_flags);
-    delegate_->OnPointerFrame();
+    if (delegate_) {
+      delegate_->OnPointerEnter(surface, surface_location, button_flags);
+      delegate_->OnPointerFrame();
+    }
     location_in_root_ = root_location;
     location_in_surface_ = surface_location;
     focus_surface_ = surface;
@@ -962,12 +1008,10 @@ void Pointer::CaptureCursor(const gfx::Point& hotspot) {
   // use the bitmap to create cursor.
   // Otherwise, send RequestCopyOfOutput request to viz
   // to capture cursor bitmap.
-  if (!root_surface()->HasAcquireFence()) {
-    SkBitmap bitmap = buffer->CreateBitmap();
-    if (!bitmap.empty()) {
-      OnCursorBitmapObtained(hotspot, bitmap, root_surface()->GetBufferScale());
-      return;
-    }
+  SkBitmap bitmap = buffer->CreateBitmap();
+  if (!bitmap.empty()) {
+    OnCursorBitmapObtained(hotspot, bitmap, root_surface()->GetBufferScale());
+    return;
   }
 
   // Advance the surface id to ensure capturing the correct compositor frame.

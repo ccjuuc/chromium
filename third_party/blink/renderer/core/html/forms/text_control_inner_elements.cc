@@ -60,6 +60,8 @@ const ComputedStyle* EditingViewPortElement::CustomStyleForLayoutObject(
   style_builder.SetMinHeight(Length::Fixed(0));
   style_builder.SetDisplay(EDisplay::kBlock);
   style_builder.SetDirection(TextDirection::kLtr);
+  style_builder.SetBaseTextDecorationData(
+      OwnerShadowHost()->ComputedStyleRef().AppliedTextDecorationData());
 
   // We don't want the shadow dom to be editable, so we set this block to
   // read-only in case the input itself is editable.
@@ -150,12 +152,8 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
           ? EUserModify::kReadOnly
           : EUserModify::kReadWritePlaintextOnly);
   style_builder.SetDisplay(EDisplay::kBlock);
-  // HasLineIfEmpty is unnecessary for <textarea> with anonymous IFCs because:
-  //  - <textarea> has the placeholder break element.
-  //  - HasLineIfEmpty is harmful for internal anonymous blocks.
-  if (!RuntimeEnabledFeatures::TextareaMultipleIfcsEnabled()) {
-    style_builder.SetHasLineIfEmpty(true);
-  }
+  style_builder.SetBaseTextDecorationData(
+      OwnerShadowHost()->ComputedStyleRef().AppliedTextDecorationData());
   if (!start_style.ApplyControlFixedSize(host)) {
     const Font* font = start_style.GetFont();
     const SimpleFontData* font_data = font->PrimaryFont();
@@ -298,6 +296,14 @@ bool PasswordRevealButtonElement::WillRespondToMouseClickEvents() {
     return true;
 
   return HTMLDivElement::WillRespondToMouseClickEvents();
+}
+
+EmailVerificationIndicatorElement::EmailVerificationIndicatorElement(
+    Document& document)
+    : HTMLDivElement(document) {
+  SetShadowPseudoId(shadow_element_names::kPseudoEmailVerificationIndicator);
+  setAttribute(html_names::kIdAttr,
+               shadow_element_names::kIdEmailVerificationIndicator);
 }
 
 }  // namespace blink

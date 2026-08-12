@@ -12,6 +12,7 @@
 #import "base/task/single_thread_task_runner.h"
 #import "components/prefs/pref_service.h"
 #import "components/signin/core/browser/account_reconcilor.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/browser/web_signin_tracker.h"
@@ -37,10 +38,9 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 
 }  // namespace
 
-@interface ConsistencyPromoSigninMediator () <
-    AuthenticationFlowDelegate,
-    AuthenticationServiceObserving,
-    IdentityManagerObserverBridgeDelegate> {
+@interface ConsistencyPromoSigninMediator () <AuthenticationFlowDelegate,
+                                              AuthenticationServiceObserving,
+                                              IdentityManagerObserving> {
   raw_ptr<ChromeAccountManagerService> _accountManagerService;
   raw_ptr<AuthenticationService> _authenticationService;
   raw_ptr<signin::IdentityManager> _identityManager;
@@ -57,19 +57,12 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
   id<SystemIdentity> _signingIdentity;
 
   // Observer for changes to the user's Google identities.
-  // TODO(crbug.com/395789708): Remove after launching
-  //     kEnableIdentityInAuthError.
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserverBridge;
 
   // Observes AccountReconcilor and account cookies and determines whether the
   // web sign-in flow finished successfully or with an error.
   std::unique_ptr<signin::WebSigninTracker> _webSigninTracker;
-  // Closure to trigger the sign-in time out error. This closure exists to make
-  // sure the user doesn't wait too long before to get the cookies available
-  // on the web. This is used only when `_accessPoint` is equal to
-  // `kWebSignin`.
-  base::CancelableOnceClosure _cookieTimeoutClosure;
   AuthenticationFlow* _authenticationFlow;
   // True if the mediator was initialized with no existing account on device.
   // Kept for metrics reasons.
@@ -95,10 +88,10 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
   self = [super init];
   if (self) {
     CHECK(identityManager);
-    CHECK(accountManagerService, base::NotFatalUntil::M144);
-    CHECK(authenticationService->SigninEnabled(), base::NotFatalUntil::M144);
-    CHECK(accountReconcilor, base::NotFatalUntil::M144);
-    CHECK(userPrefService, base::NotFatalUntil::M144);
+    CHECK(accountManagerService);
+    CHECK(authenticationService->SigninEnabled());
+    CHECK(accountReconcilor);
+    CHECK(userPrefService);
     _accountManagerService = accountManagerService;
     _authenticationService = authenticationService;
     _identityManager = identityManager;
@@ -131,10 +124,8 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 
 - (void)dealloc {
   CHECK(!_accountManagerService && !_authenticationService &&
-            !_identityManager && !_accountReconcilor && !_prefService &&
-            !_identityManagerObserverBridge.get() &&
-            !_authServiceObserverBridge,
-        base::NotFatalUntil::M142)
+        !_identityManager && !_accountReconcilor && !_prefService &&
+        !_identityManagerObserverBridge.get() && !_authServiceObserverBridge)
       << "_accountManagerService: " << _accountManagerService
       << ", _authenticationService: " << _authenticationService
       << ", _identityManager: " << _identityManager
@@ -196,7 +187,6 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
     case SigninCoordinatorUINotAvailable:
       NOTREACHED();
   }
-  _cookieTimeoutClosure.Cancel();
   _accountManagerService = nullptr;
   _authenticationService = nullptr;
   _identityManager = nullptr;
@@ -205,6 +195,7 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
   _authServiceObserverBridge.reset();
   _identityManagerObserverBridge.reset();
   _webSigninTracker.reset();
+  [_authenticationFlow interrupt];
   _authenticationFlow = nil;
 }
 
@@ -226,63 +217,85 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 
 #pragma mark - AuthenticationFlowDelegate
 
-- (void)
-    authenticationFlowDidSignInInSameProfileWithCancelationReason:
-        (signin_ui::CancelationReason)cancelationReason
-                                                         identity:
-                                                             (id<SystemIdentity>)
-                                                                 identity {
+- (void)authenticationFlowDidFetchHostedDomain:(NSString*)hostedDomain {
+  if (hostedDomain.length > 0) {
+    RecordConsistencyPromoUserAction(
+        signin_metrics::AccountConsistencyPromoAction::
+            SIGNIN_STARTED_WITH_MANAGED_ACCOUNT,
+        _accessPoint);
+  } else {
+    RecordConsistencyPromoUserAction(
+        signin_metrics::AccountConsistencyPromoAction::
+            SIGNIN_STARTED_WITH_NON_MANAGED_ACCOUNT,
+        _accessPoint);
+  }
+}
+
+- (void)authenticationFlowDidSignInInSameProfileWithIdentity:
+            (id<SystemIdentity>)identity
+                                           cancelationReason:
+                                               (signin_ui::CancelationReason)
+                                                   cancelationReason
+                                                  completion:(ProceduralBlock)
+                                                                 completion {
+  CHECK(completion);
   if (!_identityManager) {
+    completion();
     // The mediator was already disconnected, nothing to do.
     return;
   }
   _authenticationFlow = nil;
-  if (cancelationReason != signin_ui::CancelationReason::kNotCanceled) {
-    RecordConsistencyPromoUserAction(
-        signin_metrics::AccountConsistencyPromoAction::
-            IOS_AUTH_FLOW_CANCELLED_OR_FAILED,
-        _accessPoint);
-
-    // The error handling and sign-out should be already done in the
-    // authentication flow.
-    [self.delegate consistencyPromoSigninMediatorSignInCancelled:self];
-    return;
+  switch (cancelationReason) {
+    case signin_ui::CancelationReason::kNotCanceled:
+      break;
+    case signin_ui::CancelationReason::kAgeMismatchCanceledStaySignedOut:
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              IOS_AUTH_FLOW_CANCELLED_OR_FAILED,
+          _accessPoint);
+      [self.delegate consistencyPromoSigninMediatorSignInCancelled:self];
+      // User wants to skip signin from the Age Mismatch prompt. Dismiss the
+      // consistency promo.
+      [self.delegate
+          consistencyPromoSigninMediatorDidCancelToStaySignedOut:self
+                                                      completion:completion];
+      return;
+    case signin_ui::CancelationReason::kUserCanceled:
+    case signin_ui::CancelationReason::kFailed:
+    case signin_ui::CancelationReason::kAgeMismatchCanceled:
+    case signin_ui::CancelationReason::kSignInNotAllowed:
+      RecordConsistencyPromoUserAction(
+          signin_metrics::AccountConsistencyPromoAction::
+              IOS_AUTH_FLOW_CANCELLED_OR_FAILED,
+          _accessPoint);
+      [self.delegate consistencyPromoSigninMediatorSignInCancelled:self];
+      completion();
+      return;
   }
   if (_accessPoint != signin_metrics::AccessPoint::kWebSignin) {
     [self.delegate consistencyPromoSigninMediatorSignInDone:self
-                                               withIdentity:_signingIdentity];
+                                               withIdentity:_signingIdentity
+                                                 completion:completion];
     return;
   }
   // For kWebSignin access point, wait for sign-in cookies before reporting
   // success.
-  if (base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError)) {
-    CoreAccountId accountId =
-        CoreAccountId::FromGaiaId(_signingIdentity.gaiaId);
-    __weak __typeof(self) weakSelf = self;
-    base::RepeatingCallback<void(signin::WebSigninTracker::Result)> callback =
-        base::BindRepeating(
-            [](__typeof(self) strongSelf,
-               signin::WebSigninTracker::Result result) {
-              [strongSelf webSigninFinishedWithResult:result];
-            },
-            weakSelf);
-    _webSigninTracker =
-        [self.delegate trackWebSigninWithIdentityManager:_identityManager
-                                       accountReconcilor:_accountReconcilor
-                                           signinAccount:accountId
-                                            withCallback:&callback
-                                             withTimeout:kSigninTimeout];
-    return;
-  }
-  // `-[ConsistencyPromoSigninMediator onAccountsInCookieUpdated:error:]` will
-  // be called when the cookies will be ready, and then the sign-in can be
-  // finished. Or `_cookieTimeoutClosure` will be called if it takes too long.
+  CoreAccountId accountId = CoreAccountId::FromGaiaId(_signingIdentity.gaiaId);
   __weak __typeof(self) weakSelf = self;
-  _cookieTimeoutClosure.Reset(base::BindOnce(^{
-    [weakSelf cancelSigninWithError:ConsistencyPromoSigninMediatorErrorTimeout];
-  }));
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, _cookieTimeoutClosure.callback(), kSigninTimeout);
+  base::RepeatingCallback<void(signin::WebSigninTracker::Result)> callback =
+      base::BindRepeating(
+          [](__typeof(self) strongSelf, ProceduralBlock completion,
+             signin::WebSigninTracker::Result result) {
+            [strongSelf webSigninFinishedWithResult:result
+                                         completion:completion];
+          },
+          weakSelf, completion);
+  _webSigninTracker =
+      [self.delegate trackWebSigninWithIdentityManager:_identityManager
+                                     accountReconcilor:_accountReconcilor
+                                         signinAccount:accountId
+                                          withCallback:&callback
+                                           withTimeout:kSigninTimeout];
 }
 
 - (void)authenticationFlowWillSwitchProfileWithReadyCompletion:
@@ -295,12 +308,15 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
 #pragma mark - Private
 
 // Called by _webSigninTracker when the result of the web sign-in flow is known.
-- (void)webSigninFinishedWithResult:(signin::WebSigninTracker::Result)result {
+- (void)webSigninFinishedWithResult:(signin::WebSigninTracker::Result)result
+                         completion:(ProceduralBlock)completion {
+  CHECK(completion);
   _webSigninTracker.reset();
   switch (result) {
     case signin::WebSigninTracker::Result::kSuccess:
       [self.delegate consistencyPromoSigninMediatorSignInDone:self
-                                                 withIdentity:_signingIdentity];
+                                                 withIdentity:_signingIdentity
+                                                   completion:completion];
       break;
     case signin::WebSigninTracker::Result::kOtherError:
       [self cancelSigninWithError:ConsistencyPromoSigninMediatorErrorGeneric];
@@ -312,6 +328,7 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
       [self cancelSigninWithError:ConsistencyPromoSigninMediatorErrorTimeout];
       break;
   }
+  completion();
 }
 
 // Cancels sign-in and calls the delegate to display the error.
@@ -348,9 +365,9 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
       });
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   if (_authenticationFlow) {
     // If the authentication is in progress, its callback will deal with
@@ -366,48 +383,6 @@ constexpr base::TimeDelta kSigninTimeout = base::Seconds(10);
     // profile will be signed-in, the sign-in view should be dismissed.
     [self.delegate consistencyPromoSigninMediatorSignInIsImpossible:self];
   }
-}
-
-- (void)onAccountsInCookieUpdated:
-            (const signin::AccountsInCookieJarInfo&)accountsInCookieJarInfo
-                            error:(const GoogleServiceAuthError&)error {
-  if (base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError)) {
-    return;
-  }
-  CHECK(!base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError));
-  if (_authenticationFlow ||
-      _accessPoint != signin_metrics::AccessPoint::kWebSignin) {
-    // Ignore if `_authenticationFlow` is in progress since
-    // `onAccountsInCookieUpdated` may be called when data is cleared on
-    // sign-in.
-    // Ignore if the access point is different than WebSignin. Only the web
-    // sign-in needs to wait for the cookies.
-    return;
-  }
-  id<SystemIdentity> signingIdentity = _signingIdentity;
-  if (!signingIdentity) {
-    // TODO(crbug.com/40764093): This case should not happen, but
-    // `onAccountsInCookieUpdated:error:` can be called twice when there is an
-    // error. Once this bug is fixed, this `if` should be replaced with
-    // `DCHECK(!self.alertCoordinator)`.
-    return;
-  }
-  DCHECK(!_authenticationFlow);
-  _cookieTimeoutClosure.Cancel();
-  if (error.state() == GoogleServiceAuthError::State::NONE &&
-      _authenticationService->GetPrimaryIdentity(
-          signin::ConsentLevel::kSignin) &&
-      accountsInCookieJarInfo.GetPotentiallyInvalidSignedInAccounts().size() >
-          0) {
-    // Reset dismissal count.
-    if (_accessPoint == signin_metrics::AccessPoint::kWebSignin) {
-      _prefService->SetInteger(prefs::kSigninWebSignDismissalCount, 0);
-    }
-    [self.delegate consistencyPromoSigninMediatorSignInDone:self
-                                               withIdentity:signingIdentity];
-    return;
-  }
-  [self cancelSigninWithError:ConsistencyPromoSigninMediatorErrorGeneric];
 }
 
 #pragma mark - AuthenticationServiceObserving

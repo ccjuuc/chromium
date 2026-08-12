@@ -6,9 +6,11 @@
 #define CHROME_BROWSER_DEFAULT_BROWSER_DEFAULT_BROWSER_CONTROLLER_H_
 
 #include <memory>
+#include <string>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "chrome/browser/default_browser/default_browser_setter.h"
 #include "chrome/browser/shell_integration.h"
 
@@ -27,7 +29,15 @@ enum class DefaultBrowserEntrypointType {
   kStartupInfobar = 0,
   // Default browser Settings page UI.
   kSettingsPage = 1,
-  kMaxValue = kSettingsPage
+  // Default browser change detected os notification.
+  kChangeDetectedNotification = 2,
+  // Bubble dialog anchored to app menu button.
+  kBubbleDialog = 3,
+  // Modal dialog with settings illustration.
+  kModalDialogWithSettingsIllustration = 4,
+  // Modal dialog without settings illustration.
+  kModalDialogWithoutSettingsIllustration = 5,
+  kMaxValue = kModalDialogWithoutSettingsIllustration,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/ui/histograms.xml:DefaultBrowserEntrypointType)
 
@@ -44,6 +54,10 @@ enum class DefaultBrowserInteractionType {
   kMaxValue = kDismissed
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/ui/enums.xml:DefaultBrowserUserInteraction)
+
+std::string UiEntrypointTypeToString(
+    DefaultBrowserEntrypointType ui_entrypoint);
+std::string SetterTypeToString(DefaultBrowserSetterType setter_type);
 
 // DefaultBrowserController acts a bridge between UI and the setter, is
 // responsible for managing the setter based on user input, and recording
@@ -62,19 +76,21 @@ class DefaultBrowserController {
   // Called by UI based on user interactions.
   void OnShown();
   void OnAccepted(
-      DefaultBrowserControllerCompletionCallback on_setter_completion_callback);
+      DefaultBrowserControllerCompletionCallback on_setter_completion_callback,
+      const DefaultBrowserSetter::ExecuteParams& params = {});
   void OnIgnored();
   void OnDismissed();
 
  private:
-  void OnSetterExecutionComplete(DefaultBrowserState default_browser_state);
+  void OnSetterExecutionComplete(
+      DefaultBrowserControllerCompletionCallback completion_callback,
+      base::TimeTicks setter_execution_start_time,
+      DefaultBrowserState default_browser_state);
 
   void IncrementShownMetric();
   void RecordInteractionMetric(DefaultBrowserInteractionType interaction);
   void RecordResultMetric(bool success);
 
-  // Stores the callback that gets triggered when setter completes execution.
-  DefaultBrowserControllerCompletionCallback completion_callback_;
   std::unique_ptr<DefaultBrowserSetter> setter_;
 
   // Stores the UI entrypoint type that requested this controller.

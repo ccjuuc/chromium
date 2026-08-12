@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_
-#define EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_
-
 #include "extensions/browser/api/execute_code_function.h"
 
 #include <algorithm>
@@ -266,7 +263,7 @@ void ExecuteCodeFunction::OnExecuteCodeFinished(
 
   // Place the root frame result at the beginning.
   std::iter_swap(root_frame_result, results.begin());
-  base::Value::List result_list;
+  base::ListValue result_list;
   for (auto& result : results) {
     if (result.error.empty())
       result_list.Append(std::move(result.value));
@@ -276,5 +273,3 @@ void ExecuteCodeFunction::OnExecuteCodeFinished(
 }
 
 }  // namespace extensions
-
-#endif  // EXTENSIONS_BROWSER_API_EXECUTE_CODE_FUNCTION_IMPL_H_

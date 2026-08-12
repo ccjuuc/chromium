@@ -24,23 +24,22 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker;
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
+import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.ui.base.TestActivity;
 
 /** Unit tests for {@link ToolbarProgressBarLayer}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.PAUSED)
 public class ToolbarProgressBarLayerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -53,14 +52,15 @@ public class ToolbarProgressBarLayerTest {
     @Mock private TopControlsStacker mTopControlsStacker;
     @Mock private BottomControlsStacker mBottomControlsStacker;
     @Mock private CoordinatorLayout mContentView;
+    @Mock private ToolbarLayout mToolbarLayout;
 
     private Activity mActivity;
     private View mProgressBarContainer;
     private View mToolbarHairline;
 
     private ToolbarProgressBarLayer mLayer;
-    private @ControlsPosition int mTestControlPosition = ControlsPosition.NONE;
-    private SettableObservableSupplier<Integer> mBookmarkBarIdSupplier;
+    private @ControlsPosition int mTestControlPosition = ControlsPosition.BOTTOM;
+    private SettableMonotonicObservableSupplier<Integer> mBookmarkBarIdSupplier;
 
     @Before
     public void setUp() {
@@ -81,7 +81,8 @@ public class ToolbarProgressBarLayerTest {
                         mBookmarkBarIdSupplier,
                         mTopControlsStacker,
                         mBottomControlsStacker,
-                        false);
+                        false,
+                        mToolbarLayout);
     }
 
     @Test
@@ -127,5 +128,32 @@ public class ToolbarProgressBarLayerTest {
                 456,
                 ((CoordinatorLayout.LayoutParams) mProgressBarContainer.getLayoutParams())
                         .getAnchorId());
+    }
+
+    @Test
+    public void testOnProgressBarInfoUpdate_withXOffset() {
+        org.chromium.components.browser_ui.widget.ClipDrawableProgressBar.DrawingInfo drawingInfo =
+                new org.chromium.components.browser_ui.widget.ClipDrawableProgressBar.DrawingInfo();
+        drawingInfo.progressBarRect.set(0, 0, 100, 10);
+        drawingInfo.progressBarBackgroundRect.set(100, 0, 500, 10);
+        drawingInfo.progressBarStaticBackgroundRect.set(0, 0, 500, 10);
+
+        ViewGroup.MarginLayoutParams params =
+                new ViewGroup.MarginLayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.leftMargin = 240;
+        mProgressBarContainer.setLayoutParams(params);
+
+        View controlContainerView = new View(mActivity);
+        when(mControlContainer.getView()).thenReturn(controlContainerView);
+
+        mLayer.onProgressBarInfoUpdate(drawingInfo);
+
+        assertEquals(240, drawingInfo.progressBarRect.left);
+        assertEquals(340, drawingInfo.progressBarRect.right);
+        assertEquals(340, drawingInfo.progressBarBackgroundRect.left);
+        assertEquals(740, drawingInfo.progressBarBackgroundRect.right);
+        assertEquals(240, drawingInfo.progressBarStaticBackgroundRect.left);
+        assertEquals(740, drawingInfo.progressBarStaticBackgroundRect.right);
     }
 }

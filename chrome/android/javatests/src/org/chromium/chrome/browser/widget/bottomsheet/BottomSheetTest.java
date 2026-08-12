@@ -25,12 +25,14 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.MathUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.omnibox.OmniboxFocusReason;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.tab.TabObscuringHandler;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -45,6 +47,8 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.Shee
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
 import org.chromium.components.browser_ui.bottomsheet.TestBottomSheetContent;
+import org.chromium.components.omnibox.AutocompleteInput;
+import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.ExecutionException;
@@ -93,6 +97,42 @@ public class BottomSheetTest {
         mHighPriorityContent.setPeekHeight(HeightMode.DISABLED);
         mHighPriorityContent.setHalfHeightRatio(0.5f);
         mHighPriorityContent.setSkipHalfStateScrollingDown(false);
+    }
+
+    @Test
+    @MediumTest
+    public void testSnackbarContainerPosition() {
+        showContent(mHighPriorityContent, SheetState.HALF);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    View snackbarContainer =
+                            mTestRule
+                                    .getActivity()
+                                    .findViewById(R.id.bottom_sheet_snackbar_container);
+                    View bottomSheet = (View) snackbarContainer.getParent();
+
+                    assertEquals(
+                            -bottomSheet.getTranslationY(),
+                            snackbarContainer.getTranslationY(),
+                            MathUtils.EPSILON);
+                });
+
+        showContent(mHighPriorityContent, SheetState.FULL);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    View snackbarContainer =
+                            mTestRule
+                                    .getActivity()
+                                    .findViewById(R.id.bottom_sheet_snackbar_container);
+                    View bottomSheet = (View) snackbarContainer.getParent();
+
+                    assertEquals(
+                            -bottomSheet.getTranslationY(),
+                            snackbarContainer.getTranslationY(),
+                            MathUtils.EPSILON);
+                });
     }
 
     @Test
@@ -235,19 +275,24 @@ public class BottomSheetTest {
     @MediumTest
     public void testOmniboxFocusSuppressesSheet() {
         ToolbarManager toolbarManager =
-                mTestRule.getActivity().getRootUiCoordinatorForTesting().getToolbarManager();
+                mTestRule
+                        .getActivity()
+                        .getRootUiCoordinatorForTesting()
+                        .getToolbarManagerSupplier()
+                        .get();
         showContent(mHighPriorityContent, SheetState.HALF);
 
         runOnUiThreadBlocking(
-                () -> toolbarManager.setUrlBarFocus(true, OmniboxFocusReason.OMNIBOX_TAP));
+                () ->
+                        toolbarManager.beginFuseboxInput(
+                                new AutocompleteInput(OmniboxFocusReason.OMNIBOX_TAP)));
 
         assertEquals(
                 "The bottom sheet should be hidden.",
                 SheetState.HIDDEN,
                 mSheetController.getSheetState());
 
-        runOnUiThreadBlocking(
-                () -> toolbarManager.setUrlBarFocus(false, OmniboxFocusReason.OMNIBOX_TAP));
+        runOnUiThreadBlocking(toolbarManager::endFuseboxInput);
 
         assertNotEquals(
                 "The bottom sheet should not be hidden.",
@@ -371,6 +416,7 @@ public class BottomSheetTest {
 
     @Test
     @MediumTest
+    @DisabledTest(message = "crbug.com/503771877")
     public void testAdditionalBottomOffset() {
         final int height = 300;
         final int margin = 100;

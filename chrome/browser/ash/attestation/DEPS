@@ -21,12 +21,10 @@ include_rules = [
   "+chrome/browser/ash/settings",
   "+chrome/browser/browser_process.h",
   "+chrome/browser/browser_process_platform_part_ash.h",
-  "+chrome/browser/extensions/chrome_extension_function_details.h",
   "+chrome/browser/net",
   "+chrome/browser/policy",
   "+chrome/browser/profiles",
   "+chrome/common/chrome_constants.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 
   # Dependencies outside of //chrome:

@@ -21,6 +21,7 @@
 
 #include "third_party/blink/renderer/core/css/css_color.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_effect_parameters.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
@@ -59,8 +60,11 @@ StyleColor ToStyleColor(const RGBATuple& tuple) {
 }
 
 Color FallbackColorForCurrentColor(const SVGElement& target_element) {
+  // As a workaround, always use the unvisited 'color' when resolving a
+  // potential 'currentcolor' value to prevent leaking :visited state.
   if (const ComputedStyle* target_style = target_element.GetComputedStyle()) {
-    return target_style->VisitedDependentColor(GetCSSPropertyColor());
+    return GetCSSPropertyColor().ColorIncludingFallback(
+        /*visited_link=*/false, *target_style, /*is_current_color=*/nullptr);
   }
   return Color::kTransparent;
 }
@@ -90,14 +94,22 @@ SVGParsingError SVGColorProperty::SetValueAsString(const String& value) {
     style_color_ = StyleColor(parsed_color);
     return SVGParseStatus::kNoError;
   }
-  if (EqualIgnoringASCIICase(trimmed_value, "currentColor")) {
-    style_color_ = StyleColor::CurrentColor();
-    return SVGParseStatus::kNoError;
+
+  // Check for currentcolor keyword, handling escaped characters
+  CSSParserTokenStream stream(trimmed_value);
+  if (!stream.AtEnd() && stream.Peek().GetType() == kIdentToken &&
+      stream.Peek().Id() == CSSValueID::kCurrentcolor) {
+    stream.Consume();
+    if (stream.AtEnd()) {
+      style_color_ = StyleColor::CurrentColor();
+      return SVGParseStatus::kNoError;
+    }
   }
+
   return SVGParseStatus::kParsingFailed;
 }
 
-void SVGColorProperty::Add(const SVGPropertyBase* other,
+bool SVGColorProperty::Add(const SVGPropertyBase* other,
                            const SVGElement* context_element) {
   DCHECK(context_element);
 
@@ -109,6 +121,7 @@ void SVGColorProperty::Add(const SVGPropertyBase* other,
   const auto addend = ToRGBATuple(style_color_, fallback_color, color_scheme);
   Accumulate(base, addend);
   style_color_ = ToStyleColor(base);
+  return true;
 }
 
 void SVGColorProperty::CalculateAnimatedValue(

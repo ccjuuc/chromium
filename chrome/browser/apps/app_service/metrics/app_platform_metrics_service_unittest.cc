@@ -22,9 +22,10 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
+#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
@@ -37,12 +38,10 @@
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/metrics/usertype_by_devicetype_metrics_provider.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
-#include "chrome/test/base/test_browser_window_aura.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/components/mgs/managed_guest_session_test_utils.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
@@ -57,6 +56,7 @@
 #include "components/metrics/structured/test/test_structured_metrics_provider.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/instance.h"
@@ -248,8 +248,6 @@ class AppPlatformMetricsServiceTest : public AppPlatformMetricsServiceTestBase {
 
   void TearDown() override {
     AppPlatformMetricsServiceTestBase::TearDown();
-    browser_window1_.reset();
-    browser_window2_.reset();
     metrics::structured::StructuredMetricsClient::Get()->UnsetDelegate();
   }
 
@@ -425,48 +423,7 @@ class AppPlatformMetricsServiceTest : public AppPlatformMetricsServiceTestBase {
     user_segment_ = user_segment;
   }
 
-  std::unique_ptr<Browser> CreateBrowserWithAuraWindow1() {
-    std::unique_ptr<aura::Window> window = std::make_unique<aura::Window>(
-        &delegate1_, aura::client::WINDOW_TYPE_NORMAL);
-    window->SetId(0);
-    window->Init(ui::LAYER_TEXTURED);
-    Browser::CreateParams params(profile(), true);
-    params.type = Browser::TYPE_NORMAL;
-    browser_window1_ =
-        std::make_unique<TestBrowserWindowAura>(std::move(window));
-    params.window = browser_window1_.release();
-    return Browser::DeprecatedCreateOwnedForTesting(params);
-  }
 
-  std::unique_ptr<Browser> CreateBrowserWithAuraWindow2() {
-    std::unique_ptr<aura::Window> window = std::make_unique<aura::Window>(
-        &delegate2_, aura::client::WINDOW_TYPE_NORMAL);
-    window->SetId(0);
-    window->Init(ui::LAYER_TEXTURED);
-    Browser::CreateParams params(profile(), true);
-    params.type = Browser::TYPE_NORMAL;
-    browser_window2_ =
-        std::make_unique<TestBrowserWindowAura>(std::move(window));
-    params.window = browser_window2_.release();
-    return Browser::DeprecatedCreateOwnedForTesting(params);
-  }
-
-  std::unique_ptr<Browser> CreateBrowserWindow(
-      InstallReason install_reason = InstallReason::kUser) {
-    InstallOneApp(app_constants::kChromeAppId, AppType::kChromeApp, "Chrome",
-                  Readiness::kReady, InstallSource::kSystem,
-                  /*is_platform_app=*/false, WindowMode::kUnknown,
-                  install_reason);
-    std::unique_ptr<Browser> browser = CreateBrowserWithAuraWindow1();
-    EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
-    return browser;
-  }
-
-  std::unique_ptr<aura::Window> CreateWebAppWindow(aura::Window* parent) {
-    return aura::test::CreateTestWindow({.delegate = &delegate1_,
-                                         .parent = parent,
-                                         .window_id = 1});
-  }
 
   GURL GetSourceUrlForApp(const std::string& app_id) {
     return AppPlatformMetrics::GetURLForApp(profile(), app_id);
@@ -486,7 +443,7 @@ class AppPlatformMetricsServiceTest : public AppPlatformMetricsServiceTestBase {
 
   void VerifyAppRunningDuration(const base::TimeDelta time_delta,
                                 AppTypeName app_type_name) {
-    const base::Value::Dict& dict =
+    const base::DictValue& dict =
         GetPrefService()->GetDict(kAppRunningDuration);
     std::string key = GetAppTypeHistogramName(app_type_name);
 
@@ -540,8 +497,7 @@ class AppPlatformMetricsServiceTest : public AppPlatformMetricsServiceTestBase {
   }
 
   void VerifyAppActivatedCount(int expected_count, AppTypeName app_type_name) {
-    const base::Value::Dict& dict =
-        GetPrefService()->GetDict(kAppActivatedCount);
+    const base::DictValue& dict = GetPrefService()->GetDict(kAppActivatedCount);
     std::string key = GetAppTypeHistogramName(app_type_name);
 
     std::optional<int> activated_count = dict.FindIntByDottedPath(key);
@@ -760,10 +716,8 @@ class AppPlatformMetricsServiceTest : public AppPlatformMetricsServiceTestBase {
   }
 
  private:
-  std::unique_ptr<TestBrowserWindowAura> browser_window1_;
-  std::unique_ptr<TestBrowserWindowAura> browser_window2_;
-  aura::test::TestWindowDelegate delegate1_;
-  aura::test::TestWindowDelegate delegate2_;
+  ash::SessionTerminationManager session_termination_manager_;
+
   std::map<std::string, TestApp> pre_installed_apps_;
   UserTypeByDeviceTypeMetricsProvider::UserSegment user_segment_ =
       UserTypeByDeviceTypeMetricsProvider::UserSegment::kUnmanaged;
@@ -817,65 +771,6 @@ TEST_F(AppPlatformMetricsServiceTest, InstallApps) {
   histogram_tester().ExpectTotalCount(
       AppPlatformMetrics::GetAppsCountHistogramNameForTest(AppTypeName::kArc),
       /*count=*/2);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, BrowserWindow) {
-  InstallOneApp(app_constants::kChromeAppId, AppType::kChromeApp, "Chrome",
-                Readiness::kReady, InstallSource::kSystem);
-
-  // Expect no Browsers at the beginning.
-  EXPECT_EQ(0U, chrome::GetTotalBrowserCount());
-  std::unique_ptr<Browser> browser1 = CreateBrowserWithAuraWindow1();
-
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
-
-  // Set the browser window active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser1->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(10));
-  VerifyAppActivatedCount(/*expected_count=*/1, AppTypeName::kChromeBrowser);
-
-  task_environment_.FastForwardBy(base::Minutes(20));
-  // Set the browser window running in the background.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser1->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(10));
-  VerifyAppRunningDuration(base::Minutes(30), AppTypeName::kChromeBrowser);
-
-  // Test multiple browsers.
-  std::unique_ptr<Browser> browser2 = CreateBrowserWithAuraWindow2();
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
-
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser2->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(10));
-  VerifyAppActivatedCount(/*expected_count=*/2, AppTypeName::kChromeBrowser);
-
-  task_environment_.FastForwardBy(base::Minutes(20));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser2->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-
-  task_environment_.FastForwardBy(base::Minutes(10));
-  VerifyAppRunningDuration(base::Hours(1), AppTypeName::kChromeBrowser);
-
-  // Test date change.
-  task_environment_.FastForwardBy(base::Days(1));
-  VerifyAppRunningDurationCountHistogram(/*expected_count=*/1,
-                                         AppTypeName::kChromeBrowser);
-  VerifyAppRunningDurationHistogram(base::Hours(1),
-                                    /*expected_count=*/1,
-                                    AppTypeName::kChromeBrowser);
-  VerifyAppRunningPercentageCountHistogram(/*expected_count=*/1,
-                                           AppTypeName::kChromeBrowser);
-  VerifyAppRunningPercentageHistogram(100,
-                                      /*expected_count=*/1,
-                                      AppTypeName::kChromeBrowser);
-  VerifyAppActivatedCountHistogram(/*expected_count=*/1,
-                                   AppTypeName::kChromeBrowser);
-  VerifyAppActivatedHistogram(/*count*/ 2, /*expected_count=*/1,
-                              AppTypeName::kChromeBrowser);
 }
 
 // Tests the UMA metrics when launching an app in one day .
@@ -1066,448 +961,6 @@ TEST_F(AppPlatformMetricsServiceTest, ReactiveWindow) {
   VerifyAppActivatedCountHistogram(/*expected_count=*/2, AppTypeName::kArc);
   VerifyAppRunningDuration(base::Hours(0), AppTypeName::kArc);
   VerifyAppActivatedCount(/*expected_count=*/0, AppTypeName::kArc);
-}
-
-// Tests the app running percentage UMA metrics when launch a browser window
-// and an ARC app in one day.
-TEST_F(AppPlatformMetricsServiceTest, AppRunningPercentage) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Set the browser window active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Hours(1));
-
-  // Set the browser window running in the background.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Launch an ARC app.
-  std::string app_id = "aa";
-  InstallOneApp(app_id, AppType::kArc, "com.google.AA", Readiness::kReady,
-                InstallSource::kPlayStore);
-
-  // Create a window to simulate launching the app.
-  auto window = std::make_unique<aura::Window>(nullptr);
-  window->Init(ui::LAYER_NOT_DRAWN);
-  ModifyInstance(app_id, window.get(), apps::InstanceState::kActive);
-
-  // Close the window after running one hour.
-  task_environment_.FastForwardBy(base::Hours(1));
-  ModifyInstance(app_id, window.get(), apps::InstanceState::kDestroyed);
-
-  // One day passes.
-  task_environment_.FastForwardBy(base::Hours(1));
-  VerifyAppRunningPercentageCountHistogram(/*expected_count=*/1,
-                                           AppTypeName::kChromeBrowser);
-  VerifyAppRunningPercentageCountHistogram(/*expected_count=*/1,
-                                           AppTypeName::kArc);
-  VerifyAppRunningPercentageHistogram(50,
-                                      /*expected_count=*/1,
-                                      AppTypeName::kChromeBrowser);
-  VerifyAppRunningPercentageHistogram(50,
-                                      /*expected_count=*/1, AppTypeName::kArc);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, UsageTime) {
-  // Create an ARC app window.
-  std::string app_id = "aa";
-  InstallOneApp(app_id, AppType::kArc, "com.google.AA", Readiness::kReady,
-                InstallSource::kPlayStore);
-  auto window = std::make_unique<aura::Window>(nullptr);
-  window->Init(ui::LAYER_NOT_DRAWN);
-  ModifyInstance(app_id, window.get(), apps::InstanceState::kActive);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/1, AppTypeName::kArc);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/1, AppTypeNameV2::kArc);
-  VerifyAppUsageTimeHistogram(base::Minutes(5),
-                              /*expected_count=*/1, AppTypeName::kArc);
-
-  task_environment_.FastForwardBy(base::Minutes(2));
-  ModifyInstance(app_id, window.get(), kInactiveInstanceState);
-
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Set the browser window active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(3));
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/2, AppTypeName::kArc);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/2, AppTypeNameV2::kArc);
-  VerifyAppUsageTimeHistogram(base::Minutes(2),
-                              /*expected_count=*/1, AppTypeName::kArc);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/1,
-                                   AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/1,
-                                   AppTypeNameV2::kChromeBrowser);
-  VerifyAppUsageTimeHistogram(base::Minutes(3),
-                              /*expected_count=*/1,
-                              AppTypeName::kChromeBrowser);
-  VerifyNoAppUsageTimeUkm();
-
-  task_environment_.FastForwardBy(base::Minutes(15));
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/2, AppTypeName::kArc);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/2, AppTypeNameV2::kArc);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/4,
-                                   AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeCountHistogram(/*expected_count=*/4,
-                                   AppTypeNameV2::kChromeBrowser);
-  VerifyAppUsageTimeHistogram(base::Minutes(5),
-                              /*expected_count=*/3,
-                              AppTypeName::kChromeBrowser);
-  VerifyNoAppUsageTimeUkm();
-
-  // Set the browser window inactive.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Set time passed 2 hours to record the usage time AppKM.
-  task_environment_.FastForwardBy(base::Minutes(95));
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(18),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, UsageTimeUkm) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Set the browser window active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  sync_service()->SetAllowedByEnterprisePolicy(false);
-
-  // Fast forward by 2 hours and verify no usage data is reported to UKM.
-  task_environment_.FastForwardBy(base::Hours(2));
-  VerifyNoAppUsageTimeUkm();
-
-  sync_service()->SetAllowedByEnterprisePolicy(true);
-
-  static constexpr base::TimeDelta kAppUsageDuration = base::Hours(1);
-  task_environment_.FastForwardBy(kAppUsageDuration);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Fast forward by 2 hours and verify usage data reported to UKM only includes
-  // usage data since sync was last enabled.
-  task_environment_.FastForwardBy(base::Hours(2));
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, kAppUsageDuration,
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, UsageTimeUkmReportAfterReboot) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Set the browser window active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(30));
-
-  // Create a web app tab.
-  const GURL url = GURL("https://foo.com");
-  auto web_app_window =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the web app tab as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(20));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       kInactiveInstanceState);
-
-  VerifyNoAppUsageTimeUkm();
-
-  // Reset PlatformMetricsService to simulate the system reboot, and verify
-  // AppKM is restored from the user pref and reported after 5 minutes after
-  // reboot.
-  ResetAppPlatformMetricsService();
-  VerifyNoAppUsageTimeUkm();
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(30),
-                        AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(url, base::Minutes(20), AppTypeName::kChromeBrowser);
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(10));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Verify UKM is not reported.
-  VerifyAppUsageTimeUkm(/*count=*/2);
-
-  // Reset PlatformMetricsService to simulate the system reboot, and verify
-  // only the new AppKM is reported.
-  ResetAppPlatformMetricsService();
-  task_environment_.FastForwardBy(base::Minutes(5));
-
-  VerifyAppUsageTimeUkm(/*count=*/3);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(40),
-                        AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(url, base::Minutes(20), AppTypeName::kChromeBrowser);
-
-  // Reset PlatformMetricsService to simulate the system reboot, and verify no
-  // more AppKM is reported.
-  ResetAppPlatformMetricsService();
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyAppUsageTimeUkm(/*count=*/3);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(40),
-                        AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(url, base::Minutes(20), AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, UsageTimeUkmWithMultipleWindows) {
-  // Create a browser window.
-  InstallOneApp(app_constants::kChromeAppId, AppType::kChromeApp, "Chrome",
-                Readiness::kReady, InstallSource::kSystem);
-  std::unique_ptr<Browser> browser1 = CreateBrowserWithAuraWindow1();
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
-
-  // Set the browser window1 active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser1->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(5));
-
-  // Set the browser window1 inactive.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser1->window()->GetNativeWindow(), kInactiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(1));
-
-  std::unique_ptr<Browser> browser2 = CreateBrowserWithAuraWindow2();
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
-
-  // Set the browser window2 active.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser2->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(7));
-
-  // Close windows.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser1->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser2->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-
-  VerifyNoAppUsageTimeUkm();
-
-  // Verify UKM is reported after 2hours.
-  task_environment_.FastForwardBy(base::Minutes(107));
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(12),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest,
-       UsageTimeUkmForWebAppOpenInTabWithInactivatedBrowser) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Create a web app tab.
-  const GURL url = GURL("https://foo.com");
-  auto web_app_window =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the browser window as inactivated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Set the web app tab as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoAppUsageTimeUkm();
-
-  // Set the browser window and web app tabs as inactivated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       kInactiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(2));
-
-  // Set the web app tab as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(), kActiveInstanceState);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(3));
-  VerifyNoAppUsageTimeUkm();
-
-  // Set the web app tab as inactivated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       kInactiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(1));
-
-  // Set the web app tab as destroyed.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       apps::InstanceState::kDestroyed);
-
-  // Set the browser window as destroyed.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-  VerifyNoAppUsageTimeUkm();
-
-  task_environment_.FastForwardBy(base::Minutes(109));
-
-  // Verify the app usage time AppKM for the web app and browser window.
-  VerifyAppUsageTimeUkm(/*count=*/2);
-  VerifyAppUsageTimeUkm(url, base::Minutes(8), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(1),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest,
-       UsageTimeUkmForWebAppOpenInTabWithActivatedBrowser) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Create a web app tab.
-  const GURL url = GURL("https://foo.com");
-  auto web_app_window =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the web app tab as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(), kActiveInstanceState);
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoAppUsageTimeUkm();
-
-  // Set the web app tab as inactivated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       kInactiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(3));
-
-  // Set the browser window as inactivated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  VerifyNoAppUsageTimeUkm();
-  task_environment_.FastForwardBy(base::Minutes(112));
-
-  // Verify the app usage time AppKM.
-  VerifyAppUsageTimeUkm(/*count=*/2);
-  VerifyAppUsageTimeUkm(url, base::Minutes(5), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(3),
-                        AppTypeName::kChromeBrowser);
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  // Set the web app tab as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(2));
-
-  // Set the browser window as inactivated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Verify no more app usage time AppKM is recorded.
-  VerifyAppUsageTimeUkm(/*count=*/2);
-
-  // Set the web app tab as inactivated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       kInactiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(118));
-
-  // Verify only the web app UKM is reported.
-  VerifyAppUsageTimeUkm(/*count=*/3);
-  VerifyAppUsageTimeUkm(url, base::Minutes(7), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(3),
-                        AppTypeName::kChromeBrowser);
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(1));
-
-  // Set the browser window as destroyed.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-
-  // Set the web app tab as destroyed.
-  ModifyWebAppInstance(kWebAppId1, web_app_window.get(),
-                       apps::InstanceState::kDestroyed);
-
-  // Verify no more app usage time AppKM is recorded.
-  VerifyAppUsageTimeUkm(/*count=*/3);
-
-  task_environment_.FastForwardBy(base::Minutes(119));
-
-  VerifyAppUsageTimeUkm(/*count=*/4);
-  VerifyAppUsageTimeUkm(url, base::Minutes(7), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(4),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(AppPlatformMetricsServiceTest, UsageTimeUkmForMultipleWebAppOpenInTab) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow();
-
-  // Create web app tabs.
-  const GURL url1 = GURL("https://foo.com");
-  auto web_app_window1 =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-  const GURL url2 = GURL("https://foo2.com");
-  auto web_app_window2 =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the web app tab 1 as activated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window1.get(), kActiveInstanceState);
-  ModifyWebAppInstance(kWebAppId2, web_app_window2.get(),
-                       kInactiveInstanceState);
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-
-  // Set the web app tab 2 as activated.
-  ModifyWebAppInstance(kWebAppId2, web_app_window2.get(), kActiveInstanceState);
-  ModifyWebAppInstance(kWebAppId1, web_app_window1.get(),
-                       kInactiveInstanceState);
-  task_environment_.FastForwardBy(base::Minutes(4));
-
-  // Set the web app tabs as inactivated.
-  ModifyWebAppInstance(kWebAppId1, web_app_window1.get(),
-                       kInactiveInstanceState);
-  ModifyWebAppInstance(kWebAppId2, web_app_window2.get(),
-                       kInactiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(3));
-  VerifyNoAppUsageTimeUkm();
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-
-  // Destroy the browser windows, and web app tabs.
-  ModifyWebAppInstance(kWebAppId1, web_app_window1.get(),
-                       apps::InstanceState::kDestroyed);
-  ModifyWebAppInstance(kWebAppId2, web_app_window2.get(),
-                       apps::InstanceState::kDestroyed);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(),
-                 apps::InstanceState::kDestroyed);
-
-  task_environment_.FastForwardBy(base::Minutes(108));
-
-  // Verify the app usage time AppKM for the web apps and browser window.
-  VerifyAppUsageTimeUkm(/*count=*/3);
-  VerifyAppUsageTimeUkm(url1, base::Minutes(5), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(url2, base::Minutes(4), AppTypeName::kChromeBrowser);
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(3),
-                        AppTypeName::kChromeBrowser);
 }
 
 TEST_F(AppPlatformMetricsServiceTest, InstalledAppsUkm) {
@@ -1829,15 +1282,6 @@ class AppPlatformInputMetricsTest : public AppPlatformMetricsServiceTest {
     }
   }
 
-  std::unique_ptr<Browser> CreateBrowser() {
-    Browser::CreateParams params(profile(), true);
-    params.type = Browser::TYPE_NORMAL;
-    browser_window_ = std::make_unique<TestBrowserWindow>();
-    browser_window_->SetNativeWindow(window());
-    params.window = browser_window_.release();
-    return Browser::DeprecatedCreateOwnedForTesting(params);
-  }
-
   TestApp& ActivatePreInstalledApp(const std::string& app_id) {
     EXPECT_TRUE(pre_installed_apps().contains(app_id));
     TestApp& pre_installed_app = pre_installed_apps()[app_id];
@@ -1889,7 +1333,6 @@ class AppPlatformInputMetricsTest : public AppPlatformMetricsServiceTest {
   // Where down events are dispatched to.
   std::unique_ptr<views::Widget> widget_;
 
-  std::unique_ptr<TestBrowserWindow> browser_window_;
 };
 
 // Verify no more input event is recorded when the window is destroyed.
@@ -1970,8 +1413,8 @@ TEST_F(AppPlatformInputMetricsTest, KeyEvents) {
     counts.insert(
         *(test_ukm_recorder()->GetEntryMetric(entry, "AppInputEventCount")));
   }
-  EXPECT_TRUE(base::Contains(counts, 1));
-  EXPECT_TRUE(base::Contains(counts, 2));
+  EXPECT_TRUE(counts.contains(1));
+  EXPECT_TRUE(counts.contains(2));
 }
 
 TEST_F(AppPlatformInputMetricsTest, MultipleEvents) {
@@ -2013,94 +1456,6 @@ TEST_F(AppPlatformInputMetricsTest, MultipleEvents) {
   EXPECT_EQ(2, mouse_event_count);
   EXPECT_EQ(1, keyboard_event_count);
   EXPECT_EQ(1, stylus_event_count);
-}
-
-TEST_F(AppPlatformInputMetricsTest, BrowserWindow) {
-  InstallOneApp(app_constants::kChromeAppId, AppType::kChromeApp, "Chrome",
-                Readiness::kReady, InstallSource::kSystem);
-  auto browser = CreateBrowser();
-
-  // Set the browser window as activated.
-  ModifyInstance(app_constants::kChromeAppId, window(), kActiveInstanceState);
-  CreateInputEvent(InputEventSource::kMouse);
-  app_platform_input_metrics()->OnFiveMinutes();
-  VerifyNoUkm();
-  app_platform_input_metrics()->OnTwoHours();
-  VerifyUkm(std::string("app://") + app_constants::kChromeAppId,
-            AppTypeName::kChromeBrowser, /*event_count=*/1,
-            InputEventSource::kMouse);
-
-  // Create a web app tab1.
-  const GURL url1 = GURL("https://foo.com");
-  auto web_app_window1 =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the web app tab1 as activated.
-  ModifyInstance(kWebAppId1, web_app_window1.get(), kActiveInstanceState);
-  CreateInputEvent(InputEventSource::kMouse);
-  app_platform_input_metrics()->OnFiveMinutes();
-
-  // Verify no more input events UKM recorded.
-  auto entries =
-      test_ukm_recorder()->GetEntriesByName("ChromeOSApp.InputEvent");
-  ASSERT_EQ(1U, entries.size());
-
-  app_platform_input_metrics()->OnTwoHours();
-  // Verify 2 input metrics events are recorded.
-  VerifyUkm(2, url1.spec(), AppTypeName::kChromeBrowser,
-            /*event_count=*/1, InputEventSource::kMouse);
-
-  // Create a web app tab2.
-  const GURL url2 = GURL("https://foo2.com");
-  auto web_app_window2 =
-      CreateWebAppWindow(browser->window()->GetNativeWindow());
-
-  // Set the web app tab2 as activated.
-  ModifyInstance(kWebAppId2, web_app_window2.get(), kActiveInstanceState);
-  ModifyInstance(kWebAppId1, web_app_window1.get(), kInactiveInstanceState);
-  CreateInputEvent(InputEventSource::kStylus);
-  CreateInputEvent(InputEventSource::kStylus);
-  app_platform_input_metrics()->OnFiveMinutes();
-
-  // Verify no more input events UKM recorded.
-  entries = test_ukm_recorder()->GetEntriesByName("ChromeOSApp.InputEvent");
-  ASSERT_EQ(2U, entries.size());
-
-  app_platform_input_metrics()->OnTwoHours();
-  // Verify 3 input metrics events are recorded.
-  VerifyUkm(3, url2.spec(), AppTypeName::kChromeBrowser,
-            /*event_count=*/2, InputEventSource::kStylus);
-
-  // Set the web app tab2 as destroyed, and web app tab1 as activated.
-  ModifyInstance(kWebAppId2, web_app_window2.get(),
-                 apps::InstanceState::kDestroyed);
-  ModifyInstance(kWebAppId1, web_app_window1.get(), kActiveInstanceState);
-  CreateInputEvent(InputEventSource::kKeyboard);
-  app_platform_input_metrics()->OnFiveMinutes();
-
-  // Verify no more input events UKM recorded.
-  entries = test_ukm_recorder()->GetEntriesByName("ChromeOSApp.InputEvent");
-  ASSERT_EQ(3U, entries.size());
-
-  app_platform_input_metrics()->OnTwoHours();
-  // Verify 4 input metrics events are recorded.
-  VerifyUkm(4, url1.spec(), AppTypeName::kChromeBrowser,
-            /*event_count=*/1, InputEventSource::kKeyboard);
-
-  // Set the web app tab1 as inactivated.
-  ModifyInstance(kWebAppId1, web_app_window1.get(), kInactiveInstanceState);
-  CreateInputEvent(InputEventSource::kStylus);
-  app_platform_input_metrics()->OnFiveMinutes();
-
-  // Verify no more input events UKM recorded.
-  entries = test_ukm_recorder()->GetEntriesByName("ChromeOSApp.InputEvent");
-  ASSERT_EQ(4U, entries.size());
-
-  app_platform_input_metrics()->OnTwoHours();
-  // Verify 5 input metrics events are recorded.
-  VerifyUkm(5, std::string("app://") + app_constants::kChromeAppId,
-            AppTypeName::kChromeBrowser,
-            /*event_count=*/1, InputEventSource::kStylus);
 }
 
 TEST_F(AppPlatformInputMetricsTest, InputEventsUkmReportAfterReboot) {
@@ -2308,7 +1663,10 @@ TEST_F(AppPlatformMetricsObserverTest, ShouldNotifyObserverOnDestruction) {
   // test destruction lifecycle without affecting pre-existing test teardown
   // fixtures.
   auto app_platform_metrics_service =
-      std::make_unique<AppPlatformMetricsService>(profile());
+      std::make_unique<AppPlatformMetricsService>(
+          profile(), base::DefaultClock::GetInstance(),
+          base::DefaultTickClock::GetInstance(),
+          task_environment_.GetMainThreadTaskRunner());
   app_platform_metrics_service->Start(
       apps::AppServiceProxyFactory::GetForProfile(profile())
           ->AppRegistryCache(),
@@ -2778,7 +2136,10 @@ class AppPlatformMetricsServiceObserverTest
 TEST_F(AppPlatformMetricsServiceObserverTest,
        NotifyObserversOnAppPlatformMetricsInit) {
   MockObserver* const observer_ptr = observer();
-  AppPlatformMetricsService app_platform_metrics_service(profile());
+  AppPlatformMetricsService app_platform_metrics_service(
+      profile(), base::DefaultClock::GetInstance(),
+      base::DefaultTickClock::GetInstance(),
+      task_environment_.GetMainThreadTaskRunner());
   app_platform_metrics_service.AddObserver(observer_ptr);
   EXPECT_CALL(*observer_ptr, OnAppPlatformMetricsInit(_))
       .WillOnce([&](AppPlatformMetrics* app_platform_metrics) {
@@ -2795,7 +2156,10 @@ TEST_F(AppPlatformMetricsServiceObserverTest,
 TEST_F(AppPlatformMetricsServiceObserverTest,
        ShouldNotNotifyObserversOnAppPlatformMetricsInitIfUnregistered) {
   MockObserver* const observer_ptr = observer();
-  AppPlatformMetricsService app_platform_metrics_service(profile());
+  AppPlatformMetricsService app_platform_metrics_service(
+      profile(), base::DefaultClock::GetInstance(),
+      base::DefaultTickClock::GetInstance(),
+      task_environment_.GetMainThreadTaskRunner());
 
   // Unregister registered observer before init and verify observer is not
   // notified.
@@ -2813,7 +2177,10 @@ TEST_F(AppPlatformMetricsServiceObserverTest,
        ShouldNotifyObserverOnDestruction) {
   MockObserver* const observer_ptr = observer();
   auto app_platform_metrics_service =
-      std::make_unique<AppPlatformMetricsService>(profile());
+      std::make_unique<AppPlatformMetricsService>(
+          profile(), base::DefaultClock::GetInstance(),
+          base::DefaultTickClock::GetInstance(),
+          task_environment_.GetMainThreadTaskRunner());
   app_platform_metrics_service->AddObserver(observer_ptr);
   EXPECT_CALL(*observer_ptr, OnAppPlatformMetricsServiceWillBeDestroyed)
       .Times(1);
@@ -2823,7 +2190,10 @@ TEST_F(AppPlatformMetricsServiceObserverTest,
 TEST_F(AppPlatformMetricsServiceObserverTest,
        NotifyObserversOnWebsiteMetricsInit) {
   MockObserver* const observer_ptr = observer();
-  AppPlatformMetricsService app_platform_metrics_service(profile());
+  AppPlatformMetricsService app_platform_metrics_service(
+      profile(), base::DefaultClock::GetInstance(),
+      base::DefaultTickClock::GetInstance(),
+      task_environment_.GetMainThreadTaskRunner());
   app_platform_metrics_service.AddObserver(observer_ptr);
 
   EXPECT_CALL(*observer_ptr, OnWebsiteMetricsInit)
@@ -2863,223 +2233,5 @@ class ManagedGuestSessionBaseTest {
  private:
   chromeos::FakeManagedGuestSession managed_guest_session_;
 };
-
-class ManagedGuestSessionAppMetricsTest : public AppPlatformMetricsServiceTest {
- public:
-  void SetUp() override {
-    managed_guest_session_ = std::make_unique<ManagedGuestSessionBaseTest>();
-    AppPlatformMetricsServiceTest::SetUp();
-    managed_guest_session_->SetUp(*this);
-  }
-
-  void TearDown() override {
-    managed_guest_session_.reset();
-    AppPlatformMetricsServiceTest::TearDown();
-  }
-
- protected:
-  std::unique_ptr<ManagedGuestSessionBaseTest> managed_guest_session_;
-};
-
-TEST_F(ManagedGuestSessionAppMetricsTest, ReportsUsageTimeUkmAfter2Hours) {
-  std::unique_ptr<Browser> browser =
-      CreateBrowserWindow(InstallReason::kSystem);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  VerifyNoAppUsageTimeUkm();
-
-  // Set time passed 2 hours to record the usage time AppKM.
-  task_environment_.FastForwardBy(base::Minutes(115));
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(5),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest, UsageTimeUkmReportedOnShutdown) {
-  std::unique_ptr<Browser> browser =
-      CreateBrowserWindow(InstallReason::kSystem);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  task_environment_.FastForwardBy(base::Minutes(5));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  VerifyNoAppUsageTimeUkm();
-
-  managed_guest_session_->SimulateMgsShutdown(*this);
-
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(5),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest, UsageTimeUkmReportedInShortSessions) {
-  std::unique_ptr<Browser> browser =
-      CreateBrowserWindow(InstallReason::kSystem);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-
-  // "Usage metrics are updated every 5 minutes or during shutdown. Sleep only
-  // 3 minutes and simulate on shutdown update."
-  task_environment_.FastForwardBy(base::Minutes(3));
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kInactiveInstanceState);
-  VerifyNoAppUsageTimeUkm();
-
-  managed_guest_session_->SimulateMgsShutdown(*this);
-
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(3),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest,
-       DoNotReportUsageTimeUkmForBlockedInstalledReasons) {
-  for (InstallReason reason : kBlockedInstallReasonsInManagedGuestSession) {
-    std::unique_ptr<Browser> browser = CreateBrowserWindow(reason);
-    ModifyInstance(app_constants::kChromeAppId,
-                   browser->window()->GetNativeWindow(), kActiveInstanceState);
-    task_environment_.FastForwardBy(base::Hours(2));
-
-    VerifyNoAppUsageTimeUkm();
-  }
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest,
-       ReportsUsageTimeUkmForPolicyInstalledReasons) {
-  std::unique_ptr<Browser> browser =
-      CreateBrowserWindow(InstallReason::kPolicy);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Hours(2));
-
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(115),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest,
-       ReportsUsageTimeUkmForOemInstalledReasons) {
-  std::unique_ptr<Browser> browser = CreateBrowserWindow(InstallReason::kOem);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Hours(2));
-
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(115),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest,
-       ReportsUsageTimeUkmForDefaultInstalledReasons) {
-  std::unique_ptr<Browser> browser =
-      CreateBrowserWindow(InstallReason::kDefault);
-  ModifyInstance(app_constants::kChromeAppId,
-                 browser->window()->GetNativeWindow(), kActiveInstanceState);
-  task_environment_.FastForwardBy(base::Hours(2));
-
-  VerifyAppUsageTimeUkm(app_constants::kChromeAppId, base::Minutes(115),
-                        AppTypeName::kChromeBrowser);
-}
-
-TEST_F(ManagedGuestSessionAppMetricsTest,
-       InstalledAppsUkmReportedOnlyForAllowedInstallReasons) {
-  for (const auto& [_, pre_installed_app] : pre_installed_apps()) {
-    if (pre_installed_app.publisher_id.empty()) {
-      continue;
-    }
-
-    if (kAllowedInstallReasonsInManagedGuestSession.contains(
-            pre_installed_app.install_reason)) {
-      VerifyInstalledAppsUkm(pre_installed_app, InstallTime::kInit);
-    } else if (kBlockedInstallReasonsInManagedGuestSession.contains(
-                   pre_installed_app.install_reason)) {
-      VerifyNoInstalledAppUkm(pre_installed_app);
-    } else {
-      // All install reasons should be covered by either
-      // `kAllowedInstallReasonsInMgs` or `kBlockedInstallReasonsInMgs`.
-      NOTREACHED();
-    }
-  }
-}
-
-class ManagedGuestSessionInputMetricsTest : public AppPlatformInputMetricsTest {
- public:
-  void SetUp() override {
-    AppPlatformInputMetricsTest::PreSetUp();
-    managed_guest_session_ = std::make_unique<ManagedGuestSessionBaseTest>(
-        /*initialize_login_state=*/false);
-    AppPlatformInputMetricsTest::SetUp();
-    managed_guest_session_->SetUp(*this);
-  }
-
-  void TearDown() override {
-    managed_guest_session_.reset();
-    AppPlatformInputMetricsTest::TearDown();
-  }
-
- protected:
-  std::unique_ptr<ManagedGuestSessionBaseTest> managed_guest_session_;
-};
-
-TEST_F(ManagedGuestSessionInputMetricsTest, InputEventUkmReportedAfter2Hours) {
-  TestApp& pre_installed_app = ActivatePreInstalledApp(kSystemWebAppId);
-  CreateInputEvent(InputEventSource::kTouch);
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoUkm();
-
-  // Set time passed 2 hours to record the usage time AppKM.
-  task_environment_.FastForwardBy(base::Minutes(115));
-  VerifyUkm(pre_installed_app, /*event_count=*/1, InputEventSource::kTouch);
-}
-
-TEST_F(ManagedGuestSessionInputMetricsTest, InputEventUkmReportedOnShutdown) {
-  TestApp& pre_installed_app = ActivatePreInstalledApp(kSystemWebAppId);
-  CreateInputEvent(InputEventSource::kTouch);
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoUkm();
-
-  managed_guest_session_->SimulateMgsShutdown(*this);
-
-  VerifyUkm(pre_installed_app, /*event_count=*/1, InputEventSource::kTouch);
-}
-
-TEST_F(ManagedGuestSessionInputMetricsTest,
-       InputEventUkmForPolicyInstalledApp) {
-  TestApp app = TestApp(app_constants::kChromeAppId, AppType::kChromeApp,
-                        "Chrome", Readiness::kReady, InstallReason::kPolicy,
-                        InstallSource::kSystem);
-  InstallOneApp(app);
-  auto browser = CreateBrowser();
-
-  // Set the browser window as activated.
-  ModifyInstance(app.app_id, window(), kActiveInstanceState);
-  CreateInputEvent(InputEventSource::kMouse);
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoUkm();
-
-  // Set time passed 2 hours to record the usage time AppKM.
-  task_environment_.FastForwardBy(base::Minutes(115));
-
-  VerifyUkm(app, /*event_count=*/1, InputEventSource::kMouse);
-}
-
-TEST_F(ManagedGuestSessionInputMetricsTest,
-       DoNotReportInputEventUkmForUserInstalledApps) {
-  TestApp app =
-      TestApp(app_constants::kChromeAppId, AppType::kChromeApp, "Chrome",
-              Readiness::kReady, InstallReason::kUser, InstallSource::kSystem);
-  InstallOneApp(app);
-  auto browser = CreateBrowser();
-
-  // Set the browser window as activated.
-  ModifyInstance(app.app_id, window(), kActiveInstanceState);
-  CreateInputEvent(InputEventSource::kMouse);
-  task_environment_.FastForwardBy(base::Minutes(5));
-  VerifyNoUkm();
-
-  // Set time passed 2 hours to record the usage time AppKM.
-  task_environment_.FastForwardBy(base::Minutes(115));
-  VerifyNoUkm();
-}
 
 }  // namespace apps

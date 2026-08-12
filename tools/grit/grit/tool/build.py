@@ -6,23 +6,33 @@
 '''
 
 
-import collections
 import codecs
+import collections
 import filecmp
 import getopt
 import gzip
+import multiprocessing
 import os
 import pathlib
 import re
 import shutil
 import sys
 import tempfile
+import traceback
 
 from grit import grd_reader
 from grit import shortcuts
 from grit import util
 from grit import zip_helpers
+from grit.format import android_xml
+from grit.format import c_format
+from grit.format import chrome_messages_json
+from grit.format import data_pack
 from grit.format import minifier
+from grit.format import policy_templates_json
+from grit.format import rc
+from grit.format import rc_header
+from grit.format import resource_map
 from grit.node import brotli_util
 from grit.node import include
 from grit.node import message
@@ -37,25 +47,23 @@ JAVA_STRINGS_PATH_RE = re.compile(r'^.*/(values.*)$')
 # require importing all of them on every run of GRIT.
 '''Map from <output> node types to modules under grit.format.'''
 _format_modules = {
-  'android': 'android_xml',
-  'c_format': 'c_format',
-  'chrome_messages_json': 'chrome_messages_json',
-  'chrome_messages_json_gzip': 'chrome_messages_json',
-  'data_package': 'data_pack',
-  'policy_templates': 'policy_templates_json',
-  'rc_all': 'rc',
-  'rc_header': 'rc_header',
-  'rc_nontranslateable': 'rc',
-  'rc_translateable': 'rc',
-  'resource_file_map_source': 'resource_map',
-  'resource_map_header': 'resource_map',
-  'resource_map_source': 'resource_map',
+    'android': android_xml,
+    'c_format': c_format,
+    'chrome_messages_json': chrome_messages_json,
+    'chrome_messages_json_gzip': chrome_messages_json,
+    'data_package': data_pack,
+    'policy_templates': policy_templates_json,
+    'rc_all': rc,
+    'rc_header': rc_header,
+    'rc_nontranslateable': rc,
+    'rc_translateable': rc,
+    'resource_file_map_source': resource_map,
+    'resource_map_header': resource_map,
+    'resource_map_source': resource_map,
 }
 
 def GetFormatter(type):
-  modulename = 'grit.format.' + _format_modules[type]
-  __import__(modulename)
-  module = sys.modules[modulename]
+  module = _format_modules[type]
   try:
     return module.Format
   except AttributeError:
@@ -75,18 +83,24 @@ Options:
 
   -a FILE           Assert that the given file is an output. There can be
                     multiple "-a" flags listed for multiple outputs. If a "-a"
-                    or "--assert-file-list" argument is present, then the list
-                    of asserted files must match the output files or the tool
-                    will fail. The use-case is for the build system to maintain
-                    separate lists of output files and to catch errors if the
-                    build system's list and the grit list are out-of-sync.
+                    or "--assert-output-file-list" argument is present, then
+                    the list of asserted files must match the output files or the
+                    tool will fail. The use-case is for the build system to
+                    maintain separate lists of output files and to catch errors
+                    if the build system's list and the grit list are out-of-sync.
 
-  --assert-file-list
+  --assert-output-file-list
                     Provide a file listing multiple asserted output files.
                     There is one file name per line. This acts like specifying
                     each file with "-a" on the command line, but without the
                     possibility of running into OS line-length limits for very
                     long lists.
+
+  --assert-input-file-list
+                    Provide a file listing multiple asserted input files.
+                    There is one file name per line. If present, the list of
+                    asserted input files must match the actual input files or
+                    the tool will fail.
 
   -o OUTPUTDIR      Specify what directory output paths are relative to.
                     Defaults to the current directory.
@@ -177,6 +191,7 @@ are exported to translation interchange files (e.g. XMB files), etc.
     predetermined_ids_file = None
     allowlist_filenames = []
     assert_output_files = []
+    assert_input_files = []
     target_platform = None
     depfile = None
     depdir = None
@@ -188,17 +203,21 @@ are exported to translation interchange files (e.g. XMB files), etc.
     translate_genders = False
     (own_opts, args) = getopt.getopt(
         args, 'a:p:o:D:E:f:w:t:',
-        ('depdir=', 'depfile=', 'assert-file-list=', 'help',
-         'output-all-resource-defines', 'no-output-all-resource-defines',
-         'no-replace-ellipsis', 'depend-on-stamp', 'css-minifier=',
-         'write-only-new=', 'allowlist-support', 'brotli=', 'translate-genders',
+        ('depdir=', 'depfile=', 'assert-output-file-list=',
+         'assert-input-file-list=', 'help', 'output-all-resource-defines',
+         'no-output-all-resource-defines', 'no-replace-ellipsis',
+         'depend-on-stamp', 'css-minifier=', 'write-only-new=',
+         'allowlist-support', 'brotli=', 'translate-genders',
          'android-output-zip='))
     for (key, val) in own_opts:
       if key == '-a':
         assert_output_files.append(val)
-      elif key == '--assert-file-list':
+      elif key == '--assert-output-file-list':
         with open(val) as f:
           assert_output_files += f.read().splitlines()
+      elif key == '--assert-input-file-list':
+        with open(val) as f:
+          assert_input_files += f.read().splitlines()
       elif key == '-o':
         self.output_directory = val
       elif key == '-D':
@@ -289,12 +308,17 @@ are exported to translation interchange files (e.g. XMB files), etc.
       if not self.CheckAssertedOutputFiles(assert_output_files):
         return 2
 
+    if assert_input_files:
+      if not self.CheckAssertedInputFiles(assert_input_files):
+        return 2
+
     if depfile and depdir:
       self.GenerateDepfile(depfile, depdir, first_ids_file, depend_on_stamp)
 
     return 0
 
   def __init__(self, defines=None):
+    super().__init__()
     # Default file-creation function is codecs.open().  Only done to allow
     # overriding by unit test.
     self.fo_create = codecs.open
@@ -385,7 +409,81 @@ are exported to translation interchange files (e.g. XMB files), etc.
     # TODO(gfeher) modify here to set utf-8 encoding for admx/adml
     return 'utf_16'
 
+  def _ProcessOutput(self, output, zippable_android_xml_outputs):
+    self.VerboseOut('Creating %s...' % output.GetOutputFilename())
+
+    # Set the context, for conditional inclusion of resources
+    self.res.SetOutputLanguage(output.GetLanguage())
+    self.res.SetOutputContext(output.GetContext())
+    self.res.SetFallbackToDefaultLayout(output.GetFallbackToDefaultLayout())
+    self.res.SetDefines(self.defines)
+
+    # Write the results to a temporary file and only overwrite the original
+    # if the file changed.  This avoids unnecessary rebuilds.
+    #
+    # TODO(hartmanng): Android xml strings currently bypass this behaviour
+    # when self.android_output_zip_path is set. We should take another look to
+    # make sure we avoid unnecessary rebuilds.
+    out_filename = output.GetOutputFilename()
+    tmp_filename = out_filename + '.tmp'
+
+    output_type = output.GetType()
+    if output_type == 'android' and self.android_output_zip_path is not None:
+      # if these files are just going to be zipped and then deleted, they
+      # shouldn't be in the normal `out/...` directory - we'll just store them
+      # in the system tmp dir instead.
+      tmp_filename = self.GetTempAndroidOutputPath(tmp_filename)
+      out_filename = self.GetTempAndroidOutputPath(out_filename)
+      zippable_android_xml_outputs.append(out_filename)
+
+    # Make the output directory if it doesn't exist.
+    self.MakeDirectoriesTo(out_filename)
+    tmpfile = self.fo_create(tmp_filename, 'wb')
+
+    if output_type != 'data_package':
+      encoding = self._EncodingForOutputType(output_type)
+      tmpfile = util.WrapOutputStream(tmpfile, encoding)
+
+    # Iterate in-order through entire resource tree, calling formatters on
+    # the entry into a node and on exit out of it.
+    with tmpfile:
+      self.ProcessNode(self.res, output, tmpfile)
+
+    if output_type == 'chrome_messages_json_gzip':
+      gz_filename = tmp_filename + '.gz'
+      with open(tmp_filename, 'rb') as tmpfile, open(gz_filename, 'wb') as f:
+        with gzip.GzipFile(filename='', mode='wb', fileobj=f, mtime=0) as fgz:
+          shutil.copyfileobj(tmpfile, fgz)
+      os.remove(tmp_filename)
+      tmp_filename = gz_filename
+
+    # Now copy from the temp file back to the real output, but on Windows,
+    # only if the real output doesn't exist or the contents of the file
+    # changed.  This prevents identical headers from being written and .cc
+    # files from recompiling (which is painful on Windows).
+    if not os.path.exists(out_filename):
+      os.rename(tmp_filename, out_filename)
+    else:
+      # CHROMIUM SPECIFIC CHANGE.
+      # This clashes with gyp + vstudio, which expect the output timestamp
+      # to change on a rebuild, even if nothing has changed, so only do
+      # it when opted in.
+      if not self.write_only_new:
+        write_file = True
+      else:
+        files_match = filecmp.cmp(out_filename, tmp_filename)
+        write_file = not files_match
+      if write_file:
+        shutil.copy2(tmp_filename, out_filename)
+      os.remove(tmp_filename)
+
+    self.VerboseOut(' done.\n')
+
   def Process(self):
+    # Assign IDs only once to ensure that all outputs use the same IDs.
+    if self.res.GetIdMap() is None:
+      self.res.InitializeIds()
+
     for output in self.res.GetOutputFiles():
       output.output_filename = os.path.abspath(os.path.join(
         self.output_directory, output.GetOutputFilename()))
@@ -399,79 +497,82 @@ are exported to translation interchange files (e.g. XMB files), etc.
       self.android_output_tmp_dir = tempfile.TemporaryDirectory(
           ignore_cleanup_errors=True)
     zippable_android_xml_outputs = []
-    for output in self.res.GetOutputFiles():
-      self.VerboseOut('Creating %s...' % output.GetOutputFilename())
+    can_fork = hasattr(os, 'fork')
+    if os.environ.get('GRIT_DISABLE_MULTIPROCESSING') == '1':
+      can_fork = False
 
-      # Set the context, for conditional inclusion of resources
-      self.res.SetOutputLanguage(output.GetLanguage())
-      self.res.SetOutputContext(output.GetContext())
-      self.res.SetFallbackToDefaultLayout(output.GetFallbackToDefaultLayout())
-      self.res.SetDefines(self.defines)
+    outputs = self.res.GetOutputFiles()
+    if can_fork and len(outputs) > 1:
+      # WARM UP CACHES: process the first output file synchronously in the
+      # parent process. This builds the O(1) attribute caches (e.g.
+      # `FindBooleanAttribute`) and lazy-initialized structures for the entire
+      # AST. If we don't do this, all N child processes will concurrently
+      # perform the O(N) tree traversals and destroy memory/CPU caches.
+      first_output = outputs[0]
+      self._ProcessOutput(first_output, zippable_android_xml_outputs)
 
-      # Assign IDs only once to ensure that all outputs use the same IDs.
-      if self.res.GetIdMap() is None:
-        self.res.InitializeIds()
+      remaining_outputs = outputs[1:]
+      # Limit max workers to 16 to avoid overwhelming the system with Copy-On-Write
+      # page faults caused by Python reference counting on the 100MB AST.
+      num_workers = min(16, multiprocessing.cpu_count(), len(remaining_outputs))
+      chunks = [remaining_outputs[i::num_workers] for i in range(num_workers)]
+      pids = []
+      tmp_dir = tempfile.mkdtemp()
 
-      # Write the results to a temporary file and only overwrite the original
-      # if the file changed.  This avoids unnecessary rebuilds.
-      #
-      # TODO(hartmanng): Android xml strings currently bypass this behaviour
-      # when self.android_output_zip_path is set. We should take another look to
-      # make sure we avoid unnecessary rebuilds.
-      out_filename = output.GetOutputFilename()
-      tmp_filename = out_filename + '.tmp'
+      # Flush standard streams before forking to prevent buffered data from
+      # being copied into child processes and printed multiple times.
+      sys.stdout.flush()
+      sys.stderr.flush()
 
-      output_type = output.GetType()
-      if output_type == 'android' and self.android_output_zip_path is not None:
-        # if these files are just going to be zipped and then deleted, they
-        # shouldn't be in the normal `out/...` directory - we'll just store them
-        # in the system tmp dir instead.
-        tmp_filename = self.GetTempAndroidOutputPath(tmp_filename)
-        out_filename = self.GetTempAndroidOutputPath(out_filename)
-        zippable_android_xml_outputs.append(out_filename)
+      for i, chunk in enumerate(chunks):
+        # We use os.fork() instead of multiprocessing.Pool to completely bypass
+        # the massive overhead of pickling/unpickling the 100MB+ in-memory AST
+        # over IPC pipelines. os.fork() immediately shares the pre-built AST
+        # via OS Copy-On-Write (COW) without any serialization cost.
+        # It also bypasses Python's Global Interpreter Lock (GIL) to truly
+        # parallelize the CPU-bound AST traversals and string generation,
+        # unlike a threadpool which is slower due to GIL contention.
+        pid = os.fork()
+        if pid == 0:
+          # Child process
+          child_zippable = []
+          try:
+            for output in chunk:
+              self._ProcessOutput(output, child_zippable)
+            if child_zippable:
+              with open(os.path.join(tmp_dir, f'zip_{i}.txt'),
+                        'w',
+                        encoding='utf-8') as f:
+                f.write('\n'.join(child_zippable))
+            os._exit(0)
+          except Exception as e:
+            traceback.print_exc()
+            os._exit(1)
 
-      # Make the output directory if it doesn't exist.
-      self.MakeDirectoriesTo(out_filename)
-      tmpfile = self.fo_create(tmp_filename, 'wb')
+        pids.append(pid)
 
-      if output_type != 'data_package':
-        encoding = self._EncodingForOutputType(output_type)
-        tmpfile = util.WrapOutputStream(tmpfile, encoding)
+      success = True
+      for pid in pids:
+        _, status = os.waitpid(pid, 0)
+        if status != 0:
+          success = False
 
-      # Iterate in-order through entire resource tree, calling formatters on
-      # the entry into a node and on exit out of it.
-      with tmpfile:
-        self.ProcessNode(self.res, output, tmpfile)
+      if not success:
+        print("Error: One or more grit output workers failed. Aborting.")
+        sys.exit(1)
 
-      if output_type == 'chrome_messages_json_gzip':
-        gz_filename = tmp_filename + '.gz'
-        with open(tmp_filename, 'rb') as tmpfile, open(gz_filename, 'wb') as f:
-          with gzip.GzipFile(filename='', mode='wb', fileobj=f, mtime=0) as fgz:
-            shutil.copyfileobj(tmpfile, fgz)
-        os.remove(tmp_filename)
-        tmp_filename = gz_filename
+      for i in range(num_workers):
+        zip_file = os.path.join(tmp_dir, f'zip_{i}.txt')
+        if os.path.exists(zip_file):
+          with open(zip_file, 'r', encoding='utf-8') as f:
+            zippable_android_xml_outputs.extend(f.read().splitlines())
+          os.remove(zip_file)
+      shutil.rmtree(tmp_dir, ignore_errors=True)
 
-      # Now copy from the temp file back to the real output, but on Windows,
-      # only if the real output doesn't exist or the contents of the file
-      # changed.  This prevents identical headers from being written and .cc
-      # files from recompiling (which is painful on Windows).
-      if not os.path.exists(out_filename):
-        os.rename(tmp_filename, out_filename)
-      else:
-        # CHROMIUM SPECIFIC CHANGE.
-        # This clashes with gyp + vstudio, which expect the output timestamp
-        # to change on a rebuild, even if nothing has changed, so only do
-        # it when opted in.
-        if not self.write_only_new:
-          write_file = True
-        else:
-          files_match = filecmp.cmp(out_filename, tmp_filename)
-          write_file = not files_match
-        if write_file:
-          shutil.copy2(tmp_filename, out_filename)
-        os.remove(tmp_filename)
+    else:
+      for output in outputs:
+        self._ProcessOutput(output, zippable_android_xml_outputs)
 
-      self.VerboseOut(' done.\n')
 
     # Move all the Android xml files into a single zip file. This simplifies gn
     # logic, since the next step in the build process would be to zip the files
@@ -480,6 +581,7 @@ are exported to translation interchange files (e.g. XMB files), etc.
     # Asserts that each path contains '/values'.
     if self.android_output_zip_path is not None:
       self.ZipAndroidOutputs(zippable_android_xml_outputs)
+      self.android_output_tmp_dir.cleanup()
 
     # Print warnings if there are any duplicate shortcuts.
     warnings = shortcuts.GenerateDuplicateShortcutsWarnings(
@@ -602,6 +704,39 @@ Duplicate actual output files:
     return True
 
 
+  def CheckAssertedInputFiles(self, assert_input_files):
+    '''Checks that the asserted input files match the actual input files.
+
+    Returns true if the asserted files match. If they do not, returns
+    False and prints the failure.
+    '''
+    cwd = os.getcwd()
+    asserted = sorted(
+        set(
+            os.path.relpath(os.path.abspath(i), cwd)
+            for i in assert_input_files))
+    actual_files = list(self.res.GetInputFiles())
+    if self.o is not None and self.o.input:
+      actual_files.append(self.o.input)
+    actual = sorted(
+        set(os.path.relpath(os.path.abspath(i), cwd) for i in actual_files))
+
+    missing = sorted(set(actual) - set(asserted))
+    extra = sorted(set(asserted) - set(actual))
+    if missing or extra:
+      error = ['Asserted input file list does not match.']
+      if missing:
+        error.append('\nMissing input files (needed in BUILD.gn inputs):')
+        error.extend(missing)
+      if extra:
+        error.append(
+            '\nExtra input files (listed in BUILD.gn inputs but not used):')
+        error.extend(extra)
+      print('\n'.join(error))
+      return False
+    return True
+
+
   def GenerateDepfile(self, depfile, depdir, first_ids_file, depend_on_stamp):
     '''Generate a depfile that contains the implicit dependencies of the input
     grd. The depfile will be in the same format as a makefile, and will contain
@@ -652,14 +787,17 @@ Duplicate actual output files:
                                  outputs[0].GetOutputFilename())
 
     output_file = os.path.relpath(output_file, depdir)
-    # The path prefix to prepend to dependencies in the depfile.
-    prefix = os.path.relpath(os.getcwd(), depdir)
-    deps_text = ' '.join([os.path.join(prefix, i) for i in infiles])
+
+    # List each dependency by its shortest path relative to depdir, so a
+    # generated file under the output dir becomes "gen/foo" instead of
+    # "../../out/<name>/gen/foo".
+    deps_text = ' '.join(
+        os.path.relpath(os.path.abspath(i), depdir) for i in infiles)
 
     depfile_contents = output_file + ': ' + deps_text
     self.MakeDirectoriesTo(depfile)
-    outfile = self.fo_create(depfile, 'w', encoding='utf-8')
-    outfile.write(depfile_contents)
+    with self.fo_create(depfile, 'w', encoding='utf-8') as outfile:
+      outfile.write(depfile_contents)
 
   @staticmethod
   def MakeDirectoriesTo(file):

@@ -50,8 +50,9 @@ class HeaderFlattener : public WebHTTPHeaderVisitor {
 
     // Skip over referrer headers found in the header map because we already
     // pulled it out as a separate parameter.
-    if (EqualIgnoringASCIICase(wtf_name, "referer"))
+    if (EqualIgnoringAsciiCase(wtf_name, "referer")) {
       return;
+    }
 
     if (!buffer_.empty())
       buffer_.Append("\r\n");
@@ -78,7 +79,7 @@ int GetInitialRequestID() {
   // to something higher like 2^31).
   const int kMin = 0;
   const int kMax = 1 << 20;
-  return base::RandInt(kMin, kMax);
+  return base::RandIntInclusive(kMin, kMax);
 }
 
 }  // namespace

@@ -82,12 +82,7 @@ function clickDots(page: HTMLElement, num: number) {
 function clickButton(page: HTMLElement, name: string) {
   const menu = page.shadowRoot!.querySelector<HTMLElement>('#menu')!;
   const button = menu.querySelector<HTMLElement>('#' + name);
-
-  assertTrue(button !== null, name + ' button missing');
-  if (button === null) {
-    return;
-  }
-
+  assertTrue(!!button, name + ' button missing');
   button.click();
 }
 
@@ -97,12 +92,7 @@ function clickButton(page: HTMLElement, name: string) {
 function clickDialogButton(dialog: HTMLElement, name: string) {
   const menu = dialog.shadowRoot!.querySelector<HTMLElement>('#dialog')!;
   const button = menu.querySelector<HTMLElement>('#' + name);
-
-  assertTrue(button !== null, name + ' button missing');
-  if (button === null) {
-    return;
-  }
-
+  assertTrue(!!button, name + ' button missing');
   button.click();
 }
 
@@ -133,7 +123,7 @@ function isShowingError(page: HTMLElement): boolean {
   return !!page.shadowRoot!.querySelector<HTMLElement>('#error');
 }
 
-suite('PasskeysSubpage', function() {
+suite('PasskeysEditDialog', function() {
   let browserProxy: TestPasskeysBrowserProxy;
   let page: SettingsPasskeysSubpageElement;
 
@@ -142,36 +132,6 @@ suite('PasskeysSubpage', function() {
     PasskeysBrowserProxyImpl.setInstance(browserProxy);
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     page = document.createElement('settings-passkeys-subpage');
-  });
-
-  test('Delete', async function() {
-    const passkeys: [Passkey] = [
-      {
-        credentialId: '1',
-        relyingPartyId: 'rpid.com',
-        userName: 'user',
-        userDisplayName: 'displayName',
-      },
-    ];
-    browserProxy.setNextPasskeys(passkeys);
-    document.body.appendChild(page);
-    await flushTasks();
-    assertEquals(browserProxy.getCallCount('enumerate'), 1);
-
-
-    assertDeepEquals(getUsernamesFromList(page), [passkeys[0].userName]);
-
-    clickDots(page, 0);
-
-    browserProxy.whenCalled('delete').then((name: string) => {
-      assertEquals(name, passkeys[0].credentialId);
-    });
-    browserProxy.setNextPasskeys([]);
-    clickButton(page, 'delete');
-    await flushTasks();
-    assertEquals(browserProxy.getCallCount('delete'), 1);
-
-    assertDeepEquals(getUsernamesFromList(page), []);
   });
 
   test('cancelClickedEditDialog', async function() {
@@ -186,15 +146,10 @@ suite('PasskeysSubpage', function() {
     browserProxy.setNextPasskeys(passkeys);
     document.body.appendChild(page);
     await flushTasks();
-    assertEquals(browserProxy.getCallCount('enumerate'), 1);
+    assertEquals(1, browserProxy.getCallCount('enumerate'));
 
     assertFalse(isShowingError(page));
     assertDeepEquals(getUsernamesFromList(page), [passkeys[0].userName]);
-
-    browserProxy.whenCalled('edit').then((args) => {
-      assertEquals(args[0], passkeys[0].credentialId);
-      assertEquals(args[1], passkeys[0].userName);
-    });
 
     clickButton(page, 'edit');
     await flushTasks();
@@ -205,7 +160,7 @@ suite('PasskeysSubpage', function() {
     clickDialogButton(dialog, 'cancel');
     await flushTasks();
 
-    assertEquals(browserProxy.getCallCount('edit'), 0);
+    assertEquals(0, browserProxy.getCallCount('edit'));
 
     assertDeepEquals(
         getUsernamesFromList(page), passkeys.map(cred => cred.userName));
@@ -231,17 +186,12 @@ suite('PasskeysSubpage', function() {
     browserProxy.setNextPasskeys(passkeys);
     document.body.appendChild(page);
     await flushTasks();
-    assertEquals(browserProxy.getCallCount('enumerate'), 1);
+    assertEquals(1, browserProxy.getCallCount('enumerate'));
 
     assertFalse(isShowingError(page));
     assertDeepEquals(getUsernamesFromList(page), [passkeys[0].userName]);
 
     clickDots(page, 0);
-
-    browserProxy.whenCalled('edit').then((args) => {
-      assertEquals(args[0], passkeys[0].credentialId);
-      assertEquals(args[0], editedPasskeys[0].userName);
-    });
 
     clickButton(page, 'edit');
     await flushTasks();
@@ -253,6 +203,11 @@ suite('PasskeysSubpage', function() {
     setInputField(dialog, 'new-username');
     await flushTasks();
     clickDialogButton(dialog, 'actionButton');
+
+    const args = await browserProxy.whenCalled('edit');
+    assertEquals(args[0], passkeys[0].credentialId);
+    assertEquals(args[1], editedPasskeys[0].userName);
+
     await flushTasks();
 
     assertEquals(browserProxy.getCallCount('edit'), 1);
@@ -273,16 +228,14 @@ suite('PasskeysSubpage', function() {
     browserProxy.setNextPasskeys(passkeys);
     document.body.appendChild(page);
     await flushTasks();
-    assertEquals(browserProxy.getCallCount('enumerate'), 1);
+    assertEquals(
+        1, browserProxy.getCallCount('enumerate'),
+        'Enumerate should have been called once');
 
     assertFalse(isShowingError(page));
     assertDeepEquals(getUsernamesFromList(page), [passkeys[0].userName]);
 
     clickDots(page, 0);
-
-    browserProxy.whenCalled('edit').then((args) => {
-      assertEquals(args[0], passkeys[0].credentialId);
-    });
 
     clickButton(page, 'edit');
     await flushTasks();
@@ -292,12 +245,15 @@ suite('PasskeysSubpage', function() {
 
     browserProxy.setNextPasskeys(passkeys);
     setInputField(dialog, '');
+    await flushTasks();
     clickDialogButton(dialog, 'actionButton');
     await flushTasks();
 
-    assertEquals(getErrorMessage(dialog), 'Enter your username');
+    assertEquals('Enter your username', getErrorMessage(dialog));
 
-    assertEquals(browserProxy.getCallCount('edit'), 0);
+    assertEquals(
+        0, browserProxy.getCallCount('edit'),
+        'Edit should not have been called');
     assertDeepEquals(
         getUsernamesFromList(page), passkeys.map(cred => cred.userName));
   });

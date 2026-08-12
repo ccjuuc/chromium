@@ -18,7 +18,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -33,7 +32,7 @@
 #include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_value_store.h"
 #include "components/prefs/prefs_export.h"
-#include "components/prefs/transparent_unordered_string_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
@@ -50,6 +49,10 @@ class PrefServiceAndroid;
 
 namespace base {
 class FilePath;
+}
+
+namespace base::i18n {
+class LanguageTag;
 }
 
 namespace prefs {
@@ -238,6 +241,7 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   double GetDouble(std::string_view path) const;
   const std::string& GetString(std::string_view path) const;
   base::FilePath GetFilePath(std::string_view path) const;
+  base::i18n::LanguageTag GetLanguageTag(std::string_view path) const;
 
   // Returns the branch if it exists, or the registered default value otherwise.
   // `path` must point to a registered preference (DCHECK).
@@ -246,12 +250,12 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // Returns the branch if it exists, or the registered default value otherwise.
   // `path` must point to a registered preference whose value and registered
   // default are of type `base::Value::Type::DICT (DCHECK).
-  const base::Value::Dict& GetDict(std::string_view path) const;
+  const base::DictValue& GetDict(std::string_view path) const;
 
   // Returns the branch if it exists, or the registered default value otherwise.
   // `path` must point to a registered preference whose value and registered
   // default are of type `base::Value::Type::LIST (DCHECK).
-  const base::Value::List& GetList(std::string_view path) const;
+  const base::ListValue& GetList(std::string_view path) const;
 
   // Removes a user pref and restores the pref to its default value.
   void ClearPref(std::string_view path);
@@ -271,9 +275,11 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   void SetInteger(std::string_view path, int value);
   void SetDouble(std::string_view path, double value);
   void SetString(std::string_view path, std::string_view value);
-  void SetDict(std::string_view path, base::Value::Dict dict);
-  void SetList(std::string_view path, base::Value::List list);
+  void SetDict(std::string_view path, base::DictValue dict);
+  void SetList(std::string_view path, base::ListValue list);
   void SetFilePath(std::string_view path, const base::FilePath& value);
+  void SetLanguageTag(std::string_view path,
+                      const base::i18n::LanguageTag& value);
 
   // Int64 helper methods that actually store the given value as a string.
   // Note that if obtaining the named value via GetDictionary or GetList, the
@@ -330,7 +336,7 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   // If INCLUDE_DEFAULTS is requested, preferences set to their default values
   // will be included. Otherwise, these will be omitted from the returned
   // dictionary.
-  base::Value::Dict GetPreferenceValues(IncludeDefaults include_defaults) const;
+  base::DictValue GetPreferenceValues(IncludeDefaults include_defaults) const;
 
   // Returns a map of the preference values by their path including prefs that
   // have their default value.
@@ -346,11 +352,12 @@ class COMPONENTS_PREFS_EXPORT PrefService {
 
   // Tell our PrefValueStore to update itself to |command_line_store|.
   // Takes ownership of the store.
-  virtual void UpdateCommandLinePrefStore(PrefStore* command_line_store);
+  virtual void UpdateCommandLinePrefStore(
+      scoped_refptr<PrefStore> command_line_store);
 
   // Tells the PrefValueStore to update itself with `extension_store`.
   // Takes ownership of the store.
-  void UpdateExtensionPrefStore(PrefStore* extension_store);
+  void UpdateExtensionPrefStore(scoped_refptr<PrefStore> extension_store);
 
   // We run the callback once, when initialization completes. The bool
   // parameter will be set to true for successful initialization,
@@ -419,9 +426,8 @@ class COMPONENTS_PREFS_EXPORT PrefService {
  private:
   // Hash map expected to be fastest here since it minimises expensive
   // string comparisons. Order is unimportant, and deletions are rare.
-  // Confirmed on Android where this speeded Chrome startup by roughly 50ms
-  // vs. std::map, and by roughly 180ms vs. std::set of Preference pointers.
-  using PreferenceMap = TransparentUnorderedStringMap<Preference>;
+  using PreferenceMap =
+      absl::flat_hash_map<std::string, std::unique_ptr<Preference>>;
 
   // Give access to ReportUserPrefChanged() and GetMutableUserPref().
   friend class subtle::ScopedUserPrefUpdateBase;
@@ -465,8 +471,8 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   };
 
   // Sends notification of a changed preference. This needs to be called by
-  // a ScopedDictPrefUpdate or ScopedListPrefUpdate if a Value::Dict or
-  // Value::List is changed.
+  // a ScopedDictPrefUpdate or ScopedListPrefUpdate if a base::DictValue or
+  // base::ListValue is changed.
   void ReportUserPrefChanged(const std::string& key);
   void ReportUserPrefChanged(
       const std::string& key,

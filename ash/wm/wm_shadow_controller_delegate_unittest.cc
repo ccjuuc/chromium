@@ -18,11 +18,13 @@
 
 namespace ash {
 
+using chromeos::AppType;
+
 using WmShadowControllerDelegateTest = AshTestBase;
 
 TEST_F(WmShadowControllerDelegateTest,
        UpdateShadowRoundedCornersEnterExitOverview) {
-  auto window = CreateTestWindow();
+  auto window = CreateWindowWithAppType();
 
   auto* window_rounded_corner =
       window->GetProperty(aura::client::kWindowRoundedCornersKey);
@@ -34,23 +36,23 @@ TEST_F(WmShadowControllerDelegateTest,
   // radius with its window.
   auto* shadow = shadow_controller->GetShadowForWindow(window.get());
   EXPECT_TRUE(window_rounded_corner);
-  EXPECT_EQ(shadow->rounded_corner_radius_for_testing(),
+  EXPECT_EQ(shadow->rounded_corners_for_testing().upper_left(),
             window_rounded_corner->upper_left());
 
   // Enter Overview, the shadow's rounded corner radius becomes 0.
   ToggleOverview();
-  EXPECT_EQ(shadow->rounded_corner_radius_for_testing(), 0);
+  EXPECT_EQ(shadow->rounded_corners_for_testing(), gfx::RoundedCornersF());
 
   // Exit Overview, the shadow's rounded corner radius is reset to window
   // rounded corner radius.
   ToggleOverview();
-  EXPECT_EQ(shadow->rounded_corner_radius_for_testing(),
+  EXPECT_EQ(shadow->rounded_corners_for_testing().upper_left(),
             window_rounded_corner->upper_left());
 }
 
 TEST_F(WmShadowControllerDelegateTest,
        AlwaysOnTopWindowsDontHaveShadowsInOverview) {
-  auto window = CreateAppWindow(gfx::Rect(200, 300));
+  auto window = CreateWindowWithAppType(AppType::SYSTEM_APP, {200, 300});
   auto* widget = views::Widget::GetWidgetForNativeWindow(window.get());
   widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
 
@@ -77,11 +79,11 @@ TEST_F(WmShadowControllerDelegateTest, HideShadowForOccludedWindow) {
   constexpr gfx::Rect kBoundsA(200, 300);
   constexpr gfx::Rect kBoundsB(100, 100, 400, 300);
 
-  auto window1 = CreateAppWindow(kBoundsA);
+  auto window1 = CreateWindowWithAppType(AppType::SYSTEM_APP, kBoundsA);
   window1->SetName("w1");
-  auto window2 = CreateAppWindow(kBoundsA);
+  auto window2 = CreateWindowWithAppType(AppType::SYSTEM_APP, kBoundsA);
   window2->SetName("w2");
-  auto window3 = CreateAppWindow(kBoundsB);
+  auto window3 = CreateWindowWithAppType(AppType::SYSTEM_APP, kBoundsB);
   window3->SetName("w3");
 
   auto* shadow1 = shadow_controller->GetShadowForWindow(window1.get());
@@ -126,7 +128,7 @@ TEST_F(WmShadowControllerDelegateTest, ContainerShouldHaveNoShadow) {
 
 TEST_F(WmShadowControllerDelegateTest, ControlShouldHaveNoShadow) {
   auto* shadow_controller = Shell::Get()->shadow_controller();
-  auto window = CreateAppWindow({300, 200});
+  auto window = CreateWindowWithAppType(AppType::SYSTEM_APP, {300, 200});
 
   auto child = views::test::TestWidgetBuilder()
                    .SetParent(window.get())

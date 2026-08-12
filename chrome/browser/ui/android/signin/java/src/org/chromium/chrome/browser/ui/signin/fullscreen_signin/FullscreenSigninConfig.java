@@ -10,6 +10,8 @@ import androidx.annotation.DrawableRes;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncCoordinator;
+import org.chromium.chrome.browser.ui.signin.SigninSurveyController;
 
 import java.util.Objects;
 
@@ -21,8 +23,9 @@ public final class FullscreenSigninConfig {
     public final String dismissText;
     public final @DrawableRes int logoId;
     public final boolean shouldDisableSignin;
-
-    public static final String DISMISS_TEXT_NOT_INITIALIZED = "";
+    public final @Nullable @SigninSurveyController.SigninSurveyType Integer signinSurveyType;
+    public final @Nullable String selectedAccountEmail;
+    public final @SigninAndHistorySyncCoordinator.SigninFlow int signinFlow;
 
     /**
      * Constructor of FullscreenSigninConfig.
@@ -35,22 +38,31 @@ public final class FullscreenSigninConfig {
      * @param shouldDisableSignin Whether the sign-in should always be disabled for sign-in flows
      *     started by the caller. The sign-in screen will show a generic title and a continue
      *     button.
+     * @param surveyType The survey type to use for the sign-in flow.
+     * @param selectedAccountEmail the email of the account to auto-select in the sign-in flow.
+     * @param signinFlow The {@link SigninAndHistorySyncCoordinator.SigninFlow} for the sign-in
+     *     routine.
      */
     public FullscreenSigninConfig(
             String title,
             String subtitle,
             String dismissText,
             @DrawableRes int logoId,
-            boolean shouldDisableSignin) {
+            boolean shouldDisableSignin,
+            @Nullable @SigninSurveyController.SigninSurveyType Integer surveyType,
+            @Nullable String selectedAccountEmail,
+            @SigninAndHistorySyncCoordinator.SigninFlow int signinFlow) {
         assert !TextUtils.isEmpty(title);
         assert !TextUtils.isEmpty(subtitle);
-        // TODO(crbug.com/464416507): Restore the assert that dismissText is not empty once
-        // the FRE_SIGN_IN_ALTERNATIVE_SECONDARY_BUTTON_TEXT flag is cleaned up.
+        assert !TextUtils.isEmpty(dismissText);
         this.title = title;
         this.subtitle = subtitle;
         this.dismissText = dismissText;
         this.logoId = logoId;
         this.shouldDisableSignin = shouldDisableSignin;
+        this.signinSurveyType = surveyType;
+        this.selectedAccountEmail = selectedAccountEmail;
+        this.signinFlow = signinFlow;
     }
 
     @Override
@@ -64,11 +76,22 @@ public final class FullscreenSigninConfig {
                 && Objects.equals(subtitle, other.subtitle)
                 && Objects.equals(dismissText, other.dismissText)
                 && logoId == other.logoId
-                && shouldDisableSignin == other.shouldDisableSignin;
+                && shouldDisableSignin == other.shouldDisableSignin
+                && Objects.equals(signinSurveyType, other.signinSurveyType)
+                && Objects.equals(selectedAccountEmail, other.selectedAccountEmail)
+                && signinFlow == other.signinFlow;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(title, subtitle, dismissText, logoId, shouldDisableSignin);
+        return Objects.hash(
+                title,
+                subtitle,
+                dismissText,
+                logoId,
+                shouldDisableSignin,
+                signinSurveyType,
+                selectedAccountEmail,
+                signinFlow);
     }
 }

@@ -40,22 +40,38 @@
 namespace blink {
 
 EventTarget& EventPath::EventTargetRespectingTargetRules(Node& reference_node) {
-  if (reference_node.IsPseudoElement() &&
-      !reference_node.IsScrollControlPseudoElement() &&
-      !reference_node.IsInterestHintPseudoElement()) {
-    DCHECK(reference_node.parentNode());
-    return *reference_node.parentNode();
+  if (auto* pseudo = DynamicTo<PseudoElement>(reference_node)) {
+    // Pseudos with activation behavior (::scroll-marker, ::scroll-button,
+    // ::interest-button) are kept as event.RawTarget() so their
+    // DefaultEventHandler fires correctly (the handler checks
+    // |event.RawTarget() == this|).
+    // Other pseudos resolve to their originating element.
+    if (!pseudo->HasActivationBehavior()) {
+      if (pseudo->isConnected()) {
+        return pseudo->UltimateOriginatingElement();
+      }
+      // Disconnected pseudo — fall back to the pseudo itself.
+    }
   }
 
   return reference_node;
 }
 
-static inline bool ShouldStopAtShadowRoot(Event& event,
-                                          ShadowRoot& shadow_root,
-                                          EventTarget& target) {
-  // An event is scoped by default unless event.composed flag is set.
-  return !event.composed() && target.ToNode() &&
-         target.ToNode()->OwnerShadowHost() == shadow_root.host();
+// https://dom.spec.whatwg.org/#ref-for-get-the-parent%E2%91%A6
+// A shadow root’s get the parent algorithm, given an event, returns null if
+// event’s composed flag is unset and shadow root is the root of event’s
+// path’s first struct’s invocation target; otherwise shadow root’s host.
+static inline Node* GetShadowRootParent(const ShadowRoot& shadow_root,
+                                        Event* event,
+                                        const Node& target) {
+  if (!event || event->composed()) {
+    return &shadow_root.host();
+  }
+
+  if (&shadow_root != target.ContainingShadowRoot()) {
+    return &shadow_root.host();
+  }
+  return nullptr;
 }
 
 EventPath::EventPath(Node& node, Event* event) : node_(node), event_(event) {
@@ -118,14 +134,12 @@ void EventPath::CalculatePath() {
       }
     }
     if (auto* shadow_root = DynamicTo<ShadowRoot>(current)) {
-      if (event_ && ShouldStopAtShadowRoot(*event_, *shadow_root, *node_))
-        break;
-      current = current->OwnerShadowHost();
-      nodes_in_path.push_back(current);
+      current = GetShadowRootParent(*shadow_root, event_, *node_);
     } else {
       current = current->parentNode();
-      if (current)
-        nodes_in_path.push_back(current);
+    }
+    if (current) {
+      nodes_in_path.push_back(current);
     }
   }
   node_event_contexts_ = HeapVector<NodeEventContext>(

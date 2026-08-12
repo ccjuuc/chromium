@@ -4,9 +4,12 @@
 
 #include "android_webview/browser/aw_render_process.h"
 
+#include "android_webview/browser/aw_render_process_keep_alive.h"
 #include "android_webview/common/aw_features.h"
+#include "base/android/child_process_binding_types.h"
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/metrics/histogram_functions.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "ipc/ipc_channel_proxy.h"
@@ -72,6 +75,10 @@ void AwRenderProcess::SetJsOnlineProperty(bool network_up) {
   GetRendererRemote()->SetJsOnlineProperty(network_up);
 }
 
+void AwRenderProcess::PrefetchNativeLibrary() {
+  GetRendererRemote()->PrefetchNativeLibrary();
+}
+
 // static
 void AwRenderProcess::SetRenderViewReady(content::RenderProcessHost* host) {
   host->SetUserData(kAwRenderViewReadyKey,
@@ -87,7 +94,7 @@ void AwRenderProcess::Ready() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   Java_AwRenderProcess_setNative(AttachCurrentThread(), java_obj_,
-                                 reinterpret_cast<jlong>(this));
+                                 reinterpret_cast<int64_t>(this));
 }
 
 void AwRenderProcess::Cleanup() {
@@ -95,9 +102,7 @@ void AwRenderProcess::Cleanup() {
 
   // If the process was never used, keep the same Java object to satisfy CTS
   // tests.
-  if (base::FeatureList::IsEnabled(
-          features::kCreateSpareRendererOnBrowserContextCreation) &&
-      IsUnused(render_process_host_)) {
+  if (IsUnused(render_process_host_)) {
     renderer_remote_.reset();
     return;
   }
@@ -115,12 +120,23 @@ bool AwRenderProcess::TerminateChildProcess(JNIEnv* env) {
   // If the process has never been used, this is the spare render process.
   // Treat this as if it never existed since it's an internal performance
   // optimization.
-  if (base::FeatureList::IsEnabled(
-          features::kCreateSpareRendererOnBrowserContextCreation) &&
-      result && IsUnused(render_process_host_)) {
+  if (result && IsUnused(render_process_host_)) {
     // Use fast shutdown for the unused process to allow loadUrl() calls to work
     // immediately after the terminate call.
-    render_process_host_->FastShutdownIfPossible();
+    bool ignore_pending_reuse = false;
+    if (base::FeatureList::IsEnabled(features::kWebViewRendererKeepAlive)) {
+      ignore_pending_reuse =
+          AwRenderProcessKeepAlive::GetInstanceForRenderProcessHost(
+              render_process_host_)
+              ->kept_alive();
+    }
+    render_process_host_->FastShutdownIfPossible(
+        /*page_count=*/0,
+        /*skip_unload_handlers=*/false,
+        /*ignore_workers=*/false,
+        /*ignore_keep_alive=*/false,
+        /*ignore_pending_reuse=*/ignore_pending_reuse);
+
     return false;
   }
 
@@ -131,6 +147,12 @@ bool AwRenderProcess::IsProcessLockedToSiteForTesting(JNIEnv* env) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   return render_process_host_->IsProcessLockedToSiteForTesting();  // IN-TEST
+}
+
+base::android::ChildBindingState AwRenderProcess::GetEffectiveChildBindingState(
+    JNIEnv* env) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  return render_process_host_->GetEffectiveChildBindingState();
 }
 
 base::android::ScopedJavaLocalRef<jobject> AwRenderProcess::GetJavaObject() {

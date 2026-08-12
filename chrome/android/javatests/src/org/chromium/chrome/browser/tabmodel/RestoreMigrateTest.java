@@ -27,6 +27,7 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.FileUtils;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.util.AdvancedMockContext;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
@@ -65,7 +66,9 @@ public class RestoreMigrateTest {
                 ThreadUtils.runOnUiThreadBlocking(
                         () ->
                                 TabPersistentStoreImpl.extractTabMetadataFromSelector(
-                                        selector, /* tabsBeingRestored= */ null));
+                                        selector,
+                                        /* tabsBeingRestored= */ null,
+                                        /* isRecreating= */ false));
 
         File f = TabStateDirectory.getOrCreateTabbedModeStateDirectory();
         TabMetadataFileManager.saveListToFile(
@@ -122,7 +125,8 @@ public class RestoreMigrateTest {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.TABMODEL_HAS_RUN_FILE_MIGRATION, false);
         TabbedModeTabPersistencePolicy.resetMigrationTaskForTesting();
-        TabWindowManagerSingleton.resetTabModelSelectorFactoryForTesting();
+        ThreadUtils.runOnUiThreadBlocking(
+                TabWindowManagerSingleton::resetTabModelSelectorFactoryForTesting);
     }
 
     private TabPersistentStoreImpl buildTabPersistentStore(
@@ -130,14 +134,20 @@ public class RestoreMigrateTest {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     TabPersistencePolicy persistencePolicy =
-                            new TabbedModeTabPersistencePolicy(selectorIndex, false, true);
+                            new TabbedModeTabPersistencePolicy(
+                                    selectorIndex,
+                                    false,
+                                    true,
+                                    ObservableSuppliers.createNonNull(false));
                     return new TabPersistentStoreImpl(
                             TabPersistentStoreImpl.CLIENT_TAG_REGULAR,
                             persistencePolicy,
                             selector,
                             null,
                             TabWindowManagerSingleton.getInstance(),
-                            mCipherFactory);
+                            mCipherFactory,
+                            /* isAuthoritative= */ true,
+                            /* recordLegacyTabCountMetrics= */ true);
                 });
     }
 
@@ -312,7 +322,7 @@ public class RestoreMigrateTest {
         TabPersistentStore storeIn = buildTabPersistentStore(selectorIn, 0);
 
         int maxId = Math.max(getMaxId(selector0), getMaxId(selector1));
-        storeIn.loadState(/* ignoreIncognitoFiles= */ false);
+        storeIn.loadState(/* ignoreIncognitoFiles= */ false, /* ignoreRegularFiles= */ false);
         assertEquals(
                 "Invalid next id",
                 maxId + 1,
@@ -346,8 +356,8 @@ public class RestoreMigrateTest {
 
         TabPersistentStore storeIn1 = buildTabPersistentStore(selectorIn1, 1);
 
-        storeIn0.loadState(/* ignoreIncognitoFiles= */ false);
-        storeIn1.loadState(/* ignoreIncognitoFiles= */ false);
+        storeIn0.loadState(/* ignoreIncognitoFiles= */ false, /* ignoreRegularFiles= */ false);
+        storeIn1.loadState(/* ignoreIncognitoFiles= */ false, /* ignoreRegularFiles= */ false);
 
         assertEquals("Unexpected number of tabs to load", 6, storeIn0.getRestoredTabCount());
         assertEquals("Unexpected number of tabs to load", 3, storeIn1.getRestoredTabCount());

@@ -11,9 +11,9 @@
 #include <optional>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/dcheck_is_on.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
@@ -71,7 +71,7 @@ static std::unique_ptr<ui::GbmDevice> CreateGbmDevice(
         base::StrCat({drm_node_file_prefix, base::NumberToString(i)})));
 
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC)
-    const bool is_render_node = base::Contains(drm_node_file_prefix, "render");
+    const bool is_render_node = drm_node_file_prefix.contains("render");
 
     // TODO(b/313513760): don't guard base::File::FLAG_WRITE behind
     // BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC) once the hardware video
@@ -170,36 +170,42 @@ class GbmDeviceWrapper {
 
  private:
   GbmDeviceWrapper() {
-    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kRenderNodeOverride)) {
-      const base::FilePath dev_path(
-          base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
-              switches::kRenderNodeOverride));
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC)
-      const bool is_render_node = base::Contains(dev_path.value(), "render");
-
-      // TODO(b/313513760): don't guard base::File::FLAG_WRITE behind
-      // BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC) once the hardware
-      // video decoding sandbox allows R+W access to the render nodes.
-      // base::File::FLAG_WRITE is needed on Linux for gbm_create_device().
-      const uint32_t kDrmNodeFileFlags =
-          base::File::FLAG_OPEN | base::File::FLAG_READ |
-          (is_render_node ? base::File::FLAG_WRITE : 0);
-#else
-      const uint32_t kDrmNodeFileFlags =
-          base::File::FLAG_OPEN | base::File::FLAG_READ;
+    const auto dev_paths = std::to_array<base::FilePath>({
+#if BUILDFLAG(USE_VAAPI)
+        // This switch only affects VAAPI, V4L2 does not use a unified device.
+        base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+            switches::kHardwareVideoDevicePath),
 #endif
-      base::File drm_node_file(dev_path, kDrmNodeFileFlags);
-      if (drm_node_file.IsValid()) {
-        // GbmDevice expects its owner to keep |drm_node_file| open during the
-        // former's lifetime. We give it away here since GbmDeviceWrapper is a
-        // singleton that fully owns |gbm_device|.
-        gbm_device_ = ui::CreateGbmDevice(drm_node_file.GetPlatformFile());
-        if (gbm_device_) {
-          drm_node_file.TakePlatformFile();
+        base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+            switches::kRenderNodeOverride)});
+    for (const auto& dev_path : dev_paths) {
+      if (!dev_path.empty()) {
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC)
+        const bool is_render_node = dev_path.value().contains("render");
+
+        // TODO(b/313513760): don't guard base::File::FLAG_WRITE behind
+        // BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_V4L2_CODEC) once the hardware
+        // video decoding sandbox allows R+W access to the render nodes.
+        // base::File::FLAG_WRITE is needed on Linux for gbm_create_device().
+        const uint32_t kDrmNodeFileFlags =
+            base::File::FLAG_OPEN | base::File::FLAG_READ |
+            (is_render_node ? base::File::FLAG_WRITE : 0);
+#else
+        const uint32_t kDrmNodeFileFlags =
+            base::File::FLAG_OPEN | base::File::FLAG_READ;
+#endif
+        base::File drm_node_file(dev_path, kDrmNodeFileFlags);
+        if (drm_node_file.IsValid()) {
+          // GbmDevice expects its owner to keep |drm_node_file| open during the
+          // former's lifetime. We give it away here since GbmDeviceWrapper is a
+          // singleton that fully owns |gbm_device|.
+          gbm_device_ = ui::CreateGbmDevice(drm_node_file.GetPlatformFile());
+          if (gbm_device_) {
+            drm_node_file.TakePlatformFile();
+          }
         }
+        return;
       }
-      return;
     }
 
     constexpr char kRenderNodeFilePrefix[] = "/dev/dri/renderD";
@@ -213,11 +219,11 @@ class GbmDeviceWrapper {
       return;
     }
 
-    // For V4L2 testing with VISL, dumb driver is used with vkms for minigbm
-    // backend. In this case, the primary node needs to be used instead of the
-    // render node.
+    // For V4L2/VAAPI testing with VISL or libfake (virtual drivers), the dumb
+    // driver is used with vkms for minigbm backend. In this case, the primary
+    // node needs to be used instead of the render node.
     // TODO(b/316993034): Remove this when having a render node for vkms.
-#if BUILDFLAG(USE_V4L2_CODEC)
+#if BUILDFLAG(USE_V4L2_CODEC) || BUILDFLAG(USE_VAAPI)
     const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
     CHECK(cmd_line);
 
@@ -364,8 +370,9 @@ void UniqueTrackingTokenHelper::SetUniqueTrackingToken(
   metadata.tracking_token = GenerateToken();
 }
 
-scoped_refptr<VideoFrame> CreateMappableVideoFrame(
+scoped_refptr<VideoFrame> CreateMappableSharedImageVideoFrame(
     VideoPixelFormat pixel_format,
+    const gfx::ColorSpace& color_space,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
@@ -380,13 +387,14 @@ scoped_refptr<VideoFrame> CreateMappableVideoFrame(
   }
 
   return CreateVideoFrameFromGpuMemoryBufferHandle(
-      std::move(gmb_handle), pixel_format, coded_size, visible_rect,
-      natural_size, timestamp, buffer_usage, sii);
+      std::move(gmb_handle), pixel_format, color_space, coded_size,
+      visible_rect, natural_size, timestamp, buffer_usage, sii);
 }
 
 scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
     gfx::GpuMemoryBufferHandle gmb_handle,
     VideoPixelFormat pixel_format,
+    const gfx::ColorSpace& color_space,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
@@ -403,17 +411,21 @@ scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
   const auto si_usage = gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY |
                         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
   auto shared_image = sii->CreateSharedImage(
-      {*si_format, coded_size, gfx::ColorSpace(),
-       gpu::SharedImageUsageSet(si_usage), "PlatformVideoFrameUtils"},
+      {*si_format, coded_size, color_space, gpu::SharedImageUsageSet(si_usage),
+       "PlatformVideoFrameUtils"},
       gpu::kNullSurfaceHandle, buffer_usage, std::move(gmb_handle));
+  auto creation_sync_token = shared_image->creation_sync_token();
+  sii->VerifySyncToken(creation_sync_token);
 
   auto video_frame = media::VideoFrame::WrapMappableSharedImage(
-      std::move(shared_image), sii->GenVerifiedSyncToken(),
-      base::NullCallback(), visible_rect, natural_size, timestamp);
+      std::move(shared_image), creation_sync_token, base::NullCallback(),
+      visible_rect, natural_size, timestamp);
 
   if (!video_frame) {
     return nullptr;
   }
+
+  video_frame->set_color_space(color_space);
 
   // We only support importing non-DISJOINT multi-planar GbmBuffer right now.
   // TODO(crbug.com/40201271): Add DISJOINT support.
@@ -517,7 +529,9 @@ gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
       for (size_t i = 0; i < num_planes; ++i) {
         const auto& plane = video_frame->layout().planes()[i];
         native_pixmap_handle.planes.emplace_back(
-            plane.stride, plane.offset, plane.size, std::move(duped_fds[i]));
+            base::checked_cast<uint32_t>(plane.stride),
+            base::strict_cast<uint64_t>(plane.offset),
+            base::strict_cast<uint64_t>(plane.size), std::move(duped_fds[i]));
       }
       handle = gfx::GpuMemoryBufferHandle(std::move(native_pixmap_handle));
     } break;
@@ -528,14 +542,11 @@ gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
   CHECK_EQ(handle.type, gfx::NATIVE_PIXMAP);
   if (video_frame->format() == PIXEL_FORMAT_MJPEG)
     return handle;
-#if DCHECK_IS_ON()
-  const bool is_handle_valid =
-      !handle.is_null() &&
-      VerifyGpuMemoryBufferHandle(video_frame->format(),
-                                  video_frame->coded_size(), handle);
-  DLOG_IF(WARNING, !is_handle_valid)
-      << __func__ << "(): Created GpuMemoryBufferHandle is invalid";
-#endif  // DCHECK_IS_ON()
+  if (!VerifyGpuMemoryBufferHandle(video_frame->format(),
+                                   video_frame->coded_size(), handle)) {
+    LOG(ERROR) << __func__ << "(): Created GpuMemoryBufferHandle is invalid";
+    return gfx::GpuMemoryBufferHandle();
+  }
   return handle;
 }
 

@@ -26,6 +26,7 @@
 #include "base/mac/authorization_util.h"
 #include "base/mac/scoped_authorizationref.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/strings/strcat.h"
@@ -44,6 +45,7 @@
 #include "chrome/updater/constants.h"
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
+#include "components/activity_reporter/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -52,6 +54,13 @@ namespace updater {
 namespace {
 
 constexpr char kInstallCommand[] = "install";
+
+// Return whether the app bundle's Info.plist contains a KSProductID value. May
+// block.
+bool BrowserHasKSProductID() {
+  return [base::apple::OuterBundle()
+             objectForInfoDictionaryKey:@"KSProductID"] != nil;
+}
 
 base::FilePath GetUpdaterExecutablePath() {
   return base::FilePath(base::StrCat({kUpdaterName, ".app"}))
@@ -201,8 +210,10 @@ void InstallUpdaterAndRegisterBrowser(base::TaskPriority priority,
           std::move(complete)));
 }
 
+}  // namespace
+
 // Marks the browser as active, and schedules a call 1 hour later to mark the
-// browser as active again.
+// browser as active again, when using the legacy active definition.
 void SetActive() {
   base::FilePath actives_dir =
       base::GetHomeDir()
@@ -214,14 +225,16 @@ void SetActive() {
     return;
   }
   base::WriteFile(actives_dir.Append(base::apple::BaseBundleID()), "");
+#if BUILDFLAG(USE_LEGACY_ACTIVE_DEFINITION)
+  // Only SetActive in a loop on macOS when using the legacy definition; the
+  // non-legacy definition will always call SetActive when appropriate.
   base::ThreadPool::PostDelayedTask(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
       base::BindOnce(&SetActive), base::Hours(1));
+#endif
 }
-
-}  // namespace
 
 base::Version CurrentlyInstalledVersion() {
   base::ScopedBlockingCall blocks(FROM_HERE, base::BlockingType::WILL_BLOCK);
@@ -243,20 +256,32 @@ UpdaterScope GetBrowserUpdaterScope() {
 void EnsureUpdater(base::TaskPriority priority,
                    base::OnceClosure prompt,
                    base::OnceClosure complete) {
+#if BUILDFLAG(USE_LEGACY_ACTIVE_DEFINITION)
   base::ThreadPool::PostTask(FROM_HERE,
                              {base::MayBlock(), priority,
                               base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
                              base::BindOnce(&SetActive));
+#endif
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), priority,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-      base::BindOnce(&GetBrowserUpdaterScope),
+      base::BindOnce([] {
+        return BrowserHasKSProductID()
+                   ? std::make_optional(GetBrowserUpdaterScope())
+                   : std::nullopt;
+      }),
       base::BindOnce(
           [](base::TaskPriority priority, base::OnceClosure prompt,
-             base::OnceClosure complete, UpdaterScope scope) {
+             base::OnceClosure complete, std::optional<UpdaterScope> scope) {
+            if (!scope) {
+              // In the case of missing KSProductID, skip integration with
+              // the updater altogether.
+              std::move(complete).Run();
+              return;
+            }
             scoped_refptr<BrowserUpdaterClient> client =
-                BrowserUpdaterClient::Create(scope);
+                BrowserUpdaterClient::Create(*scope);
             client->IsBrowserRegistered(base::BindOnce(
                 [](scoped_refptr<BrowserUpdaterClient> client,
                    base::TaskPriority priority, base::OnceClosure prompt,
@@ -302,6 +327,8 @@ void EnsureUpdater(base::TaskPriority priority,
 }
 
 void SetUpSystemUpdater() {
+  base::UmaHistogramBoolean("GoogleUpdate.MacOS.SetUpSystemUpdaterCalled",
+                            true);
   NSString* prompt = l10n_util::GetNSStringFWithFixup(
       IDS_PROMOTE_AUTHENTICATION_PROMPT,
       l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
@@ -314,10 +341,15 @@ void SetUpSystemUpdater() {
   }
 
   base::apple::ScopedCFTypeRef<CFErrorRef> error;
-  Boolean result =
-      SMJobBless(kSMDomainSystemLaunchd,
-                 base::SysUTF8ToCFStringRef(kPrivilegedHelperName).get(),
-                 authorization, error.InitializeInto());
+  Boolean result = false;
+  // TODO(crbug.com/519500401): Migrate away from SMJobBless, which was
+  // deprecated in macOS 13.0, and use SMAppService instead.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  result = SMJobBless(kSMDomainSystemLaunchd,
+                      base::SysUTF8ToCFStringRef(kPrivilegedHelperName).get(),
+                      authorization, error.InitializeInto());
+#pragma clang diagnostic pop
   if (!result) {
     base::apple::ScopedCFTypeRef<CFStringRef> desc(
         CFErrorCopyDescription(error.get()));

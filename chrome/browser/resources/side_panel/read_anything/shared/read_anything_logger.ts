@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {isEspeak, isNatural} from '../read_aloud/voice_language_conversions.js';
+import {hasEspeakIdentifier, hasNaturalIdentifier} from '../read_aloud/voice_language_conversions.js';
 
-import {MetricsBrowserProxyImpl, ReadAnythingSpeechError, ReadAnythingVoiceType} from './metrics_browser_proxy.js';
-import type {MetricsBrowserProxy, ReadAloudSettingsChange, ReadAnythingSettingsChange} from './metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, ReadAnythingSpeechError, ReadAnythingVoiceType, UmaName} from './metrics_browser_proxy.js';
+import type {MetricsBrowserProxy, ReadAloudSettingsChange, ReadAnythingSettingsAction, ReadAnythingSettingsChange} from './metrics_browser_proxy.js';
 
 export enum TimeFrom {
   APP = 'App',
@@ -17,13 +17,53 @@ export enum SpeechControls {
   PAUSE = 'Pause',
   NEXT = 'NextButton',
   PREVIOUS = 'PreviousButton',
+  PLAY_FROM_SELECTION = 'PlayFromSelection',
+  PLAY_FROM_LINE_FOCUS = 'PlayFromLineFocus',
+}
+
+export enum LinkStatus {
+  SUCCESS = 'Success',
+  NO_HREF = 'NoHref',
+  NO_MATCH = 'NoMatch',
+  TOO_MANY_MATCHES = 'TooManyMatches',
+}
+
+export enum PageType {
+  PDF = 'PDF',
+  WEB_PAGE = 'WebPage',
+}
+
+export enum ViewMode {
+  FULL_PAGE = 'FullPage',
+  SIDE_PANEL = 'SidePanel',
 }
 
 // Handles the business logic for logging.
 export class ReadAnythingLogger {
   private metrics: MetricsBrowserProxy = MetricsBrowserProxyImpl.getInstance();
+  // When this class is first instantiated, it will be because reading mode
+  // is visible, so isHidden_ should be false be default.
+  private isHidden_: boolean = false;
+  private hasUnloggedDistillation_: boolean = false;
+  private savedWordCountContainer_: Element|null = null;
+  private keyPointsRegex_: RegExp|null = null;
+
+  setHidden(hidden: boolean) {
+    const wasHidden = this.isHidden_;
+    this.isHidden_ = hidden;
+
+    if (wasHidden && !hidden && this.hasUnloggedDistillation_ &&
+        this.savedWordCountContainer_) {
+      this.logDistilledPageStructure(this.savedWordCountContainer_);
+    }
+  }
 
   logEmptyState() {
+    // Don't log the empty state if the UI is hidden;
+    if (this.isHidden_) {
+      return;
+    }
+
     this.metrics.recordEmptyState();
   }
 
@@ -61,6 +101,12 @@ export class ReadAnythingLogger {
       case 'network':
         error = ReadAnythingSpeechError.NETWORK;
         break;
+      case 'timeout-engine-stalled':
+        error = ReadAnythingSpeechError.TIMEOUT_ENGINE_STALLED;
+        break;
+      case 'timeout-stalled-after-recovery':
+        error = ReadAnythingSpeechError.TIMEOUT_STALLED_AFTER_ENGINE_RECOVERY;
+        break;
       default:
         return;
     }
@@ -71,12 +117,16 @@ export class ReadAnythingLogger {
   }
 
   logTimeFrom(from: TimeFrom, startTime: number, endTime: number) {
-    const umaName = 'Accessibility.ReadAnything.' +
-        'TimeFrom' + from + 'StartedToConstructor';
+    const umaName =
+        `Accessibility.ReadAnything.TimeFrom${from}StartedToConstructor`;
     this.metrics.recordTime(umaName, endTime - startTime);
   }
 
   logNewPage(speechPlayed: boolean) {
+    // Don't log the new page if the UI is hidden.
+    if (this.isHidden_) {
+      return;
+    }
     speechPlayed ? this.metrics.recordNewPageWithSpeech() :
                    this.metrics.recordNewPage();
   }
@@ -85,15 +135,24 @@ export class ReadAnythingLogger {
     this.metrics.recordHighlightGranularity(highlight);
   }
 
+  logVoiceLanguageChange(
+      currentVoice: SpeechSynthesisVoice|null,
+      newVoice: SpeechSynthesisVoice|null) {
+    if (currentVoice && newVoice &&
+        (currentVoice.lang.toLowerCase() !== newVoice.lang.toLowerCase())) {
+      this.metrics.recordVoiceLanguageChange();
+    }
+  }
+
   private logVoiceTypeUsedForReading_(voice: SpeechSynthesisVoice|null) {
     if (!voice) {
       return;
     }
 
     let voiceType: ReadAnythingVoiceType;
-    if (isNatural(voice)) {
+    if (hasNaturalIdentifier(voice)) {
       voiceType = ReadAnythingVoiceType.NATURAL;
-    } else if (isEspeak(voice)) {
+    } else if (hasEspeakIdentifier(voice)) {
       voiceType = ReadAnythingVoiceType.ESPEAK;
     } else {
       // <if expr="is_chromeos">
@@ -130,6 +189,10 @@ export class ReadAnythingLogger {
     this.metrics.recordLanguage(langToLog);
   }
 
+  logSettingsAction(settingsAction: ReadAnythingSettingsAction) {
+    this.metrics.recordSettingsAction(settingsAction);
+  }
+
   logTextSettingsChange(settingsChange: ReadAnythingSettingsChange) {
     this.metrics.recordTextSettingsChange(settingsChange);
   }
@@ -145,18 +208,214 @@ export class ReadAnythingLogger {
   logSpeechPlaySession(startTime: number, voice: SpeechSynthesisVoice|null) {
     this.logVoiceTypeUsedForReading_(voice);
     this.logLanguageUsedForReading_(voice?.lang);
-    this.metrics.recordSpeechPlaybackLength(Date.now() - startTime);
+
+    const playbackTime = Date.now() - startTime;
+    this.metrics.recordSpeechPlaybackLengthLegacy(playbackTime);
+    if (!chrome.readingMode.isImmersiveEnabled) {
+      return;
+    }
+
+    const activePresentationState = chrome.readingMode.activePresentationState;
+    const isImmersiveState = activePresentationState ===
+        chrome.readingMode.inImmersiveOverlayPresentationState;
+    if (!isImmersiveState &&
+        activePresentationState !==
+            chrome.readingMode.inSidePanelPresentationState) {
+      return;
+    }
+
+    const pageType =
+        chrome.readingMode.isPdf ? PageType.PDF : PageType.WEB_PAGE;
+    const viewMode =
+        isImmersiveState ? ViewMode.FULL_PAGE : ViewMode.SIDE_PANEL;
+    const umaName = `${UmaName.SPEECH_PLAYBACK}.${pageType}In${viewMode}`;
+    this.metrics.recordSpeechPlaybackLength(umaName, playbackTime);
   }
 
   logSpeechControlClick(control: SpeechControls) {
     this.metrics.incrementMetricCount(
-        'Accessibility.ReadAnything.ReadAloud' + control + 'SessionCount');
+        `Accessibility.ReadAnything.ReadAloud${control}SessionCount`);
   }
 
   logLineFocusSession() {
     if (chrome.readingMode.isLineFocusEnabled) {
       this.metrics.recordLineFocusSession();
     }
+  }
+
+  logLineFocusToggled(enabled: boolean) {
+    if (chrome.readingMode.isLineFocusEnabled) {
+      this.metrics.recordLineFocusToggled(enabled);
+    }
+  }
+
+  logLinkStatusCount(status: LinkStatus, count: number) {
+    const umaName =
+        `Accessibility.ReadAnything.Readability.PageLinks${status}Count`;
+    this.metrics.recordCount(umaName, count);
+  }
+
+  logDistilledPageStructure(wordCountContainer: Element) {
+    if (this.isHidden_) {
+      this.hasUnloggedDistillation_ = true;
+      this.savedWordCountContainer_ = wordCountContainer;
+      return;
+    }
+
+    this.hasUnloggedDistillation_ = false;
+    this.savedWordCountContainer_ = null;
+
+    const paragraphs = wordCountContainer.querySelectorAll('p');
+    const headerCounts = ReadAnythingLogger.getHeaderCounts(wordCountContainer);
+
+    this.logOverallStructureMetrics_(headerCounts, paragraphs.length);
+    this.logTopTwoHeaderMetrics_(headerCounts);
+    if (chrome.readingMode.isPdf) {
+      this.logPdfDistilledPageStructure_(headerCounts, paragraphs.length);
+    }
+
+    this.logEnglishKeyPointsMetrics_(wordCountContainer);
+  }
+
+  private logEnglishKeyPointsMetrics_(wordCountContainer: Element) {
+    const lang = chrome.readingMode.baseLanguageForSpeech;
+    if (!lang || !lang.toLowerCase().startsWith('en')) {
+      return;
+    }
+
+    // Skip h1s as those are likely page titles.
+    const potentialKeyPointsContainers = wordCountContainer.querySelectorAll(
+        'h2, h3, h4, h5, h6, button, summary');
+    let maybeHasKeyPoints = false;
+    const regex = this.getKeyPointsRegex_();
+
+    for (const node of potentialKeyPointsContainers) {
+      const text = node.textContent || '';
+
+      if (regex.test(text)) {
+        maybeHasKeyPoints = true;
+        break;
+      }
+    }
+    this.metrics.recordBoolean(
+        'Accessibility.ReadAnything.PageStructure.EnglishKeyPointsInReadingMode',
+        maybeHasKeyPoints);
+
+    const maybeHasKeyPointsOnPage =
+        chrome.readingMode.maybeHasKeyPointsSection();
+    this.metrics.recordBoolean(
+        'Accessibility.ReadAnything.PageStructure.EnglishKeyPointsOnPage',
+        maybeHasKeyPointsOnPage);
+  }
+
+  private logOverallStructureMetrics_(
+      headerCounts: Array<{tag: string, count: number}>,
+      paragraphCount: number) {
+    // The total number of distilled headers.
+    const totalHeaderCount =
+        headerCounts.reduce((sum, item) => sum + item.count, 0);
+    this.metrics.recordCount(UmaName.TOTAL_HEADER_COUNT, totalHeaderCount);
+
+    // The number of unique header tags present.
+    const uniqueHeaderTags = headerCounts.filter(item => item.count > 0).length;
+    this.metrics.recordCount(UmaName.UNIQUE_HEADER_TAGS, uniqueHeaderTags);
+
+    // Log the number of paragraphs.
+    this.metrics.recordCount(UmaName.NUMBER_PARAGRAPHS, paragraphCount);
+
+    if (paragraphCount > 0) {
+      // The ratio of headings to paragraphs, scaled by 100.
+      const headingToParagraphRatio =
+          Math.round((totalHeaderCount / paragraphCount) * 100);
+      this.metrics.recordCount(
+          UmaName.HEADING_TO_PARAGRAPH_RATIO, headingToParagraphRatio);
+    }
+  }
+
+  // The "top two" headers in a hierarchy represent the first two non-zero
+  // header tags present in the hierarchy. e.g. if there are 5 h1 tags,
+  // 4 h2 tags, and 20 h3 tags, the top two header count would be h1 + h2 = 9.
+  // There's an exception for h1 tags. Since the h1 tag is often used for
+  // the title, it is excluded from being counted as one of the top two headers
+  // if there is exactly one h1 tag present, as that means it's likely being
+  // used as a title. headerCounts is assumed to be already sorted in order of hierarchy
+  // based on how it was originally created from getHeaderCounts.
+  private logTopTwoHeaderMetrics_(
+      headerCounts: Array<{tag: string, count: number}>) {
+    let hierarchy = [...headerCounts];
+    const h1Count = headerCounts.find(item => item.tag === 'h1')?.count ?? 0;
+    if (h1Count === 1) {
+      hierarchy = hierarchy.filter(item => item.tag !== 'h1');
+    }
+    const presentHeaders = hierarchy.filter(item => item.count > 0);
+
+    let topTwoHeadersCount = 0;
+    if (presentHeaders.length > 0) {
+      topTwoHeadersCount += presentHeaders[0]!.count;
+    }
+    if (presentHeaders.length > 1) {
+      topTwoHeadersCount += presentHeaders[1]!.count;
+    }
+    this.metrics.recordCount(UmaName.TOP_TWO_HEADERS_COUNT, topTwoHeadersCount);
+
+    let topTwoHeadersHaveMinimumTwoItems = false;
+    if (presentHeaders.length >= 2) {
+      topTwoHeadersHaveMinimumTwoItems =
+          presentHeaders[0]!.count >= 2 && presentHeaders[1]!.count >= 2;
+    }
+    this.metrics.recordBoolean(
+        UmaName.TOP_TWO_HEADERS_HAVE_MINIMUM_TWO_ITEMS,
+        topTwoHeadersHaveMinimumTwoItems);
+
+    if (presentHeaders.length >= 2 && presentHeaders[1]!.count > 0) {
+      // The ratio of the top level to the second top level header, scaled by
+      // 100.
+      const topTwoHeadingRatio = Math.round(
+          (presentHeaders[0]!.count / presentHeaders[1]!.count) * 100);
+      this.metrics.recordCount(
+          UmaName.TOP_TWO_HEADING_RATIO, topTwoHeadingRatio);
+    }
+  }
+
+  private logPdfDistilledPageStructure_(
+      headerCounts: Array<{tag: string, count: number}>,
+      paragraphCount: number) {
+    for (const header of headerCounts) {
+      const headingLevel = header.tag.toUpperCase();
+      this.metrics.recordCount(
+          `Accessibility.ReadAnything.Pdf.Headings.${headingLevel}`,
+          header.count);
+    }
+    this.metrics.recordCount(UmaName.PDF_NUMBER_PARAGRAPHS, paragraphCount);
+
+    if (paragraphCount > 0) {
+      const totalHeaderCount =
+          headerCounts.reduce((sum, item) => sum + item.count, 0);
+      const headingToParagraphRatio =
+          Math.round((totalHeaderCount / paragraphCount) * 100);
+      this.metrics.recordCount(
+          UmaName.PDF_HEADING_TO_PARAGRAPH_RATIO, headingToParagraphRatio);
+    }
+  }
+
+  static getHeaderCounts(wordCountContainer: Element):
+      Array<{tag: string, count: number}> {
+    return [
+      {tag: 'h1', count: wordCountContainer.querySelectorAll('h1').length},
+      {tag: 'h2', count: wordCountContainer.querySelectorAll('h2').length},
+      {tag: 'h3', count: wordCountContainer.querySelectorAll('h3').length},
+      {tag: 'h4', count: wordCountContainer.querySelectorAll('h4').length},
+      {tag: 'h5', count: wordCountContainer.querySelectorAll('h5').length},
+      {tag: 'h6', count: wordCountContainer.querySelectorAll('h6').length},
+    ];
+  }
+
+  private getKeyPointsRegex_(): RegExp {
+    if (!this.keyPointsRegex_) {
+      const regexStr = chrome.readingMode.getKeyPointsRegex();
+      this.keyPointsRegex_ = new RegExp(regexStr, 'i');
+    }
+    return this.keyPointsRegex_;
   }
 
   static getInstance(): ReadAnythingLogger {

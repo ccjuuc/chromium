@@ -6,12 +6,12 @@
 
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/base64.h"
 #include "base/check.h"
 #include "base/logging.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/scoped_user_pref_update.h"
 
@@ -26,10 +26,10 @@ constexpr char kUseKerberosKey[] = "use_kerberos";
 constexpr char kPasswordSaltKey[] = "password_salt";
 
 base::Value ShareToDict(const SmbShareInfo& share) {
-  base::Value::Dict dict = base::Value::Dict()
-                               .Set(kShareUrlKey, share.share_url().ToString())
-                               .Set(kDisplayNameKey, share.display_name())
-                               .Set(kUseKerberosKey, share.use_kerberos());
+  base::DictValue dict = base::DictValue()
+                             .Set(kShareUrlKey, share.share_url().ToString())
+                             .Set(kDisplayNameKey, share.display_name())
+                             .Set(kUseKerberosKey, share.use_kerberos());
   if (!share.username().empty()) {
     dict.Set(kUsernameKey, share.username());
   }
@@ -44,7 +44,7 @@ base::Value ShareToDict(const SmbShareInfo& share) {
   return base::Value(std::move(dict));
 }
 
-std::string GetStringValue(const base::Value::Dict& dict,
+std::string GetStringValue(const base::DictValue& dict,
                            const std::string& key) {
   const std::string* value = dict.FindString(key);
   if (!value) {
@@ -53,7 +53,7 @@ std::string GetStringValue(const base::Value::Dict& dict,
   return *value;
 }
 
-std::vector<uint8_t> GetEncodedBinaryValue(const base::Value::Dict& dict,
+std::vector<uint8_t> GetEncodedBinaryValue(const base::DictValue& dict,
                                            const std::string& key) {
   const std::string* encoded_value = dict.FindString(key);
   if (!encoded_value) {
@@ -68,7 +68,7 @@ std::vector<uint8_t> GetEncodedBinaryValue(const base::Value::Dict& dict,
   return {decoded_value.begin(), decoded_value.end()};
 }
 
-std::optional<SmbShareInfo> DictToShare(const base::Value::Dict& dict) {
+std::optional<SmbShareInfo> DictToShare(const base::DictValue& dict) {
   std::string share_url = GetStringValue(dict, kShareUrlKey);
   if (share_url.empty()) {
     return {};
@@ -89,7 +89,7 @@ std::optional<SmbShareInfo> DictToShare(const base::Value::Dict& dict) {
 // static
 void SmbPersistedShareRegistry::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterListPref(prefs::kNetworkFileSharesSavedShares);
+  registry->RegisterListPref(ash::prefs::kNetworkFileSharesSavedShares);
 }
 
 SmbPersistedShareRegistry::SmbPersistedShareRegistry(Profile* profile)
@@ -97,9 +97,9 @@ SmbPersistedShareRegistry::SmbPersistedShareRegistry(Profile* profile)
 
 void SmbPersistedShareRegistry::Save(const SmbShareInfo& share) {
   ScopedListPrefUpdate pref(profile_->GetPrefs(),
-                            prefs::kNetworkFileSharesSavedShares);
+                            ash::prefs::kNetworkFileSharesSavedShares);
 
-  base::Value::List& share_list = pref.Get();
+  base::ListValue& share_list = pref.Get();
   for (base::Value& item : share_list) {
     if (GetStringValue(item.GetDict(), kShareUrlKey) ==
         share.share_url().ToString()) {
@@ -114,9 +114,9 @@ void SmbPersistedShareRegistry::Save(const SmbShareInfo& share) {
 
 void SmbPersistedShareRegistry::Delete(const SmbUrl& share_url) {
   ScopedListPrefUpdate pref(profile_->GetPrefs(),
-                            prefs::kNetworkFileSharesSavedShares);
+                            ash::prefs::kNetworkFileSharesSavedShares);
 
-  base::Value::List& list_update = pref.Get();
+  base::ListValue& list_update = pref.Get();
   for (auto it = list_update.begin(); it != list_update.end(); ++it) {
     if (GetStringValue(it->GetDict(), kShareUrlKey) == share_url.ToString()) {
       list_update.erase(it);
@@ -128,7 +128,7 @@ void SmbPersistedShareRegistry::Delete(const SmbUrl& share_url) {
 std::optional<SmbShareInfo> SmbPersistedShareRegistry::Get(
     const SmbUrl& share_url) const {
   const base::Value& pref =
-      profile_->GetPrefs()->GetValue(prefs::kNetworkFileSharesSavedShares);
+      profile_->GetPrefs()->GetValue(ash::prefs::kNetworkFileSharesSavedShares);
 
   for (const base::Value& entry : pref.GetList()) {
     if (GetStringValue(entry.GetDict(), kShareUrlKey) == share_url.ToString()) {
@@ -140,7 +140,7 @@ std::optional<SmbShareInfo> SmbPersistedShareRegistry::Get(
 
 std::vector<SmbShareInfo> SmbPersistedShareRegistry::GetAll() const {
   const base::Value& pref =
-      profile_->GetPrefs()->GetValue(prefs::kNetworkFileSharesSavedShares);
+      profile_->GetPrefs()->GetValue(ash::prefs::kNetworkFileSharesSavedShares);
 
   std::vector<SmbShareInfo> shares;
   for (const auto& entry : pref.GetList()) {

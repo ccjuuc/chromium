@@ -5,6 +5,8 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_QUALITY_VALIDATION_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_QUALITY_VALIDATION_H_
 
+#include <stddef.h>
+
 #include <string>
 #include <string_view>
 
@@ -65,6 +67,10 @@ bool IsValidZip(std::u16string_view text,
                 const AddressCountryCode& country_code,
                 bool extended_validation);
 
+// Returns true if `text` is a common placeholder value (e.g.
+// "select", "choose", "optional").
+bool IsPlaceholder(std::u16string_view text);
+
 // Returns true if `text` looks like an SSN, with or without separators.
 bool IsSSN(std::u16string_view text);
 
@@ -75,10 +81,6 @@ size_t GetCvcLengthForCardNetwork(std::string_view card_network,
 // Returns true if `value` appears to be a UPI Virtual Payment Address.
 // https://upipayments.co.in/virtual-payment-address-vpa/
 bool IsUPIVirtualPaymentAddress(std::u16string_view value);
-
-// Returns true if `value` appears to be an International Bank Account Number
-// (IBAN). See https://en.wikipedia.org/wiki/International_Bank_Account_Number
-bool IsInternationalBankAccountNumber(std::u16string_view value);
 
 // Returns true if `value` appears to be a valid ABA Routing Transit Number,
 // generally used in the United States for ACH bank transfers.

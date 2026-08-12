@@ -61,7 +61,9 @@ import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.content_public.browser.RenderWidgetHostView;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
@@ -112,7 +114,7 @@ public class StaticLayoutUnitTest {
             mBrowserControlsStateProviderObserverCaptor;
 
     private final UserDataHost mUserDataHost = new UserDataHost();
-    @Mock private TopUiThemeColorProvider mTopUiThemeColorProvider;
+    @Mock private ToolbarThemeColorProvider mToolbarThemeColorProvider;
 
     @Mock private View mTabView;
 
@@ -152,6 +154,12 @@ public class StaticLayoutUnitTest {
         doReturn(POSITION1).when(mTabModel).index();
 
         doReturn(mTab1).when(mTabModelSelector).getCurrentTab();
+        doReturn(ObservableSuppliers.createMonotonic(mTabModel))
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
+        doReturn(ObservableSuppliers.createNullable(mTab1))
+                .when(mTabModelSelector)
+                .getCurrentTabSupplier();
         doReturn(Arrays.asList(mTabModel)).when(mTabModelSelector).getModels();
         doNothing().when(mTabModel).addObserver(mTabModelObserverCaptor.capture());
 
@@ -174,16 +182,15 @@ public class StaticLayoutUnitTest {
                         mTabModelSelector,
                         mTabContentManager,
                         mBrowserControlsStateProvider,
-                        () -> mTopUiThemeColorProvider,
+                        () -> mToolbarThemeColorProvider,
                         mStaticTabSceneLayer,
                         mNeedsOffsetTagsSupplier);
         mModel = mStaticLayout.getModelForTesting();
         mStaticLayout.setIsActive(true);
 
-        doReturn(BACKGROUND_COLOR).when(mTopUiThemeColorProvider).getBackgroundColor(any());
         doReturn(TOOLBAR_BACKGROUND_COLOR)
-                .when(mTopUiThemeColorProvider)
-                .getSceneLayerBackground(any());
+                .when(mToolbarThemeColorProvider)
+                .getToolbarBackgroundColor(any());
         mStaticLayout.setTextBoxBackgroundColorForTesting(TEXT_BOX_BACKGROUND_COLOR);
 
         initAndAssertAllDependencies();
@@ -232,7 +239,11 @@ public class StaticLayoutUnitTest {
         doReturn(false).when(tab).isIncognito();
         doReturn(url).when(tab).getUrl();
         doReturn(false).when(tab).isNativePage();
-        doReturn(mock(WebContents.class)).when(tab).getWebContents();
+        WebContents webContents = mock(WebContents.class);
+        RenderWidgetHostView rwhv = mock(RenderWidgetHostView.class);
+        doReturn(rwhv).when(webContents).getRenderWidgetHostView();
+        doReturn(BACKGROUND_COLOR).when(rwhv).getBackgroundColor();
+        doReturn(webContents).when(tab).getWebContents();
         doReturn(true).when(tab).isInitialized();
         doReturn(TOOLBAR_BACKGROUND_COLOR).when(tab).getThemeColor();
         when(tab.getUserDataHost()).thenReturn(mUserDataHost);
@@ -254,19 +265,19 @@ public class StaticLayoutUnitTest {
         mBrowserControlsStateProviderObserverCaptor
                 .getValue()
                 .onControlsOffsetChanged(0, 0, false, 0, 0, false, true, false);
-        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET));
-        mModel.set(LayoutTab.CONTENT_OFFSET, 0);
+        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
+        mModel.set(LayoutTab.CONTENT_OFFSET_Y, 0);
 
         mBrowserControlsStateProviderObserverCaptor
                 .getValue()
                 .onControlsOffsetChanged(0, 0, false, 0, 0, false, false, true);
-        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET));
-        mModel.set(LayoutTab.CONTENT_OFFSET, 0);
+        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
+        mModel.set(LayoutTab.CONTENT_OFFSET_Y, 0);
 
         mBrowserControlsStateProviderObserverCaptor
                 .getValue()
                 .onControlsOffsetChanged(0, 0, false, 0, 0, false, false, false);
-        assertEquals(height, (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+        assertEquals(height, (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
     }
 
     @Test
@@ -298,6 +309,9 @@ public class StaticLayoutUnitTest {
     public void testTabSelectionNativeTab() {
         assertNotEquals(mTab2.getId(), mModel.get(LayoutTab.TAB_ID));
         doReturn(true).when(mTab2).isNativePage();
+        NativePage nativePage = mock(NativePage.class);
+        doReturn(BACKGROUND_COLOR).when(nativePage).getBackgroundColor();
+        doReturn(nativePage).when(mTab2).getNativePage();
 
         getTabModelSelectorTabModelObserverFromCaptor()
                 .didSelectTab(mTab2, TabSelectionType.FROM_USER, TAB1_ID);
@@ -342,7 +356,8 @@ public class StaticLayoutUnitTest {
         mModel.set(LayoutTab.BACKGROUND_COLOR, Color.WHITE);
 
         // Index 0 is the TabObserver for mTab1.
-        doReturn(Color.RED).when(mTopUiThemeColorProvider).getBackgroundColor(mTab1);
+        RenderWidgetHostView rwhv = mTab1.getWebContents().getRenderWidgetHostView();
+        doReturn(Color.RED).when(rwhv).getBackgroundColor();
         mTabObserverCaptor.getAllValues().get(0).onBackgroundColorChanged(mTab1, Color.RED);
 
         assertEquals(Color.RED, mModel.get(LayoutTab.BACKGROUND_COLOR));
@@ -400,14 +415,14 @@ public class StaticLayoutUnitTest {
                 .getValue()
                 .onOffsetTagsInfoChanged(null, tagsInfo, 0, false);
         assertEquals(tagsInfo.getContentOffsetTag(), mModel.get(LayoutTab.CONTENT_OFFSET_TAG));
-        assertEquals(0, (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+        assertEquals(0, (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
 
         tagsInfo = new BrowserControlsOffsetTagsInfo();
         mBrowserControlsStateProviderObserverCaptor
                 .getValue()
                 .onOffsetTagsInfoChanged(null, tagsInfo, 0, true);
         assertEquals(tagsInfo.getContentOffsetTag(), mModel.get(LayoutTab.CONTENT_OFFSET_TAG));
-        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+        assertEquals(offset, (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
     }
 
     @Test
@@ -424,7 +439,7 @@ public class StaticLayoutUnitTest {
         assertEquals(
                 "Content offset should be applied when mNeedsOffsetTags is true.",
                 offset,
-                (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+                (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
         assertEquals(
                 "Content offset tag should be updated.",
                 tagsInfo.getContentOffsetTag(),
@@ -445,7 +460,7 @@ public class StaticLayoutUnitTest {
         assertEquals(
                 "Content offset should be applied when mNeedsOffsetTags is false.",
                 offset,
-                (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+                (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
         assertNull(
                 "Content offset tag should not be updated.",
                 mModel.get(LayoutTab.CONTENT_OFFSET_TAG));
@@ -465,7 +480,7 @@ public class StaticLayoutUnitTest {
         assertEquals(
                 "Content offset should be applied when mNeedsOffsetTags is true.",
                 offset,
-                (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+                (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
         assertEquals(
                 "Content offset tag should be updated.",
                 tagsInfo.getContentOffsetTag(),
@@ -483,7 +498,7 @@ public class StaticLayoutUnitTest {
         assertEquals(
                 "Content offset should still be applied even when mNeedsOffsetTags is false.",
                 offset,
-                (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+                (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
         assertEquals(
                 "Content offset tag should not be updated.",
                 null,
@@ -501,7 +516,7 @@ public class StaticLayoutUnitTest {
         assertEquals(
                 "Content offset should be applied after toggling mNeedsOffsetTags back to true.",
                 offset,
-                (int) mModel.get(LayoutTab.CONTENT_OFFSET));
+                (int) mModel.get(LayoutTab.CONTENT_OFFSET_Y));
         assertEquals(
                 "Content offset tag should be updated.",
                 tagsInfo.getContentOffsetTag(),
@@ -509,5 +524,17 @@ public class StaticLayoutUnitTest {
 
         // The update will be handled by compositorMCP.
         verify(mStaticTabSceneLayer, times(0)).update(mModel);
+    }
+
+    @Test
+    public void testSetContentOffsetX() {
+        int contentOffsetX = 125;
+        mStaticLayout.setContentOffsetX(contentOffsetX);
+
+        assertEquals(
+                "Unexpected CONTENT_OFFSET_X.",
+                contentOffsetX,
+                mModel.get(LayoutTab.CONTENT_OFFSET_X),
+                0);
     }
 }

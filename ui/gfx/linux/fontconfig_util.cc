@@ -21,10 +21,6 @@
 #include "base/files/file_util.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-namespace features {
-BASE_FEATURE(kFontConfigFontationsIndexing, base::FEATURE_ENABLED_BY_DEFAULT);
-}
-
 namespace gfx {
 
 namespace {
@@ -48,11 +44,11 @@ constexpr base::FilePath::CharType kImageloaderMountBase[] =
 class COMPONENT_EXPORT(GFX) GlobalFontConfig {
  public:
   GlobalFontConfig() {
-    if (base::FeatureList::IsEnabled(features::kFontConfigFontationsIndexing)) {
-      std::unique_ptr<base::Environment> environment =
-          base::Environment::Create();
-      environment->SetVar("FC_FONTATIONS", "1");
-    }
+    // Environment variable FC_FONTATIONS=1 is required here to use Fontations,
+    // instead of FreeType, indexing in FontConfig. Calling setenv here can race
+    // with getenv in a multithreaded context. Therefore, the setenv is done in
+    // ContentMainRunnerImpl::Initialize() to ensure it is configured before any
+    // threads are created, avoiding the race between setenv and getenv.
 
     // Without this call, the FontConfig library gets implicitly initialized
     // on the first call to FontConfig. Since it's not safe to initialize it

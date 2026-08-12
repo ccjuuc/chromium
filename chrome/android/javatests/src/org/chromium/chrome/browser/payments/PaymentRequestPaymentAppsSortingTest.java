@@ -15,12 +15,12 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppSpeed;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.TestPay;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.components.autofill.AutofillProfile;
 import org.chromium.components.payments.PaymentAppFactoryDelegate;
 import org.chromium.components.payments.PaymentAppFactoryInterface;
@@ -66,7 +66,7 @@ public class PaymentRequestPaymentAppsSortingTest {
         TestPay appB = new TestPay("https://bobpay.test", AppSpeed.FAST_APP);
         TestPay appC = new TestPay("https://charliepay.test", AppSpeed.FAST_APP);
         PaymentAppService.getInstance()
-                .addFactory(
+                .addUniqueFactory(
                         new PaymentAppFactoryInterface() {
                             @Override
                             public void create(PaymentAppFactoryDelegate delegate) {
@@ -76,7 +76,8 @@ public class PaymentRequestPaymentAppsSortingTest {
                                 delegate.onPaymentAppCreated(appC);
                                 delegate.onDoneCreatingPaymentApps(/* factory= */ this);
                             }
-                        });
+                        },
+                        "testFactoryId");
         String alicePayId = appA.getIdentifier();
         String bobPayId = appB.getIdentifier();
         String charliePayId = appC.getIdentifier();

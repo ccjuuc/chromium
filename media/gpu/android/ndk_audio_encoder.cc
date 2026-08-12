@@ -181,11 +181,9 @@ void NdkAudioEncoder::Initialize(const Options& options,
 
   output_cb_ = BindCallbackToCurrentLoopIfNeeded(std::move(output_callback));
 
-  output_params_.Reset(
-      AudioParameters::Format::AUDIO_PCM_LINEAR,
-      ChannelLayoutConfig(GuessChannelLayout(options_.channels),
-                          options_.channels),
-      options_.sample_rate, kAacFramesPerBuffer);
+  output_params_.Reset(AudioParameters::Format::AUDIO_PCM_LINEAR,
+                       ChannelLayoutConfig::Guess(options_.channels),
+                       options_.sample_rate, kAacFramesPerBuffer);
 
   // `fifo_` will upmix/downmix and repacketize inputs to make sure there are
   // the correct number of channels and samples per buffer, without resampling.
@@ -400,8 +398,8 @@ void NdkAudioEncoder::FeedInput(const AudioBus* audio_bus) {
 
   // MediaCodec uses signed 16bit PCM encoding by default.
   // Configuring the encoder to use float PCM did not work in tests.
-  audio_bus->ToInterleaved<SignedInt16SampleTypeTraits>(
-      audio_bus->frames(), reinterpret_cast<int16_t*>(mc_input_buffer.data()));
+  base::span<uint8_t> target_buffer = mc_input_buffer.first(total_bytes);
+  audio_bus->ToInterleavedBytes<SignedInt16SampleTypeTraits>(target_buffer);
 
   CHECK_EQ(audio_bus->frames(), kAacFramesPerBuffer);
   const auto timestamp_us =

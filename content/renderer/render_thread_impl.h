@@ -29,11 +29,11 @@
 #include "base/process/process.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_log.h"
 #include "base/trace_event/trace_session_observer.h"
 #include "base/trace_event/typed_macros.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
+#include "components/discardable_memory/client/client_discardable_shared_memory_manager.h"
 #include "content/child/child_thread_impl.h"
 #include "content/common/agent_scheduling_group.mojom.h"
 #include "content/common/content_export.h"
@@ -42,11 +42,10 @@
 #include "content/common/renderer_host.mojom.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/renderer/blink_isolates_pressure_listener.h"
-#include "content/renderer/discardable_memory_utils.h"
 #include "content/renderer/memory_reclaimer_pressure_listener.h"
 #include "content/renderer/skia_graphics_pressure_listener.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/clients/mojo_codec_factory.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -61,7 +60,6 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom-forward.h"
-#include "third_party/blink/public/mojom/shared_storage/shared_storage_worklet_service.mojom.h"
 #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
 #include "third_party/blink/public/platform/web_connection_type.h"
@@ -109,8 +107,6 @@ class VariationsRenderThreadObserver;
 
 #if BUILDFLAG(IS_WIN)
 class DCOMPTextureFactory;
-class OverlayStateServiceProvider;
-class OverlayStateServiceProviderImpl;
 #endif
 
 // The RenderThreadImpl class represents the main thread, where `blink::WebView`
@@ -122,8 +118,7 @@ class CONTENT_EXPORT RenderThreadImpl
     : public RenderThread,
       public ChildThreadImpl,
       public mojom::Renderer,
-      public viz::mojom::CompositingModeWatcher,
-      public base::MemoryPressureListener {
+      public viz::mojom::CompositingModeWatcher {
  public:
   static RenderThreadImpl* current();
 
@@ -151,13 +146,16 @@ class CONTENT_EXPORT RenderThreadImpl
   static void RegisterSchemes();
 
   // RenderThread implementation:
-  IPC::SyncChannel* GetChannel() override;
+  IPC::ChannelProxy* GetChannel() override;
   std::string GetLocale() override;
 
-  bool GenerateFrameRoutingID(int32_t& routing_id,
-                              blink::LocalFrameToken& frame_token,
-                              base::UnguessableToken& devtools_frame_token,
-                              blink::DocumentToken& document_token) override;
+  bool GenerateFrameRoutingID(
+      int32_t& routing_id,
+      blink::LocalFrameToken& frame_token,
+      base::UnguessableToken& devtools_frame_token,
+      blink::DocumentToken& document_token,
+      std::unique_ptr<base::UnguessableToken>& sandbox_origin_token) override;
+
   void AddObserver(RenderThreadObserver* observer) override;
   void RemoveObserver(RenderThreadObserver* observer) override;
   int PostTaskToAllWebWorkers(base::RepeatingClosure closure) override;
@@ -240,10 +238,6 @@ class CONTENT_EXPORT RenderThreadImpl
 
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<DCOMPTextureFactory> GetDCOMPTextureFactory();
-  // The OverlayStateService is only available where Media Foundation for
-  // clear is supported, otherwise GetOverlayStateServiceProvider will return
-  // nullptr.
-  scoped_refptr<OverlayStateServiceProvider> GetOverlayStateServiceProvider();
 #endif
 
   blink::WebVideoCaptureImplManager* video_capture_impl_manager() const {
@@ -274,6 +268,12 @@ class CONTENT_EXPORT RenderThreadImpl
   scoped_refptr<viz::RasterContextProvider>
   SharedCompositorWorkerContextProvider(
       cc::RasterDarkModeFilter* dark_mode_filter);
+
+  // Returns a worker context provider that will be bound on the media
+  // thread.
+  void SharedMediaContextProvider(
+      base::OnceCallback<void(scoped_refptr<viz::RasterContextProvider>)>
+          callback);
 
   media::GpuVideoAcceleratorFactories* GetGpuFactories();
 
@@ -397,7 +397,9 @@ class CONTENT_EXPORT RenderThreadImpl
                                base::TimeDelta http_rtt,
                                base::TimeDelta transport_rtt,
                                double bandwidth_kbps) override;
+#if BUILDFLAG(IS_ANDROID)
   void SetWebKitSharedTimersSuspended(bool suspend) override;
+#endif
   void InitializeRenderer(
       const std::string& user_agent,
       const blink::UserAgentMetadata& user_agent_metadata,
@@ -405,9 +407,12 @@ class CONTENT_EXPORT RenderThreadImpl
       blink::mojom::OriginTrialsSettingsPtr origin_trial_settings,
       blink::mojom::PerformanceTier cpu_performance_tier,
       uint64_t trace_id) override;
+#if BUILDFLAG(IS_MAC)
   void UpdateScrollbarTheme(
       mojom::UpdateScrollbarThemeParamsPtr params) override;
   void OnSystemColorsChanged(int32_t aqua_color_variant) override;
+  void OnRegisteredFontsChanged() override;
+#endif
   void UpdateSystemColorInfo(
       mojom::UpdateSystemColorInfoParamsPtr params) override;
   void PurgePluginListCache() override;
@@ -419,13 +424,10 @@ class CONTENT_EXPORT RenderThreadImpl
   void WriteClangProfilingProfile(
       WriteClangProfilingProfileCallback callback) override;
 #endif
-  void SetIsCrossOriginIsolated(bool value) override;
   void SetIsWebSecurityDisabled(bool value) override;
   void SetIsIsolatedContext(bool value) override;
   void SetWebUIResourceUrlToCodeCacheMap(
       const base::flat_map<GURL, int>& resource_map) override;
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
 
   bool RendererIsHidden() const;
   void OnRendererHidden();
@@ -447,6 +449,14 @@ class CONTENT_EXPORT RenderThreadImpl
   void RequestNewItemsForFrameRoutingCache();
   void PopulateFrameRoutingCacheWithItems(
       std::vector<mojom::FrameRoutingInfoPtr> infos);
+
+  scoped_refptr<viz::RasterContextProvider>
+  BindMediaContextProviderOnMediaThread(
+      scoped_refptr<viz::RasterContextProvider> rcp);
+  void SetMediaContextProviderOnMainThread(
+      base::OnceCallback<void(scoped_refptr<viz::RasterContextProvider>)>
+          callback,
+      scoped_refptr<viz::RasterContextProvider> rcp);
 
   scoped_refptr<discardable_memory::ClientDiscardableSharedMemoryManager>
       discardable_memory_allocator_;
@@ -507,8 +517,6 @@ class CONTENT_EXPORT RenderThreadImpl
 
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<DCOMPTextureFactory> dcomp_texture_factory_;
-  scoped_refptr<OverlayStateServiceProviderImpl>
-      overlay_state_service_provider_;
 #endif
 
   scoped_refptr<viz::ContextProviderCommandBuffer> shared_main_thread_contexts_;
@@ -520,12 +528,11 @@ class CONTENT_EXPORT RenderThreadImpl
 
   scoped_refptr<viz::RasterContextProvider> shared_worker_context_provider_;
 
+  scoped_refptr<viz::RasterContextProvider> shared_media_context_provider_;
+
   scoped_refptr<gpu::SharedImageInterface> shared_image_interface_;
 
   HistogramCustomizer histogram_customizer_;
-
-  std::unique_ptr<base::MemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
 
   MemoryReclaimerPressureListener memory_reclaimer_pressure_listener_;
 

@@ -5,7 +5,6 @@
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 
 #include "base/command_line.h"
-#include "base/containers/enum_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/concurrent_callbacks.h"
 #include "base/run_loop.h"
@@ -26,7 +25,6 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_install_params.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
@@ -58,7 +56,13 @@ WebAppInstallDialogCallback CreateAcceptDialogCallback() {
          WebAppInstallationAcceptanceCallback acceptance_callback) {
         web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
         std::move(acceptance_callback)
-            .Run(/*accept=*/true, std::move(web_app_info));
+            .Run(/*accept=*/true, std::move(web_app_info),
+                 base::BindOnce([](bool success,
+                                   base::OnceClosure reparent_or_launch_app) {
+                   if (success && reparent_or_launch_app) {
+                     std::move(reparent_or_launch_app).Run();
+                   }
+                 }));
       });
 }
 
@@ -328,6 +332,7 @@ webapps::AppId InstallForWebContents(
       install_source, web_contents->GetWeakPtr(), CreateAcceptDialogCallback(),
       install_future.GetCallback(), fallback_behavior);
   EXPECT_TRUE(install_future.Wait());
+  provider->command_manager().AwaitAllCommandsCompleteForTesting();
   return install_future.Get<webapps::AppId>();
 }
 
@@ -338,7 +343,7 @@ std::unique_ptr<WebAppInstallInfo> GetInstallInfoForCurrentManifest(
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   auto* provider = WebAppProvider::GetForTest(profile);
-  base::Value::Dict debug_data;
+  base::DictValue debug_data;
   base::test::TestFuture<std::unique_ptr<WebAppInstallInfo>> test_future;
   std::unique_ptr<WebAppDataRetriever> retriever =
       provider->web_contents_manager().CreateDataRetriever();

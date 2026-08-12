@@ -27,7 +27,8 @@
 
 namespace {
 
-constexpr base::TimeDelta kWaitForNotificationTimeout = base::Seconds(10);
+constexpr base::TimeDelta kWaitForNotificationTimeout = base::Seconds(15);
+constexpr base::TimeDelta kWaitForViewTimeout = base::Seconds(8);
 
 // Wait for a view that contains a partial match to the given `text`, then tap
 // it.
@@ -51,7 +52,7 @@ void MaybeTapAllowOnPopup() {
       initWithBundleIdentifier:@"com.apple.springboard"];
   // Wait for allow or ok button to appear.
   auto button = [springboardApplication.buttons elementBoundByIndex:1];
-  if ([button waitForExistenceWithTimeout:1]) {
+  if ([button waitForExistenceWithTimeout:5]) {
     // Wait for the magic stack to settle behind the alert.
     // Otherwise the test flakes when a snackbar is presented right after the
     // permissions alert is dismissed.
@@ -100,10 +101,6 @@ void MaybeDismissNotification() {
     config.features_enabled.push_back(kIOSReactivationNotifications);
   } else {
     config.features_disabled.push_back(kIOSReactivationNotifications);
-  }
-
-  if ([self isRunningTest:@selector(testNotificationMIM)]) {
-    config.features_enabled.push_back(kSeparateProfilesForManagedAccounts);
   }
 
   config.features_disabled.push_back(kIOSOneTimeDefaultBrowserNotification);
@@ -193,13 +190,7 @@ void MaybeDismissNotification() {
 }
 
 // Tests triggering and interacting with each of the Tips notifications.
-// TODO(crbug.com/455768805): Test is flaky.
 - (void)FLAKY_testTriggerNotifications {
-  // TODO(crbug.com/455768805): Re-enable the test.
-  if (@available(iOS 26.1, *)) {
-    EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.1.");
-  }
-
   [SigninEarlGrey addFakeIdentity:[FakeSystemIdentity fakeIdentity1]];
   [ChromeEarlGreyUI waitForAppToIdle];
 
@@ -219,7 +210,8 @@ void MaybeDismissNotification() {
 
   // Verify that the What's New screen is showing.
   id<GREYMatcher> whatsNewView = grey_accessibilityID(@"kWhatsNewListViewId");
-  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:whatsNewView];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:whatsNewView
+                                              timeout:kWaitForViewTimeout];
 
   // Dismiss the What's New screen.
   id<GREYMatcher> whatsNewDoneButton =
@@ -236,7 +228,8 @@ void MaybeDismissNotification() {
     // Verify that the Omnibox Position view is showing.
     id<GREYMatcher> omniboxPositionView = grey_accessibilityID(
         first_run::kFirstRunOmniboxPositionChoiceScreenAccessibilityIdentifier);
-    [ChromeEarlGrey waitForUIElementToAppearWithMatcher:omniboxPositionView];
+    [ChromeEarlGrey waitForUIElementToAppearWithMatcher:omniboxPositionView
+                                                timeout:kWaitForViewTimeout];
 
     [[EarlGrey selectElementWithMatcher:
                    grey_allOf(chrome_test_util::ButtonStackSecondaryButton(),
@@ -251,7 +244,8 @@ void MaybeDismissNotification() {
   // Verify that the Default Browser Promo is visible.
   id<GREYMatcher> defaultBrowserView =
       chrome_test_util::DefaultBrowserSettingsTableViewMatcher();
-  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:defaultBrowserView];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:defaultBrowserView
+                                              timeout:kWaitForViewTimeout];
 
   // Tap "cancel".
   [[EarlGrey
@@ -265,7 +259,8 @@ void MaybeDismissNotification() {
   // Verify the Docking promo is showing.
   id<GREYMatcher> dockingPromoView =
       grey_accessibilityID(@"kDockingPromoAccessibilityId");
-  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:dockingPromoView];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:dockingPromoView
+                                              timeout:kWaitForViewTimeout];
 
   // Tap "Got It" on the Docking promo view.
   id<GREYMatcher> gotItButton = chrome_test_util::ButtonStackPrimaryButton();
@@ -278,7 +273,8 @@ void MaybeDismissNotification() {
   // Verify the signin screen is showing.
   id<GREYMatcher> signinView =
       grey_accessibilityID(kConsistencySigninAccessibilityIdentifier);
-  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:signinView];
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:signinView
+                                              timeout:kWaitForViewTimeout];
 
   // Dismiss Signin.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::
@@ -296,11 +292,11 @@ void MaybeDismissNotification() {
   [ChromeEarlGreyUI waitForAppToIdle];
   [self optInToTipsNotifications:{}];
 
-  // Request the notification and tap it.
   [ChromeEarlGrey requestTipsNotification:TipsNotificationType::kLens];
   TapNotification();
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:grey_accessibilityID(
-                                                          @"kLensPromoAXID")];
+                                                          @"kLensPromoAXID")
+                                              timeout:base::Seconds(15)];
   // Tap "Show me how".
   // Use `grey_sufficientlyVisible()` to target the visible secondary button.
   [[EarlGrey selectElementWithMatcher:
@@ -316,11 +312,11 @@ void MaybeDismissNotification() {
       selectElementWithMatcher:chrome_test_util::NavigationBarDoneButton()]
       performAction:grey_tap()];
 
-  // Request the notification a second time.
   [ChromeEarlGrey requestTipsNotification:TipsNotificationType::kLens];
   TapNotification();
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:grey_accessibilityID(
-                                                          @"kLensPromoAXID")];
+                                                          @"kLensPromoAXID")
+                                              timeout:base::Seconds(15)];
   // Tap "Show me how" again.
   // Use `grey_sufficientlyVisible()` to target the visible secondary button.
   [[EarlGrey selectElementWithMatcher:
@@ -350,12 +346,12 @@ void MaybeDismissNotification() {
   [ChromeEarlGreyUI waitForAppToIdle];
   [self optInToTipsNotifications:{}];
 
-  // Request the notification and tap it.
   [ChromeEarlGrey
       requestTipsNotification:TipsNotificationType::kEnhancedSafeBrowsing];
   TapNotification();
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
-                      grey_accessibilityID(@"kEnhancedSafeBrowsingPromoAXID")];
+                      grey_accessibilityID(@"kEnhancedSafeBrowsingPromoAXID")
+                                              timeout:base::Seconds(15)];
   // Tap "Show me how".
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonStackSecondaryButton()]
@@ -377,12 +373,12 @@ void MaybeDismissNotification() {
                                    grey_sufficientlyVisible(), nil)]
       performAction:grey_tap()];
 
-  // Request the notification a second time.
   [ChromeEarlGrey
       requestTipsNotification:TipsNotificationType::kEnhancedSafeBrowsing];
   TapNotification();
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
-                      grey_accessibilityID(@"kEnhancedSafeBrowsingPromoAXID")];
+                      grey_accessibilityID(@"kEnhancedSafeBrowsingPromoAXID")
+                                              timeout:base::Seconds(15)];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::NavigationBarDoneButton()]
       performAction:grey_tap()];
@@ -427,11 +423,12 @@ void MaybeDismissNotification() {
   TapNotification();
   [ChromeEarlGrey
       waitForUIElementToAppearWithMatcher:
-          grey_accessibilityID(@"kCredentialProviderPromoAccessibilityId")];
+          grey_accessibilityID(@"kCredentialProviderPromoAccessibilityId")
+                                  timeout:kWaitForViewTimeout];
   // Close the promo.
-  id<GREYMatcher> noThanksButton =
-      chrome_test_util::ButtonStackSecondaryButton();
-  [ChromeEarlGrey waitForAndTapButton:noThanksButton];
+  [[EarlGrey
+      selectElementWithMatcher:chrome_test_util::NavigationBarDoneButton()]
+      performAction:grey_tap()];
 }
 
 @end

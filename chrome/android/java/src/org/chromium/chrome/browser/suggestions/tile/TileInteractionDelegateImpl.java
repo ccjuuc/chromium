@@ -21,7 +21,7 @@ import org.chromium.chrome.browser.preloading.AndroidPrerenderManager;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
 import org.chromium.chrome.browser.suggestions.SuggestionsMetrics;
 import org.chromium.chrome.browser.suggestions.tile.TileDragDelegate.ReorderFlow;
-import org.chromium.ui.mojom.WindowOpenDisposition;
+import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.ui.util.MotionEventUtils;
 import org.chromium.url.GURL;
 
@@ -47,6 +47,7 @@ class TileInteractionDelegateImpl
     private @Nullable Runnable mOnClickRunnable;
     private @Nullable Runnable mOnRemoveRunnable;
     private boolean mPrerenderTriggered;
+    private int mLastMetaState;
 
     public TileInteractionDelegateImpl(
             ContextMenuManager contextMenuManager,
@@ -80,7 +81,13 @@ class TileInteractionDelegateImpl
         SuggestionsMetrics.recordTileTapped();
         mTileDragDelegate.reset();
         if (mOnClickRunnable != null) mOnClickRunnable.run();
-        mTileGroupDelegate.openMostVisitedItem(WindowOpenDisposition.CURRENT_TAB, mTile);
+
+        // Standard onClick callbacks do not provide keyboard modifiers, so we use the meta state
+        // captured during the most recent touch event.
+        int disposition = BrowserUiUtils.getDispositionFromMetaState(mLastMetaState);
+        mLastMetaState = 0;
+
+        mTileGroupDelegate.openMostVisitedItem(disposition, mTile);
     }
 
     // TileGroup.TileInteractionDelegate => View.OnKeyListener implementation.
@@ -120,6 +127,8 @@ class TileInteractionDelegateImpl
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouch(View view, MotionEvent event) {
+        mLastMetaState = event.getMetaState();
+
         if (event.getAction() == MotionEvent.ACTION_DOWN) {
             mAndroidPrerenderManager.startPrerendering(mTile.getUrl());
             mPrerenderTriggered = true;
@@ -230,8 +239,8 @@ class TileInteractionDelegateImpl
                 return !IncognitoUtils.shouldOpenIncognitoAsWindow();
             case ContextMenuItemId.OPEN_IN_INCOGNITO_WINDOW:
                 return IncognitoUtils.shouldOpenIncognitoAsWindow();
+            case ContextMenuItemId.OPEN_IN_NEW_WINDOW:
             case ContextMenuItemId.OPEN_IN_OTHER_WINDOW:
-                return true;
             case ContextMenuItemId.SAVE_FOR_OFFLINE:
                 return true;
             case ContextMenuItemId.REMOVE:

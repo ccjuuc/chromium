@@ -26,7 +26,7 @@ namespace content {
 
 class ShellContentRendererClient : public ContentRendererClient {
  public:
-  ShellContentRendererClient();
+  explicit ShellContentRendererClient(bool is_browsertest);
   ~ShellContentRendererClient() override;
 
   // ContentRendererClient implementation.
@@ -51,6 +51,10 @@ class ShellContentRendererClient : public ContentRendererClient {
 
   void DidInitializeWorkerContextOnWorkerThread(
       v8::Local<v8::Context> context) override;
+
+  bool OverrideCreatePlugin(RenderFrame* render_frame,
+                            const blink::WebPluginParams& params,
+                            blink::WebPlugin** plugin) override;
 
   std::unique_ptr<blink::URLLoaderThrottleProvider>
   CreateURLLoaderThrottleProvider(

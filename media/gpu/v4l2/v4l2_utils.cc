@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/v4l2/v4l2_utils.h"
 
 #include <fcntl.h>
@@ -18,11 +13,12 @@
 #include <map>
 #include <sstream>
 
+#include "base/compiler_specific.h"
+
 #if BUILDFLAG(IS_LINUX)
 #include <drm_fourcc.h>
 #endif
 
-#include "base/containers/contains.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/stringprintf.h"
@@ -60,8 +56,7 @@ int HandledIoctl(int fd, int request, void* arg) {
 }
 
 std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
-  struct v4l2_capability caps;
-  memset(&caps, 0, sizeof(caps));
+  struct v4l2_capability caps = {};
   if (ioctl_cb.Run(VIDIOC_QUERYCAP, &caps) != 0) {
     VPLOGF(1) << "ioctl() failed: VIDIOC_QUERYCAP" << ", caps check failed: 0x"
               << std::hex << caps.capabilities;
@@ -109,7 +104,8 @@ std::string V4L2FormatToString(const struct v4l2_format& format) {
       << ", field: " << pix_mp.field
       << ", num_planes: " << static_cast<unsigned int>(pix_mp.num_planes);
     for (size_t i = 0; i < pix_mp.num_planes; ++i) {
-      const struct v4l2_plane_pix_format& plane_fmt = pix_mp.plane_fmt[i];
+      const struct v4l2_plane_pix_format& plane_fmt =
+          UNSAFE_TODO(pix_mp.plane_fmt[i]);
       s << ", plane_fmt[" << i << "].sizeimage: " << plane_fmt.sizeimage
         << ", plane_fmt[" << i << "].bytesperline: " << plane_fmt.bytesperline;
     }
@@ -136,7 +132,7 @@ std::string V4L2BufferToString(const struct v4l2_buffer& buffer) {
     }
   } else if (V4L2_TYPE_IS_MULTIPLANAR(buffer.type)) {
     for (size_t i = 0; i < buffer.length; ++i) {
-      const struct v4l2_plane& plane = buffer.m.planes[i];
+      const struct v4l2_plane& plane = UNSAFE_TODO(buffer.m.planes[i]);
       s << ", m.planes[" << i << "](bytesused: " << plane.bytesused
         << ", length: " << plane.length
         << ", data_offset: " << plane.data_offset;
@@ -247,6 +243,8 @@ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
 #if BUILDFLAG(IS_LINUX)
   if (video_fourcc == Fourcc(Fourcc::MM21)) {
     modifiers = DRM_FORMAT_MOD_MTK_16L_32S_TILE;
+  } else {
+    modifiers = DRM_FORMAT_MOD_LINEAR;
   }
 #endif
   const size_t num_buffers = pix_mp.num_planes;
@@ -267,7 +265,8 @@ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
   std::vector<ColorPlaneLayout> planes;
   planes.reserve(num_color_planes);
   for (size_t i = 0; i < num_buffers; ++i) {
-    const v4l2_plane_pix_format& plane_format = pix_mp.plane_fmt[i];
+    const v4l2_plane_pix_format& plane_format =
+        UNSAFE_TODO(pix_mp.plane_fmt[i]);
     planes.emplace_back(static_cast<int32_t>(plane_format.bytesperline), 0u,
                         plane_format.sizeimage);
   }
@@ -275,7 +274,7 @@ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
   // plane which does not map to buffer.
   // Right now only some pixel formats are supported: NV12, YUV420, YVU420.
   if (num_color_planes > num_buffers) {
-    const int32_t y_stride = planes[0].stride;
+    const int32_t y_stride = UNSAFE_TODO(planes[0]).stride;
     // Note that y_stride is from v4l2 bytesperline and its type is uint32_t.
     // It is safe to cast to size_t.
     const size_t y_stride_abs = static_cast<size_t>(y_stride);
@@ -398,15 +397,14 @@ std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
 
   if (base::FeatureList::IsEnabled(kV4L2H264TemporalLayerHWEncoding) &&
       media_profile >= H264PROFILE_MIN && media_profile <= H264PROFILE_MAX) {
-    struct v4l2_queryctrl query_ctrl;
-    memset(&query_ctrl, 0, sizeof(query_ctrl));
+    struct v4l2_queryctrl query_ctrl = {};
     query_ctrl.id = V4L2_CID_MPEG_VIDEO_H264_HIERARCHICAL_CODING;
     if (ioctl_cb.Run(VIDIOC_QUERYCTRL, &query_ctrl) != kIoctlOk) {
       DPLOG(WARNING) << "h.264 hierarchical coding not supported.";
       return {};
     }
 
-    memset(&query_ctrl, 0, sizeof(query_ctrl));
+    query_ctrl = {};
     query_ctrl.id = V4L2_CID_MPEG_VIDEO_H264_HIERARCHICAL_CODING_TYPE;
     if (ioctl_cb.Run(VIDIOC_QUERYCTRL, &query_ctrl) != kIoctlOk) {
       DPLOG(WARNING) << "h.264 hierarchical coding type not supported.";
@@ -431,7 +429,7 @@ std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
       return {};
     }
 
-    memset(&query_ctrl, 0, sizeof(query_ctrl));
+    query_ctrl = {};
     query_ctrl.id = V4L2_CID_MPEG_VIDEO_H264_HIERARCHICAL_CODING_LAYER;
     if (ioctl_cb.Run(VIDIOC_QUERYCTRL, &query_ctrl) != kIoctlOk) {
       DPLOG(WARNING) << "Unable to determine the number of layers supported.";
@@ -450,7 +448,7 @@ std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
 std::vector<VideoCodecProfile> EnumerateSupportedProfilesForV4L2Codec(
     const IoctlAsCallback& ioctl_cb,
     uint32_t codec_as_pix_fmt) {
-  if (!base::Contains(kV4L2CodecPixFmtToProfileCID, codec_as_pix_fmt)) {
+  if (!kV4L2CodecPixFmtToProfileCID.contains(codec_as_pix_fmt)) {
     // This is OK: there are many codecs that are not supported by Chrome.
     VLOGF(4) << "Unsupported codec: " << FourccToString(codec_as_pix_fmt);
     return {};
@@ -463,8 +461,7 @@ std::vector<VideoCodecProfile> EnumerateSupportedProfilesForV4L2Codec(
     DVLOGF(4) << "Driver doesn't support enumerating "
               << FourccToString(codec_as_pix_fmt)
               << " profiles, using default ones.";
-    DCHECK(
-        base::Contains(kDefaultVideoCodecProfilesForProfileCID, profile_cid));
+    DCHECK(kDefaultVideoCodecProfilesForProfileCID.contains(profile_cid));
     return kDefaultVideoCodecProfilesForProfileCID.at(profile_cid);
   }
 
@@ -526,8 +523,7 @@ void GetSupportedResolution(const IoctlAsCallback& ioctl_cb,
   constexpr gfx::Size kDefaultMinCodedSize(16, 16);
   *min_resolution = kDefaultMinCodedSize;
 
-  v4l2_frmsizeenum frame_size;
-  memset(&frame_size, 0, sizeof(frame_size));
+  v4l2_frmsizeenum frame_size = {};
   frame_size.pixel_format = pixelformat;
   if (ioctl_cb.Run(VIDIOC_ENUM_FRAMESIZES, &frame_size) == kIoctlOk) {
     if (frame_size.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
@@ -549,7 +545,7 @@ void GetSupportedResolution(const IoctlAsCallback& ioctl_cb,
 
 uint32_t VideoCodecProfileToV4L2PixFmt(VideoCodecProfile profile,
                                        bool slice_based) {
-  CHECK(base::Contains(kVideoCodecProfileToV4L2CodecPixFmt, profile))
+  CHECK(kVideoCodecProfileToV4L2CodecPixFmt.contains(profile))
       << "Unsupported profile: " << GetProfileName(profile);
 
   const auto& v4l2_pix_fmt = kVideoCodecProfileToV4L2CodecPixFmt.at(profile);
@@ -1054,8 +1050,7 @@ static std::string PrintStatelessH264Control(
               ext_ctrls->ptr);
       for (uint32_t i = 0; i < 16; ++i) {
         s << "dbp entry " << +i << std::endl;
-        const struct v4l2_h264_dpb_entry* dpb =
-            static_cast<const struct v4l2_h264_dpb_entry*>(&dp->dpb[i]);
+        const struct v4l2_h264_dpb_entry* dpb = UNSAFE_TODO(&dp->dpb[i]);
         CONTROL(dpb, reference_ts);
         CONTROL(dpb, pic_num);
         CONTROL(dpb, frame_num);
@@ -1177,8 +1172,7 @@ static std::string PrintStatelessHEVCControl(
       CONTROL(dp, num_delta_pocs_of_ref_rps_idx);
       for (uint32_t i = 0; i < V4L2_HEVC_DPB_ENTRIES_NUM_MAX; ++i) {
         s << "dbp entry " << +i << std::endl;
-        const struct v4l2_hevc_dpb_entry* dpb =
-            static_cast<const struct v4l2_hevc_dpb_entry*>(&dp->dpb[i]);
+        const struct v4l2_hevc_dpb_entry* dpb = UNSAFE_TODO(&dp->dpb[i]);
         CONTROL(dpb, timestamp);
         CONTROL(dpb, flags);
         CONTROL(dpb, field_pic);
@@ -1232,7 +1226,7 @@ std::string V4L2ControlsToString(const struct v4l2_ext_controls* ctrls) {
         s << "Unknown Control: 0x" << std::hex << ext_ctrls->id << std::endl;
     }
 
-    ext_ctrls++;
+    UNSAFE_TODO(ext_ctrls++);
   }
 
   return s.str();

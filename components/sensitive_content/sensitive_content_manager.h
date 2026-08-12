@@ -46,7 +46,8 @@ class SensitiveContentManager final
   // heuristics predictions, and later called with server predictions.
   void OnFieldTypesDetermined(autofill::AutofillManager& manager,
                               autofill::FormGlobalId form_id,
-                              FieldTypeSource) override;
+                              FieldTypeSource source,
+                              bool small_forms_were_parsed) override;
   // Removes the fields of `removed_forms` from `sensitive_fields_`.
   // `removed_forms` are forms which have just been from the DOM.
   void OnBeforeFormsSeen(
@@ -59,8 +60,8 @@ class SensitiveContentManager final
   // again.
   void OnAutofillManagerStateChanged(
       autofill::AutofillManager& manager,
-      autofill::AutofillDriver::LifecycleState previous,
-      autofill::AutofillDriver::LifecycleState current) override;
+      autofill::AutofillDriver::LifecycleState old_state,
+      autofill::AutofillDriver::LifecycleState new_state) override;
 
   // The last content sensitivity known by the `SensitiveContentClient` (by
   // default, initially, the content is considered not sensitive). Used to make

@@ -11,6 +11,8 @@
 
 namespace blink {
 
+class HTMLScriptElementOrSVGScriptElement;
+
 class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
                               public ScriptElementBase {
  public:
@@ -35,10 +37,10 @@ class MockScriptElementBase : public GarbageCollected<MockScriptElementBase>,
   MOCK_CONST_METHOD0(NomoduleAttributeValue, bool());
   MOCK_CONST_METHOD0(SourceAttributeValue, String());
   MOCK_CONST_METHOD0(TypeAttributeValue, String());
+  MOCK_CONST_METHOD0(CacheHintAttributeValue, String());
   MOCK_METHOD0(ChildTextContent, String());
   MOCK_CONST_METHOD0(ScriptTextInternalSlot, String());
   MOCK_CONST_METHOD0(HasSourceAttribute, bool());
-  MOCK_CONST_METHOD0(HasAttributionsrcAttribute, bool());
   MOCK_CONST_METHOD0(IsConnected, bool());
   MOCK_CONST_METHOD0(HasChildren, bool());
   MOCK_CONST_METHOD0(GetNonceForElement, const AtomicString&());

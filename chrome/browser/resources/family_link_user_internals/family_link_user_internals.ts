@@ -27,7 +27,7 @@ interface BasicInfo {
   sections: Section[];
 }
 
-type UserSettings = Record<string, any>;
+type UserSettings = Record<string, unknown>;
 
 function getBasicInfoHtml(sections: Section[]) {
   // clang-format off
@@ -84,11 +84,16 @@ function getFilteringResultsHtml(results: Result[]) {
   // clang-format on
 }
 
+interface TryUrlResult {
+  allowResult: string;
+  manual: string;
+}
+
 function initialize() {
   function submitURL(event: Event) {
     getRequiredElement('try-url-result').textContent = '';
     getRequiredElement('manual-allowlist').textContent = '';
-    sendWithPromise(
+    sendWithPromise<TryUrlResult>(
         'tryURL', getRequiredElement<HTMLInputElement>('try-url-input').value)
         .then(({allowResult, manual}) => {
           getRequiredElement('try-url-result').textContent = allowResult;

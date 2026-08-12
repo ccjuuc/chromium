@@ -24,6 +24,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
@@ -84,12 +85,20 @@ class SaveUpdateAddressProfilePromptControllerTest
   // Profile with verified data as it is returned from Java.
   AutofillProfile GetFullProfileWithVerifiedData() {
     AutofillProfile profile(AddressCountryCode("US"));
-    profile.SetRawInfoWithVerificationStatus(NAME_FULL, u"Mona J. Liza",
-                                             VerificationStatus::kUserVerified);
-    test::SetProfileInfo(&profile, "", "", "", "email@example.com",
-                         "Company Inc.", "33 Narrow Street", "Apt 42",
-                         "Playa Vista", "LA", "12345", "US", "13105551234",
-                         /*finalize=*/true, VerificationStatus::kUserVerified);
+    test::SetProfileInfo(&profile,
+                         test::SetProfileInfoOptionsBuilder()
+                             .with_full_name("Mona J. Liza")
+                             .with_email("email@example.com")
+                             .with_company("Company Inc.")
+                             .with_address1("33 Narrow Street")
+                             .with_address2("Apt 42")
+                             .with_city("Playa Vista")
+                             .with_state("LA")
+                             .with_zipcode("12345")
+                             .with_country("US")
+                             .with_phone("13105551234")
+                             .with_status(VerificationStatus::kUserVerified)
+                             .Build());
     return profile;
   }
 
@@ -101,22 +110,17 @@ class SaveUpdateAddressProfilePromptControllerTest
 
   signin::IdentityTestEnvironment identity_test_env_;
   syncer::TestSyncService sync_service_;
-  autofill::TestPersonalDataManager test_personal_data_;
+  TestPersonalDataManager test_personal_data_;
   raw_ptr<MockSaveUpdateAddressProfilePromptView> prompt_view_ = nullptr;
-  AutofillProfile profile_{
-      autofill::i18n_model_definition::kLegacyHierarchyCountryCode};
+  AutofillProfile profile_{i18n_model_definition::kLegacyHierarchyCountryCode};
   AutofillProfile original_profile_{
-      autofill::i18n_model_definition::kLegacyHierarchyCountryCode};
+      i18n_model_definition::kLegacyHierarchyCountryCode};
   base::MockCallback<AutofillClient::AddressProfileSavePromptCallback>
       decision_callback_;
   base::MockCallback<base::OnceCallback<void()>> dismissal_callback_;
   std::unique_ptr<SaveUpdateAddressProfilePromptController> controller_;
   raw_ptr<JNIEnv> env_ = base::android::AttachCurrentThread();
   base::android::JavaRef<jobject> mock_caller_{nullptr};
-
- private:
-  base::test::ScopedFeatureList feature_{
-      features::kAutofillEnableSupportForHomeAndWork};
 };
 
 void SaveUpdateAddressProfilePromptControllerTest::SigninUser() {
@@ -307,37 +311,6 @@ TEST_F(SaveUpdateAddressProfilePromptControllerTest,
 }
 
 TEST_F(SaveUpdateAddressProfilePromptControllerTest,
-       ReturnsCorrectStringsToDisplayWhenMigrateSyncAddress) {
-  sync_service_.GetUserSettings()->SetSelectedTypes(
-      /*sync_everything=*/false,
-      /*types=*/{syncer::UserSelectableType::kAutofill});
-  SigninUser();
-  SetUpController(SaveUpdateAddressProfilePromptMode::kMigrateProfile);
-
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_ACCOUNT_MIGRATE_ADDRESS_PROMPT_TITLE),
-            controller_->GetTitle());
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_SAVE_ADDRESS_PROMPT_MIGRATION_OK_BUTTON_LABEL),
-            controller_->GetPositiveButtonText());
-
-  EXPECT_EQ(u"John H. Doe\n666 Erebus St.", controller_->GetAddress());
-
-  EXPECT_EQ(u"johndoe@hades.com", controller_->GetEmail());
-  EXPECT_EQ(u"16502111111", controller_->GetPhoneNumber());
-
-  EXPECT_EQ(l10n_util::GetStringUTF16(
-                IDS_AUTOFILL_MIGRATE_ADDRESS_PROMPT_CANCEL_BUTTON_LABEL),
-            controller_->GetNegativeButtonText());
-
-  EXPECT_EQ(
-      l10n_util::GetStringFUTF16(
-          IDS_AUTOFILL_SYNCABLE_PROFILE_MIGRATION_PROMPT_NOTICE,
-          base::ASCIIToUTF16(kUserEmail)),
-      controller_->GetRecordTypeNotice(identity_test_env_.identity_manager()));
-}
-
-TEST_F(SaveUpdateAddressProfilePromptControllerTest,
        ReturnsCorrectStringsToDisplayWhenSaveAccountAddress) {
   SigninUser();
   test_api(profile_).set_record_type(AutofillProfile::RecordType::kAccount);
@@ -424,7 +397,7 @@ TEST_F(SaveUpdateAddressProfilePromptControllerTest,
   // Subtitle should contain the full name only.
   EXPECT_EQ(u"John H. Doe", controller_->GetSubtitle());
   // Differences should contain envelope style address.
-  EXPECT_EQ(u"Underworld\n666 Erebus St.\nApt 8\nElysium, CA \nUnited States",
+  EXPECT_EQ(u"Underworld\n666 Erebus St.\nApt 8\nElysium, CA\nUnited States",
             controller_->GetOldDiff());
   // There should be an extra newline between address and contacts data.
   EXPECT_EQ(

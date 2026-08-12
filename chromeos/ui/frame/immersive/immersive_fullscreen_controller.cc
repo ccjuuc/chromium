@@ -6,12 +6,15 @@
 
 #include <set>
 
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
+#include "chromeos/ui/base/chromeos_ui_constants.h"
 #include "chromeos/ui/base/window_properties.h"
-#include "chromeos/ui/frame/immersive/immersive_context.h"
+#include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
 #include "chromeos/ui/frame/immersive/immersive_focus_watcher.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_delegate.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/aura/client/capture_client.h"
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
@@ -25,8 +28,11 @@
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/frame_view.h"
+#include "ui/views/window/non_client_view.h"
 
 DEFINE_UI_CLASS_PROPERTY_TYPE(chromeos::ImmersiveFullscreenController*)
 
@@ -56,6 +62,10 @@ class ImmersiveWindowTargeter : public aura::WindowTargeter {
     return target->parent() == window();
   }
 };
+
+bool DoesAnyWindowHaveCapture(aura::Window* window) {
+  return aura::client::GetCaptureWindow(window) != nullptr;
+}
 
 // The delay in milliseconds between the mouse stopping at the top edge of the
 // screen and the top-of-window views revealing.
@@ -143,6 +153,11 @@ ImmersiveRevealedLock* ImmersiveFullscreenController::GetRevealedLock(
                                    animate_reveal);
 }
 
+void ImmersiveFullscreenController::SetImmersiveModeChangedCallback(
+    ImmersiveModeChangedCallback callback) {
+  immersive_mode_changed_callback_ = std::move(callback);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // ui::EventObserver overrides:
 
@@ -222,15 +237,17 @@ void ImmersiveFullscreenController::OnWindowDestroying(aura::Window* window) {
 
 void ImmersiveFullscreenController::OnViewBoundsChanged(
     views::View* observed_view) {
-  DCHECK_EQ(top_container_, observed_view);
-  widget()->GetNativeWindow()->SetProperty(
-      kImmersiveTopContainerBoundsInScreen,
-      new gfx::Rect(top_container_->GetBoundsInScreen()));
+  if (observed_view == top_container_) {
+    widget()->GetNativeWindow()->SetProperty(
+        kImmersiveTopContainerBoundsInScreen,
+        new gfx::Rect(top_container_->GetBoundsInScreen()));
+  }
 }
 
 void ImmersiveFullscreenController::OnViewIsDeleting(
     views::View* observed_view) {
-  DCHECK_EQ(observed_view, top_container_);
+  CHECK_EQ(observed_view, top_container_);
+  top_container_observation_.Reset();
   top_container_ = nullptr;
 }
 
@@ -281,6 +298,38 @@ void ImmersiveFullscreenController::UnlockRevealedState() {
 ////////////////////////////////////////////////////////////////////////////////
 // public:
 
+bool ImmersiveFullscreenController::ShouldRevealTopChrome(views::View* view) {
+  DCHECK(view);
+  if (top_container_->Contains(view)) {
+    return true;
+  }
+
+  // Ensure that the window actually has a frame.
+  auto* non_client_view = widget_->non_client_view();
+  if (!non_client_view || !non_client_view->frame_view()) {
+    return false;
+  }
+
+  // Find the caption button container for this window and check that too.
+  const auto views =
+      views::ElementTrackerViews::GetInstance()->GetAllMatchingViews(
+          chromeos::FrameCaptionButtonContainerView::kElementId,
+          views::ElementTrackerViews::GetContextForWidget(widget_));
+
+  // This can happen in an InteractiveAshTest where all contexts are collapsed
+  // for convenience. It should never happen in production code.
+  if (views.size() > 1) {
+    CHECK_IS_TEST();
+    LOG(WARNING) << R"(
+Note that due to use of InteractiveAshTest, it is not possible to differentiate
+between caption buttons in different windows. Unpredictable behavior may result.
+    ")";
+  }
+
+  // If a container was found, see if the view is there.
+  return !views.empty() && views.front()->Contains(view);
+}
+
 // static
 void ImmersiveFullscreenController::EnableForWidget(views::Widget* widget,
                                                     bool enabled) {
@@ -297,19 +346,21 @@ ImmersiveFullscreenController* ImmersiveFullscreenController::Get(
 ////////////////////////////////////////////////////////////////////////////////
 // private:
 
+void ImmersiveFullscreenController::SetRevealState(RevealState state) {
+  reveal_state_ = state;
+  UpdateTopContainerPaintLock();
+}
+
 void ImmersiveFullscreenController::EnableWindowObservers(bool enable) {
   if (enable) {
-    top_container_->AddObserver(this);
-    widget_->GetNativeWindow()->AddObserver(this);
+    top_container_observation_.Observe(top_container_.get());
+    window_observation_.Observe(widget_->GetNativeWindow());
   } else {
-    if (top_container_) {
-      top_container_->RemoveObserver(this);
-      top_container_ = nullptr;
-    }
-    if (widget_) {
-      widget_->GetNativeWindow()->RemoveObserver(this);
-      widget_ = nullptr;
-    }
+    top_container_observation_.Reset();
+    top_container_ = nullptr;
+
+    window_observation_.Reset();
+    widget_ = nullptr;
 
     animation_.reset();
     animation_notifier_.reset();
@@ -396,8 +447,9 @@ void ImmersiveFullscreenController::UpdateTopEdgeHoverTimer(
 
   // Mouse hover should not initiate revealing the top-of-window views while a
   // window has mouse capture.
-  if (ImmersiveContext::Get()->DoesAnyWindowHaveCapture())
+  if (DoesAnyWindowHaveCapture(widget_->GetNativeWindow())) {
     return;
+  }
 
   if (ShouldIgnoreMouseEventAtLocation(location_in_screen))
     return;
@@ -453,8 +505,9 @@ void ImmersiveFullscreenController::UpdateLocatedEventRevealedLock(
 
   // Ignore all events while a window has capture. This keeps the top-of-window
   // views revealed during a drag.
-  if (ImmersiveContext::Get()->DoesAnyWindowHaveCapture())
+  if (DoesAnyWindowHaveCapture(widget_->GetNativeWindow())) {
     return;
+  }
 
   if ((!event || event->IsMouseEvent()) &&
       ShouldIgnoreMouseEventAtLocation(location_in_screen)) {
@@ -476,7 +529,6 @@ void ImmersiveFullscreenController::UpdateLocatedEventRevealedLock(
       hit_bounds_in_screen[i].Inset(
           gfx::Insets::TLBR(0, 0, -kBoundsOffsetY, 0));
     }
-
     if (hit_bounds_in_screen[i].Contains(location_in_screen)) {
       keep_revealed = true;
       break;
@@ -580,7 +632,7 @@ void ImmersiveFullscreenController::MaybeStartReveal(Animate animate) {
   }
 
   RevealState previous_reveal_state = reveal_state_;
-  reveal_state_ = SLIDING_OPEN;
+  SetRevealState(SLIDING_OPEN);
   if (previous_reveal_state == CLOSED) {
     EnableTouchInsets(false);
 
@@ -603,7 +655,7 @@ void ImmersiveFullscreenController::MaybeStartReveal(Animate animate) {
 
 void ImmersiveFullscreenController::OnSlideOpenAnimationCompleted() {
   DCHECK_EQ(SLIDING_OPEN, reveal_state_);
-  reveal_state_ = REVEALED;
+  SetRevealState(REVEALED);
   delegate_->SetVisibleFraction(1);
 
   // The user may not have moved the mouse since the reveal was initiated.
@@ -625,7 +677,7 @@ void ImmersiveFullscreenController::MaybeEndReveal(Animate animate) {
     return;
   }
 
-  reveal_state_ = SLIDING_CLOSED;
+  SetRevealState(SLIDING_CLOSED);
   base::TimeDelta duration = GetAnimationDuration(animate);
   if (duration.is_positive()) {
     animation_->SetSlideDuration(duration);
@@ -638,7 +690,7 @@ void ImmersiveFullscreenController::MaybeEndReveal(Animate animate) {
 
 void ImmersiveFullscreenController::OnSlideClosedAnimationCompleted() {
   DCHECK_EQ(SLIDING_CLOSED, reveal_state_);
-  reveal_state_ = CLOSED;
+  SetRevealState(CLOSED);
 
   EnableTouchInsets(true);
   delegate_->OnImmersiveRevealEnded();
@@ -715,7 +767,9 @@ bool ImmersiveFullscreenController::ShouldHandleGestureEvent(
 }
 
 gfx::Rect ImmersiveFullscreenController::GetDisplayBoundsInScreen() const {
-  return ImmersiveContext::Get()->GetDisplayBoundsInScreen(widget_);
+  display::Display display = display::Screen::Get()->GetDisplayNearestWindow(
+      widget_->GetNativeWindow());
+  return display.bounds();
 }
 
 bool ImmersiveFullscreenController::IsTargetForWidget(
@@ -739,11 +793,17 @@ void ImmersiveFullscreenController::UpdateEnabled() {
   }
   enabled_ = enabled;
 
-  EnableEventObservers(enabled_);
-
-  ImmersiveContext::Get()->OnEnteringOrExitingImmersive(this, enabled);
+  // Update Shell State:
+  if (immersive_mode_changed_callback_) {
+    immersive_mode_changed_callback_.Run(this, enabled);
+  }
 
   if (enabled_) {
+    //  Make sure UI is updated before checking reveal lock.
+    delegate_->OnImmersiveFullscreenEntered();
+
+    EnableEventObservers(true);
+
     // Animate enabling immersive mode by sliding out the top-of-window views.
     // No animation occurs if a lock is holding the top-of-window views open.
 
@@ -754,26 +814,24 @@ void ImmersiveFullscreenController::UpdateEnabled() {
     // required state in case the animation cannot run because of a lock holding
     // the top-of-window views open.)
     MaybeStartReveal(ANIMATE_NO);
-
     // Reset the located event so that it does not affect whether the
     // top-of-window views are hidden.
     located_event_revealed_lock_.reset();
-
     // Try doing the animation.
     MaybeEndReveal(ANIMATE_SLOW);
 
     if (reveal_state_ == REVEALED) {
       // Reveal was unsuccessful. Reacquire the revealed locks if appropriate.
       UpdateLocatedEventRevealedLock();
-      if (immersive_focus_watcher_)
+      if (immersive_focus_watcher_) {
         immersive_focus_watcher_->UpdateFocusRevealedLock();
+      }
     }
-
-    delegate_->OnImmersiveFullscreenEntered();
   } else {
+    EnableEventObservers(false);
     // Stop cursor-at-top tracking.
     top_edge_hover_timer_.Stop();
-    reveal_state_ = CLOSED;
+    SetRevealState(CLOSED);
 
     widget_->GetNativeWindow()->SetEventTargeter(std::move(normal_targeter_));
 
@@ -799,6 +857,16 @@ void ImmersiveFullscreenController::CleanupOnWindowDestroy() {
   // MaybeEndReveal() have no effect.
   enabled_ = false;
   widget_ = nullptr;
+  UpdateTopContainerPaintLock();
+}
+
+void ImmersiveFullscreenController::UpdateTopContainerPaintLock() {
+  if (!enabled_ || IsRevealed()) {
+    top_container_paint_lock_.reset();
+  } else if (!top_container_paint_lock_.has_value()) {
+    CHECK(top_container_);
+    top_container_paint_lock_.emplace(top_container_);
+  }
 }
 
 }  // namespace chromeos

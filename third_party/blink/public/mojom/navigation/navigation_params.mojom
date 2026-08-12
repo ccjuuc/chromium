@@ -10,6 +10,7 @@ import "mojo/public/mojom/base/unguessable_token.mojom";
 import "mojo/public/mojom/base/values.mojom";
 import "services/network/public/mojom/content_security_policy.mojom";
 import "services/network/public/mojom/fetch_api.mojom";
+import "services/network/public/mojom/link_header.mojom";
 import "services/network/public/mojom/source_location.mojom";
 import "services/network/public/mojom/storage_access_api.mojom";
 import "services/network/public/mojom/trust_tokens.mojom";
@@ -20,9 +21,9 @@ import "services/network/public/mojom/web_client_hints_types.mojom";
 import "services/network/public/mojom/web_sandbox_flags.mojom";
 import "services/viz/public/mojom/compositing/local_surface_id.mojom";
 import "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom";
-import "third_party/blink/public/mojom/conversions/conversions.mojom";
 import "third_party/blink/public/mojom/fenced_frame/fenced_frame_config.mojom";
 import "third_party/blink/public/mojom/fetch/fetch_api_request.mojom";
+import "third_party/blink/public/mojom/frame/agent_cluster_key.mojom";
 import "third_party/blink/public/mojom/frame/frame_policy.mojom";
 import "third_party/blink/public/mojom/frame/view_transition_state.mojom";
 import "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom";
@@ -30,7 +31,7 @@ import "third_party/blink/public/mojom/loader/mixed_content.mojom";
 import "third_party/blink/public/mojom/loader/referrer.mojom";
 import "third_party/blink/public/mojom/messaging/task_attribution_id.mojom";
 import "third_party/blink/public/mojom/navigation/navigation_api_history_entry_arrays.mojom";
-import "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom";
+import "third_party/blink/public/mojom/navigation/navigation_type_for_navigation_api.mojom";
 import "third_party/blink/public/mojom/navigation/navigation_policy.mojom";
 import "third_party/blink/public/mojom/navigation/prefetched_signed_exchange_info.mojom";
 import "third_party/blink/public/mojom/navigation/renderer_content_settings.mojom";
@@ -44,6 +45,7 @@ import "third_party/blink/public/mojom/storage_key/storage_key.mojom";
 import "third_party/blink/public/mojom/tokens/tokens.mojom";
 import "url/mojom/origin.mojom";
 import "url/mojom/url.mojom";
+import "mojo/public/mojom/base/unguessable_token.mojom";
 
 enum NavigationType {
   // Reload the page, validating only cache entry for the main resource.
@@ -84,15 +86,6 @@ enum NavigationType {
   DIFFERENT_DOCUMENT,
 };
 
-// Maps to
-// https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigateevent-navigationtype-dev.
-enum NavigationTypeForNavigationApi {
-  kPush,
-  kTraverse,
-  kReplace,
-  kReload,
-};
-
 // Used by the renderer to indicate a case where a standard navigation that
 // pushes a history entry must not be implicity converted to replace the current
 // history entry. Ignored if the current NavigationEntry is the initial entry,
@@ -100,6 +93,14 @@ enum NavigationTypeForNavigationApi {
 enum ForceHistoryPush {
   kYes,
   kNo,
+};
+
+// A per-navigation interface passed along with the BeginNavigation call, used
+// to listen to commit deferral initiated by the navigation API.
+interface NavigationResumeDeferredCommitListener {
+  // This is called by the navigation API after author-provided conditions are
+  // met.
+  ResumeDeferredCommit();
 };
 
 // Provided by the renderer ----------------------------------------------------
@@ -111,6 +112,14 @@ struct BeginNavigationParams {
   // refer to a RenderFrameHost that doesn't exist anymore when the IPC reaches
   // the browser process.
   blink.mojom.LocalFrameToken? initiator_frame_token;
+
+  // A token identifying the state of the document that initiated the
+  // navigation. This must be set on renderer-initiated navigations.
+  mojo_base.mojom.UnguessableToken? initiator_state_token;
+
+  // A token identifying the document that initiated the navigation. This must
+  // be set on renderer-initiated navigations.
+  blink.mojom.DocumentToken? initiator_document_token;
 
   // Additional HTTP request headers.
   string headers;
@@ -161,19 +170,26 @@ struct BeginNavigationParams {
   // conveying the result of the operation. Set on some child frame navigations.
   network.mojom.TrustTokenParams? trust_token_params;
 
-  // Carries optional information associated with conversion measurement for
-  // this navigation. Only set on navigations originating from anchors with
-  // relevant impression attributes set.
-  Impression? impression;
-
   // Timestamps of the renderer running beforeunload handlers on local frames
   // in preparation for navigating. Used for metrics.
   mojo_base.mojom.TimeTicks before_unload_start;
   mojo_base.mojom.TimeTicks before_unload_end;
 
-  // The navigation initiator's user activation and ad status.
-  blink.mojom.NavigationInitiatorActivationAndAdStatus
-      initiator_activation_and_ad_status;
+  // The time when the user-visible beforeunload dialog opens or null
+  // if the user-visible dialog is not opened in this navigation.
+  mojo_base.mojom.TimeTicks before_unload_dialog_opened;
+
+  // The time when the user-visible beforeunload dialog closes or null
+  // if the user-visible dialog is not opened in this navigation.
+  mojo_base.mojom.TimeTicks before_unload_dialog_closed;
+
+  // Whether this navigation started with a transient user activation.
+  bool started_with_transient_activation;
+
+  // Whether this navigation was started by an ad (i.e., an ad script was in the
+  // JavaScript stack at the time of the navigation, or the frame is an ad
+  // frame, as determined by Ad Tagging).
+  bool started_by_ad;
 
   // Whether this navigation was container initiated (e.g. iframe changed src).
   // This is currently partially specified in
@@ -185,16 +201,15 @@ struct BeginNavigationParams {
   // TODO(https://github.com/whatwg/html/issues/8846): clarify this further.
   bool is_container_initiated = false;
 
-  // The renderer's Storage Access API status (e.g. whether it has opted into
-  // accessing cross-site cookies). Note that this is not trusted; cookies will
-  // not actually be attached unless there is also a matching permission grant
-  // created by the browser process. (Also note that the Storage Access API is
-  // only relevant when third-party cookies are blocked.)
-  network.mojom.StorageAccessApiStatus storage_access_api_status = kNone;
-
   // True if the initiator explicitly asked for opener relationships to be
   // preserved, via rel="opener".
   bool has_rel_opener = false;
+
+  // If the navigation was triggered by an actor script tool, this contains the
+  // ID of the tool invocation. This helps the browser to associate the
+  // navigation with the tool that caused it.
+  // This is null for navigations that were not triggered by a script tool.
+  mojo_base.mojom.UnguessableToken? script_tool_invocation_id;
 };
 
 // Provided by the browser or the renderer -------------------------------------
@@ -268,8 +283,10 @@ struct CommonNavigationParams {
   // Whether or not this navigation was started from a context menu.
   bool started_from_context_menu = false;
 
-  // True if the request was user initiated.
-  bool has_user_gesture = false;
+  // True if the request was user initiated. This gesture is filtered out during
+  // proxy navigations, to prevent it from being exposed to the committed
+  // document in the renderer.
+  bool has_possibly_filtered_user_gesture = false;
 
   // True if the navigation should allow the target document to invoke a text
   // fragment (i.e. fragments with :~:text=). This is based on user gesture
@@ -344,6 +361,21 @@ struct NavigationTiming {
       ParentResourceTimingAccess.kDoNotReport;
 };
 
+// Contains both the redirect info and response head for a given redirect in the
+// array of redirects for a navigation. Both values must be set for a given
+// redirect.
+struct NavigationRedirectParams {
+  // Contains information about the redirect (such as the redirect response HTTP
+  // status code) as well as the fields in the request that will change for the
+  // next leg of the redirect chain. Maps to net::RedirectInfo in C++.
+  network.mojom.URLRequestRedirectInfo redirect_info;
+
+  // Contains the full network response details received for the redirect
+  // itself (such as headers, MIME type, load timings, connection info, and SSL
+  // status). Maps to net::URLResponseHead in C++.
+  network.mojom.URLResponseHead response_head;
+};
+
 // Sent with CommitNavigationParams and should only be set for main-frame
 // same-site navigations where we did a proactive BrowsingInstance swap and
 // we're reusing the old page's process. Needed to ensure that the previous
@@ -359,6 +391,16 @@ struct OldPageInfo {
   // pagehide and visibilitychange events won't get dispatched again when we
   // unload/freeze the page later on.
   blink.mojom.PageLifecycleState new_lifecycle_state_for_old_page;
+};
+
+// There are other structures for passing permissions policies via Mojo.
+// The difference is that this one passes yet-unparsed mapping of policies
+// to allowlists, just converted from JSON format. This can contain invalid
+// entries and malformed data. It will be parsed and then merged with
+// allowlists from the headers in renderer.
+struct IsolatedAppPermissionPolicyEntry {
+  string feature;
+  array<string> allowed_origins;
 };
 
 // Used by commit IPC messages. Holds the parameters needed by the renderer to
@@ -380,20 +422,26 @@ struct CommitNavigationParams {
   // Whether or not the user agent override string should be used.
   bool is_overriding_user_agent = false;
 
-  // Any redirect URLs that occurred before |url|. Useful for cross-process
-  // navigations; defaults to empty.
+  // The complete list of redirect URLs in chronological order that occurred
+  // during the lifecycle of this navigation. This includes both "prior"
+  // redirects (e.g. those that happened prior to starting this navigation
+  // request, if this is a cross-process navigation) as well as subsequent
+  // redirects. The last element is the URL prior to the current URL in
+  // CommonNavigationParams.
   array<url.mojom.Url> redirects;
 
-  // The ResourceResponseInfos received during redirects.
-  array<network.mojom.URLResponseHead> redirect_response;
-
-  // The RedirectInfos received during redirects.
-  array<network.mojom.URLRequestRedirectInfo> redirect_infos;
+  // The redirect infos and response heads received during redirects. This is
+  // only populated for redirects that occurred *after* the browser started this
+  // navigation request. It does not contain redirect params for prior redirects
+  // that happened before this NavigationRequest was created, and thus may be a
+  // different size than the |redirects| array.
+  array<NavigationRedirectParams> redirect_params;
 
   // The content type from the request headers for POST requests.
   string post_content_type;
 
-  // The original URL & method for this navigation.
+  // The original URL and method for this navigation.
+  // TODO(crbug.com/495463654): Replace original_url with original_origin.
   url.mojom.Url original_url;
   string original_method;
 
@@ -515,14 +563,10 @@ struct CommitNavigationParams {
   // The names of origin trials to be force enabled for this navigation.
   array<string> force_enabled_origin_trials;
 
-  // Whether the page is in an origin-keyed agent cluster.
-  // https://html.spec.whatwg.org/C/#origin-keyed-agent-clusters
-  bool origin_agent_cluster = false;
-
-  // Whether the decision to use origin-keyed or site-keyed agent clustering
-  // (which itself is recorded in origin_agent_cluster, above) has been
-  // made based on absent Origin-Agent-Cluster http header.
-  bool origin_agent_cluster_left_as_default = true;
+  // Specifies the AgentCluster to use to assign an execution context to the
+  // document created by the navigation.
+  // https://html.spec.whatwg.org/multipage/webappapis.html#agent-cluster-key
+  blink.mojom.AgentClusterKey agent_cluster_key;
 
   // Client-hints enabled; this is based on the top-level frame and should be
   // further narrowed down by permissions policy.
@@ -548,7 +592,19 @@ struct CommitNavigationParams {
   // window.navigation API.
   NavigationApiHistoryEntryArrays navigation_api_history_entry_arrays;
 
-  array<url.mojom.Url> early_hints_preloaded_resources;
+  // Resources preloaded by Early Hints responses, represented as LinkHeader
+  // structs containing the parsed href, as, and crossorigin attributes.
+  array<network.mojom.LinkHeader> early_hints_preloaded_resources;
+
+  // Origins preconnected to by Early Hints responses, represented as LinkHeader
+  // structs containing the parsed href and crossorigin attribute. Deduped by
+  // (origin, crossorigin). Used by the SpeculationMeasurement API.
+  array<network.mojom.LinkHeader> early_hints_preconnects;
+
+  // Origins preconnected to by `Link: rel=preconnect` headers on the final
+  // navigation response (as opposed to a 103 Early Hints response). Used by the
+  // SpeculationMeasurement API.
+  array<network.mojom.LinkHeader> navigation_preconnects;
 
   // The time the commit was sent from the browser.
   mojo_base.mojom.TimeTicks commit_sent;
@@ -689,6 +745,35 @@ struct CommitNavigationParams {
   // the navigation commit will actually occur. For more details, see
   // `NavigationRequest::ReuseRequestNavigationClientForCommitIfNeeded()`.
   blink.mojom.LocalFrameToken? commit_target_frame_token;
+
+  // Set to true if the navigation commits an initial WebUI, which is a subset
+  // of topchrome WebUIs that are loaded and shown from the initial browser
+  // startup, e.g. the reload button.
+  // TODO(crbug.com/7409013): Consider passing info about whether the
+  // navigation commits a more general topchrome WebUI instead, if all the
+  // optimizations and code path for initial WebUI should apply for general
+  // topchrome WebUI as well.
+  bool is_initial_webui = false;
+
+  // The permissions policy to use for the document. This is used for Isolated
+  // Web Apps to pass the policy from the manifest to the renderer.
+  array<IsolatedAppPermissionPolicyEntry>? isolated_app_policy;
+
+  // A text fragment selector (that uses the syntax defined in
+  // https://wicg.github.io/scroll-to-text-fragment/#syntax) to scroll the
+  // matched text into the viewport without applying the standard highlight
+  // styling. This is used for cross-device scroll restoration.
+  // The string should contain only the selector value (the part after
+  // "text=" in a URL directive), not the "text=" prefix itself.
+  string? internal_scroll_to_text_fragment;
+
+  // Browser-authoritative per-frame secure-context-root bit (see
+  // `ContentBrowserClient::IsSecureContextRoot()`). Stored on the
+  // LocalDOMWindow's SecurityContext at document install so descendants'
+  // ancestor walks can consult it. The browser is authoritative because
+  // the renderer cannot independently determine if a frame is a MIME
+  // handler (which requires browser-side state).
+  bool is_secure_context_root = false;
 };
 
 // Parameters used to dispatch the `pageswap` event on the old Document for

@@ -62,6 +62,10 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   HTMLLinkElement(Document&, const CreateElementFlags);
   ~HTMLLinkElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLLinkElement;
+  }
+
   KURL Href() const;
   const AtomicString& Rel() const;
   String Media() const { return media_; }
@@ -175,6 +179,15 @@ class CORE_EXPORT HTMLLinkElement final : public HTMLElement,
   // 2. `href` is not empty.
   // 3. the link element is already attached to the document.
   void MaybeHandlePaymentLink();
+
+  // Temporary way behind the Skeleton runtime flag to tell the SkeletonLoader
+  // to load a skeleton for a given url via:
+  //
+  // <link rel="prefetch-skeleton" href="...">
+  //
+  // TODO(crbug.com/513276602): This will most likely be done via speculation
+  // rules instead.
+  void HandleSkeletonPrefetchLink();
 
   void DispatchEventWithTaskState(const AtomicString& type,
                                   scheduler::TaskAttributionInfo*);

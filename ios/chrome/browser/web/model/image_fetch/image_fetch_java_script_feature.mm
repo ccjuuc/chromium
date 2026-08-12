@@ -35,8 +35,7 @@ ImageFetchJavaScriptFeature::ImageFetchJavaScriptFeature(
               kScriptName,
               FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kAllFrames,
-              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)},
-          {web::java_script_features::GetCommonJavaScriptFeature()}),
+              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)}),
       handler_factory_(std::move(handler_factory)) {}
 
 ImageFetchJavaScriptFeature::~ImageFetchJavaScriptFeature() = default;
@@ -48,18 +47,17 @@ ImageFetchJavaScriptFeature* ImageFetchJavaScriptFeature::GetInstance() {
   return instance.get();
 }
 
-void ImageFetchJavaScriptFeature::GetImageData(web::WebState* web_state,
+void ImageFetchJavaScriptFeature::GetImageData(web::WebFrame* frame,
                                                int call_id,
                                                const GURL& url) {
-  web::WebFrame* main_frame = GetWebFramesManager(web_state)->GetMainWebFrame();
-  if (!main_frame) {
+  if (!frame) {
     return;
   }
 
-  base::Value::List parameters;
+  base::ListValue parameters;
   parameters.Append(call_id);
   parameters.Append(url.spec());
-  CallJavaScriptFunction(main_frame, "imageFetch.getImageData", parameters);
+  CallJavaScriptFunction(frame, "imageFetch.getImageData", parameters);
 }
 
 std::optional<std::string>
@@ -76,12 +74,12 @@ void ImageFetchJavaScriptFeature::ScriptMessageReceived(
   }
 
   // Verify that the message is well-formed before using it.
-  base::Value* message = script_message.body();
+  base::Value* message = script_message.legacy_body();
   if (!message || !message->is_dict()) {
     return;
   }
 
-  const base::Value::Dict& message_dict = message->GetDict();
+  const base::DictValue& message_dict = message->GetDict();
   const std::optional<double> id_key = message_dict.FindDouble("id");
   if (!id_key) {
     return;

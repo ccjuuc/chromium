@@ -10,8 +10,9 @@ import android.content.Context;
 import android.os.Bundle;
 
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -41,7 +42,8 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
 
     private boolean mWebContentsDarkModeEnabled;
 
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
@@ -89,7 +91,7 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -110,28 +112,77 @@ public class ThemeSettingsFragment extends ChromeBaseSettingsFragment
 
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(ThemeSettingsFragment.class.getName(), 0) {
+                private final Bundle mExtras = new Bundle();
+
+                {
+                    mExtras.putInt(
+                            ThemeSettingsFragment.KEY_THEME_SETTINGS_ENTRY,
+                            ThemeSettingsEntry.SETTINGS);
+                }
 
                 @Override
                 public void updateDynamicPreferences(Context context, SettingsIndexData indexData) {
                     String prefFragment = ThemeSettingsFragment.class.getName();
-                    Bundle extras = new Bundle();
-                    extras.putInt(
-                            ThemeSettingsFragment.KEY_THEME_SETTINGS_ENTRY,
-                            ThemeSettingsEntry.SETTINGS);
                     String defaultTitle =
                             NightModeUtils.getThemeSettingTitle(context, ThemeType.SYSTEM_DEFAULT);
                     String defaultSummary =
                             context.getString(R.string.themes_system_default_summary);
-                    indexData.addEntryForKey(
-                            prefFragment, PREF_UI_THEME_PREF, defaultTitle, defaultSummary, extras);
+                    addEntryForKey(
+                            indexData,
+                            prefFragment,
+                            PREF_UI_THEME_PREF,
+                            PREF_UI_THEME_PREF,
+                            0,
+                            defaultTitle,
+                            defaultSummary,
+                            mExtras);
 
                     String lightTitle =
                             NightModeUtils.getThemeSettingTitle(context, ThemeType.LIGHT);
-                    indexData.addEntryForKey(
-                            prefFragment, PREF_UI_THEME_PREF_LIGHT, lightTitle, null, extras);
+                    addEntryForKey(
+                            indexData,
+                            prefFragment,
+                            PREF_UI_THEME_PREF_LIGHT,
+                            PREF_UI_THEME_PREF,
+                            1,
+                            lightTitle,
+                            null,
+                            mExtras);
                     String darkTitle = NightModeUtils.getThemeSettingTitle(context, ThemeType.DARK);
-                    indexData.addEntryForKey(
-                            prefFragment, PREF_UI_THEME_PREF_DARK, darkTitle, null, extras);
+                    addEntryForKey(
+                            indexData,
+                            prefFragment,
+                            PREF_UI_THEME_PREF_DARK,
+                            PREF_UI_THEME_PREF,
+                            2,
+                            darkTitle,
+                            null,
+                            mExtras);
+                }
+
+                private void addEntryForKey(
+                        SettingsIndexData indexData,
+                        String parentFragment,
+                        String key,
+                        String highlightKey,
+                        int subViewPos,
+                        String title,
+                        @Nullable String summary,
+                        Bundle extras) {
+                    String id = getUniqueId(key);
+                    indexData.addEntry(
+                            id,
+                            new SettingsIndexData.Entry.Builder(id, key, title, parentFragment)
+                                    .setSummary(summary)
+                                    .setHighlightKey(highlightKey)
+                                    .setSubViewPos(subViewPos)
+                                    .setArguments(extras)
+                                    .build());
+                }
+
+                @Override
+                public Bundle getExtras() {
+                    return mExtras;
                 }
             };
 }

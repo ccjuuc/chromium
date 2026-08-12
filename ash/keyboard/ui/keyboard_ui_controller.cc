@@ -20,7 +20,6 @@
 #include "ash/public/cpp/keyboard/keyboard_controller_observer.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -115,8 +114,7 @@ class VirtualKeyboardController : public ui::VirtualKeyboardController {
 
  private:
   raw_ptr<KeyboardUIController> keyboard_ui_controller_;
-  base::ObserverList<ui::VirtualKeyboardControllerObserver>::Unchecked
-      observer_list_;
+  base::ObserverList<ui::VirtualKeyboardControllerObserver> observer_list_;
 };
 
 }  // namespace
@@ -410,7 +408,7 @@ bool KeyboardUIController::UpdateKeyboardConfig(const KeyboardConfig& config) {
 }
 
 void KeyboardUIController::SetEnableFlag(KeyboardEnableFlag flag) {
-  if (!base::Contains(keyboard_enable_flags_, flag))
+  if (!keyboard_enable_flags_.contains(flag))
     keyboard_enable_flags_.insert(flag);
 
   // If there is a flag that is mutually exclusive with |flag|, clear it.
@@ -447,7 +445,7 @@ void KeyboardUIController::ClearEnableFlag(KeyboardEnableFlag flag) {
 }
 
 bool KeyboardUIController::IsEnableFlagSet(KeyboardEnableFlag flag) const {
-  return base::Contains(keyboard_enable_flags_, flag);
+  return keyboard_enable_flags_.contains(flag);
 }
 
 bool KeyboardUIController::IsKeyboardEnableRequested() const {
@@ -647,8 +645,10 @@ void KeyboardUIController::ShowAnimationFinished() {
 void KeyboardUIController::SetContainerBehaviorInternal(ContainerType type) {
   // Reset the hit test event targeter because the hit test bounds will
   // be wrong when container type changes and may cause the UI to be unusable.
-  if (GetKeyboardWindow())
-    GetKeyboardWindow()->SetEventTargeter(nullptr);
+  if (aura::Window* keyboard_window = GetKeyboardWindow()) {
+    keyboard_window->SetEventTargeter(nullptr);
+    keyboard_window->layer()->SetAlphaShape(nullptr);
+  }
 
   switch (type) {
     case ContainerType::kFullWidth:
@@ -991,11 +991,15 @@ void KeyboardUIController::SetOccludedBounds(
 
 void KeyboardUIController::SetHitTestBounds(
     const std::vector<gfx::Rect>& bounds_in_window) {
-  if (!GetKeyboardWindow())
+  aura::Window* keyboard_window = GetKeyboardWindow();
+  if (!keyboard_window) {
     return;
+  }
 
-  GetKeyboardWindow()->SetEventTargeter(
+  keyboard_window->SetEventTargeter(
       std::make_unique<ShapedWindowTargeter>(bounds_in_window));
+  keyboard_window->layer()->SetAlphaShape(
+      std::make_unique<ui::Layer::ShapeRects>(bounds_in_window));
 }
 
 bool KeyboardUIController::SetAreaToRemainOnScreen(

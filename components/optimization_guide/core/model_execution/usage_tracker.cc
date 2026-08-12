@@ -31,12 +31,21 @@ void UsageTracker::OnDeviceEligibleFeatureUsed(mojom::OnDeviceFeature feature) {
   model_execution::prefs::RecordFeatureUsage(local_state_, feature);
 
   for (auto& o : observers_) {
-    o.OnDeviceEligibleFeatureUsed(feature);
+    o.OnDeviceEligibleUseCaseUsed(ToUseCaseName(feature), was_first_usage);
   }
-  if (was_first_usage) {
-    for (auto& o : observers_) {
-      o.OnDeviceEligibleFeatureFirstUsed(feature);
-    }
+}
+
+void UsageTracker::OnDeviceEligibleUseCaseUsed(
+    const std::string& use_case_name) {
+  TRACE_EVENT("optimization_guide", "UsageTracker::OnDeviceEligibleUseCaseUsed",
+              "use_case", use_case_name);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  bool was_first_usage = !WasUseCaseRecentlyUsed(use_case_name);
+  model_execution::prefs::RecordUseCaseUsage(local_state_, use_case_name);
+
+  for (auto& o : observers_) {
+    o.OnDeviceEligibleUseCaseUsed(use_case_name, was_first_usage);
   }
 }
 
@@ -47,12 +56,11 @@ bool UsageTracker::WasOnDeviceEligibleFeatureRecentlyUsed(
                                                         feature);
 }
 
-bool UsageTracker::WasAnyOnDeviceEligibleFeatureRecentlyUsed() const {
+bool UsageTracker::WasUseCaseRecentlyUsed(
+    const std::string& use_case_name) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return std::ranges::any_of(
-      OnDeviceFeatureSet::All(), [&](mojom::OnDeviceFeature feature) {
-        return WasOnDeviceEligibleFeatureRecentlyUsed(feature);
-      });
+  return model_execution::prefs::WasUseCaseRecentlyUsed(&*local_state_,
+                                                        use_case_name);
 }
 
 void UsageTracker::AddObserver(Observer* observer) {
@@ -63,6 +71,16 @@ void UsageTracker::AddObserver(Observer* observer) {
 void UsageTracker::RemoveObserver(Observer* observer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   observers_.RemoveObserver(observer);
+}
+
+void UsageTracker::SetUseCaseRequested(const std::string& use_case_name,
+                                       bool requested) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (requested) {
+    OnDeviceEligibleUseCaseUsed(use_case_name);
+  } else {
+    model_execution::prefs::ClearUseCaseUsage(&*local_state_, use_case_name);
+  }
 }
 
 }  // namespace optimization_guide

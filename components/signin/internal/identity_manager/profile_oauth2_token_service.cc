@@ -13,6 +13,7 @@
 #include "components/signin/internal/identity_manager/oauth_multilogin_token_request.h"
 #include "components/signin/internal/identity_manager/oauth_multilogin_token_response.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
+#include "components/signin/public/base/binding_key_registration_token_result.h"
 #include "components/signin/public/base/device_id_helper.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -172,7 +173,7 @@ void ProfileOAuth2TokenService::StartRequestForMultilogin(
   }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  bool is_bound = delegate_->IsRefreshTokenBound(request.account_id());
+  bool is_bound = delegate_->IsRefreshTokenBoundToKey(request.account_id());
 
   // Sign `token_binding_challenge` asynchronously if it's required.
   if (is_bound && !token_binding_challenge.empty()) {
@@ -278,9 +279,9 @@ void ProfileOAuth2TokenService::UpdateCredentials(
     const CoreAccountId& account_id,
     const std::string& refresh_token,
     signin_metrics::SourceForRefreshTokenOperation source,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const signin::TokenBindingInfo& token_binding_info) {
   GetDelegate()->UpdateCredentials(account_id, refresh_token, source,
-                                   wrapped_binding_key);
+                                   token_binding_info);
 }
 
 void ProfileOAuth2TokenService::RevokeCredentials(
@@ -351,9 +352,24 @@ void ProfileOAuth2TokenService::UpdateAuthErrorForTesting(
 }
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+bool ProfileOAuth2TokenService::GenerateBindingKeyRegistrationToken(
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        supported_algorithms,
+    std::string_view auth_code,
+    base::OnceCallback<void(
+        std::optional<signin::BindingKeyRegistrationTokenResult>)> callback) {
+  return delegate_->GenerateBindingKeyRegistrationToken(
+      supported_algorithms, auth_code, std::move(callback));
+}
+
 std::vector<uint8_t> ProfileOAuth2TokenService::GetWrappedBindingKey(
     const CoreAccountId& account_id) const {
   return delegate_->GetWrappedBindingKey(account_id);
+}
+
+bool ProfileOAuth2TokenService::IsRefreshTokenBoundToMtls(
+    const CoreAccountId& account_id) const {
+  return delegate_->IsRefreshTokenBoundToMtls(account_id);
 }
 
 bool ProfileOAuth2TokenService::AllBoundTokensShareSameBindingKey() const {
@@ -384,8 +400,7 @@ OAuth2AccessTokenManager* ProfileOAuth2TokenService::GetAccessTokenManager() {
 void ProfileOAuth2TokenService::OnRefreshTokenAvailable(
     const CoreAccountId& account_id) {
   token_manager_->CancelRequestsForAccount(
-      account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::REQUEST_CANCELED));
+      account_id, GoogleServiceAuthError::CreateRequestCanceled());
   token_manager_->ClearCacheForAccount(account_id);
 }
 
@@ -400,8 +415,7 @@ void ProfileOAuth2TokenService::OnRefreshTokenRevoked(
 void ProfileOAuth2TokenService::OnRefreshTokenRevokedNotified(
     const CoreAccountId& account_id) {
   token_manager_->CancelRequestsForAccount(
-      account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND));
+      account_id, GoogleServiceAuthError::CreateAccountNotFound());
 }
 
 void ProfileOAuth2TokenService::OnRefreshTokensLoaded() {

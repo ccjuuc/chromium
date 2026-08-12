@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/views/apps/app_dialog/app_local_block_dialog_view.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -12,6 +13,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/color/color_id.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -56,9 +58,10 @@ void apps::AppServiceProxy::CreateLocalBlockDialog(
 }
 
 AppLocalBlockDialogView::AppLocalBlockDialogView(const std::string& app_name)
-    : AppDialogView(ui::ImageModel::FromVectorIcon(kGuardianIcon,
-                                                   ui::kColorIcon,
-                                                   kIconSize)) {
+    : AppDialogView(ui::ImageModel::FromVectorIcon(
+          features::IsRoundedIconsEnabled() ? kGuardianIcon : kGuardianOldIcon,
+          ui::kColorIcon,
+          kIconSize)) {
   InitializeView();
   AddTitle(/*title_text=*/std::u16string());
 
@@ -83,7 +86,7 @@ AppLocalBlockDialogView* AppLocalBlockDialogView::GetActiveViewForTesting() {
 }
 
 void AppLocalBlockDialogView::AddApp(const std::string& app_name) {
-  if (base::Contains(app_names_, app_name)) {
+  if (std::ranges::contains(app_names_, app_name)) {
     return;
   }
 

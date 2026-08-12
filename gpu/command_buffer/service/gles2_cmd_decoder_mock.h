@@ -68,6 +68,7 @@ class MockGLES2Decoder : public GLES2Decoder {
   MOCK_METHOD0(GetCapabilities, Capabilities());
   MOCK_METHOD0(GetGLCapabilities, GLCapabilities());
   MOCK_CONST_METHOD0(HasPendingQueries, bool());
+  MOCK_CONST_METHOD0(initialized, bool());
   MOCK_METHOD1(ProcessPendingQueries, void(bool));
   MOCK_CONST_METHOD0(HasMoreIdleWork, bool());
   MOCK_METHOD0(PerformIdleWork, void());
@@ -80,6 +81,7 @@ class MockGLES2Decoder : public GLES2Decoder {
   MOCK_CONST_METHOD1(
       RestoreActiveTextureUnitBinding, void(unsigned int target));
   MOCK_METHOD0(RestoreAllExternalTextureBindingsIfNeeded, void());
+  MOCK_METHOD0(PauseTransformFeedback, void());
   MOCK_METHOD1(RestoreBufferBinding, void(unsigned int target));
   MOCK_CONST_METHOD0(RestoreBufferBindings, void());
   MOCK_CONST_METHOD0(RestoreFramebufferBindings, void());
@@ -147,6 +149,8 @@ class MockGLES2Decoder : public GLES2Decoder {
                     int height,
                     int depth));
   MOCK_METHOD0(GetErrorState, ErrorState *());
+  MOCK_CONST_METHOD2(BindFramebuffer,
+                     void(unsigned target, uint32_t service_id));
 
   MOCK_METHOD0(GetLogger, Logger*());
 

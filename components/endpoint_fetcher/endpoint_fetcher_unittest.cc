@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "base/byte_size.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
@@ -122,7 +123,7 @@ class EndpointFetcherTest : public testing::Test {
     }
     head->mime_type = mime_type;
     network::URLLoaderCompletionStatus status(error);
-    status.decoded_body_length = response_data.size();
+    status.decoded_body_length = base::ByteSize(response_data.size());
     test_url_loader_factory_.AddResponse(request_url, std::move(head),
                                          response_data, status);
   }
@@ -229,7 +230,7 @@ TEST_F(EndpointFetcherTest, FetchOAuthError) {
       });
   endpoint_fetcher()->Fetch(endpoint_fetcher_callback().Get());
   identity_test_env().WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+      GoogleServiceAuthError::FromServiceUnavailable(""));
   run_loop.Run();
 }
 

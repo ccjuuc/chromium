@@ -10,13 +10,12 @@ import {SeaPenActionName, SeaPenHistoryPromptSelectedEvent, SeaPenInputQueryElem
 import type {CrButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import type {CrTextareaElement} from 'chrome://resources/ash/common/cr_elements/cr_textarea/cr_textarea.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {assert} from 'chrome://webui-test/chai.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertEquals, assertFalse, assertNotSameOrderedMembers, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
-import type {TestPersonalizationStore} from 'test_personalization_store.js';
-import type {TestSeaPenProvider} from 'test_sea_pen_interface_provider.js';
 
 import {baseSetup, getActiveElement, initElement, teardownElement} from './personalization_app_test_utils.js';
+import type {TestPersonalizationStore} from './test_personalization_store.js';
+import type {TestSeaPenProvider} from './test_sea_pen_interface_provider.js';
 
 suite('SeaPenInputQueryElementTest', function() {
   let seaPenInputQueryElement: SeaPenInputQueryElement|null;
@@ -301,7 +300,7 @@ suite('SeaPenInputQueryElementTest', function() {
     shuffleButton.click();
 
     await waitAfterNextRender(seaPenInputQueryElement);
-    assert.notSameOrderedMembers(originalSuggestions, getSuggestions());
+    assertNotSameOrderedMembers(originalSuggestions, getSuggestions());
   });
 
   test('clicking suggestion adds text to whitespace input', async () => {
@@ -439,7 +438,7 @@ suite('SeaPenInputQueryElementTest', function() {
     await setTextInputValue('abc');
 
     // These suggestions should not be the same as the first set of suggestions.
-    assert.notSameOrderedMembers(originalSuggestions, getSuggestions());
+    assertNotSameOrderedMembers(originalSuggestions, getSuggestions());
   });
 
   test('searching using empty text input works like inspire me', async () => {
@@ -662,4 +661,56 @@ suite('SeaPenInputQueryElementTest', function() {
     assertTrue(!!inputElement);
     assertEquals(getActiveElement(seaPenInputQueryElement), inputElement);
   });
+
+  test(
+      're-observes suggestions container after disconnect and reconnect',
+      async () => {
+        const observedTargets: Element[] = [];
+        const originalResizeObserver = window.ResizeObserver;
+        class MockResizeObserver implements ResizeObserver {
+          constructor(_callback: ResizeObserverCallback) {}
+          observe(target: Element) {
+            observedTargets.push(target);
+          }
+          unobserve() {}
+          disconnect() {
+            observedTargets.length = 0;
+          }
+          takeRecords(): ResizeObserverEntry[] {
+            return [];
+          }
+        }
+        window.ResizeObserver = MockResizeObserver;
+
+        try {
+          seaPenInputQueryElement = initElement(SeaPenInputQueryElement);
+          await waitAfterNextRender(seaPenInputQueryElement);
+          await setTextInputValue('test');
+
+          const seaPenSuggestionsElement =
+              seaPenInputQueryElement.shadowRoot!.querySelector(
+                  SeaPenSuggestionsElement.is)!;
+          assertTrue(
+              !!seaPenSuggestionsElement,
+              'suggestions element should be stamped');
+          assertTrue(
+              observedTargets.includes(seaPenSuggestionsElement),
+              'suggestions element should be observed initially');
+
+          // Simulate disconnect and reconnect cycle.
+          seaPenInputQueryElement.remove();
+          assertTrue(
+              observedTargets.length === 0,
+              'observed targets should be empty on disconnect');
+
+          document.body.appendChild(seaPenInputQueryElement);
+          await waitAfterNextRender(seaPenInputQueryElement);
+
+          assertTrue(
+              observedTargets.includes(seaPenSuggestionsElement),
+              'suggestions element should be re-observed on reconnect');
+        } finally {
+          window.ResizeObserver = originalResizeObserver;
+        }
+      });
 });

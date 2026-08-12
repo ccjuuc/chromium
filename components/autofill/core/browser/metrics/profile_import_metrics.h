@@ -5,9 +5,18 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PROFILE_IMPORT_METRICS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_PROFILE_IMPORT_METRICS_H_
 
+#include <stddef.h>
+
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_import/addresses/autofill_profile_import_process.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill::autofill_metrics {
 
@@ -133,6 +142,16 @@ enum class AddressValidZipCodeSeparatorMetric {
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillZipCodeSeparators)
 
+// These values are persisted to UMA logs. Entries should not be renumbered
+// and numeric values should never be reused. Represents the categories of
+// field updates during profile merge.
+enum class FieldMergeCategory {
+  kCapitalizationUpdate = 1 << 0,
+  kDiacriticAndCapitalizationUpdate = 1 << 1,
+  kEmptyToNonEmpty = 1 << 2,
+  kMaxValue = kEmptyToNonEmpty,
+};
+
 // Logs the address profile import UKM after the form submission.
 // `user_decision` is the user's decision based on the storage prompt, if
 // presented. `num_edited_fields` is the number of fields that were edited by
@@ -153,12 +172,20 @@ void LogAddressProfileImportUkm(
 void LogAddressFormImportRequirementMetric(
     AddressProfileImportRequirementMetric metric);
 
+// Logs the source of the country of a profile.
+void LogAddressFormImportCountrySource(
+    const ProfileImportMetadata& profile_import_metadata);
+
 // Validates the profile import requirements and emits all the results.
 // Additionally, logs country-specific field requirement metrics.
 void LogAddressFormImportRequirementMetric(const AutofillProfile& profile);
 
 // Logs the overall status of an address import upon form submission.
 void LogAddressFormImportStatusMetric(AddressProfileImportStatusMetric metric);
+
+// Logs details about silent profile updates.
+void LogSilentUpdateMergeCategory(const AutofillProfile& old_profile,
+                                  const AutofillProfile& new_profile);
 
 // Logs the type of a profile import.
 void LogProfileImportType(AutofillProfileImportType import_type);
@@ -209,13 +236,6 @@ void LogHomeAndWorkSupersetAffectedType(FieldType affected_type);
 void LogProfileImportTypeEditedType(AutofillProfileImportType type,
                                     FieldType edited_type);
 
-// Logs if at least one setting-inaccessible field was removed on import.
-void LogRemovedSettingInaccessibleFields(bool did_remove);
-
-// Logs that `field` was removed from a profile on import, because it is
-// setting-inaccessible in the profile's country.
-void LogRemovedSettingInaccessibleField(FieldType field);
-
 // Logs whether a phone number was parsed successfully on profile import.
 // Contrary to the profile import requirement metrics, the parsing result is
 // only emitted when a number is present.
@@ -250,6 +270,17 @@ void LogZipCodeLengthMetric(std::u16string_view zip);
 // Logs the specific zip code separator char found in a valid and complete
 // profile considered for import.
 void LogZipCodeSeparatorMetric(std::u16string_view zip);
+
+// Logs the `user_decision` regarding a save prompt, but splits the decision
+// based on the `submission_source`. Only logs metrics for specific values of
+// `user_decision` and `submission_source`.
+void LogNewProfileUserDecisionPerSubmissionSourceMetric(
+    AutofillClient::AddressPromptUserDecision user_decision,
+    mojom::SubmissionSource submission_source);
+
+// Logs that `field_type` was removed from a profile on import because the
+// value of this type is a placeholder.
+void LogRemovedPlaceholderValue(FieldType field_type);
 
 }  // namespace autofill::autofill_metrics
 

@@ -12,6 +12,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
@@ -42,13 +43,14 @@ class Configurator;
 }
 
 namespace extensions {
+class ChromeProcessManagerDelegate;
 class ComponentExtensionResourceManager;
 class EventRouterForwarder;
 class ExtensionCache;
 class ExtensionsAPIClient;
 class ProcessManagerDelegate;
 class SafeBrowsingDelegate;
-class ScopedExtensionUpdaterKeepAlive;
+class ScopedBrowserContextKeepAlive;
 class UserScriptListener;
 
 // Implementation of BrowserClient for Chrome, which includes
@@ -59,6 +61,25 @@ class UserScriptListener;
 // browser process (see chrome/common/extensions/chrome_extensions_client.h).
 class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
  public:
+  // Manifest settings override types.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  //
+  // LINT.IfChange(ManifestSettingsOverrideType)
+  enum ManifestSettingsOverrideType {
+    // No overrides.
+    kNoOverride = 0,
+    // Overrides the default search engine.
+    kSearchEngine = 1,
+    // Overrides the new tab page.
+    kNewTabPage = 2,
+    // Overrides the default search engine and new tab page.
+    kSearchEngineAndNewTabPage = 3,
+
+    kMaxValue = kSearchEngineAndNewTabPage,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/extensions/enums.xml:ManifestSettingsOverrideType)
+
   ChromeExtensionsBrowserClient();
 
   ChromeExtensionsBrowserClient(const ChromeExtensionsBrowserClient&) = delete;
@@ -83,6 +104,8 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       content::BrowserContext* context) override;
   content::BrowserContext* GetContextRedirectedToOriginal(
       content::BrowserContext* context) override;
+  content::BrowserContext* GetContextRedirectedToOriginalWithoutAshInternals(
+      content::BrowserContext* context) override;
   content::BrowserContext* GetContextOwnInstance(
       content::BrowserContext* context) override;
   content::BrowserContext* GetContextForOriginalOnly(
@@ -91,12 +114,13 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       content::BrowserContext* context) override;
 #if BUILDFLAG(IS_CHROMEOS)
   bool IsActiveContext(content::BrowserContext* browser_context) const override;
-  std::string GetUserIdHashFromContext(
-      content::BrowserContext* context) override;
 #endif
   bool IsGuestSession(content::BrowserContext* context) const override;
   bool IsExtensionIncognitoEnabled(
       const ExtensionId& extension_id,
+      content::BrowserContext* context) const override;
+  bool IsExtensionIncognitoEnabled(
+      const Extension* extension,
       content::BrowserContext* context) const override;
   bool CanExtensionCrossIncognito(
       const Extension* extension,
@@ -111,19 +135,18 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       const base::FilePath& resource_relative_path,
       int resource_id,
       scoped_refptr<net::HttpResponseHeaders> headers,
-      mojo::PendingRemote<network::mojom::URLLoaderClient> client) override;
+      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+      content::BrowserContext* browser_context) override;
   bool AllowCrossRendererResourceLoad(
       const network::ResourceRequest& request,
       network::mojom::RequestDestination destination,
       ui::PageTransition page_transition,
-      int child_id,
+      content::ChildProcessId child_id,
       bool is_incognito,
       const Extension* extension,
       const ExtensionSet& extensions,
       const ProcessMap& process_map,
       const GURL& upstream_url) override;
-  PrefService* GetPrefServiceForContext(
-      content::BrowserContext* context) override;
   void GetEarlyExtensionPrefsObservers(
       content::BrowserContext* context,
       std::vector<EarlyExtensionPrefsObserver*>* observers) const override;
@@ -153,7 +176,7 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void BroadcastEventToRenderers(
       events::HistogramValue histogram_value,
       const std::string& event_name,
-      base::Value::List args,
+      base::ListValue args,
       bool dispatch_to_off_the_record_profiles) override;
   ExtensionCache* GetExtensionCache() override;
   bool IsBackgroundUpdateAllowed() override;
@@ -171,9 +194,12 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       scoped_refptr<update_client::Configurator>) override;
   scoped_refptr<update_client::Configurator> CreateUpdateClientConfigurator(
       content::BrowserContext* context) override;
-  std::unique_ptr<ScopedExtensionUpdaterKeepAlive> CreateUpdaterKeepAlive(
+  std::unique_ptr<ScopedBrowserContextKeepAlive> CreateUpdaterKeepAlive(
+      content::BrowserContext* context) override;
+  std::unique_ptr<ScopedBrowserContextKeepAlive> CreateCrxInstallerKeepAlive(
       content::BrowserContext* context) override;
   bool IsActivityLoggingEnabled(content::BrowserContext* context) override;
+  bool IsTelemetryLoggingEnabled(content::BrowserContext* context) override;
   void GetTabAndWindowIdForWebContents(content::WebContents* web_contents,
                                        int* tab_id,
                                        int* window_id) override;
@@ -188,13 +214,16 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void SignalContentScriptsLoaded(content::BrowserContext* context) override;
   bool ShouldSchemeBypassNavigationChecks(
       const std::string& scheme) const override;
+  bool IsDefaultSearchEngineRedirect(content::BrowserContext* context,
+                                     const GURL& request_url,
+                                     const GURL& redirect_url) const override;
   base::FilePath GetSaveFilePath(content::BrowserContext* context) override;
   void SetLastSaveFilePath(content::BrowserContext* context,
                            const base::FilePath& path) override;
   bool HasIsolatedStorage(const ExtensionId& extension_id,
                           content::BrowserContext* context) override;
-  bool IsScreenshotRestricted(
-      content::WebContents* web_contents) const override;
+  base::expected<void, extensions::ScreenshotAccessError>
+  IsScreenshotRestricted(content::WebContents* web_contents) const override;
   bool IsValidTabId(content::BrowserContext* context,
                     int tab_id,
                     bool include_incognito,
@@ -221,17 +250,17 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
   void AddAPIActionToActivityLog(content::BrowserContext* browser_context,
                                  const ExtensionId& extension_id,
                                  const std::string& call_name,
-                                 base::Value::List args,
+                                 base::ListValue args,
                                  const std::string& extra) override;
   void AddEventToActivityLog(content::BrowserContext* browser_context,
                              const ExtensionId& extension_id,
                              const std::string& call_name,
-                             base::Value::List args,
+                             base::ListValue args,
                              const std::string& extra) override;
   void AddDOMActionToActivityLog(content::BrowserContext* browser_context,
                                  const ExtensionId& extension_id,
                                  const std::string& call_name,
-                                 base::Value::List args,
+                                 base::ListValue args,
                                  const GURL& url,
                                  const std::u16string& url_title,
                                  int call_type) override;
@@ -279,6 +308,35 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
                       content::WebContents* web_contents) const override;
   void ShowWarningMessageBox(const std::u16string& title,
                              const std::u16string& message) override;
+  void RecordCommandLineMetricsOnUnpackedInstallation(
+      content::BrowserContext* context,
+      const Extension* extension) const override;
+  ExtensionAssetsManager* GetAssetsManager() override;
+  Blocklist* GetBlocklist(content::BrowserContext* context) override;
+  InstallStageTracker* GetInstallStageTracker(
+      content::BrowserContext* context) override;
+  InstallTracker* GetInstallTracker(content::BrowserContext* context) override;
+  InstallVerifier* GetInstallVerifier(
+      content::BrowserContext* context) override;
+  SharedModuleService* GetSharedModuleService(
+      content::BrowserContext* context) override;
+  void UpdateCheckIfEnabled(content::BrowserContext* context) override;
+  base::FilePath GetUserDataDir() override;
+  scoped_refptr<CrxInstaller> CreateCrxInstallerFromDownloadItem(
+      content::BrowserContext* context,
+      const download::DownloadItem& download) override;
+  std::unique_ptr<image_fetcher::ImageDecoder> CreateImageDecoder() override;
+  bool CanUseNonComponentExtensions(content::BrowserContext* context) override;
+  void CanInstallExtensionByPolicy(
+      content::BrowserContext* context,
+      const ExtensionId& extension_id,
+      const base::Version& extension_version,
+      base::OnceCallback<void(bool, std::u16string)> callback) override;
+  std::unique_ptr<ExtensionInstallPromptClient> CreateInstallPrompt(
+      content::WebContents* web_contents,
+      std::unique_ptr<InstallPromptData> prompt) override;
+
+  void SetAPIClientForTest(std::unique_ptr<ExtensionsAPIClient> client);
 
   static void set_did_chrome_update_for_testing(bool did_update);
 
@@ -294,11 +352,11 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
       const ExtensionId& extension_id,
       Action::ActionType action_type,
       const std::string& call_name,
-      base::Value::List args,
+      base::ListValue args,
       const std::string& extra);
 
   // Support for ProcessManager. May be null on some platforms (e.g. Android).
-  std::unique_ptr<ProcessManagerDelegate> process_manager_delegate_;
+  std::unique_ptr<ChromeProcessManagerDelegate> process_manager_delegate_;
 
   // May be null on some platforms (e.g. Android).
   std::unique_ptr<ComponentExtensionResourceManager> resource_manager_;

@@ -11,11 +11,13 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/blink/public/common/loader/javascript_framework_detection.h"
 #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
 #include "third_party/blink/renderer/core/event_target_names.h"
+#include "third_party/blink/renderer/core/execution_context/security_context_init.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
@@ -79,6 +81,7 @@ class FakeWorkerGlobalScope : public WorkerGlobalScope {
       const KURL& response_url,
       network::mojom::ReferrerPolicy response_referrer_policy,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
       const Vector<String>* response_origin_trial_tokens) override {
     InitializeURL(response_url);
     SetReferrerPolicy(response_referrer_policy);
@@ -86,12 +89,18 @@ class FakeWorkerGlobalScope : public WorkerGlobalScope {
     InitContentSecurityPolicyFromVector(std::move(response_csp));
     BindContentSecurityPolicyToExecutionContext();
 
+    SecurityContextInit security_init(this);
+    security_init.ApplyDocumentPolicy(
+        response_document_policy.policy,
+        String(response_document_policy.report_only_header.c_str()));
+
     OriginTrialContext::AddTokens(this, response_origin_trial_tokens);
 
     // This should be called after OriginTrialContext::AddTokens() to install
     // origin trial features in JavaScript's global object.
     ScriptController()->PrepareForEvaluation();
   }
+
   void FetchAndRunClassicScript(
       const KURL& script_url,
       std::unique_ptr<WorkerMainScriptLoadParameters>
@@ -146,27 +155,9 @@ class WorkerThreadForTest : public WorkerThread {
 
   void StartWithSourceCode(const SecurityOrigin* security_origin,
                            const String& source,
-                           const KURL& script_url = KURL("http://fake.url/"),
-                           WorkerClients* worker_clients = nullptr) {
-    auto creation_params = std::make_unique<GlobalScopeCreationParams>(
-        script_url, mojom::blink::ScriptType::kClassic,
-        "fake global scope name", "fake user agent", UserAgentMetadata(),
-        nullptr /* web_worker_fetch_context */,
-        Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-        Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-        network::mojom::ReferrerPolicy::kDefault, security_origin,
-        false /* starter_secure_context */,
-        CalculateHttpsState(security_origin), worker_clients,
-        nullptr /* content_settings_client */,
-        nullptr /* inherited_trial_features */,
-        base::UnguessableToken::Create(),
-        std::make_unique<WorkerSettings>(std::make_unique<Settings>().get()),
-        mojom::blink::V8CacheOptions::kDefault,
-        nullptr /* worklet_module_responses_map */);
-    // Create a dummy parent context.
-    creation_params->parent_context_token = LocalFrameToken();
-
-    Start(std::move(creation_params),
+                           const KURL& script_url = KURL("http://fake.url/")) {
+    Start(GlobalScopeCreationParams::CreateForWorkerForTesting(security_origin,
+                                                               script_url),
           WorkerBackingThreadStartupData::CreateDefault(),
           std::make_unique<WorkerDevToolsParams>());
     EvaluateClassicScript(script_url, source, nullptr /* cached_meta_data */,
@@ -204,7 +195,9 @@ class MockWorkerReportingProxy final : public WorkerReportingProxy {
 
   MOCK_METHOD1(DidCreateWorkerGlobalScope, void(WorkerOrWorkletGlobalScope*));
   MOCK_METHOD0(WillEvaluateScriptMock, void());
-  MOCK_METHOD1(DidEvaluateTopLevelScript, void(bool success));
+  MOCK_METHOD2(DidEvaluateTopLevelScript,
+               void(bool success,
+                    const JavaScriptFrameworkDetectionResult& result));
   MOCK_METHOD0(DidCloseWorkerGlobalScope, void());
   MOCK_METHOD0(WillDestroyWorkerGlobalScope, void());
   MOCK_METHOD0(DidTerminateWorkerThread, void());

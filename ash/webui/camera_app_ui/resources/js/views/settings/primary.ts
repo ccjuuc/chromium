@@ -3,11 +3,8 @@
 // found in the LICENSE file.
 
 import {assert, assertInstanceof} from '../../assert.js';
-import {CameraManager} from '../../device/index.js';
-import {
-  BaseSettingsOption,
-  BaseSettingsOptionGroup,
-} from '../../device/type.js';
+import type {CameraManager} from '../../device/index.js';
+import type {BaseSettingsOption, BaseSettingsOptionGroup} from '../../device/type.js';
 import * as dom from '../../dom.js';
 import {setExpertMode} from '../../expert.js';
 import {I18nString} from '../../i18n_string.js';
@@ -18,17 +15,12 @@ import * as scannerChip from '../../scanner_chip.js';
 import * as state from '../../state.js';
 import {Mode, ViewName} from '../../type.js';
 import * as util from '../../util.js';
-import {View} from '../view.js';
+import type {View} from '../view.js';
 
 import {BaseSettings} from './base.js';
 import {PhotoAspectRatioSettings} from './photo_aspect_ratio.js';
 import {PhotoResolutionSettings} from './photo_resolution.js';
-import {
-  toAspectRatioAriaLabel,
-  toAspectRatioLabel,
-  toPhotoResolutionOptionLabel,
-  toVideoResolutionOptionLabel,
-} from './util.js';
+import {toAspectRatioAriaLabel, toAspectRatioLabel, toPhotoResolutionOptionLabel, toVideoResolutionOptionLabel} from './util.js';
 import {VideoResolutionSettings} from './video_resolution.js';
 
 const helpUrl =

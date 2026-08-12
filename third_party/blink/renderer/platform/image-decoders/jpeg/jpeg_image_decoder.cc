@@ -168,8 +168,8 @@ struct decoder_source_mgr {
 enum jstate {
   kJpegHeader,  // Reading JFIF headers
   kJpegStartDecompress,
-  kJpegDecompressProgressive,  // Output progressive pixels
-  kJpegDecompressSequential,   // Output sequential pixels
+  kJpegDecompressBufferedImage,  // Output pixels in buffered-image mode.
+  kJpegDecompressSequential,     // Output pixels in sequential mode.
   kJpegDone
 };
 
@@ -206,15 +206,14 @@ class JPEGImageReader final {
   USING_FAST_MALLOC(JPEGImageReader);
 
  public:
-  JPEGImageReader(JPEGImageDecoder* decoder, wtf_size_t initial_offset)
+  explicit JPEGImageReader(JPEGImageDecoder* decoder)
       : decoder_(decoder),
         needs_restart_(false),
-        restart_position_(initial_offset),
-        next_read_position_(initial_offset),
+        restart_position_(0),
+        next_read_position_(0),
         last_set_byte_(nullptr),
         state_(kJpegHeader),
         samples_(nullptr) {
-
     // Set up the normal JPEG error routines, then override error_exit.
     info_.err = jpeg_std_error(&err_.pub);
     err_.pub.error_exit = error_exit;
@@ -474,30 +473,27 @@ class JPEGImageReader final {
         // Allow color management of the decoded RGBA pixels if possible.
         if (!decoder_->IgnoresColorSpace()) {
           // Extract the ICC profile data without copying it (the function
-          // ColorProfile::Create will make its own copy).
+          // ColorProfile::Make will make its own copy).
           auto profile_data =
               metadata_decoder_->getICCProfileData(/*copyData=*/false);
           if (profile_data) {
-            std::unique_ptr<ColorProfile> profile =
-                ColorProfile::Create(skia::as_byte_span(*profile_data));
+            sk_sp<skia::ColorProfile> profile =
+                skia::ColorProfile::Make(skia::as_byte_span(*profile_data));
             if (profile) {
-              uint32_t data_color_space =
-                  profile->GetProfile()->data_color_space;
               switch (info_.jpeg_color_space) {
                 case JCS_CMYK:
                 case JCS_YCCK:
-                  if (data_color_space != skcms_Signature_CMYK) {
+                  if (!profile->IsCMYK()) {
                     profile = nullptr;
                   }
                   break;
                 case JCS_GRAYSCALE:
-                  if (data_color_space != skcms_Signature_Gray &&
-                      data_color_space != skcms_Signature_RGB) {
+                  if (!profile->IsGray() && !profile->IsRGB()) {
                     profile = nullptr;
                   }
                   break;
                 default:
-                  if (data_color_space != skcms_Signature_RGB) {
+                  if (!profile->IsRGB()) {
                     profile = nullptr;
                   }
                   break;
@@ -571,8 +567,8 @@ class JPEGImageReader final {
           return false;  // I/O suspension.
         }
 
-        // If this is a progressive JPEG ...
-        state_ = (info_.buffered_image) ? kJpegDecompressProgressive
+        // If this is a JPEG requiring buffered-image mode.
+        state_ = (info_.buffered_image) ? kJpegDecompressBufferedImage
                                         : kJpegDecompressSequential;
         [[fallthrough]];
 
@@ -588,9 +584,9 @@ class JPEGImageReader final {
         }
         [[fallthrough]];
 
-      case kJpegDecompressProgressive:
-        if (state_ == kJpegDecompressProgressive) {
-          auto all_components_seen = [](const jpeg_decompress_struct& info) {
+      case kJpegDecompressBufferedImage:
+        if (state_ == kJpegDecompressBufferedImage) {
+          auto all_components_seen = [](jpeg_decompress_struct& info) -> bool {
             if (info.coef_bits) {
               for (int c = 0; c < info.num_components; ++c) {
                 if (UNSAFE_TODO(info.coef_bits[c])[0] == -1) {
@@ -598,8 +594,12 @@ class JPEGImageReader final {
                   return false;
                 }
               }
+              return true;
             }
-            return true;
+            // For non-progressive (e.g. non-interleaved sequential or lossless)
+            // images coef_bits is always null, and all components are only seen
+            // when the input is complete.
+            return jpeg_input_complete(&info);
           };
           int status = 0;
           int first_scan_to_display =
@@ -823,14 +823,12 @@ void term_source(j_decompress_ptr jd) {
 JPEGImageDecoder::JPEGImageDecoder(AlphaOption alpha_option,
                                    ColorBehavior color_behavior,
                                    cc::AuxImage aux_image,
-                                   wtf_size_t max_decoded_bytes,
-                                   wtf_size_t offset)
+                                   wtf_size_t max_decoded_bytes)
     : ImageDecoder(alpha_option,
                    ImageDecoder::kDefaultBitDepth,
                    color_behavior,
                    aux_image,
-                   max_decoded_bytes),
-      offset_(offset) {}
+                   max_decoded_bytes) {}
 
 JPEGImageDecoder::~JPEGImageDecoder() = default;
 
@@ -901,7 +899,7 @@ void JPEGImageDecoder::OnSetData(scoped_refptr<SegmentReader> data) {
       reader_ && reader_->Info()->scale_num == reader_->Info()->scale_denom &&
       // TODO(crbug.com/911246): Support color space transformations on planar
       // data.
-      !ColorTransform() &&
+      !NeedsDecodeTimeColorTransform() &&
       SubsamplingSupportedByDecodeToYUV(GetYUVSubsampling());
 }
 
@@ -951,11 +949,12 @@ unsigned JPEGImageDecoder::DesiredScaleNumerator(wtf_size_t max_decoded_bytes,
     return scale_denominator;
   }
 
-  // Downsample according to the maximum decoded size.
-  return static_cast<unsigned>(floor(sqrt(
-      // MSVC needs explicit parameter type for sqrt().
-      static_cast<float>(max_decoded_bytes) / original_bytes *
-      scale_denominator * scale_denominator)));
+  // Downsample according to the maximum decoded size. Use double to prevent
+  // precision loss that can trigger redundant decoder creation
+  // (crbug.com/500104917).
+  return static_cast<unsigned>(
+      floor(sqrt(static_cast<double>(max_decoded_bytes) / original_bytes) *
+            scale_denominator));
 }
 
 bool JPEGImageDecoder::ShouldGenerateAllSizes() const {
@@ -1162,15 +1161,8 @@ bool OutputRows(JPEGImageReader* reader, ImageFrame& buffer) {
       SetPixel<colorSpace>(pixel, samples, x);
     }
 
-    ColorProfileTransform* xform = reader->Decoder()->ColorTransform();
-    if (xform) {
-      ImageFrame::PixelData* row = buffer.GetAddr(0, y);
-      skcms_AlphaFormat alpha_format = skcms_AlphaFormat_Unpremul;
-      bool color_conversion_successful = skcms_Transform(
-          row, XformColorFormat(), alpha_format, xform->SrcProfile(), row,
-          XformColorFormat(), alpha_format, xform->DstProfile(), width);
-      DCHECK(color_conversion_successful);
-    }
+    reader->Decoder()->DoDecodeTimeColorTransformIfNeeded(
+        buffer, SkIRect::MakeXYWH(0, y, width, 1));
   }
 
   buffer.SetPixelsChanged(true);
@@ -1287,15 +1279,9 @@ bool JPEGImageDecoder::OutputScanlines() {
         return false;
       }
 
-      ColorProfileTransform* xform = ColorTransform();
-      if (xform) {
-        skcms_AlphaFormat alpha_format = skcms_AlphaFormat_Unpremul;
-        bool color_conversion_successful = skcms_Transform(
-            row, XformColorFormat(), alpha_format, xform->SrcProfile(), row,
-            XformColorFormat(), alpha_format, xform->DstProfile(),
-            info->output_width);
-        DCHECK(color_conversion_successful);
-      }
+      DoDecodeTimeColorTransformIfNeeded(
+          buffer, SkIRect::MakeXYWH(0, info->output_scanline - 1,
+                                    info->output_width, 1));
     }
     buffer.SetPixelsChanged(true);
     return true;
@@ -1337,7 +1323,7 @@ void JPEGImageDecoder::Decode(DecodingMode decoding_mode) {
   }
 
   if (!reader_) {
-    reader_ = std::make_unique<JPEGImageReader>(this, offset_);
+    reader_ = std::make_unique<JPEGImageReader>(this);
     reader_->SetData(data_);
   }
 

@@ -11,6 +11,7 @@
 #import "base/metrics/user_metrics.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/browser/web_signin_tracker.h"
@@ -19,6 +20,7 @@
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/authentication/consistency_promo_signin/coordinator/consistency_promo_signin_mediator.h"
 #import "ios/chrome/browser/authentication/consistency_promo_signin/ui/consistency_layout_delegate.h"
+#import "ios/chrome/browser/authentication/signin/reauth/coordinator/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_ui_util.h"
 #import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
@@ -27,10 +29,10 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/consistency_promo_signin/consistency_sheet/consistency_sheet_navigation_controller.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/consistency_promo_signin/consistency_sheet/consistency_sheet_presentation_controller.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/consistency_promo_signin/consistency_sheet/consistency_sheet_slide_transition_animator.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin/reauth/signin_reauth_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator+protected.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/metrics/model/ios_profile_metrics_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/animated_coordinator.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -52,8 +54,8 @@
 @interface ConsistencyPromoSigninCoordinator () <
     ConsistencyAccountChooserCoordinatorDelegate,
     ConsistencyDefaultAccountCoordinatorDelegate,
-    ConsistencyPromoSigninMediatorDelegate,
     ConsistencyLayoutDelegate,
+    ConsistencyPromoSigninMediatorDelegate,
     SigninReauthCoordinatorDelegate,
     UINavigationControllerDelegate,
     UIViewControllerTransitioningDelegate>
@@ -85,6 +87,9 @@
   ChangeProfileContinuationProvider _continuationProvider;
   // Block to execute before a change in profile.
   ProceduralBlock _prepareChangeProfile;
+  // Block to confirm the user actually wants to change profile.
+  // Can be nil, which means the user always accepts.
+  SigninChangeProfileConfirmationBlock _confirmChangeProfile;
 }
 
 #pragma mark - Public
@@ -94,6 +99,8 @@
                        browser:(Browser*)browser
                   contextStyle:(SigninContextStyle)contextStyle
                    accessPoint:(signin_metrics::AccessPoint)accessPoint
+          confirmChangeProfile:
+              (SigninChangeProfileConfirmationBlock)confirmChangeProfile
           prepareChangeProfile:(ProceduralBlock)prepareChangeProfile
           continuationProvider:
               (const ChangeProfileContinuationProvider&)continuationProvider {
@@ -103,7 +110,8 @@
                                accessPoint:accessPoint];
   if (self) {
     _continuationProvider = continuationProvider;
-    _prepareChangeProfile = prepareChangeProfile;
+    _confirmChangeProfile = [confirmChangeProfile copy];
+    _prepareChangeProfile = [prepareChangeProfile copy];
   }
   return self;
 }
@@ -113,57 +121,66 @@
                               browser:(Browser*)browser
                          contextStyle:(SigninContextStyle)contextStyle
                           accessPoint:(signin_metrics::AccessPoint)accessPoint
+                 confirmChangeProfile:
+                     (SigninChangeProfileConfirmationBlock)confirmChangeProfile
                  prepareChangeProfile:(ProceduralBlock)prepareChangeProfile
                  continuationProvider:(const ChangeProfileContinuationProvider&)
                                           continuationProvider {
-  ProfileIOS* profile = browser->GetProfile();
-  if (accessPoint == signin_metrics::AccessPoint::kWebSignin) {
-    signin::IdentityManager* identityManager =
-        IdentityManagerFactory::GetForProfile(profile);
-    ChromeAccountManagerService* accountManagerService =
-        ChromeAccountManagerServiceFactory::GetForProfile(profile);
-    bool hasIdentities = [signin::GetIdentitiesOnDevice(
-                             identityManager, accountManagerService) count] > 0;
-    if (!hasIdentities) {
-      RecordConsistencyPromoUserAction(
-          signin_metrics::AccountConsistencyPromoAction::SUPPRESSED_NO_ACCOUNTS,
-          accessPoint);
-      return nil;
+  if (!base::FeatureList::IsEnabled(switches::kNoAccountWebSignin)) {
+    ProfileIOS* profile = browser->GetProfile();
+    if (accessPoint == signin_metrics::AccessPoint::kWebSignin) {
+      signin::IdentityManager* identityManager =
+          IdentityManagerFactory::GetForProfile(profile);
+      ChromeAccountManagerService* accountManagerService =
+          ChromeAccountManagerServiceFactory::GetForProfile(profile);
+      bool hasIdentities =
+          [signin::GetIdentitiesOnDevice(identityManager, accountManagerService)
+              count] > 0;
+      if (!hasIdentities) {
+        RecordConsistencyPromoUserAction(
+            signin_metrics::AccountConsistencyPromoAction::
+                SUPPRESSED_NO_ACCOUNTS,
+            accessPoint);
+        return nil;
+      }
     }
   }
+
   return [[ConsistencyPromoSigninCoordinator alloc]
       initWithBaseViewController:viewController
                          browser:browser
                     contextStyle:contextStyle
                      accessPoint:accessPoint
+            confirmChangeProfile:confirmChangeProfile
             prepareChangeProfile:prepareChangeProfile
             continuationProvider:continuationProvider];
 }
 
 - (void)dealloc {
-  CHECK(!self.navigationController, base::NotFatalUntil::M142);
-  CHECK(!self.defaultAccountCoordinator, base::NotFatalUntil::M142);
-  CHECK(!self.alertCoordinator, base::NotFatalUntil::M142);
-  CHECK(!self.accountChooserCoordinator, base::NotFatalUntil::M142);
-  CHECK(!self.addAccountCoordinator, base::NotFatalUntil::M142);
-  CHECK(!self.reauthCoordinator, base::NotFatalUntil::M142);
-  CHECK(!self.consistencyPromoSigninMediator, base::NotFatalUntil::M142);
+  CHECK(!self.navigationController);
+  CHECK(!self.defaultAccountCoordinator);
+  CHECK(!self.alertCoordinator);
+  CHECK(!self.accountChooserCoordinator);
+  CHECK(!self.addAccountCoordinator);
+  CHECK(!self.reauthCoordinator);
+  CHECK(!self.consistencyPromoSigninMediator);
 }
 
 #pragma mark - ChromeCoordinator
 
 - (void)start {
   [super start];
-  signin_metrics::LogSignInStarted(self.accessPoint);
+  ProfileIOS* profile = self.profile;
+  metrics::ProfileMetricsService* profile_metrics_service =
+      IOSProfileMetricsServiceFactory::GetForProfile(profile);
+  signin_metrics::LogSignInStarted(self.accessPoint, *profile_metrics_service);
   base::RecordAction(base::UserMetricsAction("Signin_BottomSheet_Opened"));
   // Create ConsistencyPromoSigninMediator.
-  ProfileIOS* profile = self.profile;
   signin::IdentityManager* identityManager =
       IdentityManagerFactory::GetForProfile(profile);
   // The sign-in bottom sheet should not be opened if the user is already signed
   // in.
-  CHECK(!identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin),
-        base::NotFatalUntil::M142);
+  CHECK(!identityManager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   AccountReconcilor* accountReconcilor =
       ios::AccountReconcilorFactory::GetForProfile(profile);
   ChromeAccountManagerService* accountManagerService =
@@ -246,6 +263,8 @@
 #pragma mark - AnimatedCoordinator
 
 - (void)stopAnimated:(BOOL)animated {
+  _confirmChangeProfile = nil;
+  _prepareChangeProfile = nil;
   [self stopAlertCoordinator];
   [self stopAddAccountCoordinatorAnimated:animated];
   if (self.navigationController) {
@@ -254,7 +273,7 @@
     base::RecordAction(
         base::UserMetricsAction("Signin_BottomSheet_ClosedByInterrupt"));
   }
-  [self dismissViewControllerAnimated:animated];
+  [self dismissViewControllerAnimated:animated completion:nil];
   [self stopDefaultAccountCoordinator];
   // If the mediator was already disconnected, this second disconnect does
   // nothing.
@@ -272,10 +291,11 @@
 
 #pragma mark - Private
 
-- (void)dismissViewControllerAnimated:(BOOL)animated {
+- (void)dismissViewControllerAnimated:(BOOL)animated
+                           completion:(ProceduralBlock)completion {
   [self.navigationController.presentingViewController
       dismissViewControllerAnimated:animated
-                         completion:nil];
+                         completion:completion];
   self.navigationController.delegate = nil;
   self.navigationController.transitioningDelegate = nil;
   self.navigationController = nil;
@@ -429,6 +449,7 @@
       presentingViewController:self.navigationController
                     anchorView:nil
                     anchorRect:CGRectNull];
+  authenticationFlow.confirmChangeProfile = _confirmChangeProfile;
   [self.consistencyPromoSigninMediator
       signinWithAuthenticationFlow:authenticationFlow];
 }
@@ -450,8 +471,7 @@
 
 - (void)consistencyAccountChooserCoordinatorWantsToBeStopped:
     (ConsistencyAccountChooserCoordinator*)coordinator {
-  CHECK_EQ(coordinator, self.accountChooserCoordinator,
-           base::NotFatalUntil::M140);
+  CHECK_EQ(coordinator, self.accountChooserCoordinator);
   [self stopAccountChooserCoordinator];
   [self.navigationController popViewControllerAnimated:YES];
 }
@@ -460,8 +480,7 @@
 
 - (void)consistencyDefaultAccountCoordinatorSkip:
     (ConsistencyDefaultAccountCoordinator*)coordinator {
-  CHECK(!self.alertCoordinator, base::NotFatalUntil::M142)
-      << base::SysNSStringToUTF8([self description]);
+  CHECK(!self.alertCoordinator) << base::SysNSStringToUTF8([self description]);
   PrefService* userPrefService = self.profile->GetPrefs();
   if (self.accessPoint == signin_metrics::AccessPoint::kWebSignin) {
     const int skipCounter =
@@ -469,9 +488,13 @@
     userPrefService->SetInteger(prefs::kSigninWebSignDismissalCount,
                                 skipCounter);
   }
-  [self dismissViewControllerAnimated:YES];
-  [self runCompletionWithSigninResult:SigninCoordinatorResultCanceledByUser
-                   completionIdentity:nil];
+  __weak __typeof(self) weakSelf = self;
+  [self dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf runCompletionWithSigninResult:
+                                           SigninCoordinatorResultCanceledByUser
+                                                  completionIdentity:nil];
+                           }];
 }
 
 - (void)consistencyDefaultAccountCoordinatorOpenIdentityChooser:
@@ -496,12 +519,11 @@
 - (void)consistencyDefaultAccountCoordinatorSignin:
     (ConsistencyDefaultAccountCoordinator*)coordinator {
   DCHECK_EQ(coordinator, self.defaultAccountCoordinator);
-  if (base::FeatureList::IsEnabled(switches::kEnableIdentityInAuthError) &&
-      !self.selectedIdentity.hasValidAuth) {
+  if (self.selectedIdentity.hasValidAuth) {
+    [self startSignIn];
+  } else {
     [self startReauthFlowWithIdentity:self.selectedIdentity];
-    return;
   }
-  [self startSignIn];
 }
 
 - (void)consistencyDefaultAccountCoordinatorOpenAddAccount:
@@ -524,7 +546,7 @@
     ChromeAccountManagerService* accountManagerService =
         ChromeAccountManagerServiceFactory::GetForProfile(self.profile);
     BOOL identityValid =
-        accountManagerService->IsValidIdentity(self.selectedIdentity);
+        accountManagerService->IsValidIdentity(self.selectedIdentity.gaiaId);
     BOOL identityEqual =
         self.defaultAccountCoordinator.selectedIdentity.gaiaId == *gaiaID;
     if (identityValid && identityEqual && result == ReauthResult::kSuccess) {
@@ -604,26 +626,52 @@
 
 - (void)consistencyPromoSigninMediatorSignInDone:
             (ConsistencyPromoSigninMediator*)mediator
-                                    withIdentity:(id<SystemIdentity>)identity {
+                                    withIdentity:(id<SystemIdentity>)identity
+                                      completion:(ProceduralBlock)completion {
   DCHECK([identity isEqual:self.selectedIdentity]);
+  CHECK(completion);
   id<SystemIdentity> completionIdentity = identity;
-  [self dismissViewControllerAnimated:YES];
-  [self runCompletionWithSigninResult:SigninCoordinatorResultSuccess
-                   completionIdentity:completionIdentity];
+  __weak __typeof(self) weakSelf = self;
+  [self dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf runCompletionWithSigninResult:
+                                           SigninCoordinatorResultSuccess
+                                                  completionIdentity:
+                                                      completionIdentity];
+                             completion();
+                           }];
 }
 
 - (void)consistencyPromoSigninMediatorSignInIsImpossible:
     (ConsistencyPromoSigninMediator*)mediator {
-  CHECK_EQ(self.consistencyPromoSigninMediator, mediator,
-           base::NotFatalUntil::M143);
-  [self dismissViewControllerAnimated:YES];
-  [self runCompletionWithSigninResult:SigninCoordinatorResultInterrupted
-                   completionIdentity:nil];
+  CHECK_EQ(self.consistencyPromoSigninMediator, mediator);
+  __weak __typeof(self) weakSelf = self;
+  [self dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf runCompletionWithSigninResult:
+                                           SigninCoordinatorResultInterrupted
+                                                  completionIdentity:nil];
+                           }];
 }
 
 - (void)consistencyPromoSigninMediatorSignInCancelled:
     (ConsistencyPromoSigninMediator*)mediator {
   [self.defaultAccountCoordinator stopSigninSpinner];
+}
+
+- (void)consistencyPromoSigninMediatorDidCancelToStaySignedOut:
+            (ConsistencyPromoSigninMediator*)mediator
+                                                    completion:(ProceduralBlock)
+                                                                   completion {
+  CHECK(completion);
+  __weak __typeof(self) weakSelf = self;
+  [self dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf runCompletionWithSigninResult:
+                                           SigninCoordinatorResultCanceledByUser
+                                                  completionIdentity:nil];
+                             completion();
+                           }];
 }
 
 - (void)consistencyPromoSigninMediator:(ConsistencyPromoSigninMediator*)mediator

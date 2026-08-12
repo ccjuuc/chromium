@@ -4,8 +4,10 @@
 
 #include "base/path_service.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/test_future.h"
 #include "base/version.h"
 #include "base/version_info/version_info.h"
+#include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
@@ -18,7 +20,8 @@
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/extensions/extension_install_ui_desktop.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/extensions/extension_post_install_dialog.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
 #include "chrome/browser/ui/hats/survey_config.h"
@@ -27,11 +30,12 @@
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_signin_button_view.h"
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_view.h"
 #include "chrome/browser/ui/signin/promos/signin_promo_tab_helper.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/autofill/address_sign_in_promo_view.h"
 #include "chrome/browser/ui/views/autofill/save_address_profile_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_sign_in_promo_bubble_view.h"
-#include "chrome/browser/ui/views/extensions/extension_post_install_dialog_delegate.h"
+#include "chrome/browser/ui/views/extensions/extension_post_install_dialog_view_utils.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
 #include "chrome/browser/ui/views/passwords/password_save_update_view.h"
 #include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
@@ -44,6 +48,7 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/browser/bookmark_node.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
@@ -60,12 +65,14 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/test/mock_sync_service.h"
+#include "components/sync/service/local_data_description.h"
+#include "components/sync/test/test_sync_service.h"
 #include "components/sync_bookmarks/switches.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/browser/install_verifier.h"
 #include "extensions/common/extension.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/window/dialog_client_view.h"
 
@@ -88,10 +95,36 @@ using testing::Pair;
 using testing::Return;
 using testing::UnorderedElementsAre;
 
-std::unique_ptr<KeyedService> BuildMockSyncService(
+std::unique_ptr<KeyedService> BuildTestSyncService(
     content::BrowserContext* context) {
-  return std::make_unique<testing::NiceMock<syncer::MockSyncService>>();
+  return std::make_unique<testing::NiceMock<syncer::TestSyncService>>();
 }
+
+// TODO(crbug.com/528193769): Re-enable this test on Mac.
+#if !BUILDFLAG(IS_MAC)
+// UI variations of the password save/update bubble to test.
+enum PasswordBubbleTestFeature : uint32_t {
+  // Standard 2-button dialog (Save/Update and Cancel).
+  kNone = 0,
+  // 3-button dialog variant featuring an explicit "Never" button.
+  kThreeButtonSaveDialog = 1,
+  // Split-button variant replacing Cancel with a dropdown menu offering
+  // "Never".
+  kDropdownMenuExperiment = 2,
+};
+
+std::string GetPasswordSignInPromoSaveUiInteractiveUITestName(
+    const testing::TestParamInfo<PasswordBubbleTestFeature>& info) {
+  switch (info.param) {
+    case kNone:
+      return "Default";
+    case kThreeButtonSaveDialog:
+      return "ThreeButtonSaveDialog";
+    case kDropdownMenuExperiment:
+      return "DropdownMenuExperiment";
+  }
+}
+#endif  // !BUILDFLAG(IS_MAC)
 
 }  // namespace
 
@@ -121,17 +154,19 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
     // Create local password store and mock sync service.
     local_password_store_ = CreateAndUseTestPasswordStore(context);
     SyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-        context, base::BindRepeating(&BuildMockSyncService));
+        context, base::BindRepeating(&BuildTestSyncService));
   }
 
   void SetUpOnMainThread() override {
     ManagePasswordsTest::SetUpOnMainThread();
-    ON_CALL(sync_service_mock(), GetDataTypesForTransportOnlyMode())
-        .WillByDefault(Return(syncer::DataTypeSet::All()));
+
+    // Test Sync Service is signed in by default.
+    test_sync_service().SetSignedOut();
 
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
   }
 
   void TearDownOnMainThread() override {
@@ -139,22 +174,54 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
     ManagePasswordsTest::TearDownOnMainThread();
   }
 
-  // Trigger the password save by simulating an "Accept" in the password bubble,
-  // and wait for it to appear in the profile store.
-  void SavePassword();
+  // Sets the values returned by `TestSyncService::GetLocalDataDescriptions()`.
+  // Overrides existing values previously set.
+  void SetLocalDataDescription(syncer::DataType data_type,
+                               syncer::LocalDataItemModel::DataId data_id);
 
-  // Address save callback for `TriggerSaveAddressBubble`.
-  void SaveAddress(autofill::AutofillClient::AddressPromptUserDecision decision,
-                   base::optional_ref<const AutofillProfile> profile);
+  // Returns whether the SyncService has `data_id` with `data_type` as the type
+  // in its local storage fetched from
+  // `TestSyncService::GetLocalDataDescriptions()`.
+  bool HasLocalDataItemId(syncer::DataType data_type,
+                          syncer::LocalDataItemModel::DataId data_id);
+
+  // Shows the Password Bubble and trigger the password save by simulating an
+  // "Accept" in the password bubble, and wait for it to appear in the profile
+  // store. Saves the password in the sync service local data, and returns the
+  // corresponding `syncer::LocalDataItemModel::DataId`.
+  syncer::LocalDataItemModel::DataId SaveLocalPassword();
+
+  // Address save callback for `TriggerSaveLocalAddressBubble`.
+  void SaveLocalAddress(
+      autofill::AutofillClient::AddressPromptUserDecision decision,
+      base::optional_ref<const AutofillProfile> address);
 
   // Trigger the address save bubble. This does not save the address yet.
-  void TriggerSaveAddressBubble(const AutofillProfile& address);
+  void TriggerSaveLocalAddressBubble(const AutofillProfile& address);
+
+  // Shows the bookmark bubble and saves a new bookmark as a child of `parent`.
+  // For local bookmarks, the bookmark is also added to the local storage so
+  // that it is retrieved from the Sync Service. It is also added when the
+  // signed in account is in pending state to simplify test expectations.
+  // Returns the saved bookmark.
+  const bookmarks::BookmarkNode* SaveAndShowBookmarkBubble(
+      const bookmarks::BookmarkNode* parent);
 
   // Add a local extension.
-  scoped_refptr<const Extension> InstallExtension();
+  scoped_refptr<const Extension> InstallLocalExtension();
 
-  // Perform a sign in with the `access_point`.
-  void SignIn(signin_metrics::AccessPoint access_point);
+  // Generates a step that expects that `data_id` is retrievable from the
+  // `SyncService` local data.
+  auto ExpectLocalDataIsStored(syncer::DataType data_type,
+                               syncer::LocalDataItemModel::DataId data_id);
+
+  // Perform a sign in with the `access_point`. Also enables Transport mode in
+  // `TestSyncService`.
+  AccountInfo SignIn(signin_metrics::AccessPoint access_point);
+
+  // Matches the sign in state of the `TestSyncService` to align with that of
+  // the `signin::IdentityManager`.
+  void EnsureSyncServiceSigninStateConsistency();
 
   // Returns true if the current tab's URL is a sign in URL.
   bool IsSignInURL();
@@ -162,13 +229,6 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
   // Returns true if there is a primary account without a refresh token in
   // persistent error state.
   bool IsSignedIn();
-
-  // Mock the activation of the sync service upon sign in.
-  void ActivateSyncService() {
-    ON_CALL(sync_service_mock(), GetTransportState())
-        .WillByDefault(Return(syncer::SyncService::TransportState::ACTIVE));
-    ON_CALL(sync_service_mock(), HasSyncConsent()).WillByDefault(Return(true));
-  }
 
   auto SendKeyPress(ui::KeyboardCode key) {
     return Check([this, key]() {
@@ -189,9 +249,9 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
     return client().GetPersonalDataManager().address_data_manager();
   }
 
-  syncer::MockSyncService& sync_service_mock() {
-    return *static_cast<syncer::MockSyncService*>(
-        SyncServiceFactory::GetForProfile(browser()->profile()));
+  syncer::TestSyncService& test_sync_service() {
+    return *static_cast<syncer::TestSyncService*>(
+        SyncServiceFactory::GetForProfile(browser()->GetProfile()));
   }
 
   network::TestURLLoaderFactory* test_url_loader_factory() {
@@ -199,7 +259,7 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
   }
 
   signin::IdentityManager* identity_manager() {
-    return IdentityManagerFactory::GetForProfile(browser()->profile());
+    return IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   }
 
  protected:
@@ -211,55 +271,170 @@ class BubbleSignInPromoInteractiveUITest : public ManagePasswordsTest {
   scoped_refptr<password_manager::TestPasswordStore> local_password_store_;
 };
 
-void BubbleSignInPromoInteractiveUITest::SavePassword() {
+void BubbleSignInPromoInteractiveUITest::SetLocalDataDescription(
+    syncer::DataType data_type,
+    syncer::LocalDataItemModel::DataId data_id) {
+  syncer::LocalDataItemModel local_data_model;
+  local_data_model.id = std::move(data_id);
+  syncer::LocalDataDescription local_data_description;
+  local_data_description.type = data_type;
+  local_data_description.local_data_models.push_back(local_data_model);
+
+  test_sync_service().SetLocalDataDescriptions(
+      {{data_type, std::move(local_data_description)}});
+}
+
+bool BubbleSignInPromoInteractiveUITest::HasLocalDataItemId(
+    syncer::DataType data_type,
+    syncer::LocalDataItemModel::DataId data_id) {
+  // Gets all local descriptions.
+  base::test::TestFuture<
+      std::map<syncer::DataType, syncer::LocalDataDescription>>
+      future_local_data;
+  test_sync_service().GetLocalDataDescriptions({data_type},
+                                               future_local_data.GetCallback());
+  std::map<syncer::DataType, syncer::LocalDataDescription> local_data =
+      future_local_data.Get();
+
+  // Filters by `data_type`.
+  // Then checks whether `data_id` exists in the list of models by comparing
+  // `syncer::LocalDataItemModel::Id`
+  if (auto it = local_data.find(data_type); it != local_data.end()) {
+    return std::find_if(it->second.local_data_models.begin(),
+                        it->second.local_data_models.end(),
+                        [data_id](const syncer::LocalDataItemModel& model) {
+                          return model.id == data_id;
+                        }) != it->second.local_data_models.end();
+  }
+
+  return false;
+}
+
+syncer::LocalDataItemModel::DataId
+BubbleSignInPromoInteractiveUITest::SaveLocalPassword() {
+  // Set up password and the local password store.
+  std::unique_ptr<password_manager::PasswordFormManager> password_form_manager =
+      CreateFormManager(local_password_store_.get(), nullptr);
+  password_manager::PasswordForm password_form =
+      password_form_manager->GetPendingCredentials();
+  GetController()->OnPasswordSubmitted(std::move(password_form_manager));
+
   password_manager::PasswordStoreWaiter store_waiter(
       local_password_store_.get());
-
   PasswordBubbleViewBase* bubble =
       PasswordBubbleViewBase::manage_password_bubble();
   bubble->AcceptDialog();
-
   store_waiter.WaitOrReturn();
+
+  // Check that it was properly saved to profile store.
+  EXPECT_EQ(1u, GetAllLoginsSync(local_password_store_.get()).size());
+
+  syncer::LocalDataItemModel::DataId data_id =
+      PasswordFormUniqueKey(password_form);
+  SetLocalDataDescription(syncer::DataType::PASSWORDS, data_id);
+  return data_id;
 }
 
-void BubbleSignInPromoInteractiveUITest::SaveAddress(
+void BubbleSignInPromoInteractiveUITest::SaveLocalAddress(
     autofill::AutofillClient::AddressPromptUserDecision decision,
-    base::optional_ref<const AutofillProfile> profile) {
-  address_data_manager().AddProfile(*profile);
+    base::optional_ref<const AutofillProfile> address) {
+  address_data_manager().AddProfile(*address);
+
+  SetLocalDataDescription(syncer::DataType::CONTACT_INFO, address->guid());
 }
 
-void BubbleSignInPromoInteractiveUITest::TriggerSaveAddressBubble(
+void BubbleSignInPromoInteractiveUITest::TriggerSaveLocalAddressBubble(
     const AutofillProfile& address) {
   client().ConfirmSaveAddressProfile(
       address, nullptr, /*save_address_bubble_type=*/
       autofill::AutofillClient::SaveAddressBubbleType::kSave,
-      base::BindOnce(&BubbleSignInPromoInteractiveUITest::SaveAddress,
+      base::BindOnce(&BubbleSignInPromoInteractiveUITest::SaveLocalAddress,
                      base::Unretained(this)));
 }
 
+const bookmarks::BookmarkNode*
+BubbleSignInPromoInteractiveUITest::SaveAndShowBookmarkBubble(
+    const bookmarks::BookmarkNode* parent) {
+  const GURL kUrl("http://test.com");
+  bookmarks::BookmarkModel* model =
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
+  const bookmarks::BookmarkNode* bookmark =
+      model->AddURL(parent, 0, std::u16string(), kUrl);
+  BrowserWindow::FromBrowser(browser())->ShowBookmarkBubble(bookmark->url(),
+                                                            false);
+
+  // Adds the new bookmarks into the local storage to be retrieved from the
+  // Sync Service.
+  if (model->IsLocalOnlyNode(*parent) ||
+      // In production this does not happen - but in this test, it allows to
+      // simply test that
+      // `SyncService::SelectTypeAndMigrateLocalDataItemsWhenActive()` is
+      // called correctly, even though it is a no-op when in sign-in pending
+      // and saving an account bookmark.
+      signin_util::IsSigninPending(identity_manager())) {
+    SetLocalDataDescription(syncer::DataType::BOOKMARKS, bookmark->id());
+  }
+
+  return bookmark;
+}
+
 scoped_refptr<const Extension>
-BubbleSignInPromoInteractiveUITest::InstallExtension() {
+BubbleSignInPromoInteractiveUITest::InstallLocalExtension() {
   extensions::ScopedInstallVerifierBypassForTest install_verifier_bypass;
   base::FilePath test_data_dir;
   base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
   test_data_dir = test_data_dir.AppendASCII("extensions");
 
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   extension_loader.set_pack_extension(true);
-  return extension_loader.LoadExtension(
+
+  scoped_refptr<const Extension> extension = extension_loader.LoadExtension(
       test_data_dir.AppendASCII("simple_with_file"));
+  SetLocalDataDescription(syncer::DataType::EXTENSIONS, extension->id());
+  return extension;
 }
 
-void BubbleSignInPromoInteractiveUITest::SignIn(
+auto BubbleSignInPromoInteractiveUITest::ExpectLocalDataIsStored(
+    syncer::DataType data_type,
+    syncer::LocalDataItemModel::DataId data_id) {
+  return Do([&, data_type, data_id]() {
+    EXPECT_TRUE(HasLocalDataItemId(data_type, data_id));
+  });
+}
+
+AccountInfo BubbleSignInPromoInteractiveUITest::SignIn(
     signin_metrics::AccessPoint access_point) {
-  ActivateSyncService();
-  signin::MakeAccountAvailable(
+  AccountInfo account_info = signin::MakeAccountAvailable(
       identity_manager(),
       signin::AccountAvailabilityOptionsBuilder(test_url_loader_factory())
           .WithCookie()
           .WithAccessPoint(access_point)
           .AsPrimary(signin::ConsentLevel::kSignin)
           .Build("test@email.com"));
+  ExtendAccountInfo(account_info);
+
+  EnsureSyncServiceSigninStateConsistency();
+
+  return account_info;
+}
+
+void BubbleSignInPromoInteractiveUITest::
+    EnsureSyncServiceSigninStateConsistency() {
+  if (IsSignedIn()) {
+    test_sync_service().SetSignedIn(
+        signin::ConsentLevel::kSignin,
+        identity_manager()->FindExtendedAccountInfo(
+            identity_manager()->GetPrimaryAccountInfo(
+                signin::ConsentLevel::kSignin)));
+
+    test_sync_service().SetMaxTransportState(
+        syncer::SyncService::TransportState::ACTIVE);
+  } else {
+    test_sync_service().SetSignedOut();
+    test_sync_service().SetMaxTransportState(
+        syncer::SyncService::TransportState::DISABLED);
+  }
 }
 
 bool BubbleSignInPromoInteractiveUITest::IsSignInURL() {
@@ -274,25 +449,68 @@ bool BubbleSignInPromoInteractiveUITest::IsSignedIn() {
 }
 
 void BubbleSignInPromoInteractiveUITest::ExtendAccountInfo(AccountInfo& info) {
-  info.given_name = "FirstName";
-  info.full_name = "FirstName LastName";
+  info = AccountInfo::Builder(info)
+             .SetGivenName("FirstName")
+             .SetFullName("FirstName LastName")
+             .Build();
   signin::UpdateAccountInfoForAccount(identity_manager(), info);
 }
 
 /////////////////////////////////////////////////////////////////
 ///// Password Sign in Promo
 
-IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
+/**
+ * Tests for the password sign in promo.
+ *
+ * The tests are parameterized by the password save UI feature because the
+ * width of the sign-in promo changes depending on which feature flag is
+ * enabled (e.g., kThreeButtonPasswordSaveDialog or
+ * kPasswordSaveUpdateDropdownMenuExperiment). Parameterizing the test suite
+ * ensures that pixel tests (Screenshot) verify promo rendering across all
+ * possible bubble width variations.
+ */
+// TODO(crbug.com/528193769): Re-enable this test on Mac.
+#if !BUILDFLAG(IS_MAC)
+class BubbleSignInPromoPasswordSaveUiInteractiveUITest
+    : public BubbleSignInPromoInteractiveUITest,
+      public ::testing::WithParamInterface<PasswordBubbleTestFeature> {
+ public:
+  BubbleSignInPromoPasswordSaveUiInteractiveUITest() {
+    switch (GetParam()) {
+      case kNone:
+        scoped_feature_list_.InitWithFeatures(
+            /*enabled_features=*/{},
+            /*disabled_features=*/{
+                features::kThreeButtonPasswordSaveDialog,
+                features::kPasswordSaveUpdateDropdownMenuExperiment});
+        break;
+      case kThreeButtonSaveDialog:
+        scoped_feature_list_.InitWithFeatures(
+            /*enabled_features=*/{features::kThreeButtonPasswordSaveDialog},
+            /*disabled_features=*/{
+                features::kPasswordSaveUpdateDropdownMenuExperiment});
+        break;
+      case kDropdownMenuExperiment:
+        scoped_feature_list_.InitWithFeatures(
+            /*enabled_features=*/
+            {features::kPasswordSaveUpdateDropdownMenuExperiment},
+            /*disabled_features=*/{features::kThreeButtonPasswordSaveDialog});
+        break;
+    }
+  }
+
+  ~BubbleSignInPromoPasswordSaveUiInteractiveUITest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(BubbleSignInPromoPasswordSaveUiInteractiveUITest,
                        PasswordSignInPromoNoAccountPresent) {
   base::HistogramTester histogram_tester;
 
-  // Set up password and the local password store.
-  GetController()->OnPasswordSubmitted(
-      CreateFormManager(local_password_store_.get(), nullptr));
-
-  // Save the password and check that it was properly saved to profile store.
-  SavePassword();
-  EXPECT_EQ(1u, local_password_store_->stored_passwords().size());
+  // Save a local password.
+  syncer::LocalDataItemModel::DataId password_data_id = SaveLocalPassword();
 
   // Wait for the bubble to be replaced with the sign in promo and click the
   // sign in button.
@@ -320,9 +538,12 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the password to account storage.
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::PASSWORDS, _));
+  // Passwords are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kPasswords));
+  // Local password can be retrieved from SyncService local data.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Simulate a sign in event with the correct access point, which should call
   // `SelectTypeAndMigrateLocalDataItemsWhenActive()`.
@@ -330,6 +551,13 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Passwords are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kPasswords));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Signin metrics - Offered/Started/Completed are recorded, but no values for
   // WebSignin (WithDefault).
@@ -355,7 +583,7 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
       signin_metrics::AccessPoint::kPasswordBubble, 0);
 }
 
-IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
+IN_PROC_BROWSER_TEST_P(BubbleSignInPromoPasswordSaveUiInteractiveUITest,
                        PasswordSignInPromoWithWebSignedInAccount) {
   base::HistogramTester histogram_tester;
 
@@ -369,22 +597,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
           .Build("test@email.com"));
   ExtendAccountInfo(info);
 
-  // Set up password and the local password store.
-  GetController()->OnPasswordSubmitted(
-      CreateFormManager(local_password_store_.get(), nullptr));
+  // Save a local password.
+  syncer::LocalDataItemModel::DataId password_data_id = SaveLocalPassword();
 
-  // Save the password and check that it was properly saved to profile store.
-  SavePassword();
-  EXPECT_EQ(1u, local_password_store_->stored_passwords().size());
-
-  // This would move the password to account storage.
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::PASSWORDS, _));
+  // Passwords are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kPasswords));
+  // Local password can be retrieved from SyncService local data.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Wait for the bubble to be replaced with the sign in promo and click the
   // sign in button. This should directly sign the user in and trigger the data
   // migration.
-  ActivateSyncService();
   RunTestSequence(
       WaitForEvent(BubbleSignInPromoSignInButtonView::kPromoSignInButton,
                    kBubbleSignInPromoSignInButtonHasCallback),
@@ -408,11 +633,20 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  EnsureSyncServiceSigninStateConsistency();
+
+  // Passwords are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kPasswords));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Signin metrics - WebSignin (WithDefault) metrics are also recorded.
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered", signin_metrics::AccessPoint::kPasswordBubble, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started", signin_metrics::AccessPoint::kPasswordBubble, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed", signin_metrics::AccessPoint::kPasswordBubble,
       1);
@@ -436,25 +670,25 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
       signin_metrics::AccessPoint::kPasswordBubble, 0);
 }
 
-IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
+IN_PROC_BROWSER_TEST_P(BubbleSignInPromoPasswordSaveUiInteractiveUITest,
                        PasswordSignInPromoWithAccountSignInPending) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo account_info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
-
-  // Set up password and the local password store.
-  GetController()->OnPasswordSubmitted(
-      CreateFormManager(local_password_store_.get(), nullptr));
 
   // Start recording metrics after signing in.
   base::HistogramTester histogram_tester;
 
-  // Save the password and check that it was properly saved to profile store.
-  SavePassword();
-  EXPECT_EQ(1u, local_password_store_->stored_passwords().size());
+  // Save a local password.
+  syncer::LocalDataItemModel::DataId password_data_id = SaveLocalPassword();
+
+  // Passwords are already enabled.
+  ASSERT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kPasswords));
+  // Local password can be retrieved from SyncService local data.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Wait for the bubble to be replaced with the sign in promo and click
   // the sign in button.
@@ -483,16 +717,11 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   ->IsInitializedForTesting());
   EXPECT_FALSE(IsSignedIn());
 
-  // This would move the password to account storage.
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::PASSWORDS, _));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This triggers the local data
   // migration.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
-      info.gaia, info.email, "dummy_refresh_token",
+      account_info.gaia, account_info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
       signin_metrics::AccessPoint::kPasswordBubble,
       signin_metrics::SourceForRefreshTokenOperation::
@@ -500,14 +729,13 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::PASSWORDS, password_data_id));
 
   // Signin metrics - nothing should be recorded for reauth.
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Signin.SignIn."),
+              testing::ContainerEq(base::HistogramTester::CountsMap()));
   histogram_tester.ExpectTotalCount("Signin.WebSignin.SourceToChromeSignin", 0);
 
   // It was recorded that the reauth sign in promo was shown and accepted.
@@ -519,6 +747,14 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
       signin_metrics::AccessPoint::kPasswordBubble, 1);
 }
 
+INSTANTIATE_TEST_SUITE_P(All,
+                         BubbleSignInPromoPasswordSaveUiInteractiveUITest,
+                         testing::Values(kNone,
+                                         kThreeButtonSaveDialog,
+                                         kDropdownMenuExperiment),
+                         GetPasswordSignInPromoSaveUiInteractiveUITestName);
+#endif  // !BUILDFLAG(IS_MAC)
+
 /////////////////////////////////////////////////////////////////
 ///// Address Sign in Promo
 
@@ -528,12 +764,18 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Trigger the address save bubble.
   AutofillProfile address = autofill::test::GetFullProfile();
-  TriggerSaveAddressBubble(address);
+  TriggerSaveLocalAddressBubble(address);
+
+  // Addresses are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
 
   // Accept the save bubble, wait for it to be replaced with the sign in promo
   // and click the sign in button.
   RunTestSequence(
       PressButton(views::DialogClientView::kOkButtonElementId),
+      // Local address can be retrieved from SyncService after save.
+      ExpectLocalDataIsStored(syncer::DataType::CONTACT_INFO, address.guid()),
       WaitForEvent(BubbleSignInPromoSignInButtonView::kPromoSignInButton,
                    kBubbleSignInPromoSignInButtonHasCallback),
       EnsureNotPresent(SaveAddressProfileView::kTopViewId),
@@ -557,17 +799,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the address to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{address.guid()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::CONTACT_INFO, items));
-
   // Simulate a sign in event with the correct access point, which will move the
   // address.
   SignIn(signin_metrics::AccessPoint::kAddressBubble);
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Addresses are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::CONTACT_INFO, address.guid()));
 
   // Signin metrics - Offered/Started/Completed are recorded, but no values for
   // WebSignin (WithDefault).
@@ -609,19 +853,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Trigger the address save bubble.
   AutofillProfile address = autofill::test::GetFullProfile();
-  TriggerSaveAddressBubble(address);
+  TriggerSaveLocalAddressBubble(address);
 
-  // This would move the address to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{address.guid()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::CONTACT_INFO, items));
+  // Addresses are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
 
   // Accept the save bubble, wait for the save bubble to be replaced with the
   // sign in promo and click the sign in button. This should directly sign the
   // user in and move the address.
-  ActivateSyncService();
   RunTestSequence(
       PressButton(views::DialogClientView::kOkButtonElementId),
+      // Local address can be retrieved from SyncService after save.
+      ExpectLocalDataIsStored(syncer::DataType::CONTACT_INFO, address.guid()),
       WaitForEvent(BubbleSignInPromoSignInButtonView::kPromoSignInButton,
                    kBubbleSignInPromoSignInButtonHasCallback),
       EnsureNotPresent(SaveAddressProfileView::kTopViewId),
@@ -644,11 +888,20 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  EnsureSyncServiceSigninStateConsistency();
+
+  // Addresses are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::CONTACT_INFO, address.guid()));
 
   // Signin metrics - WebSignin (WithDefault) metrics are also recorded.
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered", signin_metrics::AccessPoint::kAddressBubble, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started", signin_metrics::AccessPoint::kAddressBubble, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed", signin_metrics::AccessPoint::kAddressBubble,
       1);
@@ -676,9 +929,7 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                        AddressSignInPromoWithAccountSignInPending) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo account_info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
 
   // Start recording metrics after signing in.
@@ -686,12 +937,18 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Trigger the address save bubble.
   AutofillProfile address = autofill::test::GetFullProfile();
-  TriggerSaveAddressBubble(address);
+  TriggerSaveLocalAddressBubble(address);
+
+  // Addresses are already enabled.
+  ASSERT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
 
   // Accept the save bubble, wait for the save bubble to be replaced with the
   // sign in promo and click the sign in button.
   RunTestSequence(
       PressButton(views::DialogClientView::kOkButtonElementId),
+      // Local address can be retrieved from SyncService after save.
+      ExpectLocalDataIsStored(syncer::DataType::CONTACT_INFO, address.guid()),
       WaitForEvent(BubbleSignInPromoSignInButtonView::kPromoSignInButton,
                    kBubbleSignInPromoSignInButtonHasCallback),
       EnsureNotPresent(SaveAddressProfileView::kTopViewId),
@@ -715,17 +972,11 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the address to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{address.guid()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::CONTACT_INFO, items));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This would trigger the data
   // migration.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
-      info.gaia, info.email, "dummy_refresh_token",
+      account_info.gaia, account_info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
       signin_metrics::AccessPoint::kAddressBubble,
       signin_metrics::SourceForRefreshTokenOperation::
@@ -734,13 +985,16 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
 
+  // Addresses are still enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kAutofill));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::CONTACT_INFO, address.guid()));
+
   // Signin metrics - nothing should be recorded for reauth.
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Signin.SignIn."),
+              testing::ContainerEq(base::HistogramTester::CountsMap()));
   histogram_tester.ExpectTotalCount("Signin.WebSignin.SourceToChromeSignin", 0);
 
   // It was recorded that the reauth sign in promo was shown and accepted.
@@ -772,7 +1026,7 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Trigger the address save bubble.
   AutofillProfile address = autofill::test::GetFullProfile();
-  TriggerSaveAddressBubble(address);
+  TriggerSaveLocalAddressBubble(address);
 
   // Accept the save bubble, wait for the save bubble to be replaced with the
   // sign in promo and dismiss it.
@@ -819,7 +1073,7 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Trigger the address save bubble.
   AutofillProfile address = autofill::test::GetFullProfile();
-  TriggerSaveAddressBubble(address);
+  TriggerSaveLocalAddressBubble(address);
 
   // Accept the save bubble, wait for the save bubble to be replaced with the
   // sign in promo and dismiss it.
@@ -845,13 +1099,16 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   base::HistogramTester histogram_tester;
 
   // Trigger the bookmark bubble.
-  const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
-      model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
-  ASSERT_EQ(1u, model->other_node()->children().size());
+      SaveAndShowBookmarkBubble(/*parent=*/model->other_node());
+
+  // Bookmarks are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // Local Bookmark can be retrieved from SyncService after save.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::BOOKMARKS, bookmark->id()));
 
   // Accept the save bubble, wait for it to be replaced with the sign in promo
   // and click the sign in button.
@@ -879,17 +1136,18 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the bookmark to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
-
   // Simulate a sign in event with the correct access point, which will move the
   // bookmark.
   SignIn(signin_metrics::AccessPoint::kBookmarkBubble);
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Bookmarks are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Signin metrics - Offered/Started/Completed are recorded, but no values for
   // WebSignin (WithDefault).
@@ -930,18 +1188,16 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   ExtendAccountInfo(info);
 
   // Trigger the bookmark bubble.
-  const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
-      model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
-  ASSERT_EQ(1u, model->other_node()->children().size());
+      SaveAndShowBookmarkBubble(/*parent=*/model->other_node());
 
-  // This would move the bookmark to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
+  // Bookmarks are initially off.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // Local Bookmark can be retrieved from SyncService after save.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::BOOKMARKS, bookmark->id()));
 
   // Accept the save bubble, wait for it to be replaced with the sign in promo
   // and click the sign in button. This should directly sign the user in and
@@ -969,11 +1225,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  EnsureSyncServiceSigninStateConsistency();
+
+  // Bookmarks are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Signin metrics - WebSignin (WithDefault) metrics are also recorded.
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered", signin_metrics::AccessPoint::kBookmarkBubble, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started", signin_metrics::AccessPoint::kBookmarkBubble, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed", signin_metrics::AccessPoint::kBookmarkBubble,
       1);
@@ -1001,27 +1265,27 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                        BookmarkSignInPromoWithAccountSignInPending) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo account_info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
 
-  // Turn account storage for bookmarks on initially.
-  ON_CALL(*sync_service_mock().GetMockUserSettings(), GetSelectedTypes())
-      .WillByDefault(Return(syncer::UserSelectableTypeSet::All()));
+  // Addresses are already enabled.
+  ASSERT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
 
   // Start recording metrics after signing in.
   base::HistogramTester histogram_tester;
 
   // Trigger the bookmark bubble.
-  const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   model->CreateAccountPermanentFolders();
   const bookmarks::BookmarkNode* bookmark =
-      model->AddURL(model->account_other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
-  ASSERT_EQ(1u, model->account_other_node()->children().size());
+      SaveAndShowBookmarkBubble(/*parent=*/model->account_other_node());
+
+  // Local Bookmark can be retrieved from SyncService after save - even though
+  // this is not really a local bookark, but it allows to more easily check the
+  // move later on. Check `SaveAndShowBookmarkBubble()` special case.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::BOOKMARKS, bookmark->id()));
 
   // Accept the save bubble, wait for it to be replaced with the sign in promo
   // and click the sign in button.
@@ -1049,19 +1313,10 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would technically move the bookmark to account storage. However in
-  // this case, it does nothing, because the bookmark was already initially
-  // saved to pending account storage. It is still called, but as a no-op.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
-
-  // Set a new refresh token for the primary account, which verifies the
-  // user's identity and signs them back in. This would trigger the automatic
-  // upload.
-  ActivateSyncService();
+  // Set a new refresh token for the primary account, which verifies the user's
+  // identity and signs them back in. This would trigger the automatic upload.
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
-      info.gaia, info.email, "dummy_refresh_token",
+      account_info.gaia, account_info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
       signin_metrics::AccessPoint::kBookmarkBubble,
       signin_metrics::SourceForRefreshTokenOperation::
@@ -1070,13 +1325,15 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
 
+  // Bookmarks is still enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
+
   // Signin metrics - nothing should be recorded for reauth.
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Signin.SignIn."),
+              testing::ContainerEq(base::HistogramTester::CountsMap()));
   histogram_tester.ExpectTotalCount("Signin.WebSignin.SourceToChromeSignin", 0);
 
   // It was recorded that the reauth sign in promo was shown and accepted.
@@ -1093,27 +1350,21 @@ IN_PROC_BROWSER_TEST_F(
     BookmarkSignInPromoWithAccountSignInPendingWithoutDataTypeEnabled) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo account_info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
 
-  // Turn account storage for bookmarks off initially.
-  ON_CALL(*sync_service_mock().GetMockUserSettings(), GetSelectedTypes())
-      .WillByDefault(Return(syncer::UserSelectableTypeSet()));
+  // Explicitly turn account storage for bookmarks off initially.
+  test_sync_service().GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kBookmarks, /*is_type_on=*/false);
 
   // Trigger the bookmark bubble.
-  const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
-      model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
-  ASSERT_EQ(1u, model->other_node()->children().size());
+      SaveAndShowBookmarkBubble(/*parent=*/model->other_node());
 
-  // Expect bookmarks to be enabled before the reauth is completed.
-  EXPECT_CALL(*sync_service_mock().GetMockUserSettings(),
-              SetSelectedType(syncer::UserSelectableType::kBookmarks, true));
+  // Local Bookmark can be retrieved from SyncService after save.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::BOOKMARKS, bookmark->id()));
 
   // Accept the save bubble, wait for it to be replaced with the sign in promo
   // and click the sign in button.
@@ -1128,9 +1379,6 @@ IN_PROC_BROWSER_TEST_F(
       PressButton(kButton).SetMustRemainVisible(false),
       EnsureNotPresent(kBookmarkSigninPromoFrameViewId));
 
-  EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(
-      sync_service_mock().GetMockUserSettings()));
-
   // Check that clicking the sign in button navigated to a sign in page.
   EXPECT_TRUE(IsSignInURL());
 
@@ -1140,17 +1388,11 @@ IN_PROC_BROWSER_TEST_F(
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the bookmark to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This would trigger the automatic
   // upload.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
-      info.gaia, info.email, "dummy_refresh_token",
+      account_info.gaia, account_info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
       signin_metrics::AccessPoint::kBookmarkBubble,
       signin_metrics::SourceForRefreshTokenOperation::
@@ -1158,6 +1400,12 @@ IN_PROC_BROWSER_TEST_F(
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Bookmarks are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1168,14 +1416,25 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   base::HistogramTester histogram_tester;
 
   // Install a local extension and trigger the extension bubble.
-  scoped_refptr<const Extension> extension = InstallExtension();
+  scoped_refptr<const Extension> extension = InstallLocalExtension();
   ASSERT_TRUE(extension);
   ASSERT_EQ(AccountExtensionTracker::AccountExtensionType::kLocal,
-            AccountExtensionTracker::Get(browser()->profile())
+            AccountExtensionTracker::Get(browser()->GetProfile())
                 ->GetAccountExtensionType(extension->id()));
+  // Extensions are disabled.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // Local extension can be retrieved from SyncService local data.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
-  ExtensionInstallUIDesktop::ShowBubble(extension, browser(),
-                                        browser()->profile(), SkBitmap());
+  extensions::TriggerPostInstallDialog(
+      browser()->GetProfile(), extension, SkBitmap(),
+      base::BindOnce(
+          [](Browser* b) {
+            return b->tab_strip_model()->GetActiveWebContents();
+          },
+          browser()));
 
   // Click the sign in button.
   RunTestSequence(
@@ -1202,17 +1461,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the extension to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{extension->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::EXTENSIONS, items));
-
   // Simulate a sign in event with the correct access point, which will move the
   // extension to account storage.
   SignIn(signin_metrics::AccessPoint::kExtensionInstallBubble);
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Extensions are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
   // Signin metrics - Offered/Started/Completed are recorded, but no values for
   // WebSignin (WithDefault).
@@ -1251,23 +1512,28 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   ExtendAccountInfo(info);
 
   // Install a local extension and trigger the extension bubble.
-  scoped_refptr<const Extension> extension = InstallExtension();
+  scoped_refptr<const Extension> extension = InstallLocalExtension();
   ASSERT_TRUE(extension);
   ASSERT_EQ(AccountExtensionTracker::AccountExtensionType::kLocal,
-            AccountExtensionTracker::Get(browser()->profile())
+            AccountExtensionTracker::Get(browser()->GetProfile())
                 ->GetAccountExtensionType(extension->id()));
+  // Extensions are disabled.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // Local extension can be retrieved from SyncService local data.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
-  ExtensionInstallUIDesktop::ShowBubble(extension, browser(),
-                                        browser()->profile(), SkBitmap());
-
-  // This would move the extension to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{extension->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::EXTENSIONS, items));
+  extensions::TriggerPostInstallDialog(
+      browser()->GetProfile(), extension, SkBitmap(),
+      base::BindOnce(
+          [](Browser* b) {
+            return b->tab_strip_model()->GetActiveWebContents();
+          },
+          browser()));
 
   // Click the sign in button. This should directly sign the user in and move
   // the extension to account storage.
-  ActivateSyncService();
   RunTestSequence(
       // We cannot add an element identifier to the dialog when it's built using
       // DialogModel::Builder. Thus, we check for its existence by checking the
@@ -1291,12 +1557,22 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  EnsureSyncServiceSigninStateConsistency();
+
+  // Extensions are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
   // Signin metrics - WebSignin (WithDefault) metrics are also recorded.
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered",
       signin_metrics::AccessPoint::kExtensionInstallBubble, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started",
+      signin_metrics::AccessPoint::kExtensionInstallBubble, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed",
       signin_metrics::AccessPoint::kExtensionInstallBubble, 1);
@@ -1321,30 +1597,38 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                        ExtensionSignInPromoWithAccountSignInPending) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
 
   // Start recording metrics after signing in.
   base::HistogramTester histogram_tester;
 
-  // Turn account storage for extensions on initially.
-  ON_CALL(*sync_service_mock().GetMockUserSettings(), GetSelectedTypes())
-      .WillByDefault(Return(syncer::UserSelectableTypeSet::All()));
-
   // Install an extension, which will add it to the pending account storage.
   // Then trigger the extension bubble.
-  scoped_refptr<const Extension> extension = InstallExtension();
+  scoped_refptr<const Extension> extension = InstallLocalExtension();
   ASSERT_TRUE(extension);
   ASSERT_EQ(
       AccountExtensionTracker::AccountExtensionType::kAccountInstalledSignedIn,
-      AccountExtensionTracker::Get(browser()->profile())
+      AccountExtensionTracker::Get(browser()->GetProfile())
           ->GetAccountExtensionType(extension->id()));
 
-  ExtensionInstallUIDesktop::ShowBubble(extension, browser(),
-                                        browser()->profile(), SkBitmap());
+  // Extensions are enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // Local extension can be retrieved from SyncService local data.
+  // In production this does not happen - but in this test, it allows to simply
+  // test that `SyncService::SelectTypeAndMigrateLocalDataItemsWhenActive()` is
+  // called correctly, even though it is a no-op.
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
+  extensions::TriggerPostInstallDialog(
+      browser()->GetProfile(), extension, SkBitmap(),
+      base::BindOnce(
+          [](Browser* b) {
+            return b->tab_strip_model()->GetActiveWebContents();
+          },
+          browser()));
   // Click the sign in button.
   RunTestSequence(
       // We cannot add an element identifier to the dialog when it's built using
@@ -1369,17 +1653,9 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would technically move the extension to account storage. However in
-  // this case, it does nothing, because the extension was already initially
-  // saved to pending account storage. It is still called, but as a no-op.
-  std::vector<syncer::LocalDataItemModel::DataId> items{extension->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::EXTENSIONS, items));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This would trigger the automatic
   // upload.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
       info.gaia, info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
@@ -1390,13 +1666,16 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
 
+  // Extensions are still enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
+
   // Signin metrics - nothing should be recorded for reauth.
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Signin.SignIn."),
+              testing::ContainerEq(base::HistogramTester::CountsMap()));
   histogram_tester.ExpectTotalCount("Signin.WebSignin.SourceToChromeSignin", 0);
 
   // It was recorded that the reauth sign in promo was shown and accepted.
@@ -1413,29 +1692,30 @@ IN_PROC_BROWSER_TEST_F(
     ExtensionSignInPromoWithAccountSignInPendingWithoutDataTypeEnabled) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
 
-  // Turn account storage for extensions off initially.
-  ON_CALL(*sync_service_mock().GetMockUserSettings(), GetSelectedTypes())
-      .WillByDefault(Return(syncer::UserSelectableTypeSet()));
+  // Explicitly turn account storage for extensions off initially.
+  test_sync_service().GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kExtensions, /*is_type_on=*/false);
 
   // Install an extension, which will add it to the local storage. Then trigger
   // the extension bubble.
-  scoped_refptr<const Extension> extension = InstallExtension();
+  scoped_refptr<const Extension> extension = InstallLocalExtension();
   ASSERT_TRUE(extension);
   ASSERT_EQ(AccountExtensionTracker::AccountExtensionType::kLocal,
-            AccountExtensionTracker::Get(browser()->profile())
+            AccountExtensionTracker::Get(browser()->GetProfile())
                 ->GetAccountExtensionType(extension->id()));
+  ASSERT_TRUE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 
-  ExtensionInstallUIDesktop::ShowBubble(extension, browser(),
-                                        browser()->profile(), SkBitmap());
-
-  // Expect extensions to be enabled before the reauth is completed.
-  EXPECT_CALL(*sync_service_mock().GetMockUserSettings(),
-              SetSelectedType(syncer::UserSelectableType::kExtensions, true));
+  extensions::TriggerPostInstallDialog(
+      browser()->GetProfile(), extension, SkBitmap(),
+      base::BindOnce(
+          [](Browser* b) {
+            return b->tab_strip_model()->GetActiveWebContents();
+          },
+          browser()));
 
   // Click the sign in button.
   RunTestSequence(
@@ -1448,9 +1728,6 @@ IN_PROC_BROWSER_TEST_F(
       PressButton(kButton).SetMustRemainVisible(false),
       EnsureNotPresent(BubbleSignInPromoSignInButtonView::kPromoSignInButton));
 
-  EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(
-      sync_service_mock().GetMockUserSettings()));
-
   // Check that clicking the sign in button navigated to a sign in page.
   EXPECT_TRUE(IsSignInURL());
 
@@ -1460,15 +1737,9 @@ IN_PROC_BROWSER_TEST_F(
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the extension to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{extension->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::EXTENSIONS, items));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This would trigger the automatic
   // upload.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
       info.gaia, info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
@@ -1478,13 +1749,28 @@ IN_PROC_BROWSER_TEST_F(
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Extensions are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kExtensions));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(
+      HasLocalDataItemId(syncer::DataType::EXTENSIONS, extension->id()));
 }
 
 /////////////////////////////////////////////////////////////////
 ///// Other tests
 
+#if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/532726834): Re-enable this test on Mac.
+#define MAYBE_PasswordSignInPromoAccountDisallowedByPattern \
+  DISABLED_PasswordSignInPromoAccountDisallowedByPattern
+#else
+#define MAYBE_PasswordSignInPromoAccountDisallowedByPattern \
+  PasswordSignInPromoAccountDisallowedByPattern
+#endif
 IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
-                       PasswordSignInPromoAccountDisallowedByPattern) {
+                       MAYBE_PasswordSignInPromoAccountDisallowedByPattern) {
   // Set the signin pattern
   g_browser_process->local_state()->SetString(
       prefs::kGoogleServicesUsernamePattern, "*@signinallowed.com");
@@ -1505,17 +1791,13 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITest,
 
   base::HistogramTester histogram_tester;
 
-  // Set up password and the local password store.
-  GetController()->OnPasswordSubmitted(
-      CreateFormManager(local_password_store_.get(), nullptr));
-
-  // Save the password and check that it was properly saved to profile store.
-  SavePassword();
-  EXPECT_EQ(1u, local_password_store_->stored_passwords().size());
+  // Save a local password.
+  SaveLocalPassword();
 
   // Wait for the bubble to be replaced with the sign in promo and click the
   // sign in button.
   RunTestSequence(
+      WaitForShow(BubbleSignInPromoSignInButtonView::kPromoSignInButton),
       WaitForEvent(BubbleSignInPromoSignInButtonView::kPromoSignInButton,
                    kBubbleSignInPromoSignInButtonHasCallback),
       EnsurePresent(PasswordSaveUpdateView::kPasswordBubbleElementId),
@@ -1582,11 +1864,18 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
   // Trigger the bookmark bubble.
   const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
       model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
+  BrowserWindow::FromBrowser(browser())->ShowBookmarkBubble(kUrl, false);
   ASSERT_EQ(1u, model->other_node()->children().size());
+  SetLocalDataDescription(syncer::DataType::BOOKMARKS, bookmark->id());
+
+  // Bookmarks are disabled.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // Local bookmark can be retrieved from SyncService local data.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Click the sign in button.
   RunTestSequence(
@@ -1609,17 +1898,18 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would move the bookmark to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
-
   // Simulate a sign in event with the correct access point, which will move the
   // bookmark.
   SignIn(signin_metrics::AccessPoint::kBookmarkBubble);
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+
+  // Bookmarks are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Signin metrics - Offered/Started/Completed are recorded, but no values for
   // WebSignin (WithDefault).
@@ -1662,20 +1952,21 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
   // Trigger the bookmark bubble.
   const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
       model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
+  BrowserWindow::FromBrowser(browser())->ShowBookmarkBubble(kUrl, false);
   ASSERT_EQ(1u, model->other_node()->children().size());
+  SetLocalDataDescription(syncer::DataType::BOOKMARKS, bookmark->id());
 
-  // This would move the bookmark to account storage.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
+  // Bookmarks are disabled.
+  ASSERT_FALSE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // Local bookmark can be retrieved from SyncService local data.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Click the sign in button. This should directly sign the user in and move
   // the bookmark.
-  ActivateSyncService();
   RunTestSequence(
       EnsurePresent(kBookmarkBubbleFrameViewId),
       SetOnIncompatibleAction(
@@ -1695,11 +1986,19 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
 
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
+  EnsureSyncServiceSigninStateConsistency();
+
+  // Bookmarks are now enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Signin metrics - WebSignin (WithDefault) metrics are also recorded.
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered", signin_metrics::AccessPoint::kBookmarkBubble, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started", signin_metrics::AccessPoint::kBookmarkBubble, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed", signin_metrics::AccessPoint::kBookmarkBubble,
       1);
@@ -1727,15 +2026,8 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
                        BookmarkSignInPromoWithAccountSignInPending) {
   // Sign in with an account, and put its refresh token into an error
   // state. This simulates the "sign in pending" state.
-  AccountInfo info = signin::MakePrimaryAccountAvailable(
-      identity_manager(), "test@email.com", signin::ConsentLevel::kSignin);
-  ExtendAccountInfo(info);
+  AccountInfo info = SignIn(signin_metrics::AccessPoint::kUserManager);
   signin::SetInvalidRefreshTokenForPrimaryAccount(identity_manager());
-
-  // The promo in sign in pending state is only shown if account storage for
-  // bookmarks is already enabled.
-  ON_CALL(*sync_service_mock().GetMockUserSettings(), GetSelectedTypes())
-      .WillByDefault(Return(syncer::UserSelectableTypeSet::All()));
 
   // Start recording metrics after signing in.
   base::HistogramTester histogram_tester;
@@ -1743,11 +2035,21 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
   // Trigger the bookmark bubble.
   const GURL kUrl("http://test.com");
   bookmarks::BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* bookmark =
       model->AddURL(model->other_node(), 0, std::u16string(), kUrl);
-  browser()->window()->ShowBookmarkBubble(kUrl, false);
+  BrowserWindow::FromBrowser(browser())->ShowBookmarkBubble(kUrl, false);
   ASSERT_EQ(1u, model->other_node()->children().size());
+  SetLocalDataDescription(syncer::DataType::BOOKMARKS, bookmark->id());
+
+  // Bookmarks are initially enabled.
+  ASSERT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // Local bookmark can be retrieved from SyncService local data.
+  // In production this does not happen - but in this test, it allows to simply
+  // test that `SyncService::SelectTypeAndMigrateLocalDataItemsWhenActive()` is
+  // called correctly, even though it is a no-op.
+  ASSERT_TRUE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
 
   // Click the sign in button.
   RunTestSequence(
@@ -1769,17 +2071,9 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
                   *browser()->tab_strip_model()->GetActiveWebContents())
                   ->IsInitializedForTesting());
 
-  // This would technically move the bookmark to account storage. However in
-  // this case, it does nothing, because the bookmark was already initially
-  // saved to pending account storage. It is still called, but as a no-op.
-  std::vector<syncer::LocalDataItemModel::DataId> items{bookmark->id()};
-  EXPECT_CALL(sync_service_mock(), SelectTypeAndMigrateLocalDataItemsWhenActive(
-                                       syncer::BOOKMARKS, items));
-
   // Set a new refresh token for the primary account, which verifies the
   // user's identity and signs them back in. This would trigger the automatic
   // upload.
-  ActivateSyncService();
   identity_manager()->GetAccountsMutator()->AddOrUpdateAccount(
       info.gaia, info.email, "dummy_refresh_token",
       /*is_under_advanced_protection=*/false,
@@ -1790,13 +2084,15 @@ IN_PROC_BROWSER_TEST_F(BubbleSignInPromoInteractiveUITestWithoutPhase2FollowUp,
   // Check that the sign in was successful.
   EXPECT_TRUE(IsSignedIn());
 
+  // Bookmarks are still enabled.
+  EXPECT_TRUE(test_sync_service().GetUserSettings()->GetSelectedTypes().Has(
+      syncer::UserSelectableType::kBookmarks));
+  // And the data is not present in the local storage anymore.
+  EXPECT_FALSE(HasLocalDataItemId(syncer::DataType::BOOKMARKS, bookmark->id()));
+
   // Signin metrics - nothing should be recorded for reauth.
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Completed", 0);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Offered.WithDefault", 0);
-  histogram_tester.ExpectTotalCount(
-      "Signin.SignIn.Offered.NewAccountNoExistingAccount", 0);
+  EXPECT_THAT(histogram_tester.GetTotalCountsForPrefix("Signin.SignIn."),
+              testing::ContainerEq(base::HistogramTester::CountsMap()));
   histogram_tester.ExpectTotalCount("Signin.WebSignin.SourceToChromeSignin", 0);
 
   // It was recorded that the reauth sign in promo was shown and accepted.

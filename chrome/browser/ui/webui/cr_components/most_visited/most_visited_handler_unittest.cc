@@ -9,9 +9,10 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/search_engines/template_url_service_factory_test_util.h"
 #include "chrome/browser/ui/search/ntp_user_data_types.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/prefs/pref_service.h"
@@ -63,7 +64,7 @@ class MostVisitedAutoRemovalTest
     handler_ = std::make_unique<MostVisitedHandler>(
         mojo::PendingReceiver<most_visited::mojom::MostVisitedPageHandler>(),
         page_.BindAndGetRemote(), &profile_, web_contents_.get(), GURL(),
-        base::Time());
+        base::Time(), base::TimeTicks());
     handler_->EnableTileTypes(
         ntp_tiles::MostVisitedSites::EnableTileTypesOptions().with_custom_links(
             GetParam().custom_links_enabled));
@@ -113,6 +114,54 @@ TEST_P(MostVisitedAutoRemovalTest, AddMostVisitedTile) {
                                base::DoNothing());
   EXPECT_TRUE(profile_.GetPrefs()->GetBoolean(
       ntp_prefs::kNtpShortcutsAutoRemovalDisabled));
+}
+
+TEST_P(MostVisitedAutoRemovalTest, OnMostVisitedTileHoverMetrics) {
+  auto tile = most_visited::mojom::MostVisitedTile::New();
+  tile->url = GURL("https://foo.com");
+
+  EXPECT_EQ(0, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileHoverCount));
+
+  handler_->PreconnectMostVisitedTile(std::move(tile));
+
+  EXPECT_EQ(1, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileHoverCount));
+}
+
+TEST_P(MostVisitedAutoRemovalTest, OnMostVisitedTileNavigationMetrics) {
+  auto tile = most_visited::mojom::MostVisitedTile::New();
+  tile->url = GURL("https://foo.com");
+
+  EXPECT_EQ(0, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileNavigationCount));
+
+  // Valid navigation (left click).
+  handler_->OnMostVisitedTileNavigation(
+      std::move(tile), /*index=*/0, /*mouse_button=*/0, /*alt_key=*/false,
+      /*ctrl_key=*/false, /*meta_key=*/false, /*shift_key=*/false);
+
+  EXPECT_EQ(1, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileNavigationCount));
+
+  // Invalid URL should not increment.
+  auto invalid_tile = most_visited::mojom::MostVisitedTile::New();
+  invalid_tile->url = GURL();
+  handler_->OnMostVisitedTileNavigation(std::move(invalid_tile), /*index=*/0,
+                                        /*mouse_button=*/0, /*alt_key=*/false,
+                                        /*ctrl_key=*/false, /*meta_key=*/false,
+                                        /*shift_key=*/false);
+  EXPECT_EQ(1, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileNavigationCount));
+
+  // SAVE_TO_DISK (alt+click) should not increment.
+  auto alt_tile = most_visited::mojom::MostVisitedTile::New();
+  alt_tile->url = GURL("https://foo.com");
+  handler_->OnMostVisitedTileNavigation(
+      std::move(alt_tile), /*index=*/0, /*mouse_button=*/0, /*alt_key=*/true,
+      /*ctrl_key=*/false, /*meta_key=*/false, /*shift_key=*/false);
+  EXPECT_EQ(1, profile_.GetPrefs()->GetInt64(
+                   ntp_prefs::kNtpMostVisitedTileNavigationCount));
 }
 
 TEST_P(MostVisitedAutoRemovalTest, DeleteMostVisitedTile) {
@@ -167,6 +216,9 @@ TEST_P(MostVisitedAutoRemovalTest, SetMostVisitedExpandedState) {
   handler_->SetMostVisitedExpandedState(true);
   EXPECT_TRUE(profile_.GetPrefs()->GetBoolean(
       ntp_prefs::kNtpShortcutsAutoRemovalDisabled));
+  histogram_tester_.ExpectUniqueSample(
+      "NewTabPage.MostVisited.ShowActionsToggleClicked",
+      MostVisitedShowActions::kShowMore, 1);
 }
 
 TEST_P(MostVisitedAutoRemovalTest, OnMostVisitedTileNavigation) {
@@ -177,8 +229,9 @@ TEST_P(MostVisitedAutoRemovalTest, OnMostVisitedTileNavigation) {
 
   content::WebContentsTester::For(web_contents_.get())
       ->NavigateAndCommit(GURL("https://bar.com"));
-  handler_->OnMostVisitedTileNavigation(std::move(tile), 0, 0, false, false,
-                                        false, false);
+  handler_->OnMostVisitedTileNavigation(
+      std::move(tile), /*index=*/0, /*mouse_button=*/0, /*alt_key=*/false,
+      /*ctrl_key=*/false, /*meta_key=*/false, /*shift_key=*/false);
 
   EXPECT_TRUE(profile_.GetPrefs()->GetBoolean(
       ntp_prefs::kNtpShortcutsAutoRemovalDisabled));
@@ -230,6 +283,8 @@ TEST_P(MostVisitedAutoRemovalTest, OnMostVisitedTilesRendered) {
   EXPECT_EQ(
       profile_.GetPrefs()->GetInteger(ntp_prefs::kNtpShortcutsStalenessCount),
       1);
+  histogram_tester_.ExpectBucketCount("NewTabPage.MostVisited.IsExpandedOnLoad",
+                                      false, 1);
 }
 
 TEST_P(MostVisitedAutoRemovalTest, DoNotRemoveStaleShortcutsIfFeatureDisabled) {
@@ -246,6 +301,9 @@ TEST_P(MostVisitedAutoRemovalTest, DoNotRemoveStaleShortcutsIfFeatureDisabled) {
   EXPECT_TRUE(profile_.GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible));
 }
 
+// TODO(b/514161985): Enable this test on Android once enterprise shortcuts are
+// supported.
+#if !BUILDFLAG(IS_ANDROID)
 TEST_P(MostVisitedAutoRemovalTest,
        DoNotRemoveStaleShortcutsIfEnterpriseShortcutsEnabled) {
   InitFeature(true);
@@ -265,6 +323,7 @@ TEST_P(MostVisitedAutoRemovalTest,
 
   EXPECT_TRUE(profile_.GetPrefs()->GetBoolean(ntp_prefs::kNtpShortcutsVisible));
 }
+#endif
 
 TEST_P(MostVisitedAutoRemovalTest, RemoveStaleShortcutsIfReachThreshold) {
   InitFeature(true);

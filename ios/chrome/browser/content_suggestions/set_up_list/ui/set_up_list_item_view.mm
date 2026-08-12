@@ -127,10 +127,8 @@ struct ViewConfig {
       };
     }
 
-    if (IsNTPBackgroundCustomizationEnabled()) {
-      [self registerForTraitChanges:@[ NewTabPageTrait.class ]
-                         withAction:@selector(applyBackgroundColors)];
-    }
+    [self registerForTraitChanges:@[ NewTabPageTrait.class ]
+                       withAction:@selector(applyBackgroundColors)];
     [self applyBackgroundColors];
   }
   return self;
@@ -207,9 +205,7 @@ struct ViewConfig {
 
 - (void)applyBackgroundColors {
   NewTabPageColorPalette* colorPalette =
-      IsNTPBackgroundCustomizationEnabled()
-          ? [self.traitCollection objectForNewTabPageTrait]
-          : nil;
+      [self.traitCollection objectForNewTabPageTrait];
   if (colorPalette) {
     _iconContainerView.backgroundColor = colorPalette.tertiaryColor;
   } else {
@@ -358,6 +354,11 @@ struct ViewConfig {
       return l10n_util::GetNSString(IDS_IOS_SET_UP_LIST_NOTIFICATIONS_TITLE);
     case SetUpListItemType::kAllSet:
       return l10n_util::GetNSString(IDS_IOS_SET_UP_LIST_ALL_SET_TITLE);
+    case SetUpListItemType::kSafariImport:
+      return l10n_util::GetNSString(IDS_IOS_SET_UP_LIST_SAFARI_IMPORT_TITLE);
+    case SetUpListItemType::kBackgroundCustomization:
+      return l10n_util::GetNSString(
+          IDS_IOS_SET_UP_LIST_BACKGROUND_CUSTOMIZATION_TITLE);
   }
 }
 
@@ -372,6 +373,12 @@ struct ViewConfig {
       return l10n_util::GetNSString(_config.notifications_description);
     case SetUpListItemType::kAllSet:
       return l10n_util::GetNSString(IDS_IOS_SET_UP_LIST_ALL_SET_DESCRIPTION);
+    case SetUpListItemType::kSafariImport:
+      return l10n_util::GetNSString(
+          IDS_IOS_SET_UP_LIST_SAFARI_IMPORT_DESCRIPTION);
+    case SetUpListItemType::kBackgroundCustomization:
+      return l10n_util::GetNSString(
+          IDS_IOS_SET_UP_LIST_BACKGROUND_CUSTOMIZATION_DESCRIPTION);
   }
 }
 
@@ -385,6 +392,10 @@ struct ViewConfig {
       return set_up_list::kContentNotificationItemID;
     case SetUpListItemType::kAllSet:
       return set_up_list::kAllSetItemID;
+    case SetUpListItemType::kSafariImport:
+      return set_up_list::kSafariImportItemID;
+    case SetUpListItemType::kBackgroundCustomization:
+      return set_up_list::kBackgroundCustomizationItemID;
   }
 }
 

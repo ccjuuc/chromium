@@ -21,6 +21,8 @@ enum GamepadBusType {
   GAMEPAD_BUS_BLUETOOTH
 };
 
+enum GamepadDriver { kGamepadDriverUnknown, kGamepadDriverXpad };
+
 typedef void (*GamepadStandardMappingFunction)(const Gamepad& original,
                                                Gamepad* mapped);
 
@@ -37,7 +39,8 @@ GamepadStandardMappingFunction GetGamepadStandardMappingFunction(
     const uint16_t product_id,
     const uint16_t hid_specification_version,
     const uint16_t version_number,
-    GamepadBusType bus_type);
+    GamepadBusType bus_type,
+    GamepadDriver driver);
 
 // This defines our canonical mapping order for gamepad-like devices. If these
 // items cannot all be satisfied, it is a case-by-case judgement as to whether
@@ -93,6 +96,20 @@ enum SwitchProButtons {
   SWITCH_PRO_BUTTON_COUNT
 };
 
+// The DualSense controller has a Touchpad button that has no
+// equivalent in the Standard Gamepad.
+enum DualSenseButtons {
+  DUAL_SENSE_BUTTON_TOUCHPAD = BUTTON_INDEX_COUNT,
+  DUAL_SENSE_BUTTON_COUNT
+};
+
+// The DualShock 4 controller has a Touchpad button that has no
+// equivalent in the Standard Gamepad.
+enum Dualshock4Buttons {
+  DUALSHOCK_BUTTON_TOUCHPAD = BUTTON_INDEX_COUNT,
+  DUALSHOCK_BUTTON_COUNT
+};
+
 // Common mapping functions
 GamepadButton AxisToButton(float input);
 GamepadButton AxisNegativeAsButton(float input);
@@ -101,11 +118,13 @@ GamepadButton ButtonFromButtonAndAxis(GamepadButton button, float axis);
 GamepadButton NullButton();
 void DpadFromAxis(Gamepad* mapped, float dir);
 float RenormalizeAndClampAxis(float value, float min, float max);
+void SetStandardGamepadButtonTypes(Gamepad* gamepad);
 
 // Gamepad common mapping functions
 void MapperSwitchPro(const Gamepad& input, Gamepad* mapped);
 void MapperSwitchJoyCon(const Gamepad& input, Gamepad* mapped);
 void MapperSwitchComposite(const Gamepad& input, Gamepad* mapped);
+void Mapper2Axes8Keys(const Gamepad& input, Gamepad* mapped);
 
 }  // namespace device
 

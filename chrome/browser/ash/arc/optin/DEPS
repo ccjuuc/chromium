@@ -18,7 +18,6 @@ include_rules = [
   "+chrome/browser/ash/login",
   "+chrome/browser/ash/ownership",
   "+chrome/browser/ash/settings",
-  "+chrome/browser/browser_process.h",
   "+chrome/browser/consent_auditor",
   "+chrome/browser/extensions/api/settings_private",
   "+chrome/browser/metrics",
@@ -26,6 +25,11 @@ include_rules = [
   "+chrome/browser/signin",
   "+chrome/browser/ui/ash/login",
   "+chrome/browser/ui/webui/ash/login",
-  "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "arc_terms_of_service_default_negotiator_unittest\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+}

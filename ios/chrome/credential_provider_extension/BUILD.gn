@@ -41,6 +41,7 @@ source_set("credential_provider") {
     ":reauthentication_handler",
     "//base",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/ios:passkey_types",
     "//ios/chrome/common/app_group",
     "//ios/chrome/common/crash_report",
     "//ios/chrome/common/credential_provider",
@@ -106,6 +107,7 @@ source_set("unit_tests") {
     "//components/cbor",
     "//components/sync/protocol",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/ios:passkey_types",
     "//device/fido",
     "//ios/chrome/common/app_group",
     "//ios/chrome/common/credential_provider",
@@ -143,6 +145,7 @@ source_set("passkey_util") {
     "//base",
     "//components/sync/protocol",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/ios:passkey_types",
     "//device/fido",
     "//ios/chrome/common/app_group",
     "//ios/chrome/common/credential_provider",
@@ -198,6 +201,8 @@ source_set("passkey_request_details") {
     ":passkey_util_swift",
     "//base",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/ios:passkey_types",
+    "//ios/chrome/common/credential_provider:net_util",
     "//ios/chrome/common/credential_provider:ui",
     "//ios/chrome/credential_provider_extension/ui:feature_flags",
   ]
@@ -215,6 +220,7 @@ source_set("passkey_welcome_screen_util") {
   deps = [
     ":generated_strings",
     "//base",
+    "//components/webauthn/ios:passkey_types",
     "//ios/chrome/common/credential_provider/ui",
   ]
   frameworks = [ "Foundation.framework" ]

@@ -34,7 +34,7 @@ namespace url_formatter {
 // Returns the canonicalized scheme, or the empty string when |text| is only
 // whitespace.
 std::string SegmentURL(std::string_view text, url::Parsed* parts);
-std::u16string SegmentURL(const std::u16string& text, url::Parsed* parts);
+std::u16string SegmentURL(std::u16string_view text, url::Parsed* parts);
 
 // Attempts to fix common problems in user-typed text, making some "smart"
 // adjustments to obviously-invalid input where possible.
@@ -57,7 +57,7 @@ std::u16string SegmentURL(const std::u16string& text, url::Parsed* parts);
 // |desired_tld| to the domain and prepend "www." (unless it, or a scheme, are
 // already present.)  This TLD should not have a leading '.' (use "com" instead
 // of ".com").
-GURL FixupURL(const std::string& text, const std::string& desired_tld);
+GURL FixupURL(const std::string& text, const std::string& desired_tld = "");
 
 // Converts |text| to a fixed-up URL, allowing it to be a relative path on the
 // local filesystem. Begin searching in |base_dir|; if empty, use the current

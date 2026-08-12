@@ -4,11 +4,10 @@
 
 package org.chromium.net.test;
 
-import android.util.Log;
-
 import androidx.annotation.GuardedBy;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Log;
 import org.chromium.net.CronetException;
 import org.chromium.net.ExperimentalUrlRequest;
 import org.chromium.net.InlineExecutionProhibitedException;
@@ -316,7 +315,8 @@ final class FakeUrlRequest extends ExperimentalUrlRequest {
                         mCurrentFakeResponse.getWasCached(),
                         mCurrentFakeResponse.getNegotiatedProtocol(),
                         mCurrentFakeResponse.getProxyServer(),
-                        mCurrentFakeResponse.getResponseBody().length);
+                        mCurrentFakeResponse.getResponseBody().length,
+                        /* isProxied= */ false);
         mResponse = ByteBuffer.wrap(mCurrentFakeResponse.getResponseBody());
         // Check for a redirect.
         if (responseCode >= 300 && responseCode < 400 && responseCode != 304) {

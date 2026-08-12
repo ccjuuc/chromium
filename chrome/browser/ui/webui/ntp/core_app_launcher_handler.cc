@@ -21,7 +21,7 @@ CoreAppLauncherHandler::CoreAppLauncherHandler() = default;
 CoreAppLauncherHandler::~CoreAppLauncherHandler() = default;
 
 void CoreAppLauncherHandler::HandleRecordAppLaunchByUrl(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const std::string& url = args[0].GetString();
   double source = args[1].GetDouble();
   int source_int = static_cast<int>(source);
@@ -46,7 +46,7 @@ void CoreAppLauncherHandler::RecordAppLaunchByUrl(
   }
 
   extensions::RecordAppLaunchType(bucket,
-                                  extensions::Manifest::TYPE_HOSTED_APP);
+                                  extensions::Manifest::Type::kHostedApp);
 }
 
 void CoreAppLauncherHandler::RegisterMessages() {

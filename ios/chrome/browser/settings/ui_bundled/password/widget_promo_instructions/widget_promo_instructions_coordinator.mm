@@ -12,10 +12,10 @@
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
 
 @interface WidgetPromoInstructionsCoordinator () <
-    UIAdaptivePresentationControllerDelegate,
     ConfirmationAlertActionHandler,
     LocalReauthenticationCoordinatorDelegate,
-    SettingsNavigationControllerDelegate>
+    SettingsNavigationControllerDelegate,
+    UIAdaptivePresentationControllerDelegate>
 
 // Password Manager widget promo instructions view controller.
 @property(nonatomic, strong)
@@ -100,12 +100,12 @@
   [self.delegate removeWidgetPromoInstructionsCoordinator:self];
 }
 
-- (id<ApplicationCommands, BrowserCommands>)handlerForSettings {
+- (id<SceneCommands, BrowserCommands>)handlerForSettings {
   NOTREACHED();
   return nil;
 }
 
-- (id<ApplicationCommands>)handlerForApplicationCommands {
+- (id<SceneCommands>)handlerForSceneCommands {
   NOTREACHED();
   return nil;
 }
@@ -142,7 +142,6 @@
   _reauthCoordinator = [[LocalReauthenticationCoordinator alloc]
       initWithBaseNavigationController:_settingsNavigationController
                                browser:self.browser
-                reauthenticationModule:nil
                            authOnStart:NO];
 
   _reauthCoordinator.delegate = self;

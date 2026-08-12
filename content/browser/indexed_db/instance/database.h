@@ -54,9 +54,7 @@ class CONTENT_EXPORT Database {
   // null.
   using ErrorCallback = base::RepeatingCallback<void(Status, const char*)>;
 
-  Database(uint32_t id_for_locks,
-           const std::u16string& name,
-           BucketContext& bucket_context);
+  Database(const std::u16string& name, BucketContext& bucket_context);
 
   Database(const Database&) = delete;
   Database& operator=(const Database&) = delete;
@@ -88,7 +86,9 @@ class CONTENT_EXPORT Database {
   BuildLockRequestsForTransaction(blink::mojom::IDBTransactionMode mode,
                                   const std::set<int64_t>& scope) const;
 
-  const std::list<Connection*>& connections() const { return connections_; }
+  const std::list<raw_ptr<Connection>>& connections() const {
+    return connections_;
+  }
 
   size_t GetNumTransactionsAcrossAllConnections() const;
 
@@ -96,11 +96,9 @@ class CONTENT_EXPORT Database {
   void RegisterAndScheduleTransaction(Transaction* transaction);
 
   // This closes connections and their transactions, and tells the connection
-  // coordinator to cancel pending open requests. However, pending delete
-  // requests are honored (synchronously). This requires an rvalue reference
-  // because it should only be called right before destruction, by its owner
-  // (BucketContext).
-  Status ForceClose(const std::string& message) &&;
+  // coordinator to cancel all currently pending requests. New requests can be
+  // issued after this function returns and will be processed as usual.
+  void ForceCloseConnectionsAndCancelRequests(const std::string& message);
 
   void ScheduleOpenConnection(std::unique_ptr<PendingConnection> connection,
                               base::TimeDelta synchronous_duration);
@@ -114,8 +112,6 @@ class CONTENT_EXPORT Database {
 
   // Number of connections that have progressed passed initial open call.
   size_t ConnectionCount() const { return connections_.size(); }
-
-  bool force_closing() const { return force_closing_; }
 
   // Number of active open/delete calls (running or blocked on other
   // connections).
@@ -202,13 +198,6 @@ class CONTENT_EXPORT Database {
 
   base::WeakPtr<Database> AsWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
-  void AddConnectionForTesting(Connection* connection) {
-    if (connections_.empty()) {
-      OpenInternal();
-    }
-    connections_.push_back(connection);
-  }
-
   bool CanBeDestroyed();
 
  protected:
@@ -224,6 +213,7 @@ class CONTENT_EXPORT Database {
   FRIEND_TEST_ALL_PREFIXES(DatabaseOperationTest,
                            IndexGetAllKeysWithInvalidIndexId);
   friend class DatabaseOperationTest;
+  friend class TransactionTestBase;
 
   void CallUpgradeTransactionStartedForTesting(int64_t old_version);
 
@@ -234,17 +224,19 @@ class CONTENT_EXPORT Database {
   Status OpenInternal();
   const IndexedDBDataLossInfo& GetDataLossInfo() const;
 
-  // This class informs its result sink of an error if a `GetAllOperation` is
-  // deleted without being run. This functionality mimics that of
-  // AbortOnDestruct callbacks. `GetAll()` cannot easily be shoe-horned into the
-  // abort-on-destruct callback templating.
+  // This class manages sending GetAll results. It can send records directly
+  // via the callback (for small result sets) or create a sink for streaming
+  // larger result sets. If destroyed without completing, it reports an error.
   class CONTENT_EXPORT GetAllResultSinkWrapper {
    public:
     GetAllResultSinkWrapper(base::WeakPtr<Transaction> transaction,
                             blink::mojom::IDBDatabase::GetAllCallback callback);
     ~GetAllResultSinkWrapper();
 
-    mojo::AssociatedRemote<blink::mojom::IDBDatabaseGetAllResultSink>& Get();
+    void SendResults(std::vector<blink::mojom::IDBRecordPtr> records,
+                     bool done);
+
+    void SendError(blink::mojom::IDBErrorPtr error);
 
     // An override for unit tests to bind the associated receiver successfully
     // without a pre-existing endpoint entanglement.
@@ -253,6 +245,10 @@ class CONTENT_EXPORT Database {
     }
 
    private:
+    // Passes `initial_records` to the frontend and creates `result_sink_` for
+    // returning more records (or errors).
+    void SetUpSink(std::vector<blink::mojom::IDBRecordPtr> initial_records);
+
     base::WeakPtr<Transaction> transaction_;
     blink::mojom::IDBDatabase::GetAllCallback callback_;
     mojo::AssociatedRemote<blink::mojom::IDBDatabaseGetAllResultSink>
@@ -325,19 +321,17 @@ class CONTENT_EXPORT Database {
   const blink::IndexedDBObjectStoreMetadata& GetObjectStoreMetadata(
       int64_t object_store_id) const;
 
-  // This ID uniquely identifies this database within this process. It's not
-  // persisted anywhere. Only used when the backing store is SQLite.
-  uint32_t id_for_locks_;
   std::u16string name_;
 
   // The object that owns `this`.
   raw_ref<BucketContext> bucket_context_;
 
   // `list` because iteration order is important.
-  std::list<Connection*> connections_;
+  std::list<raw_ptr<Connection>> connections_;
 
-  // True once `ForceCloseAndRunTasks()` is called.
-  bool force_closing_ = false;
+  // True only while `ForceCloseConnectionsAndCancelRequests()` is
+  // (synchronously) running.
+  bool closing_all_connections_ = false;
 
   ConnectionCoordinator connection_coordinator_;
 

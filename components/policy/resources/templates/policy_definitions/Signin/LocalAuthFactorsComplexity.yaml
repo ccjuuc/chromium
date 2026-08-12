@@ -18,8 +18,8 @@ desc: |-
 
   See the help center article for detailed explanations of what each level entails for both PINs and passwords.
 
-future_on:
-- chrome_os
+supported_on:
+- chrome_os:150-
 
 features:
   dynamic_refresh: true
@@ -27,6 +27,7 @@ features:
 
 type: int-enum
 
+# LINT.IfChange
 schema:
   type: integer
   enum:
@@ -34,6 +35,7 @@ schema:
   - 2
   - 3
   - 4
+# LINT.ThenChange(//chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom:LocalAuthFactorsComplexity)
 
 items:
 - caption: No Complexity

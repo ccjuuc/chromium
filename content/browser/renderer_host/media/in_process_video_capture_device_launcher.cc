@@ -12,7 +12,6 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
@@ -35,6 +34,7 @@
 #include "media/capture/video/video_capture_device_client.h"
 #include "media/capture/video/video_frame_receiver.h"
 #include "media/capture/video/video_frame_receiver_on_task_runner.h"
+#include "media/webrtc/webrtc_features.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 
 #if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
@@ -47,8 +47,8 @@
 #include "content/browser/media/capture/desktop_capture_device.h"
 #endif  // !BUILDFLAG(IS_IOS)
 #if BUILDFLAG(IS_MAC)
-#include "content/browser/media/capture/capture_util_mac.h"
 #include "content/browser/media/capture/desktop_capture_device_mac.h"
+#include "content/browser/media/capture/desktop_capture_util_mac.h"
 #include "content/browser/media/capture/pip_screen_capture_coordinator_impl.h"
 #include "content/browser/media/capture/views_widget_video_capture_device_mac.h"
 #endif
@@ -198,7 +198,8 @@ DesktopCaptureImplementation CreatePlatformDependentVideoCaptureDevice(
       (desktop_id.type == DesktopMediaID::TYPE_SCREEN &&
        base::FeatureList::IsEnabled(kScreenCaptureKitMacScreen))) {
     device_out = CreateScreenCaptureKitDeviceMac(
-        desktop_id, std::move(pip_screen_capture_coordinator_proxy));
+        desktop_id, /*is_native_picker=*/false,
+        std::move(pip_screen_capture_coordinator_proxy));
     if (device_out) {
       return kScreenCaptureKitDeviceMac;
     }
@@ -326,9 +327,9 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
         // For the other capturers, when a bug reports the type of capture it's
         // easy enough to determine which capturer was used, but it's a little
         // fuzzier with window capture.
-        TRACE_EVENT_INSTANT0(
+        TRACE_EVENT_INSTANT(
             TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
-            "UsingVizFrameSinkCapturer", TRACE_EVENT_SCOPE_THREAD);
+            "UsingVizFrameSinkCapturer");
         start_capture_closure = base::BindOnce(
             &InProcessVideoCaptureDeviceLauncher::
                 DoStartVizFrameSinkWindowCaptureOnDeviceThread,
@@ -339,14 +340,29 @@ void InProcessVideoCaptureDeviceLauncher::LaunchDeviceAsync(
 #endif  // defined(USE_AURA) || BUILDFLAG(IS_MAC)
 
       // All cases other than tab capture or Aura desktop/window capture.
-      TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
-                           "UsingDesktopCapturer", TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
+                          "UsingDesktopCapturer");
+
+      int max_buffer_count = kMaxNumberOfBuffers;
+      media::VideoCaptureBufferType buffer_type =
+          media::VideoCaptureBufferType::kSharedMemory;
+#if BUILDFLAG(IS_WIN)
+      // WGC (Windows Graphics Capture) is always used for window captures and
+      // conditionally enabled for screen captures.
+      const bool wgc_may_be_used =
+          desktop_id.type == DesktopMediaID::TYPE_WINDOW ||
+          IsWgcEnabledForScreenCapture();
+      if (base::FeatureList::IsEnabled(features::kWebRtcAllowWgcUsingTexture) &&
+          wgc_may_be_used) {
+        buffer_type = media::VideoCaptureBufferType::kGpuMemoryBuffer;
+        max_buffer_count = 10;
+      }
+#endif
       start_capture_closure = base::BindOnce(
           &InProcessVideoCaptureDeviceLauncher::
               DoStartDesktopCaptureOnDeviceThread,
           base::Unretained(this), desktop_id, params,
-          CreateDeviceClient(media::VideoCaptureBufferType::kSharedMemory,
-                             kMaxNumberOfBuffers, std::move(receiver),
+          CreateDeviceClient(buffer_type, max_buffer_count, std::move(receiver),
                              std::move(receiver_on_io_thread)),
           std::move(after_start_capture_callback));
       break;
@@ -600,9 +616,15 @@ void InProcessVideoCaptureDeviceLauncher::OnFakeDevicesEnumerated(
     std::move(result_callback).Run(nullptr);
     return;
   }
-  auto video_capture_device =
-      fake_device_factory_->CreateDevice(devices_info.front().descriptor)
-          .ReleaseDevice();
+  media::VideoCaptureErrorOrDevice video_capture_device_or_error =
+      fake_device_factory_->CreateDevice(devices_info.front().descriptor);
+  if (!video_capture_device_or_error.ok()) {
+    LOG(ERROR) << "Failed to create fake device";
+    std::move(result_callback).Run(nullptr);
+    return;
+  }
+  std::unique_ptr<media::VideoCaptureDevice> video_capture_device =
+      video_capture_device_or_error.ReleaseDevice();
   video_capture_device->AllocateAndStart(params, std::move(device_client));
   std::move(result_callback).Run(std::move(video_capture_device));
 }

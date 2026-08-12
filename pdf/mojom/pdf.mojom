@@ -37,6 +37,7 @@ interface SaveDataBufferHandler {
   Read(uint32 offset, uint32 block_size) => (mojo_base.mojom.BigBuffer block);
 };
 
+// Renderer-side interface used by the browser.
 interface PdfListener {
   // Sets the current caret position.
   SetCaretPosition(gfx.mojom.PointF position);
@@ -71,6 +72,23 @@ interface PdfListener {
   // returns nullopt.
   GetMostVisiblePageIndex() => (uint32? page_index);
 
+  // Returns `true` if the document has meaningful text. A document is
+  // considered to have meaningful text if the total character count is at
+  // least 100 characters. If Searchify is enabled, pages that require
+  // Searchify are treated as having 0 characters. Returns `false` if called
+  // before the document is loaded.
+  HasMeaningfulText() => (bool has_meaningful_text);
+
+  // Returns `true` if the PDF contains JavaScript actions. Returns `false` if
+  // called before the document is loaded.
+  // Called by the browser process (privileged) to query the PDF plugin in the
+  // renderer process (sandboxed).
+  HasJavaScript() => (bool has_javascript);
+
+  // Returns `true` if the PDF is password protected / encrypted. Returns
+  // `false` if called before the document is loaded.
+  IsPasswordProtected() => (bool is_password_protected);
+
   // Returns a `SaveDataBufferHandler` and the total file size to read the data
   // to save to Google Drive. Once the handler is acquired, caller can read the
   // data by calling `Read`. If the file is larger than INT_MAX size, returns
@@ -78,6 +96,54 @@ interface PdfListener {
   [EnableIf=enable_pdf_save_to_drive]
   GetSaveDataBufferHandlerForDrive(SaveRequestType request_type)
       => (SaveDataBufferHandlerGetResult? result);
+};
+
+[EnableIf=enable_pdf_ink2]
+struct InkGlyphInfo {
+  // The glyph ID within the given typeface.
+  uint16 glyph;
+  // The glyph offset value from Harfbuzz.
+  gfx.mojom.Vector2dF offset;
+  // Cumulative glyph.advance, which originally comes from Harfbuzz.
+  float total_advance;
+  // The Harfbuzz glyph cluster index for this glyph. The index refers to UTF-16
+  // Code Units within the parent InkTextRun `text` string.
+  uint32 character_index;
+};
+
+[EnableIf=enable_pdf_ink2]
+struct InkTypefaceRun {
+  // The ID from SkTypeface::uniqueId().
+  uint32 typeface_id;
+  // The glyphs that make up the run.
+  array<InkGlyphInfo> glyphs;
+  // If true the text is horizontal, if false the text is vertical.
+  bool is_horizontal;
+  // Whether the text needs to be artificially bolded / italicized.
+  bool is_synthetic_bold;
+  bool is_synthetic_italic;
+};
+
+[EnableIf=enable_pdf_ink2]
+struct InkTextRun {
+  // Each run of text with one typeface per run.
+  array<InkTypefaceRun> typeface_runs;
+  // The location of the text run in physical pixels.
+  gfx.mojom.RectF location;
+  mojo_base.mojom.String16 text;
+};
+
+// Represents the result from blink::WebFormControlElement::GetTextInfo()
+[EnableIf=enable_pdf_ink2]
+struct InkTextInfo {
+  // Each run of text returned by Blink. Can contain multiple typefaces.
+  array<InkTextRun> text_runs;
+  // The DSF * browser_zoom * css_zoom_property scale factor.
+  // 1.0 is 100%.
+  // See blink::WebElement::GetEffectiveZoom()
+  float effective_zoom;
+  // In physical pixels. Based on the <textarea> font size.
+  float primary_ascent;
 };
 
 // Browser-side interface used by PDF renderers.
@@ -91,8 +157,8 @@ interface PdfHost {
   // Updates the content restrictions, i.e. to disable print/copy.
   UpdateContentRestrictions(int32 restrictions);
 
-  // Brings up SaveAs... dialog to save specified URL.
-  SaveUrlAs(url.mojom.Url url, network.mojom.ReferrerPolicy policy);
+  // Brings up SaveAs... dialog to save the PDF.
+  SavePdf();
 
   // Notifies the embedder of the top-left and bottom-right coordinates of the
   // current selection.

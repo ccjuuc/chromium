@@ -12,6 +12,7 @@
 #include "base/location.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_path_override.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/session/user_session_manager_test_api.h"
 #include "chrome/browser/ash/login/test/gaia_page_event_waiter.h"
@@ -19,7 +20,6 @@
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
 #include "chrome/browser/ash/login/test/test_condition_waiter.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/ash/login/login_display_host_webui.h"
 #include "chrome/browser/ui/ash/login/webui_login_view.h"
@@ -28,6 +28,7 @@
 #include "chrome/browser/ui/webui/ash/login/update_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/shill/fake_shill_manager_client.h"
@@ -53,6 +54,12 @@ void OobeBaseTest::RegisterAdditionalRequestHandlers() {}
 
 void OobeBaseTest::SetUp() {
   RegisterAdditionalRequestHandlers();
+  CHECK(temp_dir_.CreateUniqueTempDir());
+  token_path_override_ = std::make_unique<base::ScopedPathOverride>(
+      chrome::FILE_CHROME_OS_DEVICE_REFRESH_TOKEN,
+      temp_dir_.GetPath().Append("device_refresh_token"),
+      /*is_absolute=*/true,
+      /*create=*/false);
   MixinBasedInProcessBrowserTest::SetUp();
 }
 

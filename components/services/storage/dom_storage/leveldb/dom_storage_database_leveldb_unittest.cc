@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
@@ -18,9 +19,11 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/task_environment.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
+#include "components/services/storage/dom_storage/db_status.h"
+#include "components/services/storage/dom_storage/dom_storage_rollout.h"
 #include "components/services/storage/dom_storage/leveldb/dom_storage_batch_operation_leveldb.h"
-#include "storage/common/database/db_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,8 +54,6 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 namespace {
-
-constexpr const char kTestDbName[] = "test_db";
 
 // Use "test-version" for the schema version key.
 constexpr const std::uint8_t kTestVersionKey[] = {'t', 'e', 's', 't', '-', 'v',
@@ -87,30 +88,16 @@ class DomStorageDatabaseLevelDBTest : public testing::Test {
   // To create an in-memory database, provide an empty `directory`.  Asserts
   // success.
   void Open(const base::FilePath& directory,
-            std::unique_ptr<DomStorageDatabaseLevelDB>* result) {
+            std::unique_ptr<DomStorageDatabaseLevelDB>* result,
+            bool write_tag_file = false) {
     StatusOr<std::unique_ptr<DomStorageDatabaseLevelDB>> database =
         DomStorageDatabaseLevelDB::Open(
-            directory, kTestDbName, /*memory_dump_id=*/std::nullopt,
-            kTestVersionKey, kTestMinSupportedVersion,
-            kTestMaxSupportedVersion);
+            StorageType::kLocalStorage, directory,
+            /*memory_dump_id=*/std::nullopt, kTestVersionKey,
+            kTestMinSupportedVersion, kTestMaxSupportedVersion, write_tag_file);
 
     ASSERT_TRUE(database.has_value()) << database.error().ToString();
     *result = *std::move(database);
-  }
-
-  // Helper for tests to block on the result of a Destroy call.
-  DbStatus DestroySync(const base::FilePath& directory,
-                       const std::string& db_name) {
-    DbStatus result;
-    base::RunLoop loop;
-    DomStorageDatabaseLevelDB::Destroy(
-        directory, db_name, blocking_task_runner_,
-        base::BindLambdaForTesting([&](DbStatus status) {
-          result = status;
-          loop.Quit();
-        }));
-    loop.Run();
-    return result;
   }
 
   void TestInvalidVersion(DomStorageDatabase::ValueView invalid_version);
@@ -175,13 +162,13 @@ TEST_F(DomStorageDatabaseLevelDBTest, Reopen) {
   // Because the database owns filesystem artifacts in the temp directory, we
   // will wait for the `DomStorageDatabaseLevelDB` instance to actually be
   // destroyed before completing the test.
-  EXPECT_STATUS_OK(DestroySync(temp_dir.GetPath(), kTestDbName));
+  EXPECT_STATUS_OK(DomStorageDatabaseLevelDB::Destroy(temp_dir.GetPath()));
 
   // Verify that the database was destroyed (open again and verify it's a blank
   // slate).
   ASSERT_NO_FATAL_FAILURE(Open(temp_dir.GetPath(), &db));
   EXPECT_THAT(db->Get(base::byte_span_from_cstring(kTestKey)),
-              ErrorIs(Property(&DbStatus::IsNotFound, IsTrue)));
+              ErrorIs(Property(&DbStatus::IsNotFound, IsTrue())));
   db.reset();
 }
 
@@ -413,10 +400,11 @@ void DomStorageDatabaseLevelDBTest::TestInvalidVersion(
   // Re-open the database, which must fail due to the invalid version number.
   db.reset();
   StatusOr<std::unique_ptr<DomStorageDatabaseLevelDB>> reopened_database =
-      DomStorageDatabaseLevelDB::Open(temp_dir.GetPath(), kTestDbName,
-                                      /*memory_dump_id=*/std::nullopt,
-                                      kTestVersionKey, kTestMinSupportedVersion,
-                                      kTestMaxSupportedVersion);
+      DomStorageDatabaseLevelDB::Open(
+          StorageType::kLocalStorage, temp_dir.GetPath(),
+          /*memory_dump_id=*/std::nullopt, kTestVersionKey,
+          kTestMinSupportedVersion, kTestMaxSupportedVersion,
+          /*write_tag_file=*/false);
   ASSERT_FALSE(reopened_database.has_value());
   EXPECT_TRUE(reopened_database.error().IsCorruption());
 }
@@ -434,6 +422,27 @@ TEST_F(DomStorageDatabaseLevelDBTest, OpenFailsWithVersionBelowMin) {
 TEST_F(DomStorageDatabaseLevelDBTest, OpenFailsWithVersionAboveMax) {
   // '5' is less than the minimum version.
   ASSERT_NO_FATAL_FAILURE(TestInvalidVersion({'5'}));
+}
+
+TEST_F(DomStorageDatabaseLevelDBTest,
+       DestroyRemovesExperimentalTagAndDirectory) {
+  // Destroying a database that carries the experimental tag must remove the tag
+  // and the emptied database directory, matching the result for an untagged
+  // database.
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const base::FilePath db_dir = temp_dir.GetPath().AppendASCII("leveldb");
+
+  std::unique_ptr<DomStorageDatabaseLevelDB> db;
+  ASSERT_NO_FATAL_FAILURE(Open(db_dir, &db, /*write_tag_file=*/true));
+  db.reset();
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  ASSERT_TRUE(base::PathExists(GetLevelDbExperimentalTagPath(db_dir)));
+
+  EXPECT_STATUS_OK(DomStorageDatabaseLevelDB::Destroy(db_dir));
+
+  EXPECT_FALSE(base::PathExists(db_dir));
 }
 
 }  // namespace storage

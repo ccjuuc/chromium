@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/auto_reset.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/js_injection/common/interfaces.mojom.h"
 #include "gin/arguments.h"
@@ -18,8 +17,9 @@
 #include "gin/wrappable.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "third_party/blink/public/common/messaging/string_message_codec.h"
-#include "v8/include/v8.h"
 #include "v8/include/cppgc/persistent.h"
+#include "v8/include/cppgc/prefinalizer.h"
+#include "v8/include/v8.h"
 
 namespace v8 {
 template <typename T>
@@ -39,17 +39,19 @@ class JsCommunication;
 // to the page. JsBinding is owned by v8.
 class JsBinding final : public gin::Wrappable<JsBinding>,
                         public mojom::BrowserToJsMessaging {
+  CPPGC_USING_PRE_FINALIZER(JsBinding, Dispose);
+
  public:
-  static constexpr gin::WrapperInfo kWrapperInfo = {
-      {gin::kEmbedderNativeGin}, gin::kJsBinding};
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kJsBinding};
 
   JsBinding(const JsBinding&) = delete;
   JsBinding& operator=(const JsBinding&) = delete;
 
   // Make public for cppgc::MakeGarbageCollected.
-  JsBinding(content::RenderFrame* render_frame,
-                     const std::u16string& js_object_name,
-                     base::WeakPtr<JsCommunication> js_communication);
+  JsBinding(const std::u16string& js_object_name,
+            base::WeakPtr<JsCommunication> js_communication,
+            int32_t world_id);
   ~JsBinding() override;
 
   static cppgc::WeakPersistent<JsBinding> Install(
@@ -57,10 +59,16 @@ class JsBinding final : public gin::Wrappable<JsBinding>,
       const std::u16string& js_object_name,
       base::WeakPtr<JsCommunication> js_communication,
       v8::Isolate* isolate,
-      v8::Local<v8::Context> context);
+      v8::Local<v8::Context> context,
+      int32_t world_id);
+
+  int32_t world_id() const { return world_id_; }
 
   // mojom::BrowserToJsMessaging implementation.
   void OnPostMessage(blink::WebMessagePayload message) override;
+  void OnExecuteJavaScript(const std::u16string& javascript,
+                           bool wants_result,
+                           OnExecuteJavaScriptCallback callback) override;
 
   void ReleaseV8GlobalObjects();
 
@@ -68,6 +76,8 @@ class JsBinding final : public gin::Wrappable<JsBinding>,
       mojo::PendingAssociatedReceiver<mojom::BrowserToJsMessaging> receiver);
 
  private:
+  void Dispose();
+
   // gin::WrappableBase implementation.
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
@@ -95,10 +105,10 @@ class JsBinding final : public gin::Wrappable<JsBinding>,
   // For set jsObject.onmessage.
   void SetOnMessage(v8::Isolate* isolate, v8::Local<v8::Value> value);
 
-  raw_ptr<content::RenderFrame> render_frame_;
   std::u16string js_object_name_;
   v8::Global<v8::Function> on_message_;
   std::vector<v8::Global<v8::Function>> listeners_;
+  int32_t world_id_;
 
   base::WeakPtr<JsCommunication> js_communication_;
 

@@ -10,13 +10,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_app_layout_impl.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
-#include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl_old.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "ui/views/view.h"
@@ -25,6 +26,15 @@
 
 using web_modal::ModalDialogHostObserver;
 using web_modal::WebContentsModalDialogHost;
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BrowserViewLayoutViews,
+                                      kVerticalTabStripTopCornerElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BrowserViewLayoutViews,
+                                      kVerticalTabStripBottomCornerElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BrowserViewLayoutViews,
+                                      kShadowOverlayElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BrowserViewLayoutViews,
+                                      kMainBackgroundRegionElementId);
 
 BrowserViewLayoutViews::BrowserViewLayoutViews() = default;
 BrowserViewLayoutViews::BrowserViewLayoutViews(
@@ -56,7 +66,7 @@ class BrowserViewLayout::BrowserModalDialogHostViews
     observer_list_.Notify(&ModalDialogHostObserver::OnHostDestroying);
   }
 
-  void NotifyPositionRequiresUpdate() {
+  void NotifyPositionRequiresUpdate() override {
     observer_list_.Notify(&ModalDialogHostObserver::OnPositionRequiresUpdate);
   }
 
@@ -117,7 +127,7 @@ class BrowserViewLayout::BrowserModalDialogHostViews
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       browser_widget_observation_{this};
 
-  base::ObserverList<ModalDialogHostObserver>::Unchecked observer_list_;
+  base::ObserverList<ModalDialogHostObserver> observer_list_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -130,27 +140,23 @@ std::unique_ptr<BrowserViewLayout> BrowserViewLayout::CreateLayout(
     BrowserViewLayoutViews views) {
   // Browser can be null in unit tests.
   if (browser) {
-    if (browser->is_type_normal() &&
-        base::FeatureList::IsEnabled(features::kTabbedBrowserUseNewLayout)) {
-      return std::make_unique<BrowserViewTabbedLayoutImpl>(
-          std::move(delegate), browser, std::move(views));
-    } else if ((browser->is_type_app() || browser->is_type_app_popup()) &&
-               base::FeatureList::IsEnabled(
-                   features::kAppBrowserUseNewLayout)) {
-      return std::make_unique<BrowserViewAppLayoutImpl>(
-          std::move(delegate), browser, std::move(views));
-    } else if ((browser->is_type_popup() || browser->is_type_devtools()) &&
-               base::FeatureList::IsEnabled(
-                   features::kPopupBrowserUseNewLayout)) {
-      return std::make_unique<BrowserViewPopupLayoutImpl>(
-          std::move(delegate), browser, std::move(views));
+    switch (browser->GetType()) {
+      case Browser::TYPE_NORMAL:
+        return std::make_unique<BrowserViewTabbedLayoutImpl>(
+            std::move(delegate), browser, std::move(views));
+      case Browser::TYPE_APP:
+      case Browser::TYPE_APP_POPUP:
+        return std::make_unique<BrowserViewAppLayoutImpl>(
+            std::move(delegate), browser, std::move(views));
+      case Browser::TYPE_POPUP:
+      case Browser::TYPE_DEVTOOLS:
+      case Browser::TYPE_PICTURE_IN_PICTURE:
+        return std::make_unique<BrowserViewPopupLayoutImpl>(
+            std::move(delegate), browser, std::move(views));
     }
   }
-
-  // This is required for PiP still; will be broken out into a new layout in the
-  // future.
-  return std::make_unique<BrowserViewLayoutImplOld>(std::move(delegate),
-                                                    browser, std::move(views));
+  NOTREACHED() << "Tried to create layout for unknown browser type: "
+               << browser->GetType();
 }
 
 BrowserViewLayout::BrowserViewLayout(
@@ -182,11 +188,19 @@ void BrowserViewLayout::UpdateBubbles() {
   // geometry of the contents pane actually changes in a way that could affect
   // the positioning of the bar.
   const gfx::Rect new_contents_bounds =
-      views().contents_container->GetBoundsInScreen();
-  if (delegate().HasFindBarController() &&
-      (new_contents_bounds.width() != latest_contents_bounds_.width() ||
-       (new_contents_bounds.y() != latest_contents_bounds_.y() &&
-        new_contents_bounds.height() != latest_contents_bounds_.height()))) {
+      views().multi_contents_view->GetBoundsInScreen();
+#if BUILDFLAG(IS_CHROMEOS)
+  // On ChromeOS, unlike macOS, the find bar can be shown without revealing the
+  // immersive frame, so we should always try to update the position even if
+  // the content bounds doesn't change.
+  bool should_update_location = true;
+#else
+  bool should_update_location =
+      new_contents_bounds.width() != latest_contents_bounds_.width() ||
+      (new_contents_bounds.y() != latest_contents_bounds_.y() &&
+       new_contents_bounds.height() != latest_contents_bounds_.height());
+#endif
+  if (delegate().HasFindBarController() && should_update_location) {
     delegate().MoveWindowForFindBarIfNecessary();
   }
   latest_contents_bounds_ = new_contents_bounds;
@@ -194,7 +208,7 @@ void BrowserViewLayout::UpdateBubbles() {
   // Adjust the fullscreen exit bubble bounds for |views().top_container|'s new
   // bounds. This makes the fullscreen exit bubble look like it animates with
   // |views().top_container| in immersive fullscreen.
-  ExclusiveAccessBubbleViews* exclusive_access_bubble =
+  ExclusiveAccessBubbleViews* const exclusive_access_bubble =
       delegate().GetExclusiveAccessBubble();
   if (exclusive_access_bubble) {
     exclusive_access_bubble->RepositionIfVisible();

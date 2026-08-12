@@ -22,17 +22,16 @@
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/views/apps/app_dialog/app_dialog_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/google/core/common/google_util.h"
@@ -41,7 +40,7 @@
 #include "components/webapps/isolated_web_apps/scheme.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/constants.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -57,6 +56,7 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/table_layout.h"
+#include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
 #if defined(USE_AURA)
@@ -64,6 +64,7 @@
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/strings/grit/ash_strings.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/borealis/borealis_util.h"
 #endif
@@ -262,19 +263,12 @@ void AppUninstallDialogView::InitializeView(Profile* profile,
     case apps::AppType::kUnknown:
     case apps::AppType::kRemote:
     case apps::AppType::kExtension:
+    case apps::AppType::kPluginVm:
       NOTREACHED();
     // TODO(crbug.com/376071296): Clean up the switch/case items below.
     case apps::AppType::kArc:
 #if BUILDFLAG(IS_CHROMEOS)
       InitializeViewForArcApp(profile, app_id);
-      break;
-#else
-      NOTREACHED();
-#endif
-    case apps::AppType::kPluginVm:
-#if BUILDFLAG(IS_CHROMEOS)
-      AddSubtitle(
-          l10n_util::GetStringUTF16(IDS_PLUGIN_VM_UNINSTALL_PROMPT_BODY));
       break;
 #else
       NOTREACHED();
@@ -293,21 +287,11 @@ void AppUninstallDialogView::InitializeView(Profile* profile,
       NOTREACHED();
 #endif
     case apps::AppType::kCrostini:
-#if BUILDFLAG(IS_CHROMEOS)
-      AddSubtitle(l10n_util::GetStringUTF16(
-          IDS_CROSTINI_APPLICATION_UNINSTALL_CONFIRM_BODY));
-      break;
-#else
+      // No longer supported
       NOTREACHED();
-#endif
     case apps::AppType::kBruschetta:
-#if BUILDFLAG(IS_CHROMEOS)
-      // TODO(b/247636749): Implement Bruschetta uninstall.
-      break;
-#else
+      // No longer supported
       NOTREACHED();
-#endif
-
     case apps::AppType::kWeb:
     case apps::AppType::kSystemWeb:
       InitializeViewForWebApp(app_id);
@@ -465,7 +449,7 @@ void AppUninstallDialogView::LoadSubAppIds(const std::string& short_app_name,
         web_app::AppLockDescription(parent_app_id),
         base::BindOnce(
             [](const std::string& parent_app_id, web_app::AppLock& lock,
-               base::Value::Dict& debug_value) {
+               base::DictValue& debug_value) {
               return lock.registrar().GetAllSubAppIds(parent_app_id);
             },
             parent_app_id),
@@ -511,17 +495,34 @@ void AppUninstallDialogView::InitializeViewForWebApp(
   // For web apps, publisher id is the start url.
   GURL app_start_url;
   std::string app_name;
+  std::string version;
   apps::AppServiceProxyFactory::GetForProfile(profile_)
       ->AppRegistryCache()
-      .ForOneApp(app_id,
-                 [&app_start_url, &app_name](const apps::AppUpdate& update) {
-                   app_start_url = GURL(update.PublisherId());
-                   app_name = update.Name();
-                 });
-  DCHECK(app_start_url.is_valid());
+      .ForOneApp(app_id, [&app_start_url, &app_name,
+                          &version](const apps::AppUpdate& update) {
+        app_start_url = GURL(update.PublisherId());
+        app_name = update.Name();
+        version = update.Version();
+      });
 
+  // In case of Sub Apps display a subtitle explaining that uninstalling this
+  // app will not affect the parent app or other installed Sub Apps.
+  if (auto parent_app_name = web_app::WebAppProvider::GetForWebApps(profile_)
+                                 ->registrar_unsafe()
+                                 .GetParentAppShortName(app_id)) {
+    AddSubtitle(l10n_util::GetStringFUTF16(IDS_IWA_SUB_APPS_UNINSTALL_INFO,
+                                           base::UTF8ToUTF16(*parent_app_name),
+                                           base::UTF8ToUTF16(app_name)));
+    return;
+  }
+
+  // In case of Isolated Web Apps display version name and details of Sub Apps.
   // Sub apps are currently only supported for Isolated Web Apps.
   if (app_start_url.SchemeIs(webapps::kIsolatedAppScheme)) {
+    // Display version for Isolated Web Apps.
+    AddSubtitle(l10n_util::GetStringFUTF16(
+        IDS_IWA_INSTALLER_SHOW_METADATA_APP_VERSION_LABEL,
+        base::UTF8ToUTF16(version)));
     sub_apps_description_ = AddChildView(std::make_unique<views::Label>());
     sub_apps_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
     sub_apps_description_->SetVisible(false);
@@ -529,8 +530,12 @@ void AppUninstallDialogView::InitializeViewForWebApp(
     LoadSubAppIds(app_name, app_id);
     return;
   }
-  // Isolated Web Apps will always have their data cleared as part of
-  // uninstallation.
+  // The uninstaller model for web apps includes a checkbox to optionally clear
+  // the site data. This checkbox is hidden for:
+  // 1. Isolated web apps since the data is wiped unconditionally.
+  // 2. Sub-apps of isolated web apps because they share
+  // their origin with the parent isolated web app (and hence clearing the data
+  // will affect the parent too).
   InitializeCheckbox(app_start_url);
 }
 

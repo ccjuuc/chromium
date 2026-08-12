@@ -13,13 +13,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_style.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_request.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "url/gurl.h"
@@ -62,12 +61,11 @@ class TestDelegateTwoOrigins : public permissions::PermissionPrompt::Delegate {
 
   GURL GetEmbeddingOrigin() const override { return embedding_origin_; }
 
-  void Accept() override {}
-  void AcceptThisTime() override {}
-  void Deny() override {}
-  void Dismiss() override {}
-  void Ignore() override {}
-  void SetPromptOptions(PromptOptions prompt_options) override {}
+  void Accept(const PromptOptions& prompt_options) override {}
+  void AcceptThisTime(const PromptOptions& prompt_options) override {}
+  void Deny(const PromptOptions& prompt_options) override {}
+  void Dismiss(const PromptOptions& prompt_options) override {}
+  void Ignore(const PromptOptions& prompt_options) override {}
   GeolocationAccuracy GetInitialGeolocationAccuracySelection() const override {
     NOTREACHED();
   }
@@ -77,6 +75,12 @@ class TestDelegateTwoOrigins : public permissions::PermissionPrompt::Delegate {
   void SetManageClicked() override {}
   void SetLearnMoreClicked() override {}
   void SetHatsShownCallback(base::OnceCallback<void()> callback) override {}
+  void SwitchToLoudPrompt() override {}
+
+  std::optional<permissions::GeolocationPromptType> GetGeolocationPromptType()
+      const override {
+    return std::nullopt;
+  }
 
   bool WasCurrentRequestAlreadyDisplayed() override { return false; }
   bool ShouldDropCurrentRequestIfCannotShowQuietly() const override {
@@ -115,7 +119,8 @@ class PermissionPromptBubbleTwoOriginsViewBrowserTest
   std::unique_ptr<PermissionPromptBubbleBaseView> CreateBubble(
       TestDelegateTwoOrigins* delegate) {
     return std::make_unique<PermissionPromptBubbleTwoOriginsView>(
-        browser(), delegate->GetWeakPtr(), PermissionPromptStyle::kBubbleOnly);
+        browser()->tab_strip_model()->GetActiveWebContents(),
+        delegate->GetWeakPtr(), PermissionPromptStyle::kBubbleOnly);
   }
 };
 

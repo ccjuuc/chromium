@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 // mini_installer.exe is the first exe that is run when chrome is being
 // installed or upgraded. It is designed to be extremely small (~5KB with no
 // extra resources linked) and it has two main jobs:
@@ -27,6 +22,8 @@
 #include "chrome/installer/mini_installer/mini_installer.h"
 
 #include <windows.h>
+
+#include "base/compiler_specific.h"
 
 // #define needed to link in RtlGenRandom(), a.k.a. SystemFunction036.  See the
 // "Community Additions" comment on MSDN here:
@@ -173,7 +170,7 @@ ProcessExitResult RunProcessAndWait(const wchar_t* exe_path,
     // Split specific failure modes. If setup.exe couldn't be launched because
     // its file/path couldn't be found, report its attributes in ExtraCode1.
     // This will help diagnose the prevalence of launch failures due to Image
-    // File Execution Options tampering. See https://crbug.com/672813 for more
+    // File Execution Options tampering. See https://crbug.com/41290422 for more
     // details.
     const DWORD last_error = ::GetLastError();
     const DWORD attributes = ::GetFileAttributes(exe_path);
@@ -737,7 +734,7 @@ bool CreateWorkDir(const wchar_t* base_path,
     // because of little endianness, but we don't care since it's just
     // a name. Since we checked capaity at the front end, we don't need to
     // duplicate it here.
-    HexEncode(&id, sizeof(id), work_dir->get() + end,
+    HexEncode(&id, sizeof(id), UNSAFE_TODO(work_dir->get() + end),
               work_dir->capacity() - end);
 
     // We only want the first 5 digits to remain within the 8.3 file name
@@ -883,7 +880,7 @@ ProcessExitResult WMain(HMODULE module) {
   if (exit_code.IsSuccess()) {
     // Send up a signal in ExtraCode1 upon successful install indicating the
     // maximum number of retries needed to delete a file or directory by
-    // DeleteWithRetry; see https://crbug.com/1138157.
+    // DeleteWithRetry; see https://crbug.com/40725204.
     MetricSample max_retries =
         (max_delete_attempts > 1 ? max_delete_attempts - 1 : 0);
     WriteExtraCode1(configuration,

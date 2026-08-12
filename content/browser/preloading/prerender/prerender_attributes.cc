@@ -22,7 +22,7 @@ void PrerenderAttributes::WriteIntoTrace(
 PrerenderAttributes::PrerenderAttributes(
     const GURL& prerendering_url,
     PreloadingTriggerType trigger_type,
-    const std::string& embedder_histogram_suffix,
+    const std::string& histogram_suffix,
     std::optional<SpeculationRulesParams> speculation_rules_params,
     Referrer referrer,
     std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
@@ -42,7 +42,7 @@ PrerenderAttributes::PrerenderAttributes(
     bool form_submission)
     : prerendering_url(prerendering_url),
       trigger_type(trigger_type),
-      embedder_histogram_suffix(embedder_histogram_suffix),
+      histogram_suffix(histogram_suffix),
       speculation_rules_params(std::move(speculation_rules_params)),
       referrer(std::move(referrer)),
       no_vary_search_hint(std::move(no_vary_search_hint)),
@@ -59,14 +59,14 @@ PrerenderAttributes::PrerenderAttributes(
       form_submission(form_submission) {
   if (initiator_render_frame_host) {
     initiator_origin = initiator_render_frame_host->GetLastCommittedOrigin();
-    initiator_process_id =
-        initiator_render_frame_host->GetProcess()->GetDeprecatedID();
+    initiator_process_id = initiator_render_frame_host->GetProcess()->GetID();
     initiator_frame_token = initiator_render_frame_host->GetFrameToken();
     initiator_frame_tree_node_id =
         initiator_render_frame_host->GetFrameTreeNodeId();
     initiator_ukm_id = initiator_render_frame_host->GetPageUkmSourceId();
     auto* rfhi = static_cast<RenderFrameHostImpl*>(initiator_render_frame_host);
     initiator_devtools_navigation_token = rfhi->GetDevToolsNavigationToken();
+    initiator_navigation_state = rfhi->CreateInitiatorStateFromCurrentFrame();
   }
 
   CHECK(!IsBrowserInitiated() ||

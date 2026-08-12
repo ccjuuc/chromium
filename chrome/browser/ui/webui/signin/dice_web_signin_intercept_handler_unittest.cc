@@ -10,7 +10,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_features.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/new_tab_page/chrome_colors/selected_colors_info.h"
 #include "chrome/browser/profiles/profile.h"
@@ -75,7 +74,7 @@ AccountInfo CreateAccount(GaiaId gaia_id,
           .SetFullName(full_name)
           .SetHostedDomain(hosted_domain)
           .Build();
-  AccountCapabilitiesTestMutator(&account_info.capabilities)
+  AccountCapabilitiesTestMutator(&account_info)
       .set_is_subject_to_enterprise_features(hosted_domain !=
                                              kNoHostedDomainFound);
   return account_info;
@@ -108,8 +107,9 @@ const TestParam kTestParams[] = {
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_TITLE_V2),
               .body_text = l10n_util::GetStringFUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
-                  base::UTF8ToUTF16(primary_account.given_name),
-                  base::UTF8ToUTF16(intercepted_account.email)),
+                  base::UTF8ToUTF16(
+                      primary_account.GetGivenName().value_or("")),
+                  base::UTF8ToUTF16(intercepted_account.GetEmail())),
               .confirm_button_label = l10n_util::GetStringUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_NEW_PROFILE_BUTTON_LABEL),
               .cancel_button_label = l10n_util::GetStringUTF8(
@@ -129,8 +129,9 @@ const TestParam kTestParams[] = {
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_TITLE_V2),
               .body_text = l10n_util::GetStringFUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
-                  base::UTF8ToUTF16(primary_account.given_name),
-                  base::UTF8ToUTF16(intercepted_account.email)),
+                  base::UTF8ToUTF16(
+                      primary_account.GetGivenName().value_or("")),
+                  base::UTF8ToUTF16(intercepted_account.GetEmail())),
               .confirm_button_label = l10n_util::GetStringUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_NEW_PROFILE_BUTTON_LABEL),
               .cancel_button_label = l10n_util::GetStringUTF8(
@@ -149,8 +150,9 @@ const TestParam kTestParams[] = {
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_TITLE_V2),
               .body_text = l10n_util::GetStringFUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
-                  base::UTF8ToUTF16(primary_account.given_name),
-                  base::UTF8ToUTF16(intercepted_account.email)),
+                  base::UTF8ToUTF16(
+                      primary_account.GetGivenName().value_or("")),
+                  base::UTF8ToUTF16(intercepted_account.GetEmail())),
               .confirm_button_label = l10n_util::GetStringUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_NEW_PROFILE_BUTTON_LABEL),
               .cancel_button_label = l10n_util::GetStringUTF8(
@@ -169,8 +171,8 @@ const TestParam kTestParams[] = {
                IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_TITLE_V2),
            .body_text = l10n_util::GetStringFUTF8(
                IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
-               base::UTF8ToUTF16(primary_account.given_name),
-               base::UTF8ToUTF16(intercepted_account.email)),
+               base::UTF8ToUTF16(primary_account.GetGivenName().value_or("")),
+               base::UTF8ToUTF16(intercepted_account.GetEmail())),
            .confirm_button_label = l10n_util::GetStringUTF8(
                IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_NEW_PROFILE_BUTTON_LABEL),
            .cancel_button_label = l10n_util::GetStringUTF8(
@@ -184,12 +186,13 @@ const TestParam kTestParams[] = {
         .management_authority = policy::EnterpriseManagementAuthority::NONE,
         .expected_strings = base::BindRepeating([] {
           return BubbleStrings{
-              .header_text = intercepted_account.given_name,
+              .header_text =
+                  std::string(intercepted_account.GetGivenName().value_or("")),
               .body_title = l10n_util::GetStringUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_TITLE),
               .body_text = l10n_util::GetStringFUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_DESC_V2,
-                  base::UTF8ToUTF16(intercepted_account.email)),
+                  base::UTF8ToUTF16(intercepted_account.GetEmail())),
               .confirm_button_label = l10n_util::GetStringUTF8(
                   IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_CONTINUE_BUTTON_LABEL),
               .cancel_button_label = l10n_util::GetStringUTF8(
@@ -202,12 +205,13 @@ const TestParam kTestParams[] = {
      .management_authority = policy::EnterpriseManagementAuthority::NONE,
      .expected_strings = base::BindRepeating([] {
        return BubbleStrings{
-           .header_text = intercepted_account.given_name,
+           .header_text =
+               std::string(intercepted_account.GetGivenName().value_or("")),
            .body_title = l10n_util::GetStringUTF8(
                IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_TITLE),
            .body_text = l10n_util::GetStringFUTF8(
                IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_DESC_V2_SUPERVISED,
-               base::UTF8ToUTF16(intercepted_account.email)),
+               base::UTF8ToUTF16(intercepted_account.GetEmail())),
            .confirm_button_label = l10n_util::GetStringUTF8(
                IDS_SIGNIN_DICE_WEB_INTERCEPT_SWITCH_BUBBLE_CONTINUE_BUTTON_LABEL),
            .cancel_button_label = l10n_util::GetStringUTF8(
@@ -226,10 +230,10 @@ class DiceWebSigninInterceptHandlerTestBase : public testing::Test {
 
   void SetUp() override { ASSERT_TRUE(profile_manager_.SetUp()); }
 
-  base::Value::Dict GetInterceptionParameters() {
+  base::DictValue GetInterceptionParameters() {
     Profile* profile = profile_manager_.CreateTestingProfile("Primary Profile");
     // Resetting the platform authority to NONE, as not all platforms have the
-    // same value in browser tests. See https://crbug.com/1324377.
+    // same value in browser tests. See https://crbug.com/40839235.
     policy::ScopedManagementServiceOverrideForTesting
         platform_management_authority_override(
             policy::ManagementServiceFactory::GetForPlatform(),
@@ -277,7 +281,7 @@ class DiceWebSigninInterceptHandlerTest
       public testing::WithParamInterface<TestParam> {
  public:
   DiceWebSigninInterceptHandlerTest() {
-    AccountCapabilitiesTestMutator mutator(&intercepted_account.capabilities);
+    AccountCapabilitiesTestMutator mutator(&intercepted_account);
     switch (GetParam().is_supervised) {
       case signin::Tribool::kTrue:
         mutator.set_is_subject_to_parental_controls(true);
@@ -291,7 +295,7 @@ class DiceWebSigninInterceptHandlerTest
   }
 
  protected:
-  void ExpectStringsMatch(const base::Value::Dict& parameters,
+  void ExpectStringsMatch(const base::DictValue& parameters,
                           const BubbleStrings& expected_strings) {
     EXPECT_EQ(*parameters.FindString("headerText"),
               expected_strings.header_text);
@@ -326,7 +330,7 @@ class DiceWebSigninInterceptHandlerTest
 };
 
 TEST_P(DiceWebSigninInterceptHandlerTest, CheckStrings) {
-  base::Value::Dict parameters = GetInterceptionParameters();
+  base::DictValue parameters = GetInterceptionParameters();
 
   if (GetParam().interception_type !=
       WebSigninInterceptor::SigninInterceptionType::kProfileSwitch) {
@@ -349,7 +353,7 @@ class DiceWebSigninInterceptHandlerChromeSigninInterceptionTest
     CHECK(interception_type() ==
           WebSigninInterceptor::SigninInterceptionType::kChromeSignin);
 
-    AccountCapabilitiesTestMutator mutator(&intercepted_account.capabilities);
+    AccountCapabilitiesTestMutator mutator(&intercepted_account);
     switch (IsSupervisedUser()) {
       case signin::Tribool::kTrue:
         mutator.set_is_subject_to_parental_controls(true);
@@ -362,12 +366,11 @@ class DiceWebSigninInterceptHandlerChromeSigninInterceptionTest
     }
   }
 
-  void ExpectChromeSignInStringsMatch(const base::Value::Dict& parameters) {
+  void ExpectChromeSignInStringsMatch(const base::DictValue& parameters) {
     std::string title = l10n_util::GetStringUTF8(
         IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_TITLE);
     std::string subtitle = l10n_util::GetStringUTF8(
-        base::FeatureList::IsEnabled(
-            syncer::kReplaceSyncPromosWithSignInPromos)
+        syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
             ? IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE_WITH_BOOKMARKS
             : IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE);
     std::string avatar_badge_alt_text;
@@ -403,7 +406,7 @@ class DiceWebSigninInterceptHandlerChromeSigninInterceptionTest
 
 TEST_P(DiceWebSigninInterceptHandlerChromeSigninInterceptionTest,
        CheckStrings) {
-  base::Value::Dict parameters = GetInterceptionParameters();
+  base::DictValue parameters = GetInterceptionParameters();
   ExpectChromeSignInStringsMatch(parameters);
 }
 

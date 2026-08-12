@@ -19,6 +19,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.chrome.browser.collaboration.CollaborationTestUtils.accountInfoToGroupMember;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.addBlankTabs;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.clickFirstCardFromTabSwitcher;
@@ -39,6 +40,7 @@ import androidx.annotation.IdRes;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -48,15 +50,17 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingUiDelegateAndroid;
@@ -72,7 +76,6 @@ import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.chrome.test.util.browser.sync.SyncTestUtil;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
@@ -86,10 +89,10 @@ import org.chromium.components.data_sharing.GroupData;
 import org.chromium.components.data_sharing.GroupToken;
 import org.chromium.components.data_sharing.member_role.MemberRole;
 import org.chromium.components.signin.base.AccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.tab_group_sync.EitherId.EitherGroupId;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 import org.chromium.ui.test.util.GmsCoreVersionRestriction;
@@ -103,6 +106,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @EnableFeatures({ChromeFeatureList.DATA_SHARING})
+@DisableFeatures({TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS})
 @DoNotBatch(reason = "Tabs can't be closed reliably between tests.")
 // TODO(crbug.com/399444939) Re-enable on automotive devices if needed.
 // Only run on device non-auto and with valid Google services.
@@ -157,14 +161,13 @@ public class CollaborationIntegrationTest {
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(Component.UI_BROWSER_MOBILE_TAB_GROUPS)
-                    .setRevision(1)
+                    .setRevision(3)
                     .build();
 
     private FakeDataSharingUIDelegateImpl mDataSharingUIDelegate;
     private DataSharingSDKDelegateTestImpl mDataSharingSDKDelegate;
     private CountingShareObserver mCountingShareObserver;
     private CountingSyncObserver mCountingSyncObserver;
-
     private Profile mProfile;
     private String mUrl;
     private CollaborationTestUtils mCollaborationTestUtils;
@@ -186,6 +189,8 @@ public class CollaborationIntegrationTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mProfile = mActivityTestRule.getProfile(/* incognito= */ false);
+                    mCollaborationTestUtils =
+                            new CollaborationTestUtils(mActivityTestRule, mProfile);
                     FirstRunStatus.setFirstRunFlowComplete(true);
                     DataSharingServiceFactory.getForProfile(mProfile)
                             .addObserver(mCountingShareObserver);
@@ -196,8 +201,13 @@ public class CollaborationIntegrationTest {
                 DataSharingServiceImpl.getDataSharingUrlForTesting(
                                 new GroupToken(TEST_COLLABORATION_ID, "access_token"))
                         .getSpec();
+    }
 
-        mCollaborationTestUtils = new CollaborationTestUtils(mActivityTestRule, mProfile);
+    @After
+    public void tearDown() {
+        if (mDataSharingUIDelegate != null) {
+            mDataSharingUIDelegate.resetForTesting();
+        }
     }
 
     /* Sets up preview data for the group ID. */
@@ -234,21 +244,20 @@ public class CollaborationIntegrationTest {
         mCollaborationTestUtils.setupShareDelegateSupplier(cta);
 
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    cta.getRootUiCoordinatorForTesting()
-                            .getDataSharingTabManager()
-                            .createOrManageFlow(
-                                    EitherGroupId.createLocalId(localTabGroupId),
-                                    CollaborationServiceShareOrManageEntryPoint.UNKNOWN,
-                                    (ignored) -> {});
-                });
+                () ->
+                        cta.getRootUiCoordinatorForTesting()
+                                .getDataSharingTabManager()
+                                .createOrManageFlow(
+                                        EitherGroupId.createLocalId(localTabGroupId),
+                                        CollaborationServiceShareOrManageEntryPoint.UNKNOWN,
+                                        (ignored) -> {}));
 
         // There's many async signals that fly around after linking the tab group. In particular we
         // need the SharedGroupObserver to think the group is shared. For this, it already knows the
         // tab group id it should watch for, but it needs to see that it's now associated with a
         // valid collaboration id. And while the DataSharingService is what has member information
         // for a collaboration id, the SharedGroupObserver cannot link its tab group id to the
-        // collaboration id that it'll be informed about until teh TabGroupSyncService lets it know
+        // collaboration id that it'll be informed about until the TabGroupSyncService lets it know
         // about the mapping. Once both of these happen, we're safe to continue, but the order of
         // these is not deterministic and we must wait for both.
         int startingAddedCount =
@@ -285,8 +294,7 @@ public class CollaborationIntegrationTest {
         mActivityTestRule.loadUrlInNewTab(mUrl);
 
         // Verify that the fullscreen sign-in promo is shown and cancel.
-        onViewWaiting(withText(R.string.collaboration_signin_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_signin_description));
         onView(withText(R.string.collaboration_cancel)).perform(scrollTo(), click());
 
         // The new data sharing url was intercepted and the tab closed.
@@ -300,8 +308,7 @@ public class CollaborationIntegrationTest {
                 mUrl, /* incognito= */ false, TabLaunchType.FROM_EXTERNAL_APP);
 
         // Verify that the fullscreen sign-in promo is shown and cancel.
-        onViewWaiting(withText(R.string.collaboration_signin_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_signin_description));
         onView(withText(R.string.collaboration_cancel)).perform(scrollTo(), click());
 
         // The new data sharing url was intercepted and the tab closed.
@@ -314,8 +321,7 @@ public class CollaborationIntegrationTest {
         mActivityTestRule.loadUrlInNewTab(mUrl);
 
         // Verify that the fullscreen sign-in promo is shown and accept.
-        onViewWaiting(withText(R.string.collaboration_signin_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_signin_description));
         final String continueAsText =
                 mActivityTestRule
                         .getActivity()
@@ -323,12 +329,11 @@ public class CollaborationIntegrationTest {
         onView(withText(continueAsText)).perform(click());
 
         // Verify that the history opt-in dialog is shown and refuse.
-        onViewWaiting(withText(R.string.collaboration_sync_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_sync_description));
         onViewWaiting(withId(R.id.button_secondary)).perform(click());
 
         // The user is signed out.
-        assertNull(mActivityTestRule.getSigninTestRule().getPrimaryAccount(ConsentLevel.SIGNIN));
+        assertNull(mActivityTestRule.getSigninTestRule().getPrimaryAccount());
     }
 
     @Test
@@ -342,8 +347,7 @@ public class CollaborationIntegrationTest {
         setFakePreviewData();
 
         // Verify that the fullscreen sign-in promo is shown and accept.
-        onViewWaiting(withText(R.string.collaboration_signin_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_signin_description));
         final String continueAsText =
                 mActivityTestRule
                         .getActivity()
@@ -351,8 +355,7 @@ public class CollaborationIntegrationTest {
         onView(withText(continueAsText)).perform(click());
 
         // Verify that the history opt-in dialog is shown and accept.
-        onViewWaiting(withText(R.string.collaboration_sync_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_sync_description));
         onViewWaiting(withId(R.id.button_primary)).perform(click());
 
         CriteriaHelper.pollInstrumentationThread(
@@ -361,6 +364,7 @@ public class CollaborationIntegrationTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.TABLET_OR_DESKTOP) // crbug.com/489072280
     public void testCollaborationCreateFlow() {
         final ChromeTabbedActivity cta = mActivityTestRule.getActivity();
         final AtomicBoolean createCalled = new AtomicBoolean();
@@ -387,11 +391,7 @@ public class CollaborationIntegrationTest {
         onView(withText(continueAsText)).perform(click());
 
         // Verify that the history opt-in dialog is shown and accept.
-        onViewWaiting(
-                        withText(R.string.collaboration_sync_description),
-                        // checkRootDialog=true ensures dialog is in focus, avoid flakiness.
-                        true)
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_sync_description));
         onViewWaiting(withId(R.id.button_primary)).perform(click());
 
         CriteriaHelper.pollInstrumentationThread(
@@ -406,8 +406,7 @@ public class CollaborationIntegrationTest {
         mActivityTestRule.loadUrlInNewTab(
                 mUrl, /* incognito= */ false, TabLaunchType.FROM_EXTERNAL_APP);
         // Verify that the history opt-in dialog is shown and refuse.
-        onViewWaiting(withText(R.string.collaboration_sync_description))
-                .check(matches(isDisplayed()));
+        waitForView(withText(R.string.collaboration_sync_description));
     }
 
     @Test
@@ -451,10 +450,7 @@ public class CollaborationIntegrationTest {
         mCollaborationTestUtils.createTabGroupAndOpenTabGridDialog(cta);
 
         // Setting create flow callback to cancel create flow.
-        Callback<Boolean> callback =
-                (success) -> {
-                    mDataSharingUIDelegate.forceCreateFlowCancellation();
-                };
+        Callback<Boolean> callback = (_) -> mDataSharingUIDelegate.forceCreateFlowCancellation();
         mDataSharingUIDelegate.setShowCreateFlowCallback(callback);
 
         onView(withId(R.id.share_button)).perform(CollaborationTestUtils.relaxedClick());
@@ -591,7 +587,7 @@ public class CollaborationIntegrationTest {
                 .check(matches(isDisplayed()));
 
         // Click "Close group" from the menu.
-        onViewWaiting(withId(R.id.toolbar_menu_button), ViewElement.displayingAtLeastOption(51))
+        onViewWaiting(withId(R.id.toolbar_menu_button))
                 .perform(CollaborationTestUtils.relaxedClick());
         onViewWaiting(withText(R.string.tab_grid_dialog_toolbar_close_group)).perform(click());
 

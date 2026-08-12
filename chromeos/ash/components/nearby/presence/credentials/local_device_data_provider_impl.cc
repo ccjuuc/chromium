@@ -5,7 +5,6 @@
 #include "chromeos/ash/components/nearby/presence/credentials/local_device_data_provider_impl.h"
 
 #include "base/base64url.h"
-#include "base/containers/contains.h"
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -50,7 +49,7 @@ LocalDeviceDataProviderImpl::~LocalDeviceDataProviderImpl() = default;
 void LocalDeviceDataProviderImpl::UpdatePersistedSharedCredentials(
     const std::vector<::nearby::internal::SharedCredential>&
         new_shared_credentials) {
-  base::Value::List list;
+  base::ListValue list;
   for (const auto& credential : new_shared_credentials) {
     list.Append(base::NumberToString(credential.id()));
   }
@@ -62,7 +61,7 @@ bool LocalDeviceDataProviderImpl::HaveSharedCredentialsChanged(
     const std::vector<::nearby::internal::SharedCredential>&
         new_shared_credentials) {
   std::set<std::string> persisted_shared_credential_ids;
-  const base::Value::List& list = pref_service_->GetList(
+  const base::ListValue& list = pref_service_->GetList(
       prefs::kNearbyPresenceSharedCredentialIdListPrefName);
   for (const auto& id : list) {
     persisted_shared_credential_ids.insert(id.GetString());
@@ -152,18 +151,18 @@ std::string LocalDeviceDataProviderImpl::GetDeviceName() const {
   // changes to the user set device name.
   std::u16string device_type = ui::GetChromeOSDeviceName();
 
-  const CoreAccountInfo account_info =
-      identity_manager_->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
-  std::string given_name =
-      identity_manager_->FindExtendedAccountInfo(account_info).given_name;
+  const CoreAccountId primary_account_id =
+      identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
+  AccountInfo account_info =
+      identity_manager_->FindExtendedAccountInfoByAccountId(primary_account_id);
 
-  if (given_name.empty()) {
+  if (!account_info.GetGivenName().has_value()) {
     return base::UTF16ToUTF8(device_type);
   }
 
-  std::string device_name =
-      l10n_util::GetStringFUTF8(IDS_NEARBY_PRESENCE_DEVICE_NAME,
-                                base::UTF8ToUTF16(given_name), device_type);
+  std::string device_name = l10n_util::GetStringFUTF8(
+      IDS_NEARBY_PRESENCE_DEVICE_NAME,
+      base::UTF8ToUTF16(*account_info.GetGivenName()), device_type);
   return device_name;
 }
 

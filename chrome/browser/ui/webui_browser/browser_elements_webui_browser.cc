@@ -5,11 +5,10 @@
 #include "chrome/browser/ui/webui_browser/browser_elements_webui_browser.h"
 
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA_SUBCLASS(BrowserElementsWebUiBrowser,
-                                            BrowserElementsViews)
+DEFINE_SAFE_CAST_SUBCLASS(BrowserElementsWebUiBrowser, BrowserElementsViews)
 
 BrowserElementsWebUiBrowser::BrowserElementsWebUiBrowser(
     BrowserWindowInterface& browser)
@@ -39,12 +38,15 @@ void BrowserElementsWebUiBrowser::TearDown() {
 }
 
 ui::ElementContext BrowserElementsWebUiBrowser::GetContext() {
-  // TODO(webium): Remove this after fixing ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
+  // During initialization, the browser widget may not have been
+  // set yet (e.g. BookmarkBarController is initialized before the
+  // window's construction is complete). Returning an empty context
+  // allows element lookups to fail gracefully instead of crashing.
+  // TODO(webium): Move the initialization of features to a point after the
+  // widget is ready.
   if (!browser_widget_) {
     return ui::ElementContext();
   }
-#endif
 
   return views::ElementTrackerViews::GetContextForWidget(browser_widget_);
 }

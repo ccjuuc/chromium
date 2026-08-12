@@ -11,8 +11,11 @@
 #import "base/metrics/user_metrics_action.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
+#import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_navigation_controller.h"
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -26,7 +29,7 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_user_education_coordinator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/inactive_tabs/inactive_tabs_view_controller.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_context_menu/tab_context_menu_helper.h"
-#import "ios/chrome/browser/tabs/model/tabs_closer.h"
+#import "ios/chrome/browser/tabs/model/inactive_tabs/features.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/web_state_id.h"
@@ -162,8 +165,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
                                   delegate:(id<InactiveTabsCoordinatorDelegate>)
                                                delegate {
   CHECK(delegate);
-  CHECK_EQ(browser->type(), Browser::Type::kInactive,
-           base::NotFatalUntil::M146);
+  CHECK_EQ(browser->type(), Browser::Type::kInactive);
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
     _delegate = delegate;
@@ -189,25 +191,26 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
       tabContextMenuDelegate:self.tabContextMenuDelegate];
 
   Browser* browser = self.browser;
-  id<SnapshotStorage> snapshotStorage =
-      SnapshotBrowserAgent::FromBrowser(browser)->snapshot_storage();
   self.mediator = [[InactiveTabsMediator alloc]
       initWithWebStateList:browser->GetWebStateList()
         profilePrefService:browser->GetProfile()->GetPrefs()
-           snapshotStorage:snapshotStorage
-                tabsCloser:std::make_unique<TabsCloser>(
-                               browser, TabsCloser::ClosePolicy::kAllTabs)];
+             faviconLoader:IOSChromeFaviconLoaderFactory::GetForProfile(
+                               browser->GetProfile())
+      snapshotBrowserAgent:SnapshotBrowserAgent::FromBrowser(browser)];
 }
 
 - (void)show {
   if (self.showing) {
     return;
   }
+  CHECK(!IsInactiveTabsExplicitlyDisabledByUser(
+      self.browser->GetProfile()->GetPrefs()));
   self.showing = YES;
   base::RecordAction(base::UserMetricsAction("MobileInactiveTabGridEntered"));
 
   // Create the view controller.
   self.viewController = [[InactiveTabsViewController alloc] init];
+  self.viewController.layoutState = self.browser->GetSceneState().layoutState;
   self.viewController.delegate = self;
   self.viewController.gridViewController.delegate = self;
 
@@ -222,6 +225,8 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
   self.mediator.delegate = self;
 
   self.viewController.gridViewController.menuProvider = _contextMenuProvider;
+  self.viewController.gridViewController.snapshotAndfaviconDataSource =
+      self.mediator;
 
   // Add the Inactive Tabs view controller to the hierarchy.
   UIView* baseView = self.baseViewController.view;
@@ -292,6 +297,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 
   [self.mediator disconnect];
   self.mediator = nil;
+  self.viewController.layoutState = nil;
   self.viewController = nil;
 }
 
@@ -434,7 +440,7 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
 
 - (void)inactiveTabsViewController:
             (InactiveTabsViewController*)inactiveTabsViewController
-    didTapCloseAllInactiveBarButtonItem:(UIBarButtonItem*)barButtonItem {
+    didTapCloseAllInactiveFromSourceView:(UIView*)sourceView {
   NSInteger numberOfTabs = [self.mediator numberOfItems];
   if (numberOfTabs <= 0) {
     return;
@@ -458,7 +464,8 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
                          browser:self.browser
                            title:title
                          message:message
-                   barButtonItem:barButtonItem];
+                            rect:sourceView.bounds
+                            view:sourceView];
 
   __weak __typeof(self) weakSelf = self;
   NSString* closeAllActionTitle = l10n_util::GetNSString(
@@ -498,11 +505,11 @@ const base::TimeDelta kPopUIDelay = base::Seconds(0.3);
   [self onSettingsDismissed];
 }
 
-- (id<ApplicationCommands, BrowserCommands>)handlerForSettings {
+- (id<SceneCommands, BrowserCommands>)handlerForSettings {
   NOTREACHED();
 }
 
-- (id<ApplicationCommands>)handlerForApplicationCommands {
+- (id<SceneCommands>)handlerForSceneCommands {
   NOTREACHED();
 }
 

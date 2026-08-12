@@ -31,6 +31,7 @@ class SafeBrowsingClientImplTest : public PlatformTest,
     client_ = std::make_unique<SafeBrowsingClientImpl>(
         /*pref_service=*/profile_->GetPrefs(),
         /*hash_real_time_service=*/nullptr,
+        /*v5_get_hash_protocol_manager=*/nullptr,
         /*url_lookup_service_factory=*/
         base::BindRepeating(
             []() -> safe_browsing::RealTimeUrlLookupServiceBase* {
@@ -65,8 +66,8 @@ class SafeBrowsingClientImplTest : public PlatformTest,
 
  private:
   web::WebTaskEnvironment task_environment_;
-  std::unique_ptr<SafeBrowsingClientImpl> client_;
   std::unique_ptr<ProfileIOS> profile_;
+  std::unique_ptr<SafeBrowsingClientImpl> client_;
   std::unique_ptr<web::FakeWebState> web_state_;
   bool prerender_cancelled_ = false;
 };

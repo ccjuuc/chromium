@@ -15,7 +15,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/download/android/download_dialog_utils.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
@@ -65,8 +64,8 @@ void InsecureDownloadDialogBridge::CreateDialog(
 }
 
 void InsecureDownloadDialogBridge::OnConfirmed(JNIEnv* env,
-                                               jlong callback_id,
-                                               jboolean accepted) {
+                                               int64_t callback_id,
+                                               bool accepted) {
   if (!validator_.ValidateAndClearJavaCallback(callback_id))
     return;
   // Convert java long long int to c++ pointer, take ownership.

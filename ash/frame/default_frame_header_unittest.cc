@@ -10,7 +10,6 @@
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/desks/desks_util.h"
-#include "base/containers/contains.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/icu_test_util.h"
@@ -42,6 +41,8 @@ using views::FrameView;
 using views::Widget;
 
 namespace ash {
+
+using chromeos::AppType;
 
 using DefaultFrameHeaderTest = AshTestBase;
 
@@ -103,7 +104,7 @@ TEST_F(DefaultFrameHeaderTest, MinimumHeaderWidthRTL) {
 // Ensure the right frame colors are used.
 TEST_F(DefaultFrameHeaderTest, FrameColors) {
   const auto win0_bounds = gfx::Rect{1, 2, 3, 4};
-  auto win0 = CreateAppWindow(win0_bounds, chromeos::AppType::BROWSER);
+  auto win0 = CreateWindowWithAppType(AppType::BROWSER, win0_bounds);
   Widget* widget = Widget::GetWidgetForNativeWindow(win0.get());
   DefaultFrameHeader* frame_header =
       static_cast<DefaultFrameHeader*>(FrameHeader::Get(widget));
@@ -184,8 +185,8 @@ class FramePaintWaiter : public ui::CompositorObserver {
 
 TEST_F(DefaultFrameHeaderTest, DeleteDuringAnimation) {
   const auto bounds = gfx::Rect(100, 100);
-  auto win0 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
-  auto win1 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
+  auto win0 = CreateWindowWithAppType(AppType::BROWSER, bounds);
+  auto win1 = CreateWindowWithAppType(AppType::BROWSER, bounds);
 
   Widget* widget = Widget::GetWidgetForNativeWindow(win0.get());
   EXPECT_TRUE(FrameHeader::Get(widget));
@@ -209,7 +210,7 @@ TEST_F(DefaultFrameHeaderTest, DeleteDuringAnimation) {
   auto* animating_layer =
       animating_layer_holding_view->layer()->parent()->children()[0].get();
   EXPECT_EQ(ui::LAYER_TEXTURED, animating_layer->type());
-  EXPECT_TRUE(base::Contains(animating_layer->name(), ":Old"));
+  EXPECT_TRUE(animating_layer->name().contains(":Old"));
   EXPECT_TRUE(animating_layer->GetAnimator()->is_animating());
 
   LayerDestroyedChecker checker(animating_layer);
@@ -222,8 +223,8 @@ TEST_F(DefaultFrameHeaderTest, DeleteDuringAnimation) {
 // Make sure that the animation is canceled when resized.
 TEST_F(DefaultFrameHeaderTest, ResizeAndReorderDuringAnimation) {
   const auto bounds = gfx::Rect(100, 100);
-  auto win_0 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
-  auto win_1 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
+  auto win_0 = CreateWindowWithAppType(AppType::BROWSER, bounds);
+  auto win_1 = CreateWindowWithAppType(AppType::BROWSER, bounds);
 
   EXPECT_TRUE(wm::IsActiveWindow(win_1.get()));
 
@@ -298,14 +299,14 @@ TEST_F(DefaultFrameHeaderTest, ResizeAndReorderDuringAnimation) {
 // create another animation.
 TEST_F(DefaultFrameHeaderTest, AnimateDuringAnimation) {
   const auto bounds = gfx::Rect(100, 100);
-  auto win_0 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
+  auto win_0 = CreateWindowWithAppType(AppType::BROWSER, bounds);
   // A frame will not animate until it is painted first.
   FramePaintWaiter(win_0.get()).Wait();
 
   auto* widget = Widget::GetWidgetForNativeWindow(win_0.get());
 
   auto lock = widget->LockPaintAsActive();
-  auto win_1 = CreateAppWindow(bounds, chromeos::AppType::BROWSER);
+  auto win_1 = CreateWindowWithAppType(AppType::BROWSER, bounds);
   FramePaintWaiter(win_1.get()).Wait();
 
   EXPECT_TRUE(wm::IsActiveWindow(win_1.get()));

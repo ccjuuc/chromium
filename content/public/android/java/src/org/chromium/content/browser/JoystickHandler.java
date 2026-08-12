@@ -4,6 +4,8 @@
 
 package org.chromium.content.browser;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.view.InputDevice;
 import android.view.MotionEvent;
 
@@ -37,11 +39,16 @@ public class JoystickHandler implements ImeEventObserver, UserData {
 
     /**
      * Creates JoystickHandler instance.
+     *
      * @param webContents WebContents instance with which this JoystickHandler is associated.
      */
     private JoystickHandler(WebContents webContents) {
         mEventForwarder = webContents.getEventForwarder();
-        ImeAdapterImpl.fromWebContents(webContents).addEventObserver(this);
+
+        ImeAdapterImpl adapter = assertNonNull(ImeAdapterImpl.fromWebContents(webContents));
+
+        // Gracefully handle a null adapter in non-debug builds.
+        if (adapter != null) adapter.addEventObserver(this);
     }
 
     public void setScrollEnabled(boolean enabled) {
@@ -57,6 +64,7 @@ public class JoystickHandler implements ImeEventObserver, UserData {
 
     /**
      * Handles joystick input events.
+     *
      * @param event {@link MotionEvent} object.
      */
     public boolean onGenericMotionEvent(MotionEvent event) {
@@ -66,7 +74,18 @@ public class JoystickHandler implements ImeEventObserver, UserData {
         float velocityX = getVelocityFromJoystickAxis(event, MotionEvent.AXIS_X);
         float velocityY = getVelocityFromJoystickAxis(event, MotionEvent.AXIS_Y);
         if (velocityX == 0.f && velocityY == 0.f) return false;
-        mEventForwarder.startFling(event.getEventTime(), velocityX, velocityY, true, true, false);
+        mEventForwarder.startFling(
+                event.getEventTime(),
+                /* x= */ 0f,
+                /* y= */ 0f,
+                /* rawX= */ 0f,
+                /* rawY= */ 0f,
+                velocityX,
+                velocityY,
+                /* syntheticScroll= */ true,
+                /* preventBoosting= */ true,
+                /* isTouchpadEvent= */ false,
+                /* targetViewport= */ true);
         return true;
     }
 

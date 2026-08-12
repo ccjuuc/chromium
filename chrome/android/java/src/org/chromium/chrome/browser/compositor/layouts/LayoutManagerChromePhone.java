@@ -4,28 +4,29 @@
 
 package org.chromium.chrome.browser.compositor.layouts;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.content.Context;
 import android.view.ViewGroup;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 import org.chromium.chrome.browser.compositor.layouts.phone.NewTabAnimationLayout;
-import org.chromium.chrome.browser.compositor.layouts.phone.SimpleAnimationLayout;
 import org.chromium.chrome.browser.hub.HubLayoutDependencyHolder;
-import org.chromium.chrome.browser.hub.NewTabAnimationUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.ntp_customization.edge_to_edge.TopInsetCoordinator;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
+import org.chromium.chrome.browser.ui.edge_to_edge.TopInsetProvider;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 
 import java.util.function.Supplier;
@@ -36,14 +37,12 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class LayoutManagerChromePhone extends LayoutManagerChrome {
-    // TODO(crbug.com/40282469): Rename SimpleAnimationLayout to NewTabAnimationLayout once it is
-    // rolled out.
-    private final ObservableSupplier<CompositorViewHolder> mCompositorViewHolderSupplier;
-    private final ObservableSupplier<TopInsetCoordinator> mTopInsetCoordinatorSupplier;
-    private final ObservableSupplier<Boolean> mScrimVisibilitySupplier;
+    private final Supplier<@Nullable CompositorViewHolder> mCompositorViewHolderSupplier;
+    private final TopInsetProvider mTopInsetProvider;
+    private final NonNullObservableSupplier<Boolean> mScrimVisibilitySupplier;
     private final ToolbarManager mToolbarManager;
     private final ViewGroup mContentView;
-    private Layout mSimpleAnimationLayout;
+    private Layout mNewTabAnimationLayout;
 
     /**
      * Creates an instance of a {@link LayoutManagerChromePhone}.
@@ -55,45 +54,46 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
      *     layout.
      * @param tabModelSelectorSupplier Supplier for an interface to talk to the Tab Model Selector.
      * @param tabContentManagerSupplier Supplier of the {@link TabContentManager} instance.
-     * @param topUiThemeColorProvider {@link ThemeColorProvider} for top UI.
+     * @param toolbarThemeColorProvider {@link ThemeColorProvider} for the toolbar.
      * @param hubLayoutDependencyHolder The dependency holder for creating {@link HubLayout}.
      * @param compositorViewHolderSupplier Supplier of the {@link CompositorViewHolder} instance.
      * @param contentView The base content view.
      * @param toolbarManager The {@link ToolbarManager} instance.
      * @param scrimVisibilitySupplier Supplier for the Scrim visibility.
+     * @param topInsetProvider The {@link TopInsetProvider} instance.
      */
     public LayoutManagerChromePhone(
             LayoutManagerHost host,
             ViewGroup contentContainer,
             Supplier<TabSwitcher> tabSwitcherSupplier,
             Supplier<TabModelSelector> tabModelSelectorSupplier,
-            ObservableSupplier<TabContentManager> tabContentManagerSupplier,
-            Supplier<TopUiThemeColorProvider> topUiThemeColorProvider,
+            MonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier,
+            Supplier<ToolbarThemeColorProvider> toolbarThemeColorProvider,
             HubLayoutDependencyHolder hubLayoutDependencyHolder,
-            ObservableSupplier<CompositorViewHolder> compositorViewHolderSupplier,
+            Supplier<@Nullable CompositorViewHolder> compositorViewHolderSupplier,
             ViewGroup contentView,
             ToolbarManager toolbarManager,
-            ObservableSupplier<Boolean> scrimVisibilitySupplier,
-            ObservableSupplier<TopInsetCoordinator> topInsetCoordinatorSupplier) {
+            NonNullObservableSupplier<Boolean> scrimVisibilitySupplier,
+            TopInsetProvider topInsetProvider) {
         super(
                 host,
                 contentContainer,
                 tabSwitcherSupplier,
                 tabModelSelectorSupplier,
                 tabContentManagerSupplier,
-                topUiThemeColorProvider,
+                toolbarThemeColorProvider,
                 hubLayoutDependencyHolder);
         mCompositorViewHolderSupplier = compositorViewHolderSupplier;
         mContentView = contentView;
         mToolbarManager = toolbarManager;
         mScrimVisibilitySupplier = scrimVisibilitySupplier;
-        mTopInsetCoordinatorSupplier = topInsetCoordinatorSupplier;
+        mTopInsetProvider = topInsetProvider;
     }
 
     @Override
     public void destroy() {
         super.destroy();
-        mSimpleAnimationLayout.destroy();
+        mNewTabAnimationLayout.destroy();
     }
 
     @Override
@@ -103,51 +103,44 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
             TabCreatorManager creator,
             @Nullable ControlContainer controlContainer,
             DynamicResourceLoader dynamicResourceLoader,
-            TopUiThemeColorProvider topUiColorProvider,
-            ObservableSupplier<Integer> bottomControlsOffsetSupplier) {
+            ToolbarThemeColorProvider toolbarColorProvider,
+            NonNullObservableSupplier<Integer> bottomControlsOffsetSupplier) {
         Context context = mHost.getContext();
         LayoutRenderHost renderHost = mHost.getLayoutRenderHost();
 
-        if (NewTabAnimationUtils.isNewTabAnimationEnabled()) {
-            // TODO(crbug.com/40282469): Change from getContentContainer() as it is z-indexed behind
-            // the NTP.
-            mSimpleAnimationLayout =
-                    new NewTabAnimationLayout(
-                            context,
-                            this,
-                            renderHost,
-                            this,
-                            getContentContainer(),
-                            mCompositorViewHolderSupplier,
-                            mContentView,
-                            mToolbarManager,
-                            getBrowserControlsManager(),
-                            mScrimVisibilitySupplier,
-                            mTopInsetCoordinatorSupplier);
-        } else {
-            mSimpleAnimationLayout =
-                    new SimpleAnimationLayout(context, this, renderHost, getContentContainer());
-        }
+        mNewTabAnimationLayout =
+                new NewTabAnimationLayout(
+                        context,
+                        this,
+                        renderHost,
+                        this,
+                        getContentContainer(),
+                        assertNonNull(mCompositorViewHolderSupplier.get()),
+                        mContentView,
+                        mToolbarManager,
+                        getBrowserControlsManager(),
+                        mScrimVisibilitySupplier,
+                        mTopInsetProvider);
 
         super.init(
                 selector,
                 creator,
                 controlContainer,
                 dynamicResourceLoader,
-                topUiColorProvider,
+                toolbarColorProvider,
                 bottomControlsOffsetSupplier);
 
         // Initialize Layouts
         TabContentManager tabContentManager = mTabContentManagerSupplier.get();
         assert tabContentManager != null;
-        mSimpleAnimationLayout.setTabModelSelector(selector);
-        mSimpleAnimationLayout.setTabContentManager(tabContentManager);
+        mNewTabAnimationLayout.setTabModelSelector(selector);
+        mNewTabAnimationLayout.setTabContentManager(tabContentManager);
     }
 
     @Override
     protected Layout getLayoutForType(int layoutType) {
         if (layoutType == LayoutType.SIMPLE_ANIMATION) {
-            return mSimpleAnimationLayout;
+            return mNewTabAnimationLayout;
         }
         return super.getLayoutForType(layoutType);
     }
@@ -155,11 +148,11 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
     @Override
     protected void tabClosed(int id, int nextId, boolean incognito, boolean tabRemoved) {
         boolean showOverview = nextId == Tab.INVALID_TAB_ID;
-        if (getActiveLayoutType() != LayoutType.TAB_SWITCHER && showOverview) {
+        if (getActiveLayoutType() != LayoutType.HUB && showOverview) {
             // Since there will be no 'next' tab to display, switch to
             // overview mode when the animation is finished.
             if (getActiveLayoutType() == LayoutType.SIMPLE_ANIMATION) {
-                setNextLayout(getLayoutForType(LayoutType.TAB_SWITCHER), true);
+                setNextLayout(getLayoutForType(LayoutType.HUB), true);
             } else {
                 super.tabClosed(id, nextId, incognito, tabRemoved);
             }
@@ -177,13 +170,13 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
             // smoothly.
             getActiveLayout().onTabCreating(sourceId);
         } else if (animationsEnabled()) {
-            if (!isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+            if (!isLayoutVisible(LayoutType.HUB)) {
                 if (getActiveLayout() != null && getActiveLayout().isStartingToHide()) {
-                    setNextLayout(mSimpleAnimationLayout, true);
+                    setNextLayout(mNewTabAnimationLayout, true);
                     // The method Layout#doneHiding() will automatically show the next layout.
                     getActiveLayout().doneHiding();
                 } else {
-                    startShowing(mSimpleAnimationLayout, false);
+                    startShowing(mNewTabAnimationLayout, false);
                 }
             }
             if (getActiveLayout() != null) {

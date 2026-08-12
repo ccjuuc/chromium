@@ -209,8 +209,11 @@ class TurnSyncOnHelperBrowserTestWithParam
       : SigninBrowserTestBase(/*use_main_profile=*/false) {
     // Class `TurnSyncOnHelper` is only reachable and usable if the feature is
     // disabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
   }
 
   void SetUpOnMainThread() override {
@@ -259,7 +262,7 @@ IN_PROC_BROWSER_TEST_P(TurnSyncOnHelperBrowserTestWithParam,
   auto owned_delegate = std::make_unique<Delegate>(choices);
   base::WeakPtr<Delegate> delegate = owned_delegate->GetWeakPtr();
   new TurnSyncOnHelper(
-      profile, signin_metrics::AccessPoint::kUnknown,
+      profile, signin_metrics::AccessPoint::kStartPage,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO,
       second_account_id, aborted_mode(), std::move(owned_delegate),
       run_loop.QuitClosure());
@@ -350,8 +353,11 @@ class TurnSyncOnHelperBrowserTest : public SigninBrowserTestBase {
       : SigninBrowserTestBase(/*use_main_profile=*/false) {
     // Class `TurnSyncOnHelper` is only reachable and usable if the feature is
     // disabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
   }
 
   void SetUpOnMainThread() override {
@@ -366,7 +372,7 @@ class TurnSyncOnHelperBrowserTest : public SigninBrowserTestBase {
   base::ScopedClosureRunner disclaimer_service_resetter_;
 };
 
-// Regression test for https://crbug.com/1404961
+// Regression test for https://crbug.com/40252085
 IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest, UndoSyncRemoveAccount) {
   Profile* profile = GetProfile();
 
@@ -383,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest, UndoSyncRemoveAccount) {
   auto owned_delegate = std::make_unique<Delegate>(choices);
   base::WeakPtr<Delegate> delegate = owned_delegate->GetWeakPtr();
   new TurnSyncOnHelper(
-      profile, signin_metrics::AccessPoint::kUnknown,
+      profile, signin_metrics::AccessPoint::kStartPage,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO, account_id,
       TurnSyncOnHelper::SigninAbortedMode::REMOVE_ACCOUNT,
       std::move(owned_delegate), run_loop.QuitClosure());
@@ -398,7 +404,7 @@ IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest, UndoSyncRemoveAccount) {
 
   AccountReconcilor* reconcilor =
       AccountReconcilorFactory::GetForProfile(profile);
-  // For the scenario in https://crbug.com/1404961, the reconcilor has to be
+  // For the scenario in https://crbug.com/40252085, the reconcilor has to be
   // triggered by the account removal.
   ASSERT_EQ(reconcilor->GetState(),
             signin_metrics::AccountReconcilorState::kOk);
@@ -442,7 +448,7 @@ IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest,
   auto owned_delegate = std::make_unique<Delegate>(choices);
   base::WeakPtr<Delegate> delegate = owned_delegate->GetWeakPtr();
   new TurnSyncOnHelper(
-      profile, signin_metrics::AccessPoint::kUnknown,
+      profile, signin_metrics::AccessPoint::kStartPage,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO,
       first_account_id,
       TurnSyncOnHelper::SigninAbortedMode::KEEP_ACCOUNT_ON_WEB_ONLY,
@@ -500,7 +506,7 @@ IN_PROC_BROWSER_TEST_F(
   auto owned_delegate = std::make_unique<Delegate>(choices);
   base::WeakPtr<Delegate> delegate = owned_delegate->GetWeakPtr();
   new TurnSyncOnHelper(
-      profile, signin_metrics::AccessPoint::kUnknown,
+      profile, signin_metrics::AccessPoint::kStartPage,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO,
       second_account_id,
       TurnSyncOnHelper::SigninAbortedMode::KEEP_ACCOUNT_ON_WEB_ONLY,
@@ -561,7 +567,7 @@ IN_PROC_BROWSER_TEST_F(
   auto owned_delegate = std::make_unique<Delegate>(choices);
   base::WeakPtr<Delegate> delegate = owned_delegate->GetWeakPtr();
   new TurnSyncOnHelper(
-      profile, signin_metrics::AccessPoint::kUnknown,
+      profile, signin_metrics::AccessPoint::kStartPage,
       signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO,
       second_account_id, TurnSyncOnHelper::SigninAbortedMode::REMOVE_ACCOUNT,
       std::move(owned_delegate), run_loop.QuitClosure());

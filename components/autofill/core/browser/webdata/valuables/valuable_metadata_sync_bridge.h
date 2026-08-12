@@ -8,12 +8,17 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "base/supports_user_data.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/webdata/autofill_ai/entity_table.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service_observer.h"
@@ -54,8 +59,6 @@ class ValuableMetadataSyncBridge
       AutofillWebDataService* web_data_service);
 
   // syncer::DataTypeSyncBridge:
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data) override;
@@ -79,6 +82,9 @@ class ValuableMetadataSyncBridge
   void ServerEntityInstanceMetadataChanged(
       const EntityInstanceMetadataChange& change) override;
 
+  // AutofillWebDataServiceObserverOnDBSequence:
+  void ValuableMetadataChanged(const ValuableMetadataChange& change) override;
+
  private:
   // Merges remote changes, specified in `entity_data`, with the local DB and,
   // potentially, writes changes to the local DB and/or commits updates of
@@ -87,16 +93,38 @@ class ValuableMetadataSyncBridge
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data);
 
-  // Uploads local data that is not part of `entity_data` sent from the server
-  // during initial `MergeFullSyncData()`.
-  void UploadInitialLocalData(syncer::MetadataChangeList* metadata_change_list,
-                              const syncer::EntityChangeList& entity_data);
+  // Uploads local data that is not part of `entity_data` received from the
+  // server during initial `MergeFullSyncData()`.
+  void UploadInitialLocalEntityMetadata(
+      syncer::MetadataChangeList* metadata_change_list,
+      const syncer::EntityChangeList& entity_data);
 
-  // This routine performs cleanup by deleting old metadata records that have
+  // Uploads local valuable metadata that is not part of `entity_data` received
+  // from the server during initial `MergeFullSyncData()`.
+  void UploadInitialLocalValuableMetadata(
+      syncer::MetadataChangeList* metadata_change_list,
+      const syncer::EntityChangeList& entity_data);
+
+  // If available, returns cached possibly trimmed
+  // `AutofillValuableMetadataSpecifics` for given `storage_key`. By default,
+  // empty `AutofillValuableMetadataSpecifics` is returned.
+  const sync_pb::AutofillValuableMetadataSpecifics&
+  GetPossiblyTrimmedValuableMetadataSpecifics(std::string_view storage_key);
+
+  // These functions perform cleanup by deleting old metadata records that have
   // become orphaned (i.e., they have no matching data entity). It's primarily
   // here to handle uncommon scenarios, like receiving metadata for an entity
   // that was deleted before the entity data itself could reach the client.
+  // `DeleteOrphanValuableMetadata()` and `DeleteOrphanEntityMetadata()` return
+  // the number of metadata records that were deleted from the valuables and
+  // entity tables, respectively.
   void DeleteOrphanMetadata();
+  int DeleteOrphanEntityMetadata(
+      syncer::MetadataChangeList* metadata_change_list,
+      const base::flat_set<ValuableId>& non_orphan_loyalty_card_ids);
+  int DeleteOrphanValuableMetadata(
+      syncer::MetadataChangeList* metadata_change_list,
+      const base::flat_set<ValuableId>& non_orphan_loyalty_card_ids);
 
   // To ensures that metadata and model data is  committed in a single
   // transaction, `CreateMetadataChangeList()` is implemented using an
@@ -118,6 +146,13 @@ class ValuableMetadataSyncBridge
 
   // Returns a const `EntityTable` associated with the `web_data_backend_`.
   const EntityTable* GetEntityTable() const;
+
+  // Returns the `PassType` of the entity associated with the metadata.
+  std::optional<sync_pb::AutofillValuableMetadataSpecifics::PassType>
+  GetPassTypeForEntityId(const EntityInstance::EntityId& guid);
+
+  // Returns the `ValuablesTable` associated with the `web_data_backend_`.
+  ValuablesTable* GetValuablesTable();
 
   AutofillSyncMetadataTable* GetSyncMetadataStore();
 

@@ -4,13 +4,13 @@
 
 #include "third_party/blink/renderer/platform/graphics/mailbox_texture_backing.h"
 
+#include "cc/paint/texture_backing.h"
 #include "components/viz/common/gpu/raster_context_provider.h"
 #include "third_party/blink/renderer/platform/graphics/accelerated_static_bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/mailbox_ref.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/skia/include/core/SkImage.h"
-#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
 namespace blink {
@@ -18,17 +18,15 @@ namespace blink {
 MailboxTextureBacking::MailboxTextureBacking(
     scoped_refptr<gpu::ClientSharedImage> shared_image,
     scoped_refptr<MailboxRef> mailbox_ref,
-    const gfx::Size& size,
-    const viz::SharedImageFormat& format,
     SkAlphaType alpha_type,
-    const gfx::ColorSpace& color_space,
     scoped_refptr<viz::RasterContextProvider> context_provider)
     : shared_image_(std::move(shared_image)),
       mailbox_ref_(std::move(mailbox_ref)),
-      sk_image_info_(SkImageInfo::Make(gfx::SizeToSkISize(size),
-                                       ToClosestSkColorType(format),
-                                       alpha_type,
-                                       color_space.ToSkColorSpace())),
+      sk_image_info_(
+          SkImageInfo::Make(gfx::SizeToSkISize(shared_image_->size()),
+                            ToClosestSkColorType(shared_image_->format()),
+                            alpha_type,
+                            shared_image_->color_space().ToSkColorSpace())),
       context_provider_(std::move(context_provider)) {
   CHECK(context_provider_);
   gpu::raster::RasterInterface* ri = context_provider_->RasterInterface();
@@ -52,6 +50,14 @@ const SkImageInfo& MailboxTextureBacking::GetSkImageInfo() {
 
 gpu::Mailbox MailboxTextureBacking::GetMailbox() const {
   return shared_image_->mailbox();
+}
+
+void MailboxTextureBacking::Bind(scoped_refptr<cc::TextureBackingContext>) {
+  // TODO(paint-dev): Do we need to support this for html-in-canvas?
+}
+
+void MailboxTextureBacking::Unbind() {
+  // TODO(paint-dev): Do we need to support this for html-in-canvas?
 }
 
 sk_sp<SkImage> MailboxTextureBacking::GetSkImageViaReadback() {

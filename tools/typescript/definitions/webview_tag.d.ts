@@ -4,13 +4,13 @@
 
 /**
  * @fileoverview Definitions for chrome.webviewTag API
- * Generated from: chrome/common/extensions/api/webview_tag.json
- * run `tools/json_schema_compiler/compiler.py
- * chrome/common/extensions/api/webview_tag.json -g ts_definitions` to
- * regenerate.
+ * Originally generated from: chrome/common/extensions/api/webview_tag.json.
  *
  * In addition to the generated file, some classes and objects have been
- * manually added to match the Closure externs file, and are commented as such.
+ * manually added or modified to match how webview events are actually
+ * exposed to users (e.g., as DOM events with addEventListener rather
+ * than extension API events). These manually maintained parts are
+ * commented as such.
  */
 
 import {ChromeEvent} from './chrome_event.js';
@@ -145,13 +145,63 @@ declare global {
       }
 
       // Manually added to match the webview_tag.js Closure externs file.
+      // The generator produces types that look like typical extension events,
+      // but webview events are exposed differently.
       export interface NewWindowEvent extends Event {
         window: NewWindow;
-        targetUrl: string;
-        initialWidth: number;
-        initialHeight: number;
-        name: string;
-        windowOpenDisposition: string;
+        readonly targetUrl: string;
+        readonly initialWidth: number;
+        readonly initialHeight: number;
+        readonly name: string;
+        readonly windowOpenDisposition: string;
+      }
+
+      export interface LoadStartEvent extends Event {
+        readonly url: string;
+        readonly isTopLevel: boolean;
+      }
+
+      export interface LoadCommitEvent extends Event {
+        readonly url: string;
+        readonly isTopLevel: boolean;
+      }
+
+      export interface LoadAbortEvent extends Event {
+        readonly url: string;
+        readonly isTopLevel: boolean;
+        readonly code: number;
+        readonly reason: string;
+      }
+
+      export interface LoadRedirectEvent extends Event {
+        readonly oldUrl: string;
+        readonly newUrl: string;
+        readonly isTopLevel: boolean;
+      }
+
+      export interface ExitEvent extends Event {
+        readonly processId: number;
+        readonly reason: ExitReason;
+      }
+
+      export interface SizeChangedEvent extends Event {
+        readonly oldHeight: number;
+        readonly oldWidth: number;
+        readonly newHeight: number;
+        readonly newWidth: number;
+      }
+
+      export interface ZoomChangeEvent extends Event {
+        readonly oldZoomFactor: number;
+        readonly newZoomFactor: number;
+      }
+
+      export interface PermissionRequestEvent extends Event {
+        readonly permission: PermissionType;
+        request: MediaPermissionRequest|GeolocationPermissionRequest|
+            PointerLockPermissionRequest|DownloadPermissionRequest|
+            FileSystemPermissionRequest|FullscreenPermissionRequest|
+            LoadPluginPermissionRequest|HidPermissionRequest;
       }
 
       export interface MediaPermissionRequest {
@@ -277,14 +327,15 @@ declare global {
       export function getAudioState(callback: (audible: boolean) => void): void;
 
       export interface WebRequestEventInterface {
-        // Manually added to match the webview_tag.js Closure externs file.
+        // https://developer.chrome.com/docs/apps/reference/webviewTag#type-WebRequestEventInterface
+        onAuthRequired: webRequest.WebRequestOnAuthRequiredEvent;
         onBeforeRequest: webRequest.WebRequestOptionallySynchronousEvent;
         onBeforeSendHeaders: webRequest.WebRequestOptionallySynchronousEvent;
         onCompleted: webRequest.WebRequestBaseEvent<(details: object) => void>;
         onSendHeaders: webRequest.WebRequestBaseEvent<(obj: any) => void>;
       }
 
-      // Manually added to match the webview_tag.js Closure externs file.
+      // https://developer.chrome.com/docs/apps/reference/webviewTag
       export interface WebView extends HTMLIFrameElement {
         request: WebRequestEventInterface;
         back(callback?: (success: boolean) => void): void;
@@ -301,6 +352,8 @@ declare global {
         terminate(): void;
         getUserAgent(): string;
         setUserAgentOverride(userAgent: string): void;
+        getZoom(callback: (zoomFactor: number) => void): void;
+        setZoom(zoomFactor: number, callback?: () => void): void;
       }
 
       export function setAudioMuted(mute: boolean): void;
@@ -376,6 +429,8 @@ declare global {
 
       export function terminate(): void;
 
+      // Note that these auto-generated events are incorrect. See the manually
+      // defined events above.
       export const close: ChromeEvent<() => void>;
 
       export const consolemessage: ChromeEvent<

@@ -17,10 +17,6 @@ class NavigationHandle;
 // Allows `PageLoadMetricsObserver` to get/hold/record `PreloadServingMetrics`.
 class CONTENT_EXPORT PreloadServingMetricsCapsule {
  public:
-  // Used to control entering paths of `PreloadServingMetrics`, which records
-  // serving metrics of preloads.
-  static bool IsFeatureEnabled();
-
   // Takes `PreloadServingMetrics` from `PreloadServingMetricsHolder` of
   // `NavigationHandle`.
   static std::unique_ptr<PreloadServingMetricsCapsule> TakeFromNavigationHandle(
@@ -29,6 +25,11 @@ class CONTENT_EXPORT PreloadServingMetricsCapsule {
   virtual ~PreloadServingMetricsCapsule();
 
   virtual void RecordMetricsForNonPrerenderNavigationCommitted() const = 0;
+
+  virtual void RecordPreloadServingMetricsByNavigationInitiator(
+      bool did_nav_use_bfcache,
+      const std::string& navigation_initiator_string,
+      bool is_url_srp) const = 0;
 
   // Records FirstContentfulPaint
   //

@@ -34,6 +34,36 @@ class TestOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
   signin::OAuthConsumer GetOAuthConsumerForGlicUserStatus() const override {
     NOTREACHED();
   }
+
+  signin::OAuthConsumer GetOAuthConsumerForGlicInvokeApi() const override {
+    NOTREACHED();
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForContextualTasks() const override {
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kContextualTasksName, {});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForIndigo() const override {
+    NOTREACHED();
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForSkillsService() const override {
+    return signin::OAuthConsumer("skills_service", {"test_scope"});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForDrivePickerHost() const override {
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kDrivePickerHostName, {});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForBrowserActuator() const override {
+    NOTREACHED();
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForSiteTokenProvider() const override {
+    return signin::OAuthConsumer("site_token_provider", {"test_scope"});
+  }
 };
 
 }  // namespace
@@ -94,6 +124,19 @@ network::mojom::CookieManager* TestSigninClient::GetCookieManager() {
     cookie_manager_ = std::make_unique<network::TestCookieManager>();
   }
   return cookie_manager_.get();
+}
+
+network::mojom::DeviceBoundSessionManager*
+TestSigninClient::GetDeviceBoundSessionManager() const {
+  return device_bound_session_manager_;
+}
+
+std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
+TestSigninClient::CreateBoundSessionOAuthMultiloginDelegate() const {
+  if (bound_session_oauth_multilogin_delegate_factory_) {
+    return bound_session_oauth_multilogin_delegate_factory_.Run();
+  }
+  return nullptr;
 }
 
 network::mojom::NetworkContext* TestSigninClient::GetNetworkContext() {

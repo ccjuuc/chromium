@@ -28,7 +28,6 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -305,7 +304,7 @@ bool ShouldBlockUiTabletModeInKiosk() {
 // certain operation.
 class TabletModeController::DestroyObserver : public aura::WindowObserver {
  public:
-  DestroyObserver(aura::Window* window, base::OnceCallback<void(void)> callback)
+  DestroyObserver(aura::Window* window, base::OnceClosure callback)
       : window_(window), callback_(std::move(callback)) {
     window_->AddObserver(this);
   }
@@ -327,7 +326,7 @@ class TabletModeController::DestroyObserver : public aura::WindowObserver {
 
  private:
   raw_ptr<aura::Window> window_;
-  base::OnceCallback<void(void)> callback_;
+  base::OnceClosure callback_;
 };
 
 // Used to hide the shelf and float containers while screenshot for tablet mode
@@ -359,7 +358,7 @@ class TabletModeController::ScopedContainerHider {
   ScopedContainerHider& operator=(const ScopedContainerHider&) = delete;
   ~ScopedContainerHider() {
     // Cancel if the root window is deleted while taking a screenshot.
-    if (!base::Contains(Shell::GetAllRootWindows(), root_window_)) {
+    if (!std::ranges::contains(Shell::GetAllRootWindows(), root_window_)) {
       return;
     }
 
@@ -1314,7 +1313,7 @@ void TabletModeController::OnLayerCopyed(
   container_hider_.reset();
 
   // Cancel if the root window is deleted while taking a screenshot.
-  if (!base::Contains(Shell::GetAllRootWindows(), root_window)) {
+  if (!std::ranges::contains(Shell::GetAllRootWindows(), root_window)) {
     return;
   }
 

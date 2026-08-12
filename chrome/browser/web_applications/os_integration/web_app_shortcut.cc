@@ -39,9 +39,9 @@
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/grit/app_icon_resources.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "extensions/grit/extensions_browser_resources.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -168,9 +168,8 @@ ConvertIconProtoDataToShortcutsMenuIcon(
   return shortcut_menu_item_icons;
 }
 
-gfx::ImageFamily PackageIconsIntoImageFamily(
-    bool allow_empty,
-    std::map<SquareSizePx, SkBitmap> icon_bitmaps) {
+gfx::ImageFamily PackageIconsIntoImageFamily(bool allow_empty,
+                                             OrderedSizeToBitmap icon_bitmaps) {
   gfx::ImageFamily image_family;
   for (auto& size_and_bitmap : icon_bitmaps) {
     image_family.Add(gfx::ImageSkia(
@@ -349,7 +348,7 @@ ShortcutLocations::ShortcutLocations() = default;
 ShortcutLocations::~ShortcutLocations() = default;
 
 base::Value ShortcutLocations::ToDebugValue() const {
-  base::Value::Dict debug_log;
+  base::DictValue debug_log;
   debug_log.Set("on_desktop", on_desktop);
   debug_log.Set("in_quick_launch_bar", in_quick_launch_bar);
   debug_log.Set("in_startup", in_startup);
@@ -433,7 +432,7 @@ gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
   // use IDR_WEB_APP_DEFAULT_ICON here.
   gfx::Image default_icon =
       ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-          IDR_APP_DEFAULT_ICON);
+          IDR_WEB_APP_DEFAULT_ICON);
   SkBitmap bmp = skia::ImageOperations::Resize(
       *default_icon.ToSkBitmap(), skia::ImageOperations::RESIZE_BEST, size,
       size);

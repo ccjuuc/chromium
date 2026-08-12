@@ -8,13 +8,16 @@ Intended to be used to split up the large histograms.xml or enums.xml file.
 """
 
 import os
+from pathlib import Path
 import re
 from xml.dom import minidom
 
-import histogram_configuration_model
-import histogram_paths
-import merge_xml
-import path_util
+import setup_modules  # pylint: disable=unused-import
+
+import chromium_src.tools.metrics.common.path_util as path_util
+import chromium_src.tools.metrics.histograms.histogram_configuration_model as histogram_configuration_model
+import chromium_src.tools.metrics.histograms.histogram_paths as histogram_paths
+import chromium_src.tools.metrics.histograms.merge_xml as merge_xml
 
 # The top level comment templates that will be formatted and added to each split
 # histograms xml.
@@ -118,7 +121,7 @@ def _CreateXMLFile(comment, parent_node_string, nodes, output_dir, filename):
   for node in nodes:
     parent_element.appendChild(node)
 
-  output_path = os.path.join(output_dir, filename)
+  output_path = str(Path(output_dir) / filename)
   if os.path.exists(output_path):
     os.remove(output_path)
 
@@ -197,9 +200,8 @@ def _OutputToFolderAndXML(nodes, output_dir, key):
     key: The prefix of the histograms, also the name of the new folder.
   """
   # Convert CamelCase name to snake_case when creating a directory.
-  output_dir = os.path.join(output_dir, _CamelCaseToSnakeCase(key))
-  if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+  output_dir = Path(output_dir) / _CamelCaseToSnakeCase(key)
+  output_dir.mkdir(parents=True, exist_ok=True)
   _CreateXMLFile(key + ' histograms', 'histograms', nodes, output_dir,
                  'histograms.xml')
 
@@ -216,7 +218,7 @@ def _WriteDocumentDict(document_dict, output_dir):
     if isinstance(val, list):
       _OutputToFolderAndXML(val, output_dir, key)
     else:
-      _WriteDocumentDict(val, os.path.join(output_dir, key))
+      _WriteDocumentDict(val, str(Path(output_dir) / key))
 
 
 def _AggregateMinorNodes(node_dict):

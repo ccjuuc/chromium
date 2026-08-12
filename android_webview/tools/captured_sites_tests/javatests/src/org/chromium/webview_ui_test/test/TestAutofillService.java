@@ -15,7 +15,6 @@ import android.service.autofill.FillRequest;
 import android.service.autofill.FillResponse;
 import android.service.autofill.SaveCallback;
 import android.service.autofill.SaveRequest;
-import android.util.Log;
 import android.util.Pair;
 import android.view.View;
 import android.view.autofill.AutofillId;
@@ -24,6 +23,7 @@ import android.widget.RemoteViews;
 
 import androidx.annotation.NonNull;
 
+import org.chromium.base.Log;
 import org.chromium.webview_ui_test.test.util.AutofillProfile;
 
 import java.util.ArrayList;
@@ -117,10 +117,10 @@ public class TestAutofillService extends AutofillService {
                     dataset.setValue(autofillId, value, createRemoteViews(fill));
                     break;
                 case View.AUTOFILL_TYPE_TOGGLE:
-                    Log.d(TAG, "Ignoring ViewNode: " + autofillId + "because it has type toggle.");
+                    Log.d(TAG, "Ignoring ViewNode: %s because it has type toggle.", autofillId);
                     break;
                 case View.AUTOFILL_TYPE_DATE:
-                    Log.d(TAG, "Ignoring ViewNode: " + autofillId + "because it has type date.");
+                    Log.d(TAG, "Ignoring ViewNode: %s because it has type date.", autofillId);
                     break;
                 default:
                     throw new Exception(

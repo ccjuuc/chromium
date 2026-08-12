@@ -47,13 +47,13 @@ class CORE_EXPORT StringUtil {
   static const uint8_t* CharactersLatin1(const String& s) {
     if (!s.Is8Bit())
       return nullptr;
-    return UNSAFE_TODO(s.Characters8());
+    return s.Span8().data();
   }
   static const uint8_t* CharactersUTF8(const String& s) { return nullptr; }
   static const uint16_t* CharactersUTF16(const String& s) {
     if (s.Is8Bit())
       return nullptr;
-    return reinterpret_cast<const uint16_t*>(UNSAFE_TODO(s.Characters16()));
+    return s.SpanUint16().data();
   }
   static size_t CharacterCount(const String& s) { return s.length(); }
 };
@@ -94,7 +94,7 @@ class CORE_EXPORT Binary : public crdtp::Serializable {
   size_t size() const { return impl_ ? impl_->size() : 0; }
   base::span<const uint8_t> Span() const {
     // SAFETY: Safety relies on data() and size() of Impl class.
-    return UNSAFE_BUFFERS(base::span(data(), size()));
+    return UNSAFE_BUFFERS(base::span(base::unchecked, data(), size()));
   }
 
   String toBase64() const;
@@ -134,6 +134,21 @@ struct ProtocolTypeTraits<blink::protocol::Binary> {
   static void Serialize(const blink::protocol::Binary& value,
                         std::vector<uint8_t>* bytes);
 };
+
+template <typename DestType>
+DestType ConvertAssociatedData(std::string_view from);
+
+template <typename DestType>
+  requires std::is_constructible_v<DestType, std::string_view>
+DestType ConvertAssociatedData(std::string_view from) {
+  return DestType(from);
+}
+
+template <typename DestType>
+  requires std::is_convertible_v<DestType, base::span<char>>
+DestType ConvertAssociatedData(std::string_view from) {
+  return DestType(base::span(from.data(), from.size()));
+}
 
 }  // namespace crdtp
 

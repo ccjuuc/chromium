@@ -6,15 +6,18 @@
 #define CONTENT_BROWSER_PRELOADING_PREFETCH_PREFETCH_SERVING_HANDLE_H_
 
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader_common_types.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/frame_tree_node_id.h"
+#include "net/cookies/cookie_util.h"
 
 class GURL;
 
 namespace content {
 
 class PrefetchContainer;
-class PrefetchNetworkContext;
+class PrefetchMatchResolverAction;
 class PrefetchResponseReader;
 class PrefetchSingleRedirectHop;
 class ServiceWorkerClient;
@@ -46,18 +49,22 @@ class CONTENT_EXPORT PrefetchServingHandle final {
 
   ~PrefetchServingHandle();
 
-  PrefetchContainer* GetPrefetchContainer() const {
+  const PrefetchContainer* GetPrefetchContainer() const {
     return prefetch_container_.get();
   }
-  PrefetchServingHandle Clone() const;
+  PrefetchContainer* GetPrefetchContainer() {
+    return prefetch_container_.get();
+  }
+  PrefetchServingHandle Clone();
 
   // Returns true if `this` is valid.
   // Do not call methods below if false.
-  explicit operator bool() const { return GetPrefetchContainer(); }
+  bool IsValid() const { return GetPrefetchContainer(); }
+  explicit operator bool() const { return IsValid(); }
 
   // Methods redirecting to `GetPrefetchContainer()`.
-  PrefetchServableState GetServableState(
-      base::TimeDelta cacheable_duration) const;
+  PrefetchMatchResolverAction GetMatchResolverAction() const;
+
   bool HasPrefetchStatus() const;
   PrefetchStatus GetPrefetchStatus() const;
 
@@ -68,26 +75,19 @@ class CONTENT_EXPORT PrefetchServingHandle final {
   // Whether or not an isolated network context is required to serve.
   bool IsIsolatedNetworkContextRequiredToServe() const;
 
-  PrefetchNetworkContext* GetCurrentNetworkContextToServe() const;
-
   bool HaveDefaultContextCookiesChanged() const;
 
-  // Before a prefetch can be served, any cookies added to the isolated
-  // network context must be copied over to the default network context. These
-  // functions are used to check and update the status of this process, as
-  // well as record metrics about how long this process takes.
-  bool HasIsolatedCookieCopyStarted() const;
-  bool IsIsolatedCookieCopyInProgress() const;
-  void OnIsolatedCookieCopyStart() const;
-  void OnIsolatedCookiesReadCompleteAndWriteStart() const;
-  void OnIsolatedCookieCopyComplete() const;
-  void OnInterceptorCheckCookieCopy() const;
-  void SetOnCookieCopyCompleteCallback(base::OnceClosure callback) const;
+  bool IsIsolatedCookieCopyInProgressForTesting() const;
+  void OnIsolatedCookieCopyStartForTesting();
+  void OnIsolatedCookiesReadCompleteAndWriteStartForTesting();
+  void OnIsolatedCookieCopyCompleteForTesting();
+  void OnInterceptorCheckCookieCopyForTesting();
+  void SetOnCookieCopyCompleteCallbackForTesting(base::OnceClosure callback);
 
   // Called with the result of the probe. If the probing feature is enabled,
   // then a probe must complete successfully before the prefetch can be
   // served.
-  void OnPrefetchProbeResult(PrefetchProbeResult probe_result) const;
+  void OnPrefetchProbeResult(PrefetchProbeResult probe_result);
 
   // Checks if the given URL matches the the URL that can be served next.
   bool DoesCurrentURLToServeMatch(const GURL& url) const;
@@ -114,12 +114,40 @@ class CONTENT_EXPORT PrefetchServingHandle final {
   bool MatchesCookieIndices(
       base::span<const std::pair<std::string, std::string>> cookies) const;
 
+  // Checks if `prefetch_container` can be used for the url of intercepted
+  // `tentative_resource_request`, and starts checking `PrefetchOriginProber` if
+  // needed.
+  void OnGotPrefetchToServe(
+      FrameTreeNodeId frame_tree_node_id,
+      const GURL& tentative_resource_request_url,
+      base::OnceCallback<void(PrefetchServingHandle)> get_prefetch_callback) &&;
+
+  // Copies any cookies in the isolated network context associated with
+  // the current redirect hop to the default network context.
+  void CopyIsolatedCookies();
+
  private:
   const std::vector<std::unique_ptr<PrefetchSingleRedirectHop>>&
   redirect_chain() const;
 
   // Returns the `SingleRedirectHop` to be served next.
   const PrefetchSingleRedirectHop& GetCurrentSingleRedirectHopToServe() const;
+  PrefetchSingleRedirectHop& GetCurrentSingleRedirectHopToServe();
+
+  // Validation methods.
+  struct OnGotPrefetchToServeState;
+  void ContinueOnGotPrefetchToServe(
+      std::unique_ptr<OnGotPrefetchToServeState> state) &&;
+  void StartCookieValidation(
+      std::unique_ptr<OnGotPrefetchToServeState> state) &&;
+  void OnGotCookiesForValidation(
+      std::unique_ptr<OnGotPrefetchToServeState> state,
+      const std::vector<net::CookieWithAccessResult>& cookies,
+      const std::vector<net::CookieWithAccessResult>& excluded_cookies) &&;
+  void OnProbeComplete(std::unique_ptr<OnGotPrefetchToServeState> state,
+                       PrefetchProbeResult probe_result) &&;
+  void OnCookieCopyComplete(std::unique_ptr<OnGotPrefetchToServeState> state,
+                            base::TimeTicks cookie_copy_start_time) &&;
 
   base::WeakPtr<PrefetchContainer> prefetch_container_;
 

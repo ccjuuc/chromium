@@ -56,6 +56,7 @@ test("device_unittests") {
     "gamepad/gamepad_id_list_unittest.cc",
     "gamepad/gamepad_provider_unittest.cc",
     "gamepad/gamepad_service_unittest.cc",
+    "gamepad/gamepad_standard_mappings_unittest.cc",
     "gamepad/hid_haptic_gamepad_unittest.cc",
     "gamepad/public/cpp/gamepad_mojom_traits_unittest.cc",
     "gamepad/xbox_hid_controller_unittest.cc",
@@ -66,6 +67,7 @@ test("device_unittests") {
     sources += [
       "bluetooth/bluetooth_low_energy_adapter_apple_unittest.mm",
       "bluetooth/bluetooth_low_energy_advertisement_manager_mac_unittest.mm",
+      "bluetooth/bluetooth_low_energy_device_watcher_mac_unittest.mm",
       "bluetooth/test/bluetooth_test_mac.h",
       "bluetooth/test/bluetooth_test_mac.mm",
       "bluetooth/test/mock_bluetooth_cbcharacteristic_mac.h",
@@ -78,6 +80,7 @@ test("device_unittests") {
       "bluetooth/test/mock_bluetooth_cbservice_mac.mm",
       "bluetooth/test/mock_bluetooth_central_manager_mac.h",
       "bluetooth/test/mock_bluetooth_central_manager_mac.mm",
+      "gamepad/game_controller_gamepad_unittest.mm",
     ]
   }
 
@@ -107,6 +110,7 @@ test("device_unittests") {
       "bluetooth/bluetooth_task_manager_win_unittest.cc",
       "bluetooth/test/bluetooth_test_win.cc",
       "bluetooth/test/bluetooth_test_win.h",
+      "gamepad/gameinput_data_fetcher_unittest.cc",
       "gamepad/wgi_data_fetcher_win_unittest.cc",
     ]
   }
@@ -152,6 +156,7 @@ test("device_unittests") {
 
   data_deps = [
     "bluetooth/strings:bluetooth_test_strings",
+    "//services/device/public/cpp/usb:usb_ids_resources_data",
     "//testing/buildbot/filters:device_unittests_filters",
     "//ui/resources:ui_test_pak_data",
   ]
@@ -174,12 +179,7 @@ test("device_unittests") {
       "fido/auth_token_requester_unittest.cc",
       "fido/bio/enrollment_handler_unittest.cc",
       "fido/ble_adapter_manager_unittest.cc",
-      "fido/cable/fido_ble_connection_unittest.cc",
-      "fido/cable/fido_ble_frames_unittest.cc",
-      "fido/cable/fido_ble_transaction_unittest.cc",
-      "fido/cable/fido_cable_device_unittest.cc",
-      "fido/cable/fido_cable_discovery_unittest.cc",
-      "fido/cable/fido_cable_handshake_handler_unittest.cc",
+      "fido/cable/v2_discovery_unittest.cc",
       "fido/cable/v2_handshake_unittest.cc",
       "fido/cbor_extract_unittest.cc",
       "fido/credential_management_handler_unittest.cc",
@@ -187,6 +187,7 @@ test("device_unittests") {
       "fido/ctap_response_unittest.cc",
       "fido/enclave/attestation_unittest.cc",
       "fido/enclave/enclave_protocol_utils_unittest.cc",
+      "fido/enclave/enclave_websocket_client_unittest.cc",
       "fido/fake_fido_discovery_unittest.cc",
       "fido/fido_device_authenticator_unittest.cc",
       "fido/fido_device_discovery_unittest.cc",
@@ -211,8 +212,10 @@ test("device_unittests") {
 
     deps += [
       "//components/sync/protocol",
+      "//device/fido:cablev2_test_util",
       "//device/fido:mocks",
       "//services/data_decoder/public/cpp:test_support",
+      "//services/network:test_support",
     ]
 
     if (is_mac) {
@@ -369,7 +372,9 @@ test("device_unittests") {
     ldflags = [ "-ObjC" ]
     frameworks = [
       "CoreBluetooth.framework",
+      "CoreHaptics.framework",
       "Foundation.framework",
+      "GameController.framework",
     ]
   }
 
@@ -452,7 +457,11 @@ test("device_unittests") {
     ]
 
     if (enable_openxr) {
-      sources += [ "vr/openxr/openxr_hand_utils_unittest.cc" ]
+      sources += [
+        "vr/openxr/openxr_hand_utils_unittest.cc",
+        "vr/openxr/openxr_view_configuration_unittest.cc",
+      ]
+      deps += [ "//third_party/openxr:openxr_core_headers" ]
     }
 
     defines = [ "DEVICE_VR_IMPLEMENTATION" ]
@@ -522,6 +531,7 @@ if (is_android) {
   }
 
   robolectric_binary("device_junit_tests") {
+    enable_android_resources = false
     sources = [
       "gamepad/android/junit/src/org/chromium/device/gamepad/GamepadDeviceTest.java",
       "gamepad/android/junit/src/org/chromium/device/gamepad/GamepadMappingsTest.java",

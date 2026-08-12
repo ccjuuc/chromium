@@ -4,16 +4,32 @@
 
 #include "components/autofill/core/browser/filling/autofill_ai/field_filling_entity_util.h"
 
-#include <string>
+#include <stddef.h>
+#include <stdint.h>
 
+#include <algorithm>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/containers/to_vector.h"
+#include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/autofill_ai_form_rationalization.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/data_quality/addresses/address_normalizer.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -25,8 +41,12 @@
 #include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "components/autofill/core/common/unique_ids.h"
+#include "components/strings/grit/components_strings.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace autofill {
 
@@ -82,7 +102,7 @@ std::u16string MaybeStripPrefix(const std::u16string& value,
 }
 
 // Looks for the day, month, or year from `attribute` to fill into `field`.
-std::optional<std::u16string> GetValueForDateSelect(
+std::optional<SelectOption> GetValueForDateSelect(
     const AttributeInstance& attribute,
     const AutofillField& field,
     const std::string& app_locale) {
@@ -106,15 +126,15 @@ std::optional<std::u16string> GetValueForDateSelect(
 
   if (base::optional_ref<const SelectOption> match =
           GetDayRange(field.options()).get_by_value(get_part(u"D", 1, 31))) {
-    return match->value;
+    return match.CopyAsOptional();
   }
   if (base::optional_ref<const SelectOption> match =
           GetMonthRange(field.options()).get_by_value(get_part(u"M", 1, 12))) {
-    return match->value;
+    return match.CopyAsOptional();
   }
   if (base::optional_ref<const SelectOption> match =
           GetYearRange(field.options()).get_by_value(get_part(u"YYYY"))) {
-    return match->value;
+    return match.CopyAsOptional();
   }
   return std::nullopt;
 }
@@ -150,39 +170,61 @@ std::u16string GetValueForInput(const AttributeInstance& attribute,
   }
 }
 
-std::u16string GetValueForSelect(const AttributeInstance& attribute,
-                                 const AutofillField& field,
-                                 const std::string& app_locale,
-                                 AddressNormalizer* address_normalizer) {
+std::optional<SelectOption> GetOptionForSelect(
+    const AttributeInstance& attribute,
+    const AutofillField& field,
+    const std::string& app_locale,
+    AddressNormalizer* address_normalizer) {
   const FieldType type =
       field.Type().GetAutofillAiType(attribute.type().entity_type());
   if (IsDateFieldType(type)) {
-    return GetValueForDateSelect(attribute, field, app_locale).value_or(u"");
+    return GetValueForDateSelect(attribute, field, app_locale);
   }
   std::u16string fill_value = GetValueForInput(attribute, field, app_locale);
   if (fill_value.empty()) {
-    return u"";
+    return std::nullopt;
   }
 
   switch (type) {
     case PASSPORT_ISSUING_COUNTRY:
-      return GetCountrySelectControlValue(fill_value, field.options(),
-                                          /*failure_to_fill=*/nullptr);
+      return GetCountrySelectControlOption(fill_value, field.options(),
+                                           /*failure_to_fill=*/nullptr);
     case DRIVERS_LICENSE_REGION:
     case VEHICLE_PLATE_STATE:
       // TODO(crbug.com/389625753): Support countries other than the US.
-      return GetStateSelectControlValue(fill_value, field.options(),
-                                        /*country_code=*/"US",
-                                        address_normalizer,
-                                        /*failure_to_fill=*/nullptr);
+      return GetStateSelectControlOption(fill_value, field.options(),
+                                         /*country_code=*/"US",
+                                         address_normalizer,
+                                         /*failure_to_fill=*/nullptr);
     default:
-      return GetSelectControlValue(fill_value, field.options(),
-                                   /*failure_to_fill=*/nullptr)
-          .value_or(u"");
+      return GetSelectControlOption(fill_value, field.options(),
+                                    /*failure_to_fill=*/nullptr);
   }
 }
 
 }  // namespace
+
+DenseSet<EntityType> GetEntityTypesBeingFetched(const AutofillField& field,
+                                                const AutofillClient& client) {
+  const AutofillAiPersonalContextAccessManager* access_manager =
+      client.GetAutofillAiPersonalContextAccessManager();
+  if (!access_manager) {
+    return {};
+  }
+  DenseSet<EntityType> types;
+  using RequestStatus = AutofillAiPersonalContextAccessManager::RequestStatus;
+
+  for (EntityType entity_type : DenseSet<EntityType>::all()) {
+    if (field.Type().GetAutofillAiType(entity_type) != UNKNOWN_TYPE) {
+      if (access_manager->ServerHasSpiiPresenceSignal(entity_type) &&
+          access_manager->GetPrefetchStatusByEntityType(entity_type) ==
+              RequestStatus::kPending) {
+        types.insert(entity_type);
+      }
+    }
+  }
+  return types;
+}
 
 std::vector<const EntityInstance*> GetFillableEntityInstances(
     const AutofillClient& client) {
@@ -193,9 +235,11 @@ std::vector<const EntityInstance*> GetFillableEntityInstances(
 
   base::span<const EntityInstance> all_entities = edm->GetEntityInstances();
 
+  const GURL url = client.GetLastCommittedPrimaryMainFrameURL();
   DenseSet<EntityType> enabled_types;
   for (EntityType type : DenseSet(all_entities, &EntityInstance::type)) {
-    if (MayPerformAutofillAiAction(client, AutofillAiAction::kFilling, type)) {
+    if (!IsAutofillAiEntityTypeBlockedByPolicy(client, url, type) &&
+        MayPerformAutofillAiAction(client, AutofillAiAction::kFilling, type)) {
       enabled_types.insert(type);
     }
   }
@@ -215,9 +259,6 @@ base::flat_set<FieldGlobalId> GetFieldsFillableByAutofillAi(
     const AutofillClient& client) {
   std::vector<const EntityInstance*> entities =
       GetFillableEntityInstances(client);
-  if (entities.empty()) {
-    return {};
-  }
 
   base::flat_map<
       Section,
@@ -227,6 +268,12 @@ base::flat_set<FieldGlobalId> GetFieldsFillableByAutofillAi(
 
   // Returns true if there is data present that could fill the `field`.
   auto is_fillable = [&](const AutofillField& field) {
+    // Return true if the `field` is of an entity type that is currently being
+    // prefetched.
+    if (!GetEntityTypesBeingFetched(field, client).empty()) {
+      return true;
+    }
+
     return std::ranges::any_of(entities, [&](const EntityInstance* entity) {
       std::optional<AttributeType> type = GetAttributeTypeForEntityAndField(
           section_to_entity_and_field_and_types, *entity, field);
@@ -243,7 +290,7 @@ base::flat_set<FieldGlobalId> GetFieldsFillableByAutofillAi(
   return fillable_fields;
 }
 
-std::u16string GetFillValueForEntity(
+FillingValueAndType GetFillingValueAndTypeForEntity(
     const EntityInstance& entity,
     base::span<const AutofillFieldWithAttributeType> fields_and_types,
     const AutofillField& field,
@@ -265,46 +312,94 @@ std::u16string GetFillValueForEntity(
     return entity.attribute(it->type);
   }();
 
+  FieldType field_type = field.Type().GetAutofillAiType(entity.type());
   if (!attribute) {
-    return u"";
+    return FillingValueAndType(u"", field_type);
   }
-
-  std::u16string fill_value =
-      field.IsSelectElement()
-          ? GetValueForSelect(*attribute, field, app_locale, address_normalizer)
-          : GetValueForInput(*attribute, field, app_locale);
 
   const bool should_obfuscate =
       action_persistence != mojom::ActionPersistence::kFill &&
-      !field.IsSelectElement() && attribute->type().is_obfuscated();
+      attribute->type().is_obfuscated();
+  if (should_obfuscate && field.IsSelectElement()) {
+    return FillingValueAndType(u"", field_type);
+  }
 
-  // TODO(crbug.com/394011769): Investigate whether the obfuscation should
-  // should include some of the attribute's value, e.g. the last x characters.
-  return should_obfuscate ? GetObfuscatedValue(fill_value) : fill_value;
+  if (field.IsSelectElement()) {
+    std::optional<SelectOption> select_control_option =
+        GetOptionForSelect(*attribute, field, app_locale, address_normalizer);
+    return FillingValueAndType(
+        select_control_option ? std::move(select_control_option->value) : u"",
+        select_control_option
+            ? std::optional(std::move(select_control_option->text))
+            : std::nullopt,
+        field_type);
+  } else {
+    std::u16string fill_value = GetValueForInput(*attribute, field, app_locale);
+
+    return FillingValueAndType(should_obfuscate ? GetObfuscatedValue(fill_value)
+                                                : std::move(fill_value),
+                               field_type);
+  }
 }
 
-bool ShouldReauthBeforeFilling(
-    const EntityInstance& entity,
-    base::span<const AutofillFieldWithAttributeType> fields,
-    const std::string& app_locale) {
+bool WillFillSensitiveAttributes(const EntityInstance& entity,
+                                 const FormStructure& form,
+                                 const Section& section,
+                                 std::string_view app_locale) {
   return std::ranges::any_of(
-      fields, [&](const AutofillFieldWithAttributeType& f) {
-        return ShouldFieldBeObfuscated(entity, f, app_locale);
+      RationalizeAndDetermineAttributeTypes(form.fields(), section,
+                                            entity.type()),
+      [&entity, app_locale](const AutofillFieldWithAttributeType& f) {
+        base::optional_ref<const AttributeInstance> attribute =
+            entity.attribute(f.type);
+        return entity.type() == f.type.entity_type() && attribute &&
+               attribute->type().is_obfuscated() &&
+               !attribute
+                    ->GetInfo(f.field->Type().GetAutofillAiType(entity.type()),
+                              app_locale, f.field->format_string())
+                    .empty();
       });
 }
 
-bool ShouldFieldBeObfuscated(const EntityInstance& entity,
-                             const AutofillFieldWithAttributeType& f,
-                             const std::string& app_locale) {
-  base::optional_ref<const AttributeInstance> attribute =
-      entity.attribute(f.type);
-  return entity.type() == f.type.entity_type() && attribute &&
-         attribute->type().is_obfuscated() &&
-         !attribute
-              ->GetInfo(f.field->Type().GetAutofillAiType(entity.type()),
-                        app_locale, f.field->format_string())
-              .empty() &&
-         base::FeatureList::IsEnabled(features::kAutofillAiReauthRequired);
+bool WillRequireServerFetch(const EntityInstance& entity,
+                            const FormStructure& form,
+                            const Section& section,
+                            std::string_view app_locale) {
+  if (!entity.IsMaskedEntity() || !entity.IsServerInstance() ||
+      !WillFillSensitiveAttributes(entity, form, section, app_locale)) {
+    return false;
+  }
+  const bool is_ambient_enabled =
+      entity.record_type() == EntityInstance::RecordType::kPersonalContext &&
+      base::FeatureList::IsEnabled(features::kAutofillAmbientAutofill);
+
+  const bool is_wallet_enabled =
+      entity.record_type() == EntityInstance::RecordType::kServerWallet &&
+      base::FeatureList::IsEnabled(features::kAutofillAiWalletPrivatePasses);
+
+  return is_ambient_enabled || is_wallet_enabled;
+}
+
+url::Origin GetTargetFieldOrigin(const url::Origin& origin,
+                                 const AutofillClient& client) {
+  return origin.opaque() ? client.GetLastCommittedPrimaryMainFrameOrigin()
+                         : origin;
+}
+
+std::u16string GetAuthenticationMessage(const url::Origin& origin) {
+  // Android is excluded here because the system biometric prompt does not
+  // support a custom message.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_IOS)
+  // TODO(crbug.com/492978632): Evaluate if the host should be accessed based
+  // on the field origin instead of using the last committed main frame origin
+  // and what should happen when `host` is empty.
+  return l10n_util::GetStringFUTF16(IDS_AUTOFILL_AI_FILLING_REAUTH,
+                                    base::UTF8ToUTF16(origin.host()));
+#else
+  return std::u16string();
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_IOS)
 }
 
 }  // namespace autofill

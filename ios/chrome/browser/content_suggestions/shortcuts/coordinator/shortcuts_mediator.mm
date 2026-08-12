@@ -10,6 +10,7 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/reading_list/core/reading_list_model.h"
 #import "components/reading_list/ios/reading_list_model_bridge_observer.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/content_suggestions/model/content_suggestions_metrics_recorder.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
@@ -17,25 +18,16 @@
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_action_item.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_commands.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_config.h"
-#import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_consumer.h"
-#import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_consumer_source.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_tile_view.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_consumer.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_actions_delegate.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/whats_new_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/whats_new/coordinator/whats_new_util.h"
 
-@interface ShortcutsConsumerList : CRBProtocolObservers <ShortcutsConsumer>
-@end
-
-@implementation ShortcutsConsumerList
-@end
-
-@interface ShortcutsMediator () <ReadingListModelBridgeObserver,
-                                 ShortcutsConsumerSource>
+@interface ShortcutsMediator () <ReadingListModelBridgeObserver>
 @end
 
 @implementation ShortcutsMediator {
@@ -51,7 +43,6 @@
   //  ShortcutsConfig* _shortcutsConfig;
   raw_ptr<feature_engagement::Tracker> _tracker;
   raw_ptr<signin::IdentityManager> _identityManager;
-  ShortcutsConsumerList* _consumers;
 }
 
 - (instancetype)initWithReadingListModel:(ReadingListModel*)readingListModel
@@ -67,10 +58,7 @@
 
     _shortcutsConfig = [[ShortcutsConfig alloc] init];
     _shortcutsConfig.shortcutItems = [self shortcutItems];
-    _shortcutsConfig.consumerSource = self;
     _shortcutsConfig.commandHandler = self;
-    _consumers = [ShortcutsConsumerList
-        observersWithProtocol:@protocol(ShortcutsConsumer)];
   }
   return self;
 }
@@ -101,15 +89,40 @@
   return shortcuts;
 }
 
-#pragma mark - ShortcutsConsumerSource
-
-- (void)addConsumer:(id<ShortcutsConsumer>)consumer {
-  [_consumers addObserver:consumer];
-}
-
 #pragma mark - ReadingListModelBridgeObserver
 
 - (void)readingListModelLoaded:(const ReadingListModel*)model {
+  [self readingListModelDidApplyChanges:model];
+}
+
+// Updates the config with the latest state of the ReadingListModel.
+- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model {
+  _readingListUnreadCount = model->unread_size();
+  _readingListModelIsLoaded = model->loaded();
+  if (_readingListItem) {
+    _shortcutsConfig.shortcutItems = [self shortcutItems];
+    [self.delegate shortcutsMediatorDidReconfigureItem];
+  }
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+             didAddEntry:(const GURL&)url
+             entrySource:(reading_list::EntrySource)source {
+  [self readingListModelDidApplyChanges:model];
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+         willRemoveEntry:(const GURL&)url {
+  // Note: unread_size() will update after removal completes, but we ensure
+  // we capture apply changes or removal completion.
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+          didUpdateEntry:(const GURL&)url {
+  [self readingListModelDidApplyChanges:model];
+}
+
+- (void)readingListModelCompletedBatchUpdates:(const ReadingListModel*)model {
   [self readingListModelDidApplyChanges:model];
 }
 
@@ -127,7 +140,7 @@
   [self.NTPActionsDelegate shortcutTileOpened];
   [self.delegate
       logMagicStackEngagementForType:ContentSuggestionsModuleType::kShortcuts];
-  [self.contentSuggestionsMetricsRecorder
+  [ContentSuggestionsMetricsRecorder
       recordShortcutTileTapped:shortcutsItem.collectionShortcutType];
   switch (shortcutsItem.collectionShortcutType) {
     case NTPCollectionShortcutTypeBookmark:
@@ -151,15 +164,6 @@
 
 #pragma mark - Private
 
-// Updates the config with the latest state of the ReadingListModel.
-- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model {
-  _readingListUnreadCount = model->unread_size();
-  _readingListModelIsLoaded = model->loaded();
-  if (_readingListItem) {
-    _shortcutsConfig.shortcutItems = [self shortcutItems];
-    [_consumers shortcutsItemConfigDidChange:_readingListItem];
-  }
-}
 
 // YES if the "What's New" tile should be shown in the Shortcuts module.
 - (BOOL)shouldShowWhatsNewActionItem {

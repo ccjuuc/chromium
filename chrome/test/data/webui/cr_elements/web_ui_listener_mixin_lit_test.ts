@@ -7,16 +7,20 @@ import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 
-const TestElementBase = WebUiListenerMixinLit(CrLitElement);
-class TestElement extends TestElementBase {}
-customElements.define('test-element', TestElement);
+const TestDummyElementBase = WebUiListenerMixinLit(CrLitElement);
+class TestDummyElement extends TestDummyElementBase {
+  static get is() {
+    return 'test-dummy';
+  }
+}
+customElements.define(TestDummyElement.is, TestDummyElement);
 
 suite('WebUiListenerMixinTest', function() {
-  let testElement: TestElement;
+  let testElement: TestDummyElement;
 
   setup(function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    testElement = document.createElement('test-element') as TestElement;
+    testElement = document.createElement('test-dummy') as TestDummyElement;
     document.body.appendChild(testElement);
   });
 

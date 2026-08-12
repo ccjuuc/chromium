@@ -9,8 +9,7 @@
 #include <vector>
 
 #include "cc/paint/element_id.h"
-#include "cc/trees/layer_tree_mutator.h"
-#include "cc/trees/mutator_host_client.h"
+#include "cc/trees/mutator_host_delegate.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -22,10 +21,22 @@ class TimeTicks;
 namespace cc {
 
 class MutatorEvents;
-class MutatorHostClient;
+class MutatorHostDelegate;
 class LayerTreeMutator;
 class PropertyTrees;
 class ScrollTree;
+
+struct AnimationTickResult {
+  // True if any animation changed a value this frame; callers use it to decide
+  // whether the current frame must be redrawn / committed.
+  bool animated = false;
+
+  // True if some animation needs a follow-up frame to keep progressing (callers
+  // request another BeginImplFrame). Scroll-linked animations leave this false,
+  // since new scroll input requests its own frame, letting the compositor go
+  // idle when scrolling stops.
+  bool needs_next_frame = false;
+};
 
 // Used as the return value of GetAnimationScales() to indicate that there is
 // no active transform animation or the scale cannot be computed.
@@ -37,7 +48,7 @@ inline constexpr float kInvalidScale = 0.f;
 // We synchronize them during the commit in a one-way data-flow process
 // (PushPropertiesTo).
 // A MutatorHost talks to its correspondent LayerTreeHost via
-// MutatorHostClient interface.
+// MutatorHostDelegate interface.
 class MutatorHost {
  public:
   virtual ~MutatorHost() = default;
@@ -50,7 +61,7 @@ class MutatorHost {
 
   virtual void RemoveElementId(ElementId element_id) = 0;
 
-  virtual void SetMutatorHostClient(MutatorHostClient* client) = 0;
+  virtual void SetMutatorHostDelegate(MutatorHostDelegate* delegate) = 0;
 
   virtual void SetLayerTreeMutator(
       std::unique_ptr<LayerTreeMutator> mutator) = 0;
@@ -68,9 +79,10 @@ class MutatorHost {
   virtual bool ActivateAnimations(MutatorEvents* events) = 0;
   // TODO(smcgruer): Once we only tick scroll-based animations on scroll, we
   // don't need to pass the scroll tree in here.
-  virtual bool TickAnimations(base::TimeTicks monotonic_time,
-                              const ScrollTree& scroll_tree,
-                              bool is_active_tree) = 0;
+  virtual AnimationTickResult TickAnimations(base::TimeTicks monotonic_time,
+                                             const ScrollTree& scroll_tree,
+                                             bool is_active_tree,
+                                             MutatorEvents* events) = 0;
   // Tick animations that depends on scroll offset.
   virtual void TickScrollAnimations(base::TimeTicks monotonic_time,
                                     const ScrollTree& scroll_tree) = 0;

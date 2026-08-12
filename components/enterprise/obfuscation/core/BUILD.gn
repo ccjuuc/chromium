@@ -4,10 +4,13 @@
 
 component("enterprise_obfuscation") {
   defines = [ "IS_ENTERPRISE_OBFUSCATION_IMPL" ]
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   sources = [
     "download_obfuscator.cc",
     "download_obfuscator.h",
+    "obfuscated_file_reader.cc",
+    "obfuscated_file_reader.h",
     "utils.cc",
     "utils.h",
   ]
@@ -16,26 +19,17 @@ component("enterprise_obfuscation") {
     "//base",
     "//crypto",
   ]
-
-  if (!is_android) {
-    sources += [
-      "obfuscated_file_reader.cc",
-      "obfuscated_file_reader.h",
-    ]
-  }
 }
 
 source_set("unit_tests") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   sources = [
     "download_obfuscator_unittest.cc",
+    "obfuscated_file_reader_unittest.cc",
     "utils_unittest.cc",
   ]
-
-  if (!is_android) {
-    sources += [ "obfuscated_file_reader_unittest.cc" ]
-  }
 
   deps = [
     ":enterprise_obfuscation",

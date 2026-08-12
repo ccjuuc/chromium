@@ -4,10 +4,11 @@
 
 #include "android_webview/browser/gfx/root_frame_sink.h"
 
+#include <algorithm>
+
 #include "android_webview/browser/gfx/child_frame.h"
 #include "android_webview/browser/gfx/display_scheduler_webview.h"
 #include "android_webview/browser/gfx/viz_compositor_thread_runner_webview.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/features.h"
@@ -96,10 +97,7 @@ class RootFrameSink::ChildCompositorFrameSink
 };
 
 RootFrameSink::RootFrameSink(RootFrameSinkClient* client)
-    : root_frame_sink_id_(AllocateParentSinkId()),
-      client_(client),
-      use_new_invalidate_heuristic_(
-          features::UseWebViewNewInvalidateHeuristic()) {
+    : root_frame_sink_id_(AllocateParentSinkId()), client_(client) {
   constexpr bool is_root = true;
   GetFrameSinkManager()->RegisterFrameSinkId(root_frame_sink_id_,
                                              false /* report_activationa */);
@@ -109,13 +107,7 @@ RootFrameSink::RootFrameSink(RootFrameSinkClient* client)
   GetFrameSinkManager()->RegisterBeginFrameSource(begin_frame_source_.get(),
                                                   root_frame_sink_id_);
 
-  // Note, that this technically not part of the new heuristic. Without this
-  // line root CF will "request" BeginFrames for delivery of presentation
-  // feedback that we don't care about which leads to more begin frame requested
-  // than necessary. But to avoid any side effects on invalidation, fixing this
-  // is gates under same feature flag.
-  if (use_new_invalidate_heuristic_)
-    support_->SetBeginFrameSource(nullptr);
+  support_->SetBeginFrameSource(nullptr);
 }
 
 RootFrameSink::~RootFrameSink() {
@@ -181,17 +173,9 @@ void RootFrameSink::ReclaimResources(
 
 void RootFrameSink::OnNeedsBeginFrames(bool needs_begin_frames) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  TRACE_EVENT_INSTANT1("android_webview", "RootFrameSink::OnNeedsBeginFrames",
-                       TRACE_EVENT_SCOPE_THREAD, "needs_begin_frames",
-                       needs_begin_frames);
+  TRACE_EVENT_INSTANT("android_webview", "RootFrameSink::OnNeedsBeginFrames",
+                      "needs_begin_frames", needs_begin_frames);
   clients_need_begin_frames_ = needs_begin_frames;
-
-  // Old heuristic doesn't need extra begin frames, so just forward client
-  // needs.
-  if (!use_new_invalidate_heuristic_) {
-    UpdateNeedsBeginFrames(clients_need_begin_frames_);
-    return;
-  }
 
   // Make sure that we subscribed to BF if client needs them. We don't
   // unsubscribe from BF here to make sure that we invalidated for the latest
@@ -251,13 +235,6 @@ bool RootFrameSink::HasPendingDependency(const viz::SurfaceId& surface_id) {
 }
 
 bool RootFrameSink::ProcessVisibleSurfacesInvalidation() {
-  if (!use_new_invalidate_heuristic_) {
-    // This handles only invalidation of sub clients, root client invalidation
-    // is handled by Invalidate() from cc to |SynchronousLayerTreeFrameSink|. So
-    // we return false unless we already have damage.
-    return needs_draw_;
-  }
-
   bool invalidate = false;
 
   // There are few possible cases:
@@ -324,17 +301,15 @@ bool RootFrameSink::BeginFrame(const viz::BeginFrameArgs& args,
   // it's state (e.g last invalidated begin frame args).
   bool invalidate = ProcessVisibleSurfacesInvalidation() || had_input_event;
 
-  TRACE_EVENT_INSTANT1("android_webview", "RootFrameSink::BeginFrame",
-                       TRACE_EVENT_SCOPE_THREAD, "invalidate", invalidate);
+  TRACE_EVENT_INSTANT("android_webview", "RootFrameSink::BeginFrame",
+                      "invalidate", invalidate);
 
   if (clients_need_begin_frames_) {
     begin_frame_source_->OnBeginFrame(args);
   } else if (!invalidate) {
-    if (use_new_invalidate_heuristic_) {
-      // Client don't need begin frames and we didn't invalidate, so we don't
-      // need them either.
-      UpdateNeedsBeginFrames(false);
-    }
+    // Client don't need begin frames and we didn't invalidate, so we don't
+    // need them either.
+    UpdateNeedsBeginFrames(false);
   }
 
   return invalidate;
@@ -345,25 +320,7 @@ void RootFrameSink::SetBeginFrameSourcePaused(bool paused) {
   begin_frame_source_->OnSetBeginFrameSourcePaused(paused);
 }
 
-void RootFrameSink::SetNeedsDraw(bool needs_draw) {
-  // Only old heuristic needs this.
-  DCHECK(!use_new_invalidate_heuristic_);
-
-  needs_draw_ = needs_draw;
-
-  // It's possible that client submitted last frame and unsubscribed from
-  // BeginFrames, but we haven't draw it yet.
-  if (!needs_begin_frames_ && needs_draw) {
-    if (client_)
-      client_->Invalidate();
-  }
-}
-
 void RootFrameSink::OnNewUncommittedFrame(const viz::SurfaceId& surface_id) {
-  // Only new heurstic needs this.
-  if (!use_new_invalidate_heuristic_)
-    return;
-
   // If there is new uncommitted frame in the surface that affects display, make
   // sure we request a begin frame to check if we need to invalidate next frame.
   UpdateNeedsBeginFrames(true);
@@ -425,9 +382,7 @@ void RootFrameSink::SubmitChildCompositorFrame(ChildFrame* child_frame) {
   // delay activation. Note, it's not part of invalidation heuristic, but for
   // safety we update deadline only on the new path, on the old path there are
   // almost no embedded surfaces anyway.
-  if (use_new_invalidate_heuristic_) {
-    child_frame->frame->metadata.deadline = viz::FrameDeadline::MakeZero();
-  }
+  child_frame->frame->metadata.deadline = viz::FrameDeadline::MakeZero();
 
   child_sink_support_->SubmitCompositorFrame(
       child_frame->local_surface_id, std::move(*child_frame->frame),
@@ -473,8 +428,8 @@ void RootFrameSink::EvictChildSurface(const viz::SurfaceId& surface_id) {
 }
 
 void RootFrameSink::OnCaptureStarted(const viz::FrameSinkId& frame_sink_id) {
-  if (!base::Contains(contained_surfaces_, frame_sink_id,
-                      &viz::SurfaceId::frame_sink_id)) {
+  if (!std::ranges::contains(contained_surfaces_, frame_sink_id,
+                             &viz::SurfaceId::frame_sink_id)) {
     return;
   }
   // When a capture is started we need to force an invalidate.

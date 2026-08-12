@@ -10,11 +10,11 @@
 
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
+#include "base/json/json_reader.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
-#include "base/time/time.h"
 #include "chrome/browser/media/mirroring_service_host.h"
 #include "chrome/browser/media/router/providers/cast/cast_activity.h"
 #include "chrome/browser/media/router/providers/cast/cast_session_tracker.h"
@@ -134,7 +134,7 @@ class MirroringActivity : public CastActivity,
                            MultipleMediaControllersNotified);
 
   void HandleParseJsonResult(const std::string& route_id,
-                             data_decoder::DataDecoder::ValueOrError result);
+                             const base::JSONReader::Result& result);
 
   void StopMirroring();
 
@@ -152,7 +152,7 @@ class MirroringActivity : public CastActivity,
   void OnMirroringResumed();
 
   // Scrubs AES related data in messages with type "OFFER".
-  static std::string GetScrubbedLogMessage(const base::Value::Dict& message);
+  static std::string GetScrubbedLogMessage(const base::DictValue& message);
 
   // Starts the mirroring service via the Ui thread. Can only be called on the
   // Ui thread.
@@ -180,7 +180,7 @@ class MirroringActivity : public CastActivity,
       channel_to_service_receiver_;
 
   // Most recent fetched mirroring stats.
-  base::Value::Dict most_recent_mirroring_stats_;
+  base::DictValue most_recent_mirroring_stats_;
 
   mojo::Receiver<mirroring::mojom::SessionObserver> observer_receiver_{this};
 

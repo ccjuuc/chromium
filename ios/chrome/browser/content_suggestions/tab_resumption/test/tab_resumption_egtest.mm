@@ -109,8 +109,6 @@ NSString* HostnameFromGURL(GURL URL) {
   config.features_disabled.push_back(
       visited_url_ranking::features::
           kVisitedURLRankingHistoryVisibilityScoreFilter);
-  config.features_disabled.push_back(
-      segmentation_platform::features::kSegmentationPlatformTipsEphemeralCard);
   return config;
 }
 
@@ -187,15 +185,8 @@ NSString* HostnameFromGURL(GURL URL) {
 }
 
 // Tests that the tab resumption tile is correctly displayed for a local tab.
-// TODO(crbug.com/443707327): Test disabled on simulator.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testTabResumptionTileDisplayedForLocalTab \
-  DISABLED_testTabResumptionTileDisplayedForLocalTab
-#else
-#define MAYBE_testTabResumptionTileDisplayedForLocalTab \
-  testTabResumptionTileDisplayedForLocalTab
-#endif
-- (void)MAYBE_testTabResumptionTileDisplayedForLocalTab {
+// TODO(crbug.com/443707327): Test disabled.
+- (void)FLAKY_testTabResumptionTileDisplayedForLocalTab {
   // Check that the tile is not displayed when there is no local tab.
   WaitUntilTabResumptionTileVisibleOrTimeout(false);
 

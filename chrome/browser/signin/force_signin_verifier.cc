@@ -6,18 +6,16 @@
 
 #include <string>
 
-#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "components/signin/public/base/consent_level.h"
@@ -43,8 +41,7 @@ const net::BackoffEntry::Policy kForceSigninVerifierBackoffPolicy = {
 };
 
 signin::ConsentLevel GetProfileConsentLevelToVerify(Profile* profile) {
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     return signin::ConsentLevel::kSignin;
   }
 
@@ -112,7 +109,7 @@ void ForceSigninVerifier::OnAccessTokenFetchComplete(
 }
 
 void ForceSigninVerifier::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   // Try again immediately once the network is back and cancel any pending
   // request.
   backoff_entry_.Reset();
@@ -131,7 +128,7 @@ void ForceSigninVerifier::Cancel() {
 }
 
 void ForceSigninVerifier::SendRequest() {
-  auto type = network::mojom::ConnectionType::CONNECTION_NONE;
+  auto type = net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE;
   if (content::GetNetworkConnectionTracker()->GetConnectionType(
           &type,
           base::BindOnce(&ForceSigninVerifier::SendRequestIfNetworkAvailable,
@@ -141,13 +138,14 @@ void ForceSigninVerifier::SendRequest() {
 }
 
 void ForceSigninVerifier::SendRequestIfNetworkAvailable(
-    network::mojom::ConnectionType network_type) {
+    net::NetworkChangeNotifier::ConnectionType network_type) {
   if (!identity_manager_ || !identity_manager_->AreRefreshTokensLoaded()) {
     request_waiting_for_refresh_tokens_ = true;
     return;
   }
 
-  if (network_type == network::mojom::ConnectionType::CONNECTION_NONE ||
+  if (network_type ==
+          net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE ||
       !ShouldSendRequest()) {
     return;
   }

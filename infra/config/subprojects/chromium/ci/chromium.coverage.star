@@ -6,7 +6,7 @@ load("@chromium-luci//args.star", "args")
 load("@chromium-luci//branches.star", "branches")
 load("@chromium-luci//builder_config.star", "builder_config")
 load("@chromium-luci//builder_health_indicators.star", "health_spec")
-load("@chromium-luci//builders.star", "cpu", "os")
+load("@chromium-luci//builders.star", "builders", "cpu", "os")
 load("@chromium-luci//ci.star", "ci")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//gn_args.star", "gn_args")
@@ -70,26 +70,22 @@ consoles.console_view(
 )
 
 def coverage_builder(**kwargs):
+    kwargs.setdefault("triggered_by", ["code-coverage-gitiles-trigger"])
+    kwargs.setdefault("triggering_policy", scheduler.greedy_batching(
+        max_concurrent_invocations = 2,
+    ))
     return ci.builder(
         schedule = "triggered",
-        triggered_by = ["code-coverage-gitiles-trigger"],
-        # This should allow one to be pending should code coverage
-        # builds take longer.
-        triggering_policy = scheduler.greedy_batching(
-            max_concurrent_invocations = 2,
-        ),
         **kwargs
     )
 
 def coverage_webview_builder(**kwargs):
+    kwargs.setdefault("triggered_by", ["code-coverage-webview-gitiles-trigger"])
+    kwargs.setdefault("triggering_policy", scheduler.greedy_batching(
+        max_concurrent_invocations = 2,
+    ))
     return ci.builder(
         schedule = "triggered",
-        triggered_by = ["code-coverage-webview-gitiles-trigger"],
-        # This should allow one to be pending should code coverage
-        # builds take longer.
-        triggering_policy = scheduler.greedy_batching(
-            max_concurrent_invocations = 2,
-        ),
         **kwargs
     )
 
@@ -268,11 +264,6 @@ coverage_builder(
                     "android_10_emulator_gtests",
                     "android_10_isolated_scripts",
                 ],
-                mixins = targets.mixin(
-                    args = [
-                        "--use-persistent-shell",
-                    ],
-                ),
             ),
             "chromium_android_scripts",
             "gtests_once",
@@ -287,7 +278,6 @@ coverage_builder(
             "emulator-4-cores",
             "linux-jammy",
             "x86-64",
-            "retry_only_failed_tests",
         ],
         per_test_modifications = {
             # Keep this same as android-10-x86-rel
@@ -310,9 +300,6 @@ coverage_builder(
 
             # Keep this same as android-10-x86-rel
             "chrome_public_test_apk": targets.mixin(
-                args = [
-                    "--test-launcher-filter-file=../../testing/buildbot/filters/android.emulator_10.chrome_public_test_apk.filter",
-                ],
                 swarming = targets.swarming(
                     dimensions = {
                         # use 8-core to shorten runtime
@@ -408,18 +395,12 @@ coverage_builder(
             ),
             # Keep this same as android-10-x86-rel
             "webview_instrumentation_test_apk_multiple_process_mode": targets.mixin(
-                args = [
-                    "--use-persistent-shell",
-                ],
                 swarming = targets.swarming(
                     shards = 18,
                 ),
             ),
             # Keep this same as android-10-x86-rel
             "webview_instrumentation_test_apk_single_process_mode": targets.mixin(
-                args = [
-                    "--use-persistent-shell",
-                ],
                 # Only multiple process tests run in CQ.
                 ci_only = True,
                 swarming = targets.swarming(
@@ -533,9 +514,6 @@ coverage_builder(
                 reason = "TODO(crbug.com/41440830): Fix permission issue when creating tmp files",
             ),
             "webview_instrumentation_test_apk_multiple_process_mode": targets.mixin(
-                args = [
-                    "--use-persistent-shell",
-                ],
                 swarming = targets.swarming(
                     # Shard number is increased for longer test execution time
                     # and added local coverage data merging time.
@@ -543,9 +521,6 @@ coverage_builder(
                 ),
             ),
             "webview_instrumentation_test_apk_single_process_mode": targets.mixin(
-                args = [
-                    "--use-persistent-shell",
-                ],
                 swarming = targets.swarming(
                     # Shard number is increased for longer test execution time
                     # and added local coverage data merging time.
@@ -959,6 +934,7 @@ coverage_builder(
                 "mac_toolchain",
             ],
             build_config = builder_config.build_config.DEBUG,
+            target_arch = builder_config.target_arch.ARM,
             target_bits = 64,
             target_platform = builder_config.target_platform.IOS,
         ),
@@ -1188,6 +1164,10 @@ coverage_builder(
 coverage_builder(
     name = "linux-fuzz-coverage",
     executable = "recipe:chromium/fuzz",
+    triggered_by = ["chromium-gitiles-trigger"],
+    triggering_policy = scheduler.greedy_batching(
+        max_concurrent_invocations = 1,
+    ),
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -1217,20 +1197,21 @@ coverage_builder(
             "release",
             "linux",
             "x64",
-            "no_clang_modules",
         ],
     ),
     builderless = True,
     os = os.LINUX_DEFAULT,
+    free_space = builders.free_space.high,
     console_view_entry = [
         consoles.console_view_entry(
             category = "linux-fuzz",
             short_name = "lnx-fuzz",
         ),
     ],
-    # TODO(crbug.com/449026537): Remove elevated timeout once performance
-    # improves.
-    execution_timeout = 32 * time.hour,
+    # TODO(crbug.com/449026537): Remove elevated timeout once performance improves.
+    # Note: execution timeout should be no different from what is defined below
+    # for linux-centipede-fuzz-coverage builder.
+    execution_timeout = 48 * time.hour,
     notifies = ["chrome-fuzzing-core"],
     properties = {
         "collect_fuzz_coverage": True,
@@ -1243,6 +1224,10 @@ coverage_builder(
     name = "linux-centipede-fuzz-coverage",
     description_html = "This builder collects code coverage for centipede.",
     executable = "recipe:chromium/fuzz",
+    triggered_by = ["chromium-gitiles-trigger"],
+    triggering_policy = scheduler.greedy_batching(
+        max_concurrent_invocations = 1,
+    ),
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
             config = "chromium",
@@ -1276,6 +1261,7 @@ coverage_builder(
     ),
     builderless = True,
     os = os.LINUX_DEFAULT,
+    free_space = builders.free_space.high,
     console_view_entry = [
         consoles.console_view_entry(
             category = "linux-fuzz",
@@ -1285,7 +1271,9 @@ coverage_builder(
     contact_team_email = "chrome-fuzzing-core@google.com",
     # TODO(crbug.com/449026537): Remove elevated timeout once performance
     # improves.
-    execution_timeout = 24 * time.hour,
+    # Note: execution timeout should be no different from what is defined above
+    # for linux-fuzz-coverage builder.
+    execution_timeout = 48 * time.hour,
     notifies = ["chrome-fuzzing-core"],
     properties = {
         "collect_fuzz_coverage": True,
@@ -1364,6 +1352,9 @@ coverage_builder(
         ),
     ),
     gn_args = gn_args.config(
+        args = {
+            "enable_single_byte_coverage": True,
+        },
         configs = [
             "release_builder",
             "remoteexec",
@@ -1412,6 +1403,9 @@ coverage_builder(
                     shards = 50,
                 ),
             ),
+            "check_static_initializers": targets.remove(
+                reason = "Coverage instrumentation adds static initializers, so this test will always fail.",
+            ),
             "content_browsertests": targets.mixin(
                 args = [
                     "--no-sandbox",
@@ -1434,6 +1428,7 @@ coverage_builder(
             "not_site_per_process_blink_web_tests": targets.mixin(
                 args = [
                     "--additional-env-var=LLVM_PROFILE_FILE=${ISOLATED_OUTDIR}/profraw/default-%2m%c.profraw",
+                    "--timeout-multiplier=5",
                 ],
                 swarming = targets.swarming(
                     shards = 20,
@@ -1499,6 +1494,7 @@ coverage_builder(
             config = "chromium",
             apply_configs = ["mb"],
             build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.ARM,
             target_bits = 64,
             target_platform = builder_config.target_platform.MAC,
         ),
@@ -1512,7 +1508,7 @@ coverage_builder(
             "no_symbols",
             "chrome_with_codecs",
             "mac",
-            "x64",
+            "arm64",
         ],
     ),
     targets = targets.bundle(
@@ -1524,7 +1520,7 @@ coverage_builder(
         ],
         mixins = [
             "isolate_profile_data",
-            "mac_default_x64",
+            "mac_default_arm64",
         ],
         per_test_modifications = {
             "browser_tests": targets.remove(
@@ -1561,6 +1557,65 @@ coverage_builder(
     export_coverage_to_zoss = True,
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CI,
     use_clang_coverage = True,
+)
+
+# Experimental builder. Does not export_coverage_to_zoss.
+coverage_builder(
+    name = "mac-libfuzzer-coverage",
+    description_html = "This builder collects code coverage for fuzz targets on Mac.",
+    executable = "recipe:chromium/fuzz",
+    # TODO(crbug.com/537414135): Add triggering policy once builder is stable
+    triggered_by = [],
+    triggering_policy = None,
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = ["use_clang_coverage"],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium_clang",
+            apply_configs = [
+                "clobber",
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.INTEL,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "use_clang_coverage",
+            "static",
+            "mojo_fuzzer",
+            "libfuzzer",
+            "dcheck_off",
+            "remoteexec",
+            "chrome_with_codecs",
+            "pdf_xfa",
+            "release",
+            "mac",
+            "x64",
+        ],
+    ),
+    builderless = True,
+    cores = None,
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
+    console_view_entry = [
+        consoles.console_view_entry(
+            category = "mac-fuzz",
+            short_name = "mac-libfuzz",
+        ),
+    ],
+    contact_team_email = "chrome-fuzzing-core@google.com",
+    execution_timeout = 48 * time.hour,
+    notifies = ["chrome-fuzzing-core"],
+    properties = {
+        "collect_fuzz_coverage": True,
+        "fuzz_engine": "libfuzzer",
+    },
 )
 
 coverage_builder(
@@ -1637,15 +1692,6 @@ coverage_builder(
                     shards = 2,
                 ),
             ),
-            "extensions_browsertests": targets.mixin(
-                swarming = targets.swarming(
-                    dimensions = {
-                        "pool": "chromium.tests.coverage",
-                        "ssd": "1",
-                    },
-                    shards = 2,
-                ),
-            ),
             "interactive_ui_tests": targets.mixin(
                 swarming = targets.swarming(
                     dimensions = {
@@ -1708,4 +1754,61 @@ coverage_builder(
     coverage_test_types = ["overall", "unit"],
     export_coverage_to_zoss = True,
     use_clang_coverage = True,
+)
+
+# Experimental builder. Does not export_coverage_to_zoss.
+coverage_builder(
+    name = "win-libfuzzer-coverage",
+    description_html = "This builder collects code coverage for fuzz targets on Windows.",
+    executable = "recipe:chromium/fuzz",
+    # TODO(crbug.com/537414135): Add triggering policy once builder is stable
+    triggered_by = [],
+    triggering_policy = None,
+    builder_spec = builder_config.builder_spec(
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = ["use_clang_coverage"],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium_clang",
+            apply_configs = [
+                "clobber",
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.WIN,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "asan",
+            "use_clang_coverage",
+            "static",
+            "mojo_fuzzer",
+            "libfuzzer",
+            "dcheck_off",
+            "remoteexec",
+            "chrome_with_codecs",
+            "pdf_xfa",
+            "release",
+            "win",
+            "x64",
+        ],
+    ),
+    builderless = True,
+    os = os.WINDOWS_10,
+    console_view_entry = [
+        consoles.console_view_entry(
+            category = "win-fuzz",
+            short_name = "win-libfuzz",
+        ),
+    ],
+    contact_team_email = "chrome-fuzzing-core@google.com",
+    execution_timeout = 48 * time.hour,
+    notifies = ["chrome-fuzzing-core"],
+    properties = {
+        "collect_fuzz_coverage": True,
+        "fuzz_engine": "libfuzzer",
+    },
 )

@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -38,6 +37,8 @@
 #include "chrome/browser/enterprise/platform_auth/cloud_ap_provider_win.h"
 #elif BUILDFLAG(IS_MAC)
 #include "chrome/browser/enterprise/platform_auth/extensible_enterprise_sso_provider_mac.h"
+#elif BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/enterprise/platform_auth/entra_provider_android.h"
 #endif
 
 namespace enterprise_auth {
@@ -49,8 +50,10 @@ std::unique_ptr<PlatformAuthProvider> MakeProvider() {
   return std::make_unique<CloudApProviderWin>();
 #elif BUILDFLAG(IS_MAC)
   return std::make_unique<ExtensibleEnterpriseSSOProvider>();
+#elif BUILDFLAG(IS_ANDROID)
+  return std::make_unique<EntraProviderAndroid>();
 #else
-  return nullptr;
+#error Unsupported platform
 #endif
 }
 
@@ -100,7 +103,7 @@ bool PlatformAuthProviderManager::IsEnabledFor(const GURL& url) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   return !supports_origin_filtering_ ||
-         base::Contains(origins_, url::Origin::Create(url));
+         origins_.contains(url::Origin::Create(url));
 }
 
 void PlatformAuthProviderManager::GetData(const GURL& url,

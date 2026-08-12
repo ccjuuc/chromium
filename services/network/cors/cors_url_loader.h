@@ -23,6 +23,7 @@
 #include "services/network/cors/preflight_controller.h"
 #include "services/network/public/cpp/cors/cors_error_status.h"
 #include "services/network/public/cpp/cross_origin_embedder_policy.h"
+#include "services/network/public/cpp/originating_process_id.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
 #include "services/network/public/mojom/devtools_observer.mojom.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
@@ -65,7 +66,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
   // note: `url_loader_network_service_observer` must not be null.
   CorsURLLoader(
       mojo::PendingReceiver<mojom::URLLoader> loader_receiver,
-      int32_t process_id,
+      OriginatingProcessId process_id,
       int32_t request_id,
       uint32_t options,
       DeleteCallback delete_callback,
@@ -86,6 +87,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
       scoped_refptr<SharedDictionaryStorage> shared_dictionary_storage,
       raw_ptr<mojom::SharedDictionaryAccessObserver> shared_dictionary_observer,
       NetworkContext* context,
+      std::optional<base::UnguessableToken> network_restrictions_id,
       net::CookieSettingOverrides factory_cookie_setting_overrides,
       net::CookieSettingOverrides devtools_cookie_setting_overrides);
 
@@ -100,9 +102,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
 
   // mojom::URLLoader overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int intra_priority_value) override;
@@ -120,11 +120,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
                         base::OnceCallback<void()> callback) override;
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override;
   void OnComplete(const URLLoaderCompletionStatus& status) override;
-
-  // Cancel the request because network revocation was triggered.
-  void CancelRequestIfNonceMatchesAndUrlNotExempted(
-      const base::UnguessableToken& nonce,
-      const std::set<GURL>& exemptions);
 
   static network::mojom::FetchResponseType CalculateResponseTaintingForTesting(
       const GURL& url,
@@ -207,35 +202,12 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
       const mojom::URLResponseHead& response,
       const std::string& header_name);
 
-  // Precondition: The request is cross-origin with destination
-  // `mojom::RequestDestination::kSharedStorageWorklet`.
-  //
-  // If the "Sec-Shared-Storage-Data-Origin" request header has not been set,
-  // then returns true (as no shared storage response header is required).
-  //
-  // Otherwise, there is a value for the "Sec-Shared-Storage-Data-Origin"
-  // request header. Parses this request header value into a URL. If the parsed
-  // data origin URL is valid and cross-origin to the request's URL, returns
-  // true, as again no shared storage response header is required. (Note that
-  // regular JavaScript is unable to modify the forbidden
-  // "Sec-Shared-Storage-Data-Origin" request header, and any modifications made
-  // by extensions will not be propagated back to the request's headers here).
-  //
-  // Finally, in the case where the parsed data origin URL is valid and
-  // same-origin to the request's URL, the
-  // "Shared-Storage-Cross-Origin-Worklet-Allowed" header is required. Parses
-  // the "Shared-Storage-Cross-Origin-Worklet-Allowed" response header into a
-  // Structured Fields Boolean, and returns the result. Returns false if the
-  // header does not exist or if the parsing fails.
-  bool CheckSharedStorageCrossOriginWorkletAllowedResponseHeaderIfNeeded(
-      const mojom::URLResponseHead& response);
-
   void OnSharedDictionaryWritten(bool success);
 
   mojo::Receiver<mojom::URLLoader> receiver_;
 
   // We need to save these for redirect, and DevTools.
-  const int32_t process_id_;
+  const OriginatingProcessId process_id_;
   const int32_t request_id_;
   const uint32_t options_;
 
@@ -330,6 +302,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) CorsURLLoader
   net::NetLogWithSource net_log_;
 
   const raw_ptr<NetworkContext> context_;
+
+  const std::optional<base::UnguessableToken> network_restrictions_id_;
 
   scoped_refptr<SharedDictionaryStorage> shared_dictionary_storage_;
   scoped_refptr<net::SharedDictionary> shared_dictionary_;

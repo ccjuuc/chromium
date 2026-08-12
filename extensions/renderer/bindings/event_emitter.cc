@@ -28,6 +28,9 @@ constexpr const char kListenerErrorCallbackFunctionKey[] =
     "listener_error_callback";
 constexpr const char kEventEmitterTypeName[] = "Event";
 
+constexpr const char kWebRequestEventPrefix[] = "webRequest.";
+constexpr const char kWebViewInternalEventPrefix[] = "webViewInternal.";
+
 }  // namespace
 
 EventEmitter::EventEmitter(bool supports_filters,
@@ -90,6 +93,10 @@ bool EventEmitter::HasListeners() const {
 
 size_t EventEmitter::GetNumListenersForTesting() const {
   return listeners_->GetNumListeners();
+}
+
+size_t EventEmitter::GetNumPendingFiltersForTesting() const {
+  return pending_filters_.size();
 }
 
 int EventEmitter::PushFilter(mojom::EventFilteringInfoPtr filter) {
@@ -159,13 +166,28 @@ void EventEmitter::AddListener(gin::Arguments* arguments) {
     return;
   }
 
+  v8::Local<v8::Object> options;
+  if (!arguments->PeekNext().IsEmpty()) {
+    // The `options` argument is currently limited to webRequest API only.
+    std::string_view event_name = listeners_->GetEventName();
+    if (!event_name.starts_with(kWebRequestEventPrefix) &&
+        !event_name.starts_with(kWebViewInternalEventPrefix)) {
+      arguments->ThrowTypeError("This event does not support options");
+      return;
+    }
+    if (!arguments->GetNext(&options)) {
+      arguments->ThrowTypeError("Invalid invocation");
+      return;
+    }
+  }
+
   v8::Local<v8::Context> context = arguments->GetHolderCreationContext();
   if (!gin::PerContextData::From(context)) {
     return;
   }
 
   std::string error;
-  if (!listeners_->AddListener(listener, filter, context, &error) &&
+  if (!listeners_->AddListener(listener, filter, options, context, &error) &&
       !error.empty()) {
     arguments->ThrowTypeError(error);
   }
@@ -278,6 +300,16 @@ v8::Local<v8::Value> EventEmitter::DispatchSync(
       }
       exception_handler_->HandleException(context, "Error in event handler",
                                           &try_catch);
+      // `ExceptionHandler:HandleException()` can run arbitrary JS code (e.g. if
+      // the thrown error defines a custom `stack` property getter), which might
+      // invalidate and tear down `context`. In this case, bail out to avoid
+      // executing remaining listeners on a destroyed context or dereferencing
+      // freed per-context data. We `break` so that any previous listeners
+      // return values are sent back to interested callers.
+      if (!binding::IsContextValid(context)) {
+        context.Clear();
+        break;
+      }
       try_catch.Reset();
     }
   }

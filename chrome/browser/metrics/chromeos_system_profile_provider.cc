@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "base/barrier_closure.h"
+#include "base/check_deref.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/ash/multidevice_setup/multidevice_setup_client_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
@@ -62,7 +64,7 @@ ChromeOSSystemProfileProvider::~ChromeOSSystemProfileProvider() = default;
 
 void ChromeOSSystemProfileProvider::AsyncInit(base::OnceClosure callback) {
   base::RepeatingClosure barrier = base::BarrierClosure(4, std::move(callback));
-  InitTaskGetFullHardwareClass(barrier);
+  InitTaskWaitForMachineStatisticsLoaded(barrier);
   InitTaskGetArcFeatures(barrier);
   InitTaskGetTpmFirmwareVersion(barrier);
   InitTaskGetCellularDeviceVariant(barrier);
@@ -86,6 +88,15 @@ void ChromeOSSystemProfileProvider::ProvideSystemProfileMetrics(
   metrics::SystemProfileProto::Hardware* hardware =
       system_profile_proto->mutable_hardware();
   hardware->set_full_hardware_class(full_hardware_class_);
+
+  // Updated hardware class might be updated after machine statistics are
+  // loaded, so get it here to ensure the latest value is retrieved.
+  const auto updated_hardware_class =
+      ash::system::StatisticsProvider::GetInstance()->GetUpdatedHardwareClass();
+  if (updated_hardware_class.has_value()) {
+    hardware->set_updated_hardware_class(*updated_hardware_class);
+  }
+
   display::Display::TouchSupport has_touch =
       ui::GetInternalDisplayTouchSupport();
   if (has_touch == display::Display::TouchSupport::AVAILABLE)
@@ -159,14 +170,17 @@ void ChromeOSSystemProfileProvider::WriteDemoModeDimensionMetrics(
   if (!ash::demo_mode::IsDeviceInDemoMode()) {
     return;
   }
+
+  PrefService& local_state = CHECK_DEREF(g_browser_process->local_state());
+
   metrics::SystemProfileProto::DemoModeDimensions* demo_mode_dimensions =
       system_profile_proto->mutable_demo_mode_dimensions();
-  demo_mode_dimensions->set_country(ash::demo_mode::Country());
+  demo_mode_dimensions->set_country(ash::demo_mode::Country(local_state));
 
   metrics::SystemProfileProto_DemoModeDimensions_Retailer* retailer =
       demo_mode_dimensions->mutable_retailer();
-  retailer->set_retailer_id(ash::demo_mode::RetailerName());
-  retailer->set_store_id(ash::demo_mode::StoreNumber());
+  retailer->set_retailer_id(ash::demo_mode::RetailerName(local_state));
+  retailer->set_store_id(ash::demo_mode::StoreNumber(local_state));
 
   if (ash::demo_mode::IsCloudGamingDevice()) {
     demo_mode_dimensions->add_customization_facet(
@@ -180,12 +194,12 @@ void ChromeOSSystemProfileProvider::WriteDemoModeDimensionMetrics(
   }
 
   demo_mode_dimensions->set_app_version(
-      ash::demo_mode::AppVersion().GetString());
+      ash::demo_mode::AppVersion(local_state).GetString());
   demo_mode_dimensions->set_resources_version(
-      ash::demo_mode::ResourcesVersion().GetString());
+      ash::demo_mode::ResourcesVersion(local_state).GetString());
 }
 
-void ChromeOSSystemProfileProvider::InitTaskGetFullHardwareClass(
+void ChromeOSSystemProfileProvider::InitTaskWaitForMachineStatisticsLoaded(
     base::OnceClosure callback) {
   ash::system::StatisticsProvider::GetInstance()
       ->ScheduleOnMachineStatisticsLoaded(base::BindOnce(
@@ -230,6 +244,9 @@ void ChromeOSSystemProfileProvider::OnMachineStatisticsLoaded(
               "hardware_class")) {
     full_hardware_class_ = std::string(full_hardware_class.value());
   }
+  // Calling ash::system::StatisticsProvider::GetUpdatedHardwareClass() is valid
+  // now since the initialization of updated hardware class is completed in the
+  // loading of machine statistics.
   std::move(callback).Run();
 }
 

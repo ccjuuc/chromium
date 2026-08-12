@@ -10,12 +10,10 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/permissions/permission_request_manager.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/display/screen_base.h"
-#include "ui/display/test/test_screen.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/shell.h"
@@ -66,7 +64,7 @@ class WindowManagementTest : public InProcessBrowserTest {
 #endif
 // Test that screen change events occurring while an event handler is running
 // a nested event loop (i.e. via window.print()) do not cause a crash.
-// Regression test for crbug.com/1273841
+// Regression test for crbug.com/40058028
 IN_PROC_BROWSER_TEST_F(WindowManagementTest,
                        MAYBE_NoCrashOnEventsDuringHandlerPrint) {
   // Update the display configuration to mock display changes.

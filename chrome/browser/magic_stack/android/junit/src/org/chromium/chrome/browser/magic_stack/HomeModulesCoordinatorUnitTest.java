@@ -27,10 +27,12 @@ import android.content.res.Resources;
 import android.graphics.Color;
 import android.util.DisplayMetrics;
 import android.view.ContextMenu;
+import android.view.View;
 import android.view.View.OnCreateContextMenuListener;
 import android.view.View.OnLongClickListener;
 import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
+import android.view.ViewGroup.MarginLayoutParams;
 
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.SmallTest;
@@ -44,7 +46,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
@@ -52,11 +53,14 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.Callback;
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.FeatureOverrides;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.segmentation_platform.client_util.HomeModulesRankingHelper;
@@ -72,6 +76,7 @@ import org.chromium.components.segmentation_platform.SegmentationPlatformService
 import org.chromium.components.segmentation_platform.prediction_status.PredictionStatus;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.test.util.MockitoHelper;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -79,6 +84,9 @@ import java.util.Set;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class HomeModulesCoordinatorUnitTest {
+    private static final int INITIAL_TOP_MARGIN = 12;
+    private static final int SMALL_TOP_MARGIN = 8;
+
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Activity mActivity;
@@ -92,7 +100,6 @@ public class HomeModulesCoordinatorUnitTest {
     @Mock private ApplicationInfo mApplicationInfo;
     @Mock private DisplayMetrics mDisplayMetrics;
     @Mock private HomeModulesConfigManager mHomeModulesConfigManager;
-    @Spy private ObservableSupplierImpl<Profile> mProfileSupplier;
     @Mock private Profile mProfile;
     @Mock SegmentationPlatformService mSegmentationPlatformService;
     @Mock private ModuleRegistry mModuleRegistry;
@@ -113,6 +120,8 @@ public class HomeModulesCoordinatorUnitTest {
 
     @Captor private ArgumentCaptor<OnCreateContextMenuListener> mOnCreateContextMenuListenerCaptor;
 
+    private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
+            ObservableSuppliers.createMonotonic();
     private HomeModulesCoordinator mCoordinator;
 
     @Before
@@ -125,8 +134,16 @@ public class HomeModulesCoordinatorUnitTest {
         when(mActivity.getApplicationInfo()).thenReturn(mApplicationInfo);
         when(mView.findViewById(R.id.home_modules_recycler_view)).thenReturn(mRecyclerView);
         when(mRecyclerView.getContext()).thenReturn(mActivity);
-        when(mHomeModulesConfigManager.getEnabledModuleSet())
-                .thenReturn(new HashSet<>(Set.of(ModuleType.PRICE_CHANGE, ModuleType.SINGLE_TAB)));
+        Set<Integer> enabledModules = Set.of(ModuleType.PRICE_CHANGE, ModuleType.SINGLE_TAB);
+        when(mModuleRegistry.getEnabledModuleSet()).thenReturn(new HashSet<>(enabledModules));
+
+        // Register mock builders for enabled modules to prevent NPE in mediator.
+        for (int type : enabledModules) {
+            ModuleProviderBuilder builder = mock(ModuleProviderBuilder.class);
+            when(builder.getManualRank()).thenReturn(null);
+            when(mModuleRegistry.getModuleProviderBuilder(type)).thenReturn(builder);
+        }
+
         ProfileManager.setLastUsedProfileForTesting(mProfile);
         HomeModulesRankingHelperJni.setInstanceForTesting(mHomeModulesRankingHelperJniMock);
 
@@ -208,10 +225,12 @@ public class HomeModulesCoordinatorUnitTest {
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
         // Verifies that an observer is registered to the mUiConfig on tablets.
         verify(mUiConfig).addObserver(mDisplayStyleObserver.capture());
+        assertTrue(mCoordinator.getIsSnapHelperAttachedForTesting());
 
         mCoordinator.destroy();
         verify(mUiConfig).removeObserver(mDisplayStyleObserver.capture());
         assertNull(mCoordinator.getHomeModulesContextMenuManagerForTesting());
+        assertFalse(mCoordinator.getIsSnapHelperAttachedForTesting());
     }
 
     @Test
@@ -245,10 +264,7 @@ public class HomeModulesCoordinatorUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({
-        ChromeFeatureList.EDUCATIONAL_TIP_MODULE,
-        ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER
-    })
+    @EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
     public void testOnModuleConfigChangedForEducationalTipModules() {
         assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
@@ -262,11 +278,24 @@ public class HomeModulesCoordinatorUnitTest {
                         ModuleType.TAB_GROUP_SYNC_PROMO,
                         ModuleType.QUICK_DELETE_PROMO,
                         ModuleType.HISTORY_SYNC_PROMO,
-                        ModuleType.TIPS_NOTIFICATIONS_PROMO,
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
-                        ModuleType.ADDRESS_BAR_PLACEMENT_PROMO);
-        when(mHomeModulesConfigManager.getEnabledModuleSet())
+                        ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
+                        ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
+                        ModuleType.SIGN_IN_PROMO,
+                        ModuleType.SAVE_PASSWORDS_PROMO,
+                        ModuleType.PASSWORD_CHECKUP_PROMO,
+                        ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
+                        ModuleType.NTP_THEME_PROMO);
+        when(mModuleRegistry.getEnabledModuleSet())
                 .thenReturn(new HashSet<>(expectedModuleListBeforeHidingModule));
+
+        // Register mock builders for all modules in this test.
+        for (int type : expectedModuleListBeforeHidingModule) {
+            ModuleProviderBuilder builder = mock(ModuleProviderBuilder.class);
+            when(builder.getManualRank()).thenReturn(null);
+            when(mModuleRegistry.getModuleProviderBuilder(type)).thenReturn(builder);
+        }
+
         mCoordinator = createCoordinator(/* skipInitProfile= */ false);
 
         verify(mHomeModulesConfigManager).addListener(mHomeModulesStateListener.capture());
@@ -293,8 +322,6 @@ public class HomeModulesCoordinatorUnitTest {
         mHomeModulesStateListener
                 .getValue()
                 .onModuleConfigChanged(ModuleType.TAB_GROUP_SYNC_PROMO, false);
-        expectedModuleListAfterHidingModule =
-                Set.of(ModuleType.PRICE_CHANGE, ModuleType.SINGLE_TAB);
         assertEquals(
                 expectedModuleListAfterHidingModule,
                 mCoordinator.getFilteredEnabledModuleSetForTesting());
@@ -309,6 +336,27 @@ public class HomeModulesCoordinatorUnitTest {
         mHomeModulesStateListener
                 .getValue()
                 .onModuleConfigChanged(ModuleType.ADDRESS_BAR_PLACEMENT_PROMO, true);
+        assertEquals(
+                expectedModuleListBeforeHidingModule,
+                mCoordinator.getFilteredEnabledModuleSetForTesting());
+
+        mHomeModulesStateListener
+                .getValue()
+                .onModuleConfigChanged(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER, true);
+        assertEquals(
+                expectedModuleListBeforeHidingModule,
+                mCoordinator.getFilteredEnabledModuleSetForTesting());
+
+        mHomeModulesStateListener
+                .getValue()
+                .onModuleConfigChanged(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER, false);
+        assertEquals(
+                expectedModuleListAfterHidingModule,
+                mCoordinator.getFilteredEnabledModuleSetForTesting());
+
+        mHomeModulesStateListener
+                .getValue()
+                .onModuleConfigChanged(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER, true);
         assertEquals(
                 expectedModuleListBeforeHidingModule,
                 mCoordinator.getFilteredEnabledModuleSetForTesting());
@@ -332,12 +380,12 @@ public class HomeModulesCoordinatorUnitTest {
     @SmallTest
     public void testProfileNotReady() {
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
-        Callback<Boolean> callback = Mockito.mock(Callback.class);
+        Callback<Boolean> callback = MockitoHelper.mockCallback();
         mCoordinator.show(callback);
 
-        verify(mProfileSupplier).addObserver(mProfileObserver.capture());
+        assertTrue(mProfileSupplier.hasObservers());
         mProfileSupplier.set(mProfile);
-        verify(mProfileSupplier).removeObserver(mProfileObserver.capture());
+        assertFalse(mProfileSupplier.hasObservers());
     }
 
     @Test
@@ -375,7 +423,7 @@ public class HomeModulesCoordinatorUnitTest {
     public void testOnModuleChangedCallback() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
-        Callback<Boolean> onHomeModulesShownCallback = Mockito.mock(Callback.class);
+        Callback<Boolean> onHomeModulesShownCallback = MockitoHelper.mockCallback();
         mCoordinator.setMediatorForTesting(mMediator);
         mCoordinator.setModelForTesting(mModel);
 
@@ -407,6 +455,7 @@ public class HomeModulesCoordinatorUnitTest {
         mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, mView);
         verify(mModuleProvider).onViewCreated();
         verify(mMediator).onModuleViewCreated(eq(ModuleType.SINGLE_TAB));
+        verify(mView).setFocusable(eq(true));
     }
 
     @Test
@@ -423,25 +472,94 @@ public class HomeModulesCoordinatorUnitTest {
     @Test
     @SmallTest
     public void testOnLongClick() {
-        HomeModulesContextMenuManager mHomeModulesContextMenuManager = mock();
+        HomeModulesContextMenuManager homeModulesContextMenuManager = mock();
         mCoordinator = createCoordinator(/* skipInitProfile= */ true);
         mCoordinator.setMediatorForTesting(mMediator);
-        mCoordinator.setHomeModulesContextMenuManagerForTesting(mHomeModulesContextMenuManager);
+        mCoordinator.setHomeModulesContextMenuManagerForTesting(homeModulesContextMenuManager);
         when(mMediator.getModuleProvider(ModuleType.SINGLE_TAB)).thenReturn(mModuleProvider);
         when(mView.getLayoutParams()).thenReturn(mLayoutParams);
 
         mCoordinator.onViewCreated(ModuleType.SINGLE_TAB, mView);
         verify(mView).setOnLongClickListener(mLongClickListenerCaptor.capture());
         mLongClickListenerCaptor.getValue().onLongClick(mView);
-        verify(mHomeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
+        verify(homeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
 
-        reset(mHomeModulesContextMenuManager);
+        reset(homeModulesContextMenuManager);
         verify(mView).setOnCreateContextMenuListener(mOnCreateContextMenuListenerCaptor.capture());
         mOnCreateContextMenuListenerCaptor
                 .getValue()
                 .onCreateContextMenu(
                         mock(ContextMenu.class), mView, mock(ContextMenu.ContextMenuInfo.class));
-        verify(mHomeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
+        verify(homeModulesContextMenuManager).displayMenu(eq(mView), eq(mModuleProvider));
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({ChromeFeatureList.HOME_MODULE_PREF_REFACTOR})
+    public void testAllCardsConfigChanged_FeatureEnabled() {
+        assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
+        when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
+        mCoordinator = createCoordinator(/* skipInitProfile= */ false);
+
+        verify(mHomeModulesConfigManager).addListener(mHomeModulesStateListener.capture());
+
+        mHomeModulesStateListener.getValue().allCardsConfigChanged(false);
+        verify(mRecyclerView).setVisibility(eq(View.GONE));
+
+        mHomeModulesStateListener.getValue().allCardsConfigChanged(true);
+        verify(mRecyclerView).setVisibility(eq(View.VISIBLE));
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures({ChromeFeatureList.HOME_MODULE_PREF_REFACTOR})
+    public void testAllCardsConfigChanged_FeatureDisabled() {
+        assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity));
+        when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
+        mCoordinator = createCoordinator(/* skipInitProfile= */ false);
+
+        verify(mHomeModulesConfigManager).addListener(mHomeModulesStateListener.capture());
+
+        mHomeModulesStateListener.getValue().allCardsConfigChanged(false);
+        verify(mRecyclerView, never()).setVisibility(eq(View.GONE));
+
+        mHomeModulesStateListener.getValue().allCardsConfigChanged(true);
+        verify(mRecyclerView, never()).setVisibility(eq(View.VISIBLE));
+    }
+
+    @Test
+    @SmallTest
+    public void testAuroraPaddingStyle_Default() {
+        testAuroraPaddingStyleImpl(
+                PaddingStyle.DEFAULT, INITIAL_TOP_MARGIN, /* expectChange= */ false);
+    }
+
+    @Test
+    @SmallTest
+    public void testAuroraPaddingStyle_NonDefault() {
+        testAuroraPaddingStyleImpl(PaddingStyle.SMALL, SMALL_TOP_MARGIN, /* expectChange= */ true);
+    }
+
+    private void testAuroraPaddingStyleImpl(
+            int paddingStyle, int expectedTopMargin, boolean expectChange) {
+        MarginLayoutParams marginLayoutParams =
+                new MarginLayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        marginLayoutParams.topMargin = INITIAL_TOP_MARGIN;
+        when(mRecyclerView.getLayoutParams()).thenReturn(marginLayoutParams);
+        when(mResources.getDimensionPixelSize(R.dimen.ntp_section_top_margin_small))
+                .thenReturn(SMALL_TOP_MARGIN);
+
+        FeatureOverrides.overrideParam(ChromeFeatureList.NTP_AURORA, "padding_style", paddingStyle);
+
+        mCoordinator = createCoordinator(/* skipInitProfile= */ false);
+
+        assertEquals(expectedTopMargin, marginLayoutParams.topMargin);
+        if (expectChange) {
+            verify(mRecyclerView).setLayoutParams(marginLayoutParams);
+        } else {
+            verify(mRecyclerView, never()).setLayoutParams(any());
+        }
     }
 
     private void setupAndVerifyTablets() {

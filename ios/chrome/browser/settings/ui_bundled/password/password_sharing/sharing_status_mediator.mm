@@ -14,7 +14,7 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/common/ui/favicon/favicon_constants.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -103,8 +103,7 @@ const CGFloat kProfileImageSize = 60.0;
 
 // Fetches and returns sender's profile image from account manager service.
 - (UIImage*)fetchSenderImage {
-  id<SystemIdentity> identity =
-      _authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = _authService->GetPrimaryIdentity();
   if (identity) {
     return CircularImageFromImage(
         GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
@@ -112,8 +111,7 @@ const CGFloat kProfileImageSize = 60.0;
         kProfileImageSize);
   }
 
-  return DefaultSymbolTemplateWithPointSize(kPersonCropCircleSymbol,
-                                            kProfileImageSize);
+  return SymbolTemplateWithPointSize(SymbolPersonCropCircle, kProfileImageSize);
 }
 
 // Creates a multi-avatar image of recipients from their profile images.

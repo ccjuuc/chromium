@@ -9,9 +9,13 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
 #include "chrome/browser/ui/views/chrome_widget_sublevel.h"
 #include "chrome/browser/ui/views/device_chooser_content_view.h"
@@ -21,20 +25,21 @@
 #include "extensions/buildflags/buildflags.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/bubble/bubble_frame_view.h"
-#include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/styled_label.h"
 #include "ui/views/controls/table/table_view_observer.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "chrome/browser/ui/views/extensions/extensions_container_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "extensions/browser/app_window/app_window_registry.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #endif
 
@@ -61,8 +66,9 @@ class ChooserBubbleUiViewDelegate : public LocationBarBubbleDelegateView,
  public:
   ChooserBubbleUiViewDelegate(
       Browser* browser,
-      content::WebContents* web_contents,
-      std::unique_ptr<permissions::ChooserController> chooser_controller);
+      content::WebContents* contents,
+      std::unique_ptr<permissions::ChooserController> chooser_controller,
+      base::ScopedClosureRunner fullscreen_blocker);
 
   ChooserBubbleUiViewDelegate(const ChooserBubbleUiViewDelegate&) = delete;
   ChooserBubbleUiViewDelegate& operator=(const ChooserBubbleUiViewDelegate&) =
@@ -95,16 +101,22 @@ class ChooserBubbleUiViewDelegate : public LocationBarBubbleDelegateView,
  private:
   raw_ptr<DeviceChooserContentView> device_chooser_content_view_ = nullptr;
 
+  // Prevent the tab from entering content fullscreen mode while the chooser
+  // bubble is visible.
+  base::ScopedClosureRunner fullscreen_blocker_;
+
   base::WeakPtrFactory<ChooserBubbleUiViewDelegate> weak_ptr_factory_{this};
 };
 
 ChooserBubbleUiViewDelegate::ChooserBubbleUiViewDelegate(
     Browser* browser,
     content::WebContents* contents,
-    std::unique_ptr<permissions::ChooserController> chooser_controller)
+    std::unique_ptr<permissions::ChooserController> chooser_controller,
+    base::ScopedClosureRunner fullscreen_blocker)
     : LocationBarBubbleDelegateView(
           GetChooserAnchorConfiguration(browser).anchor,
-          contents) {
+          contents),
+      fullscreen_blocker_(std::move(fullscreen_blocker)) {
   // ------------------------------------
   // | Chooser bubble title             |
   // | -------------------------------- |
@@ -169,8 +181,21 @@ void ChooserBubbleUiViewDelegate::OnSelectionChanged() {
 void ChooserBubbleUiViewDelegate::UpdateAnchor(Browser* browser) {
   AnchorConfiguration configuration = GetChooserAnchorConfiguration(browser);
   SetAnchor(configuration.anchor);
-  SetHighlightedButton(configuration.highlighted_button);
-  if (std::holds_alternative<std::nullptr_t>(configuration.anchor)) {
+  // In fullscreen, `anchor` may be nullptr therefore anchor to the browser
+  // window instead.
+  if (View* view = configuration.anchor.GetIfView()) {
+    set_parent_window(view->GetWidget()->GetNativeView());
+  } else if (ui::TrackedElement* element =
+                 configuration.anchor.GetIfElement()) {
+    set_parent_window(element->GetNativeView());
+  } else {
+    set_parent_window(platform_util::GetViewForWindow(
+        browser->GetWindow()->GetNativeWindow()));
+  }
+  if (configuration.highlighted_element) {
+    SetHighlightedElement(*configuration.highlighted_element);
+  }
+  if (configuration.anchor.IsNull()) {
     SetAnchorRect(GetChooserAnchorRect(browser));
   }
   SetArrow(configuration.bubble_arrow);
@@ -204,29 +229,37 @@ base::OnceClosure ShowDeviceChooserDialogForExtension(
     const extensions::Extension* extension,
     std::unique_ptr<permissions::ChooserController> controller) {
   auto* contents = content::WebContents::FromRenderFrameHost(owner);
-  auto* browser = chrome::FindBrowserWithTab(contents);
+  auto* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents);
   if (!browser) {
     return base::DoNothing();
   }
 
-  if (browser->tab_strip_model()->GetActiveWebContents() != contents) {
+  if (browser->GetTabStripModel()->GetActiveWebContents() != contents) {
     return base::DoNothing();
   }
 
-  // `GetExtensionsToolbarContainer` may return `nullptr`, for instance in
+  // `GetExtensionsContainerViews` may return `nullptr`, for instance in
   // extension popup windows.
-  auto* extensions_toolbar_container =
-      BrowserView::GetBrowserViewForBrowser(browser)
-          ->toolbar_button_provider()
-          ->GetExtensionsToolbarContainer();
-  if (!extensions_toolbar_container) {
+  auto* extensions_toolbar = BrowserView::GetBrowserViewForBrowser(browser)
+                                 ->toolbar_button_provider()
+                                 ->GetExtensionsContainerViews();
+  if (!extensions_toolbar) {
+    return base::DoNothing();
+  }
+
+  std::optional<base::ScopedClosureRunner> fullscreen_blocker =
+      contents->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+  if (!fullscreen_blocker.has_value()) {
+    // The WebContents ha been destroyed, bail out.
     return base::DoNothing();
   }
 
   auto bubble = std::make_unique<ChooserBubbleUiViewDelegate>(
-      browser, contents, std::move(controller));
+      browser->GetBrowserForMigrationOnly(), contents, std::move(controller),
+      std::move(fullscreen_blocker).value());
   base::OnceClosure close_closure = bubble->MakeCloseClosure();
-  extensions_toolbar_container->ShowWidgetForExtension(
+  extensions_toolbar->ShowWidgetForExtension(
       views::BubbleDialogDelegateView::CreateBubble(std::move(bubble)),
       extension->id());
   return close_closure;
@@ -263,25 +296,28 @@ base::OnceClosure ShowDeviceChooserDialog(
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-  auto* browser = chrome::FindBrowserWithTab(contents);
+  auto* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents);
   if (!browser) {
     return base::DoNothing();
   }
 
-  if (browser->tab_strip_model()->GetActiveWebContents() != contents) {
+  if (browser->GetTabStripModel()->GetActiveWebContents() != contents) {
+    return base::DoNothing();
+  }
+
+  std::optional<base::ScopedClosureRunner> fullscreen_blocker =
+      contents->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+  if (!fullscreen_blocker.has_value()) {
+    // The WebContents ha been destroyed, bail out.
     return base::DoNothing();
   }
 
   auto bubble = std::make_unique<ChooserBubbleUiViewDelegate>(
-      browser, contents, std::move(controller));
+      browser->GetBrowserForMigrationOnly(), contents, std::move(controller),
+      std::move(fullscreen_blocker).value());
 
-  // Set |parent_window_| because some valid anchors can become hidden.
-  views::Widget* parent_widget = views::Widget::GetWidgetForNativeWindow(
-      browser->window()->GetNativeWindow());
-  gfx::NativeView parent = parent_widget->GetNativeView();
-  DCHECK(parent);
-  bubble->set_parent_window(parent);
-  bubble->UpdateAnchor(browser);
+  bubble->UpdateAnchor(browser->GetBrowserForMigrationOnly());
 
   base::OnceClosure close_closure = bubble->MakeCloseClosure();
   views::Widget* widget =
@@ -293,7 +329,8 @@ base::OnceClosure ShowDeviceChooserDialog(
   // then our widget is also always-on-top and needs to be tracked by the
   // PictureInPictureOcclusionTracker so it can handle our widget occluding
   // other widgets.
-  if (browser->is_type_picture_in_picture()) {
+  if (browser->GetType() ==
+      BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE) {
     PictureInPictureOcclusionTracker* tracker =
         PictureInPictureWindowManager::GetInstance()->GetOcclusionTracker();
     if (tracker) {

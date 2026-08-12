@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.findinpage;
 
 import android.view.View;
 import android.view.ViewStub;
+import android.widget.FrameLayout;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -20,6 +21,7 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.ui.base.WindowAndroid;
@@ -35,6 +37,8 @@ public class FindToolbarManagerTest {
     @Mock private Tab mTab;
     @Mock private ViewStub mViewStub;
     @Mock private FindToolbar mFindToolbar;
+    @Mock private FrameLayout mSecondaryUiContainer;
+    @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
 
     @Before
     public void setUp() {
@@ -47,7 +51,9 @@ public class FindToolbarManagerTest {
                         mTabModelSelector,
                         Mockito.mock(WindowAndroid.class),
                         null,
-                        null);
+                        null,
+                        mSecondaryUiContainer,
+                        mBrowserControlsStateProvider);
     }
 
     @Test

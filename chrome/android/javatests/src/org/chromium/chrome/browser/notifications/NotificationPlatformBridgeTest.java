@@ -45,6 +45,7 @@ import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.notifications.NotificationContentDetectionManager.SuspiciousNotificationWarningInteractions;
@@ -52,7 +53,6 @@ import org.chromium.chrome.browser.permissions.PermissionTestRule;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.TabTitleObserver;
 import org.chromium.components.browser_ui.notifications.MockNotificationManagerProxy.NotificationEntry;
@@ -80,9 +80,10 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @Features.DisableFeatures(ChromeFeatureList.REPORT_NOTIFICATION_CONTENT_DETECTION_DATA)
 public class NotificationPlatformBridgeTest {
-    @Rule public PermissionTestRule mPermissionTestRule = new PermissionTestRule();
-
     @Rule public NotificationTestRule mNotificationTestRule = new NotificationTestRule();
+
+    @Rule
+    public PermissionTestRule mPermissionTestRule = new PermissionTestRule(mNotificationTestRule);
 
     private static final String NOTIFICATION_TEST_PAGE =
             "/chrome/test/data/notifications/android_test.html";
@@ -112,7 +113,6 @@ public class NotificationPlatformBridgeTest {
     public void setUp() {
         SiteEngagementService.setParamValuesForTesting();
         mNotificationTestRule.loadUrl(mPermissionTestRule.getURL(NOTIFICATION_TEST_PAGE));
-        mPermissionTestRule.setActivity(mNotificationTestRule.getActivity());
     }
 
     @SuppressWarnings("MissingFail")
@@ -139,7 +139,7 @@ public class NotificationPlatformBridgeTest {
     }
 
     private double getEngagementScoreBlocking() {
-        // TODO (https://crbug.com/1063807):  Add incognito mode tests.
+        // TODO (https://crbug.com/40680929):  Add incognito mode tests.
         return ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         SiteEngagementService.getForBrowserContext(
@@ -154,7 +154,7 @@ public class NotificationPlatformBridgeTest {
     @LargeTest
     @Feature({"Browser", "Notifications"})
     @Test
-    @DisabledTest(message = "https://crbug.com/1435133")
+    @DisabledTest(message = "https://crbug.com/40904618")
     public void testPermissionDenied() throws Exception {
         // Notifications permission should initially be prompt, and showing should fail.
         Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
@@ -174,8 +174,7 @@ public class NotificationPlatformBridgeTest {
                 NOTIFICATION_TEST_PAGE,
                 "Notification.requestPermission(addCountAndSendToTest)",
                 1,
-                false,
-                true);
+                false);
 
         // This should have caused notifications permission to become denied.
         Assert.assertEquals("\"denied\"", runJavaScript("Notification.permission"));
@@ -199,7 +198,7 @@ public class NotificationPlatformBridgeTest {
     @MediumTest
     @Feature({"Browser", "Notifications"})
     @Test
-    @DisabledTest(message = "https://crbug.com/1435133")
+    @DisabledTest(message = "https://crbug.com/40904618")
     public void testPermissionGranted() throws Exception {
         // Notifications permission should initially be prompt, and showing should fail.
         Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
@@ -219,8 +218,7 @@ public class NotificationPlatformBridgeTest {
                 NOTIFICATION_TEST_PAGE,
                 "Notification.requestPermission(addCountAndSendToTest)",
                 1,
-                false,
-                true);
+                false);
 
         // Reload page to ensure the grant is persisted.
         mNotificationTestRule.loadUrl(mPermissionTestRule.getURL(NOTIFICATION_TEST_PAGE));
@@ -796,9 +794,7 @@ public class NotificationPlatformBridgeTest {
 
         // Wait for the `provisionally unsubscribed` notification to disappear.
         mNotificationTestRule.waitForNotificationCount(0);
-
-        // This should have caused notifications permission to become reset.
-        Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
+        waitForPermissionToBecomeDefault();
         checkThatShowNotificationIsDenied();
 
         // Validate histogram is logged correctly.
@@ -1138,6 +1134,7 @@ public class NotificationPlatformBridgeTest {
 
         // Wait for the `provisionally unsubscribed` notification to disappear.
         mNotificationTestRule.waitForNotificationCount(0);
+        waitForPermissionToBecomeDefault();
 
         // Validate histogram is logged correctly.
         histogramWatcher.assertExpected();
@@ -1349,6 +1346,7 @@ public class NotificationPlatformBridgeTest {
 
         // Wait for the `provisionally unsubscribed` notification to disappear.
         mNotificationTestRule.waitForNotificationCount(0);
+        waitForPermissionToBecomeDefault();
 
         // Validate nothing is logged.
         Assert.assertTrue(
@@ -1601,9 +1599,7 @@ public class NotificationPlatformBridgeTest {
 
         // Notification with "report" button should have been dismissed.
         mNotificationTestRule.waitForNotificationCount(0);
-
-        // This should have caused notifications permission to become reset.
-        Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
+        waitForPermissionToBecomeDefault();
         checkThatShowNotificationIsDenied();
 
         // Validate histogram is logged correctly.
@@ -1676,9 +1672,7 @@ public class NotificationPlatformBridgeTest {
 
         // Notification with "report" button should have been dismissed.
         mNotificationTestRule.waitForNotificationCount(0);
-
-        // This should have caused notifications permission to become reset.
-        Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
+        waitForPermissionToBecomeDefault();
         checkThatShowNotificationIsDenied();
 
         // Validate histogram is logged correctly.
@@ -1762,9 +1756,7 @@ public class NotificationPlatformBridgeTest {
 
         // Wait for the `provisionally unsubscribed` notification to disappear.
         mNotificationTestRule.waitForNotificationCount(0);
-
-        // This should have caused notifications permission to become reset.
-        Assert.assertEquals("\"default\"", runJavaScript("Notification.permission"));
+        waitForPermissionToBecomeDefault();
         checkThatShowNotificationIsDenied();
 
         // Validate histogram is logged correctly.
@@ -1841,6 +1833,7 @@ public class NotificationPlatformBridgeTest {
 
         // Wait for the notification to be removed.
         mNotificationTestRule.waitForNotificationCount(0);
+        waitForPermissionToBecomeDefault();
 
         // Re-subscribe to notifications.
         mNotificationTestRule.setNotificationContentSettingForOrigin(
@@ -1919,7 +1912,7 @@ public class NotificationPlatformBridgeTest {
 
         // Delete suspicious notification backups stored in the
         // `NotificationContentDetectionManager`.
-        NotificationContentDetectionManager.sWarningNotificationAttributesByOrigin.clear();
+        NotificationContentDetectionManager.clearWarningNotificationAttributesByOriginForTesting();
 
         // Tap "Show notification(s)".
         PendingIntent showOriginalsIntent = warningNotification.actions[1].actionIntent;
@@ -1963,6 +1956,21 @@ public class NotificationPlatformBridgeTest {
                         + options
                         + "))"
                         + ".catch(sendToTest)");
+    }
+
+    private void waitForPermissionToBecomeDefault() {
+        CriteriaHelper.pollInstrumentationThread(
+                () -> {
+                    try {
+                        String permission = runJavaScript("Notification.permission");
+                        Criteria.checkThat(
+                                "Notification permission did not become default",
+                                permission,
+                                Matchers.equalTo("\"default\""));
+                    } catch (TimeoutException e) {
+                        throw new AssertionError("Failed to evaluate JavaScript", e);
+                    }
+                });
     }
 
     private String runJavaScript(String code) throws TimeoutException {

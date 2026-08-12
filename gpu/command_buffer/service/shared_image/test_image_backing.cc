@@ -6,8 +6,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
+#include "gpu/command_buffer/service/shared_image/skia_graphite_dawn_image_representation.h"
 #include "skia/ext/legacy_display_globals.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
@@ -15,6 +17,10 @@
 #include "third_party/skia/include/gpu/ganesh/gl/GrGLTypes.h"
 #include "third_party/skia/include/gpu/ganesh/mock/GrMockTypes.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
+
+#if BUILDFLAG(SKIA_USE_DAWN)
+#include "gpu/command_buffer/service/dawn_context_provider.h"
+#endif
 
 namespace gpu {
 namespace {
@@ -28,7 +34,7 @@ class TestGLTextureImageRepresentation : public GLTextureImageRepresentation {
       : GLTextureImageRepresentation(manager, backing, tracker),
         textures_(std::move(textures)) {}
 
-  gles2::Texture* GetTexture(int plane_index) override {
+  gles2::Texture* GetTexture(size_t plane_index) override {
     DCHECK(backing()->format().IsValidPlaneIndex(plane_index));
     return textures_[plane_index];
   }
@@ -53,7 +59,7 @@ class TestGLTexturePassthroughImageRepresentation
         textures_(std::move(textures)) {}
 
   const scoped_refptr<gles2::TexturePassthrough>& GetTexturePassthrough(
-      int plane_index) override {
+      size_t plane_index) override {
     DCHECK(backing()->format().IsValidPlaneIndex(plane_index));
     return textures_[plane_index];
   }
@@ -139,58 +145,17 @@ class TestDawnImageRepresentation : public DawnImageRepresentation {
   void EndAccess() override {}
 };
 
-class TestMetalSkiaGraphiteImageRepresentation
-    : public SkiaGraphiteImageRepresentation {
- public:
-  TestMetalSkiaGraphiteImageRepresentation(SharedImageManager* manager,
-                                           SharedImageBacking* backing,
-                                           MemoryTypeTracker* tracker)
-      : SkiaGraphiteImageRepresentation(manager, backing, tracker) {}
-
-  std::vector<scoped_refptr<GraphiteTextureHolder>> BeginReadAccess() override {
-    return {};
-  }
-  void EndReadAccess() override {}
-
-  std::vector<sk_sp<SkSurface>> BeginWriteAccess(
-      const SkSurfaceProps& surface_props,
-      const gfx::Rect& update_rect) override {
-    std::vector<sk_sp<SkSurface>> surfaces;
-    for (int plane = 0; plane < format().NumberOfPlanes(); plane++) {
-      auto plane_size = format().GetPlaneSize(plane, size());
-      surfaces.push_back(
-          SkSurfaces::Null(plane_size.width(), plane_size.height()));
-    }
-    return surfaces;
-  }
-  std::vector<scoped_refptr<GraphiteTextureHolder>> BeginWriteAccess()
-      override {
-    return {};
-  }
-  void EndWriteAccess() override {}
-};
-
 }  // namespace
 
 TestImageBacking::TestImageBacking(const Mailbox& mailbox,
-                                   viz::SharedImageFormat format,
-                                   const gfx::Size& size,
-                                   const gfx::ColorSpace& color_space,
-                                   GrSurfaceOrigin surface_origin,
-                                   SkAlphaType alpha_type,
-                                   SharedImageUsageSet usage,
+                                   const SharedImageInfo& si_info,
                                    size_t estimated_size,
                                    GLuint texture_id)
     : SharedImageBacking(mailbox,
-                         format,
-                         size,
-                         color_space,
-                         surface_origin,
-                         alpha_type,
-                         usage,
-                         "TestBacking",
+                         si_info,
                          estimated_size,
                          /*is_thread_safe=*/false) {
+  auto format = si_info.format;
   const int num_textures =
       format.PrefersExternalSampler() ? 1 : format.NumberOfPlanes();
   textures_.reserve(num_textures);
@@ -207,7 +172,7 @@ TestImageBacking::TestImageBacking(const Mailbox& mailbox,
     texture->set_wrap_s(GL_CLAMP_TO_EDGE);
     GLFormatDesc format_desc =
         GLFormatCaps().ToGLFormatDesc(format, /*plane_index=*/plane);
-    gfx::Size plane_size = format.GetPlaneSize(plane, size);
+    gfx::Size plane_size = format.GetPlaneSize(plane, si_info.size);
     texture->SetLevelInfo(GL_TEXTURE_2D, 0, format_desc.image_internal_format,
                           plane_size.width(), plane_size.height(), 1, 0,
                           format_desc.data_format, format_desc.data_type,
@@ -221,20 +186,10 @@ TestImageBacking::TestImageBacking(const Mailbox& mailbox,
 }
 
 TestImageBacking::TestImageBacking(const Mailbox& mailbox,
-                                   viz::SharedImageFormat format,
-                                   const gfx::Size& size,
-                                   const gfx::ColorSpace& color_space,
-                                   GrSurfaceOrigin surface_origin,
-                                   SkAlphaType alpha_type,
-                                   SharedImageUsageSet usage,
+                                   const SharedImageInfo& si_info,
                                    size_t estimated_size)
     : TestImageBacking(mailbox,
-                       format,
-                       size,
-                       color_space,
-                       surface_origin,
-                       alpha_type,
-                       usage,
+                       si_info,
                        estimated_size,
                        /*texture_id=*/203) {
   // Using a dummy |texture_id|, so lose our context so we don't do anything
@@ -290,7 +245,7 @@ void TestImageBacking::SetPurgeable(bool purgeable) {
 bool TestImageBacking::UploadFromMemory(const std::vector<SkPixmap>& pixmap) {
   DCHECK_EQ(format().NumberOfPlanes(), static_cast<int>(pixmap.size()));
   upload_from_memory_called_ = true;
-  return true;
+  return upload_from_memory_succeeds_;
 }
 
 bool TestImageBacking::ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) {
@@ -389,12 +344,18 @@ TestImageBacking::ProduceSkiaGraphite(
     SharedImageManager* manager,
     MemoryTypeTracker* tracker,
     scoped_refptr<SharedContextState> context_state) {
-#if BUILDFLAG(SKIA_USE_METAL)
-  return std::make_unique<TestMetalSkiaGraphiteImageRepresentation>(
-      manager, this, tracker);
-#else
+#if BUILDFLAG(SKIA_USE_DAWN)
+  if (context_state->IsGraphiteDawn()) {
+    return std::make_unique<SkiaGraphiteDawnImageRepresentation>(
+        ProduceDawn(manager, tracker,
+                    context_state->dawn_context_provider()->GetDevice(),
+                    context_state->dawn_context_provider()->backend_type(),
+                    /*view_formats=*/{}, context_state),
+        context_state, context_state->gpu_main_graphite_recorder(), manager,
+        this, tracker);
+  }
+#endif
   return nullptr;
-#endif  // BUILDFLAG(SKIA_USE_METAL)
 }
 
 std::unique_ptr<OverlayImageRepresentation> TestImageBacking::ProduceOverlay(

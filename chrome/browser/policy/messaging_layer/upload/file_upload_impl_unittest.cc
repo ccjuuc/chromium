@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -24,6 +23,7 @@
 #include "base/sequence_checker.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/policy/uploading/upload_job_impl.h"
@@ -43,6 +43,7 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_network_context_client.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
@@ -221,6 +222,61 @@ class FakeOAuth2AccessTokenManagerDelegate
     return CoreAccountId::FromEmail(kRobotAccountId) == account_id;
   }
 };
+
+class InterceptingURLLoaderFactory : public ::network::SharedURLLoaderFactory {
+ public:
+  explicit InterceptingURLLoaderFactory(
+      scoped_refptr<::network::SharedURLLoaderFactory> impl)
+      : impl_(std::move(impl)) {}
+
+  void CreateLoaderAndStart(
+      ::mojo::PendingReceiver<::network::mojom::URLLoader> loader,
+      int32_t request_id,
+      uint32_t options,
+      const ::network::ResourceRequest& request,
+      ::mojo::PendingRemote<::network::mojom::URLLoaderClient> client,
+      const ::net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
+      override {
+    {
+      base::AutoLock auto_lock(lock_);
+      intercepted_requests_.push_back(request);
+    }
+    impl_->CreateLoaderAndStart(std::move(loader), request_id, options, request,
+                                std::move(client), traffic_annotation);
+  }
+
+  void Clone(::mojo::PendingReceiver<::network::mojom::URLLoaderFactory>
+                 receiver) override {
+    impl_->Clone(std::move(receiver));
+  }
+
+  std::unique_ptr<::network::PendingSharedURLLoaderFactory> Clone() override {
+    return impl_->Clone();
+  }
+
+  bool BypassRedirectChecks() const override {
+    return impl_->BypassRedirectChecks();
+  }
+
+  std::vector<::network::ResourceRequest> GetInterceptedRequests() {
+    base::AutoLock auto_lock(lock_);
+    return intercepted_requests_;
+  }
+
+  void ClearInterceptedRequests() {
+    base::AutoLock auto_lock(lock_);
+    intercepted_requests_.clear();
+  }
+
+ private:
+  friend class base::RefCounted<InterceptingURLLoaderFactory>;
+  ~InterceptingURLLoaderFactory() override = default;
+
+  scoped_refptr<::network::SharedURLLoaderFactory> impl_;
+  base::Lock lock_;
+  std::vector<::network::ResourceRequest> intercepted_requests_
+      GUARDED_BY(lock_);
+};
 }  // namespace
 
 class FileUploadDelegateTest : public ::testing::Test {
@@ -235,17 +291,31 @@ class FileUploadDelegateTest : public ::testing::Test {
     memory_resource_ =
         base::MakeRefCounted<ResourceManager>(4u * 1024LLu * 1024LLu);  // 4 MiB
 
-    url_loader_factory_ =
-        base::MakeRefCounted<::network::TestSharedURLLoaderFactory>();
+    url_loader_factory_ = base::MakeRefCounted<InterceptingURLLoaderFactory>(
+        base::MakeRefCounted<::network::TestSharedURLLoaderFactory>());
     test_server_.RegisterRequestHandler(base::BindRepeating(
         &FileUploadDelegateTest::HandlePostRequest, base::Unretained(this)));
     ASSERT_TRUE(test_server_.Start());
     PrepareFileForUpload();
+    FileUploadDelegate::SetAllowedDirectoryForTesting(&temp_dir_.GetPath());
   }
 
   void TearDown() override {
+    FileUploadDelegate::SetAllowedDirectoryForTesting(nullptr);
     ASSERT_TRUE(test_server_.ShutdownAndWaitUntilComplete());
     EXPECT_THAT(memory_resource_->GetUsed(), Eq(0uL));
+    VerifyInterceptedRequests();
+  }
+
+  void VerifyInterceptedRequests() {
+    if (!url_loader_factory_) {
+      return;
+    }
+    for (const auto& request : url_loader_factory_->GetInterceptedRequests()) {
+      EXPECT_EQ(request.credentials_mode,
+                ::network::mojom::CredentialsMode::kOmit);
+    }
+    url_loader_factory_->ClearInterceptedRequests();
   }
 
   std::unique_ptr<FileUploadDelegate> PrepareFileUploadDelegate() {
@@ -270,9 +340,8 @@ class FileUploadDelegateTest : public ::testing::Test {
     ASSERT_TRUE(file.IsValid());
     ASSERT_THAT(file.error_details(), Eq(base::File::FILE_OK));
 
-    const int bytes_written =
-        UNSAFE_TODO(file.Write(0, kTestData, kTestDataSize));
-    EXPECT_THAT(bytes_written, Eq(static_cast<int>(kTestDataSize)));
+    EXPECT_TRUE(file.WriteAndCheck(
+        0, base::as_byte_span(kTestData).first(kTestDataSize)));
   }
 
   std::unique_ptr<::net::test_server::HttpResponse> HandlePostRequest(
@@ -362,7 +431,7 @@ class FileUploadDelegateTest : public ::testing::Test {
   base::ScopedTempDir temp_dir_;
   base::FilePath origin_path_;
   ::net::EmbeddedTestServer test_server_;
-  scoped_refptr<::network::TestSharedURLLoaderFactory> url_loader_factory_;
+  scoped_refptr<InterceptingURLLoaderFactory> url_loader_factory_;
   FakeOAuth2AccessTokenManagerDelegate token_manager_delegate_;
 };
 
@@ -999,6 +1068,124 @@ TEST_F(FileUploadDelegateTest, FinishFailures) {
   }
 }
 
+TEST_F(FileUploadDelegateTest, RejectRelativePath) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // Prepare access tokens.
+  access_token_manager_.SetTokenValid(kTokenValid);
+  access_token_manager_.AddTokenToQueue(kTokenValid);
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*total*/, std::string /*session_token*/>>>
+      init_done;
+  delegate->DoInitiate("relative/path/to/file", "some_parameters",
+                       init_done.cb());
+  EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectPathWithParentReferences) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // Prepare access tokens.
+  access_token_manager_.SetTokenValid(kTokenValid);
+  access_token_manager_.AddTokenToQueue(kTokenValid);
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*total*/, std::string /*session_token*/>>>
+      init_done;
+  delegate->DoInitiate("/var/spool/support/../unsafe_file", "some_parameters",
+                       init_done.cb());
+  EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectUnallowedDirectory) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // Prepare access tokens.
+  access_token_manager_.SetTokenValid(kTokenValid);
+  access_token_manager_.AddTokenToQueue(kTokenValid);
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*total*/, std::string /*session_token*/>>>
+      init_done;
+  delegate->DoInitiate("/etc/passwd", "some_parameters", init_done.cb());
+  EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnInitiate) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // Prepare access token.
+  access_token_manager_.SetTokenValid(kTokenValid);
+  access_token_manager_.AddTokenToQueue(kTokenValid);
+
+  // Set up response that returns an upload URL on a different origin.
+  EXPECT_CALL(mock_request_call_, Call(_, _))
+      .WillOnce([this](const ::net::test_server::HttpRequest& request,
+                       ::net::test_server::BasicHttpResponse* response) {
+        ExpectStart(request);
+        response->AddCustomHeader(kUploadStatusHeader, "active");
+        response->AddCustomHeader(kUploadChunkGranularityHeader,
+                                  base::NumberToString(kDataGranularity));
+        response->AddCustomHeader(kUploadUrlHeader,
+                                  "https://other.googleapis.com/upload");
+        response->set_code(::net::HTTP_OK);
+      });
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*total*/, std::string /*session_token*/>>>
+      init_done;
+  delegate->DoInitiate(
+      origin_path(),
+      /*upload_parameters=*/
+      base::StrCat({kUploadMedata, kUploadMetadataContentType}),
+      init_done.cb());
+  EXPECT_THAT(init_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnNextStep) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // No request should reach the server.
+  EXPECT_CALL(mock_request_call_, Call(_, _)).Times(0);
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*uploaded*/, std::string /*session_token*/>>>
+      step_done;
+  delegate->DoNextStep(
+      kTestDataSize, /*uploaded=*/0,
+      /*session_token=*/
+      base::StrCat({origin_path(), "\nhttps://other.googleapis.com/upload"}),
+      ScopedReservation(0uL, memory_resource_), step_done.cb());
+  EXPECT_THAT(step_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
+TEST_F(FileUploadDelegateTest, RejectResumableUrlOriginMismatchOnFinalize) {
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  // No request should reach the server.
+  EXPECT_CALL(mock_request_call_, Call(_, _)).Times(0);
+
+  test::TestEvent<StatusOr<std::string /*access_parameters*/>> finish_done;
+  delegate->DoFinalize(
+      /*session_token=*/
+      base::StrCat({origin_path(), "\nhttps://other.googleapis.com/upload"}),
+      finish_done.cb());
+  EXPECT_THAT(finish_done.result().error(),
+              Property(&Status::error_code, Eq(error::INVALID_ARGUMENT)));
+}
+
 TEST_F(FileUploadDelegateTest, DeleteFile) {
   // Prepare the delegate.
   std::unique_ptr<FileUploadJob::Delegate> delegate =
@@ -1006,5 +1193,63 @@ TEST_F(FileUploadDelegateTest, DeleteFile) {
 
   delegate->DoDeleteFile(origin_path());
   EXPECT_FALSE(base::PathExists(base::FilePath(origin_path())));
+}
+
+TEST_F(FileUploadDelegateTest, DeleteFileRejectsUnsafePaths) {
+  // Prepare the delegate.
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  base::ScopedTempDir another_temp_dir;
+  ASSERT_TRUE(another_temp_dir.CreateUniqueTempDir());
+  base::FilePath unsafe_file =
+      another_temp_dir.GetPath().AppendASCII("do_not_delete");
+  ASSERT_TRUE(base::WriteFile(unsafe_file, "data"));
+
+  delegate->DoDeleteFile(unsafe_file.MaybeAsASCII());
+
+  // The file should NOT have been deleted because it resides outside the
+  // allowed directory!
+  EXPECT_TRUE(base::PathExists(unsafe_file));
+}
+
+TEST_F(FileUploadDelegateTest, RejectNonGoogleResumableUploadUrlOnNextStep) {
+  // Prepare the delegate.
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  test::TestEvent<
+      StatusOr<std::pair<int64_t /*uploaded*/, std::string /*session_token*/>>>
+      step_done;
+  delegate->DoNextStep(kTestDataSize, kMaxUploadBufferSize,
+                       /*session_token=*/
+                       base::StrCat({origin_path(), "\n",
+                                     "http://malicious-attacker.com/upload"}),
+                       ScopedReservation(0uL, memory_resource_),
+                       step_done.cb());
+  const auto& result = step_done.result();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_THAT(result.error(),
+              AllOf(Property(&Status::error_code, Eq(error::DATA_LOSS)),
+                    Property(&Status::error_message,
+                             StartsWith("Corrupt resumable upload URL="))));
+}
+
+TEST_F(FileUploadDelegateTest, RejectNonGoogleResumableUploadUrlOnFinalize) {
+  // Prepare the delegate.
+  std::unique_ptr<FileUploadJob::Delegate> delegate =
+      PrepareFileUploadDelegate();
+
+  test::TestEvent<StatusOr<std::string /*access_parameters*/>> finish_done;
+  delegate->DoFinalize(
+      /*session_token=*/base::StrCat(
+          {origin_path(), "\n", "http://malicious-attacker.com/upload"}),
+      finish_done.cb());
+  const auto& result = finish_done.result();
+  ASSERT_FALSE(result.has_value());
+  EXPECT_THAT(result.error(),
+              AllOf(Property(&Status::error_code, Eq(error::DATA_LOSS)),
+                    Property(&Status::error_message,
+                             StartsWith("Corrupt resumable upload URL="))));
 }
 }  // namespace reporting

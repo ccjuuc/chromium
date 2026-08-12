@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "content/browser/renderer_host/media/peer_connection_tracker_host.h"
 #include "content/browser/webrtc/webrtc_internals.h"
 #include "content/public/browser/browser_thread.h"
@@ -33,11 +34,6 @@ WebRTCInternalsMessageHandler::~WebRTCInternalsMessageHandler() {
 }
 
 void WebRTCInternalsMessageHandler::RegisterMessages() {
-  web_ui()->RegisterMessageCallback(
-      "getStandardStats",
-      base::BindRepeating(&WebRTCInternalsMessageHandler::OnGetStandardStats,
-                          base::Unretained(this)));
-
   web_ui()->RegisterMessageCallback(
       "enableAudioDebugRecordings",
       base::BindRepeating(
@@ -97,16 +93,9 @@ RenderFrameHost* WebRTCInternalsMessageHandler::GetWebRTCInternalsHost() {
   return host;
 }
 
-void WebRTCInternalsMessageHandler::OnGetStandardStats(
-    const base::Value::List& /* unused_list */) {
-  for (auto* host : PeerConnectionTrackerHost::GetAllHosts()) {
-    host->GetStandardStats();
-  }
-}
-
 void WebRTCInternalsMessageHandler::OnSetAudioDebugRecordingsEnabled(
     bool enable,
-    const base::Value::List& /* unused_list */) {
+    const base::ListValue& /* unused_list */) {
   if (enable) {
     webrtc_internals_->EnableAudioDebugRecordings(web_ui()->GetWebContents());
   } else {
@@ -116,7 +105,7 @@ void WebRTCInternalsMessageHandler::OnSetAudioDebugRecordingsEnabled(
 
 void WebRTCInternalsMessageHandler::OnSetEventLogRecordingsEnabled(
     bool enable,
-    const base::Value::List& /* unused_list */) {
+    const base::ListValue& /* unused_list */) {
   if (!webrtc_internals_->CanToggleEventLogRecordings()) {
     LOG(WARNING) << "Cannot toggle WebRTC event logging.";
     return;
@@ -132,7 +121,7 @@ void WebRTCInternalsMessageHandler::OnSetEventLogRecordingsEnabled(
 
 void WebRTCInternalsMessageHandler::OnSetDataChannelRecordingsEnabled(
     bool enable,
-    const base::Value::List& /* unused_list */) {
+    const base::ListValue& /* unused_list */) {
   if (!base::FeatureList::IsEnabled(
           blink::features::kWebRtcAllowDataChannelRecordingInWebrtcInternals)) {
     return;
@@ -145,7 +134,7 @@ void WebRTCInternalsMessageHandler::OnSetDataChannelRecordingsEnabled(
 }
 
 void WebRTCInternalsMessageHandler::OnDOMLoadDone(
-    const base::Value::List& args_list) {
+    const base::ListValue& args_list) {
   CHECK_GE(args_list.size(), 1u);
 
   const std::string callback_id = args_list[0].GetString();
@@ -153,7 +142,7 @@ void WebRTCInternalsMessageHandler::OnDOMLoadDone(
 
   webrtc_internals_->UpdateObserver(this);
 
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("audioDebugRecordingsEnabled",
              webrtc_internals_->IsAudioDebugRecordingsEnabled());
   params.Set("eventLogRecordingsEnabled",

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/passwords/password_manager_navigation_throttle.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
 #include "components/password_manager/core/browser/password_manager_constants.h"
@@ -88,9 +87,17 @@ PasswordManagerNavigationThrottle::WillStartRequest() {
       password_manager::ManagePasswordsReferrer::kPasswordsGoogleWebsite,
       /*manage_passkeys=*/false);
 #else
-  ChromePasswordManagerClient::FromWebContents(web_contents)
-      ->NavigateToManagePasswordsPage(
-          password_manager::ManagePasswordsReferrer::kPasswordsGoogleWebsite);
+  ChromePasswordManagerClient* client =
+      ChromePasswordManagerClient::FromWebContents(web_contents);
+  if (!client) {
+    // WebContents without a password manager client (non-tab surfaces such
+    // as the presentation receiver window) have no passwords UI to redirect
+    // to. Let the navigation proceed in place instead of cancelling it and
+    // closing the WebContents below.
+    return NavigationThrottle::PROCEED;
+  }
+  client->NavigateToManagePasswordsPage(
+      password_manager::ManagePasswordsReferrer::kPasswordsGoogleWebsite);
 #endif
   // Schedule a task to close current tab since on Android Password Manager is
   // shown in the Native UI, and on desktop NavigateToManagePasswordsPage()

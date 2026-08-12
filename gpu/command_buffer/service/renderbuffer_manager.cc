@@ -15,6 +15,7 @@
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
+#include "gpu/command_buffer/service/decoder_context.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/framebuffer_manager.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
@@ -112,6 +113,18 @@ void Renderbuffer::SetInfoAndInvalidate(GLsizei samples,
   }
 }
 
+void Renderbuffer::SetAllocationFailed() {
+  samples_ = 1;
+  internal_format_ = 0x0;
+  width_ = 0;
+  height_ = 0;
+  cleared_ = false;
+  allocated_ = false;
+  for (auto& point : framebuffer_attachment_points_) {
+    point.first->UnmarkAsComplete();
+  }
+}
+
 void Renderbuffer::AddToSignature(std::string* signature) const {
   DCHECK(signature);
   RenderbufferSignature signature_data(internal_format_,
@@ -141,6 +154,7 @@ Renderbuffer::Renderbuffer(RenderbufferManager* manager,
 }
 
 bool Renderbuffer::RegenerateAndBindBackingObjectIfNeeded(
+    const DecoderContext* decoder,
     const GpuDriverBugWorkarounds& workarounds) {
   bool multisample_workaround =
       workarounds.multisample_renderbuffer_resize_emulation;
@@ -167,7 +181,7 @@ bool Renderbuffer::RegenerateAndBindBackingObjectIfNeeded(
 
   // Attach new renderbuffer to all framebuffers
   for (auto& point : framebuffer_attachment_points_) {
-    glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, point.first->service_id());
+    decoder->BindFramebuffer(GL_DRAW_FRAMEBUFFER, point.first->service_id());
     glFramebufferRenderbufferEXT(GL_DRAW_FRAMEBUFFER, point.second,
                                  GL_RENDERBUFFER, service_id_);
   }
@@ -237,6 +251,19 @@ void RenderbufferManager::SetInfoAndInvalidate(Renderbuffer* renderbuffer,
   }
 }
 
+void RenderbufferManager::SetAllocationFailed(Renderbuffer* renderbuffer) {
+  DCHECK(renderbuffer);
+  if (!renderbuffer->cleared()) {
+    --num_uncleared_renderbuffers_;
+  }
+  memory_type_tracker_->TrackMemFree(renderbuffer->EstimatedSize());
+  renderbuffer->SetAllocationFailed();
+  memory_type_tracker_->TrackMemAlloc(renderbuffer->EstimatedSize());
+  if (!renderbuffer->cleared()) {
+    ++num_uncleared_renderbuffers_;
+  }
+}
+
 void RenderbufferManager::SetCleared(Renderbuffer* renderbuffer,
                                      bool cleared) {
   DCHECK(renderbuffer);
@@ -251,8 +278,8 @@ void RenderbufferManager::SetCleared(Renderbuffer* renderbuffer,
 
 void RenderbufferManager::CreateRenderbuffer(
     GLuint client_id, GLuint service_id) {
-  scoped_refptr<Renderbuffer> renderbuffer(
-      new Renderbuffer(this, client_id, service_id));
+  auto renderbuffer =
+      base::MakeRefCounted<Renderbuffer>(this, client_id, service_id);
   std::pair<RenderbufferMap::iterator, bool> result =
       renderbuffers_.insert(std::make_pair(client_id, renderbuffer));
   DCHECK(result.second);

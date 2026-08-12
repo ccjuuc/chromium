@@ -4,13 +4,19 @@
 
 #include "chrome/updater/win/ui/progress_wnd.h"
 
+#include <windows.h>
+
+#include <commctrl.h>
+
 #include <algorithm>
 #include <array>
 #include <memory>
 #include <string>
 #include <typeinfo>
+#include <utility>
 
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -20,7 +26,11 @@
 #include "base/strings/string_util_win.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/version.h"
+#include "base/win/current_module.h"
+#include "base/win/scoped_hdc.h"
 #include "base/win/scoped_localalloc.h"
+#include "base/win/scoped_select_object.h"
 #include "chrome/updater/app/app_install_progress.h"
 #include "chrome/updater/app/app_install_util_win.h"
 #include "chrome/updater/util/util.h"
@@ -42,68 +52,67 @@ bool AreAllAppsCanceled(const std::vector<AppCompletionInfo>& apps_info) {
   });
 }
 
-}  // namespace
+// Subclass procedure used for `SS_BITMAP` statics (`IDC_APP_BITMAP` and
+// `IDC_ERROR_ILLUSTRATION`). Win32 does NOT send `WM_CTLCOLORSTATIC` for
+// `SS_BITMAP` controls, so the dialog's dark-mode background brush cannot
+// reach them through the usual mechanism. The defaults from the `STATIC`
+// window class paint `COLOR_3DFACE` for both `WM_ERASEBKGND` and the
+// no-image case in `WM_PAINT`, which shows up as a small light-gray
+// rectangle on dark / high-contrast backgrounds.
+//
+// In dark / high-contrast mode this subclass:
+//   * Returns 1 from `WM_ERASEBKGND` so the parent's already-painted
+//     themed background stays visible.
+//   * If `WM_PAINT` arrives for a control that has no image set
+//     (`STM_GETIMAGE` returns null), validates the paint rect without
+//     drawing anything so the parent's themed background remains.
+//
+// When a bitmap IS set, `WM_PAINT` is forwarded to the default static
+// proc so the bitmap is drawn normally. In light mode the entire
+// default behavior (`COLOR_3DFACE` fill, then bitmap drawn on top) is
+// preserved so the rainbow gradient design continues to look correct.
+constexpr UINT_PTR kBitmapStaticSubclassId = 1;
 
-InstallStoppedWnd::InstallStoppedWnd(WTL::CMessageLoop* message_loop,
-                                     HWND parent)
-    : message_loop_(message_loop), parent_(parent) {
-  CHECK(message_loop);
-  CHECK(::IsWindow(parent));
+LRESULT CALLBACK BitmapStaticSubclassProc(HWND hwnd,
+                                          UINT msg,
+                                          WPARAM wparam,
+                                          LPARAM lparam,
+                                          UINT_PTR id,
+                                          DWORD_PTR /*ref_data*/) {
+  const bool themed_bg = IsHighContrastOn() || IsDarkModeOn();
+  if (msg == WM_ERASEBKGND && themed_bg) {
+    return 1;
+  }
+  if (msg == WM_PAINT && themed_bg) {
+    HBITMAP image = reinterpret_cast<HBITMAP>(
+        ::SendMessageW(hwnd, STM_GETIMAGE, IMAGE_BITMAP, 0));
+    if (!image) {
+      // No image to draw. Validate the update region so Windows does not
+      // re-issue `WM_PAINT`, and leave the parent's painted background
+      // visible.
+      PAINTSTRUCT ps = {};
+      ::BeginPaint(hwnd, &ps);
+      ::EndPaint(hwnd, &ps);
+      return 0;
+    }
+  }
+  if (msg == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(hwnd, BitmapStaticSubclassProc, id);
+  }
+  return ::DefSubclassProc(hwnd, msg, wparam, lparam);
 }
 
-InstallStoppedWnd::~InstallStoppedWnd() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (IsWindow()) {
-    CloseWindow();
+void InstallBitmapStaticSubclass(HWND parent, int control_id) {
+  HWND child = ::GetDlgItem(parent, control_id);
+  if (child && ::IsWindow(child)) {
+    ::SetWindowSubclass(child, BitmapStaticSubclassProc,
+                        kBitmapStaticSubclassId, 0);
   }
 }
 
-BOOL InstallStoppedWnd::PreTranslateMessage(MSG* msg) {
-  return CWindow::IsDialogMessage(msg);
-}
+}  // namespace
 
-HRESULT InstallStoppedWnd::CloseWindow() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(IsWindow());
-  ::EnableWindow(parent_, true);
-  return DestroyWindow() ? S_OK : HRESULTFromLastError();
-}
-
-LRESULT InstallStoppedWnd::OnInitDialog(UINT, WPARAM, LPARAM, BOOL& handled) {
-  // Simulates the modal behavior by disabling its parent window. The parent
-  // window must be enabled before this window is destroyed.
-  ::EnableWindow(parent_, false);
-
-  message_loop_->AddMessageFilter(this);
-
-  default_font_.CreatePointFont(90, kDialogFont);
-  SendMessageToDescendants(
-      WM_SETFONT, reinterpret_cast<WPARAM>(static_cast<HFONT>(default_font_)),
-      0);
-
-  CreateOwnerDrawTitleBar(m_hWnd, GetDlgItem(IDC_TITLE_BAR_SPACER), kBkColor);
-  SetCustomDlgColors(kTextColor, kBkColor);
-
-  EnableFlatButtons(m_hWnd);
-
-  handled = true;
-  return 1;
-}
-
-LRESULT InstallStoppedWnd::OnClickButton(WORD, WORD id, HWND, BOOL& handled) {
-  CHECK(id == IDOK || id == IDCANCEL);
-  ::PostMessage(parent_, WM_INSTALL_STOPPED, id, 0);
-  handled = true;
-  return 0;
-}
-
-LRESULT InstallStoppedWnd::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
-  message_loop_->RemoveMessageFilter(this);
-  handled = true;
-  return 0;
-}
-
-ProgressWnd::ProgressWnd(WTL::CMessageLoop* message_loop, HWND parent)
+ProgressWnd::ProgressWnd(MessageLoop* message_loop, HWND parent)
     : CompleteWnd(IDD_PROGRESS,
                   ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS,
                   message_loop,
@@ -124,28 +133,353 @@ void ProgressWnd::SetEventSink(ProgressWndEvents* events) {
   CompleteWnd::SetEventSink(events_sink_);
 }
 
-LRESULT ProgressWnd::OnInitDialog(UINT message,
-                                  WPARAM w_param,
-                                  LPARAM l_param,
-                                  BOOL& handled) {
-  HideWindowChildren(*this);
+LRESULT ProgressWnd::OnSetAppLogo(UINT, WPARAM wparam, LPARAM) {
+  SetAppLogo(reinterpret_cast<HBITMAP>(wparam));
+  return 0;
+}
+
+void ProgressWnd::SetAppLogo(HBITMAP bitmap) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsWindow()) {
+    return;
+  }
+
+  if (app_logo_bmp_.get() != bitmap) {
+    app_logo_bmp_.reset(bitmap);
+  }
+
+  if (!app_logo_bmp_.is_valid()) {
+    return;
+  }
+
+  // Obtain the original dimensions of the cached bitmap.
+  BITMAP bm = {};
+  if (::GetObject(app_logo_bmp_.get(), sizeof(bm), &bm) == 0) {
+    VLOG(1) << __func__ << " ::GetObject failed";
+    return;
+  }
+
+  const int dpi = ::GetDpiForWindow(hwnd());
+  const int width_pixels = ::MulDiv(bm.bmWidth, dpi, USER_DEFAULT_SCREEN_DPI);
+  const int height_pixels = ::MulDiv(bm.bmHeight, dpi, USER_DEFAULT_SCREEN_DPI);
+
+  if (width_pixels <= 0 || height_pixels <= 0) {
+    VLOG(1) << __func__ << " Invalid logo dimensions: " << width_pixels << "x"
+            << height_pixels;
+    return;
+  }
+
+  HBITMAP scaled_bitmap = reinterpret_cast<HBITMAP>(::CopyImage(
+      app_logo_bmp_.get(), IMAGE_BITMAP, width_pixels, height_pixels, 0));
+
+  if (scaled_bitmap) {
+    base::win::ScopedGDIObject<HBITMAP> old_bitmap(reinterpret_cast<HBITMAP>(
+        ::SendDlgItemMessage(hwnd(), IDC_APP_BITMAP, STM_SETIMAGE, IMAGE_BITMAP,
+                             reinterpret_cast<LPARAM>(scaled_bitmap))));
+  }
+}
+
+LRESULT ProgressWnd::OnInitDialog(UINT, WPARAM, LPARAM) {
+  HideWindowChildren(hwnd());
 
   InitializeDialog();
 
   SetMarqueeMode(true);
 
-  SetDlgItemText(IDC_INSTALLER_STATE_TEXT,
+  SetControlText(IDC_INSTALLER_STATE_TEXT,
                  GetLocalizedString(IDS_INITIALIZING_BASE, lang()).c_str());
+
+  // Suppress the default `WM_ERASEBKGND` handling for `SS_BITMAP` statics
+  // so the dialog's themed background (dark / high contrast / rainbow)
+  // shows through behind any bitmap content.
+  InstallBitmapStaticSubclass(hwnd(), IDC_APP_BITMAP);
+  InstallBitmapStaticSubclass(hwnd(), IDC_ERROR_ILLUSTRATION);
+
+  btn1_.SetIsPrimary(true);
+  btn1_.SubclassWindow(::GetDlgItem(hwnd(), IDC_BUTTON1));
+
+  btn2_.SetIsPrimary(false);
+  btn2_.SubclassWindow(::GetDlgItem(hwnd(), IDC_BUTTON2));
+
+  close_btn_.SetIsPrimary(true);
+  close_btn_.SubclassWindow(::GetDlgItem(hwnd(), IDC_CLOSE));
+
+  get_help_btn_.SetIsPrimary(false);
+  get_help_btn_.SubclassWindow(::GetDlgItem(hwnd(), IDC_GET_HELP));
+
   ChangeControlState();
 
-  handled = true;
+  // Apply rounded corners on initialization.
+  UpdateWindowRgn();
+
+  // Force a full redraw of the dialog and all its children so the static
+  // controls re-erase through the dark/gradient background painted by
+  // `OnEraseBkgnd` instead of keeping their initial system-default
+  // (BTNFACE) pixels.
+  ::RedrawWindow(hwnd(), nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+
   return 1;  // Let the system set the focus.
+}
+
+LRESULT ProgressWnd::OnSize(UINT /*msg*/,
+                            WPARAM /*wparam*/,
+                            LPARAM /*lparam*/) {
+  UpdateWindowRgn();
+  SetMsgHandled(FALSE);  // Let other handlers process `WM_SIZE` if needed.
+  return 0;
+}
+
+void ProgressWnd::UpdateWindowRgn() {
+  // The window has a non-client area (e.g., system shadow, margins, or standard
+  // borders). To ensure that the rounded window clipping region exactly aligns
+  // with the custom border drawn in `OnEraseBkgnd` (which draws relative to the
+  // client area bounds), we must calculate the client area coordinates relative
+  // to the window coordinates. Using the window coordinates directly would
+  // leave margins showing standard OS borders and un-clipped corners.
+  RECT client_rect = {};
+  ::GetClientRect(hwnd(), &client_rect);
+
+  // Defensive check to prevent region creation with invalid or zero
+  // coordinates.
+  if (client_rect.right <= 0 || client_rect.bottom <= 0) {
+    return;
+  }
+
+  // MapWindowPoints handles RTL window mirroring correctly by swapping
+  // left/right coordinates when mapping a RECT to screen space (null dest HDC).
+  ::MapWindowPoints(hwnd(), nullptr, reinterpret_cast<LPPOINT>(&client_rect),
+                    2);
+
+  RECT window_rect = {};
+  ::GetWindowRect(hwnd(), &window_rect);
+
+  const int left = client_rect.left - window_rect.left;
+  const int top = client_rect.top - window_rect.top;
+  const int right = client_rect.right - window_rect.left;
+  const int bottom = client_rect.bottom - window_rect.top;
+
+  // Scale the 11px corner radius based on the current DPI of the window to
+  // ensure proportional rounded corners on high-DPI displays.
+  const int scaled_radius = GetScaledCornerRadius();
+
+  HRGN rgn = ::CreateRoundRectRgn(left, top, right, bottom, scaled_radius * 2,
+                                  scaled_radius * 2);
+  if (rgn) {
+    // SetWindowRgn takes ownership of the HRGN object.
+    ::SetWindowRgn(hwnd(), rgn, TRUE);
+  }
+}
+
+int ProgressWnd::GetScaledCornerRadius() const {
+  return ::MulDiv(11, ::GetDpiForWindow(hwnd()), USER_DEFAULT_SCREEN_DPI);
+}
+
+void ProgressWnd::ApplyDpiScaling(int dpi) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  OmahaWnd::ApplyDpiScaling(dpi);
+  if (app_logo_bmp_.is_valid()) {
+    SetAppLogo(app_logo_bmp_.get());
+  }
+}
+
+LRESULT ProgressWnd::OnEraseBkgnd(UINT, WPARAM wparam, LPARAM) {
+  const HDC hdc = reinterpret_cast<HDC>(wparam);
+  RECT rect = {};
+  ::GetClientRect(hwnd(), &rect);
+
+  const int width = rect.right - rect.left;
+  const int height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) {
+    return 1;
+  }
+
+  // Create an off-screen memory DC and bitmap (the primary buffer).
+  base::win::ScopedCreateDC hdc_mem(::CreateCompatibleDC(hdc));
+  if (!hdc_mem.is_valid()) {
+    return 1;
+  }
+  base::win::ScopedGDIObject<HBITMAP> hbmp_mem(
+      ::CreateCompatibleBitmap(hdc, width, height));
+  if (!hbmp_mem.is_valid()) {
+    return 1;
+  }
+  base::win::ScopedSelectObject select_mem_bmp(hdc_mem.get(), hbmp_mem.get());
+
+  // Paint the background into the off-screen buffer.
+  bool painted = false;
+
+  // Background image is not loaded in High Contrast Mode.
+  HBITMAP bg_bmp = IsHighContrastOn() ? nullptr : GetBackgroundBitmap();
+  if (bg_bmp) {
+    BITMAP bm = {};
+    ::GetObject(bg_bmp, sizeof(bm), &bm);
+
+    base::win::ScopedCreateDC hdc_src(::CreateCompatibleDC(hdc));
+    if (hdc_src.is_valid()) {
+      base::win::ScopedSelectObject select_src_bmp(hdc_src.get(), bg_bmp);
+
+      // Set high-quality HALFTONE scaling mode on the memory DC.
+      const int old_stretch_mode = ::SetStretchBltMode(hdc_mem.get(), HALFTONE);
+      ::SetBrushOrgEx(hdc_mem.get(), 0, 0, nullptr);
+
+      // Paint and stretch the background image over the off-screen client area.
+      ::StretchBlt(hdc_mem.get(), 0, 0, width, height, hdc_src.get(), 0, 0,
+                   bm.bmWidth, bm.bmHeight, SRCCOPY);
+
+      // Restore DC state.
+      ::SetStretchBltMode(hdc_mem.get(), old_stretch_mode);
+      painted = true;
+    }
+  }
+
+  if (!painted) {
+    // Fallback to safe solid background color if loading fails.
+    const COLORREF fallback_color =
+        IsHighContrastOn() ? ::GetSysColor(COLOR_WINDOW)
+                           : (IsDarkModeOn() ? kBgColorDark : kBgColorLight);
+    base::win::ScopedGDIObject<HBRUSH> fill_brush(
+        ::CreateSolidBrush(fallback_color));
+    ::FillRect(hdc_mem.get(), &rect, fill_brush.get());
+  }
+
+  // Draw a 1px border at 30% opacity (or 100% system theme color in High
+  // Contrast Mode) using RAII objects.
+  const int scaled_radius = GetScaledCornerRadius();
+  const int scaled_border = std::max(
+      1, ::MulDiv(1, ::GetDpiForWindow(hwnd()), USER_DEFAULT_SCREEN_DPI));
+  base::win::ScopedCreateDC hdc_blend(::CreateCompatibleDC(hdc));
+  if (hdc_blend.is_valid()) {
+    base::win::ScopedGDIObject<HBITMAP> hbmp_blend(
+        ::CreateCompatibleBitmap(hdc, width, height));
+    base::win::ScopedGDIObject<HRGN> border_rgn(::CreateRoundRectRgn(
+        0, 0, width, height, scaled_radius * 2, scaled_radius * 2));
+
+    const COLORREF border_color = IsHighContrastOn()
+                                      ? ::GetSysColor(COLOR_WINDOWTEXT)
+                                      : kWindowBorderColor;
+    base::win::ScopedGDIObject<HBRUSH> border_brush(
+        ::CreateSolidBrush(border_color));
+
+    if (hbmp_blend.is_valid() && border_rgn.is_valid() &&
+        border_brush.is_valid()) {
+      base::win::ScopedSelectObject select_blend_bmp(hdc_blend.get(),
+                                                     hbmp_blend.get());
+      // Copy the background from hdc_mem to hdc_blend (NOT from display hdc)
+      if (::BitBlt(hdc_blend.get(), 0, 0, width, height, hdc_mem.get(), 0, 0,
+                   SRCCOPY)) {
+        ::FrameRgn(hdc_blend.get(), border_rgn.get(), border_brush.get(),
+                   scaled_border, scaled_border);
+
+        BLENDFUNCTION bf = {
+            .BlendOp = AC_SRC_OVER,
+            .BlendFlags = 0,
+            .SourceConstantAlpha =
+                static_cast<BYTE>(IsHighContrastOn() ? 255 : 77),
+            .AlphaFormat = 0,
+        };
+
+        // AlphaBlend hdc_blend back onto hdc_mem
+        ::AlphaBlend(hdc_mem.get(), 0, 0, width, height, hdc_blend.get(), 0, 0,
+                     width, height, bf);
+      }
+    }
+  }
+
+  // Blit the completed primary buffer (hdc_mem) to the screen window hdc.
+  ::BitBlt(hdc, 0, 0, width, height, hdc_mem.get(), 0, 0, SRCCOPY);
+
+  return 1;
+}
+
+HBITMAP ProgressWnd::GetBackgroundBitmap() {
+  if (IsDarkModeOn()) {
+    if (!dark_bg_bmp_.is_valid()) {
+      dark_bg_bmp_.reset(static_cast<HBITMAP>(
+          ::LoadImage(CURRENT_MODULE(), MAKEINTRESOURCE(IDB_BACKGROUND_DARK),
+                      IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)));
+    }
+    return dark_bg_bmp_.get();
+  } else {
+    if (!light_bg_bmp_.is_valid()) {
+      light_bg_bmp_.reset(static_cast<HBITMAP>(
+          ::LoadImage(CURRENT_MODULE(), MAKEINTRESOURCE(IDB_BACKGROUND_LIGHT),
+                      IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION)));
+    }
+    return light_bg_bmp_.get();
+  }
+}
+
+LRESULT ProgressWnd::OnSysColorChange(UINT, WPARAM, LPARAM) {
+  SetMsgHandled(FALSE);
+  light_bg_bmp_.reset();
+  dark_bg_bmp_.reset();
+  ::RedrawWindow(hwnd(), nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  return 0;
+}
+
+LRESULT ProgressWnd::OnSettingChange(UINT, WPARAM, LPARAM lparam) {
+  SetMsgHandled(FALSE);
+  if (lparam && std::wstring_view(reinterpret_cast<LPCWSTR>(lparam)) ==
+                    L"ImmersiveColorSet") {
+    light_bg_bmp_.reset();
+    dark_bg_bmp_.reset();
+    ::RedrawWindow(
+        hwnd(), nullptr, nullptr,
+        RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  }
+  return 0;
+}
+
+HBRUSH ProgressWnd::OnCtlColorStatic(HDC dc, HWND ctl_hwnd) {
+  if (IsHighContrastOn()) {
+    ::SetTextColor(dc, ::GetSysColor(COLOR_WINDOWTEXT));
+    ::SetBkColor(dc, ::GetSysColor(COLOR_WINDOW));
+    ::SetBkMode(dc, TRANSPARENT);
+    return ::GetSysColorBrush(COLOR_WINDOW);
+  }
+  if (IsDarkModeOn()) {
+    ::SetTextColor(dc, kTextColorDark);
+  }
+  ::SetBkMode(dc, TRANSPARENT);
+  return static_cast<HBRUSH>(::GetStockObject(NULL_BRUSH));
+}
+
+void ProgressWnd::SetControlText(int id, const std::wstring& text) {
+  const HWND hwnd_control = ::GetDlgItem(hwnd(), id);
+  if (!hwnd_control || !::IsWindow(hwnd_control)) {
+    return;
+  }
+
+  // Reduces flicker by only updating the control if the text has changed.
+  std::wstring current_text;
+  ui::GetDlgItemText(hwnd(), id, &current_text);
+  if (text == current_text) {
+    return;
+  }
+
+  // Get the control's rectangle relative to the dialog.
+  RECT rect = {};
+  ::GetWindowRect(hwnd_control, &rect);
+  POINT top_left = {rect.left, rect.top};
+  POINT bottom_right = {rect.right, rect.bottom};
+  ::ScreenToClient(hwnd(), &top_left);
+  ::ScreenToClient(hwnd(), &bottom_right);
+  rect = {top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+
+  // Invalidate the area on the parent. This forces the parent to redraw the
+  // gradient in this specific spot.
+  ::InvalidateRect(hwnd(), &rect, TRUE);
+
+  // Update the text.
+  ::SetWindowTextW(hwnd_control, text.c_str());
 }
 
 // If closing is disabled, then it does not close the window.
 // If in a completion state, then the window is closed.
-// Otherwise, the InstallStoppedWnd is displayed and the window is closed only
-// if the user chooses cancel.
+// Otherwise, `HandleCancelRequest` is called which attempts to cancel the
+// install.
 bool ProgressWnd::MaybeCloseWindow() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!is_close_enabled()) {
@@ -157,43 +491,16 @@ bool ProgressWnd::MaybeCloseWindow() {
       cur_state_ != States::STATE_COMPLETE_RESTART_BROWSER &&
       cur_state_ != States::STATE_COMPLETE_RESTART_ALL_BROWSERS &&
       cur_state_ != States::STATE_COMPLETE_REBOOT) {
-    // The UI is not in final state: ask the user to proceed with closing it.
-    // A modal dialog opens up and sends a message back to this window to
-    // communicate the user decision.
-    install_stopped_wnd_ =
-        std::make_unique<InstallStoppedWnd>(message_loop(), *this);
-    HWND hwnd = install_stopped_wnd_->Create(*this);
-    if (hwnd) {
-      install_stopped_wnd_->SetWindowText(
-          GetLocalizedString(IDS_INSTALLATION_STOPPED_WINDOW_TITLE_BASE, lang())
-              .c_str());
-
-      install_stopped_wnd_->SetDlgItemText(
-          IDOK,
-          GetLocalizedString(IDS_RESUME_INSTALLATION_BASE, lang()).c_str());
-
-      install_stopped_wnd_->SetDlgItemText(
-          IDCANCEL,
-          GetLocalizedString(IDS_CANCEL_INSTALLATION_BASE, lang()).c_str());
-
-      install_stopped_wnd_->SetDlgItemText(
-          IDC_INSTALL_STOPPED_TEXT,
-          GetLocalizedString(IDS_INSTALL_STOPPED_BASE, lang()).c_str());
-
-      install_stopped_wnd_->CenterWindow(*this);
-      install_stopped_wnd_->ShowWindow(SW_SHOWDEFAULT);
-      return false;
-    }
+    // The UI is not in final state: attempt to cancel the install.
+    HandleCancelRequest();
+    return false;
   }
 
   CloseWindow();
   return true;
 }
 
-LRESULT ProgressWnd::OnClickedButton(WORD notify_code,
-                                     WORD id,
-                                     HWND wnd_ctl,
-                                     BOOL& handled) {
+void ProgressWnd::OnClickedButton(UINT notify_code, int id, HWND wnd_ctl) {
   CHECK(id == IDC_BUTTON1 || id == IDC_BUTTON2 || id == IDC_CLOSE);
   CHECK(events_sink_);
 
@@ -233,43 +540,18 @@ LRESULT ProgressWnd::OnClickedButton(WORD notify_code,
         case States::STATE_PAUSED:
         case States::STATE_COMPLETE_SUCCESS:
         case States::STATE_COMPLETE_ERROR:
-          return CompleteWnd::OnClickedButton(notify_code, id, wnd_ctl,
-                                              handled);
+          CompleteWnd::OnClickedButton(notify_code, id, wnd_ctl);
+          return;
         default:
           NOTREACHED();
       }
   }
 
-  handled = true;
   CloseWindow();
-
-  return 0;
-}
-
-LRESULT ProgressWnd::OnInstallStopped(UINT msg,
-                                      WPARAM wparam,
-                                      LPARAM,
-                                      BOOL& handled) {
-  install_stopped_wnd_.reset();
-
-  CHECK_EQ(msg, WM_INSTALL_STOPPED);
-  CHECK(wparam == IDOK || wparam == IDCANCEL);
-  switch (wparam) {
-    case IDOK:
-      break;
-    case IDCANCEL:
-      HandleCancelRequest();
-      break;
-    default:
-      NOTREACHED();
-  }
-
-  handled = true;
-  return 0;
 }
 
 void ProgressWnd::HandleCancelRequest() {
-  SetDlgItemText(IDC_INSTALLER_STATE_TEXT,
+  SetControlText(IDC_INSTALLER_STATE_TEXT,
                  GetLocalizedString(IDS_CANCELING_BASE, lang()).c_str());
 
   if (is_canceled_) {
@@ -289,7 +571,7 @@ void ProgressWnd::OnCheckingForUpdate() {
 
   cur_state_ = States::STATE_CHECKING_FOR_UPDATE;
 
-  SetDlgItemText(
+  SetControlText(
       IDC_INSTALLER_STATE_TEXT,
       GetLocalizedString(IDS_WAITING_TO_CONNECT_BASE, lang()).c_str());
 
@@ -309,7 +591,8 @@ void ProgressWnd::OnWaitingToDownload(const std::string& app_id,
     return;
   }
   cur_state_ = States::STATE_WAITING_TO_DOWNLOAD;
-  SetDlgItemText(IDC_INSTALLER_STATE_TEXT, L"");
+  SetMarqueeMode(true);
+  SetControlText(IDC_INSTALLER_STATE_TEXT, L"");
   ChangeControlState();
 }
 
@@ -332,36 +615,17 @@ void ProgressWnd::OnDownloading(
 
   if (is_canceled_) {
     s = GetLocalizedString(IDS_CANCELING_BASE, lang());
-  } else if (!time_remaining) {
-    s = GetLocalizedString(IDS_DOWNLOADING_BASE, lang());
-  } else if (!time_remaining->InSeconds()) {
+  } else if (time_remaining && time_remaining->InSeconds() == 0) {
     s = GetLocalizedString(IDS_DOWNLOADING_COMPLETED_BASE, lang());
-  } else if (!time_remaining->InMinutes()) {
-    // Less than one minute remaining.
-    s = GetLocalizedStringF(IDS_DOWNLOADING_SHORT_BASE,
-                            base::NumberToWString(time_remaining->InSeconds()),
-                            lang());
-  } else if (!time_remaining->InHours()) {
-    // Less than one hour remaining.
-    s = GetLocalizedStringF(IDS_DOWNLOADING_LONG_BASE,
-                            base::NumberToWString(time_remaining->InMinutes()),
-                            lang());
   } else {
-    s = GetLocalizedStringF(IDS_DOWNLOADING_VERY_LONG_BASE,
-                            base::NumberToWString(time_remaining->InHours()),
-                            lang());
+    s = GetLocalizedString(IDS_DOWNLOADING_BASE, lang());
   }
 
-  // Reduces flicker by only updating the control if the text has changed.
-  std::wstring current_text;
-  ui::GetDlgItemText(*this, IDC_INSTALLER_STATE_TEXT, &current_text);
-  if (s != current_text) {
-    SetDlgItemText(IDC_INSTALLER_STATE_TEXT, s.c_str());
-  }
+  SetControlText(IDC_INSTALLER_STATE_TEXT, s.c_str());
 
   SetMarqueeMode(pos == 0);
   if (pos > 0) {
-    SendDlgItemMessage(IDC_PROGRESS, PBM_SETPOS, pos, 0);
+    ::SendDlgItemMessageW(hwnd(), IDC_PROGRESS, PBM_SETPOS, pos, 0);
   }
 
   ChangeControlState();
@@ -376,7 +640,8 @@ void ProgressWnd::OnWaitingRetryDownload(const std::string& app_id,
   }
 
   cur_state_ = States::STATE_WAITING_TO_DOWNLOAD;
-  SetDlgItemText(IDC_INSTALLER_STATE_TEXT, L"");
+  SetMarqueeMode(true);
+  SetControlText(IDC_INSTALLER_STATE_TEXT, L"");
   ChangeControlState();
 }
 
@@ -389,7 +654,8 @@ void ProgressWnd::OnWaitingToInstall(const std::string& app_id,
 
   if (States::STATE_WAITING_TO_INSTALL != cur_state_) {
     cur_state_ = States::STATE_WAITING_TO_INSTALL;
-    SetDlgItemText(
+    SetMarqueeMode(true);
+    SetControlText(
         IDC_INSTALLER_STATE_TEXT,
         GetLocalizedString(IDS_WAITING_TO_INSTALL_BASE, lang()).c_str());
     ChangeControlState();
@@ -409,14 +675,14 @@ void ProgressWnd::OnInstalling(
 
   if (States::STATE_INSTALLING != cur_state_) {
     cur_state_ = States::STATE_INSTALLING;
-    SetDlgItemText(IDC_INSTALLER_STATE_TEXT,
+    SetControlText(IDC_INSTALLER_STATE_TEXT,
                    GetLocalizedString(IDS_INSTALLING_BASE, lang()).c_str());
     ChangeControlState();
   }
 
   SetMarqueeMode(pos <= 0);
   if (pos > 0) {
-    SendDlgItemMessage(IDC_PROGRESS, PBM_SETPOS, pos, 0);
+    ::SendDlgItemMessageW(hwnd(), IDC_PROGRESS, PBM_SETPOS, pos, 0);
   }
 }
 
@@ -493,8 +759,6 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
     return;
   }
 
-  CloseInstallStoppedWindow();
-
   bool launch_commands_succeeded = LaunchCmdLines(observer_info);
 
   CompletionCodes overall_completion_code =
@@ -520,12 +784,12 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
       break;
     case CompletionCodes::COMPLETION_CODE_RESTART_ALL_BROWSERS:
       cur_state_ = States::STATE_COMPLETE_RESTART_ALL_BROWSERS;
-      SetDlgItemText(IDC_BUTTON1,
+      SetControlText(IDC_BUTTON1,
                      GetLocalizedString(IDS_RESTART_NOW_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_BUTTON2,
           GetLocalizedString(IDS_RESTART_LATER_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_COMPLETE_TEXT,
           GetLocalizedStringF(IDS_TEXT_RESTART_ALL_BROWSERS_BASE,
                               base::UTF16ToWide(bundle_name()), lang())
@@ -534,12 +798,12 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
       break;
     case CompletionCodes::COMPLETION_CODE_RESTART_BROWSER:
       cur_state_ = States::STATE_COMPLETE_RESTART_BROWSER;
-      SetDlgItemText(IDC_BUTTON1,
+      SetControlText(IDC_BUTTON1,
                      GetLocalizedString(IDS_RESTART_NOW_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_BUTTON2,
           GetLocalizedString(IDS_RESTART_LATER_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_COMPLETE_TEXT,
           GetLocalizedStringF(IDS_TEXT_RESTART_BROWSER_BASE,
                               base::UTF16ToWide(bundle_name()), lang())
@@ -548,12 +812,12 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
       break;
     case CompletionCodes::COMPLETION_CODE_REBOOT:
       cur_state_ = States::STATE_COMPLETE_REBOOT;
-      SetDlgItemText(IDC_BUTTON1,
+      SetControlText(IDC_BUTTON1,
                      GetLocalizedString(IDS_RESTART_NOW_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_BUTTON2,
           GetLocalizedString(IDS_RESTART_LATER_BASE, lang()).c_str());
-      SetDlgItemText(
+      SetControlText(
           IDC_COMPLETE_TEXT,
           GetLocalizedStringF(IDS_TEXT_RESTART_COMPUTER_BASE,
                               base::UTF16ToWide(bundle_name()), lang())
@@ -604,7 +868,7 @@ void ProgressWnd::OnComplete(const ObserverCompletionInfo& observer_info) {
 
 HRESULT ProgressWnd::ChangeControlState() {
   for (const ControlState& ctl : ctls_) {
-    const size_t i = static_cast<size_t>(cur_state_);
+    const size_t i = std::to_underlying(cur_state_);
     CHECK_LE(i, std::size(ctl.attr));
     SetControlAttributes(ctl.id, ctl.attr[i]);
   }
@@ -612,30 +876,18 @@ HRESULT ProgressWnd::ChangeControlState() {
 }
 
 HRESULT ProgressWnd::SetMarqueeMode(bool is_marquee) {
-  CWindow progress_bar = GetDlgItem(IDC_PROGRESS);
-  LONG_PTR style = progress_bar.GetWindowLongPtr(GWL_STYLE);
+  HWND progress_bar = ::GetDlgItem(hwnd(), IDC_PROGRESS);
+  LONG_PTR style = ::GetWindowLongPtrW(progress_bar, GWL_STYLE);
   if (is_marquee) {
     style |= PBS_MARQUEE;
   } else {
     style &= ~PBS_MARQUEE;
   }
-  progress_bar.SetWindowLongPtr(GWL_STYLE, style);
-  progress_bar.SendMessage(PBM_SETMARQUEE, is_marquee, 0);
+  ::SetWindowLongPtrW(progress_bar, GWL_STYLE, style);
+  ::SendMessageW(progress_bar, PBM_SETMARQUEE, is_marquee,
+                 kMarqueeModeUpdatesMs);
 
   return S_OK;
-}
-
-bool ProgressWnd::IsInstallStoppedWindowPresent() {
-  return install_stopped_wnd_.get() && install_stopped_wnd_->IsWindow();
-}
-
-bool ProgressWnd::CloseInstallStoppedWindow() {
-  if (IsInstallStoppedWindowPresent()) {
-    install_stopped_wnd_->CloseWindow();
-    install_stopped_wnd_.reset();
-    return true;
-  }
-  return false;
 }
 
 }  // namespace updater::ui

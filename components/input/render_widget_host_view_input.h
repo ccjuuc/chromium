@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/component_export.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
 #include "components/input/event_with_latency_info.h"
 #include "components/input/render_input_router.h"
@@ -27,6 +28,7 @@ class WebMouseWheelEvent;
 
 namespace ui {
 class Cursor;
+class FilteredGestureProvider;
 class LatencyInfo;
 }  // namespace ui
 
@@ -153,6 +155,14 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostViewInput
       RenderWidgetHostViewInput* target_view,
       gfx::PointF* transformed_point);
 
+  // Returns true if |target_view| is one of |starting_view|'s ancestors.
+  // If |stay_within| is provided, we only consider ancestors within that
+  // sub-tree.
+  static bool IsAncestorView(
+      RenderWidgetHostViewInput* starting_view,
+      const RenderWidgetHostViewInput* target_view,
+      const RenderWidgetHostViewInput* stay_within = nullptr);
+
   // On success, returns true and modifies |*transform| to represent the
   // transformation mapping a point in the coordinate space of this view
   // into the coordinate space of the target view.
@@ -197,6 +207,8 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostViewInput
       const blink::WebGestureEvent& event,
       blink::mojom::InputEventResultState ack_result);
 
+  virtual scoped_refptr<ui::FilteredGestureProvider> GetGestureProvider();
+
   virtual void SetLastPointerType(ui::EventPointerType last_pointer_type) {}
 
   // Sets the cursor for this view to the one specified.
@@ -236,6 +248,7 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostViewInput
       blink::mojom::StylusWritingFocusResultPtr focus_result) {}
 
   virtual void OnAutoscrollStart() = 0;
+  virtual void OnAutoscrollTargetResolved(bool success) {}
 
   // Add and remove observers for lifetime event notifications. The order in
   // which notifications are sent to observers is undefined. Clients must be

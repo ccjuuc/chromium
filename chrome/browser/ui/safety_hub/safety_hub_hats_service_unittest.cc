@@ -30,7 +30,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/password_manager/core/browser/leak_detection/bulk_leak_check_service.h"
-#include "components/password_manager/core/browser/leak_detection/leak_detection_delegate_interface.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/permissions/constants.h"
@@ -130,9 +130,9 @@ class SafetyHubHatsServiceTest : public testing::Test {
 
   void CreateMockUnusedSitePermissionForReview() {
     const GURL kUrl = GURL("https://www.example.com:443");
-    base::Value::Dict dict;
+    base::DictValue dict;
     dict.Set(permissions::kRevokedKey,
-             base::Value::List().Append(
+             base::ListValue().Append(
                  UnusedSitePermissionsManager::ConvertContentSettingsTypeToKey(
                      ContentSettingsType::GEOLOCATION)));
     content_settings::ContentSettingConstraints default_constraint(
@@ -153,8 +153,8 @@ class SafetyHubHatsServiceTest : public testing::Test {
     password_manager::PasswordForm form =
         safety_hub_test_util::MakeForm(u"username", password, origin, leaked);
 
-    profile_store().AddLogin(form);
-    account_store().AddLogin(form);
+    profile_store().AddLogin(password_manager::FromPasswordForm(form));
+    account_store().AddLogin(password_manager::FromPasswordForm(form));
     RunUntilIdle();
   }
 
@@ -284,7 +284,13 @@ TEST_F(SafetyHubHatsServiceTest, GetOverallState_UnusedSitePermissions) {
             safety_hub::SafetyHubCardState::kWarning);
 }
 
-TEST_F(SafetyHubHatsServiceTest, GetOverallState_Extension) {
+// TODO(crbug.com/498029099): Flaky on Linux TSan
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_GetOverallState_Extension DISABLED_GetOverallState_Extension
+#else
+#define MAYBE_GetOverallState_Extension GetOverallState_Extension
+#endif
+TEST_F(SafetyHubHatsServiceTest, MAYBE_GetOverallState_Extension) {
   // Create mock notifications that will require a review.
   extensions::CWSInfoServiceFactory::GetInstance()->SetTestingFactory(
       profile(),

@@ -7,6 +7,7 @@
 #import "ios/chrome/app/profile/profile_init_stage.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/profile/profile_state_observer.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/common/app_group/app_group_constants.h"
@@ -58,8 +59,7 @@
       AuthenticationServiceFactory::GetForProfile(
           self.sceneState.profileState.profile);
   NSUserDefaults* shared_defaults = app_group::GetGroupUserDefaults();
-  id<SystemIdentity> identity =
-      authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = authenticationService->GetPrimaryIdentity();
   if (!identity.gaiaId.empty()) {
     [shared_defaults setObject:identity.gaiaId.ToNSString()
                         forKey:app_group::kPrimaryAccount];

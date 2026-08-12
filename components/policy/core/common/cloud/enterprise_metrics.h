@@ -161,8 +161,10 @@ enum MetricEnrollment {
   kMetricEnrollmentRegistrationCertificateFetchNotAvailable = 68,
   // Enrollment failed: Organization unit enrollment limit exceeded.
   kMetricEnrollmentOrgUnitEnrollmentLimitExceeded = 69,
+  // Device management error
+  kMetricEnrollmentDeviceManagementError = 70,
   // Max value for use with enumeration histogram UMA functions.
-  kMaxValue = kMetricEnrollmentOrgUnitEnrollmentLimitExceeded
+  kMaxValue = kMetricEnrollmentDeviceManagementError
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/enterprise/enums.xml:EnterpriseEnrollmentType)
 
@@ -272,8 +274,22 @@ inline constexpr char kMetricDeviceLocalAccountPolicyInvalidations[] =
 inline constexpr char kMetricCBCMPolicyRefresh[] =
     "Enterprise.CBCMPolicyRefresh";
 
+inline constexpr char kMetricUserExtensionInstallPolicyRefresh[] =
+    "Enterprise.ExtensionInstallPolicyRefresh";
+inline constexpr char kMetricDeviceExtensionInstallPolicyRefresh[] =
+    "Enterprise.DeviceExtensionInstallPolicyRefresh";
+inline constexpr char kMetricCBCMExtensionInstallPolicyRefresh[] =
+    "Enterprise.CBCMExtensionInstallPolicyRefresh";
+
 inline constexpr char kMetricCBCMPolicyInvalidations[] =
     "Enterprise.CBCMPolicyInvalidations";
+
+inline constexpr char kMetricUserExtensionInstallPolicyInvalidations[] =
+    "Enterprise.ExtensionInstallPolicyInvalidations";
+inline constexpr char kMetricDeviceExtensionInstallPolicyInvalidations[] =
+    "Enterprise.DeviceExtensionInstallPolicyInvalidations";
+inline constexpr char kMetricCBCMExtensionInstallPolicyInvalidations[] =
+    "Enterprise.CBCMExtensionInstallPolicyInvalidations";
 
 inline constexpr char kMetricUserRemoteCommandInvalidations[] =
     "Enterprise.UserRemoteCommandInvalidations";
@@ -304,6 +320,8 @@ inline constexpr char kMetricUserRemoteCommandReceived[] =
 // Enterprise.UserRemoteCommand.Executed.BrowserRotateAttestationCredential
 // Enterprise.UserRemoteCommand.Executed.FetchCrdAvailabilityInfo
 // Enterprise.UserRemoteCommand.Executed.FetchSupportPacket
+// Enterprise.UserRemoteCommand.Executed.BrowserExtensionUpdateCheck
+// Enterprise.UserRemoteCommand.Executed.QueryGeolocation
 inline constexpr char kMetricUserRemoteCommandExecutedTemplate[] =
     "Enterprise.UserRemoteCommand.Executed.%s";
 
@@ -384,6 +402,9 @@ inline constexpr char kMetricDeviceRemoteCommandCrdSessionDurationTemplate[] =
 // Enterprise.DeviceRemoteCommand.Executed.DeviceResetEuicc
 // Enterprise.DeviceRemoteCommand.Executed.BrowserRotateAttestationCredential
 // Enterprise.DeviceRemoteCommand.Executed.FetchCrdAvailabilityInfo
+// Enterprise.DeviceRemoteCommand.Executed.BrowserExtensionUpdateCheck
+// Enterprise.DeviceRemoteCommand.Executed.FetchSupportPacket
+// Enterprise.DeviceRemoteCommand.Executed.QueryGeolocation
 inline constexpr char kMetricDeviceRemoteCommandExecutedTemplate[] =
     "Enterprise.DeviceRemoteCommand.Executed.%s";
 
@@ -408,6 +429,9 @@ inline constexpr char kMetricCBCMRemoteCommandReceived[] =
 // Enterprise.CBCMRemoteCommand.Executed.DeviceResetEuicc
 // Enterprise.CBCMRemoteCommand.Executed.BrowserRotateAttestationCredential
 // Enterprise.CBCMRemoteCommand.Executed.FetchCrdAvailabilityInfo
+// Enterprise.CBCMRemoteCommand.Executed.BrowserExtensionUpdateCheck
+// Enterprise.CBCMRemoteCommand.Executed.FetchSupportPacket
+// Enterprise.CBCMRemoteCommand.Executed.QueryGeolocation
 inline constexpr char kMetricCBCMRemoteCommandExecutedTemplate[] =
     "Enterprise.CBCMRemoteCommand.Executed.%s";
 

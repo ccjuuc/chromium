@@ -79,7 +79,7 @@ bool TestingPrefStore::GetValue(std::string_view key,
   return prefs_.GetValue(key, value);
 }
 
-base::Value::Dict TestingPrefStore::GetValues() const {
+base::DictValue TestingPrefStore::GetValues() const {
   return prefs_.AsDict();
 }
 
@@ -169,8 +169,8 @@ void TestingPrefStore::SetInitializationCompleted() {
 }
 
 void TestingPrefStore::NotifyPrefValueChanged(std::string_view key) {
-  for (Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 }
 
 void TestingPrefStore::NotifyInitializationCompleted() {
@@ -190,8 +190,8 @@ void TestingPrefStore::ReportValueChanged(std::string_view key,
   if (prefs_.GetValue(key, &value))
     CheckPrefIsSerializable(key, *value);
 
-  for (Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 }
 
 void TestingPrefStore::SetString(const std::string& key,

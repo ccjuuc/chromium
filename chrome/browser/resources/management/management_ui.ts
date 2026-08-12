@@ -2,22 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
+// <if expr="not is_android">
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
-import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/cr_toolbar/cr_toolbar.js';
+// </if>
+import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/icons.html.js';
 import './icons.html.js';
+import './promotion_banner.js';
 import '/strings.m.js';
 
+// <if expr="not is_android">
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+// </if>
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
-// <if expr="is_chromeos">
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+// <if expr="not is_android">
+import {assert} from 'chrome://resources/js/assert.js';
 // </if>
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-// clang-format off
 import type {Application, BrowserReportingResponse, Extension, ManagementBrowserProxy, ThreatProtectionInfo} from './management_browser_proxy.js';
 import { ManagementBrowserProxyImpl, ReportingType} from './management_browser_proxy.js';
 // <if expr="is_chromeos">
@@ -112,7 +119,6 @@ export class ManagementUiElement extends ManagementUiElementBase {
 
       customerLogo_: {type: String},
       managementOverview_: {type: String},
-      pluginVmDataCollectionEnabled_: {type: Boolean},
       eolAdminMessage_: {type: String},
       eolMessage_: {type: String},
       showMonitoredNetworkPrivacyDisclosure_: {type: Boolean},
@@ -146,7 +152,6 @@ export class ManagementUiElement extends ManagementUiElementBase {
   protected accessor filesUploadToCloud_: string = '';
   protected accessor customerLogo_: string = '';
   protected accessor managementOverview_: string = '';
-  protected accessor pluginVmDataCollectionEnabled_: boolean = false;
   protected accessor eolAdminMessage_: string = '';
   protected accessor eolMessage_: string = '';
   protected accessor showMonitoredNetworkPrivacyDisclosure_: boolean = false;
@@ -177,6 +182,15 @@ export class ManagementUiElement extends ManagementUiElementBase {
     this.initReportingInfo_();
     this.getThreatProtectionInfo_();
 
+    // <if expr="not is_android">
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
+    // </if>
+
     this.addWebUiListener(
         'browser-reporting-info-updated',
         (reportingInfo: BrowserReportingResponse[]) =>
@@ -186,12 +200,6 @@ export class ManagementUiElement extends ManagementUiElementBase {
         'profile-reporting-info-updated',
         (reportingInfo: BrowserReportingResponse[]) =>
             this.onProfileReportingInfoReceived_(reportingInfo));
-
-    // <if expr="is_chromeos">
-    this.addWebUiListener(
-        'plugin-vm-data-collection-updated',
-        (enabled: boolean) => this.pluginVmDataCollectionEnabled_ = enabled);
-    // </if>
 
     this.addWebUiListener('managed_data_changed', () => {
       this.updateManagedFields_();
@@ -210,7 +218,6 @@ export class ManagementUiElement extends ManagementUiElementBase {
     });
     // <if expr="is_chromeos">
     this.getDeviceReportingInfo_();
-    this.getPluginVmDataCollectionStatus_();
     this.getLocalTrustRootsInfo_();
     this.getFilesUploadToCloudInfo_();
     // </if>
@@ -312,13 +319,6 @@ export class ManagementUiElement extends ManagementUiElementBase {
     });
   }
 
-  private getPluginVmDataCollectionStatus_() {
-    this.browserProxy_.getPluginVmDataCollectionStatus().then(
-        pluginVmDataCollectionEnabled => {
-          this.pluginVmDataCollectionEnabled_ = pluginVmDataCollectionEnabled;
-        });
-  }
-
   /**
    * @return Whether Desk sync section should be shown.
    */
@@ -350,45 +350,75 @@ export class ManagementUiElement extends ManagementUiElementBase {
       string {
     switch (reportingType) {
       case DeviceReportingType.SUPERVISED_USER:
-        return 'management:supervised-user';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:supervised-user-circle-filled' :
+            'management:supervised-user-old';
       case DeviceReportingType.DEVICE_ACTIVITY:
-        return 'management:timelapse';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:timelapse' :
+            'management:timelapse-old';
       case DeviceReportingType.STATISTIC:
-        return 'management:bar-chart';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:bar-chart' :
+            'management:bar-chart-old';
       case DeviceReportingType.DEVICE:
         return 'cr:computer';
       case DeviceReportingType.CRASH_REPORT:
-        return 'management:crash';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:release-alert' :
+            'management:crash-old';
       case DeviceReportingType.APP_INFO_AND_ACTIVITY:
-        return 'management:timelapse';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:timelapse' :
+            'management:timelapse-old';
       case DeviceReportingType.LOGS:
-        return 'management:report';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:report-filled' :
+            'management:report-old';
       case DeviceReportingType.PRINT:
-        return 'cr:print';
+        return 'cr:print-filled';
       case DeviceReportingType.PRINT_JOBS:
-        return 'cr:print';
+        return 'cr:print-filled';
       case DeviceReportingType.DLP_EVENTS:
-        return 'management:policy';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:policy-filled' :
+            'management:policy-old';
       case DeviceReportingType.CROSTINI:
-        return 'management:linux';
+        return 'management:linux-custom';
       case DeviceReportingType.USERNAME:
-        return 'management:account-circle';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:account-circle-filled' :
+            'management:account-circle-old';
       case DeviceReportingType.EXTENSION:
-        return 'cr:extension';
+        return 'cr:chrome-extension-filled';
       case DeviceReportingType.ANDROID_APPLICATION:
-        return 'management:play-store';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:play-prism-filled' :
+            'management:play-store-old';
       case DeviceReportingType.LOGIN_LOGOUT:
-        return 'management:timelapse';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:timelapse' :
+            'management:timelapse-old';
       case DeviceReportingType.CRD_SESSIONS:
-        return 'management:timelapse';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:timelapse' :
+            'management:timelapse-old';
       case DeviceReportingType.PERIPHERALS:
-        return 'management:usb';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:usb' :
+            'management:usb-old';
       case DeviceReportingType.LEGACY_TECH:
-        return 'management:legacy-tech';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:language' :
+            'management:legacy-tech-old';
       case DeviceReportingType.WEBSITE_INFO_AND_ACTIVITY:
-        return 'management:web';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:web' :
+            'management:web-old';
       case DeviceReportingType.FILE_EVENTS:
-        return 'management:policy';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:policy-filled' :
+            'management:policy-old';
       default:
         return 'cr:computer';
     }
@@ -449,20 +479,29 @@ export class ManagementUiElement extends ManagementUiElementBase {
       case ReportingType.DEVICE:
         return 'cr:computer';
       case ReportingType.EXTENSIONS:
-        return 'cr:extension';
+        return 'cr:chrome-extension-filled';
       case ReportingType.USER:
-        return 'management:account-circle';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:account-circle-filled' :
+            'management:account-circle-old';
       case ReportingType.USER_ACTIVITY:
-        return 'management:public';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:public' :
+            'management:public-old';
       case ReportingType.LEGACY_TECH:
-        return 'management:legacy-tech';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:language' :
+            'management:legacy-tech-old';
       case ReportingType.URL:
-        return 'management:link';
+        return loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'management:link' :
+            'management:link-old';
       default:
         return 'cr:security';
     }
   }
 
+  // <if expr="not is_android">
   /**
    * Handles the 'search-changed' event fired from the toolbar.
    * Redirects to the settings page initialized the the current
@@ -474,24 +513,17 @@ export class ManagementUiElement extends ManagementUiElementBase {
         `chrome://settings?search=${encodeURIComponent(query)}`;
   }
 
-  protected onTapBack_() {
+  protected onBackClick_() {
     if (history.length > 1) {
       history.back();
     } else {
       window.location.href = 'chrome://settings/help';
     }
   }
+  // </if>
 
-  protected onDismissPromotion_() {
+  protected onPromotionDismissed_() {
     this.shouldShowPromotion_ = false;
-    this.browserProxy_.setBannerDismissed();
-  }
-
-  protected onPromotionRedirect_() {
-    window.open(
-        'https://admin.google.com/ac/chrome/guides/?ref=browser&utm_source=chrome_policy_cec',
-        '_blank');
-    this.browserProxy_.recordBannerRedirected();
   }
 
   private updateManagedFields_() {
@@ -523,6 +555,22 @@ export class ManagementUiElement extends ManagementUiElementBase {
           data.browserManagementNotice, {attrs: ['aria-label']});
       // </if>
     });
+  }
+
+  // <if expr="not is_android">
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
+  }
+  // </if>
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'management-ui': ManagementUiElement;
   }
 }
 

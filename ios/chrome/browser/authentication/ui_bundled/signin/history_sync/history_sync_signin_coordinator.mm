@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/authentication/ui_bundled/signin/history_sync/history_sync_signin_coordinator.h"
 
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/base/user_selectable_type.h"
 #import "components/sync/service/sync_service.h"
@@ -93,18 +94,18 @@
       AuthenticationServiceFactory::GetForProfile(
           self.profile->GetOriginalProfile());
   id<SystemIdentity> primaryIdentity =
-      authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+      authenticationService->GetPrimaryIdentity();
   SigninCoordinatorResult signinResult;
   switch (result) {
     case HistorySyncResult::kSuccess:
     case HistorySyncResult::kUserCanceled:
     case HistorySyncResult::kSkipped:
       signinResult = SigninCoordinatorResultSuccess;
-      CHECK(primaryIdentity, base::NotFatalUntil::M145);
+      CHECK(primaryIdentity);
       break;
     case HistorySyncResult::kPrimaryIdentityRemoved:
       signinResult = SigninCoordinatorResultInterrupted;
-      CHECK(!primaryIdentity, base::NotFatalUntil::M145);
+      CHECK(!primaryIdentity);
       break;
   }
   if (primaryIdentity && _showSnackbar) {

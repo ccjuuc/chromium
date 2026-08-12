@@ -8,24 +8,24 @@ import android.view.LayoutInflater;
 import android.view.ViewGroup;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.magic_stack.ModuleConfigChecker;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
 import org.chromium.chrome.browser.magic_stack.ModuleProvider;
 import org.chromium.chrome.browser.magic_stack.ModuleProviderBuilder;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.segmentation_platform.InputContext;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 @NullMarked
-public class EducationalTipModuleBuilder implements ModuleProviderBuilder, ModuleConfigChecker {
+public class EducationalTipModuleBuilder implements ModuleProviderBuilder {
     private final EducationTipModuleActionDelegate mActionDelegate;
     private final @ModuleType int mModuleType;
     private @Nullable Profile mProfile;
@@ -41,15 +41,15 @@ public class EducationalTipModuleBuilder implements ModuleProviderBuilder, Modul
     @Override
     public boolean build(
             ModuleDelegate moduleDelegate, Callback<ModuleProvider> onModuleBuiltCallback) {
-        if (!ChromeFeatureList.sEducationalTipModule.isEnabled()
-                || !ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER)) {
-            return false;
-        }
+        if (!SetupListModuleUtils.isSetupListModule(mModuleType)) {
+            if (!EducationalTipModuleUtils.isEducationalTipActive()) {
+                return false;
+            }
 
-        if (mModuleType == ModuleType.DEFAULT_BROWSER_PROMO
-                && !ChromeFeatureList.sEducationalTipDefaultBrowserPromoCard.isEnabled()) {
-            return false;
+            if (mModuleType == ModuleType.DEFAULT_BROWSER_PROMO
+                    && !ChromeFeatureList.sEducationalTipDefaultBrowserPromoCard.isEnabled()) {
+                return false;
+            }
         }
 
         EducationalTipModuleCoordinator coordinator =
@@ -65,9 +65,22 @@ public class EducationalTipModuleBuilder implements ModuleProviderBuilder, Modul
     /** Create view for the educational tip module. */
     @Override
     public ViewGroup createView(ViewGroup parentView) {
-        return (ViewGroup)
-                LayoutInflater.from(mActionDelegate.getContext())
-                        .inflate(R.layout.educational_tip_module_layout, parentView, false);
+        int layoutId =
+                mModuleType == ModuleType.SETUP_LIST_CELEBRATORY_PROMO
+                        ? R.layout.setup_list_celebratory_promo_layout
+                        : R.layout.educational_tip_module_layout;
+        ViewGroup moduleView =
+                (ViewGroup)
+                        LayoutInflater.from(mActionDelegate.getContext())
+                                .inflate(layoutId, parentView, false);
+
+        if (SetupListModuleUtils.isSetupListModule(mModuleType)) {
+            // Setup List images don't have a background
+            moduleView
+                    .findViewById(R.id.educational_tip_module_content_image)
+                    .setBackgroundResource(0);
+        }
+        return moduleView;
     }
 
     /** Bind the property model for the educational tip module. */
@@ -76,11 +89,24 @@ public class EducationalTipModuleBuilder implements ModuleProviderBuilder, Modul
         EducationalTipModuleViewBinder.bind(model, view, propertyKey);
     }
 
-    // ModuleEligibilityChecker implementation:
+    @Override
+    public @Nullable Integer getManualRank() {
+        return SetupListModuleUtils.getManualRank(mModuleType);
+    }
 
     @Override
     public boolean isEligible() {
-        return ChromeFeatureList.sEducationalTipModule.isEnabled();
+        if (SetupListModuleUtils.isSetupListModule(mModuleType)) {
+            return SetupListModuleUtils.isModuleEligible(mModuleType);
+        }
+
+        // When the Setup List is inactive, check if Educational Tips are active globally.
+        if (!EducationalTipModuleUtils.isEducationalTipActive()) {
+            return false;
+        }
+
+        // Only standard Educational Tip modules are eligible.
+        return EducationalTipModuleUtils.getModuleTypes().contains(mModuleType);
     }
 
     @Override
@@ -92,7 +118,7 @@ public class EducationalTipModuleBuilder implements ModuleProviderBuilder, Modul
     }
 
     /** Gets the regular profile if exists. */
-    private Profile getRegularProfile(ObservableSupplier<Profile> profileSupplier) {
+    private Profile getRegularProfile(MonotonicObservableSupplier<Profile> profileSupplier) {
         if (mProfile != null) {
             return mProfile;
         }

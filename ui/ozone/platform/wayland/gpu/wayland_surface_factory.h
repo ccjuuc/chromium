@@ -52,16 +52,14 @@ class WaylandSurfaceFactory : public SurfaceFactoryOzone {
       gfx::Size size,
       viz::SharedImageFormat format,
       gfx::NativePixmapHandle handle) override;
-  std::optional<viz::SharedImageFormat> GetPreferredFormatForSolidColor()
-      const override;
   bool SupportsDrmModifiersFilter() const override;
   void SetDrmModifiersFilter(
       std::unique_ptr<DrmModifiersFilter> filter) override;
 
   bool SupportsNativePixmaps() const;
 
-  std::vector<gfx::BufferFormat> GetSupportedFormatsForTexturing()
-      const override;
+  bool IsFormatSupportedForTexturing(
+      viz::SharedImageFormat format) const override;
 
   void SetBufferManagerForTesting(WaylandBufferManagerGpu* buffer_manager);
 

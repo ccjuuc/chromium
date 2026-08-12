@@ -7,10 +7,14 @@ import 'chrome://settings/lazy_load.js';
 
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {SettingsPersonalizationOptionsElement} from 'chrome://settings/lazy_load.js';
-import type {SettingsPrefsElement} from 'chrome://settings/settings.js';
-import {CrSettingsPrefs, loadTimeData, PrivacyPageBrowserProxyImpl, resetPageVisibilityForTesting, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
+import {loadTimeData, PrefService, PrefsBrowserProxy, PrivacyPageBrowserProxyImpl, resetPageVisibilityForTesting, SignedInState, StatusAction, SyncBrowserProxyImpl} from 'chrome://settings/settings.js';
 import {assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
+// <if expr="_google_chrome and is_chromeos">
+import {OpenWindowProxyImpl} from 'chrome://settings/settings.js';
+import {TestOpenWindowProxy} from 'chrome://webui-test/test_open_window_proxy.js';
+import {isChildVisible} from 'chrome://webui-test/test_util.js';
+// </if>
 // <if expr="_google_chrome or not is_chromeos">
 import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 // </if>
@@ -24,34 +28,62 @@ import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 
 import {TestPrivacyPageBrowserProxy} from './test_privacy_page_browser_proxy.js';
 import {TestSyncBrowserProxy} from './test_sync_browser_proxy.js';
+import {TestPrefsBrowserProxy} from './test_prefs_browser_proxy.js';
 
 // clang-format on
+
+function createBooleanPref(
+    name: string, value: boolean): chrome.settingsPrivate.PrefObject {
+  return {
+    key: name,
+    type: chrome.settingsPrivate.PrefType.BOOLEAN,
+    value: value,
+  };
+}
+
+function getInitialPrefs(): chrome.settingsPrivate.PrefObject[] {
+  return [
+    createBooleanPref('search.suggest_enabled', true),
+    createBooleanPref('url_keyed_anonymized_data_collection.enabled', true),
+    createBooleanPref('page_content_collection.enabled', false),
+    createBooleanPref('price_tracking.email_notifications_enabled', true),
+    createBooleanPref('signin.allowed_on_next_startup', true),
+    createBooleanPref('spellcheck.use_spelling_service', false),
+    createBooleanPref('browser.enable_spellchecking', true),
+    {
+      key: 'spellcheck.dictionaries',
+      type: chrome.settingsPrivate.PrefType.LIST,
+      value: ['en-US'],
+    },
+  ];
+}
 
 suite('AllBuilds', function() {
   let testBrowserProxy: TestPrivacyPageBrowserProxy;
   let syncBrowserProxy: TestSyncBrowserProxy;
   let testElement: SettingsPersonalizationOptionsElement;
-  let settingsPrefs: SettingsPrefsElement;
 
   suiteSetup(function() {
     loadTimeData.overrideValues({
       signinAvailable: true,
       changePriceEmailNotificationsEnabled: true,
+      shouldUseMetricsConsentRestructure: true,
     });
-    settingsPrefs = document.createElement('settings-prefs');
-    return CrSettingsPrefs.initialized;
   });
 
   function buildTestElement() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     testElement = document.createElement('settings-personalization-options');
-    testElement.prefs = settingsPrefs.prefs!;
-    testElement.set('prefs.page_content_collection.enabled.value', false);
     document.body.appendChild(testElement);
     flush();
   }
 
-  setup(function() {
+  setup(async function() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
     testBrowserProxy = new TestPrivacyPageBrowserProxy();
     PrivacyPageBrowserProxyImpl.setInstance(testBrowserProxy);
     syncBrowserProxy = new TestSyncBrowserProxy();
@@ -163,7 +195,7 @@ suite('AllBuilds', function() {
         assertTrue(testElement.$.chromeSigninUserChoiceToast.open);
       });
 
-  test('signinAllowedToggle', function() {
+  test('signinAllowedToggle', async function() {
     const toggle = testElement.$.signinAllowedToggle;
     assertTrue(isVisible(toggle));
 
@@ -173,21 +205,27 @@ suite('AllBuilds', function() {
     };
     // Check initial setup.
     assertTrue(toggle.checked);
-    assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-    assertFalse(!!testElement.$.toast.open);
+    assertTrue(PrefService.getInstance()
+                   .getPref<boolean>('signin.allowed_on_next_startup')
+                   .value);
+    assertFalse(testElement.$.toast.open);
 
     // When the user is signed out, clicking the toggle should work
     // normally and the restart toast should be opened.
     toggle.click();
     assertFalse(toggle.checked);
-    assertFalse(testElement.prefs.signin.allowed_on_next_startup.value);
+    assertFalse(PrefService.getInstance()
+                    .getPref<boolean>('signin.allowed_on_next_startup')
+                    .value);
     assertTrue(testElement.$.toast.open);
 
     // Clicking it again, turns the toggle back on. The toast remains
     // open.
     toggle.click();
     assertTrue(toggle.checked);
-    assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
+    assertTrue(PrefService.getInstance()
+                   .getPref<boolean>('signin.allowed_on_next_startup')
+                   .value);
     assertTrue(testElement.$.toast.open);
 
     // Reset toast.
@@ -211,63 +249,62 @@ suite('AllBuilds', function() {
     assertFalse(
         !!testElement.shadowRoot!.querySelector('settings-signout-dialog'));
     toggle.click();
-    return eventToPromise('cr-dialog-open', testElement)
-        .then(function() {
-          flush();
-          // The toggle remains on.
-          assertTrue(toggle.checked);
-          assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertFalse(testElement.$.toast.open);
 
-          const signoutDialog =
-              testElement.shadowRoot!.querySelector('settings-signout-dialog');
-          assertTrue(!!signoutDialog);
-          assertTrue(signoutDialog.$.dialog.open);
+    await eventToPromise('cr-dialog-open', testElement);
+    flush();
+    // The toggle remains on.
+    assertTrue(toggle.checked);
+    assertTrue(PrefService.getInstance()
+                   .getPref<boolean>('signin.allowed_on_next_startup')
+                   .value);
+    assertFalse(testElement.$.toast.open);
 
-          // The user clicks cancel.
-          const cancel = signoutDialog.shadowRoot!.querySelector<HTMLElement>(
-              '#disconnectCancel')!;
-          cancel.click();
+    let signoutDialog =
+        testElement.shadowRoot!.querySelector('settings-signout-dialog');
+    assertTrue(!!signoutDialog);
+    assertTrue(signoutDialog.$.dialog.open);
 
-          return eventToPromise('close', signoutDialog);
-        })
-        .then(function() {
-          flush();
-          assertFalse(!!testElement.shadowRoot!.querySelector(
-              'settings-signout-dialog'));
+    // The user clicks cancel.
+    const cancel = signoutDialog.shadowRoot!.querySelector<HTMLElement>(
+        '#disconnectCancel')!;
+    cancel.click();
 
-          // After the dialog is closed, the toggle remains turned on.
-          assertTrue(toggle.checked);
-          assertTrue(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertFalse(testElement.$.toast.open);
+    await eventToPromise('close', signoutDialog);
+    flush();
+    assertFalse(
+        !!testElement.shadowRoot!.querySelector('settings-signout-dialog'));
 
-          // The user clicks the toggle again.
-          toggle.click();
-          return eventToPromise('cr-dialog-open', testElement);
-        })
-        .then(function() {
-          flush();
-          const signoutDialog =
-              testElement.shadowRoot!.querySelector('settings-signout-dialog');
-          assertTrue(!!signoutDialog);
-          assertTrue(signoutDialog.$.dialog.open);
+    // After the dialog is closed, the toggle remains turned on.
+    assertTrue(toggle.checked);
+    assertTrue(PrefService.getInstance()
+                   .getPref<boolean>('signin.allowed_on_next_startup')
+                   .value);
+    assertFalse(testElement.$.toast.open);
 
-          // The user clicks confirm, which signs them out.
-          const disconnectConfirm =
-              signoutDialog.shadowRoot!.querySelector<HTMLElement>(
-                  '#disconnectConfirm')!;
-          disconnectConfirm.click();
+    // The user clicks the toggle again.
+    toggle.click();
+    await eventToPromise('cr-dialog-open', testElement);
+    flush();
+    signoutDialog =
+        testElement.shadowRoot!.querySelector('settings-signout-dialog');
+    assertTrue(!!signoutDialog);
+    assertTrue(signoutDialog.$.dialog.open);
 
-          return eventToPromise('close', signoutDialog);
-        })
-        .then(function() {
-          flush();
-          // After the dialog is closed, the toggle is turned off and the
-          // toast is shown.
-          assertFalse(toggle.checked);
-          assertFalse(testElement.prefs.signin.allowed_on_next_startup.value);
-          assertTrue(testElement.$.toast.open);
-        });
+    // The user clicks confirm, which signs them out.
+    const disconnectConfirm =
+        signoutDialog.shadowRoot!.querySelector<HTMLElement>(
+            '#disconnectConfirm')!;
+    disconnectConfirm.click();
+
+    await eventToPromise('close', signoutDialog);
+    flush();
+    // After the dialog is closed, the toggle is turned off and the
+    // toast is shown.
+    assertFalse(toggle.checked);
+    assertFalse(PrefService.getInstance()
+                    .getPref<boolean>('signin.allowed_on_next_startup')
+                    .value);
+    assertTrue(testElement.$.toast.open);
   });
 
   // Tests that the "Allow sign-in" toggle is hidden when signin is not
@@ -415,12 +452,30 @@ suite('OfficialBuild', function() {
   let testBrowserProxy: TestPrivacyPageBrowserProxy;
   let testElement: SettingsPersonalizationOptionsElement;
 
-  setup(function() {
-    testBrowserProxy = new TestPrivacyPageBrowserProxy();
-    PrivacyPageBrowserProxyImpl.setInstance(testBrowserProxy);
+  suiteSetup(function() {
+    loadTimeData.overrideValues({
+      signinAvailable: true,
+      changePriceEmailNotificationsEnabled: true,
+      shouldUseMetricsConsentRestructure: true,
+    });
+  });
+
+  function buildTestElement() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     testElement = document.createElement('settings-personalization-options');
     document.body.appendChild(testElement);
+    flush();
+  }
+
+  setup(async function() {
+    const prefsBrowserProxy = new TestPrefsBrowserProxy(getInitialPrefs());
+    PrefsBrowserProxy.setInstance(prefsBrowserProxy);
+    PrefService.resetInstanceForTesting();
+    await PrefService.getInstance().whenInitialized();
+
+    testBrowserProxy = new TestPrivacyPageBrowserProxy();
+    PrivacyPageBrowserProxyImpl.setInstance(testBrowserProxy);
+    buildTestElement();
   });
 
   teardown(function() {
@@ -433,86 +488,70 @@ suite('OfficialBuild', function() {
   // Settings supports TypeScript tests.
   // <if expr="not is_chromeos">
   test('Spellcheck toggle', function() {
-    testElement.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-      page_content_collection: {enabled: {value: true}},
-      spellcheck: {dictionaries: {value: ['en-US']}},
-    };
+    PrefService.getInstance().setPrefValue(
+        'spellcheck.dictionaries', ['en-US']);
     flush();
     const shadowRoot = testElement.shadowRoot!;
     assertFalse(
         shadowRoot.querySelector<HTMLElement>('#spellCheckControl')!.hidden);
 
-    testElement.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-      page_content_collection: {enabled: {value: true}},
-      spellcheck: {dictionaries: {value: []}},
-    };
+    PrefService.getInstance().setPrefValue('spellcheck.dictionaries', []);
     flush();
     assertTrue(
         shadowRoot.querySelector<HTMLElement>('#spellCheckControl')!.hidden);
 
-    testElement.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-      page_content_collection: {enabled: {value: true}},
-      browser: {enable_spellchecking: {value: false}},
-      spellcheck: {
-        dictionaries: {value: ['en-US']},
-        use_spelling_service: {value: false},
-      },
-    };
+    PrefService.getInstance().setPrefValue(
+        'spellcheck.dictionaries', ['en-US']);
+    PrefService.getInstance().setPrefValue(
+        'spellcheck.use_spelling_service', false);
     flush();
     shadowRoot.querySelector<HTMLElement>('#spellCheckControl')!.click();
-    assertTrue(testElement.prefs.spellcheck.use_spelling_service.value);
+    assertTrue(PrefService.getInstance()
+                   .getPref<boolean>('spellcheck.use_spelling_service')
+                   .value);
   });
   // </if>
 
   // Only the spellcheck link is shown on Chrome OS in Browser settings.
   // <if expr="is_chromeos">
   test('Spellcheck link', function() {
-    testElement.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-      page_content_collection: {enabled: {value: true}},
-      spellcheck: {dictionaries: {value: ['en-US']}},
-    };
+    PrefService.getInstance().setPrefValue(
+        'spellcheck.dictionaries', ['en-US']);
     flush();
     const shadowRoot = testElement.shadowRoot!;
     assertFalse(
         shadowRoot.querySelector<HTMLElement>('#spellCheckLink')!.hidden);
 
-    testElement.prefs = {
-      profile: {password_manager_leak_detection: {value: true}},
-      safebrowsing:
-          {enabled: {value: true}, scout_reporting_enabled: {value: true}},
-      page_content_collection: {enabled: {value: true}},
-      spellcheck: {dictionaries: {value: []}},
-    };
+    PrefService.getInstance().setPrefValue('spellcheck.dictionaries', []);
     flush();
     assertTrue(
         shadowRoot.querySelector<HTMLElement>('#spellCheckLink')!.hidden);
   });
-  // </if>
 
-  // <if expr="is_chromeos">
-  test('Metrics row links to OS Settings Privacy Hub subpage', function() {
-    let targetUrl: string = '';
-    testElement['navigateTo_'] = (url: string) => {
-      targetUrl = url;
-    };
+  test(
+      'Metrics row hidden when metrics consent restructure is enabled',
+      function() {
+        assertFalse(isChildVisible(testElement, '#metricsReportingLink'));
+      });
 
-    testElement.$.metricsReportingLink.click();
-    const expectedUrl =
-        loadTimeData.getString('osSettingsPrivacyHubSubpageUrl');
-    assertEquals(expectedUrl, targetUrl);
-  });
+  test(
+      'Metrics row links to OS Settings Privacy Hub subpage', async function() {
+        const openWindowProxy = new TestOpenWindowProxy();
+        OpenWindowProxyImpl.setInstance(openWindowProxy);
+
+        loadTimeData.overrideValues(
+            {shouldUseMetricsConsentRestructure: false});
+        buildTestElement();
+
+        assertTrue(isChildVisible(testElement, '#metricsReportingLink'));
+
+        testElement.shadowRoot!
+            .querySelector<HTMLElement>('#metricsReportingLink')!.click();
+        const url = await openWindowProxy.whenCalled('openUrl');
+        const expectedUrl =
+            loadTimeData.getString('osSettingsPrivacyHubSubpageUrl');
+        assertEquals(expectedUrl, url);
+      });
   // </if>
 });
 // </if>

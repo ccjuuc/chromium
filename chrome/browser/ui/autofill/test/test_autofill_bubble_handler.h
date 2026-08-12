@@ -47,6 +47,9 @@ class TestAutofillBubbleHandler : public AutofillBubbleHandler {
   AutofillBubbleBase* ShowSaveAutofillAiDataBubble(
       content::WebContents* web_contents,
       AutofillAiImportDataController* controller) override;
+  AutofillBubbleBase* ShowAutofillAiLocalSaveNotification(
+      content::WebContents* web_contents,
+      AutofillAiImportDataController* controller) override;
   AutofillBubbleBase* ShowSaveAddressProfileBubble(
       content::WebContents* contents,
       std::unique_ptr<SaveAddressBubbleController> controller,
@@ -82,6 +85,20 @@ class TestAutofillBubbleHandler : public AutofillBubbleHandler {
   AutofillBubbleBase* ShowSaveIbanConfirmationBubble(
       content::WebContents* web_contents,
       IbanBubbleController* controller) override;
+  AutofillBubbleBase* ShowOmniboxAutofillBubble(
+      content::WebContents* web_contents,
+      OmniboxAutofillBubbleController* controller) override;
+  AutofillBubbleBase* ShowPaymentsChurnedUsersBubble(
+      content::WebContents* web_contents,
+      PaymentsChurnedUsersBubbleController* controller,
+      bool is_user_gesture) override;
+  AutofillBubbleBase* ShowPaymentsChurnedUsersConfirmationBubble(
+      content::WebContents* web_contents,
+      PaymentsChurnedUsersBubbleController* controller) override;
+  AutofillBubbleBase* ShowWalletReminderNoticeBubble(
+      content::WebContents* web_contents,
+      WalletReminderNoticeBubbleController* controller,
+      bool is_user_gesture) override;
 
  private:
   std::unique_ptr<TestAutofillBubble> local_card_migration_bubble_view_;
@@ -92,6 +109,7 @@ class TestAutofillBubbleHandler : public AutofillBubbleHandler {
   std::unique_ptr<TestAutofillBubble> update_address_profile_bubble_view_;
   std::unique_ptr<TestAutofillBubble> address_sign_in_promo_bubble_view_;
   std::unique_ptr<TestAutofillBubble> save_autofill_ai_data_bubble_view_;
+  std::unique_ptr<TestAutofillBubble> autofill_ai_local_save_notification_view_;
   std::unique_ptr<TestAutofillBubble> edit_address_profile_bubble_view_;
   std::unique_ptr<TestAutofillBubble> filled_card_information_bubble_view_;
   std::unique_ptr<TestAutofillBubble> virtual_card_enroll_bubble_view_;
@@ -100,6 +118,11 @@ class TestAutofillBubbleHandler : public AutofillBubbleHandler {
   std::unique_ptr<TestAutofillBubble> mandatory_reauth_bubble_view_;
   std::unique_ptr<TestAutofillBubble> save_card_confirmation_bubble_view_;
   std::unique_ptr<TestAutofillBubble> save_iban_confirmation_bubble_view_;
+  std::unique_ptr<TestAutofillBubble> omnibox_autofill_bubble_view_;
+  std::unique_ptr<TestAutofillBubble> payments_churned_users_bubble_view_;
+  std::unique_ptr<TestAutofillBubble>
+      payments_churned_users_confirmation_bubble_view_;
+  std::unique_ptr<TestAutofillBubble> wallet_reminder_notice_bubble_view_;
 };
 
 }  // namespace autofill

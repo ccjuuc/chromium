@@ -13,6 +13,10 @@ namespace blink {
 class ScrollButtonPseudoElement : public PseudoElement,
                                   public PostLayoutSnapshotClient {
  public:
+  static PseudoId PseudoIdFromScrollButtonArgument(
+      const AtomicString& argument,
+      const ComputedStyle& originating_element_style);
+
   ScrollButtonPseudoElement(Element* originating_element, PseudoId pseudo_id);
 
   bool IsScrollButtonPseudoElement() const final { return true; }
@@ -21,10 +25,12 @@ class ScrollButtonPseudoElement : public PseudoElement,
   void DefaultEventHandler(Event&) override;
   bool HasActivationBehavior() const final { return true; }
   bool WillRespondToMouseClickEvents() override { return true; }
-  Node* InnerNodeForHitTesting() final { return this; }
 
   bool IsEnabled() const { return enabled_; }
   bool IsDisabledFormControl() const final { return !IsEnabled(); }
+  bool MatchesDisabledPseudoClass() const final { return !IsEnabled(); }
+  bool MatchesEnabledPseudoClass() const final { return IsEnabled(); }
+
   FocusableState SupportsFocus(UpdateBehavior update_behavior) const final;
 
   // PostLayoutSnapshotClient:
@@ -34,7 +40,9 @@ class ScrollButtonPseudoElement : public PseudoElement,
   void Trace(Visitor* v) const final;
 
  private:
-  void HandleButtonActivation();
+  // Returns true if activation behavior was performed and the event should be
+  // considered handled.
+  bool HandleButtonActivation();
 
   bool enabled_ = true;
 };

@@ -9,7 +9,6 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/sharing_message/fake_device_info.h"
 #include "components/sharing_message/pref_names.h"
 #include "components/sharing_message/proto/sharing_message.pb.h"
 #include "components/sync/protocol/device_info_specifics.pb.h"
@@ -42,14 +41,14 @@ class SharingSyncPreferenceTest : public testing::Test {
         {kDeviceSenderIdFcmToken, kDeviceSenderIdP256dh,
          kDeviceSenderIdAuthToken},
         /*chime_representative_target_id=*/std::string(),
-        std::set<sync_pb::SharingSpecificFields::EnabledFeatures>{
-            sync_pb::SharingSpecificFields::CLICK_TO_CALL_V2});
+        std::set<syncer::DeviceInfo::SharingFeature>{
+            syncer::DeviceInfo::SharingFeature::kRemoteCopy});
   }
 
   void AddEnabledFeature(int feature) {
-    const base::Value::Dict& registration =
+    const base::DictValue& registration =
         prefs_.GetDict(prefs::kSharingLocalSharingInfo);
-    base::Value::List enabled_features =
+    base::ListValue enabled_features =
         registration.FindList(kSharingInfoEnabledFeatures)->Clone();
 
     enabled_features.Append(feature);

@@ -12,6 +12,7 @@
 #include "base/command_line.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/no_destructor.h"
@@ -190,7 +191,7 @@ class OzonePlatformWayland : public OzonePlatform,
 
   WaylandUtils* GetPlatformUtils() override { return wayland_utils_.get(); }
 
-  bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                      gfx::BufferUsage usage) const override {
 #if defined(WAYLAND_GBM)
     // If there is no drm render node device available, native pixmaps are not
@@ -199,7 +200,7 @@ class OzonePlatformWayland : public OzonePlatform,
       return false;
 
     // When OzonePlatform instance is called from GPU process,
-    // |supported_buffer_formats_| is empty. Supported buffer formats are sent
+    // |supported_formats_| is empty. Supported shared image formats are sent
     // to |buffer_manager_| via IPC after gpu service init in that case.
     if (buffer_manager_) {
       if (!buffer_manager_->SupportsFormat(format)) {
@@ -211,12 +212,11 @@ class OzonePlatformWayland : public OzonePlatform,
       // imported as wl_buffer.
       auto* gbm_device = buffer_manager_->GetGbmDevice();
       if (!gbm_device || !gbm_device->CanCreateBufferForFormat(
-                             GetFourCCFormatFromBufferFormat(format))) {
+                             GetFourCCFormatFromSharedImageFormat(format))) {
         return false;
       }
     } else {
-      if (supported_buffer_formats_.find(format) ==
-          supported_buffer_formats_.end()) {
+      if (supported_formats_.find(format) == supported_formats_.end()) {
         return false;
       }
     }
@@ -235,6 +235,12 @@ class OzonePlatformWayland : public OzonePlatform,
 
   bool ShouldUseCustomFrame() override {
     return connection_->xdg_decoration_manager_v1() == nullptr;
+  }
+
+  void OnPreSandboxStartup() override {
+    // TODO(https://crbug.com/40083534): It may not be necessary to set this
+    // environment variable when using swiftshader.
+    setenv("EGL_PLATFORM", "wayland", 0);
   }
 
   bool InitializeUI(const InitParams& args) override {
@@ -295,8 +301,8 @@ class OzonePlatformWayland : public OzonePlatform,
     input_controller_ = std::make_unique<StubInputController>();
     gpu_platform_support_host_.reset(CreateStubGpuPlatformSupportHost());
 
-    supported_buffer_formats_ =
-        connection_->buffer_manager_host()->GetSupportedBufferFormats();
+    supported_formats_ =
+        connection_->buffer_manager_host()->GetSupportedSharedImageFormats();
     linux_ui_delegate_ =
         std::make_unique<LinuxUiDelegateWayland>(connection_.get());
 
@@ -360,10 +366,10 @@ class OzonePlatformWayland : public OzonePlatform,
       // arbitrary position.
       properties->supports_global_screen_coordinates = false;
 
-      // TODO(crbug.com/40800718): Revisit (and maybe remove) once proper
-      // support, probably backed by org.freedesktop.portal.Screenshot.PickColor
-      // API is implemented.
-      properties->supports_color_picker_dialog = false;
+      // Sever communicates a preferred drm device for chrome to both composite
+      // and decode video. This is a workaround to prevent decoding and
+      // compositing on different GPUs.
+      properties->webgpu_on_vulkan_via_gl_interop = true;
 
       initialised = true;
     }
@@ -546,9 +552,9 @@ class OzonePlatformWayland : public OzonePlatform,
   std::unique_ptr<WaylandOverlayManager> overlay_manager_;
   std::unique_ptr<WaylandGLEGLUtility> gl_egl_utility_;
 
-  // Provides supported buffer formats for native gpu memory buffers
+  // Provides supported shared image formats for native gpu memory buffers
   // framework.
-  wl::BufferFormatsWithModifiersMap supported_buffer_formats_;
+  wl::SharedImageFormatsWithModifiersMap supported_formats_;
 
 #if defined(WAYLAND_GBM)
   // This is used both in the gpu and browser processes to find out if a drm

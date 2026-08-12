@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model.h"
 #include "chrome/browser/ui/content_settings/content_setting_image_model_states.h"
+#include "chrome/browser/ui/content_settings/content_setting_image_view_delegate.h"
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 #include "components/user_education/common/help_bubble/help_bubble.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -42,30 +43,9 @@ class ContentSettingImageView : public IconLabelBubbleView,
   METADATA_HEADER(ContentSettingImageView, IconLabelBubbleView)
 
  public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMediaActivityIndicatorElementId);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMidiActivityIndicatorElementId);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMidiSysexActivityIndicatorElementId);
-  class Delegate {
-   public:
-    // Delegate should return true if the content setting icon should be hidden.
-    virtual bool ShouldHideContentSettingImage() = 0;
-
-    // Gets the web contents the ContentSettingImageView is for.
-    virtual content::WebContents* GetContentSettingWebContents() = 0;
-
-    // Gets the ContentSettingBubbleModelDelegate for this
-    // ContentSettingImageView.
-    virtual ContentSettingBubbleModelDelegate*
-    GetContentSettingBubbleModelDelegate() = 0;
-
-    // Invoked when a bubble is shown.
-    virtual void OnContentSettingImageBubbleShown(
-        ContentSettingImageModel::ImageType type) const {}
-  };
-
   ContentSettingImageView(std::unique_ptr<ContentSettingImageModel> image_model,
                           IconLabelBubbleView::Delegate* parent_delegate,
-                          Delegate* delegate,
+                          ContentSettingImageViewDelegate* delegate,
                           Browser* browser,
                           const gfx::FontList& font_list);
   ContentSettingImageView(const ContentSettingImageView&) = delete;
@@ -97,11 +77,13 @@ class ContentSettingImageView : public IconLabelBubbleView,
 
   views::Widget* GetBubbleWidgetForTesting() const;
 
+  views::BubbleDialogDelegateView* GetBubbleViewForTesting() const;
+
   ContentSettingImageModel* content_setting_image_model() const {
     return content_setting_image_model_.get();
   }
 
-  Delegate* delegate() const { return delegate_; }
+  ContentSettingImageViewDelegate* delegate() const { return delegate_; }
 
   void reset_animation_for_testing() {
     IconLabelBubbleView::ResetSlideAnimation(true);
@@ -120,6 +102,10 @@ class ContentSettingImageView : public IconLabelBubbleView,
   }
 
  private:
+  // Avoid confusing between IconLabelBubbleView::Delegate and now globalized
+  // ContentSettingImageViewDelegate.
+  using IconLabelBubbleView::Delegate;
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
 
@@ -128,7 +114,7 @@ class ContentSettingImageView : public IconLabelBubbleView,
 
   void UpdateElementIdentifier();
 
-  raw_ptr<Delegate> delegate_ = nullptr;  // Weak.
+  raw_ptr<ContentSettingImageViewDelegate> delegate_ = nullptr;  // Weak.
   std::unique_ptr<ContentSettingImageModel> content_setting_image_model_;
   raw_ptr<views::BubbleDialogDelegateView> bubble_view_ = nullptr;
   std::optional<SkColor> icon_color_;

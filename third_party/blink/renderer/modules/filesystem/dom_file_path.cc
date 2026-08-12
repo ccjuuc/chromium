@@ -54,18 +54,20 @@ String DOMFilePath::EnsureDirectoryPath(const String& path) {
 }
 
 String DOMFilePath::GetName(const String& path) {
-  int index = path.ReverseFind(DOMFilePath::kSeparator);
-  if (index != -1)
-    return path.Substring(index + 1);
+  auto index = path.rfind(DOMFilePath::kSeparator);
+  if (index != String::npos) {
+    return path.substr(index + 1);
+  }
   return path;
 }
 
 String DOMFilePath::GetDirectory(const String& path) {
-  int index = path.ReverseFind(DOMFilePath::kSeparator);
+  auto index = path.rfind(DOMFilePath::kSeparator);
   if (!index)
     return DOMFilePath::kRoot;
-  if (index != -1)
-    return path.Substring(0, index);
+  if (index != String::npos) {
+    return path.substr(0, index);
+  }
   return ".";
 }
 
@@ -85,9 +87,9 @@ bool DOMFilePath::IsParentOf(const String& parent, const String& may_be_child) {
 
 String DOMFilePath::RemoveExtraParentReferences(const String& path) {
   DCHECK(DOMFilePath::IsAbsolute(path));
-  Vector<String> components;
-  Vector<String> canonicalized;
-  path.Split(DOMFilePath::kSeparator, components);
+  Vector<StringView> canonicalized;
+  Vector<StringView> components =
+      StringView(path).SplitSkippingEmpty(DOMFilePath::kSeparator);
   for (const auto& component : components) {
     if (component == ".")
       continue;
@@ -105,7 +107,7 @@ String DOMFilePath::RemoveExtraParentReferences(const String& path) {
     result.Append(DOMFilePath::kSeparator);
     result.Append(component);
   }
-  return result.ToString();
+  return result.ReleaseString();
 }
 
 bool DOMFilePath::IsValidPath(const String& path) {
@@ -113,21 +115,21 @@ bool DOMFilePath::IsValidPath(const String& path) {
     return true;
 
   // Embedded NULs are not allowed.
-  if (path.find(static_cast<UChar>(0)) != kNotFound) {
+  if (path.contains('\0')) {
     return false;
   }
 
   // While not [yet] restricted by the spec, '\\' complicates implementation for
   // Chromium.
-  if (path.find('\\') != kNotFound) {
+  if (path.contains('\\')) {
     return false;
   }
 
   // This method is only called on fully-evaluated absolute paths. Any sign of
   // ".." or "." is likely an attempt to break out of the sandbox.
-  Vector<String> components;
-  path.Split(DOMFilePath::kSeparator, components);
-  return std::ranges::none_of(components, [](const String& component) {
+  Vector<StringView> components =
+      StringView(path).SplitSkippingEmpty(DOMFilePath::kSeparator);
+  return std::ranges::none_of(components, [](const StringView& component) {
     return component == "." || component == "..";
   });
 }
@@ -136,8 +138,9 @@ bool DOMFilePath::IsValidName(const String& name) {
   if (name.empty())
     return true;
   // '/' is not allowed in name.
-  if (name.Contains('/'))
+  if (name.contains('/')) {
     return false;
+  }
   return IsValidPath(name);
 }
 

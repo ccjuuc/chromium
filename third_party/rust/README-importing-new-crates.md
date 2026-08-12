@@ -41,7 +41,7 @@ that Chromium depends on are described by two files:
 * `//third_party/rust/chromium_crates_io/gnrt_config.toml`.
   This file defines Chromium-specific, `cargo`-agnostic metadata like:
       - Configuring certain aspects of Chromium build (e.g. `allow_unsafe`,
-        `allow_unstable_features`, `extra_src_roots`, `group = "test"`, etc.)
+        `allow_unstable_features`, `extra_input_roots`, `group = "test"`, etc.)
       - Specifying licensing information when it can't be automatically inferred
         (e.g. pointing out `license_files` with non-standard filenames).
 
@@ -75,7 +75,7 @@ To import a third-party crate follow the steps below:
    * `git add third_party/rust`
 1. Upload the CL and get a review from `//third_party/rust/OWNERS`
    (check
-   [`third_party/rust/OWNERS-review-checklist.md`](../third_party/rust/OWNERS-review-checklist.md)
+   [`third_party/rust/OWNERS-review-checklist.md`](OWNERS-review-checklist.md)
    to see what to expect).
 
 Note that at this point the new crate is still not seen by `gn` nor `ninja`,
@@ -113,19 +113,15 @@ with discovering additional files consumed with something like
 So, if you see:
 
 ```
-ERROR: file not in GN sources:
+ERROR: Rust source file or input not in GN sources:
 ../../third_party/rust/chromium_crates_io/vendor/some_crate/README.md
 ```
 
-Then you can:
+Then you can add the missing files to
+`third_party/rust/chromium_crates_io/gnrt_config.toml` and then
+re-generate `BUILD.gn` files by running
+`tools/crates/run_gnrt.py gen`.
 
-* Add the missing files to
-  `third_party/rust/chromium_crates_io/gnrt_config.toml` - for example:
-
-  ```
-  [crate.some_crate]
-  extra_input_roots = ['../README.md']
-  ```
-
-* Re-generate `BUILD.gn` files by running:
-  `tools/crates/run_gnrt.py gen`
+See also
+[`//docs/rust/build_errors_guide.md`](../../docs/rust/build_errors_guide.md)
+(search for "Rust source file or input not in GN inputs").

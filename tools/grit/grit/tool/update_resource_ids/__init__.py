@@ -247,10 +247,16 @@ Other options:
     # Update "SRCDIR" entry if output is specified.
     if args.output:
       new_srcdir = os.path.relpath(src_dir, os.path.dirname(args.output))
+      # Windows uses backslashes in paths, which can cause issues when running
+      # the generated file on Linux. Force forward slashes.
+      new_srcdir = new_srcdir.replace('\\', '/')
       repl.append((root_obj['SRCDIR'].lo, root_obj['SRCDIR'].hi,
                    repr(new_srcdir)))
+      # Make the input relative to src_dir (the source root), not new_srcdir
+      # (the output dir), which would bake the absolute checkout path in.
       rel_input_dir = os.path.join('$SRCDIR',
-                                   os.path.relpath(rel_input_dir, new_srcdir))
+                                   os.path.relpath(rel_input_dir,
+                                                   src_dir)).replace('\\', '/')
 
     new_data = _MultiReplace(data, repl)
     if args.add_header:

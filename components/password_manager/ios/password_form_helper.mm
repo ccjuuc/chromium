@@ -8,6 +8,7 @@
 
 #import "base/debug/crash_logging.h"
 #import "base/debug/dump_without_crashing.h"
+#import "base/feature_list.h"
 #import "base/functional/bind.h"
 #import "base/memory/raw_ptr.h"
 #import "base/metrics/histogram_functions.h"
@@ -21,6 +22,7 @@
 #import "components/autofill/core/common/password_form_fill_data.h"
 #import "components/autofill/core/common/unique_ids.h"
 #import "components/autofill/ios/browser/autofill_util.h"
+#import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/common/field_data_manager_factory_ios.h"
 #import "components/password_manager/ios/account_select_fill_data.h"
 #import "components/password_manager/ios/ios_password_manager_driver.h"
@@ -131,13 +133,28 @@ const char kHostFrameKey[] = "host_frame";
                           inFrame:(web::WebFrame*)frame
                    perfectFilling:(BOOL)perfectFilling {
   DCHECK_EQ(_webState, webState);
+  if (!hasUserGesture &&
+      base::FeatureList::IsEnabled(
+          kAutofillRejectFormSubmissionsWithoutUserGesture)) {
+    base::UmaHistogramEnumeration(
+        "PasswordManager.iOS.FormSubmission.BlockedReason",
+        autofill::SubmissionBlockedReason::kNoUserGesture);
+    return;
+  }
+
   GURL pageURL = webState->GetLastCommittedURL();
   if (!frame->GetSecurityOrigin().IsSameOriginWith(pageURL)) {
     // Passwords is only supported on main frame and iframes with the same
     // origin.
+    base::UmaHistogramEnumeration(
+        "PasswordManager.iOS.FormSubmission.BlockedReason",
+        autofill::SubmissionBlockedReason::kCrossOriginFrame);
     return;
   }
   if (!self.delegate) {
+    base::UmaHistogramEnumeration(
+        "PasswordManager.iOS.FormSubmission.BlockedReason",
+        autofill::SubmissionBlockedReason::kNoDelegate);
     return;
   }
 
@@ -154,8 +171,9 @@ const char kHostFrameKey[] = "host_frame";
       autofill::FieldDataManagerFactoryIOS::FromWebFrame(frame);
 
   std::optional<std::vector<FormData>> formsData = autofill::ExtractFormsData(
-      JSONString, false, std::u16string(), pageURL, frame->GetSecurityOrigin(),
-      *fieldDataManager, frame->GetFrameId());
+      JSONString, /*form_name_filter=*/std::nullopt, pageURL,
+      frame->GetSecurityOrigin(), frame->GetUrl(), *fieldDataManager,
+      frame->GetFrameId());
   if (!formsData) {
     return;
   }
@@ -292,6 +310,7 @@ const char kHostFrameKey[] = "host_frame";
 - (void)fillPasswordFormWithFillData:(password_manager::FillData)fillData
                              inFrame:(web::WebFrame*)frame
                     triggeredOnField:(FieldRendererId)fieldRendererID
+                   triggerSubmission:(BOOL)triggerSubmission
                    completionHandler:
                        (nullable void (^)(BOOL))completionHandler {
   const scoped_refptr<autofill::FieldDataManager> fieldDataManager =
@@ -305,21 +324,23 @@ const char kHostFrameKey[] = "host_frame";
       fieldRendererID == fillData.username_element_id ||
       !fieldDataManager->DidUserType(fillData.username_element_id);
   __weak PasswordFormHelper* weakSelf = self;
+
+  auto callback = base::BindOnce(^(const base::Value* result) {
+    const BOOL success = [weakSelf handleFillResult:result
+                                       fromFillData:fillData
+                               withFieldDataManager:fieldDataManager.get()
+                                             driver:driver.get()];
+
+    if (completionHandler) {
+      completionHandler(success);
+    }
+  });
+
   password_manager::PasswordManagerJavaScriptFeature::GetInstance()
       ->FillPasswordForm(frame, fillData, fillUsername,
                          UTF16ToUTF8(fillData.username_value),
                          UTF16ToUTF8(fillData.password_value),
-                         base::BindOnce(^(const base::Value* result) {
-                           const BOOL success =
-                               [weakSelf handleFillResult:result
-                                             fromFillData:fillData
-                                     withFieldDataManager:fieldDataManager.get()
-                                                   driver:driver.get()];
-
-                           if (completionHandler) {
-                             completionHandler(success);
-                           }
-                         }));
+                         std::move(callback), triggerSubmission);
 }
 
 // Finds the password form named |formName| and calls
@@ -350,9 +371,9 @@ const char kHostFrameKey[] = "host_frame";
   password_manager::PasswordManagerJavaScriptFeature::GetInstance()
       ->ExtractForm(
           frame, formIdentifier, base::BindOnce(^(NSString* jsonString) {
-            if (std::optional<FormData> formData =
-                    JsonStringToFormData(jsonString, *pageURL, frame_origin,
-                                         *fieldDataManager, frame_id)) {
+            if (std::optional<FormData> formData = JsonStringToFormData(
+                    jsonString, *pageURL, frame_origin, frame->GetUrl(),
+                    *fieldDataManager, frame_id)) {
               completionHandler(YES, *formData);
               return;
             }
@@ -381,13 +402,17 @@ const char kHostFrameKey[] = "host_frame";
     return HandleSubmittedFormStatus::kRejectedNoDelegate;
   }
 
+  if (!message.is_user_interacting()) {
+    return HandleSubmittedFormStatus::kRejectedNoUserInteraction;
+  }
+
   std::optional<GURL> pageURL = _webState->GetLastCommittedURLIfTrusted();
   if (!pageURL) {
     return HandleSubmittedFormStatus::kRejectedNoTrustedUrl;
   }
 
   web::WebFrame* frame = nullptr;
-  base::Value* body = message.body();
+  base::Value* body = message.legacy_body();
 
   if (!body->is_dict()) {
     // Don't handle the message if it isn't of dictionary type. The renderer
@@ -411,10 +436,13 @@ const char kHostFrameKey[] = "host_frame";
   autofill::FieldDataManager* fieldDataManager =
       autofill::FieldDataManagerFactoryIOS::FromWebFrame(frame);
 
-  if (std::optional<FormData> form = autofill::ExtractFormData(
-          dict, false, std::u16string(), *pageURL,
-          url::Origin::Create(*pageURL), *fieldDataManager, *host_frame)) {
-    [self.delegate formHelper:self didSubmitForm:*form inFrame:frame];
+  if (base::expected<FormData, autofill::ExtractFormDataFailure> form =
+          autofill::ExtractFormData(dict, /*form_name_filter=*/std::nullopt,
+                                    *pageURL, url::Origin::Create(*pageURL),
+                                    frame->GetUrl(), *fieldDataManager,
+                                    *host_frame);
+      form.has_value()) {
+    [self.delegate formHelper:self didSubmitForm:form.value() inFrame:frame];
 
     return HandleSubmittedFormStatus::kHandled;
   }

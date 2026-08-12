@@ -30,6 +30,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_quad.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect_read_only.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_element_image.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_fenced_frame_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file_list.h"
@@ -38,11 +39,13 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_message_port.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_mojo_handle.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_offscreen_canvas.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_quota_exceeded_error.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_readable_stream.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_transform_stream.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_writable_stream.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/dom/quota_exceeded_error.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/fileapi/file.h"
@@ -55,6 +58,7 @@
 #include "third_party/blink/renderer/core/geometry/dom_quad.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_read_only.h"
+#include "third_party/blink/renderer/core/html/canvas/element_image.h"
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
 #include "third_party/blink/renderer/core/html/fenced_frame/fenced_frame_config.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
@@ -215,8 +219,10 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   }
 
   bool read_header;
-  if (!deserializer_.ReadHeader(context).To(&read_header))
+  if (!deserializer_.ReadHeader(context).To(&read_header)) {
+    has_error_ = true;
     return v8::Null(isolate);
+  }
   DCHECK(read_header);
 
   // If there was no Blink envelope earlier, Blink shares the wire format
@@ -228,8 +234,11 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   Transfer();
 
   v8::Local<v8::Value> value;
-  if (!deserializer_.ReadValue(context).ToLocal(&value))
+  if (!deserializer_.ReadValue(context).ToLocal(&value)) {
+    has_error_ = true;
     return v8::Null(isolate);
+  }
+
   if (slow_mode_ && value->IsObject()) {
     // TODO(caseq): consider additionally gating this on payload size.
     MaskDeserializationTimings(value.As<v8::Object>());
@@ -326,7 +335,7 @@ void V8ScriptValueDeserializer::MaskDeserializationTimings(
   // Deserialize the message in an empty isolate a random number of times
   // to mask whether the time of the original deserialization in the
   // target isolate.
-  int iterations = base::RandInt(4, 8);
+  int iterations = base::RandIntInclusive(4, 8);
 
   while (iterations--) {
     v8::ValueDeserializer deserializer(isolate, serialized->Data(),
@@ -399,7 +408,7 @@ bool V8ScriptValueDeserializer::ReadUTF8String(String* string) {
       !ReadRawBytesToSpan(utf8_length, &utf8_data)) {
     return false;
   }
-  *string = String::FromUTF8(utf8_data);
+  *string = String::FromUtf8(utf8_data);
 
   // Decoding must have failed; this encoding does not distinguish between null
   // and empty strings.
@@ -557,6 +566,17 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
         return nullptr;
       return transferred_image_bitmaps[index].Get();
     }
+    case kElementImageTransferTag: {
+      uint32_t index = 0;
+      if (!unpacked_value_) {
+        return nullptr;
+      }
+      const auto& transferred_element_images = unpacked_value_->ElementImages();
+      if (!ReadUint32(&index) || index >= transferred_element_images.size()) {
+        return nullptr;
+      }
+      return transferred_element_images[index].Get();
+    }
     case kImageDataTag: {
       SerializedPredefinedColorSpace predefined_color_space =
           SerializedPredefinedColorSpace::kSRGB;
@@ -605,7 +625,7 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
       size_t byte_length = 0;
       base::span<const uint8_t> pixel_data;
       if (!ReadUint64(&byte_length_64) ||
-          !base::MakeCheckedNum(byte_length_64).AssignIfValid(&byte_length) ||
+          !base::CheckedNumeric(byte_length_64).AssignIfValid(&byte_length) ||
           !ReadRawBytesToSpan(byte_length, &pixel_data)) {
         return nullptr;
       }
@@ -726,13 +746,11 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
           !ReadUint32(&sink_id)) {
         return nullptr;
       }
-      OffscreenCanvas* canvas =
-          OffscreenCanvas::Create(GetScriptState(), width, height);
+      OffscreenCanvas* canvas = OffscreenCanvas::Create(
+          GetScriptState(), width, height, client_id, sink_id, canvas_id);
       canvas->SetLocale(LayoutLocale::Get(AtomicString(locale_string)));
       SerializedTextDirectionSettings direction_setting(serialized_direction);
       canvas->SetTextDirection(direction_setting.GetTextDirection());
-      canvas->SetPlaceholderCanvasId(canvas_id);
-      canvas->SetFrameSinkId(client_id, sink_id);
       return canvas;
     }
     case kReadableStreamTransferTag: {
@@ -801,6 +819,20 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
       }
       // DOMException::Create takes its arguments in the opposite order.
       return DOMException::Create(message, name);
+    }
+    case kQuotaExceededErrorTag: {
+      // See the serialization side for |stack_unused|.
+      String message, stack_unused;
+      uint32_t has_quota, has_requested;
+      double quota, requested;
+      if (!ReadUTF8String(&message) || !ReadUTF8String(&stack_unused) ||
+          !ReadUint32(&has_quota) || !ReadDouble(&quota) ||
+          !ReadUint32(&has_requested) || !ReadDouble(&requested)) {
+        return nullptr;
+      }
+      return QuotaExceededError::Create(
+          message, has_quota ? std::make_optional(quota) : std::nullopt,
+          has_requested ? std::make_optional(requested) : std::nullopt);
     }
     case kFencedFrameConfigTag: {
       String url_string, shared_storage_context, urn_uuid_string;
@@ -1033,6 +1065,8 @@ bool V8ScriptValueDeserializer::ExecutionContextExposesInterface(
     case kImageBitmapTag:
     case kImageBitmapTransferTag:
       return V8ImageBitmap::IsExposed(execution_context);
+    case kElementImageTransferTag:
+      return V8ElementImage::IsExposed(execution_context);
     case kImageDataTag:
       return V8ImageData::IsExposed(execution_context);
     case kDOMPointTag:
@@ -1076,6 +1110,8 @@ bool V8ScriptValueDeserializer::ExecutionContextExposesInterface(
     }
     case kDOMExceptionTag:
       return V8DOMException::IsExposed(execution_context);
+    case kQuotaExceededErrorTag:
+      return V8QuotaExceededError::IsExposed(execution_context);
     case kFencedFrameConfigTag:
       return V8FencedFrameConfig::IsExposed(execution_context);
     default:

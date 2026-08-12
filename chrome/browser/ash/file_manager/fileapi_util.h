@@ -91,6 +91,9 @@ typedef base::OnceCallback<void(FileChooserFileInfoList)>
 // TODO(crbug.com/40752851): Replace with dynamic listener URL.
 const GURL GetFileManagerURL();
 
+// Returns the base URL of the ImageLoader extension.
+const GURL GetImageLoaderBaseURL();
+
 // Returns whether the given URL identifies the File Manager as a source. This
 // can be used to see if a private API calls come from the File Manager or not.
 bool IsFileManagerURL(const GURL& source_url);
@@ -161,10 +164,10 @@ void ConvertSelectedFileInfoListToFileChooserFileInfoList(
     FileChooserFileInfoListCallback callback);
 
 // Converts EntryDefinition to something File API stack can understand.
-base::Value::Dict ConvertEntryDefinitionToValue(
+base::DictValue ConvertEntryDefinitionToValue(
     const EntryDefinition& entry_definition);
 
-base::Value::List ConvertEntryDefinitionListToListValue(
+base::ListValue ConvertEntryDefinitionListToListValue(
     const EntryDefinitionList& entry_definition_list);
 
 // Checks if a directory exists at |directory_path| absolute path.

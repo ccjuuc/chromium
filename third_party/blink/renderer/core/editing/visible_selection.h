@@ -105,10 +105,11 @@ class VisibleSelectionTemplate {
   // Where the end click happened
   PositionTemplate<Strategy> focus_;
 
-  TextAffinity affinity_;  // the upstream/downstream affinity of the caret
+  // The upstream/downstream affinity of the caret.
+  TextAffinity affinity_ = TextAffinity::kDownstream;
 
   // these are cached, can be recalculated by validate()
-  bool anchor_is_first_ : 1;  // True if anchor is before the focus
+  bool anchor_is_first_ : 1 = true;  // True if anchor is before the focus
 };
 
 extern template class CORE_EXTERN_TEMPLATE_EXPORT
@@ -120,12 +121,12 @@ using VisibleSelection = VisibleSelectionTemplate<EditingStrategy>;
 using VisibleSelectionInFlatTree =
     VisibleSelectionTemplate<EditingInFlatTreeStrategy>;
 
-CORE_EXPORT VisibleSelection CreateVisibleSelection(const SelectionInDOMTree&);
+CORE_EXPORT VisibleSelection CreateVisibleSelection(const SelectionInDomTree&);
 CORE_EXPORT VisibleSelectionInFlatTree
 CreateVisibleSelection(const SelectionInFlatTree&);
 
-CORE_EXPORT SelectionInDOMTree
-ExpandWithGranularity(const SelectionInDOMTree&,
+CORE_EXPORT SelectionInDomTree
+ExpandWithGranularity(const SelectionInDomTree&,
                       TextGranularity,
                       const WordInclusion& = WordInclusion::kDefault);
 
@@ -137,7 +138,7 @@ ExpandWithGranularity(const SelectionInFlatTree&,
 // We don't yet support multi-range selections, so we only ever have one range
 // to return.
 CORE_EXPORT EphemeralRange FirstEphemeralRangeOf(const VisibleSelection&);
-CORE_EXPORT EphemeralRange NormalizeRange(const SelectionInDOMTree&);
+CORE_EXPORT EphemeralRange NormalizeRange(const SelectionInDomTree&);
 CORE_EXPORT EphemeralRangeInFlatTree NormalizeRange(const SelectionInFlatTree&);
 
 CORE_EXPORT std::ostream& operator<<(std::ostream&, const VisibleSelection&);

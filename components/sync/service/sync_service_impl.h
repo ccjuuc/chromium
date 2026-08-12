@@ -36,6 +36,7 @@
 #include "components/sync/service/data_type_controller.h"
 #include "components/sync/service/data_type_manager.h"
 #include "components/sync/service/data_type_manager_observer.h"
+#include "components/sync/service/device_statistics_scheduler.h"
 #include "components/sync/service/local_data_migration_item_queue.h"
 #include "components/sync/service/sync_auth_manager.h"
 #include "components/sync/service/sync_client.h"
@@ -61,6 +62,7 @@ class OSCryptAsync;
 namespace syncer {
 
 class BackendMigrator;
+class CustomPassphraseBootstrapToken;
 class SyncFeatureStatusForMigrationsRecorder;
 class SyncPrefsPolicyHandler;
 
@@ -76,7 +78,8 @@ class SyncServiceImpl : public SyncService,
                         public SyncAuthManager::Delegate,
                         public SyncServiceCrypto::Delegate,
                         public SyncUserSettingsImpl::Delegate,
-                        public signin::IdentityManager::Observer {
+                        public signin::IdentityManager::Observer,
+                        public DeviceStatisticsScheduler::Delegate {
  public:
   // Bundles the arguments for SyncServiceImpl construction. This is a
   // movable struct. Because of the non-POD data members, it needs out-of-line
@@ -100,6 +103,7 @@ class SyncServiceImpl : public SyncService,
     version_info::Channel channel = version_info::Channel::UNKNOWN;
     std::string debug_identifier;
     raw_ptr<os_crypt_async::OSCryptAsync> os_crypt_async = nullptr;
+    base::TimeDelta account_managed_status_finder_timeout = base::Seconds(5);
   };
 
   explicit SyncServiceImpl(InitParams init_params);
@@ -159,8 +163,10 @@ class SyncServiceImpl : public SyncService,
   void AddProtocolEventObserver(ProtocolEventObserver* observer) override;
   void RemoveProtocolEventObserver(ProtocolEventObserver* observer) override;
   void GetAllNodesForDebugging(
-      base::OnceCallback<void(base::Value::List)> callback) override;
+      base::OnceCallback<void(base::ListValue)> callback) override;
   DataTypeDownloadStatus GetDownloadStatusFor(DataType type) const override;
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForAllGaiaIds()
+      const override;
   void GetTypesWithUnsyncedData(
       DataTypeSet requested_types,
       base::OnceCallback<void(absl::flat_hash_map<DataType, size_t>)> callback)
@@ -176,7 +182,8 @@ class SyncServiceImpl : public SyncService,
   void SelectTypeAndMigrateLocalDataItemsWhenActive(
       DataType data_type,
       std::vector<LocalDataItemModel::DataId> items) override;
-  void AcknowledgeBookmarksLimitExceededError() override;
+  void AcknowledgeBookmarksLimitExceededError(
+      BookmarksLimitExceededHelpClickedSource source) override;
 
   // SyncEngineHost implementation.
   void OnEngineInitialized(bool success,
@@ -189,6 +196,8 @@ class SyncServiceImpl : public SyncService,
   void OnBackedOffTypesChanged() override;
   void OnInvalidationStatusChanged() override;
   void OnNewInvalidatedDataTypes() override;
+  void FetchAccessToken(
+      base::OnceCallback<void(signin::AccessTokenInfo)> callback) override;
 
   // DataTypeManagerObserver implementation.
   void OnConfigureDone(const DataTypeManager::ConfigureResult& result) override;
@@ -204,8 +213,11 @@ class SyncServiceImpl : public SyncService,
   void ReconfigureDataTypesDueToCrypto() override;
   void PassphraseTypeChanged(PassphraseType passphrase_type) override;
   std::optional<PassphraseType> GetPassphraseType() const override;
-  void SetEncryptionBootstrapToken(const std::string& bootstrap_token) override;
-  std::string GetEncryptionBootstrapToken() const override;
+  void SetEncryptionBootstrapToken(
+      const CustomPassphraseBootstrapToken& bootstrap_token,
+      const os_crypt_async::Encryptor& encryptor) override;
+  CustomPassphraseBootstrapToken GetEncryptionBootstrapToken(
+      const os_crypt_async::Encryptor& encryptor) const override;
 
   // SyncUserSettingsImpl::Delegate implementation.
   bool IsCustomPassphraseAllowed() const override;
@@ -229,7 +241,16 @@ class SyncServiceImpl : public SyncService,
   void OnIdentityManagerShutdown(
       signin::IdentityManager* identity_manager) override;
 
-  // Similar to above but with a callback that will be invoked on completion.
+  // DeviceStatisticsScheduler::Delegate implementation.
+  bool IsDeviceStatisticsMetricReportingEnabled() override;
+  std::unique_ptr<DeviceStatisticsRequest> CreateDeviceStatisticsRequest(
+      const CoreAccountInfo&,
+      const GURL&) override;
+  base::flat_set<std::string> GetCurrentDeviceCacheGuidsForDeviceStatistics()
+      override;
+
+  // Similar to OnAccountsInCookieUpdated() but with a callback that will be
+  // invoked on completion.
   void OnAccountsInCookieUpdatedWithCallback(
       const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
       base::OnceClosure callback);
@@ -248,8 +269,6 @@ class SyncServiceImpl : public SyncService,
   // server.
   void HasUnsyncedItemsForTest(base::OnceCallback<void(bool)> cb) const;
 
-  // Used by MigrationWatcher.  May return null.
-  BackendMigrator* GetBackendMigratorForTest();
 
   // Used by tests to inspect interaction with the access token fetcher.
   bool IsRetryingAccessTokenFetchForTest() const;
@@ -363,8 +382,9 @@ class SyncServiceImpl : public SyncService,
   void TryStart();
 
   // The actual synchronous implementation of TryStart().
-  void TryStartImpl(base::TimeTicks try_start_time,
-                    std::vector<os_crypt_async::Encryptor> encryptors);
+  void TryStartImpl(
+      base::TimeTicks try_start_time,
+      std::vector<scoped_refptr<os_crypt_async::Encryptor>> encryptors);
 
   // Whether sync has been authenticated with an account ID.
   bool IsSignedIn() const;
@@ -496,8 +516,12 @@ class SyncServiceImpl : public SyncService,
 
   // Note: This is an Optional so that we can control its destruction - in
   // particular, to trigger the "check_empty" test in Shutdown().
-  std::optional<base::ObserverList<SyncServiceObserver,
-                                   /*check_empty=*/true>>
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  std::optional<base::ObserverList<
+      SyncServiceObserver,
+      /*check_empty=*/true,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>>
       observers_;
 
   base::ObserverList<ProtocolEventObserver> protocol_event_observers_;
@@ -537,6 +561,8 @@ class SyncServiceImpl : public SyncService,
 
   // Tasks that should run after the engine is initialized.
   std::vector<base::OnceClosure> tasks_waiting_for_engine_initialization_;
+
+  std::unique_ptr<DeviceStatisticsScheduler> device_statistics_scheduler_;
 
 #if BUILDFLAG(IS_ANDROID)
   // Manage and fetch the java object that wraps this SyncService on

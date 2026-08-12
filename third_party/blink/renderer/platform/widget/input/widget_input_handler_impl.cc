@@ -18,7 +18,9 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h"
 #include "third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h"
@@ -112,8 +114,11 @@ static void ImeSetCompositionOnMainThread(
     const gfx::Range& range,
     int32_t start,
     int32_t end,
+    mojom::blink::ImeState ime_state,
+    DOMNodeIdType target_dom_node_id,
     WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
-  widget->ImeSetComposition(text, ime_text_spans, range, start, end);
+  widget->ImeSetComposition(text, ime_text_spans, range, start, end, ime_state,
+                            target_dom_node_id);
   callback_task_runner->PostTask(FROM_HERE, std::move(callback));
 }
 
@@ -123,12 +128,17 @@ void WidgetInputHandlerImpl::ImeSetComposition(
     const gfx::Range& range,
     int32_t start,
     int32_t end,
+    mojom::blink::ImeState ime_state,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id,
     WidgetInputHandlerImpl::ImeSetCompositionCallback callback) {
   // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
-  RunOnMainThread(
-      base::BindOnce(&ImeSetCompositionOnMainThread, widget_,
-                     base::SingleThreadTaskRunner::GetCurrentDefault(), text,
-                     ime_text_spans, range, start, end, std::move(callback)));
+  RunOnMainThread(base::BindOnce(
+      &ImeSetCompositionOnMainThread, widget_,
+      base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
+      range, start, end, ime_state,
+      target_dom_node_id ? DOMNodeIdType(target_dom_node_id->value)
+                         : DOMNodeIdType(),
+      std::move(callback)));
 }
 
 static void ImeCommitTextOnMainThread(
@@ -138,8 +148,10 @@ static void ImeCommitTextOnMainThread(
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t relative_cursor_position,
+    DOMNodeIdType target_dom_node_id,
     WidgetInputHandlerImpl::ImeCommitTextCallback callback) {
-  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position);
+  widget->ImeCommitText(text, ime_text_spans, range, relative_cursor_position,
+                        target_dom_node_id);
   callback_task_runner->PostTask(FROM_HERE, std::move(callback));
 }
 
@@ -148,12 +160,25 @@ void WidgetInputHandlerImpl::ImeCommitText(
     const Vector<ui::ImeTextSpan>& ime_text_spans,
     const gfx::Range& range,
     int32_t relative_cursor_position,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id,
     ImeCommitTextCallback callback) {
   // TODO(470910193): Avoid use of GetCurrentDefault() in Blink.
   RunOnMainThread(base::BindOnce(
       &ImeCommitTextOnMainThread, widget_,
       base::SingleThreadTaskRunner::GetCurrentDefault(), text, ime_text_spans,
-      range, relative_cursor_position, std::move(callback)));
+      range, relative_cursor_position,
+      target_dom_node_id ? DOMNodeIdType(target_dom_node_id->value)
+                         : DOMNodeIdType(),
+      std::move(callback)));
+}
+
+void WidgetInputHandlerImpl::PasteIntoNode(
+    const String& text,
+    mojom::blink::DOMNodeIdPtr target_dom_node_id) {
+  RunOnMainThread(base::BindOnce(&WidgetBase::PasteIntoNode, widget_, text,
+                                 target_dom_node_id
+                                     ? DOMNodeIdType(target_dom_node_id->value)
+                                     : DOMNodeIdType()));
 }
 
 void WidgetInputHandlerImpl::ImeFinishComposingText(bool keep_selection) {

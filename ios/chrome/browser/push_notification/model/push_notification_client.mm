@@ -20,8 +20,8 @@
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
 #import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_manager_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/tips_notifications/model/utils.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
@@ -184,7 +184,7 @@ PushNotificationClientScope PushNotificationClient::GetClientScope() const {
 }
 
 void PushNotificationClient::OnSceneActiveForegroundBrowserReady() {
-  if (!urls_delayed_for_loading_.size() && !feedback_presentation_delayed_) {
+  if (actions_delayed_for_loading_.empty() && !feedback_presentation_delayed_) {
     return;
   }
 
@@ -195,8 +195,8 @@ void PushNotificationClient::OnSceneActiveForegroundBrowserReady() {
   CHECK(browser);
 
   if (feedback_presentation_delayed_) {
-    id<ApplicationCommands> handler =
-        static_cast<id<ApplicationCommands>>(browser->GetCommandDispatcher());
+    id<SceneCommands> handler =
+        HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
     switch (feedback_presentation_delayed_client_) {
       case PushNotificationClientId::kContent:
       case PushNotificationClientId::kSports:
@@ -219,12 +219,7 @@ void PushNotificationClient::OnSceneActiveForegroundBrowserReady() {
     }
   }
 
-  if (urls_delayed_for_loading_.size()) {
-    for (auto& url : urls_delayed_for_loading_) {
-      LoadUrlInNewTab(url.first, browser, std::move(url.second));
-    }
-    urls_delayed_for_loading_.clear();
-  }
+  actions_delayed_for_loading_.Notify(browser);
 }
 
 Browser* PushNotificationClient::GetActiveForegroundBrowser() const {
@@ -250,6 +245,17 @@ ProfileIOS* PushNotificationClient::GetProfile() const {
   return profile_.get();
 }
 
+base::CallbackListSubscription
+PushNotificationClient::ExecuteActionWhenBrowserReady(
+    base::OnceCallback<void(Browser*)> action) {
+  Browser* browser = GetActiveForegroundBrowser();
+  if (!browser) {
+    return actions_delayed_for_loading_.Add(std::move(action));
+  }
+  std::move(action).Run(browser);
+  return {};
+}
+
 void PushNotificationClient::LoadUrlInNewTab(const GURL& url) {
   LoadUrlInNewTab(url, base::DoNothing());
 }
@@ -257,21 +263,20 @@ void PushNotificationClient::LoadUrlInNewTab(const GURL& url) {
 void PushNotificationClient::LoadUrlInNewTab(
     const GURL& url,
     base::OnceCallback<void(Browser*)> callback) {
-  Browser* browser = GetActiveForegroundBrowser();
-  if (!browser) {
-    urls_delayed_for_loading_.emplace_back(url, std::move(callback));
-    return;
+  if (base::CallbackListSubscription subscription =
+          ExecuteActionWhenBrowserReady(base::BindOnce(
+              &PushNotificationClient::ExecuteLoadUrlInNewTab,
+              weak_ptr_factory_.GetWeakPtr(), url, std::move(callback)))) {
+    delayed_url_subscriptions_.push_back(std::move(subscription));
   }
-
-  LoadUrlInNewTab(url, browser, std::move(callback));
 }
 
-void PushNotificationClient::LoadUrlInNewTab(
+void PushNotificationClient::ExecuteLoadUrlInNewTab(
     const GURL& url,
-    Browser* browser,
-    base::OnceCallback<void(Browser*)> callback) {
-  id<ApplicationCommands> handler =
-      static_cast<id<ApplicationCommands>>(browser->GetCommandDispatcher());
+    base::OnceCallback<void(Browser*)> callback,
+    Browser* browser) {
+  id<SceneCommands> handler =
+      HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands);
   [handler openURLInNewTab:[OpenNewTabCommand commandWithURLFromChrome:url]];
   std::move(callback).Run(browser);
 }
@@ -340,6 +345,13 @@ void PushNotificationClient::CheckRateLimitBeforeSchedulingNotification(
 
   [UNUserNotificationCenter.currentNotificationCenter
       getPendingNotificationRequestsWithCompletionHandler:completion_handler];
+}
+
+std::optional<ForcedNotificationPayload>
+PushNotificationClient::BuildForcedNotificationPayload(
+    int subtype,
+    NSMutableDictionary* user_info) {
+  return std::nullopt;
 }
 
 void PushNotificationClient::HandlePendingNotificationResult(

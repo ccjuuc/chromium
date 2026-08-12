@@ -95,6 +95,9 @@ COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetRemotingAPIKey();
 // Retrieves the Speech On-Device API (SODA) API Key.
 COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetSodaAPIKey();
 
+// Retrieves the Translate Private API Key.
+COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetPartialTranslateAPIKey();
+
 #if !BUILDFLAG(IS_ANDROID)
 // Retrieves the HaTS API Key. This key is only used for desktop HaTS
 // and the internal API Key is only defined in non-Android builds.
@@ -126,6 +129,11 @@ COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetCrosChromeGeoAPIKey();
 // Retrieves the key used to sign metrics (UMA/UKM) uploads.
 COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetMetricsKey();
 
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+// Returns the CDM certificate.
+COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetCdmServerCertificate();
+#endif
+
 // Represents the different sets of client IDs and secrets in use.
 enum OAuth2Client {
   CLIENT_MAIN,  // Several different features use this.
@@ -154,8 +162,12 @@ const std::string& GetOAuth2ClientID(OAuth2Client client);
 COMPONENT_EXPORT(GOOGLE_APIS)
 const std::string& GetOAuth2ClientSecret(OAuth2Client client);
 
-// Returns if the API key using in the current build is the one for official
-// Google Chrome.
+// Returns true if the current build was built with official Google Chrome API
+// keys.
+//
+// This is a build-time check and does not verify whether the keys were
+// overridden at runtime (e.g. through environment variables, command-line
+// switches or a Gaia config file).
 COMPONENT_EXPORT(GOOGLE_APIS) bool IsGoogleChromeAPIKeyUsed();
 
 #if BUILDFLAG(SUPPORT_EXTERNAL_GOOGLE_API_KEY)

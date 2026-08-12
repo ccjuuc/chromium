@@ -40,8 +40,21 @@
 // Sets the location image. If `locationImage` is nil, hides the image view.
 - (void)setLocationImage:(UIImage*)locationImage;
 
+// Adds a custom view to the left of the location label with specified spacing.
+// By default, the custom view is added in an invisible state.
+- (void)addCustomLeadingView:(UIView*)view
+                 targetWidth:(CGFloat)targetWidth
+                     spacing:(CGFloat)spacing;
+
+// Sets the visibility of the custom leading view, optionally animated.
+- (void)updateCustomLeadingViewVisibility:(BOOL)visible animated:(BOOL)animated;
+
 // Sets the location label's text.
 - (void)setLocationLabelText:(NSString*)string;
+
+// Sets the location label's text. `clipTail` indicates whether the label should
+// truncate the tail or the head.
+- (void)setLocationLabelText:(NSString*)string clipTail:(BOOL)clipTail;
 
 // Sets the location label's text and styles it as if it were placeholder text.
 - (void)setLocationLabelPlaceholderText:(NSString*)string;
@@ -52,6 +65,9 @@
 // Toggles `enabled` state of the trailing button and updates accessibility
 // appropriately.
 - (void)enableTrailingButton:(BOOL)enabled;
+
+// Sets the hidden state of the trailing button and updates accessibility.
+- (void)setTrailingButtonHidden:(BOOL)hidden;
 
 // Sets whether the contents are centered or aligned to the leading side.
 - (void)setCentered:(BOOL)centered;

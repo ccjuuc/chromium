@@ -8,6 +8,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "base/check_deref.h"
@@ -19,19 +20,16 @@
 #include "chrome/browser/ash/app_mode/web_app/kiosk_web_app_manager.h"
 #include "chrome/browser/ash/ownership/fake_owner_settings_service.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_web_app_install_util.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
-#include "chrome/browser/ui/test/test_browser_closed_waiter.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -57,7 +55,7 @@ namespace {
 constexpr const char* kTestUrlParams[] = {"", "https://www.test.com"};
 
 bool GetPolicyValueInPrefs(Profile& profile) {
-  return profile.GetPrefs()->GetBoolean(prefs::kNewWindowsInKioskAllowed);
+  return profile.GetPrefs()->GetBoolean(ash::prefs::kNewWindowsInKioskAllowed);
 }
 
 // Returns the app name for the given web `app`. This is the name
@@ -174,10 +172,11 @@ IN_PROC_BROWSER_TEST_F(NewWindowsInKioskAllowedTest, CloseBrowserIfReOpen) {
   Browser& browser = CreateRegularBrowser(CurrentProfile(), GURL());
   ASSERT_TRUE(DidKioskHideNewWindow(&browser));
   EXPECT_EQ(VisibleBrowserCount(), 1u);
-  ASSERT_FALSE(browser.window()->IsVisible());
-  browser.window()->Show();
-  ASSERT_TRUE(TestBrowserClosedWaiter(&browser).WaitUntilClosed());
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1u);
+  ASSERT_FALSE(browser.GetWindow()->IsVisible());
+  browser.GetWindow()->Show();
+  ui_test_utils::BrowserDestroyedObserver observer(&browser);
+  observer.Wait();
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
 }
 
 IN_PROC_BROWSER_TEST_P(NewWindowsInKioskAllowedTest, AllowsNewPopupWindows) {
@@ -195,14 +194,15 @@ IN_PROC_BROWSER_TEST_P(NewWindowsInKioskAllowedTest, AllowsNewPopupWindows) {
   ASSERT_FALSE(DidKioskCloseNewWindow());
   EXPECT_EQ(VisibleBrowserCount(), 2u);
 
-  EXPECT_FALSE(initial_browser.GetBrowserView()
-                   .GetExclusiveAccessContext()
+  EXPECT_FALSE(BrowserView::GetBrowserViewForBrowser(&initial_browser)
+                   ->GetExclusiveAccessContext()
                    ->CanUserEnterFullscreen());
-  EXPECT_FALSE(popup.GetBrowserView()
-                   .GetExclusiveAccessContext()
+  EXPECT_FALSE(BrowserView::GetBrowserViewForBrowser(&popup)
+                   ->GetExclusiveAccessContext()
                    ->CanUserEnterFullscreen());
-  EXPECT_TRUE(initial_browser.GetBrowserView().IsFullscreen());
-  EXPECT_TRUE(popup.GetBrowserView().IsFullscreen());
+  EXPECT_TRUE(
+      BrowserView::GetBrowserViewForBrowser(&initial_browser)->IsFullscreen());
+  EXPECT_TRUE(BrowserView::GetBrowserViewForBrowser(&popup)->IsFullscreen());
 }
 
 IN_PROC_BROWSER_TEST_P(NewWindowsInKioskAllowedTest,

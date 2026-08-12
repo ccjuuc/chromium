@@ -97,6 +97,18 @@ EBreakBetween CalculateBreakBetweenValue(LayoutInputNode child,
                                          const LayoutResult&,
                                          const BoxFragmentBuilder&);
 
+// Get the page name that the specified child fragment belongs to.
+//
+// Names propagated from descendants take precedence, but if none of them
+// propagate a page name, use the one specified on the child, or if the child
+// doesn't set a page name either, use whatever is inherited from the ancestry.
+AtomicString PageNameForChildFragment(const BoxFragmentBuilder&,
+                                      const PhysicalBoxFragment& child);
+
+// Return true if breaking inside this child is discouraged (break-inside:avoid)
+// or impossible (monolithic).
+bool ShouldAvoidBreakInside(const ConstraintSpace&, const LayoutResult&);
+
 // Return true if the container is being resumed after a fragmentainer break,
 // and the child is at the first fragment of a node, and we are allowed to break
 // before it. Normally, this isn't allowed, as that would take us nowhere,
@@ -159,11 +171,6 @@ inline LayoutUnit ClampedToValidFragmentainerCapacity(
   }
   return std::max(length, minimum);
 }
-
-// Return the logical size of the specified fragmentainer, with
-// clamping block_size.
-LogicalSize FragmentainerLogicalCapacity(
-    const PhysicalBoxFragment& fragmentainer);
 
 // Return the fragmentainer block-size to use during layout. This is normally
 // the same as the block-size we'll give to the fragment itself, but in order to
@@ -424,7 +431,6 @@ bool HasBreakOpportunityBeforeNextChild(
 // flex container, in which case, we may be tracking certain break behavior at
 // the column level.
 BreakStatus BreakBeforeChildIfNeeded(
-    const ConstraintSpace&,
     LayoutInputNode child,
     const LayoutResult&,
     LayoutUnit fragmentainer_block_offset,
@@ -438,7 +444,6 @@ BreakStatus BreakBeforeChildIfNeeded(
 // |block_size_override| should only be supplied when you wish to propagate a
 // different block-size than that of the provided layout result.
 void BreakBeforeChild(
-    const ConstraintSpace&,
     LayoutInputNode child,
     const LayoutResult*,
     LayoutUnit fragmentainer_block_offset,
@@ -448,21 +453,14 @@ void BreakBeforeChild(
     BoxFragmentBuilder*,
     std::optional<LayoutUnit> block_size_override = std::nullopt);
 
-// Propagate the block-size of unbreakable content. This is used to inflate the
+// Calculate the block-size of unbreakable content. This is used to inflate the
 // initial minimal column block-size when balancing columns, before we calculate
 // a tentative (or final) column block-size. Unbreakable content will actually
 // fragment if the columns aren't large enough, and we want to prevent that, if
 // possible.
-inline void PropagateUnbreakableBlockSize(LayoutUnit block_size,
-                                          LayoutUnit fragmentainer_block_offset,
-                                          BoxFragmentBuilder* builder) {
-  // Whatever is before the block-start of the fragmentainer isn't considered to
-  // intersect with the fragmentainer, so subtract it (by adding the negative
-  // offset).
-  if (fragmentainer_block_offset < LayoutUnit())
-    block_size += fragmentainer_block_offset;
-  builder->PropagateTallestUnbreakableBlockSize(block_size);
-}
+LayoutUnit CalculateUnbreakableBlockSize(const ConstraintSpace&,
+                                         const LayoutResult&,
+                                         LayoutUnit fragmentainer_block_offset);
 
 // Propagate space shortage to the builder and beyond, if appropriate. This is
 // something we do during column balancing, when we already have a tentative
@@ -471,7 +469,6 @@ inline void PropagateUnbreakableBlockSize(LayoutUnit block_size,
 // when you wish to propagate a different block-size than that of the provided
 // layout result.
 void PropagateSpaceShortage(
-    const ConstraintSpace&,
     const LayoutResult*,
     LayoutUnit fragmentainer_block_offset,
     LayoutUnit fragmentainer_block_size,
@@ -496,7 +493,8 @@ void UpdateMinimalSpaceShortage(std::optional<LayoutUnit> space_shortage,
 // update the appeal of breaking before or inside the child (if we're not going
 // to break before it). If false is returned, it means that we need to break
 // before the child (or even earlier). See BreakBeforeChildIfNeeded() for
-// details on |flex_column_break_info|.
+// details on `flex_column_break_info`. Note that `builder` is nullptr in cases
+// where the builder shouldn't be updated. This is the case for e.g. floats.
 bool MovePastBreakpoint(const ConstraintSpace& space,
                         LayoutInputNode child,
                         const LayoutResult& layout_result,
@@ -522,7 +520,6 @@ bool MovePastBreakpoint(const ConstraintSpace& space,
 // builder, and update appeal accordingly. See BreakBeforeChildIfNeeded() for
 // details on |flex_column_break_info|.
 void UpdateEarlyBreakAtBlockChild(
-    const ConstraintSpace&,
     BlockNode child,
     const LayoutResult&,
     BreakAppeal appeal_before,
@@ -536,7 +533,6 @@ void UpdateEarlyBreakAtBlockChild(
 // different block-size than that of the provided layout result. See
 // BreakBeforeChildIfNeeded() for details on |flex_column_break_info|.
 bool AttemptSoftBreak(
-    const ConstraintSpace&,
     LayoutInputNode child,
     const LayoutResult*,
     LayoutUnit fragmentainer_block_offset,
@@ -610,6 +606,11 @@ inline LayoutUnit AdjustedMarginAfterFinalChildFragment(
 // possible. This function should no longer be necessary once everything has
 // been properly converted to LayoutNG.
 const BlockBreakToken* FindPreviousBreakToken(const PhysicalBoxFragment&);
+
+// Return the break token data of the first fragment generated by the node
+// or `nullptr` if the first fragment has no outgoing break token.
+const BreakTokenAlgorithmData* GetFirstFragmentBreakTokenData(
+    const PhysicalBoxFragment& fragment);
 
 // Return the LayoutBox::PhysicalFragments() index for this fragment.
 wtf_size_t BoxFragmentIndex(const PhysicalBoxFragment&);

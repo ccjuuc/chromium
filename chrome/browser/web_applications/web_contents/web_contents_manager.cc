@@ -6,14 +6,20 @@
 
 #include <memory>
 
+#include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
 #include "chrome/browser/web_applications/web_contents/web_app_icon_downloader.h"
 #include "components/webapps/browser/web_contents/web_app_url_loader.h"
+#include "content/public/browser/web_contents.h"
 
 namespace web_app {
 
 WebContentsManager::WebContentsManager() = default;
 WebContentsManager::~WebContentsManager() = default;
+
+void WebContentsManager::SetProvider(WebAppProvider* provider) {
+  provider_ = provider;
+}
 
 std::unique_ptr<webapps::WebAppUrlLoader>
 WebContentsManager::CreateUrlLoader() {
@@ -27,6 +33,24 @@ std::unique_ptr<WebAppDataRetriever> WebContentsManager::CreateDataRetriever() {
 std::unique_ptr<WebAppIconDownloader>
 WebContentsManager::CreateIconDownloader() {
   return std::make_unique<WebAppIconDownloader>();
+}
+
+base::CallbackListSubscription
+WebContentsManager::GetPrimaryPageAllSpecifiedManifests(
+    content::WebContents& web_contents,
+    AllManifestsCallbackList::CallbackType callback) {
+  return content::PageManifestManager::GetOrCreate(
+             web_contents.GetPrimaryPage())
+      ->GetAllSpecifiedManifests(std::move(callback));
+}
+
+std::optional<webapps::AppId> WebContentsManager::GetAppIdForWebContents(
+    content::WebContents* web_contents) const {
+  auto* tab_helper = WebAppTabHelper::FromWebContents(web_contents);
+  if (tab_helper) {
+    return tab_helper->app_id();
+  }
+  return std::nullopt;
 }
 
 FakeWebContentsManager*

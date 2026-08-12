@@ -9,19 +9,20 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.browser.customtabs.CustomTabsIntent;
+import androidx.lifecycle.Lifecycle;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceScreen;
 
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -30,10 +31,12 @@ import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
+import org.chromium.chrome.browser.touch_to_fill.common.TouchToFillResourceProvider;
 import org.chromium.components.autofill.payments.BnplIssuerForSettings;
 import org.chromium.components.browser_ui.settings.ChromeBasePreference;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.SettingsFragment;
+import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 
 /** Preferences fragment to allow users to manage Buy Now Pay Later application settings. */
 @NullMarked
@@ -53,41 +56,24 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
     @VisibleForTesting static final String PREF_KEY_BNPL_ISSUER_TERM = "bnpl_issuers_term_key";
     @VisibleForTesting static final String PREF_LIST_TERMS_URL = "bnpl_issuers_terms_url";
 
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     private PersonalDataManager mPersonalDataManager;
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
         mPageTitle.set(getString(R.string.autofill_bnpl_settings_label));
-        setHasOptionsMenu(true);
+
+        requireActivity()
+                .addMenuProvider(new AutofillHelpMenuProvider(this), this, Lifecycle.State.RESUMED);
+
         // Create blank preference screen.
         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getStyledContext());
         // Suppresses unwanted animations while Preferences are removed from and re-added to the
         // screen.
         screen.setShouldUseGeneratedIds(false);
         setPreferenceScreen(screen);
-    }
-
-    @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-        menu.clear();
-        MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
-        help.setIcon(R.drawable.ic_help_24dp);
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.menu_id_targeted_help) {
-            getHelpAndFeedbackLauncher()
-                    .show(
-                            getActivity(),
-                            getActivity().getString(R.string.help_context_autofill),
-                            /* url= */ null);
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -135,8 +121,16 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
             issuerPref.setOnPreferenceClickListener(this);
 
             // Set BNPL issuer icon.
-            issuerPref.setIcon(
-                    AppCompatResources.getDrawable(getStyledContext(), issuer.getIconId()));
+            @Nullable
+            final TouchToFillResourceProvider resourceProvider =
+                    ServiceLoaderUtil.maybeCreate(TouchToFillResourceProvider.class);
+            @DrawableRes
+            final int issuerImageId =
+                    resourceProvider == null
+                            ? R.drawable.bnpl_icon_generic
+                            : resourceProvider.getBnplIssuerDrawableId(
+                                    /* issuerId= */ issuer.getIssuerId(), /* isLinked= */ true);
+            issuerPref.setIcon(AppCompatResources.getDrawable(getStyledContext(), issuerImageId));
 
             // Add GPay icon.
             issuerPref.setWidgetLayoutResource(R.layout.autofill_server_data_label);
@@ -187,7 +181,7 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -200,8 +194,16 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
         return SettingsFragment.AnimationType.PROPERTY;
     }
 
-    // TODO(crbug.com/444470792): Determine what pieces of logic are dynamic and need handling. Any
-    // entries that need to be built on the fly?
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
-            new ChromeBaseSearchIndexProvider(AutofillBuyNowPayLaterFragment.class.getName(), 0);
+            new ChromeBaseSearchIndexProvider(AutofillBuyNowPayLaterFragment.class.getName(), 0) {
+
+                @Override
+                public void updateDynamicPreferences(Context context, SettingsIndexData indexData) {
+                    indexData.addEntryForKey(
+                            AutofillBuyNowPayLaterFragment.class.getName(),
+                            PREF_KEY_ENABLE_BUY_NOW_PAY_LATER,
+                            R.string.autofill_bnpl_settings_label,
+                            R.string.autofill_bnpl_settings_toggle_sublabel);
+                }
+            };
 }

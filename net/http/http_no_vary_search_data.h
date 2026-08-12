@@ -61,6 +61,15 @@ class NET_EXPORT_PRIVATE HttpNoVarySearchData {
       const std::vector<std::string>& vary_params,
       bool vary_on_key_order);
 
+  // Parse No-Vary-Search from the value of a "No-Vary-Search" response header.
+  //
+  // Returns HttpNoVarySearchData if `value` is a correct No-Vary-Search header
+  // value, or a ParseErrorEnum if it is invalid. If `value` is empty, returns
+  // ParseErrorEnum::kDefaultValue.
+  static base::expected<HttpNoVarySearchData,
+                        HttpNoVarySearchData::ParseErrorEnum>
+  ParseFromHeaderValue(std::string_view value);
+
   // Parse No-Vary-Search from response headers.
   //
   // Returns HttpNoVarySearchData if a correct No-Vary-Search header is present
@@ -69,6 +78,10 @@ class NET_EXPORT_PRIVATE HttpNoVarySearchData {
   static base::expected<HttpNoVarySearchData,
                         HttpNoVarySearchData::ParseErrorEnum>
   ParseFromHeaders(const HttpResponseHeaders& response_headers);
+
+  // Returns true if the header value contains "params" with a boolean value.
+  // This form is going to be deprecated.
+  static bool HasBooleanParamsMember(std::string_view header_value);
 
   bool operator==(const HttpNoVarySearchData& rhs) const;
 
@@ -87,11 +100,18 @@ class NET_EXPORT_PRIVATE HttpNoVarySearchData {
   // UTF-8 string (not necessarily ASCII) and may end in significant whitespace.
   std::string CanonicalizeQuery(const GURL& url) const;
 
+  // Serializes the data back to a No-Vary-Search header value string.
+  //
+  // Returns `std::nullopt` if the serialization fails (see
+  // `net::structured_headers::SerializeDictionary`).
+  //
+  // If performance is concerned, consider to use `net::WriteToPickle()`.
+  std::optional<std::string> SerializeToString() const;
+
   // Member accessor methods.
-  // TODO(crbug.com/455304285): Stop exposing internals in API.
-  const base::flat_set<std::string>& affected_params() const {
-    return affected_params_;
-  }
+  // Returns a copy of the affected params as a vector, hiding the internal
+  // container type.
+  std::vector<std::string> GetAffectedParams() const;
   bool vary_on_key_order() const { return vary_on_key_order_; }
   bool vary_by_default() const { return vary_by_default_; }
 
@@ -102,6 +122,9 @@ class NET_EXPORT_PRIVATE HttpNoVarySearchData {
 
  private:
   friend struct PickleTraits<HttpNoVarySearchData>;
+  friend NET_EXPORT_PRIVATE std::ostream& operator<<(
+      std::ostream& ostream,
+      const HttpNoVarySearchData& no_vary_search_data);
 
   // Permit HttpNoVarySearchData objects to be used as keys in Abseil maps.
   template <typename H>
@@ -122,6 +145,14 @@ class NET_EXPORT_PRIVATE HttpNoVarySearchData {
 
   // The new implementation of AreEquivalent() using UrlSearchParamsView.
   bool AreEquivalentNewImpl(const GURL& a, const GURL& b) const;
+
+  // Applies No-Vary-Search rules to URL search params. This is a private
+  // template method so it can directly access affected_params_.
+  template <typename ParamsType>
+  void ApplyRulesToParams(ParamsType& params) const;
+
+  // Helper for `operator<<`.
+  void DescribeForLog(std::ostream& ostream) const;
 
   // LINT.IfChange(MagicNumber)
 
@@ -175,6 +206,10 @@ class
       bool use_new_implementation);
   ~ScopedHttpNoVarySearchDataEquivalentImplementationOverrideForTesting();
 };
+
+NET_EXPORT_PRIVATE std::ostream& operator<<(
+    std::ostream& ostream,
+    const HttpNoVarySearchData& no_vary_search_data);
 
 }  // namespace net
 

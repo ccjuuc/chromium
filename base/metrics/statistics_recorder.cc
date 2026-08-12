@@ -9,7 +9,6 @@
 
 #include "base/at_exit.h"
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
 #include "base/debug/leak_annotations.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/string_escape.h"
@@ -156,7 +155,7 @@ HistogramBase* StatisticsRecorder::RegisterOrDeleteDuplicate(
     ANNOTATE_LEAKING_OBJECT_PTR(histogram);  // see crbug.com/79322
     // If there are callbacks for this histogram, we set the kCallbackExists
     // flag.
-    if (base::Contains(top_->observers_, hash)) {
+    if (top_->observers_.contains(hash)) {
       // Note: SetFlags() does not write to persistent memory, it only writes to
       // an in-memory version of the flags.
       histogram->SetFlags(HistogramBase::kCallbackExists);
@@ -594,8 +593,7 @@ StatisticsRecorder::Histograms StatisticsRecorder::WithName(
   auto histogram_name_does_not_contain_query =
       [comparator, query](const HistogramBase* const h) {
         const auto& name = h->histogram_name();
-        return std::search(name.begin(), name.end(), query.begin(), query.end(),
-                           comparator) == name.end();
+        return !std::ranges::contains_subrange(name, query, comparator);
       };
   // Erase the non-matching histograms. Note that `histograms` was passed by
   // value so we can efficiently remove the unwanted elements and return the

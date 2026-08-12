@@ -4,15 +4,19 @@
 
 #include "components/metrics/debug/metrics_internals_utils.h"
 
+#include <inttypes.h>
+
 #include <string>
 #include <string_view>
 
 #include "base/base64.h"
 #include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/ukm/ukm_service.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/proto/study.pb.h"
 #include "components/variations/seed_reader_writer.h"
@@ -55,10 +59,6 @@ std::string PlatformToString(variations::Study::Platform platform) {
       return "WebView";
     case variations::Study::PLATFORM_FUCHSIA:
       return "Fuchsia";
-    case variations::Study::PLATFORM_ANDROID_WEBLAYER:
-      return "WebLayer";
-    case variations::Study::PLATFORM_CHROMEOS_LACROS:
-      return "ChromeOS Lacros";
   }
   NOTREACHED();
 }
@@ -127,9 +127,9 @@ std::string FormatDate(int64_t timestamp) {
       variations::SeedReaderWriter::ProtoTimeToTime(timestamp));
 }
 
-base::Value::Dict CreateKeyValueDict(std::string_view key,
-                                     std::string_view value) {
-  base::Value::Dict dict;
+base::DictValue CreateKeyValueDict(std::string_view key,
+                                   std::string_view value) {
+  base::DictValue dict;
   dict.Set("key", key);
   dict.Set("value", value);
   return dict;
@@ -138,7 +138,7 @@ base::Value::Dict CreateKeyValueDict(std::string_view key,
 void StoredSeedInfoToKeyValueList(
     base::OnceCallback<void(base::ValueView)> done_callback,
     variations::StoredSeedInfo stored_seed_info) {
-  base::Value::List list;
+  base::ListValue list;
   // We need to encode the seed data so it's valid utf-8.
   list.Append(CreateKeyValueDict("Seed Data",
                                  base::Base64Encode(stored_seed_info.data())));
@@ -167,8 +167,8 @@ void StoredSeedInfoToKeyValueList(
 
 }  // namespace
 
-base::Value::List GetUmaSummary(MetricsService* metrics_service) {
-  base::Value::List list;
+base::ListValue GetUmaSummary(MetricsService* metrics_service) {
+  base::ListValue list;
   list.Append(CreateKeyValueDict("Client ID", metrics_service->GetClientId()));
   // TODO(crbug.com/40238818): Add the server-side client ID.
   list.Append(CreateKeyValueDict(
@@ -183,9 +183,36 @@ base::Value::List GetUmaSummary(MetricsService* metrics_service) {
   return list;
 }
 
-base::Value::List GetVariationsSummary(
+base::ListValue GetUkmSummary(ukm::UkmService* ukm_service) {
+  base::ListValue list;
+  if (!ukm_service) {
+    return list;
+  }
+  list.Append(CreateKeyValueDict(
+      "Client ID", base::NumberToString(ukm_service->client_id())));
+  list.Append(CreateKeyValueDict(
+      "Session ID", base::NumberToString(ukm_service->session_id())));
+  list.Append(CreateKeyValueDict(
+      "Recording Enabled", BoolToString(ukm_service->recording_enabled())));
+  list.Append(CreateKeyValueDict(
+      "Reporting Enabled",
+      BoolToString(ukm_service->reporting_service()->reporting_active())));
+  list.Append(CreateKeyValueDict(
+      "MSBB Consent", BoolToString(ukm_service->recording_enabled(ukm::MSBB))));
+  list.Append(CreateKeyValueDict(
+      "Extensions Consent",
+      BoolToString(ukm_service->recording_enabled(ukm::EXTENSIONS))));
+  list.Append(CreateKeyValueDict(
+      "Apps Consent", BoolToString(ukm_service->recording_enabled(ukm::APPS))));
+  list.Append(
+      CreateKeyValueDict("Event Sampling Configured",
+                         BoolToString(ukm_service->IsSamplingConfigured())));
+  return list;
+}
+
+base::ListValue GetVariationsSummary(
     metrics_services_manager::MetricsServicesManager* metrics_service_manager) {
-  base::Value::List list;
+  base::ListValue list;
   std::unique_ptr<variations::ClientFilterableState> state =
       metrics_service_manager->GetVariationsService()
           ->GetClientFilterableStateForVersion();
@@ -203,6 +230,8 @@ base::Value::List GetVariationsSummary(
                                  BoolToString(state->is_low_end_device)));
   list.Append(CreateKeyValueDict("Country (Session Consistency)",
                                  state->session_consistency_country));
+  list.Append(CreateKeyValueDict("Administrative area (Session Consistency)",
+                                 state->session_consistency_geolevel1));
   list.Append(CreateKeyValueDict("Country (Permanent Consistency)",
                                  state->permanent_consistency_country));
   list.Append(CreateKeyValueDict("Locale", state->locale));

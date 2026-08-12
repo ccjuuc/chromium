@@ -6,6 +6,7 @@
 #define CHROMEOS_ASH_COMPONENTS_DBUS_CICERONE_CICERONE_CLIENT_H_
 
 #include "base/component_export.h"
+#include "base/observer_list_types.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_service.pb.h"
 #include "chromeos/dbus/common/dbus_callback.h"
 #include "chromeos/dbus/common/dbus_client.h"
@@ -17,7 +18,7 @@ namespace ash {
 // communicate with containers running inside VMs.
 class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
  public:
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
     // Called when Cicerone service exits.
     virtual void CiceroneServiceStopped() {}
@@ -76,11 +77,6 @@ class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
     virtual void OnPendingAppListUpdates(
         const vm_tools::cicerone::PendingAppListUpdatesSignal& signal) {}
 
-    // This is signaled from Cicerone while a container is being upgraded
-    // via UpgradeContainer.
-    virtual void OnUpgradeContainerProgress(
-        const vm_tools::cicerone::UpgradeContainerProgressSignal& signal) {}
-
     // This is signaled from Cicerone while LXD is starting via StartLxd.
     virtual void OnStartLxdProgress(
         const vm_tools::cicerone::StartLxdProgressSignal& signal) {}
@@ -103,9 +99,6 @@ class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
     // sleep.
     virtual void OnUninhibitScreensaver(
         const vm_tools::cicerone::UninhibitScreensaverSignal& signal) {}
-
-   protected:
-    virtual ~Observer() = default;
   };
 
   CiceroneClient(const CiceroneClient&) = delete;
@@ -155,9 +148,6 @@ class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
   // PendingAppListUpdatesSignal.
   virtual bool IsPendingAppListUpdatesSignalConnected() = 0;
 
-  // This should be true prior to calling UpgradeContainer.
-  virtual bool IsUpgradeContainerProgressSignalConnected() = 0;
-
   // This should be true prior to calling StartLxd.
   virtual bool IsStartLxdProgressSignalConnected() = 0;
 
@@ -170,11 +160,11 @@ class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
 
   // This should be true before expecting to receive
   // InhibitScreensaverSignal
-  virtual bool IsInhibitScreensaverSignalConencted() = 0;
+  virtual bool IsInhibitScreensaverSignalConnected() = 0;
 
   // This should be true before expecting to receive
   // UninhibitScreensaverSignal.
-  virtual bool IsUninhibitScreensaverSignalConencted() = 0;
+  virtual bool IsUninhibitScreensaverSignalConnected() = 0;
 
   // Launches an application inside a running Container.
   // |callback| is called after the method call finishes.
@@ -269,20 +259,6 @@ class COMPONENT_EXPORT(CICERONE) CiceroneClient : public chromeos::DBusClient {
       const vm_tools::cicerone::ConfigureForArcSideloadRequest& request,
       chromeos::DBusMethodCallback<
           vm_tools::cicerone::ConfigureForArcSideloadResponse> callback) = 0;
-
-  // Upgrades the container.
-  // |callback| is called when the method completes.
-  virtual void UpgradeContainer(
-      const vm_tools::cicerone::UpgradeContainerRequest& request,
-      chromeos::DBusMethodCallback<vm_tools::cicerone::UpgradeContainerResponse>
-          callback) = 0;
-
-  // Cancels the in progress container upgrade.
-  // |callback| is called when the method completes.
-  virtual void CancelUpgradeContainer(
-      const vm_tools::cicerone::CancelUpgradeContainerRequest& request,
-      chromeos::DBusMethodCallback<
-          vm_tools::cicerone::CancelUpgradeContainerResponse> callback) = 0;
 
   // Starts LXD.
   // |callback| is called when the method completes.

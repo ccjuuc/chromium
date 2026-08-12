@@ -166,7 +166,7 @@ void CopyStackSignalHandler(int n, siginfo_t* siginfo, void* sigcontext) {
 
   const uintptr_t bottom = RegisterContextStackPointer(params->context);
   const uintptr_t top = params->stack_base_address;
-  if ((top - bottom) > params->stack_buffer->size()) {
+  if ((top - bottom) > params->stack_buffer->size_bytes()) {
     // The stack exceeds the size of the allocated buffer. The buffer is sized
     // such that this shouldn't happen under typical execution so we can safely
     // punt in this situation.
@@ -252,8 +252,8 @@ bool StackCopierSignal::CopyStack(StackBuffer* stack_buffer,
     action.sa_sigaction = CopyStackSignalHandler;
     action.sa_flags = SA_RESTART | SA_SIGINFO;
     sigemptyset(&action.sa_mask);
-    TRACE_EVENT_BEGIN0(TRACE_DISABLED_BY_DEFAULT("cpu_profiler.debug"),
-                       "StackCopierSignal copy stack");
+    TRACE_EVENT_BEGIN(TRACE_DISABLED_BY_DEFAULT("cpu_profiler.debug"),
+                      "StackCopierSignal copy stack");
     // SIGURG is chosen here because we observe no crashes with this signal and
     // neither Chrome or the AOSP sets up a special handler for this signal.
     struct sigaction original_action = {};
@@ -267,8 +267,7 @@ bool StackCopierSignal::CopyStack(StackBuffer* stack_buffer,
       NOTREACHED();
     }
     bool finished_waiting = wait_event.Wait();
-    TRACE_EVENT_END0(TRACE_DISABLED_BY_DEFAULT("cpu_profiler.debug"),
-                     "StackCopierSignal copy stack");
+    TRACE_EVENT_END(TRACE_DISABLED_BY_DEFAULT("cpu_profiler.debug"));
     CHECK(finished_waiting);
     // Ideally, an accurate timestamp is captured while the sampled thread is
     // paused. In rare cases, this may fail, in which case we resort to
@@ -283,13 +282,15 @@ bool StackCopierSignal::CopyStack(StackBuffer* stack_buffer,
   }
 
   const uintptr_t bottom = RegisterContextStackPointer(params.context);
-  for (uintptr_t* reg :
-       thread_delegate_->GetRegistersToRewrite(thread_context)) {
-    *reg = StackCopierSignal::RewritePointerIfInOriginalStack(
+  std::vector<uintptr_t> registers =
+      thread_delegate_->GetRegisters(thread_context);
+  for (uintptr_t& reg : registers) {
+    reg = StackCopierSignal::RewritePointerIfInOriginalStack(
         reinterpret_cast<uint8_t*>(bottom),
         reinterpret_cast<uintptr_t*>(stack_base_address), stack_copy_bottom,
-        *reg);
+        reg);
   }
+  thread_delegate_->SetRegisters(thread_context, registers);
 
   *stack_top = reinterpret_cast<uintptr_t>(stack_copy_bottom) +
                (stack_base_address - bottom);
@@ -297,9 +298,14 @@ bool StackCopierSignal::CopyStack(StackBuffer* stack_buffer,
   return copied;
 }
 
-std::vector<uintptr_t*> StackCopierSignal::GetRegistersToRewrite(
+std::vector<uintptr_t> StackCopierSignal::GetRegisters(
     RegisterContext* thread_context) {
-  return thread_delegate_->GetRegistersToRewrite(thread_context);
+  return thread_delegate_->GetRegisters(thread_context);
+}
+
+void StackCopierSignal::SetRegisters(RegisterContext* thread_context,
+                                     const std::vector<uintptr_t>& registers) {
+  thread_delegate_->SetRegisters(thread_context, registers);
 }
 
 }  // namespace base

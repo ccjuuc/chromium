@@ -11,10 +11,12 @@ source_set("content_settings") {
     "//base",
     "//chrome/app/vector_icons",
     "//chrome/browser/ui/blocked_content",
+    "//components/browser_apis/ui_controllers/toolbar:mojom_data_model",
     "//components/content_settings/browser",
     "//components/content_settings/core/common",
     "//components/custom_handlers",
     "//services/device/public/cpp/geolocation:buildflags",
+    "//ui/base/interaction",
   ]
 
   if (!is_android) {
@@ -23,6 +25,8 @@ source_set("content_settings") {
       "content_setting_bubble_model_delegate.h",
       "content_setting_image_model.h",
       "content_setting_image_model_states.h",
+      "content_setting_image_view_delegate.h",
+      "primary_page_deactivation_helper.h",
     ]
     public_deps += [ "//chrome/app/vector_icons" ]
   }
@@ -30,16 +34,18 @@ source_set("content_settings") {
 
 source_set("impl") {
   sources = []
-  deps = []
+  deps = [ "//chrome/browser/ui:collected_cookies_infobar_delegate" ]
 
   if (!is_android) {
     sources += [
       "content_setting_bubble_model.cc",
       "content_setting_image_model.cc",
       "content_setting_image_model_states.cc",
+      "primary_page_deactivation_helper.cc",
     ]
     deps += [
       "//chrome/browser/custom_handlers",
+      "//chrome/browser/ui/views/site_data",
       "//chrome/browser/ui/web_applications",
     ]
   }
@@ -51,9 +57,11 @@ source_set("impl") {
     "//chrome/app:generated_resources",
     "//chrome/app/theme:theme_resources",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/content_settings",
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/content_settings:content_settings_util",
+    "//chrome/browser/infobars",
     "//chrome/browser/media/webrtc",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
@@ -92,10 +100,12 @@ source_set("browser_tests") {
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/content_settings:content_settings_util",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:chrome_pages",
     "//chrome/browser/ui/browser_window",
     "//chrome/test:test_support",
     "//components/content_settings/core/test:test_support",
     "//components/subresource_filter/core/browser",
+    "//ui/events:test_support",
   ]
 }
 
@@ -145,6 +155,7 @@ source_set("unit_tests") {
     "//components/custom_handlers:test_support",
     "//components/infobars/content",
     "//components/no_state_prefetch/browser",
+    "//components/tabs:test_support",
     "//services/data_decoder/public/cpp:test_support",
   ]
 }

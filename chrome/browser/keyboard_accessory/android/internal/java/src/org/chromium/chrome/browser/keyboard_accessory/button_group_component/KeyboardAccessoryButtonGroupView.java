@@ -5,22 +5,20 @@
 package org.chromium.chrome.browser.keyboard_accessory.button_group_component;
 
 import android.content.Context;
-import android.graphics.PorterDuff;
-import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.Gravity;
 import android.view.LayoutInflater;
-import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.keyboard_accessory.R;
-import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.widget.ViewRectProvider;
 
 import java.util.ArrayList;
 
@@ -29,6 +27,10 @@ import java.util.ArrayList;
 public class KeyboardAccessoryButtonGroupView extends LinearLayout {
     private final ArrayList<ImageButton> mButtons = new ArrayList<>();
     private @Nullable KeyboardAccessoryButtonGroupListener mListener;
+    private @Nullable Runnable mAtMemoryCallback;
+    private @Nullable Runnable mAtMemoryIphCallback;
+    private @Nullable ImageButton mAtMemoryButton;
+    private boolean mAtMemoryEnabled;
 
     /**
      * This interface should be implemented by classes which want to observe clicks on the buttons
@@ -44,38 +46,68 @@ public class KeyboardAccessoryButtonGroupView extends LinearLayout {
         this.setGravity(Gravity.CENTER);
     }
 
+    public void setAtMemoryCallback(Runnable callback) {
+        mAtMemoryCallback = callback;
+    }
+
+    public void setAtMemoryIphCallback(Runnable callback) {
+        mAtMemoryIphCallback = callback;
+    }
+
+    public void setAtMemoryEnabled(boolean enabled) {
+        mAtMemoryEnabled = enabled;
+    }
+
+    @Override
+    public void setEnabled(boolean enabled) {
+        super.setEnabled(enabled);
+        for (int i = 0; i < getChildCount(); i++) {
+            getChildAt(i).setEnabled(enabled);
+        }
+    }
+
     /**
      * Creates a new button and appends it to the end of the button group at the end of the bar.
      *
-     * @param icon The icon to be displayed in the button.
+     * @param iconId Id of the icon to be displayed in the button.
      * @param contentDescription The contentDescription to be used for the button.
+     * @param tabIndex The logical position of the button (e.g. the tab index).
      */
-    public void addButton(Drawable icon, CharSequence contentDescription) {
+    public void addButton(@DrawableRes int iconId, CharSequence contentDescription, int tabIndex) {
+        ImageButton button = createButton(iconId, contentDescription);
+        button.setOnClickListener(
+                view -> {
+                    if (mListener == null) return;
+                    mListener.onButtonClicked(tabIndex);
+                });
+        mButtons.add(button);
+        addView(button);
+    }
+
+    private ImageButton createButton(@DrawableRes int iconId, CharSequence contentDescription) {
         LayoutInflater inflater = LayoutInflater.from(getContext());
         ImageButton button =
                 (ImageButton)
                         inflater.inflate(R.layout.keyboard_accessory_image_button, this, false);
-        button.setImageDrawable(icon.mutate()); // mutate() needed to change the active tint.
-        button.getDrawable()
-                .setColorFilter(
-                        SemanticColorUtils.getDefaultIconColor(getContext()),
-                        PorterDuff.Mode.SRC_IN);
+        button.setImageResource(iconId);
         button.setContentDescription(contentDescription);
-        button.setOnClickListener(
-                view -> {
-                    if (mListener == null) return;
-                    mListener.onButtonClicked(mButtons.indexOf(view));
+        button.setEnabled(isEnabled());
+        return button;
+    }
+
+    public void addAtMemoryButton() {
+        if (!mAtMemoryEnabled) return;
+        mAtMemoryButton =
+                createButton(
+                        R.drawable.search_spark,
+                        getContext().getString(R.string.at_memory_icon_description));
+        mAtMemoryButton.setOnClickListener(
+                v -> {
+                    if (mAtMemoryIphCallback != null) mAtMemoryIphCallback.run();
+                    if (mAtMemoryCallback != null) mAtMemoryCallback.run();
                 });
-        // Add a spacing between buttons in the group.
-        ViewGroup.MarginLayoutParams marginParams =
-                (ViewGroup.MarginLayoutParams) button.getLayoutParams();
-        int spacing =
-                getResources().getDimensionPixelSize(R.dimen.keyboard_accessory_tab_icon_spacing);
-        marginParams.leftMargin = spacing;
-        marginParams.rightMargin = spacing;
-        button.setLayoutParams(marginParams);
-        mButtons.add(button);
-        addView(button);
+        mButtons.add(mAtMemoryButton);
+        addView(mAtMemoryButton);
     }
 
     @Override
@@ -93,6 +125,14 @@ public class KeyboardAccessoryButtonGroupView extends LinearLayout {
     void removeAllButtons() {
         mButtons.clear();
         removeAllViews();
+        mAtMemoryButton = null;
+    }
+
+    public @Nullable ViewRectProvider getAtMemoryIphRectProvider() {
+        if (mAtMemoryButton == null) return null;
+        ViewRectProvider provider = new ViewRectProvider(mAtMemoryButton);
+        provider.setIncludePadding(true);
+        return provider;
     }
 
     void setButtonSelectionListener(KeyboardAccessoryButtonGroupListener listener) {

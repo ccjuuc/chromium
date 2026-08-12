@@ -22,7 +22,7 @@ source_set("search_engine_choice") {
     ]
 
     public_deps += [
-      "//chrome/browser/ui:browser_list",
+      "//chrome/browser/ui/browser_window",
       "//components/keyed_service/core",
       "//components/prefs",
       "//components/search_engines",
@@ -42,6 +42,8 @@ source_set("impl") {
   deps = [
     ":search_engine_choice",
     "//chrome/browser:browser_process",
+    "//chrome/browser/first_run",
+    "//chrome/browser/metrics",
     "//chrome/browser/profiles",
     "//chrome/browser/regional_capabilities",
     "//chrome/browser/search_engines",
@@ -67,6 +69,7 @@ source_set("impl") {
       "//chrome/browser/ui/search_engine_choice",
       "//chrome/browser/ui/signin",
       "//chrome/browser/ui/web_applications",
+      "//chrome/browser/ui/webui/ntp",
       "//chrome/common:non_code_constants",
       "//components/country_codes",
     ]
@@ -76,6 +79,10 @@ source_set("impl") {
         "//chromeos/components/kiosk",
         "//chromeos/components/mgs",
       ]
+    }
+
+    if (is_chrome_for_testing) {
+      deps += [ "//chrome/browser/chrome_for_testing:browser" ]
     }
   }
 }
@@ -101,6 +108,7 @@ if (!is_android) {
         "//chrome/browser:browser_process",
         "//chrome/browser:test_support",
         "//chrome/browser/prefs:util",
+        "//chrome/browser/profiles:misc",
         "//chrome/browser/profiles/keep_alive",
         "//chrome/browser/search_engines",
         "//chrome/browser/ui",
@@ -180,6 +188,7 @@ if (!is_android) {
       "//chrome/browser/search_engines",
       "//chrome/test:test_support",
       "//components/country_codes",
+      "//components/metrics",
       "//components/regional_capabilities",
       "//components/search_engines",
       "//components/signin/public/base",

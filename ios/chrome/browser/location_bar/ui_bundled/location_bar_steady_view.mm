@@ -12,12 +12,12 @@
 #import "ios/chrome/browser/contextual_panel/entrypoint/ui/contextual_panel_entrypoint_visibility_delegate.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/badges_container_view.h"
+#import "ios/chrome/browser/location_bar/ui_bundled/location_bar_constants.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_constants.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/extended_touch_target_button.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
@@ -29,6 +29,12 @@ namespace {
 
 // Length of the trailing button side.
 const CGFloat kButtonSize = 24;
+// The offset to be applied to the centerig constraints when in incognito.
+const CGFloat kIncognitoCenteringOffset = 3;
+// Space between the incognito image and the location icon or label.
+const CGFloat kIncognitoImageToLocationSpacing = 8;
+// The size of the incognito image.
+const CGFloat kIncognitoImageSize = 15;
 // Space between the location icon and the location label.
 const CGFloat kLocationImageToLabelSpacing = -2.0;
 // Minimal horizontal padding between the leading edge of the location bar and
@@ -45,6 +51,8 @@ const CGFloat kLeadingMargin = 20;
 // The multiplier for the smaller location label font, used when animating in
 // the large Contextual Panel entrypoint.
 const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
+// The duration of the custom leading view fade animation.
+const CGFloat kCustomLeadingViewAnimationDuration = 0.3;
 }  // namespace
 
 @interface LocationBarSteadyView ()
@@ -79,14 +87,6 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
 // LocationBar.
 @property(nonatomic, strong)
     NSArray<NSLayoutConstraint*>* badgesViewFullScreenDisabledConstraints;
-
-// Constraints to hide the location image view.
-@property(nonatomic, strong)
-    NSArray<NSLayoutConstraint*>* hideLocationImageConstraints;
-
-// Constraints to show the location image view.
-@property(nonatomic, strong)
-    NSArray<NSLayoutConstraint*>* showLocationImageConstraints;
 
 // Elements to surface in accessibility.
 @property(nonatomic, strong) NSMutableArray* accessibleElements;
@@ -163,6 +163,32 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
 
   // The trailing view that is hidden by default, shown for highlight mode.
   UIView* _trailingButtonSpotlightView;
+
+  // The image view displaying the incognito icon.
+  UIImageView* _incognitoImageView;
+
+  // Whether the current text is a placeholder.
+  BOOL _isShowingPlaceholder;
+
+  // Spacing between the custom leading view and the URL label.
+  CGFloat _customLeadingViewSpacing;
+
+  // Target width for the custom leading view when visible.
+  CGFloat _customLeadingViewTargetWidth;
+
+  // Custom view added to the left of the location label.
+  UIView* _customLeadingView;
+  UIView* _customLeadingViewContainer;
+
+  // Width constraint for custom leading view container (used for animation).
+  NSLayoutConstraint* _customLeadingViewWidthConstraint;
+
+  // Leading constraint for custom leading view (used for animation).
+  NSLayoutConstraint* _customLeadingViewLeadingConstraint;
+
+  // Array of active constraints for the content views inside
+  // `locationContainerView`.
+  NSArray<NSLayoutConstraint*>* _containerActiveConstraints;
 }
 
 - (instancetype)init {
@@ -170,10 +196,62 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
   if (self) {
     [self setUpViews];
     [self setUpLayout];
-    [self setUpTraitChangeHandler];
   }
   [self setUpAccessibility];
   return self;
+}
+
+- (void)updateCustomLeadingViewVisibility:(BOOL)visible
+                                 animated:(BOOL)animated {
+  CGFloat priorSpacing =
+      [self shouldShowIncognitoBadge] ? kIncognitoImageToLocationSpacing : 0.0;
+  CGFloat targetWidth = visible ? _customLeadingViewTargetWidth : 0.0;
+  CGFloat targetSpacing =
+      visible ? priorSpacing : (priorSpacing - _customLeadingViewSpacing);
+  CGAffineTransform targetTransform =
+      visible ? CGAffineTransformIdentity
+              : CGAffineTransformMakeScale(0.01, 0.01);
+  CGFloat targetAlpha = visible ? 1.0 : 0.0;
+
+  if (!animated) {
+    _customLeadingView.hidden = !visible;
+    [self updateContainerConstraints];
+
+    _customLeadingViewWidthConstraint.constant = targetWidth;
+    _customLeadingViewLeadingConstraint.constant = targetSpacing;
+    _customLeadingView.transform = targetTransform;
+    _customLeadingView.alpha = targetAlpha;
+    [self updateAccessibility];
+    [self layoutIfNeeded];
+    return;
+  }
+
+  if (visible) {
+    _customLeadingView.hidden = NO;
+    [self updateAccessibility];
+    [self updateContainerConstraints];
+  }
+
+  NSLayoutConstraint* widthConstraint = _customLeadingViewWidthConstraint;
+  NSLayoutConstraint* leadingConstraint = _customLeadingViewLeadingConstraint;
+  UIView* customLeadingView = _customLeadingView;
+  __weak LocationBarSteadyView* weakSelf = self;
+
+  [UIView animateWithDuration:kCustomLeadingViewAnimationDuration
+      animations:^{
+        widthConstraint.constant = targetWidth;
+        leadingConstraint.constant = targetSpacing;
+        customLeadingView.transform = targetTransform;
+        customLeadingView.alpha = targetAlpha;
+        [weakSelf layoutIfNeeded];
+      }
+      completion:^(BOOL finished) {
+        if (!visible && finished) {
+          customLeadingView.hidden = YES;
+          [weakSelf updateAccessibility];
+          [weakSelf updateContainerConstraints];
+        }
+      }];
 }
 
 - (void)setUpViews {
@@ -192,6 +270,7 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
   // Setup trailing button.
   _trailingButton =
       [ExtendedTouchTargetButton buttonWithType:UIButtonTypeSystem];
+  _trailingButton.hidden = IsChromeNextIaEnabled();
   _trailingButton.translatesAutoresizingMaskIntoConstraints = NO;
   _trailingButton.pointerInteractionEnabled = YES;
   // Make the pointer shape fit the location bar's semi-circle end shape.
@@ -204,13 +283,22 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
   [_locationLabel
       setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                       forAxis:UILayoutConstraintAxisVertical];
-  _locationLabel.font = [self locationLabelFont];
+  if (IsChromeNextIaEnabled()) {
+    _locationLabel.font =
+        PreferredFontForTextStyle(UIFontTextStyleCallout, UIFontWeightMedium);
+  } else {
+    _locationLabel.font =
+        [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  }
+  _locationLabel.adjustsFontForContentSizeCategory = YES;
+  _locationLabel.maximumContentSizeCategory =
+      IsChromeNextIaEnabled() ? LocationBarSteadyViewMaxSizeCategory()
+                              : LegacyLocationBarSteadyViewMaxSizeCategory();
 
   // Container for location label and icon.
   _locationContainerView = [[UIView alloc] init];
   _locationContainerView.translatesAutoresizingMaskIntoConstraints = NO;
   _locationContainerView.userInteractionEnabled = NO;
-  [_locationContainerView addSubview:_locationIconImageView];
   [_locationContainerView addSubview:_locationLabel];
 
   _trailingButtonSpotlightView = [[UIView alloc] init];
@@ -240,26 +328,7 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
 }
 
 - (void)setUpLayout {
-  _showLocationImageConstraints = @[
-    [_locationContainerView.leadingAnchor
-        constraintEqualToAnchor:_locationIconImageView.leadingAnchor],
-    [_locationIconImageView.trailingAnchor
-        constraintEqualToAnchor:_locationLabel.leadingAnchor
-                       constant:kLocationImageToLabelSpacing],
-    [_locationLabel.trailingAnchor
-        constraintEqualToAnchor:_locationContainerView.trailingAnchor],
-    [_locationIconImageView.centerYAnchor
-        constraintEqualToAnchor:_locationContainerView.centerYAnchor],
-  ];
-
-  _hideLocationImageConstraints = @[
-    [_locationContainerView.leadingAnchor
-        constraintEqualToAnchor:_locationLabel.leadingAnchor],
-    [_locationLabel.trailingAnchor
-        constraintEqualToAnchor:_locationContainerView.trailingAnchor],
-  ];
-
-  [NSLayoutConstraint activateConstraints:_showLocationImageConstraints];
+  [self updateContainerConstraints];
 
   self.badgesViewFullScreenEnabledConstraints = @[
     [_badgesContainerView.leadingAnchor
@@ -307,27 +376,23 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
           constraintGreaterThanOrEqualToAnchor:self.leadingAnchor
                                       constant:kLocationBarLeadingPadding];
 
-  if (IsContextualPanelEnabled()) {
-    // Setup the layout guide centered between the contents of the location
-    // bar.
-    _centeredBetweenLocationBarContentsLayoutGuide =
-        [[UILayoutGuide alloc] init];
-    [_locationButton
-        addLayoutGuide:_centeredBetweenLocationBarContentsLayoutGuide];
-    [NSLayoutConstraint activateConstraints:@[
-      [_centeredBetweenLocationBarContentsLayoutGuide.leadingAnchor
-          constraintEqualToAnchor:_badgesContainerView.trailingAnchor],
-      [_centeredBetweenLocationBarContentsLayoutGuide.trailingAnchor
-          constraintEqualToAnchor:_trailingButton.leadingAnchor],
-    ]];
+  // Setup the layout guide centered between the contents of the location
+  // bar.
+  _centeredBetweenLocationBarContentsLayoutGuide = [[UILayoutGuide alloc] init];
+  [_locationButton
+      addLayoutGuide:_centeredBetweenLocationBarContentsLayoutGuide];
+  [NSLayoutConstraint activateConstraints:@[
+    [_centeredBetweenLocationBarContentsLayoutGuide.leadingAnchor
+        constraintEqualToAnchor:_badgesContainerView.trailingAnchor],
+    [_centeredBetweenLocationBarContentsLayoutGuide.trailingAnchor
+        constraintEqualToAnchor:_trailingButton.leadingAnchor],
+  ]];
 
-    _xRelativeToContentCenteredConstraint = [_locationContainerView
-                                                 .centerXAnchor
-        constraintEqualToAnchor:_centeredBetweenLocationBarContentsLayoutGuide
-                                    .centerXAnchor];
-    _xRelativeToContentCenteredConstraint.priority =
-        UILayoutPriorityDefaultHigh - 1;
-  }
+  _xRelativeToContentCenteredConstraint = [_locationContainerView.centerXAnchor
+      constraintEqualToAnchor:_centeredBetweenLocationBarContentsLayoutGuide
+                                  .centerXAnchor];
+  _xRelativeToContentCenteredConstraint.priority =
+      UILayoutPriorityDefaultHigh - 1;
 
   _trailingButtonTrailingAnchorConstraint = [self.trailingButton.trailingAnchor
       constraintEqualToAnchor:self.trailingAnchor
@@ -357,18 +422,6 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
     [_trailingButtonSpotlightView.heightAnchor
         constraintEqualToAnchor:self.heightAnchor],
   ]];
-}
-
-- (void)setUpTraitChangeHandler {
-  __weak __typeof(self) weakSelf = self;
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  UITraitChangeHandler traitChangeHandler =
-      ^(id<UITraitEnvironment> traitEnvironment,
-        UITraitCollection* previousCollection) {
-        [weakSelf updateFontOnTraitChange:previousCollection];
-      };
-  [self registerForTraitChanges:traits withHandler:traitChangeHandler];
 }
 
 - (void)setUpAccessibility {
@@ -410,6 +463,7 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
   // different colors. The icon should be the same color as the text, but it
   // only appears with the regular label, so its color can be set here.
   self.locationIconImageView.tintColor = self.colorScheme.fontColor;
+  _incognitoImageView.tintColor = self.colorScheme.fontColor;
 }
 
 - (void)setLocationImage:(UIImage*)locationImage {
@@ -420,31 +474,89 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
     return;
   }
 
-  if (hasImage) {
-    [self.locationContainerView addSubview:self.locationIconImageView];
-    [NSLayoutConstraint
-        deactivateConstraints:self.hideLocationImageConstraints];
-    [NSLayoutConstraint activateConstraints:self.showLocationImageConstraints];
-  } else {
-    [NSLayoutConstraint
-        deactivateConstraints:self.showLocationImageConstraints];
-    [NSLayoutConstraint activateConstraints:self.hideLocationImageConstraints];
-    [self.locationIconImageView removeFromSuperview];
-  }
+  [self updateContainerConstraints];
 }
 
-- (void)setLocationLabelText:(NSString*)string {
-  if ([self.locationLabel.text isEqualToString:string]) {
-    return;
+- (void)addCustomLeadingView:(UIView*)view
+                 targetWidth:(CGFloat)targetWidth
+                     spacing:(CGFloat)spacing {
+  // Clean up if the icon is already set.
+  if (_customLeadingViewContainer &&
+      [_customLeadingViewContainer isDescendantOfView:self]) {
+    [_customLeadingViewContainer removeFromSuperview];
   }
-  self.locationLabel.textColor = self.colorScheme.fontColor;
-  self.locationLabel.text = string;
+  _customLeadingView = view;
+  _customLeadingViewSpacing = spacing;
+  _customLeadingViewTargetWidth = targetWidth;
+
+  // Ensure accessibility is correctly configured on the custom leading view.
+  _customLeadingView.isAccessibilityElement = YES;
+  if (!_customLeadingView.accessibilityLabel) {
+    _customLeadingView.accessibilityLabel =
+        l10n_util::GetNSString(IDS_IOS_GEMINI_LIVE_ACCESSIBILITY_LABEL);
+  }
+
+  _customLeadingViewContainer = [[UIView alloc] init];
+  _customLeadingViewContainer.translatesAutoresizingMaskIntoConstraints = NO;
+  _customLeadingViewContainer.clipsToBounds = NO;
+
+  [_customLeadingViewContainer addSubview:_customLeadingView];
+  _customLeadingView.translatesAutoresizingMaskIntoConstraints = NO;
+
+  // Constrain the child view tightly inside its container.
+  [NSLayoutConstraint activateConstraints:@[
+    [_customLeadingView.leadingAnchor
+        constraintEqualToAnchor:_customLeadingViewContainer.leadingAnchor],
+    [_customLeadingView.centerYAnchor
+        constraintEqualToAnchor:_customLeadingViewContainer.centerYAnchor],
+    [_customLeadingView.widthAnchor
+        constraintEqualToConstant:_customLeadingViewTargetWidth],
+    [_customLeadingViewContainer.heightAnchor
+        constraintEqualToAnchor:_customLeadingView.heightAnchor],
+  ]];
+
+  _customLeadingViewWidthConstraint =
+      [_customLeadingViewContainer.widthAnchor constraintEqualToConstant:0.0];
+  _customLeadingViewWidthConstraint.active = YES;
+
+  _customLeadingView.transform = CGAffineTransformMakeScale(0.01, 0.01);
+  _customLeadingView.alpha = 0.0;
+  _customLeadingView.hidden = YES;
+
+  [self.locationContainerView addSubview:_customLeadingViewContainer];
+  [self updateContainerConstraints];
   [self updateAccessibility];
 }
 
+- (void)setLocationLabelText:(NSString*)string {
+  [self setLocationLabelText:string clipTail:NO];
+}
+
+- (void)setLocationLabelText:(NSString*)string clipTail:(BOOL)clipTail {
+  _isShowingPlaceholder = NO;
+  // Use attributed text to force LTR direction for URLs, preventing RTL
+  // characters from messing up the visual order (e.g. IDN with RTL scripts).
+  NSMutableParagraphStyle* style = [[NSMutableParagraphStyle alloc] init];
+  // https://chromium.googlesource.com/chromium/src/+/HEAD/docs/security/url_display_guidelines/url_display_guidelines.md#rtl
+  [style setBaseWritingDirection:NSWritingDirectionLeftToRight];
+  [style setLineBreakMode:clipTail ? NSLineBreakByTruncatingTail
+                                   : NSLineBreakByTruncatingHead];
+
+  NSDictionary* attributes = @{NSParagraphStyleAttributeName : style};
+
+  self.locationLabel.attributedText =
+      [[NSAttributedString alloc] initWithString:string attributes:attributes];
+  self.locationLabel.textColor = self.colorScheme.fontColor;
+  [self updateAccessibility];
+  [self updateContainerConstraints];
+}
+
 - (void)setLocationLabelPlaceholderText:(NSString*)string {
+  _isShowingPlaceholder = YES;
+  self.locationLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   self.locationLabel.textColor = self.colorScheme.placeholderColor;
   self.locationLabel.text = string;
+  [self updateContainerConstraints];
 }
 
 - (void)setSecurityLevelAccessibilityString:(NSString*)string {
@@ -528,6 +640,13 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
 - (void)enableTrailingButton:(BOOL)enabled {
   self.trailingButton.enabled = enabled;
   [self updateAccessibility];
+}
+
+- (void)setTrailingButtonHidden:(BOOL)hidden {
+  self.trailingButton.hidden = hidden;
+  if (IsChromeNextIaEnabled()) {
+    [self updateAccessibility];
+  }
 }
 
 - (void)setCentered:(BOOL)centered {
@@ -627,7 +746,15 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
 - (void)updateAccessibility {
   [self.accessibleElements removeAllObjects];
 
+  if (_customLeadingView && !_customLeadingView.hidden) {
+    [self.accessibleElements addObject:_customLeadingView];
+  }
+
   [_accessibleElements addObject:_locationButton];
+
+  if ([self shouldShowIncognitoBadge]) {
+    [self.accessibleElements addObject:_incognitoImageView];
+  }
 
   if (self.securityLevelAccessibilityString.length > 0) {
     self.locationButton.accessibilityValue =
@@ -642,33 +769,122 @@ const CGFloat kSmallerLocationLabelFontMultiplier = 0.75;
       addObjectsFromArray:self.badgesContainerView.accessibilityElements];
 
   if (self.trailingButton && self.trailingButton.enabled) {
-    [self.accessibleElements addObject:self.trailingButton];
+    if (!IsChromeNextIaEnabled() || !self.trailingButton.hidden) {
+      [self.accessibleElements addObject:self.trailingButton];
+    }
   }
-}
-
-// Returns the normal font size for the location label.
-- (UIFont*)locationLabelFont {
-  return LocationBarSteadyViewFont(
-      self.traitCollection.preferredContentSizeCategory);
-}
-
-// Updates the `locationLabel`'s font when the device's preferred content size
-// category changes.
-- (void)updateFontOnTraitChange:(UITraitCollection*)previousTraitCollection {
-  if (previousTraitCollection.preferredContentSizeCategory !=
-      self.traitCollection.preferredContentSizeCategory) {
-    self.locationLabel.font = [self locationLabelFont];
-  }
-
-  self.trailingButtonTrailingAnchorConstraint.constant =
-      self.trailingButtonTrailingSpacing;
-  [self layoutIfNeeded];
 }
 
 // Propagates the incognito state to the badges container view.
 - (void)setIncognito:(BOOL)incognito {
   _incognito = incognito;
+  if (_incognito && !_incognitoImageView) {
+    _incognitoImageView = [[UIImageView alloc] init];
+    _incognitoImageView.translatesAutoresizingMaskIntoConstraints = NO;
+    [_incognitoImageView
+        setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                        forAxis:
+                                            UILayoutConstraintAxisHorizontal];
+    _incognitoImageView.isAccessibilityElement = YES;
+    _incognitoImageView.accessibilityLabel =
+        l10n_util::GetNSString(IDS_IOS_BADGE_INCOGNITO_HINT);
+    UIImageConfiguration* configuration = [UIImageSymbolConfiguration
+        configurationWithPointSize:kIncognitoImageSize
+                            weight:UIImageSymbolWeightBold
+                             scale:UIImageSymbolScaleMedium];
+    _incognitoImageView.image =
+        SymbolWithConfiguration(SymbolIncognito, configuration);
+    _incognitoImageView.tintColor = self.colorScheme.fontColor;
+  }
+
   self.badgesContainerView.incognito = incognito;
+  [self updateContainerConstraints];
+}
+
+// Updates the current constraints.
+- (void)updateContainerConstraints {
+  [NSLayoutConstraint deactivateConstraints:_containerActiveConstraints];
+
+  BOOL hasIncognito = [self shouldShowIncognitoBadge];
+  BOOL hasLocationImage = self.locationIconImageView.image != nil;
+
+  if (hasIncognito) {
+    [self.locationButton addSubview:_incognitoImageView];
+  } else {
+    [_incognitoImageView removeFromSuperview];
+  }
+
+  if (hasLocationImage) {
+    [self.locationContainerView addSubview:self.locationIconImageView];
+  } else {
+    [self.locationIconImageView removeFromSuperview];
+  }
+
+  NSMutableArray* constraints = [[NSMutableArray alloc] init];
+
+  if (hasIncognito) {
+    [constraints addObjectsFromArray:@[
+      [_incognitoImageView.centerYAnchor
+          constraintEqualToAnchor:_locationContainerView.centerYAnchor],
+      [_locationContainerView.leadingAnchor
+          constraintEqualToAnchor:_incognitoImageView.leadingAnchor]
+    ]];
+    _xAbsoluteCenteredConstraint.constant = -kIncognitoCenteringOffset;
+  } else {
+    _xAbsoluteCenteredConstraint.constant = 0;
+  }
+
+  // Pin label to trailing edge.
+  [constraints addObject:[_locationLabel.trailingAnchor
+                             constraintEqualToAnchor:_locationContainerView
+                                                         .trailingAnchor]];
+
+  NSLayoutXAxisAnchor* leadingTargetAnchor =
+      _locationContainerView.leadingAnchor;
+  CGFloat currentSpacing = 0.0;
+
+  if (hasIncognito) {
+    leadingTargetAnchor = _incognitoImageView.trailingAnchor;
+    currentSpacing = kIncognitoImageToLocationSpacing;
+  }
+
+  if (_customLeadingViewContainer && !_customLeadingView.hidden) {
+    _customLeadingViewLeadingConstraint =
+        [_customLeadingViewContainer.leadingAnchor
+            constraintEqualToAnchor:leadingTargetAnchor
+                           constant:currentSpacing];
+    [constraints addObjectsFromArray:@[
+      _customLeadingViewLeadingConstraint,
+      [_customLeadingViewContainer.centerYAnchor
+          constraintEqualToAnchor:_locationContainerView.centerYAnchor],
+    ]];
+    leadingTargetAnchor = _customLeadingViewContainer.trailingAnchor;
+    currentSpacing = _customLeadingViewSpacing;
+  }
+
+  if (hasLocationImage) {
+    [constraints addObjectsFromArray:@[
+      [self.locationIconImageView.leadingAnchor
+          constraintEqualToAnchor:leadingTargetAnchor
+                         constant:currentSpacing],
+      [self.locationIconImageView.centerYAnchor
+          constraintEqualToAnchor:_locationContainerView.centerYAnchor],
+    ]];
+    leadingTargetAnchor = self.locationIconImageView.trailingAnchor;
+    currentSpacing = -kLocationImageToLabelSpacing;
+  }
+
+  [constraints addObject:[_locationLabel.leadingAnchor
+                             constraintEqualToAnchor:leadingTargetAnchor
+                                            constant:currentSpacing]];
+
+  _containerActiveConstraints = constraints;
+  [NSLayoutConstraint activateConstraints:_containerActiveConstraints];
+}
+
+// Whether the incognito badge should be visible or not.
+- (BOOL)shouldShowIncognitoBadge {
+  return self.isIncognito && IsChromeNextIaEnabled() && !_isShowingPlaceholder;
 }
 
 @end

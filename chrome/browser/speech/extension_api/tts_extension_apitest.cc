@@ -615,7 +615,7 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, RegisterEngine) {
       << message_;
 }
 
-// https://crbug.com/709115 tracks test flakiness.
+// https://crbug.com/41311728 tracks test flakiness.
 #if BUILDFLAG(IS_POSIX)
 #define MAYBE_EngineError DISABLED_EngineError
 #else
@@ -662,7 +662,7 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, NoNetworkSpeechEngineWhenOffline) {
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-// http://crbug.com/122474
+// http://crbug.com/40188097
 IN_PROC_BROWSER_TEST_P(TtsApiTest, EngineApi) {
   ASSERT_TRUE(RunExtensionTest("tts_engine/engine_api")) << message_;
 }
@@ -754,9 +754,6 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, LanguageStatusRequestEmitsEvent) {
   ASSERT_TRUE(validate_requestor_param_listener.WaitUntilSatisfied());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/40200835): Port to desktop Android when PRE_ steps are
-// supported.
 IN_PROC_BROWSER_TEST_P(TtsApiTest, PRE_VoicesAreCached) {
   EXPECT_FALSE(HasVoiceWithName("Dynamic Voice 1"));
   EXPECT_FALSE(HasVoiceWithName("Dynamic Voice 2"));
@@ -778,7 +775,6 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, VoicesAreCached) {
     waiter.Wait();
   }
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_P(TtsApiTest, OnSpeakWithAudioStream) {

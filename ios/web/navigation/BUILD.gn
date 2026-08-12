@@ -18,6 +18,7 @@ source_set("navigation") {
     ":core",
     ":navigation_manager_util",
     "//base",
+    "//components/enterprise/client_certificates/core",
     "//components/security_interstitials/core:insecure_form_util",
     "//components/sessions:session_id",
     "//ios/components/security_interstitials/https_only_mode:feature",
@@ -73,6 +74,7 @@ source_set("core") {
     ":proto_util",
     "//base",
     "//components/url_formatter",
+    "//ios/public/provider/web:navigation",
     "//ios/web/common:features",
     "//ios/web/common:user_agent",
     "//ios/web/navigation:wk_navigation_util",
@@ -85,6 +87,7 @@ source_set("core") {
   ]
 
   sources = [
+    "back_forward_navigation_type.h",
     "crw_navigation_item_holder.h",
     "crw_navigation_item_holder.mm",
     "navigation_context_impl.h",

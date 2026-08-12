@@ -3,7 +3,6 @@
 # found in the LICENSE file.
 
 import("//build/config/android/rules.gni")
-import("//chrome/android/modules/buildflags.gni")
 import("//third_party/jni_zero/jni_zero.gni")
 
 android_library("module_installer_java") {
@@ -39,6 +38,7 @@ android_library("module_installer_java") {
 }
 
 robolectric_binary("module_installer_junit_tests") {
+  enable_android_resources = false
   sources = [
     "junit/src/org/chromium/components/module_installer/builder/ModuleEngineTest.java",
     "junit/src/org/chromium/components/module_installer/builder/ModuleTest.java",
@@ -68,8 +68,8 @@ java_annotation_processor("module_interface_processor") {
   deps = [
     ":module_interface_java",
     "//build/android:build_java",
-    "//third_party/android_deps:guava_java",
     "//third_party/android_deps:com_squareup_javapoet_java",
+    "//third_party/android_deps:guava_java",
   ]
 }
 
@@ -80,12 +80,6 @@ source_set("native") {
     "//base",
     "//ui/base",
   ]
-
-  # The method used to load and register JNI for native libraries depends
-  # on build type.
-  if (use_native_partitions) {
-    defines = [ "LOAD_FROM_PARTITIONS" ]
-  }
 }
 
 generate_jni("jni_headers") {

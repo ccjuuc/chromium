@@ -2,13 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//components/guest_view/buildflags/buildflags.gni")
 import("//components/safe_browsing/buildflags.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//pdf/features.gni")
 import("//rlz/buildflags/buildflags.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
+import("//third_party/protobuf/proto_library.gni")
 
 if (enable_desktop_android_extensions) {
   import("//build/config/android/rules.gni")
@@ -78,9 +78,14 @@ source_set("core_keyed_service_factories") {
   deps = [
     "//components/guest_view/buildflags",
     "//extensions/browser:browser_sources",
+    "//extensions/browser:crx_installer",
     "//extensions/browser/updater",
     "//extensions/buildflags",
   ]
+
+  if (enable_extensions && !is_android) {
+    deps += [ "//extensions/browser/mime_handler:mime_handler_registry" ]
+  }
 }
 
 # The set of all sources that are related to the core extensions system.
@@ -103,6 +108,7 @@ source_set("browser_sources") {
     "api/api_resource.cc",
     "api/api_resource.h",
     "api/api_resource_manager.h",
+    "api/constants.h",
     "api/declarative/declarative_api.cc",
     "api/declarative/declarative_api.h",
     "api/declarative/declarative_rule.h",
@@ -204,8 +210,8 @@ source_set("browser_sources") {
     "api/web_request/web_request_proxying_websocket.h",
     "api/web_request/web_request_proxying_webtransport.cc",
     "api/web_request/web_request_proxying_webtransport.h",
-    "api/web_request/web_request_resource_type.cc",
-    "api/web_request/web_request_resource_type.h",
+    "api/web_request/web_request_proxying_webtransport_shutdown_notifier_factory.cc",
+    "api/web_request/web_request_proxying_webtransport_shutdown_notifier_factory.h",
     "api/web_request/web_request_time_tracker.cc",
     "api/web_request/web_request_time_tracker.h",
     "api_activity_monitor.cc",
@@ -241,6 +247,8 @@ source_set("browser_sources") {
     "content_hash_reader.h",
     "content_hash_tree.cc",
     "content_hash_tree.h",
+    "content_settings_extension_install_time_permission_provider.cc",
+    "content_settings_extension_install_time_permission_provider.h",
     "content_verifier/content_hash.cc",
     "content_verifier/content_hash.h",
     "content_verifier/content_verifier.cc",
@@ -256,6 +264,8 @@ source_set("browser_sources") {
     "content_verifier/scoped_uma_recorder.h",
     "crx_file_info.cc",
     "crx_file_info.h",
+    "cws_info_service.cc",
+    "cws_info_service.h",
     "deferred_start_render_host.h",
     "delayed_install_manager.cc",
     "delayed_install_manager.h",
@@ -288,8 +298,12 @@ source_set("browser_sources") {
     "extension_action_icon_factory.h",
     "extension_action_manager.cc",
     "extension_action_manager.h",
+    "extension_allowlist.cc",
+    "extension_allowlist.h",
     "extension_api_frame_id_map.cc",
     "extension_api_frame_id_map.h",
+    "extension_assets_manager.cc",
+    "extension_assets_manager.h",
     "extension_creator.cc",
     "extension_creator.h",
     "extension_creator_filter.cc",
@@ -326,7 +340,12 @@ source_set("browser_sources") {
     "extension_icon_manager.h",
     "extension_icon_placeholder.cc",
     "extension_icon_placeholder.h",
+    "extension_install_prompt_client.h",
     "extension_management_client.h",
+    "extension_mojo_binder_registry.cc",
+    "extension_mojo_binder_registry.h",
+    "extension_mojo_binder_registry_factory.cc",
+    "extension_mojo_binder_registry_factory.h",
     "extension_navigation_registry.cc",
     "extension_navigation_registry.h",
     "extension_navigation_throttle.cc",
@@ -364,6 +383,10 @@ source_set("browser_sources") {
     "extension_system.h",
     "extension_system_provider.cc",
     "extension_system_provider.h",
+    "extension_user_activation_service.cc",
+    "extension_user_activation_service.h",
+    "extension_user_activation_service_factory.cc",
+    "extension_user_activation_service_factory.h",
     "extension_user_script_loader.cc",
     "extension_user_script_loader.h",
     "extension_util.cc",
@@ -406,6 +429,8 @@ source_set("browser_sources") {
     "install_observer.h",
     "install_prefs_helper.cc",
     "install_prefs_helper.h",
+    "install_prompt_data.cc",
+    "install_prompt_data.h",
     "install_prompt_permissions.cc",
     "install_prompt_permissions.h",
     "install_signer.cc",
@@ -433,11 +458,14 @@ source_set("browser_sources") {
     "load_and_localize_file.h",
     "load_error_reporter.cc",
     "load_error_reporter.h",
+    "managed_installation_mode.h",
     "management_policy.cc",
     "management_policy.h",
     "manifest_check_level.h",
-    "media_capture_util.cc",
-    "media_capture_util.h",
+    "manifest_v2_handler.cc",
+    "manifest_v2_handler.h",
+    "manifest_v2_util.cc",
+    "manifest_v2_util.h",
     "message_service_api.cc",
     "message_service_api.h",
     "message_tracker.cc",
@@ -472,6 +500,7 @@ source_set("browser_sources") {
     "policy_check.h",
     "pref_names.cc",
     "pref_names.h",
+    "pref_transformer_interface.h",
     "pref_types.cc",
     "pref_types.h",
     "preload_check.cc",
@@ -505,6 +534,7 @@ source_set("browser_sources") {
     "sandboxed_unpacker.h",
     "scoped_active_install.cc",
     "scoped_active_install.h",
+    "screenshot_access.h",
     "script_executor.cc",
     "script_executor.h",
     "script_injection_tracker.cc",
@@ -529,6 +559,8 @@ source_set("browser_sources") {
     "service_worker/worker_id_set.h",
     "service_worker_manager.cc",
     "service_worker_manager.h",
+    "shared_module_service.cc",
+    "shared_module_service.h",
     "state_store.cc",
     "state_store.h",
     "state_store_test_observer.cc",
@@ -544,6 +576,8 @@ source_set("browser_sources") {
     "ui_util.h",
     "uninstall_reason.h",
     "unloaded_extension_reason.h",
+    "unpacked_installer.cc",
+    "unpacked_installer.h",
     "update_install_gate.cc",
     "update_install_gate.h",
     "update_observer.h",
@@ -573,6 +607,7 @@ source_set("browser_sources") {
   ]
 
   deps = [
+    ":cws_item_service_proto",
     "//base",
     "//base:i18n",
     "//build:android_buildflags",
@@ -592,7 +627,9 @@ source_set("browser_sources") {
     "//components/permissions",
     "//components/pref_registry",
     "//components/prefs",
+    "//components/proxy_config",
     "//components/safe_browsing:buildflags",
+    "//components/safe_browsing/core/browser:safe_browsing_metrics_collector",
     "//components/safe_browsing/core/browser/db:database_manager",
     "//components/safe_browsing/core/browser/db:util",
     "//components/safe_browsing/core/browser/db:v4_protocol_manager_util",
@@ -601,6 +638,7 @@ source_set("browser_sources") {
     "//components/services/unzip/content",
     "//components/services/unzip/public/cpp",
     "//components/sessions",
+    "//components/strings:components_strings",
     "//components/supervised_user/core/common",
     "//components/supervised_user/core/common:buildflags",
     "//components/sync",
@@ -616,18 +654,18 @@ source_set("browser_sources") {
     "//content/public/common",
     "//content/public/common:buildflags",
     "//extensions:extensions_browser_resources",
+    "//extensions/browser:keepalive",
     "//extensions/browser/api:extensions_api_client",
     "//extensions/browser/api/messaging:native_messaging",
     "//extensions/browser/api/storage:settings_namespace",
     "//extensions/browser/api/storage:settings_observer",
     "//extensions/browser/api/system_display:display_info_provider",
-    "//extensions/browser/api/virtual_keyboard_private:virtual_keyboard_delegate",
-    "//extensions/browser/updater:keepalive",
     "//extensions/buildflags",
     "//extensions/common",
     "//extensions/common/api",
     "//extensions/strings",
     "//google_apis",
+    "//google_apis/common:request_util",
     "//net",
     "//pdf:buildflags",
     "//pdf:features",
@@ -656,6 +694,7 @@ source_set("browser_sources") {
     deps += [
       "//chromeos/constants",
       "//extensions/browser/api/clipboard:clipboard_types",
+      "//extensions/browser/api/virtual_keyboard_private:virtual_keyboard_delegate",
     ]
   }
 
@@ -668,6 +707,7 @@ source_set("browser_sources") {
     "//components/safe_browsing/core/browser/db:v4_protocol_config",
     "//components/url_matcher",
     "//components/url_pattern_index",
+    "//components/user_prefs",
     "//components/value_store",
     "//content/public/common",
     "//extensions/browser/api/declarative_net_request/flat:extension_ruleset",
@@ -683,13 +723,40 @@ source_set("browser_sources") {
   # TODO(crbug.com/41323543): Ideally web_view should be a separate target on
   # which the extension system depends.
   if (enable_guest_view) {
+    if (is_chromeos) {
+      sources += [
+        "guest_view/app_view/app_view_constants.cc",
+        "guest_view/app_view/app_view_constants.h",
+        "guest_view/app_view/app_view_guest.cc",
+        "guest_view/app_view/app_view_guest.h",
+        "guest_view/app_view/app_view_guest_delegate.cc",
+        "guest_view/app_view/app_view_guest_delegate.h",
+      ]
+    }
+    if (enable_extensions) {
+      sources += [
+        "guest_view/mime_handler_view/mime_handler_stream_manager.cc",
+        "guest_view/mime_handler_view/mime_handler_stream_manager.h",
+        "guest_view/mime_handler_view/mime_handler_view_attach_helper.cc",
+        "guest_view/mime_handler_view/mime_handler_view_attach_helper.h",
+        "guest_view/mime_handler_view/mime_handler_view_constants.cc",
+        "guest_view/mime_handler_view/mime_handler_view_constants.h",
+        "guest_view/mime_handler_view/mime_handler_view_embedder.cc",
+        "guest_view/mime_handler_view/mime_handler_view_embedder.h",
+        "guest_view/mime_handler_view/mime_handler_view_guest.cc",
+        "guest_view/mime_handler_view/mime_handler_view_guest.h",
+        "guest_view/mime_handler_view/mime_handler_view_guest_delegate.cc",
+        "guest_view/mime_handler_view/mime_handler_view_guest_delegate.h",
+      ]
+
+      if (!is_android) {
+        deps += [
+          "//extensions/browser/mime_handler:mime_handler_page",
+          "//extensions/browser/mime_handler:stream_container",
+        ]
+      }
+    }
     sources += [
-      "guest_view/app_view/app_view_constants.cc",
-      "guest_view/app_view/app_view_constants.h",
-      "guest_view/app_view/app_view_guest.cc",
-      "guest_view/app_view/app_view_guest.h",
-      "guest_view/app_view/app_view_guest_delegate.cc",
-      "guest_view/app_view/app_view_guest_delegate.h",
       "guest_view/extension_options/extension_options_constants.cc",
       "guest_view/extension_options/extension_options_constants.h",
       "guest_view/extension_options/extension_options_guest.cc",
@@ -702,18 +769,6 @@ source_set("browser_sources") {
       "guest_view/extensions_guest_view_manager_delegate.h",
       "guest_view/guest_view_events.cc",
       "guest_view/guest_view_events.h",
-      "guest_view/mime_handler_view/mime_handler_stream_manager.cc",
-      "guest_view/mime_handler_view/mime_handler_stream_manager.h",
-      "guest_view/mime_handler_view/mime_handler_view_attach_helper.cc",
-      "guest_view/mime_handler_view/mime_handler_view_attach_helper.h",
-      "guest_view/mime_handler_view/mime_handler_view_constants.cc",
-      "guest_view/mime_handler_view/mime_handler_view_constants.h",
-      "guest_view/mime_handler_view/mime_handler_view_embedder.cc",
-      "guest_view/mime_handler_view/mime_handler_view_embedder.h",
-      "guest_view/mime_handler_view/mime_handler_view_guest.cc",
-      "guest_view/mime_handler_view/mime_handler_view_guest.h",
-      "guest_view/mime_handler_view/mime_handler_view_guest_delegate.cc",
-      "guest_view/mime_handler_view/mime_handler_view_guest_delegate.h",
       "guest_view/web_view/controlled_frame_embedder_url_fetcher.cc",
       "guest_view/web_view/controlled_frame_embedder_url_fetcher.h",
       "guest_view/web_view/javascript_dialog_helper.cc",
@@ -776,25 +831,28 @@ source_set("browser_sources") {
     sources += [
       "api/device_permissions_manager.cc",
       "api/device_permissions_manager.h",
-      "api/device_permissions_prompt.cc",
-      "api/device_permissions_prompt.h",
       "api/hid/hid_api.cc",
       "api/hid/hid_api.h",
       "api/hid/hid_connection_resource.cc",
       "api/hid/hid_connection_resource.h",
       "api/hid/hid_device_manager.cc",
       "api/hid/hid_device_manager.h",
-      "api/usb/usb_api.cc",
-      "api/usb/usb_api.h",
       "api/usb/usb_device_manager.cc",
       "api/usb/usb_device_manager.h",
       "api/usb/usb_device_resource.cc",
       "api/usb/usb_device_resource.h",
+      "api/usb_device_permissions_prompt.cc",
+      "api/usb_device_permissions_prompt.h",
     ]
 
     deps += [ "//services/device/public/cpp/hid" ]
 
     if (is_chromeos) {
+      sources += [
+        "api/usb/usb_api.cc",
+        "api/usb/usb_api.h",
+      ]
+
       deps += [ "//chromeos/dbus/permission_broker" ]
     }
   }
@@ -815,6 +873,69 @@ source_set("browser_sources") {
   configs += [
     "//build/config:precompiled_headers",
     "//build/config/compiler:wexit_time_destructors",
+  ]
+}
+
+source_set("keepalive") {
+  sources = [
+    "scoped_extension_keep_alive.cc",
+    "scoped_extension_keep_alive.h",
+  ]
+}
+
+source_set("crx_installer") {
+  sources = [
+    "crx_installer.cc",
+    "crx_installer.h",
+  ]
+
+  deps = [
+    ":browser_sources",
+    "//build:chromeos_buildflags",
+    "//components/keyed_service/content",
+    "//components/sync/model",
+    "//content/public/browser",
+    "//extensions/browser:keepalive",
+    "//extensions/browser/forced_extensions",
+    "//extensions/buildflags",
+    "//extensions/common",
+    "//extensions/strings",
+  ]
+
+  if (is_chromeos) {
+    deps += [ "//components/user_manager" ]
+  }
+}
+source_set("webstore_installer") {
+  sources = [
+    "webstore_data_fetcher.cc",
+    "webstore_data_fetcher.h",
+    "webstore_data_fetcher_delegate.cc",
+    "webstore_data_fetcher_delegate.h",
+    "webstore_install_helper.cc",
+    "webstore_install_helper.h",
+    "webstore_install_result.cc",
+    "webstore_install_result.h",
+    "webstore_installer.cc",
+    "webstore_installer.h",
+  ]
+  deps = [
+    ":browser_sources",
+    ":crx_installer",
+    ":cws_item_service_proto",
+    "//base",
+    "//components/download/public/common:public",
+    "//components/image_fetcher/core",
+    "//components/update_client",
+    "//content/public/browser",
+    "//extensions/buildflags",
+    "//extensions/common",
+    "//extensions/strings",
+    "//google_apis/common:request_util",
+    "//net/traffic_annotation",
+    "//services/data_decoder/public/cpp",
+    "//ui/base",
+    "//url",
   ]
 }
 
@@ -951,12 +1072,15 @@ source_set("unit_tests") {
     "api/file_handlers/mime_util_unittest.cc",
     "api/idle/idle_api_unittest.cc",
     "api/power/power_api_unittest.cc",
+    "api/proxy/proxy_api_helpers_unittest.cc",
     "api/runtime/restart_after_delay_api_unittest.cc",
+    "api/runtime/runtime_api_unittest.cc",
     "api/storage/session_storage_manager_unittest.cc",
     "api/storage/settings_quota_unittest.cc",
     "api/storage/storage_api_unittest.cc",
     "api/storage/storage_frontend_unittest.cc",
     "api/system_network/system_network_api_unittest.cc",
+    "api/test/test_api_unittest.cc",
     "api/web_request/extension_web_request_event_router_unittest.cc",
     "api/web_request/form_data_parser_unittest.cc",
     "api/web_request/upload_data_presenter_unittest.cc",
@@ -970,6 +1094,7 @@ source_set("unit_tests") {
     "computed_hashes_unittest.cc",
     "content_hash_fetcher_unittest.cc",
     "content_hash_tree_unittest.cc",
+    "content_settings_extension_install_time_permission_provider_unittest.cc",
     "content_verifier/content_hash_unittest.cc",
     "content_verifier/content_verifier_unittest.cc",
     "content_verifier/content_verifier_utils_unittest.cc",
@@ -986,9 +1111,11 @@ source_set("unit_tests") {
     "extension_function_histogram_value_unittest.cc",
     "extension_icon_image_unittest.cc",
     "extension_icon_manager_unittest.cc",
+    "extension_mojo_binder_registry_unittest.cc",
     "extension_pref_value_map_unittest.cc",
     "extension_registrar_unittest.cc",
     "extension_registry_unittest.cc",
+    "extension_user_activation_service_unittest.cc",
     "extension_util_unittest.cc",
     "file_highlighter_unittest.cc",
     "file_reader_unittest.cc",
@@ -1011,12 +1138,14 @@ source_set("unit_tests") {
     "renderer_startup_helper_unittest.cc",
     "requirements_checker_unittest.cc",
     "sandboxed_unpacker_unittest.cc",
+    "service_worker/service_worker_host_unittest.cc",
     "service_worker/worker_id_set_unittest.cc",
     "updater/extension_downloader_unittest.cc",
     "updater/extension_installer_unittest.cc",
     "updater/safe_manifest_parser_unittest.cc",
     "updater/update_data_provider_unittest.cc",
     "updater/update_service_unittest.cc",
+    "user_script_loader_unittest.cc",
     "verified_contents_unittest.cc",
     "warning_service_unittest.cc",
   ]
@@ -1029,6 +1158,7 @@ source_set("unit_tests") {
     "//build:android_buildflags",
     "//build:chromeos_buildflags",
     "//components/content_settings/core/test:test_support",
+    "//components/crash/core/common:crash_key",
     "//components/crx_file",
     "//components/feedback",
     "//components/file_access:test_support",
@@ -1038,11 +1168,13 @@ source_set("unit_tests") {
     "//components/policy/core/common:test_support",
     "//components/pref_registry",
     "//components/prefs:test_support",
+    "//components/proxy_config",
     "//components/safe_browsing/core/common",
     "//components/safe_browsing/core/common/hashprefix_realtime:hash_realtime_utils",
     "//components/safe_browsing/core/common/proto:crx_info_proto_gen",
     "//components/services/unzip:in_process",
     "//components/services/unzip/content",
+    "//components/signin/public/identity_manager:test_support",
     "//components/sync_preferences:test_support",
     "//components/update_client",
     "//components/url_matcher",
@@ -1055,9 +1187,9 @@ source_set("unit_tests") {
     "//extensions:test_support",
     "//extensions/browser/api:extensions_api_client",
     "//extensions/browser/api/content_settings",
+    "//extensions/browser/api/proxy",
     "//extensions/browser/api/storage:settings_namespace",
     "//extensions/browser/api/system_display:display_info_provider",
-    "//extensions/browser/api/virtual_keyboard_private:virtual_keyboard_delegate",
     "//extensions/browser/updater",
     "//extensions/buildflags",
     "//extensions/common",
@@ -1077,12 +1209,14 @@ source_set("unit_tests") {
     "//ui/display:test_support",
   ]
 
+  if (is_chromeos) {
+    deps += [ "//extensions/browser/api/virtual_keyboard_private:virtual_keyboard_delegate" ]
+  }
+
   # TODO(https://crbug.com/356905053): Gradually include more of these sources
   # in the desktop-android build when the related APIs are enabled.
   if (enable_extensions) {
     sources += [
-      "api/bluetooth/bluetooth_event_router_unittest.cc",
-      "api/bluetooth_socket/bluetooth_socket_api_unittest.cc",
       "api/feedback_private/feedback_service_unittest.cc",
       "api/mime_handler_private/mime_handler_private_unittest.cc",
       "api/socket/mojo_data_pump_unittest.cc",
@@ -1094,8 +1228,18 @@ source_set("unit_tests") {
     deps += [
       "//components/storage_monitor:test_support",
       "//extensions/browser/api/declarative_net_request/filter_list_converter:unit_tests",
-      "//extensions/shell:app_shell_lib",
     ]
+
+    if (!is_android) {
+      sources += [ "api/mime_handler/mime_handler_api_unittest.cc" ]
+      deps += [
+        "//extensions/browser/api/mime_handler",
+        "//extensions/browser/mime_handler",
+        "//extensions/browser/mime_handler:stream_container",
+        "//extensions/browser/mime_handler:test_helpers",
+        "//extensions/browser/mime_handler:unit_tests",
+      ]
+    }
   }
 
   if (enable_platform_apps) {
@@ -1105,6 +1249,8 @@ source_set("unit_tests") {
   if (is_chromeos) {
     sources += [
       "api/audio/audio_device_id_calculator_unittest.cc",
+      "api/bluetooth/bluetooth_event_router_unittest.cc",
+      "api/bluetooth_socket/bluetooth_socket_api_unittest.cc",
       "api/feedback_private/access_rate_limiter_chromeos_unittest.cc",
       "api/feedback_private/feedback_private_api_chromeos_unittest.cc",
       "api/feedback_private/feedback_private_api_unittest_base_chromeos.cc",
@@ -1121,6 +1267,7 @@ source_set("unit_tests") {
       "//ash/constants",
       "//chrome/common:constants",
       "//chromeos:test_support",
+      "//chromeos/ash/components/browser_context_helper",
       "//chromeos/ash/components/dbus:test_support",
       "//chromeos/ash/components/dbus/audio",
       "//chromeos/ash/components/dbus/debug_daemon",
@@ -1131,16 +1278,18 @@ source_set("unit_tests") {
       "//chromeos/ash/components/login/login_state",
       "//chromeos/ash/components/network:test_support",
       "//chromeos/constants",
-      "//chromeos/crosapi/mojom",
       "//chromeos/dbus/permission_broker",
       "//chromeos/dbus/power",
       "//components/account_id",
+      "//components/account_id:test_support",
       "//components/feedback",
+      "//components/feedback/content:factory",
       "//components/prefs",
       "//components/prefs:test_support",
+      "//components/session_manager/core",
+      "//components/session_manager/test:test_support",
       "//components/user_manager",
       "//components/user_manager:test_support",
-      "//extensions/shell:app_shell_lib",
       "//google_apis",
     ]
   }
@@ -1172,92 +1321,6 @@ if (enable_desktop_android_extensions) {
 # TODO(https://crbug.com/356905053): Gradually include more of these sources
 # in the desktop-android build.
 if (enable_extensions) {
-  # The set of all browsertests for anything defined under the
-  # //extensions/browser module. Note that, unlike the production build targets
-  # above, this is a monolithic target that includes all tests for both the core
-  # system and relevant APIs.
-  source_set("browser_tests") {
-    testonly = true
-    sources = [
-      # TODO(michaelpg): bluetooth_appshell_test.cc is a crutch until we have a
-      # better system for testing APIs in both app_shell and chrome. See
-      # crbug.com/650835.
-      "api/bluetooth/bluetooth_appshell_test.cc",
-      "api/bluetooth_socket/bluetooth_socket_apitest.cc",
-      "api/feedback_private/feedback_private_apitest.cc",
-      "api/hid/hid_apitest.cc",
-      "api/socket/socket_apitest.cc",
-      "api/sockets_tcp/sockets_tcp_apitest.cc",
-      "api/sockets_tcp_server/sockets_tcp_server_apitest.cc",
-      "api/sockets_udp/sockets_udp_apitest.cc",
-      "api/system_display/system_display_apitest.cc",
-      "api/system_storage/storage_api_test_util.cc",
-      "api/system_storage/storage_api_test_util.h",
-      "api/system_storage/system_storage_apitest.cc",
-      "api/system_storage/system_storage_eject_apitest.cc",
-      "api/usb/usb_apitest.cc",
-      "browsertest_util_browsertest.cc",
-      "extension_frame_host_browsertest.cc",
-      "guest_view/app_view/app_view_apitest.cc",
-      "guest_view/web_view/web_view_apitest.cc",
-      "guest_view/web_view/web_view_apitest.h",
-      "guest_view/web_view/web_view_media_access_apitest.cc",
-    ]
-
-    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
-
-    deps = [
-      ":browser",
-      "//base",
-      "//build:chromeos_buildflags",
-      "//components/guest_view/browser:test_support",
-      "//components/storage_monitor:test_support",
-      "//device/bluetooth:mocks",
-      "//extensions:test_support",
-      "//extensions/browser:test_support",
-      "//extensions/browser/api/system_display:display_info_provider",
-      "//extensions/browser/api/virtual_keyboard_private:virtual_keyboard_delegate",
-      "//extensions/common",
-      "//extensions/common/api",
-      "//extensions/shell:app_shell_lib",
-      "//extensions/shell:browser_tests",
-      "//net:test_support",
-      "//services/device/public/cpp:test_support",
-      "//services/device/public/mojom",
-      "//services/network:test_support",
-      "//services/service_manager/public/cpp",
-      "//ui/display:test_support",
-    ]
-
-    public_deps = [ "//content/test:test_support" ]
-
-    if (is_chromeos) {
-      sources += [
-        "api/audio/audio_apitest_chromeos.cc",
-        "api/cec_private/cec_private_ash_apitest.cc",
-        "api/media_perception_private/media_perception_private_apitest.cc",
-        "api/virtual_keyboard/virtual_keyboard_apitest.cc",
-      ]
-
-      deps += [
-        "//chromeos/ash/components/audio",
-        "//chromeos/ash/components/dbus:test_support",
-        "//chromeos/ash/components/dbus/audio",
-        "//chromeos/ash/components/dbus/cec_service",
-        "//chromeos/ash/components/dbus/media_analytics",
-        "//chromeos/ash/components/dbus/media_analytics:media_perception_proto",
-        "//chromeos/ash/components/dbus/upstart",
-        "//chromeos/ash/components/login/login_state",
-        "//chromeos/ash/components/network",
-        "//chromeos/dbus/permission_broker",
-        "//chromeos/dbus/power",
-        "//chromeos/dbus/power:power_manager_proto",
-        "//components/crash/content/browser/error_reporting:mock_crash_endpoint",
-        "//extensions/common:mojom",
-      ]
-    }
-  }
-
   fuzzer_test("extension_file_highlighter_fuzzer") {
     sources = [ "file_highlighter_fuzzer.cc" ]
     deps = [
@@ -1285,8 +1348,9 @@ if (enable_extensions) {
       "//third_party/abseil-cpp:absl",
       "//url",
     ]
-
-    # The fuzzed code needs more RAM that the default limit.
-    libfuzzer_options = [ "rss_limit_mb=4096" ]
   }
+}
+
+proto_library("cws_item_service_proto") {
+  sources = [ "cws_item_service.proto" ]
 }

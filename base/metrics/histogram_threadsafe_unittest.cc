@@ -8,11 +8,11 @@
 #include <vector>
 
 #include "base/atomicops.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_span.h"
 #include "base/metrics/bucket_ranges.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/metrics_hashes.h"
 #include "base/metrics/persistent_histogram_allocator.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/no_destructor.h"
@@ -222,13 +222,15 @@ class HistogramThreadsafeTest : public testing::Test {
         StringPrintf("LocalHeapNumericHistogram%zu", suffix);
     auto& local_heap_histogram = histograms_.emplace_back(new Histogram(
         HistogramBase::GetPermanentName(local_heap_histogram_name),
+        HashMetricName(local_heap_histogram_name),
         numeric_histogram->bucket_ranges()));
     histograms.push_back(local_heap_histogram.get());
     std::string local_heap_sparse_histogram_name =
         StringPrintf("LocalHeapSparseHistogram%zu", suffix);
     auto& local_heap_sparse_histogram =
         histograms_.emplace_back(new SparseHistogram(
-            HistogramBase::GetPermanentName(local_heap_sparse_histogram_name)));
+            HistogramBase::GetPermanentName(local_heap_sparse_histogram_name),
+            HashMetricName(local_heap_sparse_histogram_name)));
     histograms.push_back(local_heap_sparse_histogram.get());
 
     // Furthermore, create two additional *different* histogram objects that
@@ -431,7 +433,7 @@ TEST_F(HistogramThreadsafeTest, SnapshotDeltaThreadsafe) {
       // a normal histogram, once as a simulation of a subprocess histogram, and
       // once as a duplicate histogram created from the same allocator.
       size_t expected_logged_samples_count = kNumThreads * kNumEmissions;
-      if (!Contains(histogram->histogram_name(), "LocalHeap")) {
+      if (!histogram->histogram_name().contains("LocalHeap")) {
         expected_logged_samples_count *= 3;
       }
       ASSERT_EQ(static_cast<size_t>(logged_samples->TotalCount()),

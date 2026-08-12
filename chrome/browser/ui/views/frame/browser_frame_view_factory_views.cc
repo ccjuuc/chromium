@@ -7,25 +7,24 @@
 #include "build/build_config.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
-#include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
+#include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view.h"
 #endif
 
 #if BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux_native.h"
+#include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_linux_native.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
 #include "chrome/browser/ui/views/frame/picture_in_picture_browser_frame_view_linux.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "ui/linux/linux_ui.h"
-#include "ui/linux/nav_button_provider.h"
 #endif
 
 namespace chrome {
@@ -36,23 +35,25 @@ namespace {
 std::unique_ptr<OpaqueBrowserFrameView> CreateOpaqueBrowserFrameViewLinux(
     BrowserWidget* widget,
     BrowserView* browser_view) {
-  auto* profile = browser_view->browser()->profile();
+  auto* profile = browser_view->browser()->GetProfile();
   auto* linux_ui_theme = ui::LinuxUiTheme::GetForProfile(profile);
   auto* theme_service_factory = ThemeServiceFactory::GetForProfile(profile);
-  auto* app_controller = browser_view->browser()->app_controller();
+  auto* app_controller =
+      web_app::AppBrowserController::From(browser_view->browser());
 
   // Ignore the toolkit theme for web apps with window-controls-overlay as the
   // display_override so the web contents can blend with the overlay by using
   // the developer-provided theme color for a better experience. Context:
-  // https://crbug.com/1219073. Also ignore the toolkit theme for web apps with
-  // borderless as there's no surface left to apply the theme for.
-  bool app_uses_wco_or_borderless =
+  // https://crbug.com/40771982. Also ignore the toolkit theme for web apps with
+  // unframed as there's no surface left to apply the theme for.
+  bool app_uses_wco_or_unframed =
       app_controller && (app_controller->AppUsesWindowControlsOverlay() ||
-                         app_controller->AppUsesBorderlessMode());
+                         app_controller->AppUsesUnframedMode());
 
   if (linux_ui_theme && theme_service_factory->UsingSystemTheme() &&
-      !app_uses_wco_or_borderless) {
-    auto nav_button_provider = linux_ui_theme->CreateNavButtonProvider();
+      !app_uses_wco_or_unframed) {
+    auto nav_button_provider =
+        linux_ui_theme->CreateNavButtonProvider(ui::FrameType::kBrowser);
     if (nav_button_provider) {
       auto* native_widget = static_cast<BrowserNativeWidgetAuraLinux*>(
           widget->browser_native_widget());
@@ -63,8 +64,8 @@ std::unique_ptr<OpaqueBrowserFrameView> CreateOpaqueBrowserFrameViewLinux(
                  ui::LinuxUiTheme* linux_ui_theme, bool tiled, bool maximized) {
                 const bool solid_frame =
                     !native_widget->ShouldDrawRestoredFrameShadow();
-                return linux_ui_theme->GetWindowFrameProvider(solid_frame,
-                                                              tiled, maximized);
+                return linux_ui_theme->GetWindowFrameProvider(
+                    ui::FrameType::kBrowser, solid_frame, tiled, maximized);
               },
               native_widget, linux_ui_theme));
       return std::make_unique<BrowserFrameViewLinuxNative>(
@@ -78,7 +79,8 @@ std::unique_ptr<OpaqueBrowserFrameView> CreateOpaqueBrowserFrameViewLinux(
 std::unique_ptr<BrowserFrameView> CreateBrowserFrameViewLinux(
     BrowserWidget* widget,
     BrowserView* browser_view) {
-  if (browser_view->browser()->is_type_picture_in_picture()) {
+  if (browser_view->browser()->GetType() ==
+      BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE) {
     return std::make_unique<PictureInPictureBrowserFrameViewLinux>(
         widget, browser_view);
   }
@@ -95,7 +97,8 @@ std::unique_ptr<BrowserFrameView> CreateBrowserFrameViewLinux(
 std::unique_ptr<BrowserFrameView> CreateBrowserFrameViewWin(
     BrowserWidget* widget,
     BrowserView* browser_view) {
-  if (browser_view->browser()->is_type_picture_in_picture()) {
+  if (browser_view->browser()->GetType() ==
+      BrowserWindowInterface::Type::TYPE_PICTURE_IN_PICTURE) {
     return std::make_unique<PictureInPictureBrowserFrameView>(widget,
                                                               browser_view);
   }
@@ -104,7 +107,7 @@ std::unique_ptr<BrowserFrameView> CreateBrowserFrameViewWin(
     return std::make_unique<BrowserFrameViewWin>(widget, browser_view);
   }
 
-  auto opaque_browser_view = std::make_unique<OpaqueBrowserFrameViewWin>(
+  auto opaque_browser_view = std::make_unique<OpaqueBrowserFrameView>(
       widget, browser_view, new OpaqueBrowserFrameViewLayout());
   opaque_browser_view->InitViews();
 

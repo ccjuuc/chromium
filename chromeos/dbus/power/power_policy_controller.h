@@ -12,6 +12,7 @@
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/policy.pb.h"
@@ -137,17 +138,17 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
     double adaptive_charging_min_full_on_ac_ratio = -1.0;
   };
 
-  // Converts |base::Value::Dict| to |std::vector<PeakShiftDayConfig>| and
+  // Converts |base::DictValue| to |std::vector<PeakShiftDayConfig>| and
   // returns true if there are no missing fields and errors.
   static bool GetPeakShiftDayConfigs(
-      const base::Value::Dict& value,
+      const base::DictValue& value,
       std::vector<PeakShiftDayConfig>* configs_out);
 
-  // Converts |base::Value::Dict| to
+  // Converts |base::DictValue| to
   // |std::vector<AdvancedBatteryChargeModeDayConfig>| and returns true if there
   // are no missing fields and errors.
   static bool GetAdvancedBatteryChargeModeDayConfigs(
-      const base::Value::Dict& value,
+      const base::DictValue& value,
       std::vector<AdvancedBatteryChargeModeDayConfig>* configs_out);
 
   // Saves appropriate value to |mode_out| and returns true if there is mapping
@@ -317,6 +318,9 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerPolicyController
   bool auto_screen_lock_enabled_ = false;
 
   bool should_do_nothing_when_idle_in_demo_mode_ = false;
+
+  base::ScopedObservation<PowerManagerClient, PowerManagerClient::Observer>
+      power_manager_client_observation_{this};
 };
 
 }  // namespace chromeos

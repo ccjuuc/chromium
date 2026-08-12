@@ -9,15 +9,10 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/device_trust_constants.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
-#include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
-#include "chrome/browser/enterprise/connectors/device_trust/fake_device_trust_connector_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/mock_device_trust_service.h"
 #include "chrome/browser/enterprise/signals/user_permission_service_factory.h"
 #include "chrome/browser/ui/views/device_signals_consent/consent_dialog_coordinator.h"
@@ -25,8 +20,11 @@
 #include "components/device_signals/core/browser/mock_user_permission_service.h"
 #include "components/device_signals/core/browser/pref_names.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
-#include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
+#include "components/enterprise/device_trust/core/common_types.h"
+#include "components/enterprise/device_trust/core/device_trust_connector_service.h"
+#include "components/enterprise/device_trust/core/device_trust_constants.h"
+#include "components/enterprise/device_trust/core/fake_device_trust_connector_service.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/navigation_throttle.h"
@@ -88,8 +86,8 @@ class MockDeviceTrustNavigationHandle : public content::MockNavigationHandle {
   bool is_main_frame_ = true;
 };
 
-base::Value::List GetTrustedUrls() {
-  base::Value::List trusted_urls;
+base::ListValue GetTrustedUrls() {
+  base::ListValue trusted_urls;
   trusted_urls.Append(kTrustedUrl);
   trusted_urls.Append("example2.example.com");
   return trusted_urls;
@@ -130,8 +128,6 @@ class MockConsentRequester : public ConsentRequester {
 class DeviceTrustNavigationThrottleTest : public testing::Test {
  protected:
   DeviceTrustNavigationThrottleTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {enterprise_signals::features::kDeviceSignalsConsentDialog}, {});
     web_contents_ =
         content::WebContentsTester::CreateTestWebContents(&profile_, nullptr);
     test_prefs_ = profile_.GetTestingPrefService();
@@ -245,7 +241,6 @@ class DeviceTrustNavigationThrottleTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList scoped_feature_list_;
   content::RenderViewHostTestEnabler rvh_test_enabler_;
   TestingProfile profile_;
   raw_ptr<sync_preferences::TestingPrefServiceSyncable> test_prefs_;
@@ -384,7 +379,8 @@ TEST_F(DeviceTrustNavigationThrottleTest, InvalidURL) {
   EnableDTCPolicy();
   SetShouldCollectConsent();
 
-  GURL invalid_url = GURL("https://www.invalid.com/", url::Parsed(), false);
+  GURL invalid_url =
+      GURL(std::string("https://www.invalid.com/"), url::Parsed(), false);
   content::MockNavigationHandle test_handle(invalid_url, main_frame());
   EXPECT_CALL(test_handle, SetRequestHeader("X-Device-Trust", "VerifiedAccess"))
       .Times(0);

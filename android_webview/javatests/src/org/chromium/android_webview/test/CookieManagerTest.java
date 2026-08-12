@@ -60,7 +60,7 @@ import java.util.TimeZone;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /** Tests for the CookieManager. */
-@DoNotBatch(reason = "The cookie manager is global state")
+@DoNotBatch(reason = "CookieManager is global state, so we use a fresh process out of caution.")
 @RunWith(Parameterized.class)
 @UseParametersRunnerFactory(AwJUnit4ClassRunnerWithParameters.Factory.class)
 public class CookieManagerTest extends AwParameterizedTest {
@@ -110,10 +110,12 @@ public class CookieManagerTest extends AwParameterizedTest {
 
     @After
     public void tearDown() {
+        // Even though we use a fresh process, we still need to clear cookie state off of disk so
+        // that it's not read in for the next test case.
         try {
             clearCookies();
         } catch (Throwable e) {
-            throw new RuntimeException("Could not clear cookies.");
+            throw new RuntimeException("Could not clear cookies.", e);
         }
     }
 
@@ -487,14 +489,12 @@ public class CookieManagerTest extends AwParameterizedTest {
     @Test
     @MediumTest
     @Feature({"AndroidWebView", "Privacy"})
-    public void testSetCookieWithDomainForUrl() {
-        // If the app passes ".www.example.com" or "http://.www.example.com", the glue layer "fixes"
-        // this to "http:///.www.example.com"
-        String url = "http:///.www.example.com";
+    public void testSetCookieWithDomainForUrl() throws Throwable {
+        String url = ".www.example.com";
         String sameSubdomainUrl = "http://a.www.example.com";
         String differentSubdomainUrl = "http://different.sub.example.com";
         String cookie = "name=test";
-        mCookieManager.setCookie(url, cookie);
+        mCookieManager.setCookieWithUrlFixup(url, cookie);
         assertCookieEquals(cookie, sameSubdomainUrl);
         assertNoCookies(differentSubdomainUrl);
     }
@@ -502,24 +502,25 @@ public class CookieManagerTest extends AwParameterizedTest {
     @Test
     @MediumTest
     @Feature({"AndroidWebView", "Privacy"})
-    public void testSetCookieWithDomainForUrlAndExistingDomainAttribute() {
-        String url = "http:///.www.example.com";
+    public void testSetCookieWithDomainForUrlAndExistingDomainAttribute() throws Throwable {
+        String url = ".www.example.com";
+        String sameSubdomainUrl = "http://a.www.example.com";
         String differentSubdomainUrl = "http://different.sub.example.com";
         String cookie = "name=test";
-        mCookieManager.setCookie(url, cookie + "; doMaIN \t  =.example.com");
-        assertCookieEquals(cookie, url);
+        mCookieManager.setCookieWithUrlFixup(url, cookie + "; doMaIN \t  =.example.com");
+        assertCookieEquals(cookie, sameSubdomainUrl);
         assertCookieEquals(cookie, differentSubdomainUrl);
     }
 
     @Test
     @MediumTest
     @Feature({"AndroidWebView", "Privacy"})
-    public void testSetCookieWithDomainForUrlWithTrailingSemicolonInCookie() {
-        String url = "http:///.www.example.com";
+    public void testSetCookieWithDomainForUrlWithTrailingSemicolonInCookie() throws Throwable {
+        String url = ".www.example.com";
         String sameSubdomainUrl = "http://a.www.example.com";
         String differentSubdomainUrl = "http://different.sub.example.com";
         String cookie = "name=test";
-        mCookieManager.setCookie(url, cookie + ";");
+        mCookieManager.setCookieWithUrlFixup(url, cookie + ";");
         assertCookieEquals(cookie, sameSubdomainUrl);
         assertNoCookies(differentSubdomainUrl);
     }

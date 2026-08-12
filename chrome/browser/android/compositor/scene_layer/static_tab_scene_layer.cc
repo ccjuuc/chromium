@@ -12,9 +12,9 @@
 #include "chrome/browser/android/compositor/layer/content_layer.h"
 #include "chrome/browser/android/compositor/layer_title_cache.h"
 #include "chrome/browser/android/compositor/tab_content_manager.h"
-#include "components/viz/common/quads/offset_tag.h"
-#include "third_party/skia/include/core/SkColor.h"
-#include "ui/android/resources/resource_manager_impl.h"
+#include "chrome/browser/android/tab_android.h"
+#include "content/public/browser/web_contents.h"
+#include "ui/android/view_android.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/android/chrome_jni_headers/StaticTabSceneLayer_jni.h"
@@ -62,11 +62,11 @@ SkColor StaticTabSceneLayer::GetBackgroundColor() {
 }
 
 void StaticTabSceneLayer::UpdateTabLayer(JNIEnv* env,
-                                         jint id,
-                                         jboolean can_use_live_layer,
-                                         jint default_background_color,
-                                         jfloat x,
-                                         jfloat y,
+                                         int32_t id,
+                                         bool can_use_live_layer,
+                                         int32_t default_background_color,
+                                         float x,
+                                         float y,
                                          const JavaRef<jobject>& joffset_tag) {
   DCHECK(tab_content_manager_)
       << "TabContentManager must be set before updating the layer";
@@ -87,6 +87,10 @@ void StaticTabSceneLayer::UpdateTabLayer(JNIEnv* env,
     }
     if (update_visible_ids) {
       tab_content_manager_->UpdateVisibleIds({id}, id);
+    }
+    TabAndroid* tab = tab_content_manager_->GetTab(id);
+    if (tab && tab->web_contents() && tab->web_contents()->GetNativeView()) {
+      tab->web_contents()->GetNativeView()->set_content_offset_x(x);
     }
   }
 
@@ -112,8 +116,8 @@ void StaticTabSceneLayer::SetTabContentManager(
   }
 }
 
-static jlong JNI_StaticTabSceneLayer_Init(JNIEnv* env,
-                                          const JavaRef<jobject>& jobj) {
+static int64_t JNI_StaticTabSceneLayer_Init(JNIEnv* env,
+                                            const JavaRef<jobject>& jobj) {
   // This will automatically bind to the Java object and pass ownership there.
   StaticTabSceneLayer* scene_layer = new StaticTabSceneLayer(env, jobj);
   return reinterpret_cast<intptr_t>(scene_layer);

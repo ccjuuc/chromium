@@ -18,9 +18,14 @@
 #include "components/prefs/pref_change_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "ui/base/window_open_disposition.h"
 
 class MetricsReporter;
 class OmniboxController;
+
+struct AiModeButtonUiConfig;
 
 namespace content {
 class WebUI;
@@ -32,6 +37,7 @@ class WebuiOmniboxHandler : public ContextualSearchboxHandler,
  public:
   WebuiOmniboxHandler(
       mojo::PendingReceiver<searchbox::mojom::PageHandler> pending_page_handler,
+      mojo::PendingRemote<searchbox::mojom::Page> pending_page,
       MetricsReporter* metrics_reporter,
       OmniboxController* omnibox_controller,
       content::WebUI* web_ui,
@@ -42,37 +48,46 @@ class WebuiOmniboxHandler : public ContextualSearchboxHandler,
 
   ~WebuiOmniboxHandler() override;
 
-  void SetEmbedder(base::WeakPtr<TopChromeWebUIController::Embedder> embedder) {
-    embedder_ = embedder;
-  }
-
   // searchbox::mojom::PageHandler:
   void ActivateKeyword(uint8_t line,
                        const GURL& url,
                        base::TimeTicks match_selection_timestamp,
                        bool is_mouse_event) override;
   void OnThumbnailRemoved() override {}
-  void ShowContextMenu(const gfx::Point& point) override;
   void OpenLensSearch() override;
   void AddTabContext(int32_t tab_id,
                      bool delay_upload,
+                     searchbox::mojom::TabAttachmentSource source,
                      AddTabContextCallback) override;
+  void QueryAutocomplete(int32_t query_id,
+                         const std::u16string& input,
+                         bool prevent_inline_autocomplete,
+                         uint32_t cursor_position,
+                         omnibox::SuggestInventory suggest_inventory,
+                         bool is_on_focus,
+                         const std::string& keyword,
+                         searchbox::mojom::InputMethod input_method) override;
 
-  void OnShow();
-  void OnShowAiModeButtonPrefChanged();
-
-  // ContextualSearchboxHandler:
-  void SetPage(
-      mojo::PendingRemote<searchbox::mojom::Page> pending_page) override;
+  void StepSelection(OmniboxPopupSelection::Direction direction,
+                     OmniboxPopupSelection::Step step);
+  void OpenCurrentSelection(WindowOpenDisposition disposition);
+  void SetAimButtonVisible(bool visible) override;
 
   // SearchboxHandler:
+  WindowOpenDisposition ComputeWindowOpenDisposition(
+      uint8_t mouse_button,
+      bool alt_key,
+      bool ctrl_key,
+      bool meta_key,
+      bool shift_key,
+      bool via_keyboard) override;
   std::optional<searchbox::mojom::AutocompleteMatchPtr> CreateAutocompleteMatch(
       const AutocompleteMatch& match,
       size_t line,
-      const OmniboxEditModel* edit_model,
       bookmarks::BookmarkModel* bookmark_model,
       const omnibox::GroupConfigMap& suggestion_groups_map,
       const TemplateURLService* turl_service) const override;
+  void OnFocusChanged(bool focused) override;
 
   // AutocompleteController::Observer:
   void OnStart(AutocompleteController* controller,
@@ -83,27 +98,22 @@ class WebuiOmniboxHandler : public ContextualSearchboxHandler,
   // OmniboxEditModel::Observer:
   void OnSelectionChanged(OmniboxPopupSelection old_selection,
                           OmniboxPopupSelection selection) override;
+  void OnCharTyped(base::TimeTicks timestamp) override;
   void OnMatchIconUpdated(size_t index) override {}
   void OnContentsChanged() override {}
-  void OnKeywordStateChanged(bool is_keyword_selected) override;
 
-  // `AimEligibilityService` callback.
-  void OnAimEligibilityChanged();
-
-  // TabStripModelObserver:
-  void OnTabStripModelChanged(
-      TabStripModel* tab_strip_model,
-      const TabStripModelChange& change,
-      const TabStripSelectionChange& selection) override;
-
-  void OnNavigationFinished(content::NavigationHandle* navigation_handle);
-
- protected:
-  // ContextualSearchboxHandler:
-  std::optional<lens::LensOverlayInvocationSource> GetInvocationSource()
-      const override;
+  // TabListInterfaceObserver:
+  void OnActiveTabChanged(TabListInterface& tab_list,
+                          tabs::TabInterface* tab) override;
 
  private:
+  // When the omnibox is hosted in a tab, e.g. for debug, it must remain
+  // connected with the host window's OmniboxController. These methods
+  // support disconnect and reconnect as the window changes to avoid UAF.
+  void OnTabWillDetach(tabs::TabInterface* tab,
+                       tabs::TabInterface::DetachReason reason);
+  void OnTabDidInsert(tabs::TabInterface* tab);
+
   // Delegate to observe WebContents.
   // Managed as a separate class to prevent member naming conflicts
   // of `web_contents_` with a member of the same name in `SearchboxHandler`.
@@ -123,18 +133,24 @@ class WebuiOmniboxHandler : public ContextualSearchboxHandler,
   // ContextualSearchboxHandler:
   int GetContextMenuMaxTabSuggestions() override;
 
+  void OnContentSharingPolicyChanged();
+  void OnAimPopupEligibilityChanged();
+  void OnAiModeButtonConfigChanged(const AiModeButtonUiConfig* config);
+  void OnNavigationFinished(content::NavigationHandle* navigation_handle);
+
   WebContentsObserver web_contents_observer_;
 
   // Observe `OmniboxEditModel` for updates that require updating the views.
   base::ScopedObservation<OmniboxEditModel, OmniboxEditModel::Observer>
       edit_model_observation_{this};
 
-  raw_ptr<MetricsReporter> metrics_reporter_;
   PrefChangeRegistrar pref_change_registrar_;
-
-  base::WeakPtr<TopChromeWebUIController::Embedder> embedder_;
-
   base::CallbackListSubscription aim_eligibility_subscription_;
+  base::CallbackListSubscription ai_mode_config_subscription_;
+  base::CallbackListSubscription tab_will_detach_subscription_;
+  base::CallbackListSubscription tab_did_insert_subscription_;
+
+  raw_ptr<MetricsReporter> metrics_reporter_;
 
   base::WeakPtrFactory<WebuiOmniboxHandler> weak_ptr_factory_{this};
 };

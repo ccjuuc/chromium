@@ -2,13 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/browser/preloading/prefetch/prefetch_network_context.h"
-
 #include "base/memory/scoped_refptr.h"
 #include "base/test/scoped_feature_list.h"
+#include "content/browser/preloading/prefetch/prefetch_isolated_network_context.h"
+#include "content/browser/preloading/prefetch/prefetch_request.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
 #include "content/browser/preloading/prefetch/prefetch_test_util_internal.h"
 #include "content/browser/preloading/prefetch/prefetch_type.h"
+#include "content/browser/preloading/prefetch/prefetch_url_loader_factory_utils.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/child_process_host.h"
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/render_process_host.h"
@@ -73,17 +75,28 @@ TEST_F(PrefetchNetworkContextTest, CreateIsolatedURLLoaderFactory) {
                   testing::Eq(std::nullopt),
                   ukm::SourceIdObj::FromInt64(main_rfh()->GetPageUkmSourceId()),
                   testing::_, testing::NotNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/true));
 
-  std::unique_ptr<PrefetchNetworkContext> prefetch_network_context =
-      std::make_unique<PrefetchNetworkContext>(
-          /*use_isolated_network_context=*/true,
-          PrefetchType(PreloadingTriggerType::kSpeculationRule,
-                       /*use_prefetch_proxy=*/false,
-                       blink::mojom::SpeculationEagerness::kImmediate),
-          main_rfh()->GetGlobalId(), main_rfh()->GetLastCommittedOrigin());
-
-  prefetch_network_context->GetURLLoaderFactory(prefetch_service());
+  // Unused fields are marked as `{}`.
+  auto prefetch_request = PrefetchRequest::CreateRendererInitiated(
+      *static_cast<RenderFrameHostImpl*>(main_rfh()),
+      /*referring_document_token=*/{}, /*url=*/{},
+      PrefetchType(PreloadingTriggerType::kSpeculationRule,
+                   /*use_prefetch_proxy=*/false,
+                   blink::mojom::SpeculationEagerness::kImmediate),
+      /*referrer=*/{},
+      /*speculation_rules_tags=*/{},
+      /*no_vary_search_hint=*/{},
+      /*priority=*/{},
+      /*prefetch_document_manager=*/{},
+      PreloadPipelineInfo::Create(
+          /*planned_max_preloading_type=*/PreloadingType::kPrefetch));
+  // For now we just need to create the context but don't use it.
+  std::ignore = std::make_unique<PrefetchIsolatedNetworkContext>(
+      prefetch_service()->CreateIsolatedNetworkContextForTesting(
+          /*is_proxy_required_when_cross_origin=*/false),
+      *prefetch_request);
 }
 
 TEST_F(PrefetchNetworkContextTest,
@@ -101,17 +114,27 @@ TEST_F(PrefetchNetworkContextTest,
                   testing::Eq(std::nullopt),
                   ukm::SourceIdObj::FromInt64(main_rfh()->GetPageUkmSourceId()),
                   testing::_, testing::NotNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/true));
 
-  std::unique_ptr<PrefetchNetworkContext> prefetch_network_context =
-      std::make_unique<PrefetchNetworkContext>(
-          /*use_isolated_network_context=*/false,
-          PrefetchType(PreloadingTriggerType::kSpeculationRule,
-                       /*use_prefetch_proxy=*/false,
-                       blink::mojom::SpeculationEagerness::kImmediate),
-          main_rfh()->GetGlobalId(), main_rfh()->GetLastCommittedOrigin());
-
-  prefetch_network_context->GetURLLoaderFactory(prefetch_service());
+  // Unused fields are marked as `{}`.
+  auto prefetch_request = PrefetchRequest::CreateRendererInitiated(
+      *static_cast<RenderFrameHostImpl*>(main_rfh()),
+      /*referring_document_token=*/{}, /*url=*/{},
+      PrefetchType(PreloadingTriggerType::kSpeculationRule,
+                   /*use_prefetch_proxy=*/false,
+                   blink::mojom::SpeculationEagerness::kImmediate),
+      /*referrer=*/{},
+      /*speculation_rules_tags=*/{},
+      /*no_vary_search_hint=*/{},
+      /*priority=*/{},
+      /*prefetch_document_manager=*/{},
+      PreloadPipelineInfo::Create(
+          /*planned_max_preloading_type=*/PreloadingType::kPrefetch));
+  CreatePrefetchURLLoaderFactory(prefetch_request->browser_context()
+                                     ->GetDefaultStoragePartition()
+                                     ->GetNetworkContext(),
+                                 *prefetch_request);
 }
 
 TEST_F(PrefetchNetworkContextTest,
@@ -128,17 +151,28 @@ TEST_F(PrefetchNetworkContextTest,
           IsSameOriginWith(kReferringUrl), IsEmptyIsolationInfo(),
           testing::Eq(std::nullopt), testing::Eq(ukm::kInvalidSourceIdObj),
           testing::_, testing::NotNull(), testing::NotNull(), testing::IsNull(),
-          testing::IsNull(), testing::IsNull()));
+          testing::IsNull(), testing::IsNull(),
+          /*is_for_network_service=*/true));
 
-  std::unique_ptr<PrefetchNetworkContext> prefetch_network_context =
-      std::make_unique<PrefetchNetworkContext>(
-          /*use_isolated_network_context=*/false,
+  // Unused fields are marked as `{}`.
+  auto prefetch_request =
+      PrefetchRequest::CreateBrowserInitiatedWithoutWebContents(
+          browser_context(),
+          /*url=*/{},
           PrefetchType(PreloadingTriggerType::kEmbedder,
                        /*use_prefetch_proxy=*/false),
-          /*referring_render_frame_host_id=*/GlobalRenderFrameHostId(),
-          kReferringOrigin);
-
-  prefetch_network_context->GetURLLoaderFactory(prefetch_service());
+          test::kPreloadingEmbedderHistogramSuffixForTesting,
+          /*referrer=*/{},
+          /*javascript_enabled=*/{}, kReferringOrigin,
+          /*no_vary_search_hint=*/{},
+          /*priority=*/{},
+          PreloadPipelineInfo::Create(
+              /*planned_max_preloading_type=*/content::PreloadingType::
+                  kPrefetch));
+  CreatePrefetchURLLoaderFactory(prefetch_request->browser_context()
+                                     ->GetDefaultStoragePartition()
+                                     ->GetNetworkContext(),
+                                 *prefetch_request);
 }
 
 }  // namespace

@@ -15,6 +15,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/timer/timer.h"
+#include "base/types/expected.h"
+#include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/disk_cache/blockfile/block_files.h"
 #include "net/disk_cache/blockfile/disk_format.h"
@@ -105,6 +107,8 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   scoped_refptr<EntryImpl> OpenNextEntryImpl(Rankings::Iterator* iter);
 
   // Sets the maximum size for the total amount of data stored by this instance.
+  // This method is only called during backend creation.
+  // This is distinct from SetMaxBytes, which may be called multiple times.
   bool SetMaxSize(int64_t max_bytes);
 
   // Returns the full name for an external storage file.
@@ -273,8 +277,8 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   static void FlushAsynchronouslyForTesting(base::OnceClosure callback);
 
   // Backend implementation.
-  int32_t GetEntryCount(
-      net::Int32CompletionOnceCallback callback) const override;
+  base::expected<int32_t, net::Error> GetEntryCount(
+      GetEntryCountCallback callback) const override;
   EntryResult OpenOrCreateEntry(const std::string& key,
                                 net::RequestPriority request_priority,
                                 EntryResultCallback callback) override;
@@ -306,6 +310,10 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   std::unique_ptr<Iterator> CreateIterator() override;
   void GetStats(StatsItems* stats) override;
   void OnExternalCacheHit(const std::string& key) override;
+  // Not to be confused with SetMaxSize(), which is only called during backend
+  // creation.
+  void SetMaxBytes(base::ByteSize max_bytes) override;
+  base::ByteSize GetMaxBytesForTesting() const override;
 
  private:
   using EntriesMap = std::unordered_map<CacheAddr, EntryImpl*>;
@@ -419,14 +427,8 @@ class NET_EXPORT_PRIVATE BackendImpl : public Backend {
   // May point to a mapped file's unmapped memory at destruction time.
   raw_ptr<Index, DisableDanglingPtrDetection> data_;
 
-  // Points inside the same object as `data_`; note that this is usually
-  // a memory mapped file, so raw_span is only used in configurations where it's
-  // not.
-#if BUILDFLAG(POSIX_BYPASS_MMAP)
-  base::raw_span<CacheAddr> index_table_;
-#else
+  // Points inside the same object as `data_`.
   RAW_PTR_EXCLUSION base::span<CacheAddr> index_table_;
-#endif
 
   BlockFiles block_files_;  // Set of files used to store all data.
   Rankings rankings_;  // Rankings to be able to trim the cache.

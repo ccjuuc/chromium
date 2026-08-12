@@ -12,6 +12,7 @@
 #import "components/policy/policy_constants.h"
 #import "components/signin/ios/browser/features.h"
 #import "components/signin/public/base/signin_metrics.h"
+#import "google_apis/gaia/core_account_id.h"
 #import "ios/chrome/browser/authentication/account_menu/public/account_menu_constants.h"
 #import "ios/chrome/browser/authentication/test/expected_signin_histograms.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
@@ -25,9 +26,9 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/google_services_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_accounts/manage_accounts_table_view_controller_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/google_services/public/google_services_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_accounts/public/manage_accounts_table_view_controller_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -113,31 +114,6 @@ void WaitForForcedSigninScreenAndSignin(FakeSystemIdentity* fakeIdentity) {
   [[EarlGrey selectElementWithMatcher:GetContinueButtonWithIdentityMatcher(
                                           fakeIdentity)]
       performAction:grey_tap()];
-}
-
-// Opens account settings and signs out from them.
-void OpenAccountSettingsAndSignOut() {
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsAccountButton()];
-  // We're now in the "manage sync" view, and the signout button is at the very
-  // bottom. Scroll there.
-  id<GREYMatcher> scrollViewMatcher =
-      grey_accessibilityID(kManageSyncTableViewAccessibilityIdentifier);
-  [[EarlGrey selectElementWithMatcher:scrollViewMatcher]
-      performAction:grey_scrollToContentEdge(kGREYContentEdgeBottom)];
-
-  // Tap the "Sign out" button.
-  [[EarlGrey selectElementWithMatcher:
-                 grey_text(l10n_util::GetNSString(
-                     IDS_IOS_GOOGLE_ACCOUNT_SETTINGS_SIGN_OUT_ITEM))]
-      performAction:grey_tap()];
-
-  // Check that the sign-out snackbar does not show for BrowserSignin forced.
-  [[EarlGrey
-      selectElementWithMatcher:
-          grey_accessibilityLabel(l10n_util::GetNSString(
-              IDS_IOS_GOOGLE_ACCOUNT_SETTINGS_SIGN_OUT_SNACKBAR_MESSAGE))]
-      assertWithMatcher:grey_notVisible()];
 }
 
 // Sets up the sign-in policy value dynamically at runtime.
@@ -235,6 +211,7 @@ void CompleteSigninFlow() {
 
 - (AppLaunchConfiguration)appConfigurationWithoutEnterprisePolicy {
   AppLaunchConfiguration config;
+  config.features_disabled.push_back(kAuthenticationFlowReauthFirstKillswitch);
   config.relaunch_policy = ForceRelaunchByCleanShutdown;
   return config;
 }
@@ -303,7 +280,7 @@ void CompleteSigninFlow() {
   // Check that there isn't the button to skip sign-in.
   [[EarlGrey
       selectElementWithMatcher:grey_text(l10n_util::GetNSString(
-                                   IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN))]
+                                   IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT))]
       assertWithMatcher:grey_nil()];
 
   // Touch the continue button to go to the next screen.
@@ -312,6 +289,32 @@ void CompleteSigninFlow() {
       performAction:grey_tap()];
 
   VerifyForcedSigninFullyDismissed();
+}
+
+// Tests the sign-in screen with an identity that requires reauthentication.
+- (void)testSignInScreenWithAccountNeedsReauth {
+  // Add an identity to sign-in to enable the "Continue as ..." button in the
+  // sign-in screen.
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGrey setPersistentAuthErrorForAccount:CoreAccountId::FromGaiaId(
+                                                       fakeIdentity.gaiaId)];
+
+  // Touch the continue button to go to the next screen.
+  [[EarlGrey selectElementWithMatcher:GetContinueButtonWithIdentityMatcher(
+                                          fakeIdentity)]
+      performAction:grey_tap()];
+
+  // Confirm the fake reauthentication dialog.
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(
+                                   grey_accessibilityID(
+                                       kFakeAuthAddAccountButtonIdentifier),
+                                   grey_sufficientlyVisible(), nil)]
+      performAction:grey_tap()];
+
+  VerifyForcedSigninFullyDismissed();
+  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
 }
 
 // Tests the sign-in screen without accounts where an account has to be added
@@ -356,7 +359,7 @@ void CompleteSigninFlow() {
   // Check that there isn't the button to skip sign-in.
   [[EarlGrey
       selectElementWithMatcher:grey_text(l10n_util::GetNSString(
-                                   IDS_IOS_FIRST_RUN_SIGNIN_DONT_SIGN_IN))]
+                                   IDS_IOS_FIRST_RUN_SIGNIN_STAY_SIGNED_OUT))]
       assertWithMatcher:grey_nil()];
   ExpectedSigninHistograms* expecteds = [[ExpectedSigninHistograms alloc]
       initWithAccessPoint:signin_metrics::AccessPoint::kForcedSignin];
@@ -414,7 +417,9 @@ void CompleteSigninFlow() {
       assertWithMatcher:grey_nil()];
 
   // Sign out account from account settings.
-  OpenAccountSettingsAndSignOut();
+  [SigninEarlGreyUI signOutWithClearDataConfirmation:NO
+                                      expectSnackbar:NO
+                                       closeSettings:NO];
 
   // Wait and verify that the forced sign-in screen is shown.
   [ChromeEarlGrey waitForMatcher:GetForcedSigninScreenMatcher()];
@@ -469,8 +474,7 @@ void CompleteSigninFlow() {
       performAction:grey_tap()];
 
   // Open account settings and verify the content of the sign-out footer.
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:SettingsAccountButton()];
+  [SigninEarlGreyUI openSyncSettings];
   [[EarlGrey
       selectElementWithMatcher:
           grey_allOf(
@@ -800,7 +804,7 @@ void CompleteSigninFlow() {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
   }
-  if (@available(iOS 19.0, *)) {
+  if (@available(iOS 26.0, *)) {
     // TODO(crbug.com/427699033): Re-enable test on iOS 26.
     // Fails to background app from [self backgroundApplication]
     EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.");
@@ -889,15 +893,10 @@ void CompleteSigninFlow() {
 // opened, can be shown on dynamic policy update after cancelling the regular
 // sign-in prompt. The policy is applied while the regular sign-in prompt is
 // shown.
-- (void)testSignInScreenOnRegularSigninPromptMultiWindows {
+// TODO(crbug.com/384874382): Flaky test.
+- (void)DISABLED_testSignInScreenOnRegularSigninPromptMultiWindows {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
-  }
-
-  // TODO(crbug.com/40210654).
-  if ([ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_DISABLED(
-        @"Earl Grey doesn't work properly with SwiftUI and multiwindow");
   }
 
   // Restart the app to reset the policies.
@@ -917,7 +916,9 @@ void CompleteSigninFlow() {
 
   // Show the regular sign-in prompt on the second window which will raise a UI
   // blocker on the second window.
-  [ChromeEarlGreyUI openSettingsMenuInWindowWithNumber:1];
+  [ChromeEarlGrey openSettingsInWindowWithNumber:1];
+  [EarlGrey setRootMatcherForSubsequentInteractions:chrome_test_util::
+                                                        WindowWithNumber(1)];
   [ChromeEarlGreyUI tapSettingsMenuButton:SettingsAccountButton()];
 
   // Enable the forced sign-in policy.
@@ -941,15 +942,10 @@ void CompleteSigninFlow() {
 // Tests that the forced sign-in prompt can be shown on dynamic policy update
 // when a browser modal is displayed on top of the browser view when there are
 // multiple windows.
-- (void)testSignInScreenOnModalMultiWindows {
+// TODO(crbug.com/384874382): Flaky test.
+- (void)DISABLED_testSignInScreenOnModalMultiWindows {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
-  }
-
-  // TODO(crbug.com/40210654).
-  if ([ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_DISABLED(
-        @"Earl Grey doesn't work properly with SwiftUI and multiwindow");
   }
 
   // Restart the app to reset the policies.
@@ -968,8 +964,8 @@ void CompleteSigninFlow() {
   [ChromeEarlGrey waitForForegroundWindowCount:2];
 
   // Open the settings menu which represents a modal.
-  [ChromeEarlGreyUI openSettingsMenuInWindowWithNumber:0];
-  [ChromeEarlGreyUI openSettingsMenuInWindowWithNumber:1];
+  [ChromeEarlGrey openSettingsInWindowWithNumber:0];
+  [ChromeEarlGrey openSettingsInWindowWithNumber:1];
 
   // Make sure that both windows will be considered when verifying for the
   // forced sign-in screen. This is done by removing the root matcher.

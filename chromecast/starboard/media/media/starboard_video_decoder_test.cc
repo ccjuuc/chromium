@@ -246,7 +246,7 @@ TEST_F(StarboardVideoDecoderTest, PopulatesDrmInfoInSamples) {
   VideoConfig config = GetBasicConfig();
   config.encryption_scheme = EncryptionScheme::kAesCbc;
 
-  const ::media::EncryptionPattern encryption_pattern(5, 6);
+  const auto encryption_pattern = ::media::EncryptionPattern::Create(5, 6);
   std::unique_ptr<::media::DecryptConfig> decrypt_config =
       ::media::DecryptConfig::CreateCbcsConfig(kKeyId, kIv, subsamples,
                                                encryption_pattern);
@@ -298,9 +298,9 @@ TEST_F(StarboardVideoDecoderTest, PopulatesDrmInfoInSamples) {
   EXPECT_EQ(actual_drm_info.encryption_scheme,
             kStarboardDrmEncryptionSchemeAesCbc);
   EXPECT_EQ(actual_drm_info.encryption_pattern.crypt_byte_block,
-            encryption_pattern.crypt_byte_block());
+            encryption_pattern->crypt_byte_block());
   EXPECT_EQ(actual_drm_info.encryption_pattern.skip_byte_block,
-            encryption_pattern.skip_byte_block());
+            encryption_pattern->skip_byte_block());
   EXPECT_THAT(std::string(reinterpret_cast<const char*>(
                               actual_drm_info.initialization_vector),
                           actual_drm_info.initialization_vector_size),
@@ -336,7 +336,7 @@ TEST_F(StarboardVideoDecoderTest, DoesNotPushToStarboardIfDrmKeyIsUnavailable) {
   VideoConfig config = GetBasicConfig();
   config.encryption_scheme = EncryptionScheme::kAesCtr;
 
-  const ::media::EncryptionPattern encryption_pattern(5, 6);
+  const auto encryption_pattern = ::media::EncryptionPattern::Create(5, 6);
   std::unique_ptr<::media::DecryptConfig> decrypt_config =
       ::media::DecryptConfig::CreateCbcsConfig(kKeyId, kIv, subsamples,
                                                encryption_pattern);
@@ -379,7 +379,7 @@ TEST_F(StarboardVideoDecoderTest,
   VideoConfig config = GetBasicConfig();
   config.encryption_scheme = EncryptionScheme::kAesCbc;
 
-  const ::media::EncryptionPattern encryption_pattern(5, 6);
+  const auto encryption_pattern = ::media::EncryptionPattern::Create(5, 6);
   std::unique_ptr<::media::DecryptConfig> decrypt_config =
       ::media::DecryptConfig::CreateCbcsConfig(kKeyId, kIv, subsamples,
                                                encryption_pattern);
@@ -437,9 +437,9 @@ TEST_F(StarboardVideoDecoderTest,
   EXPECT_EQ(actual_drm_info.encryption_scheme,
             kStarboardDrmEncryptionSchemeAesCbc);
   EXPECT_EQ(actual_drm_info.encryption_pattern.crypt_byte_block,
-            encryption_pattern.crypt_byte_block());
+            encryption_pattern->crypt_byte_block());
   EXPECT_EQ(actual_drm_info.encryption_pattern.skip_byte_block,
-            encryption_pattern.skip_byte_block());
+            encryption_pattern->skip_byte_block());
   EXPECT_THAT(std::string(reinterpret_cast<const char*>(
                               actual_drm_info.initialization_vector),
                           actual_drm_info.initialization_vector_size),

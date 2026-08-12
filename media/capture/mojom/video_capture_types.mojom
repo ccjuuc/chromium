@@ -98,9 +98,8 @@ enum VideoCaptureTransportType {
 
 enum VideoCaptureBufferType {
   kSharedMemory,
-  kSharedMemoryViaRawFileDescriptor_DEPRECATED,  // DEPRECATED, DO NOT USE
-  kMailboxHolder,
-  kGpuMemoryBuffer
+  kGpuMemoryBuffer,
+  kSharedImage
 };
 
 // Represents capture device's support for different controls.
@@ -261,6 +260,7 @@ enum VideoCaptureError {
   kScreenCaptureKitResetStreamError,
   kWinMediaFoundationCameraBusy,
   kWebRtcStartCaptureFailed,
+  kDesktopCaptureDeviceGpuAdapterChanged,
 };
 
 enum VideoCaptureFrameDropReason {
@@ -306,6 +306,14 @@ struct VideoCaptureFormat {
   VideoCapturePixelFormat pixel_format;
 };
 
+// The request type of the capture source.
+[Extensible]
+enum CaptureSourceRequestType {
+  [Default] kUnknown,
+  kGetUserMedia,
+  kGetDisplayMedia
+};
+
 struct VideoCaptureParams {
   VideoCaptureFormat requested_format;
   VideoCaptureBufferType buffer_type;
@@ -321,6 +329,8 @@ struct VideoCaptureParams {
   // whenever the target of the capture is dynamically changed,
   // as for example when using share-this-tab-instead.
   uint32 capture_version_source;
+
+  CaptureSourceRequestType request_type;
 };
 
 struct VideoCaptureFeedback {
@@ -357,12 +367,7 @@ struct VideoCaptureFeedback {
   // intermediate layer to help route the feedback accordingly.
   // This should usually be set to the same value as the |frame_feedback_id|
   // received with the frame (often from a received `ReadyFrameInBuffer`).
-  int32 frame_id = 0;
-
-  // Indicates whether or not the value in |frame_id| is valid.
-  // TODO(crbug.com/40489779): Remove this and replace frame_id with an
-  // optional type.
-  bool has_frame_id = false;
+  int32? frame_id;
 };
 
 // Contains one stride value per image plane. Stride means the number of bytes

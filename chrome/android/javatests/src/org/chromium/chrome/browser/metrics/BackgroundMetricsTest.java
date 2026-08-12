@@ -18,6 +18,7 @@ import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
@@ -36,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
     MetricsSwitches.FORCE_ENABLE_METRICS_REPORTING
 })
+@DoNotBatch(reason = "AI automated batching was unsuccessful.")
 public final class BackgroundMetricsTest {
     // Note: these rules might conflict and so calls to their methods must be handled carefully.
     @Rule
@@ -59,12 +61,12 @@ public final class BackgroundMetricsTest {
     }
 
     private void loadNative() {
-        final AtomicBoolean mNativeLoaded = new AtomicBoolean();
+        final AtomicBoolean nativeLoaded = new AtomicBoolean();
         final BrowserParts parts =
                 new EmptyBrowserParts() {
                     @Override
                     public void finishNativeInitialization() {
-                        mNativeLoaded.set(true);
+                        nativeLoaded.set(true);
                     }
                 };
         PostTask.postTask(
@@ -75,7 +77,7 @@ public final class BackgroundMetricsTest {
                     ChromeBrowserInitializer.getInstance().handlePostNativeStartup(true, parts);
                 });
         CriteriaHelper.pollUiThread(
-                () -> mNativeLoaded.get(), "Failed while waiting for starting native.");
+                () -> nativeLoaded.get(), "Failed while waiting for starting native.");
     }
 
     @Test

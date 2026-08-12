@@ -6,12 +6,13 @@ package org.chromium.chrome.test.transit.hub;
 
 import static androidx.test.espresso.action.ViewActions.replaceText;
 import static androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom;
+import static androidx.test.espresso.matcher.ViewMatchers.isChecked;
 import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.hamcrest.CoreMatchers.allOf;
-import static org.hamcrest.CoreMatchers.startsWith;
+import static org.hamcrest.CoreMatchers.not;
 
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
 import static org.chromium.base.test.transit.ViewElement.inDialogOption;
@@ -31,13 +32,11 @@ import org.chromium.base.test.transit.Element;
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.ViewElement;
 import org.chromium.base.test.transit.ViewSpec;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupColorUtils;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeActivityTabModelBoundStation;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
 import org.chromium.chrome.test.transit.tabmodel.TabGroupCreatedCondition;
@@ -61,6 +60,7 @@ public class NewTabGroupDialogFacility<
     private final SoftKeyboardFacility mSoftKeyboard;
     public ViewElement<View> dialogElement;
     public ViewElement<View> titleInputElement;
+    public ViewElement<View> colorPickerElement;
     public ViewElement<View>[] colorElements;
     public ViewElement<View> doneButtonElement;
     private @Nullable String mTitle;
@@ -94,6 +94,7 @@ public class NewTabGroupDialogFacility<
     }
 
     @Override
+    @SuppressWarnings("unchecked") // Generic array creation for parameterized ViewElement[].
     public void declareExtraElements() {
         // Handles the case for when a new tab group is created on showing this dialog.
         if (mTabIdsToGroup == null) {
@@ -101,8 +102,7 @@ public class NewTabGroupDialogFacility<
         } else {
             titleInputElement = declareView(createTitleViewSpec(), inDialogOption());
             declareEnterCondition(
-                    new TabGroupExistsCondition(
-                            getHostStation().tabGroupModelFilterElement, mTabIdsToGroup));
+                    new TabGroupExistsCondition(getHostStation().tabModelElement, mTabIdsToGroup));
         }
 
         dialogElement =
@@ -114,23 +114,18 @@ public class NewTabGroupDialogFacility<
                 inDialogOption());
 
         // TODO(crbug.com/346377124): Partially cut off in android_30_google_apis_x86.textpb
-        declareView(withId(R.id.color_picker_container), ViewElement.displayingAtLeastOption(50));
-        @TabGroupColorId List<Integer> colors = TabGroupColorUtils.getTabGroupColorIdList();
+        colorPickerElement = declareView(withId(R.id.color_picker_container));
+        @TabGroupColorId List<Integer> colors = TabGroupColorPickerUtils.getTabGroupColorIdList();
         // Only the first 5 colors are displayed reliably when the soft keyboard opens.
         colorElements = new ViewElement[5];
         for (int i = 0; i < 5; i++) {
             @TabGroupColorId Integer color = colors.get(i);
-            if (mSelectedColor != null) {
-                colorElements[i] =
-                        declareView(
-                                colorPickerIconSpec(color, color.equals(mSelectedColor)),
-                                newOptions().inDialog().unscoped().displayingAtLeast(60).build());
-            } else {
-                colorElements[i] =
-                        declareView(
-                                colorPickerIconSpec(color, /* selected= */ null),
-                                newOptions().inDialog().unscoped().displayingAtLeast(60).build());
-            }
+            colorElements[i] =
+                    declareView(
+                            colorPickerIconSpec(
+                                    color,
+                                    mSelectedColor != null ? color.equals(mSelectedColor) : null),
+                            ViewElement.newOptions().inDialog().unscoped().build());
         }
 
         doneButtonElement = declareView(withId(R.id.positive_button), inDialogOption());
@@ -144,15 +139,15 @@ public class NewTabGroupDialogFacility<
     private void initTabGroupCreatedCondition() {
         Element<Token> tabGroupIdElement =
                 declareEnterConditionAsElement(
-                        new TabGroupCreatedCondition(mHostStation.tabGroupModelFilterElement));
+                        new TabGroupCreatedCondition(mHostStation.tabModelElement));
 
         declareElementFactory(
                 tabGroupIdElement,
                 delayedElements -> {
-                    TabGroupModelFilter filter = mHostStation.tabGroupModelFilterElement.value();
+                    TabModel tabModel = mHostStation.tabModelElement.value();
                     List<Tab> tabsInGroup =
                             runOnUiThreadBlocking(
-                                    () -> filter.getTabsInGroup(tabGroupIdElement.value()));
+                                    () -> tabModel.getTabsInGroup(tabGroupIdElement.value()));
                     mTabIdsToGroup = TabModelUtils.getTabIds(tabsInGroup);
                     mTitle = TabGroupUtil.getNumberOfTabsString(mTabIdsToGroup.size());
                     titleInputElement =
@@ -167,15 +162,11 @@ public class NewTabGroupDialogFacility<
                 context.getString(
                         TabGroupColorPickerUtils.getTabGroupColorPickerItemColorAccessibilityString(
                                 color));
-        Matcher<View> contentDescriptionMatcher;
+        Matcher<View> matcher = withContentDescription(colorName);
         if (selected != null) {
-            contentDescriptionMatcher =
-                    withContentDescription(
-                            colorName + " " + (selected ? "Selected" : "Not selected"));
-        } else {
-            contentDescriptionMatcher = withContentDescription(startsWith(colorName));
+            matcher = allOf(matcher, selected ? isChecked() : not(isChecked()));
         }
-        return viewSpec(withId(R.id.color_picker_icon), contentDescriptionMatcher);
+        return colorPickerElement.descendant(matcher);
     }
 
     /** Input a new tab group name. */

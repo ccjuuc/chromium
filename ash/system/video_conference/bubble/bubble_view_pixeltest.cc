@@ -27,8 +27,6 @@
 #include "base/unguessable_token.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/constants/chromeos_features.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom-shared.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "url/gurl.h"
 
 namespace ash::video_conference {
@@ -37,20 +35,24 @@ namespace {
 
 const char kMeetTestUrl[] = "https://meet.google.com/abc-xyz/ab-123";
 
-crosapi::mojom::VideoConferenceMediaAppInfoPtr CreateFakeMediaApp(
+VideoConferenceMediaAppInfo CreateFakeMediaApp(
     bool is_capturing_camera,
     bool is_capturing_microphone,
     bool is_capturing_screen,
     const std::u16string& title,
     std::string url,
-    const crosapi::mojom::VideoConferenceAppType app_type =
-        crosapi::mojom::VideoConferenceAppType::kChromeTab,
+    const VideoConferenceAppType app_type,
     const base::UnguessableToken& id = base::UnguessableToken::Create()) {
-  return crosapi::mojom::VideoConferenceMediaAppInfo::New(
-      id,
-      /*last_activity_time=*/base::Time::Now(), is_capturing_camera,
-      is_capturing_microphone, is_capturing_screen, title,
-      /*url=*/GURL(url), app_type);
+  VideoConferenceMediaAppInfo app;
+  app.id = id;
+  app.last_activity_time = base::Time::Now();
+  app.is_capturing_camera = is_capturing_camera;
+  app.is_capturing_microphone = is_capturing_microphone;
+  app.is_capturing_screen = is_capturing_screen;
+  app.title = title;
+  app.url = GURL(url);
+  app.app_type = app_type;
+  return app;
 }
 
 }  // namespace
@@ -223,7 +225,8 @@ TEST_P(BubbleViewPixelTest, Basic) {
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/true, /*is_capturing_microphone=*/false,
       /*is_capturing_screen=*/false, /*title=*/u"Meet",
-      /*url=*/kMeetTestUrl));
+      /*url=*/kMeetTestUrl,
+      /*app_type=*/VideoConferenceAppType::kChromeTab));
 
   // Add 2 toggle effects.
   controller()->GetEffectsManager().RegisterDelegate(office_bunny());
@@ -312,7 +315,8 @@ TEST_P(BubbleViewPixelTest, ReturnToApp) {
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/true, /*is_capturing_microphone=*/false,
       /*is_capturing_screen=*/false, /*title=*/u"Meet",
-      /*url=*/kMeetTestUrl));
+      /*url=*/kMeetTestUrl,
+      /*app_type=*/VideoConferenceAppType::kChromeTab));
 
   SetTrayAndButtonsVisible();
   ASSERT_TRUE(video_conference_tray()->GetVisible());
@@ -329,7 +333,7 @@ TEST_P(BubbleViewPixelTest, ReturnToApp) {
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/false, /*is_capturing_microphone=*/true,
       /*is_capturing_screen=*/true, /*title=*/u"Zoom",
-      /*url=*/""));
+      /*url=*/"", /*app_type=*/VideoConferenceAppType::kChromeTab));
 
   // Double click to reset the bubble to show the newly added media app.
   LeftClickOn(toggle_bubble_button);
@@ -362,8 +366,7 @@ TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/true, /*is_capturing_microphone=*/false,
       /*is_capturing_screen=*/false, /*title=*/u"Linux",
-      /*url=*/"",
-      /*app_type=*/crosapi::mojom::VideoConferenceAppType::kCrostiniVm));
+      /*url=*/"", /*app_type=*/VideoConferenceAppType::kCrostiniVm));
 
   SetTrayAndButtonsVisible();
   ASSERT_TRUE(video_conference_tray()->GetVisible());
@@ -374,14 +377,13 @@ TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("video_conference_tray_linux_bubble_one_app"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 10 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 11 : 1,
       video_conference_tray()->GetBubbleView()));
 
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/true, /*is_capturing_microphone=*/true,
-      /*is_capturing_screen=*/false, /*title=*/u"Parallels",
-      /*url=*/"",
-      /*app_type=*/crosapi::mojom::VideoConferenceAppType::kPluginVm));
+      /*is_capturing_screen=*/false, /*title=*/u"Steam",
+      /*url=*/"", /*app_type=*/VideoConferenceAppType::kBorealis));
 
   // Double click to reset the bubble to show the newly added media app.
   LeftClickOn(toggle_bubble_button);
@@ -390,7 +392,7 @@ TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("video_conference_tray_linux_bubble_two_app"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 10 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 11 : 1,
       video_conference_tray()->GetBubbleView()));
 }
 
@@ -521,7 +523,7 @@ TEST_P(BubbleViewPixelTest, DLCUIInErrorShowsWarningLabelMaxErrors) {
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("additional-set-value-view"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 6 : 0,
       bubble_view()));
 }
 

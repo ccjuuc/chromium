@@ -27,6 +27,7 @@ class ElapsedTimer;
 }
 
 namespace content {
+class RenderFrameHost;
 class WebContents;
 }
 
@@ -41,7 +42,7 @@ class ChromeWebAuthnCredentialsDelegate final :
       base::StrongAlias<struct SecurityKeyOrHybridFlowAvailableTag, bool>;
 
   explicit ChromeWebAuthnCredentialsDelegate(
-      content::WebContents* web_contents);
+      content::RenderFrameHost* frame_host);
   ~ChromeWebAuthnCredentialsDelegate() override;
   ChromeWebAuthnCredentialsDelegate(const ChromeWebAuthnCredentialsDelegate&) =
       delete;
@@ -50,6 +51,7 @@ class ChromeWebAuthnCredentialsDelegate final :
 
   // password_manager::WebAuthnCredentialsDelegate:
   void LaunchSecurityKeyOrHybridFlow() override;
+  std::optional<std::string> GetCableQrString() const override;
   void SelectPasskey(
       const std::string& backend_id,
       password_manager::WebAuthnCredentialsDelegate::OnPasskeySelectedCallback
@@ -83,6 +85,9 @@ class ChromeWebAuthnCredentialsDelegate final :
   void NotifyWebAuthnRequestAborted();
 
  protected:
+  // `raw_ptr` here is safe because this class is destroyed as a consequence
+  // of the RenderFrameDeleted event in the associated frame.
+  const raw_ptr<content::RenderFrameHost> frame_host_;
   const raw_ptr<content::WebContents> web_contents_;
 
  private:

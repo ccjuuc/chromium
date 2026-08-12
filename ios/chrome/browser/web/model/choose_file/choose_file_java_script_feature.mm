@@ -10,9 +10,7 @@
 #import "base/no_destructor.h"
 #import "base/strings/utf_string_conversions.h"
 #import "base/values.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_event.h"
-#import "ios/chrome/browser/web/model/choose_file/choose_file_event_holder.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_tab_helper.h"
 #import "ios/chrome/browser/web/model/choose_file/choose_file_util.h"
 #import "ios/web/public/js_messaging/script_message.h"
@@ -113,7 +111,7 @@ ChooseFileAccept BucketForChooseFileEvent(int accept_type,
 // an empty vector.
 using ParseFunction = std::vector<std::string> (*)(std::string_view);
 std::vector<std::string> ParseAttributeFromValue(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::string_view attribute_name,
     ParseFunction parse_function) {
   if (const std::string* attribute_value = dict.FindString(attribute_name)) {
@@ -149,10 +147,10 @@ void ChooseFileJavaScriptFeature::ScriptMessageReceived(
   DCHECK(web_state);
 
   // Verify that the message is well-formed before using it
-  if (!message.body()->is_dict()) {
+  if (!message.legacy_body()->is_dict()) {
     return;
   }
-  base::Value::Dict& body_dict = message.body()->GetDict();
+  base::DictValue& body_dict = message.legacy_body()->GetDict();
 
   std::optional<double> accept_type = body_dict.FindDouble("acceptType");
   std::optional<bool> has_multiple = body_dict.FindBool("hasMultiple");
@@ -179,59 +177,50 @@ void ChooseFileJavaScriptFeature::ScriptMessageReceived(
 
   LogChooseFileEvent(accept_type_int, *has_multiple, *has_selected_file);
 
-  if (base::FeatureList::IsEnabled(kIOSChooseFromDrive) ||
-      base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu)) {
-    std::vector<std::string> accept_file_extensions = ParseAttributeFromValue(
-        body_dict, "fileExtensions", ParseAcceptAttributeFileExtensions);
-    std::vector<std::string> accept_mime_types = ParseAttributeFromValue(
-        body_dict, "mimeTypes", ParseAcceptAttributeMimeTypes);
-    base::UmaHistogramBoolean(
-        "IOS.Web.FileInput.EventDropped",
-        ChooseFileEventHolder::GetInstance()->HasLastChooseFileEvent());
-    CGPoint screen_location = CGPointZero;
-    if (const base::Value::Dict* screen_location_dict =
-            body_dict.FindDict("screenLocation")) {
-      screen_location.x = screen_location_dict->FindDouble("x").value_or(0);
-      screen_location.y = screen_location_dict->FindDouble("y").value_or(0);
+  std::vector<std::string> accept_file_extensions = ParseAttributeFromValue(
+      body_dict, "fileExtensions", ParseAcceptAttributeFileExtensions);
+  std::vector<std::string> accept_mime_types = ParseAttributeFromValue(
+      body_dict, "mimeTypes", ParseAcceptAttributeMimeTypes);
+  CGPoint screen_location = CGPointZero;
+  if (const base::DictValue* screen_location_dict =
+          body_dict.FindDict("screenLocation")) {
+    screen_location.x = screen_location_dict->FindDouble("x").value_or(0);
+    screen_location.y = screen_location_dict->FindDouble("y").value_or(0);
+  }
+  if (const std::string* attribute_value =
+          body_dict.FindString("pointerType")) {
+    if (*attribute_value == "mouse" &&
+        !CGPointEqualToPoint(screen_location, CGPointZero)) {
+      // If seems that if the pointer type associated with the event is
+      // "mouse" then screenX and screenY do not account for the zoom scale
+      // and content offset of the document. In this case these coordinates
+      // need to be converted to the browser's coordinate system.
+      const CGFloat zoom_scale =
+          web_state->GetWebViewProxy().scrollViewProxy.zoomScale;
+      const CGPoint content_offset =
+          web_state->GetWebViewProxy().scrollViewProxy.contentOffset;
+      screen_location.x *= zoom_scale;
+      screen_location.y *= zoom_scale;
+      screen_location.x -= content_offset.x;
+      screen_location.y -= content_offset.y;
     }
-    if (const std::string* attribute_value =
-            body_dict.FindString("pointerType")) {
-      if (*attribute_value == "mouse" &&
-          !CGPointEqualToPoint(screen_location, CGPointZero)) {
-        // If seems that if the pointer type associated with the event is
-        // "mouse" then screenX and screenY do not account for the zoom scale
-        // and content offset of the document. In this case these coordinates
-        // need to be converted to the browser's coordinate system.
-        const CGFloat zoom_scale =
-            web_state->GetWebViewProxy().scrollViewProxy.zoomScale;
-        const CGPoint content_offset =
-            web_state->GetWebViewProxy().scrollViewProxy.contentOffset;
-        screen_location.x *= zoom_scale;
-        screen_location.y *= zoom_scale;
-        screen_location.x -= content_offset.x;
-        screen_location.y -= content_offset.y;
-      }
-    }
+  }
 
-    ChooseFileEvent event =
-        ChooseFileEvent::Builder()
-            .SetAllowMultipleFiles(*has_multiple)
-            .SetOnlyAllowDirectory(*has_webkitdirectory)
-            .SetHasSelectedFile(*has_selected_file)
-            .SetAcceptFileExtensions(std::move(accept_file_extensions))
-            .SetAcceptMimeTypes(std::move(accept_mime_types))
-            .SetWebState(web_state)
-            .SetScreenLocation(screen_location)
-            .SetCapture(static_cast<ChooseFileCaptureType>(capture_int))
-            .Build();
-    if (base::FeatureList::IsEnabled(kIOSCustomFileUploadMenu)) {
-      ChooseFileTabHelper* tab_helper =
-          ChooseFileTabHelper::FromWebState(web_state);
-      tab_helper->SetLastChooseFileEvent(std::move(event));
-    } else {
-      ChooseFileEventHolder::GetInstance()->SetLastChooseFileEvent(
-          std::move(event));
-    }
+  ChooseFileEvent event =
+      ChooseFileEvent::Builder()
+          .SetAllowMultipleFiles(*has_multiple)
+          .SetOnlyAllowDirectory(*has_webkitdirectory)
+          .SetHasSelectedFile(*has_selected_file)
+          .SetAcceptFileExtensions(std::move(accept_file_extensions))
+          .SetAcceptMimeTypes(std::move(accept_mime_types))
+          .SetWebState(web_state)
+          .SetScreenLocation(screen_location)
+          .SetCapture(static_cast<ChooseFileCaptureType>(capture_int))
+          .Build();
+  ChooseFileTabHelper* tab_helper =
+      ChooseFileTabHelper::FromWebState(web_state);
+  if (tab_helper) {
+    tab_helper->SetLastChooseFileEvent(std::move(event));
   }
 }
 

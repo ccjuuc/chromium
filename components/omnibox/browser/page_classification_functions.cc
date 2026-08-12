@@ -20,6 +20,13 @@ bool IsNTPPage(OEP::PageClassification classification) {
          (classification == OEP::NTP_ZPS_PREFETCH);
 }
 
+void CheckObsoletePageClass(OEP::PageClassification classification) {
+  CHECK(classification != OEP::OBSOLETE_INSTANT_NTP &&
+        classification !=
+            OEP::OBSOLETE_INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS)
+      << "crbug.com/357961079: invalid/unexpected page context. Please report.";
+}
+
 bool IsSearchResultsPage(OEP::PageClassification classification) {
   return (classification ==
           OEP::SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT) ||
@@ -36,38 +43,64 @@ bool IsOtherWebPage(OEP::PageClassification classification) {
          (classification == OEP::OTHER_ZPS_PREFETCH);
 }
 
-bool IsLensContextualSearchbox(OEP::PageClassification classification) {
-  return classification == OEP::CONTEXTUAL_SEARCHBOX;
+bool IsNtpOmnibox(OEP::PageClassification classification) {
+  return (classification == OEP::NTP) ||
+         (classification == OEP::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS);
 }
 
+bool IsWebUISearchbox(OEP::PageClassification classification) {
+  return classification == OEP::NTP_REALBOX ||
+         classification == OEP::OMNIBOX_EVERYWHERE ||
+         IsLensSearchbox(classification) || IsComposebox(classification);
+}
+
+// COMPOSEBOX
+bool IsComposebox(OEP::PageClassification classification) {
+  return classification == OEP::NTP_COMPOSEBOX ||
+         classification == OEP::LENS_SIDE_PANEL_COMPOSEBOX ||
+         classification == OEP::CO_BROWSING_COMPOSEBOX ||
+         classification == OEP::NTP_COMPOSEBOX_PREFETCH ||
+         IsOmniboxComposebox(classification);
+}
+
+bool IsOmniboxComposebox(OEP::PageClassification classification) {
+  return classification == OEP::NTP_OMNIBOX_COMPOSEBOX ||
+         classification == OEP::SRP_OMNIBOX_COMPOSEBOX ||
+         classification == OEP::OTHER_OMNIBOX_COMPOSEBOX ||
+         classification == OEP::COMPOSEBOX_EVERYWHERE;
+}
+
+bool IsNTPComposebox(OEP::PageClassification classification) {
+  return classification == OEP::NTP_COMPOSEBOX ||
+         classification == OEP::NTP_OMNIBOX_COMPOSEBOX ||
+         classification == OEP::NTP_COMPOSEBOX_PREFETCH;
+}
+
+// LENS
 bool IsLensSearchbox(OEP::PageClassification classification) {
-  return IsLensContextualSearchbox(classification) ||
-         (classification == OEP::SEARCH_SIDE_PANEL_SEARCHBOX) ||
-         (classification == OEP::LENS_SIDE_PANEL_SEARCHBOX) ||
-         (classification == OEP::LENS_SIDE_PANEL_COMPOSEBOX);
+  return classification == OEP::CONTEXTUAL_SEARCHBOX ||
+         classification == OEP::SEARCH_SIDE_PANEL_SEARCHBOX ||
+         classification == OEP::LENS_SIDE_PANEL_SEARCHBOX ||
+         classification == OEP::LENS_SIDE_PANEL_COMPOSEBOX;
 }
 
+// ANDROID ONLY
 bool IsCustomTab(OEP::PageClassification classification) {
   return classification == OEP::SEARCH_RESULT_PAGE_ON_CCT ||
          classification == OEP::OTHER_ON_CCT;
 }
 
-bool IsAndroidHub(OEP::PageClassification classification) {
-  return classification == OEP::ANDROID_HUB;
+bool IsAndroidHubOrTabSearch(OEP::PageClassification classification) {
+  return classification == OEP::ANDROID_HUB ||
+         classification == OEP::ANDROID_TAB_SEARCH_OVERLAY;
 }
 
-bool IsWebUISearchbox(OEP::PageClassification classification) {
-  return classification == OEP::NTP_REALBOX ||
-         IsLensSearchbox(classification) || IsComposebox(classification);
+bool IsAndroidWidget(OEP::PageClassification classification) {
+  return (classification == OEP::ANDROID_SHORTCUTS_WIDGET ||
+          classification == OEP::ANDROID_SEARCH_WIDGET);
 }
 
-void CheckObsoletePageClass(OEP::PageClassification classification) {
-  CHECK(classification != OEP::OBSOLETE_INSTANT_NTP &&
-        classification !=
-            OEP::OBSOLETE_INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS)
-      << "b/357961079: invalid/unexpected page context. Please report.";
-}
-
+// FEATURE SUPPORT
 bool SupportsMostVisitedSites(OEP::PageClassification classification) {
   if (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get().enabled) {
     return classification == OEP::OTHER_ON_CCT ||
@@ -81,21 +114,5 @@ bool SupportsMostVisitedSites(OEP::PageClassification classification) {
          classification == OEP::ANDROID_SHORTCUTS_WIDGET;
 }
 
-bool IsOmniboxComposebox(OEP::PageClassification classification) {
-  return classification == OEP::NTP_OMNIBOX_COMPOSEBOX ||
-         classification == OEP::SRP_OMNIBOX_COMPOSEBOX ||
-         classification == OEP::OTHER_OMNIBOX_COMPOSEBOX;
-}
-
-bool IsComposebox(OEP::PageClassification classification) {
-  return classification == OEP::NTP_COMPOSEBOX ||
-         classification == OEP::LENS_SIDE_PANEL_COMPOSEBOX ||
-         classification == OEP::CO_BROWSING_COMPOSEBOX ||
-         IsOmniboxComposebox(classification);
-}
-
-bool IsNTPRealbox(OEP::PageClassification classification) {
-  return classification == OEP::NTP_REALBOX;
-}
 
 }  // namespace omnibox

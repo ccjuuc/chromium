@@ -6,6 +6,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/hash/hash.h"
 
 namespace base {
 
@@ -15,17 +16,23 @@ MemoryConsumerRegistry* g_memory_consumer_registry = nullptr;
 
 }  // namespace
 
-void RegisteredMemoryConsumer::UpdateMemoryLimit(int percentage) {
-  memory_consumer_->UpdateMemoryLimit(percentage);
+void MemoryConsumerRegistry::NotifyReleaseMemory(MemoryConsumer* consumer) {
+  CHECK(consumer);
+  consumer->ReleaseMemory();
 }
 
-void RegisteredMemoryConsumer::ReleaseMemory() {
-  memory_consumer_->ReleaseMemory();
+void MemoryConsumerRegistry::NotifyUpdateMemoryLimit(MemoryConsumer* consumer,
+                                                     int percentage) {
+  CHECK(consumer);
+  consumer->UpdateMemoryLimit(percentage);
 }
 
-RegisteredMemoryConsumer::RegisteredMemoryConsumer(
-    MemoryConsumer* memory_consumer)
-    : memory_consumer_(memory_consumer) {}
+void MemoryConsumerRegistry::NotifyUpdateMemoryLimitNoNotification(
+    MemoryConsumer* consumer,
+    int percentage) {
+  CHECK(consumer);
+  consumer->UpdateMemoryLimitNoNotification(percentage);
+}
 
 // static
 bool MemoryConsumerRegistry::Exists() {
@@ -61,18 +68,32 @@ MemoryConsumerRegistry::~MemoryConsumerRegistry() {
   CHECK(destruction_observers_.empty());
 }
 
-void MemoryConsumerRegistry::AddMemoryConsumer(std::string_view consumer_id,
-                                               MemoryConsumerTraits traits,
-                                               MemoryConsumer* consumer) {
+void MemoryConsumerRegistry::AddMemoryConsumer(
+    std::string_view consumer_name,
+    std::optional<MemoryConsumerTraits> traits,
+    MemoryConsumer* consumer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  OnMemoryConsumerAdded(consumer_id, traits,
-                        RegisteredMemoryConsumer(consumer));
+
+  if (traits) {
+    if (traits->consumer_type == MemoryConsumerTraits::ConsumerType::kPassive) {
+      CHECK(consumer->IsPassive())
+          << "Active MemoryConsumer registered with Passive traits: "
+          << consumer_name;
+    }
+    // TODO(crbug.com/489671163): Re-enable the check that passive consumers
+    // don't register with active traits once all clients have been migrated.
+  }
+
+  uint32_t consumer_id = PersistentHash(consumer_name);
+  OnMemoryConsumerAdded(consumer_id, consumer_name, traits, consumer);
 }
 
-void MemoryConsumerRegistry::RemoveMemoryConsumer(std::string_view consumer_id,
-                                                  MemoryConsumer* consumer) {
+void MemoryConsumerRegistry::RemoveMemoryConsumer(
+    std::string_view consumer_name,
+    MemoryConsumer* consumer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  OnMemoryConsumerRemoved(consumer_id, RegisteredMemoryConsumer(consumer));
+  uint32_t consumer_id = PersistentHash(consumer_name);
+  OnMemoryConsumerRemoved(consumer_id, consumer);
 }
 
 void MemoryConsumerRegistry::AddDestructionObserver(

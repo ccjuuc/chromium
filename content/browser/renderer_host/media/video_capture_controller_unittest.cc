@@ -127,7 +127,8 @@ class MockVideoCaptureControllerEventHandler
     DoBufferReady(ControllerIDAndSize(id, buffer.frame_info->coded_size));
     if (enable_auto_return_buffer_on_buffer_ready_) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&VideoCaptureController::ReturnBuffer,
+          FROM_HERE, base::BindOnce(base::IgnoreResult(
+                                        &VideoCaptureController::ReturnBuffer),
                                     base::Unretained(controller_), id, this,
                                     buffer.buffer_id, feedback_));
     }
@@ -219,12 +220,18 @@ class VideoCaptureControllerTest
         format.frame_size, base::TimeDelta());
     const int rotation = 0;
     const int frame_feedback_id = 0;
+    // SAFETY: VideoFrame allocates a single contiguous buffer across all planes
+    // starting at data(0). AllocationSize is used instead of data_span(0) to
+    // encompass the full contiguous buffer across all planes (e.g., Y, U, and
+    // V) rather than just plane 0.
+    auto data_span = UNSAFE_BUFFERS(
+        base::span(stub_frame->data(0),
+                   media::VideoFrame::AllocationSize(
+                       stub_frame->format(), stub_frame->coded_size())));
     device_client_->OnIncomingCapturedData(
-        stub_frame->data(0),
-        media::VideoFrame::AllocationSize(stub_frame->format(),
-                                          stub_frame->coded_size()),
-        format, color_space, rotation, false /* flip_y */, base::TimeTicks(),
-        base::TimeDelta(), /*capture_begin_timestamp=*/std::nullopt,
+        data_span, format, color_space, rotation, false /* flip_y */,
+        base::TimeTicks(), base::TimeDelta(),
+        /*capture_begin_timestamp=*/std::nullopt,
         /*metadata=*/std::nullopt, frame_feedback_id);
   }
 
@@ -1082,6 +1089,32 @@ TEST_F(VideoCaptureControllerTest, AddRemoveScreenCaptureClient) {
   coordinator->ResetForTesting();
 }
 #endif  // BUILDFLAG(IS_MAC)
+
+TEST_F(VideoCaptureControllerTest, ReturnBufferTwiceFails) {
+  media::VideoCaptureParams session_params;
+  session_params.requested_format = arbitrary_format_;
+  const VideoCaptureControllerID route_id = base::UnguessableToken::Create();
+  controller_->AddClient(route_id, {}, client_a_.get(),
+                         base::UnguessableToken::Create(), session_params,
+                         std::nullopt);
+
+  // Send a frame to the client.
+  int buffer_id = -1;
+  EXPECT_CALL(*client_a_, DoBufferCreated(_, _))
+      .WillOnce(SaveArg<1>(&buffer_id));
+  EXPECT_CALL(*client_a_, DoBufferReady(_));
+  client_a_->set_enable_auto_return_buffer_on_buffer_ready(false);
+  SendStubFrameToDeviceClient(arbitrary_format_, arbitrary_color_space_);
+  task_environment_.RunUntilIdle();
+
+  // Return the buffer once.
+  EXPECT_TRUE(controller_->ReturnBuffer(route_id, client_a_.get(), buffer_id,
+                                        media::VideoCaptureFeedback()));
+
+  // Returning it again should fail but not crash.
+  EXPECT_FALSE(controller_->ReturnBuffer(route_id, client_a_.get(), buffer_id,
+                                         media::VideoCaptureFeedback()));
+}
 
 }  // namespace
 }  // namespace content

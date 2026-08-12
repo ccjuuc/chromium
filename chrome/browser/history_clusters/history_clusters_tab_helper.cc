@@ -5,13 +5,13 @@
 #include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
 
 #include <functional>
-#include <memory>
 #include <utility>
 
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/history_utils.h"
 #include "chrome/browser/history_clusters/history_clusters_metrics_logger.h"
 #include "chrome/browser/history_clusters/history_clusters_service_factory.h"
@@ -30,9 +30,9 @@
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_jni_bridge.h"
 #else  // BUILDFLAG(IS_ANDROID)
-#include "base/containers/contains.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/ntp_tiles/custom_links_store.h"
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -43,10 +43,13 @@ bool IsPageInTabGroup(content::WebContents* contents) {
   DCHECK(contents);
 
 #if !BUILDFLAG(IS_ANDROID)
-  if (Browser* browser = chrome::FindBrowserWithTab(contents)) {
-    int tab_index = browser->tab_strip_model()->GetIndexOfWebContents(contents);
+  if (BrowserWindowInterface* browser =
+          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+              contents)) {
+    int tab_index =
+        browser->GetTabStripModel()->GetIndexOfWebContents(contents);
     if (tab_index != TabStripModel::kNoTab &&
-        browser->tab_strip_model()->GetTabGroupForTab(tab_index).has_value()) {
+        browser->GetTabStripModel()->GetTabGroupForTab(tab_index).has_value()) {
       return true;
     }
   }
@@ -90,9 +93,18 @@ bool IsHistoryPage(GURL url, const GURL& history_url) {
 }  // namespace
 
 HistoryClustersTabHelper::HistoryClustersTabHelper(
-    content::WebContents* web_contents)
+    content::WebContents* web_contents,
+    HistoryTabHelper* history_tab_helper)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<HistoryClustersTabHelper>(*web_contents) {}
+      content::WebContentsUserData<HistoryClustersTabHelper>(*web_contents) {
+  if (history_tab_helper) {
+    history_tab_helper_subscription_ =
+        history_tab_helper->RegisterOnUpdatedHistoryForNavigationCallback(
+            base::BindRepeating(
+                &HistoryClustersTabHelper::OnUpdatedHistoryForNavigation,
+                weak_factory_.GetWeakPtr()));
+  }
+}
 
 HistoryClustersTabHelper::~HistoryClustersTabHelper() = default;
 
@@ -125,6 +137,7 @@ void HistoryClustersTabHelper::OnOmniboxUrlShared() {
 
 void HistoryClustersTabHelper::OnUpdatedHistoryForNavigation(
     int64_t navigation_id,
+    bool is_in_primary_main_frame,
     base::Time timestamp,
     const GURL& url) {
   auto* history_clusters_service = GetHistoryClustersService();
@@ -419,9 +432,9 @@ void HistoryClustersTabHelper::RecordPageEndMetricsIfNeeded(
           ->GetPrefs();
   ntp_tiles::CustomLinksStore custom_link_store(pref_service);
   incomplete_visit_context_annotations.context_annotations.is_ntp_custom_link =
-      base::Contains(custom_link_store.RetrieveLinks(),
-                     incomplete_visit_context_annotations.url_row.url(),
-                     [](const auto& link) { return link.url; });
+      std::ranges::contains(custom_link_store.RetrieveLinks(),
+                            incomplete_visit_context_annotations.url_row.url(),
+                            [](const auto& link) { return link.url; });
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   incomplete_visit_context_annotations.status.navigation_end_signals = true;

@@ -6,19 +6,15 @@
 
 #include <utility>
 
-#include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/accessibility_labels_bubble_model.h"
-#include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/confirm_bubble.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
+#include "components/renderer_context_menu/render_view_context_menu_proxy.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/render_view_host.h"
@@ -48,7 +44,7 @@ void AccessibilityLabelsMenuObserver::InitMenu(
 
 bool AccessibilityLabelsMenuObserver::IsCommandIdSupported(int command_id) {
   return command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE ||
-         command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS ||
+         command_id == kAccessibilityLabelsMenuId ||
          command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE;
 }
 
@@ -57,7 +53,7 @@ bool AccessibilityLabelsMenuObserver::IsCommandIdChecked(int command_id) {
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
 
   if (command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE ||
-      command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS ||
+      command_id == kAccessibilityLabelsMenuId ||
       command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE) {
     return profile->GetPrefs()->GetBoolean(
         prefs::kAccessibilityImageLabelsEnabled);
@@ -68,7 +64,7 @@ bool AccessibilityLabelsMenuObserver::IsCommandIdChecked(int command_id) {
 bool AccessibilityLabelsMenuObserver::IsCommandIdEnabled(int command_id) {
   DCHECK(IsCommandIdSupported(command_id));
   if (command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE ||
-      command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS ||
+      command_id == kAccessibilityLabelsMenuId ||
       command_id == IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE) {
     return ShouldShowLabelsItem();
   }

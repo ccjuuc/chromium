@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import(
     "//chrome/browser/resources/chromeos/accessibility/tools/run_jsbundler.gni")
 import("//chrome/common/features.gni")
@@ -40,11 +39,11 @@ ts_modules = [
 ]
 
 # Root dir must be parent directory to access common/.
-ts_library("ts_build") {
+ts_library("build_ts") {
   root_dir = "$ts_build_staging_dir"
   out_dir = tsc_out_dir
 
-  deps = [ "../common:ts_build" ]
+  deps = [ "../common:build_ts" ]
 
   extra_deps = [ ":stage_ts_build" ]
 
@@ -81,7 +80,7 @@ bundle_js("bundle_js") {
   out_folder = "$target_gen_dir/bundle"
 
   deps = [
-    ":ts_build",
+    ":build_ts",
     "../common:copied_files",
   ]
 }
@@ -149,7 +148,6 @@ js2gtest("enhanced_network_tts_extjs_tests") {
     "//ash",
     "//base",
     "//chrome/browser/ash/accessibility",
-    "//chrome/browser/ash/crosapi",
     "//chrome/browser/ash/system_web_apps",
     "//chrome/common",
   ]

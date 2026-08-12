@@ -7,6 +7,9 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -24,6 +27,7 @@
 #include "services/network/network_context.h"
 #include "services/network/network_service.h"
 #include "services/network/prefetch_matching_url_loader_factory.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -40,7 +44,7 @@ namespace network::cors {
 
 namespace {
 
-constexpr int kProcessId = 123;
+const auto kProcessId = OriginatingProcessId::renderer(RendererProcessId(123));
 constexpr int kRequestId = 456;
 
 }  // namespace
@@ -62,7 +66,8 @@ class CorsURLLoaderFactoryTest : public testing::Test {
   // testing::Test implementation.
 
   void BaseSetup(mojom::URLLoaderFactoryParamsPtr factory_params,
-                 mojom::NetworkContextParamsPtr context_params) {
+                 mojom::NetworkContextParamsPtr context_params,
+                 OriginatingProcessId process_id = kProcessId) {
     test_server_.AddDefaultHandlers();
     ASSERT_TRUE(test_server_.Start());
 
@@ -82,13 +87,13 @@ class CorsURLLoaderFactoryTest : public testing::Test {
         network_context_remote_.BindNewPipeAndPassReceiver(),
         std::move(context_params));
 
-    factory_params->process_id = kProcessId;
+    factory_params->process_id = process_id;
     factory_params->request_initiator_origin_lock =
         url::Origin::Create(test_server_.base_url());
     auto resource_scheduler_client =
         base::MakeRefCounted<ResourceSchedulerClient>(
-            ResourceScheduler::ClientId::Create(), IsBrowserInitiated(false),
-            &resource_scheduler_,
+            ResourceScheduler::ClientId::Create(),
+            IsBrowserInitiated(process_id.is_browser()), &resource_scheduler_,
             url_request_context_->network_quality_estimator());
     factory_owner_ = std::make_unique<PrefetchMatchingURLLoaderFactory>(
         network_context_.get(), std::move(factory_params),
@@ -109,6 +114,15 @@ class CorsURLLoaderFactoryTest : public testing::Test {
   }
 
   void CreateLoaderAndStart(const ResourceRequest& request, uint32_t options) {
+    CreateLoaderAndStart(
+        request, options,
+        net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+  }
+
+  void CreateLoaderAndStart(
+      const ResourceRequest& request,
+      uint32_t options,
+      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
     url_loaders_.emplace_back();
     test_cors_loader_clients_.emplace_back(
         std::make_unique<TestURLLoaderClient>());
@@ -116,7 +130,21 @@ class CorsURLLoaderFactoryTest : public testing::Test {
     cors_url_loader_factory_->CreateLoaderAndStart(
         url_loaders_.back().BindNewPipeAndPassReceiver(), kRequestId, options,
         request_copy, test_cors_loader_clients_.back()->CreateRemote(),
+        traffic_annotation);
+  }
+
+  bool CreateLoaderAndStartAndReturnIsOutermostMainFrame(
+      const ResourceRequest& request) {
+    url_loaders_.emplace_back();
+    test_cors_loader_clients_.emplace_back(
+        std::make_unique<TestURLLoaderClient>());
+    ResourceRequest request_copy(request);
+    cors_url_loader_factory_->CreateLoaderAndStart(
+        url_loaders_.back().BindNewPipeAndPassReceiver(), kRequestId,
+        mojom::kURLLoadOptionNone, request_copy,
+        test_cors_loader_clients_.back()->CreateRemote(),
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+    return request_copy.is_outermost_main_frame;
   }
 
   void ResetFactory() {
@@ -137,6 +165,14 @@ class CorsURLLoaderFactoryTest : public testing::Test {
   std::vector<std::unique_ptr<TestURLLoaderClient>>&
   test_cors_loader_clients() {
     return test_cors_loader_clients_;
+  }
+
+  void FlushFactoryForTesting() {
+    cors_url_loader_factory_remote_.FlushForTesting();
+  }
+
+  bool IsFactoryConnected() const {
+    return cors_url_loader_factory_remote_.is_connected();
   }
 
  private:
@@ -242,6 +278,24 @@ TEST_F(CorsURLLoaderFactoryTest, DisallowedLoadFlagToUntrustedLoader) {
   mojo::test::BadMessageObserver bad_message_observer;
   CreateLoaderAndStart(request);
   EXPECT_EQ("CorsURLLoaderFactory: Untrusted caller using restricted load flag",
+            bad_message_observer.WaitForBadMessage());
+}
+
+TEST_F(CorsURLLoaderFactoryTest, DocumentDestinationRequiresNavigateMode) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      features::kRestrictFrameDestinationsToNavigate);
+
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kNoCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.destination = mojom::RequestDestination::kDocument;
+  request.request_initiator = url::Origin::Create(request.url);
+  mojo::test::BadMessageObserver bad_message_observer;
+  CreateLoaderAndStart(request);
+  EXPECT_EQ("CorsURLLoaderFactory: frame destination requires kNavigate mode",
             bad_message_observer.WaitForBadMessage());
 }
 
@@ -391,6 +445,28 @@ TEST_F(CorsURLLoaderFactoryTest,
       bad_message_observer.WaitForBadMessage());
 }
 
+TEST_F(CorsURLLoaderFactoryTest, DataURLTrafficAnnotationBadMessageTest) {
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kNoCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = GURL("data:text/plain,foo");
+
+  constexpr char kTestId[] = "test_id";
+  net::NetworkTrafficAnnotationTag tag =
+      net::DefineNetworkTrafficAnnotation(kTestId, "nothing");
+  net::MutableNetworkTrafficAnnotationTag mutable_tag(tag);
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  CreateLoaderAndStart(request, mojom::kURLLoadOptionNone, mutable_tag);
+
+  EXPECT_EQ(
+      "CorsURLLoaderFactory: data: URL is not supported. "
+      "net-traffic_annotation_hash=" +
+          base::NumberToString(tag.unique_id_hash_code),
+      bad_message_observer.WaitForBadMessage());
+}
+
 class RequireCrossSiteRequestForCookiesCorsURLLoaderFactoryTest
     : public CorsURLLoaderFactoryTest {
   void SetUp() override {
@@ -481,6 +557,47 @@ TEST_F(NetworkBoundCorsURLLoaderFactoryTest, CorsPreflightRequestAreAllowed) {
   }
 }
 
+TEST_F(CorsURLLoaderFactoryTest, ForbiddenSecHeader_NoDump) {
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.request_initiator = url::Origin::Create(request.url);
+  request.headers.SetHeader("Sec-Invalid", "value");
+
+  CreateLoaderAndStart(request);
+
+  test_cors_loader_clients().back()->RunUntilComplete();
+  EXPECT_EQ(net::ERR_INVALID_ARGUMENT,
+            test_cors_loader_clients().back()->completion_status().error_code);
+
+  FlushFactoryForTesting();
+  EXPECT_TRUE(IsFactoryConnected());
+}
+
+TEST_F(CorsURLLoaderFactoryTest, ForbiddenSecHeader_Dump) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      network::features::kRestrictForbiddenSecurityHeaders,
+      {{network::features::kRestrictForbiddenSecurityHeadersDump.name,
+        "true"}});
+
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.request_initiator = url::Origin::Create(request.url);
+  request.headers.SetHeader("Sec-Invalid", "value");
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  CreateLoaderAndStart(request);
+
+  EXPECT_EQ("CorsURLLoaderFactory: Forbidden Sec- header from renderer",
+            bad_message_observer.WaitForBadMessage());
+}
+
 class TrustedURLLoaderFactoryTest : public CorsURLLoaderFactoryTest {
   void SetUp() override {
     auto factory_params = network::mojom::URLLoaderFactoryParams::New();
@@ -502,6 +619,78 @@ TEST_F(TrustedURLLoaderFactoryTest, DisallowedLoadFlagToTrustedLoader) {
   CreateLoaderAndStart(request);
   EXPECT_EQ("CorsURLLoaderFactory: Internal load flag received",
             bad_message_observer.WaitForBadMessage());
+}
+
+TEST_F(CorsURLLoaderFactoryTest, OutermostMainFrameFromRendererClamped) {
+  base::HistogramTester histogram_tester;
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kInclude;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.is_outermost_main_frame = true;
+  request.request_initiator = url::Origin::Create(request.url);
+  mojo::test::BadMessageObserver bad_message_observer;
+  EXPECT_FALSE(CreateLoaderAndStartAndReturnIsOutermostMainFrame(request));
+  test_cors_loader_clients().back()->RunUntilComplete();
+  EXPECT_EQ(net::OK,
+            test_cors_loader_clients().back()->completion_status().error_code);
+  EXPECT_FALSE(bad_message_observer.got_bad_message());
+  histogram_tester.ExpectUniqueSample(
+      "NetworkService.CorsURLLoaderFactory.IsOutermostMainFrameClamped", true,
+      1);
+}
+
+TEST_F(CorsURLLoaderFactoryTest,
+       OutermostMainFrameNavigationFromRendererNotClamped) {
+  base::HistogramTester histogram_tester;
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kNavigate;
+  request.redirect_mode = mojom::RedirectMode::kManual;
+  request.credentials_mode = mojom::CredentialsMode::kInclude;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.navigation_redirect_chain.push_back(request.url);
+  request.destination = mojom::RequestDestination::kEmpty;
+  request.original_destination = mojom::RequestDestination::kDocument;
+  request.is_outermost_main_frame = true;
+  request.request_initiator = url::Origin::Create(request.url);
+  mojo::test::BadMessageObserver bad_message_observer;
+  EXPECT_TRUE(CreateLoaderAndStartAndReturnIsOutermostMainFrame(request));
+  test_cors_loader_clients().back()->RunUntilComplete();
+  EXPECT_EQ(net::OK,
+            test_cors_loader_clients().back()->completion_status().error_code);
+  EXPECT_FALSE(bad_message_observer.got_bad_message());
+  histogram_tester.ExpectTotalCount(
+      "NetworkService.CorsURLLoaderFactory.IsOutermostMainFrameClamped", 0);
+}
+
+class BrowserProcessCorsURLLoaderFactoryTest : public CorsURLLoaderFactoryTest {
+ protected:
+  void SetUp() override {
+    BaseSetup(network::mojom::URLLoaderFactoryParams::New(),
+              mojom::NetworkContextParams::New(),
+              OriginatingProcessId::browser());
+  }
+};
+
+TEST_F(BrowserProcessCorsURLLoaderFactoryTest, OutermostMainFrameNotClamped) {
+  base::HistogramTester histogram_tester;
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kInclude;
+  request.method = net::HttpRequestHeaders::kGetMethod;
+  request.url = test_server()->GetURL("/echoall");
+  request.is_outermost_main_frame = true;
+  request.request_initiator = url::Origin::Create(request.url);
+  mojo::test::BadMessageObserver bad_message_observer;
+  EXPECT_TRUE(CreateLoaderAndStartAndReturnIsOutermostMainFrame(request));
+  test_cors_loader_clients().back()->RunUntilComplete();
+  EXPECT_EQ(net::OK,
+            test_cors_loader_clients().back()->completion_status().error_code);
+  EXPECT_FALSE(bad_message_observer.got_bad_message());
+  histogram_tester.ExpectTotalCount(
+      "NetworkService.CorsURLLoaderFactory.IsOutermostMainFrameClamped", 0);
 }
 
 }  // namespace network::cors

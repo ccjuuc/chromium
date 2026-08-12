@@ -140,7 +140,7 @@ views::NativeWidget* ChromeViewsDelegate::CreateNativeWidget(
     // initialization parameters, force the use of a non toplevel window,
     // as the native window manager has no concept of elevation based shadows.
     // TODO: This may no longer be needed if we get proper elevation-based
-    // shadows on toplevel windows. See https://crbug.com/838667.
+    // shadows on toplevel windows. See https://crbug.com/40574410.
     native_widget_type = NativeWidgetType::kNativeWidgetAura;
   } else {
     // Otherwise, we can use a toplevel window (they get blended via
@@ -168,16 +168,14 @@ int ChromeViewsDelegate::GetAppbarAutohideEdges(HMONITOR monitor,
   // in us thinking there is no auto-hide edges. By returning at least one edge
   // we don't initially go fullscreen until we figure out the real auto-hide
   // edges.
-  if (!appbar_autohide_edge_map_.count(monitor)) {
-    appbar_autohide_edge_map_[monitor] = EDGE_BOTTOM;
-  }
+  auto it = appbar_autohide_edge_map_.try_emplace(monitor, EDGE_BOTTOM).first;
 
   // We use the SHAppBarMessage API to get the taskbar autohide state. This API
   // spins a modal loop which could cause callers to be reentered. To avoid
   // that we retrieve the taskbar state in a worker thread.
   if (monitor && !in_autohide_edges_callback_) {
     // TODO(robliao): Annotate this task with .WithCOM() once supported.
-    // https://crbug.com/662122
+    // https://crbug.com/40491987
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE,
         {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
@@ -185,9 +183,9 @@ int ChromeViewsDelegate::GetAppbarAutohideEdges(HMONITOR monitor,
         base::BindOnce(&GetAppbarAutohideEdgesOnWorkerThread, monitor),
         base::BindOnce(&ChromeViewsDelegate::OnGotAppbarAutohideEdges,
                        weak_factory_.GetWeakPtr(), std::move(callback), monitor,
-                       appbar_autohide_edge_map_[monitor]));
+                       it->second));
   }
-  return appbar_autohide_edge_map_[monitor];
+  return it->second;
 }
 
 void ChromeViewsDelegate::OnGotAppbarAutohideEdges(base::OnceClosure callback,

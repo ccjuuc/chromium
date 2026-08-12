@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/android/scoped_java_ref.h"
 #include "base/compiler_specific.h"
 #include "media/base/android/media_codec_direction.h"
 #include "media/base/audio_codecs.h"
@@ -38,6 +39,14 @@ class MEDIA_EXPORT MediaCodecUtil {
   // Indicates if the vp8 decoder or encoder is available on this device.
   static bool IsVp8DecoderAvailable();
 
+  // Estimates a maximum input buffer size for a video codec at the requested
+  // resolution.
+  //
+  // Returns 0 if no clear heuristic applies.
+  static size_t EstimateVideoBufferSize(VideoCodec codec,
+                                        int width,
+                                        int height);
+
   // Returns a known alignment which can be used to translate visible size into
   // coded size. E.g., a size of (1, 1) means no alignment while a size of
   // (64, 1) would mean visible width should be rounded up to the nearest
@@ -54,6 +63,12 @@ class MEDIA_EXPORT MediaCodecUtil {
   // *** THE FOLLOWING METHODS CAN'T BE CALLED FROM THE RENDERER ***
   // ***************************************************************
   //
+
+  // Returns true if the decoder requires a secure decoder component for the
+  // given |mime_type| based on the MediaCrypto session.
+  static bool RequiresSecureDecoderComponent(
+      const base::android::JavaRef<jobject>& media_crypto,
+      std::string_view mime_type);
 
   // Returns whether it's possible to create a MediaCodec for the given codec
   // and secureness.

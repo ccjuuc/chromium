@@ -4,11 +4,14 @@
 
 package org.chromium.chrome.browser.notifications.channels;
 
+import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.os.Build;
 import android.text.TextUtils;
 
 import androidx.annotation.StringDef;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.notifications.R;
@@ -43,7 +46,7 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
      * set of channels returned by {@link #getStartupChannelIds()} or {@link #getLegacyChannelIds()}
      * changes.
      */
-    static final int CHANNELS_VERSION = 6;
+    static final int CHANNELS_VERSION = 8;
 
     private static class LazyHolder {
         private static final ChromeChannelDefinitions sInstance = new ChromeChannelDefinitions();
@@ -71,6 +74,7 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
     // LINT.IfChange(ChannelId)
     @StringDef({
         ChannelId.BROWSER,
+        ChannelId.ACTOR,
         ChannelId.COLLABORATION,
         ChannelId.DOWNLOADS,
         ChannelId.INCOGNITO,
@@ -95,11 +99,14 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
         ChannelId.BLUETOOTH,
         ChannelId.USB,
         ChannelId.SERIAL,
-        ChannelId.TIPS
+        ChannelId.TIPS,
+        ChannelId.TIPS_V2,
+        ChannelId.CHROME_FINDS,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface ChannelId {
         String BROWSER = "browser";
+        String ACTOR = "actor";
         String COLLABORATION = "collaboration";
         String DOWNLOADS = "downloads";
         String INCOGNITO = "incognito";
@@ -131,10 +138,16 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
         String USB = "usb";
         String SERIAL = "serial";
         String TIPS = "tips";
+        String TIPS_V2 = "tips_v2";
+        String CHROME_FINDS = "chrome_finds";
     }
 
-    // LINT.ThenChange(//tools/metrics/histograms/metadata/mobile/histograms.xml:NotificationChannelId)
-    // LINT.ThenChange(//chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/NotificationUmaTracker.java:NotificationChannelId)
+    // clang-format off
+    // LINT.ThenChange(
+    //   //tools/metrics/histograms/metadata/mobile/histograms.xml:NotificationChannelId,
+    //   //chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/NotificationUmaTracker.java:NotificationChannelId
+    // )
+    // clang-format on
 
     @StringDef({ChannelGroupId.GENERAL, ChannelGroupId.SITES})
     @Retention(RetentionPolicy.SOURCE)
@@ -172,6 +185,14 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
                             NotificationManager.IMPORTANCE_LOW,
                             ChannelGroupId.GENERAL));
             startup.add(ChannelId.BROWSER);
+
+            map.put(
+                    ChannelId.ACTOR,
+                    PredefinedChannel.create(
+                            ChannelId.ACTOR,
+                            R.string.notification_category_actor,
+                            NotificationManager.IMPORTANCE_HIGH,
+                            ChannelGroupId.GENERAL));
 
             map.put(
                     ChannelId.COLLABORATION,
@@ -367,16 +388,50 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
                             NotificationManager.IMPORTANCE_LOW,
                             ChannelGroupId.GENERAL));
 
-            // The tips notification channel will appear for all users but will be defaulted off and
-            // include an opt in promo that directs users to turning it on.
+            // Temporary migration logic from the old tips notification channel to the new tips
+            // notification channel. To be removed in a follow up task.
+            // TODO(crbug.com/509668849): Fully deprecate the ChannelId.TIPS channel after a few
+            // milestones from M150 when this migration code is landed to consolidate the tips
+            // notifications channel to be solely using ChannelId.TIPS_V2.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationManager notificationManager =
+                        ContextUtils.getApplicationContext()
+                                .getSystemService(NotificationManager.class);
+                if (notificationManager != null) {
+                    NotificationChannel tipsChannel =
+                            notificationManager.getNotificationChannel(ChannelId.TIPS);
+                    if (tipsChannel != null) {
+                        NotificationChannel tipsV2Channel =
+                                new NotificationChannel(
+                                        ChannelId.TIPS_V2,
+                                        ContextUtils.getApplicationContext()
+                                                .getString(R.string.notification_category_tips),
+                                        tipsChannel.getImportance());
+                        tipsV2Channel.setGroup(ChannelGroupId.GENERAL);
+                        notificationManager.createNotificationChannel(tipsV2Channel);
+                        notificationManager.deleteNotificationChannel(ChannelId.TIPS);
+                    }
+                }
+            }
+            // The tips notification channel will appear for users who opted in.
+            // For new users, it will be created when they explicitly opt in.
             map.put(
-                    ChannelId.TIPS,
+                    ChannelId.TIPS_V2,
                     PredefinedChannel.create(
-                            ChannelId.TIPS,
+                            ChannelId.TIPS_V2,
                             R.string.notification_category_tips,
-                            NotificationManager.IMPORTANCE_NONE,
+                            NotificationManager.IMPORTANCE_DEFAULT,
                             ChannelGroupId.GENERAL));
-            startup.add(ChannelId.TIPS);
+
+            // The finds notification channel will be added to the notification settings when a user
+            // explicitly accepts or declines the opt-in promo for the first time.
+            map.put(
+                    ChannelId.CHROME_FINDS,
+                    PredefinedChannel.create(
+                            ChannelId.CHROME_FINDS,
+                            R.string.notification_category_finds,
+                            NotificationManager.IMPORTANCE_DEFAULT,
+                            ChannelGroupId.GENERAL));
 
             MAP = Collections.unmodifiableMap(map);
             STARTUP = Collections.unmodifiableSet(startup);
@@ -392,6 +447,7 @@ public class ChromeChannelDefinitions extends ChannelDefinitions {
         ChromeChannelDefinitions.ChannelId.SITES,
         ChromeChannelDefinitions.ChannelId.PERMISSION_REQUESTS,
         ChromeChannelDefinitions.ChannelId.PERMISSION_REQUESTS_HIGH,
+        ChromeChannelDefinitions.ChannelId.TIPS,
     };
 
     // Map defined in static inner class so it's only initialized lazily.

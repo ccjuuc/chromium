@@ -22,12 +22,14 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
+#include "base/mac/process_requirement.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/process/launch.h"
 #include "base/strings/strcat.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/mac/privileged_helper/server.h"
@@ -36,6 +38,10 @@
 #include "chrome/updater/util/mac_util.h"
 #include "chrome/updater/util/posix_util.h"
 #include "chrome/updater/util/util.h"
+
+@interface NSXPCConnection (Private)
+@property(readonly) audit_token_t auditToken;
+@end
 
 @interface PrivilegedHelperServiceImpl
     : NSObject <PrivilegedHelperServiceProtocol> {
@@ -105,6 +111,19 @@
 
 - (BOOL)listener:(NSXPCListener*)listener
     shouldAcceptNewConnection:(NSXPCConnection*)newConnection {
+  std::optional<base::mac::ProcessRequirement> requirement =
+      base::mac::ProcessRequirement::Builder()
+          .IdentifierIsOneOf({MAC_BROWSER_BUNDLE_IDENTIFIER_STRING,
+                              MAC_BROWSER_BUNDLE_IDENTIFIER_STRING ".beta",
+                              MAC_BROWSER_BUNDLE_IDENTIFIER_STRING ".dev",
+                              MAC_BROWSER_BUNDLE_IDENTIFIER_STRING ".canary"})
+          .SignedWithSameIdentity()
+          .Build();
+  if (!requirement || !requirement->ValidateProcess(newConnection.auditToken)) {
+    // TODO(crbug.com/494281198): Consider shutting down and uninstalling.
+    return NO;
+  }
+
   newConnection.exportedInterface = [NSXPCInterface
       interfaceWithProtocol:@protocol(PrivilegedHelperServiceProtocol)];
 
@@ -151,13 +170,12 @@ int InstallUpdater(const base::FilePath& browser_path) {
     return kFailedToReadBrowserPlist;
   }
 
-  std::string user_temp_dir(PATH_MAX, std::string::value_type());
-  size_t len = confstr(_CS_DARWIN_USER_TEMP_DIR, user_temp_dir.data(),
-                       user_temp_dir.size());
-  if (len > user_temp_dir.size() || len == 0) {
+  char user_temp_dir[PATH_MAX] = {};
+  const size_t len = confstr(_CS_DARWIN_USER_TEMP_DIR, user_temp_dir,
+                             std::size(user_temp_dir));
+  if (len > std::size(user_temp_dir) || len == 0) {
     return kFailedToCreateTempDir;
   }
-  user_temp_dir.resize(len);
 
   base::ScopedTempDir temp_dir;
   if (!temp_dir.CreateUniqueTempDirUnderPath(base::FilePath(user_temp_dir))) {

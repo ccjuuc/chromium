@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
@@ -19,6 +20,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/process/process.h"
 #include "base/sequence_checker.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/sequenced_task_runner_helpers.h"
 #include "ipc/ipc_listener.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -29,6 +31,7 @@
 #include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/file_transfer/ipc_file_operations.h"
+#include "remoting/host/mojom/chromoting_host_services.mojom.h"
 #include "remoting/host/mojom/desktop_session.mojom.h"
 #include "remoting/host/mojom/remoting_mojom_traits.h"
 #include "remoting/host/remote_open_url/url_forwarder_configurator.h"
@@ -37,6 +40,7 @@
 #include "remoting/proto/coordinates.pb.h"
 #include "remoting/proto/event.pb.h"
 #include "remoting/proto/url_forwarder_control.pb.h"
+#include "remoting/protocol/audio_sample_info.h"
 #include "remoting/protocol/clipboard_stub.h"
 #include "remoting/protocol/desktop_capturer.h"
 #include "remoting/protocol/errors.h"
@@ -51,9 +55,9 @@ class ChannelProxy;
 
 namespace remoting {
 
-class AudioPacket;
 class ClientSessionControl;
 class DesktopSessionConnector;
+class IpcFifoBufferReader;
 class IpcAudioCapturer;
 class IpcMouseCursorMonitor;
 class IpcKeyboardLayoutMonitor;
@@ -82,7 +86,6 @@ class DesktopSessionProxy
       public mojom::DesktopSessionStateHandler {
  public:
   DesktopSessionProxy(
-      scoped_refptr<base::SingleThreadTaskRunner> audio_capture_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
       base::WeakPtr<ClientSessionControl> client_session_control,
       base::WeakPtr<ClientSessionEvents> client_session_events,
@@ -105,6 +108,10 @@ class DesktopSessionProxy
   std::unique_ptr<UrlForwarderConfigurator> CreateUrlForwarderConfigurator();
   std::unique_ptr<RemoteWebAuthnStateChangeNotifier>
   CreateRemoteWebAuthnStateChangeNotifier();
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  void OnSessionServicesClientConnected(
+      mojo::PendingReceiver<mojom::ChromotingSessionServices> receiver);
+#endif
   std::string GetCapabilities() const;
   void SetCapabilities(const std::string& capabilities);
 
@@ -116,15 +123,16 @@ class DesktopSessionProxy
       mojo::ScopedInterfaceEndpointHandle handle) override;
 
   // Connects to the desktop session agent.
-  bool AttachToDesktop(mojo::ScopedMessagePipeHandle desktop_pipe,
-                       int session_id);
+  bool AttachToDesktop(mojo::ScopedMessagePipeHandle desktop_pipe);
 
   // Closes the connection to the desktop session agent and cleans up
   // the associated resources.
   void DetachFromDesktop();
 
-  // Stores |audio_capturer| to be used to post captured audio packets. Called
-  // on the |audio_capture_task_runner_| thread.
+  // Registers `audio_capturer` to receive captured audio packets. This method
+  // is called on the audio sequence where `audio_capturer` is bound, and will
+  // also record the current sequence task runner as the audio task runner.
+  // `audio_capturer_` must only be accessed from the audio sequence.
   void SetAudioCapturer(const base::WeakPtr<IpcAudioCapturer>& audio_capturer);
 
   // Stores |mouse_cursor_monitor| to be used to post mouse cursor changes.
@@ -157,7 +165,14 @@ class DesktopSessionProxy
       std::unique_ptr<protocol::ClipboardStub> client_clipboard);
 
   // API used to implement the SessionController interface.
-  void SetScreenResolution(const ScreenResolution& resolution);
+  void SetScreenResolution(const ScreenResolution& resolution,
+                           std::optional<webrtc::ScreenId> screen_id);
+  void SetVideoLayout(const protocol::VideoLayout& layout);
+
+  // APIs used to implement the AudioInjector interface.
+  void StartAudioInjector(std::unique_ptr<IpcFifoBufferReader> audio_reader);
+  void SetAudioInjectorSampleInfo(const protocol::AudioSampleInfo& info,
+                                  base::OnceCallback<void(bool)> done);
 
   // API used to implement the ActionExecutor interface.
   void ExecuteAction(const protocol::ActionRequest& request);
@@ -181,6 +196,9 @@ class DesktopSessionProxy
   void OnLocalMouseMoveDetected(
       const webrtc::DesktopVector& new_position) override;
   void OnLocalKeyboardInputDetected(int32_t usb_keycode) override;
+  void OnSecurityKeyConnection(
+      mojo::PendingReceiver<mojom::SecurityKeyForwarder> receiver) override;
+  void OnMicrophoneControl(const protocol::MicrophoneControl& control) override;
 
   // mojom::DesktopSessionStateHandler implementation.
   void DisconnectSession(protocol::ErrorCode error,
@@ -193,13 +211,15 @@ class DesktopSessionProxy
   void SetUpUrlForwarder(
       const UrlForwarderConfigurator::SetUpUrlForwarderCallback& callback);
 
-  uint32_t desktop_session_id() const { return desktop_session_id_; }
+  std::string_view client_jid() const;
 
  private:
   friend class base::RefCountedDeleteOnSequence<DesktopSessionProxy>;
   friend class base::DeleteHelper<DesktopSessionProxy>;
 
   ~DesktopSessionProxy() override;
+
+  void DoStartAudioInjector();
 
   // Called when the desktop agent has started and provides the remote used to
   // inject input events and control A/V capture.
@@ -228,15 +248,23 @@ class DesktopSessionProxy
                                 base::WeakPtr<IpcVideoFrameCapturer> capturer);
 
   // Task runners:
-  //   - |audio_capturer_| is called back on |audio_capture_task_runner_|.
-  //   - public methods of this class (with some exceptions) are called on
-  //     |caller_task_runner| passed in the constructor.
-  //   - background I/O is served on |io_task_runner_|.
-  scoped_refptr<base::SingleThreadTaskRunner> audio_capture_task_runner_;
+  //   - `main_task_runner_` is the sequence on which public methods of this
+  //     class and IPC messages from the desktop process are handled.
+  //   - `audio_capture_task_runner_` is the sequence on which `audio_capturer_`
+  //     is called back.
+  //   - background I/O is served on `io_task_runner_`.
+  scoped_refptr<base::SequencedTaskRunner> main_task_runner_;
+  scoped_refptr<base::SequencedTaskRunner> audio_capture_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> ipc_task_runner_;
 
-  // Points to the audio capturer receiving captured audio packets.
+  // Points to the audio capturer receiving captured audio packets. This is
+  // registered by `IpcAudioCapturer::Start()` calling
+  // `SetAudioCapturer()` on `audio_capture_task_runner_`.
+  // When IPC audio packets arrive from the desktop process on
+  // `main_task_runner_` in `OnAudioPacket()`, this class hops sequences by
+  // posting a task to `audio_capture_task_runner_`, where `audio_capturer_`
+  // is dereferenced safely on its native sequence.
   base::WeakPtr<IpcAudioCapturer> audio_capturer_;
 
   // Points to the client stub passed to StartInputInjector().
@@ -290,9 +318,6 @@ class DesktopSessionProxy
 
   DesktopEnvironmentOptions options_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  // Stores the session id for the proxied desktop process.
-  uint32_t desktop_session_id_ = UINT32_MAX;
-
   // Caches the last keyboard layout received so it can be provided when Start
   // is called on IpcKeyboardLayoutMonitor.
   std::optional<protocol::KeyboardLayout> keyboard_layout_
@@ -334,6 +359,22 @@ class DesktopSessionProxy
   // experiment is fully rolled out, where this is always set to true.
   bool host_cursor_rendered_by_client_ GUARDED_BY_CONTEXT(sequence_checker_) =
       false;
+
+  // Boolean to ensure desktop_session_control_->StartAudioInjector() is
+  // called when StartAudioInjector() is called before
+  // `desktop_session_control_` is bound.
+  bool should_start_audio_injector_ GUARDED_BY_CONTEXT(sequence_checker_) =
+      false;
+  std::unique_ptr<IpcFifoBufferReader> pending_audio_reader_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+  std::optional<protocol::AudioSampleInfo> pending_audio_sample_info_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+  base::OnceCallback<void(bool)> pending_audio_format_ack_callback_
+      GUARDED_BY_CONTEXT(sequence_checker_);
+
+  void SetAudioCaptureTaskRunner(
+      scoped_refptr<base::SequencedTaskRunner> audio_capture_task_runner);
+  void DispatchAudioPacketOnAudioSequence(std::unique_ptr<AudioPacket> packet);
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

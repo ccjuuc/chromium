@@ -29,6 +29,7 @@ class CSSLazyParsingState;
 class CSSParserContext;
 class CSSParserObserver;
 class CSSParserTokenStream;
+struct CSSUrlRequestModifiers;
 class StyleRule;
 class StyleRuleViewTransition;
 class StyleRuleBase;
@@ -41,13 +42,13 @@ class StyleRuleFontFeature;
 class StyleRuleImport;
 class StyleRuleKeyframe;
 class StyleRuleKeyframes;
+class StyleRuleLocation;
 class StyleRuleMedia;
 class StyleRuleNamespace;
 class StyleRuleNavigation;
 class StyleRulePage;
 class StyleRulePositionTry;
 class StyleRuleProperty;
-class StyleRuleRoute;
 class StyleRuleSupports;
 class StyleSheetContents;
 class Element;
@@ -81,7 +82,7 @@ class CORE_EXPORT CSSParserImpl {
           CSSAtRuleID::kCSSAtRulePage,
           CSSAtRuleID::kCSSAtRulePositionTry,
           CSSAtRuleID::kCSSAtRuleProperty,
-          CSSAtRuleID::kCSSAtRuleRoute,
+          CSSAtRuleID::kCSSAtRuleLocation,
           CSSAtRuleID::kCSSAtRuleNavigation,
           CSSAtRuleID::kCSSAtRuleContainer,
           CSSAtRuleID::kCSSAtRuleCounterStyle,
@@ -248,6 +249,7 @@ class CORE_EXPORT CSSParserImpl {
   bool ConsumeSupportsDeclaration(CSSParserTokenStream&);
   void ConsumeErroneousAtRule(CSSParserTokenStream& stream, CSSAtRuleID id);
   const CSSParserContext* GetContext() const { return context_; }
+  StyleSheetContents* GetStyleSheet() const { return style_sheet_; }
 
   static void ParseDeclarationListForInspector(const String&,
                                                const CSSParserContext*,
@@ -295,7 +297,8 @@ class CORE_EXPORT CSSParserImpl {
                                              CSSParserTokenStream& stream);
   StyleRuleCharset* ConsumeCharsetRule(CSSParserTokenStream&);
   StyleRuleImport* ConsumeImportRule(const AtomicString& prelude_uri,
-                                     CSSParserTokenStream&);
+                                     CSSParserTokenStream&,
+                                     const CSSUrlRequestModifiers&);
   StyleRuleNamespace* ConsumeNamespaceRule(CSSParserTokenStream&);
   StyleRuleMedia* ConsumeMediaRule(CSSParserTokenStream& stream,
                                    CSSNestingType,
@@ -321,7 +324,7 @@ class CORE_EXPORT CSSParserImpl {
                                            CSSParserTokenStream&);
   StyleRulePage* ConsumePageRule(CSSParserTokenStream&);
   StyleRuleProperty* ConsumePropertyRule(CSSParserTokenStream&);
-  StyleRuleRoute* ConsumeRouteRule(CSSParserTokenStream&);
+  StyleRuleLocation* ConsumeLocationRule(CSSParserTokenStream&);
   StyleRuleNavigation* ConsumeNavigationRule(
       CSSParserTokenStream&,
       CSSNestingType,
@@ -344,6 +347,7 @@ class CORE_EXPORT CSSParserImpl {
   std::optional<HeapVector<StyleRuleFunction::Parameter>>
   ConsumeFunctionParameters(CSSParserTokenStream& stream);
   StyleRuleMixin* ConsumeMixinRule(CSSParserTokenStream& stream);
+  StyleRuleResult* ConsumeResultRule(CSSParserTokenStream& stream);
   StyleRuleApplyMixin* ConsumeApplyMixinRule(CSSParserTokenStream& stream);
   StyleRuleContentsStatement* ConsumeContentsRule(CSSParserTokenStream& stream);
   StyleRuleCustomMedia* ConsumeCustomMediaRule(CSSParserTokenStream& stream);

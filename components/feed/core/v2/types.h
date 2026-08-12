@@ -15,7 +15,7 @@
 #include "base/types/id_type.h"
 #include "base/values.h"
 #include "components/feed/core/proto/v2/store.pb.h"
-// #include "components/feed/core/proto/v2/wire/chrome_fulfillment_info.pb.h"
+#include "components/feed/core/proto/v2/wire/chrome_fulfillment_info.pb.h"
 #include "components/feed/core/proto/v2/wire/client_info.pb.h"
 #include "components/feed/core/proto/v2/wire/info_card.pb.h"
 #include "components/feed/core/proto/v2/wire/reliability_logging_enums.pb.h"
@@ -31,8 +31,6 @@ namespace feed {
 using ::feed::ChromeInfo;
 using ::feed::EphemeralChangeId;
 using ::feed::Experiments;
-using ::feed::WebFeedSubscriptionRequestStatus;
-using ::feed::WebFeedSubscriptionStatus;
 
 // Uniquely identifies a revision of a |feedstore::Content|. If Content changes,
 // it is assigned a new revision number.
@@ -59,10 +57,9 @@ struct RequestMetadata {
   std::string session_id;
   std::string country;
   DisplayMetrics display_metrics{};
-  ContentOrder content_order = ContentOrder::kUnspecified;
   bool notice_card_acknowledged = false;
+  bool is_user_feedback_disabled = false;
   TabGroupEnabledState tab_group_enabled_state = TabGroupEnabledState::kNone;
-  int followed_from_web_page_menu_count = 0;
   std::vector<feedwire::InfoCardTrackingState> info_card_tracking_states;
   feedwire::ChromeSignInStatus::SignInStatus sign_in_status =
       feedwire::ChromeSignInStatus::SIGNED_IN_STATUS_UNSPECIFIED;
@@ -90,10 +87,9 @@ struct PersistentMetricsData {
   bool did_scroll_in_visit = false;
 };
 
-base::Value::Dict PersistentMetricsDataToDict(
-    const PersistentMetricsData& data);
+base::DictValue PersistentMetricsDataToDict(const PersistentMetricsData& data);
 PersistentMetricsData PersistentMetricsDataFromDict(
-    const base::Value::Dict& dict);
+    const base::DictValue& dict);
 
 class LoadLatencyTimes {
  public:
@@ -105,7 +101,7 @@ class LoadLatencyTimes {
     // Time spent querying for and uploading stored actions. Recorded even if
     // no actions are uploaded.
     kUploadActions,
-    // Time spent making the FeedQuery (or WebFeed List Contents) request.
+    // Time spent making the FeedQuery request.
     kQueryRequest,
     // A view was reported in the stream, indicating the stream was shown.
     kStreamViewed,

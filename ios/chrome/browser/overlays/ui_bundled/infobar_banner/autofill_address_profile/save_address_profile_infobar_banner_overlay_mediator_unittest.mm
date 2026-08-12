@@ -9,6 +9,7 @@
 #import "base/functional/callback_helpers.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/uuid.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/form_import/addresses/autofill_save_update_address_profile_delegate_ios.h"
 #import "components/autofill/core/browser/foundations/autofill_client.h"
@@ -73,9 +74,8 @@ TEST_F(SaveAddressProfileInfobarBannerOverlayMediatorTest, SetUpConsumer) {
               consumer.buttonText);
   EXPECT_NSEQ(base::SysUTF16ToNSString(delegate->GetDescription()),
               consumer.subtitleText);
-  EXPECT_NSEQ(
-      CustomSymbolWithPointSize(kLocationSymbol, kInfobarSymbolPointSize),
-      consumer.iconImage);
+  EXPECT_NSEQ(SymbolWithPointSize(SymbolLocation, kInfobarSymbolPointSize),
+              consumer.iconImage);
 }
 
 // Tests that the modal is shown when infobar button is pressed.

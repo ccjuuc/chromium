@@ -4,10 +4,13 @@
 
 package org.chromium.chrome.browser.tabmodel;
 
+import android.util.ArrayMap;
+
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.Token;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabClosingSource;
@@ -15,7 +18,9 @@ import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 /**
  * An implementation of TabModelObserver that forwards notifications over a JNI bridge to a
@@ -59,6 +64,25 @@ class TabModelObserverJniBridge implements TabModelObserver {
     }
 
     @Override
+    public void willCloseTabs(List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get()
+                .willCloseTabs(
+                        mNativeTabModelObserverJniBridge,
+                        tabs.toArray(new Tab[0]),
+                        isAllTabs,
+                        allowUndo);
+    }
+
+    @Override
+    public final void didRemoveTabForClosure(Tab tab) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        assert tab.isInitialized();
+        TabModelObserverJniBridgeJni.get()
+                .didRemoveTabForClosure(mNativeTabModelObserverJniBridge, tab);
+    }
+
+    @Override
     public final void onFinishingTabClosure(Tab tab, @TabClosingSource int source) {
         assert mNativeTabModelObserverJniBridge != 0;
         TabModelObserverJniBridgeJni.get()
@@ -88,7 +112,9 @@ class TabModelObserverJniBridge implements TabModelObserver {
             boolean markedForSelection) {
         assert mNativeTabModelObserverJniBridge != 0;
         assert tab.isInitialized();
-        TabModelObserverJniBridgeJni.get().didAddTab(mNativeTabModelObserverJniBridge, tab, type);
+        int index = mTabModel.indexOf(tab);
+        TabModelObserverJniBridgeJni.get()
+                .didAddTab(mNativeTabModelObserverJniBridge, tab, type, index);
     }
 
     @Override
@@ -103,7 +129,9 @@ class TabModelObserverJniBridge implements TabModelObserver {
     public final void tabClosureUndone(Tab tab) {
         assert mNativeTabModelObserverJniBridge != 0;
         assert tab.isInitialized();
-        TabModelObserverJniBridgeJni.get().tabClosureUndone(mNativeTabModelObserverJniBridge, tab);
+        int index = mTabModel.indexOf(tab);
+        TabModelObserverJniBridgeJni.get()
+                .tabClosureUndone(mNativeTabModelObserverJniBridge, tab, index);
     }
 
     @Override
@@ -127,8 +155,35 @@ class TabModelObserverJniBridge implements TabModelObserver {
     @Override
     public void onTabCloseUndone(List<Tab> tabs, boolean isAllTabs) {
         assert mNativeTabModelObserverJniBridge != 0;
+        int[] indices = new int[tabs.size()];
+        Arrays.fill(indices, TabList.INVALID_TAB_INDEX);
+
+        Map<Tab, Integer> tabToTargetIndex = new ArrayMap<>(tabs.size());
+        for (int i = 0; i < tabs.size(); i++) {
+            tabToTargetIndex.put(tabs.get(i), i);
+        }
+
+        int i = 0;
+        for (Tab tab : mTabModel) {
+            Integer targetIdx = tabToTargetIndex.remove(tab);
+            if (targetIdx != null) {
+                indices[targetIdx] = i;
+                if (tabToTargetIndex.isEmpty()) {
+                    break;
+                }
+            }
+            i++;
+        }
+
         TabModelObserverJniBridgeJni.get()
-                .onTabCloseUndone(mNativeTabModelObserverJniBridge, tabs.toArray(new Tab[0]));
+                .onTabCloseUndone(
+                        mNativeTabModelObserverJniBridge, tabs.toArray(new Tab[0]), indices);
+    }
+
+    @Override
+    public void onTabsSelectionChanged() {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get().onTabsSelectionChanged(mNativeTabModelObserverJniBridge);
     }
 
     @Override
@@ -139,10 +194,44 @@ class TabModelObserverJniBridge implements TabModelObserver {
     }
 
     @Override
+    public final void allTabsAreClosing() {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get().allTabsAreClosing(mNativeTabModelObserverJniBridge);
+    }
+
+    @Override
     public final void tabRemoved(Tab tab) {
         assert mNativeTabModelObserverJniBridge != 0;
         assert tab.isInitialized();
         TabModelObserverJniBridgeJni.get().tabRemoved(mNativeTabModelObserverJniBridge, tab);
+    }
+
+    @Override
+    public final void onTabGroupCreated(Token groupId) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get()
+                .onTabGroupCreated(mNativeTabModelObserverJniBridge, groupId);
+    }
+
+    @Override
+    public final void onTabGroupRemoving(Token groupId) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get()
+                .onTabGroupRemoving(mNativeTabModelObserverJniBridge, groupId);
+    }
+
+    @Override
+    public final void onTabGroupMoved(Token groupId, int oldIndex) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get()
+                .onTabGroupMoved(mNativeTabModelObserverJniBridge, groupId, oldIndex);
+    }
+
+    @Override
+    public final void onTabGroupVisualsChanged(Token groupId) {
+        assert mNativeTabModelObserverJniBridge != 0;
+        TabModelObserverJniBridgeJni.get()
+                .onTabGroupVisualsChanged(mNativeTabModelObserverJniBridge, groupId);
     }
 
     @Override
@@ -190,7 +279,16 @@ class TabModelObserverJniBridge implements TabModelObserver {
                 int type,
                 int lastId);
 
+        void willCloseTabs(
+                long nativeTabModelObserverJniBridge,
+                @JniType("std::vector<TabAndroid*>") Tab[] tabs,
+                boolean isAllTabs,
+                boolean allowUndo);
+
         void willCloseTab(long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab);
+
+        void didRemoveTabForClosure(
+                long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab);
 
         void onFinishingTabClosure(
                 long nativeTabModelObserverJniBridge,
@@ -206,7 +304,10 @@ class TabModelObserverJniBridge implements TabModelObserver {
                 long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab, int type);
 
         void didAddTab(
-                long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab, int type);
+                long nativeTabModelObserverJniBridge,
+                @JniType("TabAndroid*") Tab tab,
+                int type,
+                int index);
 
         void didMoveTab(
                 long nativeTabModelObserverJniBridge,
@@ -215,11 +316,14 @@ class TabModelObserverJniBridge implements TabModelObserver {
                 int curIndex);
 
         void tabClosureUndone(
-                long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab);
+                long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab, int index);
 
         void onTabCloseUndone(
                 long nativeTabModelObserverJniBridge,
-                @JniType("std::vector<TabAndroid*>") Tab[] tab);
+                @JniType("std::vector<TabAndroid*>") Tab[] tab,
+                @JniType("std::vector<int32_t>") int[] indices);
+
+        void onTabsSelectionChanged(long nativeTabModelObserverJniBridge);
 
         void tabClosureCommitted(
                 long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab);
@@ -231,6 +335,22 @@ class TabModelObserverJniBridge implements TabModelObserver {
 
         void allTabsClosureCommitted(long nativeTabModelObserverJniBridge);
 
+        void allTabsAreClosing(long nativeTabModelObserverJniBridge);
+
         void tabRemoved(long nativeTabModelObserverJniBridge, @JniType("TabAndroid*") Tab tab);
+
+        void onTabGroupCreated(
+                long nativeTabModelObserverJniBridge, @JniType("base::Token") Token groupId);
+
+        void onTabGroupRemoving(
+                long nativeTabModelObserverJniBridge, @JniType("base::Token") Token groupId);
+
+        void onTabGroupMoved(
+                long nativeTabModelObserverJniBridge,
+                @JniType("base::Token") Token groupId,
+                int oldIndex);
+
+        void onTabGroupVisualsChanged(
+                long nativeTabModelObserverJniBridge, @JniType("base::Token") Token groupId);
     }
 }

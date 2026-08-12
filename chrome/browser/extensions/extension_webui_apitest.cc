@@ -41,7 +41,7 @@ namespace OnMessage = api::test::OnMessage;
 
 namespace {
 
-#if !BUILDFLAG(IS_WIN)  // flaky http://crbug.com/530722
+#if !BUILDFLAG(IS_WIN)  // flaky http://crbug.com/40435404
 
 // Tests running extension APIs on WebUI.
 class ExtensionWebUITest : public ExtensionApiTest {
@@ -62,7 +62,6 @@ class ExtensionWebUITest : public ExtensionApiTest {
       if (!base::PathExists(path))
         return testing::AssertionFailure() << "Couldn't find " << path.value();
       base::ReadFileToString(path, &script);
-      script = "(function(){'use strict';" + script + "}());";
     }
 
     // Run the test.
@@ -352,7 +351,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionWebUIEmbeddedOptionsTest,
   ASSERT_TRUE(onclose_listener.WaitUntilSatisfied());
 }
 
-// Regression test for crbug.com/414526.
+// Regression test for crbug.com/40384641.
 //
 // Same setup as CanEmbedExtensionOptions but disable the extension before
 // embedding.
@@ -426,7 +425,7 @@ class ExtensionWebUIListenersTest : public ExtensionWebUITest {
   }
 };
 
-// Tests crbug.com/1253745 where adding and removing listeners in a WebUI frame
+// Tests crbug.com/40199285 where adding and removing listeners in a WebUI frame
 // causes all listeners to be removed.
 IN_PROC_BROWSER_TEST_F(ExtensionWebUIListenersTest, MultipleURLListeners) {
   // Use the same URL both for the parent and child frames for convenience.

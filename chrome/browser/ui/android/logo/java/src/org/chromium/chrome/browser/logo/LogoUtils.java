@@ -15,8 +15,8 @@ import androidx.annotation.VisibleForTesting;
 import androidx.core.content.ContextCompat;
 
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -37,7 +37,28 @@ public class LogoUtils {
 
     /** Returns the top margin of the LogoView when the current logo is a google doodle. */
     public static int getTopMarginForDoodle(Resources resources) {
-        return resources.getDimensionPixelSize(R.dimen.doodle_margin_top);
+        switch (NewTabPageUtils.getPaddingStyleForAurora()) {
+            case PaddingStyle.SMALL, PaddingStyle.MEDIUM:
+                return resources.getDimensionPixelSize(R.dimen.doodle_margin_top_small);
+            case PaddingStyle.LARGE:
+                return resources.getDimensionPixelSize(R.dimen.doodle_margin_top_large);
+            default:
+                return resources.getDimensionPixelSize(R.dimen.doodle_margin_top);
+        }
+    }
+
+    /** Returns the top margin of the default Google logo. */
+    public static int getTopMarginForLogo(Resources resources) {
+        switch (NewTabPageUtils.getPaddingStyleForAurora()) {
+            case PaddingStyle.SMALL:
+                return resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_small);
+            case PaddingStyle.MEDIUM:
+                return resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_medium);
+            case PaddingStyle.LARGE:
+                return resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top_large);
+            default:
+                return resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top);
+        }
     }
 
     /** Returns the height of the LogoView when the current logo is a google doodle. */
@@ -86,7 +107,7 @@ public class LogoUtils {
         } else {
             return new int[] {
                 resources.getDimensionPixelSize(R.dimen.ntp_logo_height),
-                resources.getDimensionPixelSize(R.dimen.ntp_logo_margin_top),
+                getTopMarginForLogo(resources),
             };
         }
         return new int[] {0, 0};
@@ -96,12 +117,9 @@ public class LogoUtils {
      * Returns the default Google logo drawable.
      *
      * @param context The context used to load the resource.
-     * @return The Google logo drawable if the logo view refactor feature is enabled; otherwise
-     *     null.
+     * @return The Google logo drawable.
      */
-    public static @Nullable Drawable getGoogleLogoDrawable(Context context) {
-        if (!ChromeFeatureList.sAndroidLogoViewRefactor.isEnabled()) return null;
-
+    public static Drawable getGoogleLogoDrawable(Context context) {
         return ContextCompat.getDrawable(context, R.drawable.ic_google_logo);
     }
 
@@ -120,12 +138,23 @@ public class LogoUtils {
             View logoView, int logoHeight, int logoTopMargin) {
         MarginLayoutParams layoutParams = (MarginLayoutParams) logoView.getLayoutParams();
 
-        if (layoutParams.height == logoHeight) {
+        if (layoutParams.height == logoHeight && layoutParams.topMargin == logoTopMargin) {
             return;
         }
 
         layoutParams.height = logoHeight;
         layoutParams.topMargin = logoTopMargin;
         logoView.setLayoutParams(layoutParams);
+    }
+
+    /**
+     * Returns the total height of the logo view, including its top and bottom margins.
+     *
+     * @param logoView The view representing the logo.
+     * @return The total height of the logo view.
+     */
+    public static int getTotalLogoHeight(View logoView) {
+        MarginLayoutParams layoutParams = (MarginLayoutParams) logoView.getLayoutParams();
+        return layoutParams.height + layoutParams.topMargin + layoutParams.bottomMargin;
     }
 }

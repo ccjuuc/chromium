@@ -45,11 +45,6 @@ export class RoutineResultListElement extends PolymerElement {
         value: () => [],
       },
 
-      hidden: {
-        type: Boolean,
-        value: false,
-      },
-
       hideVerticalLines: {
         type: Boolean,
         value: false,
@@ -71,11 +66,10 @@ export class RoutineResultListElement extends PolymerElement {
     };
   }
 
-  override hidden: boolean;
-  hideVerticalLines: boolean;
-  usingRoutineGroups: boolean;
-  ignoreRoutineStatusUpdates: boolean;
-  private results: ResultsType;
+  declare hideVerticalLines: boolean;
+  declare usingRoutineGroups: boolean;
+  declare ignoreRoutineStatusUpdates: boolean;
+  declare private results: ResultsType;
 
   /**
    * Resets the list and creates a new list with all routines in the unstarted
@@ -122,13 +116,15 @@ export class RoutineResultListElement extends PolymerElement {
 
   /**
    * Receives the callback from RoutineListExecutor whenever the status of a
-   * routine changed.
+   * routine changed. Returns `true` when a blocking failure is detected and
+   * the caller should stop running further routine groups.
    */
-  onStatusUpdate(status: ResultStatusItem): void {
+  onStatusUpdate(status: ResultStatusItem): boolean {
     if (this.ignoreRoutineStatusUpdates) {
-      return;
+      return false;
     }
     assert(this.results.length > 0);
+    let blockingFailureDetected = false;
     this.results.forEach(
         (result: RoutineGroup|ResultStatusItem, idx: number) => {
           if (result instanceof RoutineGroup &&
@@ -142,6 +138,7 @@ export class RoutineResultListElement extends PolymerElement {
             if (shouldUpdateRoutineUI) {
               this.ignoreRoutineStatusUpdates = true;
               this.updateRoutineUiAfterFailure();
+              blockingFailureDetected = true;
             }
             return;
           }
@@ -152,6 +149,7 @@ export class RoutineResultListElement extends PolymerElement {
             }
           }
         });
+    return blockingFailureDetected;
   }
 
   protected shouldHideVerticalLines({value}: {

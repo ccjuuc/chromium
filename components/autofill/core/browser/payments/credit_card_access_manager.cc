@@ -4,51 +4,66 @@
 
 #include "components/autofill/core/browser/payments/credit_card_access_manager.h"
 
+#include <stddef.h>
+
 #include <algorithm>
-#include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/check_deref.h"
+#include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_functions.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
+#include "base/location.h"
+#include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
+#include "components/autofill/core/browser/form_import/payments/payments_form_data_importer.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/metrics/form_events/credit_card_form_event_logger.h"
 #include "components/autofill/core/browser/metrics/payments/better_auth_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/card_info_retrieval_enrolled_metrics.h"
-#include "components/autofill/core/browser/metrics/payments/card_unmask_authentication_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/card_unmask_flow_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/mandatory_reauth_metrics.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/autofill_payments_feature_availability.h"
+#include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
 #include "components/autofill/core/browser/payments/credit_card_cvc_authenticator.h"
 #include "components/autofill/core/browser/payments/credit_card_risk_based_authenticator.h"
+#include "components/autofill/core/browser/payments/full_card_request.h"
 #include "components/autofill/core/browser/payments/mandatory_reauth_manager.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_util.h"
 #include "components/autofill/core/browser/payments/payments_window_manager.h"
+#include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_manager.h"
 #include "components/autofill/core/browser/payments/webauthn_callback_types.h"
 #include "components/autofill/core/browser/suggestions/payments/payments_suggestion_generator_util.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if !BUILDFLAG(IS_IOS)
+#include "components/autofill/core/browser/payments/credit_card_fido_authenticator.h"
 #include "components/autofill/core/browser/strike_databases/payments/fido_authentication_strike_database.h"
 #endif
 
@@ -107,8 +122,8 @@ CreditCardAccessManager::~CreditCardAccessManager() {
   // results in us destroying the current CreditCardAccessManager and creating a
   // new one.
   if (auto* form_data_importer = autofill_client().GetFormDataImporter()) {
-    form_data_importer
-        ->SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+    form_data_importer->GetPaymentsFormDataImporter()
+        .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
             std::nullopt);
   }
   // Reset informs observers that pending fetch requests are now considered
@@ -334,13 +349,14 @@ void CreditCardAccessManager::FetchCreditCard(
     OnCreditCardFetchedCallback on_credit_card_fetched) {
   auto* form_data_importer = autofill_client().GetFormDataImporter();
   CHECK(form_data_importer);
-  form_data_importer->fetched_payments_data_context() =
-      FormDataImporter::FetchedPaymentsDataContext();
-  // Reset the variable in FormDataImporter that denotes if non-interactive
-  // authentication happened. This variable will be set to a value if a
-  // payments autofill non-interactive flow successfully completes.
-  form_data_importer
-      ->SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+  form_data_importer->GetPaymentsFormDataImporter()
+      .fetched_payments_data_context() =
+      payments::PaymentsFormDataImporter::FetchedPaymentsDataContext();
+  // Reset the variable in PaymentsFormDataImporter that denotes if
+  // non-interactive authentication happened. This variable will be set to a
+  // value if a payments autofill non-interactive flow successfully completes.
+  form_data_importer->GetPaymentsFormDataImporter()
+      .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
           std::nullopt);
 
   // Abort if authentication is already in progress, but don't reset status.
@@ -415,16 +431,7 @@ void CreditCardAccessManager::FetchCreditCard(
 }
 
 bool CreditCardAccessManager::IsMaskedServerCardRiskBasedAuthAvailable() const {
-  // On some particular platforms (iOS WebView i.e.), Hagrid (risk based
-  // authentication) is not supported. This check if the current platform
-  // supports Hagrid.
-  if (!payments_autofill_client().IsRiskBasedAuthEffectivelyAvailable()) {
-    return false;
-  }
-
   bool is_card_info_retrieval_enrolled =
-      base::FeatureList::IsEnabled(
-          features::kAutofillEnableCardInfoRuntimeRetrieval) &&
       (card_->card_info_retrieval_enrollment_state() ==
        CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalEnrolled);
   return !card_->IsExpired(AutofillClock::Now()) &&
@@ -620,7 +627,7 @@ void CreditCardAccessManager::Authenticate(
       // come from the risk based authentication response. But for masked server
       // cards if the risk based auth is not available, `fido_request_options`
       // comes from the UnmaskDetails.
-      base::Value::Dict fido_request_options;
+      base::DictValue fido_request_options;
       std::optional<std::string> context_token;
       if (card_->record_type() == CreditCard::RecordType::kVirtualCard) {
         context_token = risk_based_authentication_response_.context_token;
@@ -768,7 +775,7 @@ void CreditCardAccessManager::OnCvcAuthenticationComplete(
     unmask_auth_flow_type_ = UnmaskAuthFlowType::kNone;
   } else if (should_register_card_with_fido) {
 #if !BUILDFLAG(IS_IOS)
-    base::Value::Dict request_options;
+    base::DictValue request_options;
     if (!unmask_details_.fido_request_options.empty()) {
       // For opted-in user (CVC then FIDO case), request options are returned in
       // unmask detail response.
@@ -1224,9 +1231,8 @@ void CreditCardAccessManager::FetchMaskedServerCard() {
     payments_autofill_client().ShowAutofillProgressDialog(
         card_->card_info_retrieval_enrollment_state() ==
                 CreditCard::CardInfoRetrievalEnrollmentState::kRetrievalEnrolled
-            ? AutofillProgressDialogType::
-                  kCardInfoRetrievalEnrolledUnmaskProgressDialog
-            : AutofillProgressDialogType::kServerCardUnmaskProgressDialog,
+            ? AutofillProgressUiType::kCardInfoRetrievalEnrolledUnmaskProgressUi
+            : AutofillProgressUiType::kServerCardUnmaskProgressUi,
         /*cancel_callback=*/base::BindOnce(
             &CreditCardRiskBasedAuthenticator::OnUnmaskCancelled,
             payments_autofill_client()
@@ -1287,7 +1293,7 @@ void CreditCardAccessManager::FetchMaskedServerCard() {
 void CreditCardAccessManager::FetchVirtualCard() {
   is_authentication_in_progress_ = true;
   payments_autofill_client().ShowAutofillProgressDialog(
-      AutofillProgressDialogType::kVirtualCardUnmaskProgressDialog,
+      AutofillProgressUiType::kVirtualCardUnmaskProgressUi,
       base::BindOnce(&CreditCardAccessManager::OnVirtualCardUnmaskCancelled,
                      GetWeakPtr()));
   payments_autofill_client().GetRiskBasedAuthenticator()->Authenticate(
@@ -1329,10 +1335,11 @@ void CreditCardAccessManager::FetchLocalCard() {
     OnCreditCardFetched(*card_, /*card_was_fetched_from_cache=*/false);
 
     // This local card autofill flow did not have any interactive
-    // authentication, so notify the FormDataImporter of this.
+    // authentication, so notify the PaymentsFormDataImporter of this.
     autofill_client()
         .GetFormDataImporter()
-        ->SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+        ->GetPaymentsFormDataImporter()
+        .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
             payments::MandatoryReauthManager::
                 GetNonInteractivePaymentMethodType(
                     CreditCard::RecordType::kLocalCard));
@@ -1467,11 +1474,12 @@ void CreditCardAccessManager::OnNonInteractiveAuthenticationSuccess(
     // If the server returned a successful response along with the card's
     // real PAN without requiring interactive authentication, set the
     // `card_record_type_if_non_interactive_authentication_flow_completed_`
-    // field in FormDataImporter so that MandatoryReauthManager can decide
-    // whether to offer mandatory re-auth opt-in for this user.
+    // field in PaymentsFormDataImporter so that MandatoryReauthManager can
+    // decide whether to offer mandatory re-auth opt-in for this user.
     autofill_client()
         .GetFormDataImporter()
-        ->SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
+        ->GetPaymentsFormDataImporter()
+        .SetPaymentMethodTypeIfNonInteractiveAuthenticationFlowCompleted(
             payments::MandatoryReauthManager::
                 GetNonInteractivePaymentMethodType(record_type));
 
@@ -1681,21 +1689,19 @@ void CreditCardAccessManager::StartDeviceAuthenticationForFilling(
     const CreditCard* card) {
   is_authentication_in_progress_ = true;
 
-  payments::MandatoryReauthAuthenticationMethod authentication_method =
+  payments::MandatoryReauthManager* mandatory_reauth_manager =
       autofill_client()
           .GetPaymentsAutofillClient()
-          ->GetOrCreatePaymentsMandatoryReauthManager()
-          ->GetAuthenticationMethod();
+          ->GetOrCreatePaymentsMandatoryReauthManager();
+  payments::MandatoryReauthAuthenticationMethod authentication_method =
+      mandatory_reauth_manager->GetAuthenticationMethod();
 
   // If there is no supported auth method on the device, we should skip re-auth
   // and fill the form. Otherwise the user removing authentication on the
   // device will prevent them from using payments autofill. In the settings
   // page, we signal to the user through various means that they need to turn
   // the device's authentication on in order to use re-auth.
-  if (authentication_method ==
-          payments::MandatoryReauthAuthenticationMethod::kUnknown ||
-      authentication_method ==
-          payments::MandatoryReauthAuthenticationMethod::kUnsupportedMethod) {
+  if (!mandatory_reauth_manager->IsDeviceAuthenticationSupported()) {
     LogMandatoryReauthCheckoutFlowUsageEvent(
         payments::MandatoryReauthManager::GetNonInteractivePaymentMethodType(
             card->record_type()),
@@ -1801,7 +1807,8 @@ void CreditCardAccessManager::OnCreditCardFetched(
     bool card_was_fetched_from_cache) {
   auto* form_data_importer = autofill_client().GetFormDataImporter();
   CHECK(form_data_importer);
-  auto& context = form_data_importer->fetched_payments_data_context();
+  auto& context = form_data_importer->GetPaymentsFormDataImporter()
+                      .fetched_payments_data_context();
   context.fetched_card_instrument_id = card.instrument_id();
   context.card_was_fetched_from_cache = card_was_fetched_from_cache;
   if (on_credit_card_fetched_callback_) {

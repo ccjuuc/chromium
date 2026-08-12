@@ -5,34 +5,36 @@
 package org.chromium.chrome.browser.payments;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ALLOW_DELETE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.CANCEL_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DONE_RUNNABLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DropdownFieldProperties.DROPDOWN_ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DropdownFieldProperties.DROPDOWN_CALLBACK;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DropdownFieldProperties.DROPDOWN_HINT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.DropdownFieldProperties.DROPDOWN_KEY_VALUE_LIST;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.EDITOR_FIELDS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.EDITOR_TITLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.IS_REQUIRED;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.LABEL;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.VALIDATOR;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.FieldProperties.VALUE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.DROPDOWN;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.NOTICE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType.TEXT_INPUT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.NOTICE_ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.NoticeProperties.NOTICE_TEXT;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_ALL_KEYS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_FIELD_TYPE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_FORMATTER;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.TextFieldProperties.TEXT_SUGGESTIONS;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.VALIDATE_ON_SHOW;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.VISIBLE;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.scrollToFieldWithErrorMessage;
-import static org.chromium.chrome.browser.autofill.editors.EditorProperties.validateForm;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.ALLOW_DELETE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.CANCEL_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.DONE_RUNNABLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.EDITOR_FIELDS;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.EDITOR_TITLE;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.VALIDATE_ON_SHOW;
+import static org.chromium.chrome.browser.autofill.editors.address.EditorProperties.VISIBLE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.DROPDOWN;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.NOTICE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType.TEXT_INPUT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.IMPORTANT_FOR_ACCESSIBILITY;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_TEXT;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.NOTICE_VISIBLE;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.NoticeProperties.SHOW_BACKGROUND;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.validateForm;
+import static org.chromium.chrome.browser.autofill.editors.common.EditorComponentsUtil.scrollToFieldWithErrorMessage;
+import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_HINT;
+import static org.chromium.chrome.browser.autofill.editors.common.dropdown_field.DropdownFieldProperties.DROPDOWN_KEY_VALUE_LIST;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.IS_REQUIRED;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.LABEL;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALIDATOR;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE_CHANGED_CALLBACK;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_ALL_KEYS;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_FIELD_TYPE;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_FORMATTER;
+import static org.chromium.chrome.browser.autofill.editors.common.text_field.TextFieldProperties.TEXT_SUGGESTIONS;
 
 import android.app.ProgressDialog;
 import android.text.TextUtils;
@@ -50,11 +52,10 @@ import org.chromium.chrome.browser.autofill.AutofillProfileBridge;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PhoneNumberUtil;
 import org.chromium.chrome.browser.autofill.SubKeyRequesterFactory;
-import org.chromium.chrome.browser.autofill.editors.EditorBase;
-import org.chromium.chrome.browser.autofill.editors.EditorDialogViewBinder;
-import org.chromium.chrome.browser.autofill.editors.EditorFieldValidator;
-import org.chromium.chrome.browser.autofill.editors.EditorProperties.EditorItem;
-import org.chromium.chrome.browser.autofill.editors.EditorProperties.ItemType;
+import org.chromium.chrome.browser.autofill.editors.address.EditorDialogViewBinder;
+import org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.EditorItem;
+import org.chromium.chrome.browser.autofill.editors.common.EditorComponentsProperties.ItemType;
+import org.chromium.chrome.browser.autofill.editors.common.field.EditorFieldValidator;
 import org.chromium.components.autofill.AutofillAddressEditorUiInfo;
 import org.chromium.components.autofill.AutofillAddressUiComponent;
 import org.chromium.components.autofill.AutofillProfile;
@@ -273,21 +274,16 @@ public class AddressEditor extends EditorBase<AutofillAddress>
                                     DROPDOWN_KEY_VALUE_LIST,
                                     AutofillProfileBridge.getSupportedCountries())
                             .with(IS_REQUIRED, false)
+                            .with(
+                                    VALUE_CHANGED_CALLBACK,
+                                    (countryCode) -> {
+                                        showProgressDialog();
+                                        mRecentlySelectedCountry = countryCode;
+                                        mPhoneFormatter.setCountryCode(mRecentlySelectedCountry);
+                                        loadAdminAreasForCountry(mRecentlySelectedCountry);
+                                    })
                             .build();
         }
-
-        mCountryField.set(
-                DROPDOWN_CALLBACK,
-                new Callback<>() {
-                    /** Load admin areas for the selected country. */
-                    @Override
-                    public void onResult(String countryCode) {
-                        showProgressDialog();
-                        mRecentlySelectedCountry = countryCode;
-                        mPhoneFormatter.setCountryCode(mRecentlySelectedCountry);
-                        loadAdminAreasForCountry(mRecentlySelectedCountry);
-                    }
-                });
 
         // Country dropdown is cached, so the selected item needs to be updated for the new profile
         // that's being edited. This will not fire the dropdown callback.
@@ -321,7 +317,7 @@ public class AddressEditor extends EditorBase<AutofillAddress>
         mEditorModel =
                 new PropertyModel.Builder(ALL_KEYS)
                         .with(EDITOR_TITLE, editTitle)
-                        .with(EDITOR_FIELDS, new ListModel())
+                        .with(EDITOR_FIELDS, new ListModel<>())
                         .with(DONE_RUNNABLE, this::onDone)
                         .with(CANCEL_RUNNABLE, this::onCancel)
                         .with(ALLOW_DELETE, false)
@@ -337,8 +333,8 @@ public class AddressEditor extends EditorBase<AutofillAddress>
 
     private void onDone() {
         assert isShowingEditPrompt();
-        if (!validateForm(mEditorModel)) {
-            scrollToFieldWithErrorMessage(mEditorModel);
+        if (!validateForm(mEditorModel.get(EDITOR_FIELDS))) {
+            scrollToFieldWithErrorMessage(mEditorModel.get(EDITOR_FIELDS));
             return;
         }
         mEditorModel.set(VISIBLE, false);
@@ -577,9 +573,11 @@ public class AddressEditor extends EditorBase<AutofillAddress>
                                         NOTICE_TEXT,
                                         mContext.getString(
                                                 R.string.payments_required_field_message))
+                                .with(SHOW_BACKGROUND, false)
                                 // Required fields are indicated by an asterisk (*) and announced
                                 // separately by screen readers. Don't announce the message itself.
                                 .with(IMPORTANT_FOR_ACCESSIBILITY, false)
+                                .with(NOTICE_VISIBLE, true)
                                 .build(),
                         /* isFullLine= */ true));
         mEditorModel.set(EDITOR_FIELDS, editorFields);

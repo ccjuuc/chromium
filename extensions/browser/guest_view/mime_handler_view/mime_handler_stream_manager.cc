@@ -6,7 +6,7 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "content/public/browser/global_routing_id.h"
@@ -16,6 +16,7 @@
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+#include "extensions/browser/mime_handler/stream_container.h"
 
 namespace extensions {
 namespace {
@@ -28,6 +29,8 @@ class MimeHandlerStreamManagerFactory
   MimeHandlerStreamManager* Get(content::BrowserContext* context);
 
  private:
+  friend base::NoDestructor<MimeHandlerStreamManagerFactory>;
+
   // BrowserContextKeyedServiceFactory overrides.
   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* profile) const override;
@@ -44,7 +47,8 @@ MimeHandlerStreamManagerFactory::MimeHandlerStreamManagerFactory()
 // static
 MimeHandlerStreamManagerFactory*
 MimeHandlerStreamManagerFactory::GetInstance() {
-  return base::Singleton<MimeHandlerStreamManagerFactory>::get();
+  static base::NoDestructor<MimeHandlerStreamManagerFactory> instance;
+  return instance.get();
 }
 
 MimeHandlerStreamManager* MimeHandlerStreamManagerFactory::Get(

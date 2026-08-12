@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/token.h"
@@ -152,8 +151,8 @@ void VideoCaptureHost::OnCaptureConfigurationChanged(
     const VideoCaptureControllerID& controller_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
-  if (!base::Contains(controllers_, controller_id) ||
-      !base::Contains(device_id_to_observer_map_, controller_id)) {
+  if (!controllers_.contains(controller_id) ||
+      !device_id_to_observer_map_.contains(controller_id)) {
     return;
   }
 
@@ -289,7 +288,13 @@ void VideoCaptureHost::Start(
     return;
   }
 
-  DCHECK(!base::Contains(device_id_to_observer_map_, device_id));
+  if (!media_stream_manager_->ValidateVideoSession(
+          session_id, render_frame_host_delegate_->render_frame_host_id())) {
+    mojo::ReportBadMessage("Unauthorized video capture session.");
+    return;
+  }
+
+  DCHECK(!device_id_to_observer_map_.contains(device_id));
   auto& observer_in_map = device_id_to_observer_map_[device_id];
   observer_in_map.Bind(std::move(observer));
 
@@ -402,12 +407,16 @@ void VideoCaptureHost::ReleaseBuffer(
 
   VideoCaptureControllerID controller_id(device_id);
   auto it = controllers_.find(controller_id);
-  if (it == controllers_.end())
+  if (it == controllers_.end()) {
     return;
+  }
 
   const base::WeakPtr<VideoCaptureController>& controller = it->second;
   if (controller) {
-    controller->ReturnBuffer(controller_id, this, buffer_id, feedback);
+    if (!controller->ReturnBuffer(controller_id, this, buffer_id, feedback)) {
+      mojo::ReportBadMessage(
+          "VideoCaptureHost::ReleaseBuffer: Invalid buffer_id.");
+    }
   }
 }
 
@@ -445,7 +454,7 @@ void VideoCaptureHost::OnNewCaptureVersion(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   const VideoCaptureControllerID controller_id(device_id);
-  if (!base::Contains(controllers_, controller_id)) {
+  if (!controllers_.contains(controller_id)) {
     return;
   }
 
@@ -586,9 +595,11 @@ void VideoCaptureHost::ConnectClient(
     VideoCaptureManager::DoneCB done_cb) {
   std::optional<url::Origin> origin =
       media_stream_manager_->GetOriginByVideoSessionId(session_id);
+  bool is_allowed_on_lock_screen =
+      media_stream_manager_->IsSessionAllowedOnLockScreen(session_id);
   media_stream_manager_->video_capture_manager()->ConnectClient(
       session_id, params, controller_id, render_frame_host_id, this,
-      std::move(origin), std::move(done_cb));
+      std::move(origin), is_allowed_on_lock_screen, std::move(done_cb));
 }
 
 }  // namespace content

@@ -170,7 +170,7 @@ component("gfx") {
     ":gfx_skia",
     ":gfx_switches",
     ":memory_buffer_sources",
-    ":native_widget_types_sources",
+    ":native_ui_types_sources",
     ":resize_image_dimensions",
     ":selection_bound_sources",
     "//base",
@@ -205,6 +205,7 @@ component("gfx") {
       "android/android_surface_control_compat.h",
       "android/java_bitmap.cc",
       "android/java_bitmap.h",
+      "android/rect_jni_conversion.cc",
       "android/rect_jni_conversion.h",
       "android/surface_control_frame_rate.h",
       "android/view_configuration.cc",
@@ -216,7 +217,10 @@ component("gfx") {
       configs += [ "//build/config/compiler:optimize_max" ]
     }
 
-    deps += [ ":gfx_jni_headers" ]
+    deps += [
+      ":gfx_jni_headers",
+      "//ui/android:ui_jar_jni",
+    ]
     libs = [
       "android",
       "jnigraphics",
@@ -261,6 +265,8 @@ component("gfx") {
       "image/image_util_mac.mm",
       "mac/coordinate_conversion.h",
       "mac/coordinate_conversion.mm",
+      "mac/menu_text_elider_mac.h",
+      "mac/menu_text_elider_mac.mm",
       "mac/nswindow_frame_controls.h",
       "mac/nswindow_frame_controls.mm",
       "mac/scoped_cocoa_disable_screen_updates.h",
@@ -390,7 +396,7 @@ component("gfx") {
     ]
 
     public_deps += [ "//cc/paint" ]
-    deps += [ "//third_party/harfbuzz-ng" ]
+    deps += [ "//third_party/harfbuzz" ]
 
     if (is_android || is_fuchsia || is_ios) {
       sources += [
@@ -424,8 +430,6 @@ component("color_space") {
     "color_space.cc",
     "color_space.h",
     "color_space_export.h",
-    "color_transform.cc",
-    "color_transform.h",
     "display_color_spaces.cc",
     "display_color_spaces.h",
     "hdr_metadata.cc",
@@ -494,19 +498,19 @@ source_set("resize_image_dimensions") {
   sources = [ "image/resize_image_dimensions.h" ]
 }
 
-# Depend on this to use native_widget_types.h without pulling in all of gfx.
-# The structure here allows native_widget_types to be part of the gfx component
+# Depend on this to use native_ui_types.h without pulling in all of gfx.
+# The structure here allows native_ui_types to be part of the gfx component
 # in the component build, but be a separate source set in a static build.
-group("native_widget_types") {
+group("native_ui_types") {
   if (is_component_build) {
     public_deps = [ ":gfx" ]
   } else {
-    public_deps = [ ":native_widget_types_sources" ]
+    public_deps = [ ":native_ui_types_sources" ]
   }
 }
 
-source_set("native_widget_types_sources") {
-  visibility = [ ":*" ]  # Depend on through ":native_widget_types".
+source_set("native_ui_types_sources") {
+  visibility = [ ":*" ]  # Depend on through ":native_ui_types".
 
   public = [ "native_ui_types.h" ]
 
@@ -578,8 +582,6 @@ source_set("memory_buffer_sources") {
   # TODO(brettw) refactor this so these sources are in a coherent directory
   # structure rather than random samplings of ui/gfx and ui/gfx/mac.
   sources = [
-    "buffer_format_util.cc",
-    "buffer_format_util.h",
     "buffer_usage_util.cc",
     "buffer_usage_util.h",
     "client_native_pixmap.h",
@@ -615,7 +617,7 @@ source_set("memory_buffer_sources") {
 
   deps = [
     ":gfx_switches",
-    ":native_widget_types_sources",
+    ":native_ui_types_sources",
     "//base",
     "//build:chromecast_buildflags",
     "//build:chromeos_buildflags",
@@ -709,6 +711,12 @@ static_library("test_support") {
   if (is_apple) {
     sources += [ "image/image_unittest_util_apple.mm" ]
   }
+  if (is_android) {
+    sources += [
+      "android/fake_achoreographer_compat.cc",
+      "android/fake_achoreographer_compat.h",
+    ]
+  }
   if (use_fuzzing_engine) {
     sources += [
       "geometry/test/fuzzer_util.cc",
@@ -732,7 +740,7 @@ static_library("test_support") {
   if (use_blink) {
     sources += [ "render_text_test_api.h" ]
 
-    deps += [ "//third_party/harfbuzz-ng" ]
+    deps += [ "//third_party/harfbuzz" ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
@@ -774,7 +782,9 @@ test("gfx_unittests") {
       "font_fallback_mac_unittest.cc",
       "image/image_mac_unittest.mm",
       "mac/coordinate_conversion_unittest.mm",
+      "mac/display_icc_profiles_unittest.cc",
       "mac/io_surface_unittest.cc",
+      "mac/menu_text_elider_mac_unittest.mm",
       "platform_font_mac_unittest.mm",
       "range/range_mac_unittest.mm",
     ]
@@ -820,7 +830,6 @@ test("gfx_unittests") {
       "color_analysis_unittest.cc",
       "color_conversions_unittest.cc",
       "color_space_unittest.cc",
-      "color_transform_unittest.cc",
       "color_utils_unittest.cc",
       "delegated_ink_unittest.cc",
       "font_fallback_unittest.cc",
@@ -898,7 +907,7 @@ test("gfx_unittests") {
   ]
 
   if (use_blink) {
-    deps += [ "//third_party/harfbuzz-ng" ]
+    deps += [ "//third_party/harfbuzz" ]
   }
 
   data_deps = [ "//ui/resources:ui_test_pak_data" ]
@@ -994,7 +1003,6 @@ if (is_android) {
   generate_jni("gfx_jni_headers") {
     sources = [
       "../android/java/src/org/chromium/ui/gfx/BitmapHelper.java",
-      "../android/java/src/org/chromium/ui/gfx/RectJniConversion.java",
       "../android/java/src/org/chromium/ui/gfx/ViewConfigurationHelper.java",
     ]
   }
@@ -1004,16 +1012,6 @@ fuzzer_test("color_analysis_fuzzer") {
   sources = [ "color_analysis_fuzzer.cc" ]
 
   deps = [ ":gfx" ]
-}
-
-fuzzer_test("color_transform_fuzzer") {
-  sources = [ "color_transform_fuzzer.cc" ]
-
-  dict = "//testing/libfuzzer/fuzzers/dicts/icc.dict"
-
-  deps = [ ":gfx" ]
-
-  libfuzzer_options = [ "max_len=4194304" ]
 }
 
 fuzzer_test("render_text_fuzzer") {

@@ -32,6 +32,7 @@
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom.h"
 #include "ash/webui/personalization_app/mojom/personalization_app_mojom_traits.h"
 #include "ash/webui/personalization_app/proto/backdrop_wallpaper.pb.h"
+#include "base/check_deref.h"
 #include "base/containers/span.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
@@ -51,7 +52,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/thumbnail_loader/thumbnail_loader.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/webui/sanitized_image_source.h"
+#include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
@@ -123,10 +124,12 @@ std::optional<GURL> GetActionUrlIfValid(const backdrop::Image& image) {
 
 PersonalizationAppWallpaperProviderImpl::
     PersonalizationAppWallpaperProviderImpl(
+        PrefService* local_state,
         content::WebUI* web_ui,
         std::unique_ptr<wallpaper_handlers::WallpaperFetcherDelegate>
             wallpaper_fetcher_delegate)
-    : web_ui_(web_ui),
+    : local_state_(CHECK_DEREF(local_state)),
+      web_ui_(web_ui),
       profile_(Profile::FromWebUI(web_ui)),
       wallpaper_fetcher_delegate_(std::move(wallpaper_fetcher_delegate)) {
   content::URLDataSource::Add(profile_,
@@ -294,7 +297,7 @@ void PersonalizationAppWallpaperProviderImpl::GetLocalImages(
     GetLocalImagesCallback callback) {
   // We do not load image from android files.
   ash::EnumerateLocalWallpaperFiles(
-      profile_,
+      local_state_.get(), profile_,
       base::BindOnce(&PersonalizationAppWallpaperProviderImpl::OnGetLocalImages,
                      backend_weak_ptr_factory_.GetWeakPtr(),
                      std::move(callback)));

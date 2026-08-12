@@ -20,12 +20,15 @@
 #include "content/common/content_navigation_policy.h"
 #include "content/common/frame.mojom.h"
 #include "content/public/browser/child_process_security_policy.h"
+#include "content/public/browser/invalidate_type.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_navigation_throttle_inserter.h"
 #include "content/public/test/test_utils.h"
 #include "content/test/navigation_simulator_impl.h"
@@ -173,7 +176,7 @@ TEST_F(NavigatorTest, SimpleRendererInitiatedSameSiteNavigation) {
   // The navigation is immediately started as there's no need to wait for
   // beforeUnload to be executed.
   EXPECT_EQ(NavigationRequest::WILL_START_REQUEST, request->state());
-  EXPECT_FALSE(request->common_params().has_user_gesture);
+  EXPECT_FALSE(request->common_params().has_possibly_filtered_user_gesture);
   EXPECT_EQ(kUrl2, request->common_params().url);
   EXPECT_FALSE(request->browser_initiated());
 
@@ -421,6 +424,11 @@ TEST_F(NavigatorTest, BeforeUnloadDenialCancelNavigation) {
   // This test assumes a beforeunload handler is present.
   main_test_rfh()->SuddenTerminationDisablerChanged(
       true, blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+  // Put a user gesture on the main frame to wait for the beforeunload event to
+  // complete.
+  main_test_rfh()->ActivateUserActivation(
+      blink::mojom::UserActivationNotificationType::kTest,
+      /*sticky_only=*/true);
 
   // Start a new navigation.
   FrameTreeNode* node = main_test_rfh()->frame_tree_node();
@@ -457,6 +465,11 @@ TEST_F(NavigatorTest, BeginNavigation) {
   // This test assumes a beforeunload handler is present on the subframe.
   subframe_rfh->SuddenTerminationDisablerChanged(
       true, blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler);
+  // Put a user gesture on the sub-frame to wait for the beforeunload event to
+  // complete.
+  subframe_rfh->ActivateUserActivation(
+      blink::mojom::UserActivationNotificationType::kTest,
+      /*sticky_only=*/true);
 
   // Start a navigation at the subframe.
   FrameTreeNode* subframe_node = subframe_rfh->frame_tree_node();
@@ -506,6 +519,12 @@ TEST_F(NavigatorTest, BeginNavigation) {
   } else {
     EXPECT_FALSE(GetSpeculativeRenderFrameHost(subframe_node));
   }
+
+  // Put a user gesture on the main frame to wait for the beforeunload event to
+  // complete.
+  main_test_rfh()->ActivateUserActivation(
+      blink::mojom::UserActivationNotificationType::kTest,
+      /*sticky_only=*/true);
 
   // Now start a navigation at the root node.
   auto navigation2 =
@@ -821,7 +840,7 @@ TEST_F(NavigatorTest, RendererUserInitiatedNavigationCancel) {
   ASSERT_TRUE(request2);
   EXPECT_EQ(kUrl2, request2->common_params().url);
   EXPECT_FALSE(request2->browser_initiated());
-  EXPECT_TRUE(request2->common_params().has_user_gesture);
+  EXPECT_TRUE(request2->common_params().has_possibly_filtered_user_gesture);
 
   // Confirm that the first loader got destroyed.
   EXPECT_FALSE(loader1);
@@ -868,7 +887,7 @@ TEST_F(NavigatorTest,
   ASSERT_TRUE(request1);
   EXPECT_EQ(kUrl1, request1->common_params().url);
   EXPECT_FALSE(request1->browser_initiated());
-  EXPECT_TRUE(request1->common_params().has_user_gesture);
+  EXPECT_TRUE(request1->common_params().has_possibly_filtered_user_gesture);
   if (expect_site_instance_change) {
     EXPECT_TRUE(GetSpeculativeRenderFrameHost(node));
   } else {
@@ -888,7 +907,7 @@ TEST_F(NavigatorTest,
   EXPECT_NE(request1, request2);
   EXPECT_EQ(kUrl2, request2->common_params().url);
   EXPECT_FALSE(request2->browser_initiated());
-  EXPECT_FALSE(request2->common_params().has_user_gesture);
+  EXPECT_FALSE(request2->common_params().has_possibly_filtered_user_gesture);
   if (expect_site_instance_change) {
     EXPECT_TRUE(GetSpeculativeRenderFrameHost(node));
   } else {
@@ -970,7 +989,7 @@ TEST_F(NavigatorTest,
   ASSERT_TRUE(request1);
   EXPECT_EQ(kUrl1, request1->common_params().url);
   EXPECT_FALSE(request1->browser_initiated());
-  EXPECT_FALSE(request1->common_params().has_user_gesture);
+  EXPECT_FALSE(request1->common_params().has_possibly_filtered_user_gesture);
   if (expect_site_instance_change) {
     EXPECT_TRUE(GetSpeculativeRenderFrameHost(node));
   } else {
@@ -990,7 +1009,7 @@ TEST_F(NavigatorTest,
   NavigationRequest* request2 = node->navigation_request();
   EXPECT_EQ(kUrl2, request2->common_params().url);
   EXPECT_FALSE(request2->browser_initiated());
-  EXPECT_FALSE(request2->common_params().has_user_gesture);
+  EXPECT_FALSE(request2->common_params().has_possibly_filtered_user_gesture);
   if (expect_site_instance_change) {
     EXPECT_TRUE(GetSpeculativeRenderFrameHost(node));
   } else {
@@ -1484,6 +1503,108 @@ TEST_F(NavigatorTest, TwoNavigationsRacingCommit) {
   // The second navigation commits.
   second_navigation->Commit();
   EXPECT_EQ(0u, contents()->GetPrimaryMainFrame()->navigation_requests_.size());
+}
+
+namespace {
+
+// Test ContentBrowserClient whose OverrideNavigationParams
+// unconditionally flips is_renderer_initiated to false.
+class ForceBrowserInitiatedContentBrowserClient
+    : public TestContentBrowserClient {
+ public:
+  void OverrideNavigationParams(
+      std::optional<GURL> /*source_process_site_url*/,
+      ui::PageTransition* transition,
+      bool* is_renderer_initiated,
+      content::Referrer* referrer,
+      std::optional<url::Origin>* initiator_origin) override {
+    *is_renderer_initiated = false;
+  }
+};
+
+// WebContentsDelegate that counts NavigationStateChanged calls whose
+// flag set includes INVALIDATE_TYPE_URL.
+class UrlInvalidationCountingDelegate : public WebContentsDelegate {
+ public:
+  void NavigationStateChanged(WebContents* /*source*/,
+                              InvalidateTypes changed_flags) override {
+    if (changed_flags & INVALIDATE_TYPE_URL) {
+      ++url_invalidation_count_;
+    }
+  }
+
+  int url_invalidation_count() const { return url_invalidation_count_; }
+  void reset_count() { url_invalidation_count_ = 0; }
+
+ private:
+  int url_invalidation_count_ = 0;
+};
+
+}  // namespace
+
+// When OverrideNavigationParams flips is_renderer_initiated to false on a
+// renderer-initiated navigation, the WebContentsDelegate should still
+// receive an INVALIDATE_TYPE_URL notification so the omnibox can refresh
+// during the pending window.
+// Regression test for crbug.com/517847434.
+TEST_F(NavigatorTest,
+       RendererInitiatedNavRewrittenAsBrowserInitiatedFiresUrlInvalidation) {
+  const GURL kStartUrl("http://www.chromium.org/");
+  const GURL kDestUrl("http://www.example.com/");
+
+  contents()->NavigateAndCommit(kStartUrl);
+
+  UrlInvalidationCountingDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  ForceBrowserInitiatedContentBrowserClient client;
+  ScopedContentBrowserClientSetting setting(&client);
+
+  auto navigation =
+      NavigationSimulator::CreateRendererInitiated(kDestUrl, main_test_rfh());
+  navigation->SetTransition(ui::PAGE_TRANSITION_LINK);
+  navigation->Start();
+
+  // Sanity check: the test client successfully flipped the bit.
+  NavigationEntry* pending = contents()->GetController().GetPendingEntry();
+  ASSERT_TRUE(pending);
+  ASSERT_FALSE(NavigationEntryImpl::FromNavigationEntry(pending)
+                   ->is_renderer_initiated());
+
+  EXPECT_GE(delegate.url_invalidation_count(), 1);
+
+  contents()->SetDelegate(nullptr);
+}
+
+// Companion to the test above for the path where OverrideNavigationParams
+// does NOT flip is_renderer_initiated, ensure we still fire the URL
+// invalidation.
+TEST_F(NavigatorTest, RendererInitiatedNavWithoutRewriteFiresUrlInvalidation) {
+  const GURL kStartUrl("http://www.chromium.org/");
+  const GURL kDestUrl("http://www.example.com/");
+
+  contents()->NavigateAndCommit(kStartUrl);
+
+  UrlInvalidationCountingDelegate delegate;
+  contents()->SetDelegate(&delegate);
+
+  // No browser-client override installed -- the default content
+  // TestContentBrowserClient::OverrideNavigationParams is a no-op, so the
+  // navigation stays renderer-initiated.
+
+  auto navigation =
+      NavigationSimulator::CreateRendererInitiated(kDestUrl, main_test_rfh());
+  navigation->SetTransition(ui::PAGE_TRANSITION_LINK);
+  navigation->Start();
+
+  NavigationEntry* pending = contents()->GetController().GetPendingEntry();
+  ASSERT_TRUE(pending);
+  ASSERT_TRUE(NavigationEntryImpl::FromNavigationEntry(pending)
+                  ->is_renderer_initiated());
+
+  EXPECT_EQ(1, delegate.url_invalidation_count());
+
+  contents()->SetDelegate(nullptr);
 }
 
 }  // namespace content

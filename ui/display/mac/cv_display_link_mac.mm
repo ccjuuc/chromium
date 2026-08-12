@@ -7,17 +7,17 @@
 #import <QuartzCore/CVDisplayLink.h>
 #include <stdint.h>
 
-#include <set>
-
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/bind_post_task.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/display/mac/screen_utils_mac.h"
 
 namespace base::apple {
@@ -48,6 +48,10 @@ struct DisplayLinkGlobals {
   // system callback.
   // https://crbug.com/1427235#c2
   base::Lock lock;
+
+  // Indicate whether the display creation has been logged within the
+  // 'Viz.ExternalBeginFrameSourceMac.DisplayLink.Create2 histogram.
+  absl::flat_hash_set<CGDirectDisplayID> recorded_displays;
 
   static DisplayLinkGlobals& Get() {
     static base::NoDestructor<DisplayLinkGlobals> instance;
@@ -86,6 +90,7 @@ bool ComputeVSyncParameters(const CVTimeStamp& cv_time,
 
 }  // namespace
 
+// static
 // Called by the system on the CVDisplayLink thread, and posts a call to the
 // thread indicated in CVDisplayLinkMac::RegisterCallback().
 CVReturn CVDisplayLinkMac::CVDisplayLinkCallback(CVDisplayLinkRef display_link,
@@ -95,7 +100,7 @@ CVReturn CVDisplayLinkMac::CVDisplayLinkCallback(CVDisplayLinkRef display_link,
                                                  CVOptionFlags* flags_out,
                                                  void* context) {
   // This function is called on the system display link thread.
-  TRACE_EVENT0("ui", "DisplayLinkCallback");
+  TRACE_EVENT0("gpu", "CVDisplayLinkCallback");
 
   // Convert the time parameters to our VSync parameters.
   VSyncParamsMac params;
@@ -142,8 +147,30 @@ void CVDisplayLinkMac::CVDisplayLinkCallbackOnCallbackThread(
 }
 
 // static
+void CVDisplayLinkMac::TryRecordDisplayLinkCreation(
+    CGDirectDisplayID display_id,
+    bool success) {
+  auto& globals = DisplayLinkGlobals::Get();
+  base::AutoLock lock(globals.lock);
+
+  auto [it, inserted] = globals.recorded_displays.insert(display_id);
+  if (inserted) {
+    UMA_HISTOGRAM_BOOLEAN("Viz.DisplayLink.Create.GPU.CVDisplayLink", success);
+
+    if (!SupportsDisplayLinkMacInBrowser()) {
+      // Avoid duplicate recording in
+      // 'Viz.ExternalBeginFrameSourceMac.DisplayLink.Create2' when
+      // CADisplayLink in the Browser process is supported and recorded there
+      // instead. This is the fallback path for DisplayLinkMacInBrowser.
+      RecordDisplayLinkCreation(success);
+    }
+  }
+}
+
+// static
 scoped_refptr<CVDisplayLinkMac> CVDisplayLinkMac::GetForDisplay(
     CGDirectDisplayID display_id) {
+  TRACE_EVENT("gpu", "CVDisplayLinkMac::GetForDisplay");
   const auto thread_id = base::PlatformThread::CurrentId();
 
   // If there already exists an object for this display on this thread, return
@@ -163,8 +190,8 @@ scoped_refptr<CVDisplayLinkMac> CVDisplayLinkMac::GetForDisplay(
   ret = CVDisplayLinkCreateWithCGDisplay(display_id,
                                          display_link.InitializeInto());
 
-  RecordDisplayLinkCreation(ret == kCVReturnSuccess);
   if (ret != kCVReturnSuccess) {
+    TryRecordDisplayLinkCreation(display_id, false);
     LOG(ERROR) << "CVDisplayLinkCreateWithCGDisplay failed. CVReturn: " << ret;
     return nullptr;
   }
@@ -182,6 +209,7 @@ scoped_refptr<CVDisplayLinkMac> CVDisplayLinkMac::GetForDisplay(
   // normal conditions the current display is never zero.
   if ((ret == kCVReturnSuccess) &&
       (CVDisplayLinkGetCurrentCGDisplay(display_link.get()) == 0)) {
+    TryRecordDisplayLinkCreation(display_id, false);
     LOG(ERROR)
         << "CVDisplayLinkCreateWithCGDisplay failed (no current display)";
     return nullptr;
@@ -194,10 +222,12 @@ scoped_refptr<CVDisplayLinkMac> CVDisplayLinkMac::GetForDisplay(
                                        &CVDisplayLinkMac::CVDisplayLinkCallback,
                                        result.get());
   if (ret != kCVReturnSuccess) {
+    TryRecordDisplayLinkCreation(display_id, false);
     LOG(ERROR) << "CVDisplayLinkSetOutputCallback failed. CVReturn: " << ret;
     return nullptr;
   }
 
+  TryRecordDisplayLinkCreation(display_id, true);
   return result;
 }
 
@@ -209,7 +239,11 @@ bool CVDisplayLinkMac::EnsureDisplayLinkRunning() {
   if (!display_link_is_running_) {
     DCHECK(!CVDisplayLinkIsRunning(display_link_.get()));
     CVReturn ret = CVDisplayLinkStart(display_link_.get());
-    if (ret != kCVReturnSuccess) {
+    // https://developer.apple.com/documentation/corevideo/cvdisplaylinkstart(_:)
+    // If the specified display link is already running, CVDisplayLinkStart
+    // returns an error.
+    if (ret != kCVReturnSuccess &&
+        !CVDisplayLinkIsRunning(display_link_.get())) {
       LOG(ERROR) << "CVDisplayLinkStart failed. CVReturn: " << ret;
       return false;
     }
@@ -223,29 +257,29 @@ bool CVDisplayLinkMac::EnsureDisplayLinkRunning() {
 // Called on the system CVDisplayLink thread.
 void CVDisplayLinkMac::StopDisplayLinkIfNeeded() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
+  // Active VSync callbacks are still registered; keep the display link running.
   if (!callbacks_.empty()) {
-    consecutive_vsyncs_with_no_callbacks_ = 0;
-    return;
-  }
-  consecutive_vsyncs_with_no_callbacks_ += 1;
-  if (consecutive_vsyncs_with_no_callbacks_ <
-      VSyncCallbackMac::kMaxExtraVSyncs) {
     return;
   }
 
+  // Stop has already been requested; nothing to do.
   if (!display_link_is_running_) {
     DCHECK(!CVDisplayLinkIsRunning(display_link_.get()));
     return;
   }
 
   CVReturn ret = CVDisplayLinkStop(display_link_.get());
-  if (ret != kCVReturnSuccess) {
+  // https://developer.apple.com/documentation/corevideo/cvdisplaylinkstop(_:)
+  // If the specified display link is already stopped, CVDisplayLinkStop returns
+  // an error.
+  // If `CVDisplayLinkStop` fails and callbacks are still fired,
+  // `RunCallbacks()` will safely do nothing because `callbacks_` is now empty.
+  // `CVDisplayLinkStop` will be attempted again in `~CVDisplayLinkMac()`
+  if (ret != kCVReturnSuccess && CVDisplayLinkIsRunning(display_link_.get())) {
     LOG(ERROR) << "CVDisplayLinkStop failed. CVReturn: " << ret;
   }
 
   display_link_is_running_ = false;
-  consecutive_vsyncs_with_no_callbacks_ = 0;
 }
 
 base::TimeDelta CVDisplayLinkMac::GetRefreshInterval() const {
@@ -256,10 +290,15 @@ base::TimeDelta CVDisplayLinkMac::GetRefreshInterval() const {
   if (!(cv_time.flags & kCVTimeIsIndefinite)) {
     double refresh_interval = (static_cast<double>(cv_time.timeValue) /
                                static_cast<double>(cv_time.timeScale));
-    return (base::Seconds(1) * refresh_interval);
-  } else {
-    return display::GetNSScreenRefreshInterval(display_id_);
+    base::TimeDelta interval = base::Seconds(1) * refresh_interval;
+
+    // A non-zero safeguard for the refresh interval.
+    if (interval.is_positive()) {
+      return interval;
+    }
   }
+
+  return base::Hertz(60);
 }
 
 void CVDisplayLinkMac::GetRefreshIntervalRange(
@@ -288,11 +327,12 @@ base::TimeTicks CVDisplayLinkMac::GetCurrentTime() const {
 void CVDisplayLinkMac::RunCallbacks(const VSyncParamsMac& params) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  for (auto* callback : callbacks_) {
+  // Make a local copy first because DisplayLink can be destroyed during the
+  // callback.
+  auto local_callbacks = callbacks_;
+  for (auto* callback : local_callbacks) {
     callback->callback_for_displaylink_thread_.Run(params);
   }
-
-  StopDisplayLinkIfNeeded();
 }
 
 CVDisplayLinkMac::CVDisplayLinkMac(
@@ -324,9 +364,10 @@ CVDisplayLinkMac::~CVDisplayLinkMac() {
   // Stop the display link (if needed). After this call, it is safe to assume
   // that CVDisplayLinkMac::CVDisplayLinkCallback will not be called with
   // `this`.
-  if (display_link_is_running_) {
+  if (display_link_is_running_ || CVDisplayLinkIsRunning(display_link_.get())) {
     CVReturn ret = CVDisplayLinkStop(display_link_.get());
-    if (ret != kCVReturnSuccess) {
+    if (ret != kCVReturnSuccess &&
+        CVDisplayLinkIsRunning(display_link_.get())) {
       LOG(ERROR) << "CVDisplayLinkStop failed. CVReturn: " << ret;
     }
   }
@@ -346,14 +387,17 @@ CVDisplayLinkMac::~CVDisplayLinkMac() {
 std::unique_ptr<VSyncCallbackMac> CVDisplayLinkMac::RegisterCallback(
     VSyncCallbackMac::Callback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  TRACE_EVENT("gpu", "CVDisplayLinkMac::RegisterCallback");
+
+  // Check if this is in the fallback path for CADisplayLink
+  bool post_callback_to_ctor_thread = !SkipPostTaskForCallbacks();
 
   // Make add the new callback. Register first before calling
   // EnsureDisplayLinkRunning() to ensure the callback function is available.
-
   std::unique_ptr<VSyncCallbackMac> new_callback =
       base::WrapUnique(new VSyncCallbackMac(
           base::BindOnce(&CVDisplayLinkMac::UnregisterCallback, this),
-          std::move(callback), /*post_callback_to_ctor_thread=*/true));
+          std::move(callback), post_callback_to_ctor_thread));
 
   // Ensure that the DisplayLink is running. If something goes wrong, return
   // nullptr.
@@ -368,7 +412,11 @@ std::unique_ptr<VSyncCallbackMac> CVDisplayLinkMac::RegisterCallback(
 
 void CVDisplayLinkMac::UnregisterCallback(VSyncCallbackMac* callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  TRACE_EVENT("gpu", "CVDisplayLinkMac::UnregisterCallback");
   callbacks_.erase(callback);
+
+  // Stop the display link if there are no more registered callbacks.
+  StopDisplayLinkIfNeeded();
 }
 
 }  // namespace ui

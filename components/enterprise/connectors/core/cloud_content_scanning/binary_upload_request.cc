@@ -12,6 +12,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "components/enterprise/common/strings.h"
 #include "components/enterprise/connectors/core/analysis_settings.h"
+#include "components/enterprise/connectors/core/features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "net/base/url_util.h"
@@ -195,10 +196,8 @@ void BinaryUploadRequest::set_reason(
   content_analysis_request_.set_reason(reason);
 }
 
-void BinaryUploadRequest::set_require_metadata_verdict(
-    bool require_metadata_verdict) {
-  content_analysis_request_.set_require_metadata_verdict(
-      require_metadata_verdict);
+void BinaryUploadRequest::set_is_mobile(bool is_mobile) {
+  content_analysis_request_.set_is_mobile(is_mobile);
 }
 
 void BinaryUploadRequest::set_is_content_encrypted(bool is_content_encrypted) {
@@ -207,6 +206,10 @@ void BinaryUploadRequest::set_is_content_encrypted(bool is_content_encrypted) {
 
 void BinaryUploadRequest::set_is_content_too_large(bool is_content_too_large) {
   is_content_too_large_ = is_content_too_large;
+}
+
+void BinaryUploadRequest::set_should_skip_malware_scan(bool should_skip) {
+  should_skip_malware_scan_ = should_skip;
 }
 
 void BinaryUploadRequest::set_blocking(bool blocking) {
@@ -248,6 +251,10 @@ void BinaryUploadRequest::set_content_hash_in_final_call(
       content_hash_in_final_call);
 }
 
+void BinaryUploadRequest::set_file_size(uint64_t file_size) {
+  content_analysis_request_.mutable_request_data()->set_file_size(file_size);
+}
+
 std::string BinaryUploadRequest::SetRandomRequestToken() {
   DCHECK(request_token().empty());
   content_analysis_request_.set_request_token(
@@ -256,7 +263,7 @@ std::string BinaryUploadRequest::SetRandomRequestToken() {
 }
 
 enterprise_connectors::AnalysisConnector
-BinaryUploadRequest::analysis_connector() {
+BinaryUploadRequest::analysis_connector() const {
   return content_analysis_request_.analysis_connector();
 }
 
@@ -333,12 +340,20 @@ bool BinaryUploadRequest::is_content_too_large() const {
   return is_content_too_large_;
 }
 
+bool BinaryUploadRequest::should_skip_malware_scan() const {
+  return should_skip_malware_scan_;
+}
+
 bool BinaryUploadRequest::is_content_encrypted() const {
   return content_analysis_request_.is_content_encrypted();
 }
 
 bool BinaryUploadRequest::content_hash_in_final_call() const {
   return content_analysis_request_.content_hash_in_final_call();
+}
+
+uint64_t BinaryUploadRequest::file_size() const {
+  return content_analysis_request_.request_data().file_size();
 }
 
 void BinaryUploadRequest::StartRequest() {
@@ -383,6 +398,12 @@ GURL BinaryUploadRequest::GetUrlWithParams() const {
       break;
     case enterprise_connectors::FILE_TRANSFER:
       connector = "OnFileTransfer";
+      break;
+    case enterprise_connectors::DATA_COPIED:
+      connector = "OnDataCopied";
+      break;
+    case enterprise_connectors::NETWORK_REQUEST:
+      connector = "OnNetworkRequest";
       break;
     case enterprise_connectors::ANALYSIS_CONNECTOR_UNSPECIFIED:
       break;

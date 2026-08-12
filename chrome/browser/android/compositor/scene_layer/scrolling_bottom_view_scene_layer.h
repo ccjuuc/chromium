@@ -34,12 +34,13 @@ class ScrollingBottomViewSceneLayer : public SceneLayer {
   void UpdateScrollingBottomViewLayer(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& jresource_manager,
-      jint view_resource_id,
-      jint shadow_height,
-      jfloat x_offset,
-      jfloat y_offset,
+      int32_t view_resource_id,
+      int32_t shadow_height,
+      float x_offset,
+      float y_offset,
       bool show_shadow,
-      const base::android::JavaRef<jobject>& joffset_tag);
+      const base::android::JavaRef<jobject>& joffset_tag,
+      int32_t bottom_padding);
 
   void SetContentTree(JNIEnv* env,
                       const base::android::JavaRef<jobject>& jcontent_tree);

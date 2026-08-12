@@ -13,9 +13,11 @@
 namespace gpu {
 
 VulkanImplementation::VulkanImplementation(bool use_swiftshader,
-                                           bool allow_protected_memory)
+                                           bool allow_protected_memory,
+                                           bool force_native)
     : use_swiftshader_(use_swiftshader),
-      allow_protected_memory_(allow_protected_memory) {}
+      allow_protected_memory_(allow_protected_memory),
+      force_native_(force_native) {}
 
 VulkanImplementation::~VulkanImplementation() {}
 
@@ -36,7 +38,7 @@ std::unique_ptr<VulkanDeviceQueue> CreateVulkanDeviceQueue(
       vulkan_implementation->GetOptionalDeviceExtensions();
 
   if (instance->is_from_angle()) {
-    if (!device_queue->InitializeFromANGLE()) {
+    if (!device_queue->InitializeFromANGLE(is_thread_safe)) {
       device_queue->Destroy();
       return nullptr;
     }

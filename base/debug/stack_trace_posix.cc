@@ -31,6 +31,7 @@
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/containers/span_writer.h"
+#include "base/debug/debugging_buildflags.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/cstring_view.h"
 #include "build/build_config.h"
@@ -699,7 +700,7 @@ class SandboxSymbolizeHelper {
   int GetFileDescriptor(const char* file_path) {
     int fd = -1;
 
-#if !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#if !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
     if (file_path) {
       // The assumption here is that iterating over std::map<std::string,
       // base::ScopedFD> does not allocate dynamic memory, hence it is
@@ -719,22 +720,23 @@ class SandboxSymbolizeHelper {
         fd = -1;
       }
     }
-#endif  // !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#endif  // !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
 
     return fd;
   }
 
-  // Searches for the object file (from /proc/self/maps) that contains
-  // the specified pc.  If found, sets |start_address| to the start address
-  // of where this object file is mapped in memory, sets the module base
-  // address into |base_address|, copies the object file name into
-  // |out_file_name|, and attempts to open the object file.  If the object
+  // Searches for the object file (from /proc/self/maps) that contains the
+  // specified pc.  If found, sets `start_address` and `end_address` to the
+  // start and end address of where this object file is mapped in memory, sets
+  // the module base address into `base_address`, copies the object file name
+  // into `out_file_name`, and attempts to open the object file.  If the object
   // file is opened successfully, returns the file descriptor.  Otherwise,
   // returns -1.
   // IMPORTANT: This function must be async-signal-safe because it can be
   // called from a signal handler (symbolizing stack frames for a crash).
   static int OpenObjectFileContainingPc(uint64_t pc,
                                         uint64_t& start_address,
+                                        uint64_t& end_address,
                                         uint64_t& base_address,
                                         char* file_path_ptr,
                                         size_t file_path_size) {
@@ -766,6 +768,7 @@ class SandboxSymbolizeHelper {
       if (region.start <= pc && pc < region.end) {
         start_address = region.start;
         base_address = region.base;
+        end_address = region.end;
         if (!file_path.empty()) {
           strlcpy(file_path, region.path);
         }
@@ -896,7 +899,7 @@ class SandboxSymbolizeHelper {
     // Pre-opening and caching the file descriptors of all loaded modules is
     // not safe for production builds.  Hence it is only done in non-official
     // builds.  For more details, take a look at: http://crbug.com/341966.
-#if !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#if !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
     // Open the object files for all read-only executable regions and cache
     // their file descriptors.
     std::vector<MappedMemoryRegion>::const_iterator it;
@@ -932,7 +935,7 @@ class SandboxSymbolizeHelper {
         }
       }
     }
-#endif  // !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#endif  // !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
   }
 
   // Initializes and installs the symbolization callback.
@@ -954,20 +957,20 @@ class SandboxSymbolizeHelper {
 
   // Closes all file descriptors owned by this instance.
   void CloseObjectFiles() {
-#if !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#if !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
     modules_.clear();
-#endif  // !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#endif  // !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
   }
 
   // Set to true upon successful initialization.
   bool is_initialized_ = false;
 
-#if !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#if !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
   // Mapping from file name to file descriptor.  Includes file descriptors
   // for all successfully opened object files and the file descriptor for
   // /proc/self/maps.  This code is not safe for production builds.
   std::map<std::string, base::ScopedFD> modules_;
-#endif  // !defined(OFFICIAL_BUILD) || !defined(NO_UNWIND_TABLES)
+#endif  // !defined(OFFICIAL_BUILD) || !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
 
   // Cache for the process memory regions.  Produced by parsing the contents
   // of /proc/self/maps cache.
@@ -1038,7 +1041,8 @@ size_t CollectStackTrace(span<const void*> trace) {
   // NOTE: This code MUST be async-signal safe (it's used by in-process
   // stack dumping signal handler). NO malloc or stdio is allowed here.
 
-#if defined(NO_UNWIND_TABLES) && BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
+#if BUILDFLAG(EXCLUDE_UNWIND_TABLES) && \
+    BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
   // If we do not have unwind tables, then try tracing using frame pointers.
   return base::debug::TraceStackFramePointers(trace, 0);
 #elif defined(HAVE_BACKTRACE)

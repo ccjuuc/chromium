@@ -19,7 +19,6 @@
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_prefs.h"
 #include "chrome/browser/nearby_sharing/nearby_sharing_service_factory.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
 #include "chromeos/ash/components/phonehub/fake_browser_tabs_model_provider.h"
@@ -153,7 +152,7 @@ void VerifyPageContentDict(
     bool expected_is_camera_roll_access_status_granted_,
     bool expected_is_feature_setup_request_supported_) {
   ASSERT_TRUE(value->is_dict());
-  const base::Value::Dict& page_content_dict = value->GetDict();
+  const base::DictValue& page_content_dict = value->GetDict();
 
   std::optional<int> mode = page_content_dict.FindInt("mode");
   ASSERT_TRUE(mode);
@@ -195,16 +194,10 @@ void VerifyPageContentDict(
   std::optional<int> phone_hub_camera_roll_state =
       page_content_dict.FindInt("phoneHubCameraRollState");
   ASSERT_TRUE(phone_hub_camera_roll_state);
-  if (base::FeatureList::IsEnabled(ash::features::kPhoneHubCameraRoll)) {
-    it = feature_states_map.find(
-        multidevice_setup::mojom::Feature::kPhoneHubCameraRoll);
-    EXPECT_EQ(static_cast<int>(it->second), *phone_hub_camera_roll_state);
-  } else {
-    EXPECT_EQ(
-        static_cast<int>(
-            multidevice_setup::mojom::FeatureState::kNotSupportedByChromebook),
-        *phone_hub_camera_roll_state);
-  }
+
+  it = feature_states_map.find(
+      multidevice_setup::mojom::Feature::kPhoneHubCameraRoll);
+  EXPECT_EQ(static_cast<int>(it->second), *phone_hub_camera_roll_state);
 
   std::optional<int> phone_hub_task_continuation_state =
       page_content_dict.FindInt("phoneHubTaskContinuationState");
@@ -252,8 +245,7 @@ void VerifyPageContentDict(
 
   EXPECT_THAT(
       page_content_dict.FindBool("isPhoneHubPermissionsDialogSupported"),
-      Optional(features::IsEcheSWAEnabled() ||
-               features::IsPhoneHubCameraRollEnabled()));
+      Optional(true));
 
   EXPECT_THAT(page_content_dict.FindInt("cameraRollAccessStatus"),
               Optional(expected_is_camera_roll_access_status_granted_ ? 2 : 1));
@@ -349,7 +341,7 @@ class MultideviceHandlerTest : public testing::Test {
   void CallGetPageContentData() {
     size_t call_data_count_before_call = test_web_ui()->call_data().size();
 
-    base::Value::List args;
+    base::ListValue args;
     args.Append("handlerFunctionName");
     test_web_ui()->HandleReceivedMessage("getPageContentData", args);
 
@@ -367,7 +359,7 @@ class MultideviceHandlerTest : public testing::Test {
   void CallRemoveHostDevice() {
     size_t num_remote_host_device_calls_before_call =
         fake_multidevice_setup_client()->num_remove_host_device_called();
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("removeHostDevice", empty_args);
     EXPECT_EQ(num_remote_host_device_calls_before_call + 1u,
               fake_multidevice_setup_client()->num_remove_host_device_called());
@@ -383,13 +375,13 @@ class MultideviceHandlerTest : public testing::Test {
                       kAvailableButNotGranted,
             phonehub::MultideviceFeatureAccessManager::AccessProhibitedReason::
                 kUnknown);
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("attemptNotificationSetup",
                                          empty_args);
   }
 
   void CallCancelNotificationSetup() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("cancelNotificationSetup", empty_args);
   }
 
@@ -399,12 +391,12 @@ class MultideviceHandlerTest : public testing::Test {
                                       AccessStatus::kAccessGranted
                                 : phonehub::MultideviceFeatureAccessManager::
                                       AccessStatus::kAvailableButNotGranted);
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("attemptAppsSetup", empty_args);
   }
 
   void CallCancelAppsSetup() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("cancelAppsSetup", empty_args);
   }
 
@@ -416,32 +408,32 @@ class MultideviceHandlerTest : public testing::Test {
                       kAccessGranted
                 : phonehub::MultideviceFeatureAccessManager::AccessStatus::
                       kAvailableButNotGranted);
-    base::Value::List args;
+    base::ListValue args;
     args.Append(/*camera_roll=*/true);
     args.Append(/*notifications=*/false);
     test_web_ui()->HandleReceivedMessage("attemptCombinedFeatureSetup", args);
   }
 
   void CallCancelCameraRollSetup() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("cancelCombinedFeatureSetup",
                                          empty_args);
   }
 
   void CalAttempFeatureSetupConnection() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("attemptFeatureSetupConnection",
                                          empty_args);
   }
 
   void CallCancelFeatureSetupConnection() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("cancelFeatureSetupConnection",
                                          empty_args);
   }
 
   void CallHandleShowBrowserSyncSettings() {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("showBrowserSyncSettings", empty_args);
   }
 
@@ -595,7 +587,7 @@ class MultideviceHandlerTest : public testing::Test {
   }
 
   void CallRetryPendingHostSetup(bool success) {
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("retryPendingHostSetup", empty_args);
     fake_multidevice_setup_client()->InvokePendingRetrySetHostNowCallback(
         success);
@@ -607,7 +599,7 @@ class MultideviceHandlerTest : public testing::Test {
                                   bool success) {
     size_t call_data_count_before_call = test_web_ui()->call_data().size();
 
-    base::Value::List args;
+    base::ListValue args;
     args.Append("handlerFunctionName");
     args.Append(static_cast<int>(feature));
     args.Append(enabled);
@@ -615,7 +607,7 @@ class MultideviceHandlerTest : public testing::Test {
       args.Append(*auth_token);
     }
 
-    base::Value::List empty_args;
+    base::ListValue empty_args;
     test_web_ui()->HandleReceivedMessage("setFeatureEnabledState", args);
     fake_multidevice_setup_client()
         ->InvokePendingSetFeatureEnabledStateCallback(
@@ -840,7 +832,7 @@ class MultideviceHandlerTest : public testing::Test {
 TEST_F(MultideviceHandlerTest, PageContentDataRequestedWithNullManagers) {
   SetUpHandlerWithEmptyManagers();
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("handlerFunctionName");
   test_web_ui()->HandleReceivedMessage("getPageContentData", args);
 }
@@ -1046,7 +1038,7 @@ TEST_F(MultideviceHandlerTest, LogUmaMetricsForSetupFlow) {
   base::HistogramTester histogram_tester;
   histogram_tester.ExpectTotalCount(kDialogIntroActionHistogram, 0);
 
-  base::Value::List set_up_screen_args;
+  base::ListValue set_up_screen_args;
   set_up_screen_args.Append(/*irrelivant_set_up_dialog=*/0);
   set_up_screen_args.Append(/*action_cancel=*/3);
   test_web_ui()->HandleReceivedMessage("logPhoneHubPermissionSetUpScreenAction",
@@ -1161,7 +1153,7 @@ TEST_F(MultideviceHandlerTest, LogUmaMetricsForIntroScreenSetupMode) {
   base::HistogramTester histogram_tester;
   histogram_tester.ExpectTotalCount(kDialogIntroScreenSetupModeHistogram, 0);
 
-  base::Value::List set_up_mode_args;
+  base::ListValue set_up_mode_args;
   set_up_mode_args.Append(/*all_permissions=*/7);
   test_web_ui()->HandleReceivedMessage(
       "logPhoneHubPermissionOnboardingSetupMode", set_up_mode_args);
@@ -1174,7 +1166,7 @@ TEST_F(MultideviceHandlerTest, LogUmaMetricsForSetUpFinishedScreenSetupMode) {
   histogram_tester.ExpectTotalCount(
       kDialogSetUpFinishedScreenSetupModeHistogram, 0);
 
-  base::Value::List set_up_mode_args;
+  base::ListValue set_up_mode_args;
   set_up_mode_args.Append(/*notification_and_camera_roll=*/5);
   test_web_ui()->HandleReceivedMessage(
       "logPhoneHubPermissionOnboardingSetupResult", set_up_mode_args);
@@ -1263,19 +1255,6 @@ TEST_F(MultideviceHandlerTest, PageContentDataWhenEcheSWADisabled) {
       feature_states_map = GenerateDefaultFeatureStatesMap();
 
   feature_states_map[multidevice_setup::mojom::Feature::kEche] =
-      multidevice_setup::mojom::FeatureState::kProhibitedByPolicy;
-  SimulateFeatureStatesUpdate(feature_states_map);
-}
-
-TEST_F(MultideviceHandlerTest, PageContentDataWhenPhoneHubCameraRollDisabled) {
-  InitWithFeatures(
-      /* enabled_features */ {ash::features::kPhoneHub},
-      /* disabled_features */ {ash::features::kPhoneHubCameraRoll});
-
-  multidevice_setup::MultiDeviceSetupClient::FeatureStatesMap
-      feature_states_map = GenerateDefaultFeatureStatesMap();
-
-  feature_states_map[multidevice_setup::mojom::Feature::kPhoneHubCameraRoll] =
       multidevice_setup::mojom::FeatureState::kProhibitedByPolicy;
   SimulateFeatureStatesUpdate(feature_states_map);
 }

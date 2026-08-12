@@ -8,6 +8,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
+import static org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorUtils.INVALID_ID;
+
 import android.content.Context;
 import android.graphics.drawable.LayerDrawable;
 
@@ -28,7 +30,13 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataCustomizedColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.util.ColorUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -147,6 +155,18 @@ public class NtpThemeColorUtilsUnitTest {
     }
 
     @Test
+    public void testCreateColoredCircle_default() {
+        LayerDrawable drawable =
+                NtpThemeColorUtils.createColoredCircle(
+                        mContext,
+                        /* topColor= */ null,
+                        /* bottomLeftColor= */ null,
+                        /* bottomRightColor= */ null);
+        assertNotNull(drawable);
+        assertEquals(3, drawable.getNumberOfLayers());
+    }
+
+    @Test
     public void testGetNtpThemePrimaryColorFromPreBuiltColors() {
         @ColorRes
         int aquaPrimaryColorResId =
@@ -239,29 +259,77 @@ public class NtpThemeColorUtilsUnitTest {
     public void testGetBackgroundColorFromColorInfo() {
         assertEquals(
                 NtpThemeColorUtils.getDefaultBackgroundColor(mContext),
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, null));
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, null));
 
         NtpThemeColorInfo blueInfo =
                 NtpThemeColorUtils.createNtpThemeColorInfo(
                         mContext, NtpThemeColorId.NTP_COLORS_BLUE);
+        NtpBackgroundDataColor dataColor =
+                new NtpBackgroundDataColor(
+                        PlatformType.ANDROID,
+                        /* isChromeColorDailyRefreshEnabled= */ false,
+                        blueInfo);
+        int expectedColor =
+                BottomBarConfigUtils.isBottomBarEnabled(mContext)
+                        ? (ColorUtils.inNightMode(mContext)
+                                ? SemanticColorUtils.getColorSurface(mContext)
+                                : SemanticColorUtils.getColorSurfaceContainer(mContext))
+                        : SemanticColorUtils.getColorSurfaceContainerHigh(mContext);
+
         assertEquals(
-                SemanticColorUtils.getColorSurfaceContainerHigh(mContext),
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, blueInfo));
+                expectedColor,
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, dataColor));
 
         @ColorInt int backgroundColor = ContextCompat.getColor(mContext, R.color.green_50);
         NtpThemeColorFromHexInfo customInfo =
                 new NtpThemeColorFromHexInfo(
                         mContext, backgroundColor, NtpThemeColorInfo.COLOR_NOT_SET);
+        NtpBackgroundDataCustomizedColor dataCustomizedColor =
+                new NtpBackgroundDataCustomizedColor(PlatformType.ANDROID, customInfo);
         assertEquals(
                 backgroundColor,
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, customInfo));
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(
+                        mContext, dataCustomizedColor));
     }
 
     @Test
     public void testGetDefaultBackgroundColor() {
         assertEquals(
-                ContextCompat.getColor(mContext, R.color.home_surface_background_color),
+                ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(mContext),
                 NtpThemeColorUtils.getDefaultBackgroundColor(mContext));
+    }
+
+    @Test
+    public void testGetNtpColorThemeStringResId() {
+        assertEquals(
+                R.string.accessibility_ntp_blue_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_BLUE));
+        assertEquals(
+                R.string.accessibility_ntp_aqua_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_AQUA));
+        assertEquals(
+                R.string.accessibility_ntp_green_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_GREEN));
+        assertEquals(
+                R.string.accessibility_ntp_viridian_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(
+                        NtpThemeColorId.NTP_COLORS_VIRIDIAN));
+        assertEquals(
+                R.string.accessibility_ntp_citron_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_CITRON));
+        assertEquals(
+                R.string.accessibility_ntp_orange_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_ORANGE));
+        assertEquals(
+                R.string.accessibility_ntp_rose_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_ROSE));
+        assertEquals(
+                R.string.accessibility_ntp_fuchsia_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_FUCHSIA));
+        assertEquals(
+                R.string.accessibility_ntp_violet_color_theme,
+                NtpThemeColorUtils.getNtpColorThemeStringResId(NtpThemeColorId.NTP_COLORS_VIOLET));
+        assertEquals(INVALID_ID, NtpThemeColorUtils.getNtpColorThemeStringResId(-1));
     }
 
     private void verifyInitColorsListAndFindPrimaryColorIndexReturnCorrectIndex(

@@ -4,8 +4,7 @@
 
 import type {DisableModuleEvent, DismissModuleInstanceEvent, MicrosoftAuthModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {microsoftAuthModuleDescriptor, MicrosoftAuthProxyImpl, ParentTrustedDocumentProxy} from 'chrome://new-tab-page/lazy_load.js';
-import {MicrosoftAuthPageHandlerRemote} from 'chrome://new-tab-page/microsoft_auth.mojom-webui.js';
-import {AuthType, MicrosoftAuthUntrustedDocumentRemote} from 'chrome://new-tab-page/ntp_microsoft_auth_shared_ui.mojom-webui.js';
+import {AuthType, MicrosoftAuthPageHandlerRemote, MicrosoftAuthUntrustedDocumentRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
@@ -42,7 +41,7 @@ suite('MicrosoftAuthModule', () => {
   });
 
   async function createMicrosoftAuthElement() {
-    handler.setResultFor('shouldShowModule', Promise.resolve({show: true}));
+    handler.setPromiseResolveFor('shouldShowModule', {show: true});
     microsoftAuthModule = await microsoftAuthModuleDescriptor.initialize(0) as
         MicrosoftAuthModuleElement;
     assertTrue(!!microsoftAuthModule);
@@ -56,7 +55,7 @@ suite('MicrosoftAuthModule', () => {
 
     // Act.
     const whenFired = eventToPromise('disable-module', microsoftAuthModule);
-    const disableButton = microsoftAuthModule.$.moduleHeaderElementV2.shadowRoot
+    const disableButton = microsoftAuthModule.$.moduleHeader.shadowRoot
                               .querySelector<HTMLElement>('#disable');
     assertTrue(!!disableButton);
     disableButton.click();
@@ -75,7 +74,7 @@ suite('MicrosoftAuthModule', () => {
     // Act.
     const whenFired =
         eventToPromise('dismiss-module-instance', microsoftAuthModule);
-    microsoftAuthModule.$.moduleHeaderElementV2.dispatchEvent(
+    microsoftAuthModule.$.moduleHeader.dispatchEvent(
         new Event('dismiss-button-click'));
 
     // Assert.
@@ -107,7 +106,7 @@ suite('MicrosoftAuthModule', () => {
 
   test('does not populate module if handler says not to', async () => {
     // Arrange/Act.
-    handler.setResultFor('shouldShowModule', Promise.resolve({show: false}));
+    handler.setPromiseResolveFor('shouldShowModule', {show: false});
     microsoftAuthModule = await microsoftAuthModuleDescriptor.initialize(0) as
         MicrosoftAuthModuleElement;
 

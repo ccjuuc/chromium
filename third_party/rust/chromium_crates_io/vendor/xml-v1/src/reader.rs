@@ -9,9 +9,9 @@ use std::result;
 
 use crate::common::{Position, TextPosition};
 
-pub use self::config::ParserConfig;
-pub use self::error::{Error, ErrorKind};
-pub use events::{XmlEvent, DoctypeRef};
+pub use config::ParserConfig;
+pub use error::{Error, ErrorKind, ImmutableEntitiesError};
+pub use events::{DoctypeRef, XmlEvent};
 
 // back compat
 #[doc(hidden)]
@@ -23,7 +23,6 @@ use self::parser::PullParser;
 mod config;
 mod error;
 mod events;
-mod indexset;
 mod lexer;
 mod parser;
 
@@ -133,7 +132,7 @@ impl<R: Read> EventReader<R> {
     ///
     /// It will fail if the document is declared as _standalone_.
     #[inline]
-    pub fn add_entities<S: Into<String>, T: Into<String>>(&mut self, entities: impl IntoIterator<Item=(S, T)>) -> std::result::Result<(), crate::reader::error::ImmutableEntitiesError> {
+    pub fn add_entities<S: Into<String>, T: Into<String>>(&mut self, entities: impl IntoIterator<Item=(S, T)>) -> result::Result<(), ImmutableEntitiesError> {
         self.parser.add_entities(entities)
     }
 }
@@ -152,6 +151,15 @@ impl<R: Read> IntoIterator for EventReader<R> {
 
     fn into_iter(self) -> Events<R> {
         Events { reader: self, finished: false }
+    }
+}
+
+impl<R: Read + Clone> Clone for EventReader<R> {
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            parser: self.parser.clone()
+        }
     }
 }
 

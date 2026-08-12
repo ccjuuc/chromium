@@ -45,7 +45,7 @@ static std::string AllTargetsString(
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);
@@ -66,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
                AllTargetsString(provider).c_str());
 
   int invocations = called;
-  base::Value::List list;
+  base::ListValue list;
   list.Append("somehost:2000");
 
   service->SetList(prefs::kDevToolsTCPDiscoveryConfig, list.Clone());
@@ -96,14 +96,14 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DiscoveryListChanges) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   DevToolsAndroidBridge::Factory::GetForProfile(profile);
   service->ClearPref(prefs::kDevToolsDiscoverTCPTargetsEnabled);
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);
 
-  const base::Value::List& targets =
+  const base::ListValue& targets =
       service->GetList(prefs::kDevToolsTCPDiscoveryConfig);
   EXPECT_EQ(2ul, targets.size());
 
@@ -119,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, DefaultValues) {
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsAndroidBridgeTest, TCPEnableChange) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   PrefService* service = profile->GetPrefs();
   service->ClearPref(prefs::kDevToolsTCPDiscoveryConfig);

@@ -66,23 +66,6 @@ NetworkRequestId LaunchReliabilityLogger::LogActionsUploadRequestStart() {
   return id;
 }
 
-NetworkRequestId LaunchReliabilityLogger::LogWebFeedRequestStart() {
-  NetworkRequestId id = request_id_gen_.GenerateNextId();
-  for (const StreamSurfaceSet::Entry& entry : surfaces_->surfaces()) {
-    entry.renderer->GetReliabilityLoggingBridge().LogWebFeedRequestStart(
-        id, base::TimeTicks::Now());
-  }
-  return id;
-}
-
-NetworkRequestId LaunchReliabilityLogger::LogSingleWebFeedRequestStart() {
-  NetworkRequestId id = request_id_gen_.GenerateNextId();
-  for (const StreamSurfaceSet::Entry& entry : surfaces_->surfaces()) {
-    entry.renderer->GetReliabilityLoggingBridge().LogSingleWebFeedRequestStart(
-        id, base::TimeTicks::Now());
-  }
-  return id;
-}
 
 void LaunchReliabilityLogger::LogRequestSent(NetworkRequestId id,
                                              base::TimeTicks timestamp) {

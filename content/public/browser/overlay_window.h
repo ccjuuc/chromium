@@ -7,8 +7,11 @@
 
 #include <memory>
 
+#include "build/build_config.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "services/media_session/public/cpp/media_image.h"
 #include "services/media_session/public/cpp/media_position.h"
+#include "third_party/blink/public/mojom/picture_in_picture/picture_in_picture.mojom-forward.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace gfx {
@@ -65,6 +68,7 @@ class VideoOverlayWindow {
   virtual void SetHidePictureInPictureButtonVisibility(bool is_visible) = 0;
   virtual void SetMicrophoneMuted(bool muted) = 0;
   virtual void SetCameraState(bool turned_on) = 0;
+  virtual void SetMediaMuted(bool muted) = 0;
   virtual void SetToggleMicrophoneButtonVisibility(bool is_visible) = 0;
   virtual void SetToggleCameraButtonVisibility(bool is_visible) = 0;
   virtual void SetHangUpButtonVisibility(bool is_visible) = 0;
@@ -75,8 +79,9 @@ class VideoOverlayWindow {
   virtual void SetSourceTitle(const std::u16string& source_title) = 0;
   virtual void SetFaviconImages(
       const std::vector<media_session::MediaImage>& images) = 0;
-
   virtual void SetSurfaceId(const viz::SurfaceId& surface_id) = 0;
+  virtual void SetPlaybackControlsVisibility(bool is_visible) = 0;
+  virtual void SetImmersiveVideoOptions(const ImmersiveOptions& options) = 0;
 };
 
 }  // namespace content

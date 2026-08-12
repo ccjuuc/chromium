@@ -25,15 +25,17 @@ static_library("capture_mode") {
     "//chrome/browser/ash/policy/dlp",
     "//chrome/browser/ash/policy/skyvault",
     "//chrome/browser/ash/video_conference",
+    "//chrome/browser/download",
     "//chrome/browser/lens/core/mojom:mojo_bindings",
     "//chrome/browser/policy:system_features_disable_list",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/screen_ai/public:optical_character_recognizer",
     "//chrome/browser/search_engines",
     "//chrome/browser/signin",
-    "//chrome/browser/ui:browser_navigator_params_headers",
     "//chrome/browser/ui/ash/system_web_apps",
     "//chrome/browser/ui/ash/web_view",
     "//chrome/browser/ui/lens",
+    "//chrome/browser/ui/navigator",
     "//chrome/browser/ui/webui/ash/cloud_upload",
     "//chrome/browser/web_applications",
     "//chrome/common",
@@ -55,10 +57,7 @@ static_library("capture_mode") {
     "//ui/base",
   ]
 
-  allow_circular_includes_from = [
-    "//chrome/browser/apps/app_service",
-    "//chrome/browser/ash/policy/dlp",
-  ]
+  allow_circular_includes_from = [ "//chrome/browser/ash/policy/dlp" ]
 }
 
 source_set("browser_tests") {
@@ -80,7 +79,6 @@ source_set("browser_tests") {
     "//ash/public/cpp",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser/ash/crosapi",
     "//chrome/browser/ash/file_manager:test_support",
     "//chrome/browser/ash/system_web_apps",
     "//chrome/browser/ash/video_conference",

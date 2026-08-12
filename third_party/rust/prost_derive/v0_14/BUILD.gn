@@ -30,13 +30,13 @@ cargo_crate("lib") {
   cargo_pkg_name = "prost-derive"
   cargo_pkg_description = "Generate encoding and decoding implementations for Prost annotated types."
   cargo_pkg_repository = "https://github.com/tokio-rs/prost"
-  cargo_pkg_version = "0.14.1"
+  cargo_pkg_version = "0.14.4"
 
   allow_unsafe = false
 
   deps = [
     "//third_party/rust/anyhow/v1:lib",
-    "//third_party/rust/itertools/v0_11:lib",
+    "//third_party/rust/itertools/v0_14:lib",
     "//third_party/rust/proc_macro2/v1:lib",
     "//third_party/rust/quote/v1:lib",
     "//third_party/rust/syn/v2:lib",

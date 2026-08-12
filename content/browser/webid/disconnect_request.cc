@@ -13,14 +13,14 @@
 #include "content/public/browser/webid/federated_identity_permission_context_delegate.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace content::webid {
 
 using FederatedApiPermissionStatus =
     FederatedIdentityApiPermissionContextDelegate::PermissionStatus;
 using LoginState = IdentityRequestAccount::LoginState;
-using blink::mojom::FederatedAuthRequestResult;
+using blink::mojom::FederatedRequestResult;
 
 // static
 std::unique_ptr<DisconnectRequest> DisconnectRequest::Create(
@@ -61,7 +61,7 @@ DisconnectRequest::DisconnectRequest(
 }
 
 void DisconnectRequest::SetCallbackAndStart(
-    blink::mojom::FederatedAuthRequest::DisconnectCallback callback,
+    blink::mojom::FederatedRequestService::DisconnectCallback callback,
     FederatedIdentityApiPermissionContextDelegate* api_permission_delegate) {
   TRACE_EVENT_BEGIN("content.fedcm", "FedCM disconnect", perfetto_track_);
 
@@ -117,7 +117,7 @@ void DisconnectRequest::SetCallbackAndStart(
   // case.
   config_fetcher_->Start(
       {{config_url, IsIdPRegistrationEnabled()}},
-      blink::mojom::RpMode::kPassive, /*icon_ideal_size=*/0,
+      /*icon_ideal_size=*/0,
       /*icon_minimum_size=*/0,
       base::BindOnce(&DisconnectRequest::OnAllConfigAndWellKnownFetched,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -138,47 +138,55 @@ void DisconnectRequest::OnAllConfigAndWellKnownFetched(
 
     DisconnectStatus status;
     switch (fetch_error.result) {
-      case FederatedAuthRequestResult::kWellKnownHttpNotFound: {
+      case FederatedRequestResult::kWellKnownHttpNotFound: {
         status = DisconnectStatus::kWellKnownHttpNotFound;
         break;
       }
-      case FederatedAuthRequestResult::kWellKnownNoResponse: {
+      case FederatedRequestResult::kWellKnownNoResponse: {
         status = DisconnectStatus::kWellKnownNoResponse;
         break;
       }
-      case FederatedAuthRequestResult::kWellKnownInvalidResponse: {
+      case FederatedRequestResult::kWellKnownBlockedByConnectionAllowlist: {
+        status = DisconnectStatus::kWellKnownBlockedByConnectionAllowlist;
+        break;
+      }
+      case FederatedRequestResult::kWellKnownInvalidResponse: {
         status = DisconnectStatus::kWellKnownInvalidResponse;
         break;
       }
-      case FederatedAuthRequestResult::kWellKnownListEmpty: {
+      case FederatedRequestResult::kWellKnownListEmpty: {
         status = DisconnectStatus::kWellKnownListEmpty;
         break;
       }
-      case FederatedAuthRequestResult::kWellKnownInvalidContentType: {
+      case FederatedRequestResult::kWellKnownInvalidContentType: {
         status = DisconnectStatus::kWellKnownInvalidContentType;
         break;
       }
-      case FederatedAuthRequestResult::kConfigHttpNotFound: {
+      case FederatedRequestResult::kConfigHttpNotFound: {
         status = DisconnectStatus::kConfigHttpNotFound;
         break;
       }
-      case FederatedAuthRequestResult::kConfigNoResponse: {
+      case FederatedRequestResult::kConfigNoResponse: {
         status = DisconnectStatus::kConfigNoResponse;
         break;
       }
-      case FederatedAuthRequestResult::kConfigInvalidResponse: {
+      case FederatedRequestResult::kConfigBlockedByConnectionAllowlist: {
+        status = DisconnectStatus::kConfigBlockedByConnectionAllowlist;
+        break;
+      }
+      case FederatedRequestResult::kConfigInvalidResponse: {
         status = DisconnectStatus::kConfigInvalidResponse;
         break;
       }
-      case FederatedAuthRequestResult::kConfigInvalidContentType: {
+      case FederatedRequestResult::kConfigInvalidContentType: {
         status = DisconnectStatus::kConfigInvalidContentType;
         break;
       }
-      case FederatedAuthRequestResult::kWellKnownTooBig: {
+      case FederatedRequestResult::kWellKnownTooBig: {
         status = DisconnectStatus::kWellKnownTooBig;
         break;
       }
-      case FederatedAuthRequestResult::kConfigNotInWellKnown: {
+      case FederatedRequestResult::kConfigNotInWellKnown: {
         status = DisconnectStatus::kConfigNotInWellKnown;
         break;
       }
@@ -214,7 +222,7 @@ void DisconnectRequest::OnDisconnectResponse(FetchStatus fetch_status,
                                              const std::string& account_id) {
   CHECK(callback_);
   // Matches the GrantSharingPermission() call in
-  // RequestService::CompleteTokenRequest(). Note that the IDP origin
+  // Request::CompleteTokenRequest(). Note that the IDP origin
   // cannot be an arbitrary origin, but rather needs to be a potentially
   // trustworthy one.
   url::Origin idp_origin = url::Origin::Create(options_->config->config_url);
@@ -224,8 +232,11 @@ void DisconnectRequest::OnDisconnectResponse(FetchStatus fetch_status,
     // (`origin_`, `embedding_origin`, `idp_origin`).
     permission_delegate_->RevokeSharingPermission(
         origin_, embedding_origin_, idp_origin, /*account_id=*/"");
-    Complete(blink::mojom::DisconnectStatus::kError,
-             DisconnectStatus::kDisconnectFailedOnServer);
+    DisconnectStatus status =
+        fetch_status.parse_status == ParseStatus::kBlockedByConnectionAllowlist
+            ? DisconnectStatus::kDisconnectBlockedByConnectionAllowlist
+            : DisconnectStatus::kDisconnectFailedOnServer;
+    Complete(blink::mojom::DisconnectStatus::kError, status);
     return;
   }
   permission_delegate_->RevokeSharingPermission(origin_, embedding_origin_,

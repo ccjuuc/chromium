@@ -21,6 +21,7 @@
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "remoting/base/fake_oauth_token_getter.h"
 #include "remoting/base/http_status.h"
 #include "remoting/base/protobuf_http_client.h"
@@ -31,6 +32,7 @@
 #include "remoting/signaling/ftl_services_context.h"
 #include "remoting/signaling/registration_manager.h"
 #include "remoting/signaling/signaling_address.h"
+#include "remoting/signaling/xmpp_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -78,17 +80,6 @@ ftl::InboxMessage CreateInboxMessage(const std::string& message_id,
   return message;
 }
 
-base::OnceCallback<void(const HttpStatus&)> CheckStatusThenQuitRunLoopCallback(
-    const base::Location& from_here,
-    HttpStatus::Code expected_status_code,
-    base::RunLoop* run_loop) {
-  return base::BindLambdaForTesting([=](const HttpStatus& status) {
-    ASSERT_EQ(status.error_code(), expected_status_code)
-        << "Incorrect status code. Location: " << from_here.ToString();
-    run_loop->QuitWhenIdle();
-  });
-}
-
 std::string GetChromotingMessageText(const ftl::InboxMessage& message) {
   EXPECT_EQ(message.message_type(),
             ftl::InboxMessage_MessageType_CHROMOTING_MESSAGE);
@@ -102,17 +93,15 @@ class MockRegistrationManager : public RegistrationManager {
   MockRegistrationManager() = default;
   ~MockRegistrationManager() override = default;
 
-  MOCK_METHOD1(SignInGaia, void(DoneCallback));
-  MOCK_METHOD0(SignOut, void());
-  MOCK_CONST_METHOD0(IsSignedIn, bool());
-  MOCK_CONST_METHOD0(GetRegistrationId, std::string());
-  MOCK_CONST_METHOD0(GetFtlAuthToken, std::string());
+  MOCK_METHOD(void, SignInGaia, (DoneCallback), (override));
+  MOCK_METHOD(void, SignOut, (), (override));
+  MOCK_METHOD(bool, IsSignedIn, (), (const, override));
+  MOCK_METHOD(std::string, GetRegistrationId, (), (const, override));
+  MOCK_METHOD(std::string, GetFtlAuthToken, (), (const, override));
 };
 
 MATCHER_P(SignalingMessageMatches, expected_stanza_text, "") {
-  const ftl::ChromotingMessage* ftl_message =
-      std::get_if<ftl::ChromotingMessage>(&arg);
-  return ftl_message && ftl_message->xmpp().stanza() == expected_stanza_text;
+  return arg.xmpp().stanza() == expected_stanza_text;
 }
 
 }  // namespace
@@ -123,6 +112,10 @@ class FtlMessagingClientTest : public testing::Test {
   void TearDown() override;
 
  protected:
+  void RunMessageCallbacks(const ftl::InboxMessage& message) {
+    messaging_client_->RunMessageCallbacks(message);
+  }
+
   ProtobufHttpTestResponder test_responder_;
   FakeOAuthTokenGetter token_getter_{OAuthTokenGetter::Status::SUCCESS,
                                      OAuthTokenInfo()};
@@ -150,24 +143,20 @@ void FtlMessagingClientTest::TearDown() {
 }
 
 TEST_F(FtlMessagingClientTest, TestSendMessage_Unauthenticated) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<const HttpStatus&> future;
   messaging_client_->SendMessage(
       SignalingAddress::CreateFtlSignalingAddress(kFakeReceiverId, ""),
-      SignalingMessage{CreateXmppMessage(kMessage1Text)},
-      CheckStatusThenQuitRunLoopCallback(
-          FROM_HERE, HttpStatus::Code::UNAUTHENTICATED, &run_loop));
+      CreateXmppMessage(kMessage1Text), future.GetCallback());
   test_responder_.AddErrorToMostRecentRequestUrl(
       HttpStatus(HttpStatus::Code::UNAUTHENTICATED, "Unauthenticated"));
-  run_loop.Run();
+  EXPECT_EQ(future.Get().error_code(), HttpStatus::Code::UNAUTHENTICATED);
 }
 
 TEST_F(FtlMessagingClientTest, TestSendMessage_SendOneMessageWithoutRegId) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<const HttpStatus&> future;
   messaging_client_->SendMessage(
       SignalingAddress::CreateFtlSignalingAddress(kFakeReceiverId, ""),
-      SignalingMessage{CreateXmppMessage(kMessage1Text)},
-      CheckStatusThenQuitRunLoopCallback(FROM_HERE, HttpStatus::Code::OK,
-                                         &run_loop));
+      CreateXmppMessage(kMessage1Text), future.GetCallback());
 
   ftl::InboxSendRequest request;
   ASSERT_TRUE(test_responder_.GetMostRecentRequestMessage(&request));
@@ -178,17 +167,15 @@ TEST_F(FtlMessagingClientTest, TestSendMessage_SendOneMessageWithoutRegId) {
   EXPECT_EQ(GetChromotingMessageText(request.message()), kMessage1Text);
 
   test_responder_.AddResponseToMostRecentRequestUrl(ftl::InboxSendResponse());
-  run_loop.Run();
+  EXPECT_EQ(future.Get().error_code(), HttpStatus::Code::OK);
 }
 
 TEST_F(FtlMessagingClientTest, TestSendMessage_SendOneMessageWithRegId) {
-  base::RunLoop run_loop;
-  messaging_client_->SendMessage(
-      SignalingAddress::CreateFtlSignalingAddress(kFakeReceiverId,
-                                                  kFakeSenderRegId),
-      SignalingMessage{CreateXmppMessage(kMessage1Text)},
-      CheckStatusThenQuitRunLoopCallback(FROM_HERE, HttpStatus::Code::OK,
-                                         &run_loop));
+  base::test::TestFuture<const HttpStatus&> future;
+  messaging_client_->SendMessage(SignalingAddress::CreateFtlSignalingAddress(
+                                     kFakeReceiverId, kFakeSenderRegId),
+                                 CreateXmppMessage(kMessage1Text),
+                                 future.GetCallback());
 
   ftl::InboxSendRequest request;
   ASSERT_TRUE(test_responder_.GetMostRecentRequestMessage(&request));
@@ -200,19 +187,17 @@ TEST_F(FtlMessagingClientTest, TestSendMessage_SendOneMessageWithRegId) {
   EXPECT_EQ(GetChromotingMessageText(request.message()), kMessage1Text);
 
   test_responder_.AddResponseToMostRecentRequestUrl(ftl::InboxSendResponse());
-  run_loop.Run();
+  EXPECT_EQ(future.Get().error_code(), HttpStatus::Code::OK);
 }
 
 TEST_F(FtlMessagingClientTest, TestStartReceivingMessages_CallbacksForwarded) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<const HttpStatus&> future;
 
   base::MockCallback<base::OnceClosure> mock_on_ready_closure;
   EXPECT_CALL(mock_on_ready_closure, Run()).WillOnce(Return());
 
-  messaging_client_->StartReceivingMessages(
-      mock_on_ready_closure.Get(),
-      CheckStatusThenQuitRunLoopCallback(FROM_HERE, HttpStatus::Code::UNKNOWN,
-                                         &run_loop));
+  messaging_client_->StartReceivingMessages(mock_on_ready_closure.Get(),
+                                            future.GetCallback());
 
   ftl::ReceiveMessagesResponse start_of_batch;
   start_of_batch.mutable_start_of_batch();
@@ -220,7 +205,7 @@ TEST_F(FtlMessagingClientTest, TestStartReceivingMessages_CallbacksForwarded) {
   test_responder_.AddStreamResponseToMostRecentRequestUrl(
       {&start_of_batch}, HttpStatus(HttpStatus::Code::UNKNOWN, ""));
 
-  run_loop.Run();
+  EXPECT_EQ(future.Get().error_code(), HttpStatus::Code::UNKNOWN);
 }
 
 TEST_F(FtlMessagingClientTest,
@@ -229,19 +214,15 @@ TEST_F(FtlMessagingClientTest,
 
   base::MockCallback<FtlMessagingClient::MessageCallback> mock_on_incoming_msg;
   EXPECT_CALL(mock_on_incoming_msg, Run(_, _))
-      .WillOnce([&](const SignalingAddress&, const SignalingMessage& message) {
-        const ftl::ChromotingMessage* ftl_message =
-            std::get_if<ftl::ChromotingMessage>(&message);
-        ASSERT_NE(ftl_message, nullptr);
-        ASSERT_EQ(ftl_message->xmpp().stanza(), kMessage1Text);
-      })
-      .WillOnce([&](const SignalingAddress&, const SignalingMessage& message) {
-        const ftl::ChromotingMessage* ftl_message =
-            std::get_if<ftl::ChromotingMessage>(&message);
-        ASSERT_NE(ftl_message, nullptr);
-        ASSERT_EQ(ftl_message->xmpp().stanza(), kMessage2Text);
-        run_loop.Quit();
-      });
+      .WillOnce(
+          [&](const SignalingAddress&, const ftl::ChromotingMessage& message) {
+            ASSERT_EQ(message.xmpp().stanza(), kMessage1Text);
+          })
+      .WillOnce(
+          [&](const SignalingAddress&, const ftl::ChromotingMessage& message) {
+            ASSERT_EQ(message.xmpp().stanza(), kMessage2Text);
+            run_loop.Quit();
+          });
 
   base::CallbackListSubscription subscription =
       messaging_client_->RegisterMessageCallback(mock_on_incoming_msg.Get());
@@ -318,18 +299,14 @@ TEST_F(FtlMessagingClientTest, ReceivedDuplicatedMessage_AckAndDrop) {
       Run(Property(&SignalingAddress::id,
                    "fake_sender@gmail.com/chromoting_ftl_fake_sender_reg_id"),
           _))
-      .WillOnce([&](const SignalingAddress&, const SignalingMessage& message) {
-        const ftl::ChromotingMessage* ftl_message =
-            std::get_if<ftl::ChromotingMessage>(&message);
-        ASSERT_NE(ftl_message, nullptr);
-        ASSERT_EQ(ftl_message->xmpp().stanza(), kMessage1Text);
-      })
-      .WillOnce([&](const SignalingAddress&, const SignalingMessage& message) {
-        const ftl::ChromotingMessage* ftl_message =
-            std::get_if<ftl::ChromotingMessage>(&message);
-        ASSERT_NE(ftl_message, nullptr);
-        ASSERT_EQ(ftl_message->xmpp().stanza(), kMessage2Text);
-      });
+      .WillOnce(
+          [&](const SignalingAddress&, const ftl::ChromotingMessage& message) {
+            ASSERT_EQ(message.xmpp().stanza(), kMessage1Text);
+          })
+      .WillOnce(
+          [&](const SignalingAddress&, const ftl::ChromotingMessage& message) {
+            ASSERT_EQ(message.xmpp().stanza(), kMessage2Text);
+          });
 
   int ack_count = 0;
   EXPECT_CALL(test_responder_.GetMockInterceptor(), Run(_))
@@ -378,6 +355,35 @@ TEST_F(FtlMessagingClientTest, ReceivedDuplicatedMessage_AckAndDrop) {
       HttpStatus(HttpStatus::Code::OK, ""));
 
   run_loop.Run();
+}
+
+TEST_F(FtlMessagingClientTest, RejectLargeMessage) {
+  base::MockCallback<FtlMessagingClient::MessageCallback> mock_on_incoming_msg;
+  EXPECT_CALL(mock_on_incoming_msg, Run(_, _)).Times(0);
+
+  auto subscription =
+      messaging_client_->RegisterMessageCallback(mock_on_incoming_msg.Get());
+
+  ftl::InboxMessage inbox_message;
+  inbox_message.mutable_sender_id()->set_id(kFakeSenderId);
+  inbox_message.set_sender_registration_id(kFakeSenderRegId);
+  inbox_message.set_message_type(
+      ftl::InboxMessage_MessageType_CHROMOTING_MESSAGE);
+  inbox_message.set_message(std::string(kMaxStanzaSize + 1, ' '));
+
+  RunMessageCallbacks(inbox_message);
+}
+
+TEST_F(FtlMessagingClientTest, RejectDtdMessage) {
+  base::MockCallback<FtlMessagingClient::MessageCallback> mock_on_incoming_msg;
+  EXPECT_CALL(mock_on_incoming_msg, Run(_, _)).Times(0);
+
+  auto subscription =
+      messaging_client_->RegisterMessageCallback(mock_on_incoming_msg.Get());
+
+  ftl::InboxMessage inbox_message =
+      CreateInboxMessage(kMessage1Id, "<!DOCTYPE iq><iq/>");
+  RunMessageCallbacks(inbox_message);
 }
 
 }  // namespace remoting

@@ -89,9 +89,9 @@ std::tuple<int, ResourceResponse, scoped_refptr<SharedBuffer>> ParseDataURL(
   response.SetHttpStatusCode(200);
   response.SetHttpStatusText(AtomicString("OK"));
   response.SetCurrentRequestUrl(url);
-  response.SetMimeType(AtomicString(String::FromUTF8(utf8_mime_type)));
+  response.SetMimeType(AtomicString(String::FromUtf8(utf8_mime_type)));
   response.SetExpectedContentLength(buffer->size());
-  response.SetTextEncodingName(AtomicString(String::FromUTF8(utf8_charset)));
+  response.SetTextEncodingName(AtomicString(String::FromUtf8(utf8_charset)));
 
   size_t iter = 0;
   std::string name;
@@ -107,7 +107,7 @@ std::tuple<int, ResourceResponse, scoped_refptr<SharedBuffer>> ParseDataURL(
   size_t length = url.GetString().length();
   base::UmaHistogramCounts10M("Blink.Network.DataUrlLength",
                               static_cast<int>(length));
-  if (length >= 0 && length < 1000) {
+  if (length < 1000) {
     base::UmaHistogramMicrosecondsTimes(
         "Blink.Network.ParseDataURLTime.Under1000Char", elapsed);
   } else if (length >= 1000 && length < 100000) {
@@ -123,7 +123,7 @@ std::tuple<int, ResourceResponse, scoped_refptr<SharedBuffer>> ParseDataURL(
                                 static_cast<int>(length));
     base::UmaHistogramMicrosecondsTimes("Blink.Network.ParseDataURLTime.Image",
                                         elapsed);
-    if (length >= 0 && length < 1000) {
+    if (length < 1000) {
       base::UmaHistogramMicrosecondsTimes(
           "Blink.Network.ParseDataURLTime.Image.Under1000Char", elapsed);
     } else if (length >= 1000 && length < 100000) {
@@ -168,12 +168,12 @@ bool IsCertificateTransparencyRequiredError(int error_code) {
 }
 
 String GenerateAcceptLanguageHeader(const String& lang) {
-  return String::FromUTF8(
+  return String::FromUtf8(
       net::HttpUtil::GenerateAcceptLanguageHeader(lang.Utf8()));
 }
 
 String ExpandLanguageList(const String& lang) {
-  return String::FromUTF8(net::HttpUtil::ExpandLanguageList(lang.Utf8()));
+  return String::FromUtf8(net::HttpUtil::ExpandLanguageList(lang.Utf8()));
 }
 
 Vector<char> ParseMultipartBoundary(const AtomicString& content_type_header) {
@@ -186,7 +186,7 @@ Vector<char> ParseMultipartBoundary(const AtomicString& content_type_header) {
                                   &had_charset, &boundary);
   base::TrimString(boundary, " \"", &boundary);
   Vector<char> result;
-  result.AppendSpan(base::span(boundary));
+  result.append_range(boundary);
   return result;
 }
 

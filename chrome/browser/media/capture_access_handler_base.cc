@@ -17,7 +17,7 @@
 #include "extensions/buildflags/buildflags.h"
 #include "ui/gfx/native_ui_types.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/extension.h"
 #endif
 
@@ -331,7 +331,7 @@ bool CaptureAccessHandlerBase::IsExtensionAllowedForScreenCapture(
 #if BUILDFLAG(IS_CHROMEOS)
   std::string hex_hash = base::HexEncode(crypto::hash::Sha256(extension->id()));
 
-  // crbug.com/446688
+  // crbug.com/41150882
   return hex_hash ==
              "EA4DC6890B3B3EBE6248E7580099D9F44D8E5932D60F09E4335E157149EF552"
              "1" ||

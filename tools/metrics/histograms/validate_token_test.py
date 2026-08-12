@@ -6,8 +6,12 @@
 import logging
 import os
 import unittest
+from pathlib import Path
 
-import validate_token
+import setup_modules  # pylint: disable=unused-import
+
+from chromium_src.tools.metrics.common.path_util import METRICS_TOOLS_PATH
+import chromium_src.tools.metrics.histograms.validate_token as validate_token
 
 
 class ValidateTokenTests(unittest.TestCase):
@@ -17,15 +21,16 @@ class ValidateTokenTests(unittest.TestCase):
     with self.assertLogs() as logs:
       logging.info('ensure non-empty log')
       has_token_error = validate_token.ValidateTokenInFile(
-          f'{os.path.dirname(__file__)}/test_data/histograms.xml')
+          str(METRICS_TOOLS_PATH / 'histograms' / 'test_data' /
+              'histograms.xml'))
       self.assertFalse(has_token_error)
     self.assertEqual(len(logs.output), 1)
 
   def test_invalid_tokens(self):
     with self.assertLogs() as logs:
       has_token_error = validate_token.ValidateTokenInFile(
-          f'{os.path.dirname(__file__)}'
-          '/test_data/tokens/token_errors_histograms.xml')
+          str(METRICS_TOOLS_PATH / 'histograms' / 'test_data' / 'tokens' /
+              'token_errors_histograms.xml'))
       self.assertTrue(has_token_error)
     self.assertEqual(len(logs.output), 1)
     output = logs.output[0]

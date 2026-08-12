@@ -8,6 +8,8 @@
 #include <optional>
 #include <utility>
 
+#include "base/check_deref.h"
+#include "chrome/browser/ash/login/quick_unlock/pin_salt_storage.h"
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/login/auth/auth_factor_editor.h"
@@ -20,9 +22,10 @@
 namespace ash {
 
 KnowledgeFactorHashInfoMigration::KnowledgeFactorHashInfoMigration(
+    PrefService* local_state,
     UserDataAuthClient* user_data_auth)
-    : editor_(std::make_unique<AuthFactorEditor>(user_data_auth)),
-      pin_salt_storage_(std::make_unique<quick_unlock::PinSaltStorage>()) {}
+    : local_state_(CHECK_DEREF(local_state)),
+      editor_(std::make_unique<AuthFactorEditor>(user_data_auth)) {}
 
 KnowledgeFactorHashInfoMigration::~KnowledgeFactorHashInfoMigration() = default;
 
@@ -121,7 +124,8 @@ void KnowledgeFactorHashInfoMigration::OnPasswordFactorMetadataUpdated(
 void KnowledgeFactorHashInfoMigration::UpdatePinFactorMetadata(
     std::unique_ptr<UserContext> context,
     AuthOperationCallback callback) {
-  cryptohome::PinSalt salt(pin_salt_storage_->GetSalt(context->GetAccountId()));
+  quick_unlock::PinSaltStorageImpl pin_salt_storage(&local_state_.get());
+  cryptohome::PinSalt salt(pin_salt_storage.GetSalt(context->GetAccountId()));
   editor_->UpdatePinFactorMetadata(
       std::move(context), std::move(salt),
       base::BindOnce(

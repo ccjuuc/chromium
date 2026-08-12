@@ -38,7 +38,7 @@ IOSSSLBlockingPage::IOSSSLBlockingPage(
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     int options_mask,
-    const base::Time& time_triggered,
+    base::Time time_triggered,
     std::unique_ptr<security_interstitials::IOSBlockingPageControllerClient>
         client)
     : IOSSecurityInterstitialPage(web_state, request_url, client.get()),
@@ -54,9 +54,9 @@ IOSSSLBlockingPage::IOSSSLBlockingPage(
     options_mask &= ~SSLErrorOptionsMask::SOFT_OVERRIDE_ENABLED;
   }
 
-  ssl_error_ui_.reset(new SSLErrorUI(request_url, cert_error, ssl_info,
-                                     options_mask, time_triggered, GURL(),
-                                     controller_.get()));
+  ssl_error_ui_.reset(new SSLErrorUI(request_url, (net::Error)cert_error,
+                                     ssl_info, options_mask, time_triggered,
+                                     GURL(), controller_.get()));
 
   ProfileIOS* profile =
       ProfileIOS::FromBrowserState(web_state_->GetBrowserState());
@@ -79,7 +79,7 @@ bool IOSSSLBlockingPage::ShouldCreateNewNavigation() const {
 IOSSSLBlockingPage::~IOSSSLBlockingPage() {}
 
 void IOSSSLBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) const {
+    base::DictValue& load_time_data) const {
   ssl_error_ui_->PopulateStringsForHTML(load_time_data);
 }
 

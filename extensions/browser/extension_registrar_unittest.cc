@@ -30,7 +30,6 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "base/test/scoped_feature_list.h"
-#include "chrome/common/pref_names.h"  // nogncheck
 #include "components/account_id/account_id.h"  // nogncheck
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -105,7 +104,7 @@ class TestExtensionRegistrarDelegate : public ExtensionRegistrar::Delegate {
                void(const Extension* extension,
                     const syncer::StringOrdinal& page_ordinal,
                     int install_flags,
-                    base::Value::Dict ruleset_install_prefs));
+                    base::DictValue ruleset_install_prefs));
 };
 
 }  // namespace
@@ -131,8 +130,7 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     // Mock defaults.
     ON_CALL(delegate_, CanEnableExtension(extension_.get()))
         .WillByDefault(Return(true));
-    ON_CALL(delegate_, CanDisableExtension(extension_.get()))
-        .WillByDefault(Return(true));
+    ON_CALL(delegate_, CanDisableExtension(_)).WillByDefault(Return(true));
     EXPECT_CALL(delegate_, PostActivateExtension(_)).Times(0);
     EXPECT_CALL(delegate_, PostDeactivateExtension(_)).Times(0);
   }
@@ -514,6 +512,27 @@ TEST_F(ExtensionRegistrarTest, ReloadExtension) {
   AddEnabledExtension();
 }
 
+TEST_F(ExtensionRegistrarTest, ReloadExtensionWithNewDisableReason) {
+  AddEnabledExtension();
+  ReloadEnabledExtension();
+
+  // Add a new disable reason while the extension is reloading.
+  auto* prefs = ExtensionPrefs::Get(browser_context());
+  prefs->AddDisableReason(extension()->id(),
+                          disable_reason::DISABLE_USER_ACTION);
+
+  // Add the now-reloaded extension back into the registrar.
+  // It should NOT be enabled because of the new disable reason.
+  registrar()->AddExtension(extension());
+  ExpectInSet(ExtensionRegistry::DISABLED);
+
+  // The `DISABLE_RELOAD` reason should be gone, but the user action reason
+  // should remain.
+  EXPECT_THAT(
+      prefs->GetDisableReasons(extension()->id()),
+      testing::UnorderedElementsAre(disable_reason::DISABLE_USER_ACTION));
+}
+
 TEST_F(ExtensionRegistrarTest, RemoveReloadedExtension) {
   AddEnabledExtension();
   ReloadEnabledExtension();
@@ -592,6 +611,23 @@ TEST_F(ExtensionRegistrarTest, Enabledness) {
 
   // TODO(crbug.com/406544103): Test disabling an extension in a profile here.
   // TODO(crbug.com/406544103): Test enabling an extension in a profile here.
+}
+
+TEST_F(ExtensionRegistrarTest, DisableUninstalledExtension) {
+  // Verify that `extension()` has not been added to `ExtensionRegistry`.
+  ExpectInSet(ExtensionRegistry::NONE);
+
+  // Call `ExtensionRegistrar::DisableExtension()` on the uninstalled
+  // extension ID and verify it returns early safely without crashing or
+  // invoking delegate functions.
+  registrar()->DisableExtension(extension()->id(),
+                                {disable_reason::DISABLE_USER_ACTION});
+  ExpectInSet(ExtensionRegistry::NONE);
+
+  // Verify that we didn't write disable reasons to prefs.
+  EXPECT_TRUE(ExtensionPrefs::Get(browser_context())
+                  ->GetDisableReasons(extension()->id())
+                  .empty());
 }
 
 }  // namespace extensions

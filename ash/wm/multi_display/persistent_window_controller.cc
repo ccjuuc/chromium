@@ -3,7 +3,8 @@
 // found in the LICENSE file.
 
 #include "ash/wm/multi_display/persistent_window_controller.h"
-#include "base/memory/raw_ptr.h"
+
+#include <ranges>
 
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -12,10 +13,8 @@
 #include "ash/wm/tablet_mode/scoped_skip_user_session_blocked_check.h"
 #include "ash/wm/window_state.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_functions.h"
+#include "base/memory/raw_ptr.h"
 #include "chromeos/ui/base/display_util.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -23,11 +22,6 @@
 namespace ash {
 
 namespace {
-
-// This controls the UMA histogram `kNumOfWindowsRestoredOnDisplayAdded` and
-// `kNumOfWindowsRestoredOnScreenRotation`. It should not be changed without
-// deprecating these two metrics.
-constexpr int kMaxRestoredWindowCount = 50;
 
 display::DisplayManager* GetDisplayManager() {
   return Shell::Get()->display_manager();
@@ -93,11 +87,6 @@ void PersistentWindowController::WindowTracker::OnWindowDestroying(
 // -----------------------------------------------------------------------------
 // PersistentWindowController:
 
-constexpr char
-    PersistentWindowController::kNumOfWindowsRestoredOnDisplayAdded[];
-constexpr char
-    PersistentWindowController::kNumOfWindowsRestoredOnScreenRotation[];
-
 PersistentWindowController::PersistentWindowController() {
   display_manager_observation_.Observe(Shell::Get()->display_manager());
   Shell::Get()->session_controller()->AddObserver(this);
@@ -138,7 +127,7 @@ void PersistentWindowController::OnDisplayMetricsChanged(
   }
 
   const bool was_landscape_before_rotation =
-      base::Contains(is_landscape_orientation_map_, display.id())
+      is_landscape_orientation_map_.contains(display.id())
           ? is_landscape_orientation_map_[display.id()]
           : false;
   for (aura::Window* window : GetWindowList()) {
@@ -236,14 +225,13 @@ void PersistentWindowController::
     return;
   }
 
-  int window_restored_count = 0;
   // Maybe add the windows to a new display via SetBoundsInScreen() depending on
   // their persistent window info. Go backwards so that if they do get added to
   // another root window's container, the stacking order will match the MRU
   // order (windows added first are stacked at the bottom).
   std::vector<raw_ptr<aura::Window, VectorExperimental>> mru_window_list =
       GetWindowList();
-  for (aura::Window* window : base::Reversed(mru_window_list)) {
+  for (aura::Window* window : std::views::reverse(mru_window_list)) {
     WindowState* window_state = WindowState::Get(window);
     if (!window_state->persistent_window_info_of_display_removal()) {
       continue;
@@ -298,14 +286,6 @@ void PersistentWindowController::
     }
     // Reset persistent window info every time the window bounds have restored.
     window_state->reset_persistent_window_info_of_display_removal();
-
-    ++window_restored_count;
-  }
-
-  if (window_restored_count != 0) {
-    base::UmaHistogramExactLinear(kNumOfWindowsRestoredOnDisplayAdded,
-                                  window_restored_count,
-                                  kMaxRestoredWindowCount);
   }
 }
 
@@ -315,7 +295,6 @@ void PersistentWindowController::
     return;
   }
 
-  int window_restored_count = 0;
   for (aura::Window* window : GetWindowList()) {
     WindowState* window_state = WindowState::Get(window);
     if (!window_state->persistent_window_info_of_screen_rotation()) {
@@ -337,14 +316,7 @@ void PersistentWindowController::
     if (display_manager->GetDisplayForId(display_id).is_landscape() ==
         info->is_landscape()) {
       window->SetBounds(info->window_bounds_in_screen());
-      ++window_restored_count;
     }
-  }
-
-  if (window_restored_count != 0) {
-    base::UmaHistogramExactLinear(kNumOfWindowsRestoredOnScreenRotation,
-                                  window_restored_count,
-                                  kMaxRestoredWindowCount);
   }
 }
 

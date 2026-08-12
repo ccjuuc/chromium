@@ -140,6 +140,9 @@ public class CustomTabActivityContentTestEnvironment extends TestWatcher {
 
     @Override
     protected void starting(Description description) {
+        // MockitoRule is not processed recursively in JUnit 4, and these are
+        // TestRule or TestWatcher implementations. Manual initialization is
+        // required.
         MockitoAnnotations.initMocks(this);
 
         CustomTabsConnection.setInstanceForTesting(connection);
@@ -175,6 +178,7 @@ public class CustomTabActivityContentTestEnvironment extends TestWatcher {
         when(profileProvider.getOriginalProfile()).thenReturn(mProfile);
         when(profileProvider.getOffTheRecordProfile(eq(true))).thenReturn(mIncognitoProfile);
         when(mIncognitoProfile.isOffTheRecord()).thenReturn(true);
+        when(webContents.getLastCommittedUrl()).thenReturn(JUnitTestGURLs.INITIAL_URL);
         when(verifier.verify(any())).thenReturn(Promise.fulfilled(true));
         when(currentPageVerifier.getState())
                 .thenReturn(
@@ -209,7 +213,8 @@ public class CustomTabActivityContentTestEnvironment extends TestWatcher {
                 activity.getWindowAndroid(),
                 tabModelInitializer,
                 cipherFactory,
-                lifecycleDispatcher);
+                lifecycleDispatcher,
+                null);
     }
 
     public CustomTabActivityNavigationController createNavigationController(

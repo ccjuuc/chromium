@@ -14,7 +14,7 @@
 #include "chrome/browser/ash/policy/off_hours/device_off_hours_controller.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/ui/managed_ui.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/user_manager/user_manager.h"
 #else
@@ -25,7 +25,7 @@
 const char kDevicePolicyStatusDescription[] = "statusDevice";
 const char kUserPolicyStatusDescription[] = "statusUser";
 
-void SetDomainExtractedFromUsername(base::Value::Dict& dict) {
+void SetDomainExtractedFromUsername(base::DictValue& dict) {
 #if BUILDFLAG(IS_CHROMEOS)
   if (chromeos::IsKioskSession()) {
     // In kiosk session `username` is a website (for web kiosk) or an app id
@@ -40,7 +40,7 @@ void SetDomainExtractedFromUsername(base::Value::Dict& dict) {
     dict.Set(policy::kDomainKey, gaia::ExtractDomainName(*username));
 }
 
-void GetUserAffiliationStatus(base::Value::Dict* dict, Profile* profile) {
+void GetUserAffiliationStatus(base::DictValue* dict, Profile* profile) {
   CHECK(profile);
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -58,7 +58,7 @@ void GetUserAffiliationStatus(base::Value::Dict* dict, Profile* profile) {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
-void SetProfileId(base::Value::Dict* dict, Profile* profile) {
+void SetProfileId(base::DictValue* dict, Profile* profile) {
   CHECK(profile);
   auto* profile_id_service =
       enterprise::ProfileIdServiceFactory::GetForProfile(profile);
@@ -71,15 +71,17 @@ void SetProfileId(base::Value::Dict* dict, Profile* profile) {
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-void GetOffHoursStatus(base::Value::Dict* dict) {
+std::optional<bool> GetOffHoursStatus() {
   policy::off_hours::DeviceOffHoursController* off_hours_controller =
       ash::DeviceSettingsService::Get()->device_off_hours_controller();
   if (off_hours_controller) {
-    dict->Set("isOffHoursActive", off_hours_controller->is_off_hours_mode());
+    return off_hours_controller->is_off_hours_mode();
+  } else {
+    return std::nullopt;
   }
 }
 
-void GetUserManager(base::Value::Dict* dict, Profile* profile) {
+void GetUserManager(base::DictValue* dict, Profile* profile) {
   CHECK(profile);
 
   std::optional<std::string> account_manager =

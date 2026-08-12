@@ -55,7 +55,7 @@ try_.builder(
 
 try_.builder(
     name = "android-desktop-arm64-official",
-    # TODO(crbug.com/439887309): Enable on ANDROID_BRANCHES
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     mirrors = [
         "ci/android-desktop-arm64-official",
     ],
@@ -71,7 +71,7 @@ try_.builder(
 
 try_.builder(
     name = "android-desktop-x64-official",
-    # TODO(crbug.com/439887309): Enable on ANDROID_BRANCHES
+    branch_selector = branches.selector.ANDROID_BRANCHES,
     mirrors = [
         "ci/android-desktop-x64-official",
     ],
@@ -106,6 +106,24 @@ try_.builder(
 )
 
 try_.builder(
+    name = "linux-arm64-official",
+    branch_selector = branches.selector.LINUX_BRANCHES,
+    mirrors = [
+        "ci/linux-arm64-official",
+    ],
+    gn_args = gn_args.config(
+        configs = ["ci/linux-arm64-official", "try_builder"],
+    ),
+    ssd = True,
+    contact_team_email = "chrome-browser-infra-team@google.com",
+    siso_configs = [
+        "builder",
+        "no-remote-timeout",
+    ],
+    siso_remote_linking = True,
+)
+
+try_.builder(
     name = "mac-official",
     branch_selector = branches.selector.MAC_BRANCHES,
     mirrors = [
@@ -121,14 +139,14 @@ try_.builder(
     cores = None,
     os = os.MAC_ANY,
     cpu = cpu.ARM64,
-    # TODO(crbug.com/40208487) builds with PGO change take long time.
-    # Keep in sync with mac-official in ci/chromium.star.
-    execution_timeout = 15 * time.hour,
-    tryjob = try_.job(
+    cq_settings = try_.cq_settings(
         location_filters = [
             "chrome/build/mac-arm.pgo.txt",
         ],
     ),
+    # TODO(crbug.com/40208487) builds with PGO change take long time.
+    # Keep in sync with mac-official in ci/chromium.star.
+    execution_timeout = 15 * time.hour,
 )
 
 try_.builder(

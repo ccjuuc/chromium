@@ -8,7 +8,6 @@
 
 #include "base/logging.h"
 #include "chrome/browser/ash/borealis/borealis_context.h"
-#include "chrome/browser/ash/borealis/borealis_context_manager.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_launcher.h"
@@ -20,9 +19,6 @@
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chromeos/ash/components/dbus/vm_launch/launch.pb.h"
@@ -39,24 +35,9 @@ ResponseType Success(std::string vm_name, std::string container_name) {
 }
 
 void LaunchBorealis(Profile* profile, LaunchCallback callback) {
-  borealis::BorealisServiceFactory::GetForProfile(profile)
-      ->ContextManager()
-      .StartBorealis(base::BindOnce(
-          [](LaunchCallback callback,
-             borealis::BorealisContextManager::ContextOrFailure
-                 context_or_failure) {
-            if (!context_or_failure.has_value()) {
-              std::stringstream error_msg;
-              error_msg << "Failed to launch ("
-                        << static_cast<int>(context_or_failure.error().error())
-                        << "): " << context_or_failure.error().description();
-              std::move(callback).Run(base::unexpected(error_msg.str()));
-              return;
-            }
-            std::move(callback).Run(Success(
-                context_or_failure.value()->vm_name(), /*container_name=*/""));
-          },
-          std::move(callback)));
+  // Borealis is being removed and can no longer be launched; notify the caller
+  // of the failure instead of leaving the callback pending.
+  std::move(callback).Run(base::unexpected("Borealis is no longer available"));
 }
 
 void LaunchCrostini(Profile* profile,
@@ -80,21 +61,6 @@ void LaunchCrostini(Profile* profile,
             std::move(callback).Run(Success(vm_name, container_name));
           },
           container_id.vm_name, just_termina ? "" : container_id.container_name,
-          std::move(callback)));
-}
-
-void LaunchPluginVm(Profile* profile, LaunchCallback callback) {
-  plugin_vm::PluginVmManagerFactory::GetForProfile(profile)->LaunchPluginVm(
-      base::BindOnce(
-          [](LaunchCallback callback, bool success) {
-            if (!success) {
-              std::move(callback).Run(
-                  base::unexpected("Failed to launch Plugin VM"));
-              return;
-            }
-            std::move(callback).Run(
-                Success(plugin_vm::kPluginVmName, /*container_name=*/""));
-          },
           std::move(callback)));
 }
 
@@ -152,8 +118,6 @@ void EnsureLaunched(const vm_tools::launch::EnsureVmLaunchedRequest& request,
   } else if (main_descriptor == "crostini") {
     LaunchCrostini(profile, /*just_termina=*/false,
                    std::move(response_callback));
-  } else if (main_descriptor == "plugin_vm") {
-    LaunchPluginVm(profile, std::move(response_callback));
   } else if (main_descriptor == "termina") {
     LaunchCrostini(profile, /*just_termina=*/true,
                    std::move(response_callback));

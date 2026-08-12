@@ -35,9 +35,8 @@ void DebugRectHistory::SaveDebugRectsForCurrentFrame(
     HeadsUpDisplayLayerImpl* hud_layer,
     const RenderSurfaceList& render_surface_list,
     const LayerTreeDebugState& debug_state) {
-  // For now, clear all rects from previous frames. In the future we may want to
-  // store all debug rects for a history of many frames.
-  debug_rects_.clear();
+  std::erase_if(debug_rects_,
+                [](const DebugRect& rect) { return rect.fade_step <= 0; });
 
   if (debug_state.show_touch_event_handler_rects) {
     SaveTouchEventHandlerRects(tree_impl);
@@ -59,8 +58,9 @@ void DebugRectHistory::SaveDebugRectsForCurrentFrame(
     SaveMainThreadScrollRepaintOrRasterInducingScrollRects(
         tree_impl, DebugRectType::kRasterInducingScroll);
   }
-  if (debug_state.show_layout_shift_regions) {
-    SaveLayoutShiftRects(hud_layer);
+  if (debug_state.show_contentful_paint_rects ||
+      debug_state.show_layout_shift_regions) {
+    SaveWebVitalsDebugRects(hud_layer);
   }
   if (debug_state.show_paint_rects) {
     SavePaintRects(tree_impl);
@@ -76,18 +76,33 @@ void DebugRectHistory::SaveDebugRectsForCurrentFrame(
   }
 }
 
-void DebugRectHistory::SaveLayoutShiftRects(HeadsUpDisplayLayerImpl* hud) {
-  // We store the layout shift rects on the hud layer. If we don't have the hud
-  // layer, then there is nothing to store.
-  if (!hud)
+void DebugRectHistory::SaveWebVitalsDebugRects(HeadsUpDisplayLayerImpl* hud) {
+  if (!hud) {
     return;
-
-  for (gfx::Rect rect : hud->LayoutShiftRects()) {
-    debug_rects_.emplace_back(
-        DebugRectType::kLayoutShift,
-        MathUtil::MapEnclosingClippedRect(hud->ScreenSpaceTransform(), rect));
   }
-  hud->ClearLayoutShiftRects();
+
+  for (const auto& web_vital_rect : hud->WebVitalsDebugRects()) {
+    DebugRectType type;
+    switch (web_vital_rect.type) {
+      case WebVitalMetricType::kLayoutShift:
+        type = DebugRectType::kLayoutShift;
+        break;
+      case WebVitalMetricType::kInteractionContentfulPaint:
+        type = DebugRectType::kInteractionContentfulPaint;
+        break;
+      case WebVitalMetricType::kNavigationContentfulPaint:
+        type = DebugRectType::kNavigationContentfulPaint;
+        break;
+    }
+
+    debug_rects_.emplace_back(
+        type,
+        MathUtil::MapEnclosingClippedRect(hud->ScreenSpaceTransform(),
+                                          web_vital_rect.rect),
+        TouchAction::kNone, MainThreadRepaintReasons{},
+        DebugColors::kFadeSteps);
+  }
+  hud->ClearWebVitalsDebugRects();
 }
 
 void DebugRectHistory::SavePaintRects(LayerTreeImpl* tree_impl) {
@@ -103,7 +118,9 @@ void DebugRectHistory::SavePaintRects(LayerTreeImpl* tree_impl) {
     for (gfx::Rect rect : invalidation_region) {
       debug_rects_.emplace_back(DebugRectType::kPaint,
                                 MathUtil::MapEnclosingClippedRect(
-                                    layer->ScreenSpaceTransform(), rect));
+                                    layer->ScreenSpaceTransform(), rect),
+                                TouchAction::kNone, MainThreadRepaintReasons{},
+                                DebugColors::kFadeSteps);
     }
   }
 }
@@ -212,14 +229,17 @@ void DebugRectHistory::SaveMainThreadScrollRepaintOrRasterInducingScrollRects(
     if (type == DebugRectType::kMainThreadScrollRepaint
             ? scroll_tree.ShouldRealizeScrollsOnMain(node)
             : scroll_tree.CanRealizeScrollsOnPendingTree(node)) {
-      if (const auto* transform_node = transform_tree.Node(node.transform_id);
-          transform_node && transform_tree.Node(transform_node->parent_id)) {
-        debug_rects_.emplace_back(
-            type, MathUtil::MapEnclosingClippedRect(
-                      // Skip the scroll translation node.
-                      transform_tree.ToScreen(transform_node->parent_id),
-                      gfx::Rect(node.container_origin,
-                                scroll_tree.container_bounds(node.id))));
+      if (node.transform_id != kInvalidPropertyNodeId) {
+        const TransformNode& transform_node =
+            transform_tree.Node(node.transform_id);
+        if (transform_node.parent_id != kInvalidPropertyNodeId) {
+          debug_rects_.emplace_back(
+              type, MathUtil::MapEnclosingClippedRect(
+                        // Skip the scroll translation node.
+                        transform_tree.ToScreen(transform_node.parent_id),
+                        gfx::Rect(node.container_origin,
+                                  scroll_tree.container_bounds(node.id))));
+        }
       }
     }
   }

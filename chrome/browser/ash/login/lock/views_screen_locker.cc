@@ -11,6 +11,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
@@ -31,7 +32,6 @@
 #include "chrome/browser/ash/system/system_clock.h"
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
@@ -45,12 +45,22 @@
 
 namespace ash {
 
-ViewsScreenLocker::ViewsScreenLocker()
-    : system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>()),
+ViewsScreenLocker::ViewsScreenLocker(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash)
+    : local_state_(CHECK_DEREF(local_state)),
+      user_selection_screen_(std::make_unique<ChromeUserSelectionScreen>(
+          local_state,
+          &CHECK_DEREF(application_locale_storage),
+          std::move(shared_url_loader_factory),
+          &CHECK_DEREF(browser_policy_connector_ash),
+          DisplayedScreen::LOCK_SCREEN)),
+      system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>(
+          &CHECK_DEREF(browser_policy_connector_ash))),
       auth_performer_(UserDataAuthClient::Get()) {
   LoginScreenClientImpl::Get()->SetDelegate(this);
-  user_selection_screen_ =
-      std::make_unique<ChromeUserSelectionScreen>(DisplayedScreen::LOCK_SCREEN);
 }
 
 ViewsScreenLocker::~ViewsScreenLocker() {
@@ -189,7 +199,8 @@ void ViewsScreenLocker::UpdatePinKeyboardState(const AccountId& account_id) {
 void ViewsScreenLocker::UpdateChallengeResponseAuthAvailability(
     const AccountId& account_id) {
   const bool enable_challenge_response =
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id);
+      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(local_state_.get(),
+                                                           account_id);
   LoginScreen::Get()->GetModel()->SetChallengeResponseAuthEnabledForUser(
       account_id, enable_challenge_response);
 }

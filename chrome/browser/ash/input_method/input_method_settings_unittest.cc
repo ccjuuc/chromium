@@ -10,7 +10,6 @@
 #include "base/strings/strcat.h"
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/services/ime/public/mojom/input_method.mojom-shared.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
@@ -34,15 +33,15 @@ constexpr char kVietnameseVniEngineId[] = "vkd_vi_vni";
 constexpr char kVietnameseTelexEngineId[] = "vkd_vi_telex";
 
 void RegisterTestingPrefs(TestingPrefServiceSimple& prefs,
-                          const base::Value::Dict& dict) {
+                          const base::DictValue& dict) {
   prefs.registry()->RegisterDictionaryPref(
-      ::prefs::kLanguageInputMethodSpecificSettings);
-  prefs.Set(::prefs::kLanguageInputMethodSpecificSettings,
+      ash::prefs::kLanguageInputMethodSpecificSettings);
+  prefs.Set(ash::prefs::kLanguageInputMethodSpecificSettings,
             base::Value(dict.Clone()));
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateLatinSettingsDefault) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -57,7 +56,7 @@ TEST(CreateSettingsFromPrefsTest, CreateLatinSettingsDefault) {
 TEST(CreateSettingsFromPrefsTest, CreateLatinSettingsWithMultiwordEnabled) {
   base::test::ScopedFeatureList features;
   TestingPrefServiceSimple prefs;
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.SetByDottedPath(base::StrCat({kUsEnglishEngineId,
                                      ".physicalKeyboardAutoCorrectionLevel"}),
                        1);
@@ -78,7 +77,7 @@ TEST(CreateSettingsFromPrefsTest, CreateLatinSettingsWithMultiwordEnabled) {
 TEST(CreateSettingsFromPrefsTest, CreateLatinSettingsWithMultiwordDisabled) {
   base::test::ScopedFeatureList features;
   TestingPrefServiceSimple prefs;
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.SetByDottedPath(base::StrCat({kUsEnglishEngineId,
                                      ".physicalKeyboardAutoCorrectionLevel"}),
                        1);
@@ -100,7 +99,7 @@ TEST(CreateSettingsFromPrefsTest,
      PredictiveWritingEnabledWhenMultiWordAllowedAndEnabled) {
   base::test::ScopedFeatureList features;
   TestingPrefServiceSimple prefs;
-  base::Value::Dict dict;
+  base::DictValue dict;
   RegisterTestingPrefs(prefs, dict);
 
   const auto settings = CreateSettingsFromPrefs(prefs, kUsEnglishEngineId);
@@ -115,7 +114,7 @@ TEST(CreateSettingsFromPrefsTest,
   base::test::ScopedFeatureList features;
   features.InitWithFeatures({}, {features::kAssistMultiWord});
   TestingPrefServiceSimple prefs;
-  base::Value::Dict dict;
+  base::DictValue dict;
   RegisterTestingPrefs(prefs, dict);
 
   const auto settings = CreateSettingsFromPrefs(prefs, kUsEnglishEngineId);
@@ -126,7 +125,7 @@ TEST(CreateSettingsFromPrefsTest,
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateKoreanSettingsDefault) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -139,7 +138,7 @@ TEST(CreateSettingsFromPrefsTest, CreateKoreanSettingsDefault) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateKoreanSettings) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.SetByDottedPath(base::StrCat({kKoreanEngineId, ".koreanKeyboardLayout"}),
                        "3 Set (390) / 세벌식 (390)");
   dict.SetByDottedPath(
@@ -156,7 +155,7 @@ TEST(CreateSettingsFromPrefsTest, CreateKoreanSettings) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreatePinyinSettingsDefault) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -187,7 +186,7 @@ TEST(CreateSettingsFromPrefsTest, CreatePinyinSettingsDefault) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreatePinyinSettings) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.SetByDottedPath(base::StrCat({kPinyinEngineId, ".en:eng"}), true);
   dict.SetByDottedPath(base::StrCat({kPinyinEngineId, ".k:g"}), true);
   dict.SetByDottedPath(base::StrCat({kPinyinEngineId, ".in:ing"}), true);
@@ -233,7 +232,7 @@ TEST(CreateSettingsFromPrefsTest, CreatePinyinSettings) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateZhuyinSettingsDefault) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -248,7 +247,7 @@ TEST(CreateSettingsFromPrefsTest, CreateZhuyinSettingsDefault) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateVietnameseVniSettings) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -260,7 +259,7 @@ TEST(CreateSettingsFromPrefsTest, CreateVietnameseVniSettings) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateVietnameseTelexSettings) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   TestingPrefServiceSimple prefs;
   RegisterTestingPrefs(prefs, dict);
 
@@ -273,7 +272,7 @@ TEST(CreateSettingsFromPrefsTest, CreateVietnameseTelexSettings) {
 }
 
 TEST(CreateSettingsFromPrefsTest, CreateZhuyinSettings) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.SetByDottedPath(base::StrCat({kZhuyinEngineId, ".zhuyinKeyboardLayout"}),
                        "IBM");
   dict.SetByDottedPath(base::StrCat({kZhuyinEngineId, ".zhuyinSelectKeys"}),
@@ -296,7 +295,7 @@ class JapaneseTesting : public testing::TestWithParam<std::string> {};
 
 TEST_P(JapaneseTesting, CreateJapaneseSettingsFromPrefsTest) {
   using ::ash::ime::mojom::JapaneseSettings;
-  base::Value::Dict jp_prefs;
+  base::DictValue jp_prefs;
   jp_prefs.Set("AutomaticallySendStatisticsToGoogle", false);
   jp_prefs.Set("AutomaticallySwitchToHalfwidth", false);
   jp_prefs.Set("JapaneseDisableSuggestions", true);
@@ -311,7 +310,7 @@ TEST_P(JapaneseTesting, CreateJapaneseSettingsFromPrefsTest) {
   jp_prefs.Set("UseSystemDictionary", false);
   jp_prefs.Set("numberOfSuggestions", 5);
 
-  base::Value::Dict full_prefs;
+  base::DictValue full_prefs;
 
   // TODO(crbug.com/203464079): Use distinct CrOS prefs for nacl_mozc_jp
   // ("Japanese [for JIS keyboard]") and nacl_mozc_us ("Japanese for US

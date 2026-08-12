@@ -276,6 +276,8 @@ class Command(object):
       _Method.DELETE, '/session/:sessionId/pressuresource/:type')
   SET_PROTECTED_AUDIENCE_KANONYMITY = (
       _Method.POST, '/session/:sessionId/protected_audience/set_k_anonymity')
+  GET_GLOBAL_PRIVACY_CONTROL = (_Method.GET, '/session/:sessionId/privacy')
+  SET_GLOBAL_PRIVACY_CONTROL = (_Method.POST, '/session/:sessionId/privacy')
 
   # Custom Chrome commands.
   IS_LOADING = (_Method.GET, '/session/:sessionId/is_loading')
@@ -284,10 +286,8 @@ class CommandExecutor(object):
   def __init__(self, server_url, http_timeout=None):
     self._server_url = server_url
     parsed_url = urlparse(server_url)
-    self._http_timeout = 10
-    # see https://crbug.com/1045241: short timeout seems to introduce flakiness
-    if util.IsMac() or util.IsWindows():
-      self._http_timeout = 60
+    # see https://crbug.com/40115943: short timeout seems to introduce flakiness
+    self._http_timeout = 60
     if http_timeout is not None:
       self._http_timeout = http_timeout
     self._http_client = http.client.HTTPConnection(

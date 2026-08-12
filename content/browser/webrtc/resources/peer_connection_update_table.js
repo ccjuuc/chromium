@@ -72,8 +72,9 @@ export class PeerConnectionUpdateTable {
    *
    * @param {!Element} peerConnectionElement The root element.
    * @param {!PeerConnectionUpdateEntry} update The update to add.
+   * @param timedelta time in milliseconds since the last event.
    */
-  addPeerConnectionUpdate(peerConnectionElement, update) {
+  addPeerConnectionUpdate(peerConnectionElement, update, timedelta) {
     const tableElement = this.ensureUpdateContainer_(peerConnectionElement);
 
     const row = document.createElement('tr');
@@ -82,6 +83,11 @@ export class PeerConnectionUpdateTable {
     const time = new Date(parseFloat(update.timestamp));
     const timeItem = document.createElement('td');
     timeItem.textContent = time.toLocaleString();
+    // Display the timestamp and time since last event on hover.
+    timeItem.title = 'Timestamp: ' + update.timestamp;
+    if (timedelta) {
+      timeItem.title += ' delta: ' + timedelta + 'ms';
+    }
     row.appendChild(timeItem);
 
     // `type` is a display variant of update.type which does not get serialized
@@ -130,8 +136,13 @@ export class PeerConnectionUpdateTable {
         'transceiverModified'].includes(update.type)) {
       const data = JSON.parse(update.value);
       type += '(index=' + data.transceiverIndex + ', kind=' + data.kind + ')';
-    } else if (['oniceconnectionstatechange', 'onconnectionstatechange',
-        'onsignalingstatechange'].includes(update.type)) {
+    } else if (update.type === 'ontrack') {
+      const data = JSON.parse(update.value);
+      type += '(kind=' + data.kind + ')';
+    } else if ([
+                 'oniceconnectionstatechange', 'onconnectionstatechange',
+                 'onsignalingstatechange'
+               ].includes(update.type)) {
       const fieldName = {
         'oniceconnectionstatechange' : 'iceconnectionstate',
         'onconnectionstatechange' : 'connectionstate',
@@ -233,8 +244,10 @@ export class PeerConnectionUpdateTable {
           valueContainer.appendChild(sectionDetails);
         });
       }
-    } else if (['icecandidate', 'addIceCandidate', 'transceiverAdded',
-        'transceiverModified'].includes(update.type)) {
+    } else if ([
+                 'icecandidate', 'addIceCandidate', 'transceiverAdded',
+                 'transceiverModified', 'ontrack'
+               ].includes(update.type)) {
       const parts = JSON.parse(update.value);
       valueContainer.textContent = JSON.stringify(parts, null, ' ');
     } else {

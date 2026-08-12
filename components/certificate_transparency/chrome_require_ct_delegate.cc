@@ -7,13 +7,13 @@
 #include <algorithm>
 #include <iterator>
 #include <map>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -21,7 +21,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/types/zip.h"
 #include "base/values.h"
 #include "components/url_formatter/url_fixer.h"
 #include "components/url_matcher/url_matcher.h"
@@ -180,7 +179,15 @@ ChromeRequireCTDelegate::IsCTRequiredForHost(
     std::string_view hostname,
     const net::X509Certificate* chain,
     const std::vector<net::SHA256HashValue>& spki_hashes) const {
-  if (MatchHostname(hostname) || MatchSPKI(chain, spki_hashes)) {
+  if (MatchSPKI(chain, spki_hashes)) {
+    return CTRequirementLevel::NOT_REQUIRED_APPLIES_ACROSS_NAMES;
+  }
+  if (MatchHostname(hostname)) {
+    // Technically it should be possible to check all the hostname rules
+    // against all the SANs in the leaf and determine if this should apply
+    // across SANs. However this is hard to calculate and unclear if it is
+    // actually worth doing. Just do the simple way for now and only do
+    // hostname exclusion checks for the individual hostname.
     return CTRequirementLevel::NOT_REQUIRED;
   }
 
@@ -237,7 +244,7 @@ bool ChromeRequireCTDelegate::MatchSPKI(
   auto intermediate_hashes = base::span(hashes).subspan(1u);
   auto intermediate_buffers = chain->intermediate_buffers();
   for (auto [hash, cert_buffer] :
-       base::zip(intermediate_hashes, intermediate_buffers)) {
+       std::views::zip(intermediate_hashes, intermediate_buffers)) {
     if (spkis_.contains(hash)) {
       candidates.push_back(cert_buffer.get());
     }
@@ -332,14 +339,11 @@ void ChromeRequireCTDelegate::ParseSpkiHashes(
     absl::flat_hash_set<net::SHA256HashValue>* hashes) const {
   hashes->clear();
   for (const auto& value : spki_list) {
-    net::HashValue hash;
-    if (!hash.FromString(value)) {
+    std::optional<net::HashValue> hash = net::HashValue::FromString(value);
+    if (!hash || hash->tag() != net::HASH_VALUE_SHA256) {
       continue;
     }
-    if (hash.tag() != net::HASH_VALUE_SHA256) {
-      continue;
-    }
-    hashes->insert(hash.sha256hashvalue());
+    hashes->insert(hash->sha256hashvalue());
   }
 }
 

@@ -14,8 +14,9 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
-import org.chromium.chrome.browser.ui.signin.fullscreen_signin.FullscreenSigninConfig;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountUtils;
@@ -34,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 @NullMarked
 public final class FullscreenSigninPromoLauncher {
     /**
-     * Launches the {@link SigninAndHistoryOptInActivity} if it needs to be displayed.
+     * Launches the {@link SigninAndHistorySyncActivity} if it needs to be displayed.
      *
      * @param context The {@link Context} to launch the {@link SigninAndHistorySyncActivity}.
      * @param profile The active user profile.
@@ -53,25 +54,15 @@ public final class FullscreenSigninPromoLauncher {
             return false;
         }
 
-        FullscreenSigninAndHistorySyncConfig config =
-                new FullscreenSigninAndHistorySyncConfig.Builder(
-                                context.getString(R.string.signin_fre_title),
-                                context.getString(R.string.signin_fre_subtitle),
-                                FullscreenSigninConfig.DISMISS_TEXT_NOT_INITIALIZED,
-                                context.getString(R.string.history_sync_title),
-                                context.getString(R.string.history_sync_subtitle))
-                        .build();
-        @Nullable Intent intent =
-                signinAndHistorySyncActivityLauncher.createFullscreenSigninIntent(
-                        context, profile, config, SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO);
-        if (intent == null) {
+        if (!createAndLaunchActivity(
+                context,
+                profile,
+                signinAndHistorySyncActivityLauncher,
+                SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO)) {
             return false;
         }
 
-        context.startActivity(intent);
-        prefManager.setSigninPromoNextShowTime(
-                TimeUtils.currentTimeMillis()
-                        + TimeUnit.DAYS.toMillis(getDurationBetweenPromoTriggers()));
+        prefManager.setSigninPromoLastShownTimeWithRandomOffset(getCurrentTimeWithRandomOffset());
         prefManager.setSigninPromoLastShownVersion(currentMajorVersion);
         var accounts =
                 AccountUtils.getAccountsIfFulfilledOrEmpty(
@@ -81,30 +72,101 @@ public final class FullscreenSigninPromoLauncher {
         return true;
     }
 
+    /**
+     * Launches the {@link SigninAndHistorySyncActivity} when forcing the display.
+     *
+     * @param context The {@link Context} to launch the {@link SigninAndHistorySyncActivity}.
+     * @param profile The active user profile.
+     * @param signinAndHistorySyncActivityLauncher launcher used to launch the {@link
+     *     SigninAndHistorySyncActivity}.
+     * @return Whether the signin promo is shown.
+     */
+    public static boolean launchPromoIfForced(
+            Context context,
+            Profile profile,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher) {
+        boolean shouldDisplayForForcedSigninPolicy =
+                ForcedSigninController.shouldDisplayForcedSignin(profile);
+        if (!SigninFeatureMap.isEnabled(SigninFeatures.FORCE_STARTUP_SIGNIN_PROMO)
+                && !shouldDisplayForForcedSigninPolicy) {
+            return false;
+        }
+        return createAndLaunchActivity(
+                context,
+                profile,
+                signinAndHistorySyncActivityLauncher,
+                shouldDisplayForForcedSigninPolicy
+                        ? SigninAccessPoint.FORCED_SIGNIN
+                        : SigninAccessPoint.FULLSCREEN_SIGNIN_PROMO);
+    }
+
+    private static boolean createAndLaunchActivity(
+            Context context,
+            Profile profile,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            @SigninAccessPoint int accessPoint) {
+        FullscreenSigninAndHistorySyncConfig config =
+                FullscreenSigninAndHistorySyncConfig.builder(
+                                context.getString(R.string.signin_fre_title),
+                                context.getString(R.string.signin_fre_subtitle),
+                                context.getString(R.string.signin_fre_stay_signed_out_button),
+                                context.getString(R.string.history_sync_title),
+                                context.getString(R.string.history_sync_subtitle))
+                        .build();
+        @Nullable Intent intent =
+                signinAndHistorySyncActivityLauncher.createFullscreenSigninIntent(
+                        context, profile, config, accessPoint);
+        if (intent == null) {
+            return false;
+        }
+        context.startActivity(intent);
+        return true;
+    }
+
     private static boolean shouldLaunchPromo(
             Profile profile, SigninPreferencesManager prefManager, final int currentMajorVersion) {
-        if (SigninFeatureMap.isEnabled(SigninFeatures.FORCE_STARTUP_SIGNIN_PROMO)) {
-            return true;
-        }
-
         if (DeviceInfo.isAutomotive()) {
             return false;
         }
 
-        final long nextShowTime = prefManager.getSigninPromoNextShowTime();
+        SigninManager signinManager = IdentityServicesProvider.get().getSigninManager(profile);
+        if (signinManager == null
+                || !signinManager.isSigninSupported(/* requireUpdatedPlayServices= */ true)) {
+            return false;
+        }
+
+        final long lastShowTimeWithRandomOffset =
+                prefManager.getSigninPromoLastShownTimeWithRandomOffset();
         boolean useDate =
                 SigninFeatureMap.isEnabled(SigninFeatures.FULLSCREEN_SIGN_IN_PROMO_USE_DATE);
-        if (nextShowTime == 0) {
-            prefManager.setSigninPromoNextShowTime(
-                    TimeUtils.currentTimeMillis()
-                            + TimeUnit.DAYS.toMillis(getDurationBetweenPromoTriggers()));
+
+        // Set the last shown time if it was never set before or if it's in the future (in the case
+        // of device time change).
+        if (lastShowTimeWithRandomOffset < 0
+                || lastShowTimeWithRandomOffset > TimeUtils.currentTimeMillis()) {
+            prefManager.setSigninPromoLastShownTimeWithRandomOffset(
+                    getCurrentTimeWithRandomOffset());
             // Don't show if next show time was never recorded in the past.
             if (useDate) {
                 return false;
             }
         }
-        if (useDate && nextShowTime > TimeUtils.currentTimeMillis()) {
-            return false;
+        if (useDate) {
+            int interval =
+                    SigninFeatureMap.getInstance()
+                            .getFieldTrialParamByFeatureAsInt(
+                                    SigninFeatures.FULLSCREEN_SIGN_IN_PROMO_USE_DATE,
+                                    "interval",
+                                    -1);
+            if (interval == -1) {
+                throw new IllegalStateException(
+                        "interval param should be available with feature enabled");
+            }
+            final long nextShowTime =
+                    TimeUnit.DAYS.toMillis(interval) + lastShowTimeWithRandomOffset;
+            if (nextShowTime > TimeUtils.currentTimeMillis()) {
+                return false;
+            }
         }
 
         final int lastPromoMajorVersion = prefManager.getSigninPromoLastShownVersion();
@@ -141,10 +203,10 @@ public final class FullscreenSigninPromoLauncher {
                 || !previousAccountEmails.containsAll(currentAccountEmails);
     }
 
-    /** Returns the number of days between promo triggers. */
-    private static int getDurationBetweenPromoTriggers() {
-        // The duration between two promo trigger is randomly chosen between [53..67] days.
-        return 53 + new Random().nextInt(15);
+    // Returns a random time offset in the past between [0..14) days in milliseconds.
+    private static long getCurrentTimeWithRandomOffset() {
+        int days = new Random().nextInt(14);
+        return TimeUtils.currentTimeMillis() - TimeUnit.DAYS.toMillis(days);
     }
 
     private FullscreenSigninPromoLauncher() {}

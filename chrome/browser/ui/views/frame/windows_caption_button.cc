@@ -14,6 +14,8 @@
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
+#include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/grit/theme_resources.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/theme_provider.h"
@@ -58,12 +60,11 @@ gfx::Size WindowsCaptionButton::CalculatePreferredSize(
   // TODO(bsep): The sizes in this function are for 1x device scale and don't
   // match Windows button sizes at hidpi.
   int height = WindowFrameUtil::kWindowsCaptionButtonHeightRestored;
-  if (!frame_view_->GetBrowserView()->webui_tab_strip() &&
-      frame_view_->IsMaximized()) {
-    int maximized_height =
-        frame_view_->GetBrowserView()->ShouldDrawTabStrip()
-            ? frame_view_->GetBrowserView()->GetTabStripHeight()
-            : frame_view_->TitlebarMaximizedVisualHeight();
+  if (frame_view_->IsMaximized()) {
+    const auto info = frame_view_->GetBrowserView()->GetFrameElementInfo();
+    int maximized_height = info.tabstrip_preferred_height
+                               ? info.tabstrip_preferred_height
+                               : frame_view_->TitlebarMaximizedVisualHeight();
     constexpr int kMaximizedBottomMargin = 2;
     maximized_height -= kMaximizedBottomMargin;
     height = std::min(height, maximized_height);
@@ -72,6 +73,14 @@ gfx::Size WindowsCaptionButton::CalculatePreferredSize(
 }
 
 SkColor WindowsCaptionButton::GetBaseForegroundColor() const {
+  // On Windows, the caption buttons are always on the right. If the horizontal
+  // tab strip isn't rendered, then the caption buttons will always be on the
+  // toolbar.
+  if (frame_view_->GetBrowserView()
+          ->GetFrameElementInfo()
+          .tabstrip_preferred_height == 0) {
+    return GetColorProvider()->GetColor(kColorCaptionButtonOnToolbar);
+  }
   return GetColorProvider()->GetColor(
       GetWidget()->ShouldPaintAsActive()
           ? kColorCaptionButtonForegroundActive

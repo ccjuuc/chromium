@@ -25,6 +25,7 @@
 #import "base/task/task_traits.h"
 #import "base/task/thread_pool.h"
 #import "base/time/default_tick_clock.h"
+#import "base/trace_event/named_trigger.h"
 #import "build/blink_buildflags.h"
 #import "components/content_settings/core/common/content_settings_pattern.h"
 #import "components/crash/core/common/crash_key.h"
@@ -37,8 +38,8 @@
 #import "components/metrics/expired_histogram_util.h"
 #import "components/metrics/metrics_service.h"
 #import "components/metrics_services_manager/metrics_services_manager.h"
+#import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/open_from_clipboard/clipboard_recent_content.h"
-#import "components/os_crypt/sync/os_crypt.h"
 #import "components/prefs/json_pref_store.h"
 #import "components/prefs/pref_service.h"
 #import "components/previous_session_info/previous_session_info.h"
@@ -69,6 +70,7 @@
 #import "ios/chrome/browser/shared/model/paths/paths.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_dependency_manager_ios.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/translate/model/translate_service_ios.h"
 #import "ios/chrome/browser/web/model/ios_thread_profiler.h"
@@ -94,17 +96,11 @@
 #import "components/heap_profiling/in_process/heap_profiler_controller.h"
 #endif
 
-namespace {
+#if !BUILDFLAG(USE_BLINK)
+#import "ios/chrome/browser/tracing/ios_tracing_controller.h"
+#endif
 
-// Initializes OSCrypt.
-void EnsureOSCryptInitialized() {
-  // There is no public API to initialize OSCrypt. It is performed one the
-  // first call to the library, so call `OSCrypt::IsEncryptionAvailable()`
-  // and discard the result to perform the initialisation.
-  std::ignore = OSCrypt::IsEncryptionAvailable();
-}
-
-}  // namespace
+namespace {}  // namespace
 
 IOSChromeMainParts::IOSChromeMainParts(
     const base::CommandLine& parsed_command_line)
@@ -178,19 +174,6 @@ void IOSChromeMainParts::ApplyFeatureList() {
   // local state, in case any of the settings affect policy.
   AppendSwitchesFromExperimentalSettings(command_line);
 
-  // Get the variation IDs passed through the command line. This is done early
-  // on because ConvertFlagsToSwitches() will append to the command line
-  // the variation IDs from flags (so that they are visible in about://version).
-  // This will be passed on to `VariationsService::SetUpFieldTrials()`, which
-  // will manually fetch the variation IDs from flags (hence the reason we do
-  // not pass the mutated command line, otherwise the IDs will be duplicated).
-  // It also distinguishes between variation IDs coming from the command line
-  // and from flags, so we cannot rely on simply putting them all in the
-  // command line.
-  const std::string command_line_variation_ids =
-      command_line->GetSwitchValueASCII(
-          variations::switches::kForceVariationIds);
-
   // Initialize local state.
   local_state_ = application_context_->GetLocalState();
   DCHECK(local_state_);
@@ -203,13 +186,27 @@ void IOSChromeMainParts::ApplyFeatureList() {
   // initialize field trials. The field trials are needed by IOThread's
   // initialization which happens in BrowserProcess:PreCreateThreads. Metrics
   // initialization is handled in PreMainMessageLoopRun since it posts tasks.
-  SetUpFieldTrials(command_line_variation_ids);
+  SetUpFieldTrials();
 
   // Initialize //base features that depend on the `FeatureList`.
   base::features::Init();
+
+  if (IsDefaultBottomOmniboxOnIOSEnabled()) {
+    // Set the default value after the feature list is started as the pref is
+    // registered before the feature is set.
+    local_state_->SetDefaultPrefValue(omnibox::kIsOmniboxInBottomPosition,
+                                      base::Value(true));
+  }
 }
 
 void IOSChromeMainParts::PreCreateThreads() {
+#if !BUILDFLAG(USE_BLINK)
+  // Initialize Perfetto tracing before threads are spawned so the
+  // TrackNameRecorder can capture and name the new background threads.
+  // For Blink, the content layer handles Perfetto initialization.
+  IOSTracingController::CreateInstance();
+#endif
+
   // Create and start the stack sampling profiler if CANARY or DEV. The warning
   // below doesn't apply.
   const version_info::Channel channel = ::GetChannel();
@@ -300,15 +297,9 @@ void IOSChromeMainParts::PreMainMessageLoopRun() {
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&FirstRun::LoadSentinelInfo));
 
-  // Force the initialisation of the OSCrypt library early in the application
-  // startup sequence. See https://crbug.com/383661630 for why this is needed.
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&EnsureOSCryptInitialized));
-
   // ContentSettingsPattern need to be initialized before creating the
   // ProfileIOS.
-  ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes(nullptr, 0);
+  ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes({});
 
   // Ensure ClipboadRecentContentIOS is created.
   ClipboardRecentContent::SetInstance(CreateClipboardRecentContentIOS());
@@ -328,6 +319,11 @@ void IOSChromeMainParts::PreMainMessageLoopRun() {
 
   // Now that the file thread has been started, start recording.
   StartMetricsRecording();
+
+  // This must happen after `SetupFieldTracingFromFieldTrial()`, which is
+  // triggered by `SetupMetrics()` above.
+  base::trace_event::EmitNamedTrigger(
+      base::trace_event::kStartupTracingTriggerName);
 
   // Ensure that the KeyedService factories are registered.
   EnsureProfileKeyedServiceFactoriesBuilt();
@@ -359,6 +355,7 @@ void IOSChromeMainParts::PreMainMessageLoopRun() {
       ->ReconfigureAfterFeatureListInit("");
   base::allocator::PartitionAllocSupport::Get()->ReconfigureAfterTaskRunnerInit(
       "");
+  crash_helper::CacheCorruptionDetectedMemoryRangesKillSwitch();
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC)
 
   TranslateServiceIOS::Initialize();
@@ -393,8 +390,7 @@ void IOSChromeMainParts::PostDestroyThreads() {
 }
 
 // This will be called after the command-line has been mutated by about:flags
-void IOSChromeMainParts::SetUpFieldTrials(
-    const std::string& command_line_variation_ids) {
+void IOSChromeMainParts::SetUpFieldTrials() {
   base::SetRecordActionTaskRunner(web::GetUIThreadTaskRunner({}));
 
 // This will occur inside //content for blink.
@@ -425,8 +421,7 @@ void IOSChromeMainParts::SetUpFieldTrials(
   additional_features_controller->RegisterFeatureList(feature_list.get());
 
   application_context_->GetVariationsService()->SetUpFieldTrials(
-      variation_ids, command_line_variation_ids,
-      std::vector<base::FeatureList::FeatureOverrideInfo>(),
+      variation_ids, std::vector<base::FeatureList::FeatureOverrideInfo>(),
       std::move(feature_list), &ios_field_trials_);
   additional_features_controller->FeatureListDidCompleteSetup();
 }

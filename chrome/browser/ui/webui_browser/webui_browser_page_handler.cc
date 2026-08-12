@@ -8,17 +8,22 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/notimplemented.h"
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
+#include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/views/tab_search_bubble_host.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_side_panel_ui.h"
@@ -33,7 +38,9 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/interaction/element_tracker_views.h"
 
@@ -114,25 +121,44 @@ class WebUIBrowserGuestHandler
                       .location_bar_model()
                       ->GetVectorIcon();
     webui_browser::mojom::SecurityIcon icon_type;
-    if (icon == &omnibox::kHttpChromeRefreshIcon) {
+    if (icon == &(features::IsRoundedIconsEnabled()
+                      ? omnibox::kInfoIcon
+                      : omnibox::kHttpChromeRefreshOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::HttpChromeRefresh;
-    } else if (icon == &omnibox::kSecurePageInfoChromeRefreshIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? omnibox::kPageInfoCustomIcon
+                             : omnibox::kSecurePageInfoChromeRefreshOldIcon)) {
       icon_type =
           webui_browser::mojom::SecurityIcon::SecurePageInfoChromeRefresh;
-    } else if (icon == &vector_icons::kNoEncryptionIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? vector_icons::kNoEncryptionIcon
+                             : vector_icons::kNoEncryptionOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::NoEncryption;
-    } else if (icon == &vector_icons::kNotSecureWarningChromeRefreshIcon) {
+    } else if (icon ==
+               &(features::IsRoundedIconsEnabled()
+                     ? vector_icons::kWarningIcon
+                     : vector_icons::kNotSecureWarningChromeRefreshOldIcon)) {
       icon_type =
           webui_browser::mojom::SecurityIcon::NotSecureWarningChromeRefresh;
-    } else if (icon == &vector_icons::kBusinessChromeRefreshIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? vector_icons::kDomainIcon
+                             : vector_icons::kBusinessChromeRefreshOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::BusinessChromeRefresh;
-    } else if (icon == &vector_icons::kDangerousChromeRefreshIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? vector_icons::kDangerousFilledIcon
+                             : vector_icons::kDangerousChromeRefreshOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::DangerousChromeRefresh;
-    } else if (icon == &omnibox::kProductChromeRefreshIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? omnibox::kChromeProductIcon
+                             : omnibox::kProductChromeRefreshOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::ProductChromeRefresh;
-    } else if (icon == &vector_icons::kExtensionChromeRefreshIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? vector_icons::kChromeExtensionIcon
+                             : vector_icons::kExtensionChromeRefreshOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::ExtensionChromeRefresh;
-    } else if (icon == &omnibox::kOfflinePinIcon) {
+    } else if (icon == &(features::IsRoundedIconsEnabled()
+                             ? omnibox::kOfflinePinFilledIcon
+                             : omnibox::kOfflinePinOldIcon)) {
       icon_type = webui_browser::mojom::SecurityIcon::OfflinePin;
     } else {
       CHECK(false) << "Add new icon to webui_browsers's browser.mojom and "
@@ -192,7 +218,7 @@ void WebUIBrowserPageHandler::GetGuestIdForTabId(
 }
 
 void WebUIBrowserPageHandler::LoadTabSearch(LoadTabSearchCallback callback) {
-  content::WebContents::CreateParams params(GetBrowser()->profile());
+  content::WebContents::CreateParams params(GetBrowser()->GetProfile());
   tab_search_contents_ = content::WebContents::Create(params);
   tab_search_contents_->SetColorProviderSource(GetBrowserWindow());
   content::NavigationController::LoadURLParams url_params{
@@ -214,19 +240,18 @@ void WebUIBrowserPageHandler::ShowTabSearchBubble(
 void WebUIBrowserPageHandler::OpenAppMenu() {
   menu_.reset();
 
-  // TODO(webium): use BrowserElements::From(browser)->GetElement(). This
-  // requires adding a BrowserElementsWebUI.
   ui::TrackedElement* app_menu_button =
-      ui::ElementTracker::GetElementTracker()->GetFirstMatchingElement(
-          kToolbarAppMenuButtonElementId,
-          views::ElementTrackerViews::GetContextForWidget(
-              GetBrowserWindow()->widget()));
+      BrowserElements::From(GetBrowser())
+          ->GetElement(kToolbarAppMenuButtonElementId);
   CHECK(app_menu_button) << "App menu button not found";
   menu_model_ =
       std::make_unique<AppMenuModel>(GetBrowserWindow(), GetBrowser());
   menu_model_->Init();
-  menu_ = std::make_unique<AppMenu>(GetBrowser(), menu_model_.get(),
-                                    views::MenuRunner::NO_FLAGS);
+  menu_ = std::make_unique<AppMenu>(
+      GetBrowser(), menu_model_.get(), views::MenuRunner::NO_FLAGS,
+      // The WebUI browser architecture doesn't currently use BrowserView or
+      // an AppMenuControl that needs to be notified when the menu closes.
+      base::DoNothing());
   menu_->RunMenu(GetBrowserWindow()->widget(),
                  app_menu_button->GetScreenBounds());
 }
@@ -244,8 +269,7 @@ void WebUIBrowserPageHandler::LaunchDevToolsForBrowser() {
 }
 
 void WebUIBrowserPageHandler::OnSidePanelClosed() {
-  GetBrowserWindow()->GetWebUIBrowserSidePanelUI()->OnSidePanelClosed(
-      SidePanelEntry::PanelType::kContent);
+  GetBrowserWindow()->GetWebUIBrowserSidePanelUI()->OnSidePanelClosed();
 }
 
 void WebUIBrowserPageHandler::Minimize() {
@@ -262,6 +286,53 @@ void WebUIBrowserPageHandler::Restore() {
 
 void WebUIBrowserPageHandler::Close() {
   GetBrowserWindow()->Close();
+}
+
+void WebUIBrowserPageHandler::ShowBackForwardMenu(bool is_back) {
+  back_forward_menu_runner_.reset();
+  back_forward_menu_model_adapter_.reset();
+  back_forward_menu_model_.reset();
+
+  content::WebContents* web_contents =
+      GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  if (!web_contents) {
+    return;
+  }
+
+  ui::ElementIdentifier button_id =
+      is_back ? kToolbarBackButtonElementId : kToolbarForwardButtonElementId;
+  ui::TrackedElement* button_element =
+      BrowserElements::From(GetBrowser())->GetElement(button_id);
+  if (!button_element) {
+    return;
+  }
+
+  back_forward_menu_model_ = std::make_unique<BackForwardMenuModel>(
+      GetBrowser(), is_back ? BackForwardMenuModel::ModelType::kBackward
+                            : BackForwardMenuModel::ModelType::kForward);
+  back_forward_menu_model_adapter_ =
+      std::make_unique<views::MenuModelAdapter>(back_forward_menu_model_.get());
+  back_forward_menu_runner_ = std::make_unique<views::MenuRunner>(
+      back_forward_menu_model_adapter_->CreateMenu(),
+      views::MenuRunner::HAS_MNEMONICS);
+  back_forward_menu_runner_->RunMenuAt(
+      GetBrowserWindow()->widget(), nullptr, button_element->GetScreenBounds(),
+      views::MenuAnchorPosition::kTopLeft, ui::mojom::MenuSourceType::kMouse);
+}
+
+// static
+int WebUIBrowserPageHandler::GetTabStripInsetWidth() {
+#if BUILDFLAG(IS_MAC)
+  // Values from BrowserFrameViewMac::GetCaptionButtonBounds()
+  return (base::mac::MacOSVersion() >= 26'00'00) ? 76 : 82;
+#else
+  return 0;
+#endif
+}
+
+void WebUIBrowserPageHandler::GetTabStripInset(
+    GetTabStripInsetCallback callback) {
+  std::move(callback).Run(GetTabStripInsetWidth());
 }
 
 WebUIBrowserPageHandler::WebUIBrowserPageHandler(

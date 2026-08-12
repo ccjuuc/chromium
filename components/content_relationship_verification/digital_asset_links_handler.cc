@@ -99,9 +99,9 @@ GURL GetUrlForAssetLinks(const url::Origin& origin) {
 //    }
 //  }]
 
-bool StatementHasMatchingRelationship(const base::Value::Dict& statement,
+bool StatementHasMatchingRelationship(const base::DictValue& statement,
                                       const std::string& target_relation) {
-  const base::Value::List* relations = statement.FindList("relation");
+  const base::ListValue* relations = statement.FindList("relation");
   if (!relations) {
     return false;
   }
@@ -116,10 +116,10 @@ bool StatementHasMatchingRelationship(const base::Value::Dict& statement,
 }
 
 bool StatementHasMatchingTargetValue(
-    const base::Value::Dict& statement,
+    const base::DictValue& statement,
     const std::string& target_key,
     const std::set<std::string>& target_value) {
-  const base::Value::Dict* target = statement.FindDict("target");
+  const base::DictValue* target = statement.FindDict("target");
   if (!target) {
     return false;
   }
@@ -130,9 +130,9 @@ bool StatementHasMatchingTargetValue(
 }
 
 bool StatementHasMatchingFingerprint(
-    const base::Value::Dict& statement,
+    const base::DictValue& statement,
     const std::vector<std::string>& target_fingerprints) {
-  const base::Value::List* fingerprints =
+  const base::ListValue* fingerprints =
       statement.FindListByDottedPath("target.sha256_cert_fingerprints");
 
   if (!fingerprints) {
@@ -218,30 +218,19 @@ void DigitalAssetLinksHandler::OnURLLoadComplete(
     return;
   }
 
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      *response_body,
-      base::BindOnce(&DigitalAssetLinksHandler::OnJSONParseResult,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(relationship),
-                     std::move(fingerprints), std::move(target_values),
-                     std::move(callback)));
-}
-
-void DigitalAssetLinksHandler::OnJSONParseResult(
-    std::string relationship,
-    std::optional<std::vector<std::string>> fingerprints,
-    std::map<std::string, std::set<std::string>> target_values,
-    RelationshipCheckResultCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
+  base::JSONReader::Result result =
+      base::JSONReader::ReadAndReturnValueWithError(*response_body,
+                                                    base::JSON_PARSE_RFC);
   if (!result.has_value()) {
     AddMessageToConsole(
         web_contents_.get(),
         "Digital Asset Links response parsing failed with message: " +
-            result.error());
+            result.error().message);
     std::move(callback).Run(RelationshipCheckResult::kFailure);
     return;
   }
 
-  base::Value::List* statement_list = result->GetIfList();
+  const base::ListValue* statement_list = result->GetIfList();
   if (!statement_list) {
     AddMessageToConsole(web_contents_.get(), "Statement List is not a list.");
     std::move(callback).Run(RelationshipCheckResult::kFailure);
@@ -252,7 +241,7 @@ void DigitalAssetLinksHandler::OnJSONParseResult(
   std::vector<std::string> failures;
 
   for (const base::Value& statement : *statement_list) {
-    const base::Value::Dict* statement_dict = statement.GetIfDict();
+    const base::DictValue* statement_dict = statement.GetIfDict();
     if (!statement_dict) {
       failures.push_back("Statement is not a dictionary.");
       continue;

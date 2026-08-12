@@ -13,8 +13,8 @@ import org.hamcrest.Matcher;
 import org.chromium.base.test.transit.Facility;
 import org.chromium.base.test.transit.Station;
 import org.chromium.base.test.transit.ViewElement;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
-import org.chromium.chrome.test.R;
 
 /**
  * Bottom Sheet that appears to move a tab or list of tabs to a tab group.
@@ -41,8 +41,9 @@ public abstract class BottomSheetFacility<HostStationT extends Station<ChromeTab
         return declareView(bottomSheetElement.descendant(viewClass, viewMatchers));
     }
 
-    /** Press the system backpress to close the bottom sheet. */
-    public void close() {
+    /** Press the system backpress to dismiss the bottom sheet. */
+    public void dismiss() {
+        recheckActiveConditions();
         pressBackTo().exitFacility();
     }
 }

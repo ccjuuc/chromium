@@ -6,11 +6,17 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "base/win/windows_version.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_caption_button_container_win.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
@@ -21,6 +27,7 @@
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/model/display_override.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -212,10 +219,11 @@ class WebAppBrowserFrameViewWinTest : public InProcessBrowserTest {
     }
 
     webapps::AppId app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
+        browser()->GetProfile(), std::move(web_app_info));
     content::TestNavigationObserver navigation_observer(GetStartURL());
     navigation_observer.StartWatchingNewWebContents();
-    app_browser_ = web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+    app_browser_ =
+        web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
     navigation_observer.WaitForNavigationFinished();
 
     browser_view_ = BrowserView::GetBrowserViewForBrowser(app_browser_);
@@ -230,7 +238,7 @@ class WebAppBrowserFrameViewWinTest : public InProcessBrowserTest {
   }
 
   std::optional<SkColor> theme_color_ = SK_ColorBLUE;
-  std::vector<blink::mojom::DisplayMode> display_override_ = {};
+  std::vector<web_app::DisplayOverride> display_override_;
   raw_ptr<Browser, AcrossTasksDanglingUntriaged> app_browser_ = nullptr;
   raw_ptr<BrowserView, AcrossTasksDanglingUntriaged> browser_view_ = nullptr;
   raw_ptr<BrowserFrameViewWin, AcrossTasksDanglingUntriaged> frame_view_ =
@@ -252,9 +260,9 @@ IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinTest, NoThemeColor) {
   theme_color_ = std::nullopt;
   InstallAndLaunchWebApp();
 
-  EXPECT_EQ(
-      frame_view_->GetTitlebarColor(),
-      browser()->window()->GetColorProvider()->GetColor(ui::kColorFrameActive));
+  EXPECT_EQ(frame_view_->GetTitlebarColor(),
+            BrowserWindow::FromBrowser(browser())->GetColorProvider()->GetColor(
+                ui::kColorFrameActive));
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinTest, MaximizedLayout) {
@@ -326,7 +334,8 @@ class TabbedWebAppBrowserFrameViewWinTest
 
 IN_PROC_BROWSER_TEST_F(TabbedWebAppBrowserFrameViewWinTest,
                        TabbedWebAppIconInTitlebar) {
-  display_override_ = {blink::mojom::DisplayMode::kTabbed};
+  display_override_ = {
+      web_app::DisplayOverride::Create(blink::mojom::DisplayMode::kTabbed)};
   InstallAndLaunchWebApp();
 
   ASSERT_FALSE(frame_view_->window_icon_for_testing()->GetVisible());
@@ -362,8 +371,9 @@ class WebAppBrowserFrameViewWinWindowControlsOverlayTest
                          .LoadWindowControlsOverlayTestPageWithDataAndGetURL(
                              embedded_test_server(), &temp_dir_);
 
-    std::vector<blink::mojom::DisplayMode> display_overrides = {
-        blink::mojom::DisplayMode::kWindowControlsOverlay};
+    std::vector<web_app::DisplayOverride> display_overrides = {
+        web_app::DisplayOverride::Create(
+            blink::mojom::DisplayMode::kWindowControlsOverlay)};
     auto web_app_info =
         web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->scope = start_url.GetWithoutFilename();
@@ -374,18 +384,18 @@ class WebAppBrowserFrameViewWinWindowControlsOverlayTest
     web_app_info->display_override = display_overrides;
 
     webapps::AppId app_id = web_app::test::InstallWebApp(
-        browser()->profile(), std::move(web_app_info));
+        browser()->GetProfile(), std::move(web_app_info));
 
     content::TestNavigationObserver navigation_observer(start_url);
     base::RunLoop loop;
     navigation_observer.StartWatchingNewWebContents();
     Browser* app_browser =
-        web_app::LaunchWebAppBrowser(browser()->profile(), app_id);
+        web_app::LaunchWebAppBrowser(browser()->GetProfile(), app_id);
 
     // TODO(crbug.com/40174440): Register binder for BrowserInterfaceBroker
     // during testing.
-    app_browser->app_controller()->SetOnUpdateDraggableRegionForTesting(
-        loop.QuitClosure());
+    web_app::AppBrowserController::From(app_browser)
+        ->SetOnUpdateDraggableRegionForTesting(loop.QuitClosure());
     web_app::NavigateViaLinkClickToURLAndWait(app_browser, start_url);
     loop.Run();
     navigation_observer.WaitForNavigationFinished();
@@ -442,16 +452,27 @@ IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
   InstallAndLaunchWebAppWithWindowControlsOverlay();
   ToggleWindowControlsOverlayEnabledAndWait();
 
+  EXPECT_TRUE(browser_view_->IsWindowControlsOverlayEnabled());
   EXPECT_GT(frame_view_->GetBoundsForClientView().y(), 0);
 
   frame_view_->browser_widget()->SetFullscreen(true);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return frame_view_->browser_widget()->IsFullscreen(); }));
   browser_view_->GetWidget()->LayoutRootViewIfNecessary();
 
-  // ClientView should be covering the entire screen.
+  // WCO and its caption controls should remain enabled in fullscreen.
+  EXPECT_TRUE(browser_view_->IsWindowControlsOverlayEnabled());
+  EXPECT_TRUE(
+      frame_view_->caption_button_container_for_testing()->GetVisible());
   EXPECT_EQ(frame_view_->GetBoundsForClientView().y(), 0);
+
+  // Non-button overlay areas must stay client-clickable in fullscreen.
+  EXPECT_EQ(frame_view_->NonClientHitTest(gfx::Point(10, 10)), HTCLIENT);
 
   // Exit full screen.
   frame_view_->browser_widget()->SetFullscreen(false);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !frame_view_->browser_widget()->IsFullscreen(); }));
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
@@ -476,15 +497,26 @@ IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
 
   ToggleWindowControlsOverlayEnabledAndWait();
 
-  // Verify tooltip text has been updated.
+  // Verify tooltip text has been updated. On Windows 11+, maximize/restore
+  // buttons don't show tooltips because Windows shows Snap Layouts instead.
+  const bool is_win11_or_greater =
+      base::win::GetVersion() >= base::win::Version::WIN11;
   EXPECT_EQ(minimize_button->GetTooltipText(),
             minimize_button->GetViewAccessibility().GetCachedName());
-  EXPECT_EQ(maximize_button->GetTooltipText(),
-            maximize_button->GetViewAccessibility().GetCachedName());
-  EXPECT_EQ(restore_button->GetTooltipText(),
-            restore_button->GetViewAccessibility().GetCachedName());
   EXPECT_EQ(close_button->GetTooltipText(),
             close_button->GetViewAccessibility().GetCachedName());
+
+  if (is_win11_or_greater) {
+    // On Windows 11+, no tooltips for maximize/restore (Snap Layouts instead).
+    EXPECT_EQ(maximize_button->GetTooltipText(), u"");
+    EXPECT_EQ(restore_button->GetTooltipText(), u"");
+  } else {
+    // On older Windows, tooltips are shown for accessibility.
+    EXPECT_EQ(maximize_button->GetTooltipText(),
+              maximize_button->GetViewAccessibility().GetCachedName());
+    EXPECT_EQ(restore_button->GetTooltipText(),
+              restore_button->GetViewAccessibility().GetCachedName());
+  }
 
   ToggleWindowControlsOverlayEnabledAndWait();
 
@@ -511,13 +543,32 @@ IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
   // Verify the component updates on toggle.
   EXPECT_EQ(frame_view_->NonClientHitTest(kPoint), HTCLIENT);
 
+  // Get maximize button center point.
+  auto* caption_button_container =
+      frame_view_->caption_button_container_for_testing();
+  auto* maximize_button = static_cast<const WindowsCaptionButton*>(
+      caption_button_container->GetViewByID(VIEW_ID_MAXIMIZE_BUTTON));
+  gfx::Point maximize_center =
+      maximize_button->GetBoundsInScreen().CenterPoint();
+  views::View::ConvertPointFromScreen(frame_view_, &maximize_center);
+  const bool is_win11_or_greater =
+      base::win::GetVersion() >= base::win::Version::WIN11;
+
+  if (is_win11_or_greater) {
+    // Windows 11+: maximize button returns HTMAXBUTTON to enable Snap Layouts.
+    EXPECT_EQ(frame_view_->NonClientHitTest(maximize_center), HTMAXBUTTON);
+  } else {
+    // Older Windows: maximize button returns HTCLIENT.
+    EXPECT_EQ(frame_view_->NonClientHitTest(maximize_center), HTCLIENT);
+  }
+
   ToggleWindowControlsOverlayEnabledAndWait();
 
   // Verify the component clears when the feature is turned off.
   EXPECT_EQ(frame_view_->NonClientHitTest(kPoint), HTCLOSE);
 }
 
-// Regression test for https://crbug.com/1286896.
+// Regression test for https://crbug.com/40815899.
 IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
                        TitlebarLayoutAfterUpdateWindowTitle) {
   InstallAndLaunchWebAppWithWindowControlsOverlay();
@@ -532,4 +583,45 @@ IN_PROC_BROWSER_TEST_F(WebAppBrowserFrameViewWinWindowControlsOverlayTest,
   // right container to consume the full width of the WebAppFrameToolbarView.
   EXPECT_EQ(web_app_frame_toolbar->width(),
             web_app_frame_toolbar->get_right_container_for_testing()->width());
+}
+
+// Test that clicking the very top edge of a maximized DevTools window does not
+// return a resize component, which would prevent drag-to-restore.
+IN_PROC_BROWSER_TEST_F(BrowserFrameViewWinTest,
+                       MaximizedDevToolsTopEdgeHitTest) {
+  // Open undocked DevTools window.
+  DevToolsWindow* devtools_window =
+      DevToolsWindowTesting::OpenDevToolsWindowSync(browser(), false);
+  DevToolsWindowTesting* devtools_testing =
+      DevToolsWindowTesting::Get(devtools_window);
+
+  // Get the BrowserView and frame view for the DevTools window.
+  BrowserWindowInterface* devtools_browser = devtools_testing->browser();
+  EXPECT_EQ(devtools_browser->GetType(),
+            BrowserWindowInterface::Type::TYPE_DEVTOOLS);
+
+  BrowserView* devtools_browser_view =
+      BrowserView::GetBrowserViewForBrowser(devtools_browser);
+  views::FrameView* frame_view =
+      devtools_browser_view->GetWidget()->non_client_view()->frame_view();
+  auto* devtools_frame_view = static_cast<BrowserFrameViewWin*>(frame_view);
+
+  // Maximize the DevTools window.
+  devtools_frame_view->browser_widget()->Maximize();
+  devtools_browser_view->GetWidget()->LayoutRootViewIfNecessary();
+
+  // Hit test at the very top center edge (y=0). For a maximized window, this
+  // should NOT return HTTOP (resize).
+  const gfx::Point top_center(devtools_frame_view->width() / 2, 0);
+  EXPECT_NE(devtools_frame_view->NonClientHitTest(top_center), HTTOP);
+
+  // Hit test at the top-left corner (y=0, x=0). Should not return HTTOPLEFT.
+  const gfx::Point top_left(0, 0);
+  EXPECT_NE(devtools_frame_view->NonClientHitTest(top_left), HTTOPLEFT);
+
+  // Hit test at the top-right corner. Should not return HTTOPRIGHT.
+  const gfx::Point top_right(devtools_frame_view->width() - 1, 0);
+  EXPECT_NE(devtools_frame_view->NonClientHitTest(top_right), HTTOPRIGHT);
+
+  DevToolsWindowTesting::CloseDevToolsWindowSync(devtools_window);
 }

@@ -6,6 +6,8 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_SUGGESTIONS_SUGGESTION_TYPE_H_
 
 #include <ostream>
+#include <string>
+#include <string_view>
 
 namespace autofill {
 
@@ -43,9 +45,12 @@ enum class SuggestionType {
 
   kManageAddress = 10,
   kManageAutofillAi = 64,
+  kManageAutofillAiIdentityDocs = 75,
+  kManageAutofillAiShopping = 91,
+  kManageAutofillAiTravel = 76,
   kManageCreditCard = 11,
   kManageIban = 12,
-  kManagePlusAddress = 13,
+  // kManagePlusAddress = 13, // DEPRECATED
   kManageLoyaltyCard = 68,
 
   // Compose popup suggestion shown when no Compose session exists.
@@ -114,7 +119,7 @@ enum class SuggestionType {
   // Plus address suggestions.
   // kCreateNewPlusAddress = 39, // DEPRECATED
   // kCreateNewPlusAddressInline = 52, // DEPRECATED
-  kFillExistingPlusAddress = 40,
+  // kFillExistingPlusAddress = 40, // DEPRECATED
   // kPlusAddressError = 57, // DEPRECATED
 
   // Promotion suggestions.
@@ -136,6 +141,7 @@ enum class SuggestionType {
   // Webauthn suggestions.
   kWebauthnCredential = 43,
   kWebauthnSignInWithAnotherDevice = 44,
+  kWebauthnPasskeyQrCode = 86,
 
   // One time password suggestions.
   kOneTimePasswordEntry = 74,
@@ -143,9 +149,7 @@ enum class SuggestionType {
   // Other suggestions.
   kTitle = 45,
   kSeparator = 46,
-  // TODO(crbug.com/40266549): Rename to Undo once iOS implements it - it still
-  // works as clear form there.
-  kUndoOrClear = 47,
+  kUndo = 47,
   kMixedFormMessage = 48,
 
   // Top level suggestion rendered when test addresses are available. Shown only
@@ -171,8 +175,72 @@ enum class SuggestionType {
   // state. On click the user will be directed to sign in.
   kPendingStateSignin = 65,
 
-  // Next ID: 75
-  kMaxValue = kOneTimePasswordEntry
+  // Throbber suggestion to indicate loading state.
+  kLoadingThrobber = 77,
+
+  // Memory search result for AtMemory feature.
+  kAtMemorySearchResult = 78,
+
+  // Buy-Now-Pay-Later footnote suggestion to display the privacy notice with
+  // bold and link text.
+  kBnplFootnote = 79,
+
+  // Shows a suggestion after a period of inactivity to encourage the user to
+  // use AtMemory (opens AtMemory UI when clicked).
+  kAtMemoryInactivityNudge = 80,
+
+  // Static button in Autocomplete menu prompting use of AtMemory.
+  kAutocompleteAtMemoryButton = 81,
+
+  // Suggestion to open Gemini in the sidebar.
+  kOpenGemini = 82,
+
+  // Suggestion to display when AtMemory search fails to connect to the server.
+  kAtMemoryNoConnection = 83,
+
+  // Suggestion that triggers AtMemory search when accepted.
+  kAtMemorySearchAffordance = 84,
+
+  // Personal context notice. This is a footer note rather than a real
+  // selectable suggestion.
+  kPersonalContextNotice = 85,
+
+  // Suggestion shown when fetching Ambient Autofill suggestions is in progress.
+  kFetchingAmbientData = 87,
+
+  // Suggestion to display when AtMemory search fails due to an unexpected or
+  // generic error.
+  kAtMemoryGenericError = 88,
+
+  // Maximize Credit Card Benefits suggestion that, when clicked, prompts Gemini
+  // to recommend credit cards for autofill
+  kMaximizeCreditCardBenefitsEntry = 89,
+
+  // Fallback suggestion to open a subpopup displaying other orders.
+  kAutofillAiOtherOrders = 90,
+
+  // A suggestion shown to users as a notice about the usage of private
+  // inference.
+  kAutofillAiPrivateInferenceNotice = 92,
+
+  // Suggestion to open the enhanced autofill settings page.
+  kManageEnhancedAutofill = 93,
+
+  // Suggestion to display the AI disclosure for AtMemory.
+  kAtMemoryAiDisclosure = 94,
+
+  // Fallback suggestion to open a subpopup displaying other shipments.
+  kAutofillAiOtherShipments = 95,
+
+  // Suggestion displaying source attribution for AtMemory search results.
+  kAtMemorySourceAttribution = 96,
+
+  // Suggestion shown in the fetching state of AtMemory.
+  kAtMemoryFetching = 97,
+
+  // Next ID: 98
+
+  kMaxValue = kAtMemoryFetching
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SuggestionType)
 

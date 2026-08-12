@@ -8,6 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
@@ -29,6 +30,7 @@
 #include "components/autofill/core/browser/payments/test_legal_message_line.h"
 #include "components/autofill/core/browser/payments/test_virtual_card_enrollment_manager.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
+#include "components/autofill/core/browser/payments/virtual_card_enrollment_manager_test_api.h"
 #include "components/autofill/core/browser/strike_databases/payments/test_strike_database.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -220,8 +222,8 @@ TEST_F(VirtualCardEnrollmentManagerTest, OnRiskDataLoadedForVirtualCard) {
           testing::DoAll(testing::SaveArg<0>(&request_details),
                          testing::Return(payments::RequestId("11223344"))));
 
-  virtual_card_enrollment_manager_->OnRiskDataLoadedForVirtualCard(
-      kTestRiskData);
+  test_api(*virtual_card_enrollment_manager_)
+      .OnRiskDataLoadedForVirtualCard(kTestRiskData);
 
   EXPECT_EQ(request_details.risk_data, state->risk_data.value_or(""));
   EXPECT_EQ(request_details.app_locale, payments_data_manager().app_locale());
@@ -258,8 +260,10 @@ TEST_F(VirtualCardEnrollmentManagerTest,
   virtual_card_enrollment_manager_->InitVirtualCardEnroll(
       *card_, VirtualCardEnrollmentSource::kSettingsPage,
       virtual_card_enrollment_fields_loaded_callback.Get());
-  virtual_card_enrollment_manager_->OnDidGetDetailsForEnrollResponse(
-      payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess, response);
+  test_api(*virtual_card_enrollment_manager_)
+      .OnDidGetDetailsForEnrollResponse(
+          payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess,
+          response);
 
   auto* state =
       virtual_card_enrollment_manager_->GetVirtualCardEnrollmentProcessState();
@@ -293,8 +297,9 @@ TEST_F(VirtualCardEnrollmentManagerTest,
     virtual_card_enrollment_manager_->InitVirtualCardEnroll(
         *card_, VirtualCardEnrollmentSource::kDownstream, base::DoNothing());
     virtual_card_enrollment_manager_->SetResetCalled(false);
-    virtual_card_enrollment_manager_->OnDidGetDetailsForEnrollResponse(
-        result, payments::GetDetailsForEnrollmentResponseDetails());
+    test_api(*virtual_card_enrollment_manager_)
+        .OnDidGetDetailsForEnrollResponse(
+            result, payments::GetDetailsForEnrollmentResponseDetails());
     EXPECT_TRUE(virtual_card_enrollment_manager_->GetResetCalled());
   }
   histogram_tester.ExpectUniqueSample(
@@ -312,8 +317,9 @@ TEST_F(VirtualCardEnrollmentManagerTest,
     virtual_card_enrollment_manager_->InitVirtualCardEnroll(
         *card_, VirtualCardEnrollmentSource::kSettingsPage, base::DoNothing());
     virtual_card_enrollment_manager_->SetResetCalled(false);
-    virtual_card_enrollment_manager_->OnDidGetDetailsForEnrollResponse(
-        result, payments::GetDetailsForEnrollmentResponseDetails());
+    test_api(*virtual_card_enrollment_manager_)
+        .OnDidGetDetailsForEnrollResponse(
+            result, payments::GetDetailsForEnrollmentResponseDetails());
     EXPECT_TRUE(virtual_card_enrollment_manager_->GetResetCalled());
   }
   histogram_tester.ExpectUniqueSample(
@@ -399,6 +405,47 @@ TEST_F(VirtualCardEnrollmentManagerTest, Unenroll) {
       /*sample=*/false, 1);
 }
 
+// Ensures that if the manager is synchronously destroyed during the enrollment
+// response callback, it does not cause a Use-After-Free.
+TEST_F(VirtualCardEnrollmentManagerTest, Enroll_JniCleanupDuringCallbackNoUaf) {
+  base::HistogramTester histogram_tester;
+
+  // Setup state for Enroll.
+  VirtualCardEnrollmentProcessState* state =
+      virtual_card_enrollment_manager_->GetVirtualCardEnrollmentProcessState();
+  state->vcn_context_token = kTestVcnContextToken;
+  state->virtual_card_enrollment_fields.credit_card = *card_;
+  state->virtual_card_enrollment_fields.virtual_card_enrollment_source =
+      VirtualCardEnrollmentSource::kDownstream;
+
+  payments_data_manager().SetPaymentsCustomerData(
+      std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
+
+  // Mock the network call to run the callback synchronously.
+  EXPECT_CALL(multiple_request_payments_network_interface(),
+              UpdateVirtualCardEnrollment)
+      .WillOnce(
+          [&](const payments::UpdateVirtualCardEnrollmentRequestDetails& req,
+              base::OnceCallback<void(
+                  payments::PaymentsAutofillClient::PaymentsRpcResult)>
+                  callback) {
+            std::move(callback).Run(
+                payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess);
+            return payments::RequestId("11223344");
+          });
+
+  // Call Enroll with a callback that destroys the manager.
+  virtual_card_enrollment_manager_->Enroll(base::BindLambdaForTesting(
+      [&](payments::PaymentsAutofillClient::PaymentsRpcResult result) {
+        virtual_card_enrollment_manager_.reset();
+      }));
+
+  // Verify that the metrics were logged.
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.VirtualCard.Enroll.Result.Downstream",
+      /*sample=*/true, 1);
+}
+
 #if !BUILDFLAG(IS_IOS)
 TEST_F(VirtualCardEnrollmentManagerTest, StrikeDatabase_BubbleAccepted) {
   base::HistogramTester histogram_tester;
@@ -407,25 +454,25 @@ TEST_F(VirtualCardEnrollmentManagerTest, StrikeDatabase_BubbleAccepted) {
   virtual_card_enrollment_manager_
       ->AddStrikeToBlockOfferingVirtualCardEnrollment(
           base::NumberToString(card_->instrument_id()));
-  EXPECT_EQ(
-      virtual_card_enrollment_manager_->GetVirtualCardEnrollmentStrikeDatabase()
-          ->GetStrikes(base::NumberToString(card_->instrument_id())),
-      1);
+  EXPECT_EQ(test_api(*virtual_card_enrollment_manager_)
+                .GetVirtualCardEnrollmentStrikeDatabase()
+                ->GetStrikes(base::NumberToString(card_->instrument_id())),
+            1);
 
   // Ensure a strike has been removed after enrollment accepted.
   virtual_card_enrollment_manager_->Enroll(
       /*virtual_card_enrollment_update_response_callback=*/std::nullopt);
-  EXPECT_EQ(
-      virtual_card_enrollment_manager_->GetVirtualCardEnrollmentStrikeDatabase()
-          ->GetStrikes(base::NumberToString(card_->instrument_id())),
-      0);
+  EXPECT_EQ(test_api(*virtual_card_enrollment_manager_)
+                .GetVirtualCardEnrollmentStrikeDatabase()
+                ->GetStrikes(base::NumberToString(card_->instrument_id())),
+            0);
 
   histogram_tester.ExpectBucketCount(
       "Autofill.StrikeDatabase.StrikesPresentWhenVirtualCardEnrolled", 1, 1);
   histogram_tester.ExpectBucketCount(
-      "Autofill.VirtualCardEnrollmentStrikeDatabase." +
-          VirtualCardEnrollmentSourceToMetricSuffix(
-              VirtualCardEnrollmentSource::kDownstream),
+      base::StrCat({"Autofill.VirtualCardEnrollmentStrikeDatabase.",
+                    VirtualCardEnrollmentSourceToMetricSuffix(
+                        VirtualCardEnrollmentSource::kDownstream)}),
       VirtualCardEnrollmentStrikeDatabaseEvent::
           VIRTUAL_CARD_ENROLLMENT_STRIKE_DATABASE_STRIKES_CLEARED,
       1);
@@ -445,15 +492,15 @@ TEST_F(VirtualCardEnrollmentManagerTest, StrikeDatabase_BubbleCanceled) {
       /*sample=*/1, /*count=*/1);
 
   // Ensure a strike has been logged.
-  EXPECT_EQ(
-      virtual_card_enrollment_manager_->GetVirtualCardEnrollmentStrikeDatabase()
-          ->GetStrikes(base::NumberToString(card_->instrument_id())),
-      1);
+  EXPECT_EQ(test_api(*virtual_card_enrollment_manager_)
+                .GetVirtualCardEnrollmentStrikeDatabase()
+                ->GetStrikes(base::NumberToString(card_->instrument_id())),
+            1);
 
   histogram_tester.ExpectBucketCount(
-      "Autofill.VirtualCardEnrollmentStrikeDatabase." +
-          VirtualCardEnrollmentSourceToMetricSuffix(
-              VirtualCardEnrollmentSource::kDownstream),
+      base::StrCat({"Autofill.VirtualCardEnrollmentStrikeDatabase.",
+                    VirtualCardEnrollmentSourceToMetricSuffix(
+                        VirtualCardEnrollmentSource::kDownstream)}),
       VirtualCardEnrollmentStrikeDatabaseEvent::
           VIRTUAL_CARD_ENROLLMENT_STRIKE_DATABASE_STRIKE_LOGGED,
       1);
@@ -471,8 +518,8 @@ TEST_F(VirtualCardEnrollmentManagerTest, StrikeDatabase_BubbleBlocked) {
           base::NumberToString(card_->instrument_id()),
           VirtualCardEnrollmentSource::kDownstream));
 
-  for (int i = 0; i < virtual_card_enrollment_manager_
-                          ->GetVirtualCardEnrollmentStrikeDatabase()
+  for (int i = 0; i < test_api(*virtual_card_enrollment_manager_)
+                          .GetVirtualCardEnrollmentStrikeDatabase()
                           ->GetMaxStrikesLimit();
        ++i) {
     virtual_card_enrollment_manager_
@@ -537,22 +584,22 @@ TEST_F(VirtualCardEnrollmentManagerTest,
 
   for (int i = 0; i < static_cast<int>(failure_results.size()); ++i) {
     SetUpStrikeDatabaseTest();
-    virtual_card_enrollment_manager_
-        ->OnDidGetUpdateVirtualCardEnrollmentResponse(
+    test_api(*virtual_card_enrollment_manager_)
+        .OnDidGetUpdateVirtualCardEnrollmentResponse(
             VirtualCardEnrollmentRequestType::kEnroll, failure_results[i]);
     histogram_tester.ExpectBucketCount(
         "Autofill.StrikeDatabase.NthStrikeAdded.VirtualCardEnrollment",
         /*sample=*/i + 1, /*expected_count=*/1);
 
-    EXPECT_EQ(virtual_card_enrollment_manager_
-                  ->GetVirtualCardEnrollmentStrikeDatabase()
+    EXPECT_EQ(test_api(*virtual_card_enrollment_manager_)
+                  .GetVirtualCardEnrollmentStrikeDatabase()
                   ->GetStrikes(base::NumberToString(card_->instrument_id())),
               i + 1);
 
     histogram_tester.ExpectBucketCount(
-        "Autofill.VirtualCardEnrollmentStrikeDatabase." +
-            VirtualCardEnrollmentSourceToMetricSuffix(
-                VirtualCardEnrollmentSource::kDownstream),
+        base::StrCat({"Autofill.VirtualCardEnrollmentStrikeDatabase.",
+                      VirtualCardEnrollmentSourceToMetricSuffix(
+                          VirtualCardEnrollmentSource::kDownstream)}),
         VirtualCardEnrollmentStrikeDatabaseEvent::
             VIRTUAL_CARD_ENROLLMENT_STRIKE_DATABASE_STRIKE_LOGGED,
         i + 1);
@@ -564,8 +611,8 @@ TEST_F(VirtualCardEnrollmentManagerTest,
   SetUpStrikeDatabaseTest();
   base::HistogramTester histogram_tester;
 
-  for (int i = 0; i < virtual_card_enrollment_manager_
-                          ->GetVirtualCardEnrollmentStrikeDatabase()
+  for (int i = 0; i < test_api(*virtual_card_enrollment_manager_)
+                          .GetVirtualCardEnrollmentStrikeDatabase()
                           ->GetMaxStrikesLimit();
        ++i) {
     virtual_card_enrollment_manager_
@@ -598,15 +645,15 @@ TEST_F(VirtualCardEnrollmentManagerTest, VirtualCardEnrollmentFields_LastShow) {
   virtual_card_enrollment_manager_->set_ignore_strike_database(true);
 
   // Making sure there is no existing strike for the card.
-  ASSERT_EQ(
-      virtual_card_enrollment_manager_->GetVirtualCardEnrollmentStrikeDatabase()
-          ->GetStrikes(
-              base::NumberToString(state->virtual_card_enrollment_fields
-                                       .credit_card.instrument_id())),
-      0);
+  ASSERT_EQ(test_api(*virtual_card_enrollment_manager_)
+                .GetVirtualCardEnrollmentStrikeDatabase()
+                ->GetStrikes(
+                    base::NumberToString(state->virtual_card_enrollment_fields
+                                             .credit_card.instrument_id())),
+            0);
 
-  for (int i = 0; i < virtual_card_enrollment_manager_
-                              ->GetVirtualCardEnrollmentStrikeDatabase()
+  for (int i = 0; i < test_api(*virtual_card_enrollment_manager_)
+                              .GetVirtualCardEnrollmentStrikeDatabase()
                               ->GetMaxStrikesLimit() -
                           1;
        ++i) {
@@ -876,9 +923,10 @@ TEST_P(VirtualCardEnrollmentManagerParamTest,
     virtual_card_enrollment_manager_->InitVirtualCardEnroll(*card_, source(),
                                                             base::DoNothing());
     task_environment_.FastForwardBy(base::Milliseconds(5));
-    virtual_card_enrollment_manager_->OnDidGetDetailsForEnrollResponse(
-        payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess,
-        response);
+    test_api(*virtual_card_enrollment_manager_)
+        .OnDidGetDetailsForEnrollResponse(
+            payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess,
+            response);
 
     auto* state = virtual_card_enrollment_manager_
                       ->GetVirtualCardEnrollmentProcessState();
@@ -901,14 +949,15 @@ TEST_P(VirtualCardEnrollmentManagerParamTest,
               network_image.AsImageSkia()));
     }
     histogram_tester.ExpectUniqueSample(
-        "Autofill.VirtualCard.GetDetailsForEnrollment.Result." +
-            VirtualCardEnrollmentSourceToMetricSuffix(source()),
+        base::StrCat({"Autofill.VirtualCard.GetDetailsForEnrollment.Result.",
+                      VirtualCardEnrollmentSourceToMetricSuffix(source())}),
         /*sample=*/true, make_image_present ? 1 : 2);
     histogram_tester.ExpectBucketCount(
-        "Autofill.VirtualCard.GetDetailsForEnrollment.Latency." +
-            VirtualCardEnrollmentSourceToMetricSuffix(source()) +
-            PaymentsRpcResultToMetricsSuffix(
-                payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess),
+        base::StrCat({"Autofill.VirtualCard.GetDetailsForEnrollment.Latency.",
+                      VirtualCardEnrollmentSourceToMetricSuffix(source()),
+                      PaymentsRpcResultToMetricsSuffix(
+                          payments::PaymentsAutofillClient::PaymentsRpcResult::
+                              kSuccess)}),
         /*sample=*/5, make_image_present ? 1 : 2);
 
     // Avoid dangling pointers to artwork.
@@ -994,8 +1043,8 @@ TEST_P(DownstreamEnrollmentEarlyPreflightCallParamTest,
   bool expected = source() == VirtualCardEnrollmentSource::kDownstream &&
                   downstream_enrollment_has_started();
   EXPECT_EQ(expected,
-            virtual_card_enrollment_manager_
-                ->ShouldContinueExistingDownstreamEnrollment(card, source()));
+            test_api(*virtual_card_enrollment_manager_)
+                .ShouldContinueExistingDownstreamEnrollment(card, source()));
 }
 
 class DownstreamEnrollmentEarlyPreflightCallCallbackParamTest
@@ -1054,9 +1103,10 @@ TEST_P(DownstreamEnrollmentEarlyPreflightCallCallbackParamTest,
   // Otherwise, the callback should be invoked when the details are received.
   if (!enroll_details_received()) {
     EXPECT_CALL(callback, Run);
-    mock_manager.OnDidGetDetailsForEnrollResponse(
-        payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess,
-        response);
+    test_api(mock_manager)
+        .OnDidGetDetailsForEnrollResponse(
+            payments::PaymentsAutofillClient::PaymentsRpcResult::kSuccess,
+            response);
   }
 }
 

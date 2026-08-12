@@ -35,22 +35,21 @@ extern const CGFloat kMostVisitedBottomMarginIPhone;
 extern const CGFloat kSuggestionPeekingHeight;
 
 // Dimension of user's identity avatar as a square image.
-extern const CGFloat kIdentityAvatarDimension;
+extern const CGFloat kIdentityAvatarDiameter;
 // Margin around identity avatar and customization menu.
 extern const CGFloat kHeaderIconMargin;
 // Padding around user's identity avatar and its margin.
 extern const CGFloat kIdentityAvatarPadding;
 // Dimension of signed-out identity icon.
 extern const CGFloat kSignedOutIdentityIconSize;
-// Dimension of the customization menu button's icon.
-extern const CGFloat kCustomizationMenuIconSize;
-// Customization Menu icon size used when the sign-in button is shown without an
-// avatar.
-extern const CGFloat kCustomizationMenuIconSizeWhenSignInButtonHasNoAvatar;
-// Dimension of the customization menu button.
-extern const CGFloat kCustomizationMenuButtonDimension;
-// The corner radius of the customization menu button.
-extern const CGFloat kCustomizationMenuButtonCornerRadius;
+// Dimension of a menu button's icon.
+extern const CGFloat kNTPMenuButtonIconSize;
+// Dimension of a menu button.
+extern const CGFloat kNTPMenuButtonDimension;
+// The corner radius of a menu button.
+extern const CGFloat kNTPMenuButtonCornerRadius;
+// The alpha of an unthemed menu button in light mode.
+extern const CGFloat kNTPMenuButtonLightUnthemedAlpha;
 
 // The background color of the NTP.
 UIColor* NTPBackgroundColor();

@@ -10,8 +10,12 @@ enum ImageType {
   case kImageTypeColor, kImageTypeGrey
 }
 
-// Highest quality. No compression.
-let kJPEGImageQuality: CGFloat = 1.0
+// Default JPEG quality (no compression).
+let kJPEGImageQualityDefault: CGFloat = 1.0
+
+// Compressed JPEG quality. Provides visually lossless quality while reducing
+// file size by ~3-5x compared to 1.0.
+let kJPEGImageQualityCompressed: CGFloat = 0.97
 
 // A class to manage images stored in disk.
 // Tasks for handling disk (reading an image, writing an image, deleting images, renaming an image,
@@ -97,11 +101,17 @@ let kJPEGImageQuality: CGFloat = 1.0
     backgroundTaskGroup.enter()
     backgroundTaskQueue.async(group: backgroundTaskGroup) { [weak self] in
       guard let self = self else { return }
-      guard let data = image.jpegData(compressionQuality: kJPEGImageQuality) else {
+      let quality =
+        IsSnapshotCompressedJPEGQualityEnabled()
+        ? kJPEGImageQualityCompressed : kJPEGImageQualityDefault
+      guard let data = image.jpegData(compressionQuality: quality) else {
         backgroundTaskGroup.leave()
         return
       }
       do {
+        HistogramUtils.recordHistogram(
+          "IOS.Snapshots.DowngradedQualityImageMemoryFootprint", withMemoryKB: data.count / 1024)
+
         try data.write(to: imagePath, options: [.atomic])
 
         // Encrypt the snapshot file (mostly for Incognito, but can't hurt to
@@ -258,11 +268,7 @@ let kJPEGImageQuality: CGFloat = 1.0
   // Returns the path of the image for `snapshotID` of type `imageType`.
   private func imagePath(snapshotID: SnapshotIDWrapper, imageType: ImageType) -> URL? {
     let fileName = imageFileName(snapshotID: snapshotID, imageType: imageType)
-    if #available(iOS 16, *) {
-      return storageDirectory.appending(path: fileName)
-    } else {
-      return storageDirectory.appendingPathComponent(fileName)
-    }
+    return storageDirectory.appending(path: fileName)
   }
 
   // Returns the file name of the image for `snapshotID` of type `imageType`.
@@ -279,11 +285,7 @@ let kJPEGImageQuality: CGFloat = 1.0
     let path =
       snapshotID + suffixForImageType(imageType: imageType)
       + suffixForImageScale(imageScale: imageScale) + ".jpg"
-    if #available(iOS 16, *) {
-      return storageDirectory.appending(path: path)
-    } else {
-      return storageDirectory.appendingPathComponent(path)
-    }
+    return storageDirectory.appending(path: path)
   }
 
   // Returns the suffix to append to image filename for `image_type`.

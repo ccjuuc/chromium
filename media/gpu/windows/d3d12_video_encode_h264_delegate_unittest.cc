@@ -72,7 +72,8 @@ class D3D12VideoEncodeH264DelegateTest
             return E_INVALIDARG;
           }
           picture_control->PictureSupport.pH264Support->MaxLongTermReferences =
-              1;
+              15;
+          picture_control->PictureSupport.pH264Support->MaxL0ReferencesForP = 3;
           picture_control->PictureSupport.pH264Support->MaxDPBCapacity = 16;
           return S_OK;
         });
@@ -361,7 +362,7 @@ TEST_F(D3D12VideoEncodeH264DelegateTest, EncodeFrame) {
         return EncoderStatus::Codes::kOk;
       });
   auto result_or_error = encoder_delegate_->Encode(
-      input_frame, 0, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
+      input_frame, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
       VideoEncoder::EncodeOptions());
   ASSERT_TRUE(result_or_error.has_value());
 
@@ -420,7 +421,7 @@ TEST_F(D3D12VideoEncodeH264DelegateTest, EncodeFramesAndVerifyKeyFrameFlag) {
           return EncoderStatus::Codes::kOk;
         });
     auto result_or_error = encoder_delegate_->Encode(
-        input_frame, 0, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
+        input_frame, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
         VideoEncoder::EncodeOptions());
     ASSERT_TRUE(result_or_error.has_value());
     Mock::VerifyAndClearExpectations(GetVideoEncoderWrapper());
@@ -460,7 +461,7 @@ TEST_F(D3D12VideoEncodeH264DelegateTest,
     EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata())
         .WillOnce(Return(GetEncoderOutputMetadataResourceMap(kStreamSize)));
     auto result_or_error = encoder_delegate_->Encode(
-        input_frame, 0, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
+        input_frame, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
         VideoEncoder::EncodeOptions());
     ASSERT_TRUE(result_or_error.has_value());
 
@@ -490,24 +491,25 @@ TEST_F(D3D12VideoEncodeH264DelegateTest, EncodeWithManualReferenceControl) {
   // Pass reference_buffers and update_buffer in EncodeOptions for emulation of
   // L1T2 encoding of 3 frames.
   VideoEncoder::EncodeOptions encode_opts;
+  encode_opts.key_frame = true;
   encode_opts.reference_buffers = {};
   encode_opts.update_buffer = 0;
   auto result_or_error =
-      encoder_delegate_->Encode(input_frame, 0, gfx::ColorSpace::CreateSRGB(),
+      encoder_delegate_->Encode(input_frame, gfx::ColorSpace::CreateSRGB(),
                                 bitstream_buffer, encode_opts);
   ASSERT_TRUE(result_or_error.has_value());
 
   encode_opts.reference_buffers = {0};
   encode_opts.update_buffer = std::nullopt;
   result_or_error =
-      encoder_delegate_->Encode(input_frame, 0, gfx::ColorSpace::CreateSRGB(),
+      encoder_delegate_->Encode(input_frame, gfx::ColorSpace::CreateSRGB(),
                                 bitstream_buffer, encode_opts);
   ASSERT_TRUE(result_or_error.has_value());
 
   encode_opts.reference_buffers = {0};
   encode_opts.update_buffer = 0;
   result_or_error =
-      encoder_delegate_->Encode(input_frame, 0, gfx::ColorSpace::CreateSRGB(),
+      encoder_delegate_->Encode(input_frame, gfx::ColorSpace::CreateSRGB(),
                                 bitstream_buffer, encode_opts);
   ASSERT_TRUE(result_or_error.has_value());
 }

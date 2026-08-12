@@ -111,22 +111,33 @@ LogType GetLogTypeFromString(std::string_view desc) {
 }
 
 std::string DateAndTimeWithMicroseconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time,
-                                                "yyyy/MM/dd HH:mm:ss.SSSSSS");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  int64_t micros = time.ToDeltaSinceWindowsEpoch().InMicroseconds() % 1000000;
+  return base::StringPrintf(
+      "%04d/%02d/%02d %02d:%02d:%02d.%06lld", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second,
+      static_cast<long long>(micros));
 }
 
 std::string TimeWithSeconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time, "HH:mm:ss");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  return base::StringPrintf("%02d:%02d:%02d", exploded.hour, exploded.minute,
+                            exploded.second);
 }
 
 std::string TimeWithMillieconds(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(time, "HH:mm:ss.SSS");
+  base::Time::Exploded exploded;
+  time.LocalExplode(&exploded);
+  return base::StringPrintf("%02d:%02d:%02d.%03d", exploded.hour,
+                            exploded.minute, exploded.second,
+                            exploded.millisecond);
 }
 
 #if BUILDFLAG(IS_POSIX)
 std::string UnixTime(const base::Time& time) {
-  return base::UnlocalizedTimeFormatWithPattern(
-      time, "yyyy-MM-dd'T'HH:mm:ss.SSSSSSxxx");
+  return base::TimeFormatUnix(time);
 }
 #endif
 
@@ -166,9 +177,9 @@ std::string LogEntryToString(const DeviceEventLogImpl::LogEntry& log_entry,
   return line;
 }
 
-base::Value::Dict LogEntryToDictionary(
+base::DictValue LogEntryToDictionary(
     const DeviceEventLogImpl::LogEntry& log_entry) {
-  base::Value::Dict entry_dict;
+  base::DictValue entry_dict;
   entry_dict.Set("timestamp", DateAndTimeWithMicroseconds(log_entry.time));
   entry_dict.Set("timestampshort", TimeWithSeconds(log_entry.time));
   entry_dict.Set("level", kLogLevelName[log_entry.log_level]);
@@ -196,12 +207,13 @@ void SendLogEntryToVLogOrErrorLog(
   const bool show_file = true;
   const bool show_type = true;
   const bool show_level = log_entry.log_level != LOG_LEVEL_ERROR;
-  std::string output =
-      LogEntryToString(log_entry, show_time, show_file, show_type, show_level);
-  if (log_entry.log_level == LOG_LEVEL_ERROR)
-    LOG(ERROR) << output;
-  else
-    VLOG(1) << output;
+  if (log_entry.log_level == LOG_LEVEL_ERROR) {
+    LOG(ERROR) << LogEntryToString(log_entry, show_time, show_file, show_type,
+                                   show_level);
+  } else {
+    VLOG(1) << LogEntryToString(log_entry, show_time, show_file, show_type,
+                                show_level);
+  }
 }
 
 bool LogEntryMatches(const DeviceEventLogImpl::LogEntry& first,
@@ -393,7 +405,7 @@ std::string DeviceEventLogImpl::GetAsString(StringOrder order,
   GetLogTypes(types, &include_types, &exclude_types);
 
   std::string result;
-  base::Value::List log_entries;
+  base::ListValue log_entries;
   if (order == OLDEST_FIRST) {
     size_t offset = 0;
     if (max_events > 0 && max_events < entries_.size()) {

@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_accelerators.h"
 #include "ash/public/cpp/login_screen_test_api.h"
@@ -12,7 +13,6 @@
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/reset_screen.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
@@ -24,7 +24,6 @@
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/update_engine/fake_update_engine_client.h"
@@ -113,7 +112,7 @@ void ExpectConfirmationDialogClosed() {
 
 }  // namespace
 
-class ResetTest : public OobeBaseTest, public LocalStateMixin::Delegate {
+class ResetTest : public OobeBaseTest {
  public:
   ResetTest() {
     fake_statistics_provider_.SetVpdStatus(
@@ -140,10 +139,6 @@ class ResetTest : public OobeBaseTest, public LocalStateMixin::Delegate {
     EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
     ExpectConfirmationDialogClosed();
   }
-
-  void SetUpLocalState() override {}
-
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 
  private:
   LoginManagerMixin::TestUserInfo test_user_{
@@ -191,9 +186,9 @@ class ResetFirstAfterBootTest : public ResetTest {
     command_line->AppendSwitch(switches::kFirstExecAfterBoot);
   }
 
-  void SetUpLocalState() override {
-    PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    ResetTest::SetUpLocalStatePrefService(local_state);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   }
 };
 
@@ -262,9 +257,9 @@ class ResetTestWithTpmFirmwareUpdate : public ResetTest {
 class ResetTestWithTpmFirmwareUpdateRequested
     : public ResetTestWithTpmFirmwareUpdate {
  public:
-  void SetUpLocalState() override {
-    PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    ResetTestWithTpmFirmwareUpdate::SetUpLocalStatePrefService(local_state);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   }
 };
 
@@ -308,7 +303,7 @@ IN_PROC_BROWSER_TEST_F(ResetTest, RestartBeforePowerwash) {
       1, chromeos::FakePowerManagerClient::Get()->num_request_restart_calls());
   ASSERT_EQ(0, FakeSessionManagerClient::Get()->start_device_wipe_call_count());
 
-  EXPECT_TRUE(prefs->GetBoolean(prefs::kFactoryResetRequested));
+  EXPECT_TRUE(prefs->GetBoolean(ash::prefs::kFactoryResetRequested));
   EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
 }
 
@@ -349,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTest, ViewsLogic) {
   EXPECT_TRUE(LoginScreenTestApi::IsGuestButtonShown());
 
   // Go to confirmation phase, cancel from there in 2 steps.
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   InvokeResetScreen();
 
   ClickToConfirmButton();
@@ -365,9 +360,12 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTest, ViewsLogic) {
 
   // Rollback available. Show and cancel from confirmation screen.
   update_engine_client()->set_can_rollback_check_result(true);
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   InvokeResetScreen();
   InvokeResetAccelerator();
+  test::OobeJS()
+      .CreateHasClassWaiter(true, "rollback-proposal-view", {kResetScreen})
+      ->Wait();
 
   ClickToConfirmButton();
   WaitForConfirmationDialogToOpen();
@@ -408,7 +406,7 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTest, RollbackUnavailable) {
 
   // Next invocation leads to rollback view.
   PrefService* prefs = g_browser_process->local_state();
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   InvokeResetScreen();
   ClickToConfirmButton();
   ClickResetButton();
@@ -426,8 +424,6 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTestWithRollback, RollbackAvailable) {
   OobeScreenWaiter(ResetView::kScreenId).Wait();
   EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
 
-  EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
-
   EXPECT_EQ(
       0, chromeos::FakePowerManagerClient::Get()->num_request_restart_calls());
   EXPECT_EQ(0, FakeSessionManagerClient::Get()->start_device_wipe_call_count());
@@ -441,9 +437,12 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTestWithRollback, RollbackAvailable) {
   CloseResetScreenAndWait();
 
   // Next invocation leads to simple reset, not rollback view.
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   InvokeResetScreen();
   InvokeResetAccelerator();  // Shows rollback.
+  test::OobeJS()
+      .CreateHasClassWaiter(true, "rollback-proposal-view", {kResetScreen})
+      ->Wait();
   EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
   ClickDismissConfirmationButton();
   EXPECT_FALSE(LoginScreenTestApi::IsGuestButtonShown());
@@ -458,9 +457,12 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTestWithRollback, RollbackAvailable) {
   EXPECT_EQ(0, update_engine_client()->rollback_call_count());
   CloseResetScreenAndWait();
 
-  prefs->SetBoolean(prefs::kFactoryResetRequested, true);
+  prefs->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   InvokeResetScreen();
   InvokeResetAccelerator();  // Shows rollback.
+  test::OobeJS()
+      .CreateHasClassWaiter(true, "rollback-proposal-view", {kResetScreen})
+      ->Wait();
   ClickToConfirmButton();
   ClickResetButton();
   EXPECT_EQ(
@@ -480,6 +482,9 @@ IN_PROC_BROWSER_TEST_F(ResetFirstAfterBootTestWithRollback,
   test::OobeJS().ExpectHasNoClass("revert-promise-view", {kResetScreen});
 
   InvokeResetAccelerator();
+  test::OobeJS()
+      .CreateHasClassWaiter(true, "rollback-proposal-view", {kResetScreen})
+      ->Wait();
   ClickToConfirmButton();
   WaitForConfirmationDialogToOpen();
   ClickResetButton();
@@ -596,11 +601,12 @@ IN_PROC_BROWSER_TEST_F(ResetTestWithTpmFirmwareUpdateRequested,
 class ResetTestWithTpmFirmwareUpdateCleanup
     : public ResetTestWithTpmFirmwareUpdate {
  public:
-  void SetUpLocalState() override {
-    PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
-    prefs->SetInteger(prefs::kFactoryResetTPMFirmwareUpdateMode,
-                      static_cast<int>(tpm_firmware_update::Mode::kCleanup));
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    ResetTestWithTpmFirmwareUpdate::SetUpLocalStatePrefService(local_state);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
+    local_state->SetInteger(
+        ash::prefs::kFactoryResetTPMFirmwareUpdateMode,
+        static_cast<int>(tpm_firmware_update::Mode::kCleanup));
   }
 };
 
@@ -633,11 +639,11 @@ IN_PROC_BROWSER_TEST_F(ResetTestWithTpmFirmwareUpdateCleanup,
 class ResetTestWithTpmFirmwareUpdatePreserve
     : public ResetTestWithTpmFirmwareUpdate {
  public:
-  void SetUpLocalState() override {
-    PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
-    prefs->SetInteger(
-        prefs::kFactoryResetTPMFirmwareUpdateMode,
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    ResetTestWithTpmFirmwareUpdate::SetUpLocalStatePrefService(local_state);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
+    local_state->SetInteger(
+        ash::prefs::kFactoryResetTPMFirmwareUpdateMode,
         static_cast<int>(tpm_firmware_update::Mode::kPreserveDeviceState));
   }
 };
@@ -673,11 +679,12 @@ IN_PROC_BROWSER_TEST_F(ResetTestWithTpmFirmwareUpdatePreserve,
 class ResetTestWithTpmFirmwareUpdatePowerwash
     : public ResetTestWithTpmFirmwareUpdate {
  public:
-  void SetUpLocalState() override {
-    PrefService* prefs = g_browser_process->local_state();
-    prefs->SetBoolean(prefs::kFactoryResetRequested, true);
-    prefs->SetInteger(prefs::kFactoryResetTPMFirmwareUpdateMode,
-                      static_cast<int>(tpm_firmware_update::Mode::kPowerwash));
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    ResetTestWithTpmFirmwareUpdate::SetUpLocalStatePrefService(local_state);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
+    local_state->SetInteger(
+        ash::prefs::kFactoryResetTPMFirmwareUpdateMode,
+        static_cast<int>(tpm_firmware_update::Mode::kPowerwash));
   }
 };
 

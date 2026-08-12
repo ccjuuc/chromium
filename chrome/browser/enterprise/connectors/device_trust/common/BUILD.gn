@@ -3,33 +3,16 @@
 # found in the LICENSE file.
 
 source_set("common") {
-  sources = [
-    "common_types.cc",
-    "device_trust_constants.cc",
-    "metrics_utils.cc",
-  ]
+  configs += [ "//components/enterprise:extra_warnings" ]
 
-  public = [
-    "common_types.h",
-    "device_trust_constants.h",
-    "metrics_utils.h",
-  ]
+  sources = [ "metrics_utils.cc" ]
 
-  public_deps = [ "//base" ]
+  public = [ "metrics_utils.h" ]
+
+  public_deps = [
+    "//base",
+    "//components/enterprise/device_trust/core",
+  ]
 
   deps = []
-
-  if (is_chromeos) {
-    deps += [ "//chromeos/ash/components/install_attributes" ]
-  }
-}
-
-source_set("unit_tests") {
-  testonly = true
-  sources = [ "common_types_unittest.cc" ]
-
-  deps = [
-    ":common",
-    "//testing/gtest",
-  ]
 }

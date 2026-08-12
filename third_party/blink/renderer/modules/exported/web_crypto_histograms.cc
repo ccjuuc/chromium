@@ -64,6 +64,8 @@ static WebFeature AlgorithmIdToFeature(WebCryptoAlgorithmId id) {
       return WebFeature::kCryptoAlgorithmMlKem768;
     case kWebCryptoAlgorithmIdMlKem1024:
       return WebFeature::kCryptoAlgorithmMlKem1024;
+    case kWebCryptoAlgorithmIdMlKem768X25519:
+      return WebFeature::kCryptoAlgorithmMlKem768X25519;
   }
 
   NOTREACHED();
@@ -115,6 +117,7 @@ void HistogramAlgorithm(ExecutionContext* context,
     case kWebCryptoAlgorithmParamsTypeEcKeyGenParams:
     case kWebCryptoAlgorithmParamsTypeEcKeyImportParams:
     case kWebCryptoAlgorithmParamsTypeAesDerivedKeyParams:
+    case kWebCryptoAlgorithmParamsTypeContextParams:
       break;
   }
 }

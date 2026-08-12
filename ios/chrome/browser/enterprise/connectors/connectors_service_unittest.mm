@@ -4,16 +4,21 @@
 
 #import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 
+#import "base/containers/flat_set.h"
 #import "base/json/json_reader.h"
 #import "base/path_service.h"
 #import "base/task/sequenced_task_runner.h"
 #import "base/test/test_file_util.h"
 #import "base/version_info/version_info.h"
 #import "components/enterprise/browser/controller/fake_browser_dm_token_storage.h"
+#import "components/enterprise/common/proto/connectors.pb.h"
 #import "components/enterprise/connectors/core/connectors_prefs.h"
 #import "components/enterprise/connectors/core/features.h"
 #import "components/enterprise/connectors/core/reporting_test_utils.h"
 #import "components/policy/core/common/cloud/cloud_external_data_manager.h"
+#import "components/policy/core/common/cloud/cloud_policy_client.h"
+#import "components/policy/core/common/cloud/cloud_policy_constants.h"
+#import "components/policy/core/common/cloud/cloud_policy_service.h"
 #import "components/policy/core/common/cloud/cloud_policy_util.h"
 #import "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
 #import "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
@@ -24,6 +29,7 @@
 #import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/identity_test_utils.h"
+#import "components/sync_preferences/testing_pref_service_syncable.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -39,6 +45,8 @@
 
 namespace enterprise_connectors {
 
+using enterprise_connectors::AnalysisConnector;
+
 namespace {
 
 constexpr char kTestProfileDmToken[] = "profile_dm_token";
@@ -47,6 +55,14 @@ constexpr char kTestClientId[] = "client_id";
 constexpr char kTestProfileEmail[] = "test@example.com";
 constexpr char kTestProfileDomain[] = "example.com";
 constexpr char kTestMachineDomain[] = "machine.com";
+constexpr char kWildcardAnalysisSettingsPref[] = R"([
+  {
+    "service_provider": "google",
+    "enable": [
+      {"url_list": ["*"], "tags": ["dlp", "malware"]}
+    ]
+  }
+])";
 
 class ConnectorsServiceTest : public PlatformTest {
  public:
@@ -55,7 +71,8 @@ class ConnectorsServiceTest : public PlatformTest {
     enterprise_management::PolicyData profile_policy_data;
     profile_policy_data.set_request_token(kTestProfileDmToken);
 
-    auto store = std::make_unique<policy::MockUserCloudPolicyStore>();
+    auto store = std::make_unique<policy::MockUserCloudPolicyStore>(
+        policy::dm_protocol::GetChromeUserPolicyType());
     store->set_policy_data_for_testing(
         std::make_unique<enterprise_management::PolicyData>(
             std::move(profile_policy_data)));
@@ -87,7 +104,9 @@ class ConnectorsServiceTest : public PlatformTest {
         std::make_unique<policy::MachineLevelUserCloudPolicyStore>(
             policy::DMToken::CreateValidToken(kTestBrowserDmToken),
             std::string(), base::FilePath(), base::FilePath(), base::FilePath(),
-            base::FilePath(), scoped_refptr<base::SequencedTaskRunner>());
+            base::FilePath(),
+            policy::dm_protocol::kChromeMachineLevelUserCloudPolicyType,
+            scoped_refptr<base::SequencedTaskRunner>());
     machine_store->set_policy_data_for_testing(std::move(policy_data));
 
     manager_ = std::make_unique<policy::MachineLevelUserCloudPolicyManager>(
@@ -96,6 +115,13 @@ class ConnectorsServiceTest : public PlatformTest {
         /*policy_dir=*/base::FilePath(),
         scoped_refptr<base::SequencedTaskRunner>(),
         network::TestNetworkConnectionTracker::CreateGetter());
+
+    profile()->GetTestingPrefService()->Set(
+        AnalysisConnectorPref(connector()),
+        *base::JSONReader::Read(kWildcardAnalysisSettingsPref,
+                                base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+    profile()->GetTestingPrefService()->SetInteger(
+        AnalysisConnectorScopePref(connector()), policy::POLICY_SCOPE_MACHINE);
 
     GetApplicationContext()
         ->GetBrowserPolicyConnector()
@@ -114,9 +140,21 @@ class ConnectorsServiceTest : public PlatformTest {
     return IdentityManagerFactory::GetForProfile(profile());
   }
 
+  AnalysisConnector connector() { return FILE_DOWNLOADED; }
+
   void MakePrimaryAccountAvailable(const std::string& email) {
     signin::MakePrimaryAccountAvailable(identity_manager(), email,
                                         signin::ConsentLevel::kSignin);
+  }
+
+  ConnectorsService CreateService(ProfileIOS* p = nullptr) {
+    ProfileIOS* target_profile = p ? p : profile();
+    return ConnectorsService(
+        target_profile->GetPrefs(),
+        IdentityManagerFactory::GetForProfile(target_profile),
+        target_profile->GetUserCloudPolicyManager(),
+        target_profile->GetProfileName(), target_profile->GetStatePath(),
+        target_profile->IsOffTheRecord());
   }
 
  private:
@@ -129,8 +167,8 @@ class ConnectorsServiceTest : public PlatformTest {
 }  // namespace
 
 TEST_F(ConnectorsServiceTest, GetPrefs) {
-  ConnectorsService connectors_service{profile()};
-  const ConnectorsService const_connectors_service{profile()};
+  ConnectorsService connectors_service = CreateService();
+  const ConnectorsService const_connectors_service = CreateService();
 
   PrefService* prefs = connectors_service.GetPrefs();
   const PrefService* const_prefs = const_connectors_service.GetPrefs();
@@ -143,7 +181,7 @@ TEST_F(ConnectorsServiceTest, GetPrefs) {
 TEST_F(ConnectorsServiceTest, GetProfileDmToken) {
   profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
                                     policy::POLICY_SCOPE_USER);
-  ConnectorsService connectors_service{profile()};
+  ConnectorsService connectors_service = CreateService();
 
   auto profile_dm_token =
       connectors_service.GetDmToken(kEnterpriseRealTimeUrlCheckScope);
@@ -155,7 +193,7 @@ TEST_F(ConnectorsServiceTest, GetProfileDmToken) {
 TEST_F(ConnectorsServiceTest, GetBrowserDmToken) {
   profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
                                     policy::POLICY_SCOPE_MACHINE);
-  ConnectorsService connectors_service{profile()};
+  ConnectorsService connectors_service = CreateService();
 
   auto browser_dm_token =
       connectors_service.GetDmToken(kEnterpriseRealTimeUrlCheckScope);
@@ -173,13 +211,13 @@ TEST_F(ConnectorsServiceTest, ConnectorsEnabled) {
   ASSERT_FALSE(ConnectorsServiceFactory::GetForProfile(
                    profile()->GetOffTheRecordProfile())
                    ->ConnectorsEnabled());
-  ASSERT_TRUE(ConnectorsService(profile()).ConnectorsEnabled());
-  ASSERT_FALSE(ConnectorsService(profile()->GetOffTheRecordProfile())
-                   .ConnectorsEnabled());
+  ASSERT_TRUE(CreateService().ConnectorsEnabled());
+  ASSERT_FALSE(
+      CreateService(profile()->GetOffTheRecordProfile()).ConnectorsEnabled());
 }
 
 TEST_F(ConnectorsServiceTest, RealTimeUrlCheck) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
 
   ASSERT_FALSE(service.GetDMTokenForRealTimeUrlCheck().has_value());
   ASSERT_EQ(service.GetDMTokenForRealTimeUrlCheck().error(),
@@ -209,7 +247,7 @@ TEST_F(ConnectorsServiceTest, RealTimeUrlCheck) {
 }
 
 TEST_F(ConnectorsServiceTest, RealTimeUrlCheck_OffTheRecord) {
-  auto service = ConnectorsService(profile()->GetOffTheRecordProfile());
+  auto service = CreateService(profile()->GetOffTheRecordProfile());
 
   ASSERT_FALSE(service.GetDMTokenForRealTimeUrlCheck().has_value());
   ASSERT_EQ(service.GetDMTokenForRealTimeUrlCheck().error(),
@@ -241,7 +279,7 @@ TEST_F(ConnectorsServiceTest, RealTimeUrlCheck_OffTheRecord) {
 }
 
 TEST_F(ConnectorsServiceTest, ReportingSettings) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
 
   EXPECT_FALSE(service.GetReportingSettings());
   EXPECT_TRUE(service.GetReportingServiceProviderNames().empty());
@@ -253,8 +291,8 @@ TEST_F(ConnectorsServiceTest, ReportingSettings) {
   EXPECT_FALSE(settings->per_profile);
   EXPECT_EQ(settings->dm_token, kTestBrowserDmToken);
   EXPECT_EQ(settings->enabled_event_names,
-            std::set<std::string>(kAllReportingEnabledEvents.begin(),
-                                  kAllReportingEnabledEvents.end()));
+            base::flat_set<std::string>(kAllReportingEnabledEvents.begin(),
+                                        kAllReportingEnabledEvents.end()));
   EXPECT_TRUE(settings->enabled_opt_in_events.empty());
   auto provider_names = service.GetReportingServiceProviderNames();
   EXPECT_EQ(provider_names, std::vector<std::string>({"google"}));
@@ -268,15 +306,15 @@ TEST_F(ConnectorsServiceTest, ReportingSettings) {
   EXPECT_TRUE(settings->per_profile);
   EXPECT_EQ(settings->dm_token, kTestProfileDmToken);
   EXPECT_EQ(settings->enabled_event_names,
-            std::set<std::string>(kAllReportingEnabledEvents.begin(),
-                                  kAllReportingEnabledEvents.end()));
+            base::flat_set<std::string>(kAllReportingEnabledEvents.begin(),
+                                        kAllReportingEnabledEvents.end()));
   EXPECT_TRUE(settings->enabled_opt_in_events.empty());
   provider_names = service.GetReportingServiceProviderNames();
   EXPECT_EQ(provider_names, std::vector<std::string>({"google"}));
 }
 
 TEST_F(ConnectorsServiceTest, ReportingSettings_OffTheRecord) {
-  auto service = ConnectorsService(profile()->GetOffTheRecordProfile());
+  auto service = CreateService(profile()->GetOffTheRecordProfile());
 
   EXPECT_FALSE(service.GetReportingSettings());
   EXPECT_TRUE(service.GetReportingServiceProviderNames().empty());
@@ -295,7 +333,7 @@ TEST_F(ConnectorsServiceTest, ReportingSettings_OffTheRecord) {
 }
 
 TEST_F(ConnectorsServiceTest, GetManagementDomain_UrlFilteringEnabled) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
 
   ASSERT_EQ(service.GetManagementDomain(), std::string());
 
@@ -313,7 +351,7 @@ TEST_F(ConnectorsServiceTest, GetManagementDomain_UrlFilteringEnabled) {
 }
 
 TEST_F(ConnectorsServiceTest, GetManagementDomain_EventReportingEnabled) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
 
   ASSERT_EQ(service.GetManagementDomain(), std::string());
 
@@ -331,7 +369,7 @@ TEST_F(ConnectorsServiceTest, GetManagementDomain_EventReportingEnabled) {
 }
 
 TEST_F(ConnectorsServiceTest, GetManagementDomain_MachinePolicyHasPrecedence) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
 
   ASSERT_EQ(service.GetManagementDomain(), std::string());
 
@@ -346,7 +384,7 @@ TEST_F(ConnectorsServiceTest, GetManagementDomain_MachinePolicyHasPrecedence) {
 }
 
 TEST_F(ConnectorsServiceTest, GetManagementDomain_OffTheRecord) {
-  auto service = ConnectorsService(profile()->GetOffTheRecordProfile());
+  auto service = CreateService(profile()->GetOffTheRecordProfile());
 
   ASSERT_EQ(service.GetManagementDomain(), std::string());
 }
@@ -354,7 +392,7 @@ TEST_F(ConnectorsServiceTest, GetManagementDomain_OffTheRecord) {
 // Only added test coverage for IsClout since the not_cloud/local agent option
 // is only viable on Windows.
 TEST_F(ConnectorsServiceTest, BuildClientMetadata_IsCloud) {
-  auto service = ConnectorsService(profile());
+  auto service = CreateService();
   test::SetOnSecurityEventReporting(profile()->GetPrefs(), /*enabled=*/true);
   auto meta_data = service.BuildClientMetadata(true);
   base::FilePath expected_browser_id;
@@ -369,6 +407,261 @@ TEST_F(ConnectorsServiceTest, BuildClientMetadata_IsCloud) {
   ASSERT_EQ(meta_data->device().os_platform(), policy::GetOSPlatform());
   ASSERT_EQ(meta_data->device().name(), policy::GetDeviceName());
   EXPECT_FALSE(meta_data->is_chrome_os_managed_guest_session());
+}
+
+TEST_F(ConnectorsServiceTest, ExemptURL_WebUI) {
+  auto service = CreateService();
+  for (const char* url :
+       {"chrome://settings", "chrome://help-app/background",
+        "chrome://foo/bar/baz.html", "chrome://foo/bar/baz.html?param=value"}) {
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+    ASSERT_FALSE(settings.has_value());
+  }
+}
+
+TEST_F(ConnectorsServiceTest, ExemptURL_ThirdPartyExtensions) {
+  auto service = CreateService();
+  for (const char* url :
+       {"chrome-extension://fake_id", "chrome-extension://fake_id/background",
+        "chrome-extension://fake_id/main.html",
+        "chrome-extension://fake_id/main.html?param=value"}) {
+    ASSERT_TRUE(GURL(url).is_valid());
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+    ASSERT_TRUE(settings.has_value());
+  }
+}
+
+TEST_F(ConnectorsServiceTest, ExemptURL_DevTools) {
+  auto service = CreateService();
+
+  for (const char* url :
+       {"devtools://fake_id", "devtools://fake_id/background",
+        "devtools://devtools/main.html",
+        "devtools://devtools/bundled/main.html?param=value"}) {
+    ASSERT_TRUE(GURL(url).is_valid());
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+
+    ASSERT_NE(settings.has_value(),
+              connector() == BULK_DATA_ENTRY || connector() == FILE_ATTACHED);
+  }
+}
+
+TEST_F(ConnectorsServiceTest, ExemptURL_BlobAndFilesystem) {
+  auto service = CreateService();
+
+  // Test against wildcard policy.
+  for (const char* url_string :
+       {"blob:https://foo.com", "blob:ftp://foo.com/with/path",
+        "filesystem:http://foo.com/with.extension",
+        "filesystem:http://foo.com/with/path"}) {
+    GURL url(url_string);
+    ASSERT_TRUE(url.is_valid());
+    ASSERT_TRUE(url.SchemeIsFileSystem() || url.SchemeIsBlob());
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+    ASSERT_TRUE(settings.has_value());
+  }
+
+  // Test against a specific pattern policy to validate the correct inner URL is
+  // used.
+  profile()->GetTestingPrefService()->Set(
+      AnalysisConnectorPref(connector()),
+      *base::JSONReader::Read(R"([
+        {
+          "service_provider": "google",
+          "enable": [
+            {"url_list": ["foo.com"], "tags": ["dlp", "malware"]}
+          ]
+        }
+      ])",
+                              base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+
+  for (const char* url_string :
+       {"blob:https://foo.com", "blob:ftp://foo.com/with/path",
+        "filesystem:http://foo.com/with.extension",
+        "filesystem:http://foo.com/with/path"}) {
+    GURL url(url_string);
+    ASSERT_TRUE(url.is_valid());
+    ASSERT_TRUE(url.SchemeIsFileSystem() || url.SchemeIsBlob());
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+    ASSERT_TRUE(settings.has_value());
+  }
+  for (const char* url_string :
+       {"blob:https://notfoo.com", "blob:ftp://notfoo.com/with/path",
+        "filesystem:http://notfoo.com/with.extension",
+        "filesystem:http://notfoo.com/with/path"}) {
+    GURL url(url_string);
+    ASSERT_TRUE(url.is_valid());
+    ASSERT_TRUE(url.SchemeIsFileSystem() || url.SchemeIsBlob());
+    auto settings = service.GetAnalysisSettings(GURL(url), connector());
+    ASSERT_FALSE(settings.has_value());
+  }
+}
+
+// Tests that `GetRealTimeUrlCheckIdentifier` returns an empty string when no DM
+// token is present.
+TEST_F(ConnectorsServiceTest, GetRealTimeUrlCheckIdentifier_NoDMToken) {
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_USER);
+  auto* manager = profile()->GetUserCloudPolicyManager();
+  manager->core()->store()->set_policy_data_for_testing(nullptr);
+
+  auto service = CreateService();
+  EXPECT_EQ(service.GetRealTimeUrlCheckIdentifier(), std::string());
+}
+
+// Tests that `GetRealTimeUrlCheckIdentifier` returns both device ID and user
+// email (formatted as "{device_id}\n{email}") when the profile is affiliated
+// with the browser and a primary account is available.
+TEST_F(ConnectorsServiceTest,
+       GetRealTimeUrlCheckIdentifier_Affiliated_WithEmail) {
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_USER);
+
+  // Set user affiliation ID
+  auto* manager = profile()->GetUserCloudPolicyManager();
+  auto policy_data = std::make_unique<enterprise_management::PolicyData>();
+  policy_data->set_request_token(kTestProfileDmToken);
+  policy_data->add_user_affiliation_ids("affiliation-id");
+  manager->core()->store()->set_policy_data_for_testing(std::move(policy_data));
+
+  // Set browser affiliation ID
+  auto* machine_manager = GetApplicationContext()
+                              ->GetBrowserPolicyConnector()
+                              ->machine_level_user_cloud_policy_manager();
+  auto machine_policy_data =
+      std::make_unique<enterprise_management::PolicyData>();
+  machine_policy_data->set_managed_by(kTestMachineDomain);
+  machine_policy_data->add_device_affiliation_ids("affiliation-id");
+  machine_manager->store()->set_policy_data_for_testing(
+      std::move(machine_policy_data));
+
+  auto client = std::make_unique<policy::CloudPolicyClient>(
+      /*service=*/nullptr, /*url_loader_factory=*/nullptr,
+      policy::CloudPolicyClient::DeviceDMTokenCallback());
+  client->SetupRegistration(kTestBrowserDmToken, kTestClientId,
+                            {"affiliation-id"});
+  machine_manager->core()->ConnectForTesting(
+      /*service=*/nullptr, std::move(client));
+
+  MakePrimaryAccountAvailable(kTestProfileEmail);
+  auto service = CreateService();
+  std::string expected_identifier =
+      std::string(kTestClientId) + "\n" + kTestProfileEmail;
+  EXPECT_EQ(service.GetRealTimeUrlCheckIdentifier(), expected_identifier);
+}
+
+// Tests that `GetRealTimeUrlCheckIdentifier` returns only the device ID when
+// the profile is affiliated but no user email is available (unsigned-in state).
+TEST_F(ConnectorsServiceTest,
+       GetRealTimeUrlCheckIdentifier_Affiliated_NoEmail) {
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_USER);
+
+  // Set user affiliation ID
+  auto* manager = profile()->GetUserCloudPolicyManager();
+  auto policy_data = std::make_unique<enterprise_management::PolicyData>();
+  policy_data->set_request_token(kTestProfileDmToken);
+  policy_data->add_user_affiliation_ids("affiliation-id");
+  manager->core()->store()->set_policy_data_for_testing(std::move(policy_data));
+
+  // Set browser affiliation ID
+  auto* machine_manager = GetApplicationContext()
+                              ->GetBrowserPolicyConnector()
+                              ->machine_level_user_cloud_policy_manager();
+  auto machine_policy_data =
+      std::make_unique<enterprise_management::PolicyData>();
+  machine_policy_data->set_managed_by(kTestMachineDomain);
+  machine_policy_data->add_device_affiliation_ids("affiliation-id");
+  machine_manager->store()->set_policy_data_for_testing(
+      std::move(machine_policy_data));
+
+  auto client = std::make_unique<policy::CloudPolicyClient>(
+      /*service=*/nullptr, /*url_loader_factory=*/nullptr,
+      policy::CloudPolicyClient::DeviceDMTokenCallback());
+  client->SetupRegistration(kTestBrowserDmToken, kTestClientId,
+                            {"affiliation-id"});
+  machine_manager->core()->ConnectForTesting(
+      /*service=*/nullptr, std::move(client));
+
+  auto service = CreateService();
+  EXPECT_EQ(service.GetRealTimeUrlCheckIdentifier(), kTestClientId);
+}
+
+// Tests that `GetRealTimeUrlCheckIdentifier` returns only the device ID when
+// the profile is unaffiliated and the real-time URL check scope is set to
+// MACHINE.
+TEST_F(ConnectorsServiceTest,
+       GetRealTimeUrlCheckIdentifier_NotAffiliated_MachineScope) {
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_MACHINE);
+
+  // Set user affiliation ID
+  auto* manager = profile()->GetUserCloudPolicyManager();
+  auto policy_data = std::make_unique<enterprise_management::PolicyData>();
+  policy_data->set_request_token(kTestProfileDmToken);
+  policy_data->add_user_affiliation_ids("user-affiliation-id");
+  manager->core()->store()->set_policy_data_for_testing(std::move(policy_data));
+
+  // Set browser affiliation ID (different, so unaffiliated)
+  auto* machine_manager = GetApplicationContext()
+                              ->GetBrowserPolicyConnector()
+                              ->machine_level_user_cloud_policy_manager();
+  auto machine_policy_data =
+      std::make_unique<enterprise_management::PolicyData>();
+  machine_policy_data->set_managed_by(kTestMachineDomain);
+  machine_policy_data->add_device_affiliation_ids("device-affiliation-id");
+  machine_manager->store()->set_policy_data_for_testing(
+      std::move(machine_policy_data));
+
+  auto client = std::make_unique<policy::CloudPolicyClient>(
+      /*service=*/nullptr, /*url_loader_factory=*/nullptr,
+      policy::CloudPolicyClient::DeviceDMTokenCallback());
+  client->SetupRegistration(kTestBrowserDmToken, kTestClientId,
+                            {"device-affiliation-id"});
+  machine_manager->core()->ConnectForTesting(
+      /*service=*/nullptr, std::move(client));
+
+  MakePrimaryAccountAvailable(kTestProfileEmail);
+  auto service = CreateService();
+  EXPECT_EQ(service.GetRealTimeUrlCheckIdentifier(), kTestClientId);
+}
+
+// Tests that `GetRealTimeUrlCheckIdentifier` returns only the user email when
+// the profile is unaffiliated and the real-time URL check scope is set to USER.
+TEST_F(ConnectorsServiceTest,
+       GetRealTimeUrlCheckIdentifier_NotAffiliated_UserScope) {
+  profile()->GetPrefs()->SetInteger(kEnterpriseRealTimeUrlCheckScope,
+                                    policy::POLICY_SCOPE_USER);
+
+  // Set user affiliation ID
+  auto* manager = profile()->GetUserCloudPolicyManager();
+  auto policy_data = std::make_unique<enterprise_management::PolicyData>();
+  policy_data->set_request_token(kTestProfileDmToken);
+  policy_data->add_user_affiliation_ids("user-affiliation-id");
+  manager->core()->store()->set_policy_data_for_testing(std::move(policy_data));
+
+  // Set browser affiliation ID (different, so unaffiliated)
+  auto* machine_manager = GetApplicationContext()
+                              ->GetBrowserPolicyConnector()
+                              ->machine_level_user_cloud_policy_manager();
+  auto machine_policy_data =
+      std::make_unique<enterprise_management::PolicyData>();
+  machine_policy_data->set_managed_by(kTestMachineDomain);
+  machine_policy_data->add_device_affiliation_ids("device-affiliation-id");
+  machine_manager->store()->set_policy_data_for_testing(
+      std::move(machine_policy_data));
+
+  auto client = std::make_unique<policy::CloudPolicyClient>(
+      /*service=*/nullptr, /*url_loader_factory=*/nullptr,
+      policy::CloudPolicyClient::DeviceDMTokenCallback());
+  client->SetupRegistration(kTestBrowserDmToken, kTestClientId,
+                            {"device-affiliation-id"});
+  machine_manager->core()->ConnectForTesting(
+      /*service=*/nullptr, std::move(client));
+
+  MakePrimaryAccountAvailable(kTestProfileEmail);
+  auto service = CreateService();
+  EXPECT_EQ(service.GetRealTimeUrlCheckIdentifier(), kTestProfileEmail);
 }
 
 }  // namespace enterprise_connectors

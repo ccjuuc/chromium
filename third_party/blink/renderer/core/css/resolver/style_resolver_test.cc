@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/html/html_style_element.h"
 #include "third_party/blink/renderer/core/layout/anchor_evaluator_impl.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/style/anchor_specifier_value.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
@@ -67,7 +68,8 @@ class StyleResolverTest : public PageTestBase {
   }
 
   String ComputedValue(String name, const ComputedStyle& style) {
-    CSSPropertyRef ref(name, GetDocument());
+    AtomicString atomic_name(name);
+    CSSPropertyRef ref(&atomic_name, GetDocument());
     DCHECK(ref.IsValid());
     return ref.GetProperty()
         .CSSValueFromComputedStyle(style, nullptr, false,
@@ -366,6 +368,36 @@ TEST_F(StyleResolverTest, AnimationMaskedByImportant) {
   EXPECT_FALSE(StyleResolver::CanReuseBaseComputedStyle(state));
 }
 
+TEST_F(StyleResolverTest, AnimationWithRevertRuleVoidsBase) {
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
+    <style>
+      div {
+        height: 10px;
+      }
+    </style>
+    <div id=div></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  Element* div = GetDocument().getElementById(AtomicString("div"));
+
+  auto* effect = CreateSimpleKeyframeEffectForTest(div, CSSPropertyID::kHeight,
+                                                   "revert-rule", "100px");
+  GetDocument().Timeline().Play(effect);
+  UpdateAllLifecyclePhasesForTest();
+
+  EXPECT_EQ("10px", ComputedValue("height", *StyleForId("div")));
+
+  div->SetNeedsAnimationStyleRecalc();
+  GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
+  const ComputedStyle* style = StyleForId("div");
+  ASSERT_TRUE(style);
+  EXPECT_TRUE(style->GetBaseComputedStyle());
+
+  StyleResolverState state(GetDocument(), *div);
+  // We cannot use the base style due to a revert-rule-dependent animation.
+  EXPECT_FALSE(StyleResolver::CanReuseBaseComputedStyle(state));
+}
+
 TEST_F(StyleResolverTest,
        TransitionRetargetRelativeFontSizeOnParentlessElement) {
   GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
@@ -421,8 +453,8 @@ class StyleResolverFontRelativeUnitTest
 
 TEST_P(StyleResolverFontRelativeUnitTest,
        BaseNotReusableIfFontRelativeUnitPresent) {
-  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-      String::Format("<div id=div style='width:1%s'>Test</div>", GetParam()));
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(UNSAFE_TODO(
+      String::Format("<div id=div style='width:1%s'>Test</div>", GetParam())));
   UpdateAllLifecyclePhasesForTest();
 
   Element* div = GetDocument().getElementById(AtomicString("div"));
@@ -445,8 +477,8 @@ TEST_P(StyleResolverFontRelativeUnitTest,
 
 TEST_P(StyleResolverFontRelativeUnitTest,
        BaseReusableIfNoFontAffectingAnimation) {
-  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-      String::Format("<div id=div style='width:1%s'>Test</div>", GetParam()));
+  GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(UNSAFE_TODO(
+      String::Format("<div id=div style='width:1%s'>Test</div>", GetParam())));
   UpdateAllLifecyclePhasesForTest();
 
   Element* div = GetDocument().getElementById(AtomicString("div"));
@@ -642,8 +674,13 @@ TEST_F(StyleResolverTest, BackgroundImageFetch) {
       << "Fetch for display:contents";
   EXPECT_FALSE(GetBackgroundImageValue(inside_contents).IsCachePending())
       << "Fetch for image inherited from display:contents";
-  EXPECT_TRUE(GetBackgroundImageValue(non_slotted).IsCachePending())
-      << "No fetch for element outside the flat tree";
+
+  if (RuntimeEnabledFeatures::GetComputedStyleOutsideFlatTreeEnabled()) {
+    EXPECT_TRUE(GetBackgroundImageValue(non_slotted).IsCachePending())
+        << "No fetch for element outside the flat tree";
+  } else {
+    ASSERT_EQ(non_slotted->GetComputedStyle(), nullptr);
+  }
 
   // Added two frameset elements to hit the MatchedPropertiesCache for the
   // second one. Frameset adjusts style to display:block in StyleAdjuster, but
@@ -677,6 +714,35 @@ TEST_F(StyleResolverTest, FetchForAtPage) {
 
   const CSSValueList* bg_img_list = To<CSSValueList>(computed_value);
   EXPECT_FALSE(To<CSSImageValue>(bg_img_list->Item(0)).IsCachePending());
+}
+
+TEST_F(StyleResolverTest, SingleAxisAdjustOverflow) {
+  auto run_test = [&](String overflow_style, EOverflow expected_x,
+                      EOverflow expected_y) {
+    StringBuilder builder;
+    builder.Append("<div id='target' style='overflow-x: ");
+    builder.Append(overflow_style);
+    builder.Append("; overflow-y: scroll;'></div>");
+    SetBodyInnerHTML(builder.ToString());
+    const auto* style = StyleForId("target");
+    EXPECT_EQ(expected_x, style->OverflowX());
+    EXPECT_EQ(expected_y, style->OverflowY());
+  };
+
+  {
+    ScopedSingleAxisScrollContainersForTest single_axis_feature(false);
+    run_test("clip", EOverflow::kHidden, EOverflow::kScroll);
+    run_test("visible", EOverflow::kAuto, EOverflow::kScroll);
+  }
+
+  // The MPC is not automatically reset when we manually flip a feature flag.
+  GetDocument().GetStyleResolver().InvalidateMatchedPropertiesCache();
+
+  {
+    ScopedSingleAxisScrollContainersForTest single_axis_feature(true);
+    run_test("clip", EOverflow::kClip, EOverflow::kScroll);
+    run_test("visible", EOverflow::kAuto, EOverflow::kScroll);
+  }
 }
 
 TEST_F(StyleResolverTest, NoFetchForAtPage) {
@@ -1115,6 +1181,8 @@ TEST_F(StyleResolverTestCQ, CascadedValuesForPseudoElementInContainer) {
 }
 
 TEST_F(StyleResolverTest, EnsureComputedStyleSlotFallback) {
+  ScopedGetComputedStyleOutsideFlatTreeForTest scoped_feature(true);
+
   GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <div id="host"><span></span></div>
   )HTML");
@@ -1147,6 +1215,8 @@ TEST_F(StyleResolverTest, EnsureComputedStyleSlotFallback) {
 }
 
 TEST_F(StyleResolverTest, EnsureComputedStyleOutsideFlatTree) {
+  ScopedGetComputedStyleOutsideFlatTreeForTest scoped_feature(true);
+
   GetDocument().documentElement()->SetHTMLUnsafeWithoutTrustedTypes(R"HTML(
     <div id=host>
       <template shadowrootmode=open>
@@ -1289,13 +1359,44 @@ TEST_F(StyleResolverTest, ComputedValueRootElement) {
   EXPECT_EQ("42px", computed_value->CssText());
 }
 
+TEST_F(StyleResolverTest, ComputedValueFontSizeRelative) {
+  Element* target = GetDocument().documentElement();
+  ASSERT_TRUE(target);
+  target->SetInlineStyleProperty(CSSPropertyID::kFontSize, "30px");
+  UpdateAllLifecyclePhasesForTest();
+  CSSPropertyID property_id = CSSPropertyID::kWidth;
+  const CSSValue* parsed_value = css_test_helpers::ParseLonghand(
+      GetDocument(), GetCSSPropertyWidth(), "2em");
+  ASSERT_TRUE(parsed_value);
+  const CSSValue* computed_value = StyleResolver::ComputeValue(
+      target, CSSPropertyName(property_id), *parsed_value);
+  ASSERT_TRUE(computed_value);
+  EXPECT_EQ("60px", computed_value->CssText());
+}
+
+TEST_F(StyleResolverTest, ComputedValueLineHeight) {
+  Element* target = GetDocument().documentElement();
+  ASSERT_TRUE(target);
+  target->SetInlineStyleProperty(CSSPropertyID::kLineHeight, "50px");
+  UpdateAllLifecyclePhasesForTest();
+  CSSPropertyID property_id = CSSPropertyID::kWidth;
+  const CSSValue* parsed_value = css_test_helpers::ParseLonghand(
+      GetDocument(), GetCSSPropertyWidth(), "2lh");
+  ASSERT_TRUE(parsed_value);
+  const CSSValue* computed_value = StyleResolver::ComputeValue(
+      target, CSSPropertyName(property_id), *parsed_value);
+  ASSERT_TRUE(computed_value);
+  EXPECT_EQ("100px", computed_value->CssText());
+}
+
 namespace {
 
 const CSSValue* ParseCustomProperty(Document& document,
                                     const CustomProperty& property,
                                     const String& value) {
   const auto* context = MakeGarbageCollected<CSSParserContext>(document);
-  CSSParserLocalContext local_context;
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForTest();
 
   return property.Parse(value, *context, local_context);
 }
@@ -1316,7 +1417,7 @@ TEST_F(StyleResolverTest, ComputeValueCustomProperty) {
 
   AtomicString custom_property_name("--color");
   const CSSValue* parsed_value = ParseCustomProperty(
-      GetDocument(), CustomProperty(custom_property_name, GetDocument()),
+      GetDocument(), CustomProperty(&custom_property_name, GetDocument()),
       "blue");
   ASSERT_TRUE(parsed_value);
   const CSSValue* computed_value = StyleResolver::ComputeValue(
@@ -2274,17 +2375,29 @@ TEST_F(StyleResolverTest, AnchorQueriesMPC) {
         width: 100px;
         height: 100px;
       }
-      #anchor1 { left: 100px; }
-      #anchor2 { left: 150px; }
+      #anchor1 {
+        anchor-name: --anchor1;
+        left: 100px;
+      }
+      #anchor2 {
+        anchor-name: --anchor2;
+        left: 150px;
+      }
       .anchored {
         position: absolute;
         left: anchor(left);
       }
+      #a {
+        position-anchor: --anchor1;
+      }
+      #b {
+        position-anchor: --anchor2;
+      }
     </style>
     <div class=anchor id=anchor1>X</div>
     <div class=anchor id=anchor2>Y</div>
-    <div class=anchored id=a anchor=anchor1>A</div>
-    <div class=anchored id=b anchor=anchor2>B</div>
+    <div class=anchored id=a>A</div>
+    <div class=anchored id=b>B</div>
   )HTML");
 
   UpdateAllLifecyclePhasesForTest();
@@ -3193,8 +3306,6 @@ TEST_F(StyleResolverTestCQ, StyleRulesForElementContainerQuery) {
 }
 
 TEST_F(StyleResolverTest, StyleRulesForSVGUseInstanceElement) {
-  ScopedSvg2CascadeForTest enabled(true);
-
   SetBodyInnerHTML(R"HTML(
       <style>
         rect { fill: green; }
@@ -4046,7 +4157,16 @@ TEST_F(StyleResolverTest, TryTacticsSet_Flip) {
   ASSERT_TRUE(try_tactics_set);
 
   AnchorEvaluatorImpl anchor_evaluator(
-      {WritingMode::kHorizontalTb, TextDirection::kLtr});
+      *div->GetLayoutBox(),
+      /*anchor_map=*/nullptr,
+      /*implicit_anchor=*/nullptr,
+      /*containing_block=*/nullptr,
+      /*actual_containing_block=*/nullptr,
+      /*grid_layout_data=*/nullptr,
+      {WritingMode::kHorizontalTb, TextDirection::kLtr},
+      /*container_size=*/LogicalSize(),
+      /*container_rect=*/LogicalRect(),
+      /*scroll_rect=*/std::nullopt);
   const ComputedStyle* try_style = StyleForId(
       "div", StyleRecalcContext{.anchor_evaluator = &anchor_evaluator,
                                 .try_set = try_set,
@@ -4105,6 +4225,30 @@ TEST_F(StyleResolverTest,
   // "target" ancestor node requires re-computing the base style for the
   // pseudo-element and skip the optimization for animation style change.
   UpdateAllLifecyclePhasesForTest();
+}
+
+TEST_F(StyleResolverTest, CustomScrollbarStyleAfterInitialStyleInvalidation) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      ::-webkit-scrollbar { width: 12px; }
+      ::-webkit-scrollbar-thumb { background: #888; }
+      ::-webkit-scrollbar-thumb:window-inactive { background: #ccc; }
+      body { height: 200vh; overflow: scroll; }
+    </style>
+    <div>content</div>
+  )HTML");
+
+  UpdateAllLifecyclePhasesForTest();
+
+  // Invalidate the initial style (simulates what happens during a zoom or
+  // settings change).
+  GetDocument().GetStyleEngine().InvalidateInitialStyle();
+
+  // Trigger a window active state change, which forces custom scrollbars
+  // to be invalidated and then re-resolved.
+  // This should not crash.
+  GetPage().GetFocusController().SetActive(false);
+  GetPage().GetFocusController().SetActive(true);
 }
 
 TEST_F(StyleResolverTestCQ, ContainerUnitContext) {
@@ -4648,11 +4792,7 @@ TEST_F(StyleResolverTest, UseCountPseudoElementImplicitAnchor) {
       left: anchor(right);
     }
   )HTML");
-  if (RuntimeEnabledFeatures::CSSPositionAnchorNoneEnabled()) {
-    EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoElementUsesImplicitAnchor));
-  } else {
-    EXPECT_TRUE(IsUseCounted(WebFeature::kCSSPseudoElementUsesImplicitAnchor));
-  }
+  EXPECT_FALSE(IsUseCounted(WebFeature::kCSSPseudoElementUsesImplicitAnchor));
 }
 
 TEST_F(StyleResolverTest, FindContainerForElement_LayoutSiblings) {
@@ -4716,6 +4856,34 @@ TEST_F(StyleResolverTest, FindContainerForElement_LayoutSiblings) {
   EXPECT_EQ(StyleResolver::FindContainerForElement(button, anchored_selector,
                                                    &GetDocument()),
             scroller);
+}
+
+TEST_F(StyleResolverTest, FindContainerForElement_SkeletonPseudo) {
+  ScopedDeclarativeSkeletonsForTest enable(true);
+
+  Element* root = GetDocument().documentElement();
+  root->SetInlineStyleProperty(CSSPropertyID::kContainerType, "inline-size");
+  root->SetInlineStyleProperty(CSSPropertyID::kContainerName, "--root");
+  UpdateAllLifecyclePhasesForTest();
+
+  ContainerSelector size_selector(g_null_atom, kPhysicalAxesNone,
+                                  kLogicalAxesInline,
+                                  /*scroll_state=*/false,
+                                  /*anchored_query=*/false);
+  ContainerSelector named_selector(AtomicString("--root"), kPhysicalAxesNone,
+                                   kLogicalAxesNone,
+                                   /*scroll_state=*/false,
+                                   /*anchored_query=*/false);
+
+  PseudoElement& skeleton =
+      GetDocument().documentElement()->EnsureSkeletonPseudo();
+
+  EXPECT_EQ(StyleResolver::FindContainerForElement(&skeleton, size_selector,
+                                                   &GetDocument()),
+            nullptr);
+  EXPECT_EQ(StyleResolver::FindContainerForElement(&skeleton, named_selector,
+                                                   &GetDocument()),
+            nullptr);
 }
 
 }  // namespace blink

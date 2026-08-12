@@ -38,6 +38,8 @@
 
 namespace content {
 
+class PrefetchedSignedExchangeCache;
+
 class TestRenderFrameHostCreationObserver : public WebContentsObserver {
  public:
   explicit TestRenderFrameHostCreationObserver(WebContents* web_contents);
@@ -108,6 +110,8 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
   void SimulateBeforeUnloadCompleted(bool proceed) override;
   void SimulateUnloadACK() override;
   void SimulateUserActivation() override;
+  void SimulateFocusedElementChanged(bool is_editable_element,
+                                     bool is_richly_editable_element) override;
   const std::vector<std::string>& GetConsoleMessages() override;
   void ClearConsoleMessages() override;
   int GetHeavyAdIssueCount(HeavyAdIssueType type) override;
@@ -117,10 +121,8 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
       mojo::PendingReceiver<blink::mojom::WebUsbService> receiver) override;
   void ResetLocalFrame() override;
 
-#if !BUILDFLAG(IS_ANDROID)
   void CreateHidServiceForTesting(
       mojo::PendingReceiver<blink::mojom::HidService> receiver) override;
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   void SendNavigate(int nav_entry_id,
                     bool did_create_new_entry,
@@ -159,18 +161,24 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
   void DidEnforceInsecureRequestPolicy(
       blink::mojom::InsecureRequestPolicy policy);
 
-  // Returns the number of FedCM issues of FederatedAuthRequestResult type
+  // Returns the number of FedCM issues of FederatedRequestResult type
   // `status_type` sent to DevTools. If `status_type` is std::nullopt, returns
   // the total number of FedCM issues of any type sent to DevTools.
-  int GetFederatedAuthRequestIssueCount(
-      std::optional<blink::mojom::FederatedAuthRequestResult> status_type);
+  int GetFederatedRequestIssueCount(
+      std::optional<blink::mojom::FederatedRequestResult> status_type);
 
   // Returns the number of FedCM issues of FederatedAuthUserInfoRequestResult
   // type `status_type` sent to DevTools. If `status_type` is std::nullopt,
   // returns the total number of FedCM issues of any type sent to DevTools.
-  int GetFederatedAuthUserInfoRequestIssueCount(
+  int GetFederatedUserInfoRequestIssueCount(
       std::optional<blink::mojom::FederatedAuthUserInfoRequestResult>
           status_type);
+
+  // Returns the number of FedCM issues of EmailVerificationRequestResult
+  // type `status_type` sent to DevTools. If `status_type` is std::nullopt,
+  // returns the total number of FedCM issues of any type sent to DevTools.
+  int GetEmailVerificationRequestIssueCount(
+      std::optional<blink::mojom::EmailVerificationRequestResult> status_type);
 
   // If set, navigations will appear to have cleared the history list in the
   // RenderFrame (DidCommitProvisionalLoadParams::history_list_was_cleared).
@@ -235,6 +243,14 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
     return navigation_requests_;
   }
 
+  void SimulateOnSameDocumentCommitProcessed(
+      const base::UnguessableToken& navigation_token,
+      bool should_replace_current_entry,
+      blink::mojom::CommitResult result);
+
+  void SetPrefetchedSignedExchangeCacheForTesting(
+      scoped_refptr<PrefetchedSignedExchangeCache> cache);
+
   enum class LoadingScenario {
     NewDocumentNavigation,
     kSameDocumentNavigation,
@@ -248,21 +264,11 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
   // callbacks.
   void SimulateLoadingCompleted(LoadingScenario loading_scenario);
 
-  void set_on_sendbeforeunload_begin(
-      base::OnceClosure on_sendbeforeunload_begin) {
-    on_sendbeforeunload_begin_ = std::move(on_sendbeforeunload_begin);
-  }
-
-  void set_on_sendbeforeunload_end(base::OnceClosure on_sendbeforeunload_end) {
-    on_sendbeforeunload_end_ = std::move(on_sendbeforeunload_end);
-  }
-
   // Expose this for testing.
   using RenderFrameHostImpl::SetPolicyContainerHost;
 
  protected:
   void SendCommitNavigation(
-      mojom::NavigationClient* navigation_client,
       NavigationRequest* navigation_request,
       blink::mojom::CommonNavigationParamsPtr common_params,
       blink::mojom::CommitNavigationParamsPtr commit_params,
@@ -282,12 +288,10 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
           keep_alive_loader_factory,
       mojo::PendingAssociatedRemote<blink::mojom::FetchLaterLoaderFactory>
           fetch_later_loader_factory,
-      const std::optional<network::ParsedPermissionsPolicy>& permissions_policy,
       blink::mojom::PolicyContainerPtr policy_container,
       const blink::DocumentToken& document_token,
       const base::UnguessableToken& devtools_navigation_token) override;
   void SendCommitFailedNavigation(
-      mojom::NavigationClient* navigation_client,
       NavigationRequest* navigation_request,
       blink::mojom::CommonNavigationParamsPtr common_params,
       blink::mojom::CommitNavigationParamsPtr commit_params,
@@ -300,10 +304,6 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
       const blink::DocumentToken& document_token,
       const base::UnguessableToken& devtools_navigation_token,
       blink::mojom::PolicyContainerPtr policy_container) override;
-  void SendBeforeUnload(bool is_reload,
-                        base::WeakPtr<RenderFrameHostImpl> impl,
-                        bool for_legacy,
-                        const bool is_renderer_initiated_navigation) override;
 
  private:
   void SendNavigateWithParameters(int nav_entry_id,
@@ -339,12 +339,17 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
 
   // Keeps a count of federated authentication request issues sent to
   // ReportInspectorIssue.
-  std::unordered_map<blink::mojom::FederatedAuthRequestResult, int>
+  std::unordered_map<blink::mojom::FederatedRequestResult, int>
       federated_auth_counts_;
 
   // Keeps a count of getUserInfo() issues sent to ReportInspectorIssue.
   std::unordered_map<blink::mojom::FederatedAuthUserInfoRequestResult, int>
       federated_auth_user_info_counts_;
+
+  // Keeps a count of email verification request issues sent to
+  // ReportInspectorIssue.
+  std::unordered_map<blink::mojom::EmailVerificationRequestResult, int>
+      email_verification_request_counts_;
 
   TestRenderFrameHostCreationObserver child_creation_observer_;
 
@@ -353,10 +358,6 @@ class TestRenderFrameHost : public RenderFrameHostImpl,
 
   // The last commit was for an error page.
   bool last_commit_was_error_page_;
-
-  // The closure that runs when SendBeforeUnload is called.
-  base::OnceClosure on_sendbeforeunload_begin_;
-  base::OnceClosure on_sendbeforeunload_end_;
 
   std::map<NavigationRequest*,
            mojom::NavigationClient::CommitNavigationCallback>

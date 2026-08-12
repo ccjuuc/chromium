@@ -24,10 +24,9 @@ namespace {
 class DismissButton;
 }
 
-// View for media controls that appear on the lock screen if it is enabled. This
-// replaces the old LockScreenMediaControlsView if the flag
-// media::kGlobalMediaControlsCrOSUpdatedUI is enabled. It registers for media
-// updates and reuses MediaItemUIDetailedView to display the media controls.
+// View for media controls that appear on the lock screen if it is enabled. It
+// registers for media updates and reuses MediaItemUIDetailedView to display the
+// media controls.
 class ASH_EXPORT LockScreenMediaView
     : public views::View,
       public media_session::mojom::MediaControllerObserver,
@@ -107,6 +106,9 @@ class ASH_EXPORT LockScreenMediaView
 
  private:
   friend class LockScreenMediaViewTest;
+
+  // Called when the user clicks the dismiss button.
+  void DismissByUser();
 
   // Called to show the media view.
   void Show();

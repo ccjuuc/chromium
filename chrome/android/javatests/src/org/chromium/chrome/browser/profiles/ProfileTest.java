@@ -15,7 +15,9 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.RequiresRestart;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
@@ -27,6 +29,7 @@ import org.chromium.components.profile_metrics.BrowserProfileType;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableFeatures(ChromeFeatureList.SETTINGS_IN_TAB) // crbug.com/521895796
 public class ProfileTest {
     @Rule
     public final AutoResetCtaTransitTestRule mActivityTestRule =
@@ -296,7 +299,8 @@ public class ProfileTest {
     @Test
     @LargeTest
     @RequiresRestart(
-            "crbug/1161449 - Other tests create profiles which invalidate the first assertion.")
+            "crbug.com/40738830 - Other tests create profiles which invalidate the first"
+                    + " assertion.")
     public void testGetOffTheRecordProfile() {
         OtrProfileId profileId = new OtrProfileId("test::OtrProfile");
 

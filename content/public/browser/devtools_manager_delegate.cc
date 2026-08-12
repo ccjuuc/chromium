@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "content/public/browser/devtools_manager_delegate.h"
+
 #include "base/values.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
 
 namespace content {
@@ -47,6 +49,11 @@ std::string DevToolsManagerDelegate::GetTargetDescription(WebContents* wc) {
   return std::string();
 }
 
+std::unique_ptr<base::DictValue> DevToolsManagerDelegate::GetTargetEmbedderData(
+    DevToolsAgentHost* agent_host) {
+  return nullptr;
+}
+
 bool DevToolsManagerDelegate::AllowInspectingRenderFrameHost(
     RenderFrameHost* rfh) {
   return true;
@@ -69,11 +76,17 @@ scoped_refptr<DevToolsAgentHost> DevToolsManagerDelegate::CreateNewTarget(
   return nullptr;
 }
 
-std::vector<BrowserContext*> DevToolsManagerDelegate::GetBrowserContexts() {
-  return std::vector<BrowserContext*>();
+std::vector<base::WeakPtr<BrowserContext>>
+DevToolsManagerDelegate::GetBrowserContexts() {
+  return std::vector<base::WeakPtr<BrowserContext>>();
 }
 
 BrowserContext* DevToolsManagerDelegate::GetDefaultBrowserContext() {
+  return nullptr;
+}
+
+BrowserContext* DevToolsManagerDelegate::GetBrowserContext(
+    const std::string& context_id) {
   return nullptr;
 }
 
@@ -91,11 +104,16 @@ void DevToolsManagerDelegate::ClientAttached(
 void DevToolsManagerDelegate::ClientDetached(
     DevToolsAgentHostClientChannel* channel) {}
 
+bool DevToolsManagerDelegate::AllowInspectingTarget(
+    DevToolsAgentHost* agent_host) {
+  return true;
+}
+
 void DevToolsManagerDelegate::HandleCommand(
     DevToolsAgentHostClientChannel* channel,
     base::span<const uint8_t> message,
     NotHandledCallback callback) {
-  std::move(callback).Run(message);
+  callback.Run(message);
 }
 
 std::string DevToolsManagerDelegate::GetDiscoveryPageHTML() {

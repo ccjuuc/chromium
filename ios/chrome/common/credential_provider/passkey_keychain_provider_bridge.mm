@@ -7,37 +7,26 @@
 #import "base/apple/foundation_util.h"
 #import "base/containers/to_vector.h"
 #import "base/functional/callback.h"
+#import "base/memory/raw_ptr.h"
 #import "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #import "components/webauthn/core/browser/passkey_model_utils.h"
-#import "components/webauthn/ios/passkey_types.h"
 #import "ios/chrome/common/credential_provider/archivable_credential+passkey.h"
 
 typedef void (^CheckEnrolledCompletionBlock)(BOOL is_enrolled, NSError* error);
 typedef void (^ErrorCompletionBlock)(NSError* error);
-typedef void (^FetchKeysCompletionBlock)(
-    const webauthn::SharedKeyList& key_list);
+
+NSString* const kPasskeyKeychainProviderBridgeErrorDomain =
+    @"PasskeyKeychainProviderBridgeErrorDomain";
 
 namespace {
 
-// Returns an array of trusted vault keys.
-NSArray<NSData*>* GetTrustedVaultKeys(const webauthn::SharedKeyList& keys) {
-  NSMutableArray<NSData*>* trustedVaultKeys =
-      [NSMutableArray arrayWithCapacity:keys.size()];
-  for (const webauthn::SharedKey& key : keys) {
-    [trustedVaultKeys addObject:[NSData dataWithBytes:key.data()
-                                               length:key.size()]];
-  }
-  return trustedVaultKeys;
-}
-
 // Returns whether there's at least one valid key in the keys array.
-bool ContainsValidKey(const webauthn::SharedKeyList keys,
+bool ContainsValidKey(const webauthn::SharedKeyList& keys,
                       id<Credential> credential) {
-  for (NSData* trustedVaultKey in GetTrustedVaultKeys(keys)) {
+  for (const webauthn::SharedKey& key : keys) {
     sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
     if (webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
-            base::ToVector(base::apple::NSDataToSpan(trustedVaultKey)),
-            PasskeyFromCredential(credential), &decrypted)) {
+            key, PasskeyFromCredential(credential), &decrypted)) {
       return true;
     }
   }
@@ -51,25 +40,28 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
   // Provider that manages passkey vault keys.
   std::unique_ptr<PasskeyKeychainProvider> _passkeyKeychainProvider;
 
-  // Navigation controller needed by `_passkeyKeychainProvider` to display some
-  // UI to the user.
-  UINavigationController* _navigationController;
-
   // The branded navigation item title view to use in the navigation
   // controller's UIs.
   UIView* _navigationItemTitleView;
 }
 
 - (instancetype)initWithEnableLogging:(BOOL)enableLogging
-                 navigationController:
-                     (UINavigationController*)navigationController
               navigationItemTitleView:(UIView*)navigationItemTitleView {
   self = [super init];
   if (self) {
     _passkeyKeychainProvider =
         std::make_unique<PasskeyKeychainProvider>(enableLogging);
-    _navigationController = navigationController;
     _navigationItemTitleView = navigationItemTitleView;
+  }
+  return self;
+}
+
+- (instancetype)initWithPasskeyKeychainProvider:
+    (std::unique_ptr<PasskeyKeychainProvider>)passkeyKeychainProvider {
+  self = [super init];
+  if (self) {
+    _passkeyKeychainProvider = std::move(passkeyKeychainProvider);
+    _navigationItemTitleView = nil;  // Not needed for tests.
   }
   return self;
 }
@@ -85,28 +77,28 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                              purpose:(webauthn::ReauthenticatePurpose)purpose
                           completion:(FetchTrustedVaultKeysCompletionBlock)
                                          fetchTrustedVaultKeysCompletion {
-  if (_navigationController) {
-    __weak __typeof(self) weakSelf = self;
-    auto checkEnrolledCompletion = ^(BOOL is_enrolled, NSError* error) {
-      [weakSelf onIsEnrolledForGaia:gaia
-                         credential:credential
-                            purpose:purpose
-                         completion:fetchTrustedVaultKeysCompletion
-                         isEnrolled:is_enrolled
-                              error:error];
-    };
-    [self checkEnrolledForGaia:gaia completion:checkEnrolledCompletion];
-  } else {
-    // If there's no valid navigation controller to show the enrollment UI, it
-    // won't be possible to enroll, so only attempt to fetch keys.
-    [self fetchKeysForGaia:gaia
-                credential:credential
-        canMarkKeysAsStale:YES
-                   purpose:purpose
-         canReauthenticate:YES
-                completion:fetchTrustedVaultKeysCompletion
-                     error:nil];
-  }
+  // Ensure that the completion is invoked only once, since for the main app,
+  // it's wrapped from `base::OnceCallback`, which would lead to a crash in
+  // case of e.g. a double tap. More details in crbug.com/525411441.
+  __block bool completion_executed = false;
+  FetchTrustedVaultKeysCompletionBlock completion =
+      ^(webauthn::SharedKeyList keyList, NSError* error) {
+        if (!completion_executed) {
+          completion_executed = true;
+          fetchTrustedVaultKeysCompletion(std::move(keyList), error);
+        }
+      };
+
+  __weak __typeof(self) weakSelf = self;
+  auto checkEnrolledCompletion = ^(BOOL is_enrolled, NSError* error) {
+    [weakSelf onIsEnrolledForGaia:gaia
+                       credential:credential
+                          purpose:purpose
+                       completion:completion
+                       isEnrolled:is_enrolled
+                            error:error];
+  };
+  [self checkEnrolledForGaia:gaia completion:checkEnrolledCompletion];
 }
 
 #pragma mark - Private
@@ -139,13 +131,13 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                                 fetchTrustedVaultKeysCompletion
                  isEnrolled:(BOOL)isEnrolled
                       error:(NSError*)error {
-  if (isEnrolled) {
-    if (error != nil) {
-      // Skip fetching keys if there was an error.
-      fetchTrustedVaultKeysCompletion(nil);
-      return;
-    }
+  if (error != nil) {
+    // Skip fetching keys if there was an error.
+    fetchTrustedVaultKeysCompletion(/*trustedVaultKeys=*/{}, error);
+    return;
+  }
 
+  if (isEnrolled) {
     [self fetchKeysForGaia:gaia
                 credential:credential
         canMarkKeysAsStale:YES
@@ -164,17 +156,24 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                       completion:fetchTrustedVaultKeysCompletion
                            error:enroll_error];
     };
-    [self.delegate showEnrollmentWelcomeScreen:^{
-      [weakSelf enrollForGaia:gaia completion:enrollCompletion];
-    }];
+    [self.delegate
+        showWelcomeScreenWithPurpose:webauthn::PasskeyWelcomeScreenPurpose::
+                                         kEnroll
+                          completion:^(
+                              UINavigationController* navigationController) {
+                            [weakSelf enrollForGaia:gaia
+                                navigationController:navigationController
+                                          completion:enrollCompletion];
+                          }];
   }
 }
 
 // Starts the enrollment process for the account associated with the provided
 // gaia ID and calls the completion block.
 - (void)enrollForGaia:(NSString*)gaia
-           completion:(ErrorCompletionBlock)completion {
-  _passkeyKeychainProvider->Enroll(gaia, _navigationController,
+    navigationController:(UINavigationController*)navigationController
+              completion:(ErrorCompletionBlock)completion {
+  _passkeyKeychainProvider->Enroll(gaia, navigationController,
                                    _navigationItemTitleView,
                                    base::BindOnce(^(NSError* error) {
                                      completion(error);
@@ -196,20 +195,22 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                    error:(NSError*)error {
   if (error != nil) {
     // Skip fetching keys if there was an error.
-    fetchTrustedVaultKeysCompletion(nil);
+    fetchTrustedVaultKeysCompletion(/*trustedVaultKeys=*/{}, error);
     return;
   }
 
   __weak __typeof(self) weakSelf = self;
-  auto fetchKeysCompletion = ^(const webauthn::SharedKeyList& key_list) {
-    [weakSelf onKeysFetchedForGaia:gaia
-                        credential:credential
-                canMarkKeysAsStale:canMarkKeysAsStale
-                           purpose:purpose
-                        completion:fetchTrustedVaultKeysCompletion
-                           keyList:key_list
-                 canReauthenticate:canReauthenticate];
-  };
+  auto fetchKeysCompletion =
+      ^(webauthn::SharedKeyList key_list, NSError* fetchKeysError) {
+        [weakSelf onKeysFetchedForGaia:gaia
+                            credential:credential
+                    canMarkKeysAsStale:canMarkKeysAsStale
+                               purpose:purpose
+                            completion:fetchTrustedVaultKeysCompletion
+                               keyList:std::move(key_list)
+                     canReauthenticate:canReauthenticate
+                                 error:fetchKeysError];
+      };
   [self fetchKeysForGaia:gaia purpose:purpose completion:fetchKeysCompletion];
 }
 
@@ -217,11 +218,13 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
 // gaia ID and calls the completion block.
 - (void)fetchKeysForGaia:(NSString*)gaia
                  purpose:(webauthn::ReauthenticatePurpose)purpose
-              completion:(FetchKeysCompletionBlock)completion {
+              completion:(FetchTrustedVaultKeysCompletionBlock)completion {
   _passkeyKeychainProvider->FetchKeys(
-      gaia, purpose, base::BindOnce(^(const webauthn::SharedKeyList& key_list) {
-        completion(key_list);
-      }));
+      gaia, purpose,
+      base::BindOnce(
+          ^(webauthn::SharedKeyList trustedVaultKeys, NSError* error) {
+            completion(std::move(trustedVaultKeys), error);
+          }));
 }
 
 // Handles the outcome of the key fetch process.
@@ -232,8 +235,9 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
           canMarkKeysAsStale:(BOOL)canMarkKeysAsStale
                      purpose:(webauthn::ReauthenticatePurpose)purpose
                   completion:(FetchTrustedVaultKeysCompletionBlock)completion
-                     keyList:(const webauthn::SharedKeyList&)keyList
-           canReauthenticate:(BOOL)canReauthenticate {
+                     keyList:(webauthn::SharedKeyList)keyList
+           canReauthenticate:(BOOL)canReauthenticate
+                       error:(NSError*)error {
   __weak __typeof(self) weakSelf = self;
   if (!keyList.empty()) {
     if (purpose == webauthn::ReauthenticatePurpose::kDecrypt &&
@@ -254,34 +258,37 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
       return;
     }
 
-    const webauthn::SharedKeyList keys = std::move(keyList);
     // On success, check degraded recoverability.
-    auto degradedRecoverabilityCompletion = ^(NSError* error) {
-      if (error) {
-        completion(nil);
+    auto degradedRecoverabilityCompletion = ^(
+        NSError* degradedRecoverabilityError) {
+      if (degradedRecoverabilityError) {
+        completion(/*trustedVaultKeys=*/{}, degradedRecoverabilityError);
       } else {
-        [weakSelf
-            performUserVerificationIfNeededAndCallCompletionWithKeys:std::move(
-                                                                         keys)
-                                                          completion:
-                                                              completion];
+        [weakSelf performUserVerificationIfNeededAndCallCompletionWithKeys:
+                      std::move(keyList)
+                                                                completion:
+                                                                    completion];
       }
     };
     [self checkDegradedRecoverabilityForGaia:gaia
                                   completion:degradedRecoverabilityCompletion];
   } else {
-    if (_navigationController && canReauthenticate) {
-      // A valid navigation controller is needed to show the reauthentication
-      // UI. Otherwise, it won't be possible to perform reauthentication.
-      [self.delegate showReauthenticationWelcomeScreen:^{
-        [weakSelf reauthenticateForGaia:gaia
-                             credential:credential
-                     canMarkKeysAsStale:canMarkKeysAsStale
-                                purpose:purpose
-                             completion:completion];
-      }];
+    if (canReauthenticate) {
+      [self.delegate
+          showWelcomeScreenWithPurpose:webauthn::PasskeyWelcomeScreenPurpose::
+                                           kReauthenticate
+                            completion:^(
+                                UINavigationController* navigationController) {
+                              [weakSelf
+                                  reauthenticateForGaia:gaia
+                                             credential:credential
+                                     canMarkKeysAsStale:canMarkKeysAsStale
+                                                purpose:purpose
+                                   navigationController:navigationController
+                                             completion:completion];
+                            }];
     } else {
-      completion(nil);
+      completion(/*trustedVaultKeys=*/{}, error);
     }
   }
 }
@@ -292,11 +299,12 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                    credential:(id<Credential>)credential
            canMarkKeysAsStale:(BOOL)canMarkKeysAsStale
                       purpose:(webauthn::ReauthenticatePurpose)purpose
+         navigationController:(UINavigationController*)navigationController
                    completion:(FetchTrustedVaultKeysCompletionBlock)completion {
   __weak __typeof(self) weakSelf = self;
   _passkeyKeychainProvider->Reauthenticate(
-      gaia, _navigationController, _navigationItemTitleView, purpose,
-      base::BindOnce(^(const webauthn::SharedKeyList& key_list) {
+      gaia, navigationController, _navigationItemTitleView, purpose,
+      base::BindOnce(^(webauthn::SharedKeyList key_list, NSError* error) {
         // If we got nonempty keys, that means the reauthentication was a
         // success. Report this back to the delegate.
         if (!key_list.empty()) {
@@ -308,8 +316,9 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
                     canMarkKeysAsStale:canMarkKeysAsStale
                                purpose:purpose
                             completion:completion
-                               keyList:key_list
-                     canReauthenticate:NO];
+                               keyList:std::move(key_list)
+                     canReauthenticate:NO
+                                 error:error];
       }));
 }
 
@@ -320,15 +329,20 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
   __weak __typeof(self) weakSelf = self;
   _passkeyKeychainProvider->CheckDegradedRecoverability(
       gaia, base::BindOnce(^(BOOL inDegradedRecoverability, NSError* error) {
-        if (weakSelf.navigationController && inDegradedRecoverability) {
-          // A valid navigation controller is needed to show the "fix degraded
-          // recoverability state" UI. Otherwise, it won't be possible to
-          // perform the GPM pin creation required to fix the degraded
-          // recoverability state.
-          [weakSelf.delegate showFixDegradedRecoverabilityWelcomeScreen:^{
-            [weakSelf fixDegradedRecoverabilityForGaia:gaia
-                                            completion:completion];
-          }];
+        if (inDegradedRecoverability) {
+          [weakSelf.delegate
+              showWelcomeScreenWithPurpose:webauthn::
+                                               PasskeyWelcomeScreenPurpose::
+                                                   kFixDegradedRecoverability
+                                completion:^(UINavigationController*
+                                                 navigationController) {
+                                  [weakSelf
+                                      fixDegradedRecoverabilityForGaia:gaia
+                                                  navigationController:
+                                                      navigationController
+                                                            completion:
+                                                                completion];
+                                }];
         } else {
           completion(error);
         }
@@ -338,29 +352,35 @@ bool ContainsValidKey(const webauthn::SharedKeyList keys,
 // Fixes the degraded recoverability state for the account associated with the
 // provided gaia ID and calls the completion block.
 - (void)fixDegradedRecoverabilityForGaia:(NSString*)gaia
+                    navigationController:
+                        (UINavigationController*)navigationController
                               completion:(ErrorCompletionBlock)completion {
   _passkeyKeychainProvider->FixDegradedRecoverability(
-      gaia, _navigationController, _navigationItemTitleView,
+      gaia, navigationController, _navigationItemTitleView,
       base::BindOnce(^(NSError* error) {
         completion(error);
       }));
-}
-
-// Private accessor for the `_navigationController` ivar.
-- (UINavigationController*)navigationController {
-  return _navigationController;
 }
 
 // Asks the delegate to perform a user verification if needed and calls the
 // completion block.
 - (void)
     performUserVerificationIfNeededAndCallCompletionWithKeys:
-        (const webauthn::SharedKeyList)keys
+        (webauthn::SharedKeyList)keys
                                                   completion:
                                                       (FetchTrustedVaultKeysCompletionBlock)
                                                           completion {
-  [self.delegate performUserVerificationIfNeeded:^{
-    completion(GetTrustedVaultKeys(std::move(keys)));
+  [self.delegate performUserVerificationIfNeeded:^(BOOL success) {
+    if (success) {
+      completion(std::move(keys), /*error=*/nil);
+    } else {
+      NSError* error = [NSError
+          errorWithDomain:kPasskeyKeychainProviderBridgeErrorDomain
+                     code:static_cast<NSInteger>(
+                              PasskeyKeychainError::kUserVerificationFailed)
+                 userInfo:nil];
+      completion(/*trustedVaultKeys=*/{}, error);
+    }
   }];
 }
 

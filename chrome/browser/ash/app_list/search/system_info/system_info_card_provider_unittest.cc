@@ -19,6 +19,7 @@
 #include "base/system/sys_info.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_running_on_chromeos.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/timer/mock_timer.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
@@ -80,7 +81,7 @@ void SetProbeTelemetryInfoResponse(healthd_mojom::BatteryInfoPtr battery_info,
   }
 
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 }
 
 void SetCrosHealthdCpuResponse(
@@ -517,7 +518,7 @@ TEST_F(SystemInfoCardProviderTest, CpuProbeError) {
       CreateProbeError(healthd_mojom::ErrorType::kFileReadError));
   info->cpu_result = std::move(cpu_result);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   StartSearch(u"cpu");
   Wait();
@@ -609,7 +610,7 @@ TEST_F(SystemInfoCardProviderTest, MemoryProbeError) {
       CreateProbeError(healthd_mojom::ErrorType::kSystemUtilityError));
   info->memory_result = std::move(memory_result);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   StartSearch(u"memory");
   Wait();
@@ -746,7 +747,7 @@ TEST_F(SystemInfoCardProviderTest, BatteryProbeError) {
       CreateProbeError(healthd_mojom::ErrorType::kParseError));
   info->battery_result = std::move(battery_result);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const auto power_source =
       power_manager::PowerSupplyProperties_ExternalPower_AC;

@@ -6,6 +6,9 @@
 #define CHROME_BROWSER_ACTOR_ACTOR_KEYED_SERVICE_FAKE_H_
 
 #include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_test_util.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
+#include "chrome/common/glic_enums.mojom.h"
 
 class Profile;
 
@@ -17,8 +20,23 @@ class ActorKeyedServiceFake : public ActorKeyedService {
   ~ActorKeyedServiceFake() override;
 
   TaskId CreateTaskForTesting();
+  TaskId CreateTransientTaskForTesting();
+  TaskId CreateExperimentalTriggeringTaskForTesting();
+  void PauseTaskForTesting(TaskId task_id, bool from_actor);
+  void StopTaskForTesting(TaskId task_id,
+                          actor::ActorTask::StoppedReason stopped_reason);
 
  private:
+  TaskId CreateTaskWithDurationAndFeatureModeForTesting(
+      actor::webui::mojom::TaskDuration duration,
+      glic::mojom::FeatureMode feature_mode);
+
+  TaskId CreateTaskWithDurationForTesting(
+      actor::webui::mojom::TaskDuration duration);
+
+  MockPolicyChecker no_enterprise_policy_checker_{
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked};
+
   base::WeakPtrFactory<ActorKeyedServiceFake> weak_ptr_factory_{this};
 };
 

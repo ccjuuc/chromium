@@ -22,7 +22,6 @@ import type {App, AppPermissionsHandlerInterface} from '../mojom-webui/app_permi
 
 import {getAppPermissionProvider} from './mojo_interface_provider.js';
 import {getTemplate} from './privacy_hub_app_permission_row.html.js';
-import {NUMBER_OF_POSSIBLE_USER_ACTIONS, PrivacyHubSensorSubpageUserAction} from './privacy_hub_metrics_util.js';
 
 function getPermissionValueAsTriState(permission: Permission): TriState {
   if (isTriStateValue(permission.value)) {
@@ -107,16 +106,16 @@ export class SettingsPrivacyHubAppPermissionRow extends
     };
   }
 
-  app: App;
-  permissionType: PermissionTypeIndex;
-  private androidSettingsLinkAriaDescription_: string;
-  private ariaDescription_: string;
-  private checked_: boolean;
-  private isPermissionManaged_: boolean;
+  declare app: App;
+  declare permissionType: PermissionTypeIndex;
+  declare private androidSettingsLinkAriaDescription_: string;
+  declare private ariaDescription_: string;
+  declare private checked_: boolean;
+  declare private isPermissionManaged_: boolean;
   private mojoInterfaceProvider_: AppPermissionsHandlerInterface;
-  private permissionText_: string;
-  private shouldDisableToggle_: boolean;
-  private shouldRedirectToAndroidSettings_: boolean;
+  declare private permissionText_: string;
+  declare private shouldDisableToggle_: boolean;
+  declare private shouldRedirectToAndroidSettings_: boolean;
 
   static get observers() {
     return ['onPermissionChange_(app.permissions.*)'];
@@ -165,11 +164,6 @@ export class SettingsPrivacyHubAppPermissionRow extends
     }
   }
 
-  private getUserActionHistogramName(): string {
-    return `ChromeOS.PrivacyHub.${
-        this.permissionType.substring(1)}Subpage.UserAction`;
-  }
-
   private togglePermissionState_(): void {
     const permission =
         castExists(this.app.permissions[PermissionType[this.permissionType]]);
@@ -183,11 +177,6 @@ export class SettingsPrivacyHubAppPermissionRow extends
     }
 
     this.mojoInterfaceProvider_.setPermission(this.app.id, permission);
-
-    chrome.metricsPrivate.recordEnumerationValue(
-        this.getUserActionHistogramName(),
-        PrivacyHubSensorSubpageUserAction.APP_PERMISSION_CHANGED,
-        NUMBER_OF_POSSIBLE_USER_ACTIONS);
   }
 
   private onPermissionRowClick_(): void {
@@ -197,11 +186,6 @@ export class SettingsPrivacyHubAppPermissionRow extends
 
     if (this.shouldRedirectToAndroidSettings_) {
       this.mojoInterfaceProvider_.openNativeSettings(this.app.id);
-
-      chrome.metricsPrivate.recordEnumerationValue(
-          this.getUserActionHistogramName(),
-          PrivacyHubSensorSubpageUserAction.ANDROID_SETTINGS_LINK_CLICKED,
-          Object.keys(PrivacyHubSensorSubpageUserAction).length);
       return;
     }
 

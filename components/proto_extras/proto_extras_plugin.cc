@@ -5,7 +5,6 @@
 #include <string>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
@@ -44,7 +43,6 @@ struct ProtoExtrasGeneratorOptions {
   bool generate_to_value_serialization = false;
   bool generate_stream_operator = false;
   bool generate_equality = false;
-  bool protobuf_full_support = false;
 };
 
 bool GetAllClassNames(const Descriptor& message,
@@ -269,15 +267,6 @@ void CreateEqualityOperatorDefinition(
       {{"message_type", message_type},
        {"compare_fields",
         [&]() {
-          // If protobuf_full_support is enabled, use MessageDifferencerEquals
-          // to compare the messages as the messages should be full Message
-          // types.
-          if (options.protobuf_full_support) {
-            printer->Print(
-                "if (!::proto_extras::MessageDifferencerEquals(lhs, rhs)) "
-                "return false;\n");
-            return;
-          }
           printer->Print(
               "if (lhs.unknown_fields() != rhs.unknown_fields()) return "
               "false;\n");
@@ -404,14 +393,11 @@ class ProtoExtrasGenerator : public google::protobuf::compiler::CodeGenerator {
     CHECK(file);
 
     ProtoExtrasGeneratorOptions generator_options{
-        .generate_to_value_serialization = base::Contains(
-            command_line_options, "generate_to_value_serialization"),
+        .generate_to_value_serialization =
+            command_line_options.contains("generate_to_value_serialization"),
         .generate_stream_operator =
-            base::Contains(command_line_options, "generate_stream_operator"),
-        .generate_equality =
-            base::Contains(command_line_options, "generate_equality"),
-        .protobuf_full_support =
-            base::Contains(command_line_options, "protobuf_full_support"),
+            command_line_options.contains("generate_stream_operator"),
+        .generate_equality = command_line_options.contains("generate_equality"),
     };
     // The current design of this library assumes that only one of the
     // serialization options is enabled.
@@ -544,10 +530,6 @@ $function_declarations$
                 .ReplaceExtension(FILE_PATH_LITERAL("equal.h"))
                 .AsUTF8Unsafe());
       }
-    }
-    if (generator_options.protobuf_full_support) {
-      impl_user_includes.insert(
-          "components/proto_extras/protobuf_full_support.h");
     }
     cc_printer.Emit(
         {

@@ -18,6 +18,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.widget.SearchView;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.DividerItemDecoration;
@@ -25,8 +26,10 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.ui.KeyboardUtils;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -35,6 +38,7 @@ import org.chromium.chrome.browser.language.R;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ProfileDependentSetting;
 import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
+import org.chromium.components.browser_ui.settings.SearchViewProvider;
 import org.chromium.components.browser_ui.settings.SettingsFragment;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 
@@ -48,7 +52,10 @@ import java.util.Locale;
  */
 @NullMarked
 public class SelectLanguageFragment extends Fragment
-        implements ProfileDependentSetting, SettingsFragment, EmbeddableSettingsPage {
+        implements ProfileDependentSetting,
+                SettingsFragment,
+                EmbeddableSettingsPage,
+                SearchViewProvider {
     // Intent key to pass selected language code from SelectLanguageFragment.
     static final String KEY_SELECTED_LANGUAGE = "SelectLanguageFragment.SelectedLanguage";
     // Intent key to receive type of languages to populate fragment with.
@@ -110,8 +117,12 @@ public class SelectLanguageFragment extends Fragment
     private @MonotonicNonNull List<LanguageItem> mFilteredLanguages;
     private LanguageListBaseAdapter.ItemClickListener mItemClickListener;
     private @MonotonicNonNull Profile mProfile;
+    private @MonotonicNonNull SearchViewProvider.Observer mSearchViewObserver;
 
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
+
+    private @Nullable OnBackPressedCallback mBackPressCallback;
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -125,7 +136,7 @@ public class SelectLanguageFragment extends Fragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -187,14 +198,39 @@ public class SelectLanguageFragment extends Fragment
         menu.clear();
         inflater.inflate(R.menu.languages_action_bar_menu, menu);
 
-        mSearchView = (SearchView) menu.findItem(R.id.search).getActionView();
-        assumeNonNull(mSearchView);
+        SearchView searchView = (SearchView) menu.findItem(R.id.search).getActionView();
+        assumeNonNull(searchView);
+        initSearchView(searchView);
+    }
+
+    /** Initialize a {@link SearchView} for filtering languages. */
+    @Override
+    public void initSearchView(SearchView searchView) {
+        mSearchView = searchView;
         mSearchView.setImeOptions(EditorInfo.IME_FLAG_NO_FULLSCREEN);
 
+        mBackPressCallback =
+                new OnBackPressedCallback(false) {
+                    @Override
+                    public void handleOnBackPressed() {
+                        assumeNonNull(mSearchView).setIconified(true);
+                    }
+                };
+        requireActivity()
+                .getOnBackPressedDispatcher()
+                .addCallback(getViewLifecycleOwner(), mBackPressCallback);
+
+        mSearchView.setOnSearchClickListener(
+                view -> {
+                    if (mSearchViewObserver != null) mSearchViewObserver.onUpdated(true);
+                    assumeNonNull(mBackPressCallback).setEnabled(true);
+                });
         mSearchView.setOnCloseListener(
                 () -> {
                     mSearch = "";
                     mAdapter.setDisplayedLanguages(assumeNonNull(mFilteredLanguages));
+                    if (mSearchViewObserver != null) mSearchViewObserver.onUpdated(false);
+                    assumeNonNull(mBackPressCallback).setEnabled(false);
                     return false;
                 });
 
@@ -216,6 +252,19 @@ public class SelectLanguageFragment extends Fragment
                         return true;
                     }
                 });
+    }
+
+    @Override
+    public void setSearchViewObserver(SearchViewProvider.Observer observer) {
+        mSearchViewObserver = observer;
+    }
+
+    @Override
+    public void onDestroy() {
+        if (getView() != null) KeyboardUtils.hideAndroidSoftKeyboard(getView());
+        super.onDestroy();
+        if (mSearchViewObserver != null) mSearchViewObserver.onUpdated(false);
+        if (mBackPressCallback != null) mBackPressCallback.remove();
     }
 
     @Override

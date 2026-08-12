@@ -11,8 +11,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Rect;
 
-import androidx.annotation.Nullable;
-
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
@@ -20,6 +18,7 @@ import org.jni_zero.NativeMethods;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
@@ -86,14 +85,7 @@ public final class ScreenshotTask implements ScreenshotSource {
 
         // If neither the compositor nor the Android view screenshot tasks were kicked off, admit
         // defeat and return a {@code null} screenshot.
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        onBitmapReceived(null);
-                    }
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, () -> onBitmapReceived(null));
     }
 
     @Override
@@ -142,16 +134,13 @@ public final class ScreenshotTask implements ScreenshotSource {
 
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        Bitmap bitmap =
-                                UiUtils.generateScaledScreenshot(
-                                        activity.getWindow().getDecorView().getRootView(),
-                                        MAX_FEEDBACK_SCREENSHOT_DIMENSION,
-                                        Bitmap.Config.ARGB_8888);
-                        onBitmapReceived(bitmap);
-                    }
+                () -> {
+                    Bitmap bitmap =
+                            UiUtils.generateScaledScreenshot(
+                                    activity.getWindow().getDecorView().getRootView(),
+                                    MAX_FEEDBACK_SCREENSHOT_DIMENSION,
+                                    Bitmap.Config.ARGB_8888);
+                    onBitmapReceived(bitmap);
                 });
 
         return true;

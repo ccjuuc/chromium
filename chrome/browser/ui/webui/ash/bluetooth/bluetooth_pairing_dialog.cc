@@ -7,6 +7,7 @@
 #include <memory>
 #include <string_view>
 
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/bluetooth_config_service.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "base/check.h"
@@ -15,14 +16,14 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/bluetooth/bluetooth_shared_load_time_data_provider.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/bluetooth_pairing_dialog_resources.h"
 #include "chrome/grit/bluetooth_pairing_dialog_resources_map.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "device/bluetooth/bluetooth_device.h"
@@ -59,7 +60,7 @@ void AddBluetoothStrings(content::WebUIDataSource* html_source) {
 SystemWebDialogDelegate* BluetoothPairingDialog::ShowDialog(
     std::optional<std::string_view> device_address) {
   NET_LOG(EVENT) << "Attempting to display bluetooth pairing dialog";
-  std::string dialog_id = chrome::kChromeUIBluetoothPairingURL;
+  std::string dialog_id = ash::kChromeUIBluetoothPairingURL;
   std::optional<std::string> canonical_device_address;
 
   if (device_address.has_value()) {
@@ -94,13 +95,13 @@ SystemWebDialogDelegate* BluetoothPairingDialog::ShowDialog(
 BluetoothPairingDialog::BluetoothPairingDialog(
     const std::string& dialog_id,
     std::optional<std::string_view> canonical_device_address)
-    : SystemWebDialogDelegate(GURL(chrome::kChromeUIBluetoothPairingURL),
+    : SystemWebDialogDelegate(GURL(ash::kChromeUIBluetoothPairingURL),
                               /*title=*/std::u16string()),
       dialog_id_(dialog_id) {
   set_dialog_size(gfx::Size(SystemWebDialogDelegate::kDialogWidth,
                             kBluetoothPairingDialogHeight));
 
-  base::Value::Dict device_data;
+  base::DictValue device_data;
   if (canonical_device_address.has_value()) {
     device_data.Set("address", canonical_device_address.value());
   }
@@ -135,8 +136,10 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(BluetoothPairingDialog,
 
 BluetoothPairingDialogUI::BluetoothPairingDialogUI(content::WebUI* web_ui)
     : ui::MojoWebDialogUI(web_ui) {
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui), chrome::kChromeUIBluetoothPairingHost);
+      profile, ash::kChromeUIBluetoothPairingHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   AddBluetoothStrings(source);
   source->AddLocalizedString("title", IDS_BLUETOOTH_PAIRING_PAIR_NEW_DEVICES);

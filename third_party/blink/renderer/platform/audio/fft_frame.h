@@ -30,19 +30,24 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_AUDIO_FFT_FRAME_H_
 
 #include <memory>
+#include <optional>
+
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/audio/audio_array.h"
+#include "third_party/blink/renderer/platform/audio/rustfft_ffi.rs.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
+#include "third_party/rust/cxx/v1/cxx.h"
 
-#if defined(WTF_USE_WEBAUDIO_PFFFT)
+#if BUILDFLAG(IS_MAC)
+#include <Accelerate/Accelerate.h>
+#else
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/pffft/src/pffft.h"
-#elif BUILDFLAG(IS_MAC)
-#include <Accelerate/Accelerate.h>
 #endif
 
 namespace blink {
@@ -59,10 +64,10 @@ class PLATFORM_EXPORT FFTFrame final {
   // have platform-dependent implementations.
 
   explicit FFTFrame(unsigned fft_size);
-  // creates a blank/empty frame for later use with createInterpolatedFrame()
-  FFTFrame();
-  FFTFrame(const FFTFrame& frame);
-  ~FFTFrame();
+  FFTFrame() = delete;
+  FFTFrame(const FFTFrame&) = delete;
+  FFTFrame& operator=(const FFTFrame&) = delete;
+  ~FFTFrame() = default;
 
   // Returns the smallest and largest supported FFT lengths.
   static unsigned MinFFTSize();
@@ -74,12 +79,12 @@ class PLATFORM_EXPORT FFTFrame final {
 
   // Compute the FFT of |data|, storing the resulting FFT in |real_data_| and
   // |imag_data_|.  |data| MUST have size at least |fft_size_| elements.
-  void DoFFT(const float* data);
+  void DoFFT(base::span<const float> data);
 
   // Compute the inverse FFT using the FFT data in |real_data_| and
   // |imag_data_|.  The inverse is saved in |data|.  |data| MUST have size at
   // least |fft_size_| elements.
-  void DoInverseFFT(float* data);
+  void DoInverseFFT(base::span<float> data);
 
   AudioFloatArray& RealData() { return real_data_; }
   const AudioFloatArray& RealData() const { return real_data_; }
@@ -98,7 +103,7 @@ class PLATFORM_EXPORT FFTFrame final {
       const FFTFrame& frame2,
       double x);
   // zero-padding with dataSize <= fftSize
-  void DoPaddedFFT(const float* data, unsigned data_size);
+  void DoPaddedFFT(base::span<const float> data);
   double ExtractAverageGroupDelay();
   void AddConstantGroupDelay(double sample_frame_delay);
   // multiplies ourself with frame : effectively operator*=()
@@ -111,11 +116,19 @@ class PLATFORM_EXPORT FFTFrame final {
                                       const FFTFrame& frame2,
                                       double x);
 
+  void PlatformConstruct();
+  static unsigned PlatformMinFFTSize();
+  static unsigned PlatformMaxFFTSize();
+  static void PlatformInitialize(float sample_rate);
+  static void PlatformCleanup();
+  void PlatformDoFFT(base::span<const float> data);
+  void PlatformDoInverseFFT(base::span<float> data);
+
   unsigned fft_size_ = 0;
 
-  // When using PFFFT, this slot is not irrelevant and not used because PFFFT
+  // When using PFFFT, this slot is irrelevant and unused because PFFFT
   // supports sizes that aren't a power of 2.
-  // TODO(https://crbug.com/988121) Look into whether Mac vDSP really needs
+  // TODO(https://crbug.com/40637820) Look into whether Mac vDSP really needs
   // this.
   unsigned log2fft_size_ = 0;
 
@@ -148,68 +161,22 @@ class PLATFORM_EXPORT FFTFrame final {
   AudioFloatArray real_data_;
   AudioFloatArray imag_data_;
 
-#if BUILDFLAG(IS_MAC) && !defined(WTF_USE_WEBAUDIO_PFFFT)
-  // Thin wrapper around FFTSetup so we can call the appropriate routines to
-  // construct or release the FFTSetup objects.
-  class FFTSetupDatum {
-   public:
-    FFTSetupDatum(unsigned fft_size);
-    ~FFTSetupDatum();
-    FFTSetup GetSetup() const { return setup_; }
-
-   private:
-    FFTSetup setup_;
-  };
-
-  // Returns the vector that holds all of the possible FFTSetupData
-  // objects. This should be set up in the |Initialize()| method that is called
-  // when the context is created.
-  static Vector<std::unique_ptr<FFTSetupDatum>>& FFTSetups();
-
-  static void InitializeFFTSetupForSize(wtf_size_t fft_order);
-
+#if BUILDFLAG(IS_MAC)
   DSPSplitComplex& DspSplitComplex() { return frame_; }
   DSPSplitComplex DspSplitComplex() const { return frame_; }
-  static FFTSetup FftSetupForSize(unsigned fft_size);
   FFTSetup fft_setup_;
   DSPSplitComplex frame_;
-#elif defined(WTF_USE_WEBAUDIO_PFFFT)
-  // Thin wrapper around PFFFT_Setup so we can call the appropriate PFFFT
-  // routines to construct or release the PFFFT_Setup objects.
-  class FFTSetup {
-   public:
-    explicit FFTSetup(unsigned fft_size);
-    ~FFTSetup();
-    PFFFT_Setup* GetSetup() const { return setup_; }
-
-   private:
-    raw_ptr<PFFFT_Setup> setup_;
-  };
-
-  // Returns the HashMap that holds all of the possible FFTSetup objects.  This
-  // should be setup in the |Initialize()| method that is called when a context
-  // is created.
-  static HashMap<unsigned, std::unique_ptr<FFTSetup>>& FFTSetups();
-
-  // Initialize an entry in FFTSetups for an FFT of order |fft_order|.  This can
-  // be called from any thread, but if a new FFTSetup needs to be allocated,
-  // then it MUST happen on the main thread.
-  static void InitializeFFTSetupForSize(wtf_size_t fft_order);
-
-  // Get the PFFFT_Setup that is appropriate for an FFT of order
-  // |fft_order|. This can be called from any thread.
-  // |InitializeFFTSetupForSize()| must be called for this size before calling
-  // |FFTSetupForSize()|.
-  static PFFFT_Setup* FFTSetupForSize(wtf_size_t fft_order);
-
+#else
   // Work array for converting PFFFT results to and from the format expected in
-  // |real_data_| and |imag_datra_|.
+  // `real_data_` and `imag_data_`.
   AudioFloatArray complex_data_;
 
   // Work array used by the PFFFT transform routines.  For real FFTs, this must
   // be the same size as the FFT size.
   AudioFloatArray pffft_work_;
 #endif
+
+  std::optional<rust::Box<blink::rust_fft::RustFft>> rust_fft_;
 };
 
 }  // namespace blink

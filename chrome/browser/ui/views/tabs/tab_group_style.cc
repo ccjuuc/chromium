@@ -4,10 +4,8 @@
 
 #include "chrome/browser/ui/views/tabs/tab_group_style.h"
 
-#include "base/feature_list.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/tab_style.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_group_underline.h"
@@ -19,7 +17,6 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/background.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
@@ -49,6 +46,10 @@ TabGroupStyle::TabGroupStyle(const TabGroupViews& tab_group_views)
 TabGroupStyle::~TabGroupStyle() = default;
 
 bool TabGroupStyle::TabGroupUnderlineShouldBeHidden() const {
+  if (tab_group_views_->IsFocusModeActive()) {
+    return true;
+  }
+
   const auto [leading_group_view, trailing_group_view] =
       tab_group_views_->GetLeadingTrailingGroupViews();
 
@@ -59,6 +60,10 @@ bool TabGroupStyle::TabGroupUnderlineShouldBeHidden() const {
 bool TabGroupStyle::TabGroupUnderlineShouldBeHidden(
     const views::View* const leading_view,
     const views::View* const trailing_view) const {
+  if (tab_group_views_->IsFocusModeActive()) {
+    return true;
+  }
+
   const TabGroupHeader* const leading_view_group_header =
       views::AsViewClass<TabGroupHeader>(leading_view);
   const TabGroupHeader* const trailing_view_group_header =
@@ -89,9 +94,9 @@ gfx::Rect TabGroupStyle::GetEmptyTitleChipBounds(
 
 gfx::Point TabGroupStyle::GetTitleChipOffset(
     std::optional<int> text_height) const {
-  const int total_space = GetLayoutConstant(TAB_STRIP_HEIGHT) -
-                          GetEmptyChipSize() -
-                          GetLayoutConstant(TABSTRIP_TOOLBAR_OVERLAP);
+  const int total_space =
+      GetLayoutConstant(LayoutConstant::kTabStripHeight) - GetEmptyChipSize() -
+      GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap);
   return gfx::Point(TabStyle::Get()->GetTabOverlap() - 2, total_space / 2);
 }
 
@@ -100,14 +105,13 @@ std::unique_ptr<views::Background> TabGroupStyle::GetEmptyTitleChipBackground(
   return views::CreateRoundedRectBackground(color, GetChipCornerRadius());
 }
 
-gfx::Insets TabGroupStyle::GetInsetsForHeaderChip() const {
-  return gfx::Insets::TLBR(kHeaderChipVerticalInset, GetChipCornerRadius(),
-                           kHeaderChipVerticalInset, GetChipCornerRadius());
-}
-
 int TabGroupStyle::GetHighlightPathGeneratorCornerRadius(
     const views::View* const title) const {
   return GetChipCornerRadius();
+}
+
+gfx::Insets TabGroupStyle::GetInsetsForHeaderChip() const {
+  return gfx::Insets::VH(kHeaderChipVerticalInset, kCornerRadius);
 }
 
 int TabGroupStyle::GetTitleAdjustmentToTabGroupHeaderDesiredWidth(

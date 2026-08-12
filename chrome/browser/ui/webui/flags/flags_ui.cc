@@ -17,6 +17,7 @@
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/flags/flags_ui_handler.h"
 #include "chrome/common/pref_names.h"
 #include "components/grit/components_scaled_resources.h"
@@ -36,6 +37,7 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/webui/resources/grit/webui_resources.h"
 #include "ui/webui/webui_util.h"
 
@@ -64,8 +66,9 @@ namespace {
 content::WebUIDataSource* CreateAndAddFlagsUIHTMLSource(Profile* profile) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUIFlagsHost);
-  source->AddString(flags_ui::kVersion,
-                    std::string(version_info::GetVersionNumber()));
+  source->AddString(flags_ui::kVersion, version_info::GetVersionNumber());
+  source->AddBoolean("importExportEnabled", base::FeatureList::IsEnabled(
+                                                features::kImportExportFlags));
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (!user_manager::UserManager::Get()->IsCurrentUserOwner() &&
@@ -121,7 +124,8 @@ void FinishInitialization(base::WeakPtr<FlagsUI> flags_ui,
         infobars::ContentInfoBarManager::FromWebContents(
             flags_ui->web_ui()->GetWebContents()),
         infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE,
-        &vector_icons::kWarningIcon,
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kWarningFilledIcon
+                                            : vector_icons::kWarningOldIcon),
         l10n_util::GetStringUTF16(IDS_FLAGS_IGNORED_DUE_TO_CRASHY_CHROME),
         /*auto_expire=*/false, /*should_animate=*/true, /*closeable=*/true,
         /*infobar_priority=*/
@@ -134,7 +138,8 @@ void FinishInitialization(base::WeakPtr<FlagsUI> flags_ui,
         infobars::ContentInfoBarManager::FromWebContents(
             flags_ui->web_ui()->GetWebContents()),
         infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE,
-        &vector_icons::kWarningIcon,
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kWarningFilledIcon
+                                            : vector_icons::kWarningOldIcon),
         l10n_util::GetStringUTF16(IDS_FLAGS_IGNORED_SECONDARY_USERS),
         /*auto_expire=*/false, /*should_animate=*/true, /*closeable=*/true,
         /*infobar_priority=*/
@@ -209,7 +214,7 @@ FlagsUI::FlagsUI(content::WebUI* web_ui)
 FlagsUI::~FlagsUI() = default;
 
 // static
-base::RefCountedMemory* FlagsUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> FlagsUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_FLAGS_FAVICON, scale_factor);

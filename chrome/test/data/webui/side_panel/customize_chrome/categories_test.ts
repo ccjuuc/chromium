@@ -11,6 +11,7 @@ import type {BackgroundCollection, CustomizeChromePageRemote} from 'chrome://cus
 import {CustomizeChromePageCallbackRouter, CustomizeChromePageHandlerRemote} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome.mojom-webui.js';
 import {CustomizeChromeApiProxy} from 'chrome://customize-chrome-side-panel.top-chrome/customize_chrome_api_proxy.js';
 import {WindowProxy} from 'chrome://customize-chrome-side-panel.top-chrome/window_proxy.js';
+import type {CrA11yAnnouncerMessagesSentEvent} from 'chrome://resources/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import type {CrAutoImgElement} from 'chrome://resources/cr_elements/cr_auto_img/cr_auto_img.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -32,7 +33,7 @@ function createTestCollections(length: number): BackgroundCollection[] {
     testCollections.push({
       id: `${i}`,
       label: `collection_${i}`,
-      previewImageUrl: {url: `https://collection-${i}.jpg`},
+      previewImageUrl: `https://collection-${i}.jpg`,
       imageVerified: false,
     });
   }
@@ -56,7 +57,7 @@ suite('CategoriesTest', () => {
           'getReplacementCollectionPreviewImage', (collectionId: string) => {
             if (shouldReplaceBrokenImages) {
               return Promise.resolve({
-                previewImageUrl: {url: `https://replaced-${collectionId}.jpg`},
+                previewImageUrl: `https://replaced-${collectionId}.jpg`,
               });
             } else {
               return Promise.resolve(null);
@@ -267,7 +268,8 @@ suite('CategoriesTest', () => {
         const eventPromise =
             eventToPromise('local-image-upload', categoriesElement);
         const announcementPromise =
-            eventToPromise('cr-a11y-announcer-messages-sent', document.body);
+            eventToPromise<CrA11yAnnouncerMessagesSentEvent>(
+                'cr-a11y-announcer-messages-sent', document.body);
 
         // Act.
         categoriesElement.$.uploadImageTile.click();

@@ -29,7 +29,7 @@ class FontSettingsEventRouter;
 
 // The profile-keyed service that manages the font_settings extension API.
 // This is not an EventRouter::Observer (and does not lazily initialize) because
-// doing so caused a regression in perf tests. See crbug.com/163466.
+// doing so caused a regression in perf tests. See crbug.com/40956221.
 class FontSettingsAPI : public BrowserContextKeyedAPI {
  public:
   explicit FontSettingsAPI(content::BrowserContext* context);
@@ -101,8 +101,11 @@ class FontSettingsGetFontListFunction : public ExtensionFunction {
   ResponseAction Run() override;
 
  private:
-  void FontListHasLoaded(base::Value::List list);
-  ResponseValue CopyFontsToResult(const base::Value::List& fonts);
+#if BUILDFLAG(IS_ANDROID)
+  static base::ListValue GetAndroidFontFamilyList();
+#endif
+  void FontListHasLoaded(base::ListValue list);
+  ResponseValue CopyFontsToResult(const base::ListValue& fonts);
 };
 
 // Base class for extension API functions that clear a browser font pref.

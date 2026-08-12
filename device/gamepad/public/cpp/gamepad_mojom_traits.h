@@ -44,10 +44,22 @@ struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
 
 template <>
 struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
+    EnumTraits<device::mojom::GamepadButtonType, device::GamepadButtonType> {
+  static device::mojom::GamepadButtonType ToMojom(
+      device::GamepadButtonType input);
+  static device::GamepadButtonType FromMojom(
+      device::mojom::GamepadButtonType input);
+};
+
+template <>
+struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
     StructTraits<device::mojom::GamepadButtonDataView, device::GamepadButton> {
   static bool pressed(const device::GamepadButton& r) { return r.pressed; }
   static bool touched(const device::GamepadButton& r) { return r.touched; }
   static double value(const device::GamepadButton& r) { return r.value; }
+  static device::GamepadButtonType type(const device::GamepadButton& r) {
+    return r.type;
+  }
   static bool Read(device::mojom::GamepadButtonDataView data,
                    device::GamepadButton* out);
 };
@@ -58,8 +70,8 @@ struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
                device::GamepadHapticActuatorType> {
   static device::mojom::GamepadHapticActuatorType ToMojom(
       device::GamepadHapticActuatorType input);
-  static bool FromMojom(device::mojom::GamepadHapticActuatorType input,
-                        device::GamepadHapticActuatorType* output);
+  static device::GamepadHapticActuatorType FromMojom(
+      device::mojom::GamepadHapticActuatorType input);
 };
 
 template <>
@@ -114,8 +126,7 @@ template <>
 struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
     EnumTraits<device::mojom::GamepadMapping, device::GamepadMapping> {
   static device::mojom::GamepadMapping ToMojom(device::GamepadMapping input);
-  static bool FromMojom(device::mojom::GamepadMapping input,
-                        device::GamepadMapping* output);
+  static device::GamepadMapping FromMojom(device::mojom::GamepadMapping input);
 };
 
 template <>
@@ -147,8 +158,7 @@ template <>
 struct COMPONENT_EXPORT(GAMEPAD_SHARED_TRAITS)
     EnumTraits<device::mojom::GamepadHand, device::GamepadHand> {
   static device::mojom::GamepadHand ToMojom(device::GamepadHand input);
-  static bool FromMojom(device::mojom::GamepadHand input,
-                        device::GamepadHand* output);
+  static device::GamepadHand FromMojom(device::mojom::GamepadHand input);
 };
 
 template <>

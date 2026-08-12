@@ -28,8 +28,35 @@ typedef NS_ENUM(NSInteger, BubblePageControlPage);
                    alignment:(BubbleAlignment)alignment
               bubbleViewType:(BubbleViewType)type
              pageControlPage:(BubblePageControlPage)page
+                    delegate:(id<BubbleViewDelegate>)delegate;
+
+// Extends initializer above with `customNextButtonTitle`.
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+              bubbleViewType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+                    delegate:(id<BubbleViewDelegate>)delegate;
+
+// Extends initializer above with `totalPageControlPages`.
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)direction
+                   alignment:(BubbleAlignment)alignment
+              bubbleViewType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       totalPageControlPages:(NSInteger)totalPageControlPages
+       customNextButtonTitle:(NSString*)customNextButtonTitle
                     delegate:(id<BubbleViewDelegate>)delegate
     NS_DESIGNATED_INITIALIZER;
+
+// The total number of pages in the Bubble PageControl.
+@property(nonatomic, assign) NSInteger totalPageControlPages;
+
+// Custom title for the action button.
+@property(nonatomic, copy) NSString* customNextButtonTitle;
 
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -60,6 +87,10 @@ typedef NS_ENUM(NSInteger, BubblePageControlPage);
 // Changes the bubbleView's alignment offset, this might change the bubbleView's
 // size.
 - (void)setBubbleAlignmentOffset:(CGFloat)alignmentOffset;
+
+// Sets the maximum content size category for the bubble view. If set, the
+// bubble view will not scale its text beyond this category.
+@property(nonatomic, copy) UIContentSizeCategory maximumContentSizeCategory;
 
 @end
 

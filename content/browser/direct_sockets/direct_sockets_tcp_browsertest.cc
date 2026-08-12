@@ -46,6 +46,7 @@
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -213,11 +214,27 @@ class ReadWriteWaiter {
 class DirectSocketsTcpBrowserTest : public ContentBrowserTest {
  public:
   GURL GetTestOpenPageURL() {
-    return embedded_test_server()->GetURL("/direct_sockets/open.html");
+    return test::FileWithHeaders("/direct_sockets/open.html")
+        .WithCOIHeaders()
+        .WithPermissionsPolicy("cross-origin-isolated", "(*)")
+        .WithPermissionsPolicy("direct-sockets", "(self)")
+        .Build(embedded_test_server());
+  }
+
+  GURL GetTestOpenPageNoCoiURL() {
+    return test::FileWithHeaders("/direct_sockets/open.html")
+        .WithCOIHeaders()
+        .WithPermissionsPolicy("cross-origin-isolated", "()")
+        .WithPermissionsPolicy("direct-sockets", "(self)")
+        .Build(embedded_test_server());
   }
 
   GURL GetTestPageURL() {
-    return embedded_test_server()->GetURL("/direct_sockets/tcp.html");
+    return test::FileWithHeaders("/direct_sockets/tcp.html")
+        .WithCOIHeaders()
+        .WithPermissionsPolicy("cross-origin-isolated", "(*)")
+        .WithPermissionsPolicy("direct-sockets", "(self)")
+        .Build(embedded_test_server());
   }
 
   network::mojom::NetworkContext* GetNetworkContext() {
@@ -273,7 +290,7 @@ class DirectSocketsTcpBrowserTest : public ContentBrowserTest {
   }
 
   void SetUp() override {
-    embedded_test_server()->AddDefaultHandlers(GetTestDataFilePath());
+    embedded_test_server()->AddDefaultHandlers();
     ASSERT_TRUE(embedded_test_server()->Start());
     ContentBrowserTest::SetUp();
   }
@@ -778,33 +795,19 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsTcpServerBrowserTest, Ipv6Only) {
       EvalJs(shell(), "connectToServerWithIPv6Only(/*ipv6Only=*/true, '::1')"));
 }
 
-// A ContentBrowserClient that grants Isolated Web Apps the "direct-sockets"
-// permission, but not "cross-origin-isolated", which should result in Direct
-// Sockets being disabled.
 class NoCoiPermissionIsolatedWebAppContentBrowserClient
     : public test::IsolatedWebAppContentBrowserClient {
  public:
   explicit NoCoiPermissionIsolatedWebAppContentBrowserClient(
       const url::Origin& isolated_app_origin)
       : IsolatedWebAppContentBrowserClient(isolated_app_origin) {}
-
-  std::optional<network::ParsedPermissionsPolicy>
-  GetPermissionsPolicyForIsolatedWebApp(
-      WebContents* web_contents,
-      const url::Origin& app_origin) override {
-    return {{network::ParsedPermissionsPolicyDeclaration(
-        network::mojom::PermissionsPolicyFeature::kDirectSockets,
-        /*allowed_origins=*/{},
-        /*self_if_matches=*/app_origin,
-        /*matches_all_origins=*/false, /*matches_opaque_src=*/false)}};
-  }
 };
 
 IN_PROC_BROWSER_TEST_F(DirectSocketsTcpBrowserTest, NoCoiPermission) {
   NoCoiPermissionIsolatedWebAppContentBrowserClient client(
       url::Origin::Create(GetTestPageURL()));
 
-  ASSERT_TRUE(NavigateToURL(shell(), GetTestOpenPageURL()));
+  ASSERT_TRUE(NavigateToURL(shell(), GetTestOpenPageNoCoiURL()));
 
   EXPECT_EQ(false, EvalJs(shell(), "self.crossOriginIsolated"));
 
@@ -855,9 +858,9 @@ IN_PROC_BROWSER_TEST_F(DirectSocketsTcpBrowserTest, NotInCrossOriginIframe) {
 class IsolatedContextContentBrowserClient
     : public ContentBrowserTestContentBrowserClient {
  public:
-  bool IsIsolatedContextAllowedForUrl(BrowserContext* browser_context,
-                                      const GURL& lock_url) override {
-    return lock_url.is_valid();
+  bool ShouldUrlUseApplicationIsolationLevel(BrowserContext* browser_context,
+                                             const GURL& url) override {
+    return url.is_valid();
   }
 };
 

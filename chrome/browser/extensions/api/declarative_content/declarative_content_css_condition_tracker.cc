@@ -6,7 +6,6 @@
 
 #include <stddef.h>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
@@ -15,6 +14,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
+#include "extensions/browser/bad_message.h"
 #include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative/declarative_constants.h"
@@ -156,14 +157,16 @@ void DeclarativeContentCssConditionTracker::TrackPredicates(
       tracked_predicates_[group_predicates_pair.first].push_back(
           typed_predicate);
       for (const std::string& selector : typed_predicate->css_selectors()) {
-        if (watched_css_selector_predicate_count_[selector]++ == 0)
+        if (watched_css_selector_predicate_count_[selector]++ == 0) {
           watched_selectors_updated = true;
+        }
       }
     }
   }
 
-  if (watched_selectors_updated)
+  if (watched_selectors_updated) {
     UpdateRenderersWatchedCssSelectors(GetWatchedCssSelectors());
+  }
 }
 
 void DeclarativeContentCssConditionTracker::StopTrackingPredicates(
@@ -171,8 +174,9 @@ void DeclarativeContentCssConditionTracker::StopTrackingPredicates(
   bool watched_selectors_updated = false;
   for (const void* group : predicate_groups) {
     auto it = tracked_predicates_.find(group);
-    if (it == tracked_predicates_.end())
+    if (it == tracked_predicates_.end()) {
       continue;
+    }
     for (const DeclarativeContentCssPredicate* predicate : it->second) {
       for (const std::string& selector : predicate->css_selectors()) {
         auto loc = watched_css_selector_predicate_count_.find(selector);
@@ -186,8 +190,9 @@ void DeclarativeContentCssConditionTracker::StopTrackingPredicates(
     tracked_predicates_.erase(group);
   }
 
-  if (watched_selectors_updated)
+  if (watched_selectors_updated) {
     UpdateRenderersWatchedCssSelectors(GetWatchedCssSelectors());
+  }
 }
 
 void DeclarativeContentCssConditionTracker::TrackForWebContents(
@@ -206,7 +211,7 @@ void DeclarativeContentCssConditionTracker::TrackForWebContents(
 void DeclarativeContentCssConditionTracker::OnWebContentsNavigation(
     content::WebContents* contents,
     content::NavigationHandle* navigation_handle) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_[contents]->OnWebContentsNavigation(
       navigation_handle);
 }
@@ -214,8 +219,19 @@ void DeclarativeContentCssConditionTracker::OnWebContentsNavigation(
 void DeclarativeContentCssConditionTracker::OnWatchedPageChanged(
     content::WebContents* contents,
     const std::vector<std::string>& css_selectors) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
-  per_web_contents_tracker_[contents]->OnWatchedPageChanged(css_selectors);
+  DCHECK(per_web_contents_tracker_.contains(contents));
+
+  std::vector<std::string> valid_selectors;
+  for (const std::string& selector : css_selectors) {
+    // A compromised renderer might send selectors that were not requested.
+    // We ignore unrecognized selectors to avoid race conditions where a
+    // legitimate message arrives after the browser stopped watching a selector.
+    if (watched_css_selector_predicate_count_.contains(selector)) {
+      valid_selectors.push_back(selector);
+    }
+  }
+
+  per_web_contents_tracker_[contents]->OnWatchedPageChanged(valid_selectors);
 }
 
 bool DeclarativeContentCssConditionTracker::EvaluatePredicate(
@@ -230,7 +246,7 @@ bool DeclarativeContentCssConditionTracker::EvaluatePredicate(
       loc->second->matching_css_selectors();
   for (const std::string& predicate_css_selector :
            typed_predicate->css_selectors()) {
-    if (!base::Contains(matching_css_selectors, predicate_css_selector)) {
+    if (!matching_css_selectors.contains(predicate_css_selector)) {
       return false;
     }
   }
@@ -275,14 +291,15 @@ InstructRenderProcessIfManagingBrowserContext(
     mojom::Renderer* renderer =
         RendererStartupHelperFactory::GetForBrowserContext(browser_context)
             ->GetRenderer(process);
-    if (renderer)
+    if (renderer) {
       renderer->WatchPages(watched_css_selectors);
+    }
   }
 }
 
 void DeclarativeContentCssConditionTracker::DeletePerWebContentsTracker(
     content::WebContents* contents) {
-  DCHECK(base::Contains(per_web_contents_tracker_, contents));
+  DCHECK(per_web_contents_tracker_.contains(contents));
   per_web_contents_tracker_.erase(contents);
 }
 

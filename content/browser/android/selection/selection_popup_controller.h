@@ -9,7 +9,6 @@
 
 #include <memory>
 
-#include "base/android/jni_weak_ref.h"
 #include "base/memory/raw_ptr.h"
 #include "content/browser/android/render_widget_host_connector.h"
 #include "content/public/browser/android/selection_popup_delegate.h"
@@ -36,13 +35,13 @@ class SelectionPopupController : public RenderWidgetHostConnector {
  public:
   static SelectionPopupController* FromWebContents(WebContents& web_contents);
 
-  SelectionPopupController(JNIEnv* env,
-                           const base::android::JavaRef<jobject>& obj,
-                           WebContents* web_contents);
+  explicit SelectionPopupController(WebContents* web_contents);
 
-  void SetTextHandlesHiddenForDropdownMenu(JNIEnv* env, jboolean hidden);
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env) const;
 
-  void SetTextHandlesTemporarilyHidden(JNIEnv* env, jboolean hidden);
+  void SetTextHandlesHiddenForDropdownMenu(JNIEnv* env, bool hidden);
+
+  void SetTextHandlesTemporarilyHidden(JNIEnv* env, bool hidden);
 
   base::android::ScopedJavaLocalRef<jobjectArray> GetTouchHandleRects(
       JNIEnv* env);
@@ -89,8 +88,6 @@ class SelectionPopupController : public RenderWidgetHostConnector {
   // Retained to keep the model in scope until the menu is dismissed.
   std::unique_ptr<ui::MenuModelBridge> menu_model_bridge_;
   std::unique_ptr<ui::MenuModel> extra_items_menu_model_;
-
-  JavaObjectWeakGlobalRef java_obj_;
 };
 
 }  // namespace content

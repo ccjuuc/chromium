@@ -4,21 +4,33 @@
 
 #include "components/autofill/core/browser/metrics/prediction_quality_metrics.h"
 
+#include <stdint.h>
+
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
+#include <utility>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/metrics/form_interactions_ukm_logger.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/html_field_types.h"
 #include "components/autofill/core/common/label_source_util.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill::autofill_metrics {
 
@@ -86,6 +98,9 @@ enum FieldTypeGroupForMetrics {
   GROUP_AUTOFILL_AI = 48,
   GROUP_LOYALTY_CARD = 49,
   GROUP_ONE_TIME_PASSWORD = 50,
+  GROUP_ADDRESS_HOME_ZIP_AND_CITY = 51,
+  GROUP_ADDRESS_HOME_ZIP_PREFIX = 52,
+  GROUP_ADDRESS_HOME_ZIP_SUFFIX = 53,
   // Note: if adding an enum value here, run
   // tools/metrics/histograms/update_autofill_enums.py
   NUM_FIELD_TYPE_GROUPS_FOR_METRICS
@@ -171,6 +186,20 @@ FieldPredictionOverlapSourcesSuperset GetFieldPredictionOverlapSample(
     return FieldPredictionOverlapSourcesSuperset::kAutocompleteCorrect;
   }
   return FieldPredictionOverlapSourcesSuperset::kNoneCorrect;
+}
+
+// Encodes `field_type` and `prediction_source` into a bucket of
+// AutofillPredictionSourceByFieldType enum in
+// `tools/metrics/histograms/metadata/autofill/enums.xml`.
+int GetFieldTypePredictionSourceBucket(
+    FieldType field_type,
+    AutofillPredictionSource prediction_source) {
+  static_assert(
+      std::to_underlying(AutofillPredictionSource::kMaxValue) < (1 << 4),
+      "autofill::AutofillPredictionSource value needs more than 4 bits.");
+
+  return (std::to_underlying(field_type) << 4) |
+         std::to_underlying(prediction_source);
 }
 
 }  // namespace
@@ -259,9 +288,13 @@ int GetFieldTypeGroupPredictionQualityMetric(FieldType field_type,
           group = GROUP_ADDRESS_STATE;
           break;
         case ADDRESS_HOME_ZIP:
-        case ADDRESS_HOME_ZIP_PREFIX:
-        case ADDRESS_HOME_ZIP_SUFFIX:
           group = GROUP_ADDRESS_ZIP;
+          break;
+        case ADDRESS_HOME_ZIP_PREFIX:
+          group = GROUP_ADDRESS_HOME_ZIP_PREFIX;
+          break;
+        case ADDRESS_HOME_ZIP_SUFFIX:
+          group = GROUP_ADDRESS_HOME_ZIP_SUFFIX;
           break;
         case ADDRESS_HOME_COUNTRY:
           group = GROUP_ADDRESS_COUNTRY;
@@ -325,6 +358,9 @@ int GetFieldTypeGroupPredictionQualityMetric(FieldType field_type,
         case ADDRESS_HOME_DEPENDENT_LOCALITY_AND_LANDMARK:
           group = GROUP_ADDRESS_HOME_DEPENDENT_LOCALITY_AND_LANDMARK;
           break;
+        case ADDRESS_HOME_ZIP_AND_CITY:
+          group = GROUP_ADDRESS_HOME_ZIP_AND_CITY;
+          break;
         case DELIVERY_INSTRUCTIONS:
           group = GROUP_DELIVERY_INSTRUCTIONS;
           break;
@@ -384,8 +420,6 @@ int GetFieldTypeGroupPredictionQualityMetric(FieldType field_type,
         case SINGLE_USERNAME:
         case NOT_USERNAME:
         case ONE_TIME_CODE:
-        case NAME_LAST_PREFIX:
-        case NAME_LAST_CORE:
         case NAME_LAST_FIRST:
         case NAME_LAST_CONJUNCTION:
         case NAME_LAST_SECOND:
@@ -426,6 +460,10 @@ int GetFieldTypeGroupPredictionQualityMetric(FieldType field_type,
         case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
         case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
         case FLIGHT_RESERVATION_DEPARTURE_DATE:
+        case ORDER_ID:
+        case ORDER_DATE:
+        case ORDER_MERCHANT_NAME:
+        case SHIPMENT_TRACKING_NUMBER:
           NOTREACHED() << field_type << " type is not in that group.";
       }
       break;
@@ -511,8 +549,6 @@ const char* GetQualityMetricPredictionSource(
       return "Server";
     case PREDICTION_SOURCE_OVERALL:
       return "Overall";
-    case PREDICTION_SOURCE_ML_PREDICTIONS:
-      return "ML";
   }
 }
 
@@ -543,7 +579,7 @@ bool DuplicatedFilling(const FormStructure& form, const AutofillField& field) {
           return false;
         }
         return field.value_for_import() == form_field->value_for_import() &&
-               form_field->is_autofilled();
+               form_field->last_modifier() == FieldModifier::kAutofill;
       };
   return std::ranges::any_of(form, is_autofilled_with_same_value);
 }
@@ -788,27 +824,16 @@ void LogHeuristicPredictionQualityPerLabelSourceMetric(
   FieldType actual_type =
       GetActualFieldType(field.possible_types(), predicted_type);
   if (actual_type != UNKNOWN_TYPE && actual_type != EMPTY_TYPE) {
+    bool was_prediction_correct = predicted_type == actual_type;
     base::UmaHistogramBoolean(
         base::StrCat(
             {kAggregateFieldPredictionMetricPrefix,
              GetQualityMetricPredictionSource(PREDICTION_SOURCE_HEURISTIC), ".",
              LabelSourceToString(field.label_source())}),
-        predicted_type == actual_type);
+        was_prediction_correct);
+    LogHeuristicPredictionQualityForLowQualityLabels(field,
+                                                     was_prediction_correct);
   }
-}
-
-void LogMlPredictionQualityMetrics(
-    FormInteractionsUkmLogger& form_interactions_ukm_logger,
-    ukm::SourceId source_id,
-    const FormStructure& form,
-    const AutofillField& field,
-    QualityMetricType metric_type,
-    base::TimeTicks now) {
-  LogPredictionQualityMetrics(
-      PREDICTION_SOURCE_ML_PREDICTIONS,
-      field.heuristic_type(HeuristicSource::kAutofillMachineLearning),
-      form_interactions_ukm_logger, source_id, form, field, metric_type,
-      /*log_rationalization_metrics=*/false, now);
 }
 
 void LogServerPredictionQualityMetrics(
@@ -974,6 +999,103 @@ void LogFieldPredictionOverlapMetrics(const AutofillField& field) {
         base::StrCat({prefix, prediction_source, kAllTypes}), sample);
     base::UmaHistogramEnumeration(
         base::StrCat({prefix, prediction_source, field_type_str}), sample);
+  }
+}
+
+void LogFieldTypeAtSubmissionMetrics(const AutofillField& field) {
+  constexpr std::string_view kFieldTypeAtSubmissionHistogramName =
+      "Autofill.FieldTypeAtSubmission.%s%s";
+  const FieldType overall_type = *field.Type().GetTypes().begin();
+  const FieldType html_type =
+      HtmlFieldTypeToBestCorrespondingFieldType(field.html_type());
+
+  auto is_type_relevant = [](FieldType type) {
+    return !FieldTypeSet{UNKNOWN_TYPE, NO_SERVER_DATA, EMPTY_TYPE}.contains(
+        type);
+  };
+
+  if (is_type_relevant(field.heuristic_type())) {
+    base::UmaHistogramExactLinear(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName, "HeuristicType",
+                           ""),
+        field.heuristic_type(), MAX_VALID_FIELD_TYPE);
+  }
+
+  if (is_type_relevant(field.server_type())) {
+    base::UmaHistogramExactLinear(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName, "ServerType",
+                           ""),
+        field.server_type(), MAX_VALID_FIELD_TYPE);
+  }
+
+  if (is_type_relevant(html_type)) {
+    base::UmaHistogramExactLinear(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName, "HtmlType", ""),
+        html_type, MAX_VALID_FIELD_TYPE);
+  }
+
+  if (is_type_relevant(overall_type)) {
+    base::UmaHistogramExactLinear(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName, "OverallType",
+                           ""),
+        overall_type, MAX_VALID_FIELD_TYPE);
+  }
+
+  for (FieldType voted_type : field.possible_types()) {
+    if (is_type_relevant(voted_type)) {
+      base::UmaHistogramExactLinear(
+          base::StringPrintf(kFieldTypeAtSubmissionHistogramName, "VotedType",
+                             ""),
+          voted_type, MAX_VALID_FIELD_TYPE);
+    }
+  }
+
+  if (field.PredictionSource() && is_type_relevant(overall_type)) {
+    base::UmaHistogramEnumeration(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName,
+                           "PreferredSource.", "Aggregate"),
+        *field.PredictionSource());
+
+    base::UmaHistogramSparse(
+        base::StringPrintf(kFieldTypeAtSubmissionHistogramName,
+                           "PreferredSource.", "ByFieldType"),
+        GetFieldTypePredictionSourceBucket(overall_type,
+                                           *field.PredictionSource()));
+  }
+}
+
+void LogHeuristicPredictionQualityForLowQualityLabels(
+    const AutofillField& field,
+    bool was_prediction_correct) {
+  std::optional<MatchInfo> match_info = field.regex_match_info();
+
+  // Feature `AutofillBetterLocalHeuristicPlaceholderSupport` can improve the
+  // prediction quality only in the specific cases. Return early if the base
+  // requirements are not met.
+  if (!match_info || field.label().empty() || field.placeholder().empty() ||
+      match_info->matched_attribute !=
+          MatchInfo::MatchAttribute::kLowQualityLabel) {
+    return;
+  }
+  // Since the label is of high quality (e.g. originates from label attribute),
+  // the match had to originate from the placeholder (or poor man's
+  // placeholder).
+  if (IsLabelHigherQualityThanPlaceholder(field.label_source())) {
+    base::UmaHistogramBoolean(
+        base::StrCat(
+            {kAggregateFieldPredictionMetricPrefix,
+             GetQualityMetricPredictionSource(PREDICTION_SOURCE_HEURISTIC),
+             ".PlaceholderMatchWithHighQualityLabelPresent"}),
+        was_prediction_correct);
+  } else {
+    // The label is of low quality (e.g. originates from aria label) and it got
+    // matched despite placeholder (or poor man's placeholder) being present.
+    base::UmaHistogramBoolean(
+        base::StrCat(
+            {kAggregateFieldPredictionMetricPrefix,
+             GetQualityMetricPredictionSource(PREDICTION_SOURCE_HEURISTIC),
+             ".LowQualityLabelMatchWithPlaceholderPresent"}),
+        was_prediction_correct);
   }
 }
 

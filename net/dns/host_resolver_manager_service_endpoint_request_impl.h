@@ -18,6 +18,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/tick_clock.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/network_handle.h"
 #include "net/base/request_priority.h"
 #include "net/dns/host_resolver.h"
 #include "net/dns/host_resolver_manager.h"
@@ -34,8 +35,9 @@ class HostResolverManager::ServiceEndpointRequestImpl
     : public HostResolver::ServiceEndpointRequest,
       public base::LinkNode<HostResolverManager::ServiceEndpointRequestImpl> {
  public:
-  ServiceEndpointRequestImpl(url::SchemeHostPort scheme_host_port,
+  ServiceEndpointRequestImpl(HostResolver::Host host,
                              NetworkAnonymizationKey network_anonymization_key,
+                             handles::NetworkHandle target_network,
                              NetLogWithSource net_log,
                              ResolveHostParameters parameters,
                              base::WeakPtr<ResolveContext> resolve_context,
@@ -55,13 +57,16 @@ class HostResolverManager::ServiceEndpointRequestImpl
   bool EndpointsCryptoReady() override;
   ResolveErrorInfo GetResolveErrorInfo() override;
   const HostCache::EntryStaleness* GetStaleInfo() const override;
-  bool IsStaleWhileRefresing() const override;
+  bool IsStaleWhileRefreshing() const override;
   void ChangeRequestPriority(RequestPriority priority) override;
+  std::optional<ResolutionDetails> GetResolutionDetails() const override;
   std::string DebugString() const override;
 
   // These should only be called from HostResolver::Job.
   void AssignJob(base::SafeRef<Job> job);
-  void OnJobCompleted(const HostCache::Entry& results, bool obtained_securely);
+  void OnJobCompleted(const HostCache::Entry& results,
+                      bool obtained_securely,
+                      ResolutionDetails resolution_details);
   void OnJobCancelled();
   void OnServiceEndpointsChanged();
 
@@ -109,6 +114,7 @@ class HostResolverManager::ServiceEndpointRequestImpl
 
   const HostResolver::Host host_;
   const NetworkAnonymizationKey network_anonymization_key_;
+  const handles::NetworkHandle target_network_;
   const NetLogWithSource net_log_;
   ResolveHostParameters parameters_;
   base::WeakPtr<ResolveContext> resolve_context_;
@@ -134,6 +140,7 @@ class HostResolverManager::ServiceEndpointRequestImpl
 
   // Set when the endpoint results are finalized.
   std::optional<FinalizedResult> finalized_result_;
+  std::optional<ResolutionDetails> resolution_details_;
 
   // These fields are calculated by DoResolveLocally() and consumed by
   // DoStartJob().

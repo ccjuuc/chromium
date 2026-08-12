@@ -95,7 +95,12 @@ void SVGImageChromeClient::RestoreAnimationIfNeeded() {
   image_->RestoreAnimation();
 }
 
+void SVGImageChromeClient::SetDidEncounterXSL() {
+  image_->SetDidEncounterXSL();
+}
+
 void SVGImageChromeClient::ScheduleAnimation(const LocalFrameView*,
+                                             cc::BeginMainFrameReason,
                                              base::TimeDelta fire_time,
                                              bool urgent) {
   DCHECK(animation_timer_);

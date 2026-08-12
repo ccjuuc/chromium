@@ -4,8 +4,10 @@
 
 package org.chromium.chrome.browser.hub;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
+
+import java.util.List;
 
 /** Interface for managing {@link Pane}s. */
 @NullMarked
@@ -14,7 +16,7 @@ public interface PaneManager extends PaneLookup {
     PaneOrderController getPaneOrderController();
 
     /** Returns an observable version of the current pane. */
-    ObservableSupplier<Pane> getFocusedPaneSupplier();
+    MonotonicObservableSupplier<Pane> getFocusedPaneSupplier();
 
     /**
      * Brings the specified {@link Pane} for {@link PaneId} into focus and returns whether focus
@@ -24,4 +26,7 @@ public interface PaneManager extends PaneLookup {
      * @return whether focusing on the Pane will occur. Also true if the pane was already focused.
      */
     boolean focusPane(@PaneId int paneId);
+
+    /** Returns an ordered list of {@link PaneId} for panes that are currently active. */
+    List<Integer> getActivePaneOrder();
 }

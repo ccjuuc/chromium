@@ -58,12 +58,12 @@ class ManagedUIHandlerTest : public testing::Test {
   void InitializeHandler() {
     TestManagedUIHandler::InitializeInternal(
         &web_ui_, source_->GetWebUIDataSource(), profile());
-    web_ui_.HandleReceivedMessage("observeManagedUI", base::Value::List());
+    web_ui_.HandleReceivedMessage("observeManagedUI", base::ListValue());
   }
 
   bool IsSourceManaged() {
-    const auto* local_strings = source_->GetLocalizedStrings();
-    std::optional<bool> managed = local_strings->FindBool("isManaged");
+    const auto& local_strings = source_->GetLocalizedStrings();
+    std::optional<bool> managed = local_strings.FindBool("isManaged");
     if (!managed.has_value()) {
       ADD_FAILURE();
       return false;

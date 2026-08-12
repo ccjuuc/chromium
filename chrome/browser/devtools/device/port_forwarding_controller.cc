@@ -31,6 +31,7 @@
 #include "net/base/address_list.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/network_isolation_key.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
@@ -69,8 +70,8 @@ const char kConnectionIdParam[] = "connectionId";
 
 static bool ParseNotification(const std::string& json,
                               std::string& method,
-                              std::optional<base::Value::Dict>& params) {
-  std::optional<base::Value::Dict> value =
+                              std::optional<base::DictValue>& params) {
+  std::optional<base::DictValue> value =
       base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     return false;
@@ -81,7 +82,7 @@ static bool ParseNotification(const std::string& json,
     return false;
   method = std::move(*method_value);
 
-  base::Value::Dict* param_dict = value->FindDict(kParamsParam);
+  base::DictValue* param_dict = value->FindDict(kParamsParam);
   if (param_dict) {
     params = std::move(*param_dict);
   }
@@ -91,7 +92,7 @@ static bool ParseNotification(const std::string& json,
 static bool ParseResponse(const std::string& json,
                           int* command_id,
                           int* error_code) {
-  std::optional<base::Value::Dict> value =
+  std::optional<base::DictValue> value =
       base::JSONReader::ReadDict(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     return false;
@@ -111,7 +112,7 @@ static bool ParseResponse(const std::string& json,
 static std::string SerializeCommand(int command_id,
                                     const std::string& method,
                                     base::Value params) {
-  base::Value::Dict command;
+  base::DictValue command;
   command.Set(kIdParam, command_id);
   command.Set(kMethodParam, method);
   command.Set(kParamsParam, std::move(params));
@@ -268,7 +269,11 @@ class SocketTunnel {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
     host_socket_ = std::make_unique<net::TCPClientSocket>(
-        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource());
+        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource(),
+        // There are currently no use cases for targeting a network when
+        // forwarding via devtools. This will need to be reconsidered if a need
+        // arises.
+        net::handles::kInvalidNetworkHandle);
     int result = host_socket_->Connect(
         base::BindOnce(&SocketTunnel::OnConnected, base::Unretained(this)));
     if (result != net::ERR_IO_PENDING)
@@ -495,7 +500,7 @@ void PortForwardingController::Connection::SerializeChanges(
 void PortForwardingController::Connection::SendCommand(
     const std::string& method, int port) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::Value::Dict params;
+  base::DictValue params;
   DCHECK(method == kBindMethod || kUnbindMethod == method);
   params.Set(kPortParam, port);
   int id = ++command_id_;
@@ -574,7 +579,7 @@ void PortForwardingController::Connection::OnFrameRead(
     return;
 
   std::string method;
-  std::optional<base::Value::Dict> params;
+  std::optional<base::DictValue> params;
   if (!ParseNotification(message, method, params)) {
     return;
   }
@@ -655,7 +660,7 @@ void PortForwardingController::OnPrefsChange() {
   forwarding_map_.clear();
 
   if (pref_service_->GetBoolean(prefs::kDevToolsPortForwardingEnabled)) {
-    const base::Value::Dict& value =
+    const base::DictValue& value =
         pref_service_->GetDict(prefs::kDevToolsPortForwardingConfig);
     for (auto dict_element : value) {
       int port_num;

@@ -12,11 +12,14 @@
 
 #include "base/component_export.h"
 #include "base/files/file_path.h"
+#include "base/types/expected.h"
+#include "components/persistent_cache/transaction_error.h"
 
 namespace persistent_cache {
 
 class Backend;
 enum class BackendType;
+enum class Client;
 class PersistentCache;
 struct PendingBackend;
 
@@ -38,7 +41,8 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
     // backend) is true, the database will use write-ahead log journaling.
     // Returns no value in case of error (e.g., if the backend's files could not
     // be opened or created).
-    virtual std::optional<PendingBackend> MakePendingBackend(
+    virtual base::expected<PendingBackend, TransactionError> MakePendingBackend(
+        Client client,
         const base::FilePath& directory,
         const base::FilePath& base_name,
         bool single_connection,
@@ -49,13 +53,15 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
     // `PersistentCache` instance -- connections to it cannot be shared for use
     // by other instances. If `journal_mode_wal` (which only applies to the
     // SQLite backend) is true, the database will use write-ahead log
-    // journaling. Returns null in case of error (e.g., if the backend's files
-    // could not be opened or created, or if the backend's storage is corrupt).
-    virtual std::unique_ptr<Backend> MakeBackend(
-        const base::FilePath& directory,
-        const base::FilePath& base_name,
-        bool single_connection,
-        bool journal_mode_wal) = 0;
+    // journaling. Returns an error code on failure (e.g., if the backend's
+    // files could not be opened or created, or the backend's storage is
+    // corrupt). See persistent_cache.h for details regarding error handling.
+    virtual base::expected<std::unique_ptr<Backend>, TransactionError>
+    MakeBackend(Client client,
+                const base::FilePath& directory,
+                const base::FilePath& base_name,
+                bool single_connection,
+                bool journal_mode_wal) = 0;
 
     // Returns a pending backend for a read-only connection to the backend named
     // `base_name` within `directory`. This allows another party to bind to an
@@ -79,7 +85,8 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
 
     // Deletes all files corresponding to the backend named `base_name` in
     // `directory`. Returns the total size, in bytes, of all files deleted.
-    virtual int64_t DeleteFiles(const base::FilePath& directory,
+    virtual int64_t DeleteFiles(Client client,
+                                const base::FilePath& directory,
                                 const base::FilePath& base_name) = 0;
 
    protected:
@@ -89,14 +96,20 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
   // Constructs an instance that will use the given backend type for file
   // management within `directory`. Creates `directory` if it does not already
   // exist.
-  BackendStorage(BackendType backend_type, base::FilePath directory);
+  BackendStorage(Client client,
+                 BackendType backend_type,
+                 base::FilePath directory);
 
   // Constructs an instance that will use `delegate` for file management within
   // `directory`. Creates `directory` if it does not already exist.
-  BackendStorage(std::unique_ptr<Delegate> delegate, base::FilePath directory);
+  BackendStorage(Client client,
+                 std::unique_ptr<Delegate> delegate,
+                 base::FilePath directory);
   BackendStorage(const BackendStorage&) = delete;
   BackendStorage& operator=(const BackendStorage&) = delete;
   ~BackendStorage();
+
+  Client client() const { return client_; }
 
   // Returns the directory managed by the instance.
   const base::FilePath& directory() const { return directory_; }
@@ -106,9 +119,10 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
   // may be used to open only one `PersistentCache` -- connections to that cache
   // cannot be shared. If `journal_mode_wal` (which only applies to the SQLite
   // backend) is true, the database will use write-ahead log journaling. Returns
-  // no value in case of error (e.g., if the backend's files could not be opened
-  // or created).
-  std::optional<PendingBackend> MakePendingBackend(
+  // `TransactionError::kTransient` in case of an error for which a retry may
+  // succeed (e.g., `single_connection` is true and the main database file is
+  // in-use).
+  base::expected<PendingBackend, TransactionError> MakePendingBackend(
       const base::FilePath& base_name,
       bool single_connection,
       bool journal_mode_wal);
@@ -118,11 +132,13 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
   // by only one `PersistentCache` instance -- connections to it cannot be
   // shared for use by other instances. If `journal_mode_wal` (which only
   // applies to the SQLite backend) is true, the database will use write-ahead
-  // log journaling. Returns null in case of error (e.g., if the backend's files
-  // could not be opened or created, or the backend's storage is corrupt).
-  std::unique_ptr<Backend> MakeBackend(const base::FilePath& base_name,
-                                       bool single_connection,
-                                       bool journal_mode_wal);
+  // log journaling. Returns an error code on failure (e.g., if the backend's
+  // files could not be opened or created, or the backend's storage is corrupt).
+  // See persistent_cache.h for details regarding error handling.
+  base::expected<std::unique_ptr<Backend>, TransactionError> MakeBackend(
+      const base::FilePath& base_name,
+      bool single_connection,
+      bool journal_mode_wal);
 
   // Returns a pending backend for a read-only connection to the backend named
   // `base_name` within the instance's directory. This allows another party to
@@ -161,6 +177,8 @@ class COMPONENT_EXPORT(PERSISTENT_CACHE) BackendStorage {
       int64_t target_footprint);
 
  private:
+  const Client client_;
+
   // The delegate used to create/operate on backends.
   const std::unique_ptr<Delegate> delegate_;
 

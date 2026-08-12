@@ -7,7 +7,6 @@
 #import <map>
 #import <string_view>
 
-#import "base/containers/contains.h"
 #import "base/json/json_reader.h"
 #import "base/strings/string_util.h"
 #import "base/strings/sys_string_conversions.h"
@@ -17,6 +16,7 @@
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #import "components/autofill/core/browser/field_types.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -52,7 +52,7 @@ autofill::FieldType FieldTypeFromString(std::string_view str, NSError** error) {
     }
   }
 
-  if (!base::Contains(string_to_field_type_map, str)) {
+  if (!string_to_field_type_map.contains(str)) {
     NSString* error_description = [NSString
         stringWithFormat:@"Unable to recognize autofill field type %@!",
                          base::SysUTF8ToNSString(str)];
@@ -72,7 +72,7 @@ autofill::FieldType FieldTypeFromString(std::string_view str, NSError** error) {
 //   { "type": "NAME_LAST", "value": "Yumizuka" },
 //  ],
 NSError* PrepareAutofillProfileWithValues(
-    const base::Value::List* autofill_profile) {
+    const base::ListValue* autofill_profile) {
   if (!autofill_profile) {
     return testing::NSErrorWithLocalizedDescription(
         @"Unable to find autofill profile in parsed JSON value.");
@@ -81,13 +81,12 @@ NSError* PrepareAutofillProfileWithValues(
   autofill::AutofillProfile profile(
       autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
   autofill::CreditCard credit_card(
-      base::Uuid::GenerateRandomV4().AsLowercaseString(),
-      "https://www.example.com/");
+      base::Uuid::GenerateRandomV4().AsLowercaseString());
 
   // For each type-value dictionary in the autofill profile list, validate it,
   // then add it to the appropriate profile.
   for (const auto& profile_list_item : *autofill_profile) {
-    const base::Value::Dict* entry = profile_list_item.GetIfDict();
+    const base::DictValue* entry = profile_list_item.GetIfDict();
     if (!entry) {
       return testing::NSErrorWithLocalizedDescription(
           @"Failed to extract an entry!");
@@ -161,7 +160,7 @@ NSError* PrepareAutofillProfileWithValues(
 
   base::Value recipeRoot = std::move(readResult).value();
 
-  const base::Value::List* autofillProfile =
+  const base::ListValue* autofillProfile =
       recipeRoot.GetDict().FindList("autofillProfile");
   return PrepareAutofillProfileWithValues(autofillProfile);
 }

@@ -14,6 +14,7 @@
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/password_manager/services/csv_password/csv_password_parser_impl.h"
 #include "components/password_manager/services/csv_password/public/mojom/csv_password_parser.mojom.h"
+#include "components/private_ai/oak_session_service/oak_session_service.h"  // nogncheck
 #include "components/safe_browsing/buildflags.h"
 #include "components/services/patch/file_patcher_impl.h"
 #include "components/services/patch/public/mojom/file_patcher.mojom.h"
@@ -23,6 +24,7 @@
 #include "components/user_data_importer/mojom/bookmark_html_parser.mojom.h"
 #include "content/public/utility/utility_thread.h"
 #include "extensions/buildflags/buildflags.h"
+#include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/service_factory.h"
 #include "pdf/buildflags.h"
@@ -31,6 +33,10 @@
 #include "ui/accessibility/accessibility_features.h"
 #include "xenon_overlay/public/mojom/xenon_service.mojom.h"
 #include "xenon_overlay/services/xenon_service_impl.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/services/readaloud/read_aloud_playback_controller.h"  // nogncheck
+#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_WIN)
 #include "chrome/services/system_signals/win/win_system_signals_service.h"
@@ -49,6 +55,8 @@
 #if BUILDFLAG(IS_MAC)
 #include "chrome/services/mac_notifications/mac_notification_provider_impl.h"
 #include "chrome/services/system_signals/mac/mac_system_signals_service.h"
+#include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
+#include "services/proxy_resolver_mac/mac_system_proxy_resolver_impl.h"
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_LINUX)
@@ -57,14 +65,18 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/common/importer/profile_import.mojom.h"
+#include "chrome/services/reading_mode_metrics/reading_mode_metrics_service.h"
 #include "chrome/utility/importer/profile_import_impl.h"
-#include "components/legion/oak_session_service/oak_session_service.h"  // nogncheck
 #include "components/mirroring/service/mirroring_service.h"
 #include "services/proxy_resolver/proxy_resolver_factory_impl.h"  // nogncheck
 #include "services/proxy_resolver/public/mojom/proxy_resolver.mojom.h"
 #include "services/screen_ai/public/mojom/screen_ai_factory.mojom.h"  // nogncheck
 #include "services/screen_ai/screen_ai_service_impl.h"  // nogncheck
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+#include "chrome/services/redirection/redirection_service.h"
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 
 #if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
 #include "chrome/services/speech/speech_recognition_service_impl.h"  // nogncheck
@@ -84,13 +96,13 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS) || BUILDFLAG(IS_ANDROID)
 #include "chrome/services/media_gallery_util/media_parser_factory.h"
-#include "chrome/services/media_gallery_util/public/mojom/media_parser.mojom.h"
+#include "components/media_gallery_util/public/mojom/media_parser.mojom.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW) || \
     (BUILDFLAG(ENABLE_PRINTING) && BUILDFLAG(IS_WIN))
 #include "chrome/services/printing/printing_service.h"
-#include "chrome/services/printing/public/mojom/printing_service.mojom.h"
+#include "chrome/services/printing/public/mojom/printing_service.mojom.h"  // nogncheck
 #endif
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING)
@@ -164,6 +176,8 @@ auto RunCSVPasswordParser(
 auto ContentBookmarkParser(
     mojo::PendingReceiver<user_data_importer::mojom::BookmarkHtmlParser>
         receiver) {
+  // The bookmarks parser requires Blink for handling favicon images.
+  content::UtilityThread::Get()->EnsureBlinkInitialized();
   return std::make_unique<
       user_data_importer::ContentBookmarkParserInUtilityProcess>(
       std::move(receiver));
@@ -204,6 +218,13 @@ auto RunMacNotificationService(
   return std::make_unique<mac_notifications::MacNotificationProviderImpl>(
       std::move(receiver));
 }
+
+auto RunMacSystemProxyResolver(
+    mojo::PendingReceiver<proxy_resolver::mojom::SystemProxyResolver>
+        receiver) {
+  return std::make_unique<proxy_resolver_mac::MacSystemProxyResolverImpl>(
+      std::move(receiver));
+}
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -223,12 +244,12 @@ auto RunSystemSignalsService(
 }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
-#if !BUILDFLAG(IS_ANDROID)
 auto RunOakSessionService(
-    mojo::PendingReceiver<legion::mojom::OakSession> receiver) {
-  return std::make_unique<legion::OakSessionService>(std::move(receiver));
+    mojo::PendingReceiver<private_ai::mojom::OakSession> receiver) {
+  return std::make_unique<private_ai::OakSessionService>(std::move(receiver));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 auto RunProxyResolver(
     mojo::PendingReceiver<proxy_resolver::mojom::ProxyResolverFactory>
         receiver) {
@@ -249,6 +270,13 @@ auto RunMirroringService(
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+auto RunRedirectionService(
+    mojo::PendingReceiver<redirection::mojom::RedirectionService> receiver) {
+  return std::make_unique<redirection::RedirectionService>(std::move(receiver));
+}
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+
 auto RunPassageEmbeddingsService(
     mojo::PendingReceiver<passage_embeddings::mojom::PassageEmbeddingsService>
         receiver) {
@@ -265,6 +293,14 @@ auto RunSpeechRecognitionService(
 #endif  // !BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
 
 #if !BUILDFLAG(IS_ANDROID)
+
+auto RunReadingModeMetricsService(
+    mojo::PendingReceiver<reading_mode::mojom::DistillationEvaluator>
+        receiver) {
+  return std::make_unique<reading_mode::ReadingModeMetricsService>(
+      std::move(receiver));
+}
+
 auto RunScreenAIServiceFactory(
     mojo::PendingReceiver<screen_ai::mojom::ScreenAIServiceFactory> receiver) {
   return std::make_unique<screen_ai::ScreenAIService>(std::move(receiver));
@@ -427,6 +463,19 @@ auto RunBabelOrcaTachyonParsingService(
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(IS_ANDROID)
+std::unique_ptr<readaloud::ReadAloudPlaybackController>
+RunReadAloudPlaybackControllerFactory(
+    mojo::PendingReceiver<
+        read_aloud::mojom::ReadAloudPlaybackControllerFactory> receiver) {
+  if (!features::IsReadAloudNativeEnabled()) {
+    return nullptr;
+  }
+  return std::make_unique<readaloud::ReadAloudPlaybackController>(
+      std::move(receiver));
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 }  // namespace
 
 void RegisterElevatedMainThreadServices(mojo::ServiceFactory& services) {
@@ -445,13 +494,22 @@ void RegisterMainThreadServices(mojo::ServiceFactory& services) {
   services.Add(RunCSVPasswordParser);
   services.Add(ContentBookmarkParser);
   services.Add(RunPassageEmbeddingsService);
+  services.Add(RunOakSessionService);
+
+#if BUILDFLAG(IS_ANDROID)
+  services.Add(RunReadAloudPlaybackControllerFactory);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_ANDROID)
-  services.Add(RunOakSessionService);
   services.Add(RunProfileImporter);
   services.Add(RunMirroringService);
+  services.Add(RunReadingModeMetricsService);
   services.Add(RunScreenAIServiceFactory);
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+  services.Add(RunRedirectionService);
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
 
 #if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
   services.Add(RunSpeechRecognitionService);
@@ -537,4 +595,7 @@ void RegisterIOThreadServices(mojo::ServiceFactory& services) {
 #if BUILDFLAG(IS_WIN)
   services.Add(RunWindowsSystemProxyResolver);
 #endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC)
+  services.Add(RunMacSystemProxyResolver);
+#endif  // BUILDFLAG(IS_MAC)
 }

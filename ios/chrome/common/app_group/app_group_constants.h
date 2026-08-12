@@ -45,6 +45,17 @@ extern NSString* const kChromeCapabilitiesPreference;
 // Show default browser promo capability.
 extern NSString* const kChromeShowDefaultBrowserPromoCapability;
 
+// Capability declaring whether the current version of Chrome supports AI
+// summarization.
+extern NSString* const kChromeSupportsAISummarizationCapability;
+
+// Capability declaring whether the active user is eligible for Gemini.
+extern NSString* const kChromeUserIsEligibleForGeminiCapability;
+
+// The key of a preference containing the hashed ID of the active Chrome user,
+// shared with other 1P apps for App Switching.
+extern NSString* const kAppSwitcherHashedUserID;
+
 // Capability declaring a list of supported bundle IDs that can open incognito
 // links in chrome.
 extern NSString* const kChromeSupportOpenLinksParametersFromCapability;
@@ -210,8 +221,10 @@ extern NSString* const kOpenExtensionOutcomes;
 // Name of NSUserDefault key containing info about registered profiles to be
 // passed to widgets.
 extern NSString* const kAccountsOnDevice;
-// Names of keys in dictionary saved in kAccountsOnDevice.
+// Names of keys in dictionary saved in kAccountsOnDevice for the email.
 extern NSString* const kEmail;
+// Names of keys in dictionary saved in kAccountsOnDevice for the name or an
+// empty string.
 extern NSString* const kFullName;
 // Key used to save info for widgets when no account is signed-in.
 extern NSString* const kNoAccount;

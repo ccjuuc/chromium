@@ -102,12 +102,17 @@ class AX_BASE_EXPORT AXMode {
   // is detected, e.g. ChromeVox, Talkback, JAWS, NVDA, Narrator, etc.
   static constexpr uint32_t kScreenReader = 1 << 10;
 
+  // Indicates that the web contents are being adapted for a native UI wrapper
+  // (e.g. Webium). This modifies how Blink serializes the root role and
+  // attributes to better match native UI expectations.
+  static constexpr uint32_t kNativeAdaptedWebContents = 1 << 11;
+
   // Update this to include the last supported mode flag. If you add
   // another, be sure to update the stream insertion operator for
   // logging and debugging, as well as AccessibilityModeFlagEnum (and
   // related metrics callsites, see: |ModeFlagHistogramValue|).
-  static constexpr uint32_t kLastModeFlag = 1 << 10;
-  // LINT.ThenChange(//chrome/browser/metrics/accessibility_state_provider.cc,//chrome/browser/performance_manager/metrics/metrics_provider_common.cc,//chrome/browser/resources/accessibility/accessibility.ts,//tools/metrics/histograms/enums.xml,//ui/accessibility/ax_mode_histogram_logger.cc)
+  static constexpr uint32_t kLastModeFlag = 1 << 11;
+  // LINT.ThenChange(//chrome/browser/metrics/accessibility_state_provider.cc,//chrome/browser/performance_manager/metrics/metrics_provider_common.cc,//chrome/browser/resources/accessibility/accessibility.ts,//tools/metrics/histograms/enums.xml,//ui/accessibility/ax_mode_histogram_logger.cc,//ui/accessibility/mojom/ax_mode_mojom_traits_unittest.cc)
 
   constexpr AXMode() : flags_(kNone), filter_flags_(kNone) {}
   constexpr AXMode(uint32_t flags) : flags_(flags), filter_flags_(kNone) {}
@@ -165,6 +170,7 @@ class AX_BASE_EXPORT AXMode {
     UMA_AX_MODE_ANNOTATE_MAIN_NODE = 9,
     UMA_AX_MODE_FROM_PLATFORM = 10,
     UMA_AX_MODE_SCREEN_READER = 11,
+    UMA_AX_MODE_NATIVE_ADAPTED_WEB_CONTENTS = 12,
 
     // This must always be the last enum. It's okay for its value to
     // increase, but none of the other enum values may change.
@@ -197,6 +203,8 @@ class AX_BASE_EXPORT AXMode {
   // These are defined separately from the base flags to avoid conflating
   // flags that are additive from flags that remove information.
   static constexpr uint32_t kFilterFirstFlag = 1 << 0;
+
+  // LINT.IfChange(ax_mode_filters)
   // kFormsAndLabelsOnly filters out everything except for forms and labels
   // necessary for password managers to operate.
   static constexpr uint32_t kFormsAndLabelsOnly = 1 << 0;
@@ -204,6 +212,7 @@ class AX_BASE_EXPORT AXMode {
   // a feature flag. Please see kAccessibilityOnScreenMode.
   static constexpr uint32_t kOnScreenOnly = 1 << 1;
   static constexpr uint32_t kFilterLastFlag = 1 << 1;
+  // LINT.ThenChange(//ui/accessibility/mojom/ax_mode_mojom_traits_unittest.cc:ax_mode_filters)
 
  private:
   friend struct mojo::StructTraits<ax::mojom::AXModeDataView, AXMode>;

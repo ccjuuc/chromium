@@ -117,8 +117,8 @@ def _ScopedHistogramName(metric_name, histogram_name):
   """
   metric_suffix = '_metric'
   suffix_length = len(metric_suffix)
-  # TODO(crbug.com/40102479): Decide on whether metrics should always have
-  # '_metric' suffix.
+  # TBMv3 was deprioritized, so the metric naming convention (with or without
+  # '_metric' suffix) was left flexible. See crbug.com/40102479 for context.
   if metric_name[-suffix_length:] == metric_suffix:
     scope = metric_name[:-suffix_length]
   else:
@@ -391,11 +391,25 @@ def ConvertProtoTraceToJson(trace_processor_path, proto_file, json_path):
   with tempfile_ext.NamedTemporaryFile(mode='w+') as query_file:
     query_file.write(EXPORT_JSON_QUERY_TEMPLATE % _SqlString(json_path))
     query_file.close()
-    _RunTraceProcessor(
-        trace_processor_path,
-        '-q',
-        query_file.name,
-        proto_file,
-    )
+    try:
+      _RunTraceProcessor(
+          trace_processor_path,
+          '--allow-sql-file-access',
+          '-q',
+          query_file.name,
+          proto_file,
+      )
+    except RuntimeError as e:
+      # TODO(crbug.com/544452037): Remove this fallback once the new trace
+      # processor binary rolls to all platforms.
+      if 'unrecognized option' in str(e) or 'unknown option' in str(e):
+        _RunTraceProcessor(
+            trace_processor_path,
+            '-q',
+            query_file.name,
+            proto_file,
+        )
+      else:
+        raise
 
   return json_path

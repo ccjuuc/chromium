@@ -15,6 +15,7 @@
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "google_apis/gaia/core_account_id.h"
+#include "google_apis/gaia/fake_device_management_error_details.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/test/test_utils.h"
@@ -79,39 +80,40 @@ TEST_F(ProfileOAuth2TokenServiceDelegateTest, InvalidateTokensForMultilogin) {
             GoogleServiceAuthError::NONE);
 }
 
-// Contains all non-deprecated Google service auth error states.
-const GoogleServiceAuthError::State table[] = {
-    GoogleServiceAuthError::NONE,
-    GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS,
-    GoogleServiceAuthError::ACCOUNT_NOT_FOUND,
-    GoogleServiceAuthError::CONNECTION_FAILED,
-    GoogleServiceAuthError::SERVICE_UNAVAILABLE,
-    GoogleServiceAuthError::REQUEST_CANCELED,
-    GoogleServiceAuthError::UNEXPECTED_SERVICE_RESPONSE,
-    GoogleServiceAuthError::SERVICE_ERROR,
-    GoogleServiceAuthError::SCOPE_LIMITED_UNRECOVERABLE_ERROR,
-    GoogleServiceAuthError::CHALLENGE_RESPONSE_REQUIRED,
-};
+// Contains all non-deprecated Google service auth errors.
+std::vector<GoogleServiceAuthError> GetAllErrors() {
+  const GoogleServiceAuthError table[] = {
+      GoogleServiceAuthError::AuthErrorNone(),
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN),
+      GoogleServiceAuthError::CreateAccountNotFound(),
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED),
+      GoogleServiceAuthError::FromServiceUnavailable(std::string()),
+      GoogleServiceAuthError::CreateRequestCanceled(),
+      GoogleServiceAuthError::FromUnexpectedServiceResponse(std::string()),
+      GoogleServiceAuthError::FromServiceError(std::string()),
+      GoogleServiceAuthError::FromScopeLimitedUnrecoverableErrorReason(
+          GoogleServiceAuthError::ScopeLimitedUnrecoverableErrorReason::
+              kInvalidScope),
+      GoogleServiceAuthError::FromTokenBindingChallenge(std::string()),
+      GoogleServiceAuthError::FromDeviceManagementError(
+          std::make_unique<gaia::FakeDeviceManagementErrorDetails>()),
+  };
+  static_assert(
+      std::size(table) == GoogleServiceAuthError::NUM_STATES -
+                              GoogleServiceAuthError::kDeprecatedStateCount,
+      "table size should match number of auth error types");
+
+  return std::vector<GoogleServiceAuthError>(std::begin(table),
+                                             std::end(table));
+}
 
 TEST_F(ProfileOAuth2TokenServiceDelegateTest, UpdateAuthErrorPersistenErrors) {
   const CoreAccountId account_id =
       CoreAccountId::FromGaiaId(GaiaId("account_id"));
   delegate.UpdateCredentials(account_id, "refresh_token");
 
-  static_assert(
-      std::size(table) == GoogleServiceAuthError::NUM_STATES -
-                              GoogleServiceAuthError::kDeprecatedStateCount,
-      "table size should match number of auth error types");
-
-  for (GoogleServiceAuthError::State state : table) {
-    GoogleServiceAuthError error;
-    if (state == GoogleServiceAuthError::SCOPE_LIMITED_UNRECOVERABLE_ERROR) {
-      error = GoogleServiceAuthError::FromScopeLimitedUnrecoverableErrorReason(
-          GoogleServiceAuthError::ScopeLimitedUnrecoverableErrorReason::
-              kInvalidScope);
-    } else {
-      error = GoogleServiceAuthError(state);
-    }
+  for (const auto& error : GetAllErrors()) {
     if (!error.IsPersistentError() || error.IsScopePersistentError()) {
       continue;
     }
@@ -135,22 +137,9 @@ TEST_F(ProfileOAuth2TokenServiceDelegateTest, UpdateAuthErrorTransientErrors) {
       CoreAccountId::FromGaiaId(GaiaId("account_id"));
   delegate.UpdateCredentials(account_id, "refresh_token");
 
-  static_assert(
-      std::size(table) == GoogleServiceAuthError::NUM_STATES -
-                              GoogleServiceAuthError::kDeprecatedStateCount,
-      "table size should match number of auth error types");
-
   EXPECT_TRUE(delegate.BackoffEntry());
   int failure_count = 0;
-  for (GoogleServiceAuthError::State state : table) {
-    GoogleServiceAuthError error;
-    if (state == GoogleServiceAuthError::SCOPE_LIMITED_UNRECOVERABLE_ERROR) {
-      error = GoogleServiceAuthError::FromScopeLimitedUnrecoverableErrorReason(
-          GoogleServiceAuthError::ScopeLimitedUnrecoverableErrorReason::
-              kInvalidScope);
-    } else {
-      error = GoogleServiceAuthError(state);
-    }
+  for (const auto& error : GetAllErrors()) {
     if (!error.IsTransientError()) {
       continue;
     }
@@ -207,7 +196,8 @@ TEST_F(ProfileOAuth2TokenServiceDelegateTest,
       .Times(0);
   delegate.UpdateAuthError(
       account_id,
-      GoogleServiceAuthError(GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   EXPECT_EQ(delegate.GetAuthError(account_id),
             GoogleServiceAuthError::AuthErrorNone());
   testing::Mock::VerifyAndClearExpectations(&mock_observer);
@@ -220,8 +210,9 @@ TEST_F(ProfileOAuth2TokenServiceDelegateTest, AuthErrorChanged) {
       CoreAccountId::FromGaiaId(GaiaId("account_id"));
   delegate.UpdateCredentials(account_id, "refresh_token");
 
-  GoogleServiceAuthError error(
-      GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS);
+  GoogleServiceAuthError error =
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN);
   EXPECT_CALL(mock_observer,
               OnAuthErrorChanged(
                   account_id, error,

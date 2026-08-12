@@ -103,9 +103,9 @@ class PipelineImplTest : public ::testing::Test {
   };
 
   PipelineImplTest()
-      : demuxer_(std::make_unique<StrictMock<MockDemuxer>>()),
-        scoped_renderer_(std::make_unique<StrictMock<MockRenderer>>()),
-        renderer_(scoped_renderer_->AsWeakPtr()) {
+      : scoped_renderer_(std::make_unique<StrictMock<MockRenderer>>()),
+        renderer_(scoped_renderer_->AsWeakPtr()),
+        demuxer_(std::make_unique<StrictMock<MockDemuxer>>()) {
     pipeline_ = std::make_unique<PipelineImpl>(
         task_environment_.GetMainThreadTaskRunner(),
         task_environment_.GetMainThreadTaskRunner(),
@@ -115,7 +115,7 @@ class PipelineImplTest : public ::testing::Test {
 
     // SetDemuxerExpectations() adds overriding expectations for expected
     // non-NULL streams.
-    std::vector<DemuxerStream*> empty;
+    std::vector<raw_ptr<DemuxerStream>> empty;
     EXPECT_CALL(*demuxer_, GetAllStreams()).WillRepeatedly(Return(empty));
 
     EXPECT_CALL(*demuxer_, GetTimelineOffset())
@@ -308,6 +308,7 @@ class PipelineImplTest : public ::testing::Test {
 
   void ExpectResume(const base::TimeDelta& seek_time) {
     ExpectRendererInitialization();
+    EXPECT_CALL(*demuxer_, IsSeekable()).WillOnce(Return(true));
     EXPECT_CALL(*demuxer_, OnSeek(seek_time, _))
         .WillOnce(RunOnceCallback<1>(PIPELINE_OK));
     EXPECT_CALL(*renderer_, SetPlaybackRate(_));
@@ -358,13 +359,13 @@ class PipelineImplTest : public ::testing::Test {
   std::unique_ptr<PipelineImpl> pipeline_;
   NiceMock<MockCdmContext> cdm_context_;
 
-  std::unique_ptr<StrictMock<MockDemuxer>> demuxer_;
-  raw_ptr<DemuxerHost, DanglingUntriaged> demuxer_host_ = nullptr;
   std::unique_ptr<StrictMock<MockRenderer>> scoped_renderer_;
   base::WeakPtr<MockRenderer> renderer_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> audio_stream_;
   std::unique_ptr<StrictMock<MockDemuxerStream>> video_stream_;
-  std::vector<DemuxerStream*> streams_;
+  std::vector<raw_ptr<DemuxerStream>> streams_;
+  std::unique_ptr<StrictMock<MockDemuxer>> demuxer_;
+  raw_ptr<DemuxerHost, DanglingUntriaged> demuxer_host_ = nullptr;
   raw_ptr<RendererClient, DanglingUntriaged> renderer_client_ = nullptr;
   VideoDecoderConfig video_decoder_config_;
   PipelineMetadata metadata_;
@@ -1151,6 +1152,7 @@ class PipelineTeardownTest : public PipelineImplTest {
     PipelineImplTest::DoSuspend();
 
     if (state == kResuming) {
+      EXPECT_CALL(*demuxer_, IsSeekable()).WillOnce(Return(true));
       PipelineImplTest::DoResume(base::TimeDelta());
       return;
     }

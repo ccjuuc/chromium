@@ -57,7 +57,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           },
           {
@@ -87,7 +88,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           },
           {
@@ -117,7 +119,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           },
           {
@@ -147,7 +150,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           },
           {
@@ -177,7 +181,8 @@
                 "builder": "GPU FYI Mac arm64 Builder",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           }
         ]
@@ -218,6 +223,10 @@
       ],
       "mirroring_builder_group_and_names": [
         {
+          "builder": "gpu-fyi-cq-mac-arm64",
+          "group": "tryserver.chromium.mac"
+        },
+        {
           "builder": "gpu-fyi-try-mac-arm64-apple-m1-exp",
           "group": "tryserver.chromium.mac"
         },
@@ -238,8 +247,7 @@
           "group": "tryserver.chromium.mac"
         }
       ],
-      "targets_spec_directory": "infra/config/generated/builders/ci/GPU FYI Mac arm64 Builder/targets",
-      "targets_spec_directory_relative_to_source_dir": true
+      "targets_spec_directory": "infra/config/generated/builders/ci/GPU FYI Mac arm64 Builder/targets"
     }
   },
   "$build/siso": {
@@ -247,10 +255,9 @@
       "builder"
     ],
     "enable_cloud_monitoring": true,
-    "enable_cloud_profiler": true,
     "enable_cloud_trace": true,
     "experiments": [],
-    "metrics_project": "chromium-reclient-metrics",
+    "profile_mode": "cloud",
     "project": "rbe-chromium-trusted",
     "remote_jobs": 250
   },

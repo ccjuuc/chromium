@@ -9,19 +9,21 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/account_id/account_id.h"
 
-namespace user_manager {
-class User;
-}
+class PrefService;
 
 namespace ash {
 
 // Manages SAML password sync for multiple customer devices.
 class InSessionPasswordSyncManager : public PasswordSyncTokenFetcher::Consumer {
  public:
-  explicit InSessionPasswordSyncManager(Profile* primary_profile);
+  // `local_state` must be non-null and must outlive `this`.
+  InSessionPasswordSyncManager(PrefService* local_state,
+                               Profile* primary_profile);
   ~InSessionPasswordSyncManager() override;
 
   InSessionPasswordSyncManager(const InSessionPasswordSyncManager&) = delete;
@@ -41,8 +43,9 @@ class InSessionPasswordSyncManager : public PasswordSyncTokenFetcher::Consumer {
  private:
   void ResetReauthRequiredBySamlTokenDismatch();
 
+  const raw_ref<PrefService> local_state_;
   const raw_ptr<Profile> primary_profile_;
-  const raw_ptr<const user_manager::User, DanglingUntriaged> primary_user_;
+  const AccountId primary_account_id_;
   std::unique_ptr<PasswordSyncTokenFetcher> password_sync_token_fetcher_;
 
   friend class InSessionPasswordSyncManagerTest;

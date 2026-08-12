@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/android/device_info.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
@@ -63,6 +64,8 @@ using JniAudioDevice = media::AudioManagerAndroid::JniAudioDevice;
 using JniDelegate = media::AudioManagerAndroid::JniDelegate;
 
 namespace media {
+
+using Error = AudioInputStream::AudioInputCallback::Error;
 namespace {
 
 ACTION_P4(CheckCountAndPostQuitTask, count, limit, task_runner, quit_closure) {
@@ -218,75 +221,7 @@ class MockAudioInputCallback : public AudioInputStream::AudioInputCallback {
                     base::TimeTicks capture_time,
                     double volume,
                     const AudioGlitchInfo& glitch_info));
-  MOCK_METHOD0(OnError, void());
-};
-
-// Implements AudioOutputStream::AudioSourceCallback and provides audio data
-// by reading from a data file.
-class FileAudioSource : public AudioOutputStream::AudioSourceCallback {
- public:
-  explicit FileAudioSource(base::WaitableEvent* event, const std::string& name)
-      : event_(event) {
-    // Reads a test file from media/test/data directory and stores it in
-    // a DecoderBuffer.
-    file_ = ReadTestDataFile(name);
-
-    // Log the name of the file which is used as input for this test.
-    base::FilePath file_path = GetTestDataFilePath(name);
-    DVLOG(0) << "Reading from file: " << file_path.value().c_str();
-  }
-
-  FileAudioSource(const FileAudioSource&) = delete;
-  FileAudioSource& operator=(const FileAudioSource&) = delete;
-
-  ~FileAudioSource() override {}
-
-  // AudioOutputStream::AudioSourceCallback implementation.
-
-  // Use samples read from a data file and fill up the audio buffer
-  // provided to us in the callback.
-  int OnMoreData(base::TimeDelta /* delay */,
-                 base::TimeTicks /* delay_timestamp */,
-                 const AudioGlitchInfo& /* glitch_info */,
-                 AudioBus* dest) override {
-    bool stop_playing = false;
-    size_t max_size = dest->frames() * dest->channels() * kBytesPerSample;
-
-    // Adjust data size and prepare for end signal if file has ended.
-    if (pos_ + max_size > file_size()) {
-      stop_playing = true;
-      max_size = file_size() - pos_;
-    }
-
-    // File data is stored as interleaved 16-bit values. Copy data samples from
-    // the file and deinterleave to match the audio bus format.
-    // FromInterleaved() will zero out any unfilled frames when there is not
-    // sufficient data remaining in the file to fill up the complete frame.
-    size_t frames = max_size / (dest->channels() * kBytesPerSample);
-    if (max_size) {
-      auto* source = reinterpret_cast<const int16_t*>(
-          base::span<const uint8_t>(*file_).subspan(pos_).data());
-      dest->FromInterleaved<SignedInt16SampleTypeTraits>(
-          source, base::checked_cast<int>(frames));
-      pos_ += max_size;
-    }
-
-    // Set event to ensure that the test can stop when the file has ended.
-    if (stop_playing) {
-      event_->Signal();
-    }
-
-    return frames;
-  }
-
-  void OnError(ErrorType type) override {}
-
-  size_t file_size() const { return file_->size(); }
-
- private:
-  raw_ptr<base::WaitableEvent> event_;
-  size_t pos_ = 0;
-  scoped_refptr<DecoderBuffer> file_;
+  MOCK_METHOD1(OnError, void(Error));
 };
 
 // Implements AudioInputStream::AudioInputCallback and writes the recorded
@@ -310,8 +245,9 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
     EXPECT_TRUE(
         base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &file_path));
     file_path = file_path.AppendASCII(file_name.c_str());
-    binary_file_ = base::OpenFile(file_path, "wb");
-    DLOG_IF(ERROR, !binary_file_) << "Failed to open binary PCM data file.";
+    binary_file_path_ = file_path;
+    // Create and truncate the file.
+    EXPECT_TRUE(base::WriteFile(binary_file_path_, base::span<uint8_t>()));
     DVLOG(0) << "Writing to file: " << file_path.value().c_str();
   }
 
@@ -328,12 +264,10 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
       }
 
       // Write recorded data chunk to the file and prepare for next chunk.
-      // TODO(henrika): use file_util:: instead.
-      UNSAFE_TODO(fwrite(chunk.data(), 1, chunk.size(), binary_file_));
+      EXPECT_TRUE(base::AppendToFile(binary_file_path_, chunk));
       buffer_->Seek(chunk.size());
       bytes_written += chunk.size();
     }
-    base::CloseFile(binary_file_);
   }
 
   // AudioInputStream::AudioInputCallback implementation.
@@ -343,8 +277,7 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
               const AudioGlitchInfo& glitch_info) override {
     const int num_samples = src->frames() * src->channels();
     auto interleaved = base::HeapArray<int16_t>::Uninit(num_samples);
-    src->ToInterleaved<SignedInt16SampleTypeTraits>(src->frames(),
-                                                    interleaved.data());
+    src->ToInterleaved<SignedInt16SampleTypeTraits>(interleaved);
 
     // Store data data in a temporary buffer to avoid making blocking
     // fwrite() calls in the audio callback. The complete buffer will be
@@ -354,13 +287,13 @@ class FileAudioSink : public AudioInputStream::AudioInputCallback {
     }
   }
 
-  void OnError() override {}
+  void OnError(Error error_code) override {}
 
  private:
   raw_ptr<base::WaitableEvent> event_;
   AudioParameters params_;
   std::unique_ptr<media::SeekableBuffer> buffer_;
-  raw_ptr<FILE> binary_file_;
+  base::FilePath binary_file_path_;
 };
 
 // Implements AudioInputCallback and AudioSourceCallback to support full
@@ -386,7 +319,7 @@ class FullDuplexAudioSinkSource
   ~FullDuplexAudioSinkSource() override {}
 
   // AudioInputStream::AudioInputCallback implementation
-  void OnError() override {}
+  void OnError(Error error_code) override {}
   void OnData(const AudioBus* src,
               base::TimeTicks capture_time,
               double volume,
@@ -396,8 +329,7 @@ class FullDuplexAudioSinkSource
 
     const int num_samples = src->frames() * src->channels();
     auto interleaved = base::HeapArray<int16_t>::Uninit(num_samples);
-    src->ToInterleaved<SignedInt16SampleTypeTraits>(src->frames(),
-                                                    interleaved.data());
+    src->ToInterleaved<SignedInt16SampleTypeTraits>(interleaved);
 
     const auto byte_span = base::as_bytes(interleaved.as_span());
     base::AutoLock lock(lock_);
@@ -453,9 +385,8 @@ class FullDuplexAudioSinkSource
     if (fifo_->forward_bytes() < size_in_bytes) {
       dest->Zero();
     } else {
-      fifo_->Read(buffer_.subspan(size_in_bytes));
-      dest->FromInterleaved<SignedInt16SampleTypeTraits>(
-          reinterpret_cast<int16_t*>(buffer_.data()), dest->frames());
+      fifo_->Read(buffer_.first(size_in_bytes));
+      dest->FromInterleavedBytes<SignedInt16SampleTypeTraits>(buffer_);
     }
 
     return dest->frames();
@@ -534,6 +465,12 @@ class AudioAndroidOutputTest : public testing::TestWithParam<AudioApi> {
         break;
       case AudioApi::OpenSLES:
         break;
+    }
+
+    if (enable_aaudio_per_stream_device_selection &&
+        !base::android::device_info::is_desktop()) {
+      GTEST_SKIP()
+          << "Per-stream device selection is only supported on desktop.";
     }
 
     if (!enable_aaudio) {
@@ -825,7 +762,7 @@ class AudioAndroidInputTest : public AudioAndroidOutputTest {
             &count, num_callbacks,
             base::SingleThreadTaskRunner::GetCurrentDefault(),
             run_loop.QuitWhenIdleClosure()));
-    EXPECT_CALL(sink, OnError()).Times(0);
+    EXPECT_CALL(sink, OnError(_)).Times(0);
 
     OpenAndStartAudioInputStreamOnAudioThread(&sink);
 
@@ -1285,6 +1222,15 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStream) {
 // closed, emitting a histogram value for successfully setting the
 // device ID if AAudioWithPerStreamDeviceSelection is enabled.
 TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
+  const bool is_per_stream_selection_enabled =
+      GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection;
+
+  if (is_per_stream_selection_enabled &&
+      !base::android::device_info::is_desktop()) {
+    GTEST_SKIP() << "Per-stream device selection is only supported on "
+                 << "desktop.";
+  }
+
   std::optional<AudioDeviceDescription> device =
       GetFirstNonDefaultInputDevice();
   if (!device.has_value()) {
@@ -1296,7 +1242,7 @@ TEST_P(AudioAndroidInputTest, OpenAndCloseInputStreamWithDevice) {
   base::HistogramTester histogram_tester;
   OpenAudioInputStreamOnAudioThread();
 
-  if (GetParam() == AudioApi::AAudioWithPerStreamDeviceSelection) {
+  if (is_per_stream_selection_enabled) {
     constexpr std::string_view kHistogramPrefix =
         "Media.Audio.Android.AAudioSetDeviceId.Input.";
     const std::string kSuccessHistogram =
@@ -1360,7 +1306,7 @@ TEST_F(AudioAndroidOutputTest, OpenAndCloseOutputStreamWithDevice) {
 // explicitly being stopped.
 TEST_P(AudioAndroidInputTest, OpenStartAndCloseInputStream) {
   NiceMock<MockAudioInputCallback> callback;
-  EXPECT_CALL(callback, OnError()).Times(0);
+  EXPECT_CALL(callback, OnError(_)).Times(0);
 
   AudioParameters params = GetDefaultInputStreamParametersOnAudioThread();
   MakeAudioInputStreamOnAudioThread(params);

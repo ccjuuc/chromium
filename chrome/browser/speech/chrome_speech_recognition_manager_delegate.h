@@ -9,6 +9,10 @@
 #include "content/public/browser/speech_recognition_manager_delegate.h"
 #include "content/public/browser/speech_recognition_session_config.h"
 
+namespace content {
+struct GlobalRenderFrameHostId;
+}  // namespace content
+
 namespace speech {
 
 // This is Chrome's implementation of the SpeechRecognitionManagerDelegate
@@ -17,6 +21,8 @@ class ChromeSpeechRecognitionManagerDelegate
     : public content::SpeechRecognitionManagerDelegate,
       public content::SpeechRecognitionEventListener {
  public:
+  friend class ChromeSpeechRecognitionTest;
+
   ChromeSpeechRecognitionManagerDelegate();
 
   ChromeSpeechRecognitionManagerDelegate(
@@ -55,7 +61,8 @@ class ChromeSpeechRecognitionManagerDelegate
   // This will bind to the Speech Recognition Service if available.
   void BindSpeechRecognitionContext(
       mojo::PendingReceiver<media::mojom::SpeechRecognitionContext> receiver,
-      const std::string& language) override;
+      const std::string& language,
+      const content::GlobalRenderFrameHostId& render_frame_host_id) override;
 #endif  // !BUILDFLAG(IS_ANDROID)
 
  private:
@@ -63,8 +70,7 @@ class ChromeSpeechRecognitionManagerDelegate
   // back the result in the IO thread through |callback|.
   static void CheckRenderFrameType(
       base::OnceCallback<void(bool ask_user, bool is_allowed)> callback,
-      int render_process_id,
-      int render_frame_id);
+      content::GlobalRenderFrameHostId global_id);
 };
 
 }  // namespace speech

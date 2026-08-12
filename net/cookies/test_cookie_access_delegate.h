@@ -41,22 +41,13 @@ class TestCookieAccessDelegate : public CookieAccessDelegate {
       const std::string_view domain) const override;
   bool ShouldIgnoreSameSiteRestrictions(
       const GURL& url,
-      const SiteForCookies& site_for_cookies) const override;
+      const SiteForCookies& site_for_cookies,
+      const url::Origin& top_level_origin) const override;
   bool ShouldTreatUrlAsTrustworthy(const GURL& url) const override;
-  std::optional<
-      std::pair<FirstPartySetMetadata, FirstPartySetsCacheFilter::MatchInfo>>
-  ComputeFirstPartySetMetadataMaybeAsync(
+  std::pair<FirstPartySetMetadata, FirstPartySetsCacheFilter::MatchInfo>
+  ComputeFirstPartySetMetadata(
       const SchemefulSite& site,
-      const SchemefulSite* top_frame_site,
-      base::OnceCallback<void(FirstPartySetMetadata,
-                              FirstPartySetsCacheFilter::MatchInfo)> callback)
-      const override;
-  std::optional<base::flat_map<SchemefulSite, FirstPartySetEntry>>
-  FindFirstPartySetEntries(
-      const base::flat_set<SchemefulSite>& sites,
-      base::OnceCallback<
-          void(base::flat_map<SchemefulSite, FirstPartySetEntry>)> callback)
-      const override;
+      const SchemefulSite* top_frame_site) const override;
 
   // Sets the expected return value for any cookie whose Domain
   // matches |cookie_domain|. Pass the value of |cookie.Domain()| and any

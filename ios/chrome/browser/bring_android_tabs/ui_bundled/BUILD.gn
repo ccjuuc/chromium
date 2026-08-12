@@ -99,6 +99,7 @@ source_set("unit_tests") {
     "//components/prefs",
     "//components/segmentation_platform/embedder/default_model",
     "//components/segmentation_platform/public",
+    "//components/sync:test_support",
     "//ios/chrome/browser/bring_android_tabs/model",
     "//ios/chrome/browser/bring_android_tabs/model:metrics",
     "//ios/chrome/browser/bring_android_tabs/model:test_support",
@@ -106,15 +107,12 @@ source_set("unit_tests") {
     "//ios/chrome/browser/segmentation_platform/model",
     "//ios/chrome/browser/shared/model/profile/test",
     "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/browser/synced_sessions/model",
     "//ios/chrome/test:test_support",
     "//ios/web/public/test",
     "//testing/gtest",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }
 
 source_set("eg_app_support+eg2") {
@@ -170,6 +168,7 @@ source_set("eg2_tests") {
     "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
     "//ios/chrome/browser/first_run/test:eg_test_support+eg2",
     "//ios/chrome/browser/safari_data_import/test:eg_test_support+eg2",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/common/ui/button_stack",
     "//ios/chrome/common/ui/promo_style:constants",

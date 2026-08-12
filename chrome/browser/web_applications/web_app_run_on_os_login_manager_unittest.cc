@@ -25,12 +25,10 @@
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
-#include "chrome/browser/web_applications/web_app_database_factory.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/prefs/pref_service.h"
@@ -119,8 +117,6 @@ class WebAppRunOnOsLoginManagerTestBase : public WebAppTest {
   std::unique_ptr<NotificationDisplayServiceTester> tester_;
   std::vector<apps::AppLaunchParams> launched_apps_;
   std::unique_ptr<base::AutoReset<bool>> skip_run_on_os_login_startup_;
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kDesktopPWAsRunOnOsLogin};
 };
 
 class WebAppRunOnOsLoginManagerParameterizedTest
@@ -178,9 +174,9 @@ class WebAppRunOnOsLoginManagerSimpleSettingsTest
   void SetWebAppSettingsPref() override {
     profile()->GetPrefs()->SetList(
         prefs::kWebAppSettings,
-        base::Value::List().Append(base::Value::Dict()
-                                       .Set(kManifestId, kTestApp)
-                                       .Set(kRunOnOsLogin, kRunWindowed)));
+        base::ListValue().Append(base::DictValue()
+                                     .Set(kManifestId, kTestApp)
+                                     .Set(kRunOnOsLogin, kRunWindowed)));
   }
 
   void InstallWebApp() {

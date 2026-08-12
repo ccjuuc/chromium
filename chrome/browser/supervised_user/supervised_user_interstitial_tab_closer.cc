@@ -10,9 +10,8 @@
 #include "content/public/browser/web_contents.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #endif
 
 TabCloser::~TabCloser() = default;
@@ -24,7 +23,8 @@ void TabCloser::CheckIfInBrowserThenCloseTab(
   // Close the tab only if there is a browser for it (which is not the case
   // for example in a <webview>).
 #if !BUILDFLAG(IS_ANDROID)
-  if (!chrome::FindBrowserWithTab(web_contents)) {
+  if (!GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents)) {
     return;
   }
 #endif
@@ -39,14 +39,13 @@ TabCloser::TabCloser(content::WebContents* web_contents)
 }
 
 void TabCloser::CloseTabImpl() {
-  // On Android, FindBrowserWithTab and TabStripModel don't exist.
+  // On Android, FindBrowserWithTab doesn't exist.
 #if !BUILDFLAG(IS_ANDROID)
-  Browser* browser = chrome::FindBrowserWithTab(&GetWebContents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          &GetWebContents());
   DCHECK(browser);
-  TabStripModel* tab_strip = browser->tab_strip_model();
-  DCHECK_NE(TabStripModel::kNoTab,
-            tab_strip->GetIndexOfWebContents(&GetWebContents()));
-  if (tab_strip->count() <= 1) {
+  if (browser->GetAllTabInterfaces().size() <= 1) {
     // Don't close the last tab in the window.
     GetWebContents().RemoveUserData(UserDataKey());
     return;

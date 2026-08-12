@@ -103,7 +103,7 @@
 #include "ui/base/resource/scoped_startup_resource_bundle.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ui/process_singleton_dialog_linux.h"
+#include "chrome/browser/ui/dialogs/process_singleton_dialog_linux.h"
 #endif
 
 using content::BrowserThread;
@@ -309,7 +309,9 @@ void SetupSocket(const std::string& path,
                  SockaddrUn* addr,
                  socklen_t* socklen) {
   *sock = SetupSocketOnly();
-  CHECK(SetupSockAddr(path, addr, socklen)) << "Socket path too long: " << path;
+  if (!SetupSockAddr(path, addr, socklen)) {
+    LOG(FATAL) << "Socket path too long: " << path << ".";
+  }
 }
 
 // Read a symbolic link, return empty string if given path is not a symbol link.
@@ -798,7 +800,7 @@ ProcessSingleton::NotifyResult ProcessSingleton::NotifyOtherProcessWithTimeout(
     if (ConnectSocket(&socket, socket_path_, cookie_path_)) {
 #if BUILDFLAG(IS_MAC)
       // On Mac, we want the open process' pid in case there are
-      // Apple Events to forward. See crbug.com/777863.
+      // Apple Events to forward. See crbug.com/40546317.
       std::string hostname;
       ParseProcessSingletonLock(lock_path_, &hostname, &pid);
 #endif
@@ -951,10 +953,6 @@ ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate(
       DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
           "Chrome.ProcessSingleton.TimeToNotify",
           base::TimeTicks::Now() - begin_ticks);
-    } else {
-      DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
-          "Chrome.ProcessSingleton.TimeToFailure",
-          base::TimeTicks::Now() - begin_ticks);
     }
     return result;
   }
@@ -977,10 +975,6 @@ ProcessSingleton::NotifyOtherProcessWithTimeoutOrCreate(
   if (result == PROCESS_NOTIFIED) {
     DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
         "Chrome.ProcessSingleton.TimeToNotify",
-        base::TimeTicks::Now() - begin_ticks);
-  } else {
-    DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
-        "Chrome.ProcessSingleton.TimeToFailure",
         base::TimeTicks::Now() - begin_ticks);
   }
 
@@ -1026,7 +1020,7 @@ bool ProcessSingleton::Create() {
   // can have the socket open.
   if (!SymlinkPath(symlink_content, lock_path_)) {
     // TODO(jackhou): Remove this case once this code is stable on Mac.
-    // http://crbug.com/367612
+    // http://crbug.com/41103975
 #if BUILDFLAG(IS_MAC)
     // On Mac, an existing non-symlink lock file means the lock could be held by
     // the old process singleton code. If we can successfully replace the lock,

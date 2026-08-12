@@ -36,10 +36,9 @@ ReaderModeJavaScriptFeature::ReaderModeJavaScriptFeature()
           web::ContentWorld::kIsolatedWorld,
           {FeatureScript::CreateWithFilename(
               kScriptName,
-              FeatureScript::InjectionTime::kDocumentEnd,
+              FeatureScript::InjectionTime::kDocumentStart,
               FeatureScript::TargetFrames::kMainFrame,
-              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)},
-          {web::java_script_features::GetCommonJavaScriptFeature()}) {}
+              FeatureScript::ReinjectionBehavior::kInjectOncePerWindow)}) {}
 
 ReaderModeJavaScriptFeature::~ReaderModeJavaScriptFeature() = default;
 
@@ -65,14 +64,14 @@ void ReaderModeJavaScriptFeature::ScriptMessageReceived(
     return;
   }
 
-  if (!message.body() || !message.body()->is_dict()) {
+  if (!message.legacy_body() || !message.legacy_body()->is_dict()) {
     ReaderModeHeuristicResultAvailable(
         web_state, ReaderModeHeuristicResult::kMalformedResponse);
     return;
   }
 
   std::optional<std::vector<double>> result =
-      TransformToDerivedFeatures(message.body()->GetDict(), url.value());
+      TransformToDerivedFeatures(message.legacy_body()->GetDict(), url.value());
   if (!result.has_value()) {
     ReaderModeHeuristicResultAvailable(
         web_state, ReaderModeHeuristicResult::kMalformedResponse);
@@ -111,7 +110,7 @@ void ReaderModeJavaScriptFeature::TriggerReaderModeHeuristic(
 
 std::optional<std::vector<double>>
 ReaderModeJavaScriptFeature::TransformToDerivedFeatures(
-    const base::Value::Dict& body,
+    const base::DictValue& body,
     const GURL& request_url) {
   std::optional<double> opt_num_elements = body.FindDouble("numElements");
   if (!opt_num_elements.has_value()) {

@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
 
+#include <optional>
+
 #include "build/build_config.h"
 #include "components/input/native_web_keyboard_event.h"
-#include "content/public/browser/keyboard_event_processing_result.h"
-#include "content/public/browser/visibility.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -109,6 +109,9 @@ WebUIBubbleDialogView::WebUIBubbleDialogView(
 }
 
 WebUIBubbleDialogView::~WebUIBubbleDialogView() {
+  for (auto& observer : observer_list_) {
+    observer.OnHostDestroying();
+  }
   ClearContentsWrapper();
 }
 
@@ -116,7 +119,9 @@ void WebUIBubbleDialogView::ClearContentsWrapper() {
   if (!contents_wrapper_) {
     return;
   }
-  DCHECK_EQ(this, contents_wrapper_->GetHost().get());
+  if (contents_wrapper_->GetHost()) {
+    DCHECK_EQ(this, contents_wrapper_->GetHost().get());
+  }
   DCHECK_EQ(web_view_->web_contents(), contents_wrapper_->web_contents());
   web_view_->SetWebContents(nullptr);
   contents_wrapper_->web_contents()->WasHidden();
@@ -138,8 +143,16 @@ gfx::Size WebUIBubbleDialogView::CalculatePreferredSize(
   gfx::Size preferred_size =
       BubbleDialogDelegateView::CalculatePreferredSize(available_size);
   preferred_size.SetToMax(kMinSize);
-  preferred_size.SetToMin(GetWidget()->GetWorkAreaBoundsInScreen().size());
+  if (GetWidget()) {
+    preferred_size.SetToMin(GetWidget()->GetWorkAreaBoundsInScreen().size());
+  }
   return preferred_size;
+}
+
+void WebUIBubbleDialogView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  for (auto& observer : observer_list_) {
+    observer.OnPositionRequiresUpdate();
+  }
 }
 
 void WebUIBubbleDialogView::AddedToWidget() {
@@ -150,7 +163,8 @@ void WebUIBubbleDialogView::AddedToWidget() {
   views::Widget* widget = GetWidget();
   contents_wrapper_->SetHost(weak_factory_.GetWeakPtr());
   bubble_widget_observation_.Observe(widget);
-  web_view_->holder()->SetCornerRadii(gfx::RoundedCornersF(GetCornerRadius()));
+  web_view_->holder()->SetNativeViewCornerRadii(
+      gfx::RoundedCornersF(GetCornerRadius()));
 
 #if defined(USE_AURA)
   aura::Window* window = widget->GetNativeView();
@@ -180,25 +194,24 @@ std::unique_ptr<views::FrameView> WebUIBubbleDialogView::CreateFrameView(
   // TODO(tluk): Improve the current pattern used to compose functionality on
   // bubble frames and eliminate the need for static cast.
   auto frame = BubbleDialogDelegateView::CreateFrameView(widget);
-  static_cast<views::BubbleFrameView*>(frame.get())
-      ->set_non_client_hit_test_cb(base::BindRepeating(
-          &WebUIBubbleDialogView::NonClientHitTest, base::Unretained(this)));
+  frame->set_non_client_hit_test_callback(base::BindRepeating(
+      &WebUIBubbleDialogView::NonClientHitTest, base::Unretained(this)));
   return frame;
 }
 
 void WebUIBubbleDialogView::ShowUI() {
-  if (!contents_wrapper_) {
-    // This widget is closing and/or being destroyed.
-    CHECK(!GetWidget() || GetWidget()->IsClosed());
+  if (!contents_wrapper_ || !web_view_->GetWebContents() || !GetWidget() ||
+      GetWidget()->IsClosed()) {
     return;
   }
-  DCHECK(GetWidget());
   GetWidget()->Show();
   web_view_->GetWebContents()->Focus();
 }
 
 void WebUIBubbleDialogView::CloseUI() {
-  DCHECK(GetWidget());
+  if (!GetWidget() || GetWidget()->IsClosed()) {
+    return;
+  }
   GetWidget()->CloseWithReason(
       views::Widget::ClosedReason::kCloseButtonClicked);
 }
@@ -221,11 +234,40 @@ void WebUIBubbleDialogView::DraggableRegionsChanged(
   draggable_region_ = ComputeDraggableRegion(regions);
 }
 
+web_modal::WebContentsModalDialogHost*
+WebUIBubbleDialogView::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  return this;
+}
+
+gfx::NativeView WebUIBubbleDialogView::GetHostView() const {
+  return GetWidget() ? GetWidget()->GetNativeView() : gfx::NativeView();
+}
+
+gfx::Point WebUIBubbleDialogView::GetDialogPosition(const gfx::Size& size) {
+  return gfx::Point(std::max(0, (width() - size.width()) / 2), 0);
+}
+
+gfx::Size WebUIBubbleDialogView::GetMaximumDialogSize() {
+  return GetWidget() ? GetWidget()->GetWindowBoundsInScreen().size()
+                     : gfx::Size();
+}
+
+void WebUIBubbleDialogView::AddObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  observer_list_.AddObserver(observer);
+}
+
+void WebUIBubbleDialogView::RemoveObserver(
+    web_modal::ModalDialogHostObserver* observer) {
+  observer_list_.RemoveObserver(observer);
+}
+
 bool WebUIBubbleDialogView::ShouldDescendIntoChildForEventHandling(
     gfx::NativeView child,
     const gfx::Point& location) {
   // The bubble should claim events that fall within the draggable region.
-  return !draggable_region_.has_value() ||
+  return !draggable_region_ ||
          !draggable_region_->contains(location.x(), location.y());
 }
 
@@ -240,11 +282,12 @@ int WebUIBubbleDialogView::NonClientHitTest(const gfx::Point& point) const {
   // Convert the point to the WebView's coordinates.
   gfx::Point point_in_webview =
       views::View::ConvertPointToTarget(this, web_view_, point);
-  return draggable_region_.has_value() &&
-                 draggable_region_->contains(point_in_webview.x(),
-                                             point_in_webview.y())
-             ? HTCAPTION
-             : HTNOWHERE;
+  if (draggable_region_ &&
+      draggable_region_->contains(point_in_webview.x(), point_in_webview.y())) {
+    return HTCAPTION;
+  }
+
+  return HTNOWHERE;
 }
 
 BEGIN_METADATA(WebUIBubbleDialogView)

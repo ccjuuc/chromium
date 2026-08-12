@@ -18,7 +18,6 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/sessions/session_common_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sessions/content/session_tab_helper_delegate.h"
@@ -154,7 +153,7 @@ class SessionServiceBase : public sessions::CommandStorageManagerDelegate,
   void OnWillSaveCommands() override;
   // This implementation in SessionServiceBase is mostly a no-op.
   // Full support for Session Service logging will come with
-  // https://crbug.com/1193711
+  // https://crbug.com/40175339
   void OnErrorWritingSessionCommands() override;
 
   // sessions::SessionTabHelperDelegate:

@@ -48,7 +48,7 @@ class SiteDataCacheImplTest : public ::testing::Test {
   SiteDataCacheImplTest()
       : data_cache_factory_(std::make_unique<SiteDataCacheFactory>()) {
     data_cache_ = std::make_unique<SiteDataCacheImpl>(
-        browser_context_.UniqueId(), browser_context_.GetPath());
+        browser_context_.UniqueToken(), browser_context_.GetPath());
     mock_db_ = new ::testing::StrictMock<MockSiteCache>();
     data_cache_->SetDataStoreForTesting(base::WrapUnique(mock_db_.get()));
     WaitForAsyncOperationsToComplete();
@@ -189,7 +189,7 @@ TEST_F(SiteDataCacheImplTest, ClearSiteDataForOrigins) {
   ::testing::Mock::VerifyAndClear(mock_db_);
 
   // The information for the first site should have been cleared.
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader_->UpdatesTitleInBackground());
@@ -212,11 +212,11 @@ TEST_F(SiteDataCacheImplTest, ClearAllSiteData) {
   ::testing::Mock::VerifyAndClear(mock_db_);
 
   // The information for both sites should have been cleared.
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader_->UpdatesTitleInBackground());
-  EXPECT_GE((base::TimeTicks::Now() - base::TimeTicks::UnixEpoch()).InSeconds(),
+  EXPECT_GE((base::Time::Now() - base::Time::UnixEpoch()).InSeconds(),
             data2_->last_loaded_time_for_testing().InSeconds());
   EXPECT_EQ(performance_manager::SiteFeatureUsage::kSiteFeatureUsageUnknown,
             reader2_->UpdatesFaviconInBackground());
@@ -230,7 +230,7 @@ TEST_F(SiteDataCacheImplTest, InspectorWorks) {
   auto* factory = SiteDataCacheFactory::GetInstance();
   ASSERT_TRUE(factory);
   SiteDataCacheInspector* inspector =
-      factory->GetInspectorForBrowserContext(browser_context_.UniqueId());
+      factory->GetInspectorForBrowserContext(browser_context_.UniqueToken());
   EXPECT_NE(nullptr, inspector);
   EXPECT_EQ(data_cache_.get(), inspector);
 
@@ -264,7 +264,7 @@ TEST_F(SiteDataCacheImplTest, InspectorWorks) {
   // destruction.
   data_cache_.reset();
   EXPECT_EQ(nullptr, factory->GetInspectorForBrowserContext(
-                         browser_context_.UniqueId()));
+                         browser_context_.UniqueToken()));
 }
 
 // TODO(crbug.com/40056631): Turn this into a death test to verify that

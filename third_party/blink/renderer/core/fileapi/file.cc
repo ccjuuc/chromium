@@ -49,21 +49,19 @@
 
 namespace blink {
 
-static String GetContentTypeFromFileName(const String& name,
+static String GetContentTypeFromFileName(const StringView& name,
                                          File::ContentTypeLookupPolicy policy) {
-  String type;
-  wtf_size_t index = name.ReverseFind('.');
+  wtf_size_t index = name.rfind('.');
   if (index != kNotFound) {
+    StringView extension = name.substr(index + 1);
     if (policy == File::kWellKnownContentTypes) {
-      type = MIMETypeRegistry::GetWellKnownMIMETypeForExtension(
-          name.Substring(index + 1));
+      return MIMETypeRegistry::GetWellKnownMIMETypeForExtension(extension);
     } else {
       DCHECK_EQ(policy, File::kAllContentTypes);
-      type =
-          MIMETypeRegistry::GetMIMETypeForExtension(name.Substring(index + 1));
+      return MIMETypeRegistry::GetMIMETypeForExtension(extension);
     }
   }
-  return type;
+  return String();
 }
 
 static scoped_refptr<BlobDataHandle> CreateBlobDataHandleForFileWithType(
@@ -191,8 +189,8 @@ File* File::CreateForFileSystemFile(ExecutionContext& context,
                                     const KURL& url,
                                     const FileMetadata& metadata,
                                     UserVisibility user_visibility) {
-  String content_type = GetContentTypeFromFileName(
-      url.GetPath().ToString(), File::kWellKnownContentTypes);
+  String content_type =
+      GetContentTypeFromFileName(url.GetPath(), File::kWellKnownContentTypes);
   // RegisterBlob doesn't take nullable strings.
   if (content_type.IsNull()) {
     content_type = g_empty_string;
@@ -213,7 +211,7 @@ File::File(ExecutionContext* context,
       has_backing_file_(true),
       user_visibility_(user_visibility),
       path_(path),
-      name_(FilePathToWebString(WebStringToFilePath(path).BaseName())) {}
+      name_(FilePathToString(StringToFilePath(path).BaseName())) {}
 
 File::File(ExecutionContext* context,
            const String& path,
@@ -280,8 +278,8 @@ File::File(const KURL& file_system_url,
     : Blob(std::move(blob_data_handle)),
       has_backing_file_(false),
       user_visibility_(user_visibility),
-      name_(DecodeURLEscapeSequences(file_system_url.LastPathComponent(),
-                                     DecodeURLMode::kUTF8OrIsomorphic)),
+      name_(DecodeUrlEscapeSequences(file_system_url.LastPathComponent(),
+                                     DecodeUrlMode::kUtf8OrIsomorphic)),
       file_system_url_(file_system_url),
       snapshot_size_(metadata.length),
       snapshot_modification_time_(metadata.modification_time) {

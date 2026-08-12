@@ -304,7 +304,20 @@ bssl::CertificateTrust TrustStoreNSS::GetTrust(
     return bssl::CertificateTrust::ForUnspecified();
   }
 
+  // CERT_FindCertByDERCert may have returned a different cert that has the same
+  // issuer+serial. A trust record should only be used if it's really the same
+  // cert.
+  if (x509_util::CERTCertificateAsSpan(nss_cert.get()) != cert->der_cert()) {
+    DVLOG(1) << "skipped non-identical cert returned by CERT_FindCertByDERCert";
+    return bssl::CertificateTrust::ForUnspecified();
+  }
+
   return GetTrustIgnoringSystemTrust(nss_cert.get());
+}
+
+std::shared_ptr<const bssl::MTCAnchor> TrustStoreNSS::GetTrustedMTCIssuerOf(
+    const bssl::ParsedCertificate* cert) {
+  return nullptr;
 }
 
 bssl::CertificateTrust TrustStoreNSS::GetTrustIgnoringSystemTrust(

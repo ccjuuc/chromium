@@ -20,9 +20,8 @@ bool IsInContentFullscreen(
     const BrowserWindowInterface* browser_window_interface) {
   // Const cast because ExclusiveAccessManager and its accessors are not
   // const-correct.
-  auto* const manager =
-      const_cast<BrowserWindowInterface*>(browser_window_interface)
-          ->GetExclusiveAccessManager();
+  auto* const manager = ExclusiveAccessManager::From(
+      const_cast<BrowserWindowInterface*>(browser_window_interface));
   if (!manager) {
     return false;
   }
@@ -33,10 +32,11 @@ bool IsInContentFullscreen(
 
 bool IsAlwaysShowToolbarEnabled(const Browser* browser) {
   if (web_app::AppBrowserController::IsWebApp(browser)) {
-    const web_app::AppBrowserController* controller = browser->app_controller();
+    const web_app::AppBrowserController* controller =
+        web_app::AppBrowserController::From(browser);
     return controller->AlwaysShowToolbarInFullscreen();
   }
-  return browser->profile()->GetPrefs()->GetBoolean(
+  return browser->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kShowFullscreenToolbar);
 }
 

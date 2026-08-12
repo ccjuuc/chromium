@@ -12,9 +12,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
 #include "components/ntp_tiles/popular_sites.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "url/gurl.h"
 
 namespace network {
@@ -57,7 +55,7 @@ class PopularSitesImpl : public PopularSites {
   std::string GetDirectoryToFetch() override;
   std::string GetCountryToFetch() override;
   std::string GetVersionToFetch() override;
-  const base::Value::List& GetCachedJson() override;
+  const base::ListValue& GetCachedJson() override;
 
   // Register preferences used by this class.
   static void RegisterProfilePrefs(
@@ -71,7 +69,6 @@ class PopularSitesImpl : public PopularSites {
   // Called once SimpleURLLoader completes the network request.
   void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
-  void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
   void OnDownloadFailed();
 
   // Parameters set from constructor.
@@ -88,8 +85,6 @@ class PopularSitesImpl : public PopularSites {
   std::map<SectionType, SitesVector> sections_;
   GURL pending_url_;
   int version_in_pending_url_;
-
-  base::WeakPtrFactory<PopularSitesImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace ntp_tiles

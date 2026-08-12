@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "components/signin/public/base/gaia_id_hash.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -22,10 +22,7 @@ class SyncUserSettingsMock : public SyncUserSettings {
   ~SyncUserSettingsMock() override;
   MOCK_METHOD(bool, IsInitialSyncFeatureSetupComplete, (), (const override));
 #if !BUILDFLAG(IS_CHROMEOS)
-  MOCK_METHOD(void,
-              SetInitialSyncFeatureSetupComplete,
-              (SyncFirstSetupCompleteSource),
-              (override));
+  MOCK_METHOD(void, SetInitialSyncFeatureSetupComplete, (), (override));
 #endif  // !BUILDFLAG(IS_CHROMEOS)
   MOCK_METHOD(bool, IsSyncEverythingEnabled, (), (const override));
   MOCK_METHOD(UserSelectableTypeSet, GetSelectedTypes, (), (const override));
@@ -95,6 +92,7 @@ class SyncUserSettingsMock : public SyncUserSettings {
               (),
               (override));
   MOCK_METHOD(bool, IsTrustedVaultKeyRequired, (), (const override));
+  MOCK_METHOD(bool, IsKeystoreKeyRequiredForTesting, (), (const override));
   MOCK_METHOD(bool,
               IsTrustedVaultKeyRequiredForPreferredDataTypes,
               (),

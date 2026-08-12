@@ -61,7 +61,7 @@ std::unique_ptr<KeyedService> CreateNiceMockSyncService(ProfileIOS* profile) {
 PassphraseTableViewControllerTest::PassphraseTableViewControllerTest()
     : LegacyChromeTableViewControllerTest(),
       fake_sync_service_(nullptr),
-      default_auth_error_(GoogleServiceAuthError::NONE) {}
+      default_auth_error_(GoogleServiceAuthError::AuthErrorNone()) {}
 
 PassphraseTableViewControllerTest::~PassphraseTableViewControllerTest() {}
 
@@ -75,7 +75,7 @@ void PassphraseTableViewControllerTest::SetUp() {
   TestProfileIOS::Builder builder;
   builder.AddTestingFactory(
       AuthenticationServiceFactory::GetInstance(),
-      AuthenticationServiceFactory::GetFactoryWithDelegate(
+      AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
           std::make_unique<FakeAuthenticationServiceDelegate>()));
   builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                             base::BindRepeating(&CreateNiceMockSyncService));
@@ -84,7 +84,7 @@ void PassphraseTableViewControllerTest::SetUp() {
   profile_ = std::move(builder).Build();
   app_state_ = [[AppState alloc] initWithStartupInformation:nil];
   profile_state_ = [[ProfileState alloc] initWithAppState:app_state_];
-  scene_state_ = [[SceneState alloc] initWithAppState:app_state_];
+  scene_state_ = [[SceneState alloc] init];
   scene_state_.profileState = profile_state_;
   browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
 
@@ -108,7 +108,7 @@ void PassphraseTableViewControllerTest::SetUp() {
   AuthenticationService* auth_service =
       AuthenticationServiceFactory::GetForProfile(profile_.get());
   auth_service->SignIn(account_manager_service->GetDefaultIdentity(),
-                       signin_metrics::AccessPoint::kUnknown);
+                       signin_metrics::AccessPoint::kStartPage);
 }
 
 void PassphraseTableViewControllerTest::TearDown() {

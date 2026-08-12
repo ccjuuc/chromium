@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/rand_util.h"
@@ -36,7 +37,7 @@ std::string RandASCIIString(size_t length) {
   const int kMax = static_cast<int>('~');
   result.reserve(length);
   for (size_t i = 0; i < length; ++i) {
-    result.push_back(static_cast<char>(base::RandInt(kMin, kMax)));
+    result.push_back(static_cast<char>(base::RandIntInclusive(kMin, kMax)));
   }
   return result;
 }
@@ -167,11 +168,12 @@ SyncerError Commit::PostAndProcessResponse(
                                    request_types, message_);
   cycle->SendProtocolEvent(request_event);
 
-  TRACE_EVENT_BEGIN0("sync", "PostCommit");
   sync_pb::ClientToServerResponse response;
-  const SyncerError post_result = SyncerProtoUtil::PostClientToServerMessage(
-      message_, &response, cycle, nullptr);
-  TRACE_EVENT_END0("sync", "PostCommit");
+  const SyncerError post_result = [&]() {
+    TRACE_EVENT("sync", "PostCommit");
+    return SyncerProtoUtil::PostClientToServerMessage(message_, &response,
+                                                      cycle, nullptr);
+  }();
 
   // TODO(rlarocque): Use result that includes errors captured later?
   CommitResponseEvent response_event(base::Time::Now(), post_result, response);
@@ -201,6 +203,9 @@ SyncerError Commit::PostAndProcessResponse(
     return syncer_error;
   }
 
+  base::UmaHistogramCounts100("Sync.CommitRequestEntityCount",
+                              message_.commit().entries_size());
+
   if (cycle->context()->debug_info_getter()) {
     // Clear debug info now that we have successfully sent it to the server.
     DVLOG(1) << "Clearing client debug info.";
@@ -210,7 +215,7 @@ SyncerError Commit::PostAndProcessResponse(
   // Let the contributors process the responses to each of their requests.
   SyncerError processing_result = SyncerError::Success();
   for (const auto& [type, contributions] : contributions_) {
-    const char* data_type_str = DataTypeToDebugString(type);
+    std::string_view data_type_str = DataTypeToDebugString(type);
     TRACE_EVENT1("sync", "ProcessCommitResponse", "type", data_type_str);
     SyncerError type_result =
         contributions->ProcessCommitResponse(response, status);

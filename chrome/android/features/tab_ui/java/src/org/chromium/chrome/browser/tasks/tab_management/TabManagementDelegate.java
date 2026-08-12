@@ -11,7 +11,8 @@ import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 
 import org.chromium.base.supplier.LazyOneshotSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -33,7 +34,7 @@ import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tasks.tab_management.archived_tabs_auto_delete_promo.ArchivedTabsAutoDeletePromoManager;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -82,7 +83,7 @@ public interface TabManagementDelegate {
             ViewGroup parentView,
             BrowserControlsStateProvider browserControlsStateProvider,
             ScrimManager scrimManager,
-            ObservableSupplier<Boolean> omniboxFocusStateSupplier,
+            NonNullObservableSupplier<Boolean> omniboxFocusStateSupplier,
             BottomSheetController bottomSheetController,
             DataSharingTabManager dataSharingTabManager,
             TabModelSelector tabModelSelector,
@@ -92,8 +93,8 @@ public interface TabManagementDelegate {
             ModalDialogManager modalDialogManager,
             ThemeColorProvider themeColorProvider,
             UndoBarThrottle undoBarThrottle,
-            ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
-            Supplier<ShareDelegate> shareDelegateSupplier);
+            MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            Supplier<@Nullable ShareDelegate> shareDelegateSupplier);
 
     /**
      * Create a {@link TabSwitcher} and {@link Pane} for the Hub.
@@ -158,21 +159,22 @@ public interface TabManagementDelegate {
             boolean isIncognito,
             DoubleConsumer onToolbarAlphaChange,
             BackPressManager backPressManager,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             @Nullable DesktopWindowStateManager desktopWindowStateManager,
-            ObservableSupplier<TabModelDotInfo> tabModelNotificationDotSupplier,
-            ObservableSupplier<CompositorViewHolder> compositorViewHolderSupplier,
-            ObservableSupplier<ShareDelegate> shareDelegateSupplier,
-            ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            MonotonicObservableSupplier<TabModelDotInfo> tabModelNotificationDotSupplier,
+            MonotonicObservableSupplier<CompositorViewHolder> compositorViewHolderSupplier,
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
+            MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
             TabGroupCreationUiDelegate tabGroupCreationUiDelegate,
             UndoBarThrottle undoBarThrottle,
             LazyOneshotSupplier<HubManager> hubManagerSupplier,
             @Nullable ArchivedTabsAutoDeletePromoManager archivedTabsAutoDeletePromoManager,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
             Supplier<LayoutStateProvider> layoutStateProviderSupplier,
-            @Nullable ObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
+            NonNullObservableSupplier<Boolean> xrSpaceModeObservableSupplier,
             @Nullable MultiInstanceManager multiInstanceManager,
-            @Nullable DragAndDropDelegate dragDropDelegate);
+            @Nullable DragAndDropDelegate dragDropDelegate,
+            TabSwitcherBackPressHandlerManager dragHandlerManager);
 
     /**
      * Create a {@link TabGroupsPane} for the Hub.
@@ -196,8 +198,8 @@ public interface TabManagementDelegate {
             OneshotSupplier<ProfileProvider> profileProviderSupplier,
             LazyOneshotSupplier<HubManager> hubManagerSupplier,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
-            Supplier<ModalDialogManager> modalDialogManagerSupplier,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             DataSharingTabManager dataSharingTabManager);
 
     /**
@@ -206,11 +208,11 @@ public interface TabManagementDelegate {
      * @param context The {@link Context} for this UI flow.
      * @param modalDialogManager The modal dialog manager for the activity.
      * @param hubManagerSupplier Supplier ultimately used to get the pane manager to switch panes.
-     * @param tabGroupModelFilterSupplier Supplies the current tab group model filter.
+     * @param tabModelSupplier Supplies the current tab model.
      */
     TabGroupCreationUiDelegate createTabGroupCreationUiFlow(
             Context context,
             ModalDialogManager modalDialogManager,
             OneshotSupplier<HubManager> hubManagerSupplier,
-            Supplier<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier);
+            Supplier<@Nullable TabModel> tabModelSupplier);
 }

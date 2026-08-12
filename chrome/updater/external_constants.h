@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/values.h"
 
 class GURL;
@@ -81,7 +80,7 @@ class ExternalConstants : public base::RefCountedThreadSafe<ExternalConstants> {
   GetEventLoggingPermissionProvider() const = 0;
 
   // Policies for the `PolicyManager` surfaced by external constants.
-  virtual base::Value::Dict DictPolicies() const = 0;
+  virtual base::DictValue DictPolicies() const = 0;
 
   // Overrides the overinstall timeout.
   virtual base::TimeDelta OverinstallTimeout() const = 0;

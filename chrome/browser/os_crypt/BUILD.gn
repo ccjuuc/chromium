@@ -16,7 +16,7 @@ source_set("os_crypt") {
     "//chrome/install_static:install_static_util",
     "//components/os_crypt/async/browser:key_provider_interface",
     "//components/prefs",
-    "//content/public/browser",
+    "//crypto",
   ]
 
   public_deps = [ ":app_bound_api" ]
@@ -51,6 +51,8 @@ source_set("browser_tests") {
     ":os_crypt",
     ":test_support",
     "//base",
+    "//chrome/browser:browser_features",
+    "//chrome/browser/win:isolated_browser_support",
     "//chrome/elevation_service:public_headers",
     "//chrome/test:test_support",
     "//chrome/windows_services/service_program/test_support",
@@ -95,9 +97,6 @@ source_set("test_support") {
     "//chrome/elevation_service:public_headers",
     "//chrome/install_static:install_static_util",
     "//chrome/install_static/test:test_support",
-    "//chrome/installer/util:constants",
-    "//chrome/installer/util:work_item",
-    "//chrome/windows_services/service_program/test_support",
   ]
 }
 

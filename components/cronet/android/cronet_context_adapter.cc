@@ -25,7 +25,7 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
@@ -100,9 +100,9 @@ void CronetContextAdapter::InitRequestContextOnInitThread(
 
 void CronetContextAdapter::ConfigureNetworkQualityEstimatorForTesting(
     JNIEnv* env,
-    jboolean use_local_host_requests,
-    jboolean use_smaller_responses,
-    jboolean disable_offline_check) {
+    bool use_local_host_requests,
+    bool use_smaller_responses,
+    bool disable_offline_check) {
   context_->ConfigureNetworkQualityEstimatorForTesting(
       use_local_host_requests == JNI_TRUE, use_smaller_responses == JNI_TRUE,
       disable_offline_check == JNI_TRUE);
@@ -219,7 +219,7 @@ bool CronetContextAdapter::IsOnNetworkThread() const {
 
 bool CronetContextAdapter::StartNetLogToFile(JNIEnv* env,
                                              const JavaRef<jstring>& jfile_name,
-                                             jboolean jlog_all) {
+                                             bool jlog_all) {
   std::string file_name(
       base::android::ConvertJavaStringToUTF8(env, jfile_name));
   return context_->StartNetLogToFile(file_name, jlog_all == JNI_TRUE);
@@ -227,8 +227,8 @@ bool CronetContextAdapter::StartNetLogToFile(JNIEnv* env,
 
 void CronetContextAdapter::StartNetLogToDisk(JNIEnv* env,
                                              const JavaRef<jstring>& jdir_name,
-                                             jboolean jlog_all,
-                                             jint jmax_size) {
+                                             bool jlog_all,
+                                             int32_t jmax_size) {
   std::string dir_name(base::android::ConvertJavaStringToUTF8(env, jdir_name));
   context_->StartNetLogToDisk(dir_name, jlog_all == JNI_TRUE, jmax_size);
 }
@@ -246,7 +246,7 @@ int CronetContextAdapter::default_load_flags() const {
 }
 
 // Create a URLRequestContextConfig from the given parameters.
-static jlong JNI_CronetUrlRequestContext_CreateRequestContextConfig(
+static int64_t JNI_CronetUrlRequestContext_CreateRequestContextConfig(
     JNIEnv* env,
     const JavaRef<jbyteArray>& javaSerializedProto) {
   const int serializedProtoLength =
@@ -284,16 +284,16 @@ static jlong JNI_CronetUrlRequestContext_CreateRequestContextConfig(
           configOptions.has_proxy_options()
               ? configOptions.proxy_options()
               : std::optional<cronet::proto::ProxyOptions>());
-  return reinterpret_cast<jlong>(url_request_context_config.release());
+  return reinterpret_cast<int64_t>(url_request_context_config.release());
 }
 
 // Add a QUIC hint to a URLRequestContextConfig.
 static void JNI_CronetUrlRequestContext_AddQuicHint(
     JNIEnv* env,
-    jlong jurl_request_context_config,
+    int64_t jurl_request_context_config,
     const JavaRef<jstring>& jhost,
-    jint jport,
-    jint jalternate_port) {
+    int32_t jport,
+    int32_t jalternate_port) {
   URLRequestContextConfig* config =
       reinterpret_cast<URLRequestContextConfig*>(jurl_request_context_config);
   config->quic_hints.push_back(
@@ -304,17 +304,17 @@ static void JNI_CronetUrlRequestContext_AddQuicHint(
 
 // Add a public key pin to URLRequestContextConfig.
 // |jhost| is the host to apply the pin to.
-// |jhashes| is an array of jbyte[32] representing SHA256 key hashes.
+// |jhashes| is an array of int8_t[32] representing SHA256 key hashes.
 // |jinclude_subdomains| indicates if pin should be applied to subdomains.
 // |jexpiration_time| is the time that the pin expires, in milliseconds since
 // Jan. 1, 1970, midnight GMT.
 static void JNI_CronetUrlRequestContext_AddPkp(
     JNIEnv* env,
-    jlong jurl_request_context_config,
+    int64_t jurl_request_context_config,
     const JavaRef<jstring>& jhost,
-    const JavaRef<jobjectArray>& jhashes,
-    jboolean jinclude_subdomains,
-    jlong jexpiration_time) {
+    const JavaRef<JArray<JArray<int8_t>>>& jhashes,
+    bool jinclude_subdomains,
+    int64_t jexpiration_time) {
   URLRequestContextConfig* config =
       reinterpret_cast<URLRequestContextConfig*>(jurl_request_context_config);
   std::unique_ptr<URLRequestContextConfig::Pkp> pkp(
@@ -322,35 +322,40 @@ static void JNI_CronetUrlRequestContext_AddPkp(
           base::android::ConvertJavaStringToUTF8(env, jhost),
           jinclude_subdomains,
           base::Time::UnixEpoch() + base::Milliseconds(jexpiration_time)));
-  for (auto bytes_array : jhashes.ReadElements<jbyteArray>()) {
+  for (auto bytes_array : jhashes.CreateView(env)) {
     static_assert(std::is_trivially_copyable<net::SHA256HashValue>::value,
                   "net::SHA256HashValue is not trivially copyable");
     static_assert(sizeof(net::SHA256HashValue) * CHAR_BIT == 256,
                   "net::SHA256HashValue contains overhead");
-    if (env->GetArrayLength(bytes_array.obj()) !=
-        sizeof(net::SHA256HashValue)) {
+    auto bytes_array_view = bytes_array.CreateView(env);
+    if (bytes_array_view.length() != sizeof(net::SHA256HashValue)) {
       LOG(ERROR) << "Unable to add public key hash value.";
       continue;
     }
-    jbyte* bytes = env->GetByteArrayElements(bytes_array.obj(), nullptr);
-    net::HashValue hash(*reinterpret_cast<net::SHA256HashValue*>(bytes));
+    base::span<const uint8_t> bytes =
+        // SAFETY: the JArray<int8_t> that bytes_array_view is a view of
+        // guarantees that there are bytes_array_view.length() bytes of data
+        // present at bytes_array_view.data().
+        UNSAFE_BUFFERS(base::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(bytes_array_view.data()),
+            base::checked_cast<size_t>(bytes_array_view.length())));
+    net::HashValue hash(net::HashValueTag::HASH_VALUE_SHA256, bytes);
     pkp->pin_hashes.push_back(hash);
-    env->ReleaseByteArrayElements(bytes_array.obj(), bytes, JNI_ABORT);
   }
   config->pkp_list.push_back(std::move(pkp));
 }
 
 // Creates RequestContextAdater if config is valid URLRequestContextConfig,
 // returns 0 otherwise.
-static jlong JNI_CronetUrlRequestContext_CreateRequestContextAdapter(
+static int64_t JNI_CronetUrlRequestContext_CreateRequestContextAdapter(
     JNIEnv* env,
-    jlong jconfig) {
+    int64_t jconfig) {
   std::unique_ptr<URLRequestContextConfig> context_config(
       reinterpret_cast<URLRequestContextConfig*>(jconfig));
 
   CronetContextAdapter* context_adapter =
       new CronetContextAdapter(std::move(context_config));
-  return reinterpret_cast<jlong>(context_adapter);
+  return reinterpret_cast<int64_t>(context_adapter);
 }
 
 }  // namespace cronet

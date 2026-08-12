@@ -195,11 +195,11 @@ class ShelfGuestSessionBrowserTest : public InProcessBrowserTest {
 };
 
 // Tests that in guest session, shelf alignment could be initialized to bottom
-// aligned, instead of bottom locked (crbug.com/699661).
+// aligned, instead of bottom locked (crbug.com/40509871).
 IN_PROC_BROWSER_TEST_F(ShelfGuestSessionBrowserTest, ShelfAlignment) {
   // Check the alignment pref for the primary display.
   ShelfAlignment alignment =
-      GetShelfAlignmentPref(browser()->profile()->GetPrefs(),
+      GetShelfAlignmentPref(browser()->GetProfile()->GetPrefs(),
                             display::Screen::Get()->GetPrimaryDisplay().id());
   EXPECT_EQ(ShelfAlignment::kBottom, alignment);
 

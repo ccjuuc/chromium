@@ -12,11 +12,12 @@
 #include <optional>
 #include <string>
 #include <typeinfo>
+#include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
@@ -210,11 +211,17 @@ int UninstallImpl(UpdaterScope scope, bool uninstall_all) {
     if (std::optional<base::FilePath> log_file = GetLogFilePath(scope);
         log_file &&
         base::PathService::Get(IsSystemInstall(scope)
-                                   ? static_cast<int>(base::DIR_SYSTEM_TEMP)
-                                   : static_cast<int>(base::DIR_TEMP),
+                                   ? std::to_underlying(base::DIR_SYSTEM_TEMP)
+                                   : std::to_underlying(base::DIR_TEMP),
                                &temp_dir)) {
       base::CopyFile(*log_file, temp_dir.Append(log_file->BaseName()));
     }
+  }
+
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          kSkipUninstallScriptSwitch)) {
+    VLOG(1) << "Skipping uninstall script as requested.";
+    return kErrorOk;
   }
 
   return RunUninstallScript(scope, uninstall_all);

@@ -4,7 +4,15 @@
 
 #include "chrome/updater/event_history.h"
 
+#include <concepts>
+#include <cstddef>
+#include <functional>
 #include <memory>
+#include <ostream>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -15,6 +23,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/updater/constants.h"
+#include "chrome/updater/mojom/updater_service.mojom.h"
 #include "chrome/updater/update_service.h"
 #include "chrome/updater/updater_scope.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -41,21 +50,89 @@ MATCHER(IsTimeValue, "") {
 using ExpectedFields =
     std::vector<std::pair<std::string, testing::Matcher<const base::Value&>>>;
 
-MATCHER_P(DictHasFields, expected_fields, "") {
-  const base::Value::Dict& dict = arg;
-  if (dict.size() != expected_fields.size()) {
-    *result_listener << "has " << dict.size() << " fields, but "
-                     << expected_fields.size() << " were expected.";
-    return false;
-  }
-  for (const auto& [key, value_matcher] : expected_fields) {
-    const base::Value* value = dict.Find(key);
-    if (!value) {
-      *result_listener << "is missing field '" << key << "'";
+class DictHasFieldsMatcher {
+ public:
+  explicit DictHasFieldsMatcher(ExpectedFields expected_fields)
+      : expected_fields_(std::move(expected_fields)) {}
+
+  template <typename T>
+    requires(std::same_as<std::remove_cvref_t<T>, base::Value> ||
+             std::same_as<std::remove_cvref_t<T>, base::DictValue>)
+  bool MatchAndExplain(const T& arg,
+                       testing::MatchResultListener* result_listener) const {
+    const base::DictValue* dict = GetIfDict(arg);
+
+    if (!dict) {
+      *result_listener << "is not a dictionary";
       return false;
     }
-    if (!testing::ExplainMatchResult(value_matcher, *value, result_listener)) {
-      *result_listener << " for field '" << key << "'";
+
+    if (dict->size() != expected_fields_.size()) {
+      *result_listener << "has " << dict->size() << " fields, but "
+                       << expected_fields_.size() << " were expected";
+      return false;
+    }
+
+    for (const auto& [key, value_matcher] : expected_fields_) {
+      const base::Value* value = dict->Find(key);
+      if (!value) {
+        *result_listener << "is missing field '" << key << "'";
+        return false;
+      }
+
+      if (!testing::ExplainMatchResult(value_matcher, *value,
+                                       result_listener)) {
+        *result_listener << " (in field '" << key << "')";
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void DescribeTo(std::ostream* os) const {
+    *os << "is a dictionary with " << expected_fields_.size()
+        << " specific fields";
+  }
+
+  void DescribeNegationTo(std::ostream* os) const {
+    *os << "is not a dictionary or has mismatched fields";
+  }
+
+ private:
+  // Overloads to extract the Dict pointer regardless of input type.
+  static const base::DictValue* GetIfDict(const base::Value& v) {
+    return v.GetIfDict();
+  }
+  static const base::DictValue* GetIfDict(const base::DictValue& d) {
+    return &d;
+  }
+
+  ExpectedFields expected_fields_;
+};
+
+inline testing::PolymorphicMatcher<DictHasFieldsMatcher> DictHasFields(
+    ExpectedFields expected_fields) {
+  return testing::MakePolymorphicMatcher(
+      DictHasFieldsMatcher(std::move(expected_fields)));
+}
+
+using ExpectedListElements = std::vector<testing::Matcher<const base::Value&>>;
+
+MATCHER_P(ListValueElementsAre, expected_list_elements, "") {
+  const base::ListValue* list = arg.GetIfList();
+  if (!list) {
+    *result_listener << "is not a list, but a list was expected";
+    return false;
+  }
+  if (list->size() != expected_list_elements.size()) {
+    *result_listener << "has size " << list->size() << " (expected "
+                     << expected_list_elements.size() << ")";
+    return false;
+  }
+  for (size_t i = 0; i < list->size(); ++i) {
+    if (!testing::ExplainMatchResult(expected_list_elements[i], (*list)[i],
+                                     result_listener)) {
+      *result_listener << " for item at index " << i;
       return false;
     }
   }
@@ -121,11 +198,8 @@ TEST_F(EventHistoryTest, Write) {
   ASSERT_TRUE(json2);
   ASSERT_TRUE(json2->is_dict());
 
-  base::Value::List expected_errors =
-      base::Value::List().Append(base::Value::Dict()
-                                     .Set("category", 1)
-                                     .Set("code", 2)
-                                     .Set("extracode1", 3));
+  base::ListValue expected_errors = base::ListValue().Append(
+      base::DictValue().Set("category", 1).Set("code", 2).Set("extracode1", 3));
   EXPECT_THAT(json1->GetDict(),
               DictHasFields(ExpectedFields({
                   {"eventType", ValueIs("INSTALL")},
@@ -176,18 +250,15 @@ TEST_F(EventHistoryTest, Rotate) {
 }
 
 TEST_F(EventHistoryTest, InstallStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       InstallStartEvent()
           .SetEventId("test-event-id")
           .SetAppId("test-app-id")
           .AddError({.category = 1, .code = 2, .extracode1 = 3})
           .Build();
 
-  base::Value::List expected_errors =
-      base::Value::List().Append(base::Value::Dict()
-                                     .Set("category", 1)
-                                     .Set("code", 2)
-                                     .Set("extracode1", 3));
+  base::ListValue expected_errors = base::ListValue().Append(
+      base::DictValue().Set("category", 1).Set("code", 2).Set("extracode1", 3));
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("INSTALL")},
@@ -202,10 +273,10 @@ TEST_F(EventHistoryTest, InstallStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, InstallEndEventToDict) {
-  std::optional<base::Value::Dict> event = InstallEndEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetVersion("1.2.3.4")
-                                               .Build();
+  std::optional<base::DictValue> event = InstallEndEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetVersion("1.2.3.4")
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("INSTALL")},
@@ -219,7 +290,7 @@ TEST_F(EventHistoryTest, InstallEndEventToDict) {
 }
 
 TEST_F(EventHistoryTest, InstallEndEventNoVersionToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       InstallEndEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -238,7 +309,7 @@ TEST_F(EventHistoryTest, InstallStartEventBuilderReturnsNulloptOnMissingAppId) {
 }
 
 TEST_F(EventHistoryTest, UninstallStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UninstallStartEvent()
           .SetEventId("test-event-id")
           .SetAppId("test-app-id")
@@ -247,11 +318,8 @@ TEST_F(EventHistoryTest, UninstallStartEventToDict) {
           .AddError({.category = 1, .code = 2, .extracode1 = 3})
           .Build();
 
-  base::Value::List expected_errors =
-      base::Value::List().Append(base::Value::Dict()
-                                     .Set("category", 1)
-                                     .Set("code", 2)
-                                     .Set("extracode1", 3));
+  base::ListValue expected_errors = base::ListValue().Append(
+      base::DictValue().Set("category", 1).Set("code", 2).Set("extracode1", 3));
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("UNINSTALL")},
@@ -268,7 +336,7 @@ TEST_F(EventHistoryTest, UninstallStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, UninstallEndEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UninstallEndEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -299,7 +367,7 @@ TEST_F(EventHistoryTest,
 }
 
 TEST_F(EventHistoryTest, QualifyStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       QualifyStartEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -313,7 +381,7 @@ TEST_F(EventHistoryTest, QualifyStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, QualifyEndEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       QualifyEndEvent().SetEventId("test-event-id").SetQualified(true).Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -328,7 +396,7 @@ TEST_F(EventHistoryTest, QualifyEndEventToDict) {
 }
 
 TEST_F(EventHistoryTest, ActivateStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       ActivateStartEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -342,7 +410,7 @@ TEST_F(EventHistoryTest, ActivateStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, ActivateEndEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       ActivateEndEvent().SetEventId("test-event-id").SetActivated(true).Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -370,22 +438,22 @@ TEST_F(EventHistoryTest, PersistedDataEventToDict) {
   app2.app_id = "app2";
   app2.version = "2.0";
   app2.brand_code = "brand2";
-  std::optional<base::Value::Dict> event = PersistedDataEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetEulaRequired(true)
-                                               .SetLastChecked(last_checked)
-                                               .SetLastStarted(last_started)
-                                               .AddRegisteredApp(app1)
-                                               .AddRegisteredApp(app2)
-                                               .Build();
+  std::optional<base::DictValue> event = PersistedDataEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetEulaRequired(true)
+                                             .SetLastChecked(last_checked)
+                                             .SetLastStarted(last_started)
+                                             .AddRegisteredApp(app1)
+                                             .AddRegisteredApp(app2)
+                                             .Build();
 
-  base::Value::List expected_apps;
-  expected_apps.Append(base::Value::Dict()
+  base::ListValue expected_apps;
+  expected_apps.Append(base::DictValue()
                            .Set("appId", "app1")
                            .Set("version", "1.0")
                            .Set("cohort", "cohort1")
                            .Set("brandCode", "brand1"));
-  expected_apps.Append(base::Value::Dict()
+  expected_apps.Append(base::DictValue()
                            .Set("appId", "app2")
                            .Set("version", "2.0")
                            .Set("brandCode", "brand2"));
@@ -406,10 +474,10 @@ TEST_F(EventHistoryTest, PersistedDataEventToDict) {
 }
 
 TEST_F(EventHistoryTest, PostRequestStartEventToDict) {
-  std::optional<base::Value::Dict> event = PostRequestStartEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetRequest("test-request")
-                                               .Build();
+  std::optional<base::DictValue> event = PostRequestStartEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetRequest("test-request")
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("POST_REQUEST")},
@@ -423,10 +491,10 @@ TEST_F(EventHistoryTest, PostRequestStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, PostRequestEndEventToDict) {
-  std::optional<base::Value::Dict> event = PostRequestEndEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetResponse("test-response")
-                                               .Build();
+  std::optional<base::DictValue> event = PostRequestEndEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetResponse("test-response")
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("POST_REQUEST")},
@@ -446,7 +514,7 @@ TEST_F(EventHistoryTest,
 }
 
 TEST_F(EventHistoryTest, LoadPolicyStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       LoadPolicyStartEvent().SetEventId("test-event-id").Build();
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("LOAD_POLICY")},
@@ -459,12 +527,12 @@ TEST_F(EventHistoryTest, LoadPolicyStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, LoadPolicyEndEventToDict) {
-  const base::Value::Dict fake_policy_set =
-      base::Value::Dict().Set("stub_policy_set", true);
-  std::optional<base::Value::Dict> event = LoadPolicyEndEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetPolicySet(fake_policy_set)
-                                               .Build();
+  const base::DictValue fake_policy_set =
+      base::DictValue().Set("stub_policy_set", true);
+  std::optional<base::DictValue> event = LoadPolicyEndEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetPolicySet(fake_policy_set)
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("LOAD_POLICY")},
@@ -484,7 +552,7 @@ TEST_F(EventHistoryTest,
 }
 
 TEST_F(EventHistoryTest, UpdateStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UpdateStartEvent()
           .SetEventId("test-event-id")
           .SetAppId("test-app-id")
@@ -504,7 +572,7 @@ TEST_F(EventHistoryTest, UpdateStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, UpdateStartEventNoOptionalFieldsToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UpdateStartEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -518,27 +586,41 @@ TEST_F(EventHistoryTest, UpdateStartEventNoOptionalFieldsToDict) {
 }
 
 TEST_F(EventHistoryTest, UpdateEndEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UpdateEndEvent()
           .SetEventId("test-event-id")
-          .SetOutcome(UpdateService::UpdateState::State::kUpdateError)
           .SetNextVersion("1.2.3.4")
+          .AddUpdateState(UpdateService::UpdateState::State::kNotStarted)
+          .AddUpdateState(UpdateService::UpdateState::State::kUpdateError)
+          .SetResult(mojom::UpdateService_Result::kSuccess)
           .Build();
+
   ASSERT_TRUE(event);
-  EXPECT_THAT(*event, DictHasFields(ExpectedFields({
-                          {"eventType", ValueIs("UPDATE")},
-                          {"bound", ValueIs("END")},
-                          {"eventId", ValueIs("test-event-id")},
-                          {"outcome", ValueIs("UPDATE_ERROR")},
-                          {"nextVersion", ValueIs("1.2.3.4")},
-                          {"deviceUptime", IsPositiveTimeDeltaValue()},
-                          {"pid", ValueIs(GetCurrentPid())},
-                          {"processToken", ValueIs(GetProcessToken())},
-                      })));
+  EXPECT_THAT(*event,
+              DictHasFields(ExpectedFields({
+                  {"eventType", ValueIs("UPDATE")},
+                  {"bound", ValueIs("END")},
+                  {"eventId", ValueIs("test-event-id")},
+                  {"nextVersion", ValueIs("1.2.3.4")},
+                  {"updateStates",
+                   ListValueElementsAre(ExpectedListElements(
+                       {DictHasFields(ExpectedFields({
+                            {"deviceUptime", IsPositiveTimeDeltaValue()},
+                            {"state", ValueIs("NOT_STARTED")},
+                        })),
+                        DictHasFields(ExpectedFields{
+                            {"deviceUptime", IsPositiveTimeDeltaValue()},
+                            {"state", ValueIs("UPDATE_ERROR")},
+                        })}))},
+                  {"result", ValueIs("SUCCESS")},
+                  {"deviceUptime", IsPositiveTimeDeltaValue()},
+                  {"pid", ValueIs(GetCurrentPid())},
+                  {"processToken", ValueIs(GetProcessToken())},
+              })));
 }
 
 TEST_F(EventHistoryTest, UpdateEndEventNoOptionalFieldsToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UpdateEndEvent().SetEventId("test-event-id").Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
@@ -554,7 +636,7 @@ TEST_F(EventHistoryTest, UpdateEndEventNoOptionalFieldsToDict) {
 TEST_F(EventHistoryTest, UpdaterProcessStartEventToDict) {
   base::Time timestamp;
   ASSERT_TRUE(base::Time::FromString("1 Jan 2024 12:00:00 GMT", &timestamp));
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       UpdaterProcessStartEvent()
           .SetEventId("test-event-id")
           .SetCommandLine("test-command-line")
@@ -588,10 +670,10 @@ TEST_F(EventHistoryTest, UpdaterProcessStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, UpdaterProcessEndEventToDict) {
-  std::optional<base::Value::Dict> event = UpdaterProcessEndEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetExitCode(1)
-                                               .Build();
+  std::optional<base::DictValue> event = UpdaterProcessEndEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetExitCode(1)
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("UPDATER_PROCESS")},
@@ -605,7 +687,7 @@ TEST_F(EventHistoryTest, UpdaterProcessEndEventToDict) {
 }
 
 TEST_F(EventHistoryTest, AppCommandStartEventToDict) {
-  std::optional<base::Value::Dict> event =
+  std::optional<base::DictValue> event =
       AppCommandStartEvent()
           .SetEventId("test-event-id")
           .SetAppId("test-app-id")
@@ -625,11 +707,11 @@ TEST_F(EventHistoryTest, AppCommandStartEventToDict) {
 }
 
 TEST_F(EventHistoryTest, AppCommandEndEventToDict) {
-  std::optional<base::Value::Dict> event = AppCommandEndEvent()
-                                               .SetEventId("test-event-id")
-                                               .SetExitCode(1)
-                                               .SetOutput("test-output")
-                                               .Build();
+  std::optional<base::DictValue> event = AppCommandEndEvent()
+                                             .SetEventId("test-event-id")
+                                             .SetExitCode(1)
+                                             .SetOutput("test-output")
+                                             .Build();
   ASSERT_TRUE(event);
   EXPECT_THAT(*event, DictHasFields(ExpectedFields({
                           {"eventType", ValueIs("APP_COMMAND")},

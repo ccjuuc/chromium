@@ -4,7 +4,7 @@
 
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 
-#import "base/barrier_closure.h"
+#import "base/barrier_callback.h"
 #import "base/command_line.h"
 #import "base/functional/bind.h"
 #import "base/functional/callback_helpers.h"
@@ -19,11 +19,14 @@
 #import "components/policy/policy_constants.h"
 #import "components/prefs/pref_service.h"
 #import "components/signin/ios/browser/features.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_switches.h"
+#import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/tribool.h"
 #import "components/sync/service/sync_service.h"
 #import "components/sync/service/sync_user_settings.h"
+#import "google_apis/gaia/gaia_auth_util.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/change_profile_commands.h"
 #import "ios/chrome/app/profile/profile_state.h"
@@ -65,12 +68,9 @@
 
 namespace {
 
-// The duration between two signin fullscreen sign-in promo trigger is randomly
-// chosen between [53..68) days.
-base::TimeDelta DurationBetweenPromoTriggers() {
-  using signin::kPromoTriggerRange;
-  return base::RandTimeDelta(kPromoTriggerRange.first,
-                             kPromoTriggerRange.second);
+// Returns a random time offset in the past between [0..14) days.
+base::Time GetCurrentTimeWithRandomOffset() {
+  return base::Time::Now() - base::Days(base::RandIntInclusive(0, 13));
 }
 
 // Initiate synchronously the change to `profile`, then run `continuation`
@@ -131,10 +131,7 @@ bool IsStrictSubset(NSArray<NSString*>* recorded_gaia_ids,
 bool ShouldSwitchProfileAtSignout(AuthenticationService* authentication_service,
                                   ProfileIOS* profile) {
   bool is_work_profile = !IsPersonalProfile(profile);
-  return AreSeparateProfilesForManagedAccountsEnabled() &&
-         authentication_service->HasPrimaryIdentityManaged(
-             signin::ConsentLevel::kSignin) &&
-         is_work_profile;
+  return authentication_service->HasPrimaryIdentityManaged() && is_work_profile;
 }
 
 // Post an asynchronous request to switch to `profile`, running `continuation`
@@ -157,6 +154,26 @@ syncer::DataTypeSet DataCountsMapToDataTypeSet(
     types.Put(type);
   }
   return types;
+}
+
+// This function is called once all browser are signed out.
+// `completion` is called with the new scene state with session id that mathces
+// `trigger_scene_session_id`.
+// If `trigger_scene_session_id` is empty or invalid, the new scene state is
+// nullptr.
+void AllBrowsersSignedOut(signin::SignoutCompletion completion,
+                          std::string_view trigger_scene_session_id,
+                          std::vector<SceneState*> results) {
+  SceneState* new_scene_state = nullptr;
+  if (!trigger_scene_session_id.empty()) {
+    for (SceneState* scene_state : results) {
+      if (scene_state.sceneSessionID == trigger_scene_session_id) {
+        new_scene_state = scene_state;
+        break;
+      }
+    }
+  }
+  std::move(completion).Run(new_scene_state);
 }
 
 }  // namespace
@@ -193,7 +210,7 @@ bool ShouldPresentUserSigninUpgrade(ProfileIOS* profile,
 
   AuthenticationService* auth_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (auth_service->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+  if (auth_service->HasPrimaryIdentity()) {
     syncer::SyncService* sync_service =
         SyncServiceFactory::GetForProfile(profile);
     switch (history_sync::GetSkipReason(sync_service, auth_service,
@@ -241,19 +258,31 @@ bool ShouldPresentUserSigninUpgrade(ProfileIOS* profile,
   }
 
   PrefService* local_state = GetApplicationContext()->GetLocalState();
-  base::Time next_show_time = local_state->GetTime(prefs::kNextSSORecallTime);
+  base::Time last_show_time_with_random_offset = local_state->GetTime(
+      prefs::kSigninStartupPromoLastShownTimeWithRandomOffset);
   bool use_date =
       base::FeatureList::IsEnabled(switches::kFullscreenSignInPromoUseDate);
-  if (next_show_time.is_null()) {
-    local_state->SetTime(prefs::kNextSSORecallTime,
-                         base::Time::Now() + DurationBetweenPromoTriggers());
-    // Don't show if `kNextSSORecallTime` was never recorded.
+  // Set the last shown time if it was never set before or if it's in the future
+  // (in the case of device time change).
+  if (last_show_time_with_random_offset.is_null() ||
+      last_show_time_with_random_offset > base::Time::Now()) {
+    local_state->SetTime(
+        prefs::kSigninStartupPromoLastShownTimeWithRandomOffset,
+        GetCurrentTimeWithRandomOffset());
+    // Don't show if `kLastSSORecallTimeWithRandomOffset` was never recorded.
     if (use_date) {
       return false;
     }
   }
-  if (use_date && next_show_time > base::Time::Now()) {
-    return false;
+
+  if (use_date) {
+    int interval = switches::kFullscreenSignInPromoUseDateInterval.Get();
+    DCHECK(interval != -1);
+    base::Time next_show_time =
+        last_show_time_with_random_offset + base::Days(interval);
+    if (next_show_time > base::Time::Now()) {
+      return false;
+    }
   }
 
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
@@ -298,8 +327,7 @@ bool ShouldPresentUserSigninUpgrade(ProfileIOS* profile,
 bool ShouldPresentWebSignin(ProfileIOS* profile) {
   AuthenticationService* authentication_service =
       AuthenticationServiceFactory::GetForProfile(profile);
-  if (authentication_service->HasPrimaryIdentity(
-          signin::ConsentLevel::kSignin)) {
+  if (authentication_service->HasPrimaryIdentity()) {
     // For some reasons, Gaia might ask for the web sign-in while the user is
     // already signed in. It might be a race conditions with a token already
     // disabled on Gaia, and Chrome not aware of it yet?
@@ -352,8 +380,8 @@ void RecordFullscreenSigninPromoStarted(
 
   NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
   PrefService* local_state = GetApplicationContext()->GetLocalState();
-  local_state->SetTime(prefs::kNextSSORecallTime,
-                       base::Time::Now() + DurationBetweenPromoTriggers());
+  local_state->SetTime(prefs::kSigninStartupPromoLastShownTimeWithRandomOffset,
+                       GetCurrentTimeWithRandomOffset());
   // TODO(crbug.com/408962000): Remove this key and all code related after
   // `kFullscreenSignInPromoUseDate` is launched.
   [defaults setObject:base::SysUTF8ToNSString(current_version.GetString())
@@ -385,12 +413,16 @@ Tribool TriboolFromCapabilityResult(SystemIdentityCapabilityResult result) {
 NSArray<id<SystemIdentity>>* GetIdentitiesOnDevice(
     signin::IdentityManager* identityManager,
     ChromeAccountManagerService* accountManagerService) {
+  CHECK(identityManager);
+  CHECK(accountManagerService);
   std::vector<AccountInfo> accountInfos =
       identityManager->GetAccountsOnDevice();
   return accountManagerService->GetIdentitiesOnDeviceWithGaiaIDs(accountInfos);
 }
 
 NSArray<id<SystemIdentity>>* GetIdentitiesOnDevice(ProfileIOS* profile) {
+  CHECK(profile);
+  CHECK(!profile->IsOffTheRecord());
   return GetIdentitiesOnDevice(
       IdentityManagerFactory::GetForProfile(profile),
       ChromeAccountManagerServiceFactory::GetForProfile(profile));
@@ -404,6 +436,18 @@ id<SystemIdentity> GetDefaultIdentityOnDevice(
   return [identitiesOnDevice firstObject];
 }
 
+std::optional<AccountInfo> GetAccountInfoOnDeviceWithEmail(
+    signin::IdentityManager* identityManager,
+    std::string_view email) {
+  for (const AccountInfo& account_info :
+       identityManager->GetAccountsOnDevice()) {
+    if (gaia::AreEmailsSame(account_info.GetEmail(), email)) {
+      return account_info;
+    }
+  }
+  return std::nullopt;
+}
+
 ProfileSignoutRequest::ProfileSignoutRequest(
     signin_metrics::ProfileSignout source)
     : source_(source),
@@ -414,11 +458,11 @@ ProfileSignoutRequest::~ProfileSignoutRequest() {
   CHECK(run_has_been_called_);
 }
 
-ProfileSignoutRequest&& ProfileSignoutRequest::SetSnackbarMessage(
-    SnackbarMessage* snackbar_message,
+ProfileSignoutRequest&& ProfileSignoutRequest::SetSnackbarMessageBuilder(
+    SnackbarMessageBuilder snackbar_message_builder,
     bool force_snackbar_over_toolbar) && {
   CHECK(!run_has_been_called_);
-  snackbar_message_ = snackbar_message;
+  snackbar_message_builder_ = std::move(snackbar_message_builder);
   force_snackbar_over_toolbar_ = force_snackbar_over_toolbar;
   return std::move(*this);
 }
@@ -457,7 +501,8 @@ void ProfileSignoutRequest::Run(Browser* browser) && {
   ChangeProfileContinuation continuation =
       CreateChangeProfileSignoutContinuation(
           source_, force_snackbar_over_toolbar_, should_record_metrics_,
-          snackbar_message_, std::move(completion_callback_));
+          std::move(snackbar_message_builder_),
+          std::move(completion_callback_));
   ProfileIOS* profile = browser->GetProfile();
   AuthenticationService* authentication_service =
       AuthenticationServiceFactory::GetForProfile(profile);
@@ -490,15 +535,27 @@ void ProfileSignoutRequest::Run(Browser* browser) && {
 
 void MultiProfileSignOutForProfile(
     ProfileIOS* profile,
+    std::string_view trigger_scene_session_id,
     signin_metrics::ProfileSignout signout_source,
-    base::OnceClosure signout_completion_closure) {
+    SignoutCompletion signout_completion_closure) {
   // Simply sign out if no profile switching is needed.
   AuthenticationService* authentication_service =
       AuthenticationServiceFactory::GetForProfile(profile);
   if (!ShouldSwitchProfileAtSignout(authentication_service, profile)) {
+    SceneState* trigger_scene_state = nullptr;
+    for (Browser* browser :
+         BrowserListFactory::GetForProfile(profile)->BrowsersOfType(
+             BrowserList::BrowserType::kAll)) {
+      if (browser->GetSceneState().sceneSessionID == trigger_scene_session_id) {
+        trigger_scene_state = browser->GetSceneState();
+        break;
+      }
+    }
+    base::OnceClosure authentication_signout_completion = base::BindOnce(
+        std::move(signout_completion_closure), trigger_scene_state);
     authentication_service->SignOut(
         signout_source,
-        base::CallbackToBlock(std::move(signout_completion_closure)));
+        base::CallbackToBlock(std::move(authentication_signout_completion)));
     return;
   }
 
@@ -512,16 +569,19 @@ void MultiProfileSignOutForProfile(
 
   // Only call `signout_completion_closure` after all browsers have switched to
   // the personal profile.
-  base::RepeatingClosure barrier = base::BarrierClosure(
-      browser_list.size(), std::move(signout_completion_closure));
-
+  auto on_all_switches_done = base::BindOnce(
+      &AllBrowsersSignedOut, std::move(signout_completion_closure),
+      std::string(trigger_scene_session_id));
+  base::RepeatingCallback<void(SceneState*)> barrier =
+      base::BarrierCallback<SceneState*>(browser_list.size(),
+                                         std::move(on_all_switches_done));
   // Sign the user out in all browsers.
   for (Browser* browser : browser_list) {
     ChangeProfileContinuation continuation =
         CreateChangeProfileSignoutContinuation(
             signout_source, /*force_snackbar_over_toolbar=*/false,
-            /*should_record_metrics=*/false, /*snackbar_message =*/nil,
-            base::IgnoreArgs<SceneState*>(barrier));
+            /*should_record_metrics=*/false,
+            /*snackbar_message_builder=*/{}, std::move(barrier));
     SwitchToPersonalProfile(browser->GetSceneState(),
                             ChangeProfileReason::kManagedAccountSignOut,
                             std::move(continuation));
@@ -541,10 +601,8 @@ void LogFullscreenSigninPromoManagerMigrationDone() {
 void FetchUnsyncedDataForSignOutOrProfileSwitching(
     syncer::SyncService* sync_service,
     UnsyncedDataForSignoutOrProfileSwitchingCallback callback) {
-  constexpr syncer::DataTypeSet kDataTypesToQuery =
-      syncer::TypesRequiringUnsyncedDataCheckOnSignout();
   sync_service->GetTypesWithUnsyncedData(
-      kDataTypesToQuery,
+      syncer::TypesRequiringUnsyncedDataCheckOnSignout(),
       base::BindOnce(&DataCountsMapToDataTypeSet).Then(std::move(callback)));
 }
 

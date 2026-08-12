@@ -4,40 +4,29 @@
 
 #include "chrome/browser/ui/views/download/bubble/download_bubble_security_view.h"
 
-#include "base/containers/fixed_flat_map.h"
-#include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_functions.h"
-#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/download/download_commands.h"
-#include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_item_warning_data.h"
-#include "chrome/browser/download/download_ui_model.h"
-#include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/ui/download/download_bubble_security_view_info.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_navigation_handler.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_password_prompt_view.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_row_view.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_danger_type.h"
-#include "components/safe_browsing/core/common/features.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
-#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/flex_layout.h"
@@ -56,22 +45,6 @@ constexpr int kProgressBarHeight = 3;
 // Main Button, Subpage Icon.
 constexpr int kNumColumns = 5;
 constexpr int kAfterParagraphSpacing = 8;
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class DownloadBubbleSubpageAction {
-  kShown = 0,
-  // Reserved (obsolete): kShownCheckbox = 1,
-  kShownSecondaryButton = 2,
-  kShownPrimaryButton = 3,
-  kPressedBackButton = 4,
-  kClosedSubpage = 5,
-  // Reserved (obsolete): kClickedCheckbox = 6,
-  kPressedSecondaryButton = 7,
-  kPressedPrimaryButton = 8,
-  kMaxValue = kPressedPrimaryButton
-};
-const char kSubpageActionHistogram[] = "Download.Bubble.SubpageAction";
 
 // Whether we should page away from the security view and return to the primary
 // view upon a download update.
@@ -225,8 +198,10 @@ void DownloadBubbleSecurityView::AddHeader() {
       header->AddChildView(views::CreateVectorImageButtonWithNativeTheme(
           base::BindRepeating(&DownloadBubbleSecurityView::BackButtonPressed,
                               base::Unretained(this)),
-          vector_icons::kArrowBackChromeRefreshIcon,
-          GetLayoutConstant(DOWNLOAD_ICON_SIZE)));
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kArrowBackIcon
+              : vector_icons::kArrowBackChromeRefreshOldIcon,
+          GetLayoutConstant(LayoutConstant::kDownloadIconSize)));
   views::InstallCircleHighlightPathGenerator(back_button_);
   back_button_->SetTooltipText(
       l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_BACK_RECENT_DOWNLOADS));
@@ -252,8 +227,10 @@ void DownloadBubbleSecurityView::AddHeader() {
       header->AddChildView(views::CreateVectorImageButtonWithNativeTheme(
           base::BindRepeating(&DownloadBubbleSecurityView::CloseBubble,
                               base::Unretained(this)),
-          vector_icons::kCloseChromeRefreshIcon,
-          GetLayoutConstant(DOWNLOAD_ICON_SIZE)));
+          features::IsRoundedIconsEnabled()
+              ? vector_icons::kCloseIcon
+              : vector_icons::kCloseChromeRefreshOldIcon,
+          GetLayoutConstant(LayoutConstant::kDownloadIconSize)));
   close_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
   InstallCircleHighlightPathGenerator(close_button);
   close_button->SetProperty(views::kCrossAxisAlignmentKey,
@@ -265,9 +242,6 @@ void DownloadBubbleSecurityView::BackButtonPressed() {
     delegate_->AddSecuritySubpageWarningActionEvent(
         content_id(), DownloadItemWarningData::WarningAction::BACK);
     did_log_action_ = true;
-    base::UmaHistogramEnumeration(
-        kSubpageActionHistogram,
-        DownloadBubbleSubpageAction::kPressedBackButton);
   }
   navigation_handler_->OpenPrimaryDialog();
 }
@@ -287,14 +261,12 @@ void DownloadBubbleSecurityView::CloseBubble() {
   // CloseDialog will delete the object. Do not access any members below.
   navigation_handler_->CloseDialog(
       views::Widget::ClosedReason::kCloseButtonClicked);
-  base::UmaHistogramEnumeration(kSubpageActionHistogram,
-                                DownloadBubbleSubpageAction::kClosedSubpage);
 }
 
 void DownloadBubbleSecurityView::UpdateIconAndText() {
   icon_->SetImage(ui::ImageModel::FromVectorIcon(
       *(info_->icon_model_override()), info_->secondary_color(),
-      GetLayoutConstant(DOWNLOAD_ICON_SIZE)));
+      GetLayoutConstant(LayoutConstant::kDownloadIconSize)));
 
   paragraphs_->SetText(info_->warning_summary());
 
@@ -337,7 +309,7 @@ void DownloadBubbleSecurityView::UpdateSecondaryIconAndText() {
 
   secondary_icon_->SetImage(ui::ImageModel::FromVectorIcon(
       *info_->warning_secondary_icon(), ui::kColorSecondaryForeground,
-      GetLayoutConstant(DOWNLOAD_ICON_SIZE)));
+      GetLayoutConstant(LayoutConstant::kDownloadIconSize)));
 
   secondary_styled_label_->SetText(info_->warning_secondary_text());
   // The label defaults to a single line, which would force the dialog wider;
@@ -362,7 +334,7 @@ void DownloadBubbleSecurityView::AddIconAndContents() {
 
   icon_ = icon_text_row->AddChildView(std::make_unique<views::ImageView>());
   icon_->SetProperty(views::kMarginsKey, GetLayoutInsets(DOWNLOAD_ICON));
-  const int icon_size = GetLayoutConstant(DOWNLOAD_ICON_SIZE);
+  const int icon_size = GetLayoutConstant(LayoutConstant::kDownloadIconSize);
   icon_->SetImageSize({icon_size, icon_size});
 
   auto* wrapper = icon_text_row->AddChildView(std::make_unique<views::View>());
@@ -533,12 +505,6 @@ bool DownloadBubbleSecurityView::ProcessButtonClick(
     return false;
   }
 
-  // Record metrics only if we are actually processing the command.
-  base::UmaHistogramEnumeration(
-      kSubpageActionHistogram,
-      is_secondary_button ? DownloadBubbleSubpageAction::kPressedSecondaryButton
-                          : DownloadBubbleSubpageAction::kPressedPrimaryButton);
-
   // Process the command first, since this may become uninitialized once the
   // navigation occurs.
   delegate_->ProcessSecuritySubpageButtonPress(content_id(), command);
@@ -586,11 +552,6 @@ void DownloadBubbleSecurityView::UpdateButton(
   if (button_info.is_prominent) {
     bubble_delegate_->SetDefaultButton(static_cast<int>(button_type));
   }
-
-  base::UmaHistogramEnumeration(
-      kSubpageActionHistogram,
-      is_secondary_button ? DownloadBubbleSubpageAction::kShownSecondaryButton
-                          : DownloadBubbleSubpageAction::kShownPrimaryButton);
 }
 
 void DownloadBubbleSecurityView::UpdateButtons() {
@@ -737,7 +698,8 @@ int DownloadBubbleSecurityView::GetMinimumTitleWidth() const {
   // narrower to accommodate the close button.
   const int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_RELATED_LABEL_HORIZONTAL);
-  return GetMinimumLabelWidth() - GetLayoutConstant(DOWNLOAD_ICON_SIZE) -
+  return GetMinimumLabelWidth() -
+         GetLayoutConstant(LayoutConstant::kDownloadIconSize) -
          icon_label_spacing;
 }
 
@@ -746,7 +708,7 @@ int DownloadBubbleSecurityView::GetMinimumLabelWidth() const {
   const int icon_label_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_RELATED_LABEL_HORIZONTAL);
   return GetMinimumBubbleWidth() - side_margin -
-         GetLayoutConstant(DOWNLOAD_ICON_SIZE) -
+         GetLayoutConstant(LayoutConstant::kDownloadIconSize) -
          GetLayoutInsets(DOWNLOAD_ICON).width() - icon_label_spacing;
 }
 
@@ -811,8 +773,6 @@ void DownloadBubbleSecurityView::OnContentIdChanged() {
   // new action) when the action is performed by a user, not when the browser
   // changes the danger type (when a scan is finished, for instance).
   did_log_action_ = false;
-  base::UmaHistogramEnumeration(kSubpageActionHistogram,
-                                DownloadBubbleSubpageAction::kShown);
 }
 
 BEGIN_METADATA(DownloadBubbleSecurityView)

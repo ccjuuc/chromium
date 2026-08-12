@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/a11y/select_to_speak_handler.h"
 
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
@@ -13,9 +14,6 @@
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
 #include "chrome/browser/speech/extension_api/tts_extension_api.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/event_router.h"
@@ -32,7 +30,7 @@ SelectToSpeakHandler::SelectToSpeakHandler() = default;
 
 SelectToSpeakHandler::~SelectToSpeakHandler() = default;
 
-void SelectToSpeakHandler::HandleGetAppLocale(const base::Value::List& args) {
+void SelectToSpeakHandler::HandleGetAppLocale(const base::ListValue& args) {
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
   AllowJavascript();
   FireWebUIListener("app-locale-updated", base::Value(app_locale));
@@ -44,13 +42,13 @@ void SelectToSpeakHandler::OnVoicesChanged() {
   std::vector<content::VoiceData> voices;
   tts_controller->GetVoices(
       Profile::FromWebUI(web_ui()),
-      GURL(chrome::GetOSSettingsUrl(
+      GURL(chromeos::settings::GetOSSettingsUrl(
           chromeos::settings::mojom::kSelectToSpeakSubpagePath)),
       &voices);
-  base::Value::List responses;
+  base::ListValue responses;
   for (const auto& voice : voices) {
-    base::Value::Dict response;
-    base::Value::List event_types;
+    base::DictValue response;
+    base::ListValue event_types;
     std::string language_code;
     std::string language_and_country_code = voice.lang;
     if (!language_and_country_code.empty()) {
@@ -99,7 +97,7 @@ void SelectToSpeakHandler::RegisterMessages() {
 }
 
 GURL SelectToSpeakHandler::GetSourceURL() const {
-  return GURL(chrome::GetOSSettingsUrl(
+  return GURL(chromeos::settings::GetOSSettingsUrl(
       chromeos::settings::mojom::kSelectToSpeakSubpagePath));
 }
 

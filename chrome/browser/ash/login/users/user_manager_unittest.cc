@@ -31,7 +31,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/fake_profile_manager.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
@@ -200,9 +199,14 @@ class UserManagerTest : public testing::Test {
     policy_user_manager_controller_ =
         std::make_unique<PolicyUserManagerController>(
             user_manager_.get(), ash::CrosSettings::Get(),
-            DeviceSettingsService::Get(), nullptr);
+            DeviceSettingsService::Get(),
+            /*minimum_version_policy_handler=*/nullptr,
+            /*device_local_account_policy_service=*/nullptr);
     user_image_manager_registry_ =
-        std::make_unique<ash::UserImageManagerRegistry>(user_manager_.get());
+        std::make_unique<ash::UserImageManagerRegistry>(
+            TestingBrowserProcess::GetGlobal()->local_state(),
+            TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+            user_manager_.get());
     // Initialize `UserManager` after `UserImageManagerRegistry` creation to
     // follow initialization order in
     // `BrowserProcessPlatformPart::InitializeUserManager()`
@@ -226,8 +230,8 @@ class UserManagerTest : public testing::Test {
       int type = static_cast<int>(policy::DeviceLocalAccountType::kKioskApp)) {
     settings_helper_.Set(
         kAccountsPrefDeviceLocalAccounts,
-        base::Value(base::Value::List().Append(
-            base::Value::Dict()
+        base::Value(base::ListValue().Append(
+            base::DictValue()
                 .Set(kAccountsPrefDeviceLocalAccountsKeyId, account_id)
                 .Set(kAccountsPrefDeviceLocalAccountsKeyType, type)
                 .Set(kAccountsPrefDeviceLocalAccountsKeyEphemeralMode,
@@ -242,8 +246,8 @@ class UserManagerTest : public testing::Test {
       policy::DeviceLocalAccount::EphemeralMode ephemeral_mode) {
     settings_helper_.Set(
         kAccountsPrefDeviceLocalAccounts,
-        base::Value(base::Value::List().Append(
-            base::Value::Dict()
+        base::Value(base::ListValue().Append(
+            base::DictValue()
                 .Set(kAccountsPrefDeviceLocalAccountsKeyId, account_id)
                 .Set(kAccountsPrefDeviceLocalAccountsKeyType,
                      static_cast<int>(type))
@@ -259,7 +263,7 @@ class UserManagerTest : public testing::Test {
                          /* account_id= */ email, /* type=kArcKiosk */ 2);
     TestingBrowserProcess::GetGlobal()->local_state()->Set(
         user_manager::prefs::kDeviceLocalAccountsWithSavedData,
-        base::Value(base::Value::List().Append(email)));
+        base::Value(base::ListValue().Append(email)));
     user_manager::KnownUser(TestingBrowserProcess::GetGlobal()->local_state())
         .SaveKnownUser(
             AccountId::FromUserEmailGaiaId(email, GaiaId("fake_gaia_id")));

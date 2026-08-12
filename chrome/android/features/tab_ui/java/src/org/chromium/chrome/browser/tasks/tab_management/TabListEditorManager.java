@@ -9,24 +9,22 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.app.Activity;
 import android.view.ViewGroup;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ButtonType;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.IconPosition;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ShowMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorCoordinator.CreationMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorCoordinator.TabListEditorController;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiMetricsHelper.TabListEditorOpenMetricGroups;
-import org.chromium.chrome.browser.tinker_tank.TinkerTankDelegate;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
@@ -48,16 +46,15 @@ public class TabListEditorManager {
     private final @Nullable SnackbarManager mSnackbarManager;
     private final @Nullable BottomSheetController mBottomSheetController;
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
-    private final ObservableSupplier<@Nullable TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier;
+    private final MonotonicObservableSupplier<TabModel> mCurrentTabModelSupplier;
     private final TabContentManager mTabContentManager;
     private final TabListCoordinator mTabListCoordinator;
     private final @TabListMode int mMode;
-    private final SettableObservableSupplier<TabListEditorController> mControllerSupplier =
+    private final SettableMonotonicObservableSupplier<TabListEditorController> mControllerSupplier =
             ObservableSuppliers.createMonotonic();
     private final TabGroupCreationDialogManager mTabGroupCreationDialogManager;
     private final @Nullable DesktopWindowStateManager mDesktopWindowStateManager;
-    private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
+    private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
 
     private @Nullable TabListEditorCoordinator mTabListEditorCoordinator;
     private @Nullable List<TabListEditorAction> mTabListEditorActions;
@@ -68,8 +65,7 @@ public class TabListEditorManager {
      * @param coordinatorView The overlay view to attach the editor to.
      * @param rootView The root view to attach the snackbar to.
      * @param browserControlsStateProvider The browser controls state provider.
-     * @param currentTabGroupModelFilterSupplier The supplier of the current {@link
-     *     TabGroupModelFilter}.
+     * @param currentTabModelSupplier The supplier of the current {@link TabModel}.
      * @param tabContentManager The {@link TabContentManager} for thumbnails.
      * @param tabListCoordinator The parent {@link TabListCoordinator}.
      * @param mode The {@link TabListMode} of the tab list (grid, list, etc.).
@@ -82,18 +78,18 @@ public class TabListEditorManager {
             ViewGroup coordinatorView,
             ViewGroup rootView,
             BrowserControlsStateProvider browserControlsStateProvider,
-            ObservableSupplier<@Nullable TabGroupModelFilter> currentTabGroupModelFilterSupplier,
+            MonotonicObservableSupplier<TabModel> currentTabModelSupplier,
             TabContentManager tabContentManager,
             TabListCoordinator tabListCoordinator,
             BottomSheetController bottomSheetController,
             @TabListMode int mode,
             @Nullable Runnable onTabGroupCreation,
             @Nullable DesktopWindowStateManager desktopWindowStateManager,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier) {
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier) {
         mActivity = activity;
         mModalDialogManager = modalDialogManager;
         mCoordinatorView = coordinatorView;
-        mCurrentTabGroupModelFilterSupplier = currentTabGroupModelFilterSupplier;
+        mCurrentTabModelSupplier = currentTabModelSupplier;
         mBrowserControlsStateProvider = browserControlsStateProvider;
         mTabContentManager = tabContentManager;
         mTabListCoordinator = tabListCoordinator;
@@ -107,7 +103,8 @@ public class TabListEditorManager {
         // default parent view of the snackbar. When shown this will be re-parented inside the
         // TabListCoordinator's SelectableListLayout.
         if (!activity.isDestroyed() && !activity.isFinishing()) {
-            mSnackbarManager = new SnackbarManager(activity, rootView, null);
+            mSnackbarManager =
+                    new SnackbarManager(activity, rootView, null, null, modalDialogManager);
         } else {
             mSnackbarManager = null;
         }
@@ -118,6 +115,9 @@ public class TabListEditorManager {
     public void destroy() {
         if (mTabListEditorCoordinator != null) {
             mTabListEditorCoordinator.destroy();
+        }
+        if (mSnackbarManager != null) {
+            mSnackbarManager.destroy();
         }
     }
 
@@ -135,7 +135,7 @@ public class TabListEditorManager {
                             mCoordinatorView,
                             mCoordinatorView,
                             mBrowserControlsStateProvider,
-                            mCurrentTabGroupModelFilterSupplier,
+                            mCurrentTabModelSupplier,
                             mTabContentManager,
                             mTabListCoordinator::setRecyclerViewPosition,
                             mMode,
@@ -143,13 +143,14 @@ public class TabListEditorManager {
                             mSnackbarManager,
                             mBottomSheetController,
                             TabProperties.TabActionState.SELECTABLE,
-                            /* gridCardOnClickListenerProvider= */ null,
+                            /* tabListItemOnClickListenerProvider= */ null,
                             mModalDialogManager,
                             mDesktopWindowStateManager,
                             mEdgeToEdgeSupplier,
                             CreationMode.FULL_SCREEN,
+                            /* itemPickerSelectionHandler= */ null,
                             /* undoBarExplicitTrigger= */ null,
-                            /* componentName= */ null,
+                            /* componentId= */ null,
                             TabListEditorCoordinator.UNLIMITED_SELECTION,
                             false);
             mControllerSupplier.set(mTabListEditorCoordinator.getController());
@@ -187,36 +188,26 @@ public class TabListEditorManager {
                             ShowMode.MENU_ONLY,
                             ButtonType.ICON_AND_TEXT,
                             IconPosition.START));
-            if (TinkerTankDelegate.isEnabled()) {
-                mTabListEditorActions.add(
-                        TabListEditorTinkerTankAction.createAction(
-                                mActivity,
-                                ShowMode.MENU_ONLY,
-                                ButtonType.ICON_AND_TEXT,
-                                IconPosition.START));
-            }
             mTabListEditorActions.add(
                     TabListEditorShareAction.createAction(
                             mActivity,
                             ShowMode.MENU_ONLY,
                             ButtonType.ICON_AND_TEXT,
                             IconPosition.START));
-            if (ChromeFeatureList.sAndroidPinnedTabs.isEnabled()) {
-                mTabListEditorActions.add(
-                        TabListEditorPinAction.createAction(
-                                mActivity,
-                                ShowMode.MENU_ONLY,
-                                ButtonType.ICON_AND_TEXT,
-                                IconPosition.START));
-            }
+            mTabListEditorActions.add(
+                    TabListEditorPinAction.createAction(
+                            mActivity,
+                            ShowMode.MENU_ONLY,
+                            ButtonType.ICON_AND_TEXT,
+                            IconPosition.START));
         }
 
         var controller = mControllerSupplier.get();
         assumeNonNull(controller);
-        TabGroupModelFilter filter = mCurrentTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        assumeNonNull(tabModel);
         controller.show(
-                filter.getRepresentativeTabList(),
+                /* tabs= */ tabModel.getRepresentativeTabList(),
                 /* tabGroupSyncIds= */ Collections.emptyList(),
                 mTabListCoordinator.getRecyclerViewPosition());
         controller.configureToolbarWithMenuItems(mTabListEditorActions);
@@ -226,7 +217,7 @@ public class TabListEditorManager {
     }
 
     /** Returns a supplier for {@link TabListEditorController}. */
-    public ObservableSupplier<TabListEditorController> getControllerSupplier() {
+    public MonotonicObservableSupplier<TabListEditorController> getControllerSupplier() {
         return mControllerSupplier;
     }
 }

@@ -61,17 +61,17 @@
         [[i18n('siteSettingsSiteClearStorageConfirmationNew', pageTitle_)]]
         <div class="detail-list">
           <div class="detail">
-            <cr-icon icon="all-sites:logout" aria-hidden="true"
+            <cr-icon icon="all-sites:logout-custom" aria-hidden="true"
                 role="presentation"></cr-icon>
             $i18n{siteSettingsSiteClearStorageSignOut}
           </div>
           <div class="detail">
-            <cr-icon icon="all-sites:offline" aria-hidden="true"
+            <cr-icon icon="all-sites:offline-custom" aria-hidden="true"
                 role="presentation"></cr-icon>
             $i18n{siteSettingsSiteDeleteStorageOfflineData}
           </div>
           <div class="detail" id="adPersonalization">
-            <cr-icon icon="all-sites:tag" aria-hidden="true"
+            <cr-icon icon="all-sites:shoppingmode" aria-hidden="true"
                 role="presentation"></cr-icon>
             $i18n{siteSettingsRemoveSiteAdPersonalization}
           </div>
@@ -145,6 +145,13 @@
       </cr-button>
     </div>
 
+    <div id="subAppsPermissionExplanation" class="cr-row continuation secondary"
+        hidden$="[[!subAppsPermissionExplanation_]]">
+      <localized-link localized-string="[[subAppsPermissionExplanation_]]"
+          on-link-clicked="onSubAppPermissionExplanationLinkClicked_">
+      </localized-link>
+    </div>
+
     <div class="list-frame">
       <site-details-permission category="[[contentSettingsTypesEnum_.GEOLOCATION]]"
           icon="settings:location-on" label="$i18n{siteSettingsLocation}">
@@ -184,7 +191,7 @@
       </site-details-permission>
       <site-details-permission
           category="[[contentSettingsTypesEnum_.AUTOMATIC_DOWNLOADS]]"
-          icon="cr:file-download" label="$i18n{siteSettingsAutomaticDownloads}">
+          icon="cr:download" label="$i18n{siteSettingsAutomaticDownloads}">
       </site-details-permission>
       <site-details-permission
           category="[[contentSettingsTypesEnum_.MIDI_DEVICES]]"
@@ -203,15 +210,16 @@
             chooser-type="[[chooserTypeEnum_.SMART_CARD_READERS_DEVICES]]">
         </site-details-permission>
       </template>
-</if>
-      <site-details-permission category="[[contentSettingsTypesEnum_.SERIAL_PORTS]]"
-          icon="privacy:developer-board" label="$i18n{siteSettingsSerialPorts}"
-          chooser-type="[[chooserTypeEnum_.SERIAL_PORTS]]">
-      </site-details-permission>
       <site-details-permission
           category="[[contentSettingsTypesEnum_.WEB_PRINTING]]"
-          icon="settings:printer"
+          icon="settings:print"
           label="$i18n{siteSettingsWebPrinting}">
+      </site-details-permission>
+</if>
+      <site-details-permission
+          category="[[contentSettingsTypesEnum_.SERIAL_PORTS]]"
+          icon="privacy:developer-board" label="$i18n{siteSettingsSerialPorts}"
+          chooser-type="[[chooserTypeEnum_.SERIAL_PORTS]]">
       </site-details-permission>
       <template is="dom-if" if="[[enableWebBluetoothNewPermissionsBackend_]]">
         <site-details-permission
@@ -248,7 +256,7 @@
       <template is="dom-if" if="[[enableExperimentalWebPlatformFeatures_]]">
         <site-details-permission
             category="[[contentSettingsTypesEnum_.BLUETOOTH_SCANNING]]"
-            icon="settings:bluetooth-scanning"
+            icon="settings:bluetooth-searching"
             label="$i18n{siteSettingsBluetoothScanning}">
         </site-details-permission>
       </template>
@@ -326,13 +334,6 @@
         </site-details-permission>
       </template>
       <template is="dom-if" if="[[enableLocalNetworkAccessSetting_]]">
-        <site-details-permission
-            category="[[contentSettingsTypesEnum_.LOCAL_NETWORK_ACCESS]]"
-            icon="settings20:router"
-            label="$i18n{siteSettingsLocalNetworkAccess}">
-        </site-details-permission>
-      </template>
-      <template is="dom-if" if="[[enableLocalNetworkAccessSplitPermissions_]]">
         <site-details-permission
             category="[[contentSettingsTypesEnum_.LOCAL_NETWORK]]"
             icon="settings20:router"

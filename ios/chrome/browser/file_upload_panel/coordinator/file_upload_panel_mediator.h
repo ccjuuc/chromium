@@ -15,6 +15,9 @@ class ChooseFileController;
 struct ChooseFileEvent;
 @protocol FileUploadPanelCommands;
 
+// Returns an "invalid" UTType which cannot match other types.
+UTType* UTTypeInvalid();
+
 // Mediator for the file upload panel UI.
 API_AVAILABLE(ios(18.4))
 @interface FileUploadPanelMediator : NSObject
@@ -48,10 +51,12 @@ API_AVAILABLE(ios(18.4))
 @property(nonatomic, readonly) BOOL allowsVideoSelection;
 // Whether the page allows the selection of media items (images or video).
 @property(nonatomic, readonly) BOOL allowsMediaSelection;
-// Whether the page allows the selection a directory.
+// Whether the page allows the selection of a directory.
 @property(nonatomic, readonly) BOOL allowsDirectorySelection;
 // Whether the page allows multiple selection.
 @property(nonatomic, readonly) BOOL allowsMultipleSelection;
+// Whether a file picker is currently being presented.
+@property(nonatomic, assign) BOOL isPresentingFilePicker;
 
 // Initializes the file upload panel and binds it to `controller`.
 - (instancetype)initWithChooseFileController:(ChooseFileController*)controller

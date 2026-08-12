@@ -4,11 +4,11 @@
 
 #include "content/browser/media/active_media_session_controller.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/media/media_keys_listener_manager_impl.h"
@@ -76,7 +76,7 @@ void ActiveMediaSessionController::MediaSessionActionsChanged(
         MediaSessionActionToKeyCode(action);
     if (!action_key_code.has_value())
       continue;
-    if (!base::Contains(actions, action))
+    if (!std::ranges::contains(actions, action))
       media_keys_listener_manager->StopWatchingMediaKey(*action_key_code, this,
                                                         request_id_);
   }
@@ -155,8 +155,7 @@ void ActiveMediaSessionController::OnSeek(const base::TimeDelta& time) {
 }
 
 void ActiveMediaSessionController::OnSeekTo(const base::TimeDelta& time) {
-  if (base::Contains(actions_,
-                     media_session::mojom::MediaSessionAction::kSeekTo)) {
+  if (actions_.contains(media_session::mojom::MediaSessionAction::kSeekTo)) {
     media_controller_remote_->SeekTo(time);
   } else if (position_) {
     auto time_diff =
@@ -219,6 +218,7 @@ void ActiveMediaSessionController::PerformAction(MediaSessionAction action) {
     case MediaSessionAction::kPreviousSlide:
     case MediaSessionAction::kNextSlide:
     case MediaSessionAction::kEnterAutoPictureInPicture:
+    case MediaSessionAction::kSaveVideoFrame:
       NOTREACHED();
   }
 }
@@ -273,6 +273,7 @@ ActiveMediaSessionController::MediaSessionActionToKeyCode(
     case MediaSessionAction::kPreviousSlide:
     case MediaSessionAction::kNextSlide:
     case MediaSessionAction::kEnterAutoPictureInPicture:
+    case MediaSessionAction::kSaveVideoFrame:
       return std::nullopt;
   }
 }

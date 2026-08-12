@@ -12,8 +12,9 @@
 #include "base/base64url.h"
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
+#include "base/containers/to_array.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -24,6 +25,9 @@
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
 #include "crypto/random.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/fido/cable/cable_mock_bluetooth_adapter.h"
+#include "device/fido/cable/fido_ble_uuids.h"
 #include "device/fido/cable/v2_authenticator.h"
 #include "device/fido/cable/v2_discovery.h"
 #include "device/fido/cable/v2_handshake.h"
@@ -37,11 +41,16 @@
 #include "net/http/http_status_code.h"
 #include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/test/test_network_context.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/mojom/webauthn/authenticator.mojom.h"
 #include "third_party/boringssl/src/include/openssl/ec_key.h"
 #include "url/gurl.h"
+
+using ::testing::_;
+using ::testing::Sequence;
 
 namespace device::cablev2 {
 namespace {
@@ -58,11 +67,10 @@ class TestNetworkContext : public network::TestNetworkContext {
   void CreateWebSocket(
       const GURL& url,
       const std::vector<std::string>& requested_protocols,
-      const net::SiteForCookies& site_for_cookies,
       net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       std::vector<network::mojom::HttpHeaderPtr> additional_headers,
-      int32_t process_id,
+      const network::OriginatingProcessId& process_id,
       const url::Origin& origin,
       network::mojom::ClientSecurityStatePtr client_security_state,
       uint32_t options,
@@ -74,8 +82,8 @@ class TestNetworkContext : public network::TestNetworkContext {
       mojo::PendingRemote<network::mojom::WebSocketAuthenticationHandler>
           auth_handler,
       mojo::PendingRemote<network::mojom::TrustedHeaderClient> header_client,
-      const std::optional<base::UnguessableToken>& throttling_profile_id)
-      override {
+      const std::optional<base::UnguessableToken>& throttling_profile_id,
+      const base::UnguessableToken& network_restrictions_id) override {
     CHECK(url.has_path());
 
     std::string_view path = url.path();
@@ -84,7 +92,7 @@ class TestNetworkContext : public network::TestNetworkContext {
     static const char kContactPrefix[] = "/cable/contact/";
     if (path.find(kNewPrefix) == 0) {
       path.remove_prefix(sizeof(kNewPrefix) - 1);
-      CHECK(!base::Contains(connections_, std::string(path)));
+      CHECK(!connections_.contains(std::string(path)));
       connections_.emplace(std::string(path), std::make_unique<Connection>(
                                                   Connection::Type::NEW,
                                                   std::move(handshake_client)));
@@ -344,12 +352,8 @@ class TestNetworkContext : public network::TestNetworkContext {
           peer_->buffer_.clear();
           peer_->buffer_i_ = 0;
         } else {
-          const size_t new_length =
-              peer_->buffer_.size() - actually_written_bytes;
-          UNSAFE_TODO(memmove(peer_->buffer_.data(),
-                              &peer_->buffer_.data()[actually_written_bytes],
-                              new_length));
-          peer_->buffer_.resize(new_length);
+          peer_->buffer_.erase(peer_->buffer_.begin(),
+                               peer_->buffer_.begin() + actually_written_bytes);
           peer_->buffer_i_ -= actually_written_bytes;
         }
 
@@ -396,10 +400,10 @@ class DummyBLEAdvert
 // messages to the given |VirtualCtap2Device|.
 class TestPlatform : public authenticator::Platform {
  public:
-  TestPlatform(Discovery::AdvertEventStream::Callback ble_advert_callback,
-               device::VirtualCtap2Device* ctap2_device,
+  TestPlatform(device::VirtualCtap2Device* ctap2_device,
+               scoped_refptr<CableMockBluetoothAdapter> mock_adapter,
                authenticator::Observer* observer)
-      : ble_advert_callback_(ble_advert_callback),
+      : mock_adapter_(mock_adapter),
         ctap2_device_(ctap2_device),
         observer_(observer) {}
 
@@ -411,8 +415,7 @@ class TestPlatform : public authenticator::Platform {
         std::move(params->user),
         PublicKeyCredentialParams(std::move(params->public_key_parameters)));
     CHECK_EQ(request.client_data_hash.size(), params->challenge.size());
-    UNSAFE_TODO(memcpy(request.client_data_hash.data(),
-                       params->challenge.data(), params->challenge.size()));
+    base::span(request.client_data_hash).copy_from(params->challenge);
     request.resident_key_required =
         !params->authenticator_selection
             ? false
@@ -436,23 +439,19 @@ class TestPlatform : public authenticator::Platform {
     request.allow_list = std::move(params->allow_credentials);
     request.user_verification = params->user_verification;
 
-    CHECK_EQ(request.client_data_hash.size(), params->challenge->size());
-    UNSAFE_TODO(memcpy(request.client_data_hash.data(),
-                       params->challenge->data(), params->challenge->size()));
+    CHECK_EQ(request.client_data_hash.size(), params->challenge.size());
+    base::span(request.client_data_hash).copy_from(params->challenge);
     if (params->extensions) {
       for (const auto& prf_input_from_request :
            params->extensions->prf_inputs) {
         PRFInput prf_input_to_authenticator;
         prf_input_to_authenticator.credential_id =
             std::move(prf_input_from_request->id);
-        CHECK(fido_parsing_utils::ExtractArray(
-            prf_input_from_request->first, 0,
-            &prf_input_to_authenticator.salt1));
+        prf_input_to_authenticator.salt1 =
+            base::ToArray<32>(prf_input_from_request->first);
         if (prf_input_from_request->second) {
-          prf_input_to_authenticator.salt2.emplace();
-          CHECK(fido_parsing_utils::ExtractArray(
-              *prf_input_from_request->second, 0,
-              &prf_input_to_authenticator.salt2.value()));
+          prf_input_to_authenticator.salt2 =
+              base::ToArray<32>(*prf_input_from_request->second);
         }
 
         request.prf_inputs.emplace_back(std::move(prf_input_to_authenticator));
@@ -484,15 +483,14 @@ class TestPlatform : public authenticator::Platform {
       base::span<const uint8_t, kAdvertSize> payload) override {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(
-            &TestPlatform::DoSendBLEAdvert, weak_factory_.GetWeakPtr(),
-            device::fido_parsing_utils::Materialize<payload.size()>(payload)));
+        base::BindOnce(&TestPlatform::DoSendBLEAdvert,
+                       weak_factory_.GetWeakPtr(), base::ToArray(payload)));
     return std::make_unique<DummyBLEAdvert>();
   }
 
  private:
   void DoSendBLEAdvert(base::span<const uint8_t, kAdvertSize> advert) {
-    ble_advert_callback_.Run(advert);
+    mock_adapter_->AddNewTestBluetoothDevice(advert);
   }
 
   std::vector<uint8_t> ToCTAP2Command(
@@ -628,7 +626,7 @@ class TestPlatform : public authenticator::Platform {
         std::move(response));
   }
 
-  Discovery::AdvertEventStream::Callback ble_advert_callback_;
+  scoped_refptr<CableMockBluetoothAdapter> mock_adapter_;
   const raw_ptr<device::VirtualCtap2Device> ctap2_device_;
   const raw_ptr<authenticator::Observer> observer_;
   base::WeakPtrFactory<TestPlatform> weak_factory_{this};
@@ -657,8 +655,8 @@ class LateLinkingDevice : public authenticator::Transaction {
             qr_secret,
             {},
             device::cablev2::DerivedValueType::kEIDKey)),
-        peer_identity_(device::fido_parsing_utils::Materialize(peer_identity)),
-        secret_(fido_parsing_utils::Materialize(qr_secret)) {
+        peer_identity_(base::ToArray(peer_identity)),
+        secret_(base::ToVector(qr_secret)) {
     websocket_client_ = std::make_unique<device::cablev2::WebSocketAdapter>(
         base::BindOnce(&LateLinkingDevice::OnTunnelReady,
                        base::Unretained(this)),
@@ -669,9 +667,9 @@ class LateLinkingDevice : public authenticator::Transaction {
         kTunnelServer, tunnel_id_);
 
     network_context_factory_.Run()->CreateWebSocket(
-        target, {device::kCableWebSocketProtocol}, net::SiteForCookies(),
+        target, {device::kCableWebSocketProtocol},
         net::StorageAccessApiStatus::kNone, net::IsolationInfo(),
-        /*additional_headers=*/{}, network::mojom::kBrowserProcessId,
+        /*additional_headers=*/{}, network::OriginatingProcessId::browser(),
         url::Origin::Create(target), network::mojom::ClientSecurityState::New(),
         network::mojom::kWebSocketOptionBlockAllCookies,
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
@@ -679,7 +677,11 @@ class LateLinkingDevice : public authenticator::Transaction {
         /*url_loader_network_observer=*/mojo::NullRemote(),
         /*auth_handler=*/mojo::NullRemote(),
         /*header_client=*/mojo::NullRemote(),
-        /*throttling_profile_id=*/std::nullopt);
+        /*throttling_profile_id=*/std::nullopt,
+        // This is a browser-internal connection for the caBLE rendezvous
+        // tunnel. It does not belong to any webpage, so we bypass connection
+        // allowlists.
+        /*network_restrictions_id=*/network::GetNoOpNetworkRestrictionsId());
   }
 
  private:
@@ -878,7 +880,7 @@ class HandshakeErrorDevice : public authenticator::Transaction {
             qr_secret,
             {},
             device::cablev2::DerivedValueType::kEIDKey)),
-        secret_(fido_parsing_utils::Materialize(qr_secret)) {
+        secret_(base::ToVector(qr_secret)) {
     websocket_client_ = std::make_unique<device::cablev2::WebSocketAdapter>(
         base::BindOnce(&HandshakeErrorDevice::OnTunnelReady,
                        base::Unretained(this)),
@@ -889,9 +891,9 @@ class HandshakeErrorDevice : public authenticator::Transaction {
         kTunnelServer, tunnel_id_);
 
     network_context_factory_.Run()->CreateWebSocket(
-        target, {device::kCableWebSocketProtocol}, net::SiteForCookies(),
+        target, {device::kCableWebSocketProtocol},
         net::StorageAccessApiStatus::kNone, net::IsolationInfo(),
-        /*additional_headers=*/{}, network::mojom::kBrowserProcessId,
+        /*additional_headers=*/{}, network::OriginatingProcessId::browser(),
         url::Origin::Create(target), network::mojom::ClientSecurityState::New(),
         network::mojom::kWebSocketOptionBlockAllCookies,
         net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
@@ -899,7 +901,11 @@ class HandshakeErrorDevice : public authenticator::Transaction {
         /*url_loader_network_observer=*/mojo::NullRemote(),
         /*auth_handler=*/mojo::NullRemote(),
         /*header_client=*/mojo::NullRemote(),
-        /*throttling_profile_id=*/std::nullopt);
+        /*throttling_profile_id=*/std::nullopt,
+        // This is a browser-internal connection for the caBLE rendezvous
+        // tunnel. It does not belong to any webpage, so we bypass connection
+        // allowlists.
+        /*network_restrictions_id=*/network::GetNoOpNetworkRestrictionsId());
   }
 
  private:
@@ -960,11 +966,10 @@ std::unique_ptr<network::mojom::NetworkContext> NewMockTunnelServer(
 namespace authenticator {
 
 std::unique_ptr<authenticator::Platform> NewMockPlatform(
-    Discovery::AdvertEventStream::Callback ble_advert_callback,
     device::VirtualCtap2Device* ctap2_device,
+    scoped_refptr<CableMockBluetoothAdapter> mock_adapter,
     authenticator::Observer* observer) {
-  return std::make_unique<TestPlatform>(ble_advert_callback, ctap2_device,
-                                        observer);
+  return std::make_unique<TestPlatform>(ctap2_device, mock_adapter, observer);
 }
 
 // NewLateLinkingDevice returns a caBLEv2 authenticator that sends linking

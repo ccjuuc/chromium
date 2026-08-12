@@ -115,7 +115,7 @@ public class TrustedCdn extends TabWebContentsUserData {
     private TrustedCdn(Tab tab) {
         super(tab);
         mTab = tab;
-        mNativeTrustedCdn = TrustedCdnJni.get().init(this);
+        mNativeTrustedCdn = TrustedCdnJni.get().init();
     }
 
     @Override
@@ -146,14 +146,14 @@ public class TrustedCdn extends TabWebContentsUserData {
             return null;
         }
         int level = SecurityStateModel.getSecurityLevelForWebContents(mTab.getWebContents());
-        if (level == ConnectionSecurityLevel.DANGEROUS) return null;
+        if (level != ConnectionSecurityLevel.SECURE) return null;
         GURL publisherUrl = TrustedCdnJni.get().getPublisherUrl(mNativeTrustedCdn);
         return publisherUrl.isValid() ? publisherUrl : null;
     }
 
     @NativeMethods
     public interface Natives {
-        long init(TrustedCdn self);
+        long init();
 
         void onDestroyed(long nativeTrustedCdn);
 

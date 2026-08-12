@@ -16,7 +16,6 @@ import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.AccountsChangeObserver;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.signin.metrics.SignoutReason;
 
@@ -40,7 +39,7 @@ public class SigninChecker implements AccountsChangeObserver, Destroyable {
         mAccountManagerFacade = AccountManagerFacadeProvider.getInstance();
         mAccountManagerFacade.addObserver(this);
         if (mAccountManagerFacade.getAccounts().isFulfilled()) {
-            onCoreAccountInfosChanged();
+            onAccountsChanged();
         }
         mNumOfChildAccountChecksDone = 0;
     }
@@ -51,7 +50,7 @@ public class SigninChecker implements AccountsChangeObserver, Destroyable {
     }
 
     @Override
-    public void onCoreAccountInfosChanged() {
+    public void onAccountsChanged() {
         var accountsPromise = mAccountManagerFacade.getAccounts();
         assert accountsPromise.isFulfilled();
         var accounts = accountsPromise.getResult();
@@ -80,17 +79,14 @@ public class SigninChecker implements AccountsChangeObserver, Destroyable {
         mSigninManager.runAfterOperationInProgress(
                 () -> {
                     CoreAccountInfo accountInfo =
-                            mSigninManager
-                                    .getIdentityManager()
-                                    .getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+                            mSigninManager.getIdentityManager().getPrimaryAccountInfo();
 
                     if (accountInfo == null || childInfo.getId().equals(accountInfo.getId())) {
                         signInSupervisedUser(childInfo);
                     } else {
                         mSigninManager.signOut(
                                 SignoutReason.SIGNOUT_BEFORE_SUPERVISED_SIGNIN,
-                                () -> onChildAccountStatusReady(isChild, childInfo),
-                                /* forceWipeUserData= */ false);
+                                () -> onChildAccountStatusReady(isChild, childInfo));
                     }
                 });
     }

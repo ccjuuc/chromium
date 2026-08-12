@@ -22,6 +22,7 @@ extern const char kUsEnglishLocale[];
 extern const char kEnglishLocaleNoCountry[];
 
 // Metrics names for keeping track of SODA installation.
+extern const char kSodaPreemptiveDownloadStarted[];
 extern const char kSodaBinaryInstallationResult[];
 extern const char kSodaBinaryInstallationSuccessTimeTaken[];
 extern const char kSodaBinaryInstallationFailureTimeTaken[];
@@ -340,6 +341,16 @@ const std::string GetInstallationResultMetricForLanguagePack(
 const std::string GetInstallationResultMetricForLanguage(
     std::string_view language);
 
+// Returns the `SodaInstaller.Language.{language}.UninstalledDueToExpiration`
+// uma metric string for the language code.
+const std::string GetUninstalledDueToExpirationMetricForLanguage(
+    std::string_view language);
+
+// Returns the `SodaInstaller.Language.{language}.RedownloadedAfterExpiration`
+// uma metric string for the language code.
+const std::string GetRedownloadedAfterExpirationMetricForLanguage(
+    std::string_view language);
+
 // Returns the available Live Caption language best matching the
 // application locale, one of the user's preferred languages, or en-US if none
 // of the other languages match.
@@ -350,6 +361,11 @@ std::string_view GetDefaultLiveCaptionLanguage(
 // If `language_name` is Chinese variant, then return the master locale.
 // Otherwise, return `language_name`.
 const std::string MaybeMapToChineseLocale(std::string_view language_name);
+
+// Return a BCP47 language code for the given SODA language code. If the given
+// input is not a string corresponding a SODA language, then return nullopt.
+std::optional<std::string> GetBCP47LanguageCodeFromSodaLanguage(
+    std::string_view soda_language);
 
 }  // namespace speech
 

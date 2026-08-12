@@ -38,7 +38,6 @@ import org.chromium.components.browser_ui.site_settings.PermissionInfo;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridgeJni;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.content_settings.SessionModel;
 import org.chromium.content_public.common.ContentSwitches;
 
 import java.util.concurrent.Callable;
@@ -115,9 +114,7 @@ public class PermissionInfoTest {
             @ContentSetting int setting,
             Profile profile,
             @ContentSetting int expectedSetting) {
-        PermissionInfo info =
-                new PermissionInfo(
-                        type, origin, embedder, /* isEmbargoed= */ false, SessionModel.DURABLE);
+        PermissionInfo info = new PermissionInfo(type, origin, embedder, /* isEmbargoed= */ false);
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -151,7 +148,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSEGeolocation_InPrimaryOtrProfile_DefaultsToAskFromBlock()
+    public void testResetDseGeolocation_InPrimaryOtrProfile_DefaultsToAskFromBlock()
             throws Throwable {
         Profile primaryOtrProfile = getPrimaryOtrProfile();
         setSettingAndExpectValue(
@@ -173,7 +170,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSEGeolocation_InNonPrimaryOtrProfile_DefaultsToAskFromBlock()
+    public void testResetDseGeolocation_InNonPrimaryOtrProfile_DefaultsToAskFromBlock()
             throws Throwable {
         Profile nonPrimaryOtrProfile = getNonPrimaryOtrProfile();
         setSettingAndExpectValue(
@@ -195,7 +192,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSEGeolocation_RegularProfile_DefaultsToAskFromBlock() throws Throwable {
+    public void testResetDseGeolocation_RegularProfile_DefaultsToAskFromBlock() throws Throwable {
         Profile regularProfile = getRegularProfile();
         setSettingAndExpectValue(
                 getGeolocationType(),
@@ -216,7 +213,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSENotification_InPrimaryOtrProfile_DefaultsToAskFromBlock()
+    public void testResetDseNotification_InPrimaryOtrProfile_DefaultsToAskFromBlock()
             throws Throwable {
         Profile primaryOtrProfile = getPrimaryOtrProfile();
 
@@ -241,7 +238,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSENotification_InNonPrimaryOtrProfile_DefaultsToAskFromBlock()
+    public void testResetDseNotification_InNonPrimaryOtrProfile_DefaultsToAskFromBlock()
             throws Throwable {
         Profile nonPrimaryOtrProfile = getNonPrimaryOtrProfile();
 
@@ -266,7 +263,7 @@ public class PermissionInfoTest {
     @Test
     @SmallTest
     @Feature({"Preferences"})
-    public void testResetDSENotification_RegularProfile_DefaultsToAskFromBlock() throws Throwable {
+    public void testResetDseNotification_RegularProfile_DefaultsToAskFromBlock() throws Throwable {
         Profile regularProfile = getRegularProfile();
         resetNotificationsSettingsForTest();
         setSettingAndExpectValue(
@@ -296,8 +293,7 @@ public class PermissionInfoTest {
                         ContentSettingsType.GEOLOCATION_WITH_OPTIONS,
                         "https://example.com",
                         "https://example.com",
-                        false,
-                        SessionModel.DURABLE);
+                        false);
 
         var defaultSetting = new GeolocationSetting(ContentSetting.ASK, ContentSetting.ASK);
         var allowApproximate = new GeolocationSetting(ContentSetting.ALLOW, ContentSetting.BLOCK);
@@ -321,8 +317,7 @@ public class PermissionInfoTest {
                         ContentSettingsType.GEOLOCATION_WITH_OPTIONS,
                         "https://permission.site",
                         "https://permission.site",
-                        false,
-                        SessionModel.DURABLE);
+                        false);
 
         var defaultSetting = new GeolocationSetting(ContentSetting.ASK, ContentSetting.ASK);
 

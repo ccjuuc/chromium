@@ -8,6 +8,8 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
@@ -41,8 +43,19 @@ struct FrameMetadata;
 class PaintImageGenerator;
 class PaintWorkletInput;
 class TextureBacking;
+class TextureBackingContext;
 
-enum class ImageType { kPNG, kJPEG, kWEBP, kGIF, kICO, kBMP, kAVIF, kInvalid };
+enum class ImageType {
+  kPNG,
+  kJPEG,
+  kWEBP,
+  kGIF,
+  kICO,
+  kBMP,
+  kAVIF,
+  kJXL,
+  kInvalid
+};
 
 // An encoded image may include several auxiliary images within it. This enum
 // is used to index those images. Auxiliary images can have different sizes and
@@ -94,9 +107,6 @@ struct CC_PAINT_EXPORT ImageHeaderMetadata {
   // The subsampling format used for the chroma planes, e.g., YUV 4:2:0.
   YUVSubsampling yuv_subsampling = YUVSubsampling::kUnknown;
 
-  // Any HDR metadata included with the image.
-  gfx::HDRMetadata hdr_metadata;
-
   // The visible size of the image (i.e., the area that contains meaningful
   // pixels).
   gfx::Size image_size;
@@ -142,6 +152,12 @@ class CC_PAINT_EXPORT PaintImage {
  public:
   using Id = int;
   using AnimationSequenceId = uint32_t;
+  enum class AnimationSyncSequence : AnimationSequenceId {
+    // All instances of the image animation together on a shared timeline.
+    kShared = 0,
+    // This instance drives its own independent image animation timeline.
+    kOwn = 1,
+  };
 
   // A ContentId is used to identify the content for which images which can be
   // lazily generated (generator/record backed images). As opposed to Id, which
@@ -175,6 +191,10 @@ class CC_PAINT_EXPORT PaintImage {
     FrameKey(ContentId content_id, size_t frame_index);
     bool operator==(const FrameKey& other) const;
     bool operator!=(const FrameKey& other) const;
+    auto operator<=>(const FrameKey& other) const {
+      return std::tie(content_id_, frame_index_) <=>
+             std::tie(other.content_id_, other.frame_index_);
+    }
 
     size_t hash() const { return hash_; }
     std::string ToString() const;
@@ -282,7 +302,11 @@ class CC_PAINT_EXPORT PaintImage {
   // Returned mailbox must not outlive this PaintImage.
   gpu::Mailbox GetMailbox() const;
 
+  void BindTextureBacking(scoped_refptr<TextureBackingContext>) const;
+  void UnbindTextureBacking() const;
+
   Id stable_id() const { return id_; }
+  Id sync_animation_target_id() const { return sync_animation_target_id_; }
   SkImageInfo GetSkImageInfo(AuxImage aux_image = AuxImage::kDefault) const;
   AnimationType animation_type() const { return animation_type_; }
   CompletionState completion_state() const { return completion_state_; }
@@ -294,6 +318,9 @@ class CC_PAINT_EXPORT PaintImage {
   bool ShouldAnimate() const;
   AnimationSequenceId reset_animation_sequence_id() const {
     return reset_animation_sequence_id_;
+  }
+  AnimationSequenceId sync_animation_sequence_id() const {
+    return sync_animation_sequence_id_;
   }
   DecodingMode decoding_mode() const { return decoding_mode_; }
 
@@ -374,12 +401,13 @@ class CC_PAINT_EXPORT PaintImage {
     return gainmap_info_.value();
   }
 
-  gfx::HDRMetadata GetHDRMetadata() const {
-    if (const auto* image_metadata = GetImageHeaderMetadata()) {
-      return image_metadata->hdr_metadata;
-    }
-    return gfx::HDRMetadata();
-  }
+  const gfx::HDRMetadata& GetHDRMetadata() const { return hdr_metadata_; }
+
+  // Returns the maximum HDR headroom in log2 space required to render this
+  // image at full HDR brightness, taking into account gainmap ratio max
+  // metadata or the image's color space. Returns 0.0f if the image is SDR (e.g.
+  // 0.5f corresponds to 2^0.5 ~= 1.41x SDR white).
+  float GetMaximumRenderedHdrHeadroom() const;
 
   std::string ToString() const;
 
@@ -467,6 +495,13 @@ class CC_PAINT_EXPORT PaintImage {
   // recording with a PaintImage storing the updated sequence id.
   AnimationSequenceId reset_animation_sequence_id_ = 0u;
 
+  // The target paint image id to synchronize the frame index.
+  PaintImage::Id sync_animation_target_id_ = kInvalidId;
+  // An incrementing sequence number by the painter to indicate if the animation
+  // should be synced. This will track if it is up-to-date already synced or
+  // not.
+  PaintImage::AnimationSequenceId sync_animation_sequence_id_ = 0;
+
   DecodingMode decoding_mode_ = DecodingMode::kSync;
 
   // The |cached_sk_image_| can be derived/created from other inputs present in
@@ -479,6 +514,21 @@ class CC_PAINT_EXPORT PaintImage {
 
   // The input parameters that are needed to execute the JS paint callback.
   scoped_refptr<DeferredPaintRecord> deferred_paint_record_;
+};
+
+// Lookup table to get the animation frame to be used for rasterization.
+class CC_PAINT_EXPORT AnimatedImageFrameIndexMap
+    : public base::RefCountedThreadSafe<AnimatedImageFrameIndexMap>,
+      public base::flat_map<PaintImage::Id, size_t> {
+ public:
+  AnimatedImageFrameIndexMap();
+  AnimatedImageFrameIndexMap(
+      base::sorted_unique_t sorted_unique,
+      const std::vector<std::pair<PaintImage::Id, size_t>>& entries);
+
+ private:
+  friend class base::RefCountedThreadSafe<AnimatedImageFrameIndexMap>;
+  ~AnimatedImageFrameIndexMap();
 };
 
 }  // namespace cc

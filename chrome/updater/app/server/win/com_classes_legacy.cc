@@ -23,10 +23,9 @@
 #include "base/memory/ref_counted.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -43,13 +42,13 @@
 #include "chrome/updater/app/app_server_win.h"
 #include "chrome/updater/app/server/win/com_classes_util.h"
 #include "chrome/updater/constants.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/persisted_data.h"
 #include "chrome/updater/policy/manager.h"
 #include "chrome/updater/policy/service.h"
 #include "chrome/updater/prefs.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/update_service.h"
-#include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
 #include "chrome/updater/usage_stats_permissions.h"
 #include "chrome/updater/util/progress_sampler.h"
@@ -64,6 +63,8 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/update_client/protocol_definition.h"
 #include "components/update_client/update_client.h"
+
+namespace updater {
 
 namespace {
 
@@ -87,30 +88,42 @@ std::optional<std::wstring> StringFromVariant(const VARIANT& source) {
   return {};
 }
 
-std::string GetStringFromValue(const std::string& value) {
-  return value;
-}
+// Holds the result of the IPC to retrieve PolicyService data.
+template <typename T>
+class PolicyStatusResult
+    : public base::RefCountedThreadSafe<PolicyStatusResult<T>> {
+ public:
+  using ValueGetter = base::RepeatingCallback<PolicyStatus<T>()>;
 
-std::string GetStringFromValue(int value) {
-  return base::NumberToString(value);
-}
+  static auto Get(ValueGetter value_getter) {
+    auto result = base::WrapRefCounted(new PolicyStatusResult<T>(value_getter));
+    AppServerWin::PostRpcTask(
+        base::BindOnce(&PolicyStatusResult::GetValueOnSequence, result));
+    result->completion_event.TimedWait(base::Seconds(60));
+    return result->value;
+  }
 
-std::string GetStringFromValue(bool value) {
-  return base::ToString(value);
-}
+ private:
+  friend base::RefCountedThreadSafe<PolicyStatusResult<T>>;
+  virtual ~PolicyStatusResult() = default;
 
-std::string GetStringFromValue(const updater::UpdatesSuppressedTimes& value) {
-  return base::StringPrintf("%d, %d, %d", value.start_hour_,
-                            value.start_minute_, value.duration_minute_);
-}
+  explicit PolicyStatusResult(ValueGetter value_getter)
+      : value_getter(value_getter) {}
 
-std::string GetStringFromValue(const std::vector<std::string>& value) {
-  return base::JoinString(value, ";");
-}
+  void GetValueOnSequence() {
+    PolicyStatus<T> policy_status = value_getter.Run();
+    if (policy_status) {
+      value = policy_status;
+    }
+    completion_event.Signal();
+  }
+
+  ValueGetter value_getter;
+  std::optional<PolicyStatus<T>> value;
+  base::WaitableEvent completion_event;
+};
 
 }  // namespace
-
-namespace updater {
 
 // Implements `IAppVersionWeb`.
 class AppVersionWebImpl : public IDispatchImpl<IAppVersionWeb> {
@@ -560,7 +573,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   // foreground priority and disallows same version updates.
   HRESULT CheckForUpdate() {
     VLOG(2) << __func__;
-    current_operation_ = CurrentOperation::kCheckingForUpdates;
+    {
+      base::AutoLock lock{lock_};
+      current_operation_ = CurrentOperation::kCheckingForUpdates;
+    }
     return DoOperation(
         base::BindOnce(&AppWebImpl::CheckForUpdateImpl, AppWebImplPtr(this)));
   }
@@ -581,7 +597,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
 
   HRESULT UpdateOrInstall() {
     VLOG(2) << __func__;
-    current_operation_ = CurrentOperation::kUpdatingOrInstalling;
+    {
+      base::AutoLock lock{lock_};
+      current_operation_ = CurrentOperation::kUpdatingOrInstalling;
+    }
     return DoOperation(base::BindOnce(
         is_install_ ? &AppWebImpl::InstallImpl : &AppWebImpl::UpdateImpl,
         AppWebImplPtr(this)));
@@ -600,9 +619,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     request.brand_code = brand_code_;
     request.ap = ap_;
 
-    update_service->Install(
-        request, {}, install_data_index_, UpdateService::Priority::kForeground,
-        language_, state_change_callback, std::move(complete_callback));
+    update_service->Install(request, {}, GetInstallDataIndex(),
+                            UpdateService::Priority::kForeground, language_,
+                            state_change_callback,
+                            std::move(complete_callback));
   }
 
   void UpdateImpl(
@@ -612,7 +632,7 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
       scoped_refptr<UpdateService> update_service) {
     CHECK(update_service);
 
-    update_service->Update(app_id_, install_data_index_,
+    update_service->Update(app_id_, GetInstallDataIndex(),
                            UpdateService::Priority::kForeground,
                            policy_same_version_update_, language_,
                            state_change_callback, std::move(complete_callback));
@@ -620,7 +640,10 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
 
   // Legacy compatibility: sets a flag that causes `get_currentState` to return
   // `STATE_READY_TO_INSTALL` when the update state is `kUpdateAvailable`.
-  void SetReadyToInstall() { set_ready_to_install_ = true; }
+  void SetReadyToInstall() {
+    base::AutoLock lock{lock_};
+    set_ready_to_install_ = true;
+  }
 
   // Overrides for IAppWeb.
   IFACEMETHODIMP get_appId(BSTR* app_id) override {
@@ -841,16 +864,20 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     }
 
     *install_data_index =
-        base::win::ScopedBstr(base::UTF8ToWide(install_data_index_)).Release();
+        base::win::ScopedBstr(base::UTF8ToWide(GetInstallDataIndex()))
+            .Release();
     return S_OK;
   }
 
   IFACEMETHODIMP put_serverInstallDataIndex(BSTR install_data_index) override {
-    if (!install_data_index) {
+    std::optional<std::string> install_data_index_str =
+        ValidateInstallDataIndex(install_data_index);
+    if (!install_data_index_str) {
       return E_INVALIDARG;
     }
 
-    install_data_index_ = base::WideToUTF8(install_data_index);
+    base::AutoLock lock{lock_};
+    install_data_index_ = *std::move(install_data_index_str);
     return S_OK;
   }
 
@@ -922,6 +949,11 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
     result_ = result;
   }
 
+  std::string GetInstallDataIndex() const {
+    base::AutoLock lock{lock_};
+    return install_data_index_;
+  }
+
   // Handles the update service callbacks.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
@@ -931,19 +963,20 @@ class AppWebImpl : public IDispatchImpl<IAppWeb> {
   std::string brand_code_;
   std::string ap_;
   std::string language_;
-  std::string install_data_index_;
   UpdateService::PolicySameVersionUpdate policy_same_version_update_ =
       UpdateService::PolicySameVersionUpdate::kNotAllowed;
-  bool set_ready_to_install_ = false;
   ProgressSampler download_progress_sampler_;
   ProgressSampler install_progress_sampler_;
 
-  // Access to `state_update_` and `result_` must be serialized by using the
-  // lock.
+  // Serializes access to the members that may be read or written on multiple
+  // COM RPC threads.
   mutable base::Lock lock_;
-  std::optional<UpdateService::UpdateState> state_update_;
-  std::optional<UpdateService::Result> result_;
-  CurrentOperation current_operation_ = CurrentOperation::kUnknown;
+  std::string install_data_index_ GUARDED_BY(lock_);
+  bool set_ready_to_install_ GUARDED_BY(lock_) = false;
+  CurrentOperation current_operation_ GUARDED_BY(lock_) =
+      CurrentOperation::kUnknown;
+  std::optional<UpdateService::UpdateState> state_update_ GUARDED_BY(lock_);
+  std::optional<UpdateService::Result> result_ GUARDED_BY(lock_);
 };
 
 // This class implements the legacy Omaha3 IAppBundleWeb interface as expected
@@ -1174,7 +1207,7 @@ STDMETHODIMP LegacyProcessLauncherImpl::LaunchCmdElevated(
   ScopedKernelHANDLE duplicate_proc_handle;
   if (!::DuplicateHandle(
           ::GetCurrentProcess(), app_command_web->process().Handle(),
-          caller_proc_handle.Get(),
+          caller_proc_handle.get(),
           ScopedKernelHANDLE::Receiver(duplicate_proc_handle).get(),
           PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) {
     HRESULT hr = HRESULTFromLastError();
@@ -1224,7 +1257,13 @@ STDMETHODIMP LegacyAppCommandWebImpl::get_status(UINT* status) {
     return E_UNEXPECTED;
   }
 
-  if (!process_.IsValid()) {
+  bool is_valid = false;
+  {
+    base::AutoLock lock(lock_);
+    is_valid = process_.IsValid();
+  }
+
+  if (!is_valid) {
     *status = COMMAND_STATUS_INIT;
   } else {
     *status = app_command_runner_.value()->TimedWait() ? COMMAND_STATUS_COMPLETE
@@ -1239,9 +1278,13 @@ STDMETHODIMP LegacyAppCommandWebImpl::get_exitCode(DWORD* exit_code) {
     return E_INVALIDARG;
   }
 
+  base::Process process_dup = process();
+  if (!process_dup.IsValid()) {
+    return S_FALSE;
+  }
+
   int code = -1;
-  if (!process_.IsValid() ||
-      !process_.WaitForExitWithTimeout(base::TimeDelta(), &code)) {
+  if (!process_dup.WaitForExitWithTimeout(base::TimeDelta(), &code)) {
     return S_FALSE;
   }
 
@@ -1269,8 +1312,13 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
                                               VARIANT substitution7,
                                               VARIANT substitution8,
                                               VARIANT substitution9) {
-  if (!app_command_runner_.has_value() || process_.IsValid()) {
-    return E_UNEXPECTED;
+  {
+    base::AutoLock lock(lock_);
+    if (!app_command_runner_.has_value() || is_executing_ ||
+        process_.IsValid()) {
+      return E_UNEXPECTED;
+    }
+    is_executing_ = true;
   }
 
   std::vector<std::wstring> substitutions;
@@ -1289,7 +1337,16 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
     substitutions.push_back(substitution_string.value());
   }
 
-  const HRESULT hr = app_command_runner_.value()->Run(substitutions, process_);
+  base::Process process;
+  const HRESULT hr = app_command_runner_.value()->Run(substitutions, process);
+  {
+    base::AutoLock lock(lock_);
+    if (SUCCEEDED(hr)) {
+      process_ = std::move(process);
+    }
+    is_executing_ = false;
+  }
+
   using LegacyAppCommandWebImplPtr =
       Microsoft::WRL::ComPtr<LegacyAppCommandWebImpl>;
   AppServerWin::PostOnTaskRunner(
@@ -1342,7 +1399,7 @@ STDMETHODIMP LegacyAppCommandWebImpl::execute(VARIANT substitution1,
                         << " completed or was skipped: " << error;
               },
               LegacyAppCommandWebImplPtr(this)),
-          process_.Duplicate(), hr));
+          this->process(), hr));
   return hr;
 }
 
@@ -1402,14 +1459,26 @@ PolicyStatusImpl::PolicyStatusImpl()
                                    {IID_MAP_ENTRY_SYSTEM(IPolicyStatus4),
                                     IID_MAP_ENTRY_SYSTEM(IPolicyStatus3),
                                     IID_MAP_ENTRY_SYSTEM(IPolicyStatus2),
-                                    IID_MAP_ENTRY_SYSTEM(IPolicyStatus)}),
-      policy_service_(GetAppServerWinInstance()->config()->GetPolicyService()) {
-}
+                                    IID_MAP_ENTRY_SYSTEM(IPolicyStatus)}) {}
 PolicyStatusImpl::~PolicyStatusImpl() = default;
 
 HRESULT PolicyStatusImpl::RuntimeClassInitialize() {
   VLOG(2) << __func__;
   LogComCaller(__FUNCTION__);
+
+  scoped_refptr<AppServerWin> app_server = GetAppServerWinInstance();
+  if (!app_server) {
+    return E_FAIL;
+  }
+  scoped_refptr<Configurator> config = app_server->config();
+  if (!config) {
+    return E_FAIL;
+  }
+  policy_service_ = config->GetPolicyService();
+  if (!policy_service_) {
+    return E_FAIL;
+  }
+
   return S_OK;
 }
 
@@ -1419,12 +1488,13 @@ STDMETHODIMP PolicyStatusImpl::get_lastCheckPeriodMinutes(DWORD* minutes) {
     return E_INVALIDARG;
   }
 
-  PolicyStatus<base::TimeDelta> period = policy_service_->GetLastCheckPeriod();
+  auto period = PolicyStatusResult<base::TimeDelta>::Get(
+      base::BindRepeating(&PolicyService::GetLastCheckPeriod, policy_service_));
   if (!period) {
     return E_FAIL;
   }
 
-  *minutes = period.policy().InMinutes();
+  *minutes = period->policy().InMinutes();
   return S_OK;
 }
 
@@ -1441,17 +1511,22 @@ STDMETHODIMP PolicyStatusImpl::get_updatesSuppressedTimes(
     return E_INVALIDARG;
   }
 
-  PolicyStatus<UpdatesSuppressedTimes> updates_suppressed_times =
-      policy_service_->GetUpdatesSuppressedTimes();
-  if (!updates_suppressed_times || !updates_suppressed_times.policy().valid()) {
+  auto updates_suppressed_times =
+      PolicyStatusResult<UpdatesSuppressedTimes>::Get(base::BindRepeating(
+          &PolicyService::GetUpdatesSuppressedTimes, policy_service_));
+  if (!updates_suppressed_times ||
+      !updates_suppressed_times->policy().valid()) {
     return E_FAIL;
   }
 
-  *start_hour = updates_suppressed_times.policy().start_hour_;
-  *start_min = updates_suppressed_times.policy().start_minute_;
-  *duration_min = updates_suppressed_times.policy().duration_minute_;
+  *start_hour = updates_suppressed_times->policy().start_hour_;
+  *start_min = updates_suppressed_times->policy().start_minute_;
+  *duration_min = updates_suppressed_times->policy().duration_minute_;
   *are_updates_suppressed =
-      policy_service_->AreUpdatesSuppressedNow() ? VARIANT_TRUE : VARIANT_FALSE;
+      AreUpdatesSuppressed(updates_suppressed_times->policy(),
+                           base::Time::Now())
+          ? VARIANT_TRUE
+          : VARIANT_FALSE;
 
   return S_OK;
 }
@@ -1461,13 +1536,14 @@ STDMETHODIMP PolicyStatusImpl::get_downloadPreferenceGroupPolicy(BSTR* pref) {
     return E_INVALIDARG;
   }
 
-  PolicyStatus<std::string> download_preference =
-      policy_service_->GetDownloadPreference();
+  auto download_preference =
+      PolicyStatusResult<std::string>::Get(base::BindRepeating(
+          &PolicyService::GetDownloadPreference, policy_service_));
   if (!download_preference) {
     return E_FAIL;
   }
 
-  *pref = base::win::ScopedBstr(base::UTF8ToWide(download_preference.policy()))
+  *pref = base::win::ScopedBstr(base::UTF8ToWide(download_preference->policy()))
               .Release();
   return S_OK;
 }
@@ -1477,13 +1553,13 @@ STDMETHODIMP PolicyStatusImpl::get_packageCacheSizeLimitMBytes(DWORD* limit) {
     return E_INVALIDARG;
   }
 
-  PolicyStatus<int> cache_size_limit =
-      policy_service_->GetPackageCacheSizeLimitMBytes();
+  auto cache_size_limit = PolicyStatusResult<int>::Get(base::BindRepeating(
+      &PolicyService::GetPackageCacheSizeLimitMBytes, policy_service_));
   if (!cache_size_limit) {
     return E_FAIL;
   }
 
-  *limit = cache_size_limit.policy();
+  *limit = cache_size_limit->policy();
   return S_OK;
 }
 
@@ -1492,13 +1568,13 @@ STDMETHODIMP PolicyStatusImpl::get_packageCacheExpirationTimeDays(DWORD* days) {
     return E_INVALIDARG;
   }
 
-  PolicyStatus<int> cache_life_limit =
-      policy_service_->GetPackageCacheExpirationTimeDays();
+  auto cache_life_limit = PolicyStatusResult<int>::Get(base::BindRepeating(
+      &PolicyService::GetPackageCacheExpirationTimeDays, policy_service_));
   if (!cache_life_limit) {
     return E_FAIL;
   }
 
-  *days = cache_life_limit.policy();
+  *days = cache_life_limit->policy();
   return S_OK;
 }
 
@@ -1509,13 +1585,14 @@ STDMETHODIMP PolicyStatusImpl::get_effectivePolicyForAppInstalls(
     return E_INVALIDARG;
   }
 
-  PolicyStatus<int> install_policy =
-      policy_service_->GetPolicyForAppInstalls(base::WideToUTF8(app_id));
+  auto install_policy = PolicyStatusResult<int>::Get(
+      base::BindRepeating(&PolicyService::GetPolicyForAppInstalls,
+                          policy_service_, base::WideToUTF8(app_id)));
   if (!install_policy) {
     return E_FAIL;
   }
 
-  *policy = install_policy.policy();
+  *policy = install_policy->policy();
   return S_OK;
 }
 
@@ -1525,13 +1602,14 @@ STDMETHODIMP PolicyStatusImpl::get_effectivePolicyForAppUpdates(BSTR app_id,
     return E_INVALIDARG;
   }
 
-  PolicyStatus<int> update_policy =
-      policy_service_->GetPolicyForAppUpdates(base::WideToUTF8(app_id));
+  auto update_policy = PolicyStatusResult<int>::Get(
+      base::BindRepeating(&PolicyService::GetPolicyForAppUpdates,
+                          policy_service_, base::WideToUTF8(app_id)));
   if (!update_policy) {
     return E_FAIL;
   }
 
-  *policy = update_policy.policy();
+  *policy = update_policy->policy();
   return S_OK;
 }
 
@@ -1541,14 +1619,15 @@ STDMETHODIMP PolicyStatusImpl::get_targetVersionPrefix(BSTR app_id,
     return E_INVALIDARG;
   }
 
-  PolicyStatus<std::string> target_version_prefix =
-      policy_service_->GetTargetVersionPrefix(base::WideToUTF8(app_id));
+  auto target_version_prefix = PolicyStatusResult<std::string>::Get(
+      base::BindRepeating(&PolicyService::GetTargetVersionPrefix,
+                          policy_service_, base::WideToUTF8(app_id)));
   if (!target_version_prefix) {
     return E_FAIL;
   }
 
   *prefix =
-      base::win::ScopedBstr(base::UTF8ToWide(target_version_prefix.policy()))
+      base::win::ScopedBstr(base::UTF8ToWide(target_version_prefix->policy()))
           .Release();
   return S_OK;
 }
@@ -1560,15 +1639,15 @@ STDMETHODIMP PolicyStatusImpl::get_isRollbackToTargetVersionAllowed(
     return E_INVALIDARG;
   }
 
-  PolicyStatus<bool> is_rollback_allowed =
-      policy_service_->IsRollbackToTargetVersionAllowed(
-          base::WideToUTF8(app_id));
+  auto is_rollback_allowed = PolicyStatusResult<bool>::Get(
+      base::BindRepeating(&PolicyService::IsRollbackToTargetVersionAllowed,
+                          policy_service_, base::WideToUTF8(app_id)));
   if (!is_rollback_allowed) {
     return E_FAIL;
   }
 
   *rollback_allowed =
-      is_rollback_allowed.policy() ? VARIANT_TRUE : VARIANT_FALSE;
+      is_rollback_allowed->policy() ? VARIANT_TRUE : VARIANT_FALSE;
   return S_OK;
 }
 
@@ -1592,41 +1671,6 @@ struct LastCheckedTimeResult
  private:
   friend class base::RefCountedThreadSafe<LastCheckedTimeResult>;
   virtual ~LastCheckedTimeResult() = default;
-};
-
-// Holds the result of the IPC to retrieve PolicyService data.
-template <typename T>
-class PolicyStatusResult
-    : public base::RefCountedThreadSafe<PolicyStatusResult<T>> {
- public:
-  using ValueGetter = base::RepeatingCallback<PolicyStatus<T>()>;
-
-  static auto Get(ValueGetter value_getter) {
-    auto result = base::WrapRefCounted(new PolicyStatusResult<T>(value_getter));
-    AppServerWin::PostRpcTask(
-        base::BindOnce(&PolicyStatusResult::GetValueOnSequence, result));
-    result->completion_event.TimedWait(base::Seconds(60));
-    return result->value;
-  }
-
- private:
-  friend base::RefCountedThreadSafe<PolicyStatusResult<T>>;
-  virtual ~PolicyStatusResult() = default;
-
-  explicit PolicyStatusResult(ValueGetter value_getter)
-      : value_getter(value_getter) {}
-
-  void GetValueOnSequence() {
-    PolicyStatus<T> policy_status = value_getter.Run();
-    if (policy_status) {
-      value = policy_status;
-    }
-    completion_event.Signal();
-  }
-
-  ValueGetter value_getter;
-  std::optional<PolicyStatus<T>> value;
-  base::WaitableEvent completion_event;
 };
 
 }  // namespace
@@ -1725,12 +1769,14 @@ STDMETHODIMP PolicyStatusImpl::get_updatesSuppressedTimes(
     return E_FAIL;
   }
   const UpdatesSuppressedTimes updates_suppressed_times =
-      policy_status->effective_policy()->policy;
+      policy_status->policy();
   if (!updates_suppressed_times.valid()) {
     return E_FAIL;
   }
   *are_updates_suppressed =
-      policy_service_->AreUpdatesSuppressedNow() ? VARIANT_TRUE : VARIANT_FALSE;
+      AreUpdatesSuppressed(updates_suppressed_times, base::Time::Now())
+          ? VARIANT_TRUE
+          : VARIANT_FALSE;
   return PolicyStatusValueImpl::Create(*policy_status, value);
 }
 
@@ -1929,14 +1975,10 @@ template <typename T>
   return MakeAndInitializeComObject<PolicyStatusValueImpl>(
       policy_status_value,
       value.effective_policy() ? value.effective_policy()->source : "",
-      value.effective_policy()
-          ? GetStringFromValue(value.effective_policy()->policy)
-          : "",
+      value.effective_policy() ? value.effective_policy()->ToString() : "",
       value.conflict_policy() != std::nullopt,
       value.conflict_policy() ? value.conflict_policy()->source : "",
-      value.conflict_policy()
-          ? GetStringFromValue(value.conflict_policy()->policy)
-          : "");
+      value.conflict_policy() ? value.conflict_policy()->ToString() : "");
 }
 
 HRESULT PolicyStatusValueImpl::RuntimeClassInitialize(

@@ -17,13 +17,11 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/hash/hash.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
@@ -54,14 +52,6 @@ namespace {
 
 // Some extensions we'll tack on to copies of the Preferences files.
 const base::FilePath::CharType kBadExtension[] = FILE_PATH_LITERAL("bad");
-
-// Report a key that triggers a write into the Preferences files.
-void ReportKeyChangedToUMA(std::string_view key) {
-  // Truncate the sign bit. Even if the type is unsigned, UMA displays 32-bit
-  // negative numbers.
-  const uint32_t hash = base::PersistentHash(key) & 0x7FFFFFFF;
-  UMA_HISTOGRAM_SPARSE("Prefs.JSonStore.SetValueKey", hash);
-}
 
 bool BackupPrefsFile(const base::FilePath& path) {
   const base::FilePath bad = path.ReplaceExtension(kBadExtension);
@@ -184,7 +174,7 @@ bool JsonPrefStore::GetValue(std::string_view key,
   return true;
 }
 
-base::Value::Dict JsonPrefStore::GetValues() const {
+base::DictValue JsonPrefStore::GetValues() const {
   return prefs_.Clone();
 }
 
@@ -233,7 +223,6 @@ void JsonPrefStore::SetValue(std::string_view key,
   if (!old_value || value != *old_value) {
     prefs_.SetByDottedPath(key, std::move(value));
     ReportValueChanged(key, flags);
-    ReportKeyChangedToUMA(key);
   }
 }
 
@@ -246,7 +235,6 @@ void JsonPrefStore::SetValueSilently(std::string_view key,
   if (!old_value || value != *old_value) {
     prefs_.SetByDottedPath(key, std::move(value));
     ScheduleWrite(flags);
-    ReportKeyChangedToUMA(key);
   }
 }
 
@@ -342,8 +330,8 @@ void JsonPrefStore::ReportValueChanged(std::string_view key, uint32_t flags) {
   if (pref_filter_)
     pref_filter_->FilterUpdate(key);
 
-  for (PrefStore::Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 
   ScheduleWrite(flags);
 }
@@ -438,7 +426,7 @@ void JsonPrefStore::OnFileRead(std::unique_ptr<ReadResult> read_result) {
 
   DCHECK(read_result);
 
-  base::Value::Dict unfiltered_prefs;
+  base::DictValue unfiltered_prefs;
 
   read_error_ = read_result->error;
 
@@ -505,7 +493,7 @@ JsonPrefStore::GetSerializedDataProducerForBackgroundSequence() {
 }
 
 void JsonPrefStore::FinalizeFileRead(bool initialization_successful,
-                                     base::Value::Dict prefs,
+                                     base::DictValue prefs,
                                      bool schedule_write) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 

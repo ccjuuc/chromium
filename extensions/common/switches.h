@@ -23,6 +23,10 @@ extern const char kAllowlistedExtensionID[];
 // Chromebox for Meetings hardware.
 extern const char kDisableAppContentVerification[];
 
+// Disables crashing on JavaScript errors in component extensions. Used for
+// development.
+extern const char kDisableCrashOnComponentExtensionJsError[];
+
 // Disable checking for user opt-in for extensions that want to inject script
 // into file URLs (ie, always allow it). This is used during automated testing.
 extern const char kDisableExtensionsFileAccessCheck[];
@@ -80,6 +84,10 @@ extern const char kLoadGuestModeTestExtension[];
 // Allows the use of the `testing` reason in offscreen documents.
 extern const char kOffscreenDocumentTesting[];
 
+// Forces component extensions' service workers to be re-registered on every
+// load, instead of reusing the registration persisted in the profile.
+extern const char kRefreshComponentExtensionServiceWorkers[];
+
 // Set the parameters for ExtensionURLLoaderThrottleBrowserTest.
 extern const char kSetExtensionThrottleTestParams[];
 
@@ -101,6 +109,10 @@ extern const char kAllowFutureManifestVersion[];
 // copied from the browser to the renderer in ChromeContentBrowserClient to
 // actually use it in browser tests.
 extern const char kExtensionTestApiOnWebPages[];
+
+// Forces the `chrome.test` API to use standardized behavior matching the
+// `browser.test` proposal.
+extern const char kExtensionTestApiStandardizedBehavior[];
 
 // The feature parameter name that controls the variant of IPH shown when the
 // user has no extensions installed.
@@ -140,6 +152,14 @@ extern const char kExtensionsInstallVerification[];
 // Specifies a comma-separated list of extension ids that should be forced to
 // be treated as not from the webstore when doing install verification.
 extern const char kExtensionsNotWebstore[];
+
+// Overrides the url that the browser treats as the webstore, granting it the
+// webstore APIs and giving it some special protections.
+extern const char kAppsGalleryURL[];
+
+// Overrides the URL that the webstore APIs download extensions from.
+// Note: the URL must contain one '%s' for the extension ID.
+extern const char kAppsGalleryDownloadURL[];
 
 // Checks if extensions are allowed to run on chrome:// URLs.
 bool AreExtensionsOnChromeURLsAllowed();

@@ -10,6 +10,7 @@ import type {SettingsToggleButtonElement} from 'chrome://os-settings/os_settings
 import {CrToggleElement, DevicePageBrowserProxyImpl, Router, routes} from 'chrome://os-settings/os_settings.js';
 import {strictQuery} from 'chrome://resources/ash/common/typescript_utils/strict_query.js';
 import {assert} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {isVisible} from 'chrome://webui-test/test_util.js';
@@ -55,6 +56,11 @@ suite('<settings-audio>', () => {
             value: false,
           },
         },
+        audio_focus_enforcement_enabled: {
+          key: 'ash.audio_focus_enforcement_enabled',
+          type: chrome.settingsPrivate.PrefType.BOOLEAN,
+          value: true,
+        },
       },
     };
   }
@@ -72,6 +78,10 @@ suite('<settings-audio>', () => {
   }
 
   setup(() => {
+    // Enable the audio focus setting flag for testing.
+    loadTimeData.overrideValues({
+      enableAudioFocusSetting: true,
+    });
     // Set up test browser proxies.
     audioAndCaptionsPageBrowserProxy =
         new TestAudioAndCaptionsPageBrowserProxy();
@@ -103,11 +113,13 @@ suite('<settings-audio>', () => {
           assertTrue(isVisible(lowBatterySoundToggle));
 
           assertTrue(lowBatterySoundToggle.checked);
-          assertTrue(page.prefs.ash.low_battery_sound.enabled.value);
+          assertTrue(
+              page.getPref<boolean>('ash.low_battery_sound.enabled').value);
 
           lowBatterySoundToggle.click();
           assertFalse(lowBatterySoundToggle.checked);
-          assertFalse(page.prefs.ash.low_battery_sound.enabled.value);
+          assertFalse(
+              page.getPref<boolean>('ash.low_battery_sound.enabled').value);
         });
 
     test(
@@ -119,11 +131,13 @@ suite('<settings-audio>', () => {
           assertTrue(isVisible(chargingSoundsToggle));
 
           assertFalse(chargingSoundsToggle.checked);
-          assertFalse(page.prefs.ash.charging_sounds.enabled.value);
+          assertFalse(
+              page.getPref<boolean>('ash.charging_sounds.enabled').value);
 
           chargingSoundsToggle.click();
           assertTrue(chargingSoundsToggle.checked);
-          assertTrue(page.prefs.ash.charging_sounds.enabled.value);
+          assertTrue(
+              page.getPref<boolean>('ash.charging_sounds.enabled').value);
         });
 
     test(
@@ -150,6 +164,31 @@ suite('<settings-audio>', () => {
 
           deviceStartupSoundToggleRow.click();
           assertFalse(deviceStartupSoundToggle.checked);
+        });
+
+    test(
+        'audio focus enforcement toggle button should reflect pref value',
+        () => {
+          // Get the audio focus enforcement toggle button.
+          const audioFocusEnforcementToggle =
+              page.shadowRoot!.querySelector<SettingsToggleButtonElement>(
+                  '#audioFocusEnforcementToggle');
+          assert(audioFocusEnforcementToggle);
+          assertTrue(isVisible(audioFocusEnforcementToggle));
+
+          // Verify the toggle is checked by default and matches the pref value.
+          assertTrue(audioFocusEnforcementToggle.checked);
+          assertTrue(
+              page.getPref<boolean>('ash.audio_focus_enforcement_enabled')
+                  .value);
+
+          // Click the toggle and verify it is unchecked and updates the pref
+          // value.
+          audioFocusEnforcementToggle.click();
+          assertFalse(audioFocusEnforcementToggle.checked);
+          assertFalse(
+              page.getPref<boolean>('ash.audio_focus_enforcement_enabled')
+                  .value);
         });
   });
 

@@ -26,7 +26,7 @@
 #include "ui/views/view.h"
 
 class BookmarkMergedSurfaceService;
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 namespace bookmarks {
@@ -56,7 +56,7 @@ class Widget;
 class BookmarkMenuDelegate : public BookmarkMergedSurfaceServiceObserver,
                              public BookmarkContextMenuObserver {
  public:
-  BookmarkMenuDelegate(Browser* browser,
+  BookmarkMenuDelegate(BrowserWindowInterface* browser,
                        views::Widget* parent,
                        views::MenuDelegate* real_delegate,
                        BookmarkLaunchLocation location);
@@ -131,6 +131,11 @@ class BookmarkMenuDelegate : public BookmarkMergedSurfaceServiceObserver,
                        int id,
                        const gfx::Point& p,
                        ui::mojom::MenuSourceType source_type);
+  void RunContextMenuAt(std::vector<int64_t> node_ids,
+                        const gfx::Point& p,
+                        ui::mojom::MenuSourceType source_type,
+                        bool close_on_remove,
+                        bool can_paste);
   bool CanDrag(views::MenuItemView* menu);
   void WriteDragData(views::MenuItemView* sender, ui::OSExchangeData* data);
   int GetDragOperations(views::MenuItemView* sender);
@@ -308,7 +313,7 @@ class BookmarkMenuDelegate : public BookmarkMergedSurfaceServiceObserver,
   views::MenuItemView* UpdateOtherNodeSeparator();
   void BuildOtherNodeMenuHeader(views::MenuItemView* menu);
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<Profile> profile_;
 
   // Parent of menus.
@@ -372,6 +377,8 @@ class BookmarkMenuDelegate : public BookmarkMergedSurfaceServiceObserver,
   base::ScopedObservation<BookmarkMergedSurfaceService,
                           BookmarkMergedSurfaceServiceObserver>
       bookmark_merged_service_observation_{this};
+
+  base::WeakPtrFactory<BookmarkMenuDelegate> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_DELEGATE_H_

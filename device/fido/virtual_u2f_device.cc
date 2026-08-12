@@ -9,7 +9,7 @@
 #include <tuple>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/containers/extend.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/numerics/safe_conversions.h"
@@ -18,12 +18,9 @@
 #include "components/apdu/apdu_response.h"
 #include "crypto/keypair.h"
 #include "crypto/sign.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/public/fido_constants.h"
 
 namespace device {
-
-using fido_parsing_utils::Append;
 
 namespace {
 
@@ -44,11 +41,13 @@ std::optional<std::vector<uint8_t>> ErrorStatus(
 
 // static
 bool VirtualU2fDevice::IsTransportSupported(FidoTransportProtocol transport) {
-  return base::Contains(base::flat_set<FidoTransportProtocol>(
-                            {FidoTransportProtocol::kUsbHumanInterfaceDevice,
-                             FidoTransportProtocol::kBluetoothLowEnergy,
-                             FidoTransportProtocol::kNearFieldCommunication}),
-                        transport);
+  return (base::flat_set<FidoTransportProtocol>(
+              {FidoTransportProtocol::kUsbHumanInterfaceDevice,
+               FidoTransportProtocol::kBluetoothLowEnergy,
+               FidoTransportProtocol::kNearFieldCommunication,
+               FidoTransportProtocol::kInternal,
+               FidoTransportProtocol::kSmartCard}))
+      .contains(transport);
 }
 
 VirtualU2fDevice::VirtualU2fDevice() = default;
@@ -156,10 +155,10 @@ std::optional<std::vector<uint8_t>> VirtualU2fDevice::DoRegister(
   sign_buffer.reserve(1 + application_parameter.size() +
                       challenge_param.size() + key_handle.size() + x962.size());
   sign_buffer.push_back(0x00);
-  Append(&sign_buffer, application_parameter);
-  Append(&sign_buffer, challenge_param);
-  Append(&sign_buffer, key_handle);
-  Append(&sign_buffer, x962);
+  base::Extend(sign_buffer, application_parameter);
+  base::Extend(sign_buffer, challenge_param);
+  base::Extend(sign_buffer, key_handle);
+  base::Extend(sign_buffer, x962);
 
   // Sign with attestation key.
   // Note: Non-deterministic, you need to mock this out if you rely on
@@ -183,11 +182,11 @@ std::optional<std::vector<uint8_t>> VirtualU2fDevice::DoRegister(
   response.reserve(1 + x962.size() + 1 + key_handle.size() +
                    attestation_cert->size() + sig.size());
   response.push_back(kU2fRegistrationResponseHeader);
-  Append(&response, base::as_byte_span(x962));
+  base::Extend(response, base::as_byte_span(x962));
   response.push_back(key_handle.size());
-  Append(&response, key_handle);
-  Append(&response, *attestation_cert);
-  Append(&response, sig);
+  base::Extend(response, key_handle);
+  base::Extend(response, *attestation_cert);
+  base::Extend(response, sig);
 
   RegistrationData registration_data(
       std::move(private_key), application_parameter, 1 /* signature counter */);
@@ -228,22 +227,25 @@ std::optional<std::vector<uint8_t>> VirtualU2fDevice::DoSign(
   if (!registration)
     return ErrorStatus(apdu::ApduResponse::Status::SW_WRONG_DATA);
 
-  ++registration->counter;
+  if (registration->counter.has_value()) {
+    (*registration->counter)++;
+  }
 
   // First create the part of the response that gets signed over.
   std::vector<uint8_t> response;
   response.push_back(0x01);  // Always pretend we got a touch.
-  response.push_back(registration->counter >> 24);
-  response.push_back(registration->counter >> 16);
-  response.push_back(registration->counter >> 8);
-  response.push_back(registration->counter);
+  uint32_t counter_value = registration->counter.value_or(0);
+  response.push_back(counter_value >> 24);
+  response.push_back(counter_value >> 16);
+  response.push_back(counter_value >> 8);
+  response.push_back(counter_value);
 
   std::vector<uint8_t> sign_buffer;
   sign_buffer.reserve(application_parameter.size() + response.size() +
                       challenge_param.size());
-  Append(&sign_buffer, application_parameter);
-  Append(&sign_buffer, response);
-  Append(&sign_buffer, challenge_param);
+  base::Extend(sign_buffer, application_parameter);
+  base::Extend(sign_buffer, response);
+  base::Extend(sign_buffer, challenge_param);
 
   // Sign with credential key.
   std::vector<uint8_t> sig = registration->private_key->Sign(sign_buffer);
@@ -255,7 +257,7 @@ std::optional<std::vector<uint8_t>> VirtualU2fDevice::DoSign(
   }
 
   // Add signature for full response.
-  Append(&response, sig);
+  base::Extend(response, sig);
 
   mutable_state()->NotifyAssertion(std::make_pair(key_handle, registration));
   return apdu::ApduResponse(std::move(response),

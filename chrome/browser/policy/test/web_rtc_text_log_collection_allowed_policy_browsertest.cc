@@ -37,12 +37,12 @@ class WebRtcTextLogCollectionAllowedPolicyTest : public policy::PolicyTest {
   }
 
   const PrefService::Preference* GetPreference() const {
-    auto* service = user_prefs::UserPrefs::Get(browser()->profile());
+    auto* service = user_prefs::UserPrefs::Get(browser()->GetProfile());
     return service->FindPreference(prefs::kWebRtcTextLogCollectionAllowed);
   }
 
   void SetPreferenceValue(bool value) {
-    auto* service = user_prefs::UserPrefs::Get(browser()->profile());
+    auto* service = user_prefs::UserPrefs::Get(browser()->GetProfile());
     return service->SetBoolean(prefs::kWebRtcTextLogCollectionAllowed, value);
   }
 
@@ -124,41 +124,6 @@ IN_PROC_BROWSER_TEST_F(WebRtcTextLogCollectionAllowedPolicyTest,
     base::RunLoop run_loop;
     webrtc_logging_controller->UploadLog(
         UploadDataDoneCallbackExpectingError(&run_loop, false));
-    run_loop.Run();
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(WebRtcTextLogCollectionAllowedPolicyTest,
-                       RunUploadStoredLogTest) {
-  SetPreferenceValue(false);
-  const PrefService::Preference* const pref = GetPreference();
-  ASSERT_EQ(pref->GetValue()->GetBool(), false);
-
-  WebRtcLoggingController* webrtc_logging_controller =
-      CreateHostAndController();
-
-  {
-    base::RunLoop run_loop;
-    webrtc_logging_controller->StartLogging(
-        LoggingCallbackExpectingSuccess(&run_loop, true));
-    run_loop.Run();
-  }
-  {
-    base::RunLoop run_loop;
-    webrtc_logging_controller->StopLogging(
-        LoggingCallbackExpectingSuccess(&run_loop, true));
-    run_loop.Run();
-  }
-  {
-    base::RunLoop run_loop;
-    webrtc_logging_controller->StoreLog(
-        "test_log_id", LoggingCallbackExpectingSuccess(&run_loop, true));
-    run_loop.Run();
-  }
-  {
-    base::RunLoop run_loop;
-    webrtc_logging_controller->UploadStoredLog(
-        "test_log_id", UploadDataDoneCallbackExpectingError(&run_loop, false));
     run_loop.Run();
   }
 }

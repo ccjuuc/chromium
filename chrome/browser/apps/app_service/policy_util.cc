@@ -4,11 +4,11 @@
 
 #include "chrome/browser/apps/app_service/policy_util.h"
 
+#include <algorithm>
 #include <functional>
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -20,11 +20,11 @@
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/containers/map_util.h"
 #include "base/types/optional_util.h"
 #include "chrome/browser/ash/file_manager/office_file_tasks.h"
 #include "chrome/browser/ash/file_manager/virtual_tasks/id_constants.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace apps_util {
@@ -89,7 +89,7 @@ std::vector<std::string> GetAppIdsFromPolicyId(Profile* profile,
       ->AppRegistryCache()
       .ForEachApp([&policy_id, &app_ids](const apps::AppUpdate& update) {
         if (IsInstalled(update.Readiness()) &&
-            base::Contains(update.PolicyIds(), policy_id)) {
+            std::ranges::contains(update.PolicyIds(), policy_id)) {
           app_ids.push_back(update.AppId());
         }
       });

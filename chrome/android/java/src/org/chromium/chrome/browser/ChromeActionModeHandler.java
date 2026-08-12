@@ -26,6 +26,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+import org.chromium.chrome.browser.enterprise.util.DataProtectionBridge;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
@@ -73,9 +74,9 @@ public class ChromeActionModeHandler {
             ActivityTabProvider activityTabProvider,
             Callback<String> searchCallback,
             boolean showWebSearch,
-            Supplier<ShareDelegate> shareDelegateSupplier,
+            Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
             BrowserControlsStateProvider controlsState,
-            Supplier<ReadAloudController> readAloudControllerSupplier) {
+            Supplier<@Nullable ReadAloudController> readAloudControllerSupplier) {
         mInitWebContentsObserver =
                 (webContents) -> {
                     SelectionPopupController spc =
@@ -94,7 +95,7 @@ public class ChromeActionModeHandler {
 
         new ActivityTabProvider.ActivityTabTabObserver(activityTabProvider) {
             @Override
-            public void onObservingDifferentTab(@Nullable Tab tab, boolean hint) {
+            public void onObservingDifferentTab(@Nullable Tab tab) {
                 // ActivityTabProvider will null out the tab passed to onObservingDifferentTab when
                 // the tab is non-interactive (e.g. when entering the TabSwitcher), but in those
                 // cases we actually still want to use the most recently selected tab.
@@ -125,8 +126,8 @@ public class ChromeActionModeHandler {
     @VisibleForTesting
     static class ChromeActionModeCallback extends ActionModeCallback {
         /**
-         * Android Intent size limitations prevent sending over a megabyte of data. Limit
-         * query lengths to 100kB because other things may be added to the Intent.
+         * Android Intent size limitations prevent sending over a megabyte of data. Limit query
+         * lengths to 100kB because other things may be added to the Intent.
          */
         private static final int MAX_SHARE_QUERY_LENGTH_CHARS = 100000;
 
@@ -134,8 +135,8 @@ public class ChromeActionModeHandler {
         private final ActionModeCallbackHelper mHelper;
         private final Callback<String> mSearchCallback;
         private final boolean mShowWebSearch;
-        private final Supplier<ShareDelegate> mShareDelegateSupplier;
-        private final Supplier<ReadAloudController> mReadAloudControllerSupplier;
+        private final Supplier<@Nullable ShareDelegate> mShareDelegateSupplier;
+        private final Supplier<@Nullable ReadAloudController> mReadAloudControllerSupplier;
         private final BrowserControlsStateProvider mControlsState;
 
         // Used for recording UMA histograms.
@@ -146,9 +147,9 @@ public class ChromeActionModeHandler {
                 WebContents webContents,
                 Callback<String> searchCallback,
                 boolean showWebSearch,
-                Supplier<ShareDelegate> shareDelegateSupplier,
+                Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
                 BrowserControlsStateProvider controlsState,
-                Supplier<ReadAloudController> readAloudControllerSupplier) {
+                Supplier<@Nullable ReadAloudController> readAloudControllerSupplier) {
             mTab = tab;
             mHelper = getActionModeCallbackHelper(webContents);
             mShowWebSearch = showWebSearch;
@@ -173,7 +174,9 @@ public class ChromeActionModeHandler {
                             | ActionModeCallbackHelper.MENU_ITEM_SHARE;
             // Disable options that expose additional Chrome functionality prior to the FRE being
             // completed (i.e. creation of a new tab).
-            if (FirstRunStatus.getFirstRunFlowComplete() && mShowWebSearch) {
+            if (FirstRunStatus.getFirstRunFlowComplete()
+                    && mShowWebSearch
+                    && DataProtectionBridge.isSearchWithAllowed(mTab.getWebContents())) {
                 allowedActionModes |= ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH;
             }
             mHelper.setAllowedMenuItems(allowedActionModes);
@@ -196,7 +199,7 @@ public class ChromeActionModeHandler {
                     continue;
                 }
                 String packageName = item.getIntent().getComponent().getPackageName();
-                // Exclude actions from browsers and system launchers. https://crbug.com/850195
+                // Exclude actions from browsers and system launchers. https://crbug.com/41393094
                 if (browsers.contains(packageName) || launchers.contains(packageName)) {
                     item.setVisible(false);
                 }
@@ -215,12 +218,12 @@ public class ChromeActionModeHandler {
                     view.getResources()
                             .getDimensionPixelSize(R.dimen.iph_shared_highlighting_padding_top);
             Rect anchorRect = new Rect(view.getWidth() / 2, padding, view.getWidth() / 2, padding);
-            UserEducationHelper mUserEducationHelper =
+            UserEducationHelper userEducationHelper =
                     new UserEducationHelper(
                             assertNonNull(TabUtils.getActivity(mTab)),
                             mTab.getProfile(),
                             new Handler());
-            mUserEducationHelper.requestShowIph(
+            userEducationHelper.requestShowIph(
                     new IphCommandBuilder(
                                     view.getResources(),
                                     FeatureConstants.SHARED_HIGHLIGHTING_BUILDER_FEATURE,
@@ -301,7 +304,7 @@ public class ChromeActionModeHandler {
         @Override
         public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
             mHelper.onGetContentRect(mode, view, outRect);
-            boolean controlsVisible = mControlsState.getBrowserControlHiddenRatio() < 1.f;
+            boolean controlsVisible = mControlsState.getTopControlHiddenRatio() < 1.f;
             int controlsHeight = mControlsState.getTopControlsHeight();
             if (controlsVisible && outRect.top < 2 * controlsHeight) {
                 // Make |outRect| taller to so the framework thinks there is not enough space

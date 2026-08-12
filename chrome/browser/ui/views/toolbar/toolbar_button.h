@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/chrome_views_export.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -21,10 +22,12 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/single_animated_image_container.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/metadata/view_factory.h"
 
@@ -52,7 +55,11 @@ class ToolbarButton : public views::LabelButton,
  public:
   enum class Edge {
     kLeft = 0,
+    kTopLeft,
+    kTopRight,
     kRight,
+    kBottomLeft,
+    kBottomRight,
   };
 
   // More convenient form of the ctor below, when |model| and |tab_strip_model|
@@ -121,6 +128,7 @@ class ToolbarButton : public views::LabelButton,
   void SetLayoutInsetDelta(const gfx::Insets& insets);
 
   // views::LabelButton:
+  void StateChanged(ButtonState old_state) override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void OnThemeChanged() override;
   gfx::Rect GetAnchorBoundsInScreen() const override;
@@ -140,6 +148,10 @@ class ToolbarButton : public views::LabelButton,
   // button will have no accessible name.
   std::u16string GetAlternativeAccessibleName() const override;
 
+  ChromeColorIds GetDefaultBackgroundColorId() const {
+    return default_background_color_id_;
+  }
+
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(
       View* source,
@@ -157,6 +169,8 @@ class ToolbarButton : public views::LabelButton,
   ui::ElementIdentifier menu_identifier() const { return menu_identifier_; }
 
   bool GetVectorIconsHasValueForTesting() { return vector_icons_.has_value(); }
+
+  void SetInternalPadding(gfx::Insets insets);
 
  protected:
   struct VectorIcons {
@@ -181,6 +195,9 @@ class ToolbarButton : public views::LabelButton,
   // Shows the given `menu_model` anchored to this button.
   void ShowMenuForModel(ui::mojom::MenuSourceType source_type,
                         ui::MenuModel* menu_model);
+
+  // Sets a default background color
+  void SetDefaultBackgroundColorId(ChromeColorIds color_id);
 
   // Updates the button's background and border.
   virtual void UpdateColorsAndInsets();
@@ -227,7 +244,7 @@ class ToolbarButton : public views::LabelButton,
   const gfx::Size GetTargetSize() const;
 
   // Returns the button's rounded corner radius based on its size.
-  int GetRoundedCornerRadius() const;
+  virtual int GetRoundedCornerRadius() const;
 
   // Updates the images using the given icons and specific colors.
   void UpdateIconsWithColors(const gfx::VectorIcon& icon,
@@ -236,9 +253,18 @@ class ToolbarButton : public views::LabelButton,
                              SkColor pressed_color,
                              SkColor disabled_color);
 
-  static constexpr int kDefaultIconSize = 16;
-  static constexpr int kDefaultIconSizeChromeRefresh = 20;
-  static constexpr int kDefaultTouchableIconSize = 24;
+  std::optional<SkColor> GetBackgroundColor() const;
+
+  // views::LabelButton:
+  // Callers should use SetHighlight() instead which sets an optional color as
+  // well.
+  void SetText(std::u16string_view text) override;
+
+  views::SingleAnimatedImageContainer& animated_image_container() {
+    CHECK(image_container());
+    return *static_cast<views::SingleAnimatedImageContainer*>(
+        image_container());
+  }
 
  private:
   friend test::ToolbarButtonTestApi;
@@ -304,11 +330,6 @@ class ToolbarButton : public views::LabelButton,
   // Callback for MenuModelAdapter.
   void OnMenuClosed();
 
-  // views::LabelButton:
-  // This is private to avoid a foot-shooter. Callers should use SetHighlight()
-  // instead which sets an optional color as well.
-  void SetText(std::u16string_view text) override;
-
   // Sets the in product help promo. Called after the kHasInProductHelpPromoKey
   // property changes. When this button has an in product help promo, the button
   // gets a blue highlight that pulses.
@@ -372,6 +393,12 @@ class ToolbarButton : public views::LabelButton,
       ui::TouchUiController::Get()->RegisterCallback(
           base::BindRepeating(&ToolbarButton::TouchUiChanged,
                               base::Unretained(this)));
+
+  // Default background color
+  std::optional<SkColor> default_background_color_;
+  // Default background color id
+  ChromeColorIds default_background_color_id_ =
+      ChromeColorIds::kChromeColorsStart;
 
   // A factory for tasks that show the dropdown context menu for the button.
   base::WeakPtrFactory<ToolbarButton> show_menu_factory_{this};

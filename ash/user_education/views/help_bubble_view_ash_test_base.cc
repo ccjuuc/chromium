@@ -16,7 +16,9 @@
 #include "ash/user_education/views/help_bubble_view_ash.h"
 #include "base/strings/string_util.h"
 #include "components/user_education/common/help_bubble/help_bubble_params.h"
+#include "components/user_education/views/help_bubble_view_info.h"
 #include "components/vector_icons/vector_icons.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/view.h"
@@ -42,7 +44,8 @@ std::u16string Repeat(std::u16string_view str, size_t times) {
 
 // HelpBubbleViewAshTestBase ---------------------------------------------------
 
-HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView() {
+user_education::HelpBubbleViewInfo
+HelpBubbleViewAshTestBase::CreateHelpBubbleView() {
   HelpBubbleParams params;
   params.arrow = HelpBubbleArrow::kNone;
 
@@ -50,12 +53,12 @@ HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView() {
   return CreateHelpBubbleView(std::move(params));
 }
 
-HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView(
-    HelpBubbleArrow arrow,
-    bool with_title_text,
-    bool with_body_icon,
-    bool with_buttons,
-    bool with_progress) {
+user_education::HelpBubbleViewInfo
+HelpBubbleViewAshTestBase::CreateHelpBubbleView(HelpBubbleArrow arrow,
+                                                bool with_title_text,
+                                                bool with_body_icon,
+                                                bool with_buttons,
+                                                bool with_progress) {
   HelpBubbleParams params;
   params.arrow = arrow;
 
@@ -64,7 +67,9 @@ HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView(
   }
 
   if (with_body_icon) {
-    params.body_icon = &vector_icons::kCelebrationIcon;
+    params.body_icon = &(::features::IsRoundedIconsEnabled()
+                             ? vector_icons::kCelebrationIcon
+                             : vector_icons::kCelebrationOldIcon);
   }
 
   if (with_buttons) {
@@ -86,8 +91,8 @@ HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView(
   return CreateHelpBubbleView(std::move(params));
 }
 
-HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView(
-    HelpBubbleParams params) {
+user_education::HelpBubbleViewInfo
+HelpBubbleViewAshTestBase::CreateHelpBubbleView(HelpBubbleParams params) {
   // NOTE: `HelpBubbleViewAsh` will never be created without body text.
   params.body_text = Repeat(u"Body", /*times=*/50);
 
@@ -96,8 +101,8 @@ HelpBubbleViewAsh* HelpBubbleViewAshTestBase::CreateHelpBubbleView(
   anchor_params.view = widget_->GetContentsView();
 
   // NOTE: The returned help bubble view is owned by its widget.
-  return new HelpBubbleViewAsh(HelpBubbleId::kTest, anchor_params,
-                               std::move(params));
+  return HelpBubbleViewAsh::Create(HelpBubbleId::kTest, anchor_params,
+                                   std::move(params));
 }
 
 void HelpBubbleViewAshTestBase::SetUp() {
@@ -118,7 +123,8 @@ void HelpBubbleViewAshTestBase::SetUp() {
   widget_->Init(std::move(params));
 
   // Give the `widget_` color so that it stands out in benchmark images.
-  widget_->GetLayer()->SetColor(gfx::kPlaceholderColor);
+  widget_->GetLayer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(gfx::kPlaceholderColor));
 
   // Center the `widget_` so that we can confirm various anchoring strategies
   // are working as intended.

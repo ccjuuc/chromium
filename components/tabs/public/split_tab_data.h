@@ -7,9 +7,9 @@
 
 #include <vector>
 
+#include "components/split_tabs/split_tab_id.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tabs/public/split_tab_collection.h"
-#include "components/tabs/public/split_tab_id.h"
-#include "components/tabs/public/split_tab_visual_data.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/gfx/range/range.h"
 
@@ -27,8 +27,12 @@ class SplitTabData {
   const split_tabs::SplitTabId& id() const { return id_; }
 
   SplitTabVisualData* visual_data() { return &visual_data_; }
+  const SplitTabVisualData* visual_data() const { return &visual_data_; }
 
   std::vector<tabs::TabInterface*> ListTabs() const;
+
+  // Returns the TabCollection handle associated with this split.
+  tabs::TabCollection::Handle GetCollectionHandle() const;
 
   // Returns [start, end) where the leftmost tab in the split has index start
   // and the rightmost tab in the split has index end - 1.

@@ -342,6 +342,11 @@ declare global {
         wasm: ArrayBuffer;
       }
 
+      export interface TenjiData {
+        wasm: ArrayBuffer;
+        wrapperJs: ArrayBuffer;
+      }
+
       export enum ScrollDirection {
         UP = 'up',
         DOWN = 'down',
@@ -389,6 +394,9 @@ declare global {
       type InstallPumpkinForDictationCallback = (data: PumpkinData) => void;
       export function installPumpkinForDictation(
           callback: InstallPumpkinForDictationCallback): void;
+
+      type InstallTenjiCallback = (data: TenjiData) => void;
+      export function installTenji(callback: InstallTenjiCallback): void;
 
       export function setNativeAccessibilityEnabled(enabled: boolean): void;
 
@@ -502,9 +510,10 @@ declare global {
       export function enableDragEventRewriter(enabled: boolean): void;
 
       export function processPendingSpokenFeedbackEvent(
-          id: number, propagate: boolean): void;
+          id: number, propagate: boolean, sessionId: number): void;
 
-      export function enableSpokenFeedbackMv3KeyHandling(): void;
+      export function enableSpokenFeedbackMv3KeyHandling(sessionId: number):
+          void;
 
       export const onIntroduceChromeVox: ChromeEvent<() => void>;
 
@@ -513,6 +522,10 @@ declare global {
 
       export const onAccessibilityGesture:
           ChromeEvent<(gesture: Gesture, x: number, y: number) => void>;
+
+      export const onTwoFingerTouchStart: ChromeEvent<() => void>;
+
+      export const onTwoFingerTouchStop: ChromeEvent<() => void>;
 
       export const onSelectToSpeakContextMenuClicked: ChromeEvent<() => void>;
 

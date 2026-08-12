@@ -7,48 +7,24 @@
 #include <ranges>
 
 #include "chrome/browser/devtools/aida_service_handler.h"
+#include "chrome/browser/devtools/gca_service_handler.h"
 #include "chrome/browser/devtools/gdp_service_handler.h"
 
-DevToolsHttpServiceRegistry::Service::Service(
-    std::string service,
-    std::vector<Endpoint> endpoints,
-    std::unique_ptr<DevToolsHttpServiceHandler> handler)
-    : service(std::move(service)),
-      endpoints(std::move(endpoints)),
-      handler(std::move(handler)) {}
-DevToolsHttpServiceRegistry::Service::~Service() = default;
-DevToolsHttpServiceRegistry::Service::Service(Service&&) = default;
+namespace {
 
-DevToolsHttpServiceRegistry::DevToolsHttpServiceRegistry() {
-  services_.push_back(Service("aidaService",
-                              {
-                                  {"/v1/aida:codeComplete", "POST"},
-                                  {"/v1/registerClientEvent", "POST"},
-                                  {"/v1/aida:generateCode", "POST"},
-                              },
-                              std::make_unique<AidaServiceHandler>()));
-  services_.push_back(
-      Service("gdpService",
-              {
-                  {"/v1beta1/profile:get", "GET"},
-                  {"/v1beta1/eligibility:check", "GET"},
-                  {"/v1beta1/profiles/me/awards", "GET"},
-                  {"/v1beta1/profiles/me/awards:batchGet", "GET"},
-                  {"/v1beta1/profiles", "POST"},
-                  {"/v1beta1/profiles/me/awards", "POST"},
-              },
-              std::make_unique<GdpServiceHandler>()));
-}
-DevToolsHttpServiceRegistry::~DevToolsHttpServiceRegistry() = default;
+using Service = DevToolsHttpServiceRegistry::Service;
+using Result = DevToolsHttpServiceHandler::Result;
 
-void DevToolsHttpServiceRegistry::Request(
+void DispatchRequest(
+    const std::vector<DevToolsHttpServiceRegistry::Service>& services,
     Profile* profile,
     const DevToolsDispatchHttpRequestParams& params,
+    std::optional<DevToolsHttpServiceHandler::StreamWriter> stream_writer,
     DevToolsHttpServiceHandler::Callback callback) {
   // Service exists?
   auto service_it =
-      std::ranges::find(services_, params.service, &Service::service);
-  if (service_it == services_.end()) {
+      std::ranges::find(services, params.service, &Service::service);
+  if (service_it == services.end()) {
     auto result = std::make_unique<DevToolsHttpServiceHandler::Result>();
     result->error = DevToolsHttpServiceHandler::Result::Error::kServiceNotFound;
     std::move(callback).Run(std::move(result));
@@ -67,5 +43,65 @@ void DevToolsHttpServiceRegistry::Request(
     return;
   }
 
-  service_it->handler->Request(profile, params, std::move(callback));
+  service_it->handler->Request(profile, params, std::move(stream_writer),
+                               std::move(callback));
+}
+
+}  // namespace
+
+DevToolsHttpServiceRegistry::Service::Service(
+    std::string service,
+    std::vector<Endpoint> endpoints,
+    std::unique_ptr<DevToolsHttpServiceHandler> handler)
+    : service(std::move(service)),
+      endpoints(std::move(endpoints)),
+      handler(std::move(handler)) {}
+DevToolsHttpServiceRegistry::Service::~Service() = default;
+DevToolsHttpServiceRegistry::Service::Service(Service&&) = default;
+
+DevToolsHttpServiceRegistry::DevToolsHttpServiceRegistry() {
+  services_.push_back(Service("aidaService",
+                              {
+                                  {"/v1/aida:codeComplete", "POST"},
+                                  {"/v1/registerClientEvent", "POST"},
+                                  {"/v1/aida:generateCode", "POST"},
+                                  {"/v1/aida:doConversation", "POST"},
+                              },
+                              std::make_unique<AidaServiceHandler>()));
+  services_.push_back(Service("gcaService",
+                              {
+                                  {"/v1beta:generateContent", "POST"},
+                                  {"/v1beta:streamGenerateContent", "POST"},
+                                  {"/v1beta:sendTelemetry", "POST"},
+                              },
+                              std::make_unique<GcaServiceHandler>()));
+  services_.push_back(
+      Service("gdpService",
+              {
+                  {"/v1beta1/profile:get", "GET"},
+                  {"/v1beta1/eligibility:check", "GET"},
+                  {"/v1beta1/profiles/me/awards", "GET"},
+                  {"/v1beta1/profiles/me/awards:batchGet", "GET"},
+                  {"/v1beta1/profiles", "POST"},
+                  {"/v1beta1/profiles/me/awards", "POST"},
+              },
+              std::make_unique<GdpServiceHandler>()));
+}
+DevToolsHttpServiceRegistry::~DevToolsHttpServiceRegistry() = default;
+
+void DevToolsHttpServiceRegistry::Request(
+    Profile* profile,
+    const DevToolsDispatchHttpRequestParams& params,
+    DevToolsHttpServiceHandler::Callback callback) {
+  DispatchRequest(services_, profile, params, std::nullopt,
+                  std::move(callback));
+}
+
+void DevToolsHttpServiceRegistry::RequestAsStream(
+    Profile* profile,
+    const DevToolsDispatchHttpRequestParams& params,
+    DevToolsHttpServiceHandler::StreamWriter stream_writer,
+    DevToolsHttpServiceHandler::Callback callback) {
+  DispatchRequest(services_, profile, params, std::move(stream_writer),
+                  std::move(callback));
 }

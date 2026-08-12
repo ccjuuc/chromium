@@ -16,7 +16,6 @@
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
-#include "chromeos/ash/components/dbus/vm_plugin_dispatcher/vm_plugin_dispatcher_client.h"
 #include "chromeos/ash/components/disks/disk_mount_manager.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -74,22 +73,6 @@ enum UsbSubclassCode : uint8_t {
   USB_COMM_SUBCLASS_NETWORK_CTL = 0x0d,
 };
 
-// Reasons the notification may be closed. These are used in histograms so do
-// not remove/reorder entries. Only add at the end just before kMaxValue. Also
-// remember to update the enum listing in
-// tools/metrics/histograms/histograms.xml.
-enum class CrosUsbNotificationClosed {
-  // The notification was dismissed but not by the user (either automatically
-  // or because the device was unplugged).
-  kUnknown,
-  // The user closed the notification via the close box.
-  kByUser,
-  // The user clicked on the Connect to Linux button of the notification.
-  kConnectToLinux,
-  // Maximum value for the enum.
-  kMaxValue = kConnectToLinux
-};
-
 // Represents a USB device tracked by a CrosUsbDetector instance. The
 // CrosUsbDetector only exposes devices which can be shared with Guest OSes.
 struct CrosUsbDeviceInfo {
@@ -127,7 +110,6 @@ class CrosUsbDeviceObserver : public base::CheckedObserver {
 class CrosUsbDetector : public device::mojom::UsbDeviceManagerClient,
                         public CiceroneClient::Observer,
                         public ConciergeClient::VmObserver,
-                        public VmPluginDispatcherClient::Observer,
                         public disks::DiskMountManager::Observer {
  public:
   // Used to namespace USB notifications to avoid clashes with WebUsbDetector.
@@ -216,13 +198,6 @@ class CrosUsbDetector : public device::mojom::UsbDeviceManagerClient,
   // ConciergeClient::VmObserver:
   void OnVmStarted(const vm_tools::concierge::VmStartedSignal& signal) override;
   void OnVmStopped(const vm_tools::concierge::VmStoppedSignal& signal) override;
-
-  // VmPluginDispatcherClient::Observer:
-  void OnVmToolsStateChanged(
-      const vm_tools::plugin_dispatcher::VmToolsStateChangedSignal& signal)
-      override;
-  void OnVmStateChanged(
-      const vm_tools::plugin_dispatcher::VmStateChangedSignal& signal) override;
 
   // disks::DiskMountManager::Observer:
   void OnMountEvent(

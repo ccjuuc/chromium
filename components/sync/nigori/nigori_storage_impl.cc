@@ -9,16 +9,16 @@
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "components/os_crypt/async/common/encryptor.h"
-#include "components/os_crypt/sync/os_crypt.h"
 #include "components/sync/protocol/nigori_local_data.pb.h"
 
 namespace syncer {
 
 NigoriStorageImpl::NigoriStorageImpl(
     const base::FilePath& path,
-    std::unique_ptr<os_crypt_async::Encryptor> encryptor)
+    scoped_refptr<os_crypt_async::Encryptor> encryptor)
     : path_(path), encryptor_(std::move(encryptor)) {}
 
 NigoriStorageImpl::~NigoriStorageImpl() {
@@ -35,14 +35,12 @@ void NigoriStorageImpl::StoreData(const sync_pb::NigoriLocalData& data) {
   }
 
   std::string encrypted_data;
-  bool encryption_success = false;
-  if (encryptor_) {
-    encryption_success = encryptor_->EncryptString(serialized_data, &encrypted_data);
-  } else {
-    encryption_success = OSCrypt::EncryptString(serialized_data, &encrypted_data);
-  }
+  CHECK(encryptor_);
+  bool encryption_success =
+      encryptor_->EncryptString(serialized_data, &encrypted_data);
 
-  base::UmaHistogramBoolean("Sync.NigoriStorageEncryptionResult", encryption_success);
+  base::UmaHistogramBoolean("Sync.NigoriStorageEncryptionResult",
+                            encryption_success);
 
   if (!encryption_success) {
     DLOG(ERROR) << "Failed to encrypt NigoriLocalData.";
@@ -68,14 +66,12 @@ std::optional<sync_pb::NigoriLocalData> NigoriStorageImpl::RestoreData() {
   }
 
   std::string serialized_data;
-  bool decryption_success = false;
-  if (encryptor_) {
-    decryption_success = encryptor_->DecryptString(encrypted_data, &serialized_data);
-  } else {
-    decryption_success = OSCrypt::DecryptString(encrypted_data, &serialized_data);
-  }
+  CHECK(encryptor_);
+  bool decryption_success =
+      encryptor_->DecryptString(encrypted_data, &serialized_data);
 
-  base::UmaHistogramBoolean("Sync.NigoriStorageDecryptionResult", decryption_success);
+  base::UmaHistogramBoolean("Sync.NigoriStorageDecryptionResult",
+                            decryption_success);
 
   if (!decryption_success) {
     DLOG(ERROR) << "Failed to decrypt NigoriLocalData.";

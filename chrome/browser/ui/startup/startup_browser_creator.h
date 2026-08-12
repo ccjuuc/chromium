@@ -124,7 +124,7 @@ class StartupBrowserCreator {
   // `is_first_run` indicates that this is a new profile.
   // `restore_tabbed_browser` should only be flipped false by Ash full restore
   // code path, suppressing restoring a normal browser when there were only PWAs
-  // open in previous session. See crbug.com/1463906.
+  // open in previous session. See crbug.com/40275406.
   void LaunchBrowser(const base::CommandLine& command_line,
                      Profile* profile,
                      const base::FilePath& cur_dir,
@@ -136,7 +136,7 @@ class StartupBrowserCreator {
   // launches browser for `profile_info`. `restore_tabbed_browser` should
   // only be flipped false by Ash full restore code path, suppressing restoring
   // a normal browser when there were only PWAs open in previous session. See
-  // crbug.com/1463906.
+  // crbug.com/40275406.
   void LaunchBrowserForLastProfiles(
       const base::CommandLine& command_line,
       const base::FilePath& cur_dir,
@@ -276,10 +276,10 @@ class StartupBrowserCreator {
 
 // Returns true if |profile| has exited uncleanly and has not been launched
 // after the unclean exit.
+//
+// TODO(crbug.com/479862082): consider moving this into
+// profile_launch_observer.h.
 bool HasPendingUncleanExit(Profile* profile);
-
-// Adds launched |profile| to ProfileLaunchObserver.
-void AddLaunchedProfile(Profile* profile);
 
 // Returns the path that contains the profile that should be loaded on process
 // startup. This can do blocking operations to check if the profile exists in

@@ -5,13 +5,15 @@
 #ifndef CHROMEOS_ASH_EXPERIENCES_SYSTEM_WEB_APPS_TYPES_SYSTEM_WEB_APP_DELEGATE_H_
 #define CHROMEOS_ASH_EXPERIENCES_SYSTEM_WEB_APPS_TYPES_SYSTEM_WEB_APP_DELEGATE_H_
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_background_task_info.h"
 #include "ui/menus/simple_menu_model.h"
 #include "url/gurl.h"
@@ -225,9 +227,6 @@ class SystemWebAppDelegate {
   //   2. Manifest color (if defined).
   //   3. Default color.
   virtual bool UseSystemThemeColor() const;
-
-  // Returns whether theme changes should be animated.
-  virtual bool ShouldAnimateThemeChanges() const;
 
   // TODO(crbug.com/1308961): Migrate to use PWA pinned home tab when ready.
   // Returns whether the specified tab should be pinned.

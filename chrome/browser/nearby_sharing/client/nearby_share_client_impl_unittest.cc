@@ -144,7 +144,7 @@ std::vector<std::string> ExpectQueryStringValues(
       values.push_back(pair.second);
     }
   }
-  EXPECT_TRUE(values.size() > 0);
+  EXPECT_GT(values.size(), 0u);
   return values;
 }
 
@@ -320,10 +320,10 @@ class NearbyShareClientImplTest : public testing::Test,
       list_public_certificate_response_from_notifier_;
   base::test::TaskEnvironment task_environment_;
   signin::IdentityTestEnvironment identity_test_environment_;
-  raw_ptr<FakeNearbyShareApiCallFlow, DanglingUntriaged> api_call_flow_;
   scoped_refptr<network::SharedURLLoaderFactory> shared_factory_;
   NearbyShareHttpNotifier notifier_;
   std::unique_ptr<NearbyShareClient> client_;
+  raw_ptr<FakeNearbyShareApiCallFlow> api_call_flow_;
 };
 
 TEST_F(NearbyShareClientImplTest, UpdateDeviceSuccess) {
@@ -557,7 +557,8 @@ TEST_F(NearbyShareClientImplTest, FetchAccessTokenFailure) {
       future.GetCallback());
   identity_test_environment_
       .WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-          GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+          GoogleServiceAuthError::FromServiceUnavailable(
+              "Service unavailable."));
 
   EXPECT_EQ(ash::nearby::NearbyHttpError::kAuthenticationError, future.Get());
 }

@@ -5,14 +5,20 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_INLINE_LINE_TRUNCATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_INLINE_LINE_TRUNCATOR_H_
 
+#include <unicode/ubidi.h>
+
 #include <optional>
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/layout/inline/line_box_fragment_builder.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
+#include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
+class ComputedStyle;
 class InlineLayoutStateStack;
 class LineInfo;
 class LogicalLineItems;
@@ -93,14 +99,27 @@ class CORE_EXPORT LineTruncator final {
   LayoutUnit available_width_;
   TextDirection line_direction_;
 
-  // The following 3 data members are available after SetupEllipsis().
+  // The following 2 data members are available after SetupEllipsis().
   const SimpleFontData* ellipsis_font_data_;
-  String ellipsis_text_;
   LayoutUnit ellipsis_width_;
 
+  class EllipsisShapeResult final
+      : public GarbageCollected<EllipsisShapeResult> {
+   public:
+    EllipsisShapeResult(const ShapeResultView& shape_result,
+                        const String& text,
+                        UBiDiLevel bidi_level)
+        : shape_result(shape_result), text(text), bidi_level(bidi_level) {}
+
+    Member<const ShapeResultView> shape_result;
+    String text;
+    UBiDiLevel bidi_level;
+
+    void Trace(Visitor* visitor) const { visitor->Trace(shape_result); }
+  };
   // This data member is available between SetupEllipsis() and
   // PlaceEllipsisNextTo().
-  ShapeResultView* ellipsis_shape_result_ = nullptr;
+  HeapVector<Member<const EllipsisShapeResult>, 1> ellipsis_shape_results_;
 
   bool use_first_line_style_ = false;
   bool is_ellipsis_caused_by_line_clamp_ = false;

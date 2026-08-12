@@ -10,26 +10,85 @@ tests.
 
 load("@chromium-luci//targets.star", "targets")
 
-targets.mixin(
-    name = "10-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_29_google_apis_x86.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_29_google_apis_x86",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_29_google_apis_x86",
-                path = ".android_emulator/android_29_google_apis_x86",
-            ),
+def android_emulator_mixin(
+        mixin_name,
+        config_filename,
+        config_dir = "tools/android/avd/proto",
+        **kwargs):
+    """Generates an Android emulator mixin.
+
+    Args:
+        mixin_name: The name of the mixin.
+        config_filename: The base name of the AVD config file,
+          e.g., "android_36_google_apis_x64.textpb".
+        config_dir: The directory containing the AVD config file, relative to
+          chromium src directory.
+        **kwargs: Additional keyword arguments to pass to targets.mixin.
+
+    Returns:
+        A targets.mixin
+    """
+    if not config_filename.endswith(".textpb"):
+        fail("config_filename must end with '.textpb', got %s" % config_filename)
+
+    config_name = config_filename.removesuffix(".textpb")
+    avd_config_path = "../../{}/{}".format(config_dir.strip("/"), config_filename)
+
+    return targets.mixin(
+        name = mixin_name,
+        description = "Run with {}".format(config_name),
+        args = [
+            "--avd-config=" + avd_config_path,
         ],
+        swarming = targets.swarming(
+            # soft affinity so that bots with caches will be picked first
+            optional_dimensions = {
+                60: {
+                    "caches": config_name,
+                },
+            },
+            named_caches = [
+                swarming.cache(
+                    name = config_name,
+                    path = ".android_emulator/" + config_name,
+                ),
+            ],
+        ),
+        **kwargs
+    )
+
+android_emulator_mixin("10-x86-emulator", "android_29_google_apis_x86.textpb")
+android_emulator_mixin(
+    "11-x86-emulator",
+    "android_30_google_apis_x86.textpb",
+    resultdb = targets.resultdb(
+        base_variant = {
+            # LINT.IfChange(avd-11-x86-emulator)
+            "device_os": "RSR1.210722.013.A2",
+            # LINT.ThenChange(//tools/android/avd/proto/android_30_google_apis_x86.textpb:avd-11-x86-emulator)
+        },
     ),
 )
+android_emulator_mixin("12-x64-emulator", "android_31_google_apis_x64.textpb")
+android_emulator_mixin("12l-x64-emulator", "android_32_google_apis_x64_foldable.textpb")
+android_emulator_mixin("12l-landscape-x64-emulator", "android_32_google_apis_x64_foldable_landscape.textpb")
+android_emulator_mixin("13-x64-emulator", "android_33_google_apis_x64.textpb")
+android_emulator_mixin("14-automotive-landscape-x64-emulator", "android_34_automotive_x64.textpb")
+android_emulator_mixin("14-x64-emulator", "android_34_google_apis_x64.textpb")
+android_emulator_mixin("15-desktop-x64-emulator", "android_35_google_apis_tablet_x64_tablet_landscape.textpb")
+android_emulator_mixin("15-tablet-x64-emulator", "android_35_google_apis_x64_tablet.textpb")
+android_emulator_mixin("15-tablet-landscape-x64-emulator", "android_35_google_apis_x64_tablet_landscape.textpb")
+android_emulator_mixin("15-x64-emulator", "android_35_google_apis_x64.textpb")
+android_emulator_mixin("16-x64-emulator", "android_36_google_apis_x64.textpb")
+android_emulator_mixin("17-beta-x64-emulator", "android_37_google_apis_ps16k_x64.textpb")
+android_emulator_mixin("canary-x64-emulator", "android_canary_google_apis_x64.textpb")
+
+# The following emulator mixins are deprecated on the chromium side. But they
+# are still used by other projects, e.g. cronet
+android_emulator_mixin("marshmallow-x86-emulator", "generic_android23.textpb")
+android_emulator_mixin("nougat-x86-emulator", "generic_android24.textpb")
+android_emulator_mixin("oreo-x86-emulator", "generic_android26.textpb")
+android_emulator_mixin("pie-x86-emulator", "android_28_google_apis_x86.textpb")
 
 targets.mixin(
     name = "10_fleet",
@@ -38,352 +97,6 @@ targets.mixin(
             "device_os": "QQ1A.191205.008",
             "device_os_flavor": "google",
         },
-    ),
-)
-
-targets.mixin(
-    name = "11-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_30_google_apis_x86.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_30_google_apis_x86",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_30_google_apis_x86",
-                path = ".android_emulator/android_30_google_apis_x86",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "12-google-atd-x64-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_31_google_atd_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_31_google_atd_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_31_google_atd_x64",
-                path = ".android_emulator/android_31_google_atd_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "12-x64-emulator",
-    description = "Run with android_31_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_31_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_31_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_31_google_apis_x64",
-                path = ".android_emulator/android_31_google_apis_x64",
-            ),
-        ],
-    ),
-)
-
-# TODO(crbug.com/347759127): Re-enable after 12L FYI evaluation is done.
-# targets.mixin(
-#     name = "12l-google-atd-x64-emulator",
-#     args = [
-#         "--avd-config=../../tools/android/avd/proto/android_32_google_atd_x64_foldable.textpb",
-#     ],
-#     swarming = targets.swarming(
-#         # soft affinity so that bots with caches will be picked first
-#         optional_dimensions = {
-#             60: {
-#                 "caches": "android_32_google_atd_x64_foldable",
-#             },
-#         },
-#         named_caches = [
-#             swarming.cache(
-#                 name = "android_32_google_atd_x64_foldable",
-#                 path = ".android_emulator/android_32_google_atd_x64_foldable",
-#             ),
-#         ],
-#     ),
-# )
-
-targets.mixin(
-    name = "12l-fyi-x64-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_32_google_apis_x64_foldable_fyi.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_32_google_apis_x64_foldable_fyi",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_32_google_apis_x64_foldable_fyi",
-                path = ".android_emulator/android_32_google_apis_x64_foldable_fyi",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "12l-x64-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_32_google_apis_x64_foldable.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_32_google_apis_x64_foldable",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_32_google_apis_x64_foldable",
-                path = ".android_emulator/android_32_google_apis_x64_foldable",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "12l-landscape-x64-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_32_google_apis_x64_foldable_landscape.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_32_google_apis_x64_foldable_landscape",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_32_google_apis_x64_foldable_landscape",
-                path = ".android_emulator/android_32_google_apis_x64_foldable_landscape",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "13-google-atd-x64-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_33_google_atd_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_33_google_atd_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_33_google_atd_x64",
-                path = ".android_emulator/android_33_google_atd_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "13-x64-emulator",
-    description = "Run with android_33_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_33_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_33_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_33_google_apis_x64",
-                path = ".android_emulator/android_33_google_apis_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "14-automotive-landscape-x64-emulator",
-    description = "Run with android_34_automotive_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_34_automotive_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_34_automotive_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_34_automotive_x64",
-                path = ".android_emulator/android_34_automotive_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "14-x64-emulator",
-    description = "Run with android_34_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_34_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_34_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_34_google_apis_x64",
-                path = ".android_emulator/android_34_google_apis_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "15-desktop-x64-emulator",
-    description = "Run with android_35_google_apis_tablet_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_35_google_apis_tablet_x64_tablet_landscape.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_35_google_apis_tablet_x64_tablet_landscape",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_35_google_apis_tablet_x64_tablet_landscape",
-                path = ".android_emulator/android_35_google_apis_tablet_x64_tablet_landscape",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "15-tablet-x64-emulator",
-    description = "Run with android_35_google_apis_x64_tablet",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_35_google_apis_x64_tablet.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_35_google_apis_x64_tablet",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_35_google_apis_x64_tablet",
-                path = ".android_emulator/android_35_google_apis_x64_tablet",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "15-tablet-landscape-x64-emulator",
-    description = "Run with android_35_google_apis_x64_tablet_landscape",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_35_google_apis_x64_tablet_landscape.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_35_google_apis_x64_tablet_landscape",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_35_google_apis_x64_tablet_landscape",
-                path = ".android_emulator/android_35_google_apis_x64_tablet_landscape",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "15-x64-emulator",
-    description = "Run with android_35_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_35_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_35_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_35_google_apis_x64",
-                path = ".android_emulator/android_35_google_apis_x64",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "16-x64-emulator",
-    description = "Run with android_36_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_36_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_36_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_36_google_apis_x64",
-                path = ".android_emulator/android_36_google_apis_x64",
-            ),
-        ],
     ),
 )
 
@@ -436,28 +149,6 @@ targets.mixin(
             "device_type": "bullhead",
             "os": "Android",
         },
-    ),
-)
-
-targets.mixin(
-    name = "canary-x64-emulator",
-    description = "Run with android_canary_google_apis_x64",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_canary_google_apis_x64.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_canary_google_apis_x64",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_canary_google_apis_x64",
-                path = ".android_emulator/android_canary_google_apis_x64",
-            ),
-        ],
     ),
 )
 
@@ -518,6 +209,13 @@ targets.mixin(
 )
 
 targets.mixin(
+    name = "skylab-tauto-chromium-graphics",
+    skylab = targets.skylab(
+        autotest_name = "chromium_Graphics",
+    ),
+)
+
+targets.mixin(
     name = "skylab-50-tests-per-shard",
     skylab = targets.skylab(
         cros_test_max_in_shard = 50,
@@ -560,16 +258,24 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "tfc-exclude-public",
+    name = "tfc-cq-tast",
     skylab = targets.skylab(
-        cros_test_names_exclude_from_file = ["chromeos/tast_control_disabled_tests.txt", "chromeos/tast_control_disabled_tests_public_builders.txt"],
-    ),
-)
-
-targets.mixin(
-    name = "tfc-run-public",
-    skylab = targets.skylab(
-        cros_test_names_from_file = ["chromeos/tast_control_disabled_tests.txt", "chromeos/tast_control_disabled_tests_public_builders.txt"],
+        timeout_sec = 5400,
+        # All tests in tast_control_cq_tests.txt must have dep:chrome,
+        # !dep:chrome tests will be filtered out. !group:mainline tests will be
+        # kept and run if they are in tast_control_cq_tests.txt
+        cros_test_tags = ["dep:chrome"],
+        # cros_test_tags_exclude will honor the suite's settings. for
+        # chrome_all_tast_tests suite, all informational or
+        # dep:no_chrome_dcheck tests will be filtered out.
+        cros_test_names_from_file = [
+            "chromeos/tast_control_cq_tests.txt",
+        ],
+        cros_test_names_exclude_from_file = [
+            "chromeos/tast_control_disabled_tests.txt",
+            "chromeos/tast_control_flaky_tests.txt",
+        ],
+        cros_test_max_in_shard = 20,
     ),
 )
 
@@ -632,19 +338,6 @@ targets.mixin(
             ),
         ],
     ),
-)
-
-targets.mixin(
-    name = "chromeos-tast-public-builder",
-    args = [
-        # FieldTrial is disabled on ChromeOS builders but not in this builder.
-        # Notify Tast to handle the different UI by that.
-        "setup.FieldTrialConfig=enable",
-
-        # Tests using the default gaia pool cannot be run by public builders.
-        # These variables are fed by private bundles, thus not for public builders.
-        "-maybemissingvars=ui\\.(gaiaPoolDefault|signinProfileTestExtensionManifestKey)|uidetection\\.(key|key_type|server)",
-    ],
 )
 
 targets.mixin(
@@ -862,6 +555,13 @@ targets.mixin(
 )
 
 targets.mixin(
+    name = "fuchsia-orchestrate",
+    args = [
+        "--orchestrate",
+    ],
+)
+
+targets.mixin(
     name = "upload_inv_extended_properties",
     resultdb = targets.resultdb(
         enable = True,
@@ -971,13 +671,12 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "gpu_nvidia_shield_tv_stable",
+    name = "gpu_linux_gce_stable",
     swarming = targets.swarming(
         dimensions = {
-            "os": "Android",
-            "device_type": "mdarcy",
-            "device_os": "PPR1.180610.011",
-            "device_os_type": "userdebug",
+            "cpu": "x86-64",
+            "gpu": "none",
+            "os": "Ubuntu-22.04",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1028,7 +727,7 @@ targets.mixin(
         dimensions = {
             "os": "Android",
             "device_type": "frankel",
-            "device_os": "BD3A.250721.001",
+            "device_os": "CP1A.260405.005",
             "device_os_type": "userdebug",
             "pool": "chromium.tests.gpu",
         },
@@ -1082,7 +781,7 @@ targets.mixin(
     swarming = targets.swarming(
         dimensions = {
             "device_type": "s5e9945",
-            "device_os": "UP1A.231005.007",
+            "device_os": "AP3A.240905.015.A2",
             "device_os_type": "user",
             "os": "Android",
             "pool": "chromium.tests.gpu",
@@ -1091,11 +790,49 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "gpu_win11_intel_arc_140v_experimental",
+    name = "gpu_win_gce_stable",
+    swarming = targets.swarming(
+        dimensions = {
+            "cpu": "x86-64",
+            "gpu": "none",
+            "os": "Windows-10-19045",
+            "pool": "chromium.tests.gpu",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "gpu_amd_rx_5500_xt_linux_experimental",
     swarming = targets.swarming(
         dimensions = {
             "display_attached": "1",
-            "gpu": "8086:64a0",
+            "display_server": "x11",
+            "gpu": "1002:7340-25.2.8",
+            "os": "Ubuntu-24.04",
+            "pool": "chromium.tests.gpu",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "gpu_amd_rx_9070_xt_linux_experimental",
+    swarming = targets.swarming(
+        dimensions = {
+            "display_attached": "1",
+            "display_server": "x11",
+            "gpu": "1002:7550-25.2.8",
+            "os": "Ubuntu-24.04",
+            "pool": "chromium.tests.gpu.experimental",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "gpu_amd_rx_9070_xt_win_experimental",
+    swarming = targets.swarming(
+        dimensions = {
+            "display_attached": "1",
+            "gpu": "1002:7550-32.0.31007.5012",
             "os": "Windows-11",
             "pool": "chromium.tests.gpu.experimental",
         },
@@ -1103,12 +840,25 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "gpu_intel_arc_140v_linux_experimental",
+    name = "gpu_nvidia_rtx_5080_linux_experimental",
     swarming = targets.swarming(
         dimensions = {
             "display_attached": "1",
-            "gpu": "8086:64a0",
-            "os": "Ubuntu",
+            "display_server": "x11",
+            "gpu": "10de:2c02-595.58.03",
+            "os": "Ubuntu-24.04",
+            "pool": "chromium.tests.gpu.experimental",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "gpu_nvidia_rtx_5080_win_experimental",
+    swarming = targets.swarming(
+        dimensions = {
+            "display_attached": "1",
+            "gpu": "10de:2c02-32.0.15.9597",
+            "os": "Windows-11",
             "pool": "chromium.tests.gpu.experimental",
         },
     ),
@@ -1134,13 +884,6 @@ targets.mixin(
     name = "gpu_force_angle_d3d11",
     args = [
         "--extra-browser-args=--use-angle=d3d11",
-    ],
-)
-
-targets.mixin(
-    name = "gpu_force_angle_d3d9",
-    args = [
-        "--extra-browser-args=--use-angle=d3d9",
     ],
 )
 
@@ -1213,14 +956,14 @@ targets.mixin(
 targets.mixin(
     name = "gpu_force_skia_ganesh",
     args = [
-        "--extra-browser-args=--disable-features=SkiaGraphite",
+        "--extra-browser-args=--disable-skia-graphite",
     ],
 )
 
 targets.mixin(
     name = "gpu_force_skia_graphite",
     args = [
-        "--extra-browser-args=--enable-features=SkiaGraphite",
+        "--extra-browser-args=--enable-skia-graphite",
     ],
 )
 
@@ -1264,14 +1007,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "ios_custom_webkit",
-    args = [
-        "--args-json",
-        "{\"test_args\": [\"--run-with-custom-webkit\"]}",
-    ],
-)
-
-targets.mixin(
     name = "ios_output_disabled_tests",
     args = [
         "--output-disabled-tests",
@@ -1291,18 +1026,6 @@ targets.mixin(
     args = [
         "--restart",
     ],
-)
-
-targets.mixin(
-    name = "ios_runtime_cache_17_5",
-    swarming = targets.swarming(
-        named_caches = [
-            swarming.cache(
-                name = "runtime_ios_17_5",
-                path = "Runtime-ios-17.5",
-            ),
-        ],
-    ),
 )
 
 targets.mixin(
@@ -1354,12 +1077,24 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "ios_runtime_cache_26_2",
+    name = "ios_runtime_cache_26_5",
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "runtime_ios_26_2",
-                path = "Runtime-ios-26.2",
+                name = "runtime_ios_26_5",
+                path = "Runtime-ios-26.5",
+            ),
+        ],
+    ),
+)
+
+targets.mixin(
+    name = "ios_runtime_cache_27_0",
+    swarming = targets.swarming(
+        named_caches = [
+            swarming.cache(
+                name = "runtime_ios_27_0",
+                path = "Runtime-ios-27.0",
             ),
         ],
     ),
@@ -1448,6 +1183,18 @@ targets.mixin(
     ),
 )
 
+# Restricts Linux GPU High Tier AI WPT tasks to NVIDIA, AMD, or modern Intel GPUs
+# (Intel UHD 770 / Iris Xe) to avoid execution stalls on low-end Intel UHD 630
+# integrated graphics (lin-90-g582 and lin-91-g582).
+targets.mixin(
+    name = "linux_gpu_high_tier_ai_wpt_dimensions",
+    swarming = targets.swarming(
+        dimensions = {
+            "gpu": "10de|1002|8086:4680|8086:a780|8086:a7a0",
+        },
+    ),
+)
+
 targets.mixin(
     name = "linux_amd_780m_experimental",
     swarming = targets.swarming(
@@ -1455,6 +1202,7 @@ targets.mixin(
             "gpu": "1002:1900-25.2.2",
             "os": "Ubuntu-24.04",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu.experimental",
         },
     ),
@@ -1467,6 +1215,7 @@ targets.mixin(
             "gpu": "1002:150e-25.0.7",
             "os": "Ubuntu-24.04",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu.experimental",
         },
     ),
@@ -1476,9 +1225,10 @@ targets.mixin(
     name = "linux_amd_rx_5500_xt",
     swarming = targets.swarming(
         dimensions = {
-            "gpu": "1002:7340-23.2.1",
-            "os": "Ubuntu-22.04",
+            "gpu": "1002:7340-25.2.8",
+            "os": "Ubuntu-24.04",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1491,6 +1241,7 @@ targets.mixin(
             "gpu": "1002:7480-25.0.7",
             "os": "Ubuntu-24.04",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1503,6 +1254,7 @@ targets.mixin(
             "gpu": "8086:9bc5-23.2.1",
             "os": "Ubuntu-22.04.5",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1514,6 +1266,7 @@ targets.mixin(
         dimensions = {
             "gpu": "8086:9bc5-23.2.1",
             "os": "Ubuntu-22.04",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1526,6 +1279,7 @@ targets.mixin(
             "gpu": "8086:4680-23.2.1",
             "os": "Ubuntu-22.04",
             "display_attached": "1",
+            "display_server": "x11",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -1535,6 +1289,7 @@ targets.mixin(
     name = "linux_nvidia_gtx_1660_experimental",
     swarming = targets.swarming(
         dimensions = {
+            "display_server": "x11",
             "gpu": "10de:2184-535.183.01",
             "os": "Ubuntu-22.04",
             "pool": "chromium.tests.gpu",
@@ -1546,6 +1301,7 @@ targets.mixin(
     name = "linux_nvidia_gtx_1660_stable",
     swarming = targets.swarming(
         dimensions = {
+            "display_server": "x11",
             "gpu": "10de:2184-535.183.01",
             "os": "Ubuntu-22.04",
             "pool": "chromium.tests.gpu",
@@ -1557,6 +1313,7 @@ targets.mixin(
     name = "linux_nvidia_rtx_4070_super_stable",
     swarming = targets.swarming(
         dimensions = {
+            "display_server": "x11",
             "gpu": "10de:2783-580.95.05",
             "os": "Ubuntu-24.04",
             "pool": "chromium.tests.gpu",
@@ -1569,27 +1326,6 @@ targets.mixin(
     linux_args = [
         "--extra-browser-args=--enable-features=Vulkan",
     ],
-)
-
-targets.mixin(
-    name = "lollipop-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/generic_android22.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "generic_android22",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "generic_android22",
-                path = ".android_emulator/generic_android22",
-            ),
-        ],
-    ),
 )
 
 targets.mixin(
@@ -1611,11 +1347,11 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "mac_15_vm_optional",
+    name = "mac_26_vm_optional",
     swarming = targets.swarming(
         dimensions = {
             "cpu": "arm64",  # fallback on bare metal if no VMs are available
-            "os": "Mac-15",
+            "os": "Mac-26",
         },
         optional_dimensions = {
             30: {
@@ -1716,16 +1452,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "mac_15_beta_arm64",
-    swarming = targets.swarming(
-        dimensions = {
-            "cpu": "arm64",
-            "os": "Mac-15",
-        },
-    ),
-)
-
-targets.mixin(
     name = "mac_15_arm64",
     swarming = targets.swarming(
         dimensions = {
@@ -1736,10 +1462,30 @@ targets.mixin(
 )
 
 targets.mixin(
+    name = "mac_27_arm64",
+    swarming = targets.swarming(
+        dimensions = {
+            "cpu": "arm64",
+            "os": "Mac-27",
+        },
+    ),
+)
+
+targets.mixin(
     name = "mac_26_arm64",
     swarming = targets.swarming(
         dimensions = {
             "cpu": "arm64",
+            "os": "Mac-26",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "mac_26_x64",
+    swarming = targets.swarming(
+        dimensions = {
+            "cpu": "x86-64",
             "os": "Mac-26",
         },
     ),
@@ -1776,7 +1522,7 @@ targets.mixin(
             "cpu": "arm64",
             "gpu": "apple:m1",
             "mac_model": "Macmini9,1",
-            "os": "Mac-14.5",
+            "os": "Mac-15.7",
             "pool": "chromium.tests",
             "display_attached": "1",
         },
@@ -1790,7 +1536,7 @@ targets.mixin(
             "cpu": "arm64",
             "gpu": "apple:m2",
             "mac_model": "Mac14,7",
-            "os": "Mac-14.4.1",
+            "os": "Mac-26.5.1",
             "pool": "chromium.tests.gpu",
             "display_attached": "1",
             "hidpi": "1",
@@ -1805,7 +1551,7 @@ targets.mixin(
             "cpu": "arm64",
             "gpu": "apple:m2",
             "mac_model": "Mac14,7",
-            "os": "Mac-14.4.1",
+            "os": "Mac-26.5.1",
             "pool": "chromium.tests.gpu",
             "display_attached": "1",
             "hidpi": "1",
@@ -1829,44 +1575,24 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "mac_beta_arm64",
-    swarming = targets.swarming(
-        dimensions = {
-            "cpu": "arm64",
-            "os": "Mac-15",
-        },
-    ),
-)
-
-targets.mixin(
     name = "mac_beta_x64",
     swarming = targets.swarming(
         dimensions = {
             "cpu": "x86-64",
-            "os": "Mac-15",
+            "os": "Mac-26",
         },
     ),
 )
 
+# mac_default_arm64 is used as a prefered OS dimension for mac platform
+# instead of any mac OS version. It selects the most representative
+# dimension on Swarming.
 targets.mixin(
     name = "mac_default_arm64",
     swarming = targets.swarming(
         dimensions = {
             "cpu": "arm64",
-            "os": "Mac-15",
-        },
-    ),
-)
-
-# mac_default_x64 is used as a prefered OS dimension for mac platform
-# instead of any mac OS version. It selects the most representative
-# dimension on Swarming.
-targets.mixin(
-    name = "mac_default_x64",
-    swarming = targets.swarming(
-        dimensions = {
-            "cpu": "x86-64",
-            "os": "Mac-15",
+            "os": "Mac-26",
         },
     ),
 )
@@ -1889,7 +1615,7 @@ targets.mixin(
         dimensions = {
             "cpu": "x86-64",
             "gpu": "8086:3e9b",
-            "os": "Mac-14.5",
+            "os": "Mac-15.5",
             "display_attached": "1",
         },
     ),
@@ -1957,7 +1683,7 @@ targets.mixin(
             targets.cipd_package(
                 package = "infra/tools/mac_toolchain/${platform}",
                 location = ".",
-                revision = "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab",
+                revision = "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05",
             ),
         ],
     ),
@@ -1969,27 +1695,6 @@ targets.mixin(
         dimensions = {
             "device_os": "MMB29Q",
         },
-    ),
-)
-
-targets.mixin(
-    name = "marshmallow-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/generic_android23.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "generic_android23",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "generic_android23",
-                path = ".android_emulator/generic_android23",
-            ),
-        ],
     ),
 )
 
@@ -2026,48 +1731,6 @@ targets.mixin(
         dimensions = {
             "gpu": "10de:2184",
         },
-    ),
-)
-
-targets.mixin(
-    name = "nougat-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/generic_android24.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "generic_android24",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "generic_android24",
-                path = ".android_emulator/generic_android24",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
-    name = "oreo-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/generic_android26.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "generic_android26",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "generic_android26",
-                path = ".android_emulator/generic_android26",
-            ),
-        ],
     ),
 )
 
@@ -2113,27 +1776,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "pie-x86-emulator",
-    args = [
-        "--avd-config=../../tools/android/avd/proto/android_28_google_apis_x86.textpb",
-    ],
-    swarming = targets.swarming(
-        # soft affinity so that bots with caches will be picked first
-        optional_dimensions = {
-            60: {
-                "caches": "android_28_google_apis_x86",
-            },
-        },
-        named_caches = [
-            swarming.cache(
-                name = "android_28_google_apis_x86",
-                path = ".android_emulator/android_28_google_apis_x86",
-            ),
-        ],
-    ),
-)
-
-targets.mixin(
     name = "puppet_production",
     swarming = targets.swarming(
         dimensions = {
@@ -2148,11 +1790,6 @@ targets.mixin(
         "--record-video",
         "failed_only",
     ],
-)
-
-targets.mixin(
-    name = "retry_only_failed_tests",
-    retry_only_failed_tests = True,
 )
 
 targets.mixin(
@@ -2248,6 +1885,13 @@ targets.mixin(
 )
 
 targets.mixin(
+    name = "use-ios-simulator-cache",
+    args = [
+        "--use-simulator-cache",
+    ],
+)
+
+targets.mixin(
     name = "vaapi_unittest_args",
     args = [
         "--stop-ui",
@@ -2336,7 +1980,7 @@ targets.mixin(
             targets.cipd_package(
                 package = "chromium/android_webview/tools/cts_archive",
                 location = "android_webview/tools/cts_archive/cipd",
-                revision = "8BpUBTnmt5bH3GiqPKpmTWTP-Ie2X1TuUgf4F0IsgVgC",
+                revision = "oW6-jyOPGwPJeLlaldYwrxZoYqzXpjO1OZUdyF3Qq7sC",
             ),
         ],
     ),
@@ -2361,18 +2005,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "win10_amd_rx_5500_xt_stable",
-    swarming = targets.swarming(
-        dimensions = {
-            "display_attached": "1",
-            "gpu": "1002:7340-31.0.24002.92",
-            "os": "Windows-10-19045",
-            "pool": "chromium.tests.gpu",
-        },
-    ),
-)
-
-targets.mixin(
     name = "win11_amd_780m_experimental",
     swarming = targets.swarming(
         dimensions = {
@@ -2392,6 +2024,30 @@ targets.mixin(
             "os": "Windows-11-26100",
             "display_attached": "1",
             "pool": "chromium.tests.gpu.experimental",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "win11_amd_rx_5500_xt_experimental",
+    swarming = targets.swarming(
+        dimensions = {
+            "display_attached": "1",
+            "gpu": "1002:7340-32.0.21037.1004",
+            "os": "Windows-11-26100",
+            "pool": "chromium.tests.gpu",
+        },
+    ),
+)
+
+targets.mixin(
+    name = "win11_amd_rx_5500_xt_stable",
+    swarming = targets.swarming(
+        dimensions = {
+            "display_attached": "1",
+            "gpu": "1002:7340-32.0.21037.1004",
+            "os": "Windows-11-26100",
+            "pool": "chromium.tests.gpu",
         },
     ),
 )
@@ -2422,6 +2078,8 @@ targets.mixin(
     ),
 )
 
+# TODO(crbug.com/479147014): Remove this mixin once all uses have switched to
+# gpu_win_gce_stable.
 targets.mixin(
     name = "win10_gce_gpu_pool",
     swarming = targets.swarming(
@@ -2475,8 +2133,8 @@ targets.mixin(
     swarming = targets.swarming(
         dimensions = {
             "display_attached": "1",
-            "gpu": "10de:2184-32.0.15.8180",
-            "os": "Windows-11-26100",
+            "gpu": "10de:2184-32.0.16.1074",
+            "os": "Windows-11-26200",
             "pool": "chromium.tests.gpu",
         },
     ),
@@ -2519,22 +2177,6 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "win11_qualcomm_adreno_690_stable",
-    swarming = targets.swarming(
-        dimensions = {
-            "display_attached": "1",
-            # Screen scaling is mostly to ensure that pixel test output is
-            # consistent.
-            "screen_scaling_percent": "100",
-            "cpu": "arm64",
-            "gpu": "qcom:043a-27.20.1870.0",
-            "os": "Windows-11-22631",
-            "pool": "chromium.tests",
-        },
-    ),
-)
-
-targets.mixin(
     name = "win11",
     swarming = targets.swarming(
         dimensions = {
@@ -2569,28 +2211,23 @@ targets.mixin(
     ),
 )
 
+# Shards the slower x64 bot to 8 shards (overriding the default of 4 shards).
+# Since these bots run sequentially to avoid resource starvation, they
+# take longer to complete the test suite, requiring more shards to keep
+# the total run time within the builder's limit.
+targets.mixin(
+    name = "x64_ai_wpt_shards",
+    swarming = targets.swarming(
+        shards = 8,
+    ),
+)
+
 targets.mixin(
     name = "x86-64",
     swarming = targets.swarming(
         dimensions = {
             "cpu": "x86-64",
         },
-    ),
-)
-
-targets.mixin(
-    name = "xcode_15_beta",
-    args = [
-        "--xcode-build-version",
-        "15f31d",
-    ],
-    swarming = targets.swarming(
-        named_caches = [
-            swarming.cache(
-                name = "xcode_ios_15f31d",
-                path = "Xcode.app",
-            ),
-        ],
     ),
 )
 
@@ -2611,15 +2248,15 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "xcode_16_beta",
+    name = "xcode_27_beta",
     args = [
         "--xcode-build-version",
-        "16f6",
+        "27a5228h",
     ],
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "xcode_ios_16f6",
+                name = "xcode_ios_27a5228h",
                 path = "Xcode.app",
             ),
         ],
@@ -2627,15 +2264,15 @@ targets.mixin(
 )
 
 targets.mixin(
-    name = "xcode_26_beta",
+    name = "xcode_17a400",
     args = [
         "--xcode-build-version",
-        "17c52",
+        "17a400",
     ],
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "xcode_ios_17c52",
+                name = "xcode_ios_17a400",
                 path = "Xcode.app",
             ),
         ],
@@ -2646,12 +2283,12 @@ targets.mixin(
     name = "xcode_26_main",
     args = [
         "--xcode-build-version",
-        "17a400",
+        "17f42",
     ],
     swarming = targets.swarming(
         named_caches = [
             swarming.cache(
-                name = "xcode_ios_17a400",
+                name = "xcode_ios_17f42",
                 path = "Xcode.app",
             ),
         ],

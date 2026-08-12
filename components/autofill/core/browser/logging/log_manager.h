@@ -11,10 +11,11 @@
 #include "base/functional/callback.h"
 #include "base/types/pass_key.h"
 #include "components/autofill/core/browser/logging/log_buffer_submitter.h"
+#include "components/autofill/core/common/logging/log_buffer.h"
 #include "components/autofill/core/common/logging/log_macros.h"
 
 namespace base {
-class Value;
+class DictValue;
 }
 
 namespace autofill {
@@ -45,7 +46,7 @@ class LogManager {
   virtual LogBufferSubmitter Log() = 0;
 
   // Emits the log entry.
-  virtual void ProcessLog(base::Value::Dict node,
+  virtual void ProcessLog(base::DictValue node,
                           base::PassKey<LogBufferSubmitter>) = 0;
 };
 

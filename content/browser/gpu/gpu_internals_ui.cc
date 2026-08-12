@@ -12,7 +12,6 @@
 
 #include "base/base64.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/environment.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -55,7 +54,6 @@
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/display/util/gpu_info_util.h"
-#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/buffer_usage_util.h"
 #include "ui/gfx/gpu_extra_info.h"
 #include "ui/gl/gpu_switching_manager.h"
@@ -84,18 +82,17 @@ void CreateAndAddGpuHTMLSource(BrowserContext* browser_context) {
 
   source->UseStringsJs();
   source->AddResourcePaths(kGpuResources);
-  source->AddResourcePath("", IDR_GPU_GPU_INTERNALS_HTML);
+  source->SetDefaultResource(IDR_GPU_GPU_INTERNALS_HTML);
 }
 
 std::string GPUDeviceToString(const gpu::GPUInfo::GPUDevice& gpu) {
   std::string vendor = base::StringPrintf("0x%04x", gpu.vendor_id);
   if (!gpu.vendor_string.empty())
-    vendor += " [" + gpu.vendor_string + "]";
+    base::StrAppend(&vendor, {" [", gpu.vendor_string, "]"});
   std::string device = base::StringPrintf("0x%04x", gpu.device_id);
   if (!gpu.device_string.empty())
-    device += " [" + gpu.device_string + "]";
-  std::string rt = base::StringPrintf("VENDOR= %s, DEVICE=%s", vendor.c_str(),
-                                      device.c_str());
+    base::StrAppend(&device, {" [", gpu.device_string, "]"});
+  std::string rt = base::StringPrintf("VENDOR= %s, DEVICE=%s", vendor, device);
 #if BUILDFLAG(IS_WIN)
   if (gpu.sub_sys_id)
     rt += base::StringPrintf(", SUBSYS=0x%08x", gpu.sub_sys_id);
@@ -109,18 +106,18 @@ std::string GPUDeviceToString(const gpu::GPUInfo::GPUDevice& gpu) {
                            gpu.luid.LowPart);
 #endif
   if (!gpu.driver_vendor.empty())
-    rt += ", DRIVER_VENDOR=" + gpu.driver_vendor;
+    base::StrAppend(&rt, {", DRIVER_VENDOR=", gpu.driver_vendor});
   if (!gpu.driver_version.empty())
-    rt += ", DRIVER_VERSION=" + gpu.driver_version;
+    base::StrAppend(&rt, {", DRIVER_VERSION=", gpu.driver_version});
   if (gpu.active)
     rt += " *ACTIVE*";
   return rt;
 }
 
-base::Value::List GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
-                                  const gpu::GpuFeatureInfo& gpu_feature_info,
-                                  const gfx::GpuExtraInfo& gpu_extra_info) {
-  base::Value::List basic_info;
+base::ListValue GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
+                                const gpu::GpuFeatureInfo& gpu_feature_info,
+                                const gfx::GpuExtraInfo& gpu_extra_info) {
+  base::ListValue basic_info;
   basic_info.Append(display::BuildGpuInfoEntry(
       "Initialization time",
       base::NumberToString(gpu_info.initialization_time.InMilliseconds())));
@@ -188,7 +185,7 @@ base::Value::List GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
     const double rounded_size_inches = floor(10.0 * size_inches) / 10.0;
     std::string size_string = base::StringPrintf("%.1f\"", rounded_size_inches);
     std::string description_string = base::StringPrintf(
-        "Diagonal Monitor Size of %s", display_size.display_name.c_str());
+        "Diagonal Monitor Size of %s", display_size.display_name);
     basic_info.Append(
         display::BuildGpuInfoEntry(description_string, size_string));
   }
@@ -240,7 +237,7 @@ base::Value::List GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
       "Window system binding extensions", gpu_info.gl_ws_extensions));
 
   {
-    base::Value::List gpu_extra_info_values =
+    base::ListValue gpu_extra_info_values =
         display::Screen::Get()->GetGpuExtraInfo(gpu_extra_info);
     for (auto& pair : gpu_extra_info_values) {
       if (!pair.GetDict().FindString("description") ||
@@ -280,15 +277,15 @@ base::Value::List GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
   return basic_info;
 }
 
-base::Value::Dict GetGpuInfo() {
-  base::Value::Dict info;
+base::DictValue GetGpuInfo() {
+  base::DictValue info;
 
   const gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
   const gpu::GpuFeatureInfo gpu_feature_info =
       GpuDataManagerImpl::GetInstance()->GetGpuFeatureInfo();
   const gfx::GpuExtraInfo gpu_extra_info =
       GpuDataManagerImpl::GetInstance()->GetGpuExtraInfo();
-  base::Value::List basic_info =
+  base::ListValue basic_info =
       GetBasicGpuInfo(gpu_info, gpu_feature_info, gpu_extra_info);
   info.Set("basicInfo", std::move(basic_info));
 
@@ -302,8 +299,8 @@ base::Value::Dict GetGpuInfo() {
   return info;
 }
 
-base::Value::List CompositorInfo() {
-  base::Value::List compositor_info;
+base::ListValue CompositorInfo() {
+  base::ListValue compositor_info;
 
   compositor_info.Append(display::BuildGpuInfoEntry(
       "Tile Update Mode",
@@ -314,8 +311,8 @@ base::Value::List CompositorInfo() {
   return compositor_info;
 }
 
-base::Value::List GetDisplayInfo() {
-  base::Value::List display_info;
+base::ListValue GetDisplayInfo() {
+  base::ListValue display_info;
   const std::vector<display::Display> displays =
       display::Screen::Get()->GetAllDisplays();
   for (const auto& display : displays) {
@@ -329,13 +326,13 @@ base::Value::List GetDisplayInfo() {
       display_color_spaces.ToStrings(&names, &color_spaces, &formats);
       for (size_t i = 0; i < names.size(); ++i) {
         display_info.Append(display::BuildGpuInfoEntry(
-            base::StringPrintf("Color space (%s)", names[i].c_str()),
+            base::StringPrintf("Color space (%s)", names[i]),
             color_spaces[i]
                 .GetWithSdrWhiteLevel(
                     display_color_spaces.GetSDRMaxLuminanceNits())
                 .ToString()));
         display_info.Append(display::BuildGpuInfoEntry(
-            base::StringPrintf("Buffer format (%s)", names[i].c_str()),
+            base::StringPrintf("Buffer format (%s)", names[i]),
             formats[i].ToString()));
       }
     }
@@ -406,8 +403,8 @@ const char* HasDiscreteGpuToString(gpu::HasDiscreteGpu has_discrete_gpu) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
-base::Value::List GetDevicePerfInfo() {
-  base::Value::List list;
+base::ListValue GetDevicePerfInfo() {
+  base::ListValue list;
   const std::optional<gpu::DevicePerfInfo> device_perf_info =
       gpu::GetDevicePerfInfo();
   if (device_perf_info.has_value()) {
@@ -522,6 +519,10 @@ const char* GetProfileName(gpu::VideoCodecProfile profile) {
       return "dolby vision profile 8";
     case gpu::DOLBYVISION_PROFILE9:
       return "dolby vision profile 9";
+    case gpu::DOLBYVISION_PROFILE10:
+      return "dolby vision profile 10";
+    case gpu::DOLBYVISION_PROFILE20:
+      return "dolby vision profile 20";
     case gpu::THEORAPROFILE_ANY:
       return "theora";
     case gpu::AV1PROFILE_PROFILE_MAIN:
@@ -530,43 +531,13 @@ const char* GetProfileName(gpu::VideoCodecProfile profile) {
       return "av1 profile high";
     case gpu::AV1PROFILE_PROFILE_PRO:
       return "av1 profile pro";
-    case gpu::VVCPROFILE_MAIN10:
-      return "vvc profile main10";
-    case gpu::VVCPROFILE_MAIN12:
-      return "vvc profile main12";
-    case gpu::VVCPROFILE_MAIN12_INTRA:
-      return "vvc profile main12 intra";
-    case gpu::VVCPROIFLE_MULTILAYER_MAIN10:
-      return "vvc profile multilayer main10";
-    case gpu::VVCPROFILE_MAIN10_444:
-      return "vvc profile main10 444";
-    case gpu::VVCPROFILE_MAIN12_444:
-      return "vvc profile main12 444";
-    case gpu::VVCPROFILE_MAIN16_444:
-      return "vvc profile main16 444";
-    case gpu::VVCPROFILE_MAIN12_444_INTRA:
-      return "vvc profile main12 444 intra";
-    case gpu::VVCPROFILE_MAIN16_444_INTRA:
-      return "vvc profile main16 444 intra";
-    case gpu::VVCPROFILE_MULTILAYER_MAIN10_444:
-      return "vvc profile multilayer main10 444";
-    case gpu::VVCPROFILE_MAIN10_STILL_PICTURE:
-      return "vvc profile main10 stillpicture";
-    case gpu::VVCPROFILE_MAIN12_STILL_PICTURE:
-      return "vvc profile main12 stillpicture";
-    case gpu::VVCPROFILE_MAIN10_444_STILL_PICTURE:
-      return "vvc profile main10 444 stillpicture";
-    case gpu::VVCPROFILE_MAIN12_444_STILL_PICTURE:
-      return "vvc profile main12 444 stillpicture";
-    case gpu::VVCPROFILE_MAIN16_444_STILL_PICTURE:
-      return "vvc profile main16 444 stillpicture";
   }
   NOTREACHED();
 }
 
-base::Value::List GetVideoAcceleratorsInfo() {
+base::ListValue GetVideoAcceleratorsInfo() {
   gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
-  base::Value::List info;
+  base::ListValue info;
 
   struct {
     const raw_ref<const gpu::VideoDecodeAcceleratorSupportedProfiles>
@@ -583,8 +554,8 @@ base::Value::List GetVideoAcceleratorsInfo() {
     std::string codec_string =
         base::StringPrintf("Decode %s", GetProfileName(profile.profile));
     std::string resolution_string = base::StringPrintf(
-        "%s to %s pixels%s", profile.min_resolution.ToString().c_str(),
-        profile.max_resolution.ToString().c_str(),
+        "%s to %s pixels%s", profile.min_resolution.ToString(),
+        profile.max_resolution.ToString(),
         profile.encrypted_only ? " (encrypted)" : "");
     info.Append(display::BuildGpuInfoEntry(codec_string, resolution_string));
   }
@@ -596,8 +567,7 @@ base::Value::List GetVideoAcceleratorsInfo() {
         base::StringPrintf("Encode %s", GetProfileName(profile.profile));
     std::string resolution_string = base::StringPrintf(
         "%s to %s pixels, and/or %.3f fps%s.",
-        profile.min_resolution.ToString().c_str(),
-        profile.max_resolution.ToString().c_str(),
+        profile.min_resolution.ToString(), profile.max_resolution.ToString(),
         static_cast<double>(profile.max_framerate_numerator) /
             profile.max_framerate_denominator,
         profile.is_software_codec ? " (software codec)" : "");
@@ -609,9 +579,9 @@ base::Value::List GetVideoAcceleratorsInfo() {
 base::Value GetANGLEFeatures() {
   gfx::GpuExtraInfo gpu_extra_info =
       GpuDataManagerImpl::GetInstance()->GetGpuExtraInfo();
-  base::Value::List angle_features_list;
+  base::ListValue angle_features_list;
   for (const auto& feature : gpu_extra_info.angle_features) {
-    base::Value::Dict angle_feature;
+    base::DictValue angle_feature;
     angle_feature.Set("name", feature.name);
     angle_feature.Set("category", feature.category);
     angle_feature.Set("status", feature.status);
@@ -624,7 +594,7 @@ base::Value GetANGLEFeatures() {
 base::Value GetDawnInfo() {
   const std::vector<std::string> info_list_collected =
       GpuDataManagerImpl::GetInstance()->GetDawnInfoList();
-  base::Value::List dawn_info_list;
+  base::ListValue dawn_info_list;
 
   for (const auto& info : info_list_collected) {
     dawn_info_list.Append(info);
@@ -657,13 +627,13 @@ class GpuMessageHandler
   void OnGpuInfoUpdate() override;
 
   // Messages
-  void HandleGetGpuInfo(const base::Value::List& list);
-  void HandleGetClientInfo(const base::Value::List& list);
-  void HandleGetLogMessages(const base::Value::List& list);
+  void HandleGetGpuInfo(const base::ListValue& list);
+  void HandleGetClientInfo(const base::ListValue& list);
+  void HandleGetLogMessages(const base::ListValue& list);
 
-  base::Value::Dict GetClientInfo();
-  base::Value::List GetLogMessages();
-  base::Value::Dict GetGpuInfoDict();
+  base::DictValue GetClientInfo();
+  base::ListValue GetLogMessages();
+  base::DictValue GetGpuInfoDict();
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -703,28 +673,28 @@ void GpuMessageHandler::OnJavascriptDisallowed() {
   GpuDataManagerImpl::GetInstance()->RemoveObserver(this);
 }
 
-void GpuMessageHandler::HandleGetClientInfo(const base::Value::List& args) {
+void GpuMessageHandler::HandleGetClientInfo(const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   AllowJavascript();
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, GetClientInfo());
 }
 
-void GpuMessageHandler::HandleGetLogMessages(const base::Value::List& args) {
+void GpuMessageHandler::HandleGetLogMessages(const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   AllowJavascript();
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, GetLogMessages());
 }
 
-void GpuMessageHandler::HandleGetGpuInfo(const base::Value::List& args) {
+void GpuMessageHandler::HandleGetGpuInfo(const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   AllowJavascript();
 
   // Tell GpuDataManager it should have full GpuInfo. If the
   // Gpu process has not run yet, this will trigger its launch.
-  GpuDataManagerImpl::GetInstance()->RequestDx12VulkanVideoGpuInfoIfNeeded(
+  GpuDataManagerImpl::GetInstance()->RequestGpuInfoIfNeeded(
       GpuDataManagerImpl::kGpuInfoRequestAll,
       /*delayed=*/false);
 
@@ -734,10 +704,10 @@ void GpuMessageHandler::HandleGetGpuInfo(const base::Value::List& args) {
   ResolveJavascriptCallback(callback_id, GetGpuInfoDict());
 }
 
-base::Value::Dict GpuMessageHandler::GetClientInfo() {
+base::DictValue GpuMessageHandler::GetClientInfo() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   dict.Set("version", GetContentClient()->browser()->GetProduct());
   base::CommandLine::StringType command_line =
@@ -777,24 +747,24 @@ base::Value::Dict GpuMessageHandler::GetClientInfo() {
   return dict;
 }
 
-base::Value::List GpuMessageHandler::GetLogMessages() {
+base::ListValue GpuMessageHandler::GetLogMessages() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   return GpuDataManagerImpl::GetInstance()->GetLogMessages();
 }
 
-base::Value::Dict GpuMessageHandler::GetGpuInfoDict() {
+base::DictValue GpuMessageHandler::GetGpuInfoDict() {
   // Get GPU Info.
   const gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
   const gfx::GpuExtraInfo gpu_extra_info =
       GpuDataManagerImpl::GetInstance()->GetGpuExtraInfo();
-  base::Value::Dict gpu_info_val = GetGpuInfo();
+  base::DictValue gpu_info_val = GetGpuInfo();
 
   // Add in blocklisting features
-  base::Value::Dict feature_status;
+  base::DictValue feature_status;
   feature_status.Set("featureStatus", GetFeatureStatus());
   feature_status.Set("problems", GetProblems());
-  base::Value::List workarounds;
+  base::ListValue workarounds;
   for (const auto& workaround : GetDriverBugWorkarounds())
     workarounds.Append(workaround);
   feature_status.Set("workarounds", std::move(workarounds));
@@ -803,12 +773,12 @@ base::Value::Dict GpuMessageHandler::GetGpuInfoDict() {
     const gpu::GPUInfo gpu_info_for_hardware_gpu =
         GpuDataManagerImpl::GetInstance()->GetGPUInfoForHardwareGpu();
     if (gpu_info_for_hardware_gpu.IsInitialized()) {
-      base::Value::Dict feature_status_for_hardware_gpu;
+      base::DictValue feature_status_for_hardware_gpu;
       feature_status_for_hardware_gpu.Set("featureStatus",
                                           GetFeatureStatusForHardwareGpu());
       feature_status_for_hardware_gpu.Set("problems",
                                           GetProblemsForHardwareGpu());
-      base::Value::List workarounds_for_hardware_gpu;
+      base::ListValue workarounds_for_hardware_gpu;
       for (const auto& workaround : GetDriverBugWorkaroundsForHardwareGpu())
         workarounds_for_hardware_gpu.Append(workaround);
       feature_status_for_hardware_gpu.Set(
@@ -817,7 +787,7 @@ base::Value::Dict GpuMessageHandler::GetGpuInfoDict() {
                        std::move(feature_status_for_hardware_gpu));
       const gpu::GpuFeatureInfo gpu_feature_info_for_hardware_gpu =
           GpuDataManagerImpl::GetInstance()->GetGpuFeatureInfoForHardwareGpu();
-      base::Value::List gpu_info_for_hardware_gpu_val = GetBasicGpuInfo(
+      base::ListValue gpu_info_for_hardware_gpu_val = GetBasicGpuInfo(
           gpu_info_for_hardware_gpu, gpu_feature_info_for_hardware_gpu,
           gfx::GpuExtraInfo{});
       gpu_info_val.Set("basicInfoForHardwareGpu",

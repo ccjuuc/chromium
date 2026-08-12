@@ -78,9 +78,6 @@ class ChromotingHostContext {
   // Task runner for the thread that is used for the UI.
   scoped_refptr<AutoThreadTaskRunner> ui_task_runner() const;
 
-  // Task runner for the thread used for audio capture and encoding.
-  scoped_refptr<AutoThreadTaskRunner> audio_task_runner() const;
-
   // Task runner for the thread that is used for blocking file
   // IO. This thread is used by the URLRequestContext to read proxy
   // configuration and by NatConfig to read policy configs.
@@ -101,27 +98,19 @@ class ChromotingHostContext {
   // the screen.
   scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner() const;
 
-  // Task runner for the thread used to encode video streams.
-  scoped_refptr<AutoThreadTaskRunner> video_encode_task_runner() const;
-
   policy::ManagementService* management_service();
 
  protected:
   ChromotingHostContext(
       scoped_refptr<AutoThreadTaskRunner> ui_task_runner,
-      scoped_refptr<AutoThreadTaskRunner> audio_task_runner,
       scoped_refptr<AutoThreadTaskRunner> file_task_runner,
       scoped_refptr<AutoThreadTaskRunner> input_task_runner,
       scoped_refptr<AutoThreadTaskRunner> network_task_runner,
-      scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner,
-      scoped_refptr<AutoThreadTaskRunner> video_encode_task_runner);
+      scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner);
 
  private:
   // Caller-supplied UI thread. This is usually the application main thread.
   scoped_refptr<AutoThreadTaskRunner> ui_task_runner_;
-
-  // Thread for audio capture and encoding.
-  scoped_refptr<AutoThreadTaskRunner> audio_task_runner_;
 
   // Thread for I/O operations.
   scoped_refptr<AutoThreadTaskRunner> file_task_runner_;
@@ -134,9 +123,6 @@ class ChromotingHostContext {
 
   // Thread for screen capture.
   scoped_refptr<AutoThreadTaskRunner> video_capture_task_runner_;
-
-  // Thread for video encoding.
-  scoped_refptr<AutoThreadTaskRunner> video_encode_task_runner_;
 };
 
 }  // namespace remoting

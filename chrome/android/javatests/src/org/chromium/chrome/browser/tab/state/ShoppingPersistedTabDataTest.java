@@ -23,7 +23,8 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
@@ -38,9 +39,9 @@ import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.state.PriceDropMetricsLogger.MetricsResult;
 import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabDataTestUtils.ShoppingServiceResponse;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.components.commerce.core.ShoppingService;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.url.GURL;
 
@@ -55,7 +56,6 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
 public class ShoppingPersistedTabDataTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
 
     @Mock protected Profile mProfileMock;
 
@@ -67,6 +67,7 @@ public class ShoppingPersistedTabDataTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     ShoppingPersistedTabData.onDeferredStartup();
@@ -89,8 +90,8 @@ public class ShoppingPersistedTabDataTest {
     public void testShoppingProto() {
         Tab tab = new MockTab(ShoppingPersistedTabDataTestUtils.TAB_ID, mProfileMock);
         ShoppingPersistedTabData shoppingPersistedTabData = new ShoppingPersistedTabData(tab);
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(true);
+        SettableNonNullObservableSupplier<Boolean> supplier =
+                ObservableSuppliers.createNonNull(true);
         shoppingPersistedTabData.registerIsTabSaveEnabledSupplier(supplier);
         shoppingPersistedTabData.setPriceMicros(ShoppingPersistedTabDataTestUtils.PRICE_MICROS);
         shoppingPersistedTabData.setCurrencyCode(
@@ -131,8 +132,8 @@ public class ShoppingPersistedTabDataTest {
     public void testMetricDerivations() {
         Tab tab = new MockTab(ShoppingPersistedTabDataTestUtils.TAB_ID, mProfileMock);
         ShoppingPersistedTabData shoppingPersistedTabData = new ShoppingPersistedTabData(tab);
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(true);
+        SettableNonNullObservableSupplier<Boolean> supplier =
+                ObservableSuppliers.createNonNull(true);
         shoppingPersistedTabData.registerIsTabSaveEnabledSupplier(supplier);
         for (boolean isProductDetailPage : new boolean[] {false, true}) {
             for (boolean containsPrice : new boolean[] {false, true}) {
@@ -543,8 +544,8 @@ public class ShoppingPersistedTabDataTest {
     public void testSerializeWithOfferId() {
         Tab tab = new MockTab(ShoppingPersistedTabDataTestUtils.TAB_ID, mProfileMock);
         ShoppingPersistedTabData shoppingPersistedTabData = new ShoppingPersistedTabData(tab);
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(true);
+        SettableNonNullObservableSupplier<Boolean> supplier =
+                ObservableSuppliers.createNonNull(true);
         shoppingPersistedTabData.registerIsTabSaveEnabledSupplier(supplier);
         shoppingPersistedTabData.setMainOfferId(ShoppingPersistedTabDataTestUtils.FAKE_OFFER_ID);
         ByteBuffer serialized = shoppingPersistedTabData.getSerializer().get();
@@ -891,8 +892,8 @@ public class ShoppingPersistedTabDataTest {
     }
 
     private static void save(ShoppingPersistedTabData shoppingPersistedTabData) {
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(true);
+        SettableNonNullObservableSupplier<Boolean> supplier =
+                ObservableSuppliers.createNonNull(true);
         shoppingPersistedTabData.registerIsTabSaveEnabledSupplier(supplier);
         shoppingPersistedTabData.enableSaving();
         shoppingPersistedTabData.save();
@@ -954,23 +955,6 @@ public class ShoppingPersistedTabDataTest {
         helper.waitForCallback(count);
     }
 
-    @SmallTest
-    @Test
-    public void testNullTab() throws TimeoutException {
-        CallbackHelper helper = new CallbackHelper();
-        int count = helper.getCallCount();
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    ShoppingPersistedTabData.from(
-                            null,
-                            (res) -> {
-                                Assert.assertNull(res);
-                                helper.notifyCalled();
-                            });
-                });
-        helper.waitForCallback(count);
-    }
-
     static class DeserializeAndLogCheckerShoppingPersistedTabData extends ShoppingPersistedTabData {
         DeserializeAndLogCheckerShoppingPersistedTabData(Tab tab) {
             super(tab);
@@ -997,8 +981,8 @@ public class ShoppingPersistedTabDataTest {
 
     private static void registerObserverSupplier(
             ShoppingPersistedTabData shoppingPersistedTabData) {
-        ObservableSupplierImpl<Boolean> supplier = new ObservableSupplierImpl<>();
-        supplier.set(true);
+        SettableNonNullObservableSupplier<Boolean> supplier =
+                ObservableSuppliers.createNonNull(true);
         shoppingPersistedTabData.registerIsTabSaveEnabledSupplier(supplier);
     }
 }

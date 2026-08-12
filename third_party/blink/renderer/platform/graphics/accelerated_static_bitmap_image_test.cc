@@ -13,7 +13,6 @@
 #include "components/viz/test/test_raster_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/test/fake_gles2_interface.h"
@@ -57,7 +56,7 @@ scoped_refptr<StaticBitmapImage> CreateBitmap(
 
   return AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
       std::move(client_si), GenTestSyncToken(100), kPremul_SkAlphaType,
-      SharedGpuContext::ContextProviderWrapper(),
+      gfx::HDRMetadata(), SharedGpuContext::ContextProviderWrapper(),
       base::PlatformThread::CurrentRef(),
       base::MakeRefCounted<base::NullTaskRunner>(), base::DoNothing());
 }
@@ -66,7 +65,7 @@ class AcceleratedStaticBitmapImageTest : public Test {
  public:
   void SetUp() override {
     context_provider_ = viz::TestContextProvider::CreateRaster();
-    InitializeSharedGpuContextRaster(context_provider_.get());
+    InitializeSharedGpuContext(context_provider_.get());
   }
   void TearDown() override {
     SharedGpuContext::Reset();

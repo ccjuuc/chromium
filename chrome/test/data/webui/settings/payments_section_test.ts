@@ -6,8 +6,8 @@
 import {flush} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import type {SettingsSimpleConfirmationDialogElement} from 'chrome://settings/lazy_load.js';
 import {PaymentsManagerImpl} from 'chrome://settings/lazy_load.js';
-import type {CrButtonElement, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
-import {CvcDeletionUserAction, loadTimeData, MetricsBrowserProxyImpl, OpenWindowProxyImpl, PrivacyElementInteractions} from 'chrome://settings/settings.js';
+import type {CrButtonElement, SettingsPrefsElement, SettingsToggleButtonElement} from 'chrome://settings/settings.js';
+import {CrSettingsPrefs, CvcDeletionUserAction, loadTimeData, MetricsBrowserProxyImpl, OpenWindowProxyImpl, PrivacyElementInteractions} from 'chrome://settings/settings.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 
 // <if expr="not is_chromeos">
@@ -49,7 +49,9 @@ suite('PaymentSectionUiTest', function() {
 
 suite('PaymentsSection', function() {
   let openWindowProxy: TestOpenWindowProxy;
-  setup(function() {
+  let settingsPrefs: SettingsPrefsElement;
+
+  setup(async function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     openWindowProxy = new TestOpenWindowProxy();
     OpenWindowProxyImpl.setInstance(openWindowProxy);
@@ -59,6 +61,14 @@ suite('PaymentsSection', function() {
       deviceAuthAvailable: true,
       mandatoryReauthFeatureFlagEnabled: true,
     });
+
+    settingsPrefs = document.createElement('settings-prefs');
+    document.body.appendChild(settingsPrefs);
+    await CrSettingsPrefs.initialized;
+  });
+
+  teardown(function() {
+    CrSettingsPrefs.resetForTesting();
   });
 
   test('ManagePaymentMethodsLink_RecordsMetrics', async function() {
@@ -67,7 +77,7 @@ suite('PaymentsSection', function() {
 
     const section = await createPaymentsSection(
         /*creditCards=*/[], /*ibans=*/[], /*payOverTimeIssuers=*/[],
-        /*prefValues=*/ {});
+        {credit_card_enabled: {value: true}});
 
     const manageAnchor = section.$.manageLink.querySelector('a');
     assertTrue(!!manageAnchor);
@@ -133,7 +143,8 @@ suite('PaymentsSection', function() {
     const addCreditCardButton =
         section.shadowRoot!.querySelector<CrButtonElement>('#addCreditCard');
     assertTrue(!!addCreditCardButton);
-    assertTrue(addCreditCardButton.hidden);
+    assertFalse(addCreditCardButton.hidden);
+    assertTrue(addCreditCardButton.disabled);
 
     // This metric should only be recorded when autofilling of credit cards is
     // enabled.
@@ -189,7 +200,7 @@ suite('PaymentsSection', function() {
 
     const section = await createPaymentsSection(
         /*creditCards=*/[], /*ibans=*/[], /*payOverTimeIssuers=*/[],
-        /*prefValues=*/ {});
+        {credit_card_enabled: {value: true}});
 
     section.$.canMakePaymentToggle.click();
     const result =
@@ -199,7 +210,7 @@ suite('PaymentsSection', function() {
   });
 
   test(
-      'verifyNoAddPaymentMethodsButtonIfPaymentPrefDisabled', async function() {
+      'verifyAddPaymentMethodsButtonDisabledIfPaymentPrefDisabled', async function() {
         const section = await createPaymentsSection(
             /*creditCards=*/[], /*ibans=*/[], /*payOverTimeIssuers=*/[],
             {credit_card_enabled: {value: false}});
@@ -208,7 +219,8 @@ suite('PaymentsSection', function() {
             section.shadowRoot!.querySelector<CrButtonElement>(
                 '#addPaymentMethods');
         assertTrue(!!addPaymentMethodsButton);
-        assertTrue(addPaymentMethodsButton.hidden);
+        assertFalse(addPaymentMethodsButton.hidden);
+        assertTrue(addPaymentMethodsButton.disabled);
       });
 
   /**
@@ -561,7 +573,7 @@ suite('PaymentsSection', function() {
     assertTrue(!!cvcStorageToggle);
     assertEquals(
         loadTimeData.getString('enableCvcStorageSublabel'),
-        cvcStorageToggle.subLabelWithLink.toString());
+        cvcStorageToggle.subLabelWithLink);
     assertEquals(
         loadTimeData.getString('enableCvcStorageAriaLabelForNoCvcSaved'),
         cvcStorageToggle.ariaLabel);
@@ -585,7 +597,7 @@ suite('PaymentsSection', function() {
     assertTrue(!!cvcStorageToggle);
     assertEquals(
         loadTimeData.getString('enableCvcStorageDeleteDataSublabel'),
-        cvcStorageToggle.subLabelWithLink.toString());
+        cvcStorageToggle.subLabelWithLink);
     assertEquals(
         loadTimeData.getString('enableCvcStorageLabel'),
         cvcStorageToggle.ariaLabel);
@@ -610,7 +622,7 @@ suite('PaymentsSection', function() {
         assertTrue(!!cvcStorageToggle);
         assertEquals(
             loadTimeData.getString('enableCvcStorageSublabel'),
-            cvcStorageToggle.subLabelWithLink.toString());
+            cvcStorageToggle.subLabelWithLink);
       });
 
   // Test to verify if bulk delete is triggered or not based on how user
@@ -639,7 +651,7 @@ suite('PaymentsSection', function() {
           assertTrue(!!cvcStorageToggle);
           assertEquals(
               loadTimeData.getString('enableCvcStorageDeleteDataSublabel'),
-              cvcStorageToggle.subLabelWithLink.toString());
+              cvcStorageToggle.subLabelWithLink);
 
           const cvcStorageToggleSublabelLink =
               cvcStorageToggle.$.labelWrapper
@@ -703,27 +715,11 @@ suite('PaymentsSection', function() {
 
     assertTrue(!!cardBenefitsToggle);
     assertEquals(
-        loadTimeData.getString('cardBenefitsLabel'),
-        cardBenefitsToggle.label.toString());
+        loadTimeData.getString('cardBenefitsLabel'), cardBenefitsToggle.label);
     assertEquals(
         loadTimeData.getString('cardBenefitsToggleSublabel'),
-        cardBenefitsToggle.subLabelWithLink.toString());
+        cardBenefitsToggle.subLabelWithLink);
   });
-
-  test(
-      'verifyCardBenefitsToggleIsNotShownWhenCardBenefitsFlagIsOff',
-      async function() {
-        loadTimeData.overrideValues({
-          autofillCardBenefitsAvailable: false,
-        });
-
-        const section = await createPaymentsSection(
-            /*creditCards=*/[], /*ibans=*/[], /*payOverTimeIssuers=*/[], {
-              credit_card_enabled: {value: true},
-            });
-
-        assertFalse(!!section.shadowRoot!.querySelector('#cardBenefitsToggle'));
-      });
 
   test(
       'verifyCardBenefitsToggleIsDisabledWhenCreditCardEnabledIsOff',

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "ash/public/cpp/notification_utils.h"
@@ -31,12 +32,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/ui/webui/ash/skyvault/local_files_migration_dialog.h"
-#include "chrome/common/chrome_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_context.h"
 #include "net/base/filename_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/message_center/public/cpp/notification.h"
 
 namespace policy::local_user_files {
@@ -59,7 +60,8 @@ std::unique_ptr<message_center::Notification> CreateNotificationPtr(
       message_center::NotifierId(), optional_fields,
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           callback),
-      vector_icons::kBusinessIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                        : vector_icons::kBusinessOldIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
 }
 
@@ -128,7 +130,7 @@ void MigrationNotificationManager::ShowMigrationInfoDialog(
     base::Time migration_start_time,
     base::OnceClosure migration_callback) {
   if (destination == MigrationDestination::kDelete &&
-      !base::FeatureList::IsEnabled(features::kSkyVaultV3)) {
+      !base::FeatureList::IsEnabled(ash::features::kSkyVaultV3)) {
     LOG(ERROR) << "Destination set to MigrationDestination::kDelete, but the "
                   "flag is disabled; ignoring.";
     return;

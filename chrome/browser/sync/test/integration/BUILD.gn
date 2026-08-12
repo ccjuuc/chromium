@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//chrome/common/features.gni")
+import("//components/spellcheck/spellcheck_build_features.gni")
 import("//extensions/buildflags/buildflags.gni")
 if (is_android) {
   import("//build/config/android/rules.gni")
@@ -18,35 +19,47 @@ source_set("sync_integration_tests_impl") {
   defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
   deps = [
     ":sync_integration_test_support",
+    "//chrome/browser:browser_features",
+    "//chrome/browser/account_settings",
     "//chrome/browser/autofill",
+    "//chrome/browser/bookmarks",
+    "//chrome/browser/glic",
+    "//chrome/browser/glic/test_support",
     "//chrome/browser/history",
+    "//chrome/browser/metrics:test_support",
     "//chrome/browser/password_manager/factories",
     "//chrome/browser/plus_addresses",
     "//chrome/browser/prefs",
     "//chrome/browser/reading_list",
+    "//chrome/browser/search_engines",
     "//chrome/browser/signin",
     "//chrome/browser/subscription_eligibility",
     "//chrome/browser/sync",
     "//chrome/browser/tab_group_sync:factories",
-    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/trusted_vault",
     "//chrome/browser/ui:ui_features",
+    "//chrome/browser/ui/navigator",
     "//chrome/test:browser_tests_runner",
     "//chrome/test:test_support",
+    "//components/account_settings",
     "//components/autofill/core/browser",
     "//components/autofill/core/browser:test_support",
     "//components/bookmarks/browser",
     "//components/commerce/core:feature_list",
     "//components/data_sharing/public",
+    "//components/infobars/content",
     "//components/password_manager/core/browser/sharing",
     "//components/plus_addresses/core/browser:test_support",
-    "//components/plus_addresses/core/browser/resources/strings",
     "//components/plus_addresses/core/browser/webdata",
     "//components/reading_list/core:test_support",
     "//components/saved_tab_groups/test_support",
+    "//components/search_engines",
+    "//components/skills:features",
     "//components/sync:test_support",
     "//components/sync_bookmarks",
     "//components/sync_device_info:test_support",
     "//components/sync_preferences:common_syncable_prefs_database",
+    "//components/sync_preferences:features",
     "//components/undo",
     "//components/version_info",
     "//components/webauthn:features",
@@ -69,6 +82,7 @@ source_set("sync_integration_tests_impl") {
     "single_client_plus_address_sync_test.cc",
     "single_client_preferences_sync_test.cc",
     "single_client_reading_list_sync_test.cc",
+    "single_client_search_engines_sync_test.cc",
     "single_client_shared_tab_group_data_sync_test.cc",
     "single_client_standalone_transport_sync_test.cc",
     "single_client_sync_invalidations_test.cc",
@@ -87,7 +101,12 @@ source_set("sync_integration_tests_impl") {
     # (CL #N), add integration tests. Careful, sync_integration_tests runs in CQ
     # but android_sync_integration_tests do not.
   ]
-  data = [ "//chrome/test/data/sync/" ]
+  data = [
+    "//chrome/test/data/empty.html",
+    "//chrome/test/data/autofill/",
+    "//chrome/test/data/send_tab_to_self/",
+    "//chrome/test/data/sync/",
+  ]
 
   # Extensions are enabled on Win/Mac/Linux/CrOS and desktop Android.
   if (enable_extensions_core) {
@@ -100,14 +119,15 @@ source_set("sync_integration_tests_impl") {
       "single_client_web_apks_sync_test.cc",
     ]
 
-    # Defined here so it's shared between android_sync_integration_tests (upstream)
-    # and android_live_sync_integration_tests (downstream).
+    # Defined here so it's shared between android_sync_integration_tests
+    # (upstream) and android_live_sync_integration_tests (downstream).
     deps += [
       "//chrome:chrome_android_core",
+      "//chrome/browser/android",
       "//chrome/browser/android/webapk:webapk_sources",
       "//chrome/browser/ui:ui_features",
-      "//chrome/test:chrome_test_launcher",
       "//chrome/test:test_support_ui_android",
+      "//chrome/test/base:chrome_test_launcher",
       "//components/browser_sync:switches",
       "//components/saved_tab_groups/public",
       "//content/test:android_test_message_pump_support",
@@ -138,11 +158,10 @@ source_set("sync_integration_tests_impl") {
       "single_client_passwords_sync_test.cc",
       "single_client_polling_sync_test.cc",
       "single_client_saved_tab_groups_sync_test.cc",
-      "single_client_search_engines_sync_test.cc",
-      "single_client_secondary_account_sync_test.cc",
       "single_client_send_tab_to_self_sync_test.cc",
       "single_client_sessions_sync_test.cc",
       "single_client_sharing_message_sync_test.cc",
+      "single_client_skills_sync_test.cc",
       "single_client_themes_sync_test.cc",
       "single_client_user_consents_sync_test.cc",
       "single_client_user_events_sync_test.cc",
@@ -153,7 +172,6 @@ source_set("sync_integration_tests_impl") {
       "single_client_webauthn_credentials_sync_test.cc",
       "sync_auth_test.cc",
       "sync_errors_test.cc",
-      "sync_os_crypt_async_migration_test.cc",
       "web_apps/single_client_web_apps_sync_generated_icon_fix_sync_test.cc",
       "web_apps/single_client_web_apps_sync_test.cc",
 
@@ -163,8 +181,10 @@ source_set("sync_integration_tests_impl") {
       "two_client_autocomplete_sync_test.cc",
       "two_client_autofill_sync_test.cc",
       "two_client_bookmarks_sync_test.cc",
+      "two_client_common_sync_test.cc",
       "two_client_contact_info_sync_test.cc",
       "two_client_custom_passphrase_sync_test.cc",
+      "two_client_device_info_sync_test.cc",
       "two_client_extension_apps_sync_test.cc",
       "two_client_extension_settings_sync_test.cc",
       "two_client_extensions_sync_test.cc",
@@ -175,6 +195,7 @@ source_set("sync_integration_tests_impl") {
       "two_client_send_tab_to_self_sync_test.cc",
       "two_client_sessions_sync_test.cc",
       "two_client_shared_tab_group_data_sync_test.cc",
+      "two_client_skills_sync_test.cc",
       "two_client_themes_sync_test.cc",
       "two_client_user_events_sync_test.cc",
       "two_client_wallet_credential_sync_test.cc",
@@ -195,6 +216,9 @@ source_set("sync_integration_tests_impl") {
         "single_client_dictionary_sync_test.cc",
         "two_client_dictionary_sync_test.cc",
       ]
+      if (enable_spellcheck) {
+        deps += [ "//chrome/browser/spellchecker" ]
+      }
     }
     if (is_win || is_mac || is_linux) {
       sources +=
@@ -219,6 +243,17 @@ source_set("sync_integration_tests_impl") {
       ]
     }
 
+    # TODO(crbug.com/478187672): Fix flakiness and enable on ASan.
+    if (is_linux && is_asan) {
+      sources -= [
+        "web_apps/two_client_web_apps_integration_test.cc",
+        "web_apps/two_client_web_apps_integration_test_base.cc",
+        "web_apps/two_client_web_apps_integration_test_base.h",
+        "web_apps/two_client_web_apps_integration_test_mac_win_linux.cc",
+        "web_apps/two_client_web_apps_integration_test_win_linux.cc",
+      ]
+    }
+
     deps += [
       "//chrome:packed_resources",
       "//chrome:resources",
@@ -231,11 +266,18 @@ source_set("sync_integration_tests_impl") {
       "//chrome/browser/browsing_data:constants",
       "//chrome/browser/consent_auditor",
       "//chrome/browser/metrics/desktop_session_duration",
-      "//chrome/browser/search_engines",
+      "//chrome/browser/password_manager:test_support",
+      "//chrome/browser/password_manager:test_support_ui",
       "//chrome/browser/send_tab_to_self",
+      "//chrome/browser/send_tab_to_self:impl",
+      "//chrome/browser/sharing",
+      "//chrome/browser/skills",
       "//chrome/browser/themes",
       "//chrome/browser/ui:ui_features",
+      "//chrome/browser/ui/send_tab_to_self",
       "//chrome/browser/ui/tabs/saved_tab_groups",
+      "//chrome/browser/ui/views/send_tab_to_self",
+      "//chrome/browser/ui/views/toolbar",
       "//chrome/browser/ui/web_applications",
       "//chrome/browser/web_applications:features",
       "//chrome/browser/web_applications:web_applications_test_support",
@@ -253,8 +295,8 @@ source_set("sync_integration_tests_impl") {
       "//components/history/core/common",
       "//components/reading_list/core",
       "//components/saved_tab_groups/internal:tab_group_sync_bridge",
-      "//components/search_engines",
       "//components/send_tab_to_self",
+      "//components/skills/public",
       "//components/spellcheck/common",
       "//components/sync",
       "//components/trusted_vault",
@@ -312,7 +354,6 @@ source_set("sync_integration_tests_impl") {
         "//chrome/browser/ash/app_list",
         "//chrome/browser/ash/app_list/arc",
         "//chrome/browser/ash/app_list/test:test_support",
-        "//chrome/browser/ash/crosapi",
         "//chrome/browser/ash/floating_sso",
         "//chrome/browser/ash/floating_sso:test_support",
         "//chrome/browser/ash/printing",
@@ -342,14 +383,7 @@ source_set("sync_integration_tests_impl") {
       "//chrome/test/data/web_apps/",
       "//chrome/test/data/banners/",
       "//net/tools/testserver/",
-      "//third_party/pywebsocket3/src/mod_pywebsocket/",
-    ]
-  }
-
-  if (enable_glic || enable_glic_android) {
-    deps += [
-      "//chrome/browser/glic",
-      "//chrome/browser/glic/test_support",
+      "//third_party/pywebsocket3/src/pywebsocket3/",
     ]
   }
 }
@@ -405,14 +439,18 @@ source_set("sync_integration_test_support") {
     "password_sharing_invitation_helper.h",
     "passwords_helper.cc",
     "passwords_helper.h",
+    "performance/sync_timing_helper.cc",
+    "performance/sync_timing_helper.h",
     "preferences_helper.cc",
     "preferences_helper.h",
     "quiesce_status_change_checker.cc",
     "quiesce_status_change_checker.h",
+    "reading_list_helper.cc",
+    "reading_list_helper.h",
     "saved_tab_groups_helper.cc",
     "saved_tab_groups_helper.h",
-    "secondary_account_helper.cc",
-    "secondary_account_helper.h",
+    "search_engines_helper.cc",
+    "search_engines_helper.h",
     "send_tab_to_self_helper.cc",
     "send_tab_to_self_helper.h",
     "session_hierarchy_match_checker.cc",
@@ -455,13 +493,20 @@ source_set("sync_integration_test_support") {
 
   deps = [
     "//base",
+    "//chrome/browser:chrome_browser_main",
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/autofill",
+    "//chrome/browser/bookmarks",
+    "//chrome/browser/gcm",
     "//chrome/browser/history",
     "//chrome/browser/password_manager/factories",
     "//chrome/browser/profiles",
     "//chrome/browser/search_engines",
+    "//chrome/browser/send_tab_to_self",
+    "//chrome/browser/send_tab_to_self:impl",
     "//chrome/browser/sync",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/undo",
     "//chrome/browser/webdata_services",
     "//components/autofill/core/common:credit_card_number_validation",
     "//components/bookmarks/browser",
@@ -470,12 +515,13 @@ source_set("sync_integration_test_support") {
     "//components/browser_sync",
     "//components/commerce/core:feature_list",
     "//components/favicon/core",
-    "//components/os_crypt/sync:test_support",
     "//components/password_manager/core/browser:password_manager_buildflags",
     "//components/plus_addresses/core/common:features",
+    "//components/reading_list/core:test_support",
     "//components/saved_tab_groups/public",
     "//components/send_tab_to_self",
     "//components/signin/public/identity_manager:test_support",
+    "//components/skills:features",
     "//components/sync",
     "//components/sync:test_support",
     "//components/sync_bookmarks",
@@ -502,6 +548,8 @@ source_set("sync_integration_test_support") {
     ]
 
     deps += [
+      "//chrome/browser/android",
+      "//chrome/browser/android:tabs_public",
       "//chrome/browser/android/webapk:webapk_sources",
       "//chrome/browser/password_manager/android:utils",
       "//chrome/browser/ui/android/tab_model",
@@ -521,12 +569,6 @@ source_set("sync_integration_test_support") {
       "fake_sync_signin_delegate_desktop.h",
       "live_sync_signin_delegate_desktop.cc",
       "live_sync_signin_delegate_desktop.h",
-      "migration_waiter.cc",
-      "migration_waiter.h",
-      "migration_watcher.cc",
-      "migration_watcher.h",
-      "search_engines_helper.cc",
-      "search_engines_helper.h",
       "sessions_helper.cc",
       "sessions_helper.h",
       "sync_app_helper.cc",
@@ -542,7 +584,7 @@ source_set("sync_integration_test_support") {
     deps += [
       "//chrome/browser/apps/app_service",
       "//chrome/browser/themes",
-      "//chrome/browser/ui/webui/signin:login",
+      "//chrome/browser/ui/webui/signin:login_ui_service",
       "//chrome/browser/ui/webui/signin:test_support_ui",
       "//chrome/browser/web_applications:web_applications_test_support",
       "//chrome/browser/webauthn",
@@ -560,6 +602,9 @@ source_set("sync_integration_test_support") {
         "dictionary_load_observer.cc",
         "dictionary_load_observer.h",
       ]
+      if (enable_spellcheck) {
+        deps += [ "//chrome/browser/spellchecker" ]
+      }
     }
   }
 
@@ -591,6 +636,8 @@ source_set("sync_integration_test_support") {
       "//chromeos/ash/experiences/arc:arc_test_support",
       "//chromeos/ash/experiences/arc/mojom",
       "//chromeos/printing",
+      "//components/account_id",
+      "//components/account_id:test_support",
       "//components/desks_storage",
       "//components/user_manager:test_support",
     ]

@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-openLockedFullscreenWindow = async function() {
+const openLockedFullscreenWindow = async function() {
   const window = await chrome.windows.create(
       {url: 'about:blank', state: 'locked-fullscreen'});
   chrome.test.assertEq('locked-fullscreen', window.state);
   chrome.test.succeed();
 };
 
-openLockedFullscreenWindowWithIncorrectUrlCount = async function() {
+const openLockedFullscreenWindowWithIncorrectUrlCount = async function() {
   const incorrectUrlCountErrorMessage =
       'When creating a new window in locked fullscreen mode, exactly one URL ' +
       'should be supplied.';
@@ -23,13 +23,13 @@ openLockedFullscreenWindowWithIncorrectUrlCount = async function() {
   await chrome.test.assertPromiseRejects(
       chrome.windows.create({
         url: ['about:blank', 'chrome://version'],
-        state: 'locked-fullscreen'
+        state: 'locked-fullscreen',
       }),
       `Error: ${incorrectUrlCountErrorMessage}`);
   chrome.test.succeed();
 };
 
-updateWindowToLockedFullscreen = async function() {
+const updateWindowToLockedFullscreen = async function() {
   const window = await chrome.windows.getCurrent();
   const updatedWindow =
       await chrome.windows.update(window.id, {state: 'locked-fullscreen'});
@@ -37,7 +37,7 @@ updateWindowToLockedFullscreen = async function() {
   chrome.test.succeed();
 };
 
-updateIncompatibleWindowToLockedFullscreen = async function() {
+const updateIncompatibleWindowToLockedFullscreen = async function() {
   const window = await chrome.windows.getCurrent();
   const updatedWindow =
       await chrome.windows.update(window.id, {state: 'locked-fullscreen'});
@@ -45,7 +45,7 @@ updateIncompatibleWindowToLockedFullscreen = async function() {
   chrome.test.succeed();
 };
 
-removeLockedFullscreenFromWindow = async function() {
+const removeLockedFullscreenFromWindow = async function() {
   const window = await chrome.windows.getCurrent();
   chrome.test.assertEq('locked-fullscreen', window.state);
 
@@ -55,7 +55,7 @@ removeLockedFullscreenFromWindow = async function() {
   chrome.test.succeed();
 };
 
-removeLockedFullscreenFromIncompatibleWindow = async function() {
+const removeLockedFullscreenFromIncompatibleWindow = async function() {
   const window = await chrome.windows.getCurrent();
   chrome.test.assertEq('locked-fullscreen', window.state);
 
@@ -75,8 +75,9 @@ const tests = {
 };
 
 chrome.test.getConfig(function(config) {
-  if (config.customArg in tests)
+  if (config.customArg in tests) {
     chrome.test.runTests([tests[config.customArg]]);
-  else
-    chrome.test.fail('Test "' + config.customArg + '"" doesnt exist!');
+  } else {
+    chrome.test.fail(`Test "${config.customArg}" doesnt exist!`);
+  }
 });

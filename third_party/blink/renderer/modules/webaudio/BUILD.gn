@@ -44,8 +44,8 @@ blink_modules_sources("webaudio") {
     "audio_param_handler.h",
     "audio_param_map.cc",
     "audio_param_map.h",
-    "audio_playout_stats.cc",
-    "audio_playout_stats.h",
+    "audio_playback_stats.cc",
+    "audio_playback_stats.h",
     "audio_processing_event.cc",
     "audio_processing_event.h",
     "audio_scheduled_source_handler.cc",
@@ -72,7 +72,7 @@ blink_modules_sources("webaudio") {
     "audio_worklet_processor.h",
     "audio_worklet_processor_definition.cc",
     "audio_worklet_processor_definition.h",
-    "audio_worklet_processor_error_state.h",
+    "audio_worklet_processor_error_details.h",
     "base_audio_context.cc",
     "base_audio_context.h",
     "biquad_filter_handler.cc",
@@ -183,7 +183,8 @@ blink_modules_sources("webaudio") {
     sources += [ "cpu/x86/oscillator_kernel_sse2.cc" ]
   }
 
-  if (current_cpu == "arm64" || current_cpu == "arm") {
+  if (current_cpu == "arm64" || current_cpu == "arm64e" ||
+      current_cpu == "arm") {
     sources += [ "cpu/arm/oscillator_kernel_neon.cc" ]
   }
   deps = [

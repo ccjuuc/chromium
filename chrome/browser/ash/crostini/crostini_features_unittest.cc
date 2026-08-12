@@ -12,6 +12,7 @@
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/testing_profile.h"
@@ -69,7 +70,7 @@ TEST(CrostiniFeaturesTest, TestRootAccessAllowed) {
   // Set up for success.
   crostini_features.set_is_allowed_now(true);
   scoped_feature_list.InitWithFeatures(
-      {features::kCrostiniAdvancedAccessControls}, {});
+      {ash::features::kCrostiniAdvancedAccessControls}, {});
   profile.GetPrefs()->SetBoolean(
       crostini::prefs::kUserCrostiniRootAccessAllowedByPolicy, true);
 
@@ -85,7 +86,7 @@ TEST(CrostiniFeaturesTest, TestRootAccessAllowed) {
   {
     base::test::ScopedFeatureList feature_list_disabled;
     feature_list_disabled.InitWithFeatures(
-        {}, {features::kCrostiniAdvancedAccessControls});
+        {}, {ash::features::kCrostiniAdvancedAccessControls});
     EXPECT_TRUE(crostini_features.IsRootAccessAllowed(&profile));
   }
 }

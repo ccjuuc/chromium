@@ -8,7 +8,6 @@
 
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/i18n/case_conversion.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -35,17 +34,35 @@ void GetNodeStrings(BrowserAccessibility* node,
     strings->push_back(value);
 }
 
+namespace {
+
+bool IsBlockContainer(BrowserAccessibility* node) {
+  if (!node || !node->node()) {
+    return false;
+  }
+  const ui::AXNode* ax_node = node->node();
+  return (ax_node->GetBoolAttribute(
+              ax::mojom::BoolAttribute::kIsLineBreakingObject) ||
+          ax_node->GetRole() == ax::mojom::Role::kParagraph) &&
+         ax_node->GetRole() != ax::mojom::Role::kLineBreak &&
+         ax_node->GetRole() != ax::mojom::Role::kInlineTextBox;
+}
+
+bool HasBlockContainerDescendant(BrowserAccessibility* node) {
+  for (size_t i = 0; i < node->PlatformChildCount(); ++i) {
+    BrowserAccessibility* child = node->PlatformGetChild(i);
+    if (IsBlockContainer(child) || HasBlockContainerDescendant(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 OneShotAccessibilityTreeSearch::OneShotAccessibilityTreeSearch(
     BrowserAccessibility* scope)
-    : tree_(scope->manager()),
-      scope_node_(scope),
-      start_node_(scope),
-      direction_(OneShotAccessibilityTreeSearch::FORWARDS),
-      result_limit_(UNLIMITED_RESULTS),
-      immediate_descendants_only_(false),
-      can_wrap_to_last_element_(false),
-      onscreen_only_(false),
-      did_search_(false) {}
+    : tree_(scope->manager()), scope_node_(scope), start_node_(scope) {}
 
 OneShotAccessibilityTreeSearch::~OneShotAccessibilityTreeSearch() = default;
 
@@ -65,9 +82,14 @@ void OneShotAccessibilityTreeSearch::SetDirection(Direction direction) {
   direction_ = direction;
 }
 
-void OneShotAccessibilityTreeSearch::SetResultLimit(int result_limit) {
+void OneShotAccessibilityTreeSearch::SetResultLimit(size_t result_limit) {
   DCHECK(!did_search_);
   result_limit_ = result_limit;
+}
+
+void OneShotAccessibilityTreeSearch::SetSearchLimit(size_t search_limit) {
+  DCHECK(!did_search_);
+  search_limit_ = search_limit;
 }
 
 void OneShotAccessibilityTreeSearch::SetImmediateDescendantsOnly(
@@ -147,11 +169,15 @@ void OneShotAccessibilityTreeSearch::SearchByIteratingOverChildren() {
       index--;
   }
 
-  while (index < count && (result_limit_ == UNLIMITED_RESULTS ||
-                           static_cast<int>(matches_.size()) < result_limit_)) {
+  size_t nodes_checked_count = 0;
+  while (index < count && (!result_limit_ || matches_.size() < result_limit_) &&
+         (!search_limit_ || nodes_checked_count < search_limit_)) {
     BrowserAccessibility* node = scope_node_->PlatformGetChild(index);
-    if (Matches(node))
+
+    if (Matches(node)) {
       matches_.push_back(node);
+    }
+    nodes_checked_count++;
 
     if (direction_ == FORWARDS)
       index++;
@@ -170,12 +196,30 @@ void OneShotAccessibilityTreeSearch::SearchByWalkingTree() {
       node = tree_->PreviousInTreeOrder(start_node_, can_wrap_to_last_element_);
   }
 
-  BrowserAccessibility* stop_node = scope_node_->PlatformGetParent();
+  BrowserAccessibility* stop_node = nullptr;
+  if (direction_ == FORWARDS) {
+    // Walk up the ancestor chain until we find an ancestor that has a next
+    // platform sibling. That sibling is the node that comes immediately after
+    // the scope_node's subtree.
+    for (BrowserAccessibility* current_node = scope_node_; current_node;
+         current_node = current_node->PlatformGetParent()) {
+      if (auto* next_sibling = current_node->PlatformGetNextSibling()) {
+        stop_node = next_sibling;
+        break;
+      }
+    }
+  } else {
+    stop_node = tree_->PreviousInTreeOrder(scope_node_, /* wrap */ false);
+  }
+
+  size_t nodes_checked_count = 0;
   while (node && node != stop_node &&
-         (result_limit_ == UNLIMITED_RESULTS ||
-          static_cast<int>(matches_.size()) < result_limit_)) {
-    if (Matches(node))
+         (!result_limit_ || matches_.size() < result_limit_) &&
+         (!search_limit_ || nodes_checked_count < search_limit_)) {
+    if (Matches(node)) {
       matches_.push_back(node);
+    }
+    nodes_checked_count++;
 
     if (direction_ == FORWARDS) {
       node = tree_->NextInTreeOrder(node);
@@ -218,7 +262,7 @@ bool OneShotAccessibilityTreeSearch::Matches(BrowserAccessibility* node) {
     bool found_text_match = false;
     for (auto node_string : node_strings) {
       std::u16string node_string_lower = base::i18n::ToLower(node_string);
-      if (base::Contains(node_string_lower, search_text_lower)) {
+      if (node_string_lower.contains(search_text_lower)) {
         found_text_match = true;
         break;
       }
@@ -269,6 +313,24 @@ bool AccessibilityComboboxPredicate(BrowserAccessibility* start,
           node->GetRole() == ax::mojom::Role::kComboBoxMenuButton ||
           node->GetRole() == ax::mojom::Role::kTextFieldWithComboBox ||
           node->GetRole() == ax::mojom::Role::kComboBoxSelect);
+}
+
+bool AccessibilityContainedInAtomicLiveRegionPredicate(
+    BrowserAccessibility* start,
+    BrowserAccessibility* node) {
+  // Nodes contained in an atomic live region must record the ID of their root
+  // node. If it is not present, we should not store the node as a match.
+  if (!node->HasIntAttribute(ax::mojom::IntAttribute::kMemberOfId)) {
+    return false;
+  }
+  bool is_contained =
+      node->GetBoolAttribute(ax::mojom::BoolAttribute::kContainerLiveAtomic);
+  int node_root_id =
+      node->GetIntAttribute(ax::mojom::IntAttribute::kMemberOfId);
+  int start_id = start->GetData().id;
+  // We are only interested in nodes that are contained in the live region
+  // rooted at `start`.
+  return is_contained && (node_root_id == start_id);
 }
 
 bool AccessibilityControlPredicate(BrowserAccessibility* start,
@@ -420,10 +482,38 @@ bool AccessibilityMediaPredicate(BrowserAccessibility* start,
 
 bool AccessibilityParagraphPredicate(BrowserAccessibility* start,
                                      BrowserAccessibility* node) {
-  // Since paragraphs can contain other nodes, we exclude ancestors of the start
-  // node from the search
-  return node->GetRole() == ax::mojom::Role::kParagraph &&
-         !start->IsDescendantOf(node);
+  // Since paragraphs can contain inline child nodes (such as static text or
+  // links), they are not leaf nodes in the tree. The start node will often be a
+  // descendant of a paragraph. We exclude ancestors of the start node to avoid
+  // matching the paragraph that already contains the start node, as we want to
+  // find other paragraphs.
+  if (start->IsDescendantOf(node)) {
+    return false;
+  }
+
+  ax::mojom::Role role = node->GetRole();
+
+  if (role == ax::mojom::Role::kParagraph) {
+    return true;
+  }
+
+  if (!IsBlockContainer(node)) {
+    return false;
+  }
+
+  // Exclude roles that are definitely not paragraphs (containers or controls).
+  if (IsList(role) || IsTableLike(role) || IsPlatformDocument(role) ||
+      role == ax::mojom::Role::kDocument || IsControl(role)) {
+    return false;
+  }
+
+  // Exclude block containers that have block descendants (we only want leaf
+  // blocks).
+  if (HasBlockContainerDescendant(node)) {
+    return false;
+  }
+
+  return true;
 }
 
 bool AccessibilityRadioButtonPredicate(BrowserAccessibility* start,

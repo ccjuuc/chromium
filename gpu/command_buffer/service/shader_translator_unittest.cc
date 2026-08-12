@@ -4,7 +4,6 @@
 
 #include "gpu/command_buffer/service/shader_translator.h"
 
-#include "base/containers/contains.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_bindings.h"
@@ -390,6 +389,22 @@ TEST_F(ES3ShaderTranslatorTest, GetInterfaceBlocks) {
   EXPECT_TRUE(iter != interface_block_map.end());
 }
 
+TEST_F(ShaderTranslatorTest, OutputVariablesInitializedForAllSpecs) {
+  ShBuiltInResources resources;
+  sh::InitBuiltInResources(&resources);
+
+  for (ShShaderSpec spec :
+       {SH_GLES2_SPEC, SH_GLES3_SPEC, SH_WEBGL_SPEC, SH_WEBGL2_SPEC}) {
+    scoped_refptr<ShaderTranslator> translator = new ShaderTranslator();
+    ASSERT_TRUE(translator->Init(GL_FRAGMENT_SHADER, spec, &resources,
+                                 SH_ESSL_OUTPUT, {}, false));
+    std::string options(
+        translator->GetStringForOptionsThatWouldAffectCompilation()->data);
+    EXPECT_NE(options.find("initOutputVariables"), std::string::npos)
+        << "spec=" << spec;
+  }
+}
+
 TEST_F(ShaderTranslatorTest, OptionsString) {
   scoped_refptr<ShaderTranslator> translator_1 = new ShaderTranslator();
   scoped_refptr<ShaderTranslator> translator_2 = new ShaderTranslator();
@@ -398,14 +413,14 @@ TEST_F(ShaderTranslatorTest, OptionsString) {
   ShBuiltInResources resources;
   sh::InitBuiltInResources(&resources);
 
-  ShCompileOptions with_init_output_variables{};
-  with_init_output_variables.initOutputVariables = true;
+  ShCompileOptions with_init_gl_position{};
+  with_init_gl_position.initGLPosition = true;
 
   ASSERT_TRUE(translator_1->Init(GL_VERTEX_SHADER, SH_GLES2_SPEC, &resources,
                                  SH_GLSL_150_CORE_OUTPUT, {}, false));
   ASSERT_TRUE(translator_2->Init(GL_FRAGMENT_SHADER, SH_GLES2_SPEC, &resources,
-                                 SH_GLSL_150_CORE_OUTPUT,
-                                 with_init_output_variables, false));
+                                 SH_GLSL_150_CORE_OUTPUT, with_init_gl_position,
+                                 false));
   resources.EXT_draw_buffers = 1;
   ASSERT_TRUE(translator_3->Init(GL_VERTEX_SHADER, SH_GLES2_SPEC, &resources,
                                  SH_GLSL_150_CORE_OUTPUT, {}, false));
@@ -434,63 +449,6 @@ class ShaderTranslatorOutputVersionTest
   }
 #endif
 };
-
-// crbug.com/540543
-// https://bugs.chromium.org/p/angleproject/issues/detail?id=1276
-// https://bugs.chromium.org/p/angleproject/issues/detail?id=1277
-TEST_F(ShaderTranslatorOutputVersionTest, DISABLED_CompatibilityOutput) {
-  ShBuiltInResources resources;
-  sh::InitBuiltInResources(&resources);
-
-  ShCompileOptions compile_options{};
-  compile_options.objectCode = true;
-
-  ShShaderOutput shader_output_language = SH_GLSL_COMPATIBILITY_OUTPUT;
-  scoped_refptr<ShaderTranslator> vertex_translator = new ShaderTranslator();
-  ASSERT_TRUE(vertex_translator->Init(GL_VERTEX_SHADER, SH_GLES2_SPEC,
-                                      &resources, shader_output_language,
-                                      compile_options, false));
-  scoped_refptr<ShaderTranslator> fragment_translator = new ShaderTranslator();
-  ASSERT_TRUE(fragment_translator->Init(GL_FRAGMENT_SHADER, SH_GLES2_SPEC,
-                                        &resources, shader_output_language,
-                                        compile_options, false));
-
-  std::string translated_source;
-  int shader_version;
-  {
-    const char* kShader =
-        "attribute vec4 vPosition;\n"
-        "void main() {\n"
-        "}";
-
-    EXPECT_TRUE(vertex_translator->Translate(
-        kShader, nullptr, &translated_source, &shader_version, nullptr, nullptr,
-        nullptr, nullptr, nullptr));
-    EXPECT_TRUE(translated_source.find("#version") == std::string::npos);
-    if (!base::Contains(translated_source, "gl_Position =")) {
-      ADD_FAILURE() << "Did not find gl_Position initialization.";
-      LOG(ERROR) << "Generated output:\n" << translated_source;
-    }
-  }
-  {
-    const char* kShader =
-        "#pragma STDGL invariant(all)\n"
-        "precision mediump float;\n"
-        "varying vec4 v_varying;\n"
-        "void main() {\n"
-        "    gl_FragColor = v_varying;\n"
-        "}\n";
-
-    EXPECT_TRUE(fragment_translator->Translate(
-        kShader, nullptr, &translated_source, &shader_version, nullptr, nullptr,
-        nullptr, nullptr, nullptr));
-    EXPECT_TRUE(base::Contains(translated_source, "#version 120"));
-    if (base::Contains(translated_source, "#pragma STDGL invariant(all)")) {
-      ADD_FAILURE() << "Found forbidden pragma.";
-      LOG(ERROR) << "Generated output:\n" << translated_source;
-    }
-  }
-}
 
 TEST_P(ShaderTranslatorOutputVersionTest, HasCorrectOutputGLSLVersion) {
   // Test that translating to a shader targeting certain OpenGL context version
@@ -522,11 +480,10 @@ TEST_P(ShaderTranslatorOutputVersionTest, HasCorrectOutputGLSLVersion) {
 
   std::string expected_version_directive = testing::get<1>(GetParam());
   if (expected_version_directive.empty()) {
-    EXPECT_TRUE(!base::Contains(translated_source, "#version"))
-        << "Translation was:\n"
-        << translated_source;
+    EXPECT_TRUE(!translated_source.contains("#version")) << "Translation was:\n"
+                                                         << translated_source;
   } else {
-    EXPECT_TRUE(base::Contains(translated_source, expected_version_directive))
+    EXPECT_TRUE(translated_source.contains(expected_version_directive))
         << "Translation was:\n"
         << translated_source;
   }

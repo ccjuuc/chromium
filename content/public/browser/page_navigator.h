@@ -19,10 +19,10 @@
 #include "content/public/browser/child_process_host.h"
 #include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/browser/initiator_navigation_state.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/common/referrer.h"
-#include "ipc/constants.mojom.h"
-#include "third_party/blink/public/common/navigation/impression.h"
+#include "ipc/constants.mojom-forward.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/frame/triggering_event_info.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
@@ -96,6 +96,13 @@ struct CONTENT_EXPORT OpenURLParams {
   // if the navigation is about:blank or about:srcdoc.
   std::optional<GURL> initiator_base_url;
 
+  // A record of the state of the navigation initiator.
+  scoped_refptr<InitiatorNavigationState> initiator_navigation_state;
+
+  // Whether the web security policies of the initiator should be inherited when
+  // navigating to a local scheme.
+  bool should_ignore_initiator_policies_for_inheritance = false;
+
   // SiteInstance of the frame that initiated the navigation or null if we
   // don't know it.
   scoped_refptr<content::SiteInstance> source_site_instance;
@@ -138,6 +145,9 @@ struct CONTENT_EXPORT OpenURLParams {
   // gesture if the navigation was initiated by the renderer.
   bool user_gesture;
 
+  // Indicates whether this navigation was started by an ad.
+  bool started_by_ad = false;
+
   // Whether the call to OpenURL was triggered by an Event, and what the
   // isTrusted flag of the event was.
   blink::mojom::TriggeringEventInfo triggering_event_info =
@@ -161,17 +171,43 @@ struct CONTENT_EXPORT OpenURLParams {
   // Indicates if this navigation is a reload.
   ReloadType reload_type = ReloadType::NONE;
 
-  // Optional impression associated with this navigation. Only set on
-  // navigations that originate from links with impression attributes. Used for
-  // conversion measurement.
-  std::optional<blink::Impression> impression;
-
   // Indicates that this navigation is for PDF content in a renderer.
   bool is_pdf = false;
 
   // True if the initiator explicitly asked for opener relationships to be
   // preserved, via rel="opener".
   bool has_rel_opener = false;
+
+  // A text fragment selector (that uses the syntax defined in
+  // https://wicg.github.io/scroll-to-text-fragment/#syntax) to scroll the
+  // matched text into the viewport without applying the standard highlight
+  // styling.
+  //
+  // This is intended for features that synchronize scroll state across devices
+  // or browser sessions (e.g., Chrome's Send Tab To Self). It is used instead
+  // of the standard blink::PageState restoration mechanism because PageState
+  // relies on layout-dependent pixel offsets. Pixel offsets do not translate
+  // well across vastly different form factors and viewport sizes (e.g., moving
+  // from mobile to desktop). A text fragment anchors to the content itself,
+  // making it robust against these layout differences.
+  //
+  // It is passed internally rather than appending `#:~:text=` to the URL
+  // because modifying the visible URL with arbitrary fragment strings can
+  // confuse users. Furthermore, standard URL text fragments apply a default
+  // visual highlight to the text, which is jarring when the user simply
+  // expects their previous scroll position to be restored.
+  //
+  // Usage of this parameter should be restricted to browser-initiated
+  // navigations. It must not be initiated from untrusted web content or
+  // arbitrary third-party apps, as allowing invisible, programmatic scrolling
+  // to arbitrary text on a page could introduce security risks (e.g.,
+  // clickjacking).
+  //
+  // SECURITY NOTE: Because this payload may originate from a potentially
+  // compromised remote client, the privileged browser process must treat it
+  // as an opaque string. It should never be parsed or evaluated in the
+  // browser process, and must only be parsed by the sandboxed renderer.
+  std::optional<std::string> internal_scroll_to_text_fragment;
 };
 
 class PageNavigator {

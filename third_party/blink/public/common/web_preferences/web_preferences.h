@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "net/nqe/effective_connection_type.h"
 #include "third_party/blink/public/common/common_export.h"
@@ -42,6 +43,11 @@ BLINK_COMMON_EXPORT extern const char kCommonScript[];
 // browser/profiles/profile.cc, and
 // content/public/common/common_param_traits_macros.h
 struct BLINK_COMMON_EXPORT WebPreferences {
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  static constexpr float kDefaultMinimumPageScaleFactor = 0.25f;
+  static constexpr bool kShrinksViewportContentsToFit = true;
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
   ScriptFontFamilyMap standard_font_family_map;
   // The value for Osaka font should be "Osaka", not "Osaka-Mono".
   ScriptFontFamilyMap fixed_font_family_map;
@@ -65,7 +71,7 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   bool shrinks_standalone_images_to_fit = true;
   bool text_areas_are_resizable = true;
   bool allow_scripts_to_close_windows = false;
-  bool allow_window_focus_without_user_gesture = false;
+  bool allow_unrestricted_window_focus = false;
   bool remote_fonts_enabled = true;
   bool javascript_can_access_clipboard = false;
   // We don't use dns_prefetching_enabled to disable DNS prefetching.  Instead,
@@ -75,6 +81,8 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // Preference to save data. When enabled, requests will contain the header
   // 'Save-Data: on'.
   bool data_saver_enabled = false;
+  bool battery_saver_enabled = false;
+  bool preloading_disabled = false;
   bool local_storage_enabled = false;
   bool tabs_to_links = true;
   bool disable_ipc_flooding_protection = false;
@@ -104,10 +112,6 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // mixed content, and disables embedder notifications that such content was
   // requested (thereby preventing user override).
   bool strict_mixed_content_checking = false;
-  // Strict powerful feature restrictions block insecure usage of powerful
-  // features (like device orientation) that we haven't yet disabled for the web
-  // at large.
-  bool strict_powerful_feature_restrictions = false;
   // TODO(jww): Remove when WebView no longer needs this exception.
   bool allow_geolocation_on_insecure_origins = false;
   // Disallow user opt-in for blockable mixed content.
@@ -164,8 +168,11 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // If true - Blink will clamp the minimum scale factor to the content width,
   // preventing zoom beyond the visible content. This is really only needed if
   // `viewport_enabled` is on.
-  bool shrinks_viewport_contents_to_fit =
-      BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS);
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  bool shrinks_viewport_contents_to_fit = kShrinksViewportContentsToFit;
+#else
+  bool shrinks_viewport_contents_to_fit = false;
+#endif
 
   blink::mojom::ViewportStyle viewport_style =
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -173,8 +180,7 @@ struct BLINK_COMMON_EXPORT WebPreferences {
 #else
       mojom::ViewportStyle::kDefault;
 #endif
-  bool always_show_context_menu_on_touch =
-      !(BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS));
+  bool always_show_context_menu_on_touch = !BUILDFLAG(IS_IOS);
   bool smooth_scroll_for_find_enabled =
       BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS);
   bool main_frame_resizes_are_orientation_changes =
@@ -236,22 +242,26 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   float text_track_margin_percentage = 0.0f;
 
   bool immersive_mode_enabled = false;
+  bool immersive_video_playback_enabled = false;
 
   bool double_tap_to_zoom_enabled =
       BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_APPLE);
 
   bool fullscreen_supported = true;
 
-  bool text_autosizing_enabled = BUILDFLAG(IS_ANDROID);
+  bool text_size_adjust_enabled = BUILDFLAG(IS_ANDROID);
 
   // Representation of the Web App Manifest scope if any.
   GURL web_app_scope;
+
+  // Whether this renderer is associated with the browser's initial ("Default")
+  // profile.
+  bool is_initial_profile = false;
 
 #if BUILDFLAG(IS_ANDROID)
   float font_scale_factor = 1.0f;
   int font_weight_adjustment = 0;
   int text_size_contrast_factor = 0;
-  float device_scale_adjustment = 1.0f;
   bool force_enable_zoom = false;
   bool enable_touchpad_overscroll_history_navigation = true;
   GURL default_video_poster_url;
@@ -290,6 +300,8 @@ struct BLINK_COMMON_EXPORT WebPreferences {
 
   // Long press on links selects text instead of triggering context menu.
   bool long_press_link_select_text = false;
+  // Support WebView font scaling behavior that differs from Chrome.
+  bool scale_all_fonts_if_no_meta_text_scale_tag = false;
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // TODO(crbug.com/1284805): Remove IS_ANDROID once WebView supports WebAuthn.
@@ -308,7 +320,7 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // scale limits. These are set directly on the WebView so there's no analogue
   // in WebSettings.
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  float default_minimum_page_scale_factor = 0.25f;
+  float default_minimum_page_scale_factor = kDefaultMinimumPageScaleFactor;
   float default_maximum_page_scale_factor = 5.f;
 #elif BUILDFLAG(IS_MAC)
   float default_minimum_page_scale_factor = 1.f;
@@ -346,10 +358,6 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // `FileOrDirectoryPickerWithoutGestureAllowedForOrigins` policy.
   bool require_transient_activation_for_show_file_or_directory_picker = true;
 
-  // `navigator.subApps.{add|remove|list}()`'s user gesture and authorization
-  // can be bypassed via
-  // `SubAppsAPIsAllowedWithoutGestureAndAuthorizationForOrigins` policy.
-  bool subapps_apis_require_user_gesture_and_authorization = true;
 
   // The forced colors state for the web content. The forced colors state
   // is used to evaluate the forced-colors media query, as well as determining
@@ -397,6 +405,9 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // See https://github.com/dtapuska/html-translate
   bool translate_service_available = false;
 
+  // Whether to highlight ads on the page.
+  bool highlight_ads = false;
+
   // A value other than
   // mojom::EffectiveConnectionType::kEffectiveConnectionUnknownType implies
   // that the network quality estimate related Web APIs are in the holdback
@@ -423,7 +434,7 @@ struct BLINK_COMMON_EXPORT WebPreferences {
 
   // Whether the end of a drag fires a contextmenu event and possibly shows a
   // context-menu (depends on how the event is handled). Follows
-  // `touch_drag_drop_enabled` in Windows.
+  // `touch_drag_drop_enabled` on Linux and Windows.
   bool touch_dragend_context_menu = false;
 
   // By default, WebXR's immersive-ar session creation is allowed, but this can
@@ -451,7 +462,9 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // WebView and by `kWebPayments` feature flag everywhere.
   bool payment_request_enabled = false;
 
-  bool ai_prompt_api_enabled = false;
+  // Enables the origin trial Built-in AI APIs, for use within DevTools and
+  // devtools extension panels.
+  bool ai_ot_apis_enabled = false;
 
 #if BUILDFLAG(IS_MAC)
   bool should_disable_external_popups = false;
@@ -463,6 +476,10 @@ struct BLINK_COMMON_EXPORT WebPreferences {
   // thread as a side-effect.
   bool should_screenshot_on_mainframe_same_doc_navigation = true;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+  // Set if this is in a WebView for chrome/browser/indigo/onboarding/.
+  // Consumed only in chrome/renderer/ (not by Blink).
+  bool is_indigo_onboarding = false;
 
   // We try to keep the default values the same as the default values in
   // chrome, except for the cases where it would require lots of extra work for

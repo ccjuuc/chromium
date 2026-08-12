@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/containers/to_vector.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -23,7 +24,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -158,48 +158,59 @@ void Component::SetUpdateCheckResult(std::optional<ProtocolParser::App> result,
         crx_component_->pk_hash, crx_component_->install_data_index,
         crx_component_->installer,
         base::BindRepeating(
-            [](base::raw_ref<Component> component, ComponentState state) {
-              component->state_hint_ = state;
+            [](base::WeakPtr<Component> component, ComponentState state) {
+              if (component) {
+                component->state_hint_ = state;
+              }
             },
-            base::raw_ref(*this)),
+            weak_ptr_factory_.GetWeakPtr()),
         base::BindRepeating(&Component::AppendEvent, base::Unretained(this)),
         base::BindRepeating(
-            [](base::raw_ref<Component> component, int64_t downloaded_bytes,
+            [](base::WeakPtr<Component> component, int64_t downloaded_bytes,
                int64_t total_bytes) {
-              component->downloaded_bytes_ = downloaded_bytes;
-              component->total_bytes_ = total_bytes;
-              component->NotifyObservers();
-            },
-            base::raw_ref(*this)),
-        base::BindRepeating(
-            [](base::raw_ref<Component> component, int progress) {
-              if (progress >= 0 && progress <= 100) {
-                component->install_progress_ = progress;
+              if (component) {
+                component->downloaded_bytes_ = downloaded_bytes;
+                component->total_bytes_ = total_bytes;
+                component->NotifyObservers();
               }
-              component->NotifyObservers();
             },
-            base::raw_ref(*this)),
+            weak_ptr_factory_.GetWeakPtr()),
         base::BindRepeating(
-            [](base::raw_ref<Component> component,
-               const CrxInstaller::Result& result) {
-              component->installer_result_ = result;
-              component->error_category_ = result.result.category;
-              component->error_code_ = result.result.code;
-              component->extra_code1_ = result.result.extra;
+            [](base::WeakPtr<Component> component, int progress) {
+              if (component) {
+                if (progress >= 0 && progress <= 100) {
+                  component->install_progress_ = progress;
+                }
+                component->NotifyObservers();
+              }
             },
-            base::raw_ref(*this)),
+            weak_ptr_factory_.GetWeakPtr()),
+        base::BindRepeating(
+            [](base::WeakPtr<Component> component,
+               const CrxInstaller::Result& result) {
+              if (component) {
+                component->installer_result_ = result;
+                component->error_category_ = result.result.category;
+                component->error_code_ = result.result.code;
+                component->extra_code1_ = result.result.extra;
+              }
+            },
+            weak_ptr_factory_.GetWeakPtr()),
         crx_component_->action_handler, result.value(),
         base::BindOnce(
             base::BindOnce(
-                [](base::raw_ref<Component> component,
+                [](base::WeakPtr<Component> component,
                    base::expected<
                        base::OnceCallback<base::OnceClosure(
                            base::OnceCallback<void(const CategorizedError&)>)>,
                        CategorizedError> pipeline) {
-                  component->pipeline_ = std::move(pipeline);
-                  return true;
+                  if (component) {
+                    component->pipeline_ = std::move(pipeline);
+                    return true;
+                  }
+                  return false;
                 },
-                base::raw_ref(*this)))
+                weak_ptr_factory_.GetWeakPtr()))
             .Then(std::move(callback)));
   } else {
     pipeline_ = base::unexpected(
@@ -209,13 +220,13 @@ void Component::SetUpdateCheckResult(std::optional<ProtocolParser::App> result,
   }
 }
 
-base::Value::Dict WrapFingerprint(const std::string& fp) {
-  base::Value::Dict wrapper;
+base::DictValue WrapFingerprint(const std::string& fp) {
+  base::DictValue wrapper;
   wrapper.Set("fingerprint", fp);
   return wrapper;
 }
 
-void Component::AppendEvent(base::Value::Dict event) {
+void Component::AppendEvent(base::DictValue event) {
   if (previous_version().IsValid()) {
     event.Set("previousversion", previous_version().GetString());
   }
@@ -242,8 +253,8 @@ base::TimeDelta Component::GetUpdateDuration() const {
   return std::min(update_cost, update_context_->config->UpdateDelay());
 }
 
-base::Value::Dict Component::MakeEventUpdateComplete() const {
-  base::Value::Dict event;
+base::DictValue Component::MakeEventUpdateComplete() const {
+  base::DictValue event;
   event.Set("eventtype", update_context_->is_install
                              ? protocol_request::kEventInstall
                              : protocol_request::kEventUpdate);
@@ -267,12 +278,9 @@ base::Value::Dict Component::MakeEventUpdateComplete() const {
   return event;
 }
 
-std::vector<base::Value::Dict> Component::GetEvents() const {
-  std::vector<base::Value::Dict> events;
-  for (const auto& event : events_) {
-    events.push_back(event.Clone());
-  }
-  return events;
+std::vector<base::DictValue> Component::GetEvents() const {
+  return base::ToVector(events_,
+                        [](const auto& event) { return event.Clone(); });
 }
 
 std::unique_ptr<CrxInstaller::InstallParams> Component::install_params() const {
@@ -359,13 +367,11 @@ void Component::StateChecking::DoHandle() {
   CHECK(component.crx_component());
 
   if (component.error_code_) {
-    metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kError);
     TransitionState(std::make_unique<StateUpdateError>(&component));
     return;
   }
 
   if (component.update_context_->is_cancelled) {
-    metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kCanceled);
     TransitionState(std::make_unique<StateUpdateError>(&component));
     component.error_category_ = ErrorCategory::kService;
     component.error_code_ = static_cast<int>(ServiceError::CANCELLED);
@@ -373,18 +379,15 @@ void Component::StateChecking::DoHandle() {
   }
 
   if (component.pipeline_.has_value()) {
-    metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kHasUpdate);
     TransitionState(std::make_unique<StateCanUpdate>(&component));
     return;
   }
 
   if (component.pipeline_.error().category == ErrorCategory::kNone) {
-    metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kNoUpdate);
     TransitionState(std::make_unique<StateUpToDate>(&component));
     return;
   }
 
-  metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kError);
   TransitionState(std::make_unique<StateUpdateError>(&component));
 }
 
@@ -554,7 +557,6 @@ void Component::StateUpdated::DoHandle() {
   component.AppendEvent(component.MakeEventUpdateComplete());
 
   component.NotifyObservers();
-  metrics::RecordComponentUpdated();
   EndState();
 }
 

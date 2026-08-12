@@ -4,6 +4,7 @@
 
 #include "extensions/browser/process_map.h"
 
+#include <algorithm>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -12,25 +13,32 @@
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
-#include "extensions/browser/app_window/app_window.h"
-#include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#include "extensions/browser/app_window/app_window.h"
+#include "extensions/browser/app_window/app_window_registry.h"
+#endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -51,8 +59,8 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
     return *GetActiveWebContents()->GetPrimaryMainFrame()->GetProcess();
   }
 
-  int GetActiveMainFrameProcessID() {
-    return GetActiveMainFrameProcess().GetDeprecatedID();
+  content::ChildProcessId GetActiveMainFrameProcessID() {
+    return GetActiveMainFrameProcess().GetID();
   }
 
   // Adds a new extension with the given `extension_name` and host permission to
@@ -313,6 +321,7 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
     return extension;
   }
 
+#if BUILDFLAG(IS_CHROMEOS)
   const Extension* AddExtensionWithWebViewAndOpen() {
     static constexpr char kManifest[] =
         R"({
@@ -367,7 +376,9 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
 
     return extension;
   }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(ENABLE_PLATFORM_APPS)
   content::WebContents* GetAppWindowContents() {
     AppWindowRegistry* registry = AppWindowRegistry::Get(profile());
     if (registry->app_windows().size() != 1) {
@@ -378,6 +389,7 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
 
     return (*registry->app_windows().begin())->web_contents();
   }
+#endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
   content::WebContents* GetWebViewFromEmbedder(content::WebContents* embedder) {
     std::vector<content::WebContents*> inner_web_contents =
@@ -405,8 +417,10 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
 
   // Opens a new tab to a Web UI page.
   void OpenWebUi() {
+    // Use chrome://version because it is Web UI on all platforms, including
+    // Android (which has some native UI chrome:// pages like settings).
     ASSERT_TRUE(
-        NavigateToURL(GetActiveWebContents(), GURL("chrome://settings")));
+        NavigateToURL(GetActiveWebContents(), GURL("chrome://version")));
   }
 
   // Opens a new tab to a page in the given `extension`.
@@ -492,7 +506,7 @@ class ProcessMapBrowserTest : public ExtensionBrowserTest {
                    << (extension ? extension->name() : "<no extension>")
                    << ", Debug String: " << debug_string);
       bool expected_to_be_allowed =
-          base::Contains(allowed_contexts, context_type);
+          std::ranges::contains(allowed_contexts, context_type);
       EXPECT_EQ(expected_to_be_allowed,
                 process_map()->CanProcessHostContextType(extension, process,
                                                          context_type));
@@ -736,7 +750,9 @@ IN_PROC_BROWSER_TEST_F(
   // a sandbox attribute set, but it is not a manifest-sandboxed frame. As such,
   // it gets placed in the main extension process, has access to extension APIs
   // and is not places in a sandboxed SiteInstance.
-  EXPECT_FALSE(content::HasSandboxedSiteInstance(sandboxed_E2_frame));
+  EXPECT_FALSE(sandboxed_E2_frame->GetSiteInstance()
+                   ->GetSecurityPrincipal()
+                   .IsSandboxed());
 
   // Each frame will be in a separate process due to site isolation.
   EXPECT_NE(main_frame->GetProcess(), sandboxed_a_frame->GetProcess());
@@ -772,8 +788,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_WebPages) {
   OpenDomain("example.com");
   content::RenderProcessHost& web_page_process = GetActiveMainFrameProcess();
 
-  RunCanProcessHostContextTypeChecks(extension, web_page_process,
-                                     {mojom::ContextType::kContentScript},
+  RunCanProcessHostContextTypeChecks(extension, web_page_process, {},
                                      "web page with extension passed");
   RunCanProcessHostContextTypeChecks(
       nullptr, web_page_process,
@@ -803,8 +818,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_WebUiPages) {
   OpenWebUi();
   content::RenderProcessHost& webui_process = GetActiveMainFrameProcess();
 
-  RunCanProcessHostContextTypeChecks(extension, webui_process,
-                                     {mojom::ContextType::kContentScript},
+  RunCanProcessHostContextTypeChecks(extension, webui_process, {},
                                      "webui page with extension passed");
   RunCanProcessHostContextTypeChecks(nullptr, webui_process,
                                      {mojom::ContextType::kWebUi},
@@ -858,12 +872,10 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   content::RenderProcessHost& extension1_process = GetActiveMainFrameProcess();
 
   RunCanProcessHostContextTypeChecks(extension1, extension1_process,
-                                     {mojom::ContextType::kContentScript,
-                                      mojom::ContextType::kPrivilegedExtension,
+                                     {mojom::ContextType::kPrivilegedExtension,
                                       mojom::ContextType::kOffscreenExtension},
                                      "extension1 page with extension1 passed");
-  RunCanProcessHostContextTypeChecks(extension2, extension1_process,
-                                     {mojom::ContextType::kContentScript},
+  RunCanProcessHostContextTypeChecks(extension2, extension1_process, {},
                                      "extension1 page with extension2 passed");
   RunCanProcessHostContextTypeChecks(
       nullptr, extension1_process, {},
@@ -876,12 +888,10 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   content::RenderProcessHost& extension2_process = GetActiveMainFrameProcess();
 
   RunCanProcessHostContextTypeChecks(extension2, extension2_process,
-                                     {mojom::ContextType::kContentScript,
-                                      mojom::ContextType::kPrivilegedExtension,
+                                     {mojom::ContextType::kPrivilegedExtension,
                                       mojom::ContextType::kOffscreenExtension},
                                      "extension2 page with extension2 passed");
-  RunCanProcessHostContextTypeChecks(extension1, extension2_process,
-                                     {mojom::ContextType::kContentScript},
+  RunCanProcessHostContextTypeChecks(extension1, extension2_process, {},
                                      "extension2 page with extension1 passed");
   RunCanProcessHostContextTypeChecks(
       nullptr, extension2_process, {},
@@ -908,17 +918,22 @@ IN_PROC_BROWSER_TEST_F(
 // had a content script injected in it.
 IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
                        CanHostContextType_WebPagesWithContentScripts) {
-  const Extension* extension =
-      AddExtensionWithContentScript("test", "*://example.com/*");
-  ASSERT_TRUE(extension);
+  const Extension* extension1 =
+      AddExtensionWithContentScript("test1", "*://example.com/*");
+  ASSERT_TRUE(extension1);
+  const Extension* extension2 =
+      AddExtensionWithContentScript("test2", "*://not-example.com/*");
+  ASSERT_TRUE(extension2);
 
   // Navigate to a web page and wait for the content script to inject.
   OpenDomainAndWaitForContentScript("example.com");
   content::RenderProcessHost& page_process = GetActiveMainFrameProcess();
 
-  RunCanProcessHostContextTypeChecks(extension, page_process,
+  RunCanProcessHostContextTypeChecks(extension1, page_process,
                                      {mojom::ContextType::kContentScript},
-                                     "web page with extension passed");
+                                     "web page with extension1 passed");
+  RunCanProcessHostContextTypeChecks(extension2, page_process, {},
+                                     "web page with extension2 passed");
   RunCanProcessHostContextTypeChecks(
       nullptr, page_process,
       {mojom::ContextType::kWebPage, mojom::ContextType::kUntrustedWebUi},
@@ -960,18 +975,23 @@ void ProcessMapBrowserTest::VerifyWhetherSubframesAreIsolated(
 
   EXPECT_FALSE(ExtensionFrameIsSandboxed(main_frame));
 
-  int main_frame_process_id = main_frame->GetProcess()->GetDeprecatedID();
-  int sandboxed_frame_process_id =
-      sandboxed_child_frame->GetProcess()->GetDeprecatedID();
-  int non_sandboxed_frame_process_id =
-      non_sandboxed_child_frame->GetProcess()->GetDeprecatedID();
+  content::ChildProcessId main_frame_process_id =
+      main_frame->GetProcess()->GetID();
+  content::ChildProcessId sandboxed_frame_process_id =
+      sandboxed_child_frame->GetProcess()->GetID();
+  content::ChildProcessId non_sandboxed_frame_process_id =
+      non_sandboxed_child_frame->GetProcess()->GetID();
 
   if (expect_subframes_isolated_from_each_other) {
     EXPECT_NE(sandboxed_frame_process_id, non_sandboxed_frame_process_id);
-    EXPECT_TRUE(content::HasSandboxedSiteInstance(sandboxed_child_frame));
+    EXPECT_TRUE(sandboxed_child_frame->GetSiteInstance()
+                    ->GetSecurityPrincipal()
+                    .IsSandboxed());
   } else {
     EXPECT_EQ(sandboxed_frame_process_id, non_sandboxed_frame_process_id);
-    EXPECT_FALSE(content::HasSandboxedSiteInstance(sandboxed_child_frame));
+    EXPECT_FALSE(sandboxed_child_frame->GetSiteInstance()
+                     ->GetSecurityPrincipal()
+                     .IsSandboxed());
   }
   if (expect_sandboxed_subframe_isolated_from_extension_page) {
     EXPECT_NE(main_frame_process_id, sandboxed_frame_process_id);
@@ -984,7 +1004,9 @@ void ProcessMapBrowserTest::VerifyWhetherSubframesAreIsolated(
     EXPECT_EQ(main_frame_process_id, non_sandboxed_frame_process_id);
   }
   EXPECT_FALSE(ExtensionFrameIsSandboxed(main_frame));
-  EXPECT_FALSE(content::HasSandboxedSiteInstance(non_sandboxed_child_frame));
+  EXPECT_FALSE(non_sandboxed_child_frame->GetSiteInstance()
+                   ->GetSecurityPrincipal()
+                   .IsSandboxed());
 }
 
 // Tests that web pages loaded in sandboxed iframes inside an extension are
@@ -1060,8 +1082,8 @@ void ProcessMapBrowserTest::
 
   content::RenderFrameHost* sandboxed_child_frame =
       content::ChildFrameAt(main_frame, 0);
-  int sandboxed_frame_process_id =
-      sandboxed_child_frame->GetProcess()->GetDeprecatedID();
+  content::ChildProcessId sandboxed_frame_process_id =
+      sandboxed_child_frame->GetProcess()->GetID();
   // Sandboxed extension frames should still have access to other extension
   // resources. Verify the extension script (resource.js) was properly loaded
   // by looking for foo variable.
@@ -1151,9 +1173,10 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   content::RenderFrameHost* sandboxed_child_frame =
       content::ChildFrameAt(main_frame, 0);
 
-  int main_frame_process_id = main_frame->GetProcess()->GetDeprecatedID();
-  int sandboxed_frame_process_id =
-      sandboxed_child_frame->GetProcess()->GetDeprecatedID();
+  content::ChildProcessId main_frame_process_id =
+      main_frame->GetProcess()->GetID();
+  content::ChildProcessId sandboxed_frame_process_id =
+      sandboxed_child_frame->GetProcess()->GetID();
 
   // Since we normally process-isolate E1 from E2, placing E1 in a sandboxed
   // iframe will make no difference.
@@ -1216,11 +1239,12 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   EXPECT_TRUE(ExtensionFrameIsSandboxed(sandboxed_frame));
   EXPECT_TRUE(ExtensionFrameIsSandboxed(other_sandboxed_frame));
 
-  int main_frame_process_id = main_frame->GetProcess()->GetDeprecatedID();
-  int sandboxed_frame_process_id =
-      sandboxed_frame->GetProcess()->GetDeprecatedID();
-  int other_sandboxed_frame_process_id =
-      other_sandboxed_frame->GetProcess()->GetDeprecatedID();
+  content::ChildProcessId main_frame_process_id =
+      main_frame->GetProcess()->GetID();
+  content::ChildProcessId sandboxed_frame_process_id =
+      sandboxed_frame->GetProcess()->GetID();
+  content::ChildProcessId other_sandboxed_frame_process_id =
+      other_sandboxed_frame->GetProcess()->GetID();
 
   // The two manifest-sandboxed frames will be in the same process, regardless
   // of whether IsolateSandboxedIframes is enabled or not.
@@ -1364,8 +1388,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
 
   RunCanProcessHostContextTypeChecks(
       extension, main_frame_process,
-      {mojom::ContextType::kContentScript,
-       mojom::ContextType::kPrivilegedExtension,
+      {mojom::ContextType::kPrivilegedExtension,
        mojom::ContextType::kOffscreenExtension},
       "main frame process with extension passed");
   RunCanProcessHostContextTypeChecks(
@@ -1374,8 +1397,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
 
   if (content::SiteIsolationPolicy::AreIsolatedSandboxedIframesEnabled()) {
     RunCanProcessHostContextTypeChecks(
-        extension, sandboxed_frame_process,
-        {mojom::ContextType::kContentScript},
+        extension, sandboxed_frame_process, {},
         "sandboxed frame process with extension passed");
     RunCanProcessHostContextTypeChecks(
         nullptr, sandboxed_frame_process,
@@ -1384,8 +1406,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   } else {
     RunCanProcessHostContextTypeChecks(
         extension, sandboxed_frame_process,
-        {mojom::ContextType::kContentScript,
-         mojom::ContextType::kPrivilegedExtension,
+        {mojom::ContextType::kPrivilegedExtension,
          mojom::ContextType::kOffscreenExtension},
         "sandboxed frame process with extension passed");
     RunCanProcessHostContextTypeChecks(
@@ -1394,6 +1415,9 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   }
 }
 
+// The following tests launch a dynamic Chrome App, which is only supported on
+// ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
                        IsPrivilegedExtensionProcess_WebViews) {
   const Extension* extension = AddExtensionWithWebViewAndOpen();
@@ -1408,11 +1432,9 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
   // The embedder (the app window) should be a privileged extension process,
   // but the webview should not.
   EXPECT_TRUE(process_map()->IsPrivilegedExtensionProcess(
-      *extension,
-      embedder->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      *extension, embedder->GetPrimaryMainFrame()->GetProcess()->GetID()));
   EXPECT_FALSE(process_map()->IsPrivilegedExtensionProcess(
-      *extension,
-      webview->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()));
+      *extension, webview->GetPrimaryMainFrame()->GetProcess()->GetID()));
 }
 
 IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_WebViews) {
@@ -1425,22 +1447,20 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_WebViews) {
   content::WebContents* webview = GetWebViewFromEmbedder(embedder);
   ASSERT_TRUE(webview);
 
-  // The embedder (the app window) can host any kind of extension context
-  // except an unprivileged extension context (which is only available to
-  // webviews).
+  // The embedder (the app window) can theoretically host either a privileged
+  // context (default) or an offscreen context. In practice, apps can't use
+  // offscreen documents, but this isn't a security boundary, per se.
   RunCanProcessHostContextTypeChecks(
       extension, *embedder->GetPrimaryMainFrame()->GetProcess(),
-      {mojom::ContextType::kContentScript,
-       mojom::ContextType::kPrivilegedExtension,
+      {mojom::ContextType::kPrivilegedExtension,
        mojom::ContextType::kOffscreenExtension},
       "embedder process");
 
-  // The webview can only host content scripts, user scripts, and
-  // unprivileged extension contexts (accessible resources).
+  // The webview can only host unprivileged extension contexts (accessible
+  // resources) when associated with an extension.
   RunCanProcessHostContextTypeChecks(
       extension, *webview->GetPrimaryMainFrame()->GetProcess(),
-      {mojom::ContextType::kContentScript,
-       mojom::ContextType::kUnprivilegedExtension},
+      {mojom::ContextType::kUnprivilegedExtension},
       "webview process with extension passed");
 
   // If the extension isn't associated with the call, the webview could only
@@ -1450,6 +1470,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_WebViews) {
       {mojom::ContextType::kWebPage, mojom::ContextType::kUntrustedWebUi},
       "webview process without extension passed");
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest,
                        IsPrivilegedExtensionProcess_UserScripts) {
@@ -1475,8 +1496,7 @@ IN_PROC_BROWSER_TEST_F(ProcessMapBrowserTest, CanHostContextType_UserScripts) {
   content::RenderProcessHost& web_page_process = GetActiveMainFrameProcess();
 
   RunCanProcessHostContextTypeChecks(
-      extension, web_page_process,
-      {mojom::ContextType::kContentScript, mojom::ContextType::kUserScript},
+      extension, web_page_process, {mojom::ContextType::kUserScript},
       "page with injected user script with extension passed");
   RunCanProcessHostContextTypeChecks(
       nullptr, web_page_process,

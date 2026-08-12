@@ -13,9 +13,9 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -40,8 +40,11 @@
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_actuator/public/features.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/metrics/metrics_service.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/plus_addresses/core/common/features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/prefs/pref_service.h"
@@ -52,11 +55,11 @@
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_prefs.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
-#include "components/variations/synthetic_trials.h"
+#include "components/site_token_provider/features.h"
+#include "components/skills/features.h"
 #include "components/version_info/channel.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -81,7 +84,7 @@
 #endif
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #endif
@@ -98,30 +101,27 @@
 #include "chrome/browser/signin/bound_session_credentials/throttled_gaia_auth_fetcher.h"
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "extensions/common/extension_features.h"
+#endif
+
 namespace {
 
-// TODO(crbug.com/408181043): These groups are only used for the experiment
-// with feature flag `syncer::kSyncEnableBookmarksInTransportMode`. Can be
-// safely removed during cleanup.
-//
-// Local Pref used to track in which group from
-// `kSigninFromBookmarksBubbleSyntheticTrialName` trial the user is currently
-// in. This is set at sign-in and read/set at startup.
-constexpr char kSigninFromBookmarksBubbleSyntheticTrialGroupNamePref[] =
-    "UnoDesktopBookmarksEnabledInAccountFromBubbleGroup";
-// Local Pref used to track in which group from
-// `kBookmarksBubblePromoShownSyntheticTrialName` trial the user is currently
-// in. This is set when the promo is shown and read/set at startup.
-constexpr char kBookmarksBubblePromoShownSyntheticTrialGroupNamePref[] =
-    "UnoDesktopBookmarksBubblePromoShownGroup";
-
-// Synthetic field trial for users that have enabled account bookmarks through
-// the Bookmarks Bubble.
-constexpr char kSigninFromBookmarksBubbleSyntheticTrialName[] =
-    "UnoDesktopBookmarksEnabledInAccountFromBubble";
-// Synthetic field trial for users that have seen the Bookmarks Sign in Promo.
-constexpr char kBookmarksBubblePromoShownSyntheticTrialName[] =
-    "UnoDesktopBookmarksBubblePromoShown";
+// OAuth2 scopes for Contextual Tasks.
+inline constexpr char kCalendarEventsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/calendar.events";
+inline constexpr char kCalendarFreeBusyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/calendar.freebusy";
+inline constexpr char kCalendarListOAuth2Scope[] =
+    "https://www.googleapis.com/auth/calendar.calendarlist";
+inline constexpr char kDocumentsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/documents";
+inline constexpr char kGmailModifyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/gmail.modify";
+inline constexpr char kPeopleReadOnlyOAuth2Scope[] =
+    "https://www.googleapis.com/auth/peopleapi.readonly";
+inline constexpr char kSpreadsheetsOAuth2Scope[] =
+    "https://www.googleapis.com/auth/spreadsheets";
 
 // List of sources for which sign out is always allowed.
 // TODO(crbug.com/40162614): core product logic should not rely on metric
@@ -135,9 +135,6 @@ signin_metrics::ProfileSignout kAlwaysAllowedSignoutSources[] = {
     signin_metrics::ProfileSignout::kAccountRemovedFromDevice,
     // Allowed, for tests.
     signin_metrics::ProfileSignout::kForceSignoutAlwaysAllowedForTest,
-    // Allowed, because access to this entry point is controlled to only be
-    // enabled if the user may turn off sync.
-    signin_metrics::ProfileSignout::kUserClickedRevokeSyncConsentSettings,
     // Allowed, because the dialog offers the option to the user to sign out.
     // Note that the dialog is only shown on iOS and isn't planned to be shown
     // on the other platforms since they already support user policies (no need
@@ -199,14 +196,93 @@ class ChromeOAuthConsumerRegistry : public signin::OAuthConsumerRegistry {
   }
 
   signin::OAuthConsumer GetOAuthConsumerForGlicUserStatus() const override {
-#if BUILDFLAG(ENABLE_GLIC)
     CHECK(base::FeatureList::IsEnabled(features::kGlicUserStatusCheck));
     return signin::OAuthConsumer(
         signin::oauth_consumer_name::kGlicUserStatusName,
         {features::kGeminiOAuth2Scope.Get()});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForGlicInvokeApi() const override {
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kGlicInvokeApiName,
+        {extensions_features::kGlicInvokeApiOAuth2ScopeParam.Get()});
 #else
     NOTREACHED();
 #endif
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForSkillsService() const override {
+    CHECK(base::FeatureList::IsEnabled(features::kSkillsEnabled));
+    CHECK(base::FeatureList::IsEnabled(features::kSkillsServiceApi));
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kSkillsServiceName,
+        {features::kSkillsServiceApiOAuth2Scope.Get()});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForContextualTasks() const override {
+    CHECK(contextual_tasks::IsContextualTasksUIEnabled());
+    signin::ScopeSet scopes = {
+        GaiaConstants::kSearchResultsOAuth2Scope,
+        kCalendarEventsOAuth2Scope,
+        kCalendarFreeBusyOAuth2Scope,
+        kCalendarListOAuth2Scope,
+        GaiaConstants::kClearCutOAuth2Scope,
+        kDocumentsOAuth2Scope,
+        GaiaConstants::kDriveOAuth2Scope,
+        kGmailModifyOAuth2Scope,
+        GaiaConstants::kLensOAuth2Scope,
+        kPeopleReadOnlyOAuth2Scope,
+        kSpreadsheetsOAuth2Scope,
+    };
+    if (base::FeatureList::IsEnabled(
+            contextual_tasks::kContextualTasksExtraOauthScopes)) {
+      std::string extra_scopes_str =
+          contextual_tasks::kContextualTasksOAuthScopes.Get();
+      std::vector<std::string> extra_scopes_vec =
+          base::SplitString(extra_scopes_str, ",", base::TRIM_WHITESPACE,
+                            base::SPLIT_WANT_NONEMPTY);
+      for (const std::string& extra_scope : extra_scopes_vec) {
+        scopes.insert(extra_scope);
+      }
+    }
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kContextualTasksName, std::move(scopes));
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForDrivePickerHost() const override {
+    if (base::FeatureList::IsEnabled(omnibox::kDrivePickerV2Scope)) {
+      return signin::OAuthConsumer(
+          signin::oauth_consumer_name::kDrivePickerHostName,
+          {"https://www.googleapis.com/auth/drive.file"});
+    }
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kDrivePickerHostName,
+        {"https://www.googleapis.com/auth/drive.readonly"});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForIndigo() const override {
+    CHECK(base::FeatureList::IsEnabled(features::kIndigo));
+    std::string scopes_str = features::kIndigoScopes.Get();
+    std::vector<std::string> scopes_vec = base::SplitString(
+        scopes_str, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    signin::ScopeSet scopes(scopes_vec.begin(), scopes_vec.end());
+    return signin::OAuthConsumer(signin::oauth_consumer_name::kIndigoName,
+                                 std::move(scopes));
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForBrowserActuator() const override {
+    CHECK(base::FeatureList::IsEnabled(browser_actuator::kBrowserActuator));
+
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kBrowserActuatorName,
+        {browser_actuator::kBrowserActuatorOAuth2ScopeParam.Get()});
+  }
+
+  signin::OAuthConsumer GetOAuthConsumerForSiteTokenProvider() const override {
+    return signin::OAuthConsumer(
+        signin::oauth_consumer_name::kSiteTokenProviderName,
+        {site_token_provider::features::kSiteTokenOAuth2Scope.Get()});
   }
 };
 
@@ -217,72 +293,16 @@ ChromeSigninClient::ChromeSigninClient(Profile* profile)
 #if BUILDFLAG(IS_CHROMEOS)
           std::make_unique<WaitForNetworkCallbackHelperAsh>()
 #else
-          std::make_unique<WaitForNetworkCallbackHelperChrome>()
+          std::make_unique<WaitForNetworkCallbackHelperChrome>(
+              profile->AsTestingProfile())
 #endif
               ),
       profile_(profile),
       oauth_consumer_registry_(
           std::make_unique<ChromeOAuthConsumerRegistry>()) {
-  // Makes sure to register groups on Startup if previously set.
-  RegisterSyntheticTrialsFromPrefs();
 }
 
 ChromeSigninClient::~ChromeSigninClient() = default;
-
-// static
-void ChromeSigninClient::
-    MaybeAddUserToBookmarksBubblePromoShownSyntheticFieldTrial() {
-  MaybeAddUserToUnoBookmarksSyntheticFieldTrial(
-      kBookmarksBubblePromoShownSyntheticTrialGroupNamePref);
-}
-
-// static
-void ChromeSigninClient::MaybeAddUserToUnoBookmarksSyntheticFieldTrial(
-    std::string_view synthetic_field_trial_group_pref) {
-  // Do not register groups that do not override the main feature.
-  base::FieldTrial* field_trial = base::FeatureList::GetFieldTrial(
-      switches::kSyncEnableBookmarksInTransportMode);
-  if (!field_trial) {
-    return;
-  }
-
-  PrefService* local_prefs =
-      g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (!local_prefs) {
-    return;
-  }
-  local_prefs->SetString(synthetic_field_trial_group_pref,
-                         field_trial->GetGroupNameWithoutActivation());
-  RegisterSyntheticTrialsFromPrefs();
-}
-
-// static
-void ChromeSigninClient::RegisterSyntheticTrialsFromPrefs() {
-  PrefService* local_prefs =
-      g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (!local_prefs) {
-    return;
-  }
-
-  std::string_view signin_from_bookmarks_group_name = local_prefs->GetString(
-      kSigninFromBookmarksBubbleSyntheticTrialGroupNamePref);
-  if (!signin_from_bookmarks_group_name.empty()) {
-    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
-        kSigninFromBookmarksBubbleSyntheticTrialName,
-        signin_from_bookmarks_group_name,
-        variations::SyntheticTrialAnnotationMode::kCurrentLog);
-  }
-
-  std::string_view bookmarks_bubble_promo_shown_group_name =
-      local_prefs->GetString(
-          kBookmarksBubblePromoShownSyntheticTrialGroupNamePref);
-  if (!bookmarks_bubble_promo_shown_group_name.empty()) {
-    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
-        kBookmarksBubblePromoShownSyntheticTrialName,
-        bookmarks_bubble_promo_shown_group_name,
-        variations::SyntheticTrialAnnotationMode::kCurrentLog);
-  }
-}
 
 void ChromeSigninClient::DoFinalInit() {
   VerifySyncToken();
@@ -383,19 +403,19 @@ void ChromeSigninClient::PreSignOut(
   if (signin_util::IsForceSigninEnabled() && !profile_->IsSystemProfile() &&
       !profile_->IsGuestSession() && !profile_->IsChild() &&
       !keep_window_opened) {
-    BrowserList::CloseAllBrowsersWithProfile(
+    chrome::CloseAllBrowsersWithProfile(
         profile_,
-        base::BindRepeating(&ChromeSigninClient::OnCloseBrowsersSuccess,
-                            base::Unretained(this), signout_source_metric,
-                            /*should_sign_out=*/true),
-        base::BindRepeating(&ChromeSigninClient::OnCloseBrowsersAborted,
-                            base::Unretained(this)),
         signout_source_metric == signin_metrics::ProfileSignout::kAbortSignin ||
             signout_source_metric == signin_metrics::ProfileSignout::
                                          kAuthenticationFailedWithForceSignin ||
             signout_source_metric ==
                 signin_metrics::ProfileSignout::
-                    kCancelSyncConfirmationOnWebOnlySignedIn);
+                    kCancelSyncConfirmationOnWebOnlySignedIn,
+        base::BindRepeating(&ChromeSigninClient::OnCloseBrowsersSuccess,
+                            base::Unretained(this), signout_source_metric,
+                            /*should_sign_out=*/true),
+        base::BindRepeating(&ChromeSigninClient::OnCloseBrowsersAborted,
+                            base::Unretained(this)));
   } else {
 #else
   {
@@ -451,18 +471,14 @@ void ChromeSigninClient::OnPrimaryAccountChanged(
 
         if (consent_level == signin::ConsentLevel::kSignin) {
           std::string trigger = HatsSurveyTriggerForAccessPoint(access_point);
-          signin::LaunchSigninHatsSurveyForProfile(
-              trigger, profile_, /*defer_if_no_browser=*/true);
+          signin::LaunchHatsSurveyForProfile(trigger, profile_,
+                                             /*defer_if_no_browser=*/true);
         }
 
 #if !BUILDFLAG(IS_CHROMEOS)
         RecordOpenTabCount(access_point, consent_level);
 #endif
 
-        if (access_point == signin_metrics::AccessPoint::kBookmarkBubble) {
-          MaybeAddUserToUnoBookmarksSyntheticFieldTrial(
-              kSigninFromBookmarksBubbleSyntheticTrialGroupNamePref);
-        }
         break;
     }
   }
@@ -547,16 +563,15 @@ void ChromeSigninClient::OnTokenFetchComplete(bool token_is_valid) {
   // Token is not valid, we close all the browsers and open the Profile
   // Picker.
   should_display_user_manager_ = true;
-  BrowserList::CloseAllBrowsersWithProfile(
+  chrome::CloseAllBrowsersWithProfile(
       profile_,
+      /*skip_beforeunload=*/true,
       base::BindRepeating(
           &ChromeSigninClient::OnCloseBrowsersSuccess, base::Unretained(this),
           signin_metrics::ProfileSignout::kAuthenticationFailedWithForceSignin,
           // Do not sign the user out to allow them to reauthenticate from the
           // profile picker.
-          /*should_sign_out=*/false),
-      /*on_close_aborted=*/base::DoNothing(),
-      /*skip_beforeunload=*/true);
+          /*should_sign_out=*/false));
 }
 #endif
 
@@ -657,12 +672,4 @@ void ChromeSigninClient::ShowUserManager(const base::FilePath& profile_path) {
   ProfilePicker::Show(ProfilePicker::Params::FromEntryPoint(
       ProfilePicker::EntryPoint::kProfileLocked));
 #endif
-}
-
-// static
-void ChromeSigninClient::RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterStringPref(
-      kSigninFromBookmarksBubbleSyntheticTrialGroupNamePref, "");
-  registry->RegisterStringPref(
-      kBookmarksBubblePromoShownSyntheticTrialGroupNamePref, "");
 }

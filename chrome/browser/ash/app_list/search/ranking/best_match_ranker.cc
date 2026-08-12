@@ -10,7 +10,6 @@
 #include "base/containers/flat_set.h"
 #include "chrome/browser/ash/app_list/search/chrome_search_result.h"
 #include "chrome/browser/ash/app_list/search/ranking/constants.h"
-#include "chrome/browser/ash/app_list/search/search_features.h"
 #include "chrome/browser/ash/app_list/search/types.h"
 
 namespace app_list {
@@ -37,6 +36,7 @@ bool ShouldIgnoreProvider(ProviderType type) {
     // In development:
     case ProviderType::kImageSearch:
     case ProviderType::kHelpApp:
+    case ProviderType::kKeyboardShortcut:
       return true;
     case ProviderType::kArcAppShortcut:
     case ProviderType::kDriveSearch:
@@ -52,13 +52,6 @@ bool ShouldIgnoreProvider(ProviderType type) {
     case ProviderType::kSystemInfo:
     case ProviderType::kAppShortcutV2:
       return false;
-    case ProviderType::kKeyboardShortcut:
-      // Allows key shortcut results to appear in best match if flag enabled,
-      // otherwise disable it by default to avoid possible over-triggering.
-      if (search_features::IskLauncherKeyShortcutInBestMatchEnabled()) {
-        return false;
-      }
-      return true;
   }
 }
 
@@ -119,10 +112,9 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
   const auto it = results.find(provider);
   DCHECK(it != results.end());
 
-  base::flat_set<std::string> seen_ids;
-  for (const auto result : best_matches_) {
-    seen_ids.insert(result->id());
-  }
+  auto seen_ids = base::MakeFlatSet<std::string>(
+      best_matches_, /*comp=*/{},
+      [](const auto& result) { return result->id(); });
 
   for (const auto& result : it->second) {
     if (ShouldIgnoreResult(result.get())) {
@@ -136,12 +128,7 @@ void BestMatchRanker::UpdateResultRanks(ResultsMap& results,
     }
     Scoring& scoring = result->scoring();
 
-    double threshold = kBestMatchThreshold;
-    if (search_features::IsLauncherKeywordExtractionScoringEnabled()) {
-      threshold = kBestMatchThresholdWithKeywordRanking;
-    }
-
-    if (scoring.BestMatchScore() >= threshold) {
+    if (scoring.BestMatchScore() >= kBestMatchThreshold) {
       best_matches_.push_back(result->GetWeakPtr());
     }
   }

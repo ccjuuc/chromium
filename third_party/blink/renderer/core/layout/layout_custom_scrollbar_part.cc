@@ -84,7 +84,7 @@ static void RecordScrollbarPartStats(Document& document, ScrollbarPart part) {
 }
 
 LayoutCustomScrollbarPart* LayoutCustomScrollbarPart::CreateAnonymous(
-    Document* document,
+    Document& document,
     ScrollableArea* scrollable_area,
     CustomScrollbar* scrollbar,
     ScrollbarPart part,
@@ -93,7 +93,7 @@ LayoutCustomScrollbarPart* LayoutCustomScrollbarPart::CreateAnonymous(
       MakeGarbageCollected<LayoutCustomScrollbarPart>(
           scrollable_area, scrollbar, part, suppress_use_counters);
   if (!suppress_use_counters) {
-    RecordScrollbarPartStats(*document, part);
+    RecordScrollbarPartStats(document, part);
   }
   layout_object->SetDocumentForAnonymous(document);
   return layout_object;
@@ -218,36 +218,17 @@ static LayoutUnit ComputeMargin(const Length& style_margin) {
   return LayoutUnit(MinimumValueForLength(style_margin, LayoutUnit()).Round());
 }
 
-LayoutUnit LayoutCustomScrollbarPart::MarginTop() const {
-  NOT_DESTROYED();
-  if (scrollbar_ && scrollbar_->Orientation() == kHorizontalScrollbar) {
-    return LayoutUnit();
-  }
-  return ComputeMargin(StyleRef().MarginTop());
-}
+PhysicalBoxStrut LayoutCustomScrollbarPart::MarginOutsets() const {
+  const bool is_horizontal =
+      scrollbar_ && scrollbar_->Orientation() == kHorizontalScrollbar;
+  const bool is_vertical =
+      scrollbar_ && scrollbar_->Orientation() == kVerticalScrollbar;
 
-LayoutUnit LayoutCustomScrollbarPart::MarginBottom() const {
-  NOT_DESTROYED();
-  if (scrollbar_ && scrollbar_->Orientation() == kHorizontalScrollbar) {
-    return LayoutUnit();
-  }
-  return ComputeMargin(StyleRef().MarginBottom());
-}
-
-LayoutUnit LayoutCustomScrollbarPart::MarginLeft() const {
-  NOT_DESTROYED();
-  if (scrollbar_ && scrollbar_->Orientation() == kVerticalScrollbar) {
-    return LayoutUnit();
-  }
-  return ComputeMargin(StyleRef().MarginLeft());
-}
-
-LayoutUnit LayoutCustomScrollbarPart::MarginRight() const {
-  NOT_DESTROYED();
-  if (scrollbar_ && scrollbar_->Orientation() == kVerticalScrollbar) {
-    return LayoutUnit();
-  }
-  return ComputeMargin(StyleRef().MarginRight());
+  return {
+      is_horizontal ? LayoutUnit() : ComputeMargin(StyleRef().MarginTop()),
+      is_vertical ? LayoutUnit() : ComputeMargin(StyleRef().MarginRight()),
+      is_horizontal ? LayoutUnit() : ComputeMargin(StyleRef().MarginBottom()),
+      is_vertical ? LayoutUnit() : ComputeMargin(StyleRef().MarginLeft())};
 }
 
 void LayoutCustomScrollbarPart::UpdateFromStyle() {
@@ -261,11 +242,13 @@ void LayoutCustomScrollbarPart::UpdateFromStyle() {
 void LayoutCustomScrollbarPart::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutReplaced::StyleDidChange(diff, old_style, style_change_context);
+  LayoutReplaced::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
   if (old_style &&
-      (diff.NeedsNormalPaintInvalidation() || diff.NeedsLayout())) {
+      (diff.NeedsNormalPaintInvalidation() || diff.NeedsFullLayout())) {
     SetNeedsPaintInvalidation();
   }
   RecordPercentLengthStats();

@@ -15,13 +15,18 @@ class TabInterface;
 namespace glic {
 
 // `tab` must be non-null.
+// `is_screenshot_annotated` indicates if the screenshot contains a selection
+// region.
 void FetchPageContext(
     tabs::TabInterface* tab,
-    const mojom::GetTabContextOptions& options,
+    const mojom::TabContextOptions& options,
     base::OnceCallback<void(
         base::expected<glic::mojom::GetContextResultPtr,
                        page_content_annotations::FetchPageContextErrorDetails>)>
-        callback);
+        callback,
+    std::unique_ptr<page_content_annotations::FetchPageProgressListener>
+        progress_listener,
+    bool is_screenshot_annotated);
 
 }  // namespace glic
 

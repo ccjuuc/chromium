@@ -5,12 +5,10 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 
 #include "base/auto_reset.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
@@ -23,6 +21,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/metrics/profile_metrics_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -31,12 +30,13 @@
 #include "chrome/browser/signin/signin_ui_delegate.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/signin/promos/signin_promo_tab_helper.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper.h"
 #include "chrome/common/pref_names.h"
@@ -60,8 +60,8 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/signin/signin_ui_chromeos_util.h"
-#include "chromeos/ash/components/account_manager/account_manager_factory.h"
-#include "components/account_manager_core/account_manager_facade.h"
+#include "chrome/browser/ui/ash/account_manager/account_manager_dialog_coordinator.h"
+#include "chrome/browser/ui/ash/account_manager/account_manager_dialog_coordinator_factory.h"
 #include "components/user_manager/user.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -147,6 +147,14 @@ SigninUiDelegate* GetSigninUiDelegate() {
 
 }  // namespace
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+void ShowCrossDeviceSigninQrBubble(BrowserWindowInterface* browser,
+                                   base::OnceClosure closing_callback) {
+  GetSigninUiDelegate()->ShowCrossDeviceSigninQrBubble(
+      browser, std::move(closing_callback));
+}
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 std::u16string GetAuthenticatedUsername(Profile* profile) {
   DCHECK(profile);
   std::string user_display_name;
@@ -156,7 +164,7 @@ std::u16string GetAuthenticatedUsername(Profile* profile) {
         identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
             .email;
 #if BUILDFLAG(IS_CHROMEOS)
-    // See https://crbug.com/994798 for details.
+    // See https://crbug.com/40640779 for details.
     user_manager::User* user =
         ash::ProfileHelper::Get()->GetUserByProfile(profile);
     // |user| may be null in tests.
@@ -196,8 +204,7 @@ void ShowReauthForAccount(Profile* profile,
                           const std::string& email,
                           signin_metrics::AccessPoint access_point) {
 #if BUILDFLAG(IS_CHROMEOS)
-  ash::AccountManagerFactory::Get()
-      ->GetAccountManagerFacade(profile->GetPath().value())
+  ash::AccountManagerDialogCoordinatorFactory::GetForProfile(profile)
       ->ShowReauthAccountDialog(
           GetAccountReauthSourceFromAccessPoint(access_point), email,
           base::DoNothing());
@@ -211,71 +218,10 @@ void ShowReauthForAccount(Profile* profile,
 #endif
 }
 
-void ShowExtensionSigninPrompt(Profile* profile,
-                               bool enable_sync,
-                               const std::string& email_hint) {
-#if BUILDFLAG(IS_CHROMEOS)
-  NOTREACHED();
-#elif BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // There is no sign-in flow for guest or system profile.
-  if (profile->IsGuestSession() || profile->IsSystemProfile()) {
-    return;
-  }
-  // Locked profile should be unlocked with UserManager only.
-  ProfileAttributesEntry* entry =
-      g_browser_process->profile_manager()
-          ->GetProfileAttributesStorage()
-          .GetProfileAttributesWithPath(profile->GetPath());
-  if (entry && entry->IsSigninRequired()) {
-    return;
-  }
-
-  // This may be called in incognito. Redirect to the original profile.
-  profile = profile->GetOriginalProfile();
-
-  if (email_hint.empty()) {
-    // Add a new account.
-    GetSigninUiDelegate()->ShowSigninUI(
-        profile, enable_sync, signin_metrics::AccessPoint::kExtensions,
-        signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO);
-    return;
-  }
-
-  // Re-authenticate an existing account.
-  GetSigninUiDelegate()->ShowReauthUI(
-      profile, email_hint, enable_sync,
-      signin_metrics::AccessPoint::kExtensions,
-      signin_metrics::PromoAction::PROMO_ACTION_NO_SIGNIN_PROMO);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-}
-
-void ShowSigninPromptFromPromo(Profile* profile,
-                               signin_metrics::AccessPoint access_point) {
-#if BUILDFLAG(IS_CHROMEOS)
-  NOTREACHED();
-#elif BUILDFLAG(ENABLE_DICE_SUPPORT)
-  CHECK_NE(signin_metrics::AccessPoint::kUnknown, access_point);
-  CHECK(!profile->IsOffTheRecord());
-
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
-  if (identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
-    DVLOG(1) << "The user is already signed in.";
-    return;
-  }
-
-  GetSigninUiDelegate()->ShowSigninUI(
-      profile, /*enable_sync=*/false, access_point,
-      signin_metrics::PromoAction::
-          PROMO_ACTION_NEW_ACCOUNT_NO_EXISTING_ACCOUNT);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-}
-
 void SignInFromSingleAccountPromo(Profile* profile,
                                   const CoreAccountInfo& account,
                                   signin_metrics::AccessPoint access_point) {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  DCHECK_NE(signin_metrics::AccessPoint::kUnknown, access_point);
   DCHECK(!profile->IsOffTheRecord());
 
   signin::IdentityManager* identity_manager =
@@ -290,7 +236,8 @@ void SignInFromSingleAccountPromo(Profile* profile,
             : signin_metrics::PromoAction::
                   PROMO_ACTION_NEW_ACCOUNT_EXISTING_ACCOUNT;
     GetSigninUiDelegate()->ShowSigninUI(profile, /*enable_sync=*/false,
-                                        access_point, new_account_promo_action);
+                                        access_point, new_account_promo_action,
+                                        /*extension_name=*/"");
     return;
   }
 
@@ -322,6 +269,8 @@ void SignInFromSingleAccountPromo(Profile* profile,
   }
 
   // If the account's refresh token are fine, sign in directly.
+  signin_metrics::LogSignInStarted(
+      access_point, *ProfileMetricsServiceFactory::GetForProfile(profile));
   IdentityManagerFactory::GetForProfile(profile)
       ->GetPrimaryAccountMutator()
       ->SetPrimaryAccount(account.account_id, signin::ConsentLevel::kSignin,
@@ -344,7 +293,6 @@ void EnableSyncFromMultiAccountPromo(Profile* profile,
                                      signin_metrics::AccessPoint access_point,
                                      bool is_default_promo_account) {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  DCHECK_NE(signin_metrics::AccessPoint::kUnknown, access_point);
   DCHECK(!profile->IsOffTheRecord());
 
   signin::IdentityManager* identity_manager =
@@ -362,7 +310,8 @@ void EnableSyncFromMultiAccountPromo(Profile* profile,
             : signin_metrics::PromoAction::
                   PROMO_ACTION_NEW_ACCOUNT_EXISTING_ACCOUNT;
     GetSigninUiDelegate()->ShowSigninUI(profile, /*enable_sync=*/true,
-                                        access_point, new_account_promo_action);
+                                        access_point, new_account_promo_action,
+                                        /*extension_name=*/"");
     return;
   }
 
@@ -387,13 +336,12 @@ void EnableSyncFromMultiAccountPromo(Profile* profile,
     return;
   }
 
-  signin_metrics::LogSigninAccessPointStarted(access_point,
-                                              existing_account_promo_action);
   signin_metrics::RecordSigninUserActionForAccessPoint(access_point);
 
-  if (base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+      signin_metrics::LogSignInStarted(
+          access_point, *ProfileMetricsServiceFactory::GetForProfile(profile));
       identity_manager->GetPrimaryAccountMutator()->SetPrimaryAccount(
           account.account_id, signin::ConsentLevel::kSignin, access_point);
     }
@@ -434,6 +382,8 @@ void EnableSyncFromMultiAccountPromo(Profile* profile,
   // account in the profile.
   if (is_sync_promo &&
       !identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+    signin_metrics::LogSignInStarted(
+        access_point, *ProfileMetricsServiceFactory::GetForProfile(profile));
     identity_manager->GetPrimaryAccountMutator()->SetPrimaryAccount(
         account.account_id, signin::ConsentLevel::kSignin, access_point);
   }
@@ -546,42 +496,12 @@ std::u16string GetShortProfileIdentityToDisplay(
       identity_manager->FindExtendedAccountInfoByAccountId(
           core_info.account_id);
   // If there's no given name available, return the user email.
-  if (extended_info.given_name.empty()) {
+  std::optional<std::string_view> given_name = extended_info.GetGivenName();
+  if (!given_name.has_value()) {
     return base::UTF8ToUTF16(core_info.email);
   }
 
-  return base::UTF8ToUTF16(extended_info.given_name);
-}
-
-std::string GetAllowedDomain(std::string signin_pattern) {
-  std::vector<std::string> splitted_signin_pattern = base::SplitString(
-      signin_pattern, "@", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
-
-  // There are more than one '@'s in the pattern.
-  if (splitted_signin_pattern.size() != 2) {
-    return std::string();
-  }
-
-  std::string domain = splitted_signin_pattern[1];
-
-  // Trims tailing '$' if existed.
-  if (!domain.empty() && domain.back() == '$') {
-    domain.pop_back();
-  }
-
-  // Trims tailing '\E' if existed.
-  if (domain.size() > 1 &&
-      base::EndsWith(domain, "\\E", base::CompareCase::SENSITIVE)) {
-    domain.erase(domain.size() - 2);
-  }
-
-  // Check if there is any special character in the domain. Note that
-  // jsmith@[192.168.2.1] is not supported.
-  if (!re2::RE2::FullMatch(domain, "[a-zA-Z0-9\\-.]+")) {
-    return std::string();
-  }
-
-  return domain;
+  return base::UTF8ToUTF16(*given_name);
 }
 
 bool ShouldShowAnimatedIdentityOnOpeningWindow(Profile& profile) {
@@ -648,7 +568,7 @@ void RecordProfileMenuClick(const Profile& profile) {
   }
 }
 
-void SignInAndEnableHistorySync(Browser* browser,
+void SignInAndEnableHistorySync(BrowserWindowInterface* browser,
                                 Profile* profile,
                                 signin_metrics::AccessPoint access_point) {
 #if !BUILDFLAG(IS_CHROMEOS)

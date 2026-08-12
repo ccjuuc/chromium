@@ -10,22 +10,19 @@
 #include "base/android/jni_android.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/android/omnibox/composebox_query_controller_bridge.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "content/public/browser/browser_context.h"
-#include "third_party/omnibox_proto/aim_tools_and_models.pb.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 
 class AutocompleteResult;
 class ChromeAutocompleteProviderClient;
 class Profile;
 
-namespace base {
-template <typename Type>
-struct DefaultSingletonTraits;
-}  // namespace base
 
 // The native part of the Java AutocompleteController class.
 class AutocompleteControllerAndroid : public AutocompleteController::Observer,
@@ -33,7 +30,6 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
  public:
   AutocompleteControllerAndroid(
       Profile* profile,
-      std::unique_ptr<ChromeAutocompleteProviderClient> client,
       bool is_low_memory_device);
 
   AutocompleteControllerAndroid(const AutocompleteControllerAndroid&) = delete;
@@ -44,61 +40,65 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
   // Methods that forward to AutocompleteController:
   void Start(
       JNIEnv* env,
-      const base::android::JavaRef<jstring>& j_text,
-      jint j_cursor_pos,
-      const base::android::JavaRef<jstring>& j_desired_tld,
-      const base::android::JavaRef<jstring>& j_current_url,
+      content::WebContents* web_contents,
+      const std::u16string& text,
+      int32_t cursor_pos,
+      const std::string& desired_tld,
+      const GURL& current_url,
       ::metrics::OmniboxEventProto::PageClassification page_classification,
-      omnibox::ChromeAimToolsAndModels tool_mode,
+      omnibox::ToolMode tool_mode,
       bool prevent_inline_autocomplete,
-      bool prefer_keyword,
+      bool in_keyword_mode,
       bool allow_exact_keyword_match,
       bool want_asynchronous_matches);
   void StartPrefetch(
       JNIEnv* env,
-      const base::android::JavaRef<jstring>& j_current_url,
-      ::metrics::OmniboxEventProto::PageClassification page_classification,
-      const base::android::JavaRef<jobject>& j_web_contents);
+      content::WebContents* web_contents,
+      const GURL& current_url,
+      ::metrics::OmniboxEventProto::PageClassification page_classification);
   base::android::ScopedJavaLocalRef<jobject> Classify(
       JNIEnv* env,
-      const base::android::JavaRef<jstring>& j_text);
+      const std::u16string& text);
   void OnOmniboxFocused(
       JNIEnv* env,
-      const base::android::JavaRef<jstring>& j_omnibox_text,
-      const base::android::JavaRef<jstring>& j_current_url,
+      content::WebContents* web_contents,
+      const std::u16string& omnibox_text,
+      const GURL& current_url,
       ::metrics::OmniboxEventProto::PageClassification page_classification,
-      omnibox::ChromeAimToolsAndModels tool_mode,
-      const base::android::JavaRef<jstring>& j_current_title);
-  void Stop(JNIEnv* env, bool clear_result);
+      omnibox::ToolMode tool_mode,
+      const std::u16string& current_title);
+  void Stop(JNIEnv* env, AutocompleteStopReason reason);
   void ResetSession(JNIEnv* env);
+  void StartPrewarm(JNIEnv* env, content::WebContents* web_contents);
 
   void OnSuggestionSelected(
       JNIEnv* env,
+      content::WebContents* web_contents,
       uintptr_t match_ptr,
       int suggestion_line,
-      const jint j_window_open_disposition,
-      const base::android::JavaRef<jstring>& j_current_url,
+      const int32_t j_window_open_disposition,
+      const GURL& current_url,
       ::metrics::OmniboxEventProto::PageClassification page_classification,
-      jlong elapsed_time_since_first_modified,
-      jint completed_length,
-      const base::android::JavaRef<jobject>& j_web_contents,
-      jlong omnibox_action_ptr);
-  jboolean OnSuggestionTouchDown(
-      JNIEnv* env,
-      uintptr_t match_ptr,
-      int match_index,
-      const base::android::JavaRef<jobject>& j_web_contents);
+      int64_t elapsed_time_since_first_modified,
+      int32_t completed_length,
+      int64_t omnibox_action_ptr);
+  bool OnSuggestionTouchDown(JNIEnv* env,
+                             content::WebContents* web_contents,
+                             uintptr_t match_ptr,
+                             int match_index);
   void DeleteMatch(JNIEnv* env, uintptr_t match_ptr);
-  void DeleteMatchElement(JNIEnv* env, uintptr_t match_ptr, jint element_index);
+  void DeleteMatchElement(JNIEnv* env,
+                          uintptr_t match_ptr,
+                          int32_t element_index);
   base::android::ScopedJavaLocalRef<jobject>
   UpdateMatchDestinationURLWithAdditionalSearchboxStats(
       JNIEnv* env,
       uintptr_t match_ptr,
-      jlong elapsed_time_since_input_change);
+      int64_t elapsed_time_since_input_change);
   base::android::ScopedJavaLocalRef<jobject> GetAnswerActionDestinationURL(
       JNIEnv* env,
       uintptr_t match_ptr,
-      jlong elapsed_time_since_input_change,
+      int64_t elapsed_time_since_input_change,
       uintptr_t answer_action_ptr);
   base::android::ScopedJavaLocalRef<jobject> GetMatchingTabForSuggestion(
       JNIEnv* env,
@@ -115,21 +115,28 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
       uintptr_t composebox_controller_bridge_ptr);
 
   // Pass detected voice matches down to VoiceSuggestionsProvider.
-  void SetVoiceMatches(
-      JNIEnv* env,
-      const base::android::JavaRef<jobjectArray>& j_voice_matches,
-      const base::android::JavaRef<jfloatArray>& j_confidence_scores);
+  void SetVoiceMatches(JNIEnv* env,
+                       const std::vector<std::u16string>& voice_matches,
+                       const std::vector<float>& confidence_scores);
 
   // Pass the information about the suggestion dropdown height changes to the
   // Grouping framework.
   void OnSuggestionDropdownHeightChanged(
       JNIEnv* env,
-      jint dropdown_height_with_keyboard_active_px,
-      jint suggestion_height_px);
+      int32_t dropdown_height_with_keyboard_active_px,
+      int32_t suggestion_height_px);
 
   void CreateNavigationObserver(JNIEnv* env,
                                 uintptr_t navigation_handle_ptr,
                                 uintptr_t match_ptr);
+
+  // Extracts a valid keyword from the provided text and returns the
+  // corresponding TemplateURL. This handles text splitting (extracting the
+  // first word) and checks if it matches a valid, active keyword.
+  // Returns nullptr if no valid keyword is found.
+  base::android::ScopedJavaLocalRef<jobject> GetTemplateUrlForText(
+      JNIEnv* env,
+      const std::u16string& text);
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject() const;
 
@@ -151,7 +158,7 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
     static Factory* GetInstance();
 
    private:
-    friend struct base::DefaultSingletonTraits<Factory>;
+    friend base::NoDestructor<Factory>;
 
     Factory();
     ~Factory() override;
@@ -160,6 +167,9 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
     std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
         content::BrowserContext* profile) const override;
   };
+
+  // Returns WebContents associated with the most recent Autocomplete request.
+  content::WebContents* GetContextualTasksWebContents() const;
 
  private:
   // AutocompleteController::Observer implementation.
@@ -174,6 +184,9 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
   // This call may get triggered multiple time during User interaction with the
   // Omnibox - these requests are deduplicated down the call chain.
   void WarmUpRenderProcess() const;
+
+  // Post-processes the result to apply any Android-specific display logic.
+  void PostProcessResult(AutocompleteResult& result);
 
   // Whether the current device is a low-memory device.
   const bool is_low_memory_device_{};
@@ -207,10 +220,13 @@ class AutocompleteControllerAndroid : public AutocompleteController::Observer,
   // destroyed.
   std::unique_ptr<AutocompleteController> autocomplete_controller_;
 
-  // The ComposeBoxQueryController instance related to the same input session.
+  // The ComposeboxQueryController instance related to the same input session.
   // This may and often will be unset.
   base::WeakPtr<ComposeboxQueryControllerBridge>
       composebox_query_controller_bridge_;
+
+  // WebContents associated with the most recent request.
+  base::WeakPtr<content::WebContents> contextual_tasks_web_contents_;
 
   // Factory used to create asynchronously invoked callbacks.
   // Retained throughout the lifetime of the AutocompleteControllerAndroid.

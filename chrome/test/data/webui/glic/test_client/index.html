@@ -18,6 +18,14 @@ found in the LICENSE file.
     margin: 0;
     overflow: hidden;
   }
+  #onboarding {
+    background-color: white;
+    color: black;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   #pageHeader.connected {
     background-color: green;
   }
@@ -189,14 +197,17 @@ found in the LICENSE file.
   <h1>Test Web Client</h1>
   <div class="permission-switch not-draggable">
     <label>Interaction Mode:</label>
-    <input type="radio" id="textmode" name="interactionMode" value="text" checked>
+    <input type="radio" id="textmode" name="interactionMode" value="text" checked />
     <label for="textmode">Text</label>
-    <input type="radio" id="audiomode" name="interactionMode" value="audio">
+    <input type="radio" id="audiomode" name="interactionMode" value="audio" />
     <label for="audiomode">Audio</label>
   </div>
   <button id="refreshbn" class="not-draggable">🔄</button>
   <button id="closebn" class="not-draggable">❌</button>
   <button id="shutdownbn" class="not-draggable">⏻</button>
+</div>
+<div id="onboarding">
+  <button id="onboardingbn" class="not-draggable">Continue</button>
 </div>
 <div id="content">
   <div class="section">
@@ -276,6 +287,7 @@ found in the LICENSE file.
           <option value="none">None</option>
           <option value="osHotkey">Keyboard shortcut</option>
           <option value="osEntrypointToggle">OS Entrypoint</option>
+          <option value="locationPermission">Location Permission</option>
         </select>
       </div>
     </div>
@@ -479,6 +491,9 @@ found in the LICENSE file.
     <h1>Region Capture</h1>
     <button id="captureRegionBtn">Capture Region</button>
     <ul id="captureRegionResultList"></ul>
+    <label for="deleteCaptureRegion">Delete Region ID:</label>
+    <input type="text" id="deleteCaptureRegion" name="deleteCaptureRegion" />
+    <button id="deleteCaptureRegionBtn">Delete Region</button>
   </div>
   <div class="section">
     <h1>Scroll-To and Highlight</h1>
@@ -575,6 +590,15 @@ found in the LICENSE file.
       <select id="selectCredential"></select>
       <button id="credentialOnce">Allow once</button>
       <button id="credentialAlways">Allow always</button>
+      <div>
+        <p>Credential details:</p>
+        <p>username: <span id="selectedCredentialUsername"></span></p>
+        <p>sourceSiteOrApp: <span id="selectedCredentialSource"></span></p>
+        <p>requestOrigin: <span id="selectedCredentialRequestOrigin"></span></p>
+        <p>icon: <img id="selectedCredentialIcon"></img></p>
+        <p>type: <span id="selectedCredentialType"></span></p>
+        <p>accountPicture: <img id="selectedCredentialAccountPicture"></img></p>
+      </div>
     </div>
   </div>
   <div class="section" id="autofillSuggestionsDialogSection">
@@ -612,22 +636,55 @@ found in the LICENSE file.
     </div>
   </div>
   <div class="section">
-    <h1>View Change</h1>
-    <select id="viewChangedCurrentView">
-      <!-- options will be populated by view.ts -->
-    </select>
-    <button id="viewChangedBtn">View Changed</button>
-    <input type="checkbox" id="viewChangedAutomaticallyAccept" checked />
-    <label for="viewChangedAutomaticallyAccept">Automatically accept requested changes</label>
-  </div>
-  <div class="section">
     <h1>MQLS Client ID</h1>
     <button id="mqlsClientIdBtn">Get and log ID</button>
   </div>
   <div class="section">
-    <h1>Additional Context</h1>
-    <div id="additionalContextResult">
+    <h1>Invocation Log</h1>
+    <button id="clearInvocationLog">Clear</button>
+    <div id="invocationLog" style="max-height: 200px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;"></div>
+  </div>
+  <div class="section">
+    <h1>Skills</h1>
+    <ul id="skillsList">
+    </ul>
+    <div>
+      <label>Skill ID: <input id="skillIdInput" type="text" /></label>
     </div>
+    <div>
+      <label>Skill Name: <input id="skillNameInput" type="text" /></label>
+    </div>
+    <div>
+      <label>Skill Icon: <input id="skillIconInput" type="text" /></label>
+    </div>
+    <div>
+      <!-- LINT.IfChange(SkillSource) -->
+      <label>Skill Source:
+        <select id="skillSourceSelect">
+          <option value="0">Unknown</option>
+          <option value="1" selected>First Party</option>
+          <option value="2">User Created</option>
+          <option value="3">Derived from First Party</option>
+          <option value="4">Enterprise</option>
+          <option value="5">Derived from Enterprise</option>
+        </select>
+      </label>
+      <!-- LINT.ThenChange(//components/skills/public/skill.mojom:SkillSource) -->
+    </div>
+    <div>
+      <label>Skill Prompt: <input id="skillPromptInput" type="text" /></label>
+    </div>
+    <div>
+      <button id="createSkillBtn">Create Skill</button>
+      <button id="updateSkillBtn">Update Skill</button>
+      <button id="getSkillBtn">Get Skill</button>
+      <button id="manageSkillsBtn">Manage Skills</button>
+      <button id="browseSkillsBtn">Browse Skills</button>
+    </div>
+  </div>
+  <div class="section">
+    <h1>Additional Context</h1>
+    <div id="additionalContextResult"></div>
   </div>
   <div class="section">
     <h1>Conversations</h1>
@@ -637,6 +694,30 @@ found in the LICENSE file.
     <button id="registerConversationBtn">Register Conversation</button>
     <br />
     <label>Current Conversation ID: <input id="conversationId" type="text" readonly /></label>
+  </div>
+  <div class="section">
+    <h1>Stress</h1>
+    <button id="stressTestEngageBtn">Engage</button>
+    <button id="stressTestEngageRetainBtn">Engage with retaining memory</button>
+  </div>
+  <div class="section">
+    <h1>Counter Abuse Verdict</h1>
+    <label>
+      Show Interstitial:
+      <input id="counterAbuseShowInterstitial" type="checkbox" checked />
+    </label>
+    <br />
+    <label>
+      Threat Type:
+      <select id="counterAbuseThreatType">
+        <option value="UNSPECIFIED">UNSPECIFIED</option>
+        <option value="SOCIAL_ENGINEERING">SOCIAL_ENGINEERING</option>
+        <option value="MALWARE">MALWARE</option>
+        <option value="UNWANTED_SOFTWARE">UNWANTED_SOFTWARE</option>
+      </select>
+    </label>
+    <br />
+    <button id="processCounterAbuseVerdictTestEngageBtn">Trigger Verdict</button>
   </div>
   <br />
   <div id="status"></div>

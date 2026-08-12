@@ -15,16 +15,14 @@ AccessibilityTextStyleInfo::AccessibilityTextStyleInfo(
     float font_size,
     uint32_t fill_color,
     uint32_t stroke_color,
-    bool is_italic,
-    bool is_bold)
+    bool is_italic)
     : font_name(font_name),
       font_weight(font_weight),
       render_mode(render_mode),
       font_size(font_size),
       fill_color(fill_color),
       stroke_color(stroke_color),
-      is_italic(is_italic),
-      is_bold(is_bold) {}
+      is_italic(is_italic) {}
 
 AccessibilityTextStyleInfo::AccessibilityTextStyleInfo(
     const AccessibilityTextStyleInfo& other) = default;
@@ -36,13 +34,11 @@ AccessibilityTextRunInfo::AccessibilityTextRunInfo() = default;
 AccessibilityTextRunInfo::AccessibilityTextRunInfo(
     uint32_t start_index,
     uint32_t len,
-    const std::string& tag_type,
     const gfx::RectF& bounds,
     AccessibilityTextDirection direction,
     const AccessibilityTextStyleInfo& style)
     : AccessibilityTextRunInfo(start_index,
                                len,
-                               tag_type,
                                bounds,
                                direction,
                                style,
@@ -51,14 +47,12 @@ AccessibilityTextRunInfo::AccessibilityTextRunInfo(
 AccessibilityTextRunInfo::AccessibilityTextRunInfo(
     uint32_t start_index,
     uint32_t len,
-    const std::string& tag_type,
     const gfx::RectF& bounds,
     AccessibilityTextDirection direction,
     const AccessibilityTextStyleInfo& style,
     bool is_searchified)
     : start_index(start_index),
       len(len),
-      tag_type(tag_type),
       bounds(bounds),
       direction(direction),
       style(style),

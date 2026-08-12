@@ -5,8 +5,8 @@
 import * as fill_constants from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import * as inferenceUtil from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
 import * as fillUtil from '//components/autofill/ios/form_util/resources/fill_util.js';
-import {fieldWasEditedByUser, unownedFormElementsAndFieldSetsToFormData, webFormElementToFormData} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
-import {getFormControlElements, getFormElementFromIdentifier, getFormElementFromRendererId, getIframeElements} from '//components/autofill/ios/form_util/resources/form_utils.js';
+import {fieldWasEditedByUser, unownedFormElementsAndFieldSetsToFormData, wasEditedByUser, webFormElementToFormData} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
+import {getFormControlElements, getFormElementFromIdentifier, getIframeElements} from '//components/autofill/ios/form_util/resources/form_utils.js';
 import {getElementByUniqueID} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {CrWebApi, gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 import {isTextField, sendWebKitMessage, trim} from '//ios/web/public/js_messaging/resources/utils.js';
@@ -130,8 +130,19 @@ function countEditableElements_(elements) {
  *     empty if no match.
  */
 function getUnownedIframes() {
-  return Array.from(getIframeElements(document))
-      .filter(e => !e.closest('form'));
+  if (fillUtil.isAutofillOptimizationFormSearchEnabled()) {
+    const iframes = getIframeElements(document);
+    const result = [];
+    for (const iframe of iframes) {
+      if (!iframe.closest('form')) {
+        result.push(iframe);
+      }
+    }
+    return result;
+  } else {
+    return Array.from(getIframeElements(document))
+        .filter(e => !e.closest('form'));
+  }
 }
 
 /**
@@ -145,7 +156,7 @@ function getUnownedIframes() {
 function extractUnownedFields(restrictUnownedFieldsToFormlessCheckout) {
   const fieldsets = [];
   const unownedControlElements =
-      fillUtil.getUnownedAutofillableFormFieldElements(document.all, fieldsets);
+      fillUtil.getUnownedAutofillableFormFieldElements(fieldsets);
   const numEditableUnownedElements =
       countEditableElements_(unownedControlElements);
   const iframeElements =
@@ -153,7 +164,7 @@ function extractUnownedFields(restrictUnownedFieldsToFormlessCheckout) {
       getUnownedIframes() :
       [];
   if (numEditableUnownedElements > 0 || iframeElements.length > 0) {
-    const unownedForm = new __gCrWeb['common'].JSONSafeObject();
+    const unownedForm = new fillUtil.AutofillFormData();
     const hasUnownedForm = unownedFormElementsAndFieldSetsToFormData(
         window, fieldsets, unownedControlElements, iframeElements,
         restrictUnownedFieldsToFormlessCheckout, unownedForm);
@@ -176,7 +187,7 @@ function extractUnownedFields(restrictUnownedFieldsToFormlessCheckout) {
  */
 function extractForms(restrictUnownedFieldsToFormlessCheckout) {
   const forms = extractNewForms(restrictUnownedFieldsToFormlessCheckout);
-  return __gCrWeb.stringify(forms);
+  return fillUtil.stringify(forms);
 }
 
 /**
@@ -233,11 +244,9 @@ function controlElementInputListener_(evt) {
  * |forceFillFieldID| will always be filled even if non-empty.
  *
  * @param {!FormData} data Autofill data to fill in.
- * @param {number} forceFillFieldID Identified field will always be
- *     filled even if non-empty. May be RENDERER_ID_NOT_SET.
  * @return {string} JSON encoded list of renderer IDs of filled elements.
  */
-function fillForm(data, forceFillFieldID) {
+function fillForm(data) {
   // Inject CSS to style the autofilled elements with a yellow background.
   if (!styleInjected) {
     const style = document.createElement('style');
@@ -272,7 +281,7 @@ function fillForm(data, forceFillFieldID) {
     //    always autofilled; see AutofillManager::FillOrPreviewDataModelForm().
     // c) The "value" or "placeholder" attributes match the value, if any; or
     // d) The value has not been set by the user.
-    const shouldBeForceFilled = fieldId === forceFillFieldID.toString();
+    const shouldBeForceFilled = element === document.activeElement;
     if (element.value && fieldWasEditedByUser(element) &&
         !sanitizedFieldIsEmpty(element.value) && !shouldBeForceFilled &&
         !inferenceUtil.isSelectElement(element) &&
@@ -286,16 +295,21 @@ function fillForm(data, forceFillFieldID) {
 
     modifiedForms.add(fieldData.hostFormId);
 
-    (function(_element, _value, _section, _delay) {
+    (function(_element, _value, _isAutofilled, _delay) {
       window.setTimeout(function() {
         fillUtil.setInputElementValue(_value, _element, function() {
-          _element.setAttribute('chrome-autofilled', '');
-          _element.isAutofilled = true;
-          _element.autofillSection = _section;
-          _element.addEventListener('input', controlElementInputListener_);
+          if (_isAutofilled) {
+            _element.setAttribute('chrome-autofilled', '');
+            _element.isAutofilled = true;
+            _element.addEventListener('input', controlElementInputListener_);
+          } else {
+            _element.removeAttribute('chrome-autofilled');
+            _element.isAutofilled = false;
+            _element.removeEventListener('input', controlElementInputListener_);
+          }
         });
       }, _delay);
-    })(element, fieldData.value, fieldData.section, delay);
+    })(element, fieldData.value, fieldData.isAutofilled, delay);
     delay += delayBetweenFieldFillingMs;
     filledElements[fillUtil.getUniqueID(element)] = fieldData.value;
   }
@@ -305,7 +319,7 @@ function fillForm(data, forceFillFieldID) {
   // time of the last fill plus `delayBetweenFieldFillingMs`.
   const reportFormFill = function(_form, _delay) {
     window.setTimeout(() => {
-      let formData = new __gCrWeb['common'].JSONSafeObject();
+      let formData = new fillUtil.AutofillFormData();
       if (_form) {
         if (!webFormElementToFormData(window, _form, null, formData)) {
           formData = null;
@@ -348,77 +362,7 @@ function fillForm(data, forceFillFieldID) {
     }
   }
 
-  return __gCrWeb.stringify(filledElements);
-}
-
-/**
- * Clear autofilled fields of the specified form section. Fields that are not
- * currently autofilled or do not belong to the same section as that of the
- * field with |fieldIdentifier| are not modified. If the field identified by
- * |fieldIdentifier| cannot be found all autofilled form fields get cleared.
- * Field contents are cleared, and Autofill flag and styling are removed.
- * 'change' events are sent for fields whose contents changed.
- *
- * @param {string} formUniqueID Unique ID of the form element.
- * @param {string} fieldUniqueID Unique ID of the field initiating the
- *     clear action.
- * @return {string} JSON encoded list of renderer IDs of cleared elements.
- */
-function clearAutofilledFields(formUniqueID, fieldUniqueID) {
-  const clearedElements = [];
-
-  const form = getFormElementFromRendererId(formUniqueID);
-
-  const controlElements = form ?
-      getFormControlElements(form) :
-      fillUtil.getUnownedAutofillableFormFieldElements(
-          document.all,
-          /*fieldsets=*/[]);
-
-  let formField = null;
-  for (let i = 0; i < controlElements.length; ++i) {
-    if (fillUtil.getUniqueID(controlElements[i]) ===
-        fieldUniqueID.toString()) {
-      formField = controlElements[i];
-      break;
-    }
-  }
-
-  for (let i = 0, delay = 0; i < controlElements.length; ++i) {
-    const element = controlElements[i];
-    if (!element.isAutofilled || element.disabled) {
-      continue;
-    }
-
-    if (formField && formField.autofillSection !== element.autofillSection) {
-      continue;
-    }
-
-    let value = null;
-    if (isTextField(element) || inferenceUtil.isTextAreaElement(element)) {
-      value = '';
-    } else if (inferenceUtil.isSelectElement(element)) {
-      // Reset to the first index.
-      // TODO(bondd): Store initial values and reset to the correct one here.
-      value = element.options[0].value;
-    } else if (inferenceUtil.isCheckableElement(element)) {
-      // TODO(crbug.com/40573146): Investigate autofilling checkable elements.
-    }
-    if (value !== null) {
-      (function(_element, _value, _delay) {
-        window.setTimeout(function() {
-          fillUtil.setInputElementValue(_value, _element, function(changed) {
-            _element.removeAttribute('chrome-autofilled');
-            _element.isAutofilled = false;
-            _element.removeEventListener('input', controlElementInputListener_);
-          });
-        }, _delay);
-      })(element, value, delay);
-      delay += delayBetweenFieldFillingMs;
-      clearedElements.push(fillUtil.getUniqueID(element));
-    }
-  }
-  return __gCrWeb.stringify(clearedElements);
+  return fillUtil.stringify(filledElements);
 }
 
 /**
@@ -473,7 +417,7 @@ function extractNewForms(restrictUnownedFieldsToFormlessCheckout) {
       continue;
     }
 
-    const form = new __gCrWeb['common'].JSONSafeObject();
+    const form = new fillUtil.AutofillFormData();
     if (!webFormElementToFormData(
             window, formElement, null, form, /*field=*/ undefined,
             canExtractChildFrames())) {
@@ -547,7 +491,10 @@ function fillFormField(data, field) {
   }
 
   let filled = false;
-  if (isTextField(field) || inferenceUtil.isTextAreaElement(field)) {
+  if (isTextField(field) || inferenceUtil.isTextAreaElement(field) ||
+      (inferenceUtil.isDateField(field) &&
+       autofillFormFeaturesApi.getFunction(
+           'isAutofillSupportDateInputEnabled')())) {
     let sanitizedValue = data['value'];
 
     if (isTextField(field)) {
@@ -561,7 +508,14 @@ function fillFormField(data, field) {
     }
 
     filled = fillUtil.setInputElementValue(sanitizedValue, field);
-    field.isAutofilled = true;
+
+    // This is a hack to avoid showing Undo autofill when a field is filled with
+    // manual fallback sheet, as this path does not path by
+    // `components/autofill/core/browser/` and therefore data required to
+    // correctly Undo is not populated in `FormAutofillHistory`.
+    // TODO(crbug.com/487617428): Remove after fixing the filling paths.
+    wasEditedByUser.set(field, true);
+
   } else if (inferenceUtil.isSelectElement(field)) {
     filled = fillUtil.setInputElementValue(data['value'], field);
   } else if (inferenceUtil.isCheckableElement(field)) {
@@ -657,9 +611,8 @@ function sanitizedFieldIsEmpty(value) {
   return trim(value.replace(/[-_()/|]/g, '')) === '';
 }
 
-const autofillAPI = new CrWebApi();
+const autofillAPI = new CrWebApi('autofill');
 
-autofillAPI.addFunction('clearAutofilledFields', clearAutofilledFields);
 autofillAPI.addFunction(
     'extractAutofillableElementsInForm', extractAutofillableElementsInForm);
 autofillAPI.addFunction('extractForms', extractForms);
@@ -671,4 +624,4 @@ autofillAPI.addFunction('fillPredictionData', fillPredictionData);
 autofillAPI.addFunction('fillSpecificFormField', fillSpecificFormField);
 autofillAPI.addFunction('sanitizedFieldIsEmpty', sanitizedFieldIsEmpty);
 
-gCrWeb.registerApi('autofill', autofillAPI);
+gCrWeb.registerApi(autofillAPI);

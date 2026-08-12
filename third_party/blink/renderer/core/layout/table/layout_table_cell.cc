@@ -30,7 +30,7 @@ LayoutTableCell* LayoutTableCell::CreateAnonymousWithParent(
       parent.GetDocument().GetStyleResolver().CreateAnonymousStyleWithDisplay(
           parent.StyleRef(), EDisplay::kTableCell);
   auto* new_cell = MakeGarbageCollected<LayoutTableCell>(nullptr);
-  new_cell->SetDocumentForAnonymous(&parent.GetDocument());
+  new_cell->SetDocumentForAnonymous(parent.GetDocument());
   new_cell->SetStyle(new_style);
   return new_cell;
 }
@@ -45,7 +45,7 @@ void LayoutTableCell::InvalidateLayoutResultCacheAfterMeasure() const {
   }
 }
 
-LayoutUnit LayoutTableCell::BorderTop() const {
+PhysicalBoxStrut LayoutTableCell::BorderOutsets() const {
   NOT_DESTROYED();
   // TODO(1061423) Should return cell border, not fragment border.
   // To compute cell border, cell needs to know its starting row
@@ -53,36 +53,9 @@ LayoutUnit LayoutTableCell::BorderTop() const {
   // PhysicalFragmentCount() > 0 check should not be necessary,
   // but it is because of TextAutosizer/ScrollAnchoring.
   if (Table()->HasCollapsedBorders() && PhysicalFragmentCount() > 0) {
-    return GetPhysicalFragment(0)->Borders().top;
+    return GetPhysicalFragment(0)->Borders();
   }
-  return LayoutBlockFlow::BorderTop();
-}
-
-LayoutUnit LayoutTableCell::BorderBottom() const {
-  NOT_DESTROYED();
-  // TODO(1061423) Should return cell border, not fragment border.
-  if (Table()->HasCollapsedBorders() && PhysicalFragmentCount() > 0) {
-    return GetPhysicalFragment(0)->Borders().bottom;
-  }
-  return LayoutBlockFlow::BorderBottom();
-}
-
-LayoutUnit LayoutTableCell::BorderLeft() const {
-  NOT_DESTROYED();
-  // TODO(1061423) Should return cell border, not fragment border.
-  if (Table()->HasCollapsedBorders() && PhysicalFragmentCount() > 0) {
-    return GetPhysicalFragment(0)->Borders().left;
-  }
-  return LayoutBlockFlow::BorderLeft();
-}
-
-LayoutUnit LayoutTableCell::BorderRight() const {
-  NOT_DESTROYED();
-  // TODO(1061423) Should return cell border, not fragment border.
-  if (Table()->HasCollapsedBorders() && PhysicalFragmentCount() > 0) {
-    return GetPhysicalFragment(0)->Borders().right;
-  }
-  return LayoutBlockFlow::BorderRight();
+  return LayoutBlockFlow::BorderOutsets();
 }
 
 LayoutTableCell* LayoutTableCell::NextCell() const {
@@ -118,16 +91,18 @@ LayoutTable* LayoutTableCell::Table() const {
 void LayoutTableCell::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   if (LayoutTable* table = Table()) {
-    if ((old_style && !old_style->BorderVisuallyEqual(StyleRef())) ||
-        (old_style && old_style->GetWritingDirection() !=
-                          StyleRef().GetWritingDirection())) {
+    if (old_style &&
+        (!old_style->BorderVisuallyEqual(new_style) ||
+         old_style->GetWritingDirection() != new_style.GetWritingDirection())) {
       table->GridBordersChanged();
     }
   }
-  LayoutBlockFlow::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBlockFlow::StyleDidChange(diff, old_style, new_style,
+                                  style_change_context);
 }
 
 void LayoutTableCell::WillBeRemovedFromTree() {

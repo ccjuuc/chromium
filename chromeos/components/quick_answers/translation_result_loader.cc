@@ -11,6 +11,7 @@
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/components/quick_answers/quick_answers_model.h"
+#include "chromeos/components/quick_answers/translation_response_parser.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
 #include "chromeos/services/assistant/public/shared/constants.h"
 #include "google_apis/google_api_keys.h"
@@ -23,8 +24,6 @@
 
 namespace quick_answers {
 namespace {
-
-using base::Value;
 
 // The JSON we generate looks like this:
 // {
@@ -44,9 +43,9 @@ constexpr std::string_view kSourceLanguageKey = "source";
 constexpr std::string_view kTargetLanguageKey = "target";
 
 std::string BuildTranslationRequestBody(const IntentInfo& intent_info) {
-  Value::Dict payload;
+  base::DictValue payload;
 
-  Value::List query;
+  base::ListValue query;
   query.Append(intent_info.intent_text);
   payload.Set(kQueryKey, std::move(query));
 
@@ -84,26 +83,17 @@ void TranslationResultLoader::ProcessResponse(
     const PreprocessedOutput& preprocessed_output,
     std::optional<std::string> response_body,
     ResponseParserCallback complete_callback) {
-  if (translation_response_parser_) {
-    DCHECK(false) << "translation_response_parser_ must be nullptr";
-    std::move(complete_callback).Run(nullptr);
-    return;
-  }
-
-  translation_response_parser_ =
-      std::make_unique<TranslationResponseParser>(base::BindOnce(
-          &TranslationResultLoader::ProcessParsedResponse,
-          weak_ptr_factory_.GetWeakPtr(), preprocessed_output.intent_info,
-          std::move(complete_callback)));
-  translation_response_parser_->ProcessResponse(*response_body);
+  std::unique_ptr<TranslationResult> translation_result =
+      ParseTranslationResponse(*response_body);
+  ProcessParsedResponse(preprocessed_output.intent_info,
+                        std::move(complete_callback),
+                        std::move(translation_result));
 }
 
 void TranslationResultLoader::ProcessParsedResponse(
     IntentInfo intent_info,
     ResponseParserCallback complete_callback,
     std::unique_ptr<TranslationResult> translation_result) {
-  translation_response_parser_.reset();
-
   if (!translation_result || translation_result->translated_text.empty()) {
     std::move(complete_callback).Run(nullptr);
     return;

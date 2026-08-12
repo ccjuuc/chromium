@@ -46,8 +46,6 @@ class PasskeySyncBridge : public syncer::DataTypeSyncBridge,
   void set_clock_for_testing(base::Clock* clock) { clock_ = clock; }
 
   // syncer::DataTypeSyncBridge:
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data) override;
@@ -58,6 +56,8 @@ class PasskeySyncBridge : public syncer::DataTypeSyncBridge,
       StorageKeyList storage_keys) override;
   std::unique_ptr<syncer::DataBatch> GetAllDataForDebugging() override;
   bool IsEntityDataValid(const syncer::EntityData& entity_data) const override;
+  sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
+      const sync_pb::EntitySpecifics& entity_specifics) const override;
   std::string GetClientTag(
       const syncer::EntityData& entity_data) const override;
   std::string GetStorageKey(
@@ -80,9 +80,6 @@ class PasskeySyncBridge : public syncer::DataTypeSyncBridge,
       std::variant<AnyRp, std::string_view> rp_id,
       std::string_view credential_id,
       ShadowedCredentials shadowed_credentials) const override;
-  std::optional<sync_pb::WebauthnCredentialSpecifics> GetPasskeyByUserId(
-      const std::string& rp_id,
-      const std::string& user_id) const override;
   bool DeletePasskey(const std::string& credential_id,
                      const base::Location& location) override;
   bool HidePasskey(const std::string& credential_id,

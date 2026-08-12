@@ -60,15 +60,10 @@ mojom("mojom") {
     {
       types = [
         {
-          mojom = "gfx.mojom.BufferFormat"
-          cpp = "::gfx::BufferFormat"
-        },
-        {
           mojom = "gfx.mojom.BufferUsage"
           cpp = "::gfx::BufferUsage"
         },
       ]
-
       traits_headers = [ "buffer_types_mojom_traits.h" ]
       traits_public_deps = [ ":shared_mojom_traits" ]
     },
@@ -335,6 +330,7 @@ mojom("mojom") {
           {
             mojom = "gfx.mojom.CALayerParams"
             cpp = "::gfx::CALayerParams"
+            move_only = true
           },
         ]
         traits_sources = [ "ca_layer_params_mojom_traits.cc" ]
@@ -424,9 +420,9 @@ mojom("native_handle_types") {
           {
             # TODO(crbug.com/40584691): Note that this is typemapped to the same
             # type as the gfx.mojom.GpuMemoryBufferHandle *struct*. This is
-            # intentional since the C++ GpuMemoryBufferHandle type is is a hybrid
-            # union+struct today. This can be cleaned up once the associated bug is
-            # fixed.
+            # intentional since the C++ GpuMemoryBufferHandle type is is a
+            # hybrid union+struct today. This can be cleaned up once the
+            # associated bug is fixed.
             mojom = "gfx.mojom.GpuMemoryBufferPlatformHandle"
             cpp = "::gfx::GpuMemoryBufferHandle"
             move_only = true
@@ -515,10 +511,12 @@ component("native_handle_types_mojom_traits") {
     "//ui/gfx",
   ]
 
-  frameworks = [
-    "CoreFoundation.framework",
-    "IOSurface.framework",
-  ]
+  if (is_apple) {
+    frameworks = [
+      "CoreFoundation.framework",
+      "IOSurface.framework",
+    ]
+  }
 }
 
 mojom("hdr_metadata") {
@@ -534,18 +532,6 @@ mojom("hdr_metadata") {
   cpp_typemaps = [
     {
       types = [
-        {
-          mojom = "gfx.mojom.HdrMetadataCta861_3"
-          cpp = "::gfx::HdrMetadataCta861_3"
-        },
-        {
-          mojom = "gfx.mojom.HdrMetadataSmpteSt2086"
-          cpp = "::gfx::HdrMetadataSmpteSt2086"
-        },
-        {
-          mojom = "gfx.mojom.HdrMetadataNdwl"
-          cpp = "::gfx::HdrMetadataNdwl"
-        },
         {
           mojom = "gfx.mojom.HdrMetadataExtendedRange"
           cpp = "::gfx::HdrMetadataExtendedRange"

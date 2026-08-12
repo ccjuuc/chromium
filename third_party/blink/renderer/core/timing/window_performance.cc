@@ -35,10 +35,13 @@
 #include <optional>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
@@ -52,6 +55,8 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_cross_origin_mode.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_navigation_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
@@ -60,6 +65,7 @@
 #include "third_party/blink/renderer/core/events/input_event.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
+#include "third_party/blink/renderer/core/events/ui_event.h"
 #include "third_party/blink/renderer/core/frame/dom_window.h"
 #include "third_party/blink/renderer/core/frame/frame.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -76,7 +82,10 @@
 #include "third_party/blink/renderer/core/page/page_hidden_state.h"
 #include "third_party/blink/renderer/core/paint/timing/container_timing.h"
 #include "third_party/blink/renderer/core/performance_entry_names.h"
+#include "third_party/blink/renderer/core/speculation_rules/document_speculation_rules.h"
+#include "third_party/blink/renderer/core/speculation_rules/speculation_candidate.h"
 #include "third_party/blink/renderer/core/timing/animation_frame_timing_info.h"
+#include "third_party/blink/renderer/core/timing/global_performance.h"
 #include "third_party/blink/renderer/core/timing/interaction_contentful_paint.h"
 #include "third_party/blink/renderer/core/timing/largest_contentful_paint.h"
 #include "third_party/blink/renderer/core/timing/layout_shift.h"
@@ -85,31 +94,46 @@
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/performance_event_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_long_animation_frame_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_mark_conditional.h"
 #include "third_party/blink/renderer/core/timing/performance_navigation_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_observer.h"
 #include "third_party/blink/renderer/core/timing/performance_paint_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_scroll_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_soft_navigation.h"
 #include "third_party/blink/renderer/core/timing/performance_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_timing_for_reporting.h"
+#include "third_party/blink/renderer/core/timing/preconnect_data.h"
+#include "third_party/blink/renderer/core/timing/preload_data.h"
 #include "third_party/blink/renderer/core/timing/responsiveness_metrics.h"
-#include "third_party/blink/renderer/core/timing/soft_navigation_entry.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_context.h"
+#include "third_party/blink/renderer/core/timing/soft_navigation_heuristics.h"
+#include "third_party/blink/renderer/core/timing/speculation_data.h"
+#include "third_party/blink/renderer/core/timing/speculation_navigation_data.h"
+#include "third_party/blink/renderer/core/timing/timing_utils.h"
 #include "third_party/blink/renderer/core/timing/visibility_state_entry.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/forward.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/loader/fetch/cross_origin_attribute_value.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/widget/frame_widget.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
 
+namespace blink {
+
 static constexpr base::TimeDelta kLongTaskObserverThreshold =
     base::Milliseconds(50);
-
-namespace blink {
 
 namespace {
 
@@ -187,37 +211,44 @@ AtomicString SameOriginAttribution(Frame* observer_frame,
   return SameOriginKeyword();
 }
 
-// Eligible event types should be kept in sync with
-// WebInputEvent::IsWebInteractionEvent().
-bool IsEventTypeForInteractionId(const AtomicString& type) {
-  return type == event_type_names::kPointercancel ||
-         type == event_type_names::kContextmenu ||
-         type == event_type_names::kPointerdown ||
-         type == event_type_names::kPointerup ||
-         type == event_type_names::kClick ||
-         type == event_type_names::kKeydown ||
-         type == event_type_names::kKeypress ||
-         type == event_type_names::kKeyup ||
-         type == event_type_names::kCompositionstart ||
-         type == event_type_names::kCompositionupdate ||
-         type == event_type_names::kCompositionend ||
-         type == event_type_names::kInput;
-}
-
 base::TimeDelta TotalNonOverlappingProcessingDuration(
-    HeapVector<Member<PerformanceEventTiming>> event_timing_entries) {
+    base::span<const Member<PerformanceEventTiming>> range) {
   base::TimeDelta processing_duration;
-  for (const auto& entry : event_timing_entries) {
-    const auto& processing_start_time =
-        entry->GetEventTimingReportingInfo()->processing_start_time;
-    const auto& processing_end_time =
-        entry->GetEventTimingReportingInfo()->processing_end_time;
-    if (!entry->GetEventTimingReportingInfo()
-             ->is_processing_fully_nested_in_another_event) {
-      processing_duration += processing_end_time - processing_start_time;
+  for (const auto& entry : range) {
+    const auto& reporting_info = *entry->GetEventTimingReportingInfo();
+    if (!reporting_info.is_processing_fully_nested_in_another_event) {
+      processing_duration += reporting_info.processing_end_time -
+                             reporting_info.processing_start_time;
     }
   }
   return processing_duration;
+}
+
+bool ShouldLogEvent(const Event& event) {
+  return event.type() == event_type_names::kPointerdown ||
+         event.type() == event_type_names::kPointerup ||
+         event.type() == event_type_names::kClick ||
+         event.type() == event_type_names::kKeydown ||
+         event.type() == event_type_names::kMousedown ||
+         event.type() == event_type_names::kMouseup;
+}
+
+void HandleInputDelay(LocalDOMWindow* window,
+                      const Event& event,
+                      base::TimeTicks processing_start) {
+  auto* pointer_event = DynamicTo<PointerEvent>(&event);
+  base::TimeTicks event_timestamp =
+      pointer_event ? pointer_event->OldestPlatformTimeStamp()
+                    : event.PlatformTimeStamp();
+
+  if (ShouldLogEvent(event) && event.isTrusted()) {
+    InteractiveDetector* interactive_detector =
+        InteractiveDetector::From(*window->document());
+    if (interactive_detector) {
+      interactive_detector->HandleForInputDelay(event, event_timestamp,
+                                                processing_start);
+    }
+  }
 }
 
 }  // namespace
@@ -393,7 +424,7 @@ AdjustLoadTimingForNavigationalPrefetch(
   new_timing->socket_log_id = timing->socket_log_id;
 
   // Copy the basic members of LoadTimingInfo, and clamp them.
-  for (base::TimeTicks LoadTimingInfo::*ts :
+  for (base::TimeTicks LoadTimingInfo::* ts :
        {&LoadTimingInfo::request_start, &LoadTimingInfo::send_start,
         &LoadTimingInfo::send_end, &LoadTimingInfo::receive_headers_start,
         &LoadTimingInfo::receive_headers_end,
@@ -408,7 +439,7 @@ AdjustLoadTimingForNavigationalPrefetch(
   if (auto* connect_timing = timing->connect_timing.get()) {
     new_timing->connect_timing = LoadTimingInfoConnectTiming::New();
     auto& new_connect_timing = *new_timing->connect_timing;
-    for (base::TimeTicks LoadTimingInfoConnectTiming::*ts : {
+    for (base::TimeTicks LoadTimingInfoConnectTiming::* ts : {
              &LoadTimingInfoConnectTiming::domain_lookup_start,
              &LoadTimingInfoConnectTiming::domain_lookup_end,
              &LoadTimingInfoConnectTiming::connect_start,
@@ -463,6 +494,7 @@ void WindowPerformance::BuildJSONValue(V8ObjectBuilder& builder) const {
 
 void WindowPerformance::Trace(Visitor* visitor) const {
   visitor->Trace(event_timing_entries_);
+  visitor->Trace(active_event_timing_entries_);
   visitor->Trace(first_pointer_down_event_timing_);
   visitor->Trace(event_counts_);
   visitor->Trace(navigation_);
@@ -546,6 +578,21 @@ std::pair<AtomicString, DOMWindow*> WindowPerformance::SanitizedAttribution(
   return std::make_pair(kCrossOriginAttribution, nullptr);
 }
 
+void WindowPerformance::markConditional(ScriptState* script_state,
+                                        const AtomicString& mark_name) {
+  LocalDOMWindow* window = LocalDOMWindow::From(script_state);
+  if (!window || !window->GetFrame() ||
+      !window->GetFrame()->GetWidgetForLocalRoot()) {
+    return;
+  }
+
+  ExecutionContext* execution_context = ExecutionContext::From(script_state);
+  DCHECK(execution_context);
+  base::TimeTicks start_time = base::TimeTicks::Now();
+  window->GetFrame()->GetWidgetForLocalRoot()->MarkConditional(mark_name,
+                                                               start_time);
+}
+
 void WindowPerformance::ReportLongTask(base::TimeTicks start_time,
                                        base::TimeTicks end_time,
                                        ExecutionContext* task_context,
@@ -558,6 +605,8 @@ void WindowPerformance::ReportLongTask(base::TimeTicks start_time,
           task_context, has_multiple_contexts, DomWindow()->GetFrame());
   DOMWindow* culprit_dom_window = attribution.second;
   if (!culprit_dom_window || !culprit_dom_window->GetFrame() ||
+      !CanAccessOrigin(DomWindow()->GetFrame(),
+                       culprit_dom_window->GetFrame()) ||
       !culprit_dom_window->GetFrame()->DeprecatedLocalOwner()) {
     AddLongTaskTiming(start_time, end_time, attribution.first,
                       performance_entry_names::kWindow, g_empty_atom,
@@ -572,14 +621,13 @@ void WindowPerformance::ReportLongTask(base::TimeTicks start_time,
   }
 }
 
-void WindowPerformance::EventTimingProcessingStart(
-    const Event& event,
-    base::TimeTicks processing_start,
-    EventTarget* hit_test_target) {
-  if (!DomWindow() || !DomWindow()->GetFrame()) {
-    return;
-  }
-  DCHECK(!processing_start.is_null());
+PerformanceEventTiming* WindowPerformance::EventTimingProcessingStart(
+    const Event& event) {
+  CHECK(DomWindow());
+  CHECK(DomWindow()->GetFrame());
+  base::TimeTicks processing_start = base::TimeTicks::Now();
+
+  HandleInputDelay(DomWindow(), event, processing_start);
 
   const AtomicString& event_type = event.type();
 
@@ -592,9 +640,12 @@ void WindowPerformance::EventTimingProcessingStart(
   const KeyboardEvent* key_event = DynamicTo<KeyboardEvent>(event);
 
   PerformanceEventTiming::EventTimingReportingInfo reporting_info{
+      .frame_index = current_frame_index_,
       .enqueued_to_main_thread_time =
           responsiveness_metrics_->CurrentInteractionEventQueuedTimestamp(),
       .processing_start_time = processing_start,
+      .is_processing_fully_nested_in_another_event =
+          !active_event_timing_entries_.empty(),
   };
 
   if (pointer_event) {
@@ -635,48 +686,42 @@ void WindowPerformance::EventTimingProcessingStart(
   // `target` can be non-null but detached from DOM and GC-ed before observer
   // fires.
   PerformanceEventTiming* entry = PerformanceEventTiming::Create(
-      event_type, reporting_info, event.cancelable(), hit_test_target,
-      DomWindow(), NavigationId());
-
+      event_type, reporting_info, event.cancelable(), DomWindow(),
+      NavigationId());
+  active_event_timing_entries_.push_back(entry);
   event_timing_entries_.push_back(entry);
   current_event_ = &event;
+
+  responsiveness_metrics_->TryAssignInteractionId(entry);
+
+  return entry;
 }
 
-void WindowPerformance::EventTimingProcessingEnd(
-    const Event& event,
-    base::TimeTicks processing_end) {
+void WindowPerformance::EventTimingProcessingEnd(PerformanceEventTiming* entry,
+                                                 const Event& event) {
+  // DomWindow()->GetFrame() may no longer be available, do not CHECK for it.
   current_event_ = nullptr;
-  DCHECK(!processing_end.is_null());
+  base::TimeTicks processing_end = base::TimeTicks::Now();
 
-  if (!DomWindow() || !DomWindow()->GetFrame()) {
-    return;
-  }
-  const AtomicString& event_type = event.type();
-  auto iter = std::find_if(event_timing_entries_.rbegin(),
-                           event_timing_entries_.rend(), [](const auto& event) {
-                             return event->GetEventTimingReportingInfo()
-                                 ->processing_end_time.is_null();
-                           });
-  CHECK(iter != event_timing_entries_.rend());
-  PerformanceEventTiming* entry = *iter;
   CHECK(entry);
-  CHECK(entry->name() == event_type);
+  CHECK(!active_event_timing_entries_.empty());
+  active_event_timing_entries_.pop_back();
+
+  const AtomicString& event_type = entry->name();
 
   PerformanceEventTiming::EventTimingReportingInfo* reporting_info =
       entry->GetEventTimingReportingInfo();
   CHECK(reporting_info);
   reporting_info->processing_end_time = processing_end;
 
-  if (auto pre_iter = std::next(iter);
-      pre_iter != event_timing_entries_.rend()) {
-    auto iter_null_time = std::find_if(
-        event_timing_entries_.begin(), pre_iter.base(), [](const auto& event) {
-          return event->GetEventTimingReportingInfo()
-              ->processing_end_time.is_null();
-        });
-    if (iter_null_time != pre_iter.base()) {
-      reporting_info->is_processing_fully_nested_in_another_event = true;
-    }
+  // Windows (like iframes or open tabs) can become detached in the middle of
+  // the event, when the event itself does the detaching.
+  // TryFlushEventTimingQueue() requires a window, so we likely won't ever
+  // report this event anywhere, but let's still return the bookkeeping to a
+  // clean state.
+  if (!DomWindow() || !DomWindow()->GetFrame()) {
+    entry->UpdateFallbackTime(processing_end, FallbackReason::kWindowDestroyed);
+    return;
   }
 
   // "Artificial" pointerup events will re-use the same timestamp as the
@@ -694,37 +739,55 @@ void WindowPerformance::EventTimingProcessingEnd(
 #endif  // BUILDFLAG(IS_MAC)
   }
 
-  if (event.RawTarget()) {
+  if (event.target()) {
     // `event->target()` is assigned as part of EventDispatch, and will be unset
     // whenever we skip dispatch. (See: crbug.com/1367329).
     // Note: target may be dom detached, and even GC-ed, before Observer fires.
-    entry->SetTarget(event.RawTarget());
+    entry->SetTarget(event.target());
   }
 
-  // Request presentation time first, because this might increment presentation
-  // index
-  // TODO(crbug.com/)
-  if (need_new_promise_for_event_presentation_time_) {
+  if (RuntimeEnabledFeatures::EventTimingTargetSelectorEnabled()) {
+    if (event.IsUIEvent() && event.HasEventPath()) {
+      entry->SetTargetSelector(EventPathToSelector(event.GetEventPath()));
+    } else {
+      entry->SetTargetSelector(EventTargetToString(event.target()));
+    }
+  }
+
+  // A context menu can prevent next paint.
+  if (event.type() == event_type_names::kContextmenu) {
+    ApplyContextMenuFallbackToPendingEvents(processing_end);
+  }
+
+  // Check if we need to request presentation time feedback for this frame.
+  // Ideally, we would only request if `entry->NeedsNextPaintMeasurement()`,
+  // However, we currently rely on the presentation promise to mark the task
+  // end time for cases when ALL events in this animation frame do not need
+  // next paint (e.g. when the last event triggers a fallback to apply to all
+  // events, like contextmenu or js prompt).
+  // TODO(crbug.com/40821329): PaintTimingMixin and TaskTimeObserver will
+  // obviate the need for this.
+  if (last_presentation_requested_for_frame_index_ < current_frame_index_) {
     DomWindow()->GetFrame()->GetChromeClient().NotifyPresentationTime(
         *DomWindow()->GetFrame(),
         BindOnce(&WindowPerformance::OnPresentationPromiseResolved,
-                 WrapWeakPersistent(this), ++event_presentation_promise_count_,
+                 WrapWeakPersistent(this), current_frame_index_,
                  // TODO(crbug.com/378647854): Current implementation uses
                  // source id from previous BeginMainFrame as an
                  // approximate. And this can be further improved to the
                  // current BeginMainFrame if we could defer presentation
                  // promise registering to align with each BeginMainFrame.
                  begin_main_frame_source_id_));
-    need_new_promise_for_event_presentation_time_ = false;
+    last_presentation_requested_for_frame_index_ = current_frame_index_;
   }
-
-  reporting_info->presentation_index = event_presentation_promise_count_;
 }
 
 void WindowPerformance::SetCommitFinishTimeStampForPendingEvents(
     base::TimeTicks commit_finish_time) {
+  // Iterating all event timings rather than just last frame_index because we
+  // sometimes get multiple paints without a commit.
   for (const auto& entry : event_timing_entries_) {
-    // Skip events that already have a commit time
+    // Skip events that already have a commit time.
     if (!entry->GetEventTimingReportingInfo()->commit_finish_time.is_null()) {
       continue;
     }
@@ -732,11 +795,6 @@ void WindowPerformance::SetCommitFinishTimeStampForPendingEvents(
     if (!entry->NeedsNextPaintMeasurement()) {
       continue;
     }
-    // The following check should be true in typical conditions, but seems to
-    // fail whenever we see multiple OnPaintFinished (with multiple
-    // EventProcessingEnd) without a Commit after each Paint.
-    // CHECK(entry->GetEventTimingReportingInfo()->presentation_index ==
-    //       event_presentation_promise_count_);
     entry->GetEventTimingReportingInfo()->commit_finish_time =
         commit_finish_time;
   }
@@ -744,6 +802,8 @@ void WindowPerformance::SetCommitFinishTimeStampForPendingEvents(
 
 void WindowPerformance::SetRenderStartTimeForPendingEvents(
     base::TimeTicks render_start_time) {
+  // Iterating all event timings rather than just last frame_index because we
+  // sometimes get multiple paints without a commit.
   for (const auto& entry : event_timing_entries_) {
     // Skip events that already have a render start time.
     if (!entry->GetEventTimingReportingInfo()->render_start_time.is_null()) {
@@ -758,17 +818,17 @@ void WindowPerformance::SetRenderStartTimeForPendingEvents(
 }
 
 // Important details:
-// 1. presentation_index and expected_frame_source_id are "captured" at the
+// 1. frame_index and expected_frame_source_id are "captured" at the
 // time the presentation is requested, and might have changed by the time
 // presentation time arrives.
 // 2. presentation time might be "fake" when broken swap promise.
 void WindowPerformance::OnPresentationPromiseResolved(
-    uint64_t presentation_index,
+    uint64_t frame_index,
     uint64_t expected_frame_source_id,
     const viz::FrameTimingDetails& presentation_details) {
-  if (!DomWindow() || !DomWindow()->document()) {
-    return;
-  }
+  // DomWindow()->GetFrame() may no longer be available, do not CHECK for it.
+  // We still try to assign the presentation / fallback times to events, and
+  // then flush the event queue.
 
   // If the resolved presentation promise is for an animation frame that didn't
   // observe OnPaintFinished, then the most recent events actually did not need
@@ -776,11 +836,9 @@ void WindowPerformance::OnPresentationPromiseResolved(
   // presentation time.
   // TODO(crbug.com/378647854): Move this to happen before we request
   // presentation time, when we dont need next paint, rather than after.
-  if (presentation_index == event_presentation_promise_count_ &&
-      !need_new_promise_for_event_presentation_time_) {
+  if (frame_index == current_frame_index_) {
     ReportEventTimingsWithoutNextPaint(
         presentation_details.presentation_feedback.timestamp);
-    need_new_promise_for_event_presentation_time_ = true;
     return;
   }
 
@@ -790,9 +848,7 @@ void WindowPerformance::OnPresentationPromiseResolved(
   bool is_presentation_for_expected_source =
       !expected_frame_source_id || !actual_frame_source_id ||
       expected_frame_source_id == actual_frame_source_id;
-  if (base::FeatureList::IsEnabled(
-          ::features::kInternalBeginFrameSourceOnManyDidNotProduceFrame) ||
-      base::FeatureList::IsEnabled(::features::kManualBeginFrame)) {
+  if (base::FeatureList::IsEnabled(::features::kManualBeginFrame)) {
     // Switch to cc BeginFrameSource will generate kNotRestartable(0) begin
     // frame and submit compositor frame with kManualSourceId.
     if ((expected_frame_source_id >> 32) == 0 ||
@@ -801,87 +857,94 @@ void WindowPerformance::OnPresentationPromiseResolved(
     }
   }
 
-  for (const auto& entry : event_timing_entries_) {
+  IterateEventTimingsByAnimationFrame(frame_index, [&](auto& entry) {
+    if (!entry->NeedsNextPaintMeasurement()) {
+      return;
+    }
     auto* timing = entry->GetEventTimingReportingInfo();
-    if (timing->presentation_index == presentation_index) {
-      timing->presentation_time =
-          presentation_details.presentation_feedback.timestamp;
+    timing->presentation_time =
+        presentation_details.presentation_feedback.timestamp;
 
-      if (!is_presentation_for_expected_source) {
-        if (base::FeatureList::IsEnabled(
-                features::
-                    kEventTimingIgnorePresentationTimeFromUnexpectedFrameSource)) {
-          CHECK(!timing->commit_finish_time.is_null());
-          entry->UpdateFallbackTime(timing->commit_finish_time,
-                                    FallbackReason::kUnexpectedFrameSource);
-        }
-      }
-
-      // If page visibility was changed, add a fallback_time to the entry's
-      // processingEnd. Because we already flush events in
-      // `ReportAllPendingEventTimingsOnPageHidden`, this should only happen if
-      // a new event is processed after visibility is changed.  Users cannot
-      // interact with a hidden page, but, there might have been events in queue
-      // when the page was hidden (and they couldn't be flushed because they
-      // weren't even dispatched yet).
-      // TODO(crbug.com/378647854): We might want to just check for this at
-      // event timing registration time.  If the page is currently hidden (or
-      // was made hidden after the event was created/enqueued), then just skip
-      // asking for presentation time.
-      if (last_hidden_timestamp_ > timing->creation_time &&
-          last_hidden_timestamp_ < timing->presentation_time) {
-        if (!timing->commit_finish_time.is_null() &&
-            last_hidden_timestamp_ > timing->commit_finish_time) {
-          entry->UpdateFallbackTime(timing->commit_finish_time,
-                                    FallbackReason::kVisibilityChange);
-        } else {
-          entry->UpdateFallbackTime(timing->processing_end_time,
-                                    FallbackReason::kVisibilityChange);
-        }
-      }
-
-      // A javascript synchronous modal dialog might show before the event
-      // frame got presented.  If so, we use a fallback time to the dialog
-      // showing time.
-      // TODO(crbug.com/378647854): Simplify the way we measure dialogs:
-      // - Replace the list of dialogs with a single timestamp
-      // - When we see the first dialog per animation frame, resolve all
-      //    events already in queue (similar to visibility change).
-      // - When we process a new event, if we've already seen a modal, use it
-      //    as a fallback time.
-      // - We also don't need to fallback to dialog time after Paint is
-      //    committed, since paint will show at that point.
-      while (!show_modal_dialog_timestamps_.empty() &&
-             show_modal_dialog_timestamps_.front() < timing->creation_time) {
-        show_modal_dialog_timestamps_.pop_front();
-      }
-      if (!show_modal_dialog_timestamps_.empty() &&
-          show_modal_dialog_timestamps_.front() < timing->presentation_time) {
-        entry->UpdateFallbackTime(show_modal_dialog_timestamps_.front(),
-                                  FallbackReason::kModalDialog);
+    if (!is_presentation_for_expected_source) {
+      if (base::FeatureList::IsEnabled(
+              features::
+                  kEventTimingIgnorePresentationTimeFromUnexpectedFrameSource)) {
+        CHECK(!timing->commit_finish_time.is_null());
+        entry->UpdateFallbackTime(timing->commit_finish_time,
+                                  FallbackReason::kUnexpectedFrameSource);
       }
     }
-  }
-  ReportEventTimings();
+
+    // If page visibility was changed, add a fallback_time to the entry's
+    // processingEnd. Because we already flush events in
+    // `ReportAllPendingEventTimingsOnPageHidden`, this should only happen if
+    // a new event is processed after visibility is changed.  Users cannot
+    // interact with a hidden page, but, there might have been events in
+    // queue when the page was hidden (and they couldn't be flushed because
+    // they weren't even dispatched yet).
+    // TODO(crbug.com/378647854): We might want to just check for this at
+    // event timing registration time.  If the page is currently hidden (or
+    // was made hidden after the event was created/enqueued), then just skip
+    // asking for presentation time.
+    if (last_hidden_timestamp_ > timing->creation_time &&
+        last_hidden_timestamp_ < timing->presentation_time) {
+      if (!timing->commit_finish_time.is_null() &&
+          last_hidden_timestamp_ > timing->commit_finish_time) {
+        entry->UpdateFallbackTime(timing->commit_finish_time,
+                                  FallbackReason::kVisibilityChange);
+      } else {
+        entry->UpdateFallbackTime(timing->processing_end_time,
+                                  FallbackReason::kVisibilityChange);
+      }
+    }
+
+    // A javascript synchronous modal dialog might show before the event
+    // frame got presented.  If so, we use a fallback time to the dialog
+    // showing time.
+    // TODO(crbug.com/378647854): Simplify the way we measure dialogs:
+    // - Replace the list of dialogs with a single timestamp
+    // - When we see the first dialog per animation frame, resolve all
+    //    events already in queue (similar to visibility change).
+    // - When we process a new event, if we've already seen a modal, use it
+    //    as a fallback time.
+    // - We also don't need to fallback to dialog time after Paint is
+    //    committed, since paint will show at that point.
+    while (!show_modal_dialog_timestamps_.empty() &&
+           show_modal_dialog_timestamps_.front() < timing->creation_time) {
+      show_modal_dialog_timestamps_.pop_front();
+    }
+    if (!show_modal_dialog_timestamps_.empty() &&
+        show_modal_dialog_timestamps_.front() < timing->presentation_time) {
+      entry->UpdateFallbackTime(show_modal_dialog_timestamps_.front(),
+                                FallbackReason::kModalDialog);
+    }
+  });
+
+  TryFlushEventTimingQueue();
 }
 
 void WindowPerformance::ReportEventTimingsWithoutNextPaint(
     base::TimeTicks fallback_time) {
-  for (const auto& event_timing_entry : event_timing_entries_) {
-    if (event_timing_entry->GetEventTimingReportingInfo()->presentation_index ==
-        event_presentation_promise_count_) {
-      event_timing_entry->UpdateFallbackTime(
-          fallback_time, FallbackReason::kDoesNotNeedNextPaint);
-    }
-  }
-  ReportEventTimings();
+  IterateEventTimingsByAnimationFrame(
+      current_frame_index_, [&](auto& event_timing_entry) {
+        event_timing_entry->UpdateFallbackTime(
+            fallback_time, FallbackReason::kDoesNotNeedNextPaint);
+      });
+
+  // When a group of events is "finished" without next paint, we create a new
+  // frame group by incrementing |current_frame_index_|.
+  current_frame_index_++;
+
+  // These events are done and potentially ready for reporting, so check.
+  TryFlushEventTimingQueue();
 }
 
 void WindowPerformance::FlushEventTimingsOnPageHidden() {
-  ReportAllPendingEventTimingsOnPageHidden();
+  // 1. Assign Interaction IDs to all pending interactions (e.g. pointerdown).
+  responsiveness_metrics_->FlushAllEvents();
 
-  // Remove any remaining events that are not flushed by the above step.
-  responsiveness_metrics_->FlushAllEventsAtPageHidden();
+  // 2. Resolve any events waiting for a paint with a fallback time and report.
+  ReportAllPendingEventTimingsOnPageHidden();
 }
 
 void ReportPerAnimationFrameHistograms(std::string_view histogram_name,
@@ -898,12 +961,6 @@ void ReportPerAnimationFrameHistograms(std::string_view histogram_name,
 // At visibility change, we report event timings of current pending events. The
 // registered presentation callback, when invoked, would be ignored.
 void WindowPerformance::ReportAllPendingEventTimingsOnPageHidden() {
-  // By the time visibility change happens, DomWindow object should still be
-  // alive. This is just to be safe.
-  if (!DomWindow() || !DomWindow()->document()) {
-    return;
-  }
-
   // For events which don't have an end_time yet, set a fallback time to the
   // processingEnd timestamp.
   // Note: some events won't have a processingEnd time yet.  This can happen
@@ -922,41 +979,47 @@ void WindowPerformance::ReportAllPendingEventTimingsOnPageHidden() {
                                              FallbackReason::kVisibilityChange);
     }
   }
-  ReportEventTimings();
+  TryFlushEventTimingQueue();
 }
 
-void WindowPerformance::ReportEventTimings() {
-  CHECK(DomWindow() && DomWindow()->document());
+void WindowPerformance::TryFlushEventTimingQueue() {
+  if (!DomWindow() || !DomWindow()->GetFrame()) {
+    event_timing_entries_.clear();
+    return;
+  }
+  CHECK(DomWindow()->document());
   InteractiveDetector* interactive_detector =
       InteractiveDetector::From(*(DomWindow()->document()));
 
+
   bool tracing_enabled = TRACE_EVENT_CATEGORY_ENABLED("latency");
-  const auto parent_track =
-      perfetto::NamedTrack::ThreadScoped("EventTimingsByAnimationFrame", this);
 
   while (!event_timing_entries_.empty()) {
-    // Find the range [first, last) of events with the same presentation_index
-    auto first = event_timing_entries_.begin();
-    uint64_t presentation_index =
-        first->Get()->GetEventTimingReportingInfo()->presentation_index;
-    auto last = std::find_if_not(
-        first, event_timing_entries_.end(), [presentation_index](auto entry) {
-          return presentation_index ==
-                 entry->GetEventTimingReportingInfo()->presentation_index;
+    auto all_entries = base::span(event_timing_entries_);
+    uint64_t frame_index =
+        all_entries[0]->GetEventTimingReportingInfo()->frame_index;
+    perfetto::NamedTrack parent_track("EventTimingsByAnimationFrame",
+                                      frame_index);
+
+    const auto end_of_frame_it =
+        std::ranges::find_if_not(all_entries, [frame_index](const auto& entry) {
+          return entry->GetEventTimingReportingInfo()->frame_index ==
+                 frame_index;
         });
+    auto frame_entries = all_entries.first(base::checked_cast<size_t>(
+        std::distance(all_entries.begin(), end_of_frame_it)));
 
     // Unless ALL events in this range are ready to be reported, break out.
-    // Today: only a known EndTime is needed.
-    // Soon: also enforce interactionID to know Known.
-    if (!std::all_of(first, last,
-                     [](auto entry) { return entry->IsReadyForReporting(); })) {
+    if (!std::ranges::all_of(frame_entries, [](const auto& entry) {
+          return entry->IsReadyForReporting();
+        })) {
       break;
     }
 
     auto* first_event_reporting_info =
-        first->Get()->GetEventTimingReportingInfo();
+        frame_entries.front()->GetEventTimingReportingInfo();
     auto* last_event_reporting_info =
-        std::prev(last)->Get()->GetEventTimingReportingInfo();
+        frame_entries.back()->GetEventTimingReportingInfo();
     const auto& first_event_creation_time =
         first_event_reporting_info->creation_time;
     const auto& first_event_enqueued_to_main_thread_time =
@@ -976,12 +1039,12 @@ void WindowPerformance::ReportEventTimings() {
                                      : last_event_reporting_info->fallback_time;
 
     if (tracing_enabled) {
-      auto flowid = perfetto::Flow::ProcessScoped(presentation_index);
+      auto flowid = perfetto::Flow::ProcessScoped(frame_index);
 
       TRACE_EVENT_BEGIN("latency", "EventsInAnimationFrame", parent_track,
                         first_event_processing_start, flowid);
 
-      TRACE_EVENT_INSTANT("latency", "EventCreation", parent_track,
+      TRACE_EVENT_INSTANT("latency", "FirstEventCreation", parent_track,
                           first_event_creation_time, flowid);
     }
 
@@ -989,9 +1052,25 @@ void WindowPerformance::ReportEventTimings() {
     bool had_interaction_in_animation_frame = false;
     bool had_key_interaction = false;
     bool had_click_tap_interaction = false;
-    std::for_each(first, last, [&](auto entry) {
-      ReportEvent(interactive_detector, entry);
-      if (entry->HasKnownInteractionID() && entry->interactionId() != 0u) {
+    // Map to keep track of the primary event for each unique creation time.
+    HeapHashMap<int64_t, Member<PerformanceEventTiming>,
+                IntWithZeroKeyHashTraits<int64_t>>
+        primary_entries;
+    for (const auto& entry : frame_entries) {
+      int64_t creation_time_us = entry->GetEventTimingReportingInfo()
+                                     ->creation_time.since_origin()
+                                     .InMicroseconds();
+      // insert() keeps the existing entry when the key is present, so the
+      // first entry for a given creation time stays the primary one.
+      auto add_result = primary_entries.insert(creation_time_us, entry);
+      PerformanceEventTiming* primary_entry =
+          add_result.stored_value->value.Get();
+
+      FlushEventTiming(interactive_detector, entry, primary_entry);
+
+      if (auto interaction_id = entry->GetInteractionIdInfo();
+          interaction_id &&
+          interaction_id->id != PerformanceTimelineEntryIdInfo::kNoId) {
         had_interaction_in_animation_frame = true;
         if (entry->GetEventTimingReportingInfo()->key_code.has_value()) {
           had_key_interaction = true;
@@ -1000,10 +1079,10 @@ void WindowPerformance::ReportEventTimings() {
           had_click_tap_interaction = true;
         }
       }
-    });
+    }
 
     if (tracing_enabled) {
-      auto flowid = perfetto::Flow::ProcessScoped(presentation_index);
+      auto flowid = perfetto::Flow::ProcessScoped(frame_index);
 
       TRACE_EVENT_END("latency", parent_track, frame_end_time);
 
@@ -1012,17 +1091,12 @@ void WindowPerformance::ReportEventTimings() {
                             last_event_presentation_time, flowid);
       }
 
-      if (auto first_entry_with_fallback =
-              std::find_if(first, last,
-                           [](auto entry) {
-                             return !entry->GetEventTimingReportingInfo()
-                                         ->fallback_time.is_null();
-                           });
-          first_entry_with_fallback != last) {
+      auto it = std::ranges::find_if(frame_entries, [](const auto& entry) {
+        return !entry->GetEventTimingReportingInfo()->fallback_time.is_null();
+      });
+      if (it != frame_entries.end()) {
         TRACE_EVENT_INSTANT("latency", "EventFallbackTime", parent_track,
-                            first_entry_with_fallback->Get()
-                                ->GetEventTimingReportingInfo()
-                                ->fallback_time,
+                            (*it)->GetEventTimingReportingInfo()->fallback_time,
                             flowid);
       }
     }
@@ -1060,7 +1134,7 @@ void WindowPerformance::ReportEventTimings() {
           histogram_suffix, total_processing_duration);
 
       base::TimeDelta total_accountable_processing_duration =
-          TotalNonOverlappingProcessingDuration(event_timing_entries_);
+          TotalNonOverlappingProcessingDuration(frame_entries);
       base::TimeDelta total_unaccountable_processing_duration =
           total_processing_duration - total_accountable_processing_duration;
       ReportPerAnimationFrameHistograms(
@@ -1106,24 +1180,32 @@ void WindowPerformance::ReportEventTimings() {
     }
 
     // Remove reported EventData objects.
-    event_timing_entries_.erase(first, last);
+    event_timing_entries_.EraseAt(
+        0, base::checked_cast<wtf_size_t>(frame_entries.size()));
   }
 }
 
-void WindowPerformance::ReportEvent(
+void WindowPerformance::FlushEventTiming(
     InteractiveDetector* interactive_detector,
-    Member<PerformanceEventTiming> event_timing_entry) {
-  auto* timings = event_timing_entry->GetEventTimingReportingInfo();
+    Member<PerformanceEventTiming> entry,
+    PerformanceEventTiming* primary_entry) {
+  CHECK(entry);
+
+  // Some events (like `navigate` or `popstate`) are gated on a feature flag.
+  // We always measure them, but don't always report them to metrics/tracing/
+  // perf timeline. `eventCounts()` has a map of supported event types.
+  if (!eventCounts()->IsSupportedEventType(entry->name())) {
+    return;
+  }
+
+  CHECK(entry->IsReadyForReporting());
+
+  auto* timings = entry->GetEventTimingReportingInfo();
   base::TimeTicks event_creation_time = timings->creation_time;
-  base::TimeTicks enqueued_to_main_thread_time =
-      timings->enqueued_to_main_thread_time;
   base::TimeTicks processing_start = timings->processing_start_time;
   base::TimeTicks processing_end = timings->processing_end_time;
   base::TimeDelta processing_duration = processing_end - processing_start;
-  base::TimeTicks event_end_time = event_timing_entry->GetEndTime();
-  base::TimeTicks commit_or_end_time = timings->commit_finish_time.is_null()
-                                           ? event_end_time
-                                           : timings->commit_finish_time;
+  base::TimeTicks event_end_time = entry->GetEndTime();
   base::TimeDelta time_to_next_paint = event_end_time - processing_end;
 
   // event_creation_time might be null in certain tests.
@@ -1139,72 +1221,43 @@ void WindowPerformance::ReportEvent(
       std::round((event_end_time - event_creation_time).InMillisecondsF() / 8) *
       8;
 
-  event_timing_entry->SetDuration(rounded_duration);
+  entry->SetDuration(rounded_duration);
 
-  if (event_timing_entry->name() == "pointerdown") {
+  if (entry->name() == "pointerdown") {
     pending_pointer_down_processing_time_ = processing_duration;
     pending_pointer_down_time_to_next_paint_ = time_to_next_paint;
-  } else if (event_timing_entry->name() == "pointerup") {
+  } else if (entry->name() == "pointerup") {
     if (pending_pointer_down_time_to_next_paint_.has_value() &&
         interactive_detector) {
       interactive_detector->RecordInputEventTimingUMA(
           pending_pointer_down_processing_time_.value(),
           pending_pointer_down_time_to_next_paint_.value());
     }
-  } else if ((event_timing_entry->name() == "click" ||
-              event_timing_entry->name() == "keydown" ||
-              event_timing_entry->name() == "mousedown") &&
+  } else if ((entry->name() == "click" || entry->name() == "keydown" ||
+              entry->name() == "mousedown") &&
              interactive_detector) {
     interactive_detector->RecordInputEventTimingUMA(processing_duration,
                                                     time_to_next_paint);
   }
 
-  // Event Timing
-  ResponsivenessMetrics::EventTimestamps event_timestamps = {
-      event_creation_time, enqueued_to_main_thread_time, commit_or_end_time,
-      event_end_time};
+  TryReportAsFirstInputTiming(entry);
 
-  if (SetInteractionIdAndRecordLatency(event_timing_entry, event_timestamps)) {
-    NotifyAndAddEventTimingBuffer(event_timing_entry);
-  }
-
-  ReportFirstInputTiming(event_timing_entry);
+  responsiveness_metrics_->ReportToMetrics(entry);
+  ReportEventTimingToPerformanceTimeline(entry, primary_entry);
 }
 
-void WindowPerformance::ReportFirstInputTiming(
-    PerformanceEventTiming* event_timing_entry) {
-  // First Input
-  //
-  // See also ./First_input_state_machine.md
-  // (https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/timing/First_input_state_machine.md)
-  // to understand the logics below.
-  if (!first_input_timing_) {
-    if (event_timing_entry->name() == event_type_names::kPointerdown) {
-      first_pointer_down_event_timing_ =
-          PerformanceEventTiming::CreateFirstInputTiming(event_timing_entry);
-    } else if (event_timing_entry->name() == event_type_names::kPointerup &&
-               first_pointer_down_event_timing_) {
-      if (event_timing_entry->HasKnownInteractionID()) {
-        first_pointer_down_event_timing_->SetInteractionIdAndOffset(
-            event_timing_entry->interactionId(),
-            event_timing_entry->interactionOffset());
-      }
-      DispatchFirstInputTiming(first_pointer_down_event_timing_);
-    } else if (event_timing_entry->name() == event_type_names::kPointercancel) {
-      first_pointer_down_event_timing_.Clear();
-    } else if ((event_timing_entry->name() == event_type_names::kMousedown ||
-                event_timing_entry->name() == event_type_names::kClick ||
-                event_timing_entry->name() == event_type_names::kKeydown) &&
-               !first_pointer_down_event_timing_) {
-      DispatchFirstInputTiming(
-          PerformanceEventTiming::CreateFirstInputTiming(event_timing_entry));
-    }
-  }
-}
+// TODO(crbug.com/328902994): Delay creating the PerformanceEventTiming entry
+// until this method is called, rather than creating it at processingstart, by
+// using some sort of EventTimingRecord similar to Paint Timing Detectors.
+void WindowPerformance::ReportEventTimingToPerformanceTimeline(
+    PerformanceEventTiming* entry,
+    PerformanceEventTiming* primary_entry) {
+  CHECK(DomWindow());
+  // We may not have a Frame any more, e.g. during unload or detachment.
+  // But if we can still report to performance timeline, still try to flush
+  // event timings for consumers to read.  Window can be re-attached to a frame.
+  CHECK(entry && entry->IsReadyForReporting());
 
-void WindowPerformance::NotifyAndAddEventTimingBuffer(
-    PerformanceEventTiming* entry) {
-  CHECK(entry->HasKnownInteractionID());
   if (HasObserverFor(PerformanceEntry::kEvent)) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kEventTimingExplicitlyRequested);
@@ -1220,24 +1273,28 @@ void WindowPerformance::NotifyAndAddEventTimingBuffer(
   bool latency_tracing_enabled = TRACE_EVENT_CATEGORY_ENABLED("latency");
   bool devtools_tracing_enabled =
       TRACE_EVENT_CATEGORY_ENABLED("devtools.timeline");
-  const auto parent_track =
-      perfetto::NamedTrack::ThreadScoped("EventTimingsByAnimationFrame", this);
 
   if (latency_tracing_enabled || devtools_tracing_enabled) {
     auto* entryInfo = entry->GetEventTimingReportingInfo();
-    auto flow_id = perfetto::Flow::FromPointer(entry);
+    perfetto::NamedTrack parent_track("EventTimingsByAnimationFrame",
+                                      entryInfo->frame_index);
+    auto flow_id = perfetto::Flow::FromPointer(primary_entry);
 
-    TRACE_EVENT_INSTANT("latency", "EventCreation", parent_track,
-                        entryInfo->creation_time, flow_id);
-    auto enqueued_to_main_thread_time = entryInfo->enqueued_to_main_thread_time;
-    if (!enqueued_to_main_thread_time.is_null()) {
-      TRACE_EVENT_INSTANT("latency", "EventEnqueuedToMainThread", parent_track,
-                          enqueued_to_main_thread_time, flow_id);
-    } else {
-      // TODO(crbug.com/422215352): Add a Histogram to report the event name
-      // when `enqueued_to_main_thread_time` is null.  All events should have
-      // this timestamp set-- but we're not observing some forms of event
-      // dispatch for which we support EventTiming.  This might be due to IME.
+    if (entry == primary_entry) {
+      TRACE_EVENT_INSTANT("latency", "EventCreation", parent_track,
+                          entryInfo->creation_time, flow_id);
+      auto enqueued_to_main_thread_time =
+          entryInfo->enqueued_to_main_thread_time;
+      if (!enqueued_to_main_thread_time.is_null()) {
+        TRACE_EVENT_INSTANT("latency", "EventEnqueuedToMainThread",
+                            parent_track, enqueued_to_main_thread_time,
+                            flow_id);
+      } else {
+        // TODO(crbug.com/422215352): Add a Histogram to report the event name
+        // when `enqueued_to_main_thread_time` is null.  All events should have
+        // this timestamp set-- but we're not observing some forms of event
+        // dispatch for which we support EventTiming.  This might be due to IME.
+      }
     }
 
     TRACE_EVENT_BEGIN(
@@ -1254,14 +1311,19 @@ void WindowPerformance::NotifyAndAddEventTimingBuffer(
         });
     TRACE_EVENT_END("latency", parent_track, entryInfo->processing_end_time);
 
-    TRACE_EVENT_INSTANT("latency", "EventEndTime", parent_track,
-                        entry->GetEndTime(), flow_id);
+    if (entry == primary_entry) {
+      TRACE_EVENT_INSTANT("latency", "EventEndTime", parent_track,
+                          entry->GetEndTime(), flow_id);
 
-    // Add EventTimingMeasurementComplete trace event to report when Event
-    // Timing was measured and reported to the Performance Timeline. This helps
-    // track the delay between frame presentation and timeline reporting.
-    TRACE_EVENT_INSTANT("latency", "EventTimingMeasurementComplete",
-                        parent_track, base::TimeTicks::Now(), flow_id);
+      // Add EventTimingMeasurementComplete trace event to report when Event
+      // Timing was measured and reported to the Performance Timeline. This
+      // helps track the delay between frame presentation and timeline
+      // reporting.
+      TRACE_EVENT_INSTANT(
+          "latency", "EventTimingMeasurementComplete", parent_track,
+          base::TimeTicks::Now(),
+          perfetto::TerminatingFlow::FromPointer(primary_entry));
+    }
 
     // TODO(sullivan): Remove these events when DevTools migrates to the above
     // perfetto events.
@@ -1276,8 +1338,30 @@ void WindowPerformance::NotifyAndAddEventTimingBuffer(
   }
 }
 
+void WindowPerformance::ApplyContextMenuFallbackToPendingEvents(
+    base::TimeTicks fallback_time) {
+  // A context menu interruption can prevent the subsequent "Next Paint" from
+  // occurring (or being reported), especially on platforms like Mac.
+  // We use this fallback as an alternative to the presentation time because:
+  // 1. The context menu itself is a form of visual feedback to the user.
+  // 2. Pending interactions should not have an artificially large end time
+  //    just because a modal context menu is shown.
+  // Note: Interaction ID assignment for the contextmenu event itself is
+  // handled separately in ResponsivenessMetrics. This logic is strictly
+  // about resolving the performance end time for preceding events.
+
+  IterateEventTimingsByAnimationFrame(
+      current_frame_index_, [&](auto& pending_entry) {
+        if (!pending_entry->HasKnownEndTime()) {
+          pending_entry->UpdateFallbackTime(
+              fallback_time,
+              FallbackReason::kInteractionInterruptedByContextMenu);
+        }
+      });
+}
+
 void WindowPerformance::SetHasContainerTimingChanges() {
-  DCHECK(RuntimeEnabledFeatures::ContainerTimingEnabled());
+  DCHECK(IsContainerTimingEnabled());
 
   has_container_timing_changes_ = true;
   NotifyObserversOfContainerTiming();
@@ -1288,7 +1372,7 @@ void WindowPerformance::PopulateContainerTimingEntries() {
     return;
   }
 
-  DCHECK(RuntimeEnabledFeatures::ContainerTimingEnabled());
+  DCHECK(IsContainerTimingEnabled());
 
   LocalDOMWindow* window = DomWindow();
   if (!window) {
@@ -1300,28 +1384,6 @@ void WindowPerformance::PopulateContainerTimingEntries() {
   container_timing.EmitPerformanceEntries();
 
   has_container_timing_changes_ = false;
-}
-
-bool WindowPerformance::SetInteractionIdAndRecordLatency(
-    PerformanceEventTiming* entry,
-    ResponsivenessMetrics::EventTimestamps event_timestamps) {
-  if (!IsEventTypeForInteractionId(entry->name())) {
-    // Set 0 interaction id for event timings that do not go into state
-    // machine.
-    entry->SetInteractionId(0);
-    return true;
-  }
-  // We set the interactionId and record the metric in the
-  // same logic, so we need to ignore the return value when InteractionId is
-  // disabled.
-  if (entry->GetEventTimingReportingInfo()->pointer_id.has_value()) {
-    return responsiveness_metrics_->SetPointerIdAndRecordLatency(
-        entry, event_timestamps);
-  }
-
-  responsiveness_metrics_->SetKeyIdAndRecordLatency(entry, event_timestamps);
-
-  return true;
 }
 
 void WindowPerformance::QueueLongAnimationFrameTiming(
@@ -1348,8 +1410,7 @@ void WindowPerformance::AddFirstContentfulPaintTiming(
 
 void WindowPerformance::AddLongAnimationFrameEntry(PerformanceEntry* entry) {
   if (!IsLongAnimationFrameBufferFull()) {
-    InsertEntryIntoSortedBuffer(long_animation_frame_buffer_, *entry,
-                                kRecordSwaps);
+    InsertEntryIntoSortedBuffer(long_animation_frame_buffer_, *entry);
   }
 
   NotifyObserversOfEntry(*entry);
@@ -1396,14 +1457,14 @@ void WindowPerformance::AddContainerTiming(
     const AtomicString& identifier,
     Element* last_painted_element,
     const DOMPaintTimingInfo& first_paint_timing_info) {
-  DCHECK(RuntimeEnabledFeatures::ContainerTimingEnabled());
+  DCHECK(IsContainerTimingEnabled());
   if (!DomWindow()) {
     return;
   }
 
   PerformanceContainerTiming* entry = PerformanceContainerTiming::Create(
-      AtomicString("container-paints"), paint_timing_info.presentation_time,
-      rect, size, root_element, identifier, last_painted_element,
+      g_empty_atom, paint_timing_info.presentation_time, rect, size,
+      root_element, identifier, last_painted_element,
       first_paint_timing_info.presentation_time, DomWindow(), NavigationId());
   TRACE_EVENT2("loading", "PerformanceContainerTiming", "data",
                entry->ToTracedValue(), "frame",
@@ -1417,22 +1478,97 @@ void WindowPerformance::AddContainerTiming(
   }
 }
 
-void WindowPerformance::DispatchFirstInputTiming(
-    PerformanceEventTiming* entry) {
-  if (!entry) {
+namespace {
+
+// Performance Scroll Timing API: map a compositor scroll input type to the
+// `scrollSource` string defined by the API. Only touchscreen and wheel scrolls
+// emit entries; other input types return a null AtomicString and the caller
+// must skip emission.
+AtomicString ScrollInputTypeToScrollSource(ui::ScrollInputType input_type) {
+  switch (input_type) {
+    case ui::ScrollInputType::kTouchscreen:
+      return AtomicString("touch");
+    case ui::ScrollInputType::kWheel:
+      return AtomicString("wheel");
+    case ui::ScrollInputType::kAutoscroll:
+    case ui::ScrollInputType::kScrollbar:
+      return g_null_atom;
+  }
+}
+
+}  // namespace
+
+void WindowPerformance::AddScrollTiming(base::TimeTicks start_time,
+                                        base::TimeTicks end_time,
+                                        ui::ScrollInputType input_type,
+                                        Node* target) {
+  CHECK(RuntimeEnabledFeatures::ScrollPerformanceTimingEnabled(
+      GetExecutionContext()));
+  if (!DomWindow()) {
     return;
   }
-  DCHECK_EQ("first-input", entry->entryType());
+
+  const AtomicString scroll_source = ScrollInputTypeToScrollSource(input_type);
+  if (scroll_source.IsNull()) {
+    return;
+  }
+
+  const DOMHighResTimeStamp start_dom_time =
+      MonotonicTimeToDOMHighResTimeStamp(start_time);
+  CHECK(!start_time.is_null());
+  CHECK(!end_time.is_null());
+  CHECK_GE(end_time, start_time);
+  // Subtract clamped timestamps so duration inherits the Performance Timeline
+  // time resolution.
+  const DOMHighResTimeStamp duration =
+      MonotonicTimeToDOMHighResTimeStamp(end_time) - start_dom_time;
+
+  // Apply the documented exposure filter at write time. PerformanceScrollTiming
+  // also defends in its `target()` getter, but filtering here keeps the stored
+  // entry consistent with the intended design.
+  Node* exposable_target =
+      Performance::CanExposeNode(target) ? target : nullptr;
+
+  PerformanceScrollTiming* entry =
+      MakeGarbageCollected<PerformanceScrollTiming>(
+          start_dom_time, duration, /*first_frame_time=*/0.0,
+          /*delta_x=*/0, /*delta_y=*/0, scroll_source,
+          /*frames_expected=*/0u, /*frames_produced=*/0u,
+          /*checkerboard_time=*/0.0, exposable_target, DomWindow(),
+          NavigationId());
+
+  if (HasObserverFor(PerformanceEntry::kScroll)) {
+    NotifyObserversOfEntry(*entry);
+  }
+  AddToScrollTimingBuffer(*entry);
+}
+
+void WindowPerformance::TryReportAsFirstInputTiming(
+    PerformanceEventTiming* event_timing_entry) {
+  CHECK(event_timing_entry);
+  CHECK(event_timing_entry->HasInteractionId());
+
+  // If we have already emitted, bail out.
+  if (first_input_timing_) {
+    return;
+  }
+  if (!event_timing_entry->IsInteraction()) {
+    return;
+  }
+
+  PerformanceEventTiming* new_first_input_entry =
+      PerformanceEventTiming::CreateFirstInputTiming(event_timing_entry);
+  CHECK_EQ("first-input", new_first_input_entry->entryType());
+
   if (HasObserverFor(PerformanceEntry::kFirstInput)) {
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kEventTimingExplicitlyRequested);
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kEventTimingFirstInputExplicitlyRequested);
-    NotifyObserversOfEntry(*entry);
+    NotifyObserversOfEntry(*new_first_input_entry);
   }
 
-  DCHECK(!first_input_timing_);
-  first_input_timing_ = entry;
+  first_input_timing_ = new_first_input_entry;
 }
 
 void WindowPerformance::AddLayoutShiftEntry(LayoutShift* entry) {
@@ -1458,18 +1594,16 @@ void WindowPerformance::AddVisibilityStateEntry(bool is_visible,
   }
 }
 
-void WindowPerformance::AddSoftNavigationEntry(
-    const AtomicString& name,
+PerformanceSoftNavigation* WindowPerformance::AddSoftNavigation(
     base::TimeTicks timestamp,
     const DOMPaintTimingInfo& paint_timing_info,
-    uint32_t navigation_id) {
-  if (!RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-          GetExecutionContext())) {
-    return;
-  }
-  SoftNavigationEntry* entry = MakeGarbageCollected<SoftNavigationEntry>(
-      name, MonotonicTimeToDOMHighResTimeStamp(timestamp), paint_timing_info,
-      DomWindow(), navigation_id);
+    SoftNavigationContext* context) {
+  CHECK(RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
+      GetExecutionContext()));
+  PerformanceSoftNavigation* entry =
+      MakeGarbageCollected<PerformanceSoftNavigation>(
+          MonotonicTimeToDOMHighResTimeStamp(timestamp), paint_timing_info,
+          context);
 
   if (HasObserverFor(PerformanceEntry::kSoftNavigation)) {
     UseCounter::Count(GetExecutionContext(),
@@ -1478,6 +1612,7 @@ void WindowPerformance::AddSoftNavigationEntry(
   }
 
   AddSoftNavigationToPerformanceTimeline(entry);
+  return entry;
 }
 
 void WindowPerformance::PageVisibilityChanged() {
@@ -1491,6 +1626,9 @@ void WindowPerformance::PageVisibilityChangedWithTimestamp(
   if (!GetPage()->IsPageVisible()) {
     last_hidden_timestamp_ = visibility_change_timestamp;
     FlushEventTimingsOnPageHidden();
+    // Also flush any buffered performance entries immediately when the page
+    // becomes hidden, to ensure they are not lost if the page is discarded.
+    FlushPerformanceEntries();
   }
   AddVisibilityStateEntry(GetPage()->IsPageVisible(),
                           visibility_change_timestamp);
@@ -1505,6 +1643,68 @@ EventCounts* WindowPerformance::eventCounts() {
     event_counts_ = MakeGarbageCollected<EventCounts>();
   }
   return event_counts_.Get();
+}
+
+SpeculationData* WindowPerformance::getSpeculations() {
+  LocalDOMWindow* window = DomWindow();
+  if (!window || !window->document()) {
+    return MakeGarbageCollected<SpeculationData>(
+        HeapVector<Member<PreloadData>>(), HeapVector<Member<PreconnectData>>(),
+        HeapVector<Member<SpeculationNavigationData>>(), KURL());
+  }
+
+  Document* document = window->document();
+
+  // Collect preloads.
+  HeapVector<Member<PreloadData>> preloads;
+  HeapVector<Member<PreconnectData>> preconnects;
+  if (document->Fetcher()) {
+    const auto& preload_records = document->Fetcher()->GetPreloadRecords();
+    for (const auto& [url, info] : preload_records) {
+      preloads.push_back(MakeGarbageCollected<PreloadData>(
+          url, info.as, info.crossorigin, info.early_hints, info.used_time));
+    }
+
+    // Collect preconnects.
+    const auto& preconnect_records =
+        document->Fetcher()->GetPreconnectRecords();
+    for (const auto& [key, info] : preconnect_records) {
+      preconnects.push_back(MakeGarbageCollected<PreconnectData>(
+          info.origin, info.crossorigin, info.early_hints));
+    }
+  }
+
+  // Collect navigational speculations (prefetches and prerenders).
+  HeapVector<Member<SpeculationNavigationData>> navigations;
+  if (DocumentSpeculationRules* spec_rules =
+          DocumentSpeculationRules::FromIfExists(*document)) {
+    // With renderer-side heuristics, the renderer knows exactly which
+    // candidates were activated (immediate ones plus those enacted by the
+    // pointerdown/hover/viewport heuristics), so report that enacted set
+    // instead of every proposed candidate. Otherwise (browser-driven
+    // heuristics) the renderer can't tell which were enacted, so fall back to
+    // the proposed set.
+    const auto& candidates =
+        base::FeatureList::IsEnabled(
+            features::kSpeculationRulesRendererSideHeuristics)
+            ? spec_rules->activated_candidates()
+            : spec_rules->sent_candidates();
+    for (const SpeculationCandidate* candidate : candidates) {
+      std::optional<Vector<String>> tags;
+      // When no tag is specified, the candidate has tags=[""]
+      // (a single null atom as default). Treat this as no tags.
+      const auto& candidate_tags = candidate->tags();
+      if (!(candidate_tags.size() == 1 && candidate_tags[0].empty())) {
+        tags = candidate_tags;
+      }
+      navigations.push_back(MakeGarbageCollected<SpeculationNavigationData>(
+          candidate->action(), candidate->url(), tags, candidate->eagerness()));
+    }
+  }
+
+  return MakeGarbageCollected<SpeculationData>(
+      std::move(preloads), std::move(preconnects), std::move(navigations),
+      navigation_destination_url_);
 }
 
 uint64_t WindowPerformance::interactionCount() const {
@@ -1554,24 +1754,9 @@ void WindowPerformance::OnLargestContentfulPaintUpdated(
 }
 
 void WindowPerformance::OnInteractionContentfulPaintUpdated(
-    const DOMPaintTimingInfo& paint_timing_info,
-    uint64_t paint_size,
-    base::TimeTicks load_time,
-    const AtomicString& id,
-    const String& url,
-    Element* element,
-    uint32_t navigation_id) {
-  if (!RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
-          GetExecutionContext())) {
-    return;
-  }
-  auto* entry = MakeGarbageCollected<InteractionContentfulPaint>(
-      /*start_time=*/paint_timing_info.presentation_time,
-      /*render_time=*/paint_timing_info.presentation_time, paint_size,
-      MonotonicTimeToDOMHighResTimeStamp(load_time), id, url, element,
-      DomWindow(), navigation_id);
-  entry->SetPaintTimingInfo(paint_timing_info);
-
+    InteractionContentfulPaint* entry) {
+  CHECK(RuntimeEnabledFeatures::SoftNavigationHeuristicsEnabled(
+      GetExecutionContext()));
   if (HasObserverFor(PerformanceEntry::kInteractionContentfulPaint)) {
     NotifyObserversOfEntry(*entry);
   }
@@ -1579,10 +1764,11 @@ void WindowPerformance::OnInteractionContentfulPaintUpdated(
 }
 
 void WindowPerformance::OnPaintFinished() {
-  // The event processed after a paint will have different presentation time
-  // than previous ones, so we need to register a new presentation promise for
-  // it.
-  need_new_promise_for_event_presentation_time_ = true;
+  // A paint just finished, so any subsequent events should be grouped into the
+  // next frame. Incrementing the frame index also signals that the previous
+  // frame group is now eligible for reporting (even if it didn't request a
+  // presentation time).
+  current_frame_index_++;
 }
 
 void WindowPerformance::OnBeginMainFrame(viz::BeginFrameId frame_id) {
@@ -1599,6 +1785,39 @@ void WindowPerformance::OnPageScroll() {
 
 bool WindowPerformance::IsAutoscrollActive() {
   return autoscroll_active_;
+}
+
+bool WindowPerformance::IsContainerTimingEnabled() {
+  if (!container_timing_enabled_.has_value()) {
+    auto* context = GetExecutionContext();
+    if (context) {
+      container_timing_enabled_ =
+          RuntimeEnabledFeatures::ContainerTimingEnabled(context);
+    } else {
+      return false;
+    }
+  }
+  return *container_timing_enabled_;
+}
+
+template <typename Callback>
+void WindowPerformance::IterateEventTimingsByAnimationFrame(
+    uint64_t frame_index,
+    Callback callback) {
+  for (auto& entry : event_timing_entries_) {
+    if (entry->GetEventTimingReportingInfo()->frame_index == frame_index) {
+      callback(entry);
+    }
+  }
+}
+
+// static
+void WindowPerformance::ClearForWindowReuse(LocalDOMWindow& window) {
+  // While `WindowPerformance` is per-`LocalDOMWindow`, metrics data is
+  // typically per-`Document`. Some data (e.g. first input timestamp) can be
+  // captured and cached on the initially empty document, so we need to clear it
+  // if clearing that document so it doesn't leak to the new document.
+  GlobalPerformance::performance(window)->timing_for_reporting_ = nullptr;
 }
 
 }  // namespace blink

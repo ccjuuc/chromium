@@ -70,7 +70,7 @@ class VIZ_SERVICE_EXPORT OutputSurface {
   enum class DCSupportLevel {
     // Direct composition is not supported.
     kNone,
-    // Support for presenting `IDXGISwapChain` and `IDCompositionSurface`.
+    // Support for presenting `IDXGISwapChain3` and `IDCompositionSurface`.
     kDCLayers,
     // Support for presenting `IDCompositionTexture`.
     kDCompTexture,
@@ -241,7 +241,7 @@ class VIZ_SERVICE_EXPORT OutputSurface {
   virtual void SetUpdateVSyncParametersCallback(
       UpdateVSyncParametersCallback callback) = 0;
 
-  virtual void SetVSyncDisplayID(int64_t display_id) {}
+  virtual void SetVSyncDisplayID(int64_t display_id, bool force_update) {}
 
   // When the device is rotated, the scene prepared by the UI is in the logical
   // screen space as seen by the user. However, attempting to scanout a buffer

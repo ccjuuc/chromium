@@ -23,8 +23,7 @@ chromium-metrics-reviews@google.com.
 <histograms>
 
 <histogram name="Chrome.AppMenu.MenuHostInitToNextFramePresented" units="ms"
-    expires_after="2026-05-03">
-  <owner>temao@chromium.org</owner>
+    expires_after="2026-09-06">
   <owner>robliao@chromium.org</owner>
   <summary>
     Records time from when Widget::Show() is called to when the first frame is
@@ -33,7 +32,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.BuildState.BuildStateUpdateType"
-    enum="BuildStateUpdateType" expires_after="2026-06-06">
+    enum="BuildStateUpdateType" expires_after="2027-02-02">
   <owner>ajgo@chromium.org</owner>
   <owner>anunoy@chromium.org</owner>
   <summary>
@@ -42,8 +41,42 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Chrome.BuildState.PageBlockingUpdate"
+    enum="PageBlockingUpdate" expires_after="2027-02-02">
+  <owner>ajgo@chromium.org</owner>
+  <owner>ellyjones@chromium.org</owner>
+  <summary>
+    Emitted during every upload of UMA records for the current session when a
+    single tab and a single window are blocking an update from applying. The
+    chrome:// scheme value is not logged if a more specific value could be
+    logged. Only recorded on Windows, Linux and Mac.
+  </summary>
+</histogram>
+
+<histogram name="Chrome.BuildState.PendingUpdateState"
+    enum="PendingUpdateState" expires_after="2027-02-02">
+  <owner>ajgo@chromium.org</owner>
+  <owner>ellyjones@chromium.org</owner>
+  <summary>
+    Records if an update is available, and the state of the client that is
+    currently blocking an update from applying. Recorded on every upload of UMA
+    data for the current session. Only recorded on Windows, Linux and Mac.
+  </summary>
+</histogram>
+
+<histogram name="Chrome.BuildState.TimeSinceUpdateAvailable" units="minutes"
+    expires_after="2027-02-02">
+  <owner>ajgo@chromium.org</owner>
+  <owner>ellyjones@chromium.org</owner>
+  <summary>
+    The time since an update has been available. Recorded on every upload of UMA
+    data for the current session when an update is available. Only recorded on
+    Windows, Linux and Mac.
+  </summary>
+</histogram>
+
 <histogram name="Chrome.DWriteFontProxy.GetFontFailedHResult" enum="Hresult"
-    expires_after="2026-08-31">
+    expires_after="2026-11-01">
   <owner>andresrperez@chromium.org</owner>
   <owner>anthonyvd@chromium.org</owner>
   <owner>drott@chromium.org</owner>
@@ -67,7 +100,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.DWriteFontProxy.InvokedIPC" enum="DWriteFontProxyIPC"
-    expires_after="2026-08-31">
+    expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -80,7 +113,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.DWriteFontProxy.WinLastError" enum="WinGetLastError"
-    expires_after="2026-08-31">
+    expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -90,8 +123,44 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Chrome.FetchKeepAlive.ProcessAlive.HeldPastLastWindowClose"
+    enum="Boolean" expires_after="2027-06-30">
+  <owner>helmutjanuschka@chromium.org</owner>
+  <owner>mych@chromium.org</owner>
+  <summary>
+    Recorded each time Chrome releases the FETCH_KEEPALIVE_REQUEST
+    ScopedKeepAlive. True if no browser windows were open at that moment, i.e.
+    this keep-alive was the only reason the process was still alive. Desktop
+    only; only when kKeepAliveBrowserProcessAlive is enabled. See
+    https://crbug.com/408010432.
+  </summary>
+</histogram>
+
+<histogram name="Chrome.FetchKeepAlive.ProcessAlive.HoldDuration" units="ms"
+    expires_after="2027-06-30">
+  <owner>helmutjanuschka@chromium.org</owner>
+  <owner>mych@chromium.org</owner>
+  <summary>
+    Wall-clock duration the FETCH_KEEPALIVE_REQUEST ScopedKeepAlive was held
+    (in-flight fetch keepalive URLLoader count 0 -&gt; &gt;0 -&gt; 0). Desktop
+    only; only when kKeepAliveBrowserProcessAlive is enabled. See
+    https://crbug.com/408010432.
+  </summary>
+</histogram>
+
+<histogram name="Chrome.FetchKeepAlive.ProcessAlive.MaxConcurrentLoaders"
+    units="loaders" expires_after="2027-06-30">
+  <owner>helmutjanuschka@chromium.org</owner>
+  <owner>mych@chromium.org</owner>
+  <summary>
+    Peak number of fetch keepalive URLLoaders in flight during a single hold of
+    the FETCH_KEEPALIVE_REQUEST ScopedKeepAlive. Desktop only; only when
+    kKeepAliveBrowserProcessAlive is enabled. See https://crbug.com/408010432.
+  </summary>
+</histogram>
+
 <histogram name="Chrome.FontDataManager.NumMappedFiles" units="files"
-    expires_after="2026-08-31">
+    expires_after="2027-01-10">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -104,7 +173,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.FontDataService.CreateResult"
-    enum="FontDataServiceCreateResult" expires_after="2026-08-31">
+    enum="FontDataServiceCreateResult" expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -117,7 +186,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.FontDataService.EmptyPathOnGetFileHandle"
-    enum="Boolean" expires_after="2026-08-31">
+    enum="Boolean" expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -128,7 +197,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.FontDataService.FileHandlePathReferencesParent"
-    enum="Boolean" expires_after="2026-08-31">
+    enum="Boolean" expires_after="2026-11-01">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -142,7 +211,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.FontDataService.InvokedIPC" enum="FontDataServiceIPC"
-    expires_after="2026-08-31">
+    expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -154,8 +223,20 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Chrome.FontDataService.MatchLocalFont.FilterSuccess"
+    enum="Boolean" expires_after="2026-12-31">
+  <owner>andresrperez@chromium.org</owner>
+  <owner>drott@chromium.org</owner>
+  <owner>dileepmaurya@microsoft.com</owner>
+  <summary>
+    Records whether the local font matching found a matching font during a
+    MatchLocalFont call. True means a font was found by PostScript name or full
+    font name, false means no match was found in the system font set.
+  </summary>
+</histogram>
+
 <histogram name="Chrome.FontDataService.MemoryMapCacheSize" units="count"
-    expires_after="2026-08-31">
+    expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -166,7 +247,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.FontDataService.WinLastError" enum="WinGetLastError"
-    expires_after="2026-08-31">
+    expires_after="2027-01-03">
   <owner>andresrperez@chromium.org</owner>
   <owner>drott@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
@@ -177,7 +258,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.Headless.Action" enum="HeadlessChromeAction"
-    expires_after="M150">
+    expires_after="2027-12-31">
   <owner>kvitekp@google.com</owner>
   <owner>headless-owners@chromium.org</owner>
   <component>1456776</component>
@@ -191,91 +272,41 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Chrome.KAnonymityService.JoinSet.Action"
-    enum="KAnonymityServiceJoinSetAction" expires_after="2026-05-24">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
+<histogram name="Chrome.ProcessSingleton.CreateLockFileWithTimeout.ErrorCode"
+    enum="WinGetLastError" expires_after="2027-06-01">
+  <owner>etienneb@chromium.org</owner>
+  <owner>grt@chromium.org</owner>
   <summary>
-    Track execution of KAnonymity Service JoinSet requests for both normal
-    operation and errors. The kJoinSet enumeration is emitted when the service
-    is called and either kJoinSetSuccess or one of the error enumerations is
-    emitted at the end of the request.
+    Records the Windows last error code (GetLastError) when lock file creation
+    fails for a reason other than a sharing violation. Recorded once per fatal
+    failure on Windows.
   </summary>
 </histogram>
 
-<histogram name="Chrome.KAnonymityService.JoinSet.Latency" units="ms"
-    expires_after="2023-08-27">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
+<histogram name="Chrome.ProcessSingleton.CreateLockFileWithTimeout.Result"
+    enum="BooleanSuccess" expires_after="2027-06-01">
+  <owner>etienneb@chromium.org</owner>
+  <owner>grt@chromium.org</owner>
   <summary>
-    Records the length of time the K-Anonymity service spends processing a
-    JoinSet request. This includes time taking waiting in the JoinSet queue,
-    getting a trust token (if necessary), performing the request, and waiting
-    for the response. This metric is only measured for successful requests.
+    Records whether creating the lock file eventually succeeded. Recorded once
+    per attempt to create the lock file with a timeout on Windows.
   </summary>
 </histogram>
 
-<histogram name="Chrome.KAnonymityService.QuerySet.Action"
-    enum="KAnonymityServiceQuerySetAction" expires_after="2026-05-24">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
+<histogram name="Chrome.ProcessSingleton.CreateLockFileWithTimeout.RetryCount"
+    units="retries" expires_after="2027-06-01">
+  <owner>etienneb@chromium.org</owner>
+  <owner>grt@chromium.org</owner>
   <summary>
-    Track execution of KAnonymity Service QuerySet requests for both normal
-    operation and errors. The kQuerySet enumeration is emitted when the service
-    is called and either kQuerySetsSuccess or one of the error enumerations is
-    emitted at the end of the request.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.KAnonymityService.QuerySet.Latency" units="ms"
-    expires_after="2026-03-01">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
-  <summary>
-    Records the length of time the K-Anonymity service spends processing a
-    QuerySet request. This includes time taking waiting in the QuerySet queue,
-    formatting the request, performing the request, waiting for the response,
-    and parsing the response. This metric is only measured for successful
-    requests.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.KAnonymityService.QuerySet.Size" units="count"
-    expires_after="2026-05-24">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
-  <summary>
-    Records the number of elements queried per call for each call to QuerySet.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.KAnonymityService.TrustTokenGetter.Action"
-    enum="KAnonymityTrustTokenGetterAction" expires_after="2026-05-03">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
-  <summary>
-    Track execution of KAnonymityTrustTokenGetter requests for both normal
-    operation and errors. The kTryGetTrustTokenAndKey enumeration is emitted
-    when the service is called and either kGetTrustTokenSuccess or one of the
-    error enumerations is emitted at the end of the request. Note: This metric
-    expired after M117 and before M121.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.KAnonymityService.TrustTokenGetter.Latency" units="ms"
-    expires_after="2025-09-28">
-  <owner>behamilton@google.com</owner>
-  <owner>pauljensen@chromium.org</owner>
-  <summary>
-    Records how the length of time the K-Anonymity service spends fetching trust
-    tokens. This includes time taken waiting in the TrustTokenGetter queue,
-    getting the OAuth token, getting the key commitment, and requesting the
-    trust token. This metric is only measured for successful requests.
+    Records the number of retries it took to successfully acquire the lock file.
+    Recorded once per successful lock file creation on Windows. A value of 0
+    indicates that the lock file was successfully acquired on the first attempt
+    with no retries.
   </summary>
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.NotifyResult" enum="NotifyResult"
-    expires_after="2026-05-03">
+    expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>
@@ -284,14 +315,14 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.RemoteHungProcessTerminateReason"
-    enum="RemoteHungProcessTerminateReason" expires_after="2025-02-10">
+    enum="RemoteHungProcessTerminateReason" expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>The reason of remote hang processes termination.</summary>
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.RemoteProcessInteractionResult"
-    enum="RemoteProcessInteractionResult" expires_after="2024-10-06">
+    enum="RemoteProcessInteractionResult" expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>
@@ -301,7 +332,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.TerminateProcessErrorCode.Posix"
-    enum="PopularOSErrno" expires_after="2024-06-04">
+    enum="PopularOSErrno" expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>
@@ -310,18 +341,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Chrome.ProcessSingleton.TerminateProcessErrorCode.Windows"
-    enum="WinGetLastError" expires_after="2024-10-06">
-  <owner>gab@chromium.org</owner>
-  <owner>etienneb@chromium.org</owner>
-  <summary>
-    The error code of remote process termination on Windows in case when remote
-    process hung.
-  </summary>
-</histogram>
-
 <histogram name="Chrome.ProcessSingleton.TerminateProcessTime" units="ms"
-    expires_after="2026-06-28">
+    expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>
@@ -331,16 +352,16 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.TerminationWaitErrorCode.Windows"
-    enum="WinGetLastError" expires_after="2024-06-04">
+    enum="WinGetLastError" expires_after="2027-06-29">
   <owner>gab@chromium.org</owner>
   <owner>etienneb@chromium.org</owner>
   <summary>
-    The error code of wating for remote process termination on Windows.
+    The error code of waiting for remote process termination on Windows.
   </summary>
 </histogram>
 
 <histogram name="Chrome.ProcessSingleton.TimeToCreate" units="ms"
-    expires_after="2024-06-04">
+    expires_after="2027-06-29">
   <owner>etienneb@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <summary>
@@ -349,19 +370,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Chrome.ProcessSingleton.TimeToFailure" units="ms"
-    expires_after="2024-06-04">
-  <owner>etienneb@chromium.org</owner>
-  <owner>gab@chromium.org</owner>
-  <summary>
-    Time it takes to return an error from the process singleton algorithm (nor
-    succeeding in obtaining it, nor in generating a rendez-vous). This does not
-    include time spent in the fast notification path (chrome_exe_main_win.cc).
-  </summary>
-</histogram>
-
 <histogram name="Chrome.ProcessSingleton.TimeToNotify" units="ms"
-    expires_after="2025-04-13">
+    expires_after="2027-06-29">
   <owner>etienneb@chromium.org</owner>
   <owner>gab@chromium.org</owner>
   <summary>
@@ -373,7 +383,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Chrome.SystemNetworkContextManager.NetworkSandboxEarlyLaunchCrashed"
-    enum="Boolean" expires_after="2026-05-03">
+    enum="Boolean" expires_after="2026-07-05">
   <owner>wfh@chromium.org</owner>
   <owner>mmenke@chromium.org</owner>
   <summary>
@@ -384,7 +394,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="Chrome.SystemNetworkContextManager.NetworkSandboxLaunchFailed.ErrorCode"
-    enum="LaunchErrorCodes" expires_after="2026-05-03">
+    enum="LaunchErrorCodes" expires_after="2026-07-05">
   <owner>wfh@chromium.org</owner>
   <owner>mmenke@chromium.org</owner>
   <summary>
@@ -409,7 +419,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Chrome.SystemNetworkContextManager.NetworkSandboxState"
-    enum="NetworkSandboxState" expires_after="2026-05-03">
+    enum="NetworkSandboxState" expires_after="2027-01-17">
   <owner>wfh@chromium.org</owner>
   <owner>mmenke@chromium.org</owner>
   <summary>
@@ -421,27 +431,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Chrome.Tabs.AnimationSmoothness.HoverCard.FadeIn" units="%"
-    expires_after="2026-04-14">
-  <owner>yichenz@chromium.org</owner>
-  <owner>chromeos-wmp@google.com</owner>
-  <summary>
-    Tracks the animation smoothness for the fade-in animation of tab hover card.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.Tabs.AnimationSmoothness.HoverCard.FadeOut" units="%"
-    expires_after="2026-04-14">
-  <owner>yichenz@chromium.org</owner>
-  <owner>chromeos-wmp@google.com</owner>
-  <summary>
-    Tracks the animation smoothness for the fade-out animation of tab hover
-    card.
-  </summary>
-</histogram>
-
 <histogram name="Chrome.Tabs.AnimationSmoothness.TabLoading" units="%"
-    expires_after="2026-01-11">
+    expires_after="2027-01-09">
   <owner>yichenz@chromium.org</owner>
   <owner>chromeos-wmp@google.com</owner>
   <summary>
@@ -451,37 +442,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Chrome.WrenchMenu.MenuButtonPressedToMenuShown" units="ms"
-    expires_after="2024-11-06">
-  <owner>temao@chromium.org</owner>
-  <owner>robliao@chromium.org</owner>
-  <summary>
-    Records the latency from when the app menu button is pressed to when the
-    menu is shown. It's logged every time the button is pressed.
-
-    This metric will be removed after M121 and is replaced by
-    Chrome.AppMenu.MenuHostInitToNextFramePresented. We do not want to use menu
-    button's compositor to track the app menu creation time.
-  </summary>
-</histogram>
-
-<histogram name="Chrome.WrenchMenu.MenuHostInitToNextFramePresented" units="ms"
-    expires_after="2024-11-06">
-  <owner>temao@chromium.org</owner>
-  <owner>robliao@chromium.org</owner>
-  <summary>
-    Records time from when the menu host initialization is started to when the
-    next frame is successfully presented. It's logged every time the app menu
-    opens.
-
-    This metric will be removed after M121 and is replaced by
-    Chrome.AppMenu.MenuHostInitToNextFramePresented. We do not want to use menu
-    button's compositor to track the app menu creation time.
-  </summary>
-</histogram>
-
 <histogram name="ChromeColors.ColorOnLoad" enum="ChromeColorsInfo"
-    expires_after="2026-05-24">
+    expires_after="2026-11-29">
   <owner>tiborg@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
   <summary>
@@ -494,8 +456,19 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="ChromeColors.ColorSchemeOnLoad" enum="BrowserColorScheme"
+    expires_after="2027-06-01">
+  <owner>dpenning@chromium.org</owner>
+  <owner>top-chrome-desktop-ui@google.com</owner>
+  <summary>
+    Recorded every time the theme service is initialized from prefs (happens
+    once per profile load). Records the browser color scheme mode (Light, Dark,
+    System).
+  </summary>
+</histogram>
+
 <histogram name="ChromeColors.ColorType" enum="ChromeColorType"
-    expires_after="2026-06-28">
+    expires_after="2027-01-03">
   <owner>tiborg@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
   <summary>
@@ -510,7 +483,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="ChromeColors.DynamicColorOnLoad"
-    enum="DynamicChromeColorsInfo" expires_after="2026-06-21">
+    enum="DynamicChromeColorsInfo" expires_after="2026-12-27">
   <owner>tiborg@chromium.org</owner>
   <owner>chrome-desktop-ntp@google.com</owner>
   <summary>

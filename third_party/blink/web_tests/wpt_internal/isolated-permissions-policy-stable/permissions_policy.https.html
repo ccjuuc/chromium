@@ -14,7 +14,6 @@
 const non_isolated_policies = [
   'accelerometer',
   'aria-notify',
-  'attribution-reporting',
   'autoplay',
   'browsing-topics',
   'camera',
@@ -63,8 +62,11 @@ const non_isolated_policies = [
   'join-ad-interest-group',
   'keyboard-map',
   'language-detector',
+  'language-model',
   'local-fonts',
+  'local-network',
   'local-network-access',
+  'loopback-network',
   'magnetometer',
   'microphone',
   'midi',
@@ -80,8 +82,6 @@ const non_isolated_policies = [
   'run-ad-auction',
   'screen-wake-lock',
   'serial',
-  'shared-storage',
-  'shared-storage-select-url',
   'storage-access',
   'summarizer',
   'sync-xhr',
@@ -95,9 +95,9 @@ const non_isolated_policies = [
 const isolated_policies = [
   'controlled-frame',
   'direct-sockets',
-  'direct-sockets-private',
   'direct-sockets-multicast',
   'usb-unrestricted',
+  'sub-apps',
 ]
 
 promise_test(async t => {

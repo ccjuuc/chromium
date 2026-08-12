@@ -23,14 +23,12 @@ include_rules = [
   "+chrome/browser/download",
   "+chrome/browser/net",
   "+chrome/browser/notifications",
-  "+chrome/browser/policy",
   "+chrome/browser/profiles",
   "+chrome/browser/signin",
   "+chrome/browser/ui/browser.h",
   "+chrome/common/chrome_constants.h",
   "+chrome/common/chrome_paths.h",
   "+chrome/common/chrome_paths_internal.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
 

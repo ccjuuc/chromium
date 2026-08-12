@@ -35,6 +35,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "third_party/blink/public/mojom/timing/declarative_performance_observer.mojom-blink.h"
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_reporting.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -43,24 +44,20 @@
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
-#include "third_party/blink/renderer/core/timing/navigation_id_generator.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/performance_paint_timing.h"
+#include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_linked_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/linked_hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "v8-local-handle.h"
-
-namespace base {
-class Clock;
-class TickClock;
-}  // namespace base
 
 namespace blink {
 
@@ -77,16 +74,18 @@ class Node;
 class PerformanceContainerTiming;
 class PerformanceElementTiming;
 class PerformanceEventTiming;
+class PerformanceScrollTiming;
 class PerformanceMark;
 class PerformanceMarkOptions;
 class PerformanceMeasure;
 class PerformanceNavigation;
 class PerformanceNavigationTiming;
 class PerformanceObserver;
+class PerformanceSoftNavigation;
 class PerformanceTiming;
 class ScriptState;
 class ScriptValue;
-class SoftNavigationEntry;
+class SpeculationData;
 class UserTiming;
 class V8ObjectBuilder;
 class V8UnionDoubleOrString;
@@ -108,6 +107,10 @@ class CORE_EXPORT Performance : public EventTarget {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
+  // Delay used to throttle and batch IPC messages for observed performance
+  // entries, matching page load metrics buffer timer delay.
+  static constexpr base::TimeDelta kBufferTimerDelay = base::Milliseconds(100);
+
   ~Performance() override;
 
   const AtomicString& InterfaceName() const override;
@@ -120,6 +123,7 @@ class CORE_EXPORT Performance : public EventTarget {
       ScriptState*,
       ExceptionState& exception_state) const;
   virtual EventCounts* eventCounts();
+  virtual SpeculationData* getSpeculations();
   virtual std::uint64_t interactionCount() const = 0;
   virtual void PopulateContainerTimingEntries() {}
 
@@ -193,8 +197,8 @@ class CORE_EXPORT Performance : public EventTarget {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(resourcetimingbufferfull,
                                   kResourcetimingbufferfull)
 
-  virtual uint32_t NavigationId() const {
-    return blink::kNavigationIdAbsentValue;
+  virtual uint64_t NavigationId() const {
+    return PerformanceTimelineEntryIdInfo::kNoId;
   }
 
   void AddLongTaskTiming(base::TimeTicks start_time,
@@ -218,6 +222,9 @@ class CORE_EXPORT Performance : public EventTarget {
   bool IsElementTimingBufferFull() const;
   void AddToElementTimingBuffer(PerformanceElementTiming&);
 
+  bool IsScrollTimingBufferFull() const;
+  void AddToScrollTimingBuffer(PerformanceScrollTiming&);
+
   bool IsEventTimingBufferFull() const;
   void AddToEventTimingBuffer(PerformanceEventTiming&);
 
@@ -228,7 +235,7 @@ class CORE_EXPORT Performance : public EventTarget {
   void AddLargestContentfulPaint(LargestContentfulPaint*);
   void AddInteractionContentfulPaint(InteractionContentfulPaint*);
 
-  void AddSoftNavigationToPerformanceTimeline(SoftNavigationEntry*);
+  void AddSoftNavigationToPerformanceTimeline(PerformanceSoftNavigation*);
 
   PerformanceMark* mark(ScriptState*,
                         const AtomicString& mark_name,
@@ -237,6 +244,8 @@ class CORE_EXPORT Performance : public EventTarget {
 
   void clearMarks(const AtomicString& mark_name);
   void clearMarks() { return clearMarks(AtomicString()); }
+
+  virtual void markConditional(ScriptState*, const AtomicString& mark_name);
 
   void AddBackForwardCacheRestoration(base::TimeTicks start_time,
                                       base::TimeTicks pageshow_start_time,
@@ -312,19 +321,12 @@ class CORE_EXPORT Performance : public EventTarget {
 
   ScriptObject toJSONForBinding(ScriptState*) const;
 
-  enum Metrics { kRecordSwaps = 0, kDoNotRecordSwaps = 1 };
-
-  // Insert a PerformanceEntry into a Vector sorted by StartTime. By Default,
-  // record the number of 'swaps' per function call in a histogram.
+  // Insert a PerformanceEntry into a Vector sorted by StartTime.
   void InsertEntryIntoSortedBuffer(PerformanceEntryVector& vector,
-                                   PerformanceEntry& entry,
-                                   Metrics record);
+                                   PerformanceEntry& entry);
 
   void Trace(Visitor*) const override;
 
-  // The caller owns the |clock|.
-  void SetClocksForTesting(const base::Clock* clock,
-                           const base::TickClock* tick_clock);
   void ResetTimeOriginForTesting(base::TimeTicks time_origin);
 
   void SetCrossOriginIsolatedCapabilityForTesting(bool is_isolated) {
@@ -336,6 +338,11 @@ class CORE_EXPORT Performance : public EventTarget {
   }
 
   base::SingleThreadTaskRunner& GetTaskRunner() { return *task_runner_; }
+
+  // Flushes all buffered performance entries and sends them to the browser
+  // process via Mojo IPC. This is called automatically by the timer, or
+  // manually during window destruction and visibility changes.
+  void FlushPerformanceEntries();
 
  private:
   PerformanceMeasure* MeasureInternal(
@@ -416,6 +423,8 @@ class CORE_EXPORT Performance : public EventTarget {
   unsigned container_timing_buffer_max_size_;
   PerformanceEntryVector element_timing_buffer_;
   unsigned element_timing_buffer_max_size_;
+  PerformanceEntryVector scroll_timing_buffer_;
+  unsigned scroll_timing_buffer_max_size_;
   PerformanceEntryVector layout_shift_buffer_;
   PerformanceEntryVector largest_contentful_paint_buffer_;
   PerformanceEntryVector interaction_contentful_paint_buffer_;
@@ -431,7 +440,6 @@ class CORE_EXPORT Performance : public EventTarget {
 
   base::TimeTicks time_origin_;
   base::TimeDelta unix_at_zero_monotonic_;
-  const base::TickClock* tick_clock_;
   bool cross_origin_isolated_capability_;
 
   PerformanceEntryTypeMask observer_filter_options_;
@@ -446,11 +454,34 @@ class CORE_EXPORT Performance : public EventTarget {
   // type. Entries are dropped when the buffer from that entry type is full.
   HashMap<PerformanceEntry::EntryType, int> dropped_entries_count_map_;
 
+  // Buffers a performance entry to be sent to the browser. If the flush timer
+  // is not active, it will be started with a 100ms delay.
+  void BufferPerformanceEntry(
+      mojom::blink::DeclarativePerformanceEntryPtr entry);
+
+  // Called when the flush timer fires. Triggers a call to
+  // FlushPerformanceEntries().
+  void PerformanceEntriesFlushTimerFired(TimerBase*);
+
   // See crbug.com/1181774.
   Member<BackgroundTracingHelper> background_tracing_helper_;
 
   // Running counter for LongTask observations.
   size_t long_task_counter_ = 0;
+
+  // Buffered performance entries that are waiting to be flushed to the browser.
+  Vector<mojom::blink::DeclarativePerformanceEntryPtr>
+      batched_performance_entries_;
+
+  // Timer used to throttle and batch IPC messages for observed performance
+  // entries.
+  HeapTaskRunnerTimer<Performance> performance_entries_flush_timer_;
+
+  HeapMojoRemote<mojom::blink::DeclarativePerformanceObserverHost>
+      declarative_performance_observer_host_;
+
+  void OnDeclarativePerformanceObserverHostDisconnected();
+  bool is_declarative_performance_observer_disabled_for_document_ = false;
 
   // Telling a document to pause/resume the parser for more optimized task
   // scheduling to priroitize key loading milestones. To explore this idea, the

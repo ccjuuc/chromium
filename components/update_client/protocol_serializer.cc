@@ -10,12 +10,14 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "base/uuid.h"
 #include "base/values.h"
@@ -26,6 +28,7 @@
 #include "components/update_client/protocol_definition.h"
 #include "components/update_client/update_query_params.h"
 #include "components/update_client/utils.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
@@ -41,14 +44,15 @@ namespace {
 
 // Returns the amount of physical memory in GB, rounded to the nearest GB.
 int GetPhysicalMemoryGB() {
-  return base::ClampRound(base::SysInfo::AmountOfPhysicalMemory().InGiBF());
+  return base::ClampRound(
+      base::SysInfo::AmountOfTotalPhysicalMemory().InGiBF());
 }
 
 std::string GetOSVersion() {
 #if BUILDFLAG(IS_WIN)
   const auto ver = base::win::OSInfo::GetInstance()->version_number();
-  return base::StringPrintf("%u.%u.%u.%u", ver.major, ver.minor, ver.build,
-                            ver.patch);
+  return absl::StrFormat("%u.%u.%u.%u", ver.major, ver.minor, ver.build,
+                         ver.patch);
 #else
   return base::SysInfo().OperatingSystemVersion();
 #endif
@@ -87,7 +91,7 @@ base::flat_map<std::string, std::string> BuildUpdateCheckExtraRequestHeaders(
   const std::vector<std::string>& app_ids =
       ids.size() <= maxIdsCount
           ? ids
-          : std::vector<std::string>(ids.cbegin(), ids.cbegin() + maxIdsCount);
+          : base::ToVector(base::span(ids).first(maxIdsCount));
   return {
       {"X-Goog-Update-Updater",
        base::StrCat({prod_id, "-", browser_version.GetString()})},
@@ -114,8 +118,8 @@ protocol_request::Request MakeProtocolRequest(
 
   // Session id and request id.
   CHECK(!session_id.empty());
-  CHECK(base::StartsWith(session_id, "{", base::CompareCase::SENSITIVE));
-  CHECK(base::EndsWith(session_id, "}", base::CompareCase::SENSITIVE));
+  CHECK(session_id.starts_with('{'));
+  CHECK(session_id.ends_with('}'));
   request.session_id = session_id;
   request.request_id = base::StrCat(
       {"{", base::Uuid::GenerateRandomV4().AsLowercaseString(), "}"});
@@ -223,7 +227,7 @@ protocol_request::App MakeProtocolApp(
     std::optional<protocol_request::UpdateCheck> update_check,
     const std::vector<protocol_request::Data>& data,
     std::optional<protocol_request::Ping> ping,
-    std::optional<std::vector<base::Value::Dict>> events) {
+    std::optional<std::vector<base::DictValue>> events) {
   protocol_request::App app;
   app.app_id = app_id;
   app.version = version.GetString();

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/views/animation/scroll_animator.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 #include "ui/views/controls/menu/menu_host.h"
@@ -64,6 +65,7 @@ class VIEWS_EXPORT SubmenuView : public View,
 
   // Returns the MenuItemView at the specified index.
   MenuItemView* GetMenuItemAt(size_t index);
+  const MenuItemView* GetMenuItemAt(size_t index) const;
 
   // The preferred height, in DIPs, of a "standard" (i.e. empty) menu item.
   int GetPreferredItemHeight() const;
@@ -159,11 +161,15 @@ class VIEWS_EXPORT SubmenuView : public View,
 
   // Returns the last MenuItemView in this submenu.
   MenuItemView* GetLastItem();
+  const MenuItemView* GetLastItem() const;
 
   // Invoked if the menu is prematurely destroyed. This can happen if the window
   // closes while the menu is shown. If invoked the SubmenuView must drop all
   // references to the MenuHost as the MenuHost is about to be deleted.
   void MenuHostDestroyed();
+
+  // Safely detaches the scroll view container and resets the MenuHost.
+  void ReleaseMenuHost();
 
   int icon_area_width() const { return icon_area_width_; }
   int min_icon_height() const { return min_icon_height_; }
@@ -196,6 +202,8 @@ class VIEWS_EXPORT SubmenuView : public View,
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   void ChildPreferredSizeChanged(View* child) override;
+  void ViewHierarchyChanged(
+      const ViewHierarchyChangedDetails& details) override;
 
  private:
   friend class MenuControllerTest;
@@ -225,7 +233,8 @@ class VIEWS_EXPORT SubmenuView : public View,
   MenuDelegate::DropPosition drop_position_ = MenuDelegate::DropPosition::kNone;
 
   // Ancestor of the SubmenuView, lazily created.
-  std::unique_ptr<MenuScrollViewContainer> scroll_view_container_;
+  std::unique_ptr<MenuScrollViewContainer> detached_scroll_view_container_;
+  raw_ptr<MenuScrollViewContainer> scroll_view_container_ = nullptr;
 
   // Width of a menu icon area.
   int icon_area_width_ = 0;
@@ -270,6 +279,8 @@ class VIEWS_EXPORT SubmenuView : public View,
   PrefixSelector prefix_selector_{this, this};
 
   std::optional<ui::ColorId> border_color_id_;
+
+  base::WeakPtrFactory<SubmenuView> weak_ptr_factory_{this};
 };
 
 }  // namespace views

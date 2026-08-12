@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">输入提示</translation>
 <translation id="115705039208660697">菠萝</translation>
 <translation id="1164939766849482256">“黎明到黄昏”屏保</translation>
-<translation id="1167755866710282443">打开菜单即可自定义键。拖动菜单即可移动它。</translation>
 <translation id="1171349345463658120">沙湖</translation>
 <translation id="1174073918202301297">快捷方式已添加</translation>
 <translation id="11743817593307477">使用箭头键可将此控件移至您要执行的游戏操作。使用 Enter 键可放置控件。使用 Esc 键可取消。</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">运行充电测试</translation>
 <translation id="1622402072367425417">发光气泡</translation>
 <translation id="1626590945318984973">此快捷键不可用。请在不使用功能键和<ph name="META_KEY" />键的情况下按一个新快捷键。</translation>
+<translation id="163774412591892664">您的管理员已停用您的设备，并且可以访问其位置信息。</translation>
 <translation id="1639239467298939599">正在加载</translation>
 <translation id="1641857168437328880">文件馈送器（单面）</translation>
 <translation id="1642396894598555413">自行车</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">替换文件</translation>
 <translation id="2006864819935886708">连接</translation>
 <translation id="2008685064673031089">高峰搜索</translation>
-<translation id="2011174342667534258">SDK 版本：</translation>
 <translation id="2016697457005847575">尝试问题排查步骤</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">餐具</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">沙丘</translation>
 <translation id="2619761439309613843">每日刷新</translation>
 <translation id="2620436844016719705">系统</translation>
+<translation id="2626848494898563581">无法连接到 Google 服务</translation>
 <translation id="2637303424821734920">已关闭 - 如要显示本地天气，请<ph name="BEGIN_LINK" />开启系统位置信息使用权<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">登录账号图片</translation>
 <translation id="2640549051766135490">已选择相册“<ph name="TITLE" />”，<ph name="DESC" /></translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">按键映射方向键</translation>
 <translation id="3217462202230355157">请确保麦克风已连接，或尝试重启 <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">正在搜寻扫描器</translation>
-<translation id="3226657629376379887">布局操作菜单</translation>
 <translation id="3227186760713762082"><ph name="CATEGORY_TEXT" />值除以 <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">数字艺术</translation>
 <translation id="3246869037381808805">系统会自动移除存在时长已超过 1 天的打印任务</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">密钥方向</translation>
 <translation id="3294437725009624529">访客</translation>
 <translation id="3303855915957856445">未找到任何搜索结果</translation>
-<translation id="3305294846493618482">更多</translation>
 <translation id="3310640316857623290">DNS 延迟时间明显超出了允许的阈值</translation>
 <translation id="3316495615885967552">摘要和标题创建模型下载完毕</translation>
 <translation id="3321030238473337787">播放速度</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">出了点问题。请重试。</translation>
 <translation id="357889014807611375">按流量计费的 Wi-Fi</translation>
 <translation id="3583278742022654445">信号强度较弱。请尝试移到离 Wi-Fi 信号源更近的地方。</translation>
+<translation id="3586931643579894722">隐藏详细信息</translation>
 <translation id="3588034708467091142">确保您已联网，然后重试。</translation>
 <translation id="3594280220611906414">“<ph name="USER_FRIENDLY_APN_NAME" />”是“<ph name="APN_NAME" />”的别名，方便用户理解和记忆。</translation>
 <translation id="3595596368722241419">电池已充满</translation>
@@ -654,7 +653,7 @@
 <translation id="3902271751020176019">转写语言</translation>
 <translation id="390890062090528082">星空</translation>
 <translation id="391412459402535266">无法测试设备。切换到笔记本电脑模式即可进行测试。</translation>
-<translation id="3916998944874125962">截取屏幕截图</translation>
+<translation id="3916998944874125962">截屏</translation>
 <translation id="3923184630988645767">流量使用</translation>
 <translation id="392943705803418306">你的课堂工具会话已结束</translation>
 <translation id="3932043219784172185">未连接任何设备</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">后退 10 秒</translation>
 <translation id="4128271910628504223">输入一条提示，例如“画一片雾气蒙蒙的森林”</translation>
 <translation id="4130035430755296270">将鼠标指针悬停于此处可查看更多布局选项</translation>
-<translation id="4130750466177569591">我同意</translation>
 <translation id="4131410914670010031">黑白色</translation>
 <translation id="4137700675046373159">在周六</translation>
 <translation id="4139326893730851150">固件更新</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814"><ph name="LANGUAGE_NAME" />转写模型下载完毕</translation>
 <translation id="42126664696688958">导出</translation>
 <translation id="4213104098953699324">USB 键盘</translation>
+<translation id="4217571870635786043">语音输入</translation>
 <translation id="4227825898293920515">密码将于 <ph name="TIME" />后到期</translation>
 <translation id="4238516577297848345">没有正在进行的打印任务</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tab 键</translation>
 <translation id="5612205513582918357">课堂工具正在与“<ph name="RECEIVER_NAME" />”共享您的屏幕</translation>
 <translation id="5613201299517339763">您已退出账号</translation>
-<translation id="5620281292257375798">仅供内部使用</translation>
 <translation id="5628106863521633649">支持的语言</translation>
 <translation id="5630438231335788050">包豪斯</translation>
 <translation id="5631759159893697722">摘要</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">删除</translation>
 <translation id="6137614725462089991">赛博朋克</translation>
 <translation id="6137767437444130246">用户证书</translation>
+<translation id="6140948187512243695">显示详细信息</translation>
 <translation id="6146993107019042706">要完成更改，请输入您的新密码</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">无法连接到互联网</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">显示概要</translation>
 <translation id="6243280677745499710">当前设置的壁纸</translation>
 <translation id="6250316632541035980">培根和鸡蛋</translation>
+<translation id="6262413940100821797">未知接收者</translation>
 <translation id="6265268291107409527">所选按键为 <ph name="KEYS" />。<ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">向右</translation>
 <translation id="6278428485366576908">主题</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">此 <ph name="DEVICE_TYPE" /> 由 <ph name="MANAGER" /> 管理。管理员可能会远程配置此设备。</translation>
 <translation id="7180611975245234373">刷新</translation>
 <translation id="7180865173735832675">自定义</translation>
-<translation id="7182063559013288142">智能热点</translation>
-<translation id="7184043045742675738">点击任意键自定义您的按钮。使用鼠标或箭头键调整键的位置。</translation>
 <translation id="7187669805838282391">在周三</translation>
 <translation id="7205318498545665455">选择麦克风</translation>
-<translation id="7206979415662233817">服务条款</translation>
 <translation id="7210635925306941239">青色</translation>
 <translation id="7212547870105584639">管理网络 APN 设置。APN 会在移动网络和互联网之间建立连接。<ph name="BEGIN_LINK_LEARN_MORE" />了解详情<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">外部设备的固件更新</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">绿色和蓝绿色</translation>
 <translation id="7328475450575141167">鹤望兰</translation>
-<translation id="7331297744262591636">您必须年满 18 周岁，并且同意在使用 AI 壁纸时遵守 <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Google 服务条款<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" />和<ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />生成式 AI 附加服务条款<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />。
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          您只能利用 AI 制作用于个人和非商业用途的壁纸。当您获取壁纸方面的帮助时，系统会将相关文字发送到 Google AI 服务器，以根据 <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google 的隐私权政策<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />生成壁纸建议。<ph name="BEGIN_LINK_LEARN_MORE" />了解详情<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />；<ph name="RESULT_TEXT" />；按搜索键 + 空格键即可查看“Google 搜索”中的结果。</translation>
 <translation id="7343649194310845056">网络设备</translation>
 <translation id="7344788170842919262">自然色</translation>
 <translation id="7346768383111016081">使用键盘控制游戏操作</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">输入设置</translation>
 <translation id="7595982850646262331">电池续航时间还剩 <ph name="TIME_VALUE" /></translation>
 <translation id="7600430297804876776"><ph name="MANAGER" /> 管理员已设置此 <ph name="DEVICE_TYPE" /> 可供使用的时间。</translation>
-<translation id="7613724632293948900">使用鼠标或箭头键调整位置。</translation>
 <translation id="7618216277886673749">选择<ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">中性</translation>
 <translation id="7620771111601174153">在帮助中心内了解详情</translation>
@@ -1545,7 +1536,7 @@
 <translation id="779591286616261875">发送新报告</translation>
 <translation id="7799817062559422778">浅色模式</translation>
 <translation id="7802764839223122985">缺少按键。<ph name="REASSIGN_INSTRUCTION" /></translation>
-<translation id="780301667611848630">不用了，谢谢</translation>
+<translation id="780301667611848630">不用了</translation>
 <translation id="7805768142964895445">状态</translation>
 <translation id="7811024689617730980">选择自动重置日期，范围为 1（含）到 31 日（含）</translation>
 <translation id="7813073042185856802">山</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">使用 Google AI 提高工作效率</translation>
 <translation id="8200772114523450471">继续</translation>
 <translation id="8206859287963243715">蜂窝网络设备</translation>
+<translation id="8208043093301544621">首页</translation>
 <translation id="8208861521865154048">福利</translation>
 <translation id="8226628635270268143">选择您喜爱的照片和相册</translation>
 <translation id="8227119283605456246">附上文件</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">运行硬件测试以排查硬件问题</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">向下</translation>
+<translation id="8427213022735114808">语音输入功能会将您的语音内容发送给 Google，以便能在任何文本字段中进行语音输入。</translation>
 <translation id="8428213095426709021">设置</translation>
 <translation id="8431300646573772016">Chrome 操作系统的新变化</translation>
 <translation id="8433186206711564395">网络设置</translation>
@@ -1724,6 +1717,7 @@
 <translation id="8584654835905316966">必须重启，才能完成<ph name="DEVICE_NAME" />固件安装操作，并更新至版本 <ph name="VERSION" />。电脑可能会重启几次。这是正常现象。</translation>
 <translation id="8593058461203131755">暂停媒体内容</translation>
 <translation id="8620617069779373398">漫游状态</translation>
+<translation id="8624524972189162859">您的 <ph name="DOMAIN_NAME" /> 管理员已停用您的设备，并且可以访问其位置信息。</translation>
 <translation id="8626489604350149811">可对“<ph name="APN_NAME" />”执行的更多操作</translation>
 <translation id="86356131183441916">浅紫色</translation>
 <translation id="8647595191512746911">音频转写</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">蓝牙</translation>
 <translation id="9082718469794970195">使用此视频</translation>
-<translation id="9087578468327036362">报告此次查询</translation>
 <translation id="9088306295921699330">目前用量</translation>
 <translation id="9088994563996376283">简化</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">关于重置日期的更多信息</translation>
 <translation id="9100765901046053179">高级设置</translation>
 <translation id="910415269708673980">刷新 <ph name="PRINCIPAL_NAME" /> 的票据</translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">已将图片设为相机背景</translation>
 <translation id="9211490828691860325">所有桌面</translation>
 <translation id="9218016617214286986">显示已知的 APN</translation>
-<translation id="932327136139879170">家</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">发送反馈</translation>
 <translation id="950520315903467048">缺少表示<ph name="DIRECTION" />的按键。<ph name="ASSIGN_INSTRUCTION" /></translation>

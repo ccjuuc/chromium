@@ -34,14 +34,32 @@ BASE_DECLARE_FEATURE(kComposeboxCloseButtonTopAlign);
 // Whether to align the close button to the top edge for top composebox.
 bool AlignComposeboxCloseButtonToInputPlateTop();
 
+// Whether to show the extra controls in the composebox.
+bool ShowComposeboxAdditionalAdvancedTools();
+
+// Whether to show the deep search advanced tool.
+bool ShowDeepSearchTool();
+
+// Whether to enable the server side state.
+bool EnableComposeboxServerSideState();
+
 // Whether to enable compact mode.
 bool IsComposeboxCompactModeEnabled();
 
 // Whether to force the composebox on top.
 bool IsComposeboxForceTopEnabled();
 
+// Used to enable the extra advanced controls in the composebox.
+BASE_DECLARE_FEATURE(kComposeboxAdditionalAdvancedTools);
+
 // Used to enable the compact "one line" mode in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxCompactMode);
+
+// Used to enable deep search in the composebox.
+BASE_DECLARE_FEATURE(kComposeboxDeepSearch);
+
+// Used to enable server side state in the composebox.
+BASE_DECLARE_FEATURE(kComposeboxServerSideState);
 
 // Used to force top input plate in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxForceTop);
@@ -49,22 +67,9 @@ BASE_DECLARE_FEATURE(kComposeboxForceTop);
 // Used to enable the AIM nudge button in the composebox.
 BASE_DECLARE_FEATURE(kComposeboxAIMNudge);
 
-// Used to show the title in the + button menu of the composebox.
-BASE_DECLARE_FEATURE(kComposeboxMenuTitle);
-
 // Determines if the persistent re-enable AIM button stays visible after the
 // user exits the session.
 bool IsComposeboxAIMNudgeEnabled();
-
-// Whether the composebox + menu should show the title.
-bool IsComposeboxMenuTitleEnabled();
-
-// Used to check if we should display contextual suggestions for an image
-// attachment.
-BASE_DECLARE_FEATURE(kComposeboxFetchContextualSuggestionsForImage);
-
-// Whether or not we should display contextual suggestions for an image.
-bool IsComposeboxFetchContextualSuggestionsForImageEnabled();
 
 // Used to check if we should display contextual suggestions for multiple
 // attachments.
@@ -74,5 +79,48 @@ BASE_DECLARE_FEATURE(
 // Whether or not we should display contextual suggestions for multiple
 // attachments;
 bool IsComposeboxFetchContextualSuggestionsForMultiAttachmentsEnabled();
+
+// Used to conditionally show the + button in the composebox input plate.
+BASE_DECLARE_FEATURE(kComposeboxConditionalPlusButton);
+
+// Parameter name to determine the variant behavior of the conditional plus
+// button.
+extern const char kComposeboxConditionalPlusButtonParam[];
+
+// Represents the variant behaviors available for conditionally showing the plus
+// button.
+enum class ComposeboxConditionalPlusButtonVariant {
+  kDefault = 0,
+  // Hides the plus button entirely while in the pre-edit state.
+  kHideInPreEdit = 1,
+};
+
+// Returns the active variant for the conditional plus button logic.
+ComposeboxConditionalPlusButtonVariant
+GetComposeboxConditionalPlusButtonVariant();
+
+// Whether the composebox + button should be conditionally hidden.
+bool IsComposeboxConditionalPlusButtonEnabled();
+
+// Returns whether to enable Google Drive option in the composebox.
+bool IsComposeboxDriveOptionEnabled();
+
+// Used to enable physical keyboard Return key behaviors in the composebox.
+BASE_DECLARE_FEATURE(kComposeboxPhysicalKeyboardReturnKeys);
+
+// Returns whether the physical keyboard Return key behaviors are enabled.
+bool IsComposeboxPhysicalKeyboardReturnKeysEnabled();
+
+// Used to enable rich APC extraction when attaching tabs in Aim.
+BASE_DECLARE_FEATURE(kComposeboxAimRichAPCExtraction);
+
+// Returns whether rich APC extraction is enabled when attaching tabs in Aim.
+bool IsComposeboxAimRichAPCExtractionEnabled();
+
+// Used to enable the Connected Apps setting entry.
+BASE_DECLARE_FEATURE(kComposeboxConnectedAppsSetting);
+
+// Returns whether to enable the Connected Apps setting entry.
+bool IsComposeboxConnectedAppsSettingEnabled();
 
 #endif  // IOS_CHROME_BROWSER_COMPOSEBOX_PUBLIC_FEATURES_H_

@@ -26,6 +26,14 @@ ToolRequest::~ToolRequest() = default;
 ToolRequest::ToolRequest(const ToolRequest& other) = default;
 ToolRequest& ToolRequest::operator=(const ToolRequest& other) = default;
 
+bool ToolRequest::IsFollowup() const {
+  return is_followup_;
+}
+
+void ToolRequest::SetAsFollowup(base::PassKey<ExecutionEngine>) {
+  is_followup_ = true;
+}
+
 bool ToolRequest::IsTabScoped() const {
   return GetTabHandle() != tabs::TabHandle::Null();
 }
@@ -52,6 +60,10 @@ bool ToolRequest::RequiresUrlCheckInCurrentTab() const {
   return IsTabScoped();
 }
 
+tabs::TabHandle ToolRequest::GetTabForValidation() const {
+  return GetTabHandle();
+}
+
 std::optional<url::Origin> ToolRequest::AssociatedOriginGrant() const {
   return std::nullopt;
 }
@@ -59,6 +71,10 @@ std::optional<url::Origin> ToolRequest::AssociatedOriginGrant() const {
 ObservationDelayController::PageStabilityConfig
 ToolRequest::GetObservationPageStabilityConfig() const {
   return ObservationDelayController::PageStabilityConfig();
+}
+
+bool ToolRequest::RequiresOpeningWebContents() const {
+  return false;
 }
 
 TabToolRequest::TabToolRequest(const tabs::TabHandle tab_handle)

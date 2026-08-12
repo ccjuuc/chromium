@@ -11,28 +11,31 @@
 #import "base/metrics/user_metrics_action.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
+#import "components/image_fetcher/core/image_fetcher_service.h"
 #import "components/send_tab_to_self/features.h"
+#import "ios/chrome/browser/assistant/coordinator/assistant_container_commands.h"
+#import "ios/chrome/browser/assistant/ui/assistant_container_detent.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
-#import "ios/chrome/browser/browser_container/ui_bundled/browser_container_mediator.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/browser_content_mediator.h"
 #import "ios/chrome/browser/bubble/model/tab_based_iph_browser_agent.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
+#import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
+#import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
+#import "ios/chrome/browser/image_fetcher/model/image_fetcher_service_factory.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
+#import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
-#import "ios/chrome/browser/popup_menu/coordinator/popup_menu_action_handler.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_help_coordinator.h"
-#import "ios/chrome/browser/popup_menu/coordinator/popup_menu_mediator.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_orderer.h"
-#import "ios/chrome/browser/popup_menu/overflow_menu/public/feature_flags.h"
+#import "ios/chrome/browser/popup_menu/overflow_menu/public/features.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/overflow_menu_metrics.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_metrics_handler.h"
-#import "ios/chrome/browser/popup_menu/public/popup_menu_presenter_delegate.h"
-#import "ios/chrome/browser/popup_menu/ui/popup_menu_presenter.h"
-#import "ios/chrome/browser/popup_menu/ui/popup_menu_table_view_controller.h"
 #import "ios/chrome/browser/presenters/ui_bundled/contained_presenter_delegate.h"
 #import "ios/chrome/browser/promos_manager/model/promos_manager_factory.h"
 #import "ios/chrome/browser/reader_mode/model/features.h"
@@ -47,16 +50,18 @@
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/bookmarks_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
+#import "ios/chrome/browser/shared/public/commands/cobalt_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_commands.h"
 #import "ios/chrome/browser/shared/public/commands/lens_overlay_commands.h"
+#import "ios/chrome/browser/shared/public/commands/level_up_commands.h"
+#import "ios/chrome/browser/shared/public/commands/new_tab_page_commands.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/overflow_menu_customization_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_info_commands.h"
@@ -66,22 +71,25 @@
 #import "ios/chrome/browser/shared/public/commands/quick_delete_commands.h"
 #import "ios/chrome/browser/shared/public/commands/reader_mode_commands.h"
 #import "ios/chrome/browser/shared/public/commands/reminder_notifications_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
-#import "ios/chrome/browser/shared/public/commands/tab_groups_commands.h"
 #import "ios/chrome/browser/shared/public/commands/text_zoom_commands.h"
 #import "ios/chrome/browser/shared/public/commands/whats_new_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
+#import "ios/chrome/browser/shared/ui/elements/invisible_arrow_popover_background_view.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/supervised_user/model/supervised_user_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
+#import "ios/chrome/common/material_timing.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/web_state.h"
@@ -90,28 +98,22 @@
 using base::RecordAction;
 using base::UserMetricsAction;
 
+namespace {
+// The KVO key for observing the preferredContentSize of the menu.
+NSString* const kPreferredContentSizeKey = @"preferredContentSize";
+}  // namespace
+
 @interface PopupMenuCoordinator () <MenuCustomizationEventHandler,
                                     OverflowMenuCustomizationCommands,
                                     PopupMenuCommands,
                                     PopupMenuMetricsHandler,
-                                    PopupMenuPresenterDelegate,
                                     UIPopoverPresentationControllerDelegate,
                                     UISheetPresentationControllerDelegate>
-
-// Presenter for the popup menu, managing the animations.
-@property(nonatomic, strong) PopupMenuPresenter* presenter;
-// Mediator for the popup menu.
-@property(nonatomic, strong) PopupMenuMediator* mediator;
 // Mediator for the overflow menu
 @property(nonatomic, strong) OverflowMenuMediator* overflowMenuMediator;
 // Mediator to that alerts the main `mediator` when the web content area
 // is blocked by an overlay.
-@property(nonatomic, strong) BrowserContainerMediator* contentBlockerMediator;
-// ViewController for this mediator.
-@property(nonatomic, strong) PopupMenuTableViewController* viewController;
-// Handles user interaction with the popup menu items.
-@property(nonatomic, strong) PopupMenuActionHandler* actionHandler;
-
+@property(nonatomic, strong) BrowserContentMediator* contentBlockerMediator;
 // Time when the tools menu opened.
 @property(nonatomic, assign) NSTimeInterval toolsMenuOpenTime;
 // Whether the tools menu was scrolled vertically while it was open.
@@ -141,12 +143,16 @@ using base::UserMetricsAction;
   // Stores whether certain events occurred during an overflow menu session for
   // logs.
   OverflowMenuVisitedEvent _event;
+
+  // When the user is taking an action (and not a destination), this is storing
+  // the type of action taken.
+  std::optional<overflow_menu::ActionType> _actionTriggered;
+
+  // The presented menu view controller.
+  UIViewController* _menu;
 }
 
-@synthesize mediator = _mediator;
-@synthesize presenter = _presenter;
 @synthesize UIUpdater = _UIUpdater;
-@synthesize viewController = _viewController;
 @synthesize baseViewController = _baseViewController;
 
 - (instancetype)initWithBrowser:(Browser*)browser {
@@ -157,10 +163,10 @@ using base::UserMetricsAction;
 #pragma mark - ChromeCoordinator
 
 - (void)start {
-  [self.browser->GetCommandDispatcher()
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(PopupMenuCommands)];
-  [self.browser->GetCommandDispatcher()
+  CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
+  [dispatcher startDispatchingToTarget:self
+                           forProtocol:@protocol(PopupMenuCommands)];
+  [dispatcher
       startDispatchingToTarget:self
                    forProtocol:@protocol(OverflowMenuCustomizationCommands)];
   NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
@@ -179,15 +185,14 @@ using base::UserMetricsAction;
   [self.browser->GetCommandDispatcher() stopDispatchingToTarget:self];
   [self.overflowMenuMediator disconnect];
   self.overflowMenuMediator = nil;
-  [self.mediator disconnect];
-  self.mediator = nil;
-  self.viewController = nil;
+  self.contentBlockerMediator.consumer = nil;
+  self.contentBlockerMediator = nil;
 }
 
 #pragma mark - Public
 
 - (BOOL)isShowingPopupMenu {
-  return self.presenter != nil || self.overflowMenuMediator != nil;
+  return self.overflowMenuMediator != nil;
 }
 
 - (void)startPopupMenuHelpCoordinator {
@@ -201,14 +206,24 @@ using base::UserMetricsAction;
 #pragma mark - PopupMenuCommands
 
 - (void)showToolsMenuPopup {
-  if (self.presenter || self.overflowMenuMediator) {
+  if (self.overflowMenuMediator) {
     [self dismissPopupMenuAnimated:YES];
   }
 
-  id<OmniboxCommands> omniboxCommandsHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), OmniboxCommands);
-  // Dismiss the omnibox (if open).
-  [omniboxCommandsHandler cancelOmniboxEdit];
+  id<BrowserCoordinatorCommands> browserCoordinatorHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
+  [browserCoordinatorHandler hideComposebox];
+
+  CommandDispatcher* commandDispatcher = self.browser->GetCommandDispatcher();
+  if ([commandDispatcher
+          dispatchingForProtocol:@protocol(AssistantContainerCommands)]) {
+    id<AssistantContainerCommands> assistantContainerHandler =
+        HandlerForProtocol(commandDispatcher, AssistantContainerCommands);
+    [assistantContainerHandler
+        animateAssistantContainerToDetent:AssistantContainerDetent::kMinimized
+                                 duration:kMaterialDuration1
+                                    curve:UIViewAnimationCurveEaseInOut];
+  }
 
   id<BrowserCommands> callableDispatcher =
       HandlerForProtocol(self.browser->GetCommandDispatcher(), BrowserCommands);
@@ -226,17 +241,9 @@ using base::UserMetricsAction;
   // Allow the non-modal promo scheduler to close the promo.
   [nonModalPromoScheduler logPopupMenuEntered];
 
-  PopupMenuTableViewController* tableViewController =
-      [[PopupMenuTableViewController alloc] init];
-  tableViewController.baseViewController = self.baseViewController;
-  tableViewController.tableView.accessibilityIdentifier =
-      kPopupMenuToolsMenuTableViewId;
-
-  self.viewController = tableViewController;
-
   OverlayPresenter* overlayPresenter = OverlayPresenter::FromBrowser(
       self.browser, OverlayModality::kWebContentArea);
-  self.contentBlockerMediator = [[BrowserContainerMediator alloc]
+  self.contentBlockerMediator = [[BrowserContentMediator alloc]
                 initWithWebStateList:self.browser->GetWebStateList()
       webContentAreaOverlayPresenter:overlayPresenter];
 
@@ -249,248 +256,189 @@ using base::UserMetricsAction;
   self.toolsMenuWasScrolledVertically = NO;
   self.toolsMenuWasScrolledHorizontally = NO;
   self.toolsMenuUserTookAction = NO;
-  if (IsNewOverflowMenuEnabled()) {
-    Browser* browser = self.browser;
-    ProfileIOS* profile = browser->GetProfile();
 
-    OverflowMenuMediator* mediator = [[OverflowMenuMediator alloc] init];
+  Browser* browser = self.browser;
+  ProfileIOS* profile = browser->GetProfile();
 
-    CGFloat screenWidth = self.baseViewController.view.frame.size.width;
-    UIContentSizeCategory contentSizeCategory =
-        self.baseViewController.traitCollection.preferredContentSizeCategory;
+  OverflowMenuMediator* mediator = [[OverflowMenuMediator alloc] init];
 
-    BOOL incognito = profile->IsOffTheRecord();
-    mediator.incognito = incognito;
-    _overflowMenuOrderer =
-        [[OverflowMenuOrderer alloc] initWithIsIncognito:incognito];
-    _overflowMenuOrderer.visibleDestinationsCount = [OverflowMenuUIConfiguration
-        numDestinationsVisibleWithoutHorizontalScrollingForScreenWidth:
-            screenWidth
-                                                forContentSizeCategory:
-                                                    contentSizeCategory];
-    _overflowMenuOrderer.localStatePrefs =
-        GetApplicationContext()->GetLocalState();
+  CGFloat screenWidth = self.baseViewController.view.frame.size.width;
+  UIContentSizeCategory contentSizeCategory =
+      self.baseViewController.traitCollection.preferredContentSizeCategory;
 
-    mediator.menuOrderer = _overflowMenuOrderer;
+  BOOL incognito = profile->IsOffTheRecord();
+  mediator.incognito = incognito;
+  _overflowMenuOrderer =
+      [[OverflowMenuOrderer alloc] initWithIsIncognito:incognito];
+  _overflowMenuOrderer.visibleDestinationsCount = [OverflowMenuUIConfiguration
+      numDestinationsVisibleWithoutHorizontalScrollingForScreenWidth:screenWidth
+                                              forContentSizeCategory:
+                                                  contentSizeCategory];
+  _overflowMenuOrderer.localStatePrefs =
+      GetApplicationContext()->GetLocalState();
 
-    CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
+  mediator.menuOrderer = _overflowMenuOrderer;
 
-    mediator.activityServiceHandler =
-        HandlerForProtocol(dispatcher, ActivityServiceCommands);
-    mediator.applicationHandler =
-        HandlerForProtocol(dispatcher, ApplicationCommands);
-    mediator.settingsHandler = HandlerForProtocol(dispatcher, SettingsCommands);
-    mediator.tabGroupsHandler =
-        HandlerForProtocol(dispatcher, TabGroupsCommands);
-    mediator.bookmarksHandler =
-        HandlerForProtocol(dispatcher, BookmarksCommands);
-    if (IsLensOverlayAvailable(profile->GetPrefs())) {
-      mediator.lensOverlayHandler =
-          HandlerForProtocol(dispatcher, LensOverlayCommands);
-    }
-    if (experimental_flags::EnableAIPrototypingMenu()) {
-      mediator.applicationHandler =
-          HandlerForProtocol(dispatcher, ApplicationCommands);
-    }
+  CommandDispatcher* dispatcher = browser->GetCommandDispatcher();
 
-    if (IsPageActionMenuEnabled()) {
-      mediator.BWGHandler = HandlerForProtocol(dispatcher, BWGCommands);
-    }
-
-    mediator.browserCoordinatorHandler =
-        HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
-    mediator.findInPageHandler =
-        HandlerForProtocol(dispatcher, FindInPageCommands);
-    if (IsReaderModeAvailable()) {
-      mediator.readerModeHandler =
-          HandlerForProtocol(dispatcher, ReaderModeCommands);
-    }
-    mediator.helpHandler = HandlerForProtocol(dispatcher, HelpCommands);
-    mediator.overflowMenuCustomizationHandler =
-        HandlerForProtocol(dispatcher, OverflowMenuCustomizationCommands);
-    mediator.pageInfoHandler = HandlerForProtocol(dispatcher, PageInfoCommands);
-    mediator.popupMenuHandler =
-        HandlerForProtocol(dispatcher, PopupMenuCommands);
-    mediator.priceNotificationHandler =
-        HandlerForProtocol(dispatcher, PriceTrackedItemsCommands);
-    mediator.reminderNotificationsHandler =
-        HandlerForProtocol(dispatcher, ReminderNotificationsCommands);
-    mediator.textZoomHandler = HandlerForProtocol(dispatcher, TextZoomCommands);
-    mediator.quickDeleteHandler =
-        HandlerForProtocol(dispatcher, QuickDeleteCommands);
-    mediator.whatsNewHandler = HandlerForProtocol(dispatcher, WhatsNewCommands);
-
-    mediator.webStateList = browser->GetWebStateList();
-    mediator.navigationAgent = WebNavigationBrowserAgent::FromBrowser(browser);
-    mediator.baseViewController = self.baseViewController;
-    mediator.bookmarkModel = ios::BookmarkModelFactory::GetForProfile(profile);
-    mediator.readingListModel = ReadingListModelFactory::GetForProfile(profile);
-    mediator.profilePrefs = profile->GetPrefs();
-    mediator.engagementTracker = tracker;
-    mediator.webContentAreaOverlayPresenter = overlayPresenter;
-    mediator.browserPolicyConnector =
-        GetApplicationContext()->GetBrowserPolicyConnector();
-    mediator.syncService = SyncServiceFactory::GetForProfile(profile);
-    mediator.templateURLService =
-        ios::TemplateURLServiceFactory::GetForProfile(profile);
-    mediator.promosManager = PromosManagerFactory::GetForProfile(profile);
-    mediator.readingListBrowserAgent =
-        ReadingListBrowserAgent::FromBrowser(browser);
-    // Set the AuthenticationService with the one from the original
-    // ProfileIOS as the incognito one doesn't have that service.
-    mediator.authenticationService =
-        AuthenticationServiceFactory::GetForProfile(
-            profile->GetOriginalProfile());
-    mediator.tabBasedIPHBrowserAgent =
-        TabBasedIPHBrowserAgent::FromBrowser(browser);
-    mediator.hasSettingsBlueDot =
-        [self.popupMenuHelpCoordinator hasBlueDotForOverflowMenu];
-    self.contentBlockerMediator.consumer = mediator;
-
-    NSInteger highlightDestination =
-        [self.popupMenuHelpCoordinator highlightDestination] == nil
-            ? -1
-            : [[self.popupMenuHelpCoordinator highlightDestination]
-                  integerValue];
-
-    UITraitCollection* traits = self.baseViewController.traitCollection;
-    OverflowMenuUIConfiguration* uiConfiguration =
-        [[OverflowMenuUIConfiguration alloc]
-            initWithPresentingViewControllerHorizontalSizeClass:
-                traits.horizontalSizeClass
-                      presentingViewControllerVerticalSizeClass:
-                          traits.verticalSizeClass
-                                           highlightDestination:
-                                               highlightDestination];
-
-    self.popupMenuHelpCoordinator.uiConfiguration = uiConfiguration;
-
-    _overflowMenuModel = [[OverflowMenuModel alloc] initWithDestinations:@[]
-                                                            actionGroups:@[]];
-
-    _overflowMenuOrderer.model = _overflowMenuModel;
-    mediator.model = _overflowMenuModel;
-    self.popupMenuHelpCoordinator.actionProvider = mediator;
-
-    self.overflowMenuMediator = mediator;
-
-    UIViewController* menu =
-        [OverflowMenuViewProvider makeViewControllerWithModel:_overflowMenuModel
-                                              uiConfiguration:uiConfiguration
-                                               metricsHandler:self
-                                    customizationEventHandler:self];
-
-    LayoutGuideCenter* layoutGuideCenter = LayoutGuideCenterForBrowser(browser);
-    UILayoutGuide* layoutGuide =
-        [layoutGuideCenter makeLayoutGuideNamed:kToolsMenuGuide];
-    [self.baseViewController.view addLayoutGuide:layoutGuide];
-    CGRect frame = layoutGuide.layoutFrame;
-    menu.modalPresentationStyle = UIModalPresentationPopover;
-
-    UIPopoverPresentationController* popoverPresentationController =
-        menu.popoverPresentationController;
-
-    // Hides the arrow on the popover.
-    popoverPresentationController.permittedArrowDirections = 0;
-    popoverPresentationController.sourceView = self.baseViewController.view;
-    // With permittedArrowDirections = 0 (no arrow), apply an offset to position
-    // the popover approximately where it would be with an arrow-up.
-    popoverPresentationController.sourceRect =
-        CGRectMake(frame.origin.x, frame.origin.y + 360, frame.size.width,
-                   frame.size.height);
-
-    popoverPresentationController.delegate = self;
-    popoverPresentationController.backgroundColor =
-        [UIColor colorNamed:kBackgroundColor];
-
-    [self setupSheetForMenu:menu isCustomizationScreen:NO animated:NO];
-
-    // Reset event before presenting.
-    _event = OverflowMenuVisitedEvent();
-
-    __weak __typeof(self) weakSelf = self;
-    [self.baseViewController
-        presentViewController:menu
-                     animated:YES
-                   completion:^{
-                     [weakSelf.popupMenuHelpCoordinator
-                         showIPHAfterOpenOfOverflowMenu:menu];
-                   }];
-
-    // Log to FET overflow menu opened if opened with blue dot.
-    if ([self.popupMenuHelpCoordinator hasBlueDotForOverflowMenu] && tracker) {
-      tracker->NotifyEvent(
-          feature_engagement::events::kBlueDotPromoOverflowMenuOpened);
-      [self updateToolsMenuBlueDotVisibility];
-    }
-
-    return;
+  mediator.activityServiceHandler =
+      HandlerForProtocol(dispatcher, ActivityServiceCommands);
+  mediator.sceneHandler = HandlerForProtocol(dispatcher, SceneCommands);
+  mediator.settingsHandler = HandlerForProtocol(dispatcher, SettingsCommands);
+  mediator.bookmarksHandler = HandlerForProtocol(dispatcher, BookmarksCommands);
+  mediator.cobaltHandler = HandlerForProtocol(dispatcher, CobaltCommands);
+  if (IsLensOverlayAllowedByPolicy(profile->GetPrefs())) {
+    mediator.lensOverlayHandler =
+        HandlerForProtocol(dispatcher, LensOverlayCommands);
+  }
+  if (experimental_flags::EnableAIPrototypingMenu()) {
+    mediator.sceneHandler = HandlerForProtocol(dispatcher, SceneCommands);
   }
 
-  self.mediator = [[PopupMenuMediator alloc]
-      initWithReadingListModel:ReadingListModelFactory::GetForProfile(
-                                   self.profile)
-               policyConnector:GetApplicationContext()
-                                   ->GetBrowserPolicyConnector()
-                     incognito:self.profile->IsOffTheRecord()];
-  self.mediator.engagementTracker = tracker;
-  self.mediator.webStateList = self.browser->GetWebStateList();
-  self.mediator.readingListBrowserAgent =
-      ReadingListBrowserAgent::FromBrowser(self.browser);
-  self.mediator.lensCommandsHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), LensCommands);
-  self.mediator.bookmarkModel =
-      ios::BookmarkModelFactory::GetForProfile(self.profile);
-  self.mediator.prefService = self.profile->GetPrefs();
-  self.mediator.templateURLService =
-      ios::TemplateURLServiceFactory::GetForProfile(self.profile);
-  self.mediator.popupMenu = tableViewController;
-  self.mediator.webContentAreaOverlayPresenter = overlayPresenter;
-  self.mediator.URLLoadingBrowserAgent =
-      UrlLoadingBrowserAgent::FromBrowser(self.browser);
+  if (IsPageActionMenuEnabled()) {
+    mediator.geminiHandler = HandlerForProtocol(dispatcher, GeminiCommands);
+  }
 
-  self.contentBlockerMediator.consumer = self.mediator;
+  mediator.browserCoordinatorHandler =
+      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
+  mediator.findInPageHandler =
+      HandlerForProtocol(dispatcher, FindInPageCommands);
+  mediator.readerModeHandler =
+      HandlerForProtocol(dispatcher, ReaderModeCommands);
+  mediator.helpHandler = HandlerForProtocol(dispatcher, HelpCommands);
+  mediator.overflowMenuCustomizationHandler =
+      HandlerForProtocol(dispatcher, OverflowMenuCustomizationCommands);
+  mediator.pageInfoHandler = HandlerForProtocol(dispatcher, PageInfoCommands);
+  mediator.popupMenuHandler = HandlerForProtocol(dispatcher, PopupMenuCommands);
+  mediator.priceNotificationHandler =
+      HandlerForProtocol(dispatcher, PriceTrackedItemsCommands);
+  mediator.reminderNotificationsHandler =
+      HandlerForProtocol(dispatcher, ReminderNotificationsCommands);
+  mediator.textZoomHandler = HandlerForProtocol(dispatcher, TextZoomCommands);
+  mediator.quickDeleteHandler =
+      HandlerForProtocol(dispatcher, QuickDeleteCommands);
+  mediator.whatsNewHandler = HandlerForProtocol(dispatcher, WhatsNewCommands);
+  mediator.levelUpHandler = HandlerForProtocol(dispatcher, LevelUpCommands);
+  mediator.webStateList = browser->GetWebStateList();
+  mediator.navigationAgent = WebNavigationBrowserAgent::FromBrowser(browser);
+  mediator.baseViewController = self.baseViewController;
+  mediator.bookmarkModel = ios::BookmarkModelFactory::GetForProfile(profile);
+  mediator.readingListModel = ReadingListModelFactory::GetForProfile(profile);
+  mediator.profilePrefs = profile->GetPrefs();
+  mediator.engagementTracker = tracker;
+  mediator.webContentAreaOverlayPresenter = overlayPresenter;
+  mediator.browserPolicyConnector =
+      GetApplicationContext()->GetBrowserPolicyConnector();
+  mediator.syncService = SyncServiceFactory::GetForProfile(profile);
+  if (IsOverflowMenuHomeCustomizationEntrypointEnabled() && !incognito) {
+    mediator.NTPCommandHandler =
+        HandlerForProtocol(dispatcher, NewTabPageCommands);
+    mediator.backgroundCustomizationService =
+        HomeBackgroundCustomizationServiceFactory::GetForProfile(profile);
+    mediator.userUploadedImageManager =
+        UserUploadedImageManagerFactory::GetForProfile(profile);
+    image_fetcher::ImageFetcherService* imageFetcherService =
+        ImageFetcherServiceFactory::GetForProfile(profile);
+    mediator.imageFetcher = imageFetcherService->GetImageFetcher(
+        image_fetcher::ImageFetcherConfig::kReducedMode);
+  }
+  mediator.templateURLService =
+      ios::TemplateURLServiceFactory::GetForProfile(profile);
+  mediator.browserManagementService =
+      policy::BrowserManagementServiceFactory::GetForProfile(profile);
+  mediator.promosManager = PromosManagerFactory::GetForProfile(profile);
+  mediator.readingListBrowserAgent =
+      ReadingListBrowserAgent::FromBrowser(browser);
+  // Set the AuthenticationService with the one from the original
+  // ProfileIOS as the incognito one doesn't have that service.
+  mediator.authenticationService = AuthenticationServiceFactory::GetForProfile(
+      profile->GetOriginalProfile());
+  mediator.identityManager =
+      IdentityManagerFactory::GetForProfile(profile->GetOriginalProfile());
+  mediator.identityAvatarProvider =
+      GetApplicationContext()->GetIdentityAvatarProvider();
+  mediator.tabBasedIPHBrowserAgent =
+      TabBasedIPHBrowserAgent::FromBrowser(browser);
+  mediator.hasSettingsBlueDot =
+      [self.popupMenuHelpCoordinator hasBlueDotForOverflowMenu];
+  self.contentBlockerMediator.consumer = mediator;
 
-  self.actionHandler = [[PopupMenuActionHandler alloc] init];
-  self.actionHandler.baseViewController = self.baseViewController;
-  self.actionHandler.dispatcher = static_cast<
-      id<ApplicationCommands, BrowserCommands, FindInPageCommands,
-         LoadQueryCommands, PriceTrackedItemsCommands, TextZoomCommands>>(
-      self.browser->GetCommandDispatcher());
-  self.actionHandler.bookmarksCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), BookmarksCommands);
-  self.actionHandler.browserCoordinatorCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), BrowserCoordinatorCommands);
-  self.actionHandler.pageInfoCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), PageInfoCommands);
-  self.actionHandler.popupMenuCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), PopupMenuCommands);
-  self.actionHandler.qrScannerCommandsHandler = HandlerForProtocol(
-      self.browser->GetCommandDispatcher(), QRScannerCommands);
-  self.actionHandler.helpHandler =
-      HandlerForProtocol(self.browser->GetCommandDispatcher(), HelpCommands);
-  self.actionHandler.delegate = self.mediator;
-  self.actionHandler.navigationAgent =
-      WebNavigationBrowserAgent::FromBrowser(self.browser);
-  tableViewController.delegate = self.actionHandler;
+  NSInteger highlightDestination =
+      [self.popupMenuHelpCoordinator highlightDestination] == nil
+          ? -1
+          : [[self.popupMenuHelpCoordinator highlightDestination] integerValue];
 
-  self.presenter = [[PopupMenuPresenter alloc] init];
-  self.presenter.baseViewController = self.baseViewController;
-  self.presenter.presentedViewController = tableViewController;
-  LayoutGuideCenter* layoutGuideCenter =
-      LayoutGuideCenterForBrowser(self.browser);
+  UITraitCollection* traits = self.baseViewController.traitCollection;
+  OverflowMenuUIConfiguration* uiConfiguration = [[OverflowMenuUIConfiguration
+      alloc]
+      initWithPresentingViewControllerHorizontalSizeClass:
+          traits.horizontalSizeClass
+                presentingViewControllerVerticalSizeClass:traits
+                                                              .verticalSizeClass
+                                     highlightDestination:highlightDestination];
+
+  self.popupMenuHelpCoordinator.uiConfiguration = uiConfiguration;
+
+  _overflowMenuModel = [[OverflowMenuModel alloc] initWithDestinations:@[]
+                                                          actionGroups:@[]];
+
+  _overflowMenuOrderer.model = _overflowMenuModel;
+  mediator.model = _overflowMenuModel;
+  self.popupMenuHelpCoordinator.actionProvider = mediator;
+
+  self.overflowMenuMediator = mediator;
+
+  UIViewController* menu =
+      [OverflowMenuViewProvider makeViewControllerWithModel:_overflowMenuModel
+                                            uiConfiguration:uiConfiguration
+                                             metricsHandler:self
+                                  customizationEventHandler:self];
+
+  LayoutGuideCenter* layoutGuideCenter = LayoutGuideCenterForBrowser(browser);
+  mediator.layoutGuideCenter = layoutGuideCenter;
   UILayoutGuide* layoutGuide =
       [layoutGuideCenter makeLayoutGuideNamed:kToolsMenuGuide];
   [self.baseViewController.view addLayoutGuide:layoutGuide];
-  self.presenter.layoutGuide = layoutGuide;
-  self.presenter.delegate = self;
+  menu.modalPresentationStyle = UIModalPresentationPopover;
 
-  [self.presenter prepareForPresentation];
-  [self.presenter presentAnimated:YES];
+  UIPopoverPresentationController* popoverPresentationController =
+      menu.popoverPresentationController;
+  popoverPresentationController.popoverBackgroundViewClass =
+      [InvisibleArrowPopoverBackgroundView class];
+  popoverPresentationController.sourceView = self.baseViewController.view;
+  popoverPresentationController.sourceRect = layoutGuide.layoutFrame;
+  popoverPresentationController.permittedArrowDirections =
+      UIPopoverArrowDirectionUp;
+  popoverPresentationController.delegate = self;
+  popoverPresentationController.backgroundColor =
+      [UIColor colorNamed:kBackgroundColor];
 
-  // Scrolls happen during prepareForPresentation, so only attach the metrics
-  // handler after presentation is done.
-  tableViewController.metricsHandler = self;
+  _menu = menu;
+  [_menu addObserver:self
+          forKeyPath:kPreferredContentSizeKey
+             options:NSKeyValueObservingOptionNew
+             context:nil];
+
+  [self setupSheetForMenu:menu isCustomizationScreen:NO animated:NO];
+
+  // Reset event before presenting.
+  _event = OverflowMenuVisitedEvent();
+
+  __weak __typeof(self) weakSelf = self;
+  [self.baseViewController
+      presentViewController:menu
+                   animated:YES
+                 completion:^{
+                   [weakSelf.popupMenuHelpCoordinator
+                       showIPHAfterOpenOfOverflowMenu:menu];
+                 }];
+
+  // Log to FET overflow menu opened if opened with blue dot.
+  if ([self.popupMenuHelpCoordinator hasBlueDotForOverflowMenu] && tracker) {
+    tracker->NotifyEvent(
+        feature_engagement::events::kBlueDotPromoOverflowMenuOpened);
+    [self updateToolsMenuBlueDotVisibility];
+  }
 }
 
 - (void)dismissPopupMenuAnimated:(BOOL)animated {
@@ -540,8 +488,7 @@ using base::UserMetricsAction;
 
     RecordOverflowMenuVisitedEvent(_event);
 
-    if (IsNewOverflowMenuEnabled() &&
-        self.overflowMenuUserScrolledToEndOfActions) {
+    if (self.overflowMenuUserScrolledToEndOfActions) {
       base::UmaHistogramBoolean(
           "IOS.OverflowMenu.UserScrolledToEndAndStartedCustomization",
           _event.Has(
@@ -558,7 +505,24 @@ using base::UserMetricsAction;
     self.overflowMenuUserScrolledToEndOfActions = NO;
   }
 
+  if (_actionTriggered) {
+    IOSOverflowMenuAction UMAAction =
+        HistogramActionFromActionType(_actionTriggered.value());
+    base::UmaHistogramEnumeration("IOS.OverflowMenu.ActionTriggered",
+                                  UMAAction);
+    if (IsVisibleURLNewTabPage(
+            self.browser->GetWebStateList()->GetActiveWebState())) {
+      base::UmaHistogramEnumeration("IOS.OverflowMenu.ActionTriggeredOnNTP",
+                                    UMAAction);
+    }
+    _actionTriggered.reset();
+  }
+
   if (self.overflowMenuMediator) {
+    if (_menu) {
+      [_menu removeObserver:self forKeyPath:kPreferredContentSizeKey];
+      _menu = nil;
+    }
     [self.baseViewController dismissViewControllerAnimated:animated
                                                 completion:nil];
     _overflowMenuModel = nil;
@@ -567,12 +531,9 @@ using base::UserMetricsAction;
     _overflowMenuOrderer = nil;
     [self.overflowMenuMediator disconnect];
     self.overflowMenuMediator = nil;
+    self.contentBlockerMediator.consumer = nil;
+    self.contentBlockerMediator = nil;
   }
-  [self.presenter dismissAnimated:animated];
-  self.presenter = nil;
-  [self.mediator disconnect];
-  self.mediator = nil;
-  self.viewController = nil;
 }
 
 - (void)adjustPopupSize {
@@ -605,10 +566,21 @@ using base::UserMetricsAction;
 }
 
 - (void)displayPopupMenuTabRemindersIPH {
-  CHECK(
-      send_tab_to_self::IsSendTabIOSPushNotificationsEnabledWithTabReminders());
+  CHECK(send_tab_to_self::AreIOSTabRemindersEnabled());
 
   [self.popupMenuHelpCoordinator displayPopupMenuTabRemindersIPH];
+}
+
+- (void)showLevelUpPasswordCheckupWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpPasswordCheckupWalkthroughIPH];
+}
+
+- (void)showLevelUpPaymentMethodsWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpPaymentMethodsWalkthroughIPH];
+}
+
+- (void)showLevelUpQuickDeleteWalkthroughIPH {
+  [self.popupMenuHelpCoordinator showLevelUpQuickDeleteWalkthroughIPH];
 }
 
 #pragma mark - OverflowMenuCustomizationCommands
@@ -672,20 +644,6 @@ using base::UserMetricsAction;
   [self hideMenuCustomization];
 }
 
-#pragma mark - ContainedPresenterDelegate
-
-- (void)containedPresenterDidPresent:(id<ContainedPresenter>)presenter {
-  if (presenter != self.presenter) {
-    return;
-  }
-}
-
-#pragma mark - PopupMenuPresenterDelegate
-
-- (void)popupMenuPresenterWillDismiss:(PopupMenuPresenter*)presenter {
-  [self dismissPopupMenuAnimated:NO];
-}
-
 #pragma mark - UIAdaptivePresentationControllerDelegate
 
 - (void)presentationControllerDidDismiss:
@@ -717,8 +675,12 @@ using base::UserMetricsAction;
   _event.Put(OverflowMenuVisitedEventFields::kUserScrolledHorizontally);
 }
 
-- (void)popupMenuTookAction {
+- (void)popupMenuTriggerElement {
   self.toolsMenuUserTookAction = YES;
+}
+
+- (void)popupMenuDidTriggerAction:(NSInteger)actionType {
+  _actionTriggered = static_cast<overflow_menu::ActionType>(actionType);
 }
 
 - (void)popupMenuUserSelectedAction {
@@ -791,26 +753,10 @@ using base::UserMetricsAction;
     sheetPresentationController
         .widthFollowsPreferredContentSizeWhenEdgeAttached = YES;
 
-    if (isCustomizationScreen) {
-      sheetPresentationController.prefersGrabberVisible = NO;
-      sheetPresentationController.detents =
-          @[ [UISheetPresentationControllerDetent largeDetent] ];
-    } else {
-      sheetPresentationController.prefersGrabberVisible = YES;
-
-      NSArray<UISheetPresentationControllerDetent*>* regularDetents = @[
-        [UISheetPresentationControllerDetent mediumDetent],
-        [UISheetPresentationControllerDetent largeDetent]
-      ];
-
-      NSArray<UISheetPresentationControllerDetent*>* largeTextDetents =
-          @[ [UISheetPresentationControllerDetent largeDetent] ];
-
-      BOOL hasLargeText = UIContentSizeCategoryIsAccessibilityCategory(
-          menu.traitCollection.preferredContentSizeCategory);
-      sheetPresentationController.detents =
-          hasLargeText ? largeTextDetents : regularDetents;
-    }
+    [self configureDetentsForSheetPresentationController:
+              sheetPresentationController
+                                                    menu:menu
+                                   isCustomizationScreen:isCustomizationScreen];
   };
 
   if (animated) {
@@ -818,6 +764,94 @@ using base::UserMetricsAction;
   } else {
     changes();
   }
+}
+
+- (void)observeValueForKeyPath:(NSString*)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id>*)change
+                       context:(void*)context {
+  if ([keyPath isEqualToString:kPreferredContentSizeKey] && object == _menu) {
+    // Invalidate the sheet detents so the sheet resizes to match the new
+    // preferred size.
+    [_menu.popoverPresentationController
+            .adaptiveSheetPresentationController invalidateDetents];
+    return;
+  }
+
+  // Any unhandled KVO keys must be forwarded to the superclass.
+  [super observeValueForKeyPath:keyPath
+                       ofObject:object
+                         change:change
+                        context:context];
+}
+
+#pragma mark - Private
+
+// Resolves the height for the custom sheet detent based on the menu's preferred
+// content size.
+- (CGFloat)resolveCustomDetentHeightWithContext:
+               (id<UISheetPresentationControllerDetentResolutionContext>)context
+                                           menu:(UIViewController*)menu {
+  CGFloat preferredHeight = menu.preferredContentSize.height;
+  if (preferredHeight == 0) {
+    return context.maximumDetentValue;
+  }
+  return MIN(preferredHeight, context.maximumDetentValue);
+}
+
+// Configures the detents for the sheet presentation controller based on the NTP
+// refactor flag and accessibility font settings.
+- (void)configureDetentsForSheetPresentationController:
+            (UISheetPresentationController*)sheetPresentationController
+                                                  menu:(UIViewController*)menu
+                                 isCustomizationScreen:
+                                     (BOOL)isCustomizationScreen {
+  if (isCustomizationScreen) {
+    sheetPresentationController.prefersGrabberVisible = NO;
+    sheetPresentationController.detents =
+        @[ [UISheetPresentationControllerDetent largeDetent] ];
+    return;
+  }
+
+  sheetPresentationController.prefersGrabberVisible = YES;
+
+  BOOL isNTPRefactorEnabled =
+      IsOverflowMenuNTPRefactorEnabled() &&
+      IsVisibleURLNewTabPage(
+          self.browser->GetWebStateList()->GetActiveWebState());
+
+  NSArray<UISheetPresentationControllerDetent*>* regularDetents;
+  if (isNTPRefactorEnabled) {
+    __weak UIViewController* weakMenu = menu;
+    __weak __typeof(self) weakSelf = self;
+    UISheetPresentationControllerDetent* customLargeDetent =
+        [UISheetPresentationControllerDetent
+            customDetentWithIdentifier:kOverflowMenuNTPPreferredHeightDetentId
+                              resolver:^CGFloat(
+                                  id<UISheetPresentationControllerDetentResolutionContext>
+                                      context) {
+                                return [weakSelf
+                                    resolveCustomDetentHeightWithContext:context
+                                                                    menu:
+                                                                        weakMenu];
+                              }];
+    regularDetents = @[
+      [UISheetPresentationControllerDetent mediumDetent], customLargeDetent
+    ];
+  } else {
+    regularDetents = @[
+      [UISheetPresentationControllerDetent mediumDetent],
+      [UISheetPresentationControllerDetent largeDetent]
+    ];
+  }
+
+  NSArray<UISheetPresentationControllerDetent*>* largeTextDetents =
+      @[ [UISheetPresentationControllerDetent largeDetent] ];
+
+  BOOL hasLargeText = UIContentSizeCategoryIsAccessibilityCategory(
+      menu.traitCollection.preferredContentSizeCategory);
+  sheetPresentationController.detents =
+      hasLargeText ? largeTextDetents : regularDetents;
 }
 
 @end

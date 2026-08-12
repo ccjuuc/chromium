@@ -18,7 +18,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/common/content_export.h"
+#include "content/public/common/child_process_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -50,11 +52,14 @@ class ChromeBlobStorageContext;
 class CONTENT_EXPORT FileSystemManagerImpl
     : public blink::mojom::FileSystemManager {
  public:
-  // Constructed and held by the RenderFrameHost and render process host on
-  // the UI thread. Used by render frames (via the RenderFrameHost), workers
-  // and pepper (via the render process host).
+  // Constructed and held by the RenderFrameHost and RenderProcessHost on
+  // the UI thread. Used by render frames (via the RenderFrameHost) and workers
+  // (via RenderProcessHost).
+  // `security_policy_handle` indicates which renderer process this is for and
+  // ensures that the corresponding ProcessState is not deleted while this
+  // instance may still query it.
   FileSystemManagerImpl(
-      int process_id,
+      ChildProcessSecurityPolicyImpl::Handle security_policy_handle,
       scoped_refptr<storage::FileSystemContext> file_system_context,
       scoped_refptr<ChromeBlobStorageContext> blob_storage_context);
 
@@ -69,8 +74,7 @@ class CONTENT_EXPORT FileSystemManagerImpl
       mojo::PendingReceiver<blink::mojom::FileSystemManager> receiver);
 
   // blink::mojom::FileSystem
-  void Open(const url::Origin& origin,
-            blink::mojom::FileSystemType file_system_type,
+  void Open(blink::mojom::FileSystemType file_system_type,
             OpenCallback callback) override;
   void ResolveURL(const GURL& filesystem_url,
                   ResolveURLCallback callback) override;
@@ -136,8 +140,7 @@ class CONTENT_EXPORT FileSystemManagerImpl
   struct WriteSyncCallbackEntry;
   struct ReadDirectorySyncCallbackEntry;
 
-  void ContinueOpen(const url::Origin& origin,
-                    blink::mojom::FileSystemType file_system_type,
+  void ContinueOpen(blink::mojom::FileSystemType file_system_type,
                     mojo::ReportBadMessageCallback bad_message_callback,
                     OpenCallback callback,
                     const blink::StorageKey& storage_key,
@@ -275,7 +278,8 @@ class CONTENT_EXPORT FileSystemManagerImpl
                           base::FilePath platform_path);
   static void GetPlatformPathOnFileThread(
       const GURL& path,
-      int process_id,
+      std::unique_ptr<ChildProcessSecurityPolicyImpl::Handle>
+          security_policy_handle,
       scoped_refptr<storage::FileSystemContext> context,
       base::WeakPtr<FileSystemManagerImpl> file_system_manager,
       const blink::StorageKey& storage_key,
@@ -295,10 +299,14 @@ class CONTENT_EXPORT FileSystemManagerImpl
       OperationListenerID listener_id);
   void OnConnectionErrorForOpListeners(OperationListenerID listener_id);
 
-  const int process_id_;
   const scoped_refptr<storage::FileSystemContext> context_;
   const scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
   std::unique_ptr<storage::FileSystemOperationRunner> operation_runner_;
+
+  // Storing a ChildProcessSecurityPolicy::Handle for this instances's renderer
+  // process ensures that the corresponding ProcessState cannot be deleted
+  // while it is still needed.
+  ChildProcessSecurityPolicyImpl::Handle security_policy_handle_;
 
   mojo::ReceiverSet<blink::mojom::FileSystemManager, blink::StorageKey>
       receivers_;

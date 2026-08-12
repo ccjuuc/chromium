@@ -9,13 +9,23 @@ import type {ComposeboxLensSearchElement} from './composebox_lens_search.js';
 export function getHtml(this: ComposeboxLensSearchElement) {
   // clang-format off
   return html`
-  <cr-button id="lensSearch"
-      aria-label="${this.i18n('lensSearchLabel')}" title="${this.i18n('lensSearchLabel')}"
-      @click="${this.onLensSearchClick_}">
-    <div id="content">
-      <cr-icon id="icon" icon="composebox:google-lens-2"></cr-icon>
-      <div>${this.i18n('lensSearchLabel')}</div>
-    </div>
-  </cr-button>`;
+    ${this.isIcon ? html`
+      <cr-icon-button id="lensIcon"
+          iron-icon="composebox:google-lens-2"
+          title="${this.i18n('lensSearchHint')}"
+          aria-label="${this.i18n('lensSearchHint')}"
+          @click="${this.onLensSearchClick_}">
+      </cr-icon-button>
+    ` : html`
+      <cr-button id="lensSearchPill"
+          title="${this.i18n('lensSearchHint')}"
+          aria-label="${this.i18n('lensSearchHint')}"
+          @click="${this.onLensSearchClick_}">
+        <div id="content">
+          <div>${this.i18n('lensSearchHint')}</div>
+        </div>
+      </cr-button>
+    `}
+  `;
   // clang-format on
 }

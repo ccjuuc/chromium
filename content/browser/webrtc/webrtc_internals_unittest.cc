@@ -134,7 +134,7 @@ class WebRTCInternalsForTest : public WebRTCInternals {
 
 class WebRtcInternalsTest : public testing::Test {
  protected:
-  void VerifyString(const base::Value::Dict& dict,
+  void VerifyString(const base::DictValue& dict,
                     const std::string& key,
                     const std::string& expected) {
     const std::string* actual = dict.FindString(key);
@@ -142,7 +142,7 @@ class WebRtcInternalsTest : public testing::Test {
     EXPECT_EQ(expected, *actual);
   }
 
-  void VerifyInt(const base::Value::Dict& dict,
+  void VerifyInt(const base::DictValue& dict,
                  const std::string& key,
                  int expected) {
     std::optional<int> actual = dict.FindInt(key);
@@ -150,10 +150,10 @@ class WebRtcInternalsTest : public testing::Test {
     EXPECT_EQ(expected, actual.value());
   }
 
-  void VerifyList(const base::Value::Dict& dict,
+  void VerifyList(const base::DictValue& dict,
                   std::string_view key,
-                  const base::Value::List& expected) {
-    const base::Value::List* actual = dict.FindList(key);
+                  const base::ListValue& expected) {
+    const base::ListValue* actual = dict.FindList(key);
     ASSERT_TRUE(actual);
     EXPECT_EQ(expected, *actual);
   }
@@ -166,7 +166,7 @@ class WebRtcInternalsTest : public testing::Test {
                               const std::string& audio,
                               const std::string& video) {
     ASSERT_TRUE(actual_data->is_dict());
-    const base::Value::Dict& dict = actual_data->GetDict();
+    const base::DictValue& dict = actual_data->GetDict();
 
     VerifyInt(dict, "rid", frame_id.child_id.GetUnsafeValue());
     VerifyInt(dict, "pid", pid);
@@ -187,7 +187,7 @@ class WebRtcInternalsTest : public testing::Test {
                                      const std::string& audio_track_info,
                                      const std::string& video_track_info) {
     ASSERT_TRUE(actual_data->is_dict());
-    const base::Value::Dict& dict = actual_data->GetDict();
+    const base::DictValue& dict = actual_data->GetDict();
 
     VerifyInt(dict, "rid", frame_id.child_id.GetUnsafeValue());
     VerifyInt(dict, "pid", pid);
@@ -204,7 +204,7 @@ class WebRtcInternalsTest : public testing::Test {
                                      const std::string& error,
                                      const std::string& error_message) {
     ASSERT_TRUE(actual_data->is_dict());
-    const base::Value::Dict& dict = actual_data->GetDict();
+    const base::DictValue& dict = actual_data->GetDict();
 
     VerifyInt(dict, "rid", frame_id.child_id.GetUnsafeValue());
     VerifyInt(dict, "pid", pid);
@@ -254,8 +254,7 @@ TEST_F(WebRtcInternalsTest, EnsureNoLogWhenNoObserver) {
 
   ASSERT_TRUE(observer.event_data()->is_list());
   EXPECT_EQ(1U, observer.event_data()->GetList().size());
-  const base::Value::Dict* dict =
-      observer.event_data()->GetList()[0].GetIfDict();
+  const base::DictValue* dict = observer.event_data()->GetList()[0].GetIfDict();
   ASSERT_TRUE(dict);
   ASSERT_FALSE(dict->Find("log"));
 
@@ -282,8 +281,7 @@ TEST_F(WebRtcInternalsTest, EnsureLogIsRemovedWhenObserverIsRemoved) {
 
   ASSERT_TRUE(observer.event_data()->is_list());
   EXPECT_EQ(1U, observer.event_data()->GetList().size());
-  const base::Value::Dict* dict =
-      observer.event_data()->GetList()[0].GetIfDict();
+  const base::DictValue* dict = observer.event_data()->GetList()[0].GetIfDict();
   ASSERT_TRUE(dict);
   ASSERT_TRUE(dict->FindList("log"));
 
@@ -294,7 +292,7 @@ TEST_F(WebRtcInternalsTest, EnsureLogIsRemovedWhenObserverIsRemoved) {
 
   ASSERT_TRUE(observer.event_data()->is_list());
   EXPECT_EQ(1U, observer.event_data()->GetList().size());
-  const base::Value::Dict* updated_dict =
+  const base::DictValue* updated_dict =
       observer.event_data()->GetList()[0].GetIfDict();
   ASSERT_FALSE(updated_dict->Find("log"));
 
@@ -316,7 +314,7 @@ TEST_F(WebRtcInternalsTest, SendAddPeerConnectionUpdate) {
   ASSERT_EQ("add-peer-connection", observer.event_name());
 
   ASSERT_TRUE(observer.event_data()->is_dict());
-  const base::Value::Dict& dict = observer.event_data()->GetDict();
+  const base::DictValue& dict = observer.event_data()->GetDict();
 
   VerifyInt(dict, "rid", kFrameId.child_id.GetUnsafeValue());
   VerifyInt(dict, "lid", kLid);
@@ -344,7 +342,7 @@ TEST_F(WebRtcInternalsTest, SendRemovePeerConnectionUpdate) {
   ASSERT_EQ("remove-peer-connection", observer.event_name());
 
   ASSERT_TRUE(observer.event_data()->is_dict());
-  const base::Value::Dict& dict = observer.event_data()->GetDict();
+  const base::DictValue& dict = observer.event_data()->GetDict();
 
   VerifyInt(dict, "rid", kFrameId.child_id.GetUnsafeValue());
   VerifyInt(dict, "lid", kLid);
@@ -372,7 +370,7 @@ TEST_F(WebRtcInternalsTest, SendUpdatePeerConnectionUpdate) {
   ASSERT_EQ("update-peer-connection", observer.event_name());
 
   ASSERT_TRUE(observer.event_data()->is_dict());
-  const base::Value::Dict& dict = observer.event_data()->GetDict();
+  const base::DictValue& dict = observer.event_data()->GetDict();
 
   VerifyInt(dict, "rid", kFrameId.child_id.GetUnsafeValue());
   VerifyInt(dict, "lid", kLid);
@@ -584,11 +582,11 @@ TEST_F(WebRtcInternalsTest, SendAllUpdatesWithPeerConnectionUpdate) {
   ASSERT_TRUE(observer.event_data());
 
   ASSERT_TRUE(observer.event_data()->is_list());
-  const base::Value::List& list = observer.event_data()->GetList();
+  const base::ListValue& list = observer.event_data()->GetList();
   EXPECT_EQ(1U, list.size());
 
   ASSERT_TRUE(list.begin()->is_dict());
-  const base::Value::Dict& dict = list.begin()->GetDict();
+  const base::DictValue& dict = list.begin()->GetDict();
 
   VerifyInt(dict, "rid", kFrameId.child_id.GetUnsafeValue());
   VerifyInt(dict, "lid", kLid);
@@ -597,16 +595,84 @@ TEST_F(WebRtcInternalsTest, SendAllUpdatesWithPeerConnectionUpdate) {
   VerifyString(dict, "rtcConfiguration", kRtcConfiguration);
   EXPECT_TRUE(dict.FindDouble("timestamp"));
 
-  const base::Value::List* log_value = dict.FindList("log");
+  const base::ListValue* log_value = dict.FindList("log");
   ASSERT_TRUE(log_value);
   EXPECT_EQ(1U, log_value->size());
 
   ASSERT_TRUE(log_value->begin()->is_dict());
-  const base::Value::Dict& inner_dict = log_value->begin()->GetDict();
+  const base::DictValue& inner_dict = log_value->begin()->GetDict();
   VerifyString(inner_dict, "type", update_type);
   VerifyString(inner_dict, "value", update_value);
 
   base::RunLoop().RunUntilIdle();
+}
+
+// Regression test for crbug.com/521719721: if a PeerConnection is already
+// connected (e.g. a call running on another page) before webrtc-internals is
+// opened, attaching an observer must start polling stats and update the wake
+// lock. The real flow is AddObserver() followed by UpdateObserver() when the
+// page finishes loading.
+TEST_F(WebRtcInternalsTest, StatsTimerStartsWhenObserverAddedAfterConnection) {
+  WebRTCInternalsForTest webrtc_internals;
+
+  // Simulate a call that started on a separate page before webrtc-internals
+  // was opened: a PeerConnection is added and becomes connected while no
+  // observer is present.
+  webrtc_internals.OnPeerConnectionAdded(kFrameId, kLid, kPid, kUrl,
+                                         kRtcConfiguration);
+  webrtc_internals.OnPeerConnectionUpdated(
+      kFrameId, kLid, "oniceconnectionstatechange", "\"connected\"");
+  EXPECT_EQ(webrtc_internals.num_connected_connections(), 1);
+
+  // Without an observer, stats are not being polled even though the wake lock
+  // is held for the active connection.
+  EXPECT_FALSE(webrtc_internals.IsStatsTimerRunningForTesting());
+  EXPECT_TRUE(webrtc_internals.HasWakeLock());
+
+  // Open webrtc-internals: an observer is added and then asked to sync the
+  // current state.
+  MockWebRtcInternalsProxy observer;
+  webrtc_internals.AddObserver(&observer);
+  webrtc_internals.UpdateObserver(&observer);
+
+  // Stats polling should now be running and the wake lock still held.
+  EXPECT_TRUE(webrtc_internals.IsStatsTimerRunningForTesting());
+  EXPECT_TRUE(webrtc_internals.HasWakeLock());
+
+  // Removing the last connected PeerConnection stops the polling again
+  // and releases the wake lock.
+  webrtc_internals.OnPeerConnectionRemoved(kFrameId, kLid);
+  EXPECT_EQ(webrtc_internals.num_connected_connections(), 0);
+  EXPECT_FALSE(webrtc_internals.IsStatsTimerRunningForTesting());
+  EXPECT_FALSE(webrtc_internals.HasWakeLock());
+
+  webrtc_internals.RemoveObserver(&observer);
+}
+
+// Closing the last webrtc-internals page must stop stats polling even if a
+// PeerConnection is still active, otherwise stats keep being requested from all
+// renderers with nobody to display them.
+TEST_F(WebRtcInternalsTest, StatsTimerStopsWhenLastObserverRemoved) {
+  WebRTCInternalsForTest webrtc_internals;
+
+  // Open webrtc-internals while a call is active: stats are being polled.
+  MockWebRtcInternalsProxy observer;
+  webrtc_internals.AddObserver(&observer);
+  webrtc_internals.OnPeerConnectionAdded(kFrameId, kLid, kPid, kUrl,
+                                         kRtcConfiguration);
+  webrtc_internals.OnPeerConnectionUpdated(
+      kFrameId, kLid, "oniceconnectionstatechange", "\"connected\"");
+  EXPECT_EQ(webrtc_internals.num_connected_connections(), 1);
+  EXPECT_TRUE(webrtc_internals.IsStatsTimerRunningForTesting());
+
+  // Close webrtc-internals while the PeerConnection stays connected. Polling
+  // should stop, but the wake lock remains held for the active connection.
+  webrtc_internals.RemoveObserver(&observer);
+  EXPECT_EQ(webrtc_internals.num_connected_connections(), 1);
+  EXPECT_FALSE(webrtc_internals.IsStatsTimerRunningForTesting());
+  EXPECT_TRUE(webrtc_internals.HasWakeLock());
+
+  webrtc_internals.OnPeerConnectionRemoved(kFrameId, kLid);
 }
 
 TEST_F(WebRtcInternalsTest, OnAddStandardStats) {
@@ -617,7 +683,7 @@ TEST_F(WebRtcInternalsTest, OnAddStandardStats) {
   webrtc_internals.OnPeerConnectionAdded(kFrameId, kLid, kPid, kUrl,
                                          kRtcConfiguration);
 
-  base::Value::List list;
+  base::ListValue list;
   list.Append("xxx");
   list.Append("yyy");
   webrtc_internals.OnAddStandardStats(kFrameId, kLid, list.Clone());
@@ -628,7 +694,7 @@ TEST_F(WebRtcInternalsTest, OnAddStandardStats) {
   ASSERT_TRUE(observer.event_data());
 
   ASSERT_TRUE(observer.event_data()->is_dict());
-  const base::Value::Dict& dict = observer.event_data()->GetDict();
+  const base::DictValue& dict = observer.event_data()->GetDict();
 
   VerifyInt(dict, "rid", kFrameId.child_id.GetUnsafeValue());
   VerifyInt(dict, "lid", kLid);

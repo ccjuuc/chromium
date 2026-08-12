@@ -14,6 +14,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/advanced_memory_safety_checks.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/actions/omnibox_action.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -69,7 +70,8 @@ class AutocompleteResult {
   // Returns a corresponding Java object, creating it if necessary.
   // NOTE: Android specific methods are defined in autocomplete_match_android.cc
   base::android::ScopedJavaLocalRef<jobject> GetOrCreateJavaObject(
-      JNIEnv* env) const;
+      JNIEnv* env,
+      const TemplateURLService* template_url_service) const;
 
   // Notify the Java object that its native counterpart is about to be
   // destroyed.
@@ -78,7 +80,8 @@ class AutocompleteResult {
   // Construct an array of AutocompleteMatch objects arranged in the exact same
   // order as |matches_|.
   base::android::ScopedJavaLocalRef<jobjectArray> BuildJavaMatches(
-      JNIEnv* env) const;
+      JNIEnv* env,
+      const TemplateURLService* template_url_service) const;
 
   // Group suggestions in specified range by search vs url.
   // The range used is [first_index, last_index), which contains all the
@@ -98,8 +101,8 @@ class AutocompleteResult {
   // AutocompleteResult is correct.
   bool VerifyCoherency(JNIEnv* env,
                        const base::android::JavaRef<jlongArray>& matches,
-                       jint match_index,
-                       jint verification_point);
+                       int32_t match_index,
+                       int32_t verification_point);
 #endif
 
   // Moves matches from |old_matches| to provide a consistent result set.
@@ -188,18 +191,14 @@ class AutocompleteResult {
   void AttachPedalsToMatches(const AutocompleteInput& input,
                              const AutocompleteProviderClient& client);
 
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-  // Attaches AIM action to the highest-scoring eligible match in the result
-  // set, if no other actions are present.
-  void AttachAimAction(TemplateURLService* template_url_service,
-                       AutocompleteProviderClient* client);
-#endif
-
   // Sets a takeover action on all matches to issue a contextual search.
   void AttachContextualSearchFulfillmentActionToMatches();
 
   // Sets a takeover action on all matches to open Lens.
   void AttachContextualSearchOpenLensActionToMatches();
+
+  // Sets |action| in matches that have associated keywords.
+  void AttachSiteSearchActionToMatches(const TemplateURLService* service);
 
   // Sets a smart compose inline hint.
   void set_smart_compose_inline_hint(
@@ -243,13 +242,6 @@ class AutocompleteResult {
                                                 const ACMatches& matches);
   static ACMatches::iterator FindTopMatch(const AutocompleteInput& input,
                                           ACMatches* matches);
-
-  // If the top match is a Search Entity, and it was deduplicated with a
-  // non-entity match, splits off the non-entity match from the list of
-  // duplicates and returns true. Otherwise returns false.
-  // The non-entity duplicate is promoted to the top, unless the entity match
-  // has Action in Suggest where it remains at the top.
-  static bool UndedupTopSearchEntityMatch(ACMatches* matches);
 
   // Just a helper function to encapsulate the logic of deciding how many
   // matches to keep, with respect to configured maximums, URL limits,
@@ -310,6 +302,12 @@ class AutocompleteResult {
   void clear_gws_event_id_hashes_in_session() {
     session_.gws_event_id_hashes.clear();
   }
+
+  const std::vector<omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2>&
+  experiment_stats_v2s_in_session() const;
+
+  void add_experiment_stat_v2_in_session(
+      const omnibox::metrics::ChromeSearchboxStats::ExperimentStatsV2& stat);
 
   std::pair<bool, bool> contextual_suggestions_shown_in_session() {
     return {session_.contextual_search_suggestions_shown_in_session,
@@ -434,6 +432,15 @@ class AutocompleteResult {
     return std::erase_if(matches_, predicate);
   }
 
+  // Refreshes the ready state for this result.
+  void RefreshReadyState();
+
+  // Read-only access to `sequence_id_` for async use verification.
+  uint32_t sequence_id() const { return sequence_id_; }
+
+  // Read-only access to `result_ready_time_` for metric association.
+  base::TimeTicks result_ready_time() const { return result_ready_time_; }
+
   // This method implements a stateful stable partition. Matches which are
   // search types, and their submatches regardless of type, are shifted
   // earlier in the range, while non-search types and their submatches
@@ -454,6 +461,8 @@ class AutocompleteResult {
   FRIEND_TEST_ALL_PREFIXES(AutocompleteResultTest, Desktop_TwoColumnRealbox);
   FRIEND_TEST_ALL_PREFIXES(AutocompleteResultTest, Android_TrimOmniboxActions);
   FRIEND_TEST_ALL_PREFIXES(AutocompleteResultTest, SwapMatches);
+  FRIEND_TEST_ALL_PREFIXES(AutocompleteResultTimeTest,
+                           ResultReadyTimeSwapAndCopy);
 
   typedef std::map<AutocompleteProvider*, ACMatches> ProviderToMatches;
 
@@ -494,6 +503,16 @@ class AutocompleteResult {
       ACMatches* matches,
       const CompareWithDemoteByType<AutocompleteMatch>& comparing_object);
 
+  // If the top match is a Search Entity, and it was deduplicated with a
+  // non-entity match, splits off the non-entity match from the list of
+  // duplicates and returns true. Otherwise returns false.
+  // The non-entity duplicate is promoted to the top, unless the entity match
+  // has Action in Suggest where it remains at the top.
+  static bool UndedupeTopSearchEntityMatch(ACMatches* matches);
+
+  // Positions inline location matches relative to their parents.
+  void ArrangeInlineLocationSignalingMatch();
+
   // Populates |provider_to_matches| from |matches_|. This AutocompleteResult
   // should not be used after the 'move' version.
   void BuildProviderToMatchesCopy(ProviderToMatches* provider_to_matches) const;
@@ -513,7 +532,7 @@ class AutocompleteResult {
   // This method reduces the number of navigation suggestions to that of
   // `max_url_matches_` but will allow more if there are no other types to
   // replace them.
-  void LimitNumberOfURLsShown(
+  void LimitNumberOfUrlsShown(
       size_t max_matches,
       const CompareWithDemoteByType<AutocompleteMatch>& comparing_object);
 
@@ -557,6 +576,15 @@ class AutocompleteResult {
   // autocomplete session to start when the omnibox is focused and to end when
   // the popup closes.
   SessionData session_;
+
+  // A simple mechanism to measure and prevent use of stale data while
+  // interoperating asynchronously with the webui omnibox popup.
+  uint32_t sequence_id_;
+
+  // The time at which this result was refreshed. This must be manually
+  // refreshed by calling `RefreshReadyState()` whenever the content of this
+  // result is updated.
+  base::TimeTicks result_ready_time_;
 
 #if BUILDFLAG(IS_ANDROID)
   // Corresponding Java object.

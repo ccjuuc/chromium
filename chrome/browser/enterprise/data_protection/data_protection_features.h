@@ -10,13 +10,13 @@
 
 namespace enterprise_data_protection {
 
-BASE_DECLARE_FEATURE(kEnableSinglePageAppDataProtection);
-
 BASE_DECLARE_FEATURE(kEnableForceDownloadToCloud);
 
-BASE_DECLARE_FEATURE(kEnableVerdictCache);
+BASE_DECLARE_FEATURE(kEnableForceDownloadToOneDrive);
 
-BASE_DECLARE_FEATURE_PARAM(size_t, kVerdictCacheMaxSize);
+BASE_DECLARE_FEATURE(kEnableTabSharingProtection);
+
+BASE_DECLARE_FEATURE(kEnterpriseTabTitleReporting);
 
 }  // namespace enterprise_data_protection
 

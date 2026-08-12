@@ -47,13 +47,13 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id_util.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/net_errors.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
-#include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-shared.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 #include "ui/base/page_transition_types.h"
@@ -149,19 +149,10 @@ void RecordPageLoadInitiatorForAdTaggingUkm(
   ukm::builders::PageLoadInitiatorForAdTagging builder(
       navigation_handle->GetRenderFrameHost()->GetPageUkmSourceId());
 
-  bool renderer_initiated = navigation_handle->IsRendererInitiated();
-  bool renderer_initiated_with_user_activation =
-      (navigation_handle->GetNavigationInitiatorActivationAndAdStatus() !=
-       blink::mojom::NavigationInitiatorActivationAndAdStatus::
-           kDidNotStartWithTransientActivation);
-  bool renderer_initiated_with_user_activation_from_ad =
-      (navigation_handle->GetNavigationInitiatorActivationAndAdStatus() ==
-       blink::mojom::NavigationInitiatorActivationAndAdStatus::
-           kStartedWithTransientActivationFromAd);
-
-  builder.SetFromUser(!renderer_initiated ||
-                      renderer_initiated_with_user_activation);
-  builder.SetFromAdClick(renderer_initiated_with_user_activation_from_ad);
+  builder.SetFromUser(!navigation_handle->IsRendererInitiated() ||
+                      navigation_handle->StartedWithTransientActivation());
+  builder.SetFromAdClick(navigation_handle->StartedWithTransientActivation() &&
+                         navigation_handle->StartedByAd());
 
   builder.Record(ukm_recorder->Get());
 }
@@ -248,22 +239,28 @@ FrameTreeData* AdsPageLoadMetricsObserver::FrameInstance::Get() {
 }
 
 FrameTreeData* AdsPageLoadMetricsObserver::FrameInstance::GetOwnedFrame() {
-  if (owned_frame_data_) {
-    return owned_frame_data_.get();
-  }
-  return nullptr;
+  return owned_frame_data_.get();
+}
+
+const FrameTreeData* AdsPageLoadMetricsObserver::FrameInstance::GetOwnedFrame()
+    const {
+  return owned_frame_data_.get();
 }
 
 AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider::
     HeavyAdThresholdNoiseProvider(bool use_noise)
     : use_noise_(use_noise) {}
 
-base::ByteCount AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider::
+base::ByteSize AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider::
     GetNetworkThresholdNoiseForFrame() const {
-  return base::ByteCount(
-      use_noise_ ? base::RandInt(0, kMaxNetworkThresholdNoiseBytes.InBytes())
-                 : 0);
+  return base::ByteSize(
+      use_noise_
+          ? base::RandGenerator(kMaxNetworkThresholdNoiseBytes.InBytes() + 1)
+          : 0u);
 }
+
+const char AdsPageLoadMetricsObserver::kObserverName[] =
+    "AdsPageLoadMetricsObserver";
 
 AdsPageLoadMetricsObserver::AdsPageLoadMetricsObserver(
     heavy_ad_intervention::HeavyAdService* heavy_ad_service,
@@ -291,8 +288,7 @@ AdsPageLoadMetricsObserver::AdsPageLoadMetricsObserver(
 AdsPageLoadMetricsObserver::~AdsPageLoadMetricsObserver() = default;
 
 const char* AdsPageLoadMetricsObserver::GetObserverName() const {
-  static const char kName[] = "AdsPageLoadMetricsObserver";
-  return kName;
+  return kObserverName;
 }
 
 PageLoadMetricsObserver::ObservePolicy AdsPageLoadMetricsObserver::OnStart(
@@ -325,9 +321,8 @@ AdsPageLoadMetricsObserver::OnFencedFramesStart(
     content::NavigationHandle* navigation_handle,
     const GURL& currently_committed_url) {
   // Need the observer-level forwarding for FrameReceivedUserActivation,
-  // FrameDisplayStateChanged, FrameSizeChanged, MediaStartedPlaying,
-  // OnMainFrameIntersectionRectChanged, OnMainFrameViewportRectChanged,
-  // and OnV8MemoryChanged.
+  // FrameDisplayStateChanged, FrameSizeChanged, MediaStartedPlaying, and
+  // OnV8MemoryChanged.
   return FORWARD_OBSERVING;
 }
 
@@ -337,13 +332,9 @@ PageLoadMetricsObserver::ObservePolicy AdsPageLoadMetricsObserver::OnCommit(
 
   RecordPageLoadInitiatorForAdTaggingUkm(navigation_handle);
 
-  // When NavigationInitiatorActivationAndAdStatus is
-  // kStartedWithTransientActivationFromAd, the navigation activated from a user
-  // ad click gesture.
-  if (history_service_ &&
-      navigation_handle->GetNavigationInitiatorActivationAndAdStatus() ==
-          blink::mojom::NavigationInitiatorActivationAndAdStatus::
-              kStartedWithTransientActivationFromAd) {
+  // The navigation activated from a user ad click gesture.
+  if (history_service_ && navigation_handle->StartedWithTransientActivation() &&
+      navigation_handle->StartedByAd()) {
     // Check the frequency of the navigation URL in history.
     QueryAdUrlFrequencyInHistory(
         history_service_.get(), navigation_handle->GetURL(),
@@ -719,12 +710,9 @@ void AdsPageLoadMetricsObserver::MediaStartedPlaying(
   }
 }
 
-void AdsPageLoadMetricsObserver::OnMainFrameIntersectionRectChanged(
-    content::RenderFrameHost* render_frame_host,
-    const gfx::Rect& main_frame_intersection_rect) {
-  if (render_frame_host->IsInPrimaryMainFrame()) {
-    page_ad_density_tracker_.UpdateMainFrameRect(main_frame_intersection_rect);
-  }
+void AdsPageLoadMetricsObserver::OnMainFrameRectChanged(
+    const gfx::Rect& main_frame_rect) {
+  page_ad_density_tracker_.UpdateMainFrameRect(main_frame_rect);
 }
 
 void AdsPageLoadMetricsObserver::OnMainFrameViewportRectChanged(
@@ -745,8 +733,10 @@ void AdsPageLoadMetricsObserver::OnMainFrameAdRectsChanged(
 void AdsPageLoadMetricsObserver::CheckForAdDensityViolation() {
 #if BUILDFLAG(IS_ANDROID)
   const int kMaxMobileAdDensityByHeight = 30;
-  if (page_ad_density_tracker_.MaxPageAdDensityByHeight() >
-      kMaxMobileAdDensityByHeight) {
+  std::optional<int> max_page_ad_density_by_height =
+      page_ad_density_tracker_.MaxPageAdDensityByHeight();
+  if (max_page_ad_density_by_height &&
+      *max_page_ad_density_by_height > kMaxMobileAdDensityByHeight) {
     // TODO(bokan): ContentSubresourceFilterThrottleManager is now associated
     // with a FrameTree. When AdsPageLoadMetricsObserver becomes aware of MPArch
     // this should use the associated page rather than the primary page.
@@ -800,12 +790,44 @@ void AdsPageLoadMetricsObserver::OnSubFrameDeleted(
   ad_frames_data_.erase(id_and_data);
 }
 
-void AdsPageLoadMetricsObserver::OnAdAuctionComplete(
-    bool is_server_auction,
-    bool is_on_device_auction,
-    content::AuctionResult result) {
-  aggregate_frame_data_->OnAdAuctionComplete(is_server_auction,
-                                             is_on_device_auction, result);
+base::TimeDelta AdsPageLoadMetricsObserver::GetTotalAdCpuTime() const {
+  return aggregate_frame_data_ ? aggregate_frame_data_->live_ad_cpu_usage()
+                               : base::TimeDelta();
+}
+
+int64_t AdsPageLoadMetricsObserver::GetTotalAdNetworkBytes() const {
+  return aggregate_frame_data_ ? aggregate_frame_data_->resource_data()
+                                     .ad_network_bytes()
+                                     .InBytes()
+                               : 0;
+}
+
+base::flat_map<base::UnguessableToken,
+               AdsPageLoadMetricsObserver::AdFrameLiveStats>
+AdsPageLoadMetricsObserver::GetAdFrameLiveStats() const {
+  base::flat_map<base::UnguessableToken, AdFrameLiveStats> stats;
+  for (const auto& [id, frame_instance] : ad_frames_data_) {
+    // Only collect stats for owned frames (i.e. root ad frames).
+    // Subframes of the root ad frame are rolled up into the owned frame's
+    // totals.
+    const FrameTreeData* frame_data = frame_instance.GetOwnedFrame();
+    if (frame_data && !frame_data->devtools_frame_token().is_empty()) {
+      AdFrameLiveStats ad_frame_data;
+      base::UnguessableToken frame_id = frame_data->devtools_frame_token();
+      ad_frame_data.initial_origin = frame_data->initial_origin();
+      ad_frame_data.network_bytes =
+          frame_data->resource_data().network_bytes().InBytes();
+      ad_frame_data.cpu_time = frame_data->GetTotalCpuUsage();
+
+      auto result =
+          stats.emplace(std::move(frame_id), std::move(ad_frame_data));
+
+      // Each FrameTreeData corresponds to a unique root ad frame, so its
+      // devtools frame token should also be unique among the owned frames.
+      DCHECK(result.second);
+    }
+  }
+  return stats;
 }
 
 void AdsPageLoadMetricsObserver::OnSubresourceFilterGoingAway() {
@@ -833,18 +855,19 @@ void AdsPageLoadMetricsObserver::OnPageActivationComputed(
   }
 }
 
-base::ByteCount AdsPageLoadMetricsObserver::GetUnaccountedAdBytes(
+base::ByteSize AdsPageLoadMetricsObserver::GetUnaccountedAdBytes(
     int process_id,
     const mojom::ResourceDataUpdatePtr& resource) const {
   if (!resource->reported_as_ad_resource) {
-    return base::ByteCount(0);
+    return base::ByteSize(0);
   }
-  content::GlobalRequestID global_request_id(process_id, resource->request_id);
+  content::GlobalRequestID global_request_id(
+      content::ToOriginatingProcessIdUnsafe(process_id), resource->request_id);
 
   // Resource just started loading.
   if (!GetDelegate().GetResourceTracker().HasPreviousUpdateForResource(
           global_request_id)) {
-    return base::ByteCount(0);
+    return base::ByteSize(0);
   }
 
   // If the resource had already started loading, and is now labeled as an ad,
@@ -854,8 +877,10 @@ base::ByteCount AdsPageLoadMetricsObserver::GetUnaccountedAdBytes(
       GetDelegate().GetResourceTracker().GetPreviousUpdateForResource(
           global_request_id);
   bool is_new_ad = !previous_update->reported_as_ad_resource;
-  return is_new_ad ? resource->received_data_length - resource->delta_bytes
-                   : base::ByteCount(0);
+  // AsByteSize() will CHECK if `delta_bytes` > `received_data_length`.
+  return is_new_ad ? (resource->received_data_length - resource->delta_bytes)
+                         .AsByteSize()
+                   : base::ByteSize(0);
 }
 
 void AdsPageLoadMetricsObserver::ProcessResourceForPage(
@@ -863,7 +888,7 @@ void AdsPageLoadMetricsObserver::ProcessResourceForPage(
     const mojom::ResourceDataUpdatePtr& resource) {
   int process_id = render_frame_host->GetProcess()->GetDeprecatedID();
   auto mime_type = ResourceLoadAggregator::GetResourceMimeType(resource);
-  base::ByteCount unaccounted_ad_bytes =
+  base::ByteSize unaccounted_ad_bytes =
       GetUnaccountedAdBytes(process_id, resource);
   bool is_outermost_main_frame = !render_frame_host->GetParentOrOuterDocument();
   aggregate_frame_data_->ProcessResourceLoadInFrame(resource,
@@ -912,7 +937,7 @@ void AdsPageLoadMetricsObserver::ProcessResourceForFrame(
   }
 
   auto mime_type = ResourceLoadAggregator::GetResourceMimeType(resource);
-  base::ByteCount unaccounted_ad_bytes = GetUnaccountedAdBytes(
+  base::ByteSize unaccounted_ad_bytes = GetUnaccountedAdBytes(
       render_frame_host->GetProcess()->GetDeprecatedID(), resource);
   if (!unaccounted_ad_bytes.is_zero()) {
     ancestor_data->AdjustAdBytes(unaccounted_ad_bytes, mime_type);
@@ -927,28 +952,38 @@ void AdsPageLoadMetricsObserver::RecordPageResourceTotalHistograms(
     ukm::SourceId source_id) {
   const auto& resource_data = aggregate_frame_data_->resource_data();
 
-  auto* ukm_recorder = ukm::UkmRecorder::Get();
+  page_ad_density_tracker_.Finalize();
 
   // AdPageLoadCustomSampling4 is recorded on all pages
   ukm::builders::AdPageLoadCustomSampling4 custom_sampling_builder(source_id);
 
-  page_ad_density_tracker_.Finalize();
+  if (auto moments =
+          page_ad_density_tracker_.GetViewportAdDensityByAreaStats()) {
+    custom_sampling_builder.SetAverageViewportAdDensity(
+        std::llround(moments->mean));
+    custom_sampling_builder.SetVarianceViewportAdDensity(
+        GetExponentialBucketForDistributionMoment(moments->variance));
+    custom_sampling_builder.SetSkewnessViewportAdDensity(
+        GetExponentialBucketForDistributionMoment(moments->skewness));
+    custom_sampling_builder.SetKurtosisViewportAdDensity(
+        GetExponentialBucketForDistributionMoment(moments->excess_kurtosis));
 
-  UnivariateStats::DistributionMoments moments =
-      page_ad_density_tracker_.GetAdDensityByAreaStats();
+    ADS_HISTOGRAM("AverageViewportAdDensity", base::UmaHistogramPercentage,
+                  FrameVisibility::kAnyVisibility, std::llround(moments->mean));
+  }
 
-  custom_sampling_builder.SetAverageViewportAdDensity(
-      std::llround(moments.mean));
-  custom_sampling_builder.SetVarianceViewportAdDensity(
-      GetExponentialBucketForDistributionMoment(moments.variance));
-  custom_sampling_builder.SetSkewnessViewportAdDensity(
-      GetExponentialBucketForDistributionMoment(moments.skewness));
-  custom_sampling_builder.SetKurtosisViewportAdDensity(
-      GetExponentialBucketForDistributionMoment(moments.excess_kurtosis));
+  if (auto moments = page_ad_density_tracker_.GetViewportAdCountStats()) {
+    custom_sampling_builder.SetAverageViewportAdCountX100(
+        ukm::GetExponentialBucketMinForCounts1000(
+            std::llround(moments->mean * 100)));
+
+    ADS_HISTOGRAM("AverageViewportAdCountX100", base::UmaHistogramCounts1000,
+                  FrameVisibility::kAnyVisibility,
+                  std::llround(moments->mean * 100));
+  }
+
+  auto* ukm_recorder = ukm::UkmRecorder::Get();
   custom_sampling_builder.Record(ukm_recorder->Get());
-
-  ADS_HISTOGRAM("AverageViewportAdDensity", base::UmaHistogramPercentage,
-                FrameVisibility::kAnyVisibility, std::llround(moments.mean));
 
   // Only records histograms on pages that have some ad bytes.
   if (resource_data.ad_bytes().is_zero()) {
@@ -970,10 +1005,17 @@ void AdsPageLoadMetricsObserver::RecordPageResourceTotalHistograms(
       .SetMainframeAdBytes(ukm::GetExponentialBucketMinForBytes(
           aggregate_frame_data_->outermost_main_frame_resource_data()
               .ad_network_bytes()
-              .InBytes()))
-      .SetMaxAdDensityByArea(page_ad_density_tracker_.MaxPageAdDensityByArea())
-      .SetMaxAdDensityByHeight(
-          page_ad_density_tracker_.MaxPageAdDensityByHeight());
+              .InBytes()));
+
+  if (std::optional<int> max_ad_density_by_area =
+          page_ad_density_tracker_.MaxPageAdDensityByArea()) {
+    builder.SetMaxAdDensityByArea(*max_ad_density_by_area);
+  }
+
+  if (std::optional<int> max_ad_density_by_height =
+          page_ad_density_tracker_.MaxPageAdDensityByHeight()) {
+    builder.SetMaxAdDensityByHeight(*max_ad_density_by_height);
+  }
 
   // Record cpu metrics for the page.
   builder.SetAdCpuTime(
@@ -998,46 +1040,6 @@ void AdsPageLoadMetricsObserver::RecordHistograms(ukm::SourceId source_id) {
         "PageLoad.Clients.Ads.AdPaintTiming."
         "TopFrameNavigationToFirstAdFirstContentfulPaint",
         first_ad_fcp_after_main_nav_start.value());
-
-    std::string fcp_after_auction_metric_name;
-    if (aggregate_frame_data_->completed_fledge_server_auction_before_fcp()) {
-      if (aggregate_frame_data_
-              ->completed_fledge_on_device_auction_before_fcp()) {
-        fcp_after_auction_metric_name =
-            "PageLoad.Clients.Ads.AdPaintTiming."
-            "TopFrameNavigationToFirstAdFirstContentfulPaintAfter"
-            "ServerAndDeviceAuctions";
-      } else {
-        fcp_after_auction_metric_name =
-            "PageLoad.Clients.Ads.AdPaintTiming."
-            "TopFrameNavigationToFirstAdFirstContentfulPaintAfterServerAuction";
-        if (aggregate_frame_data_->completed_only_winning_fledge_auctions()) {
-          PAGE_LOAD_HISTOGRAM(
-              "PageLoad.Clients.Ads.AdPaintTiming."
-              "TopFrameNavigationToFirstAdFirstContentfulPaintAfterWinning"
-              "ServerAuction",
-              first_ad_fcp_after_main_nav_start.value());
-        }
-      }
-    } else if (aggregate_frame_data_
-                   ->completed_fledge_on_device_auction_before_fcp()) {
-      fcp_after_auction_metric_name =
-          "PageLoad.Clients.Ads.AdPaintTiming."
-          "TopFrameNavigationToFirstAdFirstContentfulPaintAfterDeviceAuction";
-      if (aggregate_frame_data_->completed_only_winning_fledge_auctions()) {
-        PAGE_LOAD_HISTOGRAM(
-            "PageLoad.Clients.Ads.AdPaintTiming."
-            "TopFrameNavigationToFirstAdFirstContentfulPaintAfter"
-            "WinningDeviceAuction",
-            first_ad_fcp_after_main_nav_start.value());
-      }
-    } else {
-      fcp_after_auction_metric_name =
-          "PageLoad.Clients.Ads.AdPaintTiming."
-          "TopFrameNavigationToFirstAdFirstContentfulPaintAfterNoAuction";
-    }
-    PAGE_LOAD_HISTOGRAM(fcp_after_auction_metric_name,
-                        first_ad_fcp_after_main_nav_start.value());
   }
 
   RecordAggregateHistogramsForAdTagging(FrameVisibility::kNonVisible);

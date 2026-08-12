@@ -9,18 +9,19 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/time/time.h"
 #include "base/values.h"
 
 namespace safe_browsing {
 // Features list
 //
-// These options group the lines into blocks without newlines, then
-// sorts by the name of the BASE_DECLARE_FEATURE in each block. It's
-// recommended to keep all FeatureParams for a given Feature in the same
-// block as as the Feature declaration.
+// These options group together non-empty lines, then sorts by the name
+// of the feature in each block. It's recommended to keep all
+// FeatureParams for a given Feature in the same group as as the Feature
+// declaration.
 //
 // clang-format off
-// keep-sorted start allow_yaml_lists=yes sticky_prefixes=[""] group_prefixes=["#if", "#else", "#endif", "extern const base::FeatureParam", "//", "BASE_DECLARE_FEATURE", "BASE_DECLARE_FEATURE_PARAM"] by_regex=["BASE_DECLARE_FEATURE\\(.*\\);"] skip_lines=2
+// keep-sorted start group_end_regex=^$ allow_yaml_lists=yes by_regex=["BASE_DECLARE_FEATURE\\(.*\\);"] skip_lines=2 newline_separated=true sticky_comments=false
 // clang-format on
 
 // Controls various parameters related to occasionally collecting ad samples,
@@ -29,6 +30,9 @@ BASE_DECLARE_FEATURE(kAdSamplerTriggerFeature);
 
 // Enables adding warning shown timestamp to client safe browsing report.
 BASE_DECLARE_FEATURE(kAddWarningShownTSToClientSafeBrowsingReport);
+
+// Enables antivirus product info to be included in download pings.
+BASE_DECLARE_FEATURE(kAntivirusTelemetryForDownloads);
 
 // Enables automatic revocation of notification permissions after the user has
 // received a number of notifications with a suspicious verdict from the
@@ -50,8 +54,25 @@ extern const base::FeatureParam<double>
 extern const base::FeatureParam<int>
     kAutoRevokeSuspiciousNotificationMinNotificationCount;
 
-// Enables Bundled Security Settings UI on chrome://settings/security
+// Enables Bundled Security Settings UI on chrome://settings/security.
 BASE_DECLARE_FEATURE(kBundledSecuritySettings);
+
+// Enables Ask-Before-HTTP / HTTPS-First Mode integration into the Enhanced
+// Security settings bundle.
+BASE_DECLARE_FEATURE(kBundledSecuritySettingsAskBeforeHttp);
+
+// Enables new Secure DNS V2 UI in Bundled Security Settings UI on the
+// chrome://settings/security page. Requires that kBundledSecuritySettings is
+// also enabled.
+BASE_DECLARE_FEATURE(kBundledSecuritySettingsSecureDnsV2);
+
+// Allows a list of ClientSideDetectionType to bypass the priority tier check.
+BASE_DECLARE_FEATURE(kClientSideDetectionBypassTiers);
+// The tier list below will be in form of the integer value of the
+// ClientSideDetectionType which will bypass the system. Example: "1,2" will
+// allow trigger type FORCE_REQUEST and TRIGGER_MODELS to bypass all others.
+extern const base::FeatureParam<std::string>
+    kClientSideDetectionBypassTiersList;
 
 // Expand CSPP beyond phishing and trigger when clipboard copy API is called on
 // the page.
@@ -61,6 +82,12 @@ extern const base::FeatureParam<int> kCsdClipboardCopyApiMaxLength;
 extern const base::FeatureParam<int> kCsdClipboardCopyApiMinLength;
 extern const base::FeatureParam<double> kCsdClipboardCopyApiSampleRate;
 extern const base::FeatureParam<bool> kCSDClipboardCopyApiProcessPayload;
+extern const base::FeatureParam<bool> kCSDClipboardCopyApiIncludeFullPayload;
+extern const base::FeatureParam<std::string> kCsdClipboardCopyApiLoaders;
+extern const base::FeatureParam<std::string> kCsdClipboardCopyApiRunners;
+extern const base::FeatureParam<std::string> kCsdClipboardCopyApiRemoteRunners;
+extern const base::FeatureParam<std::string> kCsdClipboardCopyApiDecoders;
+extern const base::FeatureParam<bool> kCSDClipboardCopyApiSuspiciousTokenFilter;
 
 // Enables sending a CSD ping on the detection of a credit card form.
 BASE_DECLARE_FEATURE(kClientSideDetectionCreditCardForm);
@@ -73,6 +100,8 @@ extern const base::FeatureParam<double> kCsdCreditCardFormSampleRate;
 // If the user has visited more times than this max, then the CSD ping is
 // blocked.
 extern const base::FeatureParam<int> kCsdCreditCardFormMaxUserVisit;
+// Sets the lookback period in minutes for determining the site visit count.
+extern const base::FeatureParam<int> kCsdCreditCardFormUserVisitLookback;
 // Specifies whether to filter credit card CSD pings based on whether the user
 // is on a new site.
 extern const base::FeatureParam<bool> kCsdCreditCardFormEnableNewSiteFilter;
@@ -82,6 +111,15 @@ extern const base::FeatureParam<bool> kCsdCreditCardFormEnableHeuristicFilter;
 // Specifies whether to filter credit card CSD pings based on the referring app.
 extern const base::FeatureParam<bool>
     kCsdCreditCardFormEnableReferringAppFilter;
+// Specifies whether to enable triggering on interaction with a credit card
+// form field.
+extern const base::FeatureParam<bool>
+    kCsdCreditCardFormEnableInteractionTrigger;
+// Specifies whether to enable triggering on detection of a credit card form.
+extern const base::FeatureParam<bool> kCsdCreditCardFormEnableDetectionTrigger;
+
+// Enables the creation of the ClientSideDetectionService on iOS.
+BASE_DECLARE_FEATURE(kClientSideDetectionEnabledIos);
 
 // Killswitch for Llama forced trigger info redirect chain check.
 BASE_DECLARE_FEATURE(kClientSideDetectionForcedLlamaRedirectChainKillswitch);
@@ -102,10 +140,21 @@ extern const base::FeatureParam<bool>
 // OptimizationGuide.
 BASE_DECLARE_FEATURE(kClientSideDetectionKillswitch);
 
-// Inquire the on device model when the forced llama trigger info in
-// RTLookupResponse asks to scan the page.
-BASE_DECLARE_FEATURE(
-    kClientSideDetectionLlamaForcedTriggerInfoForScamDetection);
+// Tweak the way local resource check is done in CSD preclassification check.
+BASE_DECLARE_FEATURE(kClientSideDetectionLocalResourceCheckFix);
+
+// The observers that trigger the image classification have been tweaked with a
+// more defined page loading state check.
+BASE_DECLARE_FEATURE(kClientSideDetectionNewObservers);
+extern const base::FeatureParam<double> kCsdClassificationDelay;
+
+#if BUILDFLAG(IS_ANDROID)
+// Instead of starting model download on startup, do it lazily during inference.
+BASE_DECLARE_FEATURE(kClientSideDetectionOnDeviceModelLazyDownloadAndroid);
+#endif
+
+// Deprecation of page load triggers for SSB users.
+BASE_DECLARE_FEATURE(kClientSideDetectionOnlyESBClassification);
 
 // Killswitch for force request redirect chain check.
 BASE_DECLARE_FEATURE(kClientSideDetectionRedirectChainKillswitch);
@@ -113,42 +162,29 @@ BASE_DECLARE_FEATURE(kClientSideDetectionRedirectChainKillswitch);
 BASE_DECLARE_FEATURE(kClientSideDetectionRetryLimit);
 extern const base::FeatureParam<int> kClientSideDetectionRetryLimitTime;
 
-// Send a sample CSPP ping when a URL matches the CSD allowlist and all other
-// preclassification check conditions pass.
-BASE_DECLARE_FEATURE(kClientSideDetectionSamplePing);
-
-#if BUILDFLAG(IS_ANDROID)
-// Send IntelligentScanInfo in CSD pings on Android.
-BASE_DECLARE_FEATURE(kClientSideDetectionSendIntelligentScanInfoAndroid);
-#endif
-
-// Pass the LlamaTriggerRuleInfo from RTLookupResponse to ClientPhishingRequest
-// if it exists and the force request mechanism occurs.
-BASE_DECLARE_FEATURE(kClientSideDetectionSendLlamaForcedTriggerInfo);
-
+// Controls whether the scam score is included in IntelligentScanInfo.
+BASE_DECLARE_FEATURE(kClientSideDetectionScamScore);
 #if BUILDFLAG(IS_ANDROID)
 // Inquire the server-side model instead of the on-device model for scam
 // detection.
 BASE_DECLARE_FEATURE(kClientSideDetectionServerModelForScamDetectionAndroid);
 extern const base::FeatureParam<int>
     kClientSideDetectionServerModelMaxScansPerDay;
-#endif
 
-// Show a warning to the user based on the
-// IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2.
-BASE_DECLARE_FEATURE(kClientSideDetectionShowLlamaScamVerdictWarning);
-
-#if BUILDFLAG(IS_ANDROID)
-// Show a warning to the user that factors in the IntelligentScanVerdict from
-// ClientPhishingResponse on Android.
-BASE_DECLARE_FEATURE(kClientSideDetectionShowScamVerdictWarningAndroid);
+// Dedicated long-lived feature flag to control future server model rollout and
+// set the model version. This flag should not be cleaned up after the server
+// model is launched. See go/mes-config-rollouts#roll-out-via-finch on the
+// recommended way to control rollouts.
+BASE_DECLARE_FEATURE(kClientSideDetectionServerModelRolloutAndroid);
+// Note for future finch config: Set an arbitrary integer value associated with
+// the model version (e.g. 1001). Update go/slams-mapping accordingly.
+extern const base::FeatureParam<int>
+    kClientSideDetectionServerModelRolloutVersionAndroid;
 #endif
 
 BASE_DECLARE_FEATURE(kClientSideDetectionSkipErrorPage);
 
-// Expand CSPP beyond phishing and trigger when vibration API is called on the
-// web page.
-BASE_DECLARE_FEATURE(kClientSideDetectionVibrationApi);
+BASE_DECLARE_FEATURE(kClientSideDetectionTierSystem);
 
 // Set a RESIZE_BEST preference for image resizing algorithm in Client Side
 // Detection renderer processes for both image classification and image
@@ -186,6 +222,14 @@ extern const base::FeatureParam<int> kDownloadWarningSurveyIgnoreDelaySeconds;
 // //c/b/download/download_warning_desktop_hats_util.h).
 extern const base::FeatureParam<int> kDownloadWarningSurveyType;
 
+// When enabled, behaves the same as
+// kMigrateToBlockV8OptimizerOnUnfamiliarSites, but only targeting profiles
+// that have Safe Browsing Enhanced Protection enabled.
+BASE_DECLARE_FEATURE(kEnableBlockV8OptimizerOnUnfamiliarSitesForEsbClients);
+BASE_DECLARE_FEATURE_PARAM(bool, kEsbDryRun);
+BASE_DECLARE_FEATURE_PARAM(int, kEsbMinSiteEngagementScore);
+BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kEsbMinAgeOfInitialVisit);
+
 // Enabled additional device and network information to RealTimeUrlCheck
 // requests, WP scan requests, and reporting events. These will be visible from
 // the chrome://safe-browsing page.
@@ -201,6 +245,9 @@ BASE_DECLARE_FEATURE(kEnterpriseFileSystemAccessDeepScan);
 // Enables showing an updated Password Reuse UI for enterprise users.
 BASE_DECLARE_FEATURE(kEnterprisePasswordReuseUiRefresh);
 
+// Use a new URL for the enterprise real-time URL check.
+BASE_DECLARE_FEATURE(kEnterpriseRealTimeUrlCheckNewUrl);
+
 // Makes the Enhanced Protection a syncable setting.
 // Check the design doc (go/esb-as-a-synced-setting-dd) for further details.
 BASE_DECLARE_FEATURE(kEsbAsASyncedSetting);
@@ -213,9 +260,17 @@ BASE_DECLARE_FEATURE(kEsbAsASyncedSetting);
 //   safebrowsing.scout_reporting_enabled
 BASE_DECLARE_FEATURE(kExtendedReportingRemovePrefDependency);
 
+// Bypasses the Safe Browsing network query for extensions blocklist checks
+// because a subsequent check will retrieve the blocklist state.
+BASE_DECLARE_FEATURE(kExtensionBlocklistSkipNetworkQuery);
+
 // Allows the Extension Telemetry Service to accept and use configurations
 // sent by the server.
 BASE_DECLARE_FEATURE(kExtensionTelemetryConfiguration);
+
+// Reduces the extension telemetry service's enterprise telemetry reporting
+// interval to 30 seconds.
+BASE_DECLARE_FEATURE(kExtensionTelemetryEnterpriseShortReportingInterval);
 
 // Enables the search hijacking signal in extension telemetry.
 BASE_DECLARE_FEATURE(kExtensionTelemetrySearchHijackingSignal);
@@ -229,6 +284,12 @@ extern const base::FeatureParam<int>
 
 // Enables reporting of external app redirects
 BASE_DECLARE_FEATURE(kExternalAppRedirectTelemetry);
+
+// Enables querying server-side Gemini model for scam detection.
+BASE_DECLARE_FEATURE(kGeminiAntiscamProtectionForMetricsCollection);
+// The minimum scam score required to log page content to MQLS.
+extern const base::FeatureParam<double>
+    kGeminiAntiscamProtectionMinScamScoreLogPageContent;
 
 // Replace the high confidence allowlist check gating notification warnings with
 // a check of the global cache list specific to safe notification sites.
@@ -258,6 +319,12 @@ extern const base::FeatureParam<std::string> kHashPrefixRealTimeLookupsRelayUrl;
 // key that will be used to encrypt the lookup requests.
 extern const base::FeatureParam<std::string>
     kHashPrefixRealTimeLookupsKeyFetchUrl;
+// This parameter controls the header used to request a given HPKE key type.
+extern const base::FeatureParam<std::string>
+    kHashPrefixRealTimeLookupsKeyFetchKeyTypeHeader;
+// This parameter allows adding a custom header to the HPKE key fetch request.
+extern const base::FeatureParam<std::string>
+    kHashPrefixRealTimeLookupsKeyFetchCustomHeader;
 
 // Send sample hash-prefix real-time lookups for real-time lookups to catch
 // "false positives" where real-time lookup says safe but hash-prefix lookup
@@ -297,16 +364,23 @@ BASE_DECLARE_FEATURE_PARAM(bool, kMaliciousApkDownloadCheckTelemetryOnly);
 // bundle.
 BASE_DECLARE_FEATURE(kMigrateEnhancedSbUserToEnhancedBundle);
 
-// TODO(crbug.com/449960661): Remove this flag once the MigrateAccountPrefs
-// feature is launched and the regression of users with ESB enhanced protection
-// is resolved.
-//  When enabled, this feature fixes a flaw in the Tailored Security service's
-//  handling of failed requests for the Enhanced Safe Browsing (ESB) setting.
-//  Previously, a network error would cause the service to incorrectly assume
-//  ESB was disabled. With this fix, the service preserves the last known state
-//  of the ESB bit during a failed request, preventing transient errors from
-//  disabling user protection.
-BASE_DECLARE_FEATURE(kModifiedESBFetchErrorHandling);
+// When enabled, performs a one-time migration that selects the JavaScript
+// optimizer content setting that automatically blocks the browser from using
+// JavaScript optimizers on unfamiliar sites. Only profiles that have Safe
+// Browsing enabled, have the JavaScript optimizer set to allowed for all sites,
+// and have the kBlockV8OptimizerOnUnfamiliarSitesSetting feature enabled will
+// be eligible for the migration.
+BASE_DECLARE_FEATURE(kMigrateToBlockV8OptimizerOnUnfamiliarSites);
+BASE_DECLARE_FEATURE_PARAM(
+    int,
+    kMigrateToBlockV8OptimizerOnUnfamiliarSitesMinSiteEngagementScore);
+BASE_DECLARE_FEATURE_PARAM(
+    base::TimeDelta,
+    kMigrateToBlockV8OptimizerOnUnfamiliarSitesMinAgeOfInitialVisit);
+// If true, the migration will run in dry-run mode (evaluating eligibility and
+// logging metrics, but not actually changing the content setting).
+BASE_DECLARE_FEATURE_PARAM(bool,
+                           kMigrateToBlockV8OptimizerOnUnfamiliarSitesDryRun);
 
 // When enabled, the Password Leak detection toggle is moved out from under the
 // 'Standard protection' Safe Browsing option to the top-level 'Privacy and
@@ -320,17 +394,11 @@ BASE_DECLARE_FEATURE(kNoticeQueueForEsb);
 // notifications.
 BASE_DECLARE_FEATURE(kNotificationTelemetry);
 
-// Enable the collection of ServiceWorkerBehaviors via the
-// NotificationTelemetryService.
-BASE_DECLARE_FEATURE(kNotificationTelemetrySwb);
-// Specifies the probability of sending a ServiceWorkerBehavior CSBRR off
-// device.
+// Enables proactive password protection, which triggers a CSD scan when
+// focusing on a password field.
+BASE_DECLARE_FEATURE(kProactivePasswordProtection);
 extern const base::FeatureParam<double>
-    kNotificationTelemetrySwbReportingProbability;
-// Specifies the polling interval in minutes.
-extern const base::FeatureParam<int> kNotificationTelemetrySwbPollingInterval;
-// Determines whether CSBRRs are sent to Safe Browsing.
-extern const base::FeatureParam<bool> kNotificationTelemetrySwbSendReports;
+    kCsdProactivePasswordProtectionSampleRate;
 
 // Enables HaTS surveys for users encountering red warnings.
 BASE_DECLARE_FEATURE(kRedWarningSurvey);
@@ -371,6 +439,10 @@ extern const base::FeatureParam<int> kSafeBrowsingDailyPhishingReportsLimitESB;
 BASE_DECLARE_FEATURE(kSafeBrowsingSyncCheckerCheckAllowlist);
 #endif
 
+// Allows Safe Browsing Real-Time URL lookups to wait for DNS resolution of the
+// main frame URL.
+BASE_DECLARE_FEATURE(kSafeBrowsingWaitForDnsForRealTimeLookup);
+
 // Enables saving gaia password hash from the Profile Picker sign-in flow.
 BASE_DECLARE_FEATURE(kSavePasswordHashFromProfilePicker);
 
@@ -394,8 +466,24 @@ extern const base::FeatureParam<int>
 extern const base::FeatureParam<bool>
     kShowWarningsForSuspiciousNotificationsShouldSwapButtons;
 
+// Controls whether to skip image classification scoring for non-page load
+// triggers.
+BASE_DECLARE_FEATURE(kSkipImageClassificationScoringForNonPageLoadTriggers);
+
 // Controls the daily quota for the suspicious site trigger.
 BASE_DECLARE_FEATURE(kSuspiciousSiteTriggerQuotaFeature);
+
+// Enables HaTS surveys for users encountering suspicious site warnings.
+BASE_DECLARE_FEATURE(kSuspiciousSiteWarningSurvey);
+extern const base::FeatureParam<std::string>
+    kSuspiciousSiteWarningSurveyTriggerId;
+extern const base::FeatureParam<std::string>
+    kSuspiciousSiteWarningSurveyProceedTriggerId;
+extern const base::FeatureParam<std::string>
+    kSuspiciousSiteWarningSurveyHeedTriggerId;
+
+// Enables warnings on sites that Safe Browsing deems suspicious.
+BASE_DECLARE_FEATURE(kSuspiciousSiteWarnings);
 
 // Controls whether the integration of tailored security settings is enabled.
 BASE_DECLARE_FEATURE(kTailoredSecurityIntegration);
@@ -415,7 +503,7 @@ BASE_DECLARE_FEATURE(kVisualFeaturesSizes);
 
 // keep-sorted end
 
-base::Value::List GetFeatureStatusList();
+base::ListValue GetFeatureStatusList();
 
 }  // namespace safe_browsing
 #endif  // COMPONENTS_SAFE_BROWSING_CORE_COMMON_FEATURES_H_

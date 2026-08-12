@@ -4,26 +4,30 @@
 
 #include "components/autofill/core/browser/crowdsourcing/randomized_encoder.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
 #include <array>
-#include <limits>
+#include <cinttypes>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
-#include "base/feature_list.h"
-#include "base/format_macros.h"
-#include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/metrics/sparse_histogram.h"
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/unguessable_token.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/autofill/core/common/autofill_switches.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/prefs/pref_service.h"
-#include "crypto/hkdf.h"
+#include "crypto/kdf.h"
 
 namespace autofill {
 
@@ -80,7 +84,11 @@ std::string GetPseudoRandomBits(std::string_view secret,
   DVLOG(1) << "Generating pseudo-random bits from " << info;
 
   // Generate the pseudo-random bits.
-  return crypto::HkdfSha256(secret, {}, info, encoding_length_in_bytes);
+  std::string result(encoding_length_in_bytes, '\0');
+  crypto::kdf::Hkdf(crypto::hash::kSha256, base::as_byte_span(secret), {},
+                    base::as_byte_span(info),
+                    base::as_writable_byte_span(result));
+  return result;
 }
 
 // Returns the "random" encoding type to use for encoding.

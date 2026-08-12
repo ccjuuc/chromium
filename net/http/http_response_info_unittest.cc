@@ -4,6 +4,7 @@
 
 #include "net/http/http_response_info.h"
 
+#include "base/byte_size.h"
 #include "base/pickle.h"
 #include "net/base/proxy_chain.h"
 #include "net/cert/signed_certificate_timestamp.h"
@@ -31,7 +32,8 @@ class HttpResponseInfoTest : public testing::Test {
     std::unique_ptr<base::Pickle> pickle = response_info.MakePickle(
         /*skip_transient_headers=*/false, /*response_truncated=*/false);
     bool truncated = false;
-    EXPECT_TRUE(restored_response_info->InitFromPickle(*pickle, &truncated));
+    EXPECT_TRUE(restored_response_info->InitFromPickle(
+        base::PickleIterator(*pickle), &truncated));
   }
 
   HttpResponseInfo response_info_;
@@ -258,8 +260,8 @@ TEST_F(HttpResponseInfoTest, FailsInitFromPickleWithSSLV3) {
       /*skip_transient_headers=*/false, /*response_truncated=*/false);
   bool truncated = false;
   HttpResponseInfo restored_tls12_response_info;
-  EXPECT_TRUE(
-      restored_tls12_response_info.InitFromPickle(*tls12_pickle, &truncated));
+  EXPECT_TRUE(restored_tls12_response_info.InitFromPickle(
+      base::PickleIterator(*tls12_pickle), &truncated));
   EXPECT_EQ(SSL_CONNECTION_VERSION_TLS1_2,
             SSLConnectionStatusToVersion(
                 restored_tls12_response_info.ssl_info.connection_status));
@@ -271,8 +273,8 @@ TEST_F(HttpResponseInfoTest, FailsInitFromPickleWithSSLV3) {
   std::unique_ptr<base::Pickle> ssl3_pickle = response_info_.MakePickle(
       /*skip_transient_headers=*/false, /*response_truncated=*/false);
   HttpResponseInfo restored_ssl3_response_info;
-  EXPECT_FALSE(
-      restored_ssl3_response_info.InitFromPickle(*ssl3_pickle, &truncated));
+  EXPECT_FALSE(restored_ssl3_response_info.InitFromPickle(
+      base::PickleIterator(*ssl3_pickle), &truncated));
 }
 
 // Test that `dns_aliases` is preserved.
@@ -308,12 +310,54 @@ TEST_F(HttpResponseInfoTest, EmptyBrowserRunId) {
   EXPECT_FALSE(restored_response_info.browser_run_id.has_value());
 }
 
+// Test that did_send_available_dictionary is NOT preserved .
+TEST_F(HttpResponseInfoTest, DidSendAvailableDictionary) {
+  response_info_.did_send_available_dictionary = true;
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.did_send_available_dictionary);
+}
+
 // Test that did_use_shared_dictionary is NOT preserved .
 TEST_F(HttpResponseInfoTest, DidUseSharedDictionary) {
   response_info_.did_use_shared_dictionary = true;
   HttpResponseInfo restored_response_info;
   PickleAndRestore(response_info_, &restored_response_info);
   EXPECT_FALSE(restored_response_info.did_use_shared_dictionary);
+}
+
+TEST_F(HttpResponseInfoTest, EncodedBodySize) {
+  response_info_.encoded_body_size = base::ByteSize(12345u);
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  ASSERT_TRUE(restored_response_info.encoded_body_size.has_value());
+  EXPECT_EQ(12345u, restored_response_info.encoded_body_size->InBytes());
+}
+
+TEST_F(HttpResponseInfoTest, EmptyEncodedBodySize) {
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.encoded_body_size.has_value());
+}
+
+TEST_F(HttpResponseInfoTest, NegativeEncodedBodySize) {
+  std::unique_ptr<base::Pickle> pickle =
+      response_info_.MakePickleWithSignedBodySizeForTesting(
+          /*skip_transient_headers=*/false, /*response_truncated=*/false, -1);
+  bool truncated = false;
+  HttpResponseInfo restored_response_info;
+  EXPECT_TRUE(restored_response_info.InitFromPickle(
+      base::PickleIterator(*pickle), &truncated));
+  EXPECT_FALSE(restored_response_info.encoded_body_size.has_value());
+}
+
+// Rollback safety: older cache entries predating bit 1<<4 must deserialize
+// as uncompressed. Persist-true is covered by
+// HttpCacheTest.ZstdDecompressHappyPath.
+TEST_F(HttpResponseInfoTest, ZstdUncompressedBodySizeDefault) {
+  HttpResponseInfo restored_response_info;
+  PickleAndRestore(response_info_, &restored_response_info);
+  EXPECT_FALSE(restored_response_info.zstd_uncompressed_body_size.has_value());
 }
 
 }  // namespace

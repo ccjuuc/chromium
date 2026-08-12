@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
@@ -29,6 +28,7 @@
 #include "third_party/blink/renderer/platform/scheduler/worker/non_main_thread_scheduler_helper.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_impl.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace blink {
 namespace scheduler {
@@ -109,13 +109,15 @@ WorkerThreadScheduler::WorkerThreadScheduler(
 
   GetHelper().SetObserver(this);
 
-  TRACE_EVENT_OBJECT_CREATED_WITH_ID(
-      TRACE_DISABLED_BY_DEFAULT("worker.scheduler"), "WorkerScheduler", this);
+  TRACE_EVENT_INSTANT(
+      TRACE_DISABLED_BY_DEFAULT("worker.scheduler"), "WorkerScheduler:created",
+      perfetto::Flow::FromPointer(this, "WorkerThreadScheduler"));
 }
 
 WorkerThreadScheduler::~WorkerThreadScheduler() {
-  TRACE_EVENT_OBJECT_DELETED_WITH_ID(
-      TRACE_DISABLED_BY_DEFAULT("worker.scheduler"), "WorkerScheduler", this);
+  TRACE_EVENT_INSTANT(
+      TRACE_DISABLED_BY_DEFAULT("worker.scheduler"), "WorkerScheduler:deleted",
+      perfetto::TerminatingFlow::FromPointer(this, "WorkerThreadScheduler"));
 
   DCHECK(worker_schedulers_.empty());
 }
@@ -230,7 +232,7 @@ void WorkerThreadScheduler::RegisterWorkerScheduler(
 
 void WorkerThreadScheduler::UnregisterWorkerScheduler(
     WorkerSchedulerImpl* worker_scheduler) {
-  DCHECK(base::Contains(worker_schedulers_, worker_scheduler));
+  DCHECK(worker_schedulers_.Contains(worker_scheduler));
   worker_schedulers_.erase(worker_scheduler);
 }
 
@@ -246,7 +248,8 @@ void WorkerThreadScheduler::CreateBudgetPools() {
   wake_up_budget_pool_ =
       std::make_unique<WakeUpBudgetPool>("worker_wake_up_pool");
   cpu_time_budget_pool_ = std::make_unique<CPUTimeBudgetPool>(
-      "worker_cpu_time_pool", &traceable_variable_controller_, now);
+      "worker_cpu_time_pool", &traceable_variable_controller_, now,
+      "Scheduler.WorkerBudgetMs");
 
   cpu_time_budget_pool_->SetMaxBudgetLevel(now, GetMaxBudgetLevel());
   cpu_time_budget_pool_->SetTimeBudgetRecoveryRate(now,

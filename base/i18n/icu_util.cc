@@ -61,6 +61,9 @@
 
 namespace base::i18n {
 
+// Exposed to help debug https://crbug.com/40064988
+bool g_icu_initialized = false;
+
 namespace {
 
 #if DCHECK_IS_ON()
@@ -68,7 +71,6 @@ namespace {
 // function isn't harmful (ICU can handle it), being called twice probably
 // indicates a programming error.
 bool g_check_called_once = true;
-bool g_called_once = false;
 #endif  // DCHECK_IS_ON()
 
 #if (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_FILE)
@@ -240,8 +242,7 @@ int LoadIcuData(PlatformFile data_fd,
   }
 
   (*out_error_code) = U_ZERO_ERROR;
-  udata_setCommonData(const_cast<uint8_t*>((*out_mapped_data_file)->data()),
-                      out_error_code);
+  udata_setCommonData((*out_mapped_data_file)->bytes().data(), out_error_code);
   if (U_FAILURE(*out_error_code)) {
     LOG(ERROR) << "Failed to initialize ICU with data file: "
                << u_errorName(*out_error_code);
@@ -358,6 +359,12 @@ enum class ICUCreateInstance {
 // There are multiple exposed InitializeIcu* functions. This should be called
 // as at the end of (the last functions in the sequence of) these functions.
 bool DoCommonInitialization() {
+#if BUILDFLAG(IS_IOS)
+  UErrorCode status = U_ZERO_ERROR;
+  u_init(&status);
+  DCHECK(U_SUCCESS(status));
+#endif
+
   // TODO(jungshik): Some callers do not care about tz at all. If necessary,
   // add a boolean argument to this function to init the default tz only
   // when requested.
@@ -374,9 +381,9 @@ bool InitializeICUWithFileDescriptor(
     PlatformFile data_fd,
     const MemoryMappedFile::Region& data_region) {
 #if DCHECK_IS_ON()
-  DCHECK(!g_check_called_once || !g_called_once);
-  g_called_once = true;
+  DCHECK(!g_check_called_once || !g_icu_initialized);
 #endif
+  g_icu_initialized = true;
   if (!InitializeICUWithFileDescriptorInternal(data_fd, data_region)) {
     return false;
   }
@@ -415,9 +422,9 @@ void SetIcuTimeZoneDataDirForTesting(const char* dir) {
 
 bool InitializeICU() {
 #if DCHECK_IS_ON()
-  DCHECK(!g_check_called_once || !g_called_once);
-  g_called_once = true;
+  DCHECK(!g_check_called_once || !g_icu_initialized);
 #endif
+  g_icu_initialized = true;
 
 #if (ICU_UTIL_DATA_IMPL == ICU_UTIL_DATA_STATIC)
   // The ICU data is statically linked.

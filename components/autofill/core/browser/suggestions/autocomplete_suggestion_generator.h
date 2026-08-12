@@ -5,8 +5,21 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_SUGGESTIONS_AUTOCOMPLETE_SUGGESTION_GENERATOR_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_SUGGESTIONS_AUTOCOMPLETE_SUGGESTION_GENERATOR_H_
 
+#include <memory>
+#include <optional>
+
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/suggestions/suggestion_generator.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
+#include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_field_data.h"
+#include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
 
 namespace autofill {
 
@@ -24,25 +37,12 @@ class AutocompleteSuggestionGenerator : public SuggestionGenerator {
       scoped_refptr<AutofillWebDataService> profile_database);
   ~AutocompleteSuggestionGenerator() override;
 
-  void FetchSuggestionData(
-      const FormData& form,
-      const FormFieldData& trigger_field,
-      const FormStructure* form_structure,
-      const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      base::OnceCallback<
-          void(std::pair<SuggestionDataSource,
-                         std::vector<SuggestionGenerator::SuggestionData>>)>
-          callback) override;
-
   void GenerateSuggestions(
       const FormData& form,
       const FormFieldData& trigger_field,
       const FormStructure* form_structure,
       const AutofillField* trigger_autofill_field,
-      const AutofillClient& client,
-      const base::flat_map<SuggestionDataSource, std::vector<SuggestionData>>&
-          all_suggestion_data,
+      AutofillClient& client,
       base::OnceCallback<void(ReturnedSuggestions)> callback) override;
 
   void CancelPendingQuery();
@@ -63,6 +63,7 @@ class AutocompleteSuggestionGenerator : public SuggestionGenerator {
   // `result` contains the Autocomplete suggestions retrieved from the DB that,
   // if valid, will be passed to the callback in `query_handler`.
   void OnAutofillValuesReturned(QueryHandler query_handler,
+                                bool is_at_memory_enabled,
                                 WebDataServiceBase::Handle current_handle,
                                 std::unique_ptr<WDTypedResult> result);
 
@@ -75,6 +76,7 @@ class AutocompleteSuggestionGenerator : public SuggestionGenerator {
   // initiated or if this manager is destroyed. It is `std::nullopt` if no query
   // is in flight.
   std::optional<WebDataServiceBase::Handle> pending_query_;
+
 
   base::WeakPtrFactory<AutocompleteSuggestionGenerator> weak_ptr_factory_{this};
 };

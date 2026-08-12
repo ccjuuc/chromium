@@ -19,13 +19,13 @@ import org.chromium.build.annotations.Nullable;
 /**
  * Kills and (optionally) restarts the main Chrome process, then immediately kills itself.
  *
- * Starting this Activity should only be done by the
- * {@link org.chromium.chrome.browser.init.ChromeLifetimeController}, and requires
- * passing in the process ID (the Intent should have the value of Process#myPid() as an extra).
+ * <p>Starting this Activity should only be done by the {@link
+ * org.chromium.chrome.browser.init.ChromeLifetimeController}, and requires passing in the process
+ * ID (the Intent should have the value of Process#myPid() as an extra).
  *
- * This Activity runs on a separate process from the main Chrome browser and cannot see the main
- * process' Activities.  It works around an Android framework issue for alarms set via the
- * AlarmManager, which requires a minimum alarm duration of 5 seconds: https://crbug.com/515919.
+ * <p>This Activity runs on a separate process from the main Chrome browser and cannot see the main
+ * process' Activities. It works around an Android framework issue for alarms set via the
+ * AlarmManager, which requires a minimum alarm duration of 5 seconds: https://crbug.com/41191765.
  */
 @NullMarked
 public class BrowserRestartActivity extends Activity {
@@ -71,6 +71,7 @@ public class BrowserRestartActivity extends Activity {
             Intent restartIntent = new Intent(Intent.ACTION_MAIN);
             restartIntent.setPackage(context.getPackageName());
             restartIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            restartIntent.putExtra(IntentHandler.EXTRA_FROM_RELAUNCH, true);
             context.startActivity(restartIntent);
         }
 

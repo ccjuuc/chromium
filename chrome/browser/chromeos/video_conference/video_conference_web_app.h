@@ -7,11 +7,10 @@
 
 #include <memory>
 
+#include "ash/system/video_conference/video_conference_common.h"
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_manager_client_common.h"
 #include "chrome/browser/chromeos/video_conference/video_conference_ukm_helper.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom-forward.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -82,8 +81,7 @@ class VideoConferenceWebApp
       base::UnguessableToken id,
       base::RepeatingCallback<void(const base::UnguessableToken&)>
           remove_media_app_callback,
-      base::RepeatingCallback<
-          void(crosapi::mojom::VideoConferenceClientUpdatePtr)>
+      base::RepeatingCallback<void(ash::VideoConferenceClientUpdate)>
           client_update_callback);
 
   // This callback corresponds to a method on a
@@ -93,7 +91,7 @@ class VideoConferenceWebApp
       remove_media_app_callback_;
 
   // Callback to send a new client update.
-  base::RepeatingCallback<void(crosapi::mojom::VideoConferenceClientUpdatePtr)>
+  base::RepeatingCallback<void(ash::VideoConferenceClientUpdate)>
       client_update_callback_;
 
   VideoConferenceWebAppState state_;

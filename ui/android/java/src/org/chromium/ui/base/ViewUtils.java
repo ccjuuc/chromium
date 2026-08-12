@@ -4,21 +4,31 @@
 
 package org.chromium.ui.base;
 
+import static android.view.View.MeasureSpec.EXACTLY;
+import static android.view.View.MeasureSpec.makeMeasureSpec;
+
+import android.animation.Animator;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Region;
+import android.transition.Transition;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
+import androidx.annotation.LayoutRes;
 import androidx.core.graphics.drawable.RoundedBitmapDrawable;
 import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory;
 
 import org.chromium.base.TraceEvent;
 import org.chromium.build.annotations.NullMarked;
+
+import java.util.Collection;
+import java.util.Set;
 
 /** A utility class that has helper methods for Android view. */
 @NullMarked
@@ -143,25 +153,40 @@ public final class ViewUtils {
     }
 
     /**
-     *  Converts density-independent pixels (dp) to pixels on the screen (px).
-     *
-     *  @param dp Density-independent pixels are based on the physical density of the screen.
-     *  @return   The physical pixels on the screen which correspond to this many
-     *            density-independent pixels for this screen.
+     * @see #dpToPx(DisplayMetrics, float)
      */
     public static int dpToPx(Context context, float dp) {
         return dpToPx(context.getResources().getDisplayMetrics(), dp);
     }
 
     /**
-     *  Converts density-independent pixels (dp) to pixels on the screen (px).
+     * Converts density-independent pixels (dp) to pixels on the screen (px).
      *
-     *  @param dp Density-independent pixels are based on the physical density of the screen.
-     *  @return   The physical pixels on the screen which correspond to this many
-     *            density-independent pixels for this screen.
+     * @param metrics The {@link DisplayMetrics} for checking the current display pixel density.
+     * @param dp Density-independent pixels are based on the physical density of the screen.
+     * @return The physical pixels on the screen which correspond to this many density-independent
+     *     pixels for this screen.
      */
     public static int dpToPx(DisplayMetrics metrics, float dp) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp, metrics));
+    }
+
+    /**
+     * @see #pxToDp(DisplayMetrics, int)
+     */
+    public static int pxToDp(Context context, int px) {
+        return pxToDp(context.getResources().getDisplayMetrics(), px);
+    }
+
+    /**
+     * Converts pixels on the screen (px) to density-independent pixels (dp).
+     *
+     * @param metrics The {@link DisplayMetrics} for checking the current display pixel density.
+     * @param px The physical pixels on the screen.
+     * @return The density-independent pixels that correspond to this many physical pixels.
+     */
+    public static int pxToDp(DisplayMetrics displayMetrics, int px) {
+        return Math.round(px / displayMetrics.density);
     }
 
     /**
@@ -275,5 +300,89 @@ public final class ViewUtils {
         assert view != null;
         TraceEvent.instant("requestLayout caller: " + caller);
         view.requestLayout();
+    }
+
+    /**
+     * Triggers a synchronous measure and layout pass for a view. This can be crucial when immediate
+     * geometry information is required, such as during animations performed via {@link Transition}.
+     *
+     * @param view The view to measure and layout.
+     */
+    public static void triggerSynchronousMeasureAndLayout(View view) {
+        view.measure(
+                makeMeasureSpec(view.getMeasuredWidth(), EXACTLY),
+                makeMeasureSpec(view.getMeasuredHeight(), EXACTLY));
+        view.layout(view.getLeft(), view.getTop(), view.getRight(), view.getBottom());
+    }
+
+    /**
+     * Recursively collects all descendants of a View, excluding specific IDs and their entire
+     * subtrees.
+     *
+     * @param view The starting View.
+     * @param outCollection The collection to populate with descendants.
+     * @param excludedIds A Set of view IDs (R.id.name) to ignore.
+     */
+    public static void getAllDescendants(
+            View view, Collection<View> outCollection, Set<Integer> excludedIds) {
+        if (view instanceof ViewGroup viewGroup) {
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                View child = viewGroup.getChildAt(i);
+
+                // If the ID is in the exclusion set, skip this child AND its descendants
+                if (excludedIds.contains(child.getId())) continue;
+
+                outCollection.add(child);
+                getAllDescendants(child, outCollection, excludedIds);
+            }
+        }
+    }
+
+    /**
+     * ViewStub can be given a layout id and inflated at runtime, however this approach does not
+     * respect the padding and margins that the root parent view has specified in its layout file.
+     * This method aims to get around this shortcoming by replacing an existing child view with a
+     * new layout that's directly inflated into the parent to keep the paddings and margins. The old
+     * child can but does not have to be a ViewStub.
+     *
+     * @param oldChild The child view that currently has a parent and should be removed.
+     * @param layoutId The layout that should be inflated, should have a single parent view.
+     * @return The new view that has been created and inserted.
+     * @param <T> The type of the parent most view in the layout that is inflated.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T extends View> T replace(View oldChild, @LayoutRes int layoutId) {
+        Context context = oldChild.getContext();
+        ViewGroup parent = (ViewGroup) oldChild.getParent();
+        int index = parent.indexOfChild(oldChild);
+        LayoutInflater inflater = LayoutInflater.from(context);
+        T newChild = (T) inflater.inflate(layoutId, parent, /* attachToRoot= */ false);
+        parent.removeViewInLayout(oldChild);
+        parent.addView(newChild, index);
+        return newChild;
+    }
+
+    /**
+     * Attaches a permanent OnAttachStateChangeListener to the given view that cancels the animator
+     * currently stored in the specified tag when the view is detached from the window.
+     *
+     * <p>Note: This observer remains attached permanently to support view recycling. Ensure this is
+     * called only once per view.
+     *
+     * @param view The view to attach the listener to.
+     * @param tagId The resource ID of the tag holding the animator.
+     */
+    public static void cancelAnimatorOnDetach(View view, int tagId) {
+        view.addOnAttachStateChangeListener(
+                new View.OnAttachStateChangeListener() {
+                    @Override
+                    public void onViewAttachedToWindow(View v) {}
+
+                    @Override
+                    public void onViewDetachedFromWindow(View v) {
+                        Animator a = (Animator) v.getTag(tagId);
+                        if (a != null) a.cancel();
+                    }
+                });
     }
 }

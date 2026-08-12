@@ -10,10 +10,14 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "tools/json_schema_compiler/test/test_util.h"
 
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
 namespace errors = test::api::error_generation;
+
 using base::Value;
 using json_schema_compiler::test_util::Dictionary;
 using json_schema_compiler::test_util::List;
@@ -64,7 +68,7 @@ TEST(JsonSchemaCompilerErrorTest, TypeIsRequired) {
         EqualsUtf16("", GetPopulateError<errors::ChoiceType>(value.GetDict())));
   }
   {
-    base::Value::Dict value;
+    base::DictValue value;
     EXPECT_TRUE(EqualsUtf16("'integers' is required",
                             GetPopulateError<errors::ChoiceType>(value)));
   }
@@ -74,12 +78,12 @@ TEST(JsonSchemaCompilerErrorTest, TypeIsRequired) {
 
 TEST(JsonSchemaCompilerErrorTest, TooManyParameters) {
   {
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(5);
     EXPECT_TRUE(errors::TestFunction::Params::Create(params_value).has_value());
   }
   {
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(5);
     params_value.Append(5);
     EXPECT_TRUE(EqualsUtf16("expected 1 arguments, got 2",
@@ -92,12 +96,12 @@ TEST(JsonSchemaCompilerErrorTest, TooManyParameters) {
 
 TEST(JsonSchemaCompilerErrorTest, ParamIsRequired) {
   {
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(5);
     EXPECT_TRUE(errors::TestFunction::Params::Create(params_value).has_value());
   }
   {
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(base::Value());
     EXPECT_TRUE(EqualsUtf16("'num' is required",
                             errors::TestFunction::Params::Create(params_value)
@@ -124,12 +128,12 @@ TEST(JsonSchemaCompilerErrorTest, WrongPropertyValueType) {
 TEST(JsonSchemaCompilerErrorTest, WrongParameterCreationType) {
   {
     std::u16string error;
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append("Yeah!");
     EXPECT_TRUE(errors::TestString::Params::Create(params_value).has_value());
   }
   {
-    base::Value::List params_value;
+    base::ListValue params_value;
     params_value.Append(5);
     std::u16string error;
     EXPECT_TRUE(
@@ -141,7 +145,7 @@ TEST(JsonSchemaCompilerErrorTest, WrongParameterCreationType) {
 
 TEST(JsonSchemaCompilerErrorTest, WrongTypeValueType) {
   {
-    base::Value::Dict value;
+    base::DictValue value;
     EXPECT_TRUE(EqualsUtf16("", GetPopulateError<errors::ObjectType>(value)));
   }
   {

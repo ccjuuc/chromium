@@ -10,9 +10,9 @@ import android.os.Bundle;
 
 import androidx.preference.Preference;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableObservableSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -20,7 +20,6 @@ import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
-import org.chromium.components.content_settings.SessionModel;
 
 import java.util.Collection;
 
@@ -31,7 +30,7 @@ public class LocationPermissionSubpageSettings extends BaseSiteSettingsFragment
     public static final String RADIO_BUTTON_GROUP_KEY = "radio_button_group";
     public static final String PREF_OS_PERMISSIONS_WARNING = "os_permissions_warning";
 
-    private final SettableObservableSupplier<String> mPageTitle =
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
             ObservableSuppliers.createMonotonic();
     private @MonotonicNonNull Website mSite;
 
@@ -76,11 +75,12 @@ public class LocationPermissionSubpageSettings extends BaseSiteSettingsFragment
 
     private void setUpPreferences() {
         assumeNonNull(mSite);
-        PermissionInfo permissionInfo =
-                mSite.getPermissionInfo(ContentSettingsType.GEOLOCATION_WITH_OPTIONS);
-        assert permissionInfo != null;
-        assert permissionInfo.getSessionModel() == SessionModel.DURABLE;
 
+        assert !assumeNonNull(
+                        mSite.getPermissionSetting(
+                                getSiteSettingsDelegate().getBrowserContextHandle(),
+                                ContentSettingsType.GEOLOCATION_WITH_OPTIONS))
+                .isOneTime();
         SettingsUtils.addPreferencesFromResource(this, R.xml.location_permission_settings);
 
         LocationPermissionOptionsPreference radioPreference =
@@ -140,7 +140,7 @@ public class LocationPermissionSubpageSettings extends BaseSiteSettingsFragment
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 

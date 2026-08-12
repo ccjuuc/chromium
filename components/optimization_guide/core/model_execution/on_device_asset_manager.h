@@ -12,7 +12,6 @@
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_adaptation_loader.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_component.h"
-#include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/model_execution.pb.h"
 #include "components/optimization_guide/proto/model_quality_service.pb.h"
 #include "components/prefs/pref_service.h"
@@ -50,7 +49,8 @@ class OnDeviceAssetManager final
   void StateChanged(MaybeOnDeviceModelComponentState state) override;
 
   // UsageTracker::Observer:
-  void OnDeviceEligibleFeatureFirstUsed(mojom::OnDeviceFeature feature) final;
+  void OnDeviceEligibleUseCaseUsed(const std::string& use_case_name,
+                                   bool is_first_usage) override;
 
   raw_ref<PrefService> local_state_;
   raw_ref<UsageTracker> usage_tracker_;

@@ -30,6 +30,10 @@ CMakeFiles
 CMakeCache.txt
 config.h
 sentencepiece.pc
+CPackConfig.cmake
+CTestTestfile.cmake
+CPackSourceConfig.cmake
+DartConfiguration.tcl
 
 *.o
 *.lo
@@ -66,3 +70,14 @@ m.vocab
 cmake_install.cmake
 libsentencepiece.so*
 libsentencepiece_train.so*
+python/bundled
+_sentencepiece.*.so
+third_party/abseil-cpp
+third_party/benchmark
+
+python/sentencepiece
+python/test/m_*.model
+python/test/m_*.vocab
+python/test/sp_*.pickle
+
+third_party/absl

@@ -35,7 +35,7 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/loader/navigation_policy.h"
 #include "third_party/blink/renderer/core/url/dom_origin_utils.h"
-#include "third_party/blink/renderer/core/url/dom_url_utils.h"
+#include "third_party/blink/renderer/core/url/url_utils.h"
 #include "third_party/blink/renderer/platform/link_hash.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 
@@ -48,7 +48,7 @@ class MouseEvent;
 // features that use this class should be audited (to see if the new element
 // should also support these features).
 class CORE_EXPORT HTMLAnchorElementBase : public HTMLElement,
-                                          public DOMURLUtils,
+                                          public UrlUtils,
                                           public DOMOriginUtils {
  public:
   ~HTMLAnchorElementBase() override;
@@ -65,8 +65,8 @@ class CORE_EXPORT HTMLAnchorElementBase : public HTMLElement,
 
   KURL Url() const final;
 
-  // DOMURLUtils overrides:
-  void SetURL(const KURL&) final;
+  // UrlUtils overrides:
+  void SetUrl(const KURL&) final;
 
   // DOMOriginUtils overrides:
   DOMOrigin* GetDOMOrigin(LocalDOMWindow*) const final;
@@ -128,11 +128,17 @@ class CORE_EXPORT HTMLAnchorElementBase : public HTMLElement,
   Member<RelList> rel_list_;
 };
 
+class ScrollTargetObserver;
+
 class CORE_EXPORT HTMLAnchorElement : public HTMLAnchorElementBase {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
   explicit HTMLAnchorElement(Document& document);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLAnchorElement;
+  }
 
   void AttachLayoutTree(AttachContext& context) override;
   void DetachLayoutTree(bool performing_reattach) override;
@@ -143,10 +149,16 @@ class CORE_EXPORT HTMLAnchorElement : public HTMLAnchorElementBase {
 
   // Gets the element which is referenced by this anchor fragment
   // (#scroll-target), or nullptr if not found.
-  Element* ScrollTargetElement() const;
-  // Gets the closest ancestor scrollable area of this anchors scroll target
-  // element.
-  PaintLayerScrollableArea* AncestorScrollableAreaOfScrollTargetElement() const;
+  Element* ScrollTargetElement() const { return cached_scroll_target_.Get(); }
+  Element* ResolveScrollTargetElement() const;
+
+  void Trace(Visitor*) const override;
+
+ private:
+  void ClearScrollTargetGroupMembership();
+
+  Member<ScrollTargetObserver> scroll_target_observer_;
+  Member<Element> cached_scroll_target_;
 };
 
 template <>
@@ -183,11 +195,6 @@ inline LinkHash HTMLAnchorElementBase::PartitionedVisitedLinkFingerprint()
   }
   return cached_visited_link_hash_;
 }
-
-// Functions shared with the other anchor elements (i.e., SVG).
-
-bool IsEnterKeyKeydownEvent(Event&);
-bool IsLinkClick(Event&);
 
 }  // namespace blink
 

@@ -17,6 +17,7 @@ import android.text.TextUtils;
 
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -25,14 +26,15 @@ import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.components.payments.Address;
 import org.chromium.components.payments.ErrorStrings;
 import org.chromium.components.payments.IPaymentDetailsUpdateService;
@@ -55,12 +57,13 @@ import java.util.List;
 /** Tests for PaymentDetailsUpdateServiceHelper. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class PaymentDetailsUpdateServiceHelperTest {
     private static final int DECODER_STARTUP_TIMEOUT_IN_MS = 10000;
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule public ExpectedException thrown = ExpectedException.none();
 
@@ -112,6 +115,23 @@ public class PaymentDetailsUpdateServiceHelperTest {
     public void setUp() throws Throwable {
         mActivityTestRule.startOnBlankPage();
         mContext = mActivityTestRule.getActivity();
+    }
+
+    @After
+    public void tearDown() {
+        // Unbind the PaymentDetailsUpdateService so LoadedApk.mServices doesn't keep
+        // mConnection — and through it the ChromeTabbedActivity (mContext) — alive
+        // after the test finishes.
+        if (mBound) {
+            mContext.unbindService(mConnection);
+            mBound = false;
+        }
+
+        // Reset the PaymentDetailsUpdateServiceHelper singleton so it doesn't keep
+        // mUpdateListener (an inner class capturing this test) alive after the test
+        // finishes, which would otherwise retain the destroyed ChromeTabbedActivity.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> PaymentDetailsUpdateServiceHelper.getInstance().reset());
     }
 
     private void installPaymentApp() {

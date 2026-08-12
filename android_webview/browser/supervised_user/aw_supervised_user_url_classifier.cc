@@ -6,8 +6,8 @@
 
 #include "android_webview/browser/aw_browser_process.h"
 #include "android_webview/browser/supervised_user/aw_supervised_user_safemode_action.h"
+#include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
-#include "base/android/jni_callback.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/metrics/histogram_functions.h"
@@ -78,7 +78,7 @@ void AwSupervisedUserUrlClassifier::SetUserRequiresUrlChecks(
 
 static void JNI_AwSupervisedUserUrlClassifier_SetUserRequiresUrlChecks(
     JNIEnv* env,
-    jboolean user_requires_url_checks) {
+    bool user_requires_url_checks) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   AwSupervisedUserUrlClassifier::GetInstance()->SetUserRequiresUrlChecks(
       user_requires_url_checks);

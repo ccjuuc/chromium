@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -21,12 +22,18 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/test_utils.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/test_accelerator_target.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/button/label_button.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -102,7 +109,7 @@ void WebDialogBrowserTest::SetUpOnMainThread() {
   delegate_ = delegate;
 
   auto view = std::make_unique<views::WebDialogView>(
-      browser()->profile(), delegate,
+      browser()->GetProfile(), delegate,
       std::make_unique<ChromeWebContentsHandler>());
   view->SetOwnedByWidget(views::WidgetDelegate::OwnedByWidgetPassKey());
   gfx::NativeView parent_view =
@@ -113,6 +120,7 @@ void WebDialogBrowserTest::SetUpOnMainThread() {
   auto* widget =
       views::Widget::CreateWindowWithParent(std::move(view), parent_view);
   widget->Show();
+  ASSERT_TRUE(base::test::RunUntil([&]() { return widget->IsVisible(); }));
 }
 
 void WebDialogBrowserTest::SimulateEscapeKey() {
@@ -126,7 +134,7 @@ void WebDialogBrowserTest::SimulateEscapeKey() {
 }
 
 // Windows has some issues resizing windows. An off by one problem, and a
-// minimum size that seems too big. See http://crbug.com/52602.
+// minimum size that seems too big. See http://crbug.com/41198181.
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_SizeWindow DISABLED_SizeWindow
 #else
@@ -151,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest, MAYBE_SizeWindow) {
 
   auto check_bounds = [&](const gfx::Rect& set, const gfx::Rect& actual) {
     if (centered_in_window) {
-      gfx::Rect expected = browser()->window()->GetBounds();
+      gfx::Rect expected = browser()->GetWindow()->GetBounds();
       expected.ClampToCenteredSize(set.size());
       EXPECT_EQ(expected, actual);
     } else {
@@ -282,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest, CloseParentWindow) {
   // Close the parent window. Tear down may happen asynchronously.
   EXPECT_FALSE(web_dialog_delegate_destroyed_);
   EXPECT_FALSE(was_view_deleted());
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(web_dialog_delegate_destroyed_);
   EXPECT_TRUE(was_view_deleted());
@@ -319,7 +327,51 @@ IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest, CloseDialogOnEscapeDisabled) {
   EXPECT_FALSE(was_view_deleted());
 }
 
+// Verifies that when focus has switched to a button that consumes key events
+// (such as a Confirm button), an unhandled Enter key event bubbling up from
+// WebContents does not trigger an Enter accelerator.
+// This is the regression test for crbug.com/523277481.
+IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest,
+                       UnhandledEnterRespectsButtonFocus) {
+  views::FocusManager* focus_manager = view_->GetFocusManager();
+  ASSERT_TRUE(focus_manager);
+
+  ui::TestAcceleratorTarget target;
+  focus_manager->RegisterAccelerator(
+      ui::Accelerator(ui::VKEY_RETURN, ui::EF_NONE),
+      ui::AcceleratorManager::kNormalPriority, &target);
+
+  input::NativeWebKeyboardEvent event(
+      blink::WebInputEvent::Type::kRawKeyDown,
+      blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  event.windows_key_code = ui::VKEY_RETURN;
+
+  // When WebDialogView is focused, an unhandled Enter event fires the
+  // accelerator.
+  focus_manager->SetFocusedView(view_);
+  EXPECT_EQ(view_, focus_manager->GetFocusedView());
+  view_->HandleKeyboardEvent(view_->web_contents(), event);
+  EXPECT_EQ(1, target.accelerator_count());
+
+  // After switching focus to a default button, an unhandled Enter event does
+  // not fire the accelerator.
+  auto* button = view_->AddChildView(std::make_unique<views::LabelButton>(
+      views::Button::PressedCallback(), u"Confirm"));
+  button->SetIsDefault(true);
+  focus_manager->SetFocusedView(button);
+  EXPECT_EQ(button, focus_manager->GetFocusedView());
+  view_->HandleKeyboardEvent(view_->web_contents(), event);
+  EXPECT_EQ(1, target.accelerator_count());
+}
+
 // Test that key event is translated to a text input properly.
-IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest, TextInputViaKeyEvent) {
+// TODO(crbug.com/500602996): Enable the test.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#define MAYBE_TextInputViaKeyEvent DISABLED_TextInputViaKeyEvent
+#else
+#define MAYBE_TextInputViaKeyEvent TextInputViaKeyEvent
+#endif
+IN_PROC_BROWSER_TEST_F(WebDialogBrowserTest, MAYBE_TextInputViaKeyEvent) {
   TestTextInputViaKeyEvent(view_->web_contents());
 }

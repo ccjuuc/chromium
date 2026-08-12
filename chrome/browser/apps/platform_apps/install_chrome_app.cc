@@ -5,7 +5,6 @@
 #include "chrome/browser/apps/platform_apps/install_chrome_app.h"
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/webstore_install_with_prompt.h"
@@ -13,9 +12,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/common/extensions/webstore_install_result.h"
 #include "components/crx_file/id_util.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/webstore_install_result.h"
 #include "extensions/common/manifest_constants.h"
 
 using extensions::ExtensionRegistry;
@@ -61,7 +60,7 @@ class WebstoreInstallWithPromptAppsOnly
 };
 
 void WebstoreInstallWithPromptAppsOnly::OnManifestParsed() {
-  if (!base::Contains(manifest(), extensions::manifest_keys::kApp)) {
+  if (!manifest().contains(extensions::manifest_keys::kApp)) {
     CompleteInstall(extensions::webstore_install::NOT_PERMITTED,
                     kInstallChromeAppErrorNotAnApp);
     return;

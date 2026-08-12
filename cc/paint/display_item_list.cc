@@ -14,6 +14,7 @@
 #include "cc/debug/picture_debug_util.h"
 #include "cc/paint/paint_op_buffer_iterator.h"
 #include "cc/paint/solid_color_analyzer.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "ui/gfx/geometry/rect.h"
@@ -96,8 +97,8 @@ void DisplayItemList::Raster(SkCanvas* canvas,
   DCHECK(IsFinalized());
 #endif
 
-  TRACE_EVENT_BEGIN1("cc", "DisplayItemList::Raster", "total_op_count",
-                     TotalOpCount());
+  TRACE_EVENT_BEGIN("cc", "DisplayItemList::Raster", "total_op_count",
+                    TotalOpCount());
   std::vector<size_t> offsets = OffsetsOfOpsToRaster(canvas);
   if (offsets.empty()) {
     return;
@@ -112,8 +113,7 @@ void DisplayItemList::Raster(SkCanvas* canvas,
          it; ++it) {
       rastered_op_count += 1 + PaintOp::OpAdditionalOpCount(*it);
     }
-    TRACE_EVENT_END1("cc", "DisplayItemList::Raster", "rastered_op_count",
-                     rastered_op_count);
+    TRACE_EVENT_END("cc", "rastered_op_count", rastered_op_count);
   }
 }
 
@@ -231,12 +231,13 @@ void DisplayItemList::EmitTraceSnapshot() const {
   bool include_items;
   TRACE_EVENT_CATEGORY_GROUP_ENABLED(
       TRACE_DISABLED_BY_DEFAULT("cc.debug.display_items"), &include_items);
-  TRACE_EVENT_OBJECT_SNAPSHOT_WITH_ID(
+  TRACE_EVENT_INSTANT(
       TRACE_DISABLED_BY_DEFAULT("cc.debug.display_items") ","
       TRACE_DISABLED_BY_DEFAULT("cc.debug.picture") ","
       TRACE_DISABLED_BY_DEFAULT("devtools.timeline.picture"),
-      "cc::DisplayItemList", TRACE_ID_LOCAL(this),
-      CreateTracedValue(include_items));
+      "cc::DisplayItemList:snapshot",
+      perfetto::Flow::FromPointer(this, "DisplayItemList"),
+      "snapshot", CreateTracedValue(include_items));
 }
 
 std::string DisplayItemList::ToString() const {

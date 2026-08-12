@@ -7,13 +7,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/extensions/extension_side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/extension_id.h"
 
@@ -26,8 +26,7 @@ namespace {
 bool IsKeyActiveInRegistry(SidePanelRegistry* registry,
                            const SidePanelEntry::Key& key) {
   if (registry) {
-    auto entry = registry->GetActiveEntryFor(
-        ExtensionSidePanelCoordinator::GetPanelType());
+    auto entry = registry->GetActiveEntry();
     return entry.has_value() && entry.value()->key() == key;
   }
   return false;
@@ -73,18 +72,14 @@ void OpenGlobalExtensionSidePanel(BrowserWindowInterface& browser_window,
     SidePanelRegistry* contextual_registry =
         SidePanelRegistry::GetDeprecated(web_contents);
     CHECK(contextual_registry);
-    if (contextual_registry &&
-        contextual_registry->GetActiveEntryFor(
-            ExtensionSidePanelCoordinator::GetPanelType())) {
-      contextual_registry->ResetActiveEntryFor(
-          ExtensionSidePanelCoordinator::GetPanelType());
+    if (contextual_registry && contextual_registry->GetActiveEntry()) {
+      contextual_registry->ResetActiveEntry();
     }
   }
 
   // If the side panel isn't showing on the active tab, we can show the new
   // entry directly (since it's a global entry).
-  if (!side_panel_ui->IsSidePanelShowing(
-          ExtensionSidePanelCoordinator::GetPanelType())) {
+  if (!side_panel_ui->IsSidePanelShowing()) {
     side_panel_ui->Show(extension_key);
     return;
   }
@@ -98,9 +93,7 @@ void OpenGlobalExtensionSidePanel(BrowserWindowInterface& browser_window,
       SidePanelRegistry::GetDeprecated(active_web_contents);
   CHECK(active_tab_contextual_registry);
   bool has_active_contextual_entry =
-      active_tab_contextual_registry
-          ->GetActiveEntryFor(ExtensionSidePanelCoordinator::GetPanelType())
-          .has_value();
+      active_tab_contextual_registry->GetActiveEntry().has_value();
 
   if (!has_active_contextual_entry) {
     // It must be an active global side panel. Call `Show()` to override it.
@@ -147,13 +140,11 @@ void CloseGlobalExtensionSidePanel(BrowserWindowInterface* browser_window,
 
   tabs::TabInterface* active_tab = browser_window->GetActiveTabInterface();
   SidePanelRegistry* active_contextual_registry =
-      active_tab->GetTabFeatures()->side_panel_registry();
+      SidePanelRegistry::From(active_tab);
 
   // If the global side panel entry for this extension is active, close it.
   if (active_contextual_registry &&
-      active_contextual_registry
-          ->GetActiveEntryFor(ExtensionSidePanelCoordinator::GetPanelType())
-          .has_value()) {
+      active_contextual_registry->GetActiveEntry().has_value()) {
     // If the active web content contains a contextual panel and there is an
     // active global panel for this extension, reset the global side panel so it
     // doesn’t open when switching to any tab that doesn’t contain a contextual
@@ -161,14 +152,13 @@ void CloseGlobalExtensionSidePanel(BrowserWindowInterface* browser_window,
     SidePanelRegistry* const global_registry =
         SidePanelRegistry::From(browser_window);
     if (IsKeyActiveInRegistry(global_registry, extension_key)) {
-      global_registry->ResetActiveEntryFor(
-          ExtensionSidePanelCoordinator::GetPanelType());
+      global_registry->ResetActiveEntry();
     }
   } else {
     // Otherwise, if this extension's global side panel is visible,
     // simply close it.
     if (side_panel_ui->IsSidePanelEntryShowing(extension_key)) {
-      side_panel_ui->Close(ExtensionSidePanelCoordinator::GetPanelType());
+      side_panel_ui->Close();
     }
   }
 }
@@ -176,10 +166,18 @@ void CloseGlobalExtensionSidePanel(BrowserWindowInterface* browser_window,
 // Declared in extension_side_panel_utils.h
 void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
                                        content::WebContents* web_contents,
-                                       const ExtensionId& extension_id,
-                                       std::optional<int> window_id) {
+                                       const ExtensionId& extension_id) {
   const SidePanelEntry::Key extension_key(SidePanelEntry::Id::kExtension,
                                           extension_id);
+
+  // Get the registry for the specific tab (whether active or inactive).
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
+  SidePanelRegistry* contextual_registry = SidePanelRegistry::From(tab);
+
+  // Check if this extension is specifically active in this tab's registry.
+  if (!IsKeyActiveInRegistry(contextual_registry, extension_key)) {
+    return;
+  }
 
   // Determine the active web contents in the window.
   content::WebContents* active_web_contents =
@@ -192,30 +190,14 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
   // side panel.
   if (web_contents == active_web_contents) {
     if (side_panel_ui->IsSidePanelEntryShowing(extension_key)) {
-      side_panel_ui->Close(ExtensionSidePanelCoordinator::GetPanelType());
+      side_panel_ui->Close();
     }
     return;
   }
 
-  // If an inactive tab is specified, check whether it has an open contextual
-  // panel belonging to this extension. If it does, reset that panel (so it
-  // doesn’t reopen when you switch back to the tab).
-  if (web_contents) {
-    tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents);
-    SidePanelRegistry* contextual_registry =
-        tab->GetTabFeatures()->side_panel_registry();
-    if (IsKeyActiveInRegistry(contextual_registry, extension_key)) {
-      contextual_registry->ResetActiveEntryFor(
-          ExtensionSidePanelCoordinator::GetPanelType());
-      return;
-    }
-  }
-
-  // No contextual panel for this extension is open, close/reset global panel if
-  // `window_id` is provided.
-  if (window_id.has_value()) {
-    CloseGlobalExtensionSidePanel(browser_window, extension_id);
-  }
+  // If an inactive tab is specified, reset that panel (so it doesn’t reopen
+  // when you switch back to the tab).
+  contextual_registry->ResetActiveEntry();
 }
 
 }  // namespace extensions::side_panel_util

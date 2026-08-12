@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "base/check_is_test.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -75,6 +74,10 @@ RemoteCommandsService::MetricReceivedRemoteCommand RemoteCommandMetricFromType(
       return Metric::kFetchCrdAvailabilityInfo;
     case em::RemoteCommand_Type_FETCH_SUPPORT_PACKET:
       return Metric::kFetchSupportPacket;
+    case em::RemoteCommand_Type_QUERY_GEOLOCATION:
+      return Metric::kQueryGeolocation;
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return Metric::kBrowserExtensionUpdateCheck;
   }
 
   // None of possible types matched. May indicate that there is new unhandled
@@ -120,6 +123,10 @@ const char* RemoteCommandTypeToString(em::RemoteCommand_Type type) {
       return "FetchCrdAvailabilityInfo";
     case em::RemoteCommand_Type_FETCH_SUPPORT_PACKET:
       return "FetchSupportPacket";
+    case em::RemoteCommand_Type_QUERY_GEOLOCATION:
+      return "QueryGeolocation";
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return "BrowserExtensionUpdateCheck";
   }
 
   NOTREACHED() << "Unknown command type: " << type;
@@ -336,7 +343,7 @@ void RemoteCommandsService::EnqueueCommand(
   }
 
   // If the command is already fetched, ignore it.
-  if (base::Contains(fetched_command_ids_, command.command_id())) {
+  if (std::ranges::contains(fetched_command_ids_, command.command_id())) {
     RecordReceivedRemoteCommand(MetricReceivedRemoteCommand::kDuplicated);
     return;
   }

@@ -372,11 +372,14 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
                 .long_length = static_cast<uint32_t>(
                     amount ? length : std::numeric_limits<lentype>::max())})
             .Sync();
-    if (!response || response->format / 8u != sizeof(T)) {
+    if (!response ||
+        (response->format != 8 && response->format != 16 &&
+         response->format != 32) ||
+        response->format / 8u != sizeof(T)) {
       return false;
     }
 
-    size_t byte_len = response->value_len * response->format / 8u;
+    size_t byte_len = response->value_len * sizeof(T);
     value->resize(response->value_len);
     if (byte_len > 0u) {
       UNSAFE_TODO(memcpy(value->data(), response->value->bytes(), byte_len));
@@ -406,6 +409,17 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
     static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "");
     return SetArrayPropertyImpl(window, name, type, 8u * sizeof(T),
                                 base::as_byte_span(values));
+  }
+
+  template <typename T>
+  Future<void> SetArrayProperty(Window window,
+                                Atom name,
+                                Atom type,
+                                base::span<const T> values) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "");
+    return SetArrayPropertyImpl(
+        window, name, type, 8u * sizeof(T),
+        base::subtle::reinterpret_span<const uint8_t>(values));
   }
 
   template <typename T>

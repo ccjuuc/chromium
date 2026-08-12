@@ -4,8 +4,6 @@
 
 #import "ios/chrome/browser/whats_new/ui/cells/whats_new_table_view_item.h"
 
-#import "base/check.h"
-#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -44,9 +42,8 @@ const CGFloat trailingMargin = -24.0;
 
 #pragma mark TableViewItem
 
-- (void)configureCell:(WhatsNewTableViewCell*)cell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:cell withStyler:styler];
+- (void)configureCell:(WhatsNewTableViewCell*)cell {
+  [super configureCell:cell];
 
   self.accessibilityTraits |= UIAccessibilityTraitButton;
 

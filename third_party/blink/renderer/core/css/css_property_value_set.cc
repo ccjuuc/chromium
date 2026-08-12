@@ -22,6 +22,7 @@
  */
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser.h"
@@ -41,8 +42,7 @@
 namespace blink {
 
 static AdditionalBytes
-AdditionalBytesForImmutableCSSPropertyValueSetWithPropertyCount(
-    unsigned count) {
+AdditionalBytesForImmutableCSSPropertyValueSetWithPropertyCount(size_t count) {
   return AdditionalBytes(sizeof(CSSPropertyValue) * count);
 }
 
@@ -83,14 +83,7 @@ unsigned CSSPropertyValueSet::ComputeHash() const {
     AddIntToHash(hash, property.Value().Hash());
   }
 
-  static_assert((HashTraits<unsigned>::EmptyValue() ^ 0x80000000) !=
-                    HashTraits<unsigned>::DeletedValue(),
-                "We assume below that flipping the top bit will not turn "
-                "EmptyValue into DeletedValue or vice versa");
-  if (hash == HashTraits<unsigned>::EmptyValue() ||
-      hash == HashTraits<unsigned>::DeletedValue()) {
-    hash ^= 0x80000000;
-  }
+  hash = EnsureValidHash(hash);
 
   return hash;
 }
@@ -101,15 +94,16 @@ MutableCSSPropertyValueSet::MutableCSSPropertyValueSet(
 
 MutableCSSPropertyValueSet::MutableCSSPropertyValueSet(
     base::span<const CSSPropertyValue> properties)
-    : CSSPropertyValueSet(kHTMLStandardMode) {
-  property_vector_.ReserveInitialCapacity(properties.size());
-  for (const CSSPropertyValue& property : properties) {
-    property_vector_.UncheckedAppend(property);
-    bits_.set<MayHaveLogicalPropertiesField>(
-        bits_.get<MayHaveLogicalPropertiesField>() ||
-        kLogicalGroupProperties.Has(property.PropertyID()));
-  }
-}
+    : CSSPropertyValueSet(kHTMLStandardMode),
+      property_vector_(properties, [this](const CSSPropertyValue& property) {
+        bits_.set<MayHaveLogicalPropertiesField>(
+            bits_.get<MayHaveLogicalPropertiesField>() ||
+            kLogicalGroupProperties.Has(property.PropertyID()));
+        if (property.PropertyID() == CSSPropertyID::kAll) {
+          bits_.set<HasAllField>(true);
+        }
+        return property;
+      }) {}
 
 ImmutableCSSPropertyValueSet::ImmutableCSSPropertyValueSet(
     PassKey,
@@ -117,7 +111,7 @@ ImmutableCSSPropertyValueSet::ImmutableCSSPropertyValueSet(
     CSSParserMode css_parser_mode,
     bool contains_query_hand)
     : CSSPropertyValueSet(css_parser_mode,
-                          properties.size(),
+                          base::checked_cast<unsigned>(properties.size()),
                           contains_query_hand) {
   const unsigned array_size = bits_.get<ArraySizeField>();
   if (array_size > 0) {
@@ -125,10 +119,16 @@ ImmutableCSSPropertyValueSet::ImmutableCSSPropertyValueSet(
     // through Create(), we guarantee that the arrays will have storage where we
     // expect.
     UNSAFE_BUFFERS(base::span<CSSPropertyValue> array(
-        const_cast<CSSPropertyValue*>(ArrayBase()), array_size));
+        base::unchecked, const_cast<CSSPropertyValue*>(ArrayBase()),
+        array_size));
+    bool has_all = false;
     for (unsigned i = 0; i < array_size; ++i) {
       new (&array[i]) CSSPropertyValue(properties[i]);
+      if (properties[i].PropertyID() == CSSPropertyID::kAll) {
+        has_all = true;
+      }
     }
+    bits_.set<HasAllField>(has_all);
   }
 }
 
@@ -215,6 +215,7 @@ MutableCSSPropertyValueSet::MutableCSSPropertyValueSet(
     property_vector_ = other_mutable_property_set->property_vector_;
     bits_.set<MayHaveLogicalPropertiesField>(
         other_mutable_property_set->bits_.get<MayHaveLogicalPropertiesField>());
+    bits_.set<HasAllField>(other_mutable_property_set->HasAllProperty());
   } else {
     property_vector_.ReserveInitialCapacity(other.PropertyCount());
     bool may_have_logical_properties =
@@ -225,11 +226,32 @@ MutableCSSPropertyValueSet::MutableCSSPropertyValueSet(
           kLogicalGroupProperties.Has(property.PropertyID());
     }
     bits_.set<MayHaveLogicalPropertiesField>(may_have_logical_properties);
+    bits_.set<HasAllField>(other.HasAllProperty());
   }
 }
 
 static String SerializeShorthand(const CSSPropertyValueSet& property_set,
                                  CSSPropertyID property_id) {
+  if (property_id == CSSPropertyID::kAll) {
+    if (!property_set.HasAllProperty()) {
+      return g_empty_string;
+    }
+    // 'all' is stored as a single entry instead of being expanded into
+    // longhands, so we handle its serialization manually here. It serializes to
+    // its value only if no subsequent properties affected by 'all' have a
+    // different value.
+    // e.g.: [all:revert]             -> getPropertyValue("all") == "revert"
+    //       [all:revert, width:50px] -> getPropertyValue("all") == ""
+    int all_index = property_set.FindPropertyIndex(property_id);
+    const CSSPropertyValue& all_property = property_set.PropertyAt(all_index);
+    for (unsigned i = all_index + 1; i < property_set.PropertyCount(); ++i) {
+      if (property_set.PropertyAt(i).IsAffectedByAll() &&
+          all_property.Value() != property_set.PropertyAt(i).Value()) {
+        return g_empty_string;
+      }
+    }
+    return all_property.Value().CssText();
+  }
   StylePropertyShorthand shorthand = shorthandForProperty(property_id);
   if (!shorthand.length()) {
     return String();
@@ -250,12 +272,37 @@ static String SerializeShorthand(const CSSPropertyValueSet& property_set,
   return String();
 }
 
+static bool IsAffectedByAll(CSSPropertyID property_id) {
+  return CSSProperty::Get(property_id).IsAffectedByAll();
+}
+// Custom properties and descriptors are never affected by 'all'.
+static bool IsAffectedByAll(const AtomicString& custom_property_name) {
+  return true;
+}
+static bool IsAffectedByAll(AtRuleDescriptorID descriptor_id) {
+  return false;
+}
+
 template <typename T>
 String CSSPropertyValueSet::GetPropertyValue(const T& property) const {
   String shorthand_serialization = SerializeShorthand(*this, property);
   if (!shorthand_serialization.IsNull()) {
     return shorthand_serialization;
   }
+
+  // 'all' is stored as a single entry instead of being expanded into
+  // longhands, so we handle it manually here. A property appearing
+  // before 'all' or absent from the set is overridden by 'all',
+  // so we return 'all's value.
+  // e.g.: [width:50px, all:revert] -> getPropertyValue("width") == "revert"
+  //       [all:revert]             -> getPropertyValue("color") == "revert"
+  if (bits_.get<HasAllField>() && IsAffectedByAll(property)) {
+    int all_index = FindPropertyIndex(CSSPropertyID::kAll);
+    if (FindPropertyIndex(property) < all_index) {
+      return PropertyAt(all_index).Value().CssText();
+    }
+  }
+
   const CSSValue* value = GetPropertyCSSValue(property);
   if (value) {
     return value->CssText();
@@ -323,7 +370,10 @@ void CSSPropertyValueSet::FinalizeGarbageCollectedObject() {
 bool MutableCSSPropertyValueSet::RemoveShorthandProperty(
     CSSPropertyID property_id) {
   if (property_id == CSSPropertyID::kAll) {
-    return RemovePropertiesAffectedByAll();
+    RemovePropertiesAffectedByAll();
+
+    int all_index = FindPropertyIndex(property_id);
+    return RemovePropertyAtIndex(all_index, /*return_text*/ nullptr);
   }
   StylePropertyShorthand shorthand = shorthandForProperty(property_id);
   if (!shorthand.length()) {
@@ -344,6 +394,10 @@ bool MutableCSSPropertyValueSet::RemovePropertyAtIndex(int property_index,
 
   if (return_text) {
     *return_text = PropertyAt(property_index).Value().CssText();
+  }
+
+  if (PropertyAt(property_index).PropertyID() == CSSPropertyID::kAll) {
+    bits_.set<HasAllField>(false);
   }
 
   // A more efficient removal strategy would involve marking entries as empty
@@ -540,6 +594,12 @@ MutableCSSPropertyValueSet::SetLonghandProperty(CSSPropertyValue property) {
     to_replace = const_cast<CSSPropertyValue*>(
         FindPropertyPointer(property.CustomPropertyName()));
   } else {
+    // 'all' is a shorthand in the spec but is stored as a single entry
+    // instead of being expanded into longhands, so remove affected properties
+    // to ensure 'all' fully overrides them.
+    if (id == CSSPropertyID::kAll) {
+      RemovePropertiesAffectedByAll();
+    }
     to_replace = FindInsertionPointForID(id);
   }
   if (to_replace) {
@@ -553,6 +613,12 @@ MutableCSSPropertyValueSet::SetLonghandProperty(CSSPropertyValue property) {
     bits_.set<MayHaveLogicalPropertiesField>(
         bits_.get<MayHaveLogicalPropertiesField>() ||
         kLogicalGroupProperties.Has(id));
+    // 'all' is a shorthand in the spec but is stored as a single entry
+    // instead of being expanded into longhands, so GetPropertyValue()
+    // must check whether 'all' is present.
+    if (id == CSSPropertyID::kAll) {
+      bits_.set<HasAllField>(true);
+    }
   }
   property_vector_.push_back(std::move(property));
   InvalidateHashIfComputed();
@@ -571,6 +637,12 @@ void MutableCSSPropertyValueSet::SetLonghandProperty(CSSPropertyID property_id,
     bits_.set<MayHaveLogicalPropertiesField>(
         bits_.get<MayHaveLogicalPropertiesField>() ||
         kLogicalGroupProperties.Has(property_id));
+    // 'all' is a shorthand in the spec but is stored as a single entry
+    // instead of being expanded into longhands, so GetPropertyValue()
+    // must check whether 'all' is present.
+    if (property_id == CSSPropertyID::kAll) {
+      bits_.set<HasAllField>(true);
+    }
     property_vector_.emplace_back(CSSPropertyName(property_id), value);
   }
   InvalidateHashIfComputed();
@@ -589,8 +661,7 @@ void MutableCSSPropertyValueSet::ParseDeclarationList(
     const String& style_declaration,
     SecureContextMode secure_context_mode,
     StyleSheetContents* context_style_sheet) {
-  property_vector_.clear();
-  InvalidateHashIfComputed();
+  Clear();
 
   CSSParserContext* context;
   if (context_style_sheet) {
@@ -609,7 +680,8 @@ MutableCSSPropertyValueSet::SetResult
 MutableCSSPropertyValueSet::AddParsedProperties(
     base::span<CSSPropertyValue> properties) {
   SetResult changed = kUnchanged;
-  property_vector_.reserve(property_vector_.size() + properties.size());
+  property_vector_.reserve(base::checked_cast<wtf_size_t>(
+      property_vector_.size() + properties.size()));
   for (const CSSPropertyValue& property : properties) {
     changed = std::max(changed, SetLonghandProperty(property));
   }
@@ -649,6 +721,7 @@ void MutableCSSPropertyValueSet::Clear() {
   property_vector_.clear();
   InvalidateHashIfComputed();
   bits_.set<MayHaveLogicalPropertiesField>(false);
+  bits_.set<HasAllField>(false);
 }
 
 inline bool ContainsId(const base::span<const CSSProperty* const>& set,
@@ -673,6 +746,9 @@ bool MutableCSSPropertyValueSet::RemovePropertiesInSet(
   for (unsigned old_index = 0; old_index < old_size; ++old_index) {
     const CSSPropertyValue& property = properties[old_index];
     if (ContainsId(set, property.PropertyID())) {
+      if (property.PropertyID() == CSSPropertyID::kAll) {
+        bits_.set<HasAllField>(false);
+      }
       continue;
     }
     // Modify property_vector_ in-place since this method is
@@ -727,31 +803,69 @@ bool CSSPropertyValueSet::PropertyMatches(
   return PropertyAt(found_property_index).Value() == property_value;
 }
 
-void MutableCSSPropertyValueSet::RemoveEquivalentProperties(
-    const CSSPropertyValueSet* style) {
-  Vector<CSSPropertyID> properties_to_remove;
-  unsigned size = property_vector_.size();
-  for (unsigned i = 0; i < size; ++i) {
-    const CSSPropertyValue& property = PropertyAt(i);
-    if (style->PropertyMatches(property.PropertyID(), property.Value())) {
-      properties_to_remove.push_back(property.PropertyID());
-    }
+bool CSSPropertyValueSet::ShorthandPropertyMatches(
+    CSSPropertyID shorthand_id,
+    const CSSPropertyValueSet& style) const {
+  StylePropertySerializer serializer(style);
+  String serialized_shorthand = serializer.SerializeShorthand(shorthand_id);
+  return !serialized_shorthand.empty() &&
+         serialized_shorthand == SerializeShorthand(*this, shorthand_id);
+}
+
+bool CSSPropertyValueSet::ShorthandPropertyMatches(
+    CSSPropertyID shorthand_id,
+    const CSSStyleDeclaration& style) const {
+  if (auto* abstract_prop_set =
+          DynamicTo<AbstractPropertySetCSSStyleDeclaration>(style)) {
+    return ShorthandPropertyMatches(shorthand_id,
+                                    abstract_prop_set->GetPropertyValueSet());
   }
-  // FIXME: This should use mass removal.
-  for (CSSPropertyID id : properties_to_remove) {
-    RemoveProperty(id);
-  }
+  return false;
 }
 
 void MutableCSSPropertyValueSet::RemoveEquivalentProperties(
+    const CSSPropertyValueSet* style) {
+  base::span<CSSPropertyValue> properties(property_vector_);
+  unsigned old_size = property_vector_.size();
+  unsigned new_index = 0;
+  for (unsigned old_index = 0; old_index < old_size; ++old_index) {
+    const CSSPropertyValue& property = properties[old_index];
+    // Custom properties are unconditionally kept: PropertyMatches() compares by
+    // CSSPropertyID, which is kVariable for every custom property, so it cannot
+    // distinguish them by name. Skipping them here keeps that latent ambiguity
+    // out of this editing-only path.
+    if (property.PropertyID() != CSSPropertyID::kVariable &&
+        style->PropertyMatches(property.PropertyID(), property.Value())) {
+      if (property.PropertyID() == CSSPropertyID::kAll) {
+        bits_.set<HasAllField>(false);
+      }
+      continue;
+    }
+    properties[new_index++] = property;
+  }
+  if (new_index != old_size) {
+    property_vector_.Shrink(new_index);
+    InvalidateHashIfComputed();
+  }
+}
+
+void MutableCSSPropertyValueSet::RemoveEquivalentPropertiesPreservingShorthands(
     const CSSStyleDeclaration* style) {
-  Vector<CSSPropertyID> properties_to_remove;
+  HashSet<CSSPropertyID> properties_to_remove;
   for (const CSSPropertyValue& property : property_vector_) {
+    auto shorthand_id = property.ShorthandID();
+    if (shorthand_id != CSSPropertyID::kInvalid) {
+      if (!properties_to_remove.Contains(shorthand_id) &&
+          ShorthandPropertyMatches(shorthand_id, *style)) {
+        properties_to_remove.insert(shorthand_id);
+      }
+      continue;
+    }
     if (style->CssPropertyMatches(property.PropertyID(), property.Value())) {
-      properties_to_remove.push_back(property.PropertyID());
+      properties_to_remove.insert(property.PropertyID());
     }
   }
-  // FIXME: This should use mass removal.
+  // TODO(crbug.com/483903178): This should use mass removal.
   for (CSSPropertyID id : properties_to_remove) {
     RemoveProperty(id);
   }

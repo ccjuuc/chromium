@@ -30,38 +30,32 @@ NSString* const kEditIconIdentifier = @"_editIcon";
 
 // Matcher for the 'Name on Card' field in the add credit card view.
 id<GREYMatcher> NameOnCardField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_CARDHOLDER));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_CARDHOLDER);
 }
 
 // Matcher for the 'Card Number' field in the add credit card view.
 id<GREYMatcher> CardNumberField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_CARD_NUMBER));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_CARD_NUMBER);
 }
 
 // Matcher for the 'Month of Expiry' field in the add credit card view.
 id<GREYMatcher> MonthOfExpiryField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_EXP_MONTH));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_EXP_MONTH);
 }
 
 // Matcher for the 'Year of Expiry' field in the add credit card view.
 id<GREYMatcher> YearOfExpiryField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_EXP_YEAR));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_EXP_YEAR);
 }
 
 // Matcher for the 'Nickname' field in the add credit card view.
 id<GREYMatcher> NicknameField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_NICKNAME));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_NICKNAME);
 }
 
 // Matcher for the 'CVC' field in the add credit card view.
 id<GREYMatcher> CvcField() {
-  return grey_accessibilityLabel(
-      l10n_util::GetNSStringWithFixup(IDS_IOS_AUTOFILL_SECURITY_CODE));
+  return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_SECURITY_CODE);
 }
 
 // Matcher for the 'Use Camera' button in the add credit card view.
@@ -111,8 +105,6 @@ id<GREYMatcher> CardNumberIconView(NSString* icon_type) {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
   // Add feature configs here.
-  config.features_enabled.push_back(
-      autofill::features::kAutofillEnableCvcStorageAndFilling);
   if ([self isRunningTest:@selector
             (testUseCameraButtonShownWhenFeatureEnabled)]) {
     config.features_enabled.push_back(
@@ -124,7 +116,16 @@ id<GREYMatcher> CardNumberIconView(NSString* icon_type) {
 - (void)setUp {
   [super setUp];
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey
+        selectElementWithMatcher:PaymentMethodsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  }
   [[EarlGrey selectElementWithMatcher:SettingsToolbarAddButton()]
       performAction:grey_tap()];
 }

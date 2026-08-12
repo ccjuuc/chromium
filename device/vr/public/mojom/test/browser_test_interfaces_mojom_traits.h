@@ -9,8 +9,8 @@
 #include "device/vr/public/mojom/test/color.h"
 #include "device/vr/public/mojom/test/controller_frame_data.h"
 #include "device/vr/public/mojom/test/device_config.h"
+#include "device/vr/public/mojom/test/layer_data.h"
 #include "device/vr/public/mojom/test/view_data.h"
-#include "device/vr/public/mojom/test/visibility_mask.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
@@ -35,33 +35,38 @@ struct StructTraits<device_test::mojom::ColorDataView, device::Color> {
 };
 
 template <>
-struct EnumTraits<device_test::mojom::Eye, device::XrEye> {
-  static device_test::mojom::Eye ToMojom(device::XrEye input) {
+struct EnumTraits<device_test::mojom::LayerType, device::LayerType> {
+  static device_test::mojom::LayerType ToMojom(device::LayerType input) {
     switch (input) {
-      case device::XrEye::kLeft:
-        return device_test::mojom::Eye::LEFT;
-      case device::XrEye::kRight:
-        return device_test::mojom::Eye::RIGHT;
-      case device::XrEye::kNone:
-        return device_test::mojom::Eye::NONE;
+      case device::LayerType::kQuad:
+        return device_test::mojom::LayerType::QUAD;
+      case device::LayerType::kCylinder:
+        return device_test::mojom::LayerType::CYLINDER;
+      case device::LayerType::kEquirect:
+        return device_test::mojom::LayerType::EQUIRECT;
+      case device::LayerType::kCube:
+        return device_test::mojom::LayerType::CUBE;
+      case device::LayerType::kNone:
+        return device_test::mojom::LayerType::NONE;
     }
     NOTREACHED();
-    return device_test::mojom::Eye::NONE;
+    return device_test::mojom::LayerType::NONE;
   }
 
-  static bool FromMojom(device_test::mojom::Eye input, device::XrEye* out) {
+  static device::LayerType FromMojom(device_test::mojom::LayerType input) {
     switch (input) {
-      case device_test::mojom::Eye::LEFT:
-        *out = device::XrEye::kLeft;
-        return true;
-      case device_test::mojom::Eye::RIGHT:
-        *out = device::XrEye::kRight;
-        return true;
-      case device_test::mojom::Eye::NONE:
-        *out = device::XrEye::kNone;
-        return true;
+      case device_test::mojom::LayerType::QUAD:
+        return device::LayerType::kQuad;
+      case device_test::mojom::LayerType::CYLINDER:
+        return device::LayerType::kCylinder;
+      case device_test::mojom::LayerType::EQUIRECT:
+        return device::LayerType::kEquirect;
+      case device_test::mojom::LayerType::CUBE:
+        return device::LayerType::kCube;
+      case device_test::mojom::LayerType::NONE:
+        return device::LayerType::kNone;
     }
-    return false;
+    NOTREACHED();
   }
 };
 
@@ -83,23 +88,41 @@ struct EnumTraits<device_test::mojom::ControllerRole, device::ControllerRole> {
     return device_test::mojom::ControllerRole::kControllerRoleInvalid;
   }
 
-  static bool FromMojom(device_test::mojom::ControllerRole input,
-                        device::ControllerRole* out) {
+  static device::ControllerRole FromMojom(
+      device_test::mojom::ControllerRole input) {
     switch (input) {
       case device_test::mojom::ControllerRole::kControllerRoleLeft:
-        *out = device::ControllerRole::kControllerRoleLeft;
-        return true;
+        return device::ControllerRole::kControllerRoleLeft;
       case device_test::mojom::ControllerRole::kControllerRoleRight:
-        *out = device::ControllerRole::kControllerRoleRight;
-        return true;
+        return device::ControllerRole::kControllerRoleRight;
       case device_test::mojom::ControllerRole::kControllerRoleInvalid:
-        *out = device::ControllerRole::kControllerRoleInvalid;
-        return true;
+        return device::ControllerRole::kControllerRoleInvalid;
       case device_test::mojom::ControllerRole::kControllerRoleVoice:
-        *out = device::ControllerRole::kControllerRoleVoice;
-        return true;
+        return device::ControllerRole::kControllerRoleVoice;
     }
-    return false;
+    NOTREACHED();
+  }
+};
+
+template <>
+struct StructTraits<device_test::mojom::LayerDataDataView, device::LayerData> {
+  static device::LayerType type(const device::LayerData& layer_data) {
+    return layer_data.type;
+  }
+  static const std::vector<device::Color>& face_colors(
+      const device::LayerData& layer_data) {
+    return layer_data.face_colors;
+  }
+
+  static bool Read(device_test::mojom::LayerDataDataView data,
+                   device::LayerData* out) {
+    if (!data.ReadType(&out->type)) {
+      return false;
+    }
+    if (!data.ReadFaceColors(&out->face_colors)) {
+      return false;
+    }
+    return true;
   }
 };
 
@@ -108,7 +131,7 @@ struct StructTraits<device_test::mojom::ViewDataDataView, device::ViewData> {
   static device::Color color(const device::ViewData& view_data) {
     return view_data.color;
   }
-  static device::XrEye eye(const device::ViewData& view_data) {
+  static device::mojom::XREye eye(const device::ViewData& view_data) {
     return view_data.eye;
   }
   static const gfx::Rect& viewport(const device::ViewData& view_data) {
@@ -277,30 +300,6 @@ struct StructTraits<device_test::mojom::ControllerFrameDataDataView,
       out->hand_data = *maybe_hand_data;
     }
     out->is_valid = data.is_valid();
-    return true;
-  }
-};
-
-template <>
-struct StructTraits<device_test::mojom::XRVisibilityMaskDataView,
-                    device::VisibilityMaskData> {
-  static const std::array<float, device::kNumVisibilityMaskVerticesForTest>&
-  vertices(const device::VisibilityMaskData& mask) {
-    return mask.vertices;
-  }
-  static const std::array<uint32_t, device::kNumVisibilityMaskIndicesForTest>&
-  indices(const device::VisibilityMaskData& mask) {
-    return mask.indices;
-  }
-
-  static bool Read(device_test::mojom::XRVisibilityMaskDataView data,
-                   device::VisibilityMaskData* out) {
-    if (!data.ReadVertices(&out->vertices)) {
-      return false;
-    }
-    if (!data.ReadIndices(&out->indices)) {
-      return false;
-    }
     return true;
   }
 };

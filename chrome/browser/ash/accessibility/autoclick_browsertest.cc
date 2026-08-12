@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
 #include "ash/accessibility/autoclick/autoclick_controller.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_controller_impl.h"
 #include "ash/accessibility/ui/accessibility_focus_ring_layer.h"
@@ -9,7 +11,6 @@
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/shell.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ash/accessibility/accessibility_feature_browsertest.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
@@ -18,7 +19,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -52,12 +52,6 @@ class AutoclickBrowserTest : public AccessibilityFeatureBrowserTest {
   AutoclickBrowserTest() = default;
   ~AutoclickBrowserTest() override = default;
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    scoped_feature_list_.InitWithFeatureStates(
-        {{::features::kAccessibilityManifestV3AccessibilityCommon, true}});
-    AccessibilityFeatureBrowserTest::SetUpCommandLine(command_line);
-  }
-
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     aura::Window* root_window = Shell::Get()->GetPrimaryRootWindow();
@@ -84,7 +78,6 @@ class AutoclickBrowserTest : public AccessibilityFeatureBrowserTest {
  private:
   std::unique_ptr<ui::test::EventGenerator> generator_;
   std::unique_ptr<AutoclickTestUtils> autoclick_test_utils_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(AutoclickBrowserTest, LeftClickButtonOnHover) {

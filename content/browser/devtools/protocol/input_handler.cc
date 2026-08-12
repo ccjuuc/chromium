@@ -13,11 +13,11 @@
 
 #include "base/check.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -42,8 +42,11 @@
 #include "content/common/input/synthetic_tap_gesture.h"
 #include "content/common/input/synthetic_tap_gesture_params.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/url_constants.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/blink/web_input_event_traits.h"
@@ -126,10 +129,14 @@ int GetEventModifiers(int modifiers,
 
 base::TimeTicks GetEventTimeTicks(const std::optional<double>& timestamp) {
   // Convert timestamp, in seconds since unix epoch, to an event timestamp
-  // which is time ticks since platform start time.
-  return timestamp.has_value()
-             ? base::Seconds(timestamp.value()) + base::TimeTicks::UnixEpoch()
-             : base::TimeTicks::Now();
+  // which is time ticks since platform start time. Anchor both clocks to the
+  // current instant to map the wall-clock time onto the TimeTicks timeline.
+  if (!timestamp.has_value()) {
+    return base::TimeTicks::Now();
+  }
+  const base::Time event_time =
+      base::Time::UnixEpoch() + base::Seconds(timestamp.value());
+  return base::TimeTicks::Now() - (base::Time::Now() - event_time);
 }
 
 bool SetKeyboardEventText(
@@ -253,7 +260,7 @@ bool GenerateTouchPoints(
                                   ? blink::WebTouchPoint::State::kStateCancelled
                                   : blink::WebTouchPoint::State::kStateReleased;
     event->SetType(type);
-  } else if (!base::Contains(points, changing.id)) {
+  } else if (!points.contains(changing.id)) {
     event->touches[0].state = blink::WebTouchPoint::State::kStatePressed;
     event->SetType(blink::WebInputEvent::Type::kTouchStart);
   } else {
@@ -350,6 +357,41 @@ void DispatchPointerActionsResponse(
   }
 }
 
+bool HasFileRelatedItem(Input::DragData* data) {
+  if (data->HasFiles()) {
+    return true;
+  }
+  if (!data->GetItems()) {
+    return false;
+  }
+  for (const auto& item : *data->GetItems()) {
+    if (item->GetMimeType() == ui::kMimeTypeUriList) {
+      std::vector<std::string> lines =
+          base::SplitString(item->GetData(), "\r\n", base::KEEP_WHITESPACE,
+                            base::SPLIT_WANT_NONEMPTY);
+      for (const std::string& line : lines) {
+        if (line.starts_with('#')) {
+          continue;
+        }
+        GURL url(line);
+        GURL inner_url = url;
+        while (inner_url.SchemeIs(content::kViewSourceScheme)) {
+          inner_url = GURL(inner_url.GetContent());
+        }
+        bool is_file = inner_url.SchemeIsFile();
+#if BUILDFLAG(IS_CHROMEOS)
+        // The "externalfile" scheme is ChromeOS-specific.
+        is_file |= inner_url.SchemeIs(content::kExternalFileScheme);
+#endif
+        if (is_file) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 DropData ProtocolDragDataToDropData(std::unique_ptr<Input::DragData> data) {
   std::vector<blink::mojom::DragItemPtr> items;
 
@@ -365,9 +407,11 @@ DropData ProtocolDragDataToDropData(std::unique_ptr<Input::DragData> data) {
     items.push_back(blink::mojom::DragItem::NewString(std::move(mojo_item)));
   }
 
-  blink::mojom::DragDataPtr mojo_data = blink::mojom::DragData::New(
-      std::move(items), std::nullopt,
-      /*force_default_action=*/false, network::mojom::ReferrerPolicy::kDefault);
+  blink::mojom::DragDataPtr mojo_data =
+      blink::mojom::DragData::New(std::move(items), std::nullopt,
+                                  /*force_default_action=*/false,
+                                  /*source_effect_allowed=*/std::nullopt,
+                                  network::mojom::ReferrerPolicy::kDefault);
   DropData drop_data = DragDataToDropData(*mojo_data);
 
   protocol::Array<protocol::String> default_value;
@@ -536,7 +580,7 @@ CreateWebTouchEvents(
   std::vector<blink::WebTouchEvent> events;
   bool ok = true;
   for (auto& id_point : points) {
-    if (base::Contains(touched_points, id_point.first) &&
+    if (touched_points.contains(id_point.first) &&
         type == blink::WebInputEvent::Type::kTouchMove &&
         touched_points[id_point.first].PositionInWidget() ==
             id_point.second.PositionInWidget()) {
@@ -1256,7 +1300,7 @@ void InputHandler::InsertText(const std::string& text,
   widget_host->Focus();
   widget_host->GetWidgetInputHandler()->ImeCommitText(
       text16, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0,
-      std::move(closure));
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), std::move(closure));
 }
 
 void InputHandler::ImeSetComposition(
@@ -1310,7 +1354,8 @@ void InputHandler::ImeSetComposition(
 
   widget_host->GetWidgetInputHandler()->ImeSetComposition(
       text16, std::vector<ui::ImeTextSpan>(), replacement_range,
-      selection_start, selection_end, std::move(closure));
+      selection_start, selection_end, blink::mojom::ImeState::kNone,
+      /*target_dom_node_id=*/blink::DOMNodeIdType(), std::move(closure));
 }
 
 void InputHandler::DispatchMouseEvent(
@@ -1396,7 +1441,7 @@ void InputHandler::DispatchDragEvent(
     std::unique_ptr<Input::DragData> data,
     std::optional<int> modifiers,
     std::unique_ptr<DispatchDragEventCallback> callback) {
-  if (!allow_file_access_ && data->HasFiles()) {
+  if (HasFileRelatedItem(data.get()) && !allow_file_access_) {
     callback->sendFailure(Response::InvalidParams("Not allowed"));
     return;
   }
@@ -1439,7 +1484,7 @@ void InputHandler::OnWidgetForDispatchDragEvent(
       static_cast<blink::DragOperationsMask>(data->GetDragOperationsMask());
   std::unique_ptr<DropData> drop_data =
       std::make_unique<DropData>(ProtocolDragDataToDropData(std::move(data)));
-  drop_data->view_id = widget_host->GetRoutingID();
+  widget_host->FilterDropData(drop_data.get());
   int event_modifiers =
       GetEventModifiers(modifiers.value_or(blink::WebInputEvent::kNoModifiers),
                         false, false, 0, 0);
@@ -1700,8 +1745,20 @@ void InputHandler::OnWidgetForDispatchWebTouchEvent(
   RenderWidgetHostImpl* widget_host =
       RenderWidgetHostImpl::From(target->GetRenderWidgetHost());
 
+  RenderWidgetHostViewBase* root_view = target->GetRootView();
+  if (!root_view) {
+    root_view = target.get();
+  }
+  // Keep injected touches in root coordinates for the touch emulator. The
+  // input event router converts them to target coordinates for the renderer.
+  // In WebUI Browser, `target` is a RenderWidgetHostViewChildFrame, so
+  // transform the touch points to root view coordinates. This code is no-op for
+  // regular browser (i.e., delta_to_root is zero).
+  CHECK(events.size() > 0);
   gfx::PointF original(events[0].touches[0].PositionInWidget());
-  gfx::Vector2dF delta = *transformed - original;
+  gfx::PointF transformed_in_root =
+      target->TransformPointToRootCoordSpaceF(*transformed);
+  gfx::Vector2dF delta_to_root = transformed_in_root - original;
   for (auto& event : events) {
     event.dispatch_type =
         event.GetType() == blink::WebInputEvent::Type::kTouchCancel
@@ -1710,12 +1767,10 @@ void InputHandler::OnWidgetForDispatchWebTouchEvent(
     event.moved_beyond_slop_region = true;
     event.unique_touch_event_id = ui::GetNextTouchEventId();
     for (unsigned j = 0; j < event.touches_length; j++) {
-      gfx::PointF point = event.touches[j].PositionInWidget();
-      gfx::PointF position_in_widget(point.x() + delta.x(),
-                                     point.y() + delta.y());
-      event.touches[j].SetPositionInWidget(position_in_widget);
+      event.touches[j].SetPositionInWidget(
+          event.touches[j].PositionInWidget() + delta_to_root);
       event.touches[j].SetPositionInScreen(ConvertWidgetPointToScreenPoint(
-          CHECK_DEREF(target.get()), position_in_widget));
+          CHECK_DEREF(root_view), event.touches[j].PositionInWidget()));
     }
   }
   EnsureInjector(widget_host)->InjectTouchEvents(events, std::move(callback));
@@ -1807,7 +1862,7 @@ void InputHandler::DispatchSyntheticPointerActionTouch(
 
     SyntheticPointerActionParams::PointerActionType action_type =
         SyntheticPointerActionParams::PointerActionType::MOVE;
-    if (!base::Contains(pointer_ids_, id)) {
+    if (!pointer_ids_.contains(id)) {
       pointer_ids_.insert(id);
       action_type = SyntheticPointerActionParams::PointerActionType::PRESS;
     }
@@ -1830,7 +1885,7 @@ void InputHandler::DispatchSyntheticPointerActionTouch(
           SyntheticPointerActionParams::PointerActionType::MOVE &&
       current_pointer_ids.size() < pointer_ids_.size()) {
     for (auto it = pointer_ids_.begin(); it != pointer_ids_.end();) {
-      if (base::Contains(current_pointer_ids, *it)) {
+      if (current_pointer_ids.contains(*it)) {
         it++;
         continue;
       }
@@ -2153,9 +2208,10 @@ void InputHandler::SynthesizeRepeatingScroll(
 
   if (!interaction_marker_name.empty()) {
     // TODO(alexclarke): Can we move this elsewhere? It doesn't really fit here.
-    TRACE_EVENT_COPY_NESTABLE_ASYNC_BEGIN0(
-        "benchmark", interaction_marker_name.c_str(),
-        TRACE_ID_WITH_SCOPE(interaction_marker_name.c_str(), id));
+    TRACE_EVENT_BEGIN(
+        "benchmark", perfetto::DynamicString(interaction_marker_name),
+        perfetto::NamedTrack(perfetto::DynamicString(interaction_marker_name),
+                             id));
   }
 
   root_view->host()->QueueSyntheticGesture(
@@ -2175,9 +2231,9 @@ void InputHandler::OnScrollFinished(
     std::unique_ptr<SynthesizeScrollGestureCallback> callback,
     SyntheticGesture::Result result) {
   if (!interaction_marker_name.empty()) {
-    TRACE_EVENT_COPY_NESTABLE_ASYNC_END0(
-        "benchmark", interaction_marker_name.c_str(),
-        TRACE_ID_WITH_SCOPE(interaction_marker_name.c_str(), id));
+    TRACE_EVENT_END("benchmark",
+                    perfetto::NamedTrack(
+                        perfetto::DynamicString(interaction_marker_name), id));
   }
 
   if (repeat_count > 0) {

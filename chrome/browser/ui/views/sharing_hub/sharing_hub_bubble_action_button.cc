@@ -7,7 +7,6 @@
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/sharing_hub/sharing_hub_model.h"
 #include "chrome/browser/ui/views/sharing_hub/sharing_hub_bubble_view_impl.h"
-#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -23,7 +22,7 @@ namespace sharing_hub {
 namespace {
 
 // These values values come directly from the Figma redlines. See
-// https://crbug.com/1314486 and https://crbug.com/1343564.
+// https://crbug.com/40832894 and https://crbug.com/40852450.
 static constexpr gfx::Insets kInteriorMargin = gfx::Insets::VH(10, 16);
 static constexpr gfx::Insets kDefaultMargin = gfx::Insets::VH(0, 16);
 static constexpr gfx::Size kPrimaryIconSize{16, 16};
@@ -62,7 +61,7 @@ SharingHubBubbleActionButton::SharingHubBubbleActionButton(
   // are not. That's annoying, but not as bad as the surface being keyboard
   // inaccessible, so we live with it.
   //
-  // See https://crbug.com/1404226 and https://crbug.com/1323053.
+  // See https://crbug.com/40885894 and https://crbug.com/40838391.
   SetFocusBehavior(FocusBehavior::ALWAYS);
 
   SetEnabled(true);

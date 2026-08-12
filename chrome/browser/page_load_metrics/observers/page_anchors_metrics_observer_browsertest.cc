@@ -18,6 +18,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/features.h"
 
 class PageAnchorsMetricsObserverBrowserTest
     : public InProcessBrowserTest,
@@ -132,7 +133,7 @@ class PageAnchorsMetricsObserverBrowserTest
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> ukm_recorder_;
 };
 
-// Disabled for being flaky. See crbug.com/1471215
+// Disabled for being flaky. See crbug.com/40926120
 IN_PROC_BROWSER_TEST_F(PageAnchorsMetricsObserverBrowserTest,
                        DISABLED_NavigateAwayShouldRecordUkmData) {
   ResetUKM();

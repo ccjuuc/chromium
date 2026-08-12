@@ -9,6 +9,7 @@
 
 #include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "content/public/browser/page_user_data.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -120,7 +121,7 @@ class NavigationWebMessageSender
                            NewCrossDocNavDuringCrossDocNav);
 
   static std::unique_ptr<WebMessage> CreateWebMessage(
-      base::Value::Dict message_dict);
+      base::DictValue message_dict);
 
   NavigationWebMessageSender(content::Page& page,
                              const std::u16string& js_object_name,
@@ -136,10 +137,11 @@ class NavigationWebMessageSender
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void OnFirstContentfulPaintInPrimaryMainFrame() override;
+  void OnFirstContentfulPaintInPrimaryMainFrame(
+      base::TimeTicks presentation_time) override;
 
   void PostMessageWithType(std::string_view type);
-  void PostMessage(base::Value::Dict message_dict);
+  void PostMessage(base::DictValue message_dict);
 
   bool ShouldSendMessageForNavigation(
       content::NavigationHandle* navigation_handle);

@@ -89,6 +89,7 @@ void ThreadedWorkletMessagingProxy::Initialize(
         /*response_content_security_policies=*/
         Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
         /*referrer_policy=*/network::mojom::ReferrerPolicy::kDefault,
+        /*document_policy=*/DocumentPolicy::DocumentPolicyBundle{},
         client_provided_global_scope_creation_params->starter_origin.get(),
         starter_secure_context,
         /*starter_https_state=*/HttpsState::kNone,
@@ -141,8 +142,9 @@ void ThreadedWorkletMessagingProxy::Initialize(
           frame_client->CreateWorkletFetchContext(),
           mojo::Clone(csp->GetParsedPolicies()),
           Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-          window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-          window->IsSecureContext(), window->GetHttpsState(), worker_clients,
+          window->GetReferrerPolicy(), DocumentPolicy::DocumentPolicyBundle{},
+          window->GetSecurityOrigin(), window->IsSecureContext(),
+          window->GetHttpsState(), worker_clients,
           frame_client->CreateWorkerContentSettingsClient(),
           OriginTrialContext::GetInheritedTrialFeatures(window).get(),
           base::UnguessableToken::Create(),
@@ -174,8 +176,14 @@ void ThreadedWorkletMessagingProxy::FetchAndInvokeScript(
     scoped_refptr<base::SingleThreadTaskRunner> outside_settings_task_runner,
     WorkletPendingTasks* pending_tasks) {
   DCHECK(IsMainThread());
+  WorkerThread* worker_thread = GetWorkerThread();
+  if (!worker_thread) {
+    // Worker thread has been terminated or not initialized.
+    pending_tasks->Abort(nullptr);
+    return;
+  }
   PostCrossThreadTask(
-      *GetWorkerThread()->GetTaskRunner(TaskType::kInternalLoading), FROM_HERE,
+      *worker_thread->GetTaskRunner(TaskType::kInternalLoading), FROM_HERE,
       CrossThreadBindOnce(
           &ThreadedWorkletObjectProxy::FetchAndInvokeScript,
           CrossThreadUnretained(worklet_object_proxy_.get()), module_url_record,
@@ -183,7 +191,7 @@ void ThreadedWorkletMessagingProxy::FetchAndInvokeScript(
           WrapCrossThreadPersistent(&outside_resource_timing_notifier),
           std::move(outside_settings_task_runner),
           WrapCrossThreadPersistent(pending_tasks),
-          CrossThreadUnretained(GetWorkerThread())));
+          CrossThreadUnretained(worker_thread)));
 }
 
 void ThreadedWorkletMessagingProxy::WorkletObjectDestroyed() {

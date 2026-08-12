@@ -4,12 +4,12 @@
 
 #include "components/autofill/core/browser/ui/payments/card_name_fix_flow_controller_impl.h"
 
+#include <string>
 #include <utility>
 
 #include "base/check.h"
+#include "base/functional/callback.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
@@ -41,8 +41,6 @@ void CardNameFixFlowControllerImpl::Show(
   name_accepted_callback_ = std::move(name_accepted_callback);
 
   inferred_cardholder_name_ = inferred_cardholder_name;
-  autofill_metrics::LogSaveCardCardholderNamePrefilled(
-      !inferred_cardholder_name_.empty());
 
   card_name_fix_flow_view_->Show();
   AutofillMetrics::LogCardholderNameFixFlowPromptEvent(
@@ -65,9 +63,8 @@ void CardNameFixFlowControllerImpl::OnNameAccepted(const std::u16string& name) {
   had_user_interaction_ = true;
   autofill_metrics::LogSaveCardCardholderNameWasEdited(
       inferred_cardholder_name_ != name);
-  std::u16string trimmed_name;
-  base::TrimWhitespace(name, base::TRIM_ALL, &trimmed_name);
-  std::move(name_accepted_callback_).Run(trimmed_name);
+  std::move(name_accepted_callback_)
+      .Run(std::u16string(base::TrimWhitespace(name, base::TRIM_ALL)));
 }
 
 void CardNameFixFlowControllerImpl::OnDismissed() {

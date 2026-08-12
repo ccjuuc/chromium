@@ -60,8 +60,8 @@ class FastInkHostCreateFrameUtilTest : public AshTestBase {
     gfx::Rect screen_bounds = root_window->GetBoundsInScreen();
 
     auto host_window =
-        CreateTestWindow(screen_bounds, aura::client::WINDOW_TYPE_NORMAL,
-                         kShellWindowId_OverlayContainer);
+        CreateWindowWithAppType(chromeos::AppType::NON_APP, screen_bounds,
+                                kShellWindowId_OverlayContainer);
 
     // `host_window` is owned by the root_window and it will be deleted as
     // window hierarchy is deleted during Shell deletion.
@@ -85,6 +85,7 @@ class FastInkHostCreateFrameUtilTest : public AshTestBase {
   // AshTestBase:
   void TearDown() override {
     shared_image_.reset();
+    host_window_ = nullptr;
     resource_manager_.ClearAvailableResources();
     resource_manager_.LostExportedResources();
     AshTestBase::TearDown();
@@ -106,7 +107,7 @@ class FastInkHostCreateFrameUtilTest : public AshTestBase {
   }
 
   UiResourceManager resource_manager_;
-  raw_ptr<aura::Window, DanglingUntriaged> host_window_;
+  raw_ptr<aura::Window> host_window_;
   scoped_refptr<gpu::ClientSharedImage> shared_image_;
 };
 

@@ -14,6 +14,7 @@
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
+#include "components/services/quarantine/test_support.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -30,14 +31,15 @@ const char kInternetURL[] = "http://example.com/some-url";
 const char kInternetReferrerURL[] = "http://example.com/some-other-url";
 const char kTestGUID[] = "69f8621d-c46a-4e88-b915-1ce5415cb008";
 
-void CheckQuarantineResult(QuarantineFileResult result,
-                           QuarantineFileResult expected_result) {
-  EXPECT_EQ(expected_result, result);
+void CheckQuarantineResult(QuarantineFileResult expected,
+                           QuarantineFileResult actual) {
+  EXPECT_EQ(expected, actual);
 }
 
-class QuarantineTest : public testing::Test {
+class QuarantineTest : public QuarantineTestBase {
  public:
   void SetUp() override {
+    QuarantineTestBase::SetUp();
 #if BUILDFLAG(IS_WIN)
     ASSERT_TRUE(com_initializer_.Succeeded());
 #endif

@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/containers/enum_set.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_util.h"
@@ -19,6 +19,7 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -30,6 +31,7 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/signin_resources.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/avatar_icon_util.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -84,7 +86,7 @@ bool SyncConfirmationUIConfig::IsWebUIEnabled(
 std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
     const syncer::SyncService* sync_service) {
   using syncer::UserSelectableType;
-  base::Value::List sync_benefits_list;
+  base::ListValue sync_benefits_list;
 
   if (IsAnyTypeSyncable(sync_service, {UserSelectableType::kBookmarks,
                                        UserSelectableType::kReadingList})) {
@@ -95,34 +97,47 @@ std::string SyncConfirmationUI::GetSyncBenefitsListJSON(
       titleKey = kSyncBenefitReadingListStringName;
     }
 
-    base::Value::Dict bookmarks;
+    base::DictValue bookmarks;
     bookmarks.Set(kSyncBenefitTitleKey, titleKey);
-    bookmarks.Set(kSyncBenefitIconNameKey, "signin:star-outline");
+    bookmarks.Set(kSyncBenefitIconNameKey,
+                  (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                       ? "signin:star"
+                       : "signin:star-outline-old"));
     sync_benefits_list.Append(std::move(bookmarks));
   }
 
   if (IsAnyTypeSyncable(sync_service, {UserSelectableType::kAutofill,
                                        UserSelectableType::kPasswords})) {
-    base::Value::Dict autofill;
+    base::DictValue autofill;
     autofill.Set(kSyncBenefitTitleKey, kSyncBenefitAutofillStringName);
-    autofill.Set(kSyncBenefitIconNameKey, "signin:assignment-outline");
+    autofill.Set(kSyncBenefitIconNameKey,
+                 (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                      ? "signin:assignment"
+                      : "signin:assignment-outline-old"));
     sync_benefits_list.Append(std::move(autofill));
   }
 
   if (IsAnyTypeSyncable(sync_service, {UserSelectableType::kExtensions,
                                        UserSelectableType::kApps})) {
-    base::Value::Dict extensions;
+    base::DictValue extensions;
     extensions.Set(kSyncBenefitTitleKey, kSyncBenefitExtensionsStringName);
-    extensions.Set(kSyncBenefitIconNameKey, "signin:extension-outline");
+    extensions.Set(kSyncBenefitIconNameKey,
+                   (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+                        ? "signin:chrome-extension"
+                        : "signin:extension-outline-old"));
     sync_benefits_list.Append(std::move(extensions));
   }
 
   // Even if no associated type is syncable, we still deliberately show "History
   // and more". So no need to check it.
-  base::Value::Dict history_and_more;
+  base::DictValue history_and_more;
   history_and_more.Set(kSyncBenefitTitleKey,
                        kSyncBenefitHistoryAndMoreStringName);
-  history_and_more.Set(kSyncBenefitIconNameKey, "signin:devices");
+  history_and_more.Set(
+      kSyncBenefitIconNameKey,
+      (base::FeatureList::IsEnabled(features::kWebUIRoundedIcons)
+           ? "signin:devices"
+           : "signin:devices-old"));
   sync_benefits_list.Append(std::move(history_and_more));
 
   return base::WriteJson(sync_benefits_list).value_or("");
@@ -153,6 +168,8 @@ SyncConfirmationUI::SyncConfirmationUI(content::WebUI* web_ui)
        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_BROWSER_PROXY_JS},
       {"sync_confirmation.js",
        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_JS},
+      {"sync_confirmation_refresh.js",
+       IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_REFRESH_JS},
       {chrome::kChromeUISyncConfirmationLoadingPath,
        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_LOADING_CONFIRMATION_HTML},
   };
@@ -161,14 +178,28 @@ SyncConfirmationUI::SyncConfirmationUI(content::WebUI* web_ui)
   AddStringResource(source, "syncLoadingConfirmationTitle",
                     IDS_SYNC_LOADING_CONFIRMATION_TITLE);
 
+  bool is_first_run_desktop_refresh_enabled = false;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  const bool is_in_search_engine_choice_region =
+      CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                      GetForProfile(profile_))
+          .IsInSearchEngineChoiceScreenRegion();
+  is_first_run_desktop_refresh_enabled =
+      switches::IsFirstRunDesktopRefreshEnabled(
+          is_in_search_engine_choice_region);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  source->AddBoolean("isFirstRunDesktopRefreshEnabled",
+                     is_first_run_desktop_refresh_enabled);
+
   if (is_sync_allowed) {
     InitializeForSyncConfirmation(source, GetSyncConfirmationStyle(url),
-                                  IsSyncConfirmationPromo(url));
+                                  IsSyncConfirmationPromo(url),
+                                  is_first_run_desktop_refresh_enabled);
   } else {
     InitializeForSyncDisabled(source);
   }
 
-  base::Value::Dict strings;
+  base::DictValue strings;
   webui::SetLoadTimeDataDefaults(g_browser_process->GetApplicationLocale(),
                                  &strings);
   source->AddLocalizedStrings(strings);
@@ -190,7 +221,8 @@ void SyncConfirmationUI::InitializeMessageHandlerWithBrowser(Browser* browser) {
 void SyncConfirmationUI::InitializeForSyncConfirmation(
     content::WebUIDataSource* source,
     SyncConfirmationStyle style,
-    bool is_sync_promo) {
+    bool is_sync_promo,
+    bool is_first_run_desktop_refresh_enabled) {
   int info_title_id = IDS_SYNC_CONFIRMATION_TANGIBLE_SYNC_INFO_TITLE;
   int info_desc_id = IDS_SYNC_CONFIRMATION_TANGIBLE_SYNC_INFO_DESC;
   int confirm_label_id = IDS_SYNC_CONFIRMATION_CONFIRM_BUTTON_LABEL;
@@ -220,6 +252,26 @@ void SyncConfirmationUI::InitializeForSyncConfirmation(
       IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_APP_HTML_JS);
   source->SetDefaultResource(
       IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_HTML);
+
+  if (is_first_run_desktop_refresh_enabled) {
+    source->SetDefaultResource(
+        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_REFRESH_HTML);
+    source->AddResourcePath(
+        "sync_confirmation_app_refresh.js",
+        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_APP_REFRESH_JS);
+    source->AddResourcePath(
+        "sync_confirmation_app_refresh.css.js",
+        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_APP_REFRESH_CSS_JS);
+    source->AddResourcePath(
+        "sync_confirmation_app_refresh.html.js",
+        IDR_SIGNIN_SYNC_CONFIRMATION_SYNC_CONFIRMATION_APP_REFRESH_HTML_JS);
+    source->AddResourcePath(
+        "images/profile_picker_light_background.svg",
+        IDR_SIGNIN_IMAGES_PROFILE_PICKER_LIGHT_BACKGROUND_SVG);
+    source->AddResourcePath(
+        "images/profile_picker_dark_background.svg",
+        IDR_SIGNIN_IMAGES_PROFILE_PICKER_DARK_BACKGROUND_SVG);
+  }
 
   // TODO(crbug.com/40242558): Refactor SyncConfirmationStyle based on the
   // purpose instead of what kind of container the page is displayed in.

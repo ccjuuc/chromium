@@ -89,25 +89,23 @@ void TranslateDeviceId(const std::string& device_id,
 }
 
 void GotSaltAndOrigin(
-    int process_id,
-    int frame_id,
+    GlobalRenderFrameHostId render_frame_host_id,
     base::OnceCallback<void(const MediaDeviceSaltAndOrigin& salt_and_origin,
                             bool has_access)> cb,
     const MediaDeviceSaltAndOrigin& salt_and_origin) {
   bool access = MediaDevicesPermissionChecker().CheckPermissionOnUIThread(
-      MediaDeviceType::kMediaAudioOutput, process_id, frame_id);
+      MediaDeviceType::kMediaAudioOutput, render_frame_host_id);
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(std::move(cb), salt_and_origin, access));
 }
 
 void GetSaltOriginAndPermissionsOnUIThread(
-    int process_id,
-    int frame_id,
+    GlobalRenderFrameHostId render_frame_host_id,
     base::OnceCallback<void(const MediaDeviceSaltAndOrigin& salt_and_origin,
                             bool has_access)> cb) {
   GetMediaDeviceSaltAndOrigin(
-      GlobalRenderFrameHostId(process_id, frame_id),
-      base::BindOnce(&GotSaltAndOrigin, process_id, frame_id, std::move(cb)));
+      render_frame_host_id,
+      base::BindOnce(&GotSaltAndOrigin, render_frame_host_id, std::move(cb)));
 }
 
 }  // namespace
@@ -161,6 +159,7 @@ class RenderFrameAudioInputStreamFactory::Core final
       const std::string& raw_output_device_id);
 
   const raw_ptr<MediaStreamManager> media_stream_manager_;
+  const GlobalRenderFrameHostId render_frame_host_id_;
   const int process_id_;
   const int frame_id_;
   const GlobalRenderFrameHostToken main_frame_token_;
@@ -199,6 +198,7 @@ RenderFrameAudioInputStreamFactory::Core::Core(
     MediaStreamManager* media_stream_manager,
     RenderFrameHost* render_frame_host)
     : media_stream_manager_(media_stream_manager),
+      render_frame_host_id_(render_frame_host->GetGlobalId()),
       process_id_(render_frame_host->GetProcess()->GetDeprecatedID()),
       frame_id_(render_frame_host->GetRoutingID()),
       main_frame_token_(
@@ -250,12 +250,18 @@ void RenderFrameAudioInputStreamFactory::Core::CreateStream(
   if (!forwarding_factory_)
     return;
 
+  if (!media_stream_manager_->ValidateAudioSession(session_id,
+                                                   render_frame_host_id_)) {
+    mojo::ReportBadMessage("Unauthorized audio capture session.");
+    return;
+  }
+
   const blink::MediaStreamDevice* device =
       media_stream_manager_->audio_input_device_manager()->GetOpenedDeviceById(
           session_id);
 
   if (!device) {
-    TRACE_EVENT_INSTANT0("audio", "device not found", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("audio", "device not found");
     return;
   }
 
@@ -323,7 +329,7 @@ void RenderFrameAudioInputStreamFactory::Core::AssociateInputAndOutputForAec(
   GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          &GetSaltOriginAndPermissionsOnUIThread, process_id_, frame_id_,
+          &GetSaltOriginAndPermissionsOnUIThread, render_frame_host_id_,
           base::BindOnce(
               &Core::AssociateInputAndOutputForAecAfterCheckingAccess,
               weak_ptr_factory_.GetWeakPtr(), input_stream_id,

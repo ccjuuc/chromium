@@ -19,6 +19,8 @@
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/web_state.h"
+#import "url/gurl.h"
+#import "url/origin.h"
 
 #if BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
 #import "base/command_line.h"
@@ -110,12 +112,14 @@ JavaScriptFeature::FeatureScript::CreateWithFilename(
     InjectionTime injection_time,
     TargetFrames target_frames,
     ReinjectionBehavior reinjection_behavior,
-    const PlaceholderReplacementsCallback& replacements_callback) {
+    const PlaceholderReplacementsCallback& replacements_callback,
+    OriginFilter origin_filter) {
   NSString* injection_token =
       InjectionTokenForScript(base::SysUTF8ToNSString(filename));
-  return JavaScriptFeature::FeatureScript(
-      filename, /*script=*/std::nullopt, injection_token, injection_time,
-      target_frames, reinjection_behavior, replacements_callback);
+  return JavaScriptFeature::FeatureScript(filename, /*script=*/std::nullopt,
+                                          injection_token, injection_time,
+                                          target_frames, reinjection_behavior,
+                                          replacements_callback, origin_filter);
 }
 
 JavaScriptFeature::FeatureScript
@@ -124,12 +128,14 @@ JavaScriptFeature::FeatureScript::CreateWithString(
     InjectionTime injection_time,
     TargetFrames target_frames,
     ReinjectionBehavior reinjection_behavior,
-    const PlaceholderReplacementsCallback& replacements_callback) {
+    const PlaceholderReplacementsCallback& replacements_callback,
+    OriginFilter origin_filter) {
   NSString* unique_id = [[NSProcessInfo processInfo] globallyUniqueString];
   NSString* injection_token = InjectionTokenForScript(unique_id);
   return JavaScriptFeature::FeatureScript(
       /*filename=*/std::nullopt, script, injection_token, injection_time,
-      target_frames, reinjection_behavior, replacements_callback);
+      target_frames, reinjection_behavior, replacements_callback,
+      origin_filter);
 }
 
 JavaScriptFeature::FeatureScript::FeatureScript(
@@ -139,13 +145,15 @@ JavaScriptFeature::FeatureScript::FeatureScript(
     InjectionTime injection_time,
     TargetFrames target_frames,
     ReinjectionBehavior reinjection_behavior,
-    const PlaceholderReplacementsCallback& replacements_callback)
+    const PlaceholderReplacementsCallback& replacements_callback,
+    OriginFilter origin_filter)
     : script_filename_(filename),
       script_(script),
       injection_token_(injection_token),
       injection_time_(injection_time),
       target_frames_(target_frames),
       reinjection_behavior_(reinjection_behavior),
+      origin_filter_(origin_filter),
       replacements_callback_(replacements_callback) {}
 
 JavaScriptFeature::FeatureScript::FeatureScript(const FeatureScript&) = default;
@@ -173,16 +181,18 @@ NSString* JavaScriptFeature::FeatureScript::GetScriptString() const {
     script = GetPageScript(base::SysUTF8ToNSString(*script_filename_));
   }
 
-  if (reinjection_behavior_ ==
-      ReinjectionBehavior::kReinjectOnDocumentRecreation) {
-    return ReplacePlaceholders(script);
+  script = ReplacePlaceholders(script);
+  if (reinjection_behavior_ == ReinjectionBehavior::kInjectOncePerWindow) {
+    // WKUserScript instances will automatically be re-injected by WebKit when
+    // the document is re-created, even though the JavaScript context will not
+    // be re-created. So the script needs to be wrapped in
+    // `MakeScriptInjectableOnce` so that is is not re-injected.
+    script = MakeScriptInjectableOnce(injection_token_, script);
   }
-  // WKUserScript instances will automatically be re-injected by WebKit when the
-  // document is re-created, even though the JavaScript context will not be
-  // re-created. So the script needs to be wrapped in `MakeScriptInjectableOnce`
-  // so that is is not re-injected.
-  return MakeScriptInjectableOnce(injection_token_,
-                                  ReplacePlaceholders(script));
+  if (origin_filter_ != OriginFilter::kPublic) {
+    script = MakeScriptPrivate(GetOriginList(origin_filter_), script);
+  }
+  return script;
 }
 
 NSString* JavaScriptFeature::FeatureScript::ReplacePlaceholders(
@@ -209,22 +219,37 @@ NSString* JavaScriptFeature::FeatureScript::ReplacePlaceholders(
 JavaScriptFeature::JavaScriptFeature(ContentWorld supported_world)
     : supported_world_(supported_world), weak_factory_(this) {}
 
-JavaScriptFeature::JavaScriptFeature(ContentWorld supported_world,
-                                     std::vector<FeatureScript> feature_scripts)
-    : supported_world_(supported_world),
-      scripts_(feature_scripts),
-      weak_factory_(this) {}
-
 JavaScriptFeature::JavaScriptFeature(
     ContentWorld supported_world,
     std::vector<FeatureScript> feature_scripts,
-    std::vector<const JavaScriptFeature*> dependent_features)
+    std::vector<const JavaScriptFeature*> dependent_features,
+    OriginFilter origin_filter)
     : supported_world_(supported_world),
       scripts_(feature_scripts),
       dependent_features_(dependent_features),
-      weak_factory_(this) {}
+      origin_filter_(origin_filter),
+      weak_factory_(this) {
+  for (auto& feature_script : scripts_) {
+    CHECK(feature_script.GetOriginFilter() == origin_filter_);
+    if (origin_filter_ != OriginFilter::kPublic) {
+      CHECK(feature_script.GetInjectionTime() ==
+            FeatureScript::InjectionTime::kDocumentStart);
+    }
+  }
+  if (origin_filter_ != OriginFilter::kPublic) {
+    // Create a cache for the origins.
+    for (NSString* origin in GetOriginList(origin_filter_)) {
+      origin_filter_origins_.push_back(
+          url::Origin::Create(GURL(base::SysNSStringToUTF8(origin))));
+    }
+  }
+}
 
 JavaScriptFeature::~JavaScriptFeature() = default;
+
+base::WeakPtr<JavaScriptFeature> JavaScriptFeature::AsWeakPtr() const {
+  return weak_factory_.GetMutableWeakPtr();
+}
 
 ContentWorld JavaScriptFeature::GetSupportedContentWorld() const {
   return supported_world_;
@@ -249,29 +274,68 @@ std::optional<std::string> JavaScriptFeature::GetScriptMessageHandlerName()
   return std::nullopt;
 }
 
-std::optional<JavaScriptFeature::ScriptMessageHandler>
-JavaScriptFeature::GetScriptMessageHandler() const {
-  if (!GetScriptMessageHandlerName()) {
-    return std::nullopt;
+bool JavaScriptFeature::GetFeatureRepliesToMessages() const {
+  return false;
+}
+
+bool JavaScriptFeature::ShouldAllowCallingFunctionInOrigin(
+    const url::Origin& origin) {
+  if (origin_filter_ == OriginFilter::kPublic) {
+    return YES;
   }
 
-  return base::BindRepeating(&JavaScriptFeature::ScriptMessageReceived,
-                             weak_factory_.GetMutableWeakPtr());
+  for (url::Origin& filter_origin : origin_filter_origins_) {
+    if (origin.IsSameOriginWith(filter_origin)) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
+bool JavaScriptFeature::ShouldHandleMessageFromOrigin(
+    const url::Origin& origin) {
+  if (origin_filter_ == OriginFilter::kPublic) {
+    return YES;
+  }
+
+  for (url::Origin& filter_origin : origin_filter_origins_) {
+    if (origin.IsSameOriginWith(filter_origin)) {
+      return YES;
+    }
+  }
+  return NO;
 }
 
 void JavaScriptFeature::ScriptMessageReceived(WebState* web_state,
-                                              const ScriptMessage& message) {}
+                                              const ScriptMessage& message) {
+  // If the feature receives message, this function must be overriden in the
+  // subclass.
+  NOTREACHED();
+}
+
+void JavaScriptFeature::ScriptMessageReceivedWithReply(
+    WebState* web_state,
+    const ScriptMessage& message,
+    ScriptMessageReplyCallback callback) {
+  // If the feature receives message, this function must be overriden in the
+  // subclass.
+  NOTREACHED();
+}
 
 bool JavaScriptFeature::CallJavaScriptFunction(
     WebFrame* web_frame,
     const std::string& function_name,
-    const base::Value::List& parameters) {
+    const base::ListValue& parameters) {
   DCHECK(web_frame);
 
 #if BUILDFLAG(USE_BLINK)
   // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
   return false;
 #else
+  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+    return false;
+  }
+
   JavaScriptFeatureManager* feature_manager =
       JavaScriptFeatureManager::FromBrowserState(web_frame->GetBrowserState());
   DCHECK(feature_manager);
@@ -284,18 +348,18 @@ bool JavaScriptFeature::CallJavaScriptFunction(
   if (!content_world) {
     return false;
   }
-#endif
+#endif  // BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
   DCHECK(content_world);
 
   return web_frame->GetWebFrameInternal()->CallJavaScriptFunctionInContentWorld(
       function_name, parameters, content_world);
-#endif
+#endif  // BUILDFLAG(USE_BLINK)
 }
 
 bool JavaScriptFeature::CallJavaScriptFunction(
     WebFrame* web_frame,
     const std::string& function_name,
-    const base::Value::List& parameters,
+    const base::ListValue& parameters,
     base::OnceCallback<void(const base::Value*)> callback,
     base::TimeDelta timeout) {
   DCHECK(web_frame);
@@ -304,6 +368,10 @@ bool JavaScriptFeature::CallJavaScriptFunction(
   // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
   return false;
 #else
+  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+    return false;
+  }
+
   JavaScriptFeatureManager* feature_manager =
       JavaScriptFeatureManager::FromBrowserState(web_frame->GetBrowserState());
   DCHECK(feature_manager);
@@ -316,12 +384,12 @@ bool JavaScriptFeature::CallJavaScriptFunction(
   if (!content_world) {
     return false;
   }
-#endif
+#endif  // BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
   DCHECK(content_world);
 
   return web_frame->GetWebFrameInternal()->CallJavaScriptFunctionInContentWorld(
       function_name, parameters, content_world, std::move(callback), timeout);
-#endif
+#endif  // BUILDFLAG(USE_BLINK)
 }
 
 bool JavaScriptFeature::ExecuteJavaScript(
@@ -334,6 +402,10 @@ bool JavaScriptFeature::ExecuteJavaScript(
   // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
   return false;
 #else
+  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+    return false;
+  }
+
   JavaScriptFeatureManager* feature_manager =
       JavaScriptFeatureManager::FromBrowserState(web_frame->GetBrowserState());
   DCHECK(feature_manager);
@@ -346,12 +418,77 @@ bool JavaScriptFeature::ExecuteJavaScript(
   if (!content_world) {
     return false;
   }
-#endif
+#endif  // BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
   DCHECK(content_world);
 
   return web_frame->GetWebFrameInternal()->ExecuteJavaScriptInContentWorld(
       script, content_world, std::move(callback));
-#endif
+#endif  // BUILDFLAG(USE_BLINK)
+}
+
+bool JavaScriptFeature::CallAsyncJavaScriptFunction(
+    WebFrame* web_frame,
+    const std::string& name,
+    const base::DictValue& parameters,
+    ExecuteJavaScriptCallbackWithError callback) {
+  CHECK(web_frame);
+
+#if BUILDFLAG(USE_BLINK)
+  // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
+  return false;
+#else
+  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+    return false;
+  }
+
+  JavaScriptFeatureManager* feature_manager =
+      JavaScriptFeatureManager::FromBrowserState(web_frame->GetBrowserState());
+
+  JavaScriptContentWorld* content_world =
+      feature_manager->GetContentWorldForFeature(this);
+#if BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
+  if (!content_world) {
+    return false;
+  }
+#endif  // BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
+  CHECK(content_world);
+
+  return web_frame->GetWebFrameInternal()
+      ->CallAsyncJavaScriptFunctionInContentWorld(
+          name, parameters, content_world, std::move(callback));
+#endif  // BUILDFLAG(USE_BLINK)
+}
+
+bool JavaScriptFeature::ExecuteAsyncJavaScript(
+    WebFrame* web_frame,
+    const std::u16string& script,
+    const base::DictValue& parameters,
+    ExecuteJavaScriptCallbackWithError callback) {
+  CHECK(web_frame);
+
+#if BUILDFLAG(USE_BLINK)
+  // TODO(crbug.com/40254930): Call the ContentJavascriptFeatureManager instead.
+  return false;
+#else
+  if (!ShouldAllowCallingFunctionInOrigin(web_frame->GetSecurityOrigin())) {
+    return false;
+  }
+
+  JavaScriptFeatureManager* feature_manager =
+      JavaScriptFeatureManager::FromBrowserState(web_frame->GetBrowserState());
+
+  JavaScriptContentWorld* content_world =
+      feature_manager->GetContentWorldForFeature(this);
+#if BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
+  if (!content_world) {
+    return false;
+  }
+#endif  // BUILDFLAG(ENABLE_IOS_JAVASCRIPT_FLAGS)
+  CHECK(content_world);
+
+  return web_frame->GetWebFrameInternal()->ExecuteAsyncJavaScriptInContentWorld(
+      script, parameters, content_world, std::move(callback));
+#endif  // BUILDFLAG(USE_BLINK)
 }
 
 }  // namespace web

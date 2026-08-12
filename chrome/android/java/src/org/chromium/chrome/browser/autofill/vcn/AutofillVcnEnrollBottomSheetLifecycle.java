@@ -7,7 +7,7 @@ package org.chromium.chrome.browser.autofill.vcn;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
@@ -30,7 +30,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
         implements Callback<TabModelSelector>, TabModelObserver, LayoutStateObserver {
     private final Callback<TabModel> mCurrentTabModelObserver = this::onTabModelSelected;
     private final LayoutStateProvider mLayoutStateProvider;
-    private final ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+    private final MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
     private @Nullable Runnable mOnEndOfLifecycle;
     private boolean mHasBegun;
     private @Nullable TabModelSelector mTabModelSelector;
@@ -44,7 +44,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
      */
     AutofillVcnEnrollBottomSheetLifecycle(
             LayoutStateProvider layoutStateProvider,
-            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier) {
+            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier) {
         mLayoutStateProvider = layoutStateProvider;
         mTabModelSelectorSupplier = tabModelSelectorSupplier;
     }
@@ -66,7 +66,7 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
         mHasBegun = true;
 
         mLayoutStateProvider.addObserver(this);
-        mTabModelSelectorSupplier.addObserver(this);
+        mTabModelSelectorSupplier.addSyncObserverAndPostIfNonNull(this);
     }
 
     /**
@@ -124,7 +124,9 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
         mTabModelSelectorSupplier.removeObserver(this);
 
         mTabModelSelector = tabModelSelector;
-        tabModelSelector.getCurrentTabModelSupplier().addObserver(mCurrentTabModelObserver);
+        tabModelSelector
+                .getCurrentTabModelSupplier()
+                .addSyncObserverAndPostIfNonNull(mCurrentTabModelObserver);
 
         TabModel currentTabModel = mTabModelSelector.getCurrentModel();
         if (currentTabModel.index() != TabList.INVALID_TAB_INDEX) {

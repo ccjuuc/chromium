@@ -11,13 +11,8 @@
 
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/token.h"
 #include "build/build_config.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
@@ -25,27 +20,16 @@
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
-#include "chrome/browser/user_education/user_education_service.h"
-#include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
-#include "components/user_education/common/feature_promo/feature_promo_specification.h"
-#include "components/user_education/common/help_bubble/help_bubble_params.h"
-#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/theme_provider.h"
 #include "ui/events/event_utils.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
-#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
-#include "ui/views/animation/ink_drop_impl.h"
-#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/property_effects.h"
@@ -58,52 +42,44 @@ std::optional<ViewID> GetViewID(
     ContentSettingImageModel::ImageType image_type) {
   using ImageType = ContentSettingImageModel::ImageType;
   switch (image_type) {
-    case ImageType::JAVASCRIPT:
+    case ImageType::kJavaScript:
       return ViewID::VIEW_ID_CONTENT_SETTING_JAVASCRIPT;
 
-    case ImageType::POPUPS:
+    case ImageType::kPopups:
       return ViewID::VIEW_ID_CONTENT_SETTING_POPUP;
 
-    case ImageType::COOKIES:
-    case ImageType::IMAGES:
-    case ImageType::GEOLOCATION:
-    case ImageType::MIXEDSCRIPT:
-    case ImageType::PROTOCOL_HANDLERS:
-    case ImageType::MEDIASTREAM:
-    case ImageType::ADS:
-    case ImageType::AUTOMATIC_DOWNLOADS:
-    case ImageType::MIDI_SYSEX:
-    case ImageType::SOUND:
-    case ImageType::FRAMEBUST:
-    case ImageType::CLIPBOARD_READ_WRITE:
-    case ImageType::SENSORS:
-    case ImageType::NOTIFICATIONS:
-    case ImageType::STORAGE_ACCESS:
+    case ImageType::kCookies:
+    case ImageType::kImages:
+    case ImageType::kGeolocation:
+    case ImageType::kMixedScript:
+    case ImageType::kProtocolHandlers:
+    case ImageType::kMediaStream:
+    case ImageType::kAds:
+    case ImageType::kAutomaticDownloads:
+    case ImageType::kMidiSysex:
+    case ImageType::kSound:
+    case ImageType::kFramebust:
+    case ImageType::kClipboardReadWrite:
+    case ImageType::kSensors:
+    case ImageType::kNotifications:
+    case ImageType::kStorageAccess:
 #if BUILDFLAG(IS_CHROMEOS)
-    case ImageType::SMART_CARD:
+    case ImageType::kSmartCard:
 #endif
 #if BUILDFLAG(IS_WIN)
-    case ImageType::PROTECTED_MEDIA_IDENTIFIER:
+    case ImageType::kProtectedMediaIdentifier:
 #endif
       return std::nullopt;
-
-    case ImageType::NUM_IMAGE_TYPES:
-      break;
   }
   NOTREACHED();
 }
 
 }  // namespace
 
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ContentSettingImageView,
-                                      kMediaActivityIndicatorElementId);
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(ContentSettingImageView,
-                                      kMidiSysexActivityIndicatorElementId);
-
 ContentSettingImageView::ContentSettingImageView(
     std::unique_ptr<ContentSettingImageModel> image_model,
     IconLabelBubbleView::Delegate* parent_delegate,
-    Delegate* delegate,
+    ContentSettingImageViewDelegate* delegate,
     Browser* browser,
     const gfx::FontList& font_list)
     : IconLabelBubbleView(font_list, parent_delegate),
@@ -210,25 +186,8 @@ void ContentSettingImageView::Update() {
 }
 
 void ContentSettingImageView::UpdateElementIdentifier() {
-  std::optional<ui::ElementIdentifier> element_identifier;
-  switch (content_setting_image_model_->image_type()) {
-    case ContentSettingImageModel::ImageType::NOTIFICATIONS:
-      element_identifier = kNotificationContentSettingImageView;
-      break;
-    case ContentSettingImageModel::ImageType::MEDIASTREAM:
-      element_identifier = kMediaActivityIndicatorElementId;
-      break;
-    case ContentSettingImageModel::ImageType::MIDI_SYSEX:
-      element_identifier = kMidiSysexActivityIndicatorElementId;
-      break;
-    default:
-      break;
-  }
-  if (element_identifier) {
-    SetProperty(views::kElementIdentifierKey, *element_identifier);
-  } else {
-    ClearProperty(views::kElementIdentifierKey);
-  }
+  SetProperty(views::kElementIdentifierKey,
+              content_setting_image_model_->GetElementIdentifier());
 }
 
 void ContentSettingImageView::SetIconColor(std::optional<SkColor> color) {
@@ -284,8 +243,10 @@ bool ContentSettingImageView::ShowBubbleImpl() {
     bubble_view_ = new ContentSettingBubbleContents(
         content_setting_image_model_->CreateBubbleModel(
             delegate_->GetContentSettingBubbleModelDelegate(), web_contents),
-        web_contents, anchor, views::BubbleBorder::TOP_RIGHT);
-    bubble_view_->SetHighlightedButton(this);
+        web_contents, views::BubbleAnchor(anchor),
+        views::BubbleBorder::TOP_RIGHT);
+    bubble_view_->SetHighlightedElement(
+        content_setting_image_model_->GetElementIdentifier());
     views::Widget* bubble_widget =
         views::BubbleDialogDelegateView::CreateBubble(bubble_view_);
     observation_.Observe(bubble_widget);
@@ -323,6 +284,11 @@ views::Widget* ContentSettingImageView::GetBubbleWidgetForTesting() const {
   return bubble_view_->GetWidget();
 }
 
+views::BubbleDialogDelegateView*
+ContentSettingImageView::GetBubbleViewForTesting() const {
+  return bubble_view_.get();
+}
+
 void ContentSettingImageView::OnWidgetDestroying(views::Widget* widget) {
   if (!bubble_view_ || bubble_view_->GetWidget() != widget) {
     return;
@@ -330,7 +296,7 @@ void ContentSettingImageView::OnWidgetDestroying(views::Widget* widget) {
 
 #if BUILDFLAG(IS_MAC)
   if (content_setting_image_model_->image_type() ==
-          ContentSettingImageModel::ImageType::GEOLOCATION &&
+          ContentSettingImageModel::ImageType::kGeolocation &&
       content_setting_image_model_->explanatory_string_id() ==
           IDS_GEOLOCATION_TURNED_OFF) {
     base::RecordAction(

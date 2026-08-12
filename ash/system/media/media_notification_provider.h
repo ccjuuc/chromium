@@ -10,7 +10,6 @@
 
 #include "ash/ash_export.h"
 #include "base/memory/weak_ptr.h"
-#include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/view.h"
 
 namespace global_media_controls {
@@ -20,9 +19,12 @@ class MediaItemUIFooter;
 enum class GlobalMediaControlsEntryPoint;
 }  // namespace global_media_controls
 
+namespace url {
+class Origin;
+}
+
 namespace media_message_center {
 class MediaNotificationItem;
-struct NotificationTheme;
 }  // namespace media_message_center
 
 namespace ash {
@@ -63,10 +65,6 @@ class ASH_EXPORT MediaNotificationProvider {
   // Used for ash to notify the bubble is closing.
   virtual void OnBubbleClosing() = 0;
 
-  // Set the color theme of media notification view.
-  virtual void SetColorTheme(
-      const media_message_center::NotificationTheme& color_theme) = 0;
-
   virtual global_media_controls::MediaItemManager* GetMediaItemManager() = 0;
 
   // Performs initialization that must be done after the user session is
@@ -97,6 +95,12 @@ class ASH_EXPORT MediaNotificationProvider {
   BuildFooterView(
       const std::string& id,
       base::WeakPtr<media_message_center::MediaNotificationItem> item) = 0;
+
+  // Use MediaNotificationProvider as a bridge to update the source origin of a
+  // media notification item.
+  virtual void UpdateMediaItemSourceOrigin(
+      const std::string& id,
+      const std::optional<url::Origin>& origin) = 0;
 };
 
 }  // namespace ash

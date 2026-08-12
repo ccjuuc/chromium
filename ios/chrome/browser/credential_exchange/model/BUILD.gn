@@ -15,6 +15,7 @@ source_set("model") {
     ":credential_exchange_types",
     ":credential_export_manager_swift",
     ":credential_import_manager_swift",
+    ":metrics_util",
     "//base",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser/import:importer",
@@ -23,8 +24,21 @@ source_set("model") {
     "//components/webauthn/core/browser",
     "//components/webauthn/core/browser:passkey_model",
     "//components/webauthn/core/browser/import",
+    "//components/webauthn/ios:passkey_types",
+    "//ios/chrome/app/strings",
     "//ios/chrome/browser/data_import/public",
     "//net",
+  ]
+}
+
+source_set("metrics_util") {
+  sources = [
+    "metrics_util.h",
+    "metrics_util.mm",
+  ]
+  deps = [
+    ":credential_exchange_types",
+    "//base",
   ]
 }
 
@@ -34,7 +48,10 @@ source_set("credential_exchange_types") {
     "credential_exchange_passkey.mm",
     "credential_exchange_password.h",
     "credential_exchange_password.mm",
+    "import_stats.h",
+    "import_stats.mm",
   ]
+  deps = [ "//base" ]
 }
 
 swift_source_set("credential_export_manager_swift") {
@@ -59,21 +76,28 @@ swift_source_set("credential_import_manager_swift") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "credential_importer_unittest.mm" ]
+  sources = [
+    "credential_exporter_unittest.mm",
+    "credential_importer_unittest.mm",
+  ]
   deps = [
     ":credential_exchange_types",
+    ":credential_export_manager_swift",
     ":credential_import_manager_swift",
     ":model",
     "//base/test:test_support",
     "//components/affiliations/core/browser:test_support",
     "//components/password_manager/core/browser:password_form",
     "//components/password_manager/core/browser:test_support",
+    "//components/password_manager/core/browser/import:importer",
     "//components/password_manager/core/browser/password_store:test_support",
     "//components/password_manager/core/browser/ui",
+    "//components/webauthn/core/browser:passkey_model",
     "//components/webauthn/core/browser:test_support",
     "//ios/chrome/browser/affiliations/model",
     "//ios/chrome/browser/passwords/model:store_factory",
     "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/test/app:test_support",
     "//ios/web/public/test",
     "//testing/gtest",
     "//third_party/ocmock",

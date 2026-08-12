@@ -5,29 +5,41 @@
 #ifndef IOS_CHROME_COMMON_CREDENTIAL_PROVIDER_PASSKEY_KEYCHAIN_PROVIDER_BRIDGE_H_
 #define IOS_CHROME_COMMON_CREDENTIAL_PROVIDER_PASSKEY_KEYCHAIN_PROVIDER_BRIDGE_H_
 
+#include <memory>
+
 #import "base/ios/block_types.h"
+#import "components/webauthn/ios/passkey_types.h"
 #import "ios/chrome/common/credential_provider/passkey_keychain_provider.h"
 
 @protocol Credential;
 
 typedef void (^FetchTrustedVaultKeysCompletionBlock)(
-    NSArray<NSData*>* trustedVaultKeys);
+    webauthn::SharedKeyList trustedVaultKeys,
+    NSError* error);
+
+typedef void (^UserVerificationCompletionBlock)(BOOL success);
+
+// Error domain for PasskeyKeychainProviderBridge.
+extern NSString* const kPasskeyKeychainProviderBridgeErrorDomain;
+
+// Error code for `kPasskeyKeychainProviderBridgeErrorDomain`.
+enum class PasskeyKeychainError : NSInteger {
+  kUserVerificationFailed = 0,
+  kMaxValue = kUserVerificationFailed,
+};
 
 // Delegate for the PasskeyKeychainProviderBridge.
 @protocol PasskeyKeychainProviderBridgeDelegate
 
 // Asks the user to reauthenticate if needed and calls the the completion block.
-- (void)performUserVerificationIfNeeded:(ProceduralBlock)completion;
+- (void)performUserVerificationIfNeeded:
+    (UserVerificationCompletionBlock)completion;
 
-// Presents the passkey enrollment welcome screen.
-- (void)showEnrollmentWelcomeScreen:(ProceduralBlock)enrollBlock;
-
-// Presents the passkey "fix degraded recoverability state" welcome screen.
-- (void)showFixDegradedRecoverabilityWelcomeScreen:
-    (ProceduralBlock)fixDegradedRecoverabilityBlock;
-
-// Presents the passkey reauthentication welcome screen.
-- (void)showReauthenticationWelcomeScreen:(ProceduralBlock)reauthenticateBlock;
+// Presents the passkey welcome screen for `purpose`.
+- (void)showWelcomeScreenWithPurpose:
+            (webauthn::PasskeyWelcomeScreenPurpose)purpose
+                          completion:
+                              (webauthn::PasskeyWelcomeScreenAction)completion;
 
 // Informs the delegate that the user completed a reauthentication facilitated
 // by the provider.
@@ -42,9 +54,12 @@ typedef void (^FetchTrustedVaultKeysCompletionBlock)(
 // Default initializer. `enableLogging` indicates whether metrics logging should
 // be enabled in the Credential Provider Extension.
 - (instancetype)initWithEnableLogging:(BOOL)enableLogging
-                 navigationController:
-                     (UINavigationController*)navigationController
               navigationItemTitleView:(UIView*)navigationItemTitleView
+    NS_DESIGNATED_INITIALIZER;
+
+// Initializer for testing that allows injecting a fake PasskeyKeychainProvider.
+- (instancetype)initWithPasskeyKeychainProvider:
+    (std::unique_ptr<PasskeyKeychainProvider>)passkeyKeychainProvider
     NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)init NS_UNAVAILABLE;

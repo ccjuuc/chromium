@@ -4,8 +4,12 @@
 
 source_set("tracked_element") {
   sources = [
+    "element_highlighter_webui.cc",
+    "element_highlighter_webui.h",
     "tracked_element_handler.cc",
     "tracked_element_handler.h",
+    "tracked_element_handler_document_singleton.cc",
+    "tracked_element_handler_document_singleton.h",
     "tracked_element_web_ui.cc",
     "tracked_element_web_ui.h",
   ]
@@ -18,7 +22,25 @@ source_set("tracked_element") {
 
   deps = [
     "//base",
+    "//ui/gfx",
     "//ui/gfx/geometry",
+  ]
+
+  if (!is_android) {
+    deps += [ "//ui/views" ]
+  }
+}
+
+source_set("test_support") {
+  testonly = true
+  sources = [
+    "interaction_test_util_web_ui.cc",
+    "interaction_test_util_web_ui.h",
+  ]
+  public_deps = [
+    ":tracked_element",
+    "//ui/base:test_support",
+    "//ui/base/interaction:test_support",
   ]
 }
 
@@ -26,8 +48,12 @@ source_set("tracked_element") {
 # can depend on //content. They should not be included in ui_unittests.
 source_set("unit_tests") {
   testonly = true
-  sources = [ "tracked_element_handler_unittest.cc" ]
+  sources = [
+    "interaction_test_util_web_ui_unittest.cc",
+    "tracked_element_handler_unittest.cc",
+  ]
   deps = [
+    ":test_support",
     ":tracked_element",
     "//base/test:test_support",
     "//content/test:test_support",
@@ -35,7 +61,13 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
     "//ui/base:test_support",
-    "//ui/views:test_support",
-    "//ui/views/controls/webview",
+    "//ui/base/interaction:test_support",
   ]
+  if (!is_android) {
+    deps += [
+      "//ui/views",
+      "//ui/views:test_support",
+      "//ui/views/controls/webview",
+    ]
+  }
 }

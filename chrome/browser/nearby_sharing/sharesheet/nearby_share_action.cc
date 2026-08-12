@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/files/file_path.h"
 #include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -167,7 +168,7 @@ const gfx::VectorIcon& NearbyShareAction::GetActionIcon() {
     return kNearbyShareInternalIcon;
   }
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return kNearbyShareIcon;
+  return ash::kNearbyShareIcon;
 }
 
 void NearbyShareAction::LaunchAction(
@@ -182,7 +183,8 @@ void NearbyShareAction::LaunchAction(
   view->SetPreferredSize(size);
   views::WebView* web_view = root_view->AddChildView(std::move(view));
   // TODO(vecore): Query this from the container view
-  web_view->holder()->SetCornerRadii(gfx::RoundedCornersF(kCornerRadius));
+  web_view->holder()->SetNativeViewCornerRadii(
+      gfx::RoundedCornersF(kCornerRadius));
 
   // load chrome://nearby into the webview
   web_view->LoadInitialURL(GURL(chrome::kChromeUINearbyShareURL));

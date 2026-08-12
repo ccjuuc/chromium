@@ -33,6 +33,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/load_error_reporter.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
@@ -42,6 +43,8 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -247,7 +250,7 @@ TEST_F(ZipFileInstallerLocationTest, GoodZip) {
   // temp install directory. E.g. /a/b/c/d == /a/b/c + /d.
   //
   // Make sure we're comparing absolute paths to avoid failures like
-  // https://crbug.com/1453669 on macOS 14.
+  // https://crbug.com/40916554 on macOS 14.
   base::FilePath absolute_last_extension_installed_path =
       base::MakeAbsoluteFilePath(observer_.last_extension_installed_path);
   base::FilePath absolute_expected_extension_install_directory =
@@ -276,7 +279,7 @@ TEST_F(ZipFileInstallerLocationTest, MultipleSameZipInstallSeparately) {
   // unpacked install directory. E.g. /a/b/c/d == /a/b/c + /d.
   //
   // Make sure we're comparing absolute paths to avoid failures like
-  // https://crbug.com/1453669 on macOS 14.
+  // https://crbug.com/40916554 on macOS 14.
   base::FilePath absolute_last_extension_installed_path =
       base::MakeAbsoluteFilePath(observer_.last_extension_installed_path);
   base::FilePath absolute_expected_extension_install_directory =
@@ -333,7 +336,7 @@ TEST_F(ZipFileInstallerLocationTest, ZipWithPublicKey) {
   EXPECT_EQ(observer_.last_extension_installed, kIdForPublicKey);
 
   // Make sure we compare absolute paths to avoid failures like
-  // https://crbug.com/1453669 on macOS 14.
+  // https://crbug.com/40916554 on macOS 14.
   base::FilePath absolute_last_extension_installed_path =
       base::MakeAbsoluteFilePath(observer_.last_extension_installed_path);
   base::FilePath absolute_expected_extension_install_directory =

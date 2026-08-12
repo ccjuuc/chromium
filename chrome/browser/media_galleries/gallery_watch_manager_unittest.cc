@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -260,22 +259,22 @@ TEST_F(GalleryWatchManagerTest, AddAndRemoveTwoWatches) {
   MediaGalleryPrefIdSet set1 =
       manager()->GetWatchSet(profile(), extension()->id());
   EXPECT_EQ(1u, set1.size());
-  EXPECT_TRUE(base::Contains(set1, id1));
+  EXPECT_TRUE(set1.contains(id1));
 
   // Test that the second watch was added correctly too.
   AddAndConfirmWatch(id2);
   MediaGalleryPrefIdSet set2 =
       manager()->GetWatchSet(profile(), extension()->id());
   EXPECT_EQ(2u, set2.size());
-  EXPECT_TRUE(base::Contains(set2, id1));
-  EXPECT_TRUE(base::Contains(set2, id2));
+  EXPECT_TRUE(set2.contains(id1));
+  EXPECT_TRUE(set2.contains(id2));
 
   // Remove first watch and test that the second is still in there.
   manager()->RemoveWatch(profile(), extension()->id(), id1);
   MediaGalleryPrefIdSet set3 =
       manager()->GetWatchSet(profile(), extension()->id());
   EXPECT_EQ(1u, set3.size());
-  EXPECT_TRUE(base::Contains(set3, id2));
+  EXPECT_TRUE(set3.contains(id2));
 
   // Try removing the first watch again and test that it has no effect.
   manager()->RemoveWatch(profile(), extension()->id(), id1);
@@ -314,7 +313,7 @@ TEST_F(GalleryWatchManagerTest, RemoveAllWatches) {
   EXPECT_TRUE(manager()->GetWatchSet(profile(), extension()->id()).empty());
 }
 
-// Fails on ChromeOS: crbug.com/1207878
+// Fails on ChromeOS: crbug.com/40765782
 TEST_F(GalleryWatchManagerTest, DISABLED_DropWatchOnGalleryRemoved) {
   if (!GalleryWatchesSupported())
     return;
@@ -396,7 +395,7 @@ TEST_F(GalleryWatchManagerTest, TestWatchOperationAfterProfileShutdown) {
   ShutdownProfile();
 
   // Trigger a watch that should have been removed when the profile was
-  // destroyed to catch regressions. crbug.com/467627
+  // destroyed to catch regressions. crbug.com/40409733
   base::RunLoop run_loop;
   ASSERT_TRUE(
       base::WriteFile(temp_dir.GetPath().AppendASCII("fake file"), "blah"));
@@ -422,7 +421,7 @@ TEST_F(GalleryWatchManagerTest, TestStorageRemovedAfterProfileShutdown) {
   ShutdownProfile();
 
   // Trigger a removable storage event that should be ignored now that the
-  // profile has been destroyed to catch regressions. crbug.com/467627
+  // profile has been destroyed to catch regressions. crbug.com/40409733
   base::RunLoop run_loop;
   storage_monitor()->receiver()->ProcessDetach(storage_info.device_id());
   run_loop.RunUntilIdle();

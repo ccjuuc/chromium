@@ -18,12 +18,16 @@
 
 namespace web_app {
 namespace {
+using testing::ElementsAre;
 
 using testing::IsEmpty;
 using testing::NotNull;
 using testing::UnorderedElementsAre;
 
-MATCHER_P2(IwaPermissionPolicyEntryIs, feature, allowed_origins_matcher, "") {
+MATCHER_P2(IsolatedAppPermissionPolicyEntryIs,
+           feature,
+           allowed_origins_matcher,
+           "") {
   return arg.feature == feature &&
          ExplainMatchResult(
              testing::MatcherCast<const std::vector<std::string>&>(
@@ -81,22 +85,22 @@ TEST_F(IwaPermissionsPolicyCacheTest, ParseManifestAndSetPolicy_Complex) {
   EXPECT_THAT(
       *policy,
       UnorderedElementsAre(
-          IwaPermissionPolicyEntryIs(
+          IsolatedAppPermissionPolicyEntryIs(
               "camera",
               std::vector<std::string>(
                   {"'self'", "https://example.com", "https://other.com"})),
-          IwaPermissionPolicyEntryIs("geolocation",
-                                     std::vector<std::string>({"*"})),
-          IwaPermissionPolicyEntryIs("microphone",
-                                     std::vector<std::string>({"'none'"})),
-          IwaPermissionPolicyEntryIs("fullscreen", IsEmpty()),
-          IwaPermissionPolicyEntryIs("midi",
-                                     std::vector<std::string>({"'self'"})),
-          IwaPermissionPolicyEntryIs(
+          IsolatedAppPermissionPolicyEntryIs("geolocation",
+                                             std::vector<std::string>({"*"})),
+          IsolatedAppPermissionPolicyEntryIs(
+              "microphone", std::vector<std::string>({"'none'"})),
+          IsolatedAppPermissionPolicyEntryIs("fullscreen", IsEmpty()),
+          IsolatedAppPermissionPolicyEntryIs(
+              "midi", std::vector<std::string>({"'self'"})),
+          IsolatedAppPermissionPolicyEntryIs(
               "usb", std::vector<std::string>({"https://a.com", "https://b.com",
                                                "https://c.com", "https://d.com",
                                                "https://e.com"})),
-          IwaPermissionPolicyEntryIs(
+          IsolatedAppPermissionPolicyEntryIs(
               "hid",
               std::vector<std::string>({"'none'", "https://example.com"}))));
 }
@@ -121,12 +125,12 @@ TEST_F(IwaPermissionsPolicyCacheTest, ParseManifestAndSetPolicy_Valid) {
   ASSERT_THAT(policy, NotNull());
   EXPECT_THAT(*policy,
               UnorderedElementsAre(
-                  IwaPermissionPolicyEntryIs(
+                  IsolatedAppPermissionPolicyEntryIs(
                       "camera", std::vector<std::string>(
                                     {"'self'", "https://example.com"})),
-                  IwaPermissionPolicyEntryIs("geolocation",
-                                             std::vector<std::string>({"*"})),
-                  IwaPermissionPolicyEntryIs(
+                  IsolatedAppPermissionPolicyEntryIs(
+                      "geolocation", std::vector<std::string>({"*"})),
+                  IsolatedAppPermissionPolicyEntryIs(
                       "microphone", std::vector<std::string>({"'none'"}))));
 }
 
@@ -203,6 +207,36 @@ TEST_F(IwaPermissionsPolicyCacheTest,
 
   EXPECT_FALSE(cache()->ParseManifestAndSetPolicy(kOrigin, kManifest));
   EXPECT_THAT(cache()->GetPolicy(kOrigin), testing::IsNull());
+}
+
+TEST_F(IwaPermissionsPolicyCacheTest,
+       ParseManifestAndSetPolicy_UnknownFeature) {
+  const IwaOrigin kOrigin =
+      IwaOrigin::Create(
+          GURL("isolated-app://"
+               "aerugqztij5biqquuk3mfwpsaibuegaqcitgfchwuosuofdjabzqaaic"))
+          .value();
+  const std::string kManifest = R"({
+    "permissions_policy": {
+      "unknown-feature": ["self"]
+    }
+  })";
+
+  EXPECT_TRUE(cache()->ParseManifestAndSetPolicy(kOrigin, kManifest));
+
+  const auto* policy = cache()->GetPolicy(kOrigin);
+  ASSERT_THAT(policy, NotNull());
+  EXPECT_THAT(*policy,
+              ElementsAre(IsolatedAppPermissionPolicyEntryIs(
+                  "unknown-feature", std::vector<std::string>({"'self'"}))));
+
+  auto warnings = cache()->GetWarningMessages(kOrigin);
+  ASSERT_EQ(warnings.size(), 1u);
+  EXPECT_EQ(warnings[0].source, blink::mojom::ConsoleMessageSource::kOther);
+  EXPECT_EQ(
+      warnings[0].message,
+      u"The 'permissions_policy' field in the manifest includes an unknown "
+      u"feature: 'unknown-feature'.");
 }
 
 }  // namespace web_app

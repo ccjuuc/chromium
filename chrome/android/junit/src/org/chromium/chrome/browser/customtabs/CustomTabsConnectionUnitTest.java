@@ -8,6 +8,7 @@ import static androidx.browser.customtabs.CustomTabsCallback.ACTIVITY_LAYOUT_STA
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,9 +29,23 @@ import static org.chromium.chrome.browser.customtabs.CustomTabsConnection.ON_ACT
 import static org.chromium.chrome.browser.customtabs.CustomTabsConnection.ON_ACTIVITY_LAYOUT_TOP_EXTRA;
 
 import android.app.PendingIntent;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
+import android.database.Cursor;
+import android.net.Network;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.os.Process;
 
 import androidx.browser.customtabs.CustomTabsCallback;
+import androidx.browser.customtabs.CustomTabsIntent;
+import androidx.browser.customtabs.CustomTabsService;
 import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.browser.customtabs.EngagementSignalsCallback;
 import androidx.browser.customtabs.PostMessageServiceConnection;
@@ -39,37 +54,42 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowProcess;
 
-import org.chromium.base.task.TaskTraits;
-import org.chromium.base.task.test.ShadowPostTask;
-import org.chromium.base.task.test.ShadowPostTask.TestImpl;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.browserservices.PostMessageHandler;
 import org.chromium.chrome.browser.browserservices.SessionDataHolder;
 import org.chromium.chrome.browser.browserservices.SessionHandler;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
+import org.chromium.chrome.browser.browserservices.ui.splashscreen.trustedwebactivity.SplashImageHolder;
 import org.chromium.chrome.browser.customtabs.content.EngagementSignalsHandler;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
 import org.chromium.chrome.browser.tab.Tab;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+
 /** Tests for some parts of {@link CustomTabsConnection}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(shadows = {ShadowPostTask.class})
+@Config(manifest = Config.NONE)
 public class CustomTabsConnectionUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule public final TemporaryFolder mTemporaryFolder = new TemporaryFolder();
     @Mock private SessionHandler mSessionHandler;
 
     @Mock private CustomTabsCallback mCallback;
@@ -85,14 +105,6 @@ public class CustomTabsConnectionUnitTest {
 
     @Before
     public void setup() {
-        ShadowPostTask.setTestImpl(
-                new TestImpl() {
-                    @Override
-                    public void postDelayedTask(
-                            @TaskTraits int taskTraits, Runnable task, long delay) {
-                        task.run();
-                    }
-                });
         CustomTabsConnection.setInstanceForTesting(null);
         mConnection = CustomTabsConnection.getInstance();
         mSession = spy(CustomTabsSessionToken.createMockSessionTokenForTesting());
@@ -207,6 +219,7 @@ public class CustomTabsConnectionUnitTest {
         mConnection.mClientManager.newSession(
                 mSessionHolder,
                 uid,
+                Process.myPid(),
                 null,
                 mPostMessageHandler,
                 mPostMessageServiceConnection,
@@ -239,5 +252,154 @@ public class CustomTabsConnectionUnitTest {
                         eq(CustomTabsConnection.OPEN_IN_BROWSER_CALLBACK), any(Bundle.class));
     }
 
+    @Test
+    public void extractTargetNetwork_hasPermission() {
+        initSession();
+        Network network = mock(Network.class);
+        Intent intent = new Intent();
+        intent.putExtra(CustomTabsIntent.EXTRA_NETWORK, network);
+
+        var app = RuntimeEnvironment.getApplication();
+        shadowOf(app).grantPermissions("android.permission.MAINLINE_NETWORK_STACK");
+
+        assertEquals(network, mConnection.extractTargetNetwork(intent, mSessionHolder));
+    }
+
+    @Test
+    public void extractTargetNetwork_lacksPermission() {
+        initSession();
+        Network network = mock(Network.class);
+        Intent intent = new Intent();
+        intent.putExtra(CustomTabsIntent.EXTRA_NETWORK, network);
+
+        assertNull(mConnection.extractTargetNetwork(intent, mSessionHolder));
+    }
+
+    @Test
+    public void extractTargetNetwork_noNetwork() {
+        initSession();
+        Intent intent = new Intent();
+        assertNull(mConnection.extractTargetNetwork(intent, mSessionHolder));
+    }
+
+    /** Content provider that records whether it was opened. */
+    public static class TestSplashImageContentProvider extends ContentProvider {
+        static boolean sOpened;
+        static File sImageFile;
+
+        @Override
+        public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+            sOpened = true;
+            return ParcelFileDescriptor.open(sImageFile, ParcelFileDescriptor.MODE_READ_ONLY);
+        }
+
+        @Override
+        public boolean onCreate() {
+            return false;
+        }
+
+        @Override
+        public Cursor query(
+                Uri uri,
+                String[] projection,
+                String selection,
+                String[] selectionArgs,
+                String sortOrder) {
+            return null;
+        }
+
+        @Override
+        public String getType(Uri uri) {
+            return null;
+        }
+
+        @Override
+        public Uri insert(Uri uri, ContentValues values) {
+            return null;
+        }
+
+        @Override
+        public int delete(Uri uri, String selection, String[] selectionArgs) {
+            return 0;
+        }
+
+        @Override
+        public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+            return 0;
+        }
+    }
+
+    private Uri registerSplashImageProvider() throws IOException {
+        TestSplashImageContentProvider.sOpened = false;
+        TestSplashImageContentProvider.sImageFile = mTemporaryFolder.newFile("splash.png");
+        try (FileOutputStream stream =
+                new FileOutputStream(TestSplashImageContentProvider.sImageFile)) {
+            stream.write("non-empty".getBytes());
+        }
+        ProviderInfo info = new ProviderInfo();
+        info.authority = "org.chromium.test.splash";
+        Robolectric.buildContentProvider(TestSplashImageContentProvider.class).create(info);
+        return Uri.parse("content://org.chromium.test.splash/splash.png");
+    }
+
+    private void setCallerUriPermission(int result) {
+        Context context =
+                new ContextWrapper(ContextUtils.getApplicationContext()) {
+                    @Override
+                    public int checkUriPermission(Uri uri, int pid, int uid, int modeFlags) {
+                        return result;
+                    }
+                };
+        ContextUtils.initApplicationContextForTests(context);
+    }
+
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
+    @Test
+    public void receiveFile_CallerWithoutUriPermission() throws IOException {
+        Uri uri = registerSplashImageProvider();
+        setCallerUriPermission(PackageManager.PERMISSION_DENIED);
+
+        assertFalse(
+                mConnection.receiveFile(
+                        mSession,
+                        uri,
+                        CustomTabsService.FILE_PURPOSE_TRUSTED_WEB_ACTIVITY_SPLASH_IMAGE,
+                        Bundle.EMPTY));
+        assertFalse(TestSplashImageContentProvider.sOpened);
+        assertNull(SplashImageHolder.getInstance().takeImage(mSessionHolder));
+    }
+
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
+    @Test
+    public void receiveFile_CallerWithUriPermission() throws IOException {
+        initSession();
+        Uri uri = registerSplashImageProvider();
+        setCallerUriPermission(PackageManager.PERMISSION_GRANTED);
+
+        assertTrue(
+                mConnection.receiveFile(
+                        mSession,
+                        uri,
+                        CustomTabsService.FILE_PURPOSE_TRUSTED_WEB_ACTIVITY_SPLASH_IMAGE,
+                        Bundle.EMPTY));
+        assertTrue(TestSplashImageContentProvider.sOpened);
+        assertNotNull(SplashImageHolder.getInstance().takeImage(mSessionHolder));
+    }
+
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
+    @Test
+    public void receiveFile_SessionNotRegistered() throws IOException {
+        Uri uri = registerSplashImageProvider();
+        setCallerUriPermission(PackageManager.PERMISSION_GRANTED);
+
+        assertFalse(
+                mConnection.receiveFile(
+                        mSession,
+                        uri,
+                        CustomTabsService.FILE_PURPOSE_TRUSTED_WEB_ACTIVITY_SPLASH_IMAGE,
+                        Bundle.EMPTY));
+        assertFalse(TestSplashImageContentProvider.sOpened);
+        assertNull(SplashImageHolder.getInstance().takeImage(mSessionHolder));
+    }
     // TODO(https://crrev.com/c/4118209) Add more tests for Feature enabling/disabling.
 }

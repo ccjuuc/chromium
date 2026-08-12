@@ -63,7 +63,6 @@ public class PrivacyGuideFragment extends Fragment
         FragmentType.HISTORY_SYNC,
         FragmentType.SAFE_BROWSING,
         FragmentType.COOKIES,
-        FragmentType.AD_TOPICS,
         FragmentType.DONE,
     })
     @interface FragmentType {
@@ -72,8 +71,7 @@ public class PrivacyGuideFragment extends Fragment
         int HISTORY_SYNC = 2;
         int SAFE_BROWSING = 3;
         int COOKIES = 4;
-        int AD_TOPICS = 5;
-        int DONE = 6;
+        int DONE = 5;
         int MAX_VALUE = DONE;
     }
 
@@ -85,7 +83,6 @@ public class PrivacyGuideFragment extends Fragment
                             FragmentType.HISTORY_SYNC,
                             FragmentType.SAFE_BROWSING,
                             FragmentType.COOKIES,
-                            FragmentType.AD_TOPICS,
                             FragmentType.DONE));
 
     private OneshotSupplier<BottomSheetController> mBottomSheetControllerSupplier;
@@ -124,10 +121,8 @@ public class PrivacyGuideFragment extends Fragment
         modifyAppBar();
         mView = inflater.inflate(R.layout.privacy_guide_steps, container, false);
 
-        if (ChromeFeatureList.sAndroidSettingsContainment.isEnabled()) {
-            View mainContentView = mView.findViewById(R.id.main_content);
-            mainContentView.setBackgroundResource(R.drawable.privacy_guide_containment_background);
-        }
+        View mainContentView = mView.findViewById(R.id.main_content);
+        mainContentView.setBackgroundResource(R.drawable.privacy_guide_containment_background);
 
         mViewPager = (ViewPager2) mView.findViewById(R.id.review_viewpager);
         mPagerAdapter =

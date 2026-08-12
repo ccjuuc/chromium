@@ -7,10 +7,12 @@
 #import <optional>
 
 #import "base/check_op.h"
-#import "base/containers/contains.h"
 #import "base/debug/crash_logging.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
+#import "ios/web/common/features.h"
 #import "ios/web/javascript_flags.h"
 #import "ios/web/js_messaging/web_view_web_state_map.h"
 #import "ios/web/public/browser_state.h"
@@ -18,6 +20,7 @@
 #import "ios/web/public/js_messaging/java_script_feature.h"
 #import "ios/web/public/js_messaging/script_message.h"
 #import "ios/web/public/js_messaging/web_view_js_utils.h"
+#import "ios/web/util/wk_security_origin_util.h"
 #import "ios/web/web_state/ui/crw_web_controller.h"
 #import "ios/web/web_state/ui/wk_web_view_configuration_provider.h"
 #import "ios/web/web_state/web_state_impl.h"
@@ -33,6 +36,9 @@
 namespace web {
 
 namespace {
+
+// String returned to JavaScript if the message cannot be handled correctly.
+NSString* const kInternalError = @"Internal error";
 
 WKUserScriptInjectionTime InjectionTimeToWKUserScriptInjectionTime(
     JavaScriptFeature::FeatureScript::InjectionTime injection_time) {
@@ -56,6 +62,45 @@ WKUserContentController* GetUserContentController(BrowserState* browser_state) {
   return WKWebViewConfigurationProvider::FromBrowserState(browser_state)
       .GetWebViewConfiguration()
       .userContentController;
+}
+
+// Creates a ScriptMessage from `script_message` using `web_state`.
+// Returns std::nullopt if the message is invalid or if the associated
+// WebController is missing.
+std::optional<ScriptMessage> GetMessage(WKScriptMessage* script_message,
+                                        web::WebState* web_state) {
+  if (!web_state) {
+    return std::nullopt;
+  }
+
+  CRWWebController* web_controller =
+      web::WebStateImpl::FromWebState(web_state)->GetWebController();
+  if (!web_controller) {
+    return std::nullopt;
+  }
+
+  NSURL* ns_url = script_message.frameInfo.request.URL;
+  std::optional<GURL> url;
+  if (ns_url) {
+    url = net::GURLWithNSURL(ns_url);
+  }
+
+  const base::TimeTicks start_time = base::TimeTicks::Now();
+  std::optional<ScriptMessage> message = ScriptMessage(
+      web::ValueResultFromWKResult(script_message.body),
+      web_controller.isUserInteracting, script_message.frameInfo.mainFrame, url,
+      web::OriginWithWKSecurityOrigin(script_message.frameInfo.securityOrigin));
+  if (base::FeatureList::IsEnabled(
+          web::features::kIOSScriptMessageConversionDurationLogging) &&
+      base::TimeTicks::IsHighResolution()) {
+    const base::TimeTicks end_time = base::TimeTicks::Now();
+    base::UmaHistogramCustomMicrosecondsTimes(
+        "IOS.Web.JSMessaging.ScriptMessageConversion.Duration",
+        end_time - start_time, /*min=*/base::Microseconds(1),
+        /*max=*/base::Seconds(5), /*number of buckets=*/100);
+  }
+
+  return message;
 }
 
 }  // namespace
@@ -140,7 +185,7 @@ WKContentWorld* JavaScriptContentWorld::GetWKContentWorld() {
 JavaScriptContentWorld::~JavaScriptContentWorld() {}
 
 bool JavaScriptContentWorld::HasFeature(const JavaScriptFeature* feature) {
-  return base::Contains(features_, feature);
+  return features_.contains(feature);
 }
 
 void JavaScriptContentWorld::AddFeature(const JavaScriptFeature* feature) {
@@ -169,8 +214,7 @@ void JavaScriptContentWorld::AddFeature(const JavaScriptFeature* feature) {
           web::switches::kEnableListedJavascriptFeatures)) {
     std::optional<std::string> message_handler_name =
         feature->GetScriptMessageHandlerName();
-    if (feature != java_script_features::GetBaseJavaScriptFeature() &&
-        feature != java_script_features::GetCommonJavaScriptFeature()) {
+    if (feature != java_script_features::GetBaseJavaScriptFeature()) {
       if (!message_handler_name) {
         return;
       }
@@ -247,63 +291,95 @@ void JavaScriptContentWorld::AddFeature(const JavaScriptFeature* feature) {
   // Setup Javascript message callback.
   auto optional_handler_name = feature->GetScriptMessageHandlerName();
   if (optional_handler_name) {
-    auto handler = feature->GetScriptMessageHandler();
-    DCHECK(handler);
-
     NSString* handler_name =
         base::SysUTF8ToNSString(optional_handler_name.value());
-
     std::unique_ptr<ScopedWKScriptMessageHandler> script_message_handler;
     if (content_world_) {
-      script_message_handler = std::make_unique<ScopedWKScriptMessageHandler>(
-          user_content_controller_, handler_name, content_world_,
-          base::BindRepeating(&JavaScriptContentWorld::ScriptMessageReceived,
-                              weak_factory_.GetWeakPtr(), handler.value(),
-                              browser_state_));
+      if (feature->GetFeatureRepliesToMessages()) {
+        script_message_handler = std::make_unique<ScopedWKScriptMessageHandler>(
+            user_content_controller_, handler_name, content_world_,
+            base::BindRepeating(
+                &JavaScriptContentWorld::ScriptMessageReceivedWithReply,
+                weak_factory_.GetWeakPtr(), feature->AsWeakPtr()));
+      } else {
+        script_message_handler = std::make_unique<ScopedWKScriptMessageHandler>(
+            user_content_controller_, handler_name, content_world_,
+            base::BindRepeating(&JavaScriptContentWorld::ScriptMessageReceived,
+                                weak_factory_.GetWeakPtr(),
+                                feature->AsWeakPtr()));
+      }
     } else {
+      CHECK(!feature->GetFeatureRepliesToMessages());
       script_message_handler = std::make_unique<ScopedWKScriptMessageHandler>(
           user_content_controller_, handler_name,
           base::BindRepeating(&JavaScriptContentWorld::ScriptMessageReceived,
-                              weak_factory_.GetWeakPtr(), handler.value(),
-                              browser_state_));
+                              weak_factory_.GetWeakPtr(),
+                              feature->AsWeakPtr()));
     }
     script_message_handlers_[feature] = std::move(script_message_handler);
   }
 }
 
 void JavaScriptContentWorld::ScriptMessageReceived(
-    JavaScriptFeature::ScriptMessageHandler handler,
-    BrowserState* browser_state,
+    base::WeakPtr<JavaScriptFeature> feature,
     WKScriptMessage* script_message) {
   SCOPED_CRASH_KEY_STRING32("ScriptMessage", "name",
                             base::SysNSStringToUTF8(script_message.name));
+  if (!feature) {
+    return;
+  }
 
-  web::WebViewWebStateMap* map =
-      web::WebViewWebStateMap::FromBrowserState(browser_state);
-  web::WebState* web_state = map->GetWebStateForWebView(script_message.webView);
-
-  // Drop messages if they are no longer associated with a WebState.
+  web::WebState* web_state = web::GetWebStateForWebView(script_message.webView);
   if (!web_state) {
     return;
   }
-
-  CRWWebController* web_controller =
-      web::WebStateImpl::FromWebState(web_state)->GetWebController();
-  if (!web_controller) {
+  if (!feature->ShouldHandleMessageFromOrigin(web::OriginWithWKSecurityOrigin(
+          script_message.frameInfo.securityOrigin))) {
+    return;
+  }
+  std::optional<ScriptMessage> message = GetMessage(script_message, web_state);
+  if (!message) {
     return;
   }
 
-  NSURL* ns_url = script_message.frameInfo.request.URL;
-  std::optional<GURL> url;
-  if (ns_url) {
-    url = net::GURLWithNSURL(ns_url);
+  feature->ScriptMessageReceived(web_state, *message);
+}
+
+void JavaScriptContentWorld::ScriptMessageReceivedWithReply(
+    base::WeakPtr<JavaScriptFeature> feature,
+    WKScriptMessage* script_message,
+    ScriptMessageReplyHandler reply_handler) {
+  SCOPED_CRASH_KEY_STRING32("ScriptMessage", "name",
+                            base::SysNSStringToUTF8(script_message.name));
+  CHECK(reply_handler);
+  if (!feature) {
+    reply_handler(nullptr, kInternalError);
+    return;
   }
 
-  ScriptMessage message(web::ValueResultFromWKResult(script_message.body),
-                        web_controller.isUserInteracting,
-                        script_message.frameInfo.mainFrame, url);
+  web::WebState* web_state = web::GetWebStateForWebView(script_message.webView);
+  if (!web_state) {
+    reply_handler(nullptr, kInternalError);
+    return;
+  }
+  if (!feature->ShouldHandleMessageFromOrigin(web::OriginWithWKSecurityOrigin(
+          script_message.frameInfo.securityOrigin))) {
+    reply_handler(nullptr, kInternalError);
+    return;
+  }
 
-  handler.Run(web_state, message);
+  std::optional<ScriptMessage> message = GetMessage(script_message, web_state);
+  if (!message) {
+    reply_handler(nullptr, kInternalError);
+    return;
+  }
+
+  auto callback = base::BindOnce(
+      [](ScriptMessageReplyHandler reply_handler, const base::Value* reply,
+         NSString* error) { reply_handler(reply, error); },
+      reply_handler);
+  feature->ScriptMessageReceivedWithReply(web_state, *message,
+                                          std::move(callback));
 }
 
 }  // namespace web

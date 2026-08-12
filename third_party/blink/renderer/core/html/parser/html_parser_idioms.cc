@@ -37,60 +37,22 @@
 
 namespace blink {
 
-String StripLeadingAndTrailingHTMLSpaces(const String& string) {
-  unsigned length = string.length();
-
-  if (!length)
-    return string.IsNull() ? string : g_empty_atom.GetString();
-
-  return VisitCharacters(string, [&](auto chars) {
-    unsigned num_leading_spaces = 0;
-    unsigned num_trailing_spaces = 0;
-
-    for (; num_leading_spaces < length; ++num_leading_spaces) {
-      if (IsNotHTMLSpace(chars[num_leading_spaces]))
-        break;
-    }
-
-    if (num_leading_spaces == length)
-      return string.IsNull() ? string : g_empty_atom.GetString();
-
-    for (; num_trailing_spaces < length; ++num_trailing_spaces) {
-      if (IsNotHTMLSpace(chars[length - num_trailing_spaces - 1]))
-        break;
-    }
-
-    DCHECK_LT(num_leading_spaces + num_trailing_spaces, length);
-
-    if (!(num_leading_spaces | num_trailing_spaces))
-      return string;
-
-    return string.Substring(num_leading_spaces, length - (num_leading_spaces +
-                                                          num_trailing_spaces));
-  });
+StringView StripLeadingAndTrailingHtmlSpaces(const StringView& string) {
+  if (string.empty()) {
+    return string.IsNull() ? string : g_empty_atom;
+  }
+  return string.StripWhiteSpace(IsHTMLSpace);
 }
 
-// TODO(iclelland): Consider refactoring this into a general
-// String::Split(predicate) method
 Vector<String> SplitOnASCIIWhitespace(const String& input) {
-  Vector<String> output;
-  unsigned length = input.length();
-  if (!length) {
-    return output;
-  }
-  VisitCharacters(input, [&](auto chars) {
-    size_t cursor = 0;
-    using CharacterType = std::decay_t<decltype(*chars.data())>;
-    cursor = SkipWhile<CharacterType, IsHTMLSpace>(chars, cursor);
-    while (cursor < chars.size()) {
-      const wtf_size_t token_start = static_cast<wtf_size_t>(cursor);
-      cursor = SkipUntil<CharacterType, IsHTMLSpace>(chars, cursor);
-      output.push_back(input.Substring(
-          token_start, static_cast<wtf_size_t>(cursor - token_start)));
-      cursor = SkipWhile<CharacterType, IsHTMLSpace>(chars, cursor);
-    }
-  });
-  return output;
+  return input.SplitSkippingEmpty(
+      [](const StringView& input, wtf_size_t pos) -> std::optional<wtf_size_t> {
+        // SAFETY: SplitSkippingEmpty() guarantees that pos is always in bounds.
+        if (IsHTMLSpace(UNSAFE_BUFFERS(input[pos]))) {
+          return 1u;
+        }
+        return std::nullopt;
+      });
 }
 
 String SerializeForNumberType(const Decimal& number) {
@@ -104,7 +66,7 @@ String SerializeForNumberType(const Decimal& number) {
 String SerializeForNumberType(double number) {
   // According to HTML5, "the best representation of the number n as a floating
   // point number" is a string produced by applying ToString() to n.
-  return String::NumberToStringECMAScript(number);
+  return String::NumberToStringEcmaScript(number);
 }
 
 Decimal ParseToDecimalForNumberType(const String& string,
@@ -114,8 +76,9 @@ Decimal ParseToDecimalForNumberType(const String& string,
   // whitespace characters, which are not valid here.
   const UChar first_character = string[0];
   if (first_character != '-' && first_character != '.' &&
-      !IsASCIIDigit(first_character))
+      !IsAsciiDigit(first_character)) {
     return fallback_value;
+  }
 
   const Decimal value = Decimal::FromString(string);
   if (!value.IsFinite())
@@ -159,14 +122,15 @@ double ParseToDoubleForNumberType(const String& string, double fallback_value) {
   // not valid here.
   UChar first_character = string[0];
   if (first_character != '-' && first_character != '.' &&
-      !IsASCIIDigit(first_character))
+      !IsAsciiDigit(first_character)) {
     return fallback_value;
-  if (string.EndsWith('.'))
+  }
+  if (string.ends_with('.')) {
     return fallback_value;
+  }
 
-  bool valid = false;
-  double value = string.ToDouble(&valid);
-  return CheckDoubleValue(value, valid, fallback_value);
+  auto value = StringToDouble(string);
+  return CheckDoubleValue(value.value_or(0), value.has_value(), fallback_value);
 }
 
 template <typename CharacterType>
@@ -195,15 +159,15 @@ bool ParseHTMLInteger(const String& input, int& value) {
     }
     DCHECK_LT(position, chars.size());
 
-    bool ok;
     constexpr auto kOptions = NumberParsingOptions()
                                   .SetAcceptTrailingGarbage()
                                   .SetAcceptLeadingPlus();
-    int wtf_value = CharactersToInt(chars.subspan(position), kOptions, &ok);
-    if (ok) {
-      value = wtf_value;
+    std::optional<int> int_value =
+        CharactersToInt(chars.subspan(position), kOptions);
+    if (int_value) {
+      value = *int_value;
     }
-    return ok;
+    return int_value.has_value();
   });
 }
 
@@ -283,7 +247,7 @@ static bool IsSpaceOrDelimiter(CharacterType c) {
 
 template <typename CharacterType>
 static bool IsNotSpaceDelimiterOrNumberStart(CharacterType c) {
-  return !(IsSpaceOrDelimiter(c) || IsASCIIDigit(c) || c == '.' || c == '-');
+  return !(IsSpaceOrDelimiter(c) || IsAsciiDigit(c) || c == '.' || c == '-');
 }
 
 template <typename CharacterType>
@@ -292,6 +256,35 @@ static Vector<double> ParseHTMLListOfFloatingPointNumbersInternal(
     const CharacterType* end) {
   Vector<double> numbers;
   return numbers;
+}
+
+// https://html.spec.whatwg.org/C/#rules-for-parsing-floating-point-number-values
+double ParseHTMLFloatingPointNumber(const String& input,
+                                    double fallback_value) {
+  unsigned length = input.length();
+  if (!length) {
+    return fallback_value;
+  }
+
+  double result = fallback_value;
+  VisitCharacters(input, [&](auto chars) {
+    using CharacterType = std::decay_t<decltype(*chars.data())>;
+    size_t position =
+        SkipWhile<CharacterType, IsHTMLSpace<CharacterType>>(chars, 0);
+    if (position == chars.size()) {
+      return;
+    }
+
+    CharacterType c = chars[position];
+    if (!(c >= '0' && c <= '9') && c != '+' && c != '-' && c != '.') {
+      return;
+    }
+
+    size_t parsed_length = 0;
+    double value = CharactersToDouble(chars.subspan(position), parsed_length);
+    result = CheckDoubleValue(value, parsed_length != 0, fallback_value);
+  });
+  return result;
 }
 
 // https://html.spec.whatwg.org/C/#rules-for-parsing-a-list-of-floating-point-numbers
@@ -335,7 +328,7 @@ String ExtractCharset(const String& value) {
   unsigned length = value.length();
 
   while (pos < length) {
-    pos = value.FindIgnoringASCIICase(kCharsetString, pos);
+    pos = value.FindIgnoringAsciiCase(kCharsetString, pos);
     if (pos == kNotFound)
       break;
 
@@ -372,7 +365,7 @@ String ExtractCharset(const String& value) {
     if (quote_mark && (end == length))
       break;  // Close quote not found.
 
-    return value.Substring(pos, end - pos);
+    return value.substr(pos, end - pos);
   }
 
   return "";
@@ -395,8 +388,9 @@ TextEncoding EncodingFromMetaAttributes(const HTMLAttributeList& attributes) {
     const AtomicString& attribute_value = AtomicString(html_attribute.second);
 
     if (ThreadSafeMatch(attribute_name, html_names::kHttpEquivAttr)) {
-      if (EqualIgnoringASCIICase(attribute_value, "content-type"))
+      if (EqualIgnoringAsciiCase(attribute_value, "content-type")) {
         got_pragma = true;
+      }
     } else if (ThreadSafeMatch(attribute_name, html_names::kCharsetAttr)) {
       has_charset = true;
       charset = attribute_value;
@@ -411,7 +405,7 @@ TextEncoding EncodingFromMetaAttributes(const HTMLAttributeList& attributes) {
 
   if (mode == MetaAttribute::kCharset ||
       (mode == MetaAttribute::kPragma && got_pragma))
-    return TextEncoding(StripLeadingAndTrailingHTMLSpaces(charset));
+    return TextEncoding(StripLeadingAndTrailingHtmlSpaces(charset));
 
   return TextEncoding();
 }

@@ -7,9 +7,9 @@
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "components/prefs/pref_service.h"
@@ -41,8 +41,9 @@ SecuritySettingsBundleToastHelper::GetForProfile(Profile* profile) {
 }
 
 void SecuritySettingsBundleToastHelper::TriggerIfNeeded() {
-  if (profile_->GetPrefs()->GetInteger(
-          prefs::kSecuritySettingsBundleMigrationToastState) !=
+  int toast_state = profile_->GetPrefs()->GetInteger(
+      prefs::kSecuritySettingsBundleMigrationToastState);
+  if (toast_state !=
       static_cast<int>(SecuritySettingsBundleToastState::kPending)) {
     return;
   }
@@ -91,11 +92,14 @@ ToastController* SecuritySettingsBundleToastHelper::GetToastController() {
   if (toast_controller_for_testing_) {
     return toast_controller_for_testing_;
   }
-  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  ProfileBrowserCollection* const collection =
+      ProfileBrowserCollection::GetForProfile(profile_);
+  BrowserWindowInterface* browser =
+      collection ? collection->GetLastActiveBrowser() : nullptr;
   if (!browser) {
     return nullptr;
   }
-  return browser->browser_window_features()->toast_controller();
+  return browser->GetFeatures().toast_controller();
 }
 
 }  // namespace safe_browsing

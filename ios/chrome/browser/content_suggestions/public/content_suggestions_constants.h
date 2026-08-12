@@ -45,7 +45,8 @@ enum class ContentSuggestionsModuleType {
   kShopCard = 21,
   kAppBundlePromo = 22,
   kDefaultBrowser = 23,
-  kMaxValue = kDefaultBrowser,
+  kLevelUp = 24,
+  kMaxValue = kLevelUp,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml)
 
@@ -106,5 +107,8 @@ ContentSuggestionsModuleType SetUpListModuleTypeForSetUpListType(
 
 // Returns true if the module type is one of the Tips card types.
 bool IsTipsModuleType(ContentSuggestionsModuleType type);
+
+// The maximum number of Most Visited tiles shown.
+extern const NSUInteger kContentSuggestionsMostVisitedTilesMax;
 
 #endif  // IOS_CHROME_BROWSER_CONTENT_SUGGESTIONS_PUBLIC_CONTENT_SUGGESTIONS_CONSTANTS_H_

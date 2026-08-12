@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "chrome/browser/ui/tabs/tab_types.h"
-#include "components/tabs/public/split_tab_id.h"
+#include "components/split_tabs/split_tab_id.h"
 
 // Contains the data necessary to determine the bounds of a tab even while
 // it's in the middle of animating between states.
@@ -47,7 +47,7 @@ class TabLayoutState {
   TabActive activeness_ = TabActive::kActive;
 
   // Whether this tab is split.
-  std::optional<split_tabs::SplitTabId> splitness_ = std::nullopt;
+  std::optional<split_tabs::SplitTabId> splitness_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_TAB_LAYOUT_STATE_H_

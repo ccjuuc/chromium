@@ -7,7 +7,7 @@
 
 #import <UIKit/UIKit.h>
 
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_factory.h"
+#import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/legacy_toolbar_button_factory.h"
 
 @class PrimaryToolbarViewController;
 
@@ -32,9 +32,6 @@
 
 - (void)viewController:(PrimaryToolbarViewController*)viewController
     tabGroupIndicatorVisibilityUpdated:(BOOL)visible;
-
-// The style to use for the cancel button.
-- (ToolbarCancelButtonStyle)styleForCancelButtonInToolbar;
 
 @end
 

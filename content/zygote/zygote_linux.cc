@@ -19,7 +19,6 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/platform_file.h"
@@ -39,8 +38,6 @@
 #include "base/process/process_handle.h"
 #include "base/process/set_process_title.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_log.h"
 #include "build/build_config.h"
 #include "content/common/zygote/zygote_commands_linux.h"
 #include "content/public/common/content_descriptors.h"
@@ -128,7 +125,7 @@ bool Zygote::ProcessRequests() {
     // The receiving code is in
     // content/browser/zygote_host/zygote_host_impl_linux.cc.
     bool r = base::UnixDomainSocket::SendMsg(
-        kZygoteSocketPairFd, kZygoteHelloMessage, sizeof(kZygoteHelloMessage),
+        kZygoteSocketPairFd, base::as_byte_span(kZygoteHelloMessage),
         std::vector<int>());
 #if BUILDFLAG(IS_CHROMEOS)
     LOG_IF(WARNING, !r) << "Sending zygote magic failed";
@@ -231,8 +228,7 @@ bool Zygote::UsingNSSandbox() const {
 bool Zygote::HandleRequestFromBrowser(int fd) {
   std::vector<base::ScopedFD> fds;
   uint8_t buf[kZygoteMaxMessageLength];
-  const ssize_t len =
-      base::UnixDomainSocket::RecvMsg(fd, buf, sizeof(buf), &fds);
+  const ssize_t len = base::UnixDomainSocket::RecvMsg(fd, buf, &fds);
 
   if (len == 0 || (len == -1 && errno == ECONNRESET)) {
     // EOF from the browser. We should die.
@@ -247,9 +243,8 @@ bool Zygote::HandleRequestFromBrowser(int fd) {
     return false;
   }
 
-  base::Pickle pickle = base::Pickle::WithUnownedBuffer(
+  base::PickleIterator iter = base::PickleIterator::WithData(
       base::span(buf).first(base::checked_cast<size_t>(len)));
-  base::PickleIterator iter(pickle);
 
   int kind;
   if (iter.ReadInt(&kind)) {
@@ -470,11 +465,6 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
     // Sandboxed processes need to send the global, non-namespaced PID when
     // setting up an IPC channel to their parent.
     IPC::Channel::SetGlobalPid(real_pid);
-    // Force the real PID so chrome event data have a PID that corresponds
-    // to system trace event data.
-    base::trace_event::TraceLog::GetInstance()->SetProcessID(real_pid);
-    // Tell Perfetto SDK about the real PID too.
-    perfetto::Platform::SetCurrentProcessId(real_pid);
     base::InitUniqueIdForProcessInPidNamespace(real_pid);
     return 0;
   }
@@ -494,15 +484,14 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
   {
     std::vector<base::ScopedFD> recv_fds;
     uint8_t buf[kZygoteMaxMessageLength];
-    const ssize_t len = base::UnixDomainSocket::RecvMsg(
-        kZygoteSocketPairFd, buf, sizeof(buf), &recv_fds);
+    const ssize_t len =
+        base::UnixDomainSocket::RecvMsg(kZygoteSocketPairFd, buf, &recv_fds);
 
     if (len > 0) {
       CHECK(recv_fds.empty());
 
-      base::Pickle pickle = base::Pickle::WithUnownedBuffer(
+      base::PickleIterator iter = base::PickleIterator::WithData(
           base::span(buf).first(base::checked_cast<size_t>(len)));
-      base::PickleIterator iter(pickle);
 
       int kind;
       CHECK(iter.ReadInt(&kind));
@@ -529,7 +518,7 @@ int Zygote::ForkWithRealPid(const std::string& process_type,
   }
 
   // Now set-up this process to be tracked by the Zygote.
-  if (base::Contains(process_info_map_, real_pid)) {
+  if (process_info_map_.contains(real_pid)) {
     NOTREACHED() << "Already tracking PID " << real_pid;
   }
   process_info_map_[real_pid].internal_pid = pid;

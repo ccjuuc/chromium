@@ -15,6 +15,7 @@
 #include "components/exo/surface_observer.h"
 #include "ui/aura/client/drag_drop_client.h"
 #include "ui/aura/client/drag_drop_delegate.h"
+#include "ui/aura/window_tracker.h"
 #include "ui/base/clipboard/clipboard_observer.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
 
@@ -89,7 +90,11 @@ class DataDevice : public DataOfferObserver,
   // Overridden from SurfaceObserver:
   void OnSurfaceDestroying(Surface* surface) override;
 
-  DataDeviceDelegate* get_delegate() { return delegate_; }
+  DataDeviceDelegate* get_delegate() { return delegate_.get(); }
+
+  // Returns the seat associated with this data device. Used for authorization
+  // checks in Wayland delegates.
+  Seat* seat() { return seat_; }
 
  private:
   Surface* GetEffectiveTargetForEvent(const ui::DropTargetEvent& event) const;
@@ -101,10 +106,14 @@ class DataDevice : public DataOfferObserver,
       ui::mojom::DragOperation& output_drag_op,
       std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
 
-  const raw_ptr<DataDeviceDelegate, DanglingUntriaged> delegate_;
+  base::WeakPtr<DataDeviceDelegate> delegate_;
   const raw_ptr<Seat> seat_;
   std::unique_ptr<ScopedDataOffer> data_offer_;
   std::unique_ptr<ScopedSurface> focused_surface_;
+
+  // Tracker for aura::Window's whose DragDropDelegate is `this` to avoid a
+  // dangling kDragDropDelegateKey property after `this` is destroyed.
+  aura::WindowTracker window_tracker_;
 
   base::OnceClosure quit_closure_;
   bool drop_succeeded_;

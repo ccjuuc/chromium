@@ -13,13 +13,17 @@ source_set("bubble") {
     "webui_bubble_manager.cc",
     "webui_bubble_manager.h",
     "webui_bubble_manager_observer.h",
+    "webui_bubble_reopen_suppressor.cc",
+    "webui_bubble_reopen_suppressor.h",
   ]
   public_deps = [
     "//base",
     "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser:primitives",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/webui:webui_util",
+    "//components/web_modal",
     "//content/public/browser",
     "//skia",
     "//ui/base/interaction",
@@ -33,7 +37,6 @@ source_set("bubble") {
     "//chrome/browser/ui:webui_name_variants",
   ]
   deps = [
-    "//chrome/browser/ui:browser_list",
     "//chrome/browser/ui/webui/top_chrome",
     "//components/input",
     "//ui/webui",

@@ -85,6 +85,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -103,6 +104,8 @@
 #include "url/gurl.h"
 
 namespace ash {
+
+using chromeos::AppType;
 
 namespace {
 
@@ -615,9 +618,10 @@ TEST_F(SunfishTest, PressEscapeKey) {
 
 TEST_F(SunfishTest, NoCrashOnEscapeBeforePanelShown) {
   UpdateDisplay("800x600,800x600");
-  std::unique_ptr<aura::Window> w1(CreateAppWindow());
-  std::unique_ptr<aura::Window> w2(
-      CreateAppWindow(gfx::Rect(810, 10, 400, 400)));
+  std::unique_ptr<aura::Window> w1 =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
+  std::unique_ptr<aura::Window> w2 =
+      CreateWindowWithAppType(AppType::SYSTEM_APP, {810, 10, 400, 400});
   aura::Window::Windows root_windows = Shell::GetAllRootWindows();
   ASSERT_EQ(root_windows[0], w1->GetRootWindow());
   ASSERT_EQ(root_windows[1], w2->GetRootWindow());
@@ -2365,14 +2369,15 @@ TEST_F(SunfishTest, CopyTextButtonShownForDetectedText) {
           ActionButtonViewID::kCopyTextButton);
   ASSERT_TRUE(copy_text_button);
   // Clipboard should currently be empty.
-  std::u16string clipboard_data;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  std::u16string clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"");
   // Clicking on the button should copy text to clipboard and show a toast.
   LeftClickOn(copy_text_button);
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"detected text");
   EXPECT_TRUE(ToastManager::Get()->IsToastShown(kCaptureModeTextCopiedToastId));
 }
@@ -2400,15 +2405,16 @@ TEST_F(SunfishTest, CopyTextButtonShownForLensDetectedText) {
   ASSERT_TRUE(copy_text_button);
 
   // The clipboard should currently be empty.
-  std::u16string clipboard_data;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  std::u16string clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"");
 
   // Clicking on the button should copy text to the clipboard and show a toast.
   LeftClickOn(copy_text_button);
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"lens\ndetected text");
   EXPECT_TRUE(ToastManager::Get()->IsToastShown(kCaptureModeTextCopiedToastId));
 
@@ -2574,7 +2580,8 @@ TEST_F(SunfishTest, PressingSearchButtonExitsIfLensError) {
 TEST_F(SunfishTest, PinnedWindowExitSession) {
   auto* controller = CaptureModeController::Get();
 
-  std::unique_ptr<aura::Window> pinned_window = CreateAppWindow();
+  std::unique_ptr<aura::Window> pinned_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   wm::ActivateWindow(pinned_window.get());
   window_util::PinWindow(pinned_window.get(), /*trusted=*/false);
   EXPECT_FALSE(ash::CanShowSunfishUi());
@@ -3530,14 +3537,15 @@ TEST_F(ScannerTest, CopyTextButtonShownForDetectedText) {
           ActionButtonViewID::kCopyTextButton);
   ASSERT_TRUE(copy_text_button);
   // Clipboard should currently be empty.
-  std::u16string clipboard_data;
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  std::u16string clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"");
   // Clicking on the button should copy text to clipboard and show a toast.
   LeftClickOn(copy_text_button);
-  ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &clipboard_data);
+  clipboard_data = ui::clipboard_test_util::ReadText(
+      ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+      /*data_dst=*/nullptr);
   EXPECT_EQ(clipboard_data, u"detected text");
   EXPECT_TRUE(ToastManager::Get()->IsToastShown(kCaptureModeTextCopiedToastId));
 }
@@ -5029,7 +5037,7 @@ TEST_F(ScannerTest, KeyboardNavigationDisclaimerFromSmartActionsButton) {
 
 TEST_F(ScannerTest, DisclaimerTosLinkFromScreenshotMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kGooglePrivacyPolicyUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kGooglePrivacyPolicyUrl), _, _));
 
   UnackAllScannerDisclaimers();
   ActionButtonView* smart_actions_button = GetSmartActionsButton();
@@ -5059,7 +5067,7 @@ TEST_F(ScannerTest, DisclaimerTosLinkFromScreenshotMode) {
 
 TEST_F(ScannerTest, DisclaimerLearnMoreLinkFromScreenshotMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kScannerLearnMoreUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kScannerLearnMoreUrl), _, _));
 
   UnackAllScannerDisclaimers();
   ActionButtonView* smart_actions_button = GetSmartActionsButton();
@@ -5089,7 +5097,7 @@ TEST_F(ScannerTest, DisclaimerLearnMoreLinkFromScreenshotMode) {
 
 TEST_F(ScannerTest, ReminderDisclaimerTosLinkFromScreenshotMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kGooglePrivacyPolicyUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kGooglePrivacyPolicyUrl), _, _));
 
   PrefService& prefs =
       *Shell::Get()->session_controller()->GetActivePrefService();
@@ -5121,7 +5129,7 @@ TEST_F(ScannerTest, ReminderDisclaimerTosLinkFromScreenshotMode) {
 
 TEST_F(ScannerTest, ReminderDisclaimerLearnMoreLinkFromScreenshotMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kScannerLearnMoreUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kScannerLearnMoreUrl), _, _));
 
   PrefService& prefs =
       *Shell::Get()->session_controller()->GetActivePrefService();
@@ -5153,7 +5161,7 @@ TEST_F(ScannerTest, ReminderDisclaimerLearnMoreLinkFromScreenshotMode) {
 
 TEST_F(ScannerTest, DisclaimerTosLinkFromSunfishMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kGooglePrivacyPolicyUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kGooglePrivacyPolicyUrl), _, _));
 
   UnackAllScannerDisclaimers();
   auto* controller = CaptureModeController::Get();
@@ -5182,7 +5190,7 @@ TEST_F(ScannerTest, DisclaimerTosLinkFromSunfishMode) {
 
 TEST_F(ScannerTest, DisclaimerLearnMoreLinkFromSunfishMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kScannerLearnMoreUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kScannerLearnMoreUrl), _, _));
 
   UnackAllScannerDisclaimers();
   auto* controller = CaptureModeController::Get();
@@ -5211,7 +5219,7 @@ TEST_F(ScannerTest, DisclaimerLearnMoreLinkFromSunfishMode) {
 
 TEST_F(ScannerTest, ReminderDisclaimerTosLinkFromSunfishMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kGooglePrivacyPolicyUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kGooglePrivacyPolicyUrl), _, _));
 
   PrefService& prefs =
       *Shell::Get()->session_controller()->GetActivePrefService();
@@ -5244,7 +5252,7 @@ TEST_F(ScannerTest, ReminderDisclaimerTosLinkFromSunfishMode) {
 
 TEST_F(ScannerTest, ReminderDisclaimerLearnMoreLinkFromSunfishMode) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kScannerLearnMoreUrl), _, _));
+              OpenUrl(GURL(ash::external_urls::kScannerLearnMoreUrl), _, _));
 
   PrefService& prefs =
       *Shell::Get()->session_controller()->GetActivePrefService();

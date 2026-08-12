@@ -36,7 +36,9 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/styled_label.h"
+#include "ui/views/interaction/element_highlighter_views.h"
 #include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/test/button_test_api.h"
@@ -65,8 +67,11 @@ class TestBubbleDialogDelegateView : public BubbleDialogDelegateView {
   METADATA_HEADER(TestBubbleDialogDelegateView, BubbleDialogDelegateView)
 
  public:
-  explicit TestBubbleDialogDelegateView(BubbleAnchor anchor_view)
-      : BubbleDialogDelegateView(anchor_view,
+  explicit TestBubbleDialogDelegateView(views::View* anchor_view)
+      : TestBubbleDialogDelegateView(views::BubbleAnchor(anchor_view)) {}
+
+  explicit TestBubbleDialogDelegateView(views::BubbleAnchor anchor)
+      : BubbleDialogDelegateView(anchor,
                                  BubbleBorder::TOP_LEFT,
                                  BubbleBorder::NO_SHADOW,
                                  true) {
@@ -179,6 +184,9 @@ class BubbleDialogDelegateViewTest : public ViewsTestBase {
  public:
   BubbleDialogDelegateViewTest() {
     feature_list_.InitAndEnableFeature(features::kBubbleMetricsApi);
+
+    ui::ElementHighlighter::GetElementHighlighter()
+        ->MaybeRegisterBackend<ElementHighlighterViews>();
   }
 
   BubbleDialogDelegateViewTest(const BubbleDialogDelegateViewTest&) = delete;
@@ -238,6 +246,29 @@ TEST_F(BubbleDialogDelegateViewTest, CreateDelegate) {
   EXPECT_FALSE(bubble_observer.widget_closed());
   bubble_widget->CloseNow();
   EXPECT_TRUE(bubble_observer.widget_closed());
+}
+
+TEST_F(BubbleDialogDelegateViewTest, CreateBubbleWithUniquePtrAndCallback) {
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  TestBubbleDialogDelegateView* bubble_delegate =
+      new TestBubbleDialogDelegateView(anchor_widget->GetContentsView());
+
+  bool close_callback_invoked = false;
+  auto on_close = base::BindOnce(
+      [](bool* invoked, Widget::ClosedReason reason) { *invoked = true; },
+      &close_callback_invoked);
+
+  // 1. Verify that CreateBubble properly returns a unique_ptr.
+  std::unique_ptr<Widget> bubble_widget =
+      BubbleDialogDelegate::CreateBubble(bubble_delegate, std::move(on_close));
+
+  ASSERT_TRUE(bubble_widget);
+  EXPECT_FALSE(close_callback_invoked);
+
+  // 2. Verify that destroying the widget invokes the provided callback.
+  bubble_widget->CloseNow();
+  EXPECT_TRUE(close_callback_invoked);
 }
 
 TEST_F(BubbleDialogDelegateViewTest, CloseAnchorWidget) {
@@ -786,12 +817,91 @@ TEST_F(BubbleDialogDelegateViewTest, StyledLabelTitle) {
 // Ensure associated buttons are highlighted or unhighlighted when the bubble
 // widget is shown or hidden respectively.
 TEST_F(BubbleDialogDelegateViewTest, AttachedWidgetShowsInkDropWhenVisible) {
+    std::unique_ptr<Widget> anchor_widget =
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                         Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    LabelButton* button =
+        anchor_widget->SetContentsView(std::make_unique<LabelButton>(
+            Button::PressedCallback(), std::u16string()));
+    TestInkDrop* ink_drop = new TestInkDrop();
+    test::InkDropHostTestApi(InkDrop::Get(button))
+        .SetInkDrop(base::WrapUnique(ink_drop));
+    TestBubbleDialogDelegateView* bubble_delegate =
+        new TestBubbleDialogDelegateView(nullptr);
+    bubble_delegate->set_parent_window(anchor_widget->GetNativeView());
+
+    Widget* bubble_widget =
+        BubbleDialogDelegateView::CreateBubble(bubble_delegate);
+      button->SetProperty(kElementIdentifierKey,
+                          ui::ElementTracker::kTemporaryIdentifier);
+      bubble_delegate->SetHighlightedElement(
+          ui::ElementTracker::kTemporaryIdentifier);
+    bubble_widget->Show();
+    // Explicitly calling OnWidgetVisibilityChanging to test functionality for
+    // OS_WIN. Outside of the test environment this happens automatically by way
+    // of HWNDMessageHandler.
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
+    EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+    bubble_widget->Close();
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(false);
+    EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+// Ensures that when anchor is a button it doesn't win out over explicit
+// highlight.
+TEST_F(BubbleDialogDelegateViewTest, HighlightPriority) {
+    std::unique_ptr<Widget> anchor_widget =
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                         Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    View* main_view = anchor_widget->SetContentsView(std::make_unique<View>());
+    LabelButton* button = main_view->AddChildView(std::make_unique<LabelButton>(
+        Button::PressedCallback(), std::u16string()));
+    LabelButton* anchor_button =
+        main_view->AddChildView(std::make_unique<LabelButton>(
+            Button::PressedCallback(), std::u16string()));
+
+    TestInkDrop* ink_drop = new TestInkDrop();
+    test::InkDropHostTestApi(InkDrop::Get(button))
+        .SetInkDrop(base::WrapUnique(ink_drop));
+    TestBubbleDialogDelegateView* bubble_delegate =
+        new TestBubbleDialogDelegateView(nullptr);
+    bubble_delegate->set_parent_window(anchor_widget->GetNativeView());
+    bubble_delegate->SetAnchorView(anchor_button);
+
+    Widget* bubble_widget =
+        BubbleDialogDelegateView::CreateBubble(bubble_delegate);
+      button->SetProperty(kElementIdentifierKey,
+                          ui::ElementTracker::kTemporaryIdentifier);
+      bubble_delegate->SetHighlightedElement(
+          ui::ElementTracker::kTemporaryIdentifier);
+
+    bubble_widget->Show();
+    // Explicitly calling OnWidgetVisibilityChanging to test functionality for
+    // OS_WIN. Outside of the test environment this happens automatically by way
+    // of HWNDMessageHandler.
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
+    EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+    bubble_widget->Close();
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(false);
+    EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+// Ensures that when associated button is set by element and is not visible
+// initially, it gets highlighted when finally shown, and that gets updated as
+// it gets shown/hidden.
+TEST_F(BubbleDialogDelegateViewTest, DelayedHighlightByElement) {
   std::unique_ptr<Widget> anchor_widget =
       CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
                        Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   LabelButton* button =
       anchor_widget->SetContentsView(std::make_unique<LabelButton>(
           Button::PressedCallback(), std::u16string()));
+  button->SetProperty(kElementIdentifierKey,
+                      ui::ElementTracker::kTemporaryIdentifier);
+  button->SetVisible(false);
+
   TestInkDrop* ink_drop = new TestInkDrop();
   test::InkDropHostTestApi(InkDrop::Get(button))
       .SetInkDrop(base::WrapUnique(ink_drop));
@@ -801,50 +911,113 @@ TEST_F(BubbleDialogDelegateViewTest, AttachedWidgetShowsInkDropWhenVisible) {
 
   Widget* bubble_widget =
       BubbleDialogDelegateView::CreateBubble(bubble_delegate);
-  bubble_delegate->SetHighlightedButton(button);
+  bubble_delegate->SetHighlightedElement(
+      ui::ElementTracker::kTemporaryIdentifier);
   bubble_widget->Show();
   // Explicitly calling OnWidgetVisibilityChanging to test functionality for
   // OS_WIN. Outside of the test environment this happens automatically by way
   // of HWNDMessageHandler.
   bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
+  EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
+
+  button->SetVisible(true);
   EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
 
-  bubble_widget->Close();
-  bubble_delegate->OnBubbleWidgetVisibilityChanged(false);
-  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+  button->SetVisible(false);
+  EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
+
+  button->SetVisible(true);
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+}
+
+// Test that moving an anchor between two buttons in the same widget properly
+// updates the highlight.
+TEST_F(BubbleDialogDelegateViewTest, AnchorChangeChangesHighlight) {
+  std::unique_ptr<Widget> anchor_widget =
+      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                       Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  BoxLayoutView* box =
+      anchor_widget->SetContentsView(std::make_unique<BoxLayoutView>());
+
+  LabelButton* button1 = box->AddChildView(std::make_unique<LabelButton>(
+      Button::PressedCallback(), std::u16string()));
+  button1->SetVisible(true);
+  LabelButton* button2 = box->AddChildView(std::make_unique<LabelButton>(
+      Button::PressedCallback(), std::u16string()));
+  button2->SetVisible(true);
+  Label* label = box->AddChildView(std::make_unique<Label>());
+  label->SetVisible(true);
+
+  TestInkDrop* ink_drop1 = new TestInkDrop();
+  test::InkDropHostTestApi(InkDrop::Get(button1))
+      .SetInkDrop(base::WrapUnique(ink_drop1));
+
+  TestInkDrop* ink_drop2 = new TestInkDrop();
+  test::InkDropHostTestApi(InkDrop::Get(button2))
+      .SetInkDrop(base::WrapUnique(ink_drop2));
+
+  TestBubbleDialogDelegateView* bubble_delegate =
+      new TestBubbleDialogDelegateView(nullptr);
+  bubble_delegate->set_parent_window(anchor_widget->GetNativeView());
+  bubble_delegate->SetAnchorView(button1);
+  Widget* bubble_widget =
+      BubbleDialogDelegateView::CreateBubble(bubble_delegate);
+  bubble_widget->Show();
+  // Explicitly calling OnWidgetVisibilityChanging to test functionality for
+  // OS_WIN. Outside of the test environment this happens automatically by way
+  // of HWNDMessageHandler.
+  bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
+
+  // `button1`'s highlight should be activated.
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop1->GetTargetInkDropState());
+  EXPECT_EQ(InkDropState::HIDDEN, ink_drop2->GetTargetInkDropState());
+
+  // `button2`'s highlight should be activated.
+  bubble_delegate->SetAnchorView(button2);
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop1->GetTargetInkDropState());
+  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop2->GetTargetInkDropState());
+
+  // Switching to `label` should leave both highlights deactivated.
+  bubble_delegate->SetAnchorView(label);
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop1->GetTargetInkDropState());
+  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop2->GetTargetInkDropState());
 }
 
 // Ensure associated buttons are highlighted or unhighlighted when the bubble
 // widget is shown or hidden respectively when highlighted button is set after
 // widget is shown.
 TEST_F(BubbleDialogDelegateViewTest, VisibleWidgetShowsInkDropOnAttaching) {
-  std::unique_ptr<Widget> anchor_widget =
-      CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
-                       Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  LabelButton* button =
-      anchor_widget->SetContentsView(std::make_unique<LabelButton>(
-          Button::PressedCallback(), std::u16string()));
-  TestInkDrop* ink_drop = new TestInkDrop();
-  test::InkDropHostTestApi(InkDrop::Get(button))
-      .SetInkDrop(base::WrapUnique(ink_drop));
-  TestBubbleDialogDelegateView* bubble_delegate =
-      new TestBubbleDialogDelegateView(nullptr);
-  bubble_delegate->set_parent_window(anchor_widget->GetNativeView());
+    std::unique_ptr<Widget> anchor_widget =
+        CreateTestWidget(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                         Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    LabelButton* button =
+        anchor_widget->SetContentsView(std::make_unique<LabelButton>(
+            Button::PressedCallback(), std::u16string()));
+    TestInkDrop* ink_drop = new TestInkDrop();
+    test::InkDropHostTestApi(InkDrop::Get(button))
+        .SetInkDrop(base::WrapUnique(ink_drop));
+    TestBubbleDialogDelegateView* bubble_delegate =
+        new TestBubbleDialogDelegateView(nullptr);
+    bubble_delegate->set_parent_window(anchor_widget->GetNativeView());
 
-  Widget* bubble_widget =
-      BubbleDialogDelegateView::CreateBubble(bubble_delegate);
-  bubble_widget->Show();
-  // Explicitly calling OnWidgetVisibilityChanged to test functionality for
-  // OS_WIN. Outside of the test environment this happens automatically by way
-  // of HWNDMessageHandler.
-  bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
-  EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
-  bubble_delegate->SetHighlightedButton(button);
-  EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+    Widget* bubble_widget =
+        BubbleDialogDelegateView::CreateBubble(bubble_delegate);
+    bubble_widget->Show();
+    // Explicitly calling OnWidgetVisibilityChanged to test functionality for
+    // OS_WIN. Outside of the test environment this happens automatically by way
+    // of HWNDMessageHandler.
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(true);
+    EXPECT_EQ(InkDropState::HIDDEN, ink_drop->GetTargetInkDropState());
+      button->SetProperty(kElementIdentifierKey,
+                          ui::ElementTracker::kTemporaryIdentifier);
+      bubble_delegate->SetHighlightedElement(
+          ui::ElementTracker::kTemporaryIdentifier);
 
-  bubble_widget->Close();
-  bubble_delegate->OnBubbleWidgetVisibilityChanged(false);
-  EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
+    EXPECT_EQ(InkDropState::ACTIVATED, ink_drop->GetTargetInkDropState());
+
+    bubble_widget->Close();
+    bubble_delegate->OnBubbleWidgetVisibilityChanged(false);
+    EXPECT_EQ(InkDropState::DEACTIVATED, ink_drop->GetTargetInkDropState());
 }
 
 TEST_F(BubbleDialogDelegateViewTest, VisibleAnchorChanges) {
@@ -960,8 +1133,8 @@ TEST_P(BubbleDialogDelegateViewArrowTest, AvailableScreenSpaceTest) {
       bubble_delegate->GetAnchorView()->GetBoundsInScreen();
   gfx::Size available_space =
       BubbleDialogDelegate::GetMaxAvailableScreenSpaceToPlaceBubble(
-          bubble_delegate->GetAnchorView(), bubble_delegate->arrow(),
-          bubble_delegate->adjust_if_offscreen(),
+          views::BubbleAnchor(bubble_delegate->GetAnchorView()),
+          bubble_delegate->arrow(), bubble_delegate->adjust_if_offscreen(),
           BubbleFrameView::PreferredArrowAdjustment::kMirror);
   EXPECT_EQ(available_space, kParam.ExpectedSpace(anchor_rect_in_screen));
 
@@ -972,7 +1145,7 @@ TEST_P(BubbleDialogDelegateViewArrowTest, AvailableScreenSpaceTest) {
           /*assign_temporary_id=*/true);
   available_space =
       BubbleDialogDelegate::GetMaxAvailableScreenSpaceToPlaceBubble(
-          as_tracked_element, bubble_delegate->arrow(),
+          views::BubbleAnchor(as_tracked_element), bubble_delegate->arrow(),
           bubble_delegate->adjust_if_offscreen(),
           BubbleFrameView::PreferredArrowAdjustment::kMirror);
   EXPECT_EQ(available_space, kParam.ExpectedSpace(anchor_rect_in_screen));
@@ -1104,7 +1277,7 @@ TEST_F(BubbleDialogDelegateViewTest, TrackedElementAnchorUpdates) {
 
   // Create a bubble anchored to the tracked element.
   TestBubbleDialogDelegateView* bubble_delegate =
-      new TestBubbleDialogDelegateView(tracked_element);
+      new TestBubbleDialogDelegateView(views::BubbleAnchor(tracked_element));
   bubble_delegate->set_close_on_deactivate(false);
   Widget* bubble_widget =
       BubbleDialogDelegateView::CreateBubble(bubble_delegate);
@@ -1128,7 +1301,8 @@ TEST_F(BubbleDialogDelegateViewTest, TrackedElementAnchorUpdates) {
 class AnchorTestBubbleDialogDelegateView : public BubbleDialogDelegateView {
  public:
   explicit AnchorTestBubbleDialogDelegateView(View* anchor_view)
-      : BubbleDialogDelegateView(anchor_view, BubbleBorder::TOP_LEFT) {}
+      : BubbleDialogDelegateView(views::BubbleAnchor(anchor_view),
+                                 BubbleBorder::TOP_LEFT) {}
 
   AnchorTestBubbleDialogDelegateView(
       const AnchorTestBubbleDialogDelegateView&) = delete;
@@ -1379,6 +1553,32 @@ TEST_F(BubbleDialogDelegateViewAnchorTest,
   bubble->Close();
 }
 
+TEST_F(BubbleDialogDelegateViewAnchorTest, IsSameAnchor) {
+  auto widget = CreateTopLevelWidget();
+  auto other_widget = CreateTopLevelWidget();
+  auto* bubble = CreateBubble(dummy_widget());
+  auto* anchor_view = GetAnchorView(dummy_widget());
+  auto* other_view = GetAnchorView(other_widget.get());
+  auto* delegate = static_cast<AnchorTestBubbleDialogDelegateView*>(
+      bubble->widget_delegate());
+
+  EXPECT_FALSE(delegate->IsSameAnchor(BubbleAnchor()));
+  EXPECT_TRUE(delegate->IsSameAnchor(BubbleAnchor(anchor_view)));
+
+  ui::TrackedElement* as_tracked_element =
+      ElementTrackerViews::GetInstance()->GetElementForView(
+          anchor_view,
+          /*assign_temporary_id=*/true);
+  EXPECT_TRUE(delegate->IsSameAnchor(BubbleAnchor(as_tracked_element)));
+
+  EXPECT_FALSE(delegate->IsSameAnchor(BubbleAnchor(other_view)));
+  ui::TrackedElement* other_tracked_element =
+      ElementTrackerViews::GetInstance()->GetElementForView(
+          other_view,
+          /*assign_temporary_id=*/true);
+  EXPECT_FALSE(delegate->IsSameAnchor(BubbleAnchor(other_tracked_element)));
+}
+
 // Tests that if the anchor view has kWidgetForAnchoringKey property,
 // uses that widget for anchoring.
 TEST_F(BubbleDialogDelegateViewAnchorTest, WidgetForAnchoring) {
@@ -1449,7 +1649,7 @@ TEST_F(BubbleUmaLoggerTest, LogMetricFromDelegate) {
   base::HistogramTester histogram;
 
   auto anchored_view = std::make_unique<View>();
-  BubbleDialogDelegate delegate(anchored_view.get(),
+  BubbleDialogDelegate delegate(views::BubbleAnchor(anchored_view.get()),
                                 BubbleBorder::Arrow::TOP_LEFT);
   delegate.SetOwnedByWidget(WidgetDelegate::OwnedByWidgetPassKey());
   delegate.SetContentsView(std::make_unique<Label>());
@@ -1477,6 +1677,47 @@ TEST_F(BubbleUmaLoggerTest, DoNotLogMetricNotFromAllowedClasses) {
   logger.LogMetric(base::UmaHistogramTimes, "Metric1", base::Seconds(1));
   histogram.ExpectTotalCount("Bubble.All.Metric1", 1);
   histogram.ExpectTotalCount("Bubble.Label.Metric1", 0);
+}
+
+namespace {
+
+class SizeToContentsOnDestroyingObserver : public WidgetObserver {
+ public:
+  explicit SizeToContentsOnDestroyingObserver(BubbleDialogDelegate* delegate)
+      : delegate_(delegate) {}
+  ~SizeToContentsOnDestroyingObserver() override = default;
+
+  SizeToContentsOnDestroyingObserver(
+      const SizeToContentsOnDestroyingObserver&) = delete;
+  SizeToContentsOnDestroyingObserver& operator=(
+      const SizeToContentsOnDestroyingObserver&) = delete;
+
+  void OnWidgetDestroying(Widget* widget) override {
+    delegate_->SizeToContents();
+    delegate_ = nullptr;
+  }
+
+ private:
+  raw_ptr<BubbleDialogDelegate> delegate_;
+};
+
+}  // namespace
+
+TEST_F(BubbleDialogDelegateViewTest, SizeToContentsDuringDestruction) {
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  TestBubbleDialogDelegateView* bubble_delegate =
+      new TestBubbleDialogDelegateView(anchor_widget->GetContentsView());
+
+  Widget* bubble_widget =
+      BubbleDialogDelegateView::CreateBubble(bubble_delegate);
+  bubble_widget->Show();
+
+  SizeToContentsOnDestroyingObserver observer(bubble_delegate);
+  bubble_widget->AddObserver(&observer);
+
+  // This will trigger OnWidgetDestroying synchronously.
+  bubble_widget->CloseNow();
 }
 
 }  // namespace views

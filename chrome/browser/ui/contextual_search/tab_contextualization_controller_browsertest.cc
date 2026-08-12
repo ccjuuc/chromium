@@ -6,7 +6,9 @@
 
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -19,6 +21,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/unowned_user_data/user_data_factory.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
@@ -42,9 +45,39 @@ gfx::Size GetViewportPhysicalSize(Browser* browser) {
 
 }  // namespace
 
+class TestTabContextualizationController
+    : public TabContextualizationController {
+ public:
+  explicit TestTabContextualizationController(tabs::TabInterface* tab)
+      : TabContextualizationController(tab) {}
+  ~TestTabContextualizationController() override = default;
+
+  void SetIsPageContextEligible(bool is_eligible) {
+    is_page_context_eligible_ = is_eligible;
+  }
+
+ protected:
+  bool IsPageContextEligible(const GURL& url,
+                             const std::vector<optimization_guide::FrameMetadata>&
+                                 frame_metadata) override {
+    return is_page_context_eligible_;
+  }
+
+ private:
+  bool is_page_context_eligible_ = true;
+};
+
 class TabContextualizationControllerBrowserTest : public InProcessBrowserTest {
  public:
-  TabContextualizationControllerBrowserTest() = default;
+  TabContextualizationControllerBrowserTest() {
+    controller_override_ =
+        tabs::TabFeatures::GetUserDataFactoryForTesting()
+            .AddOverrideForTesting(
+                base::BindRepeating([](tabs::TabInterface& tab) {
+                  return std::make_unique<TestTabContextualizationController>(
+                      &tab);
+                }));
+  }
   ~TabContextualizationControllerBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -54,11 +87,15 @@ class TabContextualizationControllerBrowserTest : public InProcessBrowserTest {
   }
 
  protected:
-  TabContextualizationController* GetTabContextualizationController() {
+  TestTabContextualizationController* GetTabContextualizationController() {
     tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(
         browser()->tab_strip_model()->GetWebContentsAt(0));
-    return TabContextualizationController::From(tab);
+    return static_cast<TestTabContextualizationController*>(
+        TabContextualizationController::From(tab));
   }
+
+ private:
+  ui::UserDataFactory::ScopedOverride controller_override_;
 };
 
 IN_PROC_BROWSER_TEST_F(TabContextualizationControllerBrowserTest,
@@ -130,6 +167,30 @@ IN_PROC_BROWSER_TEST_F(TabContextualizationControllerBrowserTest,
   EXPECT_FALSE(data->viewport_screenshot->drawsNothing());
   EXPECT_EQ(data->viewport_screenshot->width(), viewport_size.width());
   EXPECT_EQ(data->viewport_screenshot->height(), viewport_size.height());
+
+  EXPECT_TRUE(data->is_page_context_eligible.has_value());
+  EXPECT_TRUE(data->is_page_context_eligible.value());
+}
+
+IN_PROC_BROWSER_TEST_F(TabContextualizationControllerBrowserTest,
+                       GetPageContextForIneligiblePdf) {
+  auto* controller = GetTabContextualizationController();
+  controller->SetIsPageContextEligible(false);
+
+  GURL url(embedded_test_server()->GetURL("/pdf/test.pdf"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  content::RenderFrameHost* primary_main_frame =
+      browser()->tab_strip_model()->GetWebContentsAt(0)->GetPrimaryMainFrame();
+  ASSERT_TRUE(pdf_extension_test_util::EnsurePDFHasLoaded(primary_main_frame));
+
+  base::test::TestFuture<std::unique_ptr<lens::ContextualInputData>> future;
+  controller->GetPageContext(future.GetCallback());
+  auto data = future.Take();
+
+  EXPECT_EQ(data->primary_content_type, lens::MimeType::kPdf);
+  EXPECT_TRUE(data->is_page_context_eligible.has_value());
+  EXPECT_FALSE(data->is_page_context_eligible.value());
 }
 #endif  // BUILDFLAG(ENABLE_PDF)
 
@@ -204,6 +265,46 @@ IN_PROC_BROWSER_TEST_F(TabContextualizationControllerBrowserTest,
   EXPECT_FALSE(screenshot.drawsNothing());
   EXPECT_LE(screenshot.width(), image_options.max_width);
   EXPECT_LE(screenshot.height(), image_options.max_height);
+}
+
+IN_PROC_BROWSER_TEST_F(TabContextualizationControllerBrowserTest,
+                       GetPageContextForDiscardedWebpage) {
+  auto* controller = GetTabContextualizationController();
+
+  GURL url(embedded_test_server()->GetURL("/title1.html"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  // Discard the active tab by replacing its WebContents with a discarded
+  // placeholder that copies the original navigation history.
+  content::WebContents* original_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  std::unique_ptr<content::WebContents> discarded_contents =
+      content::WebContents::Create(
+          content::WebContents::CreateParams(browser()->GetProfile()));
+  discarded_contents->GetController().CopyStateFrom(
+      &original_contents->GetController(), /*needs_reload=*/true);
+  browser()->tab_strip_model()->DiscardWebContentsAt(
+      browser()->tab_strip_model()->active_index(),
+      std::move(discarded_contents));
+
+  content::WebContents* active_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  active_contents->SetWasDiscarded(true);
+  active_contents->GetController().SetNeedsReload();
+  EXPECT_TRUE(active_contents->WasDiscarded());
+
+  base::test::TestFuture<std::unique_ptr<lens::ContextualInputData>> future;
+  controller->GetPageContext(future.GetCallback());
+  auto data = future.Take();
+
+  EXPECT_TRUE(data->tab_session_id.has_value());
+  EXPECT_EQ(data->page_url, url);
+  EXPECT_TRUE(data->page_title.has_value());
+  EXPECT_EQ(data->primary_content_type, lens::MimeType::kAnnotatedPageContent);
+
+  content::WebContents* restored_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_FALSE(restored_contents->WasDiscarded());
 }
 
 }  // namespace lens

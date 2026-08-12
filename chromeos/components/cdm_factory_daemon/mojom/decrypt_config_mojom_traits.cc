@@ -30,19 +30,16 @@ MojomDecryptStatus EnumTraits<MojomDecryptStatus, NativeDecryptStatus>::ToMojom(
 }
 
 // static
-bool EnumTraits<MojomDecryptStatus, NativeDecryptStatus>::FromMojom(
-    MojomDecryptStatus input,
-    NativeDecryptStatus* out) {
+std::optional<NativeDecryptStatus>
+EnumTraits<MojomDecryptStatus, NativeDecryptStatus>::FromMojom(
+    MojomDecryptStatus input) {
   switch (input) {
     case MojomDecryptStatus::kSuccess:
-      *out = NativeDecryptStatus::kSuccess;
-      return true;
+      return NativeDecryptStatus::kSuccess;
     case MojomDecryptStatus::kNoKey:
-      *out = NativeDecryptStatus::kNoKey;
-      return true;
+      return NativeDecryptStatus::kNoKey;
     case MojomDecryptStatus::kFailure:
-      *out = NativeDecryptStatus::kError;
-      return true;
+      return NativeDecryptStatus::kError;
   }
   NOTREACHED();
 }
@@ -64,16 +61,14 @@ EnumTraits<MojomEncryptionScheme, NativeEncryptionScheme>::ToMojom(
 }
 
 // static
-bool EnumTraits<MojomEncryptionScheme, NativeEncryptionScheme>::FromMojom(
-    MojomEncryptionScheme input,
-    NativeEncryptionScheme* out) {
+std::optional<NativeEncryptionScheme>
+EnumTraits<MojomEncryptionScheme, NativeEncryptionScheme>::FromMojom(
+    MojomEncryptionScheme input) {
   switch (input) {
     case MojomEncryptionScheme::kCenc:
-      *out = NativeEncryptionScheme::kCenc;
-      return true;
+      return NativeEncryptionScheme::kCenc;
     case MojomEncryptionScheme::kCbcs:
-      *out = NativeEncryptionScheme::kCbcs;
-      return true;
+      return NativeEncryptionScheme::kCbcs;
   }
   NOTREACHED();
 }
@@ -83,8 +78,12 @@ bool StructTraits<chromeos::cdm::mojom::EncryptionPatternDataView,
                   media::EncryptionPattern>::
     Read(chromeos::cdm::mojom::EncryptionPatternDataView input,
          media::EncryptionPattern* output) {
-  *output = media::EncryptionPattern(input.crypt_byte_block(),
-                                     input.skip_byte_block());
+  auto pattern = media::EncryptionPattern::Create(input.crypt_byte_block(),
+                                                  input.skip_byte_block());
+  if (!pattern) {
+    return false;
+  }
+  *output = *pattern;
   return true;
 }
 

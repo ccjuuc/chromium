@@ -42,7 +42,7 @@ using ::testing::ElementsAre;
 class UppercaseDecoder : public BodyTextDecoder {
   String Decode(base::span<const char> data,
                 String* auto_detected_charset) override {
-    return String(data).UpperASCII();
+    return String(data).ToAsciiUpper();
   }
 
   String Flush() override { return String(); }
@@ -496,12 +496,12 @@ TEST_F(NavigationBodyLoaderTest, FillResponseReferrerRedirects) {
       network::mojom::URLResponseHead::New();
   network::mojom::URLResponseHeadPtr second_redirect_response =
       network::mojom::URLResponseHead::New();
-  commit_params->redirect_infos.push_back(first_redirect_info);
-  commit_params->redirect_infos.push_back(second_redirect_info);
-  commit_params->redirect_response.push_back(
-      std::move(first_redirect_response));
-  commit_params->redirect_response.push_back(
-      std::move(second_redirect_response));
+  commit_params->redirect_params.emplace_back(
+      blink::mojom::NavigationRedirectParams::New(
+          first_redirect_info, std::move(first_redirect_response)));
+  commit_params->redirect_params.emplace_back(
+      blink::mojom::NavigationRedirectParams::New(
+          second_redirect_info, std::move(second_redirect_response)));
   commit_params->redirects.push_back(first_redirect_url);
   commit_params->redirects.push_back(second_redirect_url);
 
@@ -523,9 +523,9 @@ TEST_F(NavigationBodyLoaderTest, FillResponseReferrerRedirects) {
   ASSERT_EQ(navigation_params.redirects[0].new_referrer,
             WebString(Referrer::NoReferrer()));
   ASSERT_EQ(navigation_params.redirects[1].new_referrer,
-            WebString::FromUTF8(second_redirect_url.spec()));
+            WebString::FromUtf8(second_redirect_url.spec()));
   ASSERT_EQ(navigation_params.response.CurrentRequestUrl().GetString().Utf8(),
-            WebString::FromUTF8(commit_url.spec()).Utf8());
+            WebString::FromUtf8(commit_url.spec()).Utf8());
 }
 
 // A loader client which keeps track of chunks of data that are received in a

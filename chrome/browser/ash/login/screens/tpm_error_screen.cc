@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/login/screens/tpm_error_screen.h"
 
+#include "base/check_deref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/wizard_context.h"
@@ -18,9 +19,11 @@ constexpr char kUserActionReboot[] = "reboot-system";
 
 }  // namespace
 
-TpmErrorScreen::TpmErrorScreen(base::WeakPtr<TpmErrorView> view)
+TpmErrorScreen::TpmErrorScreen(PrefService* local_state,
+                               base::WeakPtr<TpmErrorView> view)
     : BaseScreen(TpmErrorView::kScreenId,
                  OobeScreenPriority::SCREEN_HARDWARE_ERROR),
+      local_state_(CHECK_DEREF(local_state)),
       view_(std::move(view)) {}
 
 TpmErrorScreen::~TpmErrorScreen() = default;
@@ -32,7 +35,7 @@ void TpmErrorScreen::ShowImpl() {
   // users to resume the out-of-box experience (OOBE) after a restart without
   // being blocked. we set this when showing screen as user may use the hardware
   // button to reboot insread of  clicking the UI button
-  StartupUtils::SaveOobePendingScreen("");
+  StartupUtils::SaveOobePendingScreen(local_state_.get(), "");
   DCHECK(!context()->tpm_owned_error || !context()->tpm_dbus_error);
   if (context()->tpm_owned_error) {
     view_->SetTPMOwnedErrorStep();
@@ -44,7 +47,7 @@ void TpmErrorScreen::ShowImpl() {
 
 void TpmErrorScreen::HideImpl() {}
 
-void TpmErrorScreen::OnUserAction(const base::Value::List& args) {
+void TpmErrorScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionReboot) {
     chromeos::PowerManagerClient::Get()->RequestRestart(

@@ -80,6 +80,7 @@ void WebXRSessionTracker::ReportFeatureUsed(
     case XRSessionFeature::ANCHORS:
     case XRSessionFeature::CAMERA_ACCESS:
     case XRSessionFeature::PLANE_DETECTION:
+    case XRSessionFeature::MESH_DETECTION:
     case XRSessionFeature::DEPTH:
     case XRSessionFeature::IMAGE_TRACKING:
     case XRSessionFeature::HAND_INPUT:
@@ -88,8 +89,6 @@ void WebXRSessionTracker::ReportFeatureUsed(
     case XRSessionFeature::FRONT_FACING:
     case XRSessionFeature::WEBGPU:
       // Not recording metrics for these features currently.
-      // TODO(crbug.com/41460317): Add metrics for the AR-related features
-      // that are enabled by default.
       break;
   }
 }
@@ -126,6 +125,7 @@ void WebXRSessionTracker::SetFeatureRequest(
     case XRSessionFeature::ANCHORS:
     case XRSessionFeature::CAMERA_ACCESS:
     case XRSessionFeature::PLANE_DETECTION:
+    case XRSessionFeature::MESH_DETECTION:
     case XRSessionFeature::DEPTH:
     case XRSessionFeature::IMAGE_TRACKING:
     case XRSessionFeature::HAND_INPUT:
@@ -134,8 +134,6 @@ void WebXRSessionTracker::SetFeatureRequest(
     case XRSessionFeature::FRONT_FACING:
     case XRSessionFeature::WEBGPU:
       // Not recording metrics for these features currently.
-      // TODO(crbug.com/41460317): Add metrics for the AR-related features
-      // that are enabled by default.
       break;
   }
 }

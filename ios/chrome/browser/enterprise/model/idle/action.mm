@@ -22,8 +22,10 @@
 #import "components/enterprise/idle/idle_pref_names.h"
 #import "components/enterprise/idle/metrics.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/browsing_data/model/browsing_data_remover.h"
 #import "ios/chrome/browser/browsing_data/model/browsing_data_remover_factory.h"
 #import "ios/chrome/browser/browsing_data/model/browsing_data_remover_observer.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_service.h"
@@ -70,7 +72,7 @@ class SignOutAction : public Action {
     if (identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
       signout_start_time_ = base::TimeTicks::Now();
       signin::MultiProfileSignOutForProfile(
-          profile,
+          profile, /*trigger_scene_session_id=*/std::string(),
           signin_metrics::ProfileSignout::kIdleTimeoutPolicyTriggeredSignOut,
           base::BindOnce(&SignOutAction::OnSignOutCompleted,
                          base::Unretained(this), std::move(continuation)));
@@ -80,7 +82,7 @@ class SignOutAction : public Action {
     std::move(continuation).Run(true);
   }
 
-  void OnSignOutCompleted(Continuation continuation) {
+  void OnSignOutCompleted(Continuation continuation, SceneState*) {
     metrics::RecordIdleTimeoutActionTimeTaken(
         metrics::IdleTimeoutActionType::kSignOut,
         base::TimeTicks::Now() - signout_start_time_);
@@ -186,7 +188,7 @@ class ClearBrowsingDataAction : public Action,
         {ActionType::kClearAutofill, BrowsingDataRemoveMask::REMOVE_FORM_DATA}};
     BrowsingDataRemoveMask result = BrowsingDataRemoveMask::REMOVE_NOTHING;
     for (const auto& [action_type, mask] : entries) {
-      if (base::Contains(action_types_, action_type)) {
+      if (action_types_.contains(action_type)) {
         result |= mask;
       }
     }

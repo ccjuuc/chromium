@@ -64,6 +64,11 @@ class PasswordsPrivateApiTest : public ExtensionApiTest {
     content::RunAllPendingInMessageLoop();
   }
 
+  void TearDownOnMainThread() override {
+    test_delegate_->SetProfile(nullptr);
+    ExtensionApiTest::TearDownOnMainThread();
+  }
+
   std::unique_ptr<KeyedService> Create(content::BrowserContext* context) {
     return std::make_unique<PasswordsPrivateDelegateProxy>(context,
                                                            test_delegate_);
@@ -129,18 +134,6 @@ class PasswordsPrivateApiTest : public ExtensionApiTest {
     test_delegate_->SetStartPasswordCheckState(state);
   }
 
-  bool IsAccountStorageEnabled() {
-    return test_delegate_->IsAccountStorageEnabled();
-  }
-
-  void SetAccountStorageEnabled(bool enabled) {
-    test_delegate_->SetAccountStorageEnabled(enabled, nullptr);
-  }
-
-  bool ShouldShowAccountStorageSettingToggle() {
-    return test_delegate_->ShouldShowAccountStorageSettingToggle();
-  }
-
   void ResetPlaintextPassword() { test_delegate_->ResetPlaintextPassword(); }
 
   void AddCompromisedCredential(int id) {
@@ -155,24 +148,12 @@ class PasswordsPrivateApiTest : public ExtensionApiTest {
     return test_delegate_->get_authenticator_interaction_status();
   }
 
-  bool get_add_shortcut_dialog_shown() const {
-    return test_delegate_->get_add_shortcut_dialog_shown();
-  }
-
   bool get_exported_file_shown_in_shell() const {
     return test_delegate_->get_exported_file_shown_in_shell();
   }
 
-  bool get_change_password_manager_pin_called() const {
-    return test_delegate_->get_change_password_manager_pin_called();
-  }
-
   bool get_disconnect_cloud_authenticator_called() const {
     return test_delegate_->get_disconnect_cloud_authenticator_called();
-  }
-
-  bool get_delete_all_password_manager_data_called() const {
-    return test_delegate_->get_delete_all_password_manager_data_called();
   }
 
  private:
@@ -329,27 +310,8 @@ IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, RequestExportProgressStatus) {
   EXPECT_TRUE(RunPasswordsSubtest("requestExportProgressStatus")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, AccountStorageIsDisabled) {
-  EXPECT_TRUE(RunPasswordsSubtest("accountStorageIsDisabled")) << message_;
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, AccountStorageIsEnabled) {
-  SetAccountStorageEnabled(true);
-  EXPECT_TRUE(RunPasswordsSubtest("accountStorageIsEnabled")) << message_;
-}
-
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, GetInsecureCredentials) {
   EXPECT_TRUE(RunPasswordsSubtest("getInsecureCredentials")) << message_;
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, EnableAccountStorage) {
-  SetAccountStorageEnabled(false);
-  EXPECT_TRUE(RunPasswordsSubtest("enableAccountStorage")) << message_;
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, DisableAccountStorage) {
-  SetAccountStorageEnabled(true);
-  EXPECT_TRUE(RunPasswordsSubtest("disableAccountStorage")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, MuteInsecureCredentialFails) {
@@ -393,29 +355,6 @@ IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, MovePasswordsToAccount) {
   EXPECT_EQ(42, last_moved_passwords()[0]);
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, ExtendAuthValidity) {
-  EXPECT_FALSE(get_authenticator_interaction_status());
-  EXPECT_TRUE(RunPasswordsSubtest("extendAuthValidity")) << message_;
-  EXPECT_TRUE(get_authenticator_interaction_status());
-}
-
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest,
-                       SwitchBiometricAuthBeforeFillingState) {
-  EXPECT_FALSE(get_authenticator_interaction_status());
-  EXPECT_TRUE(RunPasswordsSubtest("switchBiometricAuthBeforeFillingState"))
-      << message_;
-  EXPECT_TRUE(get_authenticator_interaction_status());
-}
-#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)  ||
-        // BUILDFLAG(IS_CHROMEOS)
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, AddShortcut) {
-  EXPECT_FALSE(get_add_shortcut_dialog_shown());
-  EXPECT_TRUE(RunPasswordsSubtest("showAddShortcutDialog")) << message_;
-  EXPECT_TRUE(get_add_shortcut_dialog_shown());
-}
-
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, GetCredentialGroups) {
   EXPECT_TRUE(RunPasswordsSubtest("getCredentialGroups"));
 }
@@ -432,15 +371,6 @@ IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, ShowExportedFileInShell) {
   EXPECT_TRUE(get_exported_file_shown_in_shell());
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, ChangePasswordManagerPin) {
-  EXPECT_TRUE(RunPasswordsSubtest("changePasswordManagerPin"));
-  EXPECT_TRUE(get_change_password_manager_pin_called());
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, IsPasswordManagerPinAvailable) {
-  EXPECT_TRUE(RunPasswordsSubtest("isPasswordManagerPinAvailable"));
-}
-
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, DisconnectCloudAuthenticator) {
   EXPECT_TRUE(RunPasswordsSubtest("disconnectCloudAuthenticator"));
   EXPECT_TRUE(get_disconnect_cloud_authenticator_called());
@@ -449,10 +379,6 @@ IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, DisconnectCloudAuthenticator) {
 IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest,
                        IsConnectedToCloudAuthenticator) {
   EXPECT_TRUE(RunPasswordsSubtest("isConnectedToCloudAuthenticator"));
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordsPrivateApiTest, DeleteAllPasswordManagerData) {
-  EXPECT_TRUE(RunPasswordsSubtest("deleteAllPasswordManagerData"));
 }
 
 }  // namespace extensions

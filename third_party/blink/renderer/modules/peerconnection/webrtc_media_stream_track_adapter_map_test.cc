@@ -49,8 +49,8 @@ class WebRtcMediaStreamTrackAdapterMapTest : public ::testing::Test {
         scheduler::GetSingleThreadTaskRunnerForTesting(), true);
     MediaStreamAudioSource* audio_source_ptr = audio_source.get();
     auto* source = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8(id), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("local_audio_track"), false, std::move(audio_source));
+        String::FromUtf8(id), MediaStreamSource::kTypeAudio,
+        "local_audio_track", false, std::move(audio_source));
 
     auto* component = MakeGarbageCollected<MediaStreamComponentImpl>(
         source->Id(), source,
@@ -253,6 +253,29 @@ TEST_F(WebRtcMediaStreamTrackAdapterMapTest, GetMissingRemoteTrackAdapter) {
   scoped_refptr<blink::MockWebRtcAudioTrack> webrtc_track =
       blink::MockWebRtcAudioTrack::Create("missing");
   EXPECT_EQ(nullptr, map_->GetRemoteTrackAdapter(webrtc_track.get()));
+}
+
+TEST_F(WebRtcMediaStreamTrackAdapterMapTest,
+       DestroyAdapterRefOnSignalingThread) {
+  MediaStreamComponent* track = CreateLocalTrack("local_track");
+  std::unique_ptr<blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef>
+      adapter_ref = map_->GetOrCreateLocalTrackAdapter(track);
+  EXPECT_TRUE(adapter_ref->is_initialized());
+  EXPECT_EQ(1u, map_->GetLocalTrackCount());
+
+  // Destroying the AdapterRef on the signaling thread should post the removal
+  // and disposal to the main thread.
+  PostCrossThreadTask(
+      *signaling_thread(), FROM_HERE,
+      CrossThreadBindOnce(
+          [](std::unique_ptr<
+              blink::WebRtcMediaStreamTrackAdapterMap::AdapterRef> ref) {
+            // Destroyed when going out of scope on the signaling thread.
+          },
+          std::move(adapter_ref)));
+  RunMessageLoopsUntilIdle();
+  EXPECT_EQ(0u, map_->GetLocalTrackCount());
+  EXPECT_EQ(nullptr, map_->GetLocalTrackAdapter(track));
 }
 
 // Continuously calls GetOrCreateLocalTrackAdapter() on the main thread and

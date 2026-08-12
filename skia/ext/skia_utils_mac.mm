@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "skia/ext/skia_utils_mac.h"
 
 #import <AppKit/AppKit.h>
@@ -17,6 +12,8 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/scoped_cftyperef.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/mac/mac_util.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
@@ -120,6 +117,14 @@ SkBitmap NSImageOrNSImageRepToSkBitmap(NSImage* image,
   return bitmap;
 }
 
+// Returns a span of the components of a CGColorRef. Its life is tied to the
+// CGColorRef, so the caller must ensure that the CGColorRef outlives the span.
+base::span<const CGFloat> AsSpan(CGColorRef color_ref) {
+  // SAFETY: The ptr and size are derived from the same CGColorRef.
+  return UNSAFE_BUFFERS(base::span(CGColorGetComponents(color_ref),
+                                   CGColorGetNumberOfComponents(color_ref)));
+}
+
 } // namespace
 
 namespace skia {
@@ -162,42 +167,14 @@ CGRect SkRectToCGRect(const SkRect& rect) {
   return cg_rect;
 }
 
-SkColor NSSystemColorToSkColor(NSColor* color) {
-  // System colors use the an NSNamedColorSpace called "System", so first step
-  // is to convert the color into something that can be worked with.
-  NSColor* device_color =
-      [color colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
-  if (device_color)
-    return NSDeviceColorToSkColor(device_color);
-
-  // Sometimes the conversion is not possible, but we can get an approximation
-  // by going through a CGColorRef. Note that simply using NSColor methods for
-  // accessing components for system colors results in exceptions like
-  // "-numberOfComponents not valid for the NSColor NSNamedColorSpace System
-  // windowBackgroundColor; need to first convert colorspace." Hence the
-  // conversion first to CGColor.
-  CGColorRef cg_color = color.CGColor;
-  const size_t component_count = CGColorGetNumberOfComponents(cg_color);
-  if (component_count == 4)
-    return CGColorRefToSkColor(cg_color);
-
-  CHECK(component_count == 1 || component_count == 2);
-  // 1-2 components means a grayscale channel and maybe an alpha channel, which
-  // CGColorRefToSkColor will not like. But RGB is additive, so the conversion
-  // is easy (RGB to grayscale is less easy).
-  const CGFloat* components = CGColorGetComponents(cg_color);
-  CGFloat alpha = component_count == 2 ? components[1] : 1.0f;
-  return SkColor4f{components[0], components[0], components[0], alpha}
-      .toSkColor();
-}
-
 SkColor CGColorRefToSkColor(CGColorRef color) {
   base::apple::ScopedCFTypeRef<CGColorRef> cg_color(
       CGColorCreateCopyByMatchingToColorSpace(base::mac::GetSRGBColorSpace(),
                                               kCGRenderingIntentDefault, color,
                                               nullptr));
-  DCHECK(CGColorGetNumberOfComponents(color) == 4);
-  const CGFloat* components = CGColorGetComponents(cg_color.get());
+  base::span<const CGFloat> components = AsSpan(cg_color.get());
+
+  DCHECK_EQ(components.size(), 4u);
   return SkColor4f{components[0], components[1], components[2], components[3]}
       .toSkColor();
 }

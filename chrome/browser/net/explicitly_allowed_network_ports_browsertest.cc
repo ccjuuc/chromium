@@ -32,14 +32,14 @@ class ExplicitlyAllowedNetworkPortsBrowserTest : public policy::PolicyTest {
 
   network::mojom::NetworkContext* network_context() {
     return browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
 
   void EnablePort79ByPolicy() {
     PolicyMap policies;
-    base::Value::List list;
+    base::ListValue list;
     // Port 25 is just ignored, because it is not on the allowable ports list.
     list.Append("25");
     list.Append("79");

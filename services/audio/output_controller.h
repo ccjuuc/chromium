@@ -142,6 +142,8 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
 
   ~OutputController() override;
 
+  const base::UnguessableToken& id() const { return id_; }
+
   // Methods to control playback of the stream.
 
   // Creates the audio output stream. This must be called before Play(). Returns
@@ -240,11 +242,19 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
    private:
     void WedgeCheck();
 
+    void LogGlitchStats(const char* call_name, base::TimeTicks now);
+    void DoLogGlitchStats(const char* call_name,
+                          base::TimeDelta total_duration,
+                          media::AudioGlitchInfo glitch_info,
+                          double glitch_percentage);
+
     // RAW_PTR_EXCLUSION: OutputController object will outlive the
     // ErrorStatisticsTracker object.
     RAW_PTR_EXCLUSION OutputController* const controller_;
 
     const base::TimeTicks start_time_;
+
+    base::TimeTicks last_periodic_log_time_;
 
     // Accumulates AudioGlitchInfo provided in OnMoreData callbacks. Only used
     // for logging purposes.
@@ -255,6 +265,11 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
     // Flags when we've asked for a stream to start but it never did.
     base::AtomicRefCount on_more_io_data_called_;
     base::OneShotTimer wedge_timer_;
+
+    const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+
+    base::WeakPtr<ErrorStatisticsTracker> weak_this_;
+    base::WeakPtrFactory<ErrorStatisticsTracker> weak_ptr_factory_{this};
   };
 
   // Reports UMA statistics for stream creation.
@@ -282,7 +297,7 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
   void StopCloseAndClearStream();
 
   // Helper method which delivers a log string to the event handler.
-  PRINTF_FORMAT(2, 3) void SendLogMessage(const char* fmt, ...);
+  void SendLogMessage(const std::string& message);
 
   // Log the current average power level measured by power_monitor_.
   void LogAudioPowerLevel(const char* call_name);
@@ -295,6 +310,8 @@ class OutputController : public media::AudioOutputStream::AudioSourceCallback,
   // a new stream, and then transition back to an equivalent state prior to
   // being called.
   void ProcessDeviceChange();
+
+  const base::UnguessableToken id_;
 
   const raw_ptr<media::AudioManager> audio_manager_;
   const media::AudioParameters params_;

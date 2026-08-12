@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -19,6 +20,7 @@
 #include "base/metrics/field_trial_entry.h"
 #include "base/metrics/field_trial_list_including_low_anonymity.h"
 #include "base/metrics/field_trial_param_associator.h"
+#include "base/metrics/runtime_field_trial_overrides.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -36,17 +38,19 @@
 #include "testing/multiprocess_func_list.h"
 
 #if BUILDFLAG(USE_BLINK)
+#include "base/memory/shared_memory_switch.h"
 #include "base/process/launch.h"
 #endif
 
-#if BUILDFLAG(IS_POSIX)
-#include "base/files/platform_file.h"
-#include "base/posix/global_descriptors.h"
-#endif
-
-#if BUILDFLAG(IS_MAC)
-#include "base/apple/mach_port_rendezvous.h"
-#endif
+// A dummy class to create a PassKey for applying runtime overrides in tests.
+namespace variations {
+class VariationsService {
+ public:
+  static base::PassKey<VariationsService> CreatePassKeyForTesting() {
+    return base::PassKey<VariationsService>();
+  }
+};
+}  // namespace variations
 
 namespace base {
 
@@ -1018,7 +1022,7 @@ TEST_F(FieldTrialListTest, AssociateFieldTrialParams) {
 
   // Create a field trial with some params.
   FieldTrialList::CreateFieldTrial(trial_name, group_name);
-  std::map<std::string, std::string> params;
+  FieldTrialParams params;
   params["key1"] = "value1";
   params["key2"] = "value2";
   FieldTrialParamAssociator::GetInstance()->AssociateFieldTrialParams(
@@ -1028,13 +1032,13 @@ TEST_F(FieldTrialListTest, AssociateFieldTrialParams) {
   // Clear all cached params from the associator.
   FieldTrialParamAssociator::GetInstance()->ClearAllCachedParamsForTesting();
   // Check that the params have been cleared from the cache.
-  std::map<std::string, std::string> cached_params;
+  FieldTrialParams cached_params;
   FieldTrialParamAssociator::GetInstance()->GetFieldTrialParamsWithoutFallback(
       trial_name, group_name, &cached_params);
   EXPECT_EQ(0U, cached_params.size());
 
   // Check that we fetch the param from shared memory properly.
-  std::map<std::string, std::string> new_params;
+  FieldTrialParams new_params;
   GetFieldTrialParams(trial_name, &new_params);
   EXPECT_EQ("value1", new_params["key1"]);
   EXPECT_EQ("value2", new_params["key2"]);
@@ -1053,7 +1057,7 @@ TEST_F(FieldTrialListTest, ClearParamsFromSharedMemory) {
     // Create a field trial with some params.
     FieldTrial* trial =
         FieldTrialList::CreateFieldTrial(trial_name, group_name);
-    std::map<std::string, std::string> params;
+    FieldTrialParams params;
     params["key1"] = "value1";
     params["key2"] = "value2";
     FieldTrialParamAssociator::GetInstance()->AssociateFieldTrialParams(
@@ -1068,7 +1072,7 @@ TEST_F(FieldTrialListTest, ClearParamsFromSharedMemory) {
     EXPECT_NE(old_ref, new_ref);
 
     // Check that there are no params associated with the field trial anymore.
-    std::map<std::string, std::string> new_params;
+    FieldTrialParams new_params;
     GetFieldTrialParams(trial_name, &new_params);
     EXPECT_EQ(0U, new_params.size());
 
@@ -1101,7 +1105,7 @@ TEST_F(FieldTrialListTest, DumpAndFetchFromSharedMemory) {
   FieldTrialList::CreateFieldTrial(trial_name, group_name);
   FieldTrialList::CreateFieldTrial("Trial2", "Group2", false,
                                    /*is_overridden=*/true);
-  std::map<std::string, std::string> params;
+  FieldTrialParams params;
   params["key1"] = "value1";
   params["key2"] = "value2";
   FieldTrialParamAssociator::GetInstance()->AssociateFieldTrialParams(
@@ -1136,7 +1140,7 @@ TEST_F(FieldTrialListTest, DumpAndFetchFromSharedMemory) {
   EXPECT_FALSE(overridden);
 
   // Check that the params match.
-  std::map<std::string, std::string> shm_params;
+  FieldTrialParams shm_params;
   entry1->GetParams(&shm_params);
   EXPECT_EQ(2u, shm_params.size());
   EXPECT_EQ("value1", shm_params["key1"]);
@@ -1150,13 +1154,13 @@ TEST_F(FieldTrialListTest, DumpAndFetchFromSharedMemory) {
 
 #if BUILDFLAG(USE_BLINK)
 
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-constexpr GlobalDescriptors::Key kFDKey = 42;
+#if !BUILDFLAG(IS_IOS)
+constexpr shared_memory::SharedMemorySwitch::DescriptorKey kFDKey = 42;
 #endif
 
-BASE_FEATURE(kTestFeatureA, "TestFeatureA", base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kTestFeatureB, "TestFeatureB", base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE(kTestFeatureC, "TestFeatureC", base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTestFeatureA, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kTestFeatureB, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kTestFeatureC, base::FEATURE_ENABLED_BY_DEFAULT);
 
 MULTIPROCESS_TEST_MAIN(CreateTrialsInChildProcess) {
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_ANDROID)
@@ -1200,16 +1204,15 @@ TEST_F(FieldTrialListTest, PassFieldTrialSharedMemoryOnCommandLine) {
   // Prepare to launch a child process.
   CommandLine command_line = GetMultiProcessTestChildBaseCommandLine();
   LaunchOptions launch_options;
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-  ScopedFD fd_to_share;
-#endif
+
+  base::shared_memory::SharedMemorySwitch shared_memory_switch(
+      switches::kFieldTrialHandle, 'fldt', kFDKey);
+
   FieldTrialList::PopulateLaunchOptionsWithFieldTrialState(
+      &shared_memory_switch, &command_line, &launch_options);
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-      kFDKey, fd_to_share,
-#endif
-      &command_line, &launch_options);
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-  launch_options.fds_to_remap.emplace_back(fd_to_share.get(), kFDKey);
+  launch_options.fds_to_remap.emplace_back(
+      shared_memory_switch.out_descriptor_to_share.get(), kFDKey);
 #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
 
   // The shared memory handle should be specified.
@@ -1299,11 +1302,74 @@ TEST_F(FieldTrialListTest, TestGetRandomizedFieldTrialCount) {
   // Note: FieldTrialList should delete the objects at shutdown.
 }
 
+TEST_F(FieldTrialListTest, GetActiveFieldTrialGroups_RuntimeOverrides) {
+  // Clear any existing overrides.
+  base::RuntimeFieldTrialOverrides::GetInstance()->ResetForTesting();
+
+  // Create an active trial that will be overridden.
+  scoped_refptr<FieldTrial> overridden_trial =
+      FieldTrialList::CreateFieldTrial("OverriddenTrial", "GroupA");
+  overridden_trial->Activate();
+  // Create another active trial that will NOT be overridden.
+  scoped_refptr<FieldTrial> active_trial =
+      FieldTrialList::CreateFieldTrial("ActiveTrial", "GroupB");
+  active_trial->Activate();
+
+  // Apply a runtime override. Here "OverrideTrial" overrides "OverriddenTrial".
+  auto pass_key = variations::VariationsService::CreatePassKeyForTesting();
+  ASSERT_TRUE(
+      base::RuntimeFieldTrialOverrides::GetInstance()->ApplyRuntimeOverride(
+          pass_key, "OverrideTrial", "OverrideGroup", overridden_trial.get()));
+  // Apply a runtime override that does not override any existing trial.
+  ASSERT_TRUE(
+      base::RuntimeFieldTrialOverrides::GetInstance()->ApplyRuntimeOverride(
+          pass_key, "StandaloneOverrideTrial", "OverrideGroup2", nullptr));
+
+  // 1. Check with |include_runtime_overrides| = false.
+  {
+    FieldTrial::ActiveGroups active_groups;
+    FieldTrialList::GetActiveFieldTrialGroupsInternal(
+        &active_groups, /*include_low_anonymity=*/false,
+        /*include_runtime_overrides=*/false);
+
+    std::set<std::pair<std::string, std::string>> active_pairs;
+    for (const auto& group : active_groups) {
+      active_pairs.insert({group.trial_name, group.group_name});
+    }
+    EXPECT_TRUE(active_pairs.contains({"ActiveTrial", "GroupB"}));
+    EXPECT_TRUE(active_pairs.contains({"OverriddenTrial", "GroupA"}));
+    EXPECT_FALSE(active_pairs.contains({"OverrideTrial", "OverrideGroup"}));
+    EXPECT_FALSE(
+        active_pairs.contains({"StandaloneOverrideTrial", "OverrideGroup2"}));
+  }
+
+  // 2. Check with |include_runtime_overrides| = true.
+  {
+    FieldTrial::ActiveGroups active_groups;
+    FieldTrialList::GetActiveFieldTrialGroupsInternal(
+        &active_groups, /*include_low_anonymity=*/false,
+        /*include_runtime_overrides=*/true);
+
+    std::set<std::pair<std::string, std::string>> active_pairs;
+    for (const auto& group : active_groups) {
+      active_pairs.insert({group.trial_name, group.group_name});
+    }
+    EXPECT_TRUE(active_pairs.contains({"ActiveTrial", "GroupB"}));
+    EXPECT_FALSE(active_pairs.contains({"OverriddenTrial", "GroupA"}));
+    EXPECT_TRUE(active_pairs.contains({"OverrideTrial", "OverrideGroup"}));
+    EXPECT_TRUE(
+        active_pairs.contains({"StandaloneOverrideTrial", "OverrideGroup2"}));
+  }
+
+  // Clean up.
+  base::RuntimeFieldTrialOverrides::GetInstance()->ResetForTesting();
+}
+
 TEST_F(FieldTrialTest, TestAllParamsToString) {
   std::string exptected_output = "t1.g1:p1/v1/p2/v2";
 
   // Create study with one group and two params.
-  std::map<std::string, std::string> params;
+  FieldTrialParams params;
   params["p1"] = "v1";
   params["p2"] = "v2";
   FieldTrialParamAssociator::GetInstance()->AssociateFieldTrialParams(

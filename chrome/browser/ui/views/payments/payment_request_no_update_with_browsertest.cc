@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
@@ -13,7 +12,10 @@
 
 namespace payments {
 
-using PaymentRequestNoUpdateWithTest = PaymentRequestBrowserTestBase;
+class PaymentRequestNoUpdateWithTest : public PaymentRequestBrowserTestBase {
+ protected:
+  PaymentRequestNoUpdateWithTest() { SetBypassUserInteractionForTesting(); }
+};
 
 // A merchant that does not listen to shipping address update events will not
 // cause timeouts in UI.

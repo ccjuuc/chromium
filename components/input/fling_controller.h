@@ -78,7 +78,10 @@ class COMPONENT_EXPORT(INPUT) FlingController {
     gfx::PointF global_point;
     int modifiers;
     blink::WebGestureDevice source_device;
+    // Timestamp where the fling curve animation begins physics calculations.
     base::TimeTicks start_time;
+    // Timestamp of the original GestureFlingStart event.
+    base::TimeTicks fling_start_event_time;
 
     ActiveFlingParameters() : modifiers(0) {}
   };
@@ -173,10 +176,9 @@ class COMPONENT_EXPORT(INPUT) FlingController {
     return !last_progress_time_.is_null();
   }
 
-  raw_ptr<FlingControllerEventSenderClient, DanglingUntriaged>
-      event_sender_client_;
+  raw_ptr<FlingControllerEventSenderClient> event_sender_client_;
 
-  raw_ptr<FlingControllerSchedulerClient, DanglingUntriaged> scheduler_client_;
+  raw_ptr<FlingControllerSchedulerClient> scheduler_client_;
 
   // An object tracking the state of touchpad on the delivery of mouse events to
   // the renderer to filter mouse immediately after a touchpad fling canceling

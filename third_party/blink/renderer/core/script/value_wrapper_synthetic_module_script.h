@@ -30,6 +30,10 @@ class CORE_EXPORT ValueWrapperSyntheticModuleScript final
   CreateJSONWrapperSyntheticModuleScript(const ModuleScriptCreationParams&,
                                          Modulator* settings_object);
 
+  static ValueWrapperSyntheticModuleScript*
+  CreateTextWrapperSyntheticModuleScript(const ModuleScriptCreationParams&,
+                                         Modulator* settings_object);
+
   static ValueWrapperSyntheticModuleScript* CreateWithDefaultExport(
       v8::Local<v8::Value> value,
       Modulator* settings_object,
@@ -39,7 +43,6 @@ class CORE_EXPORT ValueWrapperSyntheticModuleScript final
       const TextPosition& start_position = TextPosition::MinimumPosition());
 
   static ValueWrapperSyntheticModuleScript* CreateWithError(
-      v8::Local<v8::Value> value,
       Modulator* settings_object,
       const KURL& source_url,
       const KURL& base_url,
@@ -52,11 +55,14 @@ class CORE_EXPORT ValueWrapperSyntheticModuleScript final
                                     const KURL& source_url,
                                     const KURL& base_url,
                                     const ScriptFetchOptions& fetch_options,
-                                    v8::Local<v8::Value> value,
                                     const TextPosition& start_position);
 
   v8::Local<v8::Value> GetExport(v8::Isolate* isolate) const {
-    return export_value_.Get(isolate);
+    v8::Local<v8::Module> v8_module = V8Module();
+    if (v8_module.IsEmpty()) {
+      return v8::Local<v8::Value>();
+    }
+    return v8_module->GetSyntheticModuleHostDefinedOptions().As<v8::Value>();
   }
 
   // <specdef
@@ -69,10 +75,6 @@ class CORE_EXPORT ValueWrapperSyntheticModuleScript final
       v8::Local<v8::Context> context,
       v8::Local<v8::Module> module);
 
-  void Trace(Visitor* visitor) const override;
-
- private:
-  TraceWrapperV8Reference<v8::Value> export_value_;
 };
 
 }  // namespace blink

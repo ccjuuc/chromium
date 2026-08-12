@@ -22,12 +22,15 @@ BASE_FEATURE(kDetectedAgentSignalCollectionEnabled,
 BASE_FEATURE(kBrowserSignalsReportingEnabled,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables the improvements made during system signals collection in Chrome.
-BASE_FEATURE(kSystemSignalCollectionImprovementEnabled,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // Enables the collection of policies in a Chrome Profile signals report.
-BASE_FEATURE(kPolicyDataCollectionEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPolicyDataCollectionEnabled, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Enables the collection of certificates in a Chrome Profile signals report.
+BASE_FEATURE(kCertificateCollectionEnabled, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables the versioned content bindings in signal reports.
+BASE_FEATURE(kContentBindingVersioningEnabled,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether a signals-only profile report will be triggered when a valid
 // cookie change is observed.
@@ -53,27 +56,17 @@ bool IsDetectedAgentSignalCollectionEnabled() {
   return base::FeatureList::IsEnabled(kDetectedAgentSignalCollectionEnabled);
 }
 
-bool IsSystemSignalCollectionImprovementEnabled() {
-  return base::FeatureList::IsEnabled(
-      kSystemSignalCollectionImprovementEnabled);
-}
-
 bool IsPolicyDataCollectionEnabled() {
   return base::FeatureList::IsEnabled(kPolicyDataCollectionEnabled);
 }
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_CHROMEOS)
-// Enables the triggering of device signals consent dialog when conditions met
-// This feature also requires UnmanagedDeviceSignalsConsentFlowEnabled policy to
-// be enabled
-BASE_FEATURE(kDeviceSignalsConsentDialog, base::FEATURE_ENABLED_BY_DEFAULT);
-
-bool IsConsentDialogEnabled() {
-  return base::FeatureList::IsEnabled(kDeviceSignalsConsentDialog);
+bool IsCertificateCollectionEnabled() {
+  return base::FeatureList::IsEnabled(kCertificateCollectionEnabled);
 }
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) ||
-        // BUILDFLAG(IS_CHROMEOS)
+
+bool IsContentBindingVersioningEnabled() {
+  return base::FeatureList::IsEnabled(kContentBindingVersioningEnabled);
+}
 
 BASE_FEATURE(kNewEvSignalsUnaffiliatedEnabled,
              base::FEATURE_DISABLED_BY_DEFAULT);

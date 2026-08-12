@@ -8,24 +8,13 @@
 #include <variant>
 
 #include "base/strings/strcat.h"
-#include "chrome/browser/actor/shared_types.h"
+#include "chrome/common/actor.mojom-shared.h"
+#include "components/actor/core/shared_types.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace actor::ui {
 namespace {
-
-// TODO(crbug.com/388070065): Replace with std::optional::transform when C++23
-// is available.
-template <typename In, typename TransformT>
-std::optional<std::invoke_result_t<TransformT, In>> transform(
-    std::optional<In> opt,
-    TransformT&& fn) {
-  if (!opt.has_value()) {
-    return std::nullopt;
-  }
-  return std::invoke(std::forward<TransformT>(fn), opt.value());
-}
 
 constexpr absl::Overload UiEventToDebugStringFn{
     [](const StartTask& e) -> std::string {
@@ -51,13 +40,13 @@ constexpr absl::Overload UiEventToDebugStringFn{
     },
     [](const MouseClick& e) -> std::string {
       return absl::StrFormat("MouseClick[type=%s, count=%s]",
-                             actor::DebugString(e.click_type),
-                             actor::DebugString(e.click_count));
+                             absl::FormatStreamed(e.click_type),
+                             absl::FormatStreamed(e.click_count));
     },
     [](const MouseMove& e) -> std::string {
       return absl::StrFormat(
           "MouseMove[target=%s target_source=%s]",
-          transform(e.target, &gfx::Point::ToString).value_or("null"),
+          e.target.transform(&gfx::Point::ToString).value_or("null"),
           DebugString(e.target_source));
     },
 };
@@ -83,6 +72,10 @@ std::string DebugString(TargetSource source) {
       return "ToolRequest";
     case TargetSource::kDerivedFromApc:
       return "DerivedFromApc";
+    case TargetSource::kUnresolvableFromRenderer:
+      return "UnresolvableFromRenderer";
+    case TargetSource::kRendererResolved:
+      return "RendererResolved";
   }
 }
 

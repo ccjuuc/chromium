@@ -13,6 +13,8 @@
 #include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
@@ -60,11 +62,18 @@ class FakeURLLoaderFactory : public network::mojom::URLLoaderFactory {
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation)
       override {
+    // Use a SequencedTaskRunner to simulate the behavior of the
+    // WebUIURLLoaderFactory, which always serves responses on a
+    // SequencedTaskRunner. If this is run on the UI main thread, it will block
+    // processing of mojo messages and cause deadlocks.
     auto headers = network::mojom::URLResponseHead::New();
     auto bytes =
         base::MakeRefCounted<base::RefCountedString>("out-of-process resource");
-    content::webui::SendData(std::move(headers), std::move(client),
-                             std::nullopt, std::move(bytes));
+    base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})
+        ->PostTask(FROM_HERE,
+                   base::BindOnce(base::IgnoreResult(&content::webui::SendData),
+                                  std::move(headers), std::move(client),
+                                  std::nullopt, std::move(bytes)));
   }
   void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
       override {
@@ -292,6 +301,41 @@ TEST_F(LocalResourceURLLoaderFactoryTest, PathToResponseMap) {
   std::string response_body = ReadAllData(client);
   EXPECT_THAT(response_body, testing::HasSubstr("import {loadTimeData}"));
   EXPECT_THAT(response_body, testing::HasSubstr("\"foo\":\"bar\""));
+}
+
+TEST_F(LocalResourceURLLoaderFactoryTest, QueryParametersFallBackOnMismatch) {
+  AddPathToResponse("test.txt", "cached content");
+
+  network::TestURLLoaderClient client;
+  network::ResourceRequest request;
+  request.url = GURL("chrome://sourcename/test.txt?version=1");
+  mojo::PendingRemote<network::mojom::URLLoader> loader;
+  loader_factory()->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0, 0, request,
+      client.CreateRemote(), net::MutableNetworkTrafficAnnotationTag());
+  client.RunUntilComplete();
+
+  ASSERT_EQ(net::OK, client.completion_status().error_code);
+  std::string response_body = ReadAllData(client);
+  EXPECT_EQ("out-of-process resource", response_body);
+}
+
+TEST_F(LocalResourceURLLoaderFactoryTest, QueryParametersOrderInvariant) {
+  AddPathToResponse("test.txt?a=1&b=2", "cached content");
+
+  // Request with different query parameter order should still hit the cache.
+  network::TestURLLoaderClient client;
+  network::ResourceRequest request;
+  request.url = GURL("chrome://sourcename/test.txt?b=2&a=1");
+  mojo::PendingRemote<network::mojom::URLLoader> loader;
+  loader_factory()->CreateLoaderAndStart(
+      loader.InitWithNewPipeAndPassReceiver(), 0, 0, request,
+      client.CreateRemote(), net::MutableNetworkTrafficAnnotationTag());
+  client.RunUntilComplete();
+
+  ASSERT_EQ(net::OK, client.completion_status().error_code);
+  std::string response_body = ReadAllData(client);
+  EXPECT_EQ("cached content", response_body);
 }
 
 INSTANTIATE_TEST_SUITE_P(

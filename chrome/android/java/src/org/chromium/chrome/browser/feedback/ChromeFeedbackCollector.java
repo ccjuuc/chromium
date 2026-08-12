@@ -19,8 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Used for gathering a variety of feedback from various components in Chrome and bundling it into
- * a set of Key - Value pairs used to submit feedback requests.
+ * Used for gathering a variety of feedback from various components in Chrome and bundling it into a
+ * set of Key - Value pairs used to submit feedback requests.
  */
 @NullMarked
 public class ChromeFeedbackCollector extends FeedbackCollector<ChromeFeedbackCollector.InitParams>
@@ -55,6 +55,9 @@ public class ChromeFeedbackCollector extends FeedbackCollector<ChromeFeedbackCol
     protected List<FeedbackSource> buildSynchronousFeedbackSources(
             Activity activity, InitParams initParams) {
         List<FeedbackSource> sources = new ArrayList<>();
+        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            return sources;
+        }
 
         // This is the list of all synchronous sources of feedback.  Please add new synchronous
         // entries here.
@@ -81,6 +84,9 @@ public class ChromeFeedbackCollector extends FeedbackCollector<ChromeFeedbackCol
     @Override
     protected List<AsyncFeedbackSource> buildAsynchronousFeedbackSources(InitParams initParams) {
         List<AsyncFeedbackSource> sources = new ArrayList<>();
+        if (!FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            return sources;
+        }
 
         // This is the list of all asynchronous sources of feedback.  Please add new asynchronous
         // entries here.
@@ -90,6 +96,7 @@ public class ChromeFeedbackCollector extends FeedbackCollector<ChromeFeedbackCol
         sources.add(new ConnectivityFeedbackSource(initParams.profile));
         sources.add(new SystemInfoFeedbackSource());
         sources.add(new ProcessIdFeedbackSource());
+        sources.add(new UploadedCrashIdsFeedbackSource());
 
         // FamilyInfoFeedbackSource relies on IdentityManager which is not available for the
         // incognito profile.

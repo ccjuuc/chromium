@@ -59,8 +59,13 @@ NSMenuItem* GetMenuItemByID(ui::MenuModel* model,
 RenderViewContextMenuMacCocoa::RenderViewContextMenuMacCocoa(
     content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params,
+    bool is_paste_enabled,
+    bool is_paste_and_match_style_enabled,
     NSView* parent_view)
-    : RenderViewContextMenuMac(render_frame_host, params),
+    : RenderViewContextMenuMac(render_frame_host,
+                               params,
+                               is_paste_enabled,
+                               is_paste_and_match_style_enabled),
       parent_view_(parent_view) {}
 
 RenderViewContextMenuMacCocoa::~RenderViewContextMenuMacCocoa() {
@@ -81,6 +86,7 @@ void RenderViewContextMenuMacCocoa::Show() {
       initWithParams:MenuControllerParamsForWidget(widget)];
   menu_controller_ =
       [[MenuControllerCocoa alloc] initWithModel:&menu_model_
+                                   isContextMenu:YES
                                         delegate:menu_controller_delegate_];
 
   NSPoint position =

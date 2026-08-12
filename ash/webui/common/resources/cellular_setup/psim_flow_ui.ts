@@ -16,6 +16,7 @@ import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.m
 import type {CellularSetupDelegate} from './cellular_setup_delegate.js';
 import {ButtonState} from './cellular_types.js';
 import type {FinalPageElement} from './final_page.js';
+import {MetricsBrowserProxy} from './metrics_browser_proxy.js';
 import {getCellularSetupRemote} from './mojo_interface_provider.js';
 import type {ProvisioningPageElement} from './provisioning_page.js';
 import {getTemplate} from './psim_flow_ui.html.js';
@@ -178,16 +179,16 @@ export class PsimFlowUiElement extends PsimFlowUiElementBase {
     };
   }
 
-  delegate: CellularSetupDelegate;
-  nameOfCarrierPendingSetup: string;
-  forwardButtonLabel: string;
-  private state_: PsimUiState;
-  private selectedPsimPageName_: PsimPageName;
-  private selectedPage_:
+  declare delegate: CellularSetupDelegate;
+  declare nameOfCarrierPendingSetup: string;
+  declare forwardButtonLabel: string;
+  declare private state_: PsimUiState;
+  declare private selectedPsimPageName_: PsimPageName;
+  declare private selectedPage_:
       SetupLoadingPageElement|ProvisioningPageElement|FinalPageElement;
-  private showError_: boolean;
-  private cellularMetadata_: CellularMetadata|null;
-  private startActivationAttempts_: number;
+  declare private showError_: boolean;
+  declare private cellularMetadata_: CellularMetadata|null;
+  declare private startActivationAttempts_: number;
 
   /**
    * Provides an interface to the CellularSetup Mojo service.
@@ -279,18 +280,18 @@ export class PsimFlowUiElement extends PsimFlowUiElementBase {
     }
 
     assert(resultCode !== null);
-    chrome.metricsPrivate.recordEnumerationValue(
+    MetricsBrowserProxy.getInstance().recordEnumerationValue(
         PSIM_SETUP_RESULT_METRIC_NAME, resultCode,
         Object.keys(PsimSetupFlowResult).length);
 
     const elapsedTimeMs = Date.now() - this.timeOnAttached_!.getTime();
     if (resultCode === PsimSetupFlowResult.SUCCESS) {
-      chrome.metricsPrivate.recordLongTime(
+      MetricsBrowserProxy.getInstance().recordLongTime(
           SUCCESSFUL_PSIM_SETUP_DURATION_METRIC_NAME, elapsedTimeMs);
       return;
     }
 
-    chrome.metricsPrivate.recordLongTime(
+    MetricsBrowserProxy.getInstance().recordLongTime(
         FAILED_PSIM_SETUP_DURATION_METRIC_NAME, elapsedTimeMs);
   }
 

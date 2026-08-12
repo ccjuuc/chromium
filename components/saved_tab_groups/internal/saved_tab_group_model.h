@@ -193,6 +193,11 @@ class SavedTabGroupModel {
   void ReorderGroupLocally(const base::Uuid& id, int new_index);
   void ReorderGroupFromSync(const base::Uuid& id, int new_index);
 
+  // Reorders the group with `id` to be before or after the group with
+  // `next_id` or `prev_id`.
+  void ReorderGroupBefore(const base::Uuid& id, const base::Uuid& next_id);
+  void ReorderGroupAfter(const base::Uuid& id, const base::Uuid& prev_id);
+
   // Update the creator cache guid for all saved groups that have
   // `old_cache_guid`, to `new_cache_guid`.
   std::pair<std::set<base::Uuid>, std::set<base::Uuid>> UpdateLocalCacheGuid(
@@ -242,9 +247,6 @@ class SavedTabGroupModel {
   // Add/Remove observers for this model.
   void AddObserver(SavedTabGroupModelObserver* observer);
   void RemoveObserver(SavedTabGroupModelObserver* observer);
-
-  // One time migration of saved tab groups from v1 to v2.
-  void MigrateTabGroupSavesUIUpdate();
 
   // Start transitioning a shared tab group to a saved group. `shared_group_id`
   // is the ID of the shared group.
@@ -314,7 +316,12 @@ class SavedTabGroupModel {
   void HandleTabGroupRemovedFromSync(int index);
 
   // Obsevers of the model.
-  base::ObserverList<SavedTabGroupModelObserver>::Unchecked observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      SavedTabGroupModelObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observers_;
 
   // True when SavedTabGroupModel::LoadStoredEntries has finished, false
   // otherwise.

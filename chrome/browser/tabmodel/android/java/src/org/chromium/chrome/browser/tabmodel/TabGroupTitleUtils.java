@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.tabmodel;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.text.TextUtils;
 
 import org.chromium.base.Token;
 import org.chromium.build.annotations.NullMarked;
@@ -20,6 +19,16 @@ import java.util.Objects;
 /** Helper class to handle tab group title related utilities. */
 @NullMarked
 public class TabGroupTitleUtils {
+    /** Represents an unset or default tab group title. */
+    public static final String UNSET_TAB_GROUP_TITLE = "";
+
+    /**
+     * @param title The title to check.
+     * @return Whether the title is unset.
+     */
+    public static boolean isTitleUnset(String title) {
+        return UNSET_TAB_GROUP_TITLE.equals(title);
+    }
 
     /**
      * @param context Context for accessing resources.
@@ -52,21 +61,20 @@ public class TabGroupTitleUtils {
      * some UI surfaces, sometimes it is difficult to follow MVC with this approach.
      *
      * @param context To load resources from.
-     * @param tabGroupModelFilter To read tab and tab group data from.
+     * @param tabModel To read tab and tab group data from.
      * @param tabGroupId The identifying tab group id of the tab group.
      * @return A non-null string that can be shown to users.
      */
     public static String getDisplayableTitle(
-            Context context, TabGroupModelFilter tabGroupModelFilter, @Nullable Token tabGroupId) {
-        boolean tabGroupExists =
-                tabGroupId != null && tabGroupModelFilter.tabGroupExists(tabGroupId);
+            Context context, TabModel tabModel, @Nullable Token tabGroupId) {
+        boolean tabGroupExists = tabGroupId != null && tabModel.tabGroupExists(tabGroupId);
         String explicitTitle =
                 tabGroupExists
-                        ? tabGroupModelFilter.getTabGroupTitle(assumeNonNull(tabGroupId))
-                        : null;
-        if (TextUtils.isEmpty(explicitTitle)) {
+                        ? tabModel.getTabGroupTitle(assumeNonNull(tabGroupId))
+                        : UNSET_TAB_GROUP_TITLE;
+        if (isTitleUnset(explicitTitle)) {
             int tabCount = 0;
-            List<Tab> tabsInGroup = tabGroupModelFilter.getTabsInGroup(assumeNonNull(tabGroupId));
+            List<Tab> tabsInGroup = tabModel.getTabsInGroup(assumeNonNull(tabGroupId));
             for (Tab tab : tabsInGroup) {
                 if (!tab.isClosing()) {
                     tabCount++;

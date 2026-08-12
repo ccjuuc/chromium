@@ -328,12 +328,6 @@ class TpcBlockingBrowserClient : public ContentBrowserClient,
       const blink::StorageKey& storage_key,
       net::CookieSettingOverrides overrides) override;
 
-  void GrantCookieAccessDueToHeuristic(BrowserContext* browser_context,
-                                       const net::SchemefulSite& top_frame_site,
-                                       const net::SchemefulSite& accessing_site,
-                                       base::TimeDelta ttl,
-                                       bool ignore_schemes) override;
-
   bool AreThirdPartyCookiesGenerallyAllowed(BrowserContext* browser_context,
                                             WebContents* web_contents) override;
 
@@ -343,13 +337,16 @@ class TpcBlockingBrowserClient : public ContentBrowserClient,
   void GrantCookieAccessTo3pSite(const GURL& url);
 
   void BlockThirdPartyCookiesOnSite(const GURL& url);
-  void BlockThirdPartyCookies(const GURL& url, const GURL& first_party_url);
+  void SetThirdPartyCookieAccess(const GURL& url,
+                                 const GURL& first_party_url,
+                                 ContentSetting setting);
 
   // Overrides for content_settings::CookieSettingsBase
 
   bool ShouldIgnoreSameSiteRestrictions(
       const GURL& url,
-      const net::SiteForCookies& site_for_cookies) const override;
+      const net::SiteForCookies& site_for_cookies,
+      const url::Origin& top_level_origin) const override;
 
   ContentSetting GetContentSetting(
       const GURL& primary_url,
@@ -363,8 +360,6 @@ class TpcBlockingBrowserClient : public ContentBrowserClient,
   bool ShouldBlockThirdPartyCookies(
       base::optional_ref<const url::Origin> top_frame_origin,
       net::CookieSettingOverrides overrides) const override;
-
-  bool MitigationsEnabledFor3pcd() const override;
 
   bool IsThirdPartyCookiesAllowedScheme(std::string_view scheme) const override;
 

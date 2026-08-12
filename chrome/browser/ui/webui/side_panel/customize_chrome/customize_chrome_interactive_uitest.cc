@@ -10,6 +10,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/new_tab_footer/footer_web_view.h"
 #include "chrome/browser/ui/webui/test_support/webui_interactive_test_mixin.h"
@@ -24,6 +26,7 @@
 #include "content/public/test/url_loader_interceptor.h"
 #include "extensions/browser/install_verifier.h"
 #include "extensions/test/test_extension_dir.h"
+#include "ui/actions/actions.h"
 
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewTabElementId);
@@ -70,13 +73,20 @@ class CustomizeChromeInteractiveTest
 
   InteractiveTestApi::MultiStep OpenCustomizeChromeSidePanel(
       const ui::ElementIdentifier& contents_id) {
-    return Steps(Do(base::BindLambdaForTesting([=, this]() {
-                   chrome::ExecuteCommand(browser(),
-                                          IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
-                 })),
-                 WaitForShow(kCustomizeChromeSidePanelWebViewElementId),
-                 InstrumentNonTabWebView(
-                     contents_id, kCustomizeChromeSidePanelWebViewElementId));
+    return Steps(
+        Do(base::BindLambdaForTesting([=, this]() {
+          chrome::ExecuteCommandWithContext(
+              browser(), IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
+              actions::ActionInvocationContext::Builder()
+                  .SetProperty(
+                      kSidePanelOpenTriggerKey,
+                      static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
+                          SidePanelOpenTrigger::kToolbarButton))
+                  .Build());
+        })),
+        WaitForShow(kCustomizeChromeSidePanelWebViewElementId),
+        InstrumentNonTabWebView(contents_id,
+                                kCustomizeChromeSidePanelWebViewElementId));
   }
 
   InteractiveTestApi::MultiStep CheckFooterToggleState(
@@ -112,7 +122,7 @@ class CustomizeChromeInteractiveTest
     extension_dir.WriteManifest(absl::StrFormat(extension_manifest, index));
 
     extensions::ChromeTestExtensionLoader extension_loader(
-        browser()->profile());
+        browser()->GetProfile());
     extension_loader.set_ignore_manifest_warnings(true);
     const extensions::Extension* extension =
         extension_loader.LoadExtension(extension_dir.Pack()).get();
@@ -177,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeInteractiveTest,
   LoadNtpOverridingExtension();
   RunTestSequence(
       // Open extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer section exists.
@@ -195,7 +205,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeInteractiveTest,
                                     "#showToggleContainer"};
   RunTestSequence(
       // Open non-extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer section does not exist.
@@ -213,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeInteractiveTest,
   RunTestSequence(
       // Open NTP with footer showing.
       Steps(AddInstrumentedTab(kNewTabElementId,
-                               GURL(chrome::kChromeUINewTabURL)),
+                               chrome::ChromeUINewTabURLAsGURL()),
             WaitForShow(kNtpFooterViewElementId)),
       // Click the footer toggle.
       Steps(OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
@@ -257,7 +267,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeInteractiveTest,
   LoadNtpOverridingExtension(1);
   RunTestSequence(
       // Open extension NTP.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Choose a 1P NTP theme from Customize Chrome.
       Steps(OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
             ClickElement(kLocalCustomizeChromeElementId, kEditThemeButton),
@@ -266,11 +276,11 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeInteractiveTest,
       // Ensure that both extensions were disabled, and the tab redirected to 1P
       // NTP with background.
       Steps(WaitForWebContentsNavigation(kNewTabElementId,
-                                         GURL(chrome::kChromeUINewTabURL)),
+                                         chrome::ChromeUINewTabURLAsGURL()),
             WaitForStateChange(kNewTabElementId, ntp_has_background)),
       // Ensure that opening a new tab redirects to the 1P NTP.
       Steps(AddInstrumentedTab(kLocalNewTabElementId,
-                               GURL(chrome::kChromeUINewTabURL)),
+                               chrome::ChromeUINewTabURLAsGURL()),
             WaitForStateChange(kLocalNewTabElementId, ntp_has_background)));
 }
 
@@ -282,16 +292,14 @@ class CustomizeChromeEnterpriseInteractiveTest
     scoped_browser_management_ =
         std::make_unique<policy::ScopedManagementServiceOverrideForTesting>(
             policy::ManagementServiceFactory::GetForProfile(
-                browser()->profile()),
+                browser()->GetProfile()),
             policy::EnterpriseManagementAuthority::DOMAIN_LOCAL);
     CustomizeChromeInteractiveTest::SetUpOnMainThread();
   }
 
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{ntp_features::kNtpFooter,
-                              features::kEnterpriseBadgingForNtpFooter},
-        {});
+        /*enabled_features=*/{ntp_features::kNtpFooter}, {});
     InteractiveBrowserTest::SetUp();
   }
 
@@ -308,7 +316,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeEnterpriseInteractiveTest,
 
   RunTestSequence(
       // Open non-extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer toggle is turned on but can't be toggled.
@@ -335,7 +343,7 @@ IN_PROC_BROWSER_TEST_F(
             prefs::kEnterpriseCustomLabelForBrowser, "Custom Label");
       })),
       // Open non-extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer toggle is turned on but can't be toggled.
@@ -352,7 +360,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeEnterpriseInteractiveTest,
   LoadNtpOverridingExtension();
   RunTestSequence(
       // Open extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer toggle is turned on and can be toggled.
@@ -360,7 +368,7 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeEnterpriseInteractiveTest,
                              /*enabled=*/true),
       // Disable extension attribution by policy.
       Do(base::BindLambdaForTesting([=, this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
             prefs::kNTPFooterExtensionAttributionEnabled, false);
       })),
       // Check that the footer section still exists.
@@ -380,11 +388,11 @@ IN_PROC_BROWSER_TEST_F(CustomizeChromeEnterpriseInteractiveTest,
       Do(base::BindLambdaForTesting([=, this]() {
         g_browser_process->local_state()->SetBoolean(
             prefs::kNTPFooterManagementNoticeEnabled, false);
-        browser()->profile()->GetPrefs()->SetBoolean(
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
             prefs::kNTPFooterExtensionAttributionEnabled, false);
       })),
       // Open non-extension new tab page.
-      AddInstrumentedTab(kNewTabElementId, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kNewTabElementId, chrome::ChromeUINewTabURLAsGURL()),
       // Open customize chrome side panel.
       OpenCustomizeChromeSidePanel(kLocalCustomizeChromeElementId),
       // Check that the footer section does not exist.

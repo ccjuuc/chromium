@@ -44,8 +44,8 @@ public class NativeViewListRenderer extends RecyclerView.Adapter<NativeViewListR
     private @Nullable ListLayoutHelper mLayoutHelper;
     private @MonotonicNonNull RecyclerView mView;
 
-    public NativeViewListRenderer(Context mContext) {
-        this.mContext = mContext;
+    public NativeViewListRenderer(Context context) {
+        mContext = context;
     }
 
     /* RecyclerView.Adapter methods */
@@ -102,6 +102,7 @@ public class NativeViewListRenderer extends RecyclerView.Adapter<NativeViewListR
         onItemRangeRemoved(0, mManager.getItemCount());
         mView.setAdapter(null);
         mView.setLayoutManager(null);
+        mManager.destroy();
         mManager = null;
     }
 

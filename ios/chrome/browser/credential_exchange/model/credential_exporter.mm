@@ -7,12 +7,19 @@
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/time/time.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/webauthn/core/browser/passkey_model_utils.h"
+#import "components/webauthn/ios/passkey_types.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_exchange_passkey.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_exchange_password.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_export_manager_swift.h"
+#import "ios/chrome/grit/ios_branded_strings.h"
 #import "net/base/apple/url_conversions.h"
+#import "ui/base/l10n/l10n_util.h"
+
+@interface CredentialExporter () <CredentialExportManagerDelegate>
+@end
 
 @implementation CredentialExporter {
   // Used as a presentation anchor for OS views. Must not be nil.
@@ -20,38 +27,48 @@
 
   // Exports credentials through the OS ASCredentialExportManager API.
   CredentialExportManager* _credentialExportManager;
+
+  // Delegate for CredentialImporter.
+  id<CredentialExporterDelegate> _delegate;
 }
 
-- (instancetype)initWithWindow:(UIWindow*)window {
+- (instancetype)initWithWindow:(UIWindow*)window
+                      delegate:(id<CredentialExporterDelegate>)delegate {
   CHECK(window);
 
   self = [super init];
   if (self) {
     _window = window;
+    _delegate = delegate;
     _credentialExportManager = [[CredentialExportManager alloc] init];
+    _credentialExportManager.delegate = self;
   }
   return self;
 }
 
 #pragma mark - Public
 
-// TODO(crbug.com/449859205): Add a unit test for this method.
 - (void)startExportWithPasswords:
             (std::vector<password_manager::CredentialUIEntry>)passwords
                         passkeys:
                             (std::vector<sync_pb::WebauthnCredentialSpecifics>)
                                 passkeys
-                trustedVaultKeys:(NSArray<NSData*>*)trustedVaultKeys
-    API_AVAILABLE(ios(26.0)) {
+                trustedVaultKeys:(webauthn::SharedKeyList)trustedVaultKeys
+                       userEmail:(NSString*)userEmail API_AVAILABLE(ios(26.0)) {
   NSArray<CredentialExchangePassword*>* exportedPasswords =
       [self transformPasswords:std::move(passwords)];
   NSArray<CredentialExchangePasskey*>* exportedPasskeys =
       [self transformPasskeys:std::move(passkeys)
-          usingTrustedVaultKeys:trustedVaultKeys];
+          usingTrustedVaultKeys:std::move(trustedVaultKeys)];
 
-  [_credentialExportManager startExportWithPasswords:exportedPasswords
-                                            passkeys:exportedPasskeys
-                                              window:_window];
+  [_credentialExportManager
+      startExportWithPasswords:exportedPasswords
+                      passkeys:exportedPasskeys
+                        window:_window
+                     userEmail:userEmail
+                  exporterName:
+                      l10n_util::GetNSString(
+                          IDS_IOS_CREDENTIAL_EXCHANGE_EXPORTER_DISPLAY_NAME)];
 }
 
 #pragma mark - Private
@@ -68,11 +85,15 @@
     NSString* note = base::SysUTF16ToNSString(credential.note) ?: @"";
     NSURL* URL =
         net::NSURLWithGURL(credential.GetURL()) ?: [NSURL URLWithString:@""];
+    NSDate* creationDate = credential.creation_time.has_value()
+                               ? credential.creation_time->ToNSDate()
+                               : nil;
     CredentialExchangePassword* exportedPassword =
         [[CredentialExchangePassword alloc] initWithURL:URL
                                                username:username
                                                password:password
-                                                   note:note];
+                                                   note:note
+                                           creationDate:creationDate];
     [exportedPasswords addObject:exportedPassword];
   }
   return exportedPasswords;
@@ -82,7 +103,7 @@
 - (NSArray<CredentialExchangePasskey*>*)
         transformPasskeys:
             (std::vector<sync_pb::WebauthnCredentialSpecifics>)passkeys
-    usingTrustedVaultKeys:(NSArray<NSData*>*)trustedVaultKeys {
+    usingTrustedVaultKeys:(webauthn::SharedKeyList)trustedVaultKeys {
   NSMutableArray<CredentialExchangePasskey*>* exportedPasskeys =
       [NSMutableArray arrayWithCapacity:passkeys.size()];
 
@@ -103,6 +124,11 @@
     NSString* userName = base::SysUTF8ToNSString(passkey.user_name());
     NSString* userDisplayName =
         base::SysUTF8ToNSString(passkey.user_display_name());
+    NSDate* creationDate = passkey.has_creation_time()
+                               ? base::Time::FromMillisecondsSinceUnixEpoch(
+                                     passkey.creation_time())
+                                     .ToNSDate()
+                               : nil;
 
     CredentialExchangePasskey* exportedPasskey =
         [[CredentialExchangePasskey alloc] initWithCredentialId:credentialId
@@ -110,7 +136,8 @@
                                                        userName:userName
                                                 userDisplayName:userDisplayName
                                                          userId:userId
-                                                     privateKey:privateKey];
+                                                     privateKey:privateKey
+                                                   creationDate:creationDate];
     [exportedPasskeys addObject:exportedPasskey];
   }
   return exportedPasskeys;
@@ -120,16 +147,23 @@
 // `trustedVaultKeys`.
 - (NSData*)decryptPrivateKeyForPasskey:
                (const sync_pb::WebauthnCredentialSpecifics&)passkey
-                 usingTrustedVaultKeys:(NSArray<NSData*>*)trustedVaultKeys {
+                 usingTrustedVaultKeys:
+                     (const webauthn::SharedKeyList&)trustedVaultKeys {
   sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
-  for (NSData* trustedVaultKey in trustedVaultKeys) {
+  for (const webauthn::SharedKey& trustedVaultKey : trustedVaultKeys) {
     if (webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
-            base::apple::NSDataToSpan(trustedVaultKey), passkey, &decrypted)) {
+            trustedVaultKey, passkey, &decrypted)) {
       return [NSData dataWithBytes:decrypted.private_key().data()
                             length:decrypted.private_key().size()];
     }
   }
   return nil;
+}
+
+#pragma mark - CredentialExportManagerDelegate
+
+- (void)onExportError {
+  [_delegate onExportError];
 }
 
 @end

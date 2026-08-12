@@ -18,13 +18,13 @@
 #include "components/autofill/core/browser/data_model/payments/ewallet.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_util.h"
+#include "components/facilitated_payments/core/browser/ewallet_account_linking_manager.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_api_client.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_app_info_list.h"
 #include "components/facilitated_payments/core/browser/facilitated_payments_client.h"
 #include "components/facilitated_payments/core/browser/network_api/facilitated_payments_initiate_payment_request_details.h"
 #include "components/facilitated_payments/core/browser/network_api/facilitated_payments_initiate_payment_response_details.h"
 #include "components/facilitated_payments/core/browser/network_api/facilitated_payments_network_interface.h"
-#include "components/facilitated_payments/core/browser/payment_link_manager.h"
 #include "components/facilitated_payments/core/browser/strike_databases/payment_link_suggestion_strike_database.h"
 #include "components/facilitated_payments/core/features/features.h"
 #include "components/facilitated_payments/core/metrics/facilitated_payments_metrics.h"
@@ -60,11 +60,15 @@ void PaymentLinkManager::TriggerPaymentLinkPushPayment(
     const GURL& payment_link_url,
     const GURL& page_url,
     ukm::SourceId ukm_source_id) {
+  if (ui_state_ != UiState::kHidden) {
+    return;
+  }
+  Reset();
   payment_flow_triggered_timestamp_ = base::TimeTicks::Now();
   ukm_source_id_ = ukm_source_id;
-  LogPaymentLinkDetected(ukm_source_id_);
-
   scheme_ = PaymentLinkValidator().GetScheme(payment_link_url);
+
+  LogPaymentLinkDetected(ukm_source_id_, scheme_);
   if (scheme_ == PaymentLinkValidator::Scheme::kInvalid) {
     LogEwalletFlowExitedReason(EwalletFlowExitedReason::kLinkIsInvalid);
     return;
@@ -92,7 +96,8 @@ void PaymentLinkManager::TriggerPaymentLinkPushPayment(
   client_->SetUiEventListener(base::BindRepeating(
       &PaymentLinkManager::OnUiScreenEvent, weak_ptr_factory_.GetWeakPtr()));
 
-  if (CanTriggerEwalletPaymentFlow(page_url)) {
+  bool is_ewallet_flow_eligible = CanTriggerEwalletPaymentFlow(page_url);
+  if (is_ewallet_flow_eligible) {
     RetrieveSupportedEwallets(payment_link_url);
   }
 
@@ -114,9 +119,38 @@ void PaymentLinkManager::TriggerPaymentLinkPushPayment(
     supported_apps.reset();
   }
 
-  ShowPaymentLinkPrompt(supported_ewallets_, std::move(supported_apps),
-                        base::BindOnce(&PaymentLinkManager::OnFopSelected,
-                                       weak_ptr_factory_.GetWeakPtr()));
+  // Cache availability before moving the unique_ptr resources
+  bool is_ewallet_available = !supported_ewallets_.empty();
+  bool is_payment_app_available =
+      (supported_apps != nullptr) && supported_apps->Size() > 0;
+
+  // Standard Payment Flow takes precedence
+  if (is_ewallet_available || is_payment_app_available) {
+    ShowPaymentLinkPrompt(supported_ewallets_, std::move(supported_apps),
+                          base::BindOnce(&PaymentLinkManager::OnFopSelected,
+                                         weak_ptr_factory_.GetWeakPtr()));
+    return;
+  }
+
+  // Standard payment flow exits due to no available instruments
+  if (is_ewallet_flow_eligible) {
+    LogEwalletFlowExitedReason(EwalletFlowExitedReason::kNoSupportedEwallet,
+                               scheme_);
+  }
+
+  // New Account Linking Flow (only if payment option is empty but creation
+  // options exist)
+  if (base::FeatureList::IsEnabled(
+          payments::facilitated::kEnableEwalletNewAccountLinking)) {
+    LogPaymentLinkDetectedAndEligibleForAccountLinking();
+    if (supported_ewallet_creation_options_.empty()) {
+      LogEwalletNewAccountLinkingFlowExitedReason(
+          EwalletNewAccountLinkingFlowExitedReason::kNoSupportedCreationOption,
+          scheme_);
+    } else {
+      TriggerEwalletAccountLinkingFlow();
+    }
+  }
 }
 
 bool PaymentLinkManager::CanTriggerEwalletPaymentFlow(const GURL& page_url) {
@@ -180,11 +214,44 @@ void PaymentLinkManager::RetrieveSupportedEwallets(
         return ewallet.SupportsPaymentLink(payment_link_url.spec());
       });
 
-  if (supported_ewallets_.size() == 0) {
-    LogEwalletFlowExitedReason(EwalletFlowExitedReason::kNoSupportedEwallet,
-                               scheme_);
+  if (base::FeatureList::IsEnabled(
+          payments::facilitated::kEnableEwalletNewAccountLinking)) {
+    base::span<const autofill::Ewallet> ewallet_creation_options =
+        client_->GetPaymentsDataManager()->GetEwalletCreationOptions();
+    supported_ewallet_creation_options_.reserve(
+        ewallet_creation_options.size());
+    std::ranges::copy_if(
+        ewallet_creation_options,
+        std::back_inserter(supported_ewallet_creation_options_),
+        [&payment_link_url](const autofill::Ewallet& ewallet) {
+          return ewallet.SupportsPaymentLink(payment_link_url.spec());
+        });
+  }
+}
+
+void PaymentLinkManager::TriggerEwalletAccountLinkingFlow() {
+  if (supported_ewallet_creation_options_.size() > 1) {
+    LogEwalletNewAccountLinkingFlowExitedReason(
+        EwalletNewAccountLinkingFlowExitedReason::
+            kMultipleSupportedCreationOptions,
+        scheme_);
     return;
   }
+
+  // At this point, there should only be 1 creation option.
+  if (ewallet_account_linking_manager_) {
+    ewallet_account_linking_manager_->DismissAndCancel();
+  }
+  ewallet_account_linking_manager_ =
+      std::make_unique<EwalletAccountLinkingManager>(
+          &client_.get(), api_client_creator_,
+          supported_ewallet_creation_options_.front());
+
+  // Kicks off an async flow that fetches a client token and makes a
+  // GetDetailsForCreatePaymentInstrument network call. The base class handles
+  // the network response and triggers a callback, which subsequently displays
+  // the account linking bottom sheet if eligible.
+  ewallet_account_linking_manager_->TriggerAccountLinking();
 }
 
 bool PaymentLinkManager::CanTriggerAppPaymentFlow(const GURL& page_url) {
@@ -212,11 +279,16 @@ bool PaymentLinkManager::CanTriggerAppPaymentFlow(const GURL& page_url) {
 
 void PaymentLinkManager::Reset() {
   supported_ewallets_.clear();
+  supported_ewallet_creation_options_.clear();
   ukm_source_id_ = ukm::kInvalidSourceId;
   initiate_payment_request_details_.reset();
   ui_state_ = UiState::kHidden;
   is_ewallet_available_ = false;
   is_payment_app_available_ = false;
+  if (ewallet_account_linking_manager_) {
+    ewallet_account_linking_manager_->DismissAndCancel();
+  }
+  ewallet_account_linking_manager_.reset();
   weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
@@ -498,9 +570,6 @@ void PaymentLinkManager::ShowPaymentLinkPrompt(
   is_payment_app_available_ =
       (app_suggestions != nullptr) && app_suggestions->Size() > 0;
 
-  if (!is_ewallet_available_ && !is_payment_app_available_) {
-    return;
-  }
   if (is_payment_app_available_) {
     client_->GetPaymentsDataManager()->SetFacilitatedPaymentsA2ATriggeredOnce(
         true);

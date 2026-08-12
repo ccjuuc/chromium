@@ -7,6 +7,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/picture_in_picture_window_controller.h"
@@ -52,6 +53,12 @@ class VideoPictureInPictureWindowController
   // Called when the user interacts with the "Hang Up" control.
   virtual void HangUp() = 0;
 
+  // Called when the user interacts with the "Mute" control.
+  virtual void RequestMute(bool mute) = 0;
+
+  // Returns the current mute status of the media.
+  virtual bool GetMuteStatus() = 0;
+
   // Called when the user interacts with the "Previous Slide" control.
   virtual void PreviousSlide() = 0;
 
@@ -76,6 +83,9 @@ class VideoPictureInPictureWindowController
   // created.
   virtual void SetOnWindowCreatedNotifyObserversCallback(
       base::OnceClosure on_window_created_notify_observers_callback) = 0;
+
+  // Returns whether the current Picture-in-Picture session is immersive.
+  virtual bool IsImmersive() const = 0;
 
  protected:
   // Use PictureInPictureWindowController::GetOrCreateForWebContents() to

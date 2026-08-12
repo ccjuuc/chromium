@@ -17,7 +17,7 @@ namespace {
 bool ParseAnswer(const std::string& answer_json,
                  omnibox::AnswerType answer_type,
                  omnibox::RichAnswerTemplate* answer) {
-  std::optional<base::Value::Dict> value = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
       answer_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     return false;
@@ -219,16 +219,6 @@ AutocompleteMatch CreateBoostedShortcutMatch(std::string name,
                                              float ml_output) {
   return CreateAutocompleteMatch(name, AutocompleteMatchType::HISTORY_URL, true,
                                  true, traditional_relevance, ml_output);
-}
-
-AutocompleteMatch CreateKeywordHintMatch(std::string name,
-                                         int traditional_relevance) {
-  auto match = CreateAutocompleteMatch(
-      name, AutocompleteMatchType::SEARCH_SUGGEST, false, false,
-      traditional_relevance, std::nullopt);
-  match.keyword = u"keyword";
-  match.associated_keyword = u"keyword";
-  return match;
 }
 
 AutocompleteMatch CreateHistoryClusterMatch(std::string name,

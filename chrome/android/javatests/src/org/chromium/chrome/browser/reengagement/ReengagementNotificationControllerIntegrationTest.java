@@ -37,10 +37,12 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.UrlUtils;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.reengagement.ReengagementActivity;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
@@ -52,7 +54,6 @@ import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.util.DefaultBrowserInfo;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
@@ -62,6 +63,7 @@ import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.content_public.common.ContentUrlConstants;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** Integration tests for {@link ReengagementNotificationController}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -96,7 +98,7 @@ public class ReengagementNotificationControllerIntegrationTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1464558")
+    @DisabledTest(message = "https://crbug.com/40275653")
     public void testReengagementNotificationSent() {
         DefaultBrowserInfo.setDefaultInfoForTests(
                 createDefaultInfo(/* passesPrecondition= */ true));
@@ -119,7 +121,7 @@ public class ReengagementNotificationControllerIntegrationTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "Flaky on multiple bots, see crbug.com/1459539")
+    @DisabledTest(message = "Flaky on multiple bots, see crbug.com/40919490")
     public void testReengagementDifferentNotificationSent() {
         DefaultBrowserInfo.setDefaultInfoForTests(
                 createDefaultInfo(/* passesPrecondition= */ true));
@@ -142,7 +144,7 @@ public class ReengagementNotificationControllerIntegrationTest {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1464323")
+    @DisabledTest(message = "https://crbug.com/40275569")
     public void testReengagementNotificationNotSentDueToIph() {
         DefaultBrowserInfo.setDefaultInfoForTests(
                 createDefaultInfo(/* passesPrecondition= */ true));
@@ -232,7 +234,7 @@ public class ReengagementNotificationControllerIntegrationTest {
     @Test
     @SmallTest
     @DisableFeatures(ChromeFeatureList.REENGAGEMENT_NOTIFICATION)
-    @DisabledTest(message = "crbug.com/1112519 - Disabled while safety guard is in place.")
+    @DisabledTest(message = "crbug.com/40709747 - Disabled while safety guard is in place.")
     public void testEngagementTrackedWhenDisabled() {
         mTabbedActivityTestRule.startFromLauncherAtNtp();
         verify(mTracker, times(1)).notifyEvent(EventConstants.STARTED_FROM_MAIN_INTENT);
@@ -273,6 +275,7 @@ public class ReengagementNotificationControllerIntegrationTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // Flaky on desktop crbug.com/497812812
     public void testReengagementActivity() throws Exception {
         WebPageStation blankPage = mTabbedActivityTestRule.startOnBlankPage();
         int initialTabCount =
@@ -383,6 +386,7 @@ public class ReengagementNotificationControllerIntegrationTest {
                 /* isDefaultSystem= */ true,
                 browserCount,
                 /* systemCount= */ 0,
-                /* isChromePreStableInstalled */ false);
+                /* isChromePreStableInstalled= */ false,
+                /* defaultBrowserResolveInfo= */ null);
     }
 }

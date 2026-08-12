@@ -73,13 +73,12 @@ class TabStripViewBinder {
                         });
             } else {
                 button.setOnClickListener(
-                        v -> {
-                            model.get(TabProperties.TAB_CLICK_LISTENER)
-                                    .run(
-                                            v,
-                                            model.get(TabProperties.TAB_ID),
-                                            /* triggeringMotion= */ null);
-                        });
+                        (View v) ->
+                                model.get(TabProperties.TAB_CLICK_LISTENER)
+                                        .run(
+                                                v,
+                                                model.get(TabProperties.TAB_ID),
+                                                /* triggeringMotion= */ null));
             }
             setContentDescription(view, model);
         } else if (TabProperties.FAVICON_FETCHER == propertyKey) {
@@ -149,8 +148,7 @@ class TabStripViewBinder {
         final ColorStateList backgroundTint;
         if (model.get(TabProperties.IS_INCOGNITO)) {
             backgroundTint =
-                    AppCompatResources.getColorStateList(
-                            view.getContext(), R.color.tab_strip_favicon_bg_incognito);
+                    view.getContext().getColorStateList(R.color.tab_strip_favicon_bg_incognito);
         } else {
             @ColorInt
             int faviconBgColor = SemanticColorUtils.getColorSurfaceContainer(button.getContext());

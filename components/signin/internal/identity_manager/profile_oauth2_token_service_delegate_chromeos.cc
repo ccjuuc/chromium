@@ -4,12 +4,12 @@
 
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate_chromeos.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "build/build_config.h"
@@ -220,9 +220,9 @@ bool ProfileOAuth2TokenServiceDelegateChromeOS::RefreshTokenIsAvailable(
 
   // We intentionally do NOT check if the refresh token associated with
   // |account_id| is valid or not. See crbug.com/919793 for details.
-  return base::Contains(GetOAuthAccountIdsFromAccountKeys(
-                            account_keys_, account_tracker_service_),
-                        account_id);
+  return std::ranges::contains(GetOAuthAccountIdsFromAccountKeys(
+                                   account_keys_, account_tracker_service_),
+                               account_id);
 }
 
 // Note: This method should use the same logic for filtering accounts as
@@ -276,7 +276,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::LoadCredentialsInternal(
 void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateCredentialsInternal(
     const CoreAccountId& account_id,
     const std::string& refresh_token,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const signin::TokenBindingInfo& token_binding_info) {
   // UpdateCredentials should not be called on Chrome OS. Credentials should be
   // updated through Chrome OS Account Manager.
   NOTREACHED();
@@ -497,8 +497,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
                                                      fire_auth_error_changed);
   if (!RefreshTokenIsAvailable(account_id)) {
     // Account has been removed.
-    DCHECK_EQ(error, GoogleServiceAuthError(
-                         GoogleServiceAuthError::ACCOUNT_NOT_FOUND));
+    DCHECK_EQ(error, GoogleServiceAuthError::CreateAccountNotFound());
     return;
   }
 
@@ -510,7 +509,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
 }
 
 void ProfileOAuth2TokenServiceDelegateChromeOS::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   ResetBackOffEntry();
 }
 

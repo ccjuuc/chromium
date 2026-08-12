@@ -219,6 +219,30 @@ bool PaintChunker::AddRegionCaptureDataToCurrentChunk(
   return created_new_chunk;
 }
 
+bool PaintChunker::AddTrackedElementDataToCurrentChunk(
+    const PaintChunk::Id& id,
+    const DisplayItemClient& client,
+    const gfx::Rect& element_paint_rect,
+    const TrackedElementSubRects& tracked_element_sub_rects) {
+  CheckNotFinished();
+  bool created_new_chunk = EnsureCurrentChunk(id, client);
+  for (const auto& [feature, sub_rect] : tracked_element_sub_rects) {
+    DCHECK(!sub_rect.id->is_zero());
+    gfx::Rect bounds = sub_rect.GetEffectiveBounds(element_paint_rect);
+    TrackedElementRect tracked_element_rect(
+        sub_rect.id, bounds, sub_rect.should_add_to_compositor_frame_metadata,
+        sub_rect.should_exclude_fixed_and_sticky_occlusions,
+        sub_rect.frame_token, sub_rect.parent_frame_token);
+
+    auto& chunk = chunks_.back();
+    if (!chunk.tracked_element_rects) {
+      chunk.tracked_element_rects = MakeGarbageCollected<TrackedElementRects>();
+    }
+    chunk.tracked_element_rects->map[feature].push_back(tracked_element_rect);
+  }
+  return created_new_chunk;
+}
+
 void PaintChunker::AddSelectionToCurrentChunk(
     std::optional<PaintedSelectionBound> start,
     std::optional<PaintedSelectionBound> end,

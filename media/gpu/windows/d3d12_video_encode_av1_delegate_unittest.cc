@@ -2,14 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef MEDIA_GPU_WINDOWS_D3D12_VIDEO_ENCODE_AV1_DELEGATE_UNITTEST_H_
-#define MEDIA_GPU_WINDOWS_D3D12_VIDEO_ENCODE_AV1_DELEGATE_UNITTEST_H_
-
 #include "media/gpu/windows/d3d12_video_encode_av1_delegate.h"
 
 #include "base/rand_util.h"
-#include "base/test/scoped_feature_list.h"
-#include "media/base/media_switches.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "media/base/video_encoder.h"
 #include "media/base/win/d3d12_mocks.h"
 #include "media/base/win/d3d12_video_mocks.h"
@@ -49,7 +45,6 @@ class D3D12VideoEncodeAV1DelegateTest
   ~D3D12VideoEncodeAV1DelegateTest() override = default;
 
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(kStandardizeVP9AndAV1Quantizer);
     device_ = MakeComPtr<NiceMock<D3D12DeviceMock>>();
     video_device3_ = MakeComPtr<NiceMock<D3D12VideoDevice3Mock>>();
     ON_CALL(*video_device3_.Get(), QueryInterface(IID_ID3D12Device, _))
@@ -149,7 +144,6 @@ class D3D12VideoEncodeAV1DelegateTest
   AV1BitstreamBuilder::FrameHeader frame_header_{};
 
  private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(D3D12VideoEncodeAV1DelegateTest, GetSupportedProfiles) {
@@ -158,8 +152,8 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, GetSupportedProfiles) {
           {AV1PROFILE_PROFILE_MAIN,
            {PIXEL_FORMAT_NV12, PIXEL_FORMAT_P010LE, PIXEL_FORMAT_ABGR}}};
   EXPECT_CALL(*video_device3_.Get(), CheckFeatureSupport).Times(7);
-  auto profiles =
-      D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(video_device3_.Get());
+  auto profiles = D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
+      video_device3_.Get(), gpu::GpuDriverBugWorkarounds());
   EXPECT_EQ(profiles, expected_profiles);
 }
 
@@ -223,9 +217,48 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, GetSupportedProfiles_HighProfile) {
       });
   std::vector<std::pair<VideoCodecProfile, std::vector<VideoPixelFormat>>>
       expected_profiles = {{AV1PROFILE_PROFILE_HIGH, {PIXEL_FORMAT_ABGR}}};
-  auto profiles =
-      D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(video_device3_.Get());
+  auto profiles = D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
+      video_device3_.Get(), gpu::GpuDriverBugWorkarounds());
   EXPECT_EQ(profiles, expected_profiles);
+}
+
+TEST_F(D3D12VideoEncodeAV1DelegateTest,
+       GetSupportedProfiles_WorkaroundLimitsToMain) {
+  // Simulate a driver that supports all three AV1 profiles (Main, High, Pro).
+  ON_CALL(*video_device3_.Get(), CheckFeatureSupport(_, _, _))
+      .WillByDefault([](D3D12_FEATURE_VIDEO feature, void* pFeatureSupportData,
+                        UINT FeatureSupportDataSize) -> HRESULT {
+        if (feature == D3D12_FEATURE_VIDEO_ENCODER_CODEC) {
+          auto* feature_data =
+              static_cast<D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC*>(
+                  pFeatureSupportData);
+          feature_data->IsSupported =
+              feature_data->Codec == D3D12_VIDEO_ENCODER_CODEC_AV1;
+        } else if (feature == D3D12_FEATURE_VIDEO_ENCODER_PROFILE_LEVEL) {
+          auto* feature_data =
+              static_cast<D3D12_FEATURE_DATA_VIDEO_ENCODER_PROFILE_LEVEL*>(
+                  pFeatureSupportData);
+          CHECK_EQ(feature_data->Codec, D3D12_VIDEO_ENCODER_CODEC_AV1);
+          // All profiles are supported by the driver.
+          feature_data->IsSupported = true;
+        } else if (feature == D3D12_FEATURE_VIDEO_ENCODER_INPUT_FORMAT) {
+          auto* feature_data =
+              static_cast<D3D12_FEATURE_DATA_VIDEO_ENCODER_INPUT_FORMAT*>(
+                  pFeatureSupportData);
+          CHECK_EQ(feature_data->Codec, D3D12_VIDEO_ENCODER_CODEC_AV1);
+          feature_data->IsSupported = true;
+        }
+        return S_OK;
+      });
+
+  // With the workaround enabled, only Main profile should be returned even
+  // though the driver claims to support all profiles.
+  gpu::GpuDriverBugWorkarounds workarounds;
+  workarounds.limit_d3d12_av1_profile_to_main = true;
+  auto profiles = D3D12VideoEncodeAV1Delegate::GetSupportedProfiles(
+      video_device3_.Get(), workarounds);
+  ASSERT_EQ(profiles.size(), 1u);
+  EXPECT_EQ(profiles[0].first, AV1PROFILE_PROFILE_MAIN);
 }
 
 TEST_F(D3D12VideoEncodeAV1DelegateTest, UnsupportedProfile) {
@@ -251,8 +284,9 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, EncodeFrame) {
     constexpr size_t kBufferSize = 4096;
     constexpr size_t kStreamSize = 3072;
     auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kBufferSize);
-    BitstreamBuffer bitstream_buffer(base::RandInt(0, 7 /*MaxDPBSize - 1*/),
-                                     shared_memory.Duplicate(), kBufferSize);
+    BitstreamBuffer bitstream_buffer(
+        base::RandIntInclusive(0, 7 /*MaxDPBSize - 1*/),
+        shared_memory.Duplicate(), kBufferSize);
     EXPECT_CALL(*GetVideoEncoderWrapper(), Encode)
         .WillOnce(Return(EncoderStatus::Codes::kOk));
     EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata)
@@ -262,8 +296,7 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, EncodeFrame) {
         .WillRepeatedly(Return(kStreamSize));
 
     auto result = encoder_delegate_->Encode(
-        input_frame.Get(), 0 /*input_frame_subresource*/,
-        gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
+        {input_frame.Get()}, gfx::ColorSpace::CreateSRGB(), bitstream_buffer,
         VideoEncoder::EncodeOptions());
     EXPECT_EQ(result.has_value(), true);
     auto [bitstream_buffer_id, metadata] = std::move(result).value();
@@ -293,8 +326,9 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, ExternalRateControl) {
     constexpr size_t kBufferSize = 4096;
     constexpr size_t kStreamSize = 3072;
     auto shared_memory = base::UnsafeSharedMemoryRegion::Create(kBufferSize);
-    BitstreamBuffer bitstream_buffer(base::RandInt(0, 7 /*MaxDPBSize - 1*/),
-                                     shared_memory.Duplicate(), kBufferSize);
+    BitstreamBuffer bitstream_buffer(
+        base::RandIntInclusive(0, 7 /*MaxDPBSize - 1*/),
+        shared_memory.Duplicate(), kBufferSize);
     EXPECT_CALL(*GetVideoEncoderWrapper(), Encode)
         .WillOnce(Return(EncoderStatus::Codes::kOk));
     EXPECT_CALL(*GetVideoEncoderWrapper(), GetEncoderOutputMetadata)
@@ -305,9 +339,9 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, ExternalRateControl) {
 
     VideoEncoder::EncodeOptions options;
     options.quantizer = quantizers[i];
-    auto result = encoder_delegate_->Encode(
-        input_frame.Get(), 0 /*input_frame_subresource*/,
-        gfx::ColorSpace::CreateSRGB(), bitstream_buffer, options);
+    auto result = encoder_delegate_->Encode({input_frame.Get()},
+                                            gfx::ColorSpace::CreateSRGB(),
+                                            bitstream_buffer, options);
     EXPECT_EQ(result.has_value(), true);
     auto [bitstream_buffer_id, metadata] = std::move(result).value();
     EXPECT_EQ(metadata.qp, quantizers[i]);
@@ -466,5 +500,3 @@ TEST_F(D3D12VideoEncodeAV1DelegateTest, UpdateFrameHeaderPostEncode) {
 }
 
 }  // namespace media
-
-#endif  // MEDIA_GPU_WINDOWS_D3D12_VIDEO_ENCODE_AV1_DELEGATE_UNITTEST_H_

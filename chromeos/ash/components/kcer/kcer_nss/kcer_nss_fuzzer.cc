@@ -12,6 +12,7 @@
 #include "base/base64.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/hash/hash.h"
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
@@ -102,7 +103,9 @@ enum class Method {
   kSetKeyNickname,
   kSetKeyPermissions,
   kSetCertProvisioningProfileId,
-  kMaxValue = kSetCertProvisioningProfileId,
+  kGetBrowserEnterpriseClientCertTag,
+  kSetBrowserEnterpriseClientCertTag,
+  kMaxValue = kSetBrowserEnterpriseClientCertTag,
 };
 
 // Test-only overloads for better errors from EXPECT_EQ, etc.
@@ -194,6 +197,9 @@ struct FuzzKey {
     // empty values by default.
     key_permissions = chaps::KeyPermissions();
     cert_provisioning_profile_id = "";
+    // Browser enterprise client cert tag defaults to absent (false) until
+    // SetBrowserEnterpriseClientCertTag has been called on this key.
+    browser_enterprise_client_cert_tag = false;
   }
   FuzzKey(FuzzKey&&) = default;
   FuzzKey& operator=(FuzzKey&&) = default;
@@ -224,6 +230,9 @@ struct FuzzKey {
   std::optional<std::string> nickname;
   std::optional<chaps::KeyPermissions> key_permissions;
   std::optional<std::string> cert_provisioning_profile_id;
+  // Mirrors the kCkaBrowserEnterpriseClientCertKey attribute on the underlying
+  // key. False == attribute not set; true == set to CK_TRUE.
+  bool browser_enterprise_client_cert_tag = false;
 };
 
 //==============================================================================
@@ -522,7 +531,8 @@ void CertGenerator::GenerateCert() {
     }
   }
   if (GetBool()) {
-    std::vector<std::string> memory_holder;
+    // Use std::deque so the memory is not moved when the container grows.
+    std::deque<std::string> memory_holder;
     std::vector<bssl::der::Input> purpose_oids;
     while (GetBool()) {
       memory_holder.push_back(GetString());
@@ -615,9 +625,11 @@ class KcerFuzzer {
   void RunGetKeyInfo();
   void RunGetKeyPermissions();
   void RunGetCertProvisioningProfileId();
+  void RunGetBrowserEnterpriseClientCertTag();
   void RunSetKeyNickname();
   void RunSetKeyPermissions();
   void RunSetCertProvisioningProfileId();
+  void RunSetBrowserEnterpriseClientCertTag();
 
   // Returns a randomized set of tokens. Can return tokens that were not
   // initialized for the current instance of Kcer.
@@ -739,12 +751,16 @@ void KcerFuzzer::RunNextMethod() {
       return RunGetKeyPermissions();
     case Method::kGetCertProvisioningProfileId:
       return RunGetCertProvisioningProfileId();
+    case Method::kGetBrowserEnterpriseClientCertTag:
+      return RunGetBrowserEnterpriseClientCertTag();
     case Method::kSetKeyNickname:
       return RunSetKeyNickname();
     case Method::kSetKeyPermissions:
       return RunSetKeyPermissions();
     case Method::kSetCertProvisioningProfileId:
       return RunSetCertProvisioningProfileId();
+    case Method::kSetBrowserEnterpriseClientCertTag:
+      return RunSetBrowserEnterpriseClientCertTag();
   }
 }
 
@@ -760,7 +776,7 @@ void KcerFuzzer::RunGenerateRsaKey() {
   kcer_->GenerateRsaKey(token, modulus_length_bits, hardware_backed,
                         generate_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(generate_waiter.Get().has_value());
     EXPECT_EQ(generate_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -791,7 +807,7 @@ void KcerFuzzer::RunGenerateEcKey() {
   kcer_->GenerateEcKey(token, elliptic_curve, hardware_backed,
                        generate_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(generate_waiter.Get().has_value());
     EXPECT_EQ(generate_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -830,7 +846,7 @@ void KcerFuzzer::RunImportKey() {
   kcer_->ImportKey(token, Pkcs8PrivateKeyInfoDer(std::move(pkcs8_key)),
                    import_key_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(import_key_waiter.Get().has_value());
     EXPECT_EQ(import_key_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -867,7 +883,7 @@ void KcerFuzzer::RunImportCertFromBytesUseRandomInput() {
   base::test::TestFuture<base::expected<void, Error>> import_waiter;
   kcer_->ImportCertFromBytes(token, cert, import_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(import_waiter.Get().has_value());
     EXPECT_EQ(import_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -924,7 +940,7 @@ void KcerFuzzer::RunImportCertFromBytesUseValidCert() {
   kcer_->ImportCertFromBytes(token, std::move(cert_der),
                              import_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(import_waiter.Get().has_value());
     EXPECT_EQ(import_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -958,7 +974,7 @@ void KcerFuzzer::RunImportX509Cert() {
   base::test::TestFuture<base::expected<void, Error>> import_waiter;
   kcer_->ImportX509Cert(token, cert, import_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(import_waiter.Get().has_value());
     EXPECT_EQ(import_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -995,8 +1011,7 @@ void KcerFuzzer::RunRemoveKeyAndCerts() {
 
   if (available_tokens_.empty() ||
       (key_handle.GetTokenInternal().has_value() &&
-       !base::Contains(available_tokens_,
-                       key_handle.GetTokenInternal().value()))) {
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
     ASSERT_FALSE(remove_key_waiter.Get().has_value());
     EXPECT_EQ(remove_key_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -1055,7 +1070,7 @@ void KcerFuzzer::RunListKeys() {
 
   std::vector<const PublicKey*> expected_result;
   for (const auto& [spki, kcer_key] : kcer_data_) {
-    if (base::Contains(tokens, kcer_key.public_key.GetToken()) &&
+    if (tokens.contains(kcer_key.public_key.GetToken()) &&
         kcer_key.can_be_listed) {
       expected_result.push_back(&kcer_key.public_key);
     }
@@ -1067,7 +1082,7 @@ void KcerFuzzer::RunListKeys() {
   EXPECT_THAT(list_waiter.Get<0>(), UnorderedElementsAreArray(expected_result));
 
   for (Token token : tokens) {
-    if (!base::Contains(available_tokens_, token)) {
+    if (!available_tokens_.contains(token)) {
       EXPECT_TRUE(list_waiter.Get<1>().at(token) ==
                   Error::kTokenIsNotAvailable);
     }
@@ -1089,7 +1104,7 @@ void KcerFuzzer::RunListCerts() {
 
   for (auto& [spki, kcer_key] : kcer_data_) {
     // Skip data that is on unrelated tokens and should not have been found.
-    if (!base::Contains(tokens, kcer_key.public_key.GetToken())) {
+    if (!tokens.contains(kcer_key.public_key.GetToken())) {
       continue;
     }
     // Check that all known certs are found. Remove matched certs from the
@@ -1123,7 +1138,7 @@ void KcerFuzzer::RunListCerts() {
   const base::flat_map<Token, Error>& errors = list_certs_waiter.Get<1>();
   for (const auto& [token, error] : errors) {
     if (error == Error::kTokenIsNotAvailable) {
-      EXPECT_FALSE(base::Contains(available_tokens_, token));
+      EXPECT_FALSE(available_tokens_.contains(token));
     } else {
       // Other errors are not expected.
       ADD_FAILURE();
@@ -1140,8 +1155,7 @@ void KcerFuzzer::RunDoesPrivateKeyExist() {
 
   if (available_tokens_.empty() ||
       (key_handle.GetTokenInternal().has_value() &&
-       !base::Contains(available_tokens_,
-                       key_handle.GetTokenInternal().value()))) {
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
     ASSERT_FALSE(key_exist_waiter.Get().has_value());
     EXPECT_EQ(key_exist_waiter.Get().error(), Error::kTokenIsNotAvailable);
 
@@ -1318,7 +1332,7 @@ void KcerFuzzer::RunGetAvailableTokens() {
   const base::flat_set<Token>& available_tokens = get_tokens_waiter.Get();
 
   for (const auto& [expected_token, v] : available_tokens_) {
-    EXPECT_TRUE(base::Contains(available_tokens, expected_token));
+    EXPECT_TRUE(available_tokens.contains(expected_token));
   }
 }
 
@@ -1328,7 +1342,7 @@ void KcerFuzzer::RunGetTokenInfo() {
   base::test::TestFuture<base::expected<TokenInfo, Error>> token_info_waiter;
   kcer_->GetTokenInfo(token, token_info_waiter.GetCallback());
 
-  if (!base::Contains(available_tokens_, token)) {
+  if (!available_tokens_.contains(token)) {
     ASSERT_FALSE(token_info_waiter.Get().has_value());
     EXPECT_EQ(token_info_waiter.Get().error(), Error::kTokenIsNotAvailable);
 
@@ -1355,8 +1369,7 @@ void KcerFuzzer::RunGetKeyInfo() {
 
   if (available_tokens_.empty() ||
       (key_handle.GetTokenInternal().has_value() &&
-       !base::Contains(available_tokens_,
-                       key_handle.GetTokenInternal().value()))) {
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
     ASSERT_FALSE(key_info_waiter.Get().has_value());
     EXPECT_EQ(key_info_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -1389,8 +1402,7 @@ void KcerFuzzer::RunGetKeyPermissions() {
 
   if (available_tokens_.empty() ||
       (key_handle.GetTokenInternal().has_value() &&
-       !base::Contains(available_tokens_,
-                       key_handle.GetTokenInternal().value()))) {
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
     ASSERT_FALSE(key_permissions_waiter.Get().has_value());
     EXPECT_EQ(key_permissions_waiter.Get().error(),
               Error::kTokenIsNotAvailable);
@@ -1417,8 +1429,7 @@ void KcerFuzzer::RunGetCertProvisioningProfileId() {
 
   if (available_tokens_.empty() ||
       (key_handle.GetTokenInternal().has_value() &&
-       !base::Contains(available_tokens_,
-                       key_handle.GetTokenInternal().value()))) {
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
     ASSERT_FALSE(cert_prov_waiter.Get().has_value());
     EXPECT_EQ(cert_prov_waiter.Get().error(), Error::kTokenIsNotAvailable);
     return;
@@ -1431,6 +1442,31 @@ void KcerFuzzer::RunGetCertProvisioningProfileId() {
   ASSERT_TRUE(cert_prov_waiter.Get().has_value());
   EXPECT_EQ(cert_prov_waiter.Get().value(),
             expected_key->cert_provisioning_profile_id);
+}
+
+void KcerFuzzer::RunGetBrowserEnterpriseClientCertTag() {
+  FuzzKey* expected_key = nullptr;
+  PrivateKeyHandle key_handle = GeneratePrivateKeyHandle(&expected_key);
+
+  base::test::TestFuture<base::expected<bool, Error>> tag_waiter;
+  kcer_->GetBrowserEnterpriseClientCertTag(key_handle,
+                                           tag_waiter.GetCallback());
+
+  if (available_tokens_.empty() ||
+      (key_handle.GetTokenInternal().has_value() &&
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
+    ASSERT_FALSE(tag_waiter.Get().has_value());
+    EXPECT_EQ(tag_waiter.Get().error(), Error::kTokenIsNotAvailable);
+    return;
+  }
+
+  if (!expected_key) {
+    EXPECT_FALSE(tag_waiter.Get().has_value());
+    return;
+  }
+  ASSERT_TRUE(tag_waiter.Get().has_value());
+  EXPECT_EQ(tag_waiter.Get().value(),
+            expected_key->browser_enterprise_client_cert_tag);
 }
 
 void KcerFuzzer::RunSetKeyNickname() {
@@ -1496,6 +1532,30 @@ void KcerFuzzer::RunSetCertProvisioningProfileId() {
 
   EXPECT_TRUE(set_cert_prov_id_waiter.Get().has_value());
   expected_key->cert_provisioning_profile_id = cert_prov_id;
+}
+
+void KcerFuzzer::RunSetBrowserEnterpriseClientCertTag() {
+  FuzzKey* expected_key = nullptr;
+  PrivateKeyHandle key_handle = GeneratePrivateKeyHandle(&expected_key);
+
+  base::test::TestFuture<base::expected<void, Error>> set_tag_waiter;
+  kcer_->SetBrowserEnterpriseClientCertTag(key_handle,
+                                           set_tag_waiter.GetCallback());
+  if (available_tokens_.empty() ||
+      (key_handle.GetTokenInternal().has_value() &&
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
+    ASSERT_FALSE(set_tag_waiter.Get().has_value());
+    EXPECT_EQ(set_tag_waiter.Get().error(), Error::kTokenIsNotAvailable);
+    return;
+  }
+
+  if (!expected_key) {
+    EXPECT_FALSE(set_tag_waiter.Get().has_value());
+    return;
+  }
+
+  EXPECT_TRUE(set_tag_waiter.Get().has_value());
+  expected_key->browser_enterprise_client_cert_tag = true;
 }
 
 base::flat_set<Token> KcerFuzzer::SelectTokens() {

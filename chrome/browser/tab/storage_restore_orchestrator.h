@@ -5,10 +5,14 @@
 #ifndef CHROME_BROWSER_TAB_STORAGE_RESTORE_ORCHESTRATOR_H_
 #define CHROME_BROWSER_TAB_STORAGE_RESTORE_ORCHESTRATOR_H_
 
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/tab/collection_storage_observer.h"
+#include "chrome/browser/tab/storage_collection_synchronizer.h"
 #include "chrome/browser/tab/storage_loaded_data.h"
 #include "chrome/browser/tab/tab_state_storage_service.h"
+#include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_collection_observer.h"
 #include "components/tabs/public/tab_strip_collection.h"
 
@@ -18,7 +22,10 @@ namespace tabs {
 // Differentiates between model changes resulting from the restoration process
 // and changes as a result of user actions during the restoration
 // process.
-class StorageRestoreOrchestrator : public TabCollectionObserver {
+// Without the use of batching, this is inefficient. See
+// TabStateStorageService#CreateScopedBatch.
+class StorageRestoreOrchestrator
+    : public StorageCollectionSynchronizer::CollectionSynchronizerObserver {
  public:
   StorageRestoreOrchestrator(TabStripCollection* collection,
                              TabStateStorageService* service,
@@ -29,7 +36,7 @@ class StorageRestoreOrchestrator : public TabCollectionObserver {
   StorageRestoreOrchestrator& operator=(const StorageRestoreOrchestrator&) =
       delete;
 
-  // TabCollectionObserver:
+  // CollectionSynchronizerObserver:
   void OnChildrenAdded(const TabCollection::Position& position,
                        const TabCollectionNodes& handles,
                        bool insert_from_detached) override;
@@ -37,17 +44,35 @@ class StorageRestoreOrchestrator : public TabCollectionObserver {
                          const TabCollectionNodes& handles) override;
   void OnChildMoved(const TabCollection::Position& to_position,
                     const NodeData& node_data) override;
+  void SaveChildNodeOnly(TabCollectionNodeHandle handle) override;
+
+  void OnNodeRejected(StorageId node);
+  void OnRestoreCancelled() override;
 
  private:
-  // Represents default observer methods.
-  CollectionStorageObserver default_observer_;
+  class ObserverImpl : public StorageLoadedData::Observer {
+   public:
+    explicit ObserverImpl(StorageRestoreOrchestrator* orchestrator);
+    ~ObserverImpl() override;
+    void OnNodeRejected(StorageId node) override;
+
+   private:
+    raw_ptr<StorageRestoreOrchestrator> orchestrator_;
+  };
+
+  void OnSaveChildTab(const TabCollection::NodeHandle& handle,
+                      bool was_inserted);
+  void OnSaveChildCollection(const TabCollection::NodeHandle& handle,
+                             bool was_inserted);
+
+  // Tracks events performed on StorageLoadedData.
+  ObserverImpl data_observer_;
 
   raw_ptr<TabStripCollection> collection_;
   raw_ptr<TabStateStorageService> service_;
   raw_ptr<StorageLoadedData> loaded_data_;
 
-  // Used to keep track of nodes that were restored from the disk.
-  absl::flat_hash_set<TabCollectionNodeHandle> restored_nodes_;
+  bool is_restore_cancelled_;
 };
 
 }  // namespace tabs

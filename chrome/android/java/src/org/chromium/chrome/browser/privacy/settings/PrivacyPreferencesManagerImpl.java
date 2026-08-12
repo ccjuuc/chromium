@@ -16,8 +16,9 @@ import org.chromium.base.ContextUtils;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -42,16 +43,14 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
     private PolicyService.@Nullable Observer mPolicyServiceObserver;
 
     // Supplier for other class to observe. Null until the supplier is requested.
-    private @Nullable ObservableSupplierImpl<Boolean> mCrashUploadPermittedSupplier;
+    private @Nullable SettableNonNullObservableSupplier<Boolean> mCrashUploadPermittedSupplier;
 
-    private boolean mNativeInitialized;
+    private volatile boolean mNativeInitialized;
 
     PrivacyPreferencesManagerImpl(Context context) {
         mContext = context;
         mPrefs = ChromeSharedPreferences.getInstance();
         mNativeInitialized = false;
-        // TODO(crbug.com/40836507). Clean up deprecated preference migration.
-        migrateDeprecatedPreferences();
     }
 
     public static PrivacyPreferencesManagerImpl getInstance() {
@@ -71,6 +70,10 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
         if (mNativeInitialized) return;
 
         mNativeInitialized = true;
+
+        // Cache the metrics restructurization state in SharedPreferences immediately when
+        // native is initialized so that it is safe to access pre-native in future sessions.
+        shouldUseMetricsChoiceRestructure();
 
         createPolicyServiceObserver();
     }
@@ -98,17 +101,7 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
         if (mPolicyService.isInitializationComplete()) {
             syncUsageAndCrashReportingPermittedByPolicy();
         }
-
         mPolicyService.addObserver(mPolicyServiceObserver);
-    }
-
-    protected void migrateDeprecatedPreferences() {
-        if (mPrefs.contains(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING)) {
-            mPrefs.writeBoolean(
-                    ChromePreferenceKeys.PRIVACY_METRICS_REPORTING_PERMITTED_BY_USER,
-                    mPrefs.readBoolean(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING, false));
-            mPrefs.removeKey(ChromePreferenceKeys.PRIVACY_METRICS_REPORTING);
-        }
     }
 
     protected boolean isNetworkAvailable() {
@@ -123,7 +116,7 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
                 (ConnectivityManager) mContext.getSystemService(Context.CONNECTIVITY_SERVICE);
         // Android telephony team said it is OK to continue using getNetworkInfo() for our purposes.
         // We cannot use ConnectivityManager#getAllNetworks() because that one only reports enabled
-        // networks. See crbug.com/532455.
+        // networks. See crbug.com/40435982.
         @SuppressWarnings("deprecation")
         NetworkInfo networkInfo =
                 connectivityManager.getNetworkInfo(ConnectivityManager.TYPE_MOBILE);
@@ -134,11 +127,11 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
      * Get the supplier for isUsageAndCrashReportingPermitted. If the supplier is null, initialize a
      * new one. Ui Thread only.
      */
-    protected ObservableSupplierImpl<Boolean> getCrashUploadPermittedSupplier() {
+    protected SettableNonNullObservableSupplier<Boolean> getCrashUploadPermittedSupplier() {
         ThreadUtils.assertOnUiThread();
         if (mCrashUploadPermittedSupplier == null) {
             mCrashUploadPermittedSupplier =
-                    new ObservableSupplierImpl<>(isUsageAndCrashReportingPermitted());
+                    ObservableSuppliers.createNonNull(isUsageAndCrashReportingPermitted());
         }
         return mCrashUploadPermittedSupplier;
     }
@@ -235,8 +228,27 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
     }
 
     @Override
-    public ObservableSupplier<Boolean> getUsageAndCrashReportingPermittedObservableSupplier() {
+    public NonNullObservableSupplier<Boolean>
+            getUsageAndCrashReportingPermittedObservableSupplier() {
         return getCrashUploadPermittedSupplier();
+    }
+
+    public boolean shouldUseMetricsChoiceRestructure() {
+        if (!mNativeInitialized) {
+            // This method can be called before the native library is loaded/initialized (e.g.,
+            // in background services or binder threads checking crash uploading permission).
+            // To avoid UnsatisfiedLinkError, we read the value cached in SharedPreferences.
+            return mPrefs.readBoolean(
+                    ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, false);
+        }
+        boolean value = PrivacyPreferencesManagerImplJni.get().shouldUseMetricsChoiceRestructure();
+        mPrefs.writeBoolean(
+                ChromePreferenceKeys.PRIVACY_SHOULD_USE_METRICS_CHOICE_RESTRUCTURE, value);
+        return value;
+    }
+
+    void setNativeInitializedForTesting(boolean initialized) {
+        mNativeInitialized = initialized;
     }
 
     @NativeMethods
@@ -246,5 +258,7 @@ public class PrivacyPreferencesManagerImpl implements PrivacyPreferencesManager 
         void setMetricsReportingEnabled(boolean enabled);
 
         boolean isMetricsReportingDisabledByPolicy();
+
+        boolean shouldUseMetricsChoiceRestructure();
     }
 }

@@ -40,11 +40,13 @@
 #include "base/version_info/channel.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "components/enterprise/browser/groups/groups_prefs.h"
 #include "components/metrics/clean_exit_beacon.h"
 #include "components/metrics/client_info.h"
 #include "components/metrics/field_trials_provider.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/variations/field_trial_config/field_trial_util.h"
@@ -56,7 +58,7 @@
 #include "components/variations/service/safe_seed_manager.h"
 #include "components/variations/service/variations_service.h"
 #include "components/variations/service/variations_service_client.h"
-#include "components/variations/variations_safe_seed_store_local_state.h"
+#include "components/variations/variations_safe_seed_store.h"
 #include "components/variations/variations_seed_store.h"
 #include "components/variations/variations_switches.h"
 #include "components/variations/variations_test_utils.h"
@@ -106,9 +108,9 @@ std::unique_ptr<VariationsSeedStore> CreateSeedStore(
   return std::make_unique<VariationsSeedStore>(
       local_state, /*initial_seed=*/nullptr,
       /*signature_verification_enabled=*/true,
-      std::make_unique<VariationsSafeSeedStoreLocalState>(
-          local_state, seed_file_dir, version_info::Channel::UNKNOWN,
-          /*entropy_providers=*/nullptr),
+      std::make_unique<VariationsSafeSeedStore>(local_state, seed_file_dir,
+                                                version_info::Channel::UNKNOWN,
+                                                /*entropy_providers=*/nullptr),
       version_info::Channel::UNKNOWN, seed_file_dir);
 }
 
@@ -315,8 +317,7 @@ class TestVariationsServiceClient : public VariationsServiceClient {
     return true;
   }
   bool IsEnterprise() override { return false; }
-  void RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-      PrefService* local_state) override {}
+  bool IsChromeEnterpriseCoreSupported() override { return true; }
 
  private:
   // VariationsServiceClient:
@@ -329,11 +330,27 @@ class TestVariationsServiceClient : public VariationsServiceClient {
 
 class MockVariationsServiceClient : public TestVariationsServiceClient {
  public:
-  MOCK_METHOD(void,
-              RemoveGoogleGroupsFromPrefsForDeletedProfiles,
+  MOCK_METHOD(std::optional<base::flat_set<std::string>>,
+              GetAllProfilesKeys,
               (PrefService*),
               (override));
   MOCK_METHOD(Study::FormFactor, GetCurrentFormFactor, (), (override));
+};
+
+class TestVariationsServiceClientWithoutEnterpriseSupport
+    : public TestVariationsServiceClient {
+ public:
+  TestVariationsServiceClientWithoutEnterpriseSupport() = default;
+
+  TestVariationsServiceClientWithoutEnterpriseSupport(
+      const TestVariationsServiceClientWithoutEnterpriseSupport&) = delete;
+  TestVariationsServiceClientWithoutEnterpriseSupport& operator=(
+      const TestVariationsServiceClientWithoutEnterpriseSupport&) = delete;
+
+  ~TestVariationsServiceClientWithoutEnterpriseSupport() override = default;
+
+  // VariationsServiceClient:
+  bool IsChromeEnterpriseCoreSupported() override { return false; }
 };
 
 class TestVariationsSeedStore : public VariationsSeedStore {
@@ -342,7 +359,7 @@ class TestVariationsSeedStore : public VariationsSeedStore {
       : VariationsSeedStore(local_state,
                             /*initial_seed=*/nullptr,
                             /*signature_verification_enabled=*/true,
-                            std::make_unique<VariationsSafeSeedStoreLocalState>(
+                            std::make_unique<VariationsSafeSeedStore>(
                                 local_state,
                                 /*seed_file_dir=*/base::FilePath(),
                                 version_info::Channel::UNKNOWN,
@@ -393,10 +410,10 @@ class TestVariationsFieldTrialCreator : public VariationsFieldTrialCreator {
       const base::FilePath user_data_dir = base::FilePath(),
       metrics::StartupVisibility startup_visibility =
           metrics::StartupVisibility::kUnknown)
-      : VariationsFieldTrialCreator(client,
-                                    // Pass a VariationsSeedStore to base class.
-                                    CreateSeedStore(local_state, user_data_dir),
-                                    UIStringOverrider()),
+      : VariationsFieldTrialCreator(
+            client,
+            // Pass a VariationsSeedStore to base class.
+            CreateSeedStore(local_state, user_data_dir)),
         enabled_state_provider_(/*consent=*/true, /*enabled=*/true),
         // Instead, use a TestVariationsSeedStore as the member variable.
         seed_store_(local_state),
@@ -420,8 +437,6 @@ class TestVariationsFieldTrialCreator : public VariationsFieldTrialCreator {
     PlatformFieldTrials platform_field_trials;
     return VariationsFieldTrialCreator::SetUpFieldTrials(
         /*variation_ids=*/std::vector<std::string>(),
-        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-            switches::kForceVariationIds),
         std::vector<base::FeatureList::FeatureOverrideInfo>(),
         std::make_unique<base::FeatureList>(), metrics_state_manager_.get(),
         &platform_field_trials, safe_seed_manager_,
@@ -436,6 +451,10 @@ class TestVariationsFieldTrialCreator : public VariationsFieldTrialCreator {
     return VariationsFieldTrialCreator::GetGoogleGroupsFromPrefs();
   }
 
+  base::flat_set<std::string> GetEnterpriseGroupsFromPrefs() {
+    return VariationsFieldTrialCreator::GetEnterpriseGroupsFromPrefs();
+  }
+
   TestVariationsSeedStore* seed_store() { return &seed_store_; }
 
  protected:
@@ -445,8 +464,6 @@ class TestVariationsFieldTrialCreator : public VariationsFieldTrialCreator {
   void ApplyFieldTrialTestingConfig(base::FeatureList* feature_list) override {
     AssociateParamsFromFieldTrialConfig(
         kTestingConfig,
-        base::BindRepeating(&TestVariationsFieldTrialCreator::OverrideUIString,
-                            base::Unretained(this)),
         GetPlatform(), GetCurrentFormFactor(), feature_list);
   }
 #endif  // BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
@@ -471,6 +488,7 @@ class FieldTrialCreatorTest : public ::testing::Test {
     // Register the prefs used by the metrics and variations services.
     metrics::MetricsService::RegisterPrefs(local_state_.registry());
     VariationsService::RegisterPrefs(local_state_.registry());
+    enterprise_groups::RegisterLocalStatePrefs(local_state_.registry());
 
     // Create a new temp dir for each test, to avoid cross test contamination.
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -957,8 +975,8 @@ TEST_F(FieldTrialCreatorTest, LoadSeedFromTestSeedJsonPath) {
   base::WriteFile(test_seed_file,
                   base::StringPrintf("{\"variations_compressed_seed\": \"%s\","
                                      "\"variations_seed_signature\": \"%s\"}",
-                                     kTestSeedData.base64_compressed_data,
-                                     kTestSeedData.base64_signature));
+                                     TestSeedData().base64_compressed_data,
+                                     TestSeedData().base64_signature));
 
   base::CommandLine::ForCurrentProcess()->AppendSwitchPath(
       variations::switches::kVariationsTestSeedJsonPath, test_seed_file);
@@ -967,8 +985,8 @@ TEST_F(FieldTrialCreatorTest, LoadSeedFromTestSeedJsonPath) {
   // the VariationsSeedStore::LoadSeedSync() logic.
   TestVariationsServiceClient variations_service_client;
   auto seed_store = CreateSeedStore(local_state(), seed_file_path());
-  VariationsFieldTrialCreator field_trial_creator(
-      &variations_service_client, std::move(seed_store), UIStringOverrider());
+  VariationsFieldTrialCreator field_trial_creator(&variations_service_client,
+                                                  std::move(seed_store));
   metrics::TestEnabledStateProvider enabled_state_provider(
       /*consent=*/true,
       /*enabled=*/true);
@@ -979,11 +997,11 @@ TEST_F(FieldTrialCreatorTest, LoadSeedFromTestSeedJsonPath) {
   PlatformFieldTrials platform_field_trials;
   NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
 
-  ASSERT_FALSE(base::FieldTrialList::TrialExists(kTestSeedData.study_names[0]));
+  ASSERT_FALSE(
+      base::FieldTrialList::TrialExists(TestSeedData().study_names[0]));
 
   EXPECT_TRUE(field_trial_creator.SetUpFieldTrials(
       /*variation_ids=*/{},
-      /*command_line_variation_ids=*/std::string(),
       std::vector<base::FeatureList::FeatureOverrideInfo>(),
       std::make_unique<base::FeatureList>(), metrics_state_manager.get(),
       &platform_field_trials, &safe_seed_manager,
@@ -991,7 +1009,7 @@ TEST_F(FieldTrialCreatorTest, LoadSeedFromTestSeedJsonPath) {
       *metrics_state_manager->CreateEntropyProviders(
           /*enable_limited_entropy_mode=*/false)));
 
-  EXPECT_TRUE(base::FieldTrialList::TrialExists(kTestSeedData.study_names[0]));
+  EXPECT_TRUE(base::FieldTrialList::TrialExists(TestSeedData().study_names[0]));
   EXPECT_EQ(
       local_state()->GetInteger(prefs::kVariationsFailedToFetchSeedStreak), 0);
   EXPECT_EQ(local_state()->GetInteger(prefs::kVariationsCrashStreak), 0);
@@ -1088,8 +1106,8 @@ TEST_F(FieldTrialCreatorTest, LoadPermanentConsistencyCountry) {
     }
 
     TestVariationsServiceClient variations_service_client;
-    VariationsFieldTrialCreator field_trial_creator(
-        &variations_service_client, std::move(seed_store), UIStringOverrider());
+    VariationsFieldTrialCreator field_trial_creator(&variations_service_client,
+                                                    std::move(seed_store));
 
     base::HistogramTester histogram_tester;
     EXPECT_EQ(test.expected_country,
@@ -1117,6 +1135,23 @@ TEST_F(FieldTrialCreatorTest, LoadPermanentConsistencyCountry) {
   }
 }
 
+TEST_F(FieldTrialCreatorTest, GetClientFilterableState_HardwareManufacturer) {
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+
+  TestVariationsServiceClient variations_service_client;
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  const base::Version& current_version = version_info::GetVersion();
+  EXPECT_TRUE(current_version.IsValid());
+
+  std::unique_ptr<ClientFilterableState> client_filterable_state =
+      field_trial_creator.GetClientFilterableStateForVersion(current_version);
+  EXPECT_EQ(client_filterable_state->hardware_manufacturer,
+            ClientFilterableState::GetHardwareManufacturer());
+}
+
 #if BUILDFLAG(IS_ANDROID)
 // This is a regression test for crbug/829527.
 TEST_F(FieldTrialCreatorTest, SetUpFieldTrials_LoadsCountryOnFirstRun) {
@@ -1138,13 +1173,13 @@ TEST_F(FieldTrialCreatorTest, SetUpFieldTrials_LoadsCountryOnFirstRun) {
   auto seed_store = std::make_unique<VariationsSeedStore>(
       local_state(), std::move(initial_seed),
       /*signature_verification_enabled=*/false,
-      std::make_unique<VariationsSafeSeedStoreLocalState>(
+      std::make_unique<VariationsSafeSeedStore>(
           local_state(),
           /*seed_file_dir=*/base::FilePath(), version_info::Channel::UNKNOWN,
           /*entropy_providers=*/nullptr),
       version_info::Channel::UNKNOWN, /*seed_file_dir=*/base::FilePath());
-  VariationsFieldTrialCreator field_trial_creator(
-      &variations_service_client, std::move(seed_store), UIStringOverrider());
+  VariationsFieldTrialCreator field_trial_creator(&variations_service_client,
+                                                  std::move(seed_store));
 
   metrics::TestEnabledStateProvider enabled_state_provider(/*consent=*/true,
                                                            /*enabled=*/true);
@@ -1158,8 +1193,6 @@ TEST_F(FieldTrialCreatorTest, SetUpFieldTrials_LoadsCountryOnFirstRun) {
   // active.
   EXPECT_TRUE(field_trial_creator.SetUpFieldTrials(
       /*variation_ids=*/std::vector<std::string>(),
-      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kForceVariationIds),
       std::vector<base::FeatureList::FeatureOverrideInfo>(),
       std::make_unique<base::FeatureList>(), metrics_state_manager.get(),
       &platform_field_trials, &safe_seed_manager,
@@ -1602,7 +1635,7 @@ TEST_F(FieldTrialCreatorTest, GetGoogleGroupsFromPrefsWhenEmptyDict) {
       user_data_dir_path());
 
   // Add an empty dict value for the pref.
-  base::Value::Dict google_groups_dict;
+  base::DictValue google_groups_dict;
   local_state()->SetDict(prefs::kVariationsGoogleGroups,
                          std::move(google_groups_dict));
 
@@ -1619,8 +1652,8 @@ TEST_F(FieldTrialCreatorTest,
       user_data_dir_path());
 
   // Add an empty dict value for the pref.
-  base::Value::Dict google_groups_dict;
-  base::Value::List profile_1_groups;
+  base::DictValue google_groups_dict;
+  base::ListValue profile_1_groups;
   google_groups_dict.Set("Profile 1", std::move(profile_1_groups));
   local_state()->SetDict(prefs::kVariationsGoogleGroups,
                          std::move(google_groups_dict));
@@ -1638,8 +1671,8 @@ TEST_F(FieldTrialCreatorTest,
       user_data_dir_path());
 
   // Add an empty dict value for the pref.
-  base::Value::Dict google_groups_dict;
-  base::Value::List profile_1_groups;
+  base::DictValue google_groups_dict;
+  base::ListValue profile_1_groups;
   profile_1_groups.Append("123");
   profile_1_groups.Append("456");
   google_groups_dict.Set("Profile 1", std::move(profile_1_groups));
@@ -1659,8 +1692,8 @@ TEST_F(FieldTrialCreatorTest,
       user_data_dir_path());
 
   // Add an empty dict value for the pref.
-  base::Value::Dict google_groups_dict;
-  base::Value::List profile_1_groups;
+  base::DictValue google_groups_dict;
+  base::ListValue profile_1_groups;
   profile_1_groups.Append("Alice");
   profile_1_groups.Append("Bob");
   google_groups_dict.Set("Profile 1", std::move(profile_1_groups));
@@ -1678,9 +1711,165 @@ TEST_F(FieldTrialCreatorTest, GetGoogleGroupsFromPrefsClearsDeletedProfiles) {
       local_state(), &variations_service_client, &safe_seed_manager,
       user_data_dir_path());
 
-  EXPECT_CALL(variations_service_client,
-              RemoveGoogleGroupsFromPrefsForDeletedProfiles(local_state()));
-  field_trial_creator.GetGoogleGroupsFromPrefs();
+  base::DictValue google_groups_dict;
+  google_groups_dict.Set("Profile 1", base::ListValue().Append("123"));
+  google_groups_dict.Set("Profile 2", base::ListValue().Append("456"));
+  local_state()->SetDict(prefs::kVariationsGoogleGroups,
+                         std::move(google_groups_dict));
+
+  EXPECT_CALL(variations_service_client, GetAllProfilesKeys(local_state()))
+      .WillOnce(Return(base::flat_set<std::string>({"Profile 2"})));
+  EXPECT_EQ(field_trial_creator.GetGoogleGroupsFromPrefs(),
+            base::flat_set<uint64_t>({456}));
+  EXPECT_THAT(local_state()
+                  ->GetDict(prefs::kVariationsGoogleGroups)
+                  .FindList("Profile 1"),
+              ::testing::IsNull());
+}
+
+TEST_F(FieldTrialCreatorTest, GetEnterpriseGroupsFromPrefsWhenPrefNotPresent) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>());
+}
+
+TEST_F(FieldTrialCreatorTest, GetEnterpriseGroupsFromPrefsWhenEmptyDict) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>());
+}
+
+TEST_F(FieldTrialCreatorTest, GetEnterpriseGroupsFromPrefsWhenEmptyLists) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  enterprise_groups_dict.Set("Profile 1", base::ListValue());
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+  local_state()->SetList(enterprise_groups::kEnterpriseGroupsBrowserPref,
+                         base::ListValue());
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>());
+}
+
+TEST_F(FieldTrialCreatorTest,
+       GetEnterpriseGroupsFromPrefsWhenProfileWithNonEmptyList) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  enterprise_groups_dict.Set(
+      "Profile 1", base::ListValue().Append("123").Append("experiment"));
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>({"123", "experiment"}));
+}
+
+TEST_F(FieldTrialCreatorTest,
+       GetEnterpriseGroupsFromPrefsWhenBrowserWithNonEmptyList) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  local_state()->SetList(enterprise_groups::kEnterpriseGroupsBrowserPref,
+                         base::ListValue().Append("123").Append("experiment"));
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>({"123", "experiment"}));
+}
+
+TEST_F(FieldTrialCreatorTest,
+       GetEnterpriseGroupsFromPrefsCombinesProfileAndBrowserPrefs) {
+  TestVariationsServiceClient variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  enterprise_groups_dict.Set(
+      "Profile 1", base::ListValue().Append("123").Append("profiles"));
+  enterprise_groups_dict.Set(
+      "Profile 2", base::ListValue().Append("456").Append("profiles"));
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+  local_state()->SetList(enterprise_groups::kEnterpriseGroupsBrowserPref,
+                         base::ListValue().Append("456").Append("browser"));
+
+  ASSERT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>({"123", "456", "browser", "profiles"}));
+}
+
+TEST_F(FieldTrialCreatorTest,
+       GetEnterpriseGroupsFromPrefsClearsDeletedProfiles) {
+  NiceMock<MockVariationsServiceClient> variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  enterprise_groups_dict.Set("Profile 1", base::ListValue().Append("123"));
+  enterprise_groups_dict.Set("Profile 2", base::ListValue().Append("456"));
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+
+  EXPECT_CALL(variations_service_client, GetAllProfilesKeys(local_state()))
+      .WillOnce(Return(base::flat_set<std::string>({"Profile 2"})));
+  EXPECT_EQ(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+            base::flat_set<std::string>({"456"}));
+  EXPECT_THAT(local_state()
+                  ->GetDict(enterprise_groups::kEnterpriseGroupsProfilePref)
+                  .FindList("Profile 1"),
+              ::testing::IsNull());
+}
+
+TEST_F(FieldTrialCreatorTest,
+       GetEnterpriseGroupsFromPrefsReturnsEmptyForUnsupportedPlatform) {
+  TestVariationsServiceClientWithoutEnterpriseSupport variations_service_client;
+  NiceMock<MockSafeSeedManager> safe_seed_manager(local_state());
+  TestVariationsFieldTrialCreator field_trial_creator(
+      local_state(), &variations_service_client, &safe_seed_manager,
+      user_data_dir_path());
+
+  base::DictValue enterprise_groups_dict;
+  enterprise_groups_dict.Set(
+      "Profile 1", base::ListValue().Append("123").Append("profiles"));
+  enterprise_groups_dict.Set(
+      "Profile 2", base::ListValue().Append("456").Append("profiles"));
+  local_state()->SetDict(enterprise_groups::kEnterpriseGroupsProfilePref,
+                         std::move(enterprise_groups_dict));
+  local_state()->SetList(enterprise_groups::kEnterpriseGroupsBrowserPref,
+                         base::ListValue().Append("456").Append("browser"));
+
+  EXPECT_THAT(field_trial_creator.GetEnterpriseGroupsFromPrefs(),
+              ::testing::IsEmpty());
 }
 
 struct SeedWithLimitedLayerTestParams {
@@ -1719,8 +1908,8 @@ TEST_P(LimitedLayerFieldTrialCreatorTest, SetUpFieldTrials) {
   TestVariationsServiceClient variations_service_client;
   std::unique_ptr<VariationsSeedStore> seed_store =
       CreateSeedStore(local_state(), seed_file_path());
-  VariationsFieldTrialCreator field_trial_creator(
-      &variations_service_client, std::move(seed_store), UIStringOverrider());
+  VariationsFieldTrialCreator field_trial_creator(&variations_service_client,
+                                                  std::move(seed_store));
 
   // Third, create the FieldTrialList.
   metrics::TestEnabledStateProvider enabled_state_provider(
@@ -1743,7 +1932,6 @@ TEST_P(LimitedLayerFieldTrialCreatorTest, SetUpFieldTrials) {
   EXPECT_EQ(
       field_trial_creator.SetUpFieldTrials(
           /*variation_ids=*/{},
-          /*command_line_variation_ids=*/std::string(),
           std::vector<base::FeatureList::FeatureOverrideInfo>(),
           std::make_unique<base::FeatureList>(), metrics_state_manager.get(),
           &platform_field_trials, &safe_seed_manager,
@@ -1831,10 +2019,9 @@ TEST_P(FieldTrialCreatorFormFactorTest, FilterByFormFactor) {
   // Set up the field trials.
   VariationsFieldTrialCreator field_trial_creator{
       &variations_service_client,
-      CreateSeedStore(local_state(), seed_file_path()), UIStringOverrider()};
+      CreateSeedStore(local_state(), seed_file_path())};
   EXPECT_TRUE(field_trial_creator.SetUpFieldTrials(
       /*variation_ids=*/{},
-      /*command_line_variation_ids=*/std::string(),
       std::vector<base::FeatureList::FeatureOverrideInfo>(),
       std::make_unique<base::FeatureList>(), metrics_state_manager.get(),
       &platform_field_trials, &safe_seed_manager,

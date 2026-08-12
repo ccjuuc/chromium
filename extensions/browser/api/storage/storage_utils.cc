@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/values.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/process_map.h"
@@ -93,9 +94,9 @@ void SetAccessLevelForArea(const ExtensionId& extension_id,
 
 base::Value ValueChangeToValue(
     std::vector<SessionStorageManager::ValueChange> changes) {
-  base::Value::Dict changes_value;
+  base::DictValue changes_value;
   for (auto& change : changes) {
-    base::Value::Dict change_value;
+    base::DictValue change_value;
     if (change.old_value.has_value()) {
       change_value.Set("oldValue", std::move(change.old_value.value()));
     }
@@ -130,7 +131,7 @@ bool CanRendererAccessExtensionStorage(
     if (access_level == api::storage::AccessLevel::kTrustedContexts) {
       ProcessMap* process_map = ProcessMap::Get(&browser_context);
       return process_map->IsPrivilegedExtensionProcess(
-          extension, render_process_host.GetDeprecatedID());
+          extension, render_process_host.GetID());
     }
   }
 

@@ -5,7 +5,13 @@
 #ifndef EXTENSIONS_BROWSER_UI_UTIL_H_
 #define EXTENSIONS_BROWSER_UI_UTIL_H_
 
+#include <string>
+
 #include "extensions/common/manifest.h"
+
+namespace base {
+class DictValue;
+}  // namespace base
 
 namespace extensions {
 class Extension;
@@ -18,6 +24,24 @@ bool ShouldDisplayInExtensionSettings(Manifest::Type type,
                                       mojom::ManifestLocation location);
 // Convenience method of the above taking an Extension object.
 bool ShouldDisplayInExtensionSettings(const Extension& extension);
+
+// Returns the extension name to be used in UI surfaces. Name will be truncated
+// if its very long, preventing extension name to spoof or break UI surfaces
+// (see crbug.com/40063885).
+std::u16string GetFixupExtensionNameForUIDisplay(
+    const std::u16string& extension_name);
+std::u16string GetFixupExtensionNameForUIDisplay(
+    const std::string& extension_name);
+
+// Creates a dummy extension from the `manifest`, replacing the name and
+// description with the localizations if provided.
+scoped_refptr<extensions::Extension> GetLocalizedExtensionForDisplay(
+    const base::DictValue& manifest,
+    int flags,  // Extension::InitFromValueFlags
+    const ExtensionId& id,
+    const std::string& localized_name,
+    const std::string& localized_description,
+    std::u16string* error);
 
 }  // namespace ui_util
 }  // namespace extensions

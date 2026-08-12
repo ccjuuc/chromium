@@ -6,16 +6,13 @@
 
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/actor/resources/grit/actor_browser_resources.h"
+#include "chrome/browser/glic/browser_ui/glic_vector_icon_manager.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/alert/tab_alert.h"
-#include "chrome/common/chrome_features.h"
+#include "components/tabs/public/tab_alert.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/browser_ui/glic_vector_icon_manager.h"
-#endif
+#include "ui/base/ui_base_features.h"
 
 namespace tabs {
 
@@ -71,47 +68,59 @@ ui::ColorId GetAlertIndicatorColor(TabAlert state,
 const gfx::VectorIcon& GetAlertIcon(TabAlert alert_state) {
   switch (alert_state) {
     case TabAlert::kAudioPlaying:
-      return vector_icons::kVolumeUpChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kVolumeUpIcon
+                 : vector_icons::kVolumeUpChromeRefreshOldIcon;
     case TabAlert::kAudioMuting:
-      return vector_icons::kVolumeOffChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kVolumeOffIcon
+                 : vector_icons::kVolumeOffChromeRefreshOldIcon;
     case TabAlert::kMediaRecording:
     case TabAlert::kAudioRecording:
     case TabAlert::kVideoRecording:
     case TabAlert::kDesktopCapturing:
-      return vector_icons::kRadioButtonCheckedIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kRadioButtonCheckedIcon
+                 : vector_icons::kRadioButtonCheckedOldIcon;
     case TabAlert::kTabCapturing:
-      return vector_icons::kCaptureIcon;
+      return features::IsRoundedIconsEnabled() ? vector_icons::kCaptureIcon
+                                               : vector_icons::kCaptureOldIcon;
     case TabAlert::kBluetoothConnected:
-      return vector_icons::kBluetoothConnectedIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kBluetoothConnectedIcon
+                 : vector_icons::kBluetoothConnectedOldIcon;
     case TabAlert::kBluetoothScanActive:
-      return vector_icons::kBluetoothScanningChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kBluetoothSearchingIcon
+                 : vector_icons::kBluetoothScanningChromeRefreshOldIcon;
     case TabAlert::kUsbConnected:
-      return vector_icons::kUsbChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kUsbIcon
+                 : vector_icons::kUsbChromeRefreshOldIcon;
     case TabAlert::kHidConnected:
-      return vector_icons::kVideogameAssetChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kVideogameAssetIcon
+                 : vector_icons::kVideogameAssetChromeRefreshOldIcon;
     case TabAlert::kSerialConnected:
-      return vector_icons::kSerialPortChromeRefreshIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kDeveloperBoardIcon
+                 : vector_icons::kSerialPortChromeRefreshOldIcon;
     case TabAlert::kPipPlaying:
-      return vector_icons::kPictureInPictureAltIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kPictureInPictureAltIcon
+                 : vector_icons::kPictureInPictureAltOldIcon;
     case TabAlert::kVrPresentingInHeadset:
-      return vector_icons::kCardboardIcon;
+      return features::IsRoundedIconsEnabled()
+                 ? vector_icons::kCardboardIcon
+                 : vector_icons::kCardboardOldIcon;
     case TabAlert::kActorWaitingOnUser:
     case TabAlert::kActorAccessing:
-#if BUILDFLAG(ENABLE_GLIC)
-      if (base::FeatureList::IsEnabled(features::kGlicActorUiTaskIconV2)) {
-        return glic::GlicVectorIconManager::GetVectorIcon(
-            IDR_ACTOR_AUTO_BROWSE_ICON);
-      }
-#endif
-      return kTvIcon;
+      return glic::GlicVectorIconManager::GetVectorIcon(
+          IDR_ACTOR_AUTO_BROWSE_ICON);
     case TabAlert::kGlicAccessing:
     case TabAlert::kGlicSharing:
-#if BUILDFLAG(ENABLE_GLIC)
       return glic::GlicVectorIconManager::GetVectorIcon(
           IDR_GLIC_ACCESSING_ICON);
-#else
-      return kTvIcon;
-#endif
   }
 }
 
@@ -121,8 +130,8 @@ ui::ImageModel GetAlertImageModel(TabAlert alert_state,
   // the other tab alert indicator icons.
   const int image_width =
       GetLayoutConstant(alert_state == tabs::TabAlert::kTabCapturing
-                            ? TAB_ALERT_INDICATOR_CAPTURE_ICON_WIDTH
-                            : TAB_ALERT_INDICATOR_ICON_WIDTH);
+                            ? LayoutConstant::kTabAlertIndicatorCaptureIconWidth
+                            : LayoutConstant::kTabAlertIndicatorIconWidth);
 
   return ui::ImageModel::FromVectorIcon(GetAlertIcon(alert_state), icon_color,
                                         image_width);

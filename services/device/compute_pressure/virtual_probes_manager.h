@@ -31,12 +31,10 @@ class VirtualProbesManager final : public ProbesManager {
   // is not being overridden.
   void RemoveOverrideForSource(mojom::PressureSource source);
 
-  // Adds a new sample and own contribution estimate for the given |source| and
-  // updates any mojom::PressureClient instances waiting for updates.
+  // Adds a new sample for the given |source| and updates any
+  // mojom::PressureClient instances waiting for updates.
   // Does nothing if |source| is not being overridden.
-  void AddDataUpdate(mojom::PressureSource source,
-                     mojom::PressureState state,
-                     double own_contribution_estimate);
+  void AddUpdate(mojom::PressureSource source, mojom::PressureState state);
 
   // Returns true if |source| has a corresponding VirtualProbe instance, and
   // false otherwise.
@@ -45,10 +43,7 @@ class VirtualProbesManager final : public ProbesManager {
  private:
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::EnumSet<mojom::PressureSource,
-                mojom::PressureSource::kMinValue,
-                mojom::PressureSource::kMaxValue>
-      overridden_sources_;
+  base::EnumSet<mojom::PressureSource> overridden_sources_;
 };
 
 }  // namespace device

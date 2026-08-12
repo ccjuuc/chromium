@@ -9,6 +9,8 @@
 
 #include "chrome/browser/password_manager/android/password_store_android_backend_receiver_bridge.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/sync/protocol/deletion_origin.pb.h"
 
 namespace password_manager {
 
@@ -85,7 +87,7 @@ class PasswordStoreAndroidBackendDispatcherBridge {
   // used to decide which storage to use. If `account` is empty, the
   // local storage will be used.
   virtual void AddLogin(JobId job_id,
-                        const PasswordForm& form,
+                        const StoredCredential& credential,
                         std::string account) = 0;
 
   // Triggers an asynchronous request to update |form| in store. The
@@ -94,7 +96,7 @@ class PasswordStoreAndroidBackendDispatcherBridge {
   // used to decide which storage to use. If `account` is empty, the
   // local storage will be used.
   virtual void UpdateLogin(JobId job_id,
-                           const PasswordForm& form,
+                           const StoredCredential& credential,
                            std::string account) = 0;
 
   // Triggers an asynchronous request to remove |form| from store. The
@@ -103,8 +105,18 @@ class PasswordStoreAndroidBackendDispatcherBridge {
   // used to decide which storage to use. If `account` is empty, the
   // local storage will be used.
   virtual void RemoveLogin(JobId job_id,
-                           const PasswordForm& form,
+                           const StoredCredential& credential,
                            std::string account) = 0;
+
+  // Triggers an asynchronous request to remove |form| from store with
+  // `DeletionOrigin`. The registered `Consumer` is notified with
+  // `OnLoginsChanged` via the receiver bridge when the job with the given JobId
+  // succeeds. `account` is used to decide which storage to use. If `account` is
+  // empty, the local storage will be used.
+  virtual void RemoveLogin(JobId job_id,
+                           const StoredCredential& credential,
+                           std::string account,
+                           sync_pb::DeletionOrigin deletion_origin) = 0;
 
   // Factory function for creating the bridge. Implementation is pulled in by
   // including an implementation or by defining it explicitly in tests.

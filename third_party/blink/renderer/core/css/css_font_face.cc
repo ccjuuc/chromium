@@ -61,6 +61,10 @@ void CSSFontFace::RemoveSegmentedFontFace(
   segmented_font_faces_.erase(segmented_font_face);
 }
 
+void CSSFontFace::UpdateRanges(HeapVector<UnicodeRange>&& ranges) {
+  ranges_ = MakeGarbageCollected<UnicodeRangeSet>(std::move(ranges));
+}
+
 void CSSFontFace::DidBeginLoad() {
   if (LoadStatus() == FontFace::kUnloaded) {
     SetLoadStatus(FontFace::kLoading);
@@ -214,7 +218,7 @@ bool CSSFontFace::MaybeLoadFont(const FontDescription& font_description,
   // only checks if the first character of the text is included in the font's
   // unicode range. If this font is needed by subsequent characters, load is
   // kicked off in layout phase.
-  UChar32 character = text.CharacterStartingAt(0);
+  UChar32 character = text.CodePointAtOrZero(0);
   if (ranges_->Contains(character)) {
     if (LoadStatus() == FontFace::kUnloaded) {
       Load(font_description);

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/accelerated_widget_mac/ca_renderer_layer_tree.h"
 
 #import <AVFoundation/AVFoundation.h>
@@ -43,6 +38,8 @@ namespace ui {
 // https://crbug.com/1441762
 BASE_FEATURE(kFullscreenLowPowerBackdropMac, base::FEATURE_DISABLED_BY_DEFAULT);
 
+namespace {
+
 #if BUILDFLAG(IS_MAC)
 // Show borders around RenderPassDrawQuad CALayers. which is the output of a
 // non-root render pass.
@@ -50,7 +47,17 @@ BASE_FEATURE(kShowMacRenderPassDrawQuadBorders,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-namespace {
+// Use the CALayer contentsHeadroom attribute, if available.
+BASE_FEATURE(kUseCALayerContentsHeadroom, base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool UseCALayerContentsHeadroom() {
+  if (@available(macOS 26, iOS 26, *)) {
+    static bool feature_enabled =
+        base::FeatureList::IsEnabled(kUseCALayerContentsHeadroom);
+    return feature_enabled;
+  }
+  return false;
+}
 
 class ComparatorSkColor4f {
  public:
@@ -110,16 +117,27 @@ bool AVSampleBufferDisplayLayerEnqueueCVPixelBuffer(
                        kCMSampleAttachmentKey_DisplayImmediately,
                        kCFBooleanTrue);
 
-  [av_layer enqueueSampleBuffer:sample_buffer.get()];
+  AVQueuedSampleBufferRenderingStatus status;
+  NSError* error;
+  if (@available(macOS 14, iOS 17, *)) {
+    AVSampleBufferVideoRenderer* renderer = av_layer.sampleBufferRenderer;
+    [renderer enqueueSampleBuffer:sample_buffer.get()];
+    status = renderer.status;
+    error = renderer.error;
+  } else {
+    [av_layer enqueueSampleBuffer:sample_buffer.get()];
+    status = av_layer.status;
+    error = av_layer.error;
+  }
 
-  switch (av_layer.status) {
+  switch (status) {
     case AVQueuedSampleBufferRenderingStatusUnknown:
       LOG(ERROR) << "AVSampleBufferDisplayLayer has status unknown, but should "
                     "be rendering.";
       return false;
     case AVQueuedSampleBufferRenderingStatusFailed:
       LOG(ERROR) << "AVSampleBufferDisplayLayer has status failed, error: "
-                 << base::SysNSStringToUTF8(av_layer.error.description);
+                 << base::SysNSStringToUTF8(error.description);
       return false;
     case AVQueuedSampleBufferRenderingStatusRendering:
       break;
@@ -200,14 +218,12 @@ bool AVSampleBufferDisplayLayerEnqueueIOSurface(
 }
 
 CATransform3D ToCATransform3D(const gfx::Transform& t) {
-  CATransform3D result;
-  auto* dst = &result.m11;
-  for (int col = 0; col < 4; col++) {
-    for (int row = 0; row < 4; row++) {
-      *dst++ = t.rc(row, col);
-    }
-  }
-  return result;
+  return CATransform3D{
+      t.rc(0, 0), t.rc(1, 0), t.rc(2, 0), t.rc(3, 0),  //
+      t.rc(0, 1), t.rc(1, 1), t.rc(2, 1), t.rc(3, 1),  //
+      t.rc(0, 2), t.rc(1, 2), t.rc(2, 2), t.rc(3, 2),  //
+      t.rc(0, 3), t.rc(1, 3), t.rc(2, 3), t.rc(3, 3)   //
+  };
 }
 
 }  // namespace
@@ -405,8 +421,10 @@ void CARendererLayerTree::ContentLayer::UpdateMapAndMatchOldLayers(
   if (matched_content_layer->ca_layer_used_)
     return;
 
-  auto* matched_transform_layer = matched_content_layer->parent_layer_;
-  auto* matched_clip_layer = matched_transform_layer->parent_layer_;
+  TransformLayer* matched_transform_layer =
+      matched_content_layer->parent_layer_;
+  ClipAndSortingLayer* matched_clip_layer =
+      matched_transform_layer->parent_layer_;
 
   // If the parent is different, the superlayer must have changed. It should be
   // removed from its superlayer and inserted back to the new superlayer in
@@ -762,7 +780,8 @@ CARendererLayerTree::ContentLayer::ContentLayer(
   }
 
   // Determine which type of CALayer subclass we should use.
-  if (metal::ShouldUseHDRCopier(io_surface.get(), hdr_metadata_,
+  if (!UseCALayerContentsHeadroom() &&
+      metal::ShouldUseHDRCopier(io_surface.get(), hdr_metadata_,
                                 io_surface_color_space)) {
     type_ = CALayerType::kHDRCopier;
   } else if (io_surface) {
@@ -1104,6 +1123,7 @@ void CARendererLayerTree::ContentLayer::CommitToCA(
     std::swap(av_layer_, old_layer_->av_layer_);
     update_contents =
         old_layer_->io_surface_ != io_surface_ ||
+        old_layer_->io_surface_color_space_ != io_surface_color_space_ ||
         old_layer_->cv_pixel_buffer_ != cv_pixel_buffer_ ||
         old_layer_->solid_color_contents_ != solid_color_contents_ ||
         old_layer_->hdr_metadata_ != hdr_metadata_;
@@ -1121,6 +1141,10 @@ void CARendererLayerTree::ContentLayer::CommitToCA(
     update_ca_edge_aa_mask = old_layer_->ca_edge_aa_mask_ != ca_edge_aa_mask_;
     update_opacity = old_layer_->opacity_ != opacity_;
     update_ca_filter = old_layer_->ca_filter_ != ca_filter_;
+    if (type_ == CALayerType::kVideo) {
+      av_layer_.preventsCapture =
+          protected_video_type_ != gfx::ProtectedVideoType::kClear;
+    }
   } else {
     switch (type_) {
       case CALayerType::kHDRCopier:
@@ -1211,6 +1235,22 @@ void CARendererLayerTree::ContentLayer::CommitToCA(
         ca_layer_.contentsScale = tree()->scale_factor_;
       }
       break;
+  }
+
+  if (UseCALayerContentsHeadroom() && update_contents) {
+    if (@available(macOS 26, iOS 26, *)) {
+      if (io_surface_color_space_.IsHDR()) {
+        // Assume that all HDR content uses the full 4 stops (16x linear)
+        // headroom that an XDR display supports. Replace this when an accurate
+        // TODO(https://crbug.com/540031280): Accurately track content HDR
+        // headroom.
+        ca_layer_.contentsHeadroom = 16.f;
+        ca_layer_.preferredDynamicRange = CADynamicRangeHigh;
+      } else {
+        ca_layer_.contentsHeadroom = 0.f;
+        ca_layer_.preferredDynamicRange = CADynamicRangeStandard;
+      }
+    }
   }
 
   if (update_contents_rect) {

@@ -15,9 +15,9 @@ import org.hamcrest.TypeSafeMatcher;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.transit.ViewElement;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.native_page.ContextMenuManager.ContextMenuItemId;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.transit.tabmodel.TabCountChangedCondition;
 import org.chromium.chrome.test.transit.ui.ListMenuFacility;
@@ -37,6 +37,7 @@ public class MvtsTileContextMenuFacility extends ListMenuFacility<RegularNewTabP
     public Item openInNewTabInGroup;
     public Item openInIncognitoTab;
     public Item openInIncognitoWindow;
+    public Item openInNewWindow;
     public Item openInOtherWindow;
     public Item downloadLink;
     public Item editShortcut;
@@ -155,6 +156,10 @@ public class MvtsTileContextMenuFacility extends ListMenuFacility<RegularNewTabP
                 items.declareItem(
                         withText("Open in Incognito window"),
                         withMenuItemId(ContextMenuItemId.OPEN_IN_INCOGNITO_WINDOW));
+        openInNewWindow =
+                items.declareItem(
+                        withText("Open in new window"),
+                        withMenuItemId(ContextMenuItemId.OPEN_IN_NEW_WINDOW));
         openInOtherWindow =
                 items.declareItem(
                         withText("Open in other window"),

@@ -29,12 +29,16 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 
+#include <unicode/uscript.h>
+
 #include <limits>
 #include <memory>
 
+#include "base/byte_size.h"
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/escape.h"
 #include "base/system/sys_info.h"
 #include "base/timer/elapsed_timer.h"
@@ -44,6 +48,7 @@
 #include "skia/ext/font_utils.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/public/platform/web_font_prewarmer.h"
 #include "third_party/blink/renderer/platform/font_family_names.h"
 #include "third_party/blink/renderer/platform/fonts/alternate_font_family.h"
 #include "third_party/blink/renderer/platform/fonts/font_cache_client.h"
@@ -65,6 +70,7 @@
 #include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "ui/gfx/font_list.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -88,6 +94,29 @@ float FontCache::device_scale_factor_ = 1.0;
 bool FontCache::antialiased_text_enabled_ = false;
 bool FontCache::lcd_text_enabled_ = false;
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID)
+WebFontPrewarmer* FontCache::prewarmer_ = nullptr;
+
+// static
+void FontCache::PrewarmFamily(const AtomicString& family_name) {
+  DCHECK(IsMainThread());
+  TRACE_EVENT1("fonts", "FontCache::PrewarmFamily", "family",
+               family_name.Utf8());
+
+  if (!prewarmer_) {
+    return;
+  }
+
+  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, prewarmed_families, ());
+  const auto result = prewarmed_families.insert(family_name);
+  if (!result.is_new_entry) {
+    return;
+  }
+
+  prewarmer_->PrewarmFamily(family_name);
+}
+#endif
 
 FontCache& FontCache::Get() {
   return FontGlobalContext::GetFontCache();
@@ -128,11 +157,6 @@ const FontPlatformData* FontCache::GetFontPlatformData(
     const FontFaceCreationParams& creation_params,
     AlternateFontName alternate_font_name) {
   TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
-
-  if (!platform_init_) {
-    platform_init_ = true;
-    PlatformInit();
-  }
 
 #if !BUILDFLAG(IS_MAC)
   if (creation_params.CreationType() == kCreateFontByFamily &&
@@ -198,8 +222,8 @@ String FontCache::FirstAvailableOrFirst(const String& families) {
   // For now we prefer shared code over the cost because a) inputs are
   // only from grd/xtb and all ASCII, and b) at most only a few times per
   // setting change/script.
-  return String::FromUTF8(
-      gfx::FontList::FirstAvailableOrFirst(families.Utf8().c_str()));
+  return String::FromUtf8(
+      gfx::FontList::FirstAvailableOrFirst(families.Utf8()));
 }
 
 const SimpleFontData* FontCache::FallbackFontForCharacter(
@@ -221,7 +245,14 @@ const SimpleFontData* FontCache::FallbackFontForCharacter(
   base::ElapsedTimer timer;
   const SimpleFontData* result = PlatformFallbackFontForCharacter(
       description, lookup_char, font_data_to_substitute, fallback_priority);
-  FontPerformance::AddSystemFallbackFontTime(timer.Elapsed());
+  base::TimeDelta elapsed = timer.Elapsed();
+  bool is_emoji = IsNonTextFallbackPriority(fallback_priority);
+  UErrorCode err = U_ZERO_ERROR;
+  UScriptCode script = uscript_getScript(lookup_char, &err);
+  if (U_FAILURE(err)) {
+    script = USCRIPT_INVALID_CODE;
+  }
+  FontPerformance::AddSystemFallbackFontTime(script, is_emoji, elapsed);
   return result;
 }
 
@@ -231,15 +262,13 @@ void FontCache::AddClient(FontCacheClient* client) {
   font_cache_clients_.insert(client);
 }
 
-uint16_t FontCache::Generation() {
-  return generation_;
-}
-
 void FontCache::Invalidate() {
   TRACE_EVENT0("fonts,ui", "FontCache::Invalidate");
   font_platform_data_cache_.Clear();
   font_data_cache_.Clear();
-  generation_++;
+#if BUILDFLAG(IS_MAC)
+  unavailable_font_families_.clear();
+#endif
 
   for (const auto& client : font_cache_clients_) {
     client->FontCacheInvalidated();
@@ -248,28 +277,23 @@ void FontCache::Invalidate() {
 
 void FontCache::CrashWithFontInfo(const FontDescription* font_description) {
   int num_families = std::numeric_limits<int>::min();
+  FontUniqueNameLookup::FontServiceConnectionState
+      font_service_connection_state =
+          FontUniqueNameLookup::FontServiceConnectionState::kNotSupported;
 
   num_families = skia::DefaultFontMgr()->countFamilies();
+  if (FontUniqueNameLookup* unique_name_lookup =
+          FontGlobalContext::Get().GetFontUniqueNameLookup()) {
+    font_service_connection_state =
+        unique_name_lookup->GetFontServiceConnectionStateForCrash();
+  }
 
   FontDescription font_description_copy = *font_description;
   base::debug::Alias(&font_description_copy);
   base::debug::Alias(&num_families);
+  base::debug::Alias(&font_service_connection_state);
 
   NOTREACHED();
-}
-
-void FontCache::DumpShapeResultCache(
-    base::trace_event::ProcessMemoryDump* memory_dump) {
-  DCHECK(IsMainThread());
-  base::trace_event::MemoryAllocatorDump* dump =
-      memory_dump->CreateAllocatorDump("font_caches/shape_caches");
-  size_t shape_result_cache_size = 0;
-  // TODO(layout-dev): We had a logic to compute the memory amount consumed
-  // by the legacy ShapeCache.  Should we update this for NGShapeCache and
-  // FrameShapeCache?
-  dump->AddScalar("size", "bytes", shape_result_cache_size);
-  memory_dump->AddSuballocation(dump->guid(),
-                                Partitions::kAllocatedObjectPoolName);
 }
 
 sk_sp<SkTypeface> FontCache::CreateTypefaceFromUniqueName(
@@ -333,13 +357,14 @@ void FontCache::MaybePreloadSystemFonts() {
     return;
   }
 
-  if (base::SysInfo::AmountOfPhysicalMemory().InGiB() <
-      features::kPreloadSystemFontsRequiredMemoryGB.Get()) {
+  if (base::SysInfo::AmountOfTotalPhysicalMemory() <
+      base::GiBU(base::saturated_cast<uint64_t>(
+          features::kPreloadSystemFontsRequiredMemoryGB.Get()))) {
     return;
   }
 
   std::unique_ptr<JSONArray> targets =
-      JSONArray::From(ParseJSON(String::FromUTF8(
+      JSONArray::From(ParseJSON(String::FromUtf8(
           base::UnescapeURLComponent(features::kPreloadSystemFontsTargets.Get(),
                                      base::UnescapeRule::SPACES))));
 

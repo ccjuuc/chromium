@@ -14,10 +14,12 @@ import android.content.pm.PackageManager;
 import android.database.DataSetObserver;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseExpandableListAdapter;
@@ -80,6 +82,7 @@ public class CrashesListFragment extends DevUiBaseFragment {
     public static final int MAX_CRASHES_NUMBER = 20;
 
     private CrashListExpandableAdapter mCrashListViewAdapter;
+    private ExpandableListView mCrashListView;
     private Context mContext;
 
     private static @Nullable Runnable sCrashInfoLoadedListener;
@@ -163,8 +166,34 @@ public class CrashesListFragment extends DevUiBaseFragment {
 
         TextView crashesSummaryView = view.findViewById(R.id.crashes_summary_textview);
         mCrashListViewAdapter = new CrashListExpandableAdapter(crashesSummaryView);
-        ExpandableListView crashListView = view.findViewById(R.id.crashes_list);
-        crashListView.setAdapter(mCrashListViewAdapter);
+        mCrashListView = view.findViewById(R.id.crashes_list);
+        mCrashListView.setAdapter(mCrashListViewAdapter);
+
+        if (isTV()) {
+            View navBarButton = activity.findViewById(R.id.navigation_crash_ui);
+            if (shouldRequestFocus()) {
+                crashesSummaryView.requestFocus();
+            }
+            mCrashListView.setItemsCanFocus(true);
+            registerBackPressToNavBarCallback(navBarButton);
+
+            registerDownPressToFocusOnFirstItem(crashesSummaryView, mCrashListView);
+        }
+    }
+
+    private void registerDownPressToFocusOnFirstItem(
+            View sourceView, android.widget.ListView targetListView) {
+        sourceView.setOnKeyListener(
+                (v, keyCode, event) -> {
+                    if (event.getAction() == android.view.MotionEvent.ACTION_DOWN
+                            && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                        if (targetListView.getChildCount() > 0) {
+                            targetListView.getChildAt(0).requestFocus();
+                            return true;
+                        }
+                    }
+                    return false;
+                });
     }
 
     @Override
@@ -242,7 +271,36 @@ public class CrashesListFragment extends DevUiBaseFragment {
                     view.findViewById(R.id.crash_header),
                     packageName,
                     new Date(crashInfo.captureTime).toString());
+
+            if (isTV()) {
+                setupTvFocusForGroupView(view, groupPosition, isExpanded);
+            }
+
             return view;
+        }
+
+        private void setupTvFocusForGroupView(View view, int position, boolean isExpanded) {
+            view.setOnKeyListener(
+                    (v, keyCode, event) -> {
+                        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                            // Trap the focus when pressing down on the last item
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                                    && position == getGroupCount() - 1
+                                    && !isExpanded) {
+                                return true;
+                            }
+                            // Handle DPAD_CENTER to expand/collapse the group
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+                                if (mCrashListView.isGroupExpanded(position)) {
+                                    mCrashListView.collapseGroup(position);
+                                } else {
+                                    mCrashListView.expandGroup(position);
+                                }
+                                return true;
+                            }
+                        }
+                        return false; // Let the system handle other keys/positions
+                    });
         }
 
         // Child View where more info about the crash is shown:
@@ -343,6 +401,13 @@ public class CrashesListFragment extends DevUiBaseFragment {
                         WebViewCrashInfoCollector.updateCrashLogFileWithNewCrashInfo(crashInfo);
                         updateCrashes();
                     });
+
+            if (isTV()) {
+                preventFocusEscapeFromLastItem(
+                        view,
+                        groupPosition == getGroupCount() - 1
+                                && childPosition == getChildrenCount(groupPosition) - 1);
+            }
 
             return view;
         }

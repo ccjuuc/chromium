@@ -36,8 +36,8 @@ ScrollbarLayerImplBase::~ScrollbarLayerImplBase() {
   layer_tree_impl()->UnregisterScrollbar(this);
 }
 
-void ScrollbarLayerImplBase::PushPropertiesTo(LayerImpl* layer) {
-  LayerImpl::PushPropertiesTo(layer);
+void ScrollbarLayerImplBase::CopyPropertiesTo(LayerImpl* layer) const {
+  LayerImpl::CopyPropertiesTo(layer);
   DCHECK(layer->IsScrollbarLayer());
   ScrollbarLayerImplBase* scrollbar_layer = ToScrollbarLayer(layer);
   scrollbar_layer->SetHasFindInPageTickmarks(has_find_in_page_tickmarks_);
@@ -285,14 +285,19 @@ void ScrollbarLayerImplBase::SetOverlayScrollbarLayerOpacityAnimated(
 
   PropertyTrees* property_trees = layer_tree_impl()->property_trees();
 
-  EffectNode* node =
-      property_trees->effect_tree_mutable().Node(effect_tree_index());
-  if (node->opacity == opacity) {
+  int effect_id = effect_tree_index();
+  if (effect_id == kInvalidPropertyNodeId) {
     return;
   }
 
-  node->opacity = opacity;
-  node->effect_changed = true;
+  EffectNode& node =
+      property_trees->effect_tree_mutable().MutableNode(effect_id);
+  if (node.opacity == opacity) {
+    return;
+  }
+
+  node.opacity = opacity;
+  node.effect_changed = true;
   property_trees->set_changed(true);
   property_trees->effect_tree_mutable().set_needs_update(true);
   layer_tree_impl()->set_needs_update_draw_properties();
@@ -382,7 +387,7 @@ ScrollbarPart ScrollbarLayerImplBase::IdentifyScrollbarPart(
   if (ForwardTrackRect().Contains(pointer_location))
     return ScrollbarPart::kForwardTrack;
 
-  // TODO(arakeri): Once crbug.com/952314 is fixed, add a DCHECK to verify that
+  // TODO(gastonr): Once crbug.com/952314 is fixed, add a DCHECK to verify that
   // the point that is passed in is within the TrackRect. Also, please note that
   // hit testing other scrollbar parts is not yet implemented.
   return ScrollbarPart::kNoPart;

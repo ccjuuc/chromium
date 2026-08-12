@@ -11,6 +11,7 @@ import type {CrIconButtonElement} from 'chrome://resources/cr_elements/cr_icon_b
 import type {CrUrlListItemElement} from 'chrome://resources/cr_elements/cr_url_list_item/cr_url_list_item.js';
 import {MouseHoverableMixinLit} from 'chrome://resources/cr_elements/mouse_hoverable_mixin_lit.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {ReadLaterEntry} from './reading_list.mojom-webui.js';
@@ -56,7 +57,7 @@ export class ReadingListItemElement extends ReadingListItemElementBase {
 
   accessor data: ReadLaterEntry = {
     title: '',
-    url: {url: ''},
+    url: '',
     displayUrl: '',
     updateTime: 0n,
     read: false,
@@ -84,7 +85,7 @@ export class ReadingListItemElement extends ReadingListItemElementBase {
       return;
     }
 
-    this.apiProxy_.openUrl(this.data.url, true, {
+    this.apiProxy_.openUrl(this.data.url, {
       middleButton: true,
       altKey: e.altKey,
       ctrlKey: e.ctrlKey,
@@ -94,7 +95,7 @@ export class ReadingListItemElement extends ReadingListItemElementBase {
   }
 
   private onClick_(e: MouseEvent|KeyboardEvent) {
-    this.apiProxy_.openUrl(this.data.url, true, {
+    this.apiProxy_.openUrl(this.data.url, {
       middleButton: false,
       altKey: e.altKey,
       ctrlKey: e.ctrlKey,
@@ -148,8 +149,7 @@ export class ReadingListItemElement extends ReadingListItemElementBase {
     e.stopPropagation();
     this.apiProxy_.updateReadStatus(this.data.url, !this.data.read);
     if (!this.data.read) {
-      this.dispatchEvent(new CustomEvent(
-          MARKED_AS_READ_UI_EVENT, {bubbles: true, composed: true}));
+      this.fire(MARKED_AS_READ_UI_EVENT);
     }
   }
 
@@ -162,8 +162,11 @@ export class ReadingListItemElement extends ReadingListItemElementBase {
    * @return The appropriate icon for the current state
    */
   protected getUpdateStatusButtonIcon_(): string {
-    return this.data.read ? 'read-later:check-circle-reverse' :
-                            'cr:check-circle';
+    return this.data.read ?
+        (loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+             'read-later:check-circle-filled' :
+             'read-later:check-circle-reverse-old') :
+        'cr:check-circle';
   }
 
   /**

@@ -6,28 +6,20 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/grit/generated_resources.h"
-#include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_provider.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/layer_type.h"
-#include "ui/events/event_constants.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/favicon_size.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/image/image_skia_operations.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/resources/grit/ui_resources.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -37,7 +29,6 @@
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
-#include "ui/views/view_constants.h"
 #include "ui/views/view_utils.h"
 
 namespace {
@@ -90,7 +81,8 @@ MultiContentsDropTargetView::MultiContentsDropTargetView()
   icon_view_->SetPaintToLayer(ui::LAYER_TEXTURED);
   icon_view_->layer()->SetFillsBoundsOpaquely(false);
   icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-      kAddCircleIcon, ui::kColorSysPrimary, kIconSize));
+      features::IsRoundedIconsEnabled() ? kAddCircleIcon : kAddCircleOldIcon,
+      ui::kColorSysPrimary, kIconSize));
 
   label_ = inner_container->AddChildView(std::make_unique<views::Label>(
       l10n_util::GetStringUTF16(IDS_SPLIT_VIEW_DRAG_ENTRYPOINT_LABEL)));
@@ -138,50 +130,50 @@ bool MultiContentsDropTargetView::IsClosing() const {
   return animation_.IsClosing();
 }
 
+bool MultiContentsDropTargetView::IsVisibleAndNotClosing() const {
+  return GetVisible() && !IsClosing();
+}
+
 // static
-int MultiContentsDropTargetView::GetMaxWidth(int web_contents_width,
-                                             DropTargetState state,
-                                             DragType drag_type) {
-  int min_width = 0;
-  int max_width = 0;
+int MultiContentsDropTargetView::GetMaxSize(int web_contents_size,
+                                            DropTargetState state,
+                                            DragType drag_type) {
+  int min_size = 0;
+  int max_size = 0;
   int percentage = 0;
 
   switch (state) {
     case DropTargetState::kNudge:
-      CHECK(base::FeatureList::IsEnabled(features::kSideBySideDropTargetNudge));
-      min_width = features::kSideBySideDropTargetNudgeMinWidth.Get();
-      max_width = features::kSideBySideDropTargetNudgeMaxWidth.Get();
-      percentage =
-          features::kSideBySideDropTargetNudgeTargetWidthPercentage.Get();
+      min_size = kNudgeMinSize;
+      max_size = kNudgeMaxSize;
+      percentage = kNudgeTargetSizePercentage;
       break;
     case DropTargetState::kNudgeToFull:
-      CHECK(base::FeatureList::IsEnabled(features::kSideBySideDropTargetNudge));
-      min_width = features::kSideBySideDropTargetNudgeToFullMinWidth.Get();
-      max_width = features::kSideBySideDropTargetNudgeToFullMaxWidth.Get();
-      percentage =
-          features::kSideBySideDropTargetNudgeToFullTargetWidthPercentage.Get();
+      min_size = kNudgeToFullMinSize;
+      max_size = kNudgeToFullMaxSize;
+      percentage = kNudgeToFullTargetSizePercentage;
       break;
     case DropTargetState::kFull:
-      min_width = kDropTargetMinWidth;
-      max_width = kDropTargetMaxWidth;
+      min_size = kDropTargetMinSize;
+      max_size = kDropTargetMaxSize;
       percentage = drag_type == DragType::kTab
-                       ? kDropTargetTargetWidthPercentage
-                       : kDropTargetForLinkTargetWidthPercentage;
+                       ? kDropTargetTargetSizePercentage
+                       : kDropTargetForLinkTargetSizePercentage;
       break;
     default:
       NOTREACHED();
   }
 
-  // Calculate the target width based on the web contents width and the target
+  // Calculate the target size based on the web contents size and the target
   // percentage.
-  const int target_width = web_contents_width * (percentage / 100.0);
+  const int target_size = web_contents_size * (percentage / 100.0);
 
-  // Clamp the width to the min and max widths.
-  return std::clamp(target_width, min_width, max_width);
+  // Clamp the size to the min and max sizes.
+  return std::clamp(target_size, min_size, max_size);
 }
 
-int MultiContentsDropTargetView::GetPreferredWidth(
-    int web_contents_width) const {
+int MultiContentsDropTargetView::GetSizeForAvailableSpace(
+    int available_space_size) const {
   if (!GetVisible()) {
     return 0;
   }
@@ -189,11 +181,11 @@ int MultiContentsDropTargetView::GetPreferredWidth(
   CHECK(state_.has_value());
   CHECK(drag_type_.has_value());
 
-  const int target_full_width =
-      GetMaxWidth(web_contents_width, *state_, drag_type_.value());
-  const int animation_start_width = animate_expand_starting_width_.value_or(0);
-  return animation_start_width +
-         (GetAnimationValue() * (target_full_width - animation_start_width));
+  const int target_full_size =
+      GetMaxSize(available_space_size, *state_, drag_type_.value());
+  const int animation_start_size = animate_expand_starting_size_.value_or(0);
+  return animation_start_size +
+         (GetAnimationValue() * (target_full_size - animation_start_size));
 }
 
 void MultiContentsDropTargetView::AnimationProgressed(
@@ -212,10 +204,8 @@ void MultiContentsDropTargetView::AnimationEnded(
 void MultiContentsDropTargetView::Show(DropSide side,
                                        DropTargetState state,
                                        DragType drag_type) {
-  if (state == DropTargetState::kNudge ||
-      state == DropTargetState::kNudgeToFull) {
-    CHECK(base::FeatureList::IsEnabled(features::kSideBySideDropTargetNudge));
-  }
+  // Bottom side should not show a nudge.
+  CHECK(side != DropSide::BOTTOM || state == DropTargetState::kFull);
 
   // If transitioning from a nudge to full state, start a new animation.
   if (state == DropTargetState::kNudgeToFull &&
@@ -230,8 +220,9 @@ void MultiContentsDropTargetView::Show(DropSide side,
   drag_type_ = drag_type;
 
   inner_container_layout_->SetMainAxisAlignment(
-      drag_type_ == DragType::kTab ? views::LayoutAlignment::kStart
-                                   : views::LayoutAlignment::kCenter);
+      (side != DropSide::BOTTOM && drag_type_ == DragType::kTab)
+          ? views::LayoutAlignment::kStart
+          : views::LayoutAlignment::kCenter);
 
   UpdateVisibility(true);
 }
@@ -252,16 +243,17 @@ void MultiContentsDropTargetView::SetVisible(bool visible) {
 
 void MultiContentsDropTargetView::UpdateVisibility(bool should_be_open) {
   if (!should_be_open || !GetVisible()) {
-    animate_expand_starting_width_.reset();
+    animate_expand_starting_size_.reset();
   } else if (animation_.GetCurrentValue() == 0) {
-    // If starting a new "expand" animation, then update the starting width.
-    animate_expand_starting_width_ = width();
+    // If starting a new "expand" animation, then update the starting size.
+    animate_expand_starting_size_ =
+        side_ == DropSide::BOTTOM ? height() : width();
   }
   if (ShouldShowAnimation()) {
     if (should_be_open) {
       SetVisible(should_be_open);
       animation_.Show();
-    } else if (GetVisible() && !IsClosing()) {
+    } else if (IsVisibleAndNotClosing()) {
       animation_.Hide();
     }
   } else {

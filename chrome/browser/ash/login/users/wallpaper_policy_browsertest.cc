@@ -267,7 +267,7 @@ class WallpaperPolicyTest : public LoginManagerTest,
     builder->Build();
     FakeSessionManagerClient::Get()->set_user_policy(
         cryptohome::CreateAccountIdentifierFromAccountId(account_id),
-        builder->GetBlob());
+        login_manager::POLICY_DOMAIN_CHROME, builder->GetBlob());
     const user_manager::User* user =
         user_manager::UserManager::Get()->FindUser(account_id);
     ASSERT_TRUE(user);
@@ -319,7 +319,7 @@ class WallpaperPolicyTest : public LoginManagerTest,
 // user.  Also verifies that after the policy has been cleared, the wallpaper
 // reverts to default.
 //
-// Disabled due to flakiness: https://crbug.com/873908.
+// Disabled due to flakiness: https://crbug.com/258749432.
 IN_PROC_BROWSER_TEST_F(WallpaperPolicyTest, DISABLED_SetResetClear) {
   SetSystemSalt();
   LoginUser(login_manager_.users()[0].account_id);

@@ -72,7 +72,7 @@ class ScriptContext {
 
   // Returns whether `url` from any Extension in `extension_set` is sandboxed,
   // as declared in each Extension's manifest.
-  // TODO(kalman): Delete this when crbug.com/466373 is fixed.
+  // TODO(kalman): Delete this when crbug.com/40409183 is fixed.
   // See comment in HasAccessOrThrowError.
   static bool IsSandboxedPage(const GURL& url);
 
@@ -148,10 +148,10 @@ class ScriptContext {
                                         CheckAliasStatus check_alias);
 
   // Returns a string description of the type of context this is.
-  std::string GetContextTypeDescription() const;
+  std::string_view GetContextTypeDescription() const;
 
   // Returns a string description of the effective type of context this is.
-  std::string GetEffectiveContextTypeDescription() const;
+  std::string_view GetEffectiveContextTypeDescription() const;
 
   v8::Isolate* isolate() const { return isolate_; }
 
@@ -335,6 +335,10 @@ class ScriptContext {
   // Owns and structures the JS that is injected to set up extension bindings.
   std::unique_ptr<ModuleSystem> module_system_;
 
+  // Must be declared before `safe_builtins_` because `safe_builtins_` uses it
+  // during initialization (via `ScriptContext::isolate()`).
+  raw_ptr<v8::Isolate> isolate_;
+
   // Contains safe copies of builtin objects like Function.prototype.
   SafeBuiltins safe_builtins_;
 
@@ -344,8 +348,6 @@ class ScriptContext {
   // A list of base::OnceClosure instances as an observer interface for
   // invalidation.
   std::vector<base::OnceClosure> invalidate_observers_;
-
-  raw_ptr<v8::Isolate> isolate_;
 
   GURL url_;
 

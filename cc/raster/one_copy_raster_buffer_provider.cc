@@ -8,11 +8,12 @@
 
 #include <algorithm>
 #include <limits>
+#include <atomic>
 #include <utility>
 
 #include "base/debug/alias.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
@@ -38,6 +39,13 @@
 #include "ui/gl/trace_util.h"
 
 namespace cc {
+
+namespace {
+
+// Use std::atomic as the this can be executed in a impl side thread.
+std::atomic<bool> disable_shared_image_creation_log = false;
+
+}  // namespace
 
 OneCopyRasterBufferProvider::RasterBufferImpl::RasterBufferImpl(
     OneCopyRasterBufferProvider* client,
@@ -181,25 +189,21 @@ uint64_t OneCopyRasterBufferProvider::SetReadyToDrawCallback(
     base::OnceClosure callback,
     uint64_t pending_callback_id) {
   FlushIfNeeded();
-  gpu::SyncToken latest_sync_token;
+
+  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images;
+  std::vector<gpu::SyncToken> sync_tokens;
+
+  shared_images.reserve(resources.size());
+  sync_tokens.reserve(resources.size());
+
   for (const auto* in_use : resources) {
-    const gpu::SyncToken& sync_token = in_use->backing()->mailbox_sync_token;
-    if (sync_token.release_count() > latest_sync_token.release_count())
-      latest_sync_token = sync_token;
-  }
-  uint64_t callback_id = latest_sync_token.release_count();
-  DCHECK_NE(callback_id, 0u);
-
-  // If the callback is different from the one the caller is already waiting on,
-  // pass the callback through to SignalSyncToken. Otherwise the request is
-  // redundant.
-  if (callback_id != pending_callback_id) {
-    // Use the compositor context because we want this callback on the
-    // compositor thread.
-    compositor_context_provider_->ContextSupport()->SignalSyncToken(
-        latest_sync_token, std::move(callback));
+    shared_images.push_back(in_use->backing()->shared_image());
+    sync_tokens.push_back(in_use->backing()->mailbox_sync_token);
   }
 
+  uint64_t callback_id = gpu::ClientSharedImage::SignalLatestSyncToken(
+      std::move(shared_images), std::move(sync_tokens), std::move(callback),
+      compositor_context_provider_->ContextSupport(), pending_callback_id);
   return callback_id;
 }
 
@@ -279,7 +283,8 @@ bool OneCopyRasterBufferProvider::PlaybackToStagingBuffer(
          "OneCopyRasterStaging"},
         gpu::kNullSurfaceHandle, gfx::BufferUsage::GPU_READ_CPU_READ_WRITE);
     if (!staging_buffer->client_shared_image) {
-      LOG(ERROR) << "Creation of StagingBuffer's SharedImage failed.";
+      LOG_IF(ERROR, !disable_shared_image_creation_log.load())
+          << "Creation of StagingBuffer's SharedImage failed.";
       return false;
     }
   }
@@ -308,14 +313,10 @@ gpu::SyncToken OneCopyRasterBufferProvider::CopyOnWorkerThread(
     ResourcePool::Backing* backing,
     bool mailbox_texture_is_overlay_candidate,
     const gpu::SyncToken& sync_token) {
-  const gfx::Size& resource_size = backing->size();
-
   DCHECK(sii_);
-
   CHECK(staging_buffer->client_shared_image);
 
   bool needs_clear = false;
-
   if (!backing->shared_image()) {
     // This SharedImage will have the contents of raster operations copied into
     // it via the raster interface before being sent off to the display
@@ -327,11 +328,12 @@ gpu::SyncToken OneCopyRasterBufferProvider::CopyOnWorkerThread(
     backing->CreateSharedImage(sii_.get(), usage, "OneCopyRasterTile");
     // Clear the resource if we're not going to initialize it fully from the
     // copy due to non-exact resource reuse.  See https://crbug.com/1313091
-    needs_clear = rect_to_copy.size() != resource_size;
+    needs_clear = rect_to_copy.size() != backing->shared_image()->size();
   }
 
-  sii_->UpdateSharedImage(staging_buffer->sync_token,
-                          staging_buffer->client_shared_image->mailbox());
+  gpu::SyncToken src_sync_token =
+      staging_buffer->client_shared_image->BackingWasExternallyUpdated(
+          staging_buffer->sync_token);
 
   viz::RasterContextProvider::ScopedRasterContextLock scoped_context(
       worker_context_provider_);
@@ -341,21 +343,23 @@ gpu::SyncToken OneCopyRasterBufferProvider::CopyOnWorkerThread(
       backing->shared_image()->BeginRasterAccess(ri, sync_token,
                                                  /*readonly=*/false);
   std::unique_ptr<gpu::RasterScopedAccess> src_ri_access =
-      staging_buffer->client_shared_image->BeginRasterAccess(
-          ri, sii_->GenUnverifiedSyncToken(), /*readonly=*/true);
+      staging_buffer->client_shared_image->BeginRasterAccess(ri, src_sync_token,
+                                                             /*readonly=*/true);
 
   // Do not use queries unless COMMANDS_COMPLETED queries are supported, or
   // COMMANDS_ISSUED queries are sufficient.
   GLenum query_target = GL_NONE;
 
+  // If CPU/GPU synchronization is supported, by default CPU access must wait
+  // until GPU processing of commands is completed as SharedImages
+  // backed by GPU memory can be accessed by the GPU until the commands are
+  // finished (and not just issued).
   if (worker_context_provider_->ContextCapabilities().sync_query) {
-    // Use GL_COMMANDS_COMPLETED_CHROMIUM when supported because native
-    // GpuMemoryBuffers can be accessed by the GPU after commands are issued
-    // until GPU reads are done.
     query_target = GL_COMMANDS_COMPLETED_CHROMIUM;
   }
 
-  // COMMANDS_ISSUED is sufficient for shared memory resources.
+  // However, if the SharedImage is backed by shared memory, waiting for the
+  // commands to be issued is sufficient.
   if (staging_buffer->is_shared_memory) {
     query_target = GL_COMMANDS_ISSUED_CHROMIUM;
   }
@@ -372,8 +376,9 @@ gpu::SyncToken OneCopyRasterBufferProvider::CopyOnWorkerThread(
   // Clear to ensure the resource is fully initialized and BeginAccess succeeds.
   if (needs_clear) {
     SkImageInfo dst_info = SkImageInfo::Make(
-        {resource_size.width(), resource_size.height()},
-        ToClosestSkColorType(backing->format()), kPremul_SkAlphaType);
+        gfx::SizeToSkISize(backing->shared_image()->size()),
+        ToClosestSkColorType(backing->shared_image()->format()),
+        kPremul_SkAlphaType);
     SkBitmap bitmap;
     if (bitmap.tryAllocPixels(dst_info)) {
       bitmap.eraseColor(raster_source->background_color());
@@ -403,4 +408,15 @@ gpu::SyncToken OneCopyRasterBufferProvider::CopyOnWorkerThread(
   return out_sync_token;
 }
 
+namespace test {
+
+ScopedDisableSharedImageCreationLog::ScopedDisableSharedImageCreationLog() {
+  disable_shared_image_creation_log.store(true);
+}
+
+ScopedDisableSharedImageCreationLog::~ScopedDisableSharedImageCreationLog() {
+  disable_shared_image_creation_log.store(false);
+}
+
+}  // namespace test
 }  // namespace cc

@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/page_popup.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/language.h"
@@ -56,31 +57,32 @@ DateTimeChooserImpl::DateTimeChooserImpl(
     LocalFrame* frame,
     DateTimeChooserClient* client,
     const DateTimeChooserParameters& parameters)
-    : frame_(frame),
+    : chrome_client_(&frame->GetPage()->GetChromeClient()),
       client_(client),
       popup_(nullptr),
       parameters_(&parameters),
       locale_(Locale::Create(parameters.locale)) {
   DCHECK(RuntimeEnabledFeatures::InputMultipleFieldsUIEnabled());
-  DCHECK(frame_);
   DCHECK(client_);
-  popup_ = frame_->View()->GetChromeClient()->OpenPagePopup(this);
+  popup_ = chrome_client_->OpenPagePopup(this);
   parameters_ = nullptr;
 }
 
 DateTimeChooserImpl::~DateTimeChooserImpl() = default;
 
 void DateTimeChooserImpl::Trace(Visitor* visitor) const {
-  visitor->Trace(frame_);
+  visitor->Trace(chrome_client_);
   visitor->Trace(client_);
   DateTimeChooser::Trace(visitor);
+  PagePopupClient::Trace(visitor);
 }
 
 void DateTimeChooserImpl::EndChooser() {
   if (!popup_)
     return;
-  if (auto* frame_view = frame_->View())
-    frame_view->GetChromeClient()->ClosePagePopup(popup_);
+  if (chrome_client_) {
+    chrome_client_->ClosePagePopup(popup_);
+  }
 }
 
 AXObject* DateTimeChooserImpl::RootAXObject(Element* popup_owner) {
@@ -139,7 +141,7 @@ void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
           GetLocale().QueryString(IDS_FORM_OTHER_DATE_LABEL);
   }
 
-  AddString(
+  AddLiteral(
       "<!DOCTYPE html><head><meta charset='UTF-8'><meta name='color-scheme' "
       "content='light dark'><style>\n",
       data);
@@ -151,7 +153,7 @@ void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
       parameters_->type == InputType::Type::kDateTimeLocal) {
     data.Append(ChooserResourceLoader::GetTimePickerStyleSheet());
   }
-  AddString(
+  AddLiteral(
       "</style></head><body><div id=main>Loading...</div><script>\n"
       "window.dialogArguments = {\n",
       data);
@@ -190,8 +192,8 @@ void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
   AddProperty("weekStartDay", locale_->FirstDayOfWeek(), data);
   AddProperty("shortMonthLabels", locale_->ShortMonthLabels(), data);
   AddProperty("dayLabels", locale_->WeekDayShortLabels(), data);
-  AddProperty("ampmLabels", locale_->TimeAMPMLabels(), data);
-  AddProperty("isLocaleRTL", locale_->IsRTL(), data);
+  AddProperty("ampmLabels", locale_->TimeAmPmLabels(), data);
+  AddProperty("isLocaleRTL", locale_->IsRtl(), data);
   AddProperty("isRTL", parameters_->is_anchor_element_rtl, data);
 #if BUILDFLAG(IS_MAC)
   AddProperty("isBorderTransparent", true, data);
@@ -241,7 +243,7 @@ void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
                     .SerializeAsCSSColor(),
                 data);
   }
-  AddString("}\n", data);
+  AddLiteral("}\n", data);
 
   data.Append(ChooserResourceLoader::GetPickerCommonJS());
   data.Append(ChooserResourceLoader::GetSuggestionPickerJS());
@@ -253,7 +255,7 @@ void DateTimeChooserImpl::WriteDocument(SegmentedBuffer& data) {
     data.Append(ChooserResourceLoader::GetDateTimeLocalPickerJS());
   }
   data.Append(ChooserResourceLoader::GetCalendarPickerJS());
-  AddString("</script></body>\n", data);
+  AddLiteral("</script></body>\n", data);
 }
 
 Element& DateTimeChooserImpl::OwnerElement() {
@@ -261,7 +263,7 @@ Element& DateTimeChooserImpl::OwnerElement() {
 }
 
 ChromeClient& DateTimeChooserImpl::GetChromeClient() {
-  return *frame_->View()->GetChromeClient();
+  return *chrome_client_;
 }
 
 Locale& DateTimeChooserImpl::GetLocale() {

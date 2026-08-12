@@ -19,9 +19,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/common/webui_url_constants.h"
@@ -68,7 +68,7 @@ class NewTabPageTest : public InProcessBrowserTest,
                          message.size()),
         base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     CHECK(maybe_parsed_message.has_value());
-    base::Value::Dict parsed_message =
+    base::DictValue parsed_message =
         std::move(maybe_parsed_message.value()).TakeDict();
     auto* method = parsed_message.FindString("method");
     if (!method) {
@@ -114,7 +114,7 @@ class NewTabPageTest : public InProcessBrowserTest,
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
 
-    browser_view_ = static_cast<BrowserView*>(browser()->window());
+    browser_view_ = BrowserView::GetBrowserViewForBrowser(browser());
     contents_ = browser_view_->GetActiveWebContents();
 
     // Wait for initial about:blank to load and attach DevTools before
@@ -132,7 +132,7 @@ class NewTabPageTest : public InProcessBrowserTest,
     agent_host_->DispatchProtocolMessage(
         this, base::as_byte_span("{\"id\": 2, \"method\": \"DOM.enable\"}"));
 
-    NavigateParams params(browser(), GURL(chrome::kChromeUINewTabPageURL),
+    NavigateParams params(browser(), chrome::ChromeUINewTabPageURLAsGURL(),
                           ui::PageTransition::PAGE_TRANSITION_FIRST);
     Navigate(&params);
     ASSERT_TRUE(WaitForLoadStop(contents_));

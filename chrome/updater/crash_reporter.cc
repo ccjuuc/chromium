@@ -4,8 +4,7 @@
 
 #include "chrome/updater/crash_reporter.h"
 
-#include <algorithm>
-#include <iterator>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -15,12 +14,13 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/updater/constants.h"
@@ -60,14 +60,10 @@ std::vector<std::string> MakeCrashHandlerArgs(UpdaterScope updater_scope) {
   // The first element in the command line arguments is the program name,
   // which must be skipped.
 #if BUILDFLAG(IS_WIN)
-  std::vector<std::string> args;
-  std::ranges::transform(++command_line.argv().begin(),
-                         command_line.argv().end(), std::back_inserter(args),
-                         [](const auto& arg) { return base::WideToUTF8(arg); });
-
-  return args;
+  return base::ToVector(base::span(command_line.argv()).subspan(1u),
+                        [](const auto& arg) { return base::WideToUTF8(arg); });
 #else
-  return {++command_line.argv().begin(), command_line.argv().end()};
+  return base::ToVector(base::span(command_line.argv()).subspan(1u));
 #endif
 }
 
@@ -103,10 +99,16 @@ void StartCrashReporter(UpdaterScope updater_scope,
   crashpad::CrashpadClient& client = GetCrashpadClient();
   std::vector<base::FilePath> attachments;
 #if !BUILDFLAG(IS_MAC)  // Crashpad does not support attachments on macOS.
-  std::optional<base::FilePath> log_file = GetLogFilePath(updater_scope);
-  if (log_file) {
-    attachments.push_back(*log_file);
+  if (std::optional<base::FilePath> log_file = GetLogFilePath(updater_scope);
+      log_file) {
+    attachments.push_back(*std::move(log_file));
   }
+  if (std::optional<base::FilePath> history_log_path =
+          GetHistoryLogFilePath(updater_scope);
+      history_log_path) {
+    attachments.push_back(*std::move(history_log_path));
+  }
+
 #endif
   if (!client.StartHandler(
           handler_path, *database_path,

@@ -10,7 +10,6 @@
 #include <string_view>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
@@ -30,7 +29,6 @@
 #include "components/reporting/proto/synced/metric_data.pb.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/protos/app_types.pb.h"
 
 namespace reporting {
@@ -93,8 +91,9 @@ bool AppEventsObserver::AppInstallTracker::Contains(
     std::string_view app_id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(profile_);
-  return base::Contains(
-      profile_->GetPrefs()->GetList(::ash::reporting::kAppsInstalled), app_id);
+  return profile_->GetPrefs()
+      ->GetList(::ash::reporting::kAppsInstalled)
+      .contains(app_id);
 }
 
 AppEventsObserver::AppEventsObserver(

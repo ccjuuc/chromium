@@ -9,6 +9,7 @@ import androidx.annotation.VisibleForTesting;
 import org.jni_zero.CalledByNative;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.Contract;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -19,6 +20,8 @@ import org.chromium.content_public.browser.WebContents;
 /** Wrapper that allows passing a Profile reference around in the Java layer. */
 @NullMarked
 public class Profile implements BrowserContextHandle {
+    private static @Nullable Profile sFromWebContentsForTesting;
+
     private final @Nullable OtrProfileId mOtrProfileId;
 
     /** Pointer to the Native-side Profile. */
@@ -38,7 +41,16 @@ public class Profile implements BrowserContextHandle {
      */
     @Contract("!null -> !null")
     public static @Nullable Profile fromWebContents(@Nullable WebContents webContents) {
+        if (sFromWebContentsForTesting != null) {
+            return sFromWebContentsForTesting;
+        }
         return ProfileJni.get().fromWebContents(webContents);
+    }
+
+    /** Sets for testing the profile to be returned by {@link #fromWebContents(WebContents)}. */
+    public static void setProfileFromWebContentsForTesting(Profile profile) {
+        sFromWebContentsForTesting = profile;
+        ResettersForTesting.register(() -> sFromWebContentsForTesting = null);
     }
 
     /**
@@ -67,6 +79,14 @@ public class Profile implements BrowserContextHandle {
 
     public Profile getOriginalProfile() {
         return ProfileJni.get().getOriginalProfile(mNativeProfile);
+    }
+
+    /**
+     * Returns the creation time of the profile in milliseconds since Unix epoch. Directly
+     * comparable with the value returned from `System.currentTimeMillis()`
+     */
+    public long getCreationTime() {
+        return ProfileJni.get().getCreationTime(mNativeProfile);
     }
 
     /** Return whether this Profile represents the initially created "Default" Profile. */
@@ -248,6 +268,8 @@ public class Profile implements BrowserContextHandle {
         @Nullable Profile fromWebContents(@Nullable WebContents webContents);
 
         Profile getOriginalProfile(long ptr);
+
+        long getCreationTime(long ptr);
 
         boolean isInitialProfile(long ptr);
 

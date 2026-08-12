@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "android_webview/js_sandbox/service/js_sandbox_memory_budget.h"
 #include "android_webview/js_sandbox/service/js_sandbox_message_port.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/compiler_specific.h"
@@ -53,25 +54,23 @@ class JsSandboxIsolate {
                             size_t max_heap_size_bytes);
   ~JsSandboxIsolate();
 
-  jboolean EvaluateJavascript(
+  bool EvaluateJavascript(JNIEnv* env,
+                          const base::android::JavaRef<jstring>& jcode,
+                          const base::android::JavaRef<jobject>& j_callback);
+  bool EvaluateJavascriptWithFd(
       JNIEnv* env,
-      const base::android::JavaRef<jstring>& jcode,
-      const base::android::JavaRef<jobject>& j_callback);
-  jboolean EvaluateJavascriptWithFd(
-      JNIEnv* env,
-      const jint fd,
-      const jlong length,
-      const jlong offset,
+      const int32_t fd,
+      const int64_t length,
+      const int64_t offset,
       const base::android::JavaRef<jobject>& j_callback,
       const base::android::JavaRef<jobject>& pfd);
   void DestroyNative(JNIEnv* env);
-  jboolean ProvideNamedData(JNIEnv* env,
-                            const base::android::JavaRef<jstring>& jname,
-                            const jint fd,
-                            const jint length);
+  bool ProvideNamedData(JNIEnv* env,
+                        const base::android::JavaRef<jstring>& jname,
+                        const int32_t fd,
+                        const int32_t length);
   // May enable or disable inspection, as needed.
-  void SetConsoleEnabled(JNIEnv* env,
-                         jboolean enable);
+  void SetConsoleEnabled(JNIEnv* env, bool enable);
 
   void ProvideMessagePort(
       JNIEnv* env,
@@ -82,7 +81,12 @@ class JsSandboxIsolate {
 
   v8::Isolate* GetIsolate();
 
+  // Can be called from any thread to indicate that memory external to the
+  // v8-heap has been exhausted and the isolate should crash.
+  void ExternalMemoryLimitExceeded();
+
   scoped_refptr<base::SingleThreadTaskRunner> GetIsolateTaskRunner();
+  JsSandboxMemoryBudget* GetMemoryBudget();
 
  private:
   class InspectorClient;
@@ -122,31 +126,6 @@ class JsSandboxIsolate {
       base::android::ScopedJavaGlobalRef<jobject> pfd,
       scoped_refptr<JsSandboxIsolateCallback> callback,
       std::string errorMessage);
-  void ConvertPromiseToArrayBufferInThreadPool(
-      base::ScopedFD fd,
-      ssize_t length,
-      std::string name,
-      std::unique_ptr<v8::Global<v8::ArrayBuffer>> array_buffer,
-      std::unique_ptr<v8::Global<v8::Promise::Resolver>> resolver,
-      void* inner_buffer);
-  void ConvertPromiseToArrayBufferInControlSequence(
-      std::string name,
-      std::unique_ptr<v8::Global<v8::ArrayBuffer>> array_buffer,
-      std::unique_ptr<v8::Global<v8::Promise::Resolver>> resolver);
-  void ConvertPromiseToFailureInControlSequence(
-      std::string name,
-      std::unique_ptr<v8::Global<v8::ArrayBuffer>> array_buffer,
-      std::unique_ptr<v8::Global<v8::Promise::Resolver>> resolver,
-      std::string reason);
-  void ConvertPromiseToFailureInIsolateSequence(
-      std::string name,
-      std::unique_ptr<v8::Global<v8::ArrayBuffer>> array_buffer,
-      std::unique_ptr<v8::Global<v8::Promise::Resolver>> resolver,
-      std::string reason);
-  void ConvertPromiseToArrayBufferInIsolateSequence(
-      std::string name,
-      std::unique_ptr<v8::Global<v8::ArrayBuffer>> array_buffer,
-      std::unique_ptr<v8::Global<v8::Promise::Resolver>> resolver);
 
   void ConsumeNamedDataAsArrayBuffer(gin::Arguments* args);
 
@@ -198,6 +177,7 @@ class JsSandboxIsolate {
   //
   // 0 indicates no explicit limit (but use the default V8 limits).
   const size_t isolate_max_heap_size_bytes_;
+  std::unique_ptr<JsSandboxMemoryBudget> memory_budget_;
   // Apart from construction/destruction, must only be used from the isolate
   // thread.
   std::unique_ptr<JsSandboxArrayBufferAllocator> array_buffer_allocator_;

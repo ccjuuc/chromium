@@ -16,6 +16,7 @@
 
 #include "base/containers/enum_set.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -113,6 +114,15 @@ struct AccessDetails {
 //
 // Events tied to a main frame navigation will be associated with the newly
 // loaded page once the navigation commits or discarded if it does not.
+//
+// `PageSpecificContentSettings` can't observe cookie events of navigation using
+// prefetch. So, we need to disable prefetch ahead of prerender for
+// SpeculationRules. For more details, see
+// https://docs.google.com/document/d/1gYanzL8zrrulVdJds9IxoCwlNs0Xstc6bTuHVgrVGn4
+// See also the test
+// ContentSettingsWithPrerenderingBrowserTest.PrerenderingPageSetsCookie.
+//
+// TODO(crbug.com/493711325): Revisit and decide that we should fix or not.
 class PageSpecificContentSettings
     : public content_settings::Observer,
       public content::PageUserData<PageSpecificContentSettings> {
@@ -129,10 +139,7 @@ class PageSpecificContentSettings
     kMinValue = kMicrophoneAccessed,
     kMaxValue = kCameraBlocked,
   };
-  using MicrophoneCameraState =
-      base::EnumSet<MicrophoneCameraStateFlags,
-                    MicrophoneCameraStateFlags::kMinValue,
-                    MicrophoneCameraStateFlags::kMaxValue>;
+  using MicrophoneCameraState = base::EnumSet<MicrophoneCameraStateFlags>;
 
   class Delegate {
    public:
@@ -250,6 +257,17 @@ class PageSpecificContentSettings
   static PageSpecificContentSettings::Delegate* GetDelegateForWebContents(
       content::WebContents* web_contents);
 
+  // Called by GeolocationNavigationThrottle when the X-Geo header is attached
+  // to a search navigation. This ensures the geolocation usage indicator is
+  // displayed in the Omnibox upon commit.
+  static void GeolocationHeaderAttachedToNavigation(
+      content::NavigationHandle* navigation);
+
+  // Called by GeolocationNavigationThrottle when the X-Geo header is removed
+  // from a navigation (e.g. due to a redirect to a non-search URL).
+  static void GeolocationHeaderRemovedFromNavigation(
+      content::NavigationHandle* navigation);
+
   static void StorageAccessed(
       mojom::ContentSettingsManager::StorageType storage_type,
       std::variant<content::GlobalRenderFrameHostToken,
@@ -356,6 +374,16 @@ class PageSpecificContentSettings
     return notifications_was_denied_because_of_system_permission_;
   }
 
+  void SetRequestedSensorIsAvailable(bool is_available);
+  bool is_any_requested_sensor_available() const {
+    return any_requested_sensor_is_available_;
+  }
+
+  // Support for tracking active sensors
+  void OnSensorStarted();
+  void OnSensorStopped();
+  int active_available_sensors() const;
+
   // Returns the state of the camera and microphone usage.
   // The return value always includes all active media capture devices, on top
   // of the devices from the last request.
@@ -418,6 +446,8 @@ class PageSpecificContentSettings
   // Block all content. Used for testing content setting bubbles.
   void BlockAllContentForTesting();
 
+  static void SetIgnoreBlockedMediaIndicatorTimerForTesting(bool ignore);
+
   // Stores content settings changed by the user via PageInfo.
   void ContentSettingChangedViaPageInfo(ContentSettingsType type);
 
@@ -473,9 +503,10 @@ class PageSpecificContentSettings
   // This method is called when audio or video activity indicator is closed.
   void OnActivityIndicatorBubbleClosed(ContentSettingsType type);
 
-  // Returns `true` if an activity indicator is displaying for
-  // `ContentSettingsType`. Returns `false` otherwise.
   bool IsIndicatorVisible(ContentSettingsType type) const;
+  // Returns `true` if an activity indicator is displaying for any of the
+  // provided `types`. Returns `false` otherwise.
+  bool IsAnyIndicatorVisible(base::span<const ContentSettingsType> types) const;
   // Save `ContentSettingsType` to a set of currently displaying activity
   // indicators.
   void OnPermissionIndicatorShown(ContentSettingsType type);
@@ -676,6 +707,13 @@ class PageSpecificContentSettings
   // Stores `ContentSettingsType` that is currently displaying. It is used only
   // for the Left-Hand Side indicators.
   std::set<ContentSettingsType> visible_indicators_;
+
+  // True if at least one sensor requested by the page is available.
+  // We use a single boolean instead of a map because the UI
+  // indicator is generic ("Sensors") and doesn't distinguish between specific
+  // sensor types.
+  bool any_requested_sensor_is_available_ = false;
+  int active_available_sensors_ = 0;
 
   // Observer to watch for content settings changed.
   base::ScopedObservation<HostContentSettingsMap, content_settings::Observer>

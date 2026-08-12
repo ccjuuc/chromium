@@ -30,6 +30,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_SERVICE_WORKER_SERVICE_WORKER_GLOBAL_SCOPE_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_SERVICE_WORKER_SERVICE_WORKER_GLOBAL_SCOPE_H_
 
+#include <stdint.h>
+
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
@@ -37,8 +39,10 @@
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/data_element.h"
 #include "services/network/public/mojom/network_context.mojom-blink-forward.h"
+#include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/associated_interfaces/associated_interfaces.mojom-blink.h"
@@ -70,6 +74,7 @@ namespace blink {
 class InterfaceRegistry;
 class ExceptionState;
 class FetchEvent;
+class FetchRespondWithObserver;
 class RespondWithObserver;
 class RequestInit;
 class ScriptState;
@@ -117,8 +122,9 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
 
   // ExecutionContext overrides:
   bool IsServiceWorkerGlobalScope() const override { return true; }
-  bool ShouldInstallV8Extensions() const final;
   void MaybeRecordNetworkRequestUrlForPushEvents(const KURL& url) override;
+  void MaybeRecordFetchError(int net_error_code,
+                             const FetchRequestData* request_data) override;
   bool IsInFencedFrame() const override;
   void NotifyWebSocketActivity() override;
 
@@ -129,6 +135,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       const KURL& response_url,
       network::mojom::ReferrerPolicy response_referrer_policy,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
       const Vector<String>* response_origin_trial_tokens) override;
   // Fetches and runs the top-level classic worker script.
   void FetchAndRunClassicScript(
@@ -249,16 +256,19 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       bool range_request,
       std::optional<network::DataElementChunkedDataPipe> request_body,
       base::TimeTicks event_dispatch_time,
-      base::TimeTicks respond_with_settled_time);
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
   void OnStreamingUploadCompletion(int fetch_event_id);
 
   // Responds to the fetch event with |response|.
-  void RespondToFetchEvent(int fetch_event_id,
-                           const KURL& request_url,
-                           bool range_request,
-                           mojom::blink::FetchAPIResponsePtr,
-                           base::TimeTicks event_dispatch_time,
-                           base::TimeTicks respond_with_settled_time);
+  void RespondToFetchEvent(
+      int fetch_event_id,
+      const KURL& request_url,
+      bool range_request,
+      mojom::blink::FetchAPIResponsePtr,
+      base::TimeTicks event_dispatch_time,
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
   // Responds to the fetch event with |response|, where body is
   // |body_as_stream|.
   void RespondToFetchEventWithResponseStream(
@@ -268,7 +278,8 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       mojom::blink::FetchAPIResponsePtr,
       mojom::blink::ServiceWorkerStreamHandlePtr,
       base::TimeTicks event_dispatch_time,
-      base::TimeTicks respond_with_settled_time);
+      base::TimeTicks respond_with_settled_time,
+      mojom::blink::ServiceWorkerFetchHandlerErrorsPtr errors);
 
   // RespondToAbortPaymentEvent will be called after the service worker
   // returns a response to a AbortPaymentEvent, and DidHandleAbortPaymentEvent
@@ -366,6 +377,12 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
   std::optional<mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>>
   FindRaceNetworkRequestURLLoaderFactory(
       const base::UnguessableToken& token) final;
+  void InsertNewItemToRaceNetworkRequestsForTesting(
+      int fetch_event_id,
+      const base::UnguessableToken& token,
+      mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+          url_loader_factory,
+      const KURL& request_url);
 
   bool did_evaluate_script() { return did_evaluate_script_; }
 
@@ -410,6 +427,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       const KURL& response_url,
       network::mojom::ReferrerPolicy response_referrer_policy,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
       const Vector<String>* response_origin_trial_tokens,
       const String& source_code,
       std::unique_ptr<Vector<uint8_t>> cached_meta_data,
@@ -451,14 +469,10 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       DispatchFetchEventForSubresourceCallback callback) override;
   void Clone(
       mojo::PendingReceiver<mojom::blink::ControllerServiceWorker> receiver,
-      const network::CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
-      mojo::PendingRemote<
-          network::mojom::blink::CrossOriginEmbedderPolicyReporter>
-          coep_reporter,
-      const network::DocumentIsolationPolicy& document_isolation_policy,
-      mojo::PendingRemote<
-          network::mojom::blink::DocumentIsolationPolicyReporter> dip_reporter)
-      override;
+      mojom::blink::CrossOriginEmbedderPolicyInfoPtr
+          cross_origin_embedder_policy_info,
+      mojom::blink::DocumentIsolationPolicyInfoPtr
+          document_isolation_policy_info) override;
 
   // Implements mojom::blink::ServiceWorker.
   void InitializeGlobalScope(
@@ -549,7 +563,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
       DispatchContentDeleteEventCallback callback) override;
   void Ping(PingCallback callback) override;
   void SetIdleDelay(base::TimeDelta delay) override;
-  void AddKeepAlive() override;
+  void AddKeepAlive(uint64_t keepalive_sequence_number) override;
   void ClearKeepAlive() override;
   void AddMessageToConsole(mojom::blink::ConsoleMessageLevel,
                            const String& message) override;
@@ -642,6 +656,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
           url_loader_factory,
       const KURL& request_url);
   void RemoveItemFromRaceNetworkRequests(int fetch_event_id);
+  void OnRaceNetworkRequestDisconnected(const base::UnguessableToken& token);
 
   Member<ServiceWorkerClients> clients_;
   Member<ServiceWorkerRegistration> registration_;
@@ -753,10 +768,13 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
     int range_count = 0;
   };
   HashMap<KURL, FetchEventCounts> unresponded_fetch_event_counts_;
+  HeapHashMap<int, Member<FetchRespondWithObserver>>
+      active_fetch_respond_with_observers_;
 
   // ServiceWorker event queue where all events are queued before
   // they are dispatched.
   std::unique_ptr<ServiceWorkerEventQueue> event_queue_;
+  uint64_t observed_keepalive_sequence_number_ = 0;
 
   // InitializeGlobalScope() pauses the top level script evaluation when this
   // flag is true.
@@ -807,17 +825,78 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
 
   blink::BlinkStorageKey storage_key_;
 
-  struct RaceNetworkRequestInfo {
-    int fetch_event_id;
-    String token;
+  // Holds information and the loader factory remote for an in-flight
+  // RaceNetworkRequest.
+  //
+  // Managed by Oilpan GC (`GarbageCollected`) so that `HeapMojoRemote` can be
+  // safely stored inside `race_network_requests_` (`HeapHashMap`).
+  //
+  // Note on `pending_url_loader_factory_` vs `url_loader_factory_remote_`:
+  // - When `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is ENABLED:
+  //   The loader factory remote is bound to `url_loader_factory_remote_`
+  //   (`HeapMojoRemote`) so that pipe disconnection can be detected via
+  //   `set_disconnect_handler`.
+  // - When `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is DISABLED:
+  //   The loader factory remote remains un-bound in
+  //   `pending_url_loader_factory_`
+  //   (`mojo::PendingRemote`), avoiding binding overhead when disconnect
+  //   detection is not active.
+  class RaceNetworkRequestInfo final
+      : public GarbageCollected<RaceNetworkRequestInfo> {
+   public:
+    RaceNetworkRequestInfo(
+        ExecutionContext* execution_context,
+        int fetch_event_id,
+        mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+            url_loader_factory,
+        bool fallback_on_disconnect_enabled);
+
+    void Trace(Visitor* visitor) const {
+      visitor->Trace(url_loader_factory_remote_);
+    }
+
+    int fetch_event_id() const { return fetch_event_id_; }
+    HeapMojoRemote<network::mojom::blink::URLLoaderFactory>& remote() {
+      return url_loader_factory_remote_;
+    }
+
+    // Takes and returns the URLLoaderFactory pending remote, unbinding it if
+    // bound (feature enabled) or moving `pending_url_loader_factory_` (feature
+    // disabled).
     mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
-        url_loader_factory;
+    TakePendingRemote() {
+      if (url_loader_factory_remote_.is_bound()) {
+        return url_loader_factory_remote_.Unbind();
+      }
+      return std::move(pending_url_loader_factory_);
+    }
+
+    // Returns true if either the bound HeapMojoRemote or the unbound
+    // PendingRemote is valid.
+    bool IsValid() const {
+      return pending_url_loader_factory_.is_valid() ||
+             url_loader_factory_remote_.is_bound();
+    }
+
+   private:
+    int fetch_event_id_;
+
+    // Holds the un-bound PendingRemote when
+    // `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is disabled.
+    mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+        pending_url_loader_factory_;
+
+    // Holds the bound HeapMojoRemote when
+    // `kServiceWorkerRaceNetworkRequestFallbackOnDisconnect` is enabled,
+    // enabling pipe disconnect detection via `set_disconnect_handler`.
+    HeapMojoRemote<network::mojom::blink::URLLoaderFactory>
+        url_loader_factory_remote_;
   };
+
   // TODO(crbug.com/918702) HashMap cannot use base::UnguessableToken as a
   // key. As a workaround uses String as a key instead.
-  HashMap<String, std::unique_ptr<RaceNetworkRequestInfo>>
-      race_network_requests_;
-  HashMap<int, RaceNetworkRequestInfo*> race_network_request_fetch_event_ids_;
+  HeapHashMap<String, Member<RaceNetworkRequestInfo>> race_network_requests_;
+  HashMap<int, String> fetch_event_ids_to_token_map_;
 
   HeapMojoAssociatedRemote<mojom::blink::AssociatedInterfaceProvider>
       remote_associated_interfaces_{this};

@@ -11,20 +11,17 @@
 #include "base/i18n/time_formatting.h"
 #include "chrome/browser/ui/commerce/commerce_ui_tab_helper.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/commerce/discounts_coupon_code_label_view.h"
 #include "chrome/browser/ui/views/controls/page_switcher_view.h"
 #include "chrome/browser/ui/views/controls/subpage_view.h"
 #include "chrome/grit/browser_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "components/commerce/core/commerce_types.h"
 #include "components/commerce/core/metrics/discounts_metric_collector.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -44,10 +41,10 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kDiscountsBubbleTermsAndConditionPageId);
 
 // DiscountsBubbleDialogView
 DiscountsBubbleDialogView::DiscountsBubbleDialogView(
-    View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     const commerce::DiscountInfo& discount_info)
-    : LocationBarBubbleDelegateView(anchor_view, web_contents, true),
+    : LocationBarBubbleDelegateView(anchor, web_contents, true),
       discount_info_(discount_info),
       ukm_source_id_(
           web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId()) {
@@ -274,7 +271,7 @@ void DiscountsBubbleCoordinator::OnWidgetDestroying(views::Widget* widget) {
 }
 
 void DiscountsBubbleCoordinator::Show(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     const commerce::DiscountInfo& discount_info,
     base::OnceClosure on_dialog_closing_callback) {
@@ -283,7 +280,7 @@ void DiscountsBubbleCoordinator::Show(
   on_dialog_closing_callback_ = std::move(on_dialog_closing_callback);
 
   auto bubble = std::make_unique<DiscountsBubbleDialogView>(
-      anchor_view, web_contents, discount_info);
+      anchor, web_contents, discount_info);
   tracker_.SetView(bubble.get());
   auto* widget = DiscountsBubbleDialogView::CreateBubble(std::move(bubble));
   bubble_widget_observation_.Observe(widget);

@@ -9,12 +9,12 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/metrics/user_action_tester.h"
 #import "base/test/scoped_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/test/ios/test_utils.h"
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_data_source.h"
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_mutator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/central_account_view.h"
-#import "ios/chrome/browser/authentication/ui_bundled/cells/table_view_account_item.h"
 #import "ios/chrome/browser/policy/model/management_state.h"
 #import "ios/chrome/browser/settings/model/sync/utils/account_error_ui_info.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
@@ -26,12 +26,14 @@
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -57,6 +59,14 @@ UIImage* kPrimaryAccountAvatar = [[UIImage alloc] init];
 @interface FakeAccountMenuDataSource : NSObject <AccountMenuDataSource>
 @property(nonatomic, assign) ChromeAccountManagerService* accountManagerService;
 @property(nonatomic, strong) AccountErrorUIInfo* accountErrorUIInfo;
+
+// Redeclare properties as readwrite for testing.
+@property(nonatomic, strong, readwrite) NSString* primaryAccountEmail;
+@property(nonatomic, strong, readwrite) NSString* primaryAccountUserFullName;
+@property(nonatomic, strong, readwrite) UIImage* primaryAccountAvatar;
+@property(nonatomic, assign, readwrite) BOOL primaryAccountAvatarNeedsRing;
+@property(nonatomic, strong, readwrite) NSString* primaryAccountAITierFullName;
+@property(nonatomic, strong, readwrite) NSString* primaryAccountAITierName;
 @end
 
 @implementation FakeAccountMenuDataSource {
@@ -64,7 +74,10 @@ UIImage* kPrimaryAccountAvatar = [[UIImage alloc] init];
 }
 @synthesize primaryAccountEmail = _primaryAccountEmail;
 @synthesize primaryAccountAvatar = _primaryAccountAvatar;
+@synthesize primaryAccountAvatarNeedsRing = _primaryAccountAvatarNeedsRing;
+@synthesize primaryAccountAITierFullName = _primaryAccountAITierFullName;
 @synthesize primaryAccountUserFullName = _primaryAccountUserFullName;
+@synthesize primaryAccountAITierName = _primaryAccountAITierName;
 @synthesize managementDescription = _managementDescription;
 
 - (instancetype)init {
@@ -74,6 +87,9 @@ UIImage* kPrimaryAccountAvatar = [[UIImage alloc] init];
     _secondaryAccountsGaiaIDs = {kSecondaryIdentity.gaiaId};
     _primaryAccountEmail = kPrimaryIdentity.userEmail;
     _primaryAccountAvatar = kPrimaryAccountAvatar;
+    _primaryAccountAvatarNeedsRing = NO;
+    _primaryAccountAITierFullName = nil;
+    _primaryAccountAITierName = nil;
     _primaryAccountUserFullName = kPrimaryIdentity.userFullName;
     _managementDescription = @"managementDescription";
   }
@@ -118,23 +134,19 @@ UIImage* kPrimaryAccountAvatar = [[UIImage alloc] init];
 
 @end
 
-// The test param determines whether `kSeparateProfilesForManagedAccounts` is
-// enabled.
-class AccountMenuViewControllerTest : public PlatformTest,
-                                      public testing::WithParamInterface<bool> {
+class AccountMenuViewControllerTest : public PlatformTest {
  public:
-  AccountMenuViewControllerTest() {
-    feature_list_.InitWithFeatureState(kSeparateProfilesForManagedAccounts,
-                                       GetParam());
-  }
+  AccountMenuViewControllerTest() = default;
 
   void SetUp() override {
     PlatformTest::SetUp();
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
     fake_system_identity_manager_ =
         FakeSystemIdentityManager::FromSystemIdentityManager(
@@ -176,8 +188,6 @@ class AccountMenuViewControllerTest : public PlatformTest,
   }
 
  protected:
-  base::test::ScopedFeatureList feature_list_;
-
   // The navigation controller that displays the view_controller_.
   // It is not used in test. However, it’s accessed by the view controller, so
   // we must not let it be deallocated until tests are done.
@@ -192,7 +202,6 @@ class AccountMenuViewControllerTest : public PlatformTest,
   NSIndexPath* path_for_sign_out_ = [NSIndexPath indexPathForRow:0 inSection:1];
   NSIndexPath* path_for_add_account_ = [NSIndexPath indexPathForRow:1
                                                           inSection:0];
-  raw_ptr<AuthenticationService, DanglingUntriaged> authentication_service_;
   raw_ptr<FakeSystemIdentityManager> fake_system_identity_manager_;
   base::UserActionTester user_actions_;
 
@@ -240,7 +249,7 @@ class AccountMenuViewControllerTest : public PlatformTest,
   void AddPrimaryIdentity() {
     fake_system_identity_manager_->AddIdentity(kPrimaryIdentity);
     authentication_service_->SignIn(kPrimaryIdentity,
-                                    signin_metrics::AccessPoint::kUnknown);
+                                    signin_metrics::AccessPoint::kStartPage);
   }
 
   // Add kSecondaryIdentity as a secondary identity.
@@ -252,19 +261,16 @@ class AccountMenuViewControllerTest : public PlatformTest,
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   std::unique_ptr<TestProfileIOS> profile_;
+  raw_ptr<AuthenticationService> authentication_service_;
 };
 
 // Test the view controller when it starts.
-TEST_P(AccountMenuViewControllerTest, TestDefaultSetting) {
+TEST_F(AccountMenuViewControllerTest, TestDefaultSetting) {
   EXPECT_EQ(2, TableView().numberOfSections);
   // The secondary account, Add Account....
   EXPECT_EQ(2, [TableView() numberOfRowsInSection:0]);
   // Sign Out
   EXPECT_EQ(1, [TableView() numberOfRowsInSection:1]);
-  UITableViewCell* secondary_account_cell =
-      GetCell(path_for_secondary_account_);
-  EXPECT_TRUE(
-      [secondary_account_cell isKindOfClass:[TableViewAccountCell class]]);
   ExpectTextAtPath(
       l10n_util::GetNSString(IDS_IOS_OPTIONS_ACCOUNTS_ADD_ACCOUNT_BUTTON),
       path_for_add_account_);
@@ -282,7 +288,7 @@ TEST_P(AccountMenuViewControllerTest, TestDefaultSetting) {
 }
 
 // Test the account menu without ellipsis.
-TEST_P(AccountMenuViewControllerTest, TestAccountMenuWithoutEllipsis) {
+TEST_F(AccountMenuViewControllerTest, TestAccountMenuWithoutEllipsis) {
   ViewControllerWithEllipsisMenuHidden();
 
   [view_controller_ updatePrimaryAccount];
@@ -303,7 +309,7 @@ TEST_P(AccountMenuViewControllerTest, TestAccountMenuWithoutEllipsis) {
 #pragma mark - Test tapping on the views.
 
 // Tests tapping on the secondary account cell.
-TEST_P(AccountMenuViewControllerTest, TestTapSecondaryAccount) {
+TEST_F(AccountMenuViewControllerTest, TestTapSecondaryAccount) {
   OCMExpect([mutator_
                 accountTappedWithGaiaID:ios::OCM::AnyPointer<const GaiaId>()
                              targetRect:CGRect()])
@@ -315,14 +321,14 @@ TEST_P(AccountMenuViewControllerTest, TestTapSecondaryAccount) {
 }
 
 // Tests tapping on the add account cell.
-TEST_P(AccountMenuViewControllerTest, TestTapAddAccount) {
+TEST_F(AccountMenuViewControllerTest, TestTapAddAccount) {
   OCMExpect([mutator_ didTapAddAccount]);
   SelectCell(path_for_add_account_);
   EXPECT_EQ(1, user_actions_.GetActionCount("Signin_AccountMenu_AddAccount"));
 }
 
 // Tests tapping on the sign-out cell.
-TEST_P(AccountMenuViewControllerTest, TestTapSignOut) {
+TEST_F(AccountMenuViewControllerTest, TestTapSignOut) {
   OCMExpect([mutator_ signOutFromTargetRect:CGRect()]).ignoringNonObjectArgs();
   SelectCell(path_for_sign_out_);
   EXPECT_EQ(1, user_actions_.GetActionCount("Signin_AccountMenu_Signout"));
@@ -331,7 +337,7 @@ TEST_P(AccountMenuViewControllerTest, TestTapSignOut) {
 #pragma mark - AccountMenuConsumer
 
 // Tests tapping on error action button.
-TEST_P(AccountMenuViewControllerTest, TestSetError) {
+TEST_F(AccountMenuViewControllerTest, TestSetError) {
   base::HistogramTester histogram_tester;
 
   AccountErrorUIInfo* errorInfo = [[AccountErrorUIInfo alloc]
@@ -374,7 +380,7 @@ TEST_P(AccountMenuViewControllerTest, TestSetError) {
 
 // Tests that adding an account adds an extra row in the secondary account
 // section.
-TEST_P(AccountMenuViewControllerTest, TestAddAccount) {
+TEST_F(AccountMenuViewControllerTest, TestAddAccount) {
   fake_system_identity_manager_->AddIdentity(kSecondaryIdentity2);
   [view_controller_ updateAccountListWithGaiaIDsToAdd:@[
     kSecondaryIdentity2.gaiaId.ToNSString()
@@ -392,7 +398,7 @@ TEST_P(AccountMenuViewControllerTest, TestAddAccount) {
 
 // Test that removing a secondary account remove a row in the secondary account
 // section.
-TEST_P(AccountMenuViewControllerTest, TestRemoveAccount) {
+TEST_F(AccountMenuViewControllerTest, TestRemoveAccount) {
   [view_controller_ updateAccountListWithGaiaIDsToAdd:@[]
                                       gaiaIDsToRemove:@[
                                         kSecondaryIdentity.gaiaId.ToNSString()
@@ -405,7 +411,7 @@ TEST_P(AccountMenuViewControllerTest, TestRemoveAccount) {
 
 // Test that updating the primary account has no discernable impact on the view
 // controller.
-TEST_P(AccountMenuViewControllerTest, TestUpdatePrimaryAccount) {
+TEST_F(AccountMenuViewControllerTest, TestUpdatePrimaryAccount) {
   [view_controller_ updatePrimaryAccount];
   EXPECT_EQ(2, TableView().numberOfSections);
   // The secondary account, Add Account....
@@ -414,10 +420,121 @@ TEST_P(AccountMenuViewControllerTest, TestUpdatePrimaryAccount) {
   EXPECT_EQ(1, [TableView() numberOfRowsInSection:1]);
 }
 
-INSTANTIATE_TEST_SUITE_P(,
-                         AccountMenuViewControllerTest,
-                         testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "WithSeparateProfiles"
-                                             : "WithoutSeparateProfiles";
-                         });
+// Test the account menu with an identity with missing given name.
+TEST_F(AccountMenuViewControllerTest, TestMissingGivenName) {
+  FakeSystemIdentity* identity =
+      [FakeSystemIdentity fakeIdentityWithMissingGivenName];
+  fake_system_identity_manager_->AddIdentity(identity);
+
+  data_source_.primaryAccountEmail = identity.userEmail;
+  data_source_.primaryAccountUserFullName = identity.userFullName;
+
+  AccountMenuViewController* viewController =
+      [[AccountMenuViewController alloc] initWithHideEllipsisMenu:NO];
+  viewController.dataSource = data_source_;
+  viewController.mutator = mutator_;
+  [viewController view];
+
+  UITableView* tableView = viewController.view.subviews[0];
+  UIView* header = tableView.tableHeaderView;
+  EXPECT_TRUE([header isKindOfClass:[CentralAccountView class]]);
+  CentralAccountView* centralAccountView =
+      static_cast<CentralAccountView*>(header);
+  EXPECT_NSEQ(centralAccountView.name, identity.userFullName);
+  EXPECT_NSEQ(centralAccountView.email, identity.userEmail);
+}
+
+// Test the account menu with an identity with missing names.
+TEST_F(AccountMenuViewControllerTest, TestMissingNames) {
+  FakeSystemIdentity* identity =
+      [FakeSystemIdentity fakeIdentityWithMissingNames];
+  fake_system_identity_manager_->AddIdentity(identity);
+
+  data_source_.primaryAccountEmail = identity.userEmail;
+  data_source_.primaryAccountUserFullName = identity.userFullName;
+
+  AccountMenuViewController* viewController =
+      [[AccountMenuViewController alloc] initWithHideEllipsisMenu:NO];
+  viewController.dataSource = data_source_;
+  viewController.mutator = mutator_;
+  [viewController view];
+
+  UITableView* tableView = viewController.view.subviews[0];
+  UIView* header = tableView.tableHeaderView;
+  EXPECT_TRUE([header isKindOfClass:[CentralAccountView class]]);
+  CentralAccountView* centralAccountView =
+      static_cast<CentralAccountView*>(header);
+  EXPECT_NSEQ(centralAccountView.name, identity.userEmail);
+  EXPECT_NSEQ(centralAccountView.email, nil);
+}
+
+// Tests that calling `-[AccountMenuViewController updateErrorSection:nil]`
+// does not crash when the snapshot has no error section (e.g. when opening
+// the menu without an active sync error).
+TEST_F(AccountMenuViewControllerTest, UpdateErrorSectionWithNilWhenNoError) {
+  EXPECT_EQ(2, TableView().numberOfSections);
+  [view_controller_ updateErrorSection:nil];
+  EXPECT_EQ(2, TableView().numberOfSections);
+}
+
+// Tests adding an error section and then clearing it with
+// `-[AccountMenuViewController updateErrorSection:nil]`.
+TEST_F(AccountMenuViewControllerTest, ClearErrorSection) {
+  AccountErrorUIInfo* errorInfo = [[AccountErrorUIInfo alloc]
+       initWithErrorType:syncer::SyncService::UserActionableError::
+                             kNeedsPassphrase
+      userActionableType:AccountErrorUserActionableType::kEnterPassphrase
+               messageID:IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_MESSAGE
+           buttonLabelID:IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_BUTTON];
+  data_source_.accountErrorUIInfo = errorInfo;
+  [view_controller_ updateErrorSection:errorInfo];
+  EXPECT_EQ(3, TableView().numberOfSections);
+
+  data_source_.accountErrorUIInfo = nil;
+  [view_controller_ updateErrorSection:nil];
+  EXPECT_EQ(2, TableView().numberOfSections);
+}
+
+// Tests updating the error section from one error type to another, ensuring
+// the message and button label update properly.
+TEST_F(AccountMenuViewControllerTest, TransitionBetweenErrorTypes) {
+  AccountErrorUIInfo* errorInfo1 = [[AccountErrorUIInfo alloc]
+       initWithErrorType:syncer::SyncService::UserActionableError::
+                             kNeedsPassphrase
+      userActionableType:AccountErrorUserActionableType::kEnterPassphrase
+               messageID:IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_MESSAGE
+           buttonLabelID:IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_BUTTON];
+  data_source_.accountErrorUIInfo = errorInfo1;
+  [view_controller_ updateErrorSection:errorInfo1];
+  EXPECT_EQ(3, TableView().numberOfSections);
+
+  NSIndexPath* path_for_error_message = [NSIndexPath indexPathForRow:0
+                                                           inSection:0];
+  NSIndexPath* path_for_error_button = [NSIndexPath indexPathForRow:1
+                                                          inSection:0];
+  ExpectSubtitleAtPath(
+      l10n_util::GetNSString(
+          IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_MESSAGE),
+      path_for_error_message);
+  ExpectTextAtPath(l10n_util::GetNSString(
+                       IDS_IOS_ACCOUNT_TABLE_ERROR_ENTER_PASSPHRASE_BUTTON),
+                   path_for_error_button);
+
+  AccountErrorUIInfo* errorInfo2 = [[AccountErrorUIInfo alloc]
+       initWithErrorType:syncer::SyncService::UserActionableError::
+                             kSignInNeedsUpdate
+      userActionableType:AccountErrorUserActionableType::
+                             kReauthToResolveSigninError
+               messageID:IDS_IOS_ACCOUNT_TABLE_ERROR_VERIFY_ITS_YOU_MESSAGE
+           buttonLabelID:IDS_IOS_ACCOUNT_TABLE_ERROR_VERIFY_ITS_YOU_BUTTON];
+  data_source_.accountErrorUIInfo = errorInfo2;
+  [view_controller_ updateErrorSection:errorInfo2];
+  EXPECT_EQ(3, TableView().numberOfSections);
+
+  ExpectSubtitleAtPath(l10n_util::GetNSString(
+                           IDS_IOS_ACCOUNT_TABLE_ERROR_VERIFY_ITS_YOU_MESSAGE),
+                       path_for_error_message);
+  ExpectTextAtPath(
+      l10n_util::GetNSString(IDS_IOS_ACCOUNT_TABLE_ERROR_VERIFY_ITS_YOU_BUTTON),
+      path_for_error_button);
+}

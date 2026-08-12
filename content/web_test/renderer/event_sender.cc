@@ -478,7 +478,7 @@ std::vector<std::string> MakeMenuItemStringsFor(ContextMenuData* context_menu) {
     }
     std::vector<WebString> suggestions;
     WebTestSpellChecker::FillSuggestionList(
-        WebString::FromUTF16(context_menu->misspelled_word), &suggestions);
+        WebString::FromUtf16(context_menu->misspelled_word), &suggestions);
     for (const WebString& suggestion : suggestions)
       strings.push_back(suggestion.Utf8());
   } else {
@@ -1686,11 +1686,9 @@ void EventSender::KeyEvent(KeyEventType event_type,
       break;
   }
 
-  // For one generated keyboard event, we need to generate a keyDown/keyUp
-  // pair;
-  // On Windows, we might also need to generate a char event to mimic the
-  // Windows event flow; on other platforms we create a merged event and test
-  // the event flow that that platform provides.
+  // A combined key press is dispatched as RawKeyDown, an optional Char event
+  // for character-producing keys, and KeyUp. KeyDownOnly dispatches the
+  // key-down portion, including Char, while KeyUp dispatches only KeyUp.
   WebKeyboardEvent event_down(WebInputEvent::Type::kRawKeyDown, modifiers,
                               GetCurrentEventTime());
   event_down.windows_key_code = code;
@@ -1740,15 +1738,15 @@ void EventSender::KeyEvent(KeyEventType event_type,
     }
 
     web_frame_widget_->ClearEditCommands();
-  }
 
-  if (event_type & KeyEventType::kKeyUp) {
     if (generate_char) {
-      WebKeyboardEvent event_char = event_up;
+      WebKeyboardEvent event_char = event_down;
       event_char.SetType(WebInputEvent::Type::kChar);
       HandleInputEventOnViewOrPopup(event_char, async);
     }
+  }
 
+  if (event_type & KeyEventType::kKeyUp) {
     HandleInputEventOnViewOrPopup(event_up, async);
   }
 }
@@ -2015,8 +2013,8 @@ void EventSender::BeginDragWithStringData(blink::WebLocalFrame* frame,
                                           const std::string& mime_type) {
   std::vector<WebDragData::Item> items;
   WebDragData::StringItem item = {
-      .type = WebString::FromUTF8(mime_type),
-      .data = WebString::FromUTF8(data),
+      .type = WebString::FromUtf8(mime_type),
+      .data = WebString::FromUtf8(data),
   };
   items.emplace_back(item);
 

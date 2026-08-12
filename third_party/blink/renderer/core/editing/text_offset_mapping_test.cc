@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -31,10 +32,10 @@ class TextOffsetMappingTest : public EditingTestBase {
     const String text = mapping.GetText();
     const int offset = mapping.ComputeTextOffset(position);
     StringBuilder builder;
-    builder.Append(text.Left(offset));
+    builder.Append(text.subview(0, offset));
     builder.Append('|');
-    builder.Append(text.Substring(offset));
-    return builder.ToString().Utf8();
+    builder.Append(text.subview(offset));
+    return StringView(builder).Utf8();
   }
 
   std::string GetRange(const std::string& selection_text) {
@@ -485,10 +486,11 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect1) {
   Element* select = QuerySelector("select");
   const auto& expected_outer =
       "^<select>"
-      "<div aria-hidden=\"true\"></div>"
-      "<slot id=\"select-button\"></slot>"
+      "<div aria-hidden=\"true\" "
+      "pseudo=\"-internal-select-inner-element\"></div>"
+      "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"select-popover-options\"></slot>"
+      "<slot id=\"select-options\"></slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -496,10 +498,11 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect1) {
       "</select>foo|";
   const auto& expected_inner =
       "<select>"
-      "<div aria-hidden=\"true\">^|</div>"
-      "<slot id=\"select-button\"></slot>"
+      "<div aria-hidden=\"true\" "
+      "pseudo=\"-internal-select-inner-element\">^|</div>"
+      "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"select-popover-options\"></slot>"
+      "<slot id=\"select-options\"></slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -515,10 +518,11 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect2) {
   Element* select = QuerySelector("select");
   const auto& expected_outer =
       "^<select>"
-      "<div aria-hidden=\"true\"></div>"
-      "<slot id=\"select-button\"></slot>"
+      "<div aria-hidden=\"true\" "
+      "pseudo=\"-internal-select-inner-element\"></div>"
+      "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"select-popover-options\">bar</slot>"
+      "<slot id=\"select-options\">bar</slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -526,10 +530,11 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect2) {
       "</select>foo|";
   const auto& expected_inner =
       "<select>"
-      "<div aria-hidden=\"true\">^|</div>"
-      "<slot id=\"select-button\"></slot>"
+      "<div aria-hidden=\"true\" "
+      "pseudo=\"-internal-select-inner-element\">^|</div>"
+      "<slot pseudo=\"-internal-select-button-slot\"></slot>"
       "<div popover=\"auto\" pseudo=\"picker(select)\">"
-      "<slot id=\"select-popover-options\">bar</slot>"
+      "<slot id=\"select-options\">bar</slot>"
       "</div>"
       "<div popover=\"manual\" pseudo=\"-internal-select-autofill-preview\">"
       "<div pseudo=\"-internal-select-autofill-preview-text\"></div>"
@@ -542,7 +547,7 @@ TEST_F(TextOffsetMappingTest, RangeWithSelect2) {
 }
 
 // http://crbug.com//832350
-TEST_F(TextOffsetMappingTest, RangeWithShadowDOM) {
+TEST_F(TextOffsetMappingTest, RangeWithShadowDom) {
   EXPECT_EQ("<div><slot>^abc|</slot></div>",
             GetRange("<div>"
                      "<template data-mode='open'><slot></slot></template>"
@@ -634,10 +639,43 @@ TEST_F(TextOffsetMappingTest, ComputeTextOffsetWithBrokenImage) {
         TextOffsetMapping::FindBackwardInlineContents(position)}) {
     const TextOffsetMapping mapping(inline_contents);
     const String text = mapping.GetText();
-    const unsigned offset = mapping.ComputeTextOffset(position);
+    const wtf_size_t offset = mapping.ComputeTextOffset(position);
     EXPECT_LE(offset, text.length());
     EXPECT_EQ("A,B", text);
     EXPECT_EQ(2u, offset);
+  }
+}
+
+TEST_F(TextOffsetMappingTest, AnonymousBlockFlowWithBlockInInline) {
+  ScopedCreateInlineContentsAnonymousBlockForTest flag(true);
+  const char* htmls[] = {
+      "<span><div>foo</div></span>",
+      "<span><div style='float:left'>foo</div></span>",
+      "<span><div style='position:absolute'>foo</div></span>",
+      ("<div style='columns:2'><span><div "
+       "style='float:left'>foo</div></span></div>"),
+      "<div style='display:flex'><span><div>foo</div></span></div>",
+  };
+  for (const char* html : htmls) {
+    SetBodyContent(html);
+    Element* span = QuerySelector("span");
+    ASSERT_TRUE(span);
+    for (const PositionInFlatTree& position : {
+             PositionInFlatTree::BeforeNode(*span),
+             PositionInFlatTree::FirstPositionInNode(*span),
+             PositionInFlatTree::LastPositionInNode(*span),
+             PositionInFlatTree::AfterNode(*span),
+         }) {
+      for (const auto& inline_contents : {
+               TextOffsetMapping::FindForwardInlineContents(position),
+               TextOffsetMapping::FindBackwardInlineContents(position),
+           }) {
+        if (inline_contents.IsNotNull()) {
+          TextOffsetMapping mapping(inline_contents);
+          mapping.GetRange();
+        }
+      }
+    }
   }
 }
 

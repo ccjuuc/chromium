@@ -113,7 +113,7 @@ class SpellcheckServiceBrowserTest : public InProcessBrowserTest,
   RenderProcessHost* GetRenderer() const { return renderer_.get(); }
 
   BrowserContext* GetContext() const {
-    return static_cast<BrowserContext*>(browser()->profile());
+    return static_cast<BrowserContext*>(browser()->GetProfile());
   }
 
   PrefService* GetPrefs() const { return prefs_; }
@@ -124,7 +124,7 @@ class SpellcheckServiceBrowserTest : public InProcessBrowserTest,
     prefs_->SetBoolean(spellcheck::prefs::kSpellCheckEnable, enable_spellcheck);
     prefs_->SetString(spellcheck::prefs::kSpellCheckDictionary,
                       single_dictionary);
-    base::Value::List dictionaries_value;
+    base::ListValue dictionaries_value;
     const std::vector<std::string> str_list =
         base::SplitString(multiple_dictionaries, ",", base::TRIM_WHITESPACE,
                           base::SPLIT_WANT_NONEMPTY);
@@ -165,7 +165,7 @@ class SpellcheckServiceBrowserTest : public InProcessBrowserTest,
   }
 
   void SetMultiLingualDictionaries(const std::string& multiple_dictionaries) {
-    base::Value::List dictionaries_value;
+    base::ListValue dictionaries_value;
     const std::vector<std::string> str_list =
         base::SplitString(multiple_dictionaries, ",", base::TRIM_WHITESPACE,
                           base::SPLIT_WANT_NONEMPTY);
@@ -177,7 +177,7 @@ class SpellcheckServiceBrowserTest : public InProcessBrowserTest,
   }
 
   std::string GetMultilingualDictionaries() {
-    const base::Value::List& list_value =
+    const base::ListValue& list_value =
         prefs_->GetList(spellcheck::prefs::kSpellCheckDictionaries);
     std::vector<std::string_view> dictionaries;
     for (const auto& item_value : list_value) {
@@ -451,7 +451,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
 // Starting without spellcheck languages should send the 'disable spellcheck'
 // message to the renderer. Consequently adding spellchecking languages should
 // enable spellcheck.
-// Flaky, see https://crbug.com/600153
+// Flaky, see https://crbug.com/41247248
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        DISABLED_StartWithoutLanguages) {
   InitSpellcheck(true, "", "");
@@ -488,7 +488,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, CustomDictionaryChanged) {
   EXPECT_TRUE(GetCustomDictionaryChangedState());
 }
 
-// Regression test for https://crbug.com/854540.
+// Regression test for https://crbug.com/41395638.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        CustomDictionaryChangedAfterRendererCrash) {
   InitSpellcheck(true, "en-US", "");
@@ -604,7 +604,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, DeleteCorruptedBDICT) {
 
 // Checks that preferences migrate correctly.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, PreferencesMigrated) {
-  base::Value::List empty_list;
+  base::ListValue empty_list;
   GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
                       std::move(empty_list));
   GetPrefs()->SetString(spellcheck::prefs::kSpellCheckDictionary, "en-US");
@@ -629,7 +629,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, PreferencesMigrated) {
 
 // Checks that preferences are not migrated when they shouldn't be.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, PreferencesNotMigrated) {
-  base::Value::List dictionaries;
+  base::ListValue dictionaries;
   dictionaries.Append("en-US");
   GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
                       std::move(dictionaries));
@@ -657,7 +657,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest, PreferencesNotMigrated) {
 // during migration.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        SpellcheckingDisabledPreferenceMigration) {
-  base::Value::List dictionaries;
+  base::ListValue dictionaries;
   dictionaries.Append("en-US");
   GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
                       std::move(dictionaries));
@@ -675,7 +675,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
 // Make sure preferences get preserved and spellchecking stays enabled.
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceBrowserTest,
                        MultilingualPreferenceNotMigrated) {
-  base::Value::List dictionaries;
+  base::ListValue dictionaries;
   dictionaries.Append("en-US");
   dictionaries.Append("fr");
   GetPrefs()->SetList(spellcheck::prefs::kSpellCheckDictionaries,
@@ -796,7 +796,7 @@ const std::vector<std::string> kSpellcheckDictionariesAfter = {
 IN_PROC_BROWSER_TEST_F(SpellcheckServiceWindowsHybridBrowserTestDelayInit,
                        PRE_WindowsHybridSpellcheckDelayInit) {
   GetPrefs()->SetString(language::prefs::kSelectedLanguages, kAcceptLanguages);
-  base::Value::List spellcheck_dictionaries_list;
+  base::ListValue spellcheck_dictionaries_list;
   for (const auto& dictionary : kSpellcheckDictionariesBefore) {
     spellcheck_dictionaries_list.Append(std::move(dictionary));
   }
@@ -848,7 +848,7 @@ IN_PROC_BROWSER_TEST_F(SpellcheckServiceWindowsHybridBrowserTestDelayInit,
   // that languages with no spellcheck support have spellchecking disabled.
   EXPECT_EQ(kAcceptLanguages,
             GetPrefs()->GetString(language::prefs::kAcceptLanguages));
-  const base::Value::List& dictionaries_list =
+  const base::ListValue& dictionaries_list =
       GetPrefs()->GetList(spellcheck::prefs::kSpellCheckDictionaries);
   std::vector<std::string> actual_dictionaries;
   for (const auto& dictionary : dictionaries_list) {

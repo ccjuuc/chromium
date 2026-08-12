@@ -6,16 +6,17 @@
 
 #include <vector>
 
+#include "base/hash/hash.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
 #include "chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption/url_visit_types.mojom.h"
 #include "chrome/browser/visited_url_ranking/visited_url_ranking_service_factory.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
@@ -23,6 +24,7 @@
 #include "components/visited_url_ranking/public/test_support.h"
 #include "components/visited_url_ranking/public/testing/mock_visited_url_ranking_service.h"
 #include "components/visited_url_ranking/public/visited_url_ranking_service.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_contents_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -58,31 +60,43 @@ void ExpectURLTypesInFetchOptions(const FetchOptions& options,
 
 }  // namespace
 
-class MostRelevantTabResumptionPageHandlerTest
-    : public BrowserWithTestWindowTest {
+class MostRelevantTabResumptionPageHandlerTest : public testing::Test {
  public:
   MostRelevantTabResumptionPageHandlerTest() = default;
 
   void RemoveOldDismissedTabs() { Handler()->RemoveOldDismissedTabs(); }
 
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
+    TestingProfile::Builder builder;
+    builder.AddTestingFactory(
+        VisitedURLRankingServiceFactory::GetInstance(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          return std::make_unique<
+              visited_url_ranking::MockVisitedURLRankingService>();
+        }));
+    profile_ = builder.Build();
     InitializeHandler();
   }
 
   void InitializeHandler() {
-    web_contents_ = content::WebContents::Create(
-        content::WebContents::CreateParams(profile()));
+    web_contents_ = web_contents_factory_.CreateWebContents(profile_.get());
     handler_ = std::make_unique<MostRelevantTabResumptionPageHandler>(
         mojo::PendingReceiver<
             ntp::most_relevant_tab_resumption::mojom::PageHandler>(),
-        web_contents_.get());
+        web_contents_);
   }
 
   void ClearHandler() {
     handler_.reset();
-    web_contents_.reset();
+    if (web_contents_) {
+      content::WebContents* raw_web_contents = web_contents_.get();
+      web_contents_ = nullptr;
+      web_contents_factory_.DestroyWebContents(raw_web_contents);
+    }
   }
+
+  TestingProfile* profile() { return profile_.get(); }
 
   std::vector<ntp::most_relevant_tab_resumption::mojom::URLVisitPtr>
   RunGetURLVisits() {
@@ -105,26 +119,15 @@ class MostRelevantTabResumptionPageHandlerTest
 
   void TearDown() override {
     ClearHandler();
-    BrowserWithTestWindowTest::TearDown();
   }
 
   MostRelevantTabResumptionPageHandler* Handler() { return handler_.get(); }
 
  private:
-  // BrowserWithTestWindowTest:
-  TestingProfile::TestingFactories GetTestingFactories() override {
-    return {
-        TestingProfile::TestingFactory{
-            VisitedURLRankingServiceFactory::GetInstance(),
-            base::BindRepeating([](content::BrowserContext* context)
-                                    -> std::unique_ptr<KeyedService> {
-              return std::make_unique<
-                  visited_url_ranking::MockVisitedURLRankingService>();
-            })},
-    };
-  }
-
-  std::unique_ptr<content::WebContents> web_contents_;
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfile> profile_;
+  content::TestWebContentsFactory web_contents_factory_;
+  raw_ptr<content::WebContents> web_contents_ = nullptr;
   std::unique_ptr<MostRelevantTabResumptionPageHandler> handler_;
 };
 
@@ -491,8 +494,13 @@ TEST_F(MostRelevantTabResumptionPageHandlerTest,
   ASSERT_EQ(
       ntp::most_relevant_tab_resumption::mojom::DecorationType::kVisitedXAgo,
       url_visits_mojom[0]->decoration->type);
+#if BUILDFLAG(IS_ANDROID)
+  ASSERT_EQ("You visited 5 min ago",
+            url_visits_mojom[1]->decoration->display_string);
+#else
   ASSERT_EQ("You visited 5 mins ago",
             url_visits_mojom[1]->decoration->display_string);
+#endif
   ASSERT_EQ(
       ntp::most_relevant_tab_resumption::mojom::DecorationType::kVisitedXAgo,
       url_visits_mojom[1]->decoration->type);
@@ -502,11 +510,88 @@ TEST_F(MostRelevantTabResumptionPageHandlerTest, RemoveOldDismissedTabs) {
   base::Time last_year = base::Time::Now() - base::Days(365);
   double last_year_micros = static_cast<double>(
       last_year.ToDeltaSinceWindowsEpoch().InMicroseconds());
-  base::Value::Dict dismissed_urls_dict;
+  base::DictValue dismissed_urls_dict;
   dismissed_urls_dict.Set("http://www.google.com/", last_year_micros);
   dismissed_urls_dict.Set("http://www.google2.com/", last_year_micros);
   profile()->GetPrefs()->SetDict(kDismissedVisitsPrefName,
                                  std::move(dismissed_urls_dict));
   RemoveOldDismissedTabs();
   ASSERT_EQ(0u, dismissed_urls_dict.size());
+}
+
+TEST_F(MostRelevantTabResumptionPageHandlerTest,
+       GetURLVisits_URLTitleFormatting) {
+  visited_url_ranking::MockVisitedURLRankingService*
+      mock_visited_url_ranking_service =
+          static_cast<visited_url_ranking::MockVisitedURLRankingService*>(
+              VisitedURLRankingServiceFactory::GetForProfile(profile()));
+
+  EXPECT_CALL(*mock_visited_url_ranking_service, FetchURLVisitAggregates(_, _))
+      .Times(1)
+      .WillOnce(
+          [](const FetchOptions& options,
+             VisitedURLRankingService::GetURLVisitAggregatesCallback callback) {
+            std::vector<URLVisitAggregate> url_visit_aggregates = {};
+
+            // 1. Visit with an empty title.
+            URLVisitAggregate visit1("visit_id_1");
+            GURL url1("https://www.example.com/path?q=1");
+            visit1.fetcher_data_map.emplace(
+                Fetcher::kHistory,
+                URLVisitAggregate::HistoryData(
+                    visited_url_ranking::GenerateSampleAnnotatedVisit(
+                        1, u"", url1, false)));
+            visit1.decorations.emplace_back(
+                visited_url_ranking::DecorationType::kVisitedXAgo,
+                u"You visited X ago");
+            url_visit_aggregates.push_back(std::move(visit1));
+
+            // 2. Visit with a non-empty title.
+            URLVisitAggregate visit2("visit_id_2");
+            GURL url2("https://www.google.com/");
+            visit2.fetcher_data_map.emplace(
+                Fetcher::kHistory,
+                URLVisitAggregate::HistoryData(
+                    visited_url_ranking::GenerateSampleAnnotatedVisit(
+                        2, u"Google Search Page", url2, false)));
+            visit2.decorations.emplace_back(
+                visited_url_ranking::DecorationType::kVisitedXAgo,
+                u"You visited X ago");
+            url_visit_aggregates.push_back(std::move(visit2));
+
+            URLVisitsMetadata url_visits_metadata;
+            std::move(callback).Run(ResultStatus::kSuccess,
+                                    std::move(url_visits_metadata),
+                                    std::move(url_visit_aggregates));
+          });
+
+  EXPECT_CALL(*mock_visited_url_ranking_service,
+              RankURLVisitAggregates(_, _, _))
+      .Times(1)
+      .WillOnce([](const visited_url_ranking::Config& config,
+                   std::vector<URLVisitAggregate> visits,
+                   VisitedURLRankingService::RankURLVisitAggregatesCallback
+                       callback) {
+        std::move(callback).Run(ResultStatus::kSuccess, std::move(visits));
+      });
+
+  EXPECT_CALL(*mock_visited_url_ranking_service,
+              DecorateURLVisitAggregates(_, _, _, _))
+      .Times(1)
+      .WillOnce([](const visited_url_ranking::Config& config,
+                   visited_url_ranking::URLVisitsMetadata url_visit_metadata,
+                   std::vector<URLVisitAggregate> visits,
+                   VisitedURLRankingService::DecorateURLVisitAggregatesCallback
+                       callback) {
+        std::move(callback).Run(ResultStatus::kSuccess, std::move(visits));
+      });
+
+  auto url_visits_mojom = RunGetURLVisits();
+  ASSERT_EQ(2u, url_visits_mojom.size());
+
+  // First visit had an empty title, so it should fallback to the GURL spec.
+  EXPECT_EQ("https://www.example.com/path?q=1", url_visits_mojom[0]->title);
+
+  // Second visit had a non-empty title, so it should use it.
+  EXPECT_EQ("Google Search Page", url_visits_mojom[1]->title);
 }

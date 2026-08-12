@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/webid/identity_credential_source.h"
 
 namespace content {
 
@@ -68,15 +69,17 @@ void IdentityRequestDialogController::SetIsInterceptionEnabled(bool enabled) {
   is_interception_enabled_ = enabled;
 }
 
-void IdentityRequestDialogController::ShouldShowAccountsPassiveDialog(
-    ShouldShowAccountsPassiveDialogCallback cb) {
-  std::move(cb).Run(true);
+void IdentityRequestDialogController::GetPassiveDialogVolume(
+    GetPassiveDialogVolumeCallback cb) {
+  std::move(cb).Run(PassiveDialogVolume::kDefault);
 }
 
 bool IdentityRequestDialogController::ShowAccountsDialog(
     content::RelyingPartyData rp_data,
     const std::vector<scoped_refptr<content::IdentityProviderData>>& idp_list,
     const std::vector<scoped_refptr<content::IdentityRequestAccount>>& accounts,
+    const std::vector<scoped_refptr<content::IdentityRequestAccount>>&
+        filtered_accounts,
     blink::mojom::RpMode rp_mode,
     AccountSelectionCallback on_selected,
     LoginToIdPCallback on_add_account,
@@ -95,6 +98,7 @@ bool IdentityRequestDialogController::ShowFailureDialog(
     blink::mojom::RpContext rp_context,
     blink::mojom::RpMode rp_mode,
     const IdentityProviderMetadata& idp_metadata,
+    const std::vector<scoped_refptr<IdentityRequestAccount>>& filtered_accounts,
     DismissCallback dismiss_callback,
     LoginToIdPCallback login_callback) {
   if (!is_interception_enabled_) {
@@ -160,7 +164,9 @@ void IdentityRequestDialogController::ShowUrl(LinkType type, const GURL& url) {}
 WebContents* IdentityRequestDialogController::ShowModalDialog(
     const GURL& url,
     blink::mojom::RpMode rp_mode,
-    DismissCallback dismiss_callback) {
+    DismissCallback dismiss_callback,
+    ShownModalAsyncCallback on_shown_async,
+    TokenCallback token_callback) {
   if (!is_interception_enabled_) {
     std::move(dismiss_callback).Run(DismissReason::kOther);
   }
@@ -180,9 +186,5 @@ void IdentityRequestDialogController::RequestIdPRegistrationPermision(
 }
 
 void IdentityRequestDialogController::NotifyAutofillSourceReadyForTesting() {}
-
-bool IdentityRequestDialogController::DidShowUi() const {
-  return false;
-}
 
 }  // namespace content

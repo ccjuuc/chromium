@@ -36,7 +36,7 @@ struct DOMAIN_RELIABILITY_EXPORT DomainReliabilityBeacon {
     // Evicted to make room for newer beacons.
     kEvicted = 3,
     // Deleted for user clearing browsing data.
-    kCleared = 5,
+    kCleared = 4,
     // Beacon was deleted upon context shutdown.
     kContextShutDown = 5,
 
@@ -53,7 +53,7 @@ struct DOMAIN_RELIABILITY_EXPORT DomainReliabilityBeacon {
   // are being uploaded to a same-origin collector.
   // |path_prefixes| are used to include only a known-safe (not PII) prefix of
   // URLs when uploading to a non-same-origin collector.
-  base::Value::Dict ToValue(
+  base::DictValue ToValue(
       base::TimeTicks upload_time,
       base::TimeTicks last_network_change_time,
       const GURL& collector_url,

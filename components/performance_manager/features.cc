@@ -15,9 +15,6 @@
 namespace performance_manager::features {
 
 #if !BUILDFLAG(IS_ANDROID)
-BASE_FEATURE(kBackgroundTabLoadingFromPerformanceManager,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kPerformanceControlsPPMSurvey, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE_PARAM(base::TimeDelta,
@@ -146,6 +143,9 @@ BASE_FEATURE(kUnthrottledTabProcessReporting, base::FEATURE_ENABLED_BY_DEFAULT);
 
 #endif
 
+BASE_FEATURE(kLevelDBSiteDataStoreBestEffort,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kEnableBestEffortTaskInhibitingPolicy,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(base::TimeDelta,
@@ -168,14 +168,10 @@ const base::FeatureParam<bool> kInheritParentPriority{
 const base::FeatureParam<bool> kRenderedOutOfViewIsNotVisible{
     &kPMProcessPriorityPolicy, "rendered_out_of_view_is_not_visible", false};
 
-const base::FeatureParam<bool> kNonSpareRendererHighInitialPriority{
-    &kPMProcessPriorityPolicy, "non_spare_renderer_high_initial_priority",
-    false};
+const base::FeatureParam<bool> kRendererHighInitialPriority{
+    &kPMProcessPriorityPolicy, "renderer_high_initial_priority", false};
 
 BASE_FEATURE(kPMLoadingPageVoter, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kBFCachePerformanceManagerPolicy,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kUrgentPageDiscarding, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -188,9 +184,8 @@ BASE_FEATURE(kDiscardFrozenBrowsingInstancesWithGrowingPMF,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Note: These params are associated with `kCPUMeasurementInFreezingPolicy`
-// instead of `kFreezingOnBatterySaver` or
-// `kDiscardFrozenBrowsingInstancesWithGrowingPMF`, to allow retrieving the
-// value without activating these two features.
+// instead of `kDiscardFrozenBrowsingInstancesWithGrowingPMF`,
+// to allow retrieving the value without activating these two features.
 BASE_FEATURE_PARAM(int,
                    kFreezingMemoryGrowthThresholdToDiscardKb,
                    &kCPUMeasurementInFreezingPolicy,
@@ -212,11 +207,6 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                    &kCPUMeasurementInFreezingPolicy,
                    "freezing_audio_protection_time",
                    base::Minutes(5));
-
-BASE_FEATURE(kFreezingOnBatterySaver, base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kFreezingOnBatterySaverForTesting,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kFreezingFollowsDiscardOptOut, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -257,6 +247,14 @@ BASE_FEATURE_PARAM(int,
                    "percent_threshold",
                    15);
 
+BASE_FEATURE(kDiscardOnCommitLimit, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(int,
+                   kDiscardOnCommitLimit_MinAvailablePercent,
+                   &kDiscardOnCommitLimit,
+                   "min_available_percent",
+                   10);
+
 BASE_FEATURE(kResourceAttributionIncludeOrigins,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -267,9 +265,17 @@ BASE_FEATURE(kUnimportantFramesPriority, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kThrottleUnimportantFrameRate, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kKeepDefaultSearchEngineRendererAlive,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_DISABLED_BY_DEFAULT
+#else
+             base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+);
 
 BASE_FEATURE(kBoostClosingTabs, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kForceForegroundPriorityForAllTabs,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Defines the feature to enable this policy.
 BASE_FEATURE(kTransientKeepAlivePolicy, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -292,5 +298,24 @@ BASE_FEATURE_PARAM(size_t,
                    10);
 
 BASE_FEATURE(kExtensionServiceWorkerVoter, base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_WIN)
+// A feature to use ABOVE_NORMAL_PRIORITY_CLASS for Browser on Windows by
+// setting base::Priority::kUserBlocking. This should be used together with
+// kUserBlockingAboveNormalPriority.
+BASE_FEATURE(kBrowserProcessAboveNormalPriority,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+// When enabled, this feature prevents the browser from proactively discarding
+// tabs to save memory. This is used to measure the impact of tab discarding on
+// memory usage and user experience compared to other memory saving features.
+BASE_FEATURE(kDisableTabDiscarding, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kGlicActuationPriorityVoter, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIgnoreMediaQueryFaviconUpdates, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace performance_manager::features

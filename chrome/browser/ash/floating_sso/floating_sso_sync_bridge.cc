@@ -56,11 +56,6 @@ FloatingSsoSyncBridge::~FloatingSsoSyncBridge() {
   }
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-FloatingSsoSyncBridge::CreateMetadataChangeList() {
-  return syncer::DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
-
 std::optional<syncer::ModelError> FloatingSsoSyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
     syncer::EntityChangeList remote_entities) {
@@ -175,6 +170,14 @@ std::string FloatingSsoSyncBridge::GetStorageKey(
 std::string FloatingSsoSyncBridge::GetClientTag(
     const syncer::EntityData& entity_data) const {
   return entity_data.specifics.cookie().unique_key();
+}
+
+sync_pb::EntitySpecifics
+FloatingSsoSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool FloatingSsoSyncBridge::IsEntityDataValid(

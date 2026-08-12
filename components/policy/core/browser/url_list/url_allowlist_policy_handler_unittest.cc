@@ -11,6 +11,7 @@
 #include "base/values.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/policy_error_map.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_types.h"
@@ -49,7 +50,7 @@ class URLAllowlistPolicyHandlerTest : public testing::Test {
     return handler_->ValidatePolicy(policy);
   }
   base::Value GetURLAllowlistPolicyValueWithEntries(size_t len) {
-    base::Value::List allowlist;
+    base::ListValue allowlist;
     for (size_t i = 0; i < len; ++i) {
       allowlist.Append(kTestAllowlistValue);
     }
@@ -94,7 +95,7 @@ TEST_F(URLAllowlistPolicyHandlerTest, ApplyPolicySettings_Empty) {
 
 TEST_F(URLAllowlistPolicyHandlerTest, ApplyPolicySettings_WrongElementType) {
   // The policy expects string-valued elements. Give it booleans.
-  base::Value::List in;
+  base::ListValue in;
   in.Append(false);
   SetPolicy(key::kURLAllowlist, base::Value(std::move(in)));
   ApplyPolicies();
@@ -107,7 +108,7 @@ TEST_F(URLAllowlistPolicyHandlerTest, ApplyPolicySettings_WrongElementType) {
 }
 
 TEST_F(URLAllowlistPolicyHandlerTest, ApplyPolicySettings_Successful) {
-  base::Value::List in_url_allowlist;
+  base::ListValue in_url_allowlist;
   in_url_allowlist.Append(kTestAllowlistValue);
   SetPolicy(key::kURLAllowlist, base::Value(std::move(in_url_allowlist)));
   ApplyPolicies();
@@ -184,7 +185,7 @@ TEST_F(URLAllowlistPolicyHandlerTest, ValidatePolicy) {
 // policy can still be applied, but an error is added to the error map to
 // indicate an invalid URL.
 TEST_F(URLAllowlistPolicyHandlerTest, CheckPolicyURLHostWithAsterik) {
-  base::Value::List allowed_urls;
+  base::ListValue allowed_urls;
   allowed_urls.Append("*.developers.com");
   EXPECT_TRUE(
       CheckPolicy(key::kURLAllowlist, base::Value(std::move(allowed_urls))));

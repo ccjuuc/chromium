@@ -49,6 +49,7 @@
 #include "components/bookmarks/test/test_matchers.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_util.h"
+#include "components/sync/base/server_defined_unique_tags.h"
 #include "components/sync/base/unique_position.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
@@ -70,20 +71,16 @@ namespace bookmarks_helper {
 
 namespace {
 
-const char kBookmarkBarTag[] = "bookmark_bar";
-const char kSyncedBookmarksTag[] = "synced_bookmarks";
-const char kOtherBookmarksTag[] = "other_bookmarks";
-
 const BookmarkNode* GetPermanentNodeForServerTag(
     const sync_bookmarks::BookmarkModelView& model_view,
     const std::string& server_defined_unique_tag) {
-  if (server_defined_unique_tag == kBookmarkBarTag) {
+  if (server_defined_unique_tag == syncer::kBookmarkBarTag) {
     return model_view.bookmark_bar_node();
   }
-  if (server_defined_unique_tag == kSyncedBookmarksTag) {
+  if (server_defined_unique_tag == syncer::kSyncedBookmarksTag) {
     return model_view.mobile_node();
   }
-  if (server_defined_unique_tag == kOtherBookmarksTag) {
+  if (server_defined_unique_tag == syncer::kOtherBookmarksTag) {
     return model_view.other_node();
   }
 
@@ -321,9 +318,8 @@ void DeleteFaviconMappingsImpl(Profile* profile,
     favicon_service->DeleteFaviconMappings({node->url()},
                                            favicon_base::IconType::kFavicon);
   } else {
-    ApplyBookmarkFavicon(
-        node, favicon_service, /*icon_url=*/GURL(),
-        scoped_refptr<base::RefCountedString>(new base::RefCountedString()));
+    ApplyBookmarkFavicon(node, favicon_service, /*icon_url=*/GURL(),
+                         base::MakeRefCounted<base::RefCountedString>());
   }
 
   // Wait for the favicon for |node| to be deleted.
@@ -449,9 +445,9 @@ bool BookmarkModelsMatch(BookmarkModel* model_a, BookmarkModel* model_b) {
   return !iterator_b.has_next();
 }
 
-std::vector<const BookmarkNode*> GetAllBookmarkNodes(
+std::vector<raw_ptr<const BookmarkNode>> GetAllBookmarkNodes(
     const BookmarkModel* model) {
-  std::vector<const BookmarkNode*> all_nodes;
+  std::vector<raw_ptr<const BookmarkNode>> all_nodes;
 
   // Add root node separately as iterator does not include it.
   all_nodes.push_back(model->root_node());
@@ -508,8 +504,10 @@ const BookmarkNode* GetOtherNode(int index, StoreType store_type) {
              : GetBookmarkModel(index)->other_node();
 }
 
-const BookmarkNode* GetSyncedBookmarksNode(int index) {
-  return GetBookmarkModel(index)->mobile_node();
+const BookmarkNode* GetSyncedBookmarksNode(int index, StoreType store_type) {
+  return (store_type == StoreType::kAccountStore)
+             ? GetBookmarkModel(index)->account_mobile_node()
+             : GetBookmarkModel(index)->mobile_node();
 }
 
 const BookmarkNode* GetManagedNode(int index) {
@@ -986,8 +984,7 @@ SingleBookmarksModelMatcherChecker::~SingleBookmarksModelMatcherChecker() =
 
 bool SingleBookmarksModelMatcherChecker::IsExitConditionSatisfied(
     std::ostream* os) {
-  const std::vector<const BookmarkNode*> all_bookmark_nodes =
-      GetAllBookmarkNodes(bookmark_model());
+  const auto all_bookmark_nodes = GetAllBookmarkNodes(bookmark_model());
 
   testing::StringMatchResultListener result_listener;
   const bool matches = testing::ExplainMatchResult(matcher_, all_bookmark_nodes,

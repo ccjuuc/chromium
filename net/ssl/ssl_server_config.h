@@ -14,6 +14,7 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "net/base/bssl_refcounted.h"
 #include "net/base/net_export.h"
 #include "net/socket/next_proto.h"
 #include "net/ssl/ssl_config.h"
@@ -90,6 +91,10 @@ struct NET_EXPORT SSLServerConfig {
   // If true, causes only ECDHE cipher suites to be enabled.
   bool require_ecdhe = false;
 
+  // If true, will support the server padding extension.
+  // Experimental, may be removed at any time.
+  bool server_padding_enabled = false;
+
   // cipher_suite_for_testing, if set, causes the server to only support the
   // specified cipher suite in TLS 1.2 and below. This should only be used in
   // unit tests.
@@ -138,31 +143,8 @@ struct NET_EXPORT SSLServerConfig {
   // handshake.
   std::optional<uint8_t> alert_after_handshake_for_testing;
 
-  // This is a workaround for BoringSSL's scopers not being copyable. See
-  // https://crbug.com/boringssl/431.
-  class NET_EXPORT ECHKeysContainer {
-   public:
-    ECHKeysContainer();
-    // Intentionally allow implicit conversion from bssl::UniquePtr.
-    ECHKeysContainer(  // NOLINT(google-explicit-constructor)
-        bssl::UniquePtr<SSL_ECH_KEYS> keys);
-    ~ECHKeysContainer();
-
-    ECHKeysContainer(const ECHKeysContainer& other);
-    ECHKeysContainer& operator=(const ECHKeysContainer& other);
-
-    // Forward APIs from bssl::UniquePtr.
-    SSL_ECH_KEYS* get() const { return keys_.get(); }
-    explicit operator bool() const { return static_cast<bool>(keys_); }
-    // This is defined out-of-line to avoid an ssl.h include.
-    void reset(SSL_ECH_KEYS* keys = nullptr);
-
-   private:
-    bssl::UniquePtr<SSL_ECH_KEYS> keys_;
-  };
-
   // If not nullptr, an ECH configuration to use on the server.
-  ECHKeysContainer ech_keys;
+  BsslRefcounted<SSL_ECH_KEYS> ech_keys;
 };
 
 }  // namespace net

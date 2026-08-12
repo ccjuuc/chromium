@@ -16,8 +16,10 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/url_matcher/url_matcher.h"
@@ -71,7 +73,7 @@ class DeclarativeConditionSet {
   static std::unique_ptr<DeclarativeConditionSet> Create(
       const Extension* extension,
       url_matcher::URLMatcherConditionFactory* url_matcher_condition_factory,
-      const base::Value::List& condition_values,
+      const base::ListValue& condition_values,
       std::string* error);
 
   const Conditions& conditions() const {
@@ -109,7 +111,7 @@ class DeclarativeConditionSet {
 
   const URLMatcherIdToCondition match_id_to_condition_;
   const Conditions conditions_;
-  const std::vector<const ConditionT*> conditions_without_urls_;
+  const std::vector<raw_ptr<const ConditionT>> conditions_without_urls_;
 };
 
 // Immutable container for multiple actions.
@@ -121,7 +123,7 @@ class DeclarativeConditionSet {
 //   static std::unique_ptr<ActionT> Create(
 //       const Extension* extension,
 //       // Except this argument gets elements of the Values array.
-//       const base::Value::Dict& definition,
+//       const base::DictValue& definition,
 //       std::string* error, bool* bad_message);
 //   void Apply(const ExtensionId& extension_id,
 //              const base::Time& extension_install_time,
@@ -155,7 +157,7 @@ class DeclarativeActionSet {
   static std::unique_ptr<DeclarativeActionSet> Create(
       content::BrowserContext* browser_context,
       const Extension* extension,
-      const base::Value::List& action_values,
+      const base::ListValue& action_values,
       std::string* error,
       bool* bad_message);
 
@@ -305,7 +307,7 @@ std::unique_ptr<DeclarativeConditionSet<ConditionT>>
 DeclarativeConditionSet<ConditionT>::Create(
     const Extension* extension,
     url_matcher::URLMatcherConditionFactory* url_matcher_condition_factory,
-    const base::Value::List& condition_values,
+    const base::ListValue& condition_values,
     std::string* error) {
   Conditions result;
 
@@ -344,7 +346,8 @@ DeclarativeConditionSet<ConditionT>::DeclarativeConditionSet(
     const std::vector<const ConditionT*>& conditions_without_urls)
     : match_id_to_condition_(match_id_to_condition),
       conditions_(std::move(conditions)),
-      conditions_without_urls_(conditions_without_urls) {}
+      conditions_without_urls_(
+          base::ToVector<raw_ptr<const ConditionT>>(conditions_without_urls)) {}
 
 //
 // DeclarativeActionSet
@@ -359,7 +362,7 @@ template <typename ActionT>
 std::unique_ptr<DeclarativeActionSet<ActionT>>
 DeclarativeActionSet<ActionT>::Create(content::BrowserContext* browser_context,
                                       const Extension* extension,
-                                      const base::Value::List& action_values,
+                                      const base::ListValue& action_values,
                                       std::string* error,
                                       bool* bad_message) {
   *error = "";

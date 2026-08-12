@@ -22,7 +22,6 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -123,8 +122,7 @@ class QueuedHistoryDBTask {
 class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                        public HistoryBackendForSync,
                        public HistoryBackendNotifier,
-                       public favicon::FaviconBackendDelegate,
-                       public base::MemoryPressureListener {
+                       public favicon::FaviconBackendDelegate {
  public:
   // Interface implemented by the owner of the HistoryBackend object. Normally,
   // the history service implements this to send stuff back to the main thread.
@@ -269,9 +267,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                              int nav_entry_id,
                              const GURL& url,
                              base::Time end_ts);
-  void SetBrowsingTopicsAllowed(ContextID context_id,
-                                int nav_entry_id,
-                                const GURL& url);
   void SetPageLanguageForVisit(ContextID context_id,
                                int nav_entry_id,
                                const GURL& url,
@@ -302,6 +297,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Querying ------------------------------------------------------------------
 
   QueryURLResult QueryURL(const GURL& url);
+  std::optional<std::vector<URLID>> QueryUrlIds(const std::vector<GURL>& urls);
   QueryURLAndVisitsResult QueryURLAndVisits(
       const GURL& url,
       VisitQuery404sPolicy policy_for_404s);
@@ -359,6 +355,8 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // top-level domain (eTLD) + 1, e.g. "foo.com", "bar.co.uk") visited within
   // the 1-day, 7-day or 28-day span that ends at a midnight in local timezone.
   //
+  // Includes only visits from this device; foreign/synced visits are ignored.
+  //
   // For each of the most recent `number_of_days_to_report` midnights before
   // `report_time`(inclusive), this function computes a subset of
   // {1-day, 7-day, 28-day} metrics whose spanning periods all end on that
@@ -382,12 +380,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // metrics measuring domain visit counts spanning the following date ranges
   // (all dates are inclusive):
   // {{10/30, 10/3–10/30}, {10/29, 10/2–10/29}, {10/28, 10/1–10/28}}
-  //
-  // The return value is a pair of results, where the first member counts only
-  // local visits, and the second counts both local and foreign (synced) visits.
-  // TODO(crbug.com/40896778): Once the "V2" domain diversity metrics are
-  // deprecated, return only a single result, the "local" one.
-  std::pair<DomainDiversityResults, DomainDiversityResults> GetDomainDiversity(
+  DomainDiversityResults GetDomainDiversity(
       base::Time report_time,
       int number_of_days_to_report,
       DomainMetricBitmaskType metric_type_bitmask,
@@ -564,26 +557,26 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // this boundary won't be clustered nor cause re-clustering.
   base::Time FindMostRecentClusteredTime();
 
-  void ReplaceClusters(const std::vector<int64_t>& ids_to_delete,
+  void ReplaceClusters(const std::vector<ClusterId>& ids_to_delete,
                        const std::vector<Cluster>& clusters_to_add);
 
-  int64_t ReserveNextClusterIdWithVisit(const ClusterVisit& cluster_visit);
+  ClusterId ReserveNextClusterIdWithVisit(ClusterVisit cluster_visit);
 
-  void AddVisitsToCluster(int64_t cluster_id,
-                          const std::vector<ClusterVisit>& visits);
+  void AddVisitsToCluster(ClusterId cluster_id,
+                          std::vector<ClusterVisit> visits);
 
   // Adds `cluster_visit` to the local cluster with `originator_cache_guid` and
   // `originator_cluster_id`. If an existing cluster does not exist with those
   // synced details, a new one will be created.
   void AddVisitToSyncedCluster(const history::ClusterVisit& cluster_visit,
                                const std::string& originator_cache_guid,
-                               int64_t originator_cluster_id) override;
+                               ClusterId originator_cluster_id) override;
 
   void UpdateClusterTriggerability(const std::vector<Cluster>& clusters);
 
   void HideVisits(const std::vector<VisitID>& visit_ids);
 
-  void UpdateClusterVisit(const history::ClusterVisit& cluster_visit);
+  void UpdateClusterVisit(history::ClusterVisit cluster_visit);
 
   std::vector<Cluster> GetMostRecentClusters(
       base::Time inclusive_min_time,
@@ -595,13 +588,13 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Get a `Cluster`. Since `keyword_to_data_map` and `visits.duplicate_visits`
   // aren't always useful and require extra SQL executions, they're only
   // populated if `include_keywords_and_duplicates` is true.
-  Cluster GetCluster(int64_t cluster_id,
+  Cluster GetCluster(ClusterId cluster_id,
                      bool include_keywords_and_duplicates = true);
 
   // Returns the ID of the cluster containing `visit_id`. Returns 0 if
   // `visit_id` is not in a cluster.
   // HistoryBackendForSync:
-  int64_t GetClusterIdContainingVisit(VisitID visit_id) override;
+  ClusterId GetClusterIdContainingVisit(VisitID visit_id) override;
 
   // Finds the 1st visit in the redirect chain containing `visit`.
   // Unlike `GetRedirectsToSpecificVisit()`, this only considers actual
@@ -854,10 +847,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   // Does the work of Init.
   void InitImpl(const HistoryDatabaseParams& history_database_params);
-
-  // Called when the system is under memory pressure.
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
 
   // Closes all databases managed by HistoryBackend. Commits any pending
   // transactions.
@@ -1147,10 +1136,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   ExpireHistoryBackend expirer_;
 
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
-
-  // Listens for the system being under memory pressure.
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
 
   // Contains diagnostic information about the sql database that is non-empty
   // when a catastrophic error occurs.

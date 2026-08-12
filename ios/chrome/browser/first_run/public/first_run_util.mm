@@ -12,6 +12,7 @@
 #import "base/task/thread_pool.h"
 #import "components/metrics/metrics_reporting_default_state.h"
 #import "components/policy/core/common/policy_loader_ios_constants.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/startup_metric_utils/browser/startup_metric_utils.h"
 #import "ios/chrome/app/tests_hook.h"
@@ -23,7 +24,6 @@
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/web/public/thread/web_thread.h"
-#import "ui/gfx/ios/NSString+CrStringDrawing.h"
 
 constexpr BOOL kDefaultMetricsReportingCheckboxValue = YES;
 

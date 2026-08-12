@@ -96,41 +96,31 @@ class VIZ_SERVICE_EXPORT OverlayProcessorInterface {
     bool supports_hdr = false;
     bool is_opaque = false;
 
+    // Used by Ozone to create a dummy buffer to test overlay support.
+    const SharedImageFormat si_format;
+    // Used by Ozone to create a dummy buffer to test overlay support. Used by
+    // Android to determine the output color space, especially for HDR output.
+    const gfx::ColorSpace color_space;
+
 #if BUILDFLAG(IS_OZONE)
     // Ozone requires checking for overlay support with an actual buffer. To
     // create the primary plane, `OverlayProcessorOzone` will use an existing
     // `overlay_testing_mailbox` (usually, the last swapped primary plane
     // buffer) or will make a dummy buffer using `si_format` and `color_space`.
-    const SharedImageFormat si_format;
-    const gfx::ColorSpace color_space;
     const gpu::Mailbox overlay_testing_mailbox;
 #endif
   };
 
   // Attempts to replace quads from the specified root render pass with overlays
   // or CALayers. This must be called every frame.
-  // TODO(crbug.com/444264038): Delete this overload when the RPDQ refactor is
-  // finished.
   virtual void ProcessForOverlays(
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list,
       const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
-      gfx::Rect* damage_rect,
-      std::vector<gfx::Rect>* content_bounds) = 0;
-
-  void ProcessForOverlays(DisplayResourceProvider* resource_provider,
-                          AggregatedRenderPassList* render_passes,
-                          const SkM44& output_color_matrix,
-                          SurfaceDamageRectList surface_damage_rect_list,
-                          const PrimaryPlaneParams& primary_plane_params,
-                          CandidateList* overlay_candidates,
-                          gfx::Rect* damage_rect,
-                          std::vector<gfx::Rect>* content_bounds);
+      gfx::Rect* damage_rect) = 0;
 
   // Before the overlay refactor to use OverlayProcessorOnGpu, overlay
   // candidates are stored inside DirectRenderer. Those overlay candidates are

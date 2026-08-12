@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -37,7 +36,7 @@ PerformancePaintTiming::PerformancePaintTiming(
     PaintType type,
     const DOMPaintTimingInfo& paint_timing_info,
     DOMWindow* source,
-    uint32_t navigation_id)
+    uint64_t navigation_id)
     : PerformanceEntry(
           /*duration=*/0.0,
           FromPaintTypeToString(type),

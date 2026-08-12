@@ -9,7 +9,6 @@ include_rules = [
   "+chrome/app/vector_icons",
   "+chrome/browser/apps/app_service",
   "+chrome/browser/ash/login/users",
-  "+chrome/browser/ash/plugin_vm",
   "+chrome/browser/ash/policy/core",
   "+chrome/browser/ash/profiles",
   "+chrome/browser/ash/scanning",
@@ -29,17 +28,14 @@ include_rules = [
   "+chrome/browser/ui/ash/system_web_apps",
   "+chrome/browser/ui/chrome_pages.h",
   "+chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
-  "+chrome/browser/ui/webui/ash/print_preview_cros",
   "+chrome/common/chrome_features.h",
-  "+chrome/common/pref_names.h",
-  "+chrome/common/webui_url_constants.h",
   "+chrome/grit",
 ]
 
 specific_include_rules = {
   ".*test(_.*)?\\.(cc|h)": [
     "+chrome/browser/ash/system_web_apps/test_support",
+    "+chrome/browser/global_features.h",
     "+chrome/browser/web_applications/test",
     "+chrome/test/base",
   ],
@@ -50,7 +46,7 @@ specific_include_rules = {
     "+third_party/libipp/libipp/parser.h",
     "+third_party/libipp/libipp/validator.h",
   ],
-  "printer_setup_util.cc": [
+  "printer_setup_util\\.cc": [
     "+chrome/services/printing/public/mojom"
   ],
 }

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "sandbox/win/src/process_mitigations.h"
 
 #include <windows.h>
@@ -19,6 +14,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/notreached.h"
 #include "base/rand_util.h"
@@ -381,7 +377,7 @@ void ConvertProcessMitigationsToPolicy(MitigationFlags flags,
   // from PROCESS_CREATION_MITIGATION_POLICY2_* go into the second value.  If
   // any flags are set in value 2, update |size| to include both elements.
   DWORD64* policy_value_1 = &policy_flags[0];
-  DWORD64* policy_value_2 = &policy_flags[1];
+  DWORD64* policy_value_2 = UNSAFE_TODO(&policy_flags[1]);
   *policy_value_1 = 0;
   *policy_value_2 = 0;
 
@@ -489,6 +485,11 @@ void ConvertProcessMitigationsToPolicy(MitigationFlags flags,
   // Mitigations >= Win10 RS3 ("Fall Creator's"):
   //----------------------------------------------------------------------------
   if (version >= base::win::Version::WIN10_RS3) {
+    if (flags & MITIGATION_MODULE_TAMPERING_PROTECTION) {
+      *policy_value_2 |=
+          PROCESS_CREATION_MITIGATION_POLICY2_MODULE_TAMPERING_PROTECTION_ALWAYS_ON;
+    }
+
     // Note: This mitigation requires not only Win10 1709, but also the January
     //       2018 security updates and any applicable firmware updates from the
     //       OEM device manufacturer.
@@ -551,7 +552,7 @@ void ConvertProcessMitigationsToPolicy(MitigationFlags flags,
   const ULONG64* supported = GetSupportedMitigations();
 
   *policy_value_1 = *policy_value_1 & supported[0];
-  *policy_value_2 = *policy_value_2 & supported[1];
+  *policy_value_2 = *policy_value_2 & UNSAFE_TODO(supported[1]);
 
   // Only include the second element in |size| if it is non-zero.  Else,
   // UpdateProcThreadAttribute() will return a failure when setting policies.
@@ -582,8 +583,9 @@ bool ApplyProcessMitigationsToSuspendedProcess(HANDLE process,
     char* ptr = 0;
     const size_t kMask64k = 0xFFFF;
     // Random range (512k-16.5mb) in 64k steps.
-    auto limit = static_cast<unsigned int>(base::RandInt(512, 512 + 16384 - 1));
-    const char* end = ptr + ((limit * 1024) & ~kMask64k);
+    auto limit =
+        static_cast<unsigned int>(base::RandIntInclusive(512, 512 + 16384 - 1));
+    const char* end = UNSAFE_TODO(ptr + ((limit * 1024) & ~kMask64k));
     while (ptr < end) {
       MEMORY_BASIC_INFORMATION memory_info;
       if (!::VirtualQueryEx(process, ptr, &memory_info, sizeof(memory_info)))
@@ -592,7 +594,7 @@ bool ApplyProcessMitigationsToSuspendedProcess(HANDLE process,
                              static_cast<SIZE_T>(end - ptr));
       if (ptr && memory_info.State == MEM_FREE)
         ::VirtualAllocEx(process, ptr, size, MEM_RESERVE, PAGE_NOACCESS);
-      ptr += size;
+      UNSAFE_TODO(ptr += size);
     }
   }
 #endif

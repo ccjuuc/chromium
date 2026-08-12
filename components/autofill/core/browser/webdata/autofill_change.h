@@ -5,7 +5,10 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_CHANGE_H__
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_CHANGE_H__
 
+#include <stdint.h>
+
 #include <concepts>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -15,6 +18,7 @@
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/autofill/core/browser/webdata/payments/server_cvc.h"
 
@@ -45,7 +49,8 @@ template <typename DataType, typename KeyType>
            std::same_as<DataType, EntityInstance> ||
            std::same_as<DataType, EntityInstance::EntityMetadata> ||
            std::same_as<DataType, CreditCard> || std::same_as<DataType, Iban> ||
-           std::same_as<DataType, ServerCvc>
+           std::same_as<DataType, ServerCvc> ||
+           std::same_as<DataType, ValuableMetadata>
 class AutofillDataModelChange {
  public:
   // The difference between `REMOVE` and `HIDE_IN_AUTOFILL` is that the
@@ -96,6 +101,8 @@ class AutofillDataModelChange {
     } else if constexpr (std::same_as<DataType,
                                       EntityInstance::EntityMetadata>) {
       CHECK(data_model_.guid == key_);
+    } else if constexpr (std::same_as<DataType, ValuableMetadata>) {
+      CHECK(data_model_.valuable_id == key_);
     } else {
       CHECK(data_model_.guid() == key_);
     }
@@ -144,6 +151,10 @@ using IbanChange =
 
 // Identified by `ServerCvc::instrument_id`.
 using ServerCvcChange = AutofillDataModelChange<ServerCvc, int64_t>;
+
+// Identified by `ValuableMetadata::valuable_id`.
+using ValuableMetadataChange =
+    AutofillDataModelChange<ValuableMetadata, ValuableId>;
 
 }  // namespace autofill
 

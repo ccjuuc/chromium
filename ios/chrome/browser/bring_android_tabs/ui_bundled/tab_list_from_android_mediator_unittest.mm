@@ -7,6 +7,7 @@
 #import "base/memory/raw_ptr.h"
 #import "base/test/metrics/histogram_tester.h"
 #import "components/segmentation_platform/embedder/default_model/device_switcher_result_dispatcher.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/bring_android_tabs/model/bring_android_tabs_to_ios_service.h"
 #import "ios/chrome/browser/bring_android_tabs/model/fake_bring_android_tabs_to_ios_service.h"
 #import "ios/chrome/browser/bring_android_tabs/model/metrics.h"
@@ -15,6 +16,7 @@
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/sync/model/session_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/synced_sessions/model/distant_tab.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
@@ -22,8 +24,8 @@
 #import "url/gurl.h"
 
 namespace {
-const std::vector<std::string> kTestUrls{
-    "http://chromium.org", "http://google.com", "http://example.com"};
+constexpr auto kTestUrls = std::to_array<std::string_view>(
+    {"http://chromium.org", "http://google.com", "http://example.com"});
 }  // namespace
 
 // Test fixture for TabListFromAndroidMediator.
@@ -43,6 +45,8 @@ class TabListFromAndroidMediatorTest : public PlatformTest {
             GetInstance(),
         segmentation_platform::SegmentationPlatformServiceFactory::
             GetDefaultFactory());
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = std::move(builder).Build();
   }
 
@@ -50,7 +54,7 @@ class TabListFromAndroidMediatorTest : public PlatformTest {
   // open.
   std::vector<std::unique_ptr<synced_sessions::DistantTab>> SetOfTabs() {
     std::vector<std::unique_ptr<synced_sessions::DistantTab>> tabs;
-    for (std::string url : kTestUrls) {
+    for (std::string_view url : kTestUrls) {
       std::unique_ptr<synced_sessions::DistantTab> tab =
           std::make_unique<synced_sessions::DistantTab>();
       tab->virtual_url = GURL(url);

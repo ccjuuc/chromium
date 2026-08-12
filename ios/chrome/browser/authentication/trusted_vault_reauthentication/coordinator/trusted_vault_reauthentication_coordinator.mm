@@ -16,8 +16,8 @@
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
-#import "ios/chrome/browser/signin/model/trusted_vault_client_backend.h"
-#import "ios/chrome/browser/signin/model/trusted_vault_client_backend_factory.h"
+#import "ios/chrome/browser/signin/model/trusted_vault/trusted_vault_client_backend.h"
+#import "ios/chrome/browser/signin/model/trusted_vault/trusted_vault_client_backend_factory.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -25,8 +25,7 @@ using base::SysNSStringToUTF16;
 using l10n_util::GetNSString;
 using l10n_util::GetNSStringF;
 
-@interface TrustedVaultReauthenticationCoordinator () <
-    IdentityManagerObserverBridgeDelegate>
+@interface TrustedVaultReauthenticationCoordinator () <IdentityManagerObserving>
 
 @property(nonatomic, strong) AlertCoordinator* errorAlertCoordinator;
 @property(nonatomic, strong) id<SystemIdentity> identity;
@@ -77,8 +76,8 @@ using l10n_util::GetNSStringF;
 }
 
 - (void)dealloc {
-  CHECK(!self.errorAlertCoordinator, base::NotFatalUntil::M140);
-  CHECK(!self.identity, base::NotFatalUntil::M140);
+  CHECK(!self.errorAlertCoordinator);
+  CHECK(!self.identity);
 }
 
 #pragma mark - ChromeCoordinator
@@ -87,12 +86,11 @@ using l10n_util::GetNSStringF;
   [super start];
   // TODO(crbug.com/40105436): Should test if reauth is still needed. If still
   // needed, the reauth should be really started.
-  // If not, the coordinator can be closed successfuly, by calling
+  // If not, the coordinator can be closed successfully, by calling
   // -[TrustedVaultReauthenticationCoordinator
   // reauthentificationCompletedWithSuccess:]
-  self.identity =
-      _authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
-  CHECK(self.identity, base::NotFatalUntil::M145);
+  self.identity = _authService->GetPrimaryIdentity();
+  CHECK(self.identity);
   __weak __typeof(self) weakSelf = self;
   void (^callback)(BOOL success, NSError* error) =
       ^(BOOL success, NSError* error) {
@@ -129,12 +127,11 @@ using l10n_util::GetNSStringF;
   self.delegate = nil;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
-  id<SystemIdentity> identity =
-      _authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = _authService->GetPrimaryIdentity();
   if (![identity isEqual:self.identity]) {
     [self.delegate
         trustedVaultReauthenticationCoordinatorWantsToBeStopped:self];

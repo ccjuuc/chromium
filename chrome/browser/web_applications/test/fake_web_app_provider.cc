@@ -16,12 +16,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/file_utils_wrapper.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_installation_manager.h"
 #include "chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h"
 #include "chrome/browser/web_applications/manifest_update_manager.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
 #include "chrome/browser/web_applications/preinstalled_web_app_manager.h"
+#include "chrome/browser/web_applications/test/fake_extensions_manager.h"
 #include "chrome/browser/web_applications/test/fake_os_integration_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_database_factory.h"
 #include "chrome/browser/web_applications/test/fake_web_app_ui_manager.h"
@@ -31,7 +31,6 @@
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_database_factory.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "chrome/browser/web_applications/web_app_install_manager.h"
 #include "chrome/browser/web_applications/web_app_origin_association_manager.h"
 #include "chrome/browser/web_applications/web_app_profile_deletion_manager.h"
@@ -164,12 +163,6 @@ void FakeWebAppProvider::SetInstallManager(
   install_manager_ = std::move(install_manager);
 }
 
-void FakeWebAppProvider::SetInstallFinalizer(
-    std::unique_ptr<WebAppInstallFinalizer> install_finalizer) {
-  CheckNotStartedAndDisconnect();
-  install_finalizer_ = std::move(install_finalizer);
-}
-
 void FakeWebAppProvider::SetExternallyManagedAppManager(
     std::unique_ptr<ExternallyManagedAppManager>
         externally_managed_app_manager) {
@@ -183,14 +176,6 @@ void FakeWebAppProvider::SetWebAppUiManager(
   ui_manager_ = std::move(ui_manager);
 }
 
-void FakeWebAppProvider::SetIsolatedWebAppInstallationManager(
-    std::unique_ptr<IsolatedWebAppInstallationManager>
-        isolated_web_app_installation_manager) {
-  CheckNotStartedAndDisconnect();
-  isolated_web_app_installation_manager_ =
-      std::move(isolated_web_app_installation_manager);
-}
-
 void FakeWebAppProvider::SetWebAppPolicyManager(
     std::unique_ptr<WebAppPolicyManager> web_app_policy_manager) {
   CheckNotStartedAndDisconnect();
@@ -198,12 +183,6 @@ void FakeWebAppProvider::SetWebAppPolicyManager(
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-void FakeWebAppProvider::SetIsolatedWebAppUpdateManager(
-    std::unique_ptr<IsolatedWebAppUpdateManager> iwa_update_manager) {
-  CheckNotStartedAndDisconnect();
-  iwa_update_manager_ = std::move(iwa_update_manager);
-}
-
 void FakeWebAppProvider::SetWebAppRunOnOsLoginManager(
     std::unique_ptr<WebAppRunOnOsLoginManager>
         web_app_run_on_os_login_manager) {
@@ -300,6 +279,8 @@ void FakeWebAppProvider::CreateFakeSubsystems() {
 
   SetDatabaseFactory(std::make_unique<FakeWebAppDatabaseFactory>());
 
+  SetExtensionsManager(std::make_unique<FakeExtensionsManager>());
+
   SetWebContentsManager(std::make_unique<FakeWebContentsManager>());
 
   SetOsIntegrationManager(std::make_unique<FakeOsIntegrationManager>(
@@ -336,16 +317,14 @@ void FakeWebAppProvider::Shutdown() {
     externally_managed_app_manager_->Shutdown();
   if (manifest_update_manager_)
     manifest_update_manager_->Shutdown();
-  if (iwa_update_manager_) {
-    iwa_update_manager_->Shutdown();
+  if (isolated_web_app_update_manager_) {
+    isolated_web_app_update_manager_->Shutdown();
   }
   if (install_manager_)
     install_manager_->Shutdown();
   web_app_policy_manager_->Shutdown();
   if (icon_manager_)
     icon_manager_->Shutdown();
-  if (install_finalizer_)
-    install_finalizer_->Shutdown();
   if (profile_deletion_manager_) {
     profile_deletion_manager_->Shutdown();
   }
@@ -369,6 +348,14 @@ void FakeWebAppProvider::CheckNotStartedAndDisconnect(
 }
 
 void FakeWebAppProvider::StartImpl() {
+  if (ui_manager_) {
+    FakeWebAppUiManager* fake_ui_manager =
+        ui_manager_->AsFakeWebAppUiManagerForTesting();
+    if (fake_ui_manager) {
+      fake_ui_manager->SetProvider(this);
+    }
+  }
+
   preinstalled_web_app_manager_->SetSkipStartupSynchronizeForTesting(
       !synchronize_preinstalled_app_on_startup_);
 
@@ -376,10 +363,12 @@ void FakeWebAppProvider::StartImpl() {
     case AutomaticIwaUpdateStrategy::kDefault:
       break;
     case AutomaticIwaUpdateStrategy::kForceDisabled:
-      iwa_update_manager_->SetEnableAutomaticUpdatesForTesting(false);
+      isolated_web_app_update_manager_->SetEnableAutomaticUpdatesForTesting(
+          false);
       break;
     case AutomaticIwaUpdateStrategy::kForceEnabled:
-      iwa_update_manager_->SetEnableAutomaticUpdatesForTesting(true);
+      isolated_web_app_update_manager_->SetEnableAutomaticUpdatesForTesting(
+          true);
       break;
   }
 

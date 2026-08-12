@@ -54,7 +54,6 @@ external/wpt/css/CSS2/margin-padding-clear [ Skip ]
 external/wpt/css/CSS2/media [ Skip ]
 external/wpt/css/CSS2/other-formats [ Skip ]
 external/wpt/css/CSS2/page-box [ Skip ]
-external/wpt/css/CSS2/pagination [ Skip ]
 external/wpt/css/CSS2/run-in [ Skip ]
 external/wpt/css/CSS2/sec5 [ Skip ]
 external/wpt/css/CSS2/section-index.xht [ Skip ]
@@ -175,7 +174,6 @@ external/wpt/html/semantics/document-metadata/the-style-element/style-error-01.h
 # Manual tests that fail as TIMEOUT or NOTRUN. Consider adding wpt_automation.
 external/wpt/FileAPI/BlobURL/test2-manual.html [ Skip ]
 external/wpt/FileAPI/FileReader/test_errors-manual.html [ Skip ]
-external/wpt/FileAPI/filelist-section/filelist_multiple_selected_files-manual.html [ Skip ]
 external/wpt/FileAPI/filelist-section/filelist_selected_file-manual.html [ Skip ]
 external/wpt/FileAPI/idlharness-manual.html [ Skip ]
 external/wpt/FileAPI/progress-manual.html [ Skip ]
@@ -202,7 +200,6 @@ external/wpt/html/semantics/forms/constraints/tooLong-input-tel-delete-manual.ht
 external/wpt/html/semantics/forms/constraints/tooLong-input-text-delete-manual.html [ Skip ]
 external/wpt/html/semantics/forms/constraints/tooLong-input-url-delete-manual.html [ Skip ]
 external/wpt/html/semantics/forms/constraints/tooLong-textarea-delete-manual.html [ Skip ]
-external/wpt/html/semantics/forms/the-input-element/file-manual.html [ Skip ]
 external/wpt/html/semantics/forms/the-input-element/maxlength-manual.html [ Skip ]
 external/wpt/html/semantics/forms/the-textarea-element/textarea-select-event-manual.html [ Skip ]
 external/wpt/html/semantics/grouping-content/the-li-element/grouping-li-novalue-manual.html [ Skip ]
@@ -220,38 +217,18 @@ external/wpt/feature-policy/reporting/vr-report-only.https.html.headers [ Skip ]
 # Manual tests related to accessibility for which we have parallel coverage,
 # e.g. porting them to content browser tests.
 external/wpt/accname/manual [ Skip ]
-
-# Other manual tests related to accessibility.
-# TODO(accessibility): core-aam has many manual tests and a single non-manual
-# test.  It should be split into subdirectories so that we can import
-# non-manual tests.
-external/wpt/core-aam [ Skip ]
+external/wpt/core-aam/manual [ Skip ]
 external/wpt/dpub-aam/manual [ Skip ]
 external/wpt/dpub-aria/inuse-manual.html [ Skip ]
 external/wpt/wai-aria/manual [ Skip ]
 
-# Manual tests for CSS Paged Media.
-external/wpt/css/css-page/forced-page-breaks-002.xht [ Skip ]
-external/wpt/css/css-page/page-background-000.xht [ Skip ]
-external/wpt/css/css-page/page-borders-000.xht [ Skip ]
-external/wpt/css/css-page/page-counters-000.xht [ Skip ]
-external/wpt/css/css-page/page-margin-003.xht [ Skip ]
-external/wpt/css/css-page/page-name-000.xht [ Skip ]
-external/wpt/css/css-page/page-properties-000.xht [ Skip ]
-external/wpt/css/css-page/page-size-000.xht [ Skip ]
-external/wpt/css/css-page/page-size-001.xht [ Skip ]
-external/wpt/css/css-page/page-size-002.xht [ Skip ]
-external/wpt/css/css-page/page-size-003.xht [ Skip ]
-external/wpt/css/css-page/page-size-004.xht [ Skip ]
-external/wpt/css/css-page/page-size-005.xht [ Skip ]
-external/wpt/css/css-page/page-size-006.xht [ Skip ]
-external/wpt/css/css-page/page-size-007.xht [ Skip ]
-external/wpt/css/css-page/page-size-008.xht [ Skip ]
-external/wpt/css/css-page/page-size-009.xht [ Skip ]
-external/wpt/css/css-page/page-size-010.xht [ Skip ]
-external/wpt/css/css-page/page-size-011.xht [ Skip ]
-external/wpt/css/css-page/page-size-012.xht [ Skip ]
-
 # This is a reference file for a non-denylisted test, so it should be included
 # despite a general exclusion of `css/CSS2/syntax/`.
 external/wpt/css/CSS2/syntax/character-encoding-041-ref.xht [ Pass ]
+
+# v8 already has test262 coverage, so testing in Chromium would be redundant.
+# Also, there's not enough infrastructure capacity to run all 50k+ tests.
+external/wpt/infrastructure/metadata/infrastructure/test262 [ Skip ]
+external/wpt/infrastructure/test262 [ Skip ]
+external/wpt/resources/test262 [ Skip ]
+external/wpt/third_party/test262 [ Skip ]

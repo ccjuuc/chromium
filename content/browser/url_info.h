@@ -9,6 +9,7 @@
 
 #include "base/tracing/protos/chrome_track_event.pbzero.h"
 #include "content/browser/agent_cluster_key.h"
+#include "content/browser/embedder_isolation_info.h"
 #include "content/browser/origin_agent_cluster_isolation_state.h"
 #include "content/browser/web_exposed_isolation_info.h"
 #include "content/common/content_export.h"
@@ -157,10 +158,16 @@ struct CONTENT_EXPORT UrlInfo {
   // state - this member will be empty.
   std::optional<WebExposedIsolationInfo> web_exposed_isolation_info;
 
-  // Indicates that the URL directs to PDF content, which should be isolated
-  // from other types of content.  On Android, this can only be true when a PDF
-  // NativePage is created for a main frame navigation.
-  bool is_pdf = false;
+  // Embedder-specified process isolation policy (PDF, per-document MIME
+  // handler isolation, etc.). See //content/browser/embedder_isolation_info.h.
+  EmbedderIsolationInfo embedder_isolation_info =
+      EmbedderIsolationInfo::CreateNone();
+
+  // Indicates that the URL was flagged by the subresource filterlist as
+  // matching a known ad URL.
+  // TODO(crbug.com/40259221): This should eventually only include filters that
+  // match a domain (host), and not include partial matches.
+  bool matches_ad_filter_with_host = false;
 
   // The CrossOriginIsolationKey to use for the navigation. This represents the
   // isolation requested by the page itself through the use of COOP, COEP and
@@ -207,7 +214,8 @@ class CONTENT_EXPORT UrlInfoInit {
       std::optional<StoragePartitionConfig> storage_partition_config);
   UrlInfoInit& WithWebExposedIsolationInfo(
       std::optional<WebExposedIsolationInfo> web_exposed_isolation_info);
-  UrlInfoInit& WithIsPdf(bool is_pdf);
+  UrlInfoInit& WithEmbedderIsolationInfo(EmbedderIsolationInfo info);
+  UrlInfoInit& WithMatchesAdFilterWithHost(bool matches_ad_filter_with_host);
   UrlInfoInit& WithCrossOriginIsolationKey(
       const std::optional<AgentClusterKey::CrossOriginIsolationKey>&
           cross_origin_isolation_key);
@@ -230,7 +238,9 @@ class CONTENT_EXPORT UrlInfoInit {
   int64_t unique_sandbox_id_ = UrlInfo::kInvalidUniqueSandboxId;
   std::optional<StoragePartitionConfig> storage_partition_config_;
   std::optional<WebExposedIsolationInfo> web_exposed_isolation_info_;
-  bool is_pdf_ = false;
+  EmbedderIsolationInfo embedder_isolation_info_ =
+      EmbedderIsolationInfo::CreateNone();
+  bool matches_ad_filter_with_host_ = false;
   std::optional<AgentClusterKey::CrossOriginIsolationKey>
       cross_origin_isolation_key_;
   std::optional<base::SafeRef<ProcessSelectionUserData>>

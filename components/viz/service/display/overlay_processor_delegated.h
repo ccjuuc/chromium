@@ -32,10 +32,6 @@ namespace viz {
 class VIZ_SERVICE_EXPORT OverlayProcessorDelegated
     : public OverlayProcessorOzone {
  public:
-  // TODO(crbug.com/444264038): Delete this declaration when the RPDQ refactor
-  // is finished. Need to avoid hiding the base class' overload.
-  using OverlayProcessorInterface::ProcessForOverlays;
-
   OverlayProcessorDelegated(
       std::unique_ptr<ui::OverlayCandidatesOzone> overlay_candidates,
       std::vector<OverlayStrategy> available_strategies,
@@ -51,13 +47,10 @@ class VIZ_SERVICE_EXPORT OverlayProcessorDelegated
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
       const SkM44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
       SurfaceDamageRectList surface_damage_rect_list,
       const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
-      gfx::Rect* damage_rect,
-      std::vector<gfx::Rect>* content_bounds) final;
+      gfx::Rect* damage_rect) final;
 
   gfx::RectF GetUnassignedDamage() const override;
 
@@ -73,15 +66,11 @@ class VIZ_SERVICE_EXPORT OverlayProcessorDelegated
   // |primary_plane|'s blending setting.
   bool AttemptWithStrategies(
       const SkM44& output_color_matrix,
-      const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-      const OverlayProcessorInterface::FilterOperationsMap&
-          render_pass_backdrop_filters,
       const DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_pass_list,
       SurfaceDamageRectList* surface_damage_rect_list,
       const std::optional<OverlayCandidate>& primary_plane,
-      OverlayCandidateList* candidates,
-      std::vector<gfx::Rect>* content_bounds);
+      OverlayCandidateList* candidates);
 
   // Should delegation be blocked because we have recently had copy output
   // requests on any render passes. The root render pass must not be delegated

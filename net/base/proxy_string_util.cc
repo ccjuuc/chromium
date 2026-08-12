@@ -208,26 +208,26 @@ ProxyServer PacResultElementToProxyServer(std::string_view pac_result_element) {
 std::string ProxyServerToPacResultElement(const ProxyServer& proxy_server) {
   switch (proxy_server.scheme()) {
     case ProxyServer::SCHEME_HTTP:
-      return std::string("PROXY ") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"PROXY ", ConstructHostPortString(proxy_server.GetHost(),
+                                             proxy_server.GetPort())});
     case ProxyServer::SCHEME_SOCKS4:
       // For compatibility send SOCKS instead of SOCKS4.
-      return std::string("SOCKS ") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"SOCKS ", ConstructHostPortString(proxy_server.GetHost(),
+                                             proxy_server.GetPort())});
     case ProxyServer::SCHEME_SOCKS5:
-      return std::string("SOCKS5 ") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"SOCKS5 ", ConstructHostPortString(proxy_server.GetHost(),
+                                              proxy_server.GetPort())});
     case ProxyServer::SCHEME_HTTPS:
-      return std::string("HTTPS ") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"HTTPS ", ConstructHostPortString(proxy_server.GetHost(),
+                                             proxy_server.GetPort())});
     case ProxyServer::SCHEME_QUIC:
-      return std::string("QUIC ") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"QUIC ", ConstructHostPortString(proxy_server.GetHost(),
+                                            proxy_server.GetPort())});
     case ProxyServer::SCHEME_VLESS:
       return std::string("VLESS ") +
              ConstructHostPortString(proxy_server.GetHost(),
@@ -291,21 +291,21 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
       return ConstructHostPortString(proxy_server.GetHost(),
                                      proxy_server.GetPort());
     case ProxyServer::SCHEME_SOCKS4:
-      return std::string("socks4://") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"socks4://", ConstructHostPortString(proxy_server.GetHost(),
+                                                proxy_server.GetPort())});
     case ProxyServer::SCHEME_SOCKS5:
-      return std::string("socks5://") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"socks5://", ConstructHostPortString(proxy_server.GetHost(),
+                                                proxy_server.GetPort())});
     case ProxyServer::SCHEME_HTTPS:
-      return std::string("https://") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"https://", ConstructHostPortString(proxy_server.GetHost(),
+                                               proxy_server.GetPort())});
     case ProxyServer::SCHEME_QUIC:
-      return std::string("quic://") +
-             ConstructHostPortString(proxy_server.GetHost(),
-                                     proxy_server.GetPort());
+      return base::StrCat(
+          {"quic://", ConstructHostPortString(proxy_server.GetHost(),
+                                              proxy_server.GetPort())});
     case ProxyServer::SCHEME_VLESS:
       return LeafProxyUri(proxy_server, "vless://");
     case ProxyServer::SCHEME_VMESS:

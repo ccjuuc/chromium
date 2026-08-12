@@ -39,14 +39,14 @@ std::string CommitRequestEvent::GetType() const {
 }
 
 std::string CommitRequestEvent::GetDetails() const {
-  return base::StringPrintf(
-      "Item count: %" PRIuS
-      "\n"
-      "Contributing types: %s",
-      num_items_, DataTypeSetToDebugString(contributing_types_).c_str());
+  return base::StringPrintf("Item count: %" PRIuS
+                            "\n"
+                            "Contributing types: %s",
+                            num_items_,
+                            DataTypeSetToDebugString(contributing_types_));
 }
 
-base::Value::Dict CommitRequestEvent::GetProtoMessage(
+base::DictValue CommitRequestEvent::GetProtoMessage(
     bool include_specifics) const {
   return ClientToServerMessageToValue(
              request_, {.include_specifics = include_specifics,

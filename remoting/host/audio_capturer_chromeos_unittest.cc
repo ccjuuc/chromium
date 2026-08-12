@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "ash/constants/ash_features.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -18,8 +17,8 @@
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/protobuf_matchers.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "media/audio/audio_manager.h"
 #include "media/audio/test_audio_thread.h"
 #include "remoting/host/audio_capturer.h"
@@ -132,10 +131,10 @@ class AudioCapturerChromeOsTest : public testing::Test {
 
     // The `audio_capturer_` needs to be destroyed on the same sequence that
     // AudioCapturerChromeOs::Start() was called on.
-    base::RunLoop run_loop;
+    base::test::TestFuture<void> future;
     capture_runner_->DeleteSoon(FROM_HERE, std::move(audio_capturer_));
-    capture_runner_->PostTask(FROM_HERE, run_loop.QuitClosure());
-    run_loop.Run();
+    capture_runner_->PostTask(FROM_HERE, future.GetSequenceBoundCallback());
+    ASSERT_TRUE(future.Wait());
 
     audio_manager_->Shutdown();
   }
@@ -150,7 +149,6 @@ class AudioCapturerChromeOsTest : public testing::Test {
   std::unique_ptr<AudioCapturerChromeOs> audio_capturer_;
   raw_ptr<FakeAudioHelperChromeOs> audio_helper_chromeos_;
   std::vector<std::unique_ptr<AudioPacket>> captured_audio_packets_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   // Runner for AudioCapturerChromeOs::Start/Stop.
   scoped_refptr<base::SequencedTaskRunner> capture_runner_;
@@ -175,7 +173,7 @@ TEST_F(AudioCapturerChromeOsTest, SimulateAudioPacket) {
   std::string audio_data(1024, 0);
   expected_packet->add_data(std::move(audio_data));
 
-  base::RunLoop run_loop;
+  base::test::TestFuture<void> future;
 
   // Simulate `audio_capturer_` being started by CRD on the "start" sequence.
   base::OnceClosure start_capture_task = base::BindOnce(
@@ -184,38 +182,43 @@ TEST_F(AudioCapturerChromeOsTest, SimulateAudioPacket) {
       base::BindRepeating(&AudioCapturerChromeOsTest::OnAudioPacketCaptured,
                           base::Unretained(this)));
 
-  base::OnceClosure start_capture_reply = base::BindLambdaForTesting([&]() {
-    // Simulate audio data via `audio_helper_chromeos_` on the `audio_runner_`.
-    base::OnceClosure simulate_data_task = base::BindOnce(
-        &FakeAudioHelperChromeOs::SimulateData,
-        base::Unretained(audio_helper_chromeos_.get()),
-        std::make_unique<remoting::AudioPacket>(*expected_packet));
+  base::OnceClosure start_capture_reply = base::BindLambdaForTesting(
+      [&, quit_cb = future.GetSequenceBoundCallback()]() mutable {
+        // Simulate audio data via `audio_helper_chromeos_` on the
+        // `audio_runner_`.
+        base::OnceClosure simulate_data_task = base::BindOnce(
+            &FakeAudioHelperChromeOs::SimulateData,
+            base::Unretained(audio_helper_chromeos_.get()),
+            std::make_unique<remoting::AudioPacket>(*expected_packet));
 
-    // Once simulation is complete and
-    // AudioCapturerChromeOsTest::OnAudioPacketCaptured is triggered, validate
-    // the result on the "start" sequence.
-    base::OnceClosure validate_and_quit_reply = base::BindPostTask(
-        capture_runner_, base::BindLambdaForTesting([&] {
-          EXPECT_EQ(1U, captured_audio_packets_.size());
-          EXPECT_THAT(*expected_packet,
-                      EqualsProto(*captured_audio_packets_[0]));
-          run_loop.Quit();
-        }));
+        // Once simulation is complete and
+        // AudioCapturerChromeOsTest::OnAudioPacketCaptured is triggered,
+        // validate the result on the "start" sequence.
+        base::OnceClosure validate_and_quit_reply = base::BindPostTask(
+            capture_runner_,
+            base::BindLambdaForTesting(
+                [&, quit_cb = std::move(quit_cb)]() mutable {
+                  EXPECT_EQ(captured_audio_packets_.size(), 1U);
+                  EXPECT_THAT(*expected_packet,
+                              EqualsProto(*captured_audio_packets_[0]));
+                  std::move(quit_cb).Run();
+                }));
 
-    // Use PostTaskAndReply() to allow tasks on `audio_runner_` to complete
-    // before attempting to validate.
-    audio_runner_->PostTaskAndReply(FROM_HERE, std::move(simulate_data_task),
-                                    std::move(validate_and_quit_reply));
-  });
+        // Use PostTaskAndReply() to allow tasks on `audio_runner_` to complete
+        // before attempting to validate.
+        audio_runner_->PostTaskAndReply(FROM_HERE,
+                                        std::move(simulate_data_task),
+                                        std::move(validate_and_quit_reply));
+      });
 
   capture_runner_->PostTask(
       FROM_HERE,
       std::move(start_capture_task).Then(std::move(start_capture_reply)));
-  run_loop.Run();
+  ASSERT_TRUE(future.Wait());
 }
 
 TEST_F(AudioCapturerChromeOsTest, SimulateError) {
-  base::RunLoop run_loop;
+  base::test::TestFuture<void> future;
 
   base::OnceClosure simulate_error_task =
       base::BindOnce(&FakeAudioHelperChromeOs::SimulateError,
@@ -226,10 +229,11 @@ TEST_F(AudioCapturerChromeOsTest, SimulateError) {
       base::BindOnce(&FakeAudioHelperChromeOs::SimulateData,
                      base::Unretained(audio_helper_chromeos_.get()),
                      std::make_unique<remoting::AudioPacket>(AudioPacket()))
-          .Then(base::BindLambdaForTesting([&]() {
-            EXPECT_EQ(0u, captured_audio_packets_.size());
-            run_loop.Quit();
-          })));
+          .Then(base::BindLambdaForTesting(
+              [&, quit_cb = future.GetSequenceBoundCallback()]() mutable {
+                EXPECT_EQ(captured_audio_packets_.size(), 0u);
+                std::move(quit_cb).Run();
+              })));
 
   capture_runner_->PostTask(
       FROM_HERE, base::BindLambdaForTesting([&]() {
@@ -245,17 +249,7 @@ TEST_F(AudioCapturerChromeOsTest, SimulateError) {
             FROM_HERE, std::move(simulate_error_task),
             std::move(verify_packet_callback_reset_task));
       }));
-  run_loop.Run();
-}
-
-TEST_F(AudioCapturerChromeOsTest, CreateWithFlagEnabled) {
-  scoped_feature_list_.InitAndEnableFeature(ash::features::kBocaHostAudio);
-  EXPECT_NE(AudioCapturer::Create(), nullptr);
-}
-
-TEST_F(AudioCapturerChromeOsTest, CreateWithFlagDisabled) {
-  scoped_feature_list_.InitAndDisableFeature(ash::features::kBocaHostAudio);
-  EXPECT_EQ(AudioCapturer::Create(), nullptr);
+  ASSERT_TRUE(future.Wait());
 }
 
 }  // namespace remoting

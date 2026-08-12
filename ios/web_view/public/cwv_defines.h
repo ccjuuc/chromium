@@ -114,12 +114,6 @@
 // Supports AccountAddressSyncing
 #define IOS_WEB_VIEW_SUPPORTS_ACCOUNT_ADDRESS_SYNC 1
 
-// Supports using Image Fetcher.
-#define IOS_WEB_VIEW_SUPPORTS_USING_IMAGE_FETCHER 1
-
-// Supports using card custom image for suggestions.
-#define IOS_WEB_VIEW_SUPPORTS_USING_CARD_CUSTOM_IMAGE 1
-
 // Supports CWVGlobalState.
 #define IOS_WEB_VIEW_SUPPORTS_GLOBAL_STATE 1
 
@@ -143,5 +137,20 @@
 
 // Supports VCN.
 #define IOS_WEB_VIEW_SUPPORTS_VCN 1
+
+// Supports fetching virtual cards
+#define IOS_WEBVIEW_SUPPORTS_FETCHING_VIRTUAL_CARDS 1
+
+// Supports -[CWVEarlyInitFlags mainThreadInitialNestingLevel].
+#define IOS_WEB_VIEW_SUPPORTS_MAIN_THREAD_INITIAL_NESTING_LEVEL 1
+
+// When enabled, -[CWVGlobalState setDumpWithoutCrashingHandler:] is made available.
+#define CWV_DUMP_WITHOUT_CRASHING_HANDLER_AVAILABLE 1
+
+// Supports -[CWVPreferences autofillSafeLifecycleEnabled].
+#define IOS_WEB_VIEW_SUPPORTS_AUTOFILL_SAFE_LIFECYCLE 1
+
+// Supports -[CWVUIDelegate webView:buildMenuWithBuilder:].
+#define CWV_SUPPORTS_BUILD_MENU_WITH_BUILDER 1
 
 #endif  // IOS_WEB_VIEW_PUBLIC_CWV_DEFINES_H_

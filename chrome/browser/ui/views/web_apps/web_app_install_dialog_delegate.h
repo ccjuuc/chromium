@@ -5,12 +5,13 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_WEB_APPS_WEB_APP_INSTALL_DIALOG_DELEGATE_H_
 #define CHROME_BROWSER_UI_VIEWS_WEB_APPS_WEB_APP_INSTALL_DIALOG_DELEGATE_H_
 
+#include <iosfwd>
 #include <memory>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/views/web_apps/web_app_modal_dialog_delegate.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -42,6 +43,8 @@ namespace web_app {
 
 enum InstallDialogType { kSimple, kDetailed, kDiy, kMaxValue = kDiy };
 
+std::ostream& operator<<(std::ostream& os, InstallDialogType type);
+
 inline constexpr int kIconSize = 32;
 
 // When pre-populating the name field (using the web app title) we
@@ -60,6 +63,21 @@ inline constexpr int kIconSize = 32;
 // result in a weird filename), it only restricts what we suggest as titles.
 std::u16string NormalizeSuggestedAppTitle(const std::u16string& title);
 
+// Defines the maximum allowed width and height shrinkage (in pixels) from the
+// preferred size of a dialog before it is considered too small/occluded and
+// automatically closed to prevent UI spoofing.
+struct MaxAllowedShrinkage {
+  int max_width_shrinkage;
+  int max_height_shrinkage;
+};
+
+inline constexpr MaxAllowedShrinkage kSimpleMaxShrinkage = {40, 20};
+inline constexpr MaxAllowedShrinkage kDetailedMaxShrinkage = {100, 150};
+inline constexpr MaxAllowedShrinkage kDiyMaxShrinkage = {50, 50};
+inline constexpr MaxAllowedShrinkage kLaunchMaxShrinkage = {50, 50};
+
+MaxAllowedShrinkage GetMaxAllowedShrinkage(InstallDialogType type);
+
 // For some browser windows that are smaller in size, the install dialog's
 // current size is smaller than the preferred size, leading to important
 // security information being occluded. This function performs the comparison
@@ -67,7 +85,8 @@ std::u16string NormalizeSuggestedAppTitle(const std::u16string& title);
 // This serves as a stop-gap fix for crbug.com/384962294.
 // TODO(crbug.com/346974105): Remove once tab modal dialogs can be sized
 // irrespective of the size of the browser window triggering it.
-bool IsWidgetCurrentSizeSmallerThanPreferredSize(views::Widget* widget);
+bool IsWidgetCurrentSizeSmallerThanPreferredSize(views::Widget* widget,
+                                                 MaxAllowedShrinkage shrinkage);
 
 class WebAppInstallDialogDelegate : public WebAppModalDialogDelegate {
  public:
@@ -88,9 +107,11 @@ class WebAppInstallDialogDelegate : public WebAppModalDialogDelegate {
 
   ~WebAppInstallDialogDelegate() override;
 
-  void OnAccept();
+  virtual void OnAccept();
   void OnCancel();
   void OnClose();
+
+  virtual bool OnOkButtonClicked();
 
   // This is called when the dialog has been either accepted, cancelled, closed
   // or destroyed without an user-action.
@@ -112,12 +133,16 @@ class WebAppInstallDialogDelegate : public WebAppModalDialogDelegate {
   // WebAppModalDialogDelegate overrides:
   void CloseDialogAsIgnored() override;
 
+  InstallDialogType dialog_type() { return dialog_type_; }
+
+ protected:
+  std::unique_ptr<WebAppInstallInfo> install_info_;
+
  private:
   void MeasureIphOnDialogClose();
   void MeasureAcceptUserActionsForInstallDialog();
   void MeasureCancelUserActionsForInstallDialog();
 
-  std::unique_ptr<WebAppInstallInfo> install_info_;
   std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker_;
   AppInstallationAcceptanceCallback callback_;
   PwaInProductHelpState iph_state_;
@@ -136,7 +161,6 @@ class WebAppInstallDialogDelegate : public WebAppModalDialogDelegate {
 
   base::WeakPtrFactory<WebAppInstallDialogDelegate> weak_ptr_factory_{this};
 };
-
 }  // namespace web_app
 
 #endif  // CHROME_BROWSER_UI_VIEWS_WEB_APPS_WEB_APP_INSTALL_DIALOG_DELEGATE_H_

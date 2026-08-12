@@ -187,23 +187,23 @@ export class SettingsPrivacyHubGeolocationSubpage extends
     Setting.kGeolocationAdvanced,
   ]);
 
-  private geolocationAccessLevelPrefValues_: {[key: string]: number};
+  declare private geolocationAccessLevelPrefValues_: {[key: string]: number};
   private geolocationModeDescriptionText_: string;
-  private appList_: App[];
+  declare private appList_: App[];
   private appPermissionsObserverReceiver_: AppPermissionsObserverReceiver|null;
-  private isSecondaryUser_: boolean;
-  private systemGeolocationAccessLevel_: GeolocationAccessLevel;
-  private isGeolocationAllowedForApps_: boolean;
+  declare private isSecondaryUser_: boolean;
+  declare private systemGeolocationAccessLevel_: GeolocationAccessLevel;
+  declare private isGeolocationAllowedForApps_: boolean;
   private mojoInterfaceProvider_: AppPermissionsHandlerInterface;
   private browserProxy_: PrivacyHubBrowserProxy;
-  private currentTimeZoneName_: string;
-  private currentSunRiseTime_: string;
-  private currentSunSetTime_: string;
+  declare private currentTimeZoneName_: string;
+  declare private currentSunRiseTime_: string;
+  declare private currentSunSetTime_: string;
   private shouldShowManageGeolocationDialog_: boolean;
-  private automaticTimeZoneText_: string;
-  private darkThemeText_: string;
-  private localWeatherText_: string;
-  private nightLightText_: string;
+  declare private automaticTimeZoneText_: string;
+  declare private darkThemeText_: string;
+  declare private localWeatherText_: string;
+  declare private nightLightText_: string;
 
   constructor() {
     super();
@@ -353,7 +353,8 @@ export class SettingsPrivacyHubGeolocationSubpage extends
   }
 
   private isAutomaticTimeZoneConfigured_(): boolean {
-    return this.getPref('generated.resolve_timezone_by_geolocation_on_off')
+    return this
+        .getPref<boolean>('generated.resolve_timezone_by_geolocation_on_off')
         .value;
   }
 
@@ -447,7 +448,7 @@ export class SettingsPrivacyHubGeolocationSubpage extends
   }
 
   private isLocalWeatherConfiguredToUseGeolocation_(): boolean {
-    return this.getPref('settings.ambient_mode.enabled').value;
+    return this.getPref<boolean>('settings.ambient_mode.enabled').value;
   }
 
   private computeLocalWeatherText_(): string {

@@ -17,6 +17,7 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/metrics/user_action_tester.h"
 #import "base/test/scoped_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/download/model/confirm_download_closing_overlay.h"
 #import "ios/chrome/browser/download/model/confirm_download_replacing_overlay.h"
 #import "ios/chrome/browser/download/model/document_download_tab_helper.h"
@@ -28,22 +29,36 @@
 #import "ios/chrome/browser/download/ui/download_manager_view_controller+Testing.h"
 #import "ios/chrome/browser/download/ui/download_manager_view_controller.h"
 #import "ios/chrome/browser/download/ui/download_manager_view_controller_delegate.h"
+#import "ios/chrome/browser/drive/model/drive_tab_helper.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
 #import "ios/chrome/browser/overlays/model/public/web_content_area/alert_overlay.h"
+#import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_scene_agent.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/download_list_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
+#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/file_size_util.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/fakes/fake_contained_presenter.h"
+#import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/scoped_key_window.h"
 #import "ios/web/public/test/fakes/fake_download_task.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
+#import "net/base/apple/url_conversions.h"
+#import "net/base/filename_util.h"
 #import "net/base/net_errors.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -63,15 +78,29 @@ const int64_t kTestReceivedBytes = 0;
 const base::FilePath::CharType kTestSuggestedFileName[] =
     FILE_PATH_LITERAL("file.zip");
 
-
 }  // namespace
 
 // Test fixture for testing DownloadManagerCoordinator class.
 class DownloadManagerCoordinatorTest : public PlatformTest {
  protected:
   DownloadManagerCoordinatorTest() {
-    profile_ = TestProfileIOS::Builder().Build();
-    browser_ = std::make_unique<TestBrowser>(profile_.get());
+    TestProfileIOS::Builder builder;
+    builder.AddTestingFactory(
+        AuthenticationServiceFactory::GetInstance(),
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
+            std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
+    profile_ = std::move(builder).Build();
+    scene_state_ = [[SceneState alloc] init];
+    LayoutGuideSceneAgent* layout_guide_scene_agent =
+        [[LayoutGuideSceneAgent alloc] init];
+    [scene_state_ addAgent:layout_guide_scene_agent];
+    browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
+    mock_gemini_handler_ = OCMProtocolMock(@protocol(GeminiCommands));
+    [browser_->GetCommandDispatcher()
+        startDispatchingToTarget:mock_gemini_handler_
+                     forProtocol:@protocol(GeminiCommands)];
     presenter_ = [[FakeContainedPresenter alloc] init];
     base_view_controller_ = [[UIViewController alloc] init];
     activity_view_controller_class_ =
@@ -80,6 +109,7 @@ class DownloadManagerCoordinatorTest : public PlatformTest {
     OverlayRequestQueue::CreateForWebState(web_state_.get());
     DownloadManagerTabHelper::CreateForWebState(web_state_.get());
     DocumentDownloadTabHelper::CreateForWebState(web_state_.get());
+    DriveTabHelper::CreateForWebState(web_state_.get());
     web_state_->SetBrowserState(profile_.get());
     coordinator_ = [[DownloadManagerCoordinator alloc]
         initWithBaseViewController:base_view_controller_
@@ -96,6 +126,9 @@ class DownloadManagerCoordinatorTest : public PlatformTest {
       [coordinator_ stop];
     }
 
+    [browser_->GetCommandDispatcher()
+        stopDispatchingForProtocol:@protocol(GeminiCommands)];
+    mock_gemini_handler_ = nil;
     [activity_view_controller_class_ stopMocking];
     [application_ stopMocking];
     [[InstallationNotifier sharedInstance] stopPolling];
@@ -116,11 +149,14 @@ class DownloadManagerCoordinatorTest : public PlatformTest {
     return task;
   }
 
+  // ScopedTestingLocalState needed for the authentication service.
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   base::test::ScopedFeatureList feature_list_;
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<TestBrowser> browser_;
   FakeContainedPresenter* presenter_;
+  SceneState* scene_state_;
   UIViewController* base_view_controller_;
   ScopedKeyWindow scoped_key_window_;
   id activity_view_controller_class_;
@@ -129,6 +165,7 @@ class DownloadManagerCoordinatorTest : public PlatformTest {
   // Destructor will call -stopMocking on this object to make sure that
   // UIApplication is not mocked after these test finish running.
   id application_;
+  id mock_gemini_handler_;
   DownloadManagerCoordinator* coordinator_;
   base::UserActionTester user_action_tester_;
   base::HistogramTester histogram_tester_;
@@ -139,7 +176,7 @@ class DownloadManagerCoordinatorTest : public PlatformTest {
 // DownloadManagerViewController is propertly configured and presented.
 TEST_F(DownloadManagerCoordinatorTest, Start) {
   auto task = CreateTestTask();
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
   [coordinator_ start];
 
   // By default coordinator presents without animation.
@@ -171,7 +208,7 @@ TEST_F(DownloadManagerCoordinatorTest, Start) {
 // stale raw pointer).
 TEST_F(DownloadManagerCoordinatorTest, Stop) {
   auto task = CreateTestTask();
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
   [coordinator_ start];
   @autoreleasepool {
     // Calling -stop will retain and autorelease coordinator_. task_environment_
@@ -191,7 +228,7 @@ TEST_F(DownloadManagerCoordinatorTest, DestructionDuringDownload) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -237,7 +274,7 @@ TEST_F(DownloadManagerCoordinatorTest, DelegateCreatedDownload) {
                        webStateIsVisible:YES];
 
   // Verify that coordinator's properties are set up.
-  EXPECT_EQ(task.get(), coordinator_.downloadTask);
+  EXPECT_EQ(task.get(), coordinator_.downloadTask.get());
   EXPECT_TRUE(coordinator_.animatesPresentation);
 
   // First presentation of Download Manager UI should be animated.
@@ -389,7 +426,7 @@ TEST_F(DownloadManagerCoordinatorTest, DelegateShowDownload) {
 // cancelled.
 TEST_F(DownloadManagerCoordinatorTest, Close) {
   auto task = CreateTestTask();
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -426,7 +463,7 @@ TEST_F(DownloadManagerCoordinatorTest, OpenIn) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -439,6 +476,11 @@ TEST_F(DownloadManagerCoordinatorTest, OpenIn) {
   [browser_->GetCommandDispatcher()
       startDispatchingToTarget:dispatcher_mock
                    forProtocol:@protocol(BrowserCoordinatorCommands)];
+  id download_list_dispatcher_mock =
+      OCMProtocolMock(@protocol(DownloadListCommands));
+  [browser_->GetCommandDispatcher()
+      startDispatchingToTarget:download_list_dispatcher_mock
+                   forProtocol:@protocol(DownloadListCommands)];
 
   // Start the download.
   base::FilePath path;
@@ -508,7 +550,7 @@ TEST_F(DownloadManagerCoordinatorTest, DestroyInProgressDownload) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -551,7 +593,7 @@ TEST_F(DownloadManagerCoordinatorTest, QuitDuringInProgressDownload) {
   auto task = CreateTestTask();
   web::DownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   auto web_state = std::make_unique<web::FakeWebState>();
   browser_->GetWebStateList()->InsertWebState(std::move(web_state));
   [coordinator_ start];
@@ -603,7 +645,7 @@ TEST_F(DownloadManagerCoordinatorTest, QuitDuringInProgressDownload) {
 TEST_F(DownloadManagerCoordinatorTest, CloseInProgressDownload) {
   auto task = CreateTestTask();
   task->Start(base::FilePath());
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -661,7 +703,7 @@ TEST_F(DownloadManagerCoordinatorTest, CloseInProgressDownload) {
 // Coordinator should present the confirmation dialog.
 TEST_F(DownloadManagerCoordinatorTest, DecidePolicyForDownload) {
   auto task = CreateTestTask();
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
 
   OverlayRequestQueue* queue = OverlayRequestQueue::FromWebState(
       web_state_.get(), OverlayModality::kWebContentArea);
@@ -748,7 +790,7 @@ TEST_F(DownloadManagerCoordinatorTest, StartDownload) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   DownloadManagerViewController* viewController =
@@ -788,7 +830,7 @@ TEST_F(DownloadManagerCoordinatorTest, RetryingDownload) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   // First download is a failure.
@@ -844,7 +886,7 @@ TEST_F(DownloadManagerCoordinatorTest, FailingInBackground) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   // Start and immediately fail the download.
@@ -881,7 +923,7 @@ TEST_F(DownloadManagerCoordinatorTest, SucceedingInBackground) {
   auto task = CreateTestTask();
   web::FakeDownloadTask* task_ptr = task.get();
   tab_helper()->SetCurrentDownload(std::move(task));
-  coordinator_.downloadTask = task_ptr;
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
   [coordinator_ start];
 
   EXPECT_EQ(1U, base_view_controller_.childViewControllers.count);
@@ -918,7 +960,7 @@ TEST_F(DownloadManagerCoordinatorTest, SucceedingInBackground) {
 // started and nil when stopped.
 TEST_F(DownloadManagerCoordinatorTest, ViewController) {
   auto task = CreateTestTask();
-  coordinator_.downloadTask = task.get();
+  coordinator_.downloadTask = task->GetWeakPtr();
   ASSERT_FALSE(coordinator_.viewController);
   [coordinator_ start];
 
@@ -939,4 +981,96 @@ TEST_F(DownloadManagerCoordinatorTest, ViewController) {
     [coordinator_ stop];
   }
   EXPECT_FALSE(coordinator_.viewController);
+}
+
+// Tests opening the downloaded file. Verifies that the file URL is safely
+// constructed (escaped) and dispatched via `OpenNewTabCommand`.
+TEST_F(DownloadManagerCoordinatorTest, OpenDownloadedFile) {
+  std::unique_ptr<web::FakeDownloadTask> task = CreateTestTask();
+  web::FakeDownloadTask* task_ptr = task.get();
+
+  // Configure the task with an unsafe filename.
+  task_ptr->SetGeneratedFileName(base::FilePath("file name %2e%2e%2f.zip"));
+
+  tab_helper()->SetCurrentDownload(std::move(task));
+  coordinator_.downloadTask = task_ptr->GetWeakPtr();
+  [coordinator_ start];
+
+  DownloadManagerViewController* viewController =
+      base_view_controller_.childViewControllers.firstObject;
+  ASSERT_EQ([DownloadManagerViewController class], [viewController class]);
+
+  id<SceneCommands> scene_dispatcher_mock =
+      OCMProtocolMock(@protocol(SceneCommands));
+  [browser_->GetCommandDispatcher()
+      startDispatchingToTarget:scene_dispatcher_mock
+                   forProtocol:@protocol(SceneCommands)];
+
+  // Start the download from the coordinator.
+  @autoreleasepool {
+    [viewController.delegate
+        downloadManagerViewControllerDidStartDownload:viewController];
+  }
+
+  // Complete the download.
+  task_ptr->SetDone(true);
+
+  // Wait for the final file path to be resolved.
+  ASSERT_TRUE(WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForDownloadTimeout, true, ^{
+        return !tab_helper()->GetDownloadTaskFinalFilePath().empty();
+      }));
+
+  base::FilePath final_path = tab_helper()->GetDownloadTaskFinalFilePath();
+
+  // Expect `OpenNewTabCommand` with properly escaped URLs.
+  __block BOOL command_verified = NO;
+  OCMStub([scene_dispatcher_mock
+      openURLInNewTab:[OCMArg checkWithBlock:^(id object) {
+        EXPECT_EQ([OpenNewTabCommand class], [object class]);
+        OpenNewTabCommand* command =
+            base::apple::ObjCCastStrict<OpenNewTabCommand>(object);
+
+        // The file URL should have escaped characters:
+        // space -> %20, % -> %25
+        // So "file name %2e%2e%2f.zip" -> "file%20name%20%252e%252e%252f.zip"
+        std::string expected_url_spec =
+            net::FilePathToFileURL(final_path).spec();
+        EXPECT_EQ(expected_url_spec, command.URL.spec());
+
+        // The virtual URL should be
+        // chrome://downloads/file%20name%20%252e%252e%252f.zip
+        std::string expected_virtual_url_spec =
+            "chrome://downloads/file%20name%20%252e%252e%252f.zip";
+        EXPECT_EQ(expected_virtual_url_spec, command.virtualURL.spec());
+
+        command_verified = YES;
+        return YES;
+      }]]);
+
+  // Open the downloaded file.
+  @autoreleasepool {
+    [viewController.delegate
+        openDownloadedFileForDownloadManagerViewController:viewController];
+  }
+
+  EXPECT_TRUE(command_verified);
+
+  // Verify the path traversal safety difference when decoded once (as the OS
+  // loader does):
+  // 1. Unsafe URL decodes once to literal ".." traversal components:
+  GURL unsafeGURL("file:///Documents/file%20name%20%2e%2e%2f.zip");
+  NSString* unsafeDecoded = [base::SysUTF8ToNSString(unsafeGURL.spec())
+      stringByRemovingPercentEncoding];
+  EXPECT_TRUE([unsafeDecoded containsString:@"/.."] ||
+              [unsafeDecoded containsString:@".."]);
+
+  // 2. Safe URL decodes once to "%2e%2e%2f", NOT containing literal traversal
+  // components:
+  GURL safeGURL("file:///Documents/file%20name%20%252e%252e%252f.zip");
+  NSString* safeDecoded = [base::SysUTF8ToNSString(safeGURL.spec())
+      stringByRemovingPercentEncoding];
+  EXPECT_FALSE([safeDecoded containsString:@"/.."] ||
+               [safeDecoded containsString:@".."]);
+  EXPECT_TRUE([safeDecoded containsString:@"%2e%2e%2f"]);
 }

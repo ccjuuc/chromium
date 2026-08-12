@@ -19,7 +19,6 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 
-import org.chromium.base.FeatureList;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
@@ -395,19 +394,6 @@ public class ContentSettingsResources {
                         R.string.website_settings_javascript_optimizer_allowed,
                         R.string.website_settings_javascript_optimizer_blocked);
 
-            case ContentSettingsType.LOCAL_NETWORK_ACCESS:
-                return new ResourceItem(
-                        R.drawable.router_24,
-                        R.string.local_network_access_permission_title,
-                        ContentSetting.ASK,
-                        ContentSetting.BLOCK,
-                        R.string.website_settings_category_local_network_access_ask,
-                        R.string.website_settings_category_local_network_access_blocked,
-                        R.string.website_settings_category_local_network_access_a11y,
-                        R.drawable.router_off_24,
-                        R.string.website_settings_local_network_access_ask,
-                        R.string.website_settings_local_network_access_block);
-
             case ContentSettingsType.LOCAL_NETWORK:
                 return new ResourceItem(
                         R.drawable.router_24,
@@ -545,43 +531,42 @@ public class ContentSettingsResources {
                         0);
 
             case ContentSettingsType.SENSORS:
-                int sensorsPermissionTitle = R.string.motion_sensors_permission_title;
-                int sensorsAllowedDescription =
-                        R.string.website_settings_category_motion_sensors_allowed;
-                int sensorsBlockedDescription =
-                        R.string.website_settings_category_motion_sensors_blocked;
+                boolean extraSensorClassesEnabled =
+                        DeviceFeatureMap.isEnabled(DeviceFeatureList.GENERIC_SENSOR_EXTRA_CLASSES);
+                int sensorsPermissionTitle =
+                        extraSensorClassesEnabled
+                                ? R.string.motion_and_light_sensors_permission_title
+                                : R.string.motion_sensors_permission_title;
+                int sensorsAllowed =
+                        extraSensorClassesEnabled
+                                ? R.string.website_settings_motion_and_light_sensors_allow
+                                : R.string.website_settings_motion_sensors_allow;
+                int sensorsBlocked =
+                        extraSensorClassesEnabled
+                                ? R.string.website_settings_motion_and_light_sensors_block
+                                : R.string.website_settings_motion_sensors_block;
                 int sensorsScreenreaderAnnouncement =
-                        R.string.website_settings_category_motion_sensors_a11y;
-                try {
-                    if (FeatureList.isNativeInitialized()
-                            && DeviceFeatureMap.isEnabled(
-                                    DeviceFeatureList.GENERIC_SENSOR_EXTRA_CLASSES)) {
-                        sensorsPermissionTitle = R.string.sensors_permission_title;
-                        sensorsAllowedDescription =
-                                R.string.website_settings_category_sensors_allowed;
-                        sensorsBlockedDescription =
-                                R.string.website_settings_category_sensors_blocked;
-                        sensorsScreenreaderAnnouncement =
-                                R.string.website_settings_category_sensors_a11y;
-                    }
-                } catch (IllegalArgumentException e) {
-                    // We can hit this in tests that use the @Features annotation, as it calls
-                    // FeatureList.setTestFeatures() with a map that should not need to contain
-                    // DeviceFeatureList.GENERIC_SENSOR_EXTRA_CLASSES.
-                }
+                        extraSensorClassesEnabled
+                                ? R.string.website_settings_motion_and_light_sensors_a11y
+                                : R.string.website_settings_motion_sensors_a11y;
+                int sensorsBlockedDescription =
+                        extraSensorClassesEnabled
+                                ? R.string
+                                        .website_settings_motion_and_light_sensors_block_description
+                                : R.string.website_settings_motion_sensors_block_description;
+
                 return new ResourceItem(
                                 R.drawable.settings_sensors,
                                 sensorsPermissionTitle,
                                 ContentSetting.ALLOW,
                                 ContentSetting.BLOCK,
-                                sensorsAllowedDescription,
-                                sensorsBlockedDescription,
+                                0,
+                                0,
                                 sensorsScreenreaderAnnouncement,
                                 R.drawable.sensors_off_24px,
-                                R.string.website_settings_motion_sensors_allow,
-                                R.string.website_settings_motion_sensors_block)
-                        .setDisabledDescriptionText(
-                                R.string.website_settings_motion_sensors_block_description);
+                                sensorsAllowed,
+                                sensorsBlocked)
+                        .setDisabledDescriptionText(sensorsBlockedDescription);
 
             case ContentSettingsType.SERIAL_CHOOSER_DATA:
                 return new ResourceItem(
@@ -863,27 +848,6 @@ public class ContentSettingsResources {
      * @param value The ContentSetting for which we want the resource.
      * @param isOneTime Whether the content setting value has a OneTime session model.
      * @param isApproximateGeolocation Whether the geolocation is approximate.
-     */
-    public static int getCategorySummary(
-            @ContentSettingsType.EnumType int type,
-            @ContentSetting int value,
-            boolean isOneTime,
-            boolean isApproximateGeolocation) {
-        return getCategorySummary(
-                type,
-                value,
-                isOneTime,
-                isApproximateGeolocation,
-                /* isOnlyPreciseLocationBlockedInOs= */ false);
-    }
-
-    /**
-     * Returns the string resource id for a given ContentSetting to show with a permission category.
-     *
-     * @param type The ContentSettingsType for which we want the resource.
-     * @param value The ContentSetting for which we want the resource.
-     * @param isOneTime Whether the content setting value has a OneTime session model.
-     * @param isApproximateGeolocation Whether the geolocation is approximate.
      * @param isOnlyPreciseLocationBlockedInOs Whether only precise location is blocked in the OS
      *     (but coarse is granted).
      */
@@ -1060,13 +1024,6 @@ public class ContentSettingsResources {
         return 0;
     }
 
-    /** Returns the summary for the Tracking Protection setting to be displayed in site settings. */
-    public static int getTrackingProtectionListSummary(boolean blockAll) {
-        return blockAll
-                ? R.string.third_party_cookies_link_row_sub_label_disabled
-                : R.string.third_party_cookies_link_row_sub_label_limited;
-    }
-
     /**
      * Returns the resources IDs for descriptions for Allowed, Ask and Blocked states, in that
      * order, on a tri-state setting.
@@ -1074,23 +1031,27 @@ public class ContentSettingsResources {
      * @return An array of 3 resource IDs for descriptions for Allowed, Ask and Blocked states, in
      *     that order.
      */
-    public static int @Nullable [] getTriStateSettingDescriptionIDs(
-            int contentType, boolean isPermissionSiteSettingsRadioButtonFeatureEnabled) {
+    public static int @Nullable [] getTriStateSettingDescriptionIDs(int contentType) {
         if (contentType == ContentSettingsType.PROTECTED_MEDIA_IDENTIFIER) {
-            if (isPermissionSiteSettingsRadioButtonFeatureEnabled) {
-                int[] descriptionIDs = {
-                    R.string.website_settings_protected_content_allow,
-                    R.string.website_settings_protected_content_ask,
-                    R.string.website_settings_protected_content_block
+            return new int[] {
+                R.string.website_settings_protected_content_allow,
+                R.string.website_settings_protected_content_ask,
+                R.string.website_settings_protected_content_block
+            };
+        } else if (contentType == ContentSettingsType.SENSORS) {
+            if (DeviceFeatureMap.isEnabled(
+                    DeviceFeatureList.SENSORS_ALLOW_ASK_BLOCK_PERMISSION_MODEL)) {
+                return new int[] {
+                    R.string.website_settings_motion_and_light_sensors_allow,
+                    R.string.website_settings_motion_and_light_sensors_ask,
+                    R.string.website_settings_motion_and_light_sensors_block,
                 };
-                return descriptionIDs;
             } else {
-                int[] descriptionIDs = {
-                    R.string.website_settings_category_protected_content_allowed_recommended,
-                    R.string.website_settings_category_protected_content_ask,
-                    R.string.website_settings_category_protected_content_blocked
+                return new int[] {
+                    R.string.website_settings_motion_sensors_allow,
+                    R.string.website_settings_motion_sensors_ask,
+                    R.string.website_settings_motion_sensors_block,
                 };
-                return descriptionIDs;
             }
         }
 
@@ -1107,14 +1068,40 @@ public class ContentSettingsResources {
      */
     public static int @Nullable [] getTriStateSettingIconIDs(int contentType) {
         if (contentType == ContentSettingsType.PROTECTED_MEDIA_IDENTIFIER) {
-            int[] descriptionIDs = {
-                R.drawable.live_tv_24px, R.drawable.tv_24px, R.drawable.tv_off_24px
+            return new int[] {
+                R.drawable.live_tv_24px, R.drawable.tv_24px, R.drawable.tv_off_24px,
             };
-            return descriptionIDs;
+        } else if (contentType == ContentSettingsType.SENSORS) {
+            return new int[] {
+                R.drawable.settings_sensors,
+                R.drawable.sensors_ask_24px,
+                R.drawable.sensors_off_24px
+            };
         }
 
         assert false;
         return null;
+    }
+
+    /**
+     * Returns the resource ID of the icon for a given content settings type and value.
+     *
+     * @param contentType The ContentSettingsType.
+     * @param setting The ContentSetting value.
+     * @return The resource ID of the icon.
+     */
+    public static int getTriStateSettingIcon(int contentType, @ContentSetting int setting) {
+        int[] iconIds = getTriStateSettingIconIDs(contentType);
+        if (iconIds != null) {
+            if (setting == ContentSetting.ALLOW) {
+                return iconIds[0];
+            } else if (setting == ContentSetting.ASK) {
+                return iconIds[1];
+            } else if (setting == ContentSetting.BLOCK) {
+                return iconIds[2];
+            }
+        }
+        return getIcon(contentType);
     }
 
     /**

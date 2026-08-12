@@ -22,6 +22,7 @@ try_.defaults.set(
         "chromium_tests.resultdb_module": 100,
     },
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
     siso_project = siso.project.DEFAULT_UNTRUSTED,
     siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
 )
@@ -59,11 +60,6 @@ _builder(
 _builder(
     name = "linux-asan-media-rel",
     mirror_of = "ci/ASAN Release Media",
-)
-
-_builder(
-    name = "linux-asan-v8-arm-dbg",
-    mirror_of = "ci/ASan Debug (32-bit x86 with V8-ARM)",
 )
 
 _builder(
@@ -119,6 +115,8 @@ _builder(
 
 _mirror_builder(name = "android-desktop-x64-libfuzzer-asan", executable = "recipe:chromium/fuzz")
 
+_mirror_builder(name = "android-desktop-x64-asan-rel")
+
 _mirror_builder(name = "android-arm64-libfuzzer-hwasan", executable = "recipe:chromium/fuzz")
 
 _builder(
@@ -141,7 +139,8 @@ _builder(
 _builder(
     name = "mac-asan-media-rel",
     cores = None,
-    os = os.MAC_DEFAULT,
+    # TODO(crbug.com/543006750): Revert to MAC_DEFAULT after arm migration.
+    os = os.MAC_15,
     mirror_of = "ci/Mac ASAN Release Media",
 )
 
@@ -198,13 +197,20 @@ try_.builder(
 
 # Libfuzzer test bots.
 
-# All test bots should run on the CQ for any changes to fuzztest.
-# See crbug.com/466122130.
+# All test bots should run on the CQ for any changes to fuzztest or libfuzzer.
+# See crbug.com/466122130 and crbug.com/493762894.
 def _test_builder(**kwargs):
     _mirror_builder(
         cq_settings = try_.cq_settings(
-            location_filters = ["third_party/fuzztest"],
+            location_filters = [
+                "testing/libfuzzer/.+",
+                "third_party/fuzztest/.+",
+                "third_party/libFuzzer/.+",
+            ],
         ),
+        experiments = {
+            "luci.buildbucket.run_in_turboci": 25,
+        },
         **kwargs
     )
 

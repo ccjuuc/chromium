@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import datetime
 import glob
+import hashlib
 import logging
 import os
 import pathlib
@@ -91,6 +92,12 @@ def parse_common_args(
         "--menuname",
         default=None,
         help="Override MENUNAME (desktop menu display name).")
+    parser.add_argument(
+        "--use-static-angle",
+        choices=["true", "false"],
+        default="false",
+        help="whether ANGLE is statically linked",
+    )
     return parser
 
 
@@ -288,6 +295,7 @@ class InstallerConfig:
     target_os: str
     is_official_build: bool
     shlib_perms: int
+    use_static_angle: bool = False
 
     # From chromium-browser.info or google-chrome.info
     info_vars: dict[str, str] = dataclasses.field(default_factory=dict)
@@ -335,6 +343,7 @@ class InstallerConfig:
     logo_resources_png: str = ""
     uri_scheme: str = ""
     extra_desktop_entries: str = ""
+    startup_wm_class: str = ""
 
     @classmethod
     def from_args(cls, args: argparse.Namespace,
@@ -351,6 +360,7 @@ class InstallerConfig:
             "is_official_build": args.official,
             "output_dir": output_dir,
             "shlib_perms": StandardPermissions.EXECUTABLE,
+            "use_static_angle": args.use_static_angle == "true",
             # Placeholder for build specific paths, set by caller if needed
             "script_dir": pathlib.Path("."),
             "staging_dir": pathlib.Path("."),
@@ -412,8 +422,8 @@ class InstallerConfig:
         data["channel"] = channel
         data["versionfull"] = f"{data['version']}-{data['package_release']}"
         data["package_orig"] = data["info_vars"]["PACKAGE"]
-        data[
-            "usr_bin_symlink_name"] = f"{data['info_vars']['PACKAGE']}-{channel}"
+        data["usr_bin_symlink_name"] = (
+            f"{data['info_vars']['PACKAGE']}-{channel}")
         if channel != "stable":
             data["info_vars"]["INSTALLDIR"] += f"-{channel}"
             data["info_vars"]["PACKAGE"] += f"-{channel}"
@@ -421,6 +431,8 @@ class InstallerConfig:
             data["rdn_desktop"] = f"{data['info_vars']['RDN']}.{channel}"
         else:
             data["rdn_desktop"] = data["info_vars"]["RDN"]
+
+        data["startup_wm_class"] = data["info_vars"]["PACKAGE"] or ""
 
         return data
 
@@ -504,15 +516,8 @@ class InstallerConfig:
                 is_optional=True,
             ),
             Artifact(
-                "libEGL.so.stripped",
-                "libEGL.so",
-                ArtifactType.BINARY,
-                self.shlib_perms,
-                is_optional=True,
-            ),
-            Artifact(
-                "libGLESv2.so.stripped",
-                "libGLESv2.so",
+                "libLiteRtWebGpuAccelerator.so.stripped",
+                "libLiteRtWebGpuAccelerator.so",
                 ArtifactType.BINARY,
                 self.shlib_perms,
                 is_optional=True,
@@ -570,6 +575,24 @@ class InstallerConfig:
                     ArtifactType.DIRECTORY,
                     StandardPermissions.EXECUTABLE,
                 ))
+
+        if not self.use_static_angle:
+            artifacts.extend([
+                Artifact(
+                    "libEGL.so.stripped",
+                    "libEGL.so",
+                    ArtifactType.BINARY,
+                    self.shlib_perms,
+                    is_optional=True,
+                ),
+                Artifact(
+                    "libGLESv2.so.stripped",
+                    "libGLESv2.so",
+                    ArtifactType.BINARY,
+                    self.shlib_perms,
+                    is_optional=True,
+                ),
+            ])
 
         return artifacts
 
@@ -657,21 +680,20 @@ class InstallerConfig:
                 ))
 
         # Privacy Sandbox Attestation
-        psa_manifest = (
-            self.output_dir /
-            "PrivacySandboxAttestationsPreloaded/manifest.json")
+        psa_dir = "PrivacySandboxAttestationsPreloaded"
+        psa_manifest = self.output_dir / psa_dir / "manifest.json"
         if psa_manifest.exists():
             artifacts.append(
                 Artifact(
-                    "PrivacySandboxAttestationsPreloaded/manifest.json",
-                    "PrivacySandboxAttestationsPreloaded/manifest.json",
+                    f"{psa_dir}/manifest.json",
+                    f"{psa_dir}/manifest.json",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
                 ))
             artifacts.append(
                 Artifact(
-                    "PrivacySandboxAttestationsPreloaded/privacy-sandbox-attestations.dat",
-                    "PrivacySandboxAttestationsPreloaded/privacy-sandbox-attestations.dat",
+                    f"{psa_dir}/privacy-sandbox-attestations.dat",
+                    f"{psa_dir}/privacy-sandbox-attestations.dat",
                     ArtifactType.RESOURCE,
                     StandardPermissions.REGULAR,
                 ))
@@ -794,20 +816,13 @@ class InstallerConfig:
         else:
             self.uri_scheme = "x-scheme-handler/chromium;"
 
-        # xdg-mime and xdg-settings
+        # apparmor profile
         artifacts.append(
             Artifact(
-                "xdg-mime",
-                "xdg-mime",
-                ArtifactType.RESOURCE,
-                StandardPermissions.EXECUTABLE,
-            ))
-        artifacts.append(
-            Artifact(
-                "xdg-settings",
-                "xdg-settings",
-                ArtifactType.RESOURCE,
-                StandardPermissions.EXECUTABLE,
+                "installer/common/apparmor.template",
+                pathlib.Path("apparmor.d") / self.usr_bin_symlink_name,
+                ArtifactType.TEMPLATE,
+                StandardPermissions.REGULAR,
             ))
 
         # appdata.xml
@@ -929,6 +944,7 @@ class Installer:
             (self.config.staging_dir /
              "usr/share/gnome-control-center/default-apps"),
             self.config.staging_dir / "usr/share/man/man1",
+            install_dir / "apparmor.d",
         ]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
@@ -1201,3 +1217,83 @@ class Installer:
                         msg += f", but they were {oct(actual_perms)}"
                         print(msg, file=sys.stderr)
                         sys.exit(1)
+
+
+def compute_repo_package_hash_for_presubmit(
+    chrome_installer_linux_dir: str | pathlib.Path,
+    out_dir: str | pathlib.Path,
+) -> str:
+    """Builds the repo .deb package in out_dir and returns its SHA-256 hash.
+
+    This function is used during presubmit and key update to build a minimal,
+    deterministic version of the repository package ('google-chrome-repo') and
+    return its hash.
+
+    Since this is only used to verify that modifications to repository package
+    templates or packaging scripts are accompanied by version, timestamp, and
+    hash updates in 'repo_package.include', the package configuration (like
+    version, timestamp, architecture, branding, etc.) can be hardcoded.
+    This avoids needing a real, fully compiled Chrome/Chromium build output
+    directory, making the presubmit check extremely fast and lightweight.
+
+    'google-chrome-repo' is used as the representative package for verification
+    because the repo package scripts (postinst, postrm, etc.) are identical or
+    structurally equivalent under both brandings, and verifying a single
+    representative branding is sufficient to enforce version and hash updates.
+    """
+    old_umask = os.umask(0o022)
+    try:
+        local_root = os.path.abspath(str(chrome_installer_linux_dir))
+        out_dir = os.path.abspath(str(out_dir))
+        common_out = os.path.join(out_dir, "installer", "common")
+        theme_out = os.path.join(out_dir, "installer", "theme")
+        os.makedirs(common_out, exist_ok=True)
+        os.makedirs(theme_out, exist_ok=True)
+
+        # Copy the required 'google-chrome.info' directly from the source repository.
+        # This file must exist as it is a vital part of the repository structure.
+        info_path = os.path.join(local_root, "common", "google-chrome.info")
+        shutil.copy(info_path, os.path.join(common_out, "google-chrome.info"))
+
+        # Write mock files simulating a build directory so build_repo_package.py
+        # can execute in a standalone/presubmit context without requiring a real,
+        # fully-built Chromium/Chrome binary.
+        with open(os.path.join(theme_out, "BRANDING"), "w") as f:
+            f.write("COMPANY_FULLNAME=Google\n")
+        with open(os.path.join(out_dir, "installer", "version.txt"), "w") as f:
+            f.write("MAJOR=130\nMINOR=0\nBUILD=6723\nPATCH=44\n")
+
+        script = os.path.join(local_root, "debian", "build_repo_package.py")
+        cmd = [
+            sys.executable,
+            script,
+            "-a",
+            "amd64",
+            "-b",
+            "1700000000",
+            "-c",
+            "stable",
+            "-d",
+            "google_chrome",
+            "-o",
+            out_dir,
+            "-s",
+            out_dir,
+            "-t",
+            "linux",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            error_msg = f"build_repo_package.py failed (rc={res.returncode})"
+            if res.stdout:
+                error_msg += f"\nstdout:\n{res.stdout}"
+            if res.stderr:
+                error_msg += f"\nstderr:\n{res.stderr}"
+            raise RuntimeError(error_msg)
+        deb_path = os.path.join(out_dir, "google-chrome-repo_amd64.deb")
+        if not os.path.exists(deb_path):
+            raise RuntimeError(f"deb package was not created at {deb_path}")
+        with open(deb_path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    finally:
+        os.umask(old_umask)

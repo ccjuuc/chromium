@@ -67,8 +67,7 @@ UserInfoFetcher::UserInfoFetcher(
   DCHECK(delegate_);
 }
 
-UserInfoFetcher::~UserInfoFetcher() {
-}
+UserInfoFetcher::~UserInfoFetcher() = default;
 
 void UserInfoFetcher::Start(const std::string& access_token) {
   net::NetworkTrafficAnnotationTag traffic_annotation =
@@ -88,9 +87,8 @@ void UserInfoFetcher::Start(const std::string& access_token) {
             "This feature cannot be controlled by Chrome settings, but users "
             "can sign out of Chrome to disable it."
           chrome_policy {
-            SigninAllowed {
-              policy_options {mode: MANDATORY}
-              SigninAllowed: false
+            BrowserSignin {
+              BrowserSignin: 0
             }
           }
         })");
@@ -124,7 +122,7 @@ void UserInfoFetcher::OnFetchComplete(
       int response_code = url_loader->ResponseInfo()->headers->response_code();
       DLOG_POLICY(WARNING, POLICY_AUTH)
           << "UserInfo request failed with HTTP code: " << response_code;
-      error = GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED);
+      error = GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED);
       RecordHttpErrorCode(response_code);
     } else {
       DLOG_POLICY(WARNING, POLICY_AUTH) << "UserInfo request failed";
@@ -154,8 +152,8 @@ void UserInfoFetcher::OnFetchComplete(
     RecordFetchStatus(status);
     DLOG_POLICY(WARNING, POLICY_AUTH)
         << "Could not parse userinfo response from server: " << *unparsed_data;
-    delegate_->OnGetUserInfoFailure(GoogleServiceAuthError(
-        GoogleServiceAuthError::CONNECTION_FAILED));
+    delegate_->OnGetUserInfoFailure(
+        GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
   }
 }
 

@@ -11,6 +11,7 @@
 
 #include "base/containers/span.h"
 #include "base/containers/span_writer.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/time/time.h"
@@ -18,6 +19,7 @@
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/base/port_util.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/ssl_client_socket.h"
@@ -25,7 +27,6 @@
 #include "services/network/proxy_resolving_client_socket.h"
 #include "services/network/proxy_resolving_client_socket_factory.h"
 #include "services/network/public/cpp/p2p_param_traits.h"
-#include "third_party/webrtc/media/base/rtp_utils.h"
 #include "third_party/webrtc/rtc_base/time_utils.h"
 #include "url/gurl.h"
 
@@ -82,6 +83,16 @@ void P2PSocketTcpBase::Init(
   DCHECK(!socket_);
 
   remote_address_ = remote_address;
+
+  if (base::FeatureList::IsEnabled(kEnforceP2PSocketPortRestrictions)) {
+    bool is_restricted_port =
+        !net::IsPortAllowedForIpEndpoint(remote_address.ip_address) ||
+        !net::IsPortAllowedForScheme(remote_address.ip_address.port(), "stun");
+    if (is_restricted_port) {
+      OnError();
+      return;
+    }
+  }
 
   net::HostPortPair dest_host_port_pair;
   // If there is a domain name, let's try it first, it's required by some proxy
@@ -472,11 +483,6 @@ bool P2PSocketTcp::DoSend(const net::IPEndPoint& to,
     CHECK_EQ(writer.remaining(), 0u);
   }
 
-  base::span<uint8_t> send_buffer_without_header =
-      send_buffer.buffer->span().subspan(kPacketHeaderSize);
-  webrtc::ApplyPacketOptions(send_buffer_without_header,
-                             options.packet_time_params, webrtc::TimeMicros());
-
   return WriteOrQueue(send_buffer);
 }
 
@@ -546,10 +552,6 @@ bool P2PSocketStunTcp::DoSend(const net::IPEndPoint& to,
       base::MakeRefCounted<net::DrainableIOBuffer>(
           base::MakeRefCounted<net::VectorIOBuffer>(std::move(buffer)),
           buffer_size));
-
-  webrtc::ApplyPacketOptions(
-      webrtc::ArrayView<uint8_t>(send_buffer.buffer->bytes(), data.size()),
-      options.packet_time_params, webrtc::TimeMicros());
 
   // WriteOrQueue may free the memory, so dump it first.
   delegate_->DumpPacket(send_buffer.buffer->span(), false);

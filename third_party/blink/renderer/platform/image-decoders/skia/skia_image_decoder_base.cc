@@ -99,7 +99,7 @@ void SkiaImageDecoderBase::OnSetData(scoped_refptr<SegmentReader> data) {
         }
         if (!IgnoresColorSpace()) {
           if (const skcms_ICCProfile* profile = codec_->getICCProfile()) {
-            SetEmbeddedColorProfile(std::make_unique<ColorProfile>(*profile));
+            SetEmbeddedColorProfile(skia::ColorProfile::Make(*profile));
           }
           if (codec_->getHdrMetadata() != skhdr::Metadata::MakeEmpty()) {
             hdr_metadata_ = gfx::HDRMetadata(codec_->getHdrMetadata());
@@ -301,6 +301,11 @@ void SkiaImageDecoderBase::Decode(wtf_size_t index) {
     UpdateAggressivePurging(current_frame_index);
 
     if (frame.GetStatus() == ImageFrame::kFrameEmpty) {
+      // `AllocatePixelData` (or `TakeBitmapDataIfWritable` / `CopyBitmapData`)
+      // calls mean that we can't reuse old buffer pointers that may have been
+      // stashed in `SkCodec` by previous `startIncrementalDecode` calls.
+      already_started_frame_.reset();
+
       wtf_size_t required_previous_frame_index =
           frame.RequiredPreviousFrameIndex();
       if (required_previous_frame_index == kNotFound) {
@@ -383,15 +388,12 @@ void SkiaImageDecoderBase::Decode(wtf_size_t index) {
       DCHECK_NE(color_type, kUnknown_SkColorType);
 
       sk_sp<SkColorSpace> color_space;
-      if (const ColorProfileTransform* transform = ColorTransform()) {
-        const skcms_ICCProfile* dst_profile = transform->DstProfile();
-        DCHECK(dst_profile);  // Always non-null ptr to `dst_profile_` field.
-        color_space = SkColorSpace::Make(*dst_profile);
+      if (NeedsDecodeTimeColorTransform()) {
+        color_space = ColorSpaceForSkImages();
       } else {
         // Explicitly ask for no color transformation.  This avoids transforming
         // into sRGB if/when `SkEncodedInfo::makeImageInfo` has set
         // `codec_->getInfo().colorSpace()` to sRGB as a fallback.
-        color_space = nullptr;
       }
 
       SkImageInfo image_info = codec_->getInfo()
@@ -404,6 +406,7 @@ void SkiaImageDecoderBase::Decode(wtf_size_t index) {
       options.fPriorFrame = prior_frame_;
       options.fZeroInitialized = SkCodec::kNo_ZeroInitialized;
 
+      already_started_frame_.reset();
       SkCodec::Result start_incremental_decode_result =
           codec_->startIncrementalDecode(image_info, frame.Bitmap().getPixels(),
                                          frame.Bitmap().rowBytes(), &options);

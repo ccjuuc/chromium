@@ -23,8 +23,7 @@
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
-#include "chrome/browser/ui/views/location_bar/merchant_trust_chip_button_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_delegate.h"
 #include "chrome/browser/ui/views/permissions/chip/chip_controller.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
 #include "components/permissions/permission_prompt.h"
@@ -53,19 +52,19 @@
 #include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
+class Browser;
+class BrowserWindowInterface;
 class CommandUpdater;
 class ContentSettingBubbleModelDelegate;
-class IntentChipButton;
 class OmniboxController;
 class OmniboxContextMenu;
 enum class OmniboxPart;
 class OmniboxPopupAimPresenter;
 class OmniboxPopupFileSelector;
+class OmniboxPopupUI;
 class OmniboxPopupView;
 class OmniboxViewViews;
-class OmniboxChipButton;
-class PageActionIconController;
-class PageActionIconContainerView;
+class PermissionChipView;
 class PermissionDashboardView;
 class Profile;
 class SelectedKeywordView;
@@ -101,11 +100,11 @@ class LocationBarView
       public views::AnimationDelegateViews,
       public IconLabelBubbleView::Delegate,
       public LocationIconView::Delegate,
-      public ContentSettingImageView::Delegate,
+      public ContentSettingImageViewDelegate,
 #if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
       public device::GeolocationSystemPermissionManager::PermissionObserver,
 #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
-      public PageActionIconView::Delegate {
+      public OmniboxPopupPresenterDelegate {
   METADATA_HEADER(LocationBarView, views::View)
 
  public:
@@ -136,31 +135,25 @@ class LocationBarView
 
   // Returns the location bar border radius in DIPs.
   int GetBorderRadius() const;
+  static int ComputeBorderRadius(gfx::Size size);
 
   // Initializes the LocationBarView.
   void Init();
 
-  bool in_popup_state_transition() const { return in_popup_state_transition_; }
-
-  // True if this instance has been initialized by calling Init, which can only
-  // be called when the receiving instance is attached to a view container.
-  bool IsInitialized() const;
+  bool in_popup_state_transition() const override;
 
   // Returns a background that paints an (optionally stroked) rounded rect with
   // the given color.
-  std::unique_ptr<views::Background> CreateRoundRectBackground(
+  static std::unique_ptr<views::Background> CreateRoundRectBackground(
       SkColor background_color,
       SkColor stroke_color,
+      gfx::Size size,
       SkBlendMode blend_mode = SkBlendMode::kSrcOver,
       bool antialias = true,
-      bool should_border_scale = false) const;
+      bool should_border_scale = false);
 
   // Returns the delegate.
   Delegate* delegate() const { return delegate_; }
-
-  PageActionIconController* page_action_icon_controller() {
-    return page_action_icon_controller_;
-  }
 
   page_actions::PageActionContainerView* page_action_container() {
     return page_action_container_;
@@ -195,37 +188,52 @@ class LocationBarView
 
   const OmniboxController* GetOmniboxController() const;
 
-  // Returns true if the location bar's current security state does not match
-  // the currently visible state.
-  bool HasSecurityStateChanged();
-
-  // Updates the controller, and, if |contents| is non-null, restores saved
-  // state that the tab holds.
-  void Update(content::WebContents* contents);
-
-  // Clears the location bar's state for |contents|.
-  void ResetTabState(content::WebContents* contents);
-
-  // Controls the chip in the LocationBarView.
-  ChipController* GetChipController();
 
   // Controls the permission dashboard in the LocationBarView.
   PermissionDashboardController* permission_dashboard_controller() {
     return permission_dashboard_controller_.get();
   }
 
-  IntentChipButton* intent_chip() { return intent_chip_; }
+  PermissionChipView* chip_view() { return chip_view_; }
+  PermissionDashboardView* permission_dashboard_view() {
+    return permission_dashboard_view_;
+  }
 
   // LocationBar:
-  void FocusLocation(bool is_user_initiated) override;
+  void FocusLocation(bool is_user_initiated,
+                     bool clear_focus_if_failed) override;
   void Revert() override;
   OmniboxView* GetOmniboxView() override;
+  OmniboxPopupView* GetOmniboxPopupView() override;
+  OmniboxPopupPresenterDelegate* GetPresenterDelegate() override;
   OmniboxController* GetOmniboxController() override;
+  bool ShouldCloseOmniboxPopup(ui::MouseEvent* event) override;
+  ChipController* GetChipController() override;
   void UpdateWithoutTabRestore() override;
   LocationBarModel* GetLocationBarModel() override;
   content::WebContents* GetWebContents() override;
   std::optional<bubble_anchor_util::AnchorConfiguration> GetChipAnchor()
       override;
+  ui::TrackedElement* GetAnchorOrNull() override;
+  BrowserWindowInterface* GetBrowser() override;
+  Profile* GetProfile() override;
+
+  // True if this instance has been initialized by calling Init, which can only
+  // be called when the receiving instance is attached to a view container.
+  bool IsInitialized() const override;
+  bool IsVisible() const override;
+  bool IsDrawn() const override;
+  bool IsFullscreen() const override;
+  bool IsMouseHovered() const override;
+  bool IsFocusWithin() const override;
+  void InvalidateLayout() override;
+  gfx::Rect Bounds() const override;
+  gfx::Rect BoundsInScreen() const override;
+  gfx::Size MinimumSize() const override;
+  gfx::Size PreferredSize() const override;
+  void Update(content::WebContents* contents) override;
+  void ResetTabState(content::WebContents* contents) override;
+  bool HasSecurityStateChanged() override;
 
   // views::View:
   void AddedToWidget() override;
@@ -246,7 +254,7 @@ class LocationBarView
   SkAlpha GetIconLabelBubbleSeparatorAlpha() const override;
   SkColor GetIconLabelBubbleBackgroundColor() const override;
 
-  // ContentSettingImageView::Delegate:
+  // ContentSettingImageViewDelegate:
   bool ShouldHideContentSettingImage() override;
   content::WebContents* GetContentSettingWebContents() override;
   ContentSettingBubbleModelDelegate* GetContentSettingBubbleModelDelegate()
@@ -259,6 +267,12 @@ class LocationBarView
   void OnPermissionManagerShuttingDown() override;
 #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
+  // OmniboxPopupPresenterDelegate:
+  views::Widget* GetLocationBarWidget() override;
+  OmniboxPopupFileSelector* GetOmniboxPopupFileSelector() const override;
+  OmniboxPopupAimPresenter* GetOmniboxPopupAimPresenter() const override;
+  const views::View* GetLocationBarFocusRestoreView() const override;
+
   static bool IsVirtualKeyboardVisible(views::Widget* widget);
 
   // Returns the height available for user-entered text in the location bar.
@@ -268,11 +282,15 @@ class LocationBarView
   static int GetAvailableDecorationTextHeight();
 
   void OnOmniboxFocused();
+  void OpenOmniboxPopup(bool query_zps = true);
   void OnOmniboxBlurred();
 
   // Called when omnibox view receives mouse notifications relevant to hover.
   // |is_hovering| should be true when mouse is in omnibox; false when exited.
   void OnOmniboxHovered(bool is_hovering);
+
+  // LocationBar:
+  void SetPermissionPromptShowing(bool showing) override;
 
   // `browser_` returned here may be nullptr. There are two known cases.
   //
@@ -283,18 +301,18 @@ class LocationBarView
   // 2. presentation_receiver_window_view is the other known case. However,
   // presentation_receiver_window_view is about to be sunsetted in a year or so.
   Browser* browser() { return browser_; }
-  Profile* profile() { return profile_; }
 
   // LocationIconView::Delegate:
   const LocationBarModel* GetLocationBarModel() const override;
   bool IsEditingOrEmpty() const override;
+  void OnLocationIconGestureEvent(ui::GestureEvent* event) override;
   void OnLocationIconPressed(const ui::MouseEvent& event) override;
   void OnLocationIconDragged(const ui::MouseEvent& event) override;
   bool ShowPageInfoDialog() override;
   SkColor GetSecurityChipColor(
       security_state::SecurityLevel security_level) const override;
-  ui::ImageModel GetLocationIcon(LocationIconView::Delegate::IconFetchedCallback
-                                     on_icon_fetched) const override;
+  ui::ImageModel GetLocationIcon(
+      LocationIconView::Delegate::IconFetchedCallback on_icon_fetched) override;
   std::vector<raw_ptr<ContentSettingImageView, VectorExperimental>>&
   GetContentSettingViewsForTest() {
     return content_setting_views_;
@@ -302,17 +320,7 @@ class LocationBarView
 
   SkColor GetBackgroundColorForTesting() const { return background_color_; }
 
-  OmniboxPopupView* GetOmniboxPopupViewForTesting() {
-    return omnibox_popup_view_.get();
-  }
-
-  OmniboxPopupFileSelector* GetOmniboxPopupFileSelector() const {
-    return omnibox_popup_file_selector_.get();
-  }
-
-  OmniboxPopupAimPresenter* GetOmniboxPopupAimPresenter() const {
-    return omnibox_popup_aim_presenter_.get();
-  }
+  OmniboxPopupUI* GetOmniboxPopupUI();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SecurityIndicatorTest, CheckIndicatorText);
@@ -322,6 +330,8 @@ class LocationBarView
                            IMEInlineAutocompletePosition);
   FRIEND_TEST_ALL_PREFIXES(LocationBarViewAddContextButtonBrowserTest,
                            AddContextButtonVisibilityAndClick);
+  FRIEND_TEST_ALL_PREFIXES(LocationBarViewAddContextButtonBrowserTest,
+                           PrefChangesAddContextButtonVisibility);
   using ContentSettingViews =
       std::vector<raw_ptr<ContentSettingImageView, VectorExperimental>>;
 
@@ -344,17 +354,18 @@ class LocationBarView
   // Updates the background on a theme change, or dropdown state change.
   void RefreshBackground();
 
-  // Updates the visibility state of the Content Blocked icons to reflect what
-  // is actually blocked on the current page. Returns true if the visibility
-  // of at least one of the views in |content_setting_views_| changed.
+  // Updates the visibility state of the content setting icons to reflect what
+  // is blocked or actively in use on the current page. Returns true if the
+  // visibility of at least one of the views in `content_setting_views_`
+  // changed.
   bool RefreshContentSettingViews();
 
   // Updates the visibility state of the PageActionIconViews to reflect what
   // actions are available on the current page.
   void RefreshPageActionIconViews();
 
-  // Updates the visibility state of the AIM page action icon view.
-  void RefreshAiModePageActionIconView();
+  // Updates the visibility state of the AIM page action.
+  void RefreshAiModePageAction();
 
   // Updates PageActionContainerView's action controller to the active tab's
   // controller. At the same time, the page actions visibility will be set based
@@ -393,10 +404,12 @@ class LocationBarView
 
   // LocationBar:
   void FocusSearch() override;
+  void UpdateFocusBehavior(bool toolbar_visible) override;
   void UpdateContentSettingsIcons() override;
   void SaveStateToContents(content::WebContents* contents) override;
   LocationBarTesting* GetLocationBarForTesting() override;
   void OnChanged() override;
+  void AnnounceAlert(const std::u16string& announcement) override;
 
   // LocationBarTesting:
   bool TestContentSettingImagePressed(size_t index) override;
@@ -428,22 +441,13 @@ class LocationBarView
                            const gfx::Point& press_pt,
                            const gfx::Point& p) override;
 
-  // PageActionIconView::Delegate:
-  content::WebContents* GetWebContentsForPageActionIconView() override;
-  bool ShouldHidePageActionIcons() const override;
-  bool ShouldHidePageActionIcon(
-      const PageActionIconView* icon_view) const override;
-  bool ShouldHidePageActionIconForContext(
-      const PageActionIconView* icon_view,
-      metrics::OmniboxEventProto::PageClassification page_context) const;
+  bool ShouldHidePageActionIcons() const;
 
   struct PageActionInfo {
     // Is the AIM page action the right-most visible page action?
     bool is_aim_last_visible_page_action = false;
-    // How many migrated page actions are shown?
-    size_t num_migrated_page_actions_shown = 0;
-    // How many legacy (non-migrated) page actions are shown?
-    size_t num_legacy_page_actions_shown = 0;
+    // How many page actions are shown?
+    size_t num_page_actions_shown = 0;
   };
   PageActionInfo GetPageActionInfo() const;
 
@@ -482,6 +486,18 @@ class LocationBarView
   // destroyed.
   page_actions::PageActionController* GetPageActionController();
 
+  bool OpenContextMenu();
+
+  // Whether the "Add Context" button should be shown in place of the location
+  // bar page info icon button.
+  bool ShouldShowAddContextButton();
+
+  // Whether the Omnibox context menu contains at least one menu item that can
+  // be shown to the user.
+  bool HasAllowedInputs();
+
+  content::WebContents* GetWrappedWebContents();
+
 #if BUILDFLAG(IS_MAC)
   // Called when app shims change.
   void OnAppShimChanged(const webapps::AppId& app_id);
@@ -501,7 +517,7 @@ class LocationBarView
 #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
   // The Browser this LocationBarView is in.  Note that at least
-  // ash::SimpleWebViewDialog uses a LocationBarView outside any browser
+  // SimpleWebViewDialog uses a LocationBarView outside any browser
   // window, so this may be NULL.
   const raw_ptr<Browser> browser_;
 
@@ -529,16 +545,14 @@ class LocationBarView
   // permission information and requests.
   std::unique_ptr<ChipController> chip_controller_ = nullptr;
 
+  // The concrete native view used for the permission chip. Stored separately
+  // from the controller to allow layout calculations to bypass the UI-agnostic
+  // PermissionChipInterface.
+  raw_ptr<PermissionChipView> chip_view_ = nullptr;
+
   std::unique_ptr<PermissionDashboardController>
       permission_dashboard_controller_;
   raw_ptr<PermissionDashboardView> permission_dashboard_view_;
-
-  // A merchant trust omnibox chip button.
-  raw_ptr<OmniboxChipButton> merchant_trust_chip_;
-
-  // A controller for a merchant chip button view.
-  std::unique_ptr<MerchantTrustChipButtonController>
-      merchant_trust_chip_controller_;
 
   // An icon to the left of the edit field: the HTTPS lock, blank page icon,
   // search icon, EV HTTPS bubble, etc.
@@ -564,22 +578,20 @@ class LocationBarView
   // Shown if the user has selected a keyword.
   raw_ptr<SelectedKeywordView> selected_keyword_view_ = nullptr;
 
-  raw_ptr<IntentChipButton> intent_chip_ = nullptr;
 
   // The content setting views.
   ContentSettingViews content_setting_views_;
 
-  // The controller for page action icons.
-  raw_ptr<PageActionIconController> page_action_icon_controller_ = nullptr;
-
   // The container for page action icons.
-  raw_ptr<PageActionIconContainerView> page_action_icon_container_ = nullptr;
   raw_ptr<page_actions::PageActionContainerView> page_action_container_ =
       nullptr;
 
   // An [x] that appears in touch mode (when the OSK is visible) and allows the
   // user to clear all text.
   raw_ptr<views::ImageButton> clear_all_button_ = nullptr;
+
+  // A label to show the AI Mode hint text.
+  raw_ptr<views::Label> ai_mode_hint_label_ = nullptr;
 
   // Animation to change whole location bar background color on hover.
   gfx::SlideAnimation hover_animation_{this};
@@ -613,6 +625,8 @@ class LocationBarView
   // TODO(crbug.com/40251974): Remove this once state manager is proven
   //  reliable.
   bool in_popup_state_transition_ = false;
+
+  void OnMiddleClickPaste(base::TimeTicks event_timestamp, std::u16string text);
 
   base::WeakPtrFactory<LocationBarView> weak_factory_{this};
 };

@@ -6,16 +6,19 @@
 
 #include <memory>
 
+#include "base/containers/adapters.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/html/html_dialog_element.h"
+#include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object-inl.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
-#include "third_party/blink/renderer/modules/accessibility/testing/accessibility_test.h"
+#include "third_party/blink/renderer/modules/accessibility/testing/accessibility_selection_test.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_mode.h"
@@ -1203,7 +1206,7 @@ TEST_F(AccessibilityTest, SlotIsLineBreakingObject) {
   SetBodyContent(body_content);
   ShadowRoot& shadow_root =
       GetElementById("host")->AttachShadowRootForTesting(ShadowRootMode::kOpen);
-  shadow_root.SetInnerHTMLWithoutTrustedTypes(String::FromUTF8(shadow_content),
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(String::FromUtf8(shadow_content),
                                               ASSERT_NO_EXCEPTION);
   UpdateAllLifecyclePhasesForTest();
 
@@ -1280,6 +1283,112 @@ TEST_F(AccessibilityTest, DisplayLockedContentWithoutScreenReaderIsHidden) {
             DisplayLockUtilities::LockedInclusiveAncestorPreventingPaint(
                 *paragraph->GetNode()))
       << "The <p> element should be display locked.";
+}
+
+TEST_F(AccessibilityTest, ComputedDetailsRelationWithDisplayLockedHintPopover) {
+  // A popover="hint" inside content-visibility:hidden is pruned from the AX
+  // tree when no screen reader is present (as in kAXModeComplete), so
+  // AXObjectCache::Get() returns null while popoverOpen() stays true.
+  // Serializing an invoking element with such a target must not dereference
+  // that null result.
+  ax_context_ = std::make_unique<AXContext>(GetDocument(), ui::kAXModeComplete);
+  SetBodyInnerHTML(R"HTML(
+      <div style="content-visibility: hidden">
+        <div id="popoverTargetHint" popover="hint">tooltip</div>
+      </div>
+      <button id="popoverTargetButton"
+              popovertarget="popoverTargetHint">A</button>
+      <div style="content-visibility: hidden">
+        <div id="commandForHint" popover="hint">tooltip</div>
+      </div>
+      <button id="commandForButton" commandfor="commandForHint"
+              command="show-popover">B</button>
+      )HTML");
+
+  // Returns the button's serialized details relation IDs.
+  auto details_ids = [&](const char* button_id) -> std::vector<int32_t> {
+    AXObject* ax_button = GetAXObjectByElementId(button_id);
+    if (!ax_button) {
+      ADD_FAILURE() << "No AXObject for " << button_id;
+      return {};
+    }
+    ScopedFreezeAXCache freeze(GetAXObjectCache());
+    ui::AXNodeData node_data;
+    ax_button->Serialize(&node_data, ui::kAXModeComplete);
+    return node_data.GetIntListAttribute(
+        ax::mojom::IntListAttribute::kDetailsIds);
+  };
+
+  // popovertarget: the hint is open in the DOM but absent from the AX tree.
+  auto* popover_target_hint =
+      To<HTMLElement>(GetElementById("popoverTargetHint"));
+  popover_target_hint->showPopover(ASSERT_NO_EXCEPTION);
+  ASSERT_TRUE(popover_target_hint->popoverOpen());
+  ASSERT_EQ(nullptr, GetAXObjectCache().Get(popover_target_hint));
+  EXPECT_TRUE(details_ids("popoverTargetButton").empty());
+
+  // commandfor: the hint is open in the DOM but absent from the AX tree.
+  auto* command_for_hint = To<HTMLElement>(GetElementById("commandForHint"));
+  command_for_hint->showPopover(ASSERT_NO_EXCEPTION);
+  ASSERT_TRUE(command_for_hint->popoverOpen());
+  ASSERT_EQ(nullptr, GetAXObjectCache().Get(command_for_hint));
+  EXPECT_TRUE(details_ids("commandForButton").empty());
+}
+
+TEST_F(AccessibilityTest, ComputedDetailsRelationForPlainContentPopover) {
+  // For popovertarget and commandfor invoking elements, a plain-content hint
+  // popover is excluded from the details relation, while a plain-content
+  // manual popover still establishes the relation.
+  SetBodyInnerHTML(R"HTML(
+      <div id="hintPopover" popover="hint">tooltip</div>
+      <div id="manualPopover" popover="manual">plain</div>
+      <button id="popoverTargetHintButton"
+              popovertarget="hintPopover">A</button>
+      <button id="popoverTargetManualButton"
+              popovertarget="manualPopover">B</button>
+      <button id="commandForHintButton" commandfor="hintPopover"
+              command="show-popover">C</button>
+      <button id="commandForManualButton" commandfor="manualPopover"
+              command="show-popover">D</button>
+      )HTML");
+
+  auto* hint_popover = To<HTMLElement>(GetElementById("hintPopover"));
+  hint_popover->showPopover(ASSERT_NO_EXCEPTION);
+  auto* manual_popover = To<HTMLElement>(GetElementById("manualPopover"));
+  manual_popover->showPopover(ASSERT_NO_EXCEPTION);
+  ASSERT_TRUE(hint_popover->popoverOpen());
+  ASSERT_TRUE(manual_popover->popoverOpen());
+  GetAXObjectCache().UpdateAXForAllDocuments();
+
+  // Both target popovers are present in the AX tree and have plain content,
+  // so popover type is the relevant difference within each pair below.
+  const AXObject* ax_hint_popover = GetAXObjectByElementId("hintPopover");
+  ASSERT_NE(nullptr, ax_hint_popover);
+  ASSERT_TRUE(ax_hint_popover->IsPlainContent());
+  const AXObject* ax_manual_popover = GetAXObjectByElementId("manualPopover");
+  ASSERT_NE(nullptr, ax_manual_popover);
+  ASSERT_TRUE(ax_manual_popover->IsPlainContent());
+
+  // Returns the button's serialized details relation IDs.
+  auto details_ids = [&](const char* button_id) -> std::vector<int32_t> {
+    AXObject* ax_button = GetAXObjectByElementId(button_id);
+    if (!ax_button) {
+      ADD_FAILURE() << "No AXObject for " << button_id;
+      return {};
+    }
+    ScopedFreezeAXCache freeze(GetAXObjectCache());
+    ui::AXNodeData node_data;
+    ax_button->Serialize(&node_data, ui::kAXModeComplete);
+    return node_data.GetIntListAttribute(
+        ax::mojom::IntListAttribute::kDetailsIds);
+  };
+
+  const std::vector<int32_t> manual_popover_ids = {
+      static_cast<int32_t>(ax_manual_popover->AXObjectID())};
+  EXPECT_TRUE(details_ids("popoverTargetHintButton").empty());
+  EXPECT_EQ(manual_popover_ids, details_ids("popoverTargetManualButton"));
+  EXPECT_TRUE(details_ids("commandForHintButton").empty());
+  EXPECT_EQ(manual_popover_ids, details_ids("commandForManualButton"));
 }
 
 TEST_F(AccessibilityTest, ListMarkerIsNotLineBreakingObject) {
@@ -2070,6 +2179,502 @@ TEST_F(AccessibilityTest, UpdateTreeUpdatesInheritedDisabledProperty) {
   ASSERT_NE(nullptr, mark);
   // Ensure that "ancestor is disabled" has propagated to a deep descendant.
   ASSERT_TRUE(mark->IsDescendantOfDisabledNode());
+}
+
+class AccessibilityReplaceRangesTest : public AccessibilitySelectionTest {
+ protected:
+  ui::AXActionData SetSelectionTextAndCreateReplaceAction(
+      const std::string& selection_text,
+      const Vector<std::string>& replacement_strings) const {
+    const Vector<AXSelection> selections =
+        SetMultipleSelectionText(selection_text);
+    EXPECT_EQ(selections.size(), replacement_strings.size())
+        << "Number of selections in text (" << selections.size()
+        << ") must match the number of replacement strings ("
+        << replacement_strings.size() << ").";
+
+    std::vector<int> start_anchor_ids;
+    std::vector<int> start_offsets;
+    std::vector<int> end_anchor_ids;
+    std::vector<int> end_offsets;
+
+    // Traversing the selections in reverse order so that we can safely apply
+    // the replacement strings without interfering with replacements that appear
+    // later in document.
+    for (const AXSelection& selection : base::Reversed(selections)) {
+      const AXPosition anchor = selection.Anchor();
+      EXPECT_TRUE(anchor.IsValid());
+      EXPECT_TRUE(anchor.IsTextPosition());
+      EXPECT_TRUE(anchor.ContainerObject());
+      start_anchor_ids.push_back(anchor.ContainerObject()->AXObjectID());
+      start_offsets.push_back(anchor.TextOffset());
+      const AXPosition focus = selection.Focus();
+      EXPECT_TRUE(focus.IsValid());
+      EXPECT_TRUE(focus.IsTextPosition());
+      EXPECT_TRUE(focus.ContainerObject());
+      end_anchor_ids.push_back(focus.ContainerObject()->AXObjectID());
+      end_offsets.push_back(focus.TextOffset());
+    }
+
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::blink::Action::kReplaceRanges;
+    action_data.AddIntListAttribute(
+        ax::mojom::blink::IntListAttribute::kTextOperationStartAnchorIds,
+        start_anchor_ids);
+    action_data.AddIntListAttribute(
+        ax::mojom::blink::IntListAttribute::kTextOperationStartOffsets,
+        start_offsets);
+    action_data.AddIntListAttribute(
+        ax::mojom::blink::IntListAttribute::kTextOperationEndAnchorIds,
+        end_anchor_ids);
+    action_data.AddIntListAttribute(
+        ax::mojom::blink::IntListAttribute::kTextOperationEndOffsets,
+        end_offsets);
+    action_data.AddStringListAttribute(
+        ax::mojom::blink::StringListAttribute::kTextOperationReplacementStrings,
+        std::vector<std::string>(replacement_strings.rbegin(),
+                                 replacement_strings.rend()));
+
+    return action_data;
+  }
+};
+
+TEST_F(AccessibilityReplaceRangesTest, NoReplacement) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div contenteditable="true">Hello, World!</div>)HTML", {});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(R"HTML(<div contenteditable="true">Hello, World!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, DeleteRange) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div contenteditable="true">Hello^, World|!</div>)HTML", {""});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(R"HTML(<div contenteditable="true">Hello!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, InsertTextInMiddleOfNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true">Hello^|, World!</div>
+      )HTML",
+      {"oooo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true">Hellooooo, World!</div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, InsertTextBeforeNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true">Hello, ^|<b>World</b>!</div>
+      )HTML",
+      {"crazy "});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true">Hello, crazy&nbsp;<b>World</b>!</div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, InsertTextFirstPositionInNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true">Hello, <b>^|World</b>!</div>
+      )HTML",
+      {"crazy "});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  // Insertions have upstream affinity and therefore the inserted text must be
+  // placed before the <b>.
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true">Hello, crazy&nbsp;<b>World</b>!</div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, InsertTextAfterNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true"><b>Hello</b>^|, World!</div>
+      )HTML",
+      {"oooo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  // Insertions have upstream affinity and therefore the inserted text must be
+  // contained in <b>.
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true"><b>Hellooooo</b>, World!</div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, InsertTextLastPositionInNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true"><b>Hello^|</b>, World!</div>
+      )HTML",
+      {"oooo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true"><b>Hellooooo</b>, World!</div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, SingleReplacementInContentEditable) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div contenteditable="true">^Hello|, World!</div>)HTML", {"Hey"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(R"HTML(<div contenteditable="true">Hey, World!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, MultipleReplacementsInContentEditable) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div contenteditable="true">^Hello|, ^World|!</div>)HTML",
+      {"Hey", "Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(R"HTML(<div contenteditable="true">Hey, Foo!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, SingleReplacementInTextArea) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<textarea>^Hello|, World!</textarea>)HTML", {"Hey"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* textarea = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("textarea")));
+  EXPECT_EQ("Hey, World!", textarea->Value());
+  // The HTML remains unchanged.
+  EXPECT_EQ(R"HTML(<textarea>Hello, World!</textarea>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, MultipleReplacementsInTextArea) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<textarea>^Hello|, ^World|!</textarea>)HTML", {"Hey", "Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* textarea = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("textarea")));
+  EXPECT_EQ("Hey, Foo!", textarea->Value());
+  // The HTML remains unchanged.
+  EXPECT_EQ(R"HTML(<textarea>Hello, World!</textarea>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest,
+       MultipleReplacementsInTextAreaWithMultilineText) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      "<textarea>^Hello|,\n^World|!</textarea>", {"Hey", "FooBar"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* textarea = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("textarea")));
+  EXPECT_EQ("Hey,\nFooBar!", textarea->Value());
+  // The HTML remains unchanged.
+  EXPECT_EQ("<textarea>Hello,\nWorld!</textarea>",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, SingleReplacementInInputField) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<input value="^Hello|, World!">)HTML", {"Hey"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* input = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("input")));
+  EXPECT_EQ("Hey, World!", input->Value());
+  // The HTML remains unchanged.
+  EXPECT_EQ(R"HTML(<input value="Hello, World!">)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, MultipleReplacementsInInputField) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<input value="^Hello|, ^World|!">)HTML", {"Hey", "Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* input = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("input")));
+  EXPECT_EQ("Hey, Foo!", input->Value());
+  // The HTML remains unchanged.
+  EXPECT_EQ(R"HTML(<input value="Hello, World!">)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, MultipleReplacementsInMultipleElements) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div contenteditable="true">^Hello|, ^World|!</div>
+        <div contenteditable="true">ab^c<b>d|e^f</b>g|hi</div>
+        <input value="^Hello|, World!">
+        <textarea>Hello, ^World|!</textarea>
+      )HTML",
+      {"Hey", "Foo", "CD", "FG", "Hi", "Bar"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  TextControlElement* input = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("input")));
+  EXPECT_EQ("Hi, World!", input->Value());
+
+  TextControlElement* textarea = To<TextControlElement>(
+      GetDocument().QuerySelector(AtomicString("textarea")));
+  EXPECT_EQ("Hello, Bar!", textarea->Value());
+
+  EXPECT_EQ(
+      R"HTML(
+        <div contenteditable="true">Hey, Foo!</div>
+        <div contenteditable="true">abCD<b>eFG</b>hi</div>
+        <input value="Hello, World!">
+        <textarea>Hello, World!</textarea>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, ReplacementRangeMatchesNode) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div contenteditable="true">Hello, ^<b>World</b>|!</div>)HTML",
+      {"Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  // Replacement start position has downstream affinity and the end position
+  // has upstream affinity therefore, the replaced text is placed inside <b>.
+  EXPECT_EQ(R"HTML(<div contenteditable="true">Hello, <b>Foo</b>!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, ReplacementInShadowDOM) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div>
+          <template shadowrootmode="open">
+            <slot name="slot"></slot>
+          </template>
+          <div slot="slot" contenteditable="true">Hello, ^<b>World</b>|!</div>
+        </div>
+      )HTML",
+      {"Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(
+      R"HTML(
+        <div>
+          <template shadowrootmode="open">
+            <slot name="slot"></slot>
+          </template>
+          <div slot="slot" contenteditable="true">Hello, <b>Foo</b>!</div>
+        </div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, MultipleReplacementsInShadowDOM) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(
+        <div>
+          <template shadowrootmode="open">
+            <slot name="slot1"></slot>
+            <slot name="slot2"></slot>
+          </template>
+          <div slot="slot2" contenteditable="true">^Hello|, <b>World</b>!</div>
+          <div slot="slot1" contenteditable="true">Hello, ^<b>World</b>|!</div>
+        </div>
+      )HTML",
+      {"Hey", "Foo"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(
+      R"HTML(
+        <div>
+          <template shadowrootmode="open">
+            <slot name="slot1"></slot>
+            <slot name="slot2"></slot>
+          </template>
+          <div slot="slot2" contenteditable="true">Hey, <b>World</b>!</div>
+          <div slot="slot1" contenteditable="true">Hello, <b>Foo</b>!</div>
+        </div>
+      )HTML",
+      GetDocument().body()->GetInnerHTMLString());
+}
+
+TEST_F(AccessibilityReplaceRangesTest, NonEditableTextRemainsUnchanged) {
+  const ui::AXActionData action_data = SetSelectionTextAndCreateReplaceAction(
+      R"HTML(<div>^Hello|, World!</div>)HTML", {"Hey"});
+
+  GetAXRootObject()->PerformAction(action_data);
+
+  EXPECT_EQ(R"HTML(<div>Hello, World!</div>)HTML",
+            GetDocument().body()->GetInnerHTMLString());
+}
+TEST_F(AccessibilityTest, OrphanedRolesFallback) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="container">
+      <div id="orphaned_listitem" role="listitem">x</div>
+      <p id="orphaned_listitem_p" role="listitem">x</p>
+      <nav id="orphaned_option" role="option">x</nav>
+    </div>
+  )HTML");
+
+  const AXObject* orphaned_listitem =
+      GetAXObjectByElementId("orphaned_listitem");
+  ASSERT_NE(nullptr, orphaned_listitem);
+  EXPECT_EQ(ax::mojom::blink::Role::kGenericContainer,
+            orphaned_listitem->RoleValue());
+
+  const AXObject* orphaned_listitem_p =
+      GetAXObjectByElementId("orphaned_listitem_p");
+  ASSERT_NE(nullptr, orphaned_listitem_p);
+  EXPECT_EQ(ax::mojom::blink::Role::kParagraph,
+            orphaned_listitem_p->RoleValue());
+
+  const AXObject* orphaned_option = GetAXObjectByElementId("orphaned_option");
+  ASSERT_NE(nullptr, orphaned_option);
+  EXPECT_EQ(ax::mojom::blink::Role::kNavigation, orphaned_option->RoleValue());
+}
+
+TEST_F(AccessibilityTest, RoleAllowedViaAriaOwns) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="owner_list" role="list" aria-owns="owned_listitem"></div>
+    <div id="owner_listbox" role="listbox" aria-owns="owned_option"></div>
+    <div id="container">
+      <div id="owned_listitem" role="listitem">x</div>
+      <nav id="owned_option" role="option">x</nav>
+    </div>
+  )HTML");
+
+  const AXObject* owned_listitem = GetAXObjectByElementId("owned_listitem");
+  ASSERT_NE(nullptr, owned_listitem);
+  EXPECT_EQ(ax::mojom::blink::Role::kListItem, owned_listitem->RoleValue());
+
+  const AXObject* owned_option = GetAXObjectByElementId("owned_option");
+  ASSERT_NE(nullptr, owned_option);
+  EXPECT_EQ(ax::mojom::blink::Role::kListBoxOption, owned_option->RoleValue());
+}
+
+TEST_F(AccessibilityTest, RolePreservedWithInterveningPresentationalContainer) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="owner_list" role="list">
+      <div role="presentation">
+        <div role="none">
+          <div id="listitem" role="listitem">x</div>
+        </div>
+      </div>
+    </div>
+    <div id="owner_listbox" role="listbox">
+      <div role="presentation">
+        <div role="none">
+          <div id="option" role="option">x</div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  const AXObject* listitem = GetAXObjectByElementId("listitem");
+  ASSERT_NE(nullptr, listitem);
+  EXPECT_EQ(ax::mojom::blink::Role::kListItem, listitem->RoleValue());
+
+  const AXObject* option = GetAXObjectByElementId("option");
+  ASSERT_NE(nullptr, option);
+  EXPECT_EQ(ax::mojom::blink::Role::kListBoxOption, option->RoleValue());
+}
+
+TEST_F(AccessibilityTest, MultipleRolesWithContext) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="orphaned" role="option navigation">x</div>
+    <div id="owner_listbox" role="listbox" aria-owns="owned"></div>
+    <div id="container">
+      <div id="owned" role="option navigation">x</div>
+    </div>
+  )HTML");
+
+  const AXObject* orphaned = GetAXObjectByElementId("orphaned");
+  ASSERT_NE(nullptr, orphaned);
+  // The option role is orphaned, so it should fall back to navigation.
+  EXPECT_EQ(ax::mojom::blink::Role::kNavigation, orphaned->RoleValue());
+
+  const AXObject* owned = GetAXObjectByElementId("owned");
+  ASSERT_NE(nullptr, owned);
+  // The option role is owned by a listbox, so it should be preserved.
+  EXPECT_EQ(ax::mojom::blink::Role::kListBoxOption, owned->RoleValue());
+}
+
+TEST_F(AccessibilityTest, PopulateAXRelativeBoundsSanitizesNonFiniteValues) {
+  // Set up an element with extreme CSS that produces Infinity in transforms.
+  SetBodyInnerHTML(R"HTML(
+    <div id="target" style="transform: scale(calc(1/0))">
+      Extreme Transform
+    </div>
+  )HTML");
+
+  AXObject* target = GetAXObjectByElementId("target");
+  ASSERT_NE(nullptr, target);
+
+  ui::AXRelativeBounds bounds;
+  bool clips_children = false;
+  target->PopulateAXRelativeBounds(bounds, &clips_children);
+
+  // Verify that the transform is sanitized to identity (represented as null).
+  EXPECT_FALSE(bounds.transform);
+
+  // Set up an element with a negative infinity scale, which could produce
+  // negative width/height if not sanitized.
+  SetBodyInnerHTML(R"HTML(
+    <div id="target2" style="transform: scale(calc(log(0)))">
+      Negative Infinity Transform
+    </div>
+  )HTML");
+
+  AXObject* target2 = GetAXObjectByElementId("target2");
+  ASSERT_NE(nullptr, target2);
+
+  target2->PopulateAXRelativeBounds(bounds, &clips_children);
+
+  EXPECT_TRUE(std::isfinite(bounds.bounds.x()));
+  EXPECT_TRUE(std::isfinite(bounds.bounds.y()));
+  EXPECT_TRUE(std::isfinite(bounds.bounds.width()));
+  EXPECT_TRUE(std::isfinite(bounds.bounds.height()));
+  EXPECT_GE(bounds.bounds.width(), 0.0f);
+  EXPECT_GE(bounds.bounds.height(), 0.0f);
+
+  // null means identity
+  EXPECT_FALSE(bounds.transform);
 }
 
 }  // namespace test

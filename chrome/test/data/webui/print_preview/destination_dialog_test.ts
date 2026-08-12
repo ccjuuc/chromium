@@ -10,7 +10,8 @@ import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {NativeLayerStub} from './native_layer_stub.js';
-import {createDestinationStore, getDestinations, getExtensionDestinations, setupTestListenerElement} from './print_preview_test_utils.js';
+import {createDestinationStore, getDestinations, getExtensionDestinations} from './print_preview_test_utils.js';
+import {setupTestListenerElement} from './test_listener.js';
 
 suite('DestinationDialogTest', function() {
   let dialog: PrintPreviewDestinationDialogElement;
@@ -93,7 +94,7 @@ suite('DestinationDialogTest', function() {
 
   // Test that destinations are correctly displayed in the lists when all
   // printers have been preloaded before the dialog is opened. Regression test
-  // for https://crbug.com/1330678.
+  // for https://crbug.com/40227253.
   test('PrinterListPreloaded', async () => {
     // All printers are fetched at startup since both native and extension
     // printers are recent.

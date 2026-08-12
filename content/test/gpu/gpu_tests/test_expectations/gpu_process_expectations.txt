@@ -6,11 +6,12 @@
 #         fuchsia
 #         linux ubuntu
 #         mac highsierra mojave catalina bigsur monterey ventura sonoma sequoia
+#             macos26
 #         win win8 win10 win11 ]
 # Devices
 # tags: [ android-pixel-2 android-pixel-4 android-pixel-6 android-pixel-10
 #             android-shield-android-tv android-sm-a137f android-sm-a236b
-#             android-sm-s911u1
+#             android-sm-s911u1 android-sm-s926b
 #         android-brya android-corsola
 #         chromeos-board-amd64-generic chromeos-board-eve chromeos-board-jacuzzi
 #             chromeos-board-octopus
@@ -28,8 +29,8 @@
 #         web-engine-shell
 #         cros-chrome ]
 # GPU
-# tags: [ amd amd-0x150e amd-0x1900 amd-0x6613 amd-0x679e amd-0x67ef amd-0x6821
-#             amd-0x7340 amd-0x7480
+# tags: [ amd amd-0x150e amd-0x1900 amd-0x6613 amd-0x67ef amd-0x6821 amd-0x7340
+#             amd-0x7480 amd-0x7550
 #         apple apple-apple-m1 apple-apple-m2 apple-apple-m3
 #             apple-angle-metal-renderer:-apple-m1
 #             apple-angle-metal-renderer:-apple-m2
@@ -41,8 +42,9 @@
 #         intel intel-gen-9 intel-gen-12 intel-0xa2e intel-0xa011 intel-0x3e92
 #             intel-0x3e9b intel-0x4680 intel-0x46a8 intel-0x5912 intel-0x9bc5
 #         microsoft microsoft-0xffff
-#         nvidia nvidia-0x1cb3 nvidia-0x2184 nvidia-0x2783
-#         qualcomm qualcomm-0x41333430 qualcomm-0x36333630 qualcomm-0x36334330 ]
+#         nvidia nvidia-0x1cb3 nvidia-0x2184 nvidia-0x2783 nvidia-0x2c02
+#         qualcomm qualcomm-0x36333630 qualcomm-0x36334330
+#         samsung-electronics-co.-ltd. ]
 # Architecture
 # tags: [ arch-arm64 arch-x86_64 ]
 # Decoder
@@ -67,6 +69,7 @@
 #         mesa_ge_24.2
 #         nvidia_ge_31.0.15.4601 nvidia_lt_31.0.15.4601
 #         nvidia_ge_32.0.15.8180 nvidia_lt_32.0.15.8180
+#         nvidia_ge_32.0.16.1074 nvidia_lt_32.0.16.1074
 #         nvidia_ge_535.183.01 nvidia_lt_535.183.01 ]
 # ASan
 # tags: [ asan no-asan ]
@@ -124,7 +127,6 @@ crbug.com/1448964 [ mac angle-metal ] GpuProcess_mac_webgl_terminated_high_perfo
 [ fuchsia ] GpuProcess_swiftshader_for_webgl [ Skip ]
 
 # SwiftShader is not supported on arm64 by default
-[ win qualcomm-0x41333430 ] GpuProcess_no_swiftshader_for_webgl_without_flags [ Skip ]
 [ win qualcomm-0x36333630 ] GpuProcess_no_swiftshader_for_webgl_without_flags [ Skip ]
 [ win qualcomm-0x36334330 ] GpuProcess_no_swiftshader_for_webgl_without_flags [ Skip ]
 [ win qualcomm-0x36334330 ] GpuProcess_feature_status_under_swiftshader [ Skip ]
@@ -134,6 +136,17 @@ crbug.com/1084796 [ chromeos ] GpuProcess_readback_webgl_gpu_process [ Skip ]
 
 # WebGPU tests hanging on multiple Mac FYI bots
 crbug.com/1305020 [ mac asan intel-0x3e9b ] GpuProcess_webgpu_iframe_removed [ Skip ]
+
+# Fails on Fuchsia cast receiver - not important to fix
+crbug.com/500083376 [ fuchsia ] GpuProcess_vulkan_vma_race [ Skip ]
+
+# Test requires SwiftShader which isn't available on some platforms
+crbug.com/513197846 [ android ] GpuProcess_webgl_y16_uploads [ Skip ]
+crbug.com/513197846 [ chromeos ] GpuProcess_webgl_y16_uploads [ Skip ]
+crbug.com/513197846 [ fuchsia ] GpuProcess_webgl_y16_uploads [ Skip ]
+
+# Fuchsia cannot launch a new tab.
+[ fuchsia ] GpuProcess_webgl_background_clear [ Skip ]
 
 ###############################
 # Temporary Skip Expectations #
@@ -152,6 +165,9 @@ crbug.com/1294065 [ android android-shield-android-tv ] GpuProcess_visibility [ 
 
 # SwiftShader is disabled on Mac M1 by default
 crbug.com/1378476 [ mac arch-arm64 ] GpuProcess_no_swiftshader_for_webgl_without_flags [ Skip ]
+
+# Vulkan VMA race test is too slow on ChromeOS
+crbug.com/504644655 [ chromeos ] GpuProcess_vulkan_vma_race [ Skip ]
 
 ###################
 # Failures/Flakes #

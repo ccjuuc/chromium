@@ -84,6 +84,7 @@ class DefaultSearchManager
   static const char kRequireShortcut[];
   static const char kPreconnectToSearchUrl[];
   static const char kPrefetchLikelyNavigations[];
+  static const char kSendXGeoHeader[];
   static const char kIsActive[];
   static const char kStarterPackId[];
   static const char kEnforcedByPolicy[];
@@ -114,11 +115,14 @@ class DefaultSearchManager
   // Keep in sync with enums.xml.
   enum class DefaultSearchEngineMirrorCheckOutcomeType {
     kNoTamperingDetected = 0,
-    kResetSkippedForEnterpriseDevice = 1,
+    kObsoleteResetSkippedForEnterpriseDevice = 1,
     kMirrorCheckReset = 2,
     kRecentHmacReset = 3,
     kStaleHmacReset = 4,
-    kMaxValue = kStaleHmacReset,
+    // Reset skipped when DSE is mandatory by policy, or when no user-controlled
+    // DSE setting or recent HMAC reset is present.
+    kResetSkippedForManagedDefaultSearch = 5,
+    kMaxValue = kResetSkippedForManagedDefaultSearch,
   };
 
   using ObserverCallback =
@@ -139,7 +143,7 @@ class DefaultSearchManager
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // Save default search provider pref values into the map provided.
-  static void AddPrefValueToMap(base::Value::Dict value,
+  static void AddPrefValueToMap(base::DictValue value,
                                 PrefValueMap* pref_value_map);
 
   // Testing code can call this with |disabled| set to true to cause
@@ -228,9 +232,8 @@ class DefaultSearchManager
 
   // Detects DSE tampering by comparing the DSE pref to
   // a mirrored copy and resets the DSE pref if needed.
-  void HandleDefaultSearchEngineTampering(
-      const base::Value::Dict& url_dict,
-      const base::Value::Dict& mirrored_dict);
+  void HandleDefaultSearchEngineTampering(const base::DictValue& url_dict,
+                                          const base::DictValue& mirrored_dict);
 
   // Determines if there has been a recent pref reset (i.e., within the last
   // hour).

@@ -37,6 +37,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/string_view_util.h"
+#include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "skia/ext/font_utils.h"
 #include "third_party/blink/public/platform/linux/web_sandbox_support.h"
@@ -52,8 +53,8 @@
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
 #include "third_party/blink/renderer/platform/fonts/skia/sktypeface_factory.h"
 #include "third_party/blink/renderer/platform/language.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
 #include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkTypeface.h"
@@ -65,7 +66,7 @@
 namespace blink {
 
 AtomicString ToAtomicString(const SkString& str) {
-  return AtomicString::FromUTF8(base::as_string_view(str));
+  return AtomicString::FromUtf8(base::as_string_view(str));
 }
 
 namespace {
@@ -106,16 +107,14 @@ const FontPlatformData* FontCache::CreateFontPlatformDataForCharacter(
 
   Bcp47Vector locales =
       GetBcp47LocaleForRequest(font_description, fallback_priority);
-  sk_sp<SkTypeface> typeface(fm->matchFamilyStyleCharacter(
-      family_name, font_description.SkiaFontStyle(), locales.data(),
-      locales.size(), c));
+  sk_sp<SkTypeface> typeface =
+      MatchFamilyStyleCharacter(family_name, font_description.SkiaFontStyle(),
+                                locales.data(), locales.size(), c);
 
   return CreateFontPlatformDataForTypeface(std::move(typeface),
                                            font_description);
 }
 #endif
-
-void FontCache::PlatformInit() {}
 
 const SimpleFontData* FontCache::FallbackOnStandardFontStyle(
     const FontDescription& font_description,
@@ -257,7 +256,6 @@ const SimpleFontData* FontCache::GetLastResortFallbackFont(
       last_resort_fallback_attempt, kMaxAttempts);
   base::UmaHistogramBoolean("Blink.Fonts.LastResortFallbackFound",
                             font_platform_data != nullptr);
-  DCHECK(font_platform_data);
   return FontDataFromFontPlatformData(font_platform_data);
 }
 
@@ -292,8 +290,9 @@ sk_sp<SkTypeface> FontCache::CreateTypeface(
       return typeface;
   }
 #endif  // BUILDFLAG(IS_ANDROID)
-  return sk_sp<SkTypeface>(skia::DefaultFontMgr()->matchFamilyStyle(
-      name.empty() ? nullptr : name.c_str(), font_description.SkiaFontStyle()));
+  sk_sp<SkTypeface> typeface = MatchFamilyStyle(
+      name.empty() ? nullptr : name.c_str(), font_description.SkiaFontStyle());
+  return typeface;
 }
 
 #if !BUILDFLAG(IS_WIN)
@@ -318,9 +317,8 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
            FontFaceCreationType::kCreateFontByFamily &&
        creation_params.Family() == kNotoColorEmojiCompat);
 #endif
-  if (RuntimeEnabledFeatures::FontSrcLocalMatchingEnabled() &&
-      (alternate_name == AlternateFontName::kLocalUniqueFace ||
-       noto_color_emoji_from_gmscore)) {
+  if (alternate_name == AlternateFontName::kLocalUniqueFace ||
+      noto_color_emoji_from_gmscore) {
     typeface = CreateTypefaceFromUniqueName(creation_params);
   } else {
     typeface = CreateTypeface(font_description, creation_params, name);
@@ -357,5 +355,41 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
   return font_platform_data;
 }
 #endif  // !BUILDFLAG(IS_WIN)
+
+sk_sp<SkTypeface> FontCache::MatchFamilyStyle(const char* family_name,
+                                              const SkFontStyle& style) {
+  SkFontMgr* fm = skia::DefaultFontMgr().get();
+  CHECK(fm);
+  std::optional<base::ElapsedTimer> timer;
+  if (IsMainThread()) {
+    timer.emplace();
+  }
+  sk_sp<SkTypeface> typeface = fm->matchFamilyStyle(family_name, style);
+  if (timer) {
+    base::UmaHistogramMicrosecondsTimes("Blink.Fonts.MatchFamilyStyle.Duration",
+                                        timer->Elapsed());
+  }
+  return typeface;
+}
+
+sk_sp<SkTypeface> FontCache::MatchFamilyStyleCharacter(const char* family_name,
+                                                       const SkFontStyle& style,
+                                                       const char* bcp47[],
+                                                       int bcp47_count,
+                                                       UChar32 character) {
+  SkFontMgr* fm = skia::DefaultFontMgr().get();
+  CHECK(fm);
+  std::optional<base::ElapsedTimer> timer;
+  if (IsMainThread()) {
+    timer.emplace();
+  }
+  sk_sp<SkTypeface> typeface = fm->matchFamilyStyleCharacter(
+      family_name, style, bcp47, bcp47_count, character);
+  if (timer) {
+    base::UmaHistogramMicrosecondsTimes(
+        "Blink.Fonts.MatchFamilyStyleCharacter.Duration", timer->Elapsed());
+  }
+  return typeface;
+}
 
 }  // namespace blink

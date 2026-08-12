@@ -15,6 +15,26 @@
 
 namespace install_static {
 
+// The brand-specific company name to be included as a component of the install
+// and user data directory paths. May be empty if no such dir is to be used.
+inline constexpr wchar_t kCompanyPathName[] = L"";
+
+// The brand-specific product name to be included as a component of the install
+// and user data directory paths.
+#if defined(CUSTOM_CHROME_PRODUCT_PATH_NAME_W)
+inline constexpr wchar_t kProductPathName[] =
+    CUSTOM_CHROME_PRODUCT_PATH_NAME_W;
+#else
+inline constexpr wchar_t kProductPathName[] = L"Chromium";
+#endif
+
+// The brand-specific safe browsing client name.
+#if defined(CUSTOM_CHROME_SAFE_BROWSING_NAME)
+inline constexpr char kSafeBrowsingName[] = CUSTOM_CHROME_SAFE_BROWSING_NAME;
+#else
+inline constexpr char kSafeBrowsingName[] = "chromium";
+#endif
+
 #if defined(CUSTOM_CHROME_PRODUCT_NAME_W)
 #define CHROMIUM_BASE_APP_NAME CUSTOM_CHROME_PRODUCT_NAME_W
 #else
@@ -94,9 +114,6 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .active_setup_guid =
             L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup
                                                         // GUID.
-        .legacy_command_execute_clsid =
-            L"{A2DF06F9-A21A-44A8-8A99-8B9C84F29160}",  // CommandExecuteImpl
-                                                        // CLSID.
         .toast_activator_clsid = {0x635EFA6F,
                                   0x08D6,
                                   0x4EC9,

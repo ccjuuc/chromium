@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/modules/webgl/webgl_rendering_context_webgpu.h"
 #include "third_party/blink/renderer/platform/graphics/predefined_color_space.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -37,7 +38,7 @@ CanvasRenderingContext* WebGLContextFactory::Create(
     CanvasRenderingContextHost* host,
     const CanvasContextCreationAttributesCore& attrs) {
   if (RuntimeEnabledFeatures::WebGLOnWebGPUEnabled()) {
-    return CreateInternalWebGPU(host, attrs);
+    return CreateInternalWebGPU(execution_context, host, attrs);
   } else {
     return CreateInternal(execution_context, host, attrs);
   }
@@ -80,7 +81,7 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
       Extensions3DUtil::Create(gl);
   if (extensions_util->SupportsExtension("GL_EXT_debug_marker")) {
     String context_label(
-        String::Format("%s-%p", GetContextName(), context_provider.get()));
+        Format("{}-{}", GetContextName(), context_provider.get()));
     gl->PushGroupMarkerEXT(0, context_label.Ascii().c_str());
   }
 
@@ -93,7 +94,7 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
 
       host->HostDispatchEvent(WebGLContextEvent::Create(
           event_type_names::kWebglcontextcreationerror,
-          String::Format("Failed to create %s.", GetContextName())));
+          StrCat({"Failed to create ", GetContextName(), "."})));
       return nullptr;
     }
 
@@ -103,6 +104,9 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
   };
 
   // Report WebDXFeatures and use counters.
+  UseCounter::CountWebDXFeature(execution_context, is_webgl2_
+                                                       ? WebDXFeature::kWebgl2
+                                                       : WebDXFeature::kWebgl);
   if (attribs.desynchronized) {
     UseCounter::Count(execution_context,
                       WebFeature::kHTMLCanvasElementLowLatency_WebGL);
@@ -126,13 +130,25 @@ CanvasRenderingContext* WebGLContextFactory::CreateInternal(
 }
 
 CanvasRenderingContext* WebGLContextFactory::CreateInternalWebGPU(
+    ExecutionContext* execution_context,
     CanvasRenderingContextHost* host,
     const CanvasContextCreationAttributesCore& attrs) {
+  WebGLRenderingContextWebGPUBase* context = nullptr;
   if (is_webgl2_) {
-    return MakeGarbageCollected<WebGL2RenderingContextWebGPU>(host, attrs);
+    context = MakeGarbageCollected<WebGL2RenderingContextWebGPU>(host, attrs);
   } else {
-    return MakeGarbageCollected<WebGLRenderingContextWebGPU>(host, attrs);
+    context = MakeGarbageCollected<WebGLRenderingContextWebGPU>(host, attrs);
   }
+
+  String init_error;
+  if (!context->Initialize(execution_context, &init_error)) {
+    host->HostDispatchEvent(WebGLContextEvent::Create(
+        event_type_names::kWebglcontextcreationerror,
+        StrCat({"Failed to create ", GetContextName(), ": ", init_error})));
+    return nullptr;
+  }
+
+  return context;
 }
 
 CanvasRenderingContext::CanvasRenderingAPI

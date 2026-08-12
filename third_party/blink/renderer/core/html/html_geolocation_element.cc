@@ -6,12 +6,13 @@
 
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
 #include "third_party/blink/public/strings/grit/permission_element_strings.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_accuracy_mode.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/core/geolocation/geolocation.h"
-#include "third_party/blink/renderer/core/html/html_permission_element.h"
+#include "third_party/blink/renderer/core/html/html_capability_element_base.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
@@ -19,7 +20,6 @@
 namespace blink {
 
 namespace {
-const char kAccuracyModePrecise[] = "precise";
 
 // Timeout for querying location (in milliseconds).
 constexpr uint16_t kDefaultQueryLocationTimeoutMs = 10000;
@@ -28,17 +28,20 @@ PositionOptions* CreateDefaultLocationOptions() {
   PositionOptions* options = PositionOptions::Create();
   options->setTimeout(kDefaultQueryLocationTimeoutMs);
   options->setMaximumAge(0);
-  options->setEnableHighAccuracy(false);
+  options->setEnableHighAccuracy(true);
   return options;
 }
 
 }  // namespace
 
 HTMLGeolocationElement::HTMLGeolocationElement(Document& document)
-    : HTMLPermissionElement(document, html_names::kGeolocationTag) {
+    : HTMLCapabilityElementBase(document, html_names::kGeolocationTag) {
   CHECK(RuntimeEnabledFeatures::GeolocationElementEnabled(
       document.GetExecutionContext()));
-  setType(AtomicString("geolocation"));
+  type_ = AtomicString("geolocation");
+  auto descriptor = mojom::blink::PermissionDescriptor::New();
+  descriptor->name = mojom::blink::PermissionName::GEOLOCATION;
+  permission_descriptors_.push_back(std::move(descriptor));
 }
 
 Geoposition* HTMLGeolocationElement::position() const {
@@ -52,16 +55,12 @@ GeolocationPositionError* HTMLGeolocationElement::error() const {
 void HTMLGeolocationElement::Trace(Visitor* visitor) const {
   visitor->Trace(position_);
   visitor->Trace(error_);
-  HTMLPermissionElement::Trace(visitor);
+  HTMLCapabilityElementBase::Trace(visitor);
 }
 
 void HTMLGeolocationElement::UpdateAppearance() {
   UpdateIcon(mojom::blink::PermissionName::GEOLOCATION);
-  // We need `PostTask` here because setInnerText hits a DCHECK.
-  GetDocument()
-      .GetTaskRunner(TaskType::kInternalDefault)
-      ->PostTask(FROM_HERE, BindOnce(&HTMLGeolocationElement::UpdateText,
-                                     WrapWeakPersistent(this)));
+  UpdateText();
 }
 
 void HTMLGeolocationElement::UpdatePermissionStatusAndAppearance() {
@@ -75,22 +74,28 @@ mojom::blink::EmbeddedPermissionRequestDescriptorPtr
 HTMLGeolocationElement::CreateEmbeddedPermissionRequestDescriptor() {
   auto descriptor = mojom::blink::EmbeddedPermissionRequestDescriptor::New();
   descriptor->element_position = BoundsInWidget();
-  descriptor->geolocation =
+
+  auto geolocation_descriptor =
       mojom::blink::GeolocationEmbeddedPermissionRequestDescriptor::New();
-  descriptor->geolocation->autolocate = autolocate();
+  geolocation_descriptor->autolocate = autolocate();
+  descriptor->detail =
+      mojom::blink::EmbeddedPermissionControlDescriptorExtension::
+          NewGeolocation(std::move(geolocation_descriptor));
+
   return descriptor;
 }
 
-void HTMLGeolocationElement::AttributeChanged(
+void HTMLGeolocationElement::ParseAttribute(
     const AttributeModificationParams& params) {
   // The "preciselocation" attribute does not have a special meaning on the
   // geolocation element. It is handled by the generic HTMLElement attribute
-  // changed function to avoid the special handling in HTMLPermissionElement.
+  // changed function to avoid the special handling in
+  // HTMLCapabilityElementBase.
   // TODO(crbug.com/450801233): Remove this when the "preciselocation"
   // attribute is removed entirely along with the "geolocation" permission
   // element type.
   if (params.name == html_names::kPreciselocationAttr) {
-    HTMLElement::AttributeChanged(params);
+    HTMLElement::ParseAttribute(params);
     return;
   } else if (params.name == html_names::kAutolocateAttr) {
     if (params.new_value) {
@@ -101,25 +106,28 @@ void HTMLGeolocationElement::AttributeChanged(
       ClearWatch();
     }
   } else if (params.name == html_names::kAccuracymodeAttr) {
-    SetPreciseLocation(
-        EqualIgnoringASCIICase(params.new_value, kAccuracyModePrecise));
+    SetPreciseLocation(EqualIgnoringAsciiCase(
+        params.new_value,
+        V8AccuracyMode(V8AccuracyMode::Enum::kPrecise).AsStringView()));
   }
 
   // If it's not a geolocation element specific attribute, the base class
   // permission element can handle attributes.
-  HTMLPermissionElement::AttributeChanged(params);
+  HTMLCapabilityElementBase::ParseAttribute(params);
 }
 
 void HTMLGeolocationElement::DefaultEventHandler(Event& event) {
   // We consume the click event here if the permission is already granted
-  // and propagate any other events to the parent HTMLPermissionElement.
+  // and propagate any other events to the parent HTMLCapabilityElementBase.
+  // HTMLCapabilityElementBase::HandleActivation checks that the event is
+  // trusted before proceeding with the permission request.
   if (event.type() == event_type_names::kDOMActivate && PermissionsGranted()) {
     HandleActivation(event,
                      blink::BindOnce(&HTMLGeolocationElement::OnActivated,
                                      WrapWeakPersistent(this)));
     return;
   }
-  HTMLPermissionElement::DefaultEventHandler(event);
+  HTMLCapabilityElementBase::DefaultEventHandler(event);
 }
 
 void HTMLGeolocationElement::OnPermissionStatusChange(
@@ -129,7 +137,7 @@ void HTMLGeolocationElement::OnPermissionStatusChange(
   // update. If this occurs, we will check whether the user has previously given
   // permission to determine if a geolocation search should be initiated.
   bool has_made_permission_decision_granted = PermissionsGranted();
-  HTMLPermissionElement::OnPermissionStatusChange(permission_name, status);
+  HTMLCapabilityElementBase::OnPermissionStatusChange(permission_name, status);
   if (status != mojom::blink::PermissionStatus::GRANTED) {
     ClearWatch();
     return;
@@ -147,10 +155,15 @@ void HTMLGeolocationElement::OnPermissionStatusChange(
 
 void HTMLGeolocationElement::DidFinishLifecycleUpdate(
     const LocalFrameView& view) {
-  HTMLPermissionElement::DidFinishLifecycleUpdate(view);
+  HTMLCapabilityElementBase::DidFinishLifecycleUpdate(view);
   if (FastHasAttribute(html_names::kAutolocateAttr)) {
     MaybeTriggerAutolocate(ForceAutolocate::kNo);
   }
+}
+
+void HTMLGeolocationElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
+  HTMLCapabilityElementBase::DidAddUserAgentShadowRoot(root);
+  UpdateText();
 }
 
 void HTMLGeolocationElement::OnActivated() {
@@ -273,7 +286,7 @@ void HTMLGeolocationElement::ClearWatch() {
 void HTMLGeolocationElement::MaybeTriggerAutolocate(ForceAutolocate force) {
   CHECK(FastHasAttribute(html_names::kAutolocateAttr));
   if (force == ForceAutolocate::kYes ||
-      (!did_autolocate_trigger_request && IsRenderered() &&
+      (!did_autolocate_trigger_request && IsRendered() &&
        PermissionsGranted())) {
     did_autolocate_trigger_request = true;
     RequestGeolocation();
@@ -284,9 +297,20 @@ void HTMLGeolocationElement::UpdateText() {
   uint16_t message_id = GetTranslatedMessageID(
       is_precise_location() ? IDS_PERMISSION_REQUEST_PRECISE_GEOLOCATION
                             : IDS_PERMISSION_REQUEST_GEOLOCATION,
-      ComputeInheritedLanguage().LowerASCII());
+      ComputeInheritedLanguage().ToAsciiLower());
   CHECK(message_id);
-  permission_text_span()->setInnerText(GetLocale().QueryString(message_id));
+  String new_text = GetLocale().QueryString(message_id);
+  if (permission_text_span()->textContent() != new_text) {
+    permission_text_span()->setInnerText(new_text);
+  }
+}
+
+void HTMLGeolocationElement::UpdateIcon(
+    mojom::blink::PermissionName permission) {
+  DCHECK_EQ(permission, mojom::blink::PermissionName::GEOLOCATION);
+  permission_internal_icon()->SetIcon(is_precise_location()
+                                          ? PermissionIconType::kLocationPrecise
+                                          : PermissionIconType::kLocation);
 }
 
 }  // namespace blink

@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/i18n/message_formatter.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -18,10 +17,10 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/layout/layout_types.h"
@@ -113,8 +112,9 @@ PageInfoMerchantTrustContentView::CreateReviewsSummarySection() {
 
   auto* icon =
       container->AddChildView(std::make_unique<NonAccessibleImageView>());
-  icon->SetImage(
-      PageInfoViewFactory::GetImageModel(vector_icons::kChatSparkIcon));
+  icon->SetImage(PageInfoViewFactory::GetImageModel(
+      features::IsRoundedIconsEnabled() ? vector_icons::kChatSparkIcon
+                                        : vector_icons::kChatSparkOldIcon));
 
   auto* labels_wrapper =
       container->AddChildView(PageInfoViewFactory::CreateLabelWrapper());
@@ -141,7 +141,9 @@ PageInfoMerchantTrustContentView::CreateViewReviewsButton() {
       base::BindRepeating(
           &PageInfoMerchantTrustContentView::NotifyViewReviewsPressed,
           base::Unretained(this)),
-      PageInfoViewFactory::GetImageModel(vector_icons::kChatIcon),
+      PageInfoViewFactory::GetImageModel(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kChatIcon
+                                             : vector_icons::kChatOldIcon),
       std::u16string(), std::u16string(), PageInfoViewFactory::GetLaunchIcon());
   merchant_trust_button->SetTitleTextStyleAndColor(
       views::style::STYLE_BODY_3_MEDIUM, kColorPageInfoForeground);

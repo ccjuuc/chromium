@@ -16,13 +16,15 @@
 #include "base/json/string_escape.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/time/time.h"
 #include "base/values.h"
+#include "components/enterprise/connectors/core/common.h"
 #include "components/prefs/pref_service.h"
 #include "components/spellcheck/browser/pref_names.h"
 #include "components/spellcheck/common/spellcheck_common.h"
+#include "components/spellcheck/common/spellcheck_features.h"
 #include "components/spellcheck/common/spellcheck_result.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
@@ -39,7 +41,7 @@ namespace {
 
 // The REST endpoint for requesting spell checking and sending user feedback.
 const char kSpellingServiceRestURL[] =
-    "https://www.googleapis.com/spelling/v%d/spelling/check?key=%s";
+    "https://%s.googleapis.com/spelling/v%d/spelling/check?key=%s";
 
 // The spellcheck suggestions object key in the JSON response from the spelling
 // service.
@@ -50,6 +52,23 @@ const char kErrorPath[] = "error";
 
 // Languages currently supported by SPELLCHECK.
 const char* const kValidLanguages[] = {"en", "es", "fi", "da"};
+
+GURL GetRegionalizedEndpoint(enterprise_connectors::DataRegion data_region,
+                             int version) {
+  const char* key = google_apis::GetAPIKey().c_str();
+  switch (data_region) {
+    case enterprise_connectors::DataRegion::NO_PREFERENCE:
+      return GURL(
+          base::StringPrintf(kSpellingServiceRestURL, "www", version, key));
+    case enterprise_connectors::DataRegion::UNITED_STATES:
+      return GURL(
+          base::StringPrintf(kSpellingServiceRestURL, "spelling-us", 2, key));
+    case enterprise_connectors::DataRegion::EUROPE:
+      return GURL(
+          base::StringPrintf(kSpellingServiceRestURL, "spelling-eu", 2, key));
+  }
+  NOTREACHED();
+}
 
 }  // namespace
 
@@ -71,7 +90,7 @@ bool SpellingServiceClient::RequestTextCheck(
   DCHECK(pref);
 
   std::string dictionary;
-  const base::Value::List& dicts_list =
+  const base::ListValue& dicts_list =
       pref->GetList(spellcheck::prefs::kSpellCheckDictionaries);
   if (0u < dicts_list.size() && dicts_list[0].is_string())
     dictionary = dicts_list[0].GetString();
@@ -137,7 +156,7 @@ bool SpellingServiceClient::RequestTextCheck(
         })");
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = BuildEndpointUrl(type);
+  resource_request->url = BuildEndpointUrl(context, type);
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   resource_request->method = "POST";
 
@@ -158,8 +177,7 @@ bool SpellingServiceClient::RequestTextCheck(
   loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
       url_loader_factory.get(),
       base::BindOnce(&SpellingServiceClient::OnSimpleLoaderComplete,
-                     base::Unretained(this), std::move(it),
-                     base::TimeTicks::Now()));
+                     base::Unretained(this), std::move(it)));
   return true;
 }
 
@@ -205,9 +223,20 @@ void SpellingServiceClient::SetURLLoaderFactoryForTesting(
   url_loader_factory_for_testing_ = std::move(url_loader_factory_for_testing);
 }
 
-GURL SpellingServiceClient::BuildEndpointUrl(int type) {
-    return GURL(base::StringPrintf(kSpellingServiceRestURL, type,
+GURL SpellingServiceClient::BuildEndpointUrl(content::BrowserContext* context,
+                                             ServiceType type) {
+  if (!base::FeatureList::IsEnabled(
+          spellcheck::kEnableSpellcheckRegionalSignal)) {
+    return GURL(base::StringPrintf(kSpellingServiceRestURL, "www", type,
                                    google_apis::GetAPIKey().c_str()));
+  }
+
+  const PrefService* pref = user_prefs::UserPrefs::Get(context);
+  const int region_setting =
+      pref->GetInteger(spellcheck::prefs::kChromeDataRegionSetting);
+  enterprise_connectors::DataRegion region =
+      enterprise_connectors::ChromeDataRegionSettingToEnum(region_setting);
+  return GetRegionalizedEndpoint(region, type);
 }
 
 bool SpellingServiceClient::ParseResponse(
@@ -249,29 +278,29 @@ bool SpellingServiceClient::ParseResponse(
   //    }
   //  }
 
-  std::optional<base::Value::Dict> value =
+  std::optional<base::DictValue> value =
       base::JSONReader::ReadDict(data, base::JSON_ALLOW_TRAILING_COMMAS);
   if (!value) {
     return false;
   }
 
   // Check for errors from spelling service.
-    const base::Value* error = value->Find(kErrorPath);
-    if (error) {
+  const base::Value* error = value->Find(kErrorPath);
+  if (error) {
     return false;
-    }
+  }
 
   // Retrieve the array of Misspelling objects. When the input text does not
   // have misspelled words, it returns an empty JSON. (In this case, its HTTP
   // status is 200.) We just return true for this case.
-    const base::Value::List* misspellings =
-        value->FindListByDottedPath(kMisspellingsRestPath);
+  const base::ListValue* misspellings =
+      value->FindListByDottedPath(kMisspellingsRestPath);
 
-    if (!misspellings) {
+  if (!misspellings) {
     return true;
-    }
+  }
 
-    for (const base::Value& misspelling : *misspellings) {
+  for (const base::Value& misspelling : *misspellings) {
     // Retrieve the i-th misspelling region and put it to the given vector. When
     // the Spelling service sends two or more suggestions, we read only the
     // first one because SpellCheckResult can store only one suggestion.
@@ -282,7 +311,7 @@ bool SpellingServiceClient::ParseResponse(
 
     std::optional<int> start = misspelling_dict->FindInt("charStart");
     std::optional<int> length = misspelling_dict->FindInt("charLength");
-    const base::Value::List* suggestions =
+    const base::ListValue* suggestions =
         misspelling_dict->FindList("suggestions");
     if (!start || !length || !suggestions) {
       return false;
@@ -300,7 +329,7 @@ bool SpellingServiceClient::ParseResponse(
     SpellCheckResult result(spellcheck::Decoration::SPELLING, *start, *length,
                             base::UTF8ToUTF16(*replacement));
     results->push_back(result);
-    }
+  }
   return true;
 }
 
@@ -317,11 +346,7 @@ SpellingServiceClient::TextCheckCallbackData::~TextCheckCallbackData() =
 
 void SpellingServiceClient::OnSimpleLoaderComplete(
     SpellCheckLoaderList::iterator it,
-    base::TimeTicks request_start,
     std::optional<std::string> response_body) {
-  UMA_HISTOGRAM_TIMES("SpellCheck.SpellingService.RequestDuration",
-                      base::TimeTicks::Now() - request_start);
-
   TextCheckCompleteCallback callback = std::move(it->get()->callback);
   std::u16string text = it->get()->text;
   bool success = false;

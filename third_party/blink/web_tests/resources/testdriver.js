@@ -420,7 +420,7 @@
             let wait_click = new Promise(resolve => button.addEventListener("click", resolve));
 
             return test_driver.click(button)
-              .then(wait_click)
+              .then(() => wait_click)
               .then(function () {
                     button.remove();
 
@@ -1449,8 +1449,8 @@
          *                    virtual pressure source of the given type does not
          *                    exist).
          */
-        update_virtual_pressure_source: function(source_type, state, own_contribution_estimate, context=null) {
-            return window.test_driver_internal.update_virtual_pressure_source(source_type, state, own_contribution_estimate, context);
+        update_virtual_pressure_source: function(source_type, sample, own_contribution_estimate, context=null) {
+            return window.test_driver_internal.update_virtual_pressure_source(source_type, sample, own_contribution_estimate, context);
         },
 
         /**
@@ -1539,7 +1539,41 @@
          */
         clear_display_features: function(context=null) {
             return window.test_driver_internal.clear_display_features(context);
-        }
+        },
+
+        /**
+         * Gets the current globally-applied privacy control status
+         *
+         * Matches the `Get Global Privacy Control
+         * <https://www.w3.org/TR/gpc/#get-global-privacy-control>`_
+         * WebDriver command.
+         *
+         * @returns {Promise} Fulfils with an object with boolean property `gpc`
+         *                    that encodes the current "do not sell or share"
+         *                    signal the browser is configured to convey.
+         */
+        get_global_privacy_control: function() {
+            return window.test_driver_internal.get_global_privacy_control();
+        },
+
+        /**
+         * Sets and then gets the current globally-applied privacy control status
+         *
+         * Matches the `Set Global Privacy Control
+         * <https://www.w3.org/TR/gpc/#set-global-privacy-control>`_
+         * WebDriver command.
+         *
+         * @param {boolean} newValue - A boolean that is true if the browser
+         *                             should convey a "do not sell or share" signal
+         *                             and false otherwise
+         *
+         * @returns {Promise} Fulfils with an object with boolean property `gpc`
+         *                    that encodes the new "do not sell or share"
+         *                    after applying the new value.
+         */
+        set_global_privacy_control: function(newValue) {
+            return window.test_driver_internal.set_global_privacy_control(newValue);
+        },
     };
 
     window.test_driver_internal = {
@@ -1790,7 +1824,7 @@
             throw new Error("create_virtual_pressure_source() is not implemented by testdriver-vendor.js");
         },
 
-        async update_virtual_pressure_source(source_type, state, own_contribution_estimate, context=null) {
+        async update_virtual_pressure_source(source_type, sample, own_contribution_estimate, context=null) {
             throw new Error("update_virtual_pressure_source() is not implemented by testdriver-vendor.js");
         },
 
@@ -1808,6 +1842,14 @@
 
         async clear_display_features(context=null) {
             throw new Error("clear_display_features() is not implemented by testdriver-vendor.js");
-        }
+        },
+
+        async get_global_privacy_control() {
+            throw new Error("get_global_privacy_control() is not implemented by testdriver-vendor.js");
+        },
+
+        async set_global_privacy_control(newValue) {
+            throw new Error("set_global_privacy_control() is not implemented by testdriver-vendor.js");
+        },
     };
 })();

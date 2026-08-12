@@ -38,6 +38,7 @@ source_set("model") {
     "//components/security_interstitials/core",
     "//components/signin/public/identity_manager",
     "//components/supervised_user/core/browser",
+    "//components/supervised_user/core/browser:device_parental_controls",
     "//components/supervised_user/core/browser/proto",
     "//components/supervised_user/core/common",
     "//components/variations/service",
@@ -86,8 +87,8 @@ source_set("capabilities") {
 
 source_set("sync_settings_factory") {
   sources = [
-    "supervised_user_settings_service_factory.h",
-    "supervised_user_settings_service_factory.mm",
+    "family_link_settings_service_factory.h",
+    "family_link_settings_service_factory.mm",
   ]
   deps = [
     "//components/supervised_user/core/browser",
@@ -100,12 +101,12 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "child_account_service_factory_unittest.mm",
+    "family_link_settings_service_factory_unittest.mm",
     "ios_web_content_handler_impl_unittest.mm",
     "list_family_members_service_factory_unittest.mm",
     "parent_access_tab_helper_unittest.mm",
     "supervised_user_metrics_service_factory_unittest.mm",
     "supervised_user_service_factory_unittest.mm",
-    "supervised_user_settings_service_factory_unittest.mm",
     "supervised_user_url_filter_tab_helper_unittest.mm",
   ]
   deps = [
@@ -118,8 +119,10 @@ source_set("unit_tests") {
     "//components/signin/public/identity_manager",
     "//components/signin/public/identity_manager:test_support",
     "//components/supervised_user/core/browser",
+    "//components/supervised_user/core/browser:test_support",
     "//components/supervised_user/core/common",
     "//components/supervised_user/test_support",
+    "//components/sync:test_support",
     "//components/sync_preferences",
     "//components/sync_preferences:test_support",
     "//ios/chrome/browser/first_run/model",
@@ -128,6 +131,8 @@ source_set("unit_tests") {
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/signin/model",
     "//ios/chrome/browser/signin/model:test_support",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/test:test_support",
     "//ios/components/security_interstitials",
     "//ios/web/public/test",
@@ -156,13 +161,12 @@ source_set("eg2_tests") {
     "//ios/chrome/browser/authentication/test:eg_test_support+eg2",
     "//ios/chrome/browser/content_suggestions/public:constants",
     "//ios/chrome/browser/metrics/model:eg_test_support+eg2",
-    "//ios/chrome/browser/ntp/ui_bundled:feature_flags",
     "//ios/chrome/browser/policy/model:eg_test_support+eg2",
     "//ios/chrome/browser/policy/model:policy_earl_grey_matchers",
     "//ios/chrome/browser/policy/model:policy_util",
     "//ios/chrome/browser/popup_menu/public",
+    "//ios/chrome/browser/settings/manage_sync/public",
     "//ios/chrome/browser/settings/ui_bundled:eg_test_support+eg2",
-    "//ios/chrome/browser/settings/ui_bundled/google_services:constants",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/public/snackbar:constants",
     "//ios/chrome/browser/signin/model:capabilities_types",

@@ -5,6 +5,13 @@
 #include "components/persistent_cache/persistent_cache.h"
 
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/containers/heap_array.h"
@@ -12,6 +19,7 @@
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/function_ref.h"
+#include "base/rand_util.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/gmock_expected_support.h"
@@ -20,63 +28,44 @@
 #include "build/build_config.h"
 #include "components/persistent_cache/backend_storage.h"
 #include "components/persistent_cache/backend_type.h"
+#include "components/persistent_cache/client.h"
 #include "components/persistent_cache/pending_backend.h"
 #include "components/persistent_cache/sqlite/sqlite_backend_impl.h"
 #include "components/persistent_cache/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 
-#if BUILDFLAG(IS_MAC)
-#include "base/mac/mac_util.h"
-#endif
-
 namespace persistent_cache {
 
-// The variations of cache options available for creating/testing
-// PersistentCache.
-enum class CacheOption {
-  kMultipleConnections,
-  kSingleConnection,
-  kJournalModeWal,
-};
-
-// A printer for `CacheOption`; used by GoogleTest for more friendly output and
-// to suffix the story name for performance measurements.
-void PrintTo(CacheOption cache_option, std::ostream* os) {
-  switch (cache_option) {
-    case CacheOption::kMultipleConnections:
-      *os << "MultipleConnections";
-      break;
-    case CacheOption::kSingleConnection:
-      *os << "SingleConnection";
-      break;
-    case CacheOption::kJournalModeWal:
-      *os << "JournalModeWal";
-      break;
-  }
-}
-
 // A test harness parameterized on the options for creating a PersistentCache.
-class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
+class PersistentCachePerftest
+    : public testing::TestWithParam<std::tuple<bool, bool>> {
  protected:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    backend_storage_.emplace(BackendType::kSqlite, temp_dir_.GetPath());
+    backend_storage_.emplace(Client::kTest, BackendType::kSqlite,
+                             temp_dir_.GetPath());
+  }
+
+ public:
+  // Returns a string representing the test parameter for story names.
+  static std::string GetParamName(std::tuple<bool, bool> param) {
+    auto [single_connection, journal_mode_wal] = param;
+    if (single_connection && journal_mode_wal) {
+      return "JournalModeWal";
+    } else if (single_connection && !journal_mode_wal) {
+      return "SingleConnection";
+    } else if (!single_connection && journal_mode_wal) {
+      return "MultipleConnectionsWal";
+    } else {
+      return "MultipleConnections";
+    }
   }
 
   // Returns a new cache configured according to the test's parameter.
   std::unique_ptr<PersistentCache> MakeCache() {
-    switch (GetParam()) {
-      case CacheOption::kMultipleConnections:
-        return CreateCache(/*single_connection=*/false,
-                           /*journal_mode_wal=*/false);
-      case CacheOption::kSingleConnection:
-        return CreateCache(/*single_connection=*/true,
-                           /*journal_mode_wal=*/false);
-      case CacheOption::kJournalModeWal:
-        return CreateCache(/*single_connection=*/true,
-                           /*journal_mode_wal=*/true);
-    }
+    auto [single_connection, journal_mode_wal] = GetParam();
+    return CreateCache(single_connection, journal_mode_wal);
   }
 
   // Returns a new cache with the given options.
@@ -85,17 +74,23 @@ class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
     if (auto pending_backend = backend_storage_->MakePendingBackend(
             base::FilePath(kBaseName), single_connection, journal_mode_wal);
         pending_backend.has_value()) {
-      return PersistentCache::Bind(*std::move(pending_backend));
+      if (auto cache_result =
+              PersistentCache::Bind(Client::kTest, *std::move(pending_backend));
+          cache_result.has_value()) {
+        return *std::move(cache_result);
+      }
     }
-    ADD_FAILURE() << "Failed to make PendingBackend";
+    ADD_FAILURE() << "Failed to make PendingBackend or Bind it";
     return nullptr;
   }
 
   // Returns true if caches created in this configuration can be shared across
   // multiple connections.
-  static bool CanShareConnections() {
-    return GetParam() == CacheOption::kMultipleConnections;
-  }
+  static bool CanShareConnections() { return !std::get<0>(GetParam()); }
+
+  // Returns true if caches created in this configuration use the write-ahead
+  // log.
+  static bool IsWalMode() { return std::get<1>(GetParam()); }
 
   std::optional<PendingBackend> ShareReadWriteConnection(
       PersistentCache& cache) {
@@ -112,10 +107,9 @@ class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
 
     test_body();
 
-    ReportMeasurment(
-        base::StrCat({operation_name, testing::PrintToString(GetParam())}),
-        iteration_count, elapsed_timer.Elapsed(),
-        elapsed_thread_timer.Elapsed());
+    ReportMeasurement(base::StrCat({operation_name, GetParamName(GetParam())}),
+                      iteration_count, elapsed_timer.Elapsed(),
+                      elapsed_thread_timer.Elapsed());
   }
 
   // Pregenerates keys. Use to avoid timing allocation overhead.
@@ -146,11 +140,7 @@ class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
 
   // Returns true if this platform has expensive database commits.
   static bool HasExpensiveCommits() {
-#if BUILDFLAG(IS_MAC)
-    // Commits are slow on macOS 12. Speculation: perhaps it does not benefit
-    // from F_BARRIERFSYNC.
-    return base::mac::MacOSMajorVersion() < 13;
-#elif BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
     return true;
 #else
     // Android and other POSIX systems appear to benefit from batch atomic
@@ -159,14 +149,10 @@ class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
 #endif
   }
 
- private:
-  static constexpr base::FilePath::StringViewType kBaseName =
-      FILE_PATH_LITERAL("perftest");
-
-  void ReportMeasurment(std::string operation_name,
-                        int iteration_count,
-                        base::TimeDelta elapsed_time,
-                        base::TimeDelta elapsed_thread_time) {
+  void ReportMeasurement(std::string operation_name,
+                         int iteration_count,
+                         base::TimeDelta elapsed_time,
+                         base::TimeDelta elapsed_thread_time) {
     const std::string reporter_name("PersistentCache");
     perf_test::PerfResultReporter reporter(reporter_name, operation_name);
     reporter.RegisterImportantMetric(".wall_time", "us");
@@ -180,10 +166,79 @@ class PersistentCachePerftest : public testing::TestWithParam<CacheOption> {
                             iteration_count));
   }
 
+  static base::FilePath GetBaseName(int i) {
+    return base::FilePath(kBaseName).InsertBeforeExtensionASCII(
+        base::NumberToString(i));
+  }
+
+  BackendStorage& backend_storage() { return *backend_storage_; }
+
+ private:
+  static constexpr base::FilePath::StringViewType kBaseName =
+      FILE_PATH_LITERAL("perftest");
+
   base::ScopedTempDir temp_dir_;
   std::optional<BackendStorage> backend_storage_;
   bool under_measurment_ = false;
 };
+
+TEST_P(PersistentCachePerftest, Create) {
+  int iteration_count = 1024;
+
+  if (HasExpensiveCommits()) {
+    iteration_count /= 4;
+  }
+
+  // iteration_count distinct backend names.
+  auto backend_names =
+      base::HeapArray<base::FilePath>::WithSize(iteration_count);
+  std::ranges::generate(backend_names,
+                        [i = 0] mutable { return GetBaseName(i++); });
+
+  // Storage for iteration_count distinct caches.
+  auto caches = base::HeapArray<std::unique_ptr<PersistentCache>>::WithSize(
+      iteration_count);
+
+  // Creates or opens all iteration_count caches.
+  auto make_and_bind_caches = [&, single_connection = std::get<0>(GetParam()),
+                               journal_mode_wal = std::get<1>(GetParam())] {
+    std::ranges::generate(
+        caches, [&, i = 0] mutable -> std::unique_ptr<PersistentCache> {
+          if (auto pending_backend = backend_storage().MakePendingBackend(
+                  backend_names[i++], single_connection, journal_mode_wal);
+              pending_backend.has_value()) {
+            if (auto cache_result = PersistentCache::Bind(
+                    Client::kTest, *std::move(pending_backend));
+                cache_result.has_value()) {
+              return std::move(cache_result).value();
+            }
+          }
+          return nullptr;
+        });
+  };
+
+  // Closes all iteration_count caches.
+  auto close_caches = [&caches] { std::ranges::fill(caches, nullptr); };
+
+  RunAndTimeTest("Create", iteration_count, [&] { make_and_bind_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), 0);
+
+  RunAndTimeTest("FirstClose", iteration_count, [&] { close_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), iteration_count);
+
+  RunAndTimeTest("FirstOpen", iteration_count, [&] { make_and_bind_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), 0);
+
+  RunAndTimeTest("SecondClose", iteration_count, [&] { close_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), iteration_count);
+
+  RunAndTimeTest("SecondOpen", iteration_count,
+                 [&] { make_and_bind_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), 0);
+
+  RunAndTimeTest("ThirdClose", iteration_count, [&] { close_caches(); });
+  ASSERT_EQ(std::ranges::count(caches, nullptr), iteration_count);
+}
 
 TEST_P(PersistentCachePerftest, OpenClose) {
   if (!CanShareConnections()) {
@@ -201,9 +256,9 @@ TEST_P(PersistentCachePerftest, OpenClose) {
   RunAndTimeTest(
       "OpenClose", kIterationCount, [this, &cache = *cache, &success_count] {
         for (size_t i = 0; i < kIterationCount; ++i) {
-          auto persistent_cache_under_test =
-              PersistentCache::Bind(*ShareReadWriteConnection(cache));
-          if (persistent_cache_under_test) {
+          if (PersistentCache::Bind(Client::kTest,
+                                    *ShareReadWriteConnection(cache))
+                  .has_value()) {
             ++success_count;
           }
         }
@@ -215,7 +270,7 @@ TEST_P(PersistentCachePerftest, OpenClose) {
 TEST_P(PersistentCachePerftest, Insert) {
   int kIterationCount = 1024;
 
-  if (GetParam() != CacheOption::kJournalModeWal && HasExpensiveCommits()) {
+  if (!IsWalMode() && HasExpensiveCommits()) {
     // Insertions take an egregiously long time when commits are expensive.
     // Scale back the number of iterations in that case.
     kIterationCount /= 4;
@@ -227,10 +282,10 @@ TEST_P(PersistentCachePerftest, Insert) {
 
   int success_count = 0;
   RunAndTimeTest("Insert", kIterationCount, [&] {
-    success_count =
-        std::ranges::count_if(keys, [&cache = *cache, &value](const auto& key) {
-          return cache.Insert(key, value.as_span()).has_value();
-        });
+    success_count = std::ranges::count_if(keys, [&cache = *cache,
+                                                 &value](const auto& key) {
+      return cache.Insert(base::as_byte_span(key), value.as_span()).has_value();
+    });
   });
   ASSERT_EQ(success_count, kIterationCount);
 }
@@ -246,7 +301,7 @@ TEST_P(PersistentCachePerftest, Find) {
 
   // Fill the cache.
   for (const auto& key : keys) {
-    ASSERT_OK(cache->Insert(key, value, {}));
+    ASSERT_OK(cache->Insert(base::as_byte_span(key), value, {}));
   }
 
   // Switch the cache back to using a rollback journal and close it. This will
@@ -263,21 +318,94 @@ TEST_P(PersistentCachePerftest, Find) {
 
   int success_count = 0;
   RunAndTimeTest("Find", kIterationCount, [&] {
-    success_count = std::ranges::count_if(keys, [&cache =
-                                                     *cache](const auto& key) {
-      return cache
-          .Find(key, [](size_t content_size) { return base::span<uint8_t>(); })
-          .has_value();
-    });
+    success_count =
+        std::ranges::count_if(keys, [&cache = *cache](const auto& key) {
+          return cache
+              .Find(base::as_byte_span(key),
+                    [](size_t content_size) { return base::span<uint8_t>(); })
+              .has_value();
+        });
   });
   ASSERT_EQ(success_count, kIterationCount);
 }
 
-INSTANTIATE_TEST_SUITE_P(,
-                         PersistentCachePerftest,
-                         testing::Values(CacheOption::kMultipleConnections,
-                                         CacheOption::kSingleConnection,
-                                         CacheOption::kJournalModeWal),
-                         testing::PrintToStringParamName());
+TEST_P(PersistentCachePerftest, WALPerformance) {
+  if (!IsWalMode()) {
+    GTEST_SKIP();
+  }
+
+  static constexpr int kTotalCount = 2048;
+  static constexpr int kHalfCount = kTotalCount / 2;
+  std::unique_ptr<PersistentCache> cache = MakeCache();
+  auto* backend =
+      static_cast<SqliteBackendImpl*>(cache->GetBackendForTesting());
+
+  // Disable automatic checkpointing.
+  ASSERT_OK(backend->ExecuteStatementForTesting("PRAGMA wal_autocheckpoint=0"));
+
+  std::vector<std::string> keys = GenerateKeys(kTotalCount);
+  base::HeapArray<uint8_t> value = MakeValue();
+
+  // 1. Insert first half of the data (goes to WAL).
+  for (int i = 0; i < kHalfCount; ++i) {
+    ASSERT_OK(cache->Insert(base::as_byte_span(keys[i]), value));
+  }
+
+  // 2. Perform a truncating checkpoint to move data from WAL to database.
+  ASSERT_OK(
+      backend->ExecuteStatementForTesting("PRAGMA wal_checkpoint(TRUNCATE)"));
+
+  // 3. Insert second half of the data (goes to WAL).
+  for (int i = kHalfCount; i < kTotalCount; ++i) {
+    ASSERT_OK(cache->Insert(base::as_byte_span(keys[i]), value));
+  }
+
+  // Shuffle keys for random access.
+  base::RandomShuffle(keys.begin(), keys.end());
+
+  // 4. Measure performance with mixed WAL and DB data.
+  base::ElapsedTimer mixed_timer;
+  base::ElapsedThreadTimer mixed_thread_timer;
+  for (const auto& key : keys) {
+    auto result = cache->Find(base::as_byte_span(key), [&value](size_t size) {
+      return value.as_span();
+    });
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result.value().has_value());
+  }
+  base::TimeDelta mixed_elapsed = mixed_timer.Elapsed();
+  base::TimeDelta mixed_thread_elapsed = mixed_thread_timer.Elapsed();
+
+  // 5. Perform final truncating checkpoint.
+  ASSERT_OK(
+      backend->ExecuteStatementForTesting("PRAGMA wal_checkpoint(TRUNCATE)"));
+
+  // 6. Measure performance with all data in DB.
+  base::ElapsedTimer db_timer;
+  base::ElapsedThreadTimer db_thread_timer;
+  for (const auto& key : keys) {
+    auto result = cache->Find(base::as_byte_span(key), [&value](size_t size) {
+      return value.as_span();
+    });
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result.value().has_value());
+  }
+  base::TimeDelta db_elapsed = db_timer.Elapsed();
+  base::TimeDelta db_thread_elapsed = db_thread_timer.Elapsed();
+
+  // 7. Report the difference (Mixed - DB = Overhead).
+  ReportMeasurement(
+      "WALOverhead", kTotalCount,
+      std::max(base::TimeDelta(), mixed_elapsed - db_elapsed),
+      std::max(base::TimeDelta(), mixed_thread_elapsed - db_thread_elapsed));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    PersistentCachePerftest,
+    testing::Combine(testing::Bool(), testing::Bool()),
+    [](const testing::TestParamInfo<PersistentCachePerftest::ParamType>& info) {
+      return PersistentCachePerftest::GetParamName(info.param);
+    });
 
 }  // namespace persistent_cache

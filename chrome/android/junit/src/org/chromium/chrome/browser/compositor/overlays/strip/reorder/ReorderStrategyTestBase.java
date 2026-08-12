@@ -35,10 +35,10 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutView;
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDelegate.StripUpdateDelegate;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.MediaState;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabUngrouper;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 
@@ -76,7 +76,6 @@ public abstract class ReorderStrategyTestBase {
     @Mock protected StripUpdateDelegate mStripUpdateDelegate;
     @Mock protected ScrollDelegate mScrollDelegate;
     @Mock protected View mContainerView;
-    @Mock protected TabGroupModelFilter mTabGroupModelFilter;
     @Mock protected ReorderDelegate mReorderDelegate;
     @Mock protected Supplier<Float> mTabWidthSupplier;
     @Mock protected Supplier<Long> mLastReorderScrollTimeSupplier;
@@ -107,8 +106,7 @@ public abstract class ReorderStrategyTestBase {
 
         when(mTabWidthSupplier.get()).thenReturn((float) TAB_WIDTH);
         when(mLastReorderScrollTimeSupplier.get()).thenReturn(0L);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mModel);
-        when(mTabGroupModelFilter.getTabUngrouper()).thenReturn(mTabUnGrouper);
+        when(mModel.getTabUngrouper()).thenReturn(mTabUnGrouper);
         setupStripViews();
     }
 
@@ -116,14 +114,25 @@ public abstract class ReorderStrategyTestBase {
 
     protected StripLayoutGroupTitle buildGroupTitle(Token groupId, int x) {
         StripLayoutGroupTitle title =
-                new StripLayoutGroupTitle(mActivity, null, null, false, groupId);
+                new StripLayoutGroupTitle(mActivity, null, null, null, null, null, false, groupId);
         setDrawProperties(title, x);
         return title;
     }
 
     protected StripLayoutTab buildStripTab(int id, int x) {
         StripLayoutTab tab =
-                new StripLayoutTab(mActivity, id, null, null, null, null, false, false);
+                new StripLayoutTab(
+                        mActivity,
+                        id,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        false,
+                        MediaState.NONE);
         setDrawProperties(tab, x);
         return tab;
     }
@@ -139,18 +148,16 @@ public abstract class ReorderStrategyTestBase {
         view.setVisible(true);
     }
 
-    protected void mockTabGroup(Token groupId, int rootId, Tab... tabs) {
+    protected void mockTabGroup(Token groupId, Tab... tabs) {
         List<Tab> tabList = List.of(tabs);
         for (Tab tab : tabList) {
-            when(mTabGroupModelFilter.isTabInTabGroup(tab)).thenReturn(true);
-            when(mTabGroupModelFilter.getRelatedTabList(tab.getId())).thenReturn(tabList);
-            when(mTabGroupModelFilter.getTabsInGroup(groupId)).thenReturn(tabList);
+            when(mModel.isTabInTabGroup(tab)).thenReturn(true);
+            when(mModel.getRelatedTabList(tab.getId())).thenReturn(tabList);
+            when(mModel.getTabsInGroup(groupId)).thenReturn(tabList);
             tab.setTabGroupId(groupId);
-            tab.setRootId(rootId);
         }
-        when(mTabGroupModelFilter.getTabCountForGroup(groupId)).thenReturn(tabList.size());
-        when(mTabGroupModelFilter.getGroupLastShownTabId(groupId))
-                .thenReturn(tabList.get(0).getId());
+        when(mModel.getTabCountForGroup(groupId)).thenReturn(tabList.size());
+        when(mModel.getGroupLastShownTabId(groupId)).thenReturn(tabList.get(0).getId());
     }
 
     private static class TestAnimationHost implements AnimationHost {

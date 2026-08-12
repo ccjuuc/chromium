@@ -14,6 +14,7 @@
 #include "chrome/browser/ash/policy/value_validation/onc_user_policy_value_validator.h"
 #include "chromeos/ash/components/dbus/session_manager/policy_descriptor.h"
 #include "components/ownership/owner_key_util.h"
+#include "components/policy/core/common/cloud/cloud_policy_util.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/policy_map.h"
@@ -35,7 +36,8 @@ DeviceLocalAccountPolicyStore::DeviceLocalAccountPolicyStore(
     scoped_refptr<base::SequencedTaskRunner> background_task_runner,
     scoped_refptr<base::SequencedTaskRunner> first_load_task_runner)
     : UserCloudPolicyStoreBase(background_task_runner,
-                               PolicyScope::POLICY_SCOPE_USER),
+                               PolicyScope::POLICY_SCOPE_USER,
+                               dm_protocol::kChromePublicAccountPolicyType),
       first_load_task_runner_(first_load_task_runner),
       account_id_(account_id),
       session_manager_client_(session_manager_client),
@@ -49,8 +51,9 @@ void DeviceLocalAccountPolicyStore::Load() {
   // Cancel all pending requests.
   weak_factory_.InvalidateWeakPtrs();
 
-  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id_);
+  login_manager::PolicyDescriptor descriptor = ash::MakePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT,
+      login_manager::POLICY_DOMAIN_CHROME, account_id_);
   session_manager_client_->RetrievePolicy(
       descriptor,
       base::BindOnce(&DeviceLocalAccountPolicyStore::ValidateLoadedPolicyBlob,
@@ -58,14 +61,12 @@ void DeviceLocalAccountPolicyStore::Load() {
                      true /*validate_in_background*/));
 }
 
-std::unique_ptr<UserCloudPolicyValidator>
+std::unique_ptr<CloudPolicyValidatorBase>
 DeviceLocalAccountPolicyStore::CreateValidator(
     std::unique_ptr<em::PolicyFetchResponse> policy,
     CloudPolicyValidatorBase::ValidateTimestampOption option) {
-  auto validator =
-      UserCloudPolicyStoreBase::CreateValidator(std::move(policy), option);
-  validator->ValidateValues(std::make_unique<ONCUserPolicyValueValidator>());
-  return validator;
+  NOTREACHED() << "DeviceLocalAccountPolicyStore::Validate already creates a "
+                  "validator";
 }
 
 void DeviceLocalAccountPolicyStore::LoadImmediately() {
@@ -78,14 +79,15 @@ void DeviceLocalAccountPolicyStore::LoadImmediately() {
   // the user has flags configured in about:flags.
   // However, on those paths we must load policy synchronously so that the
   // Profile initialization never sees unmanaged prefs, which would lead to
-  // data loss. http://crbug.com/263061
+  // data loss. http://crbug.com/40326003
 
   // Cancel all running async loads.
   weak_factory_.InvalidateWeakPtrs();
 
   std::string policy_blob;
-  login_manager::PolicyDescriptor descriptor = ash::MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id_);
+  login_manager::PolicyDescriptor descriptor = ash::MakePolicyDescriptor(
+      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT,
+      login_manager::POLICY_DOMAIN_CHROME, account_id_);
   RetrievePolicyResponseType response =
       session_manager_client_->BlockingRetrievePolicy(descriptor, &policy_blob);
   ValidateLoadedPolicyBlob(false /*validate_in_background*/, response,
@@ -132,7 +134,7 @@ void DeviceLocalAccountPolicyStore::ValidateLoadedPolicyBlob(
 
 void DeviceLocalAccountPolicyStore::UpdatePolicy(
     const std::string& signature_validation_public_key,
-    UserCloudPolicyValidator* validator) {
+    CloudPolicyValidatorBase* validator) {
   SYSLOG(INFO) << "Update policy for account: " << account_id_;
   // Validator is not created when device ownership is not set up yet. Do not
   // propagate the error in such case since it is recoverable.
@@ -153,7 +155,7 @@ void DeviceLocalAccountPolicyStore::UpdatePolicy(
   }
 
   InstallPolicy(std::move(validator->policy_data()),
-                std::move(validator->payload()),
+                validator,
                 signature_validation_public_key);
   status_ = STATUS_OK;
   NotifyStoreLoaded();
@@ -161,7 +163,7 @@ void DeviceLocalAccountPolicyStore::UpdatePolicy(
 
 void DeviceLocalAccountPolicyStore::OnPolicyToStoreValidated(
     const std::string& signature_validation_public_key_unused,
-    UserCloudPolicyValidator* validator) {
+    CloudPolicyValidatorBase* validator) {
   // Validator is not created when device ownership is not set up yet. Do not
   // propagate the error in such case since it is recoverable.
   if (!validator) {

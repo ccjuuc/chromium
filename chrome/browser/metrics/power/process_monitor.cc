@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -26,9 +27,11 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_data.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_constants.h"
 #include "extensions/buildflags/buildflags.h"
 #include "services/network/public/mojom/network_service.mojom.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
@@ -46,18 +49,56 @@ using content::BrowserThread;
 
 namespace {
 
-std::unique_ptr<base::ProcessMetrics> CreateProcessMetrics(
+class ProcessMetricsDelegateImpl : public ProcessMetricsDelegate {
+ public:
+  explicit ProcessMetricsDelegateImpl(
+      std::unique_ptr<base::ProcessMetrics> process_metrics)
+      : process_metrics_(std::move(process_metrics)) {}
+
+  ~ProcessMetricsDelegateImpl() override = default;
+
+  double GetPlatformIndependentCPUUsage(
+      base::TimeDelta cumulative_cpu) override {
+    return process_metrics_->GetPlatformIndependentCPUUsage(cumulative_cpu);
+  }
+
+  base::expected<double, base::ProcessCPUUsageError>
+  GetPlatformIndependentCPUUsage() override {
+    return process_metrics_->GetPlatformIndependentCPUUsage();
+  }
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_AIX)
+  int GetIdleWakeupsPerSecond() override {
+    return process_metrics_->GetIdleWakeupsPerSecond();
+  }
+#endif
+
+#if BUILDFLAG(IS_MAC)
+  int GetPackageIdleWakeupsPerSecond() override {
+    return process_metrics_->GetPackageIdleWakeupsPerSecond();
+  }
+#endif
+
+ private:
+  std::unique_ptr<base::ProcessMetrics> process_metrics_;
+};
+
+std::unique_ptr<ProcessMetricsDelegate> CreateProcessMetricsDelegate(
     base::ProcessHandle process_handle) {
 #if BUILDFLAG(IS_MAC)
-  return base::ProcessMetrics::CreateProcessMetrics(
+  auto process_metrics = base::ProcessMetrics::CreateProcessMetrics(
       process_handle, content::BrowserChildProcessHost::GetPortProvider());
 #else
-  return base::ProcessMetrics::CreateProcessMetrics(process_handle);
+  auto process_metrics =
+      base::ProcessMetrics::CreateProcessMetrics(process_handle);
 #endif
+  return std::make_unique<ProcessMetricsDelegateImpl>(
+      std::move(process_metrics));
 }
 
 // Samples the process metrics the ProcessMonitor cares about.
-ProcessMonitor::Metrics SampleMetrics(base::ProcessMetrics& process_metrics) {
+ProcessMonitor::Metrics SampleMetrics(ProcessMetricsDelegate& process_metrics) {
   ProcessMonitor::Metrics metrics;
 
   metrics.cpu_usage = base::OptionalFromExpected(
@@ -92,41 +133,51 @@ void ScaleMetrics(ProcessMonitor::Metrics* metrics, double factor) {
 }
 
 ProcessMonitor::Metrics GetLastIntervalMetrics(
-    base::ProcessMetrics& process_metrics,
-    base::TimeDelta cumulative_cpu_usage) {
+    const ProcessInfo& process_info,
+    base::TimeDelta cumulative_cpu_usage,
+    base::TimeTicks last_sample_time) {
+  const auto now = base::TimeTicks::Now();
   ProcessMonitor::Metrics metrics;
   metrics.cpu_usage =
-      process_metrics.GetPlatformIndependentCPUUsage(cumulative_cpu_usage);
+      process_info.process_metrics->GetPlatformIndependentCPUUsage(
+          cumulative_cpu_usage);
   // TODO: Add other values in ProcessMonitor::Metrics.
+
+  base::TimeDelta interval_duration =
+      process_info.first_sample_time.has_value()
+          ? now - process_info.first_sample_time.value()
+          : now - last_sample_time;
+  ScaleMetrics(&metrics, interval_duration / kLongPowerMetricsIntervalDuration);
   return metrics;
 }
 
-MonitoredProcessType GetMonitoredProcessTypeForRenderProcess(
+ProcessInfo::Key GetMonitoredProcessInfoKeyForRenderProcess(
     content::RenderProcessHost* host) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   content::BrowserContext* browser_context = host->GetBrowserContext();
   if (extensions::ChromeContentBrowserClientExtensionsPart::
           AreExtensionsDisabledForProfile(browser_context)) {
-    return MonitoredProcessType::kRenderer;
+    return {MonitoredProcessType::kRenderer, std::nullopt};
   }
 
   const extensions::Extension* extension =
       extensions::ProcessMap::Get(browser_context)
-          ->GetEnabledExtensionByProcessID(host->GetDeprecatedID());
+          ->GetEnabledExtensionByProcessID(host->GetID());
   if (!extension) {
-    return kRenderer;
+    return {MonitoredProcessType::kRenderer, std::nullopt};
   }
 
-  return extensions::BackgroundInfo::HasPersistentBackgroundPage(extension)
-             ? MonitoredProcessType::kExtensionPersistent
-             : MonitoredProcessType::kExtensionEvent;
+  return {extensions::BackgroundInfo::HasPersistentBackgroundPage(extension)
+              ? MonitoredProcessType::kExtensionPersistent
+              : MonitoredProcessType::kExtensionEvent,
+          std::nullopt};
 #else
-  return MonitoredProcessType::kRenderer;
+  return {MonitoredProcessType::kRenderer, std::nullopt};
 #endif
 }
 
-MonitoredProcessType GetMonitoredProcessTypeForNonRendererChildProcess(
+ProcessInfo::Key GetMonitoredProcessInfoKeyForNonRendererChildProcess(
     const content::ChildProcessData& data) {
   switch (data.process_type) {
     case content::PROCESS_TYPE_BROWSER:
@@ -134,15 +185,15 @@ MonitoredProcessType GetMonitoredProcessTypeForNonRendererChildProcess(
       // Not a non-renderer child process.
       NOTREACHED();
     case content::PROCESS_TYPE_GPU:
-      return MonitoredProcessType::kGpu;
+      return {MonitoredProcessType::kGpu, std::nullopt};
     case content::PROCESS_TYPE_UTILITY: {
       // Special case for the network process.
       if (data.metrics_name == network::mojom::NetworkService::Name_)
-        return MonitoredProcessType::kNetwork;
-      return MonitoredProcessType::kUtility;
+        return {MonitoredProcessType::kNetwork, std::nullopt};
+      return {MonitoredProcessType::kUtility, data.metrics_name};
     }
     default:
-      return MonitoredProcessType::kOther;
+      return {MonitoredProcessType::kOther, std::nullopt};
   }
 }
 
@@ -169,15 +220,15 @@ ProcessMonitor::Metrics& operator+=(ProcessMonitor::Metrics& lhs,
 
 }  // namespace
 
-MonitoredProcessType
-GetMonitoredProcessTypeForNonRendererChildProcessForTesting(
+ProcessInfo::Key GetMonitoredProcessInfoKeyForNonRendererChildProcessForTesting(
     const content::ChildProcessData& data) {
-  return GetMonitoredProcessTypeForNonRendererChildProcess(data);
+  return GetMonitoredProcessInfoKeyForNonRendererChildProcess(data);
 }
 
-ProcessInfo::ProcessInfo(MonitoredProcessType type,
-                         std::unique_ptr<base::ProcessMetrics> process_metrics)
-    : type(type),
+ProcessInfo::ProcessInfo(
+    Key key,
+    std::unique_ptr<ProcessMetricsDelegate> process_metrics)
+    : key(key),
       process_metrics(std::move(process_metrics)),
       first_sample_time(base::TimeTicks::Now()) {
   // Do an initial call to SampleMetrics() so that the next one returns
@@ -193,6 +244,20 @@ ProcessInfo::ProcessInfo(MonitoredProcessType type,
 }
 ProcessInfo::~ProcessInfo() = default;
 
+ProcessInfo::Key::Key(MonitoredProcessType type,
+                      std::optional<std::string> subtype)
+    : type(type), subtype(subtype) {}
+ProcessInfo::Key::Key(const Key& other) = default;
+ProcessInfo::Key::~Key() = default;
+
+bool ProcessInfo::Key::operator<(const Key& other) const {
+  return std::tie(type, subtype) < std::tie(other.type, other.subtype);
+}
+
+bool ProcessInfo::Key::operator==(const Key& other) const {
+  return type == other.type && subtype == other.subtype;
+}
+
 ProcessMonitor::Metrics::Metrics() = default;
 ProcessMonitor::Metrics::Metrics(const ProcessMonitor::Metrics& other) =
     default;
@@ -202,8 +267,8 @@ ProcessMonitor::Metrics::~Metrics() = default;
 
 ProcessMonitor::ProcessMonitor()
     : browser_process_info_(
-          MonitoredProcessType::kBrowser,
-          CreateProcessMetrics(base::GetCurrentProcessHandle())) {
+          ProcessInfo::Key(MonitoredProcessType::kBrowser, std::nullopt),
+          CreateProcessMetricsDelegate(base::GetCurrentProcessHandle())) {
   // Ensure ProcessMonitor is created before any child process so that none is
   // missed.
   DCHECK(content::BrowserChildProcessHostIterator().Done());
@@ -234,6 +299,7 @@ void ProcessMonitor::SampleAllProcesses(Observer* observer) {
   // Aggregate all metrics into a single sum, but also per their process type.
   Metrics aggregated_metrics;
   std::array<Metrics, MonitoredProcessType::kCount> per_type_metrics;
+  absl::flat_hash_map<ProcessInfo::Key, Metrics> per_utility_subtype_metrics;
   for (auto* process_info : process_infos) {
     Metrics metrics = SampleMetrics(*process_info->process_metrics);
 
@@ -251,20 +317,44 @@ void ProcessMonitor::SampleAllProcesses(Observer* observer) {
     }
 
     aggregated_metrics += metrics;
-    per_type_metrics[process_info->type] += metrics;
+    per_type_metrics[process_info->key.type] += metrics;
+
+    if (process_info->key.type == MonitoredProcessType::kUtility) {
+      per_utility_subtype_metrics[process_info->key] += metrics;
+    }
   }
 
-  for (int i = 0; i < MonitoredProcessType::kCount; i++) {
-    // Add the metrics for the processes that exited during this interval and
-    // zero out.
-    per_type_metrics[i] += exited_processes_metrics_[i];
-    exited_processes_metrics_[i] = Metrics();
+  for (auto& [key, metrics] : exited_processes_metrics_) {
+    // Add the metrics for the processes that exited during this interval.
+    per_type_metrics[key.type] += metrics;
+    if (key.type == MonitoredProcessType::kUtility) {
+      per_utility_subtype_metrics[key] += metrics;
+    }
+    metrics = Metrics();
+  }
 
-    observer->OnMetricsSampled(static_cast<MonitoredProcessType>(i),
-                               per_type_metrics[i]);
+  for (int type = 0; type < MonitoredProcessType::kCount; ++type) {
+    observer->OnMetricsSampled(
+        ProcessInfo::Key(static_cast<MonitoredProcessType>(type), std::nullopt),
+        per_type_metrics[type]);
+  }
+
+  for (auto& [key, metrics] : per_utility_subtype_metrics) {
+    observer->OnMetricsSampled(key, metrics);
   }
 
   observer->OnAggregatedMetricsSampled(aggregated_metrics);
+
+  last_sample_time_ = now;
+}
+
+void ProcessMonitor::AddChildProcessInfoForTesting(
+    int id,
+    ProcessInfo::Key key,
+    std::unique_ptr<ProcessMetricsDelegate> process_metrics) {
+  browser_child_process_infos_.emplace(
+      std::piecewise_construct, std::forward_as_tuple(id),
+      std::forward_as_tuple(key, std::move(process_metrics)));
 }
 
 void ProcessMonitor::OnRenderProcessHostCreated(
@@ -285,13 +375,13 @@ void ProcessMonitor::RenderProcessReady(
   //                 `RenderProcessReady()`.
   bool inserted =
       render_process_infos_
-          .emplace(
-              std::piecewise_construct,
-              std::forward_as_tuple(render_process_host),
-              std::forward_as_tuple(
-                  GetMonitoredProcessTypeForRenderProcess(render_process_host),
-                  CreateProcessMetrics(
-                      render_process_host->GetProcess().Handle())))
+          .emplace(std::piecewise_construct,
+                   std::forward_as_tuple(render_process_host),
+                   std::forward_as_tuple(
+                       GetMonitoredProcessInfoKeyForRenderProcess(
+                           render_process_host),
+                       CreateProcessMetricsDelegate(
+                           render_process_host->GetProcess().Handle())))
           .second;
   DCHECK(inserted);
 }
@@ -309,8 +399,8 @@ void ProcessMonitor::RenderProcessExited(
   // Remember the metrics from when the process exited, if available.
   if (info.cpu_usage.has_value()) {
     const ProcessInfo& process_info = it->second;
-    exited_processes_metrics_[process_info.type] += GetLastIntervalMetrics(
-        *process_info.process_metrics, info.cpu_usage.value());
+    exited_processes_metrics_[process_info.key] += GetLastIntervalMetrics(
+        process_info, info.cpu_usage.value(), last_sample_time_);
   }
 
   render_process_infos_.erase(it);
@@ -334,13 +424,13 @@ void ProcessMonitor::BrowserChildProcessLaunchedAndConnected(
   }
 #endif
 
-  MonitoredProcessType type =
-      GetMonitoredProcessTypeForNonRendererChildProcess(data);
+  ProcessInfo::Key key =
+      GetMonitoredProcessInfoKeyForNonRendererChildProcess(data);
   bool inserted =
       browser_child_process_infos_
           .emplace(std::piecewise_construct, std::forward_as_tuple(data.id),
-                   std::forward_as_tuple(
-                       type, CreateProcessMetrics(data.GetProcess().Handle())))
+                   std::forward_as_tuple(key, CreateProcessMetricsDelegate(
+                                                  data.GetProcess().Handle())))
           .second;
   DCHECK(inserted);
 }
@@ -388,7 +478,7 @@ void ProcessMonitor::OnBrowserChildProcessExited(
   auto it = browser_child_process_infos_.find(data.id);
   if (it == browser_child_process_infos_.end()) {
     // It is possible to receive this notification without a launch-and-connect
-    // notification. See https://crbug.com/942500 for a similar issue.
+    // notification. See https://crbug.com/41447174 for a similar issue.
     return;
   }
 
@@ -396,8 +486,8 @@ void ProcessMonitor::OnBrowserChildProcessExited(
   // Remember the metrics from when the process exited, if available.
   if (info.cpu_usage.has_value()) {
     const ProcessInfo& process_info = it->second;
-    exited_processes_metrics_[process_info.type] += GetLastIntervalMetrics(
-        *process_info.process_metrics, info.cpu_usage.value());
+    exited_processes_metrics_[process_info.key] += GetLastIntervalMetrics(
+        process_info, info.cpu_usage.value(), last_sample_time_);
   }
 
   browser_child_process_infos_.erase(it);

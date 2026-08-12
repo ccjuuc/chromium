@@ -31,7 +31,6 @@ import org.chromium.android_webview.AwContents.DependencyFactory;
 import org.chromium.android_webview.AwContents.InternalAccessDelegate;
 import org.chromium.android_webview.AwContentsClient;
 import org.chromium.android_webview.AwContentsStatics;
-import org.chromium.android_webview.AwSettings;
 import org.chromium.android_webview.AwWebResourceRequest;
 import org.chromium.android_webview.SafeBrowsingAction;
 import org.chromium.android_webview.WebviewErrorCode;
@@ -55,6 +54,8 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.safe_browsing.SafeBrowsingApiBridge;
 import org.chromium.components.safe_browsing.SafeBrowsingApiHandler;
 import org.chromium.net.test.EmbeddedTestServer;
@@ -182,9 +183,27 @@ public class SafeBrowsingTest extends AwParameterizedTest {
      * A fake PlatformServiceBridge that allows tests to make safe browsing requests without GMS.
      */
     private static class MockPlatformServiceBridge extends PlatformServiceBridge {
+        private Callback<@Nullable Boolean> mCallback;
+        private @Nullable Boolean mConsent;
+
         @Override
         public boolean canUseGms() {
             return true;
+        }
+
+        @Override
+        public void querySafeBrowsingUserConsent(Callback<@Nullable Boolean> callback) {
+            mCallback = callback;
+            if (mConsent != null) {
+                callback.onResult(mConsent);
+            }
+        }
+
+        public void setConsent(Boolean consent) {
+            mConsent = consent;
+            if (mCallback != null) {
+                mCallback.onResult(consent);
+            }
         }
     }
 
@@ -199,7 +218,6 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                 InternalAccessDelegate internalAccessAdapter,
                 AwDrawFnImpl.DrawFnAccess drawFnAccess,
                 AwContentsClient contentsClient,
-                AwSettings settings,
                 DependencyFactory dependencyFactory) {
             super(
                     browserContext,
@@ -208,7 +226,6 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                     internalAccessAdapter,
                     drawFnAccess,
                     contentsClient,
-                    settings,
                     dependencyFactory);
             mCanShowInterstitial = true;
             mCanShowBigInterstitial = true;
@@ -283,7 +300,6 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                 InternalAccessDelegate internalAccessAdapter,
                 AwDrawFnImpl.DrawFnAccess drawFnAccess,
                 AwContentsClient contentsClient,
-                AwSettings settings,
                 DependencyFactory dependencyFactory) {
             return new MockAwContents(
                     browserContext,
@@ -292,7 +308,6 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                     internalAccessAdapter,
                     drawFnAccess,
                     contentsClient,
-                    settings,
                     dependencyFactory);
         }
     }
@@ -323,7 +338,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                         InstrumentationRegistry.getInstrumentation().getContext());
 
         // Need to configure user opt-in, otherwise WebView won't perform Safe Browsing checks.
-        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptIn(true);
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(true);
 
         // Some tests need to inject JavaScript.
         AwActivityTestRule.enableJavaScriptOnUiThread(mAwContents);
@@ -475,7 +490,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
         Assert.assertTrue(
                 "setSafeBrowsingEnabled(true) should change the getter",
                 mActivityTestRule.getAwSettingsOnUiThread(mAwContents).getSafeBrowsingEnabled());
-        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptIn(false);
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
         Assert.assertTrue(
                 "Getter API should ignore user opt-out",
                 mActivityTestRule.getAwSettingsOnUiThread(mAwContents).getSafeBrowsingEnabled());
@@ -595,7 +610,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                 mAwContents, mContentsClient.getOnPageFinishedHelper(), WEB_UI_MALWARE_URL);
         errorHelper.waitForCallback(errorCount);
         Assert.assertEquals(
-                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().errorCode);
+                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().getWebviewError());
         Assert.assertEquals(
                 "Network error is for the malicious page",
                 WEB_UI_MALWARE_URL,
@@ -688,7 +703,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
         clickBackToSafety();
         errorHelper.waitForCallback(errorCount);
         Assert.assertEquals(
-                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().errorCode);
+                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().getWebviewError());
         final String responseUrl = mTestServer.getURL(MALWARE_HTML_PATH);
         Assert.assertEquals(
                 "Network error is for the malicious page",
@@ -769,7 +784,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
         mActivityTestRule.loadUrlAsync(mAwContents, responseUrl);
         errorHelper.waitForCallback(errorCount);
         Assert.assertEquals(
-                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().errorCode);
+                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().getWebviewError());
         Assert.assertEquals(
                 "Network error is for the malicious page",
                 responseUrl,
@@ -887,7 +902,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
         mActivityTestRule.loadUrlAsync(mAwContents, responseUrl);
         errorHelper.waitForCallback(errorCount);
         Assert.assertEquals(
-                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().errorCode);
+                WebviewErrorCode.ERROR_UNSAFE_RESOURCE, errorHelper.getError().getWebviewError());
         Assert.assertEquals(
                 "Network error is for the malicious page",
                 responseUrl,
@@ -955,7 +970,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     public void testSafeBrowsingUserOptOutOverridesManifest() throws Throwable {
-        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptIn(false);
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
         loadGreenPage();
         final String responseUrl = mTestServer.getURL(MALWARE_HTML_PATH);
         mActivityTestRule.loadUrlSync(
@@ -967,7 +982,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     public void testSafeBrowsingUserOptOutOverridesPerWebView() throws Throwable {
-        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptIn(false);
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
         mActivityTestRule.getAwSettingsOnUiThread(mAwContents).setSafeBrowsingEnabled(true);
         loadGreenPage();
         final String responseUrl = mTestServer.getURL(MALWARE_HTML_PATH);
@@ -1002,7 +1017,7 @@ public class SafeBrowsingTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     public void testSafeBrowsingHardcodedUrlsIgnoreUserOptOut() throws Throwable {
-        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptIn(false);
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
         loadGreenPage();
         mActivityTestRule.loadUrlAsync(mAwContents, WEB_UI_MALWARE_URL);
         // Wait for the interstitial to actually render.
@@ -1211,5 +1226,100 @@ public class SafeBrowsingTest extends AwParameterizedTest {
                         throw new CriteriaNotSatisfiedException(e);
                     }
                 });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testSafeBrowsingUserOptInCached() throws Throwable {
+        MockPlatformServiceBridge bridge =
+                (MockPlatformServiceBridge) PlatformServiceBridge.getInstance();
+
+        // Set initial consent to false in pref
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
+
+        bridge.setConsent(null); // Don't return immediately
+
+        AwSafeBrowsingConfigHelper.maybeEnableSafeBrowsingFromGms();
+
+        // Now set consent to true via GMS (changes state from false to true)
+        try (HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectBooleanRecord(
+                                "SafeBrowsing.WebView.GmsOptIn.ApiCallMatchesDiskCache", false)
+                        .build()) {
+            bridge.setConsent(true);
+            // Waits for posted task from callback to complete and then verifies pref updated to
+            // true
+            Assert.assertTrue(AwSafeBrowsingConfigHelper.getSafeBrowsingUserOptInForTesting());
+        }
+
+        // Now set consent to false via GMS (changes state from true to false)
+        try (HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectBooleanRecord(
+                                "SafeBrowsing.WebView.GmsOptIn.ApiCallMatchesDiskCache", false)
+                        .build()) {
+            bridge.setConsent(false);
+            // Waits for posted task from callback to complete and then verifies pref updated to
+            // false
+            Assert.assertFalse(AwSafeBrowsingConfigHelper.getSafeBrowsingUserOptInForTesting());
+        }
+
+        // Now set consent to false again so that call matches disk cache
+        try (HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectBooleanRecord(
+                                "SafeBrowsing.WebView.GmsOptIn.ApiCallMatchesDiskCache", true)
+                        .build()) {
+            bridge.setConsent(false);
+            // Waits for posted task from callback to complete.
+            Assert.assertFalse(AwSafeBrowsingConfigHelper.getSafeBrowsingUserOptInForTesting());
+        }
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testSafeBrowsingUserOptInNullDoesNotUpdateCache() throws Throwable {
+        MockPlatformServiceBridge bridge =
+                (MockPlatformServiceBridge) PlatformServiceBridge.getInstance();
+
+        // Set initial consent to true in pref
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(true);
+
+        bridge.setConsent(null); // Don't return immediately
+
+        AwSafeBrowsingConfigHelper.maybeEnableSafeBrowsingFromGms();
+
+        // Now trigger callback with null (simulating timeout/error)
+        // We expect that the cache is NOT updated (stays true)
+        // And we expect NO histogram record for ApiCallMatchesDiskCache
+        try (HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords("SafeBrowsing.WebView.GmsOptIn.ApiCallMatchesDiskCache")
+                        .build()) {
+            bridge.setConsent(null);
+            // Waits for posted task from callback to complete (if any)
+            // and verifies pref is still true
+            Assert.assertTrue(AwSafeBrowsingConfigHelper.getSafeBrowsingUserOptInForTesting());
+        }
+
+        // Set initial consent to false in pref
+        AwSafeBrowsingConfigHelper.setSafeBrowsingUserOptInForTesting(false);
+
+        bridge.setConsent(null); // Reset
+
+        AwSafeBrowsingConfigHelper.maybeEnableSafeBrowsingFromGms();
+
+        // Trigger callback with null again
+        // We expect that the cache is NOT updated (stays false)
+        try (HistogramWatcher watcher =
+                HistogramWatcher.newBuilder()
+                        .expectNoRecords("SafeBrowsing.WebView.GmsOptIn.ApiCallMatchesDiskCache")
+                        .build()) {
+            bridge.setConsent(null);
+            Assert.assertFalse(AwSafeBrowsingConfigHelper.getSafeBrowsingUserOptInForTesting());
+        }
     }
 }

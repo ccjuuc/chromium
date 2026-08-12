@@ -110,7 +110,8 @@ class OpenXrRenderLoop : public XRThread,
   void RequestSession(base::RepeatingCallback<void(mojom::XRVisibilityState)>
                           on_visibility_state_changed,
                       mojom::XRRuntimeSessionOptionsPtr options,
-                      RequestSessionCallback callback);
+                      RequestSessionCallback callback,
+                      base::OnceClosure end_callback);
 
  private:
   void SetVisibilityState(mojom::XRVisibilityState visibility_state);
@@ -120,12 +121,15 @@ class OpenXrRenderLoop : public XRThread,
   void CleanUp() override;
 
   void ClearPendingFrame();
-  void StartPendingFrame();
+  // Returns false if the session ended synchronously while starting the frame
+  // (see the .cc); callers should bail without touching `pending_frame_`.
+  bool StartPendingFrame();
 
   void StartRuntimeFinish(
       base::RepeatingCallback<void(mojom::XRVisibilityState)>
           on_visibility_state_changed,
       mojom::XRRuntimeSessionOptionsPtr options,
+      base::OnceClosure end_callback,
       bool success);
 
   // Will Submit if we have textures submitted from the Overlay (if it is
@@ -148,14 +152,16 @@ class OpenXrRenderLoop : public XRThread,
                                     mojo::PlatformHandle texture_handle,
                                     const gpu::SyncToken& sync_token) override;
 #endif
-  void SubmitFrameMissing(int16_t frame_index, const gpu::SyncToken&) override;
+  void SubmitFrameMissing(
+      int16_t frame_index,
+      gpu::SharedImageExportResult camera_export_multi_result) override;
   void SubmitFrame(int16_t frame_index,
-                   const gpu::MailboxHolder& mailbox,
                    base::TimeDelta time_waited) final;
-  void SubmitFrameDrawnIntoTexture(int16_t frame_index,
-                                   const std::vector<LayerId>& layer_ids,
-                                   const gpu::SyncToken&,
-                                   base::TimeDelta time_waited) override;
+  void SubmitFrameDrawnIntoTexture(
+      int16_t frame_index,
+      std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
+      gpu::SharedImageExportResult camera_export_multi_result,
+      base::TimeDelta time_waited) override;
   void UpdateLayerBounds(int16_t frame_id,
                          const gfx::RectF& left_bounds,
                          const gfx::RectF& right_bounds,
@@ -180,8 +186,6 @@ class OpenXrRenderLoop : public XRThread,
   struct OutstandingFrame {
     OutstandingFrame();
     ~OutstandingFrame();
-    bool webxr_has_pose_ = false;
-    bool overlay_has_pose_ = false;
     bool webxr_submitted_ = false;
     bool overlay_submitted_ = false;
     bool waiting_for_webxr_ = false;
@@ -203,7 +207,8 @@ class OpenXrRenderLoop : public XRThread,
 
   void StartRuntime(base::RepeatingCallback<void(mojom::XRVisibilityState)>
                         on_visibility_state_changed,
-                    mojom::XRRuntimeSessionOptionsPtr options);
+                    mojom::XRRuntimeSessionOptionsPtr options,
+                    base::OnceClosure end_callback);
   void StopRuntime();
   void OnSessionStart();
   bool HasSessionEnded();
@@ -215,6 +220,7 @@ class OpenXrRenderLoop : public XRThread,
   void OnOpenXrSessionStarted(
       base::RepeatingCallback<void(mojom::XRVisibilityState)>
           on_visibility_state_changed,
+      base::OnceClosure end_callback,
       mojom::XRRuntimeSessionOptionsPtr options,
       XrResult result);
   bool UpdateViews();
@@ -273,10 +279,11 @@ class OpenXrRenderLoop : public XRThread,
 
   void OnWebXrTokenSignaled(int16_t frame_index,
                             std::vector<LayerId> updated_layers,
-                            GLuint id,
                             std::unique_ptr<gfx::GpuFence> gpu_fence);
 
   void MaybeRejectSessionCallback();
+
+  bool ShouldDelayGetFrameData() const;
 
   gfx::Transform mojo_from_local() {
     // mojo_from_local is currently identity.
@@ -323,7 +330,7 @@ class OpenXrRenderLoop : public XRThread,
   mojom::XRVisibilityState visibility_state_ =
       mojom::XRVisibilityState::VISIBLE;
   mojom::VRStageParametersPtr current_stage_parameters_;
-  uint32_t stage_parameters_id_;
+  uint32_t stage_parameters_id_ = 0;
 
   // Lifetime of the platform helper is guaranteed by the OpenXrDevice.
   raw_ptr<OpenXrPlatformHelper> platform_helper_;
@@ -334,6 +341,7 @@ class OpenXrRenderLoop : public XRThread,
       environment_receiver_{this};
 
   RequestSessionCallback request_session_callback_;
+  base::OnceClosure end_callback_;
 
   // This must be the last member
   base::WeakPtrFactory<OpenXrRenderLoop> weak_ptr_factory_{this};

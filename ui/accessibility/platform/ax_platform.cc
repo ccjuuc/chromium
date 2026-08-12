@@ -5,7 +5,6 @@
 #include "ui/accessibility/platform/ax_platform.h"
 
 #include "base/check_op.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/ax_mode_observer.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -77,6 +76,16 @@ bool AXPlatform::IsScreenReaderActive() {
   return IsScreenReader(active_assistive_tech_);
 }
 
+bool AXPlatform::JawsNeedsTabSelectionEvent() const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return jaws_needs_tab_selection_event_;
+}
+
+void AXPlatform::SetJawsNeedsTabSelectionEvent(bool needs_event) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  jaws_needs_tab_selection_event_ = needs_event;
+}
+
 bool AXPlatform::IsCaretBrowsingEnabled() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return caret_browsing_enabled_;
@@ -106,21 +115,13 @@ const std::string& AXPlatform::GetToolkitVersion() const {
   return product_strings_->toolkit_version;
 }
 
-void AXPlatform::SetUiaProviderEnabled(bool is_enabled) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  CHECK_EQ(uia_provider_enablement_, UiaProviderEnablement::kVariations);
-  uia_provider_enablement_ = is_enabled ? UiaProviderEnablement::kEnabled
-                                        : UiaProviderEnablement::kDisabled;
-}
-
 void AXPlatform::DisableActiveUiaProvider() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (uia_provider_enablement_ == UiaProviderEnablement::kDisabled) {
-    // Already disabled.
-    return;
+  if (!uia_provider_enabled_) {
+    return;  // Already disabled.
   }
 
-  uia_provider_enablement_ = UiaProviderEnablement::kDisabled;
+  uia_provider_enabled_ = false;
 
   // We must call this *after* we disabled the UIA provider to ensure that we
   // don't respond with the same provider to a re-entrant WM_GETOBJECT call. See
@@ -132,9 +133,7 @@ void AXPlatform::DisableActiveUiaProvider() {
 
 bool AXPlatform::IsUiaProviderEnabled() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return uia_provider_enablement_ == UiaProviderEnablement::kVariations
-             ? base::FeatureList::IsEnabled(features::kUiaProvider)
-             : (uia_provider_enablement_ == UiaProviderEnablement::kEnabled);
+  return uia_provider_enabled_;
 }
 
 void AXPlatform::SetUiaClientServiced(bool uia_client_serviced) {
@@ -145,6 +144,56 @@ void AXPlatform::SetUiaClientServiced(bool uia_client_serviced) {
 bool AXPlatform::HasServicedUiaClients() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return has_serviced_uia_clients_;
+}
+
+void AXPlatform::SetMsaaRequested() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  msaa_requested_ = true;
+}
+
+void AXPlatform::SetUiaRequested() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  uia_requested_ = true;
+}
+
+std::optional<AXPlatform::ActiveClientApi> AXPlatform::GetRequestedClientApi()
+    const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (msaa_requested_ && uia_requested_) {
+    return ActiveClientApi::kBoth;
+  }
+  if (uia_requested_) {
+    return ActiveClientApi::kUiaOnly;
+  }
+  if (msaa_requested_) {
+    return ActiveClientApi::kMsaaOnly;
+  }
+  return std::nullopt;
+}
+
+void AXPlatform::SetMsaaActive() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  msaa_active_ = true;
+}
+
+void AXPlatform::SetUiaActive() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  uia_active_ = true;
+}
+
+std::optional<AXPlatform::ActiveClientApi> AXPlatform::GetActiveClientApi()
+    const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (msaa_active_ && uia_active_) {
+    return ActiveClientApi::kBoth;
+  }
+  if (uia_active_) {
+    return ActiveClientApi::kUiaOnly;
+  }
+  if (msaa_active_) {
+    return ActiveClientApi::kMsaaOnly;
+  }
+  return std::nullopt;
 }
 #endif  // BUILDFLAG(IS_WIN)
 

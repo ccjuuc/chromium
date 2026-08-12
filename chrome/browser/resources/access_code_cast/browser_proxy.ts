@@ -9,10 +9,6 @@ import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PageHandlerInterface} from './access_code_cast.mojom-webui.js';
 import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from './access_code_cast.mojom-webui.js';
 
-declare const chrome: {
-  send(message: string, params?: any[]): void,
-  getVariableValue(variable: string): string,
-};
 
 const HISTOGRAM_ACCESS_CODE_INPUT_TIME =
     'AccessCodeCast.Ui.AccessCodeInputTime';
@@ -35,8 +31,8 @@ export enum DialogCloseReason {
 }
 
 export class BrowserProxy {
-  callbackRouter: PageCallbackRouter;
-  handler: PageHandlerInterface;
+  callbackRouter: PageCallbackRouter|undefined;
+  handler: PageHandlerInterface|undefined;
 
   constructor(omitHandler?: boolean) {
     if (omitHandler) {

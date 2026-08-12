@@ -45,9 +45,12 @@
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 #include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
 #include "third_party/blink/renderer/platform/wtf/text/copy_lchars_from_uchar_source.h"
+#include "third_party/blink/renderer/platform/wtf/text/integer_to_string_conversion.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_internal.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/blink/renderer/platform/wtf/text/utf16.h"
 #include "third_party/blink/renderer/platform/wtf/text/utf8.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
@@ -76,20 +79,51 @@ int CodeUnitCompare(const String& a, const String& b) {
   return CodeUnitCompare(a.Impl(), b.Impl());
 }
 
-int CodeUnitCompareIgnoringASCIICase(const String& a, const char* b) {
-  return CodeUnitCompareIgnoringASCIICase(a.Impl(),
-                                          reinterpret_cast<const LChar*>(b));
-}
-
-wtf_size_t String::Find(base::RepeatingCallback<bool(UChar)> match_callback,
-                        wtf_size_t index) const {
+String::size_type String::Find(
+    base::RepeatingCallback<bool(UChar)> match_callback,
+    size_type index) const {
   return impl_ ? impl_->Find(match_callback, index) : kNotFound;
 }
 
-UChar32 String::CharacterStartingAt(unsigned i) const {
+String::size_type String::find(const StringView& value, size_type start) const {
+  return internal::Find(impl_.get(), value, start);
+}
+
+String::size_type String::rfind(const StringView& value,
+                                size_type start) const {
+  if (value.empty()) {
+    return std::min(start, length());
+  }
+  return impl_ ? impl_->ReverseFind(value, start) : npos;
+}
+
+UChar32 String::CodePointAt(size_type i) const {
+  if (Is8Bit()) {
+    return Span8()[i];
+  }
+  return blink::CodePointAt(Span16(), i);
+}
+
+UChar32 String::CodePointAtOrZero(size_type i) const {
   if (!impl_ || i >= impl_->length())
     return 0;
-  return impl_->CharacterStartingAt(i);
+  return impl_->CodePointAtOrZero(i);
+}
+
+UChar32 String::CodePointAtAndPrevious(size_type start_offset,
+                                       size_type& i) const {
+  DCHECK_LT(start_offset, i);
+  if (Is8Bit()) {
+    return Span8()[--i];
+  }
+  return blink::CodePointAtAndPrevious(Span16(), start_offset, i);
+}
+
+UChar32 String::CodePointAtAndNext(size_type& i) const {
+  if (Is8Bit()) {
+    return Span8()[i++];
+  }
+  return blink::CodePointAtAndNext(Span16(), i);
 }
 
 CodePointIterator String::begin() const {
@@ -112,20 +146,28 @@ void String::Ensure16Bit() {
   }
 }
 
-void String::Truncate(unsigned length) {
-  if (impl_)
-    impl_ = impl_->Truncate(length);
+String& String::erase(size_type pos, size_type len) {
+  CHECK_LE(pos, length());
+  if (impl_) {
+    impl_ = impl_->Remove(pos, len);
+  }
+  return *this;
 }
 
-void String::Remove(unsigned start, unsigned length_to_remove) {
-  if (impl_)
-    impl_ = impl_->Remove(start, length_to_remove);
-}
-
-String String::Substring(unsigned pos, unsigned len) const {
+String String::DeprecatedSubstring(size_type pos, size_type len) const {
   if (!impl_)
     return String();
   return impl_->Substring(pos, len);
+}
+
+String String::substr(size_type pos, size_type len) const {
+  CHECK_LE(pos, length());
+  return impl_ ? impl_->Substring(pos, len) : String();
+}
+
+StringView String::subview(size_type pos, size_type len) const {
+  CHECK_LE(pos, length());
+  return StringView(*this, pos, std::min(len, length() - pos));
 }
 
 String String::DeprecatedLower() const {
@@ -134,19 +176,19 @@ String String::DeprecatedLower() const {
   return blink::CaseMap::FastToLowerInvariant(impl_.get());
 }
 
-String String::LowerASCII() const {
+String String::ToAsciiLower() const {
   if (!impl_)
     return String();
-  return impl_->LowerASCII();
+  return impl_->ToAsciiLower();
 }
 
-String String::UpperASCII() const {
+String String::ToAsciiUpper() const {
   if (!impl_)
     return String();
-  return impl_->UpperASCII();
+  return impl_->ToAsciiUpper();
 }
 
-unsigned String::LengthWithStrippedWhiteSpace() const {
+String::size_type String::LengthWithStrippedWhiteSpace() const {
   if (!impl_) {
     return 0;
   }
@@ -208,7 +250,10 @@ String String::Format(const char* format, ...) {
   Vector<char, kDefaultSize> buffer(kDefaultSize);
 
   va_start(args, format);
-  int length = base::VSpanPrintf(buffer, format, args);
+  // SAFETY: The safety of this code depends on the content of `format`. Since
+  // unsafe usage is marked with UNSAFE_TODO or UNSAFE_BUFFERS at the call
+  // site, no action is required here.
+  int length = UNSAFE_BUFFERS(base::VSpanPrintf(buffer, format, args));
   va_end(args);
 
   // TODO(esprehn): Negative result can only happen if there's an encoding
@@ -235,7 +280,8 @@ String String::Format(const char* format, ...) {
     // Not calling va_end/va_start here happens to work on lots of systems, but
     // fails e.g. on 64bit Linux.
     va_start(args, format);
-    length = base::VSpanPrintf(buffer, format, args);
+    // SAFETY: See the previous comment on base::VSpanPrintf().
+    length = UNSAFE_BUFFERS(base::VSpanPrintf(buffer, format, args));
     va_end(args);
 
     // TODO(tsepez): can we get an error the second time around if
@@ -253,6 +299,36 @@ String String::EncodeForDebugging() const {
   return StringView(*this).EncodeForDebugging();
 }
 
+String String::Number(int value) {
+  IntegerToStringConverter<int> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
+String String::Number(unsigned value) {
+  IntegerToStringConverter<unsigned> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
+String String::Number(long value) {
+  IntegerToStringConverter<long> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
+String String::Number(unsigned long value) {
+  IntegerToStringConverter<unsigned long> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
+String String::Number(long long value) {
+  IntegerToStringConverter<long long> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
+String String::Number(unsigned long long value) {
+  IntegerToStringConverter<unsigned long long> converter(value);
+  return StringImpl::Create(converter.Span());
+}
+
 String String::Number(float number) {
   return Number(static_cast<double>(number));
 }
@@ -262,7 +338,7 @@ String String::Number(double number, unsigned precision) {
   return String(converter.ToStringWithFixedPrecision(number, precision));
 }
 
-String String::NumberToStringECMAScript(double number) {
+String String::NumberToStringEcmaScript(double number) {
   DoubleToStringConverter converter;
   return String(converter.ToString(number));
 }
@@ -273,132 +349,27 @@ String String::NumberToStringFixedWidth(double number,
   return String(converter.ToStringWithFixedWidth(number, decimal_places));
 }
 
-int String::ToIntStrict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToInt(NumberParsingOptions::Strict(), ok);
+String String::HexNumber(uint64_t value) {
+  IntegerToStringConverter<uint64_t, 16, false> converter(value);
+  return StringImpl::Create(converter.Span());
 }
 
-unsigned String::ToUIntStrict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToUInt(NumberParsingOptions::Strict(), ok);
+Vector<String> String::Split(const StringView& separator) const {
+  return internal::Split(*this, separator, /* allow_empty_entries */ true);
 }
 
-unsigned String::HexToUIntStrict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->HexToUIntStrict(ok);
+Vector<String> String::Split(UChar separator) const {
+  return internal::Split(*this, separator, /* allow_empty_entries */ true);
 }
 
-uint64_t String::HexToUInt64Strict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->HexToUInt64Strict(ok);
-}
-
-int64_t String::ToInt64Strict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToInt64(NumberParsingOptions::Strict(), ok);
-}
-
-uint64_t String::ToUInt64Strict(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToUInt64(NumberParsingOptions::Strict(), ok);
-}
-
-int String::ToInt(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToInt(NumberParsingOptions::Loose(), ok);
-}
-
-unsigned String::ToUInt(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0;
-  }
-  return impl_->ToUInt(NumberParsingOptions::Loose(), ok);
-}
-
-double String::ToDouble(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0.0;
-  }
-  return impl_->ToDouble(ok);
-}
-
-float String::ToFloat(bool* ok) const {
-  if (!impl_) {
-    if (ok)
-      *ok = false;
-    return 0.0f;
-  }
-  return impl_->ToFloat(ok);
-}
-
-void String::Split(const StringView& separator,
-                   bool allow_empty_entries,
-                   Vector<String>& result) const {
-  result.clear();
-
-  unsigned start_pos = 0;
-  wtf_size_t end_pos;
-  while ((end_pos = Find(separator, start_pos)) != kNotFound) {
-    if (allow_empty_entries || start_pos != end_pos)
-      result.push_back(Substring(start_pos, end_pos - start_pos));
-    start_pos = end_pos + separator.length();
-  }
-  if (allow_empty_entries || start_pos != length())
-    result.push_back(Substring(start_pos));
-}
-
-void String::Split(UChar separator,
-                   bool allow_empty_entries,
-                   Vector<String>& result) const {
-  result.clear();
-
-  unsigned start_pos = 0;
-  wtf_size_t end_pos;
-  while ((end_pos = find(separator, start_pos)) != kNotFound) {
-    if (allow_empty_entries || start_pos != end_pos)
-      result.push_back(Substring(start_pos, end_pos - start_pos));
-    start_pos = end_pos + 1;
-  }
-  if (allow_empty_entries || start_pos != length())
-    result.push_back(Substring(start_pos));
+Vector<String> String::SplitSkippingEmpty(UChar separator) const {
+  return internal::Split(*this, separator, /* allow_empty_entries */ false);
 }
 
 std::string String::Ascii() const {
   // Printable ASCII characters 32..127 and the null character are
   // preserved, characters outside of this range are converted to '?'.
-  unsigned length = this->length();
+  size_type length = this->length();
   if (!length)
     return std::string();
 
@@ -415,7 +386,7 @@ std::string String::Ascii() const {
 std::string String::Latin1() const {
   // Basic Latin1 (ISO) encoding - Unicode characters 0..255 are
   // preserved, characters outside of this range are converted to '?'.
-  unsigned length = this->length();
+  size_type length = this->length();
   if (!length)
     return std::string();
 
@@ -437,7 +408,7 @@ String String::Make8BitFrom16BitSource(base::span<const UChar> source) {
     return g_empty_string;
   }
 
-  const wtf_size_t length = base::checked_cast<wtf_size_t>(source.size());
+  const size_type length = base::checked_cast<size_type>(source.size());
   base::span<LChar> destination;
   String result = String::CreateUninitialized(length, destination);
 
@@ -451,16 +422,17 @@ String String::Make16BitFrom8BitSource(base::span<const LChar> source) {
     return g_empty_string16_bit;
   }
 
+  const wtf_size_t length = base::checked_cast<wtf_size_t>(source.size());
   base::span<UChar> destination;
-  String result = String::CreateUninitialized(source.size(), destination);
+  String result = String::CreateUninitialized(length, destination);
 
   StringImpl::CopyChars(destination, source);
   return result;
 }
 
-String String::FromUTF8(base::span<const uint8_t> bytes) {
+String String::FromUtf8(base::span<const uint8_t> bytes) {
   const uint8_t* string_start = bytes.data();
-  wtf_size_t length = base::checked_cast<wtf_size_t>(bytes.size());
+  size_type length = base::checked_cast<size_type>(bytes.size());
 
   if (!string_start)
     return String();
@@ -474,24 +446,17 @@ String String::FromUTF8(base::span<const uint8_t> bytes) {
 
   Vector<UChar, 1024> buffer(length);
 
-  blink::unicode::ConversionResult result =
-      blink::unicode::ConvertUtf8ToUtf16(bytes, base::span(buffer));
-  if (result.status != blink::unicode::kConversionOK) {
+  unicode::ConversionResult result =
+      unicode::ConvertUtf8ToUtf16(bytes, base::span(buffer));
+  if (!result.IsSuccess()) {
     return String();
   }
 
   return StringImpl::Create(result.converted);
 }
 
-String String::FromUTF8(const char* s) {
-  if (!s) {
-    return String();
-  }
-  return FromUTF8(std::string_view(s));
-}
-
-String String::FromUTF8WithLatin1Fallback(base::span<const uint8_t> bytes) {
-  String utf8 = FromUTF8(bytes);
+String String::FromUtf8WithLatin1Fallback(base::span<const uint8_t> bytes) {
+  String utf8 = FromUtf8(bytes);
   if (!utf8)
     return String(bytes);
   return utf8;

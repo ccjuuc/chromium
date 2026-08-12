@@ -5,7 +5,10 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FOUNDATIONS_AUTOFILL_DRIVER_FACTORY_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FOUNDATIONS_AUTOFILL_DRIVER_FACTORY_H_
 
+#include <vector>
+
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "components/autofill/core/browser/foundations/autofill_driver.h"
 
 namespace autofill {
@@ -71,10 +74,22 @@ class AutofillDriverFactory {
   void SetLifecycleStateAndNotifyObservers(AutofillDriver& driver,
                                            LifecycleState new_state);
 
-  const base::ObserverList<Observer>& observers() { return observers_; }
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  const base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>&
+  observers() {
+    return observers_;
+  }
 
  private:
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 };
 
 }  // namespace autofill

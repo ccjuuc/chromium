@@ -4,8 +4,9 @@
 
 #include "ui/gl/init/gl_display_initializer.h"
 
+#include <algorithm>
+
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_features.h"
@@ -20,12 +21,13 @@ namespace {
 void AddInitDisplay(std::vector<DisplayType>* init_displays,
                     DisplayType display_type) {
   // Make sure to not add the same display type twice.
-  if (!base::Contains(*init_displays, display_type)) {
+  if (!std::ranges::contains(*init_displays, display_type)) {
     init_displays->push_back(display_type);
   }
 }
 
-void GetEGLInitDisplays(bool supports_angle_d3d,
+void GetEGLInitDisplays(bool supports_angle,
+                        bool supports_angle_d3d,
                         bool supports_angle_opengl,
                         bool supports_angle_null,
                         bool supports_angle_vulkan,
@@ -60,6 +62,12 @@ void GetEGLInitDisplays(bool supports_angle_d3d,
       (!command_line->HasSwitch(switches::kUseANGLE) ||
        requested_renderer == kANGLEImplementationDefaultName);
 
+  // Only allow falling back to requesting the default display if we're not
+  // running on ANGLE. If we run on ANGLE we want to always explicitly request a
+  // backend. If no backend is selected, we should fail display creation and
+  // fall back to software.
+  bool allow_default_display = !supports_angle;
+
   if (supports_angle_null &&
       (requested_renderer == kANGLEImplementationNullName ||
        gl::GetANGLEImplementation() == ANGLEImplementation::kNull)) {
@@ -78,16 +86,13 @@ void GetEGLInitDisplays(bool supports_angle_d3d,
 
   if (supports_angle_d3d) {
     if (use_angle_default) {
-      // Default mode for ANGLE - try D3D11, else try D3D9
+      // Default mode for ANGLE - use D3D11.
       if (!GetGlWorkarounds().disable_d3d11) {
         AddInitDisplay(init_displays, ANGLE_D3D11);
       }
-      AddInitDisplay(init_displays, ANGLE_D3D9);
     } else {
       if (requested_renderer == kANGLEImplementationD3D11Name) {
         AddInitDisplay(init_displays, ANGLE_D3D11);
-      } else if (requested_renderer == kANGLEImplementationD3D9Name) {
-        AddInitDisplay(init_displays, ANGLE_D3D9);
       } else if (requested_renderer == kANGLEImplementationD3D11NULLName) {
         AddInitDisplay(init_displays, ANGLE_D3D11_NULL);
       } else if (requested_renderer == kANGLEImplementationD3D11on12Name) {
@@ -157,9 +162,9 @@ void GetEGLInitDisplays(bool supports_angle_d3d,
     }
   }
 
-  // If no displays are available due to missing angle extensions or invalid
-  // flags, request the default display.
-  if (init_displays->empty()) {
+  // If no displays are available and we're allowed to use the default display
+  // (eg Android native GL driver), insert it.
+  if (init_displays->empty() && allow_default_display) {
     init_displays->push_back(DEFAULT);
   }
 }
@@ -175,7 +180,10 @@ void GetEGLInitDisplaysForTesting(bool supports_angle_d3d,  // IN-TEST
                                   bool supports_angle_metal,
                                   const base::CommandLine* command_line,
                                   std::vector<DisplayType>* init_displays) {
-  GetEGLInitDisplays(supports_angle_d3d, supports_angle_opengl,
+  bool supports_angle = supports_angle_d3d || supports_angle_opengl ||
+                        supports_angle_null || supports_angle_vulkan ||
+                        supports_angle_swiftshader || supports_angle_metal;
+  GetEGLInitDisplays(supports_angle, supports_angle_d3d, supports_angle_opengl,
                      supports_angle_null, supports_angle_vulkan,
                      supports_angle_swiftshader, supports_angle_opengl_egl,
                      supports_angle_metal, command_line, init_displays);
@@ -197,10 +205,8 @@ void GetDisplayInitializationParams(bool* supports_angle,
   if (g_driver_egl.client_ext.b_EGL_ANGLE_platform_angle) {
     supports_angle_d3d =
         g_driver_egl.client_ext.b_EGL_ANGLE_platform_angle_d3d &&
-        (gl::GLImplementationParts(gl::ANGLEImplementation::kD3D9)
-             .IsAllowed(allowed_impls) ||
-         gl::GLImplementationParts(gl::ANGLEImplementation::kD3D11)
-             .IsAllowed(allowed_impls));
+        gl::GLImplementationParts(gl::ANGLEImplementation::kD3D11)
+            .IsAllowed(allowed_impls);
     supports_angle_opengl =
         g_driver_egl.client_ext.b_EGL_ANGLE_platform_angle_opengl &&
         (gl::GLImplementationParts(gl::ANGLEImplementation::kOpenGL)
@@ -232,7 +238,7 @@ void GetDisplayInitializationParams(bool* supports_angle,
                     supports_angle_swiftshader || supports_angle_metal;
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  GetEGLInitDisplays(supports_angle_d3d, supports_angle_opengl,
+  GetEGLInitDisplays(*supports_angle, supports_angle_d3d, supports_angle_opengl,
                      supports_angle_null, supports_angle_vulkan,
                      supports_angle_swiftshader, supports_angle_opengl_egl,
                      supports_angle_metal, command_line, init_displays);

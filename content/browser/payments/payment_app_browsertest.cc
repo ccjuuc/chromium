@@ -125,6 +125,7 @@ class PaymentAppBrowserTest : public ContentBrowserTest {
             /*service_worker_scope=*/
             service_worker_javascript_file_url.GetWithoutFilename(),
             /*payment_method_identifier=*/"https://bobpay.com",
+            shell()->web_contents()->GetPrimaryMainFrame()->GetGlobalId(),
             base::BindOnce(&OnPaymentAppInstall, run_loop.QuitClosure(),
                            &success));
     run_loop.Run();
@@ -215,7 +216,6 @@ class PaymentAppBrowserTest : public ContentBrowserTest {
                                            ->GetBrowserContext()
                                            ->GetDefaultStoragePartition())
         ->ClearData(StoragePartition::REMOVE_DATA_MASK_SERVICE_WORKERS,
-                    StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
                     blink::StorageKey(), base::Time(), base::Time::Max(),
                     run_loop.QuitClosure());
 

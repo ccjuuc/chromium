@@ -8,9 +8,12 @@
 #include <optional>
 #include <string>
 
+#include "build/build_config.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
+
 struct AutocompleteMatch;
+class AutocompleteClassifier;
 class GURL;
-class OmniboxClient;
 
 namespace omnibox {
 
@@ -37,6 +40,7 @@ std::u16string SanitizeTextForPaste(const std::u16string& text);
 
 // Adjusts the copied text before writing it to the clipboard. If the copied
 // text is a URL with the scheme elided, this method reattaches the scheme.
+//
 // Copied text that looks like a search query will not be modified.
 //
 // |sel_min| gives the minimum of the selection, e.g. min(sel_start, sel_end).
@@ -56,14 +60,23 @@ std::u16string SanitizeTextForPaste(const std::u16string& text);
 //  - |url_from_text| may be modified, but might not contain a valid GURL.
 //  - |text| is full UTF-16 and not %-escaped. This is because we are not
 //    interpreting |text| as a URL, so we leave the Unicode characters as-is.
-void AdjustTextForCopy(int sel_min,
-                       std::u16string* text,
-                       bool has_user_modified_text,
-                       bool is_keyword_selected,
-                       std::optional<AutocompleteMatch> current_popup_match,
-                       OmniboxClient* client,
-                       GURL* url_from_text,
-                       bool* write_url);
+//
+// Copied text that looks like a "contextual tasks" URL will have
+// "origin-swapping" logic applied to it, in order to ensure that users copy a
+// valid, shareable URL.
+//
+void AdjustTextForCopy(
+    int sel_min,
+    std::u16string* text,
+    bool has_user_modified_text,
+    bool is_keyword_selected,
+    std::optional<AutocompleteMatch> current_popup_match,
+    const GURL& navigation_entry_url,
+    AutocompleteClassifier* autocomplete_classifier,
+    ::metrics::OmniboxEventProto::PageClassification page_classification,
+    const GURL& contextual_tasks_inner_frame_url,
+    GURL* url_from_text,
+    bool* write_url);
 
 }  // namespace omnibox
 

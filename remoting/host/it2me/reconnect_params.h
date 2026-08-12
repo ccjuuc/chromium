@@ -13,13 +13,15 @@ namespace remoting {
 
 struct ReconnectParams {
   ReconnectParams();
+  ReconnectParams(const ReconnectParams& other);
   ReconnectParams(ReconnectParams&& other);
+  ReconnectParams& operator=(const ReconnectParams& other);
   ReconnectParams& operator=(ReconnectParams&& other);
   ~ReconnectParams();
 
   // Helpers used to convert to/from a JSON dictionary.
-  static base::Value::Dict ToDict(const ReconnectParams& params);
-  static ReconnectParams FromDict(const base::Value::Dict& dict);
+  static base::DictValue ToDict(const ReconnectParams& params);
+  static ReconnectParams FromDict(const base::DictValue& dict);
 
   // Verifies the structure contains valid data.
   bool IsValid() const;

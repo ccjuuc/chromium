@@ -15,10 +15,11 @@
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/testing_pref_service.h"
 #import "components/signin/public/base/signin_metrics.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/content_suggestions/price_tracking_promo/coordinator/price_tracking_promo_mediator+testing.h"
 #import "ios/chrome/browser/content_suggestions/price_tracking_promo/coordinator/price_tracking_promo_mediator_delegate.h"
 #import "ios/chrome/browser/content_suggestions/price_tracking_promo/model/price_tracking_promo_prefs.h"
-#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_item.h"
+#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_config.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -33,6 +34,8 @@
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/public/provider/chrome/browser/push_notification/push_notification_api.h"
@@ -51,8 +54,10 @@ class PriceTrackingPromoMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
         IOSChromeFaviconLoaderFactory::GetInstance(),
         IOSChromeFaviconLoaderFactory::GetDefaultFactory());
@@ -65,7 +70,7 @@ class PriceTrackingPromoMediatorTest : public PlatformTest {
             GetApplicationContext()->GetSystemIdentityManager());
     system_identity_manager->AddIdentity(identity_);
 
-    auth_service_->SignIn(identity_, signin_metrics::AccessPoint::kUnknown);
+    auth_service_->SignIn(identity_, signin_metrics::AccessPoint::kStartPage);
 
     shopping_service_ = std::make_unique<commerce::MockShoppingService>();
     bookmark_model_ = bookmarks::TestBookmarkClient::CreateModel();
@@ -183,11 +188,11 @@ TEST_F(PriceTrackingPromoMediatorTest, TestDisconnect) {
 
 // Resets card and fetches most recent subscription, if available.
 TEST_F(PriceTrackingPromoMediatorTest, TestReset) {
-  PriceTrackingPromoItem* item = [[PriceTrackingPromoItem alloc] init];
-  [mediator() setPriceTrackingPromoItemForTesting:item];
-  EXPECT_NE(nil, mediator().priceTrackingPromoItemForTesting);
+  PriceTrackingPromoConfig* config = [[PriceTrackingPromoConfig alloc] init];
+  [mediator() setPriceTrackingPromoConfigForTesting:config];
+  EXPECT_NE(nil, mediator().priceTrackingPromoConfigForTesting);
   [mediator() reset];
-  EXPECT_EQ(nil, mediator().priceTrackingPromoItemForTesting);
+  EXPECT_EQ(nil, mediator().priceTrackingPromoConfigForTesting);
 }
 
 TEST_F(PriceTrackingPromoMediatorTest, TestGetSnackbarMessage) {

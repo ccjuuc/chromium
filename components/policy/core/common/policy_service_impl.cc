@@ -15,13 +15,11 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
-#include "base/containers/contains.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
@@ -246,7 +244,7 @@ void PolicyServiceImpl::RemoveProviderUpdateObserver(
 bool PolicyServiceImpl::HasProvider(
     ConfigurationPolicyProvider* provider) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return base::Contains(providers_, provider);
+  return std::ranges::contains(providers_, provider);
 }
 
 const PolicyMap& PolicyServiceImpl::GetPolicies(
@@ -461,14 +459,24 @@ PolicyBundle PolicyServiceImpl::MergePolicyBundles(
   DefaultChromeAppsMigrator chrome_apps_migrator;
 #endif  // BUILDFLAG(IS_CHROMEOS)
   for (const PolicyBundle* policy_bundle : bundles) {
-    PolicyBundle provided_bundle = policy_bundle->Clone();
-    IgnoreUserCloudPrecedencePolicies(&provided_bundle.Get(chrome_namespace));
-    DowngradeMetricsReportingToRecommendedPolicy(
-        &provided_bundle.Get(chrome_namespace));
+    // Merge non-chrome namespaces directly from the provider. No clone is
+    // needed because PolicyMap::MergeFrom deep-copies individual entries
+    // internally — the provider's data is never mutated. Only the chrome
+    // namespace requires cloning for pre-merge mutations below.
+    for (const auto& [ns, map] : *policy_bundle) {
+      if (ns != chrome_namespace) {
+        bundle.Get(ns).MergeFrom(map);
+      }
+    }
+
+    // Clone only the chrome-namespace PolicyMap for pre-merge mutations.
+    PolicyMap chrome_clone = policy_bundle->Get(chrome_namespace).Clone();
+    IgnoreUserCloudPrecedencePolicies(&chrome_clone);
+    DowngradeMetricsReportingToRecommendedPolicy(&chrome_clone);
 #if BUILDFLAG(IS_CHROMEOS)
-    chrome_apps_migrator.Migrate(&provided_bundle.Get(chrome_namespace));
+    chrome_apps_migrator.Migrate(&chrome_clone);
 #endif  // BUILDFLAG(IS_CHROMEOS)
-    bundle.MergeFrom(provided_bundle);
+    bundle.Get(chrome_namespace).MergeFrom(chrome_clone);
   }
 
   auto& chrome_policies = bundle.Get(chrome_namespace);
@@ -617,9 +625,8 @@ void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
 
   // Check if POLICY_DOMAIN_CHROME has just become initialized and we haven't
   // cached the startup chrome policy map.
-  if (startup_chrome_policy_hash_map_.empty() &&
-      std::ranges::find(updated_domains, POLICY_DOMAIN_CHROME) !=
-          updated_domains.end() &&
+  if (!initial_snapshot_taken_ &&
+      std::ranges::contains(updated_domains, POLICY_DOMAIN_CHROME) &&
       policy_domain_status_[POLICY_DOMAIN_CHROME] ==
           PolicyDomainStatus::kPolicyReady) {
     VLOG_POLICY(1, POLICY_PROCESSING)
@@ -627,6 +634,7 @@ void PolicyServiceImpl::MaybeNotifyPolicyDomainStatusChange(
     const PolicyNamespace chrome_namespace(POLICY_DOMAIN_CHROME, std::string());
     startup_chrome_policy_hash_map_ =
         CopyPoliciesStartupHash(policy_bundle_.Get(chrome_namespace));
+    initial_snapshot_taken_ = true;
   }
 }
 
@@ -685,8 +693,8 @@ PolicyServiceImpl::CopyPoliciesStartupHash(
     if (policy_details && !policy_details->supports_dynamic_refresh) {
       const base::Value* policy_value = entry.value_unsafe();
       if (policy_value) {
-        startup_policy_dynamic_refresh_false_map[key] =
-            policy::PolicyValueHash(*policy_value);
+        size_t hash = policy::PolicyValueHash(*policy_value);
+        startup_policy_dynamic_refresh_false_map[key] = hash;
       }
     }
   }

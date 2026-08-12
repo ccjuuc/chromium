@@ -15,6 +15,7 @@
 #include "components/variations/active_field_trials.h"
 #include "components/variations/net/variations_command_line.h"
 #include "components/variations/service/safe_seed_manager.h"
+#include "components/variations/service/variations_service.h"
 #include "components/variations/synthetic_trials_active_group_id_provider.h"
 
 namespace version_ui {
@@ -48,7 +49,34 @@ std::string SeedTypeToUiString(variations::SeedType seed_type) {
   }
 }
 
-base::Value::List GetVariationsList() {
+std::string VariationsSourceToUiString(
+    variations::VariationsSource variations_source) {
+  std::string result = "unknown";
+  switch (variations_source.type) {
+    case variations::VariationsSourceType::kUnknown:
+      return result;
+    case variations::VariationsSourceType::kCommandLineOrAboutFlags:
+      return "command line or about flags";
+    case variations::VariationsSourceType::kDefaultSeed:
+      result = "default seed";
+      break;
+    case variations::VariationsSourceType::kFieldTrialConfig:
+      result = "field-trial-config";
+      break;
+    case variations::VariationsSourceType::kVariationsServer:
+      result = "variations server";
+      break;
+    case variations::VariationsSourceType::kManualConfigFile:
+      result = "manual config file";
+      break;
+  }
+  if (variations_source.forced_via_command_line_or_about_flags) {
+    result += " (command line or about flags)";
+  }
+  return result;
+}
+
+base::ListValue GetVariationsList() {
   std::vector<std::string> variations;
   base::FieldTrial::ActiveGroups active_groups;
   // Include low anonymity trial groups in the version string, as it is only
@@ -79,7 +107,7 @@ base::Value::List GetVariationsList() {
                     synthetic_field_trials.end());
 #endif
 
-  base::Value::List variations_list;
+  base::ListValue variations_list;
   for (std::string& variation : variations) {
     variations_list.Append(std::move(variation));
   }

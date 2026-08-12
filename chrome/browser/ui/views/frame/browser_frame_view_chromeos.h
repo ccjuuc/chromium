@@ -10,11 +10,10 @@
 #include "base/cancelable_callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/frame/browser_frame_header_chromeos.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/tab_icon_view_model.h"
 #include "chromeos/ui/frame/highlight_border_overlay.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
@@ -24,6 +23,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/display/display_observer.h"
 #include "ui/display/tablet_state.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 
 class ProfileIndicatorIcon;
 class TabIconView;
@@ -56,16 +56,13 @@ class BrowserFrameViewChromeOS
 
   // BrowserFrameView:
   BrowserLayoutParams GetBrowserLayoutParams() const override;
-  gfx::Rect GetBoundsForTabStripRegion(
-      const gfx::Size& tabstrip_minimum_size) const override;
-  gfx::Rect GetBoundsForWebAppFrameToolbar(
-      const gfx::Size& toolbar_preferred_size) const override;
   bool ShouldShowWebAppFrameToolbar() const override;
   int GetTopInset(bool restored) const override;
   void UpdateThrobber(bool running) override;
   SkColor GetCaptionColor(BrowserFrameActiveState active_state) const override;
   SkColor GetFrameColor(BrowserFrameActiveState active_state) const override;
   void UpdateMinimumSize() override;
+  gfx::RoundedCornersF GetWindowRoundedCorners() const override;
 
   // views::FrameView:
   gfx::Rect GetBoundsForClientView() const override;
@@ -85,8 +82,6 @@ class BrowserFrameViewChromeOS
   gfx::Size GetMinimumSize() const override;
   void OnThemeChanged() override;
   void ChildPreferredSizeChanged(views::View* child) override;
-  bool DoesIntersectRect(const views::View* target,
-                         const gfx::Rect& rect) const override;
   views::View::Views GetChildrenInZOrder() override;
 
   // BrowserFrameHeaderChromeOS::AppearanceProvider:
@@ -114,8 +109,7 @@ class BrowserFrameViewChromeOS
                                intptr_t old) override;
 
   // ImmersiveModeController::Observer:
-  void OnImmersiveRevealStarted() override;
-  void OnImmersiveRevealEnded() override;
+  void OnImmersiveFullscreenEntered() override;
   void OnImmersiveFullscreenExited() override;
 
   // apps::AppRegistryCache::Observer:
@@ -145,14 +139,13 @@ class BrowserFrameViewChromeOS
 
  private:
   friend class BrowserFrameViewChromeOSTestApi;
-  FRIEND_TEST_ALL_PREFIXES(ImmersiveModeBrowserViewTestNoWebUiTabStrip,
-                           ImmersiveFullscreen);
+  FRIEND_TEST_ALL_PREFIXES(ImmersiveModeBrowserViewTest, ImmersiveFullscreen);
   class ProfileChangeObserver;
 
-  // App is a PWA and has borderless in its manifest. This doesn't yet mean
-  // that the `window-management` permission has been granted and borderless
+  // App is a PWA and has unframed in its manifest. This doesn't yet mean
+  // that the `window-management` permission has been granted and unframed
   // mode would be activated.
-  bool AppIsPwaWithBorderlessDisplayMode() const;
+  bool AppIsPwaWithUnframedDisplayMode() const;
 
   // Returns true if `GetShowCaptionButtonsWhenNotInOverview()` returns true
   // and this browser window is not showing in overview.
@@ -196,9 +189,15 @@ class BrowserFrameViewChromeOS
   // Updates the icon that indicates a teleported window.
   void UpdateProfileIcons();
 
+  void MaybeAddAppIconToLayoutParams(BrowserLayoutParams& params) const;
+
   void LayoutProfileIndicator();
 
-  void UpdateBorderlessModeEnabled();
+  void UpdateUnframedModeEnabled();
+
+  void RelayoutBrowserWindow();
+
+  ImmersiveModeController* GetImmersiveModeController() const;
 
   // Returns whether this window is currently in the overview list.
   bool GetOverviewMode() const;
@@ -211,18 +210,11 @@ class BrowserFrameViewChromeOS
   // Called any time the frame color may have changed.
   void OnUpdateFrameColor();
 
-  // Called any time the theme has changed and may need to be animated.
-  void MaybeAnimateThemeChanged();
-
   // Returns whether the associated window is currently floated or not.
   bool IsFloated() const;
 
   // Returns whether the associated window is currently snapped or not.
   bool IsSnapped() const;
-
-  // True if the the associated browser window should be using the WebUI tab
-  // strip.
-  bool UseWebUITabStrip() const;
 
   // Returns the top level aura::Window for this browser window.
   const aura::Window* GetFrameWindow() const;
@@ -254,12 +246,6 @@ class BrowserFrameViewChromeOS
   std::optional<display::ScopedDisplayObserver> display_observer_;
 
   gfx::Size last_minimum_size_;
-
-  // Callback to invoke to animate back in the layer associated with the
-  // `contents_web_view()` native view following a theme changed event.
-  base::CancelableOnceCallback<void(bool)> theme_changed_animation_callback_;
-
-  base::WeakPtrFactory<BrowserFrameViewChromeOS> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_CHROMEOS_H_

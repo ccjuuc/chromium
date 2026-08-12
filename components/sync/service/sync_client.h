@@ -12,6 +12,10 @@
 
 class PrefService;
 
+namespace network_time {
+class NetworkTimeTracker;
+}  // namespace network_time
+
 namespace signin {
 class IdentityManager;
 }
@@ -44,6 +48,9 @@ class SyncClient {
 
   virtual signin::IdentityManager* GetIdentityManager() = 0;
 
+  // Returns the network time tracker to retrieve synchronized network time.
+  virtual network_time::NetworkTimeTracker* GetNetworkTimeTracker() = 0;
+
   // Returns the path to the folder used for storing the local sync database.
   // It is only used when sync is running against a local backend.
   virtual base::FilePath GetLocalSyncBackendFolder() = 0;
@@ -63,6 +70,10 @@ class SyncClient {
   // most once.
   virtual void RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial(
       const TrustedVaultAutoUpgradeSyntheticFieldTrialGroup& group) = 0;
+
+  // Returns whether metrics reporting is enabled; see
+  // `ChromeMetricsServiceAccessor` for details.
+  virtual bool IsMetricsAndCrashReportingEnabled() = 0;
 };
 
 }  // namespace syncer

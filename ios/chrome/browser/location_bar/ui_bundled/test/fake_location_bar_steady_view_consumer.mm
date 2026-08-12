@@ -19,6 +19,9 @@
 
 - (void)updateLocationShareable:(BOOL)shareable {
   _locationShareable = shareable;
+  if (self.onUpdateLocationShareable) {
+    self.onUpdateLocationShareable(shareable);
+  }
 }
 
 - (void)updateAfterNavigatingToNTP {
@@ -28,6 +31,9 @@
 }
 
 - (void)recordLensOverlayAvailability {
+}
+
+- (void)updateAIHubNewBadgeVisibility {
 }
 
 @end

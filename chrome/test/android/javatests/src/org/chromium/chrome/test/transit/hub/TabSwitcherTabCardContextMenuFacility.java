@@ -8,7 +8,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertTrue;
 
 import static org.chromium.base.test.transit.Condition.whether;
 import static org.chromium.base.test.transit.SimpleConditions.uiThreadCondition;
@@ -24,9 +23,8 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.Token;
 import org.chromium.base.test.transit.ScrollableFacility;
 import org.chromium.base.test.transit.ViewElement;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.tab.TabId;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.SoftKeyboardFacility;
 import org.chromium.chrome.test.transit.tabmodel.TabsPinnedStatusCondition;
 import org.chromium.components.browser_ui.widget.list_view.TouchTrackingListView;
@@ -49,7 +47,7 @@ public class TabSwitcherTabCardContextMenuFacility<HostStationT extends TabSwitc
             declareContainerView(
                     TouchTrackingListView.class,
                     withId(R.id.tab_group_action_menu_list),
-                    ViewElement.defaultOptions());
+                    ViewElement.initialSettleTimeOption(1000));
     private final @TabId int mTabId;
 
     public Item share;
@@ -95,9 +93,7 @@ public class TabSwitcherTabCardContextMenuFacility<HostStationT extends TabSwitc
 
         List<Token> allTabGroupIds =
                 ThreadUtils.runOnUiThreadBlocking(
-                        () ->
-                                new ArrayList<>(
-                                        mHostStation.getTabGroupModelFilter().getAllTabGroupIds()));
+                        () -> new ArrayList<>(mHostStation.getTabModel().getAllTabGroupIds()));
         return addTabToGroup
                 .scrollToAndSelectTo()
                 .enterFacility(
@@ -154,8 +150,6 @@ public class TabSwitcherTabCardContextMenuFacility<HostStationT extends TabSwitc
     }
 
     private void changePinnedState(boolean newPinnedState, Item pinListItem) {
-        assertTrue(ChromeFeatureList.sAndroidPinnedTabs.isEnabled());
-
         noopTo().waitFor(
                         new TabsPinnedStatusCondition(
                                 mHostStation.getTabModel(), List.of(mTabId), !newPinnedState));

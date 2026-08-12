@@ -18,7 +18,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/input_method_manager/arc_input_method_manager_bridge_impl.h"
 #include "chrome/browser/profiles/profile.h"
@@ -104,11 +104,12 @@ class ArcInputMethodManagerServiceFactory
   static constexpr const char* kName = "ArcInputMethodManagerServiceFactory";
 
   static ArcInputMethodManagerServiceFactory* GetInstance() {
-    return base::Singleton<ArcInputMethodManagerServiceFactory>::get();
+    static base::NoDestructor<ArcInputMethodManagerServiceFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcInputMethodManagerServiceFactory>;
+  friend base::NoDestructor<ArcInputMethodManagerServiceFactory>;
   ArcInputMethodManagerServiceFactory() = default;
   ~ArcInputMethodManagerServiceFactory() override = default;
 };
@@ -749,7 +750,7 @@ void ArcInputMethodManagerService::NotifyInputMethodManagerObservers(
   // TODO(yhanada): This is a temporary workaround for supporting ARC IMEs
   // and supports neither Chrome OS extensions nor state changes enforced by
   // the policy. The better way to do this is to add a dedicated event to
-  // language_settings_private.idl and send the new event to the JS side
+  // language_settings_private.webidl and send the new event to the JS side
   // instead.
   auto* manager = ash::input_method::InputMethodManager::Get();
   if (!manager)

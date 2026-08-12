@@ -17,7 +17,6 @@
 #include "chrome/browser/extensions/extension_service_test_base.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search/background/ntp_custom_background_service_constants.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/themes/theme_service_test_utils.h"
@@ -37,6 +36,7 @@
 #include "components/sync/test/fake_sync_change_processor.h"
 #include "components/sync/test/sync_change_processor_wrapper_for_test.h"
 #include "components/sync/test/test_matchers.h"
+#include "components/themes/ntp_custom_background_service_constants.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -192,61 +192,13 @@ class ThemeLocalDataBatchUploaderTestBase
   std::unique_ptr<ThemeLocalDataBatchUploader> batch_uploader_;
 };
 
-class ThemeLocalDataBatchUploaderTestWithFlagDisabled
-    : public ThemeLocalDataBatchUploaderTestBase {
- public:
-  ThemeLocalDataBatchUploaderTestWithFlagDisabled() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{syncer::kSeparateLocalAndAccountThemes},
-        /*disabled_features=*/{syncer::kThemesBatchUpload});
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(ThemeLocalDataBatchUploaderTestWithFlagDisabled, ShouldReturnNoItems) {
-  // Local extension theme.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return theme_service()->UsingExtensionTheme(); }));
-
-  const sync_pb::ThemeSpecifics local_theme_specifics =
-      theme_sync_service()->GetThemeSpecificsFromCurrentThemeForTesting();
-  const sync_pb::ThemeSpecifics remote_theme_specifics =
-      theme_service::test::CreateThemeSpecificsWithColorTheme();
-
-  StartSyncing(remote_theme_specifics);
-
-  EXPECT_THAT(GetLocalDataDescription(), IsEmptyLocalDataDescription());
-}
-
-using ThemeLocalDataBatchUploaderDeathTestWithFlagDisabled =
-    ThemeLocalDataBatchUploaderTestWithFlagDisabled;
-
-TEST_F(ThemeLocalDataBatchUploaderDeathTestWithFlagDisabled,
-       TriggerLocalDataMigration) {
-  // Local extension theme.
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return theme_service()->UsingExtensionTheme(); }));
-
-  const sync_pb::ThemeSpecifics local_theme_specifics =
-      theme_sync_service()->GetThemeSpecificsFromCurrentThemeForTesting();
-  const sync_pb::ThemeSpecifics remote_theme_specifics =
-      theme_service::test::CreateThemeSpecificsWithColorTheme();
-
-  StartSyncing(remote_theme_specifics);
-
-  EXPECT_DEATH(TriggerLocalDataMigration(), "");
-}
-
 class ThemeLocalDataBatchUploaderTest
     : public ThemeLocalDataBatchUploaderTestBase,
       public testing::WithParamInterface<sync_pb::ThemeSpecifics> {
  public:
   ThemeLocalDataBatchUploaderTest() {
     feature_list_.InitWithFeatures(
-        /*enabled_features=*/{syncer::kSeparateLocalAndAccountThemes,
-                              syncer::kThemesBatchUpload},
+        /*enabled_features=*/{syncer::kSeparateLocalAndAccountThemes},
         /*disabled_features=*/{});
   }
 
@@ -628,8 +580,8 @@ TEST_P(ThemeLocalDataBatchUploaderTest, LocalGrayscaleTheme) {
 
 TEST_P(ThemeLocalDataBatchUploaderTest, LocalNtpBackground) {
   // Set custom background via pref.
-  base::Value::Dict background_dict =
-      base::Value::Dict()
+  base::DictValue background_dict =
+      base::DictValue()
           .Set(kNtpCustomBackgroundURL, kTestUrl)
           .Set(kNtpCustomBackgroundAttributionLine1, "attribution_line_1")
           .Set(kNtpCustomBackgroundAttributionLine2, "attribution_line_2")

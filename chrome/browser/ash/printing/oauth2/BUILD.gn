@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//third_party/protobuf/proto_library.gni")
 
 assert(is_chromeos)
@@ -40,6 +39,7 @@ static_library("oauth2") {
   deps = [
     "//chrome/browser:browser_process",
     "//chrome/browser/sync:factories",
+    "//chrome/browser/ui:chrome_web_modal_dialog_manager_delegate",
     "//chrome/common:constants",
     "//chromeos/ash/components/channel",
     "//chromeos/printing",

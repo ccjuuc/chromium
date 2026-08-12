@@ -112,26 +112,35 @@ void BluetoothSocketAndroid::DoConnect(base::OnceClosure success_callback,
 }
 
 void BluetoothSocketAndroid::Disconnect(base::OnceClosure success_callback) {
-  socket_thread_->task_runner()->PostTask(
-      FROM_HERE, base::BindOnce(&BluetoothSocketAndroid::DoDisconnect, this,
-                                std::move(success_callback)));
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  socket_thread_->task_runner()->PostTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(&BluetoothSocketAndroid::DoDisconnect,
+                     base::Unretained(this)),
+      base::BindOnce(&BluetoothSocketAndroid::PostDisconnect,
+                     base::Unretained(this), std::move(success_callback)));
 }
 
-void BluetoothSocketAndroid::DoDisconnect(base::OnceClosure success_callback) {
+void BluetoothSocketAndroid::DoDisconnect() {
   CHECK(socket_thread_->task_runner()->RunsTasksInCurrentSequence());
 
   Java_ChromeBluetoothSocket_close(AttachCurrentThread(), j_socket_);
+}
 
+void BluetoothSocketAndroid::PostDisconnect(
+    base::OnceClosure success_callback) {
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence());
+  // Stop and destroy `receiving_thread_` on UI thread, not on Socket Thread.
   receiving_thread_->Stop();
   receiving_thread_.reset();
-
-  ui_task_runner_->PostTask(FROM_HERE, std::move(success_callback));
+  std::move(success_callback).Run();
 }
 
 void BluetoothSocketAndroid::Receive(
     int buffer_size,
     ReceiveCompletionCallback success_callback,
     ReceiveErrorCompletionCallback error_callback) {
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence());
   if (!receiving_thread_) {
     std::move(error_callback).Run(ErrorReason::kDisconnected, "Not connected");
     return;
@@ -161,8 +170,7 @@ void BluetoothSocketAndroid::DoReceive(
     return;
   }
 
-  auto j_buffer = base::android::ScopedJavaLocalRef<jbyteArray>::Adopt(
-      env, env->NewByteArray(buffer_size));
+  auto j_buffer = jni_zero::AdoptRef(env, env->NewByteArray(buffer_size));
   base::android::CheckException(env);
   CHECK(j_buffer.obj());
 
@@ -191,6 +199,7 @@ void BluetoothSocketAndroid::Send(scoped_refptr<net::IOBuffer> buffer,
                                   int buffer_size,
                                   SendCompletionCallback success_callback,
                                   ErrorCompletionCallback error_callback) {
+  CHECK(ui_task_runner_->RunsTasksInCurrentSequence());
   socket_thread_->task_runner()->PostTask(
       FROM_HERE,
       base::BindOnce(&BluetoothSocketAndroid::DoSend, this, std::move(buffer),

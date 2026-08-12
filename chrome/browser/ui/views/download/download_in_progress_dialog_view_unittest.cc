@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/views/chrome_constrained_window_views_client.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -17,7 +17,7 @@ using DownloadInProgressDialogTest = ChromeViewsTestBase;
 
 // This checks that DownloadInProgressDialogView runs its completion callback
 // even if the dialog is closed by the user without selecting an option. It is a
-// regression test for https://crbug.com/1064138.
+// regression test for https://crbug.com/40681120.
 TEST_F(DownloadInProgressDialogTest, CallbackIsRunOnClose) {
   SetConstrainedWindowViewsClient(CreateChromeConstrainedWindowViewsClient());
 
@@ -30,7 +30,7 @@ TEST_F(DownloadInProgressDialogTest, CallbackIsRunOnClose) {
                                        "DownloadInProgressDialogView");
   DownloadInProgressDialogView::Show(
       parent->GetNativeWindow(), 1,
-      Browser::DownloadCloseType::kBrowserShutdown,
+      UnloadController::DownloadCloseType::kBrowserShutdown,
       base::BindLambdaForTesting([&](bool b) { result = b; }));
   waiter.WaitIfNeededAndGet()->Close();
 

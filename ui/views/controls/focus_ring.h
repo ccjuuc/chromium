@@ -75,6 +75,11 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
   // encloses.
   void SetInvalid(bool invalid);
 
+  // Updates the focus ring's visibility based on the parent's focus state or
+  // the custom focus predicate. Clients should call this whenever the value
+  // of their custom focus predicate changes.
+  void Refresh();
+
   // Sets the predicate function used to tell when the parent has focus. The
   // parent is passed into this predicate; it should return whether the parent
   // should be treated as focused. This is useful when, for example, the parent
@@ -108,6 +113,8 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
   void OnViewFocused(View* view) override;
   void OnViewBlurred(View* view) override;
   void OnViewLayoutInvalidated(View* view) override;
+  void OnViewAddedToWidget(View* observed_view) override;
+  void OnViewHierarchyWillBeDeleted(View* view) override;
 
  private:
   FocusRing();
@@ -119,7 +126,7 @@ class VIEWS_EXPORT FocusRing : public View, public ViewObserver {
   SkPath GetPath() const;
   SkRRect GetRingRoundRect() const;
 
-  void RefreshLayer();
+  void RefreshLayer(bool should_paint);
 
   // Returns whether we should outset by `kFocusRingOutset` dp before drawing
   // the focus ring.

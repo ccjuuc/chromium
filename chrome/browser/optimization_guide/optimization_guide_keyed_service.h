@@ -16,6 +16,7 @@
 #include "chrome/browser/optimization_guide/model_execution/optimization_guide_global_state.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decider.h"
 #include "components/optimization_guide/core/model_execution/feature_keys.h"
@@ -33,18 +34,16 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
 #include "chrome/browser/bookmarks/android/bookmark_bridge.h"
+#include "chrome/browser/optimization_guide/android/jni_headers/OptimizationGuideBridge_shared_jni.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace content {
 class BrowserContext;
 }  // namespace content
 
-namespace contextual_cueing {
-class ZeroStateSuggestionsPageData;
-}  // namespace contextual_cueing
-
 namespace glic {
 class GlicPageContextEligibilityObserver;
+class ZeroStateSuggestionsPageData;
 }  // namespace glic
 
 namespace on_device_internals {
@@ -56,7 +55,6 @@ class ChromeHintsManager;
 class ModelExecutionEnabledBrowserTest;
 class ModelExecutionLiveTest;
 class ModelExecutionManager;
-class ModelInfo;
 class ModelQualityLogsUploaderService;
 class ModelValidatorKeyedService;
 class OnDeviceModelAvailabilityObserver;
@@ -76,7 +74,6 @@ class OptimizationGuideBridge;
 #endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace optimization_guide
 
-class ChromeBrowserMainExtraPartsOptimizationGuide;
 class GURL;
 class OptimizationGuideLogger;
 class OptimizationGuideNavigationData;
@@ -111,7 +108,7 @@ class OptimizationGuideKeyedService
   ~OptimizationGuideKeyedService() override;
 
 #if BUILDFLAG(IS_ANDROID)
-  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+  base::android::ScopedJavaLocalRef<JOptimizationGuideBridge> GetJavaObject();
 #endif
 
   // Constructs a ModelBrokerClient with remote fallback capability.
@@ -164,7 +161,6 @@ class OptimizationGuideKeyedService
   void RemoveOnDeviceModelAvailabilityChangeObserver(
       optimization_guide::mojom::OnDeviceFeature feature,
       optimization_guide::OnDeviceModelAvailabilityObserver* observer) override;
-  on_device_model::Capabilities GetOnDeviceCapabilities() override;
   optimization_guide::OnDeviceModelEligibilityReason
   GetOnDeviceModelEligibility(
       optimization_guide::mojom::OnDeviceFeature feature) override;
@@ -174,11 +170,6 @@ class OptimizationGuideKeyedService
       base::OnceCallback<
           void(optimization_guide::OnDeviceModelEligibilityReason)> callback)
       override;
-  std::optional<optimization_guide::SamplingParamsConfig>
-  GetSamplingParamsConfig(
-      optimization_guide::mojom::OnDeviceFeature feature) override;
-  std::optional<const optimization_guide::proto::Any> GetFeatureMetadata(
-      optimization_guide::mojom::OnDeviceFeature feature) override;
 
   // Returns true if the `feature` should be currently enabled for this user.
   // Note that the return value here may not match the feature enable state on
@@ -233,6 +224,18 @@ class OptimizationGuideKeyedService
       const std::vector<optimization_guide::proto::OptimizationType>&
           optimization_types);
 
+  // Adds hints for a URL with provided optimization types and metadata to the
+  // optimization guide. For testing purposes only. This will flush any
+  // callbacks for |url| that were registered via |CanApplyOptimization|. If no
+  // applicable callbacks were registered, this will just add the hint for later
+  // use.
+  void AddHintWithMultipleOptimizationsForTesting(
+      const GURL& url,
+      const std::vector<
+          std::pair<optimization_guide::proto::OptimizationType,
+                    std::optional<optimization_guide::OptimizationMetadata>>>&
+          optimization_types_and_metadata);
+
   // Adds hints for a URL with provided metadata to the optimization guide.
   // Hints added via this method will work for `CanApplyOptimizationOnDemand`
   // calls. For testing purposes only.
@@ -249,11 +252,11 @@ class OptimizationGuideKeyedService
       optimization_guide::OptimizationGuideModelExecutionResult result);
 
   // Override the model file sent to observers of |optimization_target|. Use
-  // |TestModelInfoBuilder| to construct the model metadata. For
+  // ModelInfo aggregate initialization to construct the model metadata. For
   // testing purposes only.
   void OverrideTargetModelForTesting(
       optimization_guide::proto::OptimizationTarget optimization_target,
-      std::unique_ptr<optimization_guide::ModelInfo> model_info);
+      std::optional<optimization_guide::ModelInfo> model_info);
 
   void SetModelQualityLogsUploaderServiceForTesting(
       std::unique_ptr<optimization_guide::ModelQualityLogsUploaderService>
@@ -280,9 +283,8 @@ class OptimizationGuideKeyedService
   GetModelExecutionFeaturesController();
 
  private:
-  friend class ChromeBrowserMainExtraPartsOptimizationGuide;
   friend class ChromeBrowsingDataRemoverDelegate;
-  friend class contextual_cueing::ZeroStateSuggestionsPageData;
+  friend class glic::ZeroStateSuggestionsPageData;
   friend class glic::GlicPageContextEligibilityObserver;
   friend class HintsFetcherBrowserTest;
   friend class on_device_internals::PageHandler;

@@ -5,13 +5,13 @@
 #include "chrome/browser/ash/net/system_proxy_manager.h"
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/system_proxy/system_proxy_client.h"
@@ -85,7 +85,7 @@ network::NetworkService* GetNetworkService() {
 
 void SetManagedProxy(Profile* profile) {
   // Configure a proxy via user policy.
-  auto proxy_config = base::Value::Dict()
+  auto proxy_config = base::DictValue()
                           .Set("mode", ProxyPrefs::kFixedServersProxyModeName)
                           .Set("server", kProxyAuthUrl);
   profile->GetPrefs()->SetDict(proxy_config::prefs::kProxy,
@@ -163,7 +163,7 @@ TEST_F(SystemProxyManagerTest, KerberosConfig) {
             client_test_interface()->GetSetAuthenticationDetailsCallCount());
 
   TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-      prefs::kKerberosEnabled, true);
+      ash::prefs::kKerberosEnabled, true);
   EXPECT_EQ(++expected_set_auth_details_call_count,
             client_test_interface()->GetSetAuthenticationDetailsCallCount());
 
@@ -174,7 +174,7 @@ TEST_F(SystemProxyManagerTest, KerberosConfig) {
   EXPECT_EQ(request.traffic_type(), system_proxy::TrafficOrigin::SYSTEM);
 
   // Set an active principal name.
-  profile_->GetPrefs()->SetString(prefs::kKerberosActivePrincipalName,
+  profile_->GetPrefs()->SetString(ash::prefs::kKerberosActivePrincipalName,
                                   kKerberosActivePrincipalName);
   EXPECT_EQ(++expected_set_auth_details_call_count,
             client_test_interface()->GetSetAuthenticationDetailsCallCount());
@@ -188,14 +188,14 @@ TEST_F(SystemProxyManagerTest, KerberosConfig) {
   EXPECT_EQ(request.traffic_type(), system_proxy::TrafficOrigin::ALL);
 
   // Remove the active principal name.
-  profile_->GetPrefs()->SetString(prefs::kKerberosActivePrincipalName, "");
+  profile_->GetPrefs()->SetString(ash::prefs::kKerberosActivePrincipalName, "");
   request = client_test_interface()->GetLastAuthenticationDetailsRequest();
   EXPECT_EQ("", request.active_principal_name());
   EXPECT_TRUE(request.kerberos_enabled());
 
   // Disable kerberos.
   TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-      prefs::kKerberosEnabled, false);
+      ash::prefs::kKerberosEnabled, false);
   request = client_test_interface()->GetLastAuthenticationDetailsRequest();
   EXPECT_FALSE(request.kerberos_enabled());
 }
@@ -329,7 +329,7 @@ TEST_F(SystemProxyManagerTest, ArcWorkerAddressPrefSynced) {
   task_environment_.RunUntilIdle();
   EXPECT_EQ(kLocalProxyAddress,
             profile_->GetPrefs()->GetString(
-                ::prefs::kSystemProxyUserTrafficHostAndPort));
+                ash::prefs::kSystemProxyUserTrafficHostAndPort));
 
   // The preference shouldn't be updated if the signal is send for system
   // traffic.
@@ -339,13 +339,13 @@ TEST_F(SystemProxyManagerTest, ArcWorkerAddressPrefSynced) {
   task_environment_.RunUntilIdle();
   EXPECT_EQ(kLocalProxyAddress,
             profile_->GetPrefs()->GetString(
-                ::prefs::kSystemProxyUserTrafficHostAndPort));
+                ash::prefs::kSystemProxyUserTrafficHostAndPort));
 
   SetPolicy(false /* system_proxy_enabled */, "" /* system_services_username */,
             "" /* system_services_password */);
 
   EXPECT_TRUE(profile_->GetPrefs()
-                  ->GetString(::prefs::kSystemProxyUserTrafficHostAndPort)
+                  ->GetString(ash::prefs::kSystemProxyUserTrafficHostAndPort)
                   .empty());
 }
 
@@ -522,7 +522,7 @@ TEST_F(FeatureEnabledSystemProxyTest, Arc) {
   task_environment_.RunUntilIdle();
 
   EXPECT_TRUE(profile_->GetPrefs()
-                  ->GetString(::prefs::kSystemProxyUserTrafficHostAndPort)
+                  ->GetString(ash::prefs::kSystemProxyUserTrafficHostAndPort)
                   .empty());
 }
 
@@ -541,7 +541,7 @@ TEST_F(FeatureEnabledSystemProxyTest, ArcPolicyEnabled) {
 
   EXPECT_EQ(kLocalProxyAddress,
             profile_->GetPrefs()->GetString(
-                ::prefs::kSystemProxyUserTrafficHostAndPort));
+                ash::prefs::kSystemProxyUserTrafficHostAndPort));
 }
 
 }  // namespace ash

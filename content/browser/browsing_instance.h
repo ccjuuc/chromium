@@ -144,8 +144,8 @@ class CONTENT_EXPORT BrowsingInstance final
   // is ok with |url| sharing a process with other sites that do not require
   // a dedicated process. Note that setting this to true means that the
   // SiteInstanceImpl you get back may return "http://unisolated.invalid" for
-  // GetSiteURL() and lock_url() calls because the default instance is not
-  // bound to a single site.
+  // GetDeprecatedSiteURL() and lock_url() calls because the default instance is
+  // not bound to a single site.
   scoped_refptr<SiteInstanceImpl> GetSiteInstanceForURL(
       const UrlInfo& url_info,
       bool allow_default_instance);
@@ -201,6 +201,7 @@ class CONTENT_EXPORT BrowsingInstance final
   // Note: This method is not intended to be called by code outside this object.
   scoped_refptr<SiteInstanceImpl> GetSiteInstanceForURLHelper(
       const UrlInfo& url_info,
+      const SiteInfo& site_info,
       bool allow_default_instance);
 
   // Adds the given SiteInstance to our map, to ensure that we do not create

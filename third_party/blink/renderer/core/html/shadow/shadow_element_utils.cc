@@ -61,9 +61,36 @@ const AtomicString& StringForUAShadowPseudoId(PseudoId pseudo_id) {
       return shadow_element_names::kIdPermissionIcon;
     case kPseudoIdPickerSelect:
       return shadow_element_names::kPickerSelect;
+    case kPseudoIdSelectListbox:
+      return shadow_element_names::kSelectListbox;
     default:
       return g_null_atom;
   }
+}
+
+PseudoId PseudoIdForShadowElementName(const AtomicString& shadow_element_name) {
+  if (shadow_element_name == g_null_atom) {
+    return kPseudoIdNone;
+  }
+  if (shadow_element_name == shadow_element_names::kPseudoInputPlaceholder) {
+    return kPseudoIdPlaceholder;
+  }
+  if (shadow_element_name == shadow_element_names::kPseudoFileUploadButton) {
+    return kPseudoIdFileSelectorButton;
+  }
+  if (shadow_element_name == shadow_element_names::kIdDetailsContent) {
+    return kPseudoIdDetailsContent;
+  }
+  if (shadow_element_name == shadow_element_names::kIdPermissionIcon) {
+    return kPseudoIdPermissionIcon;
+  }
+  if (shadow_element_name == shadow_element_names::kPickerSelect) {
+    return kPseudoIdPickerSelect;
+  }
+  if (shadow_element_name == shadow_element_names::kSelectListbox) {
+    return kPseudoIdSelectListbox;
+  }
+  return kPseudoIdNone;
 }
 
 }  // namespace shadow_element_utils

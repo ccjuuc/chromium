@@ -8,18 +8,19 @@
 
 #include "partition_alloc/allocator_config.h"
 #include "partition_alloc/build_config.h"
+#include "partition_alloc/internal/partition_page_internal.h"
+#include "partition_alloc/internal/partition_root_internal.h"
+#include "partition_alloc/internal/reservation_offset_table_internal.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/partition_alloc_for_testing.h"
 #include "partition_alloc/partition_freelist_entry.h"
-#include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/slot_start.h"
 #include "partition_alloc/use_death_tests.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 // With *SAN, PartitionAlloc is rerouted to malloc().
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 namespace partition_alloc::internal {
 namespace {
@@ -247,4 +248,4 @@ TEST(HardeningTest, PoolOffsetSuccessfulCorruption) {
 }  // namespace
 }  // namespace partition_alloc::internal
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)

@@ -13,6 +13,9 @@ typedef NSString GuideName;
 // create a constant for it below. Because these constants are in the global
 // namespace, all guide names should end in 'Guide', for clarity.
 
+// A guide that is constrained to match the frame of the part of the app outside
+// of the AppBar. The toolbars are inside the frame.
+extern GuideName* const kAppContentGuide;
 // A guide that is constrained to match the frame of the tab's content area.
 extern GuideName* const kContentAreaGuide;
 // A guide that is constrained to match the frame of the primary toolbar. This
@@ -34,8 +37,6 @@ extern GuideName* const kOmniboxTextFieldGuide;
 extern GuideName* const kBackButtonGuide;
 // A guide that is constrained to match the frame of the forward button's image.
 extern GuideName* const kForwardButtonGuide;
-// A guide that is constrained to match the frame of the NewTab button.
-extern GuideName* const kNewTabButtonGuide;
 // A guide that is constrained to match the frame of the Share button.
 extern GuideName* const kShareButtonGuide;
 // A guide that is constrained to match the frame of the TabSwitcher button's
@@ -69,6 +70,9 @@ extern GuideName* const kMagicStackGuide;
 // A guide that is constrained to match the frame of the Contextual Panel's
 // entrypoint when it is large, otherwise this stays nil.
 extern GuideName* const kContextualPanelLargeEntrypointGuide;
+// A guide that is constrained to match the frame of the AI Mode button on the
+// New Tab page.
+extern GuideName* const kNTPAIMButtonGuide;
 // A guide that is constrained to match the frame of the Lens icon in the NTP's
 // Fakebox.
 extern GuideName* const kFakeboxLensIconGuide;
@@ -83,6 +87,9 @@ extern GuideName* const kReaderModeOptionsEntrypointGuide;
 // A guide that is constrained to match the frame of the identity disc button on
 // the New Tab page.
 extern GuideName* const kNTPIdentityDiscButtonGuide;
+// A guide that is constrained to match the frame of the first most visited
+// tile.
+extern GuideName* const kNTPFirstMostVisitedTileGuide;
 // A guide that is constrained to match the frame of the current active regular
 // tab. It is not registered if the selected cell is not visible.
 extern GuideName* const kSelectedRegularCellGuide;
@@ -93,5 +100,8 @@ extern GuideName* const kLocationBarBadgeLargeEntrypointGuide;
 extern GuideName* const kInputAccessoryViewLayoutGuide;
 // A guide that is constrained to match the frame of the app bar.
 extern GuideName* const kAppBarGuide;
+// A guide that is constrained to match the frame of the app bar's assistant
+// button.
+extern GuideName* const kAppBarAssistantButtonGuide;
 
 #endif  // IOS_CHROME_BROWSER_SHARED_UI_UTIL_LAYOUT_GUIDE_NAMES_H_

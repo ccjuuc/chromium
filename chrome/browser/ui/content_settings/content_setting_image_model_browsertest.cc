@@ -41,8 +41,8 @@ IN_PROC_BROWSER_TEST_F(ContentSettingImageModelBrowserTest, CreateBubbleModel) {
 
   // Automatic downloads are handled by DownloadRequestLimiter.
   DownloadRequestLimiter::TabDownloadState* tab_download_state =
-      g_browser_process->download_request_limiter()->GetDownloadState(
-          web_contents, true);
+      g_browser_process->download_request_limiter()->GetOrCreateDownloadState(
+          web_contents);
   tab_download_state->set_download_seen();
   tab_download_state->SetDownloadStatusAndNotify(
       url::Origin::Create(web_contents->GetVisibleURL()),
@@ -52,10 +52,10 @@ IN_PROC_BROWSER_TEST_F(ContentSettingImageModelBrowserTest, CreateBubbleModel) {
   // to the same setting.
   static constexpr ContentSettingImageModel::ImageType
       content_settings_to_test[] = {
-          ImageType::COOKIES,     ImageType::IMAGES,
-          ImageType::JAVASCRIPT,  ImageType::POPUPS,
-          ImageType::MIXEDSCRIPT, ImageType::PROTOCOL_HANDLERS,
-          ImageType::MIDI_SYSEX,
+          ImageType::kCookies,     ImageType::kImages,
+          ImageType::kJavaScript,  ImageType::kPopups,
+          ImageType::kMixedScript, ImageType::kProtocolHandlers,
+          ImageType::kMidiSysex,
       };
 
   for (auto type : content_settings_to_test) {
@@ -94,14 +94,14 @@ IN_PROC_BROWSER_TEST_F(ContentSettingImageModelBrowserTest,
       browser()->tab_strip_model()->GetActiveWebContents();
 
   auto model =
-      ContentSettingImageModel::CreateForContentType(ImageType::IMAGES);
+      ContentSettingImageModel::CreateForContentType(ImageType::kImages);
 
   EXPECT_TRUE(model->ShouldRunAnimation(web_contents));
   model->SetAnimationHasRun(web_contents);
   EXPECT_FALSE(model->ShouldRunAnimation(web_contents));
 
   // The animation has run for the current WebContents, but not for any other.
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   WebContents::CreateParams create_params(profile);
   std::unique_ptr<WebContents> other_web_contents =
       WebContents::Create(create_params);
@@ -118,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(ContentSettingImageModelBrowserTest,
   WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
-  auto model = ContentSettingImageModel::CreateForContentType(ImageType::ADS);
+  auto model = ContentSettingImageModel::CreateForContentType(ImageType::kAds);
   std::unique_ptr<ContentSettingBubbleModel> bubble(model->CreateBubbleModel(
       browser()->GetFeatures().content_setting_bubble_model_delegate(),
       web_contents));

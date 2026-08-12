@@ -17,7 +17,6 @@
 #include "extensions/common/constants.h"
 #include "extensions/common/cors_util.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest_handlers/permissions_parser.h"
 #include "extensions/common/mojom/host_id.mojom.h"
@@ -40,20 +39,6 @@ enum class FactoryUser {
   kContentScript,
   kExtensionProcess,
 };
-
-bool DoContentScriptsDependOnRelaxedOrbOrCors(const Extension& extension) {
-  // Content scripts injected by Chrome Apps (e.g. into <webview> tag) need to
-  // run with relaxed ORB.
-  //
-  // TODO(crbug.com/40158699): Remove this exception once Chrome Platform
-  // Apps are gone.
-  if (extension.is_platform_app()) {
-    return true;
-  }
-
-  // Content scripts are not granted an ability to relax ORB and/or CORS.
-  return false;
-}
 
 bool DoExtensionPermissionsCoverHttpOrHttpsOrigins(
     const PermissionSet& permissions) {
@@ -103,16 +88,16 @@ bool DoExtensionPermissionsCoverHttpOrHttpsOrigins(const Extension& extension) {
 // attention to the `isolated_world_origin` from content scripts, and using
 // SecFetchSiteValue::kNoOrigin from extensions).
 bool ShouldRelaxCors(const Extension& extension, FactoryUser factory_user) {
-  if (!DoExtensionPermissionsCoverHttpOrHttpsOrigins(extension)) {
-    return false;
+  // TODO(crbug.com/40158699): Remove this exception once Chrome Platform
+  // Apps are gone.  This should also consequently allow removing of
+  // `isolated_world_origin` and related code.
+  if (factory_user == FactoryUser::kContentScript &&
+      extension.is_platform_app() &&
+      DoExtensionPermissionsCoverHttpOrHttpsOrigins(extension)) {
+    return true;
   }
 
-  switch (factory_user) {
-    case FactoryUser::kContentScript:
-      return DoContentScriptsDependOnRelaxedOrbOrCors(extension);
-    case FactoryUser::kExtensionProcess:
-      return true;
-  }
+  return false;
 }
 
 bool ShouldCreateSeparateFactoryForContentScripts(const Extension& extension) {
@@ -123,28 +108,30 @@ void OverrideFactoryParams(const Extension& extension,
                            bool is_for_service_worker,
                            FactoryUser factory_user,
                            network::mojom::URLLoaderFactoryParams* params) {
-  if (is_for_service_worker &&
-      base::FeatureList::IsEnabled(
-          extensions_features::kSkipResetServiceWorkerURLLoaderFactories)) {
+  if (is_for_service_worker) {
     CHECK_EQ(factory_user, FactoryUser::kExtensionProcess);
     params->ignore_factory_reset = true;
   }
 
+  if (factory_user == FactoryUser::kExtensionProcess) {
+    // Indicate that request are initiated by an extension (aka
+    // non-webby-initiator).  This will allow CORS and ORB implementations
+    // to consult `OriginAccessList` for extension-origin-specific permissions.
+    // This is safe, because we know that this `URLLoaderFactory` will be passed
+    // to a renderer process that only hosts extensions.
+    params->unsafe_non_webby_initiator = true;
+  }
+
   if (ShouldRelaxCors(extension, factory_user)) {
     params->is_orb_enabled = false;
-    switch (factory_user) {
-      case FactoryUser::kContentScript:
-        // Requests from content scripts set
-        // network::ResourceRequest::isolated_world_origin to the origin of the
-        // extension.  This field of ResourceRequest is normally ignored, but by
-        // setting `ignore_isolated_world_origin` to false below, we ensure that
-        // OOR-CORS will use the extension origin when checking if content
-        // script requests should bypass CORS.
-        params->ignore_isolated_world_origin = false;
-        break;
-      case FactoryUser::kExtensionProcess:
-        params->unsafe_non_webby_initiator = true;
-        break;
+    if (factory_user == FactoryUser::kContentScript) {
+      // Requests from content scripts set
+      // network::ResourceRequest::isolated_world_origin to the origin of the
+      // extension.  This field of ResourceRequest is normally ignored, but by
+      // setting `ignore_isolated_world_origin` to false below, we ensure that
+      // OOR-CORS will use the extension origin when checking if content
+      // script requests should bypass CORS.
+      params->ignore_isolated_world_origin = false;
     }
   }
 }

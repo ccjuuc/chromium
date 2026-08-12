@@ -7,8 +7,6 @@ package org.chromium.chrome.browser.collaboration;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayingAtLeast;
 
-import static org.mockito.Mockito.doReturn;
-
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.addBlankTabs;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.clickFirstCardFromTabSwitcher;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.enterTabSwitcher;
@@ -20,19 +18,19 @@ import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
 
 import org.hamcrest.Matcher;
-import org.mockito.Mock;
 import org.mockito.Mockito;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.sync.SyncTestRule;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
-import org.chromium.chrome.test.R;
 import org.chromium.components.data_sharing.GroupMember;
 import org.chromium.components.data_sharing.member_role.MemberRole;
 import org.chromium.components.signin.base.AccountInfo;
@@ -42,8 +40,6 @@ import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.url.GURL;
 
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -54,16 +50,13 @@ public class CollaborationTestUtils {
 
     private final SyncTestRule mSyncTestRule;
     private final Profile mProfile;
-
-    // Mock ShareDelegate and its supplier for controlling share sheet behavior.
-    @Mock private final ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
-    @Mock private final ShareDelegate mShareDelegate;
+    private final SettableMonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier =
+            ObservableSuppliers.createMonotonic();
+    private final ShareDelegate mShareDelegate = Mockito.mock(ShareDelegate.class);
 
     public CollaborationTestUtils(SyncTestRule syncTestRule, Profile profile) {
         mSyncTestRule = syncTestRule;
         mProfile = profile;
-        mShareDelegateSupplier = Mockito.mock(ObservableSupplier.class);
-        mShareDelegate = Mockito.mock(ShareDelegate.class);
     }
 
     /**
@@ -176,9 +169,7 @@ public class CollaborationTestUtils {
                     // Post delayed task in order to make sure that `NotifyTabGroupAdded` is
                     // called first.
                     ThreadUtils.postOnUiThreadDelayed(
-                            () -> {
-                                makeTabGroupShared(syncGroupId, collaborationId);
-                            },
+                            () -> makeTabGroupShared(syncGroupId, collaborationId),
                             DELAY_MS_FOR_TAB_GROUP_ADDED);
                 });
     }
@@ -186,28 +177,26 @@ public class CollaborationTestUtils {
     /** Returns the {@link TabGroupSyncService} for the current profile. */
     public TabGroupSyncService getTabGroupSyncService() {
         return ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    return TabGroupSyncServiceFactory.getForProfile(mProfile);
-                });
+                () -> TabGroupSyncServiceFactory.getForProfile(mProfile));
     }
 
     /** Signs in and sets selected types for tab groups. */
     public void setUpSyncAndSignIn() {
         mSyncTestRule.setUpAccountAndSignInForTesting();
-        mSyncTestRule.setSelectedTypes(
-                true,
-                new HashSet<>(
-                        Arrays.asList(
-                                UserSelectableType.TABS, UserSelectableType.SAVED_TAB_GROUPS)));
+        mSyncTestRule.setSelectedType(UserSelectableType.HISTORY, true);
+        mSyncTestRule.setSelectedType(UserSelectableType.TABS, true);
+        mSyncTestRule.setSelectedType(UserSelectableType.SAVED_TAB_GROUPS, true);
     }
 
     /** Returns the local tab group id. */
     public LocalTabGroupId getLocalTabGroupId(ChromeTabbedActivity cta) {
         return ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    return new LocalTabGroupId(
-                            cta.getTabModelSelector().getModel(false).getTabAt(0).getTabGroupId());
-                });
+                () ->
+                        new LocalTabGroupId(
+                                cta.getTabModelSelector()
+                                        .getModel(false)
+                                        .getTabAt(0)
+                                        .getTabGroupId()));
     }
 
     /** Creates a tab group and opens the tab grid dialog. */
@@ -223,7 +212,7 @@ public class CollaborationTestUtils {
     public void setupShareDelegateSupplier(ChromeTabbedActivity cta) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    doReturn(mShareDelegate).when(mShareDelegateSupplier).get();
+                    mShareDelegateSupplier.set(mShareDelegate);
                     var rootUiCoordinator = cta.getRootUiCoordinatorForTesting();
                     DataSharingTabManager dstm = rootUiCoordinator.getDataSharingTabManager();
                     dstm.setShareDelegateSupplierForTesting(mShareDelegateSupplier);

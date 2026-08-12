@@ -4,6 +4,8 @@
 
 #include "chrome/browser/signin/header_modification_delegate_impl.h"
 
+#include <algorithm>
+
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
@@ -11,6 +13,7 @@
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/chrome_signin_helper.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -24,6 +27,7 @@
 #include "components/sync/service/sync_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/storage_partition.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "net/base/schemeful_site.h"
@@ -78,6 +82,9 @@ void ProcessBoundSessionResponseHeaders(
   bound_session_cookie_refresh_service->MaybeTerminateSession(
       response_adapter->GetUrl(), headers);
 
+  std::vector<net::SchemefulSite> restricted_sites =
+      signin_util::GetDeviceBoundSessionRestrictedSites();
+
   // If an equivalent standard DBSC session is going to be triggered by the same
   // response, ignore the session registration.
   base::flat_set<GURL> ignored_registration_endpoints;
@@ -88,13 +95,19 @@ void ProcessBoundSessionResponseHeaders(
     GURL normalized_url = url.SchemeIsWSOrWSS()
                               ? net::ChangeWebSocketSchemeToHttpScheme(url)
                               : url;
+    // We don't need any restricted sites here because this code only
+    // runs on google.com, which is always restricted.
     std::vector<net::device_bound_sessions::RegistrationFetcherParam>
         standard_registrations =
             net::device_bound_sessions::RegistrationFetcherParam::CreateIfValid(
-                normalized_url, headers);
-    for (const auto& standard_registration : standard_registrations) {
-      ignored_registration_endpoints.insert(
-          standard_registration.registration_endpoint());
+                normalized_url, headers, restricted_sites);
+    if (standard_registrations.size() > 0 &&
+        base::FeatureList::IsEnabled(
+            net::features::kDeviceBoundSessionsForRestrictedSites)) {
+      for (const auto& standard_registration : standard_registrations) {
+        ignored_registration_endpoints.insert(
+            standard_registration.registration_endpoint());
+      }
     }
   }
 
@@ -164,10 +177,8 @@ void HeaderModificationDelegateImpl::ProcessRequest(
   }
 
   const PrefService* prefs = profile_->GetPrefs();
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(profile_);
-#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
   bool is_secondary_account_addition_allowed = true;
@@ -179,8 +190,7 @@ void HeaderModificationDelegateImpl::ProcessRequest(
 
   ConsentLevel consent_level = ConsentLevel::kSignin;
 #if !BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     consent_level = ConsentLevel::kSync;
   }
 #endif
@@ -193,6 +203,13 @@ void HeaderModificationDelegateImpl::ProcessRequest(
       // Defaults to kUnknown if the account is not found.
       identity_manager->FindExtendedAccountInfo(account).IsChildAccount();
 
+  // The primary account info at kSignin consent level is obtained to get the
+  // sign-in Gaia ID. This is passed to FixAccountConsistencyRequestHeader
+  // to decouple the sign-in account from the sync status (which is handled
+  // internally inside the function for Mirror and DICE).
+  CoreAccountInfo primary_account =
+      identity_manager->GetPrimaryAccountInfo(ConsentLevel::kSignin);
+
   int incognito_mode_availability =
       prefs->GetInteger(policy::policy_prefs::kIncognitoModeAvailability);
 #if BUILDFLAG(IS_ANDROID)
@@ -202,20 +219,26 @@ void HeaderModificationDelegateImpl::ProcessRequest(
           : static_cast<int>(policy::IncognitoModeAvailability::kDisabled);
 #endif
 
+  // SyncService and IdentityManager updates are not atomic. There are edge
+  // cases where SyncService thinks sync is enabled but IdentityManager has
+  // already cleared the primary account (e.g. if another identity observer
+  // gets notified before SyncService and triggers a request).
+  // See `SyncAuthManager::GetActiveAccountInfo()` for details. Primary account
+  // not empty is a requirement for sync.
+  bool is_sync_feature_enabled = sync_service &&
+                                 sync_service->IsSyncFeatureEnabled() &&
+                                 !primary_account.gaia.empty();
+
   FixAccountConsistencyRequestHeader(
       request_adapter, redirect_url, profile_->IsOffTheRecord(),
       incognito_mode_availability,
       AccountConsistencyModeManager::GetMethodForProfile(profile_),
-      account.gaia, is_child_account,
+      primary_account.gaia, consent_level, is_child_account,
 #if BUILDFLAG(IS_CHROMEOS)
       is_secondary_account_addition_allowed,
 #endif
+      is_sync_feature_enabled,
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-      // This usage of `IsSyncFeatureEnabled()` needs to be kept until the Sync
-      // users are migrated to kSignin state. It tells the Gaia server whether
-      // the sync feature is enabled, which in particular triggers a
-      // confirmation web page on signout.
-      sync_service && sync_service->IsSyncFeatureEnabled(),
       prefs->GetString(prefs::kGoogleServicesSigninScopedDeviceId),
 #endif
       cookie_settings_.get());
@@ -260,7 +283,7 @@ bool HeaderModificationDelegateImpl::ShouldIgnoreGuestWebViewRequest(
 
   if (extensions::WebViewRendererState::GetInstance()->IsGuest(
           contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID())) {
-    CHECK(contents->GetSiteInstance()->IsGuest());
+    CHECK(contents->GetSiteInstance()->GetSecurityPrincipal().IsGuest());
     return true;
   }
   return false;

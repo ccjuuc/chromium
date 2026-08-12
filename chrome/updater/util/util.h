@@ -11,6 +11,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@
 #include "chrome/updater/tag.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/updater_version.h"
+#include "chrome/updater/util/path_util.h"  // IWYU pragma: export
 
 class GURL;
 
@@ -74,13 +76,12 @@ std::optional<base::FilePath> GetVersionedInstallDirectory(
 // version of the updater.
 std::optional<base::FilePath> GetVersionedInstallDirectory(UpdaterScope scope);
 
-// Returns the base install directory common to all versions of the updater.
-// Does not create the directory if it does not exist.
-std::optional<base::FilePath> GetInstallDirectory(UpdaterScope scope);
-
 // Returns the path where cached CRX files should be stored, common to all
 // versions of the updater. Does not create the directory if it does not exist.
 std::optional<base::FilePath> GetCrxCacheDirectory(UpdaterScope scope);
+
+// Returns the temporary directory used by the updater.
+std::optional<base::FilePath> GetUpdaterTempDir();
 
 #if BUILDFLAG(IS_MAC)
 // For example: ~/Library/Google/GoogleUpdater/88.0.4293.0/GoogleUpdater.app
@@ -139,8 +140,6 @@ std::string GetTagLanguage();
 std::string GetDecodedInstallDataFromAppArgs(const std::string& app_id);
 
 std::string GetInstallDataIndexFromAppArgs(const std::string& app_id);
-
-std::optional<base::FilePath> GetLogFilePath(UpdaterScope scope);
 
 // Initializes logging for an executable.
 void InitLogging(UpdaterScope updater_scope);
@@ -255,6 +254,12 @@ std::vector<base::FilePath> GetFilesWithPredicate(
 void EnumerateUpdateClientTempDirectories(
     UpdaterScope scope,
     base::FunctionRef<void(const base::FilePath& dir)> callback);
+
+// Returns true if the App ID is valid (not empty, not too long, does not
+// contain path separators '/' or '\', and does not contain path traversal
+// components).
+bool IsValidAppId(std::string_view app_id);
+bool IsValidAppId(std::wstring_view app_id);
 
 }  // namespace updater
 

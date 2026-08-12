@@ -1,6 +1,7 @@
 include_rules = [
   "+components/country_codes",
   "+components/keyed_service/core",
+  "+components/metrics",
   "+components/prefs",
   "+components/pref_registry",
   "+components/strings",
@@ -11,13 +12,13 @@ include_rules = [
 ]
 
 specific_include_rules = {
-  ".*test\.cc": [
+  ".*test\\.cc": [
     "+components/sync_preferences",
   ],
-  ".*regional_capabilities_prefs\.cc": [
+  ".*regional_capabilities_prefs\\.cc": [
     "+components/search_engines/search_engines_pref_names.h",
   ],
-  ".*regional_capabilities_internals_data_holder\.cc": [
+  ".*regional_capabilities_internals_data_holder\\.cc": [
     "+components/webui/regional_capabilities_internals/constants.h",
   ]
 }

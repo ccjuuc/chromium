@@ -18,6 +18,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.view.ContextThemeWrapper;
 import android.view.View;
 
@@ -30,14 +35,17 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
+import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl.MenuGroup;
@@ -47,7 +55,6 @@ import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactoryJni;
 import org.chromium.chrome.browser.enterprise.util.ManagedBrowserUtils;
 import org.chromium.chrome.browser.enterprise.util.ManagedBrowserUtilsJni;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.incognito.IncognitoUtilsJni;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
@@ -57,7 +64,6 @@ import org.chromium.chrome.browser.omaha.UpdateMenuItemHelper;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.readaloud.ReadAloudController;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
@@ -65,15 +71,17 @@ import org.chromium.chrome.browser.toolbar.menu_button.MenuUiState;
 import org.chromium.chrome.browser.translate.TranslateBridge;
 import org.chromium.chrome.browser.translate.TranslateBridgeJni;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
+import org.chromium.chrome.browser.webapps.WebappDataStorage;
 import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridgeJni;
 import org.chromium.components.commerce.core.CommerceFeatureUtils;
 import org.chromium.components.commerce.core.CommerceFeatureUtilsJni;
 import org.chromium.components.commerce.core.ShoppingService;
-import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
 import org.chromium.components.power_bookmarks.PowerBookmarkType;
@@ -81,25 +89,23 @@ import org.chromium.components.power_bookmarks.ShoppingSpecifics;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
+import org.chromium.components.webapk.lib.client.WebApkValidator;
 import org.chromium.components.webapps.AppBannerManager;
 import org.chromium.components.webapps.AppBannerManagerJni;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
+import org.chromium.webapk.lib.common.WebApkConstants;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Unit tests for {@link AppMenuPropertiesDelegateImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
-@DisableFeatures({
-    ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_PAGE_SUMMARY,
-    DomDistillerFeatures.READER_MODE_IMPROVEMENTS
-})
 public class AppMenuPropertiesDelegateUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -117,7 +123,6 @@ public class AppMenuPropertiesDelegateUnitTest {
     @Mock private UserPrefs.Natives mUserPrefsJniMock;
     @Mock private Profile mProfile;
     @Mock private PrefService mPrefService;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock public WebsitePreferenceBridge.Natives mWebsitePreferenceBridgeJniMock;
     @Mock public BookmarkModel mBookmarkModel;
     @Mock private ManagedBrowserUtils.Natives mManagedBrowserUtilsJniMock;
@@ -132,10 +137,10 @@ public class AppMenuPropertiesDelegateUnitTest {
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
     private final OneshotSupplierImpl<LayoutStateProvider> mLayoutStateProviderSupplier =
             new OneshotSupplierImpl<>();
-    private final ObservableSupplierImpl<BookmarkModel> mBookmarkModelSupplier =
-            new ObservableSupplierImpl<>();
-    private final ObservableSupplierImpl<ReadAloudController> mReadAloudControllerSupplier =
-            new ObservableSupplierImpl<>();
+    private final SettableNullableObservableSupplier<BookmarkModel> mBookmarkModelSupplier =
+            ObservableSuppliers.createNullable();
+    private final SettableMonotonicObservableSupplier<ReadAloudController>
+            mReadAloudControllerSupplier = ObservableSuppliers.createMonotonic();
 
     private AppMenuPropertiesDelegateImpl mAppMenuPropertiesDelegate;
     private MenuUiState mMenuUiState;
@@ -159,8 +164,6 @@ public class AppMenuPropertiesDelegateUnitTest {
         when(mTabModelSelector.getCurrentModel()).thenReturn(mTabModel);
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
         when(mTabModelSelector.getModel(true)).thenReturn(mIncognitoTabModel);
-        when(mTabModelSelector.getCurrentTabGroupModelFilter()).thenReturn(mTabGroupModelFilter);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.isIncognito()).thenReturn(false);
         when(mIncognitoTabModel.isIncognito()).thenReturn(true);
         PageZoomUtils.setShouldShowMenuItemForTesting(false);
@@ -192,29 +195,34 @@ public class AppMenuPropertiesDelegateUnitTest {
         mBookmarkModelSupplier.set(mBookmarkModel);
         PowerBookmarkUtils.setPriceTrackingEligibleForTesting(false);
         PowerBookmarkUtils.setPowerBookmarkMetaForTesting(PowerBookmarkMeta.newBuilder().build());
-        mAppMenuPropertiesDelegate =
-                Mockito.spy(
-                        new AppMenuPropertiesDelegateImpl(
-                                context,
-                                mActivityTabProvider,
-                                mMultiWindowModeStateDispatcher,
-                                mTabModelSelector,
-                                mToolbarManager,
-                                mDecorView,
-                                mLayoutStateProviderSupplier,
-                                mBookmarkModelSupplier,
-                                mReadAloudControllerSupplier) {
-                            @Override
-                            public MVCListAdapter.ModelList buildMenuModelList() {
-                                return new MVCListAdapter.ModelList();
-                            }
-                        });
+
+        AppMenuPropertiesDelegateImpl realDelegate =
+                new AppMenuPropertiesDelegateImpl(
+                        context,
+                        mActivityTabProvider,
+                        mMultiWindowModeStateDispatcher,
+                        mTabModelSelector,
+                        mToolbarManager,
+                        mDecorView,
+                        mLayoutStateProviderSupplier,
+                        mBookmarkModelSupplier,
+                        mReadAloudControllerSupplier,
+                        /* pageZoomManager= */ null,
+                        /* openInAppMenuItemProvider= */ null) {
+                    @Override
+                    public MVCListAdapter.ModelList buildMenuModelList() {
+                        return new MVCListAdapter.ModelList();
+                    }
+                };
+        RobolectricUtil.runAllBackgroundAndUi();
+        mAppMenuPropertiesDelegate = Mockito.spy(realDelegate);
 
         CommerceFeatureUtilsJni.setInstanceForTesting(mCommerceFeatureUtilsJniMock);
         ShoppingServiceFactoryJni.setInstanceForTesting(mShoppingServiceFactoryJniMock);
         doReturn(mShoppingService).when(mShoppingServiceFactoryJniMock).getForProfile(any());
 
         DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     private void setupFeatureDefaults() {
@@ -236,7 +244,7 @@ public class AppMenuPropertiesDelegateUnitTest {
     @Test
     @Config(qualifiers = "sw600dp")
     public void testShouldShowPageMenu_Tablet() {
-        when(mLayoutStateProvider.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(false);
+        when(mLayoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
         when(mTabModel.getCount()).thenReturn(1);
         assertTrue(mAppMenuPropertiesDelegate.shouldShowPageMenu());
         Assert.assertEquals(MenuGroup.PAGE_MENU, mAppMenuPropertiesDelegate.getMenuGroup());
@@ -245,7 +253,7 @@ public class AppMenuPropertiesDelegateUnitTest {
     @Test
     @Config(qualifiers = "sw600dp")
     public void testShouldShowOverviewMenu_Tablet() {
-        when(mLayoutStateProvider.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(true);
+        when(mLayoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
         when(mTabModel.getCount()).thenReturn(1);
         Assert.assertFalse(mAppMenuPropertiesDelegate.shouldShowPageMenu());
         Assert.assertEquals(
@@ -455,11 +463,46 @@ public class AppMenuPropertiesDelegateUnitTest {
         assertFalse(mAppMenuPropertiesDelegate.isReaderModeShowing(mTab));
     }
 
+    @Mock private BottomSheetController mBottomSheetControllerMock;
+
+    @Test
+    public void testPageZoomMenuItem_hiddenWhenBottomSheetOpen() {
+        // Setup: Bottom sheet controller is available and sheet is open
+        BottomSheetControllerProvider.setInstanceForTesting(mBottomSheetControllerMock);
+        when(mBottomSheetControllerMock.isSheetOpen()).thenReturn(true);
+        PageZoomUtils.setShouldShowMenuItemForTesting(true);
+
+        // Stub dependent tab setup
+        when(mTab.getWindowAndroid()).thenReturn(mock(WindowAndroid.class));
+        doReturn(true)
+                .when(mAppMenuPropertiesDelegate)
+                .shouldShowWebContentsDependentMenuItem(any());
+
+        // Verify the zoom item is NOT shown
+        assertFalse(mAppMenuPropertiesDelegate.shouldShowPageZoomItem(mTab));
+    }
+
+    @Test
+    public void testPageZoomMenuItem_visibleWhenBottomSheetClosed() {
+        // Setup: Bottom sheet controller is available and sheet is closed
+        BottomSheetControllerProvider.setInstanceForTesting(mBottomSheetControllerMock);
+        when(mBottomSheetControllerMock.isSheetOpen()).thenReturn(false);
+        PageZoomUtils.setShouldShowMenuItemForTesting(true);
+
+        // Stub dependent tab setup
+        when(mTab.getWindowAndroid()).thenReturn(mock(WindowAndroid.class));
+        doReturn(true)
+                .when(mAppMenuPropertiesDelegate)
+                .shouldShowWebContentsDependentMenuItem(any());
+
+        // Verify the zoom item IS shown
+        assertTrue(mAppMenuPropertiesDelegate.shouldShowPageZoomItem(mTab));
+    }
+
     private void setUpMocksForPageMenu() {
-        when(mLayoutStateProvider.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(false);
+        when(mLayoutStateProvider.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
         doReturn(false).when(mAppMenuPropertiesDelegate).shouldCheckBookmarkStar(any(Tab.class));
         doReturn(false).when(mAppMenuPropertiesDelegate).shouldEnableDownloadPage(any(Tab.class));
-        doReturn(false).when(mAppMenuPropertiesDelegate).shouldShowReaderModePrefs(any(Tab.class));
         doReturn(true)
                 .when(mAppMenuPropertiesDelegate)
                 .shouldShowAutoDarkItem(any(Tab.class), eq(false));
@@ -467,6 +510,71 @@ public class AppMenuPropertiesDelegateUnitTest {
                 .when(mAppMenuPropertiesDelegate)
                 .shouldShowAutoDarkItem(any(Tab.class), eq(true));
         setUpIncognitoMocks();
+    }
+
+    @Test
+    public void testQueryWebApkResolveInfoFiltersMismatchedPackage() {
+        String manifestId = "https://example.com/manifest";
+        String expectedPackage = "org.chromium.webapk.expected";
+        String mismatchedPackage = "org.chromium.webapk.mismatched";
+        String url = "https://example.com/start";
+
+        AppBannerManager.Natives appBannerManagerJniMock = mock(AppBannerManager.Natives.class);
+        AppBannerManagerJni.setInstanceForTesting(appBannerManagerJniMock);
+        when(appBannerManagerJniMock.getInstallableWebAppManifestId(any())).thenReturn(manifestId);
+
+        Context context = ContextUtils.getApplicationContext();
+        SharedPreferences prefs =
+                context.getSharedPreferences("webapp_registry", Context.MODE_PRIVATE);
+        java.util.Set<String> webapps = new java.util.HashSet<>();
+        String webapkId = WebApkConstants.WEBAPK_ID_PREFIX + expectedPackage;
+        webapps.add(webapkId);
+        prefs.edit().putStringSet("webapp_set", webapps).apply();
+
+        WebappDataStorage mockedStorage = mock(WebappDataStorage.class);
+        when(mockedStorage.getId()).thenReturn(webapkId);
+        when(mockedStorage.getWebApkPackageName()).thenReturn(expectedPackage);
+        when(mockedStorage.getWebApkManifestId()).thenReturn(manifestId);
+        when(mockedStorage.getScope()).thenReturn("https://example.com/");
+
+        WebappDataStorage.setFactoryForTests(
+                new WebappDataStorage.Factory() {
+                    @Override
+                    public WebappDataStorage create(String id) {
+                        if (id.equals(webapkId)) {
+                            return mockedStorage;
+                        }
+                        return super.create(id);
+                    }
+                });
+
+        WebappRegistry.refreshSharedPrefsForTesting();
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        assertEquals(
+                expectedPackage, WebappRegistry.getInstance().findWebApkWithManifestId(manifestId));
+
+        when(mTab.getUrl()).thenReturn(new GURL(url));
+
+        PackageManager pm = context.getPackageManager();
+        ShadowPackageManager shadowPm = Shadows.shadowOf(pm);
+
+        Intent constrainedIntent = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+        constrainedIntent.addCategory(Intent.CATEGORY_BROWSABLE);
+        constrainedIntent.setPackage(expectedPackage);
+
+        ResolveInfo mismatchedResolveInfo = new ResolveInfo();
+        mismatchedResolveInfo.activityInfo = new ActivityInfo();
+        mismatchedResolveInfo.activityInfo.packageName = mismatchedPackage;
+        mismatchedResolveInfo.activityInfo.name = "MainActivity";
+
+        shadowPm.addResolveInfoForIntent(constrainedIntent, mismatchedResolveInfo);
+
+        WebApkValidator.setDisableValidationForTesting(true);
+
+        ResolveInfo result = AppMenuPropertiesDelegateImpl.queryWebApkResolveInfo(context, mTab);
+
+        assertNull(result);
     }
 
     private void setUpIncognitoMocks() {

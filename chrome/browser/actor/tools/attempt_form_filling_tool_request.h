@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/actor/tools/tool_request.h"
-#include "chrome/common/actor.mojom-forward.h"
+#include "components/actor/core/shared_types.h"
+#include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 
 namespace actor {
 
@@ -21,41 +21,7 @@ class ToolRequestVisitorFunctor;
 class AttemptFormFillingToolRequest : public TabToolRequest {
  public:
   static constexpr char kName[] = "AttemptFormFilling";
-  // Note: While autofill detects the type of data to be filled into a field
-  // (address or credit card), autofill is unable to identify the purpose (e.g.
-  // shipping v.s. billing address). Therefore the purpose needs to be provided
-  // when showing UI, so that multiple sections of the same type can be
-  // disambiguated in the UI.
-  //
-  // See also RequestedData in actions_data.proto.
-  enum class RequestedData {
-    // The requested data is not specified.
-    kUnknown = 0,
-
-    // An address should be filled. This value can be used as a catch-all when
-    // the more specific address options below do not fit.
-    kAddress = 1,
-
-    // A shipping address should be filled.
-    kShippingAddress = 2,
-
-    // A billing address should be filled.
-    kBillingAddress = 3,
-
-    // A home address should be filled.
-    kHomeAddress = 4,
-
-    // A work address should be filled.
-    kWorkAddress = 5,
-
-    // A credit card should be filled.
-    kCreditCard = 6,
-
-    // Contact information should be filled. Contact information includes name,
-    // email, phone number, but not postal address information (street, city,
-    // etc.)
-    kContactInformation = 7,
-  };
+  using RequestedData = autofill::ActorFormFillingRequestedData;
 
   struct FormFillingRequest {
     FormFillingRequest();
@@ -66,11 +32,13 @@ class AttemptFormFillingToolRequest : public TabToolRequest {
     FormFillingRequest& operator=(FormFillingRequest&&);
 
     RequestedData requested_data{};
+    std::string section_label;
     std::vector<PageTarget> trigger_fields;
   };
 
   AttemptFormFillingToolRequest(tabs::TabHandle tab_handle,
-                                std::vector<FormFillingRequest> requests);
+                                std::vector<FormFillingRequest> requests,
+                                bool enqueued_click = false);
   AttemptFormFillingToolRequest(const AttemptFormFillingToolRequest&);
   AttemptFormFillingToolRequest& operator=(
       const AttemptFormFillingToolRequest&);
@@ -82,8 +50,19 @@ class AttemptFormFillingToolRequest : public TabToolRequest {
   std::string_view Name() const override;
   void Apply(ToolRequestVisitorFunctor& f) const override;
 
+  const std::vector<FormFillingRequest>& requests() const { return requests_; }
+
+  const std::vector<FormFillingRequest>& GetRequestsForTesting() const {
+    return requests_;
+  }
+
+  bool enqueued_click() const { return enqueued_click_; }
+
  private:
   std::vector<FormFillingRequest> requests_;
+  // Set to true if a click has already been enqueued for the target field of
+  // this request. This prevents infinite click-delegation loops.
+  bool enqueued_click_ = false;
 };
 
 // To support JournalDetailsBuilder which calls base::ToString(), implement the

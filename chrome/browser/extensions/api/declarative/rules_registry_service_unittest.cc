@@ -97,10 +97,10 @@ TEST_F(RulesRegistryServiceTest, TestConstructionAndMultiThreading) {
   base::RunLoop().RunUntilIdle();
 
   // Test extension uninstalling.
-  base::Value::Dict manifest = base::Value::Dict()
-                                   .Set("name", "Extension")
-                                   .Set("version", "1.0")
-                                   .Set("manifest_version", 2);
+  base::DictValue manifest = base::DictValue()
+                                 .Set("name", "Extension")
+                                 .Set("version", "1.0")
+                                 .Set("manifest_version", 2);
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
           .SetManifest(std::move(manifest))
@@ -114,6 +114,18 @@ TEST_F(RulesRegistryServiceTest, TestConstructionAndMultiThreading) {
                      registry_service.GetRulesRegistry(key, "ui"), 0));
 
   base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(RulesRegistryServiceTest, ContentRulesRegistryClearedOnShutdown) {
+  TestingProfile profile;
+  RulesRegistryService registry_service(&profile);
+  ASSERT_TRUE(registry_service.content_rules_registry());
+
+  // Shutdown() releases the last reference to the ContentRulesRegistry.
+  // Consumers such as TabHelper can still reach the service afterwards, so the
+  // accessor must report null instead of handing out a dangling pointer.
+  registry_service.Shutdown();
+  EXPECT_FALSE(registry_service.content_rules_registry());
 }
 
 #if !BUILDFLAG(IS_ANDROID)

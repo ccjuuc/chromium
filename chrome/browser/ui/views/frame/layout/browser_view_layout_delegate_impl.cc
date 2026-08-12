@@ -6,42 +6,48 @@
 
 #include "base/feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/tabs/tab_strip_prefs.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+#include "chrome/browser/ui/views/tabs/organizer/organizer_panel_utils.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
 #include "chrome/common/buildflags.h"
+#include "chrome/common/pref_names.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/view.h"
 
-#if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
-#include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/fullscreen_util_mac.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #endif
 
 BrowserViewLayoutDelegateImpl::BrowserViewLayoutDelegateImpl(
     BrowserView& browser_view)
-    : browser_view_(browser_view) {}
+    : browser_view_(browser_view) {
+    PrefService* prefs = browser_view_->GetProfile()->GetPrefs();
+    tab_search_pinned_to_tab_strip_ =
+        prefs->GetBoolean(prefs::kTabSearchPinnedToTabstrip);
+
+    pref_registrar_.Init(prefs);
+    pref_registrar_.Add(
+        prefs::kTabSearchPinnedToTabstrip,
+        base::BindRepeating(
+            &BrowserViewLayoutDelegateImpl::OnTabSearchPinnedStateChanged,
+            base::Unretained(this)));
+}
 BrowserViewLayoutDelegateImpl::~BrowserViewLayoutDelegateImpl() = default;
 
 bool BrowserViewLayoutDelegateImpl::ShouldDrawTabStrip() const {
   return browser_view_->ShouldDrawTabStrip();
-}
-
-bool BrowserViewLayoutDelegateImpl::ShouldUseTouchableTabstrip() const {
-#if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
-  return WebUITabStripContainerView::UseTouchableTabStrip(
-             browser_view_->browser()) &&
-         browser_view_->GetSupportsTabStrip();
-#else
-  return false;
-#endif
 }
 
 bool BrowserViewLayoutDelegateImpl::ShouldDrawVerticalTabStrip() const {
@@ -53,51 +59,62 @@ bool BrowserViewLayoutDelegateImpl::IsVerticalTabStripCollapsed() const {
 }
 
 bool BrowserViewLayoutDelegateImpl::ShouldDrawWebAppFrameToolbar() const {
-  return !GetBorderlessModeEnabled() &&
-         GetFrameView()->ShouldShowWebAppFrameToolbar();
+  return browser_view_->ShouldDrawWebAppFrameToolbar();
 }
 
-bool BrowserViewLayoutDelegateImpl::GetBorderlessModeEnabled() const {
-  return browser_view_->IsBorderlessModeEnabled();
+bool BrowserViewLayoutDelegateImpl::GetUnframedModeEnabled() const {
+  return browser_view_->IsUnframedModeEnabled();
 }
 
 BrowserLayoutParams BrowserViewLayoutDelegateImpl::GetBrowserLayoutParams(
     bool use_browser_bounds) const {
-  const auto params = GetFrameView()->GetBrowserLayoutParams();
-  if (params.IsEmpty()) {
-    // This can happen sometimes right after a browser is created.
-    return params;
-  }
-  return params.InLocalCoordinates(
-      use_browser_bounds ? browser_view_->bounds() : params.visual_client_area);
-}
-
-int BrowserViewLayoutDelegateImpl::GetTopInsetInBrowserView() const {
-  // BrowserView should fill the full window when window controls overlay
-  // is enabled or when immersive fullscreen with tabs is enabled.
-  if (browser_view_->IsWindowControlsOverlayEnabled() ||
-      browser_view_->IsBorderlessModeEnabled()) {
-    return 0;
-  }
-#if BUILDFLAG(IS_MAC)
-  if (browser_view_->UsesImmersiveFullscreenTabbedMode() &&
-      GetImmersiveModeController()->IsEnabled()) {
-    return 0;
-  }
+  if (auto* const frame = GetFrameView()) {
+    const auto params = frame->GetBrowserLayoutParams();
+    if (params.IsEmpty()) {
+      // This can happen sometimes right after a browser is created.
+      return params;
+    }
+    const gfx::Rect browser_bounds = browser_view_->bounds();
+#if BUILDFLAG(IS_CHROMEOS)
+    // Sometimes in kiosk mode the browser bounds briefly fail to line up with
+    // the client area. Rather than allowing this to crash in
+    // `InLocalCoordinates()`, just use the client bounds instead. The worst
+    // outcome in this case is that some minimum size calculations may be off by
+    // a few pixels for one frame.
+    // See https://crbug.com/506933210 for more information.
+    if (use_browser_bounds &&
+        !params.visual_client_area.Contains(browser_bounds)) {
+      use_browser_bounds = false;
+    }
 #endif
-
-  if (auto* const frame_view = GetFrameView()) {
-    return frame_view->GetTopInset(false) - browser_view_->y();
+    return params.InLocalCoordinates(
+        use_browser_bounds ? browser_bounds : params.visual_client_area);
   }
 
-  return 0;
+  return BrowserLayoutParams();
 }
 
-void BrowserViewLayoutDelegateImpl::LayoutWebAppWindowTitle(
-    const gfx::Rect& available_space,
-    views::Label& window_title_label) const {
-  return GetFrameView()->LayoutWebAppWindowTitle(available_space,
-                                                 window_title_label);
+BrowserViewLayoutDelegateImpl::WindowState
+BrowserViewLayoutDelegateImpl::GetBrowserWindowState() const {
+  if (browser_view_->IsFullscreen()) {
+#if BUILDFLAG(IS_MAC)
+    if (fullscreen_utils::IsAlwaysShowToolbarEnabled(
+            browser_view_->browser()) &&
+        !fullscreen_utils::IsInContentFullscreen(browser_view_->browser())) {
+      return WindowState::kFullscreenWithToolbar;
+    }
+#endif
+    return WindowState::kFullscreen;
+  }
+  if (browser_view_->IsMaximized()) {
+    return WindowState::kMaximized;
+  }
+  return WindowState::kNormal;
+}
+
+views::LayoutAlignment BrowserViewLayoutDelegateImpl::GetWindowTitleAlignment()
+    const {
+  return GetFrameView()->GetWindowTitleAlignment();
 }
 
 bool BrowserViewLayoutDelegateImpl::IsToolbarVisible() const {
@@ -125,7 +142,7 @@ bool BrowserViewLayoutDelegateImpl::IsContentsSeparatorEnabled() const {
   // based on whether it is visible instead of setting the height to 0px. This
   // will enable BrowserViewLayout to hide the contents separator on its own
   // using the same logic used by normal BrowserElementsViews.
-  return !browser_view_->browser()->app_controller();
+  return !web_app::AppBrowserController::From(browser_view_->browser());
 }
 
 bool BrowserViewLayoutDelegateImpl::IsActiveTabSplit() const {
@@ -133,7 +150,24 @@ bool BrowserViewLayoutDelegateImpl::IsActiveTabSplit() const {
   // when the multi contents view hasn't been fully setup and this
   // inconsistency would cause unnecessary re-layout of content view during
   // tab switch.
-  return browser_view_->browser()->tab_strip_model()->IsActiveTabSplit();
+  auto* const active_tab =
+      browser_view_->browser()->tab_strip_model()->GetActiveTab();
+  return active_tab && active_tab->IsSplit();
+}
+
+bool BrowserViewLayoutDelegateImpl::IsActiveTabAtLeadingWindowEdge() const {
+  if (auto* const frame = GetFrameView()) {
+    bool has_leading_search_button =
+        tabs::GetTabSearchPosition(browser_view_->browser()) ==
+        tabs::TabSearchPosition::kLeadingHorizontalTabstrip;
+    // Tab search button can be unpinned so including it in the determination
+    // of leading edge of horizontal tab strip.
+    has_leading_search_button &= tab_search_pinned_to_tab_strip_;
+    if (!frame->CaptionButtonsOnLeadingEdge() && !has_leading_search_button) {
+      return browser_view_->browser()->tab_strip_model()->IsTabInForeground(0);
+    }
+  }
+  return false;
 }
 
 const ImmersiveModeController*
@@ -153,11 +187,6 @@ bool BrowserViewLayoutDelegateImpl::IsTopControlsSlideBehaviorEnabled() const {
 float BrowserViewLayoutDelegateImpl::GetTopControlsSlideBehaviorShownRatio()
     const {
   return browser_view_->GetTopControlsSlideBehaviorShownRatio();
-}
-
-bool BrowserViewLayoutDelegateImpl::SupportsWindowFeature(
-    Browser::WindowFeature feature) const {
-  return browser_view_->browser()->SupportsWindowFeature(feature);
 }
 
 gfx::NativeView BrowserViewLayoutDelegateImpl::GetHostViewForAnchoring() const {
@@ -198,7 +227,8 @@ bool BrowserViewLayoutDelegateImpl::ShouldLayoutTabStrip() const {
 #if BUILDFLAG(IS_MAC)
   // The tab strip is hosted in a separate widget in immersive fullscreen on
   // macOS.
-  if (browser_view_->UsesImmersiveFullscreenTabbedMode() &&
+  if (WindowFeatureController::From(browser_view_->browser())
+          ->UsesImmersiveFullscreenTabbedMode() &&
       GetImmersiveModeController()->IsEnabled()) {
     return false;
   }
@@ -209,11 +239,17 @@ bool BrowserViewLayoutDelegateImpl::ShouldLayoutTabStrip() const {
 int BrowserViewLayoutDelegateImpl::GetExtraInfobarOffset() const {
 #if BUILDFLAG(IS_MAC)
   auto* const controller = GetImmersiveModeController();
-  if (browser_view_->UsesImmersiveFullscreenMode() && controller->IsEnabled()) {
+  if (WindowFeatureController::From(browser_view_->browser())
+          ->UsesImmersiveFullscreenMode() &&
+      controller->IsEnabled()) {
     return controller->GetExtraInfobarOffset();
   }
 #endif
   return 0;
+}
+
+bool BrowserViewLayoutDelegateImpl::IsOrganizerPanelVisible() const {
+  return organizer_panel::IsOrganizerPanelFeatureEnabled();
 }
 
 const BrowserFrameView* BrowserViewLayoutDelegateImpl::GetFrameView() const {
@@ -222,93 +258,8 @@ const BrowserFrameView* BrowserViewLayoutDelegateImpl::GetFrameView() const {
              : nullptr;
 }
 
-gfx::Rect
-BrowserViewLayoutDelegateImpl::GetBoundsForTabStripRegionInBrowserView() const {
-  const gfx::Size tabstrip_minimum_size =
-      browser_view().tab_strip_view()->GetMinimumSize();
-  const auto layout = GetFrameView()->GetBrowserLayoutParams();
-  gfx::RectF bounds_f = gfx::RectF(layout.visual_client_area);
-  const float max_bound =
-      std::max(layout.leading_exclusion.content.height() +
-                   layout.leading_exclusion.vertical_padding,
-               layout.trailing_exclusion.content.height() +
-                   layout.trailing_exclusion.vertical_padding);
-  bounds_f.set_height(
-      std::max(max_bound, static_cast<float>(tabstrip_minimum_size.height())));
-  const int tab_margin = TabStyle::Get()->GetBottomCornerRadius();
-  bounds_f.Inset(gfx::InsetsF::TLBR(
-      0.0f,
-      layout.leading_exclusion.content.width() +
-          std::max(0.0f,
-                   layout.leading_exclusion.horizontal_padding - tab_margin),
-      0.0f,
-      layout.trailing_exclusion.content.width() +
-          std::max(0.0f,
-                   layout.trailing_exclusion.horizontal_padding - tab_margin)));
-  views::View::ConvertRectToTarget(browser_view().parent(), &browser_view(),
-                                   &bounds_f);
-  return gfx::ToEnclosingRect(bounds_f);
-}
-
-gfx::Rect
-BrowserViewLayoutDelegateImpl::GetBoundsForToolbarInVerticalTabBrowserView()
-    const {
-  const gfx::Size toolbar_preferred_size =
-      browser_view().toolbar()->GetPreferredSize();
-  const auto layout = GetFrameView()->GetBrowserLayoutParams();
-  gfx::RectF bounds_f(gfx::RectF(layout.visual_client_area));
-  const float max_bound =
-      std::max(layout.leading_exclusion.content.height() +
-                   layout.leading_exclusion.vertical_padding,
-               layout.trailing_exclusion.content.height() +
-                   layout.trailing_exclusion.vertical_padding);
-  bounds_f.set_height(
-      std::max(max_bound, static_cast<float>(toolbar_preferred_size.height())));
-  bounds_f.Inset(
-      gfx::InsetsF::TLBR(0.0f,
-                         layout.leading_exclusion.content.width() +
-                             layout.leading_exclusion.horizontal_padding,
-                         0.0f,
-                         layout.trailing_exclusion.content.width() +
-                             layout.trailing_exclusion.horizontal_padding));
-  views::View::ConvertRectToTarget(browser_view().parent(), &browser_view(),
-                                   &bounds_f);
-  return gfx::ToEnclosingRect(bounds_f);
-}
-
-gfx::Rect
-BrowserViewLayoutDelegateImpl::GetBoundsForWebAppFrameToolbarInBrowserView()
-    const {
-  if (!GetFrameView()->ShouldShowWebAppFrameToolbar()) {
-    return gfx::Rect();
-  }
-
-  const gfx::Size web_app_frame_toolbar_preferred_size =
-      browser_view().web_app_frame_toolbar()->GetPreferredSize();
-
-  const auto layout = GetFrameView()->GetBrowserLayoutParams();
-  gfx::RectF bounds_f = gfx::RectF(layout.visual_client_area);
-  // Note: on Mac in fullscreen these exclusions have zero width, but may still
-  // have nonzero height to ensure that the top area has the same height as it
-  // would have had if they were present; see https://crbug.com/450817281 for
-  // why this is needed.
-  const float max_bound =
-      std::max(layout.leading_exclusion.content.height() +
-                   layout.leading_exclusion.vertical_padding,
-               layout.trailing_exclusion.content.height() +
-                   layout.trailing_exclusion.vertical_padding);
-  bounds_f.set_height(std::max(
-      max_bound,
-      static_cast<float>(web_app_frame_toolbar_preferred_size.height())));
-  bounds_f.Inset(
-      gfx::InsetsF::TLBR(0.0f,
-                         layout.leading_exclusion.content.width() +
-                             layout.leading_exclusion.horizontal_padding,
-                         0.0f,
-                         layout.trailing_exclusion.content.width() +
-                             layout.trailing_exclusion.horizontal_padding));
-
-  views::View::ConvertRectToTarget(browser_view().parent(), &browser_view(),
-                                   &bounds_f);
-  return gfx::ToEnclosingRect(bounds_f);
+void BrowserViewLayoutDelegateImpl::OnTabSearchPinnedStateChanged() {
+  tab_search_pinned_to_tab_strip_ =
+      browser_view_->GetProfile()->GetPrefs()->GetBoolean(
+          prefs::kTabSearchPinnedToTabstrip);
 }

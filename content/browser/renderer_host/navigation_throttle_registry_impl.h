@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/memory/advanced_memory_safety_checks.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "content/common/content_export.h"
@@ -88,7 +89,7 @@ class CONTENT_EXPORT NavigationThrottleRegistryBase
   virtual NavigationThrottle& GetThrottleAtIndex(size_t index) = 0;
 
   // Returns the throttles that are currently deferring the navigation.
-  virtual const std::set<NavigationThrottle*>& GetDeferringThrottles()
+  virtual const std::set<raw_ptr<NavigationThrottle>>& GetDeferringThrottles()
       const = 0;
 };
 
@@ -138,7 +139,6 @@ class CONTENT_EXPORT NavigationThrottleRegistryImpl
       std::unique_ptr<NavigationThrottle> navigation_throttle) override;
   bool HasThrottle(const std::string& name) override;
   bool EraseThrottleForTesting(const std::string& name) override;
-  bool IsHTTPOrHTTPS() override;
 
   // Implements NavigationThrottleRegistryBase:
   void OnEventProcessed(
@@ -148,7 +148,8 @@ class CONTENT_EXPORT NavigationThrottleRegistryImpl
   void OnDeferProcessingNavigationEvent(
       NavigationThrottle* deferring_throttle) override;
   NavigationThrottle& GetThrottleAtIndex(size_t index) override;
-  const std::set<NavigationThrottle*>& GetDeferringThrottles() const override;
+  const std::set<raw_ptr<NavigationThrottle>>& GetDeferringThrottles()
+      const override;
 
  private:
   // Holds a reference to the NavigationRequest that owns this instance.
@@ -162,13 +163,7 @@ class CONTENT_EXPORT NavigationThrottleRegistryImpl
   std::vector<std::unique_ptr<NavigationThrottle>> throttles_;
 
   // The throttles that are currently deferring the navigation.
-  std::set<NavigationThrottle*> deferring_throttles_;
-
-  // This is used in an experiment to cache frequently used navigation
-  // attributes.
-  // TODO(https://424460302): Remove this once the experiment completes, and
-  // move the cache to GURL if it's successful.
-  std::optional<bool> is_http_or_https_;
+  std::set<raw_ptr<NavigationThrottle>> deferring_throttles_;
 
   // A callback to be called when the navigation is deferred for the first time.
   base::OnceClosure first_deferral_callback_for_testing_;

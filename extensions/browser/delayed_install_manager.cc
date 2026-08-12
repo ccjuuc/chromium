@@ -59,7 +59,7 @@ void DelayedInstallManager::FinishInstallationsDelayedByShutdown() {
   TRACE_EVENT0("browser,startup",
                "DelayedInstallManager::FinishInstallationsDelayedByShutdown");
 
-  const ExtensionPrefs::ExtensionsInfo delayed_info =
+  const ExtensionPrefs::InstallRecords delayed_info =
       extension_prefs_->GetAllDelayedInstallInfo();
   for (const auto& info : delayed_info) {
     scoped_refptr<const Extension> extension;
@@ -120,10 +120,6 @@ bool DelayedInstallManager::FinishDelayedInstallationIfReady(
       GetPendingExtensionUpdate(extension_id);
   CHECK(delayed_install.get());
   delayed_installs_.Remove(extension_id);
-
-  if (!extension_prefs_->FinishDelayedInstallInfo(extension_id)) {
-    NOTREACHED();
-  }
 
   for (auto& observer : observers_) {
     observer.OnDelayedInstallFinished(delayed_install);

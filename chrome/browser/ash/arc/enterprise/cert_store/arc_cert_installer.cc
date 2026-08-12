@@ -10,10 +10,12 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/strings/stringprintf.h"
+#include "base/values.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/arc_cert_installer_utils.h"
 #include "chrome/browser/ash/policy/remote_commands/user_command_arc_job.h"
 #include "chrome/browser/profiles/profile.h"
@@ -112,8 +114,9 @@ std::string ArcCertInstaller::InstallArcCert(
     const CertDescription& certificate) {
   VLOG(1) << "ArcCertInstaller::InstallArcCert " << name;
 
+  auto [known_cert_it, inserted] = known_cert_names_.emplace(name);
   // Do not install certificate if it is already installed or pending.
-  if (known_cert_names_.count(name)) {
+  if (!inserted) {
     VLOG(1) << "Certificate " << name << " is already installed or pending";
     return "";
   }
@@ -123,7 +126,6 @@ std::string ArcCertInstaller::InstallArcCert(
     LOG(ERROR) << "Certificate encoding error: " << name;
     return "";
   }
-  known_cert_names_.insert(name);
 
   // Install certificate.
   std::unique_ptr<policy::RemoteCommandJob> job =
@@ -139,22 +141,37 @@ std::string ArcCertInstaller::InstallArcCert(
 
   crypto::keypair::PrivateKey rsa = certificate.placeholder_key;
   std::string pkcs12 = CreatePkcs12ForKey(name, rsa.key());
+
+  base::DictValue inner_payload =
+      base::DictValue()
+          .Set("alias", name)
+          .Set("certs", base::ListValue().Append(std::move(der_cert64)))
+          .Set("is_user_selectable", false)
+          .Set("key", std::move(pkcs12));
+
+  std::string inner_payload_json;
+  const bool inner_success =
+      base::JSONWriter::Write(inner_payload, &inner_payload_json);
+  CHECK(inner_success);
+
+  base::DictValue outer_payload =
+      base::DictValue()
+          .Set("payload", std::move(inner_payload_json))
+          .Set("type", "INSTALL_KEY_PAIR");
+
+  std::string outer_payload_json;
+  const bool outer_success =
+      base::JSONWriter::Write(outer_payload, &outer_payload_json);
+  CHECK(outer_success);
+
   // NOTE: command_proto contains crypto key value. Avoid logging its value out
   // on release build, by using LOG instead of SYSLOG.
-  command_proto.set_payload(
-      base::StringPrintf("{\"type\":\"INSTALL_KEY_PAIR\","
-                         "\"payload\":\"{"
-                         "\\\"key\\\":\\\"%s\\\","
-                         "\\\"alias\\\":\\\"%s\\\","
-                         "\\\"certs\\\":[\\\"%s\\\"],"
-                         "\\\"is_user_selectable\\\":false"
-                         "}\"}",
-                         pkcs12.c_str(), name.c_str(), der_cert64.c_str()));
+  command_proto.set_payload(std::move(outer_payload_json));
   LOG(INFO) << "Attempting to install a key pair via remote command.";
   if (!job || !job->Init(queue_->GetNowTicks(), command_proto,
                          enterprise_management::SignedData())) {
     LOG(ERROR) << "Initialization of remote command failed";
-    known_cert_names_.erase(name);
+    known_cert_names_.erase(known_cert_it);
     return "";
   } else {
     pending_commands_[next_id_++] = name;
@@ -166,7 +183,8 @@ std::string ArcCertInstaller::InstallArcCert(
 
 void ArcCertInstaller::OnJobFinished(policy::RemoteCommandJob* command) {
   VLOG(1) << "ArcCertInstaller::OnJobFinished";
-  if (!pending_commands_.count(command->unique_id())) {
+  auto pending_command_it = pending_commands_.find(command->unique_id());
+  if (pending_command_it == pending_commands_.end()) {
     LOG(ERROR) << "Received invalid ARC remote command with unrecognized "
                << "unique_id = " << command->unique_id();
     return;
@@ -177,9 +195,10 @@ void ArcCertInstaller::OnJobFinished(policy::RemoteCommandJob* command) {
   // re-try installation.
   if (command->status() != policy::RemoteCommandJob::Status::SUCCEEDED) {
     LOG(ERROR) << "Failed to install certificate "
-               << pending_commands_[command->unique_id()];
-    if (known_cert_names_.count(pending_commands_[command->unique_id()])) {
-      known_cert_names_.erase(pending_commands_[command->unique_id()]);
+               << pending_command_it->second;
+    if (auto it = known_cert_names_.find(pending_command_it->second);
+        it != known_cert_names_.end()) {
+      known_cert_names_.erase(it);
       pending_status_ = false;
     }
   }

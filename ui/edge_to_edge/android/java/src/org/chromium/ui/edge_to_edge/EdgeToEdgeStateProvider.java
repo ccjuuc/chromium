@@ -9,8 +9,8 @@ import android.view.Window;
 import androidx.core.view.WindowCompat;
 
 import org.chromium.base.UnownedUserDataKey;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -48,7 +48,7 @@ public class EdgeToEdgeStateProvider {
     public static boolean isEdgeToEdgeEnabledForWindow(@Nullable WindowAndroid windowAndroid) {
         if (windowAndroid == null) return false;
 
-        ObservableSupplier<Boolean> stateProvider = from(windowAndroid);
+        MonotonicObservableSupplier<Boolean> stateProvider = from(windowAndroid);
         return stateProvider != null && Boolean.TRUE.equals(stateProvider.get());
     }
 
@@ -72,7 +72,7 @@ public class EdgeToEdgeStateProvider {
      *
      * @return A token to release the edge to edge state
      */
-    public int acquireSetDecorFitsSystemWindowToken() {
+    public int acquireEdgeToEdgeToken() {
         return mTokenHolder.acquireToken();
     }
 
@@ -80,8 +80,18 @@ public class EdgeToEdgeStateProvider {
      * Release a token to edge to edge. When the token holder is empty, trigger a call to {@code
      * Window.setDecorFitsSystemWindows(true)}.
      */
-    public void releaseSetDecorFitsSystemWindowToken(int token) {
+    public void releaseEdgeToEdgeToken(int token) {
         mTokenHolder.releaseToken(token);
+    }
+
+    /** Backward-compatible alias for callers not yet migrated to edge-to-edge naming. */
+    public int acquireSetDecorFitsSystemWindowToken() {
+        return acquireEdgeToEdgeToken();
+    }
+
+    /** Backward-compatible alias for callers not yet migrated to edge-to-edge naming. */
+    public void releaseSetDecorFitsSystemWindowToken(int token) {
+        releaseEdgeToEdgeToken(token);
     }
 
     private void onTokenUpdate() {

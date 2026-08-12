@@ -4,12 +4,14 @@
 
 #import "ios/chrome/browser/autofill/ui_bundled/bottom_sheet/virtual_card_enrollment_bottom_sheet_view_controller.h"
 
+#import "base/feature_list.h"
 #import "build/branding_buildflags.h"
 #import "components/autofill/core/browser/payments/payments_service_url.h"
+#import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/grit/components_scaled_resources.h"
 #import "components/strings/grit/components_strings.h"
-#import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_util.h"
 #import "ios/chrome/browser/autofill/ui_bundled/bottom_sheet/bottom_sheet_constants.h"
+#import "ios/chrome/browser/autofill/ui_bundled/util/autofill_credit_card_util.h"
 #import "ios/chrome/browser/net/model/crurl.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_detail_icon_item.h"
@@ -43,10 +45,10 @@ CGFloat const kCreditCardCellHeight = 64;
 }  // namespace
 
 @interface VirtualCardEnrollmentBottomSheetViewController () <
+    ConfirmationAlertActionHandler,
     UITableViewDataSource,
     UITableViewDelegate,
-    UITextViewDelegate,
-    ConfirmationAlertActionHandler>
+    UITextViewDelegate>
 @end
 
 @implementation VirtualCardEnrollmentBottomSheetViewController {
@@ -66,9 +68,6 @@ CGFloat const kCreditCardCellHeight = 64;
 
   // Set the spacing between the two stack views.
   self.customSpacing = kVerticalSpacingMedium;
-
-  // Remove extra space between the scroll view bottom and last legal message.
-  self.addsContentViewBottomInset = NO;
 
   self.aboveTitleView = [self createAboveTitleStackView];
 
@@ -168,7 +167,10 @@ CGFloat const kCreditCardCellHeight = 64;
       addArrangedSubview:[[UIView alloc]
                              initWithFrame:CGRectMake(0, 0, 0, kLogoPadding)]];
 
-  [aboveTitleStackView addArrangedSubview:[self createGooglePayLogoView]];
+  if (!base::FeatureList::IsEnabled(
+          autofill::features::kAutofillEnableWalletBranding)) {
+    [aboveTitleStackView addArrangedSubview:[self createGooglePayLogoView]];
+  }
   CGFloat logoIllustrationSpacerHeight =
       kLogoPadding + kIllustrationPadding - aboveTitleStackView.spacing;
   [aboveTitleStackView
@@ -203,8 +205,12 @@ CGFloat const kCreditCardCellHeight = 64;
 // UIUserInterfaceStyle (light/dark mode).
 - (UIImage*)googlePayBadgeImage {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      kGooglePaySymbol, kCreditCardCellHeight - 2 * kLogoPadding));
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGooglePayV2
+                      : SymbolGooglePay;
+  return MakeSymbolMulticolor(
+      SymbolWithPointSize(symbol, kCreditCardCellHeight - 2 * kLogoPadding));
 #else
   return NativeImage(IDR_AUTOFILL_GOOGLE_PAY);
 #endif

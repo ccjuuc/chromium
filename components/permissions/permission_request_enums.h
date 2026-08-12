@@ -56,11 +56,12 @@ enum class PermissionRequestLikelihood {
 // LINT.IfChange(PermissionAiRelevanceModel)
 enum class PermissionAiRelevanceModel {
   kUnknown = 0,
-  kAIv3 = 1,
+  // kAIv3 = 1, (Deprecated)
   kAIv4 = 2,
   kMaxValue = kAIv4,
 };
-// LINT.ThenChange(//tools/metrics/histograms/metadata/permissions/enums.xml:PermissionAiRelevanceModel)
+// LINT.ThenChange(//tools/metrics/histograms/metadata/permissions/enums.xml:PermissionAiRelevanceModel,
+// //components/permissions/prediction_service/prediction_common.cc:PermissionsAiSetRelevance)
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -69,8 +70,8 @@ enum class PermissionPredictionSource {
   kNoCpssModel = 0,
   kOnDeviceCpssV1Model = 1,
   kServerSideCpssV3Model = 2,
-  kOnDeviceAiv1AndServerSideModel = 3,
-  kOnDeviceAiv3AndServerSideModel = 4,
+  // kOnDeviceAiv1AndServerSideModel = 3, (Deprecated)
+  // kOnDeviceAiv3AndServerSideModel = 4, (Deprecated)
   kOnDeviceAiv4AndServerSideModel = 5,
 
   // Always keep at the end.
@@ -102,8 +103,8 @@ enum class PredictionModelType {
   kUnknown = 0,
   kServerSideCpssV3Model = 1,
   kOnDeviceCpssV1Model = 2,
-  kOnDeviceAiV1Model = 3,
-  kOnDeviceAiV3Model = 4,
+  // kOnDeviceAiV1Model = 3, (Deprecated)
+  // kOnDeviceAiV3Model = 4, (Deprecated)
   kOnDeviceAiV4Model = 5,
 
   // Always keep at the end.

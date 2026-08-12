@@ -24,9 +24,12 @@
 
 #include <utility>
 
+#include "third_party/blink/renderer/bindings/core/v8/v8_box_quad_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_convert_coordinate_options.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/dom/events/scoped_event_queue.h"
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
+#include "third_party/blink/renderer/core/dom/geometry_utils.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
 #include "third_party/blink/renderer/core/dom/node_cloning_data.h"
@@ -35,9 +38,12 @@
 #include "third_party/blink/renderer/core/dom/text_diff_range.h"
 #include "third_party/blink/renderer/core/dom/whitespace_attacher.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
+#include "third_party/blink/renderer/core/geometry/dom_point.h"
+#include "third_party/blink/renderer/core/geometry/dom_quad.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
 #include "third_party/blink/renderer/core/svg/svg_foreign_object_element.h"
 #include "third_party/blink/renderer/core/svg_names.h"
@@ -123,8 +129,8 @@ Text* Text::splitText(unsigned offset, ExceptionState& exception_state) {
   EventQueueScope scope;
   String old_str = data();
   Text* new_text =
-      To<Text>(CloneWithData(GetDocument(), old_str.Substring(offset)));
-  SetDataWithoutUpdate(old_str.Substring(0, offset));
+      To<Text>(CloneWithData(GetDocument(), old_str.substr(offset)));
+  SetDataWithoutUpdate(old_str.substr(0, offset));
 
   DidModifyData(old_str, CharacterData::kUpdateFromNonParser);
 
@@ -154,6 +160,40 @@ Text* Text::splitText(unsigned offset, ExceptionState& exception_state) {
              .IsEmpty());
 
   return new_text;
+}
+
+HeapVector<Member<DOMQuad>> Text::getBoxQuads(
+    const BoxQuadOptions* options,
+    ExceptionState& exception_state) const {
+  return geometry_utils::GetBoxQuads(const_cast<Text*>(this), nullptr, options,
+                                     exception_state);
+}
+
+DOMQuad* Text::convertQuadFromNode(
+    DOMQuadInit* quad,
+    const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
+    const ConvertCoordinateOptions* options,
+    ExceptionState& exception_state) const {
+  return geometry_utils::ConvertQuadFromNode(
+      quad, const_cast<Text*>(this), nullptr, from, options, exception_state);
+}
+
+DOMQuad* Text::convertRectFromNode(
+    DOMRectReadOnly* rect,
+    const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
+    const ConvertCoordinateOptions* options,
+    ExceptionState& exception_state) const {
+  return geometry_utils::ConvertRectFromNode(
+      rect, const_cast<Text*>(this), nullptr, from, options, exception_state);
+}
+
+DOMPoint* Text::convertPointFromNode(
+    DOMPointInit* point,
+    const V8UnionCSSPseudoElementOrDocumentOrElementOrText* from,
+    const ConvertCoordinateOptions* options,
+    ExceptionState& exception_state) const {
+  return geometry_utils::ConvertPointFromNode(
+      point, const_cast<Text*>(this), nullptr, from, options, exception_state);
 }
 
 static const Text* EarliestLogicallyAdjacentTextNode(const Text* t) {
@@ -253,7 +293,7 @@ String Text::nodeName() const {
 }
 
 static inline bool EndsWithWhitespace(const String& text) {
-  return text.length() && IsASCIISpace(text[text.length() - 1]);
+  return text.length() && IsAsciiSpace(text[text.length() - 1]);
 }
 
 static inline bool CanHaveWhitespaceChildren(
@@ -340,13 +380,12 @@ void Text::AttachLayoutTree(AttachContext& context) {
   if (context.parent) {
     if (Element* style_parent =
             LayoutTreeBuilderTraversal::ParentElement(*this)) {
-      const ComputedStyle* const style =
+      const ComputedStyle& style =
           IsA<HTMLHtmlElement>(style_parent) && style_parent->GetLayoutObject()
-              ? style_parent->GetLayoutObject()->Style()
-              : style_parent->GetComputedStyle();
-      CHECK(style);
-      if (TextLayoutObjectIsNeeded(context, *style)) {
-        LayoutTreeBuilderForText(*this, context, style).CreateLayoutObject();
+              ? style_parent->GetLayoutObject()->StyleRef()
+              : style_parent->ComputedStyleRef();
+      if (TextLayoutObjectIsNeeded(context, style)) {
+        LayoutTreeBuilderForText(*this, context, &style).CreateLayoutObject();
         context.previous_in_flow = GetLayoutObject();
       }
     }
@@ -391,11 +430,11 @@ void Text::RecalcTextStyle(const StyleRecalcChange change) {
   const ComputedStyle* new_style =
       GetDocument().GetStyleResolver().StyleForText(this);
   if (LayoutText* layout_text = GetLayoutObject()) {
-    const ComputedStyle* layout_parent_style =
-        GetLayoutObject()->Parent()->Style();
+    const ComputedStyle& layout_parent_style =
+        GetLayoutObject()->Parent()->StyleRef();
     if (!new_style || GetForceReattachLayoutTree() ||
-        (new_style != layout_parent_style &&
-         !new_style->InheritedEqual(*layout_parent_style))) {
+        (*new_style != layout_parent_style &&
+         !new_style->InheritedEqual(layout_parent_style))) {
       // The computed style or the need for an anonymous inline wrapper for a
       // display:contents text child changed.
       SetNeedsReattachLayoutTree();
@@ -434,7 +473,7 @@ static bool ShouldUpdateLayoutByReattaching(const Text& text_node,
   Node::AttachContext context;
   context.parent = text_layout_object->Parent();
   if (!text_node.TextLayoutObjectIsNeeded(context,
-                                          *text_layout_object->Style())) {
+                                          text_layout_object->StyleRef())) {
     return true;
   }
   if (text_layout_object->IsTextFragment()) {

@@ -4,7 +4,6 @@
 
 #include "chrome/updater/ipc/update_service_proxy_mojo.h"
 
-#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,6 +13,7 @@
 #include "base/cancelable_callback.h"
 #include "base/check.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -23,6 +23,7 @@
 #include "base/sequence_checker.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
@@ -106,25 +107,6 @@ constexpr base::TimeDelta kConnectionTimeout = base::Minutes(3);
   }
 
   return app_state;
-}
-
-[[nodiscard]] std::pair<std::string, UpdateService::PolicyValue>
-MakePolicyValues(
-    const std::pair<std::string, mojom::PolicyValuePtr>& policy_value_mojo) {
-  return std::make_pair(policy_value_mojo.first, *policy_value_mojo.second);
-}
-
-[[nodiscard]] std::pair<std::string,
-                        base::flat_map<std::string, UpdateService::PolicyValue>>
-MakeAppPolicyValues(
-    const std::pair<std::string,
-                    base::flat_map<std::string, mojom::PolicyValuePtr>>&
-        policy_value_mojo) {
-  base::flat_map<std::string, UpdateService::PolicyValue> policies;
-  std::ranges::transform(policy_value_mojo.second,
-                         std::inserter(policies, policies.end()),
-                         &MakePolicyValues);
-  return std::make_pair(policy_value_mojo.first, std::move(policies));
 }
 
 [[nodiscard]] mojom::RegistrationRequestPtr MakeRegistrationRequest(
@@ -265,10 +247,7 @@ void UpdateServiceProxyMojoImpl::GetAppStates(
   EnsureConnecting();
   remote_->GetAppStates(
       base::BindOnce([](std::vector<mojom::AppStatePtr> app_states_mojo) {
-        std::vector<updater::UpdateService::AppState> app_states;
-        std::ranges::transform(app_states_mojo, std::back_inserter(app_states),
-                               &MakeAppState);
-        return app_states;
+        return base::ToVector(app_states_mojo, &MakeAppState);
       }).Then(ToMojoCallback(std::move(callback))));
 }
 
@@ -393,47 +372,14 @@ void UpdateServiceProxyMojoImpl::GetUpdaterState(
       }).Then(ToMojoCallback(std::move(callback))));
 }
 
-void UpdateServiceProxyMojoImpl::GetUpdaterPolicies(
-    base::OnceCallback<void(
-        base::expected<base::flat_map<std::string, UpdateService::PolicyValue>,
-                       RpcError>)> callback) {
+void UpdateServiceProxyMojoImpl::GetPoliciesJson(
+    base::OnceCallback<void(base::expected<std::string, RpcError>)> callback) {
   VLOG(1) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   EnsureConnecting();
-  remote_->GetUpdaterPolicies(
-      base::BindOnce([](base::flat_map<std::string, mojom::PolicyValuePtr>
-                            policies_mojo) {
-        base::flat_map<std::string, UpdateService::PolicyValue> policies;
-        std::ranges::transform(policies_mojo,
-                               std::inserter(policies, policies.end()),
-                               &MakePolicyValues);
-        return policies;
-      }).Then(ToMojoCallback(std::move(callback))));
-}
-
-void UpdateServiceProxyMojoImpl::GetAppPolicies(
-    base::OnceCallback<
-        void(base::expected<
-             base::flat_map<
-                 std::string,
-                 base::flat_map<std::string, UpdateService::PolicyValue>>,
-             RpcError>)> callback) {
-  VLOG(1) << __func__;
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  EnsureConnecting();
-  remote_->GetAppPolicies(
-      base::BindOnce([](base::flat_map<
-                         std::string,
-                         base::flat_map<std::string, mojom::PolicyValuePtr>>
-                            policies_mojo) {
-        base::flat_map<std::string,
-                       base::flat_map<std::string, UpdateService::PolicyValue>>
-            policies;
-        std::ranges::transform(policies_mojo,
-                               std::inserter(policies, policies.end()),
-                               &MakeAppPolicyValues);
-        return policies;
-      }).Then(ToMojoCallback(std::move(callback))));
+  remote_->GetPoliciesJson(base::BindOnce([](const std::string& policies_json) {
+                             return policies_json;
+                           }).Then(ToMojoCallback(std::move(callback))));
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -448,6 +394,13 @@ void UpdateServiceProxyMojoImpl::OnConnected(
 #endif  // BUILDFLAG(IS_WIN)
   VLOG(1) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Verify remote_ has not been reset in the meantime.
+  if (!remote_.is_bound()) {
+    LOG(ERROR) << "Remote was reset during connection initialization.";
+    return;
+  }
+
   if (!endpoint) {
     remote_.reset();
     return;

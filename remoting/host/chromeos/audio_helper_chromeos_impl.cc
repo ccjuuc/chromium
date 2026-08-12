@@ -62,6 +62,11 @@ void RecordOpenOutcome(media::AudioInputStream::OpenOutcome open_outcome) {
     case media::AudioInputStream::OpenOutcome::kFailedInUse:
       open_outcome_chromeos = OpenOutcomeChromeOs::kFailedInUse;
       break;
+    case media::AudioInputStream::OpenOutcome::kFailedDeviceRemoved:
+      // This outcome is only returned by the Windows WASAPI implementation.
+      // It should never be reached on ChromeOS, but is required here to
+      // satisfy the compiler's exhaustive switch checking.
+      NOTREACHED();
   }
   base::UmaHistogramEnumeration(kAudioStreamOpenOutcomeHistogramName,
                                 open_outcome_chromeos);
@@ -184,9 +189,10 @@ void AudioHelperChromeOsImpl::OnData(
   on_data_callback_.Run(std::move(packet));
 }
 
-void AudioHelperChromeOsImpl::OnError() {
+void AudioHelperChromeOsImpl::OnError(Error error_code) {
   DCHECK(audio_runner_->RunsTasksInCurrentSequence());
-  LOG(ERROR) << "AudioInputStream Error encountered.";
+  LOG(ERROR) << "AudioInputStream Error encountered. Error Code: "
+             << static_cast<int>(error_code);
   base::UmaHistogramBoolean(kAudioStreamErrorHistogramName, /* sample= */ true);
   NotifyFatalStreamError();
 }

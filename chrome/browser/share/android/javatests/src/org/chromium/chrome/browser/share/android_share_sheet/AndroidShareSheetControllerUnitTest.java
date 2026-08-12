@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.share.android_share_sheet;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -24,13 +25,12 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.graphics.drawable.Icon;
 import android.net.Uri;
-import android.os.Bundle;
+import android.os.Build;
 import android.os.Parcelable;
+import android.service.chooser.ChooserAction;
 import android.text.TextUtils;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.lifecycle.Lifecycle.State;
@@ -49,37 +49,34 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
-import org.robolectric.annotation.RealObject;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
-import org.chromium.base.task.TaskTraits;
-import org.chromium.base.task.test.ShadowPostTask;
-import org.chromium.base.task.test.ShadowPostTask.TestImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.PayloadCallbackHelper;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.enterprise.util.DataProtectionBridge;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ChromeShareExtras;
 import org.chromium.chrome.browser.share.ChromeShareExtras.DetailedContentType;
-import org.chromium.chrome.browser.share.ShareHelper;
 import org.chromium.chrome.browser.share.ShareMetricsUtils.ShareCustomAction;
 import org.chromium.chrome.browser.share.link_to_text.LinkToTextCoordinator;
 import org.chromium.chrome.browser.share.long_screenshots.LongScreenshotsCoordinator;
 import org.chromium.chrome.browser.share.qrcode.QrCodeDialog;
 import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBridgeJni;
-import org.chromium.chrome.browser.share.share_sheet.ChromeOptionShareCallback;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
@@ -90,22 +87,21 @@ import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefsJni;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.Clipboard;
 import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 /** Test for {@link AndroidShareSheetController} and {@link AndroidCustomActionProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {ShadowPostTask.class})
+@Config(sdk = 34)
 public class AndroidShareSheetControllerUnitTest {
-    private static final String KEY_CHOOSER_ACTION_ICON = "icon";
-    private static final String KEY_CHOOSER_ACTION_NAME = "name";
-    private static final String KEY_CHOOSER_ACTION_ACTION = "action";
     private static final String SELECTOR_FOR_LINK_TO_TEXT = "selector";
 
     private static final Uri TEST_WEB_FAVICON_PREVIEW_URI =
@@ -123,6 +119,7 @@ public class AndroidShareSheetControllerUnitTest {
     @Mock UserPrefsJni mMockUserPrefsJni;
     @Mock FaviconHelperJni mMockFaviconHelperJni;
     @Mock DomDistillerUrlUtilsJni mMockDomDistillerUrlUtilsJni;
+    @Mock DataProtectionBridge.Natives mMockDataProtectionBridgeNatives;
     @Mock BottomSheetController mBottomSheetController;
     @Mock TabModelSelector mTabModelSelector;
     @Mock Tab mTab;
@@ -131,12 +128,18 @@ public class AndroidShareSheetControllerUnitTest {
     @Mock Tracker mTracker;
     @Mock InsetObserver mInsetObserver;
     @Mock TabGroupSharingController mTabGroupSharingController;
+    @Mock SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    @Mock ActivityResultTracker mActivityResultTracker;
+    @Mock ModalDialogManager mModalDialogManager;
+    @Mock SnackbarManager mSnackbarManager;
 
     private TestActivity mActivity;
     private WindowAndroid mWindow;
     private PayloadCallbackHelper<Tab> mPrintCallback;
     private AndroidShareSheetController mController;
     private Bitmap mTestWebFavicon;
+    private final SettableMonotonicObservableSupplier<ModalDialogManager>
+            mModalDialogManagerSupplier = ObservableSuppliers.createMonotonic(mModalDialogManager);
 
     @Before
     public void setup() {
@@ -167,17 +170,13 @@ public class AndroidShareSheetControllerUnitTest {
         doAnswer(invocation -> new GURL(invocation.getArgument(0)))
                 .when(mMockDomDistillerUrlUtilsJni)
                 .getOriginalUrlFromDistillerUrl(anyString());
-        // Setup shadow post task for clipboard actions.
-        ShadowPostTask.setTestImpl(
-                new TestImpl() {
-                    @Override
-                    public void postDelayedTask(
-                            @TaskTraits int taskTraits, Runnable task, long delay) {
-                        task.run();
-                    }
-                });
+
+        DataProtectionBridge.setInstanceForTesting(mMockDataProtectionBridgeNatives);
+        doReturn(true).when(mMockDataProtectionBridgeNatives).isScreenshotAllowed(any());
 
         doReturn(true).when(mTabGroupSharingController).isAvailableForTab(any());
+
+        LinkToTextCoordinator.setForceSelectorForTesting(SELECTOR_FOR_LINK_TO_TEXT);
 
         mActivityScenario.getScenario().onActivity((activity) -> mActivity = activity);
         mActivityScenario.getScenario().moveToState(State.RESUMED);
@@ -187,10 +186,11 @@ public class AndroidShareSheetControllerUnitTest {
                         false,
                         IntentRequestTracker.createFromActivity(mActivity),
                         mInsetObserver,
-                        /* trackOcclusion= */ true);
+                        /* occlusionTrackingAllowed= */ true);
         mPrintCallback = new PayloadCallbackHelper<>();
         // Set up mock tab
         doReturn(mWindow).when(mTab).getWindowAndroid();
+        doReturn(ContextUtils.getApplicationContext()).when(mTab).getContext();
 
         mController =
                 new AndroidShareSheetController(
@@ -200,22 +200,21 @@ public class AndroidShareSheetControllerUnitTest {
                         mProfile,
                         mPrintCallback::notifyCalled,
                         mTabGroupSharingController,
-                        null);
+                        null,
+                        mSigninAndHistorySyncActivityLauncher,
+                        mActivityResultTracker,
+                        mModalDialogManagerSupplier,
+                        mSnackbarManager);
     }
 
     @After
     public void tearDown() {
-        ShadowLinkToTextCoordinator.setForceToFail(null);
-        ShadowQrCodeDialog.sLastUrl = null;
         mWindow.destroy();
     }
 
     /** Test whether custom actions are attached to the intent. */
     @Test
     @RequiresApi(api = 34)
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void shareWithCustomAction() {
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", JUnitTestGURLs.EXAMPLE_URL.getSpec())
@@ -235,7 +234,7 @@ public class AndroidShareSheetControllerUnitTest {
             assertCustomActions(
                     intent,
                     R.string.sharing_long_screenshot,
-                    R.string.sharing_send_tab_to_self,
+                    R.string.send_tab_to_self,
                     R.string.qr_code_share_icon_label);
         } else {
             assertCustomActions(
@@ -243,14 +242,13 @@ public class AndroidShareSheetControllerUnitTest {
                     R.string.sharing_tab_group,
                     R.string.sharing_long_screenshot,
                     R.string.print_share_activity_title,
-                    R.string.sharing_send_tab_to_self,
+                    R.string.send_tab_to_self,
                     R.string.qr_code_share_icon_label);
         }
     }
 
     @Test
     @RequiresApi(api = 34)
-    @Config(sdk = 34)
     public void shareWithoutCustomAction() {
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", "")
@@ -266,9 +264,6 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void choosePrintAction() throws CanceledException {
         Assume.assumeFalse(
                 "Test ignored in the desktop mode because the Print action is not showed in the"
@@ -304,7 +299,11 @@ public class AndroidShareSheetControllerUnitTest {
                 mProfile,
                 mPrintCallback::notifyCalled,
                 mTabGroupSharingController,
-                mDeviceLockActivityLauncher);
+                mDeviceLockActivityLauncher,
+                mSigninAndHistorySyncActivityLauncher,
+                mActivityResultTracker,
+                mModalDialogManagerSupplier,
+                mSnackbarManager);
 
         Intent intent = Shadows.shadowOf((Activity) mActivity).peekNextStartedActivity();
         chooseCustomAction(intent, R.string.print_share_activity_title, ShareCustomAction.PRINT);
@@ -364,9 +363,6 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void shareImageWithCustomActions() {
         Uri testImageUri = Uri.parse("content://test.image.uri");
         ShareParams params =
@@ -387,14 +383,11 @@ public class AndroidShareSheetControllerUnitTest {
         assertCustomActions(
                 intent,
                 R.string.sharing_copy_image_with_link,
-                R.string.sharing_send_tab_to_self,
+                R.string.send_tab_to_self,
                 R.string.qr_code_share_icon_label);
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void shareImageLinkThenCopyImageAndLink() throws CanceledException {
         Uri testImageUri = Uri.parse("content://test.image.uri");
         ShareParams params =
@@ -415,7 +408,7 @@ public class AndroidShareSheetControllerUnitTest {
         assertCustomActions(
                 intent,
                 R.string.sharing_copy_image_with_link,
-                R.string.sharing_send_tab_to_self,
+                R.string.send_tab_to_self,
                 R.string.qr_code_share_icon_label);
 
         chooseCustomAction(
@@ -549,9 +542,6 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowLinkToTextCoordinator.class, ShadowChooserActionHelper.class})
     public void shareLinkToHighlightText() throws CanceledException {
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", JUnitTestGURLs.EXAMPLE_URL.getSpec())
@@ -572,7 +562,11 @@ public class AndroidShareSheetControllerUnitTest {
                 mProfile,
                 mPrintCallback::notifyCalled,
                 mTabGroupSharingController,
-                mDeviceLockActivityLauncher);
+                mDeviceLockActivityLauncher,
+                mSigninAndHistorySyncActivityLauncher,
+                mActivityResultTracker,
+                mModalDialogManagerSupplier,
+                mSnackbarManager);
 
         Intent chooserIntent = Shadows.shadowOf((Activity) mActivity).peekNextStartedActivity();
         Intent shareIntent = chooserIntent.getParcelableExtra(Intent.EXTRA_INTENT);
@@ -584,7 +578,7 @@ public class AndroidShareSheetControllerUnitTest {
         assertCustomActions(
                 chooserIntent,
                 R.string.sharing_copy_highlight_without_link,
-                R.string.sharing_send_tab_to_self,
+                R.string.send_tab_to_self,
                 R.string.qr_code_share_icon_label);
 
         // Toggle the modify action again, link is removed from text.
@@ -601,12 +595,45 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
+    public void shareLinkToHighlightText_EmptyUrlFallbackToTabUrl() throws CanceledException {
+        doReturn(JUnitTestGURLs.EXAMPLE_URL).when(mTab).getUrl();
+        ShareParams params =
+                new ShareParams.Builder(mWindow, "", "")
+                        .setFileContentType("text/plain")
+                        .setText("highlight")
+                        .setBypassFixingDomDistillerUrl(true)
+                        .build();
+        ChromeShareExtras chromeShareExtras =
+                new ChromeShareExtras.Builder()
+                        .setDetailedContentType(DetailedContentType.HIGHLIGHTED_TEXT)
+                        .build();
+        AndroidShareSheetController.showShareSheet(
+                params,
+                chromeShareExtras,
+                mBottomSheetController,
+                () -> mTab,
+                () -> mTabModelSelector,
+                mProfile,
+                mPrintCallback::notifyCalled,
+                mTabGroupSharingController,
+                mDeviceLockActivityLauncher,
+                mSigninAndHistorySyncActivityLauncher,
+                mActivityResultTracker,
+                mModalDialogManagerSupplier,
+                mSnackbarManager);
+
+        Intent chooserIntent = Shadows.shadowOf((Activity) mActivity).peekNextStartedActivity();
+        Intent shareIntent = chooserIntent.getParcelableExtra(Intent.EXTRA_INTENT);
+        Assert.assertEquals(
+                "Text being shared is different.",
+                "\"highlight\"\n " + JUnitTestGURLs.TEXT_FRAGMENT_URL.getSpec(),
+                shareIntent.getStringExtra(Intent.EXTRA_TEXT));
+    }
+
+    @Test
     @RequiresApi(34)
-    @Config(
-            sdk = 34,
-            shadows = {ShadowLinkToTextCoordinator.class, ShadowChooserActionHelper.class})
     public void shareLinkToHighlightTextFailed() {
-        ShadowLinkToTextCoordinator.setForceToFail(true);
+        LinkToTextCoordinator.setForceSelectorForTesting("");
 
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", JUnitTestGURLs.EXAMPLE_URL.getSpec())
@@ -627,7 +654,11 @@ public class AndroidShareSheetControllerUnitTest {
                 mProfile,
                 mPrintCallback::notifyCalled,
                 mTabGroupSharingController,
-                mDeviceLockActivityLauncher);
+                mDeviceLockActivityLauncher,
+                mSigninAndHistorySyncActivityLauncher,
+                mActivityResultTracker,
+                mModalDialogManagerSupplier,
+                mSnackbarManager);
 
         // Since link to share failed, the content being shared is a plain text.
         Intent chooserIntent = Shadows.shadowOf((Activity) mActivity).peekNextStartedActivity();
@@ -643,10 +674,8 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class, ShadowQrCodeDialog.class})
     public void shareQrCodeForImage() throws CanceledException {
+        QrCodeDialog.setInstanceForTesting(Mockito.mock(QrCodeDialog.class));
         Uri testImageUri = Uri.parse("content://test.image.uri");
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", "")
@@ -667,20 +696,17 @@ public class AndroidShareSheetControllerUnitTest {
         assertCustomActions(
                 intent,
                 R.string.sharing_copy_image_with_link,
-                R.string.sharing_send_tab_to_self,
+                R.string.send_tab_to_self,
                 R.string.qr_code_share_icon_label);
         chooseCustomAction(intent, R.string.qr_code_share_icon_label, ShareCustomAction.QR_CODE);
 
         Assert.assertEquals(
                 "Image source URL should be used for QR Code.",
                 JUnitTestGURLs.GOOGLE_URL_DOGS.getSpec(),
-                ShadowQrCodeDialog.sLastUrl);
+                QrCodeDialog.getLastUrlForTesting());
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void webShareImageLink() throws CanceledException {
         Uri testImageUri = Uri.parse("content://test.image.uri/image.png");
         ShareParams params =
@@ -700,7 +726,7 @@ public class AndroidShareSheetControllerUnitTest {
                 intent,
                 R.string.sharing_copy_image,
                 R.string.sharing_copy_image_with_link,
-                R.string.sharing_send_tab_to_self,
+                R.string.send_tab_to_self,
                 R.string.qr_code_share_icon_label);
 
         Intent shareIntent = intent.getParcelableExtra(Intent.EXTRA_INTENT);
@@ -716,9 +742,6 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void webShareImageOnly() {
         Uri testImageUri = Uri.parse("content://test.image.uri");
         ShareParams params =
@@ -734,7 +757,7 @@ public class AndroidShareSheetControllerUnitTest {
                         .build();
         mController.showShareSheet(params, chromeShareExtras, 1L);
         Intent intent = Shadows.shadowOf((Activity) mActivity).peekNextStartedActivity();
-        assertCustomActions(intent, R.string.sharing_copy_image, R.string.sharing_send_tab_to_self);
+        assertCustomActions(intent, R.string.sharing_copy_image, R.string.send_tab_to_self);
 
         Intent shareIntent = intent.getParcelableExtra(Intent.EXTRA_INTENT);
         Assert.assertTrue(
@@ -743,12 +766,9 @@ public class AndroidShareSheetControllerUnitTest {
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class, ShadowLongScreenshotsCoordinator.class})
     public void chooseLongScreenShot() throws CanceledException {
-        ShadowLongScreenshotsCoordinator.sMockInstance =
-                Mockito.mock(LongScreenshotsCoordinator.class);
+        LongScreenshotsCoordinator mockCoordinator = Mockito.mock(LongScreenshotsCoordinator.class);
+        LongScreenshotsCoordinator.setInstanceForTesting(mockCoordinator);
 
         ShareParams params =
                 new ShareParams.Builder(mWindow, "", JUnitTestGURLs.EXAMPLE_URL.getSpec())
@@ -764,7 +784,7 @@ public class AndroidShareSheetControllerUnitTest {
             assertCustomActions(
                     intent,
                     R.string.sharing_long_screenshot,
-                    R.string.sharing_send_tab_to_self,
+                    R.string.send_tab_to_self,
                     R.string.qr_code_share_icon_label);
         } else {
             assertCustomActions(
@@ -772,22 +792,17 @@ public class AndroidShareSheetControllerUnitTest {
                     R.string.sharing_tab_group,
                     R.string.sharing_long_screenshot,
                     R.string.print_share_activity_title,
-                    R.string.sharing_send_tab_to_self,
+                    R.string.send_tab_to_self,
                     R.string.qr_code_share_icon_label);
         }
         chooseCustomAction(
                 intent, R.string.sharing_long_screenshot, ShareCustomAction.LONG_SCREENSHOT);
 
         verify(mTracker).notifyEvent(EventConstants.SHARE_SCREENSHOT_SELECTED);
-        verify(ShadowLongScreenshotsCoordinator.sMockInstance).captureScreenshot();
-
-        ShadowLongScreenshotsCoordinator.sMockInstance = null;
+        verify(mockCoordinator).captureScreenshot();
     }
 
     @Test
-    @Config(
-            sdk = 34,
-            shadows = {ShadowChooserActionHelper.class})
     public void shareScreenshot() {
         Uri testImageUri = Uri.parse("content://test.screenshot.uri");
         // Build the same params and share extras as sharing a long screenshot
@@ -811,14 +826,16 @@ public class AndroidShareSheetControllerUnitTest {
     private void setFaviconToFetchForTest(Bitmap favicon) {
         doAnswer(
                         invocation -> {
-                            FaviconHelper.FaviconImageCallback callback = invocation.getArgument(4);
+                            FaviconHelper.FaviconImageCallback callback = invocation.getArgument(5);
                             callback.onFaviconAvailable(favicon, GURL.emptyGURL());
                             return null;
                         })
                 .when(mMockFaviconHelperJni)
-                .getLocalFaviconImageForURL(anyLong(), eq(mProfile), any(), anyInt(), any());
+                .getLocalFaviconImageForURL(
+                        anyLong(), eq(mProfile), any(), anyInt(), anyBoolean(), any());
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private void assertCustomActions(Intent chooserIntent, Integer... expectedStringRes) {
         Parcelable[] actions =
                 chooserIntent.getParcelableArrayExtra(Intent.EXTRA_CHOOSER_CUSTOM_ACTIONS);
@@ -830,8 +847,7 @@ public class AndroidShareSheetControllerUnitTest {
 
         StringBuilder actualStringBuilder = new StringBuilder();
         for (Parcelable action : actions) {
-            String name = ((Bundle) action).getString(KEY_CHOOSER_ACTION_NAME);
-            actualStringBuilder.append(",").append(name);
+            actualStringBuilder.append(",").append(((ChooserAction) action).getLabel());
         }
 
         StringBuilder expectedStringBuilder = new StringBuilder();
@@ -846,6 +862,7 @@ public class AndroidShareSheetControllerUnitTest {
                 "Actions and/or the order does not match.", expectedString, actualString);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private void chooseCustomAction(
             Intent chooserIntent, @StringRes int iconLabel, @ShareCustomAction int shareAction)
             throws CanceledException {
@@ -854,13 +871,13 @@ public class AndroidShareSheetControllerUnitTest {
         Assert.assertTrue("More than one action is provided.", actions.length > 0);
 
         // Find the print callback, since we mocked that out during this test.
-        Bundle expectAction = null;
+        ChooserAction expectAction = null;
         for (Parcelable parcelable : actions) {
-            Bundle bundle = (Bundle) parcelable;
+            ChooserAction chooserAction = (ChooserAction) parcelable;
             if (TextUtils.equals(
                     ContextUtils.getApplicationContext().getString(iconLabel),
-                    bundle.getString(KEY_CHOOSER_ACTION_NAME))) {
-                expectAction = bundle;
+                    chooserAction.getLabel())) {
+                expectAction = chooserAction;
                 break;
             }
         }
@@ -872,81 +889,10 @@ public class AndroidShareSheetControllerUnitTest {
                         .expectIntRecord("Sharing.SharingHubAndroid.CustomAction", shareAction)
                         .expectAnyRecord("Sharing.SharingHubAndroid.TimeToCustomAction")
                         .build();
-        PendingIntent action = expectAction.getParcelable(KEY_CHOOSER_ACTION_ACTION);
+        PendingIntent action = expectAction.getAction();
         action.send();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         histogramWatcher.assertExpected();
-    }
-
-    /** Test implementation to build a ChooserAction. */
-    @Implements(ShareHelper.ChooserActionHelper.class)
-    static class ShadowChooserActionHelper {
-        @Implementation
-        protected static boolean isSupported() {
-            return true;
-        }
-
-        @Implementation
-        protected static Parcelable newChooserAction(Icon icon, String name, PendingIntent action) {
-            Bundle bundle = new Bundle();
-            bundle.putParcelable(KEY_CHOOSER_ACTION_ICON, icon);
-            bundle.putString(KEY_CHOOSER_ACTION_NAME, name);
-            bundle.putParcelable(KEY_CHOOSER_ACTION_ACTION, action);
-            return bundle;
-        }
-    }
-
-    /**
-     * Shadow implementation of the real LinkToTextCoordinator but bypassing the selector process.
-     */
-    @Implements(LinkToTextCoordinator.class)
-    public static class ShadowLinkToTextCoordinator {
-        @RealObject private LinkToTextCoordinator mRealObj;
-
-        public ShadowLinkToTextCoordinator() {}
-
-        static Boolean sForceToFail;
-
-        static void setForceToFail(Boolean forceToFail) {
-            sForceToFail = forceToFail;
-        }
-
-        @Implementation
-        protected void shareLinkToText() {
-            boolean fail = sForceToFail != null && sForceToFail;
-            mRealObj.onSelectorReady(fail ? "" : SELECTOR_FOR_LINK_TO_TEXT);
-        }
-
-        @Implementation
-        protected String getTitle() {
-            return "Include link: <link>";
-        }
-    }
-
-    @Implements(QrCodeDialog.class)
-    static class ShadowQrCodeDialog {
-        static @Nullable String sLastUrl;
-
-        @Implementation
-        protected static QrCodeDialog newInstance(String url, WindowAndroid windowAndroid) {
-            sLastUrl = url;
-            return Mockito.mock(QrCodeDialog.class);
-        }
-    }
-
-    @Implements(LongScreenshotsCoordinator.class)
-    static class ShadowLongScreenshotsCoordinator {
-        static LongScreenshotsCoordinator sMockInstance;
-
-        @Implementation
-        public static LongScreenshotsCoordinator create(
-                Activity activity,
-                Tab tab,
-                String shareUrl,
-                ChromeOptionShareCallback chromeOptionShareCallback,
-                BottomSheetController sheetController) {
-            return sMockInstance;
-        }
     }
 }

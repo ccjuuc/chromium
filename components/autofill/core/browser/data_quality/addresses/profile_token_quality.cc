@@ -4,27 +4,34 @@
 
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <algorithm>
+#include <memory>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/check.h"
 #include "base/check_deref.h"
+#include "base/check_op.h"
 #include "base/containers/circular_deque.h"
-#include "base/containers/contains.h"
-#include "base/feature_list.h"
+#include "base/containers/span.h"
 #include "base/rand_util.h"
 #include "base/strings/levenshtein_distance.h"
 #include "base/strings/string_util.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/metrics/profile_token_quality_metrics.h"
-#include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_l10n_util.h"
+#include "components/autofill/core/common/signatures.h"
 
 namespace autofill {
 
@@ -119,10 +126,7 @@ bool ProfileTokenQuality::operator==(const ProfileTokenQuality& other) const {
 
 bool ProfileTokenQuality::AddObservationsForFilledForm(
     const FormStructure& form_structure,
-    const FormData& form_data,
     const AddressDataManager& adm) {
-  CHECK_EQ(form_structure.field_count(), form_data.fields().size());
-
   std::vector<const AutofillProfile*> other_profiles = adm.GetProfiles();
   std::erase_if(other_profiles, [&](const AutofillProfile* p) {
     return p->guid() == profile_->guid();
@@ -154,8 +158,9 @@ bool ProfileTokenQuality::AddObservationsForFilledForm(
         GetFormSignatureHash(form_structure.form_signature());
     if (auto observations = observations_.find(stored_type);
         observations != observations_.end() &&
-        base::Contains(observations->second, hash,
-                       [](const Observation& o) { return o.form_hash; })) {
+        std::ranges::contains(
+            observations->second, hash,
+            [](const Observation& o) { return o.form_hash; })) {
       // An observation for the `stored_type` and `hash` was already collected.
       continue;
     }
@@ -163,10 +168,7 @@ bool ProfileTokenQuality::AddObservationsForFilledForm(
     // If the field has a selected option, we give precedence to the option's
     // text over its value because the user-visible text is likely more
     // meaningful. Currently, only <select> elements may have a selected option.
-    base::optional_ref<const SelectOption> selected_option =
-        form_data.fields()[i].selected_option();
-    std::u16string value =
-        selected_option ? selected_option->text : form_data.fields()[i].value();
+    std::u16string value = field.value_for_import();
     possible_observations.emplace_back(
         stored_type,
         Observation{.type = std::to_underlying(GetObservationTypeFromField(
@@ -179,7 +181,6 @@ bool ProfileTokenQuality::AddObservationsForFilledForm(
 // static
 void ProfileTokenQuality::SaveObservationsForFilledFormForAllSubmittedProfiles(
     const FormStructure& form_structure,
-    const FormData& form_data,
     AddressDataManager& adm) {
   std::set<std::string> guids_seen;
   for (const std::unique_ptr<AutofillField>& field : form_structure) {
@@ -196,7 +197,7 @@ void ProfileTokenQuality::SaveObservationsForFilledFormForAllSubmittedProfiles(
     }
     AutofillProfile updatable_profile = *profile;
     if (updatable_profile.token_quality().AddObservationsForFilledForm(
-            form_structure, form_data, adm)) {
+            form_structure, adm)) {
       adm.UpdateProfile(updatable_profile);
     }
   }
@@ -263,11 +264,12 @@ ObservationType ProfileTokenQuality::GetObservationTypeFromField(
     const std::vector<const AutofillProfile*>& other_profiles,
     const std::string& app_locale) const {
   CHECK(field.autofill_source_profile_guid() == profile_->guid());
-  DCHECK(!base::Contains(other_profiles, profile_->guid(),
-                         [](const AutofillProfile* p) { return p->guid(); }));
+  DCHECK(!std::ranges::contains(
+      other_profiles, profile_->guid(),
+      [](const AutofillProfile* p) { return p->guid(); }));
 
   const FieldType type = field.Type().GetAddressType();
-  if (field.is_autofilled()) {
+  if (field.last_modifier() == FieldModifier::kAutofill) {
     // The filled value was accepted without editing.
     return AutofillProfile::kDatabaseStoredTypes.contains(type)
                ? ObservationType::kAccepted

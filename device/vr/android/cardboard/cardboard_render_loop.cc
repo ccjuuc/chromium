@@ -11,12 +11,14 @@
 #include "base/functional/callback_helpers.h"
 #include "base/task/bind_post_task.h"
 #include "base/trace_event/trace_event.h"
+#include "components/viz/common/gpu/context_provider.h"
 #include "device/vr/android/cardboard/cardboard_image_transport.h"
 #include "device/vr/android/cardboard/cardboard_sdk.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "device/vr/public/mojom/vr_service.mojom-shared.h"
 #include "device/vr/util/transform_utils.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
+#include "ui/gfx/geometry/decomposed_transform.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_bindings_autogen_gl.h"
@@ -28,10 +30,9 @@
 
 namespace device {
 namespace {
-// TODO(crbug.com/40900871): It's not clear if the display rotation
-// should factor into Cardboard's viewport orientation. Initial attempts to
-// map them together frequently gave wrong results, whereas statically using
-// kLandscapeLeft has the expected effect.
+// Statically using kLandscapeLeft is preferred because initial attempts to
+// map display rotation to Cardboard's viewport orientation frequently gave
+// wrong results.
 constexpr CardboardViewportOrientation kViewportOrientation = kLandscapeLeft;
 
 // Default downscale factor for computing the recommended WebXR
@@ -270,7 +271,7 @@ void CardboardRenderLoop::OnCardboardImageTransportReady(bool success) {
   session->device_config = device::mojom::XRSessionDeviceConfig::New();
   auto* config = session->device_config.get();
 
-  // TODO(crbug.com/40900872): Determine if we should support this.
+  // TODO(crbug.com/528413360): Determine if we should support this.
   config->supports_viewport_scaling = false;
 
   config->default_framebuffer_scale = kRecommendedResolutionScale;
@@ -371,14 +372,16 @@ void CardboardRenderLoop::GetFrameData(
   // Translate the head pose into the viewer pose pointer
   // This needs to be inverted because the Cardboard SDK appears to be giving
   // back values that are the inverse of what WebXR expects.
-  mojom::VRPosePtr pose = mojom::VRPose::New();
-  pose->position = gfx::Point3F(-position[0], -position[1], -position[2]);
-  pose->orientation = gfx::Quaternion(-orientation[0], -orientation[1],
-                                      -orientation[2], orientation[3]);
-  pose->emulated_position = true;
+  gfx::DecomposedTransform viewer_from_mojo_decomp;
+  viewer_from_mojo_decomp.quaternion = gfx::Quaternion(
+      orientation[0], orientation[1], orientation[2], orientation[3]);
+  viewer_from_mojo_decomp.translate = {position[0], position[1], position[2]};
+  auto viewer_from_mojo = gfx::Transform::Compose(viewer_from_mojo_decomp);
+  gfx::Transform mojo_from_viewer = viewer_from_mojo.GetCheckedInverse();
 
-  gfx::Transform mojo_from_viewer = vr_utils::VrPoseToTransform(pose.get());
-  frame_data->render_info->mojo_from_viewer = std::move(pose);
+  frame_data->render_info->mojo_from_viewer =
+      vr_utils::GfxTransformToVrPose(mojo_from_viewer,
+                                     /*emulated_position=*/true);
 
   // Get the view transform for each eye
   left_eye_->geometry->mojo_from_view =
@@ -395,8 +398,6 @@ void CardboardRenderLoop::GetFrameData(
 
   frame_data->time_delta = now - base::TimeTicks();
 
-  // TODO(crbug.com/40900872): Calculating
-  // frame_data->rendering_time_ratio may be necessary for viewport scaling.
   std::move(callback).Run(std::move(frame_data));
 }
 
@@ -435,8 +436,9 @@ bool CardboardRenderLoop::IsSubmitFrameExpected(int16_t frame_index) {
   return true;
 }
 
-void CardboardRenderLoop::SubmitFrameMissing(int16_t frame_index,
-                                             const gpu::SyncToken& sync_token) {
+void CardboardRenderLoop::SubmitFrameMissing(
+    int16_t frame_index,
+    gpu::SharedImageExportResult camera_export_multi_result) {
   TRACE_EVENT1("gpu", "CardboardRenderLoop::SubmitFrameMissing", "frame",
                frame_index);
   DVLOG(2) << __func__ << ": frame=" << frame_index;
@@ -445,8 +447,13 @@ void CardboardRenderLoop::SubmitFrameMissing(int16_t frame_index,
     return;
   }
 
+  if (camera_export_multi_result.HasData()) {
+    presentation_receiver_.ReportBadMessage(
+        "Received unexpected camera sync tokens.");
+    return;
+  }
+
   webxr_->RecycleUnusedAnimatingFrame();
-  cardboard_image_transport_->WaitSyncToken(sync_token);
   FinishFrame(frame_index);
 
   if (pending_getframedata_) {
@@ -455,23 +462,31 @@ void CardboardRenderLoop::SubmitFrameMissing(int16_t frame_index,
 }
 
 void CardboardRenderLoop::SubmitFrame(int16_t frame_index,
-                                      const gpu::MailboxHolder& mailbox,
                                       base::TimeDelta time_waited) {
   NOTREACHED();
 }
 
 void CardboardRenderLoop::SubmitFrameDrawnIntoTexture(
     int16_t frame_index,
-    const std::vector<LayerId>& layer_ids,
-    const gpu::SyncToken& sync_token,
+    std::vector<device::mojom::XRLayerUpdatePtr> layer_updates,
+    gpu::SharedImageExportResult camera_export_multi_result,
     base::TimeDelta time_waited) {
   TRACE_EVENT1("gpu", "CardboardRenderLoop::SubmitFrameDrawnIntoTexture",
                "frame", frame_index);
   DVLOG(2) << __func__ << ": frame=" << frame_index;
 
-  if (!layer_ids.empty()) {
+  // |layer_updates| is expected to contain only the base layer.
+  if (layer_updates.size() != 1) {
     presentation_receiver_.ReportBadMessage(
         "Layers feature not enabled for this session");
+    return;
+  }
+
+  // For cardboard, no sync token for the camera should be received since there
+  // is no camera shared image.
+  if (camera_export_multi_result.HasData()) {
+    presentation_receiver_.ReportBadMessage(
+        "Received unexpected camera sync tokens.");
     return;
   }
 
@@ -483,13 +498,30 @@ void CardboardRenderLoop::SubmitFrameDrawnIntoTexture(
   // processing frame, defer it until that frame calls TryDeferredProcessing.
   webxr_->ProcessOrDefer(
       base::BindOnce(&CardboardRenderLoop::ProcessFrameDrawnIntoTexture,
-                     weak_ptr_factory_.GetWeakPtr(), sync_token));
+                     weak_ptr_factory_.GetWeakPtr(),
+                     std::move(layer_updates[0]->shared_image_export_result)));
 }
 
 void CardboardRenderLoop::ProcessFrameDrawnIntoTexture(
-    const gpu::SyncToken& sync_token) {
-  cardboard_image_transport_->CreateGpuFenceForSyncToken(
-      sync_token,
+    gpu::SharedImageExportResult shared_image_export_result) {
+  // The current function is run immediately after the animating frame is
+  // moved to processing, so GetProcessingFrame() is guaranteed to be valid.
+  WebXrFrame* frame = webxr_->GetProcessingFrame();
+  CHECK(frame);
+
+  // For Cardboard, the camera image shared buffer is always empty and
+  // therefore is not included in this shared_images vector.
+  std::vector<scoped_refptr<gpu::ClientSharedImage>> shared_images{
+      frame->shared_buffer->shared_image};
+
+  std::vector<gpu::SyncToken> combined_sync_tokens{
+      shared_images[0]->EndExport(std::move(shared_image_export_result))};
+
+  viz::ContextProvider* context_provider =
+      cardboard_image_transport_->GetContextProvider();
+  gpu::ClientSharedImage::CreateGpuFenceForSyncTokens(
+      std::move(shared_images), std::move(combined_sync_tokens),
+      context_provider->ContextGL(), context_provider->ContextSupport(),
       base::BindOnce(&CardboardRenderLoop::OnWebXrTokenSignaled, GetWeakPtr()));
 
   if (pending_getframedata_) {

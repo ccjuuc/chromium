@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/containers/span.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/thread_pool.h"
@@ -38,12 +39,9 @@ const Uuid kFastAdvertisementServiceUuid1{0x0000FEF300001000,
                                           0x800000805F9B34FB};
 const Uuid kTestServiceUuid2{0x0000FEF300001000, 0xA0000060ABCDEF12};
 const device::BluetoothUUID kService1BluetoothUuid{
-    base::span<const uint8_t>(reinterpret_cast<const uint8_t*>(
-                                  kFastAdvertisementServiceUuid1.data().data()),
-                              kFastAdvertisementServiceUuid1.data().size())};
-const device::BluetoothUUID kService2BluetoothUuid{base::span<const uint8_t>(
-    reinterpret_cast<const uint8_t*>(kTestServiceUuid2.data().data()),
-    kTestServiceUuid2.data().size())};
+    base::as_byte_span(kFastAdvertisementServiceUuid1.data())};
+const device::BluetoothUUID kService2BluetoothUuid{
+    base::as_byte_span(kTestServiceUuid2.data())};
 const char kServiceId[] = "TestServiceId";
 const char kCharacteristicUuid[] = "1234";
 const uint64_t kUniqueId = 24279786918417;
@@ -721,22 +719,10 @@ TEST_F(BleV2MediumTest, IsExtendedAdvertisementsAvailable_FlagEnabled) {
   EXPECT_FALSE(ble_v2_medium_->IsExtendedAdvertisementsAvailable());
 }
 
-TEST_F(BleV2MediumTest, StartGattServer_DualRoleSupported_FlagDisabled) {
+TEST_F(BleV2MediumTest, StartGattServer_DualRoleSupported) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       /*enabled_features=*/{::features::kEnableNearbyBleV2},
-      /*disabled_features=*/{::features::kEnableNearbyBleV2GattServer});
-
-  fake_adapter_->is_dual_role_supported_ = true;
-  auto gatt_server = ble_v2_medium_->StartGattServer({});
-  EXPECT_FALSE(gatt_server);
-}
-
-TEST_F(BleV2MediumTest, StartGattServer_DualRoleSupported_FlagEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyBleV2,
-                            ::features::kEnableNearbyBleV2GattServer},
       /*disabled_features=*/{});
 
   fake_adapter_->is_dual_role_supported_ = true;
@@ -753,8 +739,7 @@ TEST_F(BleV2MediumTest, StartGattServer_DualRoleSupported_FlagEnabled) {
 TEST_F(BleV2MediumTest, StartGattServer_DualRoleNotSupported) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyBleV2,
-                            ::features::kEnableNearbyBleV2GattServer},
+      /*enabled_features=*/{::features::kEnableNearbyBleV2},
       /*disabled_features=*/{});
 
   fake_adapter_->is_dual_role_supported_ = false;
@@ -768,8 +753,7 @@ TEST_F(BleV2MediumTest, StartGattServer_DualRoleNotSupported) {
 TEST_F(BleV2MediumTest, StartAdvertising_RegisterGattServer_Success) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyBleV2,
-                            ::features::kEnableNearbyBleV2GattServer},
+      /*enabled_features=*/{::features::kEnableNearbyBleV2},
       /*disabled_features=*/{});
 
   SetUpGattServerForAdvertising(/*should_register_succeed=*/true);
@@ -793,8 +777,7 @@ TEST_F(BleV2MediumTest, StartAdvertising_RegisterGattServer_Success) {
 TEST_F(BleV2MediumTest, StartAdvertising_RegisterGattServer_Failure) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyBleV2,
-                            ::features::kEnableNearbyBleV2GattServer},
+      /*enabled_features=*/{::features::kEnableNearbyBleV2},
       /*disabled_features=*/{});
 
   SetUpGattServerForAdvertising(/*should_register_succeed=*/false);
@@ -1003,8 +986,7 @@ TEST_F(BleV2MediumTest, AdvertisementsAreConnectable_ExtendedAdvertisement) {
 TEST_F(BleV2MediumTest, AdvertisementsAreConnectable_GattAdvertisement) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
-      /*enabled_features=*/{::features::kEnableNearbyBleV2,
-                            ::features::kEnableNearbyBleV2GattServer},
+      /*enabled_features=*/{::features::kEnableNearbyBleV2},
       /*disabled_features=*/{});
 
   SetUpGattServerForAdvertising(/*should_register_succeed=*/true);

@@ -11,12 +11,24 @@ import static org.chromium.ui.listmenu.ListMenuItemProperties.IS_HIGHLIGHTED;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.KEY_LISTENER;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
 import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE_ID;
-import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_ITEMS;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.IS_EXPANDED;
+import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_PROVIDER;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.graphics.Rect;
+import android.graphics.drawable.GradientDrawable;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.CompoundButton;
+import android.widget.ImageView;
 import android.widget.ListView;
+
+import androidx.annotation.AttrRes;
+import androidx.annotation.ColorRes;
+import androidx.core.widget.CompoundButtonCompat;
+import androidx.core.widget.ImageViewCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -32,10 +44,12 @@ import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
+import org.chromium.ui.util.AttrUtils;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 
 @NullMarked
 public class ListMenuUtils {
@@ -74,11 +88,11 @@ public class ListMenuUtils {
 
         adapter.registerType(
                 ListItemType.DIVIDER,
-                new LayoutViewBuilder(R.layout.list_section_divider),
-                (m, v, p) -> {});
+                new LayoutViewBuilder<>(R.layout.list_section_divider),
+                ListSectionDividerViewBinder::bind);
         adapter.registerType(
                 ListItemType.MENU_ITEM,
-                new LayoutViewBuilder(R.layout.list_menu_item),
+                new LayoutViewBuilder<>(R.layout.list_menu_item),
                 ListMenuItemViewBinder::binder);
         adapter.registerType(
                 ListItemType.MENU_ITEM_WITH_CHECKBOX,
@@ -108,20 +122,6 @@ public class ListMenuUtils {
     }
 
     /**
-     * Constructs a {@link ModelList} containing the submenu items of a given parent item.
-     *
-     * @param item The parent {@link ListItem} that contains the submenu.
-     * @return A new {@link ModelList} populated with the children of the given item.
-     */
-    public static ModelList getModelListSubtree(ListItem item) {
-        ModelList modelList = new ModelList();
-        for (ListItem listItem : item.model.get(SUBMENU_ITEMS)) {
-            modelList.add(listItem);
-        }
-        return modelList;
-    }
-
-    /**
      * Calculates the Rect of a given View in the coordinate space of a root View. This is useful
      * when you need to position a UI element (like a popup) relative to a specific view, but need
      * the coordinates to be based on the root view's visible area, which accounts for when the
@@ -144,11 +144,30 @@ public class ListMenuUtils {
     }
 
     /**
+     * Clips the content view to a rounded outline defined by a theme attribute.
+     *
+     * @param contentView The view to be clipped.
+     * @param cornerRadiusAttr The attribute ID (e.g., R.attr.popupBgCornerRadius) defining the
+     *     radius.
+     */
+    public static void clipContentViewOutline(View contentView, @AttrRes int cornerRadiusAttr) {
+        GradientDrawable outlineDrawable = new GradientDrawable();
+        outlineDrawable.setShape(GradientDrawable.RECTANGLE);
+        outlineDrawable.setCornerRadius(
+                AttrUtils.getDimensionPixelSize(contentView.getContext(), cornerRadiusAttr));
+        contentView.setBackground(outlineDrawable);
+        contentView.setClipToOutline(true);
+    }
+
+    /**
      * Creates an instance of {@link HierarchicalMenuController} for {@link ListMenu}.
      *
+     * @param <T> The type of the popup window managed by the controller's {@link FlyoutHandler}.
      * @param context The {@link Context} for the controller to use.
+     * @return A new {@link HierarchicalMenuController} instance.
      */
-    public static HierarchicalMenuController createHierarchicalMenuController(Context context) {
+    public static <T> HierarchicalMenuController<T> createHierarchicalMenuController(
+            Context context) {
         HierarchicalMenuKeyProvider keyProvider = new ListMenuUtils.ListMenuKeyProvider();
         SubmenuHeaderFactory headerFactory =
                 (clickedItem, backRunnable) -> {
@@ -159,9 +178,23 @@ public class ListMenuUtils {
                             keyProvider,
                             clickedItem.model.get(ListMenuItemProperties.TITLE),
                             backRunnable);
+
+                    if (clickedItem.model.containsKey(ListMenuItemProperties.TEXT_APPEARANCE_ID)) {
+                        builder.with(
+                                ListMenuItemProperties.TEXT_APPEARANCE_ID,
+                                clickedItem.model.get(ListMenuItemProperties.TEXT_APPEARANCE_ID));
+                    }
+                    if (clickedItem.model.containsKey(
+                            ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID)) {
+                        builder.with(
+                                ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID,
+                                clickedItem.model.get(
+                                        ListMenuItemProperties.ICON_TINT_COLOR_STATE_LIST_ID));
+                    }
+
                     return new ListItem(ListItemType.SUBMENU_HEADER, builder.build());
                 };
-        return new HierarchicalMenuController(context, keyProvider, headerFactory);
+        return new HierarchicalMenuController<>(context, keyProvider, headerFactory);
     }
 
     public static class ListMenuKeyProvider implements HierarchicalMenuKeyProvider {
@@ -196,13 +229,52 @@ public class ListMenuUtils {
         }
 
         @Override
-        public WritableObjectPropertyKey<List<ListItem>> getSubmenuItemsKey() {
-            return SUBMENU_ITEMS;
+        public WritableObjectPropertyKey<Supplier<List<ListItem>>> getSubmenuProviderKey() {
+            return SUBMENU_PROVIDER;
         }
 
         @Override
         public WritableBooleanPropertyKey getIsHighlightedKey() {
             return IS_HIGHLIGHTED;
         }
+
+        @Override
+        public WritableBooleanPropertyKey getIsExpandedKey() {
+            return IS_EXPANDED;
+        }
+    }
+
+    /**
+     * Iterates through the view hierarchy and applies the specified tint to all ImageViews.
+     *
+     * @param view The root view to start the iteration from.
+     * @param tintList The tint color state list to apply.
+     */
+    public static void applyTintToAllIcons(View view, @Nullable ColorStateList tintList) {
+        if (view instanceof ImageView imageView) {
+            // General icons and submenu arrows are usually ImageViews.
+            ImageViewCompat.setImageTintList(imageView, tintList);
+        } else if (view instanceof CompoundButton compoundButton) {
+            // Checkboxes and radio buttons are CompoundButtons.
+            CompoundButtonCompat.setButtonTintList(compoundButton, tintList);
+        } else if (view instanceof ViewGroup viewGroup) {
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                applyTintToAllIcons(viewGroup.getChildAt(i), tintList);
+            }
+        }
+    }
+
+    /**
+     * Resolves the color resource ID to a ColorStateList and applies it to all icons in the view.
+     *
+     * @param view The root view.
+     * @param colorResId The color resource ID.
+     */
+    public static void applyTintToAllIcons(View view, @ColorRes int colorResId) {
+        ColorStateList tintList =
+                colorResId != Resources.ID_NULL
+                        ? view.getContext().getColorStateList(colorResId)
+                        : null;
+        applyTintToAllIcons(view, tintList);
     }
 }

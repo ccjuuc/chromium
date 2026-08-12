@@ -12,8 +12,12 @@
 #import "components/browser_sync/sync_engine_factory_impl.h"
 #import "components/sync/service/sync_client.h"
 
+namespace network_time {
+class NetworkTimeTracker;
+}  // namespace network_time
+
 namespace supervised_user {
-class SupervisedUserSettingsService;
+class FamilyLinkSettingsService;
 }  // namespace supervised_user
 
 namespace syncer {
@@ -34,8 +38,7 @@ class IOSChromeSyncClient : public syncer::SyncClient {
       syncer::SyncInvalidationsService* sync_invalidations_service,
       syncer::DeviceInfoSyncService* device_info_sync_service,
       syncer::DataTypeStoreService* data_type_store_service,
-      supervised_user::SupervisedUserSettingsService*
-          supervised_user_settings_service);
+      supervised_user::FamilyLinkSettingsService* family_link_settings_service);
 
   IOSChromeSyncClient(const IOSChromeSyncClient&) = delete;
   IOSChromeSyncClient& operator=(const IOSChromeSyncClient&) = delete;
@@ -45,6 +48,7 @@ class IOSChromeSyncClient : public syncer::SyncClient {
   // SyncClient implementation.
   PrefService* GetPrefService() override;
   signin::IdentityManager* GetIdentityManager() override;
+  network_time::NetworkTimeTracker* GetNetworkTimeTracker() override;
   base::FilePath GetLocalSyncBackendFolder() override;
   trusted_vault::TrustedVaultClient* GetTrustedVaultClient() override;
   syncer::SyncInvalidationsService* GetSyncInvalidationsService() override;
@@ -54,14 +58,15 @@ class IOSChromeSyncClient : public syncer::SyncClient {
   void RegisterTrustedVaultAutoUpgradeSyntheticFieldTrial(
       const syncer::TrustedVaultAutoUpgradeSyntheticFieldTrialGroup& group)
       override;
+  bool IsMetricsAndCrashReportingEnabled() override;
 
  private:
   const raw_ptr<PrefService> pref_service_;
   const raw_ptr<signin::IdentityManager> identity_manager_;
   const raw_ptr<trusted_vault::TrustedVaultService> trusted_vault_service_;
   const raw_ptr<syncer::SyncInvalidationsService> sync_invalidations_service_;
-  const raw_ptr<supervised_user::SupervisedUserSettingsService>
-      supervised_user_settings_service_;
+  const raw_ptr<supervised_user::FamilyLinkSettingsService>
+      family_link_settings_service_;
   browser_sync::SyncEngineFactoryImpl engine_factory_;
 };
 

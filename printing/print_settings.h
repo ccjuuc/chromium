@@ -32,7 +32,7 @@
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chromeos/crosapi/mojom/local_printer.mojom.h"
+#include "printing/cups_printer_status_reason_ash.h"
 #include "printing/printing_features.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -139,10 +139,8 @@ class COMPONENT_EXPORT(PRINTING_SETTINGS) PrintSettings {
   }
   void set_margin_type(mojom::MarginType margin_type) {
 #if BUILDFLAG(IS_CHROMEOS)
-    if (base::FeatureList::IsEnabled(features::kApiPrintingMarginsAndScale)) {
-      CHECK_NE(margin_type,
-               printing::mojom::MarginType::kPrecomputedMarginsForBackend);
-    }
+    CHECK_NE(margin_type,
+             printing::mojom::MarginType::kPrecomputedMarginsForBackend);
 #endif  // BUILDFLAG(IS_CHROMEOS)
     margin_type_ = margin_type;
   }
@@ -337,11 +335,10 @@ class COMPONENT_EXPORT(PRINTING_SETTINGS) PrintSettings {
   bool printer_manually_selected() const { return printer_manually_selected_; }
 
   void set_printer_status_reason(
-      crosapi::mojom::StatusReason::Reason printer_status_reason) {
+      CupsPrinterStatusReason printer_status_reason) {
     printer_status_reason_ = printer_status_reason;
   }
-  std::optional<crosapi::mojom::StatusReason::Reason> printer_status_reason()
-      const {
+  std::optional<CupsPrinterStatusReason> printer_status_reason() const {
     return printer_status_reason_;
   }
 
@@ -355,10 +352,10 @@ class COMPONENT_EXPORT(PRINTING_SETTINGS) PrintSettings {
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
-  void set_system_print_dialog_data(base::Value::Dict data) {
+  void set_system_print_dialog_data(base::DictValue data) {
     system_print_dialog_data_ = std::move(data);
   }
-  const base::Value::Dict& system_print_dialog_data() const {
+  const base::DictValue& system_print_dialog_data() const {
     return system_print_dialog_data_;
   }
 #endif
@@ -415,7 +412,7 @@ class COMPONENT_EXPORT(PRINTING_SETTINGS) PrintSettings {
   // Platform-specific print settings captured from a system print dialog.
   // The settings are captured in the browser process for transmission to
   // the Print Backend service for OOP printing.
-  base::Value::Dict system_print_dialog_data_;
+  base::DictValue system_print_dialog_data_;
 #endif
 
   // Media requested by the user.
@@ -489,7 +486,7 @@ class COMPONENT_EXPORT(PRINTING_SETTINGS) PrintSettings {
 
   // The printer status reason shown for the selected printer at the time print
   // is requested. Only local CrOS printers set printer statuses.
-  std::optional<crosapi::mojom::StatusReason::Reason> printer_status_reason_;
+  std::optional<CupsPrinterStatusReason> printer_status_reason_;
 
   // Print scaling type.
   mojom::PrintScalingType print_scaling_ =

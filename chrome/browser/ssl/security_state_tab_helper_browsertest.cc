@@ -38,8 +38,6 @@
 #include "chrome/browser/ssl/https_upgrades_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
@@ -898,7 +896,7 @@ IN_PROC_BROWSER_TEST_F(
   // SB_THREAT_TYPE_GAIA_PASSWORD_REUSE.
   safe_browsing::ChromePasswordProtectionService* service =
       safe_browsing::ChromePasswordProtectionService::
-          GetPasswordProtectionService(browser()->profile());
+          GetPasswordProtectionService(browser()->GetProfile());
   safe_browsing::ReusedPasswordAccountType account_type;
   account_type.set_account_type(
       safe_browsing::ReusedPasswordAccountType::GSUITE);
@@ -951,7 +949,7 @@ IN_PROC_BROWSER_TEST_F(
   // SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE.
   safe_browsing::ChromePasswordProtectionService* service =
       safe_browsing::ChromePasswordProtectionService::
-          GetPasswordProtectionService(browser()->profile());
+          GetPasswordProtectionService(browser()->GetProfile());
   scoped_refptr<safe_browsing::PasswordProtectionRequest> request =
       safe_browsing::CreateDummyRequest(contents);
   service->ShowModalWarning(
@@ -1017,7 +1015,7 @@ class PKPModelClientTest : public SecurityStateTabHelperTest {
     }
 
     content::StoragePartition* partition =
-        browser()->profile()->GetDefaultStoragePartition();
+        browser()->GetProfile()->GetDefaultStoragePartition();
     {
       base::test::TestFuture<void> future;
       partition->GetNetworkContext()->EnableStaticKeyPinningForTesting(
@@ -1316,7 +1314,7 @@ IN_PROC_BROWSER_TEST_F(DidChangeVisibleSecurityStateTest,
 }
 
 // Tests that the Not Secure chip does not show for error pages on http:// URLs.
-// Regression test for https://crbug.com/760647.
+// Regression test for https://crbug.com/40537791.
 IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperIncognitoTest, HttpErrorPage) {
   content::WebContents* contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1326,7 +1324,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperIncognitoTest, HttpErrorPage) {
 
   // Disable HTTPS upgrades on nonexistent.test for this test to work.
   ScopedAllowHttpForHostnamesForTesting scoped_allow_http(
-      {"nonexistent.test"}, browser()->profile()->GetPrefs());
+      {"nonexistent.test"}, browser()->GetProfile()->GetPrefs());
 
   // Navigate to a URL that results in an error page. Even though the displayed
   // URL is http://, there shouldn't be a Not Secure warning because the browser
@@ -1362,7 +1360,7 @@ IN_PROC_BROWSER_TEST_F(SecurityStateTabHelperTest,
                        MixedFormsDontShowLockIfWarningsAreDisabledByPolicy) {
   SetUpMockCertVerifierForHttpsServer(0, net::OK);
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kMixedFormsWarningsEnabled, false);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(

@@ -16,13 +16,15 @@
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "ui/gfx/geometry/point.h"
 #include "url/gurl.h"
 
 namespace content {
 
 namespace webid {
+
+using RpMode = blink::mojom::RpMode;
 
 namespace {
 
@@ -45,7 +47,7 @@ int GetSumOfAllValues(const std::map<GURL, int>& map) {
 }
 
 int GetNewSessionID() {
-  return base::RandInt(1, 1 << 30);
+  return base::RandIntInclusive(1, 1 << 30);
 }
 
 }  // namespace
@@ -89,7 +91,7 @@ ukm::builders::Blink_FedCmIdp* Metrics::GetOrCreateFedCmIdpBuilder(
 }
 
 void Metrics::RecordShowAccountsDialogTime(
-    const std::vector<IdentityProviderDataPtr>& providers,
+    const std::vector<scoped_refptr<IdentityProviderData>>& providers,
     base::TimeDelta duration) {
   auto SetUkm = [&](auto ukm_builder) {
     ukm_builder->SetTiming_ShowAccountsDialog(
@@ -169,7 +171,7 @@ void Metrics::RecordContinueOnPopupTime(const GURL& provider,
 }
 
 void Metrics::RecordCancelOnDialogTime(
-    const std::vector<IdentityProviderDataPtr>& providers,
+    const std::vector<scoped_refptr<IdentityProviderData>>& providers,
     base::TimeDelta duration) {
   auto SetUkm = [&](auto ukm_builder) {
     ukm_builder->SetTiming_CancelOnDialog(
@@ -185,7 +187,7 @@ void Metrics::RecordCancelOnDialogTime(
 }
 
 void Metrics::RecordAccountsDialogShownDuration(
-    const std::vector<IdentityProviderDataPtr>& providers,
+    const std::vector<scoped_refptr<IdentityProviderData>>& providers,
     base::TimeDelta duration) {
   auto SetUkm = [&](auto ukm_builder) {
     ukm_builder->SetTiming_AccountsDialogShownDuration(
@@ -214,7 +216,7 @@ void Metrics::RecordAccountsDialogShownDuration(
 }
 
 void Metrics::RecordMismatchDialogShownDuration(
-    const std::vector<IdentityProviderDataPtr>& providers,
+    const std::vector<scoped_refptr<IdentityProviderData>>& providers,
     base::TimeDelta duration) {
   auto SetUkm = [&](auto ukm_builder) {
     ukm_builder->SetTiming_MismatchDialogShownDuration(
@@ -289,18 +291,31 @@ void Metrics::RecordHasNonce(const std::set<GURL>& idps_with_nonce) {
 
 void Metrics::RecordHasNonceOutsideParamsOnly(
     const std::set<GURL>& idps_with_nonce_outside_params_only) {
-  if (!idps_with_nonce_outside_params_only.empty()) {
-    base::UmaHistogramBoolean("Blink.FedCm.HasNonceOutsideParamsOnly", true);
+  if (idps_with_nonce_outside_params_only.empty()) {
+    return;
   }
+  base::UmaHistogramBoolean("Blink.FedCm.HasNonceOutsideParamsOnly", true);
+  GetOrCreateFedCmBuilder()->SetHasNonceOutsideParamsOnly(true);
+  for (const GURL& idp : idps_with_nonce_outside_params_only) {
+    GetOrCreateFedCmIdpBuilder(idp)->SetHasNonceOutsideParamsOnly(true);
+  }
+}
+
+void Metrics::RecordWellKnownInvalidDueToClientMetadata(const GURL& provider) {
+  base::UmaHistogramBoolean("Blink.FedCm.WellKnownInvalidDueToClientMetadata",
+                            true);
+  GetOrCreateFedCmBuilder()->SetWellKnownInvalidDueToClientMetadata(true);
+  GetOrCreateFedCmIdpBuilder(provider)->SetWellKnownInvalidDueToClientMetadata(
+      true);
 }
 
 void Metrics::RecordRequestTokenStatus(
     RequestIdTokenStatus status,
-    MediationRequirement requirement,
+    ::password_manager::CredentialMediationRequirement requirement,
     const std::vector<GURL>& requested_providers,
     int num_idps_mismatch,
     const std::optional<GURL>& selected_idp_config_url,
-    const RpMode& rp_mode,
+    const blink::mojom::RpMode& rp_mode,
     std::optional<UseOtherAccountResult> use_other_account_result,
     std::optional<VerifyingDialogResult> verifying_dialog_result,
     ThirdPartyCookiesStatus tpc_status,
@@ -311,9 +326,8 @@ void Metrics::RecordRequestTokenStatus(
   // 1. The request has failed but we have not yet rejected the promise, e.g.
   // when the API is disabled. We record a metric immediately but only post a
   // task to later reject the callback.
-  // 2. The page is unloaded. This invokes the RequestService
-  // destructor. We record a metric with unhandled status since the callback is
-  // still present.
+  // 2. The page is unloaded. This invokes the Request destructor. We record a
+  // metric with unhandled status since the callback is still present.
   if (has_recorded_request_token_status_) {
     return;
   }
@@ -353,7 +367,8 @@ void Metrics::RecordRequestTokenStatus(
 
   bool is_token_request_successful =
       status == RequestIdTokenStatus::kSuccessUsingTokenInHttpResponse ||
-      status == RequestIdTokenStatus::kSuccessUsingIdentityProviderResolve;
+      status == RequestIdTokenStatus::kSuccessUsingIdentityProviderResolve ||
+      status == RequestIdTokenStatus::kSuccessUsingRedirectTo;
 
   for (const auto& provider : requested_providers) {
     ukm::builders::Blink_FedCmIdp* fedcm_idp_builder =
@@ -424,6 +439,10 @@ void Metrics::RecordIdpSigninMatchStatus(std::optional<bool> idp_signin_status,
       case ParseStatus::kHttpNotFoundError:
         match_status = IdpSigninMatchStatus::kMismatchWithNetworkError;
         break;
+      case ParseStatus::kBlockedByConnectionAllowlist:
+        match_status =
+            IdpSigninMatchStatus::kMismatchWithConnectionAllowlistBlock;
+        break;
       case ParseStatus::kNoResponseError:
         match_status = IdpSigninMatchStatus::kMismatchWithNoContent;
         break;
@@ -467,7 +486,6 @@ void Metrics::RecordAutoReauthnMetrics(
     bool is_auto_reauthn_setting_blocked,
     bool is_auto_reauthn_embargoed,
     bool is_auto_reauthn_blocked_by_embedder,
-    std::optional<base::TimeDelta> time_from_embargo,
     bool requires_user_mediation) {
   NumAccounts num_returning_accounts = NumAccounts::kZero;
   if (has_single_returning_account.has_value()) {
@@ -492,19 +510,6 @@ void Metrics::RecordAutoReauthnMetrics(
       "Blink.FedCm.AutoReauthn.BlockedByPreventSilentAccess",
       requires_user_mediation);
   ukm::builders::Blink_FedCm* ukm_builder = GetOrCreateFedCmBuilder();
-  if (time_from_embargo) {
-    // Use a custom histogram with the default number of buckets so that we set
-    // the maximum to the permission embargo duration: 10 minutes. See
-    // `kFederatedIdentityAutoReauthnEmbargoDuration`.
-    base::UmaHistogramCustomTimes(
-        "Blink.FedCm.AutoReauthn.TimeFromEmbargoWhenBlocked",
-        *time_from_embargo, base::Milliseconds(10), base::Minutes(10),
-        /*buckets=*/50);
-    ukm_builder->SetAutoReauthn_TimeFromEmbargoWhenBlocked(
-        ukm::GetExponentialBucketMinForUserTiming(
-            time_from_embargo->InMilliseconds()));
-  }
-
   if (has_single_returning_account.has_value()) {
     ukm_builder->SetAutoReauthn_ReturningAccounts(
         static_cast<int>(num_returning_accounts));
@@ -520,7 +525,7 @@ void Metrics::RecordAutoReauthnMetrics(
 }
 
 void Metrics::RecordAccountsDialogShown(
-    const std::vector<IdentityProviderDataPtr>& providers) {
+    const std::vector<scoped_refptr<IdentityProviderData>>& providers) {
   auto SetUkm = [&](auto ukm_builder, int accounts_dialog_shown) {
     ukm_builder->SetAccountsDialogShown2(accounts_dialog_shown);
   };
@@ -701,19 +706,6 @@ void Metrics::RecordMultipleRequestsRpMode(
   base::UmaHistogramEnumeration("Blink.FedCm.MultipleRequestsRpMode", status);
 }
 
-void Metrics::RecordTimeBetweenUserInfoAndActiveModeAPI(
-    base::TimeDelta duration) {
-  auto SetUkm = [&](auto ukm_builder) {
-    ukm_builder->SetTiming_GetUserInfoToButtonMode(
-        ukm::GetExponentialBucketMinForUserTiming(duration.InMilliseconds()));
-  };
-
-  SetUkm(GetOrCreateFedCmBuilder());
-
-  base::UmaHistogramMediumTimes("Blink.FedCm.Timing.GetUserInfoToButtonMode",
-                                duration);
-}
-
 void Metrics::RecordNumMatchingAccounts(size_t accounts_remaining,
                                         const std::string& filter_type) {
   Metrics::NumAccounts num_matching =
@@ -783,17 +775,6 @@ int Metrics::GetSessionID() const {
   return session_id_;
 }
 
-void RecordPreventSilentAccess(const RequesterFrameType& requester_frame_type,
-                               int source_id) {
-  base::UmaHistogramEnumeration("Blink.FedCm.PreventSilentAccessFrameType",
-                                requester_frame_type);
-
-  ukm::builders::Blink_FedCm ukm_builder(source_id);
-  ukm_builder.SetPreventSilentAccessFrameType(
-      static_cast<int>(requester_frame_type));
-  ukm_builder.Record(ukm::UkmRecorder::Get());
-}
-
 void RecordAccountSelectionScrollPosition(int source_id,
                                           int session_id,
                                           const gfx::Point& scroll_position) {
@@ -829,31 +810,32 @@ void RecordAccountsResponseInvalidReason(
       "Blink.FedCm.Status.AccountsResponseInvalidReason", reason);
 }
 
-void RecordSetLoginStatusIgnoredReason(SetLoginStatusIgnoredReason reason) {
-  base::UmaHistogramEnumeration("Blink.FedCm.SetLoginStatusIgnored", reason);
-}
-
 void RecordLifecycleStateFailureReason(LifecycleStateFailureReason reason) {
   base::UmaHistogramEnumeration("Blink.FedCm.LifecycleStateFailureReason",
                                 reason);
 }
 
-void RecordRawAccountsSize(int size) {
+void Metrics::RecordRawAccountsSize(int size) {
   CHECK_GT(size, 0);
   base::UmaHistogramCustomCounts("Blink.FedCm.AccountsSize.Raw", size,
                                  /*min=*/1,
                                  /*exclusive_max=*/10, /*buckets=*/10);
+
+  GetOrCreateFedCmBuilder()->SetAccountsSize_Raw(
+      ukm::GetExponentialBucketMinForCounts1000(size));
 }
 
-void RecordReadyToShowAccountsSize(int size) {
+void Metrics::RecordReadyToShowAccountsSize(int size) {
   CHECK_GT(size, 0);
   base::UmaHistogramCustomCounts("Blink.FedCm.AccountsSize.ReadyToShow", size,
                                  /*min=*/1,
                                  /*exclusive_max=*/10, /*buckets=*/10);
+  GetOrCreateFedCmBuilder()->SetAccountsSize_ReadyToShow(
+      ukm::GetExponentialBucketMinForCounts1000(size));
 }
 
 void RecordAccountFieldsType(
-    const std::vector<IdentityRequestAccountPtr>& accounts) {
+    const std::vector<scoped_refptr<IdentityRequestAccount>>& accounts) {
   bool has_name = false;
   bool has_email = false;
   bool has_phone_or_username = false;

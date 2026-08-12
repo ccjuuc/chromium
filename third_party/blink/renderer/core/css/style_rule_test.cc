@@ -5,14 +5,18 @@
 #include "third_party/blink/renderer/core/css/style_rule.h"
 
 #include "base/functional/function_ref.h"
+#include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_rule_list.h"
 #include "third_party/blink/renderer/core/css/css_scope_rule.h"
 #include "third_party/blink/renderer/core/css/css_style_rule.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
 #include "third_party/blink/renderer/core/css/css_test_helpers.h"
 #include "third_party/blink/renderer/core/css/navigation_query.h"
+#include "third_party/blink/renderer/core/css/style_rule_nested_declarations.h"
+#include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -24,19 +28,18 @@ class StyleRuleTest : public PageTestBase {};
 
 namespace {
 
-// Find first occurrence of a simple selector with the given PseudoType,
-// traversing into lists (e.g. :is()).
-const CSSSelector* FindPseudoSelector(const CSSSelector* selector,
-                                      CSSSelector::PseudoType pseudo_type) {
+// Find first occurrence of a simple selector with the given match
+// condition, traversing into lists (e.g. :is()).
+const CSSSelector* FindSelector(const CSSSelector* selector,
+                                bool (*match)(const CSSSelector*)) {
   for (const CSSSelector* s = selector; s; s = s->NextSimpleSelector()) {
-    if (s->GetPseudoType() == pseudo_type) {
+    if (match(s)) {
       return s;
     }
     if (s->SelectorList()) {
       for (const CSSSelector* complex = s->SelectorList()->First(); complex;
            complex = CSSSelectorList::Next(*complex)) {
-        if (const CSSSelector* parent =
-                FindPseudoSelector(complex, pseudo_type)) {
+        if (const CSSSelector* parent = FindSelector(complex, match)) {
           return parent;
         }
       }
@@ -46,19 +49,26 @@ const CSSSelector* FindPseudoSelector(const CSSSelector* selector,
 }
 
 const CSSSelector* FindParentSelector(const CSSSelector* selector) {
-  return FindPseudoSelector(selector, CSSSelector::kPseudoParent);
+  return FindSelector(selector, [](const CSSSelector* s) -> bool {
+    return s->GetPseudoType() == CSSSelector::kPseudoParent;
+  });
 }
 
-const CSSSelector* FindUnparsedSelector(const CSSSelector* selector) {
-  return FindPseudoSelector(selector, CSSSelector::kPseudoUnparsed);
+const CSSSelector* FindUnparsedSelectorContainingNesting(
+    const CSSSelector* selector) {
+  return FindSelector(selector, [](const CSSSelector* s) -> bool {
+    return s->GetPseudoType() == CSSSelector::kPseudoUnparsed &&
+           s->GetNestingType() != CSSNestingType::kNone;
+  });
 }
 
-// Finds the CSSNestingType (as captured by the first kPseudoUnparsed selector)
-// and the parent rule for nesting (as captured by the first kPseudoParent
-// selector).
+// Finds the CSSNestingType (as captured by the first kPseudoUnparsed selector
+// containing nesting) and the parent rule for nesting (as captured by the
+// first kPseudoParent selector).
 std::pair<CSSNestingType, const StyleRule*> FindNestingContext(
     const CSSSelector* selector) {
-  const CSSSelector* unparsed_selector = FindUnparsedSelector(selector);
+  const CSSSelector* unparsed_selector =
+      FindUnparsedSelectorContainingNesting(selector);
   const CSSSelector* parent_selector = FindParentSelector(selector);
   return std::make_pair<CSSNestingType, const StyleRule*>(
       unparsed_selector ? unparsed_selector->GetNestingType()
@@ -104,15 +114,17 @@ TEST_F(StyleRuleTest, StyleRuleMarginCopy) {
     }
     )CSS");
 
-  auto base_rule = DynamicTo<StyleRulePage>(page_rule)->ChildRules()[0];
+  ASSERT_TRUE(IsA<StyleRulePage>(page_rule));
+  auto base_rule = To<StyleRulePage>(*page_rule).ChildRules()[0];
 
   ASSERT_TRUE(base_rule);
-  auto* rule = DynamicTo<StyleRulePageMargin>(&*base_rule);
+  auto* rule = DynamicTo<StyleRulePageMargin>(*base_rule);
   ASSERT_TRUE(rule);
 
   auto* base_copy = base_rule->Clone(nullptr, nullptr);
   EXPECT_NE(base_rule, base_copy);
   auto* copy = DynamicTo<StyleRulePageMargin>(base_copy);
+  ASSERT_TRUE(copy);
   EXPECT_EQ(rule->ID(), copy->ID());
 }
 
@@ -368,6 +380,41 @@ TEST_F(StyleRuleTest, SetPreludeTextUnexpectedTrailingTokens) {
   EXPECT_EQ(after_rule, before_rule);
 }
 
+TEST_F(StyleRuleTest, SetPreludeTextOnDetachedNested) {
+  CSSStyleSheet* sheet = css_test_helpers::CreateStyleSheet(GetDocument());
+  sheet->SetText(R"CSS(
+      .a {
+        @scope (.b) { }
+      }
+    )CSS",
+                 CSSImportRules::kIgnoreWithWarning);
+
+  DummyExceptionStateForTesting exception_state;
+  CSSRuleList* rules = sheet->rules(exception_state);
+  ASSERT_TRUE(rules && rules->length() == 1u);
+  auto* style_rule = DynamicTo<CSSStyleRule>(rules->item(0));
+  ASSERT_TRUE(style_rule);
+  ASSERT_EQ(1u, style_rule->length());
+  auto* scope_rule = DynamicTo<CSSScopeRule>(style_rule->ItemInternal(0));
+  ASSERT_TRUE(scope_rule);
+
+  StyleRuleScope* before = &scope_rule->GetStyleRuleScope();
+
+  // Detach wrappers from the stylesheet.
+  sheet->SetText("", CSSImportRules::kIgnoreWithWarning);
+
+  scope_rule->SetPreludeText(GetDocument().GetExecutionContext(), "(.c)");
+
+  // Setting the prelude text should have created a new StyleRuleScope.
+  StyleRuleScope* after = &scope_rule->GetStyleRuleScope();
+  EXPECT_NE(before, after);
+
+  // The child rule vector of the parent rule should also have been updated.
+  ASSERT_TRUE(style_rule->GetStyleRule());
+  ASSERT_TRUE(style_rule->GetStyleRule()->ChildRules());
+  EXPECT_EQ(after, (*style_rule->GetStyleRule()->ChildRules())[0]);
+}
+
 TEST_F(StyleRuleTest, CloneStyleRule) {
   auto* a = To<StyleRule>(css_test_helpers::ParseRule(GetDocument(), ".a {}"));
   auto* b = To<StyleRule>(css_test_helpers::ParseRule(GetDocument(), ".b {}"));
@@ -475,8 +522,9 @@ TEST_F(StyleRuleTest, NavigationRule) {
   // Parse the specified CSS into a rule, and extract its
   // NavigationTestExpression.
   auto GetNavigationTest =
-      [this](const char* css) -> const NavigationTestExpression* {
-    using Callback = base::FunctionRef<void(const NavigationTestExpression&)>;
+      [this](const char* css) -> const NavigationLocationTestExpression* {
+    using Callback =
+        base::FunctionRef<void(const NavigationLocationTestExpression&)>;
     class TestExtractor : public ConditionalExpNodeVisitor {
      public:
       explicit TestExtractor(Callback callback) : callback_(callback) {}
@@ -484,7 +532,11 @@ TEST_F(StyleRuleTest, NavigationRule) {
      private:
       KleeneValue EvaluateNavigationExpNode(
           const NavigationExpNode& node) override {
-        callback_(node.NavigationTest());
+        auto* exp =
+            DynamicTo<NavigationLocationTestExpression>(node.NavigationTest());
+        if (exp) {
+          callback_(*exp);
+        }
         return KleeneValue::kFalse;
       }
 
@@ -501,41 +553,142 @@ TEST_F(StyleRuleTest, NavigationRule) {
     if (!root_exp) {
       return nullptr;
     }
-    const NavigationTestExpression* navigation_test = nullptr;
-    auto set_test = [&navigation_test](const NavigationTestExpression& test) {
-      navigation_test = &test;
-    };
+    const NavigationLocationTestExpression* navigation_test = nullptr;
+    auto set_test =
+        [&navigation_test](const NavigationLocationTestExpression& test) {
+          navigation_test = &test;
+        };
     TestExtractor extractor(set_test);
     root_exp->Evaluate(extractor);
     return navigation_test;
   };
 
-  const NavigationTestExpression* navigation_test =
-      GetNavigationTest("@navigation (at: pun_ruined) {}");
+  const NavigationLocationTestExpression* navigation_test =
+      GetNavigationTest("@navigation (at: --rte) {}");
   ASSERT_TRUE(navigation_test);
-  EXPECT_EQ(navigation_test->GetLocation().GetRouteName(), "pun_ruined");
+  EXPECT_EQ(navigation_test->GetLocation().GetValue(), "--rte");
   EXPECT_EQ(navigation_test->GetPreposition(), NavigationPreposition::kAt);
 
-  navigation_test = GetNavigationTest("@navigation (from: pun_ruined) {}");
+  navigation_test = GetNavigationTest("@navigation (from: --rte) {}");
   ASSERT_TRUE(navigation_test);
-  EXPECT_EQ(navigation_test->GetLocation().GetRouteName(), "pun_ruined");
+  EXPECT_EQ(navigation_test->GetLocation().GetValue(), "--rte");
   EXPECT_EQ(navigation_test->GetPreposition(), NavigationPreposition::kFrom);
 
-  navigation_test = GetNavigationTest("@navigation (to: pun_ruined) {}");
+  navigation_test = GetNavigationTest("@navigation (to: --rte) {}");
   ASSERT_TRUE(navigation_test);
-  EXPECT_EQ(navigation_test->GetLocation().GetRouteName(), "pun_ruined");
+  EXPECT_EQ(navigation_test->GetLocation().GetValue(), "--rte");
   EXPECT_EQ(navigation_test->GetPreposition(), NavigationPreposition::kTo);
 
-  navigation_test = GetNavigationTest("@navigation (at: pun_ruined) {}");
+  navigation_test = GetNavigationTest("@navigation (at: --rte) {}");
   ASSERT_TRUE(navigation_test);
-  EXPECT_EQ(navigation_test->GetLocation().GetRouteName(), "pun_ruined");
+  EXPECT_EQ(navigation_test->GetLocation().GetValue(), "--rte");
   EXPECT_EQ(navigation_test->GetPreposition(), NavigationPreposition::kAt);
 
-  navigation_test = GetNavigationTest("@navigation (below: pun_ruined) {}");
+  navigation_test = GetNavigationTest("@navigation (below: --rte) {}");
   EXPECT_FALSE(navigation_test);
 
   navigation_test = GetNavigationTest("@navigation (at: ) {}");
   EXPECT_FALSE(navigation_test);
+}
+
+struct CloneTestParam {
+  const char* name;
+  const char* css;
+};
+
+class StyleRuleCloneTest : public StyleRuleTest,
+                           public testing::WithParamInterface<CloneTestParam> {
+ protected:
+  void VerifyDifferent(const StyleRuleBase* rule1, const StyleRuleBase* rule2) {
+    ASSERT_TRUE(rule1);
+    ASSERT_TRUE(rule2);
+    EXPECT_NE(rule1, rule2);
+    ASSERT_EQ(rule1->GetType(), rule2->GetType());
+
+    if (auto* group1 = DynamicTo<StyleRuleGroup>(rule1)) {
+      auto* group2 = To<StyleRuleGroup>(rule2);
+      const HeapVector<Member<StyleRuleBase>>& c1 = group1->ChildRules();
+      const HeapVector<Member<StyleRuleBase>>& c2 = group2->ChildRules();
+      ASSERT_EQ(c1.size(), c2.size());
+      for (wtf_size_t i = 0; i < c1.size(); ++i) {
+        VerifyDifferent(c1[i].Get(), c2[i].Get());
+      }
+    } else if (auto* style1 = DynamicTo<StyleRule>(rule1)) {
+      auto* style2 = To<StyleRule>(rule2);
+      const GCedHeapVector<Member<StyleRuleBase>>* c1 = style1->ChildRules();
+      const GCedHeapVector<Member<StyleRuleBase>>* c2 = style2->ChildRules();
+      if (c1 && c2) {
+        ASSERT_EQ(c1->size(), c2->size());
+        for (wtf_size_t i = 0; i < c1->size(); ++i) {
+          VerifyDifferent((*c1)[i].Get(), (*c2)[i].Get());
+        }
+      } else {
+        EXPECT_FALSE(c1);
+        EXPECT_FALSE(c2);
+      }
+    }
+  }
+};
+
+TEST_P(StyleRuleCloneTest, CloneRulesAreDifferent) {
+  auto param = GetParam();
+  CSSStyleSheet* sheet = css_test_helpers::CreateStyleSheet(GetDocument());
+  sheet->SetText(param.css, CSSImportRules::kIgnoreWithWarning);
+  StyleSheetContents* contents1 = sheet->Contents();
+  StyleSheetContents* contents2 = contents1->Copy();
+
+  ASSERT_EQ(contents1->ChildRules().size(), contents2->ChildRules().size());
+  EXPECT_GT(contents1->ChildRules().size(), 0);
+
+  for (wtf_size_t i = 0; i < contents1->ChildRules().size(); ++i) {
+    VerifyDifferent(contents1->ChildRules()[i].Get(),
+                    contents2->ChildRules()[i].Get());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    StyleRuleTest,
+    StyleRuleCloneTest,
+    testing::Values(
+        CloneTestParam{"NestedScopeDeclarations",
+                       "@scope (div) { color: green; } "},
+        CloneTestParam{"NestedDeclarations",
+                       "div { @media (width > 100px) { color: green; } }"},
+        CloneTestParam{"MixinContentsStatement",
+                       "@mixin --m() { @result { @contents; } }"},
+        CloneTestParam{"MixinContentsEmptyBlock",
+                       "@mixin --m() { @result { @contents {} } }"},
+        CloneTestParam{"MixinContentsNonEmptyBlock",
+                       "@mixin --m() { @result { @contents { div {} } } }"},
+        CloneTestParam{"ApplyStatement", "div { @apply --m(); }"},
+        CloneTestParam{"ApplyEmptyBlock", "div { @apply --m() { } }"},
+        CloneTestParam{"ApplyNonEmptyBlock",
+                       "div { @apply --m() { div {} } }"}),
+    [](const testing::TestParamInfo<StyleRuleCloneTest::ParamType>& info) {
+      return info.param.name;
+    });
+
+TEST_F(StyleRuleTest, CloneNestedDeclarationsNoParent) {
+  HeapVector<CSSSelector> selectors;
+  selectors.emplace_back(/*parent_rule=*/nullptr, /*is_implicit=*/true);
+  selectors.back().SetLastInSelectorList(true);
+  selectors.back().SetLastInComplexSelector(true);
+
+  auto* declarations =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLStandardMode);
+
+  auto* inner_rule = StyleRule::Create(selectors, declarations,
+                                       /*mixin_parameter_bindings=*/nullptr);
+
+  StyleRuleBase* nested_declarations1 =
+      MakeGarbageCollected<StyleRuleNestedDeclarations>(
+          CSSNestingType::kNesting, inner_rule);
+
+  StyleRuleBase* nested_declarations2 = nested_declarations1->Clone(
+      /*new_parent=*/nullptr,
+      /*mixin_parameter_bindings=*/nullptr);  // Don't crash.
+
+  EXPECT_NE(nested_declarations1, nested_declarations2);
 }
 
 }  // namespace blink

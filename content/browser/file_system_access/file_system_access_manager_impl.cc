@@ -19,8 +19,10 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/file_util_icu.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -47,6 +49,7 @@
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -91,6 +94,43 @@ using storage::FileSystemContext;
 using HandleType = FileSystemAccessPermissionContext::HandleType;
 
 namespace {
+
+constexpr char kThirdPartyIframesNotAllowedToShowFilePicker[] =
+    "Third party iframes are not allowed to show a file picker.";
+
+// Holds resolved and validated frame objects. All pointers are guaranteed to be
+// non-null and active if this struct is returned.
+struct ResolvedFrame {
+  raw_ptr<RenderFrameHost> rfh;
+  raw_ptr<WebContents> web_contents;
+  raw_ptr<RenderFrameHost> outermost_rfh;
+};
+
+// Resolves `frame_id` to its corresponding `RenderFrameHost`, `WebContents`,
+// and outermost `RenderFrameHost`, and validates that they are all non-null
+// and active.
+// Returns a `ResolvedFrame` struct if ALL resolved objects are valid and
+// active, i.e. non-null; otherwise, returns `std::nullopt`.
+//
+// This check is critical because intermediate operations, like permission
+// checks or security prompts, can run nested message loops during which the
+// calling frame or WebContents can be destroyed or navigated.
+std::optional<ResolvedFrame> ResolveAndValidateFrame(
+    GlobalRenderFrameHostId frame_id) {
+  RenderFrameHost* rfh = RenderFrameHost::FromID(frame_id);
+  if (!rfh || !rfh->IsActive()) {
+    return std::nullopt;
+  }
+  WebContents* web_contents = WebContents::FromRenderFrameHost(rfh);
+  if (!web_contents) {
+    return std::nullopt;
+  }
+  RenderFrameHost* outermost_rfh = rfh->GetOutermostMainFrame();
+  if (!outermost_rfh || !outermost_rfh->IsActive()) {
+    return std::nullopt;
+  }
+  return ResolvedFrame{rfh, web_contents, outermost_rfh};
+}
 
 #if BUILDFLAG(IS_ANDROID)
 // Adaptor between FileSystemChooser::ResultCallback and FileSelectListener
@@ -178,16 +218,19 @@ void ShowFilePickerOnUIThread(
     return;
   }
 
-  url::Origin embedding_origin = outermost_rfh->GetLastCommittedOrigin();
+  // Third party iframes are not allowed to show a file picker, unless the
+  // embedder explicitly grants this cross-origin subframe an exemption (e.g.,
+  // a MIME handler extension frame).
+  const url::Origin embedding_origin = outermost_rfh->GetLastCommittedOrigin();
   if (embedding_origin != requesting_origin &&
-      !GetContentClient()->IsFilePickerAllowedForCrossOriginSubframe(
-          requesting_origin)) {
-    // Third party iframes are not allowed to show a file picker.
-    std::move(callback).Run(
-        file_system_access_error::FromStatus(
-            FileSystemAccessStatus::kPermissionDenied,
-            "Third party iframes are not allowed to show a file picker."),
-        {});
+      !GetContentClient()
+           ->browser()
+           ->IsCrossOriginSubframeAllowedToShowFilePicker(rfh,
+                                                          requesting_origin)) {
+    std::move(callback).Run(file_system_access_error::FromStatus(
+                                FileSystemAccessStatus::kPermissionDenied,
+                                kThirdPartyIframesNotAllowedToShowFilePicker),
+                            {});
     return;
   }
 
@@ -200,6 +243,18 @@ void ShowFilePickerOnUIThread(
                           {});
                       return;
                     });
+    // `CanShowFilePicker()` runs nested message loops during which the frame
+    // could be destroyed or navigated. Re-resolve and re-validate the frame.
+    auto re_resolved = ResolveAndValidateFrame(frame_id);
+    if (!re_resolved) {
+      std::move(callback).Run(file_system_access_error::FromStatus(
+                                  FileSystemAccessStatus::kOperationAborted),
+                              {});
+      return;
+    }
+    rfh = re_resolved->rfh;
+    web_contents = re_resolved->web_contents;
+    outermost_rfh = re_resolved->outermost_rfh;
   }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -238,10 +293,25 @@ void ShowFilePickerOnUIThread(
   }
 #endif
 
+  auto blocker =
+      web_contents->ForSecurityDropFullscreen(display::kInvalidDisplayId);
+
+  // `ForSecurityDropFullscreen()` can also run nested message loops. Re-resolve
+  // and re-validate the frame, and ensure the fullscreen blocker was
+  // successfully acquired.
+  auto post_fullscreen_resolved = ResolveAndValidateFrame(frame_id);
+  if (!post_fullscreen_resolved || !blocker) {
+    std::move(callback).Run(file_system_access_error::FromStatus(
+                                FileSystemAccessStatus::kOperationAborted),
+                            {});
+    return;
+  }
+  rfh = post_fullscreen_resolved->rfh;
+  web_contents = post_fullscreen_resolved->web_contents;
+  outermost_rfh = post_fullscreen_resolved->outermost_rfh;
+
   FileSystemChooser::ScopedObjects scoped_objects(
-      // Drop fullscreen mode so that the user sees the URL bar.
-      /*fullscreen_block=*/web_contents->ForSecurityDropFullscreen(
-          display::kInvalidDisplayId),
+      /*fullscreen_block=*/std::move(*blocker),
       // Maybe tuck the pip window so that it would not block the file picker
       // UI.
       /*pip_tucker=*/GetContentClient()
@@ -502,6 +572,14 @@ void FileSystemAccessManagerImpl::GetSandboxedFileSystem(
     GetSandboxedFileSystemCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!ChildProcessSecurityPolicy::GetInstance()->CanAccessDataForOrigin(
+          binding_context.process_id(), binding_context.storage_key.origin())) {
+    std::move(callback).Run(file_system_access_error::FromFileError(
+                                base::File::FILE_ERROR_SECURITY),
+                            mojo::NullRemote());
+    return;
+  }
+
   auto response_callback = base::BindOnce(
       [](base::WeakPtr<FileSystemAccessManagerImpl> manager,
          const BindingContext& callback_binding_context,
@@ -580,6 +658,25 @@ void FileSystemAccessManagerImpl::ChooseEntries(
     return;
   }
 
+  // Preflight the cross-origin subframe deny path so a denial does not burn
+  // the user gesture below. The full set of picker preconditions (active
+  // outer frame, fenced-frame check, etc.) is enforced again in
+  // `ShowFilePickerOnUIThread()`.
+  RenderFrameHost* outermost_rfh = rfh->GetOutermostMainFrame();
+  if (outermost_rfh && outermost_rfh->IsActive() &&
+      outermost_rfh->GetLastCommittedOrigin() != context.storage_key.origin() &&
+      !GetContentClient()
+           ->browser()
+           ->IsCrossOriginSubframeAllowedToShowFilePicker(
+               rfh, context.storage_key.origin())) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            FileSystemAccessStatus::kPermissionDenied,
+            kThirdPartyIframesNotAllowedToShowFilePicker),
+        std::vector<blink::mojom::FileSystemAccessEntryPtr>());
+    return;
+  }
+
   // Consume user activation to address this issue: crbug.com/40059071
   // TODO(crbug.com/411125804): Consider moving this user activation check to
   // the renderer process or informing the renderer that it lost user
@@ -588,9 +685,16 @@ void FileSystemAccessManagerImpl::ChooseEntries(
           ->browser()
           ->IsTransientActivationRequiredForShowFileOrDirectoryPicker(
               WebContents::FromRenderFrameHost(rfh))) {
-    FrameTreeNode::From(rfh)->UpdateUserActivationState(
-        blink::mojom::UserActivationUpdateType::kConsumeTransientActivation,
-        blink::mojom::UserActivationNotificationType::kNone);
+    if (!FrameTreeNode::From(rfh)->UpdateUserActivationState(
+            blink::mojom::UserActivationUpdateType::kConsumeTransientActivation,
+            blink::mojom::UserActivationNotificationType::kNone)) {
+      std::move(callback).Run(
+          file_system_access_error::FromStatus(
+              FileSystemAccessStatus::kPermissionDenied,
+              "User activation required."),
+          std::vector<blink::mojom::FileSystemAccessEntryPtr>());
+      return;
+    }
   }
 
   // Don't show the file picker if there is an already active file picker for
@@ -744,11 +848,11 @@ void FileSystemAccessManagerImpl::SetDefaultPathAndShowPicker(
       std::move(title), std::move(default_directory),
       std::move(suggested_name_path));
 
-  if (auto_file_picker_result_for_test_) {
+  if (!auto_file_picker_results_for_test_.empty()) {
     DidChooseEntries(
         context, file_system_chooser_options, options->starting_directory_id,
         request_directory_write_access, std::move(callback),
-        file_system_access_error::Ok(), {*auto_file_picker_result_for_test_});
+        file_system_access_error::Ok(), auto_file_picker_results_for_test_);
     return;
   }
 
@@ -853,8 +957,35 @@ void FileSystemAccessManagerImpl::ResolveDataTransferTokenWithFileType(
     HandleType file_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (!permission_context_) {
+    DidVerifySensitiveDirectoryAccessForDataTransfer(
+        binding_context, path_info, url, file_type,
+        std::move(token_resolved_callback), SensitiveEntryResult::kAllowed);
+    return;
+  }
+
+  RenderFrameHost* rfh = RenderFrameHost::FromID(binding_context.frame_id);
+  if (!rfh) {
+    std::move(token_resolved_callback)
+        .Run(file_system_access_error::FromStatus(
+                 blink::mojom::FileSystemAccessStatus::kOperationAborted),
+             blink::mojom::FileSystemAccessEntryPtr());
+    return;
+  }
+
+  auto can_show_file_picker_result =
+      permission_context_->CanShowFilePicker(rfh);
+  if (!can_show_file_picker_result.has_value()) {
+    std::move(token_resolved_callback)
+        .Run(file_system_access_error::FromStatus(
+                 blink::mojom::FileSystemAccessStatus::kPermissionDenied,
+                 can_show_file_picker_result.error()),
+             blink::mojom::FileSystemAccessEntryPtr());
+    return;
+  }
+
   // Don't perform sensitive entry access checks on D&D files.
-  if (!permission_context_ || file_type == HandleType::kFile) {
+  if (file_type == HandleType::kFile) {
     DidVerifySensitiveDirectoryAccessForDataTransfer(
         binding_context, path_info, url, file_type,
         std::move(token_resolved_callback), SensitiveEntryResult::kAllowed);
@@ -1104,9 +1235,8 @@ void FileSystemAccessManagerImpl::DeserializeHandle(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!bits.empty());
 
-  std::string bits_as_string(bits.begin(), bits.end());
   FileSystemAccessHandleData data;
-  if (!data.ParseFromString(bits_as_string)) {
+  if (!data.ParseFromString(base::as_string_view(bits))) {
     // Drop `token`, and directly return.
     return;
   }
@@ -1576,24 +1706,85 @@ void FileSystemAccessManagerImpl::DidChooseEntries(
     return;
   }
 
-  // It is enough to only verify access to the first path, as multiple
-  // file selection is only supported if all files are in the same
-  // directory.
-  PathInfo first_entry = entries.front();
-  const bool is_directory =
-      options.type() == ui::SelectFileDialog::SELECT_FOLDER;
-  permission_context_->ConfirmSensitiveEntryAccess(
-      binding_context.storage_key.origin(), first_entry,
-      is_directory ? HandleType::kDirectory : HandleType::kFile,
-      options.type() == ui::SelectFileDialog::SELECT_SAVEAS_FILE
-          ? UserAction::kSave
-          : UserAction::kOpen,
-      binding_context.frame_id,
-      base::BindOnce(
-          &FileSystemAccessManagerImpl::DidVerifySensitiveDirectoryAccess,
-          weak_factory_.GetWeakPtr(), binding_context, options,
-          starting_directory_id, request_directory_write_access,
-          std::move(callback), std::move(entries)));
+  // Since user can choose multiple files spanning different directories, we
+  // need to check all the files' sensitivity.
+  // `ConfirmSensitiveEntryAccessForEntries` recursively checks all the files in
+  // `entries`.
+  ConfirmSensitiveEntryAccessForEntries(
+      binding_context, options, starting_directory_id,
+      request_directory_write_access, std::move(callback), std::move(entries),
+      /*current_entry_index=*/0);
+}
+
+void FileSystemAccessManagerImpl::ConfirmSensitiveEntryAccessForEntries(
+    const BindingContext& binding_context,
+    const FileSystemChooser::Options& options,
+    const std::string& starting_directory_id,
+    bool request_directory_write_access,
+    ChooseEntriesCallback callback,
+    std::vector<PathInfo> entries,
+    size_t current_entry_index) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (current_entry_index >= entries.size()) {
+    // All the entries have passed the check with `kAllowed`.
+    DidVerifySensitiveDirectoryAccess(
+        binding_context, options, starting_directory_id,
+        request_directory_write_access, std::move(callback), std::move(entries),
+        SensitiveEntryResult::kAllowed);
+  } else {
+    const bool is_directory =
+        options.type() == ui::SelectFileDialog::SELECT_FOLDER;
+    PathInfo entry = entries[current_entry_index];
+    // Calculate the sensitivity of `entries[current_entry_index]`.
+    permission_context_->ConfirmSensitiveEntryAccess(
+        binding_context.storage_key.origin(), entry,
+        is_directory ? HandleType::kDirectory : HandleType::kFile,
+        options.type() == ui::SelectFileDialog::SELECT_SAVEAS_FILE
+            ? UserAction::kSave
+            : UserAction::kOpen,
+        binding_context.frame_id,
+        base::BindOnce(&FileSystemAccessManagerImpl::
+                           DidVerifySensitiveDirectoryAccessForIndex,
+                       weak_factory_.GetWeakPtr(), binding_context, options,
+                       starting_directory_id, request_directory_write_access,
+                       std::move(callback), std::move(entries),
+                       current_entry_index));
+  }
+}
+
+void FileSystemAccessManagerImpl::DidVerifySensitiveDirectoryAccessForIndex(
+    const BindingContext& binding_context,
+    const FileSystemChooser::Options& options,
+    const std::string& starting_directory_id,
+    bool request_directory_write_access,
+    ChooseEntriesCallback callback,
+    std::vector<PathInfo> entries,
+    size_t current_entry_index,
+    FileSystemAccessPermissionContext::SensitiveEntryResult result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (result == SensitiveEntryResult::kAbort) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            FileSystemAccessStatus::kOperationAborted),
+        std::vector<blink::mojom::FileSystemAccessEntryPtr>());
+    return;
+  } else if (result == SensitiveEntryResult::kTryAgain) {
+    ShowFilePickerOnUIThread(
+        permission_context(), binding_context.storage_key.origin(),
+        binding_context.frame_id, options,
+        base::BindOnce(&FileSystemAccessManagerImpl::DidChooseEntries,
+                       weak_factory_.GetWeakPtr(), binding_context, options,
+                       starting_directory_id, request_directory_write_access,
+                       std::move(callback)));
+    return;
+  } else {
+    CHECK_EQ(result, SensitiveEntryResult::kAllowed);
+    // Check the next entry's sensitivity.
+    ConfirmSensitiveEntryAccessForEntries(
+        binding_context, options, starting_directory_id,
+        request_directory_write_access, std::move(callback), std::move(entries),
+        current_entry_index + 1);
+  }
 }
 
 void FileSystemAccessManagerImpl::DidVerifySensitiveDirectoryAccess(
@@ -2097,7 +2288,6 @@ FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode() {
 
 bool FileSystemAccessManagerImpl::IsSafePathComponent(
     storage::FileSystemType type,
-    const url::Origin& origin,
     const std::string& name) {
   // This method is similar to net::IsSafePortablePathComponent, with a few
   // notable differences where the net version does not consider names safe
@@ -2148,8 +2338,7 @@ bool FileSystemAccessManagerImpl::IsSafePathComponent(
     // Check for both '/' and '\' as path separators, regardless of what OS
     // we're running on.
     return component16 != u"." && component16 != u".." &&
-           !base::Contains(component16, '/') &&
-           !base::Contains(component16, '\\');
+           !component16.contains('/') && !component16.contains('\\');
   }
 
   // base::i18n::IsFilenameLegal blocks names that start with '.', so strip out
@@ -2192,7 +2381,7 @@ bool FileSystemAccessManagerImpl::IsSafePathComponent(
   // components/safe_browsing/content/resources/download_file_types.asciipb,
   // are considered unsafe, with an exception of ".local" extensions.
   if (extension_lower != FILE_PATH_LITERAL("local") && permission_context_ &&
-      permission_context_->IsFileTypeDangerous(component, origin)) {
+      permission_context_->IsFileTypeDangerous(component)) {
     return false;
   }
 
@@ -2201,7 +2390,7 @@ bool FileSystemAccessManagerImpl::IsSafePathComponent(
     return false;
   }
 
-  if (net::IsReservedNameOnWindows(component.value())) {
+  if (base::IsReservedNameOnWindows(component.value())) {
     return false;
   }
 

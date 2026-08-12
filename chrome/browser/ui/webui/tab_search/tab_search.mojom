@@ -4,55 +4,23 @@
 
 module tab_search.mojom;
 
-import "mojo/public/mojom/base/string16.mojom";
 import "components/tab_groups/public/mojom/tab_group_types.mojom";
+import "components/tabs/public/mojom/tabs.mojom";
+import "mojo/public/mojom/base/string16.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/token.mojom";
 import "url/mojom/url.mojom";
-import "chrome/browser/ui/webui/tabs/tabs.mojom";
 
-enum TabOrganizationState {
-  kInitializing,
-  kNotStarted,
-  kInProgress,
-  kSuccess,
-  kFailure,
+struct TokenRange {
+  uint32 start;
+  uint32 length;
 };
 
-// These values are persisted and must not be renumbered or reordered.
-[Stable, Extensible]
-enum TabOrganizationFeature {
-  [Default] kNone = 0,
-  kSelector = 1,
-  kAutoTabGroups = 2,
-  kDeclutter = 3,
-};
-
-enum TabOrganizationError {
-  kNone,
-  kGrouping,
-  kGeneric,
-};
-
-enum TabOrganizationModelStrategy {
-  kTopic,
-  kTask,
-  kDomain,
-};
-
-// These values are persisted and must not be renumbered or reordered.
-[Stable, Extensible]
-enum TabSearchSection {
-  [Default] kNone = 0,
-  kSearch = 1,
-  kOrganize = 2,
-};
-
-//TODO(b/311697865) move this to a common location.
-enum UserFeedback {
-  kUserFeedBackUnspecified,
-  kUserFeedBackPositive,
-  kUserFeedBackNegative,
+// Orientation of a split view. Needs to be kept in sync with
+// split_tabs::SplitTabLayout in components/split_tabs/split_tab_visual_data.h.
+enum SplitTabLayout {
+  kSideBySide = 0,
+  kStacked = 1,
 };
 
 // Collection of tab searching details associated with a profile.
@@ -61,6 +29,7 @@ struct ProfileData {
   array<TabGroup> tab_groups;
   array<RecentlyClosedTab> recently_closed_tabs;
   array<RecentlyClosedTabGroup> recently_closed_tab_groups;
+  array<RecentlyClosedSplitView> recently_closed_split_views;
   bool recently_closed_section_expanded;
 };
 
@@ -90,9 +59,6 @@ struct Tab {
   // The alert states of the tab.
   array<tabs.mojom.TabAlertState> alert_states;
 
-  // The index of the tab in the current tab strip.
-  int32 index;
-
   // The unique identifier of the tab.
   int32 tab_id;
 
@@ -104,6 +70,12 @@ struct Tab {
 
   // Whether the tab is split.
   bool split;
+
+  // The split view identifier of the tab.
+  mojo_base.mojom.Token? split_id;
+
+  // The layout orientation of the split view, if split.
+  SplitTabLayout? split_layout;
 
   // The title of the tab.
   string title;
@@ -140,6 +112,9 @@ struct RecentlyClosedTab {
 
   // The group identifier of the tab.
   mojo_base.mojom.Token? group_id;
+
+  // The split view identifier of the tab.
+  mojo_base.mojom.Token? split_id;
 
   // The title of the tab.
   string title;
@@ -192,24 +167,37 @@ struct RecentlyClosedTabGroup {
   string last_active_elapsed_text;
 };
 
+// Information about a recently closed split view.
+struct RecentlyClosedSplitView {
+  // The unique identifier of the split view that is only valid for the duration
+  // of the session.
+  int32 session_id;
+
+  // The unique identifier of the split view.
+  mojo_base.mojom.Token id;
+
+  // A count of tabs that belong to the split view.
+  uint32 tab_count;
+
+  // Elapsed time since the split view was closed.
+  mojo_base.mojom.Time last_active_time;
+
+  // String representing the elapsed time since the split view was closed.
+  string last_active_elapsed_text;
+
+  // The URLs of the tabs in the split view.
+  array<url.mojom.Url> tab_urls;
+
+  // The layout orientation of the split view.
+  SplitTabLayout layout;
+
+  // The group identifier of the split view, if all of its tabs are in a group.
+  mojo_base.mojom.Token? group_id;
+};
+
 // Information about switching to a tab.
 struct SwitchToTabInfo {
   int32 tab_id;
-};
-
-struct TabOrganization {
-  int32 organization_id;
-  array<Tab> tabs;
-  int32 first_new_tab_index;
-  mojo_base.mojom.String16 name;
-};
-
-struct TabOrganizationSession {
-  int32 session_id;
-  TabOrganizationState state;
-  array<TabOrganization> organizations;
-  TabOrganizationError error;
-  int32 active_tab_id;
 };
 
 // Information about a tab update.
@@ -233,17 +221,11 @@ struct TabsRemovedInfo {
   array<RecentlyClosedTab> recently_closed_tabs;
 };
 
-// Information about unused tabs, inclusive of stale and duplicate tabs.
-struct UnusedTabInfo {
-  array<Tab> stale_tabs;
-  map<string, array<Tab>> duplicate_tabs;
-};
-
 // Used by the WebUI page to bootstrap bidirectional communication.
 interface PageHandlerFactory {
   // The WebUI calls this method when the page is first initialized.
-  CreatePageHandler(pending_remote<Page> page,
-                    pending_receiver<PageHandler> handler);
+  CreatePageHandler(
+      pending_remote<Page> page, pending_receiver<PageHandler> handler);
 };
 
 // Browser-side handler for requests from WebUI page.
@@ -251,52 +233,14 @@ interface PageHandler {
   // Close a specific tab.
   CloseTab(int32 tab_id);
 
+  // Close multiple specific tabs.
+  CloseTabs(array<int32> tab_ids);
+
   // Close the tab hosting this WebUI.
   CloseWebUiTab();
 
-  // Bulk close multiple tabs as part of the declutter workflow. All tabs with
-  // either an id in tab_ids should be closed. All tabs but the oldest with a
-  // url in urls should be closed.
-  DeclutterTabs(array<int32> tab_ids, array<url.mojom.Url> urls);
-
-  // Accept the tab organization, updated with the specified tab list.
-  AcceptTabOrganization(int32 session_id,
-                        int32 organization_id,
-                        array<Tab> tabs);
-
-  // Reject the tab organization.
-  RejectTabOrganization(int32 session_id, int32 organization_id);
-
-  // Rename the tab organization.
-  RenameTabOrganization(int32 session_id,
-                        int32 organization_id,
-                        mojo_base.mojom.String16 name);
-
-  // Exclude the given tab from the stale tabs list.
-  ExcludeFromStaleTabs(int32 tab_id);
-
-  // Exclude all tabs with the given URL from the duplicate tabs list.
-  ExcludeFromDuplicateTabs(url.mojom.Url url);
-
   // Get window and tab data for the current profile.
   GetProfileData() => (ProfileData profile_data);
-
-  // Get all tabs that are considered stale based on their last active time,
-  // and tabs that are duplicates of other tabs based on partial URL match
-  // (excludes fragments).
-  GetUnusedTabs() => (UnusedTabInfo tabs);
-
-  // Get the currently active section of the tab search bubble.
-  GetTabSearchSection() => (TabSearchSection section);
-
-  // Get the currently active tab organization feature.
-  GetTabOrganizationFeature() => (TabOrganizationFeature feature);
-
-  // Get the current tab organization session info.
-  GetTabOrganizationSession() => (TabOrganizationSession session);
-
-  // Get the current tab organization model strategy.
-  GetTabOrganizationModelStrategy() => (TabOrganizationModelStrategy strategy);
 
   // Returns whether or not the tab associated with this WebUI, if any, is in a
   // split view.
@@ -308,67 +252,30 @@ interface PageHandler {
   // Open a recently closed tab or tab group.
   OpenRecentlyClosedEntry(int32 session_id);
 
-  // Manually trigger a new tab organization request.
-  RequestTabOrganization();
-
-  // Remove the tab from the tab organization.
-  RemoveTabFromOrganization(int32 session_id, int32 organization_id, Tab tab);
-
-  // Reject all tab organizations in the current session.
-  RejectSession(int32 session_id);
-
   // Within a split view, replace the current tab with the given tab.
   ReplaceActiveSplitTab(int32 replacement_tab_id);
-
-  // Clear the current tab organization session state and start a new request.
-  RestartSession();
 
   // Save a user's preference for the state of the expandable 'Recently Closed'
   // list section.
   SaveRecentlyClosedExpandedPref(bool expanded);
 
-  // Set the user preference for which feature the tab organization selector
-  // should display when next shown.
-  SetOrganizationFeature(TabOrganizationFeature feature);
-
   // Force trigger the tab group tutorial.
   StartTabGroupTutorial();
 
-  // Initiate the feedback flow.
-  TriggerFeedback(int32 session_id);
+  // Notify the backend that the UI is ready to be shown.
+  MaybeShowUI();
 
-  // Initiate the sign in flow.
-  TriggerSignIn();
-
-  // Open the help page associated with tab organization.
-  OpenHelpPage();
-
-  // Store the tab organization model strategy supplied by the user.
-  SetTabOrganizationModelStrategy(TabOrganizationModelStrategy strategy);
-
-  // Store the user instruction for tab organization model.
-  SetTabOrganizationUserInstruction(string user_instruction);
-
-  // Store the user feedback supplied by the user.
-  SetUserFeedback(int32 session_id, UserFeedback feedback);
-
-  // Notify the backend that the Organization UI is ready to be shown. The
-  // surface will only be shown once both Organization and Search are ready.
-  NotifyOrganizationUIReadyToShow();
-
-  // Notify the backend that the Search UI is ready to be shown. The
-  // surface will only be shown once both Organization and Search are ready.
-  NotifySearchUIReadyToShow();
+  // Match a search text against a list of strings, returning a list of
+  // matched ranges for each string. The returned array of arrays must map
+  // 1-to-1 with the `targets` array.
+  // Empty array of TokenRanges means no match.
+  GetRangesIgnoringCaseAndAccents(
+      string search_text,
+      array<string> targets) => (array<array<TokenRange>> ranges);
 };
 
 // WebUI-side handler for requests from the browser.
 interface Page {
-  // Called when the tab organization session state changes.
-  TabOrganizationSessionUpdated(TabOrganizationSession session);
-
-  // Called when the tab organization model strategy changes.
-  TabOrganizationModelStrategyUpdated(TabOrganizationModelStrategy strategy);
-
   // Called when the window hosting the WebUI page changes.
   HostWindowChanged();
 
@@ -387,24 +294,6 @@ interface Page {
 
   // Callback when tabs are removed.
   TabsRemoved(TabsRemovedInfo tabsRemovedInfo);
-
-  // Called when the top level bubble tab should change.
-  TabSearchSectionChanged(TabSearchSection section);
-
-  // Called when the feature shown by the tab organization selector should
-  // change.
-  TabOrganizationFeatureChanged(TabOrganizationFeature feature);
-
-  // Called when state of whether the first run experience should be shown
-  // changes.
-  ShowFREChanged(bool show);
-
-  // Called when the tab organization feature should be enabled/disabled.
-  TabOrganizationEnabledChanged(bool enabled);
-
-  // Called when the list of tabs considered stale based on their last active
-  // time, or duplicate based on partial URL match, has changed.
-  UnusedTabsChanged(UnusedTabInfo tabs);
 
   // Called when the tab corresponding to this WebUI, if any, has become newly
   // unsplit.

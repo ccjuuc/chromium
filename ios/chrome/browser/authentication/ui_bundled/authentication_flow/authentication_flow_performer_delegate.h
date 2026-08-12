@@ -10,17 +10,27 @@
 #import "base/functional/callback_forward.h"
 #import "base/ios/block_types.h"
 #import "components/policy/core/browser/signin/profile_separation_policies.h"
+#import "components/signin/public/identity_manager/tribool.h"
 #import "components/sync/base/data_type.h"
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow_performer_base_delegate.h"
+#import "ios/chrome/browser/signin/model/capabilities_types.h"
 #import "ios/chrome/browser/signin/model/constants.h"
 
 class Browser;
 @protocol SystemIdentity;
 @class UIViewController;
+@class AuthenticationFlowPerformer;
 
 // Handles completion of AuthenticationFlowPerformerBase steps.
 @protocol AuthenticationFlowPerformerDelegate <
     AuthenticationFlowPerformerBaseDelegate>
+
+// Indicates that the reauthentication flow completed.
+- (void)didCompleteReauthWithSuccess:(BOOL)success;
+
+// Indicates that the CanSignInToChrome capability was fetched.
+- (void)authenticationFlowPerformer:(AuthenticationFlowPerformer*)performer
+    didFetchCanSignInToChromeCapability:(signin::Tribool)capability;
 
 // Called after `-[AuthenticationFlowPerformerBase
 // fetchUnsyncedDataWithSyncService:]`, to return the list of data types
@@ -40,6 +50,10 @@ class Browser;
 // Indicates that the requested identity managed status fetch failed.
 - (void)didFailFetchManagedStatus:(NSError*)error;
 
+// Indicates that the Age Mismatch dialog was dismissed.
+- (void)didDismissAgeMismatchDialogWithCancelationReason:
+    (signin_ui::CancelationReason)reason;
+
 // Indicates that the value for ProfileSeparationDataMigrationSettings has been
 // fetched from the server.
 - (void)didFetchProfileSeparationPolicies:
@@ -47,23 +61,29 @@ class Browser;
         profileSeparationDataMigrationSettings;
 
 // Indicates that the user accepted signing in to a managed account.
-// If `browsingDataSeparate` is `YES`, the managed account gets signed in to
-// a new empty work profile. This must only be specified if
-// AreSeparateProfilesForManagedAccountsEnabled() is true.
-// If `browsingDataSeparate` is `NO`, the account gets signed in to the
-// current profile. If AreSeparateProfilesForManagedAccountsEnabled() is true,
-// this involves converting the current profile into a work profile.
+// If `browsingDataSeparate` is `YES`, the
+// managed account gets signed in to a new empty work profile. This must only be
+// specified if AreSeparateProfilesForManagedAccountsEnabled() is true. If
+// `browsingDataSeparate` is `NO`, the account gets signed in to the current
+// profile. If AreSeparateProfilesForManagedAccountsEnabled() is true, this
+// involves converting the current profile into a work profile.
 - (void)didAcceptManagedConfirmationWithBrowsingDataSeparate:
     (BOOL)browsingDataSeparate;
 
 // Indicates that the user cancelled signing in to a managed account.
 - (void)didCancelManagedConfirmation;
 
+// Indicates that the managed confirmation could not proceed.
+- (void)managedConfirmationCouldNotProceed;
+
 // Indicates that switching to a different profile failed.
 - (void)didFailToSwitchToProfile;
 
 // Indicates that the personal profile was converted to a managed one.
 - (void)didMakePersonalProfileManaged;
+
+// Indicates whether the user confirmed changing profile can proceed.
+- (void)didConfirmChangeProfileCanProceed:(BOOL)canProceed;
 
 @end
 

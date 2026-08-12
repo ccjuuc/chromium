@@ -5,7 +5,7 @@
 /** @fileoverview Suite of tests for extension-item. */
 
 import type {CrIconElement, ExtensionsItemElement} from 'chrome://extensions/extensions.js';
-import {Mv2ExperimentStage, navigation, Page, TooltipPosition} from 'chrome://extensions/extensions.js';
+import {navigation, Page} from 'chrome://extensions/extensions.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isChildVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
@@ -455,21 +455,29 @@ suite('ExtensionItemTest', function() {
     let icon = item.shadowRoot.querySelector<CrIconElement>(
         '#source-indicator cr-icon');
     assertTrue(!!icon);
-    assertEquals('extensions-icons:unpacked', icon.icon);
+    assertEquals('extensions-icons:unpacked-custom', icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.THIRD_PARTY;
     item.data = data;
     await microtasksFinished();
     assertTrue(isChildVisible(item, '#source-indicator'));
-    assertEquals('extensions-icons:input', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:input' :
+            'extensions-icons:input-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.UNKNOWN;
     item.data = data;
     await microtasksFinished();
     assertTrue(isChildVisible(item, '#source-indicator'));
-    assertEquals('extensions-icons:input', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:input' :
+            'extensions-icons:input-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.INSTALLED_BY_DEFAULT;
@@ -488,7 +496,11 @@ suite('ExtensionItemTest', function() {
     icon = item.shadowRoot.querySelector<CrIconElement>(
         '#source-indicator cr-icon');
     assertTrue(!!icon);
-    assertEquals('extensions-icons:business', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:domain' :
+            'extensions-icons:business-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.controlledInfo = undefined;
@@ -526,7 +538,7 @@ suite('ExtensionItemTest', function() {
 
     // This section tests that the enable toggle is visible but disabled
     // when disableReasons.blockedByPolicy is true. This test prevents a
-    // regression to crbug/1003014.
+    // regression to crbug.com/40646977.
     data = createExtensionInfo(item.data);
     data.disableReasons.blockedByPolicy = true;
     item.data = data;
@@ -564,23 +576,12 @@ suite('ExtensionItemTest', function() {
     testVisible(item, '#enableToggle', true);
     assertFalse(item.$.enableToggle.disabled);
 
-    // MV2 deprecation tests cases.
-    // Extension toggle is visible and enabled when MV2 experiment is 'disable
-    // with re-enable' and extension is disabled due to unsupported manifest
-    // version.
+    // Extension toggle is visible and disabled when extension is disabled
+    // due to unsupported manifest version.
     data = createExtensionInfo(item.data);
     data.disableReasons.custodianApprovalRequired = false;
     data.disableReasons.unsupportedManifestVersion = true;
-    item.mv2ExperimentStage = Mv2ExperimentStage.DISABLE_WITH_REENABLE;
     item.data = data;
-    await microtasksFinished();
-    testVisible(item, '#enableToggle', true);
-    assertFalse(item.$.enableToggle.disabled);
-
-    // Extension toggle is visible and disabled when MV2 experiment is
-    // 'unsupported' and extension is disabled due to unsupported manifest
-    // version.
-    item.mv2ExperimentStage = Mv2ExperimentStage.UNSUPPORTED;
     await microtasksFinished();
     testVisible(item, '#enableToggle', true);
     assertTrue(item.$.enableToggle.disabled);
@@ -687,56 +688,6 @@ suite('ExtensionItemTest', function() {
         item.shadowRoot
             .querySelector<HTMLElement>(
                 '#inspect-views a:first-of-type')!.textContent.trim());
-  });
-
-  // Test that the correct tooltip text is shown when the enable toggle is
-  // hovered over, depending on if the extension is enabled/disabled and its
-  // permissions.
-  test('EnableExtensionToggleTooltips', async () => {
-    const crTooltip =
-        item.shadowRoot.querySelector<HTMLElement>('#enable-toggle-tooltip')!;
-    testVisible(item, '#enable-toggle-tooltip', false);
-
-    item.$.enableToggle.dispatchEvent(
-        new CustomEvent('pointerenter', {bubbles: true, composed: true}));
-    await microtasksFinished();
-    testVisible(item, '#enable-toggle-tooltip', true);
-    assertEquals(
-        loadTimeData.getString('enableToggleTooltipEnabled'),
-        crTooltip.textContent.trim());
-    assertEquals(TooltipPosition.LEFT, crTooltip.getAttribute('position'));
-
-    let data = createExtensionInfo(item.data);
-    data.permissions = {
-      simplePermissions: [{message: 'activeTab', submessages: []}],
-      canAccessSiteData: true,
-    };
-    item.data = data;
-    await microtasksFinished();
-    assertEquals(
-        loadTimeData.getString('enableToggleTooltipEnabledWithSiteAccess'),
-        crTooltip.textContent.trim());
-
-    data = createExtensionInfo(item.data);
-    data.state = chrome.developerPrivate.ExtensionState.DISABLED;
-    item.data = data;
-    await microtasksFinished();
-    assertEquals(
-        loadTimeData.getString('enableToggleTooltipDisabled'),
-        crTooltip.textContent.trim());
-  });
-
-  test('EnableExtensionToggleTooltipPositions', () => {
-    let crTooltip =
-        item.shadowRoot.querySelector<HTMLElement>('#enable-toggle-tooltip')!;
-    assertEquals(TooltipPosition.LEFT, crTooltip.getAttribute('position'));
-
-    document.dir = 'rtl';
-    const rtlItem = document.createElement('extensions-item');
-    document.body.appendChild(rtlItem);
-    crTooltip = rtlItem.shadowRoot.querySelector<HTMLElement>(
-        '#enable-toggle-tooltip')!;
-    assertEquals(TooltipPosition.RIGHT, crTooltip.getAttribute('position'));
   });
 
   test('CanUploadAsAccountExtension', async () => {

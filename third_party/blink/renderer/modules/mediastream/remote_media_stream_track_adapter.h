@@ -43,7 +43,7 @@ class MODULES_EXPORT RemoteMediaStreamTrackAdapter
       : main_thread_(main_thread),
         webrtc_track_(webrtc_track),
         track_execution_context_(track_execution_context),
-        id_(String::FromUTF8(webrtc_track->id())) {}
+        id_(String::FromUtf8(webrtc_track->id())) {}
 
   RemoteMediaStreamTrackAdapter(const RemoteMediaStreamTrackAdapter&) = delete;
   RemoteMediaStreamTrackAdapter& operator=(
@@ -88,8 +88,12 @@ class MODULES_EXPORT RemoteMediaStreamTrackAdapter
     DCHECK(main_thread_->BelongsToCurrentThread());
     DCHECK(!component_);
 
+    // https://w3c.github.io/webrtc-pc/#rtcrtpreceiver-interface
+    String label = (type == MediaStreamSource::kTypeAudio)
+                       ? String("remote audio")
+                       : String("remote video");
     auto* source = MakeGarbageCollected<MediaStreamSource>(
-        id_, type, id_, true /*remote*/, std::move(platform_source));
+        id_, type, label, /*remote=*/true, std::move(platform_source));
     component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
         id_, source, std::move(platform_track));
     // If we have a reference to a window frame where the track was created,

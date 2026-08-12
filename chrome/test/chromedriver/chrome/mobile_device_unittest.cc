@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/strings/pattern.h"
@@ -65,12 +64,12 @@ TEST(MobileDevicePreset, CanFindKnownDevices) {
 TEST(MobileDevicePreset, CheckAnyDeviceWithClientHints) {
   // Check that we parse client hints of any known device correctly
   MobileDevice device;
-  ASSERT_TRUE(StatusOk(MobileDevice::FindMobileDevice("Nexus 5", &device)));
+  ASSERT_TRUE(StatusOk(MobileDevice::FindMobileDevice("Pixel 10", &device)));
   ASSERT_TRUE(device.client_hints.has_value());
   const ClientHints& client_hints = device.client_hints.value();
   EXPECT_EQ("Android", client_hints.platform);
-  EXPECT_EQ("6.0", client_hints.platform_version);
-  EXPECT_EQ("Nexus 5", client_hints.model);
+  EXPECT_EQ("16", client_hints.platform_version);
+  EXPECT_EQ("Pixel 10", client_hints.model);
   EXPECT_EQ(true, client_hints.mobile);
 }
 
@@ -100,7 +99,7 @@ TEST_P(MobileDevicePresetPerDeviceName, ValidatePresets) {
     if (client_hints.platform == "Android") {
       // This implies from GetUserAgentMetadata and GetReducedAgent functions
       // code in components/embedder_support/user_agent_utils.cc.
-      // S/A: crbug.com/1442468, crbug.com/1442784
+      // S/A: crbug.com/40266966, crbug.com/40267103
       EXPECT_EQ(mobile_ua, client_hints.mobile);
     } else if (!client_hints.platform.empty()) {
       // Testing the implication: mobile_ua => client_hints.mobile

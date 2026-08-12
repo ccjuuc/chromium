@@ -24,9 +24,14 @@ import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAcce
 @NullMarked
 public class NotchedKeyboardAccessoryOutlineProvider extends ViewOutlineProvider {
     private final @NotchPosition int mNotchPosition;
+    private int mNotchOffsetX;
 
     public NotchedKeyboardAccessoryOutlineProvider(@NotchPosition int notchPosition) {
         mNotchPosition = notchPosition;
+    }
+
+    public void setNotchOffsetX(int notchOffsetX) {
+        mNotchOffsetX = notchOffsetX;
     }
 
     @Override
@@ -37,14 +42,13 @@ public class NotchedKeyboardAccessoryOutlineProvider extends ViewOutlineProvider
 
         // Fallback for the old devices that don't support complex paths.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            float cornerRadius =
-                    res.getDimension(R.dimen.keyboard_accessory_corner_radius_redesign);
+            float cornerRadius = res.getDimension(R.dimen.keyboard_accessory_corner_radius);
             outline.setRoundRect(0, 0, width, height, (int) cornerRadius);
             return;
         }
 
         // For shape with the notch, calculate the path.
-        Path path = createNotchPath(res, mNotchPosition, width, height);
+        Path path = createNotchPath(res, mNotchPosition, width, height, mNotchOffsetX);
         outline.setPath(path);
     }
 
@@ -56,16 +60,21 @@ public class NotchedKeyboardAccessoryOutlineProvider extends ViewOutlineProvider
      * @param notchPosition The position of the notch.
      * @param width The width of the view.
      * @param height The height of the view.
+     * @param notchOffsetX The offset of the notch from its default position.
      * @return The calculated Path object.
      */
     @VisibleForTesting
     public static Path createNotchPath(
-            Resources res, @NotchPosition int notchPosition, int width, int height) {
+            Resources res,
+            @NotchPosition int notchPosition,
+            int width,
+            int height,
+            int notchOffsetX) {
         Path path = new Path();
 
         float notchHeight = res.getDimension(R.dimen.keyboard_accessory_notch_height);
-        float cornerRadius = res.getDimension(R.dimen.keyboard_accessory_corner_radius_redesign);
-        float notchX = res.getDimension(R.dimen.keyboard_accessory_notch_position);
+        float cornerRadius = res.getDimension(R.dimen.keyboard_accessory_corner_radius);
+        float notchX = res.getDimension(R.dimen.keyboard_accessory_notch_position) + notchOffsetX;
         float tipWidth = res.getDimension(R.dimen.keyboard_accessory_notch_tip_width);
         float baseWidth = res.getDimension(R.dimen.keyboard_accessory_notch_base_width);
         float notchRounding = res.getDimension(R.dimen.keyboard_accessory_notch_tip_rounding);

@@ -10,7 +10,6 @@
 #include <utility>
 #include <variant>
 
-#include "base/compiler_specific.h"
 #include "base/json/json_writer.h"
 #include "base/pickle.h"
 #include "base/strings/escape.h"
@@ -39,7 +38,7 @@ ScopedClipboardWriter::~ScopedClipboardWriter() {
   // If the metadata format type is not empty then create a JSON payload and
   // write to the clipboard.
   if (!registered_formats_.empty()) {
-    base::Value::Dict registered_formats_value;
+    base::DictValue registered_formats_value;
     for (const auto& item : registered_formats_)
       registered_formats_value.Set(item.first, item.second);
     Clipboard::Data data = Clipboard::WebCustomFormatMapData{
@@ -88,6 +87,7 @@ void ScopedClipboardWriter::SetDataSourceURL(const GURL& main_frame,
 
 void ScopedClipboardWriter::WriteText(std::u16string_view text) {
   RecordWrite(ClipboardFormatMetric::kText);
+  RecordWriteTextSizeMetrics(text);
 
   Clipboard::Data data = Clipboard::TextData{.data = base::UTF16ToUTF8(text)};
   const size_t index = data.index();
@@ -133,15 +133,22 @@ void ScopedClipboardWriter::WriteFilenames(std::string uri_list) {
   objects_[index] = Clipboard::ObjectMapParams(std::move(data));
 }
 
-void ScopedClipboardWriter::WriteBookmark(std::u16string_view bookmark_title,
-                                          std::string url) {
-  if (ui::clipboard_util::ShouldSkipBookmark(bookmark_title, url)) {
+void ScopedClipboardWriter::WriteURL(const ClipboardUrlInfo& url_info) {
+  // GURL::spec() CHECKs on URLs that failed to canonicalize but have a
+  // non-empty spec_, so reject invalid URLs here before they reach any
+  // spec() call on this path (crbug.com/495504337). This also subsumes the
+  // empty-URL case from ShouldSkipBookmark below, since GURL::is_valid() is
+  // false for the empty URL.
+  if (!url_info.url.is_valid()) {
     return;
   }
-  RecordWrite(ClipboardFormatMetric::kBookmark);
+  const std::string url = url_info.url.spec();
+  if (ui::clipboard_util::ShouldSkipBookmark(url_info.title, url)) {
+    return;
+  }
+  RecordWrite(ClipboardFormatMetric::kUrl);
 
-  Clipboard::Data data = Clipboard::BookmarkData{
-      .title = base::UTF16ToUTF8(bookmark_title), .url = std::move(url)};
+  Clipboard::Data data = Clipboard::UrlData{.url_info = url_info};
   const size_t index = data.index();
   objects_[index] = Clipboard::ObjectMapParams(std::move(data));
 }
@@ -199,10 +206,7 @@ void ScopedClipboardWriter::WritePickledData(
   RecordWrite(ClipboardFormatMetric::kCustomData);
   Clipboard::RawData raw_data;
   raw_data.format = format;
-  raw_data.data = std::vector<uint8_t>(
-      reinterpret_cast<const uint8_t*>(pickle.data()),
-      UNSAFE_TODO(reinterpret_cast<const uint8_t*>(pickle.data()) +
-                  pickle.size()));
+  raw_data.data = std::vector<uint8_t>(std::from_range, pickle.AsBytes());
   raw_objects_.insert({format, std::move(raw_data)});
 }
 

@@ -12,7 +12,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_features.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_factory.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
@@ -99,7 +98,7 @@ class OmniboxPrerenderBrowserTest : public PlatformBrowserTest {
 #if BUILDFLAG(IS_ANDROID)
     return chrome_test_utils::GetProfile(this);
 #else
-    return browser()->profile();
+    return browser()->GetProfile();
 #endif
   }
 
@@ -152,7 +151,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxPrerenderBrowserTest, DisableNetworkPrediction) {
 
   // Since preload setting is disabled, prerender shouldn't be triggered.
   base::RunLoop().RunUntilIdle();
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().GetHostForUrl(prerender_url);
   EXPECT_TRUE(host_id.is_null());
 
@@ -370,7 +369,7 @@ class PrerenderOmniboxSearchSuggestionExpiryBrowserTest
         GetSearchSuggestionUrl(search_terms, /*with_parameter=*/false);
     registry_observer.WaitForTrigger(prerendered_url);
 
-    content::FrameTreeNodeId host_id =
+    content::PrerenderHostId host_id =
         prerender_helper().GetHostForUrl(prerendered_url);
     ASSERT_TRUE(host_id);
     content::test::PrerenderHostObserver prerender_observer(

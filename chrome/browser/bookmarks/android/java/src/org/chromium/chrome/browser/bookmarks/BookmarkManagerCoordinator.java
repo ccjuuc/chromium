@@ -8,7 +8,9 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ComponentCallbacks;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnAttachStateChangeListener;
@@ -33,6 +35,7 @@ import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.bookmarks.BookmarkListEntry.ViewType;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
 import org.chromium.chrome.browser.commerce.ShoppingServiceFactory;
+import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
@@ -46,9 +49,11 @@ import org.chromium.chrome.browser.ui.signin.signin_promo.BookmarkSigninPromoDel
 import org.chromium.chrome.browser.ui.signin.signin_promo.SigninPromoCoordinator;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
 import org.chromium.components.browser_ui.util.GlobalDiscardableReferencePool;
 import org.chromium.components.browser_ui.widget.dragreorder.DragReorderableRecyclerViewAdapter;
+import org.chromium.components.browser_ui.widget.dragreorder.DragTouchHandler;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListLayout;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar.SearchDelegate;
@@ -59,16 +64,22 @@ import org.chromium.components.image_fetcher.ImageFetcher;
 import org.chromium.components.image_fetcher.ImageFetcherConfig;
 import org.chromium.components.image_fetcher.ImageFetcherFactory;
 import org.chromium.ui.KeyboardVisibilityDelegate;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.base.Clipboard;
+import org.chromium.ui.base.ViewUtils;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** Responsible for setting up sub-components and routing incoming/outgoing signals */
 // TODO(crbug.com/40268641): Add a new coordinator so this class doesn't own everything.
@@ -89,8 +100,8 @@ public class BookmarkManagerCoordinator
             };
 
     private static final class DragAndCancelAdapter extends DragReorderableRecyclerViewAdapter {
-        DragAndCancelAdapter(Context context, ModelList modelList) {
-            super(context, modelList);
+        DragAndCancelAdapter(Context context, ModelList modelList, DragTouchHandler handler) {
+            super(context, modelList, handler);
         }
 
         @Override
@@ -99,7 +110,7 @@ public class BookmarkManagerCoordinator
             // fade animation. Theoretically we could clear it and let the RecyclerView continue
             // normally, but it seems sometimes this is called after bind, and the transient
             // state is really just the fade in animation of the new content. For more details
-            // see https://crbug.com/1496181. Instead, return true to tell the RecyclerView to
+            // see https://crbug.com/40075653. Instead, return true to tell the RecyclerView to
             // reuse the view regardless. The view binding code should be robust enough to
             // handle an in progress animation anyway.
             return true;
@@ -129,22 +140,28 @@ public class BookmarkManagerCoordinator
     private final BookmarkManagerMediator mMediator;
     private final ImageFetcher mImageFetcher;
     private final SnackbarManager mSnackbarManager;
-    private final @Nullable SigninPromoCoordinator mSigninPromoCoordinator;
-    private final @Nullable BookmarkPromoHeader mPromoHeaderManager;
+    private final SigninPromoCoordinator mSigninPromoCoordinator;
     private final BookmarkModel mBookmarkModel;
     private final Profile mProfile;
     private final BookmarkUiPrefs mBookmarkUiPrefs;
     private final ModalDialogManager mModalDialogManager;
     private final ModelList mModelList;
     private final @Nullable BackPressManager mBackPressManager;
+    private final ComponentCallbacks mComponentCallbacks;
+    private @Nullable BookmarkDesktopNavigationCoordinator mDesktopNavigationCoordinator;
+    private @Nullable PropertyModelChangeProcessor mSearchBoxChangeProcessor;
 
+    // TODO(https://crbug.com/475144764): Investigate whether activity can be replaced by a Context.
     /**
      * Creates an instance of {@link BookmarkManagerCoordinator}. It also initializes resources,
      * bookmark models and jni bridges.
      *
-     * @param context The current {@link Context} used to obtain resources or inflate views.
+     * @param windowAndroid The current {@link WindowAndroid} showing the bookmark UI.
+     * @param activity The current {@link Activity} used to obtain resources or inflate views.
      * @param isDialogUi Whether the main bookmarks UI will be shown in a dialog, not a NativePage.
      * @param snackbarManager The {@link SnackbarManager} used to display snackbars.
+     * @param bottomSheetControllerSupplier Supplier of the {@link BottomSheetController}.
+     * @param activityResultTracker Tracker of activity results.
      * @param profile The profile which the manager is running in.
      * @param bookmarkUiPrefs Manages prefs for bookmarks ui.
      * @param bookmarkOpener Helper class to open bookmarks.
@@ -154,9 +171,12 @@ public class BookmarkManagerCoordinator
      * @param backPressManager BackPressManager for processing back press events.
      */
     public BookmarkManagerCoordinator(
-            Context context,
+            WindowAndroid windowAndroid,
+            Activity activity,
             boolean isDialogUi,
             SnackbarManager snackbarManager,
+            Supplier<BottomSheetController> bottomSheetControllerSupplier,
+            ActivityResultTracker activityResultTracker,
             Profile profile,
             BookmarkUiPrefs bookmarkUiPrefs,
             BookmarkOpener bookmarkOpener,
@@ -164,7 +184,7 @@ public class BookmarkManagerCoordinator
             PriceDropNotificationManager priceDropNotificationManager,
             @Nullable Function<View, EdgeToEdgePadAdjuster> edgeToEdgePadAdjusterGenerator,
             @Nullable BackPressManager backPressManager) {
-        mContext = context;
+        mContext = activity;
         mProfile = profile;
         mImageFetcher =
                 ImageFetcherFactory.createImageFetcher(
@@ -173,7 +193,10 @@ public class BookmarkManagerCoordinator
                         GlobalDiscardableReferencePool.getReferencePool());
         mSnackbarManager = snackbarManager;
 
-        mMainView = (ViewGroup) LayoutInflater.from(context).inflate(R.layout.bookmark_main, null);
+        final boolean isDesktopLayoutEnabled = BookmarkUtils.isDesktopBookmarksLayoutEnabled();
+        int layoutId =
+                isDesktopLayoutEnabled ? R.layout.bookmark_main_desktop : R.layout.bookmark_main;
+        mMainView = (ViewGroup) LayoutInflater.from(activity).inflate(layoutId, null);
         mBookmarkModel = BookmarkModel.getForProfile(profile);
         mBookmarkOpener = bookmarkOpener;
         ShoppingService service = ShoppingServiceFactory.getForProfile(profile);
@@ -188,18 +211,30 @@ public class BookmarkManagerCoordinator
         mSelectableListLayout = selectableList;
 
         mModelList = new ModelList();
-        DragReorderableRecyclerViewAdapter dragReorderableRecyclerViewAdapter =
-                new DragAndCancelAdapter(context, mModelList);
+        DragTouchHandler dragTouchHandler = new DragTouchHandler(mContext, mModelList);
 
         // Disable the default long press so that our custom one can be used.
-        dragReorderableRecyclerViewAdapter.setDefaultLongPressDragEnabled(
-                !ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled());
+        dragTouchHandler.setDefaultLongPressDragEnabled(false);
+
+        DragReorderableRecyclerViewAdapter dragReorderableRecyclerViewAdapter =
+                new DragAndCancelAdapter(activity, mModelList, dragTouchHandler);
 
         mRecyclerView =
                 mSelectableListLayout.initializeRecyclerView(
                         dragReorderableRecyclerViewAdapter,
                         /* recyclerView= */ null,
                         edgeToEdgePadAdjusterGenerator);
+        if (isDesktopLayoutEnabled) {
+            int padding =
+                    activity.getResources()
+                            .getDimensionPixelSize(R.dimen.bookmark_desktop_content_padding);
+            mRecyclerView.setPaddingRelative(
+                    padding,
+                    mRecyclerView.getPaddingTop(),
+                    padding,
+                    mRecyclerView.getPaddingBottom());
+            mRecyclerView.setClipToPadding(false);
+        }
 
         // Disable everything except move animations. Switching between folders should be as
         // seamless as possible without flickering caused by these animations. While dragging
@@ -210,19 +245,27 @@ public class BookmarkManagerCoordinator
         itemAnimator.setRemoveDuration(0);
 
         mModalDialogManager =
-                new ModalDialogManager(new AppModalPresenter(context), ModalDialogType.APP);
+                new ModalDialogManager(new AppModalPresenter(activity), ModalDialogType.APP);
 
         // Using OneshotSupplier as an alternative to a 2-step initialization process.
         OneshotSupplierImpl<BookmarkDelegate> bookmarkDelegateSupplier =
                 new OneshotSupplierImpl<>();
+        if (isDesktopLayoutEnabled) {
+            View navigationPane = assumeNonNull(mMainView.findViewById(R.id.navigation_pane));
+            mDesktopNavigationCoordinator =
+                    new BookmarkDesktopNavigationCoordinator(
+                            activity, navigationPane, mBookmarkModel, bookmarkDelegateSupplier);
+        }
+        BookmarkUndoController bookmarkUndoController =
+                new BookmarkUndoController(activity, mBookmarkModel, snackbarManager);
         mBookmarkToolbarCoordinator =
                 new BookmarkToolbarCoordinator(
-                        context,
+                        activity,
                         mProfile,
                         mSelectableListLayout,
                         mSelectionDelegate,
                         /* searchDelegate= */ this,
-                        dragReorderableRecyclerViewAdapter,
+                        dragTouchHandler,
                         isDialogUi,
                         bookmarkDelegateSupplier,
                         mBookmarkModel,
@@ -233,27 +276,27 @@ public class BookmarkManagerCoordinator
                         () -> IncognitoUtils.isIncognitoModeEnabled(profile),
                         bookmarkManagerOpener,
                         mSnackbarManager,
-                        /* nextFocusableView= */ mMainView.findViewById(R.id.list_content));
-        mSelectableListLayout.configureWideDisplayStyle();
+                        /* nextFocusableView= */ mMainView.findViewById(R.id.list_content),
+                        bookmarkUndoController);
+        if (!isDesktopLayoutEnabled) {
+            mSelectableListLayout.configureWideDisplayStyle();
+        }
 
         final @BookmarkRowDisplayPref int displayPref =
                 mBookmarkUiPrefs.getBookmarkRowDisplayPref();
         BookmarkImageFetcher bookmarkImageFetcher =
                 new BookmarkImageFetcher(
                         profile,
-                        context,
+                        activity,
                         mBookmarkModel,
                         mImageFetcher,
-                        BookmarkViewUtils.getRoundedIconGenerator(context, displayPref));
-
-        BookmarkUndoController bookmarkUndoController =
-                new BookmarkUndoController(context, mBookmarkModel, snackbarManager);
+                        BookmarkViewUtils.getRoundedIconGenerator(activity, displayPref));
         Consumer<OnScrollListener> onScrollListenerConsumer =
                 onScrollListener -> mRecyclerView.addOnScrollListener(onScrollListener);
         mMediator =
                 new BookmarkManagerMediator(
-                        (Activity) context,
-                        (LifecycleOwner) context,
+                        activity,
+                        (LifecycleOwner) activity,
                         mModalDialogManager,
                         mBookmarkModel,
                         mBookmarkOpener,
@@ -261,6 +304,7 @@ public class BookmarkManagerCoordinator
                         mSelectionDelegate,
                         mRecyclerView,
                         dragReorderableRecyclerViewAdapter,
+                        dragTouchHandler,
                         isDialogUi,
                         mBackPressStateSupplier,
                         mProfile,
@@ -274,42 +318,53 @@ public class BookmarkManagerCoordinator
                         this::canShowSigninPromo,
                         onScrollListenerConsumer,
                         bookmarkManagerOpener,
-                        priceDropNotificationManager);
-        mPromoHeaderManager = mMediator.getPromoHeaderManager();
+                        priceDropNotificationManager,
+                        Clipboard.getInstance());
 
         bookmarkDelegateSupplier.set(/* object= */ mMediator);
 
+        if (isDesktopLayoutEnabled) {
+            View searchBoxView = mMainView.findViewById(R.id.desktop_search_box_row);
+            PropertyModel searchBoxPropertyModel = mMediator.getOrCreateSearchBoxPropertyModel();
+            mSearchBoxChangeProcessor =
+                    PropertyModelChangeProcessor.create(
+                            searchBoxPropertyModel,
+                            searchBoxView,
+                            BookmarkSearchBoxRowViewBinder.createViewBinder());
+
+            updateDesktopSearchBoxMargins();
+        }
+
         mMainView.addOnAttachStateChangeListener(this);
 
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)) {
-            mSigninPromoCoordinator =
-                    new SigninPromoCoordinator(
-                            context,
-                            mProfile.getOriginalProfile(),
-                            new BookmarkSigninPromoDelegate(
-                                    context,
-                                    mProfile.getOriginalProfile(),
-                                    SigninAndHistorySyncActivityLauncherImpl.get(),
-                                    mMediator::onPromoVisibilityChange,
-                                    this::openSettings));
-            dragReorderableRecyclerViewAdapter.registerType(
-                    ViewType.SIGNIN_PROMO,
-                    mSigninPromoCoordinator::buildPromoView,
-                    // SigninPromoCoordinator owns the model and keys for the promo inside it.
-                    // The PropertyModel and BookmarkManagerProperties key passed to this binder
-                    // method are thus not needed.
-                    (model, view, key) -> mSigninPromoCoordinator.setView(view));
-            dragReorderableRecyclerViewAdapter.registerType(
-                    ViewType.BATCH_UPLOAD_CARD,
-                    this::buildBatchUploadCardView,
-                    BookmarkManagerViewBinder::bindBatchUploadCardView);
-        } else {
-            mSigninPromoCoordinator = null;
-            dragReorderableRecyclerViewAdapter.registerType(
-                    ViewType.SIGNIN_PROMO,
-                    this::buildPersonalizedPromoView,
-                    BookmarkManagerViewBinder::bindPersonalizedPromoView);
-        }
+        mSigninPromoCoordinator =
+                new SigninPromoCoordinator(
+                        windowAndroid,
+                        activity,
+                        mProfile.getOriginalProfile(),
+                        activityResultTracker,
+                        SigninAndHistorySyncActivityLauncherImpl.get(),
+                        bottomSheetControllerSupplier,
+                        mModalDialogManager,
+                        snackbarManager,
+                        DeviceLockActivityLauncherImpl.get(),
+                        new BookmarkSigninPromoDelegate(
+                                activity,
+                                mProfile.getOriginalProfile(),
+                                SigninAndHistorySyncActivityLauncherImpl.get(),
+                                mMediator::onPromoVisibilityChange,
+                                this::openSettings));
+        dragReorderableRecyclerViewAdapter.registerType(
+                ViewType.SIGNIN_PROMO,
+                mSigninPromoCoordinator::buildPromoView,
+                // SigninPromoCoordinator owns the model and keys for the promo inside it.
+                // The PropertyModel and BookmarkManagerProperties key passed to this binder
+                // method are thus not needed.
+                (model, view, key) -> mSigninPromoCoordinator.setView(view));
+        dragReorderableRecyclerViewAdapter.registerType(
+                ViewType.BATCH_UPLOAD_CARD,
+                this::buildBatchUploadCardView,
+                BookmarkManagerViewBinder::bindBatchUploadCardView);
         dragReorderableRecyclerViewAdapter.registerType(
                 ViewType.SECTION_HEADER,
                 this::buildSectionHeaderView,
@@ -350,19 +405,49 @@ public class BookmarkManagerCoordinator
         } else {
             mBackPressManager = null;
         }
+
+        mComponentCallbacks =
+                new ComponentCallbacks() {
+                    @Override
+                    public void onConfigurationChanged(Configuration newConfig) {
+                        if (BookmarkUtils.isDesktopBookmarksLayoutEnabled()) {
+                            int padding =
+                                    mContext.getResources()
+                                            .getDimensionPixelSize(
+                                                    R.dimen.bookmark_desktop_content_padding);
+                            mRecyclerView.setPaddingRelative(
+                                    padding,
+                                    mRecyclerView.getPaddingTop(),
+                                    padding,
+                                    mRecyclerView.getPaddingBottom());
+
+                            updateDesktopSearchBoxMargins();
+
+                            mBookmarkToolbarCoordinator.onConfigurationChanged(newConfig);
+                        }
+                    }
+
+                    @Override
+                    public void onLowMemory() {}
+                };
+        mContext.registerComponentCallbacks(mComponentCallbacks);
     }
 
     // Public API implementation.
 
     /** Destroys and cleans up itself. This must be called after done using this class. */
     public void onDestroyed() {
+        if (mSearchBoxChangeProcessor != null) {
+            mSearchBoxChangeProcessor.destroy();
+        }
+        mContext.unregisterComponentCallbacks(mComponentCallbacks);
         RecordUserAction.record("MobileBookmarkManagerClose");
         mMainView.removeOnAttachStateChangeListener(this);
         mSelectableListLayout.onDestroyed();
         mMediator.onDestroy();
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.UNO_PHASE_2_FOLLOW_UP)) {
-            assert mSigninPromoCoordinator != null;
-            mSigninPromoCoordinator.destroy();
+        mSigninPromoCoordinator.destroy();
+        if (mDesktopNavigationCoordinator != null) {
+            mDesktopNavigationCoordinator.destroy();
         }
     }
 
@@ -457,12 +542,6 @@ public class BookmarkManagerCoordinator
     }
 
     @VisibleForTesting
-    View buildPersonalizedPromoView(ViewGroup parent) {
-        assumeNonNull(mPromoHeaderManager);
-        return mPromoHeaderManager.createPersonalizedSigninAndSyncPromoHolder(parent);
-    }
-
-    @VisibleForTesting
     View buildBatchUploadCardView(ViewGroup parent) {
         // The signin_settings_card_view is used for Batch Upload Cards.
         return inflate(parent, R.layout.signin_settings_card_view);
@@ -498,11 +577,28 @@ public class BookmarkManagerCoordinator
     View buildEmptyStateView(ViewGroup parent) {
         ViewGroup emptyStateView = (ViewGroup) inflate(parent, R.layout.empty_state_view);
         emptyStateView.setTouchscreenBlocksFocus(true);
+        // Adjust the empty state view height dynamically to fill the remaining space in the
+        // RecyclerView. Since R.layout.empty_state_view is a shared layout of height match_parent,
+        // displaying it alongside the search box in the RecyclerView would exceed the viewport
+        // height and cause the page to scroll unnecessarily.
+        emptyStateView.addOnLayoutChangeListener(
+                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                    int parentHeight = parent.getHeight();
+                    int targetHeight = parentHeight - top - parent.getPaddingBottom();
+                    if (targetHeight > 0 && v.getLayoutParams().height != targetHeight) {
+                        v.getLayoutParams().height = targetHeight;
+                        v.post(
+                                () ->
+                                        ViewUtils.requestLayout(
+                                                v,
+                                                "BookmarkManagerCoordinator"
+                                                        + ".buildEmptyStateView"));
+                    }
+                });
         return emptyStateView;
     }
 
     boolean canShowSigninPromo() {
-        assert mSigninPromoCoordinator != null;
         return mSigninPromoCoordinator.canShowPromo();
     }
 
@@ -615,23 +711,39 @@ public class BookmarkManagerCoordinator
         return mBookmarkUiPrefs;
     }
 
+    private void updateDesktopSearchBoxMargins() {
+        View searchBoxView = mMainView.findViewById(R.id.desktop_search_box_row);
+        if (searchBoxView != null) {
+            int padding =
+                    mContext.getResources()
+                            .getDimensionPixelSize(R.dimen.bookmark_desktop_content_padding);
+            int margin =
+                    mContext.getResources()
+                            .getDimensionPixelSize(R.dimen.search_box_embedder_margin_horizontal);
+            ViewGroup.MarginLayoutParams params =
+                    (ViewGroup.MarginLayoutParams) searchBoxView.getLayoutParams();
+            params.setMarginStart(margin + padding);
+            params.setMarginEnd(margin + padding);
+            searchBoxView.setLayoutParams(params);
+        }
+    }
+
     private void openSettings() {
         SettingsNavigationFactory.createSettingsNavigation()
-                .startSettings(
-                        mContext,
-                        ManageSyncSettings.class,
-                        ManageSyncSettings.createArguments(false));
+                .startSettings(mContext, ManageSyncSettings.class);
     }
 
     @Nullable BackPressManager getBackPressManagerForTesting() {
         return mBackPressManager;
     }
 
+    ComponentCallbacks getComponentCallbacksForTesting() {
+        return mComponentCallbacks;
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private void bindDragProperties(
             RecyclerView.ViewHolder viewHolder, ItemTouchHelper itemTouchHelper) {
-        if (!ChromeFeatureList.sAndroidBookmarkBarFastFollow.isEnabled()) return;
-
         int position = viewHolder.getBindingAdapterPosition();
         if (position == RecyclerView.NO_POSITION) return;
 

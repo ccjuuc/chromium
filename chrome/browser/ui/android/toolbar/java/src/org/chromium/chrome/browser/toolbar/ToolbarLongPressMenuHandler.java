@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.toolbar;
 
 import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.toolbar.settings.AddressBarPreference.setToolbarPositionAndSource;
 
 import android.content.Context;
 import android.content.res.Configuration;
@@ -23,10 +22,11 @@ import android.widget.PopupWindow;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -49,16 +49,22 @@ import org.chromium.url.GURL;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** The handler for the toolbar long press menu. */
 @NullMarked
 public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver {
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({MenuItemType.MOVE_ADDRESS_BAR_TO, MenuItemType.COPY_LINK})
+    @IntDef({
+        MenuItemType.MOVE_ADDRESS_BAR_TO,
+        MenuItemType.COPY_LINK,
+        MenuItemType.SEND_TAB_TO_SELF
+    })
     public @interface MenuItemType {
         int MOVE_ADDRESS_BAR_TO = 0;
         int COPY_LINK = 1;
+        int SEND_TAB_TO_SELF = 2;
     }
 
     private @Nullable PopupWindow mPopupMenu;
@@ -69,13 +75,15 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
     private final int mMenuOmniboxOverlap;
     private int mScreenWidthDp;
     private final Context mContext;
-    private final ObservableSupplier<@Nullable Profile> mProfileSupplier;
+    private final MonotonicObservableSupplier<Profile> mProfileSupplier;
     private final BooleanSupplier mSuppressLongPressSupplier;
     private final Supplier<@Nullable GURL> mUrlSupplier;
     private final Supplier<ViewRectProvider> mUrlBarViewRectProviderSupplier;
     private final @Nullable OnLongClickListener mOnLongClickListener;
     private final WindowAndroid mWindowAndroid;
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
+    private final Predicate<GURL> mIsSendTabToSelfAvailable;
+    private final Runnable mOnSendTabToSelfClicked;
 
     /**
      * Creates a new {@link ToolbarLongPressMenuHandler}.
@@ -88,16 +96,21 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
      * @param windowAndroid window for the activity.
      * @param urlSupplier supplier of the current URL, can be null.
      * @param urlBarViewRectProviderSupplier supplier of the URL bar view rect provider.
+     * @param isSendTabToSelfAvailable predicate checking if Send Tab To Self is available for a
+     *     given URL.
+     * @param onSendTabToSelfClicked callback for when Send Tab To Self is clicked.
      */
     public ToolbarLongPressMenuHandler(
             Context context,
-            ObservableSupplier<@Nullable Profile> profileSupplier,
+            MonotonicObservableSupplier<Profile> profileSupplier,
             boolean isCustomTab,
             BooleanSupplier suppressLongPressSupplier,
             ActivityLifecycleDispatcher lifecycleDispatcher,
             WindowAndroid windowAndroid,
             Supplier<@Nullable GURL> urlSupplier,
-            Supplier<ViewRectProvider> urlBarViewRectProviderSupplier) {
+            Supplier<ViewRectProvider> urlBarViewRectProviderSupplier,
+            Predicate<GURL> isSendTabToSelfAvailable,
+            Runnable onSendTabToSelfClicked) {
         mContext = context;
         mProfileSupplier = profileSupplier;
         mSuppressLongPressSupplier = suppressLongPressSupplier;
@@ -106,10 +119,16 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
         mWindowAndroid = windowAndroid;
         mLifecycleDispatcher = lifecycleDispatcher;
         mLifecycleDispatcher.register(this);
+        mIsSendTabToSelfAvailable = isSendTabToSelfAvailable;
+        mOnSendTabToSelfClicked = onSendTabToSelfClicked;
 
         mScreenWidthDp = context.getResources().getConfiguration().screenWidthDp;
 
-        if (ToolbarPositionController.isToolbarPositionCustomizationEnabled(context, isCustomTab)) {
+        boolean isBottomToolbarEnabled =
+                ToolbarPositionController.isToolbarPositionCustomizationEnabled(
+                        context, isCustomTab);
+        boolean isSttsEnabled = ChromeFeatureList.sSendTabToSelfExtraEntryPoints.isEnabled();
+        if (isBottomToolbarEnabled || isSttsEnabled) {
             mOnLongClickListener =
                     (view) -> {
                         if (mSuppressLongPressSupplier.getAsBoolean()) {
@@ -176,7 +195,7 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
                 BrowserUiListMenuUtils.getBasicListMenu(
                         view.getContext(),
                         buildMenuItems(onTop),
-                        (model, unusedView) -> {
+                        (model, _) -> {
                             handleMenuClick(model.get(ListMenuItemProperties.MENU_ITEM_ID));
                             assumeNonNull(mPopupMenu);
                             mPopupMenu.dismiss();
@@ -234,7 +253,23 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
                         .withTitleRes(R.string.toolbar_copy_link)
                         .withMenuId(MenuItemType.COPY_LINK)
                         .build());
+        maybeAddSendTabToSelf(itemList);
         return itemList;
+    }
+
+    private void maybeAddSendTabToSelf(ModelList itemList) {
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.SEND_TAB_TO_SELF_EXTRA_ENTRY_POINTS)) {
+            return;
+        }
+        GURL url = mUrlSupplier.get();
+        if (url == null || !mIsSendTabToSelfAvailable.test(url)) {
+            return;
+        }
+        itemList.add(
+                new ListItemBuilder()
+                        .withTitleRes(R.string.menu_send_to_devices)
+                        .withMenuId(MenuItemType.SEND_TAB_TO_SELF)
+                        .build());
     }
 
     @VisibleForTesting
@@ -245,6 +280,9 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
         } else if (id == MenuItemType.COPY_LINK) {
             handleCopyLink();
             return;
+        } else if (id == MenuItemType.SEND_TAB_TO_SELF) {
+            handleSendTabToSelf();
+            return;
         }
     }
 
@@ -252,15 +290,23 @@ public class ToolbarLongPressMenuHandler implements ConfigurationChangedObserver
         boolean currentlyOnTop = AddressBarPreference.isToolbarConfiguredToShowOnTop();
         // The new position is the inverse of the current position.
         if (currentlyOnTop) {
-            setToolbarPositionAndSource(ToolbarPositionAndSource.BOTTOM_LONG_PRESS);
+            AddressBarPreference.setToolbarPositionAndSource(
+                    ToolbarPositionAndSource.BOTTOM_LONG_PRESS);
         } else {
-            setToolbarPositionAndSource(ToolbarPositionAndSource.TOP_LONG_PRESS);
+            AddressBarPreference.setToolbarPositionAndSource(
+                    ToolbarPositionAndSource.TOP_LONG_PRESS);
         }
     }
 
     private void handleCopyLink() {
         GURL url = mUrlSupplier.get() == null ? GURL.emptyGURL() : mUrlSupplier.get();
         Clipboard.getInstance().copyUrlToClipboard(url);
+    }
+
+    private void handleSendTabToSelf() {
+        if (mOnSendTabToSelfClicked != null) {
+            mOnSendTabToSelfClicked.run();
+        }
     }
 
     @VisibleForTesting

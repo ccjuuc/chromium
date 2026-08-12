@@ -88,7 +88,7 @@ std::unique_ptr<WebFileHandlers> ParseFromList(const Extension& extension,
     }
 
     // Mime type keyed by string or array of strings of file extensions.
-    base::Value::Dict accept;
+    base::DictValue accept;
     for (const auto [mime_type, file_extensions] :
          manifest_file_handler.accept.additional_properties) {
       // Verify that mime type only has one slash.
@@ -104,7 +104,7 @@ std::unique_ptr<WebFileHandlers> ParseFromList(const Extension& extension,
       }
 
       // Verify that file extension has a leading dot.
-      base::Value::List file_extension_list;
+      base::ListValue file_extension_list;
       if (file_extensions.is_string()) {
         file_extension_list.Append(file_extensions.GetString());
       } else if (file_extensions.is_list()) {
@@ -215,6 +215,9 @@ std::unique_ptr<WebFileHandlers> ParseFromList(const Extension& extension,
 
 }  // namespace
 
+// static
+const char* WebFileHandlers::kManifestDataKey = manifest_keys::kFileHandlers;
+
 WebFileHandlers::WebFileHandlers() = default;
 WebFileHandlers::~WebFileHandlers() = default;
 
@@ -232,8 +235,7 @@ const WebFileHandlersInfo* WebFileHandlers::GetFileHandlers(
     return nullptr;
   }
 
-  WebFileHandlers* info = static_cast<WebFileHandlers*>(
-      extension.GetManifestData(manifest_keys::kFileHandlers));
+  const WebFileHandlers* info = extension.GetManifestData<WebFileHandlers>();
   return info ? &info->file_handlers : nullptr;
 }
 
@@ -258,7 +260,7 @@ bool WebFileHandlersParser::Parse(Extension* extension, std::u16string* error) {
     return false;
   }
 
-  extension->SetManifestData(manifest_keys::kFileHandlers, std::move(info));
+  extension->SetManifestData(std::move(info));
   return true;
 }
 

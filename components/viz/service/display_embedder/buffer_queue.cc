@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/metrics/histogram_macros.h"
+#include "base/trace_event/trace_event.h"
 #include "components/viz/service/display/skia_output_surface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 
@@ -63,8 +64,7 @@ gfx::Rect BufferQueue::CurrentBufferDamage() const {
   return gfx::Rect(size_);
 }
 
-void BufferQueue::SwapBuffers(const gfx::Rect& damage) {
-  UpdateBufferDamage(damage);
+void BufferQueue::SwapBuffers() {
   if (current_buffer_) {
     current_buffer_->damage = gfx::Rect();
   }
@@ -105,10 +105,6 @@ void BufferQueue::SwapBuffersComplete(bool did_present) {
       }
     }
   }
-}
-
-void BufferQueue::SwapBuffersSkipped(const gfx::Rect& damage) {
-  UpdateBufferDamage(damage);
 }
 
 bool BufferQueue::Reshape(const gfx::Size& size,
@@ -157,6 +153,7 @@ void BufferQueue::RecreateBuffers() {
 }
 
 void BufferQueue::FreeAllBuffers() {
+  TRACE_EVENT("viz", __PRETTY_FUNCTION__);
   FreeBuffer(std::move(displayed_buffer_));
   FreeBuffer(std::move(current_buffer_));
 
@@ -261,6 +258,13 @@ void BufferQueue::EnsureMinNumberOfBuffers(size_t n) {
     AllocateBuffers(n - number_of_buffers_);
   }
   number_of_buffers_ = n;
+}
+
+int BufferQueue::GetCurrentAllocatedBuffers() const {
+  if (size_.IsEmpty() || buffers_destroyed_) {
+    return 0;
+  }
+  return number_of_buffers_;
 }
 
 void BufferQueue::DestroyBuffers() {

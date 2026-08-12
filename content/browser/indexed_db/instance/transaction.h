@@ -20,15 +20,14 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_id.h"
 #include "components/services/storage/indexed_db/locks/partitioned_lock_manager.h"
 #include "components/services/storage/privileged/mojom/indexed_db_client_state_checker.mojom.h"
 #include "components/services/storage/privileged/mojom/indexed_db_internals_types.mojom-forward.h"
+#include "components/services/storage/public/cpp/inactivity_timer.h"
 #include "content/browser/indexed_db/indexed_db_database_error.h"
 #include "content/browser/indexed_db/indexed_db_external_object_storage.h"
 #include "content/browser/indexed_db/instance/backing_store.h"
-#include "content/browser/indexed_db/instance/bucket_context_handle.h"
 #include "content/browser/indexed_db/status.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -36,6 +35,7 @@
 
 namespace content::indexed_db {
 
+class BucketContext;
 class Connection;
 class Cursor;
 class Database;
@@ -60,7 +60,7 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
       const std::set<int64_t>& object_store_ids,
       blink::mojom::IDBTransactionMode mode,
       blink::mojom::IDBTransactionDurability durability,
-      BucketContextHandle bucket_context,
+      BucketContext& bucket_context,
       std::unique_ptr<BackingStore::Transaction> backing_store_transaction);
   ~Transaction() override;
 
@@ -85,11 +85,7 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
     return !is_commit_pending_ && state_ != COMMITTING && state_ != FINISHED;
   }
 
-  // This transaction is ultimately backed by a LevelDBScope. Aborting a
-  // transaction rolls back the LevelDBScopes, which (if LevelDBScopes is in
-  // single-sequence mode) can fail. This returns the result of that rollback,
-  // if applicable.
-  Status Abort(const DatabaseError& error);
+  void Abort(const DatabaseError& error);
 
   // Called by the scopes lock manager when this transaction is unblocked.
   void Start();
@@ -174,7 +170,7 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
   }
   int64_t id() const { return id_; }
 
-  Connection* connection() const { return connection_.get(); }
+  Connection& connection() const { return connection_.get(); }
   bool is_commit_pending() const { return is_commit_pending_; }
   int64_t num_errors_sent() const { return num_errors_sent_; }
   int64_t num_errors_handled() const { return num_errors_handled_; }
@@ -189,14 +185,13 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
     base::Time start_time;
     int tasks_scheduled = 0;
     int tasks_completed = 0;
-    bool mojo_receiver_disconnected = false;
   };
 
   const Diagnostics& diagnostics() const { return diagnostics_; }
 
   base::WeakPtr<Transaction> AsWeakPtr() { return ptr_factory_.GetWeakPtr(); }
 
-  BucketContext* bucket_context() { return bucket_context_.bucket_context(); }
+  BucketContext& bucket_context() { return *bucket_context_; }
 
   const base::flat_set<PartitionedLockId> lock_ids() const { return lock_ids_; }
   PartitionedLockHolder* mutable_locks_receiver() { return &locks_receiver_; }
@@ -271,16 +266,12 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
   void BlobWriteComplete(base::TimeTicks start_time, Status result);
   void CloseOpenCursors();
   Status CommitPhaseTwo();
-  void TimeoutFired();
-  void ResetTimeoutTimer();
+  void OnInactivityTimeout();
   void SetState(State state);
 
   // Generates a key for an auto_increment object store, or an invalid key if
   // the backing store has a problem.
   blink::IndexedDBKey GenerateAutoIncrementKey(int64_t object_store_id);
-
-  // Invoked when the associated receiver is disconnected.
-  void OnMojoReceiverDisconnected();
 
   const int64_t id_;
   const std::set<int64_t> object_store_ids_;
@@ -299,12 +290,12 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
   // for transaction commit (phase one + phase two).
   base::TimeDelta commit_synchronous_duration_;
 
-  // We are owned by the connection object, but during force closes sometimes
-  // there are issues if there is a pending OpenRequest. So use a WeakPtr.
-  base::WeakPtr<Connection> connection_;
+  // Owns `this`.
+  raw_ref<Connection> connection_;
+
   base::WeakPtr<Database> database_;
 
-  BucketContextHandle bucket_context_;
+  raw_ptr<BucketContext> bucket_context_;
 
   base::CheckedNumeric<size_t> in_flight_memory_ = 0;
 
@@ -364,15 +355,9 @@ class CONTENT_EXPORT Transaction : public blink::mojom::IDBTransaction {
   // This timer is started after requests have been processed. If no subsequent
   // requests are processed before the timer fires, assume the script is
   // unresponsive and abort to unblock the transaction queue.
-  base::RepeatingTimer timeout_timer_;
-  int timeout_strikes_ = 0;
-  // Poll every 20 seconds to see if this transaction is blocking others, and
-  // kill the transaction after 3 strikes. The polling mitigates the fact that
-  // timers may or may not pause when a system is suspended
-  // (crbug.com/40296804). See also crbug.com/40581991.
-  static constexpr base::TimeDelta kInactivityTimeoutPollPeriod =
-      base::Seconds(20);
-  static const int kMaxTimeoutStrikes = 3;
+  // See also crbug.com/40581991.
+  storage::InactivityTimer timeout_timer_;
+  static constexpr base::TimeDelta kInactivityTimeout = base::Seconds(60);
 
   Diagnostics diagnostics_;
 

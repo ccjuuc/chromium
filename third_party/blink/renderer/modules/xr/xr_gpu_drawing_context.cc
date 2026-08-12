@@ -7,7 +7,9 @@
 #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 #include "third_party/blink/renderer/modules/xr/xr_gpu_binding.h"
 #include "third_party/blink/renderer/modules/xr/xr_gpu_swap_chain.h"
+#include "third_party/blink/renderer/modules/xr/xr_layer_shared_image_manager.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/xr_gpu_frame_transport_delegate.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_drawing_buffer.h"
 
 namespace blink {
 
@@ -64,11 +66,30 @@ XRSession* XRGPUDrawingContext::session() const {
   return color_swap_chain_->layer()->session();
 }
 
-scoped_refptr<StaticBitmapImage>
-XRGPUDrawingContext::TransferToStaticBitmapImage() {
-  // TransferToStaticBitmapImage is only used with SUBMIT_AS_TEXTURE_HANDLE,
+std::unique_ptr<SharedImageHolder>
+XRGPUDrawingContext::TransferToSharedImageHolder() {
+  // TransferToSharedImageHolder is only used with SUBMIT_AS_TEXTURE_HANDLE,
   // which we don't support.
   NOTREACHED();
+}
+
+std::unique_ptr<SharedImageHolder> XRGPUDrawingContext::DoneWithSharedBuffer() {
+  // Get the shared image from the color swap chain.
+  if (!color_swap_chain_ || !color_swap_chain_->layer()) {
+    return nullptr;
+  }
+
+  const XRSharedImageData& shared_image_data =
+      color_swap_chain_->layer()->SharedImage();
+
+  if (!shared_image_data.shared_image) {
+    return nullptr;
+  }
+
+  gpu::SyncToken sync_token = color_swap_chain_->GetSyncToken();
+
+  return std::make_unique<SharedImageHolder>(shared_image_data.shared_image,
+                                             sync_token, base::DoNothing());
 }
 
 XRFrameTransportDelegate* XRGPUDrawingContext::GetTransportDelegate() {

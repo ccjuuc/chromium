@@ -5,10 +5,13 @@
 #include "components/security_interstitials/core/features.h"
 
 #include "base/feature_list.h"
+#include "build/build_config.h"
 
 namespace security_interstitials::features {
 
 // Enables a dialog-based UI for HTTPS-First Mode.
 BASE_FEATURE(kHttpsFirstDialogUi, base::FEATURE_ENABLED_BY_DEFAULT);
 
+BASE_FEATURE(kInsecureFormNavigationThrottleForPrerender,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 }  // namespace security_interstitials::features

@@ -42,11 +42,11 @@
 #include "components/optimization_guide/core/filters/hints_component_util.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
 #include "components/optimization_guide/core/filters/test_hints_component_creator.h"
+#include "components/optimization_guide/core/hints/command_line_top_host_provider.h"
 #include "components/optimization_guide/core/hints/fake_hints_fetcher.h"
 #include "components/optimization_guide/core/hints/hints_manager.h"
 #include "components/optimization_guide/core/hints/optimization_guide_store.h"
 #include "components/optimization_guide/core/hints/top_host_provider.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
@@ -134,7 +134,7 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     content::NetworkConnectionChangeSimulator().SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_2G);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G);
 
     // Ensure that kGoogleHost resolves to the localhost where the embedded test
     // server is listening.
@@ -206,10 +206,10 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
             .spec());
     cmd->AppendSwitchASCII("force-variation-ids", "4");
 
-    cmd->AppendSwitchASCII(optimization_guide::switches::kFetchHintsOverride,
+    cmd->AppendSwitchASCII(optimization_guide::kFetchHintsOverrideSwitch,
                            "example1.com, example2.com");
 
-    cmd->AppendSwitch(optimization_guide::switches::kFetchHintsOverrideTimer);
+    cmd->AppendSwitch(optimization_guide::kFetchHintsOverrideTimerSwitch);
 
     // Ignore the port numbers for the Google Search URL check.
     cmd->AppendSwitch(switches::kIgnoreGooglePortNumbers);
@@ -239,12 +239,12 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
 
   void SetNetworkConnectionOffline() {
     content::NetworkConnectionChangeSimulator().SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_NONE);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   }
 
   void SetNetworkConnectionOnline() {
     content::NetworkConnectionChangeSimulator().SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_2G);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_2G);
   }
 
   void SetResponseType(
@@ -326,7 +326,7 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
   void TriggerNoStatePrefetch(const GURL& url) {
     prerender::NoStatePrefetchManager* no_state_prefetch_manager =
         prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-            browser()->profile());
+            browser()->GetProfile());
     ASSERT_TRUE(no_state_prefetch_manager);
 
     prerender::test_utils::TestNoStatePrefetchContentsFactory*
@@ -377,16 +377,16 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
     EXPECT_EQ(request.method, net::test_server::METHOD_POST);
     EXPECT_NE(request.headers.end(), request.headers.find("X-Client-Data"));
 
-    EXPECT_EQ(expected_bearer_access_token_.empty(),
-              !base::Contains(request.headers,
-                              net::HttpRequestHeaders::kAuthorization));
+    EXPECT_EQ(
+        expected_bearer_access_token_.empty(),
+        !request.headers.contains(net::HttpRequestHeaders::kAuthorization));
     if (!expected_bearer_access_token_.empty()) {
       EXPECT_EQ(expected_bearer_access_token_,
                 request.headers.at(net::HttpRequestHeaders::kAuthorization));
     }
 
     // Make sure only one of API key or access token is sent.
-    EXPECT_EQ(base::Contains(request.headers, "X-Goog-Api-Key"),
+    EXPECT_EQ(request.headers.contains("X-Goog-Api-Key"),
               expected_bearer_access_token_.empty());
 
     optimization_guide::proto::GetHintsRequest hints_request;
@@ -447,10 +447,9 @@ class HintsFetcherDisabledBrowserTest : public InProcessBrowserTest {
       return;
     }
 
-    base::flat_set<std::string> hosts_and_urls_requested;
-    for (const auto& host : hints_request.hosts()) {
-      hosts_and_urls_requested.insert(host.host());
-    }
+    auto hosts_and_urls_requested = base::MakeFlatSet<std::string>(
+        hints_request.hosts(), /*comp=*/{},
+        [&](const auto& host) { return host.host(); });
     for (const auto& url : hints_request.urls()) {
       // TODO(crbug.com/40118423):  Remove normalization step once nav predictor
       // provides predictable URLs.
@@ -541,7 +540,7 @@ class HintsFetcherBrowserTest : public HintsFetcherDisabledBrowserTest {
   void SetUpOnMainThread() override {
     // Register an optimization type, so hints will be fetched at page
     // navigation.
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
     HintsFetcherDisabledBrowserTest::SetUpOnMainThread();
@@ -554,7 +553,7 @@ class HintsFetcherBrowserTest : public HintsFetcherDisabledBrowserTest {
   optimization_guide::TopHostProvider* top_host_provider() {
     OptimizationGuideKeyedService* keyed_service =
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     return keyed_service->GetTopHostProvider();
   }
 
@@ -564,7 +563,7 @@ class HintsFetcherBrowserTest : public HintsFetcherDisabledBrowserTest {
           optimization_types,
       optimization_guide::OnDemandOptimizationGuideDecisionRepeatingCallback
           callback) {
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->CanApplyOptimizationOnDemand(
             urls, optimization_types,
             optimization_guide::proto::CONTEXT_BOOKMARKS, callback);
@@ -827,7 +826,7 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
       "OptimizationGuide.HintCache.HintType.Loaded", 0);
 
   // Wipe the browser history - clear all the fetched hints.
-  browser()->profile()->Wipe();
+  browser()->GetProfile()->Wipe();
 
   // Wait until hint cache stabilizes and clears all the fetched hints.
   base::ThreadPoolInstance::Get()->FlushForTesting();
@@ -849,9 +848,9 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherOverrideTimer) {
   const base::HistogramTester* histogram_tester = GetHistogramTester();
   GURL url = https_url();
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      optimization_guide::switches::kFetchHintsOverride, "whatever.com");
+      optimization_guide::kFetchHintsOverrideSwitch, "whatever.com");
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-      optimization_guide::switches::kFetchHintsOverrideTimer);
+      optimization_guide::kFetchHintsOverrideTimerSwitch);
 
   // Allowlist NoScript for https_url()'s' host.
   SetUpComponentUpdateHints(https_url());
@@ -926,7 +925,8 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
       optimization_guide::HintsFetcherRemoteResponseType::kSuccessful);
 
   OptimizationGuideKeyedService* ogks =
-      OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile());
+      OptimizationGuideKeyedServiceFactory::GetForProfile(
+          browser()->GetProfile());
   ogks->RegisterOptimizationTypes(
       {optimization_guide::proto::OptimizationType::NOSCRIPT});
 
@@ -1083,10 +1083,11 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest,
     base::HistogramTester incognito_histogram_tester;
     // Instantiate off the record Optimization Guide Service.
     OptimizationGuideKeyedServiceFactory::GetForProfile(
-        browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true))
+        browser()->GetProfile()->GetPrimaryOTRProfile(
+            /*create_if_needed=*/true))
         ->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
-    Browser* otr_browser = CreateIncognitoBrowser(browser()->profile());
+    Browser* otr_browser = CreateIncognitoBrowser(browser()->GetProfile());
     ASSERT_TRUE(ui_test_utils::NavigateToURL(otr_browser, GURL(full_url)));
 
     // Make sure no additional hints requests were received.
@@ -1326,8 +1327,9 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherBrowserTest, HintsFetcherDoesntFetchOnNSP) {
 class HintsFetcherSearchPageBrowserTest : public HintsFetcherBrowserTest {
  public:
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(optimization_guide::switches::
-                          kDisableFetchingHintsAtNavigationStartForTesting);
+    cmd->AppendSwitch(
+        optimization_guide::
+            kDisableFetchingHintsAtNavigationStartForTestingSwitch);
     HintsFetcherBrowserTest::SetUpCommandLine(cmd);
   }
 };
@@ -1490,7 +1492,7 @@ IN_PROC_BROWSER_TEST_F(HintsFetcherSearchPagePrerenderingBrowserTest,
   // Load a page in the prerender.
   GURL prerender_url = search_results_page_url();
   ResetCountHintsRequestsReceived();
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   EXPECT_EQ(0u, count_hints_requests_received());
   histogram_tester->ExpectBucketCount(
@@ -1544,7 +1546,7 @@ class HintsFetcherSearchPageDisabledBrowserTest
   void SetUpOnMainThread() override {
     // Register an optimization type, so hints will be fetched at page
     // navigation.
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
     HintsFetcherDisabledBrowserTest::SetUpOnMainThread();
@@ -1663,15 +1665,16 @@ class HintsFetcherSearchPageLimitedURLsBrowserTest
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(optimization_guide::switches::
-                          kDisableFetchingHintsAtNavigationStartForTesting);
+    cmd->AppendSwitch(
+        optimization_guide::
+            kDisableFetchingHintsAtNavigationStartForTestingSwitch);
     HintsFetcherDisabledBrowserTest::SetUpCommandLine(cmd);
   }
 
   void SetUpOnMainThread() override {
     // Register an optimization type, so hints will be fetched at page
     // navigation.
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
 
     HintsFetcherDisabledBrowserTest::SetUpOnMainThread();
@@ -1742,7 +1745,7 @@ class PersonalizedHintsFetcherBrowserTest : public HintsFetcherBrowserTest {
     HintsFetcherBrowserTest::SetUpOnMainThread();
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   void EnableSignin() {
@@ -1757,7 +1760,7 @@ class PersonalizedHintsFetcherBrowserTest : public HintsFetcherBrowserTest {
       optimization_guide::proto::OptimizationType optimization_type,
       optimization_guide::proto::RequestContext request_context) {
     std::unique_ptr<base::RunLoop> run_loop = std::make_unique<base::RunLoop>();
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->CanApplyOptimizationOnDemand(
             {GURL("https://example.com")}, {optimization_type}, request_context,
             base::BindRepeating(
@@ -1853,7 +1856,7 @@ class ProactivePersonalizationHintsFetcherBrowserTest
     HintsFetcherBrowserTest::SetUpOnMainThread();
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   void PopulateEnabledFeatures(
@@ -1928,7 +1931,10 @@ IN_PROC_BROWSER_TEST_F(ProactivePersonalizationHintsFetcherBrowserTest,
 // Verify access token is attached during url fetching if a
 // personalizable optimization type is requested.
 // TODO(crbug.com/40919396): De-leakify and re-enable.
-#if BUILDFLAG(IS_LINUX) && defined(LEAK_SANITIZER)
+// TODO(crbug.com/520436633): Fix timeout issues before re-enabling likely due
+// to the wait call.
+#if (BUILDFLAG(IS_LINUX) && defined(LEAK_SANITIZER)) || \
+    (BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER))
 #define MAYBE_FetchingUrlFetchesWithAccessToken \
   DISABLED_FetchingUrlFetchesWithAccessToken
 #else

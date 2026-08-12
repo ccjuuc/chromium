@@ -20,6 +20,7 @@
 #include <string>
 
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -115,8 +116,7 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
       IVideoProcAmp** video_control);
 
   // Implements SinkFilterObserver.
-  void FrameReceived(const uint8_t* buffer,
-                     int length,
+  void FrameReceived(base::span<const uint8_t> buffer,
                      const VideoCaptureFormat& format,
                      base::TimeDelta timestamp,
                      bool flip_y) override;
@@ -130,8 +130,14 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
                      HRESULT hr);
 
   const VideoCaptureDeviceDescriptor device_descriptor_;
-  InternalState state_;
-  std::unique_ptr<VideoCaptureDevice::Client> client_;
+
+  // Used to guard between race checking capture state between the thread used
+  // in |thread_checker_| and a thread used in
+  // |SinkFilterObserver::SinkFilterObserver| callbacks.
+  base::Lock lock_;
+
+  InternalState state_ GUARDED_BY(lock_);
+  std::unique_ptr<VideoCaptureDevice::Client> client_ GUARDED_BY(lock_);
 
   Microsoft::WRL::ComPtr<IBaseFilter> capture_filter_;
 
@@ -158,14 +164,9 @@ class VideoCaptureDeviceWin : public VideoCaptureDevice,
 
   base::TimeTicks first_ref_time_;
 
-  base::queue<TakePhotoCallback> take_photo_callbacks_;
+  base::queue<TakePhotoCallback> take_photo_callbacks_ GUARDED_BY(lock_);
 
   base::ThreadChecker thread_checker_;
-
-  // Used to guard between race checking capture state between the thread used
-  // in |thread_checker_| and a thread used in
-  // |SinkFilterObserver::SinkFilterObserver| callbacks.
-  base::Lock lock_;
 
   bool enable_get_photo_state_;
 

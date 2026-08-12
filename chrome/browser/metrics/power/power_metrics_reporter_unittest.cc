@@ -220,6 +220,47 @@ class PowerMetricsReporterWithoutBatteryLevelProviderUnitTest
 
 }  // namespace
 
+#if !(BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64))
+// Windows ARM64 does not support Constant Rate TSC so
+// PerformanceMonitor.AverageCPU10.* is not recorded there.
+TEST_F(PowerMetricsReporterUnitTest,
+       UtilityProcessesWithSubtypeReportedInSuffixedHistogram) {
+  base::HistogramTester tester;
+  // Sampling for utility processes without a subtype records only in the
+  // top-level histogram. This happens once for the aggregate of all utility
+  // processes.
+  power_metrics_reporter_->OnMetricsSampled(
+      ProcessInfo::Key(MonitoredProcessType::kUtility, std::nullopt),
+      GetFakeProcessMetrics());
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess", 1);
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess.Test",
+                          0);
+  tester.ExpectTotalCount(
+      "PerformanceMonitor.AverageCPU10.UtilityProcess.Unknown", 0);
+
+  // Sampling for a utility process with a defined subtype records it only in
+  // that suffixes histogram.
+  power_metrics_reporter_->OnMetricsSampled(
+      ProcessInfo::Key(MonitoredProcessType::kUtility, "Test"),
+      GetFakeProcessMetrics());
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess", 1);
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess.Test",
+                          1);
+  tester.ExpectTotalCount(
+      "PerformanceMonitor.AverageCPU10.UtilityProcess.Unknown", 0);
+
+  // Sampling with an empty string subtype records to the "Unknown" suffix only.
+  power_metrics_reporter_->OnMetricsSampled(
+      ProcessInfo::Key(MonitoredProcessType::kUtility, ""),
+      GetFakeProcessMetrics());
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess", 1);
+  tester.ExpectTotalCount("PerformanceMonitor.AverageCPU10.UtilityProcess.Test",
+                          1);
+  tester.ExpectTotalCount(
+      "PerformanceMonitor.AverageCPU10.UtilityProcess.Unknown", 1);
+}
+#endif
+
 TEST_F(PowerMetricsReporterWithoutBatteryLevelProviderUnitTest,
        CPUTimeRecorded) {
   process_monitor_.SetMetricsToReturn(GetFakeProcessMetrics());
@@ -236,13 +277,13 @@ TEST_F(PowerMetricsReporterWithoutBatteryLevelProviderUnitTest,
   const std::vector<const char*> suffixes({"", kScenarioSuffix});
 #if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
   // Windows ARM64 does not support Constant Rate TSC so
-  // PerformanceMonitor.AverageCPU9.Total is not recorded there.
+  // PerformanceMonitor.AverageCPU10.Total is not recorded there.
   ExpectHistogramSamples(
       &histogram_tester_, suffixes,
-      {{"PerformanceMonitor.AverageCPU9.Total", std::nullopt}});
+      {{"PerformanceMonitor.AverageCPU10.Total", std::nullopt}});
 #else
   ExpectHistogramSamples(&histogram_tester_, suffixes,
-                         {{"PerformanceMonitor.AverageCPU9.Total", 500}});
+                         {{"PerformanceMonitor.AverageCPU10.Total", 500}});
 #endif
 }
 
@@ -263,14 +304,14 @@ TEST_F(PowerMetricsReporterWithoutBatteryLevelProviderUnitTest,
   const std::vector<const char*> suffixes({"", kScenarioSuffix});
 #if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
   // Windows ARM64 does not support Constant Rate TSC so
-  // PerformanceMonitor.AverageCPU9.Total is not recorded there.
+  // PerformanceMonitor.AverageCPU10.Total is not recorded there.
   ExpectHistogramSamples(
       &histogram_tester_, suffixes,
-      {{"PerformanceMonitor.AverageCPU9.Total", std::nullopt}});
+      {{"PerformanceMonitor.AverageCPU10.Total", std::nullopt}});
 #else
   // Missing `cpu_usage` recorded as 0.
   ExpectHistogramSamples(&histogram_tester_, suffixes,
-                         {{"PerformanceMonitor.AverageCPU9.Total", 0}});
+                         {{"PerformanceMonitor.AverageCPU10.Total", 0}});
 #endif
 }
 
@@ -290,13 +331,13 @@ TEST_F(PowerMetricsReporterUnitTest, LongIntervalHistograms) {
   const std::vector<const char*> suffixes({"", kScenarioSuffix});
 #if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM64)
   // Windows ARM64 does not support Constant Rate TSC so
-  // PerformanceMonitor.AverageCPU9.Total is not recorded there.
+  // PerformanceMonitor.AverageCPU10.Total is not recorded there.
   ExpectHistogramSamples(
       &histogram_tester_, suffixes,
-      {{"PerformanceMonitor.AverageCPU9.Total", std::nullopt}});
+      {{"PerformanceMonitor.AverageCPU10.Total", std::nullopt}});
 #else
   ExpectHistogramSamples(&histogram_tester_, suffixes,
-                         {{"PerformanceMonitor.AverageCPU9.Total", 500}});
+                         {{"PerformanceMonitor.AverageCPU10.Total", 500}});
 #endif
 }
 
@@ -582,7 +623,7 @@ TEST_F(PowerMetricsReporterUnitTest, UKMsNoBattery) {
 
 #if BUILDFLAG(IS_MAC)
 // Tests that on MacOS, a full |charge_level| while not plugged does not result
-// in a kDischarging value emitted. See https://crbug.com/1249830.
+// in a kDischarging value emitted. See https://crbug.com/40197761.
 TEST_F(PowerMetricsReporterUnitTest, UKMsMacFullyCharged) {
   // Set the initial battery level at 100%.
   power_metrics_reporter_->battery_state_for_testing()->current_capacity = 100;

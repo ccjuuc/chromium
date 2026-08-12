@@ -22,6 +22,7 @@
 import '../cr_icon_button/cr_icon_button.js';
 
 import {assert} from '//resources/js/assert.js';
+import {EventTracker} from '//resources/js/event_tracker.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {CrInputElement} from '../cr_input/cr_input.js';
@@ -108,21 +109,7 @@ export class CrDialogElement extends CrLitElement {
 
   private mutationObserver_: MutationObserver|null = null;
   private boundKeydown_: ((e: KeyboardEvent) => void)|null = null;
-
-  override firstUpdated() {
-    // If the active history entry changes (i.e. user clicks back button),
-    // all open dialogs should be cancelled.
-    window.addEventListener('popstate', () => {
-      if (!this.ignorePopstate && this.$.dialog.open) {
-        this.cancel();
-      }
-    });
-
-    if (!this.ignoreEnterKey) {
-      this.addEventListener('keypress', this.onKeypress_.bind(this));
-    }
-    this.addEventListener('pointerdown', e => this.onPointerdown_(e));
-  }
+  private tracker_: EventTracker = new EventTracker();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -146,6 +133,12 @@ export class CrDialogElement extends CrLitElement {
     if (this.showOnAttach) {
       this.showModal();
     }
+
+    this.tracker_.add(window, 'popstate', () => {
+      if (!this.ignorePopstate && this.$.dialog.open) {
+        this.cancel();
+      }
+    });
   }
 
   override disconnectedCallback() {
@@ -155,6 +148,14 @@ export class CrDialogElement extends CrLitElement {
       this.mutationObserver_.disconnect();
       this.mutationObserver_ = null;
     }
+    this.tracker_.removeAll();
+  }
+
+  override firstUpdated() {
+    if (!this.ignoreEnterKey) {
+      this.addEventListener('keypress', this.onKeypress_.bind(this));
+    }
+    this.addEventListener('pointerdown', e => this.onPointerdown_(e));
   }
 
   private addKeydownListener_() {
@@ -199,6 +200,10 @@ export class CrDialogElement extends CrLitElement {
     this.fire('cr-dialog-open');
   }
 
+  protected onCloseClick_() {
+    this.cancel();
+  }
+
   cancel() {
     this.fire('cancel');
     this.$.dialog.close();
@@ -241,11 +246,6 @@ export class CrDialogElement extends CrLitElement {
   protected async onNativeDialogCancel_(e: Event) {
     // Ignore any 'cancel' events not fired directly by the <dialog> element.
     if (e.target !== this.getNative()) {
-      return;
-    }
-
-    if (this.noCancel) {
-      e.preventDefault();
       return;
     }
 

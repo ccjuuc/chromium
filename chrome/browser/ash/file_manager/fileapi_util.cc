@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "ash/constants/ash_features.h"
@@ -20,6 +21,7 @@
 #include "chrome/browser/ash/file_manager/filesystem_api_util.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -28,6 +30,7 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/url_utils.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/common/extension.h"
 #include "google_apis/common/task_util.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/isolated_context.h"
@@ -528,6 +531,11 @@ const GURL GetFileManagerURL() {
   return GURL(ash::file_manager::kChromeUIFileManagerURL);
 }
 
+const GURL GetImageLoaderBaseURL() {
+  return extensions::Extension::GetBaseURLFromExtensionId(
+      kImageLoaderExtensionId);
+}
+
 bool IsFileManagerURL(const GURL& source_url) {
   return GetFileManagerURL() == source_url.DeprecatedGetOriginAsURL();
 }
@@ -623,9 +631,9 @@ void ConvertSelectedFileInfoListToFileChooserFileInfoList(
       context, origin, selected_info_list, std::move(callback));
 }
 
-base::Value::Dict ConvertEntryDefinitionToValue(
+base::DictValue ConvertEntryDefinitionToValue(
     const EntryDefinition& entry_definition) {
-  base::Value::Dict entry;
+  base::DictValue entry;
   entry.Set("fileSystemName", entry_definition.file_system_name);
   entry.Set("fileSystemRoot", entry_definition.file_system_root_url);
   entry.Set(
@@ -635,9 +643,9 @@ base::Value::Dict ConvertEntryDefinitionToValue(
   return entry;
 }
 
-base::Value::List ConvertEntryDefinitionListToListValue(
+base::ListValue ConvertEntryDefinitionListToListValue(
     const EntryDefinitionList& entry_definition_list) {
-  base::Value::List entries;
+  base::ListValue entries;
   for (const auto& entry : entry_definition_list) {
     entries.Append(ConvertEntryDefinitionToValue(entry));
   }

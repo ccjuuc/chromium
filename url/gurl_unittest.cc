@@ -173,12 +173,13 @@ TEST_F(GURLTest, Components) {
 
   // Test non-ASCII characters, outside of the host (IDNA).
   GURL url_non_ascii("http://example.com/foo/aβc%2Etxt?q=r🙂s");
-  EXPECT_EQ("/foo/a%CE%B2c.txt", url_non_ascii.GetPath());
+  EXPECT_EQ("/foo/a%CE%B2c%2Etxt", url_non_ascii.GetPath());
   EXPECT_EQ("q=r%F0%9F%99%82s", url_non_ascii.GetQuery());
 
   // Test already percent-escaped strings.
+  // %2E case preserved (/./ is navigation, other %2E stay encoded).
   GURL url_percent_escaped("http://example.com/a/./%2e/i%2E%2F%2fj?q=r%2Es");
-  EXPECT_EQ("/a/i.%2F%2fj", url_percent_escaped.GetPath());
+  EXPECT_EQ("/a/i%2E%2F%2fj", url_percent_escaped.GetPath());
   EXPECT_EQ("q=r%2Es", url_percent_escaped.GetQuery());
 }
 
@@ -1136,6 +1137,41 @@ TEST_F(GURLTest, SchemeIsHTTPOrHTTPS) {
   EXPECT_TRUE(GURL("http://bar/").SchemeIsHTTPOrHTTPS());
   EXPECT_TRUE(GURL("HTTPS://BAR").SchemeIsHTTPOrHTTPS());
   EXPECT_FALSE(GURL("ftp://bar/").SchemeIsHTTPOrHTTPS());
+}
+
+TEST_F(GURLTest, SchemeIsHTTPOrHTTPSAfterSwap) {
+  GURL url1("http://example.com");
+  GURL url2("ftp://example.com");
+
+  EXPECT_TRUE(url1.SchemeIsHTTPOrHTTPS());
+  EXPECT_FALSE(url2.SchemeIsHTTPOrHTTPS());
+
+  url1.Swap(&url2);
+
+  EXPECT_FALSE(url1.SchemeIsHTTPOrHTTPS());
+  EXPECT_TRUE(url2.SchemeIsHTTPOrHTTPS());
+}
+
+TEST_F(GURLTest, SchemeIsHTTPOrHTTPSAfterReplaceComponents) {
+  GURL url("http://example.com");
+  EXPECT_TRUE(url.SchemeIsHTTPOrHTTPS());
+
+  GURL::Replacements replacements;
+  replacements.SetSchemeStr("ftp");
+  GURL new_url = url.ReplaceComponents(replacements);
+
+  EXPECT_FALSE(new_url.SchemeIsHTTPOrHTTPS());
+}
+
+TEST_F(GURLTest, SchemeIsHTTPOrHTTPSAfterResolve) {
+  GURL url("http://example.com/foo");
+  EXPECT_TRUE(url.SchemeIsHTTPOrHTTPS());
+
+  GURL new_url = url.Resolve("bar");
+  EXPECT_TRUE(new_url.SchemeIsHTTPOrHTTPS());
+
+  GURL new_url2 = url.Resolve("ftp://elsewhere.com");
+  EXPECT_FALSE(new_url2.SchemeIsHTTPOrHTTPS());
 }
 
 TEST_F(GURLTest, SchemeIsWSOrWSS) {

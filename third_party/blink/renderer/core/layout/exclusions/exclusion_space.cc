@@ -134,16 +134,22 @@ LayoutOpportunity CreateLayoutOpportunity(const LayoutOpportunity& other,
 LayoutOpportunity CreateLayoutOpportunity(
     const ExclusionSpaceInternal::Shelf& shelf,
     const BfcOffset& offset,
-    const LayoutUnit inline_size) {
-  BfcOffset start_offset(std::max(shelf.line_left, offset.line_offset),
-                         std::max(shelf.block_offset, offset.block_offset));
+    const LayoutUnit inline_size,
+    TextDirection direction) {
+  LayoutUnit line_left = std::max(shelf.line_left, offset.line_offset);
+  LayoutUnit line_right =
+      std::min(shelf.line_right, offset.line_offset + inline_size);
 
-  // Max with |start_offset.line_offset| in case the shelf has a negative
-  // inline-size.
-  BfcOffset end_offset(
-      std::max(std::min(shelf.line_right, offset.line_offset + inline_size),
-               start_offset.line_offset),
-      LayoutUnit::Max());
+  // Collapse a negative inline-size to the dominant side.
+  if (direction == TextDirection::kLtr) {
+    line_right = std::max(line_right, line_left);
+  } else {
+    line_left = std::min(line_left, line_right);
+  }
+
+  BfcOffset start_offset(line_left,
+                         std::max(shelf.block_offset, offset.block_offset));
+  BfcOffset end_offset(line_right, LayoutUnit::Max());
 
   return LayoutOpportunity(
       BfcRect(start_offset, end_offset),
@@ -173,7 +179,6 @@ ExclusionSpaceInternal::ExclusionSpaceInternal(
           other.initial_letter_left_clear_offset_),
       initial_letter_right_clear_offset_(
           other.initial_letter_right_clear_offset_),
-      non_hidden_clear_offset_(other.non_hidden_clear_offset_),
       track_shape_exclusions_(other.track_shape_exclusions_),
       has_break_before_left_float_(other.has_break_before_left_float_),
       has_break_before_right_float_(other.has_break_before_right_float_),
@@ -201,7 +206,6 @@ void ExclusionSpaceInternal::CopyFrom(const ExclusionSpaceInternal& other) {
   last_float_block_start_ = other.last_float_block_start_;
   initial_letter_left_clear_offset_ = other.initial_letter_left_clear_offset_;
   initial_letter_right_clear_offset_ = other.initial_letter_right_clear_offset_;
-  non_hidden_clear_offset_ = other.non_hidden_clear_offset_;
   track_shape_exclusions_ = other.track_shape_exclusions_;
   has_break_before_left_float_ = other.has_break_before_left_float_;
   has_break_before_right_float_ = other.has_break_before_right_float_;
@@ -243,7 +247,7 @@ void ExclusionSpaceInternal::Add(const ExclusionArea* exclusion) {
       // Perform a copy-on-write if the number of exclusions has gone out of
       // sync.
       auto* exclusions = MakeGarbageCollected<GCedExclusionAreaPtrArray>();
-      exclusions->AppendSpan(base::span(*exclusions_).first(num_exclusions_));
+      exclusions->append_range(base::span(*exclusions_).first(num_exclusions_));
       exclusions_ = exclusions;
     }
   }
@@ -274,11 +278,6 @@ void ExclusionSpaceInternal::Add(const ExclusionArea* exclusion) {
     } else if (exclusion->type == EFloat::kRight) {
       initial_letter_right_clear_offset_ =
           std::max(initial_letter_right_clear_offset_, clear_offset);
-    }
-
-    if (!exclusion->is_hidden_for_paint) {
-      non_hidden_clear_offset_ =
-          std::max(non_hidden_clear_offset_, clear_offset);
     }
 
     if (!already_exists) {
@@ -325,10 +324,6 @@ void ExclusionSpaceInternal::Add(const ExclusionArea* exclusion) {
     left_clear_offset_ = std::max(left_clear_offset_, clear_offset);
   else if (exclusion->type == EFloat::kRight)
     right_clear_offset_ = std::max(right_clear_offset_, clear_offset);
-
-  if (!exclusion->is_hidden_for_paint) {
-    non_hidden_clear_offset_ = std::max(non_hidden_clear_offset_, clear_offset);
-  }
 
   if (derived_geometry_)
     derived_geometry_->Add(*exclusion);
@@ -639,13 +634,14 @@ LayoutOpportunity
 ExclusionSpaceInternal::DerivedGeometry::FindLayoutOpportunity(
     const BfcOffset& offset,
     const LayoutUnit available_inline_size,
+    TextDirection direction,
     const LayoutUnit minimum_inline_size) const {
   // TODO(ikilpatrick): Determine what to do for a -ve available_inline_size.
   DCHECK_GE(offset.block_offset, block_offset_limit_);
 
   LayoutOpportunity return_opportunity;
   IterateAllLayoutOpportunities(
-      offset, available_inline_size,
+      offset, available_inline_size, direction,
       [&return_opportunity, &offset, &available_inline_size,
        &minimum_inline_size](const LayoutOpportunity opportunity) -> bool {
         // Determine if this opportunity will fit the given size.
@@ -670,13 +666,14 @@ ExclusionSpaceInternal::DerivedGeometry::FindLayoutOpportunity(
 LayoutOpportunityVector
 ExclusionSpaceInternal::DerivedGeometry::AllLayoutOpportunities(
     const BfcOffset& offset,
-    const LayoutUnit available_inline_size) const {
+    const LayoutUnit available_inline_size,
+    TextDirection direction) const {
   DCHECK_GE(offset.block_offset, block_offset_limit_);
   LayoutOpportunityVector opportunities;
 
   // This method is only used for determining the position of line-boxes.
   IterateAllLayoutOpportunities(
-      offset, available_inline_size,
+      offset, available_inline_size, direction,
       [&opportunities](const LayoutOpportunity opportunity) -> bool {
         opportunities.push_back(std::move(opportunity));
         return false;
@@ -689,6 +686,7 @@ template <typename LambdaFunc>
 void ExclusionSpaceInternal::DerivedGeometry::IterateAllLayoutOpportunities(
     const BfcOffset& offset,
     const LayoutUnit available_inline_size,
+    TextDirection direction,
     const LambdaFunc& lambda) const {
   auto shelves_span = base::span(shelves_);
   auto areas_span = base::span(areas_);
@@ -743,8 +741,10 @@ void ExclusionSpaceInternal::DerivedGeometry::IterateAllLayoutOpportunities(
         HasSolidEdges(shelf.line_right_edges, offset.block_offset,
                       LayoutUnit::Max());
     if (has_solid_edges) {
-      if (lambda(CreateLayoutOpportunity(shelf, offset, available_inline_size)))
+      if (lambda(CreateLayoutOpportunity(shelf, offset, available_inline_size,
+                                         direction))) {
         return;
+      }
     }
     ++shelves_it;
   }

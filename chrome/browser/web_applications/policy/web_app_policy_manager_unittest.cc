@@ -25,6 +25,7 @@
 #include "base/test/test_future.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
@@ -40,6 +41,8 @@
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
+#include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_utils.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
@@ -119,32 +122,33 @@ constexpr char kNoContainerUrl[] = "https://no-container.example/";
 const char kDefaultCustomAppName[] = "custom app name";
 constexpr char kDefaultCustomIconUrl[] = "https://windowed.example/icon.png";
 constexpr char kUnsecureIconUrl[] = "http://windowed.example/icon.png";
-constexpr char kDefaultCustomIconHash[] = "abcdef";
+constexpr char kDefaultCustomIconHash[] =
+    "567e3611094b537115a14c3a314014e8dfcb2b6e993ede8b2da85be93f200849";
 
-base::Value::Dict GetWindowedItem() {
-  return base::Value::Dict()
+base::DictValue GetWindowedItem() {
+  return base::DictValue()
       .Set(kUrlKey, kWindowedUrl)
       .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerWindowValue);
 }
 
-base::Value::Dict GetTabbedItem() {
-  return base::Value::Dict()
+base::DictValue GetTabbedItem() {
+  return base::DictValue()
       .Set(kUrlKey, kTabbedUrl)
       .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerTabValue);
 }
 
-base::Value::Dict GetNoContainerItem() {
-  return base::Value::Dict().Set(kUrlKey, kNoContainerUrl);
+base::DictValue GetNoContainerItem() {
+  return base::DictValue().Set(kUrlKey, kNoContainerUrl);
 }
 
-base::Value::Dict GetCreateDesktopShortcutFalseItem() {
-  return base::Value::Dict()
+base::DictValue GetCreateDesktopShortcutFalseItem() {
+  return base::DictValue()
       .Set(kUrlKey, kNoContainerUrl)
       .Set(kCreateDesktopShortcutKey, false);
 }
 
-base::Value::Dict GetCreateDesktopShortcutTrueItem() {
-  return base::Value::Dict()
+base::DictValue GetCreateDesktopShortcutTrueItem() {
+  return base::DictValue()
       .Set(kUrlKey, kNoContainerUrl)
       .Set(kCreateDesktopShortcutKey, true);
 }
@@ -166,29 +170,32 @@ class MockAppRegistrarObserver : public WebAppRegistrarObserver {
   int on_policy_changed_call_count = 0;
 };
 
-base::Value::Dict GetFallbackAppNameItem() {
-  return base::Value::Dict()
+base::DictValue GetFallbackAppNameItem() {
+  return base::DictValue()
       .Set(kUrlKey, kWindowedUrl)
       .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerWindowValue)
       .Set(kFallbackAppNameKey, kDefaultFallbackAppName);
 }
 
-base::Value::Dict GetCustomAppNameItem(std::string name) {
-  return base::Value::Dict()
+base::DictValue GetCustomAppNameItem(std::string name) {
+  return base::DictValue()
       .Set(kUrlKey, kWindowedUrl)
       .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerWindowValue)
       .Set(kCustomNameKey, std::move(name));
 }
 
-base::Value::Dict GetCustomAppIconItem(bool secure = true) {
-  return base::Value::Dict()
+base::DictValue GetCustomAppIconItem(bool secure = true,
+                                     bool include_hash = true) {
+  base::DictValue custom_icon;
+  custom_icon.Set(kCustomIconURLKey,
+                  secure ? kDefaultCustomIconUrl : kUnsecureIconUrl);
+  if (include_hash) {
+    custom_icon.Set(kCustomIconHashKey, kDefaultCustomIconHash);
+  }
+  return base::DictValue()
       .Set(kUrlKey, kWindowedUrl)
       .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerWindowValue)
-      .Set(kCustomIconKey,
-           base::Value::Dict()
-               .Set(kCustomIconURLKey,
-                    secure ? kDefaultCustomIconUrl : kUnsecureIconUrl)
-               .Set(kCustomIconHashKey, kDefaultCustomIconHash));
+      .Set(kCustomIconKey, std::move(custom_icon));
 }
 
 void SetWebAppSettingsListPref(Profile* profile, std::string_view pref) {
@@ -213,7 +220,8 @@ void SetWebAppInstallForceListPref(Profile* profile, std::string_view pref) {
 
 class WebAppPolicyManagerTestBase : public WebAppTest {
  public:
-  WebAppPolicyManagerTestBase() = default;
+  WebAppPolicyManagerTestBase()
+      : WebAppTest(WebAppTest::WithTestUrlLoaderFactory()) {}
   WebAppPolicyManagerTestBase(const WebAppPolicyManagerTestBase&) = delete;
   WebAppPolicyManagerTestBase& operator=(const WebAppPolicyManagerTestBase&) =
       delete;
@@ -239,8 +247,11 @@ class WebAppPolicyManagerTestBase : public WebAppTest {
 
     WebAppTest::SetUp();
 #if BUILDFLAG(IS_CHROMEOS)
-    test_system_app_manager_ =
-        std::make_unique<ash::TestSystemWebAppManager>(profile());
+    test_system_app_manager_ = std::make_unique<ash::TestSystemWebAppManager>(
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        profile());
 #endif
     auto web_app_policy_manager =
         std::make_unique<WebAppPolicyManager>(profile());
@@ -325,7 +336,8 @@ class WebAppPolicyManagerTestBase : public WebAppTest {
 
   bool IsPreventCloseEnabled(const std::string& manifest_id) {
     return policy_manager().IsPreventCloseEnabled(
-        web_app::GenerateAppIdFromManifestId(GURL(manifest_id)));
+        web_app::GenerateAppIdFromManifestId(
+            webapps::ManifestId(GURL(manifest_id))));
   }
 
   void WaitForAppsToSynchronize() {
@@ -432,7 +444,7 @@ TEST_F(WebAppPolicyManagerTest, NoPrefValues) {
 
 TEST_F(WebAppPolicyManagerTest, NoForceInstalledApps) {
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
-                                 base::Value::List());
+                                 base::ListValue());
 
   WaitForAppsToSynchronize();
   ASSERT_TRUE(app_registrar().is_empty());
@@ -442,7 +454,7 @@ TEST_F(WebAppPolicyManagerTest, NoWebAppSettings) {
   base::RunLoop loop;
   policy_manager().SetRefreshPolicySettingsCompletedCallbackForTesting(
       loop.QuitClosure());
-  profile()->GetPrefs()->SetList(prefs::kWebAppSettings, base::Value::List());
+  profile()->GetPrefs()->SetList(prefs::kWebAppSettings, base::ListValue());
   loop.Run();
 
   ValidateEmptyWebAppSettingsPolicy();
@@ -548,7 +560,7 @@ TEST_F(WebAppPolicyManagerTest, WebAppSettingsWithDefaultConfiguration) {
 
 TEST_F(WebAppPolicyManagerTest, TwoForceInstalledApps) {
   // Add two sites, one that opens in a window and one that opens in a tab.
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetWindowedItem());
   list.Append(GetTabbedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
@@ -561,7 +573,7 @@ TEST_F(WebAppPolicyManagerTest, TwoForceInstalledApps) {
 }
 
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithNoDefaultLaunchContainer) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetNoContainerItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -572,7 +584,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithNoDefaultLaunchContainer) {
 }
 
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCreateDesktopShortcut) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetCreateDesktopShortcutFalseItem());
   list.Append(GetCreateDesktopShortcutTrueItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
@@ -581,13 +593,13 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCreateDesktopShortcut) {
   WaitForAppsToSynchronize();
 
   EXPECT_NE(GetPolicyInstalledNoContainerApp(), nullptr);
-  EXPECT_EQ(proto::INSTALLED_WITH_OS_INTEGRATION,
-            app_registrar().GetInstallState(
-                GetPolicyInstalledNoContainerApp()->app_id()));
+  EXPECT_TRUE(app_registrar().AppMatches(
+      GetPolicyInstalledNoContainerApp()->app_id(),
+      WebAppFilter::InstalledInOperatingSystemForTesting()));
 }
 
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithFallbackAppName) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetFallbackAppNameItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -601,8 +613,32 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithFallbackAppName) {
 }
 
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppIcon) {
-  base::Value::List list;
+  std::string png_bytes =
+      "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00"
+      "\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90\x77\x53\xDE\x00\x00\x00"
+      "\x0C\x49\x44\x41\x54\x78\x9C\x63\xF8\xCF\xC0\x00\x00\x03\x01\x01\x00\x18"
+      "\xDD\x8D\xB0\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82";
+  profile_url_loader_factory().AddResponse(kDefaultCustomIconUrl, png_bytes);
+
+  base::ListValue list;
   list.Append(GetCustomAppIconItem());
+  profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
+                                 std::move(list));
+
+  WaitForAppsToSynchronize();
+  EXPECT_NE(GetPolicyInstalledWindowedApp(), nullptr);
+}
+
+TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppIconNoHash) {
+  std::string png_bytes =
+      "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A\x00\x00\x00\x0D\x49\x48\x44\x52\x00\x00"
+      "\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90\x77\x53\xDE\x00\x00\x00"
+      "\x0C\x49\x44\x41\x54\x78\x9C\x63\xF8\xCF\xC0\x00\x00\x03\x01\x01\x00\x18"
+      "\xDD\x8D\xB0\x00\x00\x00\x00\x49\x45\x4E\x44\xAE\x42\x60\x82";
+  profile_url_loader_factory().AddResponse(kDefaultCustomIconUrl, png_bytes);
+
+  base::ListValue list;
+  list.Append(GetCustomAppIconItem(/*secure=*/true, /*include_hash=*/false));
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
 
@@ -612,7 +648,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppIcon) {
 
 // If the custom icon URL is not https, the icon should be ignored.
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithUnsecureCustomAppIcon) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetCustomAppIconItem(/*secure=*/false));
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -626,7 +662,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithUnsecureCustomAppIcon) {
 }
 
 TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppName) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetCustomAppNameItem(kDefaultCustomAppName));
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -644,7 +680,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppNameRefresh) {
 
   // Add app
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetCustomAppNameItem(kDefaultCustomAppName));
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                    std::move(list));
@@ -658,7 +694,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppNameRefresh) {
 
   // Change custom name
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetCustomAppNameItem(kPrefix + kDefaultCustomAppName));
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                    std::move(list));
@@ -674,7 +710,7 @@ TEST_F(WebAppPolicyManagerTest, ForceInstallAppWithCustomAppNameRefresh) {
 }
 
 TEST_F(WebAppPolicyManagerTest, DynamicRefresh) {
-  base::Value::List first_list;
+  base::ListValue first_list;
   first_list.Append(GetWindowedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(first_list));
@@ -682,7 +718,7 @@ TEST_F(WebAppPolicyManagerTest, DynamicRefresh) {
   WaitForAppsToSynchronize();
   EXPECT_NE(GetPolicyInstalledWindowedApp(), nullptr);
 
-  base::Value::List second_list;
+  base::ListValue second_list;
   second_list.Append(GetTabbedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(second_list));
@@ -703,7 +739,7 @@ TEST_F(WebAppPolicyManagerTest, UninstallAppInstalledInPreviousSession) {
                                  ExternalInstallSource::kInternalDefault);
 
   // Push a policy with only one of the apps.
-  base::Value::List first_list;
+  base::ListValue first_list;
   first_list.Append(GetWindowedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(first_list));
@@ -721,7 +757,7 @@ TEST_F(WebAppPolicyManagerTest, UninstallAppInstalledInPreviousSession) {
 // session.
 TEST_F(WebAppPolicyManagerTest, UninstallAppInstalledInCurrentSession) {
   // Add two sites, one that opens in a window and one that opens in a tab.
-  base::Value::List first_list;
+  base::ListValue first_list;
   first_list.Append(GetWindowedItem());
   first_list.Append(GetTabbedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
@@ -732,7 +768,7 @@ TEST_F(WebAppPolicyManagerTest, UninstallAppInstalledInCurrentSession) {
   EXPECT_NE(GetPolicyInstalledTabbedApp(), nullptr);
 
   // Push a new policy without the tabbed site.
-  base::Value::List second_list;
+  base::ListValue second_list;
   second_list.Append(GetWindowedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(second_list));
@@ -745,7 +781,7 @@ TEST_F(WebAppPolicyManagerTest, UninstallAppInstalledInCurrentSession) {
 
 // Tests that we correctly reinstall a placeholder app.
 TEST_F(WebAppPolicyManagerTest, ReinstallPlaceholderAppSuccess) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetWindowedItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -772,7 +808,7 @@ TEST_F(WebAppPolicyManagerTest, ReinstallPlaceholderAppSuccess) {
 }
 
 TEST_F(WebAppPolicyManagerTest, DoNotReinstallIfNotPlaceholder) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetWindowedItem());
   web_contents_manager().CreateBasicInstallPageState(
       GURL(kWindowedUrl), GURL(kWindowedUrl), GURL(kWindowedUrl));
@@ -803,7 +839,7 @@ TEST_F(WebAppPolicyManagerTest, DoNotReinstallIfNotPlaceholder) {
 // Tests that we correctly reinstall a placeholder app when the placeholder
 // is using a fallback name.
 TEST_F(WebAppPolicyManagerTest, ReinstallPlaceholderAppWithFallbackAppName) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetFallbackAppNameItem());
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(list));
@@ -840,7 +876,7 @@ TEST_F(WebAppPolicyManagerTest, ReinstallPlaceholderAppWithFallbackAppName) {
   TryToInstallNonexistentPlaceholderApp
 #endif  // BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
 TEST_F(WebAppPolicyManagerTest, MAYBE_TryToInstallNonexistentPlaceholderApp) {
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetWindowedItem());
   web_contents_manager().CreateBasicInstallPageState(
       GURL(kWindowedUrl), GURL(kWindowedUrl), GURL(kWindowedUrl));
@@ -868,14 +904,14 @@ TEST_F(WebAppPolicyManagerTest, MAYBE_TryToInstallNonexistentPlaceholderApp) {
 TEST_F(WebAppPolicyManagerTest, SayRefreshTwoTimesQuickly) {
   // Add an app.
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetWindowedItem());
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                    std::move(list));
   }
   // Before it gets installed, set a policy that uninstalls it.
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetTabbedItem());
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                    std::move(list));
@@ -898,7 +934,7 @@ TEST_F(WebAppPolicyManagerTest, SayRefreshTwoTimesQuickly) {
 TEST_F(WebAppPolicyManagerTest, InstallResultHistogram) {
   base::HistogramTester histograms;
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetWindowedItem());
     profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                    std::move(list));
@@ -915,7 +951,7 @@ TEST_F(WebAppPolicyManagerTest, InstallResultHistogram) {
         webapps::InstallResultCode::kSuccessNewInstall, 1);
   }
   {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(GetTabbedItem());
     list.Append(GetNoContainerItem());
 
@@ -933,11 +969,11 @@ TEST_F(WebAppPolicyManagerTest, InstallResultHistogram) {
 }
 
 TEST_F(WebAppPolicyManagerTest, InvalidUrlParsingSkipped) {
-  base::Value::Dict invalid_url_policy =
-      base::Value::Dict()
+  base::DictValue invalid_url_policy =
+      base::DictValue()
           .Set(kUrlKey, "abcdef")
           .Set(kDefaultLaunchContainerKey, kDefaultLaunchContainerWindowValue);
-  base::Value::List policy_list;
+  base::ListValue policy_list;
   policy_list.Append(std::move(invalid_url_policy));
   profile()->GetPrefs()->SetList(prefs::kWebAppInstallForceList,
                                  std::move(policy_list));
@@ -996,7 +1032,7 @@ TEST_F(WebAppPolicyManagerTest, WebAppSettingsDynamicRefresh) {
 TEST_F(WebAppPolicyManagerTest,
        WebAppSettingsApplyToExistingForceInstalledApp) {
   // Add two sites, one that opens in a window and one that opens in a tab.
-  base::Value::List list;
+  base::ListValue list;
   list.Append(GetWindowedItem());
   list.Append(GetTabbedItem());
 
@@ -1055,7 +1091,7 @@ TEST_F(WebAppPolicyManagerTest, WebAppSettingsForceInstallNewApps) {
     // tab.
     profile()->GetPrefs()->SetList(
         prefs::kWebAppInstallForceList,
-        base::Value::List().Append(GetWindowedItem()).Append(GetTabbedItem()));
+        base::ListValue().Append(GetWindowedItem()).Append(GetTabbedItem()));
     loop.Run();
   }
 
@@ -1094,7 +1130,7 @@ TEST_F(WebAppPolicyManagerDisableListTest, DisableSystemWebApps) {
   // Add supported system web apps to system features disable list policy.
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetUserPref(
       policy::policy_prefs::kSystemFeaturesDisableList,
-      base::Value::List()
+      base::ListValue()
           .Append(static_cast<int>(policy::SystemFeature::kCamera))
           .Append(static_cast<int>(policy::SystemFeature::kOsSettings))
           .Append(static_cast<int>(policy::SystemFeature::kScanning))
@@ -1171,11 +1207,11 @@ TEST_F(WebAppPolicyManagerWithGraduationTest,
 
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetUserPref(
       policy::policy_prefs::kSystemFeaturesDisableList,
-      base::Value::List()
+      base::ListValue()
           .Append(static_cast<int>(policy::SystemFeature::kCamera))
           .Append(static_cast<int>(policy::SystemFeature::kOsSettings))
           .Append(static_cast<int>(policy::SystemFeature::kKeyShortcuts)));
-  base::Value::Dict graduation_status;
+  base::DictValue graduation_status;
   graduation_status.Set("is_enabled", true);
   profile()->GetPrefs()->SetDict(ash::prefs::kGraduationEnablementStatus,
                                  graduation_status.Clone());
@@ -1191,11 +1227,11 @@ TEST_F(WebAppPolicyManagerWithGraduationTest, GraduationDisabledWhenBlocked) {
   // Add supported system web apps to system features disable list policy.
   TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetUserPref(
       policy::policy_prefs::kSystemFeaturesDisableList,
-      base::Value::List()
+      base::ListValue()
           .Append(static_cast<int>(policy::SystemFeature::kCamera))
           .Append(static_cast<int>(policy::SystemFeature::kOsSettings))
           .Append(static_cast<int>(policy::SystemFeature::kKeyShortcuts)));
-  base::Value::Dict graduation_status;
+  base::DictValue graduation_status;
   graduation_status.Set("is_enabled", false);
   profile()->GetPrefs()->SetDict(ash::prefs::kGraduationEnablementStatus,
                                  graduation_status.Clone());
@@ -1235,9 +1271,7 @@ TEST_F(WebAppPolicyManagerWithBocaTest, BocaDisabledWhenDisabledFromPolicy) {
 
 class WebAppPolicyManagerPreventCloseTest
     : public WebAppPolicyManagerTestBase,
-      public testing::WithParamInterface<
-          std::tuple<bool /*prevent_close_enabled*/,
-                     bool /*run_on_os_login_enabled*/>> {
+      public testing::WithParamInterface<bool /*prevent_close_enabled*/> {
  public:
   WebAppPolicyManagerPreventCloseTest() = default;
   WebAppPolicyManagerPreventCloseTest(
@@ -1251,9 +1285,7 @@ class WebAppPolicyManagerPreventCloseTest
     WebAppPolicyManagerTestBase::SetUp();
   }
 
-  bool prevent_close_enabled() const { return std::get<0>(GetParam()); }
-
-  bool run_on_os_login_enabled() const { return std::get<1>(GetParam()); }
+  bool prevent_close_enabled() const { return GetParam(); }
 
  private:
   void BuildAndInitFeatureList() {
@@ -1264,12 +1296,6 @@ class WebAppPolicyManagerPreventCloseTest
       enabled_features.push_back(features::kDesktopPWAsPreventClose);
     } else {
       disabled_features.push_back(features::kDesktopPWAsPreventClose);
-    }
-
-    if (run_on_os_login_enabled()) {
-      enabled_features.push_back(features::kDesktopPWAsRunOnOsLogin);
-    } else {
-      disabled_features.push_back(features::kDesktopPWAsRunOnOsLogin);
     }
 
     scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
@@ -1392,7 +1418,7 @@ TEST_P(WebAppPolicyManagerPreventCloseTest, WebAppSettingsPreventClose) {
 
   bool expected_windowed_url_status = false;
 #if BUILDFLAG(IS_CHROMEOS)
-  if (prevent_close_enabled() && run_on_os_login_enabled()) {
+  if (prevent_close_enabled()) {
     expected_windowed_url_status = true;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -1405,22 +1431,14 @@ TEST_P(WebAppPolicyManagerPreventCloseTest, WebAppSettingsPreventClose) {
 INSTANTIATE_TEST_SUITE_P(
     WebAppPolicyManagerPreventCloseTestWithParams,
     WebAppPolicyManagerPreventCloseTest,
-    testing::Combine(testing::Bool(), testing::Bool()),
-    [](const ::testing::TestParamInfo<
-        std::tuple<bool /*prevent_close_enabled*/,
-                   bool /*run_on_os_login_enabled*/>>& info) {
+    testing::Bool(),
+    [](const ::testing::TestParamInfo<bool /*prevent_close_enabled*/>& info) {
       std::string test_name = "Test_";
 
-      if (std::get<0>(info.param)) {
-        test_name.append("PreventCloseEnabled_");
+      if (info.param) {
+        test_name.append("PreventCloseEnabled");
       } else {
-        test_name.append("PreventCloseDisabled_");
-      }
-
-      if (std::get<1>(info.param)) {
-        test_name.append("RunOnOsLoginEnabled");
-      } else {
-        test_name.append("RunOnOsLoginDisabled");
+        test_name.append("PreventCloseDisabled");
       }
 
       return test_name;
@@ -1471,9 +1489,8 @@ class WebAppPolicyForceUnregistrationTest : public WebAppTest {
     return bitmap;
   }
 
-  webapps::AppId InstallWebAppWithShortcuts(
-      std::map<SquareSizePx, SkBitmap> icon_map,
-      const GURL manifest_id) {
+  webapps::AppId InstallWebAppWithShortcuts(OrderedSizeToBitmap icon_map,
+                                            const GURL manifest_id) {
     std::unique_ptr<WebAppInstallInfo> info =
         std::make_unique<WebAppInstallInfo>(webapps::ManifestId(manifest_id),
                                             /*start_url=*/manifest_id);
@@ -1520,7 +1537,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
 
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   icon_map[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1556,7 +1573,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
   if (!IsOsIntegrationAllowed()) {
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   icon_map[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1592,7 +1609,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
   if (!IsOsIntegrationAllowed()) {
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   icon_map[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1628,7 +1645,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
   if (!IsOsIntegrationAllowed()) {
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
-  std::map<SquareSizePx, SkBitmap> icon_map;
+  OrderedSizeToBitmap icon_map;
   icon_map[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1685,7 +1702,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
   if (!IsOsIntegrationAllowed()) {
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
-  std::map<SquareSizePx, SkBitmap> icon_map1;
+  OrderedSizeToBitmap icon_map1;
   icon_map1[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map1[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1698,7 +1715,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
       profile(), app_id1, app_name1));
 
   const GURL manifest_id2 = GURL("https://example_2.com/index.html");
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   icon_map2[icon_size::k24] =
       CreateSolidColorIcon(icon_size::k24, SK_ColorGREEN);
   icon_map2[icon_size::k128] =
@@ -1741,7 +1758,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
   if (!IsOsIntegrationAllowed()) {
     GTEST_SKIP() << "OS integration execution does not work on this OS";
   }
-  std::map<SquareSizePx, SkBitmap> icon_map1;
+  OrderedSizeToBitmap icon_map1;
   icon_map1[icon_size::k24] = CreateSolidColorIcon(icon_size::k24, SK_ColorRED);
   icon_map1[icon_size::k128] =
       CreateSolidColorIcon(icon_size::k128, SK_ColorGREEN);
@@ -1754,7 +1771,7 @@ TEST_F(WebAppPolicyForceUnregistrationTest,
       profile(), app_id1, app_name1));
 
   const GURL manifest_id2 = GURL("https://example_2.com/index.html");
-  std::map<SquareSizePx, SkBitmap> icon_map2;
+  OrderedSizeToBitmap icon_map2;
   icon_map2[icon_size::k24] =
       CreateSolidColorIcon(icon_size::k24, SK_ColorGREEN);
   icon_map2[icon_size::k128] =

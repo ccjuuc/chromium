@@ -47,23 +47,22 @@ class AttributeCollectionGeneric {
   STACK_ALLOCATED();
 
  public:
-  using ValueType = typename Container::ValueType;
-  using iterator = ValueType*;
+  using iterator = typename Container::pointer;
 
   AttributeCollectionGeneric(Container& attributes) : attributes_(attributes) {}
 
-  ValueType& operator[](unsigned index) const { return at(index); }
-  ValueType& at(unsigned index) const {
+  Container::reference operator[](unsigned index) const { return at(index); }
+  Container::reference at(unsigned index) const {
     CHECK_LT(index, size());
     // SAFETY: Check above.
     return UNSAFE_BUFFERS(begin()[index]);
   }
 
-  ValueType* data() { return attributes_.data(); }
-  const ValueType* data() const { return attributes_.data(); }
+  Container::pointer data() { return attributes_.data(); }
+  Container::const_pointer data() const { return attributes_.data(); }
 
-  iterator begin() const { return attributes_.data(); }
-  iterator end() const {
+  Container::pointer begin() const { return attributes_.data(); }
+  Container::pointer end() const {
     // SAFETY: size() describes the number of elements at data().
     // This form is used in place of end() to avoid a conflict
     // between the pointer type used as an iterator for this class,
@@ -71,7 +70,7 @@ class AttributeCollectionGeneric {
     return UNSAFE_BUFFERS(begin() + size());
   }
 
-  unsigned size() const { return attributes_.size(); }
+  unsigned size() const { return static_cast<unsigned>(attributes_.size()); }
   bool IsEmpty() const { return !size(); }
 
   // Find() returns nullptr if the specified name is not found.
@@ -123,8 +122,8 @@ class AttributeCollectionGeneric {
   //      corresponding to the him can  be reallocated to a different string
   //      making the |hint| semantically invalid. However, because the
   //      |collection| is not mutated, |hint| will not match anything.
-  iterator FindHinted(const StringView& name,
-                      AtomicStringTable::WeakResult hint) const;
+  Container::pointer FindHinted(const StringView& name,
+                                AtomicStringTable::WeakResult hint) const;
   wtf_size_t FindIndexHinted(const StringView& name,
                              AtomicStringTable::WeakResult hint) const;
 
@@ -134,33 +133,16 @@ class AttributeCollectionGeneric {
   ContainerMemberType attributes_;
 };
 
-class AttributeArray {
-  DISALLOW_NEW();
-
- public:
-  using ValueType = const Attribute;
-
-  AttributeArray(const Attribute* array, unsigned size)
-      : array_(array), size_(size) {}
-
-  const Attribute* data() const { return array_; }
-  unsigned size() const { return size_; }
-
- private:
-  const Attribute* array_;
-  unsigned size_;
-};
+using AttributeArray = base::span<const Attribute>;
 
 class AttributeCollection
     : public AttributeCollectionGeneric<const AttributeArray> {
  public:
   AttributeCollection()
-      : AttributeCollectionGeneric<const AttributeArray>(
-            AttributeArray(nullptr, 0)) {}
+      : AttributeCollectionGeneric<const AttributeArray>(AttributeArray()) {}
 
   explicit AttributeCollection(base::span<const Attribute> attributes)
-      : AttributeCollectionGeneric<const AttributeArray>(
-            AttributeArray(attributes.data(), attributes.size())) {}
+      : AttributeCollectionGeneric<const AttributeArray>(attributes) {}
 };
 
 using AttributeVector = Vector<Attribute, 4>;
@@ -206,11 +188,10 @@ template <typename Container, typename ContainerMemberType>
 inline wtf_size_t
 AttributeCollectionGeneric<Container, ContainerMemberType>::FindIndex(
     const QualifiedName& name) const {
-  iterator end = this->end();
-  wtf_size_t index = 0;
-  for (iterator it = begin(); it != end; UNSAFE_TODO(++it), ++index) {
-    if (it->GetName().Matches(name))
+  for (wtf_size_t index = 0; index < size(); ++index) {
+    if (at(index).GetName().Matches(name)) {
       return index;
+    }
   }
   return kNotFound;
 }
@@ -234,13 +215,13 @@ AttributeCollectionGeneric<Container, ContainerMemberType>::FindHinted(
 
   // Optimize for the case where the attribute exists and its name exactly
   // matches.
-  iterator end = this->end();
-  for (iterator it = begin(); it != end; UNSAFE_TODO(++it)) {
+  for (unsigned index = 0; index < size(); ++index) {
     // FIXME: Why check the prefix? Namespaces should be all that matter.
     // Most attributes (all of HTML and CSS) have no namespace.
-    if (!it->GetName().HasPrefix()) {
-      if (hint == it->LocalName()) {
-        return it;
+    auto& item = at(index);
+    if (!item.GetName().HasPrefix()) {
+      if (hint == item.LocalName()) {
+        return &item;
       }
     } else {
       has_attributes_with_prefixes = true;
@@ -259,10 +240,11 @@ inline typename AttributeCollectionGeneric<Container,
                                            ContainerMemberType>::iterator
 AttributeCollectionGeneric<Container, ContainerMemberType>::Find(
     const QualifiedName& name) const {
-  iterator end = this->end();
-  for (iterator it = begin(); it != end; UNSAFE_TODO(++it)) {
-    if (it->GetName().Matches(name))
-      return it;
+  for (unsigned index = 0; index < size(); ++index) {
+    auto& item = at(index);
+    if (item.GetName().Matches(name)) {
+      return &item;
+    }
   }
   return nullptr;
 }
@@ -274,18 +256,22 @@ AttributeCollectionGeneric<Container, ContainerMemberType>::FindWithPrefix(
   // Check all attributes with prefixes. This is a case sensitive check.
   // Attributes with empty prefixes are expected to be handled outside this
   // function.
-  iterator end = this->end();
-  for (iterator it = begin(); it != end; UNSAFE_TODO(++it)) {
-    if (!it->GetName().HasPrefix()) {
+  for (unsigned index = 0; index < size(); ++index) {
+    auto& item = at(index);
+    if (!item.GetName().HasPrefix()) {
       // Skip attributes with no prefixes because they must be checked in
       // FindIndex(const AtomicString&).
-      DCHECK(!(name == it->LocalName()));
+      DCHECK(!(name == item.LocalName()));
     } else {
-      // FIXME: Would be faster to do this comparison without calling ToString,
-      // which generates a temporary string by concatenation. But this branch is
-      // only reached if the attribute name has a prefix, which is rare in HTML.
-      if (name == it->GetName().ToString()) {
-        return it;
+      // `name` equals "prefix:localName"; compare it piece by piece instead of
+      // building that temporary string via QualifiedName::ToString().
+      const AtomicString& prefix = item.Prefix();
+      const AtomicString& local_name = item.LocalName();
+      if (name.length() == prefix.length() + 1 + local_name.length() &&
+          name.substr(0, prefix.length()) == prefix &&
+          name.substr(prefix.length()).starts_with(':') &&
+          name.substr(prefix.length() + 1) == local_name) {
+        return &item;
       }
     }
   }

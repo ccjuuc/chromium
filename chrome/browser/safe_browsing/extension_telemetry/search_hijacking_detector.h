@@ -29,6 +29,18 @@ class SearchHijackingDetector {
   SearchHijackingDetector(const SearchHijackingDetector&) = delete;
   SearchHijackingDetector& operator=(const SearchHijackingDetector&) = delete;
 
+  enum class HeuristicResult {
+    kUnknown = 0,
+    kNoMatch = 1,
+    kMatch = 2,
+  };
+
+  // Returns kMatch if the heuristic matched within the specified `interval`,
+  // kNoMatch if the detector is running but there were no recent matches,
+  // and kUnknown otherwise.
+  static HeuristicResult GetRecentHeuristicResult(PrefService* pref_service,
+                                                  base::TimeDelta interval);
+
   // Records an omnibox search event associated with
   // the default search engine (DSE)
   void OnOmniboxSearch(const AutocompleteMatch& match);

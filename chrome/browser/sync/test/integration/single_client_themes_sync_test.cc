@@ -21,6 +21,7 @@
 #include "chrome/browser/themes/theme_service_utils.h"
 #include "chrome/browser/themes/theme_syncable_service.h"
 #include "chrome/common/pref_names.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -32,6 +33,9 @@
 #include "components/sync/test/fake_server.h"
 #include "components/sync/test/test_matchers.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/test_launcher.h"
+#include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registry.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace {
@@ -293,7 +297,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTest,
         prefs::kDeprecatedBrowserColorSchemeDoNotUse);
     preference_specifics->set_value(
         preferences_helper::ConvertPrefValueToValueInSpecifics(base::Value(
-            static_cast<int>(ThemeService::BrowserColorScheme::kLight))));
+            std::to_underlying(ThemeService::BrowserColorScheme::kLight))));
 
     GetFakeServer()->InjectEntity(
         syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
@@ -372,7 +376,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTest,
         prefs::kDeprecatedBrowserColorSchemeDoNotUse);
     preference_specifics->set_value(
         preferences_helper::ConvertPrefValueToValueInSpecifics(base::Value(
-            static_cast<int>(ThemeService::BrowserColorScheme::kDark))));
+            std::to_underlying(ThemeService::BrowserColorScheme::kDark))));
 
     GetFakeServer()->InjectEntity(
         syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
@@ -434,7 +438,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTest,
         prefs::kDeprecatedBrowserColorSchemeDoNotUse);
     preference_specifics->set_value(
         preferences_helper::ConvertPrefValueToValueInSpecifics(base::Value(
-            static_cast<int>(ThemeService::BrowserColorScheme::kLight))));
+            std::to_underlying(ThemeService::BrowserColorScheme::kLight))));
 
     GetFakeServer()->InjectEntity(
         syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
@@ -473,7 +477,7 @@ IN_PROC_BROWSER_TEST_P(
         prefs::kDeprecatedBrowserColorSchemeDoNotUse);
     preference_specifics->set_value(
         preferences_helper::ConvertPrefValueToValueInSpecifics(base::Value(
-            static_cast<int>(ThemeService::BrowserColorScheme::kLight))));
+            std::to_underlying(ThemeService::BrowserColorScheme::kLight))));
     GetFakeServer()->InjectEntity(
         syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
             /*non_unique_name=*/prefs::kDeprecatedBrowserColorSchemeDoNotUse,
@@ -537,7 +541,7 @@ IN_PROC_BROWSER_TEST_P(
         prefs::kDeprecatedBrowserColorSchemeDoNotUse);
     preference_specifics->set_value(
         preferences_helper::ConvertPrefValueToValueInSpecifics(base::Value(
-            static_cast<int>(ThemeService::BrowserColorScheme::kLight))));
+            std::to_underlying(ThemeService::BrowserColorScheme::kLight))));
     GetFakeServer()->InjectEntity(
         syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
             /*non_unique_name=*/prefs::kDeprecatedBrowserColorSchemeDoNotUse,
@@ -652,10 +656,22 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
   UseCustomTheme(GetProfile(0), 0);
   ASSERT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
 
+  const std::string custom_theme_id = GetCustomTheme(0);
+  ASSERT_FALSE(custom_theme_id.empty());
+
+  extensions::ExtensionRegistry* registry =
+      extensions::ExtensionRegistry::Get(GetProfile(0));
+  ASSERT_TRUE(registry->GetInstalledExtension(custom_theme_id));
+  ASSERT_FALSE(registry->disabled_extensions().Contains(custom_theme_id));
+
   GetFakeServer()->InjectEntity(CreateGrayscaleThemeEntity());
 
   ASSERT_TRUE(SetupSync());
   EXPECT_TRUE(GrayscaleThemeChecker(GetProfile(0)).Wait());
+
+  // The custom theme should remain installed but disabled.
+  EXPECT_TRUE(registry->GetInstalledExtension(custom_theme_id));
+  EXPECT_TRUE(registry->disabled_extensions().Contains(custom_theme_id));
 
   // Disable sync.
   ASSERT_TRUE(
@@ -664,6 +680,9 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
   // Original local theme should get re-applied.
   EXPECT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
   EXPECT_FALSE(UsingGrayscaleTheme(GetProfile(0)));
+
+  EXPECT_TRUE(registry->GetInstalledExtension(custom_theme_id));
+  EXPECT_FALSE(registry->disabled_extensions().Contains(custom_theme_id));
 }
 
 IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
@@ -747,8 +766,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
   ASSERT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
 
   // Sign in and activate sync transport.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   EXPECT_THAT(GetClient(0)->GetLocalDataDescriptionAndWait(syncer::THEMES),
@@ -777,8 +795,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
   GetFakeServer()->InjectEntity(CreateGrayscaleThemeEntity());
 
   // Sign in and activate sync transport.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   ASSERT_TRUE(GrayscaleThemeChecker(GetProfile(0)).Wait());
@@ -821,8 +838,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientThemesSyncTestWithAccountThemesSeparation,
   GetFakeServer()->InjectEntity(CreateGrayscaleThemeEntity());
 
   // Sign in and activate sync transport.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   ASSERT_TRUE(GrayscaleThemeChecker(GetProfile(0)).Wait());
@@ -888,8 +904,7 @@ IN_PROC_BROWSER_TEST_P(
 
   GetFakeServer()->InjectEntity(CreateGrayscaleThemeEntity());
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 
   // Account theme is effective.
   ASSERT_TRUE(GrayscaleThemeChecker(GetProfile(0)).Wait());
@@ -930,8 +945,7 @@ IN_PROC_BROWSER_TEST_P(
 #if BUILDFLAG(IS_CHROMEOS)
   ASSERT_TRUE(SetupSync());
 #else
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Account theme is effective.
@@ -999,8 +1013,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(UsingDefaultTheme(GetProfile(0)));
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 
   themes_helper::UseGrayscaleTheme(GetProfile(0));
   ASSERT_TRUE(CommittedAllNudgedChangesChecker(GetSyncService(0)).Wait());
@@ -1032,8 +1045,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(UsingDefaultTheme(GetProfile(0)));
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 
   themes_helper::UseGrayscaleTheme(GetProfile(0));
   ASSERT_TRUE(CommittedAllNudgedChangesChecker(GetSyncService(0)).Wait());
@@ -1069,8 +1081,7 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_TRUE(SetupClients());
   ASSERT_TRUE(UsingDefaultTheme(GetProfile(0)));
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 
   themes_helper::UseGrayscaleTheme(GetProfile(0));
   ASSERT_TRUE(CommittedAllNudgedChangesChecker(GetSyncService(0)).Wait());
@@ -1117,5 +1128,93 @@ IN_PROC_BROWSER_TEST_P(
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+class SingleClientThemesMigrateSyncingUserToSignedInSyncTest
+    : public SingleClientThemesSyncTestWithAccountThemesSeparation {
+ public:
+  SingleClientThemesMigrateSyncingUserToSignedInSyncTest() {
+    std::vector<base::test::FeatureRef> enabled_features = {
+        syncer::kReplaceSyncPromosWithSignInPromos,
+        syncer::kSeparateLocalAndAccountThemes};
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (content::IsPreTest()) {
+      disabled_features.push_back(switches::kMigrateSyncingUserToSignedIn);
+    } else {
+      enabled_features.push_back(switches::kMigrateSyncingUserToSignedIn);
+    }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    SingleClientThemesMigrateSyncingUserToSignedInSyncTest,
+    testing::Values(SyncTest::SetupSyncMode::kSyncTheFeature),
+    testing::PrintToStringParamName());
+
+IN_PROC_BROWSER_TEST_P(SingleClientThemesMigrateSyncingUserToSignedInSyncTest,
+                       PRE_ShouldDeduplicateSameLocalAndAccountTheme) {
+  ASSERT_TRUE(SetupClients());
+
+  UseCustomTheme(GetProfile(0), 0);
+  ASSERT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
+
+  // Same theme on the server.
+  GetFakeServer()->InjectEntity(CreateCustomThemeEntity(GetCustomTheme(0)));
+  ASSERT_TRUE(SetupSyncWithMode(SyncTest::SetupSyncMode::kSyncTheFeature));
+  ASSERT_TRUE(UsingCustomTheme(GetProfile(0)));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientThemesMigrateSyncingUserToSignedInSyncTest,
+                       ShouldDeduplicateSameLocalAndAccountTheme) {
+  ASSERT_TRUE(SetupClients());
+  // The migration is triggered right after the initial sync. Since the local
+  // theme was the same as the account theme, the saved local theme will get
+  // removed.
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+
+  ASSERT_TRUE(UsingCustomTheme(GetProfile(0)));
+  // Disable sync.
+  ASSERT_TRUE(
+      GetClient(0)->DisableSelectableType(syncer::UserSelectableType::kThemes));
+
+  // The saved local theme was de-duped. Thus upon turning off the themes sync,
+  // since no local theme is saved, the default theme is applied.
+  EXPECT_TRUE(DefaultThemeChecker(GetProfile(0)).Wait());
+  EXPECT_FALSE(UsingCustomTheme(GetProfile(0)));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientThemesMigrateSyncingUserToSignedInSyncTest,
+                       PRE_ShouldNotDeduplicateDifferentLocalAndAccountTheme) {
+  ASSERT_TRUE(SetupClients());
+
+  UseCustomTheme(GetProfile(0), 0);
+  ASSERT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
+
+  // Different theme on the server.
+  GetFakeServer()->InjectEntity(CreateGrayscaleThemeEntity());
+
+  ASSERT_TRUE(SetupSyncWithMode(SyncTest::SetupSyncMode::kSyncTheFeature));
+  ASSERT_TRUE(GrayscaleThemeChecker(GetProfile(0)).Wait());
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientThemesMigrateSyncingUserToSignedInSyncTest,
+                       ShouldNotDeduplicateDifferentLocalAndAccountTheme) {
+  ASSERT_TRUE(SetupClients());
+  // The migration is triggered right after the initial sync. However, since the
+  // local theme is different from the account theme, no de-duplication happens.
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+
+  // Disable sync.
+  ASSERT_TRUE(
+      GetClient(0)->DisableSelectableType(syncer::UserSelectableType::kThemes));
+
+  // The saved local theme is not de-duped. Thus upon turning off the themes
+  // sync, the saved local theme is applied.
+  EXPECT_TRUE(CustomThemeChecker(GetProfile(0)).Wait());
+}
 
 }  // namespace

@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/barrier_callback.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -46,14 +45,12 @@
 #include "chrome/browser/ash/app_list/md_icon_normalizer.h"
 #include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/component_extension_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom.h"
-#include "components/services/app_service/public/cpp/features.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace apps {

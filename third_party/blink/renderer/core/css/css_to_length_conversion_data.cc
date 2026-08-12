@@ -198,9 +198,8 @@ CSSToLengthConversionData::LineHeightSize::LineHeightSize(
     const FontSizeStyle& style,
     const ComputedStyle* root_style)
     : LineHeightSize(
-          style.SpecifiedLineHeight(),
-          root_style ? root_style->SpecifiedLineHeight()
-                     : style.SpecifiedLineHeight(),
+          style.LineHeight(),
+          root_style ? root_style->LineHeight() : style.LineHeight(),
           style.GetFont(),
           root_style ? root_style->GetFont() : style.GetFont(),
           style.EffectiveZoom(),
@@ -307,10 +306,10 @@ std::optional<double> CSSToLengthConversionData::ContainerSizes::FindNamedSize(
 
 CSSToLengthConversionData::AnchorData::AnchorData(
     AnchorEvaluator* evaluator,
-    const StylePositionAnchor& position_anchor,
+    const DefaultAnchorData& default_anchor_data,
     const std::optional<PositionAreaOffsets>& position_area_offsets)
     : evaluator_(evaluator),
-      position_anchor_(position_anchor),
+      default_anchor_data_(default_anchor_data),
       position_area_offsets_(position_area_offsets) {}
 
 CSSToLengthConversionData::CSSToLengthConversionData(

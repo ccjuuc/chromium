@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.site_settings;
 
 import static org.junit.Assert.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 
 import static org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge.SITE_WILDCARD;
@@ -25,8 +24,9 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
@@ -45,7 +45,6 @@ import org.chromium.chrome.browser.browsing_data.TimePeriod;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.components.browser_ui.site_settings.ChosenObjectInfo;
 import org.chromium.components.browser_ui.site_settings.ContentSettingException;
@@ -66,8 +65,9 @@ import org.chromium.components.browsing_data.content.BrowsingDataModel;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.content_settings.ProviderType;
-import org.chromium.components.content_settings.SessionModel;
 import org.chromium.content_public.browser.BrowserContextHandle;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
@@ -90,7 +90,7 @@ import java.util.concurrent.TimeoutException;
 })
 @Batch(Batch.PER_CLASS)
 public class WebsitePermissionsFetcherTest {
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private SiteSettingsDelegate mSiteSettingsDelegate;
 
@@ -331,17 +331,6 @@ public class WebsitePermissionsFetcherTest {
         }
     }
 
-    public static class EmbargoedAndOneTimeSessionParameters implements ParameterProvider {
-        @Override
-        public List<ParameterSet> getParameters() {
-            return Arrays.asList(
-                    new ParameterSet().value(false, false).name("NormalDurable"),
-                    new ParameterSet().value(true, false).name("EmbargoedDurable"),
-                    new ParameterSet().value(false, true).name("NormalOneTime"),
-                    new ParameterSet().value(true, true).name("EmbargoedOneTime"));
-        }
-    }
-
     public static class BrowsingDataModelEnabled implements ParameterProvider {
         @Override
         public List<ParameterSet> getParameters() {
@@ -369,7 +358,7 @@ public class WebsitePermissionsFetcherTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
     }
 
     @After
@@ -419,7 +408,7 @@ public class WebsitePermissionsFetcherTest {
 
     @Test
     @SmallTest
-    @DisabledTest(message = "https://crbug.com/1085592")
+    @DisabledTest(message = "https://crbug.com/40693706")
     public void testFetcherDoesNotTimeOutWithManyUrls() throws Exception {
         final WebsitePermissionsWaiter waiter = new WebsitePermissionsWaiter();
         // Set lots of permissions values.
@@ -471,7 +460,7 @@ public class WebsitePermissionsFetcherTest {
                                         ContentSetting.BLOCK);
                     }
 
-                    // This should not time out. See crbug.com/732907.
+                    // This should not time out. See crbug.com/40525586.
                     WebsitePermissionsFetcher fetcher =
                             new WebsitePermissionsFetcher(mSiteSettingsDelegate);
                     fetcher.fetchAllPreferences(waiter);
@@ -613,124 +602,88 @@ public class WebsitePermissionsFetcherTest {
 
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        ContentSettingsType.AR,
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        ContentSettingsType.AR, ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.HAND_TRACKING,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.IDLE_DETECTION,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        getGeolocationType(),
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        getGeolocationType(), ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.MIDI_SYSEX,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.PROTECTED_MEDIA_IDENTIFIER,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        ContentSettingsType.NFC,
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        ContentSettingsType.NFC, ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.NOTIFICATIONS,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.MEDIASTREAM_CAMERA,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.MEDIASTREAM_MIC,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.CLIPBOARD_READ_WRITE,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.SENSORS,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        ContentSettingsType.VR,
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
-        websitePreferenceBridge.addPermissionInfo(
-                new PermissionInfo(
-                        ContentSettingsType.LOCAL_NETWORK_ACCESS,
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        ContentSettingsType.VR, ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.LOCAL_NETWORK,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         ContentSettingsType.LOOPBACK_NETWORK,
                         ORIGIN,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
 
         // Add content setting exception types.
         // If the ContentSettingsType.MAX_VALUE value changes *and* a new value has been exposed on
         // Android, then please update this code block to include a test for your new type.
         // Otherwise, just update count in the assert.
-        // TODO(https://b/332704817): Add test for Tracking Protection content setting after Android
-        // integration.
-        assertEquals(122, ContentSettingsType.MAX_VALUE);
+        assertEquals(121, ContentSettingsType.MAX_VALUE);
         websitePreferenceBridge.addContentSettingException(
                 new ContentSettingException(
                         ContentSettingsType.COOKIES,
@@ -831,13 +784,6 @@ public class WebsitePermissionsFetcherTest {
                         /* isEmbargoed= */ false));
         websitePreferenceBridge.addContentSettingException(
                 new ContentSettingException(
-                        ContentSettingsType.LOCAL_NETWORK_ACCESS,
-                        ORIGIN,
-                        ContentSetting.DEFAULT,
-                        ProviderType.PREF_PROVIDER,
-                        /* isEmbargoed= */ false));
-        websitePreferenceBridge.addContentSettingException(
-                new ContentSettingException(
                         ContentSettingsType.LOCAL_NETWORK,
                         ORIGIN,
                         ContentSetting.DEFAULT,
@@ -867,7 +813,7 @@ public class WebsitePermissionsFetcherTest {
 
             doAnswer(this::mockBdmCallback)
                     .when(mSiteSettingsDelegate)
-                    .getBrowsingDataModel(any(Callback.class));
+                    .getBrowsingDataModel(MockitoHelper.anyCallback());
         } else {
             // Add storage info.
             websitePreferenceBridge.addStorageInfo(new StorageInfo(ORIGIN, storageSize));
@@ -925,8 +871,6 @@ public class WebsitePermissionsFetcherTest {
                     Assert.assertNotNull(site.getPermissionInfo(ContentSettingsType.VR));
                     Assert.assertNotNull(site.getPermissionInfo(ContentSettingsType.HAND_TRACKING));
                     Assert.assertNotNull(site.getPermissionInfo(ContentSettingsType.AR));
-                    Assert.assertNotNull(
-                            site.getPermissionInfo(ContentSettingsType.LOCAL_NETWORK_ACCESS));
                     Assert.assertNotNull(site.getPermissionInfo(ContentSettingsType.LOCAL_NETWORK));
                     Assert.assertNotNull(
                             site.getPermissionInfo(ContentSettingsType.LOOPBACK_NETWORK));
@@ -1035,7 +979,7 @@ public class WebsitePermissionsFetcherTest {
     }
 
     private Object mockBdmCallback(InvocationOnMock invocation) {
-        var callback = (Callback<BrowsingDataModel>) invocation.getArguments()[0];
+        Callback<BrowsingDataModel> callback = invocation.getArgument(0);
         callback.onResult(mBrowsingDataModel);
         return null;
     }
@@ -1052,18 +996,13 @@ public class WebsitePermissionsFetcherTest {
 
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        getGeolocationType(),
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        getGeolocationType(), ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
                         getGeolocationType(),
                         chromiumOrigin,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
 
         Website expectedGoogleWebsite =
                 new Website(WebsiteAddress.create(ORIGIN), WebsiteAddress.create(null));
@@ -1098,8 +1037,7 @@ public class WebsitePermissionsFetcherTest {
                         getGeolocationType(),
                         exampleOrigin,
                         SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        /* isEmbargoed= */ false));
 
         Website expectedExampleWebsite =
                 new Website(WebsiteAddress.create(exampleOrigin), WebsiteAddress.create(null));
@@ -1143,9 +1081,8 @@ public class WebsitePermissionsFetcherTest {
 
     @Test
     @SmallTest
-    @UseMethodParameter(EmbargoedAndOneTimeSessionParameters.class)
-    public void testFetchPreferencesForCategoryPermissionInfoTypes(
-            boolean isEmbargoed, boolean isOneTime) {
+    @UseMethodParameter(EmbargoedParams.class)
+    public void testFetchPreferencesForCategoryPermissionInfoTypes(boolean isEmbargoed) {
         WebsitePermissionsFetcher fetcher = new WebsitePermissionsFetcher(mSiteSettingsDelegate);
         FakeWebsitePreferenceBridge websitePreferenceBridge = new FakeWebsitePreferenceBridge();
         fetcher.setWebsitePreferenceBridgeForTesting(websitePreferenceBridge);
@@ -1167,11 +1104,9 @@ public class WebsitePermissionsFetcherTest {
                                 ContentSettingsType.SENSORS,
                                 ContentSettingsType.VR));
 
-        @SessionModel.EnumType
-        int sessionModel = isOneTime ? SessionModel.ONE_TIME : SessionModel.DURABLE;
         for (@ContentSettingsType.EnumType int type : permissionInfoTypes) {
             PermissionInfo fakePermissionInfo =
-                    new PermissionInfo(type, ORIGIN, SITE_WILDCARD, isEmbargoed, sessionModel);
+                    new PermissionInfo(type, ORIGIN, SITE_WILDCARD, isEmbargoed);
             websitePreferenceBridge.addPermissionInfo(fakePermissionInfo);
 
             fetcher.fetchPreferencesForCategory(
@@ -1182,8 +1117,6 @@ public class WebsitePermissionsFetcherTest {
 
                         Website site = sites.iterator().next();
                         Assert.assertNotNull(site.getPermissionInfo(type));
-                        Assert.assertEquals(
-                                sessionModel, site.getPermissionInfo(type).getSessionModel());
                     });
         }
     }
@@ -1634,18 +1567,10 @@ public class WebsitePermissionsFetcherTest {
 
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        getGeolocationType(),
-                        ORIGIN,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        getGeolocationType(), ORIGIN, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addPermissionInfo(
                 new PermissionInfo(
-                        getGeolocationType(),
-                        EMBEDDER,
-                        SITE_WILDCARD,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE));
+                        getGeolocationType(), EMBEDDER, SITE_WILDCARD, /* isEmbargoed= */ false));
         websitePreferenceBridge.addContentSettingException(
                 new ContentSettingException(
                         ContentSettingsType.STORAGE_ACCESS,

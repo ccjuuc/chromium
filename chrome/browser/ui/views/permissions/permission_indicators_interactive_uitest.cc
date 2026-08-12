@@ -5,10 +5,8 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
-#include "chrome/browser/ui/views/location_bar/omnibox_chip_button.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/content_settings/core/common/features.h"
@@ -18,7 +16,6 @@
 #include "net/dns/mock_host_resolver.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/vector_icon_types.h"
-#include "ui/views/interaction/interaction_test_util_views.h"
 
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
@@ -67,7 +64,7 @@ class PermissionIndicatorsInteractiveUITest : public InteractiveBrowserTest {
 
   void SetPermission(ContentSettingsType type, ContentSetting setting) {
     HostContentSettingsMap* map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
     map->SetContentSettingDefaultScope(GetURL(), GetURL(), type, setting);
   }
@@ -107,18 +104,18 @@ IN_PROC_BROWSER_TEST_F(PermissionIndicatorsInteractiveUITest,
       ExecuteJs(kWebContentsElementId, "requestCamera"),
       // `getUserMedia` is async, so wait until media stream is opened.
       WaitForStateChange(kWebContentsElementId, GetCameraStreamStateChange()),
-      WaitForShow(ContentSettingImageView::kMediaActivityIndicatorElementId),
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_for_testing,
-          &vector_icons::kVideocamChromeRefreshIcon),
+      WaitForShow(ContentSettingImageModel::kMediaStreamIconElementId),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_for_testing,
+                        &(features::IsRoundedIconsEnabled()
+                              ? vector_icons::kVideocamIcon
+                              : vector_icons::kVideocamChromeRefreshOldIcon)),
       // Permission is granted, there is no badge.
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_badge_for_testing,
-          &gfx::VectorIcon::EmptyIcon()),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_badge_for_testing,
+                        &gfx::VectorIcon::EmptyIcon()),
       ExecuteJs(kWebContentsElementId, "stopCamera"),
-      WaitForHide(ContentSettingImageView::kMediaActivityIndicatorElementId));
+      WaitForHide(ContentSettingImageModel::kMediaStreamIconElementId));
 }
 
 // Start using a camera, then start using a microphone, stop using the camera,
@@ -133,30 +130,30 @@ IN_PROC_BROWSER_TEST_F(PermissionIndicatorsInteractiveUITest,
       NavigateWebContents(kWebContentsElementId, GetURL()),
       ExecuteJs(kWebContentsElementId, "requestMicrophone"),
       WaitForStateChange(kWebContentsElementId, GetMicStreamStateChange()),
-      WaitForShow(ContentSettingImageView::kMediaActivityIndicatorElementId),
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_for_testing,
-          &vector_icons::kMicChromeRefreshIcon),
+      WaitForShow(ContentSettingImageModel::kMediaStreamIconElementId),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_for_testing,
+                        &(features::IsRoundedIconsEnabled()
+                              ? vector_icons::kMicIcon
+                              : vector_icons::kMicChromeRefreshOldIcon)),
       // Permission is granted, there is no badge.
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_badge_for_testing,
-          &gfx::VectorIcon::EmptyIcon()),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_badge_for_testing,
+                        &gfx::VectorIcon::EmptyIcon()),
       ExecuteJs(kWebContentsElementId, "requestCamera"),
       // `getUserMedia` is async, so wait until media stream is opened.
       WaitForStateChange(kWebContentsElementId, GetCameraStreamStateChange()),
-      WaitForShow(ContentSettingImageView::kMediaActivityIndicatorElementId),
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_for_testing,
-          &vector_icons::kVideocamChromeRefreshIcon),
+      WaitForShow(ContentSettingImageModel::kMediaStreamIconElementId),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_for_testing,
+                        &(features::IsRoundedIconsEnabled()
+                              ? vector_icons::kVideocamIcon
+                              : vector_icons::kVideocamChromeRefreshOldIcon)),
       // Permission is granted, there is no badge.
-      CheckViewProperty(
-          ContentSettingImageView::kMediaActivityIndicatorElementId,
-          &ContentSettingImageView::get_icon_badge_for_testing,
-          &gfx::VectorIcon::EmptyIcon()),
+      CheckViewProperty(ContentSettingImageModel::kMediaStreamIconElementId,
+                        &ContentSettingImageView::get_icon_badge_for_testing,
+                        &gfx::VectorIcon::EmptyIcon()),
       ExecuteJs(kWebContentsElementId, "stopCamera"),
       ExecuteJs(kWebContentsElementId, "stopMic"),
-      WaitForHide(ContentSettingImageView::kMediaActivityIndicatorElementId));
+      WaitForHide(ContentSettingImageModel::kMediaStreamIconElementId));
 }

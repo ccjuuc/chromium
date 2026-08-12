@@ -6,7 +6,6 @@
 #define IOS_CHROME_BROWSER_NTP_UI_BUNDLED_NEW_TAB_PAGE_COORDINATOR_H_
 
 #import "ios/chrome/browser/discover_feed/model/feed_constants.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_configuring.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 
 namespace web {
@@ -16,9 +15,9 @@ class WebState;
 @class BubblePresenter;
 @protocol NewTabPageComponentFactoryProtocol;
 @protocol NewTabPageControllerDelegate;
+@protocol PromosManagerUIHandler;
 
-// Coordinator handling the NTP.
-@interface NewTabPageCoordinator : ChromeCoordinator <NewTabPageConfiguring>
+@interface NewTabPageCoordinator : ChromeCoordinator
 
 // Initializes this coordinator with its `browser`, a nil base view
 // controller, and the given `componentFactory`.
@@ -56,8 +55,8 @@ class WebState;
 // Called when a snapshot of the content will be taken.
 - (void)willUpdateSnapshot;
 
-// Whether the NTP is scrolled to the top.
-- (BOOL)isScrolledToTop;
+// Scroll the NTP to the top.
+- (void)scrollToTop;
 
 // Reloads the content of the NewTabPage. Does not do anything on Incognito.
 - (void)reload;
@@ -77,8 +76,6 @@ class WebState;
 // Tell location bar has taken focus.
 - (void)locationBarDidBecomeFirstResponder;
 
-// Constrains the named layout guide for the feed IPH.
-- (void)constrainNamedGuideForFeedIPH;
 
 // Called when the feed has completed layout updates of type
 // `updateType`.
@@ -97,11 +94,26 @@ class WebState;
 // Presents an IPH bubble to highlight the Lens icon in the NTP Fakebox.
 - (void)presentLensIconBubble;
 
+// Navigates to the NTP if needed and presents an IPH bubble to highlight the
+// AI Mode button.
+- (void)presentAIModeBubble;
+
+// Shows the Home Background Customization promo.
+- (void)showHomeBackgroundCustomizationPromoWithUIHandler:
+    (id<PromosManagerUIHandler>)uiHandler;
+
 // Returns `YES` if the feed is currently visible on the NTP.
 - (BOOL)isFeedVisible;
 
 // Dismisses all presented views owned by the NTP.
 - (void)clearPresentedState;
+
+// Called when the home customization action is tapped in the NTP overflow menu.
+// Presents the  customization menu.
+- (void)customizationMenuWasTapped;
+
+// Controls the visibility of the blue dot on the NTP.
+- (void)setBlueDotVisible:(BOOL)visible;
 
 @end
 

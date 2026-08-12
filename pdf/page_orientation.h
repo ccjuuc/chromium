@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+#include "base/notreached.h"
+
 namespace chrome_pdf {
 
 // Enumeration of allowed page orientations. Assigned values permit simple
@@ -44,7 +46,13 @@ constexpr int GetClockwiseRotationSteps(PageOrientation orientation) {
     case PageOrientation::kClockwise270:
       return 3;
   }
+  NOTREACHED();
 }
+
+// Converts 90 degree clockwise rotation steps to `PageOrientation`.
+// `steps` must be non-negative.
+// This is the reverse of GetClockwiseRotationSteps().
+PageOrientation PageOrientationFromClockwiseRotationSteps(int steps);
 
 // Whether the page orientation is `kClockwise90` or `kClockwise270`.
 bool IsTransposedPageOrientation(PageOrientation orientation);

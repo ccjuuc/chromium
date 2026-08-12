@@ -42,12 +42,17 @@ PostStyleUpdateScope::~PostStyleUpdateScope() {
 }
 
 bool PostStyleUpdateScope::Apply() {
+  if (current_ != this) {
+    // We only record and apply updates in the outermost scope (reflected by
+    // current_).
+    return false;
+  }
+
   if (ApplyPseudo()) {
     return true;
   }
   ApplyAnimations();
-  document_.RemoveFinishedTopLayerElements();
-  return false;
+  return document_.RemoveFinishedTopLayerElements();
 }
 
 bool PostStyleUpdateScope::ApplyPseudo() {
@@ -82,9 +87,13 @@ void PostStyleUpdateScope::ApplyAnimations() {
     element_animations->CssAnimations().MaybeApplyPendingUpdate(element.Get());
   }
 
-  // NOTE(crbug.com/446159591): With AnimationTrigger enabled, we see renderer
-  // hang reports. This hang should be fixed before enabling AnimationTrigger.
-  if (RuntimeEnabledFeatures::AnimationTriggerEnabled()) {
+  // NOTE: We avoid performing the trigger attachments if we know we still need
+  // to run layout because the trigger names (and scopes) are made visible by
+  // propagating them through the fragment tree which happens during layout.
+  // Otherwise, we run the risk of performing attachments based on obsolete
+  // trigger names and scopes.
+  if (RuntimeEnabledFeatures::AnimationTriggerEnabled() &&
+      !document_.View()->NeedsLayout()) {
     document_.GetDocumentAnimations().UpdateAnimationTriggerAttachments();
   }
 
@@ -97,6 +106,14 @@ void PostStyleUpdateScope::AnimationData::SetPendingUpdate(
     const CSSAnimationUpdate& update) {
   element.EnsureElementAnimations().CssAnimations().SetPendingUpdate(update);
   elements_with_pending_updates_.insert(&element);
+}
+
+void PostStyleUpdateScope::SetPendingUpdateForTesting(
+    Element& element,
+    const CSSAnimationUpdate& update) {
+  if (AnimationData* data = CurrentAnimationData()) {
+    data->SetPendingUpdate(element, update);
+  }
 }
 
 void PostStyleUpdateScope::AnimationData::StoreOldStyleIfNeeded(

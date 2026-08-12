@@ -54,7 +54,7 @@ class HelpBubbleFactoryRegistryInteractiveUitest
 
   user_education::HelpBubbleFactoryRegistry* GetRegistry() {
     return &UserEducationServiceFactory::GetForBrowserContext(
-                browser()->profile())
+                browser()->GetProfile())
                 ->help_bubble_factory_registry();
   }
 };
@@ -148,7 +148,9 @@ IN_PROC_BROWSER_TEST_F(HelpBubbleFactoryRegistryInteractiveUitest,
           // will clean up all of the secondary UI.
           Do([this]() {
             static_cast<BrowserTabStripController*>(
-                GetBrowserView()->tabstrip()->controller())
+                GetBrowserView()
+                    ->horizontal_tab_strip_for_testing()
+                    ->controller())
                 ->CloseContextMenuForTesting();
           })
 #if BUILDFLAG(IS_MAC)

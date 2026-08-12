@@ -11,7 +11,9 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/check.h"
+#include "base/json/json_string_value_serializer.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/safety_hub/revoked_permissions_service.h"
 #include "chrome/browser/ui/safety_hub/revoked_permissions_service_factory.h"
@@ -36,10 +38,18 @@ PermissionsData FromJavaPermissionsData(
       Java_PermissionsData_getOrigin(env, jobject));
   CHECK(permissions_data.primary_pattern.IsValid());
 
-  for (const int32_t permission_type :
-       Java_PermissionsData_getPermissions(env, jobject)) {
-    permissions_data.permission_types.insert(
-        static_cast<ContentSettingsType>(permission_type));
+  int error_code = 0;
+  std::string error_message;
+  std::unique_ptr<base::Value> permission_map =
+      JSONStringValueDeserializer(
+          Java_PermissionsData_getSerializedRevokedPermissionsMap(env, jobject))
+          .Deserialize(&error_code, &error_message);
+  CHECK_EQ(error_code, 0) << error_message;
+  for (auto&& [permission_type, value] : permission_map->GetDict()) {
+    permissions_data.permissions.insert(std::make_pair(
+        UnusedSitePermissionsManager::ConvertKeyToContentSettingsType(
+            permission_type),
+        std::move(value)));
   }
 
   const base::Time expiration = base::Time::FromDeltaSinceWindowsEpoch(
@@ -60,8 +70,12 @@ base::android::ScopedJavaLocalRef<jobject> ToJavaPermissionsData(
     JNIEnv* env,
     const PermissionsData& obj) {
   std::vector<int32_t> permissions;
-  for (ContentSettingsType type : obj.permission_types) {
+  base::DictValue permission_map;
+  for (const auto& [type, value] : obj.permissions) {
     permissions.push_back(static_cast<int32_t>(type));
+    permission_map.Set(
+        UnusedSitePermissionsManager::ConvertContentSettingsTypeToKey(type),
+        value.Clone());
   }
 
   // Converting a primary pattern to an origin is normally an anti-pattern
@@ -71,11 +85,14 @@ base::android::ScopedJavaLocalRef<jobject> ToJavaPermissionsData(
   url::Origin origin =
       UnusedSitePermissionsManager::ConvertPrimaryPatternToOrigin(
           obj.primary_pattern);
+  std::string serialized_permission_map;
+  JSONStringValueSerializer(&serialized_permission_map)
+      .Serialize(permission_map);
   return Java_PermissionsData_create(
       env, origin.Serialize(), permissions,
       obj.constraints.expiration().ToDeltaSinceWindowsEpoch().InMicroseconds(),
       obj.constraints.lifetime().InMicroseconds(),
-      static_cast<int32_t>(obj.revocation_type));
+      static_cast<int32_t>(obj.revocation_type), serialized_permission_map);
 }
 
 std::vector<PermissionsData> GetRevokedPermissions(Profile* profile) {
@@ -88,7 +105,7 @@ std::vector<PermissionsData> GetRevokedPermissions(Profile* profile) {
                                       service_result.end());
 }
 
-void RegrantPermissions(Profile* profile, std::string& origin_str) {
+void RegrantPermissions(Profile* profile, const std::string& origin_str) {
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile);
   CHECK(service);
@@ -98,7 +115,7 @@ void RegrantPermissions(Profile* profile, std::string& origin_str) {
 }
 
 void UndoRegrantPermissions(Profile* profile,
-                            PermissionsData& permissions_data) {
+                            const PermissionsData& permissions_data) {
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile);
   CHECK(service);
@@ -116,7 +133,7 @@ void ClearRevokedPermissionsReviewList(Profile* profile) {
 
 void RestoreRevokedPermissionsReviewList(
     Profile* profile,
-    std::vector<PermissionsData>& permissions_data_list) {
+    const std::vector<PermissionsData>& permissions_data_list) {
   RevokedPermissionsService* service =
       RevokedPermissionsServiceFactory::GetForProfile(profile);
   CHECK(service);
@@ -124,7 +141,7 @@ void RestoreRevokedPermissionsReviewList(
 }
 
 std::vector<std::u16string> ContentSettingsTypeToString(
-    std::vector<int32_t>& content_settings_type_list) {
+    const std::vector<int32_t>& content_settings_type_list) {
   std::vector<std::u16string> content_settings_string_list;
   for (int32_t content_settings_type : content_settings_type_list) {
     content_settings_string_list.push_back(PageInfoUI::PermissionTypeToUIString(
@@ -134,42 +151,36 @@ std::vector<std::u16string> ContentSettingsTypeToString(
 }
 
 static std::vector<PermissionsData>
-JNI_UnusedSitePermissionsBridge_GetRevokedPermissions(JNIEnv* env,
-                                                      Profile* profile) {
+JNI_UnusedSitePermissionsBridge_GetRevokedPermissions(Profile* profile) {
   return GetRevokedPermissions(profile);
 }
 
 static void JNI_UnusedSitePermissionsBridge_RegrantPermissions(
-    JNIEnv* env,
     Profile* profile,
-    std::string& origin_str) {
+    const std::string& origin_str) {
   RegrantPermissions(profile, origin_str);
 }
 
 static void JNI_UnusedSitePermissionsBridge_UndoRegrantPermissions(
-    JNIEnv* env,
     Profile* profile,
-    PermissionsData& permissions_data) {
+    const PermissionsData& permissions_data) {
   UndoRegrantPermissions(profile, permissions_data);
 }
 
 static void JNI_UnusedSitePermissionsBridge_ClearRevokedPermissionsReviewList(
-    JNIEnv* env,
     Profile* profile) {
   ClearRevokedPermissionsReviewList(profile);
 }
 
 static void JNI_UnusedSitePermissionsBridge_RestoreRevokedPermissionsReviewList(
-    JNIEnv* env,
     Profile* profile,
-    std::vector<PermissionsData>& permissions_data_list) {
+    const std::vector<PermissionsData>& permissions_data_list) {
   RestoreRevokedPermissionsReviewList(profile, permissions_data_list);
 }
 
 static std::vector<std::u16string>
 JNI_UnusedSitePermissionsBridge_ContentSettingsTypeToString(
-    JNIEnv* env,
-    std::vector<std::int32_t>& content_settings_type_list) {
+    const std::vector<std::int32_t>& content_settings_type_list) {
   return ContentSettingsTypeToString(content_settings_type_list);
 }
 

@@ -18,6 +18,7 @@
 
 namespace content {
 
+class BackForwardCacheImpl;
 class ForwardingAudioStreamFactory;
 class RenderFrameHostImpl;
 class WebContentsImpl;
@@ -61,8 +62,10 @@ class GuestPageHolderImpl : public GuestPageHolder,
   bool OnRenderFrameProxyVisibilityChanged(
       RenderFrameProxyHost* render_frame_proxy_host,
       blink::mojom::FrameVisibility visibility) override;
+  PrerenderHostId GetPrerenderHostId() override;
 
   // NavigationControllerDelegate implementation.
+  BackForwardCacheImpl& GetBackForwardCache() override;
   void NotifyNavigationStateChangedFromController(
       InvalidateTypes changed_flags) override;
   void NotifyBeforeFormRepostWarningShow() override;

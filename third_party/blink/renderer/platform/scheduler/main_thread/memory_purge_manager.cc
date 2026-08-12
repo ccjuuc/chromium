@@ -51,7 +51,7 @@ MemoryPurgeManager::~MemoryPurgeManager() = default;
 
 void MemoryPurgeManager::OnPageCreated() {
   total_page_count_++;
-  base::MemoryPressureListener::SetNotificationsSuppressed(false);
+  memory_pressure_suppression_token_.reset();
 
   if (!CanPurge()) {
     purge_timer_.Stop();
@@ -95,7 +95,7 @@ void MemoryPurgeManager::OnPageResumed() {
     purge_timer_.Stop();
   }
 
-  base::MemoryPressureListener::SetNotificationsSuppressed(false);
+  memory_pressure_suppression_token_.reset();
 #if BUILDFLAG(IS_ANDROID)
   // Cancel a pending compaction, since the page is now active and its memory
   // will likely be accessed soon.
@@ -119,7 +119,7 @@ void MemoryPurgeManager::OnRendererBackgrounded() {
     return;
   }
 
-  if (!kPurgeOnBackgroundingEnabled) {
+  if (!features::IsMemoryPurgeOnBackgroundingEnabled()) {
 #if BUILDFLAG(IS_ANDROID)
     // If we do not freeze renderers, we want to trigger compaction directly
     // when we are backgrounded here.
@@ -185,7 +185,7 @@ void MemoryPurgeManager::PerformMemoryPurge() {
   }
 
   if (AreAllPagesFrozen()) {
-    base::MemoryPressureListener::SetNotificationsSuppressed(true);
+    memory_pressure_suppression_token_.emplace();
 #if BUILDFLAG(IS_ANDROID)
     base::android::SelfCompactionManager::OnRunningCompact();
 #endif
@@ -219,7 +219,7 @@ bool MemoryPurgeManager::AreAllPagesFrozen() const {
 }
 
 base::TimeDelta MemoryPurgeManager::GetTimeToPurgeAfterBackgrounded() const {
-  return base::Seconds(base::RandInt(
+  return base::Seconds(base::RandIntInclusive(
       static_cast<int>(kMemoryPurgeInBackgroundMinDelay.Get().InSeconds()),
       static_cast<int>(kMemoryPurgeInBackgroundMaxDelay.Get().InSeconds())));
 }

@@ -24,13 +24,9 @@ per-file bisect*.py=svenzheng@chromium.org
 
 per-file check_git_config.py=iannucci@chromium.org
 
-per-file check_grd_for_unused_strings.py=estade@chromium.org
-
 per-file gyp-explain.py=thakis@chromium.org
 
 per-file include_tracer.py=thakis@chromium.org
-
-per-file ipc_messages_log.py=yfriedman@chromium.org
 
 per-file mojo_messages_log.py=awillia@chromium.org
 

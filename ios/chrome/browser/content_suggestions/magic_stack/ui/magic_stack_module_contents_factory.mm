@@ -6,22 +6,16 @@
 
 #import "base/notreached.h"
 #import "ios/chrome/browser/content_suggestions/app_bundle_promo/ui/app_bundle_promo_config.h"
-#import "ios/chrome/browser/content_suggestions/app_bundle_promo/ui/app_bundle_promo_view.h"
 #import "ios/chrome/browser/content_suggestions/default_browser/ui/default_browser_config.h"
-#import "ios/chrome/browser/content_suggestions/default_browser/ui/default_browser_view.h"
+#import "ios/chrome/browser/content_suggestions/level_up/ui/level_up_config.h"
+#import "ios/chrome/browser/content_suggestions/level_up/ui/level_up_view.h"
 #import "ios/chrome/browser/content_suggestions/magic_stack/ui/magic_stack_module_content_view_delegate.h"
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_collection_view.h"
-#import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_stack_view.h"
-#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_favicon_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_item.h"
-#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_module_view.h"
+#import "ios/chrome/browser/content_suggestions/price_tracking_promo/ui/price_tracking_promo_config.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_state.h"
+#import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_config.h"
 #import "ios/chrome/browser/content_suggestions/safety_check/ui/safety_check_view.h"
-#import "ios/chrome/browser/content_suggestions/send_tab_to_self/ui/send_tab_promo_audience.h"
-#import "ios/chrome/browser/content_suggestions/send_tab_to_self/ui/send_tab_promo_item.h"
-#import "ios/chrome/browser/content_suggestions/send_tab_to_self/ui/send_tab_promo_view.h"
+#import "ios/chrome/browser/content_suggestions/send_tab_to_self/ui/send_tab_promo_config.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/coordinator/set_up_list_mediator.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/public/set_up_list_constants.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/public/set_up_list_utils.h"
@@ -29,27 +23,22 @@
 #import "ios/chrome/browser/content_suggestions/set_up_list/ui/set_up_list_consumer.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/ui/set_up_list_consumer_source.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/ui/set_up_list_item_view.h"
+#import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_config.h"
 #import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_data.h"
-#import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_favicon_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_item.h"
-#import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_price_tracking_view.h"
 #import "ios/chrome/browser/content_suggestions/shop_card/ui/shop_card_view.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_action_item.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_commands.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_config.h"
-#import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_consumer_source.h"
 #import "ios/chrome/browser/content_suggestions/shortcuts/ui/shortcuts_tile_view.h"
-#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_item.h"
+#import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_config.h"
 #import "ios/chrome/browser/content_suggestions/tab_resumption/ui/tab_resumption_view.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_audience.h"
-#import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_consumer_source.h"
-#import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_state.h"
+#import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_config.h"
 #import "ios/chrome/browser/content_suggestions/tips/ui/tips_module_view.h"
 #import "ios/chrome/browser/content_suggestions/ui/cells/content_suggestions_tile_layout_util.h"
+#import "ios/chrome/browser/content_suggestions/ui/cells/icon_detail_view.h"
 #import "ios/chrome/browser/content_suggestions/ui/cells/multi_row_container_view.h"
 #import "ios/chrome/browser/content_suggestions/ui/cells/standalone_module_view.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 
 @implementation MagicStackModuleContentsFactory
@@ -62,14 +51,7 @@
     case ContentSuggestionsModuleType::kMostVisited: {
       MostVisitedTilesConfig* mvtConfig =
           static_cast<MostVisitedTilesConfig*>(config);
-      if (IsContentSuggestionsCustomizable()) {
-        return
-            [[MostVisitedTilesCollectionView alloc] initWithConfig:mvtConfig];
-      }
-      return [[MostVisitedTilesStackView alloc]
-          initWithConfig:mvtConfig
-                 spacing:ContentSuggestionsTilesHorizontalSpacing(
-                             traitCollection)];
+      return [[MostVisitedTilesCollectionView alloc] initWithConfig:mvtConfig];
     }
     case ContentSuggestionsModuleType::kShortcuts: {
       ShortcutsConfig* shortcutsConfig = static_cast<ShortcutsConfig*>(config);
@@ -79,28 +61,29 @@
                                           traitCollection)];
     }
     case ContentSuggestionsModuleType::kTabResumption: {
-      TabResumptionItem* tabResumptionItem =
-          static_cast<TabResumptionItem*>(config);
-      return [self tabResumptionViewForConfig:tabResumptionItem];
+      TabResumptionConfig* tabResumptionConfig =
+          static_cast<TabResumptionConfig*>(config);
+      return [self tabResumptionViewForConfig:tabResumptionConfig];
     }
     case ContentSuggestionsModuleType::kSafetyCheck: {
-      SafetyCheckState* safetyCheckConfig =
-          static_cast<SafetyCheckState*>(config);
+      SafetyCheckConfig* safetyCheckConfig =
+          static_cast<SafetyCheckConfig*>(config);
       return [self safetyCheckViewForConfigState:safetyCheckConfig
                              contentViewDelegate:contentViewDelegate];
     }
     case ContentSuggestionsModuleType::kPriceTrackingPromo: {
-      PriceTrackingPromoItem* item =
-          static_cast<PriceTrackingPromoItem*>(config);
-      return [self priceTrackingPromoViewForConfig:item];
+      PriceTrackingPromoConfig* priceTrackingPromoConfig =
+          static_cast<PriceTrackingPromoConfig*>(config);
+      return [self priceTrackingPromoViewForConfig:priceTrackingPromoConfig];
     }
     case ContentSuggestionsModuleType::kShopCard: {
-      ShopCardItem* item = static_cast<ShopCardItem*>(config);
-      return [self shopCardViewForConfig:item];
+      ShopCardConfig* shopCardConfig = static_cast<ShopCardConfig*>(config);
+      return [self shopCardViewForConfig:shopCardConfig];
     }
     case ContentSuggestionsModuleType::kSendTabPromo: {
-      SendTabPromoItem* item = static_cast<SendTabPromoItem*>(config);
-      return [self sendTabPromoViewForConfig:item];
+      SendTabPromoConfig* sendTabPromoConfig =
+          static_cast<SendTabPromoConfig*>(config);
+      return [self sendTabPromoViewForConfig:sendTabPromoConfig];
     }
     case ContentSuggestionsModuleType::kSetUpListDefaultBrowser:
     case ContentSuggestionsModuleType::kSetUpListAutofill:
@@ -112,7 +95,7 @@
     }
     case ContentSuggestionsModuleType::kTipsWithProductImage:
     case ContentSuggestionsModuleType::kTips: {
-      TipsModuleState* tipsConfig = static_cast<TipsModuleState*>(config);
+      TipsModuleConfig* tipsConfig = static_cast<TipsModuleConfig*>(config);
       return [self tipsViewForConfig:tipsConfig
                  contentViewDelegate:contentViewDelegate];
     }
@@ -125,6 +108,10 @@
       DefaultBrowserConfig* defaultBrowserConfig =
           static_cast<DefaultBrowserConfig*>(config);
       return [self defaultBrowserViewForConfig:defaultBrowserConfig];
+    }
+    case ContentSuggestionsModuleType::kLevelUp: {
+      LevelUpConfig* levelUpConfig = static_cast<LevelUpConfig*>(config);
+      return [self levelUpViewForConfig:levelUpConfig];
     }
     default:
       NOTREACHED();
@@ -139,7 +126,6 @@
   for (ShortcutsActionItem* item in shortcutsConfig.shortcutItems) {
     ContentSuggestionsShortcutTileView* view =
         [[ContentSuggestionsShortcutTileView alloc] initWithConfiguration:item];
-    [shortcutsConfig.consumerSource addConsumer:view];
     [shortcutsViews addObject:view];
   }
   UIStackView* shortcutsStackView = [[UIStackView alloc] init];
@@ -164,59 +150,45 @@
   return shortcutsStackView;
 }
 
-- (UIView*)tabResumptionViewForConfig:(TabResumptionItem*)tabResumptionItem {
-  if (tabResumptionItem.shopCardData.shopCardItemType ==
-      ShopCardItemType::kPriceTrackableProductOnTab) {
-    ShopCardPriceTrackingView* shopCardPriceTrackingView =
-        [[ShopCardPriceTrackingView alloc] initWithItem:tabResumptionItem];
-    shopCardPriceTrackingView.commandHandler = tabResumptionItem.commandHandler;
-    return shopCardPriceTrackingView;
-  } else {
-    TabResumptionView* tabResumptionView =
-        [[TabResumptionView alloc] initWithItem:tabResumptionItem];
-    [tabResumptionItem.consumerSource addConsumer:tabResumptionView];
-    tabResumptionView.commandHandler = tabResumptionItem.commandHandler;
-    return tabResumptionView;
-  }
+- (UIView*)tabResumptionViewForConfig:(TabResumptionConfig*)config {
+  TabResumptionView* tabResumptionView =
+      [[TabResumptionView alloc] initWithConfig:config];
+  tabResumptionView.tabResumptionHandler = config.commandHandler;
+  return tabResumptionView;
 }
 
 - (UIView*)priceTrackingPromoViewForConfig:
-    (PriceTrackingPromoItem*)priceTrackingPromoItem {
-  PriceTrackingPromoModuleView* view =
-      [[PriceTrackingPromoModuleView alloc] initWithFrame:CGRectZero];
-  [priceTrackingPromoItem.priceTrackingPromoFaviconConsumerSource
-      addConsumer:view];
-  view.priceTrackingPromoHandler =
-      priceTrackingPromoItem.priceTrackingPromoHandler;
-  [view configureView:priceTrackingPromoItem];
+    (PriceTrackingPromoConfig*)priceTrackingPromoConfig {
+  StandaloneModuleView* view =
+      [[StandaloneModuleView alloc] initWithFrame:CGRectZero];
+  [view configureView:priceTrackingPromoConfig];
+  view.tapDelegate = priceTrackingPromoConfig;
   return view;
 }
 
-- (UIView*)shopCardViewForConfig:(ShopCardItem*)shopCardItem {
+- (UIView*)shopCardViewForConfig:(ShopCardConfig*)config {
   ShopCardModuleView* view =
       [[ShopCardModuleView alloc] initWithFrame:CGRectZero];
-  [shopCardItem.shopCardFaviconConsumerSource addFaviconConsumer:view];
-  view.commandHandler = shopCardItem.commandHandler;
-  [view configureView:shopCardItem];
+  view.commandHandler = config.shopCardHandler;
+  [view configureView:config];
   return view;
 }
 
-- (UIView*)safetyCheckViewForConfigState:(SafetyCheckState*)state
+- (UIView*)safetyCheckViewForConfigState:(SafetyCheckConfig*)config
                      contentViewDelegate:
                          (id<MagicStackModuleContentViewDelegate>)
                              contentViewDelegate {
   SafetyCheckView* safetyCheckView =
-      [[SafetyCheckView alloc] initWithState:state
-                         contentViewDelegate:contentViewDelegate];
-  safetyCheckView.audience = state.audience;
-  [state.safetyCheckConsumerSource addConsumer:safetyCheckView];
+      [[SafetyCheckView alloc] initWithConfig:config];
+  safetyCheckView.contentViewDelegate = contentViewDelegate;
   return safetyCheckView;
 }
 
-- (UIView*)sendTabPromoViewForConfig:(SendTabPromoItem*)sendTabPromoItem {
-  SendTabPromoView* view =
-      [[SendTabPromoView alloc] initWithConfig:sendTabPromoItem];
-  view.audience = sendTabPromoItem.audience;
+- (UIView*)sendTabPromoViewForConfig:(SendTabPromoConfig*)sendTabPromoConfig {
+  StandaloneModuleView* view =
+      [[StandaloneModuleView alloc] initWithFrame:CGRectZero];
+  [view configureView:sendTabPromoConfig];
+  view.tapDelegate = sendTabPromoConfig;
   return view;
 }
 
@@ -245,31 +217,30 @@
   return view;
 }
 
-- (UIView*)tipsViewForConfig:(TipsModuleState*)state
+- (UIView*)tipsViewForConfig:(TipsModuleConfig*)config
          contentViewDelegate:
              (id<MagicStackModuleContentViewDelegate>)contentViewDelegate {
-  TipsModuleView* view = [[TipsModuleView alloc] initWithState:state];
-
-  view.audience = state.audience;
+  TipsModuleView* view = [[TipsModuleView alloc] initWithConfig:config];
   view.contentViewDelegate = contentViewDelegate;
-  [state.consumerSource addConsumer:view];
-
   return view;
 }
 
-// Returns an `AppBundlePromoView` for a given `AppBundlePromoConfig`.
+// Returns a view for a given `AppBundlePromoConfig`.
 - (UIView*)appBundlePromoViewForConfig:(AppBundlePromoConfig*)config {
-  AppBundlePromoView* view = [[AppBundlePromoView alloc] initWithConfig:config];
-  view.audience = config.audience;
-
+  IconDetailView* view = [[IconDetailView alloc] initWithConfig:config];
+  view.tapDelegate = config;
   return view;
 }
 
-// Returns a `DefaultBrowserView` for a given `DefaultBrowserConfig`.
+// Returns a view for a given `DefaultBrowserConfig`.
 - (UIView*)defaultBrowserViewForConfig:(DefaultBrowserConfig*)config {
-  DefaultBrowserView* view = [[DefaultBrowserView alloc] initWithConfig:config];
-  view.defaultBrowserHandler = config.defaultBrowserHandler;
+  IconDetailView* view = [[IconDetailView alloc] initWithConfig:config];
+  view.tapDelegate = config;
+  return view;
+}
 
+- (UIView*)levelUpViewForConfig:(LevelUpConfig*)config {
+  LevelUpView* view = [[LevelUpView alloc] initWithConfig:config];
   return view;
 }
 

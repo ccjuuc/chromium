@@ -20,10 +20,16 @@
 (define executable-path "EXECUTABLE_PATH")
 (define homedir-as-literal "USER_HOMEDIR_AS_LITERAL")
 (define log-file-path "LOG_FILE_PATH")
+(define network-user-dir-access "NETWORK_USER_DIR_ACCESS")
+(define odme-user-dir-access "ODME_USER_DIR_ACCESS")
 (define os-version (string->number (param "OS_VERSION")))
 (define darwin-user-cache-dir "DARWIN_USER_CACHE_DIR")
 (define darwin-user-dir "DARWIN_USER_DIR")
 (define darwin-user-temp-dir "DARWIN_USER_TEMP_DIR")
+
+; Whether to allow processes to post and look up distributed notifications.
+; See https://crbug.com/513454805.
+(define enable-distributed-notifications "ENABLE_DISTRIBUTED_NOTIFICATIONS")
 
 ; Sandboxed processes which use Metal may need to disable the shader cache.
 (define disable-metal-shader-cache "DISABLE_METAL_SHADER_CACHE")
@@ -234,14 +240,12 @@
   (path "/System/Library/CoreServices/checkfixlist")
 )
 
-; From /System/Library/Sandbox/Profiles/dyld-support.sb on macOS 13.
-(if (>= os-version 1300)
-  (allow file-read* file-map-executable
-    (subpath "/System/Cryptexes/App")
-    (subpath "/System/Cryptexes/OS")
-    (subpath "/System/Volumes/Preboot/Cryptexes/App/System")
-    (subpath "/System/Volumes/Preboot/Cryptexes/OS")
-  )
+; From /System/Library/Sandbox/Profiles/dyld-support.sb.
+(allow file-read* file-map-executable
+  (subpath "/System/Cryptexes/App")
+  (subpath "/System/Cryptexes/OS")
+  (subpath "/System/Volumes/Preboot/Cryptexes/App/System")
+  (subpath "/System/Volumes/Preboot/Cryptexes/OS")
 )
 
 ; Reads from /usr.
@@ -285,17 +289,6 @@
   (sysctl-name "hw.memsize")
   (sysctl-name "hw.ncpu")
   (sysctl-name "hw.nperflevels")
-  (sysctl-name "hw.optional.arm.FEAT_BF16")
-  (sysctl-name "hw.optional.arm.FEAT_DotProd")
-  (sysctl-name "hw.optional.arm.FEAT_FCMA")
-  (sysctl-name "hw.optional.arm.FEAT_FHM")
-  (sysctl-name "hw.optional.arm.FEAT_FP16")
-  (sysctl-name "hw.optional.arm.FEAT_I8MM")
-  (sysctl-name "hw.optional.arm.FEAT_JSCVT")
-  (sysctl-name "hw.optional.arm.FEAT_LSE")
-  (sysctl-name "hw.optional.arm.FEAT_RDM")
-  (sysctl-name "hw.optional.arm.FEAT_SHA512")
-  (sysctl-name "hw.optional.armv8_2_sha512")
   (sysctl-name "hw.packages")
   (sysctl-name "hw.pagesize_compat")
   (sysctl-name "hw.physicalcpu_max")
@@ -313,6 +306,7 @@
   (sysctl-name "kern.usrstack64")
   (sysctl-name "kern.version")
   (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name-prefix "hw.optional.")
   (sysctl-name-prefix "hw.perflevel")
 )
 

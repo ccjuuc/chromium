@@ -5,12 +5,14 @@
 #include "chrome/browser/metrics/chrome_android_metrics_provider.h"
 
 #include "base/memory/scoped_refptr.h"
+#include "base/strings/string_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_simple_task_runner.h"
 #include "chrome/browser/flags/android/chrome_session_state.h"
 #include "components/metrics/android_metrics_helper.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/metrics/test/test_metrics_service_client.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/ukm/ukm_pref_names.h"
@@ -114,8 +116,13 @@ TEST_F(ChromeAndroidMetricsProviderTest,
   EXPECT_EQ(GetPersistedLogCount(pref_service_), 1);
 
   // Make sure no histogram other than UMA histograms about UKM are logged.
-  EXPECT_EQ(histogram_tester_.GetTotalSum(),
-            histogram_tester_.GetTotalSumForPrefix("UKM"));
+  auto all_histograms = histogram_tester_.GetAllSamplesForPrefix("");
+  for (const auto& [name, buckets] : all_histograms) {
+    if (!base::StartsWith(name, "UKM") &&
+        !base::StartsWith(name, "Variations.FeatureAccess")) {
+      ADD_FAILURE() << "Unexpected histogram logged: " << name;
+    }
+  }
 
   metrics_provider_.set_hardware_class("sample_hardware_class");
   metrics_provider_.ProvideSystemProfileMetrics(

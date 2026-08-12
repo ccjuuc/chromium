@@ -4,9 +4,8 @@
 
 #include "chrome/browser/renderer_context_menu/spelling_bubble_model.h"
 
-#include "base/logging.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
@@ -15,11 +14,8 @@
 #include "components/spellcheck/browser/pref_names.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/image/image.h"
 
 using content::OpenURLParams;
 using content::Referrer;
@@ -72,7 +68,8 @@ void SpellingBubbleModel::OpenHelpPage() {
     return;
   }
   // The web contents used to open this dialog have been destroyed.
-  Browser* browser = chrome::ScopedTabbedBrowserDisplayer(profile_).browser();
+  BrowserWindowInterface* browser =
+      chrome::ScopedTabbedBrowserDisplayer(profile_).browser_window_interface();
   browser->OpenURL(params, /*navigation_handle_callback=*/{});
 }
 

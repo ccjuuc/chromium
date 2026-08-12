@@ -12,6 +12,9 @@
 #include "android_webview/browser/aw_browser_context.h"
 #include "android_webview/browser/aw_cookie_access_policy.h"
 #include "android_webview/browser/cookie_manager.h"
+#include "android_webview/common/aw_features.h"
+#include "base/check.h"
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -24,7 +27,7 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/cookies/parsed_cookie.h"
 #include "net/storage_access_api/status.h"
-#include "services/network/public/mojom/restricted_cookie_manager.mojom-forward.h"
+#include "services/network/public/mojom/restricted_cookie_manager.mojom-shared.h"
 #include "url/gurl.h"
 
 namespace android_webview {
@@ -43,18 +46,16 @@ class AwProxyingRestrictedCookieManagerListener
       const net::SiteForCookies& site_for_cookies,
       base::WeakPtr<AwProxyingRestrictedCookieManager>
           aw_restricted_cookie_manager,
-      mojo::PendingRemote<network::mojom::CookieChangeListener> client_listener,
-      net::StorageAccessApiStatus storage_access_api_status)
+      mojo::PendingRemote<network::mojom::CookieChangeListener> client_listener)
       : url_(url),
         site_for_cookies_(site_for_cookies),
-        storage_access_api_status_(storage_access_api_status),
         aw_restricted_cookie_manager_(aw_restricted_cookie_manager),
         client_listener_(std::move(client_listener)) {}
 
   void OnCookieChange(const net::CookieChangeInfo& change) override {
     if (aw_restricted_cookie_manager_) {
-      PrivacySetting cookieState = aw_restricted_cookie_manager_->AllowCookies(
-          url_, site_for_cookies_, storage_access_api_status_);
+      PrivacySetting cookieState =
+          aw_restricted_cookie_manager_->AllowCookies(url_);
 
       if (cookieState == PrivacySetting::kStateAllowed ||
           (cookieState == PrivacySetting::kPartitionedStateAllowedOnly &&
@@ -67,11 +68,6 @@ class AwProxyingRestrictedCookieManagerListener
  private:
   const GURL url_;
   const net::SiteForCookies site_for_cookies_;
-  // restricted_cookie_manager in services/network follows a similar pattern of
-  // using the state of "storage_access_api_status" at the time of the listener
-  // being added so we are matching that behaviour. If the storage access was
-  // enabled _after_ the listener was added, it will not be updated here.
-  net::StorageAccessApiStatus storage_access_api_status_;
   base::WeakPtr<AwProxyingRestrictedCookieManager>
       aw_restricted_cookie_manager_;
   mojo::Remote<network::mojom::CookieChangeListener> client_listener_;
@@ -83,12 +79,19 @@ void AwProxyingRestrictedCookieManager::CreateAndBind(
     bool is_service_worker,
     int process_id,
     int frame_id,
+    const net::SiteForCookies& site_for_cookies,
     mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
     AwCookieAccessPolicy* aw_cookie_access_policy) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   std::optional<content::GlobalRenderFrameHostToken> frame_token;
-  if (!is_service_worker) {
+  if (is_service_worker) {
+    // A nullopt global_frame_token_ is used for service workers, so no value
+    // for the per-WebView acceptThirdPartyCookies web setting can be obtained.
+    // However, without third-party storage partitioning, WebView service
+    // workers always have a first-party (same-site) site_for_cookies.
+    CHECK(!site_for_cookies.IsNull(), base::NotFatalUntil::M159);
+  } else {
     if (auto* rfh = content::RenderFrameHost::FromID(process_id, frame_id)) {
       frame_token = rfh->GetGlobalFrameToken();
     }
@@ -98,7 +101,7 @@ void AwProxyingRestrictedCookieManager::CreateAndBind(
       FROM_HERE,
       base::BindOnce(
           &AwProxyingRestrictedCookieManager::CreateAndBindOnIoThread,
-          std::move(underlying_rcm), is_service_worker, frame_token,
+          std::move(underlying_rcm), frame_token, site_for_cookies,
           std::move(receiver), aw_cookie_access_policy));
 }
 
@@ -108,9 +111,9 @@ AwProxyingRestrictedCookieManager::~AwProxyingRestrictedCookieManager() {
 
 void AwProxyingRestrictedCookieManager::GetAllForUrl(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     network::mojom::CookieManagerGetOptionsPtr options,
     bool is_ad_tagged,
     bool apply_devtools_overrides,
@@ -118,8 +121,7 @@ void AwProxyingRestrictedCookieManager::GetAllForUrl(
     GetAllForUrlCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
 
-  PrivacySetting cookieState =
-      AllowCookies(url, site_for_cookies, storage_access_api_status);
+  PrivacySetting cookieState = AllowCookies(url);
 
   if (cookieState == PrivacySetting::kStateDisallowed) {
     std::move(callback).Run(std::vector<net::CookieWithAccessResult>());
@@ -130,35 +132,39 @@ void AwProxyingRestrictedCookieManager::GetAllForUrl(
       force_disable_third_party_cookies ||
       cookieState == PrivacySetting::kPartitionedStateAllowedOnly;
 
+  // WebView does not currently have a way to grant storage access requests with
+  // user consent so we default this to be none.
   underlying_restricted_cookie_manager_->GetAllForUrl(
-      url, site_for_cookies, top_frame_origin, storage_access_api_status,
-      std::move(options), is_ad_tagged, apply_devtools_overrides, disable_3pcs,
-      std::move(callback));
+      url, site_for_cookies_, top_frame_origin,
+      net::StorageAccessApiStatus::kNone, std::move(options), is_ad_tagged,
+      apply_devtools_overrides, disable_3pcs, std::move(callback));
 }
 
 void AwProxyingRestrictedCookieManager::SetCanonicalCookie(
-    const net::CanonicalCookie& cookie,
+    network::mojom::RestrictedCanonicalCookieParamsPtr cookie_params,
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
-    net::CookieInclusionStatus status,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     bool is_ad_tagged,
     bool apply_devtools_overrides,
     SetCanonicalCookieCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  PrivacySetting cookieState =
-      AllowCookies(url, site_for_cookies, storage_access_api_status);
+  PrivacySetting cookieState = AllowCookies(url);
 
   if (cookieState == PrivacySetting::kStateDisallowed) {
     std::move(callback).Run(false);
     return;
   }
 
-  if (cookie.IsPartitioned() || cookieState == PrivacySetting::kStateAllowed) {
+  if (cookie_params->partitioned ==
+          network::mojom::RestrictedCookiePartition::PARTITIONED ||
+      cookieState == PrivacySetting::kStateAllowed) {
+    // WebView does not currently have a way to grant storage access requests
+    // with user consent so we default this to be none.
     underlying_restricted_cookie_manager_->SetCanonicalCookie(
-        cookie, url, site_for_cookies, top_frame_origin,
-        storage_access_api_status, status, is_ad_tagged,
+        std::move(cookie_params), url, site_for_cookies_, top_frame_origin,
+        net::StorageAccessApiStatus::kNone, is_ad_tagged,
         apply_devtools_overrides, std::move(callback));
   } else {
     std::move(callback).Run(false);
@@ -167,9 +173,9 @@ void AwProxyingRestrictedCookieManager::SetCanonicalCookie(
 
 void AwProxyingRestrictedCookieManager::AddChangeListener(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     mojo::PendingRemote<network::mojom::CookieChangeListener> listener,
     AddChangeListenerCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
@@ -178,35 +184,34 @@ void AwProxyingRestrictedCookieManager::AddChangeListener(
       proxy_listener_remote;
   auto proxy_listener =
       std::make_unique<AwProxyingRestrictedCookieManagerListener>(
-          url, site_for_cookies, weak_factory_.GetWeakPtr(),
-          std::move(listener), storage_access_api_status);
+          url, site_for_cookies_, weak_factory_.GetWeakPtr(),
+          std::move(listener));
 
   mojo::MakeSelfOwnedReceiver(
       std::move(proxy_listener),
       proxy_listener_remote.InitWithNewPipeAndPassReceiver());
 
+  // WebView does not currently have a way to grant storage access requests with
+  // user consent so we default this to be none.
   underlying_restricted_cookie_manager_->AddChangeListener(
-      url, site_for_cookies, top_frame_origin, storage_access_api_status,
-      std::move(proxy_listener_remote), std::move(callback));
+      url, site_for_cookies_, top_frame_origin,
+      net::StorageAccessApiStatus::kNone, std::move(proxy_listener_remote),
+      std::move(callback));
 }
 
 void AwProxyingRestrictedCookieManager::SetCookieFromString(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
-    bool get_version_shared_memory,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     bool is_ad_tagged,
     bool apply_devtools_overrides,
-    const std::string& cookie,
-    SetCookieFromStringCallback callback) {
+    const std::string& cookie) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
 
-  PrivacySetting cookieState =
-      AllowCookies(url, site_for_cookies, storage_access_api_status);
+  PrivacySetting cookieState = AllowCookies(url);
 
   if (cookieState == PrivacySetting::kStateDisallowed) {
-    std::move(callback).Run(/*response=*/nullptr);
     return;
   }
 
@@ -218,20 +223,20 @@ void AwProxyingRestrictedCookieManager::SetCookieFromString(
   if (cookieState == PrivacySetting::kStateAllowed ||
       (parsed_cookie.IsValid() && parsed_cookie.IsPartitioned() &&
        parsed_cookie.IsSecure())) {
+    // WebView does not currently have a way to grant storage access requests
+    // with user consent so we default this to be none.
     underlying_restricted_cookie_manager_->SetCookieFromString(
-        url, site_for_cookies, top_frame_origin, storage_access_api_status,
-        get_version_shared_memory, is_ad_tagged, apply_devtools_overrides,
-        cookie, std::move(callback));
-  } else {
-    std::move(callback).Run(/*response=*/nullptr);
+        url, site_for_cookies_, top_frame_origin,
+        net::StorageAccessApiStatus::kNone, is_ad_tagged,
+        apply_devtools_overrides, cookie);
   }
 }
 
 void AwProxyingRestrictedCookieManager::GetCookiesString(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     bool get_version_shared_memory,
     bool is_ad_tagged,
     bool apply_devtools_overrides,
@@ -239,8 +244,7 @@ void AwProxyingRestrictedCookieManager::GetCookiesString(
     GetCookiesStringCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
 
-  PrivacySetting cookieState =
-      AllowCookies(url, site_for_cookies, storage_access_api_status);
+  PrivacySetting cookieState = AllowCookies(url);
 
   if (cookieState == PrivacySetting::kStateDisallowed) {
     std::move(callback).Run(network::mojom::kInvalidCookieVersion,
@@ -252,74 +256,94 @@ void AwProxyingRestrictedCookieManager::GetCookiesString(
       force_disable_third_party_cookies ||
       cookieState == PrivacySetting::kPartitionedStateAllowedOnly;
 
-  // In Android Webview the access to cookies can change dynamically. For
-  // now never request a shared memory region so that a full IPC is issued
-  // every time. This prevents a client retaining access to the cookie value
-  // past the moment where it was denied. (crbug.com/1393050): Implement a
-  // strategy so that the shared memory access can be revoked from here.
+  // When using latched cookie policy, enable shared memory versioning since
+  // the policy won't change during this RCM's lifetime. When the feature is
+  // disabled, never request shared memory so that a full IPC is issued every
+  // time, preventing clients from retaining access past the moment where access
+  // was denied. See crbug.com/1393050 for original issue.
+  const bool use_shared_memory =
+      base::FeatureList::IsEnabled(features::kWebViewLatchedCookiePolicy) &&
+      get_version_shared_memory;
+
+  // WebView does not currently have a way to grant storage access requests with
+  // user consent so we default this to be none.
   underlying_restricted_cookie_manager_->GetCookiesString(
-      url, site_for_cookies, top_frame_origin, storage_access_api_status,
-      /*get_version_shared_memory=*/false, is_ad_tagged,
+      url, site_for_cookies_, top_frame_origin,
+      net::StorageAccessApiStatus::kNone, use_shared_memory, is_ad_tagged,
       apply_devtools_overrides, disable_3pcs, std::move(callback));
 }
 
 void AwProxyingRestrictedCookieManager::CookiesEnabledFor(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
+    const net::SiteForCookies& /*site_for_cookies*/,
     const url::Origin& top_frame_origin,
-    net::StorageAccessApiStatus storage_access_api_status,
+    net::StorageAccessApiStatus /*storage_access_api_status*/,
     bool apply_devtools_overrides,
     CookiesEnabledForCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
-  std::move(callback).Run(
-      AllowCookies(url, site_for_cookies, storage_access_api_status) ==
-      PrivacySetting::kStateAllowed);
+  std::move(callback).Run(AllowCookies(url) == PrivacySetting::kStateAllowed);
 }
 
 AwProxyingRestrictedCookieManager::AwProxyingRestrictedCookieManager(
     mojo::PendingRemote<network::mojom::RestrictedCookieManager>
         underlying_restricted_cookie_manager,
-    bool is_service_worker,
     const std::optional<const content::GlobalRenderFrameHostToken>&
         global_frame_token,
+    const net::SiteForCookies& site_for_cookies,
     AwCookieAccessPolicy* cookie_access_policy)
     : underlying_restricted_cookie_manager_(
           std::move(underlying_restricted_cookie_manager)),
-      is_service_worker_(is_service_worker),
       global_frame_token_(global_frame_token),
-      cookie_access_policy_(*cookie_access_policy) {
+      cookie_access_policy_(*cookie_access_policy),
+      site_for_cookies_(site_for_cookies) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+
+  // Latch cookie policy settings when feature is enabled. This allows shared
+  // memory cookie versioning to work since the policy won't change during this
+  // RCM's lifetime.
+  if (base::FeatureList::IsEnabled(features::kWebViewLatchedCookiePolicy)) {
+    latched_accept_cookies_ = cookie_access_policy_->GetShouldAcceptCookies();
+    latched_accept_third_party_ =
+        cookie_access_policy_->GetShouldAcceptThirdPartyCookies(
+            global_frame_token_);
+  }
 }
 
 // static
 void AwProxyingRestrictedCookieManager::CreateAndBindOnIoThread(
     mojo::PendingRemote<network::mojom::RestrictedCookieManager> underlying_rcm,
-    bool is_service_worker,
     const std::optional<const content::GlobalRenderFrameHostToken>&
         global_frame_token,
+    const net::SiteForCookies& site_for_cookies,
     mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
     AwCookieAccessPolicy* cookie_access_policy) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
   auto wrapper = base::WrapUnique(new AwProxyingRestrictedCookieManager(
-      std::move(underlying_rcm), is_service_worker, global_frame_token,
+      std::move(underlying_rcm), global_frame_token, site_for_cookies,
       cookie_access_policy));
   mojo::MakeSelfOwnedReceiver(std::move(wrapper), std::move(receiver));
 }
 
 PrivacySetting AwProxyingRestrictedCookieManager::AllowCookies(
-    const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
-    net::StorageAccessApiStatus storage_access_api_status) const {
-  if (is_service_worker_) {
-    // Service worker cookies are always first-party, so only need to check
-    // the global toggle.
-    return cookie_access_policy_->GetShouldAcceptCookies()
-               ? PrivacySetting::kStateAllowed
-               : PrivacySetting::kStateDisallowed;
-  } else {
-    return cookie_access_policy_->AllowCookies(
-        url, site_for_cookies, global_frame_token_, storage_access_api_status);
+    const GURL& url) const {
+  // When feature is enabled, use latched cookie policy state captured at
+  // construction time. This enables shared memory cookie versioning.
+  if (base::FeatureList::IsEnabled(features::kWebViewLatchedCookiePolicy)) {
+    // Note: For service workers, cookie policy updates may be slightly
+    // delayed. Service workers are only killed after some seconds of
+    // inactivity (no controlled fetch events). This means a cookie policy
+    // change may apply to a new page, but a reused service worker will still
+    // have the old cookie policy until it is terminated and recreated. We
+    // accept this as a limited edge case unlikely to cause issues in
+    // practice.
+    return AwCookieAccessPolicy::CanAccessCookies(url, site_for_cookies_,
+                                                  latched_accept_cookies_,
+                                                  latched_accept_third_party_);
   }
+
+  // Original dynamic behavior.
+  return cookie_access_policy_->AllowCookies(url, site_for_cookies_,
+                                             global_frame_token_);
 }
 
 }  // namespace android_webview

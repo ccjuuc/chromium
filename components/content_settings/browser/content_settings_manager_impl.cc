@@ -146,13 +146,10 @@ void ContentSettingsManagerImpl::Clone(
       std::move(receiver));
 }
 
-void ContentSettingsManagerImpl::AllowStorageAccess(
-    const blink::LocalFrameToken& frame_token,
-    StorageType storage_type,
+bool ContentSettingsManagerImpl::EvaluateStorageAccessPermission(
     const url::Origin& origin,
     const net::SiteForCookies& site_for_cookies,
-    const url::Origin& top_frame_origin,
-    base::OnceCallback<void(bool)> callback) {
+    const url::Origin& top_frame_origin) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   GURL url = origin.GetURL();
 
@@ -173,10 +170,10 @@ void ContentSettingsManagerImpl::AllowStorageAccess(
       url, site_for_cookies, top_frame_origin, net::CookieSettingOverrides(),
       cookie_partition_key, &cookie_settings);
 
-  //  If storage partitioning is active, third-party partitioned storage is
-  //  allowed by default, and access is only blocked due to general third-party
-  //  cookie blocking (and not due to a user specified pattern) then we'll allow
-  //  storage access.
+  // If storage partitioning is active, third-party partitioned storage is
+  // allowed by default, and access is only blocked due to general third-party
+  // cookie blocking (and not due to a user specified pattern) then we'll allow
+  // storage access.
   if (base::FeatureList::IsEnabled(
           net::features::kThirdPartyStoragePartitioning) &&
       base::FeatureList::IsEnabled(
@@ -193,16 +190,30 @@ void ContentSettingsManagerImpl::AllowStorageAccess(
     allowed = true;
   }
 
-  // Allow unpartitioned storage access when the
-  // kNativeUnpartitionedStoragePermittedWhen3PCOff feature is enabled. This
-  // developer flag is used to simulate Chrome's unpartitioned storage behavior
-  // that is otherwise unreachable through command line flags. (Fixes
-  // crbug.com/357784801)
-  if (!allowed &&
-      base::FeatureList::IsEnabled(
-          features::kNativeUnpartitionedStoragePermittedWhen3PCOff)) {
-    allowed = true;
-  }
+  return allowed;
+}
+
+void ContentSettingsManagerImpl::IsStorageAccessAllowed(
+    const url::Origin& origin,
+    const net::SiteForCookies& site_for_cookies,
+    const url::Origin& top_frame_origin,
+    base::OnceCallback<void(bool)> callback) {
+  bool allowed = EvaluateStorageAccessPermission(origin, site_for_cookies,
+                                                 top_frame_origin);
+  std::move(callback).Run(allowed);
+}
+
+void ContentSettingsManagerImpl::AllowStorageAccess(
+    const blink::LocalFrameToken& frame_token,
+    StorageType storage_type,
+    const url::Origin& origin,
+    const net::SiteForCookies& site_for_cookies,
+    const url::Origin& top_frame_origin,
+    base::OnceCallback<void(bool)> callback) {
+  bool allowed = EvaluateStorageAccessPermission(origin, site_for_cookies,
+                                                 top_frame_origin);
+  GURL url = origin.GetURL();
+
   if (delegate_->AllowStorageAccess(
           content::GlobalRenderFrameHostToken(render_process_id_, frame_token),
           storage_type, url, allowed, &callback)) {

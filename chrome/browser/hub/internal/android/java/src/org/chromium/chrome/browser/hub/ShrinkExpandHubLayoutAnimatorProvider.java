@@ -11,11 +11,14 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.RectEvaluator;
 import android.animation.ValueAnimator;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.View;
 import android.view.animation.Interpolator;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.ColorInt;
@@ -27,6 +30,8 @@ import org.chromium.base.supplier.SyncOneshotSupplier;
 import org.chromium.base.supplier.SyncOneshotSupplierImpl;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarUtils;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.animation.AnimationPerformanceTracker;
 import org.chromium.ui.animation.AnimationPerformanceTracker.AnimationMetrics;
 import org.chromium.ui.interpolators.Interpolators;
@@ -79,9 +84,11 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
     private final @Nullable ImageViewWeakRefBitmapCallback mBitmapCallback;
     private final long mDurationMs;
     private final DoubleConsumer mOnAlphaChange;
+    private final boolean mIsIncognito;
 
     private boolean mWasForcedToFinish;
     private @Nullable ShrinkExpandImageView mShrinkExpandImageView;
+    private @Nullable View mFakeBottomControlsView;
     private boolean mLayoutSatisfied;
 
     /**
@@ -102,6 +109,7 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
      *     doesn't cover the animating area.
      * @param durationMs The duration in milliseconds of the animation.
      * @param onAlphaChange Observer to notify when alpha changes during animations.
+     * @param isIncognito Whether the animation is in the incognito state.
      */
     public ShrinkExpandHubLayoutAnimatorProvider(
             @HubLayoutAnimationType int animationType,
@@ -110,7 +118,8 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
             SyncOneshotSupplier<ShrinkExpandAnimationData> animationDataSupplier,
             @ColorInt int backgroundColor,
             long durationMs,
-            DoubleConsumer onAlphaChange) {
+            DoubleConsumer onAlphaChange,
+            boolean isIncognito) {
         this(
                 animationType,
                 needsBitmap,
@@ -119,7 +128,8 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
                 animationDataSupplier,
                 backgroundColor,
                 durationMs,
-                onAlphaChange);
+                onAlphaChange,
+                isIncognito);
     }
 
     /**
@@ -137,6 +147,7 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
      *     doesn't cover the animating area.
      * @param durationMs The duration in milliseconds of the animation.
      * @param onAlphaChange Observer to notify when alpha changes during animations.
+     * @param isIncognito Whether the animation is in the incognito state.
      */
     public ShrinkExpandHubLayoutAnimatorProvider(
             @HubLayoutAnimationType int animationType,
@@ -146,7 +157,8 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
             SyncOneshotSupplier<ShrinkExpandAnimationData> animationDataSupplier,
             @ColorInt int backgroundColor,
             long durationMs,
-            DoubleConsumer onAlphaChange) {
+            DoubleConsumer onAlphaChange,
+            boolean isIncognito) {
         assert animationType == HubLayoutAnimationType.EXPAND_NEW_TAB
                         || animationType == HubLayoutAnimationType.EXPAND_TAB
                         || animationType == HubLayoutAnimationType.SHRINK_TAB
@@ -157,6 +169,7 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
         mAnimationDataSupplier = animationDataSupplier;
         mDurationMs = durationMs;
         mOnAlphaChange = onAlphaChange;
+        mIsIncognito = isIncognito;
 
         mShrinkExpandImageView = shrinkExpandImageView;
         mShrinkExpandImageView.setVisibility(View.INVISIBLE);
@@ -205,6 +218,10 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
 
     public @Nullable ShrinkExpandImageView getImageViewForTesting() {
         return mShrinkExpandImageView;
+    }
+
+    public @Nullable View getFakeBottomControlsViewForTesting() {
+        return mFakeBottomControlsView;
     }
 
     private void onAnimationDataAvailable(ShrinkExpandAnimationData animationData) {
@@ -339,11 +356,56 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
                         mShrinkExpandImageView, initialRoundedCorners, finalRoundedCorners);
         cornerAnimator.setInterpolator(interpolator);
 
-        AnimatorSet animatorSet = new AnimatorSet();
-        if (fadeAnimator == null) {
-            animatorSet.playTogether(shrinkExpandAnimator, cornerAnimator);
+        int bottomControlsHeight =
+                Math.max(
+                        0,
+                        mHubContainerView.getHeight()
+                                - (isShrink ? initialRect.bottom : finalRect.bottom));
+        final @Nullable ObjectAnimator bottomControlsScaleAnimator;
+
+        int bottomMargin = animationData.getBottomMargin();
+        int animatingHeight = Math.max(0, bottomControlsHeight - bottomMargin);
+
+        if (animatingHeight > 0) {
+            Context context = mHubContainerView.getContext();
+            mFakeBottomControlsView = new View(context);
+            FrameLayout.LayoutParams fakeViewParams =
+                    new FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT, animatingHeight, Gravity.BOTTOM);
+            fakeViewParams.bottomMargin = bottomMargin;
+            mFakeBottomControlsView.setLayoutParams(fakeViewParams);
+
+            @ColorInt
+            int onSurfaceColor =
+                    BottomBarUtils.getBottomBarBackgroundColor(
+                            context,
+                            mIsIncognito
+                                    ? BrandedColorScheme.INCOGNITO
+                                    : BrandedColorScheme.APP_DEFAULT);
+            mFakeBottomControlsView.setBackgroundColor(onSurfaceColor);
+            mHubContainerView.addView(mFakeBottomControlsView);
+
+            float initialScaleY = isShrink ? 1.0f : 0.0f;
+            float finalScaleY = isShrink ? 0.0f : 1.0f;
+
+            mFakeBottomControlsView.setPivotY(animatingHeight);
+            mFakeBottomControlsView.setScaleY(initialScaleY);
+
+            bottomControlsScaleAnimator =
+                    ObjectAnimator.ofFloat(
+                            mFakeBottomControlsView, View.SCALE_Y, initialScaleY, finalScaleY);
+            bottomControlsScaleAnimator.setInterpolator(interpolator);
         } else {
-            animatorSet.playTogether(shrinkExpandAnimator, fadeAnimator, cornerAnimator);
+            bottomControlsScaleAnimator = null;
+        }
+
+        AnimatorSet animatorSet = new AnimatorSet();
+        var builder = animatorSet.play(shrinkExpandAnimator).with(cornerAnimator);
+        if (fadeAnimator != null) {
+            builder.with(fadeAnimator);
+        }
+        if (bottomControlsScaleAnimator != null) {
+            builder.with(bottomControlsScaleAnimator);
         }
         animatorSet.setDuration(mDurationMs);
 
@@ -407,6 +469,10 @@ public class ShrinkExpandHubLayoutAnimatorProvider implements HubLayoutAnimatorP
         mHubContainerView.removeView(mShrinkExpandImageView);
         mShrinkExpandImageView.setImageBitmap(null);
         mShrinkExpandImageView = null;
+        if (mFakeBottomControlsView != null) {
+            mHubContainerView.removeView(mFakeBottomControlsView);
+            mFakeBottomControlsView = null;
+        }
     }
 
     private static Interpolator getInterpolator(@HubLayoutAnimationType int animationType) {

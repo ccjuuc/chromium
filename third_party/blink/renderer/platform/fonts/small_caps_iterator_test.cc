@@ -32,7 +32,7 @@ class SmallCapsIteratorTest : public testing::Test {
     text.Ensure16Bit();
     Vector<SmallCapsExpectedRun> expect;
     for (auto& run : runs) {
-      text.Append(String::FromUTF8(run.text));
+      text.Append(String::FromUtf8(run.text));
       expect.push_back(SmallCapsExpectedRun(text.length(), run.code));
     }
     SmallCapsIterator small_caps_iterator(text.Span16());
@@ -43,7 +43,7 @@ class SmallCapsIteratorTest : public testing::Test {
                   const Vector<SmallCapsExpectedRun>& expect) {
     unsigned limit;
     SmallCapsIterator::SmallCapsBehavior small_caps_behavior;
-    size_t run_count = 0;
+    wtf_size_t run_count = 0;
     while (small_caps_iterator->Consume(&limit, &small_caps_behavior)) {
       ASSERT_LT(run_count, expect.size());
       ASSERT_EQ(expect[run_count].limit, limit);

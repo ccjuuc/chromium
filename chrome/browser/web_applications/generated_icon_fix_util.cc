@@ -23,7 +23,6 @@
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
-#include "chrome/common/chrome_features.h"
 #include "components/sync/base/time.h"
 
 namespace web_app::generated_icon_fix_util {
@@ -59,7 +58,11 @@ bool IsValid(const proto::GeneratedIconFix& generated_icon_fix) {
 }
 
 void SetNowForTesting(base::Time now) {
-  g_now_override_for_testing_ = now;
+  if (now.is_null()) {
+    g_now_override_for_testing_ = std::nullopt;
+  } else {
+    g_now_override_for_testing_ = now;
+  }
 }
 
 bool HasRemainingAttempts(const WebApp& app) {

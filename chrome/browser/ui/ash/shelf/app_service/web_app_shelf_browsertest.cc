@@ -10,14 +10,14 @@
 #include "ash/shelf/shelf_app_button.h"
 #include "ash/shelf/shelf_view.h"
 #include "ash/shell.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
@@ -25,6 +25,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/app_constants/constants.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/test/browser_test.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -54,10 +55,10 @@ class WebAppShelfBrowserTest : public InProcessBrowserTest {
         WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromOmnibox));
     Browser* app_browser = browser_created_observer.Wait();
     ash::ShelfModel::Get()->PinExistingItemWithID(app_id);
-    app_browser->window()->Close();
+    app_browser->GetWindow()->Close();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppShelfBrowserTest, SwitchingBetweenApps) {
@@ -145,33 +146,33 @@ IN_PROC_BROWSER_TEST_F(WebAppShelfBrowserTest, SwitchingBetweenApps) {
   const ash::ShelfAppButton* const button_chrome =
       shelf_view->GetShelfAppButton(ash::ShelfID(app_constants::kChromeAppId));
 
-  browser()->ActivateContents(contents_a);
+  BrowserWebContentsDelegate::From(browser())->ActivateContents(contents_a);
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_ACTIVE);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_RUNNING);
 
-  browser()->ActivateContents(contents_b);
+  BrowserWebContentsDelegate::From(browser())->ActivateContents(contents_b);
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_ACTIVE);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_RUNNING);
 
-  browser_c->ActivateContents(contents_c);
+  BrowserWebContentsDelegate::From(browser_c)->ActivateContents(contents_c);
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_ACTIVE);
   EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_RUNNING);
 
-  browser()->ActivateContents(contents_d);
+  BrowserWebContentsDelegate::From(browser())->ActivateContents(contents_d);
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_RUNNING);
   EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_ACTIVE);
 
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   EXPECT_EQ(button_a->state(), ash::ShelfAppButton::STATE_NORMAL);
   EXPECT_EQ(button_b->state(), ash::ShelfAppButton::STATE_NORMAL);
   EXPECT_EQ(button_c->state(), ash::ShelfAppButton::STATE_ACTIVE);
-  EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_RUNNING);
+  EXPECT_EQ(button_chrome->state(), ash::ShelfAppButton::STATE_NORMAL);
 }

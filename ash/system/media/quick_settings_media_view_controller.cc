@@ -84,7 +84,7 @@ QuickSettingsMediaViewController::ShowMediaItem(
       MediaNotificationProvider::Get()->BuildDeviceSelectorView(
           id, item,
           global_media_controls::GlobalMediaControlsEntryPoint::kSystemTray),
-      /*notification_theme=*/std::nullopt, GetCrosMediaColorTheme(),
+      GetCrosMediaColorTheme(),
       global_media_controls::MediaDisplayPage::kQuickSettingsMediaView);
   auto* media_item_ui_ptr = media_item_ui.get();
   media_item_ui_observer_set_.Observe(id, media_item_ui_ptr);
@@ -122,6 +122,8 @@ void QuickSettingsMediaViewController::OnMediaItemUIShowDevices(
 std::unique_ptr<views::View> QuickSettingsMediaViewController::CreateView() {
   auto media_view = std::make_unique<QuickSettingsMediaView>(this);
   media_view_ = media_view->AsWeakPtr();
+  pagination_model_ = std::make_unique<PaginationModel>(media_view_.get());
+  media_view_->Init();
   media_item_manager_->SetDialogDelegate(this);
   return std::move(media_view);
 }

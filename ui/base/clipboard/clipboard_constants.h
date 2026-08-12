@@ -48,6 +48,11 @@ inline constexpr char kMimeTypeWindowDrag[] = "chromium/x-window-drag";
 inline constexpr char kMimeTypeLinuxUtf8String[] = "UTF8_STRING";
 inline constexpr char kMimeTypeLinuxString[] = "STRING";
 inline constexpr char kMimeTypeLinuxText[] = "TEXT";
+
+// Used for file transfer using the XDG file transfer portal.
+inline constexpr char kMimeTypePortalFileTransfer[] =
+    "application/vnd.portal.filetransfer";
+inline constexpr char kMimeTypePortalFiles[] = "application/vnd.portal.files";
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
         // BUILDFLAG(IS_FUCHSIA)
 
@@ -62,12 +67,18 @@ inline constexpr char kMimeTypeSourceUrl[] = "chromium/x-source-url";
 #if !BUILDFLAG(IS_APPLE)
 
 // TODO(dcheng): This name is temporary. See https://crbug.com/40123727.
+// LINT.IfChange(kMimeTypeDataTransferCustomData)
 inline constexpr char kMimeTypeDataTransferCustomData[] =
     "chromium/x-web-custom-data";
+// LINT.ThenChange(/ui/android/java/src/org/chromium/ui/base/ClipboardImpl.java)
 inline constexpr char16_t kMimeTypeDataTransferCustomData16[] =
     u"chromium/x-web-custom-data";
 inline constexpr char kMimeTypeWebkitSmartPaste[] = "chromium/x-webkit-paste";
 
+// The MIME type for the clipboard format for bookmark entries. This type is
+// not used on the Mac.
+inline constexpr char kMimeTypeBookmarkEntries[] =
+    "chromium/x-bookmark-entries";
 #else
 
 // ----- APPLE UNIFORM TYPES -----
@@ -134,6 +145,16 @@ extern NSString* const kUTTypeWebKitWebUrlsWithTitles;
 // A type used to track the source URL of data put in the clipboard.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
 extern NSString* const kUTTypeChromiumSourceUrl;
+
+// A type used to carry the Content-Disposition value (which encodes the
+// original filename) for file contents on the pasteboard during drag-and-drop.
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
+extern NSString* const kUTTypeChromiumContentDisposition;
+
+// UTI for dictionary containing bookmark structure consisting of individual
+// bookmark nodes and/or bookmark folders.
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
+extern NSString* const kUTTypeChromiumBookmarkDictionaryList;
 
 #endif  //  __OBJC__
 

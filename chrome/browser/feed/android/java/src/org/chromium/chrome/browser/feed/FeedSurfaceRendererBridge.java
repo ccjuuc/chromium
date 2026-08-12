@@ -47,10 +47,9 @@ public class FeedSurfaceRendererBridge {
                 Profile profile,
                 Renderer renderer,
                 FeedReliabilityLoggingBridge reliabilityLoggingBridge,
-                @StreamKind int streamKind,
-                @Nullable SingleWebFeedParameters webFeedParameters) {
+                @StreamKind int streamKind) {
             return new FeedSurfaceRendererBridge(
-                    profile, renderer, reliabilityLoggingBridge, streamKind, webFeedParameters);
+                    profile, renderer, reliabilityLoggingBridge, streamKind);
         }
     }
 
@@ -58,29 +57,14 @@ public class FeedSurfaceRendererBridge {
             Profile profile,
             Renderer renderer,
             FeedReliabilityLoggingBridge reliabilityLoggingBridge,
-            @StreamKind int streamKind,
-            @Nullable SingleWebFeedParameters webFeedParameters) {
+            @StreamKind int streamKind) {
         mProfile = profile;
         mRenderer = renderer;
-        if (streamKind == StreamKind.SINGLE_WEB_FEED) {
-            assert webFeedParameters != null;
-            mNativeSurfaceRenderer =
-                    FeedSurfaceRendererBridgeJni.get()
-                            .initWebFeed(
-                                    this,
-                                    profile,
-                                    webFeedParameters.getWebFeedId(),
-                                    reliabilityLoggingBridge.getNativePtr(),
-                                    webFeedParameters.getEntryPoint());
-        } else {
-            mNativeSurfaceRenderer =
-                    FeedSurfaceRendererBridgeJni.get()
-                            .init(
-                                    this,
-                                    profile,
-                                    streamKind,
-                                    reliabilityLoggingBridge.getNativePtr());
-        }
+
+        mNativeSurfaceRenderer =
+                FeedSurfaceRendererBridgeJni.get()
+                        .init(this, profile, streamKind, reliabilityLoggingBridge.getNativePtr());
+
         mSurfaceId = FeedSurfaceRendererBridgeJni.get().getSurfaceId(mNativeSurfaceRenderer);
     }
 
@@ -270,19 +254,16 @@ public class FeedSurfaceRendererBridge {
                 @StreamKind int streamKind,
                 long nativeFeedReliabilityLoggingBridge);
 
-        long initWebFeed(
-                FeedSurfaceRendererBridge self,
-                @JniType("Profile*") Profile profile,
-                byte[] webFeedId,
-                long nativeFeedReliabilityLoggingBridge,
-                int entryPoint);
-
         // Member functions, must not be called after destroy().
         void destroy(long nativeFeedSurfaceRendererBridge);
 
-        void loadMore(long nativeFeedSurfaceRendererBridge, Callback<Boolean> callback);
+        void loadMore(
+                long nativeFeedSurfaceRendererBridge,
+                @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
-        void manualRefresh(long nativeFeedSurfaceRendererBridge, Callback<Boolean> callback);
+        void manualRefresh(
+                long nativeFeedSurfaceRendererBridge,
+                @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         int getSurfaceId(long nativeFeedSurfaceRendererBridge);
 

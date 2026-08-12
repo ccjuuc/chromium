@@ -10,7 +10,6 @@
 #include "ash/webui/shimless_rma/backend/external_app_dialog.h"
 #include "ash/webui/shimless_rma/backend/fake_shimless_rma_delegate.h"
 #include "ash/webui/shimless_rma/backend/shimless_rma_service.h"
-#include "ash/webui/shimless_rma/mojom/shimless_rma.mojom-shared.h"
 #include "ash/webui/shimless_rma/mojom/shimless_rma.mojom.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -87,7 +86,7 @@ void SetFakeCrosHealthdOemName(const std::string& oem_name) {
       ash::cros_healthd::mojom::SystemResult::NewSystemInfo(
           std::move(system_info));
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      telemetry_info);
+      std::move(telemetry_info));
 }
 
 TEST_F(ShimlessRmaService3pDiagTest, Get3pDiagnosticsProvider) {
@@ -112,9 +111,8 @@ TEST_F(ShimlessRmaService3pDiagTest,
 TEST_F(ShimlessRmaService3pDiagTest,
        Get3pDiagnosticsProviderFailedToGetOemName) {
   // Set empty cros_healthd response.
-  auto info = ash::cros_healthd::mojom::TelemetryInfo::New();
   cros_healthd::FakeCrosHealthd::Get()->SetProbeTelemetryInfoResponseForTesting(
-      info);
+      ash::cros_healthd::mojom::TelemetryInfo::New());
 
   base::test::TestFuture<const std::optional<std::string>&> future;
   shimless_rma_provider_->Get3pDiagnosticsProvider(future.GetCallback());

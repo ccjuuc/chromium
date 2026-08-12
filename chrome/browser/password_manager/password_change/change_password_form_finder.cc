@@ -12,10 +12,14 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/password_manager/password_change/annotated_page_content_capturer.h"
 #include "chrome/browser/password_manager/password_change/button_click_helper.h"
 #include "chrome/browser/password_manager/password_change/change_password_form_waiter.h"
 #include "chrome/browser/password_manager/password_change/model_quality_logs_uploader.h"
+#include "chrome/browser/password_manager/password_change/password_change_logging_util.h"
+#include "chrome/browser/password_manager/password_change/password_change_page_stability_waiter.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/core/model_quality/model_execution_logging_wrappers.h"
 #include "components/optimization_guide/proto/features/password_change_submission.pb.h"
@@ -29,50 +33,48 @@ namespace {
 
 using Logger = password_manager::BrowserSavePasswordProgressLogger;
 using PageType = optimization_guide::proto::OpenFormResponseData::PageType;
+using password_change::LogBoolean;
+using password_change::LogMessage;
+using password_change::LogNumber;
+using password_change::LogResponse;
 
 constexpr optimization_guide::proto::PasswordChangeRequest::FlowStep
     kOpenFormFlowStep = optimization_guide::proto::PasswordChangeRequest::
         FlowStep::PasswordChangeRequest_FlowStep_OPEN_FORM_STEP;
 
+constexpr optimization_guide::proto::OpenFormResponseData::PageType
+    kInterventionNeededPage = optimization_guide::proto::OpenFormResponseData::
+        PageType::OpenFormResponseData_PageType_USER_INTERVENTION_NEEDED_PAGE;
+
 blink::mojom::AIPageContentOptionsPtr GetAIPageContentOptions() {
   // WebContents where password change is happening is hidden, and renderer
   // won't capture a snapshot unless it becomes visible again or
   // on_critical_path is set to true.
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::
-              kUseActionablesForImprovedPasswordChange)) {
-    return optimization_guide::ActionableAIPageContentOptions(
-        /*on_critical_path =*/true);
-  }
-  return optimization_guide::DefaultAIPageContentOptions(
-      /*on_critical_path =*/true);
-}
-
-std::unique_ptr<Logger> GetLoggerIfAvailable(
-    password_manager::PasswordManagerClient* client) {
-  if (!client) {
-    return nullptr;
-  }
-
-  autofill::LogManager* log_manager = client->GetCurrentLogManager();
-  if (log_manager && log_manager->IsLoggingActive()) {
-    return std::make_unique<Logger>(log_manager);
-  }
-
-  return nullptr;
+  blink::mojom::AIPageContentOptionsPtr options =
+      optimization_guide::ActionableAIPageContentOptions(
+          /*on_critical_path =*/true);
+  options->include_same_site_only = true;
+  return options;
 }
 
 password_manager::PasswordFormManager* LogPasswordFormDetectedMetric(
     base::Time time_of_creation,
     password_manager::PasswordFormManager* form_manager) {
-  base::UmaHistogramBoolean("PasswordManager.ChangePasswordFormDetected",
-                            form_manager);
-  if (form_manager) {
-    base::UmaHistogramMediumTimes(
-        "PasswordManager.ChangePasswordFormDetectionTime",
-        base::Time::Now() - time_of_creation);
-  }
+  CHECK(form_manager);
+  base::UmaHistogramBoolean("PasswordManager.ChangePasswordFormDetected", true);
+  base::UmaHistogramMediumTimes(
+      "PasswordManager.ChangePasswordFormDetectionTime",
+      base::Time::Now() - time_of_creation);
   return form_manager;
+}
+
+ChangePasswordFormFinder::ErrorCase LogFormNotFoundMetric(
+    ChangePasswordFormFinder::ErrorCase error_case) {
+  base::UmaHistogramBoolean("PasswordManager.ChangePasswordFormDetected",
+                            false);
+  base::UmaHistogramEnumeration("PasswordManager.ChangePasswordFormFinderError",
+                                error_case);
+  return error_case;
 }
 
 }  // namespace
@@ -81,18 +83,43 @@ ChangePasswordFormFinder::ChangePasswordFormFinder(
     content::WebContents* web_contents,
     password_manager::PasswordManagerClient* client,
     ModelQualityLogsUploader* logs_uploader,
-    ChangePasswordFormWaiter::PasswordFormFoundCallback callback)
+    ChangePasswordFormWaiter::PasswordFormFoundCallback success_callback,
+    FailureCallback failure_callback)
     : creation_time_(base::Time::Now()),
       web_contents_(web_contents),
       client_(client),
       logs_uploader_(logs_uploader) {
   // Record metrics if form has been detected and the time it took.
-  callback_ = base::BindOnce(&LogPasswordFormDetectedMetric, creation_time_)
-                  .Then(std::move(callback));
+  success_callback_ =
+      base::BindOnce(&LogPasswordFormDetectedMetric, creation_time_)
+          .Then(std::move(success_callback));
+  failure_callback_ =
+      base::BindOnce(&LogFormNotFoundMetric).Then(std::move(failure_callback));
   CHECK(logs_uploader_);
-  capture_annotated_page_content_ =
-      base::BindOnce(&optimization_guide::GetAIPageContent, web_contents,
-                     GetAIPageContentOptions());
+
+  if (base::FeatureList::IsEnabled(
+          password_manager::features::kAwaitPageStabilityForPasswordChange)) {
+    page_stability_waiter_ =
+        std::make_unique<PasswordChangePageStabilityWaiter>(
+            web_contents_, client_,
+            base::BindOnce(&ChangePasswordFormFinder::OnPageStableInitially,
+                           weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    OnPageStableInitially();
+  }
+
+  timeout_timer_.Start(FROM_HERE, kFormWaitingTimeout,
+                       base::BindOnce(&ChangePasswordFormFinder::OnFormNotFound,
+                                      weak_ptr_factory_.GetWeakPtr()));
+}
+
+ChangePasswordFormFinder::~ChangePasswordFormFinder() {
+  logs_uploader_->SetStepDuration(kOpenFormFlowStep,
+                                  base::Time::Now() - creation_time_);
+}
+
+void ChangePasswordFormFinder::OnPageStableInitially() {
+  page_stability_waiter_.reset();
   form_waiter_ =
       ChangePasswordFormWaiter::Builder(
           web_contents_, client_,
@@ -102,74 +129,44 @@ ChangePasswordFormFinder::ChangePasswordFormFinder(
               base::BindOnce(&ChangePasswordFormFinder::OnFormNotFoundInitially,
                              weak_ptr_factory_.GetWeakPtr()))
           .IgnoreHiddenForms()
+          .SetLogsUploader(logs_uploader_)
           .Build();
-
-  timeout_timer_.Start(FROM_HERE, kFormWaitingTimeout,
-                       base::BindOnce(&ChangePasswordFormFinder::OnFormNotFound,
-                                      weak_ptr_factory_.GetWeakPtr()));
-}
-
-ChangePasswordFormFinder::ChangePasswordFormFinder(
-    base::PassKey<class ChangePasswordFormFinderTest>,
-    content::WebContents* web_contents,
-    password_manager::PasswordManagerClient* client,
-    ModelQualityLogsUploader* logs_uploader,
-    ChangePasswordFormWaiter::PasswordFormFoundCallback callback,
-    base::OnceCallback<void(optimization_guide::OnAIPageContentDone)>
-        capture_annotated_page_content)
-    : ChangePasswordFormFinder(web_contents,
-                               client,
-                               logs_uploader,
-                               std::move(callback)) {
-  capture_annotated_page_content_ = std::move(capture_annotated_page_content);
-}
-
-ChangePasswordFormFinder::~ChangePasswordFormFinder() {
-  logs_uploader_->SetStepDuration(kOpenFormFlowStep,
-                                  base::Time::Now() - creation_time_);
 }
 
 void ChangePasswordFormFinder::OnFormNotFoundInitially() {
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogBoolean(
-        Logger::STRING_PASSWORD_CHANGE_INITIAL_FORM_WAITING_RESULT, false);
-  }
-
-  CHECK(capture_annotated_page_content_);
-  std::move(capture_annotated_page_content_)
-      .Run(base::BindOnce(&ChangePasswordFormFinder::OnPageContentReceived,
-                          weak_ptr_factory_.GetWeakPtr()));
+  LogBoolean(client_,
+             Logger::STRING_PASSWORD_CHANGE_INITIAL_FORM_WAITING_RESULT, false);
+  capturer_ = AnnotatedPageContentCapturer::Create(
+      web_contents_, client_, GetAIPageContentOptions(),
+      base::BindOnce(&ChangePasswordFormFinder::OnPageContentReceived,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void ChangePasswordFormFinder::OnFormFoundInitially(
     password_manager::PasswordFormManager* form_manager) {
   form_waiter_.reset();
-  CHECK(callback_);
+  CHECK(success_callback_);
   CHECK(form_manager);
 
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogMessage(Logger::STRING_AUTOMATED_PASSWORD_CHANGE_FORM_FOUND);
-  }
+  LogMessage(client_, Logger::STRING_AUTOMATED_PASSWORD_CHANGE_FORM_FOUND);
 
   logs_uploader_->MarkStepSkipped(kOpenFormFlowStep);
-  std::move(callback_).Run(form_manager);
+  std::move(success_callback_).Run(form_manager);
 }
 
 void ChangePasswordFormFinder::OnPageContentReceived(
     optimization_guide::AIPageContentResultOrError content) {
   CHECK(web_contents_);
-  CHECK(callback_);
+  CHECK(failure_callback_);
 
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogBoolean(
-        Logger::STRING_AUTOMATED_PASSWORD_CHANGE_PAGE_CONTENT_RECEIVED,
-        content.has_value());
-  }
+  LogBoolean(client_,
+             Logger::STRING_AUTOMATED_PASSWORD_CHANGE_PAGE_CONTENT_RECEIVED,
+             content.has_value());
 
   if (!content.has_value()) {
     LogPageContentCaptureFailure(
         password_manager::metrics_util::PasswordChangeFlowStep::kOpenFormStep);
-    std::move(callback_).Run(nullptr);
+    std::move(failure_callback_).Run(ErrorCase::kFailedToCapturePageContent);
     return;
   }
 
@@ -201,7 +198,7 @@ void ChangePasswordFormFinder::OnExecutionResponseCallback(
         optimization_guide::proto::PasswordChangeSubmissionLoggingData>
         logging_data) {
   CHECK(web_contents_);
-  CHECK(callback_);
+  CHECK(failure_callback_);
 
   std::optional<optimization_guide::proto::PasswordChangeResponse> response =
       std::nullopt;
@@ -209,28 +206,36 @@ void ChangePasswordFormFinder::OnExecutionResponseCallback(
     response = optimization_guide::ParsedAnyMetadata<
         optimization_guide::proto::PasswordChangeResponse>(
         execution_result.response.value());
+    if (response) {
+      LogResponse(client_, Logger::STRING_MESSAGE, *response);
+    }
   }
 
   logs_uploader_->SetOpenFormQuality(response, std::move(logging_data));
 
   if (!response) {
-    std::move(callback_).Run(nullptr);
+    std::move(failure_callback_).Run(ErrorCase::kFailedToParseResponse);
     return;
   }
 
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogNumber(Logger::STRING_PASSWORD_CHANGE_MODEL_PAGE_PREDICTION_TYPE,
-                      response.value().open_form_data().page_type());
-  }
-  int dom_node_id = response.value().open_form_data().dom_node_id_to_click();
+  LogNumber(client_, Logger::STRING_PASSWORD_CHANGE_MODEL_PAGE_PREDICTION_TYPE,
+            response.value().open_form_data().page_type());
+
   PageType page_type = response.value().open_form_data().page_type();
+  if (page_type == kInterventionNeededPage) {
+    std::move(failure_callback_).Run(ErrorCase::kInterruptionDetected);
+    return;
+  }
+
+  int dom_node_id = response.value().open_form_data().dom_node_id_to_click();
   if (!dom_node_id ||
       page_type != PageType::OpenFormResponseData_PageType_SETTINGS_PAGE) {
-    std::move(callback_).Run(nullptr);
+    std::move(failure_callback_).Run(ErrorCase::kNoButtonToClick);
     return;
   }
 
   form_waiter_.reset();
+  button_click_attempted_ = true;
   click_helper_ = std::make_unique<ButtonClickHelper>(
       web_contents_, client_, dom_node_id,
       base::BindOnce(&ChangePasswordFormFinder::OnButtonClicked,
@@ -240,44 +245,62 @@ void ChangePasswordFormFinder::OnExecutionResponseCallback(
 void ChangePasswordFormFinder::OnButtonClicked(
     actor::mojom::ActionResultCode result) {
   CHECK(web_contents_);
-  CHECK(callback_);
+  CHECK(failure_callback_);
 
   click_helper_.reset();
 
   if (result != actor::mojom::ActionResultCode::kOk) {
     logs_uploader_->RecordButtonClickFailure(kOpenFormFlowStep, result);
-    std::move(callback_).Run(nullptr);
+    std::move(failure_callback_).Run(ErrorCase::kFailedToClickButton);
     return;
   }
 
+  if (base::FeatureList::IsEnabled(
+          password_manager::features::kAwaitPageStabilityForPasswordChange)) {
+    page_stability_waiter_ =
+        std::make_unique<PasswordChangePageStabilityWaiter>(
+            web_contents_, client_,
+            base::BindOnce(&ChangePasswordFormFinder::OnPageStableAfterClick,
+                           weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    OnPageStableAfterClick();
+  }
+}
+
+void ChangePasswordFormFinder::OnPageStableAfterClick() {
   form_waiter_ =
       ChangePasswordFormWaiter::Builder(
           web_contents_, client_,
           base::BindOnce(
               &ChangePasswordFormFinder::OnChangePasswordFormFoundAfterClick,
               weak_ptr_factory_.GetWeakPtr()))
+          .SetLogsUploader(logs_uploader_)
           .Build();
 }
 
 void ChangePasswordFormFinder::OnChangePasswordFormFoundAfterClick(
     password_manager::PasswordFormManager* form_manager) {
   CHECK(form_manager);
+  CHECK(success_callback_);
 
   form_waiter_.reset();
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogBoolean(
-        Logger::STRING_PASSWORD_CHANGE_SUBSEQUENT_FORM_WAITING_RESULT,
-        form_manager);
-  }
-  std::move(callback_).Run(form_manager);
+  LogBoolean(client_,
+             Logger::STRING_PASSWORD_CHANGE_SUBSEQUENT_FORM_WAITING_RESULT,
+             form_manager);
+  std::move(success_callback_).Run(form_manager);
 }
 
 void ChangePasswordFormFinder::OnFormNotFound() {
-  if (auto logger = GetLoggerIfAvailable(client_)) {
-    logger->LogMessage(Logger::STRING_AUTOMATED_PASSWORD_CHANGE_FORM_NOT_FOUND);
+  LogMessage(client_, Logger::STRING_AUTOMATED_PASSWORD_CHANGE_FORM_NOT_FOUND);
+  if (button_click_attempted_) {
+    logs_uploader_->FormNotDetectedAfterOpening();
+  } else {
+    logs_uploader_->SetFlowInterrupted(
+        kOpenFormFlowStep,
+        ModelQualityLogsUploader::QualityStatus::
+            PasswordChangeQuality_StepQuality_SubmissionStatus_TIME_OUT);
   }
-  logs_uploader_->FormNotDetectedAfterOpening();
 
-  CHECK(callback_);
-  std::move(callback_).Run(nullptr);
+  CHECK(failure_callback_);
+  std::move(failure_callback_).Run(ErrorCase::kFormNotFound);
 }

@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/check_deref.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ash/login/screens/consolidated_consent_screen.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
@@ -282,7 +284,8 @@ IN_PROC_BROWSER_TEST_F(FirstUserOobeMetricsTest,
 
   if (ash::features::IsOobeAutoEnrollmentCheckForcedEnabled()) {
     // Showing the GAIA screen requires OOBE to be marked complete.
-    StartupUtils::MarkOobeCompleted();
+    StartupUtils::MarkOobeCompleted(
+        CHECK_DEREF(g_browser_process->local_state()));
   }
   login_manager_mixin_.LoginAsNewRegularUser();
   OobeScreenExitWaiter(GetFirstSigninScreen()).Wait();
@@ -345,7 +348,8 @@ IN_PROC_BROWSER_TEST_F(FirstUserOobeMetricsTest, ClientIdNotReset) {
   OobeScreenWaiter(GetFirstSigninScreen()).Wait();
   if (ash::features::IsOobeAutoEnrollmentCheckForcedEnabled()) {
     // Showing the GAIA screen requires OOBE to be marked complete.
-    StartupUtils::MarkOobeCompleted();
+    StartupUtils::MarkOobeCompleted(
+        CHECK_DEREF(g_browser_process->local_state()));
   }
 
   login_manager_mixin_.LoginAsNewRegularUser();
@@ -373,7 +377,8 @@ IN_PROC_BROWSER_TEST_F(FirstUserOobeMetricsTest, ClientIdReset) {
   LoginDisplayHost::default_host()->StartWizard(GetFirstSigninScreen());
   OobeScreenWaiter(GetFirstSigninScreen()).Wait();
   if (ash::features::IsOobeAutoEnrollmentCheckForcedEnabled()) {
-    StartupUtils::MarkOobeCompleted();
+    StartupUtils::MarkOobeCompleted(
+        CHECK_DEREF(g_browser_process->local_state()));
   }
 
   login_manager_mixin_.LoginAsNewRegularUser();

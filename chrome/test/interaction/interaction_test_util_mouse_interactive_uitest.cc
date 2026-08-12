@@ -19,7 +19,7 @@
 #include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/interaction/element_tracker_views.h"
-#include "ui/views/interaction/interaction_test_util_mouse.h"
+#include "ui/views/interaction/mouse/interaction_test_util_mouse.h"
 #include "ui/views/view_utils.h"
 
 class InteractionTestUtilMouseUiTest
@@ -33,8 +33,7 @@ class InteractionTestUtilMouseUiTest
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    mouse_ = std::make_unique<Mouse>(
-        BrowserView::GetBrowserViewForBrowser(browser())->GetWidget());
+    mouse_ = std::make_unique<Mouse>(browser()->GetWindow()->GetNativeWindow());
     CHECK(mouse_->SetTouchMode(GetParam()));
   }
 
@@ -82,8 +81,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, MoveAndClick) {
                              // - click the left mouse button
                              if (!mouse_->PerformGestures(
                                      Mouse::GestureParams(
-                                         view->GetWidget()->GetNativeWindow(),
-                                         false),
+                                         view->GetWidget()->GetNativeWindow()),
                                      Mouse::MoveTo(pos),
                                      Mouse::Click(ui_controls::LEFT))) {
                                seq->FailForTesting();
@@ -129,8 +127,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, GestureAborted) {
                              // - click the left mouse button
                              EXPECT_FALSE(mouse_->PerformGestures(
                                  Mouse::GestureParams(
-                                     view->GetWidget()->GetNativeWindow(),
-                                     false),
+                                     view->GetWidget()->GetNativeWindow()),
                                  Mouse::MoveTo(pos),
                                  Mouse::Click(ui_controls::LEFT)));
                            })))
@@ -175,8 +172,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, Drag) {
                         // Drag the first tab into the second spot.
                         if (!mouse_->PerformGestures(
                                 Mouse::GestureParams(
-                                    tab_strip->GetWidget()->GetNativeWindow(),
-                                    false),
+                                    tab_strip->GetWidget()->GetNativeWindow()),
                                 Mouse::MoveTo(start),
                                 Mouse::DragAndRelease(end))) {
                           seq->FailForTesting();

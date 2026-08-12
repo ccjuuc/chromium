@@ -17,7 +17,6 @@
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
 #include "components/login/localized_values_builder.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -42,15 +41,15 @@ gfx::ImageSkia IconOrDefault(gfx::ImageSkia icon) {
              : icon;
 }
 
-base::Value::Dict ConvertDataToDict(const AppLaunchSplashScreen::Data& data) {
-  return base::Value::Dict()
+base::DictValue ConvertDataToDict(const AppLaunchSplashScreen::Data& data) {
+  return base::DictValue()
       .Set("name", data.name)
       .Set("iconURL", webui::GetBitmapDataUrl(*data.icon.bitmap()))
       .Set("url", data.url.spec());
 }
 
-base::Value::Dict GetScreenData(const AppLaunchSplashScreen::Data& data) {
-  return base::Value::Dict()
+base::DictValue GetScreenData(const AppLaunchSplashScreen::Data& data) {
+  return base::DictValue()
       .Set("shortcutEnabled",
            !KioskChromeAppManager::Get()->GetDisableBailoutShortcut())
       .Set("appInfo", ConvertDataToDict(data));
@@ -87,7 +86,7 @@ void AppLaunchSplashScreen::ShowImpl() {
   }
 
   UpdateAppLaunchState(state_);
-  base::Value::Dict screen_data = GetScreenData(app_data_);
+  base::DictValue screen_data = GetScreenData(app_data_);
   view_->Show(std::move(screen_data));
 }
 
@@ -163,7 +162,7 @@ void AppLaunchSplashScreen::SetAppData(Data data) {
     return;
   }
 
-  base::Value::Dict screen_data = GetScreenData(app_data_);
+  base::DictValue screen_data = GetScreenData(app_data_);
   view_->SetAppData(std::move(screen_data));
 }
 

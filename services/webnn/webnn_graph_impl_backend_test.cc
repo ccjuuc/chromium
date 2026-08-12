@@ -39,22 +39,6 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/fp16/src/include/fp16.h"
 
-#if BUILDFLAG(IS_WIN)
-#include "base/containers/fixed_flat_map.h"
-#include "services/webnn/dml/adapter.h"
-#include "services/webnn/dml/command_queue.h"
-#include "services/webnn/dml/command_recorder.h"
-#include "services/webnn/dml/context_impl_dml.h"
-#include "services/webnn/dml/graph_impl_dml.h"
-#include "services/webnn/dml/test_base.h"
-#include "services/webnn/dml/utils.h"
-#include "third_party/microsoft_dxheaders/include/directml.h"
-
-// Windows SDK headers should be included after DirectX headers.
-#include <wrl.h>
-
-#endif  // BUILDFLAG(IS_WIN)
-
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
 #endif  // BUILDFLAG(IS_MAC)
@@ -80,7 +64,7 @@ TensorRemoteAndHandle CreateTensor(
   mojo::AssociatedRemote<mojom::WebNNTensor> webnn_tensor_remote;
 
   base::test::TestFuture<mojom::CreateTensorResultPtr> create_tensor_future;
-  context_remote->CreateTensor(std::move(tensor_info), mojo_base::BigBuffer(0),
+  context_remote->CreateTensor(std::move(tensor_info),
                                create_tensor_future.GetCallback());
   mojom::CreateTensorResultPtr create_tensor_result =
       create_tensor_future.Take();
@@ -116,7 +100,7 @@ template <typename InputDataType, typename OutputDataType = InputDataType>
 [[nodiscard]] base::flat_map<std::string, std::vector<OutputDataType>>
 BuildAndCompute(
     mojo::Remote<mojom::WebNNContext>& context_remote,
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> graph_builder_remote,
+    mojo::Remote<mojom::WebNNGraphBuilder> graph_builder_remote,
     mojom::GraphInfoPtr graph_info,
     base::flat_map<std::string, base::span<const InputDataType>> named_inputs,
     BuildAndComputeExpectation expectation =
@@ -183,8 +167,7 @@ BuildAndCompute(
       return {};
   }
 
-  mojo::AssociatedRemote<mojom::WebNNGraph> graph_remote;
-  graph_remote.Bind(std::move(create_graph_result.value()->graph_remote));
+  blink::WebNNGraphToken graph_token = create_graph_result.value()->graph_token;
 
   std::vector<std::pair<std::string, blink::WebNNTensorToken>>
       named_input_handles;
@@ -205,7 +188,8 @@ BuildAndCompute(
       });
 
   // The GraphImpl should compute successfully.
-  graph_remote->Dispatch(named_input_handles, named_output_handles);
+  context_remote->Dispatch(graph_token, named_input_handles,
+                           named_output_handles);
 
   // Read back the results from the output buffers.
   std::vector<std::pair<std::string, std::vector<OutputDataType>>>
@@ -285,115 +269,30 @@ void VerifyIsEqual(base::span<const T> actual, const OperandInfo<T>& expected) {
   EXPECT_EQ(actual, expected.values);
 }
 
+std::string_view GetBaseTestName(std::string_view test_name) {
+  const size_t slash_pos = test_name.find('/');
+  if (slash_pos != std::string_view::npos) {
+    return test_name.substr(0, slash_pos);
+  }
+  return test_name;
+}
+
 }  // namespace
 
-#if BUILDFLAG(IS_WIN)
-class WebNNGraphImplBackendTest : public testing::Test {
- public:
-  WebNNGraphImplBackendTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{webnn::mojom::features::
-                                  kWebMachineLearningNeuralNetwork,
-                              webnn::mojom::features::kWebNNDirectML},
-        /*disabled_features=*/{webnn::mojom::features::kWebNNOnnxRuntime});
-  }
-
-  void SetUp() override;
-  void SetUpBase();
-  void TearDown() override;
-
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> BindNewGraphBuilderRemote();
-
-  mojo::Remote<mojom::WebNNContext>& context() { return webnn_context_; }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_refptr<dml::Adapter> adapter_;
-
-  WebNNTestEnvironment webnn_test_environment_;
-  mojo::Remote<mojom::WebNNContextProvider> provider_remote_;
-  mojo::Remote<mojom::WebNNContext> webnn_context_;
-};
-
-void WebNNGraphImplBackendTest::SetUp() {
-  SKIP_TEST_IF(!UseGPUInTests());
-
-  dml::Adapter::EnableDebugLayerForTesting();
-  auto adapter_creation_result = dml::Adapter::GetGpuInstanceForTesting();
-  // If the adapter creation result has no value, it's most likely because
-  // platform functions were not properly loaded.
-  SKIP_TEST_IF(!adapter_creation_result.has_value());
-  adapter_ = adapter_creation_result.value();
-  // Graph compilation relies on IDMLDevice1::CompileGraph introduced in
-  // DirectML version 1.2 or DML_FEATURE_LEVEL_2_1, so skip the tests if the
-  // DirectML version doesn't support this feature.
-  SKIP_TEST_IF(!adapter_->IsDMLDeviceCompileGraphSupportedForTesting());
-
-  // Skip a test if the required feature level is not supported for the
-  // operator being tested.
-  auto kRequiredFeatureLevels = base::MakeFixedFlatMap<std::string_view,
-                                                       DML_FEATURE_LEVEL>(
-      {// DML_BATCHNORMALIZATION_OPERATOR_DESC support for 1~8 dimension counts
-       // was introduced in DML_FEATURE_LEVEL_3_1.
-       {"FuseStandaloneActivationIntoBatchNormalization",
-        DML_FEATURE_LEVEL_3_1},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"FuseStandaloneActivationIntoGemm", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildAndComputeMultipleOperatorGemm", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildOneInputAndOneConstantOperand", DML_FEATURE_LEVEL_4_0},
-       // DML_MEAN_VARIANCE_NORMALIZATION1_OPERATOR_DESC support for 1~8
-       // dimension
-       // counts was introduced in DML_FEATURE_LEVEL_3_1.
-       {"BuildSingleOperatorLayerNormalization", DML_FEATURE_LEVEL_3_1},
-       // DML_GEMM_OPERATOR_DESC support for 2~4 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"FuseStandaloneOperationsIntoMatmul", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildMultipleInputsAppendingConstants", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildMultipleConstantsAppendingInputs", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildGemmWithReshapedConstantOperand", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildMaxPoolingAsThirdOperator", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildMaxPoolingAsSecondOperator", DML_FEATURE_LEVEL_4_0},
-       // DML_GEMM_OPERATOR_DESC support for 2 dimensions was introduced in
-       // DML_FEATURE_LEVEL_4_0.
-       {"BuildMaxPoolingAsFirstOperator", DML_FEATURE_LEVEL_4_0}});
-  auto it = kRequiredFeatureLevels.find(
-      ::testing::UnitTest::GetInstance()->current_test_info()->name());
-  if (it != kRequiredFeatureLevels.end()) {
-    const auto& required_feature_level = it->second;
-    SKIP_TEST_IF(!adapter_->IsDMLFeatureLevelSupported(required_feature_level));
-  }
-
-  SetUpBase();
-}
-#endif  // #if BUILDFLAG(IS_WIN)
-
 #if BUILDFLAG(IS_MAC)
-class WebNNGraphImplBackendTest : public testing::Test {
+class WebNNGraphImplBackendTest : public testing::Test,
+                                  public testing::WithParamInterface<bool> {
  public:
   WebNNGraphImplBackendTest()
       : scoped_feature_list_(
             webnn::mojom::features::kWebMachineLearningNeuralNetwork) {}
 
+  bool IsIncognito() const { return GetParam(); }
   void SetUp() override;
   void SetUpBase();
   void TearDown() override;
 
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> BindNewGraphBuilderRemote();
 
   mojo::Remote<mojom::WebNNContext>& context() { return webnn_context_; }
 
@@ -419,8 +318,9 @@ void WebNNGraphImplBackendTest::SetUp() {
       "BuildAndComputeSingleOperatorRelu",
       "BuildAndComputeSingleOperatorTanh",
       "BuildAndComputeGraphWithTwoTranspose",
+      "DestroyContextDuringBuild",
   });
-  if (!kSupportedTests.contains(current_test_name)) {
+  if (!kSupportedTests.contains(GetBaseTestName(current_test_name))) {
     GTEST_SKIP() << "Skipping test because the operator is not yet supported.";
   }
 
@@ -429,18 +329,21 @@ void WebNNGraphImplBackendTest::SetUp() {
 #endif  // BUILDFLAG(IS_MAC)
 
 // TODO(crbug.com/325612086): Parameterize these tests for different backends.
-#if BUILDFLAG(WEBNN_USE_TFLITE) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
-class WebNNGraphImplBackendTest : public testing::Test {
+#if (BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(WEBNN_USE_LITERT)) && \
+    !BUILDFLAG(IS_MAC)
+class WebNNGraphImplBackendTest : public testing::Test,
+                                  public testing::WithParamInterface<bool> {
  public:
   WebNNGraphImplBackendTest()
       : scoped_feature_list_(
             webnn::mojom::features::kWebMachineLearningNeuralNetwork) {}
 
+  bool IsIncognito() const { return GetParam(); }
   void SetUp() override;
   void SetUpBase();
   void TearDown() override;
 
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> BindNewGraphBuilderRemote();
 
   mojo::Remote<mojom::WebNNContext>& context() { return webnn_context_; }
 
@@ -462,33 +365,48 @@ void WebNNGraphImplBackendTest::SetUp() {
       // "BuildAndComputeAddAndMulWithOnlyConstantInputs",
       // "BuildAndComputeAddWithOnlyConstantInputs",
       "BuildAndComputeConcatWithConstants",
-      "BuildAndComputeGraphWithReshapeAsIntermediateNode",
       "BuildAndComputeGraphWithReshapeAsLastNode",
+#if !BUILDFLAG(IS_WIN)
+      "BuildAndComputeGraphWithReshapeAsIntermediateNode",
       "BuildAndComputeGraphWithSplitAndReshape",
       "BuildAndComputeGraphWithTransposeAndRelu",
       "BuildAndComputeGraphWithTransposeAndTwoOutputs",
       "BuildAndComputeGraphWithTransposeAndTwoReshape",
-      "BuildAndComputeGraphWithTwoOutputs", "BuildAndComputeGraphWithTwoRelu",
+#endif  // !BUILDFLAG(IS_WIN)
+      "BuildAndComputeGraphWithTwoOutputs",
+      "BuildAndComputeGraphWithTwoRelu",
       "BuildAndComputeGraphWithTwoReshape",
       "BuildAndComputeGraphWithTwoTranspose",
       "BuildAndComputeMultipleOperatorGemm",
       // "BuildAndComputeReluWithOnlyConstantInput",
+#if !BUILDFLAG(IS_WIN)
       "BuildAndComputeReshapeConcatAndClamp",
+#endif  // !BUILDFLAG(IS_WIN)
       "BuildAndComputeSingleOperatorClamp",
+#if !BUILDFLAG(IS_WIN)
       "BuildAndComputeSingleOperatorGruCell",
       "BuildAndComputeSingleOperatorGru",
+#endif  // !BUILDFLAG(IS_WIN)
       "BuildAndComputeSingleOperatorHardSigmoid",
       "BuildAndComputeSingleOperatorHardSwish",
       // "BuildAndComputeSingleOperatorLstmCell",
       // "BuildAndComputeSingleOperatorLstm",
       // "BuildAndComputeSingleOperatorResample2d",
       "BuildAndComputeSingleOperatorTanh",
-      "BuildGemmWithReshapedConstantOperand", "BuildMaxPoolingAsFirstOperator",
-      "BuildMaxPoolingAsSecondOperator", "BuildMaxPoolingAsThirdOperator",
+      "BuildGemmWithReshapedConstantOperand",
+#if !BUILDFLAG(IS_WIN)
+      "BuildMaxPoolingAsFirstOperator",
+      "BuildMaxPoolingAsSecondOperator",
+      "BuildMaxPoolingAsThirdOperator",
+#endif  // !BUILDFLAG(IS_WIN)
       "BuildMultipleConstantsAppendingInputs",
       "BuildMultipleInputsAppendingConstants",
       "BuildSingleOperatorLayerNormalization",
       "BuildOneInputAndOneConstantOperand",
+#if !BUILDFLAG(IS_WIN)
+      "Conv2dIgemmPackedWeightsOverflow",
+#endif  // !BUILDFLAG(IS_WIN)
+      "DestroyContextDuringBuild",
       // "FuseStandaloneActivationIntoBatchNormalization",
       // "FuseStandaloneActivationIntoConv2d",
       "FuseStandaloneActivationIntoElementWiseBinaryAdd",
@@ -498,17 +416,19 @@ void WebNNGraphImplBackendTest::SetUp() {
       "FuseStandaloneOperationsIntoMatmul",
       // "MultipleOutputsCanNotFuseStandaloneActivation",
   });
-  if (!kSupportedTests.contains(current_test_name)) {
+
+  if (!kSupportedTests.contains(GetBaseTestName(current_test_name))) {
     GTEST_SKIP() << "Skipping test because the operator is not yet supported.";
   }
 
   SetUpBase();
 }
-#endif  // BUILDFLAG(WEBNN_USE_TFLITE) && !BUILDFLAG(IS_WIN)
+#endif  // (BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(WEBNN_USE_LITERT)) &&
+        // !BUILDFLAG(IS_MAC)
 
 void WebNNGraphImplBackendTest::SetUpBase() {
   webnn_test_environment_.BindWebNNContextProvider(
-      provider_remote_.BindNewPipeAndPassReceiver());
+      provider_remote_.BindNewPipeAndPassReceiver(), IsIncognito());
 
   // Create the ContextImpl through context provider.
   base::test::TestFuture<mojom::CreateContextResultPtr> create_context_future;
@@ -529,16 +449,15 @@ void WebNNGraphImplBackendTest::SetUpBase() {
 }
 
 void WebNNGraphImplBackendTest::TearDown() {
-  webnn_context_.reset();
-  EXPECT_TRUE(base::test::RunUntil([&]() { return true; }));
   // Give WebNNContext a chance to run disconnect.
-  provider_remote_.reset();
+  webnn_context_.reset();
+  webnn_test_environment_.RunUntilIdle();
 }
 
-mojo::AssociatedRemote<mojom::WebNNGraphBuilder>
+mojo::Remote<mojom::WebNNGraphBuilder>
 WebNNGraphImplBackendTest::BindNewGraphBuilderRemote() {
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote;
-  webnn_context_->CreateGraphBuilder(remote.BindNewEndpointAndPassReceiver());
+  mojo::Remote<mojom::WebNNGraphBuilder> remote;
+  webnn_context_->CreateGraphBuilder(remote.BindNewPipeAndPassReceiver());
   return remote;
 }
 
@@ -606,20 +525,14 @@ struct BatchNormalizationTester {
   OperandInfo<T> variance;
   std::optional<OperandInfo<T>> scale;
   std::optional<OperandInfo<T>> bias;
-  struct BatchNormalizationAttributes {
-    std::optional<OperandId> scale_operand_id;
-    std::optional<OperandId> bias_operand_id;
-    uint32_t axis = 1;
-    float epsilon = 1e-5;
-  };
-  BatchNormalizationAttributes attributes;
+  BuildBatchNormalizationAttributes attributes;
   OperandInfo<T> output;
 
   void TestFusingOperation(
       WebNNGraphImplBackendTest& test,
       const FusibleOperationDescriptor& fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -667,9 +580,11 @@ struct BatchNormalizationTester {
   }
 };
 
+INSTANTIATE_TEST_SUITE_P(All, WebNNGraphImplBackendTest, testing::Bool());
+
 // Test building and computing a graph of fusing a standalone activation into
 // batchNormalization automatically.
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        FuseStandaloneActivationIntoBatchNormalization) {
   {  // Test batchNormalization with 4-D input, default axis and activation =
     // linear.
@@ -809,21 +724,15 @@ struct Conv2dTester {
   mojom::Conv2d::Kind type;
   OperandInfo<T> input;
   OperandInfo<T> filter;
-  struct Conv2dAttributes {
-    std::vector<uint32_t> padding = {0, 0, 0, 0};
-    std::vector<uint32_t> strides = {1, 1};
-    std::vector<uint32_t> dilations = {1, 1};
-    uint32_t groups = 1;
-    std::optional<OperandInfo<T>> bias;
-  };
-  Conv2dAttributes attributes;
+  BuildConv2dAttributes attributes;
+  std::optional<OperandInfo<T>> bias;
   OperandInfo<float> output;
 
   void TestFusingOperation(
       WebNNGraphImplBackendTest& test,
       const FusibleOperationDescriptor& fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -835,16 +744,14 @@ struct Conv2dTester {
         builder.BuildIntermediateOperand(output.dimensions, output.type);
 
     std::optional<OperandId> bias_operand_id;
-    if (attributes.bias.has_value()) {
+    if (bias.has_value()) {
       bias_operand_id = builder.BuildConstant(
-          attributes.bias->dimensions, attributes.bias->type,
-          base::as_byte_span(base::allow_nonunique_obj,
-                             attributes.bias->values));
+          bias->dimensions, bias->type,
+          base::as_byte_span(base::allow_nonunique_obj, bias->values));
     }
 
     builder.BuildConv2d(type, input_operand_id, filter_operand_id,
-                        conv2d_output_operand_id, std::move(attributes),
-                        bias_operand_id);
+                        conv2d_output_operand_id, attributes, bias_operand_id);
 
     OperandId output_operand_id =
         builder.BuildOutput("output", output.dimensions, output.type);
@@ -864,7 +771,7 @@ struct Conv2dTester {
 
 // Test building and computing a graph of fusing a standalone activation
 // into conv2d automatically.
-TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
+TEST_P(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
   // Test conv2d with NCHW layout, float 32 data type, bias and fusing with elu
   // activation.
   {
@@ -876,10 +783,9 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
         .filter = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 1, 1},
                    .values = {1}},
-        .attributes = {.bias =
-                           OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                              .dimensions = {1},
-                                              .values = {-5}}},
+        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
+                                   .dimensions = {1},
+                                   .values = {-5}},
         .output = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 3, 3},
                    .values = {-0.7946096424007316, -0.7853474888890126,
@@ -901,10 +807,9 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
         .filter = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 3, 3},
                    .values = {1, 1, 1, 1, 1, 1, 1, 1, 1}},
-        .attributes = {.bias =
-                           OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                              .dimensions = {1},
-                                              .values = {-60}}},
+        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
+                                   .dimensions = {1},
+                                   .values = {-60}},
         .output = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 2, 2},
                    .values = {-0.3, -0.12, 21, 30}}}
@@ -925,11 +830,10 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
         .filter = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 3, 3},
                    .values = {1, 1, 1, 1, 1, 1, 1, 1, 1}},
-        .attributes = {.padding = {1, 1, 1, 1},
-                       .bias =
-                           OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                              .dimensions = {1},
-                                              .values = {1}}},
+        .attributes = {.padding = {1, 1, 1, 1}},
+        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
+                                   .dimensions = {1},
+                                   .values = {1}},
         .output = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 5, 5},
                    .values = {1.13, 1.22, 1.28, 1.34, 1.25, 1.34, 1.55,
@@ -952,11 +856,10 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoConv2d) {
         .filter = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 3, 3},
                    .values = {1, 1, 1, 1, 1, 1, 1, 1, 1}},
-        .attributes = {.padding = {1, 1, 1, 1},
-                       .bias =
-                           OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                              .dimensions = {1},
-                                              .values = {1}}},
+        .attributes = {.padding = {1, 1, 1, 1}},
+        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
+                                   .dimensions = {1},
+                                   .values = {1}},
         .output = {.type = OperandDataType::kFloat32,
                    .dimensions = {1, 1, 5, 5},
                    .values = {0,    0,    0, 0,    0,    0,    0, 0,    0,
@@ -1087,7 +990,7 @@ struct ElementWiseBinaryTester {
   OperandInfo<O> output;
   void Test(WebNNGraphImplBackendTest& helper) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         helper.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId lhs_operand_id =
@@ -1145,7 +1048,7 @@ struct ElementWiseBinaryTester {
     // Now only binary add supports fusing standalone activation.
     CHECK_EQ(kind, mojom::ElementWiseBinary::Kind::kAdd);
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId lhs_operand_id =
@@ -1176,7 +1079,7 @@ struct ElementWiseBinaryTester {
 
 // Test building and computing a graph of fusing a standalone activation
 // into elementwise binary add automatically.
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        FuseStandaloneActivationIntoElementWiseBinaryAdd) {
   // Test add with linear activation.
   {
@@ -1221,10 +1124,9 @@ TEST_F(WebNNGraphImplBackendTest,
 //   [output1]  reshape
 //                 |
 //             [output2]
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithSplitAndReshape) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithSplitAndReshape) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {2, 5}, OperandDataType::kFloat32);
@@ -1274,7 +1176,7 @@ struct UnaryOperatorTester {
             BuildAndComputeExpectation expectation =
                 BuildAndComputeExpectation::kSuccess) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -1343,7 +1245,7 @@ struct UnaryOperatorTester {
 };
 
 // Test building and computing a graph with single operator clamp.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorClamp) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorClamp) {
   {
     // Test clamp for 0-D scalar input.
     UnaryOperatorTester<float>{.tag = mojom::Operation::Tag::kClamp,
@@ -1360,7 +1262,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorClamp) {
 }
 
 // Test building and computing a graph with single operator hardSigmoid.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSigmoid) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSigmoid) {
   {
     // Test sigmoid for 0-D scalar input.
     UnaryOperatorTester<float>{.tag = mojom::Operation::Tag::kHardSigmoid,
@@ -1377,7 +1279,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSigmoid) {
 }
 
 // Test building and computing a graph with single operator hardSwish.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSwish) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSwish) {
   // Test hardSwish with a 0-D scalar input.
   {
     UnaryOperatorTester<float>{.tag = mojom::Operation::Tag::kHardSwish,
@@ -1392,7 +1294,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorHardSwish) {
 }
 
 // Test building and computing a graph with single operator tanh.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorTanh) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorTanh) {
   // Test tanh with a 0-D scalar input.
   {
     UnaryOperatorTester<float>{.tag = mojom::Operation::Tag::kTanh,
@@ -1412,10 +1314,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorTanh) {
 //      relu1
 //       |
 //      relu2
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoRelu) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoRelu) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -1447,10 +1348,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoRelu) {
 //      relu
 //       |
 //     reshape
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithReshapeAsLastNode) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithReshapeAsLastNode) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -1480,11 +1380,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithReshapeAsLastNode) {
 //    reshape
 //       |
 //      relu
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        BuildAndComputeGraphWithReshapeAsIntermediateNode) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -1513,10 +1412,9 @@ TEST_F(WebNNGraphImplBackendTest,
 //    reshape1
 //       |
 //    reshape2
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoReshape) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoReshape) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -1545,10 +1443,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoReshape) {
 //  reshape   relu
 //     |        |
 // [output1] [output2]
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoOutputs) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoOutputs) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -1576,28 +1473,19 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoOutputs) {
                           13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24});
 }
 
-struct GemmAttributes {
-  std::optional<OperandId> c_operand_id;
-  // TODO(crbug.com/40206287): Add test cases for below attributes.
-  float alpha = 1.0;
-  float beta = 1.0;
-  bool a_transpose = false;
-  bool b_transpose = false;
-};
-
 template <typename T>
 struct GemmTester {
   OperandInfo<T> input_a;
   OperandInfo<T> input_b;
   std::optional<OperandInfo<T>> input_c;
-  GemmAttributes attributes;
+  BuildGemmAttributes attributes;
   OperandInfo<float> output;
 
   void TestFusingOperation(
       WebNNGraphImplBackendTest& test,
       const FusibleOperationDescriptor& fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_a_operand_id =
@@ -1635,7 +1523,7 @@ struct GemmTester {
 
 // Test building and computing a graph of fusing a standalone activation
 // into gemm automatically.
-TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoGemm) {
+TEST_P(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoGemm) {
   // Test gemm without a third input, activation = linear.
   {
     GemmTester<float>{.input_a = {.type = OperandDataType::kFloat32,
@@ -1675,20 +1563,6 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneActivationIntoGemm) {
 
 template <typename T>
 struct GruTester {
-  struct GruAttributes {
-    std::optional<OperandId> bias_operand_id;
-    std::optional<OperandId> recurrent_bias_operand_id;
-    std::optional<OperandId> initial_hidden_state_operand_id;
-    bool reset_after = true;
-    bool return_sequence = false;
-    mojom::RecurrentNetworkDirection direction =
-        mojom::RecurrentNetworkDirection::kForward;
-    mojom::GruWeightLayout layout = mojom::GruWeightLayout::kZrn;
-    std::vector<mojom::RecurrentNetworkActivation> activations{
-        mojom::RecurrentNetworkActivation::kSigmoid,
-        mojom::RecurrentNetworkActivation::kTanh};
-  };
-
   OperandInfo<T> input;
   OperandInfo<T> weight;
   OperandInfo<T> recurrent_weight;
@@ -1697,14 +1571,14 @@ struct GruTester {
   std::optional<OperandInfo<T>> bias;
   std::optional<OperandInfo<T>> recurrent_bias;
   std::optional<OperandInfo<T>> initial_hidden_state;
-  GruAttributes attributes;
+  BuildGruAttributes attributes;
   std::vector<OperandInfo<T>> outputs;
 
   void Test(WebNNGraphImplBackendTest& helper,
             BuildAndComputeExpectation expectation =
                 BuildAndComputeExpectation::kSuccess) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         helper.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -1766,7 +1640,7 @@ struct GruTester {
 };
 
 // Test building and computing a graph with single operator gru.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGru) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGru) {
   // Test gru without bias and initial hidden state.
   {
     const uint32_t steps = 1;
@@ -2021,16 +1895,6 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGru) {
 // after the WPT conformance tests are completed.
 template <typename T>
 struct GruCellTester {
-  struct GruCellAttributes {
-    std::optional<OperandId> bias_operand_id;
-    std::optional<OperandId> recurrent_bias_operand_id;
-    bool reset_after = true;
-    mojom::GruWeightLayout layout = mojom::GruWeightLayout::kZrn;
-    std::vector<mojom::RecurrentNetworkActivation> activations{
-        mojom::RecurrentNetworkActivation::kSigmoid,
-        mojom::RecurrentNetworkActivation::kTanh};
-  };
-
   OperandInfo<T> input;
   OperandInfo<T> weight;
   OperandInfo<T> recurrent_weight;
@@ -2038,14 +1902,14 @@ struct GruCellTester {
   uint32_t hidden_size;
   std::optional<OperandInfo<T>> bias;
   std::optional<OperandInfo<T>> recurrent_bias;
-  GruCellAttributes attributes;
+  BuildGruCellAttributes attributes;
   OperandInfo<T> output;
 
   void Test(WebNNGraphImplBackendTest& helper,
             BuildAndComputeExpectation expectation =
                 BuildAndComputeExpectation::kSuccess) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         helper.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -2096,7 +1960,7 @@ struct GruCellTester {
 };
 
 // Test building and computing a graph with single operator gruCell.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGruCell) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGruCell) {
   // Test gruCell without bias and initial hidden state.
   {
     const uint32_t batch_size = 3;
@@ -2175,10 +2039,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorGruCell) {
 //            gemm                  gemm
 //                \                /
 //                       gemm
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeMultipleOperatorGemm) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeMultipleOperatorGemm) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {2, 2}, OperandDataType::kFloat32);
@@ -2187,15 +2050,15 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeMultipleOperatorGemm) {
   OperandId intermediate_1_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(input_a_operand_id, input_b_operand_id,
-                    intermediate_1_operand_id, GemmAttributes());
+                    intermediate_1_operand_id, BuildGemmAttributes());
   OperandId intermediate_2_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(input_a_operand_id, input_b_operand_id,
-                    intermediate_2_operand_id, GemmAttributes());
+                    intermediate_2_operand_id, BuildGemmAttributes());
   OperandId output_operand_id =
       builder.BuildOutput("output", {2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(intermediate_1_operand_id, intermediate_2_operand_id,
-                    output_operand_id, GemmAttributes());
+                    output_operand_id, BuildGemmAttributes());
 
   base::flat_map<std::string, base::span<const float>> named_inputs;
   std::vector<float> input_a_data = {1, 2, 3, 4};
@@ -2210,11 +2073,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeMultipleOperatorGemm) {
 }
 
 // Test building and computing a graph with one input and one constant.
-TEST_F(WebNNGraphImplBackendTest, BuildOneInputAndOneConstantOperand) {
+TEST_P(WebNNGraphImplBackendTest, BuildOneInputAndOneConstantOperand) {
   // Build the mojom graph info.
   std::vector<float> constant_data = {5, 6, 7, 8};
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {2, 2}, OperandDataType::kFloat32);
@@ -2224,7 +2086,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildOneInputAndOneConstantOperand) {
   OperandId output_operand_id =
       builder.BuildOutput("output", {2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(input_a_operand_id, input_b_operand_id, output_operand_id,
-                    GemmAttributes());
+                    BuildGemmAttributes());
 
   base::flat_map<std::string, base::span<const float>> named_inputs;
   std::vector<float> input_a_data = {1, 1, 1, 1};
@@ -2241,19 +2103,14 @@ struct InstanceNormalizationTester {
   OperandInfo<T> input;
   std::optional<OperandInfo<T>> scale;
   std::optional<OperandInfo<T>> bias;
-  struct InstanceNormalizationAttributes {
-    std::optional<OperandId> scale_operand_id;
-    std::optional<OperandId> bias_operand_id;
-    float epsilon = 1e-5;
-  };
-  InstanceNormalizationAttributes attributes;
+  BuildInstanceNormalizationAttributes attributes;
   OperandInfo<T> output;
 
   void TestFusingOperation(
       WebNNGraphImplBackendTest& test,
       const FusibleOperationDescriptor& fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -2295,7 +2152,7 @@ struct InstanceNormalizationTester {
 
 // Test building and computing a graph of fusing a standalone activation into
 // instanceNormalization automatically.
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        FuseStandaloneActivationIntoInstanceNormalization) {
   {
     // Test instanceNormalization with 4-D input with default scale and bias and
@@ -2318,20 +2175,14 @@ struct LayerNormalizationTester {
   OperandInfo<T> input;
   std::optional<OperandInfo<T>> scale;
   std::optional<OperandInfo<T>> bias;
-  struct LayerNormalizationAttributes {
-    std::optional<OperandId> scale_operand_id;
-    std::optional<OperandId> bias_operand_id;
-    std::vector<uint32_t> axes;
-    float epsilon = 1e-5;
-  };
-  LayerNormalizationAttributes attributes;
+  BuildLayerNormalizationAttributes attributes;
   OperandInfo<T> output;
 
   void Test(WebNNGraphImplBackendTest& test,
             BuildAndComputeExpectation expectation =
                 BuildAndComputeExpectation::kSuccess) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -2371,7 +2222,7 @@ struct LayerNormalizationTester {
       WebNNGraphImplBackendTest& test,
       const FusibleOperationDescriptor& fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -2413,7 +2264,7 @@ struct LayerNormalizationTester {
 
 // Test building and computing a graph of fusing a standalone activation into
 // layerNormalization automatically.
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        FuseStandaloneActivationIntoLayerNormalization) {
   {
     // Test layerNormalization with 1-D input with axes = [0] and default scale
@@ -2433,7 +2284,7 @@ TEST_F(WebNNGraphImplBackendTest,
 
 // Test building and computing a graph with single operator
 // layerNormalization.
-TEST_F(WebNNGraphImplBackendTest, BuildSingleOperatorLayerNormalization) {
+TEST_P(WebNNGraphImplBackendTest, BuildSingleOperatorLayerNormalization) {
   {
     // Test layerNormalization with a scalar input with default scale and bias.
     LayerNormalizationTester<float>{
@@ -2482,29 +2333,14 @@ struct LstmTester {
   std::optional<OperandInfo<T>> peephole_weight;
   std::optional<OperandInfo<T>> initial_hidden_state;
   std::optional<OperandInfo<T>> initial_cell_state;
-  struct LstmAttributes {
-    std::optional<OperandId> bias_operand_id;
-    std::optional<OperandId> recurrent_bias_operand_id;
-    std::optional<OperandId> peephole_weight_operand_id;
-    std::optional<OperandId> initial_hidden_state_operand_id;
-    std::optional<OperandId> initial_cell_state_operand_id;
-    bool return_sequence = false;
-    mojom::RecurrentNetworkDirection direction =
-        mojom::RecurrentNetworkDirection::kForward;
-    mojom::LstmWeightLayout layout = mojom::LstmWeightLayout::kIofg;
-    std::vector<mojom::RecurrentNetworkActivation> activations{
-        mojom::RecurrentNetworkActivation::kSigmoid,
-        mojom::RecurrentNetworkActivation::kTanh,
-        mojom::RecurrentNetworkActivation::kTanh};
-  };
-  LstmAttributes attributes;
+  BuildLstmAttributes attributes;
   std::vector<OperandInfo<T>> outputs;
 
   void Test(WebNNGraphImplBackendTest& helper,
             BuildAndComputeExpectation expectation =
                 BuildAndComputeExpectation::kSuccess) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         helper.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -2584,7 +2420,7 @@ struct LstmTester {
 };
 
 // Test building and computing a graph with single operator lstm.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstm) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstm) {
   {
     // Test lstm with given bias and recurrent bias, activations = {relu, relu,
     // relu}.
@@ -2684,8 +2520,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstm) {
     std::array<float, 4> initial_cell_state_data = {1, 1, 1, 1};
     std::vector<float> expected_data = {0, 0, 2, 2};
 
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-        BindNewGraphBuilderRemote();
+    mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id = builder.BuildConstant(
         {steps, batch_size, input_size}, OperandDataType::kFloat32,
@@ -2699,7 +2534,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstm) {
         OperandDataType::kFloat32,
         base::as_byte_span(base::allow_nonunique_obj, recurrent_weight_data));
 
-    LstmTester<float>::LstmAttributes attributes;
+    BuildLstmAttributes attributes;
     attributes.peephole_weight_operand_id = builder.BuildConstant(
         {direction_count, 3 * hidden_size}, OperandDataType::kFloat32,
         base::as_byte_span(base::allow_nonunique_obj, peephole_weight_data));
@@ -2738,21 +2573,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstm) {
   }
 }
 
-struct LstmCellAttributes {
-  std::optional<OperandId> bias_operand_id;
-  std::optional<OperandId> recurrent_bias_operand_id;
-  std::optional<OperandId> peephole_weight_operand_id;
-  mojom::LstmWeightLayout layout = mojom::LstmWeightLayout::kIofg;
-  std::vector<mojom::RecurrentNetworkActivation> activations = {
-      mojom::RecurrentNetworkActivation::kSigmoid,
-      mojom::RecurrentNetworkActivation::kTanh,
-      mojom::RecurrentNetworkActivation::kTanh};
-};
-
 // TODO(crbug.com/331250158): Remove this test after the WPT conformance tests
 // are completed.
 // Test building and computing a graph with single operator lstmCell.
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstmCell) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstmCell) {
   std::vector<float> expected_output0 = {150, 150, 810, 810};
   std::vector<float> expected_output1 = {30, 30, 90, 90};
   uint32_t batch_size = 2;
@@ -2764,8 +2588,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstmCell) {
   std::vector<float> initial_hidden_state_data(4, 1);
   std::vector<float> initial_cell_state_data(4, 1);
 
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id = builder.BuildInput(
       "input", {batch_size, input_size}, OperandDataType::kFloat32);
@@ -2779,7 +2602,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorLstmCell) {
   OperandId cell_state_operand_id = builder.BuildInput(
       "cellState", {batch_size, hidden_size}, OperandDataType::kFloat32);
 
-  LstmCellAttributes attributes;
+  BuildLstmCellAttributes attributes;
   attributes.activations = {mojom::RecurrentNetworkActivation::kRelu,
                             mojom::RecurrentNetworkActivation::kRelu,
                             mojom::RecurrentNetworkActivation::kRelu};
@@ -2822,7 +2645,7 @@ struct MatmulTester {
       std::optional<std::vector<uint32_t>> permutation_b,
       std::optional<const FusibleOperationDescriptor> fusible_operation) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_a_operand_id =
@@ -2881,7 +2704,7 @@ struct MatmulTester {
 
 // Test building and computing a graph of fusing standalone operations
 // into matmul when possible.
-TEST_F(WebNNGraphImplBackendTest, FuseStandaloneOperationsIntoMatmul) {
+TEST_P(WebNNGraphImplBackendTest, FuseStandaloneOperationsIntoMatmul) {
   // Test matmul with fusible transpose for input a.
   {
     MatmulTester<float>{
@@ -3000,10 +2823,9 @@ TEST_F(WebNNGraphImplBackendTest, FuseStandaloneOperationsIntoMatmul) {
 //            gemm                  gemm
 //                \                /
 //                       gemm
-TEST_F(WebNNGraphImplBackendTest, BuildMultipleInputsAppendingConstants) {
+TEST_P(WebNNGraphImplBackendTest, BuildMultipleInputsAppendingConstants) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {2, 2}, OperandDataType::kFloat32);
@@ -3021,15 +2843,15 @@ TEST_F(WebNNGraphImplBackendTest, BuildMultipleInputsAppendingConstants) {
   OperandId intermediate_1_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(input_a_operand_id, constant_a_operand_id,
-                    intermediate_1_operand_id, GemmAttributes());
+                    intermediate_1_operand_id, BuildGemmAttributes());
   OperandId intermediate_2_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(input_b_operand_id, constant_b_operand_id,
-                    intermediate_2_operand_id, GemmAttributes());
+                    intermediate_2_operand_id, BuildGemmAttributes());
   OperandId output_operand_id =
       builder.BuildOutput("output", {2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(intermediate_1_operand_id, intermediate_2_operand_id,
-                    output_operand_id, GemmAttributes());
+                    output_operand_id, BuildGemmAttributes());
 
   base::flat_map<std::string, base::span<const float>> named_inputs;
   std::vector<float> input_data = {1, 2, 3, 4};
@@ -3049,10 +2871,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildMultipleInputsAppendingConstants) {
 //            gemm                  gemm
 //                \                /
 //                       gemm
-TEST_F(WebNNGraphImplBackendTest, BuildMultipleConstantsAppendingInputs) {
+TEST_P(WebNNGraphImplBackendTest, BuildMultipleConstantsAppendingInputs) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {2, 2}, OperandDataType::kFloat32);
@@ -3070,15 +2891,15 @@ TEST_F(WebNNGraphImplBackendTest, BuildMultipleConstantsAppendingInputs) {
   OperandId intermediate_1_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(constant_a_operand_id, input_a_operand_id,
-                    intermediate_1_operand_id, GemmAttributes());
+                    intermediate_1_operand_id, BuildGemmAttributes());
   OperandId intermediate_2_operand_id =
       builder.BuildIntermediateOperand({2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(constant_b_operand_id, input_b_operand_id,
-                    intermediate_2_operand_id, GemmAttributes());
+                    intermediate_2_operand_id, BuildGemmAttributes());
   OperandId output_operand_id =
       builder.BuildOutput("output", {2, 2}, OperandDataType::kFloat32);
   builder.BuildGemm(intermediate_1_operand_id, intermediate_2_operand_id,
-                    output_operand_id, GemmAttributes());
+                    output_operand_id, BuildGemmAttributes());
 
   base::flat_map<std::string, base::span<const float>> named_inputs;
   std::vector<float> input_data = {1, 1, 1, 1};
@@ -3101,10 +2922,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildMultipleConstantsAppendingInputs) {
 // This test case could reproduce the issue of ResNetV2 50 model of WebNN image
 // classification sample:
 // https://bugs.chromium.org/p/chromium/issues/detail?id=1509747
-TEST_F(WebNNGraphImplBackendTest, BuildGemmWithReshapedConstantOperand) {
+TEST_P(WebNNGraphImplBackendTest, BuildGemmWithReshapedConstantOperand) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {2, 2}, OperandDataType::kFloat32);
@@ -3118,7 +2938,7 @@ TEST_F(WebNNGraphImplBackendTest, BuildGemmWithReshapedConstantOperand) {
   OperandId reshape_operand_id =
       builder.BuildIntermediateOperand({1, 2}, OperandDataType::kFloat32);
   builder.BuildReshape(constant_c_operand_id, reshape_operand_id);
-  GemmAttributes gemm_attributes;
+  BuildGemmAttributes gemm_attributes;
   gemm_attributes.c_operand_id = reshape_operand_id;
   OperandId output_operand_id =
       builder.BuildOutput("output", {2, 2}, OperandDataType::kFloat32);
@@ -3143,10 +2963,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildGemmWithReshapedConstantOperand) {
 //    [input_a]  reshape
 //           \    /
 //            add
-TEST_F(WebNNGraphImplBackendTest, BuildAddWithReshapedConstantOperand) {
+TEST_P(WebNNGraphImplBackendTest, BuildAddWithReshapedConstantOperand) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {1, 1, 2, 2}, OperandDataType::kFloat32);
@@ -3178,10 +2997,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAddWithReshapedConstantOperand) {
 //    [constant]
 //         |
 //       relu
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeReluWithOnlyConstantInput) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeReluWithOnlyConstantInput) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   std::vector<float> constant_data = {-1, 0, 1};
   OperandId constant_operand_id = builder.BuildConstant(
@@ -3203,10 +3021,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeReluWithOnlyConstantInput) {
 //    [constant_a]  [constant_b]
 //               \  /
 //               add
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeAddWithOnlyConstantInputs) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeAddWithOnlyConstantInputs) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   std::vector<float> constant_a_data = {1, 1, 1, 1};
   OperandId constant_a_operand_id = builder.BuildConstant(
@@ -3236,11 +3053,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeAddWithOnlyConstantInputs) {
 //               add    [constant_c]
 //                  \  /
 //                   mul
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        BuildAndComputeAddAndMulWithOnlyConstantInputs) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   std::vector<float> constant_a_data = {1, 1, 1, 1};
   OperandId constant_a_operand_id = builder.BuildConstant(
@@ -3272,13 +3088,6 @@ TEST_F(WebNNGraphImplBackendTest,
   VerifyFloatDataIsEqual(named_outputs["output"], {9, 9, 9, 9});
 }
 
-struct Pool2dAttributes {
-  std::vector<uint32_t> window_dimensions;
-  std::vector<uint32_t> padding;
-  std::vector<uint32_t> strides;
-  std::vector<uint32_t> dilations;
-};
-
 // Test building a graph in the following topology.
 //    [input_a] [input_b]
 //           \    /
@@ -3287,10 +3096,9 @@ struct Pool2dAttributes {
 //            relu
 //             |
 //          max pooling
-TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsThirdOperator) {
+TEST_P(WebNNGraphImplBackendTest, BuildMaxPoolingAsThirdOperator) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {1, 1, 2, 2}, OperandDataType::kFloat32);
@@ -3312,10 +3120,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsThirdOperator) {
       builder.BuildOutput("output", {1, 1, 2, 2}, OperandDataType::kFloat32);
   builder.BuildPool2d(mojom::Pool2d::Kind::kMaxPool2d,
                       intermediate_2_operand_id, output_operand_id,
-                      Pool2dAttributes{.window_dimensions = {1, 1},
-                                       .padding = {0, 0, 0, 0},
-                                       .strides = {1, 1},
-                                       .dilations = {1, 1}});
+                      BuildPool2dAttributes{.window_dimensions = {1, 1},
+                                            .padding = {0, 0, 0, 0},
+                                            .strides = {1, 1},
+                                            .dilations = {1, 1}});
 
   base::flat_map<std::string, base::span<const float>> named_inputs;
   std::vector<float> input_data = {1, 1, 1, 1};
@@ -3335,10 +3143,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsThirdOperator) {
 //          max pooling
 //             |
 //            relu
-TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsSecondOperator) {
+TEST_P(WebNNGraphImplBackendTest, BuildMaxPoolingAsSecondOperator) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {1, 1, 2, 2}, OperandDataType::kFloat32);
@@ -3355,10 +3162,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsSecondOperator) {
       builder.BuildIntermediateOperand({1, 1, 2, 2}, OperandDataType::kFloat32);
   builder.BuildPool2d(mojom::Pool2d::Kind::kMaxPool2d,
                       intermediate_1_operand_id, intermediate_2_operand_id,
-                      Pool2dAttributes{.window_dimensions = {1, 1},
-                                       .padding = {0, 0, 0, 0},
-                                       .strides = {1, 1},
-                                       .dilations = {1, 1}});
+                      BuildPool2dAttributes{.window_dimensions = {1, 1},
+                                            .padding = {0, 0, 0, 0},
+                                            .strides = {1, 1},
+                                            .dilations = {1, 1}});
 
   // Relu.
   OperandId output_operand_id =
@@ -3384,10 +3191,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsSecondOperator) {
 //               add
 //                |
 //               relu
-TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsFirstOperator) {
+TEST_P(WebNNGraphImplBackendTest, BuildMaxPoolingAsFirstOperator) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_a_operand_id =
       builder.BuildInput("input_a", {1, 1, 2, 2}, OperandDataType::kFloat32);
@@ -3395,10 +3201,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsFirstOperator) {
       builder.BuildIntermediateOperand({1, 1, 2, 2}, OperandDataType::kFloat32);
   builder.BuildPool2d(mojom::Pool2d::Kind::kMaxPool2d, input_a_operand_id,
                       intermediate_1_operand_id,
-                      Pool2dAttributes{.window_dimensions = {1, 1},
-                                       .padding = {0, 0, 0, 0},
-                                       .strides = {1, 1},
-                                       .dilations = {1, 1}});
+                      BuildPool2dAttributes{.window_dimensions = {1, 1},
+                                            .padding = {0, 0, 0, 0},
+                                            .strides = {1, 1},
+                                            .dilations = {1, 1}});
 
   // Add operation.
   OperandId input_b_operand_id =
@@ -3433,10 +3239,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildMaxPoolingAsFirstOperator) {
 //             concat
 //               |
 //             clamp
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeReshapeConcatAndClamp) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeReshapeConcatAndClamp) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id1 =
       builder.BuildInput("input_a", {4, 3}, OperandDataType::kFloat16);
@@ -3491,13 +3296,12 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeReshapeConcatAndClamp) {
 //             concat   [constant_b]
 //               \           /
 //                   concat
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeConcatWithConstants) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeConcatWithConstants) {
   std::vector<float> expected_output = {0,  0,  0,  1,  2,  3,
                                         -1, -2, -3, -4, -5, -6};
 
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 1, 1, 3}, OperandDataType::kFloat32);
@@ -3544,18 +3348,12 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeConcatWithConstants) {
 template <typename T>
 struct Resample2dTester {
   OperandInfo<T> input;
-  struct Resample2dAttributes {
-    mojom::Resample2d::InterpolationMode mode =
-        mojom::Resample2d::InterpolationMode::kNearestNeighbor;
-    std::optional<std::vector<float>> scales;
-    std::vector<uint32_t> axes = {2, 3};
-  };
-  Resample2dAttributes attributes;
+  BuildResample2dAttributes attributes;
   OperandInfo<float> output;
 
   void Test(WebNNGraphImplBackendTest& test) {
     // Build the graph with mojo type.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
+    mojo::Remote<mojom::WebNNGraphBuilder> remote =
         test.BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
@@ -3574,17 +3372,7 @@ struct Resample2dTester {
   }
 };
 
-// Test building and computing a graph with single operator resample2d.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_ARM_FAMILY)
-// Test times out on Windows 11 / ARM bot, see https:  // crbug.com/381510750.
-#define MAYBE_BuildAndComputeSingleOperatorResample2d \
-  DISABLED_BuildAndComputeSingleOperatorResample2d
-#else
-#define MAYBE_BuildAndComputeSingleOperatorResample2d \
-  BuildAndComputeSingleOperatorResample2d
-#endif
-TEST_F(WebNNGraphImplBackendTest,
-       MAYBE_BuildAndComputeSingleOperatorResample2d) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeSingleOperatorResample2d) {
   // Test resample2d with "NearestNeighbor" mode, explicit scales = [2, 3] and
   // axes = [2, 3].
   {
@@ -3613,10 +3401,9 @@ TEST_F(WebNNGraphImplBackendTest,
 //     transpose
 //         |
 //     transpose
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoTranspose) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoTranspose) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -3667,10 +3454,9 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTwoTranspose) {
 //     transpose
 //         |
 //       relu
-TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTransposeAndRelu) {
+TEST_P(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTransposeAndRelu) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -3724,11 +3510,10 @@ TEST_F(WebNNGraphImplBackendTest, BuildAndComputeGraphWithTransposeAndRelu) {
 //      reshape
 //         |
 //     transpose
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        BuildAndComputeGraphWithTransposeAndTwoReshape) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
@@ -3779,11 +3564,10 @@ TEST_F(WebNNGraphImplBackendTest,
 //     reshape    transpose
 //        |           |
 //    [output1]   [output2]
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        BuildAndComputeGraphWithTransposeAndTwoOutputs) {
   // Build the mojom graph info.
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-      BindNewGraphBuilderRemote();
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
   GraphInfoBuilder builder(remote);
   OperandId input_operand_id =
       builder.BuildInput("input", {1, 2, 3, 2}, OperandDataType::kFloat32);
@@ -3825,7 +3609,7 @@ TEST_F(WebNNGraphImplBackendTest,
 
 // Test building and computing a graph which can't be automatically fused
 // because the output of conv2d is used by two operations or as graph's output.
-TEST_F(WebNNGraphImplBackendTest,
+TEST_P(WebNNGraphImplBackendTest,
        MultipleOutputsCanNotFuseStandaloneActivation) {
   //     [input]
   //        |
@@ -3837,8 +3621,7 @@ TEST_F(WebNNGraphImplBackendTest,
   // [output1][output2]
   {
     // Build the mojom graph info.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-        BindNewGraphBuilderRemote();
+    mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
         builder.BuildInput("input", {1, 1, 5, 5}, OperandDataType::kFloat32);
@@ -3850,20 +3633,15 @@ TEST_F(WebNNGraphImplBackendTest,
     OperandId conv2d_output_operand_id = builder.BuildIntermediateOperand(
         {1, 1, 5, 5}, OperandDataType::kFloat32);
 
-    Conv2dTester<float>::Conv2dAttributes attributes{
+    BuildConv2dAttributes attributes{
         .padding = {1, 1, 1, 1},
-        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                   .dimensions = {1},
-                                   .values = {-100}},
     };
+    OperandInfo<float> conv2d_bias = {
+        .type = OperandDataType::kFloat32, .dimensions = {1}, .values = {-100}};
 
-    std::optional<OperandId> bias_operand_id;
-    if (attributes.bias.has_value()) {
-      bias_operand_id = builder.BuildConstant(
-          attributes.bias->dimensions, attributes.bias->type,
-          base::as_byte_span(base::allow_nonunique_obj,
-                             attributes.bias->values));
-    }
+    OperandId bias_operand_id = builder.BuildConstant(
+        conv2d_bias.dimensions, conv2d_bias.type,
+        base::as_byte_span(base::allow_nonunique_obj, conv2d_bias.values));
 
     builder.BuildConv2d(mojom::Conv2d::Kind::kDirect, input_operand_id,
                         filter_operand_id, conv2d_output_operand_id,
@@ -3902,8 +3680,7 @@ TEST_F(WebNNGraphImplBackendTest,
   // [output1][output2]
   {
     // Build the mojom graph info.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-        BindNewGraphBuilderRemote();
+    mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
         builder.BuildInput("input", {1, 1, 5, 5}, OperandDataType::kFloat32);
@@ -3915,20 +3692,15 @@ TEST_F(WebNNGraphImplBackendTest,
     OperandId conv2d_output_operand_id = builder.BuildIntermediateOperand(
         {1, 1, 5, 5}, OperandDataType::kFloat32);
 
-    Conv2dTester<float>::Conv2dAttributes attributes{
+    BuildConv2dAttributes attributes{
         .padding = {1, 1, 1, 1},
-        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                   .dimensions = {1},
-                                   .values = {-100}},
     };
+    OperandInfo<float> conv2d_bias = {
+        .type = OperandDataType::kFloat32, .dimensions = {1}, .values = {-100}};
 
-    std::optional<OperandId> bias_operand_id;
-    if (attributes.bias.has_value()) {
-      bias_operand_id = builder.BuildConstant(
-          attributes.bias->dimensions, attributes.bias->type,
-          base::as_byte_span(base::allow_nonunique_obj,
-                             attributes.bias->values));
-    }
+    OperandId bias_operand_id = builder.BuildConstant(
+        conv2d_bias.dimensions, conv2d_bias.type,
+        base::as_byte_span(base::allow_nonunique_obj, conv2d_bias.values));
 
     builder.BuildConv2d(mojom::Conv2d::Kind::kDirect, input_operand_id,
                         filter_operand_id, conv2d_output_operand_id,
@@ -3969,8 +3741,7 @@ TEST_F(WebNNGraphImplBackendTest,
   // [output1] [output2]
   {
     // Build the mojom graph info.
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder> remote =
-        BindNewGraphBuilderRemote();
+    mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
     GraphInfoBuilder builder(remote);
     OperandId input_operand_id =
         builder.BuildInput("input", {1, 1, 5, 5}, OperandDataType::kFloat32);
@@ -3982,20 +3753,15 @@ TEST_F(WebNNGraphImplBackendTest,
     OperandId conv2d_output_operand_id = builder.BuildIntermediateOperand(
         {1, 1, 5, 5}, OperandDataType::kFloat32);
 
-    Conv2dTester<float>::Conv2dAttributes attributes{
+    BuildConv2dAttributes attributes{
         .padding = {1, 1, 1, 1},
-        .bias = OperandInfo<float>{.type = OperandDataType::kFloat32,
-                                   .dimensions = {1},
-                                   .values = {-100}},
     };
+    OperandInfo<float> conv2d_bias = {
+        .type = OperandDataType::kFloat32, .dimensions = {1}, .values = {-100}};
 
-    std::optional<OperandId> bias_operand_id;
-    if (attributes.bias.has_value()) {
-      bias_operand_id = builder.BuildConstant(
-          attributes.bias->dimensions, attributes.bias->type,
-          base::as_byte_span(base::allow_nonunique_obj,
-                             attributes.bias->values));
-    }
+    OperandId bias_operand_id = builder.BuildConstant(
+        conv2d_bias.dimensions, conv2d_bias.type,
+        base::as_byte_span(base::allow_nonunique_obj, conv2d_bias.values));
 
     builder.BuildConv2d(mojom::Conv2d::Kind::kDirect, input_operand_id,
                         filter_operand_id, conv2d_output_operand_id,
@@ -4023,6 +3789,68 @@ TEST_F(WebNNGraphImplBackendTest,
         {-88, -79, -73, -67, -76, -67, -46, -37, -28, -49, -37, -1, 8,
          17,  -19, -7,  44,  53,  62,  11,  -28, 11,  17,  23,  -16});
   }
+}
+
+// Regression test: depthwise conv2d with kernel_size > kMaxPrimaryTile (25)
+// causes XNNPACK to use the igemm path instead of dwconv. With large groups
+// the igemm packed-weights size overflows int32_t.
+TEST_P(WebNNGraphImplBackendTest, Conv2dIgemmPackedWeightsOverflow) {
+  // groups chosen so that igemm packed weights =
+  //   ((26 * RoundUp(1,8) * 4) + 12) * RoundUp(1,128) * groups
+  //   = 108032 * 19879 > INT32_MAX.
+  constexpr uint32_t kGroups = 19879;
+  constexpr uint32_t kFilterHeight = 26;
+  constexpr uint32_t kFilterWidth = 1;
+
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
+  GraphInfoBuilder builder(remote);
+
+  OperandId input_operand_id =
+      builder.BuildInput("input", {1, kFilterHeight, kFilterWidth, kGroups},
+                         OperandDataType::kFloat32);
+
+  std::vector<float> filter_data(kFilterHeight * kFilterWidth * kGroups, 0.0f);
+  OperandId filter_operand_id = builder.BuildConstant(
+      {1, kFilterHeight, kFilterWidth, kGroups}, OperandDataType::kFloat32,
+      base::as_byte_span(base::allow_nonunique_obj, filter_data));
+
+  OperandId output_operand_id = builder.BuildOutput(
+      "output", {1, 1, 1, kGroups}, OperandDataType::kFloat32);
+
+  builder.BuildConv2d(mojom::Conv2d::Kind::kDirect, input_operand_id,
+                      filter_operand_id, output_operand_id,
+                      BuildConv2dAttributes{.groups = kGroups},
+                      /*bias_operand_id=*/std::nullopt);
+
+  std::vector<float> input_data(kFilterHeight * kFilterWidth * kGroups, 0.0f);
+  base::flat_map<std::string, base::span<const float>> named_inputs;
+  named_inputs.insert({"input", input_data});
+
+  std::ignore = BuildAndCompute(
+      context(), std::move(remote), builder.TakeGraphInfo(),
+      std::move(named_inputs), BuildAndComputeExpectation::kCreateGraphFailure);
+}
+
+TEST_P(WebNNGraphImplBackendTest, DestroyContextDuringBuild) {
+  // Build the mojom graph info.
+  mojo::Remote<mojom::WebNNGraphBuilder> remote = BindNewGraphBuilderRemote();
+  GraphInfoBuilder builder(remote);
+  OperandId input_operand_id =
+      builder.BuildInput("input", {1, 2, 3, 4}, OperandDataType::kFloat32);
+  OperandId output_operand_id =
+      builder.BuildOutput("output1", {1, 1, 6, 4}, OperandDataType::kFloat32);
+  builder.BuildReshape(input_operand_id, output_operand_id);
+
+  // The CreateGraph callback should never be called.
+  remote->CreateGraph(
+      builder.TakeGraphInfo(),
+      base::BindOnce(
+          [](base::expected<mojom::CreateGraphSuccessPtr, mojom::ErrorPtr>
+                 result) { NOTREACHED(); }));
+
+  // Destroy the context and wait for any pending tasks to complete.
+  context().reset();
+  webnn_test_environment_.RunUntilIdle();
 }
 
 }  // namespace webnn::test

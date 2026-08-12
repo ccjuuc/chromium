@@ -22,7 +22,6 @@ import android.graphics.drawable.Drawable;
 import android.util.DisplayMetrics;
 import android.widget.FrameLayout;
 
-import androidx.annotation.NonNull;
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
@@ -35,8 +34,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.annotation.LooperMode.Mode;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -44,10 +41,9 @@ import org.chromium.chrome.test.OverrideContextWrapperTestRule;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Tests for {@link RunOnNextLayoutDelegate}. */
+/** Tests for {@link ShrinkExpandImageView}. */
 // TODO(crbug.com/40286625): Move to hub/internal/ once TabSwitcherLayout no longer depends on this.
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(Mode.PAUSED)
 public class ShrinkExpandImageViewUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -318,7 +314,7 @@ public class ShrinkExpandImageViewUnitTest {
                 testBitmap.getDensity());
     }
 
-    private void assertReset(@NonNull Rect rect, boolean keepingBitmap) {
+    private void assertReset(Rect rect, boolean keepingBitmap) {
         assertEquals(1.0f, mShrinkExpandImageView.getScaleX(), EPSILON);
         assertEquals(1.0f, mShrinkExpandImageView.getScaleY(), EPSILON);
         assertEquals(0.0f, mShrinkExpandImageView.getTranslationX(), EPSILON);

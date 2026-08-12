@@ -184,7 +184,7 @@ bool MediaRouterAndroid::RegisterMediaSinksObserver(
   }
 
   observer_list->AddObserver(observer);
-  return bridge_->StartObservingMediaSinks(source_id);
+  return bridge_->StartObservingMediaSinks(source_id, observer->origin());
 }
 
 void MediaRouterAndroid::UnregisterMediaSinksObserver(
@@ -401,8 +401,8 @@ base::Value MediaRouterAndroid::GetLogs() const {
   return base::Value();
 }
 
-base::Value::Dict MediaRouterAndroid::GetState() const {
-  return base::Value::Dict();
+base::DictValue MediaRouterAndroid::GetState() const {
+  return base::DictValue();
 }
 
 void MediaRouterAndroid::GetProviderState(

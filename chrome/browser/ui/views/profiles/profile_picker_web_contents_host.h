@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_WEB_CONTENTS_HOST_H_
 #define CHROME_BROWSER_UI_VIEWS_PROFILES_PROFILE_PICKER_WEB_CONTENTS_HOST_H_
 
+#include <variant>
+
 #include "base/functional/callback.h"
 #include "base/types/strong_alias.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
@@ -14,6 +16,7 @@
 
 class GURL;
 class ForceSigninUIError;
+class SigninUIError;
 
 namespace content {
 class WebContents;
@@ -51,6 +54,9 @@ class ProfilePickerWebContentsHost {
   // Returns whether dark colors should be used (based on native theme).
   virtual bool ShouldUseDarkColors() const = 0;
 
+  // Returns whether effects (animations/audio) are enabled.
+  virtual bool AreEffectsEnabled() const = 0;
+
   // Returns the picker WebContents.
   virtual content::WebContents* GetPickerContents() const = 0;
 
@@ -64,13 +70,28 @@ class ProfilePickerWebContentsHost {
   virtual void Reset(StepSwitchFinishedCallback callback) = 0;
 
   // Used as a callback of type `StepSwitchFinishedCallback`. Allows to show the
-  // ForceSignin error dialog after completing a step switch.
-  virtual void ShowForceSigninErrorDialog(const ForceSigninUIError& error,
-                                          bool success) = 0;
+  // Signin error dialog after completing a step switch.
+  virtual void ShowSigninErrorDialog(
+      const std::variant<ForceSigninUIError, SigninUIError>& error,
+      bool success) = 0;
 
-  // Changes the visibility of the host's native toolbar, which shows a back
-  // button.
-  virtual void SetNativeToolbarVisible(bool visible) = 0;
+  // Changes the visibility of the sign-in buttons (i.e. buttons associated with
+  // the sign-in Gaia page) in the native toolbar.
+  virtual void SetNativeToolbarSigninButtonsVisible(bool visible) = 0;
+
+  // Changes the visibility of the "Don't sign in" button in the native toolbar.
+  // Safe to call even if the button was not instantiated (no-op in that case).
+  virtual void SetNativeToolbarDontSignInButtonVisible(bool visible) = 0;
+
+  // Changes the visibility of the "Start browsing" button in the native
+  // toolbar. Safe to call even if the button was not instantiated (no-op in
+  // that case).
+  virtual void SetNativeToolbarStartBrowsingButtonVisible(bool visible) = 0;
+
+  // Changes the visibility of the effects control button in the native
+  // toolbar. Safe to call even if the button was not instantiated (no-op in
+  // that case).
+  virtual void SetNativeToolbarEffectsControlButtonVisible(bool visible) = 0;
 
   // Returns the background colors that other `content::WebContents` that are
   // rendered by this host should use to match the toolbar.

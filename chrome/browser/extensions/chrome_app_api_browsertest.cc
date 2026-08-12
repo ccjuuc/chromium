@@ -137,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalled) {
   std::optional<base::Value> result_value =
       base::JSONReader::Read(result, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(result_value && result_value->is_dict());
-  base::Value::Dict& app_details = result_value.value().GetDict();
+  base::DictValue& app_details = result_value.value().GetDict();
 
   // extension->manifest() does not contain the id.
   app_details.Remove("id");
@@ -161,7 +161,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalled) {
 }
 
 // Test accessing app.isInstalled when the context has been invalidated (e.g.
-// by removing the frame). Regression test for https://crbug.com/855853.
+// by removing the frame). Regression test for https://crbug.com/41396418.
 IN_PROC_BROWSER_TEST_F(ChromeAppAPITest, IsInstalledFromRemovedFrame) {
   GURL app_url =
       embedded_test_server()->GetURL("app.com", "/extensions/test_file.html");

@@ -9,6 +9,8 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_url_constants.h"
+#include "ash/constants/url_constants.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "base/check.h"
 #include "base/check_deref.h"
@@ -25,19 +27,19 @@
 #include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_features_util.h"
-#include "chrome/browser/ui/webui/ash/settings/pages/privacy/metrics_consent_handler.h"
+#include "chrome/browser/ui/webui/ash/settings/pages/privacy/metrics_choice_handler.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/peripheral_data_access_handler.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/privacy_hub_handler.h"
 #include "chrome/browser/ui/webui/ash/settings/search/search_tag_registry.h"
 #include "chrome/browser/ui/webui/settings/settings_secure_dns_handler.h"
 #include "chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -390,7 +392,7 @@ void PrivacySection::AddHandlers(content::WebUI* web_ui) {
   web_ui->AddMessageHandler(
       std::make_unique<PeripheralDataAccessHandler>(profile()));
 
-  web_ui->AddMessageHandler(std::make_unique<MetricsConsentHandler>(
+  web_ui->AddMessageHandler(std::make_unique<MetricsChoiceHandler>(
       profile(), g_browser_process->metrics_service(),
       user_manager::UserManager::Get()));
 
@@ -634,22 +636,24 @@ void PrivacySection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       ui::SubstituteChromeOSDeviceType(IDS_OS_SETTINGS_SMART_PRIVACY_DESC));
 
   html_source->AddString("smartPrivacyLearnMoreURL",
-                         chrome::kSmartPrivacySettingsLearnMoreURL);
+                         ash::external_urls::kSmartPrivacySettingsLearnMoreURL);
 
   html_source->AddString("suggestedContentLearnMoreURL",
-                         chrome::kSuggestedContentLearnMoreURL);
+                         ash::external_urls::kSuggestedContentLearnMoreURL);
 
-  html_source->AddString("syncAndGoogleServicesLearnMoreURL",
-                         chrome::kSyncAndGoogleServicesLearnMoreURL);
+  html_source->AddString(
+      "syncAndGoogleServicesLearnMoreURL",
+      ash::chrome_external_urls::kSyncAndGoogleServicesLearnMoreURL);
 
   html_source->AddString("peripheralDataAccessLearnMoreURL",
-                         chrome::kPeripheralDataAccessHelpURL);
+                         ash::external_urls::kPeripheralDataAccessHelpURL);
 
   html_source->AddString("speakOnMuteDetectionLearnMoreURL",
-                         chrome::kSpeakOnMuteDetectionLearnMoreURL);
+                         ash::external_urls::kSpeakOnMuteDetectionLearnMoreURL);
 
-  html_source->AddString("geolocationAccuracyLearnMoreUrl",
-                         chrome::kPrivacyHubGeolocationAccuracyLearnMoreURL);
+  html_source->AddString(
+      "geolocationAccuracyLearnMoreUrl",
+      ash::external_urls::kPrivacyHubGeolocationAccuracyLearnMoreURL);
 
   html_source->AddString("osSettingsAppId", ash::kOsSettingsAppId);
 
@@ -662,6 +666,9 @@ void PrivacySection::AddLoadTimeData(content::WebUIDataSource* html_source) {
 
   html_source->AddBoolean("showSecureDnsSetting", true);
   html_source->AddBoolean("showSecureDnsOsSettingLink", false);
+  html_source->AddBoolean("shouldUseMetricsConsentRestructure",
+                          metrics::MetricsReportingChoiceService::
+                              ShouldUseMetricsConsentRestructure());
 
   ::settings::AddSecureDnsStrings(html_source);
   AddChromeOsSecureDnsStrings(html_source);

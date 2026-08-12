@@ -7,11 +7,12 @@
 #include <inttypes.h>
 #include <stdint.h>
 
+#include "base/check_is_test.h"
 #include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/types/pass_key.h"
@@ -23,6 +24,7 @@
 #include "net/cert/cert_verifier.h"
 #include "net/cert/sct_auditing_delegate.h"
 #include "net/cookies/cookie_store.h"
+#include "net/dns/dns_platform_attempt_factory.h"
 #include "net/dns/host_resolver.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
@@ -135,6 +137,7 @@ std::unique_ptr<URLRequest> URLRequestContext::CreateRequest(
     RequestPriority priority,
     URLRequest::Delegate* delegate) const {
   return CreateRequest(url, priority, delegate, MISSING_TRAFFIC_ANNOTATION,
+                       handles::kInvalidNetworkHandle,
                        /*is_for_websockets=*/false);
 }
 #endif
@@ -144,11 +147,29 @@ std::unique_ptr<URLRequest> URLRequestContext::CreateRequest(
     RequestPriority priority,
     URLRequest::Delegate* delegate,
     NetworkTrafficAnnotationTag traffic_annotation,
+    handles::NetworkHandle target_network,
     bool is_for_websockets,
     const std::optional<net::NetLogSource> net_log_source) const {
+  if (expected_target_network_for_testing().has_value() &&
+      target_network != handles::kInvalidNetworkHandle) {
+    // Ideally we should not have test-only code/assertions in production code.
+    // Unfortunately, this we don't have a good way to handle this case. See
+    // URLRequestContext::SetExpectedTargetNetworkForTesting for more details.
+    CHECK_IS_TEST();
+    // Test environments that configure expected_target_network_for_testing
+    // expect all requests generated to have the same target network. With that
+    // in mind, we prefer CHECK-failing, instead of silently failing the request
+    // (or letting through requests for other networks), to surface the issue as
+    // early as possible.
+    // TODO(crbug.com/543274233): Drop this in favor of a different architecture
+    // that affects the socket layer directly. See the bug and
+    // https://crrev.com/c/7904261/comment/43ee0e22_e82eef35/ for more details.
+    CHECK_EQ(target_network, *expected_target_network_for_testing());
+    target_network = handles::kInvalidNetworkHandle;
+  }
   return std::make_unique<URLRequest>(
       base::PassKey<URLRequestContext>(), url, priority, delegate, this,
-      traffic_annotation, is_for_websockets, net_log_source);
+      traffic_annotation, is_for_websockets, target_network, net_log_source);
 }
 
 void URLRequestContext::AssertNoURLRequests() const {
@@ -246,6 +267,10 @@ void URLRequestContext::set_client_socket_factory(
 void URLRequestContext::set_cache_encryption_delegate(
     std::unique_ptr<CacheEncryptionDelegate> cache_encryption_delegate) {
   cache_encryption_delegate_ = std::move(cache_encryption_delegate);
+}
+void URLRequestContext::set_dns_platform_attempt_factory(
+    std::unique_ptr<DnsPlatformAttemptFactory> dns_platform_attempt_factory) {
+  dns_platform_attempt_factory_ = std::move(dns_platform_attempt_factory);
 }
 #if BUILDFLAG(ENABLE_REPORTING)
 void URLRequestContext::set_persistent_reporting_and_nel_store(

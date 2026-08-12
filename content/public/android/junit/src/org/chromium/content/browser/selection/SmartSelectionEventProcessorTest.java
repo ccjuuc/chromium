@@ -20,15 +20,16 @@ import android.view.textclassifier.TextClassifier;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -42,6 +43,7 @@ import java.text.BreakIterator;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class SmartSelectionEventProcessorTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private WebContentsImpl mWebContents;
     private WindowAndroid mWindowAndroid;
 
@@ -66,8 +68,6 @@ public class SmartSelectionEventProcessorTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
-        ShadowLog.stream = System.out;
 
         mWebContents = Mockito.mock(WebContentsImpl.class);
         mWindowAndroid = Mockito.mock(WindowAndroid.class);

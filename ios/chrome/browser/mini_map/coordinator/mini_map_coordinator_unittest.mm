@@ -18,11 +18,14 @@
 #import "ios/chrome/browser/shared/model/prefs/browser_prefs.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/mini_map_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/grit/ios_branded_strings.h"
+#import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/providers/mini_map/test_mini_map.h"
 #import "ios/chrome/test/scoped_key_window.h"
 #import "ios/web/common/features.h"
@@ -33,6 +36,7 @@
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
+#import "ui/base/l10n/l10n_util.h"
 
 typedef void (^BlockWithViewController)(UIViewController*);
 
@@ -72,8 +76,7 @@ class MiniMapCoordinatorTest : public PlatformTest {
     builder.SetPrefService(CreatePrefService());
     profile_ = std::move(builder).Build();
     browser_ = std::make_unique<TestBrowser>(profile_.get());
-    mock_application_command_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     mock_application_settings_command_handler_ =
         OCMStrictProtocolMock(@protocol(SettingsCommands));
     mock_mini_map_command_handler_ =
@@ -82,8 +85,8 @@ class MiniMapCoordinatorTest : public PlatformTest {
         OCMStrictProtocolMock(@protocol(SnackbarCommands));
 
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-    [dispatcher startDispatchingToTarget:mock_application_command_handler_
-                             forProtocol:@protocol(ApplicationCommands)];
+    [dispatcher startDispatchingToTarget:mock_scene_handler_
+                             forProtocol:@protocol(SceneCommands)];
     [dispatcher
         startDispatchingToTarget:mock_application_settings_command_handler_
                      forProtocol:@protocol(SettingsCommands)];
@@ -101,7 +104,7 @@ class MiniMapCoordinatorTest : public PlatformTest {
 
   void TearDown() override {
     [coordinator_ stop];
-    EXPECT_OCMOCK_VERIFY(mock_application_command_handler_);
+    EXPECT_OCMOCK_VERIFY(mock_scene_handler_);
     EXPECT_OCMOCK_VERIFY(mock_application_settings_command_handler_);
     EXPECT_OCMOCK_VERIFY(mock_mini_map_command_handler_);
     EXPECT_OCMOCK_VERIFY(mock_snackbar_command_handler_);
@@ -115,6 +118,7 @@ class MiniMapCoordinatorTest : public PlatformTest {
         initWithBaseViewController:root_view_controller_
                            browser:browser_.get()
                               text:text
+                               URL:nil
                            withIPH:iph
                               mode:type];
     [coordinator_ start];
@@ -135,7 +139,7 @@ class MiniMapCoordinatorTest : public PlatformTest {
   std::unique_ptr<Browser> browser_;
   MiniMapCoordinator* coordinator_;
   TestMiniMapControllerFactory* factory_;
-  id mock_application_command_handler_;
+  id mock_scene_handler_;
   id mock_application_settings_command_handler_;
   id mock_mini_map_command_handler_;
   id mock_snackbar_command_handler_;
@@ -288,7 +292,7 @@ TEST_F(MiniMapCoordinatorTest, TestOpenURL) {
       presentMapsWithPresentingViewController:[OCMArg any]]);
   SetupCoordinator(NO, MiniMapMode::kMap);
   OCMExpect([mock_mini_map_command_handler_ hideMiniMap]);
-  OCMExpect([mock_application_command_handler_ openURLInNewTab:[OCMArg any]]);
+  OCMExpect([mock_scene_handler_ openURLInNewTab:[OCMArg any]]);
 
   ASSERT_NE(nil, completion_block);
   completion_block([NSURL URLWithString:@"https://www.example.org"]);
@@ -322,7 +326,7 @@ TEST_F(MiniMapCoordinatorTest, TestOpenQuery) {
       presentMapsWithPresentingViewController:[OCMArg any]]);
   SetupCoordinator(NO, MiniMapMode::kMap);
   OCMExpect([mock_mini_map_command_handler_ hideMiniMap]);
-  OCMExpect([mock_application_command_handler_ openURLInNewTab:[OCMArg any]]);
+  OCMExpect([mock_scene_handler_ openURLInNewTab:[OCMArg any]]);
 
   ASSERT_NE(nil, completion_block);
   completion_block(@"Query test");
@@ -372,7 +376,7 @@ TEST_F(MiniMapCoordinatorTest, TestFooterButtons) {
   EXPECT_FALSE(
       profile_->GetPrefs()->GetBoolean(prefs::kDetectAddressesEnabled));
 
-  OCMExpect([mock_application_command_handler_
+  OCMExpect([mock_scene_handler_
       showReportAnIssueFromViewController:[OCMArg any]
                                    sender:UserFeedbackSender::MiniMap]);
   histogram_tester.ExpectBucketCount("IOS.MiniMap.Outcome", 2, 0);
@@ -386,4 +390,155 @@ TEST_F(MiniMapCoordinatorTest, TestFooterButtons) {
   // Expect normal outcome.
   histogram_tester.ExpectBucketCount("IOS.MiniMap.Outcome", 0, 1);
   EXPECT_OCMOCK_VERIFY(mini_map_controller);
+}
+
+// Tests that Native Preview is presented when initialized with a URL.
+TEST_F(MiniMapCoordinatorTest, TestPresentNativePreview) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kIOSMiniMapUniversalLink);
+
+  id mini_map_controller = OCMStrictProtocolMock(@protocol(MiniMapController));
+  factory_.controller = mini_map_controller;
+
+  NSURL* url = [NSURL URLWithString:@"https://maps.google.com/maps/foo"];
+
+  coordinator_ = [[MiniMapCoordinator alloc]
+      initWithBaseViewController:root_view_controller_
+                         browser:browser_.get()
+                            text:nil
+                             URL:url
+                         withIPH:NO
+                            mode:MiniMapMode::kMapNativePreviewURL];
+  OCMExpect([mini_map_controller configureURL:url]);
+  OCMExpect([mini_map_controller configureIncognito:NO]);
+  OCMExpect([mini_map_controller configureCompletion:[OCMArg any]]);
+  OCMExpect(
+      [mini_map_controller configureCompletionWithSearchQuery:[OCMArg any]]);
+  OCMExpect([mini_map_controller configureFailureCompletion:[OCMArg any]]);
+  OCMExpect([mini_map_controller configureFooterWithTitle:[OCMArg any]
+                                       leadingButtonTitle:[OCMArg any]
+                                      trailingButtonTitle:[OCMArg any]
+                                      leadingButtonAction:[OCMArg any]
+                                     trailingButtonAction:[OCMArg any]]);
+
+  OCMExpect([mini_map_controller
+      presentMapsNativePreviewWithPresentingViewController:[OCMArg any]]);
+
+  [coordinator_ start];
+
+  EXPECT_OCMOCK_VERIFY(mini_map_controller);
+}
+
+// Tests that Native Preview is presented when initialized with a URL in
+// Incognito mode.
+TEST_F(MiniMapCoordinatorTest, TestPresentNativePreviewIncognito) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kIOSMiniMapUniversalLink);
+
+  id mini_map_controller = OCMStrictProtocolMock(@protocol(MiniMapController));
+  factory_.controller = mini_map_controller;
+
+  NSURL* url = [NSURL URLWithString:@"https://maps.google.com/maps/foo"];
+
+  browser_ = std::make_unique<TestBrowser>(
+      profile_->CreateOffTheRecordProfileWithTestingFactories());
+  CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
+  [dispatcher startDispatchingToTarget:mock_scene_handler_
+                           forProtocol:@protocol(SceneCommands)];
+  [dispatcher
+      startDispatchingToTarget:mock_application_settings_command_handler_
+                   forProtocol:@protocol(SettingsCommands)];
+  [dispatcher startDispatchingToTarget:mock_mini_map_command_handler_
+                           forProtocol:@protocol(MiniMapCommands)];
+  [dispatcher startDispatchingToTarget:mock_snackbar_command_handler_
+                           forProtocol:@protocol(SnackbarCommands)];
+
+  coordinator_ = [[MiniMapCoordinator alloc]
+      initWithBaseViewController:root_view_controller_
+                         browser:browser_.get()
+                            text:nil
+                             URL:url
+                         withIPH:NO
+                            mode:MiniMapMode::kMapNativePreviewURL];
+  OCMExpect([mini_map_controller configureURL:url]);
+  OCMExpect([mini_map_controller configureIncognito:YES]);
+  OCMExpect([mini_map_controller configureCompletion:[OCMArg any]]);
+  OCMExpect(
+      [mini_map_controller configureCompletionWithSearchQuery:[OCMArg any]]);
+  OCMExpect([mini_map_controller configureFailureCompletion:[OCMArg any]]);
+  OCMExpect([mini_map_controller configureFooterWithTitle:[OCMArg any]
+                                       leadingButtonTitle:[OCMArg any]
+                                      trailingButtonTitle:[OCMArg any]
+                                      leadingButtonAction:[OCMArg any]
+                                     trailingButtonAction:[OCMArg any]]);
+
+  OCMExpect([mini_map_controller
+      presentMapsNativePreviewWithPresentingViewController:[OCMArg any]]);
+
+  [coordinator_ start];
+
+  EXPECT_OCMOCK_VERIFY(mini_map_controller);
+}
+
+// Tests the footer buttons for Native Preview (URL flow).
+TEST_F(MiniMapCoordinatorTest, TestNativePreviewFooterButtons) {
+  id mini_map_controller = OCMStrictProtocolMock(@protocol(MiniMapController));
+  factory_.controller = mini_map_controller;
+
+  __block BlockWithViewController left_button_block;
+  __block BlockWithViewController right_button_block;
+
+  NSURL* url = [NSURL URLWithString:@"https://maps.google.com/maps/foo"];
+
+  coordinator_ = [[MiniMapCoordinator alloc]
+      initWithBaseViewController:root_view_controller_
+                         browser:browser_.get()
+                            text:nil
+                             URL:url
+                         withIPH:NO
+                            mode:MiniMapMode::kMapNativePreviewURL];
+
+  OCMExpect([mini_map_controller configureURL:url]);
+  OCMExpect([mini_map_controller configureIncognito:NO]);
+  OCMExpect([mini_map_controller configureCompletion:[OCMArg any]]);
+  OCMExpect(
+      [mini_map_controller configureCompletionWithSearchQuery:[OCMArg any]]);
+  OCMExpect([mini_map_controller configureFailureCompletion:[OCMArg any]]);
+
+  // Verify that the NEW strings are passed for the URL flow
+  OCMExpect([mini_map_controller
+      configureFooterWithTitle:l10n_util::GetNSString(
+                                   IDS_IOS_MINI_MAP_URL_FOOTER_STRING)
+            leadingButtonTitle:l10n_util::GetNSString(
+                                   IDS_IOS_MINI_MAP_DISABLE_PREVIEW_STRING)
+           trailingButtonTitle:l10n_util::GetNSString(
+                                   IDS_IOS_OPTIONS_REPORT_AN_ISSUE)
+           leadingButtonAction:AssignValueToVariable(left_button_block)
+          trailingButtonAction:AssignValueToVariable(right_button_block)]);
+
+  OCMExpect([mini_map_controller
+      presentMapsNativePreviewWithPresentingViewController:[OCMArg any]]);
+
+  [coordinator_ start];
+
+  EXPECT_OCMOCK_VERIFY(mini_map_controller);
+
+  // Verify that the left button action shows the snackbar
+  OCMExpect([mock_snackbar_command_handler_
+      showSnackbarWithMessage:
+          l10n_util::GetNSString(
+              IDS_IOS_MINI_MAP_DISABLE_PREVIEW_CONFIRMATION_STRING)
+                   buttonText:[OCMArg any]
+                messageAction:[OCMArg any]
+             completionAction:[OCMArg any]]);
+
+  // Set preference to true initially
+  profile_->GetPrefs()->SetBoolean(prefs::kIosMiniMapShowNativeMap, true);
+
+  // Trigger the block
+  left_button_block(nil);
+
+  // Verify that the correct preference was disabled!
+  EXPECT_FALSE(
+      profile_->GetPrefs()->GetBoolean(prefs::kIosMiniMapShowNativeMap));
 }

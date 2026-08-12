@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/views/new_tab_footer/footer_controller.h"
 
-#include <memory>
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -16,7 +15,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/browser/ui/views/new_tab_footer/footer_web_view.h"
@@ -30,6 +28,7 @@
 #include "components/search/ntp_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/base/url_util.h"
@@ -202,7 +201,7 @@ IN_PROC_BROWSER_TEST_F(FooterControllerExtensionTest, TabChanged) {
   NavigateCurrentTab(extension->url());
   EXPECT_TRUE(footer()->GetVisible());
 
-  OpenNewTab(GURL(chrome::kChromeUINewTabPageURL));
+  OpenNewTab(chrome::ChromeUINewTabPageURLAsGURL());
   EXPECT_FALSE(footer()->GetVisible());
 }
 
@@ -229,9 +228,7 @@ class FooterControllerEnterpriseTest
       public testing::WithParamInterface<bool> {
  public:
   FooterControllerEnterpriseTest() {
-    feature_list_.InitWithFeatureStates(
-        {{ntp_features::kNtpFooter, true},
-         {features::kEnterpriseBadgingForNtpFooter, true}});
+    feature_list_.InitWithFeatureStates({{ntp_features::kNtpFooter, true}});
   }
   ~FooterControllerEnterpriseTest() override = default;
 
@@ -251,11 +248,11 @@ IN_PROC_BROWSER_TEST_P(FooterControllerEnterpriseTest, NoticePolicyEnabled) {
   ASSERT_FALSE(footer()->GetVisible());
 
   // Default NTP
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabURLAsGURL());
   EXPECT_EQ(managed(), footer()->GetVisible());
 
   // 1P NTP
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabPageURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabPageURLAsGURL());
   EXPECT_EQ(managed(), footer()->GetVisible());
 
   // 3P NTP
@@ -279,7 +276,7 @@ IN_PROC_BROWSER_TEST_P(FooterControllerEnterpriseTest, NoticePolicyDisabled) {
                 : policy::EnterpriseManagementAuthority::NONE);
   local_state()->SetBoolean(prefs::kNTPFooterManagementNoticeEnabled, false);
 
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabPageURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabPageURLAsGURL());
   EXPECT_FALSE(footer()->GetVisible());
 }
 
@@ -290,7 +287,7 @@ IN_PROC_BROWSER_TEST_P(FooterControllerEnterpriseTest, NoticePolicyChanged) {
                 : policy::EnterpriseManagementAuthority::NONE);
   ASSERT_FALSE(footer()->GetVisible());
 
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabURLAsGURL());
   EXPECT_EQ(managed(), footer()->GetVisible());
 
   local_state()->SetBoolean(prefs::kNTPFooterManagementNoticeEnabled, false);
@@ -312,7 +309,7 @@ IN_PROC_BROWSER_TEST_P(FooterControllerEnterpriseTest,
       policy::EnterpriseManagementAuthority::DOMAIN_LOCAL);
   VerifyNoticeMetricsRecorded(0);
 
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabURLAsGURL());
   ASSERT_EQ(managed(), footer()->GetVisible());
   VerifyNoticeMetricsRecorded(/*total_count= */ 1, /*management_count= */ 1);
 
@@ -371,7 +368,7 @@ IN_PROC_BROWSER_TEST_F(FooterControllerSplitViewSingleTabTest, TabChanged) {
   NavigateCurrentTab(GURL(kNonNtpUrl));
   EXPECT_FALSE(footer()->GetVisible());
 
-  NavigateCurrentTab(GURL(chrome::kChromeUINewTabPageURL));
+  NavigateCurrentTab(chrome::ChromeUINewTabPageURLAsGURL());
   EXPECT_FALSE(footer()->GetVisible());
 
   OpenNewTab(GURL(extension->url()));
@@ -468,4 +465,35 @@ IN_PROC_BROWSER_TEST_F(FooterControllerSplitViewTest, CloseRightTabInSplit) {
       1, TabCloseTypes::CLOSE_USER_GESTURE |
              TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
   EXPECT_FALSE(footer()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(FooterControllerSplitViewTest, OpenUrlFromTabInSplit) {
+  auto extension = LoadNtpExtension();
+
+  tab_strip_model()->ActivateTabAt(0);
+  NavigateCurrentTab(GURL(extension->url()));
+  content::WebContents* ntp_tab_contents =
+      tab_strip_model()->GetWebContentsAt(0);
+
+  tab_strip_model()->ActivateTabAt(1);
+  content::WebContents* active_tab_contents =
+      tab_strip_model()->GetActiveWebContents();
+  ASSERT_NE(ntp_tab_contents, active_tab_contents);
+
+  auto* ntp_container = BrowserView::GetBrowserViewForBrowser(browser())
+                            ->GetContentsContainerViewFor(ntp_tab_contents);
+  ASSERT_TRUE(ntp_container);
+  auto* ntp_footer = ntp_container->new_tab_footer_view();
+  ASSERT_TRUE(ntp_footer);
+
+  const GURL kTargetUrl("https://www.google.com/");
+  content::OpenURLParams params(kTargetUrl, content::Referrer(),
+                                WindowOpenDisposition::CURRENT_TAB,
+                                ui::PAGE_TRANSITION_LINK, false);
+  content::TestNavigationObserver nav_observer(ntp_tab_contents);
+  ntp_footer->OpenURLFromTab(ntp_footer->GetWebContents(), params, {});
+  nav_observer.Wait();
+
+  EXPECT_EQ(kTargetUrl, ntp_tab_contents->GetLastCommittedURL());
+  EXPECT_EQ(GURL(kNonNtpUrl), active_tab_contents->GetLastCommittedURL());
 }

@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 
 #include "base/callback_list.h"
 #include "base/functional/callback_helpers.h"
@@ -14,20 +15,23 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/test/browser_test.h"
+#include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_sequence.h"
@@ -77,6 +81,8 @@ class InteractiveBrowserTestUiTest : public InteractiveBrowserTest {
 
   void SetUpOnMainThread() override {
     InteractiveBrowserTest::SetUpOnMainThread();
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kTabSearchPinnedToTabstrip, true);
     embedded_test_server()->StartAcceptingConnections();
   }
 
@@ -508,6 +514,11 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest, SendKeyPress) {
       CheckViewProperty(kOmniboxElementId, &OmniboxViewViews::GetText, u"aB"));
 }
 
+IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestUiTest,
+                       MaybeEnterInteractiveMode) {
+  RunTestSequence(MaybeEnterInteractiveMode(kBrowserViewElementId));
+}
+
 // Simple bubble containing a WebView. Allows us to simulate swapping out one
 // WebContents for another.
 class WebBubbleView : public views::BubbleDialogDelegateView {
@@ -521,10 +532,9 @@ class WebBubbleView : public views::BubbleDialogDelegateView {
     BrowserView* const browser_view =
         BrowserView::GetBrowserViewForBrowser(browser);
     auto bubble_ptr = base::WrapUnique(
-        new WebBubbleView(browser_view->toolbar(), browser->profile(), url));
+        new WebBubbleView(browser_view->toolbar(), browser->GetProfile(), url));
     auto* const bubble = bubble_ptr.get();
-    views::BubbleDialogDelegateView::CreateBubble(std::move(bubble_ptr))
-        ->Show();
+    views::BubbleDialogDelegateView::CreateBubble(bubble_ptr.release())->Show();
     return bubble;
   }
 
@@ -724,7 +734,8 @@ class InteractiveBrowserTestHoverUiTest : public InteractiveBrowserTestUiTest {
     // Move the mouse somewhere completely outside where the dialog will show.
     auto* const browser_view = BrowserView::GetBrowserViewForBrowser(browser());
     mouse_util().PerformGestures(
-        {browser_view->GetNativeWindow(), /*force_async=*/false},
+        views::test::InteractionTestUtilMouse::GestureParams(
+            browser_view->GetNativeWindow()),
         views::test::InteractionTestUtilMouse::MoveTo(
             browser_view->GetBoundsInScreen().origin() +
             gfx::Vector2d(10, 10)));
@@ -735,8 +746,8 @@ class InteractiveBrowserTestHoverUiTest : public InteractiveBrowserTestUiTest {
     CHECK(anchor_view);
     auto bubble_view = std::make_unique<HoverDetectionBubbleView>(anchor_view);
     bubble_view_ = bubble_view.get();
-    bubble_widget_ = base::WrapUnique(views::BubbleDialogDelegate::CreateBubble(
-        std::move(bubble_view), views::Widget::InitParams::CLIENT_OWNS_WIDGET));
+    bubble_widget_ = views::BubbleDialogDelegate::CreateBubble(
+        std::move(bubble_view).release());
     bubble_widget_->Show();
     bubble_view_->SizeToContents();
   }
@@ -791,4 +802,114 @@ IN_PROC_BROWSER_TEST_F(InteractiveBrowserTestHoverUiTest,
           })),
       WaitForState(kHoverView3State,
                    testing::Contains(ui::EventType::kMouseExited)));
+}
+
+namespace {
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kDraggableViewId);
+
+// A view that records drag operations.
+class DraggableView : public views::View {
+  METADATA_HEADER(DraggableView, views::View)
+ public:
+  DraggableView() {
+    SetProperty(views::kElementIdentifierKey, kDraggableViewId);
+    SetBackground(views::CreateSolidBackground(SK_ColorRED));
+  }
+
+  int GetDragOperations(const gfx::Point& press_pt) override {
+    return ui::DragDropTypes::DRAG_MOVE;
+  }
+
+  void WriteDragData(const gfx::Point& press_pt,
+                     ui::OSExchangeData* data) override {
+    data->SetString(u"placeholder");
+    SkBitmap bitmap;
+    bitmap.allocN32Pixels(/*width=*/10, /*height=*/10);
+    data->provider().SetDragImage(gfx::ImageSkia::CreateFrom1xBitmap(bitmap),
+                                  gfx::Vector2d());
+  }
+
+  int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    last_drag_position_ =
+        views::View::ConvertPointToScreen(this, event.location());
+    return ui::DragDropTypes::DRAG_MOVE;
+  }
+
+  bool CanDrop(const OSExchangeData& data) override { return true; }
+
+  bool GetDropFormats(
+      int* formats,
+      std::set<ui::ClipboardFormatType>* format_types) override {
+    *formats = ui::OSExchangeData::STRING;
+    return true;
+  }
+
+  gfx::Point last_drag_position() const { return last_drag_position_; }
+
+ private:
+  gfx::Point last_drag_position_;
+};
+
+BEGIN_METADATA(DraggableView)
+END_METADATA
+}  // namespace
+
+class DragInteractiveUiTest : public InteractiveBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    InteractiveBrowserTest::SetUpOnMainThread();
+
+    views::Widget::InitParams params(
+        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    params.bounds = gfx::Rect(0, 0, 1000, 1000);
+    params.context = browser()->GetWindow()->GetNativeWindow();
+    test_widget_ = std::make_unique<views::Widget>();
+    test_widget_->Init(std::move(params));
+    draggable_view_ =
+        test_widget_->SetContentsView(std::make_unique<DraggableView>());
+    test_widget_->Show();
+  }
+
+  void TearDownOnMainThread() override {
+    draggable_view_ = nullptr;
+    if (test_widget_) {
+      test_widget_->CloseNow();
+      test_widget_.reset();
+    }
+    InteractiveBrowserTest::TearDownOnMainThread();
+  }
+
+  auto CheckLastDragPosition(gfx::Point expected_pos) {
+    return Do([&, expected_pos]() {
+      EXPECT_EQ(draggable_view_->last_drag_position(), expected_pos);
+    });
+  }
+
+ protected:
+  std::unique_ptr<views::Widget> test_widget_;
+  raw_ptr<DraggableView> draggable_view_ = nullptr;
+};
+
+// A simple test that verifies widget dragging works by moving a view around.
+// The bounds of the view are expected to change as the mouse moves.
+// TODO(crbug.com/40249472): Dragging views does not work on all platforms.
+#if BUILDFLAG(IS_LINUX)
+#define MAYBE_DragView DragView
+#else
+#define MAYBE_DragView DISABLED_DragView
+#endif
+IN_PROC_BROWSER_TEST_F(DragInteractiveUiTest, MAYBE_DragView) {
+  RunTestSequence(
+      InAnyContext(MoveMouseTo(kDraggableViewId)), Log("Start drag"),
+      DragMouseTo(gfx::Point(50, 50), false),
+      // The initial drag movement isn't checked because some platforms consume
+      // the initial input event, preventing the view from getting the "drag
+      // update".
+
+      Log("Continue drag to (100, 100)"), MoveMouseTo(gfx::Point(100, 100)),
+      CheckLastDragPosition({100, 100}), Log("Continue drag to (400, 400)"),
+      MoveMouseTo(gfx::Point(400, 400)), CheckLastDragPosition({400, 400}),
+      Log("Continue drag to (200, 200)"), MoveMouseTo(gfx::Point(200, 200)),
+      CheckLastDragPosition({200, 200}), Log("End drag"), ReleaseMouse());
 }

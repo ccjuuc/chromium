@@ -8,14 +8,15 @@
 
 #include <cstddef>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include "base/debug/dump_without_crashing.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/optimization_guide/core/model_execution/multimodal_message.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_execution_proto_descriptors.h"
@@ -154,11 +155,13 @@ class InputBuilder final {
   Error ResolveMediaField(const ResolutionContext& ctx,
                           proto::MediaField token);
 
-  void AddToken(ml::Token token) { out_->pieces.emplace_back(token); }
+  void AddToken(ml::Token token) {
+    out_->pieces.push_back(InputPiece::NewToken(token));
+  }
 
   void AddString(std::string_view str) {
     if (!str.empty()) {
-      out_->pieces.emplace_back(std::string(str));
+      out_->pieces.push_back(InputPiece::NewText(std::string(str)));
     }
   }
 
@@ -245,10 +248,16 @@ InputBuilder::Error InputBuilder::ResolveMediaField(
   MultimodalType mtype = ctx.view.GetMultimodalType(field.proto_field());
   switch (mtype) {
     case MultimodalType::kAudio:
-      out_->pieces.emplace_back(*ctx.view.GetAudio(field.proto_field()));
+      out_->pieces.push_back(
+          InputPiece::NewAudio(on_device_model::mojom::AudioData::New(
+              ctx.view.GetAudio(field.proto_field())->sample_rate_hz,
+              ctx.view.GetAudio(field.proto_field())->num_channels,
+              ctx.view.GetAudio(field.proto_field())->num_frames,
+              ctx.view.GetAudio(field.proto_field())->data)));
       return Error::kOk;
     case MultimodalType::kImage:
-      out_->pieces.emplace_back(*ctx.view.GetImage(field.proto_field()));
+      out_->pieces.push_back(
+          InputPiece::NewBitmap(*ctx.view.GetImage(field.proto_field())));
       return Error::kOk;
     case MultimodalType::kNone:
       return Error::kOk;
@@ -361,6 +370,54 @@ std::string PlaceholderForToken(ml::Token token) {
   }
 }
 
+std::string WriteJsonForDisplay(base::ValueView value) {
+  std::string json;
+  if (!base::JSONWriter::Write(value, &json)) {
+    return std::string();
+  }
+  return json;
+}
+
+std::string OnDeviceInputPieceToString(
+    const on_device_model::mojom::InputPiecePtr& piece) {
+  using Tag = on_device_model::mojom::InputPiece::Tag;
+  switch (piece->which()) {
+    case Tag::kText:
+      return piece->get_text();
+    case Tag::kToken:
+      return PlaceholderForToken(piece->get_token());
+    case Tag::kBitmap:
+      return std::string("<image>");
+    case Tag::kAudio:
+      return std::string("<audio>");
+    case Tag::kToolResponse: {
+      const auto& response = piece->get_tool_response();
+      // Tool responses include result or error for safety checking.
+      std::string result = base::StrCat(
+          {"<tool-response id=", response->call_id, " name=", response->name});
+      if (response->result) {
+        base::StrAppend(&result,
+                        {" result=", WriteJsonForDisplay(*response->result)});
+      }
+      if (response->error_message) {
+        base::StrAppend(&result, {" error=\"", *response->error_message, "\""});
+      }
+      result += ">";
+      return result;
+    }
+    case Tag::kToolDeclaration: {
+      const auto& decl = piece->get_tool_declaration();
+      // Tool declarations include description and schema for safety checking.
+      return base::StrCat(
+          {"<tool name=", decl->name, " description=\"", decl->description,
+           "\" schema=", WriteJsonForDisplay(decl->input_schema), ">"});
+    }
+    case Tag::kUnknownType:
+      NOTREACHED();
+  }
+  NOTREACHED();
+}
+
 }  // namespace
 
 SubstitutionResult::SubstitutionResult() = default;
@@ -370,21 +427,11 @@ SubstitutionResult& SubstitutionResult::operator=(SubstitutionResult&&) =
     default;
 
 std::string OnDeviceInputToString(const on_device_model::mojom::Input& input) {
-  std::ostringstream oss;
+  std::string result;
   for (const auto& piece : input.pieces) {
-    if (std::holds_alternative<std::string>(piece)) {
-      oss << std::get<std::string>(piece);
-    } else if (std::holds_alternative<ml::Token>(piece)) {
-      oss << PlaceholderForToken(std::get<ml::Token>(piece));
-    } else if (std::holds_alternative<SkBitmap>(piece)) {
-      oss << "<image>";
-    } else if (std::holds_alternative<ml::AudioBuffer>(piece)) {
-      oss << "<audio>";
-    } else {
-      NOTREACHED();
-    }
+    result += OnDeviceInputPieceToString(piece);
   }
-  return oss.str();
+  return result;
 }
 
 std::string SubstitutionResult::ToString() const {

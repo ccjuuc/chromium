@@ -8,6 +8,7 @@
 
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/main_controller.h"
+#import "ios/chrome/browser/scene/coordinator/scene_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_controller_testing.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -17,8 +18,9 @@
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_commands.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_grid_coordinator.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 
@@ -91,10 +93,10 @@ void OpenNewTabInWindowWithNumber(int windowNumber) {
       [controller addANewTabAndPresentBrowser:browser withURLLoadParams:params];
       return;
     }
-    id<ApplicationCommands, BrowserCommands> handler =
-        static_cast<id<ApplicationCommands, BrowserCommands>>(
-            GetCurrentBrowserForWindowWithNumber(windowNumber)
-                ->GetCommandDispatcher());
+    CommandDispatcher* dispatcher =
+        GetCurrentBrowserForWindowWithNumber(windowNumber)
+            ->GetCommandDispatcher();
+    id<SceneCommands> handler = HandlerForProtocol(dispatcher, SceneCommands);
     [handler openURLInNewTab:command];
   }
 }

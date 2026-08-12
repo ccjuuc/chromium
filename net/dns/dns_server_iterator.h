@@ -154,5 +154,34 @@ class NET_EXPORT_PRIVATE ClassicDnsServerIterator : public DnsServerIterator {
   bool AttemptAvailable() override;
 };
 
+// Iterator that can be used when the query is sent via APIs that do not allow
+// controlling the underlying DNS server used. For example, this is the case for
+// DnsTransactionFactory::AttemptMode::kPlatform on Android.
+// In this scenario, we want to limit the number of attempts for each query to
+// `max_attempts`: calling GetNextAttemptIndex increments the attempt count,
+// and AttemptAvailable will return false once `max_attempts` is reached.
+class NET_EXPORT_PRIVATE PlatformDnsServerIterator : public DnsServerIterator {
+ public:
+  explicit PlatformDnsServerIterator(int max_attempts)
+      : DnsServerIterator(/*nameservers_size=*/1,
+                          /*starting_index=*/0,
+                          /*max_times_returned=*/max_attempts,
+                          /*max_failures=*/0,
+                          /*resolve_context=*/nullptr,
+                          /*session=*/nullptr) {}
+
+  ~PlatformDnsServerIterator() override = default;
+
+  // Not copy or moveable.
+  PlatformDnsServerIterator(const PlatformDnsServerIterator&) = delete;
+  PlatformDnsServerIterator& operator=(const PlatformDnsServerIterator&) =
+      delete;
+  PlatformDnsServerIterator(PlatformDnsServerIterator&&) = delete;
+
+  // DnsServerIterator methods:
+  size_t GetNextAttemptIndex() override;
+  bool AttemptAvailable() override;
+};
+
 }  // namespace net
 #endif  // NET_DNS_DNS_SERVER_ITERATOR_H_

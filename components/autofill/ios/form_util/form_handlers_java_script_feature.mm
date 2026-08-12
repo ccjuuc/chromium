@@ -8,6 +8,7 @@
 #import "base/no_destructor.h"
 #import "base/values.h"
 #import "components/autofill/core/common/autofill_features.h"
+#import "components/autofill/ios/common/autofill_optimization_features.h"
 #import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/common/javascript_feature_util.h"
 #import "components/autofill/ios/form_util/autofill_form_features_java_script_feature.h"
@@ -16,6 +17,8 @@
 #import "ios/web/public/js_messaging/java_script_feature.h"
 #import "ios/web/public/js_messaging/java_script_feature_util.h"
 #import "ios/web/public/js_messaging/script_message.h"
+
+namespace autofill {
 
 namespace {
 
@@ -37,7 +40,17 @@ std::vector<web::JavaScriptFeature::FeatureScript> GetFeatureScripts() {
             kAutofillFormSubmissionEventsInCaptureMode);
         return @{
           @"{{PlaceholderFormSubmissionListenerCapture}}" :
-                  use_capture ? @"true" : @"false"
+                  use_capture ? @"true" : @"false",
+          @"window.gCrWebPlaceholderAutofillOptimizationFormSearch" :
+                  base::FeatureList::IsEnabled(
+                      features::kAutofillOptimizationFormSearchIos)
+              ? @"true"
+              : @"false",
+          @"window.gCrWebPlaceholderTrackFormMutationsOptimization" :
+                  base::FeatureList::IsEnabled(
+                      features::kAutofillTrackFormMutationsOptimizationIos)
+              ? @"true"
+              : @"false",
         };
       });
 
@@ -47,20 +60,16 @@ std::vector<web::JavaScriptFeature::FeatureScript> GetFeatureScripts() {
       FeatureScript::ReinjectionBehavior::kReinjectOnDocumentRecreation,
       placeholder_replacements_callback));
 
-  if (base::FeatureList::IsEnabled(kAutofillIsolatedWorldForJavascriptIos)) {
-    feature_scripts.push_back(FeatureScript::CreateWithFilename(
-        kRemoteTokenRegistrationScriptName,
-        FeatureScript::InjectionTime::kDocumentStart,
-        FeatureScript::TargetFrames::kAllFrames,
-        FeatureScript::ReinjectionBehavior::kReinjectOnDocumentRecreation));
-  }
+  feature_scripts.push_back(FeatureScript::CreateWithFilename(
+      kRemoteTokenRegistrationScriptName,
+      FeatureScript::InjectionTime::kDocumentStart,
+      FeatureScript::TargetFrames::kAllFrames,
+      FeatureScript::ReinjectionBehavior::kReinjectOnDocumentRecreation));
 
   return feature_scripts;
 }
 
 }  // namespace
-
-namespace autofill {
 
 // static
 FormHandlersJavaScriptFeature* FormHandlersJavaScriptFeature::GetInstance() {
@@ -73,8 +82,7 @@ FormHandlersJavaScriptFeature::FormHandlersJavaScriptFeature()
           ContentWorldForAutofillJavascriptFeatures(),
           GetFeatureScripts(),
           {
-              web::java_script_features::GetCommonJavaScriptFeature(),
-              autofill::AutofillFormFeaturesJavaScriptFeature::GetInstance(),
+              AutofillFormFeaturesJavaScriptFeature::GetInstance(),
               RemoteFrameRegistrationJavaScriptFeature::GetInstance(),
           }) {}
 
@@ -84,7 +92,7 @@ void FormHandlersJavaScriptFeature::TrackFormMutations(
     web::WebFrame* frame,
     int mutation_tracking_delay) {
   CallJavaScriptFunction(frame, "formHandlers.trackFormMutations",
-                         base::Value::List().Append(mutation_tracking_delay));
+                         base::ListValue().Append(mutation_tracking_delay));
 }
 
 std::optional<std::string>
@@ -104,12 +112,8 @@ void FormHandlersJavaScriptFeature::ScriptMessageReceived(
 FormHandlersJavaScriptFeature::FormHandlersJavaScriptFeature(
     RemoteFrameRegistrationJavaScriptFeature*
         remote_frame_registration_java_script_feature)
-    : web::JavaScriptFeature(
-          ContentWorldForAutofillJavascriptFeatures(),
-          GetFeatureScripts(),
-          {
-              web::java_script_features::GetCommonJavaScriptFeature(),
-              remote_frame_registration_java_script_feature,
-          }) {}
+    : web::JavaScriptFeature(ContentWorldForAutofillJavascriptFeatures(),
+                             GetFeatureScripts(),
+                             {remote_frame_registration_java_script_feature}) {}
 
 }  // namespace autofill

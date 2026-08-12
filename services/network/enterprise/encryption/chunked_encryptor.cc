@@ -9,17 +9,21 @@
 #include "base/containers/span_reader.h"
 #include "base/containers/span_writer.h"
 #include "base/numerics/byte_conversions.h"
-#include "crypto/hkdf.h"
+#include "crypto/kdf.h"
 #include "crypto/random.h"
 
 namespace network::enterprise_encryption {
 
 EncryptionContext::EncryptionContext(
     base::span<const uint8_t, kKeySize> key,
-    base::span<const uint8_t, kNoncePrefixSize> prefix) {
-  base::span(derived_key).copy_from(key);
+    base::span<const uint8_t, kNoncePrefixSize> prefix)
+    : derived_key(std::string(key.begin(), key.end())) {
   base::span(nonce_prefix).copy_from(prefix);
 }
+
+EncryptionContext::EncryptionContext(EncryptionContext&&) = default;
+EncryptionContext& EncryptionContext::operator=(EncryptionContext&&) = default;
+EncryptionContext::~EncryptionContext() = default;
 
 base::expected<std::pair<std::vector<uint8_t>, EncryptionContext>,
                EncryptionError>
@@ -43,7 +47,8 @@ CreateHeader(base::span<const uint8_t> key_value) {
   CHECK(writer.Write(nonce_prefix));
 
   // Derive per-file key using key_value and salt.
-  auto derived_key = crypto::HkdfSha256<kKeySize>(key_value, salt, {});
+  auto derived_key = crypto::kdf::Hkdf<kKeySize>(
+      crypto::hash::HashKind::kSha256, key_value, salt, {});
 
   // Create EncryptionContext. Used for encryption/decryption.
   EncryptionContext encryption_context(derived_key, nonce_prefix);
@@ -75,15 +80,16 @@ base::expected<EncryptionContext, EncryptionError> ParseHeader(
   }
 
   // Create derived key for file-specific encryption/decryption.
-  auto derived_key = crypto::HkdfSha256<kKeySize>(key_value, *salt, {});
+  auto derived_key = crypto::kdf::Hkdf<kKeySize>(
+      crypto::hash::HashKind::kSha256, key_value, *salt, {});
 
   return EncryptionContext(derived_key, *nonce_prefix);
 }
 
 ChunkedEncryptor::ChunkedEncryptor(const EncryptionContext& encryption_context)
-    : aead_(crypto::Aead::AES_256_GCM_SIV),
-      nonce_prefix_(encryption_context.nonce_prefix) {
-  aead_.Init(encryption_context.derived_key);
+    : nonce_prefix_(encryption_context.nonce_prefix),
+      aead_(crypto::Aead::AES_256_GCM_SIV,
+            base::as_byte_span(encryption_context.derived_key.secure_value())) {
 }
 
 ChunkedEncryptor::~ChunkedEncryptor() = default;

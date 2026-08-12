@@ -4,12 +4,23 @@
 
 #include "components/page_content_annotations/core/page_content_annotations_service.h"
 
+#include <cstddef>
+#include <memory>
 #include <optional>
+#include <string>
+#include <tuple>
+#include <variant>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "base/path_service.h"
+#include "base/scoped_observation.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
@@ -17,13 +28,13 @@
 #include "chrome/browser/optimization_guide/browser_test_util.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/page_content_annotations/multi_source_page_context_fetcher.h"
 #include "chrome/browser/page_content_annotations/page_content_annotations_service_factory.h"
-#include "chrome/browser/page_content_annotations/page_content_annotations_web_contents_observer.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_service.h"
 #include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
-#include "chrome/browser/page_content_annotations/page_content_extraction_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -33,29 +44,44 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/history_service_test_util.h"
 #include "components/network_session_configurator/common/network_switches.h"
-#include "components/optimization_guide/core/delivery/test_model_info_builder.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/inference/execution_status.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_proto_util.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/optimization_guide/proto/page_entities_metadata.pb.h"
+#include "components/page_content_annotations/content/annotate_page_content_request.h"
+#include "components/page_content_annotations/content/annotate_page_content_request_metrics.h"
+#include "components/page_content_annotations/content/page_content_annotations_web_contents_observer.h"
+#include "components/page_content_annotations/content/page_content_extraction_service.h"
+#include "components/page_content_annotations/content/page_context_fetcher_metrics.h"
 #include "components/page_content_annotations/core/page_content_annotations_enums.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
 #include "components/page_content_annotations/core/page_content_annotations_switches.h"
+#include "components/page_content_annotations/core/page_content_extraction_types.h"
 #include "components/page_content_annotations/core/test_page_content_annotations_service.h"
 #include "components/page_content_annotations/core/test_page_content_annotator.h"
-#include "components/passage_embeddings/passage_embeddings_test_util.h"
+#include "components/passage_embeddings/core/passage_embeddings_test_util.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "net/dns/mock_host_resolver.h"
+#include "pdf/buildflags.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom-forward.h"
+#include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest-param-test.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "components/pdf/browser/pdf_document_helper.h"
+#include "pdf/mojom/pdf.mojom.h"
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
@@ -67,12 +93,15 @@ namespace page_content_annotations {
 
 namespace {
 
+using ::testing::HasSubstr;
+using ::testing::Not;
 using ::testing::UnorderedElementsAre;
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 // Different platforms may execute float models slightly differently, and this
-// results in a noticeable difference in the scores. See crbug.com/1307251.
+// results in a noticeable difference in the scores. See crbug.com/40828310.
 const double kMaxScoreErrorBetweenPlatforms = 0.1;
+
+constexpr size_t kPDFMaxTextExtractionSize = 100;
 
 class TestPageContentAnnotationsObserver
     : public PageContentAnnotationsService::PageContentAnnotationsObserver {
@@ -82,11 +111,63 @@ class TestPageContentAnnotationsObserver
       const PageContentAnnotationsResult& result) override {
     last_page_content_annotations_result_ = result;
   }
+
+  const std::optional<PageContentAnnotationsResult>&
+  last_page_content_annotations_result() const {
+    return last_page_content_annotations_result_;
+  }
+
+ private:
   std::optional<PageContentAnnotationsResult>
       last_page_content_annotations_result_;
 };
 
+#if BUILDFLAG(ENABLE_PDF)
+// This class is used for simulating PDF text and bytes extraction hangs.
+class HangingPdfListener : public pdf::mojom::PdfListener {
+ public:
+  HangingPdfListener() = default;
+  ~HangingPdfListener() override = default;
+
+  // pdf::mojom::PdfListener:
+  void GetPageText(int32_t page_index, GetPageTextCallback callback) override {
+    pending_get_page_text_callbacks_.push_back(std::move(callback));
+  }
+
+  void GetPdfBytes(uint32_t size_limit, GetPdfBytesCallback callback) override {
+    pending_get_pdf_bytes_callbacks_.push_back(std::move(callback));
+  }
+
+  void SetCaretPosition(const gfx::PointF& position) override {}
+  void MoveRangeSelectionExtent(const gfx::PointF& extent) override {}
+  void SetSelectionBounds(const gfx::PointF& base,
+                          const gfx::PointF& extent) override {}
+  void GetMostVisiblePageIndex(
+      GetMostVisiblePageIndexCallback callback) override {
+    std::move(callback).Run(std::nullopt);
+  }
+  void HasMeaningfulText(HasMeaningfulTextCallback callback) override {
+    std::move(callback).Run(true);
+  }
+  void HasJavaScript(HasJavaScriptCallback callback) override {
+    std::move(callback).Run(false);
+  }
+  void IsPasswordProtected(IsPasswordProtectedCallback callback) override {
+    std::move(callback).Run(false);
+  }
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+  void GetSaveDataBufferHandlerForDrive(
+      pdf::mojom::SaveRequestType request_type,
+      GetSaveDataBufferHandlerForDriveCallback callback) override {
+    std::move(callback).Run(nullptr);
+  }
 #endif
+
+ private:
+  std::vector<GetPageTextCallback> pending_get_page_text_callbacks_;
+  std::vector<GetPdfBytesCallback> pending_get_pdf_bytes_callbacks_;
+};
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 }  // namespace
 
@@ -144,8 +225,13 @@ class PageContentAnnotationsServiceDisabledBrowserTest
   PageContentAnnotationsServiceDisabledBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/{},
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove the two omnibox features below.
+        /*disabled_features=*/
         {optimization_guide::features::kOptimizationHints,
-         features::kPageContentAnnotations});
+         features::kPageContentAnnotations,
+         omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
   }
 
  private:
@@ -155,7 +241,7 @@ class PageContentAnnotationsServiceDisabledBrowserTest
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceDisabledBrowserTest,
                        KeyedServiceEnabledButFeaturesDisabled) {
   EXPECT_EQ(nullptr, PageContentAnnotationsServiceFactory::GetForProfile(
-                         browser()->profile()));
+                         browser()->GetProfile()));
 }
 
 class PageContentAnnotationsServiceKioskModeBrowserTest
@@ -177,7 +263,7 @@ class PageContentAnnotationsServiceKioskModeBrowserTest
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceKioskModeBrowserTest,
                        DisabledInKioskMode) {
   EXPECT_EQ(nullptr, PageContentAnnotationsServiceFactory::GetForProfile(
-                         browser()->profile()));
+                         browser()->GetProfile()));
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -206,7 +292,7 @@ class PageContentAnnotationsServiceEphemeralProfileBrowserTest
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceEphemeralProfileBrowserTest,
                        EphemeralProfileDoesNotInstantiateService) {
   EXPECT_EQ(nullptr, PageContentAnnotationsServiceFactory::GetForProfile(
-                         browser()->profile()));
+                         browser()->GetProfile()));
 }
 #endif
 
@@ -226,7 +312,7 @@ class PageContentAnnotationsServiceValidationBrowserTest
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceValidationBrowserTest,
                        ValidationEnablesService) {
   EXPECT_NE(nullptr, PageContentAnnotationsServiceFactory::GetForProfile(
-                         browser()->profile()));
+                         browser()->GetProfile()));
 }
 
 class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
@@ -237,7 +323,6 @@ class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
           {
               {"write_to_history_service", "true"},
           }},
-         {features::kPageVisibilityPageContentAnnotations, {}},
          {history::kVisitedLinksOn404, {}}},
         /*disabled_features=*/{
             optimization_guide::features::kPreventLongRunningPredictionModels});
@@ -250,7 +335,7 @@ class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
 
   PageContentAnnotationsService* service() {
     return PageContentAnnotationsServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void SetUpOnMainThread() override {
@@ -279,27 +364,23 @@ class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
 
     base::HistogramTester histogram_tester;
 
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideTargetModelForTesting(
             optimization_guide::proto::OPTIMIZATION_TARGET_PAGE_VISIBILITY,
-            optimization_guide::TestModelInfoBuilder()
-                .SetModelFilePath(model_file_path)
-                .Build());
+            optimization_guide::ModelInfo{
+                .model_file_path = model_file_path,
+            });
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
     optimization_guide::RetryForHistogramUntilCountReached(
         &histogram_tester,
         "OptimizationGuide.ModelExecutor.ModelFileUpdated.PageVisibility", 1);
-#else
-    base::RunLoop().RunUntilIdle();
-#endif
   }
 
   std::optional<history::VisitContentAnnotations> GetContentAnnotationsForURL(
       const GURL& url) {
     history::HistoryService* history_service =
         HistoryServiceFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS);
     if (!history_service) {
       return std::nullopt;
     }
@@ -348,7 +429,7 @@ class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
   void Annotate(const HistoryVisit& visit) {
     PageContentAnnotationsService* service =
         PageContentAnnotationsServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     service->Annotate(visit);
   }
 
@@ -356,7 +437,7 @@ class PageContentAnnotationsServiceBrowserTest : public InProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
     history::HistoryService* history_service =
         HistoryServiceFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS);
     if (!history_service) {
       return;
     }
@@ -382,43 +463,29 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   // but the url stays the same.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   int expected_count = 2;
-#else
-  int expected_count = 0;
-#endif
 
   optimization_guide::RetryForHistogramUntilCountReached(
       &histogram_tester,
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated",
       expected_count);
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   std::optional<history::VisitContentAnnotations> got_content_annotations =
       GetContentAnnotationsForURL(url);
   ASSERT_TRUE(got_content_annotations.has_value());
   EXPECT_TRUE(got_content_annotations->model_annotations.categories.empty());
-#endif
 
   histogram_tester.ExpectTotalCount(
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated",
       expected_count);
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", true,
       2);
-#else
-  histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", false,
-      2);
-#endif
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   WaitForHistoryServiceToFinish();
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::PageContentAnnotations2::kEntryName);
   EXPECT_EQ(2u, entries.size());
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 }
 
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
@@ -426,20 +493,14 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   TestPageContentAnnotator test_annotator;
   test_annotator.UseVisibilityScores(std::nullopt, {{"Test Page", 0.5}});
   service()->OverridePageContentAnnotatorForTesting(&test_annotator);
-#endif
 
   GURL url(embedded_test_server()->GetURL("a.test", "/hello.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   int expected_count = 1;
-#else
-  int expected_count = 0;
-#endif
   optimization_guide::RetryForHistogramUntilCountReached(
       &histogram_tester,
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated",
@@ -448,17 +509,10 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   histogram_tester.ExpectTotalCount(
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated",
       expected_count);
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   histogram_tester.ExpectUniqueSample(
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", true,
       1);
-#else
-  histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", false,
-      1);
-#endif
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   WaitForHistoryServiceToFinish();
   std::optional<history::VisitContentAnnotations> got_content_annotations =
       GetContentAnnotationsForURL(url);
@@ -469,7 +523,6 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::PageContentAnnotations2::kEntryName);
   EXPECT_EQ(1u, entries.size());
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 }
 
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
@@ -477,11 +530,9 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   TestPageContentAnnotator test_annotator;
   test_annotator.UseVisibilityScores(std::nullopt, {{std::string(), 0.5}});
   service()->OverridePageContentAnnotatorForTesting(&test_annotator);
-#endif
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("data:,")));
   base::RunLoop().RunUntilIdle();
@@ -495,11 +546,9 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   TestPageContentAnnotator test_annotator;
   test_annotator.UseVisibilityScores(std::nullopt, {{std::string(), 0.5}});
   service()->OverridePageContentAnnotatorForTesting(&test_annotator);
-#endif
 
   GURL url(embedded_test_server()->GetURL("a.test", "/page404.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -509,13 +558,12 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", 0);
 }
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
                        ENPageVisibilityModel_GoldenData) {
   LoadAndWaitForModel();
 
   PageContentAnnotationsService* service =
-      PageContentAnnotationsServiceFactory::GetForProfile(browser()->profile());
+      PageContentAnnotationsServiceFactory::GetForProfile(browser()->GetProfile());
 
   // Important: Consumers of the visibility score should query the HistoryDB
   // instead of hitting the PCAService directly. We only do this in tests
@@ -557,7 +605,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
   LoadAndWaitForModel(model_file_path);
 
   PageContentAnnotationsService* service =
-      PageContentAnnotationsServiceFactory::GetForProfile(browser()->profile());
+      PageContentAnnotationsServiceFactory::GetForProfile(browser()->GetProfile());
 
   // Important: Consumers of the visibility score should query the HistoryDB
   // instead of hitting the PCAService directly. We only do this in tests
@@ -657,14 +705,16 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBrowserTest,
       &histogram_tester,
       "OptimizationGuide.PageContentAnnotationsService.ContentAnnotated", 1);
 
-  EXPECT_TRUE(observer.last_page_content_annotations_result_.has_value());
+  ASSERT_TRUE(observer.last_page_content_annotations_result().has_value());
   EXPECT_EQ(AnnotationType::kContentVisibility,
-            observer.last_page_content_annotations_result_->GetType());
-  EXPECT_NE(-1.0, observer.last_page_content_annotations_result_
+            observer.last_page_content_annotations_result()->GetType());
+  EXPECT_NE(-1.0, observer.last_page_content_annotations_result()
                       ->GetContentVisibilityScore());
   EXPECT_TRUE(
       PageContentAnnotationsWebContentsObserver::GetOrCreateForWebContents(
-          browser()->tab_strip_model()->GetActiveWebContents())
+          browser()->tab_strip_model()->GetActiveWebContents(),
+          *PageContentAnnotationsServiceFactory::GetForProfile(
+              browser()->GetProfile()))
           ->content_visibility_score()
           .has_value());
 }
@@ -712,7 +762,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceRemoteMetadataBrowserTest,
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(page_entities_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::PAGE_ENTITIES,
                           metadata);
 
@@ -755,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceRemoteMetadataBrowserTest,
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(page_entities_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::PAGE_ENTITIES,
                           metadata);
 
@@ -786,7 +836,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceRemoteMetadataBrowserTest,
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(page_entities_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::PAGE_ENTITIES,
                           metadata);
 
@@ -809,7 +859,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceRemoteMetadataBrowserTest,
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(page_entities_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::PAGE_ENTITIES,
                           metadata);
 
@@ -849,7 +899,7 @@ IN_PROC_BROWSER_TEST_F(
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(salient_image_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::SALIENT_IMAGE,
                           metadata);
 
@@ -875,7 +925,7 @@ IN_PROC_BROWSER_TEST_F(
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(salient_image_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::SALIENT_IMAGE,
                           metadata);
 
@@ -902,7 +952,7 @@ IN_PROC_BROWSER_TEST_F(
   optimization_guide::OptimizationMetadata metadata;
   metadata.set_any_metadata(
       optimization_guide::AnyWrapProto(salient_image_metadata));
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
       ->AddHintForTesting(url, optimization_guide::proto::SALIENT_IMAGE,
                           metadata);
 
@@ -923,8 +973,7 @@ class PageContentAnnotationsServiceNoHistoryTest
         {{features::kPageContentAnnotations,
           {
               {"write_to_history_service", "false"},
-          }},
-         {features::kPageVisibilityPageContentAnnotations, {}}},
+          }}},
         /*disabled_features=*/{});
   }
   ~PageContentAnnotationsServiceNoHistoryTest() override = default;
@@ -1020,8 +1069,7 @@ class PageContentAnnotationsServiceBatchVisitTest
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{features::kPageContentAnnotations,
           {{"write_to_history_service", "false"},
-           {"annotate_visit_batch_size", "2"}}},
-         {features::kPageVisibilityPageContentAnnotations, {}}},
+           {"annotate_visit_batch_size", "2"}}}},
         /*disabled_features=*/{});
   }
   ~PageContentAnnotationsServiceBatchVisitTest() override = default;
@@ -1031,7 +1079,7 @@ class PageContentAnnotationsServiceBatchVisitTest
 
     PageContentAnnotationsService* service =
         PageContentAnnotationsServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
 
     annotator_.UseVisibilityScores(
         /*model_info=*/std::nullopt, {
@@ -1052,8 +1100,9 @@ class PageContentAnnotationsServiceBatchVisitTest
   TestPageContentAnnotator annotator_;
 };
 
+// TODO(crbug.com/512459314): Re-enable once the test is fixed.
 IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBatchVisitTest,
-                       ModelExecutesWithFullBatch) {
+                       DISABLED_ModelExecutesWithFullBatch) {
   base::HistogramTester histogram_tester;
 
   GURL url(embedded_test_server()->GetURL("a.test", "/hello.html"));
@@ -1102,8 +1151,7 @@ class PageContentAnnotationsServiceBatchVisitNoAnnotateTest
     scoped_feature_list_.InitWithFeaturesAndParameters(
         {{features::kPageContentAnnotations,
           {{"write_to_history_service", "false"},
-           {"annotate_visit_batch_size", "1"}}},
-         {features::kPageVisibilityPageContentAnnotations, {}}},
+           {"annotate_visit_batch_size", "1"}}}},
         /*disabled_features=*/{});
   }
   ~PageContentAnnotationsServiceBatchVisitNoAnnotateTest() override = default;
@@ -1179,8 +1227,6 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceBatchVisitTest,
   EXPECT_FALSE(ModelAnnotationsFieldsAreSetForURL(url));
 }
 
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
-
 class FakeEmbedderMetadataProvider
     : public passage_embeddings::EmbedderMetadataProvider {
  public:
@@ -1214,18 +1260,17 @@ class FakeEmbedder : public passage_embeddings::TestEmbedder {
   ~FakeEmbedder() override = default;
 
   // passage_embeddings::TestEmbedder:
-  passage_embeddings::Embedder::TaskId ComputePassagesEmbeddings(
+  passage_embeddings::Embedder::Job ComputePassagesEmbeddings(
       passage_embeddings::PassagePriority priority,
       std::vector<std::string> passages,
       ComputePassagesEmbeddingsCallback callback) override {
     if (status_ == passage_embeddings::ComputeEmbeddingsStatus::kSuccess) {
-      passage_embeddings::TestEmbedder::ComputePassagesEmbeddings(
+      return passage_embeddings::TestEmbedder::ComputePassagesEmbeddings(
           priority, passages, std::move(callback));
-      return 0;
     }
 
-    std::move(callback).Run(passages, {}, 0, status_);
-    return 0;
+    std::move(callback).Run(passages, {}, 1, status_);
+    return passage_embeddings::Embedder::Job(GetWeakPtr(), 1);
   }
 
   void set_status(passage_embeddings::ComputeEmbeddingsStatus status) {
@@ -1253,45 +1298,47 @@ class PageContentAnnotationsServiceOnDeviceCategoryClassifierTest
     InProcessBrowserTest::TearDown();
   }
 
+  void SetUpOnMainThread() override {
+    host_resolver()->AddRule("*", "127.0.0.1");
+    InProcessBrowserTest::SetUpOnMainThread();
+
+    embedded_test_server()->ServeFilesFromSourceDirectory(
+        "chrome/test/data/optimization_guide");
+    ASSERT_TRUE(embedded_test_server()->Start());
+  }
+
   void SetUpBrowserContextKeyedServices(
       content::BrowserContext* browser_context) override {
     PageContentAnnotationsServiceFactory::GetInstance()
         ->SetTestingFactoryAndUse(
             browser_context,
-            base::BindRepeating(
-                [](passage_embeddings::EmbedderMetadataProvider*
-                       embedder_metadata_provider,
-                   passage_embeddings::Embedder* embedder,
-                   content::BrowserContext* context)
-                    -> std::unique_ptr<KeyedService> {
-                  Profile* profile = Profile::FromBrowserContext(context);
-                  return TestPageContentAnnotationsService::Create(
-                      OptimizationGuideKeyedServiceFactory::GetForProfile(
-                          profile),
-                      HistoryServiceFactory::GetForProfile(
-                          profile, ServiceAccessType::IMPLICIT_ACCESS),
-                      embedder_metadata_provider, embedder);
-                },
-                &embedder_metadata_provider_, &embedder_));
+            base::BindRepeating([](content::BrowserContext* context)
+                                    -> std::unique_ptr<KeyedService> {
+              Profile* profile = Profile::FromBrowserContext(context);
+              return TestPageContentAnnotationsService::Create(
+                  OptimizationGuideKeyedServiceFactory::GetForProfile(profile),
+                  HistoryServiceFactory::GetForProfile(
+                      profile, ServiceAccessType::IMPLICIT_ACCESS));
+            }));
   }
 
   PageContentAnnotationsService* service() {
     return PageContentAnnotationsServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void PushClassifierModel(
       optimization_guide::proto::OptimizationTarget optimization_target) {
     base::FilePath test_data_dir;
     base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &test_data_dir);
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->OverrideTargetModelForTesting(
             optimization_target,
-            optimization_guide::TestModelInfoBuilder()
-                .SetModelFilePath(test_data_dir.AppendASCII(
+            optimization_guide::ModelInfo{
+                .model_file_path = test_data_dir.AppendASCII(
                     "components/test/data/page_content_annotations/"
-                    "edu_classifier.tflite"))
-                .Build());
+                    "edu_classifier.tflite"),
+            });
   }
 
   void NotifyEmbedderMetadata() {
@@ -1311,62 +1358,51 @@ class PageContentAnnotationsServiceOnDeviceCategoryClassifierTest
 
 IN_PROC_BROWSER_TEST_F(
     PageContentAnnotationsServiceOnDeviceCategoryClassifierTest,
-    EmbedderButNoRegression) {
-  NotifyEmbedderMetadata();
+    ObserverNotified) {
+  TestPageContentAnnotationsObserver observer;
+  service()->AddObserver(AnnotationType::kCategoryClassifier, &observer);
 
-  base::test::TestFuture<std::vector<Category>> future;
-  service()->ClassifyCategoriesForText("some text", future.GetCallback());
-  EXPECT_TRUE(future.Get().empty());
+  GURL url(embedded_test_server()->GetURL("/hello.html"));
+  // Navigate to a URL so that the service has a HistoryVisit associated with
+  // it in its internal cache.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  // Category classifier is triggered after navigation and once embeddings are
+  // available. Here we manually trigger the notification to the service to
+  // verify it correctly forwards it to its observers.
+  std::vector<Category> categories = {
+      {CategoryType::kEducation, 0.5},
+      {CategoryType::kShopping, 0.8},
+  };
+
+  service()->OnCategoriesClassified(url, /*source_id=*/0, categories);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return observer.last_page_content_annotations_result().has_value();
+  }));
+
+  EXPECT_EQ(observer.last_page_content_annotations_result()->GetType(),
+            AnnotationType::kCategoryClassifier);
+  const std::vector<Category>& results =
+      observer.last_page_content_annotations_result()->GetCategoryResults();
+  EXPECT_EQ(results.size(), 2u);
+  EXPECT_EQ(results[0].category_type, CategoryType::kEducation);
+  EXPECT_EQ(results[0].score, 0.5f);
+  EXPECT_EQ(results[1].category_type, CategoryType::kShopping);
+  EXPECT_EQ(results[1].score, 0.8f);
+
+  service()->RemoveObserver(AnnotationType::kCategoryClassifier, &observer);
 }
 
-IN_PROC_BROWSER_TEST_F(
-    PageContentAnnotationsServiceOnDeviceCategoryClassifierTest,
-    RegressionButNoEmbedder) {
-  PushClassifierModel(
-      optimization_guide::proto::OPTIMIZATION_TARGET_EDU_CLASSIFIER);
-
-  base::test::TestFuture<std::vector<Category>> future;
-  service()->ClassifyCategoriesForText("some text", future.GetCallback());
-  EXPECT_TRUE(future.Get().empty());
-}
-
-IN_PROC_BROWSER_TEST_F(
-    PageContentAnnotationsServiceOnDeviceCategoryClassifierTest,
-    EmbedderFailed) {
-  NotifyEmbedderMetadata();
-  UpdateEmbedderStatus(
-      passage_embeddings::ComputeEmbeddingsStatus::kExecutionFailure);
-  PushClassifierModel(
-      optimization_guide::proto::OPTIMIZATION_TARGET_EDU_CLASSIFIER);
-
-  base::test::TestFuture<std::vector<Category>> future;
-  service()->ClassifyCategoriesForText("some text", future.GetCallback());
-  EXPECT_TRUE(future.Get().empty());
-}
-
-IN_PROC_BROWSER_TEST_F(
-    PageContentAnnotationsServiceOnDeviceCategoryClassifierTest,
-    Success) {
-  NotifyEmbedderMetadata();
-  PushClassifierModel(
-      optimization_guide::proto::OPTIMIZATION_TARGET_EDU_CLASSIFIER);
-
-  base::test::TestFuture<std::vector<Category>> future;
-  service()->ClassifyCategoriesForText("some text", future.GetCallback());
-  ASSERT_EQ(1u, future.Get().size());
-  EXPECT_EQ(CategoryType::kEducation, future.Get()[0].category_type);
-}
-
-#endif
-
-class PageContentAnnotationsServiceContentExtractionTest
+class PageContentAnnotationsServiceContentExtractionTestBase
     : public InProcessBrowserTest {
  public:
-  virtual void InitializeFeatureList() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        features::kAnnotatedPageContentExtraction,
-        {{"capture_delay", "0s"}, {"include_inner_text", "true"}});
+  static std::string GetPageSettledMonitorParamName(bool is_enabled) {
+    return is_enabled ? "PageSettledMonitorEnabled"
+                      : "PageSettledMonitorDisabled";
   }
+
+  virtual void InitializeFeatureList() {}
 
   void SetUp() override {
     InitializeFeatureList();
@@ -1383,10 +1419,54 @@ class PageContentAnnotationsServiceContentExtractionTest
   }
 
  protected:
+  void AddPageSettledMonitorFeatureState(
+      bool is_enabled,
+      std::vector<base::test::FeatureRefAndParams>& enabled_features,
+      std::vector<base::test::FeatureRef>& disabled_features,
+      const std::string& capture_delay = "0s") {
+    if (is_enabled) {
+      enabled_features.push_back(
+          {features::kPageContentExtractionUsingPageSettledMonitor,
+           {{"capture_delay", capture_delay}}});
+      enabled_features.push_back(
+          {features::kPageSettledMonitor,
+           {// Effectively disable the timeout to prevent flakes.
+            {features::kPageStabilityTimeout.name, "30000ms"},
+            {features::kObservationDelayTimeout.name, "30000ms"}}});
+    } else {
+      disabled_features.push_back(
+          features::kPageContentExtractionUsingPageSettledMonitor);
+    }
+  }
+
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionTest,
+class PageContentAnnotationsServiceContentExtractionTest
+    : public PageContentAnnotationsServiceContentExtractionTestBase,
+      public testing::WithParamInterface<bool> {
+ public:
+  static std::string DescribeParams(const testing::TestParamInfo<bool>& info) {
+    return GetPageSettledMonitorParamName(info.param);
+  }
+
+  virtual bool IsPageSettledMonitorEnabled() const { return GetParam(); }
+
+  void InitializeFeatureList() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", "0s"}, {"include_inner_text", "true"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
                        Basic) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
@@ -1420,7 +1500,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionTest,
   EXPECT_TRUE(future.Wait());
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::OptimizationGuide_AnnotatedPageContent::kEntryName);
-  EXPECT_EQ(1u, entries.size());
+  ASSERT_EQ(1u, entries.size());
   auto* entry = entries[0].get();
   EXPECT_EQ(1,
             *ukm_recorder.GetEntryMetric(
@@ -1439,7 +1519,7 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionTest,
                  kExtractionLatencyName));
 }
 
-IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionTest,
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
                        Subframe) {
   base::HistogramTester histogram_tester;
   content::WebContents* web_contents =
@@ -1470,16 +1550,22 @@ IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionTest,
 }
 
 class PageContentAnnotationsServiceContentExtractionResponseCodeTest
-    : public PageContentAnnotationsServiceContentExtractionTest,
-      public testing::WithParamInterface<bool> {
+    : public PageContentAnnotationsServiceContentExtractionTestBase,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
  public:
+  bool IsPageSettledMonitorEnabled() const { return std::get<1>(GetParam()); }
+
   void InitializeFeatureList() override {
     std::vector<base::test::FeatureRefAndParams> enabled_features_with_params =
         {{features::kAnnotatedPageContentExtraction,
           {{"capture_delay", "0s"}, {"include_inner_text", "true"}}}};
     std::vector<base::test::FeatureRef> disabled_features;
 
-    bool are_404_navigations_saved_to_history = GetParam();
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features_with_params,
+                                      disabled_features);
+
+    bool are_404_navigations_saved_to_history = std::get<0>(GetParam());
     if (are_404_navigations_saved_to_history) {
       enabled_features_with_params.push_back({history::kVisitedLinksOn404, {}});
     } else {
@@ -1520,7 +1606,7 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_TRUE(future.Wait());
   auto entries = ukm_recorder.GetEntriesByName(
       ukm::builders::OptimizationGuide_AnnotatedPageContent::kEntryName);
-  EXPECT_EQ(1u, entries.size());
+  ASSERT_EQ(1u, entries.size());
   auto* entry = entries[0].get();
   EXPECT_EQ(11,
             *ukm_recorder.GetEntryMetric(
@@ -1596,102 +1682,64 @@ IN_PROC_BROWSER_TEST_P(
 INSTANTIATE_TEST_SUITE_P(
     All,
     PageContentAnnotationsServiceContentExtractionResponseCodeTest,
-    ::testing::Bool());
-
-class PageContentAnnotationsServiceContentExtractionPdfTest
-    : public PageContentAnnotationsServiceContentExtractionTest {
- public:
-  void InitializeFeatureList() override {
-    const char* capture_delay = "5s";
-#if defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) || !defined(NDEBUG)
-    capture_delay = "10s";
-#endif  // defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) ||
-        // !defined(NDEBUG)
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        features::kAnnotatedPageContentExtraction,
-        {{"capture_delay", capture_delay}});
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionPdfTest,
-                       PdfPageCount) {
-  ukm::TestAutoSetUkmRecorder ukm_recorder;
-  base::test::TestFuture<void> future;
-  ukm_recorder.SetOnAddEntryCallback(
-      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
-      future.GetRepeatingCallback());
-
-  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
-      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"), 1);
-
-  EXPECT_TRUE(future.Wait());
-  auto entries = ukm_recorder.GetEntriesByName(
-      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
-  EXPECT_EQ(1u, entries.size());
-  auto* entry = entries[0].get();
-  EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
-                   entry, ukm::builders::OptimizationGuide_AnnotatedPdfContent::
-                              kPdfPageCountName));
-}
-
-IN_PROC_BROWSER_TEST_F(PageContentAnnotationsServiceContentExtractionPdfTest,
-                       TwoPdfPageLoads) {
-  ukm::TestAutoSetUkmRecorder ukm_recorder;
-  base::test::TestFuture<void> future;
-  ukm_recorder.SetOnAddEntryCallback(
-      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
-      future.GetRepeatingCallback());
-
-  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
-      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"), 1);
-  EXPECT_TRUE(future.WaitAndClear());
-
-  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
-      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"), 1);
-  EXPECT_TRUE(future.WaitAndClear());
-
-  auto entries = ukm_recorder.GetEntriesByName(
-      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
-  EXPECT_EQ(2u, entries.size());
-  EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
-                   entries[0].get(),
-                   ukm::builders::OptimizationGuide_AnnotatedPdfContent::
-                       kPdfPageCountName));
-  EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
-                   entries[1].get(),
-                   ukm::builders::OptimizationGuide_AnnotatedPdfContent::
-                       kPdfPageCountName));
-}
-
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    [](const testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+      return base::StrCat(
+          {std::get<0>(info.param) ? "VisitedLinksOn404Enabled"
+                                   : "VisitedLinksOn404Disabled",
+           "_",
+           PageContentAnnotationsServiceContentExtractionTestBase::
+               GetPageSettledMonitorParamName(std::get<1>(info.param))});
+    });
 
 class PageContentAnnotationsServiceContentExtractionTestNoFeatureFlag
     : public PageContentAnnotationsServiceContentExtractionTest {
  public:
-  void InitializeFeatureList() override {}
+  void InitializeFeatureList() override {
+    if (IsPageSettledMonitorEnabled()) {
+      scoped_feature_list_.InitAndEnableFeature(
+          features::kPageContentExtractionUsingPageSettledMonitor);
+    } else {
+      scoped_feature_list_.InitAndDisableFeature(
+          features::kPageContentExtractionUsingPageSettledMonitor);
+    }
+  }
 };
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionTestNoFeatureFlag,
+    ::testing::Bool(),
+    &PageContentAnnotationsServiceContentExtractionTest::DescribeParams);
 
 class FakeExtractionServiceObserver
     : public PageContentExtractionService::Observer {
  public:
-  void OnPageContentExtracted(
-      content::Page& page,
-      const optimization_guide::proto::AnnotatedPageContent& page_content)
-      override {
+  void OnPageContentExtracted(content::Page& page,
+                              PageContent page_content) override {
     page_content_future_.SetValue(page_content);
   }
   void Wait() { EXPECT_TRUE(page_content_future_.Wait()); }
-  base::test::TestFuture<optimization_guide::proto::AnnotatedPageContent>
-      page_content_future_;
+  base::test::TestFuture<PageContent> page_content_future_;
+
+  void Observe(PageContentExtractionService* service) {
+    scoped_observation_.Observe(service);
+  }
+  void Reset() { scoped_observation_.Reset(); }
+
+ private:
+  base::ScopedObservation<PageContentExtractionService,
+                          PageContentExtractionService::Observer>
+      scoped_observation_{this};
 };
 
-IN_PROC_BROWSER_TEST_F(
+IN_PROC_BROWSER_TEST_P(
     PageContentAnnotationsServiceContentExtractionTestNoFeatureFlag,
     ObserverAddedAfterWebContentsInit) {
   FakeExtractionServiceObserver observer;
   auto* service =
-      PageContentExtractionServiceFactory::GetForProfile(browser()->profile());
-  service->AddObserver(&observer);
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -1700,13 +1748,25 @@ IN_PROC_BROWSER_TEST_F(
   content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
 
   observer.Wait();
-  auto& page_content = observer.page_content_future_.Get();
-  EXPECT_TRUE(page_content.IsInitialized());
+  const PageContent& page_content = observer.page_content_future_.Get();
+  RefCountedAnnotatedPageContentPtr annotated_page_content_ptr =
+      GetAnnotatedPageContentPtrFromPageContent(page_content);
+  ASSERT_TRUE(annotated_page_content_ptr);
+  EXPECT_TRUE(annotated_page_content_ptr->data.IsInitialized());
 
   // Should have cached data for page since there was an observer registered.
   ASSERT_TRUE(service->GetExtractedPageContentAndEligibilityForPage(
       web_contents->GetPrimaryPage()));
+  ASSERT_TRUE(service->GetServerUploadEligibilityForPage(
+      web_contents->GetPrimaryPage()));
 
+  observer.Reset();
+
+  // TODO(b/490161242): Add checks here to verify that cached results persist
+  // even after removing the observer, once non-observer usage is supported.
+
+  // Confirm that removing the observer prevents future navigations from
+  // triggering an extraction, but does not prevent the cache from being reset.
   service->RemoveObserver(&observer);
 
   GURL new_url(embedded_test_server()->GetURL(
@@ -1716,41 +1776,16 @@ IN_PROC_BROWSER_TEST_F(
   // Make sure cached content is cleared with a new navigation.
   ASSERT_FALSE(service->GetExtractedPageContentAndEligibilityForPage(
       web_contents->GetPrimaryPage()));
+  ASSERT_FALSE(service->GetServerUploadEligibilityForPage(
+      web_contents->GetPrimaryPage()));
 }
 
-class PageContentAnnotationsServiceContentExtractionTestActionable
-    : public InProcessBrowserTest {
- public:
-  virtual void InitializeFeatureList() {
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        features::kAnnotatedPageContentExtraction,
-        {{"capture_delay", "0s"}, {"mode", "actionable"}});
-  }
-
-  void SetUp() override {
-    InitializeFeatureList();
-    InProcessBrowserTest::SetUp();
-  }
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-    InProcessBrowserTest::SetUpOnMainThread();
-
-    embedded_test_server()->ServeFilesFromSourceDirectory(
-        GetChromeTestDataDir());
-    ASSERT_TRUE(embedded_test_server()->Start());
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(
-    PageContentAnnotationsServiceContentExtractionTestActionable,
-    Basic) {
+IN_PROC_BROWSER_TEST_P(
+    PageContentAnnotationsServiceContentExtractionTestNoFeatureFlag,
+    AsyncGettersWaitUntilExtracted) {
   FakeExtractionServiceObserver observer;
   auto* service =
-      PageContentExtractionServiceFactory::GetForProfile(browser()->profile());
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
   service->AddObserver(&observer);
 
   content::WebContents* web_contents =
@@ -1759,12 +1794,1172 @@ IN_PROC_BROWSER_TEST_F(
                                           "/optimization_guide/hello.html"));
   content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
 
+  base::test::TestFuture<std::optional<ExtractedPageContentResult>>
+      content_future;
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), content_future.GetCallback());
+
+  base::test::TestFuture<std::optional<bool>> eligibility_future;
+  service->GetServerUploadEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), eligibility_future.GetCallback());
+
+  EXPECT_FALSE(content_future.IsReady());
+  EXPECT_FALSE(eligibility_future.IsReady());
+
   observer.Wait();
-  auto& page_content = observer.page_content_future_.Get();
-  EXPECT_TRUE(page_content.IsInitialized());
-  EXPECT_EQ(page_content.mode(),
+
+  EXPECT_TRUE(content_future.Get().has_value());
+  EXPECT_TRUE(eligibility_future.Get().has_value());
+}
+
+IN_PROC_BROWSER_TEST_P(
+    PageContentAnnotationsServiceContentExtractionTestNoFeatureFlag,
+    AsyncGettersInvalidateOnNavigation) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  service->AddObserver(&observer);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  base::test::TestFuture<std::optional<ExtractedPageContentResult>>
+      content_future;
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), content_future.GetCallback());
+
+  EXPECT_FALSE(content_future.IsReady());
+
+  // Navigate to a new URL before extraction finishes.
+  GURL url2(embedded_test_server()->GetURL("b.test",
+                                           "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url2, 1);
+
+  ASSERT_TRUE(content_future.Wait());
+  EXPECT_FALSE(content_future.Get().has_value());
+}
+
+class PageContentAnnotationsServiceContentExtractionTestActionable
+    : public PageContentAnnotationsServiceContentExtractionTest {
+ public:
+  void InitializeFeatureList() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", "0s"}, {"mode", "actionable"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(
+    PageContentAnnotationsServiceContentExtractionTestActionable,
+    Basic) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  observer.Wait();
+  const PageContent& page_content = observer.page_content_future_.Get();
+  RefCountedAnnotatedPageContentPtr annotated_page_content_ptr =
+      GetAnnotatedPageContentPtrFromPageContent(page_content);
+  ASSERT_TRUE(annotated_page_content_ptr);
+  EXPECT_TRUE(annotated_page_content_ptr->data.IsInitialized());
+  EXPECT_EQ(annotated_page_content_ptr->data.mode(),
             optimization_guide::proto::
                 ANNOTATED_PAGE_CONTENT_MODE_ACTIONABLE_ELEMENTS);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionTestActionable,
+    ::testing::Bool(),
+    &PageContentAnnotationsServiceContentExtractionTest::DescribeParams);
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
+                       RefreshAPC) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  observer.Wait();
+  const PageContent& page_content = observer.page_content_future_.Get();
+  RefCountedAnnotatedPageContentPtr annotated_page_content_ptr =
+      GetAnnotatedPageContentPtrFromPageContent(page_content);
+  ASSERT_TRUE(annotated_page_content_ptr);
+  const optimization_guide::proto::AnnotatedPageContent&
+      annotated_page_content = annotated_page_content_ptr->data;
+
+  EXPECT_TRUE(annotated_page_content.IsInitialized());
+  EXPECT_TRUE(annotated_page_content.has_main_frame_data());
+  std::string initial_content =
+      annotated_page_content.main_frame_data().title();
+
+  observer.page_content_future_.Clear();
+
+  // Modify the page content via JS to verify the on-demand extraction fetches
+  // the new content.
+  ASSERT_TRUE(content::ExecJs(web_contents, "document.title = 'New Title';"));
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_TRUE(result.has_value());
+  EXPECT_TRUE(result->page_content->data.has_main_frame_data());
+  EXPECT_NE(initial_content,
+            result->page_content->data.main_frame_data().title());
+  EXPECT_EQ("New Title", result->page_content->data.main_frame_data().title());
+}
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
+                       RefreshAPC_QueuedCallbacks) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  observer.Wait();
+  observer.page_content_future_.Clear();
+
+  ASSERT_TRUE(content::ExecJs(web_contents, "document.title = 'New Title';"));
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future_1;
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future_2;
+
+  // Queue two requests concurrently before either finishes.
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future_1.GetCallback());
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future_2.GetCallback());
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result_1 =
+      refresh_future_1.Get();
+  EXPECT_TRUE(result_1.has_value());
+  EXPECT_EQ("New Title",
+            result_1->page_content->data.main_frame_data().title());
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result_2 =
+      refresh_future_2.Get();
+  EXPECT_TRUE(result_2.has_value());
+  EXPECT_EQ("New Title",
+            result_2->page_content->data.main_frame_data().title());
+}
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
+                       RefreshAPC_WebContentsClosed) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  observer.Wait();
+  observer.page_content_future_.Clear();
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  // Destroy the WebContents, which should cancel pending extractions and
+  // resolve the callback with nullopt.
+  browser()->tab_strip_model()->CloseWebContentsAt(0,
+                                                   TabCloseTypes::CLOSE_NONE);
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_FALSE(result.has_value());
+}
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTest,
+                       RefreshAPC_WhileInitialExtractionPending) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  ASSERT_TRUE(content::NavigateToURL(web_contents, url));
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  observer.Wait();
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_TRUE(result.has_value());
+  EXPECT_TRUE(result->page_content->data.has_main_frame_data());
+  const PageContent& page_content = observer.page_content_future_.Get();
+  RefCountedAnnotatedPageContentPtr annotated_page_content_ptr =
+      GetAnnotatedPageContentPtrFromPageContent(page_content);
+  ASSERT_TRUE(annotated_page_content_ptr);
+  EXPECT_EQ(annotated_page_content_ptr->data.main_frame_data().title(),
+            result->page_content->data.main_frame_data().title());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionTest,
+    ::testing::Bool(),
+    &PageContentAnnotationsServiceContentExtractionTest::DescribeParams);
+
+class PageContentAnnotationsServiceContentExtractionTestLongCaptureDelay
+    : public PageContentAnnotationsServiceContentExtractionTest {
+ public:
+  void InitializeFeatureList() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", "120s"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(
+    PageContentAnnotationsServiceContentExtractionTestLongCaptureDelay,
+    RefreshAPC_MultipleNavigations_PendingCallbackResolvedWithNullopt) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url1(embedded_test_server()->GetURL("a.test",
+                                           "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url1, 1);
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  // Due to the long capture delay, the second navigation should finish before
+  // the first extraction occurs, resulting in a failure.
+  GURL url2(embedded_test_server()->GetURL("b.test",
+                                           "/optimization_guide/hello.html"));
+  ASSERT_TRUE(content::NavigateToURL(web_contents, url2));
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_FALSE(result.has_value());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionTestLongCaptureDelay,
+    ::testing::Bool(),
+    &PageContentAnnotationsServiceContentExtractionTest::DescribeParams);
+
+class PageContentAnnotationsServiceContentExtractionTestHidden
+    : public PageContentAnnotationsServiceContentExtractionTest {
+ public:
+  void InitializeFeatureList() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features = {
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", "0s"}, {"triggering_mode", "on_hidden"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTestHidden,
+                       RefreshAPC_WithOnHiddenTrigger) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  // The extraction won't happen automatically since we haven't hidden the tab.
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+
+  // This should force the extraction to be scheduled immediately despite the
+  // tab being visible.
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_TRUE(result.has_value());
+  EXPECT_TRUE(result->page_content->data.has_main_frame_data());
+  EXPECT_EQ("Test Page", result->page_content->data.main_frame_data().title());
+}
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTestHidden,
+                       AsyncGettersReturnNulloptWhenVisibleInOnHiddenMode) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/simple.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  base::test::TestFuture<std::optional<ExtractedPageContentResult>>
+      content_future;
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), content_future.GetCallback(),
+      /*trigger_if_not_cached=*/false);
+
+  // Return nullopt as no extraction is scheduled (so the wait is indefinite)
+  EXPECT_TRUE(content_future.IsReady());
+  EXPECT_FALSE(content_future.Get().has_value());
+}
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionTestHidden,
+                       AsyncGetterTriggersExtractionWhenNotCached) {
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test",
+                                          "/optimization_guide/hello.html"));
+  content::NavigateToURLBlockUntilNavigationsComplete(web_contents, url, 1);
+
+  // Verify it is not cached initially (since triggering mode is on_hidden and
+  // tab is visible).
+  ASSERT_FALSE(service->GetExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage()));
+
+  base::test::TestFuture<std::optional<ExtractedPageContentResult>>
+      content_future;
+  // Call the public async getter without arguments. It should trigger
+  // extraction (trigger_if_not_cached defaults to true).
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), content_future.GetCallback());
+
+  // Extraction is async.
+  EXPECT_FALSE(content_future.IsReady());
+
+  // Wait for it.
+  std::optional<ExtractedPageContentResult> result = content_future.Get();
+  EXPECT_TRUE(result.has_value());
+  EXPECT_TRUE(result->page_content->data.has_main_frame_data());
+  EXPECT_EQ("Test Page", result->page_content->data.main_frame_data().title());
+
+  // Now it should be cached.
+  EXPECT_TRUE(service->GetExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage()));
+
+  // Call again, should be ready immediately (cached).
+  base::test::TestFuture<std::optional<ExtractedPageContentResult>>
+      content_future2;
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), content_future2.GetCallback());
+
+  EXPECT_TRUE(content_future2.IsReady());
+  EXPECT_TRUE(content_future2.Get().has_value());
+  EXPECT_EQ(
+      "Test Page",
+      content_future2.Get()->page_content->data.main_frame_data().title());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionTestHidden,
+    ::testing::Bool(),
+    &PageContentAnnotationsServiceContentExtractionTest::DescribeParams);
+
+// Tests PDF extraction behavior based on feature
+// `kAnnotatedPageContentExtraction`:
+// - Enabled: PDF text is extracted; UKM is not recorded.
+// - Disabled: PDF text is not extracted; PDF page count is recorded to UKM.
+class PageContentAnnotationsServiceContentExtractionPdfTest
+    : public PageContentAnnotationsServiceContentExtractionTestBase,
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
+ public:
+  static std::string DescribeParams(
+      const testing::TestParamInfo<std::tuple<bool, bool>>& info) {
+    return base::StrCat(
+        {std::get<0>(info.param) ? "PDFTextExtractionEnabled"
+                                 : "PDFTextExtractionDisabled",
+         "_", GetPageSettledMonitorParamName(std::get<1>(info.param))});
+  }
+
+  bool IsPDFTextExtractionEnabled() const { return std::get<0>(GetParam()); }
+  bool IsPageSettledMonitorEnabled() const { return std::get<1>(GetParam()); }
+
+  void InitializeFeatureList() override {
+#if defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) || !defined(NDEBUG)
+    constexpr char capture_delay[] = "10s";
+#else
+    constexpr char capture_delay[] = "5s";
+#endif  // defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) ||
+        // !defined(NDEBUG)
+
+    std::vector<base::test::FeatureRefAndParams> enabled_features{
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", capture_delay}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    if (IsPDFTextExtractionEnabled()) {
+      enabled_features.push_back(
+          {features::kAnnotatedPageContentPDFTextExtraction,
+           {{"max_text_byte_size",
+             base::NumberToString(kPDFMaxTextExtractionSize)}}});
+    } else {
+      disabled_features.push_back(
+          features::kAnnotatedPageContentPDFTextExtraction);
+    }
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       PDFTextExtractionBasic) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  // Navigate to a PDF document.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"),
+      /*number_of_navigations=*/1);
+
+  if (IsPDFTextExtractionEnabled()) {
+    // Observer receives the PDF text extraction result.
+    observer.Wait();
+    const PageContent& page_content = observer.page_content_future_.Get();
+    RefCountedPDFTextPtr pdf_text_ptr =
+        GetPDFTextPtrFromPageContent(page_content);
+    ASSERT_TRUE(pdf_text_ptr);
+
+    const std::string& pdf_text = pdf_text_ptr->data;
+    EXPECT_THAT(pdf_text, HasSubstr("this is some text"));
+    EXPECT_THAT(pdf_text, HasSubstr("some more text"));
+
+    // No data is recorded to UKM metrics.
+    ASSERT_FALSE(ukm_future.IsReady());
+    EXPECT_TRUE(ukm_recorder
+                    .GetEntriesByName(
+                        ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                            kEntryName)
+                    .empty());
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    // Neither APC nor PDF text extraction is requested when feature is
+    // disabled. Only the PDF page count is requested and recorded to UKM
+    // metrics.
+    ASSERT_FALSE(observer.page_content_future_.IsReady());
+
+    // PDF page count is recorded to UKM metrics.
+    EXPECT_TRUE(ukm_future.Wait());
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    ASSERT_EQ(1u, entries.size());
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+  }
+}
+
+// Test extraction on a PDF that has empty content.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       PDFTextExtractionEmptyContent) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  // Navigate to a PDF document that has empty content.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(),
+      embedded_test_server()->GetURL("/pdf/accessibility/blank_image.pdf"),
+      /*number_of_navigations=*/1);
+
+  if (IsPDFTextExtractionEnabled()) {
+    // Observer receives the PDF text extraction result.
+    observer.Wait();
+    const PageContent& page_content = observer.page_content_future_.Get();
+    RefCountedPDFTextPtr pdf_text_ptr =
+        GetPDFTextPtrFromPageContent(page_content);
+    ASSERT_TRUE(pdf_text_ptr);
+
+    const std::string& pdf_text = pdf_text_ptr->data;
+    EXPECT_TRUE(pdf_text.empty());
+
+    // No data is recorded to UKM metrics.
+    ASSERT_FALSE(ukm_future.IsReady());
+    EXPECT_TRUE(ukm_recorder
+                    .GetEntriesByName(
+                        ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                            kEntryName)
+                    .empty());
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kEmptyText, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    // Neither APC nor PDF text extraction is requested when feature is
+    // disabled. Only the PDF page count is requested and recorded to UKM
+    // metrics.
+    ASSERT_FALSE(observer.page_content_future_.IsReady());
+
+    // PDF page count is recorded to UKM metrics.
+    EXPECT_TRUE(ukm_future.Wait());
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    ASSERT_EQ(1u, entries.size());
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+  }
+}
+
+// Verify PDF text extraction is restricted to first page.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       PDFTextExtractionRestrictedToFirstPage) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  // Navigate to a multi-page PDF document.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(),
+      embedded_test_server()->GetURL("/pdf/accessibility/multi-page.pdf"),
+      /*number_of_navigations=*/1);
+
+  if (IsPDFTextExtractionEnabled()) {
+    // Observer receives the PDF text extraction result.
+    observer.Wait();
+    const PageContent& page_content = observer.page_content_future_.Get();
+    RefCountedPDFTextPtr pdf_text_ptr =
+        GetPDFTextPtrFromPageContent(page_content);
+    ASSERT_TRUE(pdf_text_ptr);
+
+    const std::string& pdf_text = pdf_text_ptr->data;
+
+    // Only text from the first page is extracted.
+    EXPECT_THAT(pdf_text, HasSubstr("Page 1"));
+    EXPECT_THAT(pdf_text, Not(testing::HasSubstr("Page 2")));
+
+    // No data is recorded to UKM metrics.
+    ASSERT_FALSE(ukm_future.IsReady());
+    EXPECT_TRUE(ukm_recorder
+                    .GetEntriesByName(
+                        ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                            kEntryName)
+                    .empty());
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    // Neither APC nor PDF text extraction is requested when feature is
+    // disabled. Only the PDF page count is requested and recorded to UKM
+    // metrics.
+    ASSERT_FALSE(observer.page_content_future_.IsReady());
+
+    // PDF page count is recorded to UKM metrics.
+    EXPECT_TRUE(ukm_future.Wait());
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    ASSERT_EQ(1u, entries.size());
+    EXPECT_EQ(2, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+  }
+}
+
+// Verify the pdf text extraction result is capped at the limit set by parameter
+// "max_text_byte_size". Note for these tests, this parameter is set at 100
+// characters instead of its default value 1048576 (1MB). Otherwise a huge PDF
+// is required to test this limit.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       PDFTextExtractionSizeLimit) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  // Navigate to a PDF document that has more than 100 chars on the first page.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(),
+      embedded_test_server()->GetURL(
+          "/pdf/accessibility/paragraphs-and-heading-untagged.pdf"),
+      /*number_of_navigations=*/1);
+
+  if (IsPDFTextExtractionEnabled()) {
+    // Observer receives the PDF text extraction result.
+    observer.Wait();
+    const PageContent& page_content = observer.page_content_future_.Get();
+    RefCountedPDFTextPtr pdf_text_ptr =
+        GetPDFTextPtrFromPageContent(page_content);
+    ASSERT_TRUE(pdf_text_ptr);
+
+    const std::string& pdf_text = pdf_text_ptr->data;
+
+    // Text within the size limit can be found in the extraction result.
+    // Otherwise, it gets truncated.
+    EXPECT_THAT(pdf_text, HasSubstr("Heading"));
+    EXPECT_THAT(pdf_text, Not(testing::HasSubstr("45 BC")));
+
+    // The number of bytes of the result text is capped exactly at the limit.
+    EXPECT_EQ(pdf_text.size(), kPDFMaxTextExtractionSize);
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    // Neither APC nor PDF text extraction is requested when feature is
+    // disabled. Only the PDF page count is requested and recorded to UKM
+    // metrics.
+    ASSERT_FALSE(observer.page_content_future_.IsReady());
+
+    // PDF page count is recorded to UKM metrics.
+    EXPECT_TRUE(ukm_future.Wait());
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    ASSERT_EQ(1u, entries.size());
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+  }
+}
+
+// Verify that the truncation according to a byte limit does not produce invalid
+// chars when the initial extracted text, which is a UTF-16 string, happened to
+// have a multi-byte char at the point of truncation.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       PDFTextExtractionSizeLimitMultiByteChar) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  // Navigate to a PDF document contains repeating "€". The Euro sign is
+  // represented by 3 bytes.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), embedded_test_server()->GetURL("/pdf/euro_sign.pdf"),
+      /*number_of_navigations=*/1);
+
+  if (IsPDFTextExtractionEnabled()) {
+    // Observer receives the PDF text extraction result.
+    observer.Wait();
+    const PageContent& page_content = observer.page_content_future_.Get();
+    RefCountedPDFTextPtr pdf_text_ptr =
+        GetPDFTextPtrFromPageContent(page_content);
+    ASSERT_TRUE(pdf_text_ptr);
+
+    const std::string& pdf_text = pdf_text_ptr->data;
+
+    // There should not be any invalid char after the truncation. The byte size
+    // limit is 100, which means the truncation point is among the bytes
+    // representing the Euro sign.
+    EXPECT_TRUE(base::IsStringUTF8(pdf_text));
+    EXPECT_THAT(pdf_text, HasSubstr("€€€€€"));
+
+    // The string is truncated to the nearest UTF-8 char. The number of bytes
+    // is less than the limit.
+    EXPECT_LT(pdf_text.size(), kPDFMaxTextExtractionSize);
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    // Neither APC nor PDF text extraction is requested when feature is
+    // disabled. Only the PDF page count is requested and recorded to UKM
+    // metrics.
+    ASSERT_FALSE(observer.page_content_future_.IsReady());
+
+    // PDF page count is recorded to UKM metrics.
+    EXPECT_TRUE(ukm_future.Wait());
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    ASSERT_EQ(1u, entries.size());
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+  }
+}
+
+// TODO(crbug.com/517335503): Re-enable this test on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_TwoPDFPageLoads DISABLED_TwoPDFPageLoads
+#else
+#define MAYBE_TwoPDFPageLoads TwoPDFPageLoads
+#endif
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       MAYBE_TwoPDFPageLoads) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content and PDF text extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  // Set up the UKM metrics recorder for PDF page count.
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+  base::test::TestFuture<void> ukm_future;
+  ukm_recorder.SetOnAddEntryCallback(
+      ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName,
+      ukm_future.GetRepeatingCallback());
+
+  auto VerifyPDFExtractionResult = [&observer, &ukm_future, &histogram_tester,
+                                    this]() {
+    if (IsPDFTextExtractionEnabled()) {
+      // Observer receives the PDF text extraction result.
+      observer.Wait();
+      const PageContent& page_content = observer.page_content_future_.Get();
+      RefCountedPDFTextPtr pdf_text_ptr =
+          GetPDFTextPtrFromPageContent(page_content);
+      ASSERT_TRUE(pdf_text_ptr);
+
+      const std::string& pdf_text = pdf_text_ptr->data;
+      EXPECT_THAT(pdf_text, HasSubstr("this is some text"));
+      EXPECT_THAT(pdf_text, HasSubstr("some more text"));
+
+      observer.page_content_future_.Clear();
+
+      // No data is recorded to UKM metrics.
+      ASSERT_FALSE(ukm_future.IsReady());
+    } else {
+      // Neither APC nor PDF text extraction is requested when feature is
+      // disabled. Only the PDF page count is requested and recorded to UKM
+      // metrics. The UKM metrics are verified after the two loads of PDF.
+      ASSERT_FALSE(observer.page_content_future_.IsReady());
+      EXPECT_TRUE(ukm_future.WaitAndClear());
+
+      histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+      histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+      histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+    }
+  };
+
+  // First load of PDF.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"),
+      /*number_of_navigations=*/1);
+  VerifyPDFExtractionResult();
+  if (IsPDFTextExtractionEnabled()) {
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 1);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 1);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 1);
+  } else {
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 1);
+  }
+
+  // Second load of PDF.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"),
+      /*number_of_navigations=*/1);
+  VerifyPDFExtractionResult();
+  if (IsPDFTextExtractionEnabled()) {
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFText, 2);
+    histogram_tester.ExpectUniqueSample(kPdfTextExtractionStatusHistogram,
+                                        PdfTextExtractionStatus::kSuccess, 2);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 2);
+    histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 2);
+  } else {
+    histogram_tester.ExpectUniqueSample(
+        kPageContentExtractionRequestTypeHistogram,
+        ExtractionRequestType::kPDFPageCount, 2);
+  }
+
+  // Check the UKM metrics in the end.
+  if (IsPDFTextExtractionEnabled()) {
+    // No data is recorded to UKM metrics.
+    ASSERT_FALSE(ukm_future.IsReady());
+    EXPECT_TRUE(ukm_recorder
+                    .GetEntriesByName(
+                        ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                            kEntryName)
+                    .empty());
+  } else {
+    // Two entries are recorded to UKM metrics, one for each PDF load.
+    auto entries = ukm_recorder.GetEntriesByName(
+        ukm::builders::OptimizationGuide_AnnotatedPdfContent::kEntryName);
+    EXPECT_EQ(2u, entries.size());
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[0].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+    EXPECT_EQ(1, *ukm_recorder.GetEntryMetric(
+                     entries[1].get(),
+                     ukm::builders::OptimizationGuide_AnnotatedPdfContent::
+                         kPdfPageCountName));
+  }
+}
+
+// On-demand extraction does not support PDF documents, regardless of whether
+// PDF text extraction is enabled or not.
+// TODO(b/487632737): Support on-demand PDF text extraction.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       OnDemandExtractionDoesNotSupportPDF) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content and PDF text extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test", "/pdf/test.pdf"));
+  content::NavigateToURLBlockUntilNavigationsComplete(
+      web_contents, url, /*number_of_navigations=*/1);
+
+  // Attempt to initiate an on-demand extraction.
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      refresh_future;
+  service->RefreshExtractedPageContentAndEligibilityForPage(
+      web_contents->GetPrimaryPage(), refresh_future.GetCallback());
+
+  // For PDF documents, the on-demand extraction returns a null result.
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      refresh_future.Get();
+  EXPECT_FALSE(result.has_value());
+
+  // Neither page context nor PDF text extraction takes place.
+  histogram_tester.ExpectTotalCount(kPageContentExtractionRequestTypeHistogram,
+                                    0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+}
+
+// Async getter does not support PDF documents, regardless of whether PDF text
+// extraction is enabled or not.
+IN_PROC_BROWSER_TEST_P(PageContentAnnotationsServiceContentExtractionPdfTest,
+                       AsyncGettersDoesNotSupportPDF) {
+  base::HistogramTester histogram_tester;
+
+  // Set up the observer for page content and PDF text extraction.
+  FakeExtractionServiceObserver observer;
+  auto* service =
+      PageContentExtractionServiceFactory::GetForProfile(browser()->GetProfile());
+  observer.Observe(service);
+
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  GURL url(embedded_test_server()->GetURL("a.test", "/pdf/test.pdf"));
+  content::NavigateToURLBlockUntilNavigationsComplete(
+      web_contents, url, /*number_of_navigations=*/1);
+
+  base::test::TestFuture<
+      std::optional<page_content_annotations::ExtractedPageContentResult>>
+      async_future;
+  service->GetExtractedPageContentAndEligibilityForPageAsync(
+      web_contents->GetPrimaryPage(), async_future.GetCallback());
+
+  std::optional<page_content_annotations::ExtractedPageContentResult> result =
+      async_future.Get();
+  EXPECT_FALSE(result.has_value());
+
+  // Neither page context nor PDF text extraction takes place.
+  histogram_tester.ExpectTotalCount(kPageContentExtractionRequestTypeHistogram,
+                                    0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionStatusHistogram, 0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionLatencyHistogram, 0);
+  histogram_tester.ExpectTotalCount(kPdfTextExtractionSizeHistogram, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionPdfTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    &PageContentAnnotationsServiceContentExtractionPdfTest::DescribeParams);
+
+class PageContentAnnotationsServiceContentExtractionPdfHangingTest
+    : public PageContentAnnotationsServiceContentExtractionPdfTest {
+ public:
+  PageContentAnnotationsServiceContentExtractionPdfHangingTest() = default;
+  ~PageContentAnnotationsServiceContentExtractionPdfHangingTest() override =
+      default;
+
+  void InitializeFeatureList() override {
+    // Setting a delay so that the extraction does not get triggered by
+    // `AnnotatedPageContentRequest`. The extraction is triggered by directly
+    // calling `FetchPageContext` after the required setup completes.
+    std::vector<base::test::FeatureRefAndParams> enabled_features{
+        {features::kAnnotatedPageContentExtraction,
+         {{"capture_delay", "10000s"}}}};
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    if (IsPDFTextExtractionEnabled()) {
+      enabled_features.push_back(
+          {features::kAnnotatedPageContentPDFTextExtraction,
+           {{"max_text_byte_size",
+             base::NumberToString(kPDFMaxTextExtractionSize)}}});
+    } else {
+      disabled_features.push_back(
+          features::kAnnotatedPageContentPDFTextExtraction);
+    }
+
+    AddPageSettledMonitorFeatureState(IsPageSettledMonitorEnabled(),
+                                      enabled_features, disabled_features);
+
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       disabled_features);
+  }
+};
+
+// Simulate that a PDF extraction hangs and the WebContents goes away. The
+// `PageContextFetcher` should be destroyed without causing memory leak. This is
+// done by making sure the `FetchPageContextResultCallback` is run in this case.
+// This callback is stored as a member of `PageContextFetcher`. The callback
+// also holds a unique_ptr to `PageContextFetcher` itself, creating a circular
+// reference. There will be a memory leak if WebContents goes away but the
+// callback is never run, which makes `PageContextFetcher` unable to be
+// destroyed.
+IN_PROC_BROWSER_TEST_P(
+    PageContentAnnotationsServiceContentExtractionPdfHangingTest,
+    PDFExtractionNotCompleteWebContentsWentAway) {
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Navigate to a PDF document.
+  ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
+      browser(), embedded_test_server()->GetURL("/pdf/test.pdf"),
+      /*number_of_navigations=*/1);
+
+  // Wait for PDFDocumentHelper creation.
+  pdf::PDFDocumentHelper* pdf_helper;
+  ASSERT_TRUE(base::test::RunUntil([&pdf_helper, &web_contents]() {
+    pdf_helper = pdf::PDFDocumentHelper::MaybeGetForWebContents(*web_contents);
+    return pdf_helper != nullptr;
+  }));
+
+  // Bind the hanging PDF Listener to simulate PDF text and bytes extraction
+  // taking forever.
+  HangingPdfListener hanging_listener;
+  mojo::Receiver<pdf::mojom::PdfListener> receiver(&hanging_listener);
+  pdf_helper->SetListener(receiver.BindNewPipeAndPassRemote());
+
+  // Notify the PDF document load complete.
+  pdf_helper->OnDocumentLoadComplete();
+
+  // Manually trigger FetchPageContext.
+  FetchPageContextOptions options;
+  options.pdf_options.emplace(IsPDFTextExtractionEnabled()
+                                  ? PdfOptions::Format::kText
+                                  : PdfOptions::Format::kBytes,
+                              1024);
+  base::test::TestFuture<FetchPageContextResultCallbackArg> future;
+  FetchPageContext(*web_contents, options, nullptr, future.GetCallback());
+
+  // Close the tab to simulate the web content going away.
+  browser()->tab_strip_model()->CloseWebContentsAt(0,
+                                                   TabCloseTypes::CLOSE_NONE);
+
+  // Verify the callback is resolved with
+  // `FetchPageContextError::kWebContentsWentAway`.
+  FetchPageContextResultCallbackArg result = future.Take();
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(result.error().error_code,
+            FetchPageContextError::kWebContentsWentAway);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    PageContentAnnotationsServiceContentExtractionPdfHangingTest,
+    ::testing::Combine(::testing::Bool(), ::testing::Bool()),
+    &PageContentAnnotationsServiceContentExtractionPdfHangingTest::
+        DescribeParams);
 
 }  // namespace page_content_annotations

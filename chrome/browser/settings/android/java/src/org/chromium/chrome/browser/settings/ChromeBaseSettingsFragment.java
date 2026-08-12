@@ -4,6 +4,14 @@
 
 package org.chromium.chrome.browser.settings;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
+import android.content.Context;
+import android.os.Bundle;
+import android.view.ContextThemeWrapper;
+import android.view.LayoutInflater;
+
+import androidx.annotation.StringRes;
 import androidx.preference.PreferenceFragmentCompat;
 
 import org.chromium.build.annotations.Initializer;
@@ -11,7 +19,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherFactory;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.settings.CustomDividerFragment;
 import org.chromium.components.browser_ui.settings.EmbeddableSettingsPage;
@@ -34,6 +41,32 @@ public abstract class ChromeBaseSettingsFragment extends PreferenceFragmentCompa
     private Profile mProfile;
     private SettingsCustomTabLauncher mCustomTabLauncher;
     private @Nullable PreferenceUpdateObserver mPreferenceUpdateObserver;
+    private @Nullable Context mThemedContext;
+
+    @Override
+    public void onAttach(Context context) {
+        if (!SettingsInTab.isEnabled()) {
+            super.onAttach(context);
+            return;
+        }
+
+        // Ensure settings fragments inherit the same Chromium Settings theme used by
+        // SettingsActivity, even though they are hosted in ChromeTabbedActivity.
+        mThemedContext = new ContextThemeWrapper(context, R.style.Theme_Chromium_Settings);
+        super.onAttach(mThemedContext);
+    }
+
+    @Override
+    public Context getContext() {
+        return mThemedContext != null ? mThemedContext : assumeNonNull(super.getContext());
+    }
+
+    @Override
+    public LayoutInflater onGetLayoutInflater(@Nullable Bundle savedInstanceState) {
+        LayoutInflater inflater = super.onGetLayoutInflater(savedInstanceState);
+        // Ensure we use the themed context if available.
+        return inflater.cloneInContext(getContext());
+    }
 
     /**
      * @return The profile associated with the current Settings screen.
@@ -69,7 +102,7 @@ public abstract class ChromeBaseSettingsFragment extends PreferenceFragmentCompa
     /** Returns whether the divider should be shown. */
     @Override
     public boolean hasDivider() {
-        return !ChromeFeatureList.sAndroidSettingsContainment.isEnabled();
+        return false;
     }
 
     /**
@@ -77,6 +110,13 @@ public abstract class ChromeBaseSettingsFragment extends PreferenceFragmentCompa
      */
     public HelpAndFeedbackLauncher getHelpAndFeedbackLauncher() {
         return HelpAndFeedbackLauncherFactory.getForProfile(mProfile);
+    }
+
+    /**
+     * @return The resource ID of the help string that is valid for the current policy.
+     */
+    protected @StringRes int getHelpMenuStringRes() {
+        return HelpAndFeedbackLauncher.getHelpMenuStringRes();
     }
 
     /**

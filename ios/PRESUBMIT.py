@@ -20,6 +20,11 @@ PIPE_IN_COMMENT_PATTERN = r'//.*[^|]\|(?!\|)'
 IOS_PACKAGE_PATTERN = r'^ios'
 BOXED_BOOL_PATTERN = r'@\((YES|NO)\)'
 USER_DEFAULTS_PATTERN = r'\[NSUserDefaults standardUserDefaults]'
+UMBRELLA_HEADER_PATTERN = r'#import\s+<([\w]+)\/(?!\1\.h)[^>]+>'
+UNITTEST_FILE_PATTERN = r'_unittests?\.(mm|cc)$'
+SYSTEM_COLORS_PATTERN = (
+    r'\[UIColor (?!white|black|clear)[a-z][a-zA-Z]*Color\]|'
+    r'UIColor\.(?!white|black|clear)[a-z][a-zA-Z]*Color')
 
 # Color management constants
 COLOR_SHARED_DIR = 'ios/chrome/common/ui/colors/'
@@ -51,7 +56,8 @@ def _CheckNullabilityAnnotations(input_api, output_api):
 
     errors = []
     for f in input_api.AffectedFiles():
-        if f.LocalPath().startswith('ios/web_view/public/'):
+        if (f.LocalPath().startswith('ios/web_view/public/') or
+            f.LocalPath().startswith('ios/third_party/')):
             # ios/web_view/public tries to mimic an existing API that
             # might have nullability in it and that is acceptable.
             continue
@@ -323,23 +329,23 @@ def _CheckOrderedStringFile(input_api, output_api):
 
 def _CheckOrderedFlagsFile(input_api, output_api):
     """ Checks that the flag description files are alphabetically ordered"""
+    # The order_flags.py script calls `gclient root` which is not available
+    # on Windows CI bots, causing all CLs that touch
+    # ios_chrome_flag_descriptions.{h,cc} to fail presubmit on Windows.
+    if input_api.platform == 'win32':
+        return []
     h_file = None
-    cc_file = None
     for f in input_api.AffectedFiles(include_deletes=False):
         if f.LocalPath().endswith('ios_chrome_flag_descriptions.h'):
             h_file = f.LocalPath()
-        elif f.LocalPath().endswith('ios_chrome_flag_descriptions.cc'):
-            cc_file = f.LocalPath()
 
-    if h_file or cc_file:
+    if h_file:
         try:
             command = [
                 input_api.python3_executable, 'tools/order_flags.py', '--check'
             ]
             if h_file:
                 command.extend(['--h-file', h_file])
-            if cc_file:
-                command.extend(['--cc-file', cc_file])
             subprocess.check_output(command, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
             message = 'Flag description files not alphabetically sorted.\n'
@@ -460,9 +466,10 @@ def _CheckStyleESLint(input_api, output_api):
     return results
 
 def _CheckUIGraphicsBeginImageContextWithOptions(input_api, output_api):
-    """ Checks that UIGraphicsBeginImageContextWithOptions is not used"""
+    """ Checks that UIGraphicsBeginImageContext and
+    UIGraphicsBeginImageContextWithOptions are not used"""
     deprecated_regex = input_api.re.compile(
-        r'UIGraphicsBeginImageContextWithOptions\(')
+        r'UIGraphicsBeginImageContext(WithOptions)?\(')
 
     errors = []
     for f in input_api.AffectedFiles():
@@ -475,7 +482,8 @@ def _CheckUIGraphicsBeginImageContextWithOptions(input_api, output_api):
     if not errors:
         return []
     error_message = '\n'.join([
-        'UIGraphicsBeginImageContextWithOptions is deprecated, use '
+        'UIGraphicsBeginImageContext and '
+        'UIGraphicsBeginImageContextWithOptions are deprecated, use '
         'UIGraphicsImageRenderer instead.'
     ] + errors) + '\n'
 
@@ -504,6 +512,185 @@ def _CheckOmniboxTextInEgtest(input_api, output_api):
 
     return [output_api.PresubmitPromptWarning(warning_message)]
 
+def _CheckUmbrellaHeaderUsage(input_api, output_api):
+    """Checks for individual system header imports instead of umbrella headers.
+    """
+    umbrella_regex = input_api.re.compile(UMBRELLA_HEADER_PATTERN)
+
+    errors = []
+    file_filter = lambda f: f.LocalPath().endswith(('.mm', '.h'))
+
+    for f in input_api.AffectedSourceFiles(file_filter):
+        for line_num, line in f.ChangedContents():
+            match = umbrella_regex.search(line)
+            if match:
+                framework_name = match.group(1)
+                errors.append('%s:%s (Found: %s. Use <%s/%s.h> instead)' %
+                              (f.LocalPath(), line_num, line.strip(),
+                               framework_name, framework_name))
+    if not errors:
+        return []
+
+    warning_message = (
+        'Always use Umbrella Headers for system frameworks. Importing '
+        'individual headers increases compilation time and breaks module '
+        'optimization.'
+    )
+
+    return [
+        output_api.PresubmitPromptWarning(warning_message, items=errors)
+    ]
+
+def _CheckNoFlakyUnitTest(input_api, output_api):
+    """ Checks that there are no tests with FLAKY_ prefix."""
+    flaky_specifier_pattern = input_api.re.compile(r'\bFLAKY_')
+
+    unittest_regex = input_api.re.compile(UNITTEST_FILE_PATTERN)
+    errors = []
+    for f in input_api.AffectedFiles():
+        if not unittest_regex.search(f.LocalPath()):
+            continue
+        for line_num, line in f.ChangedContents():
+            if line.lstrip().startswith('//'):
+                continue
+            if flaky_specifier_pattern.search(line):
+                errors.append('%s:%s' % (f.LocalPath(), line_num))
+
+    if not errors:
+        return []
+    error_message = '\n'.join([
+        'Unit tests must not be marked as FLAKY_. If a test is flaky, use '
+        'DISABLED_ instead.'
+    ] + errors) + '\n'
+
+    return [output_api.PresubmitError(error_message)]
+
+def _CheckUsageOfSystemColors(input_api, output_api):
+    """ Checks whether there are forbidden system color used in ios code.
+
+    Only white, black and clear colors are accepted.
+    """
+    system_colors_regex = input_api.re.compile(SYSTEM_COLORS_PATTERN)
+
+    errors = []
+    file_filter = lambda f: f.LocalPath().endswith(('.mm', '.h'))
+    for f in input_api.AffectedSourceFiles(file_filter):
+        for line_num, line in f.ChangedContents():
+            if system_colors_regex.search(line):
+                errors.append('%s:%s' % (f.LocalPath(), line_num))
+    if not errors:
+        return []
+
+    warning_message = 'Found forbidden usage of system colors. '
+    'Only white, black and clear colors are accepted.'
+    'Prefer semantic colors in ios code instead of the system ones:'
+
+    return [output_api.PresubmitPromptWarning(warning_message, items=errors)]
+
+
+def _CheckLargeImagesets(input_api, output_api):
+    """Checks that no large (> 100pt) PDF or SVG files are added to
+    .imageset directories.
+    """
+    import re
+
+    def get_svg_dimensions(file_contents):
+        try:
+            import xml.etree.ElementTree as ET
+            if isinstance(file_contents, bytes):
+                text = file_contents.decode('utf-8', errors='ignore')
+            else:
+                text = file_contents
+
+            root = ET.fromstring(text)
+            w_str = root.attrib.get('width', '')
+            h_str = root.attrib.get('height', '')
+            viewbox_str = (root.attrib.get('viewBox', '') or
+                           root.attrib.get('viewbox', ''))
+
+            def parse_val(v):
+                if not v:
+                    return 0.0
+                m = re.match(r'^([\d.]+)', str(v).strip())
+                return float(m.group(1)) if m else 0.0
+
+            w, h = parse_val(w_str), parse_val(h_str)
+            if (w == 0.0 or h == 0.0) and viewbox_str:
+                parts = re.split(r'[\s,]+', viewbox_str.strip())
+                if len(parts) >= 4:
+                    w = parse_val(parts[2])
+                    h = parse_val(parts[3])
+            return w, h
+        except Exception:
+            return 0.0, 0.0
+
+    def get_pdf_dimensions(file_contents):
+        try:
+            if isinstance(file_contents, str):
+                file_bytes = file_contents.encode('latin-1', errors='ignore')
+            else:
+                file_bytes = file_contents
+
+            # The PDF spec specifies that MediaBox can have whitespace or
+            # newlines.
+            pattern = re.compile(
+                rb'/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+'
+                rb'(-?[\d.]+)\s+(-?[\d.]+)\s*\]')
+            match = pattern.search(file_bytes)
+            if match:
+                llx = float(match.group(1))
+                lly = float(match.group(2))
+                urx = float(match.group(3))
+                ury = float(match.group(4))
+                return abs(urx - llx), abs(ury - lly)
+        except Exception:
+            pass
+        return 0.0, 0.0
+
+    errors = []
+    for f in input_api.AffectedFiles(include_deletes=False):
+        if f.Action() != 'A':
+            continue
+        local_path = f.LocalPath()
+        lower_path = local_path.lower()
+        if '.imageset/' not in lower_path:
+            continue
+
+        if lower_path.endswith('.svg'):
+            is_svg = True
+        elif lower_path.endswith('.pdf'):
+            is_svg = False
+        else:
+            continue
+
+        try:
+            with open(f.AbsoluteLocalPath(), 'rb') as fp:
+                file_contents = fp.read()
+        except (IOError, OSError):
+            file_contents = input_api.ReadFile(
+                f.AbsoluteLocalPath(), mode='rb')
+
+        if is_svg:
+            w, h = get_svg_dimensions(file_contents)
+        else:
+            w, h = get_pdf_dimensions(file_contents)
+
+        if w > 100.0 or h > 100.0:
+            errors.append('%s (%.1fx%.1f pt)' % (local_path, w, h))
+
+    if not errors:
+        return []
+
+    warning_message = (
+        'Large vector assets (> 100pt) found in .imageset directories.\n'
+        'Apple actool rasterizes these at compile time into uncompressed\n'
+        '32-bit ARGB bitmaps, which severely bloats the Assets.car binary\n'
+        'size. Please use @2x and @3x PNGs instead.\n'
+        'Files:\n'
+    )
+
+    return [output_api.PresubmitError(warning_message, items=errors)]
+
 
 def CheckChange(input_api, output_api):
     results = []
@@ -522,6 +709,10 @@ def CheckChange(input_api, output_api):
     results.extend(
         _CheckUIGraphicsBeginImageContextWithOptions(input_api, output_api))
     results.extend(_CheckOmniboxTextInEgtest(input_api, output_api))
+    results.extend(_CheckUmbrellaHeaderUsage(input_api, output_api))
+    results.extend(_CheckNoFlakyUnitTest(input_api, output_api))
+    results.extend(_CheckUsageOfSystemColors(input_api, output_api))
+    results.extend(_CheckLargeImagesets(input_api, output_api))
     return results
 
 def CheckChangeOnUpload(input_api, output_api):

@@ -9,7 +9,6 @@
 #include "base/apple/foundation_util.h"
 #include "base/auto_reset.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/mac/mac_util.h"
 #include "components/remote_cocoa/app_shim/features.h"
 #import "components/remote_cocoa/app_shim/immersive_mode_delegate_mac.h"
@@ -19,12 +18,6 @@
 #include "ui/gfx/native_ui_types.h"
 
 namespace {
-// Workaround for https://crbug.com/1369643
-const double kThinControllerHeight = 0.5;
-
-inline bool IsPermanentThinControllerEnabled() {
-  return base::mac::MacOSMajorVersion() >= 13;
-}
 
 void CloseNSPopovers(NSWindow* parent_window) {
   // Close any NSPopover that may be open.
@@ -241,7 +234,7 @@ ImmersiveModeControllerCocoa::~ImmersiveModeControllerCocoa() {
   StopObservingChildWindows(overlay_window_);
 
   // Rollback the view shuffling from enablement.
-  DisableThinControllerIfNecessary();
+  browser_window_.thinTitlebarViewController.hidden = YES;
   [overlay_content_view_ removeFromSuperview];
   overlay_window_.contentView = overlay_content_view_;
   [immersive_mode_titlebar_view_controller_ removeFromParentViewController];
@@ -276,7 +269,6 @@ void ImmersiveModeControllerCocoa::Init() {
   [overlay_content_view_.centerYAnchor
       constraintEqualToAnchor:overlay_content_view_.superview.centerYAnchor]
       .active = YES;
-  CreateThinControllerIfNecessary();
 }
 
 void ImmersiveModeControllerCocoa::FullscreenTransitionCompleted() {
@@ -473,7 +465,7 @@ void ImmersiveModeControllerCocoa::OnChildWindowAdded(NSWindow* child) {
   // TODO(kerenzhu): the sole purpose of `window_lock_received_` is to
   // verify that we don't lock twice for a single window.
   // We can remove it once this is verified.
-  CHECK(!base::Contains(window_lock_received_, child));
+  CHECK(!window_lock_received_.contains(child));
   window_lock_received_.insert(child);
   RevealLock();
 
@@ -489,7 +481,7 @@ void ImmersiveModeControllerCocoa::OnChildWindowRemoved(NSWindow* child) {
   if (((NativeWidgetMacNSWindow*)child).isShufflingForOrdering) {
     return;
   }
-  CHECK(base::Contains(window_lock_received_, child));
+  CHECK(window_lock_received_.contains(child));
   window_lock_received_.erase(child);
   RevealUnlock();
 }
@@ -627,14 +619,12 @@ void ImmersiveModeControllerCocoa::
 
 void ImmersiveModeControllerCocoa::UpdateThinControllerVisibility() {
   NSTitlebarAccessoryViewController* thin_controller =
-      IsPermanentThinControllerEnabled()
-          ? browser_window_.thinTitlebarViewController
-          : thin_titlebar_view_controller_;
+      browser_window_.thinTitlebarViewController;
   if (last_used_style_ == mojom::ToolbarVisibilityStyle::kNone &&
       immersive_mode_titlebar_view_controller_.revealAmount == 0) {
     // Needed when eventually exiting from content fullscreen and returning
     // to mojom::ToolbarVisibilityStyle::kAlways. This is a workaround for
-    // https://crbug.com/1369643.
+    // https://crbug.com/40240734.
     //
     // We hit this situation when a window enters browser fullscreen, then
     // enters content fullscreen. Exiting content fullscreen will drop the
@@ -643,14 +633,14 @@ void ImmersiveModeControllerCocoa::UpdateThinControllerVisibility() {
     // We don't know what state we will be returning to when exiting content
     // fullscreen, but `kAlways` is one of the options. Because of this we
     // need to keep the thin controller visible during content fullscreen,
-    // otherwise we will trip https://crbug.com/1369643.
+    // otherwise we will trip https://crbug.com/40240734.
     //
     // Exiting content fullscreen and returning to `kAutohide` does not
-    // trigger https://crbug.com/1369643, but to keep things simple we keep
+    // trigger https://crbug.com/40240734, but to keep things simple we keep
     // the mitigation in place for all transitions out of content fullscreen.
 
     // In short, when transitioning to `kNone` we need to take steps to
-    // mitigate https://crbug.com/1369643 which is triggered when we
+    // mitigate https://crbug.com/40240734 which is triggered when we
     // eventually transition out of `kNone`.
     thin_controller.hidden = NO;
   } else {
@@ -667,7 +657,7 @@ void ImmersiveModeControllerCocoa::LayoutWindowWithAnchorView(
   // Only move |window| when it is on the active space. If |window| has a child
   // with key an unwanted space switch will occur. See http://crbug.com/1519484
   // and http://crbug.com/1316543.
-  if (!window.isOnActiveSpace) {
+  if (!window.onActiveSpace) {
     return;
   }
 
@@ -699,36 +689,6 @@ void ImmersiveModeControllerCocoa::LayoutWindowWithAnchorView(
 
 void ImmersiveModeControllerCocoa::Reanchor() {
   LayoutWindowWithAnchorView(overlay_window_, overlay_content_view_);
-}
-
-void ImmersiveModeControllerCocoa::CreateThinControllerIfNecessary() {
-  if (IsPermanentThinControllerEnabled()) {
-    // In this arm, the thin controller is created in BrowserNativeWidgetWindow
-    // and owned by the window.
-    return;
-  }
-  thin_titlebar_view_controller_ =
-      [[NSTitlebarAccessoryViewController alloc] init];
-  thin_titlebar_view_controller_.view = [[NSView alloc] init];
-  thin_titlebar_view_controller_.view.wantsLayer = YES;
-  thin_titlebar_view_controller_.view.layer.backgroundColor =
-      NSColor.blackColor.CGColor;
-  thin_titlebar_view_controller_.layoutAttribute = NSLayoutAttributeBottom;
-  thin_titlebar_view_controller_.fullScreenMinHeight = kThinControllerHeight;
-  thin_titlebar_view_controller_.hidden = YES;
-  // Insert it in the front for consistency with the permanent thin
-  // controller path.
-  [browser_window_
-      insertTitlebarAccessoryViewController:thin_titlebar_view_controller_
-                                    atIndex:0];
-}
-
-void ImmersiveModeControllerCocoa::DisableThinControllerIfNecessary() {
-  if (IsPermanentThinControllerEnabled()) {
-    browser_window_.thinTitlebarViewController.hidden = YES;
-  } else {
-    [thin_titlebar_view_controller_ removeFromParentViewController];
-  }
 }
 
 }  // namespace remote_cocoa

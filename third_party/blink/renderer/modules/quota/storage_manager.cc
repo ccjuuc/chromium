@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/quota/storage_manager.h"
 
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/public/mojom/quota/quota_types.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
@@ -116,8 +117,7 @@ ScriptPromise<IDLBoolean> StorageManager::persist(
   auto promise = resolver->Promise();
 
   GetPermissionService(window)->RequestPermission(
-      CreatePermissionDescriptor(PermissionName::DURABLE_STORAGE),
-      LocalFrame::HasTransientUserActivation(window->GetFrame()),
+      CreatePermissionDescriptor(PermissionName::PERSISTENT_STORAGE),
       BindOnce(&StorageManager::PermissionRequestComplete, WrapPersistent(this),
                WrapPersistent(resolver)));
 
@@ -142,7 +142,7 @@ ScriptPromise<IDLBoolean> StorageManager::persisted(
 
   GetPermissionService(ExecutionContext::From(script_state))
       ->HasPermission(
-          CreatePermissionDescriptor(PermissionName::DURABLE_STORAGE),
+          CreatePermissionDescriptor(PermissionName::PERSISTENT_STORAGE),
           BindOnce(&StorageManager::PermissionRequestComplete,
                    WrapPersistent(this), WrapPersistent(resolver)));
   return promise;
@@ -204,11 +204,12 @@ void StorageManager::PermissionServiceConnectionError() {
 
 void StorageManager::PermissionRequestComplete(
     ScriptPromiseResolver<IDLBoolean>* resolver,
-    mojom::blink::PermissionStatus status) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
   if (!resolver->GetExecutionContext() ||
-      resolver->GetExecutionContext()->IsContextDestroyed())
+      resolver->GetExecutionContext()->IsContextDestroyed()) {
     return;
-  resolver->Resolve(status == mojom::blink::PermissionStatus::GRANTED);
+  }
+  resolver->Resolve(status->status == mojom::blink::PermissionStatus::GRANTED);
 }
 
 mojom::blink::QuotaManagerHost* StorageManager::GetQuotaHost(

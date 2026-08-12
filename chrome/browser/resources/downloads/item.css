@@ -21,6 +21,57 @@
   outline: none;
 }
 
+:host-context([webui-refresh-2026]) {
+  --controlled-by-active-color: var(--cr-primary-text-color);
+  --controlled-by-active-link-color: var(--cr-link-color);
+  --controlled-by-inactive-color: var(--cr-secondary-text-color);
+
+  #date {
+    color: var(--cr-primary-text-color);
+  }
+
+  #action-icon-buttons {
+    --iron-icon-fill-color: var(--cr-secondary-text-color);
+  }
+
+  #content.is-active {
+    background-color: var(--color-download-manager-item-background);
+  }
+
+  #fileLink {
+    color: var(--cr-link-color);
+  }
+
+  #content:not(.is-active) {
+    background-color: var(--color-download-manager-item-background-inactive);
+    border: none;
+    color: var(--color-download-manager-item-inactive);
+  }
+
+  #details {
+    border: none;
+  }
+
+  #tag {
+    color: var(--cr-secondary-text-color);
+  }
+
+  .description,
+  .is-active .description[icon-color=''] {
+    color: var(--cr-primary-text-color);
+  }
+
+  #file-icon-wrapper cr-icon[icon-color='red'],
+  .description[description-color='red'] {
+    color: var(--color-download-manager-item-error);
+  }
+
+  #progress {
+    --cr-progress-active-color: var(--color-download-manager-progress);
+    --cr-progress-container-color: var(--md-background-color);
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :host {
     --controlled-by-active-color: inherit;
@@ -56,6 +107,7 @@ cr-button {
   width: var(--downloads-card-width);
   max-width: calc(100% - 2 * var(--downloads-card-margin));
 }
+
 #main-content {
   display: flex;
   flex: none;
@@ -85,7 +137,7 @@ cr-button {
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-width: 0;  /* This allows #url to ellide correctly. */
+  min-width: 0;  /* This allows #fileLink to elide correctly. */
   padding-bottom: 16px;
   padding-inline-end: 16px;
   padding-inline-start: var(--downloads-card-margin);
@@ -147,10 +199,6 @@ cr-button {
   color: var(--google-red-700);
 }
 
-#file-icon-wrapper cr-icon[icon-color='yellow'] {
-  color: var(--google-yellow-500);
-}
-
 @media (prefers-color-scheme: dark) {
   #file-icon-wrapper cr-icon[icon-color='red'] {
     color: var(--google-red-300);
@@ -193,23 +241,18 @@ cr-button {
 }
 
 #name,
-#file-link,
-#url {
+#fileLink {
+  font-weight: 500;
   max-width: 100%;
   overflow: hidden;
+  text-align: start;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-#name,
-#file-link {
-  font-weight: 500;
   word-break: break-all;
-  text-align: start;
 }
 
 @media (prefers-color-scheme: light) {
-  .is-active :-webkit-any(#file-link) {
+  .is-active :-webkit-any(#fileLink) {
     color: var(--google-blue-600);
   }
 
@@ -224,17 +267,6 @@ cr-button {
   margin-inline-start: 12px;
 }
 
-#url {
-  color: inherit;
-  display: block;
-  margin-top: 6px;
-  min-height: 0;
-  text-decoration: none;
-  /* Ellipsize beginning and preserve the end to always display the eTLD+1. */
-  direction: rtl;
-  text-align: end;
-}
-
 #initiator-origin {
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -243,20 +275,12 @@ cr-button {
   margin-top: 6px;
 }
 
-:host-context([dir=rtl]) #url {
-  direction: ltr;
-}
-
 :host-context([dir=rtl]) #name {
   direction: ltr;
 }
 
-:host-context([dir=rtl]) #file-link {
+:host-context([dir=rtl]) #fileLink {
   direction: ltr;
-}
-
-.is-active #url {
-  color: var(--cr-secondary-text-color);
 }
 
 #progress,
@@ -285,16 +309,16 @@ cr-button {
   }
 }
 
-#controlled-by,
-#controlled-by a {
+#controlledBy,
+#controlledBy a {
   color: var(--controlled-by-inactive-color);
 }
 
-.is-active #controlled-by {
+.is-active #controlledBy {
   color: var(--controlled-by-active-color);
 }
 
-.is-active #controlled-by a {
+.is-active #controlledBy a {
   color: var(--controlled-by-active-link-color);
 }
 

@@ -8,6 +8,7 @@
 #include "base/feature_list.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -21,6 +22,7 @@
 #include "components/commerce/core/commerce_feature_list.h"
 #include "components/data_sharing/public/features.h"
 #include "components/saved_tab_groups/public/features.h"
+#include "components/skills/features.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
 #include "components/sync/base/command_line_switches.h"
 #include "components/sync/base/data_type.h"
@@ -94,6 +96,15 @@ class SyncServiceFactoryTest : public testing::Test {
     // There may tasks in flight referencing fields owned by the test fixture.
     // Make sure they are flushed now to prevent memory safety errors, e.g.
     // use-after-destruction errors.
+
+    // Flush any pending initialization tasks (e.g. WebData) before destroying
+    // the profile, to avoid accessing closed DBs.
+    task_environment_.RunUntilIdle();
+
+    // Destroy the profile. This may post cleanup tasks.
+    profile_.reset();
+
+    // Flush cleanup tasks while NetworkHandler is still alive.
     task_environment_.RunUntilIdle();
   }
 
@@ -103,7 +114,7 @@ class SyncServiceFactoryTest : public testing::Test {
 
   // Returns the collection of default datatypes.
   syncer::DataTypeSet DefaultDatatypes() {
-    static_assert(59 == syncer::GetNumDataTypes(),
+    static_assert(67 == syncer::GetNumDataTypes(),
                   "When adding a new type, you probably want to add it here as "
                   "well (assuming it is already enabled). Check similar "
                   "function in "
@@ -130,10 +141,22 @@ class SyncServiceFactoryTest : public testing::Test {
     datatypes.Put(syncer::WEB_APPS);
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(
+            syncer::kNewTabPageCustomizationThemeSync)) {
+      datatypes.Put(syncer::THEMES);
+    }
+#else
     datatypes.Put(syncer::THEMES);
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(syncer::kSyncSearchEnginesAndroidLFF)) {
+      datatypes.Put(syncer::SEARCH_ENGINES);
+    }
+#else
     datatypes.Put(syncer::SEARCH_ENGINES);
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
     datatypes.Put(syncer::SAVED_TAB_GROUP);
 
@@ -166,10 +189,7 @@ class SyncServiceFactoryTest : public testing::Test {
     // types.
     datatypes.Put(syncer::AUTOFILL);
     datatypes.Put(syncer::AUTOFILL_PROFILE);
-    if (base::FeatureList::IsEnabled(
-            syncer::kSyncAutofillWalletCredentialData)) {
-      datatypes.Put(syncer::AUTOFILL_WALLET_CREDENTIAL);
-    }
+    datatypes.Put(syncer::AUTOFILL_WALLET_CREDENTIAL);
     datatypes.Put(syncer::AUTOFILL_WALLET_DATA);
     datatypes.Put(syncer::AUTOFILL_WALLET_METADATA);
     datatypes.Put(syncer::AUTOFILL_WALLET_OFFER);
@@ -211,9 +231,7 @@ class SyncServiceFactoryTest : public testing::Test {
     // because GoogleGroupsManagerFactory is null for testing and hence no
     // controller gets instantiated for the type.
 
-    if (base::FeatureList::IsEnabled(syncer::kSyncAutofillLoyaltyCard)) {
-      datatypes.Put(syncer::AUTOFILL_VALUABLE);
-    }
+    datatypes.Put(syncer::AUTOFILL_VALUABLE);
 
     if (base::FeatureList::IsEnabled(syncer::kSyncAutofillValuableMetadata)) {
       datatypes.Put(syncer::AUTOFILL_VALUABLE_METADATA);
@@ -229,6 +247,39 @@ class SyncServiceFactoryTest : public testing::Test {
 
     if (base::FeatureList::IsEnabled(syncer::kSyncContextualTask)) {
       datatypes.Put(syncer::CONTEXTUAL_TASK);
+    }
+
+    if (base::FeatureList::IsEnabled(features::kSkillsEnabled)) {
+      datatypes.Put(syncer::SKILL);
+    }
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncGeminiThread)) {
+      datatypes.Put(syncer::GEMINI_THREAD);
+    }
+
+    if (base::FeatureList::IsEnabled(
+            syncer::kSyncEncryptedTabContextContainer)) {
+      datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_CONTAINER);
+      datatypes.Put(syncer::ENCRYPTED_TAB_CONTEXT_ITEM);
+    }
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncThemesIos)) {
+      datatypes.Put(syncer::THEMES_IOS);
+    }
+
+#if !BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(
+            syncer::kNewTabPageCustomizationThemeSync)) {
+      datatypes.Put(syncer::THEMES_ANDROID);
+    }
+#endif
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncNotebook)) {
+      datatypes.Put(syncer::NOTEBOOK);
+    }
+
+    if (base::FeatureList::IsEnabled(syncer::kSyncJourney)) {
+      datatypes.Put(syncer::JOURNEY);
     }
 
     return datatypes;
@@ -278,4 +329,34 @@ TEST_F(SyncServiceFactoryTest, CreateSyncServiceImplDefault) {
     EXPECT_TRUE(types.Has(type))
         << syncer::DataTypeToDebugString(type) << " not found in datatypes map";
   }
+}
+
+class SyncServiceFactoryTestWithCrossDeviceThemeFeatures
+    : public SyncServiceFactoryTest {
+ public:
+  SyncServiceFactoryTestWithCrossDeviceThemeFeatures() {
+    feature_list_.InitWithFeatures(
+        /*enabled_features=*/{syncer::kSyncThemesIos,
+                              syncer::kNewTabPageCustomizationThemeSync},
+        /*disabled_features=*/{});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_F(SyncServiceFactoryTestWithCrossDeviceThemeFeatures,
+       CreateSyncServiceImpl) {
+  syncer::SyncServiceImpl* sync_service =
+      SyncServiceFactory::GetAsSyncServiceImplForProfileForTesting(profile());
+  syncer::DataTypeSet types = sync_service->GetRegisteredDataTypesForTest();
+
+  EXPECT_TRUE(types.Has(syncer::THEMES_IOS));
+#if !BUILDFLAG(IS_ANDROID)
+  EXPECT_TRUE(types.Has(syncer::THEMES_ANDROID));
+  EXPECT_TRUE(types.Has(syncer::THEMES));
+#else
+  EXPECT_FALSE(types.Has(syncer::THEMES_ANDROID));
+  EXPECT_TRUE(types.Has(syncer::THEMES));
+#endif
 }

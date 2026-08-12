@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_PASSWORD_MANAGER_MOCK_PASSWORD_MANAGER_DELEGATE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_INTEGRATORS_PASSWORD_MANAGER_MOCK_PASSWORD_MANAGER_DELEGATE_H_
 
+#include "base/memory/weak_ptr.h"
 #include "components/autofill/core/browser/integrators/password_manager/password_manager_delegate.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/common/password_form_fill_data.h"
@@ -20,20 +21,21 @@ class MockPasswordManagerDelegate : public PasswordManagerDelegate {
       delete;
   ~MockPasswordManagerDelegate() override;
 
-  MOCK_METHOD((void),
-              ShowSuggestions,
-              (const autofill::TriggeringField&),
-              (override));
+  MOCK_METHOD((void), ShowSuggestions, (const TriggeringField&), (override));
 
 #if BUILDFLAG(IS_ANDROID)
   MOCK_METHOD((void),
               ShowKeyboardReplacingSurface,
-              (const autofill::PasswordSuggestionRequest&),
+              (const PasswordSuggestionRequest&),
               (override));
 #endif  // BUILDFLAG(IS_ANDROID)
 
   MOCK_METHOD(std::optional<Suggestion>,
               GetWebauthnSignInWithAnotherDeviceSuggestion,
+              (),
+              (const, override));
+  MOCK_METHOD(std::optional<Suggestion>,
+              GetWebauthnInlineQrCodeSuggestion,
               (),
               (const, override));
 

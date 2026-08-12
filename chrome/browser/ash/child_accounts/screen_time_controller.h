@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/observer_list.h"
@@ -118,11 +119,11 @@ class ScreenTimeController
   // Schedule a call for UsageTimeLimitWarning.
   void ScheduleUsageTimeLimitWarning(const usage_time_limit::State& state);
 
-  // Save the |state| to |prefs::kScreenTimeLastState|.
+  // Save the |state| to |ash::prefs::kScreenTimeLastState|.
   void SaveCurrentStateToPref(const usage_time_limit::State& state);
 
-  // Get the last calculated |state| from |prefs::kScreenTimeLastState|, if it
-  // exists.
+  // Get the last calculated |state| from |ash::prefs::kScreenTimeLastState|, if
+  // it exists.
   std::optional<usage_time_limit::State> GetLastStateFromPref();
 
   // Called when the usage time limit is |kUsageTimeLimitWarningTime| or less to
@@ -171,7 +172,7 @@ class ScreenTimeController
 
   // Contains the last time limit policy processed by this class. Used to
   // generate notifications when the policy changes.
-  base::Value::Dict last_policy_;
+  base::DictValue last_policy_;
 
   // Used to set up timers when a time limit is approaching.
   TimeLimitNotifier time_limit_notifier_;

@@ -23,7 +23,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
-using ProviderAccount = DeviceAccountsProvider::AccountInfo;
+using ProviderAccount = DeviceAccountsProvider::DeviceAccountInfo;
 
 namespace {
 constexpr char kNoBindingChallenge[] = "";
@@ -36,15 +36,16 @@ class ProfileOAuth2TokenServiceIOSDelegateTest
  public:
   ProfileOAuth2TokenServiceIOSDelegateTest()
       : client_(&prefs_),
-        last_access_token_error_(GoogleServiceAuthError::NONE) {}
+        last_access_token_error_(GoogleServiceAuthError::AuthErrorNone()) {}
 
   void SetUp() override {
     AccountTrackerService::RegisterPrefs(prefs_.registry());
-    account_tracker_.Initialize(&prefs_, base::FilePath());
+    account_tracker_ =
+        std::make_unique<AccountTrackerService>(&prefs_, base::FilePath());
 
     fake_provider_ = new FakeDeviceAccountsProvider();
     oauth2_delegate_.reset(new ProfileOAuth2TokenServiceIOSDelegate(
-        &client_, base::WrapUnique(fake_provider_), &account_tracker_));
+        &client_, base::WrapUnique(fake_provider_), account_tracker_.get()));
     oauth2_delegate_->SetOnRefreshTokenRevokedNotified(base::DoNothing());
     token_service_observation_.Observe(oauth2_delegate_.get());
   }
@@ -101,7 +102,7 @@ class ProfileOAuth2TokenServiceIOSDelegateTest
   }
 
   CoreAccountId GetAccountId(const ProviderAccount& provider_account) {
-    return account_tracker_.PickAccountIdForAccount(
+    return account_tracker_->PickAccountIdForAccount(
         provider_account.GetGaiaId(), provider_account.GetEmail());
   }
 
@@ -109,7 +110,7 @@ class ProfileOAuth2TokenServiceIOSDelegateTest
   base::test::TaskEnvironment task_environment_;
   TestingPrefServiceSimple prefs_;
   TestSigninClient client_;
-  AccountTrackerService account_tracker_;
+  std::unique_ptr<AccountTrackerService> account_tracker_;
   FakeDeviceAccountsProvider* fake_provider_;
   std::unique_ptr<ProfileOAuth2TokenServiceIOSDelegate> oauth2_delegate_;
   TestingOAuth2AccessTokenManagerConsumer consumer_;
@@ -187,7 +188,7 @@ TEST_F(ProfileOAuth2TokenServiceIOSDelegateTest,
 TEST_F(ProfileOAuth2TokenServiceIOSDelegateTest,
        LoadCredentialsPrimaryAccountMissing) {
   CoreAccountId primary_account =
-      account_tracker_.SeedAccountInfo(GaiaId("gaia_1"), "email_1@x");
+      account_tracker_->SeedAccountInfo(GaiaId("gaia_1"), "email_1@x");
   oauth2_delegate_->LoadCredentials(primary_account);
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1, token_available_count_);
@@ -335,7 +336,7 @@ TEST_F(ProfileOAuth2TokenServiceIOSDelegateTest,
   base::RunLoop().RunUntilIdle();
 
   ResetObserverCounts();
-  GoogleServiceAuthError error(GoogleServiceAuthError::SERVICE_ERROR);
+  GoogleServiceAuthError error = GoogleServiceAuthError::FromServiceError("");
   oauth2_delegate_->UpdateAuthError(GetAccountId(account1), error);
   EXPECT_EQ(error, oauth2_delegate_->GetAuthError(GetAccountId(account1)));
   EXPECT_EQ(1, auth_error_changed_count_);

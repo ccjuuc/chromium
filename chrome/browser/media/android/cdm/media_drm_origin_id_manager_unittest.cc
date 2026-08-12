@@ -4,21 +4,23 @@
 
 #include "chrome/browser/media/android/cdm/media_drm_origin_id_manager.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/unguessable_token.h"
+#include "base/values.h"
 #include "chrome/browser/media/android/cdm/media_drm_origin_id_manager_factory.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -53,15 +55,31 @@ class MediaDrmOriginIdManagerTest : public testing::Test {
  public:
   // By default MediaDrmOriginIdManager will attempt to pre-provision origin
   // IDs at startup. For most tests this should be disabled.
-  void Initialize(bool enable_preprovision_at_startup = false) {
-    scoped_feature_list_.InitWithFeatureState(
-        media::kMediaDrmPreprovisioningAtStartup,
-        enable_preprovision_at_startup);
+  void Initialize(bool enable_preprovision_at_startup = false,
+                  bool enable_backoff = false) {
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    if (enable_preprovision_at_startup) {
+      enabled_features.push_back(media::kMediaDrmPreprovisioningAtStartup);
+    } else {
+      disabled_features.push_back(media::kMediaDrmPreprovisioningAtStartup);
+    }
+
+    if (enable_backoff) {
+      enabled_features.push_back(media::kMediaDrmPreprovisioningBackoff);
+    } else {
+      disabled_features.push_back(media::kMediaDrmPreprovisioningBackoff);
+    }
+
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
 
     TestingProfile::Builder profile_builder;
     profile_ = profile_builder.Build();
     origin_id_manager_ =
         MediaDrmOriginIdManagerFactory::GetForProfile(profile_.get());
+    origin_id_manager_->SetTickClockForTesting(
+        task_environment_.GetMockTickClock());
     origin_id_manager_->SetProvisioningResultCBForTesting(
         base::BindRepeating(&MediaDrmOriginIdManagerTest::GetProvisioningResult,
                             base::Unretained(this)));
@@ -95,13 +113,13 @@ class MediaDrmOriginIdManagerTest : public testing::Test {
     origin_id_manager_->PreProvisionIfNecessary();
   }
 
-  std::string DisplayPref(const base::Value::Dict& value) {
+  std::string DisplayPref(const base::DictValue& value) {
     std::optional<std::string> output = base::WriteJson(value);
     EXPECT_TRUE(output);
     return output.value_or(std::string());
   }
 
-  const base::Value::Dict& GetDict(const std::string& path) const {
+  const base::DictValue& GetDict(const std::string& path) const {
     return profile_->GetTestingPrefService()->GetDict(path);
   }
 
@@ -255,7 +273,7 @@ TEST_F(MediaDrmOriginIdManagerTest, PreProvisionFailAtStartup) {
 
   // Trigger a network connection to force pre-provisioning to run again.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
   task_environment_.RunUntilIdle();
 
   // Pre-provisioning should have run again. Should return the same result as if
@@ -293,8 +311,8 @@ TEST_F(MediaDrmOriginIdManagerTest, OriginIdNotInList) {
   DVLOG(1) << "Checking preference " << kMediaDrmOriginIds;
   auto& dict = GetDict(kMediaDrmOriginIds);
   auto* list = dict.FindList(kAvailableOriginIds);
-  EXPECT_FALSE(
-      base::Contains(*list, base::UnguessableTokenToValue(origin_id.value())));
+  EXPECT_FALSE(std::ranges::contains(
+      *list, base::UnguessableTokenToValue(origin_id.value())));
 }
 
 TEST_F(MediaDrmOriginIdManagerTest, ProvisioningFail) {
@@ -433,7 +451,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChange) {
   // Provisioning will now "succeed", so trigger a network change to
   // unconnected.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_NONE);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
   task_environment_.RunUntilIdle();
 
   // Check that |kAvailableOriginIds| is still empty.
@@ -446,7 +464,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChange) {
 
   // Now trigger a network change to connected.
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-      network::mojom::ConnectionType::CONNECTION_ETHERNET);
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
   task_environment_.RunUntilIdle();
 
   // Pre-provisioning should have run and filled up the list.
@@ -464,7 +482,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChangeFails) {
 
   EXPECT_CALL(*this, GetProvisioningResult())
       .Times(kConnectionAttempts + 1)
-      .WillOnce(Return(std::nullopt));
+      .WillRepeatedly(Return(std::nullopt));
   Initialize();
 
   EXPECT_FALSE(GetOriginId());
@@ -483,7 +501,7 @@ TEST_F(MediaDrmOriginIdManagerTest, NetworkChangeFails) {
   // after several failed attempts.
   for (size_t i = 0; i < kConnectionAttempts + 3; ++i) {
     network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_ETHERNET);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
     task_environment_.RunUntilIdle();
   }
 
@@ -514,7 +532,7 @@ TEST_F(MediaDrmOriginIdManagerTest, InvalidEntry) {
   {
     ScopedDictPrefUpdate update(profile_->GetTestingPrefService(),
                                 kMediaDrmOriginIds);
-    base::Value::List* origin_ids = update->FindList(kAvailableOriginIds);
+    base::ListValue* origin_ids = update->FindList(kAvailableOriginIds);
     EXPECT_FALSE(origin_ids->empty());
     auto first_entry = origin_ids->begin();
     *first_entry = base::Value(true);
@@ -526,5 +544,51 @@ TEST_F(MediaDrmOriginIdManagerTest, InvalidEntry) {
   // from the list.
   EXPECT_TRUE(GetOriginId());
   task_environment_.RunUntilIdle();
+  VerifyListSize();
+}
+
+TEST_F(MediaDrmOriginIdManagerTest, NetworkChangeBackoff) {
+  // Test verifies that exponential backoff ignores subsequent connection
+  // changes if the backoff timer hasn't expired, and schedules a retry
+  // when the backoff expires.
+
+  // Setup expecting:
+  // 1. First when we call GetOriginId() (fails).
+  // 2. Subsequent successful attempts.
+  EXPECT_CALL(*this, GetProvisioningResult())
+      .WillOnce(Return(std::nullopt))
+      .WillRepeatedly(InvokeWithoutArgs(&base::UnguessableToken::Create));
+
+  Initialize(/*enable_preprovision_at_startup=*/false,
+             /*enable_backoff=*/true);
+
+  // This will trigger the first provisioning attempt, which fails.
+  // This instantiates the NetworkObserver and sets up the backoff delay (10s).
+  EXPECT_FALSE(GetOriginId());
+
+  // Explicitly set the connection to NONE first so we can transition to
+  // ETHERNET.
+  network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE);
+  task_environment_.FastForwardBy(base::TimeDelta());
+
+  // Try to trigger a network change immediately to connected. This should be
+  // ignored by the backoff logic (it schedules a retry instead of immediately
+  // running), so GetProvisioningResult() should NOT be called here.
+  network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
+      net::NetworkChangeNotifier::ConnectionType::CONNECTION_ETHERNET);
+  task_environment_.FastForwardBy(base::TimeDelta());
+
+  // Check that available origin IDs in pref is still empty because the change
+  // was ignored.
+  {
+    auto& dict = GetDict(kMediaDrmOriginIds);
+    EXPECT_FALSE(dict.Find(kAvailableOriginIds));
+  }
+
+  // Fast forward past the initial backoff delay (10 seconds).
+  // The retry timer in NetworkObserver should fire.
+  task_environment_.FastForwardBy(base::Seconds(30));
+
   VerifyListSize();
 }

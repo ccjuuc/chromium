@@ -8,11 +8,13 @@ import android.net.Uri;
 import android.text.Spanned;
 import android.text.TextUtils;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.url.GURL;
 
@@ -21,6 +23,7 @@ import java.util.Set;
 /** Encapsulates all data that is necessary for the URL bar to display its contents. */
 @NullMarked
 public class UrlBarData {
+
     /** The URL schemes that don't need to be displayed complete with path. */
     public static final Set<String> SCHEMES_TO_SPLIT =
             Set.of(
@@ -53,6 +56,8 @@ public class UrlBarData {
     /** Represents an empty URL bar. */
     public static final UrlBarData EMPTY = create(null, "", 0, 0, null);
 
+    private static @Nullable Boolean sShouldShowUrlForTesting;
+
     public static UrlBarData forUrl(GURL url) {
         return forUrlAndText(url, null, null);
     }
@@ -74,9 +79,25 @@ public class UrlBarData {
         return forUrlAndText(url, displayText, null);
     }
 
+    public static void setShouldShowUrlForTesting(boolean shouldShow) {
+        sShouldShowUrlForTesting = shouldShow;
+        ResettersForTesting.register(() -> sShouldShowUrlForTesting = null);
+    }
+
     /** Returns whether supplied URL should be shown in the Omnibox/Suggestions list. */
     public static boolean shouldShowUrl(GURL gurl, boolean isOffTheRecord) {
-        return !NativePage.isChromePageUrl(gurl, isOffTheRecord) && !UrlUtilities.isNtpUrl(gurl);
+        if (sShouldShowUrlForTesting != null) {
+            return sShouldShowUrlForTesting;
+        }
+
+        boolean shouldSuppress =
+                // Don't show the NTP URL
+                UrlUtilities.isNtpUrl(gurl)
+                        // Don't show other Chrome URLs on mobile devices.
+                        || (!OmniboxCapabilities.isDesktopPlatform()
+                                && NativePage.isChromePageUrl(gurl, isOffTheRecord));
+
+        return !shouldSuppress;
     }
 
     /**

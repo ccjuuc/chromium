@@ -44,15 +44,11 @@ OverlayStrategyUnderlayCast::~OverlayStrategyUnderlayCast() = default;
 
 void OverlayStrategyUnderlayCast::Propose(
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_pass_list,
     SurfaceDamageRectList* surface_damage_rect_list,
     const std::optional<OverlayCandidate>& primary_plane,
-    std::vector<OverlayProposedCandidate>* candidates,
-    std::vector<gfx::Rect>* content_bounds) {
+    std::vector<OverlayProposedCandidate>* candidates) {
   auto* render_pass = render_pass_list->back().get();
   QuadList& quad_list = render_pass->quad_list;
   OverlayCandidate candidate;
@@ -63,8 +59,7 @@ void OverlayStrategyUnderlayCast::Propose(
   context.supports_mask_filter = true;
   OverlayCandidateFactory candidate_factory = OverlayCandidateFactory(
       render_pass, resource_provider, surface_damage_rect_list,
-      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane),
-      &render_pass_filters, context);
+      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane), context);
 
   // Original code did reverse iteration.
   // Here we do forward but find the last one. which should be the same thing.
@@ -94,15 +89,11 @@ void OverlayStrategyUnderlayCast::Propose(
 
 bool OverlayStrategyUnderlayCast::Attempt(
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_pass_list,
     SurfaceDamageRectList* surface_damage_rect_list,
     const std::optional<OverlayCandidate>& primary_plane,
     OverlayCandidateList* candidate_list,
-    std::vector<gfx::Rect>* content_bounds,
     const OverlayProposedCandidate& proposed_candidate) {
   // Before we attempt an overlay strategy, the candidate list should be empty.
   DCHECK(candidate_list->empty());
@@ -116,8 +107,7 @@ bool OverlayStrategyUnderlayCast::Attempt(
 
   OverlayCandidateFactory candidate_factory = OverlayCandidateFactory(
       render_pass, resource_provider, surface_damage_rect_list,
-      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane),
-      &render_pass_filters, context);
+      &output_color_matrix, GetPrimaryPlaneDisplayRect(primary_plane), context);
 
   for (const auto* quad : base::Reversed(quad_list)) {
     if (OverlayCandidate::IsInvisibleQuad(quad))
@@ -177,10 +167,6 @@ bool OverlayStrategyUnderlayCast::Attempt(
     }
   }
 
-  DCHECK(content_bounds && content_bounds->empty());
-  if (found_underlay) {
-    content_bounds->push_back(content_rect);
-  }
   return found_underlay;
 }
 

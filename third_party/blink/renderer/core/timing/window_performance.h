@@ -31,11 +31,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_WINDOW_PERFORMANCE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_WINDOW_PERFORMANCE_H_
 
-#include <optional>
-
+#include "base/feature_list.h"
 #include "base/time/time.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "third_party/blink/public/mojom/timing/resource_timing.mojom-blink-forward.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_navigation_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/events/pointer_event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
@@ -43,15 +43,17 @@
 #include "third_party/blink/renderer/core/page/page_visibility_observer.h"
 #include "third_party/blink/renderer/core/timing/event_counts.h"
 #include "third_party/blink/renderer/core/timing/memory_info.h"
-#include "third_party/blink/renderer/core/timing/navigation_id_generator.h"
 #include "third_party/blink/renderer/core/timing/performance.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
 #include "third_party/blink/renderer/core/timing/performance_event_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_navigation.h"
+#include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
 #include "third_party/blink/renderer/core/timing/performance_timing.h"
 #include "third_party/blink/renderer/core/timing/responsiveness_metrics.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
+#include "ui/events/types/scroll_input_type.h"
 
 namespace viz {
 class FrameTimingDetails;
@@ -60,8 +62,13 @@ class FrameTimingDetails;
 namespace blink {
 
 class AnimationFrameTimingInfo;
+class InteractionContentfulPaint;
 class InteractiveDetector;
+class LocalDOMWindow;
+class Node;
+class PerformanceSoftNavigation;
 class PerformanceTimingForReporting;
+class SoftNavigationContext;
 
 class CORE_EXPORT WindowPerformance final : public Performance,
                                             public PerformanceMonitor::Client,
@@ -76,6 +83,10 @@ class CORE_EXPORT WindowPerformance final : public Performance,
 
   static base::TimeTicks GetTimeOrigin(LocalDOMWindow* window);
 
+  // Clears any metrics state that should not persist when the initially empty
+  // document is cleared.
+  static void ClearForWindowReuse(LocalDOMWindow&);
+
   ExecutionContext* GetExecutionContext() const override;
 
   PerformanceTiming* timing() const override;
@@ -85,10 +96,27 @@ class CORE_EXPORT WindowPerformance final : public Performance,
   MemoryInfo* memory(ScriptState*) const override;
 
   EventCounts* eventCounts() override;
+  SpeculationData* getSpeculations() override;
+  // Stash a pending destination URL for an outgoing non-same-document,
+  // same-origin navigation. Held as "pending" so that a later cancellation
+  // (e.g. beforeunload, network error) does not leave a stale URL exposed.
+  void SetPendingNavigationDestinationURL(const KURL& url) {
+    pending_navigation_destination_url_ = url;
+  }
+  // Promote the pending URL to the publicly observable
+  // navigationDestinationURL. Should be invoked once the navigation is past
+  // any cancellation point (i.e. just before pagehide is dispatched).
+  void PromoteNavigationDestinationURL() {
+    navigation_destination_url_ = pending_navigation_destination_url_;
+  }
   uint64_t interactionCount() const override;
 
   void PopulateContainerTimingEntries() override;
   void SetHasContainerTimingChanges();
+
+  // Caches the runtime feature flag (and origin trial) to see if
+  // ContainerTiming support is enabled
+  bool IsContainerTimingEnabled();
 
   bool FirstInputDetected() const { return !!first_input_timing_; }
 
@@ -99,15 +127,17 @@ class CORE_EXPORT WindowPerformance final : public Performance,
   // There might be nested events being dispatched (e.g. `input` event nested
   // inside a raw pointer event), but the RAII class `EventTiming` uses the
   // stack to manage calling these functions (from constructor/destructor).
-  // This means that calls to End will be in LIFO often with Start.
+  // This means that calls to End will be in LIFO order w.r.t. Start.
   //
   // Will create a `PerformanceEventTiming`, and if needed, requests the next
   // presentation time to calculate the full |duration| to next paint.
-  void EventTimingProcessingStart(const Event& event,
-                                  base::TimeTicks processing_start,
-                                  EventTarget* hit_test_target);
-  void EventTimingProcessingEnd(const Event& event,
-                                base::TimeTicks processing_end);
+  //
+  // This method requires a DomWindow, a Frame, and an execution context; the
+  // caller must check for that.
+  // It will always return an instance of PerformanceEventTiming.
+  PerformanceEventTiming* EventTimingProcessingStart(const Event& event);
+  void EventTimingProcessingEnd(PerformanceEventTiming* entry,
+                                const Event& event);
 
   // Set commit finish time for all pending events that have finished processing
   // and are watiting for presentation promise to resolve.
@@ -140,6 +170,11 @@ class CORE_EXPORT WindowPerformance final : public Performance,
                           Element* last_painted_element,
                           const DOMPaintTimingInfo& first_paint_timing_info);
 
+  void AddScrollTiming(base::TimeTicks start_time,
+                       base::TimeTicks end_time,
+                       ui::ScrollInputType input_type,
+                       Node* target);
+
   void OnBodyLoadFinished(int64_t encoded_body_size, int64_t decoded_body_size);
   void QueueLongAnimationFrameTiming(
       AnimationFrameTimingInfo*,
@@ -155,26 +190,26 @@ class CORE_EXPORT WindowPerformance final : public Performance,
                       ExecutionContext* task_context,
                       bool has_multiple_contexts) override;
 
+  void markConditional(ScriptState*, const AtomicString& mark_name) override;
+
   void AddLayoutShiftEntry(LayoutShift*);
   void AddVisibilityStateEntry(bool is_visible, base::TimeTicks start_time);
-  void AddSoftNavigationEntry(const AtomicString& name,
-                              base::TimeTicks start_time,
-                              const DOMPaintTimingInfo& paint_timing_info,
-                              uint32_t navigation_id);
+  PerformanceSoftNavigation* AddSoftNavigation(
+      base::TimeTicks start_time,
+      const DOMPaintTimingInfo& paint_timing_info,
+      SoftNavigationContext* context);
 
   // For soft navigations and back-forward cache restoration. This increments
   // the navigation ID, as specified in
   // https://w3c.github.io/performance-timeline/.
-  void IncrementNavigationId() {
-    navigation_id_generator_.IncrementNavigationId();
-  }
+  void IncrementNavigationId() { navigation_id_generator_.IncrementId(); }
 
   // Returns the navigation ID, as specified in
   // https://w3c.github.io/performance-timeline/; this appears as navigationId
   // in https://developer.mozilla.org/en-US/docs/Web/API/PerformanceEntry
   // instances.
-  uint32_t NavigationId() const override {
-    return navigation_id_generator_.NavigationId();
+  uint64_t NavigationId() const override {
+    return navigation_id_generator_.GetValue().id;
   }
 
   // PageVisibilityObserver
@@ -189,14 +224,8 @@ class CORE_EXPORT WindowPerformance final : public Performance,
       const AtomicString& id,
       const String& url,
       Element*);
-  void OnInteractionContentfulPaintUpdated(
-      const DOMPaintTimingInfo& paint_timing_info,
-      uint64_t paint_size,
-      base::TimeTicks load_time,
-      const AtomicString& id,
-      const String& url,
-      Element*,
-      uint32_t navigation_id);
+
+  void OnInteractionContentfulPaintUpdated(InteractionContentfulPaint*);
 
   void Trace(Visitor*) const override;
 
@@ -205,6 +234,13 @@ class CORE_EXPORT WindowPerformance final : public Performance,
   }
 
   const Event* GetCurrentEventTimingEvent() { return current_event_.Get(); }
+
+  PerformanceEventTiming* GetTopMostEventTimingEntry() const {
+    if (active_event_timing_entries_.empty()) {
+      return nullptr;
+    }
+    return active_event_timing_entries_.front();
+  }
 
   void CreateNavigationTimingInstance(
       mojom::blink::ResourceTimingInfoPtr navigation_resource_timing);
@@ -232,27 +268,24 @@ class CORE_EXPORT WindowPerformance final : public Performance,
       const viz::FrameTimingDetails& presentation_details);
   // Report buffered events with presentation time following their registered
   // order; stop as soon as seeing an event with pending presentation promise.
-  void ReportEventTimings();
-  void ReportEvent(InteractiveDetector* interactive_detector,
-                   Member<PerformanceEventTiming> event_timing_entry);
+  void TryFlushEventTimingQueue();
+  void FlushEventTiming(InteractiveDetector* interactive_detector,
+                        Member<PerformanceEventTiming> event_timing_entry,
+                        PerformanceEventTiming* primary_entry);
 
-  void DispatchFirstInputTiming(PerformanceEventTiming* entry);
-
-  // Assign an interaction id to an event timing entry if needed. Also records
-  // the interaction latency. Returns true if the entry is ready to be surfaced
-  // in PerformanceObservers and the Performance Timeline
-  bool SetInteractionIdAndRecordLatency(
-      PerformanceEventTiming* entry,
-      ResponsivenessMetrics::EventTimestamps event_timestamps);
+  void TryReportAsFirstInputTiming(PerformanceEventTiming* event_timing_entry);
 
   // Notify observer that an event timing entry is ready and add it to the event
   // timing buffer if needed.
-  void NotifyAndAddEventTimingBuffer(PerformanceEventTiming* entry);
+  void ReportEventTimingToPerformanceTimeline(
+      PerformanceEventTiming* entry,
+      PerformanceEventTiming* primary_entry);
 
-  void ReportFirstInputTiming(PerformanceEventTiming* event_timing_entry);
+  template <typename Callback>
+  void IterateEventTimingsByAnimationFrame(uint64_t frame_index,
+                                           Callback callback);
 
-  void SchedulePendingRenderCoarsenedEntries(base::TimeTicks target_time);
-  void FlushPendingRenderCoarsenedEntries();
+  void ApplyContextMenuFallbackToPendingEvents(base::TimeTicks fallback_time);
 
   // The last time the page visibility was changed.
   base::TimeTicks last_hidden_timestamp_;
@@ -265,16 +298,24 @@ class CORE_EXPORT WindowPerformance final : public Performance,
   // frame source id from presentation feedback to identify GPU crashes.
   // crbug.com/324877581
   uint64_t begin_main_frame_source_id_ = 0;
-  // Controls if we register a new presentation promise upon events arrival.
-  bool need_new_promise_for_event_presentation_time_ = true;
-  // Counts the total number of presentation promises we've registered for
-  // events' presentation feedback since the beginning.
-  uint64_t event_presentation_promise_count_ = 0;
+  // Event Timing entries are grouped together by animation frame (or by task
+  // for cases where there is no next paint).
+  uint64_t current_frame_index_ = 1;
+  // This value tracks the last time we requested presentation time, in order to
+  // make sure we request at most once per animation frame, and only if at least
+  // one event in that group actually requires visual feedback
+  // (NeedsNextPaintMeasurement).
+  // TODO(crbug.com/40821329): Integration with PaintTimingMixin should remove
+  // the need to manually track this.
+  uint64_t last_presentation_requested_for_frame_index_ = 0;
 
   // Store all event timing and latency related data, including
-  // PerformanceEventTiming, presentation_index, keycode and pointerId.
+  // PerformanceEventTiming, frame_index, keycode and pointerId.
   // We use the data to calculate events latencies.
   HeapVector<Member<PerformanceEventTiming>> event_timing_entries_;
+
+  HeapVector<Member<PerformanceEventTiming>> active_event_timing_entries_;
+
   Member<PerformanceEventTiming> first_pointer_down_event_timing_;
   Member<EventCounts> event_counts_;
   mutable Member<PerformanceNavigation> navigation_;
@@ -300,16 +341,27 @@ class CORE_EXPORT WindowPerformance final : public Performance,
   // these interactions.
   bool autoscroll_active_ = false;
 
+  std::optional<bool> container_timing_enabled_;
   bool has_container_timing_changes_ = false;
 
   // Calculate responsiveness metrics and record UKM for them.
   Member<ResponsivenessMetrics> responsiveness_metrics_;
+
   // The event we are currently processing.
   WeakMember<const Event> current_event_;
 
   // Implements the "assign a new navigation id" algorithm described in
   // https://w3c.github.io/performance-timeline/
-  NavigationIdGenerator navigation_id_generator_;
+  PerformanceTimelineEntryIdGenerator navigation_id_generator_;
+
+  // Stashed destination URL of an in-flight outgoing non-same-document,
+  // same-origin navigation. Promoted to `navigation_destination_url_` once
+  // the navigation is past the point of being canceled.
+  KURL pending_navigation_destination_url_;
+  // The publicly observable navigationDestinationURL exposed via
+  // SpeculationData. Only set once the navigation is past the point of being
+  // canceled (e.g. by beforeunload).
+  KURL navigation_destination_url_;
 };
 
 }  // namespace blink

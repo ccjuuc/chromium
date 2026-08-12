@@ -7,6 +7,7 @@
 #import "base/memory/ptr_util.h"
 #import "ios/chrome/browser/broadcaster/ui_bundled/chrome_broadcast_observer_bridge.h"
 #import "ios/chrome/browser/broadcaster/ui_bundled/chrome_broadcaster.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_system_notification_observer.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/fullscreen/toolbars_size.h"
@@ -29,11 +30,18 @@ FullscreenControllerImpl::FullscreenControllerImpl(Browser* browser)
       notification_observer_([[FullscreenSystemNotificationObserver alloc]
           initWithController:this
                     mediator:&mediator_]) {
-  DCHECK(broadcaster_);
+  CHECK(broadcaster_);
+
+  // TODO(crbug.com/500417603): This can be removed once all calls to
+  // FullscreenController are flag guarded.
+  if (IsFullscreenRefactoringEnabled()) {
+    return;
+  }
+
   web_state_list_observer_.SetWebStateList(browser->GetWebStateList());
-  [broadcaster_ addObserver:bridge_
-                forSelector:@selector(broadcastScrollViewContentSize:)];
-  if (base::FeatureList::IsEnabled(web::features::kSmoothScrollingDefault)) {
+  if (web::features::ShouldUseBroadcasterForSmoothScrolling()) {
+    [broadcaster_ addObserver:bridge_
+                  forSelector:@selector(broadcastScrollViewContentSize:)];
     [broadcaster_ addObserver:bridge_
                   forSelector:@selector(broadcastScrollViewSize:)];
     [broadcaster_ addObserver:bridge_
@@ -64,9 +72,9 @@ FullscreenControllerImpl::~FullscreenControllerImpl() {
   mediator_.Disconnect();
   web_state_list_observer_.Disconnect();
   [notification_observer_ disconnect];
-  [broadcaster_ removeObserver:bridge_
-                   forSelector:@selector(broadcastScrollViewContentSize:)];
-  if (base::FeatureList::IsEnabled(web::features::kSmoothScrollingDefault)) {
+  if (web::features::ShouldUseBroadcasterForSmoothScrolling()) {
+    [broadcaster_ removeObserver:bridge_
+                     forSelector:@selector(broadcastScrollViewContentSize:)];
     [broadcaster_ removeObserver:bridge_
                      forSelector:@selector(broadcastScrollViewSize:)];
     [broadcaster_ removeObserver:bridge_
@@ -155,12 +163,12 @@ void FullscreenControllerImpl::EnterFullscreen() {
 
 // Needs to be cleanup.
 void FullscreenControllerImpl::ExitFullscreen() {
-  mediator_.ExitFullscreen(FullscreenExitReason::kForcedByCode);
+  mediator_.ExitFullscreen(FullscreenModeTransitionTrigger::kForcedByCode);
 }
 
 void FullscreenControllerImpl::ExitFullscreen(
-    FullscreenExitReason fullscreen_exit_reason) {
-  mediator_.ExitFullscreen(fullscreen_exit_reason);
+    FullscreenModeTransitionTrigger fullscreen_exit_trigger) {
+  mediator_.ExitFullscreen(fullscreen_exit_trigger);
 }
 
 void FullscreenControllerImpl::ExitFullscreenWithoutAnimation() {
@@ -172,25 +180,17 @@ bool FullscreenControllerImpl::IsForceFullscreenMode() const {
 }
 
 void FullscreenControllerImpl::EnterForceFullscreenMode(
-    bool insets_update_enabled) {
-  model_->SetForceFullscreenMode(true);
-  model_->SetInsetsUpdateEnabled(insets_update_enabled);
-  // Disable fullscreen because:
-  // - It interfers with the animation when moving the secondary toolbar above
-  // the keyboard.
-  // - Fullscreen should not resize the toolbar it's above the keyboard.
-  IncrementDisabledCounter();
-  mediator_.ForceEnterFullscreen();
+    bool insets_update_enabled,
+    FullscreenModeTransitionTrigger trigger) {
+  mediator_.ForceEnterFullscreen(insets_update_enabled, trigger);
 }
 
-void FullscreenControllerImpl::ExitForceFullscreenMode() {
+void FullscreenControllerImpl::ExitForceFullscreenMode(
+    FullscreenModeTransitionTrigger trigger) {
   if (!IsForceFullscreenMode()) {
     return;
   }
-  DecrementDisabledCounter();
-  model_->SetForceFullscreenMode(false);
-  model_->SetInsetsUpdateEnabled(true);
-  mediator_.ExitFullscreenWithoutAnimation();
+  mediator_.ForceExitFullscreen(trigger);
 }
 
 void FullscreenControllerImpl::ResizeHorizontalViewport() {

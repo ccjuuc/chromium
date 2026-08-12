@@ -5,12 +5,12 @@
 #include "chrome/browser/ui/views/profiles/profiles_pixel_test_utils.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/scoped_environment_variable_override.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/common/chrome_features.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
@@ -18,6 +18,7 @@
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/signin/public/identity_manager/tribool.h"
+#include "content/public/test/browser_test_utils.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/image/image_skia.h"
@@ -40,7 +41,7 @@ AccountInfo FillAccountInfo(
           .SetLocale("en")
           .SetAvatarUrl("https://example.com")
           .Build();
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_enterprise_features(
       management_status == AccountManagementStatus::kManaged);
 
@@ -52,6 +53,40 @@ AccountInfo FillAccountInfo(
   }
 
   return account_info;
+}
+
+std::string GetWaitForAnimationsScript(std::string_view component_name) {
+  return content::JsReplace(
+      R"(
+        (async () => {
+          const componentName = $1;
+          await customElements.whenDefined(componentName);
+          const component = document.querySelector(componentName);
+          if (!component) {
+            return false;
+          }
+
+          await component.updateComplete;
+
+          const anims = component.shadowRoot.querySelectorAll('cr-lottie');
+          if (anims.length === 0) {
+            return false;
+          }
+
+          await Promise.all(Array.from(anims, anim => {
+            return new Promise(resolve => {
+              if (anim.isAnimationLoaded_) {
+                resolve(true);
+              } else {
+                anim.addEventListener('cr-lottie-initialized',
+                                      () => resolve(true), {once: true});
+              }
+            });
+          }));
+          return true;
+        })();
+      )",
+      component_name);
 }
 
 AccountInfo SignInWithAccount(

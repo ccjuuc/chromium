@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/image-encoders/image_encoder.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 
 namespace blink {
@@ -162,15 +163,25 @@ File* DataObjectItem::GetAsFile() const {
     const uint64_t length = data->length();
     auto blob = BlobDataHandle::Create(std::move(data), length);
     return MakeGarbageCollected<File>(
-        DecodeURLEscapeSequences(base_url_.LastPathComponent(),
-                                 DecodeURLMode::kUTF8OrIsomorphic),
+        DecodeUrlEscapeSequences(base_url_.LastPathComponent(),
+                                 DecodeUrlMode::kUtf8OrIsomorphic),
         base::Time::Now(), std::move(blob));
   }
 
   DCHECK_EQ(source_, DataSource::kClipboardSource);
+  // Verify that the clipboard has not changed since the item was created.
+  // See crbug.com/501920294.
+  if (system_clipboard_->SequenceNumber() != sequence_number_) {
+    return nullptr;
+  }
+
   if (GetType() == ui::kMimeTypePng) {
-    mojo_base::BigBuffer png_data =
-        system_clipboard_->ReadPng(mojom::blink::ClipboardBuffer::kStandard);
+    mojom::blink::ClipboardBuffer buffer =
+        RuntimeEnabledFeatures::ClipboardPasteImageRespectBufferEnabled() &&
+                system_clipboard_->IsSelectionMode()
+            ? mojom::blink::ClipboardBuffer::kSelection
+            : mojom::blink::ClipboardBuffer::kStandard;
+    mojo_base::BigBuffer png_data = system_clipboard_->ReadPng(buffer);
 
     auto data = std::make_unique<BlobData>();
     data->SetContentType(ui::kMimeTypePng);

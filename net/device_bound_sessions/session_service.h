@@ -6,15 +6,23 @@
 #define NET_DEVICE_BOUND_SESSIONS_SESSION_SERVICE_H_
 
 #include <memory>
+#include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ref.h"
+#include "base/time/time.h"
 #include "net/base/net_export.h"
+#include "net/device_bound_sessions/cookie_access_check_params.h"
 #include "net/device_bound_sessions/deletion_reason.h"
+#include "net/device_bound_sessions/refresh_result.h"
 #include "net/device_bound_sessions/registration_fetcher_param.h"
 #include "net/device_bound_sessions/session.h"
 #include "net/device_bound_sessions/session_access.h"
 #include "net/device_bound_sessions/session_challenge_param.h"
+#include "net/device_bound_sessions/session_display.h"
+#include "net/device_bound_sessions/session_event.h"
 #include "net/device_bound_sessions/session_key.h"
 #include "net/log/net_log_with_source.h"
 
@@ -23,16 +31,51 @@ class FirstPartySetMetadata;
 class IsolationInfo;
 class URLRequestContext;
 class HttpRequestHeaders;
+class SSLCertRequestInfo;
+class X509Certificate;
+class SSLPrivateKey;
 }  // namespace net
 
 namespace net::device_bound_sessions {
+
+// Result of prewarming DBSC sessions for a URL.
+struct NET_EXPORT SessionPrewarmResult {
+  std::vector<RefreshResult> results;
+  base::Time earliest_next_refresh_time = base::Time::Max();
+
+  bool operator==(const SessionPrewarmResult&) const = default;
+};
+
+// Callback invoked when a client certificate selection has finished.
+// `cert` and `key` are the selected certificate and its private key. Both are
+// null if no certificate was selected or the request was cancelled.
+// `cancel` is true if the request should be aborted (e.g. user cancelled the
+// prompt), or false if it should continue (either with a certificate or without
+// one).
+using SelectClientCertificateCallback =
+    base::OnceCallback<void(scoped_refptr<X509Certificate> cert,
+                            scoped_refptr<SSLPrivateKey> key,
+                            bool cancel)>;
+
+// Handler invoked by the SessionService to select a client certificate for a
+// Device Bound session request (registration or refresh).
+// When the certificate selection is complete, the handler must run the
+// provided `callback`.
+using SelectClientCertificateHandler =
+    base::RepeatingCallback<void(const GURL& url,
+                                 scoped_refptr<SSLCertRequestInfo> cert_info,
+                                 SelectClientCertificateCallback callback)>;
 
 // Main class for Device Bound Session Credentials (DBSC).
 // Full information can be found at https://github.com/WICG/dbsc
 class NET_EXPORT SessionService {
  public:
   using OnAccessCallback = base::RepeatingCallback<void(const SessionAccess&)>;
+  using OnEventCallback = base::RepeatingCallback<void(const SessionEvent&)>;
   using RefreshCompleteCallback = base::OnceCallback<void(RefreshResult)>;
+  using CookieAccessCallback =
+      base::RepeatingCallback<bool(const CookieAccessCheckParams&)>;
+  using PrewarmCallback = base::OnceCallback<void(SessionPrewarmResult)>;
 
   // Indicates the reason for deferring. Exactly one of
   // `is_pending_initialization` or `session_id` will be truthy.
@@ -68,13 +111,16 @@ class NET_EXPORT SessionService {
     // The challenge used to generate `signed_challenge`.
     std::string challenge;
     // The key_id used to generate `signed_challenge`.
-    unexportable_keys::UnexportableKeyId key_id;
+    unexportable_keys::UnexportableSigningKeyId key_id;
   };
 
   // Returns nullptr if unexportable key provider is not supported by the
   // platform or the device.
   static std::unique_ptr<SessionService> Create(
-      const URLRequestContext* request_context);
+      const URLRequestContext* request_context,
+      const std::vector<SchemefulSite>& restricted_sites,
+      SelectClientCertificateHandler client_cert_handler,
+      CookieAccessCallback has_cookie_access_cb = base::NullCallback());
 
   SessionService(const SessionService&) = delete;
   SessionService& operator=(const SessionService&) = delete;
@@ -137,6 +183,12 @@ class NET_EXPORT SessionService {
   virtual void GetAllSessionsAsync(
       base::OnceCallback<void(const std::vector<SessionKey>&)> callback) = 0;
 
+  // Get all sessions and return a list of display sessions. If sessions
+  // have not yet been loaded from disk, defer until completely initialized.
+  virtual void GetAllSessionDisplaysAsync(
+      base::OnceCallback<void(const std::vector<SessionDisplay>&)>
+          callback) = 0;
+
   // Delete the session matching `session_key`, notifying
   // `per_request_callback` about any deletions.
   virtual void DeleteSessionAndNotify(
@@ -161,6 +213,10 @@ class NET_EXPORT SessionService {
   virtual base::ScopedClosureRunner AddObserver(
       const GURL& url,
       base::RepeatingCallback<void(const SessionAccess&)> callback) = 0;
+
+  // Add an observer for DBSC events. This is used for DevTools.
+  virtual base::CallbackListSubscription AddEventObserver(
+      OnEventCallback callback) = 0;
 
   // Get a session by key, or `nullptr` if no such session exists.
   virtual const Session* GetSession(const SessionKey& session_key) const = 0;
@@ -192,10 +248,26 @@ class NET_EXPORT SessionService {
 
   // Helper function to handle the registration and challenge headers provided
   // in `headers` on the response to `request`.
-  void HandleResponseHeaders(
+  virtual void HandleResponseHeaders(
       DbscRequest& request,
       HttpResponseHeaders* headers,
-      const FirstPartySetMetadata& first_party_set_metadata);
+      const FirstPartySetMetadata& first_party_set_metadata) = 0;
+
+  virtual void SelectClientCertificate(
+      const GURL& url,
+      scoped_refptr<SSLCertRequestInfo> cert_info,
+      SelectClientCertificateCallback callback) = 0;
+
+  // Evaluates all DBSC sessions matching `url` to determine if their required
+  // cookies are missing or expiring soon. If a refresh is needed, initiates
+  // background proactive refreshes and invokes `callback` asynchronously when
+  // all concurrent evaluations and refreshes complete, passing a
+  // `SessionPrewarmResult` containing a vector of `RefreshResult` outcomes and
+  // an absolute `base::Time` timestamp for `earliest_next_refresh_time`. If
+  // `url` is invalid or no matching sessions are found, `callback` is invoked
+  // asynchronously with an empty `SessionPrewarmResult`.
+  virtual void PrewarmSessionsForUrl(const GURL& url,
+                                     PrewarmCallback callback) = 0;
 
  protected:
   SessionService() = default;

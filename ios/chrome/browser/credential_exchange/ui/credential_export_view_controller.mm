@@ -4,10 +4,12 @@
 
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller.h"
 
+#import "base/apple/foundation_util.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/credential_exchange/public/metrics.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_constants.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_favicon_provider.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller_presentation_delegate.h"
@@ -88,6 +90,9 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 #pragma mark - Actions
 
 - (void)didTapDone {
+  LogCredentialExportScreenAction(
+      CredentialExportScreenAction::kContinuePressed);
+
   NSArray<NSIndexPath*>* selectedIndexPaths =
       self.tableView.indexPathsForSelectedRows;
   NSMutableArray<CredentialGroupIdentifier*>* selectedItems =
@@ -107,14 +112,39 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
   NSUInteger totalCount = _affiliatedGroups.size();
 
   if (selectedCount == totalCount) {
+    LogCredentialExportScreenAction(
+        CredentialExportScreenAction::kDeselectAllPressed);
     [self deselectAllItems];
   } else {
+    LogCredentialExportScreenAction(
+        CredentialExportScreenAction::kSelectAllPressed);
     [self selectAllItems];
   }
 }
 
 - (void)didTapExportCSV {
-  // TODO(crbug.com/40284755): Implement export selected passwords to csv.
+  LogCredentialExportScreenAction(
+      CredentialExportScreenAction::kDownloadToCSVPressed);
+
+  std::vector<password_manager::CredentialUIEntry> credentialsToExport;
+
+  for (NSIndexPath* path in self.tableView.indexPathsForSelectedRows) {
+    CredentialGroupIdentifier* item =
+        [_dataSource itemIdentifierForIndexPath:path];
+
+    const password_manager::AffiliatedGroup& group = item.affiliatedGroup;
+
+    base::span<const password_manager::CredentialUIEntry> credentialEntries =
+        group.GetCredentials();
+
+    for (const password_manager::CredentialUIEntry& entry : credentialEntries) {
+      if (entry.passkey_credential_id.empty()) {
+        credentialsToExport.push_back(entry);
+      }
+    }
+  }
+
+  [self.delegate exportCredentialsToCSV:std::move(credentialsToExport)];
 }
 
 #pragma mark - CredentialExportConsumer
@@ -207,7 +237,6 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
                   completion:completion];
 }
 
-// TODO(crbug.com/454566693): Add EGTest.
 // Updates the title and button states based on the selected items.
 - (void)updateUIForSelection {
   CHECK_GT(_affiliatedGroups.size(), 0U);
@@ -302,7 +331,7 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 // Creates the menu button for the toolbar.
 - (UIBarButtonItem*)createExportMenuButton {
   UIImage* icon =
-      DefaultSymbolTemplateWithPointSize(kMenuSymbol, kSymbolActionPointSize);
+      SymbolTemplateWithPointSize(SymbolMenu, kSymbolActionPointSize);
 
   UIBarButtonItem* button =
       [[UIBarButtonItem alloc] initWithImage:icon
@@ -318,15 +347,15 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 - (UIMenu*)createExportMenuEnabled:(BOOL)enabled {
   __weak __typeof(self) weakSelf = self;
 
-  UIAction* exportAction = [UIAction
-      actionWithTitle:l10n_util::GetNSString(
-                          IDS_IOS_EXPORT_PASSWORDS_DOWNLOAD_CSV)
-                image:DefaultSymbolWithPointSize(kArrowDownToLineSymbol,
-                                                 kSymbolActionPointSize)
-           identifier:nil
-              handler:^(UIAction* action) {
-                [weakSelf didTapExportCSV];
-              }];
+  UIAction* exportAction =
+      [UIAction actionWithTitle:l10n_util::GetNSString(
+                                    IDS_IOS_EXPORT_PASSWORDS_DOWNLOAD_CSV)
+                          image:SymbolWithPointSize(SymbolArrowDownToLine,
+                                                    kSymbolActionPointSize)
+                     identifier:nil
+                        handler:^(UIAction* action) {
+                          [weakSelf didTapExportCSV];
+                        }];
 
   if (!enabled) {
     exportAction.attributes = UIMenuElementAttributesDisabled;
@@ -361,7 +390,10 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 
   const password_manager::AffiliatedGroup& group = identifier.affiliatedGroup;
 
-  [self configureCell:cell withGroup:group identifier:identifier];
+  [self configureCell:cell
+            withGroup:group
+           identifier:identifier
+          atIndexPath:indexPath];
   [self updateAccessibilityTraitsForCell:cell indexPath:indexPath];
 
   return cell;
@@ -370,7 +402,8 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 // Helper to configure the cell.
 - (void)configureCell:(UITableViewCell*)cell
             withGroup:(const password_manager::AffiliatedGroup&)group
-           identifier:(CredentialGroupIdentifier*)identifier {
+           identifier:(CredentialGroupIdentifier*)identifier
+          atIndexPath:(NSIndexPath*)indexPath {
   TableViewCellContentConfiguration* contentConfig =
       [[TableViewCellContentConfiguration alloc] init];
 
@@ -382,7 +415,9 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
   contentConfig.subtitleNumberOfLines = 1;
   contentConfig.subtitleLineBreakMode = NSLineBreakByTruncatingTail;
 
-  [self loadFaviconForContentConfiguration:contentConfig identifier:identifier];
+  [self loadFaviconForContentConfiguration:contentConfig
+                                identifier:identifier
+                               atIndexPath:indexPath];
 
   cell.contentConfiguration = contentConfig;
   cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -393,11 +428,40 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
   cell.selectedBackgroundView = selectedBackgroundView;
 }
 
+// Called when a favicon is fetched.
+- (void)didFetchFaviconAttributes:(FaviconAttributes*)attributes
+                           cached:(bool)cached
+                    configuration:
+                        (TableViewCellContentConfiguration*)contentConfig
+                       identifier:(CredentialGroupIdentifier*)identifier
+                        indexPath:(NSIndexPath*)indexPath {
+  if (cached) {
+    FaviconContentConfiguration* newFaviconConfig =
+        [[FaviconContentConfiguration alloc] init];
+    newFaviconConfig.faviconAttributes = attributes;
+    contentConfig.leadingConfiguration = newFaviconConfig;
+  } else if (attributes.faviconImage) {
+    if ([_dataSource indexPathForItemIdentifier:identifier] != indexPath) {
+      return;
+    }
+    UITableViewCell* cell = [self.tableView cellForRowAtIndexPath:indexPath];
+    TableViewCellContentConfiguration* configuration =
+        base::apple::ObjCCastStrict<TableViewCellContentConfiguration>(
+            cell.contentConfiguration);
+    FaviconContentConfiguration* newFaviconConfig =
+        [[FaviconContentConfiguration alloc] init];
+    newFaviconConfig.faviconAttributes = attributes;
+    configuration.leadingConfiguration = newFaviconConfig;
+    cell.contentConfiguration = configuration;
+  }
+}
+
 // Helper to load favicon and update configuration.
 - (void)loadFaviconForContentConfiguration:
             (TableViewCellContentConfiguration*)contentConfig
                                 identifier:
-                                    (CredentialGroupIdentifier*)identifier {
+                                    (CredentialGroupIdentifier*)identifier
+                               atIndexPath:(NSIndexPath*)indexPath {
   FaviconContentConfiguration* faviconConfiguration =
       [[FaviconContentConfiguration alloc] init];
   contentConfig.leadingConfiguration = faviconConfiguration;
@@ -412,14 +476,11 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
   [self.faviconProvider
       fetchFaviconForURL:URL
               completion:^(FaviconAttributes* attributes, BOOL cached) {
-                if (cached) {
-                  FaviconContentConfiguration* newFaviconConfig =
-                      [[FaviconContentConfiguration alloc] init];
-                  newFaviconConfig.faviconAttributes = attributes;
-                  contentConfig.leadingConfiguration = newFaviconConfig;
-                } else if (attributes.faviconImage) {
-                  [weakSelf reconfigureItem:identifier];
-                }
+                [weakSelf didFetchFaviconAttributes:attributes
+                                             cached:cached
+                                      configuration:contentConfig
+                                         identifier:identifier
+                                          indexPath:indexPath];
               }];
 }
 

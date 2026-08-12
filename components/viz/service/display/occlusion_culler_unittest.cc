@@ -107,7 +107,8 @@ class OcclusionCullerTest : public testing::Test {
         shared_quad_state, rect, rect, needs_blending, resource_id,
         /*top_left=*/gfx::PointF(),
         /*bottom_right=*/gfx::PointF(), SkColors::kBlack, nearest_neighbor,
-        /*secure_output=*/false, gfx::ProtectedVideoType::kClear);
+        /*secure_output=*/false, gfx::ProtectedVideoType::kClear,
+        /*is_tex_coords_normalized=*/false);
 
     return overlay_quad;
   }
@@ -172,10 +173,6 @@ TEST_F(OcclusionCullerTest, OcclusionCullingWithBlending) {
 // Currently, quad cutting for AggregatedRenderPassDrawQuad is not supported.
 // Only fully occluded AggregatedRenderPassDrawQuad are removed from the frame.
 TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
-  if (!features::IsRenderPassDrawQuadCullingOptimizationEnabled()) {
-    GTEST_SKIP();
-  }
-
   // z-order: quad > render_pass_1 > render_pass_2
   InitOcclusionCuller();
   AggregatedFrame frame = MakeDefaultAggregatedFrame(/*num_render_passes=*/3);
@@ -202,7 +199,7 @@ TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
 
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_1, quad_1,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -216,7 +213,7 @@ TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), render_pass_1, render_pass_1,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -228,11 +225,11 @@ TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, render_pass_1, render_pass_1,
                  frame.render_pass_list.at(0)->id, ResourceId(1), gfx::RectF(),
-                 gfx::Size(), gfx::RectF(), false);
+                 gfx::Size(), false);
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), render_pass_2, render_pass_2,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -244,7 +241,7 @@ TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, render_pass_2, render_pass_2,
                  frame.render_pass_list.at(1)->id, ResourceId(2), gfx::RectF(),
-                 gfx::Size(), gfx::RectF(), false);
+                 gfx::Size(), false);
   }
 
   EXPECT_EQ(NumVisibleRects(root_render_pass->quad_list), 3u);
@@ -263,10 +260,6 @@ TEST_F(OcclusionCullerTest, OcclusionCullingForAggregatedRenderPass) {
 
 TEST_F(OcclusionCullerTest,
        OcclusionCullingForAggregatedRenderPassWithExpandedDamage) {
-  if (!features::IsRenderPassDrawQuadCullingOptimizationEnabled()) {
-    GTEST_SKIP();
-  }
-
   InitOcclusionCuller();
   AggregatedFrame frame = MakeDefaultAggregatedFrame(/*num_render_passes=*/3);
 
@@ -281,27 +274,19 @@ TEST_F(OcclusionCullerTest,
   auto& foreground_render_pass_2 = frame.render_pass_list.at(1);
   auto& root_render_pass = frame.render_pass_list.at(2);
 
-  cc::FilterOperations foreground_filters_1;
-  foreground_filters_1.Append(cc::FilterOperation::CreateBlurFilter(5.0));
-
-  cc::FilterOperations foreground_filters_2;
-  foreground_filters_2.Append(cc::FilterOperation::CreateOpacityFilter(5.0));
-
   foreground_render_pass_1->SetAll(
       AggregatedRenderPassId{1}, foreground_filter_rect_1, gfx::Rect(),
-      gfx::Transform(), foreground_filters_1, cc::FilterOperations(),
-      SkPath::Rect(gfx::RectToSkRect(foreground_filter_rect_1)),
-      gfx::ContentColorUsage::kSRGB, false, false, false, false);
+      gfx::Transform(), gfx::ContentColorUsage::kSRGB, false, false, false,
+      false);
 
   foreground_render_pass_2->SetAll(
       AggregatedRenderPassId{2}, foreground_filter_rect_2, gfx::Rect(),
-      gfx::Transform(), foreground_filters_2, cc::FilterOperations(),
-      SkPath::Rect(gfx::RectToSkRect(foreground_filter_rect_2)),
-      gfx::ContentColorUsage::kSRGB, false, false, false, false);
+      gfx::Transform(), gfx::ContentColorUsage::kSRGB, false, false, false,
+      false);
 
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_1, quad_1,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -316,7 +301,7 @@ TEST_F(OcclusionCullerTest,
 
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), foreground_filter_rect_1,
                               foreground_filter_rect_1, gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -328,12 +313,19 @@ TEST_F(OcclusionCullerTest,
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, foreground_filter_rect_1,
                  foreground_filter_rect_1, foreground_render_pass_1->id,
-                 ResourceId(1), gfx::RectF(), gfx::Size(), gfx::RectF(), false);
+                 ResourceId(1), gfx::RectF(), gfx::Size(), false);
+    quad->SetFilters(
+        /*filters=*/cc::FilterOperations(
+            {cc::FilterOperation::CreateBlurFilter(5.0)}),
+        /*backdrop_filters=*/{},
+        SkPath::Rect(gfx::RectToSkRect(foreground_filter_rect_1)),
+        /*filters_scale=*/gfx::Vector2dF(1.0f, 1.0f),
+        /*filters_origin=*/gfx::PointF(), /*backdrop_filter_quality=*/1.0f);
   }
 
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), foreground_filter_rect_2,
                               foreground_filter_rect_2, gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -345,7 +337,14 @@ TEST_F(OcclusionCullerTest,
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, foreground_filter_rect_2,
                  foreground_filter_rect_2, foreground_render_pass_2->id,
-                 ResourceId(2), gfx::RectF(), gfx::Size(), gfx::RectF(), false);
+                 ResourceId(2), gfx::RectF(), gfx::Size(), false);
+    quad->SetFilters(
+        /*filters=*/cc::FilterOperations(
+            {cc::FilterOperation::CreateOpacityFilter(5.0)}),
+        /*backdrop_filters=*/{},
+        SkPath::Rect(gfx::RectToSkRect(foreground_filter_rect_2)),
+        /*filters_scale=*/gfx::Vector2dF(1.0f, 1.0f),
+        /*filters_origin=*/gfx::PointF(), /*backdrop_filter_quality=*/1.0f);
   }
 
   EXPECT_EQ(NumVisibleRects(root_render_pass->quad_list), 3u);
@@ -399,18 +398,16 @@ TEST_F(OcclusionCullerTest, OcclusionCullingWithIntersectingBackdropFilter) {
   backdrop_filters.Append(cc::FilterOperation::CreateBlurFilter(5.0));
   backdrop_render_pass_1->SetAll(
       AggregatedRenderPassId{1}, backdrop_filter_rect_1, gfx::Rect(),
-      gfx::Transform(), cc::FilterOperations(), backdrop_filters,
-      SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_1)),
-      gfx::ContentColorUsage::kSRGB, false, false, false, false);
+      gfx::Transform(), gfx::ContentColorUsage::kSRGB, false, false, false,
+      false);
   backdrop_render_pass_2->SetAll(
       AggregatedRenderPassId{2}, backdrop_filter_rect_2, gfx::Rect(),
-      gfx::Transform(), cc::FilterOperations(), backdrop_filters,
-      SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_2)),
-      gfx::ContentColorUsage::kSRGB, false, false, false, false);
+      gfx::Transform(), gfx::ContentColorUsage::kSRGB, false, false, false,
+      false);
 
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), backdrop_filter_rect_1,
                               backdrop_filter_rect_1, gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -422,11 +419,16 @@ TEST_F(OcclusionCullerTest, OcclusionCullingWithIntersectingBackdropFilter) {
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, backdrop_filter_rect_1,
                  backdrop_filter_rect_1, backdrop_render_pass_1->id,
-                 ResourceId(2), gfx::RectF(), gfx::Size(), gfx::RectF(), false);
+                 ResourceId(2), gfx::RectF(), gfx::Size(), false);
+    quad->SetFilters(/*filters=*/{}, backdrop_filters,
+                     SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_1)),
+                     /*filters_scale=*/gfx::Vector2dF(1.0f, 1.0f),
+                     /*filters_origin=*/gfx::PointF(),
+                     /*backdrop_filter_quality=*/1.0f);
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_1, quad_1,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -440,7 +442,7 @@ TEST_F(OcclusionCullerTest, OcclusionCullingWithIntersectingBackdropFilter) {
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), backdrop_filter_rect_2,
                               backdrop_filter_rect_2, gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -452,11 +454,16 @@ TEST_F(OcclusionCullerTest, OcclusionCullingWithIntersectingBackdropFilter) {
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, backdrop_filter_rect_2,
                  backdrop_filter_rect_2, backdrop_render_pass_2->id,
-                 ResourceId(3), gfx::RectF(), gfx::Size(), gfx::RectF(), false);
+                 ResourceId(3), gfx::RectF(), gfx::Size(), false);
+    quad->SetFilters(/*filters=*/{}, backdrop_filters,
+                     SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_2)),
+                     /*filters_scale=*/gfx::Vector2dF(1.0f, 1.0f),
+                     /*filters_origin=*/gfx::PointF(),
+                     /*backdrop_filter_quality=*/1.0f);
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_2, quad_2,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -502,16 +509,13 @@ TEST_F(OcclusionCullerTest, EnsureOccluderComplexityWithBackdropFilters) {
   auto& backdrop_render_pass_1 = frame.render_pass_list.at(0);
   auto& root_render_pass = frame.render_pass_list.at(1);
 
-  cc::FilterOperations backdrop_filters;
-  backdrop_filters.Append(cc::FilterOperation::CreateBlurFilter(5.0));
   backdrop_render_pass_1->SetAll(
       AggregatedRenderPassId{1}, backdrop_filter_rect_1, gfx::Rect(),
-      gfx::Transform(), cc::FilterOperations(), backdrop_filters,
-      SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_1)),
-      gfx::ContentColorUsage::kSRGB, false, false, false, false);
+      gfx::Transform(), gfx::ContentColorUsage::kSRGB, false, false, false,
+      false);
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_1, quad_1,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -525,7 +529,7 @@ TEST_F(OcclusionCullerTest, EnsureOccluderComplexityWithBackdropFilters) {
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), backdrop_filter_rect_1,
                               backdrop_filter_rect_1, gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -537,11 +541,18 @@ TEST_F(OcclusionCullerTest, EnsureOccluderComplexityWithBackdropFilters) {
                      .AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
     quad->SetNew(shared_quad_state, backdrop_filter_rect_1,
                  backdrop_filter_rect_1, backdrop_render_pass_1->id,
-                 ResourceId(2), gfx::RectF(), gfx::Size(), gfx::RectF(), false);
+                 ResourceId(2), gfx::RectF(), gfx::Size(), false);
+    quad->SetFilters(
+        /*filters=*/{}, /*backdrop_filters=*/
+        cc::FilterOperations({cc::FilterOperation::CreateBlurFilter(5.0)}),
+        SkPath::Rect(gfx::RectToSkRect(backdrop_filter_rect_1)),
+        /*filters_scale=*/gfx::Vector2dF(1.0f, 1.0f),
+        /*filters_origin=*/gfx::PointF(),
+        /*backdrop_filter_quality=*/1.0f);
   }
   {
     SharedQuadState* shared_quad_state =
-        frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
+        root_render_pass->CreateAndAppendSharedQuadState();
     shared_quad_state->SetAll(gfx::Transform(), quad_2, quad_2,
                               gfx::MaskFilterInfo(),
                               /*clip=*/std::nullopt, are_contents_opaque,
@@ -2643,7 +2654,7 @@ TEST_F(OcclusionCullerTest, CompositorFrameWithCoveredRenderPass) {
   auto* quad = frame.render_pass_list.at(1)
                    ->quad_list.AllocateAndConstruct<SolidColorDrawQuad>();
   SharedQuadState* shared_quad_state2 =
-      frame.render_pass_list.at(1)->CreateAndAppendSharedQuadState();
+      frame.render_pass_list.front()->CreateAndAppendSharedQuadState();
   auto* quad1 =
       frame.render_pass_list.front()
           ->quad_list.AllocateAndConstruct<AggregatedRenderPassDrawQuad>();
@@ -2668,8 +2679,7 @@ TEST_F(OcclusionCullerTest, CompositorFrameWithCoveredRenderPass) {
         /*sorting_context=*/0, /*layer_id=*/0u, /*fast_rounded_corner=*/false);
     quad->SetNew(shared_quad_state, rect1, rect1, SkColors::kBlack, false);
     quad1->SetNew(shared_quad_state2, rect1, rect1, render_pass_id,
-                  mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-                  false);
+                  mask_resource_id, gfx::RectF(), gfx::Size(), false);
 
     EXPECT_EQ(1u, NumVisibleRects(frame.render_pass_list.front()->quad_list));
     EXPECT_EQ(1u, frame.render_pass_list.at(1)->quad_list.size());
@@ -2920,11 +2930,9 @@ TEST_F(OcclusionCullerTest, CompositorFrameWithRenderPass) {
         /*sorting_context=*/0, /*layer_id=*/0u, /*fast_rounded_corner=*/false);
 
     R1->SetNew(shared_quad_state, rect1, rect1, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     R2->SetNew(shared_quad_state, rect2, rect2, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     D1->SetNew(shared_quad_state3, rect3, rect3, SkColors::kBlack, false);
     D2->SetNew(shared_quad_state4, rect4, rect4, SkColors::kBlack, false);
     EXPECT_EQ(4u, NumVisibleRects(frame.render_pass_list.front()->quad_list));
@@ -2975,11 +2983,9 @@ TEST_F(OcclusionCullerTest, CompositorFrameWithRenderPass) {
         /*sorting_context=*/0, /*layer_id=*/0u, /*fast_rounded_corner=*/false);
 
     R1->SetNew(shared_quad_state, rect5, rect5, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     R2->SetNew(shared_quad_state, rect1, rect1, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     D1->SetNew(shared_quad_state3, rect3, rect3, SkColors::kBlack, false);
     D2->SetNew(shared_quad_state4, rect6, rect6, SkColors::kBlack, false);
     EXPECT_EQ(4u, NumVisibleRects(frame.render_pass_list.front()->quad_list));
@@ -3029,11 +3035,9 @@ TEST_F(OcclusionCullerTest, CompositorFrameWithRenderPass) {
         /*sorting_context=*/0, /*layer_id=*/0u, /*fast_rounded_corner=*/false);
 
     R1->SetNew(shared_quad_state, rect5, rect5, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     R2->SetNew(shared_quad_state, rect1, rect1, render_pass_id,
-               mask_resource_id, gfx::RectF(), gfx::Size(), gfx::RectF(),
-               false);
+               mask_resource_id, gfx::RectF(), gfx::Size(), false);
     D1->SetNew(shared_quad_state3, rect3, rect3, SkColors::kBlack, false);
     D2->SetNew(shared_quad_state4, rect7, rect7, SkColors::kBlack, false);
     EXPECT_EQ(4u, NumVisibleRects(frame.render_pass_list.front()->quad_list));

@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/safe_browsing/content/renderer/phishing_classifier/phishing_classifier.h"
-
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -23,11 +21,13 @@
 #include "chrome/test/base/chrome_render_view_test.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/features.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_classifier.h"
+#include "components/safe_browsing/content/renderer/phishing_classifier/content_phishing_image_embedder.h"
 #include "components/safe_browsing/content/renderer/phishing_classifier/murmurhash3_util.h"
-#include "components/safe_browsing/content/renderer/phishing_classifier/scorer.h"
 #include "components/safe_browsing/core/common/fbs/client_model_generated.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/phishing_classifier/features.h"
+#include "components/safe_browsing/core/common/phishing_classifier/scorer.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/renderer/render_frame.h"
@@ -85,6 +85,12 @@ class PhishingClassifierTest
     SetUpClassifier();
 
     base::DiscardableMemoryAllocator::SetInstance(&test_allocator_);
+  }
+
+  void TearDown() override {
+    classifier_.reset();
+    image_embedder_.reset();
+    ChromeRenderViewTest::TearDown();
   }
 
   void PrepareFlatModel() {
@@ -247,16 +253,32 @@ class PhishingClassifierTest
   }
 
   void SetUpClassifier() {
-    classifier_ = std::make_unique<PhishingClassifier>(GetMainRenderFrame());
+    classifier_ =
+        std::make_unique<ContentPhishingClassifier>(GetMainRenderFrame());
+  }
+
+  void SetUpImageEmbedder() {
+    image_embedder_ =
+        std::make_unique<ContentPhishingImageEmbedder>(GetMainRenderFrame());
   }
 
   // Helper method to start phishing classification.
   void RunPhishingClassifier() {
     base::test::TestFuture<const ClientPhishingRequest&,
-                           PhishingClassifier::Result>
+                           ContentPhishingClassifier::Result>
         test_future;
     classifier_->BeginClassification(test_future.GetCallback());
     verdict_ = test_future.Get<0>();
+  }
+
+  // Helper method to start phishing image embedding.
+  void RunPhishingImageEmbedder() {
+    base::test::TestFuture<ContentPhishingImageEmbedder::Result,
+                           const ImageFeatureEmbedding&, const VisualFeatures&>
+        test_future;
+    image_embedder_->BeginImageEmbedding(true, test_future.GetCallback());
+    image_embedder_result_ = test_future.Get<0>();
+    image_feature_embedding_ = test_future.Get<1>();
   }
 
   void LoadHtml(const GURL& url, const std::string& content) {
@@ -270,7 +292,8 @@ class PhishingClassifierTest
   }
 
   std::string response_content_;
-  std::unique_ptr<PhishingClassifier> classifier_;
+  std::unique_ptr<ContentPhishingClassifier> classifier_;
+  std::unique_ptr<ContentPhishingImageEmbedder> image_embedder_;
   base::MappedReadOnlyRegion mapped_region_;
 
   // Features that are in the model.
@@ -280,6 +303,8 @@ class PhishingClassifierTest
 
   // Outputs of phishing classifier.
   ClientPhishingRequest verdict_;
+  ContentPhishingImageEmbedder::Result image_embedder_result_;
+  ImageFeatureEmbedding image_feature_embedding_;
 
   // A DiscardableMemoryAllocator is needed for certain Skia operations.
   base::TestDiscardableMemoryAllocator test_allocator_;
@@ -302,9 +327,20 @@ TEST_F(PhishingClassifierTest, TestClassificationWhenSchemeNotSupported) {
   // https.
   LoadHtml(GURL("file://host.net"), "<html><body>content</body></html>");
   RunPhishingClassifier();
-  EXPECT_EQ(PhishingClassifier::kClassifierFailed,
+  EXPECT_EQ(ContentPhishingClassifier::kClassifierFailed,
             static_cast<int>(verdict_.client_score()));
   EXPECT_FALSE(verdict_.is_phishing());
+}
+
+TEST_F(PhishingClassifierTest, TestImageEmbeddingWhenSchemeNotSupported) {
+  // Extraction should also fail for this case because the URL is not http or
+  // https.
+  SetUpImageEmbedder();
+  LoadHtml(GURL("file://host.net"), "<html><body>content</body></html>");
+  RunPhishingImageEmbedder();
+  EXPECT_EQ(ContentPhishingImageEmbedder::Result::kInvalidURLFormatRequest,
+            image_embedder_result_);
+  EXPECT_EQ(0, image_feature_embedding_.embedding_value_size());
 }
 
 TEST_F(PhishingClassifierTest, DisableDetection) {
@@ -314,6 +350,27 @@ TEST_F(PhishingClassifierTest, DisableDetection) {
   EXPECT_FALSE(classifier_->is_ready());
 }
 
+TEST_F(PhishingClassifierTest, CancelWhenNotReady) {
+  EXPECT_TRUE(classifier_->is_ready());
+  // Set a NULL scorer, which turns detection back off.
+  ScorerStorage::GetInstance()->SetScorer(nullptr);
+  EXPECT_FALSE(classifier_->is_ready());
+
+  // This used to DCHECK, but now it should safely do nothing.
+  classifier_->CancelPendingClassification();
+}
+
+TEST_F(PhishingClassifierTest, CancelImageEmbeddingWhenNotReady) {
+  SetUpImageEmbedder();
+  EXPECT_TRUE(image_embedder_->is_ready());
+  // Set a NULL scorer, which turns detection back off.
+  ScorerStorage::GetInstance()->SetScorer(nullptr);
+  EXPECT_FALSE(image_embedder_->is_ready());
+
+  // This used to DCHECK, but now it should safely do nothing.
+  image_embedder_->CancelPendingImageEmbedding();
+}
+
 #if BUILDFLAG(IS_ANDROID)
 TEST_F(PhishingClassifierTest, TestImageEmbeddingMatchPopulatesEmbedding) {
   LoadHtml(
@@ -321,7 +378,7 @@ TEST_F(PhishingClassifierTest, TestImageEmbeddingMatchPopulatesEmbedding) {
       "<html><body><a href=\"http://phishing.com/\">login</a></body></html>");
 
   classifier_->SetClientSideDetectionType(
-      safe_browsing::mojom::ClientSideDetectionType::kImageEmbeddingMatch);
+      safe_browsing::ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   RunPhishingClassifier();
 
@@ -340,7 +397,7 @@ TEST_F(PhishingClassifierTest,
       "<html><body><a href=\"http://phishing.com/\">login</a></body></html>");
 
   classifier_->SetClientSideDetectionType(
-      safe_browsing::mojom::ClientSideDetectionType::kTriggerModels);
+      safe_browsing::ClientSideDetectionType::TRIGGER_MODELS);
 
   RunPhishingClassifier();
 

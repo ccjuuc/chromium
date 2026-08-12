@@ -19,6 +19,7 @@ import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.gesturenav.NavigationBubble.CloseTarget;
+import org.chromium.ui.OverscrollActivationStatus;
 import org.chromium.ui.base.BackGestureEventSwipeEdge;
 
 /** FrameLayout that supports side-wise slide gesture for history navigation. */
@@ -29,6 +30,9 @@ class HistoryNavigationLayout extends FrameLayout implements ViewGroup.OnHierarc
 
     // Frame layout hosting the arrow puck UI.
     private @MonotonicNonNull SideSlideLayout mSideSlideLayout;
+
+    private int mLeftSideUiWidth;
+    private int mRightSideUiWidth;
 
     // Async runnable for ending the refresh animation after the page first
     // loads a frame. This is used to provide a reasonable minimum animation time.
@@ -43,6 +47,14 @@ class HistoryNavigationLayout extends FrameLayout implements ViewGroup.OnHierarc
         mNavigateCallback = navigateCallback;
         setOnHierarchyChangeListener(this);
         setVisibility(View.INVISIBLE);
+    }
+
+    void setSideUiWidths(int leftWidth, int rightWidth) {
+        mLeftSideUiWidth = leftWidth;
+        mRightSideUiWidth = rightWidth;
+        if (mSideSlideLayout != null) {
+            mSideSlideLayout.setSideUiWidths(leftWidth, rightWidth);
+        }
     }
 
     @Override
@@ -65,6 +77,7 @@ class HistoryNavigationLayout extends FrameLayout implements ViewGroup.OnHierarc
         mSideSlideLayout = new SideSlideLayout(getContext());
         mSideSlideLayout.setLayoutParams(
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        mSideSlideLayout.setSideUiWidths(mLeftSideUiWidth, mRightSideUiWidth);
         return mSideSlideLayout;
     }
 
@@ -92,6 +105,7 @@ class HistoryNavigationLayout extends FrameLayout implements ViewGroup.OnHierarc
                         sideSlideLayout.post(createDetachLayoutRunnable());
                     });
         }
+        mSideSlideLayout.setSideUiWidths(mLeftSideUiWidth, mRightSideUiWidth);
         mSideSlideLayout.setEnabled(true);
         mSideSlideLayout.setDirection(forward);
         mSideSlideLayout.setInitiatingEdge(initiatingEdge);
@@ -115,12 +129,12 @@ class HistoryNavigationLayout extends FrameLayout implements ViewGroup.OnHierarc
      * Release the active pull. If no pull has started, the release will be ignored. If the pull was
      * sufficiently large, the navigation sequence will be initiated.
      *
-     * @param allowNav {@code true} if release action is supposed to trigger navigation.
+     * @param status The activation status of the release gesture.
      */
-    void releaseBubble(boolean allowNav) {
+    void releaseBubble(@OverscrollActivationStatus int status) {
         if (mSideSlideLayout == null) return;
         cancelStopNavigatingRunnable();
-        mSideSlideLayout.release(allowNav);
+        mSideSlideLayout.release(status);
     }
 
     /** Reset navigation bubble UI in action. */

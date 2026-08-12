@@ -135,7 +135,7 @@ enum class EditingCommandType {
   kSelectWord = 120,
   kSetMark = 121,
   kStrikethrough = 122,
-  kStyleWithCSS = 123,
+  kStyleWithCss = 123,
   kSubscript = 124,
   kSuperscript = 125,
   kSwapWithMark = 126,
@@ -148,7 +148,7 @@ enum class EditingCommandType {
   kUnlink = 133,
   kUnscript = 134,
   kUnselect = 135,
-  kUseCSS = 136,
+  kUseCss = 136,
   kYank = 137,
   kYankAndSelect = 138,
   kAlignCenter = 139,
@@ -156,7 +156,7 @@ enum class EditingCommandType {
   // This command is for internal use only; the current use case is pasting GIF
   // images selected from emoji picker on ChromeOS (the GIF URLs are from
   // tenor.com).
-  kPasteFromImageURL = 140,
+  kPasteFromImageUrl = 140,
 
   // Add new commands immediately above this line.
   kNumberOfCommandTypes,

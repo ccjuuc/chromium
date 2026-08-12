@@ -4,39 +4,98 @@
 
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 
-#include <algorithm>
-#include <ranges>
-#include <variant>
+#include <stddef.h>
+#include <stdint.h>
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/flat_set.h"
+#include "base/feature_list.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
-#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_field.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
+#include "base/time/time.h"
+#include "base/types/optional_ref.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
+#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_normalization_utils.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/contact_info.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/country_info.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/date_info.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
-#include "components/autofill/core/browser/data_model/data_model_utils.h"
-#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
 #include "components/autofill/core/browser/field_type_utils.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/geo/autofill_country.h"
-#include "components/autofill/core/browser/geo/country_names.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/personal_context/proto/features/at_memory.pb.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace autofill {
 
 namespace {
 
-std::u16string NormalizeEntityValue(const AttributeInstance& attribute) {
-  return normalization::NormalizeForComparison(
+// Returns the normalized value of the `attribute`. If `suffix_length` is
+// provided, only the suffix of that length is returned.
+std::u16string NormalizeAttributeValue(
+    const AttributeInstance& attribute,
+    std::optional<size_t> suffix_length = std::nullopt) {
+  std::u16string value = normalization::NormalizeForComparison(
       attribute.GetRawInfo(attribute.type().field_type()));
+  if (suffix_length && value.length() > *suffix_length) {
+    value = value.substr(value.length() - *suffix_length);
+  }
+  return value;
 }
 
-// Returns `s` in the demanded `format`. See `data_util::IsValidDateFormat` for
+// If `kAutofillAiWalletPrivatePasses` or `kAutofillAmbientAutofill`
+// is enabled and either `a1` or `a2` is masked, returns the maximum of the
+// lengths of the non-empty, normalized values of the masked attribute
+// instances. Otherwise, returns `std::nullopt`.
+//
+// The product implication of a non-zero suffix length is that equality checks
+// between attribute values only consider the suffix of this length. For
+// example, if the suffix length is 4, the values "12345678" and "45678" are
+// considered equal, but "12345678" and "34567" are not.
+std::optional<size_t> DetermineSuffixLength(const AttributeInstance& a1,
+                                            const AttributeInstance& a2) {
+  if (!base::FeatureList::IsEnabled(features::kAutofillAiWalletPrivatePasses) &&
+      !base::FeatureList::IsEnabled(features::kAutofillAmbientAutofill)) {
+    return std::nullopt;
+  }
+
+  size_t length = 0;
+  if (a1.masked()) {
+    std::u16string value = NormalizeAttributeValue(a1);
+    if (!value.empty()) {
+      length = value.length();
+    }
+  }
+  if (a2.masked()) {
+    std::u16string value = NormalizeAttributeValue(a2);
+    if (!value.empty()) {
+      length = std::max(length, value.length());
+    }
+  }
+  return length ? std::make_optional(length) : std::nullopt;
+}
+
+// Returns `s` in the demanded `format`. See `data_util::IsValidAffixFormat` for
 // the valid `format` values.
 std::u16string FormatAffix(std::u16string s, std::u16string_view format) {
   // We parse the leading minus here rather than using `base::StringToInt()` to
@@ -83,6 +142,7 @@ std::u16string FormatFlightNumber(std::u16string s,
 
 std::u16string Format(
     std::u16string s,
+    FieldType type,
     base::optional_ref<const AutofillFormatString> format_string) {
   if (!format_string) {
     return s;
@@ -90,14 +150,31 @@ std::u16string Format(
 
   switch (format_string->type) {
     case FormatString_Type_AFFIX:
+      if (!IsAffixFormatStringEnabledForType(type)) {
+        break;
+      }
       return FormatAffix(std::move(s), format_string->value);
     case FormatString_Type_FLIGHT_NUMBER:
+      if (type != FLIGHT_RESERVATION_FLIGHT_NUMBER) {
+        break;
+      }
       return FormatFlightNumber(std::move(s), format_string->value);
     case FormatString_Type_DATE:
     case FormatString_Type_ICU_DATE:
       break;
   }
   return s;
+}
+
+bool IsMaskableRecordType(EntityInstance::RecordType record_type) {
+  switch (record_type) {
+    case EntityInstance::RecordType::kLocal:
+      return false;
+    case EntityInstance::RecordType::kServerWallet:
+    case EntityInstance::RecordType::kPersonalContext:
+      return true;
+  }
+  NOTREACHED();
 }
 
 }  // namespace
@@ -126,10 +203,10 @@ AttributeInstance& AttributeInstance::operator=(AttributeInstance&&) = default;
 AttributeInstance::~AttributeInstance() = default;
 
 std::u16string AttributeInstance::GetInfo(
-    FieldType field_type,
+    std::optional<FieldType> unnormalized_field_type,
     std::string_view app_locale,
     base::optional_ref<const AutofillFormatString> format_string) const {
-  field_type = GetNormalizedFieldType(field_type);
+  FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
   return std::visit(
       absl::Overload{[&](const CountryInfo& country) {
                        return country.GetCountryName(app_locale);
@@ -140,20 +217,21 @@ std::u16string AttributeInstance::GetInfo(
                          return date.GetIcuDate(format_string->value,
                                                 app_locale);
                        }
-
                        return date.GetDate(format_string ? format_string->value
                                                          : u"YYYY-MM-DD");
                      },
                      [&](const NameInfo&) { return GetRawInfo(field_type); },
                      [&](const StateInfo&) { return GetRawInfo(field_type); },
                      [&](const std::u16string&) {
-                       return Format(GetRawInfo(field_type), format_string);
+                       return Format(GetRawInfo(field_type), field_type,
+                                     format_string);
                      }},
       info_);
 }
 
-std::u16string AttributeInstance::GetRawInfo(FieldType field_type) const {
-  field_type = GetNormalizedFieldType(field_type);
+std::u16string AttributeInstance::GetRawInfo(
+    std::optional<FieldType> unnormalized_field_type) const {
+  FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
   return std::visit(
       absl::Overload{
           [&](const CountryInfo& country) {
@@ -172,8 +250,8 @@ std::u16string AttributeInstance::GetRawInfo(FieldType field_type) const {
 }
 
 VerificationStatus AttributeInstance::GetVerificationStatus(
-    FieldType field_type) const {
-  field_type = GetNormalizedFieldType(field_type);
+    std::optional<FieldType> unnormalized_field_type) const {
+  FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
   return std::visit(
       absl::Overload{
           [&](const CountryInfo&) { return VerificationStatus::kNoStatus; },
@@ -189,13 +267,36 @@ VerificationStatus AttributeInstance::GetVerificationStatus(
       info_);
 }
 
+personal_context::proto::TypedValue AttributeInstance::GetTypedValue() const {
+  personal_context::proto::TypedValue typed_value;
+  std::visit(
+      absl::Overload{[&typed_value](const CountryInfo& country) {
+                       std::string code = country.GetCountryCode();
+                       if (!code.empty()) {
+                         typed_value.set_country_code(std::move(code));
+                       }
+                     },
+                     [&typed_value](const DateInfo& date) {
+                       personal_context::proto::Date date_proto =
+                           date.GetDateProto();
+                       if (date_proto.year() != 0 || date_proto.month() != 0 ||
+                           date_proto.day() != 0) {
+                         *typed_value.mutable_date() = std::move(date_proto);
+                       }
+                     },
+                     [](const NameInfo&) {}, [](const StateInfo&) {},
+                     [](const std::u16string&) {}},
+      info_);
+  return typed_value;
+}
+
 void AttributeInstance::SetInfo(
-    FieldType field_type,
+    std::optional<FieldType> unnormalized_field_type,
     const std::u16string& value,
     std::string_view app_locale,
     base::optional_ref<const AutofillFormatString> format_string,
     VerificationStatus status) {
-  field_type = GetNormalizedFieldType(field_type);
+  FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
   std::visit(
       absl::Overload{
           [&](CountryInfo& country) {
@@ -229,10 +330,11 @@ void AttributeInstance::SetInfo(
       info_);
 }
 
-void AttributeInstance::SetRawInfo(FieldType field_type,
-                                   const std::u16string& value,
-                                   VerificationStatus status) {
-  field_type = GetNormalizedFieldType(field_type);
+void AttributeInstance::SetRawInfo(
+    std::optional<FieldType> unnormalized_field_type,
+    const std::u16string& value,
+    VerificationStatus status) {
+  FieldType field_type = GetNormalizedFieldType(unnormalized_field_type);
   std::visit(absl::Overload{
                  [&](CountryInfo& country) {
                    if (!country.SetCountryFromCountryCode(value)) {
@@ -255,9 +357,10 @@ void AttributeInstance::SetRawInfo(FieldType field_type,
 }
 
 FieldType AttributeInstance::GetNormalizedFieldType(
-    FieldType field_type) const {
-  return type_.field_subtypes().contains(field_type) ? field_type
-                                                     : type_.field_type();
+    std::optional<FieldType> field_type) const {
+  return field_type && type_.field_subtypes().contains(*field_type)
+             ? *field_type
+             : type_.field_type().value_or(UNKNOWN_TYPE);
 }
 
 void AttributeInstance::FinalizeInfo() {
@@ -275,20 +378,19 @@ EntityInstance::EntityInstance(
     EntityId guid,
     std::string nickname,
     base::Time date_modified,
-    size_t use_count,
+    int64_t use_count,
     base::Time use_date,
-    RecordType record_type,
+    RecordTypeData record_type_data,
     AreAttributesReadOnly are_attributes_read_only,
     std::string frecency_override)
     : type_(type),
       attributes_(std::move(attributes)),
-      guid_(std::move(guid)),
       nickname_(std::move(nickname)),
-      entity_metadata_{.guid = guid_,
-                       .date_modified = date_modified,
-                       .use_count = use_count,
-                       .use_date = use_date},
-      record_type_(record_type),
+      metadata_{.guid = std::move(guid),
+                .date_modified = date_modified,
+                .use_count = use_count,
+                .use_date = use_date},
+      record_type_data_(std::move(record_type_data)),
       are_attributes_read_only_(are_attributes_read_only),
       frecency_override_(std::move(frecency_override)) {
   DCHECK(!attributes_.empty());
@@ -313,6 +415,15 @@ bool EntityInstance::MigrationOrder(const EntityInstance& lhs,
   return lhs.use_date() > rhs.use_date();
 }
 
+std::ostream& operator<<(std::ostream& os,
+                         const EntityInstance::EntityMetadata& m) {
+  os << "- guid: " << '"' << m.guid << '"' << std::endl;
+  os << "- date modified: " << '"' << m.date_modified << '"' << std::endl;
+  os << "- use count: " << m.use_count << std::endl;
+  os << "- use date: " << '"' << m.use_date << '"' << std::endl;
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const AttributeInstance& a) {
   os << a.type() << ": " << '"'
      << a.GetInfo(a.type().field_type(), /*app_locale=*/"en-US",
@@ -321,15 +432,69 @@ std::ostream& operator<<(std::ostream& os, const AttributeInstance& a) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os,
+                         const EntityInstance::RecordType& t) {
+  switch (t) {
+    case EntityInstance::RecordType::kLocal:
+      os << "kLocal";
+      break;
+    case EntityInstance::RecordType::kServerWallet:
+      os << "kServerWallet";
+      break;
+    case EntityInstance::RecordType::kPersonalContext:
+      os << "kPersonalContext";
+      break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source::Type& t) {
+  using Type = EntityInstance::PersonalContextRecordTypePayload::Source::Type;
+  switch (t) {
+    case Type::kUnspecified:
+      os << "kUnspecified";
+      break;
+    case Type::kGmail:
+      os << "kGmail";
+      break;
+    case Type::kPhotos:
+      os << "kPhotos";
+      break;
+  }
+  return os;
+}
+
+std::ostream& operator<<(
+    std::ostream& os,
+    const EntityInstance::PersonalContextRecordTypePayload::Source& s) {
+  os << "Source(type: " << s.type << ", url: \"" << s.url << "\")";
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const EntityInstance& e) {
   os << "- name: " << '"' << e.type() << '"' << std::endl;
   os << "- nickname: " << '"' << e.nickname() << '"' << std::endl;
-  os << "- guid: " << '"' << e.guid() << '"' << std::endl;
-  os << "- use date: " << '"' << e.use_date() << '"' << std::endl;
-  os << "- date modified: " << '"' << e.date_modified() << '"' << std::endl;
+  os << "- record type: " << e.record_type() << std::endl;
+  os << "- are attributes read only: "
+     << (e.are_attributes_read_only() ? "true" : "false") << std::endl;
+  os << e.metadata() << std::endl;
+
   for (const AttributeInstance& a : e.attributes()) {
     os << "- attribute " << a << std::endl;
   }
+
+  std::visit(
+      absl::Overload{
+          [&](const EntityInstance::PersonalContextRecordTypePayload& p) {
+            for (const EntityInstance::PersonalContextRecordTypePayload::Source&
+                     s : p.sources) {
+              os << "- source " << s << std::endl;
+            }
+          },
+          [](const auto&) {}},
+      e.record_type_data());
   return os;
 }
 
@@ -358,8 +523,33 @@ EntityInstance::EntityMergeability::operator=(
 EntityInstance::EntityMergeability::~EntityMergeability() = default;
 
 void EntityInstance::RecordEntityUsed(base::Time date) {
-  entity_metadata_.use_date = date;
-  ++entity_metadata_.use_count;
+  metadata_.use_date = date;
+  ++metadata_.use_count;
+}
+
+bool EntityInstance::MatchesMergeConstraintsOf(
+    const EntityInstance& other) const {
+  if (type_ != other.type_) {
+    return false;
+  }
+
+  return std::ranges::any_of(
+      type_.merge_constraints(),
+      [&](const DenseSet<AttributeType>& constraints) {
+        return std::ranges::all_of(constraints, [&](AttributeType type) {
+          base::optional_ref<const AttributeInstance> attribute_1 =
+              attribute(type);
+          base::optional_ref<const AttributeInstance> attribute_2 =
+              other.attribute(type);
+          if (!attribute_1 || !attribute_2) {
+            return false;
+          }
+          const std::optional<size_t> suffix_length =
+              DetermineSuffixLength(*attribute_1, *attribute_2);
+          return NormalizeAttributeValue(*attribute_1, suffix_length) ==
+                 NormalizeAttributeValue(*attribute_2, suffix_length);
+        });
+      });
 }
 
 EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
@@ -372,30 +562,23 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
   // will lead to  `newer` being a fresh new entity, otherwise we chose the
   // attribute of `newer` as a mergeable attribute to eventually override the
   // value of `this`.
-  const bool is_same_entity = [&]() {
-    return std::ranges::any_of(
-        type_.merge_constraints(),
-        [&](const DenseSet<AttributeType>& constraints) {
-          return std::ranges::all_of(constraints, [&](AttributeType type) {
-            base::optional_ref<const AttributeInstance> attribute_1 =
-                attribute(type);
-            base::optional_ref<const AttributeInstance> attribute_2 =
-                newer.attribute(type);
-            return attribute_1 && attribute_2 &&
-                   NormalizeEntityValue(*attribute_1) ==
-                       NormalizeEntityValue(*attribute_2);
-          });
-        });
-  }();
+  const bool is_same_entity = MatchesMergeConstraintsOf(newer);
 
   const bool is_subset = [&]() {
     return std::ranges::all_of(type_.attributes(), [&](AttributeType type) {
       base::optional_ref<const AttributeInstance> attribute_1 = attribute(type);
       base::optional_ref<const AttributeInstance> attribute_2 =
           newer.attribute(type);
-      return !attribute_2 ||
-             (attribute_1 && NormalizeEntityValue(*attribute_1) ==
-                                 NormalizeEntityValue(*attribute_2));
+      if (!attribute_2) {
+        return true;
+      }
+      if (!attribute_1) {
+        return false;
+      }
+      const std::optional<size_t> suffix_length =
+          DetermineSuffixLength(*attribute_1, *attribute_2);
+      return NormalizeAttributeValue(*attribute_1, suffix_length) ==
+             NormalizeAttributeValue(*attribute_2, suffix_length);
     });
   }();
 
@@ -426,7 +609,7 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
     auto is_attribute_empty =
         [&](base::optional_ref<const AttributeInstance> attribute_instance) {
           return !attribute_instance ||
-                 NormalizeEntityValue(*attribute_instance).empty();
+                 NormalizeAttributeValue(*attribute_instance).empty();
         };
     const bool is_attribute_1_empty = is_attribute_empty(attribute_1);
     const bool is_attribute_2_empty = is_attribute_empty(attribute_2);
@@ -446,8 +629,12 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
       return AttributeMergeabilityResult::kNewEntityHasNewAttribute;
     }
 
-    const std::u16string attribute_value_1 = NormalizeEntityValue(*attribute_1);
-    const std::u16string attribute_value_2 = NormalizeEntityValue(*attribute_2);
+    const std::optional<size_t> suffix_length =
+        DetermineSuffixLength(*attribute_1, *attribute_2);
+    const std::u16string attribute_value_1 =
+        NormalizeAttributeValue(*attribute_1, suffix_length);
+    const std::u16string attribute_value_2 =
+        NormalizeAttributeValue(*attribute_2, suffix_length);
     return attribute_value_1 == attribute_value_2
                ? AttributeMergeabilityResult::
                      kNewAndOldEntitiesHaveSameAttribute
@@ -483,10 +670,11 @@ EntityInstance::EntityMergeability EntityInstance::GetEntityMergeability(
 }
 
 bool EntityInstance::IsServerInstance() const {
-  switch (record_type_) {
+  switch (record_type()) {
     case RecordType::kLocal:
       return false;
     case RecordType::kServerWallet:
+    case RecordType::kPersonalContext:
       return true;
   }
   NOTREACHED();
@@ -502,10 +690,17 @@ bool EntityInstance::IsSubsetOf(const EntityInstance& other) const {
     base::optional_ref<const AttributeInstance> other_attribute =
         other.attribute(type);
 
+    const std::optional<size_t> suffix_length =
+        (this_attribute && other_attribute)
+            ? DetermineSuffixLength(*this_attribute, *other_attribute)
+            : std::nullopt;
     const std::u16string this_attribute_value =
-        this_attribute ? NormalizeEntityValue(*this_attribute) : u"";
+        this_attribute ? NormalizeAttributeValue(*this_attribute, suffix_length)
+                       : u"";
     const std::u16string other_attribute_value =
-        other_attribute ? NormalizeEntityValue(*other_attribute) : u"";
+        other_attribute
+            ? NormalizeAttributeValue(*other_attribute, suffix_length)
+            : u"";
 
     // Both entities do not have a value for a certain attribute, move forward
     // to check other attributes.
@@ -535,6 +730,68 @@ bool EntityInstance::IsSubsetOf(const EntityInstance& other) const {
   return true;
 }
 
+bool EntityInstance::IsMaskedEntity() const {
+  const bool masked =
+      std::ranges::any_of(attributes_, &AttributeInstance::masked);
+  CHECK(!masked || IsMaskableRecordType(record_type()));
+  return masked;
+}
+
+bool EntityInstance::IsUnmaskedEntity() const {
+  return IsMaskableRecordType(record_type()) &&
+         std::ranges::any_of(
+             attributes_, [](const AttributeInstance& attribute) {
+               return !attribute.masked() && attribute.type().is_obfuscated();
+             });
+}
+
+EntityInstance EntityInstance::CopyWithNewEntityId(EntityId id) const {
+  EntityInstance new_instance = *this;
+  new_instance.metadata_.guid = std::move(id);
+  return new_instance;
+}
+
+EntityInstance EntityInstance::CopyWithNewRecordType(
+    RecordType record_type) const {
+  EntityInstance new_entity = *this;
+  switch (record_type) {
+    case RecordType::kLocal:
+      new_entity.record_type_data_ = LocalRecordTypePayload();
+      break;
+    case RecordType::kServerWallet:
+      new_entity.record_type_data_ = WalletRecordTypePayload();
+      break;
+    case RecordType::kPersonalContext:
+      // TODO(crbug.com/542083924): Converting to a pContext entity is currently
+      // not supported because no source can be specified. It is not needed at
+      // the moment since pContext entities don't support migrations.
+      NOTIMPLEMENTED();
+  }
+  return new_entity;
+}
+
+EntityInstance::RecordType EntityInstance::record_type() const {
+  return std::visit(absl::Overload{[](const LocalRecordTypePayload&) {
+                                     return RecordType::kLocal;
+                                   },
+                                   [](const WalletRecordTypePayload&) {
+                                     return RecordType::kServerWallet;
+                                   },
+                                   [](const PersonalContextRecordTypePayload&) {
+                                     return RecordType::kPersonalContext;
+                                   }},
+                    record_type_data_);
+}
+
+EntityInstance EntityInstance::CopyWithUpdatedAttribute(
+    AttributeInstance attribute) const {
+  EntityInstance new_entity = *this;
+  auto it = new_entity.attributes_.find(attribute.type());
+  CHECK(it != new_entity.attributes_.end());
+  *it = std::move(attribute);
+  return new_entity;
+}
+
 EntityInstance::FrecencyOrder::FrecencyOrder(base::Time now) : now_(now) {}
 
 bool EntityInstance::FrecencyOrder::operator()(
@@ -558,23 +815,9 @@ bool EntityInstance::FrecencyOrder::operator()(
            log(static_cast<double>(entity.use_count()) + 2);
   };
 
-  // We use rounded values to express near equivalence.
-  //
-  // We cannot use `std::fabs(x - y) < kEpsilon` because that'd break
-  // transitivity of equivalence, which is required by std::sort().
-  //
-  // We don't need to worry about overflows because the maximum absolute value
-  // of get_ranking_score() is
-  //   std::log(std::numeric_limits<double>::max()) / std::log(2)
-  // which is ~1023.
-  static constexpr double kEpsilon = 0.00001;
-  const int32_t lhs_score = std::lround(get_ranking_score(lhs) / kEpsilon);
-  const int32_t rhs_score = std::lround(get_ranking_score(rhs) / kEpsilon);
-
-  if (lhs_score != rhs_score) {
-    return lhs_score > rhs_score;
-  }
-  return lhs.use_date() > rhs.use_date();
+  return std::tuple(get_ranking_score(lhs), lhs.use_date()) >
+         std::tuple(get_ranking_score(rhs), rhs.use_date());
 }
+
 
 }  // namespace autofill

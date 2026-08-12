@@ -12,23 +12,24 @@
 #include <stddef.h>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 
 namespace {
 
 // Returns the RMS (quadratic mean) of the input signal.
-float RMS(const int16_t* samples, int num_samples) {
+float RMS(base::span<const int16_t> samples) {
   int64_t ssq_int64 = 0;
   int64_t sum_int64 = 0;
-  for (int i = 0; i < num_samples; ++i) {
-    sum_int64 += UNSAFE_TODO(samples[i]);
-    ssq_int64 += UNSAFE_TODO(samples[i]) * UNSAFE_TODO(samples[i]);
+  for (int16_t sample : samples) {
+    sum_int64 += sample;
+    ssq_int64 += sample * sample;
   }
   // now convert to floats.
   double sum = static_cast<double>(sum_int64);
-  sum /= num_samples;
+  sum /= samples.size();
   double ssq = static_cast<double>(ssq_int64);
-  return static_cast<float>(sqrt((ssq / num_samples) - (sum * sum)));
+  return static_cast<float>(sqrt((ssq / samples.size()) - (sum * sum)));
 }
 
 int64_t Secs2Usecs(float seconds) {
@@ -158,11 +159,11 @@ int EnergyEndpointer::TimeToFrame(float time) const {
   return static_cast<int32_t>(0.5 + (time / params_.frame_period()));
 }
 
-void EnergyEndpointer::Restart(bool reset_threshold) {
+void EnergyEndpointer::Restart(bool reset_environment) {
   status_ = EP_PRE_SPEECH;
   user_input_start_time_us_ = 0;
 
-  if (reset_threshold) {
+  if (reset_environment) {
     decision_threshold_ = params_.decision_threshold();
     rms_adapt_ = decision_threshold_;
     noise_level_ = params_.decision_threshold() / 2.0f;
@@ -223,8 +224,8 @@ void EnergyEndpointer::Init(const EnergyEndpointerParams& params) {
       static_cast<int>(sample_rate_ / params_.min_fundamental_frequency());
 }
 
-void EnergyEndpointer::StartSession() {
-  Restart(true);
+void EnergyEndpointer::StartSession(bool reset_environment) {
+  Restart(reset_environment);
 }
 
 void EnergyEndpointer::EndSession() {
@@ -242,11 +243,10 @@ void EnergyEndpointer::SetUserInputMode() {
 }
 
 void EnergyEndpointer::ProcessAudioFrame(int64_t time_us,
-                                         const int16_t* samples,
-                                         int num_samples,
+                                         base::span<const int16_t> samples,
                                          float* rms_out) {
   endpointer_time_us_ = time_us;
-  float rms = RMS(samples, num_samples);
+  float rms = RMS(samples);
 
   // Check that this is user input audio vs. pre-input adaptation audio.
   // Input audio starts when the user indicates start of input, by e.g.

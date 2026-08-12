@@ -6,25 +6,25 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/strings/string_split.h"
 #include "build/buildflag.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/policy/policy_util.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/permissions/features.h"
 #include "components/prefs/pref_service.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #endif
 
@@ -95,8 +95,8 @@ bool IsCommandAllowedInAppMode(int command_id, bool is_popup) {
 
   constexpr int kAllowedPopup[] = {IDC_CLOSE_TAB};
 
-  return base::Contains(kAllowed, command_id) ||
-         (is_popup && base::Contains(kAllowedPopup, command_id));
+  return std::ranges::contains(kAllowed, command_id) ||
+         (is_popup && std::ranges::contains(kAllowedPopup, command_id));
 }
 
 bool IsRunningInAppMode() {
@@ -128,7 +128,8 @@ bool IsWebKioskOriginAllowed(const PrefService* prefs, const GURL& origin) {
   }
 
   if (policy::IsOriginInAllowlist(
-          origin, prefs, prefs::kKioskBrowserPermissionsAllowedForOrigins)) {
+          origin, prefs,
+          ash::prefs::kKioskBrowserPermissionsAllowedForOrigins)) {
     return true;
   }
 

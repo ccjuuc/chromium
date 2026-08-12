@@ -49,6 +49,8 @@ enum HitTestResult {
   // Usually, this is a RenderWidgetHostViewCocoa which presents a content
   // area.
   kSubView,
+  // Hits a subview that is currently blocked by a modal dialog.
+  kBlockedSubView,
   // Hits other area. This includes resize handles, traffic lights, etc. The
   // NSWindow handles the event.
   kOther,
@@ -148,6 +150,12 @@ interface NativeWidgetNSWindowHost {
       gfx.mojom.Rect window_bounds_in_screen_dips,
       gfx.mojom.Rect content_bounds_in_screen_dips);
 
+  // Called when the window is about to move.
+  OnWindowWillMove();
+
+  // Called when the window has moved.
+  OnWindowDidEndMove();
+
   // Called when the window is about to be live resized.
   OnWindowWillStartLiveResize();
 
@@ -192,6 +200,9 @@ interface NativeWidgetNSWindowHost {
   // Called when the blob of data that represents the NSWindow's restorable
   // state has changed.
   OnWindowStateRestorationDataChanged(array<uint8> data);
+
+  // Called when the window's "visible on all workspaces" state has changed.
+  OnVisibleOnAllWorkspacesChanged(bool visible);
 
   // Called when a sheet modal is shown.
   OnSheetModalShown();

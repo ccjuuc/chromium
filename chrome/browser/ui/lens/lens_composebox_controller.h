@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_LENS_LENS_COMPOSEBOX_CONTROLLER_H_
 #define CHROME_BROWSER_UI_LENS_LENS_COMPOSEBOX_CONTROLLER_H_
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -15,14 +16,15 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "third_party/lens_server_proto/aim_communication.pb.h"
 #include "ui/webui/resources/cr_components/composebox/composebox.mojom.h"
 
 class LensSearchController;
 
 namespace lens {
+class ClientToAimMessage;
 class LensSessionMetricsLogger;
 class LensComposeboxHandler;
+enum FeatureCapability : int;
 
 // Controller for the Lens compose box. This class is responsible for handling
 // communications between the Lens WebUI compose box and other Lens components,
@@ -41,7 +43,6 @@ class LensComposeboxController {
   // executing javascript and has bound the handler.
   virtual void BindComposebox(
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler);
@@ -49,7 +50,10 @@ class LensComposeboxController {
   // Issues a composebox query to the side panel results. If this is called when
   // the user is in AIM, issues a follow up query. Otherwise, issues a new AIM
   // session query.
-  void IssueComposeboxQuery(const std::string& query_text);
+  void IssueComposeboxQuery(
+      const std::string& query_text,
+      const std::map<std::string, std::string>& additional_query_params,
+      bool is_voice_search);
 
   // Called when the focus state of the composebox changes.
   void OnFocusChanged(bool focused);
@@ -112,10 +116,10 @@ class LensComposeboxController {
     searchbox::mojom::SelectedFileInfoPtr file_info;
   };
 
-  // Builds a SubmitQuery ClientToAimMessage message to send to the side panel
-  // remote UI.
   lens::ClientToAimMessage BuildSubmitQueryMessage(
-      const std::string& query_text);
+      const std::string& query_text,
+      const std::map<std::string, std::string>& additional_query_params,
+      bool is_voice_search);
 
   // Creates a SelectedFileInfo struct to send to the composebox for the visual
   // selection context.
@@ -139,6 +143,8 @@ class LensComposeboxController {
   // A query that was issued before the remote UI was ready. This will be sent
   // once the handshake completes.
   std::optional<std::string> pending_query_text_;
+  std::map<std::string, std::string> pending_additional_query_params_;
+  bool pending_is_voice_search_ = false;
 
   // The class responsible for handling messages between the compose box and
   // the WebUI.

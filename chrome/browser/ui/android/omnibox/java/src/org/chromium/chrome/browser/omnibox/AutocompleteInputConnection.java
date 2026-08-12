@@ -196,10 +196,10 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
             if (mInputDelegate.getDeletePostfixOnNextBeginImeCommand() > len) {
                 mInputDelegate.setDeletePostfixOnNextBeginImeCommand(len);
             }
-            mInputDelegate
-                    .getAutocompleteEditTextModelBaseDelegate()
-                    .getText()
-                    .delete(len - mInputDelegate.getDeletePostfixOnNextBeginImeCommand(), len);
+            Editable editable = mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getText();
+            try (var capture = new UndoStackCapture(editable)) {
+                editable.delete(len - mInputDelegate.getDeletePostfixOnNextBeginImeCommand(), len);
+            }
         }
         mInputDelegate.setDeletePostfixOnNextBeginImeCommand(0);
         mInputDelegate.getSpanCursorController().removeAutocompleteSpan();
@@ -221,7 +221,9 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         incrementBatchEditCount(); // avoids additional notifyAutocompleteTextStateChanged()
         Editable editable =
                 mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
-        editable.append(diff);
+        try (var capture = new UndoStackCapture(editable)) {
+            editable.append(diff);
+        }
         decrementBatchEditCount();
     }
 
@@ -279,7 +281,12 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
             // Update selection first such that keyboard app gets what it expects.
             boolean retVal = decrementBatchEditCount();
 
-            if (mPreBatchEditState.getAutocompleteText() != null) {
+            // Ensure this deletion is for autocomplete and not a site search transition.
+            // When site search is activated (e.g. hitting <space> on "yahoo[ suggestion]")
+            // the current state becomes completely empty. A normal autocomplete deletion will not
+            // leave the current state empty.
+            if (mPreBatchEditState.getAutocompleteText() != null
+                    && !currentState.getUserText().isEmpty()) {
                 // Undo delete to retain the last character and only remove autocomplete text.
                 restoreBackspacedText(diff);
             }
@@ -294,8 +301,10 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
         boolean retVal = decrementBatchEditCount();
         // Simply typed some characters or whole text selection has been overridden.
         if (currentState.isForwardTypedFrom(mPreBatchEditState)
+                || currentState.isForwardReplacementFrom(mPreBatchEditState)
                 || (mPreBatchEditState.isWholeUserTextSelected()
                         && currentState.getUserText().length() > 0
+                        && currentState.getSelection().isCollapsed()
                         && currentState.isCursorAtEndOfUserText())) {
             mInputDelegate.setLastEditWasTyping(true);
         }
@@ -343,7 +352,17 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     public boolean deleteSurroundingText(final int beforeLength, final int afterLength) {
         if (DEBUG) Log.i(TAG, "deleteSurroundingText [%d,%d]", beforeLength, afterLength);
         onBeginImeCommand();
-        boolean retVal = super.deleteSurroundingText(beforeLength, afterLength);
+        AutocompleteState state = mInputDelegate.getCurrentState();
+        boolean bypassUndo =
+                state.getAutocompleteText() != null
+                        && afterLength == 0
+                        && state.getUserText().length() > beforeLength;
+        Editable editable =
+                mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
+        boolean retVal;
+        try (var capture = bypassUndo ? new UndoStackCapture(editable) : null) {
+            retVal = super.deleteSurroundingText(beforeLength, afterLength);
+        }
         onEndImeCommand();
         return retVal;
     }
@@ -377,7 +396,8 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     }
 
     @Override
-    public ExtractedText getExtractedText(final ExtractedTextRequest request, final int flags) {
+    public @Nullable ExtractedText getExtractedText(
+            final ExtractedTextRequest request, final int flags) {
         if (DEBUG) Log.i(TAG, "getExtractedText");
         onBeginImeCommand();
         ExtractedText retVal = super.getExtractedText(request, flags);
@@ -404,7 +424,7 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     }
 
     @Override
-    public CharSequence getSelectedText(final int flags) {
+    public @Nullable CharSequence getSelectedText(final int flags) {
         if (DEBUG) Log.i(TAG, "getSelectedText");
         onBeginImeCommand();
         CharSequence retVal = super.getSelectedText(flags);
@@ -443,7 +463,19 @@ class AutocompleteInputConnection extends InputConnectionWrapper {
     public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
         if (DEBUG) Log.i(TAG, "deleteSurroundingTextInCodePoints");
         onBeginImeCommand();
-        boolean retVal = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+        AutocompleteState state = mInputDelegate.getCurrentState();
+        int userTextCodePoints =
+                Character.codePointCount(state.getUserText(), 0, state.getUserText().length());
+        boolean bypassUndo =
+                state.getAutocompleteText() != null
+                        && afterLength == 0
+                        && userTextCodePoints > beforeLength;
+        Editable editable =
+                mInputDelegate.getAutocompleteEditTextModelBaseDelegate().getEditableText();
+        boolean retVal;
+        try (var capture = bypassUndo ? new UndoStackCapture(editable) : null) {
+            retVal = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+        }
         onEndImeCommand();
         return retVal;
     }

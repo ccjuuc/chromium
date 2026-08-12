@@ -30,18 +30,18 @@ include_rules = [
   "+chrome/browser/web_applications/web_app_constants.h",
   "+chrome/browser/web_applications/web_app_management_type.h",
   "+chrome/browser/web_applications/web_app_helpers.h",
-  "+chrome/browser/web_applications/web_app_install_finalizer.h",
   "+chrome/browser/web_applications/web_app_provider.h",
   "+chrome/browser/web_applications/web_app_tab_helper.h",
   "+chrome/browser/web_applications/web_app_utils.h",
-  "+chrome/common/chrome_features.h",
   "+chrome/common/chrome_switches.h",
   "+chrome/common/extensions",
-  "+chrome/common/pref_names.h",
-  "+chrome/grit",
 ]
 
 specific_include_rules = {
+  "app_time_controller\\.cc": [
+    "+chrome/grit",
+  ],
+
   ".*test.*": [
     "+chrome/browser/ash/login/test",
     "+chrome/browser/extensions/test_extension_system.h",

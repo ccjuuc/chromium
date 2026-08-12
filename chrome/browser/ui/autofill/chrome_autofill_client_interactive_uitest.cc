@@ -57,7 +57,9 @@ class TestAutofillExternalDelegate : public AutofillExternalDelegate {
       : AutofillExternalDelegate(autofill_manager), client_(*autofill_client) {}
   ~TestAutofillExternalDelegate() override = default;
 
-  void OnSuggestionsShown(base::span<const Suggestion>) override {
+  void OnSuggestionsShown(
+      base::span<const Suggestion>,
+      base::optional_ref<const SuggestionMetadata>) override {
     ++show_counter_;
     ui_session_id_at_last_show_ =
         client_->GetSessionIdForCurrentAutofillSuggestions();
@@ -131,10 +133,12 @@ class ChromeAutofillClientBrowserTest : public InProcessBrowserTest {
   }
 
   AutofillClient::SuggestionUiSessionId ShowSuggestions(
+      const FieldGlobalId& field_id,
       const gfx::RectF& bounds) {
     return client()->ShowAutofillSuggestions(
         ChromeAutofillClient::PopupOpenArgs(
-            bounds, base::i18n::TextDirection::LEFT_TO_RIGHT,
+            field_id.frame_token, bounds,
+            base::i18n::TextDirection::LEFT_TO_RIGHT,
             {Suggestion(u"test", SuggestionType::kAutocompleteEntry)},
             AutofillSuggestionTriggerSource::kFormControlElementClicked,
             /*form_control_ax_id=*/0, PopupAnchorType::kField),
@@ -182,7 +186,9 @@ IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
 
   // Set the bounds such that the Autofill Popup would overlap with the IPH (the
   // IPH is displayed right below `form.fields[0]`, whose bounds are set above).
-  ShowSuggestions(/*bounds=*/gfx::RectF(100, 100));
+  ShowSuggestions(
+      FieldGlobalId(driver()->GetFrameToken(), form.fields()[0].renderer_id()),
+      /*bounds=*/gfx::RectF(100, 100));
   WaitUntilSuggestionsHaveBeenShown();
 
   EXPECT_FALSE(
@@ -197,13 +203,15 @@ IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest, SuggestionUiSessionId) {
 
   // Showing suggestions leads (asynchronously) to showing a popup with the
   // identifier returned by ShowAutofillSuggestions.
-  const AutofillClient::SuggestionUiSessionId first_id =
-      ShowSuggestions(gfx::RectF(50, 50));
+  const AutofillClient::SuggestionUiSessionId first_id = ShowSuggestions(
+      FieldGlobalId(driver()->GetFrameToken(), test::MakeFieldRendererId()),
+      gfx::RectF(50, 50));
   WaitUntilSuggestionsHaveBeenShown();
   EXPECT_THAT(ui_session_id_at_last_show(), std::make_optional(first_id));
 
-  const AutofillClient::SuggestionUiSessionId second_id =
-      ShowSuggestions(gfx::RectF(60, 60));
+  const AutofillClient::SuggestionUiSessionId second_id = ShowSuggestions(
+      FieldGlobalId(driver()->GetFrameToken(), test::MakeFieldRendererId()),
+      gfx::RectF(60, 60));
   EXPECT_NE(first_id, second_id);
   // Since showing suggestions is asynchronous, the identifier returned by
   // ShowAutofillSuggestions can be different from the one currently showing.
@@ -221,7 +229,8 @@ IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest, SuggestionUiSessionId) {
   client()->UpdateAutofillSuggestions(
       {Suggestion(u"other text", SuggestionType::kAutocompleteEntry)},
       FillingProduct::kAutocomplete,
-      AutofillSuggestionTriggerSource::kUnspecified);
+      AutofillSuggestionTriggerSource::kUnspecified,
+      AutofillSuggestionsIgnoreFocusLoss(false));
   EXPECT_GT(suggestion_show_counter(), old_count);
   // It is possible that some external interaction with popup could have led
   // to the suggestions hiding. In that case, updating the suggestions should
@@ -240,34 +249,24 @@ IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
   base::HistogramTester histogram_tester;
   client()->ShowAutofillSettings(SuggestionType::kManageAddress);
   histogram_tester.ExpectUniqueSample(
-      "Autofill.AddressesSettingsPage.VisitReferrer",
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
       autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 1);
 
   client()->ShowAutofillSettings(SuggestionType::kManageCreditCard);
   histogram_tester.ExpectUniqueSample(
-      "Autofill.PaymentMethodsSettingsPage.VisitReferrer",
-      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 1);
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
+      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 2);
 
   client()->ShowAutofillSettings(SuggestionType::kManageIban);
   histogram_tester.ExpectUniqueSample(
-      "Autofill.PaymentMethodsSettingsPage.VisitReferrer",
-      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 2);
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
+      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 3);
 }
 
-class ChromeAutofillClientYourSavedInfoTest
-    : public ChromeAutofillClientBrowserTest {
- public:
-  void SetUpInProcessBrowserTestFixture() override {
-    ChromeAutofillClientBrowserTest::SetUpInProcessBrowserTestFixture();
-    feature_list_.InitAndEnableFeature(
-        autofill::features::kYourSavedInfoSettingsPage);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(ChromeAutofillClientYourSavedInfoTest,
+// Tests that calling ShowAutofillSettings() with
+// SuggestionType::kManageAutofillAi navigates the active tab to the main
+// "Your Saved Info" settings page and records the visit referrer metric.
+IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
                        ShowAutofillSettings_NavigatesToYourSavedInfo) {
   base::HistogramTester histogram_tester;
   client()->ShowAutofillSettings(SuggestionType::kManageAutofillAi);
@@ -279,7 +278,59 @@ IN_PROC_BROWSER_TEST_F(ChromeAutofillClientYourSavedInfoTest,
       browser()->tab_strip_model()->GetActiveWebContents();
   EXPECT_EQ(
       active_contents->GetVisibleURL(),
-      GURL(std::string("chrome://settings/") + chrome::kYourSavedInfoSubPage));
+      GURL(std::string("chrome://settings/") + chrome::kAutofillSubPage));
+}
+
+// Tests that calling ShowAutofillSettings() with
+// SuggestionType::kManageAutofillAiIdentityDocs navigates the active tab to the
+// Identity Docs settings subpage and records the visit referrer metric.
+IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
+                       ShowAutofillSettings_NavigatesToIdentityDocs) {
+  base::HistogramTester histogram_tester;
+  client()->ShowAutofillSettings(SuggestionType::kManageAutofillAiIdentityDocs);
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
+      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 1);
+  content::WebContents* active_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(
+      active_contents->GetVisibleURL(),
+      GURL(std::string("chrome://settings/") + chrome::kIdentityDocsSubPage));
+}
+
+// Tests that calling ShowAutofillSettings() with
+// SuggestionType::kManageAutofillAiTravel navigates the active tab to the
+// Travel settings subpage and records the visit referrer metric.
+IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
+                       ShowAutofillSettings_NavigatesToTravel) {
+  base::HistogramTester histogram_tester;
+  client()->ShowAutofillSettings(SuggestionType::kManageAutofillAiTravel);
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
+      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 1);
+  content::WebContents* active_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(active_contents->GetVisibleURL(),
+            GURL(std::string("chrome://settings/") + chrome::kTravelSubPage));
+}
+
+// Tests that calling ShowAutofillSettings() with
+// SuggestionType::kManageAutofillAiShopping navigates the active tab to the
+// Shopping settings subpage and records the visit referrer metric.
+IN_PROC_BROWSER_TEST_F(ChromeAutofillClientBrowserTest,
+                       ShowAutofillSettings_NavigatesToShopping) {
+  base::HistogramTester histogram_tester;
+  client()->ShowAutofillSettings(SuggestionType::kManageAutofillAiShopping);
+
+  histogram_tester.ExpectUniqueSample(
+      "Autofill.YourSavedInfoSettingsPage.VisitReferrer",
+      autofill_metrics::AutofillSettingsReferrer::kFillingFlowDropdown, 1);
+  content::WebContents* active_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(active_contents->GetVisibleURL(),
+            GURL(std::string("chrome://settings/") + chrome::kShoppingSubPage));
 }
 
 }  // namespace

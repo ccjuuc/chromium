@@ -65,6 +65,37 @@ SearchHijackingDetector::SearchHijackingDetector(
 
 SearchHijackingDetector::~SearchHijackingDetector() = default;
 
+// static
+SearchHijackingDetector::HeuristicResult
+SearchHijackingDetector::GetRecentHeuristicResult(PrefService* pref_service,
+                                                  base::TimeDelta interval) {
+  // Finds the latest heuristic result from the signal data if available and
+  // checks it was within the specified `interval`.
+  if (pref_service->HasPrefPath(
+          prefs::kExtensionTelemetrySearchHijackingSignalData)) {
+    const base::DictValue& signal_data = pref_service->GetDict(
+        prefs::kExtensionTelemetrySearchHijackingSignalData);
+    const std::string* timestamp_str =
+        signal_data.FindString("detection_timestamp");
+    int64_t timestamp_ms = 0;
+    if (timestamp_str && base::StringToInt64(*timestamp_str, &timestamp_ms)) {
+      base::Time detection_time =
+          base::Time::FromMillisecondsSinceUnixEpoch(timestamp_ms);
+      if (base::Time::Now() - detection_time < interval) {
+        return HeuristicResult::kMatch;
+      }
+    }
+  }
+
+  // Stale or no match, with prefs showing the detector is active.
+  if (pref_service->HasPrefPath(
+          prefs::kExtensionTelemetrySearchHijackingLastCheckTime)) {
+    return HeuristicResult::kNoMatch;
+  }
+
+  return HeuristicResult::kUnknown;
+}
+
 void SearchHijackingDetector::OnOmniboxSearch(const AutocompleteMatch& match) {
   if (template_url_service_ &&
       template_url_service_->IsSearchResultsPageFromDefaultSearchProvider(
@@ -98,7 +129,7 @@ void SearchHijackingDetector::MaybeCheckForHeuristicMatch() {
   bool heuristic_match = false;
   if (search_count - serp_count >= heuristic_threshold_) {
     heuristic_match = true;
-    base::Value::Dict signal_data;
+    base::DictValue signal_data;
     signal_data.Set(
         "detection_timestamp",
         base::NumberToString(base::Time::Now().InMillisecondsSinceUnixEpoch()));
@@ -125,7 +156,7 @@ SearchHijackingDetector::GetSignalForReport() {
     return nullptr;
   }
 
-  const base::Value::Dict& signal_data = pref_service_->GetDict(
+  const base::DictValue& signal_data = pref_service_->GetDict(
       prefs::kExtensionTelemetrySearchHijackingSignalData);
   auto signal = std::make_unique<
       ExtensionTelemetryReportRequest::SearchHijackingSignal>();

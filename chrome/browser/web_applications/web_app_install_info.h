@@ -5,8 +5,6 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_INFO_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_INFO_H_
 
-#include <array>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -20,7 +18,11 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "chrome/browser/web_applications/model/dialog_image_info.h"
+#include "chrome/browser/web_applications/model/display_override.h"
 #include "chrome/browser/web_applications/model/localized_text.h"
+#include "chrome/browser/web_applications/model/migration_source.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/scope_extension_info.h"
@@ -30,113 +32,18 @@
 #include "components/services/app_service/public/cpp/share_target.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/types/iwa_version.h"
-#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
-#include "third_party/blink/public/common/safe_url_pattern.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
-#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-data-view.h"
+#include "third_party/blink/public/mojom/manifest/manifest_launch_handler.mojom-shared.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 
 static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
               BUILDFLAG(IS_CHROMEOS));
 
 namespace web_app {
-
-// A map of icon urls to the bitmaps provided by that url.
-using IconsMap = std::map<GURL, std::vector<SkBitmap>>;
-
-using SquareSizePx = int;
-// Iterates in ascending order (checked in SortedSizesPxIsAscending test).
-using SortedSizesPx = base::flat_set<SquareSizePx, std::less<>>;
-using IconPurpose = blink::mojom::ManifestImageResource_Purpose;
-constexpr std::array<IconPurpose,
-                     static_cast<int>(IconPurpose::kMaxValue) -
-                         static_cast<int>(IconPurpose::kMinValue) + 1>
-    kIconPurposes{IconPurpose::ANY, IconPurpose::MONOCHROME,
-                  IconPurpose::MASKABLE};
-struct SizeComparator {
-  constexpr bool operator()(const gfx::Size& left,
-                            const gfx::Size& right) const {
-    if (left.height() != right.height()) {
-      return left.height() < right.height();
-    }
-
-    return left.width() < right.width();
-  }
-};
-
-using SizeSet = base::flat_set<gfx::Size, SizeComparator>;
-
-apps::IconInfo::Purpose ManifestPurposeToIconInfoPurpose(
-    IconPurpose manifest_purpose);
-
-// Icon bitmaps for each IconPurpose.
-struct IconBitmaps {
-  IconBitmaps();
-  ~IconBitmaps();
-  IconBitmaps(const IconBitmaps&);
-  IconBitmaps(IconBitmaps&&) noexcept;
-  IconBitmaps& operator=(const IconBitmaps&);
-  IconBitmaps& operator=(IconBitmaps&&) noexcept;
-
-  bool operator==(const IconBitmaps&) const;
-
-  const std::map<SquareSizePx, SkBitmap>& GetBitmapsForPurpose(
-      IconPurpose purpose) const;
-  void SetBitmapsForPurpose(IconPurpose purpose,
-                            std::map<SquareSizePx, SkBitmap> bitmaps);
-
-  bool empty() const;
-
-  // TODO(crbug.com/40158740): Consider using base::flat_map.
-
-  // Icon bitmaps suitable for any context, keyed by their square size.
-  // See https://www.w3.org/TR/appmanifest/#dfn-any-purpose
-  std::map<SquareSizePx, SkBitmap> any;
-
-  // Icon bitmaps designed for masking, keyed by their square size.
-  // See https://www.w3.org/TR/appmanifest/#dfn-maskable-purpose
-  std::map<SquareSizePx, SkBitmap> maskable;
-
-  // Monochrome bitmaps designed for any context, keyed by their square size.
-  // See https://www.w3.org/TR/appmanifest/#purpose-member
-  std::map<SquareSizePx, SkBitmap> monochrome;
-};
-
-// Icon sizes for each IconPurpose.
-struct IconSizes {
-  IconSizes();
-  ~IconSizes();
-  IconSizes(const IconSizes&);
-  IconSizes(IconSizes&&) noexcept;
-  IconSizes& operator=(const IconSizes&);
-  IconSizes& operator=(IconSizes&&) noexcept;
-  base::Value AsDebugValue() const;
-
-  const std::vector<SquareSizePx>& GetSizesForPurpose(
-      IconPurpose purpose) const;
-  void SetSizesForPurpose(IconPurpose purpose, std::vector<SquareSizePx> sizes);
-
-  bool empty() const;
-
-  // Sizes of icon bitmaps suitable for any context.
-  // See https://www.w3.org/TR/appmanifest/#dfn-any-purpose
-  std::vector<SquareSizePx> any;
-
-  // Sizes of icon bitmaps designed for masking.
-  // See https://www.w3.org/TR/appmanifest/#dfn-maskable-purpose
-  std::vector<SquareSizePx> maskable;
-
-  // Sizes of monochrome bitmaps, keyed by their square size.
-  // See https://www.w3.org/TR/appmanifest/#purpose-member
-  std::vector<SquareSizePx> monochrome;
-};
-
-using ShortcutsMenuIconBitmaps = std::vector<IconBitmaps>;
 
 // Structure used when creating app icon shortcuts menu and for downloading
 // associated shortcut icons when supported by OS platform (eg. Windows).
@@ -205,35 +112,17 @@ struct IconsWithSizeAny {
   base::Value ToDebugValue() const;
   std::string ToString() const;
 
-  // 4 different maps are needed to keep track of the icons since there is no
-  // guarantee that the icons specified for each component that uses icons (like
-  // file handlers) will exist at the higher level `icons` entry for the
-  // manifest.
+  // Separate maps are needed to keep track of the icons since there is no
+  // guarantee that the icons specified for each component that uses icons will
+  // exist at the higher level `icons` entry for the manifest.
   // A single GURL is stored per IconPurpose since only the last available icon
   // needs to be considered as per the manifest spec.
   base::flat_map<IconPurpose, GURL> manifest_icons;
   SizeSet manifest_icon_provided_sizes;
   base::flat_map<IconPurpose, GURL> shortcut_menu_icons;
   SizeSet shortcut_menu_icons_provided_sizes;
-  base::flat_map<IconPurpose, GURL> file_handling_icons;
-  SizeSet file_handling_icon_provided_sizes;
   base::flat_map<IconPurpose, GURL> home_tab_icons;
   SizeSet home_tab_icon_provided_sizes;
-};
-
-// Data structure to store information about whether the icons obtained from the
-// manifest need to be masked to be shown in dialogs or other UX surfaces while
-// the app has not been installed yet.
-struct DialogImageInfo {
-  DialogImageInfo();
-  ~DialogImageInfo();
-  DialogImageInfo(const DialogImageInfo& dialog_image_info);
-  DialogImageInfo& operator=(const DialogImageInfo& dialog_image_info);
-  DialogImageInfo(DialogImageInfo&& dialog_image_info);
-  DialogImageInfo& operator=(DialogImageInfo&& dialog_image_info);
-
-  std::map<SquareSizePx, SkBitmap> bitmaps;
-  bool is_maskable = false;
 };
 
 // Structure used when installing a web page as an app.
@@ -289,6 +178,9 @@ struct WebAppInstallInfo {
 
   // Returns the version of the Isolated Web App.
   // PRECONDITION: Must only be called if an IWA version is actually set.
+  bool has_isolated_web_app_version() const {
+    return isolated_web_app_version_.has_value();
+  }
   const IwaVersion& isolated_web_app_version() const {
     CHECK(isolated_web_app_version_.has_value())
         << "Attempted to access Isolated Web App version when not set.";
@@ -327,8 +219,9 @@ struct WebAppInstallInfo {
   // translations and text direction information to be preserved.
   LocalizedText title;
 
-  // Description of the application.
-  std::u16string description;
+  // Description of the application, stored in a localized format to allow
+  // translations and text direction information to be preserved.
+  LocalizedText description;
 
   // The URL of the manifest.
   // https://www.w3.org/TR/appmanifest/#web-application-manifest
@@ -354,9 +247,7 @@ struct WebAppInstallInfo {
   IconBitmaps trusted_icon_bitmaps;
 
   // A collection of unprocessed icons keyed by their download URL. The usage
-  // and purpose of these icons is tracked elsewhere, such as in
-  // `file_handlers`. Currently, this is only used for file handling icons, but
-  // other icons may be added here in the future.
+  // and purpose of these icons is tracked elsewhere.
   IconsMap other_icon_bitmaps;
 
   // Represents whether the icons for the web app are generated by Chrome due to
@@ -389,7 +280,7 @@ struct WebAppInstallInfo {
   blink::mojom::DisplayMode display_mode = blink::mojom::DisplayMode::kBrowser;
 
   // App preference to control display fallback ordering
-  std::vector<blink::mojom::DisplayMode> display_override;
+  std::vector<web_app::DisplayOverride> display_override;
 
   // User preference for whether the app should be opened as a tab or in an app
   // window. Must be either kBrowser or kStandalone, this will be checked by
@@ -397,9 +288,14 @@ struct WebAppInstallInfo {
   std::optional<web_app::mojom::UserDisplayMode> user_display_mode =
       web_app::mojom::UserDisplayMode::kBrowser;
 
-  // URL patterns used to decide when a window should have display mode
-  // `kBorderless`.
-  std::vector<blink::SafeUrlPattern> borderless_url_patterns;
+  // User preference for whether the app should be added to the quick launch bar
+  // on ChromeOS, or the taskbar on Windows, passed from the installation
+  // dialogs.
+  std::optional<bool> add_to_quick_launch_bar;
+
+  // User preference for whether the app should be added to the desktop or not,
+  // passed from the installation dialogs.
+  std::optional<bool> add_to_desktop;
 
   // The extensions and mime types the app can handle.
   apps::FileHandlers file_handlers;
@@ -418,7 +314,7 @@ struct WebAppInstallInfo {
   // given |IconBitmaps| matches that of the shortcut in
   // |shortcuts_menu_item_infos| whose bitmaps it contains.
   // Notes: It is not guaranteed that these are populated if the menu items are.
-  // See https://crbug.com/1427444.
+  // See https://crbug.com/40899887.
   ShortcutsMenuIconBitmaps shortcuts_menu_icon_bitmaps;
 
   // The URL protocols/schemes that the app can handle.
@@ -456,10 +352,6 @@ struct WebAppInstallInfo {
   // A mapping from locales to translated fields.
   base::flat_map<std::string, blink::Manifest::TranslationItem> translations;
 
-  // The declared permissions policy to apply as the baseline policy for all
-  // documents belonging to the application.
-  network::ParsedPermissionsPolicy permissions_policy;
-
   // See ExternallyManagedAppManager for placeholder app documentation.
   // Intended to be a temporary app while we wait for the install_url to
   // successfully load.
@@ -478,11 +370,6 @@ struct WebAppInstallInfo {
   // is only used when the app is installed as a sub app through the SUB_APP
   // API.
   std::optional<webapps::AppId> parent_app_id;
-
-  // ManifestId of the app that called the SUB_APP API to install this app. This
-  // field is only used when the app is installed as a sub app through the
-  // SUB_APP API.
-  std::optional<webapps::ManifestId> parent_app_manifest_id;
 
   // A list of additional terms to use when matching this app against
   // identifiers in admin policies (for shelf pinning, default file handlers,
@@ -520,6 +407,9 @@ struct WebAppInstallInfo {
   // IsolatedWebAppInstallForceList policy takes precedence over this value.
   std::optional<GURL> iwa_update_manifest_url;
 
+  // Migration sources to be associated with the app.
+  std::vector<MigrationSource> migration_sources;
+
  private:
   // Used this method in Clone() method. Use Clone() to deep copy explicitly.
   WebAppInstallInfo(const WebAppInstallInfo& other);
@@ -534,15 +424,11 @@ struct WebAppInstallInfo {
   GURL start_url_;
 };
 
-bool operator==(const IconSizes& icon_sizes1, const IconSizes& icon_sizes2);
-
 bool operator==(const WebAppShortcutsMenuItemInfo::Icon& icon1,
                 const WebAppShortcutsMenuItemInfo::Icon& icon2);
 
 bool operator==(const WebAppShortcutsMenuItemInfo& shortcut_info1,
                 const WebAppShortcutsMenuItemInfo& shortcut_info2);
-
-bool operator==(const DialogImageInfo& info1, const DialogImageInfo& info2);
 
 }  // namespace web_app
 

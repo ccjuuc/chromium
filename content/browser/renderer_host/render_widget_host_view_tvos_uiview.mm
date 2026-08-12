@@ -9,6 +9,7 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "ui/accessibility/platform/browser_accessibility_manager.h"
 #include "ui/base/ime/mojom/ime_types.mojom-shared.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -25,6 +26,7 @@ typedef NS_ENUM(NSInteger, RemoteButton) {
   kLeft,
   kRight,
   kMediaPlayPause,
+  kSelect,
   kMenu,
   kNone
 };
@@ -71,6 +73,9 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
     case UIPressTypePlayPause:
       button = kMediaPlayPause;
       break;
+    case UIPressTypeSelect:
+      button = kSelect;
+      break;
     case UIPressTypeMenu:
       button = kMenu;
       break;
@@ -97,38 +102,7 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
     // tvOS supports multiple types of input events from the Remote, including
     // the clickpad (touch surface), the clickpad ring (directional control),
     // and various physical buttons.
-    // Add a tap gesture recognizer to handle center-clickpad press events.
-    UITapGestureRecognizer* tapGesture =
-        [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                action:@selector(tapGesture:)];
-    [self addGestureRecognizer:tapGesture];
-
-    // Create and add swipe gesture recognizers for all directions originating
-    // from the clickpad buttons.
-    [self addSwipeGestureRecognizerWithDirection:
-              UISwipeGestureRecognizerDirectionUp];
-    [self addSwipeGestureRecognizerWithDirection:
-              UISwipeGestureRecognizerDirectionLeft];
-    [self addSwipeGestureRecognizerWithDirection:
-              UISwipeGestureRecognizerDirectionRight];
-    [self addSwipeGestureRecognizerWithDirection:
-              UISwipeGestureRecognizerDirectionDown];
-
-    // Add a pan gesture recognizer to capture input from the clickpad ring,
-    // which allows for continuous movement to the left or right.
-    UIPanGestureRecognizer* panGesture =
-        [[UIPanGestureRecognizer alloc] initWithTarget:self
-                                                action:@selector(handlePan:)];
-    panGesture.delegate = self;
-    [self addGestureRecognizer:panGesture];
-
-    // Only allow the pan gesture to activate if the swipe gesture fails to
-    // recognize.
-    for (UIGestureRecognizer* swipeGesture in self.gestureRecognizers) {
-      if ([swipeGesture isKindOfClass:[UISwipeGestureRecognizer class]]) {
-        [panGesture requireGestureRecognizerToFail:swipeGesture];
-      }
-    }
+    [self addSwipeAndPanGestureRecognizers];
   }
   return self;
 }
@@ -182,6 +156,35 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
 
 #pragma mark - Private
 
+- (void)addSwipeAndPanGestureRecognizers {
+  // Create and add swipe gesture recognizers for all directions originating
+  // from the clickpad buttons.
+  [self addSwipeGestureRecognizerWithDirection:
+            UISwipeGestureRecognizerDirectionUp];
+  [self addSwipeGestureRecognizerWithDirection:
+            UISwipeGestureRecognizerDirectionLeft];
+  [self addSwipeGestureRecognizerWithDirection:
+            UISwipeGestureRecognizerDirectionRight];
+  [self addSwipeGestureRecognizerWithDirection:
+            UISwipeGestureRecognizerDirectionDown];
+
+  // Add a pan gesture recognizer to capture input from the clickpad ring,
+  // which allows for continuous movement to the left or right.
+  UIPanGestureRecognizer* panGesture =
+      [[UIPanGestureRecognizer alloc] initWithTarget:self
+                                              action:@selector(handlePan:)];
+  panGesture.delegate = self;
+  [self addGestureRecognizer:panGesture];
+
+  // Only allow the pan gesture to activate if the swipe gesture fails to
+  // recognize.
+  for (UIGestureRecognizer* swipeGesture in self.gestureRecognizers) {
+    if ([swipeGesture isKindOfClass:[UISwipeGestureRecognizer class]]) {
+      [panGesture requireGestureRecognizerToFail:swipeGesture];
+    }
+  }
+}
+
 // Helper method to add swipe gestures for `direction`.
 - (void)addSwipeGestureRecognizerWithDirection:
     (UISwipeGestureRecognizerDirection)direction {
@@ -191,44 +194,6 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
   swipeGesture.direction = direction;
   swipeGesture.delegate = self;
   [self addGestureRecognizer:swipeGesture];
-}
-
-- (void)tapGesture:(UIGestureRecognizer*)gestureRecognizer {
-  if ([gestureRecognizer state] != UIGestureRecognizerStateEnded) {
-    return;
-  }
-
-  const ui::mojom::TextInputState* state = [self editState];
-  if (state && state->mode != ui::TextInputMode::TEXT_INPUT_MODE_NONE &&
-      state->type != ui::TextInputType::TEXT_INPUT_TYPE_NONE) {
-    [self showKeyboard:*state];
-    return;
-  }
-
-  blink::WebKeyboardEvent event(blink::WebInputEvent::Type::kKeyDown,
-                                blink::WebInputEvent::kNoModifiers,
-                                ui::EventTimeForNow());
-  event.native_key_code = UIKeyboardHIDUsageKeyboardReturnOrEnter;
-  event.dom_code = static_cast<int>(ui::DomCode::ENTER);
-  event.dom_key = ui::DomKey::ENTER;
-  event.windows_key_code = ui::VKEY_RETURN;
-
-  // Copied from components/input/web_input_event_builders_mac.mm's
-  // WebKeyboardEventBuilder::Build().
-  // This is necessary due to way some HTML elements process keyboard activation
-  // (e.g. blink::HTMLElement::HandleKeyboardActivation()).
-  event.text[0] = '\r';
-  event.unmodified_text[0] = '\r';
-
-  _view->SendKeyEvent(
-      input::NativeWebKeyboardEvent(event, _view->GetNativeView()));
-
-  // We also need to send a keyup event so that e.g. checkboxes are properly
-  // activated/deactivated with the keyboard.
-  event.SetType(blink::WebInputEvent::Type::kKeyUp);
-  event.SetTimeStamp(ui::EventTimeForNow());
-  _view->SendKeyEvent(
-      input::NativeWebKeyboardEvent(event, _view->GetNativeView()));
 }
 
 - (void)swipeGesture:(UISwipeGestureRecognizer*)gestureRecognizer {
@@ -280,6 +245,31 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
   }
 }
 
+// Handles keyboard-show logic for UIPressTypeSelect. Returns YES if the key
+// event should be suppressed (keyboard was shown or will be shown).
+- (BOOL)handleSelectPressWithType:(blink::WebInputEvent::Type)type {
+  const ui::mojom::TextInputState* state = [self editState];
+  if (type == blink::WebInputEvent::Type::kKeyDown) {
+    if (state && state->mode != ui::TextInputMode::TEXT_INPUT_MODE_NONE &&
+        state->type != ui::TextInputType::TEXT_INPUT_TYPE_NONE) {
+      _selectWillShowKeyboard = YES;
+      return YES;
+    }
+    // Reset `_selectWillShowKeyboard` to NO. If a previous press was
+    // cancelled, the flag could remain YES.
+    _selectWillShowKeyboard = NO;
+  } else if (type == blink::WebInputEvent::Type::kKeyUp) {
+    if (_selectWillShowKeyboard) {
+      _selectWillShowKeyboard = NO;
+      if (state) {
+        [self showKeyboard:*state];
+      }
+      return YES;
+    }
+  }
+  return NO;
+}
+
 // Returns the set of unhanlded UIPress events to propagate to `super`.
 - (NSSet<UIPress*>*)handlePresses:(NSSet<UIPress*>*)presses
                          withType:(blink::WebInputEvent::Type)type {
@@ -294,6 +284,9 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
       if (![self sendKeyboardEvent:press eventType:type]) {
         [unhandled addObject:press];
       }
+      continue;
+    }
+    if (button == kSelect && [self handleSelectPressWithType:type]) {
       continue;
     }
     if (![self sendKeyEventWithRemoteButton:button eventType:type]) {
@@ -379,6 +372,18 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
       event.dom_key = ui::DomKey::MEDIA_PLAY_PAUSE;
       event.windows_key_code = ui::VKEY_MEDIA_PLAY_PAUSE;
       break;
+    case kSelect:
+      event.native_key_code = UIKeyboardHIDUsageKeyboardReturnOrEnter;
+      event.dom_code = static_cast<int>(ui::DomCode::ENTER);
+      event.dom_key = ui::DomKey::ENTER;
+      event.windows_key_code = ui::VKEY_RETURN;
+      // Copied from components/input/web_input_event_builders_mac.mm's
+      // WebKeyboardEventBuilder::Build().
+      // This is necessary due to way some HTML elements process keyboard
+      // activation (e.g. blink::HTMLElement::HandleKeyboardActivation()).
+      event.text[0] = '\r';
+      event.unmodified_text[0] = '\r';
+      break;
     case kMenu:
       // Refer to https://support.apple.com/en-us/102337.
       // The menu button works to return to the previous screen.
@@ -441,6 +446,19 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
 
 #pragma mark - NSObject
 
+- (NSArray*)accessibilityElements {
+  ui::BrowserAccessibilityManager* manager =
+      _view->host()->GetRootBrowserAccessibilityManager();
+  if (manager) {
+    id root =
+        manager->GetBrowserAccessibilityRoot()->GetNativeViewAccessible().Get();
+    if (root) {
+      return @[ root ];
+    }
+  }
+  return nil;
+}
+
 - (void)observeValueForKeyPath:(NSString*)keyPath
                       ofObject:(id)object
                         change:(NSDictionary*)change
@@ -454,6 +472,16 @@ RemoteButton remoteButtonFromPressType(UIPressType type) {
                            change:change
                           context:context];
   }
+}
+
+#pragma mark - UIAccessibilityElement
+
+- (BOOL)isAccessibilityElement {
+  return NO;
+}
+
+- (CGRect)accessibilityFrame {
+  return CGRectZero;
 }
 
 #pragma mark - UIResponder

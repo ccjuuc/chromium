@@ -15,8 +15,11 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.Mockito;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
@@ -30,6 +33,8 @@ import java.util.Collection;
 
 @RunWith(ParameterizedRobolectricTestRunner.class)
 public class BarrierTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @IntDef({ApiCallType.NONE, ApiCallType.CRED_MAN, ApiCallType.FIDO_2_API})
     @Retention(RetentionPolicy.SOURCE)
     public @interface ApiCallType {
@@ -209,7 +214,6 @@ public class BarrierTest {
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
         when(mAuthenticationContextProvider.getRequestCallback()).thenReturn(mRequestCallback);
     }
 
@@ -247,8 +251,10 @@ public class BarrierTest {
 
         switch (mExpectation) {
             case Expectation.BOTH_RAN:
-                verify(mFido2ApiSuccessfulRunnable, times(1)).run();
-                verify(mCredManSuccesfulRunnable, times(1)).run();
+                InOrder inOrder =
+                        Mockito.inOrder(mCredManSuccesfulRunnable, mFido2ApiSuccessfulRunnable);
+                inOrder.verify(mCredManSuccesfulRunnable).run();
+                inOrder.verify(mFido2ApiSuccessfulRunnable).run();
                 verify(mRequestCallback, times(0)).onComplete(any());
                 break;
             case Expectation.ERROR_RAN:

@@ -27,6 +27,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "build/build_config.h"
+#include "third_party/blink/public/common/webid/email_verification_state.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -44,6 +45,7 @@ class ComputedStyleBuilder;
 class DragData;
 class ExceptionState;
 class FileList;
+class OpaqueRange;
 class HTMLDataListElement;
 class HTMLImageLoader;
 class InputType;
@@ -64,6 +66,10 @@ class CORE_EXPORT HTMLInputElement
                             const CreateElementFlags = CreateElementFlags());
   ~HTMLInputElement() override;
   void Trace(Visitor*) const override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLInputElement;
+  }
 
   bool HasPendingActivity() const final;
 
@@ -225,6 +231,7 @@ class CORE_EXPORT HTMLInputElement
                                    unsigned end,
                                    ExceptionState&);
 
+  void setNonce(const AtomicString&) final;
   bool LayoutObjectIsNeeded(const DisplayStyle&) const final;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) override;
   void DetachLayoutTree(bool performing_reattach) final;
@@ -288,6 +295,9 @@ class CORE_EXPORT HTMLInputElement
   // Associated <datalist> options which match to the current INPUT value.
   HeapVector<Member<HTMLOptionElement>> FilteredDataListOptions() const;
 
+  // Returns the select element associated via the filter attribute, if any.
+  HTMLSelectElement* FilterTarget() const;
+
   // Functions for InputType classes.
   void SetNonAttributeValue(const String&);
   void SetNonAttributeValueByUserEdit(const String&);
@@ -335,6 +345,10 @@ class CORE_EXPORT HTMLInputElement
                     const V8SelectionMode& selection_mode,
                     ExceptionState&) final;
 
+  OpaqueRange* createValueRange(unsigned start_offset,
+                                unsigned end_offset,
+                                ExceptionState&) final;
+
   HTMLImageLoader* ImageLoader() const { return image_loader_.Get(); }
   HTMLImageLoader& EnsureImageLoader();
 
@@ -346,7 +360,23 @@ class CORE_EXPORT HTMLInputElement
   bool ShouldDrawCapsLockIndicator() const;
   void SetShouldRevealPassword(bool value);
   bool ShouldRevealPassword() const { return should_reveal_password_; }
-  bool IsLastInputElementInForm();
+  // Sets the logical verification state (e.g. loading, verified, etc.) and
+  // updates the indicator element's DOM attributes.
+  void SetEmailVerificationState(EmailVerificationState state);
+  EmailVerificationState GetEmailVerificationState() const;
+
+  // Re-evaluates whether the indicator is supported by checking for associated
+  // token fields, and updates the data-state attribute of the indicator shadow
+  // element.
+  void UpdateEmailVerificationIndicator();
+
+  // Returns true if this input field has an
+  // autocomplete="email-verification-token" attribute. The nonce is not checked
+  // here because a page can dynamically set/clear the nonce via setNonce(), and
+  // we need to identify the element as a token field to trigger form updates.
+  // Whether verification is supported (which requires a non-empty nonce) is
+  // checked separately in IsEmailVerificationSupported().
+  bool IsEmailVerificationTokenField() const;
   void DispatchSimulatedEnter();
   AXObject* PopupRootAXObject();
   void DidNotifySubtreeInsertionsToDocument() override;
@@ -371,6 +401,7 @@ class CORE_EXPORT HTMLInputElement
 
   mojom::blink::FormControlType FormControlType() const final;
 
+  bool SupportsReadOnly() const override;
   bool isMutable();
   void showPicker(ExceptionState&);
   bool IsPickerVisible() const;
@@ -386,6 +417,8 @@ class CORE_EXPORT HTMLInputElement
   bool IsKeyboardFocusableSlow(UpdateBehavior update_behavior =
                                    UpdateBehavior::kStyleAndLayout) const final;
 
+  bool IsBaseAppearanceCombobox() const;
+
  protected:
   void DefaultEventHandler(Event&) override;
   bool IsInnerEditorValueEmpty() const final;
@@ -393,6 +426,9 @@ class CORE_EXPORT HTMLInputElement
 
  private:
   enum AutoCompleteSetting { kUninitialized, kOn, kOff };
+
+  // Element:
+  bool IsNativeOrHeuristicPassword() const override;
 
   void WillChangeForm() final;
   void DidChangeForm() final;
@@ -407,6 +443,7 @@ class CORE_EXPORT HTMLInputElement
   bool IsEnumeratable() const final;
   bool IsInteractiveContent() const final;
   bool IsLabelable() const final;
+  FocusgroupFlags NativeArrowKeyAxes() const final;
   bool MatchesDefaultPseudoClass() const override;
   bool IsTextControl() const final { return IsTextField(); }
   int scrollWidth() override;
@@ -468,7 +505,8 @@ class CORE_EXPORT HTMLInputElement
   bool IsRequiredFormControl() const final;
   bool RecalcWillValidate() const final;
   void RequiredAttributeChanged() final;
-  void DisabledAttributeChanged() final;
+  void DisabledAttributeChanged(DisabledChangedReason) final;
+  void AttributeChanged(const AttributeModificationParams&) final;
 
   void InitializeTypeInParsing();
   void UpdateType(const AtomicString&);
@@ -486,7 +524,7 @@ class CORE_EXPORT HTMLInputElement
 
   void MaybeReportPiiMetrics();
 
-  void DidChangeIsCanvasOrInCanvasSubtree() final;
+  void DidChangeIsInCanvasSubtree() final;
 
   AtomicString name_;
   // The value string in |value| value mode.
@@ -518,6 +556,16 @@ class CORE_EXPORT HTMLInputElement
   // element lives on.
   Member<HTMLImageLoader> image_loader_;
   Member<ListAttributeTargetObserver> list_attribute_target_observer_;
+  // nearest_ancestor_select_ is the select element ancestor of this element. If
+  // there are more than one select element ancestor, the nearest of them is
+  // chosen. This is updated in HTMLInputElement::InsertedInto for the
+  // FilterableSelect feature.
+  Member<HTMLSelectElement> nearest_ancestor_select_;
+  // nearest_ancestor_select_child_ is the child node of
+  // nearest_ancestor_select_ which is in this element's ancestor chain. It is
+  // also updated in HTMLInputElement::InsertedInto. See
+  // HTMLSelectElement::WalkAncestorsForRelatedParts.
+  Member<ContainerNode> nearest_ancestor_select_child_;
 
   FRIEND_TEST_ALL_PREFIXES(HTMLInputElementTest, RadioKeyDownDCHECKFailure);
 };

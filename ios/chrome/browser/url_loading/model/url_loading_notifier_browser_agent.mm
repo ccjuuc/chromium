@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/url_loading/model/url_loading_notifier_browser_agent.h"
 
 #import "ios/chrome/browser/url_loading/model/url_loading_observer.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 
 UrlLoadingNotifierBrowserAgent::UrlLoadingNotifierBrowserAgent(Browser* browser)
     : BrowserUserData(browser) {}
@@ -21,42 +22,46 @@ void UrlLoadingNotifierBrowserAgent::RemoveObserver(
 }
 
 void UrlLoadingNotifierBrowserAgent::TabWillLoadUrl(
-    const GURL& url,
-    ui::PageTransition transition_type) {
+    const UrlLoadParams& params,
+    base::WeakPtr<web::WebState> web_state) {
   for (auto& observer : observers_) {
-    observer.TabWillLoadUrl(url, transition_type);
+    observer.TabWillLoadUrl(params, web_state);
   }
 }
 
 void UrlLoadingNotifierBrowserAgent::TabFailedToLoadUrl(
     const GURL& url,
-    ui::PageTransition transition_type) {
+    ui::PageTransition transition_type,
+    base::WeakPtr<web::WebState> web_state) {
   for (auto& observer : observers_) {
-    observer.TabFailedToLoadUrl(url, transition_type);
+    observer.TabFailedToLoadUrl(url, transition_type, web_state);
   }
 }
 
 void UrlLoadingNotifierBrowserAgent::TabDidPrerenderUrl(
     const GURL& url,
-    ui::PageTransition transition_type) {
+    ui::PageTransition transition_type,
+    base::WeakPtr<web::WebState> web_state) {
   for (auto& observer : observers_) {
-    observer.TabDidPrerenderUrl(url, transition_type);
+    observer.TabDidPrerenderUrl(url, transition_type, web_state);
   }
 }
 
 void UrlLoadingNotifierBrowserAgent::TabDidReloadUrl(
     const GURL& url,
-    ui::PageTransition transition_type) {
+    ui::PageTransition transition_type,
+    base::WeakPtr<web::WebState> web_state) {
   for (auto& observer : observers_) {
-    observer.TabDidReloadUrl(url, transition_type);
+    observer.TabDidReloadUrl(url, transition_type, web_state);
   }
 }
 
 void UrlLoadingNotifierBrowserAgent::TabDidLoadUrl(
     const GURL& url,
-    ui::PageTransition transition_type) {
+    ui::PageTransition transition_type,
+    base::WeakPtr<web::WebState> web_state) {
   for (auto& observer : observers_) {
-    observer.TabDidLoadUrl(url, transition_type);
+    observer.TabDidLoadUrl(url, transition_type, web_state);
   }
 }
 

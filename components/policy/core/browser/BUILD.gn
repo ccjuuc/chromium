@@ -27,6 +27,7 @@ source_set("internal") {
     "configuration_policy_handler_list.h",
     "configuration_policy_pref_store.cc",
     "configuration_policy_pref_store.h",
+    "developer_tools_availability.h",
     "gen_ai_default_settings_policy_handler.cc",
     "gen_ai_default_settings_policy_handler.h",
     "policy_conversions.cc",
@@ -51,6 +52,7 @@ source_set("internal") {
     "url_list/url_blocklist_manager.h",
     "url_list/url_blocklist_policy_handler.cc",
     "url_list/url_blocklist_policy_handler.h",
+    "url_list/url_list_policy_pref_names.h",
     "url_list/url_scheme_list_policy_handler.cc",
     "url_list/url_scheme_list_policy_handler.h",
     "webui/json_generation.cc",
@@ -74,6 +76,13 @@ source_set("internal") {
     ]
   }
 
+  if (!is_fuchsia) {
+    sources += [
+      "url_list/incognito_mode_policy_handler.cc",
+      "url_list/incognito_mode_policy_handler.h",
+    ]
+  }
+
   configs += [ "//components/policy:component_implementation" ]
 
   public_deps = [ "//base" ]
@@ -82,6 +91,7 @@ source_set("internal") {
     "//build:branding_buildflags",
     "//components/google/core/common",
     "//components/keyed_service/core",
+    "//components/policy/resources/webui/mojom:mojo_bindings",
     "//components/pref_registry",
     "//components/prefs",
     "//components/reporting/proto:record_proto",
@@ -165,6 +175,22 @@ source_set("pref_mapping_test_support") {
   data = [ "//components/policy/test/data/pref_mapping/" ]
 }
 
+static_library("incognito_mode_policy_test_support") {
+  testonly = true
+  sources = []
+  if (!is_fuchsia) {
+    sources += [
+      "url_list/incognito_mode_policy_handler_test.cc",
+      "url_list/incognito_mode_policy_handler_test.h",
+    ]
+  }
+  deps = [
+    ":test_support",
+    "//base",
+    "//testing/gtest",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
   sources = [
@@ -180,13 +206,20 @@ source_set("unit_tests") {
     "url_list/url_blocklist_manager_unittest.cc",
     "url_list/url_blocklist_policy_handler_unittest.cc",
     "url_list/url_scheme_list_policy_handler_unittest.cc",
+    "webui/json_generation_unittest.cc",
+    "webui/policy_status_provider_unittest.cc",
+    "webui/statistics_collector_unittest.cc",
   ]
   deps = [
     ":browser",
+    ":incognito_mode_policy_test_support",
     ":test_support",
     "//base",
+    "//base/test:test_support",
     "//build:android_buildflags",
     "//components/policy:generated",
+    "//components/policy/core/common:test_support",
+    "//components/policy/resources/webui/mojom:mojo_bindings",
     "//components/prefs:test_support",
     "//components/signin/public/identity_manager",
     "//components/signin/public/identity_manager:test_support",
@@ -201,8 +234,17 @@ source_set("unit_tests") {
     "//url",
   ]
 
+  if (!is_chromeos) {
+    sources +=
+        [ "webui/machine_level_user_cloud_policy_status_provider_unittest.cc" ]
+  }
+
   if (is_android) {
     sources += [ "android/policy_cache_updater_android_unittest.cc" ]
     deps += [ "//components/policy/android:test_jni_headers" ]
+  }
+
+  if (!is_fuchsia) {
+    sources += [ "url_list/incognito_mode_policy_handler_unittest.cc" ]
   }
 }

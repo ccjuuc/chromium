@@ -4,10 +4,14 @@
 
 #include "components/autofill/core/browser/form_parsing/loyalty_field_parser.h"
 
+#include <memory>
+#include <optional>
+#include <utility>
+
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/autofill_scanner.h"
-#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
-#include "components/autofill/core/common/autofill_regex_constants.h"
+#include "components/autofill/core/browser/form_parsing/field_candidates.h"
+#include "components/autofill/core/browser/form_parsing/form_field_parser.h"
 
 namespace autofill {
 
@@ -28,8 +32,8 @@ LoyaltyFieldParser::LoyaltyFieldParser(FieldAndMatchInfo match)
 
 void LoyaltyFieldParser::AddClassifications(
     FieldCandidatesMap& field_candidates) const {
-  AddClassification(match_, LOYALTY_MEMBERSHIP_ID, kBaseLoyaltyCardParserScore,
-                    field_candidates);
+  AddClassification(match_, LOYALTY_MEMBERSHIP_ID,
+                    HeuristicParser::kLoyaltyCard, field_candidates);
 }
 
 }  // namespace autofill

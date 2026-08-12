@@ -33,47 +33,64 @@ void RegisterReadAnythingProfilePrefs(
       prefs::kAccessibilityReadAnythingLetterSpacing,
       static_cast<int>(read_anything::mojom::LetterSpacing::kDefaultValue),
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  if (features::IsReadAnythingReadAloudEnabled()) {
-    // TODO(crbug.com/40927698): When we release on multiple platforms, add
-    // separate prefs for voices on each platform since they're not always
-    // the same on every platform.
-    registry->RegisterDictionaryPref(
-        prefs::kAccessibilityReadAnythingVoiceName, base::Value::Dict(),
-        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-    registry->RegisterDoublePref(
-        prefs::kAccessibilityReadAnythingSpeechRate, 1.0,
-        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-    registry->RegisterIntegerPref(
-        prefs::kAccessibilityReadAnythingHighlightGranularity,
-        static_cast<int>(
-            read_anything::mojom::HighlightGranularity::kDefaultValue),
-        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-    // TODO(crbug.com/40927698): Update the default value for this integer
-    // pref to be an enum value, like the ones above
-    registry->RegisterIntegerPref(
-        prefs::kAccessibilityReadAnythingHighlightColor, 0,
-        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-    registry->RegisterListPref(
-        prefs::kAccessibilityReadAnythingLanguagesEnabled, base::Value::List(),
-        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  }
+  // TODO(crbug.com/40927698): When we release on multiple platforms, add
+  // separate prefs for voices on each platform since they're not always
+  // the same on every platform.
+  registry->RegisterDictionaryPref(
+      prefs::kAccessibilityReadAnythingVoiceName, base::DictValue(),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterDoublePref(prefs::kAccessibilityReadAnythingSpeechRate, 1.0,
+                               user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      prefs::kAccessibilityReadAnythingHighlightGranularity,
+      static_cast<int>(
+          read_anything::mojom::HighlightGranularity::kDefaultValue),
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterListPref(prefs::kAccessibilityReadAnythingLanguagesEnabled,
+                             base::ListValue(),
+                             user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(
       prefs::kAccessibilityReadAnythingLinksEnabled, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
 
-  registry->RegisterBooleanPref(
-      prefs::kAccessibilityReadAnythingImagesEnabled, false,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-  if (features::IsReadAnythingOmniboxChipEnabled() &&
-      base::FeatureList::IsEnabled(features::kPageActionsMigration)) {
+  if (features::IsImmersiveReadAnythingEnabled()) {
+    registry->RegisterBooleanPref(
+        prefs::kAccessibilityReadAnythingImagesEnabled, true,
+        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  } else {
+    registry->RegisterBooleanPref(
+        prefs::kAccessibilityReadAnythingImagesEnabled, false,
+        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  }
+  if (features::IsReadAnythingOmniboxChipEnabled()) {
     registry->RegisterIntegerPref(
         prefs::kAccessibilityReadAnythingOmniboxChipIgnoredCount, 0,
         user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   }
+  if (features::IsImmersiveReadAnythingEnabled()) {
+    registry->RegisterIntegerPref(
+        prefs::kAccessibilityReadAnythingLastOpenedPresentationState,
+        static_cast<int>(read_anything::mojom::ReadAnythingPresentationState::
+                             kInImmersiveOverlay),
+        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  }
+  registry->RegisterListPref(
+      prefs::kAccessibilityReadAnythingRecentUsagesStartTimes,
+      base::ListValue());
+
   if (features::IsReadAnythingLineFocusEnabled()) {
     registry->RegisterIntegerPref(
         prefs::kAccessibilityReadAnythingLineFocus,
         static_cast<int>(read_anything::mojom::LineFocus::kDefaultValue),
+        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+    registry->RegisterIntegerPref(
+        prefs::kAccessibilityReadAnythingLastNonDisabledLineFocus,
+        static_cast<int>(read_anything::mojom::LineFocus::kDefaultValue),
+        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  }
+  if (features::IsReadAnythingImprovedUiEnabled()) {
+    registry->RegisterListPref(
+        prefs::kAccessibilityReadAnythingRecentlyUsedFonts, base::ListValue(),
         user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   }
 }

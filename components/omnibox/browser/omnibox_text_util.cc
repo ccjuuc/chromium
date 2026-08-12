@@ -7,16 +7,22 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
+#include "components/contextual_tasks/public/features.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
+#include "components/omnibox/browser/location_bar_model_util.h"
 #include "components/omnibox/browser/omnibox_client.h"
+#include "content/public/common/url_constants.h"
+#include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
 namespace omnibox {
 
+// LINT.IfChange(StripJavascriptSchemas)
 std::u16string StripJavascriptSchemas(const std::u16string& text) {
   const std::u16string kJsPrefix(
       base::StrCat({url::kJavaScriptScheme16, u":"}));
@@ -50,7 +56,9 @@ std::u16string StripJavascriptSchemas(const std::u16string& text) {
 
   return text;
 }
+// LINT.ThenChange(//ui/webui/resources/cr_components/searchbox/utils.ts:StripJavascriptSchemas)
 
+// LINT.IfChange(SanitizeTextForPaste)
 std::u16string SanitizeTextForPaste(const std::u16string& text) {
   if (text.empty()) {
     return std::u16string();  // Nothing to do.
@@ -125,16 +133,22 @@ std::u16string SanitizeTextForPaste(const std::u16string& text) {
 
   return StripJavascriptSchemas(output);
 }
+// LINT.ThenChange(//ui/webui/resources/cr_components/searchbox/utils.ts:SanitizeTextForPaste)
 
-void AdjustTextForCopy(int sel_min,
-                       std::u16string* text,
-                       bool has_user_modified_text,
-                       bool is_keyword_selected,
-                       std::optional<AutocompleteMatch> current_popup_match,
-                       OmniboxClient* client,
-                       GURL* url_from_text,
-                       bool* write_url) {
+void AdjustTextForCopy(
+    int sel_min,
+    std::u16string* text,
+    bool has_user_modified_text,
+    bool is_keyword_selected,
+    std::optional<AutocompleteMatch> current_popup_match,
+    const GURL& navigation_entry_url,
+    AutocompleteClassifier* autocomplete_classifier,
+    ::metrics::OmniboxEventProto::PageClassification page_classification,
+    const GURL& contextual_tasks_inner_frame_url,
+    GURL* url_from_text,
+    bool* write_url) {
   DCHECK(text);
+
   DCHECK(url_from_text);
   DCHECK(write_url);
 
@@ -149,7 +163,7 @@ void AdjustTextForCopy(int sel_min,
   // text (whether it's in the elided or unelided form), copy the omnibox
   // contents as a hyperlink to the current page.
   if (!has_user_modified_text) {
-    *url_from_text = client->GetNavigationEntryURL();
+    *url_from_text = navigation_entry_url;
     *write_url = true;
 
     // Don't let users copy Reader Mode page URLs.
@@ -159,6 +173,12 @@ void AdjustTextForCopy(int sel_min,
       *url_from_text = dom_distiller::url_utils::GetOriginalUrlFromDistillerUrl(
           *url_from_text);
     }
+    // Don't let users copy Contextual Task URLs. We should let them copy the
+    // inner frame URL instead.
+    if (!contextual_tasks_inner_frame_url.is_empty()) {
+      *url_from_text = contextual_tasks_inner_frame_url;
+    }
+
     *text = base::UTF8ToUTF16(url_from_text->spec());
     return;
   }
@@ -171,10 +191,9 @@ void AdjustTextForCopy(int sel_min,
   // the user is probably holding down control to cause the copy, which will
   // screw up our calculation of the desired_tld.
   AutocompleteMatch match_from_text;
-  client->GetAutocompleteClassifier()->Classify(
-      *text, is_keyword_selected, true,
-      client->GetPageClassification(/*is_prefetch=*/false), &match_from_text,
-      nullptr);
+  autocomplete_classifier->Classify(*text, is_keyword_selected, true,
+                                    page_classification, &match_from_text,
+                                    nullptr);
   if (AutocompleteMatch::IsSearchType(match_from_text.type)) {
     return;
   }
@@ -183,7 +202,7 @@ void AdjustTextForCopy(int sel_min,
   *url_from_text = match_from_text.destination_url;
 
   // Get the current page GURL (or the GURL of the currently selected match).
-  GURL current_page_url = client->GetNavigationEntryURL();
+  GURL current_page_url = navigation_entry_url;
   if (current_popup_match) {
     AutocompleteMatch current_match = *current_popup_match;
     if (!AutocompleteMatch::IsSearchType(current_match.type) &&
@@ -192,6 +211,19 @@ void AdjustTextForCopy(int sel_min,
       // current page, since the URL in the Omnibox will be from that match.
       current_page_url = current_match.destination_url;
     }
+  }
+
+  // If `url_from_text` looks like a "contextual tasks" display URL, then apply
+  // "origin-swapping" logic to generate a valid shareable URL.
+  GURL replacement_url = location_bar_model::AdjustContextualTasksURLForCopy(
+      *url_from_text, contextual_tasks_inner_frame_url);
+  if (replacement_url.is_valid()) {
+    *url_from_text = replacement_url;
+    *text = base::UTF8ToUTF16(url_from_text->spec());
+    // In order for "origin-swapping" to work properly, we need to ensure that
+    // callers interpret the copied text as "plain text" content.
+    *write_url = false;
+    return;
   }
 
   // If the user has altered the host piece of the omnibox text, then we cannot

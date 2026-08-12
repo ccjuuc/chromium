@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -53,8 +54,6 @@ class AiThreadSyncBridge : public syncer::DataTypeSyncBridge {
   ~AiThreadSyncBridge() override;
 
   // DataTypeSyncBridge implementation.
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_change_list) override;
@@ -76,6 +75,12 @@ class AiThreadSyncBridge : public syncer::DataTypeSyncBridge {
 
   // Returns a thread by its ID.
   virtual std::optional<Thread> GetThread(const std::string& server_id) const;
+
+  // Returns all threads.
+  virtual std::vector<Thread> GetThreads() const;
+
+  // Delete the thread.
+  void DeleteThread(const Thread& thread);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);

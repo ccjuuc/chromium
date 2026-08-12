@@ -84,7 +84,7 @@ void AXVirtualView::AddChildView(std::unique_ptr<AXVirtualView> view) {
   if (view->virtual_parent_view_ == this) {
     return;  // Already a child of this virtual view.
   }
-  AddChildViewAt(std::move(view), children_.size());
+  AddChildViewAt(std::move(view), virtual_children_.size());
 }
 
 void AXVirtualView::AddChildViewAt(std::unique_ptr<AXVirtualView> view,
@@ -97,19 +97,22 @@ void AXVirtualView::AddChildViewAt(std::unique_ptr<AXVirtualView> view,
   DCHECK(!view->virtual_parent_view_) << "This |view| already has an "
                                          "AXVirtualView parent. Call "
                                          "RemoveChildView first.";
-  DCHECK_LE(index, children_.size());
+  DCHECK_LE(index, virtual_children_.size());
 
   view->virtual_parent_view_ = this;
-  children_.insert(children_.begin() + static_cast<ptrdiff_t>(index),
-                   std::move(view));
+  virtual_children_.insert(
+      virtual_children_.begin() + static_cast<ptrdiff_t>(index),
+      std::move(view));
   views::View* owner_view = GetOwnerView();
 
-  AXVirtualView* added_view = children_[index].get();
+  AXVirtualView* added_view = virtual_children_[index].get();
   added_view->OnViewHasNewAncestor(
       /* ancestor_focusable */ data().HasState(ax::mojom::State::kFocusable) ||
       has_focusable_ancestor());
+  added_view->OnOwnerViewChanged();
 
   AXUpdateNotifier::Get()->NotifyChildAdded(added_view, this);
+  FireLiveRegionChangedIfNeeded(LiveRegionEventTrigger::kAdditions);
 
   if (owner_view) {
     owner_view->NotifyAccessibilityEventDeprecated(
@@ -119,10 +122,10 @@ void AXVirtualView::AddChildViewAt(std::unique_ptr<AXVirtualView> view,
 
 void AXVirtualView::ReorderChildView(AXVirtualView* view, size_t index) {
   DCHECK(view);
-  index = std::min(index, children_.size() - 1);
+  index = std::min(index, virtual_children_.size() - 1);
 
   DCHECK_EQ(view->virtual_parent_view_, this);
-  if (children_[index].get() == view) {
+  if (virtual_children_[index].get() == view) {
     return;
   }
 
@@ -132,11 +135,12 @@ void AXVirtualView::ReorderChildView(AXVirtualView* view, size_t index) {
   }
 
   std::unique_ptr<AXVirtualView> child =
-      std::move(children_[cur_index.value()]);
-  children_.erase(children_.begin() +
-                  static_cast<ptrdiff_t>(cur_index.value()));
-  children_.insert(children_.begin() + static_cast<ptrdiff_t>(index),
-                   std::move(child));
+      std::move(virtual_children_[cur_index.value()]);
+  virtual_children_.erase(virtual_children_.begin() +
+                          static_cast<ptrdiff_t>(cur_index.value()));
+  virtual_children_.insert(
+      virtual_children_.begin() + static_cast<ptrdiff_t>(index),
+      std::move(child));
 
   GetOwnerView()->NotifyAccessibilityEventDeprecated(
       ax::mojom::Event::kChildrenChanged, true);
@@ -161,25 +165,31 @@ std::unique_ptr<AXVirtualView> AXVirtualView::RemoveChildView(
     return {};
   }
 
-  bool focus_changed = false;
+  bool active_descendant_removed = false;
   if (GetOwnerView()) {
     ViewAccessibility& view_accessibility =
         GetOwnerView()->GetViewAccessibility();
-    if (view_accessibility.FocusedVirtualChild() &&
-        Contains(view_accessibility.FocusedVirtualChild())) {
-      focus_changed = true;
+    if (ViewAccessibility* active_view =
+            view_accessibility.GetActiveDescendantView()) {
+      if (Contains(static_cast<AXVirtualView*>(active_view))) {
+        active_descendant_removed = true;
+      }
     }
   }
 
   std::unique_ptr<AXVirtualView> child =
-      std::move(children_[cur_index.value()]);
-  children_.erase(children_.begin() +
-                  static_cast<ptrdiff_t>(cur_index.value()));
+      std::move(virtual_children_[cur_index.value()]);
+  virtual_children_.erase(virtual_children_.begin() +
+                          static_cast<ptrdiff_t>(cur_index.value()));
+
+  FireLiveRegionChangedIfNeeded(LiveRegionEventTrigger::kRemovals);
+
   child->virtual_parent_view_ = nullptr;
+  child->OnOwnerViewChanged();
 
   if (GetOwnerView()) {
-    if (focus_changed) {
-      GetOwnerView()->GetViewAccessibility().OverrideFocus(nullptr);
+    if (active_descendant_removed) {
+      GetOwnerView()->GetViewAccessibility().ClearActiveDescendant();
     }
     GetOwnerView()->NotifyAccessibilityEventDeprecated(
         ax::mojom::Event::kChildrenChanged, true);
@@ -191,8 +201,8 @@ std::unique_ptr<AXVirtualView> AXVirtualView::RemoveChildView(
 }
 
 void AXVirtualView::RemoveAllChildViews() {
-  while (!children_.empty()) {
-    RemoveChildView(children_.back().get());
+  while (!virtual_children_.empty()) {
+    RemoveChildView(virtual_children_.back().get());
   }
 }
 
@@ -209,10 +219,11 @@ bool AXVirtualView::Contains(const AXVirtualView* view) const {
 std::optional<size_t> AXVirtualView::GetIndexOf(
     const AXVirtualView* view) const {
   DCHECK(view);
-  const auto iter =
-      std::ranges::find(children_, view, &std::unique_ptr<AXVirtualView>::get);
-  return iter != children_.end()
-             ? std::make_optional(static_cast<size_t>(iter - children_.begin()))
+  const auto iter = std::ranges::find(virtual_children_, view,
+                                      &std::unique_ptr<AXVirtualView>::get);
+  return iter != virtual_children_.end()
+             ? std::make_optional(
+                   static_cast<size_t>(iter - virtual_children_.begin()))
              : std::nullopt;
 }
 
@@ -264,7 +275,6 @@ void AXVirtualView::NotifyEvent(ax::mojom::Event event_type,
     return;
   }
 
-  DCHECK(ax_platform_node_);
   if (event_type == ax::mojom::Event::kAlert) {
     CHECK(ui::IsAlert(GetRole()))
         << "On some platforms, the alert event does not work correctly unless "
@@ -279,8 +289,10 @@ void AXVirtualView::NotifyEvent(ax::mojom::Event event_type,
     }
   }
 
-  // This is used on platforms that have a native accessibility API.
-  ax_platform_node_->NotifyAccessibilityEvent(event_type);
+  if (!ViewAccessibility::IsViewsAccessibilityTreeEnabled()) {
+    DCHECK(ax_platform_node_);
+    ax_platform_node_->NotifyAccessibilityEvent(event_type);
+  }
 
   // This is used on platforms that don't have a native accessibility API.
   AXUpdateNotifier::Get()->NotifyVirtualViewEvent(this, event_type);
@@ -288,6 +300,24 @@ void AXVirtualView::NotifyEvent(ax::mojom::Event event_type,
 
 void AXVirtualView::NotifyDataChanged() {
   AXUpdateNotifier::Get()->NotifyVirtualViewDataChanged(this);
+}
+
+ui::AXNodeID AXVirtualView::GetOffsetContainerId() const {
+  // Virtual view bounds are relative to the owner View, no matter how deeply
+  // the virtual view is nested.
+  // TODO(crbug.com/539373399): Make these bounds relative to the parent
+  // virtual view instead.
+  View* owner_view = GetOwnerView();
+  return owner_view ? static_cast<ui::AXNodeID>(
+                          owner_view->GetViewAccessibility().GetUniqueId())
+                    : ui::kInvalidAXNodeID;
+}
+
+void AXVirtualView::OnOwnerViewChanged() {
+  UpdateOffsetContainerId();
+  for (auto& child : virtual_children_) {
+    child->OnOwnerViewChanged();
+  }
 }
 
 // ui::AXPlatformNodeDelegate
@@ -298,7 +328,7 @@ const ui::AXNodeData& AXVirtualView::GetData() const {
 
 size_t AXVirtualView::GetChildCount() const {
   size_t count = 0;
-  for (const std::unique_ptr<AXVirtualView>& child : children_) {
+  for (const std::unique_ptr<AXVirtualView>& child : virtual_children_) {
     if (child->IsIgnored()) {
       count += child->GetChildCount();
     } else {
@@ -312,7 +342,7 @@ gfx::NativeViewAccessible AXVirtualView::ChildAtIndex(size_t index) const {
   DCHECK_LT(index, GetChildCount())
       << "|index| should be less than the child count.";
 
-  for (const std::unique_ptr<AXVirtualView>& child : children_) {
+  for (const std::unique_ptr<AXVirtualView>& child : virtual_children_) {
     if (child->IsIgnored()) {
       size_t child_count = child->GetChildCount();
       if (index < child_count) {
@@ -364,7 +394,8 @@ gfx::Rect AXVirtualView::GetBoundsRect(
     const ui::AXClippingBehavior clipping_behavior,
     ui::AXOffscreenResult* offscreen_result) const {
   // We could optionally add clipping here if ever needed.
-  // TODO(nektar): Implement bounds that are relative to the parent.
+  // TODO(crbug.com/539373399): Implement bounds that are relative to the
+  // parent.
   gfx::Rect bounds = gfx::ToEnclosingRect(GetData().relative_bounds.bounds);
   View* owner_view = GetOwnerView();
   if (owner_view && owner_view->GetWidget()) {
@@ -402,7 +433,7 @@ gfx::NativeViewAccessible AXVirtualView::HitTestSync(
   // deepest child, since it does not support relative bounds.
   // Search the greater indices first, since they're on top in the z-order.
   for (const std::unique_ptr<AXVirtualView>& child :
-       base::Reversed(children_)) {
+       base::Reversed(virtual_children_)) {
     gfx::NativeViewAccessible result =
         child->HitTestSync(screen_physical_pixel_x, screen_physical_pixel_y);
     if (result) {
@@ -565,10 +596,9 @@ ViewAXPlatformNodeDelegate* AXVirtualView::GetDelegate() const {
 #endif
 }
 
-AXVirtualViewWrapper* AXVirtualView::GetOrCreateWrapper(
-    views::AXAuraObjCache* cache) {
+AXAuraObjWrapper* AXVirtualView::GetOrCreateWrapper(AXAuraObjCache* cache) {
 #if defined(USE_AURA)
-  return static_cast<AXVirtualViewWrapper*>(cache->GetOrCreate(this));
+  return cache->GetOrCreate(this);
 #else
   return nullptr;
 #endif
@@ -646,6 +676,7 @@ void AXVirtualView::OnViewHasNewAncestor(bool ancestor_focusable) {
   parent_view_is_drawn_ = !parent_invisible;
 
   UpdateInvisibleState();
+  UpdateContainerLiveStatus();
 
   // We only want to propagate the `ancestor_focusable` value if it's true. This
   // is because if this view is unfocusable, and it gets added to a tree with a
@@ -657,7 +688,7 @@ void AXVirtualView::OnViewHasNewAncestor(bool ancestor_focusable) {
   }
 
   UpdateReadyToNotifyEvents();
-  for (auto& child : children_) {
+  for (auto& child : virtual_children_) {
     child->OnViewHasNewAncestor(ancestor_focusable);
   }
 }
@@ -716,7 +747,7 @@ void AXVirtualView::UpdateParentViewIsDrawnRecursive(
   UpdateInvisibleState();
 
   // Now we do the same for any virtual children.
-  for (auto& child : children_) {
+  for (auto& child : virtual_children_) {
     child->UpdateParentViewIsDrawnRecursive(initial_view, parent_view_is_drawn);
   }
 }
@@ -748,14 +779,14 @@ void AXVirtualView::SetShowContextMenu(bool show_context_menu) {
 
 void AXVirtualView::SetIsEnabledRecursive(bool enabled) {
   SetIsEnabled(enabled);
-  for (auto& child : children_) {
+  for (auto& child : virtual_children_) {
     child->SetIsEnabledRecursive(enabled);
   }
 }
 
 void AXVirtualView::SetShowContextMenuRecursive(bool show_context_menu) {
   SetShowContextMenu(show_context_menu);
-  for (auto& child : children_) {
+  for (auto& child : virtual_children_) {
     child->SetShowContextMenuRecursive(show_context_menu);
   }
 }

@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="et">
-<translation id="1028699632127661925">Saatmine seadmesse <ph name="DEVICE_NAME" /> …</translation>
 <translation id="111910763555783249">Märguandeseaded</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 päev tagasi}other{# päeva tagasi}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 minut tagasi}other{# minutit tagasi}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">Puute sihtmärk liikus paremasse ülanurka. Puudutage siin.</translation>
 <translation id="1266864766717917324">Üksust <ph name="CONTENT_TYPE" /> ei õnnestunud jagada</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Proovige teksti jagada väiksemate lõikudena.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">Left to Right (Vasakult paremale)</translation>
 <translation id="1383876407941801731">Otsi</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{1 minut tagasi}other{# minutit tagasi}}</translation>
 <translation id="1450753235335490080">Üksust <ph name="CONTENT_TYPE" /> ei saa jagada</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{1 kuu tagasi}other{# kuud tagasi}}</translation>
+<translation id="1591017414891297549">EELVAADE</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minut ja }other{# minutit ja }}</translation>
 <translation id="1643823602425662293">Märguanne</translation>
 <translation id="169515659049020177">Tõstuklahv</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Täna</translation>
 <translation id="2168039046890040389">Lehekülje üles</translation>
 <translation id="2190355936436201913">(tühi)</translation>
-<translation id="2192232475740621500">Kasuta madalat tihedust</translation>
 <translation id="2267918077332197517">Blokeeri kõik märguanded sellelt saidilt</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Puudutage ekraanil puutesihtmärke.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Kas soovite telefonist sellele numbrile helistada?</translation>
 <translation id="2435457462613246316">Kuva parool</translation>
 <translation id="24452542372838207">Laienda märguannet</translation>
-<translation id="2445449901874883781">Kasuta kõrget tihedust</translation>
 <translation id="2448407890032181691">Puute sihtmärk liikus paremasse alanurka. Puudutage siin.</translation>
 <translation id="2482878487686419369">Märguanded</translation>
 <translation id="2497284189126895209">Kõik failid</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Lõikelaud</translation>
 <translation id="2653844658857826081">UUS</translation>
 <translation id="2666092431469916601">Üles</translation>
-<translation id="2701330563083355633">Jagas <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 aasta tagasi}other{# aastat tagasi}}</translation>
 <translation id="2878511608894704031">Kustuta kõik</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 p pärast}other{# p pärast}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Sisse­ehitatud ekraan</translation>
 <translation id="335581015389089642">Kõne</translation>
 <translation id="3372635229069101468">Klõpsake valikul <ph name="BEGIN_BOLD" />Üksikasjad<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">Tekst on liiga pikk</translation>
 <translation id="3406306243914553062">HTML-sisu</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 päev on jäänud}other{# päeva on jäänud}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" />-fail</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 lugemata märguanne}other{# lugemata märguannet}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Lülitage inkognito režiimis sisse järgmine laiendus:}other{Lülitage inkognito režiimis sisse järgmised laiendused:}}</translation>
+<translation id="4230098358142093034">Avaekraan</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 kuu tagasi}other{# kuud tagasi}}</translation>
 <translation id="4277033906326892359">Veerg <ph name="COLUMN_NAME" /> on sorditud kasvavas järjestuses</translation>
 <translation id="4289300219472526559">Alusta rääkimist</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">OK</translation>
 <translation id="6974053822202609517">Right to Left (Paremalt vasakule)</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">Teie rakenduse kuvaseaded jõustuvad pärast rakenduse taaskäivitamist.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min on jäänud}other{# min on jäänud}}</translation>
 <translation id="7252604552361840748">Leidke ülalt laiendus</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minut on jäänud}other{# minutit on jäänud}}</translation>
 <translation id="7437971918971306061">Veerg <ph name="COLUMN_NAME" /> on sortimata.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emotikonid</translation>
 <translation id="7620655452534002301">Eemaldatud.</translation>
 <translation id="7658239707568436148">Tühista</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> kB/s</translation>
 <translation id="8725488761726303204">ja veel <ph name="NUMBER" /></translation>
 <translation id="8730621377337864115">Valmis</translation>
+<translation id="8741385002816058621">See on eelvaatefunktsioon.</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1h}other{#h}}</translation>
 <translation id="8798099450830957504">Vaikimisi</translation>
 <translation id="8841375032071747811">Nupp Tagasi</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Võta tagasi</translation>
 <translation id="9195990613383871904">Homme</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Kodu</translation>
 <translation id="944069440740578670">Lugemata märguanded</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 sekund tagasi}other{# sekundit tagasi}}</translation>
 </translationbundle>

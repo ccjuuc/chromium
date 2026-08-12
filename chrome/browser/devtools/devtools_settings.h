@@ -10,6 +10,7 @@
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
+#include "chrome/browser/devtools/devtools_dock_side.h"
 #include "components/prefs/pref_change_registrar.h"
 
 class Profile;
@@ -32,14 +33,18 @@ class DevToolsSettings {
   ~DevToolsSettings();
 
   void Register(const std::string& name, const RegisterOptions& options);
-  base::Value::Dict Get();
+  base::DictValue Get();
   std::optional<base::Value> Get(const std::string& name);
   void Set(const std::string& name, const std::string& value);
   void Remove(const std::string& name);
   void Clear();
 
+  static devtools::DockSide GetDockSide(Profile* profile);
+  devtools::DockSide GetDockSide() const;
+
  private:
   const char* GetDictionaryNameForSettingsName(const std::string& name) const;
+  static const char* GetDictionaryNameForSyncedPrefs(Profile* profile);
   const char* GetDictionaryNameForSyncedPrefs() const;
   void DevToolsSyncPreferencesChanged();
 

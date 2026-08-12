@@ -78,8 +78,8 @@ void EnableSigninAndModelExecutionCapability(Profile* profile) {
   // Sign-in and enable account capability.
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
   auto account_info = signin::MakePrimaryAccountAvailable(
-      identity_manager, "test@example.com", signin::ConsentLevel::kSync);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+      identity_manager, "test@example.com", signin::ConsentLevel::kSignin);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_use_model_execution_features(true);
   signin::UpdateAccountInfoForAccount(identity_manager, account_info);
 }
@@ -88,8 +88,8 @@ void EnableSigninWithoutModelExecutionCapability(Profile* profile) {
   // Sign-in and disable account capability.
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
   auto account_info = signin::MakePrimaryAccountAvailable(
-      identity_manager, "test@example.com", signin::ConsentLevel::kSync);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+      identity_manager, "test@example.com", signin::ConsentLevel::kSignin);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_can_use_model_execution_features(false);
   signin::UpdateAccountInfoForAccount(identity_manager, account_info);
 }

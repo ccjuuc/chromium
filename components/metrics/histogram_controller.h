@@ -66,9 +66,12 @@ class COMPONENT_EXPORT(METRICS) HistogramController {
                           base::UnsafeSharedMemoryRegion shared_region,
                           ChildProcessMode mode);
 
-  // Some hosts can be re-used before Mojo recognizes that their connections
-  // are invalid because the previous child process died.
-  void NotifyChildDied(HistogramChildProcess* host);
+  // Clean up the internal connection to the child process associated with
+  // `process_id`. Every `HistogramChildProcess` that previously called
+  // `SetHistogramMemory()` should call this method when its associated process
+  // is dead. `process_id` must be an integer representation of
+  // `content::ChildProcessId`.
+  void NotifyChildDied(uint64_t process_id);
 
  private:
   friend struct base::LeakySingletonTraits<HistogramController>;
@@ -76,9 +79,10 @@ class COMPONENT_EXPORT(METRICS) HistogramController {
   raw_ptr<HistogramSubscriber> subscriber_;
 
   void InsertChildHistogramFetcherInterface(
-      HistogramChildProcess* host,
+      uint64_t process_id,
       mojo::Remote<mojom::ChildHistogramFetcher> child_histogram_fetcher,
-      ChildProcessMode mode);
+      ChildProcessMode mode,
+      bool is_webium_renderer);
 
   // Calls PingChildProcess() on ~10% of child processes. Not all child
   // processes are pinged so as to avoid possibly "waking up" too many and
@@ -96,17 +100,18 @@ class COMPONENT_EXPORT(METRICS) HistogramController {
   // PingChildProcess()).
   void Pong(mojom::UmaPingCallSource call_source);
 
-  void RemoveChildHistogramFetcherInterface(
-      MayBeDangling<HistogramChildProcess> host);
+  // Removes the child histogram fetcher interface associated with `process_id`.
+  void RemoveChildHistogramFetcherInterface(uint64_t process_id);
 
   // Records the histogram data collected from a child process.
   void OnHistogramDataCollected(
       int sequence_number,
+      bool is_webium_renderer,
       const std::vector<std::string>& pickled_histograms);
 
   struct ChildHistogramFetcher;
-  using ChildHistogramFetcherMap =
-      std::map<HistogramChildProcess*, ChildHistogramFetcher>;
+  // Map of `content::ChildProcessId` to their fetchers.
+  using ChildHistogramFetcherMap = std::map<uint64_t, ChildHistogramFetcher>;
   ChildHistogramFetcherMap child_histogram_fetchers_;
 
   // Used to call PingAllChildProcesses() every 5 minutes.

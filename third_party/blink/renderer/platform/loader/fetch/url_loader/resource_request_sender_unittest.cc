@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/ref_counted_memory.h"
@@ -178,7 +179,7 @@ class MockRequestClient : public ResourceRequestClient {
       data_ += ReadOneChunk(&body);
     }
   }
-  void OnTransferSizeUpdated(int transfer_size_diff) override {
+  void OnTransferSizeUpdated(base::ByteSize transfer_size_diff) override {
     transfer_size_updated_called_ = true;
   }
   void OnCompletedRequest(
@@ -242,12 +243,11 @@ class MockLoader : public network::mojom::URLLoader {
 
   // network::mojom::URLLoader implementation:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     if (follow_redirect_callback_) {
-      follow_redirect_callback_.Run(removed_headers, modified_headers);
+      follow_redirect_callback_.Run(headers_update_params.removed_headers,
+                                    headers_update_params.modified_headers);
     }
   }
   void SetPriority(net::RequestPriority priority,
@@ -288,6 +288,9 @@ class DummyCodeCacheHost final : public mojom::blink::CodeCacheHost {
                                     const KURL& url,
                                     base::Time expected_response_time,
                                     mojo_base::BigBuffer data) override {}
+  void DidGenerateSourceKeyedCacheableMetadata(
+      const blink::Vector<uint8_t>& script_hash,
+      mojo_base::BigBuffer data) override {}
   void FetchCachedCode(mojom::blink::CodeCacheType cache_type,
                        const KURL& url,
                        FetchCachedCodeCallback callback) override {
@@ -2155,8 +2158,9 @@ class TestingPlatformForWebUIBundledCodeCache : public TestingPlatformSupport {
   ~TestingPlatformForWebUIBundledCodeCache() override = default;
 
   // TestingPlatformSupport:
-  base::RefCountedMemory* GetDataResourceBytes(int resource_id) override {
-    return resource_data_.get();
+  scoped_refptr<base::RefCountedMemory> GetDataResourceBytes(
+      int resource_id) override {
+    return resource_data_;
   }
   std::optional<int> GetWebUIBundledCodeCacheResourceId(
       const GURL& resource_url) override {

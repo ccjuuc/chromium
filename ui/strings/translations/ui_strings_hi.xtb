@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="hi">
-<translation id="1028699632127661925"><ph name="DEVICE_NAME" /> पर भेजा जा रहा है...</translation>
 <translation id="111910763555783249">सूचना सेटिंग</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{1 दिन पहले}one{# दिन पहले}other{# दिन पहले}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{1 मिनट पहले}one{# मिनट पहले}other{# मिनट पहले}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">टच टारगेट (स्क्रीन के वे हिस्से जहां छूने पर कोई कार्रवाई होती है) को सबसे ऊपर दाईं ओर ले जाया गया. यहां टैप करें.</translation>
 <translation id="1266864766717917324"><ph name="CONTENT_TYPE" /> शेयर नहीं किया जा सका</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">टेक्स्ट को छोटे-छोटे हिस्सों में शेयर करने की कोशिश करें.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">बाएं से दाएं</translation>
 <translation id="1383876407941801731">खोजें</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{एक मिनट पहले}one{# मिनट पहले}other{# मिनट पहले}}</translation>
 <translation id="1450753235335490080"><ph name="CONTENT_TYPE" /> शेयर नहीं किया जा सकता</translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{एक महीना पहले}one{# महीना पहले}other{# महीने पहले}}</translation>
+<translation id="1591017414891297549">झलक</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 मिनट और }one{# मिनट और }other{# मिनट और }}</translation>
 <translation id="1643823602425662293">सूचना</translation>
 <translation id="169515659049020177">Shift</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">आज</translation>
 <translation id="2168039046890040389">पेज ऊपर</translation>
 <translation id="2190355936436201913">(खाली)</translation>
-<translation id="2192232475740621500">कम सघनता का इस्तेमाल करें</translation>
 <translation id="2267918077332197517">इस साइट से सभी सूचनाएं रोकें</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">अपनी स्क्रीन पर स्पर्श लक्ष्य पर टैप करें.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">अपने फ़ोन से इस नंबर पर कॉल करना चाहते हैं?</translation>
 <translation id="2435457462613246316">पासवर्ड दिखाएं</translation>
 <translation id="24452542372838207">पूरी सूचना दिखाएं</translation>
-<translation id="2445449901874883781">ज़्यादा सघनता का इस्तेमाल करें</translation>
 <translation id="2448407890032181691">टच टारगेट (स्क्रीन के वे हिस्से जहां छूने पर कोई कार्रवाई होती है) को सबसे नीचे दाईं ओर ले जाया गया. यहां टैप करें.</translation>
 <translation id="2482878487686419369">सूचनाएं</translation>
 <translation id="2497284189126895209">सभी फ़ाइलें</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">क्लिपबोर्ड</translation>
 <translation id="2653844658857826081">नया</translation>
 <translation id="2666092431469916601">शीर्ष</translation>
-<translation id="2701330563083355633"><ph name="DEVICE_NAME" /> से शेयर किया</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 साल पहले}one{# साल पहले}other{# साल पहले}}</translation>
 <translation id="2878511608894704031">सभी आइटम मिटाएं</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{1 दिन में}one{# दिन में}other{# दिन में}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">पहले से मौजूद डिसप्ले</translation>
 <translation id="335581015389089642">बोली</translation>
 <translation id="3372635229069101468"><ph name="BEGIN_BOLD" />जानकारी<ph name="END_BOLD" /> पर क्लिक करें</translation>
-<translation id="3389286852084373014">टेक्स्ट बहुत बड़ा है</translation>
 <translation id="3406306243914553062">एचटीएमएल कॉन्टेंट</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 दिन शेष}one{# दिन शेष}other{# दिन शेष}}</translation>
 <translation id="3600969208114796418"><ph name="SAVEAS_EXTENSION_TYPE" /> फ़ाइल</translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 न पढ़ी गई सूचना}one{# न पढ़ी गई सूचनाएं}other{# न पढ़ी गई सूचनाएं}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{इस एक्सटेंशन को गुप्त मोड में चालू करें:}one{इस एक्सटेंशन को गुप्त मोड में चालू करें:}other{इन एक्सटेंशन को गुप्त मोड में चालू करें:}}</translation>
+<translation id="4230098358142093034">होम</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{1 महीने पहले}one{# महीने पहले}other{# महीने पहले}}</translation>
 <translation id="4277033906326892359"><ph name="COLUMN_NAME" /> कॉलम को बढ़ते क्रम में लगाया गया है</translation>
 <translation id="4289300219472526559">बोलना प्रारंभ करें</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">ठीक है</translation>
 <translation id="6974053822202609517">दाएं से बाएं</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">आपके ऐप्लिकेशन की डिसप्ले सेटिंग, रीस्टार्ट होने पर लागू होंगी.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 मिनट शेष}one{# मिनट शेष}other{# मिनट शेष}}</translation>
 <translation id="7252604552361840748">ऊपर दिया गया एक्सटेंशन ढूंढें</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 मिनट शेष}one{# मिनट शेष}other{# मिनट शेष}}</translation>
 <translation id="7437971918971306061"><ph name="COLUMN_NAME" /> कॉलम किसी क्रम में नहीं है.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">इमोजी</translation>
 <translation id="7620655452534002301">हटाया गया.</translation>
 <translation id="7658239707568436148">अभी नहीं</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> केबी/सेकंड</translation>
 <translation id="8725488761726303204">+<ph name="NUMBER" /> और</translation>
 <translation id="8730621377337864115">हो गया</translation>
+<translation id="8741385002816058621">यह सुविधा, फ़िलहाल सिर्फ़ झलक के तौर पर उपलब्ध है</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1h}one{#h}other{#h}}</translation>
 <translation id="8798099450830957504">डिफ़ॉल्ट</translation>
 <translation id="8841375032071747811">वापस जाएं बटन</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;पूर्ववत् करें</translation>
 <translation id="9195990613383871904">कल</translation>
 <translation id="928628199082367701">सुपर</translation>
-<translation id="932327136139879170">होम बटन</translation>
 <translation id="944069440740578670">न पढ़ी गई सूचनाएं</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{एक सेकंड पहले}one{# सेकंड पहले}other{# सेकंड पहले}}</translation>
 </translationbundle>

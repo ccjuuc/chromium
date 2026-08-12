@@ -6,9 +6,12 @@
 #define UI_MESSAGE_CENTER_VIEWS_NOTIFICATION_CONTROL_BUTTONS_VIEW_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/auto_reset.h"
 #include "base/memory/raw_ptr.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_variant.h"
 #include "ui/message_center/message_center_export.h"
@@ -36,15 +39,24 @@ class MESSAGE_CENTER_EXPORT NotificationControlButtonsView
   ~NotificationControlButtonsView() override;
 
   // Default control button icons.
-  inline static const gfx::VectorIcon& kDefaultCloseIcon =
-      kNotificationCloseButtonIcon;
+  inline static const gfx::VectorIcon& kDefaultCloseOldIcon =
+      kNotificationCloseButtonOldIcon;
+  inline static const gfx::VectorIcon& kDefaultSettingsOldIcon =
+      kNotificationSettingsButtonOldIcon;
+  inline static const gfx::VectorIcon& kDefaultSnoozeOldIcon =
+      kNotificationSnoozeButtonOldIcon;
+  inline static const gfx::VectorIcon& kDefaultCloseIcon = kCloseIcon;
   inline static const gfx::VectorIcon& kDefaultSettingsIcon =
-      kNotificationSettingsButtonIcon;
-  inline static const gfx::VectorIcon& kDefaultSnoozeIcon =
-      kNotificationSnoozeButtonIcon;
+      kSettingsFilledIcon;
+  inline static const gfx::VectorIcon& kDefaultSnoozeIcon = kScheduleIcon;
 
   // Default horizontal spacing between control buttons.
   constexpr static int kDefaultBetweenButtonSpacing = 0;
+
+  // Forcibly enable/disable tooltip for testing.
+  // Destroying the return object unsets the state.
+  [[nodiscard]] static base::AutoReset<std::optional<bool>>
+  SetTooltipEnabledForTesting(bool value);
 
   void OnThemeChanged() override;
 

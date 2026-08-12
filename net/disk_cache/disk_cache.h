@@ -15,11 +15,13 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/files/file.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_split.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "net/base/cache_type.h"
 #include "net/base/completion_once_callback.h"
@@ -165,6 +167,12 @@ NET_EXPORT void FlushCacheThreadForTesting();
 NET_EXPORT void FlushCacheThreadAsynchronouslyForTesting(
     base::OnceClosure cllback);
 
+// Runs `callback` when all backend I/O for the given `path` has completed
+// post-destruction. If there is no backend active for `path`, the callback
+// is run immediately (asynchronously).
+NET_EXPORT void WaitForBackendCleanupForTesting(const base::FilePath& path,
+                                                base::OnceClosure callback);
+
 // The root interface for a disk cache instance.
 class NET_EXPORT Backend {
  public:
@@ -211,9 +219,12 @@ class NET_EXPORT Backend {
   net::CacheType GetCacheType() const { return cache_type_; }
 
   // Returns the entry count synchronously if available, or
-  // net::ERR_IO_PENDING for asynchronous completion via `callback`.
-  virtual int32_t GetEntryCount(
-      net::Int32CompletionOnceCallback callback) const = 0;
+  // net::ERR_IO_PENDING for asynchronous completion via `callback`. The only
+  // error that might be returned is ERR_IO_PENDING; all other returns will
+  // indicate synchronous success.
+  using GetEntryCountCallback = base::OnceCallback<void(int32_t)>;
+  virtual base::expected<int32_t, net::Error> GetEntryCount(
+      GetEntryCountCallback callback) const = 0;
 
   // Atomically attempts to open an existing entry based on |key| or, if none
   // already exists, to create a new entry. Returns an EntryResult object,
@@ -327,6 +338,17 @@ class NET_EXPORT Backend {
 
   // Called when the browser is detected to be idle.
   virtual void OnBrowserIdle();
+
+  // Advise the backend of a new desired cache quota size. Note that unlike
+  // with CreateCacheBackend(), zero is not a special value and here means the
+  // minimum possible size. Implementations MAY adjust the value to within their
+  // own limits. Implementations MAY trigger evictions.
+  virtual void SetMaxBytes(base::ByteSize max_bytes) = 0;
+
+  // Returns the actual maximum size the cache can grow to in bytes.
+  // If an automatic size was chosen due to being set to 0, this returns
+  // the calculated non-zero value.
+  virtual base::ByteSize GetMaxBytesForTesting() const = 0;
 
  private:
   const net::CacheType cache_type_;

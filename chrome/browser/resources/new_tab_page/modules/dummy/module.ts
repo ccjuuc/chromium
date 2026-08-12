@@ -55,12 +55,14 @@ export class ModuleElement extends ModuleElementBase {
 
   protected getMenuItems_(): MenuItem[] {
     return [
-        {
-          action: 'disable',
-          icon: 'modules:block',
-          text: this.i18nRecursive(
-              '', 'modulesDisableButtonText', 'modulesDummyLower'),
-        },
+      {
+        action: 'disable',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
+        text: this.i18nRecursive(
+            '', 'modulesDisableButtonText', 'modulesDummyLower'),
+      },
     ];
   }
 
@@ -70,6 +72,12 @@ export class ModuleElement extends ModuleElementBase {
           'disableModuleToastMessage',
           loadTimeData.getString('modulesDummyLower')),
     });
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-dummy-module': ModuleElement;
   }
 }
 

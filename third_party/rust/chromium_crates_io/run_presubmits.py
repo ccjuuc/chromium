@@ -109,7 +109,7 @@ def _CheckTomlTableIsSorted(toml_table):
         if first_elaborate_key:
             if isinstance(value, str):
                 return ("Simple string entries should appear before table "
-                        f"entries: `{key}` should appear after "
+                        f"entries: `{key}` should appear before "
                         f"`{first_elaborate_key}`.")
             elaborate_keys.append(key)
         else:
@@ -194,7 +194,7 @@ def CheckNonapplicablePatches(crate_ids, gnrt_config):
     real_crate_names = _GetRealCrateNamesWithEpochs(crate_ids)
 
     patched_crate_names = set(
-        filter(lambda filename: filename != "README.md",
+        filter(lambda filename: filename not in ["README.md", "PRESUBMIT.py"],
                os.listdir(PATCHES_DIR)))
 
     nonapplicable_patches = patched_crate_names - real_crate_names
@@ -258,21 +258,23 @@ def CheckMultiversionCrates(crate_ids, gnrt_config):
     # Group `crate_id`s by their `crate_name`.
     crate_name_to_list_of_crate_ids = dict()
     for crate_id in crate_ids:
+        if crate_utils.IsPlaceholderCrate(crate_id): continue
         crate_name = crate_utils.ConvertCrateIdToCrateName(crate_id)
         if crate_name not in crate_name_to_list_of_crate_ids:
             crate_name_to_list_of_crate_ids[crate_name] = []
         crate_name_to_list_of_crate_ids[crate_name] += [crate_id]
 
     result = []
+    unneeded_multiversion_tags = []
     for (crate_name, crate_ids) in crate_name_to_list_of_crate_ids.items():
-        # Ignore crates where we depend only on a single version.
-        if len(crate_ids) == 1:
-            continue
-
-        # Ignore crates that already have a bug to track cleaning up a
-        # multiversion situation.
         extra_kv = _GetExtraKvForCrateName(crate_name, gnrt_config)
-        if "multiversion_cleanup_bug" in extra_kv:
+        has_multiversion_tag = ("multiversion_cleanup_bug" in extra_kv)
+
+        if len(crate_ids) == 1 and has_multiversion_tag:
+            unneeded_multiversion_tags.append(crate_name)
+
+        # Ignore single-version crates and ones with the tag.
+        if len(crate_ids) == 1 or has_multiversion_tag:
             continue
 
         # Report a problem for other multiversion crates.
@@ -290,6 +292,11 @@ def CheckMultiversionCrates(crate_ids, gnrt_config):
             f"    [crate.{crate_name}.extra_kv]",
             f'    multiversion_cleanup_bug = "https://crbug.com/<bug number>"\n',
         ]
+
+    if unneeded_multiversion_tags:
+        result.append("ERROR: `gnrt_config.toml` contains unnecessary "
+                      "`multiversion_cleanup_bug` tag for the following "
+                      f"crates: {', '.join(unneeded_multiversion_tags)}")
 
     return "\n".join(result)
 

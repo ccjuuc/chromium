@@ -319,16 +319,18 @@ static void JNI_Benchmark_SendLargeIntArray(
 
 static void JNI_Benchmark_SendLargeIntArrayConverted(
     JNIEnv* env,
-    std::vector<int32_t>& array) {
+    const std::vector<int32_t>& array) {
   for (size_t i = 0; i < array.size(); i++) {
     DoNotOptimize(array[i]);
   }
 }
 
-static void JNI_Benchmark_SendByteArrayUseView(JNIEnv* env,
-                                               ByteArrayView& array_view) {
+static void JNI_Benchmark_SendByteArrayUseView(
+    JNIEnv* env,
+    const JavaRef<JArray<int8_t>>& array) {
+  jni_zero::JArrayView<int8_t> array_view = array.CreateView(env);
   for (size_t i = 0; i < array_view.size(); i++) {
-    DoNotOptimize(array_view.data());
+    DoNotOptimize(reinterpret_cast<const uint8_t*>(array_view.data()));
   }
 }
 
@@ -351,7 +353,7 @@ static void JNI_Benchmark_SendLargeObjectList(JNIEnv* env,
   }
 }
 
-static void JNI_Benchmark_SendSingleInt(JNIEnv* env, jint param) {
+static void JNI_Benchmark_SendSingleInt(JNIEnv* env, int32_t param) {
   DoNotOptimize(param);
 }
 
@@ -361,16 +363,16 @@ static void JNI_Benchmark_SendSingleInteger(JNIEnv* env,
 }
 
 static void JNI_Benchmark_Send10Ints(JNIEnv* env,
-                                     jint a,
-                                     jint b,
-                                     jint c,
-                                     jint d,
-                                     jint e,
-                                     jint f,
-                                     jint g,
-                                     jint h,
-                                     jint i,
-                                     jint j) {
+                                     int32_t a,
+                                     int32_t b,
+                                     int32_t c,
+                                     int32_t d,
+                                     int32_t e,
+                                     int32_t f,
+                                     int32_t g,
+                                     int32_t h,
+                                     int32_t i,
+                                     int32_t j) {
   DoNotOptimize(a + b + c + d + e + f + g + h + i + j);
 }
 
@@ -397,25 +399,27 @@ static void JNI_Benchmark_Send10Integers(JNIEnv* env,
   DoNotOptimize(JNI_Integer::Java_Integer_intValue(env, j));
 }
 
-static void JNI_Benchmark_SendAsciiStringConvertedToU8(JNIEnv* env,
-                                                       std::string& param) {}
+static void JNI_Benchmark_SendAsciiStringConvertedToU8(
+    JNIEnv* env,
+    const std::string& param) {}
 
-static void JNI_Benchmark_SendAsciiStringConvertedToU16(JNIEnv* env,
-                                                        std::u16string& param) {
-}
+static void JNI_Benchmark_SendAsciiStringConvertedToU16(
+    JNIEnv* env,
+    const std::u16string& param) {}
 
-static void JNI_Benchmark_SendNonAsciiStringConvertedToU8(JNIEnv* env,
-                                                          std::string& param) {}
+static void JNI_Benchmark_SendNonAsciiStringConvertedToU8(
+    JNIEnv* env,
+    const std::string& param) {}
 
 static void JNI_Benchmark_SendNonAsciiStringConvertedToU16(
     JNIEnv* env,
-    std::u16string& param) {}
+    const std::u16string& param) {}
 
 static void JNI_Benchmark_CallMe(JNIEnv* env) {}
 
 static void JNI_Benchmark_SendListConverted(
     JNIEnv* env,
-    std::vector<ScopedJavaLocalRef<jobject>>& vec) {
+    const std::vector<ScopedJavaLocalRef<jobject>>& vec) {
   for (size_t i = 0; i < vec.size(); i++) {
     DoNotOptimize(vec[i].obj());
   }

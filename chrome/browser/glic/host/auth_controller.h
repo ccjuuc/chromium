@@ -9,22 +9,55 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 
 class Profile;
 
+namespace content {
+class WebContents;
+}
+
 namespace glic {
 class GlicCookieSynchronizer;
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(GlicCookieSyncTrigger)
+enum class GlicCookieSyncTrigger {
+  kCheckAuthBeforeLoad = 0,
+  kCheckAuthBeforeLoadForced = 1,
+  kOnPrimaryAccountChanged = 2,
+  kOnRefreshTokenUpdated = 3,
+  kMaybeSyncCookiesOnError = 4,
+  kGlicClient = 5,
+  kMaxValue = kGlicClient,
+};
+// LINT.ThenChange(tools/metrics/histograms/metadata/glic/enums.xml:GlicCookieSyncTrigger)
+
 bool IsPrimaryAccountGoogleInternal(signin::IdentityManager& signin_manager);
+
+// LINT.IfChange(CheckAuthBeforeLoadOutcome)
+enum class CheckAuthBeforeLoadOutcome {
+  // Test automation is enabled.
+  kAutomationSkipped = 0,
+  // User must manually sign in.
+  kRequiresSignIn = 1,
+  // GlicCookieSyncOnTokenChange is enabled and allowed skipping sync.
+  kTokenChangeNoSyncNeeded = 2,
+  // Skipped due to GlicSkipCookieSyncOnOpen.
+  kSkipOnOpen = 3,
+  // Cookie sync was attempted.
+  kSyncAttempted = 4,
+  kMaxValue = kSyncAttempted,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/glic/enums.xml:GlicCheckAuthBeforeLoadOutcome)
 
 // Decides when to refresh sign-in cookies for the webview.
 class AuthController : public signin::IdentityManager::Observer {
  public:
-  AuthController(Profile* profile,
-                 signin::IdentityManager* identity_manager,
-                 bool use_for_fre);
+  AuthController(Profile* profile, signin::IdentityManager* identity_manager);
   ~AuthController() override;
 
   // Called before the glic web client is loaded. Tries to sync cookies to the
@@ -33,27 +66,20 @@ class AuthController : public signin::IdentityManager::Observer {
   void CheckAuthBeforeLoad(
       base::OnceCallback<void(mojom::PrepareForClientResult)> callback);
 
-  // Called before the glic window is shown. Returns true if the glic window
-  // should be shown. Returns false if the login page is shown instead, in which
-  // case the glic window should not be shown.
-  bool CheckAuthBeforeShowSync(base::OnceClosure after_signin);
-
   // Sync cookies, even if it appears as though a sync is not required.
-  void ForceSyncCookies(base::OnceCallback<void(bool)> callback);
+  void ForceSyncCookies(GlicCookieSyncTrigger trigger,
+                        base::OnceCallback<void(bool)> callback);
 
-  // Show the sign-in page. `after_signin` will be called after the user has
-  // signed in. It will not be called if the user cancels the sign-in, or the
-  // sign-in doesn't happen before:
-  // * ShowReauthForAccount is called again
-  // * CheckAuthBeforeShow is called
-  // * The AuthController is destroyed
-  // * Too much time has passed (5 minutes).
-  // * OnGlicWindowOpened is called.
+  // Called when the client reports that it has encountered an error.
+  void OnClientError();
+
+  // Called when the client reports that it has encountered a transient error.
+  void OnClientTransientError(mojo_base::mojom::AbslStatusCode status_code);
+
+  // Show the sign-in page. `web_contents` is used on Android to find the
+  // activity to display the sign-in sheet.
   // TODO(crbug.com/406529330): Track sign-in flow correctly.
-  void ShowReauthForAccount(base::OnceClosure after_signin);
-  void OnGlicWindowOpened();
-
-  bool RequiresSignIn() const;
+  void ShowReauthForAccount(content::WebContents* web_contents);
 
   void SetCookieSynchronizerForTesting(
       std::unique_ptr<GlicCookieSynchronizer> synchronizer);
@@ -61,6 +87,8 @@ class AuthController : public signin::IdentityManager::Observer {
   GlicCookieSynchronizer* GetCookieSynchronizerForTesting() const {
     return cookie_synchronizer_.get();
   }
+
+  bool NeedsSyncForTesting() const;
 
   // signin::IdentityManager::Observer implementation.
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
@@ -83,22 +111,25 @@ class AuthController : public signin::IdentityManager::Observer {
   base::WeakPtr<AuthController> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
-  void SyncCookiesIfRequired(base::OnceCallback<void(bool)> callback);
-  void CookieSyncDone(base::OnceCallback<void(bool)> callback,
+  void DelayedForceSyncCookies(GlicCookieSyncTrigger trigger);
+  void CookieSyncDone(GlicCookieSyncTrigger trigger,
+                      base::OnceCallback<void(bool)> callback,
                       bool sync_success);
   void CookieSyncBeforeLoadDone(
+      GlicCookieSyncTrigger trigger,
       base::OnceCallback<void(mojom::PrepareForClientResult)> callback,
       bool sync_success);
+  void RecordSyncResult(GlicCookieSyncTrigger trigger, bool success);
+  void MaybeSyncCookiesOnError();
 
   raw_ptr<Profile> profile_;
-  base::OnceClosure after_signin_callback_;
-  base::TimeTicks after_signin_callback_expiration_time_;
   raw_ptr<signin::IdentityManager> identity_manager_;
-  std::optional<base::TimeTicks> last_cookie_sync_time_;
   std::unique_ptr<GlicCookieSynchronizer> cookie_synchronizer_;
   base::ScopedObservation<signin::IdentityManager,
                           signin::IdentityManager::Observer>
       observation_;
+  base::TimeTicks last_sync_on_error_time_;
+  base::OneShotTimer token_change_sync_timer_;
   base::WeakPtrFactory<AuthController> weak_ptr_factory_{this};
 };
 

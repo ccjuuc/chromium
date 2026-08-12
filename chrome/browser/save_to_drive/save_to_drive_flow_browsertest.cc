@@ -6,14 +6,17 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "base/functional/callback.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
 #include "base/test/with_feature_override.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/pdf/pdf_extension_test_base.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
+#include "chrome/browser/pdf/pdf_pref_names.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/save_to_drive/content_reader.h"
 #include "chrome/browser/save_to_drive/drive_uploader.h"
@@ -21,12 +24,14 @@
 #include "chrome/browser/save_to_drive/resumable_drive_uploader.h"
 #include "chrome/browser/save_to_drive/save_to_drive_event_dispatcher.h"
 #include "chrome/browser/save_to_drive/save_to_drive_recorder.h"
+#include "chrome/browser/save_to_drive/save_to_drive_utils.h"
 #include "chrome/browser/save_to_drive/time_remaining_calculator.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
 #include "chrome/browser/ui/save_to_drive/get_account.h"
 #include "chrome/common/extensions/api/pdf_viewer_private.h"
 #include "chrome/test/base/chrome_test_utils.h"
+#include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -62,6 +67,7 @@ class MockAccountChooser : public AccountChooser {
   MOCK_METHOD(void,
               GetAccount,
               (content::WebContents * web_contents,
+               const std::u16string& upload_title,
                base::OnceCallback<void(std::optional<AccountInfo>)>
                    on_account_selected_callback),
               (override));
@@ -136,7 +142,8 @@ class SaveToDriveFlowBrowserTest : public base::test::WithFeatureOverride,
     account_chooser_ = account_chooser.get();
     hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
 
     SaveToDriveFlow::CreateForCurrentDocument(
         rfh, std::move(event_dispatcher), std::move(content_reader),
@@ -168,7 +175,10 @@ class SaveToDriveFlowBrowserTest : public base::test::WithFeatureOverride,
         .WillOnce(
             [account_info = std::move(account_info), this](
                 content::WebContents* web_contents,
+                const std::u16string& upload_title,
                 base::OnceCallback<void(std::optional<AccountInfo>)> callback) {
+              EXPECT_EQ(upload_title,
+                        EnsurePdfExtension(web_contents->GetTitle()));
               // The callback could kill the flow, which would destroy the
               // account chooser. It needs to be reset to avoid a dangling
               // pointer.
@@ -328,6 +338,35 @@ IN_PROC_BROWSER_TEST_P(SaveToDriveFlowBrowserTest,
       *hats_service_,
       LaunchDelayedSurvey(kHatsSurveyEnterpriseTriggerPdfSaveToDrive, _, _, _));
   TestCreateMultipartUploaderForSmallFile(/*is_managed=*/true);
+}
+
+IN_PROC_BROWSER_TEST_P(SaveToDriveFlowBrowserTest, FailsForDisallowedAccounts) {
+  g_browser_process->local_state()->SetString(
+      prefs::kRestrictPdfSaveToGoogleDriveAccountsToPattern, ".*@google.com");
+  SimulateAccountChooserAction(CreateAccountInfo(/*is_managed=*/false));
+
+  EXPECT_CALL(event_dispatcher(),
+              Notify(AllOf(Field(&SaveToDriveProgress::status,
+                                 SaveToDriveStatus::kInitiated),
+                           Field(&SaveToDriveProgress::error_type,
+                                 SaveToDriveErrorType::kNoError))));
+
+  EXPECT_CALL(event_dispatcher(),
+              Notify(AllOf(Field(&SaveToDriveProgress::status,
+                                 SaveToDriveStatus::kUploadFailed),
+                           Field(&SaveToDriveProgress::error_type,
+                                 SaveToDriveErrorType::kUnknownError))));
+
+  SaveToDriveFlow::GetForCurrentDocument(rfh())->Run();
+}
+
+IN_PROC_BROWSER_TEST_P(SaveToDriveFlowBrowserTest, SucceedsForAllowedAccounts) {
+  g_browser_process->local_state()->SetString(
+      prefs::kRestrictPdfSaveToGoogleDriveAccountsToPattern, ".*@mail.com");
+
+  // This is the same as TestCreateMultipartUploaderForSmallFile but with the
+  // pref set.
+  TestCreateMultipartUploaderForSmallFile(/*is_managed=*/false);
 }
 
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(SaveToDriveFlowBrowserTest);

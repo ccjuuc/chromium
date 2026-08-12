@@ -123,10 +123,6 @@ class COMPONENT_EXPORT(UI_BASE) OSExchangeData {
   std::optional<std::u16string> GetString() const;
   // Gets the URL and title from the drag data.
   // Returns an empty vector if no valid URL/title data is present.
-  // TODO(http://crbug.com/41011768): Remove this method to merge these together
-  // as GetURLs().
-  std::vector<ClipboardUrlInfo> GetURLsAndTitles(
-      FilenameToURLPolicy policy) const;
   std::vector<ui::ClipboardUrlInfo> GetURLs(FilenameToURLPolicy policy) const;
   // Return information about the contained files, if any.
   std::optional<std::vector<FileInfo>> GetFilenames() const;
@@ -149,7 +145,7 @@ class COMPONENT_EXPORT(UI_BASE) OSExchangeData {
   // Adds the bytes of a file (CFSTR_FILECONTENTS and CFSTR_FILEDESCRIPTOR on
   // Windows).
   void SetFileContents(const base::FilePath& filename,
-                       const std::string& file_contents);
+                       base::span<const uint8_t> file_contents);
   using FileContentsInfo = OSExchangeDataProvider::FileContentsInfo;
   std::optional<FileContentsInfo> GetFileContents() const;
 

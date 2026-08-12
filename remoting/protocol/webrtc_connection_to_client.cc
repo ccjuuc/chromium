@@ -11,28 +11,34 @@
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "components/webrtc/thread_wrapper.h"
 #include "net/base/io_buffer.h"
+#include "remoting/base/fifo_buffer.h"
 #include "remoting/base/logging.h"
-#include "remoting/codec/video_encoder.h"
 #include "remoting/codec/webrtc_video_encoder_vpx.h"
 #include "remoting/protocol/audio_source.h"
 #include "remoting/protocol/audio_stream.h"
 #include "remoting/protocol/authenticator.h"
+#include "remoting/protocol/chromium_port_allocator_factory.h"
 #include "remoting/protocol/clipboard_stub.h"
 #include "remoting/protocol/desktop_capturer.h"
 #include "remoting/protocol/host_control_dispatcher.h"
 #include "remoting/protocol/host_event_dispatcher.h"
 #include "remoting/protocol/host_stub.h"
+#include "remoting/protocol/ice_config_fetcher.h"
 #include "remoting/protocol/input_stub.h"
 #include "remoting/protocol/message_pipe.h"
 #include "remoting/protocol/transport_context.h"
+#include "remoting/protocol/webrtc_audio_fifo_sink_adapter.h"
+#include "remoting/protocol/webrtc_audio_module.h"
 #include "remoting/protocol/webrtc_audio_stream.h"
 #include "remoting/protocol/webrtc_transport.h"
 #include "remoting/protocol/webrtc_video_encoder_factory.h"
 #include "remoting/protocol/webrtc_video_stream.h"
 #include "third_party/webrtc/api/media_stream_interface.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/sctp_transport_interface.h"
 
 namespace remoting::protocol {
@@ -48,25 +54,35 @@ const char kVideoStatsStreamLabel[] = "screen_stream";
 // TODO(sergeyu): Figure out if we would benefit from using a separate thread as
 // a worker thread.
 WebrtcConnectionToClient::WebrtcConnectionToClient(
-    std::unique_ptr<protocol::Session> session,
-    scoped_refptr<protocol::TransportContext> transport_context,
-    scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner)
-    : session_(std::move(session)),
-      video_stats_dispatcher_(kVideoStatsStreamLabel),
-      audio_task_runner_(audio_task_runner),
+    std::unique_ptr<protocol::IceConfigFetcher> ice_config_fetcher)
+    : video_stats_dispatcher_(kVideoStatsStreamLabel),
       control_dispatcher_(new HostControlDispatcher()),
       event_dispatcher_(new HostEventDispatcher()) {
+  audio_task_runner_ = base::ThreadPool::CreateSingleThreadTaskRunner(
+      {base::TaskPriority::HIGHEST},
+      base::SingleThreadTaskRunnerThreadMode::DEDICATED);
+  webrtc::ThreadWrapper::EnsureForCurrentMessageLoop();
+  auto transport_context = base::MakeRefCounted<protocol::TransportContext>(
+      std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
+      webrtc::ThreadWrapper::current()->SocketServer(),
+      std::move(ice_config_fetcher), protocol::TransportRole::SERVER);
   auto video_encoder_factory = std::make_unique<WebrtcVideoEncoderFactory>();
   video_encoder_factory_ = video_encoder_factory.get();
   transport_ = std::make_unique<WebrtcTransport>(
       webrtc::ThreadWrapper::current(), transport_context,
       std::move(video_encoder_factory), this);
-  session_->SetEventHandler(this);
-  session_->SetTransport(transport_.get());
+  if (audio_task_runner_) {
+    transport_->audio_module()->SetAudioTaskRunner(audio_task_runner_);
+  }
 }
 
 WebrtcConnectionToClient::~WebrtcConnectionToClient() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+}
+
+void WebrtcConnectionToClient::Start() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  event_handler_->CreateMediaStreams();
 }
 
 void WebrtcConnectionToClient::SetEventHandler(
@@ -75,9 +91,9 @@ void WebrtcConnectionToClient::SetEventHandler(
   event_handler_ = event_handler;
 }
 
-protocol::Session* WebrtcConnectionToClient::session() {
+Transport* WebrtcConnectionToClient::transport() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return session_.get();
+  return transport_.get();
 }
 
 void WebrtcConnectionToClient::Disconnect(
@@ -85,10 +101,21 @@ void WebrtcConnectionToClient::Disconnect(
     std::string_view error_details,
     const SourceLocation& error_location) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (closed_) {
+    return;
+  }
+  closed_ = true;
 
-  // This should trigger OnConnectionClosed() event and this object
-  // may be destroyed as the result.
-  session_->Close(error, error_details, error_location);
+  control_dispatcher_.reset();
+  event_dispatcher_.reset();
+  if (transport_) {
+    transport_->Close(error, std::string(error_details), FROM_HERE);
+    transport_.reset();
+  }
+
+  if (event_handler_) {
+    event_handler_->OnConnectionClosed(error, error_details, error_location);
+  }
 }
 
 std::unique_ptr<VideoStream> WebrtcConnectionToClient::StartVideoStream(
@@ -114,6 +141,19 @@ std::unique_ptr<AudioStream> WebrtcConnectionToClient::StartAudioStream(
   std::unique_ptr<WebrtcAudioStream> stream(new WebrtcAudioStream());
   stream->Start(audio_task_runner_, std::move(audio_source), transport_.get());
   return std::move(stream);
+}
+
+void WebrtcConnectionToClient::SetAudioWriter(
+    std::unique_ptr<FifoBufferWriter> writer) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+
+  audio_fifo_sink_adapter_ = std::make_unique<WebrtcAudioFifoSinkAdapter>(
+      std::move(writer),
+      base::BindRepeating(
+          &WebrtcConnectionToClient::OnIncomingAudioFormatChanged,
+          weak_factory_.GetWeakPtr()));
+
+  BindAudioFifoSinkAdapter();
 }
 
 // Return pointer to ClientStub.
@@ -156,49 +196,6 @@ PeerConnectionControls* WebrtcConnectionToClient::peer_connection_controls() {
 
 WebrtcEventLogData* WebrtcConnectionToClient::rtc_event_log() {
   return transport_->rtc_event_log();
-}
-
-void WebrtcConnectionToClient::OnSessionStateChange(Session::State state) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  DCHECK(event_handler_);
-  switch (state) {
-    case Session::INITIALIZING:
-    case Session::CONNECTING:
-    case Session::ACCEPTING:
-    case Session::ACCEPTED:
-      // Don't care about these events.
-      break;
-
-    case Session::AUTHENTICATING:
-      event_handler_->OnConnectionAuthenticating();
-      break;
-
-    case Session::AUTHENTICATED: {
-      base::WeakPtr<WebrtcConnectionToClient> self = weak_factory_.GetWeakPtr();
-      event_handler_->OnConnectionAuthenticated(
-          session_->authenticator().GetSessionPolicies());
-
-      // OnConnectionAuthenticated() call above may result in the connection
-      // being torn down.
-      if (self) {
-        event_handler_->CreateMediaStreams();
-      }
-      break;
-    }
-
-    case Session::CLOSED:
-    case Session::FAILED:
-      control_dispatcher_.reset();
-      event_dispatcher_.reset();
-      transport_->Close(
-          state == Session::CLOSED ? ErrorCode::OK : session_->error(),
-          /* error_details= */ {}, FROM_HERE);
-      transport_.reset();
-      event_handler_->OnConnectionClosed(
-          state == Session::CLOSED ? ErrorCode::OK : session_->error());
-      break;
-  }
 }
 
 void WebrtcConnectionToClient::OnWebrtcTransportConnecting() {
@@ -263,12 +260,61 @@ void WebrtcConnectionToClient::OnWebrtcTransportIncomingDataChannel(
 void WebrtcConnectionToClient::OnWebrtcTransportMediaStreamAdded(
     webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  LOG(WARNING) << "The client created an unexpected media stream.";
+
+  if (stream->GetAudioTracks().empty()) {
+    LOG(WARNING) << "The client created an unexpected media stream.";
+    return;
+  }
+
+  if (incoming_audio_stream_) {
+    LOG(ERROR) << "Multiple audio streams received. Only one is supported.";
+    return;
+  }
+
+  incoming_audio_stream_ = stream;
+  BindAudioFifoSinkAdapter();
 }
 
 void WebrtcConnectionToClient::OnWebrtcTransportMediaStreamRemoved(
     webrtc::scoped_refptr<webrtc::MediaStreamInterface> stream) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (incoming_audio_stream_ == stream) {
+    if (audio_fifo_sink_adapter_) {
+      audio_fifo_sink_adapter_->SetTrack(nullptr);
+    }
+    incoming_audio_stream_ = nullptr;
+  }
+}
+
+void WebrtcConnectionToClient::OnIncomingAudioFormatChanged(
+    const AudioSampleInfo& info,
+    base::OnceCallback<void(bool)> acknowledgment_callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (event_handler_) {
+    event_handler_->OnIncomingAudioFormatChanged(
+        info, std::move(acknowledgment_callback));
+  } else {
+    std::move(acknowledgment_callback).Run(false);
+  }
+}
+
+void WebrtcConnectionToClient::BindAudioFifoSinkAdapter() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  if (!audio_fifo_sink_adapter_ || !incoming_audio_stream_) {
+    return;
+  }
+
+  webrtc::AudioTrackVector audio_tracks =
+      incoming_audio_stream_->GetAudioTracks();
+  if (!audio_tracks.empty()) {
+    audio_fifo_sink_adapter_->SetTrack(audio_tracks[0]);
+  }
+}
+
+bool WebrtcConnectionToClient::FormatHandshakeCompleteForTesting() const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return audio_fifo_sink_adapter_ &&
+         audio_fifo_sink_adapter_->FormatHandshakeCompleteForTesting();
 }
 
 void WebrtcConnectionToClient::OnWebrtcTransportRouteChanged(

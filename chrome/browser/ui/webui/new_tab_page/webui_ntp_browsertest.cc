@@ -2,21 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <set>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/new_tab_page/prefs/ntp_pref_names.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -24,10 +24,11 @@
 #include "components/ntp_tiles/tile_type.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
-#include "content/public/browser/child_process_id.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/spare_render_process_host_manager.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -57,7 +58,7 @@ class WebContentsRemovedObserver : public TabStripModelObserver {
     }
   }
 
-  std::optional<TabStripModelChange::RemoveReason> remove_reason() const {
+  std::optional<TabRemovedReason> remove_reason() const {
     return remove_reason_;
   }
   std::optional<tabs::TabInterface::DetachReason> tab_detach_reason() const {
@@ -65,12 +66,12 @@ class WebContentsRemovedObserver : public TabStripModelObserver {
   }
 
  private:
-  std::optional<TabStripModelChange::RemoveReason> remove_reason_;
+  std::optional<TabRemovedReason> remove_reason_;
   std::optional<tabs::TabInterface::DetachReason> tab_detach_reason_;
 };
 
 void ExpectIsWebUiNtp(content::WebContents* tab) {
-  EXPECT_EQ(GURL(chrome::kChromeUINewTabPageURL).spec(),
+  EXPECT_EQ(chrome::ChromeUINewTabPageURLAsGURL().spec(),
             EvalJs(tab, "window.location.href",
                    content::EXECUTE_SCRIPT_DEFAULT_OPTIONS, /*world_id=*/1));
 }
@@ -112,17 +113,18 @@ class WebUiNtpBrowserTest : public InProcessBrowserTest {
 
 // Verify that the WebUI NTP commits in a SiteInstance with the WebUI URL.
 IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, VerifySiteInstance) {
-  GURL ntp_url(chrome::kChromeUINewTabURL);
+  const GURL& ntp_url = chrome::ChromeUINewTabURLAsGURL();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), ntp_url));
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_EQ(ntp_url, web_contents->GetLastCommittedURL());
 
-  GURL webui_ntp_url(chrome::kChromeUINewTabPageURL);
-  ASSERT_EQ(
-      webui_ntp_url,
-      web_contents->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL());
+  const GURL& webui_ntp_url = chrome::ChromeUINewTabPageURLAsGURL();
+  ASSERT_EQ(webui_ntp_url, web_contents->GetPrimaryMainFrame()
+                               ->GetSiteInstance()
+                               ->GetSecurityPrincipal()
+                               .GetDeprecatedSiteURL());
 }
 
 // Verify that the WebUI NTP uses process-per-site.
@@ -132,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, ProcessPerSite) {
   // Open a few NTPs.
   for (size_t i = 0; i < 3; i++) {
     content::WebContentsAddedObserver tab_observer;
-    chrome::NewTab(browser());
+    chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
 
     // Wait for the new tab.
     auto* tab = tab_observer.GetWebContents();
@@ -153,7 +155,7 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, ProcessPerSite) {
 }
 
 // Verify that the WebUI NTP uses an available spare process and does not
-// discard it as in https://crbug.com/1094088.
+// discard it as in https://crbug.com/40699271.
 IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, SpareRenderer) {
   // Capture current spare renderer.
   std::vector<content::ChildProcessId> spare_ids_before_navigation =
@@ -166,15 +168,15 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, SpareRenderer) {
       LiveRenderProcessHostIds();
 
   // Open an NTP.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   auto* ntp = browser()->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(WaitForLoadStop(ntp));
   ExpectIsWebUiNtp(ntp);
 
   // Check spare was taken.
   EXPECT_TRUE(
-      base::Contains(spare_ids_before_navigation,
-                     ntp->GetPrimaryMainFrame()->GetProcess()->GetID()));
+      std::ranges::contains(spare_ids_before_navigation,
+                            ntp->GetPrimaryMainFrame()->GetProcess()->GetID()));
 
   // No processes should be unnecessarily terminated.
   const std::set<content::ChildProcessId> ending_rph_ids =
@@ -208,14 +210,14 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, LoadsSuccessfullyWithoutTabModel) {
                   tabs::TabInterface::DetachReason::kDelete));
   std::unique_ptr<content::WebContents> extracted_contents =
       tab_strip_model->DetachWebContentsAtForInsertion(1);
-  EXPECT_EQ(TabStripModelChange::RemoveReason::kInsertedIntoOtherTabStrip,
+  EXPECT_EQ(TabRemovedReason::kInsertedIntoOtherTabStrip,
             removed_observer.remove_reason());
   EXPECT_EQ(tabs::TabInterface::DetachReason::kDelete,
             removed_observer.tab_detach_reason());
 
   // Load the NTP into the detached tab. The NTP should load without crashing.
   EXPECT_TRUE(content::NavigateToURL(extracted_contents.get(),
-                                     GURL(chrome::kChromeUINewTabURL)));
+                                     chrome::ChromeUINewTabURLAsGURL()));
 
   // Re-insert the tab into the tab strip.
   tab_strip_model->AppendWebContents(std::move(extracted_contents), true);
@@ -229,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, LoadsSuccessfullyWithoutTabModel) {
 IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, HandlesTabModelChanges) {
   // Add a new NTP tab to the browser tab strip.
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
-  chrome::AddTabAt(browser(), GURL(chrome::kChromeUINewTabURL), 1, true);
+  chrome::AddTabAt(browser(), chrome::ChromeUINewTabURLAsGURL(), 1, true);
   tabs::TabInterface* initial_tab = tab_strip_model->GetTabAtIndex(1);
   EXPECT_EQ(2, tab_strip_model->count());
 
@@ -246,7 +248,7 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, HandlesTabModelChanges) {
                   tabs::TabInterface::DetachReason::kDelete));
   std::unique_ptr<content::WebContents> extracted_contents =
       tab_strip_model->DetachWebContentsAtForInsertion(1);
-  EXPECT_EQ(TabStripModelChange::RemoveReason::kInsertedIntoOtherTabStrip,
+  EXPECT_EQ(TabRemovedReason::kInsertedIntoOtherTabStrip,
             removed_observer.remove_reason());
   EXPECT_EQ(tabs::TabInterface::DetachReason::kDelete,
             removed_observer.tab_detach_reason());
@@ -255,44 +257,29 @@ IN_PROC_BROWSER_TEST_F(WebUiNtpBrowserTest, HandlesTabModelChanges) {
   tab_strip_model->AppendWebContents(std::move(extracted_contents), true);
 }
 
-class WebUiNtpEnterpriseShortcutsBrowserTest
-    : public WebUiNtpBrowserTest,
-      public testing::WithParamInterface<bool> {
+class WebUiNtpEnterpriseShortcutsBrowserTest : public WebUiNtpBrowserTest {
  public:
-  WebUiNtpEnterpriseShortcutsBrowserTest() {
-    // Enable/disable the enterprise shortcuts feature.
-    if (IsEnterpriseShortcutsEnabled()) {
-      feature_list_.InitAndEnableFeature(ntp_tiles::kNtpEnterpriseShortcuts);
-    } else {
-      feature_list_.InitAndDisableFeature(ntp_tiles::kNtpEnterpriseShortcuts);
-    }
-  }
-
-  bool IsEnterpriseShortcutsEnabled() const { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
+  WebUiNtpEnterpriseShortcutsBrowserTest() = default;
 };
 
 // TODO(crbug.com/442038064): Re-enable once flakiness is addressed.
-IN_PROC_BROWSER_TEST_P(WebUiNtpEnterpriseShortcutsBrowserTest,
+IN_PROC_BROWSER_TEST_F(WebUiNtpEnterpriseShortcutsBrowserTest,
                        DISABLED_EnterpriseShortcuts) {
   // 1. Set the user preference to use enterprise shortcuts.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpCustomLinksVisible, false);
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       ntp_prefs::kNtpEnterpriseShortcutsVisible, true);
 
   // 2. Navigate to the New Tab Page.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), GURL(chrome::kChromeUINewTabPageURL)));
+      browser(), chrome::ChromeUINewTabPageURLAsGURL()));
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
   // 3. Verify through JavaScript that the page is configured correctly.
-  // - If feature enabled, enterprise shorctus are displayed.
-  // - If feature disabled, custom links are displayed.
-  const std::string js_check = base::StringPrintf(
+  // - Enterprise shortcuts are displayed.
+  const std::string js_check =
       R"((() => {
           const mostVisited = document.querySelector('ntp-app')?.shadowRoot
                                     ?.querySelector('cr-most-visited');
@@ -303,15 +290,9 @@ IN_PROC_BROWSER_TEST_P(WebUiNtpEnterpriseShortcutsBrowserTest,
               mostVisited.hasAttribute('enterprise-shortcuts-enabled_');
           const hasCustom =
               mostVisited.hasAttribute('custom-links-enabled_');
-          return hasEnterprise === %s && hasCustom === %s;
-        })())",
-      IsEnterpriseShortcutsEnabled() ? "true" : "false",
-      !IsEnterpriseShortcutsEnabled() ? "true" : "false");
+          return hasEnterprise === true && hasCustom === false;
+        })())";
 
   ASSERT_TRUE(base::test::RunUntil(
       [&] { return content::EvalJs(web_contents, js_check).ExtractBool(); }));
 }
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         WebUiNtpEnterpriseShortcutsBrowserTest,
-                         testing::Bool());

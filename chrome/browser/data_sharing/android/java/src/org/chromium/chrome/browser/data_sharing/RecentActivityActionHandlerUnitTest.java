@@ -7,14 +7,17 @@ package org.chromium.chrome.browser.data_sharing;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -24,13 +27,13 @@ import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
 import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.SavedTabGroupTab;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,7 +46,6 @@ public class RecentActivityActionHandlerUnitTest {
     private static final String SYNC_TAB_GROUP_ID = "sync_tab_group_1";
     private static final String SYNC_TAB_ID = "sync_tab_1";
     private static final Token TOKEN_1 = new Token(3, 5);
-    private static final int ROOT_ID_1 = 9;
     private static final int TAB_ID_1 = 9;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -52,7 +54,6 @@ public class RecentActivityActionHandlerUnitTest {
     @Mock private DataSharingTabGroupsDelegate mDataSharingTabGroupsDelegate;
     @Mock private Runnable mManageSharingCallback;
     @Mock private TabModel mTabModel;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabCreator mTabCreator;
     @Mock private Tab mTab1;
     private RecentActivityActionHandlerImpl mRecentActivityActionHandler;
@@ -61,18 +62,15 @@ public class RecentActivityActionHandlerUnitTest {
     public void setUp() {
         // Set up tab model with a single tab and as part of a tab group.
         when(mTab1.getId()).thenReturn(TAB_ID_1);
-        when(mTab1.getRootId()).thenReturn(ROOT_ID_1);
         when(mTab1.getTabGroupId()).thenReturn(TOKEN_1);
         when(mTabModel.getCount()).thenReturn(1);
         when(mTabModel.getTabAt(0)).thenReturn(mTab1);
         when(mTabModel.getTabById(TAB_ID_1)).thenReturn(mTab1);
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
-        when(mTabModelSelector.getTabGroupModelFilter(false)).thenReturn(mTabGroupModelFilter);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
-        when(mTabGroupModelFilter.getGroupLastShownTabId(TOKEN_1)).thenReturn(ROOT_ID_1);
+        when(mTabModel.getGroupLastShownTabId(TOKEN_1)).thenReturn(TAB_ID_1);
         List<Tab> relatedTabs = new ArrayList<>();
         relatedTabs.add(mTab1);
-        when(mTabGroupModelFilter.getRelatedTabList(ROOT_ID_1)).thenReturn(relatedTabs);
+        when(mTabModel.getRelatedTabList(TAB_ID_1)).thenReturn(relatedTabs);
         when(mTabModel.getTabCreator()).thenReturn(mTabCreator);
 
         // Setup saved tab group with a single tab.
@@ -105,7 +103,17 @@ public class RecentActivityActionHandlerUnitTest {
     public void testReopenTab() {
         String url = "https://google.com";
         mRecentActivityActionHandler.reopenTab(url);
-        verify(mTabCreator, times(1)).createNewTab(any(), anyInt(), any());
+        ArgumentCaptor<LoadUrlParams> captor = ArgumentCaptor.forClass(LoadUrlParams.class);
+        verify(mTabCreator, times(1)).createNewTab(captor.capture(), anyInt(), any());
+        Assert.assertEquals(url, captor.getValue().getUrl());
+    }
+
+    @Test
+    public void testReopenTab_InvalidUrl() {
+        String invalidUrl = "chrome://flags";
+        mRecentActivityActionHandler.reopenTab(invalidUrl);
+        // Should not trigger any navigation.
+        verify(mTabCreator, never()).createNewTab(any(), anyInt(), any());
     }
 
     @Test

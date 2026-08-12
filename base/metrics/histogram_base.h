@@ -11,11 +11,13 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "base/atomicops.h"
 #include "base/base_export.h"
+#include "base/functional/callback_forward.h"
 #include "base/strings/durable_string_view.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -53,43 +55,6 @@ enum JSONVerbosityLevel {
 
 std::string HistogramTypeToString(HistogramType type);
 
-// This enum is used for reporting how many histograms and of what types and
-// variations are being created. It has to be in the main .h file so it is
-// visible to files that define the various histogram types.
-enum HistogramReport {
-  // Count the number of reports created. The other counts divided by this
-  // number will give the average per run of the program.
-  HISTOGRAM_REPORT_CREATED = 0,
-
-  // Count the total number of histograms created. It is the limit against
-  // which all others are compared.
-  HISTOGRAM_REPORT_HISTOGRAM_CREATED = 1,
-
-  // Count the total number of histograms looked-up. It's better to cache
-  // the result of a single lookup rather than do it repeatedly.
-  HISTOGRAM_REPORT_HISTOGRAM_LOOKUP = 2,
-
-  // These count the individual histogram types. This must follow the order
-  // of HistogramType above.
-  HISTOGRAM_REPORT_TYPE_LOGARITHMIC = 3,
-  HISTOGRAM_REPORT_TYPE_LINEAR = 4,
-  HISTOGRAM_REPORT_TYPE_BOOLEAN = 5,
-  HISTOGRAM_REPORT_TYPE_CUSTOM = 6,
-  HISTOGRAM_REPORT_TYPE_SPARSE = 7,
-
-  // These indicate the individual flags that were set.
-  HISTOGRAM_REPORT_FLAG_UMA_TARGETED = 8,
-  HISTOGRAM_REPORT_FLAG_UMA_STABILITY = 9,
-  HISTOGRAM_REPORT_FLAG_PERSISTENT = 10,
-
-  // This must be last.
-  HISTOGRAM_REPORT_MAX = 11
-};
-
-// Create or find existing histogram that matches the pickled info.
-// Returns NULL if the pickled data has problems.
-BASE_EXPORT HistogramBase* DeserializeHistogramInfo(base::PickleIterator* iter);
-
 ////////////////////////////////////////////////////////////////////////////////
 
 class BASE_EXPORT HistogramBase {
@@ -97,6 +62,9 @@ class BASE_EXPORT HistogramBase {
   using Sample32 = int32_t;              // Used for samples.
   using AtomicCount = subtle::Atomic32;  // Used to count samples.
   using Count32 = int32_t;  // Used to manipulate counts in temporaries.
+  // Used to rename or drop a histogram name when empty is returned.
+  using NameMapper =
+      base::RepeatingCallback<std::string_view(std::string_view)>;
 
   static const Sample32 kSampleType_MAX;  // INT_MAX
 
@@ -147,6 +115,16 @@ class BASE_EXPORT HistogramBase {
     NEVER_EXCEEDED_VALUE = 0x10,
   };
 
+  // Create or find existing histogram that matches the pickled info.
+  // The `mapper` callback is invoked with the original histogram name. It can
+  // return a new name to rename the histogram, the original name to keep it,
+  // or an empty string to drop the histogram entirely. This allows renaming
+  // metrics during deserialization, e.g., adding prefixes based on process
+  // type.
+  // Returns nullptr if the pickled data has problems.
+  static HistogramBase* DeserializeInfo(base::PickleIterator* iter,
+                                        HistogramBase::NameMapper mapper);
+
   // Construct the base histogram. The name is not copied; it's up to the
   // caller to ensure that it lives at least as long as this object.
   explicit HistogramBase(DurableStringView name);
@@ -191,21 +169,12 @@ class BASE_EXPORT HistogramBase {
   // than or equal to 1.
   virtual void AddCount(Sample32 value, int count) = 0;
 
-  // Similar to above but divides |count| by the |scale| amount. Probabilistic
-  // rounding is used to yield a reasonably accurate total when many samples
-  // are added. Methods for common cases of scales 1000 and 1024 are included.
-  // The ScaledLinearHistogram (which can also used be for enumerations) may be
-  // a better (and faster) solution.
-  void AddScaled(Sample32 value, int count, int scale);
-  void AddKilo(Sample32 value, int count);  // scale=1000
-  void AddKiB(Sample32 value, int count);   // scale=1024
-
   // Convenient functions that call Add(Sample32).
-  void AddTime(const TimeDelta& time) { AddTimeMillisecondsGranularity(time); }
-  void AddTimeMillisecondsGranularity(const TimeDelta& time);
+  void AddTime(TimeDelta time) { AddTimeMillisecondsGranularity(time); }
+  void AddTimeMillisecondsGranularity(TimeDelta time);
   // Note: AddTimeMicrosecondsGranularity() drops the report if this client
   // doesn't have a high-resolution clock.
-  void AddTimeMicrosecondsGranularity(const TimeDelta& time);
+  void AddTimeMicrosecondsGranularity(TimeDelta time);
   void AddBoolean(bool value);
 
   virtual bool AddSamples(const HistogramSamples& samples) = 0;
@@ -293,7 +262,7 @@ class BASE_EXPORT HistogramBase {
   // with the following format:
   // {"header": "Name of the histogram with samples, mean, and/or flags",
   // "body": "ASCII histogram representation"}
-  virtual base::Value::Dict ToGraphDict() const = 0;
+  virtual base::DictValue ToGraphDict() const = 0;
 
   // Produce a JSON representation of the histogram with |verbosity_level| as
   // the serialization verbosity. This is implemented with the help of
@@ -307,9 +276,9 @@ class BASE_EXPORT HistogramBase {
   struct BASE_EXPORT CountAndBucketData {
     Count32 count;
     int64_t sum;
-    Value::List buckets;
+    ListValue buckets;
 
-    CountAndBucketData(Count32 count, int64_t sum, Value::List buckets);
+    CountAndBucketData(Count32 count, int64_t sum, ListValue buckets);
     ~CountAndBucketData();
 
     CountAndBucketData(CountAndBucketData&& other);
@@ -320,7 +289,7 @@ class BASE_EXPORT HistogramBase {
   virtual void SerializeInfoImpl(base::Pickle* pickle) const = 0;
 
   // Writes information about the construction parameters in |params|.
-  virtual Value::Dict GetParameters() const = 0;
+  virtual DictValue GetParameters() const = 0;
 
   // Returns information about the current (non-empty) buckets and their sample
   // counts to |buckets|, the total sample count to |count| and the total sum

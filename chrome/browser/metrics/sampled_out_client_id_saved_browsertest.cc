@@ -10,6 +10,7 @@
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "content/public/test/browser_test.h"
@@ -33,11 +34,11 @@ void OnMetricsReportingStateChanged(bool* new_state_ptr,
 bool ChangeMetricsReporting(bool enabled) {
   bool value_after_change;
   base::RunLoop run_loop;
-  ChangeMetricsReportingStateWithReply(
+  metrics::ChangeMetricsReportingStateWithReply(
       enabled,
       base::BindOnce(OnMetricsReportingStateChanged, &value_after_change,
                      run_loop.QuitClosure()),
-      ChangeMetricsReportingStateCalledFrom::kUiSettings);
+      metrics::ChangeMetricsReportingStateCalledFrom::kUiSettings);
   run_loop.Run();
   return value_after_change;
 }
@@ -70,8 +71,8 @@ class SampledOutClientIdSavedBrowserTest : public PlatformBrowserTest {
     // Because metrics reporting is disabled in non-Chrome-branded builds,
     // IsMetricsReportingEnabled() always returns false. Enable it here for
     // test consistency between Chromium and Chrome builds, otherwise
-    // ChangeMetricsReportingStateWithReply() will not have the intended effects
-    // for non-Chrome-branded builds.
+    // metrics::ChangeMetricsReportingStateWithReply() will not have the
+    // intended effects for non-Chrome-branded builds.
     ChromeMetricsServiceAccessor::SetForceIsMetricsReportingEnabledPrefLookup(
         true);
 
@@ -130,7 +131,8 @@ IN_PROC_BROWSER_TEST_F(SampledOutClientIdSavedBrowserTest, ClientIdSaved) {
   // Enable metrics reporting, and verify that it was successful.
   ASSERT_TRUE(ChangeMetricsReporting(true));
   ASSERT_TRUE(
-      local_state()->GetBoolean(metrics::prefs::kMetricsReportingEnabled));
+      metrics::MetricsReportingChoiceService::IsBasicMetricsReportingEnabled(
+          local_state()));
 
   // Verify that we are still considered sampled out.
   EXPECT_FALSE(
@@ -157,7 +159,8 @@ IN_PROC_BROWSER_TEST_F(SampledOutClientIdSavedBrowserTest, ClientIdSaved) {
   // Disable metrics reporting, and verify that it was successful.
   ASSERT_FALSE(ChangeMetricsReporting(false));
   ASSERT_FALSE(
-      local_state()->GetBoolean(metrics::prefs::kMetricsReportingEnabled));
+      metrics::MetricsReportingChoiceService::IsBasicMetricsReportingEnabled(
+          local_state()));
 
   // Verify that the pref dictating whether we use new sampling trial should be
   // used is set to true.

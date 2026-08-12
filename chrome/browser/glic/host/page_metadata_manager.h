@@ -13,9 +13,12 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "components/tabs/public/tab_interface.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/blink/public/mojom/page/page.mojom-forward.h"
+
+class Profile;
 
 namespace content {
 class WebContents;
@@ -25,8 +28,6 @@ namespace optimization_guide {
 class PageContentMetadataObserver;
 }
 
-#include "components/tabs/public/tab_interface.h"
-
 namespace glic {
 
 // Manages subscriptions to page metadata for tabs on behalf of the Glic web
@@ -34,7 +35,7 @@ namespace glic {
 // client. It also handles caching of metadata when the Glic panel is inactive.
 class PageMetadataManager {
  public:
-  explicit PageMetadataManager(glic::mojom::WebClient* web_client);
+  PageMetadataManager(Profile* profile, glic::mojom::WebClient* web_client);
   ~PageMetadataManager();
 
   PageMetadataManager(const PageMetadataManager&) = delete;
@@ -55,9 +56,13 @@ class PageMetadataManager {
                                 content::WebContents* new_contents);
   void OnTabWillDetach(tabs::TabInterface* tab,
                        tabs::TabInterface::DetachReason reason);
+  void OnPageContentMetadataChanged(
+      int32_t tab_id,
+      blink::mojom::PageMetadataPtr page_metadata);
   void NotifyPageMetadataChanged(int32_t tab_id,
                                  blink::mojom::PageMetadataPtr page_metadata);
 
+  const raw_ptr<Profile> profile_;
   // Unowned. The client is owned by the owner of this PageMetadataManager.
   const raw_ptr<glic::mojom::WebClient> web_client_;
 

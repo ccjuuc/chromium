@@ -39,7 +39,7 @@ source_set("overlays") {
     "//ios/chrome/browser/overlays/model/public/default",
     "//ios/chrome/browser/overlays/model/public/infobar_banner",
     "//ios/chrome/browser/overlays/model/public/infobar_modal",
-    "//ios/chrome/browser/passwords/model:infobar_delegates",
+    "//ios/chrome/browser/passwords/infobars/model",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/tips_manager/model:factory",
@@ -112,7 +112,6 @@ source_set("unit_tests") {
     "//ios/chrome/browser/infobars/model:public",
     "//ios/chrome/browser/infobars/model/overlays/browser_agent/interaction_handlers/test",
     "//ios/chrome/browser/infobars/model/test",
-    "//ios/chrome/browser/infobars/ui_bundled/test",
     "//ios/chrome/browser/overlays/model",
     "//ios/chrome/browser/overlays/model/public/common",
     "//ios/chrome/browser/overlays/model/public/common/infobars",
@@ -120,8 +119,8 @@ source_set("unit_tests") {
     "//ios/chrome/browser/overlays/model/public/infobar_banner",
     "//ios/chrome/browser/overlays/model/public/infobar_modal",
     "//ios/chrome/browser/overlays/model/test",
-    "//ios/chrome/browser/passwords/model:infobar_delegates",
-    "//ios/chrome/browser/passwords/model/test",
+    "//ios/chrome/browser/passwords/infobars/model",
+    "//ios/chrome/browser/passwords/infobars/test",
     "//ios/chrome/browser/safe_browsing/model/tailored_security/test",
     "//ios/chrome/browser/shared/model/browser/test:test_support",
     "//ios/chrome/browser/shared/model/profile/test",
@@ -133,8 +132,4 @@ source_set("unit_tests") {
     "//ios/web/public/test/fakes",
     "//testing/gtest",
   ]
-
-  # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
-  # enable the diagnostic by removing this line.
-  configs += [ "//build/config/compiler:no_exit_time_destructors" ]
 }

@@ -7,12 +7,15 @@
 
 #include "base/callback_list.h"
 #include "base/time/time.h"
+#include "chrome/browser/glic/common/local_hotkey_manager.h"
+#include "chrome/browser/glic/common/panel_focus_dependent_hotkey_manager.h"
+#include "chrome/browser/glic/common/panel_visibility_dependent_hotkey_manager.h"
 #include "chrome/browser/glic/host/context/glic_screenshot_capturer.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/service/glic_ui_embedder.h"
-#include "chrome/browser/glic/widget/glic_window_event_observer.h"
-#include "chrome/browser/glic/widget/local_hotkey_manager.h"
+#include "chrome/browser/glic/widget/browser_conditions.h"
+#include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
@@ -34,11 +37,11 @@ class GlicInstanceMetrics;
 // A stub implementation of GlicUiEmbedder for floating UIs.
 class GlicFloatingUi : public GlicUiEmbedder,
                        public Host::EmbedderDelegate,
-                       public GlicWindowEventObserver::Delegate,
                        public LocalHotkeyManager::Panel,
                        public views::WidgetObserver,
                        public web_modal::WebContentsModalDialogManagerDelegate,
-                       public web_modal::WebContentsModalDialogHost {
+                       public web_modal::WebContentsModalDialogHost,
+                       public glic::BrowserAttachObserver {
  public:
   GlicFloatingUi(Profile* profile,
                  BrowserWindowInterface* browser,
@@ -59,7 +62,8 @@ class GlicFloatingUi : public GlicUiEmbedder,
   Host::EmbedderDelegate* GetHostEmbedderDelegate() override;
   void Show(const ShowOptions& options) override;
   bool IsShowing() const override;
-  void Close() override;
+  bool IsShowingOrBackgrounded() const override;
+  void Close(const CloseOptions& options) override;
   std::unique_ptr<GlicUiEmbedder> CreateInactiveEmbedder() const override;
   void Focus() override;
   mojom::PanelState GetPanelState() const override;
@@ -70,8 +74,6 @@ class GlicFloatingUi : public GlicUiEmbedder,
   void Resize(const gfx::Size& size,
               base::TimeDelta duration,
               base::OnceClosure callback) override;
-  void SetDraggableAreas(
-      const std::vector<gfx::Rect>& draggable_areas) override;
   void EnableDragResize(bool enabled) override;
   void Attach() override;
   void Detach() override;
@@ -83,25 +85,31 @@ class GlicFloatingUi : public GlicUiEmbedder,
       glic::mojom::WebClientHandler::CaptureScreenshotCallback callback)
       override;
   void ClosePanel() override;
-
-  // GlicWindowEventObserver::Delegate:
-  GlicWindowAnimator* window_animator() override;
-  void OnDragComplete() override;
+  void OnReload() override;
+  void OnMicrophoneStatusChanged(mojom::MicrophoneStatus status) override;
 
   // views::WidgetObserver implementation, monitoring the glic window widget.
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
   void OnWidgetDestroyed(views::Widget* widget) override;
   void OnWidgetBoundsChanged(views::Widget* widget,
                              const gfx::Rect& new_bounds) override;
-  void OnWidgetUserResizeStarted() override;
-  void OnWidgetUserResizeEnded() override;
+  void OnWidgetUserResizeStarted(views::Widget* widget) override;
+  void OnWidgetUserResizeEnded(views::Widget* widget) override;
+
+  // BrowserAttachObserver implementation:
+  void CanAttachToBrowserChanged(bool can_attach) override;
 
   // LocalHotkeyManager::Panel:
   void FocusIfOpen() override;
   bool HasFocus() override;
   bool ActivateBrowser() override;
+  void Zoom(mojom::ZoomAction zoom_action) override;
   void ShowTitleBarContextMenuAt(gfx::Point event_loc) override;
+#if !BUILDFLAG(IS_ANDROID)
+  bool HasSelectionOverlay() override;
+  void CloseSelectionOverlay() override;
   base::WeakPtr<views::View> GetView() override;
+#endif
 
   // web_modal::WebContentsModalDialogManagerDelegate:
   web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
@@ -124,20 +132,23 @@ class GlicFloatingUi : public GlicUiEmbedder,
   void SetGlicWindowToFloatingMode(bool floating);
   void OnSourceTabDestroyed(tabs::TabInterface* tab);
   void FloatingPanelCanAttachChanged(bool can_attach);
+  void ConfigureWebContentsModalDialogs();
+  void MaybeNotifyActivationChanged(bool window_active);
 
   // Whether the widget should be user resizable, kept here in case it's
   // specified before the widget is created.
   bool user_resizable_ = true;
   // Whether the user is currently drag-resizing the widget.
   bool user_resizing_ = false;
-  std::unique_ptr<LocalHotkeyManager> application_hotkey_manager_;
-  std::unique_ptr<LocalHotkeyManager> glic_panel_hotkey_manager_;
+  std::unique_ptr<PanelVisibilityDependentHotkeyManager>
+      panel_visibility_dependent_hotkey_manager_;
+  std::unique_ptr<PanelFocusDependentHotkeyManager>
+      panel_focus_dependent_hotkey_manager_;
   std::unique_ptr<GlicWindowAnimator> glic_window_animator_;
 
   // Must outlive `glic_widget_`
   std::unique_ptr<views::WidgetDelegate> glic_delegate_;
   std::unique_ptr<GlicWidget> glic_widget_;
-  std::unique_ptr<GlicWindowEventObserver> window_event_observer_;
   mojom::PanelState panel_state_;
   // Observes the glic widget.
   base::ScopedObservation<views::Widget, views::WidgetObserver>
@@ -145,7 +156,7 @@ class GlicFloatingUi : public GlicUiEmbedder,
 
   // Used by web modals to listens for glic window events, e.g. size change or
   // window close.
-  base::ObserverList<web_modal::ModalDialogHostObserver>::Unchecked
+  base::ObserverList<web_modal::ModalDialogHostObserver>
       modal_dialog_host_observers_;
 
   raw_ptr<Profile> profile_;
@@ -156,6 +167,9 @@ class GlicFloatingUi : public GlicUiEmbedder,
 
   tabs::TabHandle source_tab_;
   base::CallbackListSubscription source_tab_destruction_subscription_;
+
+  std::unique_ptr<BrowserAttachObservation> browser_attach_observation_;
+  ScopedProfileKeepAlive profile_keep_alive_;
 
   base::WeakPtrFactory<GlicFloatingUi> weak_ptr_factory_{this};
 };

@@ -112,11 +112,9 @@ class ScrollAnchorTest : public SimTest {
     DCHECK_EQ(true, scrollbar->GetTheme().AllowsHitTest());
     int thumb_center = scrollbar->GetTheme().ThumbPosition(*scrollbar) +
                        scrollbar->GetTheme().ThumbLength(*scrollbar) / 2;
-    scrollbar_drag_point_ =
-        gfx::PointF(scrollbar->GetLayoutBox()
-                        ->GetScrollableArea()
-                        ->ConvertFromScrollbarToContainingEmbeddedContentView(
-                            *scrollbar, gfx::Point(0, thumb_center)));
+    scrollbar_drag_point_ = scrollbar->GetLayoutBox()->LocalToAbsolutePoint(
+        gfx::PointF(0, thumb_center) +
+        scrollbar->FrameRect().OffsetFromOrigin());
     scrollbar->MouseDown(blink::WebMouseEvent(
         blink::WebInputEvent::Type::kMouseDown, *scrollbar_drag_point_,
         *scrollbar_drag_point_, blink::WebPointerProperties::Button::kLeft, 0,
@@ -626,6 +624,46 @@ TEST_F(ScrollAnchorTest, SerializeAnchorWithVariousLineHeights) {
   EXPECT_EQ(serialized_anchor.selector, "#line-span-200>:nth-child(1)");
   // expect the anchor object to be the text node inside the paragraph
   EXPECT_TRUE(scroll_anchor.AnchorObject()->IsText());
+
+  // scroll to (0, 0)
+  ScrollLayoutViewport(ScrollOffset(0, -scroll_y));
+  EXPECT_EQ(LayoutViewport()->ScrollOffsetInt().y(), 0);
+
+  // then restore the anchor
+  EXPECT_TRUE(
+      GetScrollAnchor(LayoutViewport()).RestoreAnchor(serialized_anchor));
+  EXPECT_EQ(LayoutViewport()->ScrollOffsetInt().y(), scroll_y);
+}
+
+TEST_F(ScrollAnchorTest, SerializeAnchorForSvgText) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        height: 2000px;
+      }
+      #svg {
+        width: 100px;
+        height: 100px;
+      }
+    </style>
+    <svg id="svg" width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+      <text id="svg-text" x="0" y="20" font-size="20" fill="blue">
+        Hello
+      </text>
+    </svg>
+  )HTML");
+
+  int scroll_y = 15;
+  // scroll to (0, 15)
+  ScrollLayoutViewport(ScrollOffset(0, scroll_y));
+  ScrollAnchor scroll_anchor = GetScrollAnchor(LayoutViewport());
+  SerializedAnchor serialized_anchor = scroll_anchor.GetSerializedAnchor();
+
+  EXPECT_EQ(serialized_anchor.selector, "#svg-text");
 
   // scroll to (0, 0)
   ScrollLayoutViewport(ScrollOffset(0, -scroll_y));
@@ -1202,7 +1240,7 @@ class ScrollAnchorFindInPageTest : public testing::Test {
 
   void SetHtmlInnerHTML(const char* content) {
     GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-        String::FromUTF8(content));
+        String::FromUtf8(content));
     UpdateAllLifecyclePhasesForTest();
   }
 
@@ -1426,6 +1464,14 @@ TEST_F(ScrollAnchorPageTest, SvgRelativeBoundsCrashAfterClearLayoutResults) {
   // called, then ScrollAnchor::NotifyBeforeLayout() for <foreignObject> was
   // called. It accessed the geometry of the first <div>.
   doc.UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  // Pass if no crashes.
+}
+
+// Verifies that SuppressScrollAnchorScope doesn't crash when constructed with
+// a nullptr ScrollableArea.
+// https://crbug.com/471610993
+TEST_F(ScrollAnchorTest, SuppressScrollAnchorScopeWithNullScroller) {
+  SuppressScrollAnchorScope scope(nullptr);
   // Pass if no crashes.
 }
 }

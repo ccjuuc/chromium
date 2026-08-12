@@ -40,7 +40,7 @@ class RenderProcessHost;
 }
 
 namespace IPC {
-class SyncChannel;
+class ChannelProxy;
 }  // namespace IPC
 
 namespace content {
@@ -58,14 +58,15 @@ class CONTENT_EXPORT RenderThread : virtual public ChildThread {
   RenderThread();
   ~RenderThread() override;
 
-  virtual IPC::SyncChannel* GetChannel() = 0;
+  virtual IPC::ChannelProxy* GetChannel() = 0;
   virtual std::string GetLocale() = 0;
 
   virtual bool GenerateFrameRoutingID(
       int32_t& routing_id,
       blink::LocalFrameToken& frame_token,
       base::UnguessableToken& devtools_frame_token,
-      blink::DocumentToken& document_token) = 0;
+      blink::DocumentToken& document_token,
+      std::unique_ptr<base::UnguessableToken>& sandbox_origin_token) = 0;
 
   // Add/remove observers for the process.
   virtual void AddObserver(RenderThreadObserver* observer) = 0;

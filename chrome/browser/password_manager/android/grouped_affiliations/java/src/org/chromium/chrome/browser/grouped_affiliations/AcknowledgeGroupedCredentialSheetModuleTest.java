@@ -18,7 +18,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.quality.Strictness;
@@ -26,7 +25,6 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerFactory;
@@ -37,7 +35,6 @@ import org.chromium.ui.base.WindowAndroid;
 /** Tests for {@link AcknowledgeGroupedCredentialSheetController} */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@Batch(Batch.PER_CLASS)
 public class AcknowledgeGroupedCredentialSheetModuleTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
     @Mock private AcknowledgeGroupedCredentialSheetBridge.Natives mBridgeJniMock;
@@ -54,11 +51,11 @@ public class AcknowledgeGroupedCredentialSheetModuleTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
         AcknowledgeGroupedCredentialSheetBridgeJni.setInstanceForTesting(mBridgeJniMock);
         mWindowAndroid =
                 new WindowAndroid(
-                        ContextUtils.getApplicationContext(), /* trackOcclusion= */ false);
+                        ContextUtils.getApplicationContext(),
+                        /* occlusionTrackingAllowed= */ false);
         setUpBottomSheetController();
         mBridge = new AcknowledgeGroupedCredentialSheetBridge(TEST_NATIVE_POINTER, mWindowAndroid);
     }

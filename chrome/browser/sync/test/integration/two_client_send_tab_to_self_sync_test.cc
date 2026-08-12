@@ -3,17 +3,24 @@
 // found in the LICENSE file.
 
 #include "base/callback_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/send_tab_to_self/send_tab_to_self_util.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
-#include "chrome/browser/sync/test/integration/secondary_account_helper.h"
 #include "chrome/browser/sync/test/integration/send_tab_to_self_helper.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/history/core/browser/history_service.h"
+#include "components/send_tab_to_self/metrics_util.h"
+#include "components/send_tab_to_self/page_context.h"
 #include "components/send_tab_to_self/send_tab_to_self_bridge.h"
 #include "components/send_tab_to_self/send_tab_to_self_model.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
@@ -22,9 +29,18 @@
 #include "components/sync_device_info/device_info_sync_service.h"
 #include "components/sync_device_info/local_device_info_provider.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "url/gurl.h"
+
+namespace {
+
+using send_tab_to_self_helper::GetFormFieldValueById;
+using send_tab_to_self_helper::PopulateFormField;
+
+}  // namespace
 
 class TwoClientSendTabToSelfSyncTest
     : public SyncTest,
@@ -79,7 +95,10 @@ IN_PROC_BROWSER_TEST_P(TwoClientSendTabToSelfSyncTest,
       SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(0))
           ->GetSendTabToSelfModel();
 
-  ASSERT_TRUE(model0->AddEntry(kUrl, kTitle, kTargetDeviceSyncCacheGuid));
+  ASSERT_TRUE(model0->SendEntry(
+      kUrl, kTitle, kTargetDeviceSyncCacheGuid, send_tab_to_self::PageContext(),
+      send_tab_to_self::NavigationHistory(), base::DoNothing(),
+      send_tab_to_self::ShareEntryPoint::kShareSheet));
 
   send_tab_to_self::SendTabToSelfSyncService* service1 =
       SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(1));
@@ -108,13 +127,23 @@ IN_PROC_BROWSER_TEST_P(TwoClientSendTabToSelfSyncTest,
       SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(0))
           ->GetSendTabToSelfModel();
 
-  ASSERT_TRUE(model0->AddEntry(kGurl0, kTitle0, kTargetDeviceSyncCacheGuid0));
+  ASSERT_TRUE(model0->SendEntry(
+      kGurl0, kTitle0, kTargetDeviceSyncCacheGuid0,
+      send_tab_to_self::PageContext(), send_tab_to_self::NavigationHistory(),
+      base::DoNothing(), send_tab_to_self::ShareEntryPoint::kShareSheet));
 
-  ASSERT_TRUE(model0->AddEntry(kGurl1, kTitle1, kTargetDeviceSyncCacheGuid1));
+  ASSERT_TRUE(model0->SendEntry(
+      kGurl1, kTitle1, kTargetDeviceSyncCacheGuid1,
+      send_tab_to_self::PageContext(), send_tab_to_self::NavigationHistory(),
+      base::DoNothing(), send_tab_to_self::ShareEntryPoint::kShareSheet));
 
   ASSERT_TRUE(SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(1))
                   ->GetSendTabToSelfModel()
-                  ->AddEntry(kGurl2, kTitle2, kTargetDeviceSyncCacheGuid2));
+                  ->SendEntry(kGurl2, kTitle2, kTargetDeviceSyncCacheGuid2,
+                              send_tab_to_self::PageContext(),
+                              send_tab_to_self::NavigationHistory(),
+                              base::DoNothing(),
+                              send_tab_to_self::ShareEntryPoint::kShareSheet));
 
   EXPECT_TRUE(send_tab_to_self_helper::SendTabToSelfModelEqualityChecker(
                   SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(1)),
@@ -240,7 +269,10 @@ IN_PROC_BROWSER_TEST_P(TwoClientSendTabToSelfSyncTest,
   send_tab_to_self::SendTabToSelfModel* model0 =
       service0->GetSendTabToSelfModel();
 
-  ASSERT_TRUE(model0->AddEntry(kUrl, kTitle, kTargetDeviceSyncCacheGuid));
+  ASSERT_TRUE(model0->SendEntry(
+      kUrl, kTitle, kTargetDeviceSyncCacheGuid, send_tab_to_self::PageContext(),
+      send_tab_to_self::NavigationHistory(), base::DoNothing(),
+      send_tab_to_self::ShareEntryPoint::kShareSheet));
 
   send_tab_to_self::SendTabToSelfSyncService* service1 =
       SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(1));
@@ -255,6 +287,77 @@ IN_PROC_BROWSER_TEST_P(TwoClientSendTabToSelfSyncTest,
   EXPECT_TRUE(
       send_tab_to_self_helper::SendTabToSelfUrlOpenedChecker(service0, kUrl)
           .Wait());
+}
+
+IN_PROC_BROWSER_TEST_P(TwoClientSendTabToSelfSyncTest,
+                       ShouldPropagateFormFields) {
+  const std::string kName = "John";
+  const std::string kEmail = "john@example.com";
+  const GURL kUrl =
+      embedded_test_server()->GetURL("/autofill/autofill_test_form.html");
+  ASSERT_TRUE(SetupSync());
+
+  // Client 0: Open tab and fill form.
+  content::WebContents* sender_web_contents =
+      chrome::AddAndReturnTabAt(GetBrowser(0), kUrl, -1, true);
+  ASSERT_TRUE(content::WaitForLoadStop(sender_web_contents));
+
+  // Wait for Autofill to cache the form fields.
+  ASSERT_TRUE(
+      send_tab_to_self_helper::AutofillFieldsSeenChecker(
+          sender_web_contents, {{"NAME_FIRST", ""}, {"EMAIL_ADDRESS", ""}})
+          .Wait());
+
+  ASSERT_TRUE(PopulateFormField(sender_web_contents, "NAME_FIRST", kName));
+  ASSERT_TRUE(PopulateFormField(sender_web_contents, "EMAIL_ADDRESS", kEmail));
+
+  // Wait for Autofill to catch up with the values.
+  ASSERT_TRUE(send_tab_to_self_helper::AutofillFieldsSeenChecker(
+                  sender_web_contents,
+                  {{"NAME_FIRST", kName}, {"EMAIL_ADDRESS", kEmail}})
+                  .Wait());
+
+  // Trigger sending.
+  const std::string target_guid = GetCacheGuid(1);
+  send_tab_to_self::PageContext context;
+  context.form_field_info =
+      send_tab_to_self::ExtractFormFieldsFromWebContents(sender_web_contents);
+  SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(0))
+      ->GetSendTabToSelfModel()
+      ->SendEntry(kUrl, "example", target_guid, context,
+                  send_tab_to_self::NavigationHistory(), base::DoNothing(),
+                  send_tab_to_self::ShareEntryPoint::kShareSheet);
+
+  // Ensure receiver browser is active so notification is handled immediately,
+  // as opposed to getting queued and executing during teardown.
+  GetBrowser(1)->GetWindow()->Activate();
+
+  // Client 1: Wait for entry and fill.
+  send_tab_to_self::SendTabToSelfSyncService* service1 =
+      SendTabToSelfSyncServiceFactory::GetForProfile(GetProfile(1));
+  ASSERT_TRUE(
+      send_tab_to_self_helper::SendTabToSelfUrlChecker(service1, kUrl).Wait());
+
+  const send_tab_to_self::SendTabToSelfEntry* entry1 =
+      service1->GetSendTabToSelfModel()->GetEntryByGUID(
+          service1->GetSendTabToSelfModel()->GetAllGuids()[0]);
+  ASSERT_NE(nullptr, entry1);
+
+  // Mimic the tab being opened on client 1.
+  content::WebContents* received_web_contents =
+      chrome::AddAndReturnTabAt(GetBrowser(1), kUrl, -1, true);
+
+  send_tab_to_self::FillWebContents(received_web_contents,
+                                    url::Origin::Create(entry1->GetURL()),
+                                    entry1->GetPageContext());
+
+  // Wait for filling to complete.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return GetFormFieldValueById(received_web_contents, "NAME_FIRST") ==
+               kName &&
+           GetFormFieldValueById(received_web_contents, "EMAIL_ADDRESS") ==
+               kEmail;
+  }));
 }
 
 // Transport mode isn't really supported on ChromeOS.
@@ -287,7 +390,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientSendTabToSelfTransportModeSyncTest,
   ASSERT_TRUE(GetClient(0)->SetupSync());
   ASSERT_TRUE(GetSyncService(0)->IsSyncFeatureActive());
 
-  ASSERT_TRUE(GetClient(1)->SignInPrimaryAccount());
+  ASSERT_TRUE(GetClient(1)->SignInNoWaitForCompletion());
   ASSERT_TRUE(GetClient(1)->AwaitSyncTransportActive());
   ASSERT_FALSE(GetSyncService(1)->IsSyncFeatureActive());
 

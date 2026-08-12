@@ -49,7 +49,8 @@ class SequenceManagerThreadDelegate : public base::Thread::Delegate {
     default_task_runner_ =
         browser_ui_thread_scheduler->GetHandle()->GetDefaultTaskRunner();
 
-    ui_sequence_manager_->SetDefaultTaskRunner(default_task_runner_);
+    ui_sequence_manager_->SetDefaultTaskQueue(
+        browser_ui_thread_scheduler->GetDefaultTaskQueue());
 
     BrowserTaskExecutor::CreateForTesting(
         std::move(browser_ui_thread_scheduler),
@@ -75,10 +76,6 @@ class SequenceManagerThreadDelegate : public base::Thread::Delegate {
         base::MessagePump::Create(base::MessagePumpType::DEFAULT));
   }
 
-  void AddTaskObserver(base::TaskObserver* observer) override {
-    ui_sequence_manager_->AddTaskObserver(observer);
-  }
-
  private:
   std::unique_ptr<base::sequence_manager::SequenceManager> ui_sequence_manager_;
   scoped_refptr<base::SingleThreadTaskRunner> default_task_runner_;
@@ -99,10 +96,9 @@ class BrowserThreadTest : public testing::Test {
  protected:
   void SetUp() override {
     ui_thread_ = std::make_unique<base::Thread>(
-        BrowserThreadImpl::GetThreadName(BrowserThread::UI));
-    base::Thread::Options ui_options;
-    ui_options.delegate = std::make_unique<SequenceManagerThreadDelegate>();
-    ui_thread_->StartWithOptions(std::move(ui_options));
+        BrowserThreadImpl::GetThreadName(BrowserThread::UI),
+        std::make_unique<SequenceManagerThreadDelegate>());
+    ui_thread_->Start();
 
     io_thread_ = BrowserTaskExecutor::CreateIOThread();
     io_thread_->RegisterAsBrowserThread();
@@ -272,8 +268,7 @@ class BrowserThreadWithCustomSchedulerTest : public testing::Test {
       std::unique_ptr<BrowserUIThreadScheduler> browser_ui_thread_scheduler =
           BrowserUIThreadScheduler::CreateForTesting(sequence_manager());
       DeferredInitFromSubclass(
-          browser_ui_thread_scheduler->GetHandle()->GetBrowserTaskRunner(
-              QueueType::kDefault));
+          browser_ui_thread_scheduler->GetDefaultTaskQueue());
       BrowserTaskExecutor::CreateForTesting(
           std::move(browser_ui_thread_scheduler),
           std::make_unique<BrowserIOThreadDelegate>());

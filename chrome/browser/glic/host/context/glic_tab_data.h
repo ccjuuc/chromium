@@ -47,9 +47,7 @@ enum class TabDataChangeCause : uint32_t {
 
   kMaxValue = kTabChanged,
 };
-using TabDataChangeCauseSet = base::EnumSet<TabDataChangeCause,
-                                            TabDataChangeCause::kMinValue,
-                                            TabDataChangeCause::kMaxValue>;
+using TabDataChangeCauseSet = base::EnumSet<TabDataChangeCause>;
 
 std::ostream& operator<<(std::ostream& os, const TabDataChangeCause& cause);
 
@@ -66,8 +64,12 @@ struct TabDataChange {
 std::ostream& operator<<(std::ostream& os, const TabDataChange& change);
 
 // TODO: Detect changes to windowID.
-class TabDataObserver : public content::WebContentsObserver,
-                        public favicon::FaviconDriverObserver {
+class TabDataObserver : public content::WebContentsObserver
+#if !BUILDFLAG(IS_ANDROID)
+    ,
+                        public favicon::FaviconDriverObserver
+#endif
+{
  public:
   // Observes `web_contents` for changes that would modify the result of
   // `CreateTabData(web_contents)`. `tab_data_changed` is called any time tab
@@ -102,18 +104,19 @@ class TabDataObserver : public content::WebContentsObserver,
   void TitleWasSetForMainFrame(
       content::RenderFrameHost* render_frame_host) override;
 
+#if !BUILDFLAG(IS_ANDROID)
   // favicon::FaviconDriverObserver.
   void OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
                         NotificationIconType notification_icon_type,
                         const GURL& icon_url,
                         bool icon_url_changed,
                         const gfx::Image& image) override;
+#endif
 
   void SetTaskRunnerForTesting(
       scoped_refptr<base::SequencedTaskRunner> task_runner);
 
  private:
-  void ReportUpdatesPerNavigation();
   void SendRateLimitedUpdate();
   void SendUpdate();
   void ClearObservation();
@@ -128,6 +131,8 @@ class TabDataObserver : public content::WebContentsObserver,
 
   // Subscription to TabInterface detach callback.
   base::CallbackListSubscription tab_detach_subscription_;
+
+  raw_ptr<tabs::TabInterface> tab_ = nullptr;
 };
 
 // Either a focused tab, or an error string.
@@ -144,7 +149,7 @@ class FocusedTabData {
   FocusedTabData(const FocusedTabData& src) = delete;
   FocusedTabData& operator=(const FocusedTabData& src) = delete;
   bool is_focus() const {
-    return std::holds_alternative<tabs::TabInterface*>(data_);
+    return std::holds_alternative<raw_ptr<tabs::TabInterface>>(data_);
   }
 
   // Returns the focused tab or nullptr.
@@ -158,21 +163,22 @@ class FocusedTabData {
   tabs::TabInterface* unfocused_tab() const { return unfocused_tab_.get(); }
 
  private:
-  std::variant<tabs::TabInterface*, std::string> data_;
+  std::variant<raw_ptr<tabs::TabInterface>, std::string> data_;
 
   // Only see if `data_` is string variant.
   raw_ptr<tabs::TabInterface> unfocused_tab_;
 };
 
-// Helper function to extract the Tab Id from the current web contents.
+// Helper function to extract the Tab Id.
 int GetTabId(content::WebContents* web_contents);
+int GetTabId(tabs::TabInterface* tab);
 
-// Helper function to extract the Tab url from the current web contents.
+// Helper function to extract the Tab url.
 const GURL& GetTabUrl(content::WebContents* web_contents);
+GURL GetTabUrl(tabs::TabInterface* tab);
 
-// Populates and returns a TabDataPtr from a given WebContents, or null if
-// web_contents is null.
-glic::mojom::TabDataPtr CreateTabData(content::WebContents* web_contents);
+// Populates and returns a TabDataPtr from a given Tab, or null if tab is null.
+glic::mojom::TabDataPtr CreateTabData(tabs::TabInterface* tab);
 
 // Populates and returns a FocusedTabDataPtr from a given FocusedTabData.
 glic::mojom::FocusedTabDataPtr CreateFocusedTabData(

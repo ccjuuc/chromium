@@ -5,8 +5,8 @@
 #include "third_party/blink/renderer/platform/scheduler/common/tracing_helper.h"
 
 #include "base/test/task_environment.h"
-#include "base/test/test_trace_processor.h"
-#include "base/test/trace_test_utils.h"
+#include "base/test/tracing/test_trace_processor.h"
+#include "base/test/tracing/trace_test_utils.h"
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -32,7 +32,7 @@ perfetto::StaticString SignOfInt(int value) {
 TEST(TracingHelperTest, DISABLED_TraceableState) {
   TraceableVariableController controller;
   TraceableState<int, "renderer.scheduler"> state(
-      0, perfetto::NamedTrack("State"), &controller, SignOfInt);
+      0, perfetto::StateTrack("State"), &controller, SignOfInt);
 
   base::test::TracingEnvironment tracing_environment;
   base::test::TaskEnvironment task_environment;
@@ -64,9 +64,9 @@ TEST(TracingHelperTest, DISABLED_TraceableState) {
 TEST(TracingHelperTest, TraceableStateOperators) {
   TraceableVariableController controller;
   TraceableState<int, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")> x(
-      -1, perfetto::NamedTrack("X"), &controller, SignOfInt);
+      -1, perfetto::StateTrack("X"), &controller, SignOfInt);
   TraceableState<int, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")> y(
-      1, perfetto::NamedTrack("Y"), &controller, SignOfInt);
+      1, perfetto::StateTrack("Y"), &controller, SignOfInt);
   EXPECT_EQ(0, x + y);
   EXPECT_FALSE(x == y);
   EXPECT_TRUE(x != y);
@@ -81,6 +81,11 @@ TEST(TracingHelperTest, TraceableStateOperators) {
   y = 2;
   int z = x = y;
   EXPECT_EQ(2, z);
+}
+
+TEST(TracingHelperTest, YesNoStateToString) {
+  EXPECT_STREQ(YesNoStateToString(true).value, "yes");
+  EXPECT_EQ(YesNoStateToString(false).value, nullptr);
 }
 
 }  // namespace scheduler

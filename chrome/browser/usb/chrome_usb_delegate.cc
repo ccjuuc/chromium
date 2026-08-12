@@ -8,13 +8,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_dialogs.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/usb/usb_blocklist.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
@@ -28,19 +26,20 @@
 #include "content/public/browser/isolated_context_util.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/security_principal.h"
+#include "content/public/browser/site_instance.h"
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "third_party/blink/public/common/features_generated.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "base/containers/fixed_flat_set.h"
 #include "chrome/common/chrome_features.h"
 #include "extensions/browser/extension_registry.h"
-#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
-#endif
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 namespace {
 
@@ -63,7 +62,7 @@ UsbConnectionTracker* GetConnectionTracker(
 }
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 // These extensions can claim the smart card USB class and automatically gain
 // permissions for devices that have an interface with this class.
 constexpr auto kSmartCardPrivilegedExtensionIds =
@@ -87,21 +86,21 @@ bool DeviceHasInterfaceWithClass(
   }
   return false;
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 bool IsDevicePermissionAutoGranted(
     const url::Origin& origin,
     const device::mojom::UsbDeviceInfo& device_info) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Note: The `DeviceHasInterfaceWithClass()` call is made after checking the
   // origin, since that method call is expensive.
   if (origin.scheme() == extensions::kExtensionScheme &&
-      base::Contains(kSmartCardPrivilegedExtensionIds, origin.host()) &&
+      kSmartCardPrivilegedExtensionIds.contains(origin.host()) &&
       DeviceHasInterfaceWithClass(device_info,
                                   device::mojom::kUsbSmartCardClass)) {
     return true;
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
   return false;
 }
@@ -185,7 +184,7 @@ void ChromeUsbDelegate::AdjustProtectedInterfaceClasses(
     const url::Origin& origin,
     content::RenderFrameHost* frame,
     std::vector<uint8_t>& classes) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // We only adjust interfaces for extensions here.
   if (origin.scheme() != extensions::kExtensionScheme) {
     return;
@@ -208,7 +207,8 @@ void ChromeUsbDelegate::AdjustProtectedInterfaceClasses(
   // as badge readers)
   static constexpr auto kHidPrivilegedExtensionIds =
       base::MakeFixedFlatSet<std::string_view>({
-          // Imprivata Extensions, see crbug.com/1065112 and crbug.com/995294.
+          // Imprivata Extensions, see crbug.com/40123998 and
+          // crbug.com/40640984.
           "baobpecgllpajfeojepgedjdlnlfffde",
           "bnfoibgpjolimhppjmligmcgklpboloj",
           "cdgickkdpbekbnalbmpgochbninibkko",
@@ -234,7 +234,7 @@ void ChromeUsbDelegate::AdjustProtectedInterfaceClasses(
           "plpogimmgnkkiflhpidbibfmgpkaofec",
           "pmhiabnkkchjeaehcodceadhdpfejmmd",
 
-          // Hotrod Extensions, see crbug.com/1220165
+          // Hotrod Extensions, see crbug.com/40186353
           "acdafoiapclbpdkhnighhilgampkglpc",
           "denipklgekfpcdmbahmbpnmokgajnhma",
           "hkamnlhnogggfddmjomgbdokdkgfelgg",
@@ -245,15 +245,15 @@ void ChromeUsbDelegate::AdjustProtectedInterfaceClasses(
           "moklfjoegmpoolceggbebbmgbddlhdgp",
       });
 
-  if (base::Contains(kHidPrivilegedExtensionIds, origin.host())) {
+  if (kHidPrivilegedExtensionIds.contains(origin.host())) {
     std::erase(classes, device::mojom::kUsbHidClass);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  if (base::Contains(kSmartCardPrivilegedExtensionIds, origin.host())) {
+  if (kSmartCardPrivilegedExtensionIds.contains(origin.host())) {
     std::erase(classes, device::mojom::kUsbSmartCardClass);
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 std::unique_ptr<UsbChooser> ChromeUsbDelegate::RunChooser(
@@ -267,15 +267,13 @@ std::unique_ptr<UsbChooser> ChromeUsbDelegate::RunChooser(
 
 bool ChromeUsbDelegate::PageMayUseUsb(content::Page& page) {
   content::RenderFrameHost& main_rfh = page.GetMainDocument();
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  // WebViewGuests have no mechanism to show permission prompts and their
-  // embedder can't grant USB access through its permissionrequest API. Also
-  // since webviews use a separate StoragePartition, they must not gain access
-  // through permissions granted in non-webview contexts.
-  if (extensions::WebViewGuest::FromRenderFrameHost(&main_rfh)) {
+  // Because permission is scoped to the profile, guest contexts (like
+  // <webview>, <controlledframe>, and SlimWebView), despite having isolated
+  // StoragePartitions, would share USB permissions with the rest of the
+  // profile. Therefore, USB is not allowed in these contexts.
+  if (main_rfh.GetSiteInstance()->GetSecurityPrincipal().IsGuest()) {
     return false;
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   // USB permissions are scoped to a BrowserContext instead of a
   // StoragePartition, so we need to be careful about usage across
@@ -393,7 +391,7 @@ void ChromeUsbDelegate::RemoveObserver(content::BrowserContext* browser_context,
 ChromeUsbDelegate::ContextObservation* ChromeUsbDelegate::GetContextObserver(
     content::BrowserContext* browser_context) {
   CHECK(browser_context);
-  if (!base::Contains(observations_, browser_context)) {
+  if (!observations_.contains(browser_context)) {
     observations_.emplace(browser_context, std::make_unique<ContextObservation>(
                                                this, browser_context));
   }
@@ -402,12 +400,12 @@ ChromeUsbDelegate::ContextObservation* ChromeUsbDelegate::GetContextObserver(
 
 bool ChromeUsbDelegate::IsServiceWorkerAllowedForOrigin(
     const url::Origin& origin) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // WebUSB is only available on extension service workers for now.
   if (origin.scheme() == extensions::kExtensionScheme) {
     return true;
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   return false;
 }
 

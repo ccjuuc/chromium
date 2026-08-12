@@ -10,17 +10,20 @@
 #import "base/memory/raw_ptr.h"
 #import "base/memory/weak_ptr.h"
 #import "base/scoped_observation.h"
+#import "ios/chrome/app/profile/profile_state_observer_bridge.h"
 #import "ios/chrome/browser/overlays/model/overlay_request_queue_impl.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_dismissal_callback.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_modality.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presentation_context_observer.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
+#import "ios/chrome/browser/overlays/model/public/overlay_request.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_user_data.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer.h"
 #import "ios/chrome/browser/tabs/model/tabs_dependency_installer.h"
 
 class OverlayResponse;
+@class ProfileState;
 
 // Implementation of OverlayPresenter.  The presenter:
 // - observes OverlayRequestQueue modifications for the active WebState and
@@ -30,6 +33,7 @@ class OverlayPresenterImpl : public OverlayPresenter,
                              public OverlayPresentationContextObserver,
                              public OverlayRequestQueueImpl::Delegate,
                              public OverlayRequestQueueImpl::Observer,
+                             public ProfileStateObserver,
                              public TabsDependencyInstaller {
  public:
   ~OverlayPresenterImpl() override;
@@ -61,6 +65,12 @@ class OverlayPresenterImpl : public OverlayPresenter,
   void AddObserver(OverlayPresenterObserver* observer) override;
   void RemoveObserver(OverlayPresenterObserver* observer) override;
   bool IsShowingOverlayUI() const override;
+
+  // ProfileStateObserver:
+  void OnProfileStateDidTransitionToInitStage(
+      ProfileState* profile_state,
+      ProfileInitStage next_init_stage,
+      ProfileInitStage from_init_stage) override;
 
  private:
   // Private constructor used by the container.
@@ -99,7 +109,7 @@ class OverlayPresenterImpl : public OverlayPresenter,
   // This function is called when the OverlayDismissalCallback provided to
   // `presentation_context` is executed.
   void OverlayWasDismissed(OverlayPresentationContext* presentation_context,
-                           OverlayRequest* request,
+                           OverlayRequestId request_id,
                            base::WeakPtr<OverlayRequestQueueImpl> queue,
                            OverlayDismissalReason reason);
 
@@ -182,6 +192,8 @@ class OverlayPresenterImpl : public OverlayPresenter,
   OverlayModality modality_;
   raw_ptr<WebStateList> web_state_list_ = nullptr;
   raw_ptr<web::WebState> active_web_state_ = nullptr;
+  __weak ProfileState* profile_state_ = nil;
+  ProfileStateObserverBridge* profile_state_observer_bridge_ = nil;
   raw_ptr<OverlayPresentationContext> presentation_context_ = nullptr;
   base::ObserverList<OverlayPresenterObserver,
                      /* check_empty= */ true>

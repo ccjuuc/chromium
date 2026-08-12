@@ -4,18 +4,17 @@
 
 #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
 
-#include "base/memory/weak_ptr.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tabs/public/split_tab_data.h"
-#include "components/tabs/public/split_tab_visual_data.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/common/url_constants.h"
@@ -27,9 +26,23 @@ MultiContentsViewDelegateImpl::MultiContentsViewDelegateImpl(Browser& browser)
 
 void MultiContentsViewDelegateImpl::WebContentsFocused(
     content::WebContents* web_contents) {
-  int tab_index = tab_strip_model_->GetIndexOfWebContents(web_contents);
-  if (tab_index != TabStripModel::kNoTab) {
-    tab_strip_model_->ActivateTabAt(tab_index);
+  const tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  if (!tab || !tab->IsSplit()) {
+    return;
+  }
+
+  std::vector<tabs::TabInterface*> tabs =
+      tab_strip_model_->GetSplitData(tab->GetSplit().value())->ListTabs();
+
+  // Ensure that the focused WebContents and the active tab are part of the same
+  // split. There could be a race condition between when the focus happens and
+  // when the contents of MultiContentsView are swapped out. See
+  // crbug.com/485670308.
+  if (tab_strip_model_->GetActiveTab() != tab &&
+      std::find(tabs.begin(), tabs.end(), tab_strip_model_->GetActiveTab()) !=
+          tabs.end()) {
+    tab_strip_model_->ActivateTabAt(tab_strip_model_->GetIndexOfTab(tab));
   }
 }
 
@@ -49,14 +62,15 @@ void MultiContentsViewDelegateImpl::ResizeWebContents(double start_ratio,
       tab_strip_model_->GetActiveTab()->GetSplit();
 
   CHECK(split_tab_id.has_value());
-  tab_strip_model_->UpdateSplitRatio(split_tab_id.value(), start_ratio);
+  tab_strip_model_->UpdateSplitRatio(split_tab_id.value(), start_ratio,
+                                     !done_resizing);
 
   if (done_resizing) {
     const split_tabs::SplitTabId split_id =
         tab_strip_model_->GetActiveTab()->GetSplit().value();
 
     SessionService* const session_service =
-        SessionServiceFactory::GetForProfile(browser_->profile());
+        SessionServiceFactory::GetForProfile(browser_->GetProfile());
 
     if (!session_service) {
       return;
@@ -64,7 +78,7 @@ void MultiContentsViewDelegateImpl::ResizeWebContents(double start_ratio,
 
     const split_tabs::SplitTabVisualData* visual_data =
         tab_strip_model_->GetSplitData(split_id)->visual_data();
-    session_service->SetSplitTabData(browser_->session_id(), split_id,
+    session_service->SetSplitTabData(browser_->GetSessionID(), split_id,
                                      visual_data);
   }
 }
@@ -92,9 +106,10 @@ void MultiContentsViewDelegateImpl::HandleLinkDrop(
       tab_strip_model_->active_index() +
       (side == MultiContentsDropTargetView::DropSide::START ? 0 : 1);
 
-  // TODO(crbug.com/406792273): Support entrypoint for horizontal splits.
   const split_tabs::SplitTabVisualData split_data(
-      split_tabs::SplitTabLayout::kVertical);
+      side == MultiContentsDropTargetView::DropSide::BOTTOM
+          ? split_tabs::SplitTabLayout::kStacked
+          : split_tabs::SplitTabLayout::kSideBySide);
 
   // We currently only support creating a split with one link; i.e., the first
   // link in the provided list.
@@ -128,9 +143,10 @@ void MultiContentsViewDelegateImpl::HandleTabDrop(
     TabDragTarget::DragController& drag_controller) {
   CHECK(!tab_strip_model_->GetActiveTab()->IsSplit());
 
-  // TODO(crbug.com/406792273): Support entrypoint for horizontal splits.
   const split_tabs::SplitTabVisualData split_data(
-      split_tabs::SplitTabLayout::kVertical);
+      side == MultiContentsDropTargetView::DropSide::BOTTOM
+          ? split_tabs::SplitTabLayout::kStacked
+          : split_tabs::SplitTabLayout::kSideBySide);
 
   std::unique_ptr<tabs::TabModel> detached_tab =
       drag_controller.DetachTabAtForInsertion(

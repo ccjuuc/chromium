@@ -39,6 +39,26 @@ void NativeValueTraitsInterfaceNotOfType(
       argument_index, wrapper_type_info->interface_name));
 }
 
+bool ThrowIfResizable(v8::Local<v8::ArrayBuffer> array_buffer,
+                      ExceptionState& exception_state) {
+  if (array_buffer->IsResizableByUserJavaScript()) {
+    exception_state.ThrowTypeError(
+        "The provided ArrayBuffer value must not be resizable");
+    return false;
+  }
+  return true;
+}
+
+bool ThrowIfResizable(v8::Local<v8::SharedArrayBuffer> shared_array_buffer,
+                      ExceptionState& exception_state) {
+  if (shared_array_buffer->GetBackingStore()->IsResizableByUserJavaScript()) {
+    exception_state.ThrowTypeError(
+        "The provided SharedArrayBuffer value must not be resizable");
+    return false;
+  }
+  return true;
+}
+
 template <>
 CORE_TEMPLATE_EXPORT typename NativeValueTraits<IDLSequence<IDLLong>>::ImplType
 CreateIDLSequenceFromV8Array<IDLLong>(v8::Isolate* isolate,
@@ -93,21 +113,5 @@ EventListener* NativeValueTraits<IDLOnErrorEventHandler>::NativeValue(
   return JSEventHandler::CreateOrNull(
       value, JSEventHandler::HandlerType::kOnErrorEventHandler);
 }
-
-namespace bindings::internal {
-
-ByteSpanWithInlineStorage& ByteSpanWithInlineStorage::operator=(
-    const ByteSpanWithInlineStorage& r) {
-  if (r.span_.data() == r.inline_storage_) {
-    auto span = base::span(inline_storage_);
-    span.copy_from(base::span(r.inline_storage_));
-    span_ = span.first(r.span_.size());
-  } else {
-    span_ = r.span_;
-  }
-  return *this;
-}
-
-}  // namespace bindings::internal
 
 }  // namespace blink

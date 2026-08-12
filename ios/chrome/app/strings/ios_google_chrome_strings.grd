@@ -203,6 +203,12 @@
       <message name="IDS_IOS_ACCOUNT_TABLE_ERROR_VERIFY_ITS_YOU_MESSAGE" desc="The error message to show in the account table when there is an authentication error. [iOS only]">
         To use and save Chrome data in your Google Account, verify it's you.
       </message>
+      <message name="IDS_IOS_AGE_MISMATCH_FOLLOW_UP_SUBTITLE" desc="Explanatory body copy in a full-screen notice. This string is shown to users who are using an iPhone that has age settings for a child, but their Chrome app is signed in to a Google Account with age settings for an adult. The user already saw the initial info screen, so this string emphasizes Chrome’s two available solutions: the user can use Chrome with child restrictions by signing in to a child’s account; or, they can use Chrome with child restrictions by signing out and using the basic child safety limits. The tone should be informative and neutral.">
+        To get child safety features, you can either use a Google Account that's set up for a child or use Chrome without an account. <ph name="BEGIN_LINK">BEGIN_LINK</ph>Learn more<ph name="END_LINK">END_LINK</ph>
+      </message>
+      <message name="IDS_IOS_AGE_MISMATCH_SUBTITLE_PART1" desc="First part of the explanatory body copy in a full-screen notice shown to users whose device is set up for a child but Chrome is signed into an adult account. Provides solutions: use a child's Google Account or use without an account.">
+        To get child safety features in Chrome, you can either use a Google Account that's set up for a child or use Chrome without an account.
+      </message>
       <message name="IDS_IOS_APPLICATION_SHORTCUT_SET_DEFAULT_BROWSER" desc="The title of the spotlight item to set Chrome as a default browser. [Length: unlimited] [iOS only]." meaning="Spotlight item title for setting default browser.">
         Set Chrome as default browser
       </message>
@@ -227,9 +233,6 @@
       </message>
       <message name="IDS_IOS_BEST_FEATURES_NEVER_FORGET_PASSWORDS_SECOND_STEP" desc="The second step to set up save and autofill passwords">
         Chrome will offer to save your password
-      </message>
-      <message name="IDS_IOS_BEST_FEATURES_PASSWORDS_IN_OTHER_APPS_STEP_4_SELECT" desc="The fourth step to enable Passwords in other apps. OS must be below iOS 18.">
-        Select Chrome
       </message>
       <message name="IDS_IOS_BEST_FEATURES_PASSWORDS_IN_OTHER_APPS_STEP_4_TOGGLE" desc="The fourth step to enable Passwords in other apps. OS must be iOS 18 or later.">
         Toggle Chrome
@@ -273,6 +276,9 @@
       <message name="IDS_IOS_CREDENTIAL_BOTTOM_SHEET_TITLE" desc="Title of the credential bottom sheet. [iOS only]">
           Google Password Manager
       </message>
+      <message name="IDS_IOS_CREDENTIAL_EXCHANGE_EXPORTER_DISPLAY_NAME" desc="Display name of Google Password Manager used in credential export feature. [iOS only]">
+        Google Password Manager
+      </message>
       <message name="IDS_IOS_CREDENTIAL_EXCHANGE_IMPORT_DISCLAIMER" desc="The bottom text displayed on Credential Exchange import screen to declare that the data will be saved to the user's password manager. [iOS only]">
         Your data will be saved to Google Password Manager for <ph name="USER_EMAIL">$1<ex>elisa.g.beckett@gmail.com</ex></ph>
       </message>
@@ -288,13 +294,8 @@
       <message name="IDS_IOS_CREDENTIAL_PROVIDER_PROMO_SUBTITLE" desc="Subtitle text of the Credential Provider Exention promo. [iOS only]">
         Get easy access to your passwords and passkeys with Chrome for AutoFill
       </message>
-      <message name="IDS_IOS_CREDENTIAL_PROVIDER_PROMO_TITLE_IOS18" desc="Title text of the Credential Provider Exention promo for iOS 18 and above. [iOS only]">
+      <message name="IDS_IOS_CREDENTIAL_PROVIDER_PROMO_TITLE" desc="Title text of the Credential Provider Exention promo for iOS 18 and above. [iOS only]">
         Sign in with your saved passwords &amp; passkeys from any app using Chrome for AutoFill
-      </message>
-      <message name="IDS_IOS_DATA_NOT_UPLOADED_DIALOG_BODY" desc="Body of a dialog that is shown when the user starts to sign out; the user chooses to sync some or all data types, but some data hasn't been saved in their Google Account yet (for example, if there was an error). This string follows the heading 'Some Data Isn't Saved Yet', and the user can choose to tap on the buttons 'Cancel' or 'Delete and Sign Out'. If the user chooses to continue to sign out, then any of their data (such as bookmarks, passwords, history, settings, and more) that isn't saved in their account will be deleted. The tone should be helpful and instructive. [iOS only]">
-        Some of your Chrome data hasn't been saved in your Google Account yet.
-
-Try waiting a few minutes before signing out. If you sign out now, this data will be deleted.
       </message>
       <message name="IDS_IOS_DATA_NOT_UPLOADED_SWITCH_DIALOG_BODY" desc="Body of a dialog that is shown when the user starts to switch accounts; the user chooses to sync some or all data types, but some data hasn't been saved in their Google Account yet (for example, if there was an error). This string follows the heading 'Some Data Isn't Saved Yet', and the user can choose to tap on the buttons 'Cancel' or 'Delete and Switch'. If the user chooses to continue to switch accounts, then any of their data (such as bookmarks, passwords, history, settings, and more) that isn't saved in their account will be deleted. The tone should be helpful and instructive. [iOS only]">
         Some of your Chrome data hasn't been saved in <ph name="EMAIL">$1<ex>johndoe@gmail.com</ex></ph> yet.
@@ -315,6 +316,36 @@ Try waiting a few minutes before switching accounts. If you switch accounts now,
       <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation.">
         Open Chrome anytime you tap on links in other apps
       </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP1" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Copy/Paste Friction experiment) [iOS only].">
+        Set Chrome as default to open links in one tap instead of copying them.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP10" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Experience Upgrade experiment) [iOS only].">
+        Make Chrome your default to stop copying links from other apps.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP2" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (One-Tap Open experiment) [iOS only].">
+        Open links directly in Chrome next time without copying URLs first.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP3" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Smooth Transitions experiment) [iOS only].">
+        Make Chrome your default browser to launch links here instantly.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP4" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Time Saving experiment) [iOS only].">
+        Avoid the hassle of copying. Launch links straight into Chrome.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP5" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Direct Loading experiment) [iOS only].">
+        Make Chrome your default and open web content automatically.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP6" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Convenience experiment) [iOS only].">
+        Set Chrome as default to open links instantly from other apps.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP7" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Speed experiment) [iOS only].">
+        Stop copying URLs. Set Chrome as default to load pages directly.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP8" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Seamless Web Flow experiment) [iOS only].">
+        Open links from messages and documents directly in Chrome.
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_DESCRIPTION_EXP9" desc="Description for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation (Direct Action experiment) [iOS only].">
+        Avoid copying. Set Chrome as your default iOS browser.
+      </message>
       <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_OMNIBOX_NAVIGATION_TITLE" desc="Title for the non-modal default browser promotion banner after Omnibox URL copy/paste and navigation.">
         Set Chrome as default?
       </message>
@@ -323,6 +354,12 @@ Try waiting a few minutes before switching accounts. If you switch accounts now,
       </message>
       <message name="IDS_IOS_DEFAULT_BROWSER_NON_MODAL_SHARE_TITLE" desc="Title for the non-modal default browser promotion banner when sharing a URL via the 'Share Chrome' action or the share icon in the Omnibox.">
         Make Chrome your own
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_PICTURE_IN_PICTURE_TITLE_TEXT" desc="Title for the default browser picture in picture promo. [iOS only]">
+        Set Chrome as default
+      </message>
+      <message name="IDS_IOS_DEFAULT_BROWSER_PIP_ACCESSIBILITY_ANNOUNCEMENT" desc="Accessibility announcement for the default browser fullscreen video instructions. [iOS only]" is_accessibility_with_no_ui="true">
+        Full screen video of how to set Chrome as default
       </message>
       <message name="IDS_IOS_DEFAULT_BROWSER_TAILORED_ALL_TABS_DESCRIPTION" desc="Description of the 'All your tabs' default browser promotion modal. [iOS only]">
         Set Chrome as default to sync your tabs, passwords, and payment info on all your devices
@@ -363,8 +400,23 @@ Try waiting a few minutes before switching accounts. If you switch accounts now,
       <message name="IDS_IOS_DOCKING_PROMO_FIRST_INSTRUCTION" desc="Title of the first step instruction shown in the Docking Promo, which tells users to hold down on the Chrome icon to put their iOS device into Edit Mode.">
         Press and hold the Chrome icon and click "Edit home screen"
       </message>
+      <message name="IDS_IOS_DOCKING_PROMO_SUBTITLE" desc="Subtitle of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock.">
+        Open Chrome instantly when you're on your iPhone
+      </message>
+      <message name="IDS_IOS_DOCKING_PROMO_SUBTITLE_IPAD" desc="Subtitle of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock. iPad experimental version.">
+        Open Chrome instantly when you're on your iPad
+      </message>
       <message name="IDS_IOS_DOCKING_PROMO_TITLE" desc="Title of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock.">
         Access Chrome faster from your home screen dock
+      </message>
+      <message name="IDS_IOS_DOCKING_PROMO_TITLE_0" desc="Title of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock.">
+        Access Chrome faster from your dock
+      </message>
+      <message name="IDS_IOS_DOCKING_PROMO_TITLE_1" desc="Title of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock.">
+        Move Chrome to your dock
+      </message>
+      <message name="IDS_IOS_DOCKING_PROMO_TITLE_2" desc="Title of the fullscreen, instructional Docking Promo which shows users how to add the Chrome app to their iOS dock.">
+        Place Chrome in the bottom area to access it anytime
       </message>
       <message name="IDS_IOS_ENHANCED_SAFE_BROWSING_PROMO_INSTRUCTIONS_STEP1" desc="Step 1 of instructions telling the user how to enable Enhanced Safe Browsing.">
         Open Chrome Settings
@@ -409,7 +461,7 @@ Try waiting a few minutes before switching accounts. If you switch accounts now,
         Use Chrome for iPad by default
       </message>
       <message name="IDS_IOS_FIRST_RUN_GUIDED_TOUR_PROMO_TEXT" desc="The text of the screen prompting the user to learn more about the basics of the app. [iOS only]">
-          Learn the helpful Chrome basics to get you started
+          Learn helpful Chrome basics to get you started
       </message>
       <message name="IDS_IOS_FIRST_RUN_GUIDED_TOUR_PROMO_TITLE" desc="Title of the screen welcoming the user to the app. [iOS only]">
         Welcome to Chrome
@@ -457,9 +509,6 @@ Things to consider:
       </message>
       <message name="IDS_IOS_FIRST_RUN_WELCOME_SCREEN_SUBTITLE" desc="The subtitle of the welcome screen presented to the user on First Run [iOS only]">
         Get more done with a simple, secure, and faster-than-ever Google Chrome.
-      </message>
-      <message name="IDS_IOS_GEMINI_IMAGE_CONTEXT_MENU_ENTRY_POINT" desc="The entry point for Gemini when the user long-presses an image. Invites the user to create an image using Gemini in Chrome.">
-        Create image with Gemini in Chrome
       </message>
       <message name="IDS_IOS_GOOGLE_SERVICES_SETTINGS_ALLOW_SIGNIN_DETAIL" desc="Feature detail text in the Google services Settings for the user to enable/disable Chrome express sign-in from the web [iOS only]">
         Shows prompts to sign in to Chrome.
@@ -731,6 +780,12 @@ Things to consider:
       <message name="IDS_IOS_MINI_MAP_IPH_TITLE" desc="The text of the iph string displayed on Mini Map screen on first trigger [iOS only].">
         Chrome detects addresses and uses Google Maps to give you directions and local info.
       </message>
+      <message name="IDS_IOS_MINI_MAP_URL_FOOTER_STRING" desc="The text of the footer string displayed at the bottom of the native preview for maps links [iOS only].">
+        Chrome uses Google Maps to give you directions and local info on maps links
+      </message>
+      <message name="IDS_IOS_NEW_IA_PROMO_IPH_GEMINI_TITLE" desc="Title for the second in-product help bubble suggesting Gemini built-in. [Length: unlimited] [iOS only]">
+        Gemini in Chrome
+      </message>
       <message name="IDS_IOS_NEW_SYNC_ENCRYPTION_PASSPHRASE_INFO_UNO" desc="The information text for encrypting sync using a passphrase, shown on the passphrase screen [iOS only]">
         Payment methods and addresses won’t be encrypted. Browsing history from Chrome won’t sync.
 
@@ -760,14 +815,8 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_CPE_TITLE" desc="Text for the title of a Tips notification that encourages the user to enable the CPE.">
         Chrome Tip: Get your passwords in any app
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_ALT1_TITLE" desc="Text for the title of a Tips notification that encourages the user to set the app as their default browser">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_ALT_TITLE" desc="Text for the title of a Tips notification that encourages the user to set the app as their default browser">
          Use Chrome by default
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_ALT2_TITLE" desc="Text for the title of a Tips notification that encourages the user to set the app as their default browser">
-         Make Chrome your default browser
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_ALT3_BODY" desc="Text for the body of a Tips notification that encourages the user to set the app as their default browser">
-         Easily use Chrome anytime you tap links in messages or other apps.
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_BODY" desc="Text for the body of a Tips notification that encourages the user to set the app as their default browser">
         Use Chrome anytime you tap links in messages or other apps.
@@ -775,29 +824,14 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_DEFAULT_BROWSER_TITLE" desc="Text for the title of a Tips notification that encourages the user to set the app as their default browser">
         Chrome Tip: use Chrome by default
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT1_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
          Access Chrome faster from your iPad's Home Screen.
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT1_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
          Access Chrome faster from your iPhone's Home Screen.
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT1_TITLE" desc="Text for the title of a Tips notification that encourages the user to put the app into the iOS dock">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT_TITLE" desc="Text for the title of a Tips notification that encourages the user to put the app into the iOS dock">
          Chrome Tip: Move Chrome to your home screen
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT2_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
-         Access Chrome faster from your iPad's Dock.
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT2_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
-         Access Chrome faster from your iPhone's Dock.
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT3_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
-         Open Chrome faster when you're ready to browse on your iPad.
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT3_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
-         Open Chrome faster when you're ready to browse on your iPhone.
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_ALT3_TITLE" desc="Text for the title of a Tips notification that encourages the user to put the app into the iOS dock">
-        Move Chrome to your dock
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to put the app into the iOS dock">
         Access Chrome faster from your iPad's home screen dock.
@@ -808,16 +842,13 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_DOCKING_TITLE" desc="Text for the title of a Tips notification that encourages the user to put the app into the iOS dock">
         Chrome Tip: Move Chrome to the dock
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_ENHANCED_SAFE_BROWSING_ALT1_TITLE" desc="Text for the title of a Tips notification that encourages the user to enable Enhanced Safe Browsing">
-         Chrome Tip: Enhanced safe browsing will save your day
-      </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_ENHANCED_SAFE_BROWSING_TITLE" desc="Text for the title of a Tips notification that encourages the user to enable Enhanced Safe Browsing">
         Chrome Tip: Get Chrome's strongest security
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_ENHANCED_SAFE_BROWSING_TITLE_FROM_DESKTOP" desc="Text for the title of a Tips notification that encourages the user to enable Enhanced Safe Browsing.">
         Chrome Tip: Enhanced Safe Browsing
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_LENS_ALT1_TITLE" desc="Text for the title of a Tips notification that encourages the user to search with Lens">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_LENS_ALT_TITLE" desc="Text for the title of a Tips notification that encourages the user to search with Lens">
          Chrome Tip: Search what you see with Google Lens
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_LENS_OVERLAY_TITLE" desc="Text for the title of a Tips notification that encourages the user to use the Lens Overlay feature.">
@@ -829,23 +860,17 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_OMNIBOX_POSITION_TITLE" desc="Text for the title of a Tips notification that reminds the user to set their preferred omnibox position">
         Chrome Tip: Choose your address bar position
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_ALT1_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to complete the Set Up List">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_ALT_BODY_IPAD" desc="Text for the body of a Tips notification that encourages the user to complete the Set Up List">
          Tap here to get the most out of Chrome on your iPad.
       </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_ALT1_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to complete the Set Up List">
+      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_ALT_BODY_IPHONE" desc="Text for the body of a Tips notification that encourages the user to complete the Set Up List">
          Tap here to get the most out of Chrome on your iPhone.
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_ALT2_TITLE" desc="Text for the title of a Tips notification that encourages the user to complete the Set Up List">
-         You're almost finished setting up Chrome!
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_BODY" desc="Text for the body of a Tips notification that encourages the user to complete the Set Up List">
         Get the most out of Chrome by continuing setting up your browser.
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_SETUPLIST_CONTINUATION_TITLE" desc="Text for the title of a Tips notification that encourages the user to complete the Set Up List">
         Finish setting up Chrome
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_SIGNIN_ALT3_TITLE" desc="Text for the title of a Tips notification that encourages the user to sign in to their account">
-         Sign in to Chrome to get your stuff
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_SIGNIN_BODY" desc="Text for the body of a Tips notification that encourages the user to sign in to their account">
         Sign in with your Google Account to sync your passwords, bookmarks, and more.
@@ -855,9 +880,6 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_TRUSTED_VAULT_KEY_RETRIVAL_TITLE" desc="Text for the title of a Tips notification that starts a re-authentication flow, which will allow users to access their passwords.">
         Chrome Tip: Get your passwords
-      </message>
-      <message name="IDS_IOS_NOTIFICATIONS_TIPS_WHATS_NEW_ALT2_TITLE" desc="Text for the title of a Tips notification that takes the user to the Whats New page">
-         Check out what’s new in Chrome
       </message>
       <message name="IDS_IOS_NOTIFICATIONS_TIPS_WHATS_NEW_BODY" desc="Text for the body of a Tips notification that takes the user to the Whats New page">
         Explore new features that help you get the most out of Chrome.
@@ -917,6 +939,15 @@ Only someone with your passphrase can read your encrypted data. The passphrase i
       </message>
       <message name="IDS_IOS_PASSWORD_CHECK_ERROR" desc="Description of the password check cell, explaining that Password Check failed. [iOS only]" meaning="Password Check failed due to some error.">
         Chrome can't check your passwords
+      </message>
+      <message name="IDS_IOS_PASSWORD_MANAGER_PASSPHRASE_ERROR_INFOBAR_SUBTITLE" desc="Infobar subtitle for fixing sync passphrase error before saving a password on the account.">
+        Enter passphrase to save this password and get Chrome data on all your devices
+      </message>
+      <message name="IDS_IOS_PASSWORD_MANAGER_SIGN_IN_ERROR_INFOBAR_SUBTITLE" desc="Infobar subtitle for fixing sign-in error before saving a password on the account.">
+        Verify it's you to save this password and get Chrome data on all your devices
+      </message>
+      <message name="IDS_IOS_PASSWORD_SAVED_INFOBAR_MESSAGE" desc="Message displayed on an infobar confirming that the password was saved to the specified account. [iOS only]">
+        To Google Password Manager for <ph name="EMAIL">$1<ex>johndoe@gmail.com</ex></ph>
       </message>
       <message name="IDS_IOS_PASSWORD_SETTINGS_PASSWORDS_IN_OTHER_APPS_DESCRIPTION" desc="Help text explaining the benefits of having Chrome set as a credential provider for other apps. [iOS Only]">
         Sign in quickly to apps and sites by autofilling your passwords &amp; passkeys from Chrome
@@ -1167,6 +1198,11 @@ For more settings that use data to improve your Chrome experience, go to <ph nam
       <message name="IDS_IOS_SIGNIN_SHEET_LABEL_FOR_WEB_SIGNIN" desc="This string is on a sign-in page, after the user taps to sign in to a website with their Google Account. It offers to sign the user in to both the website and to Chrome with the account. It highlights the overarching user benefit of signing in to Chrome (access to data from other devices like bookmarks, passwords, history, settings, etc.). We want users to understand why signing in is beneficial, and click 'Continue as name' to sign in to their Google Account. The tone should be informative and lightweight. [iOS only]">
         Sign in to this site and Chrome to get your bookmarks and more on all your devices.
       </message>
+      <message name="IDS_IOS_SIGNOUT_DIALOG_MESSAGE_WITH_BOOKMARKS_LIMIT_EXCEEDED" desc="Body of a dialog shown to users when they sign out of Chrome but Chrome hasn't synced some data yet, which is permanently deleted if the user proceeds.  [iOS only].">
+        You reached Google Chrome's limit of <ph name="LIMIT">$1<ex>100,000</ex></ph> bookmarks, so some of your bookmarks haven’t been saved in your Google Account yet.
+
+New bookmarks can’t be saved in your account until you delete some. If you sign out now, unsaved bookmarks will be deleted.
+      </message>
       <message name="IDS_IOS_SIGNOUT_DIALOG_MESSAGE_WITH_NOT_SAVED_DATA" desc="Body of a dialog shown to users when they sign out of Chrome but Chrome hasn't synced some data yet, which is permanently deleted if the user proceeds. Related to IDS_IOS_SIGNOUT_DIALOG_SIGN_OUT_AND_DELETE_BUTTON and IDS_IOS_SIGNOUT_DIALOG_SIGN_OUT_AND_DELETE_TITLE [iOS only].">
         Some of your Chrome data hasn't been saved in your Google Account yet.
 Try waiting a few minutes before signing out. If you sign out now, this data will be deleted.
@@ -1182,6 +1218,9 @@ Try waiting a few minutes before signing out. If you sign out now, this data wil
       </message>
       <message name="IDS_IOS_SUGGESTED_STRONG_PASSWORD_HINT_DISPLAYING_EMAIL" desc="Text shown alongside a suggested password to tell user that generated passwords are recorded by chrome. [Length: unlimited] [iOS only]">
         You won't need to remember this password. It will be saved to Google Password Manager for <ph name="EMAIL">$1<ex>johndoe@gmail.com</ex></ph>
+      </message>
+      <message name="IDS_IOS_SYNC_DATATYPE_IOS_THEME" desc="The label for the sync switch item to sync iOS themes. [iOS only]">
+        Chrome theme for iPhone and iPad
       </message>
       <message name="IDS_IOS_SYNC_ENCRYPTION_PASSPHRASE_HINT_UNO" desc="The information text on how to reset encryption passphrase for sync, shown on the sync encryption settings [Length: 300em] [iOS only]">
         Passphrase encryption doesn’t include payment methods and addresses.

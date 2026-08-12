@@ -18,14 +18,13 @@ namespace commerce {
 class ShoppingService;
 }  // namespace commerce
 
-@class ContentSuggestionsMetricsRecorder;
 class FaviconLoader;
 class ImpressionLimitService;
 @protocol NewTabPageActionsDelegate;
 class PrefService;
 @protocol ShopCardActionDelegate;
+@class ShopCardConfig;
 @class ShopCardData;
-@class ShopCardItem;
 @protocol ShopCardMediatorDelegate;
 
 @interface ShopCardMediator : NSObject <ShopCardCommands>
@@ -38,10 +37,6 @@ class PrefService;
 
 // Delegate for reporting content suggestions actions to the NTP.
 @property(nonatomic, weak) id<NewTabPageActionsDelegate> NTPActionsDelegate;
-
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
 
 // Default initializer.
 - (instancetype)
@@ -62,7 +57,7 @@ class PrefService;
 
 - (void)disableModule;
 
-- (ShopCardItem*)shopCardItemToShow;
+- (ShopCardConfig*)shopCardItemToShow;
 
 @end
 

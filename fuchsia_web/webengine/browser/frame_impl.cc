@@ -12,10 +12,11 @@
 #include <lib/fpromise/result.h>
 #include <lib/sys/cpp/component_context.h>
 
+#include <algorithm>
 #include <limits>
+#include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/fuchsia/fuchsia_component_connect.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/mem_buffer_util.h"
@@ -213,7 +214,7 @@ std::optional<blink::PermissionType> FidlPermissionTypeToContentPermissionType(
     case fuchsia::web::PermissionType::PROTECTED_MEDIA_IDENTIFIER:
       return blink::PermissionType::PROTECTED_MEDIA_IDENTIFIER;
     case fuchsia::web::PermissionType::PERSISTENT_STORAGE:
-      return blink::PermissionType::DURABLE_STORAGE;
+      return blink::PermissionType::PERSISTENT_STORAGE;
     case fuchsia::web::PermissionType::NOTIFICATIONS:
       return blink::PermissionType::NOTIFICATIONS;
     default:
@@ -366,6 +367,12 @@ class AudioStreamBrokerFactory final
       mojo::PendingRemote<media::mojom::AudioOutputStreamProviderClient> client)
       final {
     DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
+
+    if (params.effects() & media::AudioParameters::FUCHSIA_RENDER_USAGE_MASK) {
+      DLOG(ERROR) << "Renderer requested forbidden Fuchsia effect flags.";
+      return nullptr;
+    }
+
     media::AudioParameters params_with_effects = params;
     if (output_usage_) {
       params_with_effects.set_effects(
@@ -666,6 +673,7 @@ content::WebContents* FrameImpl::AddNewContents(
     case WindowOpenDisposition::OFF_THE_RECORD:
     case WindowOpenDisposition::IGNORE_ACTION:
     case WindowOpenDisposition::SWITCH_TO_TAB:
+    case WindowOpenDisposition::NEW_SPLIT_VIEW:
     case WindowOpenDisposition::UNKNOWN:
       NOTIMPLEMENTED() << "Dropped new web contents (disposition: "
                        << static_cast<int>(disposition) << ")";
@@ -673,12 +681,12 @@ content::WebContents* FrameImpl::AddNewContents(
   }
 }
 
-void FrameImpl::WebContentsCreated(content::WebContents* source_contents,
-                                   int opener_render_process_id,
-                                   int opener_render_frame_id,
-                                   const std::string& frame_name,
-                                   const GURL& target_url,
-                                   content::WebContents* new_contents) {
+void FrameImpl::WebContentsCreated(
+    content::WebContents* source_contents,
+    const content::GlobalRenderFrameHostId& opener_id,
+    const std::string& frame_name,
+    const GURL& target_url,
+    content::WebContents* new_contents) {
   auto creation_info = std::make_unique<PopupFrameCreationInfoUserData>();
   creation_info->info.set_initial_url(target_url.spec());
   new_contents->SetUserData(kPopupCreationInfo, std::move(creation_info));
@@ -972,7 +980,7 @@ void FrameImpl::AddBeforeLoadJavaScript(
   }
 
   // TODO(crbug.com/40707541): Only allow wildcards to be specified standalone.
-  if (base::Contains(origins, kWildcardOrigin)) {
+  if (std::ranges::contains(origins, kWildcardOrigin)) {
     script_injector_.AddScriptForAllOrigins(id, *script_as_string);
   } else {
     std::vector<url::Origin> origins_converted;
@@ -1236,8 +1244,10 @@ void FrameImpl::SetMediaSettings(
               perfetto::Flow::FromPointer(this));
 
   media_settings_ = std::move(media_settings);
-  if (media_settings.has_renderer_usage() && set_audio_output_usage_callback_)
-    set_audio_output_usage_callback_.Run(media_settings.renderer_usage());
+  if (media_settings_.has_renderer_usage() &&
+      set_audio_output_usage_callback_) {
+    set_audio_output_usage_callback_.Run(media_settings_.renderer_usage());
+  }
 }
 
 void FrameImpl::ForceContentDimensions(
@@ -1637,6 +1647,7 @@ void FrameImpl::DidFirstVisuallyNonEmptyPaint() {
 void FrameImpl::ResourceLoadComplete(
     content::RenderFrameHost* render_frame_host,
     const content::GlobalRequestID& request_id,
+    const GURL& original_url,
     const blink::mojom::ResourceLoadInfo& resource_load_info) {
   int net_error = resource_load_info.net_error;
   if (net_error != net::OK) {

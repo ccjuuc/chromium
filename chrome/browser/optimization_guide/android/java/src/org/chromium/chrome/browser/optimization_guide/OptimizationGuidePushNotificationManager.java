@@ -11,6 +11,8 @@ import android.util.Base64;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.library_loader.LibraryLoader;
@@ -116,20 +118,20 @@ public class OptimizationGuidePushNotificationManager {
         Set<String> cache = getStringCacheForOptimizationType(optimizationType);
         if (checkForOverflow(cache)) return null;
 
-        Iterator<String> cache_iter = cache.iterator();
+        Iterator<String> cacheIter = cache.iterator();
 
         List<HintNotificationPayload> notifications = new ArrayList<>();
         for (int i = 0; i < cache.size(); i++) {
             try {
                 HintNotificationPayload payload =
                         HintNotificationPayload.parseFrom(
-                                Base64.decode(cache_iter.next(), Base64.DEFAULT));
+                                Base64.decode(cacheIter.next(), Base64.DEFAULT));
                 notifications.add(payload);
                 RecordHistogram.recordEnumeratedHistogram(
                         READ_CACHE_RESULT_HISTOGRAM,
                         ReadCacheResult.SUCCESS,
                         ReadCacheResult.NUM_ENTRIES);
-            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            } catch (InvalidProtocolBufferException e) {
                 RecordHistogram.recordEnumeratedHistogram(
                         READ_CACHE_RESULT_HISTOGRAM,
                         ReadCacheResult.INVALID_PROTO_ERROR,
@@ -225,11 +227,11 @@ public class OptimizationGuidePushNotificationManager {
         }
 
         // The notification's payload isn't used so it can be stripped to preserve memory space.
-        HintNotificationPayload slim_payload =
+        HintNotificationPayload slimPayload =
                 HintNotificationPayload.newBuilder(payload).clearPayload().build();
         ChromeSharedPreferences.getInstance()
                 .addToStringSet(
-                        cacheKey(slim_payload.getOptimizationType()),
-                        Base64.encodeToString(slim_payload.toByteArray(), Base64.DEFAULT));
+                        cacheKey(slimPayload.getOptimizationType()),
+                        Base64.encodeToString(slimPayload.toByteArray(), Base64.DEFAULT));
     }
 }

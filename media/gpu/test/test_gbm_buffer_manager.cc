@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/test/test_gbm_buffer_manager.h"
 
 #include <drm_fourcc.h>
@@ -18,6 +13,7 @@
 
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
@@ -48,7 +44,7 @@ gbm_device* CreateGbmDevice() {
     }
 
     drmVersionPtr version = drmGetVersion(fd);
-    if (!strcmp("vgem", version->name)) {
+    if (!UNSAFE_TODO(strcmp("vgem", version->name))) {
       drmFreeVersion(version);
       close(fd);
       continue;
@@ -108,9 +104,10 @@ TestGbmBuffer::TestGbmBuffer(gbm_bo* buffer_object)
   for (size_t i = 0;
        i < static_cast<size_t>(gbm_bo_get_plane_count(buffer_object)); ++i) {
     native_pixmap_handle.planes.push_back(gfx::NativePixmapPlane(
-        gbm_bo_get_stride_for_plane(buffer_object, i),
-        gbm_bo_get_offset(buffer_object, i),
-        gbm_bo_get_plane_size(buffer_object, i),
+        base::checked_cast<uint32_t>(
+            gbm_bo_get_stride_for_plane(buffer_object, i)),
+        base::checked_cast<uint64_t>(gbm_bo_get_offset(buffer_object, i)),
+        base::strict_cast<uint64_t>(gbm_bo_get_plane_size(buffer_object, i)),
         base::ScopedFD(gbm_bo_get_plane_fd(buffer_object, i))));
   }
   handle_ = gfx::GpuMemoryBufferHandle(std::move(native_pixmap_handle));
@@ -257,10 +254,10 @@ std::unique_ptr<TestGbmBuffer> TestGbmBufferManager::ImportDmaBuf(
       LOG(ERROR) << "Invalid file descriptor for plane " << plane;
       return nullptr;
     }
-    import_data.fds[plane] = handle.planes[plane].fd.get();
-    import_data.strides[plane] =
+    UNSAFE_TODO(import_data.fds[plane]) = handle.planes[plane].fd.get();
+    UNSAFE_TODO(import_data.strides[plane]) =
         base::checked_cast<int>(handle.planes[plane].stride);
-    import_data.offsets[plane] =
+    UNSAFE_TODO(import_data.offsets[plane]) =
         base::checked_cast<int>(handle.planes[plane].offset);
   }
   import_data.modifier = handle.modifier;

@@ -32,12 +32,13 @@
 #include "components/content_relationship_verification/digital_asset_links_handler.h"
 #include "components/js_injection/browser/js_communication_host.h"
 #include "components/js_injection/common/enum.mojom-forward.h"
+#include "content/public/browser/prerender_handle.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/child_process_id.h"
 
 class SkBitmap;
 
 namespace content {
-class PrerenderHandle;
 class WebContents;
 }  // namespace content
 
@@ -111,9 +112,11 @@ class AwContents : public FindHelper::Listener,
   void InitSensitiveContentClient(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetWebContents(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetBrowserContext(JNIEnv* env);
-  void SetCompositorFrameConsumer(JNIEnv* env, jlong compositor_frame_consumer);
+  void SetCompositorFrameConsumer(JNIEnv* env,
+                                  int64_t compositor_frame_consumer);
   base::android::ScopedJavaLocalRef<jobject> GetRenderProcess(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+  bool GetShouldDownloadFaviconsOnNavigation(JNIEnv* env);
   void Destroy(JNIEnv* env);
   void DocumentHasImages(JNIEnv* env,
                          const base::android::JavaRef<jobject>& message);
@@ -136,31 +139,30 @@ class AwContents : public FindHelper::Listener,
   bool IsVisible(JNIEnv* env);
   bool IsDisplayingInterstitialForTesting(JNIEnv* env);
   base::android::ScopedJavaLocalRef<jbyteArray>
-  GetOpaqueState(JNIEnv* env, jint max_size, jboolean include_forward_state);
-  jboolean RestoreFromOpaqueState(
-      JNIEnv* env,
-      const base::android::JavaRef<jbyteArray>& state);
+  GetOpaqueState(JNIEnv* env, int32_t max_size, bool include_forward_state);
+  bool RestoreFromOpaqueState(JNIEnv* env,
+                              const base::android::JavaRef<jbyteArray>& state);
   void FocusFirstNode(JNIEnv* env);
-  void SetBackgroundColor(JNIEnv* env, jint color);
-  void ZoomBy(JNIEnv* env, jfloat delta);
-  void OnComputeScroll(JNIEnv* env, jlong animation_time_millis);
+  void SetBackgroundColor(JNIEnv* env, int32_t color);
+  void ZoomBy(JNIEnv* env, float delta);
+  void OnComputeScroll(JNIEnv* env, int64_t animation_time_millis);
   bool OnDraw(JNIEnv* env,
               const base::android::JavaRef<jobject>& canvas,
-              jboolean is_hardware_accelerated,
-              jint scroll_x,
-              jint scroll_y,
-              jint visible_left,
-              jint visible_top,
-              jint visible_right,
-              jint visible_bottom,
-              jboolean force_auxiliary_bitmap_rendering);
-  jfloat GetVelocityInPixelsPerSecond(JNIEnv* env);
+              bool is_hardware_accelerated,
+              int32_t scroll_x,
+              int32_t scroll_y,
+              int32_t visible_left,
+              int32_t visible_top,
+              int32_t visible_right,
+              int32_t visible_bottom,
+              bool force_auxiliary_bitmap_rendering);
+  float GetVelocityInPixelsPerSecond(JNIEnv* env);
   bool NeedToDrawBackgroundColor(JNIEnv* env);
-  jlong CapturePicture(JNIEnv* env, int width, int height);
-  void EnableOnNewPicture(JNIEnv* env, jboolean enabled);
+  int64_t CapturePicture(JNIEnv* env, int width, int height);
+  void EnableOnNewPicture(JNIEnv* env, bool enabled);
   void InsertVisualStateCallback(
       JNIEnv* env,
-      jlong request_id,
+      int64_t request_id,
       const base::android::JavaRef<jobject>& callback);
   void ClearView(JNIEnv* env);
   void SetExtraHeadersForUrl(
@@ -169,54 +171,55 @@ class AwContents : public FindHelper::Listener,
       const base::android::JavaRef<jstring>& extra_headers);
 
   void InvokeGeolocationCallback(JNIEnv* env,
-                                 jboolean value,
+                                 bool value,
                                  const base::android::JavaRef<jstring>& origin);
 
-  jint GetEffectivePriority(JNIEnv* env);
+  int32_t GetEffectivePriority(JNIEnv* env);
 
   js_injection::JsCommunicationHost* GetJsCommunicationHost();
 
-  jint AddPersistentJavaScript(
+  int32_t AddPersistentJavaScript(
       JNIEnv* env,
       const std::u16string& script,
       js_injection::mojom::DocumentInjectionTime event_type,
       const std::vector<std::string>& allowed_origin_rules,
-      jint world_identifier);
+      int32_t world_identifier);
 
-  void RemovePersistentJavaScript(JNIEnv* env, jint script_id);
+  void RemovePersistentJavaScript(JNIEnv* env, int32_t script_id);
 
   base::android::ScopedJavaLocalRef<jstring> AddWebMessageListener(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& listener,
-      const base::android::JavaRef<jstring>& js_object_name,
-      const base::android::JavaRef<jobjectArray>& allowed_origins);
+      const std::u16string& js_object_name,
+      const std::vector<std::string>& allowed_origin_rules,
+      int32_t world_id);
 
-  void RemoveWebMessageListener(
-      JNIEnv* env,
-      const base::android::JavaRef<jstring>& js_object_name);
+  void RemoveWebMessageListener(JNIEnv* env,
+                                const std::u16string& js_object_name,
+                                int32_t world_id);
 
   std::vector<jni_zero::ScopedJavaLocalRef<jobject>> GetWebMessageListenerInfos(
       JNIEnv* env);
 
-  std::vector<jni_zero::ScopedJavaLocalRef<jobject>>
-  GetDocumentStartupJavascripts(JNIEnv* env);
+  std::vector<jni_zero::ScopedJavaLocalRef<jobject>> GetPersistentJavascripts(
+      JNIEnv* env);
 
-  void FlushBackForwardCache(JNIEnv* env, jint reason);
+  void FlushBackForwardCache(JNIEnv* env, int32_t reason);
 
   // Returns a non-negative non-zero integer when prerendering successfully
   // started. The returned integer can be passed to CancelPrerendering().
   // Returns -1 when prerendering failed to start.
-  jint StartPrerendering(
+  int64_t StartPrerendering(
       JNIEnv* env,
       const std::string& prerendering_url,
       const base::android::JavaRef<jobject>& j_prefetch_params,
-      const base::android::JavaRef<jobject>& j_activation_callback,
-      const base::android::JavaRef<jobject>& j_error_callback);
+      base::OnceClosure&& activation_callback,
+      base::OnceClosure&& error_callback);
 
   // `prerender_id` should be a returned value of StartPrerendering(). If a
   // corresponding prerendering has already been canceled or activated, this
   // does nothing.
-  void CancelPrerendering(JNIEnv* env, int prerender_id);
+  void CancelPrerendering(JNIEnv* env, int64_t prerender_id);
 
   // Cancel all prerendering running on this contents regardless of how they are
   // triggered (StartPrerendering() or speculation rules).
@@ -225,8 +228,8 @@ class AwContents : public FindHelper::Listener,
   bool GetViewTreeForceDarkState() { return view_tree_force_dark_state_; }
 
   // PermissionRequestHandlerClient implementation.
-  void OnPermissionRequest(base::android::ScopedJavaLocalRef<jobject> j_request,
-                           AwPermissionRequest* request) override;
+  base::WeakPtr<AwPermissionRequest> OnPermissionRequest(
+      std::unique_ptr<AwPermissionRequestDelegate> permission_request) override;
   void OnPermissionRequestCanceled(AwPermissionRequest* request) override;
 
   PermissionRequestHandler* GetPermissionRequestHandler() {
@@ -235,7 +238,7 @@ class AwContents : public FindHelper::Listener,
 
   void PreauthorizePermission(JNIEnv* env,
                               const base::android::JavaRef<jstring>& origin,
-                              jlong resources);
+                              int64_t resources);
 
   // AwBrowserPermissionRequestDelegate implementation.
   void RequestProtectedMediaIdentifierPermission(
@@ -253,7 +256,7 @@ class AwContents : public FindHelper::Listener,
   // Find-in-page API and related methods.
   void FindAllAsync(JNIEnv* env,
                     const base::android::JavaRef<jstring>& search_string);
-  void FindNext(JNIEnv* env, jboolean forward);
+  void FindNext(JNIEnv* env, bool forward);
   void ClearMatches(JNIEnv* env);
   FindHelper* GetFindHelper();
 
@@ -268,7 +271,7 @@ class AwContents : public FindHelper::Listener,
                             int match_count,
                             bool finished) override;
   // IconHelper::Listener implementation.
-  bool ShouldDownloadFavicon(const GURL& icon_url) override;
+  bool ShouldDownloadFavicon() override;
   void OnReceivedIcon(const GURL& icon_url, const SkBitmap& bitmap) override;
   void OnReceivedTouchIconUrl(const std::string& url,
                               const bool precomposed) override;
@@ -299,25 +302,25 @@ class AwContents : public FindHelper::Listener,
                      bool inside_vsync) override;
   ui::TouchHandleDrawable* CreateDrawable() override;
 
-  void ClearCache(JNIEnv* env, jboolean include_disk_files);
+  void ClearCache(JNIEnv* env, bool include_disk_files);
   // See //android_webview/docs/how-does-on-create-window-work.md for more
   // details.
   void SetPendingWebContentsForPopup(
       std::unique_ptr<content::WebContents> pending);
-  jlong ReleasePopupAwContents(JNIEnv* env);
+  int64_t ReleasePopupAwContents(JNIEnv* env);
 
-  void ScrollTo(JNIEnv* env, jint x, jint y);
-  void RestoreScrollAfterTransition(JNIEnv* env, jint x, jint y);
+  void ScrollTo(JNIEnv* env, int32_t x, int32_t y);
+  void RestoreScrollAfterTransition(JNIEnv* env, int32_t x, int32_t y);
   void SmoothScroll(JNIEnv* env,
-                    jint target_x,
-                    jint target_y,
-                    jlong duration_ms);
-  void SetDipScale(JNIEnv* env, jfloat dip_scale);
+                    int32_t target_x,
+                    int32_t target_y,
+                    int64_t duration_ms);
+  void SetDipScale(JNIEnv* env, float dip_scale);
   base::android::ScopedJavaLocalRef<jstring> GetScheme(JNIEnv* env);
   void OnInputEvent(JNIEnv* env);
 
-  void SetJsOnlineProperty(JNIEnv* env, jboolean network_up);
-  void TrimMemory(JNIEnv* env, jint level, jboolean visible);
+  void SetJsOnlineProperty(JNIEnv* env, bool network_up);
+  void TrimMemory(JNIEnv* env, int32_t level, bool visible);
 
   void GrantFileSchemeAccesstoChildProcess(JNIEnv* env);
 
@@ -357,6 +360,8 @@ class AwContents : public FindHelper::Listener,
 
   void SetDipScaleInternal(float dip_scale);
 
+  void UpdateAwRenderProcessAssociation();
+
   JavaObjectWeakGlobalRef java_ref_;
   BrowserViewRenderer browser_view_renderer_;  // Must outlive |web_contents_|.
   std::unique_ptr<content::WebContents> web_contents_;
@@ -364,7 +369,6 @@ class AwContents : public FindHelper::Listener,
   std::unique_ptr<AwContentsClientBridge> contents_client_bridge_;
   std::unique_ptr<AwNavigationClient> navigation_client_;
   std::unique_ptr<AwRenderViewHostExt> render_view_host_ext_;
-  std::unique_ptr<FindHelper> find_helper_;
   std::unique_ptr<IconHelper> icon_helper_;
   // See //android_webview/docs/how-does-on-create-window-work.md for more
   // details for |pending_contents_|.
@@ -373,8 +377,20 @@ class AwContents : public FindHelper::Listener,
   std::unique_ptr<PermissionRequestHandler> permission_request_handler_;
   std::unique_ptr<js_injection::JsCommunicationHost> js_communication_host_;
 
-  base::circular_deque<std::unique_ptr<content::PrerenderHandle>>
-      prerender_handles_;
+  struct PrerenderInfo : public content::PrerenderHandle::Observer {
+    PrerenderInfo(std::unique_ptr<content::PrerenderHandle> prerender_handle,
+                  base::OnceClosure activation_callback,
+                  base::OnceClosure error_callback);
+    ~PrerenderInfo() override;
+
+    void OnLifecycleStateChanged(
+        content::PrerenderLifecycleStatus status) override;
+
+    std::unique_ptr<content::PrerenderHandle> handle;
+    std::vector<base::OnceClosure> activation_callbacks;
+    std::vector<base::OnceClosure> error_callbacks;
+  };
+  base::circular_deque<std::unique_ptr<PrerenderInfo>> prerender_infos_;
 
   bool view_tree_force_dark_state_ = false;
   std::string scheme_;
@@ -387,6 +403,8 @@ class AwContents : public FindHelper::Listener,
   std::list<OriginCallback> pending_geolocation_prompts_;
 
   base::TimeDelta preferred_frame_interval_;
+
+  content::ChildProcessId associated_rph_id_;
 
   base::WeakPtrFactory<AwContents> weak_ptr_factory_{this};
 };

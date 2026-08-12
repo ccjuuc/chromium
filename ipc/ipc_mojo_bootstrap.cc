@@ -17,7 +17,6 @@
 
 #include "base/check_op.h"
 #include "base/containers/circular_deque.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -54,7 +53,6 @@
 #include "mojo/public/cpp/bindings/pipe_control_message_proxy.h"
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
 #include "mojo/public/cpp/bindings/sequence_local_sync_event_watcher.h"
-#include "mojo/public/cpp/bindings/tracing_helpers.h"
 
 namespace IPC {
 
@@ -173,7 +171,8 @@ class ChannelAssociatedGroupController
       bool set_interface_id_namespace_bit,
       const scoped_refptr<base::SingleThreadTaskRunner>& ipc_task_runner,
       const scoped_refptr<base::SingleThreadTaskRunner>& proxy_task_runner)
-      : task_runner_(ipc_task_runner),
+      : AssociatedGroupController(ipc_task_runner),
+        task_runner_(ipc_task_runner),
         proxy_task_runner_(proxy_task_runner),
         set_interface_id_namespace_bit_(set_interface_id_namespace_bit),
         dispatcher_(this),
@@ -335,7 +334,7 @@ class ChannelAssociatedGroupController
         id = next_interface_id_++;
         if (set_interface_id_namespace_bit_)
           id |= mojo::kInterfaceIdNamespaceMask;
-      } while (base::Contains(endpoints_, id));
+      } while (endpoints_.contains(id));
 
       Endpoint* endpoint = new Endpoint(this, id);
       if (encountered_error_)
@@ -397,7 +396,7 @@ class ChannelAssociatedGroupController
       return;
     {
       base::AutoLock locker(lock_);
-      DCHECK(base::Contains(endpoints_, id));
+      DCHECK(endpoints_.contains(id));
       Endpoint* endpoint = endpoints_[id].get();
       DCHECK(!endpoint->client());
       DCHECK(!endpoint->closed());
@@ -429,7 +428,7 @@ class ChannelAssociatedGroupController
     DCHECK(client);
 
     base::AutoLock locker(lock_);
-    DCHECK(base::Contains(endpoints_, id));
+    DCHECK(endpoints_.contains(id));
 
     Endpoint* endpoint = endpoints_[id].get();
     endpoint->AttachClient(client, std::move(runner));
@@ -447,7 +446,7 @@ class ChannelAssociatedGroupController
     DCHECK(mojo::IsValidInterfaceId(id));
 
     base::AutoLock locker(lock_);
-    DCHECK(base::Contains(endpoints_, id));
+    DCHECK(endpoints_.contains(id));
 
     Endpoint* endpoint = endpoints_[id].get();
     endpoint->DetachClient();

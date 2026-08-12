@@ -38,7 +38,7 @@ bool ShowAndFocusNativeWindow(gfx::NativeWindow native_window) {
   // We used to call [NSApp activateIgnoringOtherApps:YES] but this
   // would not reliably activate the app, causing the window to never
   // become key. This bit of private API appears to be the secret
-  // incantation that gets us what we want. See https://crbug.com/1215570.
+  // incantation that gets us what we want. See https://crbug.com/40184452.
   [NSApplication.sharedApplication _handleActivatedEvent:nil];
 
   WindowedNSNotificationObserver* async_waiter;
@@ -56,7 +56,7 @@ bool ShowAndFocusNativeWindow(gfx::NativeWindow native_window) {
   // events are sent via ui_test_utils::SendKeyPressSync.
   BOOL notification_observed = [async_waiter wait];
   base::RunLoop().RunUntilIdle();  // There may be other events queued. Flush.
-  NSMenu* file_menu = [[NSApp.mainMenu itemWithTag:IDC_FILE_MENU] submenu];
+  NSMenu* file_menu = [[NSApp.mainMenu itemWithTag:kMacFileMenuId] submenu];
   [file_menu.delegate menuNeedsUpdate:file_menu];
 
   return !async_waiter || notification_observed;

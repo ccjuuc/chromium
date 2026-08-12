@@ -14,15 +14,20 @@
 #include "base/time/time.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/actor_logging.h"
-#include "chrome/common/actor/journal_details_builder.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/renderer/actor/tool_utils.h"
 #include "chrome/renderer/actor/type_tool.h"
+#include "components/actor/core/actor_logging.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_range.h"
 #include "third_party/blink/public/web/web_widget.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
@@ -32,6 +37,7 @@
 namespace actor {
 
 using ::blink::WebCoalescedInputEvent;
+using ::blink::WebElement;
 using ::blink::WebInputEvent;
 using ::blink::WebInputEventResult;
 using ::blink::WebKeyboardEvent;
@@ -72,11 +78,16 @@ KeyDispatcher::KeyDispatcher(std::vector<KeyParams> key_sequence,
       on_complete_(std::move(on_complete)),
       task_id_(task_id),
       journal_(journal) {
+  base::TimeDelta input_delay = features::kGlicActorKeyUpDuration.Get();
+  WebElement focused_element = FindFocusedElement(*type_tool_->frame());
+
   task_runner_->PostDelayedTask(
       FROM_HERE,
-      base::BindOnce(&KeyDispatcher::ContinueIncrementalTyping,
-                     weak_ptr_factory_.GetWeakPtr()),
-      features::kGlicActorKeyUpDuration.Get());
+      base::BindOnce(&KeyDispatcher::PrepareIncrementalTyping,
+                     weak_ptr_factory_.GetWeakPtr(), base::TimeTicks::Now(),
+                     input_delay,
+                     focused_element && focused_element.IsEditable()),
+      input_delay);
 }
 
 KeyDispatcher::~KeyDispatcher() = default;
@@ -90,8 +101,12 @@ void KeyDispatcher::Cancel() {
     WebWidget* widget = resolved_target_->GetWidget(*type_tool_);
     if (widget) {
       const KeyDispatcher::KeyParams& params = key_sequence_[current_key_];
+      base::WeakPtr<KeyDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
       WebInputEventResult up_result = CreateAndDispatchKeyEvent(
           *widget, WebInputEvent::Type::kKeyUp, params);
+      if (!weak_this) {
+        return;
+      }
       if (up_result == WebInputEventResult::kHandledSuppressed) {
         ACTOR_LOG() << "Warning: KeyUp event for key " << params.dom_key
                     << " suppressed during cancelation.";
@@ -101,6 +116,68 @@ void KeyDispatcher::Cancel() {
   is_key_down_ = false;
 
   Finish(MakeResult(mojom::ActionResultCode::kToolTimeout));
+}
+
+bool KeyDispatcher::ShouldRestartOnFocusSwap(
+    const WebElement& focused_element) const {
+  if (!features::kGlicActorIncrementalTypingWaitForEditableElement.Get()) {
+    return false;
+  }
+
+  if (!focused_element || !focused_element.IsEditable()) {
+    return false;
+  }
+
+  // Use flat tree containment to check if the target node is the same as or
+  // contained within the currently focused element (or vice versa). This
+  // avoids false-positive retries when the target is a text node inside a
+  // contenteditable container or a shadow DOM host whose focus moves
+  // internally.
+  bool is_original_target =
+      !resolved_target_->node.IsNull() &&
+      (resolved_target_->node.ContainsViaFlatTree(&focused_element) ||
+       focused_element.ContainsViaFlatTree(&resolved_target_->node));
+
+  return !is_original_target && !has_retried_;
+}
+
+void KeyDispatcher::PrepareIncrementalTyping(base::TimeTicks start_time,
+                                             base::TimeDelta last_input_delay,
+                                             bool started_in_editing_context) {
+  // If the target node was originally non editable, send the key events
+  // immediately as we don't know whether the key event will be handled
+  // anyways.
+  if (!started_in_editing_context ||
+      !features::kGlicActorIncrementalTypingWaitForEditableElement.Get()) {
+    ContinueIncrementalTyping();
+    return;
+  }
+
+  // If the target node is still editable, send the key events.
+  WebElement focused_element = FindFocusedElement(*type_tool_->frame());
+  if (focused_element && focused_element.IsEditable()) {
+    ContinueIncrementalTyping();
+    return;
+  }
+
+  // The element or focus may have changed, wait for page to stabilize. Use
+  // exponential backoff delay. If the next attempt will be scheduled after time
+  // out, finish with an error.
+  base::TimeDelta input_delay = 2 * last_input_delay;
+  if (base::TimeTicks::Now() + input_delay - start_time >
+      features::kGlicActorPageStabilityTimeout.Get()) {
+    Finish(MakeResult(mojom::ActionResultCode::kObservedTargetElementChanged,
+                      /*requires_page_stabilization=*/false,
+                      "No editable element found before incremental typing"));
+    return;
+  }
+
+  task_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&KeyDispatcher::PrepareIncrementalTyping,
+                     weak_ptr_factory_.GetWeakPtr(), start_time, input_delay,
+                     started_in_editing_context),
+      input_delay);
 }
 
 void KeyDispatcher::ContinueIncrementalTyping() {
@@ -114,10 +191,70 @@ void KeyDispatcher::ContinueIncrementalTyping() {
                       "No widget during incremental typing"));
     return;
   }
-
   if (!is_key_down_) {
+    WebElement focused_element = FindFocusedElement(*type_tool_->frame());
+    if (ShouldRestartOnFocusSwap(focused_element)) {
+      // When a website opens an overlay or search popover upon initial typing,
+      // focus often shifts to a newly spawned input element. We retry the
+      // typing sequence on the new target once.
+      ACTOR_LOG() << "Element swapped to a new editable element during "
+                     "typing. Retrying sequence.";
+      has_retried_ = true;
+      has_cleared_auto_selection_ = false;
+      current_key_ = 0;
+
+      base::WeakPtr<KeyDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
+      // Execute SelectAll on the new element before restarting. If the webpage
+      // copied over already typed characters to the new input box, selecting
+      // all ensures the restarted typing sequence overwrites the copied text
+      // rather than duplicating it. This also handles cases where a fresh
+      // overlay box is shown.
+      if (focused_element.GetDocument().GetFrame()) {
+        focused_element.GetDocument().GetFrame()->ExecuteCommand(
+            blink::WebString("SelectAll"));
+        if (!weak_this) {
+          return;
+        }
+      }
+
+      base::TimeDelta input_delay = features::kGlicActorKeyUpDuration.Get();
+      task_runner_->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&KeyDispatcher::ContinueIncrementalTyping, weak_this),
+          input_delay);
+      return;
+    }
+
+    // When typing into search boxes or overlay inputs, website scripts or
+    // autocomplete handlers may automatically trigger full text selection (e.g.
+    // via delayed select() calls or in response to initial key events).
+    // Once auto-selection is detected and cleared,
+    // `has_cleared_auto_selection_` is set so we do not perform this check
+    // again during the remaining typing sequence.
+    if (current_key_ > 0 && !has_cleared_auto_selection_ &&
+        features::kGlicActorIncrementalTypingClearAutoSelection.Get()) {
+      if (focused_element && focused_element.ContainsFrameSelection() &&
+          focused_element.GetDocument().GetFrame()) {
+        blink::WebLocalFrame* frame = focused_element.GetDocument().GetFrame();
+        blink::WebRange range = frame->SelectionRange();
+        // Only clear the selection if it starts at index 0 (e.g. a full
+        // selectAll). This preserves inline autocomplete highlights (which
+        // start at index > 0).
+        if (!range.IsNull() && range.length() > 0 && range.StartOffset() == 0) {
+          frame->SetEditableSelectionOffsets(range.EndOffset(),
+                                             range.EndOffset());
+          has_cleared_auto_selection_ = true;
+        }
+      }
+    }
+
+    base::WeakPtr<KeyDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
     WebInputEventResult down_result = CreateAndDispatchKeyEvent(
         *widget, WebInputEvent::Type::kRawKeyDown, params);
+
+    if (!weak_this) {
+      return;
+    }
 
     // Only the KeyDown event will check for and report failure. The reason the
     // other events don't is that if the KeyDown event was dispatched to the
@@ -135,7 +272,8 @@ void KeyDispatcher::ContinueIncrementalTyping() {
       return;
     }
 
-    // Input handling could destroy the widget so it needs to be re-read.
+    // Input handling could cause the widget to be destroyed so it must be
+    // re-read.
     widget = resolved_target_->GetWidget(*type_tool_);
     if (!widget) {
       Finish(MakeResult(mojom::ActionResultCode::kFrameWentAway,
@@ -143,9 +281,13 @@ void KeyDispatcher::ContinueIncrementalTyping() {
                         "No widget during incremental typing"));
       return;
     }
+
     if (params.dom_key != "Dead") {
       WebInputEventResult char_result = CreateAndDispatchKeyEvent(
           *widget, WebInputEvent::Type::kChar, params);
+      if (!weak_this) {
+        return;
+      }
       if (char_result == WebInputEventResult::kHandledSuppressed) {
         ACTOR_LOG() << "Warning: Char event for key " << params.dom_key
                     << " suppressed.";
@@ -154,8 +296,12 @@ void KeyDispatcher::ContinueIncrementalTyping() {
 
     is_key_down_ = true;
   } else {
+    base::WeakPtr<KeyDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
     WebInputEventResult up_result =
         CreateAndDispatchKeyEvent(*widget, WebInputEvent::Type::kKeyUp, params);
+    if (!weak_this) {
+      return;
+    }
     if (up_result == WebInputEventResult::kHandledSuppressed) {
       ACTOR_LOG() << "Warning: KeyUp event for key " << params.dom_key
                   << " suppressed.";
@@ -214,7 +360,7 @@ void KeyDispatcher::Finish(mojom::ActionResultPtr result) {
 WebInputEventResult KeyDispatcher::CreateAndDispatchKeyEvent(
     WebWidget& widget,
     WebInputEvent::Type type,
-    KeyDispatcher::KeyParams key_params) {
+    KeyParams key_params) {
   WebKeyboardEvent key_event(type, key_params.modifiers, ui::EventTimeForNow());
   key_event.windows_key_code = key_params.windows_key_code;
   key_event.native_key_code = key_params.native_key_code;
@@ -225,8 +371,14 @@ WebInputEventResult KeyDispatcher::CreateAndDispatchKeyEvent(
   key_event.text[0] = key_params.text;
   key_event.unmodified_text[0] = key_params.unmodified_text;
 
+  base::WeakPtr<KeyDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
   WebInputEventResult result = widget.HandleInputEvent(
       WebCoalescedInputEvent(key_event, ui::LatencyInfo()));
+
+  if (!weak_this) {
+    return result;
+  }
+
   journal_->Log(task_id_, WebInputEvent::GetName(type),
                 JournalDetailsBuilder()
                     .Add("key", key_params.dom_key)

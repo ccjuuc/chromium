@@ -70,21 +70,17 @@ export class Shimless3pDiagnostics extends Shimless3pDiagnosticsBase {
     };
   }
 
-  private hasPendingLaunch: boolean;
-  protected providerName: string|null;
-  protected installableAppPath: string;
-  protected appInfo: Shimless3pDiagnosticsAppInfo|null;
-  protected errorTitle: string;
-  protected errorMessage: string;
+  declare private hasPendingLaunch: boolean;
+  declare protected providerName: string|null;
+  declare protected installableAppPath: string;
+  declare protected appInfo: Shimless3pDiagnosticsAppInfo|null;
+  declare protected errorTitle: string;
+  declare protected errorMessage: string;
   private shimlessRmaService: ShimlessRmaServiceInterface =
       getShimlessRmaService();
 
   constructor() {
     super();
-
-    if (!loadTimeData.getBoolean('3pDiagnosticsEnabled')) {
-      return;
-    }
 
     this.shimlessRmaService.get3pDiagnosticsProvider().then(
         ({provider}: {provider: string|null}) => {
@@ -251,8 +247,7 @@ export class Shimless3pDiagnostics extends Shimless3pDiagnosticsBase {
    * app from external storage if app files exist, or launch the installed app.
    */
   launch3pDiagnostics(): void {
-    if (!loadTimeData.getBoolean('3pDiagnosticsEnabled') ||
-        this.hasPendingLaunch) {
+    if (this.hasPendingLaunch) {
       return;
     }
 

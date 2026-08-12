@@ -4,9 +4,15 @@
 
 package org.chromium.chrome.browser.ui.signin.fullscreen_signin;
 
+import android.animation.Animator.AnimatorListener;
+import android.graphics.drawable.Drawable;
 import android.text.method.LinkMovementMethod;
 import android.transition.AutoTransition;
+import android.transition.ChangeBounds;
+import android.transition.Fade;
+import android.transition.Transition;
 import android.transition.TransitionManager;
+import android.transition.TransitionSet;
 import android.view.View;
 import android.view.ViewGroup.LayoutParams;
 import android.widget.ProgressBar;
@@ -35,26 +41,17 @@ class FullscreenSigninViewBinder {
         } else if (propertyKey == FullscreenSigninProperties.ON_DISMISS_CLICKED) {
             view.getDismissButtonView()
                     .setOnClickListener(model.get(FullscreenSigninProperties.ON_DISMISS_CLICKED));
-        } else if (propertyKey
-                == FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT) {
+        } else if ((propertyKey == FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER)
+                || (propertyKey
+                        == FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT)) {
             updateVisibilityOnButtonClick(view, model);
-            updateBottomGroupVisibility(view, model);
-        } else if (propertyKey == FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER) {
-            updateVisibilityOnButtonClick(view, model);
-            updateBottomGroupVisibility(view, model);
+            updateTopAndBottomGroupVisibilities(view, model);
         } else if (propertyKey == FullscreenSigninProperties.ON_SELECTED_ACCOUNT_CLICKED) {
             view.getSelectedAccountView()
                     .setOnClickListener(
                             model.get(FullscreenSigninProperties.ON_SELECTED_ACCOUNT_CLICKED));
-        } else if (propertyKey == FullscreenSigninProperties.SELECTED_ACCOUNT_DATA) {
+        } else if (propertyKey == FullscreenSigninProperties.BOTTOM_GROUP_ACCOUNT_DATA) {
             updateSelectedAccount(view, model);
-            updateBottomGroupVisibility(view, model);
-        } else if (propertyKey == FullscreenSigninProperties.IS_SELECTED_ACCOUNT_SUPERVISED) {
-            final boolean isSelectedAccountSupervised =
-                    model.get(FullscreenSigninProperties.IS_SELECTED_ACCOUNT_SUPERVISED);
-            view.getSelectedAccountView().setEnabled(!isSelectedAccountSupervised);
-
-            updateBrowserManagedHeaderView(view, model);
             updateBottomGroupVisibility(view, model);
         } else if (propertyKey == FullscreenSigninProperties.SHOW_INITIAL_LOAD_PROGRESS_SPINNER) {
             final boolean showInitialLoadProgressSpinner =
@@ -66,37 +63,55 @@ class FullscreenSigninViewBinder {
                 // this case.
                 initialLoadProgressSpinner.animate().alpha(1.0f).setStartDelay(500);
             } else {
-                TransitionManager.beginDelayedTransition(view);
+                // Cancel any pending load spinner animations to prevent possible layout race
+                // conditions that could abort the incoming transition.
+                initialLoadProgressSpinner.animate().cancel();
+                TransitionManager.beginDelayedTransition(view, createTransitionToLoadedState());
                 initialLoadProgressSpinner.setVisibility(View.GONE);
             }
+            updateTopAndBottomGroupVisibilities(view, model);
+            updateBrowserManagedHeaderView(view, model);
+        } else if ((propertyKey == FullscreenSigninProperties.SHOW_ENTERPRISE_MANAGEMENT_NOTICE)
+                || (propertyKey == FullscreenSigninProperties.SHOW_ACCOUNT_SUPERVISION_NOTICE)) {
+            updateTitleAndSubtitleVisibility(view, model);
+            updateBrowserManagedHeaderView(view, model);
+        } else if (propertyKey == FullscreenSigninProperties.SHOULD_HIDE_DISMISS_BUTTON) {
             updateBottomGroupVisibility(view, model);
-            updateBrowserManagedHeaderView(view, model);
-        } else if (propertyKey == FullscreenSigninProperties.SHOW_ENTERPRISE_MANAGEMENT_NOTICE) {
-            updateBrowserManagedHeaderView(view, model);
+        } else if (propertyKey == FullscreenSigninProperties.ENABLE_ACCOUNT_SELECTION) {
+            final boolean enableAccountSelection =
+                    model.get(FullscreenSigninProperties.ENABLE_ACCOUNT_SELECTION);
+            view.getExpandIconView()
+                    .setVisibility(enableAccountSelection ? View.VISIBLE : View.GONE);
+            view.getSelectedAccountView().setEnabled(enableAccountSelection);
         } else if (propertyKey == FullscreenSigninProperties.IS_SIGNIN_SUPPORTED) {
             updateSelectedAccount(view, model);
             updateBottomGroupVisibility(view, model);
-        } else if (propertyKey == FullscreenSigninProperties.LOGO_DRAWABLE_ID) {
-            int logoId = model.get(FullscreenSigninProperties.LOGO_DRAWABLE_ID);
-            LayoutParams params = view.getIcon().getLayoutParams();
-
-            // TODO(crbug.com/390418475): Remove the if block below and
-            // fullscreen_signin_logo_default_height when fre_product_logo will be a VectorDrawable
-            // with appropriate height.
-            if (logoId == 0) {
-                logoId = R.drawable.fre_product_logo;
-                params.height =
-                        view.getContext()
-                                .getResources()
-                                .getDimensionPixelSize(
-                                        R.dimen.fullscreen_signin_logo_default_height);
+        } else if ((propertyKey == FullscreenSigninProperties.LOGO_DRAWABLE_ID)
+                || (propertyKey == FullscreenSigninProperties.PROFILE_PICTURE)) {
+            @Nullable Drawable profilePicture =
+                    model.get(FullscreenSigninProperties.PROFILE_PICTURE);
+            if (profilePicture != null) {
+                view.getIcon().setImageDrawable(profilePicture);
             } else {
-                params.height = LayoutParams.WRAP_CONTENT;
+                int logoId = model.get(FullscreenSigninProperties.LOGO_DRAWABLE_ID);
+                LayoutParams params = view.getIcon().getLayoutParams();
+
+                // TODO(crbug.com/390418475): Remove the if block below and
+                // fullscreen_signin_logo_default_height when fre_product_logo will be a
+                // VectorDrawable with appropriate height.
+                if (logoId == 0) {
+                    logoId = R.drawable.fre_product_logo;
+                    params.height =
+                            view.getContext()
+                                    .getResources()
+                                    .getDimensionPixelSize(
+                                            R.dimen.fullscreen_signin_logo_default_height);
+                } else {
+                    params.height = LayoutParams.WRAP_CONTENT;
+                }
+                view.getIcon().setImageResource(logoId);
+                view.getIcon().setLayoutParams(params);
             }
-            view.getIcon().setImageResource(logoId);
-            view.getIcon().setLayoutParams(params);
-        } else if (propertyKey == FullscreenSigninProperties.PROFILE_PICTURE) {
-            view.getIcon().setImageDrawable(model.get(FullscreenSigninProperties.PROFILE_PICTURE));
         } else if (propertyKey == FullscreenSigninProperties.SHOW_ANIMATION) {
             boolean visible = model.get(FullscreenSigninProperties.SHOW_ANIMATION);
             view.getAnimationView().setVisibility(visible ? View.VISIBLE : View.GONE);
@@ -105,20 +120,25 @@ class FullscreenSigninViewBinder {
             LottieAnimationView animation = view.getAnimationView();
             if (startAnimation) {
                 animation.playAnimation();
+            } else {
+                animation.cancelAnimation();
+                animation.setProgress(0.0f);
             }
         } else if (propertyKey == FullscreenSigninProperties.ANIMATOR_LISTENER) {
             LottieAnimationView animation = view.getAnimationView();
             animation.removeAllAnimatorListeners();
-            animation.addAnimatorListener(model.get(FullscreenSigninProperties.ANIMATOR_LISTENER));
+            AnimatorListener listener = model.get(FullscreenSigninProperties.ANIMATOR_LISTENER);
+            if (listener != null) {
+                animation.addAnimatorListener(listener);
+            }
         } else if (Objects.equals(propertyKey, FullscreenSigninProperties.TITLE_STRING)) {
             String text = model.get(FullscreenSigninProperties.TITLE_STRING);
             view.getTitle().setText(text);
+            updateTitleAndSubtitleVisibility(view, model);
         } else if (Objects.equals(propertyKey, FullscreenSigninProperties.SUBTITLE_STRING)) {
             String text = model.get(FullscreenSigninProperties.SUBTITLE_STRING);
-            if (text != null) {
-                view.getSubtitle().setText(text);
-            }
-            updateBottomGroupVisibility(view, model);
+            view.getSubtitle().setText(text);
+            updateTitleAndSubtitleVisibility(view, model);
         } else if (Objects.equals(propertyKey, FullscreenSigninProperties.DISMISS_BUTTON_STRING)) {
             String text = model.get(FullscreenSigninProperties.DISMISS_BUTTON_STRING);
             view.getDismissButtonView().setText(text);
@@ -149,7 +169,7 @@ class FullscreenSigninViewBinder {
         if (model.get(FullscreenSigninProperties.SHOW_INITIAL_LOAD_PROGRESS_SPINNER)) {
             return;
         }
-        if (model.get(FullscreenSigninProperties.IS_SELECTED_ACCOUNT_SUPERVISED)) {
+        if (model.get(FullscreenSigninProperties.SHOW_ACCOUNT_SUPERVISION_NOTICE)) {
             view.getBrowserManagedHeaderView().setVisibility(View.VISIBLE);
             view.getPrivacyDisclaimer().setText(R.string.fre_browser_managed_by_parent);
             view.getPrivacyDisclaimer()
@@ -159,8 +179,7 @@ class FullscreenSigninViewBinder {
             view.getBrowserManagedHeaderView().setVisibility(View.VISIBLE);
             view.getPrivacyDisclaimer().setText(R.string.fre_browser_managed_by_organization);
             view.getPrivacyDisclaimer()
-                    .setCompoundDrawablesRelativeWithIntrinsicBounds(
-                            R.drawable.ic_business, 0, 0, 0);
+                    .setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_domain, 0, 0, 0);
         } else {
             view.getBrowserManagedHeaderView().setVisibility(View.GONE);
         }
@@ -172,7 +191,7 @@ class FullscreenSigninViewBinder {
             return;
         }
         final @Nullable DisplayableProfileData profileData =
-                model.get(FullscreenSigninProperties.SELECTED_ACCOUNT_DATA);
+                model.get(FullscreenSigninProperties.BOTTOM_GROUP_ACCOUNT_DATA);
         if (profileData == null) {
             view.getContinueButtonView().setText(R.string.signin_add_account_to_device);
         } else {
@@ -183,6 +202,32 @@ class FullscreenSigninViewBinder {
         }
     }
 
+    private static void updateTopAndBottomGroupVisibilities(
+            FullscreenSigninView view, PropertyModel model) {
+        updateTitleAndSubtitleVisibility(view, model);
+        updateBottomGroupVisibility(view, model);
+    }
+
+    private static void updateTitleAndSubtitleVisibility(
+            FullscreenSigninView view, PropertyModel model) {
+        final boolean showSigninProgressSpinner =
+                model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT)
+                        || model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER);
+        if (showSigninProgressSpinner) {
+            // Don't update the UI when sign-in progress spinner is being shown.
+            return;
+        }
+
+        final boolean showInitialLoadProgressSpinner =
+                model.get(FullscreenSigninProperties.SHOW_INITIAL_LOAD_PROGRESS_SPINNER);
+        view.getTitle().setVisibility(showInitialLoadProgressSpinner ? View.GONE : View.VISIBLE);
+
+        final String text = model.get(FullscreenSigninProperties.SUBTITLE_STRING);
+        view.getSubtitle()
+                .setVisibility(
+                        showInitialLoadProgressSpinner || text == null ? View.GONE : View.VISIBLE);
+    }
+
     private static void updateBottomGroupVisibility(
             FullscreenSigninView view, PropertyModel model) {
         // TODO(crbug.com/349973162): Add a regression test that updates profile data after continue
@@ -191,46 +236,29 @@ class FullscreenSigninViewBinder {
                 model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT)
                         || model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER);
         if (showSigninProgressSpinner) {
-            // Don't update the bottom group when sign-in progress spinner is being shown.
+            // Don't update the UI when sign-in progress spinner is being shown.
             return;
         }
 
         final boolean showInitialLoadProgressSpinner =
                 model.get(FullscreenSigninProperties.SHOW_INITIAL_LOAD_PROGRESS_SPINNER);
-        final boolean isSelectedAccountSupervised =
-                model.get(FullscreenSigninProperties.IS_SELECTED_ACCOUNT_SUPERVISED);
-        final boolean showManagementNotice =
-                model.get(FullscreenSigninProperties.SHOW_ENTERPRISE_MANAGEMENT_NOTICE);
-        final String text = model.get(FullscreenSigninProperties.SUBTITLE_STRING);
-        view.getTitle().setVisibility(showInitialLoadProgressSpinner ? View.GONE : View.VISIBLE);
-        view.getSubtitle()
-                .setVisibility(
-                        !showInitialLoadProgressSpinner
-                                        && !isSelectedAccountSupervised
-                                        && !showManagementNotice
-                                        && text != null
-                                ? View.VISIBLE
-                                : View.GONE);
-
         final int selectedAccountVisibility =
                 !showInitialLoadProgressSpinner
-                                && model.get(FullscreenSigninProperties.SELECTED_ACCOUNT_DATA)
+                                && model.get(FullscreenSigninProperties.BOTTOM_GROUP_ACCOUNT_DATA)
                                         != null
                                 && model.get(FullscreenSigninProperties.IS_SIGNIN_SUPPORTED)
                         ? View.VISIBLE
                         : View.GONE;
         view.getSelectedAccountView().setVisibility(selectedAccountVisibility);
-        view.getExpandIconView()
-                .setVisibility(
-                        selectedAccountVisibility == View.VISIBLE && isSelectedAccountSupervised
-                                ? View.INVISIBLE
-                                : View.VISIBLE);
+
+        final boolean shouldHideDismissButton =
+                model.get(FullscreenSigninProperties.SHOULD_HIDE_DISMISS_BUTTON);
         final int dismissButtonVisibility =
-                !showInitialLoadProgressSpinner
-                                && model.get(FullscreenSigninProperties.IS_SIGNIN_SUPPORTED)
-                                && !isSelectedAccountSupervised
-                        ? View.VISIBLE
-                        : View.GONE;
+                showInitialLoadProgressSpinner
+                                || shouldHideDismissButton
+                                || !model.get(FullscreenSigninProperties.IS_SIGNIN_SUPPORTED)
+                        ? View.GONE
+                        : View.VISIBLE;
         view.getDismissButtonView().setVisibility(dismissButtonVisibility);
 
         final int otherElementsVisibility =
@@ -246,8 +274,8 @@ class FullscreenSigninViewBinder {
         final boolean showSigninProgressSpinner =
                 model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT)
                         || model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER);
-        final boolean isSelectedAccountSupervised =
-                model.get(FullscreenSigninProperties.IS_SELECTED_ACCOUNT_SUPERVISED);
+        final boolean shouldHideDismissButton =
+                model.get(FullscreenSigninProperties.SHOULD_HIDE_DISMISS_BUTTON);
         final boolean showSigningInText =
                 model.get(FullscreenSigninProperties.SHOW_SIGNIN_PROGRESS_SPINNER_WITH_TEXT);
 
@@ -258,8 +286,8 @@ class FullscreenSigninViewBinder {
         }
         final int bottomGroupVisibility = showSigninProgressSpinner ? View.INVISIBLE : View.VISIBLE;
         view.getSelectedAccountView().setVisibility(bottomGroupVisibility);
-        if (!isSelectedAccountSupervised) {
-            // Only adjust dismiss button visibility if it's not already removed for a child user.
+        if (!shouldHideDismissButton) {
+            // Only adjust dismiss button visibility if it's not already removed.
             view.getDismissButtonView().setVisibility(bottomGroupVisibility);
         }
         view.getContinueButtonView().setVisibility(bottomGroupVisibility);
@@ -269,6 +297,20 @@ class FullscreenSigninViewBinder {
         view.getSigninProgressSpinner()
                 .setVisibility(showSigninProgressSpinner ? View.VISIBLE : View.GONE);
         view.getSigninProgressText().setVisibility(showSigningInText ? View.VISIBLE : View.GONE);
+    }
+
+    private static Transition createTransitionToLoadedState() {
+        // Replace the default AutoTransition with a custom TransitionSet. Instead of running
+        // everything sequentially, running Fade(OUT) and ChangeBounds in parallel avoids a 300ms UI
+        // freeze on fast startups when the load spinner was never made visible.
+        return new TransitionSet()
+                .setOrdering(TransitionSet.ORDERING_SEQUENTIAL)
+                .addTransition(
+                        new TransitionSet()
+                                .setOrdering(TransitionSet.ORDERING_TOGETHER)
+                                .addTransition(new Fade(Fade.OUT))
+                                .addTransition(new ChangeBounds()))
+                .addTransition(new Fade(Fade.IN));
     }
 
     private FullscreenSigninViewBinder() {}

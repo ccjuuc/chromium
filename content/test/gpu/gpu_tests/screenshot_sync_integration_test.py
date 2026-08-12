@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import logging
 import math
 import os
 import random
@@ -18,6 +19,9 @@ from gpu_tests import common_browser_args as cba
 from gpu_tests import common_typing as ct
 from gpu_tests import gpu_integration_test
 from gpu_tests.util import screenshot_utils
+
+ASAN_SCREENSHOT_MULTIPLIER = 3
+
 
 class ScreenshotSyncIntegrationTest(gpu_integration_test.GpuIntegrationTest):
   """Tests that screenshots are properly synchronized with the frame on
@@ -71,7 +75,8 @@ class ScreenshotSyncIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # results in the toolbar hairline # being always drawn. The hariline
     # overlaps with the page's contents and interferes with the tests. Disable
     # it so the hairline isn't drawn.
-    default_args.extend(['--disable-features=AndroidBrowserControlsInViz'])
+    default_args.extend(
+        ['--disable-features=AlwaysDrawCompositedToolbarHairline'])
 
     return default_args
 
@@ -93,6 +98,12 @@ class ScreenshotSyncIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # to become interactive or better, avoiding critical race
     # conditions.
     self.tab.action_runner.Navigate(url)
+
+  def _GetScreenshotTimeout(self):
+    timeout = 10
+    if self._is_asan:
+      timeout *= ASAN_SCREENSHOT_MULTIPLIER
+    return timeout
 
   def _CheckColorMatchAtLocation(self, expectedRGB: rgba_color.RgbaColor,
                                  screenshot: ct.Screenshot, x: int,
@@ -120,7 +131,8 @@ class ScreenshotSyncIntegrationTest(gpu_integration_test.GpuIntegrationTest):
                            red=canvasRGB.r,
                            green=canvasRGB.g,
                            blue=canvasRGB.b)
-    screenshot = tab.Screenshot(10)
+    screenshot = tab.Screenshot(self._GetScreenshotTimeout())
+
     effective_dpr = screenshot_utils.GetEffectiveDpr(tab)
     # Avoid checking along antialiased boundary due to limited Adreno 3xx
     # interpolation precision (crbug.com/847984). We inset by one CSS pixel
@@ -143,7 +155,8 @@ class ScreenshotSyncIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     self.RestartBrowserIfNecessaryWithArgs([browser_arg])
     self._Navigate(test_path)
     repetitions = 20
-    for _ in range(0, repetitions):
+    for i in range(0, repetitions):
+      logging.info('Running iteration %d out of %d', i + 1, repetitions)
       self._CheckScreenshot()
 
   @classmethod

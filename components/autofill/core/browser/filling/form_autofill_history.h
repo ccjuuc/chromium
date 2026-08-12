@@ -5,11 +5,16 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_FORM_AUTOFILL_HISTORY_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_FORM_AUTOFILL_HISTORY_H_
 
+#include <stddef.h>
+
 #include <list>
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "base/containers/span.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -17,6 +22,8 @@
 namespace autofill {
 
 class AutofillField;
+
+enum class FieldModifier;
 
 // Holds history of Autofill filling operations so that they can be undone
 // later. The class is used to add, remove and access filling operations, which
@@ -29,7 +36,8 @@ class FormAutofillHistory {
   struct FieldFillingEntry {
     FieldFillingEntry(
         std::u16string field_value,
-        bool field_is_autofilled,
+        bool field_is_autofilled_according_to_renderer,
+        std::vector<FieldModifier> field_modifiers,
         std::optional<std::string> field_autofill_source_profile_guid,
         std::optional<FieldType> field_autofilled_type,
         FillingProduct filling_product,
@@ -50,7 +58,10 @@ class FormAutofillHistory {
     // because fields that are autofilled might be reset to still autofilled
     // field, considering cases where autofill is allowed to override autofilled
     // fields.
-    bool is_autofilled;
+    bool is_autofilled_according_to_renderer;
+
+    // The sequence of modifiers that have affected the field.
+    std::vector<FieldModifier> field_modifiers;
 
     // ID of the last profile used to fill the field, if any. This is stored so
     // the field doesn't track undone autofill operations, which can cause
@@ -86,21 +97,18 @@ class FormAutofillHistory {
   ~FormAutofillHistory();
 
   // Adds a new history entry in the beginning of the list.
-  // FormFieldData's are needed to get the most recent value of a field.
-  // AutofillField's are needed to get the type of a field.
-  // TODO(crbug.com/40232021): Only pass AutofillFields.
-  void AddFormFillingEntry(
-      base::span<const FormFieldData* const> filled_fields,
-      base::span<const AutofillField* const> filled_autofill_fields,
-      FillingProduct filling_product,
-      bool is_refill);
+  // `filled_fields` contain the state of the fields that were filled BEFORE
+  // the filling operation happened.
+  void AddFormFillingEntry(base::span<const AutofillField* const> filled_fields,
+                           FillingProduct filling_product,
+                           bool is_refill);
 
-  // Erases the field history information corresponding to `field_id` in
-  // `fill_operation`. If the form filling entry becomes empty afterwards, the
-  // function also removes it from `history_`.
-  void EraseFieldFillingEntry(
-      std::list<FormFillingEntry>::iterator fill_operation,
-      FieldGlobalId field_id);
+  // Erases the field history information corresponding to all `field_ids` from
+  // `filling_entry`. If `filling_entry` becomes empty afterwards, the function
+  // also removes it from `history_`.
+  void EraseFieldFillingEntries(
+      std::list<FormFillingEntry>::iterator filling_entry,
+      base::span<const FieldGlobalId> field_ids);
 
   // Returns the first entry in `history_` (corresponding to the last
   // chronological entry) that has information about the field represented by

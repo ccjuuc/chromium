@@ -15,9 +15,6 @@ class PrefRegistrySyncable;
 
 namespace tab_resumption_prefs {
 
-// Pref name that disables the tab resumption tile.
-extern const char kTabResumptionDisabledPref[];
-
 // Pref name that stores the last opened tab URL.
 extern const char kTabResumptionLastOpenedTabURLPref[];
 
@@ -32,9 +29,6 @@ extern const char kTabResumptionWithPriceDropUrlImpressions[];
 // Stores impressions for which the Tab resumption card for a price
 // trackabel URL has been rendered on a per URL basis.
 extern const char kTabResumptionWithPriceTrackableUrlImpressions[];
-
-// Registers the local state prefs associated with the tab resumption tile.
-void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
 // Registers the profile prefs associated with the tab resumption tile.
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);

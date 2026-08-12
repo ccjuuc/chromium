@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "base/files/file_util.h"
 
 #include <dirent.h>
@@ -17,7 +12,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/time.h>
@@ -36,8 +30,8 @@
 #include "base/bits.h"
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/containers/stack.h"
 #include "base/environment.h"
 #include "base/files/file_enumerator.h"
@@ -90,6 +84,10 @@ extern "C" char* mkdtemp(char* path);
 namespace base {
 namespace {
 
+// mkstemp() requires a template ending in exactly six trailing 'X' characters,
+// which it replaces in place with a unique suffix.
+constexpr size_t kMkstempSuffixLength = 6u;
+
 #if BUILDFLAG(IS_MAC)
 // Helper for VerifyPathControlledByUser.
 bool VerifySpecificPathControlledByUser(const FilePath& path,
@@ -111,8 +109,7 @@ bool VerifySpecificPathControlledByUser(const FilePath& path,
     return false;
   }
 
-  if ((stat_info.st_mode & S_IWGRP) &&
-      !Contains(group_gids, stat_info.st_gid)) {
+  if ((stat_info.st_mode & S_IWGRP) && !group_gids.contains(stat_info.st_gid)) {
     DLOG(ERROR) << "Path " << path.value()
                 << " is writable by an unprivileged group.";
     return false;
@@ -678,12 +675,14 @@ bool ReadFromFD(int fd, span<char> buffer) {
   return true;
 }
 
-ScopedFD CreateAndOpenFdForTemporaryFileInDir(const FilePath& directory,
-                                              FilePath* path) {
+ScopedFD CreateAndOpenFdForTemporaryFileInDir(
+    const FilePath& directory,
+    FilePath::StringViewType name_prefix,
+    FilePath* path) {
   ScopedBlockingCall scoped_blocking_call(
       FROM_HERE,
       BlockingType::MAY_BLOCK);  // For call to mkstemp().
-  *path = directory.Append(GetTempTemplate("", true));
+  *path = directory.Append(GetTempTemplate(name_prefix, true));
   const std::string& tmpdir_string = path->value();
   // this should be OK since mkstemp just replaces characters in place
   char* buffer = const_cast<char*>(tmpdir_string.c_str());
@@ -815,7 +814,7 @@ bool ExecutableExistsInPath(Environment* env,
 // This is implemented in file_util_apple.mm for Mac.
 bool GetTempDir(FilePath* path) {
   const char* tmp = getenv("TMPDIR");
-  if (tmp) {
+  if (tmp && tmp[0]) {
     *path = FilePath(tmp);
     return true;
   }
@@ -858,17 +857,59 @@ FilePath GetHomeDir() {
 }
 #endif  // !BUILDFLAG(IS_APPLE)
 
-File CreateAndOpenTemporaryFileInDir(const FilePath& dir, FilePath* temp_file) {
+File CreateAndOpenTemporaryFileInDir(const FilePath& dir,
+                                     FilePath* temp_file,
+                                     uint32_t /*additional_flags*/,
+                                     FilePath::StringViewType name_prefix) {
   // For call to close() inside ScopedFD.
   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
-  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(dir, temp_file);
+  ScopedFD fd =
+      CreateAndOpenFdForTemporaryFileInDir(dir, name_prefix, temp_file);
   return fd.is_valid() ? File(std::move(fd)) : File(File::GetLastFileError());
+}
+
+// POSIX temp files created use one of these forms:
+//   .<platform_prefix>.<random6>
+//   .<platform_prefix>.<name_prefix>.<random6>
+// where `<random6>` is the mkstemp() suffix.
+// This method extracts `name_prefix` by stripping the fixed platform-specific
+// prefix and then the final `.<random6>` segment.
+std::optional<FilePath::StringType> GetNamePrefixForTemporaryFile(
+    const FilePath& temp_file) {
+  const FilePath::StringType basename = temp_file.BaseName().value();
+  const FilePath::StringType platform_prefix =
+      FormatTemporaryFileName({}, true).value();
+  // The basename must start with the fixed `.<platform_prefix>.` prefix.
+  if (!StartsWith(basename, platform_prefix, CompareCase::SENSITIVE)) {
+    return std::nullopt;
+  }
+
+  // Remove the fixed `.<platform_prefix>.` prefix first.
+  const FilePath::StringType remainder =
+      basename.substr(platform_prefix.size());
+  if (remainder.size() <= kMkstempSuffixLength) {
+    return std::nullopt;
+  }
+
+  // The remaining name must end in `.<random6>`, so the separator before the
+  // mkstemp() suffix must be present here.
+  const size_t separator_index = remainder.size() - kMkstempSuffixLength - 1;
+  if (remainder[separator_index] != '.') {
+    return std::nullopt;
+  }
+
+  const FilePath::StringType prefix = remainder.substr(0, separator_index);
+  if (prefix.empty()) {
+    return std::nullopt;
+  }
+  return prefix;
 }
 
 bool CreateTemporaryFileInDir(const FilePath& dir, FilePath* temp_file) {
   // For call to close() inside ScopedFD.
   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
-  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(dir, temp_file);
+  ScopedFD fd =
+      CreateAndOpenFdForTemporaryFileInDir(dir, /*name_prefix=*/{}, temp_file);
   return fd.is_valid();
 }
 
@@ -886,7 +927,8 @@ FilePath FormatTemporaryFileName(FilePath::StringViewType identifier,
 
 ScopedFILE CreateAndOpenTemporaryStreamInDir(const FilePath& dir,
                                              FilePath* path) {
-  ScopedFD scoped_fd = CreateAndOpenFdForTemporaryFileInDir(dir, path);
+  ScopedFD scoped_fd =
+      CreateAndOpenFdForTemporaryFileInDir(dir, /*name_prefix=*/{}, path);
   if (!scoped_fd.is_valid()) {
     return nullptr;
   }
@@ -1055,12 +1097,13 @@ bool GetFileInfo(const FilePath& file_path, File::Info* results) {
   return true;
 }
 
-FILE* OpenFile(const FilePath& filename, const char* mode) {
+FILE* OpenFile(const FilePath& filename, base::cstring_view mode) {
   // 'e' is unconditionally added below, so be sure there is not one already
   // present before a comma in |mode|.
-  DCHECK(
-      strchr(mode, 'e') == nullptr ||
-      (strchr(mode, ',') != nullptr && strchr(mode, 'e') > strchr(mode, ',')));
+  size_t e_pos = mode.find('e');
+  size_t comma_pos = mode.find(',');
+  DCHECK(e_pos == base::cstring_view::npos ||
+         (comma_pos != base::cstring_view::npos && e_pos > comma_pos));
   ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
   FILE* result = nullptr;
 #if BUILDFLAG(IS_ANDROID)
@@ -1075,13 +1118,13 @@ FILE* OpenFile(const FilePath& filename, const char* mode) {
     if (fd < 0) {
       return nullptr;
     }
-    return fdopen(fd, mode);
+    return fdopen(fd, mode.c_str());
   }
 #endif
 #if BUILDFLAG(IS_APPLE)
   // macOS does not provide a mode character to set O_CLOEXEC; see
   // https://developer.apple.com/legacy/library/documentation/Darwin/Reference/ManPages/man3/fopen.3.html.
-  const char* the_mode = mode;
+  const char* the_mode = mode.c_str();
 #else
   std::string mode_with_e(AppendModeCharacter(mode, 'e'));
   const char* the_mode = mode_with_e.c_str();
@@ -1574,7 +1617,8 @@ BASE_EXPORT bool IsPathExecutable(const FilePath& path) {
   bool result = false;
   FilePath tmp_file_path;
 
-  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(path, &tmp_file_path);
+  ScopedFD fd = CreateAndOpenFdForTemporaryFileInDir(path, /*name_prefix=*/{},
+                                                     &tmp_file_path);
   if (fd.is_valid()) {
     DeleteFile(tmp_file_path);
     long sysconf_result = sysconf(_SC_PAGESIZE);

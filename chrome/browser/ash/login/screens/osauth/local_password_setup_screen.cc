@@ -9,6 +9,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
@@ -21,13 +22,11 @@
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chrome/browser/ash/login/screens/osauth/base_osauth_setup_screen.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/ash/login/local_password_setup_handler.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/auth_factor_config/auth_factor_config.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
-#include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-forward.h"
 #include "chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-shared.h"
 
 namespace ash {
@@ -53,10 +52,12 @@ std::string LocalPasswordSetupScreen::GetResultString(Result result) {
 }
 
 LocalPasswordSetupScreen::LocalPasswordSetupScreen(
+    PrefService* local_state,
     base::WeakPtr<LocalPasswordSetupView> view,
     const ScreenExitCallback& exit_callback)
     : BaseOSAuthSetupScreen(LocalPasswordSetupView::kScreenId,
                             OobeScreenPriority::DEFAULT),
+      local_state_(CHECK_DEREF(local_state)),
       view_(std::move(view)),
       exit_callback_(exit_callback) {}
 
@@ -89,16 +90,16 @@ void LocalPasswordSetupScreen::DoShow() {
   // 1. They were presented the choice between local vs. online password on the
   //    LocalPasswordSetup screen.
   // 2. They clicked on 'Choose password instead' during main PIN setup.
+  std::string auth_token = GetToken();
   bool can_go_back = !context()->knowledge_factor_setup.local_password_forced ||
                      context()->knowledge_factor_setup.pin_setup_mode ==
                          WizardContext::PinSetupMode::kUserChosePasswordInstead;
   bool is_recovery_flow = context()->knowledge_factor_setup.auth_setup_flow ==
                           WizardContext::AuthChangeFlow::kRecovery;
-  view_->Show(/*can_go_back=*/can_go_back,
-              /*is_recovery_flow=*/is_recovery_flow);
+  view_->Show(auth_token, can_go_back, is_recovery_flow);
 }
 
-void LocalPasswordSetupScreen::OnUserAction(const base::Value::List& args) {
+void LocalPasswordSetupScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionInputPassword) {
     CHECK_EQ(args.size(), 2u);
@@ -106,7 +107,7 @@ void LocalPasswordSetupScreen::OnUserAction(const base::Value::List& args) {
     auth::mojom::PasswordFactorEditor& password_factor_editor =
         auth::GetPasswordFactorEditor(
             quick_unlock::QuickUnlockFactory::GetDelegate(),
-            g_browser_process->local_state());
+            &local_state_.get());
     switch (context()->knowledge_factor_setup.auth_setup_flow) {
       case WizardContext::AuthChangeFlow::kInitialSetup:
         password_factor_editor.SetLocalPassword(

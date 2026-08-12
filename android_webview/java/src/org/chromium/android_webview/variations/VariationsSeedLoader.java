@@ -122,10 +122,15 @@ public class VariationsSeedLoader {
     @Nullable private FutureTask<SeedLoadResult> mLoadTask;
     private final SeedServerCallback mSeedServerCallback = new SeedServerCallback();
     private boolean mPostedServiceConnected;
+    private static long sMaxSeedAgeMillis;
+    private static long sMaxRequestPeriodMillis;
 
     private static void recordLoadSeedResult(@LoadSeedResult int result) {
+        // Note: The +1 is needed, because C++ UmaHistogramEnumeration() actually does +1 twice:
+        // once in UmaHistogramEnumeration() and once in UmaHistogramExactLinear() and the params
+        // need to match with C++ code.
         RecordHistogram.recordEnumeratedHistogram(
-                SEED_LOAD_RESULT_HISTOGRAM_NAME, result, LoadSeedResult.MAX_VALUE);
+                SEED_LOAD_RESULT_HISTOGRAM_NAME, result, LoadSeedResult.MAX_VALUE + 1);
     }
 
     private static void recordSeedLoadBlockingTime(long timeMs) {
@@ -199,25 +204,11 @@ public class VariationsSeedLoader {
         if (lastRequestTime == 0) {
             return false;
         }
-        long maxRequestPeriodMillis =
-                VariationsUtils.getDurationSwitchValueInMillis(
-                        AwSwitches.FINCH_SEED_MIN_UPDATE_PERIOD, MAX_REQUEST_PERIOD_MILLIS);
-        if (WebViewCachedFlags.get()
-                .isCachedFeatureEnabled(AwFeatures.WEBVIEW_REDUCED_SEED_REQUEST_PERIOD)) {
-            maxRequestPeriodMillis /= 2;
-        }
-        return now < lastRequestTime + maxRequestPeriodMillis;
+        return now < lastRequestTime + sMaxRequestPeriodMillis;
     }
 
     private boolean isSeedExpired(long seedFileTime) {
-        long expirationDuration =
-                VariationsUtils.getDurationSwitchValueInMillis(
-                        AwSwitches.FINCH_SEED_EXPIRATION_AGE, SEED_EXPIRATION_MILLIS);
-        if (WebViewCachedFlags.get()
-                .isCachedFeatureEnabled(AwFeatures.WEBVIEW_REDUCED_SEED_EXPIRATION)) {
-            expirationDuration /= 2;
-        }
-        return getCurrentTimeMillis() > seedFileTime + expirationDuration;
+        return getCurrentTimeMillis() > seedFileTime + sMaxSeedAgeMillis;
     }
 
     public static boolean parseAndSaveSeedFile(File seedFile) {
@@ -486,6 +477,23 @@ public class VariationsSeedLoader {
     // Begin asynchronously loading the variations seed. ContextUtils.getApplicationContext() and
     // AwBrowserProcess.getWebViewPackageName() must be ready to use before calling this.
     public void startVariationsInit() {
+        // We read the command line switches here instead of in the posted task because accessing
+        // the native command line switches from another thread while it is being modified is
+        // unsafe. See b/477304958
+        sMaxRequestPeriodMillis =
+                VariationsUtils.getDurationSwitchValueInMillis(
+                        AwSwitches.FINCH_SEED_MIN_UPDATE_PERIOD, MAX_REQUEST_PERIOD_MILLIS);
+        sMaxSeedAgeMillis =
+                VariationsUtils.getDurationSwitchValueInMillis(
+                        AwSwitches.FINCH_SEED_EXPIRATION_AGE, SEED_EXPIRATION_MILLIS);
+        if (WebViewCachedFlags.get()
+                .isCachedFeatureEnabled(AwFeatures.WEBVIEW_REDUCED_SEED_REQUEST_PERIOD)) {
+            sMaxRequestPeriodMillis /= 2;
+        }
+        if (WebViewCachedFlags.get()
+                .isCachedFeatureEnabled(AwFeatures.WEBVIEW_REDUCED_SEED_EXPIRATION)) {
+            sMaxSeedAgeMillis /= 2;
+        }
         mLoadTask = new FutureTask<>(this::loadSeedFile);
         // The Runnable task must be scheduled with high priority to start the FutureTask as soon as
         // possible since that task is blocking WebView startup.

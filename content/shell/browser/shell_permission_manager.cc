@@ -52,7 +52,7 @@ bool IsAllowlistedPermissionType(PermissionType permission) {
     case PermissionType::MIDI_SYSEX:
     case PermissionType::NOTIFICATIONS:
     case PermissionType::PROTECTED_MEDIA_IDENTIFIER:
-    case PermissionType::DURABLE_STORAGE:
+    case PermissionType::PERSISTENT_STORAGE:
     case PermissionType::AUDIO_CAPTURE:
     case PermissionType::VIDEO_CAPTURE:
     case PermissionType::CLIPBOARD_READ_WRITE:
@@ -91,27 +91,6 @@ ShellPermissionManager::ShellPermissionManager() = default;
 
 ShellPermissionManager::~ShellPermissionManager() = default;
 
-void ShellPermissionManager::RequestPermissions(
-    RenderFrameHost* render_frame_host,
-    const PermissionRequestDescription& request_description,
-    base::OnceCallback<void(const std::vector<PermissionResult>&)> callback) {
-  if (render_frame_host->IsNestedWithinFencedFrame()) {
-    std::move(callback).Run(std::vector<PermissionResult>(
-        request_description.permissions.size(),
-        PermissionResult(blink::mojom::PermissionStatus::DENIED,
-                         PermissionStatusSource::FENCED_FRAME)));
-    return;
-  }
-  std::vector<PermissionResult> result;
-  for (const auto& permission : request_description.permissions) {
-    result.emplace_back(
-        IsAllowlistedPermissionType(
-            blink::PermissionDescriptorToPermissionType(permission))
-            ? blink::mojom::PermissionStatus::GRANTED
-            : blink::mojom::PermissionStatus::DENIED);
-  }
-  std::move(callback).Run(result);
-}
 
 void ShellPermissionManager::ResetPermission(
     PermissionType permission,

@@ -28,7 +28,6 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "base/trace_event/trace_event.h"
-#include "third_party/blink/renderer/core/html/parser/html_meta_charset_parser.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/text_encoding_detector.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
@@ -91,12 +90,12 @@ void TextResourceDecoder::AddToBuffer(base::span<const char> data) {
   // Explicitly reserve capacity in the Vector to avoid triggering the growth
   // heuristic (== no excess capacity).
   buffer_.reserve(base::checked_cast<wtf_size_t>(buffer_.size() + data.size()));
-  buffer_.AppendSpan(data);
+  buffer_.append_range(data);
 }
 
 void TextResourceDecoder::AddToBufferIfEmpty(base::span<const char> data) {
   if (buffer_.empty())
-    buffer_.AppendSpan(data);
+    buffer_.append_range(data);
 }
 
 void TextResourceDecoder::SetEncoding(const TextEncoding& encoding,
@@ -114,7 +113,7 @@ void TextResourceDecoder::SetEncoding(const TextEncoding& encoding,
   // When encoding comes from meta tag (i.e. it cannot be XML files sent via
   // XHR), treat x-user-defined as windows-1252 (bug 18270)
   if (source == kEncodingFromMetaTag &&
-      EqualIgnoringASCIICase(encoding.GetName(), "x-user-defined")) {
+      EqualIgnoringAsciiCase(encoding.GetName(), "x-user-defined")) {
     encoding_ = TextEncoding("windows-1252");
   } else if (source == kEncodingFromMetaTag ||
              source == kEncodingFromXMLHeader ||
@@ -308,10 +307,16 @@ void TextResourceDecoder::CheckForMetaCharset(base::span<const char> data) {
     return;
   }
 
+  FinalizeMetaCharsetCheck();
+}
+
+void TextResourceDecoder::FinalizeMetaCharsetCheck() {
+  DCHECK(charset_parser_);
+
+  meta_charset_disposition_ = charset_parser_->MetaCharsetResult();
   SetEncoding(charset_parser_->Encoding(), kEncodingFromMetaTag);
   charset_parser_.reset();
   checked_for_meta_charset_ = true;
-  return;
 }
 
 // We use the encoding detector in two cases:
@@ -414,8 +419,10 @@ String TextResourceDecoder::Decode(base::span<const char> data,
 
   DCHECK(encoding_.IsValid());
 
-  if (!codec_)
+  if (!codec_) {
     codec_ = NewTextCodec(encoding_);
+    CHECK(codec_) << encoding_.GetName();
+  }
 
   String result = codec_->Decode(
       base::as_bytes(data_for_decode), FlushBehavior::kDoNotFlush,
@@ -442,11 +449,19 @@ String TextResourceDecoder::Flush() {
     AutoDetectEncodingIfAllowed(buffer_);
   }
 
-  if (!codec_)
+  if (options_.GetContentType() == TextResourceDecoderOptions::kHTMLContent &&
+      !checked_for_meta_charset_ && charset_parser_) {
+    charset_parser_->Finish();
+    FinalizeMetaCharsetCheck();
+  }
+
+  if (!codec_) {
     codec_ = NewTextCodec(encoding_);
+    CHECK(codec_) << encoding_.GetName();
+  }
 
   String result = codec_->Decode(
-      base::as_byte_span(buffer_), FlushBehavior::kFetchEOF,
+      base::as_byte_span(buffer_), FlushBehavior::kFetchEof,
       options_.GetContentType() == TextResourceDecoderOptions::kXMLContent &&
           !options_.GetUseLenientXMLDecoding(),
       saw_error_);

@@ -88,6 +88,8 @@ class PeerConnectionRecord {
   /**
    * @param {!Object} update The object contains keys "timestamp", "type", and
    *   "value".
+   * @return time delta in milliseconds since last update or undefined for the
+   *   first item.
    */
   addUpdate(update) {
     const time = new Date(parseFloat(update.time));
@@ -96,6 +98,11 @@ class PeerConnectionRecord {
       value: update.value,
       timestamp: update.timestamp,
     });
+    if (this.record_.updateLog.length > 1) {
+      return this.record_.updateLog[this.record_.updateLog.length - 1]
+                 .timestamp -
+          this.record_.updateLog[this.record_.updateLog.length - 2].timestamp;
+    }
   }
 }
 
@@ -204,19 +211,6 @@ function initialize() {
         params.eventLogRecordingsToggleable);
   });
 
-  // Requests stats from all peer connections every second unless specified via
-  // ?statsInterval=(milliseconds >= 100ms)
-  let statsInterval = 1000;
-  if (searchParameters.has('statsInterval')) {
-    statsInterval = Math.max(
-        parseInt(searchParameters.get('statsInterval'), 10),
-        100);
-    if (!isFinite(statsInterval)) {
-      statsInterval = 1000;
-    }
-  }
-  window.setInterval(requestStats, statsInterval);
-
   addRtcStatsEvent(
     'create',
     null,
@@ -224,6 +218,7 @@ function initialize() {
       hardwareConcurrency: navigator.hardwareConcurrency,
       userAgentData: navigator.userAgentData,
       deviceMemory: navigator.deviceMemory,
+      cpuPerformance: navigator.cpuPerformance,
       screen: {
         width: window.screen.availWidth,
         height: window.screen.availHeight,
@@ -238,16 +233,6 @@ function initialize() {
   );
 }
 document.addEventListener('DOMContentLoaded', initialize);
-
-/**
- * Sends a request to the browser to get peer connection statistics from the
- * standard getStats() API (promise-based).
- */
-function requestStats() {
-  if (Object.keys(peerConnectionDataStore).length > 0) {
-    chrome.send('getStandardStats');
-  }
-}
 
 /**
  * A helper function for getting a peer connection element id.
@@ -282,9 +267,10 @@ function appendChildWithText(parent, tag, text) {
  * @param {!PeerConnectionUpdateEntry} update The peer connection update data.
  */
 function addPeerConnectionUpdate(peerConnectionElement, update) {
+  const timedelta = peerConnectionDataStore[peerConnectionElement.id]
+    .addUpdate(update);
   peerConnectionUpdateTable.addPeerConnectionUpdate(
-      peerConnectionElement, update);
-  peerConnectionDataStore[peerConnectionElement.id].addUpdate(update);
+      peerConnectionElement, update, timedelta);
   let value = undefined;
   if (update.value.length) {
     if (update.value[0] === '{') {
@@ -292,6 +278,11 @@ function addPeerConnectionUpdate(peerConnectionElement, update) {
     } else {
       value = update.value;
     }
+  }
+  if (update.type === 'ontrack') {
+    // The rtcstats format flattens the track event into
+    // [kind, id, label, ...streamIds].
+    value = [value.kind, value.id, value.label, ...value.streams];
   }
   addRtcStatsEvent(
     update.type,
@@ -456,7 +447,6 @@ function updateAllPeerConnections(data) {
       addPeerConnectionUpdate(peerConnection, log[j]);
     }
   }
-  requestStats();
 }
 
 /**
@@ -518,8 +508,8 @@ function addStandardStats(data) {
       .getElementsByClassName('candidatepair')[0].firstElementChild;
     candidateElement.innerText = '';
     if (!(localCandidate && remoteCandidate)) {
-      return;
       candidateElement.innerText = '(not connected)';
+      return;
     }
 
     if (localCandidate.address &&

@@ -11,7 +11,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "url/url_constants.h"
 
@@ -45,6 +47,11 @@ void WindowManagementTool::Validate(ToolCallback callback) {
                        "The target window could not be found."));
         return;
       }
+      mojom::ActionResultPtr result = CheckCrossProfile(browser);
+      if (!IsOk(*result)) {
+        std::move(callback).Run(std::move(result));
+        return;
+      }
       browser_did_close_subscription_ = browser->RegisterBrowserDidClose(
           base::BindRepeating(&WindowManagementTool::OnBrowserDidClose,
                               base::Unretained(this)));
@@ -61,11 +68,12 @@ void WindowManagementTool::Invoke(ToolCallback callback) {
 
   switch (action_) {
     case Action::kCreate: {
-      Browser::CreateParams params(Browser::TYPE_NORMAL,
-                                   &tool_delegate().GetProfile(),
-                                   /*user_gesture=*/false);
+      BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
+                                       &tool_delegate().GetProfile(),
+                                       /*from_user_gesture=*/false);
       params.initial_show_state = ::ui::mojom::WindowShowState::kNormal;
-      Browser* browser = Browser::Create(params);
+      Browser* browser =
+          CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
       browser_did_become_active_subscription_ =
           browser->RegisterDidBecomeActive(base::BindRepeating(
               &WindowManagementTool::OnBrowserDidBecomeActive,
@@ -95,6 +103,11 @@ void WindowManagementTool::Invoke(ToolCallback callback) {
                                     "The target window could not be found."));
         return;
       }
+      mojom::ActionResultPtr result = CheckCrossProfile(browser);
+      if (!IsOk(*result)) {
+        OnInvokeFinished(std::move(result));
+        return;
+      }
       browser_did_become_active_subscription_ =
           browser->RegisterDidBecomeActive(base::BindRepeating(
               &WindowManagementTool::OnBrowserDidBecomeActive,
@@ -109,6 +122,11 @@ void WindowManagementTool::Invoke(ToolCallback callback) {
         OnInvokeFinished(MakeResult(mojom::ActionResultCode::kWindowWentAway,
                                     /*requires_page_stabilization=*/false,
                                     "The target window could not be found."));
+        return;
+      }
+      mojom::ActionResultPtr result = CheckCrossProfile(browser);
+      if (!IsOk(*result)) {
+        OnInvokeFinished(std::move(result));
         return;
       }
 
@@ -165,7 +183,8 @@ void WindowManagementTool::UpdateTaskAfterInvoke(ActorTask& task,
   // acting.
   if (action_ == Action::kCreate && task.GetTabs().empty()) {
     CHECK(created_tab_handle_.has_value());
-    task.AddTab(*created_tab_handle_, std::move(callback));
+    task.AddTab(*created_tab_handle_, /*stop_task_on_detach=*/true,
+                std::move(callback));
   } else {
     std::move(callback).Run(std::move(result));
   }
@@ -193,6 +212,16 @@ void WindowManagementTool::OnInvokeFinished(mojom::ActionResultPtr result) {
   }
   browser_did_close_subscription_ = {};
   browser_did_become_active_subscription_ = {};
+}
+
+mojom::ActionResultPtr WindowManagementTool::CheckCrossProfile(
+    BrowserWindowInterface* browser) {
+  if (browser && browser->GetProfile() != &tool_delegate().GetProfile()) {
+    return MakeResult(mojom::ActionResultCode::kWindowWentAway,
+                      /*requires_page_stabilization=*/false,
+                      "Cross-profile access denied.");
+  }
+  return MakeOkResult();
 }
 
 }  // namespace actor

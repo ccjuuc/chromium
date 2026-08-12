@@ -13,11 +13,12 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/strings/string_util.h"
 #include "base/task/task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/assist_ranker/proto/ranker_model.pb.h"
 #include "components/assist_ranker/proto/translate_ranker_model.pb.h"
@@ -95,9 +96,6 @@ const char kDefaultTranslateRankerModelURL[] =
 BASE_FEATURE(kTranslateRankerQuery, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kTranslateRankerEnforcement, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kTranslateRankerPreviousLanguageMatchesOverride,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 TranslateRankerFeatures::TranslateRankerFeatures() = default;
 
 TranslateRankerFeatures::TranslateRankerFeatures(int accepted,
@@ -153,10 +151,7 @@ TranslateRankerImpl::TranslateRankerImpl(const base::FilePath& model_path,
       is_uma_logging_enabled_(false),
       is_query_enabled_(base::FeatureList::IsEnabled(kTranslateRankerQuery)),
       is_enforcement_enabled_(
-          base::FeatureList::IsEnabled(kTranslateRankerEnforcement)),
-      is_previous_language_matches_override_enabled_(
-          base::FeatureList::IsEnabled(
-              translate::kTranslateRankerPreviousLanguageMatchesOverride)) {
+          base::FeatureList::IsEnabled(kTranslateRankerEnforcement)) {
   if (is_query_enabled_ || is_enforcement_enabled_) {
     model_loader_ = std::make_unique<assist_ranker::RankerModelLoaderImpl>(
         base::BindRepeating(&ValidateModel),
@@ -367,21 +362,6 @@ void TranslateRankerImpl::RecordTranslateEvent(
   AddTranslateEvent(*translate_event, ukm_source_id);
 }
 
-bool TranslateRankerImpl::ShouldOverrideMatchesPreviousLanguageDecision(
-    ukm::SourceId ukm_source_id,
-    TranslateEventProto* translate_event) {
-  if (is_previous_language_matches_override_enabled_) {
-    translate_event->add_decision_overrides(
-        TranslateEventProto::MATCHES_PREVIOUS_LANGUAGE);
-    DVLOG(3) << "Overriding decision of type: "
-             << TranslateEventProto::MATCHES_PREVIOUS_LANGUAGE;
-    return true;
-  } else {
-    RecordTranslateEvent(TranslateEventProto::MATCHES_PREVIOUS_LANGUAGE,
-                         ukm_source_id, translate_event);
-    return false;
-  }
-}
 
 }  // namespace translate
 

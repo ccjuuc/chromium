@@ -34,9 +34,11 @@
 #include "third_party/blink/renderer/core/editing/inline_box_position.h"
 #include "third_party/blink/renderer/core/editing/local_caret_rect.h"
 #include "third_party/blink/renderer/core/editing/ng_flat_tree_shorthands.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/editing/visual_caret_movement.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_caret_position.h"
@@ -52,7 +54,7 @@ namespace {
 
 // There are some cases where |SelectionModifier::ModifyWithPageGranularity()|
 // enters an infinite loop. Work around it by hard-limiting the iteration.
-const unsigned kMaxIterationForPageGranularityMovement = 1024;
+const wtf_size_t kMaxIterationForPageGranularityMovement = 1024;
 
 VisiblePositionInFlatTree LeftBoundaryOfLine(const VisiblePositionInFlatTree& c,
                                              TextDirection direction) {
@@ -135,7 +137,7 @@ bool SelectionModifier::ShouldAlwaysUseDirectionalSelection(
 
 SelectionModifier::SelectionModifier(
     const LocalFrame& frame,
-    const SelectionInDOMTree& selection,
+    const SelectionInDomTree& selection,
     LayoutUnit x_pos_for_vertical_arrow_navigation)
     : frame_(&frame),
       current_selection_(ConvertToSelectionInFlatTree(selection)),
@@ -143,18 +145,35 @@ SelectionModifier::SelectionModifier(
           x_pos_for_vertical_arrow_navigation) {}
 
 SelectionModifier::SelectionModifier(const LocalFrame& frame,
-                                     const SelectionInDOMTree& selection)
+                                     const SelectionInDomTree& selection)
     : SelectionModifier(frame, selection, NoXPosForVerticalArrowNavigation()) {}
 
 VisibleSelection SelectionModifier::Selection() const {
   return CreateVisibleSelection(
-      ConvertToSelectionInDOMTree(current_selection_));
+      ConvertToSelectionInDomTree(current_selection_));
 }
 
 static VisiblePositionInFlatTree ComputeVisibleFocus(
     const VisibleSelectionInFlatTree& visible_selection) {
-  return CreateVisiblePosition(visible_selection.Focus(),
-                               visible_selection.Affinity());
+  TextAffinity affinity = visible_selection.Affinity();
+
+  // At soft wrap boundaries, adjust focus affinity based on
+  // selection direction so the focus stays on the correct visual line.
+  if (RuntimeEnabledFeatures::SelectionFocusAffinityEnabled() &&
+      visible_selection.IsRange()) {
+    const PositionInFlatTree& focus = visible_selection.Focus();
+    if (focus.IsNotNull() && focus.AnchorNode()->GetLayoutObject()) {
+      PositionInFlatTreeWithAffinity downstream(focus,
+                                                TextAffinity::kDownstream);
+      PositionInFlatTreeWithAffinity upstream(focus, TextAffinity::kUpstream);
+      if (!InSameLine(downstream, upstream)) {
+        affinity = visible_selection.IsAnchorFirst() ? TextAffinity::kDownstream
+                                                     : TextAffinity::kUpstream;
+      }
+    }
+  }
+
+  return CreateVisiblePosition(visible_selection.Focus(), affinity);
 }
 
 TextDirection SelectionModifier::DirectionOfEnclosingBlock() const {
@@ -233,6 +252,11 @@ TextDirection SelectionModifier::DirectionOfSelection() const {
 
 TextDirection SelectionModifier::LineDirectionOfFocus() const {
   return LineDirectionAt(selection_.VisibleFocus().ToPositionWithAffinity())
+      .value_or(DirectionOfEnclosingBlockOf(selection_.Focus()));
+}
+
+TextDirection SelectionModifier::TextDirectionOfFocus() const {
+  return DirectionAt(selection_.VisibleFocus().ToPositionWithAffinity())
       .value_or(DirectionOfEnclosingBlockOf(selection_.Focus()));
 }
 
@@ -355,6 +379,17 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingRightInternal(
   // block is RTL direction.
   switch (granularity) {
     case TextGranularity::kCharacter:
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+        VisualCaretMoveResult result = MoveCaretVisuallyRight(
+            ComputeVisibleFocus(selection_).ToPositionWithAffinity(),
+            caret_bidi_level_, entered_bidi_run_);
+        if (result.position.IsNotNull()) {
+          caret_bidi_level_ = result.bidi_level;
+          entered_bidi_run_ = result.entered_bidi_run;
+          raw_visual_position_ = result.position;
+          return CreateVisiblePosition(result.position);
+        }
+      }
       if (DirectionOfEnclosingBlock() == TextDirection::kLtr) {
         return NextPositionOf(ComputeVisibleFocus(selection_),
                               kCanSkipOverEditingBoundary);
@@ -451,6 +486,25 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingRight(
   switch (granularity) {
     case TextGranularity::kCharacter:
       if (!selection_.IsRange()) {
+        // Visual bidi caret movement: when enabled, arrow keys move the
+        // caret visually (spatially on screen) rather than logically (in
+        // memory order). Falls back to logical if the visual algorithm
+        // returns null (safety net).
+        if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+          VisualCaretMoveResult result = MoveCaretVisuallyRight(
+              ComputeVisibleFocus(selection_).ToPositionWithAffinity(),
+              caret_bidi_level_, entered_bidi_run_);
+          if (result.position.IsNotNull()) {
+            caret_bidi_level_ = result.bidi_level;
+            entered_bidi_run_ = result.entered_bidi_run;
+            // Store the raw position so Modify() can use it directly,
+            // bypassing VisiblePosition canonicalization which destroys
+            // bidi boundary precision.
+            raw_visual_position_ = result.position;
+            return CreateVisiblePosition(result.position);
+          }
+          // Fall through to logical on failure.
+        }
         if (LineDirectionOfFocus() == TextDirection::kLtr) {
           return ModifyMovingForward(granularity);
         }
@@ -460,7 +514,9 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingRight(
         return CreateVisiblePosition(selection_.End(), selection_.Affinity());
       return CreateVisiblePosition(selection_.Start(), selection_.Affinity());
     case TextGranularity::kWord:
-      if (LineDirectionOfFocus() == TextDirection::kLtr) {
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()
+              ? TextDirectionOfFocus() == TextDirection::kLtr
+              : LineDirectionOfFocus() == TextDirection::kLtr) {
         return ModifyMovingForward(granularity);
       }
       return ModifyMovingBackward(granularity);
@@ -470,6 +526,12 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingRight(
     case TextGranularity::kSentenceBoundary:
     case TextGranularity::kParagraphBoundary:
     case TextGranularity::kDocumentBoundary:
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+        if (TextDirectionOfFocus() == TextDirection::kLtr) {
+          return ModifyMovingForward(granularity);
+        }
+        return ModifyMovingBackward(granularity);
+      }
       // TODO(editing-dev): Implement all of the above.
       return ModifyMovingForward(granularity);
     case TextGranularity::kLineBoundary:
@@ -515,9 +577,7 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingForward(
     case TextGranularity::kParagraphBoundary:
       return EndOfParagraph(
           EndForPlatform(),
-          RuntimeEnabledFeatures::
-                      MoveToParagraphStartOrEndSkipsNonEditableEnabled() &&
-                  IsEditablePosition(EndForPlatform().DeepEquivalent())
+          IsEditablePosition(EndForPlatform().DeepEquivalent())
               ? EditingBoundaryCrossingRule::kCanSkipOverEditingBoundary
               : EditingBoundaryCrossingRule::kCannotCrossEditingBoundary);
     case TextGranularity::kDocumentBoundary: {
@@ -543,6 +603,17 @@ VisiblePositionInFlatTree SelectionModifier::ModifyExtendingLeftInternal(
   // block is RTL direction.
   switch (granularity) {
     case TextGranularity::kCharacter:
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+        VisualCaretMoveResult result = MoveCaretVisuallyLeft(
+            ComputeVisibleFocus(selection_).ToPositionWithAffinity(),
+            caret_bidi_level_, entered_bidi_run_);
+        if (result.position.IsNotNull()) {
+          caret_bidi_level_ = result.bidi_level;
+          entered_bidi_run_ = result.entered_bidi_run;
+          raw_visual_position_ = result.position;
+          return CreateVisiblePosition(result.position);
+        }
+      }
       if (DirectionOfEnclosingBlock() == TextDirection::kLtr) {
         return PreviousPositionOf(ComputeVisibleFocus(selection_),
                                   kCanSkipOverEditingBoundary);
@@ -641,6 +712,21 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingLeft(
   switch (granularity) {
     case TextGranularity::kCharacter:
       if (!selection_.IsRange()) {
+        if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+          VisualCaretMoveResult result = MoveCaretVisuallyLeft(
+              ComputeVisibleFocus(selection_).ToPositionWithAffinity(),
+              caret_bidi_level_, entered_bidi_run_);
+          if (result.position.IsNotNull()) {
+            caret_bidi_level_ = result.bidi_level;
+            entered_bidi_run_ = result.entered_bidi_run;
+            // Store the raw position so Modify() can use it directly,
+            // bypassing VisiblePosition canonicalization which destroys
+            // bidi boundary precision.
+            raw_visual_position_ = result.position;
+            return CreateVisiblePosition(result.position);
+          }
+          // Fall through to logical on failure.
+        }
         if (LineDirectionOfFocus() == TextDirection::kLtr) {
           return ModifyMovingBackward(granularity);
         }
@@ -650,7 +736,9 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingLeft(
         return CreateVisiblePosition(selection_.Start(), selection_.Affinity());
       return CreateVisiblePosition(selection_.End(), selection_.Affinity());
     case TextGranularity::kWord:
-      if (LineDirectionOfFocus() == TextDirection::kLtr) {
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()
+              ? TextDirectionOfFocus() == TextDirection::kLtr
+              : LineDirectionOfFocus() == TextDirection::kLtr) {
         return ModifyMovingBackward(granularity);
       }
       return ModifyMovingForward(granularity);
@@ -660,6 +748,12 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingLeft(
     case TextGranularity::kSentenceBoundary:
     case TextGranularity::kParagraphBoundary:
     case TextGranularity::kDocumentBoundary:
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled()) {
+        if (TextDirectionOfFocus() == TextDirection::kLtr) {
+          return ModifyMovingBackward(granularity);
+        }
+        return ModifyMovingForward(granularity);
+      }
       // FIXME: Implement all of the above.
       return ModifyMovingBackward(granularity);
     case TextGranularity::kLineBoundary:
@@ -712,9 +806,7 @@ VisiblePositionInFlatTree SelectionModifier::ModifyMovingBackward(
     case TextGranularity::kParagraphBoundary:
       pos = StartOfParagraph(
           StartForPlatform(),
-          RuntimeEnabledFeatures::
-                      MoveToParagraphStartOrEndSkipsNonEditableEnabled() &&
-                  IsEditablePosition(StartForPlatform().DeepEquivalent())
+          IsEditablePosition(StartForPlatform().DeepEquivalent())
               ? EditingBoundaryCrossingRule::kCanSkipOverEditingBoundary
               : EditingBoundaryCrossingRule::kCannotCrossEditingBoundary);
       break;
@@ -800,11 +892,33 @@ bool SelectionModifier::Modify(SelectionModifyAlteration alter,
 
   switch (alter) {
     case SelectionModifyAlteration::kMove:
-      current_selection_ = SelectionInFlatTree::Builder()
-                               .Collapse(position.ToPositionWithAffinity())
-                               .Build();
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled() &&
+          raw_visual_position_.IsNotNull()) {
+        // Use the raw position from visual caret movement directly,
+        // bypassing VisiblePosition canonicalization which shifts positions
+        // at bidi boundaries to the wrong DOM location.
+        current_selection_ = SelectionInFlatTree::Builder()
+                                 .Collapse(raw_visual_position_)
+                                 .Build();
+        raw_visual_position_ = PositionInFlatTreeWithAffinity();
+      } else {
+        current_selection_ = SelectionInFlatTree::Builder()
+                                 .Collapse(position.ToPositionWithAffinity())
+                                 .Build();
+      }
       break;
     case SelectionModifyAlteration::kExtend:
+      // For visual bidi movement, use the raw position to avoid
+      // VisiblePosition canonicalization that destroys bidi precision.
+      if (RuntimeEnabledFeatures::BidiVisualOrderCaretMovementEnabled() &&
+          raw_visual_position_.IsNotNull()) {
+        current_selection_ = SelectionInFlatTree::Builder()
+                                 .Collapse(selection_.Anchor())
+                                 .Extend(raw_visual_position_.GetPosition())
+                                 .Build();
+        raw_visual_position_ = PositionInFlatTreeWithAffinity();
+        break;
+      }
 
       if (!selection_.IsCaret() &&
           (granularity == TextGranularity::kWord ||
@@ -888,10 +1002,11 @@ static bool AbsoluteCaretY(const PositionInFlatTreeWithAffinity& c, int& y) {
 
 bool SelectionModifier::ModifyWithPageGranularity(
     SelectionModifyAlteration alter,
-    unsigned vertical_distance,
+    int vertical_distance,
     SelectionModifyVerticalDirection direction) {
-  if (!vertical_distance)
+  if (vertical_distance == 0) {
     return false;
+  }
 
   DCHECK(!GetFrame().GetDocument()->NeedsLayoutTreeUpdate());
   UpdateAllLifecyclePhasesExceptPaint();
@@ -933,7 +1048,7 @@ bool SelectionModifier::ModifyWithPageGranularity(
 
   VisiblePositionInFlatTree result;
   VisiblePositionInFlatTree next;
-  unsigned iteration_count = 0;
+  wtf_size_t iteration_count = 0;
   for (VisiblePositionInFlatTree p = pos;
        iteration_count < kMaxIterationForPageGranularityMovement; p = next) {
     ++iteration_count;
@@ -954,8 +1069,9 @@ bool SelectionModifier::ModifyWithPageGranularity(
       break;
     if (direction == SelectionModifyVerticalDirection::kUp)
       next_y = -next_y;
-    if (next_y - start_y > static_cast<int>(vertical_distance))
+    if (next_y - start_y > vertical_distance) {
       break;
+    }
     if (next_y >= last_y) {
       last_y = next_y;
       result = next;
@@ -1009,7 +1125,7 @@ static LayoutUnit LineDirectionPointForBlockDirectionNavigationOf(
     caret_point = caret_rect.rect.MinXMinYCorner();
   }
   caret_point = caret_rect.layout_object->LocalToAbsolutePoint(
-      caret_point, kIgnoreTransforms);
+      caret_point, {MapCoordinatesMode::kIgnoreTransforms});
   return caret_rect.layout_object->IsHorizontalWritingMode() ? caret_point.left
                                                              : caret_point.top;
 }

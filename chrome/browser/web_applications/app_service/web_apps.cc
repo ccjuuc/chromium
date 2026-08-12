@@ -12,7 +12,6 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/web_app.h"
@@ -22,13 +21,14 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_menu_constants.h"
-#include "ash/webui/projector_app/public/cpp/projector_app_constants.h"  // nogncheck
+#include "ash/strings/grit/ash_strings.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
@@ -137,16 +137,10 @@ void WebApps::LaunchAppWithIntent(const std::string& app_id,
 void WebApps::LaunchAppWithParams(apps::AppLaunchParams&& params,
                                   apps::LaunchCallback callback) {
   publisher_helper().LaunchAppWithParams(
-      std::move(params),
-      base::BindOnce(
-          [](apps::LaunchCallback callback,
-             content::WebContents* web_contents) {
-            apps::LaunchResult::State result =
-                web_contents ? apps::LaunchResult::State::kSuccess
-                             : apps::LaunchResult::State::kFailed;
-            std::move(callback).Run(apps::LaunchResult(result));
-          },
-          std::move(callback)));
+      std::move(params), base::BindOnce([](content::WebContents* web_contents) {
+                           return web_contents ? apps::LaunchResult::kSuccess
+                                               : apps::LaunchResult::kFailed;
+                         }).Then(std::move(callback)));
 }
 
 void WebApps::SetPermission(const std::string& app_id,
@@ -201,8 +195,9 @@ void WebApps::GetMenuModel(const std::string& app_id,
     // should not allow open more windows because user won't be able to close
     // them.
   } else if (can_close) {
-    // Isolated web apps can only be launched in new window.
-    if (web_app->isolation_data().has_value()) {
+    // Isolated web apps or sub apps can only be launched in new window.
+    if (web_app->isolation_data().has_value() ||
+        web_app->IsSubAppInstalledApp()) {
       // Isolated Web Apps with focus-existing or navigate-existing do not need
       // a new window button.
       if (!web_app->launch_handler()
@@ -387,7 +382,7 @@ void WebApps::OnShortcutsMenuIconsRead(
 
   for (const WebAppShortcutsMenuItemInfo& menu_item_info :
        web_app->shortcuts_menu_item_infos()) {
-    const std::map<SquareSizePx, SkBitmap>* menu_item_icon_bitmaps = nullptr;
+    const OrderedSizeToBitmap* menu_item_icon_bitmaps = nullptr;
     if (menu_item_index < shortcuts_menu_icon_bitmaps.size()) {
       // We prefer |MASKABLE| icons, but fall back to icons with purpose |ANY|.
       menu_item_icon_bitmaps =

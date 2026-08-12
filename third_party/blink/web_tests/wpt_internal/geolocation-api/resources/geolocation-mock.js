@@ -21,6 +21,7 @@ export class GeolocationMock {
      * call.
     */
     this.result_ = null;
+    this.cachedResult_ = null;
 
     /**
      * While true, position requests will result in a timeout error.
@@ -42,7 +43,10 @@ export class GeolocationMock {
      *
      * @type {!PermissionStatus}
      */
-    this.permissionStatus_ = PermissionStatus.ASK;
+    this.permissionStatus_ = {
+      precise: PermissionStatus.ASK,
+      approximate: PermissionStatus.ASK
+    };
     this.rejectGeolocationServiceConnections_ = false;
 
     this.systemPermissionStatus_ = PermissionStatus.GRANTED;
@@ -125,6 +129,23 @@ export class GeolocationMock {
     return Promise.resolve({result});
   }
 
+  /**
+   * A mock implementation of GeolocationService.queryCachedPosition(). This
+   * returns the current cached location or kPositionUnavailable error.
+   */
+  queryCachedPosition() {
+    if (this.cachedResult_ && this.cachedResult_.position) {
+      return Promise.resolve({result: this.cachedResult_});
+    }
+
+    const error = {
+      errorMessage: "",
+      errorCode: GeopositionErrorCode.kPositionUnavailable,
+      errorTechnical: "",
+    };
+    return Promise.resolve({result: {error}});
+  }
+
   makeGeoposition(latitude, longitude, accuracy, altitude = undefined,
                   altitudeAccuracy = undefined, heading = undefined,
                   speed = undefined) {
@@ -135,12 +156,26 @@ export class GeolocationMock {
     // sets the |internalValue|. See more info in //base/time/time.h.
     const windowsEpoch = Date.UTC(1601,0,1,0,0,0,0);
     const unixEpoch = Date.UTC(1970,0,1,0,0,0,0);
-    // |epochDeltaInMs| equals to base::Time::kTimeTToMicrosecondsOffset.
+    // |epochDeltaInMs| equals to
+    // base::Time::kMicrosecondsFromWindowsToUnixEpoch.
     const epochDeltaInMs = unixEpoch - windowsEpoch;
     const timestamp =
         {internalValue: BigInt((new Date().getTime() + epochDeltaInMs) * 1000)};
-    return {latitude, longitude, accuracy, altitude, altitudeAccuracy, heading,
-            speed, timestamp};
+    const accuracyMode =
+        this.permissionStatus_.precise === PermissionStatus.GRANTED ?
+        'precise' :
+        'approximate';
+    return {
+      latitude,
+      longitude,
+      accuracy,
+      altitude,
+      altitudeAccuracy,
+      heading,
+      speed,
+      timestamp,
+      accuracyMode
+    };
   }
 
   /**
@@ -153,6 +188,7 @@ export class GeolocationMock {
     const position = this.makeGeoposition(latitude, longitude, accuracy,
         altitude, altitudeAccuracy, heading, speed);
     this.result_ = {position};
+    this.cachedResult_ = {position};
   }
 
   /**
@@ -167,6 +203,7 @@ export class GeolocationMock {
       errorTechnical: "",
     };
     this.result_ = {error};
+    this.cachedResult_ = {error};
   }
 
   /**
@@ -189,33 +226,38 @@ export class GeolocationMock {
    * This accepts the request as long as the permission has been set to
    * granted.
    */
-  createGeolocation(receiver, user_gesture) {
-    switch (this.permissionStatus_) {
-     case PermissionStatus.ASK:
+  createGeolocation(receiver, user_gesture, accuracy) {
+    if (this.permissionStatus_.precise === PermissionStatus.ASK &&
+        this.permissionStatus_.approximate === PermissionStatus.ASK) {
       return new Promise((resolve, reject) => {
         setTimeout(() => {
-          resolve(this.createGeolocation(receiver, user_gesture));
+          resolve(this.createGeolocation(receiver, user_gesture, accuracy));
         }, 50);
       });
-      setTimeout(() => { this.createGeolocation(receiver, user_gesture)}, 50);
-      break;
-
-     case PermissionStatus.GRANTED:
+    } else if (
+        this.permissionStatus_.precise === PermissionStatus.GRANTED ||
+        this.permissionStatus_.approximate === PermissionStatus.GRANTED) {
       this.geolocationReceiver_.$.bindHandle(receiver.handle);
-      break;
-
-     default:
+      return Promise.resolve(PermissionStatus.GRANTED);
+    } else {
       receiver.handle.close();
     }
-    return Promise.resolve(this.permissionStatus_);
+    return Promise.resolve(PermissionStatus.DENIED);
   }
 
   /**
    * Sets whether the next geolocation permission request should be allowed.
    */
-  setGeolocationPermission(allowed) {
-    this.permissionStatus_ = allowed ? PermissionStatus.GRANTED
-                                     : PermissionStatus.DENIED;
+  setGeolocationPermission(allowedPrecise, allowedApproximate = undefined) {
+    this.permissionStatus_.precise =
+        allowedPrecise ? PermissionStatus.GRANTED : PermissionStatus.DENIED;
+    if (allowedApproximate === undefined) {
+      this.permissionStatus_.approximate = this.permissionStatus_.precise;
+    } else {
+      this.permissionStatus_.approximate = allowedApproximate ?
+          PermissionStatus.GRANTED :
+          PermissionStatus.DENIED;
+    }
   }
 
   setSystemGeolocationPermission(allowed) {

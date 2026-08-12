@@ -13,13 +13,16 @@
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/browser/ui/test_autofill_external_delegate.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/one_time_tokens/core/browser/gmail_otp_backend.h"
 #include "components/one_time_tokens/core/browser/one_time_token.h"
+#include "components/one_time_tokens/core/browser/one_time_token_backend_notification.h"
 #include "components/one_time_tokens/core/browser/one_time_token_retrieval_error.h"
 #include "components/one_time_tokens/core/browser/one_time_token_service_impl.h"
 #include "components/one_time_tokens/core/browser/sms_otp_backend.h"
@@ -70,6 +73,46 @@ void FakeSmsOtpBackend::NotifyCallbacks(
   callbacks_.clear();
 }
 
+// This implementation is for testing. It lets us manually control and simulate
+// the moment a Gmail OTP is received for one-time passwords (OTP).
+class FakeGmailOtpBackend : public one_time_tokens::GmailOtpBackend {
+ public:
+  using CallbackType = base::RepeatingCallback<void(
+      base::expected<one_time_tokens::OneTimeToken,
+                     one_time_tokens::OneTimeTokenRetrievalError>)>;
+
+  FakeGmailOtpBackend() = default;
+  ~FakeGmailOtpBackend() override = default;
+
+  // one_time_tokens::GmailOtpBackend:
+  one_time_tokens::ExpiringSubscription Subscribe(
+      base::Time expiration,
+      CallbackType callback) override {
+    callbacks_.push_back(callback);
+    return one_time_tokens::ExpiringSubscription();
+  }
+
+  // one_time_tokens::GmailOtpBackend:
+  void OnIncomingOneTimeTokenBackendNotification(
+      const one_time_tokens::OneTimeTokenBackendNotification& notification)
+      override {}
+
+  // Simulates the reception of a Gmail OTP.
+  void ProcessCallbacks(
+      base::expected<one_time_tokens::OneTimeToken,
+                     one_time_tokens::OneTimeTokenRetrievalError> reply) {
+    for (auto& callback : callbacks_) {
+      callback.Run(reply);
+    }
+    callbacks_.clear();
+  }
+
+  size_t num_callbacks() const { return callbacks_.size(); }
+
+ private:
+  std::vector<CallbackType> callbacks_;
+};
+
 // AutofillCrowdsourcingManager that classifies every field as a ONE_TIME_CODE.
 class FakeAutofillCrowdsourcingManager : public AutofillCrowdsourcingManager {
  public:
@@ -78,8 +121,7 @@ class FakeAutofillCrowdsourcingManager : public AutofillCrowdsourcingManager {
   ~FakeAutofillCrowdsourcingManager() override = default;
 
   bool StartQueryRequest(
-      const std::vector<raw_ptr<const FormStructure, VectorExperimental>>&
-          forms,
+      const std::vector<FormData>& forms,
       std::optional<net::IsolationInfo> isolation_info,
       base::OnceCallback<void(std::optional<QueryResponse>)> callback) override;
 
@@ -94,19 +136,19 @@ FakeAutofillCrowdsourcingManager::FakeAutofillCrowdsourcingManager(
     : AutofillCrowdsourcingManager(autofill_client, channel) {}
 
 bool FakeAutofillCrowdsourcingManager::StartQueryRequest(
-    const std::vector<raw_ptr<const FormStructure, VectorExperimental>>& forms,
+    const std::vector<FormData>& forms,
     std::optional<net::IsolationInfo> isolation_info,
     base::OnceCallback<void(std::optional<QueryResponse>)> callback) {
   // Generate a response that classifies each field as a ONE_TIME_CODE field.
   std::vector<FormSignature> queried_form_signatures;
   AutofillQueryResponse response;
-  for (const FormStructure* form : forms) {
-    queried_form_signatures.push_back(form->form_signature());
+  for (const FormData& form : forms) {
+    queried_form_signatures.push_back(CalculateFormSignature(form));
     auto* form_suggestion = response.add_form_suggestions();
-    for (const auto& field : form->fields()) {
+    for (const FormFieldData& field : form.fields()) {
       auto* field_suggestion = form_suggestion->add_field_suggestions();
       field_suggestion->set_field_signature(
-          CalculateFieldSignatureForField(*field).value());
+          CalculateFieldSignatureForField(field).value());
       *field_suggestion->add_predictions() =
           test::CreateFieldPrediction(ONE_TIME_CODE, /*is_override=*/false);
     }
@@ -168,15 +210,30 @@ class OtpTestAutofillClient : public TestContentAutofillClient {
         std::make_unique<FakeAutofillCrowdsourcingManager>(
             this, version_info::Channel::STABLE));
     set_sms_otp_backend(std::make_unique<FakeSmsOtpBackend>());
-    set_one_time_token_service(
+    gmail_otp_backend_ = std::make_unique<FakeGmailOtpBackend>();
+    one_time_token_service_ =
         std::make_unique<one_time_tokens::OneTimeTokenServiceImpl>(
-            GetSmsOtpBackend()));
+            GetSmsOtpBackend(), gmail_otp_backend_.get());
   }
   ~OtpTestAutofillClient() override = default;
+
+  one_time_tokens::OneTimeTokenService* GetOneTimeTokenService()
+      const override {
+    return one_time_token_service_.get();
+  }
 
   FakeSmsOtpBackend& sms_otp_backend() {
     return *static_cast<FakeSmsOtpBackend*>(GetSmsOtpBackend());
   }
+
+  FakeGmailOtpBackend& gmail_otp_backend() {
+    return *static_cast<FakeGmailOtpBackend*>(gmail_otp_backend_.get());
+  }
+
+ private:
+  std::unique_ptr<one_time_tokens::GmailOtpBackend> gmail_otp_backend_;
+  std::unique_ptr<one_time_tokens::OneTimeTokenServiceImpl>
+      one_time_token_service_;
 };
 
 }  // namespace
@@ -261,7 +318,7 @@ IN_PROC_BROWSER_TEST_P(OtpManagerWithWebOtpApiBrowserTest,
   // Simulate an OTP arriving.
   autofill_client().sms_otp_backend().NotifyCallbacks(
       one_time_tokens::OneTimeToken(one_time_tokens::OneTimeTokenType::kSmsOtp,
-                                    "123456", base::Time::Now()));
+                                    "123456", base::TimeTicks::Now()));
 
   // Simulate click on field.
   std::vector<const FormStructure*> forms =
@@ -272,7 +329,8 @@ IN_PROC_BROWSER_TEST_P(OtpManagerWithWebOtpApiBrowserTest,
   autofill_manager().OnAskForValuesToFill(
       form.ToFormData(), first_field.global_id(), gfx::Rect(),
       AutofillSuggestionTriggerSource::kFormControlElementClicked,
-      /*password_request=*/std::nullopt);
+      /*password_request=*/std::nullopt,
+      autofill::AutofillManagerTestApi::pass_key());
   ASSERT_TRUE(autofill_manager().WaitForSuggestionsShown(1));
 
   // Verify expectations: The OTP should be suggested by autofill unless the

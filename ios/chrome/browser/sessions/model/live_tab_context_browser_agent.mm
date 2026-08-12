@@ -12,6 +12,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/uuid.h"
 #import "components/sessions/core/session_types.h"
+#import "components/split_tabs/split_tab_id.h"
 #import "components/tab_groups/tab_group_id.h"
 #import "components/tab_groups/tab_group_visual_data.h"
 #import "ios/chrome/browser/sessions/model/session_util.h"
@@ -84,12 +85,27 @@ LiveTabContextBrowserAgent::GetTabGroupForTab(int index) const {
   return std::nullopt;
 }
 
+std::optional<split_tabs::SplitTabId>
+LiveTabContextBrowserAgent::GetSplitForTab(int index) const {
+  // Split views are not currently supported on the iOS platform. This
+  // function would get the SplitTabId implementation of a given tab.
+  return std::nullopt;
+}
+
 const tab_groups::TabGroupVisualData*
 LiveTabContextBrowserAgent::GetVisualDataForGroup(
     const tab_groups::TabGroupId& group) const {
   // Since we never return a group from GetTabGroupForTab(), this should never
   // be called.
   NOTREACHED();
+}
+
+const split_tabs::SplitTabVisualData*
+LiveTabContextBrowserAgent::GetVisualDataForSplit(
+    const split_tabs::SplitTabId& split_id) const {
+  // Split views are not currently supported on the iOS platform. This function
+  // would return the visual data of the split (orientation and ratio).
+  return nullptr;
 }
 
 bool LiveTabContextBrowserAgent::IsTabPinned(int index) const {
@@ -104,10 +120,35 @@ LiveTabContextBrowserAgent::GetSavedTabGroupIdForGroup(
   NOTREACHED();
 }
 
+const std::optional<tab_groups::TabGroupId>
+LiveTabContextBrowserAgent::GetGroupIdForSavedGroup(
+    const base::Uuid& saved) const {
+  // Not supported by iOS... yet.
+  NOTREACHED();
+}
+
 void LiveTabContextBrowserAgent::SetVisualDataForGroup(
     const tab_groups::TabGroupId& group,
     const tab_groups::TabGroupVisualData& visual_data) {
   // Not supported on iOS.
+}
+
+const std::optional<tab_groups::TabGroupId>
+LiveTabContextBrowserAgent::GetInitialFocusedTabGroup() const {
+  // iOS does not support focused tab groups.
+
+  // This function would return the tab group ID that was focused when the
+  // window was closed, so it can be restored to focus.
+  return std::nullopt;
+}
+
+void LiveTabContextBrowserAgent::SetFocusedTabGroup(
+    const tab_groups::TabGroupId& group) {
+  // iOS does not support focused tab groups.
+
+  // This function would set the focused tab group for the window, removing the
+  // visibility of other tabs to instead show just the given tab group.
+  NOTREACHED();
 }
 
 const gfx::Rect LiveTabContextBrowserAgent::GetRestoredBounds() const {
@@ -148,6 +189,17 @@ sessions::LiveTab* LiveTabContextBrowserAgent::ReplaceRestoredTab(
           profile_, tab.normalized_navigation_index(), tab.navigations));
 
   return nullptr;
+}
+
+void LiveTabContextBrowserAgent::ReconstructSplit(
+    sessions::LiveTab* leading_tab,
+    sessions::LiveTab* trailing_tab,
+    split_tabs::SplitTabId split_id,
+    const split_tabs::SplitTabVisualData& visual_data) {
+  // Split views are currently not supported on the iOS platform.
+  // This function serves as a placeholder to store the logic that would combine
+  // two tabs into a singular SplitView object.
+  NOTREACHED();
 }
 
 void LiveTabContextBrowserAgent::CloseTab() {

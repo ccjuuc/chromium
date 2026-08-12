@@ -15,7 +15,6 @@
 #include "remoting/host/action_executor.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/curtain_mode.h"
-#include "remoting/host/desktop_capturer_proxy.h"
 #include "remoting/host/desktop_display_info_monitor.h"
 #include "remoting/host/desktop_resizer.h"
 #include "remoting/host/desktop_resizer_proxy.h"
@@ -27,9 +26,11 @@
 #include "remoting/host/linux/ei_keyboard_layout_monitor.h"
 #include "remoting/host/linux/gnome_action_executor.h"
 #include "remoting/host/linux/gnome_desktop_display_info_monitor.h"
+#include "remoting/host/linux/gnome_lock_state_tracker.h"
 #include "remoting/host/linux/pipewire_desktop_capturer.h"
 #include "remoting/host/linux/pipewire_local_input_monitor.h"
 #include "remoting/host/linux/pipewire_mouse_cursor_monitor.h"
+#include "remoting/protocol/desktop_capturer_proxy.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_types.h"
 
 namespace remoting {
@@ -85,7 +86,9 @@ std::unique_ptr<InputInjector> GnomeInteractionStrategy::CreateInputInjector() {
   auto result = std::make_unique<EiInputInjector>(
       remote_desktop_session_->ei_session(),
       remote_desktop_session_->capture_stream_manager(),
-      std::make_unique<ClipboardGnome>(
+      std::make_unique<ClipboardGnome>(remote_desktop_session_->connection(),
+                                       remote_desktop_session_->session_path()),
+      std::make_unique<GnomeLockStateTracker>(
           remote_desktop_session_->connection(),
           remote_desktop_session_->session_path()));
   remote_desktop_session_->ei_session()->SetInputInjector(result->GetWeakPtr());
@@ -105,8 +108,6 @@ std::unique_ptr<DesktopCapturer> GnomeInteractionStrategy::CreateVideoCapturer(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto proxy = std::make_unique<DesktopCapturerProxy>(
       base::SequencedTaskRunner::GetCurrentDefault());
-  proxy->set_supports_frame_callbacks(
-      PipewireDesktopCapturer::kSupportsFrameCallbacks);
   base::WeakPtr<CaptureStream> stream =
       remote_desktop_session_->capture_stream_manager()->GetStream(id);
   if (stream) {
@@ -114,7 +115,8 @@ std::unique_ptr<DesktopCapturer> GnomeInteractionStrategy::CreateVideoCapturer(
   } else {
     HOST_LOG << "Video capturer for screen ID " << id
              << " will be initialized after the stream is ready.";
-    pending_desktop_capturer_proxies_[id] = proxy->GetWeakPtr();
+    pending_set_desktop_capturer_callbacks_.emplace(
+        id, proxy->GetSetCapturerCallback());
   }
   return proxy;
 }
@@ -193,14 +195,15 @@ void GnomeInteractionStrategy::OnPipewireCaptureStreamAdded(
   if (!stream) {
     return;
   }
-  auto it = pending_desktop_capturer_proxies_.find(stream->screen_id());
-  if (it == pending_desktop_capturer_proxies_.end()) {
+  auto it = pending_set_desktop_capturer_callbacks_.find(stream->screen_id());
+  if (it == pending_set_desktop_capturer_callbacks_.end()) {
     return;
   }
   if (it->second) {
-    it->second->set_capturer(std::make_unique<PipewireDesktopCapturer>(stream));
+    std::move(it->second)
+        .Run(std::make_unique<PipewireDesktopCapturer>(stream));
   }
-  pending_desktop_capturer_proxies_.erase(it);
+  pending_set_desktop_capturer_callbacks_.erase(it);
 }
 
 GnomeInteractionStrategyFactory::GnomeInteractionStrategyFactory(

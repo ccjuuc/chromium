@@ -6,12 +6,13 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/containers/queue.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -26,7 +27,6 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/platform_keys/extension_key_permissions_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/kcer/key_permissions.pb.h"
 #include "chromeos/ash/components/platform_keys/platform_keys.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -205,7 +205,7 @@ void KeyPermissionsManagerImpl::KeyPermissionsInChapsUpdater::
     // Some public keys are not removed from chaps although their corresponding
     // private keys are removed. We continue the migration process if we
     // received kKeyNotFound as a workaround until the keys-clean-up problem is
-    // solved (crbug.com/1096051).
+    // solved (crbug.com/40700534).
     LOG(WARNING) << "Corresponding private key not found. Continuing the "
                     "migration process...";
   } else if (permissions_update_status != Status::kSuccess) {
@@ -271,7 +271,7 @@ KeyPermissionsManagerImpl::CreateSystemTokenKeyPermissionsManager(
 // static
 void KeyPermissionsManagerImpl::RegisterLocalStatePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kKeyPermissionsOneTimeMigrationDone,
+  registry->RegisterBooleanPref(ash::prefs::kKeyPermissionsOneTimeMigrationDone,
                                 /*default_value=*/false);
 }
 
@@ -313,7 +313,7 @@ void KeyPermissionsManagerImpl::OnGotTokens(
     return;
   }
 
-  if (!base::Contains(token_ids, token_id_)) {
+  if (!std::ranges::contains(token_ids, token_id_)) {
     LOG(ERROR) << "KeyPermissionsManager doesn't have access to token: "
                << static_cast<int>(token_id_);
     return;
@@ -494,7 +494,8 @@ void KeyPermissionsManagerImpl::OnOneTimeMigrationDone(
   base::UmaHistogramEnumeration(kMigrationStatusHistogramName,
                                 MigrationStatus::kSucceeded);
 
-  pref_service_->SetBoolean(prefs::kKeyPermissionsOneTimeMigrationDone, true);
+  pref_service_->SetBoolean(ash::prefs::kKeyPermissionsOneTimeMigrationDone,
+                            true);
 
   OnReadyForQueries();
 
@@ -504,7 +505,8 @@ void KeyPermissionsManagerImpl::OnOneTimeMigrationDone(
 }
 
 bool KeyPermissionsManagerImpl::IsOneTimeMigrationDone() const {
-  return pref_service_->GetBoolean(prefs::kKeyPermissionsOneTimeMigrationDone);
+  return pref_service_->GetBoolean(
+      ash::prefs::kKeyPermissionsOneTimeMigrationDone);
 }
 
 void KeyPermissionsManagerImpl::OnArcUsageAllowanceForCorporateKeysChanged(

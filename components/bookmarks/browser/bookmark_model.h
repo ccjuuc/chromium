@@ -30,6 +30,7 @@
 #include "components/bookmarks/browser/uuid_index.h"
 #include "components/bookmarks/common/bookmark_metrics.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "ui/gfx/image/image.h"
 #include "url/gurl.h"
 
@@ -603,6 +604,16 @@ class BookmarkModel : public BookmarkUndoProvider,
                                     bool new_visibility,
                                     bool notify_observers);
 
+  // Triggers the loading of bookmarks, which is an asynchronous operation with
+  // most heavy-lifting taking place in a background sequence. Upon completion,
+  // loaded() will return true and observers will be notified via
+  // BookmarkModelLoaded(). This is called after we're done loading the
+  // encryptor. Encryptor will be loaded only if encryption is enabled,
+  // otherwise encryptor will be null.
+  void ContinueLoadWithEncryptor(
+      const base::FilePath& profile_path,
+      scoped_refptr<const os_crypt_async::Encryptor> encryptor);
+
   // Whether the initial set of data has been loaded.
   bool loaded_ = false;
 
@@ -632,7 +643,12 @@ class BookmarkModel : public BookmarkUndoProvider,
   int64_t next_node_id_ = 1;
 
   // The observers.
-  base::ObserverList<BookmarkModelObserver, true> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      BookmarkModelObserver,
+      /*check_empty=*/true,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   std::unique_ptr<BookmarkClient> client_;
 

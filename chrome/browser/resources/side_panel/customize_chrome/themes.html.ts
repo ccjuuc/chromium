@@ -9,7 +9,7 @@ import type {ThemesElement} from './themes.js';
 export function getHtml(this: ThemesElement) {
   return html`<!--_html_template_start_-->
 <div class="sp-card">
-  <sp-heading id="heading" @back-button-click="${this.onBackClick_}"
+  <sp-heading id="heading" @back-button-click="${this.onBackButtonClick_}"
       back-button-aria-label="$i18n{backButton}"
       back-button-title="$i18n{backButton}">
     <h2 slot="heading">${this.header_}</h2>
@@ -24,15 +24,15 @@ export function getHtml(this: ThemesElement) {
   <cr-grid columns="3" role="radiogroup">
     ${this.themes_.map((item, index) => html`
       <div class="tile theme" tabindex="0" role="radio"
-          data-index="${index}" @click="${this.onSelectTheme_}"
+          data-index="${index}" @click="${this.onThemeClick_}"
           title="${item.attribution1}"
-          aria-checked="${this.isThemeSelected_(item.imageUrl.url)}"
+          aria-checked="${this.isThemeSelected_(item.imageUrl)}"
           ?hidden="${!this.shouldShowTheme_(item.imageVerified)}">
         <customize-chrome-check-mark-wrapper
-            ?checked="${this.isThemeSelected_(item.imageUrl.url)}">
+            ?checked="${this.isThemeSelected_(item.imageUrl)}">
           <div class="image-container">
             <img is="cr-auto-img" data-index="${index}"
-                .autoSrc="${item.previewImageUrl.url}"
+                .autoSrc="${item.previewImageUrl}"
                 draggable="false"
                 @load="${this.onPreviewImageLoad_}"
                 @error="${this.onPreviewImageError_}">

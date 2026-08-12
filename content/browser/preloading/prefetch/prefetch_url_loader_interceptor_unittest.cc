@@ -16,7 +16,6 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/timer/elapsed_timer.h"
 #include "components/ukm/test_ukm_recorder.h"
-#include "components/variations/scoped_variations_ids_provider.h"
 #include "content/browser/loader/response_head_update_params.h"
 #include "content/browser/preloading/prefetch/prefetch_container.h"
 #include "content/browser/preloading/prefetch/prefetch_origin_prober.h"
@@ -25,6 +24,8 @@
 #include "content/browser/preloading/prefetch/prefetch_request.h"
 #include "content/browser/preloading/prefetch/prefetch_servable_state.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/browser/preloading/prefetch/prefetch_serving_handle.h"
+#include "content/browser/preloading/prefetch/prefetch_single_redirect_hop.h"
 #include "content/browser/preloading/prefetch/prefetch_test_util_internal.h"
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 #include "content/browser/preloading/preloading.h"
@@ -149,16 +150,6 @@ class TestPrefetchServiceForInterceptor final : public PrefetchService {
     test_origin_prober_ = std::move(test_origin_prober);
   }
 
-  void AddOnStartCookieCopyClosure(const GURL& prefetch_url,
-                                   const GURL& redirect_url,
-                                   base::OnceClosure closure) {
-    auto key = std::make_pair(prefetch_url, redirect_url);
-    EXPECT_TRUE(on_start_cookie_copy_closure_.find(key) ==
-                on_start_cookie_copy_closure_.end());
-
-    on_start_cookie_copy_closure_[key] = std::move(closure);
-  }
-
   int num_probes() const { return test_origin_prober_->num_probes(); }
 
   TestPrefetchOriginProber* test_origin_prober() {
@@ -170,35 +161,14 @@ class TestPrefetchServiceForInterceptor final : public PrefetchService {
     return test_origin_prober_.get();
   }
 
-  void CopyIsolatedCookies(
-      const PrefetchServingHandle& serving_handle) override {
-    if (!serving_handle.IsIsolatedNetworkContextRequiredToServe()) {
-      return;
-    }
-
-    serving_handle.OnIsolatedCookieCopyStart();
-
-    auto itr = on_start_cookie_copy_closure_.find(
-        std::make_pair(serving_handle.GetPrefetchContainer()->GetURL(),
-                       serving_handle.GetCurrentURLToServe()));
-    EXPECT_TRUE(itr != on_start_cookie_copy_closure_.end());
-    EXPECT_TRUE(itr->second);
-    std::move(itr->second).Run();
-  }
-
   void OnPrefetchCompletedOrFailed(
-      PrefetchContainer& prefetch_container,
-      const network::URLLoaderCompletionStatus& completion_status,
-      const std::optional<int>& response_code) override {
+      const PrefetchContainer& prefetch_container) override {
     // Skip `active_prefetch_` check and related prefetch queue processing in
     // `PrefetchService`, because it's not set/used in
     // `TestPrefetchServiceForInterceptor`.
   }
 
   std::unique_ptr<TestPrefetchOriginProber> test_origin_prober_;
-
-  std::map<std::pair<GURL, GURL>, base::OnceClosure>
-      on_start_cookie_copy_closure_;
 };
 
 }  //  namespace
@@ -220,21 +190,24 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
         web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId(),
         std::move(prefetch_service));
 
-    browser_context()
-        ->GetDefaultStoragePartition()
-        ->GetNetworkContext()
-        ->GetCookieManager(cookie_manager_.BindNewPipeAndPassReceiver());
-
     NavigationSimulator::NavigateAndCommitFromBrowser(
         web_contents(), GURL("https://example.com/referrer"));
 
     auto navigation_simulator = NavigationSimulator::CreateBrowserInitiated(
         GURL("https://test.com"), web_contents());
     navigation_simulator->Start();
+
+    PrefetchSingleRedirectHop::SetOnIsolatedCookieCopyStartCallbackForTesting(
+        base::BindRepeating(&PrefetchURLLoaderInterceptorTestBase::
+                                OnIsolatedCookieCopyStartForTesting,
+                            base::Unretained(this)));
   }
 
   void TearDown() override {
     interceptor_.release();
+
+    PrefetchSingleRedirectHop::SetOnIsolatedCookieCopyStartCallbackForTesting(
+        {});
 
     PrefetchingMetricsTestBase::TearDown();
   }
@@ -245,18 +218,13 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
             web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId()));
   }
 
-  RenderFrameHostImpl* main_rfhi() {
-    return static_cast<RenderFrameHostImpl*>(main_rfh());
-  }
-
   void CreateInterceptor(
       std::optional<blink::DocumentToken> initiator_document_token) {
     interceptor_ = std::make_unique<PrefetchURLLoaderInterceptor>(
         PrefetchServiceWorkerState::kDisallowed,
         /*service_worker_handle=*/nullptr,
         web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId(),
-        std::move(initiator_document_token),
-        /*serving_page_metrics_container=*/nullptr);
+        std::move(initiator_document_token));
   }
 
   void MaybeCreateLoaderAndWait(const GURL& test_url) {
@@ -318,51 +286,29 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
         ->navigation_request();
   }
 
-  bool SetCookie(const GURL& url, const std::string& value) {
-    bool result = false;
-    base::RunLoop run_loop;
+  void SetOnIsolatedCookieCopyStartForTesting(const GURL& prefetch_url,
+                                              const GURL& redirect_url,
+                                              base::OnceClosure closure) {
+    auto key = std::make_pair(prefetch_url, redirect_url);
+    EXPECT_TRUE(on_isolated_cookie_copy_start_closure_.find(key) ==
+                on_isolated_cookie_copy_start_closure_.end());
 
-    std::unique_ptr<net::CanonicalCookie> cookie(
-        net::CanonicalCookie::CreateForTesting(url, value, base::Time::Now()));
-    EXPECT_TRUE(cookie.get());
-    EXPECT_TRUE(cookie->IsHostCookie());
-
-    net::CookieOptions options;
-    options.set_include_httponly();
-    options.set_same_site_cookie_context(
-        net::CookieOptions::SameSiteCookieContext::MakeInclusive());
-
-    cookie_manager_->SetCanonicalCookie(
-        *cookie.get(), url, options,
-        base::BindOnce(
-            [](bool* result, base::RunLoop* run_loop,
-               net::CookieAccessResult set_cookie_access_result) {
-              *result = set_cookie_access_result.status.IsInclude();
-              run_loop->Quit();
-            },
-            &result, &run_loop));
-
-    // This will run until the cookie is set.
-    run_loop.Run();
-
-    // This will run until the cookie listener gets the cookie change.
-    task_environment()->RunUntilIdle();
-
-    return result;
+    on_isolated_cookie_copy_start_closure_[key] = std::move(closure);
   }
 
-  network::mojom::CookieManager* cookie_manager() {
-    return cookie_manager_.get();
+  void OnIsolatedCookieCopyStartForTesting(const GURL& prefetch_url,
+                                           const GURL& redirect_url) {
+    auto itr = on_isolated_cookie_copy_start_closure_.find(
+        std::make_pair(prefetch_url, redirect_url));
+    if (itr == on_isolated_cookie_copy_start_closure_.end()) {
+      return;
+    }
+    ASSERT_TRUE(itr->second);
+    std::move(itr->second).Run();
   }
-
-  const base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
   ScopedMockContentBrowserClient* test_content_browser_client() {
     return test_content_browser_client_.get();
-  }
-
-  blink::DocumentToken MainDocumentToken() {
-    return static_cast<RenderFrameHostImpl*>(main_rfh())->GetDocumentToken();
   }
 
   base::WeakPtr<PrefetchContainer> CreateSpeculationRulesPrefetchContainer(
@@ -412,7 +358,7 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
       const std::optional<url::Origin> referring_origin = std::nullopt) {
     auto prefetch_request = PrefetchRequest::CreateBrowserInitiated(
         *web_contents(), prefetch_url, std::move(prefetch_type),
-        test::kPreloadingEmbedderHistgramSuffixForTesting,
+        test::kPreloadingEmbedderHistogramSuffixForTesting,
         blink::mojom::Referrer(), std::move(referring_origin),
         /*no_vary_search_hint=*/std::nullopt,
         /*priority=*/std::nullopt,
@@ -428,9 +374,9 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
     PrefetchServingHandle serving_handle =
         prefetch_container.CreateServingHandle();
     ASSERT_TRUE(serving_handle.IsIsolatedNetworkContextRequiredToServe());
-    serving_handle.OnIsolatedCookieCopyStart();
+    serving_handle.OnIsolatedCookieCopyStartForTesting();
     task_environment()->FastForwardBy(base::Milliseconds(10));
-    serving_handle.OnIsolatedCookieCopyComplete();
+    serving_handle.OnIsolatedCookieCopyCompleteForTesting();
   }
 
   // When prefetch is served for navigation (depending on the `GetParam()`
@@ -440,7 +386,7 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
         *test_content_browser_client(),
         WillCreateURLLoaderFactory(
             _, _, _, ContentBrowserClient::URLLoaderFactoryType::kNavigation, _,
-            _, _, _, _, _, _, _, _, _))
+            _, _, _, _, _, _, _, _, _, _))
         .Times(::testing::AtMost(1));
   }
 
@@ -453,19 +399,16 @@ class PrefetchURLLoaderInterceptorTestBase : public PrefetchingMetricsTestBase {
 
   std::unique_ptr<PrefetchURLLoaderInterceptor> interceptor_;
 
-  base::HistogramTester histogram_tester_;
-
   std::map<GURL, bool> was_intercepted_;
   std::map<GURL, base::OnceClosure> on_loader_callback_closure_;
 
-  mojo::Remote<network::mojom::CookieManager> cookie_manager_;
+  std::map<std::pair<GURL, GURL>, base::OnceClosure>
+      on_isolated_cookie_copy_start_closure_;
+
   std::unique_ptr<ScopedMockContentBrowserClient> test_content_browser_client_;
 
   // Disable sampling of UKM preloading logs.
   content::test::PreloadingConfigOverride preloading_config_override_;
-
-  variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
-      variations::VariationsIdsProvider::Mode::kIgnoreSignedInState};
 };
 
 namespace {
@@ -487,18 +430,17 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false));
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   // Simulate the cookie copy process starting and finishing before
   // |MaybeCreateLoader| is called.
@@ -541,23 +483,22 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false));
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   // Simulate the cookie copy process starting, but not finishing until after
   // |MaybeCreateLoader| is called.
   auto serving_handle = prefetch_container->CreateServingHandle();
-  serving_handle.OnIsolatedCookieCopyStart();
+  serving_handle.OnIsolatedCookieCopyStartForTesting();
   task_environment()->FastForwardBy(base::Milliseconds(10));
 
   GetPrefetchService()->TakePrefetchOriginProber(
@@ -574,7 +515,7 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
 
   task_environment()->FastForwardBy(base::Milliseconds(20));
 
-  serving_handle.OnIsolatedCookieCopyComplete();
+  serving_handle.OnIsolatedCookieCopyCompleteForTesting();
   WaitForCallback(kTestUrl);
 
   EXPECT_TRUE(was_intercepted(kTestUrl).has_value());
@@ -604,7 +545,8 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false));
 
   // No cookies are copied for prefetches where |use_isolated_network_context|
   // is false (i.e. same origin prefetches).
@@ -613,11 +555,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                              /*use_prefetch_proxy=*/false,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -654,7 +594,8 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false));
 
   // Creates a same-origin embedder prefetch, which means cookie copy is not
   // needed.
@@ -664,11 +605,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                    /*use_prefetch_proxy=*/false),
       url::Origin::Create(kTestUrl));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -744,13 +683,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                        /*use_prefetch_proxy=*/false,
                        blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container_speculation_rules_diff_url
-      ->SimulatePrefetchEligibleForTest();
   MakeServableStreamingURLLoaderForTest(
       prefetch_container_speculation_rules_diff_url.get(),
-      network::mojom::URLResponseHead::New(), "test body");
-  prefetch_container_speculation_rules_diff_url
-      ->SimulatePrefetchCompletedForTest();
+      SuccessfulPrefetchResponseHeadForTesting(), "test body");
 
   // Creates a speculation rules prefetch that has a different DocumentToken
   // from the current main document's.
@@ -761,13 +696,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                        /*use_prefetch_proxy=*/false,
                        blink::mojom::SpeculationEagerness::kImmediate),
           blink::DocumentToken());
-  prefetch_container_speculation_rules_diff_token
-      ->SimulatePrefetchEligibleForTest();
   MakeServableStreamingURLLoaderForTest(
       prefetch_container_speculation_rules_diff_token.get(),
-      network::mojom::URLResponseHead::New(), "test body");
-  prefetch_container_speculation_rules_diff_token
-      ->SimulatePrefetchCompletedForTest();
+      SuccessfulPrefetchResponseHeadForTesting(), "test body");
 
   // Creates an embedder prefetch, whose DocumentToken will be nullopt.
   auto prefetch_container_embedder = CreateEmbedderPrefetchContainer(
@@ -775,11 +706,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
       PrefetchType(PreloadingTriggerType::kEmbedder,
                    /*use_prefetch_proxy=*/false),
       url::Origin::Create(kTestUrl));
-  prefetch_container_embedder->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container_embedder.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container_embedder->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container_embedder.get(),
+      SuccessfulPrefetchResponseHeadForTesting(), "test body");
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -825,7 +754,8 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
       "PrefetchProxy.AfterClick.Mainframe.CookieWaitTime", 0);
 
   EXPECT_EQ(GetPrefetchService()->num_probes(), 0);
-  ExpectCorrectUkmLogs({.outcome = PreloadingTriggeringOutcome::kUnspecified});
+  ExpectCorrectUkmLogs({.holdback = PreloadingHoldbackStatus::kUnspecified,
+                        .outcome = PreloadingTriggeringOutcome::kUnspecified});
 }
 
 TEST_F(PrefetchURLLoaderInterceptorTest,
@@ -840,11 +770,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   // Advance time enough so that the response is considered stale.
   task_environment()->FastForwardBy(2 * PrefetchCacheableDuration());
@@ -869,7 +797,8 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
 
 TEST_F(PrefetchURLLoaderInterceptorTest,
        DISABLE_ASAN(DoNotInterceptNavigationCookiesChanged)) {
-  const GURL kTestUrl("https://example.com");
+  // The prefetch URL should be cross-site to go through cookie-related checks.
+  const GURL kTestUrl("https://cross-site.example.org");
 
   EXPECT_CALL(*test_content_browser_client(), WillCreateURLLoaderFactory)
       .Times(0);
@@ -878,13 +807,10 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
-  prefetch_container->RegisterCookieListener(cookie_manager());
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   // Since the cookies associated with |kTestUrl| have changed, the prefetch can
   // no longer be served.
@@ -945,18 +871,17 @@ TEST_F(PrefetchURLLoaderInterceptorTest, DISABLE_ASAN(ProbeSuccess)) {
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()));
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false));
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   SimulateCookieCopyProcess(*prefetch_container);
 
@@ -990,11 +915,9 @@ TEST_F(PrefetchURLLoaderInterceptorTest, DISABLE_ASAN(ProbeFailure)) {
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
-  MakeServableStreamingURLLoaderForTest(prefetch_container.get(),
-                                        network::mojom::URLResponseHead::New(),
-                                        "test body");
-  prefetch_container->SimulatePrefetchCompletedForTest();
+  MakeServableStreamingURLLoaderForTest(
+      prefetch_container.get(), SuccessfulPrefetchResponseHeadForTesting(),
+      "test body");
 
   SimulateCookieCopyProcess(*prefetch_container);
 
@@ -1048,10 +971,8 @@ TEST_P(PrefetchURLLoaderInterceptorBecomeNotServableTest, DISABLE_ASAN(Basic)) {
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   auto pending_request =
       MakeManuallyServableStreamingURLLoaderForTest(prefetch_container.get());
-  prefetch_container->SimulatePrefetchCompletedForTest();
 
   mojo::ScopedDataPipeProducerHandle producer_handle;
   {
@@ -1063,14 +984,14 @@ TEST_P(PrefetchURLLoaderInterceptorBecomeNotServableTest, DISABLE_ASAN(Basic)) {
     CHECK_EQ(MOJO_RESULT_OK,
              producer_handle->WriteAllData(base::as_byte_span(content)));
     pending_request.client->OnReceiveResponse(
-        network::mojom::URLResponseHead::New(), std::move(consumer_handle),
+        SuccessfulPrefetchResponseHeadForTesting(), std::move(consumer_handle),
         std::nullopt);
   }
 
   // Simulate the cookie copy process starting, but not finishing until after
   // |MaybeCreateLoader| is called.
   auto serving_handle = prefetch_container->CreateServingHandle();
-  serving_handle.OnIsolatedCookieCopyStart();
+  serving_handle.OnIsolatedCookieCopyStartForTesting();
   task_environment()->FastForwardBy(base::Milliseconds(10));
 
   GetPrefetchService()->TakePrefetchOriginProber(
@@ -1140,7 +1061,7 @@ TEST_P(PrefetchURLLoaderInterceptorBecomeNotServableTest, DISABLE_ASAN(Basic)) {
 
   task_environment()->RunUntilIdle();
 
-  serving_handle.OnIsolatedCookieCopyComplete();
+  serving_handle.OnIsolatedCookieCopyCompleteForTesting();
   WaitForCallback(kTestUrl);
 
   EXPECT_TRUE(was_intercepted(kTestUrl).has_value());
@@ -1148,7 +1069,11 @@ TEST_P(PrefetchURLLoaderInterceptorBecomeNotServableTest, DISABLE_ASAN(Basic)) {
   switch (GetParam()) {
     case NotServableReason::kOnCompleteFailure:
       EXPECT_FALSE(was_intercepted(kTestUrl).value());
-      ExpectCorrectUkmLogs({.is_accurate = true}, kTestUrl);
+      ExpectCorrectUkmLogs({.outcome = PreloadingTriggeringOutcome::kFailure,
+                            .failure = ToPreloadingFailureReason(
+                                PrefetchStatus::kPrefetchFailedNetError),
+                            .is_accurate = true},
+                           kTestUrl);
       break;
 
     case NotServableReason::kAnotherRequest:
@@ -1200,19 +1125,17 @@ TEST_F(PrefetchURLLoaderInterceptorTest, DISABLE_ASAN(HandleRedirects)) {
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()))
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false))
       .Times(2);
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
-  prefetch_container->MakeResourceRequest();
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   MakeServableStreamingURLLoaderWithRedirectForTest(prefetch_container.get(),
                                                     kTestUrl, kRedirectUrl);
-  prefetch_container->SimulatePrefetchCompletedForTest();
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -1227,7 +1150,7 @@ TEST_F(PrefetchURLLoaderInterceptorTest, DISABLE_ASAN(HandleRedirects)) {
   EXPECT_FALSE(was_intercepted(kRedirectUrl).has_value());
 
   base::RunLoop on_start_cookie_copy_run_loop;
-  GetPrefetchService()->AddOnStartCookieCopyClosure(
+  SetOnIsolatedCookieCopyStartForTesting(
       kTestUrl, kRedirectUrl, on_start_cookie_copy_run_loop.QuitClosure());
 
   MaybeCreateLoader(kRedirectUrl);
@@ -1235,7 +1158,7 @@ TEST_F(PrefetchURLLoaderInterceptorTest, DISABLE_ASAN(HandleRedirects)) {
   task_environment()->FastForwardBy(base::Milliseconds(20));
   auto serving_handle = prefetch_container->CreateServingHandle();
   serving_handle.AdvanceCurrentURLToServe();
-  serving_handle.OnIsolatedCookieCopyComplete();
+  serving_handle.OnIsolatedCookieCopyCompleteForTesting();
   WaitForCallback(kRedirectUrl);
 
   EXPECT_TRUE(was_intercepted(kTestUrl).has_value());
@@ -1275,19 +1198,17 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                   ukm::SourceIdObj::FromInt64(
                       navigation_request()->GetNextPageUkmSourceId()),
                   testing::_, testing::IsNull(), testing::NotNull(),
-                  testing::IsNull(), testing::IsNull(), testing::IsNull()))
+                  testing::IsNull(), testing::IsNull(), testing::IsNull(),
+                  /*is_for_network_service=*/false))
       .Times(2);
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
-  prefetch_container->MakeResourceRequest();
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   MakeServableStreamingURLLoadersWithNetworkTransitionRedirectForTest(
       prefetch_container.get(), kTestUrl, kRedirectUrl);
-  prefetch_container->SimulatePrefetchCompletedForTest();
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -1302,7 +1223,7 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
   EXPECT_FALSE(was_intercepted(kRedirectUrl).has_value());
 
   base::RunLoop on_start_cookie_copy_run_loop;
-  GetPrefetchService()->AddOnStartCookieCopyClosure(
+  SetOnIsolatedCookieCopyStartForTesting(
       kTestUrl, kRedirectUrl, on_start_cookie_copy_run_loop.QuitClosure());
 
   MaybeCreateLoader(kRedirectUrl);
@@ -1311,7 +1232,7 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
   on_start_cookie_copy_run_loop.Run();
   task_environment()->FastForwardBy(base::Milliseconds(20));
   serving_handle.AdvanceCurrentURLToServe();
-  serving_handle.OnIsolatedCookieCopyComplete();
+  serving_handle.OnIsolatedCookieCopyCompleteForTesting();
   WaitForCallback(kRedirectUrl);
 
   EXPECT_TRUE(was_intercepted(kTestUrl).has_value());
@@ -1341,18 +1262,16 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
   IgnoreWillCreateURLLoaderFactoryForNavigation();
 
   const GURL kTestUrl("https://example.com");
+  // The redirect URL should be cross-site to go through cookie-related checks.
   const GURL kRedirectUrl("https://redirect.com");
 
   auto prefetch_container = CreateSpeculationRulesPrefetchContainer(
       kTestUrl, PrefetchType(PreloadingTriggerType::kSpeculationRule,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
-  prefetch_container->MakeResourceRequest();
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   MakeServableStreamingURLLoaderWithRedirectForTest(prefetch_container.get(),
                                                     kTestUrl, kRedirectUrl);
-  prefetch_container->SimulatePrefetchCompletedForTest();
 
   GetPrefetchService()->TakePrefetchOriginProber(
       std::make_unique<TestPrefetchOriginProber>(
@@ -1367,7 +1286,6 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
   EXPECT_FALSE(was_intercepted(kRedirectUrl).has_value());
 
   // Update cookies for redirect URL. This should make the prefech unusable.
-  prefetch_container->RegisterCookieListener(cookie_manager());
   ASSERT_TRUE(SetCookie(kRedirectUrl, "test-cookie"));
 
   MaybeCreateLoaderAndWait(kRedirectUrl);
@@ -1399,7 +1317,6 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   auto pending_request =
       MakeManuallyServableStreamingURLLoaderForTest(prefetch_container.get());
 
@@ -1414,13 +1331,13 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
     CHECK_EQ(MOJO_RESULT_OK,
              producer_handle->WriteAllData(base::as_byte_span(content)));
     pending_request.client->OnReceiveResponse(
-        network::mojom::URLResponseHead::New(), std::move(consumer_handle),
+        SuccessfulPrefetchResponseHeadForTesting(), std::move(consumer_handle),
         std::nullopt);
   }
 
   SimulateCookieCopyProcess(*prefetch_container);
 
-  ASSERT_EQ(prefetch_container->GetServableState(base::TimeDelta::Max()),
+  ASSERT_EQ(prefetch_container->GetMatchResolverAction().ToServableState(),
             PrefetchServableState::kServable);
 
   CreateInterceptor(MainDocumentToken());
@@ -1468,7 +1385,6 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
                              /*use_prefetch_proxy=*/true,
                              blink::mojom::SpeculationEagerness::kImmediate));
 
-  prefetch_container->SimulatePrefetchEligibleForTest();
   auto pending_request =
       MakeManuallyServableStreamingURLLoaderForTest(prefetch_container.get());
 
@@ -1483,17 +1399,19 @@ TEST_F(PrefetchURLLoaderInterceptorTest,
     CHECK_EQ(MOJO_RESULT_OK,
              producer_handle->WriteAllData(base::as_byte_span(content)));
     pending_request.client->OnReceiveResponse(
-        network::mojom::URLResponseHead::New(), std::move(consumer_handle),
+        SuccessfulPrefetchResponseHeadForTesting(), std::move(consumer_handle),
         std::nullopt);
   }
 
   SimulateCookieCopyProcess(*prefetch_container);
 
-  ASSERT_EQ(prefetch_container->GetServableState(base::TimeDelta::Max()),
+  ASSERT_EQ(prefetch_container->GetMatchResolverAction().ToServableState(),
             PrefetchServableState::kServable);
 
   CreateInterceptor(MainDocumentToken());
   MaybeCreateLoader(kTestUrl);
+  // Wait asynchronous `PrefetchMatchResolver::UnblockInternal()` call.
+  task_environment()->RunUntilIdle();
 
   // A decision on whether the navigation should be intercepted shouldn't be
   // made until the origin probe is complete.

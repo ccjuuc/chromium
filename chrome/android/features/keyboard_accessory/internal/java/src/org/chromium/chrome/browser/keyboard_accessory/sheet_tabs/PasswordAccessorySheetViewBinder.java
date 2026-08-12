@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.keyboard_accessory.sheet_tabs;
 
-import static org.chromium.components.embedder_support.util.UrlUtilities.stripScheme;
-
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.text.method.PasswordTransformationMethod;
@@ -21,9 +19,9 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.UserInfoField;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabItemsModel.AccessorySheetDataPiece;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AccessorySheetTabViewBinder.ElementViewHolder;
-import org.chromium.chrome.browser.keyboard_accessory.sheet_tabs.AddressAccessorySheetViewBinder.PlusAddressInfoViewHolder;
 import org.chromium.chrome.browser.keyboard_accessory.utils.InsecureFillingDialogUtils;
 import org.chromium.components.browser_ui.widget.chips.ChipView;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.ui.modelutil.ListModel;
 
 /**
@@ -42,8 +40,6 @@ class PasswordAccessorySheetViewBinder {
             @AccessorySheetDataPiece.Type int viewType,
             UiConfiguration uiConfiguration) {
         switch (viewType) {
-            case AccessorySheetDataPiece.Type.PLUS_ADDRESS_SECTION:
-                return new PlusAddressInfoViewHolder(parent, uiConfiguration.faviconHelper);
             case AccessorySheetDataPiece.Type.PASSKEY_SECTION:
                 return new PasskeyChipViewHolder(parent);
             case AccessorySheetDataPiece.Type.PASSWORD_INFO:
@@ -72,7 +68,7 @@ class PasswordAccessorySheetViewBinder {
             chip.getPrimaryTextView().setText(passkeySection.getDisplayName());
             chip.getPrimaryTextView().setContentDescription(passkeySection.getDisplayName());
             chip.getSecondaryTextView().setText(R.string.password_accessory_passkey_label);
-            chip.setOnClickListener((unused) -> passkeySection.triggerSelection());
+            chip.setOnClickListener(_ -> passkeySection.triggerSelection());
         }
     }
 
@@ -105,8 +101,11 @@ class PasswordAccessorySheetViewBinder {
                                         R.string
                                                 .recovery_password_accessory_sheet_content_description));
             } else {
-                // Strip the trailing slash (for aesthetic reasons):
-                view.getTitle().setText(stripScheme(info.getOrigin()).replaceFirst("/$", ""));
+                // Strip the scheme and trailing slash (for aesthetic reasons).
+                view.getTitle()
+                        .setText(
+                                UrlUtilities.stripTrailingSlash(
+                                        UrlUtilities.stripScheme(info.getOrigin())));
                 view.setContentDescription(
                         view.getResources()
                                 .getString(R.string.password_accessory_sheet_content_description));

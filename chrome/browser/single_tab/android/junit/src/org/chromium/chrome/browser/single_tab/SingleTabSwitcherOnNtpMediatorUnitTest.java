@@ -41,7 +41,6 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
@@ -65,8 +64,8 @@ import org.chromium.components.browser_ui.widget.displaystyle.UiConfig;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig.DisplayStyle;
 import org.chromium.components.browser_ui.widget.displaystyle.VerticalDisplayStyle;
 import org.chromium.components.embedder_support.util.UrlUtilities;
-import org.chromium.components.embedder_support.util.UrlUtilitiesJni;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -75,7 +74,6 @@ import org.chromium.url.JUnitTestGURLs;
 @Config(manifest = Config.NONE)
 public class SingleTabSwitcherOnNtpMediatorUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock UrlUtilities.Natives mUrlUtilitiesJniMock;
 
     private final int mTabId = 1;
     private final String mTitle = "test";
@@ -101,8 +99,6 @@ public class SingleTabSwitcherOnNtpMediatorUnitTest {
 
     @Before
     public void setUp() {
-        UrlUtilitiesJni.setInstanceForTesting(mUrlUtilitiesJniMock);
-
         doReturn(true).when(mTabListFaviconProvider).isInitialized();
         doReturn(mNormalTabModel).when(mTabModelSelector).getModel(false);
         doReturn(mTab).when(mNormalTabModel).getTabAt(0);
@@ -171,7 +167,8 @@ public class SingleTabSwitcherOnNtpMediatorUnitTest {
         verify(mTabContentManager)
                 .getTabThumbnailWithCallback(eq(mTabId), eq(thumbnailSize), any());
         assertEquals(mTitle, mPropertyModel.get(TITLE));
-        assertEquals(mUrlHost, mPropertyModel.get(URL));
+        String expectedUrl = UrlUtilities.getDomainAndRegistry(mUrl.getSpec(), false);
+        assertEquals(expectedUrl, mPropertyModel.get(URL));
         assertTrue(mPropertyModel.get(IS_VISIBLE));
         if (moduleDelegate != null) {
             verify(moduleDelegate).onDataReady(eq(ModuleType.SINGLE_TAB), eq(mPropertyModel));
@@ -349,7 +346,7 @@ public class SingleTabSwitcherOnNtpMediatorUnitTest {
 
     @Test
     public void testSingleTabCardClickCallback() {
-        Callback<Integer> callback = Mockito.mock(Callback.class);
+        Callback<Integer> callback = MockitoHelper.mockCallback();
         int tabId = 3;
         when(mTab3.getId()).thenReturn(tabId);
         new SingleTabSwitcherOnNtpMediator(

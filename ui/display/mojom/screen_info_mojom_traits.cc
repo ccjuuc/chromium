@@ -19,6 +19,7 @@ bool StructTraits<display::mojom::ScreenInfoDataView, display::ScreenInfo>::
   }
 
   out->device_scale_factor = data.device_scale_factor();
+  out->text_scale_multiplier = data.text_scale_multiplier();
   out->depth = data.depth();
   out->handwriting_radius = data.handwriting_radius();
   out->depth_per_component = data.depth_per_component();
@@ -28,6 +29,7 @@ bool StructTraits<display::mojom::ScreenInfoDataView, display::ScreenInfo>::
   out->is_extended = data.is_extended();
   out->is_primary = data.is_primary();
   out->is_internal = data.is_internal();
+  out->display_frequency = data.display_frequency();
   out->display_id = data.display_id();
   return true;
 }

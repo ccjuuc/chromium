@@ -27,6 +27,7 @@
 #include "remoting/host/register_support_host_request.h"
 #include "remoting/protocol/errors.h"
 #include "remoting/protocol/validating_authenticator.h"
+#include "remoting/signaling/ftl_signal_strategy.h"
 #include "remoting/signaling/signal_strategy.h"
 
 namespace remoting {
@@ -43,9 +44,6 @@ class OAuthTokenGetter;
 class RegisterSupportHostRequest;
 class RsaKeyPair;
 
-namespace protocol {
-struct IceConfig;
-}  // namespace protocol
 
 // Internal implementation of the plugin's It2Me host function.
 class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
@@ -56,7 +54,7 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
     ~DeferredConnectContext();
 
     std::unique_ptr<RegisterSupportHostRequest> register_request;
-    std::unique_ptr<SignalStrategy> signal_strategy;
+    std::unique_ptr<FtlSignalStrategy> signal_strategy;
 
     // `signaling_token_getter_` is used for signaling, which may require a
     // non-CRD token scope, while `api_token_getter_` is used for all other
@@ -136,12 +134,11 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
   // Creates It2Me host structures and starts the host.
   virtual void Connect(
       std::unique_ptr<ChromotingHostContext> context,
-      base::Value::Dict policies,
+      base::DictValue policies,
       std::unique_ptr<It2MeConfirmationDialogFactory> dialog_factory,
       base::WeakPtr<It2MeHost::Observer> observer,
       CreateDeferredConnectContext create_context,
-      const std::string& username,
-      const protocol::IceConfig& ice_config);
+      const std::string& username);
 
   // Disconnects and shuts down the host.
   virtual void Disconnect();
@@ -166,7 +163,7 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
 #endif
 
   // Called when initial policies are read and when they change.
-  void OnPolicyUpdate(base::Value::Dict policies);
+  void OnPolicyUpdate(base::DictValue policies);
 
  protected:
   friend class base::RefCountedThreadSafe<It2MeHost>;
@@ -194,7 +191,6 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
 
   // Task posted to the network thread from Connect().
   void ConnectOnNetworkThread(const std::string& username,
-                              const protocol::IceConfig& ice_config,
                               CreateDeferredConnectContext create_context);
 
   // Called when the support host registration completes.
@@ -213,7 +209,7 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
   void UpdateHostDomainListPolicy(std::vector<std::string> host_domain_list);
   void UpdateClientDomainListPolicy(
       std::vector<std::string> client_domain_list);
-  void UpdateLocalSessionPolicies(const base::Value::Dict& platform_policies);
+  void UpdateLocalSessionPolicies(const base::DictValue& platform_policies);
 
   void DisconnectOnNetworkThread(
       protocol::ErrorCode error_code = protocol::ErrorCode::OK);
@@ -225,7 +221,7 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
       protocol::ValidatingAuthenticator::ResultCallback result_callback);
 
   // Determines if remote support connections are allowed by policy.
-  bool RemoteSupportConnectionsAllowed(const base::Value::Dict& policies);
+  bool RemoteSupportConnectionsAllowed(const base::DictValue& policies);
 
   // Indicates whether the session allows a ChromeOS admin to reconnect.
   bool SessionSupportsReconnections() const;
@@ -237,7 +233,7 @@ class It2MeHost : public base::RefCountedThreadSafe<It2MeHost>,
   // Caller supplied fields.
   std::unique_ptr<ChromotingHostContext> host_context_;
   base::WeakPtr<It2MeHost::Observer> observer_;
-  std::unique_ptr<SignalStrategy> signal_strategy_;
+  std::unique_ptr<FtlSignalStrategy> signal_strategy_;
   std::unique_ptr<FtlSignalingConnector> ftl_signaling_connector_;
   std::unique_ptr<OAuthTokenGetter> api_token_getter_;
 

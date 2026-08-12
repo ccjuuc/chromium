@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/enterprise/data_controls/model/ios_rules_service_factory.h"
 #import "ios/chrome/browser/enterprise/data_controls/utils/ios_clipboard_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ui/base/clipboard/clipboard_metadata.h"
 #import "url/gurl.h"
 
 namespace data_controls {
@@ -81,6 +82,17 @@ Verdict IsShareAllowedByPolicy(const GURL& source_url,
   // Once the default sharing sheet is presented, the user will be able to copy
   // the selected content to the os clipboard. Treat the share intent as a copy
   // to os clipboard intent.
+  return rules_service->GetCopyToOSClipboardVerdict(source_url);
+}
+
+Verdict IsSearchWithAllowedByPolicy(const GURL& source_url,
+                                    ProfileIOS* source_profile) {
+  CHECK(source_profile);
+
+  IOSRulesService* rules_service =
+      IOSRulesServiceFactory::GetForProfile(source_profile);
+  // Treat the 'Search With [Default Search Engine]' intent as a copy to os
+  // clipboard intent.
   return rules_service->GetCopyToOSClipboardVerdict(source_url);
 }
 

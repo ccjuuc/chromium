@@ -47,6 +47,7 @@
 #include "services/viz/privileged/mojom/compositing/display_private.mojom.h"
 #include "services/viz/privileged/mojom/compositing/external_begin_frame_controller.mojom.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
+#include "ui/base/device_form_factor.h"
 #include "ui/base/ozone_buildflags.h"
 #include "ui/base/ui_base_features.h"
 
@@ -78,8 +79,7 @@ scoped_refptr<viz::ContextProviderCommandBuffer> CreateContextProvider(
   GURL url("chrome://gpu/VizProcessTransportFactory::CreateContextProvider");
   return viz::ContextProviderCommandBuffer::CreateForRaster(
       std::move(gpu_channel_host), kGpuStreamIdDefault, kGpuStreamPriorityUI,
-      std::move(url), kAutomaticFlushes, supports_locking, memory_limits, type,
-      /*lose_context_when_out_of_memory=*/true);
+      std::move(url), kAutomaticFlushes, supports_locking, memory_limits, type);
 }
 
 bool IsContextLost(viz::RasterContextProvider* context_provider) {
@@ -101,11 +101,11 @@ class HostDisplayClient : public viz::HostDisplayClient {
   HostDisplayClient& operator=(const HostDisplayClient&) = delete;
 
   // viz::HostDisplayClient:
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
   void DidCompleteSwapWithNewSize(const gfx::Size& size) override {
     compositor_->OnCompleteSwapWithNewSize(size);
   }
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
 
 #if BUILDFLAG(IS_WIN)
   void AddChildWindowToBrowser(gpu::SurfaceHandle child_window) override {
@@ -194,19 +194,7 @@ void VizProcessTransportFactory::CreateLayerTreeFrameSink(
 #endif
 
 #if BUILDFLAG(IS_MAC)
-  // Create DisplayLinkMacMojo only after FrameSinkManager and display::Screen
-  // are available. FrameSinkManager is established in
-  // ConnectHostFrameSinkManager(), but display::Screen is not available in that
-  // function in Content Shell. (Note: display::Screen is available and not an
-  // issue there when running on Chrome.)
-  // CADisplayLink is not used in headless mode
-  // (use_external_begin_frame_control()).
-  if (!compositor->use_external_begin_frame_control() &&
-      !display_link_mac_mojo_ &&
-      ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
-    display_link_mac_mojo_ =
-        std::make_unique<ui::DisplayLinkMacMojo>(GetHostFrameSinkManager());
-  }
+  CreateDisplayLinkMacMojoIfNeeded(compositor);
 #endif
 
   gpu_channel_establish_factory_->EstablishGpuChannel(
@@ -420,6 +408,8 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
       root_params->external_begin_frame_controller_client =
           factory->CreateExternalBeginFrameControllerClient();
     }
+    root_params->wait_for_all_frame_sinks =
+        compositor->wait_for_all_frame_sinks();
   }
 
   root_params->frame_sink_id = compositor->frame_sink_id();
@@ -430,10 +420,14 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
   root_params->renderer_settings = viz::CreateRendererSettings();
 #if BUILDFLAG(IS_MAC)
   root_params->renderer_settings.display_id = compositor->display_id();
+  root_params->refresh_rate = compositor->refresh_rate();
 #endif
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kDisableFrameRateLimit))
     root_params->disable_frame_rate_limit = true;
+
+  // Enable VideoConferenceMatcher on desktop platforms.
+  root_params->enable_video_conference_matcher = true;
 
 #if BUILDFLAG(IS_WIN)
   const bool using_direct_composition = GpuDataManagerImpl::GetInstance()
@@ -484,15 +478,6 @@ void VizProcessTransportFactory::OnEstablishedGpuChannel(
     compositor->SetExternalBeginFrameController(
         std::move(external_begin_frame_controller));
   }
-
-#if BUILDFLAG(IS_WIN)
-  // Windows using the ANGLE D3D backend for compositing needs to disable swap
-  // on resize to avoid D3D scaling the framebuffer texture. This isn't a
-  // problem with software compositing or ANGLE D3D with direct composition.
-  const bool using_angle_d3d_compositing =
-      gpu_compositing && !using_direct_composition;
-  compositor->SetShouldDisableSwapUntilResize(using_angle_d3d_compositing);
-#endif
 }
 
 gpu::ContextResult
@@ -575,6 +560,31 @@ VizProcessTransportFactory::TryCreateContextsForGpuCompositing(
 
   return gpu::ContextResult::kSuccess;
 }
+
+#if BUILDFLAG(IS_MAC)
+void VizProcessTransportFactory::CreateDisplayLinkMacMojoIfNeeded(
+    base::WeakPtr<ui::Compositor> compositor) {
+  // Headless mode (use_external_begin_frame_control()) does not use
+  // CADisplayLink.
+  if (compositor->use_external_begin_frame_control() ||
+      !ui::DisplayLinkMac::SupportsDisplayLinkMacInBrowser()) {
+    return;
+  }
+
+  // Create only one CADisplayLinkMojo/VSyncThread.
+  if (display_link_mac_mojo_) {
+    return;
+  }
+
+  // Create DisplayLinkMacMojo only after FrameSinkManager and display::Screen
+  // are available. FrameSinkManager is established in
+  // ConnectHostFrameSinkManager(), but display::Screen is not available in that
+  // function in Content Shell. (Note: display::Screen is available and not an
+  // issue there when running on Chrome.)
+  display_link_mac_mojo_ =
+      std::make_unique<ui::DisplayLinkMacMojo>(GetHostFrameSinkManager());
+}
+#endif
 
 VizProcessTransportFactory::CompositorData::CompositorData() = default;
 VizProcessTransportFactory::CompositorData::CompositorData(

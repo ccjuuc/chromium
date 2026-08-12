@@ -6,10 +6,9 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "components/services/storage/public/cpp/buckets/bucket_info.h"
 #include "content/browser/buckets/bucket_host.h"
@@ -89,7 +88,7 @@ void BucketManagerHost::OpenBucket(const std::string& name,
       // Only grant persistence if permitted.
       if (receivers_.current_context() &&
           receivers_.current_context()->GetPermissionStatus(
-              blink::PermissionType::DURABLE_STORAGE) ==
+              blink::PermissionType::PERSISTENT_STORAGE) ==
               blink::mojom::PermissionStatus::GRANTED) {
         params.persistent = policies->persisted;
       }
@@ -163,7 +162,7 @@ void BucketManagerHost::DeleteBucket(const std::string& name,
 }
 
 void BucketManagerHost::RemoveBucketHost(storage::BucketId id) {
-  DCHECK(base::Contains(bucket_map_, id));
+  DCHECK(bucket_map_.contains(id));
   bucket_map_.erase(id);
 }
 

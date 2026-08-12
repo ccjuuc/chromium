@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/no_destructor.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/new_tab_page/modules/modules_constants.h"
@@ -61,8 +62,12 @@ std::unique_ptr<TestingProfile> MakeTestingProfile(
 }
 
 const char kSampleUserEmail[] = "user@gmail.com";
-const std::vector<ntp::ModuleIdDetail> kSampleModules = {
-    {ntp_modules::kDriveModuleId, IDS_NTP_MODULES_DRIVE_NAME}};
+const std::vector<ntp::ModuleIdDetail>& GetSampleModules() {
+  static const base::NoDestructor<std::vector<ntp::ModuleIdDetail>> modules(
+      std::vector<ntp::ModuleIdDetail>{
+          {ntp_modules::kDriveModuleId, IDS_NTP_MODULES_DRIVE_NAME}});
+  return *modules;
+}
 
 }  // namespace
 
@@ -129,7 +134,7 @@ TEST_F(NewTabPageModulesTest, MakeModuleIdDetails_OnlyPopulatesEnabledModules) {
   identity_test_env().SetCookieAccounts(
       {{kSampleUserEmail, signin::GetTestGaiaIdForEmail(kSampleUserEmail)}});
   const std::vector<base::test::FeatureRef>& some_module_features = {
-      ntp_features::kNtpFeedModule,
+      ntp_features::kNtpTabGroupsModule,
       ntp_features::kNtpMostRelevantTabResumptionModule};
   for (auto& feature : some_module_features) {
     base::test::ScopedFeatureList features;
@@ -211,7 +216,7 @@ TEST_F(NewTabPageModulesTest, MakeModuleIdDetails_DummyModules) {
 TEST_F(NewTabPageModulesTest, HasModulesEnabled) {
   identity_test_env().SetCookieAccounts(
       {{kSampleUserEmail, signin::GetTestGaiaIdForEmail(kSampleUserEmail)}});
-  ASSERT_TRUE(ntp::HasModulesEnabled(kSampleModules,
+  ASSERT_TRUE(ntp::HasModulesEnabled(GetSampleModules(),
                                      identity_test_env().identity_manager()));
 }
 
@@ -223,7 +228,7 @@ TEST_F(NewTabPageModulesTest, HasModulesEnabled_NtpModulesLoadFlag) {
 
   identity_test_env().SetCookieAccounts(
       {{kSampleUserEmail, signin::GetTestGaiaIdForEmail(kSampleUserEmail)}});
-  ASSERT_FALSE(ntp::HasModulesEnabled(kSampleModules,
+  ASSERT_FALSE(ntp::HasModulesEnabled(GetSampleModules(),
                                       identity_test_env().identity_manager()));
 }
 

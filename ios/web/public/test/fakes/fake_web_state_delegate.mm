@@ -4,7 +4,6 @@
 
 #import "ios/web/public/test/fakes/fake_web_state_delegate.h"
 
-#import "base/containers/contains.h"
 
 namespace web {
 
@@ -45,7 +44,7 @@ WebState* FakeWebStateDelegate::CreateNewWebState(WebState* source,
   last_create_new_web_state_request_->opener_url = opener_url;
   last_create_new_web_state_request_->initiated_by_user = initiated_by_user;
 
-  if (!initiated_by_user && !base::Contains(allowed_popups_, opener_url)) {
+  if (!initiated_by_user && !allowed_popups_.contains(opener_url)) {
     popups_.push_back(FakePopup(url, opener_url));
     return nullptr;
   }
@@ -106,12 +105,22 @@ void FakeWebStateDelegate::OnAuthRequired(
     WebState* source,
     NSURLProtectionSpace* protection_space,
     NSURLCredential* credential,
-    AuthCallback callback) {
+    HTTPAuthCallback callback) {
   last_authentication_request_ = std::make_unique<FakeAuthenticationRequest>();
   last_authentication_request_->web_state = source;
   last_authentication_request_->protection_space = protection_space;
   last_authentication_request_->credential = credential;
-  last_authentication_request_->auth_callback = std::move(callback);
+  last_authentication_request_->http_auth_callback = std::move(callback);
+}
+
+void FakeWebStateDelegate::OnAuthRequired(
+    WebState* source,
+    NSURLProtectionSpace* protection_space,
+    ClientCertAuthCallback callback) {
+  last_authentication_request_ = std::make_unique<FakeAuthenticationRequest>();
+  last_authentication_request_->web_state = source;
+  last_authentication_request_->protection_space = protection_space;
+  last_authentication_request_->client_cert_auth_callback = std::move(callback);
 }
 
 void FakeWebStateDelegate::HandlePermissionsDecisionRequest(

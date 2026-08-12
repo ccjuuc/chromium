@@ -24,20 +24,20 @@
 #include "ash/wm/window_state.h"
 #include "ash/wm/wm_event.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/new_window/chrome_new_window_client.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_observer.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_observer.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ash/util/ash_test_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -63,12 +63,6 @@ void ClickButton(const views::Button* button) {
   ui::test::EventGenerator event_generator(root_window);
   event_generator.MoveMouseToInHost(button->GetBoundsInScreen().CenterPoint());
   event_generator.ClickLeftButton();
-}
-
-const GURL& GetActiveUrl(Browser* browser) {
-  return browser->tab_strip_model()
-      ->GetActiveWebContents()
-      ->GetLastCommittedURL();
 }
 
 // This class observes the `TabStripModelObserver` and reacts with predetermined
@@ -110,9 +104,9 @@ using FasterSplitScreenBrowserTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
                        AutoSnapWhileInSessionRestore) {
   // Create two browser windows and snap `window1` to start partial overview.
-  aura::Window* window1 = browser()->window()->GetNativeWindow();
+  aura::Window* window1 = browser()->GetWindow()->GetNativeWindow();
   ash::WindowState* window_state = ash::WindowState::Get(window1);
-  CreateBrowser(browser()->profile());
+  CreateBrowser(browser()->GetProfile());
 
   const ash::WindowSnapWMEvent primary_snap_event(
       ash::WM_EVENT_SNAP_PRIMARY,
@@ -122,8 +116,8 @@ IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
   ASSERT_TRUE(ash::OverviewController::Get()->InOverviewSession());
 
   // Open a new browser window. Test it gets auto-snapped.
-  Browser* browser3 = CreateBrowser(browser()->profile());
-  aura::Window* window3 = browser3->window()->GetNativeWindow();
+  Browser* browser3 = CreateBrowser(browser()->GetProfile());
+  aura::Window* window3 = browser3->GetWindow()->GetNativeWindow();
   EXPECT_TRUE(ash::WindowState::Get(window3)->IsSnapped());
   EXPECT_FALSE(ash::OverviewController::Get()->InOverviewSession());
 }
@@ -131,12 +125,12 @@ IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
 IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
                        SnapWindowWithNewSettings) {
   // Install the Settings App.
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
 
   // Create two browser windows and snap `window` to start partial overview.
-  aura::Window* window = browser()->window()->GetNativeWindow();
-  CreateBrowser(browser()->profile());
+  aura::Window* window = browser()->GetWindow()->GetNativeWindow();
+  CreateBrowser(browser()->GetProfile());
   ash::WindowState* window_state = ash::WindowState::Get(window);
   const ash::WindowSnapWMEvent primary_snap_event(
       ash::WM_EVENT_SNAP_PRIMARY,
@@ -172,10 +166,12 @@ IN_PROC_BROWSER_TEST_F(FasterSplitScreenBrowserTest,
   navigation_observer.Wait();
 
   // Verify correct OS Settings page is opened.
-  Browser* settings_browser = ash::FindSystemWebAppBrowser(
-      browser()->profile(), ash::SystemWebAppType::SETTINGS);
+  ash::BrowserDelegate* settings_browser = ash::FindSystemWebAppBrowser(
+      browser()->GetProfile(), ash::SystemWebAppType::SETTINGS,
+      ash::BrowserType::kApp);
   ASSERT_TRUE(settings_browser);
-  ASSERT_EQ(os_settings, GetActiveUrl(settings_browser));
+  ASSERT_EQ(os_settings,
+            settings_browser->GetActiveWebContents()->GetLastCommittedURL());
 }
 
 // -----------------------------------------------------------------------------
@@ -278,12 +274,12 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, RotatedSnapGroup) {
 // Verify that dragging a tab within a Snap Group window does not break the
 // group.
 IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDragging) {
-  aura::Window* window1 = browser()->window()->GetNativeWindow();
+  aura::Window* window1 = browser()->GetWindow()->GetNativeWindow();
   chrome::AddTabAt(browser(), GURL(chrome::kChromeUITabSearchURL), -1, true);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
   aura::Window* window2 =
-      CreateBrowser(browser()->profile())->window()->GetNativeWindow();
+      CreateBrowser(browser()->GetProfile())->GetWindow()->GetNativeWindow();
 
   aura::Window* root_window = ash::Shell::GetPrimaryRootWindow();
   ui::test::EventGenerator event_generator(root_window);
@@ -303,7 +299,7 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDragging) {
   event_generator.MoveMouseTo(end_point);
   event_generator.ReleaseLeftButton();
 
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_TRUE(
       ash::SnapGroupController::Get()->AreWindowsInSnapGroup(window1, window2));
 }
@@ -311,12 +307,12 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDragging) {
 // Verify that detaching a tab from a window within a Snap Group doesn't break
 // the group.
 IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDetaching) {
-  aura::Window* window1 = browser()->window()->GetNativeWindow();
+  aura::Window* window1 = browser()->GetWindow()->GetNativeWindow();
   chrome::AddTabAt(browser(), GURL(chrome::kChromeUITabSearchURL), -1, true);
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
 
   aura::Window* window2 =
-      CreateBrowser(browser()->profile())->window()->GetNativeWindow();
+      CreateBrowser(browser()->GetProfile())->GetWindow()->GetNativeWindow();
 
   ui::test::EventGenerator event_generator(ash::Shell::GetPrimaryRootWindow());
   ash::SnapTwoTestWindows(window1, window2, /*horizontal=*/true,
@@ -324,7 +320,7 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDetaching) {
   ASSERT_TRUE(
       ash::SnapGroupController::Get()->AreWindowsInSnapGroup(window1, window2));
 
-  ASSERT_EQ(2u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   TabStripRegionView* tab_strip_view =
       BrowserView::GetBrowserViewForBrowser(browser())->tab_strip_view();
@@ -335,17 +331,15 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest, DoNotBreakGroupOnTabDetaching) {
 
   // The tab drag and drop operation will result in creation and destruction of
   // a new browser as the tab is dragged between existing browser windows.
-  ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ui_test_utils::BrowserDestroyedObserver browser_destroyed_observer;
   event_generator.PressLeftButton();
   TabRemoveObserver observer(browser(), &event_generator);
   event_generator.MoveMouseTo(end_point);
-  browser_created_observer.Wait();
   browser_destroyed_observer.Wait();
 
   // Verify that dragging a tab between `window1` and `window2` results in
   // `window1` and `window2` still belonging to the Snap Group.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_TRUE(
       ash::SnapGroupController::Get()->AreWindowsInSnapGroup(window1, window2));
 }
@@ -361,16 +355,16 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest,
   aura::Window* root_window = ash::Shell::GetPrimaryRootWindow();
 
   // Explicitly move the default non-incognito browser window to another desk.
-  aura::Window* window = browser()->window()->GetNativeWindow();
+  aura::Window* window = browser()->GetWindow()->GetNativeWindow();
   desks_controller->MoveWindowFromActiveDeskTo(
       window, desks[1].get(), root_window,
       ash::DesksMoveWindowFromActiveDeskSource::kShortcut);
 
   // Create a Snap Group with two incognito browser windows.
   Browser* incognito_browser1 = CreateIncognitoBrowser();
-  aura::Window* window1 = incognito_browser1->window()->GetNativeWindow();
+  aura::Window* window1 = incognito_browser1->GetWindow()->GetNativeWindow();
   Browser* incognito_browser2 = CreateIncognitoBrowser();
-  aura::Window* window2 = incognito_browser2->window()->GetNativeWindow();
+  aura::Window* window2 = incognito_browser2->GetWindow()->GetNativeWindow();
 
   ui::test::EventGenerator event_generator(root_window);
   ash::SnapTwoTestWindows(window1, window2, /*horizontal=*/true,
@@ -411,5 +405,5 @@ IN_PROC_BROWSER_TEST_F(SnapGroupBrowserTest,
   // within a Snap Group are in incognito mode.
   EXPECT_TRUE(ash::IsInOverviewSession());
   EXPECT_EQ(1u, overview_grid->item_list().size());
-  EXPECT_EQ(3u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
 }

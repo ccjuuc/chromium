@@ -2,7 +2,6 @@ include_rules = [
   # Existing dependencies within //chrome. There is an active effort to
   # refactor ash codes in //chrome to break these dependencies; see b/332804822.
   # Whenever possible, avoid adding new //chrome dependencies to this list.
-  "+chrome/app",
   "+chrome/browser/ash/accessibility",
   "+chrome/browser/ash/app_mode",
   "+chrome/browser/ash/attestation",
@@ -26,9 +25,6 @@ include_rules = [
   "+chrome/browser/ash/tpm",
   "+chrome/browser/browser_process.h",
   "+chrome/browser/browser_process_platform_part.h",
-  "+chrome/browser/command_updater_delegate.h",
-  "+chrome/browser/command_updater_impl.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/media/webrtc",
   "+chrome/browser/password_manager",
   "+chrome/browser/profiles",
@@ -36,22 +32,14 @@ include_rules = [
   "+chrome/browser/safe_browsing",
   "+chrome/browser/sessions",
   "+chrome/browser/signin",
-  "+chrome/browser/ssl",
   "+chrome/browser/themes",
   "+chrome/browser/ui/ash/keyboard",
   "+chrome/browser/ui/ash/system",
   "+chrome/browser/ui/ash/wallpaper",
   "+chrome/browser/ui/browser.h",
-  "+chrome/browser/ui/browser_dialogs.h",
   "+chrome/browser/ui/chrome_pages.h",
   "+chrome/browser/ui/chrome_web_modal_dialog_manager_delegate.h",
-  "+chrome/browser/ui/content_settings",
-  "+chrome/browser/ui/login",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
-  "+chrome/browser/ui/toolbar",
-  "+chrome/browser/ui/view_ids.h",
-  "+chrome/browser/ui/views/location_bar/location_bar_view.h",
-  "+chrome/browser/ui/views/toolbar/reload_button.h",
+  "+chrome/browser/ui/dialogs/browser_dialogs.h",
   "+chrome/browser/ui/webui/ash/diagnostics_dialog",
   "+chrome/browser/ui/webui/ash/internet",
   "+chrome/browser/ui/webui/ash/lock_screen_reauth",
@@ -64,16 +52,27 @@ include_rules = [
   "+chrome/common",
   "+chrome/common/chrome_constants.h",
   "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
 ]
 
 specific_include_rules = {
+  # TODO(crbug.com/403154552): Avoid g_browser_process->GetFeatures().
+  "user_adding_screen\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+  "login_display_host_mojo\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+  "login_display_host_webui\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+  "fake_login_display_host\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+
   ".*_(browser|unit)test\\.cc": [
-    "+chrome/browser/ui/browser_finder.h",
     "+chrome/browser/ui/browser_window.h",
     "+chrome/test/base",
-    "+chrome/test/views",
   ],
   "fake_.*\\.cc": [
     "+chrome/test/base",

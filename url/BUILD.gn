@@ -41,7 +41,6 @@ component("url") {
     "url_canon_host.cc",
     "url_canon_internal.cc",
     "url_canon_internal.h",
-    "url_canon_internal_file.h",
     "url_canon_ip.cc",
     "url_canon_ip.h",
     "url_canon_mailtourl.cc",
@@ -71,12 +70,13 @@ component("url") {
   public_deps = [
     "//base",
     "//build:robolectric_buildflags",
+    "//net:cronet_buildflags",
   ]
 
   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 
   if (is_android || is_robolectric) {
-    deps += [ ":url_jni_headers" ]
+    public_deps += [ ":url_jni_headers" ]
     if (!is_cronet_build) {
       sources += [
         "android/gurl_android.cc",
@@ -96,6 +96,10 @@ component("url") {
   if (is_win) {
     # Don't conflict with Windows' "url.dll".
     output_name = "url_lib"
+  }
+
+  if (is_ios) {
+    sources += [ "url_constants_ios.h" ]
   }
 
   # ICU support.
@@ -212,7 +216,11 @@ test("url_unittests") {
   ]
 
   if (use_platform_icu_alternatives) {
-    # Unit tests that are not supported by the current ICU alternatives on Android.
+    # Unit tests that are not supported by the current ICU alternatives on
+    # Android.
+    # TODO(https://crbug.com/513446116): revisit this - in Android >=24 we now
+    # use android.icu.text.IDNA which implements IDNA2008 and should therefore
+    # be consistent with ICU.
     if (is_android) {
       sources -= [
         "url_canon_icu_unittest.cc",
@@ -255,7 +263,7 @@ test("url_unittests") {
 
 test("url_perftests") {
   sources = [
-    "run_all_perftests.cc",
+    "scheme_host_port_perftest.cc",
     "url_parse_perftest.cc",
   ]
 
@@ -263,7 +271,9 @@ test("url_perftests") {
     ":url",
     "//base",
     "//base/test:test_support",
+    "//base/test:test_support_perf",
     "//testing/gtest",
+    "//third_party/google_benchmark",
   ]
 }
 
@@ -273,6 +283,7 @@ fuzzer_test("gurl_fuzzer") {
     ":url",
     "//base",
     "//base:i18n",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
   dict = "gurl_fuzzer.dict"
 }
@@ -316,8 +327,8 @@ if (is_android && !is_cronet_build) {
       ]
     }
 
-    # Targets depending on gurl_junit_test_support do not need to bypass platform
-    # checks.
+    # Targets depending on gurl_junit_test_support do not need to bypass
+    # platform checks.
     android_library("gurl_junit_test_support") {
       testonly = true
       sources = [ "android/test/java/src/org/chromium/url/JUnitTestGURLs.java" ]
@@ -397,4 +408,44 @@ if (!is_cronet_build && target_os == "android") {
       configs += [ "//third_party/jdk" ]
     }
   }
+}
+
+# Provides FFI bindings for Chromium's C++ URL types (specifically GURL and
+# url::Origin) using the cxx crate, enabling Rust code to interact with and use
+# these types.
+rust_static_library("url_rust") {
+  crate_name = "url"
+  crate_root = "url.rs"
+  sources = [
+    "gurl.rs",
+    "origin.rs",
+    "url.rs",
+  ]
+  allow_unsafe = true
+  public_deps = [
+    ":url",
+    ":url_shim",
+  ]
+  deps = [ "//third_party/rust/cxx/v1:lib" ]
+  cxx_bindings = [
+    "gurl.rs",
+    "origin.rs",
+  ]
+}
+
+# Contains C++ shim code that supports the Rust FFI bindings for GURL and
+# url::Origin. This is compiled as a separate C++ target to prevent exposing
+# Rust-specific FFI shim functionality (such as shims returning rust::Str
+# or FFI ordering functions) directly to general C++ users of the url library.
+source_set("url_shim") {
+  sources = [
+    "gurl_shim.cc",
+    "gurl_shim.h",
+    "origin_shim.cc",
+    "origin_shim.h",
+  ]
+  deps = [
+    ":url",
+    "//third_party/rust/cxx/v1:lib",
+  ]
 }

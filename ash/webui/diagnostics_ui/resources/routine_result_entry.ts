@@ -67,6 +67,8 @@ export function getRoutineType(routineType: RoutineType): string {
       return loadTimeData.getString('arcPingRoutineText');
     case RoutineType.kArcDnsResolution:
       return loadTimeData.getString('arcDnsResolutionRoutineText');
+    case RoutineType.kGoogleServicesConnectivity:
+      return loadTimeData.getString('googleServicesGroupLabel');
     default:
       return '';
   }
@@ -86,6 +88,7 @@ export function getSimpleResult(result: RoutineResult): StandardRoutineResult {
     assert(result.powerResult);
     return result.powerResult.simpleResult as number;
   }
+
   assertNotReached();
 }
 
@@ -150,14 +153,14 @@ export class RoutineResultEntryElement extends PolymerElement {
     };
   }
 
-  item: RoutineGroup|ResultStatusItem;
-  hideVerticalLines: boolean;
-  usingRoutineGroups: boolean;
-  protected badgeType: BadgeType;
-  protected badgeText: string;
-  protected testCompleted: boolean;
-  private announcedText: string;
-  private routineType: string;
+  declare item: RoutineGroup|ResultStatusItem;
+  declare hideVerticalLines: boolean;
+  declare usingRoutineGroups: boolean;
+  declare protected badgeType: BadgeType;
+  declare protected badgeText: string;
+  declare protected testCompleted: boolean;
+  declare private announcedText: string;
+  declare private routineType: string;
 
 
   static get observers(): string[] {

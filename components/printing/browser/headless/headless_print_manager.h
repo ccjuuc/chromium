@@ -52,14 +52,13 @@ class HeadlessPrintManager
   void ScriptedPrint(printing::mojom::ScriptedPrintParamsPtr params,
                      ScriptedPrintCallback callback) override;
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
-  void UpdatePrintSettings(base::Value::Dict job_settings,
-                           UpdatePrintSettingsCallback callback) override;
+  void GetPrintPreviewParams(GetPrintPreviewParamsCallback callback) override;
   void SetupScriptedPrintPreview(
       SetupScriptedPrintPreviewCallback callback) override;
-  void ShowScriptedPrintPreview(bool source_is_modifiable) override;
+  void ShowScriptedPrintPreview() override;
   void RequestPrintPreview(
       printing::mojom::RequestPrintPreviewParamsPtr params) override;
-  void CheckForCancel(int32_t preview_ui_id,
+  void CheckForCancel(const base::UnguessableToken& preview_ui_id,
                       int32_t request_id,
                       CheckForCancelCallback callback) override;
   void SetAccessibilityTree(
@@ -67,6 +66,8 @@ class HeadlessPrintManager
       const ui::AXTreeUpdate& accessibility_tree) override;
 #endif
 #if BUILDFLAG(IS_ANDROID)
+  void SetupScriptedPrintAndroid(
+      SetupScriptedPrintAndroidCallback callback) override;
   void PdfWritingDone(int page_count) override;
 #endif
 

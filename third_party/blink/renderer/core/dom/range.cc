@@ -41,6 +41,7 @@
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
+#include "third_party/blink/renderer/core/editing/position_units.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/serializers/serialization.h"
 #include "third_party/blink/renderer/core/editing/set_selection_options.h"
@@ -55,11 +56,13 @@
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
+#include "third_party/blink/renderer/core/html/parser/fragment_parser.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
 #include "third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.h"
 #include "third_party/blink/renderer/core/svg/svg_svg_element.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_types_names.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -433,7 +436,7 @@ int16_t Range::compareBoundaryPoints(Node* container_a,
                                      unsigned offset_b,
                                      ExceptionState& exception_state) {
   bool disconnected = false;
-  int16_t result = ComparePositionsInDOMTree(container_a, offset_a, container_b,
+  int16_t result = ComparePositionsInDomTree(container_a, offset_a, container_b,
                                              offset_b, &disconnected);
   if (disconnected) {
     exception_state.ThrowDOMException(
@@ -610,6 +613,10 @@ DocumentFragment* Range::ProcessContents(ActionType action,
     process_start = process_start->nextSibling();
   Node* process_end = ChildOfCommonRootBeforeOffset(
       &original_end.Container(), original_end.Offset(), common_root);
+
+  if (!process_end && !common_root->contains(&original_end.Container())) {
+    process_start = nullptr;
+  }
 
   // Collapse the range, making sure that the result is not within a node that
   // was partially selected.
@@ -998,10 +1005,13 @@ DocumentFragment* Range::createContextualFragment(
   // https://html.spec.whatwg.org/#the-createcontextualfragment()-method
 
   // Step 1: Invoke Get Trusted Type compliant string.
-  String compliant_markup = TrustedTypesCheckForHTML(
-      markup, OwnerDocument().GetExecutionContext(),
+  FragmentParserOptions resolved_options(
+      FragmentParserOptions::RunScripts::kRunScripts);
+  String compliant_markup = TrustedTypesCheckForFragment(
+      markup, resolved_options, owner_document_->GetExecutionContext(),
       trusted_types_names::kRange,
       trusted_types_names::kCreateContextualFragment, exception_state);
+
   if (exception_state.HadException()) {
     return nullptr;
   }
@@ -1039,9 +1049,8 @@ DocumentFragment* Range::createContextualFragment(
   }
 
   // Steps 7, 8, 9: Invoke fragment parsing, etc.
-  return blink::CreateContextualFragment(
-      compliant_markup, element,
-      kAllowScriptingContentAndDoNotMarkAlreadyStarted, exception_state);
+  return blink::CreateContextualFragment(compliant_markup, element,
+                                         resolved_options, exception_state);
 }
 
 void Range::detach() {
@@ -1235,6 +1244,18 @@ void Range::selectNode(Node* ref_node, ExceptionState& exception_state) {
   }
 
   RangeUpdateScope scope(this);
+  if (RuntimeEnabledFeatures::RangeBoundaryFastPathEnabled()) {
+    // Set both boundaries lazily relative to `ref_node`, avoiding the O(n)
+    // `NodeIndex()`/`ChildAt()` walks. start-before/end-after `ref_node` are
+    // always ordered and share a container, so no collapse check is needed.
+    if (ref_node->GetDocument() != owner_document_) {
+      SetDocument(ref_node->GetDocument());
+    }
+    start_.SetToBeforeChild(*ref_node);
+    end_.SetToAfterChild(*ref_node);
+    update_selection_behavior_ = UpdateSelectionBehavior::kAll;
+    return;
+  }
   setStartBefore(ref_node);
   setEndAfter(ref_node);
 }
@@ -1508,8 +1529,20 @@ void Range::NodeWillBeRemoved(Node& node) {
 }
 
 void Range::FixupRemovedNodeAcrossShadowBoundary(Node& node) {
-  BoundaryShadowNodeWillBeRemoved(start_, node);
-  BoundaryShadowNodeWillBeRemoved(end_, node);
+  // If the node being removed is the child immediately before the boundary
+  // point, we need to handle it here to avoid a crash in
+  // BoundaryShadowNodeWillBeRemoved (which expects ChildBefore != node).
+  // This mirrors the behavior in BoundaryNodeWillBeRemoved.
+  if (start_.ChildBefore() == &node) {
+    start_.ChildBeforeWillBeRemoved();
+  } else {
+    BoundaryShadowNodeWillBeRemoved(start_, node);
+  }
+  if (end_.ChildBefore() == &node) {
+    end_.ChildBeforeWillBeRemoved();
+  } else {
+    BoundaryShadowNodeWillBeRemoved(end_, node);
+  }
 }
 
 static inline void BoundaryTextInserted(RangeBoundaryPoint& boundary,
@@ -1717,7 +1750,7 @@ void Range::GetBorderAndTextQuads(Vector<gfx::QuadF>& quads) const {
       owner_document_->AdjustQuadsForScrollAndAbsoluteZoom(element_quads,
                                                            *layout_object);
 
-      quads.AppendVector(element_quads);
+      quads.append_range(element_quads);
       continue;
     }
 
@@ -1737,7 +1770,7 @@ void Range::GetBorderAndTextQuads(Vector<gfx::QuadF>& quads) const {
                                     ? end_.Offset()
                                     : std::numeric_limits<unsigned>::max();
     if (!layout_text->IsTextFragment()) {
-      quads.AppendVector(ComputeTextQuads(*owner_document_, *layout_text,
+      quads.append_range(ComputeTextQuads(*owner_document_, *layout_text,
                                           start_offset, end_offset));
       continue;
     }
@@ -1753,7 +1786,7 @@ void Range::GetBorderAndTextQuads(Vector<gfx::QuadF>& quads) const {
       const unsigned start_in_first_letter = start_offset;
       const unsigned end_in_first_letter =
           std::min(end_offset, first_letter_part.FragmentLength());
-      quads.AppendVector(ComputeTextQuads(*owner_document_, first_letter_part,
+      quads.append_range(ComputeTextQuads(*owner_document_, first_letter_part,
                                           start_in_first_letter,
                                           end_in_first_letter));
     }
@@ -1767,7 +1800,7 @@ void Range::GetBorderAndTextQuads(Vector<gfx::QuadF>& quads) const {
       const unsigned end_in_remaining_part =
           end_offset == UINT_MAX ? end_offset
                                  : end_offset - remaining_part.Start();
-      quads.AppendVector(ComputeTextQuads(*owner_document_, remaining_part,
+      quads.append_range(ComputeTextQuads(*owner_document_, remaining_part,
                                           start_in_remaining_part,
                                           end_in_remaining_part));
     }
@@ -1815,16 +1848,16 @@ void Range::UpdateSelectionIfAddedToSelection() {
   Position end_position = EndPosition();
   switch (update_selection_behavior_) {
     case UpdateSelectionBehavior::kEndOnly:
-      start_position = selection.GetSelectionInDOMTree().ComputeStartPosition();
+      start_position = selection.GetSelectionInDomTree().ComputeStartPosition();
       break;
     case UpdateSelectionBehavior::kStartOnly:
-      end_position = selection.GetSelectionInDOMTree().ComputeEndPosition();
+      end_position = selection.GetSelectionInDomTree().ComputeEndPosition();
       break;
     case UpdateSelectionBehavior::kAll:
       break;
   }
 
-  selection.SetSelection(SelectionInDOMTree::Builder()
+  selection.SetSelection(SelectionInDomTree::Builder()
                              .Collapse(start_position)
                              .Extend(end_position)
                              .Build(),

@@ -9,7 +9,7 @@
 
 namespace optimization_guide {
 
-std::string GetVariantName(mojom::OnDeviceFeature feature) {
+std::string_view GetVariantName(mojom::OnDeviceFeature feature) {
   switch (feature) {
     case mojom::OnDeviceFeature::kCompose:
       return "Compose";
@@ -33,8 +33,11 @@ std::string GetVariantName(mojom::OnDeviceFeature feature) {
       return "WritingAssistanceApi";
     case mojom::OnDeviceFeature::kOnDeviceSpeechRecognition:
       return "OnDeviceSpeechRecognition";
+    case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
+      return "SpeechRecognitionSmallExpertModel";
   }
 }
+
 
 // To enable on-device execution for a feature, update this to return a
 // non-null target.
@@ -66,6 +69,9 @@ proto::OptimizationTarget GetOptimizationTargetForFeature(
     case mojom::OnDeviceFeature::kOnDeviceSpeechRecognition:
       return proto::
           OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION;
+    case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
+      return proto::
+          OPTIMIZATION_TARGET_MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA;
   }
 }
 
@@ -101,6 +107,9 @@ proto::ModelExecutionFeature ToModelExecutionFeatureProto(
     case mojom::OnDeviceFeature::kOnDeviceSpeechRecognition:
       return proto::ModelExecutionFeature::
           MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION;
+    case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
+      return proto::ModelExecutionFeature::
+          MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA;
   }
 }
 
@@ -114,6 +123,53 @@ std::optional<mojom::OnDeviceFeature> ToOnDeviceFeature(
             return std::pair(ToModelExecutionFeatureProto(feature), feature);
           })};
   auto it = lookup->find(feature);
+  if (it == lookup->end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+std::string ToUseCaseName(mojom::OnDeviceFeature feature) {
+  switch (feature) {
+    case mojom::OnDeviceFeature::kCompose:
+      return "compose";
+    case mojom::OnDeviceFeature::kTest:
+      return "test";
+    case mojom::OnDeviceFeature::kPromptApi:
+      return "prompt_api";
+    case mojom::OnDeviceFeature::kHistorySearch:
+      return "history_search";
+    case mojom::OnDeviceFeature::kSummarize:
+      return "summarizer_api";
+    case mojom::OnDeviceFeature::kHistoryQueryIntent:
+      return "history_query_intent";
+    case mojom::OnDeviceFeature::kScamDetection:
+      return "scam_detection";
+    case mojom::OnDeviceFeature::kPermissionsAi:
+      return "permissions_ai";
+    case mojom::OnDeviceFeature::kWritingAssistanceApi:
+      return "writing_assistance_api";
+    case mojom::OnDeviceFeature::kProofreaderApi:
+      return "proofreader_api";
+    case mojom::OnDeviceFeature::kOnDeviceSpeechRecognition:
+      return "speech_recognition";
+    case mojom::OnDeviceFeature::kSpeechRecognitionSmallExpertModel:
+      return "speech_recognition_small_expert_model";
+  }
+}
+
+std::optional<mojom::OnDeviceFeature> GetFeatureForUseCase(
+    const std::string& use_case_name) {
+  static base::NoDestructor<base::flat_map<std::string, mojom::OnDeviceFeature>>
+      lookup{[]() {
+        base::flat_map<std::string, mojom::OnDeviceFeature> map;
+        for (auto feature : OnDeviceFeatureSet::All()) {
+          map[ToUseCaseName(feature)] = feature;
+        }
+        return map;
+      }()};
+
+  auto it = lookup->find(use_case_name);
   if (it == lookup->end()) {
     return std::nullopt;
   }

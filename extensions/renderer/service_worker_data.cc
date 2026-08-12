@@ -117,14 +117,15 @@ void ServiceWorkerData::Init() {
   const int thread_id = content::WorkerThread::GetCurrentId();
   const ExtensionId& extension_id = context_->GetExtensionID();
   CHECK(!extension_id.empty());
+  CHECK(activation_sequence_.has_value());
   GetServiceWorkerHost()->DidInitializeServiceWorkerContext(
-      extension_id, service_worker_version_id_, thread_id,
-      service_worker_token_,
+      extension_id, *activation_sequence_, service_worker_version_id_,
+      thread_id, service_worker_token_,
       event_dispatcher_receiver_.BindNewEndpointAndPassRemote());
 }
 
 void ServiceWorkerData::DispatchEvent(mojom::DispatchEventParamsPtr params,
-                                      base::Value::List event_args,
+                                      base::ListValue event_args,
                                       DispatchEventCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   ScriptContext* script_context = context();

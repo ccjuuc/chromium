@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <variant>
 
-#include "base/containers/contains.h"
 #include "base/containers/enum_set.h"
 #include "base/containers/span.h"
 #include "base/metrics/histogram_macros.h"
@@ -195,9 +194,7 @@ enum class MLGraphOperatorUma {
   kMaxValue = kIsInfinite,
 };
 
-using MLGraphOperatorUmaSet = base::EnumSet<MLGraphOperatorUma,
-                                            MLGraphOperatorUma::kMinValue,
-                                            MLGraphOperatorUma::kMaxValue>;
+using MLGraphOperatorUmaSet = base::EnumSet<MLGraphOperatorUma>;
 
 MLGraphOperatorUma GetUmaValueForOperation(
     const blink_mojom::Operation& operation) {
@@ -453,7 +450,7 @@ void RecordOperatorsUsed(const blink_mojom::GraphInfo& graph_info) {
 
 #define ASSIGN_OR_THROW_AND_RETURN_IF_ERROR(lhs, rexpr)                \
   ASSIGN_OR_RETURN(lhs, rexpr, [&exception_state](std::string error) { \
-    exception_state.ThrowTypeError(String::FromUTF8(error));           \
+    exception_state.ThrowTypeError(String::FromUtf8(error));           \
     return nullptr;                                                    \
   });
 
@@ -583,7 +580,7 @@ webnn::BatchNormalizationAttributes ConvertToBatchNormalizationAttributes(
 }
 
 String BuildErrorMessage(const std::string& label, StringView message) {
-  return StrCat({String::FromUTF8(webnn::GetErrorLabelPrefix(label)), message});
+  return StrCat({String::FromUtf8(webnn::GetErrorLabelPrefix(label)), message});
 }
 
 template <typename MLConv2dOptionsType, typename Conv2dAttributesType>
@@ -731,8 +728,8 @@ base::expected<webnn::Pool2dAttributes, std::string> ConvertToPool2dAttributes(
       webnn::Size2d<uint32_t>{.height = dilations[0], .width = dilations[1]};
   attributes.layout =
       BlinkInputOperandLayoutToComponent(options->layout().AsEnum());
-  attributes.rounding_type =
-      BlinkRoundingTypeToComponent(options->roundingType().AsEnum());
+  attributes.output_shape_rounding =
+      BlinkRoundingTypeToComponent(options->outputShapeRounding().AsEnum());
   if (options->hasOutputSizes()) {
     // TODO(ningxin.hu@intel.com): report a DevTools warning message if rounding
     // type is provided but ignored.
@@ -1069,7 +1066,7 @@ MLOperand* BuildPool2d(MLGraphBuilder* builder,
                        ExceptionState& exception_state) {
   auto pool2d_attributes = ConvertToPool2dAttributes(options);
   if (!pool2d_attributes.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(pool2d_attributes.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(pool2d_attributes.error()));
     return nullptr;
   }
 
@@ -1117,9 +1114,8 @@ DetermineGraphConstraintsFromOutputs(const MLNamedOperands& named_outputs) {
     const auto& name = output.first;
     const auto& operand = output.second;
     if (operand->Kind() != blink_mojom::Operand::Kind::kOutput) {
-      return base::unexpected(String::Format(
-          "The operand with name \"%s\" is not an output operand.",
-          name.Utf8().c_str()));
+      return base::unexpected(StrCat(
+          {"The operand with name \"", name, "\" is not an output operand."}));
     }
     // Setup resource info for this output operand.
     output_constraints.insert(name, operand->Descriptor());
@@ -1146,9 +1142,8 @@ DetermineGraphConstraintsFromOutputs(const MLNamedOperands& named_outputs) {
           }
           visited_input_operands.insert(operand);
           if (input_constraints.Contains(operand->Name())) {
-            return base::unexpected(
-                String::Format("The input name \"%s\" is duplicated.",
-                               operand->Name().Utf8().c_str()));
+            return base::unexpected(StrCat(
+                {"The input name \"", operand->Name(), "\" is duplicated."}));
           }
           input_constraints.insert(operand->Name(), operand->Descriptor());
           break;
@@ -1480,20 +1475,17 @@ blink_mojom::GraphInfoPtr BuildWebNNGraphInfo(
           break;
         }
         case blink_mojom::Operand::Kind::kConstant: {
+          // Tensor-backed constants are not supported. The
+          // MLGraphBuilder::constant(MLTensor*) overload rejects early,
+          // so this should never happen.
+          CHECK(!operand->AsConstantOperand()->tensor());
           // Convert `mojo::Operand` for constant operand.
           webnn::OperandId operand_id = AddOperand(
               *graph_info,
               mojo::ConvertTo<blink_mojom::OperandPtr>(operand.Get()));
           // Build the map of constant operands for this graph with the id.
-          MLConstantOperand const* constant_operand =
-              operand->AsConstantOperand();
-          if (constant_operand->tensor()) {
-            graph_info->id_to_constant_tensor_operand_map.insert(
-                operand_id, constant_operand->tensor()->handle());
-          } else {
-            graph_info->constant_operand_ids_to_handles.insert(
-                operand_id, operand->AsConstantOperand()->handle());
-          }
+          graph_info->constant_operand_ids_to_handles.insert(
+              operand_id, operand->AsConstantOperand()->handle());
           operand_to_id_map.insert(operand, operand_id);
           break;
         }
@@ -1564,8 +1556,8 @@ void FoldReshapableConstants(blink_mojom::GraphInfo& graph_info) {
               graph_info.operations,
               [&constant_operand_id](
                   const blink_mojom::OperationPtr& operation) {
-                return base::Contains(GetInputs(*operation),
-                                      constant_operand_id);
+                return std::ranges::contains(GetInputs(*operation),
+                                             constant_operand_id);
               }) > 1) {
         break;
       }
@@ -1627,8 +1619,7 @@ MLGraphBuilder* MLGraphBuilder::Create(ScriptState* script_state,
 MLGraphBuilder::MLGraphBuilder(
     ExecutionContext* execution_context,
     MLContext* context,
-    mojo::PendingAssociatedRemote<blink_mojom::WebNNGraphBuilder>
-        pending_remote)
+    mojo::PendingRemote<blink_mojom::WebNNGraphBuilder> pending_remote)
     : execution_context_(execution_context),
       ml_context_(context),
       remote_(execution_context) {
@@ -1737,7 +1728,8 @@ MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
   auto* constant =
       MakeGarbageCollected<MLConstantOperand>(this, std::move(descriptor));
 
-  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB", bytes.size() / 1024);
+  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB",
+                          base::saturated_cast<int>(bytes.size() / 1024));
   TRACE_EVENT_BEGIN("webnn", "copy constant bytes into BigBuffer",
                     scoped_trace.track(), "size", bytes.size());
   mojo_base::BigBuffer constant_data = mojo_base::BigBuffer(bytes);
@@ -1753,26 +1745,12 @@ MLOperand* MLGraphBuilder::constant(ScriptState* script_state,
                                     ExceptionState& exception_state) {
   THROW_AND_RETURN_IF_ERROR(ValidateGraphBuilderState(), nullptr);
 
-  if (tensor->context() != ml_context_) {
-    exception_state.ThrowTypeError(
-        "The tensor wasn't created with this context.");
-    return nullptr;
-  }
-
-  if (!tensor->IsValid()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        "Tensor has been destroyed or context is lost.");
-    return nullptr;
-  }
-
-  if (!tensor->Usage().Has(webnn::MLTensorUsageFlags::kGraphConstant)) {
-    exception_state.ThrowTypeError(
-        "Tensor was not created by createConstantTensor.");
-    return nullptr;
-  }
-
-  return MakeGarbageCollected<MLConstantOperand>(this, tensor);
+  // TODO(crbug.com/516844144): No backend currently supports tensor-backed
+  // graph constants. Reject early until support is added.
+  exception_state.ThrowDOMException(
+      DOMExceptionCode::kNotSupportedError,
+      "Tensor-backed graph constants are not supported.");
+  return nullptr;
 }
 
 MLOperand* MLGraphBuilder::constant(
@@ -1858,7 +1836,8 @@ MLOperand* MLGraphBuilder::constant(
   auto* constant =
       MakeGarbageCollected<MLConstantOperand>(this, std::move(descriptor));
 
-  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB", byte_length / 1024);
+  UMA_HISTOGRAM_MEMORY_KB("WebNN.ConstantDataSizeInKB",
+                          base::saturated_cast<int>(byte_length / 1024));
   TRACE_EVENT_BEGIN("webnn", "create constant scalar value BigBuffer",
                     scoped_trace.track(), "size", byte_length);
   scoped_trace.AddStep("post mojo message: CreatePendingConstant");
@@ -1958,7 +1937,7 @@ MLOperand* MLGraphBuilder::clamp(MLOperand* input,
       ml_context_->GetProperties().data_type_limits.clamp_input;
   if (!tensor_constraint.Supports(input->Descriptor())) {
     exception_state.ThrowTypeError(StrCat(
-        {String::FromUTF8(webnn::GetErrorLabelPrefix(options->label().Utf8())),
+        {String::FromUtf8(webnn::GetErrorLabelPrefix(options->label().Utf8())),
          String(NotSupportedInputArgumentError(input->Descriptor(),
                                                tensor_constraint))}));
     return nullptr;
@@ -1970,7 +1949,7 @@ MLOperand* MLGraphBuilder::clamp(MLOperand* input,
           : webnn::MLNumber::NegativeInfinity();
   if (!min_value.has_value()) {
     exception_state.ThrowTypeError(StrCat(
-        {String::FromUTF8(webnn::GetErrorLabelPrefix(options->label().Utf8())),
+        {String::FromUtf8(webnn::GetErrorLabelPrefix(options->label().Utf8())),
          min_value.error()}));
     return nullptr;
   }
@@ -2425,7 +2404,7 @@ HeapVector<Member<MLOperand>> MLGraphBuilder::gru(
       recurrent_weight->Descriptor(), steps, hidden_size,
       ConvertToGruAttributes(this, options));
   if (!validated_outputs.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(validated_outputs.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(validated_outputs.error()));
     return {};
   }
   auto* gru =
@@ -2660,7 +2639,7 @@ HeapVector<Member<MLOperand>> MLGraphBuilder::lstm(
       recurrent_weight->Descriptor(), steps, hidden_size,
       ConvertToLstmAttributes(options));
   if (!validated_outputs.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(validated_outputs.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(validated_outputs.error()));
     return {};
   }
 
@@ -2722,7 +2701,7 @@ HeapVector<Member<MLOperand>> MLGraphBuilder::lstmCell(
       cell_state->Descriptor(), hidden_size,
       ConvertToLstmCellAttributes(options));
   if (!validated_outputs.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(validated_outputs.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(validated_outputs.error()));
     return {};
   }
 
@@ -3232,7 +3211,7 @@ HeapVector<Member<MLOperand>> MLGraphBuilder::split(
        .axis = options->axis(),
        .label = options->label().Utf8()});
   if (!validated_outputs.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(validated_outputs.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(validated_outputs.error()));
     return {};
   }
 
@@ -3261,7 +3240,7 @@ HeapVector<Member<MLOperand>> MLGraphBuilder::split(
        .axis = options->axis(),
        .label = options->label().Utf8()});
   if (!validated_outputs.has_value()) {
-    exception_state.ThrowTypeError(String::FromUTF8(validated_outputs.error()));
+    exception_state.ThrowTypeError(String::FromUtf8(validated_outputs.error()));
     return {};
   }
 
@@ -3513,8 +3492,7 @@ void MLGraphBuilder::DidCreateWebNNGraph(
     }
   }
   auto* graph = MakeGarbageCollected<MLGraph>(
-      resolver->GetExecutionContext(), ml_context_,
-      std::move(success->graph_remote),
+      resolver->GetExecutionContext(), ml_context_, success->graph_token,
       std::move(input_and_output_constraints.first),
       std::move(input_and_output_constraints.second), std::move(devices),
       base::PassKey<MLGraphBuilder>());

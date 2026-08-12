@@ -18,6 +18,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -513,7 +514,11 @@ public class NotificationPlatformBridge {
      * @param actionIndex The zero-based index of the action button, or -1 if not applicable.
      */
     static Uri makeIntentData(String notificationId, String origin, int actionIndex) {
-        return Uri.parse(origin).buildUpon().fragment(notificationId + "," + actionIndex).build();
+        return Uri.parse(origin)
+                .buildUpon()
+                .appendPath(notificationId)
+                .appendQueryParameter("actionIndex", String.valueOf(actionIndex))
+                .build();
     }
 
     /**
@@ -571,7 +576,7 @@ public class NotificationPlatformBridge {
         intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         return PendingIntentProvider.getBroadcast(
                 context,
-                PENDING_INTENT_REQUEST_CODE,
+                actionIndex >= 0 ? actionIndex : PENDING_INTENT_REQUEST_CODE,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT,
                 mutable);
@@ -621,7 +626,6 @@ public class NotificationPlatformBridge {
         }
 
         // This code parses the notification id that was generated in notification_id_generator.cc
-        // TODO(crbug.com/41364310): Extract this to a separate class.
         String[] parts = tag.split(NotificationConstants.NOTIFICATION_TAG_SEPARATOR);
         assert parts.length >= 3;
         try {
@@ -733,7 +737,7 @@ public class NotificationPlatformBridge {
             final long timestamp,
             final boolean renotify,
             final boolean silent,
-            final ActionInfo[] actions,
+            @JniType("std::vector<message_center::ButtonInfo>") final ActionInfo[] actions,
             final boolean isSuspicious,
             final boolean skipUAButtons) {
         final boolean vibrateEnabled =
@@ -971,7 +975,7 @@ public class NotificationPlatformBridge {
                             // Display notification as Chrome.
                             // Android may throw an exception on
                             // INotificationManager.enqueueNotificationWithTag,
-                            // see crbug.com/1077027.
+                            // see crbug.com/40688509.
                             try {
                                 if (shouldTreatNotificationAsSuspicious) {
                                     mNotificationContentDetectionManager.showWarning(
@@ -1069,8 +1073,6 @@ public class NotificationPlatformBridge {
                                         origin, SchemeDisplay.OMIT_HTTP_AND_HTTPS));
 
         if (shouldSetChannelId(forWebApk)) {
-            // TODO(crbug.com/40544272): Channel ID should be retrieved from cache in native and
-            // passed through to here with other notification parameters.
             notificationBuilder.setChannelId(identifyingAttributes.channelId);
         }
 
@@ -1244,7 +1246,7 @@ public class NotificationPlatformBridge {
 
         // If action buttons are displayed, there isn't room for the full Site Settings button
         // label and icon, so abbreviate it. This has the unfortunate side-effect of
-        // unnecessarily abbreviating it on Android Wear also (crbug.com/576656). If custom
+        // unnecessarily abbreviating it on Android Wear also (crbug.com/40451941). If custom
         // layouts are enabled, the label and icon provided here only affect Android Wear, so
         // don't abbreviate them.
         boolean abbreviateSiteSettings = actions.length > 0;
@@ -1361,7 +1363,7 @@ public class NotificationPlatformBridge {
 
         // Mark the title of the notification as being bold.
         spannableStringBuilder.setSpan(
-                new StyleSpan(android.graphics.Typeface.BOLD),
+                new StyleSpan(Typeface.BOLD),
                 0,
                 title.length(),
                 Spannable.SPAN_INCLUSIVE_INCLUSIVE);

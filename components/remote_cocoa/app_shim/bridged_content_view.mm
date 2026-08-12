@@ -355,19 +355,22 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
         MovePointToWindow(theEvent.locationInWindow, source, target);
   }
 
-  // The tooltip update event should be forwarded to the window where the event
-  // occurs. This is how it works with Aura, and the backend logic expects that
-  // the mouse location is in the coordinate system of the window from which the
-  // event originated.
+  // Forward tooltip updates to the window where the mouse event actually
+  // occurred. This is how it works with Aura, and is critical for nested
+  // menus on Mac: when the mouse is over a submenu, events are captured by
+  // the parent menu's BridgedContentView, but tooltips must be set on the
+  // submenu's view for them to display correctly.
   auto* event_window =
       base::apple::ObjCCast<NativeWidgetMacNSWindow>(theEvent.window);
   remote_cocoa::NativeWidgetNSWindowBridge* event_bridge =
       [event_window bridge];
-  if (event_bridge) {
-    gfx::Point location_in_source_content = MovePointToView(
-        theEvent.locationInWindow, source, event_bridge->ns_view());
-    [self updateTooltipIfRequiredAt:location_in_source_content
-                             bridge:event_bridge];
+  BridgedContentView* event_view =
+      event_bridge ? event_bridge->ns_view() : nullptr;
+  if (event_view) {
+    gfx::Point location_in_event_view =
+        MovePointToView(theEvent.locationInWindow, source, event_view);
+    [event_view updateTooltipIfRequiredAt:location_in_event_view
+                                   bridge:event_bridge];
   } else {
     [self updateTooltipIfRequiredAt:event_location bridge:_bridge];
   }
@@ -834,6 +837,36 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // equivalent that Cocoa uses for toggling the input language. In this case,
   // that's actually a good thing, though -- see http://crbug.com/26115 .)
   return YES;
+}
+
+- (void)contextMenuKeyDown:(NSEvent*)event {
+  base::apple::OwnedNSEvent owned_event(event);
+  ui::KeyEvent original_event(owned_event);
+
+  // Dispatch the original key event first so that existing handlers (if any)
+  // take priority over the context menu.
+  [self handleKeyEvent:&original_event];
+  if (original_event.handled()) {
+    return;
+  }
+
+  int event_flags = [event isARepeat] ? ui::EF_IS_REPEAT : ui::EF_NONE;
+  ui::KeyEvent context_menu_event(ui::EventType::kKeyPressed, ui::VKEY_APPS,
+                                  ui::DomCode::CONTEXT_MENU, event_flags);
+
+  context_menu_event.SetNativeEvent(owned_event);
+  if ([self dispatchKeyEventToMenuController:&context_menu_event]) {
+    return;
+  }
+
+  [self dispatchKeyEvent:&context_menu_event];
+  if (context_menu_event.handled()) {
+    return;
+  }
+
+  if (@available(macOS 15.0, *)) {
+    [super contextMenuKeyDown:event];
+  }
 }
 
 - (void)keyDown:(NSEvent*)theEvent {

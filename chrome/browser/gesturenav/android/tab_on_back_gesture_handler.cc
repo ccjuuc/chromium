@@ -81,7 +81,7 @@ void TabOnBackGestureHandler::OnBackProgressed(JNIEnv* env,
   }
 
   content::WebContents* web_contents = tab_android_->web_contents();
-  AssertHasWindowAndCompositor(web_contents);
+  CHECK(web_contents);
 
   // The OS can give us incorrect progress values.
   progress = std::clamp(progress, 0.f, 1.f);
@@ -101,7 +101,7 @@ void TabOnBackGestureHandler::OnBackCancelled(JNIEnv* env,
   is_in_progress_ = false;
 
   content::WebContents* web_contents = tab_android_->web_contents();
-  AssertHasWindowAndCompositor(web_contents);
+  CHECK(web_contents);
 
   web_contents->GetBackForwardTransitionAnimationManager()
       ->OnGestureCancelled();
@@ -116,7 +116,7 @@ void TabOnBackGestureHandler::OnBackInvoked(JNIEnv* env, bool is_gesture_mode) {
   is_in_progress_ = false;
 
   content::WebContents* web_contents = tab_android_->web_contents();
-  AssertHasWindowAndCompositor(web_contents);
+  CHECK(web_contents);
 
   web_contents->GetBackForwardTransitionAnimationManager()->OnGestureInvoked();
 }
@@ -141,23 +141,22 @@ void TabOnBackGestureHandler::Destroy(JNIEnv* env) {
 // ----------------------------------------------------------------------------
 
 // static
-static jlong JNI_TabOnBackGestureHandler_Init(JNIEnv* env,
-                                              const JavaRef<jobject>& jtab) {
+static int64_t JNI_TabOnBackGestureHandler_Init(JNIEnv* env,
+                                                const JavaRef<jobject>& jtab) {
   TabOnBackGestureHandler* handler =
       new TabOnBackGestureHandler(TabAndroid::GetNativeTab(env, jtab));
   return reinterpret_cast<intptr_t>(handler);
 }
 
 // static
-static jboolean JNI_TabOnBackGestureHandler_ShouldAnimateNavigationTransition(
+static bool JNI_TabOnBackGestureHandler_ShouldAnimateNavigationTransition(
     JNIEnv* env,
-    jboolean forward,
-    jint edge) {
-  return static_cast<jboolean>(
+    bool forward,
+    int32_t edge) {
+  return static_cast<bool>(
       content::BackForwardTransitionAnimationManager::
           ShouldAnimateNavigationTransition(
-              static_cast<bool>(forward) ? NavDirection::kForward
-                                         : NavDirection::kBackward,
+              forward ? NavDirection::kForward : NavDirection::kBackward,
               static_cast<ui::BackGestureEventSwipeEdge>(edge)));
 }
 

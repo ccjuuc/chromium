@@ -29,7 +29,8 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
@@ -94,19 +95,19 @@ public class HomeButtonTest {
                     // accessibility to prevent failures from AccessibilityChecks. Do not do this
                     // for views outside tests.
                     homeButton.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                    ObservableSupplierImpl<Boolean> homepagePolicySupplier =
-                            new ObservableSupplierImpl<>();
-                    homepagePolicySupplier.set(false);
+                    NonNullObservableSupplier<Boolean> homepagePolicySupplier =
+                            ObservableSuppliers.alwaysFalse();
                     homeButton.setId(mIdHomeButton);
                     mHomeButtonCoordinator =
                             new HomeButtonCoordinator(
                                     sActivity,
                                     homeButton,
-                                    (view) -> {},
+                                    (metaState, buttonState) -> {},
                                     HomepageManager.getInstance()::onMenuClick,
                                     () -> false,
                                     mThemeColorProvider,
-                                    mIncognitoStateProvider);
+                                    mIncognitoStateProvider,
+                                    /* actionRegistry= */ null);
                     SettingsNavigationFactory.setInstanceForTesting(mSettingsNavigation);
 
                     content.addView(homeButton);

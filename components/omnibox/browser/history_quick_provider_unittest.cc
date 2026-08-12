@@ -303,6 +303,7 @@ HistoryQuickProviderTest::GetTestData() {
 }
 
 void HistoryQuickProviderTest::FillData() {
+  std::vector<history::URLRow> rows;
   for (const auto& info : GetTestData()) {
     history::URLRow row{GURL(info.url)};
     ASSERT_TRUE(row.url().is_valid());
@@ -311,8 +312,10 @@ void HistoryQuickProviderTest::FillData() {
     row.set_typed_count(info.typed_count);
     row.set_last_visit(base::Time::Now() - base::Days(info.days_from_now));
 
-    AddFakeURLToHistoryDB(history_backend()->db(), row);
+    rows.push_back(row);
   }
+
+  history::AddFakeURLsToHistoryService(client_->GetHistoryService(), rows);
 }
 
 HistoryQuickProviderTest::SetShouldContain::SetShouldContain(
@@ -953,9 +956,7 @@ TEST_F(HistoryQuickProviderTest, KeywordModeExtractUserInput) {
 
   // Turn on keyword mode, test result again, we should get back the result for
   // google.com since we're searching only for the user text after the keyword.
-  input2.set_prefer_keyword(true);
-  input2.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
+  input2.set_in_keyword_mode(true);
   provider().Start(input2, false);
   if (!provider().done())
     base::RunLoop().Run();
@@ -970,6 +971,9 @@ TEST_F(HistoryQuickProviderTest, KeywordModeExtractUserInput) {
   EXPECT_EQ(matches[0].keyword, u"@history");
   EXPECT_TRUE(PageTransitionCoreTypeIs(matches[0].transition,
                                        ui::PAGE_TRANSITION_KEYWORD));
+
+  // Ensure `fill_to_edit` includes the keyword.
+  EXPECT_EQ(matches[0].fill_into_edit, u"@history www.google.com");
 }
 
 TEST_F(HistoryQuickProviderTest,
@@ -995,9 +999,7 @@ TEST_F(HistoryQuickProviderTest, MaxMatches) {
   EXPECT_EQ(matches.size(), provider().provider_max_matches());
 
   // Turn keyword mode on. we should be able to get more matches now.
-  input.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
-  input.set_prefer_keyword(true);
+  input.set_in_keyword_mode(true);
   provider().Start(input, false);
 
   matches = provider().matches();
@@ -1006,9 +1008,7 @@ TEST_F(HistoryQuickProviderTest, MaxMatches) {
   // The provider should not limit the number of suggestions when ML scoring
   // w/increased candidates is enabled. Any matches beyond the limit should be
   // marked as culled_by_provider and have a relevance of 0.
-  input.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_INVALID);
-  input.set_prefer_keyword(false);
+  input.set_in_keyword_mode(false);
 
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeaturesAndParameters(

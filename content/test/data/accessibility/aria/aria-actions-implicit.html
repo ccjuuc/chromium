@@ -1,5 +1,7 @@
 <!--
 @BLINK-ALLOW:actions*
+@BLINK-ALLOW:hasActions*
+@MAC-ALLOW:AXCustomActionNamesForTesting
 -->
 <select>
   <button>
@@ -26,6 +28,15 @@
 <div role="menu">
   <div tabindex="0" role="menuitem">File1<button type="button">hello world</button></div>
   <div tabindex="1" role="menuitem">File2<a href="google.com">search engine</a></div>
+</div>
+
+<!-- No-name filtering: only the named button should appear as an action. -->
+<div role="menu">
+  <div role="menuitem" tabindex="0">
+    Download
+    <button>Save</button>
+    <button></button>
+  </div>
 </div>
 
 <style>

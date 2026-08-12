@@ -7,6 +7,7 @@
 #include "base/base64.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
@@ -34,6 +35,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
+#include "media/media_buildflags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/python_utils.h"
 #include "testing/perf/perf_test.h"
@@ -129,9 +131,8 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
     ASSERT_TRUE(base::Base64Decode(base64_encoded_video, &recorded_video));
     base::File video_file(webm_video_filename,
                           base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    size_t written = UNSAFE_TODO(
-        video_file.Write(0, recorded_video.c_str(), recorded_video.length()));
-    ASSERT_EQ(recorded_video.length(), written);
+    ASSERT_TRUE(
+        video_file.WriteAndCheck(0, base::as_byte_span(recorded_video)));
   }
 
   // Runs ffmpeg on the captured webm video and writes it to a yuv video file.
@@ -148,7 +149,7 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
     // Set up ffmpeg to output at a certain resolution (-s) and bitrate (-b:v).
     // This is needed because WebRTC is free to start the call at a lower
     // resolution before ramping up. Without these flags, ffmpeg would output a
-    // video in the inital lower resolution, causing the SSIM and PSNR results
+    // video in the initial lower resolution, causing the SSIM and PSNR results
     // to become meaningless.
     base::CommandLine ffmpeg_command(path_to_ffmpeg);
     ffmpeg_command.AppendArg("-i");
@@ -231,7 +232,7 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
                  << output;
       return false;
     }
-    // TODO(http://crbug.com/923564): Enable this and drop the printf above
+    // TODO(http://crbug.com/40610245): Enable this and drop the printf above
     // when ready to switch to histogram sets.
     // if (!test::WriteCompareVideosOutputAsHistogram(test_label, output))
     //  return false;
@@ -286,7 +287,7 @@ class WebRtcVideoQualityBrowserTest : public WebRtcTestBase,
 
     // Shut everything down to avoid having the javascript race with the
     // analysis tools. For instance, dont have console log printouts interleave
-    // with the RESULT lines from the analysis tools (crbug.com/323200).
+    // with the RESULT lines from the analysis tools (crbug.com/40342719).
     chrome::CloseWebContents(browser(), left_tab, false);
     chrome::CloseWebContents(browser(), right_tab, false);
 
@@ -357,9 +358,9 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
   TestVideoQuality("VP9", true /* prefer_hw_video_codec */);
 }
 
-#if BUILDFLAG(RTC_USE_H264)
+#if BUILDFLAG(ENABLE_OPENH264)
 
-// Flaky on mac (crbug.com/754684) and WebRTC's frame_analyzer doesn't build
+// Flaky on mac (crbug.com/40534742) and WebRTC's frame_analyzer doesn't build
 // from a Chromium's component build.
 #if BUILDFLAG(IS_MAC) || defined(COMPONENT_BUILD)
 #define MAYBE_MANUAL_TestVideoQualityH264 DISABLED_MANUAL_TestVideoQualityH264
@@ -370,7 +371,7 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
 IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
                        MAYBE_MANUAL_TestVideoQualityH264) {
   base::ScopedAllowBlockingForTesting allow_blocking;
-  // Only run test if run-time feature corresponding to |rtc_use_h264| is on.
+  // Only run test if run-time feature corresponding to OpenH264 is on.
   if (!base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder)) {
     LOG(WARNING)
         << "Run-time feature OpenH264SoftwareEncoder disabled. "
@@ -381,4 +382,4 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoQualityBrowserTest,
   TestVideoQuality("H264", true /* prefer_hw_video_codec */);
 }
 
-#endif  // BUILDFLAG(RTC_USE_H264)
+#endif  // BUILDFLAG(ENABLE_OPENH264)

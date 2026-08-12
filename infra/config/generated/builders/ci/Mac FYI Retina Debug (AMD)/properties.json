@@ -53,7 +53,8 @@
                 "builder": "GPU FYI Mac Builder (dbg)",
                 "project": "chromium"
               },
-              "run_tests_serially": true
+              "run_tests_serially": true,
+              "use_test_trigger_cas": true
             }
           }
         ]
@@ -71,8 +72,7 @@
           "group": "tryserver.chromium.mac"
         }
       ],
-      "targets_spec_directory": "infra/config/generated/builders/ci/Mac FYI Retina Debug (AMD)/targets",
-      "targets_spec_directory_relative_to_source_dir": true
+      "targets_spec_directory": "infra/config/generated/builders/ci/Mac FYI Retina Debug (AMD)/targets"
     }
   },
   "$recipe_engine/resultdb/test_presentation": {

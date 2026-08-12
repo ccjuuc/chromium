@@ -4,6 +4,9 @@
 
 #include "chromeos/ui/frame/frame_utils.h"
 
+#include <algorithm>
+#include <optional>
+
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/ui/base/chromeos_ui_constants.h"
 #include "chromeos/ui/base/display_util.h"
@@ -40,8 +43,10 @@ gfx::Insets GetResizeBorderInsets(aura::Window* frame_window,
 
 }  // namespace
 
-int FrameBorderNonClientHitTest(views::FrameView* view,
-                                const gfx::Point& point_in_widget) {
+int FrameBorderNonClientHitTest(
+    views::FrameView* view,
+    const gfx::Point& point_in_widget,
+    const views::FrameView::HitTestCallback& non_client_hit_test_callback) {
   gfx::Rect expanded_bounds = view->bounds();
   int outside_bounds = chromeos::kResizeOutsideBoundsSize;
 
@@ -68,6 +73,13 @@ int FrameBorderNonClientHitTest(views::FrameView* view,
       chromeos::kResizeAreaCornerSize, has_resize_border);
   if (frame_component != HTNOWHERE)
     return frame_component;
+
+  if (!non_client_hit_test_callback.is_null()) {
+    int result = non_client_hit_test_callback.Run(point_in_widget);
+    if (result != HTNOWHERE) {
+      return result;
+    }
+  }
 
   int client_component =
       widget->client_view()->NonClientHitTest(point_in_widget);
@@ -128,12 +140,14 @@ bool ShouldShowResizeBorder(const aura::Window* window) {
   const auto window_state_type =
       window->GetProperty(chromeos::kWindowStateTypeKey);
   if (in_tablet_mode) {
-    return !base::Contains(blocklist_clamshell_states, window_state_type) &&
-           !base::Contains(additional_blocklist_tablet_states,
-                           window_state_type);
+    return !std::ranges::contains(blocklist_clamshell_states,
+                                  window_state_type) &&
+           !std::ranges::contains(additional_blocklist_tablet_states,
+                                  window_state_type);
 
   } else {
-    return !base::Contains(blocklist_clamshell_states, window_state_type);
+    return !std::ranges::contains(blocklist_clamshell_states,
+                                  window_state_type);
   }
 }
 

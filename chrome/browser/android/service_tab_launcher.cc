@@ -8,6 +8,7 @@
 
 #include "base/android/jni_string.h"
 #include "base/functional/callback.h"
+#include "base/memory/singleton.h"
 #include "base/notimplemented.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/page_navigator.h"
@@ -25,7 +26,7 @@ using base::android::ScopedJavaLocalRef;
 // Called by Java when the WebContents instance for a request Id is available.
 static void JNI_ServiceTabLauncher_OnWebContentsForRequestAvailable(
     JNIEnv* env,
-    jint request_id,
+    int32_t request_id,
     const JavaRef<jobject>& android_web_contents) {
   ServiceTabLauncher::GetInstance()->OnTabLaunched(
       request_id,

@@ -11,6 +11,8 @@
 #include "base/test/test_future.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time_override.h"
+#include "build/build_config.h"
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/enterprise/signin/enterprise_signin_prefs.h"
 #include "chrome/browser/enterprise/signin/profile_management_disclaimer_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
@@ -22,6 +24,8 @@
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
+#include "chrome/browser/ui/webui/signin/managed_user_profile_notice_handler.h"
+#include "chrome/browser/ui/webui/signin/managed_user_profile_notice_ui.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_waiter.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -52,7 +56,7 @@ enum class ManagedProfileCreationResult {
 struct ManagementDisclaimerTestParam {
   std::string test_name;
   // Preconditions:
-  std::optional<signin::SigninChoice> user_choice = std::nullopt;
+  std::optional<signin::SigninChoice> user_choice;
   policy::ProfileSeparationPolicies policies;
   bool is_managed;
 
@@ -190,7 +194,12 @@ const ManagementDisclaimerTestParam kManagementDisclaimerTestParams[] = {
     // - Profile creation is enforced by policy
     // - No User choice
     {
+#if BUILDFLAG(IS_MAC)
+        // TODO(crbug.com/505194363): Re-enable once deflaked.
+        .test_name = "DISABLED_Managed_EnforcedByPolicy_Dismiss",
+#else
         .test_name = "Managed_EnforcedByPolicy_Dismiss",
+#endif
         .user_choice = std::nullopt,
         .policies = policy::ProfileSeparationPolicies(
             /*profile_separation_settings=*/policy::ProfileSeparationSettings::
@@ -254,7 +263,7 @@ class ProfileManagementDisclaimerServiceBrowserFocusBrowserTest
                        .SetAvatarUrl("https://example.com")
                        .Build();
 
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     bool is_managed = !hosted_domain.empty();
     mutator.set_is_subject_to_enterprise_features(is_managed);
 
@@ -270,7 +279,7 @@ class ProfileManagementDisclaimerServiceBrowserFocusBrowserTest
 
   void ReplaceCurrentBrowserWithNewOne() {
     BrowserWindowInterface* const new_browser =
-        CreateBrowser(browser()->profile());
+        CreateBrowser(browser()->GetProfile());
     CloseBrowserSynchronously(browser());
     SetBrowser(new_browser);
     ASSERT_EQ(browser(), new_browser);
@@ -444,7 +453,7 @@ class ProfileManagementDisclaimerServiceSigninBrowserTest
                        .SetAvatarUrl("https://example.com")
                        .Build();
 
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     bool is_managed = !hosted_domain.empty();
     mutator.set_is_subject_to_enterprise_features(is_managed);
 
@@ -619,7 +628,7 @@ class ProfileManagementDisclaimerServiceBrowserTest
                        .SetAvatarUrl("https://example.com")
                        .Build();
 
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     bool is_managed = !hosted_domain.empty();
     mutator.set_is_subject_to_enterprise_features(is_managed);
 
@@ -642,7 +651,7 @@ class ProfileManagementDisclaimerServiceBrowserTest
                        .SetAvatarUrl("https://example.com")
                        .Build();
 
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     bool is_managed = !hosted_domain.empty();
     mutator.set_is_subject_to_enterprise_features(is_managed);
 
@@ -1005,4 +1014,51 @@ IN_PROC_BROWSER_TEST_F(ProfileManagementDisclaimerServiceBrowserTest,
     EXPECT_FALSE(GetIdentityManager(GetProfile())
                      ->HasAccountWithRefreshToken(account_info.account_id));
   }
+}
+
+IN_PROC_BROWSER_TEST_F(ProfileManagementDisclaimerServiceBrowserTest,
+                       CancelFlowOnAccountRemoval) {
+  auto* disclaimer_service = GetDisclaimerService();
+
+  // User accepts the disclaimer.
+  disclaimer_service->SetProfileSeparationPoliciesForTesting(
+      policy::ProfileSeparationPolicies());
+
+  // Set primary account.
+  AccountInfo primary_account_info =
+      MakeValidPrimaryAccountInfoAvailableAndUpdate("bob@example.com",
+                                                    "example.com");
+
+  base::test::TestFuture<Profile*, bool> future;
+  disclaimer_service->EnsureManagedProfileForAccount(
+      primary_account_info.account_id,
+      signin_metrics::AccessPoint::kEnterpriseManagementDisclaimerAtStartup,
+      future.GetCallback());
+
+  base::RunLoop().RunUntilIdle();
+
+  SigninViewController* signin_view_controller =
+      browser()->GetFeatures().signin_view_controller();
+  ASSERT_TRUE(signin_view_controller->ShowsModalDialog());
+  content::WebContents* dialog_web_contents =
+      signin_view_controller->GetModalDialogWebContentsForTesting();
+
+  ManagedUserProfileNoticeHandler* handler =
+      dialog_web_contents->GetWebUI()
+          ->GetController()
+          ->GetAs<ManagedUserProfileNoticeUI>()
+          ->GetHandlerForTesting();
+
+  ASSERT_TRUE(handler);
+
+  base::test::TestFuture<void> javascript_allowed_future;
+  handler->SetJavaScriptAllowedCallbackForTesting(
+    javascript_allowed_future.GetCallback());
+  ASSERT_TRUE(javascript_allowed_future.Wait());
+
+  // Remove the account while the flow is in progress.
+  identity_test_env()->ClearPrimaryAccount();
+
+  ASSERT_TRUE(future.Wait());
+  EXPECT_EQ(future.Get<Profile*>(), nullptr);
 }

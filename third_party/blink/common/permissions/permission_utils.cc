@@ -4,6 +4,8 @@
 
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 
+#include <algorithm>
+
 #include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
@@ -36,7 +38,7 @@ std::string GetPermissionString(PermissionType permission) {
       return "Notifications";
     case PermissionType::MIDI_SYSEX:
       return "MidiSysEx";
-    case PermissionType::DURABLE_STORAGE:
+    case PermissionType::PERSISTENT_STORAGE:
       return "DurableStorage";
     case PermissionType::PROTECTED_MEDIA_IDENTIFIER:
       return "ProtectedMediaIdentifier";
@@ -176,7 +178,7 @@ PermissionTypeToPermissionsPolicyFeature(PermissionType permission) {
       return network::mojom::PermissionsPolicyFeature::kLoopbackNetwork;
 
     case PermissionType::PERIODIC_BACKGROUND_SYNC:
-    case PermissionType::DURABLE_STORAGE:
+    case PermissionType::PERSISTENT_STORAGE:
     case PermissionType::BACKGROUND_SYNC:
     // TODO(crbug.com/1384434): decouple this to separated types of sensor,
     // with a corresponding permission policy.
@@ -203,12 +205,14 @@ const std::vector<PermissionType>& GetAllPermissionTypes() {
         const int NUM_TYPES = static_cast<int>(PermissionType::NUM);
         std::vector<PermissionType> all_types;
         // Note: Update this if the set of removed entries changes.
-        // This is 7 because it skips 0 as well as the 6 numbers explicitly
-        // mentioned below.
-        all_types.reserve(NUM_TYPES - 7);
+        constexpr int kRemovedEntries[] = {2, 11, 13, 14, 15, 32};
+
+        // The PermissionType enum starts from 1.
+        all_types.reserve(NUM_TYPES - 1 - std::size(kRemovedEntries));
         for (int i = 1; i < NUM_TYPES; ++i) {
           // Skip removed entries.
-          if (i == 2 || i == 11 || i == 13 || i == 14 || i == 15 || i == 32) {
+          if (std::find(std::begin(kRemovedEntries), std::end(kRemovedEntries),
+                        i) != std::end(kRemovedEntries)) {
             continue;
           }
           all_types.push_back(static_cast<PermissionType>(i));
@@ -282,8 +286,8 @@ std::optional<PermissionType> PermissionDescriptorInfoToPermissionType(
       NOTIMPLEMENTED();
       return std::nullopt;
 #endif  // defined(ENABLE_PROTECTED_MEDIA_IDENTIFIER_PERMISSION)
-    case PermissionName::DURABLE_STORAGE:
-      return PermissionType::DURABLE_STORAGE;
+    case PermissionName::PERSISTENT_STORAGE:
+      return PermissionType::PERSISTENT_STORAGE;
     case PermissionName::AUDIO_CAPTURE:
       return PermissionType::AUDIO_CAPTURE;
     case PermissionName::VIDEO_CAPTURE:

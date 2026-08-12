@@ -13,6 +13,7 @@
 #include "content/public/test/browser_test.h"
 #include "ui/actions/actions.h"
 #include "ui/base/models/menu_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/menus/simple_menu_model.h"
 
 class PinnedActionToolbarButtonMenuModelBrowserTest
@@ -29,7 +30,8 @@ class PinnedActionToolbarButtonMenuModelBrowserTest
 
   actions::ActionItem* action_item() {
     return actions::ActionManager::Get().FindAction(
-        actions::kActionCut, browser()->browser_actions()->root_action_item());
+        actions::kActionCut,
+        BrowserActions::From(browser())->root_action_item());
   }
 };
 
@@ -70,8 +72,9 @@ IN_PROC_BROWSER_TEST_F(PinnedActionToolbarButtonMenuModelBrowserTest,
   const std::u16string test_child_string1 = u"test_child_string1";
   const std::u16string test_child_string2 = u"test_child_string2";
   const auto test_child_icon1 = ui::ImageModel::FromVectorIcon(
-      vector_icons::kBackArrowIcon, ui::kColorSysPrimary,
-      ui::SimpleMenuModel::kDefaultIconSize);
+      features::IsRoundedIconsEnabled() ? vector_icons::kArrowBackIcon
+                                        : vector_icons::kBackArrowOldIcon,
+      ui::kColorSysPrimary, ui::SimpleMenuModel::kDefaultIconSize);
   // Add two child actions
   action_item()->AddChild(actions::ActionItem::Builder()
                               .SetActionId(test_child_action_id1)

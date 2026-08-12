@@ -62,9 +62,9 @@ class PerformanceInterventionButtonControllerUnitTest : public testing::Test {
         controller()->ShouldShowNotification(feature_engagement_tracker);
 
     if (should_show) {
-      CHECK(feature_engagement_tracker->ShouldTriggerHelpUI(
+      CHECK(feature_engagement_tracker->ShouldTriggerHelpUIForTesting(
           feature_engagement::kIPHPerformanceInterventionDialogFeature));
-      feature_engagement_tracker->Dismissed(
+      feature_engagement_tracker->DismissedForTesting(
           feature_engagement::kIPHPerformanceInterventionDialogFeature);
       g_browser_process->local_state()->SetTime(
           performance_manager::user_tuning::prefs::
@@ -82,7 +82,7 @@ class PerformanceInterventionButtonControllerUnitTest : public testing::Test {
     CHECK_LE(num_accepts, max_accept);
     PrefService* const pref_service = g_browser_process->local_state();
 
-    base::Value::List previous_acceptance = base::Value::List();
+    base::ListValue previous_acceptance = base::ListValue();
     for (int i = 0; i < max_accept - num_accepts; i++) {
       previous_acceptance.Append(false);
     }
@@ -192,7 +192,7 @@ TEST_F(PerformanceInterventionButtonControllerUnitTest,
   const int max_accept =
       performance_manager::features::kAcceptanceRateWindowSize.Get();
   PrefService* const pref_service = g_browser_process->local_state();
-  base::Value::List previous_acceptance = base::Value::List();
+  base::ListValue previous_acceptance = base::ListValue();
   for (int i = 0; i < max_accept; i++) {
     previous_acceptance.Append(false);
   }

@@ -4,9 +4,7 @@
 
 package org.chromium.chrome.browser.omnibox.styles;
 
-import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.drawable.BitmapDrawable;
+import android.content.res.Resources;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 
@@ -19,11 +17,9 @@ import org.chromium.build.annotations.NullMarked;
 /** Represents graphical decoration for the suggestion components. */
 @NullMarked
 public class OmniboxDrawableState {
+
     /** Embedded drawable object. */
     public final Drawable drawable;
-
-    /** Embedded drawable object for incognito mode. */
-    public final Drawable incognitoDrawable;
 
     /** Whether supplied drawable can be tinted */
     public final boolean allowTint;
@@ -33,6 +29,9 @@ public class OmniboxDrawableState {
 
     /** Whether drawable should be displayed as large. */
     public final boolean isLarge;
+
+    /** Resource ID of the drawable, if known. Used for testing. */
+    public final @DrawableRes int resourceIdForTesting;
 
     /**
      * Create OmniboxDrawableState representing a Color.
@@ -45,116 +44,100 @@ public class OmniboxDrawableState {
                 new ColorDrawable(color),
                 /* useRoundedCorners= */ true,
                 /* isLarge= */ true,
-                /* allowTint= */ false);
+                /* allowTint= */ false,
+                Resources.ID_NULL);
     }
 
     /**
      * Create OmniboxDrawableState representing a small fallback icon.
      *
-     * @param context current context
+     * @param resourceProvider resource provider
      * @param resourceId resource ID of the drawable
      * @param allowTint whether the icon should be tinted with text color
      * @return newly created OmniboxDrawableState
      */
     public static OmniboxDrawableState forSmallIcon(
-            Context context, @DrawableRes int resourceId, boolean allowTint) {
-        return new OmniboxDrawableState(
-                OmniboxResourceProvider.getDrawable(context, resourceId),
-                /* useRoundedCorners= */ false,
-                /* isLarge= */ false,
-                allowTint);
-    }
-
-    /**
-     * Create OmniboxDrawableState representing a small fallback icon.
-     *
-     * @param context current context
-     * @param resourceId resource ID of the drawable
-     * @param incognitoResourceId resource ID of the drawable in incognito mode
-     * @param allowTint whether the icon should be tinted with text color
-     * @return newly created OmniboxDrawableState
-     */
-    public static OmniboxDrawableState forSmallIconWithIncognitoVariant(
-            Context context,
+            OmniboxResourceProvider resourceProvider,
             @DrawableRes int resourceId,
-            @DrawableRes int incognitoResourceId,
             boolean allowTint) {
         return new OmniboxDrawableState(
-                OmniboxResourceProvider.getDrawable(context, resourceId),
-                OmniboxResourceProvider.getDrawable(context, incognitoResourceId),
+                resourceProvider.getDrawable(resourceId),
                 /* useRoundedCorners= */ false,
                 /* isLarge= */ false,
-                allowTint);
+                allowTint,
+                resourceId);
     }
 
     /**
      * Create OmniboxDrawableState representing a large fallback icon.
      *
-     * @param context current context
+     * @param resourceProvider resource provider
      * @param resourceId resource ID of the drawable
      * @param allowTint whether the icon should be tinted with text color
      * @return newly created OmniboxDrawableState
      */
     public static OmniboxDrawableState forLargeIcon(
-            Context context, @DrawableRes int resourceId, boolean allowTint) {
+            OmniboxResourceProvider resourceProvider,
+            @DrawableRes int resourceId,
+            boolean allowTint) {
         return new OmniboxDrawableState(
-                OmniboxResourceProvider.getDrawable(context, resourceId),
+                resourceProvider.getDrawable(resourceId),
                 /* useRoundedCorners= */ false,
                 /* isLarge= */ true,
-                allowTint);
+                allowTint,
+                resourceId);
     }
 
     /**
      * Create OmniboxDrawableState representing a site favicon.
      *
-     * @param context current context
-     * @param bitmap bitmap with decoded site favicon
+     * @param drawable Drawable of the favicon
      * @return newly created OmniboxDrawableState
      */
-    public static OmniboxDrawableState forFavIcon(Context context, Bitmap bitmap) {
+    public static OmniboxDrawableState forFavIcon(Drawable drawable) {
         return new OmniboxDrawableState(
-                new BitmapDrawable(context.getResources(), bitmap),
+                drawable,
                 /* useRoundedCorners= */ true,
                 /* isLarge= */ false,
-                /* allowTint= */ false);
+                /* allowTint= */ false,
+                Resources.ID_NULL);
     }
 
     /**
      * Create OmniboxDrawableState with dedicated image decoration.
      *
-     * @param context current context
-     * @param bitmap dedicated bitmap
+     * @param drawable dedicated drawable
      * @return newly created OmniboxDrawableState
      */
-    public static OmniboxDrawableState forImage(Context context, Bitmap bitmap) {
+    public static OmniboxDrawableState forImage(Drawable drawable) {
         return new OmniboxDrawableState(
-                new BitmapDrawable(context.getResources(), bitmap),
+                drawable,
                 /* useRoundedCorners= */ true,
                 /* isLarge= */ true,
-                /* allowTint= */ false);
+                /* allowTint= */ false,
+                Resources.ID_NULL);
     }
 
     /**
      * Create new OmniboxDrawableState.
      *
      * @param drawable the object to draw
-     * @param incognitoDrawable the object to draw in incognito mode
      * @param useRoundedCorners whether to round drawable's corners
      * @param isLarge whether the drawable should be shown as large item
      * @param allowTint whether the icon should be tinted with text color
+     * @param resourceId resource ID of the drawable, if known
      */
-    @VisibleForTesting
-    public OmniboxDrawableState(
+    private OmniboxDrawableState(
             Drawable drawable,
-            Drawable incognitoDrawable,
             boolean useRoundedCorners,
             boolean isLarge,
-            boolean allowTint) {
+            boolean allowTint,
+            @DrawableRes int resourceId) {
         this.drawable = drawable;
-        this.incognitoDrawable = incognitoDrawable;
         this.useRoundedCorners = useRoundedCorners;
         this.isLarge = isLarge;
         this.allowTint = allowTint;
+        this.resourceIdForTesting = resourceId;
     }
 
     /**
@@ -168,6 +151,6 @@ public class OmniboxDrawableState {
     @VisibleForTesting
     public OmniboxDrawableState(
             Drawable drawable, boolean useRoundedCorners, boolean isLarge, boolean allowTint) {
-        this(drawable, drawable, useRoundedCorners, isLarge, allowTint);
+        this(drawable, useRoundedCorners, isLarge, allowTint, Resources.ID_NULL);
     }
 }

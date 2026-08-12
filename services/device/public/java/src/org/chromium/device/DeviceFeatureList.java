@@ -22,14 +22,18 @@ import org.chromium.build.annotations.NullMarked;
 @NullMarked
 public abstract class DeviceFeatureList {
     public static final String GENERIC_SENSOR_EXTRA_CLASSES = "GenericSensorExtraClasses";
+    public static final String SENSORS_ALLOW_ASK_BLOCK_PERMISSION_MODEL =
+            "SensorsAllowAskBlockPermissionModel";
     public static final String BATTERY_STATUS_MANAGER_BROADCAST_RECEIVER_IN_BACKGROUND =
             "BatteryStatusManagerBroadcastReceiverInBackground";
-    public static final String WEBAUTHN_ANDROID_SIGNAL = "WebAuthenticationAndroidSignal";
-    public static final String WEBAUTHN_PASSKEY_UPGRADE = "WebAuthenticationPasskeyUpgrade";
-    public static final String WEBAUTHN_IMMEDIATE_GET = "WebAuthenticationImmediateGet";
+
+    public static final String GMS_CORE_FAIL_CLOSED_ON_PRECISE_LEAK =
+            "GmsCoreFailClosedOnPreciseLeak";
 
     public static final MutableFlagWithSafeDefault sGmsCoreLocationRequestParamOverride =
             newMutableFlagWithSafeDefault("GmsCoreLocationRequestParamOverride", false);
+    public static final MutableFlagWithSafeDefault sGmsCoreFailClosedOnPreciseLeak =
+            newMutableFlagWithSafeDefault(GMS_CORE_FAIL_CLOSED_ON_PRECISE_LEAK, true);
     public static final MutableIntParamWithSafeDefault sGmsCoreLocationRequestUpdateInterval =
             sGmsCoreLocationRequestParamOverride.newIntParam(
                     "location_request_min_update_interval_millis",
@@ -38,10 +42,6 @@ public abstract class DeviceFeatureList {
             sGmsCoreLocationRequestParamOverride.newIntParam(
                     "location_request_max_location_age_mills",
                     (int) (5 * DateUtils.SECOND_IN_MILLIS));
-    public static final MutableFlagWithSafeDefault sWebAuthnImmediateGet =
-            newMutableFlagWithSafeDefault(WEBAUTHN_IMMEDIATE_GET, false);
-    public static final MutableIntParamWithSafeDefault sWebAuthnImmmediateTimeoutMs =
-            sWebAuthnImmediateGet.newIntParam("timeout_ms", 500);
 
     private static MutableFlagWithSafeDefault newMutableFlagWithSafeDefault(
             String featureName, boolean defaultValue) {

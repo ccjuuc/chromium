@@ -29,11 +29,9 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
 import org.chromium.chrome.browser.autofill.AutofillClientProviderUtils;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
@@ -43,8 +41,10 @@ import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
+import org.chromium.components.autofill.AndroidAutofillFeatures;
 import org.chromium.components.browser_ui.http_auth.LoginPrompt;
 import org.chromium.components.browser_ui.http_auth.R;
+import org.chromium.components.browser_ui.widget.text.AlertDialogEditText;
 import org.chromium.content_public.common.ContentUrlConstants;
 import org.chromium.net.test.EmbeddedTestServer;
 
@@ -118,8 +118,7 @@ public class ChromeHttpAuthHandlerTest {
 
     @Test
     @MediumTest
-    @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
-    @DisabledTest(message = "https://crbug.com/1218039")
+    @DisabledTest(message = "https://crbug.com/40771422")
     public void authDialogSuppressedOnBackgroundTab() throws Exception {
         Tab firstTab = mActivityTestRule.getActivityTab();
         ChromeTabUtils.newTabFromMenu(
@@ -167,7 +166,6 @@ public class ChromeHttpAuthHandlerTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH)
     public void testAutofillUrlProvidedWhenAvailable() throws Exception {
         AutofillClientProviderUtils.setAutofillAvailabilityToUseForTesting(
                 AndroidAutofillAvailabilityStatus.AVAILABLE);
@@ -183,7 +181,6 @@ public class ChromeHttpAuthHandlerTest {
 
     @Test
     @MediumTest
-    @EnableFeatures(ChromeFeatureList.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH)
     public void testAutofillUrlNotProvidedWhenNotAvailable() throws Exception {
         AutofillClientProviderUtils.setAutofillAvailabilityToUseForTesting(
                 AndroidAutofillAvailabilityStatus.SETTING_TURNED_OFF);
@@ -199,8 +196,8 @@ public class ChromeHttpAuthHandlerTest {
 
     @Test
     @MediumTest
-    @DisableFeatures(ChromeFeatureList.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH)
-    public void testAutofillUrlNotProvidedWhenFeatureDisabled() throws Exception {
+    @EnableFeatures(AndroidAutofillFeatures.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH_ORIGIN_NAME)
+    public void testAutofillUrlProvidedWhenFeatureOriginEnabled() throws Exception {
         AutofillClientProviderUtils.setAutofillAvailabilityToUseForTesting(
                 AndroidAutofillAvailabilityStatus.AVAILABLE);
 
@@ -209,7 +206,25 @@ public class ChromeHttpAuthHandlerTest {
         CriteriaHelper.pollUiThread(
                 () -> {
                     Criteria.checkThat(
-                            handler, hasAutofillImportance(View.IMPORTANT_FOR_AUTOFILL_NO));
+                            handler, hasAutofillImportance(View.IMPORTANT_FOR_AUTOFILL_YES));
+                    Criteria.checkThat(handler, hasAutofillUrl(mTestServer.getURL("/")));
+                });
+    }
+
+    @Test
+    @MediumTest
+    @DisableFeatures(AndroidAutofillFeatures.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH_ORIGIN_NAME)
+    public void testAutofillUrlProvidedWhenFeatureOriginDisabled() throws Exception {
+        AutofillClientProviderUtils.setAutofillAvailabilityToUseForTesting(
+                AndroidAutofillAvailabilityStatus.AVAILABLE);
+
+        ChromeHttpAuthHandler handler = triggerAuth();
+        verifyAuthDialogVisibility(handler, true);
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    Criteria.checkThat(
+                            handler, hasAutofillImportance(View.IMPORTANT_FOR_AUTOFILL_YES));
+                    Criteria.checkThat(handler, hasAutofillUrl(mTestServer.getURL("/auth-basic")));
                 });
     }
 
@@ -234,6 +249,28 @@ public class ChromeHttpAuthHandlerTest {
             @Override
             public void describeTo(Description description) {
                 description.appendText("has autofill importance of " + expectedImportance);
+            }
+        };
+    }
+
+    private static Matcher<ChromeHttpAuthHandler> hasAutofillUrl(String expectedUrl) {
+        return new TypeSafeMatcher<ChromeHttpAuthHandler>() {
+            @Override
+            protected boolean matchesSafely(ChromeHttpAuthHandler handler) {
+                LoginPrompt prompt = handler.getLoginPromptForTesting();
+                if (prompt == null) return false;
+                AlertDialog dialog = prompt.getDialogForTesting();
+                if (dialog == null) return false;
+                AlertDialogEditText usernameView = dialog.findViewById(R.id.username);
+                if (usernameView == null || usernameView.getUrlForTesting() == null) {
+                    return false;
+                }
+                return usernameView.getUrlForTesting().getSpec().equals(expectedUrl);
+            }
+
+            @Override
+            public void describeTo(Description description) {
+                description.appendText("has autofill url " + expectedUrl);
             }
         };
     }

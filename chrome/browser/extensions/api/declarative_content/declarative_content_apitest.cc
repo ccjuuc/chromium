@@ -133,10 +133,8 @@ constexpr char kBackgroundHelpers[] =
          });
        };)";
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 constexpr char kRulesExtensionName[] =
     "Declarative content persistence apitest";
-#endif
 
 using ContextType = extensions::browser_test_util::ContextType;
 
@@ -200,8 +198,9 @@ void DeclarativeContentApiTest::CheckIncognito(IncognitoMode mode,
   ASSERT_TRUE(incognito_action);
 
   ASSERT_TRUE(ready.WaitUntilSatisfied());
-  if (is_enabled_in_incognito && mode == SPLIT)
+  if (is_enabled_in_incognito && mode == SPLIT) {
     ASSERT_TRUE(ready_incognito.WaitUntilSatisfied());
+  }
 
   const int incognito_tab_id = ExtensionTabUtil::GetTabId(incognito_tab);
 
@@ -387,7 +386,7 @@ IN_PROC_BROWSER_TEST_F(DeclarativeContentApiTest, Overview) {
 }
 
 // Test that adds two rules pointing to single action instance.
-// Regression test for http://crbug.com/574149.
+// Regression test for http://crbug.com/41231889.
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        ReusedActionInstance) {
   static constexpr char kBackgroundScript[] =
@@ -720,8 +719,6 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
   EXPECT_TRUE(incognito_action->GetIsVisible(incognito_tab_id));
 }
 
-// TODO(crbug.com/40488499): Android does not support PRE_ steps.
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // TODO(crbug.com/41189874): Flaky on Windows release builds.
 #if BUILDFLAG(IS_WIN) && defined(NDEBUG)
 #define MAYBE_PRE_RulesPersistence DISABLED_PRE_RulesPersistence
@@ -758,8 +755,6 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        MAYBE_RulesPersistence) {
   const Extension* extension = GetSingleLoadedExtension();
-  // TODO(crbug.com/40200835): On desktop Android this assert fails because the
-  // extension was not loaded. It's not clear why.
   ASSERT_TRUE(extension) << message_;
   ASSERT_EQ(kRulesExtensionName, extension->name());
 
@@ -810,9 +805,8 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
   incognito_test_observer.WaitForPageActionVisibilityChangeTo(incognito_tab, 0);
   EXPECT_FALSE(incognito_action->GetIsVisible(incognito_tab_id));
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-// http://crbug.com/304373
+// http://crbug.com/40335865
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        UninstallWhileActivePageAction) {
   ext_dir_.WriteManifest(FormatManifest(SPANNING));
@@ -1009,7 +1003,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
   CheckBookmarkEvents(false);
 }
 
-// https://crbug.com/497586
+// https://crbug.com/40421566
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        WebContentsWithoutTabAddedNotificationAtOnLoaded) {
   // Add a web contents to the tab strip in a way that doesn't trigger
@@ -1024,7 +1018,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
   ASSERT_TRUE(LoadExtension(ext_dir_.UnpackedPath()));
 }
 
-// https://crbug.com/501225
+// https://crbug.com/40423103
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        PendingWebContentsClearedOnRemoveRules) {
   ext_dir_.WriteManifest(FormatManifest(SPANNING));
@@ -1069,7 +1063,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
   EXPECT_TRUE(action->GetIsVisible(ExtensionTabUtil::GetTabId(tab1)));
 }
 
-// https://crbug.com/517492
+// https://crbug.com/40430221
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
                        RemoveAllRulesAfterExtensionUninstall) {
   ext_dir_.WriteManifest(FormatManifest(SPANNING));
@@ -1107,7 +1101,7 @@ IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,
 
 // Test that an extension with a RequestContentScript rule in its manifest can
 // be loaded.
-// Regression for crbug.com/1211316, which could cause this test to flake if
+// Regression for crbug.com/40767553, which could cause this test to flake if
 // RulesRegistry::OnExtensionLoaded() was called before
 // UserScriptManager::OnExtensionLoaded().
 IN_PROC_BROWSER_TEST_P(DeclarativeContentApiTestWithContextType,

@@ -55,6 +55,7 @@
 #include "ui/views/views_features.h"
 #include "ui/views/widget/drop_helper.h"
 #include "ui/views/widget/focus_manager_event_handler.h"
+#include "ui/views/widget/legacy_window_reorderer.h"
 #include "ui/views/widget/native_widget_delegate.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/tooltip_manager_aura.h"
@@ -377,8 +378,13 @@ void NativeWidgetAura::InitNativeWidget(Widget::InitParams params) {
 
   wm::SetActivationDelegate(window_, this);
 
-  window_reorderer_ =
-      std::make_unique<WindowReorderer>(window_, GetWidget()->GetRootView());
+  if (base::FeatureList::IsEnabled(features::kNativeViewHostManagesLayers)) {
+    window_reorderer_ =
+        std::make_unique<WindowReorderer>(window_, GetWidget()->GetRootView());
+  } else {
+    legacy_window_reorderer_ = std::make_unique<legacy::WindowReorderer>(
+        window_, GetWidget()->GetRootView());
+  }
 }
 
 void NativeWidgetAura::OnWidgetInitDone() {}
@@ -437,7 +443,11 @@ const ui::Layer* NativeWidgetAura::GetLayer() const {
 }
 
 void NativeWidgetAura::ReorderNativeViews() {
-  window_reorderer_->ReorderChildWindows();
+  if (legacy_window_reorderer_) {
+    legacy_window_reorderer_->ReorderChildWindows();
+  } else if (window_reorderer_) {
+    window_reorderer_->ReorderChildWindows();
+  }
 }
 
 void NativeWidgetAura::ViewRemoved(View* view) {
@@ -940,18 +950,19 @@ void NativeWidgetAura::FlashFrame(bool flash) {
   }
 }
 
-void NativeWidgetAura::RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
-                                    const gfx::Point& location,
-                                    int operation,
-                                    ui::mojom::DragEventSource source) {
+void NativeWidgetAura::RunDragDropLoop(std::unique_ptr<ui::OSExchangeData> data,
+                                       const gfx::Point& location,
+                                       int operation,
+                                       ui::mojom::DragEventSource source) {
   if (window_) {
-    views::RunShellDrag(window_, std::move(data), location, operation, source);
+    views::RunDragDropLoop(window_, std::move(data), location, operation,
+                           source);
   }
 }
 
-void NativeWidgetAura::CancelShellDrag(View* view) {
+void NativeWidgetAura::CancelDragDropLoop(View* view) {
   if (window_) {
-    views::CancelShellDrag(window_);
+    views::CancelDragDropLoop(window_);
   }
 }
 
@@ -1087,6 +1098,12 @@ void NativeWidgetAura::OnSizeConstraintsChanged() {
 void NativeWidgetAura::OnNativeViewHierarchyWillChange() {}
 
 void NativeWidgetAura::OnNativeViewHierarchyChanged() {}
+
+#if BUILDFLAG(IS_WIN)
+void NativeWidgetAura::SetExcludeFromScreenCapture(bool exclude) {
+  // Nothing to be done for native widgets.
+}
+#endif
 
 bool NativeWidgetAura::SetAllowScreenshots(bool allow) {
   // TODO(crbug.com/322519161): Revisit this to delegate the call to
@@ -1271,12 +1288,14 @@ void NativeWidgetAura::OnResizeLoopEnded(aura::Window* window) {
 
 void NativeWidgetAura::OnMoveLoopStarted(aura::Window* window) {
   if (delegate_) {
+    delegate_->OnNativeWidgetUserDragStarted();
     delegate_->OnNativeWidgetBeginUserBoundsChange();
   }
 }
 
 void NativeWidgetAura::OnMoveLoopEnded(aura::Window* window) {
   if (delegate_) {
+    delegate_->OnNativeWidgetUserDragEnded();
     delegate_->OnNativeWidgetEndUserBoundsChange();
   }
 }
@@ -1430,6 +1449,7 @@ NativeWidgetAura::~NativeWidgetAura() {
     // root view. Reset them before deleting `delegate_` to avoid holding a
     // briefly dangling ptr.
     drop_helper_.reset();
+    legacy_window_reorderer_.reset();
     window_reorderer_.reset();
     owned_delegate_.reset();
   } else {

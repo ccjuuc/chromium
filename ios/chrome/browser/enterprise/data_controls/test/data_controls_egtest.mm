@@ -3,16 +3,19 @@
 // found in the LICENSE file.
 
 #import "base/strings/sys_string_conversions.h"
+#import "components/enterprise/data_controls/core/browser/features.h"
 #import "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_app_interface.h"
+#import "ios/chrome/browser/browser_content/ui_bundled/edit_menu_matchers.h"
 #import "ios/chrome/browser/enterprise/data_controls/test/data_controls_app_interface.h"
 #import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/ui/constants.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ios/chrome/test/earl_grey/chrome_actions.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
-#import "ios/components/enterprise/data_controls/features.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/web/public/test/element_selector.h"
 #import "net/test/embedded_test_server/default_handlers.h"
@@ -40,6 +43,15 @@ const char kLogoPageChromiumImageId[] = "chromium_image";
 // The text of the message on the logo page.
 const char kLogoPageText[] = "Page with some text and the chromium logo image.";
 
+// URL to a page with selectable text and pastebin.
+const char kPastebinPath[] = "/pastebin_page.html";
+// The DOM element ID of the selectable text.
+const char kSensitiveInformationId[] = "sensitive_information";
+// The text of the pastebin page
+const char kSensitiveInformationText[] = "SensitiveInformation";
+// The DOM element ID of the pastebin.
+const char kPastebinId[] = "pastebin";
+
 // Returns an ElementSelector for long pressing the first link in the page.
 ElementSelector* ElementSelectorToLongPressLink() {
   return [ElementSelector selectorWithCSSSelector:"a"];
@@ -48,6 +60,11 @@ ElementSelector* ElementSelectorToLongPressLink() {
 // Returns an ElementSelector for the chromium image on the logo page.
 ElementSelector* LogoPageChromiumImageIdSelector() {
   return [ElementSelector selectorWithElementID:kLogoPageChromiumImageId];
+}
+
+// Returns an ElementSelector for the sensitive information text.
+ElementSelector* SensitiveInformationIDSelector() {
+  return [ElementSelector selectorWithElementID:kSensitiveInformationId];
 }
 
 // Matcher for the copy link button in the context menu.
@@ -79,14 +96,12 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
 
-  if ([self isRunningTest:@selector(testCopyBlockedOnReaderMode)] ||
-      [self isRunningTest:@selector(testCopyLinkWarnProceedOnReaderMode)] ||
-      [self isRunningTest:@selector(testCopyLinkWarnCancelOnReaderMode)]) {
-    config.features_enabled.push_back(kEnableReaderMode);
-    config.features_enabled.push_back(kEnableReaderModeInUS);
+  if ([self isRunningTest:@selector(testSearchWithBlocked)] ||
+      [self isRunningTest:@selector(testSearchWithWarnProceed)] ||
+      [self isRunningTest:@selector(testSearchWithWarnCancel)] ||
+      [self isRunningTest:@selector(testSearchWithReport)]) {
+    config.features_enabled.push_back(data_controls::kDataControlsSearchWith);
   }
-  config.features_enabled.push_back(
-      data_controls::kEnableClipboardDataControlsIOS);
 
   return config;
 }
@@ -394,6 +409,169 @@ void TapOnContextMenuButton(id<GREYMatcher> context_menu_item_button) {
   GREYAssertTrue([ChromeEarlGrey pasteboardURL].is_empty(),
                  kBlockCopyingLinkFailedMessage);
   [ChromeEarlGrey clearPasteboard];
+  [DataControlsAppInterface clearDataControlRules];
+}
+
+// Tests that when pasting is warned, clipboard content change will dismiss the
+// current Warning Dialog.
+- (void)testPasteCancelIfClipboardContentChanged {
+  [DataControlsAppInterface setWarnPasteRule];
+
+  [ChromeEarlGrey clearPasteboard];
+  const GURL initialURL = self.testServer->GetURL(kPastebinPath);
+  [ChromeEarlGrey loadURL:initialURL];
+  [ChromeEarlGrey waitForWebStateContainingText:kSensitiveInformationText];
+
+  [ChromeEarlGreyUI longPressElementOnWebView:SensitiveInformationIDSelector()];
+  id<GREYMatcher> copyButton =
+      grey_allOf([EditMenuAppInterface editMenuCopyButtonMatcher],
+                 grey_sufficientlyVisible(), nil);
+  [[EarlGrey selectElementWithMatcher:copyButton] performAction:grey_tap()];
+
+  // Using JavaScript to focus on the pastebin first then longpress because
+  // edit menu does not always show up if simply tapping on the pastebin.
+  [ChromeEarlGrey
+      evaluateJavaScriptForSideEffect:
+          [NSString stringWithFormat:@"document.getElementById('%@').focus();",
+                                     base::SysUTF8ToNSString(kPastebinId)]];
+  [ChromeEarlGreyUI
+      longPressElementOnWebView:[ElementSelector
+                                    selectorWithElementID:kPastebinId]];
+
+  // Tap the paste button in the edit menu.
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:[EditMenuAppInterface
+                                              editMenuPasteButtonMatcher]];
+  [[EarlGrey selectElementWithMatcher:[EditMenuAppInterface
+                                          editMenuPasteButtonMatcher]]
+      performAction:grey_tap()];
+
+  // Test that the alert is shown by waiting.
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:
+                      chrome_test_util::AlertItemWithAccessibilityLabelId(
+                          IDS_DATA_CONTROLS_PASTE_WARN_CONTINUE_BUTTON)];
+
+  // Simulate a new Copy action by updating the clipboard content.
+  [ChromeEarlGrey copyTextToPasteboard:@"Text"];
+
+  // Test that the alert is dismissed by waiting.
+  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:
+                      chrome_test_util::AlertItemWithAccessibilityLabelId(
+                          IDS_DATA_CONTROLS_PASTE_WARN_CONTINUE_BUTTON)];
+
+  [ChromeEarlGrey clearPasteboard];
+  [DataControlsAppInterface clearDataControlRules];
+}
+
+// Tests that Search With via context menu is blocked when a "BLOCK" is set
+// in DataControls policy.
+- (void)testSearchWithBlocked {
+  [DataControlsAppInterface setBlockCopyRule];
+
+  [ChromeEarlGrey loadURL:self.testServer->GetURL(kLogoPagePath)];
+  [ChromeEarlGrey waitForWebStateContainingText:kLogoPageText];
+
+  NSString* script =
+      @"var el = document.createElement('em'); el.id = 'search_text'; "
+      @"el.innerText = 'searchable'; document.body.appendChild(el);";
+  [ChromeEarlGrey evaluateJavaScriptWithPotentialError:script];
+
+  [ChromeEarlGreyUI
+      triggerEditMenu:[ElementSelector selectorWithElementID:"search_text"]];
+
+  id<GREYMatcher> matcher =
+      FindEditMenuActionWithAccessibilityLabel(@"Search with Google");
+  GREYAssertNil(matcher, @"Search with Google button should not be found");
+
+  [DataControlsAppInterface clearDataControlRules];
+}
+
+// Tests that Search With via context menu is allowed after the user
+// proceeds through the warning triggered by DataControlRules policy.
+- (void)testSearchWithWarnProceed {
+  [DataControlsAppInterface setWarnCopyRule];
+
+  [ChromeEarlGrey loadURL:self.testServer->GetURL(kLogoPagePath)];
+  [ChromeEarlGrey waitForWebStateContainingText:kLogoPageText];
+
+  NSString* script =
+      @"var el = document.createElement('em'); el.id = 'search_text'; "
+      @"el.innerText = 'searchable'; document.body.appendChild(el);";
+  [ChromeEarlGrey evaluateJavaScriptWithPotentialError:script];
+
+  [ChromeEarlGreyUI
+      triggerEditMenu:[ElementSelector selectorWithElementID:"search_text"]];
+
+  id<GREYMatcher> matcher =
+      FindEditMenuActionWithAccessibilityLabel(@"Search with Google");
+  GREYAssertNotNil(matcher, @"Search with Google button not found");
+  [[EarlGrey selectElementWithMatcher:matcher] performAction:grey_tap()];
+
+  // Tap the "Continue" button on the warning dialog.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::AlertItemWithAccessibilityLabelId(
+                     IDS_CONTINUE)] performAction:grey_tap()];
+
+  // Check that the search opened in a new tab.
+  [ChromeEarlGrey waitForMainTabCount:2];
+  [DataControlsAppInterface clearDataControlRules];
+}
+
+// Tests that Search With via context menu is cancelled when the user
+// cancels on the warning triggered by DataControlRules policy.
+- (void)testSearchWithWarnCancel {
+  [DataControlsAppInterface setWarnCopyRule];
+
+  [ChromeEarlGrey loadURL:self.testServer->GetURL(kLogoPagePath)];
+  [ChromeEarlGrey waitForWebStateContainingText:kLogoPageText];
+
+  NSString* script =
+      @"var el = document.createElement('em'); el.id = 'search_text'; "
+      @"el.innerText = 'searchable'; document.body.appendChild(el);";
+  [ChromeEarlGrey evaluateJavaScriptWithPotentialError:script];
+
+  [ChromeEarlGreyUI
+      triggerEditMenu:[ElementSelector selectorWithElementID:"search_text"]];
+
+  id<GREYMatcher> matcher =
+      FindEditMenuActionWithAccessibilityLabel(@"Search with Google");
+  GREYAssertNotNil(matcher, @"Search with Google button not found");
+  [[EarlGrey selectElementWithMatcher:matcher] performAction:grey_tap()];
+
+  // Tap the "Cancel" button on the warning dialog.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::AlertItemWithAccessibilityLabelId(
+                     IDS_CANCEL)] performAction:grey_tap()];
+
+  // Check that no new tab was opened.
+  GREYAssertEqual(1UL, [ChromeEarlGrey mainTabCount],
+                  @"Search should not have opened a new tab");
+  [DataControlsAppInterface clearDataControlRules];
+}
+
+// Tests that Search With via context menu is allowed and executes when
+// a "REPORT" is set in DataControls policy.
+- (void)testSearchWithReport {
+  [DataControlsAppInterface setReportCopyRule];
+
+  [ChromeEarlGrey loadURL:self.testServer->GetURL(kLogoPagePath)];
+  [ChromeEarlGrey waitForWebStateContainingText:kLogoPageText];
+
+  NSString* script =
+      @"var el = document.createElement('em'); el.id = 'search_text'; "
+      @"el.innerText = 'searchable'; document.body.appendChild(el);";
+  [ChromeEarlGrey evaluateJavaScriptWithPotentialError:script];
+
+  [ChromeEarlGreyUI
+      triggerEditMenu:[ElementSelector selectorWithElementID:"search_text"]];
+
+  id<GREYMatcher> matcher =
+      FindEditMenuActionWithAccessibilityLabel(@"Search with Google");
+  GREYAssertNotNil(matcher, @"Search with Google button not found");
+  [[EarlGrey selectElementWithMatcher:matcher] performAction:grey_tap()];
+
+  // Check that the search opened in a new tab without any dialog interruption.
+  [ChromeEarlGrey waitForMainTabCount:2];
   [DataControlsAppInterface clearDataControlRules];
 }
 

@@ -55,12 +55,10 @@ class ShapeOutsideInfo final : public GarbageCollected<ShapeOutsideInfo> {
   void SetPercentageResolutionInlineSize(LayoutUnit);
 
   static ShapeOutsideInfo& EnsureInfo(const LayoutBox& key) {
-    InfoMap& info_map = ShapeOutsideInfo::GetInfoMap();
-    auto it = info_map.find(&key);
-    if (it != info_map.end())
-      return *it->value;
-    InfoMap::AddResult result =
-        info_map.insert(&key, MakeGarbageCollected<ShapeOutsideInfo>(key));
+    InfoMap::AddResult result = GetInfoMap().insert(&key, nullptr);
+    if (result.is_new_entry) {
+      result.stored_value->value = MakeGarbageCollected<ShapeOutsideInfo>(key);
+    }
     return *result.stored_value->value;
   }
   static void RemoveInfo(const LayoutBox& key) { GetInfoMap().erase(&key); }
@@ -71,7 +69,6 @@ class ShapeOutsideInfo final : public GarbageCollected<ShapeOutsideInfo> {
   }
 
   void MarkShapeAsDirty() { shape_.reset(); }
-  bool IsShapeDirty() { return !shape_.get(); }
   bool IsComputingShape() const { return is_computing_shape_; }
 
   PhysicalRect ComputedShapePhysicalBoundingBox() const;
@@ -89,8 +86,7 @@ class ShapeOutsideInfo final : public GarbageCollected<ShapeOutsideInfo> {
                                              WritingMode,
                                              float margin) const;
 
-  LayoutUnit BlockStartOffset() const;
-  LayoutUnit InlineStartOffset() const;
+  LogicalOffset LogicalStartOffset() const;
 
   using InfoMap =
       HeapHashMap<WeakMember<const LayoutBox>, Member<ShapeOutsideInfo>>;

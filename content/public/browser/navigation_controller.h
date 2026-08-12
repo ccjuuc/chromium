@@ -17,18 +17,18 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/child_process_host.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/browser/initiator_navigation_state.h"
 #include "content/public/browser/navigation_ui_data.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/restore_type.h"
 #include "content/public/browser/session_storage_namespace.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/referrer.h"
 #include "services/network/public/cpp/resource_request_body.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/common/navigation/navigation_policy.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom.h"
 #include "third_party/blink/public/mojom/navigation/was_activated_option.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -141,6 +141,8 @@ class NavigationController {
 
   // Extra optional parameters for LoadURLWithParams.
   struct CONTENT_EXPORT LoadURLParams {
+    // Prefer using the constructor that takes in `OpenURLParams`, if available,
+    // to ensure important fields are copied over.
     explicit LoadURLParams(const GURL& url);
 
     // Copies |open_url_params| into LoadURLParams, attempting to copy all
@@ -168,7 +170,7 @@ class NavigationController {
     // ID of the renderer process of the frame host that initiated the
     // navigation. This is defined if and only if |initiator_frame_token| above
     // is, and it is only valid in conjunction with it.
-    int initiator_process_id = ChildProcessHost::kInvalidUniqueID;
+    ChildProcessId initiator_process_id;
 
     // The origin of the initiator of the navigation or std::nullopt if the
     // navigation was initiated through trusted, non-web-influenced UI
@@ -186,6 +188,16 @@ class NavigationController {
     // may not have an initiator, and in those cases this will be null. It will
     // also be null for non-about:blank/about:srcdoc navigations.
     std::optional<GURL> initiator_base_url;
+
+    // A record of the state of the navigation initiator when the navigation
+    // started. This should be non-null for all web contents initiated
+    // navigations.
+    scoped_refptr<InitiatorNavigationState> initiator_navigation_state;
+
+    // Whether initiator web security policies can be inherited when navigating
+    // to a local scheme. Except in specific cases (e.g. PDF viewer), this
+    // should be true.
+    bool should_ignore_initiator_policies_for_inheritance = false;
 
     // SiteInstance of the frame that initiated the navigation or null if we
     // don't know it.
@@ -307,21 +319,26 @@ class NavigationController {
     // Indicates a form submission created this navigation.
     bool is_form_submission = false;
 
-    // Impression info associated with this navigation. Should only be populated
-    // for navigations originating from a link click.
-    std::optional<blink::Impression> impression;
-
     // Download policy to be applied if this navigation turns into a download.
     blink::NavigationDownloadPolicy download_policy;
 
-    // Common begin navigation status.
-    blink::mojom::NavigationInitiatorActivationAndAdStatus
-        initiator_activation_and_ad_status =
-            blink::mojom::NavigationInitiatorActivationAndAdStatus::
-                kDidNotStartWithTransientActivation;
+    // Whether this navigation was started by an ad (i.e., an ad script was in
+    // the JavaScript stack at the time of the navigation, or the frame is an ad
+    // frame, as determined by Ad Tagging).
+    bool started_by_ad = false;
 
     // Indicates that this navigation is for PDF content in a renderer.
     bool is_pdf = false;
+
+    // When true, this navigation establishes a fresh embedder-imposed
+    // isolation domain: `NavigationRequest` mints a unique per-instance id, and
+    // the committing document plus any descendant frames inherit that id from
+    // their parent SiteInstance, so the whole subtree stays isolated from every
+    // other instance. Set only on the root navigation of a MimeHandler subtree
+    // (the initial navigation to content handled by a MimeHandler extension,
+    // which may itself be a subframe), not on the outermost main frame in
+    // general.
+    bool requests_unique_instance_isolation = false;
 
     // Indicates this navigation should use a new BrowsingInstance. For example,
     // this is used in web platform tests to guarantee that each test starts in
@@ -337,11 +354,49 @@ class NavigationController {
     // preserved, via rel="opener".
     bool has_rel_opener = false;
 
+    // If true, any extra headers provided will be removed on a cross-origin
+    // redirect.
+    bool remove_extra_headers_on_cross_origin_redirect = false;
+
     // True if the navigation should not be upgraded to HTTPS. This should only
     // be set in very specific circumstances like navigations to captive portal
     // login URLs which may be broken by HTTPS Upgrades due to the portal's
     // unconventional handling of HTTPS URLs.
     bool force_no_https_upgrade = false;
+
+    // A text fragment selector (that uses the syntax defined in
+    // https://wicg.github.io/scroll-to-text-fragment/#syntax) to scroll the
+    // matched text into the viewport without applying the standard highlight
+    // styling.
+    //
+    // This is intended for features that synchronize scroll state across
+    // devices or browser sessions (e.g., Chrome's Send Tab To Self). It is used
+    // instead of the standard blink::PageState restoration mechanism because
+    // PageState relies on layout-dependent pixel offsets. Pixel offsets do not
+    // translate well across vastly different form factors and viewport sizes
+    // (e.g., moving from mobile to desktop). A text fragment anchors to the
+    // content itself, making it robust against these layout differences.
+    //
+    // It is passed internally rather than appending `#:~:text=` to the URL
+    // because modifying the visible URL with arbitrary fragment strings can
+    // confuse users. Furthermore, standard URL text fragments apply a default
+    // visual highlight to the text, which is jarring when the user simply
+    // expects their previous scroll position to be restored.
+    //
+    // Usage of this parameter should be restricted to browser-initiated
+    // navigations. It must not be initiated from untrusted web content or
+    // arbitrary third-party apps, as allowing invisible, programmatic
+    // scrolling to arbitrary text on a page could introduce security risks
+    // (e.g., clickjacking).
+    //
+    // SECURITY NOTE: Because this payload may originate from a potentially
+    // compromised remote client, the privileged browser process must treat it
+    // as an opaque string. It should never be parsed or evaluated in the
+    // browser process, and must only be parsed by the sandboxed renderer.
+    //
+    // The string should contain only the selector value (the part after
+    // "text=" in a URL directive), not the "text=" prefix itself.
+    std::optional<std::string> internal_scroll_to_text_fragment;
   };
 
   // Disables checking for a repost and prompting the user. This is used during

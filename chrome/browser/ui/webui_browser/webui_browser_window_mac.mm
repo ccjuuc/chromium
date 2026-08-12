@@ -28,6 +28,7 @@ namespace {
 
 AppShimHost* GetHostForBrowser(Browser* browser) {
   auto* const shim_manager = apps::AppShimManager::Get();
+  CHECK(browser);
   if (!shim_manager) {
     return nullptr;
   }
@@ -36,12 +37,12 @@ AppShimHost* GetHostForBrowser(Browser* browser) {
 
 bool ShouldHandleKeyboardEvent(const input::NativeWebKeyboardEvent& event) {
   // |event.skip_if_unhandled| is true when it shouldn't be handled by the
-  // browser if it was ignored by the renderer. See http://crbug.com/25000.
+  // browser if it was ignored by the renderer. See http://crbug.com/41018016.
   if (event.skip_if_unhandled) {
     return false;
   }
 
-  // Ignore synthesized keyboard events. See http://crbug.com/23221.
+  // Ignore synthesized keyboard events. See http://crbug.com/41007517.
   if (event.GetType() == input::NativeWebKeyboardEvent::Type::kChar) {
     return false;
   }
@@ -75,9 +76,15 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
 
  private:
   // views::NativeWidgetMac implementation:
+  void OnWidgetDestroyed(views::Widget* widget) override {
+    browser_ = nullptr;
+    NativeWidgetMac::OnWidgetDestroyed(widget);
+  }
+
   void ValidateUserInterfaceItem(
       int32_t command,
       remote_cocoa::mojom::ValidateUserInterfaceItemResult* result) override {
+    CHECK(browser_);
     // This allows menu items like "Close Tabs" to be enabled when the browser
     // has open tabs, which in turn enables the "Close Tabs" keyboard shortcut.
     result->enable = chrome::IsCommandEnabled(browser_, command);
@@ -101,6 +108,7 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
   bool WillExecuteCommand(int32_t command,
                           WindowOpenDisposition window_open_disposition,
                           bool is_before_first_responder) override {
+    CHECK(browser_);
     if (is_before_first_responder) {
       // The specification for this private extensions API is incredibly vague.
       // For now, we avoid triggering chrome commands prior to giving the
@@ -114,13 +122,13 @@ class WebUIBrowserNativeWidgetMac : public views::NativeWidgetMac {
       // If a command is reserved, then we also have it bypass the main menu.
       // This is based on the rough approximation that reserved commands are
       // also the ones that we want to be quickly repeatable.
-      // https://crbug.com/836947.
+      // https://crbug.com/41385540.
       // The function IsReservedCommandOrKey does not examine its event argument
       // on macOS.
       input::NativeWebKeyboardEvent dummy_event(
           blink::WebInputEvent::Type::kKeyDown, 0, base::TimeTicks());
-      if (!browser_->command_controller()->IsReservedCommandOrKey(
-              command, dummy_event)) {
+      if (!chrome::BrowserCommandController::From(browser_)
+               ->IsReservedCommandOrKey(command, dummy_event)) {
         return false;
       }
     }

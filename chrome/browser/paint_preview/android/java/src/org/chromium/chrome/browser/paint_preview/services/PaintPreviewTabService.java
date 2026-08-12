@@ -24,12 +24,12 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
 import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.components.embedder_support.util.UrlUtilities;
-import org.chromium.components.embedder_support.util.UrlUtilitiesJni;
 import org.chromium.components.paintpreview.browser.NativePaintPreviewServiceProvider;
 import org.chromium.content_public.browser.RenderCoordinates;
 import org.chromium.content_public.browser.WebContents;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 
 /**
  * The Java-side implementations of paint_preview_tab_service.cc. The C++ side owns and controls the
@@ -55,7 +55,7 @@ public class PaintPreviewTabService implements NativePaintPreviewServiceProvider
                 && !tab.isNativePage()
                 && !tab.isShowingErrorPage()
                 && UrlUtilities.isHttpOrHttps(tab.getUrl())
-                && !UrlUtilitiesJni.get().isGoogleSearchUrl(tab.getUrl().getSpec());
+                && !UrlUtilities.isGoogleSearchUrl(tab.getUrl().getSpec());
     }
 
     private class CaptureTriggerListener extends TabModelSelectorTabObserver
@@ -82,13 +82,17 @@ public class PaintPreviewTabService implements NativePaintPreviewServiceProvider
             // ChromeActivity#onStop.
             if (mCurrentApplicationState == ApplicationState.HAS_STOPPED_ACTIVITIES
                     && qualifiesForCapture(tab)) {
+                final int tabId = tab.getId();
+                WeakReference<PaintPreviewTabService> serviceRef =
+                        new WeakReference<>(PaintPreviewTabService.this);
                 captureTab(
                         tab,
                         success -> {
-                            if (!success) {
+                            PaintPreviewTabService service = serviceRef.get();
+                            if (service != null && !success) {
                                 // Treat the tab as if it was closed to cleanup any partial capture
                                 // data.
-                                tabClosed(tab);
+                                service.tabClosed(tabId);
                             }
                         });
             }
@@ -96,7 +100,7 @@ public class PaintPreviewTabService implements NativePaintPreviewServiceProvider
 
         @Override
         public void onTabUnregistered(Tab tab) {
-            tabClosed(tab);
+            tabClosed(tab.getId());
         }
 
         @Override
@@ -232,11 +236,10 @@ public class PaintPreviewTabService implements NativePaintPreviewServiceProvider
                         successCallback);
     }
 
-    private void tabClosed(Tab tab) {
+    private void tabClosed(int tabId) {
         if (mNativePaintPreviewTabService == 0) return;
 
-        PaintPreviewTabServiceJni.get()
-                .tabClosedAndroid(mNativePaintPreviewTabService, tab.getId());
+        PaintPreviewTabServiceJni.get().tabClosedAndroid(mNativePaintPreviewTabService, tabId);
     }
 
     @VisibleForTesting

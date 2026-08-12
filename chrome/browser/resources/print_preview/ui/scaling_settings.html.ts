@@ -45,10 +45,9 @@ export function getHtml(this: ScalingSettingsElement) {
   </div>
 </print-preview-settings-section>
 <cr-collapse ?opened="${this.customSelected_}"
-    @transitionend="${this.onCollapseChanged_}">
-  <print-preview-number-settings-section
-      max-value="200" min-value="10" default-value="100"
-      ?disabled="${this.inputDisabled_()}"
+    @transitionend="${this.onTransitionend_}">
+  <print-preview-number-settings-section max-value="200" min-value="10"
+      default-value="100" ?disabled="${this.inputDisabled_()}"
       current-value="${this.currentValue_}"
       @current-value-changed="${this.onCurrentValueChanged_}"
       ?input-valid="${this.inputValid_}"

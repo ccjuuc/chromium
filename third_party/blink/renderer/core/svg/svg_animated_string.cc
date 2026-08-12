@@ -9,12 +9,12 @@
 #include "third_party/blink/renderer/core/trustedtypes/trusted_script_url.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_util.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
-V8UnionStringOrTrustedScriptURL* SVGAnimatedString::baseVal() {
-  return MakeGarbageCollected<V8UnionStringOrTrustedScriptURL>(
-      SVGAnimatedProperty<SVGString>::baseVal());
+String SVGAnimatedString::baseVal() {
+  return SVGAnimatedProperty<SVGString>::baseVal();
 }
 
 void SVGAnimatedString::setBaseVal(const V8UnionStringOrTrustedScriptURL* value,

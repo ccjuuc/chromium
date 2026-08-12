@@ -13,22 +13,19 @@
 #include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/style/ash_color_id.h"
-#include "ash/style/ash_color_provider.h"
 #include "ash/style/icon_button.h"
 #include "ash/style/typography.h"
 #include "ash/system/media/media_notification_provider.h"
+#include "ash/system/tray/imaged_tray_icon.h"
 #include "ash/system/tray/tray_bubble_view.h"
 #include "ash/system/tray/tray_bubble_wrapper.h"
 #include "ash/system/tray/tray_constants.h"
-#include "ash/system/tray/tray_container.h"
 #include "ash/system/tray/tray_popup_utils.h"
 #include "ash/system/tray/tray_utils.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "components/global_media_controls/public/constants.h"
-#include "components/media_message_center/notification_theme.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -42,7 +39,6 @@
 #include "ui/display/manager/managed_display_info.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
@@ -200,7 +196,13 @@ BEGIN_METADATA(MediaTray, PinButton)
 END_METADATA
 
 MediaTray::MediaTray(Shelf* shelf)
-    : TrayBackgroundView(shelf, TrayBackgroundViewCatalogName::kMediaPlayer) {
+    : ImagedTrayIcon(shelf,
+                     ui::ImageModel(),
+                     /*tooltip=*/
+                     IDS_ASH_GLOBAL_MEDIA_CONTROLS_BUTTON_TOOLTIP_TEXT,
+                     /*accessibility_name=*/
+                     IDS_ASH_GLOBAL_MEDIA_CONTROLS_BUTTON_TOOLTIP_TEXT,
+                     TrayBackgroundViewCatalogName::kMediaPlayer) {
   SetCallback(base::BindRepeating(&MediaTray::OnTrayButtonPressed,
                                   base::Unretained(this)));
   if (MediaNotificationProvider::Get()) {
@@ -209,14 +211,7 @@ MediaTray::MediaTray(Shelf* shelf)
 
   Shell::Get()->session_controller()->AddObserver(this);
 
-  tray_container()->SetMargin(kMediaTrayPadding, 0);
-  auto icon = std::make_unique<views::ImageView>();
-  icon->SetTooltipText(l10n_util::GetStringUTF16(
-      IDS_ASH_GLOBAL_MEDIA_CONTROLS_BUTTON_TOOLTIP_TEXT));
-  icon_ = tray_container()->AddChildView(std::move(icon));
   UpdateTrayItemColor(is_active());
-  GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
-      IDS_ASH_GLOBAL_MEDIA_CONTROLS_BUTTON_TOOLTIP_TEXT));
 }
 
 MediaTray::~MediaTray() {
@@ -250,11 +245,6 @@ void MediaTray::HideBubble(const TrayBubbleView* bubble_view) {
 void MediaTray::UpdateAfterLoginStatusChange() {
   UpdateDisplayState();
   PreferredSizeChanged();
-}
-
-void MediaTray::HandleLocaleChange() {
-  icon_->SetTooltipText(l10n_util::GetStringUTF16(
-      IDS_ASH_GLOBAL_MEDIA_CONTROLS_BUTTON_TOOLTIP_TEXT));
 }
 
 views::Widget* MediaTray::GetBubbleWidget() const {
@@ -300,7 +290,7 @@ void MediaTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {
 }
 
 void MediaTray::UpdateTrayItemColor(bool is_active) {
-  icon_->SetImage(ui::ImageModel::FromVectorIcon(
+  image_view()->SetImage(ui::ImageModel::FromVectorIcon(
       kGlobalMediaControlsIcon,
       is_active ? cros_tokens::kCrosSysSystemOnPrimaryContainer
                 : cros_tokens::kCrosSysOnSurface));
@@ -363,8 +353,7 @@ void MediaTray::UpdateDisplayState() {
 }
 
 void MediaTray::ShowBubbleWithItem(const std::string& item_id) {
-  DCHECK(MediaNotificationProvider::Get());
-  SetNotificationColorTheme();
+  CHECK(MediaNotificationProvider::Get());
 
   std::unique_ptr<TrayBubbleView> bubble_view =
       std::make_unique<TrayBubbleView>(CreateInitParamsForTrayBubble(this));
@@ -398,27 +387,6 @@ void MediaTray::ShowBubbleWithItem(const std::string& item_id) {
 
 std::u16string MediaTray::GetAccessibleNameForBubble() {
   return l10n_util::GetStringUTF16(IDS_ASH_GLOBAL_MEDIA_CONTROLS_TITLE);
-}
-
-void MediaTray::SetNotificationColorTheme() {
-  if (!MediaNotificationProvider::Get()) {
-    return;
-  }
-
-  media_message_center::NotificationTheme theme;
-  theme.primary_text_color =
-      AshColorProvider::Get()->GetColor(cros_tokens::kTextColorPrimary);
-  theme.secondary_text_color =
-      AshColorProvider::Get()->GetColor(cros_tokens::kTextColorSecondary);
-  theme.enabled_icon_color =
-      AshColorProvider::Get()->GetColor(cros_tokens::kIconColorPrimary);
-  theme.disabled_icon_color =
-      AshColorProvider::Get()->GetColor(cros_tokens::kIconColorSecondary);
-  theme.separator_color =
-      AshColorProvider::Get()->GetColor(cros_tokens::kSeparatorColor);
-  theme.background_color =
-      GetColorProvider()->GetColor(kColorAshControlBackgroundColorInactive);
-  MediaNotificationProvider::Get()->SetColorTheme(theme);
 }
 
 void MediaTray::OnGlobalMediaControlsPinPrefChanged() {

@@ -8,19 +8,22 @@
 
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notimplemented.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "services/webnn/error.h"
+#include "services/webnn/gpu_task_scheduler.h"
 #include "services/webnn/public/cpp/operand_descriptor.h"
 #include "services/webnn/public/cpp/webnn_types.h"
 #include "services/webnn/public/mojom/features.mojom-features.h"
+#include "services/webnn/public/mojom/webnn_service_introspection.mojom.h"
 #include "services/webnn/public/mojom/webnn_tensor.mojom.h"
-#include "services/webnn/scoped_gpu_sequence.h"
 #include "services/webnn/webnn_constant_operand.h"
 #include "services/webnn/webnn_context_impl.h"
 #include "services/webnn/webnn_context_provider_impl.h"
@@ -28,6 +31,7 @@
 #include "services/webnn/webnn_tensor_impl.h"
 #include "services/webnn/webnn_test_environment.h"
 #include "services/webnn/webnn_test_utils.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 
@@ -36,7 +40,7 @@ namespace webnn {
 namespace {
 
 mojom::GraphInfoPtr BuildSimpleGraphInfo(
-    mojo::AssociatedRemote<mojom::WebNNGraphBuilder>& graph_builder_remote) {
+    mojo::Remote<mojom::WebNNGraphBuilder>& graph_builder_remote) {
   // Build a simple graph.
   GraphInfoBuilder builder(graph_builder_remote);
   OperandId input_operand_id = builder.BuildInput(
@@ -48,16 +52,12 @@ mojom::GraphInfoPtr BuildSimpleGraphInfo(
   return builder.TakeGraphInfo();
 }
 
-// A fake WebNNGraph Mojo interface implementation that binds a pipe for
-// computing graph message.
+// A fake WebNNGraph implementation for testing.
 class FakeWebNNGraphImpl final : public WebNNGraphImpl {
  public:
-  FakeWebNNGraphImpl(
-      mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
-      base::WeakPtr<WebNNContextImpl> context,
-      ComputeResourceInfo compute_resource_info)
-      : WebNNGraphImpl(std::move(receiver),
-                       std::move(context),
+  FakeWebNNGraphImpl(WebNNContextImpl& context,
+                     ComputeResourceInfo compute_resource_info)
+      : WebNNGraphImpl(context,
                        std::move(compute_resource_info),
                        /*devices=*/{}) {}
 
@@ -79,26 +79,31 @@ class FakeWebNNContextImpl final : public WebNNContextImpl {
   FakeWebNNContextImpl(
       mojo::PendingReceiver<mojom::WebNNContext> receiver,
       base::WeakPtr<WebNNContextProviderImpl> context_provider,
-      std::unique_ptr<ScopedGpuSequence> gpu_sequence,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       gpu::SharedImageManager* shared_image_manager,
-      scoped_refptr<base::SingleThreadTaskRunner> main_task_runner)
+      scoped_refptr<base::SingleThreadTaskRunner> main_task_runner,
+      base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>*
+          captured_constant_operands)
       : WebNNContextImpl(std::move(receiver),
                          std::move(context_provider),
+                         // The backend type is ignored for testing.
+                         ContextBackendUma::kNotSupported,
                          GetContextPropertiesForTesting(),
                          mojom::CreateContextOptions::New(),
                          mojo::ScopedDataPipeConsumerHandle(),
                          mojo::ScopedDataPipeProducerHandle(),
-                         std::move(gpu_sequence),
+                         std::move(gpu_task_scheduler),
                          std::move(memory_tracker),
                          std::move(owning_task_runner),
                          shared_image_manager,
-                         std::move(main_task_runner)) {}
+                         std::move(main_task_runner)),
+        captured_constant_operands_(captured_constant_operands) {}
 
   // WebNNContextImpl:
   base::WeakPtr<WebNNContextImpl> AsWeakPtr() override {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     return weak_factory_.GetWeakPtr();
   }
 
@@ -106,31 +111,27 @@ class FakeWebNNContextImpl final : public WebNNContextImpl {
   ~FakeWebNNContextImpl() override = default;
 
   void CreateGraphImpl(
-      mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
       mojom::GraphInfoPtr graph_info,
       WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
       base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
-      /*constant_operands*/,
-      base::flat_map<OperandId, WebNNTensorImpl*>
-      /*constant_tensor_operands*/,
+          constant_operands,
       CreateGraphImplCallback callback) override {
+    if (captured_constant_operands_) {
+      *captured_constant_operands_ = std::move(constant_operands);
+    }
+
     // Asynchronously resolve `callback` so there's an opportunity for
     // subsequent messages to be (illegally) sent from the `WebNNGraphBuilder`
     // remote before it's disconnected.
-    scheduler_task_runner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](mojo::PendingAssociatedReceiver<mojom::WebNNGraph> receiver,
-               base::WeakPtr<WebNNContextImpl> context,
-               WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
-               CreateGraphImplCallback callback) {
-              CHECK(context);
-              std::move(callback).Run(base::MakeRefCounted<FakeWebNNGraphImpl>(
-                  std::move(receiver), std::move(context),
-                  std::move(compute_resource_info)));
-            },
-            std::move(receiver), AsWeakPtr(), std::move(compute_resource_info),
-            std::move(callback)));
+    RunOrScheduleTask(base::BindOnce(
+        [](base::WeakPtr<WebNNContextImpl> context,
+           WebNNGraphImpl::ComputeResourceInfo compute_resource_info,
+           CreateGraphImplCallback callback) {
+          CHECK(context);
+          std::move(callback).Run(base::MakeRefCounted<FakeWebNNGraphImpl>(
+              *context, std::move(compute_resource_info)));
+        },
+        AsWeakPtr(), std::move(compute_resource_info), std::move(callback)));
   }
 
   base::expected<scoped_refptr<WebNNTensorImpl>, mojom::ErrorPtr>
@@ -149,6 +150,16 @@ class FakeWebNNContextImpl final : public WebNNContextImpl {
         mojom::Error::Code::kNotSupportedError, "Not implemented"));
   }
 
+  std::string_view GetBackendName() const override { return "Fake Backend"; }
+
+  std::vector<mojom::WebNNExecutionProviderDetailsPtr>
+  GetExecutionProvidersInfo() const override {
+    return {};
+  }
+
+  // Owned by FakeWebNNBackend. May be null if no capture is needed.
+  raw_ptr<base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>>
+      captured_constant_operands_;
   base::WeakPtrFactory<FakeWebNNContextImpl> weak_factory_{this};
 };
 
@@ -156,10 +167,15 @@ class FakeWebNNContextImpl final : public WebNNContextImpl {
 // the graph validation steps and computation resources.
 class FakeWebNNBackend : public WebNNContextProviderImpl::BackendForTesting {
  public:
+  const base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>&
+  captured_constant_operands() const {
+    return captured_constant_operands_;
+  }
+
   std::unique_ptr<WebNNContextImpl, OnTaskRunnerDeleter> CreateWebNNContext(
       base::WeakPtr<WebNNContextProviderImpl> context_provider_impl,
       mojom::CreateContextOptionsPtr options,
-      std::unique_ptr<ScopedGpuSequence> gpu_sequence,
+      std::unique_ptr<GpuTaskScheduler> gpu_task_scheduler,
       scoped_refptr<gpu::MemoryTracker> memory_tracker,
       scoped_refptr<base::SingleThreadTaskRunner> owning_task_runner,
       gpu::SharedImageManager* shared_image_manager,
@@ -171,20 +187,27 @@ class FakeWebNNBackend : public WebNNContextProviderImpl::BackendForTesting {
     std::unique_ptr<WebNNContextImpl, OnTaskRunnerDeleter> context_impl(
         new FakeWebNNContextImpl(
             remote.InitWithNewPipeAndPassReceiver(),
-            std::move(context_provider_impl), std::move(gpu_sequence),
+            std::move(context_provider_impl), std::move(gpu_task_scheduler),
             std::move(memory_tracker), std::move(owning_task_runner),
-            shared_image_manager, std::move(main_task_runner)),
+            shared_image_manager, std::move(main_task_runner),
+            &captured_constant_operands_),
         OnTaskRunnerDeleter(std::move(task_runner)));
     ContextProperties context_properties = context_impl->properties();
     // The receiver bound to FakeWebNNContext.
     auto success = mojom::CreateContextSuccess::New(
-        std::move(remote), std::move(context_properties),
-        context_impl->handle(), mojo::ScopedDataPipeProducerHandle(),
-        mojo::ScopedDataPipeConsumerHandle());
+        std::move(remote), /*compiler_context_remote=*/mojo::NullRemote(),
+        std::move(context_properties), context_impl->handle(),
+        mojo::ScopedDataPipeProducerHandle(),
+        mojo::ScopedDataPipeConsumerHandle(), /*command_buffer_id=*/0);
     std::move(callback).Run(
         mojom::CreateContextResult::NewSuccess(std::move(success)));
     return context_impl;
   }
+
+ private:
+  // Constant operands captured from the most recent CreateGraphImpl call.
+  base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>
+      captured_constant_operands_;
 };
 
 }  // namespace
@@ -210,9 +233,15 @@ class WebNNGraphBuilderImplTest : public testing::Test {
         std::move(create_context_result->get_success()->context_remote));
 
     webnn_context_->CreateGraphBuilder(
-        graph_builder_remote_.BindNewEndpointAndPassReceiver());
+        graph_builder_remote_.BindNewPipeAndPassReceiver());
   }
   void TearDown() override {
+    graph_builder_remote_.reset();
+    webnn_context_.reset();
+    webnn_test_environment_.WaitForAllContextsToBeDestroyed();
+
+    provider_remote_.reset();
+    webnn_test_environment_.TearDown();
     WebNNContextProviderImpl::SetBackendForTesting(nullptr);
   }
 
@@ -220,9 +249,11 @@ class WebNNGraphBuilderImplTest : public testing::Test {
     return webnn_test_environment_;
   }
 
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder>& graph_builder_remote() {
+  mojo::Remote<mojom::WebNNGraphBuilder>& graph_builder_remote() {
     return graph_builder_remote_;
   }
+
+  FakeWebNNBackend& backend() { return backend_for_testing_; }
 
  protected:
   WebNNGraphBuilderImplTest()
@@ -238,7 +269,7 @@ class WebNNGraphBuilderImplTest : public testing::Test {
   test::WebNNTestEnvironment webnn_test_environment_;
   mojo::Remote<mojom::WebNNContextProvider> provider_remote_;
   mojo::Remote<mojom::WebNNContext> webnn_context_;
-  mojo::AssociatedRemote<mojom::WebNNGraphBuilder> graph_builder_remote_;
+  mojo::Remote<mojom::WebNNGraphBuilder> graph_builder_remote_;
 };
 
 TEST_F(WebNNGraphBuilderImplTest, CreateGraph) {
@@ -257,8 +288,8 @@ TEST_F(WebNNGraphBuilderImplTest, CreateGraph) {
   // The remote should disconnect shortly after the future resolves since the
   // `WebNNGraphBuilder` is destroyed shortly after firing its `CreateGraph()`
   // callback.
-  test_environment().RunUntilIdle();
-  EXPECT_FALSE(graph_builder_remote().is_connected());
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !graph_builder_remote().is_connected(); }));
 }
 
 TEST_F(WebNNGraphBuilderImplTest, CreateGraphTwice) {
@@ -376,6 +407,47 @@ TEST_F(WebNNGraphBuilderImplTest, CreateInvalidGraphForTensorByteLengthLimit) {
                      /*max_value=*/1.0);
   EXPECT_FALSE(
       builder.IsValidGraphForTesting(GetContextPropertiesForTesting()));
+}
+
+TEST_F(WebNNGraphBuilderImplTest, TransposePendingPermutation7DConstant) {
+  const std::array<float, 24> kConstantData{
+      1.0f,  2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f,  8.0f,
+      9.0f,  10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f,
+      17.0f, 18.0f, 19.0f, 20.0f, 21.0f, 22.0f, 23.0f, 24.0f};
+
+  GraphInfoBuilder builder(graph_builder_remote());
+  OperandId constant_operand_id = builder.BuildConstant(
+      /*dimensions=*/{2, 3, 1, 1, 1, 1, 4}, OperandDataType::kFloat32,
+      base::as_byte_span(base::allow_nonunique_obj, kConstantData),
+      blink::WebNNPendingConstantToken(),
+      /*pending_permutation=*/{6, 5, 4, 3, 2, 1, 0});
+  OperandId output_operand_id = builder.BuildOutput(
+      "output", /*dimensions=*/{24}, OperandDataType::kFloat32);
+
+  builder.BuildReshape(constant_operand_id, output_operand_id);
+  EXPECT_TRUE(builder.IsValidGraphForTesting(GetContextPropertiesForTesting()));
+
+  base::test::TestFuture<
+      base::expected<mojom::CreateGraphSuccessPtr, mojom::ErrorPtr>>
+      create_graph_future;
+  graph_builder_remote()->CreateGraph(builder.TakeGraphInfo(),
+                                      create_graph_future.GetCallback());
+  auto create_graph_result = create_graph_future.Take();
+  EXPECT_TRUE(create_graph_result.has_value());
+
+  // Verify the constant data was transposed correctly from shape
+  // {2, 3, 1, 1, 1, 1, 4} with permutation {6, 5, 4, 3, 2, 1, 0}
+  // to shape {4, 1, 1, 1, 1, 3, 2}.
+  ASSERT_EQ(backend().captured_constant_operands().size(), 1u);
+  base::span<const uint8_t> captured_bytes =
+      backend().captured_constant_operands().begin()->second->ByteSpan();
+  const std::array<float, 24> kExpectedTransposedData{
+      1.0f, 7.0f,  13.0f, 19.0f, 3.0f, 9.0f,  15.0f, 21.0f,
+      5.0f, 11.0f, 17.0f, 23.0f, 2.0f, 8.0f,  14.0f, 20.0f,
+      4.0f, 10.0f, 16.0f, 22.0f, 6.0f, 12.0f, 18.0f, 24.0f};
+  EXPECT_THAT(captured_bytes,
+              testing::ElementsAreArray(base::as_byte_span(
+                  base::allow_nonunique_obj, kExpectedTransposedData)));
 }
 
 }  // namespace webnn

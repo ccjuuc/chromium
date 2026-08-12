@@ -4,7 +4,8 @@
 
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_browser_test_base.h"
 
-#include "base/containers/adapters.h"
+#include <ranges>
+
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_request.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service_factory.h"
+#include "chrome/browser/preloading/search_preload/search_preload_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser.h"
@@ -46,6 +48,8 @@ constexpr char kLoadInSubframe[] = "/load_in_subframe";
 }  // namespace
 
 SearchPrefetchBaseBrowserTest::SearchPrefetchBaseBrowserTest() {
+  feature_list_for_dse_preload2_.InitAndDisableFeature(features::kDsePreload2);
+
   search_server_ = std::make_unique<net::EmbeddedTestServer>(
       net::EmbeddedTestServer::TYPE_HTTPS);
   search_server_->ServeFilesFromSourceDirectory("chrome/test/data");
@@ -73,7 +77,7 @@ void SearchPrefetchBaseBrowserTest::SetUpOnMainThread() {
   host_resolver()->AddRule(kSuggestDomain, "127.0.0.1");
 
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(model);
   search_test_utils::WaitForTemplateURLServiceToLoad(model);
   ASSERT_TRUE(model->loaded());
@@ -114,7 +118,7 @@ GURL SearchPrefetchBaseBrowserTest::GetCanonicalSearchURL(
     const GURL& prefetch_url) {
   GURL canonical_search_url;
   EXPECT_TRUE(HasCanonicalPreloadingOmniboxSearchURL(
-      prefetch_url, browser()->profile(), &canonical_search_url));
+      prefetch_url, browser()->GetProfile(), &canonical_search_url));
   return canonical_search_url;
 }
 
@@ -134,7 +138,7 @@ std::tuple<GURL, GURL>
 SearchPrefetchBaseBrowserTest::GetSearchPrefetchAndNonPrefetch(
     const std::string& search_terms) {
   TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
 
   TemplateURLRef::SearchTermsArgs search_terms_args =
       TemplateURLRef::SearchTermsArgs(base::ASCIIToUTF16(search_terms));
@@ -163,7 +167,7 @@ void SearchPrefetchBaseBrowserTest::WaitUntilStatusChangesTo(
     const GURL& canonical_search_url,
     std::optional<SearchPrefetchStatus> status) {
   auto* search_prefetch_service =
-      SearchPrefetchServiceFactory::GetForProfile(browser()->profile());
+      SearchPrefetchServiceFactory::GetForProfile(browser()->GetProfile());
   while (search_prefetch_service->GetSearchPrefetchStatusForTesting(
              canonical_search_url) != status) {
     base::RunLoop run_loop;
@@ -174,7 +178,7 @@ void SearchPrefetchBaseBrowserTest::WaitUntilStatusChangesTo(
 GURL SearchPrefetchBaseBrowserTest::GetRealPrefetchUrlForTesting(
     const GURL& canonical_search_url) {
   auto* search_prefetch_service =
-      SearchPrefetchServiceFactory::GetForProfile(browser()->profile());
+      SearchPrefetchServiceFactory::GetForProfile(browser()->GetProfile());
   return search_prefetch_service->GetRealPrefetchUrlForTesting(
       canonical_search_url);
 }
@@ -203,7 +207,7 @@ void SearchPrefetchBaseBrowserTest::ClearBrowsingCacheData(
   if (url_origin)
     filter->AddOrigin(url::Origin::Create(url_origin.value()));
   content::BrowsingDataRemover* remover =
-      browser()->profile()->GetBrowsingDataRemover();
+      browser()->GetProfile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
   remover->RemoveWithFilterAndReply(
       base::Time(), base::Time::Max(),
@@ -215,7 +219,7 @@ void SearchPrefetchBaseBrowserTest::ClearBrowsingCacheData(
 void SearchPrefetchBaseBrowserTest::SetDSEWithURL(const GURL& url,
                                                   bool dse_allows_prefetch) {
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   TemplateURLData data;
   data.SetShortName(kSearchDomain16);
   data.SetKeyword(data.short_name());
@@ -224,6 +228,7 @@ void SearchPrefetchBaseBrowserTest::SetDSEWithURL(const GURL& url,
       search_suggest_server_->GetURL(kSuggestDomain, "/?q={searchTerms}")
           .spec();
   data.prefetch_likely_navigations = dse_allows_prefetch;
+  data.send_x_geo_header = true;
 
   TemplateURL* template_url = model->Add(std::make_unique<TemplateURL>(data));
   ASSERT_TRUE(template_url);
@@ -234,7 +239,7 @@ void SearchPrefetchBaseBrowserTest::SetDSEWithURL(const GURL& url,
 // doesn't change DSE at all.
 void SearchPrefetchBaseBrowserTest::UpdateButChangeNothingInDSE() {
   TemplateURLService* model =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   TemplateURLData data;
   data.SetShortName(kSuggestDomain16);
   data.SetKeyword(data.short_name());
@@ -298,7 +303,7 @@ SearchPrefetchBaseBrowserTest::HandleSearchRequest(
                                     MonitorSearchResourceRequestOnUIThread,
                                 base::Unretained(this), request, is_prefetch));
 
-  if (base::Contains(static_files_, request.relative_url)) {
+  if (static_files_.contains(request.relative_url)) {
     response_headers.emplace_back("content-type",
                                   static_files_[request.relative_url].second);
     return CreateDeferrableResponse(net::HTTP_OK, response_headers,
@@ -379,7 +384,8 @@ SearchPrefetchBaseBrowserTest::HandleSearchSuggestRequest(
         }
     )";
 
-  for (const auto& suggestion_rule : base::Reversed(search_suggestion_rules_)) {
+  for (const auto& suggestion_rule :
+       std::views::reverse(search_suggestion_rules_)) {
     // Origin query matches a predefined rule.
     if (request.GetURL().spec().find(suggestion_rule.origin_query) ==
         std::string::npos)

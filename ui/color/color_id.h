@@ -229,6 +229,10 @@
   E_CPONLY(kColorSysActorUiGradientStart) \
   E_CPONLY(kColorSysActorUiGradientMiddle) \
   E_CPONLY(kColorSysActorUiGradientEnd) \
+  /* Glic */ \
+  E_CPONLY(kColorGlicTabUnderline1) \
+  E_CPONLY(kColorGlicTabUnderline2) \
+  E_CPONLY(kColorGlicTabUnderline3) \
   /* AI. */ \
   E_CPONLY(kColorSysAiIllustrationShapeSurface1) \
   E_CPONLY(kColorSysAiIllustrationShapeSurface2) \
@@ -236,6 +240,8 @@
   E_CPONLY(kColorSysAiIllustrationShapeSurfaceGradientEnd) \
   /* Experimentation. */ \
   E_CPONLY(kColorSysOmniboxContainer) \
+  E_CPONLY(kColorSysSurfaceSection) \
+  E_CPONLY(kColorSysBaseContainerOnSurface) \
   /* Deprecated */ \
   E_CPONLY(kColorSysStateHover) \
   E_CPONLY(kColorSysStateFocus) \
@@ -354,6 +360,8 @@
   E_CPONLY(kColorFrameActive) \
   E_CPONLY(kColorFrameActiveUnthemed) \
   E_CPONLY(kColorFrameCaptionButtonUnfocused) \
+  E_CPONLY(kColorFrameCaptionForegroundActive) \
+  E_CPONLY(kColorFrameCaptionForegroundInactive) \
   E_CPONLY(kColorFrameInactive) \
   E_CPONLY(kColorHelpIconActive) \
   E_CPONLY(kColorHelpIconInactive) \
@@ -367,6 +375,7 @@
   E_CPONLY(kColorHistoryClustersSidePanelCardSecondaryForeground) \
   E_CPONLY(kColorIcon) \
   E_CPONLY(kColorIconDisabled) \
+  E_CPONLY(kColorIconHovered) \
   E_CPONLY(kColorIconSecondary) \
   /* This is declared here so src/components/ can access it, but we expect */ \
   /* this to be set in the embedder. */ \
@@ -394,6 +403,8 @@
   E_CPONLY(kColorLiveCaptionBubbleForegroundSecondary) \
   E_CPONLY(kColorLiveCaptionBubbleCheckbox) \
   E_CPONLY(kColorLiveCaptionBubbleLink) \
+  E_CPONLY(kColorLiveCaptionDialogBackground) \
+  E_CPONLY(kColorLiveCaptionDialogForeground) \
   E_CPONLY(kColorLoadingGradientBorder) \
   E_CPONLY(kColorLoadingGradientEnd) \
   E_CPONLY(kColorLoadingGradientMiddle) \
@@ -576,6 +587,7 @@
   E_CPONLY(kColorWebNativeControlScrollbarArrowBackgroundPressed) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForeground) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundDisabled) \
+  E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundHovered) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundPressed) \
   E_CPONLY(kColorWebNativeControlScrollbarCorner) \
   E_CPONLY(kColorWebNativeControlScrollbarThumb) \

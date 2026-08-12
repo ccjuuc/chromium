@@ -4,6 +4,8 @@
 
 import type {BookmarksAppElement} from 'chrome://bookmarks/bookmarks.js';
 import {BookmarksApiProxyImpl, HIDE_FOCUS_RING_ATTRIBUTE, LOCAL_STORAGE_FOLDER_STATE_KEY, LOCAL_STORAGE_TREE_WIDTH_KEY} from 'chrome://bookmarks/bookmarks.js';
+import {COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {isMac} from 'chrome://resources/js/platform.js';
 import {getDeepActiveElement} from 'chrome://resources/js/util.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -32,7 +34,10 @@ suite('<bookmarks-app>', function() {
                 '1',
                 [
                   createFolder('11', []),
-                ]),
+                ],
+                {
+                  folderType: chrome.bookmarks.FolderType.BOOKMARKS_BAR,
+                }),
           ]),
     ]);
   }
@@ -46,6 +51,14 @@ suite('<bookmarks-app>', function() {
     app = document.createElement('bookmarks-app');
     replaceBody(app);
     return microtasksFinished();
+  });
+
+  teardown(function() {
+    // Teardown the element to ensure it is disconnected from the DOM, which
+    // removes event listeners from the active BookmarksApiProxy instance.
+    // This prevents the element from trying to remove listeners from a swapped
+    // proxy instance in subsequent test setups.
+    app.remove();
   });
 
   test('write and load closed folder state', async function() {
@@ -119,5 +132,66 @@ suite('<bookmarks-app>', function() {
     pressAndReleaseKeyOn(document.body, 0, isMac ? 'meta' : 'ctrl', 'f');
     await searchField.updateComplete;
     assertEquals(searchInput, getDeepActiveElement());
+  });
+});
+
+suite('WebuiRefresh2026', function() {
+  const WEBUI_REFRESH_ATTR = 'webui-refresh-2026';
+  let app: BookmarksAppElement;
+  let store: TestStore;
+  let testBookmarksApiProxy: TestBookmarksApiProxy;
+
+  setup(function() {
+    window.localStorage.clear();
+    testBookmarksApiProxy = new TestBookmarksApiProxy();
+    BookmarksApiProxyImpl.setInstance(testBookmarksApiProxy);
+
+    store = new TestStore({});
+    store.acceptInitOnce();
+    store.replaceSingleton();
+    testBookmarksApiProxy.setGetTree([
+      createFolder(
+          '0',
+          [
+            createFolder(
+                '1',
+                [
+                  createFolder('11', []),
+                ],
+                {
+                  folderType: chrome.bookmarks.FolderType.BOOKMARKS_BAR,
+                }),
+          ]),
+    ]);
+  });
+
+  teardown(function() {
+    if (app) {
+      // Teardown the element to ensure it is disconnected from the DOM, which
+      // removes event listeners from the active BookmarksApiProxy instance.
+      // This prevents the element from trying to remove listeners from a
+      // swapped proxy instance in subsequent test setups.
+      app.remove();
+    }
+  });
+
+  async function createApp() {
+    app = document.createElement('bookmarks-app');
+    replaceBody(app);
+    return microtasksFinished();
+  }
+
+  test('Enabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: WEBUI_REFRESH_ATTR});
+    await createApp();
+
+    assertNotEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
+  });
+
+  test('Disabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: ''});
+    await createApp();
+
+    assertEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
   });
 });

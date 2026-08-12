@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_view.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -91,10 +92,11 @@ inline bool ParseHexColorInternal(base::span<const CharacterType> name,
   }
   uint32_t value = 0;
   for (unsigned i = 0; i < name.size(); ++i) {
-    if (!IsASCIIHexDigit(name[i]))
+    if (!IsAsciiHexDigit(name[i])) {
       return false;
+    }
     value <<= 4;
-    value |= ToASCIIHexValue(name[i]);
+    value |= ToAsciiHexValue(name[i]);
   }
   if (name.size() == 6) {
     color = Color::FromRGBA32(0xFF000000 | value);
@@ -132,7 +134,7 @@ inline const NamedColor* FindNamedColor(const String& name) {
     const UChar c = name[i];
     if (!c || c > 0x7F)
       return nullptr;
-    buffer[i] = ToASCIILower(static_cast<char>(c));
+    buffer[i] = ToAsciiLower(static_cast<char>(c));
   }
   return FindColor(base::as_string_view(base::span(buffer).first(length)));
 }
@@ -302,13 +304,6 @@ Color Color::FromColorMix(Color::ColorSpace interpolation_space,
                                    color2, percentage);
 
   result.alpha_ *= alpha_multiplier;
-
-  // Legacy colors that are the result of color-mix should serialize as
-  // color(srgb ... ).
-  // See: https://github.com/mozilla/wg-decisions/issues/1125
-  if (result.IsLegacyColorSpace(result.color_space_)) {
-    result.ConvertToColorSpace(Color::ColorSpace::kSRGB);
-  }
   return result;
 }
 
@@ -1015,7 +1010,7 @@ static String ColorParamToString(float param, int precision = 6) {
 
 String Color::SerializeAsCanvasColor() const {
   if (IsOpaque() && IsLegacyColorSpace(color_space_)) {
-    return String::Format("#%02x%02x%02x", Red(), Green(), Blue());
+    return Format("#{:02x}{:02x}{:02x}", Red(), Green(), Blue());
   }
 
   return SerializeAsCSSColor();

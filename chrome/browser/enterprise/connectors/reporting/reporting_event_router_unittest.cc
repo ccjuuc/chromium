@@ -4,6 +4,8 @@
 
 #include "components/enterprise/connectors/core/reporting_event_router.h"
 
+#include "base/no_destructor.h"
+#include "base/test/bind.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/enterprise/connectors/test/mock_realtime_reporting_client.h"
@@ -41,15 +43,10 @@ constexpr char kFakeProfileUsername[] = "Fakeuser";
 constexpr char kFakeActiveUserEmail[] = "active_user@example.com";
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-const std::set<std::string>* ZipMimeType() {
-  static std::set<std::string> set = {"application/zip"};
-  return &set;
-}
-
 const std::vector<std::string>& GetFakeFrameUrlChain() {
-  static const std::vector<std::string> kFrameUrls = {"https://frame1.com/",
-                                                      "https://frame2.com/"};
-  return kFrameUrls;
+  static base::NoDestructor<std::vector<std::string>> kFrameUrls(
+      {"https://frame1.com/", "https://frame2.com/"});
+  return *kFrameUrls;
 }
 
 google::protobuf::RepeatedPtrField<std::string> CreateFakeFrameUrlChainProto() {
@@ -82,19 +79,13 @@ class RealtimeReportingClientFakeActiveGaia : public RealtimeReportingClient {
   }
 };
 
-class ReportingEventRouterTest : public testing::TestWithParam<bool> {
+class ReportingEventRouterTestBase : public ::testing::Test {
  public:
-  ReportingEventRouterTest()
+  ReportingEventRouterTestBase()
       : profile_manager_(TestingBrowserProcess::GetGlobal()) {}
 
+
   void SetUp() override {
-    if (use_proto_format()) {
-      scoped_feature_list_.InitAndEnableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    }
 
     EXPECT_TRUE(profile_manager_.SetUp());
     profile_ = profile_manager_.CreateTestingProfile(kFakeProfileUsername);
@@ -126,43 +117,16 @@ class ReportingEventRouterTest : public testing::TestWithParam<bool> {
         ->SetBrowserCloudPolicyClientForTesting(nullptr);
   }
 
-  bool use_proto_format() { return GetParam(); }
-
   std::string GetProfileIdentifier() const {
     return profile_->GetPath().AsUTF8Unsafe();
   }
 
   void EnableEnhancedFieldsForSecOps() {
-    scoped_feature_list_.Reset();
-    if (use_proto_format()) {
-      scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{policy::
-                                    kUploadRealtimeReportingEventsUsingProto,
-                                safe_browsing::kEnhancedFieldsForSecOps},
-          /*disabled_features=*/{});
-    } else {
-      scoped_feature_list_.InitAndEnableFeature(
-          safe_browsing::kEnhancedFieldsForSecOps);
-    }
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{safe_browsing::kEnhancedFieldsForSecOps},
+        /*disabled_features=*/{});
   }
 
-  void EnableEnhancedFieldsForSecOpsAndActiveUserDetection() {
-    scoped_feature_list_.Reset();
-    if (use_proto_format()) {
-      scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/
-          {policy::kUploadRealtimeReportingEventsUsingProto,
-           safe_browsing::kEnhancedFieldsForSecOps,
-           enterprise_connectors::kEnterpriseActiveUserDetection},
-          /*disabled_features=*/{});
-    } else {
-      scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/
-          {safe_browsing::kEnhancedFieldsForSecOps,
-           enterprise_connectors::kEnterpriseActiveUserDetection},
-          /*disabled_features=*/{});
-    }
-  }
 
  protected:
   content::BrowserTaskEnvironment task_environment_;
@@ -174,7 +138,12 @@ class ReportingEventRouterTest : public testing::TestWithParam<bool> {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-TEST_P(ReportingEventRouterTest, CheckEventEnabledReturnsFalse) {
+class ReportingEventRouterTest : public ReportingEventRouterTestBase {
+ public:
+  ReportingEventRouterTest() = default;
+};
+
+TEST_F(ReportingEventRouterTest, CheckEventEnabledReturnsFalse) {
   test::SetOnSecurityEventReporting(profile_->GetPrefs(), /*enabled=*/false,
                                     /*enabled_event_names=*/{},
                                     /*enabled_opt_in_events=*/{});
@@ -182,7 +151,7 @@ TEST_P(ReportingEventRouterTest, CheckEventEnabledReturnsFalse) {
   EXPECT_FALSE(reporting_event_router_->IsEventEnabled(kKeyPasswordReuseEvent));
 }
 
-TEST_P(ReportingEventRouterTest, CheckEventEnabledReturnsTrue) {
+TEST_F(ReportingEventRouterTest, CheckEventEnabledReturnsTrue) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyPasswordReuseEvent},
@@ -191,7 +160,7 @@ TEST_P(ReportingEventRouterTest, CheckEventEnabledReturnsTrue) {
   EXPECT_TRUE(reporting_event_router_->IsEventEnabled(kKeyPasswordReuseEvent));
 }
 
-TEST_P(ReportingEventRouterTest, TestOnLoginEvent) {
+TEST_F(ReportingEventRouterTest, TestOnLoginEvent) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -202,7 +171,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEvent) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::LoginEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://www.example.com/");
     expected_event.set_is_federated(false);
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
@@ -210,11 +178,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEvent) {
     expected_event.set_login_user_name("*****");
 
     validator.ExpectLoginEvent(std::move(expected_event));
-  } else {
-    validator.ExpectLoginEvent("https://www.example.com/", false, "",
-                               profile_->GetProfileUserName(),
-                               GetProfileIdentifier(), u"*****");
-  }
 
   reporting_event_router_->OnLoginEvent(GURL("https://www.example.com/"),
                                         url::SchemeHostPort().IsValid(),
@@ -222,7 +185,7 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEvent) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnLoginEventNoMatchingUrlPattern) {
+TEST_F(ReportingEventRouterTest, TestOnLoginEventNoMatchingUrlPattern) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -236,7 +199,7 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventNoMatchingUrlPattern) {
       url::SchemeHostPort(), u"login-username");
 }
 
-TEST_P(ReportingEventRouterTest, TestOnLoginEventWithEmailAsLoginUsername) {
+TEST_F(ReportingEventRouterTest, TestOnLoginEventWithEmailAsLoginUsername) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -247,7 +210,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventWithEmailAsLoginUsername) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::LoginEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://www.example.com/");
     expected_event.set_is_federated(false);
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
@@ -255,11 +217,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventWithEmailAsLoginUsername) {
     expected_event.set_login_user_name("*****@example.com");
 
     validator.ExpectLoginEvent(std::move(expected_event));
-  } else {
-    validator.ExpectLoginEvent("https://www.example.com/", false, "",
-                               profile_->GetProfileUserName(),
-                               GetProfileIdentifier(), u"*****@example.com");
-  }
 
   reporting_event_router_->OnLoginEvent(
       GURL("https://www.example.com/"), url::SchemeHostPort().IsValid(),
@@ -267,7 +224,7 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventWithEmailAsLoginUsername) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnLoginEventFederated) {
+TEST_F(ReportingEventRouterTest, TestOnLoginEventFederated) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -278,7 +235,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventFederated) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::LoginEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://www.example.com/");
     expected_event.set_is_federated(true);
     expected_event.set_federated_origin("https://www.google.com");
@@ -287,11 +243,6 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventFederated) {
     expected_event.set_login_user_name("*****");
 
     validator.ExpectLoginEvent(std::move(expected_event));
-  } else {
-    validator.ExpectLoginEvent(
-        "https://www.example.com/", true, "https://www.google.com",
-        profile_->GetProfileUserName(), GetProfileIdentifier(), u"*****");
-  }
 
   url::SchemeHostPort federated_origin =
       url::SchemeHostPort(GURL("https://www.google.com"));
@@ -302,7 +253,7 @@ TEST_P(ReportingEventRouterTest, TestOnLoginEventFederated) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnPasswordBreach) {
+TEST_F(ReportingEventRouterTest, TestOnPasswordBreach) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -312,7 +263,6 @@ TEST_P(ReportingEventRouterTest, TestOnPasswordBreach) {
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::PasswordBreachEvent expected_event;
-  if (use_proto_format()) {
     chrome::cros::reporting::proto::PasswordBreachEvent::Identity identity_1;
     identity_1.set_url("https://first.example.com/");
     identity_1.set_username("*****");
@@ -327,15 +277,6 @@ TEST_P(ReportingEventRouterTest, TestOnPasswordBreach) {
     expected_event.set_profile_identifier(GetProfileIdentifier());
 
     validator.ExpectPasswordBreachEvent(std::move(expected_event));
-  } else {
-    validator.ExpectPasswordBreachEvent(
-        "SAFETY_CHECK",
-        {
-            {"https://first.example.com/", u"*****"},
-            {"https://second.example.com/", u"*****@gmail.com"},
-        },
-        profile_->GetProfileUserName(), GetProfileIdentifier());
-  }
 
   reporting_event_router_->OnPasswordBreach(
       "SAFETY_CHECK",
@@ -346,7 +287,7 @@ TEST_P(ReportingEventRouterTest, TestOnPasswordBreach) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnPasswordBreachNoMatchingUrlPattern) {
+TEST_F(ReportingEventRouterTest, TestOnPasswordBreachNoMatchingUrlPattern) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{},
@@ -364,7 +305,7 @@ TEST_P(ReportingEventRouterTest, TestOnPasswordBreachNoMatchingUrlPattern) {
       });
 }
 
-TEST_P(ReportingEventRouterTest,
+TEST_F(ReportingEventRouterTest,
        TestOnPasswordBreachPartiallyMatchingUrlPatterns) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
@@ -379,7 +320,6 @@ TEST_P(ReportingEventRouterTest,
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::PasswordBreachEvent expected_event;
 
-  if (use_proto_format()) {
     chrome::cros::reporting::proto::PasswordBreachEvent::Identity identity;
     identity.set_url("https://secondexample.com/");
     identity.set_username("*****");
@@ -390,14 +330,6 @@ TEST_P(ReportingEventRouterTest,
     expected_event.set_profile_identifier(GetProfileIdentifier());
 
     validator.ExpectPasswordBreachEvent(std::move(expected_event));
-  } else {
-    validator.ExpectPasswordBreachEvent(
-        "SAFETY_CHECK",
-        {
-            {"https://secondexample.com/", u"*****"},
-        },
-        profile_->GetProfileUserName(), GetProfileIdentifier());
-  }
 
   reporting_event_router_->OnPasswordBreach(
       "SAFETY_CHECK",
@@ -408,8 +340,8 @@ TEST_P(ReportingEventRouterTest,
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
-  EnableEnhancedFieldsForSecOpsAndActiveUserDetection();
+TEST_F(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
+  EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyUrlFilteringInterstitialEvent},
@@ -433,11 +365,7 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
   expected_event.set_web_app_signed_in_account(kFakeActiveUserEmail);
 
-  if (use_proto_format()) {
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
-  } else {
-    validator.ExpectURLFilteringInterstitialEventWithReferrers(expected_event);
-  }
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -457,8 +385,8 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Blocked) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
-  EnableEnhancedFieldsForSecOpsAndActiveUserDetection();
+TEST_F(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
+  EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyUrlFilteringInterstitialEvent},
@@ -482,11 +410,7 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
   expected_event.set_web_app_signed_in_account(kFakeActiveUserEmail);
 
-  if (use_proto_format()) {
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
-  } else {
-    validator.ExpectURLFilteringInterstitialEventWithReferrers(expected_event);
-  }
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -508,8 +432,8 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Warned) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
-  EnableEnhancedFieldsForSecOpsAndActiveUserDetection();
+TEST_F(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
+  EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyUrlFilteringInterstitialEvent},
@@ -534,11 +458,7 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
   expected_event.set_web_app_signed_in_account(kFakeActiveUserEmail);
 
-  if (use_proto_format()) {
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
-  } else {
-    validator.ExpectURLFilteringInterstitialEventWithReferrers(expected_event);
-  }
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -560,9 +480,9 @@ TEST_P(ReportingEventRouterTest, TestOnUrlFilteringInterstitial_Bypassed) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest,
+TEST_F(ReportingEventRouterTest,
        TestOnUrlFilteringInterstitial_WatermarkAudit) {
-  EnableEnhancedFieldsForSecOpsAndActiveUserDetection();
+  EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyUrlFilteringInterstitialEvent},
@@ -586,11 +506,7 @@ TEST_P(ReportingEventRouterTest,
   *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
   expected_event.set_web_app_signed_in_account(kFakeActiveUserEmail);
 
-  if (use_proto_format()) {
-    validator.ExpectProtoBasedUrlFilteringInterstitialEvent(expected_event);
-  } else {
-    validator.ExpectURLFilteringInterstitialEventWithReferrers(expected_event);
-  }
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
 
   safe_browsing::RTLookupResponse response;
   auto* threat_info = response.add_threat_info();
@@ -609,7 +525,52 @@ TEST_P(ReportingEventRouterTest,
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestInterstitialShownWarned) {
+TEST_F(ReportingEventRouterTest,
+       TestOnUrlFilteringInterstitial_ScreenshotAudit) {
+  EnableEnhancedFieldsForSecOps();
+  test::SetOnSecurityEventReporting(
+      profile_->GetPrefs(), /*enabled=*/true,
+      /*enabled_event_names=*/{kKeyUrlFilteringInterstitialEvent},
+      /*enabled_opt_in_events=*/{});
+
+  test::EventReportValidatorBase validator(client_.get());
+  base::RunLoop run_loop;
+  validator.SetDoneClosure(run_loop.QuitClosure());
+  chrome::cros::reporting::proto::UrlFilteringInterstitialEvent expected_event;
+
+  expected_event.set_url("https://filteredurl.com/");
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EVENT_RESULT_ALLOWED);
+  expected_event.set_threat_type(
+      chrome::cros::reporting::proto::UrlFilteringInterstitialEvent::
+          UNKNOWN_INTERSTITIAL_THREAT_TYPE);
+  expected_event.set_profile_user_name(profile_->GetProfileUserName());
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  *expected_event.add_triggered_rule_info() = test::MakeTriggeredRuleInfo(
+      /*action=*/TriggeredRuleInfo::ACTION_UNKNOWN, /*has_watermark=*/false,
+      /*has_screenshot_protection=*/true);
+  *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+  expected_event.set_web_app_signed_in_account(kFakeActiveUserEmail);
+
+  validator.ExpectUrlFilteringInterstitialEvent(expected_event);
+
+  safe_browsing::RTLookupResponse response;
+  auto* threat_info = response.add_threat_info();
+  auto* matched_url_navigation_rule =
+      threat_info->mutable_matched_url_navigation_rule();
+  matched_url_navigation_rule->set_rule_id("123");
+  matched_url_navigation_rule->set_rule_name("test rule name");
+  matched_url_navigation_rule->set_matched_url_category("test rule category");
+  matched_url_navigation_rule->set_block_screenshot(true);
+  ReferrerChain referrer_chain;
+  referrer_chain.Add(test::MakeReferrerChainEntry());
+
+  reporting_event_router_->OnUrlFilteringInterstitial(
+      GURL("https://filteredurl.com"), "", response, referrer_chain);
+  run_loop.Run();
+}
+
+TEST_F(ReportingEventRouterTest, TestInterstitialShownWarned) {
   EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
@@ -621,7 +582,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownWarned) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::SafeBrowsingInterstitialEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://phishing.com/");
     expected_event.set_reason(chrome::cros::reporting::proto::
                                   SafeBrowsingInterstitialEvent::PHISHING);
@@ -634,12 +594,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownWarned) {
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSecurityInterstitialEventWithReferrers(
-        "https://phishing.com/", "PHISHING", profile_->GetProfileUserName(),
-        GetProfileIdentifier(), "EVENT_RESULT_WARNED", false, 0,
-        test::MakeUrlInfoReferrer());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
@@ -648,7 +602,7 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownWarned) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestInterstitialShownBlocked) {
+TEST_F(ReportingEventRouterTest, TestInterstitialShownBlocked) {
   EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
@@ -660,7 +614,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownBlocked) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::SafeBrowsingInterstitialEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://phishing.com/");
     expected_event.set_reason(chrome::cros::reporting::proto::
                                   SafeBrowsingInterstitialEvent::PHISHING);
@@ -673,12 +626,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownBlocked) {
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSecurityInterstitialEventWithReferrers(
-        "https://phishing.com/", "PHISHING", profile_->GetProfileUserName(),
-        GetProfileIdentifier(), "EVENT_RESULT_BLOCKED", false, 0,
-        test::MakeUrlInfoReferrer());
-  }
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSecurityInterstitialShown(
@@ -686,7 +633,7 @@ TEST_P(ReportingEventRouterTest, TestInterstitialShownBlocked) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestInterstitialProceeded) {
+TEST_F(ReportingEventRouterTest, TestInterstitialProceeded) {
   EnableEnhancedFieldsForSecOps();
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
@@ -698,7 +645,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialProceeded) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::SafeBrowsingInterstitialEvent expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://phishing.com/");
     expected_event.set_reason(chrome::cros::reporting::proto::
                                   SafeBrowsingInterstitialEvent::PHISHING);
@@ -711,12 +657,6 @@ TEST_P(ReportingEventRouterTest, TestInterstitialProceeded) {
     expected_event.mutable_referrers()->Add(test::MakeUrlInfoReferrer());
 
     validator.ExpectSecurityInterstitialEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSecurityInterstitialEventWithReferrers(
-        "https://phishing.com/", "PHISHING", profile_->GetProfileUserName(),
-        GetProfileIdentifier(), "EVENT_RESULT_BYPASSED", true, 0,
-        test::MakeUrlInfoReferrer());
-  }
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSecurityInterstitialProceeded(
@@ -724,7 +664,7 @@ TEST_P(ReportingEventRouterTest, TestInterstitialProceeded) {
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestPasswordReuseWarned) {
+TEST_F(ReportingEventRouterTest, TestPasswordReuseWarned) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyPasswordReuseEvent},
@@ -734,7 +674,6 @@ TEST_P(ReportingEventRouterTest, TestPasswordReuseWarned) {
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::SafeBrowsingPasswordReuseEvent expected_event;
-  if (use_proto_format()) {
     expected_event.set_url("https://phishing.com/");
     expected_event.set_user_name("user_name_1");
     expected_event.set_is_phishing_url(true);
@@ -744,19 +683,15 @@ TEST_P(ReportingEventRouterTest, TestPasswordReuseWarned) {
     expected_event.set_profile_identifier(GetProfileIdentifier());
 
     validator.ExpectPasswordReuseEvent(std::move(expected_event));
-  } else {
-    validator.ExpectPasswordReuseEvent(
-        "https://phishing.com/", "user_name_1", true, "EVENT_RESULT_WARNED",
-        profile_->GetProfileUserName(), GetProfileIdentifier());
-  }
 
-  reporting_event_router_->OnPasswordReuse(
-      GURL("https://phishing.com/"), "user_name_1", /*is_phishing_url*/ true,
-      /*warning_shown*/ true);
-  run_loop.Run();
+    ReferrerChain referrer_chain;
+    reporting_event_router_->OnPasswordReuse(
+        GURL("https://phishing.com/"), "user_name_1", /*is_phishing_url*/ true,
+        /*warning_shown*/ true, referrer_chain);
+    run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestPasswordReuseAllowed) {
+TEST_F(ReportingEventRouterTest, TestPasswordReuseAllowed) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyPasswordReuseEvent},
@@ -766,7 +701,6 @@ TEST_P(ReportingEventRouterTest, TestPasswordReuseAllowed) {
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::SafeBrowsingPasswordReuseEvent expected_event;
-  if (use_proto_format()) {
     expected_event.set_url("https://phishing.com/");
     expected_event.set_user_name("user_name_1");
     expected_event.set_is_phishing_url(true);
@@ -776,19 +710,15 @@ TEST_P(ReportingEventRouterTest, TestPasswordReuseAllowed) {
     expected_event.set_profile_identifier(GetProfileIdentifier());
 
     validator.ExpectPasswordReuseEvent(std::move(expected_event));
-  } else {
-    validator.ExpectPasswordReuseEvent(
-        "https://phishing.com/", "user_name_1", true, "EVENT_RESULT_ALLOWED",
-        profile_->GetProfileUserName(), GetProfileIdentifier());
-  }
 
-  reporting_event_router_->OnPasswordReuse(
-      GURL("https://phishing.com/"), "user_name_1", /*is_phishing_url*/ true,
-      /*warning_shown*/ false);
-  run_loop.Run();
+    ReferrerChain referrer_chain;
+    reporting_event_router_->OnPasswordReuse(
+        GURL("https://phishing.com/"), "user_name_1", /*is_phishing_url*/ true,
+        /*warning_shown*/ false, referrer_chain);
+    run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestPasswordChanged) {
+TEST_F(ReportingEventRouterTest, TestPasswordChanged) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyPasswordChangedEvent},
@@ -800,84 +730,145 @@ TEST_P(ReportingEventRouterTest, TestPasswordChanged) {
   chrome::cros::reporting::proto::SafeBrowsingPasswordChangedEvent
       expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_user_name("user_name_1");
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
     expected_event.set_profile_identifier(GetProfileIdentifier());
 
     validator.ExpectPasswordChangedEvent(std::move(expected_event));
-  } else {
-    validator.ExpectPassowrdChangedEvent(
-        "user_name_1", profile_->GetProfileUserName(), GetProfileIdentifier());
-  }
 
   reporting_event_router_->OnPasswordChanged("user_name_1");
   run_loop.Run();
 }
 
-#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-TEST_P(ReportingEventRouterTest, TestOnUnscannedFileEvent_Allowed) {
+#if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
+TEST_F(ReportingEventRouterTest, TestOnDataControlsSensitiveDataEvent) {
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
-      /*enabled_event_names=*/{kKeyUnscannedFileEvent},
+      /*enabled_event_names=*/{kKeySensitiveDataEvent},
       /*enabled_opt_in_events=*/{});
 
+  data_controls::Verdict::TriggeredRules triggered_rules = {
+      {{0, true}, {"1", "rule_1_name"}}};
   test::EventReportValidator validator(client_.get());
   base::RunLoop run_loop;
   validator.SetDoneClosure(run_loop.QuitClosure());
-  chrome::cros::reporting::proto::UnscannedFileEvent expected_event;
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
 
-  if (use_proto_format()) {
-    expected_event.set_url("about:blank");
-    expected_event.set_tab_url("tab:about:blank");
+    expected_event.set_url("https://example.com/");
+    expected_event.set_tab_url("https://example.com/");
     expected_event.set_source("exampleSource");
     expected_event.set_destination("exampleDestination");
-    expected_event.set_file_name("encrypted.zip");
-    expected_event.set_download_digest_sha_256("sha256_of_data");
-    expected_event.set_content_type("application/zip");
-    expected_event.set_content_size(12345);
-
-    expected_event.set_unscanned_reason(
-        chrome::cros::reporting::proto::UnscannedFileEvent::
-            FILE_PASSWORD_PROTECTED);
+    expected_event.set_content_type("text/html");
+    expected_event.set_content_size(1234);
     expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_UPLOAD);
+        chrome::cros::reporting::proto::DataTransferEventTrigger::
+            WEB_CONTENT_UPLOAD);
     expected_event.set_event_result(
         chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
-    expected_event.set_clicked_through(false);
-    expected_event.set_content_transfer_method(
-        chrome::cros::reporting::proto::CONTENT_TRANSFER_METHOD_DRAG_AND_DROP);
+    expected_event.set_web_app_signed_in_account("content_area_user@gmail.com");
+    expected_event.set_source_web_app_signed_in_account(
+        "active_user@gmail.com");
 
+    TriggeredRuleInfo triggered_rule;
+    triggered_rule.set_rule_id(1);
+    triggered_rule.set_rule_name("rule_1_name");
+
+    *expected_event.add_triggered_rule_info() = triggered_rule;
     expected_event.set_profile_identifier(GetProfileIdentifier());
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
-    validator.ExpectUnscannedFileEvent(std::move(expected_event));
-  } else {
-    validator.ExpectUnscannedFileEvent(
-        /*expected_url=*/"about:blank", /*expected_tab_url=*/"tab:about:blank",
-        /*expected_source=*/"exampleSource",
-        /*expected_destination=*/"exampleDestination",
-        /*expected_filename=*/"encrypted.zip",
-        /*expected_sha256=*/"sha256_of_data",
-        /*expected_trigger=*/"FILE_UPLOAD",
-        /*expected_reason=*/"FILE_PASSWORD_PROTECTED",
-        /*expected_mimetypes=*/ZipMimeType(), /*expected_content_size=*/12345,
-        /* expected_result=*/"EVENT_RESULT_ALLOWED",
-        /*expected_profile_username=*/profile_->GetProfileUserName(),
-        /*expected_profile_identifier=*/GetProfileIdentifier(),
-        /*expected_content_transfer_method*/
-        "CONTENT_TRANSFER_METHOD_DRAG_AND_DROP");
-  }
+    validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
-  reporting_event_router_->OnUnscannedFileEvent(
-      GURL("about:blank"), GURL("tab:about:blank"), "exampleSource",
-      "exampleDestination", "encrypted.zip", "sha256_of_data",
-      "application/zip", "FILE_UPLOAD", "FILE_PASSWORD_PROTECTED",
-      "CONTENT_TRANSFER_METHOD_DRAG_AND_DROP", 12345, EventResult::ALLOWED);
+  reporting_event_router_->OnDataControlsSensitiveDataEvent(
+      GURL("https://example.com/"), GURL("https://example.com/"),
+      "exampleSource", "exampleDestination", "text/html",
+      enterprise_connectors::kWebContentUploadDataTransferEventTrigger,
+      "active_user@gmail.com", "content_area_user@gmail.com", triggered_rules,
+      enterprise_connectors::EventResult::ALLOWED, 1234);
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnUnscannedFileEvent_Blocked) {
+TEST_F(ReportingEventRouterTest, TestReportPasteFromGemini) {
+  test::SetOnSecurityEventReporting(
+      profile_->GetPrefs(), /*enabled=*/true,
+      /*enabled_event_names=*/{kKeySensitiveDataEvent},
+      /*enabled_opt_in_events=*/{});
+
+  data_controls::Verdict::TriggeredRules triggered_rules = {
+      {{0, true}, {"1", "rule_1_name"}}};
+  data_controls::Verdict verdict =
+      data_controls::Verdict::Block(triggered_rules);
+
+  test::EventReportValidator validator(client_.get());
+  base::RunLoop run_loop;
+  validator.SetDoneClosure(run_loop.QuitClosure());
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+
+  expected_event.set_url("https://example.com/");
+  expected_event.set_tab_url("https://example.com/");
+  expected_event.set_source("GEMINI");
+  expected_event.set_destination("https://example.com/");
+  expected_event.set_content_type("text/plain");
+  expected_event.set_content_size(1234);
+  expected_event.set_trigger(chrome::cros::reporting::proto::
+                                 DataTransferEventTrigger::WEB_CONTENT_UPLOAD);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
+  expected_event.set_web_app_signed_in_account("destination_user@gmail.com");
+
+  TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_id(1);
+  triggered_rule.set_rule_name("rule_1_name");
+
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  expected_event.set_profile_user_name(profile_->GetProfileUserName());
+
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
+
+  reporting_event_router_->ReportPasteFromGemini(
+      GURL("https://example.com/"), "destination_user@gmail.com", verdict, 1234,
+      /*bypassed=*/false);
+  run_loop.Run();
+}
+#endif  // BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
+
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+class ReportingEventRouterFileEventTest
+    : public ReportingEventRouterTestBase,
+      public ::testing::WithParamInterface<bool> {
+ public:
+  ReportingEventRouterFileEventTest() = default;
+
+  bool async_file_hash() const { return GetParam(); }
+
+  HashCallbackVariant GetHashCallbackVariant(std::string hash) {
+    if (!async_file_hash()) {
+      return hash;
+    }
+    return base::BindLambdaForTesting([this, hash](OnGotHashCallback callback) {
+      std::move(callback).Run(hash);
+      async_file_hash_run_loop_.Quit();
+    });
+  }
+
+  void RunUntilHashObtained() {
+    if (!async_file_hash()) {
+      return;
+    }
+    async_file_hash_run_loop_.Run();
+  }
+
+  base::RunLoop async_file_hash_run_loop_;
+};
+
+INSTANTIATE_TEST_SUITE_P(,
+                         ReportingEventRouterFileEventTest,
+                         ::testing::Bool());
+
+TEST_P(ReportingEventRouterFileEventTest, TestOnUnscannedFileEvent_Allowed) {
+  EnableEnhancedFieldsForSecOps();
+
   test::SetOnSecurityEventReporting(
       profile_->GetPrefs(), /*enabled=*/true,
       /*enabled_event_names=*/{kKeyUnscannedFileEvent},
@@ -888,53 +879,146 @@ TEST_P(ReportingEventRouterTest, TestOnUnscannedFileEvent_Blocked) {
   validator.SetDoneClosure(run_loop.QuitClosure());
   chrome::cros::reporting::proto::UnscannedFileEvent expected_event;
 
-  if (use_proto_format()) {
-    expected_event.set_url("about:blank");
-    expected_event.set_tab_url("tab:about:blank");
-    expected_event.set_source("exampleSource");
-    expected_event.set_destination("exampleDestination");
-    expected_event.set_file_name("encrypted.zip");
-    expected_event.set_download_digest_sha_256("sha256_of_data");
-    expected_event.set_content_type("application/zip");
-    expected_event.set_content_size(12345);
+  expected_event.set_url("about:blank");
+  expected_event.set_tab_url("tab:about:blank");
+  expected_event.set_source("exampleSource");
+  expected_event.set_destination("exampleDestination");
+  expected_event.set_file_name("encrypted.zip");
+  expected_event.set_download_digest_sha_256("DEADBEEF");
+  expected_event.set_content_type("application/zip");
+  expected_event.set_scan_id("123");
+  expected_event.set_content_size(12345);
 
-    expected_event.set_unscanned_reason(
-        chrome::cros::reporting::proto::UnscannedFileEvent::
-            FILE_PASSWORD_PROTECTED);
-    expected_event.set_trigger(chrome::cros::reporting::proto::
-                                   DataTransferEventTrigger::FILE_DOWNLOAD);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
-    expected_event.set_clicked_through(false);
-    expected_event.set_profile_identifier(GetProfileIdentifier());
-    expected_event.set_profile_user_name(profile_->GetProfileUserName());
+  expected_event.set_unscanned_reason(
+      chrome::cros::reporting::proto::UnscannedFileEvent::
+          FILE_PASSWORD_PROTECTED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_UPLOAD);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
+  expected_event.set_clicked_through(false);
+  expected_event.set_content_transfer_method(
+      chrome::cros::reporting::proto::CONTENT_TRANSFER_METHOD_DRAG_AND_DROP);
 
-    validator.ExpectUnscannedFileEvent(std::move(expected_event));
-  } else {
-    validator.ExpectUnscannedFileEvent(
-        /*expected_url=*/"about:blank", /*expected_tab_url=*/"tab:about:blank",
-        /*expected_source=*/"exampleSource",
-        /*expected_destination=*/"exampleDestination",
-        /*expected_filename=*/"encrypted.zip",
-        /*expected_sha256=*/"sha256_of_data",
-        /*expected_trigger=*/"FILE_DOWNLOAD",
-        /*expected_reason=*/"FILE_PASSWORD_PROTECTED",
-        /*expected_mimetypes=*/ZipMimeType(), /*expected_content_size=*/12345,
-        /*expected_result=*/"EVENT_RESULT_BLOCKED",
-        /*expected_profile_username=*/profile_->GetProfileUserName(),
-        /*expected_profile_identifier=*/GetProfileIdentifier(),
-        /*expected_content_transfer_method*/ std::nullopt);
-  }
+  *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  expected_event.set_profile_user_name(profile_->GetProfileUserName());
+
+  validator.ExpectUnscannedFileEvent(std::move(expected_event));
+
+  ReferrerChain referrer_chain;
+  referrer_chain.Add(test::MakeReferrerChainEntry());
 
   reporting_event_router_->OnUnscannedFileEvent(
       GURL("about:blank"), GURL("tab:about:blank"), "exampleSource",
-      "exampleDestination", "encrypted.zip", "sha256_of_data",
-      "application/zip", "FILE_DOWNLOAD", "FILE_PASSWORD_PROTECTED", "", 12345,
-      EventResult::BLOCKED);
+      "exampleDestination", "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
+      "application/zip", "FILE_UPLOAD", "123", "FILE_PASSWORD_PROTECTED",
+      "CONTENT_TRANSFER_METHOD_DRAG_AND_DROP", 12345, referrer_chain,
+      EventResult::ALLOWED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Allowed) {
+TEST_P(ReportingEventRouterFileEventTest, TestOnUnscannedFileEvent_Cancelled) {
+  test::SetOnSecurityEventReporting(
+      profile_->GetPrefs(), /*enabled=*/true,
+      /*enabled_event_names=*/{kKeyUnscannedFileEvent},
+      /*enabled_opt_in_events=*/{});
+
+  test::EventReportValidator validator(client_.get());
+  base::RunLoop run_loop;
+  validator.SetDoneClosure(run_loop.QuitClosure());
+  chrome::cros::reporting::proto::UnscannedFileEvent expected_event;
+
+  expected_event.set_url("about:blank");
+  expected_event.set_tab_url("tab:about:blank");
+  expected_event.set_source("exampleSource");
+  expected_event.set_destination("exampleDestination");
+  expected_event.set_file_name("encrypted.zip");
+  expected_event.set_download_digest_sha_256("DEADBEEF");
+  expected_event.set_content_type("application/zip");
+  expected_event.set_content_size(12345);
+  expected_event.set_scan_id("123");
+
+  expected_event.set_unscanned_reason(
+      chrome::cros::reporting::proto::UnscannedFileEvent::
+          FILE_PASSWORD_PROTECTED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_DOWNLOAD);
+  expected_event.set_event_result(chrome::cros::reporting::proto::EventResult::
+                                      EVENT_RESULT_CANCELLED_BY_USER);
+  expected_event.set_clicked_through(false);
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  expected_event.set_profile_user_name(profile_->GetProfileUserName());
+
+  *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+
+  validator.ExpectUnscannedFileEvent(std::move(expected_event));
+
+  ReferrerChain referrer_chain;
+  referrer_chain.Add(test::MakeReferrerChainEntry());
+
+  reporting_event_router_->OnUnscannedFileEvent(
+      GURL("about:blank"), GURL("tab:about:blank"), "exampleSource",
+      "exampleDestination", "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
+      "application/zip", "FILE_DOWNLOAD", "123", "FILE_PASSWORD_PROTECTED", "",
+      12345, referrer_chain, EventResult::CANCELLED);
+  RunUntilHashObtained();
+  run_loop.Run();
+}
+
+TEST_P(ReportingEventRouterFileEventTest, TestOnUnscannedFileEvent_Blocked) {
+  EnableEnhancedFieldsForSecOps();
+
+  test::SetOnSecurityEventReporting(
+      profile_->GetPrefs(), /*enabled=*/true,
+      /*enabled_event_names=*/{kKeyUnscannedFileEvent},
+      /*enabled_opt_in_events=*/{});
+
+  test::EventReportValidator validator(client_.get());
+  base::RunLoop run_loop;
+  validator.SetDoneClosure(run_loop.QuitClosure());
+  chrome::cros::reporting::proto::UnscannedFileEvent expected_event;
+
+  expected_event.set_url("about:blank");
+  expected_event.set_tab_url("tab:about:blank");
+  expected_event.set_source("exampleSource");
+  expected_event.set_destination("exampleDestination");
+  expected_event.set_file_name("encrypted.zip");
+  expected_event.set_download_digest_sha_256("DEADBEEF");
+  expected_event.set_content_type("application/zip");
+  expected_event.set_content_size(12345);
+  expected_event.set_scan_id("123");
+
+  expected_event.set_unscanned_reason(
+      chrome::cros::reporting::proto::UnscannedFileEvent::
+          FILE_PASSWORD_PROTECTED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_DOWNLOAD);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
+  expected_event.set_clicked_through(false);
+  expected_event.set_profile_identifier(GetProfileIdentifier());
+  expected_event.set_profile_user_name(profile_->GetProfileUserName());
+
+  *expected_event.add_referrers() = test::MakeUrlInfoReferrer();
+
+  validator.ExpectUnscannedFileEvent(std::move(expected_event));
+
+  ReferrerChain referrer_chain;
+  referrer_chain.Add(test::MakeReferrerChainEntry());
+
+  reporting_event_router_->OnUnscannedFileEvent(
+      GURL("about:blank"), GURL("tab:about:blank"), "exampleSource",
+      "exampleDestination", "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
+      "application/zip", "FILE_DOWNLOAD", "123", "FILE_PASSWORD_PROTECTED", "",
+      12345, referrer_chain, EventResult::BLOCKED);
+  RunUntilHashObtained();
+  run_loop.Run();
+}
+
+TEST_P(ReportingEventRouterFileEventTest, TestOnSensitiveDataEvent_Allowed) {
   EnableEnhancedFieldsForSecOps();
 
   test::SetOnSecurityEventReporting(
@@ -953,12 +1037,11 @@ TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Allowed) {
   result->set_status(ContentAnalysisResponse::Result::SUCCESS);
   result->set_tag("dlp");
 
-  if (use_proto_format()) {
     expected_event.set_url("about:blank");
     expected_event.set_tab_url("about:blank");
     expected_event.set_source("exampleSource");
     expected_event.set_destination("exampleDestination");
-    expected_event.set_download_digest_sha_256("sha256_of_data");
+    expected_event.set_download_digest_sha_256("DEADBEEF");
     expected_event.set_file_name("encrypted.zip");
     expected_event.set_content_type("application/zip");
     expected_event.set_content_size(200);
@@ -980,44 +1063,21 @@ TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Allowed) {
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSensitiveDataEvent(
-        /*url*/ "about:blank",
-        /*tab_url*/ "about:blank",
-        /*source*/ "exampleSource",
-        /*destination*/ "exampleDestination",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*trigger*/ "FILE_UPLOAD",
-        /*dlp_verdict*/ *result,
-        /*mimetype*/ ZipMimeType(),
-        /*size*/ 200,
-        /*result*/
-        EventResultToString(EventResult::ALLOWED),
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ "123",
-        /*content_transfer_method*/ "CONTENT_TRANSFER_METHOD_DRAG_AND_DROP",
-        /*user_justification*/ std::nullopt);
-    validator.ExpectActiveUser("gaia@gmail.com");
-    validator.ExpectSourceActiveUser("test@gmail.com");
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSensitiveDataEvent(
       GURL("about:blank"), GURL("about:blank"), "exampleSource",
-      "exampleDestination", "encrypted.zip", "sha256_of_data",
+      "exampleDestination", "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
       "application/zip", "FILE_UPLOAD", "123",
       "CONTENT_TRANSFER_METHOD_DRAG_AND_DROP", "test@gmail.com",
       "gaia@gmail.com", /*user_justification=*/std::nullopt, *result, 200,
-      referrer_chain, CreateFakeFrameUrlChainProto(),
-      EventResult::ALLOWED);
+      referrer_chain, CreateFakeFrameUrlChainProto(), EventResult::ALLOWED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Blocked) {
+TEST_P(ReportingEventRouterFileEventTest, TestOnSensitiveDataEvent_Blocked) {
   EnableEnhancedFieldsForSecOps();
 
   test::SetOnSecurityEventReporting(
@@ -1042,12 +1102,11 @@ TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Blocked) {
   rule->set_rule_id("12345");
   rule->set_url_category("test rule category");
 
-  if (use_proto_format()) {
     expected_event.set_url("about:blank");
     expected_event.set_tab_url("about:blank");
     expected_event.set_source("exampleSource");
     expected_event.set_destination("exampleDestination");
-    expected_event.set_download_digest_sha_256("sha256_of_data");
+    expected_event.set_download_digest_sha_256("DEADBEEF");
     expected_event.set_file_name("encrypted.zip");
     expected_event.set_content_type("application/zip");
     expected_event.set_content_size(200);
@@ -1075,43 +1134,20 @@ TEST_P(ReportingEventRouterTest, TestOnSensitiveDataEvent_Blocked) {
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSensitiveDataEvent(
-        /*url*/ "about:blank",
-        /*tab_url*/ "about:blank",
-        /*source*/ "exampleSource",
-        /*destination*/ "exampleDestination",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*trigger*/ "FILE_DOWNLOAD",
-        /*dlp_verdict*/ *result,
-        /*mimetype*/ ZipMimeType(),
-        /*size*/ 200,
-        /*result*/
-        EventResultToString(EventResult::BLOCKED),
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ "123",
-        /*content_transfer_method*/ std::nullopt,
-        /*user_justification*/ std::nullopt);
-    validator.ExpectActiveUser("gaia@gmail.com");
-    validator.ExpectSourceActiveUser("test@gmail.com");
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnSensitiveDataEvent(
       GURL("about:blank"), GURL("about:blank"), "exampleSource",
-      "exampleDestination", "encrypted.zip", "sha256_of_data",
+      "exampleDestination", "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
       "application/zip", "FILE_DOWNLOAD", "123", "", "test@gmail.com",
       "gaia@gmail.com", /*user_justification=*/std::nullopt, *result, 200,
-      referrer_chain, CreateFakeFrameUrlChainProto(),
-      EventResult::BLOCKED);
+      referrer_chain, CreateFakeFrameUrlChainProto(), EventResult::BLOCKED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Warned) {
+TEST_P(ReportingEventRouterFileEventTest, TestOnDangerousDownloadEvent_Warned) {
   EnableEnhancedFieldsForSecOps();
 
   test::SetOnSecurityEventReporting(
@@ -1125,12 +1161,11 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Warned) {
   chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent
       expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://example.com/download.exe");
     expected_event.set_tab_url("https://example.com/");
     expected_event.set_source("exampleSource");
     expected_event.set_destination("exampleDestination");
-    expected_event.set_download_digest_sha256("sha256_of_data");
+    expected_event.set_download_digest_sha256("DEADBEEF");
     expected_event.set_threat_type(
         chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent::
             POTENTIALLY_UNWANTED);
@@ -1151,37 +1186,22 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Warned) {
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectDangerousDownloadEvent(std::move(expected_event));
-  } else {
-    validator.ExpectDangerousDeepScanningResult(
-        /*url*/ "https://example.com/download.exe",
-        /*tab_url*/ "https://example.com/",
-        /*source*/ "exampleSource",
-        /*destination*/ "exampleDestination",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*threat_type*/ "POTENTIALLY_UNWANTED",
-        /*trigger*/ "FILE_DOWNLOAD",
-        /*mimetypes*/ ZipMimeType(),
-        /*size*/ 12345,
-        /*result*/ "EVENT_RESULT_WARNED",
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ "123");
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnDangerousDownloadEvent(
       GURL("https://example.com/download.exe"), GURL("https://example.com/"),
-      "exampleSource", "exampleDestination", "encrypted.zip", "sha256_of_data",
-      "POTENTIALLY_UNWANTED", "application/zip", "FILE_DOWNLOAD", "123",
+      "exampleSource", "exampleDestination", "encrypted.zip",
+      GetHashCallbackVariant("DEADBEEF"), "POTENTIALLY_UNWANTED",
+      "application/zip", "FILE_DOWNLOAD", "123",
       /*content_transfer_method=*/"", 12345, std::move(referrer_chain),
       CreateFakeFrameUrlChainProto(), EventResult::WARNED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Blocked) {
+TEST_P(ReportingEventRouterFileEventTest,
+       TestOnDangerousDownloadEvent_Blocked) {
   EnableEnhancedFieldsForSecOps();
 
   test::SetOnSecurityEventReporting(
@@ -1195,12 +1215,11 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Blocked) {
   chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent
       expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://example.com/download.exe");
     expected_event.set_tab_url("https://example.com/");
     expected_event.set_source("exampleSource");
     expected_event.set_destination("exampleDestination");
-    expected_event.set_download_digest_sha256("sha256_of_data");
+    expected_event.set_download_digest_sha256("DEADBEEF");
     expected_event.set_threat_type(
         chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent::
             DANGEROUS);
@@ -1221,37 +1240,22 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Blocked) {
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectDangerousDownloadEvent(std::move(expected_event));
-  } else {
-    validator.ExpectDangerousDeepScanningResult(
-        /*url*/ "https://example.com/download.exe",
-        /*tab_url*/ "https://example.com/",
-        /*source*/ "exampleSource",
-        /*destination*/ "exampleDestination",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*threat_type*/ "DANGEROUS",
-        /*trigger*/ "FILE_DOWNLOAD",
-        /*mimetypes*/ ZipMimeType(),
-        /*size*/ 12345,
-        /*result*/ "EVENT_RESULT_BLOCKED",
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ "123");
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnDangerousDownloadEvent(
       GURL("https://example.com/download.exe"), GURL("https://example.com/"),
-      "exampleSource", "exampleDestination", "encrypted.zip", "sha256_of_data",
-      "DANGEROUS", "application/zip", "FILE_DOWNLOAD", "123",
+      "exampleSource", "exampleDestination", "encrypted.zip",
+      GetHashCallbackVariant("DEADBEEF"), "DANGEROUS", "application/zip",
+      "FILE_DOWNLOAD", "123",
       /*content_transfer_method=*/"", 12345, std::move(referrer_chain),
       CreateFakeFrameUrlChainProto(), EventResult::BLOCKED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Bypassed) {
+TEST_P(ReportingEventRouterFileEventTest,
+       TestOnDangerousDownloadEvent_Bypassed) {
   EnableEnhancedFieldsForSecOps();
 
   test::SetOnSecurityEventReporting(
@@ -1265,12 +1269,11 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Bypassed) {
   chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent
       expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://example.com/download.exe");
     expected_event.set_tab_url("https://example.com/");
     expected_event.set_source("");
     expected_event.set_destination("");
-    expected_event.set_download_digest_sha256("sha256_of_data");
+    expected_event.set_download_digest_sha256("DEADBEEF");
     expected_event.set_threat_type(
         chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent::
             DANGEROUS);
@@ -1291,37 +1294,20 @@ TEST_P(ReportingEventRouterTest, TestOnDangerousDownloadEvent_Bypassed) {
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectDangerousDownloadEvent(std::move(expected_event));
-  } else {
-    validator.ExpectDangerousDeepScanningResult(
-        /*url*/ "https://example.com/download.exe",
-        /*tab_url*/ "https://example.com/",
-        /*source*/ "",
-        /*destination*/ "",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*threat_type*/ "DANGEROUS",
-        /*trigger*/ "FILE_DOWNLOAD",
-        /*mimetypes*/ ZipMimeType(),
-        /*size*/ 12345,
-        /*result*/ "EVENT_RESULT_BYPASSED",
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ "123");
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnDangerousDownloadEvent(
       GURL("https://example.com/download.exe"), GURL("https://example.com/"),
-      "encrypted.zip", "sha256_of_data",
+      "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
       download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT, "application/zip",
       "FILE_DOWNLOAD", "123", 12345, std::move(referrer_chain),
       CreateFakeFrameUrlChainProto(), EventResult::BYPASSED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 
-TEST_P(ReportingEventRouterTest,
+TEST_P(ReportingEventRouterFileEventTest,
        TestOnDangerousDownloadEvent_WarnedFromSafeBrowsing) {
   EnableEnhancedFieldsForSecOps();
 
@@ -1336,12 +1322,11 @@ TEST_P(ReportingEventRouterTest,
   chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent
       expected_event;
 
-  if (use_proto_format()) {
     expected_event.set_url("https://example.com/download.exe");
     expected_event.set_tab_url("https://example.com/");
     expected_event.set_source("");
     expected_event.set_destination("");
-    expected_event.set_download_digest_sha256("sha256_of_data");
+    expected_event.set_download_digest_sha256("DEADBEEF");
     expected_event.set_threat_type(
         chrome::cros::reporting::proto::SafeBrowsingDangerousDownloadEvent::
             DANGEROUS);
@@ -1361,108 +1346,18 @@ TEST_P(ReportingEventRouterTest,
     expected_event.set_profile_user_name(profile_->GetProfileUserName());
 
     validator.ExpectDangerousDownloadEvent(std::move(expected_event));
-  } else {
-    validator.ExpectDangerousDeepScanningResult(
-        /*url*/ "https://example.com/download.exe",
-        /*tab_url*/ "https://example.com/",
-        /*source*/ "",
-        /*destination*/ "",
-        /*filename*/ "encrypted.zip",
-        /*sha256*/ "sha256_of_data",
-        /*threat_type*/ "DANGEROUS",
-        /*trigger*/ "FILE_DOWNLOAD",
-        /*mimetypes*/ ZipMimeType(),
-        /*size*/ 12345,
-        /*result*/ "EVENT_RESULT_WARNED",
-        /*username*/ profile_->GetProfileUserName(),
-        /*profile_identifier*/ GetProfileIdentifier(),
-        /*scan_id*/ std::nullopt);
-    validator.ExpectFrameUrlChain(GetFakeFrameUrlChain());
-  }
 
   ReferrerChain referrer_chain;
   referrer_chain.Add(test::MakeReferrerChainEntry());
   reporting_event_router_->OnDangerousDownloadEvent(
       GURL("https://example.com/download.exe"), GURL("https://example.com/"),
-      "encrypted.zip", "sha256_of_data",
+      "encrypted.zip", GetHashCallbackVariant("DEADBEEF"),
       download::DOWNLOAD_DANGER_TYPE_DANGEROUS_CONTENT, "application/zip",
       "FILE_DOWNLOAD", "", 12345, std::move(referrer_chain),
       CreateFakeFrameUrlChainProto(), EventResult::WARNED);
+  RunUntilHashObtained();
   run_loop.Run();
 }
 #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-
-#if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
-TEST_P(ReportingEventRouterTest, TestOnDataControlsSensitiveDataEvent) {
-  test::SetOnSecurityEventReporting(
-      profile_->GetPrefs(), /*enabled=*/true,
-      /*enabled_event_names=*/{kKeySensitiveDataEvent},
-      /*enabled_opt_in_events=*/{});
-
-  data_controls::Verdict::TriggeredRules triggered_rules = {
-      {{0, true}, {"1", "rule_1_name"}}};
-  test::EventReportValidator validator(client_.get());
-  base::RunLoop run_loop;
-  validator.SetDoneClosure(run_loop.QuitClosure());
-  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
-
-  if (use_proto_format()) {
-    expected_event.set_url("https://example.com/");
-    expected_event.set_tab_url("https://example.com/");
-    expected_event.set_source("exampleSource");
-    expected_event.set_destination("exampleDestination");
-    expected_event.set_content_type("text/html");
-    expected_event.set_content_size(1234);
-    expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::
-            WEB_CONTENT_UPLOAD);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
-    expected_event.set_web_app_signed_in_account("content_area_user@gmail.com");
-    expected_event.set_source_web_app_signed_in_account(
-        "active_user@gmail.com");
-
-    TriggeredRuleInfo triggered_rule;
-    triggered_rule.set_rule_id(1);
-    triggered_rule.set_rule_name("rule_1_name");
-
-    *expected_event.add_triggered_rule_info() = triggered_rule;
-    expected_event.set_profile_identifier(GetProfileIdentifier());
-    expected_event.set_profile_user_name(profile_->GetProfileUserName());
-
-    validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectDataControlsSensitiveDataEvent(
-        /*expected_url*/
-        "https://example.com/",
-        /*expected_tab_url*/ "https://example.com/",
-        /*expected_source*/ "exampleSource",
-        /*expected_destination*/ "exampleDestination",
-        /*expected_mimetypes=*/
-        []() {
-          static std::set<std::string> set = {"text/html"};
-          return &set;
-        }(),
-        /*expected_trigger=*/"WEB_CONTENT_UPLOAD",
-        /*triggered_rules=*/triggered_rules,
-        /*expected_result*/ "EVENT_RESULT_ALLOWED",
-        /*expected_profile_username*/ profile_->GetProfileUserName(),
-        /*expected_profile_identifier*/ GetProfileIdentifier(),
-        /*expected_content_size=*/1234);
-    validator.ExpectActiveUser("content_area_user@gmail.com");
-    validator.ExpectSourceActiveUser("active_user@gmail.com");
-  }
-
-  reporting_event_router_->OnDataControlsSensitiveDataEvent(
-      GURL("https://example.com/"), GURL("https://example.com/"),
-      "exampleSource", "exampleDestination", "text/html",
-      enterprise_connectors::kWebContentUploadDataTransferEventTrigger,
-      "active_user@gmail.com", "content_area_user@gmail.com", triggered_rules,
-      enterprise_connectors::EventResult::ALLOWED, 1234);
-  run_loop.Run();
-}
-#endif  // BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
-
-INSTANTIATE_TEST_SUITE_P(, ReportingEventRouterTest, ::testing::Bool());
 
 }  // namespace enterprise_connectors

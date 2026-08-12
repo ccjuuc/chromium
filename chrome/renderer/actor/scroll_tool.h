@@ -10,8 +10,8 @@
 #include "base/memory/raw_ref.h"
 #include "base/types/expected.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
@@ -34,6 +34,7 @@ class ScrollTool : public ToolBase {
   ~ScrollTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   std::string DebugString() const override;
 
@@ -42,12 +43,9 @@ class ScrollTool : public ToolBase {
     blink::WebElement scroller;
     gfx::Vector2dF scroll_by_offset;
   };
-  using ValidatedResult =
-      base::expected<ScrollerAndDistance, mojom::ActionResultPtr>;
-
-  ValidatedResult Validate() const;
 
   mojom::ScrollActionPtr action_;
+  std::optional<ScrollerAndDistance> validated_scroller_and_distance_;
 };
 
 }  // namespace actor

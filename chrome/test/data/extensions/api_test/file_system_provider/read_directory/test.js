@@ -10,28 +10,20 @@ let testUtil;
  * @type {Object}
  * @const
  */
-var TESTING_HELLO_DIR = Object.freeze({
-  isDirectory: true,
-  name: 'hello'
-});
+const TESTING_HELLO_DIR = Object.freeze({isDirectory: true, name: 'hello'});
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_CANDIES_DIR = Object.freeze({
-  isDirectory: true,
-  name: 'candies'
-});
+const TESTING_CANDIES_DIR = Object.freeze({isDirectory: true, name: 'candies'});
 
 /**
  * @type {Object}
  * @const
  */
-var TESTING_TIRAMISU_FILE = Object.freeze({
-  isDirectory: false,
-  name: 'tiramisu.txt'
-});
+const TESTING_TIRAMISU_FILE =
+    Object.freeze({isDirectory: false, name: 'tiramisu.txt'});
 
 /**
  * Returns entries in the requested directory.
@@ -47,7 +39,7 @@ function onReadDirectoryRequested(options, onSuccess, onError) {
     return;
   }
 
-  if (options.directoryPath !== '/' + TESTING_HELLO_DIR.name) {
+  if (options.directoryPath !== `/${TESTING_HELLO_DIR.name}`) {
     onError('NOT_FOUND');  // enum ProviderError.
     return;
   }
@@ -66,12 +58,11 @@ function setUp(callback) {
   chrome.fileSystemProvider.onGetMetadataRequested.addListener(
       testUtil.onGetMetadataRequestedDefault);
 
-  testUtil.defaultMetadata['/' + TESTING_HELLO_DIR.name] =
-      TESTING_HELLO_DIR;
-  testUtil.defaultMetadata['/' + TESTING_HELLO_DIR.name + '/' +
-        TESTING_TIRAMISU_FILE.name] = TESTING_TIRAMISU_FILE;
-  testUtil.defaultMetadata['/' + TESTING_HELLO_DIR.name + '/' +
-      TESTING_CANDIES_DIR.name] = TESTING_CANDIES_DIR;
+  testUtil.defaultMetadata[`/${TESTING_HELLO_DIR.name}`] = TESTING_HELLO_DIR;
+  testUtil.defaultMetadata[`/${TESTING_HELLO_DIR.name}/${
+      TESTING_TIRAMISU_FILE.name}`] = TESTING_TIRAMISU_FILE;
+  testUtil.defaultMetadata[`/${TESTING_HELLO_DIR.name}/${
+      TESTING_CANDIES_DIR.name}`] = TESTING_CANDIES_DIR;
 
   chrome.fileSystemProvider.onReadDirectoryRequested.addListener(
       onReadDirectoryRequested);
@@ -88,12 +79,11 @@ function runTests() {
     // should succeed.
     function readEntriesSuccess() {
       testUtil.fileSystem.root.getDirectory(
-          'hello',
-          {create: false},
+          'hello', {create: false},
           chrome.test.callbackPass(function(dirEntry) {
-            var dirReader = dirEntry.createReader();
-            var entries = [];
-            var readEntriesNext = function() {
+            const dirReader = dirEntry.createReader();
+            const entries = [];
+            const readEntriesNext = function() {
               dirReader.readEntries(
                   chrome.test.callbackPass(function(inEntries) {
                     Array.prototype.push.apply(entries, inEntries);
@@ -111,7 +101,8 @@ function runTests() {
                     } else {
                       readEntriesNext();
                     }
-                  }), function(error) {
+                  }),
+                  function(error) {
                     chrome.test.fail();
                   });
             };
@@ -125,15 +116,12 @@ function runTests() {
     // error.
     function readEntriesError() {
       testUtil.fileSystem.root.getDirectory(
-          'cranberries',
-          {create: false},
-          function(dirEntry) {
+          'cranberries', {create: false}, function(dirEntry) {
             chrome.test.fail();
-          },
-          chrome.test.callbackPass(function(error) {
+          }, chrome.test.callbackPass(function(error) {
             chrome.test.assertEq('NotFoundError', error.name);
           }));
-    }
+    },
   ]);
 }
 
@@ -141,7 +129,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

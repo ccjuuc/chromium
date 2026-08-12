@@ -49,6 +49,10 @@
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "components/account_id/account_id.h"
 #include "ui/aura/test/test_windows.h"
+#include "ui/aura/window.h"
+#include "ui/aura/window_occlusion_tracker.h"
+#include "ui/aura/window_tree_host.h"
+#include "ui/compositor/test/begin_main_frame_waiter.h"
 #include "ui/display/manager/display_configurator.h"
 #include "ui/display/manager/test/fake_display_snapshot.h"
 #include "ui/display/tablet_state.h"
@@ -57,6 +61,8 @@
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
+
+using chromeos::AppType;
 namespace {
 
 constexpr char kShelfShutdownConfirmationHistogramName[] =
@@ -492,6 +498,41 @@ TEST_F(LockStateControllerTest, LockButtonBasicGuest) {
   EXPECT_FALSE(lock_state_test_api_->is_animating_lock());
   ReleaseLockButton();
   EXPECT_FALSE(Shell::Get()->session_controller()->IsScreenLocked());
+}
+
+TEST_F(LockStateControllerTest, PauseFrameEvictionWhileLocked) {
+  // The lock button shouldn't do anything when we're logged in as a guest.
+  ClearLogin();
+  SimulateUserLogin({"user@example.com"});
+  auto window = CreateWindowWithAppType();
+  window->TrackOcclusionState();
+  EXPECT_EQ(aura::Window::OcclusionState::VISIBLE, window->GetOcclusionState());
+  EXPECT_FALSE(
+      viz::FrameEvictionManager::GetInstance()->is_paused_for_testing());
+
+  auto* compositor =
+      ash::Shell::GetPrimaryRootWindow()->GetHost()->compositor();
+  GetSessionControllerClient()->LockScreen();
+  // The cc's scheduler may or may not run BeginFrame during
+  // RunLoop::RunUntilIdle in `LockScreen()` above . Explicitly request a redraw
+  // and wait to make sure that DidBeginMainFrame is called.
+  compositor->ScheduleDraw();
+  ui::BeginMainFrameWaiter(compositor).Wait();
+  EXPECT_FALSE(
+      aura::Env::GetInstance()->GetWindowOcclusionTracker()->IsPaused());
+
+  EXPECT_EQ(aura::Window::OcclusionState::OCCLUDED,
+            window->GetOcclusionState());
+  EXPECT_TRUE(
+      viz::FrameEvictionManager::GetInstance()->is_paused_for_testing());
+
+  GetSessionControllerClient()->UnlockScreen();
+  ui::BeginMainFrameWaiter(compositor).Wait();
+  EXPECT_FALSE(
+      aura::Env::GetInstance()->GetWindowOcclusionTracker()->IsPaused());
+  EXPECT_EQ(aura::Window::OcclusionState::VISIBLE, window->GetOcclusionState());
+  EXPECT_FALSE(
+      viz::FrameEvictionManager::GetInstance()->is_paused_for_testing());
 }
 
 class LockStateControllerAnimationTest
@@ -1096,7 +1137,7 @@ class LockStateControllerInformedRestoreTest : public LockStateControllerTest {
 
 // Tests that a informed restore image is taken when there are windows open.
 TEST_F(LockStateControllerInformedRestoreTest, ShutdownWithWindows) {
-  std::unique_ptr<aura::Window> window = CreateTestWindow();
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   base::HistogramTester histogram_tester;
 
   RequestShutdownWithoutFailTimer();
@@ -1140,7 +1181,7 @@ TEST_F(LockStateControllerInformedRestoreTest, ShutdownInOverview) {
 
   base::HistogramTester histogram_tester;
   // Create a window and enter the overview before requesting shutdown.
-  CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   EnterOverview();
 
   RequestShutdownWithoutFailTimer();
@@ -1161,7 +1202,7 @@ TEST_F(LockStateControllerInformedRestoreTest, ShutdownInGuest) {
   ASSERT_TRUE(base::WriteFile(file_path(), ""));
 
   base::HistogramTester histogram_tester;
-  CreateTestWindow();
+  auto window = CreateWindowWithAppType();
   ASSERT_TRUE(Shell::Get()->session_controller()->IsUserGuest());
 
   // Request shutdown while in guest mode.
@@ -1182,7 +1223,7 @@ TEST_F(LockStateControllerInformedRestoreTest, ShutdownInLockScreen) {
 
   base::HistogramTester histogram_tester;
   // Create a window and go the lock screen before requesting shutdown.
-  CreateTestWindowInShell({.window_id = 0});
+  auto window = CreateTestWindowInShell({.window_id = 0});
   GetSessionControllerClient()->LockScreen();
   EXPECT_TRUE(Shell::Get()->session_controller()->IsScreenLocked());
 
@@ -1203,7 +1244,7 @@ TEST_F(LockStateControllerInformedRestoreTest, ShutdownInHomeLauncher) {
   base::HistogramTester histogram_tester;
   // Create a window and go to the home launcher page before requesting
   // shutdown.
-  std::unique_ptr<aura::Window> window(CreateTestWindow());
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   TabletModeControllerTestApi().EnterTabletMode();
   auto* app_list_controller = Shell::Get()->app_list_controller();
   app_list_controller->GoHome(GetPrimaryDisplay().id());
@@ -1228,7 +1269,8 @@ TEST_F(LockStateControllerInformedRestoreTest, PinnedState) {
 
   base::HistogramTester histogram_tester;
   // Create and pin a window before requesting shutdown.
-  std::unique_ptr<aura::Window> pinned_window = CreateAppWindow();
+  std::unique_ptr<aura::Window> pinned_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   wm::ActivateWindow(pinned_window.get());
   window_util::PinWindow(pinned_window.get(), /*trusted=*/false);
 
@@ -1247,8 +1289,8 @@ TEST_F(LockStateControllerInformedRestoreTest, AllWindowsMinimized) {
   ASSERT_TRUE(base::WriteFile(file_path(), ""));
 
   base::HistogramTester histogram_tester;
-  std::unique_ptr<aura::Window> window1(CreateTestWindow());
-  std::unique_ptr<aura::Window> window2(CreateTestWindow());
+  std::unique_ptr<aura::Window> window1 = CreateWindowWithAppType();
+  std::unique_ptr<aura::Window> window2 = CreateWindowWithAppType();
   WindowState::Get(window1.get())->Minimize();
   WindowState::Get(window2.get())->Minimize();
 
@@ -1267,7 +1309,8 @@ TEST_F(LockStateControllerInformedRestoreTest, AllWindowsMinimized) {
 // window.
 TEST_F(LockStateControllerInformedRestoreTest, ShutdownWithFloatWindow) {
   base::HistogramTester histogram_tester;
-  std::unique_ptr<aura::Window> floated_window = CreateAppWindow();
+  std::unique_ptr<aura::Window> floated_window =
+      CreateWindowWithAppType(AppType::SYSTEM_APP);
   PressAndReleaseKey(ui::VKEY_F, ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN);
   ASSERT_TRUE(WindowState::Get(floated_window.get())->IsFloated());
 
@@ -1304,7 +1347,7 @@ TEST_F(LockStateControllerInformedRestoreTest, TakeScreenshotTimeout) {
   ASSERT_TRUE(base::WriteFile(file_path(), ""));
 
   base::HistogramTester histogram_tester;
-  std::unique_ptr<aura::Window> window(CreateTestWindow());
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
       run_loop.QuitClosure());
@@ -1327,7 +1370,7 @@ TEST_F(LockStateControllerInformedRestoreTest, TakeScreenshotTimeout) {
 TEST_F(LockStateControllerInformedRestoreTest, CancelShutdown) {
   // Create an empty file to simulate an old informed restore image.
   ASSERT_TRUE(base::WriteFile(file_path(), ""));
-  std::unique_ptr<aura::Window> window(CreateTestWindow());
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
       run_loop.QuitClosure());
@@ -1346,7 +1389,7 @@ TEST_F(LockStateControllerInformedRestoreTest,
   EXPECT_FALSE(base::PathExists(file_path()));
 
   // At least one window is needed to trigger screenshot.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
 
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
@@ -1370,7 +1413,7 @@ TEST_F(LockStateControllerInformedRestoreTest,
       static_cast<int>(full_restore::RestoreOption::kAlways));
 
   // At least one window is needed to trigger screenshot.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
 
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
@@ -1394,7 +1437,7 @@ TEST_F(LockStateControllerInformedRestoreTest,
       static_cast<int>(full_restore::RestoreOption::kDoNotRestore));
 
   // At least one window is needed to trigger screenshot.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
 
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
@@ -1418,7 +1461,7 @@ TEST_F(LockStateControllerInformedRestoreTest,
   SwitchActiveUser(account_id);
 
   // At least one window is needed to trigger screenshot.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
 
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
@@ -1446,7 +1489,7 @@ TEST_F(LockStateControllerInformedRestoreTest,
   SwitchActiveUser(primary_account_id);
 
   // At least one window is needed to trigger screenshot.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
 
   base::RunLoop run_loop;
   lock_state_test_api_->set_informed_restore_image_callback(
@@ -1473,11 +1516,11 @@ TEST_F(LockStateControllerInformedRestoreTest,
 
   // Setup two windows: one is owned by the primary user, and the other
   // is owned by the secondary user. Both are shown for the primary user.
-  auto test_window = CreateTestWindow();
+  auto test_window = CreateWindowWithAppType();
   auto* multi_user_window_manager = Shell::Get()->multi_user_window_manager();
   multi_user_window_manager->SetWindowOwner(test_window.get(),
                                             primary_account_id);
-  auto test_window2 = CreateTestWindow();
+  auto test_window2 = CreateWindowWithAppType();
   multi_user_window_manager->SetWindowOwner(test_window2.get(),
                                             secondary_account_id);
   multi_user_window_manager->ShowWindowForUser(test_window2.get(),

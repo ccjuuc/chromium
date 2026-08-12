@@ -45,6 +45,13 @@ public class CastWebContentsIntentUtils {
     public static final String ACTION_ENABLE_TOUCH_INPUT =
             "com.google.android.apps.castshell.intent.action.ENABLE_TOUCH_INPUT";
 
+    /**
+     * Action type of inten from CastWebContentsActivity to notify CastWebContentsComponent whether
+     * the activity is created.
+     */
+    public static final String ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE =
+            "com.google.android.apps.castshell.intent.action.ON_ACTIVITY_STARTED_BY_CAST_CORE";
+
     /** Key of extra value in an intent, the value is a URI of cast://webcontents/<instanceId> */
     static final String INTENT_EXTRA_URI = "content_uri";
 
@@ -103,6 +110,13 @@ public class CastWebContentsIntentUtils {
     private static final String INTENT_EXTRA_VISIBILITY_TYPE =
             "com.google.android.apps.castshell.intent.extra.VISIBILITY_TYPE";
 
+    /**
+     * Key for extra value for intent to start web contents. true if the start call is from cast
+     * core.
+     */
+    static final String INTENT_EXTRA_FROM_CAST_CORE =
+            "com.google.android.apps.castshell.intent.extra.FROM_CAST_CORE";
+
     @VisibilityType static final int VISIBITY_TYPE_UNKNOWN = VisibilityType.UNKNOWN;
     @VisibilityType static final int VISIBITY_TYPE_FULL_SCREEN = VisibilityType.FULL_SCREEN;
     @VisibilityType static final int VISIBITY_TYPE_PARTIAL_OUT = VisibilityType.PARTIAL_OUT;
@@ -124,7 +138,7 @@ public class CastWebContentsIntentUtils {
     }
 
     private static Intent onVisibilityChange(Uri uri, @VisibilityType int visibilityType) {
-        Log.d(TAG, "onVisibilityChange with uri:" + uri + " type:" + visibilityType);
+        Log.d(TAG, "onVisibilityChange with uri:%s type:%d", uri, visibilityType);
 
         Intent intent = new Intent(ACTION_ON_VISIBILITY_CHANGE, uri);
         intent.putExtra(INTENT_EXTRA_VISIBILITY_TYPE, visibilityType);
@@ -249,6 +263,19 @@ public class CastWebContentsIntentUtils {
         intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
         intent.putExtra(INTENT_EXTRA_TOUCH_INPUT_ENABLED, enabled);
         return intent;
+    }
+
+    // CastWebContentsActivity -> CastWebContentsComponent
+    public static Intent onActivityStartedByCastCore() {
+        return new Intent(ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE);
+    }
+
+    public static boolean isIntentOfActivityStartedByCastCore(Intent in) {
+        return in.getAction().equals(ACTION_ON_ACTIVITY_STARTED_BY_CAST_CORE);
+    }
+
+    public static boolean isIntentFromCastCore(Intent intent) {
+        return intent.getBooleanExtra(INTENT_EXTRA_FROM_CAST_CORE, false);
     }
 
     public static Uri getInstanceUri(String instanceId) {

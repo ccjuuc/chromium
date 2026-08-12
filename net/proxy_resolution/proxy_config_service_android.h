@@ -46,7 +46,7 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
     virtual void ProxySettingsChangedTo(
         JNIEnv*,
         const base::android::JavaRef<jstring>&,
-        jint,
+        int32_t,
         const base::android::JavaRef<jstring>&,
         const base::android::JavaRef<jobjectArray>&) = 0;
 
@@ -132,4 +132,4 @@ class NET_EXPORT ProxyConfigServiceAndroid : public ProxyConfigService {
 
 } // namespace net
 
-#endif // NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_
+#endif  // NET_PROXY_RESOLUTION_PROXY_CONFIG_SERVICE_ANDROID_H_

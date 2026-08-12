@@ -17,9 +17,9 @@
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/permissions_parser.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
-#include "extensions/common/manifest_url_handlers.h"
 #include "extensions/common/permissions/api_permission.h"
 
 namespace extensions {
@@ -34,6 +34,10 @@ using ChromeUrlOverridesKeys = api::chrome_url_overrides::ManifestKeys;
 
 }  // namespace
 
+// static
+const char* URLOverrides::kManifestDataKey =
+    ChromeUrlOverridesKeys::kChromeUrlOverrides;
+
 URLOverrides::URLOverrides() = default;
 URLOverrides::~URLOverrides() = default;
 
@@ -42,8 +46,8 @@ const URLOverrides::URLOverrideMap& URLOverrides::GetChromeURLOverrides(
     const Extension* extension) {
   static const base::NoDestructor<URLOverrides::URLOverrideMap>
       empty_url_overrides;
-  URLOverrides* url_overrides = static_cast<URLOverrides*>(
-      extension->GetManifestData(ChromeUrlOverridesKeys::kChromeUrlOverrides));
+  const URLOverrides* url_overrides =
+      extension->GetManifestData<URLOverrides>();
   return url_overrides ? url_overrides->chrome_url_overrides_
                        : *empty_url_overrides;
 }
@@ -111,8 +115,7 @@ bool URLOverridesHandler::Parse(Extension* extension, std::u16string* error) {
         extension, mojom::APIPermissionID::kNewTabPageOverride);
   }
 
-  extension->SetManifestData(ChromeUrlOverridesKeys::kChromeUrlOverrides,
-                             std::move(url_overrides));
+  extension->SetManifestData(std::move(url_overrides));
 
   return true;
 }

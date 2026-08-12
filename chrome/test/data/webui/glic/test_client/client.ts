@@ -2,10 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {FocusedTabData, GlicBrowserHost, GlicWebClient, Observable, OpenPanelInfo, PanelOpeningData, PanelState, WebClientInitializeError} from '/glic/glic_api/glic_api.js';
-import {WebClientInitializeErrorReason, WebClientMode} from '/glic/glic_api/glic_api.js';
+import type {AdditionalContext, FocusedTabData, GlicBrowserHost, GlicWebClient, InvokeOptions, Observable, OpenPanelInfo, PanelOpeningData, PanelState, WebClientInitializeError} from '/glic/glic_api/glic_api.js';
+import {InvocationSource, WebClientInitializeErrorReason, WebClientMode} from '/glic/glic_api/glic_api.js';
+import {Subject} from '/glic/observable.js';
 
 import {$} from './page_element_types.js';
+
+const replacer = (_key: string, value: any) => {
+  if (value instanceof ArrayBuffer) {
+    return `ArrayBuffer(${value.byteLength})`;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return `${value.constructor.name}(${value.byteLength})`;
+  }
+  return value;
+};
 
 export function logMessage(message: string) {
   const d = new Date();
@@ -95,6 +106,13 @@ class WebClient implements GlicWebClient {
     const boundFocusedChangedCallback = this.focusedTabChangedV2.bind(this);
     focusedTabStateV2.subscribe(boundFocusedChangedCallback);
 
+    if (this.browser.getZoomLevel) {
+      const zoomLevel = await this.browser.getZoomLevel();
+      zoomLevel.subscribe((factor: number) => {
+        logMessage(`Zoom level changed to: ${factor}`);
+      });
+    }
+
     // Initialize permission switches and subscribe for updates.
     const permissionStates:
         Partial<Record<PermissionSwitchName, Observable<boolean>>> = {
@@ -178,6 +196,10 @@ class WebClient implements GlicWebClient {
       }
     });
 
+    $.clearInvocationLog.addEventListener('click', () => {
+      $.invocationLog.innerHTML = '';
+    });
+
     this.initialized = true;
     const cbs = this.onInitializedCallbacks;
     this.onInitializedCallbacks = [];
@@ -195,7 +217,15 @@ class WebClient implements GlicWebClient {
     // Deleting backwards-compatible members coming from PanelState.
     delete (panelOpeningData as Partial<PanelState>).kind;
     delete (panelOpeningData as Partial<PanelState>).windowId;
-    logMessage(`notifyPanelWillOpen(${JSON.stringify(panelOpeningData)})`);
+    logMessage(
+        `notifyPanelWillOpen(${JSON.stringify(panelOpeningData, replacer)})`);
+
+    const entry = document.createElement('div');
+    entry.style.borderBottom = '1px solid #ccc';
+    entry.style.padding = '4px';
+    entry.textContent =
+        `notifyPanelWillOpen(${JSON.stringify(panelOpeningData, replacer, 2)})`;
+    $.invocationLog.prepend(entry);
     this.browser!.setContextAccessIndicator!($.contextAccessIndicator.checked);
 
     if (panelOpeningData.conversationId) {
@@ -261,6 +291,51 @@ class WebClient implements GlicWebClient {
     // Nothing need to be checked on the test client.
   }
 
+  async invoke(options: InvokeOptions): Promise<void> {
+    logMessage(`invoke(${JSON.stringify(options, replacer)})`);
+    const entry = document.createElement('div');
+    entry.style.borderBottom = '1px solid #ccc';
+    entry.style.padding = '4px';
+    entry.textContent = `invoke(${JSON.stringify(options, replacer, 2)})`;
+    $.invocationLog.prepend(entry);
+
+    if (options.invocationSource === InvocationSource.CAPTURE_REGION_HOTKEY) {
+      $.captureRegionBtn.click();
+    }
+
+    if (options.context) {
+      additionalContextSubject.next(options.context);
+    }
+
+    if (options.prompts && options.prompts.length > 0) {
+      const input = $.skillPromptInput as HTMLInputElement;
+      const prompt = options.prompts[0];
+      if (input && prompt !== undefined) {
+        input.value = prompt;
+      }
+    }
+
+    if (options.payload?.skillsPayload) {
+      const idInput = $.skillIdInput as HTMLInputElement;
+      if (idInput) {
+        idInput.value = options.payload.skillsPayload.skillId;
+      }
+      const nameInput = $.skillNameInput as HTMLInputElement;
+      if (nameInput) {
+        nameInput.value = options.payload.skillsPayload.skillName;
+      }
+      const iconInput = $.skillIconInput as HTMLInputElement;
+      if (iconInput) {
+        iconInput.value = options.payload.skillsPayload.skillIcon;
+      }
+    } else if (options.skillId !== undefined) {
+      const input = $.skillIdInput as HTMLInputElement;
+      if (input) {
+        input.value = options.skillId;
+      }
+    }
+  }
+
   getInitialized(): Promise<void> {
     return new Promise<void>((resolve) => {
       if (this.initialized) {
@@ -287,6 +362,7 @@ class WebClient implements GlicWebClient {
   }
 }
 
+export const additionalContextSubject = new Subject<AdditionalContext>();
 export const client = new WebClient();
 
 // This allows browser tests using this test client to be able to access and

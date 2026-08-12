@@ -17,13 +17,13 @@
 #include <string>
 #include <vector>
 
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "filesystem.h"
 #include "sentencepiece_model.pb.h"
 #include "sentencepiece_processor.h"
 #include "sentencepiece_trainer.h"
 #include "testharness.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "util.h"
 
 namespace sentencepiece {
@@ -44,15 +44,12 @@ struct TrainerResult {
   std::vector<std::pair<std::string, float>> seed_pieces_and_probs;
 };
 
-TrainerResult RunTrainer(const std::vector<std::string>& input,
-                         int size,
-                         const bool use_dp = false,
-                         const float dp_noise = 0.0,
-                         const uint32 dp_clip = 0) {
-  const std::string input_file =
-      util::JoinPath(absl::GetFlag(FLAGS_test_tmpdir), "input");
+TrainerResult RunTrainer(const std::vector<std::string>& input, int size,
+                         const bool use_dp = false, const float dp_noise = 0.0,
+                         const uint32_t dp_clip = 0) {
+  const std::string input_file = util::JoinPath(::testing::TempDir(), "input");
   const std::string model_prefix =
-      util::JoinPath(absl::GetFlag(FLAGS_test_tmpdir), "model");
+      util::JoinPath(::testing::TempDir(), "model");
   {
     auto output = filesystem::NewWritableFile(input_file);
     for (const auto& line : input) {
@@ -120,11 +117,13 @@ TEST(UnigramTrainerTest, BasicTest) {
       30);
 
   // Check seed pieces.
-  EXPECT_EQ(27, res.seed_pieces_and_probs.size());
+  EXPECT_EQ(56, res.seed_pieces_and_probs.size());
 
   // Check final pieces.
-  EXPECT_EQ("A O P a an apple b d e g h i l le m n p r t v ve y ▁ ▁an",
-            res.sentence_pieces);
+  EXPECT_EQ(
+      "A O Overly P Pineapple a b d e g h i l le m magnanimity n p r t v y ▁ "
+      "▁an",
+      res.sentence_pieces);
 }
 
 TEST(UnigramTrainerTest, BasicDPTest) {
@@ -135,8 +134,8 @@ TEST(UnigramTrainerTest, BasicDPTest) {
          "Overly \t 6", "Available \t 5"},
         22, true /*use_dp*/, 0 /*dp_noise*/, 4 /*dp_clipping*/);
 
-    // Got 16 instead of 27 seeds.
-    EXPECT_EQ(16, res.seed_pieces_and_probs.size());
+    // Got 38 instead of 27 seeds.
+    EXPECT_EQ(38, res.seed_pieces_and_probs.size());
 
     // And they are equiv to if the last sentence was not there.
     const auto& res_nodp = RunTrainer(
@@ -155,24 +154,21 @@ namespace {
 static constexpr char kTestInputData[] = "wagahaiwa_nekodearu.txt";
 
 TEST(UnigramTrainerTest, EndToEndTest) {
-  const std::string input =
-      util::JoinPath(absl::GetFlag(FLAGS_test_srcdir), kTestInputData);
+  const std::string input = util::JoinPath(::testing::SrcDir(), kTestInputData);
 
   ASSERT_TRUE(
       SentencePieceTrainer::Train(
-          absl::StrCat(
-              "--model_prefix=",
-              util::JoinPath(absl::GetFlag(FLAGS_test_tmpdir), "tmp_model"),
-              " --input=", input,
-              " --vocab_size=8000 --normalization_rule_name=identity",
-              " --model_type=unigram --user_defined_symbols=<user>",
-              " --control_symbols=<ctrl> --max_sentence_length=2048"))
+          absl::StrCat("--model_prefix=",
+                       util::JoinPath(::testing::TempDir(), "tmp_model"),
+                       " --input=", input,
+                       " --vocab_size=8000 --normalization_rule_name=identity",
+                       " --model_type=unigram --user_defined_symbols=<user>",
+                       " --control_symbols=<ctrl> --max_sentence_length=2048"))
           .ok());
 
   SentencePieceProcessor sp;
-  EXPECT_TRUE(sp.Load(util::JoinPath(absl::GetFlag(FLAGS_test_tmpdir),
-                                     "tmp_model.model"))
-                  .ok());
+  EXPECT_TRUE(
+      sp.Load(util::JoinPath(::testing::TempDir(), "tmp_model.model")).ok());
   EXPECT_EQ(8000, sp.GetPieceSize());
 
   const int cid = sp.PieceToId("<ctrl>");
@@ -194,7 +190,7 @@ TEST(UnigramTrainerTest, EndToEndTest) {
                   .ok());
   // TODO(taku): Temporally disable this test on Windows.
 #ifndef OS_WIN
-  LOG(INFO) << "[" << absl::StrJoin(tok, " ") << std::endl;
+  ABSL_LOG(INFO) << "[" << absl::StrJoin(tok, " ") << std::endl;
   EXPECT_EQ(
       WS
       " 吾輩 《 わが はい 》 は猫である 。 名前はまだ 無 い 。 どこ で 生 れた "

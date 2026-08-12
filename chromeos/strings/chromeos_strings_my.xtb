@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">တိုက်တွန်းချက် ထည့်ရန်</translation>
 <translation id="115705039208660697">နာနတ်သီး</translation>
 <translation id="1164939766849482256">မိုးသောက်ချိန်မှ မှောင်မိုက်ချိန်အထိ စခရင်နားချိန်ပုံ</translation>
-<translation id="1167755866710282443">ကီးများ စိတ်ကြိုက်လုပ်ရန် မီနူးဖွင့်ပါ။ ရွှေ့ရန် မီနူးကို ဖိဆွဲပါ။</translation>
 <translation id="1171349345463658120">သဲထူသောထုံးအိုင်</translation>
 <translation id="1174073918202301297">ဖြတ်လမ်းလင့်ခ် ထည့်ပြီးပါပြီ</translation>
 <translation id="11743817593307477">လိုချင်သော ဂိမ်းလုပ်ဆောင်ချက်အထိ ဤထိန်းချုပ်မှုကို ရွှေ့ရန် မြားကီးများ သုံးပါ။ ထိန်းချုပ်မှုကို နေရာချရန် Enter ကီး သုံးပါ။ ပယ်ဖျက်ရန် Escape ကီး သုံးပါ။</translation>
@@ -146,7 +145,7 @@
           AI ဖြင့် ပြုလုပ်သောအခါ <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google ကိုယ်ရေးအချက်အလက်လုံခြုံမှုဆိုင်ရာ မူဝါဒ<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> နှင့်အညီ ပုံများထုတ်လုပ်ပြီး ထုတ်ကုန်မွမ်းမံရန်အတွက် ညွှန်ကြားချက်ကို Google AI ဆာဗာများသို့ ပို့သည်။
           <ph name="LINE_BREAK" />
           <ph name="LINE_BREAK" />
-          ထုတ်လုပ်မှု AI ကို ကနဦးစမ်းသပ်ရေးဆွဲနေဆဲဖြစ်ပြီး လောလောဆယ်တွင် ရနိုင်မှုကို ကန့်သတ်ထားသည်။</translation>
+          Generative AI ကို ကနဦးစမ်းသပ်ရေးဆွဲနေဆဲဖြစ်ပြီး လောလောဆယ်တွင် ရနိုင်မှုကို ကန့်သတ်ထားသည်။</translation>
 <translation id="1555130319947370107">အပြာရောင်</translation>
 <translation id="155865706765934889">တို့ထိရန် အပြား</translation>
 <translation id="1561927818299383735">နောက်ခံမီးအရောင်</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">အားဝင်ရောက်မှု စစ်ဆေးရန်</translation>
 <translation id="1622402072367425417">တောက်ပသောပူဖောင်း</translation>
 <translation id="1626590945318984973">ဖြတ်လမ်းလင့်ခ် မရနိုင်ပါ။ လုပ်ဆောင်ချက်နှင့် <ph name="META_KEY" /> ခလုတ်များ မသုံးဘဲ ဖြတ်လမ်းလင့်ခ်အသစ်နှိပ်ပါ။</translation>
+<translation id="163774412591892664">သင့်စီမံခန့်ခွဲသူသည် သင့်စက်ကို ပိတ်ထားပြီး ၎င်း၏တည်နေရာကို သုံးနိုင်သည်။</translation>
 <translation id="1639239467298939599">တင်ပေးနေ</translation>
 <translation id="1641857168437328880">စာရွက်စာတမ်း ထည့်ရန်ဗန်း (တစ်ဘက်သုံး)</translation>
 <translation id="1642396894598555413">စက်ဘီး</translation>
@@ -236,7 +236,7 @@
 <translation id="1852934301711881861">ChromeOS Flex ထည့်သွင်းရန်</translation>
 <translation id="1854156910036166007">မျောက်မောင်းမ</translation>
 <translation id="1856388568474281774">အောက်ညွှန်မြား</translation>
-<translation id="1858620243986915808">ဖန်သားပြင်ဓာတ်ပုံ ပူးတွဲရန်</translation>
+<translation id="1858620243986915808">ဖန်သားပြင်ပုံ ပူးတွဲရန်</translation>
 <translation id="1860654594958086756">3D ပုံဖော်ခြင်း</translation>
 <translation id="1871413952174074704">APN တွင် အက္ခရာ <ph name="CHAR_LIMIT" /> လုံးထက် ပိုရှိ၍မရပါ</translation>
 <translation id="1871569928317311284">အမှောင်နောက်ခံ ပိတ်ရန်</translation>
@@ -272,8 +272,7 @@
 <translation id="200669432486043882">ဖိုင် အစားထိုးရန်</translation>
 <translation id="2006864819935886708">ချိတ်ဆက်နိုင်မှု</translation>
 <translation id="2008685064673031089">အဓိက ရှာဖွေမှု</translation>
-<translation id="2011174342667534258">SDK ဗားရှင်း-</translation>
-<translation id="2016697457005847575">ပြဿနာရှာဖွေဖြေရှင်းခြင်း အဆင့်များ စမ်းကြည့်ရန်</translation>
+<translation id="2016697457005847575">ပြဿနာဖြေရှင်းခြင်း အဆင့်များ စမ်းကြည့်ရန်</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">ဇွန်း၊ ခက်ရင်း၊ ဓား</translation>
 <translation id="2047316797244836561">စကရင်နားချိန်ပုံကို ကြည့်ရန် ကွန်ရက်ချိတ်ဆက်ပြီး စာမျက်နှာကို ပြန်လည် စတင်ပါ။</translation>
@@ -330,7 +329,7 @@
 <translation id="2244834438220057800">အစိမ်းရောင်</translation>
 <translation id="2248689665683494517">အနက်ရောင်နောက်ခံတွင် ဖန်ပုလင်းတစ်ခုထဲရှိ Papaver rhea ပန်းပွင့် အနည်းငယ်ပါဝင်သော ရိုးရှင်းသည့် သက်ငြိမ်ပုံ</translation>
 <translation id="225692081236532131">စဖွင့်ခြင်း အခြေအနေ</translation>
-<translation id="2267285889943769271">ဖန်သားပြင်ဓာတ်ပုံ ထည့်ရန်</translation>
+<translation id="2267285889943769271">ဖန်သားပြင်ပုံ ထည့်ရန်</translation>
 <translation id="2268044343513325586">ပြန်မွမ်းမံ</translation>
 <translation id="2271469253353559191">အမှောင်မုဒ် အချိန်ဇယား</translation>
 <translation id="2276999893457278469">ထိပ်တန်းအကူအညီ အကြောင်းအရာ</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">သဲသောင်ခုံ</translation>
 <translation id="2619761439309613843">နေ့စဉ် ပြန်လည်စတင်ရန်</translation>
 <translation id="2620436844016719705">စနစ်</translation>
+<translation id="2626848494898563581">Google ဝန်ဆောင်မှုများကို ချိတ်ဆက်၍မရပါ</translation>
 <translation id="2637303424821734920">ပိတ်ထားသည် - ဒေသတွင်းမိုးလေဝသ ကြည့်ရန်အတွက် <ph name="BEGIN_LINK" />စနစ်တည်နေရာသုံးခွင့် ဖွင့်ရန်<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">လက်မှတ်ထိုးဝင်ရန်ပုံ</translation>
 <translation id="2640549051766135490"><ph name="TITLE" /> <ph name="DESC" /> အယ်လ်ဘမ်ကို ရွေးထားသည်</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">ကီးနေရာချသည့် D-pad</translation>
 <translation id="3217462202230355157">မိုက် ချိတ်ဆက်ထားကြောင်း သေချာအောင်လုပ်ပါ (သို့) သင့် <ph name="DEVICE_TYPE" /> ကို ပြန်စကြည့်ပါ</translation>
 <translation id="3226405216343213872">စကင်ဖတ်စက်များ ရှာနေသည်</translation>
-<translation id="3226657629376379887">အပြင်အဆင် လုပ်ဆောင်ချက် မီနူး</translation>
 <translation id="3227186760713762082"><ph name="CATEGORY_TEXT" /> ကို <ph name="CONVERSION_RATE" /> နှင့်စားပါ</translation>
 <translation id="3242622575335502454">ဒစ်ဂျစ်တယ်အနုပညာ</translation>
 <translation id="3246869037381808805">1 ရက်အထက် ပရင့်ထုတ်ရန်ဖိုင်များကို ဖယ်ရှားပါမည်</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">ကီးလမ်းညွှန်ချက်</translation>
 <translation id="3294437725009624529">ဧည့်သည်</translation>
 <translation id="3303855915957856445">မည်သည့်ရှာဖွေမှု ရလဒ်မျှ မတွေ့ပါ</translation>
-<translation id="3305294846493618482">နောက်ထပ်</translation>
 <translation id="3310640316857623290">DNS တုံ့ပြန်ချိန်က ခွင့်ပြုနိုင်သောသတ်မှတ်ကာလကို သိသာစွာကျော်နေသည်</translation>
 <translation id="3316495615885967552">အနှစ်ချုပ်နှင့် ခေါင်းစဉ်တပ်ခြင်း မော်ဒယ်ကို ဒေါင်းလုဒ်လုပ်ပြီးပါပြီ</translation>
 <translation id="3321030238473337787">ဖွင့်သည့်မြန်နှုန်း</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">တစ်ခုခုမှားသွားသည်။ ထပ်စမ်းကြည့်ပါ။</translation>
 <translation id="357889014807611375">အခမဲ့မဟုတ်သော Wi-Fi</translation>
 <translation id="3583278742022654445">လိုင်းဆွဲအား မကောင်းပါ။ Wi-Fi လိုင်းရင်းမြစ် အနီးသို့ ရွှေ့ကြည့်ပါ။</translation>
+<translation id="3586931643579894722">အသေးစိတ်များ ဝှက်ထားရန်</translation>
 <translation id="3588034708467091142">အင်တာနက်နှင့် ချိတ်ဆက်ထားခြင်း ရှိ၊ မရှိ စစ်ဆေးပြီး ထပ်စမ်းကြည့်ပါ။</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> သည် <ph name="APN_NAME" /> အတွက် အသုံးပြုရ လွယ်ကူသော အမည်ဖြစ်သည်။</translation>
 <translation id="3595596368722241419">ဘက်ထရီ အားပြည့်နေ</translation>
@@ -654,7 +653,7 @@
 <translation id="3902271751020176019">စာသားမှတ်တမ်း ဘာသာစကား</translation>
 <translation id="390890062090528082">ကြယ်အပြည့်ကောင်းကင်</translation>
 <translation id="391412459402535266">စက်ကို စမ်းသပ်၍မရပါ။ စမ်းသပ်ရန် လက်ပ်တော့မုဒ်သို့ ပြောင်းပါ။</translation>
-<translation id="3916998944874125962">ဖန်သားပြင်ဓာတ်ပုံ ရိုက်ရန်</translation>
+<translation id="3916998944874125962">ဖန်သားပြင်ပုံ ရိုက်ရန်</translation>
 <translation id="3923184630988645767">ဒေတာသုံးစွဲမှု</translation>
 <translation id="392943705803418306">သင့်အတွက် ‘စာသင်ခန်းသုံးတူးလ်’ စက်ရှင် ပြီးသွားပြီ</translation>
 <translation id="3932043219784172185">ချိတ်ဆက်ထားသော စက်မရှိပါ</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">နောက်သို့ ၁၀ စက္ကန့် ပြန်သွားရန်</translation>
 <translation id="4128271910628504223">“အုံ့ဆိုင်းနေသော သစ်တောပုံဆွဲပါ” ကဲ့သို့ ညွှန်ကြားချက် ထည့်ပါ</translation>
 <translation id="4130035430755296270">နောက်ထပ် အပြင်အဆင်နည်းလမ်းများအတွက် မောက်စ်ကို ဆက်ပြီးတင်ထားပါ</translation>
-<translation id="4130750466177569591">ကျွန်ုပ် သဘောတူ</translation>
 <translation id="4131410914670010031">အမည်း နှင့် အဖြူ</translation>
 <translation id="4137700675046373159">စနေနေ့တွင်</translation>
 <translation id="4139326893730851150">ဖာမ်းဝဲ အပ်ဒိတ်များ</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814"><ph name="LANGUAGE_NAME" /> စာသားမှတ်တမ်းမော်ဒယ်ကို ဒေါင်းလုဒ်လုပ်ပြီးပါပြီ</translation>
 <translation id="42126664696688958">တင်ပို့ရန်</translation>
 <translation id="4213104098953699324">USB ကီးဘုတ်</translation>
+<translation id="4217571870635786043">အသံထွက်၍ ဖတ်ပေးခြင်း</translation>
 <translation id="4227825898293920515">စကားဝှက်သည် <ph name="TIME" /> တွင် သက်တမ်းကုန်ပါမည်</translation>
 <translation id="4238516577297848345">ပရင့်ထုတ်ရန် ဖိုင်များ လုပ်ဆောင်မနေပါ</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -742,12 +741,12 @@
           ကိုယ်ပိုင်နောက်ခံ ပြုလုပ်သောအခါ <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google ၏ ဝန်ဆောင်မှုစည်းမျဉ်းများနှင့် ကိုယ်ရေးအချက်အလက်လုံခြုံမှုဆိုင်ရာ မူဝါဒ<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> တို့နှင့်အညီ ပုံများထုတ်လုပ်ပြီး ထုတ်ကုန်မွမ်းမံရန်အတွက် ညွှန်ကြားချက်ကို Google ဆာဗာများသို့ ပို့သည်။ ကိုယ်ရေးကိုယ်တာ၊ သတိထားရမည့် (သို့) လျှို့ဝှက်အချက်အလက်များကို မထည့်ပါနှင့်။
           <ph name="LINE_BREAK" />
           <ph name="LINE_BREAK" />
-          ထုတ်လုပ်မှု AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာ စိစစ်ပါ။ <ph name="BEGIN_LINK_CREATE_YOUR_OWN_WALLPAPER" />ပိုမိုလေ့လာရန်<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /></translation>
+          Generative AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာ စိစစ်ပါ။ <ph name="BEGIN_LINK_CREATE_YOUR_OWN_WALLPAPER" />ပိုမိုလေ့လာရန်<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /></translation>
 <translation id="4253971074682120908">နေရာလွတ်</translation>
 <translation id="4258281355379922695">HTTP တုံ့ပြန်ချိန်</translation>
 <translation id="4266143281602681663">ချည်လုံး</translation>
 <translation id="4269815121975886860">စတင်ခြင်း သတ်မှတ်ချက်များ</translation>
-<translation id="4271957103967917607">‘ဖန်သားပြင်အပြည့်’ ကြည့်ရန်</translation>
+<translation id="4271957103967917607">‘စခရင်အပြည့်’ ကြည့်ရန်</translation>
 <translation id="4275663329226226506">မီဒီယာ</translation>
 <translation id="4278766082079064416">ဖြတ်လမ်းလင့်ခ်ကို “<ph name="CONFLICT_ACCEL_NAME" />” အတွက် သုံးထားသည်။ ရှုပ်ထွေးမှု မရှိစေရန် ပြင်ပါ (သို့) ဖယ်ရှားပါ။</translation>
 <translation id="4285999655021474887">ခရမ်းရောင်</translation>
@@ -834,7 +833,7 @@
 <translation id="4650608062294027130">ညာဘက် shift</translation>
 <translation id="4654549501020883054">နေ့စဉ် ပြောင်းရန်</translation>
 <translation id="4655868084888499342">ပုံကို နောက်ခံအဖြစ် သတ်မှတ်ပြီးပါပြီ</translation>
-<translation id="4660989616054030633">ထုတ်လုပ်မှု AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာ စိစစ်ပါ</translation>
+<translation id="4660989616054030633">Generative AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာ စိစစ်ပါ</translation>
 <translation id="4661249927038176904">အိပ်မက်ဆန်</translation>
 <translation id="4661392828086261436">ဤအပ်ဒိတ်ကို စက်ထုတ်လုပ်သူက ပံ့ပိုးထားပြီး Google က မစိစစ်ရသေးပါ</translation>
 <translation id="4664651912255946953">သားမွေး</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">တဘ်</translation>
 <translation id="5612205513582918357">‘စာသင်ခန်းသုံးတူးလ်’ သည် သင့်စခရင်ကို <ph name="RECEIVER_NAME" /> နှင့် မျှဝေနေသည်</translation>
 <translation id="5613201299517339763">အကောင့်ထွက်လိုက်သည်</translation>
-<translation id="5620281292257375798">ရုံးတွင်းသာ</translation>
 <translation id="5628106863521633649">ရနိုင်သော ဘာသာစကားများ</translation>
 <translation id="5630438231335788050">ဘောင်းဟောက်စ်</translation>
 <translation id="5631759159893697722">ကောက်နုတ်ချက်</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">နောက်ပြန်</translation>
 <translation id="6137614725462089991">ဆိုက်ဘာသိပ္ပံ</translation>
 <translation id="6137767437444130246">အသုံးပြုသူ အသိအမှတ်ပြုလက်မှတ်</translation>
+<translation id="6140948187512243695">အသေးစိတ်များကို ပြရန်</translation>
 <translation id="6146993107019042706">အပြီးသတ်ရန် သင့်စကားဝှက်အသစ်ကို ထည့်ပါ</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">အင်တာနက်သို့ ချိတ်ဆက်၍မရပါ</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">အကြမ်းဖော်ပြချက် ပြပါ</translation>
 <translation id="6243280677745499710">လောလောဆယ် သတ်မှတ်ထားသည်</translation>
 <translation id="6250316632541035980">ဝက်ပေါင်ခြောက်နှင့် ကြက်ဥ</translation>
+<translation id="6262413940100821797">အမည်မသိ လက်ခံသူ</translation>
 <translation id="6265268291107409527">ရွေးထားသောကီးမှာ <ph name="KEYS" /> ဖြစ်သည်။ <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">ညာညွှန်မြား</translation>
 <translation id="6278428485366576908">အပြင်အဆင်</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">ဤ <ph name="DEVICE_TYPE" /> ကို <ph name="MANAGER" /> က စီမံခန့်ခွဲသည်။ စီမံခန့်ခွဲသူများက စက်ပစ္စည်းကို အဝေးမှ စီစဉ်သတ်မှတ်နိုင်သည်။</translation>
 <translation id="7180611975245234373">ပြန်လည်စတင်ရန်</translation>
 <translation id="7180865173735832675">ပြုပြင်ရန်</translation>
-<translation id="7182063559013288142">ချက်ချင်းသုံး ဟော့စပေါ့</translation>
-<translation id="7184043045742675738">သင့်ခလုတ်ကို စိတ်ကြိုက်လုပ်ရန် ကီးတစ်ခုခုနှိပ်ပါ။ မောက်စ် (သို့) မြားကီးများဖြင့် ကီးကို နေရာပြန်ချပါ။</translation>
 <translation id="7187669805838282391">ဗုဒ္ဓဟူးနေ့တွင်</translation>
 <translation id="7205318498545665455">မိုက် ရွေးပါ</translation>
-<translation id="7206979415662233817">ဝန်ဆောင်မှုစည်းမျဉ်းများ</translation>
 <translation id="7210635925306941239">စိမ်းပြာရောင်</translation>
 <translation id="7212547870105584639">ကွန်ရက် APN ဆက်တင်များကို စီမံနိုင်သည်။ APN များက ဆယ်လူလာ ကွန်ရက်နှင့် အင်တာနက်အကြား ချိတ်ဆက်ပေးသည်။ <ph name="BEGIN_LINK_LEARN_MORE" />ပိုမိုလေ့လာရန်<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">ပြင်ပစက်များအတွက် ဖာမ်းဝဲအပ်ဒိတ်များ</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">အစိမ်းနှင့် စိမ်းပြာရင့်</translation>
 <translation id="7328475450575141167">ပရဒိသုငှက်ပန်း</translation>
-<translation id="7331297744262591636">သင်သည် အနည်းဆုံးအသက် ၁၈ နှစ် ရှိရမည်ဖြစ်ပြီး AI နောက်ခံများကို အသုံးပြုခြင်းသည် <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Google ဝန်ဆောင်မှုစည်းမျဉ်းများ<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> နှင့် <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />ထုတ်လုပ်မှု AI ထပ်ဆောင်းဝန်ဆောင်မှုစည်းမျဉ်းများ<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" /> ကို လိုက်နာရမည်ဖြစ်ကြောင်း သင်သဘောတူသည်။
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          တစ်ကိုယ်ရေ အသုံးပြုမှုနှင့် စီးပွားဖြစ်မဟုတ်သော အသုံးပြုမှုအတွက်သာ နောက်ခံများကို AI ဖြင့် ဖန်တီးနိုင်သည်။ နောက်ခံအတွက် အကူအညီ ရယူသည့်အခါ နောက်ခံဆိုင်ရာ အကြံပြုချက်များ ထုတ်ပေးရန် စာသားကို <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google ကိုယ်ရေးအချက်အလက်လုံခြုံမှုဆိုင်ရာ မူဝါဒ<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" /> နှင့်အညီ Google AI ဆာဗာများသို့ ပို့သည်။ <ph name="BEGIN_LINK_LEARN_MORE" />ပိုမိုလေ့လာရန်<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />။ <ph name="RESULT_TEXT" />။ Google Search တွင် ရလဒ်ကိုကြည့်ရန် ‘ရှာဖွေရန်’ နှင့် Space ကိုနှိပ်ပါ။</translation>
 <translation id="7343649194310845056">ကွန်ရက်ရှိ စက်များ</translation>
 <translation id="7344788170842919262">မြေကြီးရောင်</translation>
 <translation id="7346768383111016081">ကီးဘုတ်ဖြင့် ကစားရန်အတွက် ဂိမ်းလုပ်ဆောင်ချက်တွင် သတ်မှတ်ချက် ထည့်ပါ</translation>
@@ -1497,7 +1489,7 @@
 <translation id="7544853251252956727">ရောသမမွှေပါ</translation>
 <translation id="7550715992156305117">အမှားရှာဖွေမှု ပုံမှန်အစီအစဉ်များ</translation>
 <translation id="7551123448725492271">ကိရိယာသည် အသံစက်ပစ္စည်းဖြစ်သည်။</translation>
-<translation id="7559239713112547082">ဖန်သားပြင်ဓာတ်ပုံ အစမ်းကြည့်ရှုရန်</translation>
+<translation id="7559239713112547082">ဖန်သားပြင်ပုံ အစမ်းကြည့်ရှုရန်</translation>
 <translation id="7561454561030345039">ဤလုပ်ဆောင်ချက်ကို သင့်ကြီးကြပ်သူက စီမံသည်</translation>
 <translation id="7561759921596375678">အသံဖွင့်ရန်</translation>
 <translation id="7569444139234840525"><ph name="QUERY_TEXT" /> · /<ph name="PHONETICS" />/</translation>
@@ -1506,7 +1498,6 @@
 <translation id="7590883480672980941">ထည့်သွင်းမှု ဆက်တင်များ</translation>
 <translation id="7595982850646262331"><ph name="TIME_VALUE" /> ကျန်သည်</translation>
 <translation id="7600430297804876776"><ph name="MANAGER" /> စီမံခန့်ခွဲသူက ဤ <ph name="DEVICE_TYPE" /> ကို သုံးနိုင်သည့်အချိန် သတ်မှတ်ထားသည်။</translation>
-<translation id="7613724632293948900">မောက်စ် (သို့) မြားကီးများဖြင့် နေရာပြန်ချပါ။</translation>
 <translation id="7618216277886673749"><ph name="LANGUAGE_NAME" /> ကို ရွေးရန်</translation>
 <translation id="7618774594543487847">ပုံမှန်</translation>
 <translation id="7620771111601174153">'ကူညီရေးဌာန' တွင် ပိုမိုလေ့လာရန်</translation>
@@ -1594,7 +1585,7 @@
 <translation id="7983597390787556680">{NUM_ROOL_APPS,plural, =1{"<ph name="APP_NAME_1" />" ကို အလိုအလျောက် စတင်ထားသည်}other{အက်ပ် # ခုကို အလိုအလျောက် စတင်ထားသည်}}</translation>
 <translation id="7994702968232966508">EAP နည်းလမ်း</translation>
 <translation id="8004582292198964060">ဘရောင်ဇာ</translation>
-<translation id="8010765388850538088">‘ထုတ်လုပ်မှု AI’ အကြောင်း ပိုမိုလေ့လာရန်</translation>
+<translation id="8010765388850538088">Generative AI အကြောင်း ပိုမိုလေ့လာရန်</translation>
 <translation id="8017679124341497925">ဖြတ်လမ်းလင့်ခ်ကို တည်းဖြတ်ပြီးပါပြီ</translation>
 <translation id="802154636333426148">ဒေါင်းလုဒ်လုပ်မှု မအောင်မြင်ပါ</translation>
 <translation id="8027467664787098346">ရွေးထားသောနောက်ခံအကြောင်း ပိုမိုလေ့လာရန်</translation>
@@ -1640,6 +1631,7 @@
 <translation id="819278132617411009">ပိုမိုလုပ်ဆောင်နိုင်ရန် Google AI သုံးပါ</translation>
 <translation id="8200772114523450471">ပြန်ဆက်ရန်</translation>
 <translation id="8206859287963243715">ဆဲလ်လူလာ</translation>
+<translation id="8208043093301544621">ပင်မစာမျက်နှာ</translation>
 <translation id="8208861521865154048">ခံစားခွင့်များ</translation>
 <translation id="8226628635270268143">သင့်အကြိုက်ဆုံး ဓာတ်ပုံနှင့် အယ်လ်ဘမ်များ ရွေးချယ်ရန်</translation>
 <translation id="8227119283605456246">ပူးတွဲဖိုင်</translation>
@@ -1686,6 +1678,7 @@
 <translation id="8420955526972171689">ဟာ့ဒ်ဝဲပြဿနာအတွက် စစ်ဆေးမှုများနှင့် ပြဿနာရှာဖွေဖြေရှင်းခြင်းကို လုပ်ဆောင်နိုင်သည်</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">အောက်သို့</translation>
+<translation id="8427213022735114808">စာရိုက်ရန်အကွက်များတွင် စကားသံဖြင့်စာရိုက်ခြင်းကို ခွင့်ပြုရန် Dictation သည် သင့်အသံကို Google သို့ ပို့သည်။</translation>
 <translation id="8428213095426709021">ဆက်တင်များ</translation>
 <translation id="8431300646573772016">ChromeOS ၏ အသစ်ပါဝင်မှု</translation>
 <translation id="8433186206711564395">ကွန်ရက် ဆက်တင်များ</translation>
@@ -1718,12 +1711,13 @@
 <translation id="8538236298648811558">Google AI က ပံ့ပိုးထားသည်</translation>
 <translation id="8550364285433943656">ကီးဘုတ်ကီးများဖြင့် ကစားရန်အတွက် ဂိမ်းလုပ်ဆောင်ချက်များတွင် သတ်မှတ်ချက်များ ထည့်ပါ</translation>
 <translation id="8557447961879934694">WPA2</translation>
-<translation id="8558521694042102707">ထုတ်လုပ်မှု AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာစိစစ်ပါ။</translation>
+<translation id="8558521694042102707">Generative AI သည် လူများအကြောင်းအပါအဝင် အမှားများ ပြုလုပ်နိုင်သဖြင့် ၎င်းကို သေချာစွာစိစစ်ပါ။</translation>
 <translation id="8575298406870537639">သင့်မိုဘိုင်းဖုန်းကုမ္ပဏီသည် ၎င်း၏ကွန်ရက်သို့ ချိတ်ဆက်ရန် ဤရွေးချယ်စရာကို သတ်မှတ်ထားနိုင်သည်။ အသေးစိတ်အတွက် သင့်မိုဘိုင်းဖုန်းကုမ္ပဏီကို ဆက်သွယ်ပါ။</translation>
 <translation id="8576249514688522074">စတင်မထားပါ</translation>
 <translation id="8584654835905316966"><ph name="DEVICE_NAME" /> အတွက် ဖာမ်းဝဲဗားရှင်း <ph name="VERSION" /> ထည့်သွင်းမှုကို အပြီးသတ်ရန်အတွက် ပြန်စရန်လိုအပ်သည်။ သင့်ကွန်ပျူတာကို အကြိမ်များစွာ ပြန်လည်စတင်နိုင်သည်။ ဤလုပ်ဆောင်ချက်သည် ပုံမှန်ဖြစ်သည်။</translation>
 <translation id="8593058461203131755">မီဒီယာကို ခဏရပ်ရန်</translation>
 <translation id="8620617069779373398">ကွန်ရက်ပြင်ပဒေတာသုံးခြင်း အခြေအနေ</translation>
+<translation id="8624524972189162859">သင်၏ <ph name="DOMAIN_NAME" /> စီမံခန့်ခွဲသူသည် သင့်စက်ကို ပိတ်ထားပြီး ၎င်း၏တည်နေရာကို သုံးနိုင်သည်။</translation>
 <translation id="8626489604350149811"><ph name="APN_NAME" /> အတွက် နောက်ထပ်လုပ်ဆောင်ချက်များ</translation>
 <translation id="86356131183441916">ခရမ်းနု</translation>
 <translation id="8647595191512746911">အသံစာသားမှတ်တမ်း</translation>
@@ -1835,10 +1829,8 @@
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">ဘလူးတုသ်</translation>
 <translation id="9082718469794970195">ဤဗီဒီယိုသုံးရန်</translation>
-<translation id="9087578468327036362">ဤမေးမြန်းချက်ကို အကြောင်းကြားရန်</translation>
 <translation id="9088306295921699330">လက်ရှိ အသုံးပြုမှု</translation>
 <translation id="9088994563996376283">ရှင်းလင်းအောင်လုပ်ရန်</translation>
-<translation id="9095775724867566971">Pluginvm</translation>
 <translation id="909856219855259344">‘ပြင်ဆင်သတ်မှတ်ရန်’ ရက်စွဲအကြောင်း နောက်ထပ်အချက်အလက်</translation>
 <translation id="9100765901046053179">အဆင့်မြင့် ဆက်တင်များ</translation>
 <translation id="910415269708673980"><ph name="PRINCIPAL_NAME" /> အတွက် လက်မှတ်ကို ပြန်လည်စတင်ပါ</translation>
@@ -1868,7 +1860,6 @@
 <translation id="921080052717160800">ပုံကို ကင်မရာနောက်ခံအဖြစ် သတ်မှတ်ပြီးပါပြီ</translation>
 <translation id="9211490828691860325">မျက်နှာပြင်နေရာအားလုံး</translation>
 <translation id="9218016617214286986">သိသော APN များကို ပြပါ</translation>
-<translation id="932327136139879170">ပင်မ</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">အကြံပြုချက် ပေးပို့မည်</translation>
 <translation id="950520315903467048"><ph name="DIRECTION" /> အတွက် ကီးမရှိပါ။ <ph name="ASSIGN_INSTRUCTION" /></translation>

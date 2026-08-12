@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 
+#include "base/byte_size.h"
 #include "base/containers/enum_set.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
@@ -16,6 +17,7 @@
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "base/types/token_type.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "components/performance_manager/decorators/page_aggregator_data.h"
 #include "components/performance_manager/decorators/page_load_tracker_decorator_data.h"
@@ -26,6 +28,8 @@
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/resource_attribution/cpu_measurement_data.h"
 #include "components/performance_manager/scenarios/loading_scenario_data.h"
+#include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "url/gurl.h"
 
@@ -61,19 +65,15 @@ class PageNodeImpl
  public:
   using PassKey = base::PassKey<PageNodeImpl>;
 
-  // A unique token to identify the PageNode and its associated WebContents for
-  // the lifetime of the browser. Most node types use an existing unique
-  // identifier for this (eg. FrameNode uses content::GlobalRenderFrameHostId,
-  // WorkerNode uses blink::WorkerToken) but WebContents has no id to use.
-  using PageToken = base::TokenType<class PageTokenTag>;
-
   using TypedNodeBase<PageNodeImpl, PageNode, PageNodeObserver>::FromNode;
 
   PageNodeImpl(base::WeakPtr<content::WebContents> web_contents,
-               const std::string& browser_context_id,
+               const content::WebContents::UniqueToken& page_token,
+               const base::UnguessableToken& browser_context_id,
                const GURL& visible_url,
                PagePropertyFlags initial_properties,
-               base::TimeTicks visibility_change_time);
+               base::TimeTicks visibility_change_time,
+               const perfetto::Track& tracing_track);
 
   PageNodeImpl(const PageNodeImpl&) = delete;
   PageNodeImpl& operator=(const PageNodeImpl&) = delete;
@@ -81,7 +81,7 @@ class PageNodeImpl
   ~PageNodeImpl() override;
 
   // Partial PageNode implementation:
-  const std::string& GetBrowserContextID() const override;
+  const base::UnguessableToken& GetBrowserContextID() const override;
   resource_attribution::PageContext GetResourceContext() const override;
   PageType GetType() const override;
   bool IsFocused() const override;
@@ -104,31 +104,31 @@ class PageNodeImpl
   GetNotificationPermissionStatus() const override;
   base::TimeDelta GetTimeSinceLastNavigation() const override;
   const GURL& GetMainFrameUrl() const override;
-  base::ByteCount EstimateMainFramePrivateFootprintSize() const override;
+  base::ByteSize EstimateMainFramePrivateFootprintSize() const override;
   bool HadFormInteraction() const override;
   bool HadUserEdits() const override;
   base::WeakPtr<content::WebContents> GetWebContents() const override;
-  base::ByteCount EstimateResidentSetSize() const override;
-  base::ByteCount EstimatePrivateFootprintSize() const override;
+  base::ByteSize EstimateResidentSetSize() const override;
+  base::ByteSize EstimatePrivateFootprintSize() const override;
   base::WeakPtr<PageNode> GetWeakPtr() override;
   base::WeakPtr<const PageNode> GetWeakPtr() const override;
 
   // Returns the unique token for the page node. This function can be called
   // from any thread.
-  const PageToken& page_token() const { return page_token_; }
+  const content::WebContents::UniqueToken& page_token() const {
+    return page_token_;
+  }
 
-  // Returns a Perfetto track that can record trace events for the page. This
-  // function can be called from any thread.
-  const perfetto::NamedTrack& tracing_track() const { return *tracing_track_; }
-
+  // Initializes the page type. The current type must be kUnknown.
   void SetType(PageType type);
+
   void SetIsFocused(bool is_focused);
   void SetIsVisible(bool is_visible);
   void SetIsAudible(bool is_audible);
   void SetHasPictureInPicture(bool has_picture_in_picture);
   void SetLoadingState(LoadingState loading_state);
   void SetUkmSourceId(ukm::SourceId ukm_source_id);
-  void OnFaviconUpdated();
+  void OnFaviconUpdated(blink::mojom::FaviconUpdateReason reason);
   void OnTitleUpdated();
   void OnAboutToBeDiscarded(base::WeakPtr<PageNode> new_page_node);
   // Set main frame information of a restored page before the first navigation
@@ -154,7 +154,7 @@ class PageNodeImpl
   // Accessors.
   FrameNodeImpl* opener_frame_node() const;
   FrameNodeImpl* embedder_frame_node() const;
-  FrameNodeImpl* main_frame_node() const;
+  FrameNodeImpl* primary_main_frame_node() const;
   NodeSetView<FrameNodeImpl*> main_frame_nodes() const;
 
   // Invoked to set/clear the opener of this page.
@@ -200,7 +200,6 @@ class PageNodeImpl
   void TraceFrame(base::PassKey<FrameNodeImpl>, FrameNodeImpl* frame_node);
   void RemoveFrame(base::PassKey<FrameNodeImpl>, FrameNodeImpl* frame_node);
 
-  // Function meant to be called by FrozenFrameAggregator.
   void SetLifecycleState(base::PassKey<FrozenFrameAggregator>,
                          LifecycleState lifecycle_state) {
     SetLifecycleState(lifecycle_state);
@@ -239,7 +238,7 @@ class PageNodeImpl
   // Partial PageNode implementation:
   const FrameNode* GetOpenerFrameNode() const override;
   const FrameNode* GetEmbedderFrameNode() const override;
-  const FrameNode* GetMainFrameNode() const override;
+  const FrameNode* GetPrimaryMainFrameNode() const override;
   NodeSetView<const FrameNode*> GetMainFrameNodes() const override;
 
   // NodeBase:
@@ -266,12 +265,10 @@ class PageNodeImpl
   const base::WeakPtr<content::WebContents> web_contents_;
 
   // The unique token that identifies this PageNode for the life of the browser.
-  const PageToken page_token_;
+  const content::WebContents::UniqueToken page_token_;
 
   // Perfetto track that can record trace events for the page.
-  const base::trace_event::TrackRegistration<perfetto::NamedTrack>
-      tracing_track_;
-  const perfetto::NamedTrack loading_track_;
+  const perfetto::NamedTrack frames_track_;
 
   // The main frame nodes of this page. There can be more than one main frame
   // in a page, among other reasons because during main frame navigation, the
@@ -323,7 +320,7 @@ class PageNodeImpl
       notification_permission_status_ GUARDED_BY_CONTEXT(sequence_checker_);
 
   // The unique ID of the browser context that this page belongs to.
-  const std::string browser_context_id_;
+  const base::UnguessableToken browser_context_id_;
 
   // The opener of this page, if there is one.
   raw_ptr<FrameNodeImpl> opener_frame_node_

@@ -8,11 +8,6 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #ifndef GPU_COMMAND_BUFFER_COMMON_WEBGPU_CMD_FORMAT_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_COMMON_WEBGPU_CMD_FORMAT_AUTOGEN_H_
 
@@ -114,8 +109,8 @@ struct AssociateMailboxImmediate {
     flags = _flags;
     view_format_count = _view_format_count;
     count = _count;
-    memcpy(ImmediateDataAddress(this), _mailbox_and_view_formats,
-           ComputeDataSize(_count));
+    UNSAFE_TODO(memcpy(ImmediateDataAddress(this), _mailbox_and_view_formats,
+                       ComputeDataSize(_count)));
   }
 
   void* Set(void* cmd,
@@ -203,7 +198,8 @@ struct AssociateMailboxForBufferImmediate {
     id = _id;
     generation = _generation;
     usage = _usage;
-    memcpy(ImmediateDataAddress(this), _mailbox, ComputeDataSize());
+    UNSAFE_TODO(
+        memcpy(ImmediateDataAddress(this), _mailbox, ComputeDataSize()));
   }
 
   void* Set(void* cmd,

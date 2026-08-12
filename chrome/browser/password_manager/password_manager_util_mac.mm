@@ -6,16 +6,15 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
-#include <Security/Authorization.h>
+#include <Security/Security.h>
 
+#include "base/apple/bridging.h"
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
 #include "base/mac/authorization_util.h"
 #include "base/mac/scoped_authorizationref.h"
 #include "base/strings/sys_string_conversions.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace {
@@ -29,14 +28,26 @@ NSString* UserAuthenticationRightName() {
 }
 
 bool EnsureAuthorizationRightExists() {
-  NSString* rightName = UserAuthenticationRightName();
-  // If the authorization right already exists there is nothing to do.
-  if (AuthorizationRightGet(rightName.UTF8String, nullptr) ==
+  NSString* right_name = UserAuthenticationRightName();
+  base::apple::ScopedCFTypeRef<CFDictionaryRef> right_definition;
+  if (AuthorizationRightGet(right_name.UTF8String,
+                            right_definition.InitializeInto()) ==
       errAuthorizationSuccess) {
-    return true;
+    id rule = [base::apple::CFToNSPtrCast(right_definition.get())
+        objectForKey:@(kAuthorizationRightRule)];
+    if (NSString* rule_string = base::apple::ObjCCast<NSString>(rule);
+        [rule_string
+            isEqualToString:@(kAuthorizationRuleAuthenticateAsSessionUser)]) {
+      return true;
+    }
+    if (NSArray* rule_array = base::apple::ObjCCast<NSArray>(rule); [rule_array
+            containsObject:@(kAuthorizationRuleAuthenticateAsSessionUser)]) {
+      return true;
+    }
   }
 
-  // The authorization right does not exist so create it.
+  // The authorization right does not exist or does not match the desired rule,
+  // so create or overwrite it.
   base::mac::ScopedAuthorizationRef authorization =
       base::mac::CreateAuthorization();
   if (!authorization) {
@@ -46,7 +57,7 @@ bool EnsureAuthorizationRightExists() {
   // Create a right which requires that the user authenticate as the session
   // owner. The prompt must be specified each time the right is requested.
   OSStatus status =
-      AuthorizationRightSet(authorization, rightName.UTF8String,
+      AuthorizationRightSet(authorization.get(), right_name.UTF8String,
                             CFSTR(kAuthorizationRuleAuthenticateAsSessionUser),
                             nullptr, nullptr, nullptr);
   if (status != errAuthorizationSuccess) {

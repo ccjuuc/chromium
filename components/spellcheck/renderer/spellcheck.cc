@@ -33,6 +33,7 @@
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_visitor.h"
 #include "content/public/renderer/render_thread.h"
+#include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
@@ -69,7 +70,7 @@ bool UpdateSpellcheckEnabled::Visit(content::RenderFrame* render_frame) {
 
 std::vector<WebString> ConvertToWebStringFromUtf8(
     const std::set<std::string>& words) {
-  return base::ToVector(words, &WebString::FromUTF8);
+  return base::ToVector(words, &WebString::FromUtf8);
 }
 
 bool IsApostrophe(char16_t c) {
@@ -108,7 +109,7 @@ std::vector<WebString> FilterReplacementSuggestions(
     if (replacement == misspelled_word)
       continue;
 
-    replacements_filtered.push_back(WebString::FromUTF16(replacement));
+    replacements_filtered.push_back(WebString::FromUtf16(replacement));
   }
 
   return replacements_filtered;
@@ -212,11 +213,21 @@ void SpellCheck::Initialize(
   content::RenderFrame::ForEach(&updater);
 }
 
+void SpellCheck::SpellCheckCustomDictionaryChanged(
+    const std::vector<std::string>& words_added,
+    const std::vector<std::string>& words_removed) {
+  if (blink::WebRuntimeFeatures::IsSpellCheckCustomDictionaryAPIEnabled()) {
+    const std::set<std::string> added(words_added.begin(), words_added.end());
+    NotifyDictionaryObservers(ConvertToWebStringFromUtf8(added));
+  }
+}
+
 void SpellCheck::CustomDictionaryChanged(
     const std::vector<std::string>& words_added,
     const std::vector<std::string>& words_removed) {
   const std::set<std::string> added(words_added.begin(), words_added.end());
   NotifyDictionaryObservers(ConvertToWebStringFromUtf8(added));
+  // Add or remove the word in the browser's custom dictionary
   custom_dictionary_.OnCustomDictionaryChanged(
       added, std::set<std::string>(words_removed.begin(), words_removed.end()));
 }
@@ -405,7 +416,8 @@ bool SpellCheck::SpellCheckWord(
 bool SpellCheck::SpellCheckParagraph(
     const std::u16string& text,
     spellcheck::mojom::SpellCheckHost& host,
-    std::vector<WebTextCheckingResult>* results) {
+    std::vector<WebTextCheckingResult>* results,
+    const std::set<std::u16string>* document_custom_words) {
   DCHECK(results);
   std::vector<WebTextCheckingResult> textcheck_results;
   const size_t text_length = text.length();
@@ -435,12 +447,18 @@ bool SpellCheck::SpellCheckParagraph(
       return true;
     }
 
-    if (!custom_dictionary_.SpellCheckWord(text, misspelling_start,
-                                           misspelling_length)) {
-      textcheck_results.push_back(
-          WebTextCheckingResult(blink::kWebTextDecorationTypeSpelling,
-                                base::checked_cast<int>(misspelling_start),
-                                base::checked_cast<int>(misspelling_length)));
+    // A word is correctly spelled if it is in the profile custom dictionary
+    // or in the per-document word set.
+    const bool in_custom_dictionary =
+        custom_dictionary_.SpellCheckWord(text, misspelling_start,
+                                          misspelling_length) ||
+        (document_custom_words && document_custom_words->contains(text.substr(
+                                      misspelling_start, misspelling_length)));
+    if (!in_custom_dictionary) {
+      textcheck_results.emplace_back(
+          blink::kWebTextDecorationTypeSpelling,
+          base::checked_cast<int>(misspelling_start),
+          base::checked_cast<int>(misspelling_length));
     }
     position_in_text = misspelling_start + misspelling_length;
   }
@@ -495,8 +513,9 @@ void SpellCheck::PostDelayedSpellCheckTask(SpellcheckRequest* request) {
 void SpellCheck::PerformSpellCheck(SpellcheckRequest* param) {
   DCHECK(param);
 
+  SpellCheckProvider* provider = param->provider();
   spellcheck::mojom::SpellCheckHost* host = nullptr;
-  if (SpellCheckProvider* provider = param->provider()) {
+  if (provider != nullptr) {
     // It is safe to provide this as a pointer here because
     // it will only be used synchronously in the SpellCheckParagraph
     // method.
@@ -507,8 +526,10 @@ void SpellCheck::PerformSpellCheck(SpellcheckRequest* param) {
       !std::ranges::all_of(languages_, &SpellcheckLanguage::IsEnabled)) {
     param->completion()->DidCancelCheckingText();
   } else {
+    const std::set<std::u16string>& document_custom_words =
+        provider->document_custom_words();
     std::vector<blink::WebTextCheckingResult> results;
-    SpellCheckParagraph(param->text(), *host, &results);
+    SpellCheckParagraph(param->text(), *host, &results, &document_custom_words);
     param->completion()->DidFinishCheckingText(results);
 #if BUILDFLAG(IS_WIN) && BUILDFLAG(USE_BROWSER_SPELLCHECKER)
     spellcheck_renderer_metrics::RecordSpellcheckDuration(
@@ -525,7 +546,8 @@ void SpellCheck::CreateTextCheckingResults(
     int line_offset,
     const std::u16string& line_text,
     const std::vector<SpellCheckResult>& spellcheck_results,
-    std::vector<WebTextCheckingResult>* textcheck_results) {
+    std::vector<WebTextCheckingResult>* textcheck_results,
+    const std::set<std::u16string>* document_custom_words) {
   DCHECK(!line_text.empty());
 
   std::vector<WebTextCheckingResult> results;
@@ -553,6 +575,11 @@ void SpellCheck::CreateTextCheckingResults(
     // Ignore words in custom dictionary.
     if (custom_dictionary_.SpellCheckWord(misspelled_word, 0,
                                           misspelled_word.length())) {
+      continue;
+    }
+
+    if (document_custom_words &&
+        document_custom_words->contains(misspelled_word)) {
       continue;
     }
 

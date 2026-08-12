@@ -9,24 +9,24 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
+#include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/process/process_handle.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/browser/child_process_host_impl.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/file_system_access/file_system_access_error.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/spare_render_process_host_manager_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/common/renderer.mojom.h"
 #include "content/public/browser/android/child_process_importance.h"
 #include "content/public/browser/browser_context.h"
@@ -35,6 +35,7 @@
 #include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/site_instance.h"
 #include "content/test/fake_network_url_loader_factory.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "media/media_buildflags.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
@@ -48,7 +49,8 @@ StoragePartitionConfig GetOrCreateStoragePartitionConfig(
   if (site_instance) {
     SiteInstanceImpl* site_instance_impl =
         static_cast<SiteInstanceImpl*>(site_instance);
-    return site_instance_impl->GetSiteInfo().storage_partition_config();
+    return site_instance_impl->GetSecurityPrincipal()
+        .GetStoragePartitionConfig();
   }
   return StoragePartitionConfig::CreateDefault(browser_context);
 }
@@ -84,19 +86,18 @@ MockRenderProcessHost::MockRenderProcessHost(
       foreground_service_worker_count_(0) {
   // Child process security operations can't be unit tested unless we add
   // ourselves as an existing child process.
-  ChildProcessSecurityPolicyImpl::GetInstance()->Add(GetDeprecatedID(),
-                                                     browser_context);
+  ChildProcessSecurityPolicyImpl::GetInstance()->Add(GetID(), browser_context);
 
-  RenderProcessHostImpl::RegisterHost(GetDeprecatedID(), this);
+  RenderProcessHostImpl::RegisterHost(GetID(), this);
 }
 
 MockRenderProcessHost::~MockRenderProcessHost() {
-  ChildProcessSecurityPolicyImpl::GetInstance()->Remove(GetDeprecatedID());
+  ChildProcessSecurityPolicyImpl::GetInstance()->Remove(GetID());
   // In unit tests, Cleanup() might not have been called.
   if (!deletion_callback_called_) {
     for (auto& observer : observers_)
       observer.RenderProcessHostDestroyed(this);
-    RenderProcessHostImpl::UnregisterHost(GetDeprecatedID());
+    RenderProcessHostImpl::UnregisterHost(GetID());
   }
 }
 
@@ -193,14 +194,22 @@ bool MockRenderProcessHost::GetIntersectsViewport() {
   return true;
 }
 
-#if !BUILDFLAG(IS_ANDROID)
-bool MockRenderProcessHost::IsForInitialWebUI() const {
-  return false;
+bool MockRenderProcessHost::IsForTopChromeWebUI() const {
+  return is_for_top_chrome_web_ui_;
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
+
+bool MockRenderProcessHost::ShouldSendGpuChannelEarly() const {
+  return base::FeatureList::IsEnabled(features::kSendGPUChannelEarly) &&
+         (!features::kSendGPUChannelEarlyTopChromeOnly.Get() ||
+          IsForTopChromeWebUI());
+}
 
 bool MockRenderProcessHost::IsForGuestsOnly() {
   return is_for_guests_only_;
+}
+
+bool MockRenderProcessHost::IsPrivileged() {
+  return GetProcessLock().is_privileged();
 }
 
 bool MockRenderProcessHost::IsJitDisabled() {
@@ -208,7 +217,11 @@ bool MockRenderProcessHost::IsJitDisabled() {
 }
 
 bool MockRenderProcessHost::AreV8OptimizationsDisabled() {
-  return false;
+  return are_v8_optimizations_disabled_;
+}
+
+void MockRenderProcessHost::SetAreV8OptimizationsDisabled(bool disabled) {
+  are_v8_optimizations_disabled_ = disabled;
 }
 
 bool MockRenderProcessHost::DisallowV8FeatureFlagOverrides() {
@@ -216,7 +229,11 @@ bool MockRenderProcessHost::DisallowV8FeatureFlagOverrides() {
 }
 
 bool MockRenderProcessHost::IsPdf() {
-  return false;
+  return is_pdf_;
+}
+
+void MockRenderProcessHost::SetIsPdf(bool is_pdf) {
+  is_pdf_ = is_pdf;
 }
 
 void MockRenderProcessHost::OnMediaStreamAdded() {}
@@ -236,9 +253,17 @@ void MockRenderProcessHost::OnBoostForLoadingAdded() {}
 
 void MockRenderProcessHost::OnBoostForLoadingRemoved() {}
 
-void MockRenderProcessHost::OnImmersiveXrSessionStarted() {}
+void MockRenderProcessHost::OnImmersiveXrSessionStarted() {
+  has_immersive_xr_session_ = true;
+}
 
-void MockRenderProcessHost::OnImmersiveXrSessionStopped() {}
+void MockRenderProcessHost::OnImmersiveXrSessionStopped() {
+  has_immersive_xr_session_ = false;
+}
+
+bool MockRenderProcessHost::HasImmersiveXrSessionForTesting() const {
+  return has_immersive_xr_session_;
+}
 
 StoragePartition* MockRenderProcessHost::GetStoragePartition() {
   return browser_context_->GetStoragePartition(storage_partition_config_);
@@ -255,10 +280,13 @@ bool MockRenderProcessHost::ShutdownRequested() {
   return shutdown_requested_;
 }
 
-bool MockRenderProcessHost::FastShutdownIfPossible(size_t page_count,
-                                                   bool skip_unload_handlers,
-                                                   bool ignore_workers,
-                                                   bool ignore_keep_alive) {
+bool MockRenderProcessHost::FastShutdownIfPossible(
+    size_t page_count,
+    bool skip_unload_handlers,
+    bool ignore_workers,
+    bool ignore_keep_alive,
+    bool ignore_pending_reuse,
+    bool use_outermost_main_frame_check) {
   if (GetActiveViewCount() != page_count)
     return false;
   // We aren't actually going to do anything, but set |fast_shutdown_started_|
@@ -272,8 +300,12 @@ bool MockRenderProcessHost::FastShutdownStarted() {
 }
 
 const base::Process& MockRenderProcessHost::GetProcess() {
-  if (process.IsValid())
-    return process;
+  if (process_still_launching_) {
+    // Matches RenderProcessHostImpl::GetProcess() while the launcher is still
+    // starting: a sentinel for "no process".
+    static const base::NoDestructor<base::Process> null_process;
+    return *null_process;
+  }
 
   static const base::Process current_process(base::Process::Current());
   return current_process;
@@ -341,7 +373,7 @@ void MockRenderProcessHost::Cleanup() {
 
     for (auto& observer : observers_)
       observer.RenderProcessHostDestroyed(this);
-    RenderProcessHostImpl::UnregisterHost(GetDeprecatedID());
+    RenderProcessHostImpl::UnregisterHost(GetID());
     has_connection_ = false;
     deletion_callback_called_ = true;
   }
@@ -367,7 +399,6 @@ void MockRenderProcessHost::RemovePriorityClient(
   priority_clients_.erase(priority_client);
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 void MockRenderProcessHost::SetPriorityOverride(
     base::Process::Priority priority) {}
 
@@ -376,7 +407,6 @@ bool MockRenderProcessHost::HasPriorityOverride() {
 }
 
 void MockRenderProcessHost::ClearPriorityOverride() {}
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
 void MockRenderProcessHost::GraduateSpareToNormalRendererPriority() {}
@@ -434,6 +464,10 @@ MockRenderProcessHost::TakeMetricsAllocator() {
 const base::TimeTicks& MockRenderProcessHost::GetLastInitTime() {
   static base::TimeTicks dummy_time = base::TimeTicks::Now();
   return dummy_time;
+}
+
+base::TimeTicks MockRenderProcessHost::GetProcessLaunchedTime() const {
+  return process_launched_time_;
 }
 
 base::Process::Priority MockRenderProcessHost::GetPriority() const {
@@ -560,8 +594,8 @@ bool MockRenderProcessHost::HostHasNotBeenUsed() {
 }
 
 bool MockRenderProcessHost::IsSpare() const {
-  return base::Contains(SpareRenderProcessHostManagerImpl::Get().GetSpares(),
-                        this);
+  return std::ranges::contains(
+      SpareRenderProcessHostManagerImpl::Get().GetSpares(), this);
 }
 
 void MockRenderProcessHost::SetProcessLock(
@@ -574,8 +608,7 @@ void MockRenderProcessHost::SetProcessLock(
 }
 
 ProcessLock MockRenderProcessHost::GetProcessLock() const {
-  return ChildProcessSecurityPolicyImpl::GetInstance()->GetProcessLock(
-      GetDeprecatedID());
+  return ChildProcessSecurityPolicyImpl::GetInstance()->GetProcessLock(GetID());
 }
 
 bool MockRenderProcessHost::IsProcessLockedToSiteForTesting() {
@@ -614,7 +647,7 @@ MockRenderProcessHost::GetInfoForBrowserContextDestructionCrashReporting() {
 
 void MockRenderProcessHost::WriteIntoTrace(
     perfetto::TracedProto<TraceProto> proto) const {
-  proto->set_id(GetDeprecatedID());
+  proto->set_id(GetID().value());
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -685,7 +718,8 @@ std::unique_ptr<MockRenderProcessHost>
 MockRenderProcessHostFactory::BuildRenderProcessHost(
     BrowserContext* browser_context,
     SiteInstance* site_instance) {
-  const bool is_for_guests_only = site_instance && site_instance->IsGuest();
+  const bool is_for_guests_only =
+      site_instance && site_instance->GetSecurityPrincipal().IsGuest();
   StoragePartitionConfig storage_partition_config =
       GetOrCreateStoragePartitionConfig(browser_context, site_instance);
   return std::make_unique<MockRenderProcessHost>(
@@ -700,5 +734,9 @@ base::ScopedClosureRunner MockRenderProcessHost::DelayProcessShutdown(
 }
 
 void MockRenderProcessHost::StopTrackingProcessForShutdownDelay() {}
+
+bool MockRenderProcessHost::IsOnlyHostingPrerenderedFramesOrEmpty() {
+  return false;
+}
 
 }  // namespace content

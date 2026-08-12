@@ -8,16 +8,13 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "media/base/capture_version.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/base/unguessable_token_mojom_traits.h"
 
 namespace {
-// Deserializes has_field and field into a std::optional.
-#define DESERIALIZE_INTO_OPT(field) \
-  if (input.has_##field())          \
-  output->field = input.field()
 
 #define READ_AND_ASSIGN_OPT(type, field, FieldInCamelCase) \
   std::optional<type> field;                               \
@@ -58,19 +55,16 @@ EnumTraits<media::mojom::EffectState, intermediate::EffectState>::ToMojom(
 }
 
 // static
-bool EnumTraits<media::mojom::EffectState, intermediate::EffectState>::
-    FromMojom(media::mojom::EffectState input,
-              intermediate::EffectState* output) {
+intermediate::EffectState
+EnumTraits<media::mojom::EffectState, intermediate::EffectState>::FromMojom(
+    media::mojom::EffectState input) {
   switch (input) {
     case media::mojom::EffectState::kUnknown:
-      *output = intermediate::EffectState::kUnknown;
-      return true;
+      return intermediate::EffectState::kUnknown;
     case media::mojom::EffectState::kDisabled:
-      *output = intermediate::EffectState::kDisabled;
-      return true;
+      return intermediate::EffectState::kDisabled;
     case media::mojom::EffectState::kEnabled:
-      *output = intermediate::EffectState::kEnabled;
-      return true;
+      return intermediate::EffectState::kEnabled;
   }
   NOTREACHED();
 }
@@ -90,7 +84,7 @@ bool StructTraits<media::mojom::VideoFrameMetadataDataView,
     Read(media::mojom::VideoFrameMetadataDataView input,
          media::VideoFrameMetadata* output) {
   // int.
-  DESERIALIZE_INTO_OPT(capture_counter);
+  output->capture_counter = input.capture_counter();
   output->frame_sequence = input.frame_sequence();
   output->source_id = input.source_id();
   output->background_blur = FromMojom(input.background_blur());
@@ -110,13 +104,13 @@ bool StructTraits<media::mojom::VideoFrameMetadataDataView,
   output->interactive_content = input.interactive_content();
 
   // double.
-  DESERIALIZE_INTO_OPT(device_scale_factor);
-  DESERIALIZE_INTO_OPT(page_scale_factor);
-  DESERIALIZE_INTO_OPT(root_scroll_offset_x);
-  DESERIALIZE_INTO_OPT(root_scroll_offset_y);
-  DESERIALIZE_INTO_OPT(top_controls_visible_height);
-  DESERIALIZE_INTO_OPT(frame_rate);
-  DESERIALIZE_INTO_OPT(rtp_timestamp);
+  output->device_scale_factor = input.device_scale_factor();
+  output->page_scale_factor = input.page_scale_factor();
+  output->root_scroll_offset_x = input.root_scroll_offset_x();
+  output->root_scroll_offset_y = input.root_scroll_offset_y();
+  output->top_controls_visible_height = input.top_controls_visible_height();
+  output->frame_rate = input.frame_rate();
+  output->rtp_timestamp = input.rtp_timestamp();
 
   READ_AND_ASSIGN_OPT(media::VideoTransformation, transformation,
                       Transformation);
@@ -138,6 +132,10 @@ bool StructTraits<media::mojom::VideoFrameMetadataDataView,
   READ_AND_ASSIGN_OPT(base::TimeDelta, frame_duration, FrameDuration);
   READ_AND_ASSIGN_OPT(base::TimeDelta, wallclock_frame_duration,
                       WallclockFrameDuration);
+
+#if BUILDFLAG(IS_ANDROID)
+  READ_AND_ASSIGN_OPT(gpu::VulkanYCbCrInfo, ycbcr_info, YcbcrInfo);
+#endif
 
   if (!input.ReadCaptureVersion(&output->capture_version)) {
     return false;

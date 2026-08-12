@@ -201,8 +201,9 @@ void Operation::SetProgress(int progress) {
 void Operation::SetStage(image_writer_api::Stage stage) {
   DCHECK(IsRunningInCorrectSequence());
 
-  if (IsCancelled())
+  if (IsCancelled()) {
     return;
+  }
 
   stage_ = stage;
   progress_ = 0;
@@ -294,8 +295,9 @@ void Operation::MD5Chunk(
     size_t bytes_total,
     base::OnceCallback<void(const std::string&)> callback) {
   DCHECK(IsRunningInCorrectSequence());
-  if (IsCancelled())
+  if (IsCancelled()) {
     return;
+  }
 
   CHECK_LE(bytes_processed, bytes_total);
 
@@ -335,6 +337,7 @@ void Operation::OnExtractFailure(const std::string& error) {
 
 void Operation::OnExtractProgress(int64_t total_bytes, int64_t progress_bytes) {
   DCHECK(IsRunningInCorrectSequence());
+  CHECK(total_bytes > 0);
 
   int progress_percent = kProgressComplete * progress_bytes / total_bytes;
   SetProgress(progress_percent);
@@ -342,8 +345,9 @@ void Operation::OnExtractProgress(int64_t total_bytes, int64_t progress_bytes) {
 
 void Operation::CleanUp() {
   DCHECK(IsRunningInCorrectSequence());
-  for (base::OnceClosure& cleanup_function : cleanup_functions_)
+  for (base::OnceClosure& cleanup_function : cleanup_functions_) {
     std::move(cleanup_function).Run();
+  }
   cleanup_functions_.clear();
 }
 

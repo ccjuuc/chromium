@@ -15,6 +15,7 @@
 #include "components/payments/content/android/payment_handler_host.h"
 #include "components/payments/content/payment_request_converter.h"
 #include "components/payments/core/payment_method_data.h"
+#include "content/public/browser/browser_thread.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
 #include "ui/gfx/android/java_bitmap.h"
 
@@ -44,7 +45,7 @@ ScopedJavaLocalRef<jobject> JniPaymentApp::Create(
     JNIEnv* env,
     std::unique_ptr<PaymentApp> payment_app) {
   // The |app| is owned by JniPaymentApp.java and will be destroyed through a
-  // JniPaymentApp::FreeNativeObject() call.
+  // JniPaymentApp::FreeNativeObjectSoon() call.
   JniPaymentApp* app = new JniPaymentApp(std::move(payment_app));
 
   return Java_JniPaymentApp_Constructor(
@@ -52,8 +53,8 @@ ScopedJavaLocalRef<jobject> JniPaymentApp::Create(
       ConvertUTF16ToJavaString(env, app->payment_app_->GetLabel()),
       ConvertUTF16ToJavaString(env, app->payment_app_->GetSublabel()),
       app->payment_app_->icon_bitmap(),
-      static_cast<jint>(app->payment_app_->type()),
-      reinterpret_cast<jlong>(app),
+      static_cast<int32_t>(app->payment_app_->type()),
+      reinterpret_cast<int64_t>(app),
       app->payment_app_->GetPaymentEntitiesLogos());
 }
 
@@ -113,6 +114,12 @@ bool JniPaymentApp::CanPreselect(JNIEnv* env) {
   return payment_app_->CanPreselect();
 }
 
+ScopedJavaLocalRef<jbyteArray> JniPaymentApp::GetTotalForSpc(JNIEnv* env) {
+  const mojom::PaymentItemPtr& total = payment_app_->GetTotalForSpc();
+  return base::android::ToJavaByteArray(env,
+                                        mojom::PaymentItem::Serialize(&total));
+}
+
 void JniPaymentApp::InvokePaymentApp(JNIEnv* env,
                                      const JavaRef<jobject>& jcallback) {
   invoke_callback_ = jcallback;
@@ -157,7 +164,7 @@ JniPaymentApp::GetApplicationIdentifiersThatHideThisApp(JNIEnv* env) {
                               std::vector<std::string>(ids.begin(), ids.end()));
 }
 
-jlong JniPaymentApp::GetUkmSourceId(JNIEnv* env) {
+int64_t JniPaymentApp::GetUkmSourceId(JNIEnv* env) {
   return payment_app_->UkmSourceId();
 }
 
@@ -183,8 +190,8 @@ JniPaymentApp::SetAppSpecificResponseFields(
       env, mojom::PaymentResponse::Serialize(&result));
 }
 
-void JniPaymentApp::FreeNativeObject(JNIEnv* env) {
-  delete this;
+void JniPaymentApp::FreeNativeObjectSoon(JNIEnv* env) {
+  content::GetUIThreadTaskRunner({})->DeleteSoon(FROM_HERE, this);
 }
 
 void JniPaymentApp::OnInstrumentDetailsReady(
@@ -229,14 +236,19 @@ void JniPaymentApp::OnInstrumentDetailsReady(
       ConvertUTF8ToJavaString(env, stringified_details), jpayer_data);
 }
 
-void JniPaymentApp::OnInstrumentDetailsError(const std::string& error_message) {
+void JniPaymentApp::OnInstrumentDetailsError(
+    mojom::PaymentEventResponseType error,
+    const std::string& error_message) {
   JNIEnv* env = AttachCurrentThread();
   Java_JniPaymentApp_onInvokeError(env, invoke_callback_,
+                                   static_cast<int>(error),
                                    ConvertUTF8ToJavaString(env, error_message));
 }
 
 JniPaymentApp::JniPaymentApp(std::unique_ptr<PaymentApp> payment_app)
-    : payment_app_(std::move(payment_app)) {}
+    : payment_app_(std::move(payment_app)) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+}
 
 JniPaymentApp::~JniPaymentApp() = default;
 

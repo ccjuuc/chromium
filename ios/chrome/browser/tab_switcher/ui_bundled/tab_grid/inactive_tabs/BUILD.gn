@@ -24,15 +24,19 @@ source_set("inactive_tabs") {
     "//components/prefs/ios",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/crash_report/model",
+    "//ios/chrome/browser/favicon/model",
     "//ios/chrome/browser/settings/ui_bundled:settings_root",
     "//ios/chrome/browser/shared/coordinator/alert",
     "//ios/chrome/browser/shared/coordinator/chrome_coordinator",
+    "//ios/chrome/browser/shared/coordinator/scene:scene_state_header",
+    "//ios/chrome/browser/shared/coordinator/scene/state",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/url",
     "//ios/chrome/browser/shared/model/web_state_list",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/symbols",
     "//ios/chrome/browser/snapshots/model",
     "//ios/chrome/browser/snapshots/model:model_common",
@@ -70,6 +74,10 @@ source_set("inactive_tabs_ui") {
     ":inactive_tabs_button_ui",
     ":inactive_tabs_delegate",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/app_bar/ui:constants",
+    "//ios/chrome/browser/shared/coordinator/scene/state",
+    "//ios/chrome/browser/shared/public/features",
+    "//ios/chrome/browser/shared/ui/util:util_swift",
     "//ios/chrome/browser/tab_switcher/tab_grid/base_grid/ui",
     "//ios/chrome/browser/tab_switcher/ui_bundled",
     "//ios/chrome/browser/tab_switcher/ui_bundled:items",
@@ -78,6 +86,7 @@ source_set("inactive_tabs_ui") {
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid:grid_ui",
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid:grid_view_controller_mutator",
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/regular:regular_ui",
+    "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/toolbars:toolbars_ui",
     "//ios/chrome/browser/tabs/model/inactive_tabs:features",
     "//ios/chrome/common/ui/colors",
     "//ios/web/public",
@@ -132,6 +141,32 @@ source_set("inactive_tabs_button_ui") {
   ]
 }
 
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "inactive_tabs_mediator_unittest.mm" ]
+  deps = [
+    ":inactive_tabs",
+    "//base",
+    "//base/test:test_support",
+    "//ios/chrome/browser/favicon/model",
+    "//ios/chrome/browser/favicon/model:test_support",
+    "//ios/chrome/browser/shared/model/browser/test:test_support",
+    "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/shared/model/web_state_list",
+    "//ios/chrome/browser/shared/public/features",
+    "//ios/chrome/browser/snapshots/model",
+    "//ios/chrome/browser/snapshots/model:model_common",
+    "//ios/chrome/browser/snapshots/model:model_swift",
+    "//ios/chrome/browser/snapshots/model:snapshot_source",
+    "//ios/chrome/browser/tab_switcher/ui_bundled:items",
+    "//ios/chrome/browser/tab_switcher/ui_bundled/test:fakes",
+    "//ios/chrome/browser/tabs/model",
+    "//ios/web/public/test",
+    "//ios/web/public/test/fakes",
+    "//testing/gtest",
+  ]
+}
+
 source_set("eg2_tests") {
   configs += [ "//build/config/ios:xctest_config" ]
   testonly = true
@@ -141,9 +176,11 @@ source_set("eg2_tests") {
     "//base",
     "//components/strings:components_strings_grit",
     "//ios/chrome/app/strings",
+    "//ios/chrome/browser/app_bar/ui:constants",
     "//ios/chrome/browser/reading_list/ui_bundled:eg_test_support+eg2",
     "//ios/chrome/browser/settings/ui_bundled/tabs:tabs_constants",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid:tab_grid_ui_constants",
     "//ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid:grid_ui_constants",
     "//ios/chrome/browser/tab_switcher/ui_bundled/test:utils",

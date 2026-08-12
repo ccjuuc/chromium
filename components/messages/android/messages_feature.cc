@@ -17,7 +17,7 @@ namespace {
 
 const base::Feature* const kFeaturesExposedToJava[] = {
     &kMessagesForAndroidFullyVisibleCallback, &kMessagesAndroidExtraHistograms,
-    &kMessagesCloseButton};
+    &kMessagesCloseButton, &kDismissNavigationMessagesOnPrimaryPageChanged};
 
 // static
 base::android::FeatureMap* GetFeatureMap() {
@@ -36,8 +36,11 @@ BASE_FEATURE(kMessagesAndroidExtraHistograms, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kMessagesCloseButton, base::FEATURE_ENABLED_BY_DEFAULT);
 
-static jlong JNI_MessageFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+BASE_FEATURE(kDismissNavigationMessagesOnPrimaryPageChanged,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+static int64_t JNI_MessageFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace messages

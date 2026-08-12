@@ -15,10 +15,13 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/supports_user_data.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_view.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_context_menu_mixin.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_service_observer.h"
@@ -55,10 +58,30 @@ namespace ui {
 class OSExchangeData;
 }  // namespace ui
 
+// Stores omnibox state for each tab.
+struct OmniboxState : public base::SupportsUserData::Data {
+  OmniboxState(const OmniboxEditModel::State& model_state,
+               const gfx::Range& selection,
+               const gfx::Range& saved_selection_for_focus_change,
+               const bool show_full_url = false);
+
+  ~OmniboxState() override;
+
+  const OmniboxEditModel::State model_state;
+
+  // We store both the actual selection and any saved selection (for when the
+  // omnibox is not focused).  This allows us to properly handle cases like
+  // selecting text, tabbing out of the omnibox, switching tabs away and back,
+  // and tabbing back into the omnibox.
+  const gfx::Range selection;
+  const gfx::Range saved_selection_for_focus_change;
+  const bool show_full_url;
+};
+
 // Views-implementation of OmniboxView.
 class OmniboxViewViews
     : public OmniboxView,
-      public views::Textfield,
+      public OmniboxContextMenuMixin<views::Textfield>,
 #if BUILDFLAG(IS_CHROMEOS)
       public ash::input_method::InputMethodManager::CandidateWindowObserver,
 #endif
@@ -104,10 +127,14 @@ class OmniboxViewViews
   void SaveStateToTab(content::WebContents* tab);
 
   // Called when the window's active tab changes.
-  void OnTabChanged(const content::WebContents* web_contents);
+  void OnTabChanged(content::WebContents* web_contents);
 
   // Called to clear the saved state for |web_contents|.
   void ResetTabState(content::WebContents* web_contents);
+
+  // Updates the saved state for |web_contents| with the provided |text|.
+  static void SetUserTextForTab(content::WebContents* web_contents,
+                                const std::u16string& text);
 
   // Installs the placeholder text with the name of the current default search
   // provider. For example, if Google is the default search provider, this shows
@@ -156,10 +183,23 @@ class OmniboxViewViews
   void OnPaint(gfx::Canvas* canvas) override;
   void ExecuteCommand(int command_id, int event_flags) override;
   void OnInputMethodChanged() override;
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
-  std::u16string GetLabelForCommandId(int command_id) const override;
-  bool IsCommandIdEnabled(int command_id) const override;
+  bool SupportsEmoji() const override;
+#if BUILDFLAG(IS_MAC)
+  bool SupportsEditableContextMenuItems() const override;
+  bool SupportsLookUp() const override;
+  bool SupportsAutoFill() const override;
+#endif
+
+  // OmniboxContextMenuMixinBase:
+  bool IsContextMenuForReadOnlyOmnibox() const override;
+  const gfx::FontList& FontListForContextMenu() const override;
+  bool IsContextMenuTextEditingCommandEnabled(int command_id) const override;
 
  protected:
   // OmniboxView:
@@ -187,6 +227,8 @@ class OmniboxViewViews
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsTest, AccessibleTextSelectBoundTest);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsAIMButtonPreferenceTest,
                            ButtonVisibilityTogglesWithPref_OmniboxFocused);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsAIMButtonDynamicTest,
+                           QueryShowsArrowIcon);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
                            ContextualTasksPlaceholderForContextualTasksPage);
   FRIEND_TEST_ALL_PREFIXES(OmniboxViewViewsPlaceholderTest,
@@ -218,6 +260,10 @@ class OmniboxViewViews
   // for details). The function invokes OnBefore/AfterPossibleChange() as
   // necessary.
   void OnOmniboxPaste();
+  void OnOmniboxPasteComplete(std::u16string text);
+
+  void HandleCutOrCopyAdjustments(ui::ClipboardBuffer clipboard_buffer,
+                                  std::u16string* text);
 
   // Handle keyword hint tab-to-search and tabbing through dropdown results.
   bool HandleEarlyTabActions(const ui::KeyEvent& event);
@@ -267,19 +313,26 @@ class OmniboxViewViews
   void OnMouseExited(const ui::MouseEvent& event) override;
 
   // views::Textfield:
-  bool IsItemForCommandIdDynamic(int command_id) const override;
   void OnGestureEvent(ui::GestureEvent* event) override;
   bool SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   void OnFocus() override;
   void OnBlur() override;
-  std::u16string GetSelectionClipboardText() const override;
+  void PasteSelectionClipboard(
+      base::OnceCallback<void(bool)> callback) override;
+  void OnTextReadForPasteSelectionClipboard(
+      base::OnceCallback<void(bool)> callback,
+      std::u16string text);
   void DoInsertChar(char16_t ch) override;
   bool IsTextEditCommandEnabled(ui::TextEditCommand command) const override;
   void ExecuteTextEditCommand(ui::TextEditCommand command) override;
   bool ShouldShowPlaceholderText() const override;
 
   void UpdateAccessibleValue() override;
+
+  void ShowContextMenuForViewImplComplete(
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type);
 
   // ash::input_method::InputMethodManager::CandidateWindowObserver:
 #if BUILDFLAG(IS_CHROMEOS)
@@ -296,19 +349,19 @@ class OmniboxViewViews
                       const ui::KeyEvent& key_event) override;
   void OnBeforeUserAction(views::Textfield* sender) override;
   void OnAfterUserAction(views::Textfield* sender) override;
+  bool OnBeforeCutOrCopy(views::Textfield* sender,
+                         std::u16string* copy_contents) override;
   void OnAfterCutOrCopy(ui::ClipboardBuffer clipboard_buffer) override;
   void OnWriteDragData(ui::OSExchangeData* data) override;
   void OnGetDragOperationsForTextfield(int* drag_operations) override;
   void AppendDropFormats(
       int* formats,
       std::set<ui::ClipboardFormatType>* format_types) override;
-  ui::mojom::DragOperation OnDrop(const ui::DropTargetEvent& event) override;
   views::View::DropCallback CreateDropCallback(
       const ui::DropTargetEvent& event) override;
   void UpdateContextMenu(ui::SimpleMenuModel* menu_contents) override;
-
-  // ui::SimpleMenuModel::Delegate:
-  bool IsCommandIdChecked(int id) const override;
+  std::unique_ptr<ui::ScopedClipboardWriter> CreateClipboardWriter() override;
+  void UpdateSelectionClipboard() override;
 
   // ui::CompositorObserver:
   void OnCompositingDidCommit(ui::Compositor* compositor) override;
@@ -338,31 +391,9 @@ class OmniboxViewViews
                    ui::mojom::DragOperation& output_drag_op,
                    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
 
-  // Helper method to construct part of the context menu.
-  void MaybeAddSendTabToSelfItem(ui::SimpleMenuModel* menu_contents);
-
   // Helper for updating placeholder color depending on whether its a keyword or
   // DSE placeholder.
   void UpdatePlaceholderTextColor();
-
-  // Returns true if the AIM hint impression limits have been reached.
-  bool AreAimHintImpressionLimitsReached() const;
-
-  // Returns true if the AIM placeholder text should be installed instead of the
-  // DSE placeholder text.
-  bool ShouldInstallAimPlaceholderText() const;
-
-  // Returns true if the Contextual Tasks placeholder text should be installed
-  // instead of the DSE placeholder text.
-  bool ShouldInstallContextualTasksPlaceholderText() const;
-
-  // Returns true if the AIM placeholder text should be visible. This differs
-  // from ShouldInstallAimPlaceholderText() because there are certain scenarios
-  // where the AIM placeholder text is installed but not visible.
-  bool ShouldShowAimPlaceholderText() const;
-
-  // Records an impression of the AIM hint text.
-  void RecordAimHintImpression();
 
   // Returns the AI Mode page action icon view, if present, or nullptr if the
   // view doesn't exist.

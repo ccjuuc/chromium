@@ -8,6 +8,7 @@
 #include "base/android/scoped_java_ref.h"
 #include "base/android/token_android.h"
 #include "cc/slim/layer.h"
+#include "cc/slim/nine_patch_layer.h"
 #include "cc/slim/solid_color_layer.h"
 #include "cc/slim/ui_resource_layer.h"
 #include "chrome/browser/android/compositor/layer/group_indicator_layer.h"
@@ -40,26 +41,55 @@ TabStripSceneLayer::TabStripSceneLayer(JNIEnv* env,
       new_tab_button_(cc::slim::UIResourceLayer::Create()),
       new_tab_button_background_(cc::slim::UIResourceLayer::Create()),
       new_tab_button_keyboard_focus_ring_(cc::slim::UIResourceLayer::Create()),
-      left_fade_(cc::slim::UIResourceLayer::Create()),
-      right_fade_(cc::slim::UIResourceLayer::Create()),
+      left_fade_(cc::slim::SolidColorLayer::Create()),
+      right_fade_(cc::slim::SolidColorLayer::Create()),
       left_padding_layer_(cc::slim::SolidColorLayer::Create()),
       right_padding_layer_(cc::slim::SolidColorLayer::Create()),
+      window_controls_divider_(cc::slim::UIResourceLayer::Create()),
+      glic_button_container_(cc::slim::Layer::Create()),
+      glic_button_(cc::slim::UIResourceLayer::Create()),
+      glic_button_background_(cc::slim::SolidColorLayer::Create()),
+      glic_button_text_(cc::slim::UIResourceLayer::Create()),
+      glic_dismiss_nudge_button_(cc::slim::UIResourceLayer::Create()),
+      glic_dismiss_nudge_button_keyboard_focus_ring_(
+          cc::slim::UIResourceLayer::Create()),
+      glic_button_keyboard_focus_ring_(cc::slim::NinePatchLayer::Create()),
+      glic_actor_button_container_(cc::slim::Layer::Create()),
+      glic_actor_button_(cc::slim::UIResourceLayer::Create()),
+      glic_actor_button_background_(cc::slim::SolidColorLayer::Create()),
+      glic_actor_button_text_(cc::slim::UIResourceLayer::Create()),
+      glic_actor_button_keyboard_focus_ring_(
+          cc::slim::NinePatchLayer::Create()),
       model_selector_button_(cc::slim::UIResourceLayer::Create()),
       model_selector_button_background_(cc::slim::UIResourceLayer::Create()),
       model_selector_button_keyboard_focus_ring_(
+          cc::slim::UIResourceLayer::Create()),
+      tab_search_button_(cc::slim::UIResourceLayer::Create()),
+      tab_search_button_background_(cc::slim::UIResourceLayer::Create()),
+      tab_search_button_keyboard_focus_ring_(
           cc::slim::UIResourceLayer::Create()),
       scrim_layer_(cc::slim::SolidColorLayer::Create()),
       content_tree_(nullptr) {
   new_tab_button_->SetIsDrawable(true);
   new_tab_button_background_->SetIsDrawable(true);
+  glic_button_->SetIsDrawable(true);
+  glic_button_background_->SetIsDrawable(true);
+  glic_button_text_->SetIsDrawable(true);
+  glic_dismiss_nudge_button_->SetIsDrawable(true);
+  glic_actor_button_->SetIsDrawable(true);
+  glic_actor_button_background_->SetIsDrawable(true);
+  glic_actor_button_text_->SetIsDrawable(true);
   model_selector_button_->SetIsDrawable(true);
   model_selector_button_background_->SetIsDrawable(true);
+  tab_search_button_->SetIsDrawable(true);
+  tab_search_button_background_->SetIsDrawable(true);
 
   left_fade_->SetIsDrawable(true);
   right_fade_->SetIsDrawable(true);
   scrim_layer_->SetIsDrawable(true);
   left_padding_layer_->SetIsDrawable(true);
   right_padding_layer_->SetIsDrawable(true);
+  window_controls_divider_->SetIsDrawable(true);
 
   // When the ScrollingStripStacker is used, the new tab button and tabs scroll,
   // while the incognito button and left/right fade stay fixed. Put the new tab
@@ -108,13 +138,35 @@ TabStripSceneLayer::TabStripSceneLayer(JNIEnv* env,
     tab_strip_layer_->AddChild(right_fade_);
     tab_strip_layer_->AddChild(right_padding_layer_);
   }
+  tab_strip_layer_->AddChild(new_tab_button_background_);
+  tab_strip_layer_->AddChild(new_tab_button_);
+  tab_strip_layer_->AddChild(new_tab_button_keyboard_focus_ring_);
+
+  glic_button_container_->SetMasksToBounds(true);
+  glic_button_container_->AddChild(glic_button_background_);
+  glic_button_container_->AddChild(glic_button_);
+  glic_button_container_->AddChild(glic_button_text_);
+  glic_button_container_->AddChild(glic_dismiss_nudge_button_);
+  glic_button_container_->AddChild(
+      glic_dismiss_nudge_button_keyboard_focus_ring_);
+  tab_strip_layer_->AddChild(glic_button_container_);
+  tab_strip_layer_->AddChild(glic_button_keyboard_focus_ring_);
+
+  glic_actor_button_container_->SetMasksToBounds(true);
+  glic_actor_button_container_->AddChild(glic_actor_button_background_);
+  glic_actor_button_container_->AddChild(glic_actor_button_);
+  glic_actor_button_container_->AddChild(glic_actor_button_text_);
+  tab_strip_layer_->AddChild(glic_actor_button_container_);
+  tab_strip_layer_->AddChild(glic_actor_button_keyboard_focus_ring_);
 
   tab_strip_layer_->AddChild(model_selector_button_background_);
-  tab_strip_layer_->AddChild(new_tab_button_background_);
   tab_strip_layer_->AddChild(model_selector_button_);
-  tab_strip_layer_->AddChild(new_tab_button_);
   tab_strip_layer_->AddChild(model_selector_button_keyboard_focus_ring_);
-  tab_strip_layer_->AddChild(new_tab_button_keyboard_focus_ring_);
+
+  tab_strip_layer_->AddChild(tab_search_button_background_);
+  tab_strip_layer_->AddChild(tab_search_button_);
+  tab_strip_layer_->AddChild(tab_search_button_keyboard_focus_ring_);
+  tab_strip_layer_->AddChild(window_controls_divider_);
 
   layer()->AddChild(background_layer_);
 }
@@ -122,15 +174,22 @@ TabStripSceneLayer::TabStripSceneLayer(JNIEnv* env,
 TabStripSceneLayer::~TabStripSceneLayer() = default;
 
 void TabStripSceneLayer::SetConstants(JNIEnv* env,
-                                      jint reorder_background_top_margin,
-                                      jint reorder_background_bottom_margin,
-                                      jint reorder_background_padding_short,
-                                      jint reorder_background_padding_long,
-                                      jint reorder_background_corner_radius) {
+                                      int32_t reorder_background_top_margin,
+                                      int32_t reorder_background_bottom_margin,
+                                      int32_t reorder_background_padding_short,
+                                      int32_t reorder_background_padding_long,
+                                      int32_t reorder_background_corner_radius,
+                                      float tab_underline_thickness,
+                                      float tab_underline_corner_radius,
+                                      float tab_underline_bottom_margin) {
   GroupIndicatorLayer::SetConstants(
       reorder_background_top_margin, reorder_background_bottom_margin,
       reorder_background_padding_short, reorder_background_padding_long,
       reorder_background_corner_radius);
+
+  TabHandleLayer::SetConstants(tab_underline_thickness,
+                               tab_underline_corner_radius,
+                               tab_underline_bottom_margin);
 }
 
 void TabStripSceneLayer::SetContentTree(JNIEnv* env,
@@ -157,7 +216,7 @@ void TabStripSceneLayer::SetContentTree(JNIEnv* env,
 
 void TabStripSceneLayer::BeginBuildingFrame(
     JNIEnv* env,
-    jboolean visible,
+    bool visible,
     const JavaRef<jobject>& jresource_manager,
     const JavaRef<jobject>& jlayer_title_cache) {
   write_index_ = 0;
@@ -195,15 +254,19 @@ void TabStripSceneLayer::UpdateOffsetTag(JNIEnv* env,
 }
 
 void TabStripSceneLayer::UpdateTabStripLayer(JNIEnv* env,
-                                             jint width,
-                                             jint height,
-                                             jfloat y_offset,
-                                             jint background_color,
-                                             jint scrim_color,
-                                             jfloat scrim_opacity,
-                                             jfloat left_padding,
-                                             jfloat right_padding,
-                                             jfloat top_padding) {
+                                             int32_t width,
+                                             int32_t height,
+                                             float y_offset,
+                                             int32_t background_color,
+                                             int32_t scrim_color,
+                                             float scrim_opacity,
+                                             float left_padding,
+                                             float right_padding,
+                                             float top_padding,
+                                             float divider_y,
+                                             bool should_show_divider,
+                                             int32_t divider_resource_id,
+                                             int32_t divider_tint) {
   gfx::RectF content(0, y_offset, width, height);
   layer()->SetPosition(gfx::PointF(0, y_offset));
   background_layer_->SetBounds(gfx::Size(width, height));
@@ -238,6 +301,34 @@ void TabStripSceneLayer::UpdateTabStripLayer(JNIEnv* env,
         SkColor4f::FromColor(background_color));
   }
 
+  // Update the window controls divider.
+  if (!should_show_divider) {
+    window_controls_divider_->SetHideLayerAndSubtree(true);
+  } else {
+    window_controls_divider_->SetHideLayerAndSubtree(false);
+
+    DCHECK(resource_manager_);
+    ui::Resource* divider_resource =
+        resource_manager_->GetStaticResourceWithTint(divider_resource_id,
+                                                     divider_tint, true);
+
+    window_controls_divider_->SetUIResourceId(
+        divider_resource->ui_resource()->id());
+    window_controls_divider_->SetBounds(divider_resource->size());
+
+    // Position the window controls divider at the same y-level as the tab
+    // dividers.
+    float y_pos = divider_y;
+
+    float x_pos;
+    if (l10n_util::IsLayoutRtl()) {
+      x_pos = left_padding;
+    } else {
+      x_pos = width - right_padding - divider_resource->size().width();
+    }
+    window_controls_divider_->SetPosition(gfx::PointF(x_pos, y_pos));
+  }
+
   // Hide scrim layer if it's not visible.
   if (scrim_opacity == 0.f) {
     scrim_layer_->SetHideLayerAndSubtree(true);
@@ -255,19 +346,19 @@ void TabStripSceneLayer::UpdateTabStripLayer(JNIEnv* env,
 
 void TabStripSceneLayer::UpdateNewTabButton(
     JNIEnv* env,
-    jint resource_id,
-    jint bg_resource_id,
-    jfloat x,
-    jfloat y,
-    jfloat touch_target_offset,
-    jboolean visible,
-    jboolean should_apply_hover_highlight,
-    jint tint,
-    jint background_tint,
-    jfloat button_alpha,
-    jboolean is_keyboard_focused,
-    jint keyboard_focus_ring_resource_id,
-    jint keyboard_focus_ring_color) {
+    int32_t resource_id,
+    int32_t bg_resource_id,
+    float x,
+    float y,
+    float touch_target_offset,
+    bool visible,
+    bool should_apply_hover_highlight,
+    int32_t tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color) {
   DCHECK(resource_manager_);
   ui::Resource* button_resource =
       resource_manager_->GetStaticResourceWithTint(resource_id, tint);
@@ -287,20 +378,101 @@ void TabStripSceneLayer::UpdateNewTabButton(
                          is_keyboard_focused, keyboard_focus_ring_drawable);
 }
 
+// The Glic button layer can be constructed with the following dynamic layout:
+//
+//   <----------------------- e ----------------------->
+//   ┌─────────────────────────────────────────────────┐
+// ^ │                                                 │
+// │ │       ┌────┐       ┌──────┐       ┌────┐        │
+// d │ <-a-> │Icon│ <-b-> │ Text │ <-b-> │Btn │ <-c->  │
+// │ │       └────┘       └──────┘       └────┘        │
+// v │                                                 │
+//   └─────────────────────────────────────────────────┘
+//
+// Where the values are:
+//   * a = button_start_padding: The distance from the button's leading edge to
+//         the icon.
+//   * b = icon_text_padding: The distance between the icon/btn and the text.
+//   * c = button_end_padding: The distance from the last visible child
+//         layer's end to the button's end. This is implicitly handled by the
+//         total `button_width`.
+//   * d = button_height: The total height of the button.
+//   * e = button_width: The total dynamic width of the button, calculated to
+//         wrap the icons, text, and paddings.
+void TabStripSceneLayer::UpdateGlicButton(
+    JNIEnv* env,
+    int32_t resource_id,
+    float x,
+    float y,
+    float button_width,
+    float button_height,
+    bool visible,
+    bool should_apply_hover_highlight,
+    int32_t tint,
+    bool should_tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color,
+    float keyboard_focus_ring_offset,
+    int32_t text_texture_id,
+    float button_start_padding,
+    float icon_text_padding,
+    float corner_radius_outer,
+    float corner_radius_inner,
+    int32_t dismiss_resource_id,
+    float dismiss_x,
+    float dismiss_y,
+    bool dismiss_visible,
+    int32_t dismiss_tint,
+    bool dismiss_is_keyboard_focused,
+    int32_t dismiss_keyboard_focus_ring_resource_id,
+    int32_t dismiss_keyboard_focus_ring_color) {
+  DCHECK(resource_manager_);
+
+  // Glic button outer edge is left in LTR (matches base asset), right in RTL.
+  bool should_flip_keyboard_focus_ring = l10n_util::IsLayoutRtl();
+
+  UpdateGlicButtonInternal(
+      glic_button_container_, glic_button_background_, glic_button_,
+      glic_button_text_, glic_button_keyboard_focus_ring_, resource_id, x, y,
+      button_width, button_height, visible, tint, should_tint, background_tint,
+      button_alpha, is_keyboard_focused, keyboard_focus_ring_resource_id,
+      keyboard_focus_ring_color, keyboard_focus_ring_offset,
+      should_flip_keyboard_focus_ring, text_texture_id, button_start_padding,
+      icon_text_padding, corner_radius_outer, corner_radius_inner);
+
+  // Dismiss Button (positions are relative to the parent container coordinates
+  ui::Resource* dismiss_icon_resource =
+      resource_manager_->GetStaticResourceWithTint(dismiss_resource_id,
+                                                   dismiss_tint);
+  ui::Resource* dismiss_focus_ring_drawable =
+      resource_manager_->GetStaticResourceWithTint(
+          dismiss_keyboard_focus_ring_resource_id,
+          dismiss_keyboard_focus_ring_color, true);
+
+  UpdateCompositorButton(
+      glic_dismiss_nudge_button_, nullptr, dismiss_icon_resource, nullptr,
+      dismiss_x - x, dismiss_y - y, dismiss_visible, false, button_alpha,
+      glic_dismiss_nudge_button_keyboard_focus_ring_,
+      dismiss_is_keyboard_focused, dismiss_focus_ring_drawable);
+}
+
 void TabStripSceneLayer::UpdateModelSelectorButton(
     JNIEnv* env,
-    jint resource_id,
-    jint bg_resource_id,
-    jfloat x,
-    jfloat y,
-    jboolean visible,
-    jboolean should_apply_hover_highlight,
-    jint tint,
-    jint background_tint,
-    jfloat button_alpha,
-    jboolean is_keyboard_focused,
-    jint keyboard_focus_ring_resource_id,
-    jint keyboard_focus_ring_color) {
+    int32_t resource_id,
+    int32_t bg_resource_id,
+    float x,
+    float y,
+    bool visible,
+    bool should_apply_hover_highlight,
+    int32_t tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color) {
   DCHECK(resource_manager_);
   ui::Resource* button_resource =
       resource_manager_->GetStaticResourceWithTint(resource_id, tint);
@@ -317,6 +489,217 @@ void TabStripSceneLayer::UpdateModelSelectorButton(
                          should_apply_hover_highlight, button_alpha,
                          model_selector_button_keyboard_focus_ring_,
                          is_keyboard_focused, keyboard_focus_ring_drawable);
+}
+
+void TabStripSceneLayer::UpdateTabSearchButton(
+    JNIEnv* env,
+    int32_t resource_id,
+    int32_t bg_resource_id,
+    float x,
+    float y,
+    bool visible,
+    bool should_apply_hover_highlight,
+    int32_t tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color) {
+  DCHECK(resource_manager_);
+  ui::Resource* button_resource =
+      resource_manager_->GetStaticResourceWithTint(resource_id, tint);
+  ui::Resource* background_resource =
+      resource_manager_->GetStaticResourceWithTint(bg_resource_id,
+                                                   background_tint, true);
+  ui::Resource* keyboard_focus_ring_drawable =
+      resource_manager_->GetStaticResourceWithTint(
+          keyboard_focus_ring_resource_id, keyboard_focus_ring_color, true);
+
+  UpdateCompositorButton(tab_search_button_, tab_search_button_background_,
+                         button_resource, background_resource, x, y, visible,
+                         should_apply_hover_highlight, button_alpha,
+                         tab_search_button_keyboard_focus_ring_,
+                         is_keyboard_focused, keyboard_focus_ring_drawable);
+}
+
+void TabStripSceneLayer::UpdateGlicActorButton(
+    JNIEnv* env,
+    int32_t resource_id,
+    float x,
+    float y,
+    float button_width,
+    float button_height,
+    bool visible,
+    bool should_apply_hover_highlight,
+    int32_t tint,
+    bool should_tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color,
+    float keyboard_focus_ring_offset,
+    int32_t text_texture_id,
+    float button_start_padding,
+    float icon_text_padding,
+    float corner_radius_outer,
+    float corner_radius_inner) {
+  // Actor button outer edge is right in LTR (needs flip), left in RTL.
+  bool should_flip_keyboard_focus_ring = !l10n_util::IsLayoutRtl();
+
+  UpdateGlicButtonInternal(
+      glic_actor_button_container_, glic_actor_button_background_,
+      glic_actor_button_, glic_actor_button_text_,
+      glic_actor_button_keyboard_focus_ring_, resource_id, x, y, button_width,
+      button_height, visible, tint, should_tint, background_tint, button_alpha,
+      is_keyboard_focused, keyboard_focus_ring_resource_id,
+      keyboard_focus_ring_color, keyboard_focus_ring_offset,
+      should_flip_keyboard_focus_ring, text_texture_id, button_start_padding,
+      icon_text_padding, corner_radius_outer, corner_radius_inner);
+}
+
+void TabStripSceneLayer::UpdateGlicButtonInternal(
+    scoped_refptr<cc::slim::Layer> container_layer,
+    scoped_refptr<cc::slim::SolidColorLayer> background_layer,
+    scoped_refptr<cc::slim::UIResourceLayer> icon_layer,
+    scoped_refptr<cc::slim::UIResourceLayer> text_layer,
+    scoped_refptr<cc::slim::NinePatchLayer> focus_ring_layer,
+    int32_t resource_id,
+    float x,
+    float y,
+    float button_width,
+    float button_height,
+    bool visible,
+    int32_t tint,
+    bool should_tint,
+    int32_t background_tint,
+    float button_alpha,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color,
+    float keyboard_focus_ring_offset,
+    bool should_flip_keyboard_focus_ring,
+    int32_t text_texture_id,
+    float button_start_padding,
+    float icon_text_padding,
+    float corner_radius_outer,
+    float corner_radius_inner) {
+  DCHECK(resource_manager_);
+  ui::Resource* icon_resource;
+  if (should_tint) {
+    icon_resource =
+        resource_manager_->GetStaticResourceWithTint(resource_id, tint, true);
+  } else {
+    icon_resource = resource_manager_->GetResource(
+        ui::ANDROID_RESOURCE_TYPE_STATIC, resource_id);
+  }
+
+
+  gfx::Size background_size(std::round(button_width),
+                            std::round(button_height));
+  gfx::Size icon_size = icon_resource->size();
+
+  // 0. Parent Nesting Container
+  container_layer->SetPosition(gfx::PointF(std::round(x), std::round(y)));
+  container_layer->SetBounds(background_size);
+  container_layer->SetHideLayerAndSubtree(!visible);
+  container_layer->SetOpacity(button_alpha);
+
+  // 1. Background
+  background_layer->SetBackgroundColor(SkColor4f::FromColor(background_tint));
+  background_layer->SetBounds(background_size);
+  background_layer->SetPosition(gfx::PointF(0, 0));
+
+  float computed_corner_radius_l =
+      l10n_util::IsLayoutRtl() ? corner_radius_inner : corner_radius_outer;
+  float computed_corner_radius_r =
+      l10n_util::IsLayoutRtl() ? corner_radius_outer : corner_radius_inner;
+
+  background_layer->SetRoundedCorner(
+      gfx::RoundedCornersF(computed_corner_radius_l, computed_corner_radius_r,
+                           computed_corner_radius_r, computed_corner_radius_l));
+
+  // 2. Icon
+  float icon_x_pos;
+  float icon_y_offset = (background_size.height() - icon_size.height()) / 2;
+
+  ui::Resource* text_resource = nullptr;
+  if (text_texture_id != 0 && text_layer) {
+    text_resource = resource_manager_->GetResource(
+        ui::ANDROID_RESOURCE_TYPE_DYNAMIC, text_texture_id);
+  }
+  gfx::Size text_size = text_resource ? text_resource->size() : gfx::Size();
+  bool has_text = text_resource && !text_size.IsEmpty();
+
+  if (has_text) {
+    icon_x_pos = l10n_util::IsLayoutRtl()
+                     ? (button_width - button_start_padding - icon_size.width())
+                     : (button_start_padding);
+  } else {
+    icon_x_pos = (button_width - icon_size.width()) / 2;
+  }
+
+  icon_layer->SetUIResourceId(icon_resource->ui_resource()->id());
+  icon_layer->SetBounds(icon_size);
+  icon_layer->SetPosition(
+      gfx::PointF(std::round(icon_x_pos), std::round(icon_y_offset)));
+
+  // 3. Text
+  if (text_layer) {
+    if (has_text) {
+      text_layer->SetUIResourceId(text_resource->ui_resource()->id());
+      text_layer->SetBounds(text_size);
+
+      float text_y_offset = (background_size.height() - text_size.height()) / 2;
+      float text_x_pos =
+          l10n_util::IsLayoutRtl()
+              ? (button_width - button_start_padding - icon_size.width() -
+                 icon_text_padding - text_size.width())
+              : (button_start_padding + icon_size.width() + icon_text_padding);
+
+      text_layer->SetPosition(
+          gfx::PointF(std::round(text_x_pos), std::round(text_y_offset)));
+      text_layer->SetHideLayerAndSubtree(false);
+      text_layer->SetOpacity(SkColorGetA(tint) * (1.0f / 255.f));
+    } else {
+      text_layer->SetHideLayerAndSubtree(true);
+    }
+  }
+
+  // 4. Focus Ring
+  if (is_keyboard_focused && visible) {
+    ui::NinePatchResource* keyboard_focus_ring_drawable =
+        ui::NinePatchResource::From(
+            resource_manager_->GetStaticResourceWithTint(
+                keyboard_focus_ring_resource_id, keyboard_focus_ring_color,
+                true));
+    focus_ring_layer->SetIsDrawable(true);
+    focus_ring_layer->SetUIResourceId(
+        keyboard_focus_ring_drawable->ui_resource()->id());
+    focus_ring_layer->SetAperture(keyboard_focus_ring_drawable->aperture());
+    focus_ring_layer->SetPosition(
+        gfx::PointF(std::round(x - keyboard_focus_ring_offset),
+                    std::round(y - keyboard_focus_ring_offset)));
+    focus_ring_layer->SetBounds(
+        gfx::Size(std::round(button_width + keyboard_focus_ring_offset * 2),
+                  std::round(button_height + keyboard_focus_ring_offset * 2)));
+    focus_ring_layer->SetFillCenter(true);
+    focus_ring_layer->SetBorder(
+        keyboard_focus_ring_drawable->Border(focus_ring_layer->bounds()));
+
+    // Flip the focus ring texture horizontally to swap rounded and straight
+    // edges.
+    if (should_flip_keyboard_focus_ring) {
+      focus_ring_layer->SetTransformOrigin(
+          gfx::PointF(focus_ring_layer->bounds().width() / 2.0f,
+                      focus_ring_layer->bounds().height() / 2.0f));
+      focus_ring_layer->SetTransform(gfx::Transform::MakeScale(-1.0f, 1.0f));
+    } else {
+      focus_ring_layer->SetTransform(gfx::Transform());
+    }
+  } else {
+    focus_ring_layer->SetIsDrawable(false);
+  }
 }
 
 void TabStripSceneLayer::UpdateCompositorButton(
@@ -337,28 +720,31 @@ void TabStripSceneLayer::UpdateCompositorButton(
   button->SetHideLayerAndSubtree(!visible);
   button->SetOpacity(button_alpha);
 
-  gfx::Size background_size = background_resource->size();
   gfx::Size button_size = button_resource->size();
-  float x_offset = (background_size.width() - button_size.width()) / 2;
-  float y_offset = (background_size.height() - button_size.height()) / 2;
+  gfx::Size background_size =
+      background_resource ? background_resource->size() : button_size;
+  float x_offset = (background_size.width() - button_size.width()) / 2.f;
+  float y_offset = (background_size.height() - button_size.height()) / 2.f;
   // Round this so that the keyboard focus ring looks centered with respect to
   // the rest of the button (see comment below).
   button->SetPosition(
       gfx::PointF(std::round(x + x_offset), std::round(y + y_offset)));
 
-  if (!should_apply_hover_highlight) {
-    background->SetHideLayerAndSubtree(true);
-  } else {
-    background->SetUIResourceId(background_resource->ui_resource()->id());
-    // Round this so that the keyboard focus ring looks centered with respect to
-    // the rest of the button (see comment below).
-    background->SetPosition(gfx::PointF(std::round(x), std::round(y)));
-    background->SetBounds(background_resource->size());
-    background->SetHideLayerAndSubtree(!visible);
-    background->SetOpacity(button_alpha);
+  if (background) {
+    if (!should_apply_hover_highlight) {
+      background->SetHideLayerAndSubtree(true);
+    } else if (background_resource) {
+      background->SetUIResourceId(background_resource->ui_resource()->id());
+      // Round this so that the keyboard focus ring looks centered with respect
+      // to the rest of the button (see comment below).
+      background->SetPosition(gfx::PointF(std::round(x), std::round(y)));
+      background->SetBounds(background_resource->size());
+      background->SetHideLayerAndSubtree(!visible);
+      background->SetOpacity(button_alpha);
+    }
   }
 
-  if (is_keyboard_focused) {
+  if (is_keyboard_focused && visible) {
     keyboard_focus_ring_layer->SetIsDrawable(true);
     keyboard_focus_ring_layer->SetUIResourceId(
         keyboard_focus_ring_drawable->ui_resource()->id());
@@ -378,124 +764,112 @@ void TabStripSceneLayer::UpdateCompositorButton(
   }
 }
 
-void TabStripSceneLayer::UpdateTabStripLeftFade(JNIEnv* env,
-                                                jint resource_id,
-                                                jfloat opacity,
-                                                jint left_fade_color,
-                                                jfloat left_padding) {
+void TabStripSceneLayer::UpdateTabStripFade(JNIEnv* env,
+                                            bool is_left,
+                                            int32_t fade_color,
+                                            float opacity,
+                                            float gradient_width,
+                                            float opaque_width,
+                                            float padding) {
+  // Act on the correct fade.
+  cc::slim::SolidColorLayer& fade = is_left ? *left_fade_ : *right_fade_;
+
   // Hide layer if it's not visible.
   if (opacity == 0.f) {
-    left_fade_->SetHideLayerAndSubtree(true);
+    fade.SetHideLayerAndSubtree(true);
     return;
   }
 
-  DCHECK(resource_manager_);
-  ui::Resource* fade_resource = resource_manager_->GetStaticResourceWithTint(
-      resource_id, left_fade_color);
-  left_fade_->SetUIResourceId(fade_resource->ui_resource()->id());
-
-  // The same resource is used for both left and right fade, so the
-  // resource must be mirrored for the left fade.
-  gfx::Transform fade_transform = gfx::Transform::MakeScale(-1.0f, 1.0f);
-  left_fade_->SetTransform(fade_transform);
-
   // Set opacity.
-  left_fade_->SetOpacity(opacity);
+  fade.SetOpacity(opacity);
 
-  // Set bounds. Use the parent layer height so the 1px fade resource is
-  // stretched vertically.
+  // Set background color.
+  fade.SetBackgroundColor(SkColor4f::FromColor(fade_color));
+
+  // Set bounds.
+  float width = opaque_width + gradient_width;
   float height = tab_strip_layer_->bounds().height();
-  left_fade_->SetBounds(gfx::Size(fade_resource->size().width(), height));
+  fade.SetBounds(gfx::Size(width, height));
 
-  // Set position. The rotation set above requires the layer to be offset
-  // by its width in order to display on the left edge.
-  left_fade_->SetPosition(
-      gfx::PointF(fade_resource->size().width() + left_padding, 0));
+  // Set position.
+  int fade_x =
+      is_left ? padding : tab_strip_layer_->bounds().width() - width - padding;
+  fade.SetPosition(gfx::PointF(fade_x, 0));
 
-  // Ensure layer is visible.
-  left_fade_->SetHideLayerAndSubtree(false);
-}
-
-void TabStripSceneLayer::UpdateTabStripRightFade(JNIEnv* env,
-                                                 jint resource_id,
-                                                 jfloat opacity,
-                                                 jint right_fade_color,
-                                                 jfloat right_padding) {
-  // Hide layer if it's not visible.
-  if (opacity == 0.f) {
-    right_fade_->SetHideLayerAndSubtree(true);
-    return;
+  // Set gradient.
+  gfx::LinearGradient gradient;
+  gradient.AddStep(0.f, 255);
+  gradient.AddStep(opaque_width / (opaque_width + gradient_width), 255);
+  gradient.AddStep(1.f, 0);
+  if (!is_left) {
+    gradient.set_angle(180);
   }
-
-  DCHECK(resource_manager_);
-  ui::Resource* fade_resource = resource_manager_->GetStaticResourceWithTint(
-      resource_id, right_fade_color);
-  right_fade_->SetUIResourceId(fade_resource->ui_resource()->id());
-
-  // Set opacity.
-  right_fade_->SetOpacity(opacity);
-
-  // Set bounds. Use the parent layer height so the 1px fade resource is
-  // stretched vertically.
-  float height = tab_strip_layer_->bounds().height();
-  right_fade_->SetBounds(gfx::Size(fade_resource->size().width(), height));
-
-  // Set position. The right fade is positioned at the end of the tab strip.
-  float x = tab_strip_layer_->bounds().width() - fade_resource->size().width() -
-            right_padding;
-  right_fade_->SetPosition(gfx::PointF(x, 0));
+  fade.SetContentsOpaque(false);
+  fade.SetGradientMask(gradient);
 
   // Ensure layer is visible.
-  right_fade_->SetHideLayerAndSubtree(false);
+  fade.SetHideLayerAndSubtree(false);
 }
 
 void TabStripSceneLayer::PutStripTabLayer(
     JNIEnv* env,
-    jint id,
-    jint close_resource_id,
-    jint close_hover_bg_resource_id,
-    jboolean is_close_keyboard_focused,
-    jint close_keyboard_focus_ring_resource_id,
-    jint divider_resource_id,
-    jint handle_resource_id,
-    jint handle_outline_resource_id,
-    jint close_tint,
-    jint close_hover_bg_tint,
-    jint divider_tint,
-    jint handle_tint,
-    jint handle_outline_tint,
-    jboolean foreground,
-    jboolean shouldShowTabOutline,
-    jboolean close_pressed,
-    jboolean should_hide_favicon,
-    jboolean should_show_media_indicator,
-    jint media_indicator_resource_id,
-    jint media_indicator_tint,
-    jfloat media_indicator_width,
-    jfloat toolbar_width,
-    jfloat x,
-    jfloat y,
-    jfloat width,
-    jfloat height,
-    jfloat content_offset_y,
-    jfloat divider_offset_x,
-    jfloat bottom_margin,
-    jfloat top_margin,
-    jfloat close_button_padding,
-    jfloat close_button_alpha,
-    jfloat width_to_hide_tab_title,
-    jboolean is_start_divider_visible,
-    jboolean is_end_divider_visible,
-    jboolean is_loading,
-    jfloat spinner_rotation,
-    jfloat opacity,
-    jboolean is_keyboard_focused,
-    jint keyboard_focus_ring_resource_id,
-    jint keyboard_focus_ring_color,
-    jint keyboard_focus_ring_offset,
-    jint stroke_width,
-    jfloat folio_foot_length,
-    jboolean is_pinned) {
+    int32_t id,
+    int32_t close_resource_id,
+    int32_t close_hover_bg_resource_id,
+    bool is_close_keyboard_focused,
+    int32_t close_keyboard_focus_ring_resource_id,
+    int32_t divider_resource_id,
+    int32_t handle_resource_id,
+    int32_t handle_outline_resource_id,
+    int32_t close_tint,
+    int32_t close_hover_bg_tint,
+    int32_t divider_tint,
+    int32_t handle_tint,
+    int32_t handle_outline_tint,
+    bool foreground,
+    bool shouldShowTabOutline,
+    bool close_pressed,
+    bool should_hide_favicon,
+    bool should_show_media_indicator,
+    int32_t media_indicator_resource_id,
+    int32_t media_indicator_tint,
+    float media_indicator_width,
+    float media_indicator_spacing,
+    float media_indicator_internal_padding,
+    float title_to_media_indicator_spacing,
+    int32_t tab_indicator_overlay_resource_id,
+    float tab_indicator_overlay_rotation,
+    float tab_indicator_overlay_width,
+    float toolbar_width,
+    float x,
+    float y,
+    float width,
+    float height,
+    float content_offset_y,
+    float divider_offset_x,
+    float bottom_margin,
+    float top_margin,
+    float close_button_padding,
+    float close_button_extra_offset,
+    float close_button_alpha,
+    float desktop_min_tab_width,
+    bool is_start_divider_visible,
+    bool is_end_divider_visible,
+    bool is_loading,
+    float spinner_rotation,
+    float opacity,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color,
+    int32_t keyboard_focus_ring_offset,
+    int32_t stroke_width,
+    float folio_foot_length,
+    bool is_pinned,
+    float underline_opacity,
+    float underline_shimmer_offset,
+    int32_t underline_start_color,
+    int32_t underline_end_color,
+    int32_t underline_width_threshold) {
   DCHECK(layer_title_cache_);
   scoped_refptr<TabHandleLayer> layer = GetNextTabLayer(layer_title_cache_);
 
@@ -536,6 +910,19 @@ void TabStripSceneLayer::PutStripTabLayer(
     media_indicator_drawable = resource_manager_->GetStaticResourceWithTint(
         media_indicator_resource_id, media_indicator_tint);
   }
+  ui::Resource* media_indicator_overlay_drawable = nullptr;
+  if (should_show_media_indicator && tab_indicator_overlay_resource_id != 0) {
+    media_indicator_overlay_drawable =
+        resource_manager_->GetStaticResourceWithTint(
+            tab_indicator_overlay_resource_id, media_indicator_tint);
+  }
+
+  float media_indicator_opacity = 1.0f;
+  if (media_indicator_tint == close_tint) {
+    // Match close button opacity (0.7) if tints are the same, as the
+    // media indicator is expected to look like the close button in such cases.
+    media_indicator_opacity = 0.7f;
+  }
 
   layer->SetProperties(
       id, close_button_resource, close_button_hover_resource,
@@ -543,41 +930,47 @@ void TabStripSceneLayer::PutStripTabLayer(
       divider_resource, tab_handle_resource, tab_handle_outline_resource,
       foreground, is_pinned, shouldShowTabOutline, close_pressed,
       should_hide_favicon, should_show_media_indicator,
-      media_indicator_drawable, media_indicator_width, toolbar_width, x, y,
-      width, height, content_offset_y, divider_offset_x, bottom_margin,
-      top_margin, close_button_padding, close_button_alpha,
-      is_start_divider_visible, is_end_divider_visible, is_loading,
-      spinner_rotation, opacity, is_keyboard_focused,
-      keyboard_focus_ring_drawable, keyboard_focus_ring_offset, stroke_width,
-      folio_foot_length, width_to_hide_tab_title);
+      media_indicator_drawable, media_indicator_width, media_indicator_spacing,
+      media_indicator_internal_padding, title_to_media_indicator_spacing,
+      media_indicator_opacity, media_indicator_overlay_drawable,
+      tab_indicator_overlay_rotation, tab_indicator_overlay_width,
+      toolbar_width, x, y, width, height, content_offset_y, divider_offset_x,
+      bottom_margin, top_margin, close_button_padding,
+      close_button_extra_offset, close_button_alpha, is_start_divider_visible,
+      is_end_divider_visible, is_loading, spinner_rotation, opacity,
+      is_keyboard_focused, keyboard_focus_ring_drawable,
+      keyboard_focus_ring_offset, stroke_width, folio_foot_length,
+      desktop_min_tab_width, underline_opacity, underline_shimmer_offset,
+      static_cast<SkColor>(underline_start_color),
+      static_cast<SkColor>(underline_end_color), underline_width_threshold);
 }
 
 void TabStripSceneLayer::PutGroupIndicatorLayer(
     JNIEnv* env,
-    jboolean incognito,
-    jboolean foreground,
-    jboolean collapsed,
-    jboolean show_bubble,
+    bool incognito,
+    bool foreground,
+    bool collapsed,
+    bool show_bubble,
     const base::android::JavaRef<jobject>& jgroup_token,
-    jint tint,
-    jint reorder_background_tint,
-    jint bubble_tint,
-    jfloat x,
-    jfloat y,
-    jfloat width,
-    jfloat height,
-    jfloat title_start_padding,
-    jfloat title_end_padding,
-    jfloat corner_radius,
-    jfloat bottom_indicator_width,
-    jfloat bottom_indicator_height,
-    jfloat bubble_padding,
-    jfloat bubble_size,
-    jboolean is_keyboard_focused,
-    jint keyboard_focus_ring_resource_id,
-    jint keyboard_focus_ring_color,
-    jint keyboard_focus_ring_offset,
-    jint keyboard_focus_ring_width) {
+    int32_t tint,
+    int32_t reorder_background_tint,
+    int32_t bubble_tint,
+    float x,
+    float y,
+    float width,
+    float height,
+    float title_start_padding,
+    float title_end_padding,
+    float corner_radius,
+    float bottom_indicator_width,
+    float bottom_indicator_height,
+    float bubble_padding,
+    float bubble_size,
+    bool is_keyboard_focused,
+    int32_t keyboard_focus_ring_resource_id,
+    int32_t keyboard_focus_ring_color,
+    int32_t keyboard_focus_ring_offset,
+    int32_t keyboard_focus_ring_width) {
   DCHECK(layer_title_cache_);
 
   // Reuse existing layer if it exists.
@@ -653,8 +1046,8 @@ SkColor TabStripSceneLayer::GetBackgroundColor() {
   return SceneLayer::GetBackgroundColor();
 }
 
-static jlong JNI_TabStripSceneLayer_Init(JNIEnv* env,
-                                         const JavaRef<jobject>& jobj) {
+static int64_t JNI_TabStripSceneLayer_Init(JNIEnv* env,
+                                           const JavaRef<jobject>& jobj) {
   // This will automatically bind to the Java object and pass ownership there.
   TabStripSceneLayer* scene_layer = new TabStripSceneLayer(env, jobj);
   return reinterpret_cast<intptr_t>(scene_layer);

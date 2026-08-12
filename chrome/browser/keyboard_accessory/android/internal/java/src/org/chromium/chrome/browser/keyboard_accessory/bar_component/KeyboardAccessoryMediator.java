@@ -20,12 +20,17 @@ import static org.chromium.chrome.browser.keyboard_accessory.bar_component.Keybo
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.STYLE;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.VISIBLE;
 
+import android.content.Context;
+
 import androidx.annotation.StringRes;
 
 import org.chromium.base.ObserverList;
 import org.chromium.base.TraceEvent;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager;
+import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryAction;
 import org.chromium.chrome.browser.keyboard_accessory.KeyboardAccessoryVisualStateProvider;
@@ -45,12 +50,24 @@ import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetCoordinator;
 import org.chromium.chrome.browser.keyboard_accessory.utils.ManualFillingMetricsRecorder;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.autofill.AutofillAiPayload;
 import org.chromium.components.autofill.AutofillDelegate;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.autofill.FillingProduct;
 import org.chromium.components.autofill.FillingProductBridge;
 import org.chromium.components.autofill.SuggestionType;
+import org.chromium.components.autofill.autofill_ai.EntityInstance;
+import org.chromium.components.autofill.autofill_ai.EntityType;
+import org.chromium.components.autofill.autofill_ai.EntityTypeName;
+import org.chromium.components.autofill.autofill_ai.RecordType;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.ConfirmationDialogParams;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.DialogDismissType;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.DismissHandler;
+import org.chromium.components.browser_ui.widget.StrictButtonPressController.ButtonClickResult;
 import org.chromium.components.feature_engagement.FeatureConstants;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyObservable;
@@ -72,6 +89,10 @@ class KeyboardAccessoryMediator
         implements PropertyObservable.PropertyObserver<PropertyKey>,
                 Provider.Observer<Action[]>,
                 KeyboardAccessoryButtonGroupCoordinator.AccessoryTabObserver {
+    private static final String UMA_AUTOFILL_AI_SETTINGS_LINKOUT_DIALOG =
+            "Autofill.Ai.SettingsLinkoutDialog";
+
+    private final Context mContext;
     private final PropertyModel mModel;
     private final BarVisibilityDelegate mBarVisibilityDelegate;
     private final AccessorySheetCoordinator.SheetVisibilityDelegate mSheetVisibilityDelegate;
@@ -79,13 +100,16 @@ class KeyboardAccessoryMediator
     private final Supplier<Integer> mBackgroundColorSupplier;
     private final Supplier<Boolean> mIsLargeFormFactorSupplier;
     private final Profile mProfile;
+    private final @Nullable ActionConfirmationDialog mDialog;
     private @Nullable Boolean mHasFilteredTouchEvent;
     private final ObserverList<KeyboardAccessoryVisualStateProvider.Observer> mVisualObservers =
             new ObserverList<>();
 
     KeyboardAccessoryMediator(
+            Context context,
             PropertyModel model,
             Profile profile,
+            ModalDialogManager modalDialogManager,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
             TabSwitchingDelegate tabSwitcher,
@@ -93,6 +117,7 @@ class KeyboardAccessoryMediator
             Supplier<Integer> backgroundColorSupplier,
             Supplier<Boolean> isLargeFormFactorSupplier,
             Runnable dismissRunnable) {
+        mContext = context;
         mModel = model;
         mProfile = profile;
         mBarVisibilityDelegate = barVisibilityDelegate;
@@ -100,6 +125,10 @@ class KeyboardAccessoryMediator
         mTabSwitcher = tabSwitcher;
         mBackgroundColorSupplier = backgroundColorSupplier;
         mIsLargeFormFactorSupplier = isLargeFormFactorSupplier;
+        mDialog =
+                modalDialogManager != null
+                        ? new ActionConfirmationDialog(context, modalDialogManager)
+                        : null;
 
         // Add mediator as observer so it can use model changes as signal for accessory visibility.
         mModel.set(OBFUSCATED_CHILD_AT_CALLBACK, this::onSuggestionObfuscatedAt);
@@ -259,18 +288,23 @@ class KeyboardAccessoryMediator
     private boolean shouldShowSuggestion(AutofillSuggestion suggestion) {
         switch (suggestion.getSuggestionType()) {
             case SuggestionType.INSECURE_CONTEXT_PAYMENT_DISABLED_MESSAGE:
-                // The insecure context warning has a replacement in the fallback sheet.
+            // The insecure context warning has a replacement in the fallback sheet.
             case SuggestionType.TITLE:
             case SuggestionType.SEPARATOR:
-            case SuggestionType.UNDO_OR_CLEAR:
-            case SuggestionType.ALL_LOYALTY_CARDS_ENTRY:
+            case SuggestionType.UNDO:
             case SuggestionType.ALL_SAVED_PASSWORDS_ENTRY:
+            case SuggestionType.AUTOFILL_AI_PRIVATE_INFERENCE_NOTICE:
             case SuggestionType.GENERATE_PASSWORD_ENTRY:
             case SuggestionType.MANAGE_ADDRESS:
+            case SuggestionType.MANAGE_AUTOFILL_AI:
+            case SuggestionType.MANAGE_AUTOFILL_AI_IDENTITY_DOCS:
+            case SuggestionType.MANAGE_AUTOFILL_AI_TRAVEL:
+            case SuggestionType.MANAGE_AUTOFILL_AI_SHOPPING:
             case SuggestionType.MANAGE_CREDIT_CARD:
             case SuggestionType.MANAGE_IBAN:
-            case SuggestionType.MANAGE_PLUS_ADDRESS:
             case SuggestionType.MANAGE_LOYALTY_CARD:
+            case SuggestionType.AUTOFILL_AI_OTHER_ORDERS:
+            case SuggestionType.AUTOFILL_AI_OTHER_SHIPMENTS:
                 return false;
             case SuggestionType.AUTOCOMPLETE_ENTRY:
             case SuggestionType.PASSWORD_ENTRY:
@@ -290,7 +324,9 @@ class KeyboardAccessoryMediator
             if (!shouldShowSuggestion(suggestion)) continue;
             barItems.add(
                     new AutofillBarItem(
-                            suggestion, createAutofillAction(delegate, position), mProfile));
+                            suggestion,
+                            createAutofillAction(delegate, position, suggestion),
+                            mProfile));
         }
 
         // Annotates the first suggestion in with an in-product help bubble. For password
@@ -324,15 +360,120 @@ class KeyboardAccessoryMediator
         return barItems;
     }
 
-    private Action createAutofillAction(AutofillDelegate delegate, int pos) {
+    private Action createAutofillAction(
+            AutofillDelegate delegate, int pos, AutofillSuggestion suggestion) {
         return new Action(
                 AccessoryAction.AUTOFILL_SUGGESTION,
                 result -> {
                     ManualFillingMetricsRecorder.recordActionSelected(
                             AccessoryAction.AUTOFILL_SUGGESTION);
-                    delegate.suggestionSelected(pos);
+                    if (suggestion.showLoadingOnAcceptance()) {
+                        showLoadingUIOnSuggestion(suggestion);
+                    }
+                    delegate.suggestionSelected(pos, suggestion.showLoadingOnAcceptance());
                 },
-                result -> delegate.deleteSuggestion(pos));
+                result -> {
+                    if (maybeShowDialogOnLongPress(delegate, suggestion)) {
+                        return;
+                    }
+                    delegate.deleteSuggestion(pos);
+                });
+    }
+
+    private boolean maybeShowDialogOnLongPress(
+            AutofillDelegate delegate, AutofillSuggestion suggestion) {
+        AutofillAiPayload payload = suggestion.getAutofillAiPayload();
+        if (payload == null || mDialog == null) {
+            return false;
+        }
+        EntityDataManager entityDataManager = EntityDataManagerFactory.getForProfile(mProfile);
+        if (entityDataManager == null) {
+            return false;
+        }
+        EntityInstance entityInstance = entityDataManager.getEntityInstance(payload.getGuid());
+        if (entityInstance == null
+                || entityInstance.getRecordType() != RecordType.PERSONAL_CONTEXT
+                || !shouldOpenSettingsForEntityType(entityInstance.getEntityType().getTypeName())) {
+            return false;
+        }
+        String sublabel = suggestion.getSublabel();
+        if (sublabel == null) {
+            return false;
+        }
+        mDialog.show(
+                new ConfirmationDialogParams.Builder(mContext)
+                        .withTitle(sublabel)
+                        .withDescription(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_description))
+                        .withPositiveButton(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_positive_button))
+                        .withNegativeButton(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_negative_button))
+                        .build(),
+                (dismissHandler, buttonClickResult, stopShowing) ->
+                        handleDialogAction(
+                                delegate,
+                                entityInstance.getEntityType(),
+                                dismissHandler,
+                                buttonClickResult,
+                                stopShowing));
+        return true;
+    }
+
+    private boolean shouldOpenSettingsForEntityType(@EntityTypeName int entityType) {
+        switch (entityType) {
+            case EntityTypeName.PASSPORT:
+            case EntityTypeName.DRIVERS_LICENSE:
+            case EntityTypeName.NATIONAL_ID_CARD:
+            case EntityTypeName.KNOWN_TRAVELER_NUMBER:
+            case EntityTypeName.REDRESS_NUMBER:
+            case EntityTypeName.VEHICLE:
+            case EntityTypeName.ORDER:
+            case EntityTypeName.FLIGHT_RESERVATION:
+            case EntityTypeName.SHIPMENT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private @DialogDismissType int handleDialogAction(
+            AutofillDelegate delegate,
+            EntityType entityType,
+            DismissHandler unusedDismissHandler,
+            @ButtonClickResult int buttonClickResult,
+            boolean unusedStopShowing) {
+        boolean isPositive = buttonClickResult == ButtonClickResult.POSITIVE;
+        RecordHistogram.recordBooleanHistogram(
+                UMA_AUTOFILL_AI_SETTINGS_LINKOUT_DIALOG + "."
+                        + entityType.getTypeNameAsMetricsString(),
+                isPositive);
+        if (isPositive) {
+            // Need to go through C++ because `SettingsNavigationHelper` is in `chrome_java`.
+            // Keyboard accessory Java code should not depend on `chrome_java`.
+            delegate.openSettingsForEntityType(entityType.getTypeName());
+        }
+        return DialogDismissType.DISMISS_IMMEDIATELY;
+    }
+
+    private void updateListState(
+            ListModel<BarItem> list, @Nullable AutofillSuggestion clickedSuggestion) {
+        for (int i = 0; i < list.size(); i++) {
+            BarItem barItem = list.get(i);
+            barItem.updateStateOnItemSelection(clickedSuggestion);
+            list.update(i, barItem);
+        }
+    }
+
+    private void showLoadingUIOnSuggestion(AutofillSuggestion clickedSuggestion) {
+        updateListState(mModel.get(BAR_ITEMS), clickedSuggestion);
+        updateListState(mModel.get(BAR_ITEMS_FIXED), null);
     }
 
     private @BarItem.Type int toBarItemType(@AccessoryAction int accessoryAction) {
@@ -364,6 +505,12 @@ class KeyboardAccessoryMediator
     void dismiss() {
         mTabSwitcher.closeActiveTab();
         mModel.set(VISIBLE, false);
+        if (mModel.get(SHEET_OPENER_ITEM) != null) {
+            mModel.get(SHEET_OPENER_ITEM).setViewState(ActionBarItem.ViewState.ENABLED);
+        }
+        if (mModel.get(DISMISS_ITEM) != null) {
+            mModel.get(DISMISS_ITEM).setViewState(ActionBarItem.ViewState.ENABLED);
+        }
         if (!(mHasFilteredTouchEvent == null || mHasFilteredTouchEvent)) {
             // Log the metric if the accessory received touch events, but none of them were
             // filtered.
@@ -514,8 +661,14 @@ class KeyboardAccessoryMediator
      * @return whether the width of the suggestion is allowed to be limited.
      */
     private static boolean canLimitWidth(@SuggestionType int suggestionType) {
-        return FillingProductBridge.getFillingProductFromSuggestionType(suggestionType)
-                == FillingProduct.ADDRESS;
+        @FillingProduct
+        final int fillingProduct =
+                FillingProductBridge.getFillingProductFromSuggestionType(suggestionType);
+        if (fillingProduct == FillingProduct.AUTOFILL_AI) {
+            return ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.AUTOFILL_AI_LIMIT_SUGGESTION_WIDTH);
+        }
+        return fillingProduct == FillingProduct.ADDRESS;
     }
 
     private @StringRes int getCaptionId(@AccessoryAction int actionType) {
@@ -559,11 +712,7 @@ class KeyboardAccessoryMediator
     }
 
     private boolean shouldLimitSuggestionWidth() {
-        return !showFloatingKeyboardAccessory()
-                && ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.AUTOFILL_ENABLE_KEYBOARD_ACCESSORY_CHIP_REDESIGN)
-                && ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.AUTOFILL_ENABLE_KEYBOARD_ACCESSORY_CHIP_WIDTH_ADJUSTMENT);
+        return !showFloatingKeyboardAccessory();
     }
 
     void addObserver(KeyboardAccessoryVisualStateProvider.Observer observer) {

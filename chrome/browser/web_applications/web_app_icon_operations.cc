@@ -8,7 +8,6 @@
 #include <variant>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/extend.h"
 #include "base/containers/flat_set.h"
 #include "base/strings/stringprintf.h"
@@ -26,11 +25,8 @@ namespace {
 
 base::flat_set<GURL> GetAllIconUrlsForSizeAny(
     base::flat_map<IconPurpose, GURL> icon_purpose_to_urls) {
-  base::flat_set<GURL> urls;
-  for (const auto& data : icon_purpose_to_urls) {
-    urls.insert(data.second);
-  }
-  return urls;
+  return base::MakeFlatSet<GURL>(icon_purpose_to_urls, /*comp=*/{},
+                                 [](const auto& data) { return data.second; });
 }
 
 void PopulateIconUrlsForSizeAnyIfNeeded(
@@ -109,24 +105,6 @@ std::vector<IconUrlWithSize> GetShortcutMenuIcons(
       GetAllIconUrlsForSizeAny(
           web_app_info.icons_with_size_any.shortcut_menu_icons),
       web_app_info.icons_with_size_any.shortcut_menu_icons_provided_sizes);
-  return urls;
-}
-
-std::vector<IconUrlWithSize> GetFileHandlingIcons(
-    const WebAppInstallInfo& web_app_info) {
-  std::vector<IconUrlWithSize> urls;
-
-  for (const apps::FileHandler& file_handler : web_app_info.file_handlers) {
-    for (const apps::IconInfo& icon : file_handler.downloaded_icons) {
-      urls.push_back(IconUrlWithSize::CreateForUnspecifiedSize(icon.url));
-    }
-  }
-
-  PopulateIconUrlsForSizeAnyIfNeeded(
-      std::ref(urls),
-      GetAllIconUrlsForSizeAny(
-          web_app_info.icons_with_size_any.file_handling_icons),
-      web_app_info.icons_with_size_any.file_handling_icon_provided_sizes);
   return urls;
 }
 
@@ -211,9 +189,6 @@ IconUrlSizeSet GetValidIconUrlsToDownload(const WebAppInstallInfo& web_app_info,
   }
   if (options.shortcut_menu_item_icons) {
     base::Extend(icon_urls_with_sizes, GetShortcutMenuIcons(web_app_info));
-  }
-  if (options.file_handling_icons) {
-    base::Extend(icon_urls_with_sizes, GetFileHandlingIcons(web_app_info));
   }
   if (options.home_tab_icons) {
     base::Extend(icon_urls_with_sizes, GetHomeTabIcons(web_app_info));

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/statistics_recorder.h"
 #include "base/no_destructor.h"
@@ -15,8 +15,6 @@
 #include "components/metrics/histogram_encoder.h"
 
 namespace metrics {
-
-HistogramManager::HistogramManager() : histogram_snapshot_manager_(this) {}
 
 HistogramManager::~HistogramManager() = default;
 
@@ -29,13 +27,10 @@ HistogramManager* HistogramManager::GetInstance() {
 void HistogramManager::RecordDelta(const base::HistogramBase& histogram,
                                    const base::HistogramSamples& snapshot) {
   EncodeHistogramDelta(histogram.histogram_name(), snapshot,
-                       uma_proto_.add_histogram_event());
+                       [&] { return uma_proto_.add_histogram_event(); });
 }
 
-// TODO(lukasza): https://crbug.com/881903: NO_THREAD_SAFETY_ANALYSIS below can
-// be removed once base::Lock::Try is annotated with EXCLUSIVE_TRYLOCK_FUNCTION.
-bool HistogramManager::GetDeltas(std::vector<uint8_t>* data)
-    NO_THREAD_SAFETY_ANALYSIS {
+bool HistogramManager::GetDeltas(std::vector<uint8_t>* data) {
   if (get_deltas_lock_.Try()) {
     base::AutoLock lock(get_deltas_lock_, base::AutoLock::AlreadyAcquired());
     // Clear the protobuf between calls.
@@ -45,8 +40,7 @@ bool HistogramManager::GetDeltas(std::vector<uint8_t>* data)
     // other means.
     base::StatisticsRecorder::PrepareDeltas(
         false, base::Histogram::kNoFlags,
-        base::Histogram::kUmaTargetedHistogramFlag,
-        &histogram_snapshot_manager_);
+        base::Histogram::kUmaTargetedHistogramFlag, this);
     int32_t data_size = uma_proto_.ByteSizeLong();
     data->resize(data_size);
     if (data_size == 0 || uma_proto_.SerializeToArray(data->data(), data_size))

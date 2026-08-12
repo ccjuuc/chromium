@@ -33,6 +33,7 @@ enum class WebAppUrlLoaderResult;
 
 namespace web_app {
 
+class FinalizeInstallOrUpdateJob;
 enum class IconsDownloadedResult;
 class SharedWebContentsWithAppLock;
 class WebAppDataRetriever;
@@ -80,6 +81,8 @@ class WebInstallFromUrlCommand
 
  protected:
   // WebAppCommand:
+  content::WebContents* GetInstallingWebContents(
+      base::PassKey<WebAppCommandManager>) override;
   void StartWithLock(std::unique_ptr<SharedWebContentsLock> lock) override;
 
  private:
@@ -95,12 +98,12 @@ class WebInstallFromUrlCommand
       std::unique_ptr<WebAppInstallInfo> install_info);
   void OnInstallDialogCompleted(
       bool user_accepted,
-      std::unique_ptr<WebAppInstallInfo> web_app_info);
+      std::unique_ptr<WebAppInstallInfo> web_app_info,
+      WebAppInstallationAcceptanceResultCallback result_callback);
   void InstallApp();
   void OnAppInstalled(const webapps::AppId& app_id,
                       webapps::InstallResultCode code);
-  void LaunchApp();
-  void OnAppLaunched(base::Value launch_debug_value);
+
   void MeasureUserInstalledAppHistogram(webapps::InstallResultCode code);
 
   raw_ref<Profile> profile_;
@@ -113,6 +116,7 @@ class WebInstallFromUrlCommand
   // The last committed URL of the page that initiated the install.
   GURL installed_by_;
   WebAppInstallDialogCallback dialog_callback_;
+  WebAppInstallationAcceptanceResultCallback acceptance_result_callback_;
 
   std::unique_ptr<SharedWebContentsLock> web_contents_lock_;
   std::unique_ptr<SharedWebContentsWithAppLock>
@@ -121,6 +125,7 @@ class WebInstallFromUrlCommand
   std::unique_ptr<WebAppDataRetriever> data_retriever_;
   std::unique_ptr<WebAppInstallInfo> web_app_info_;
   std::unique_ptr<ManifestToWebAppInstallInfoJob> manifest_to_install_info_job_;
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_job_;
   IconUrlSizeSet icons_from_manifest_;
   webapps::InstallResultCode install_result_code_;
   blink::mojom::ManifestPtr opt_manifest_;

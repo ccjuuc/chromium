@@ -46,13 +46,19 @@ export class SigninEmailConfirmationAppElement extends CrLitElement {
         'signinEmailConfirmationStartSyncButtonSubtitle', newEmail);
   }
 
-  protected onConfirm_() {
+  protected onConfirmClick_() {
     const action = this.shadowRoot.querySelector('cr-radio-group')!.selected;
     chrome.send('dialogClose', [JSON.stringify({'action': action})]);
   }
 
-  protected onCancel_() {
+  protected onCancelClick_() {
     chrome.send('dialogClose', [JSON.stringify({'action': 'cancel'})]);
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'signin-email-confirmation-app': SigninEmailConfirmationAppElement;
   }
 }
 

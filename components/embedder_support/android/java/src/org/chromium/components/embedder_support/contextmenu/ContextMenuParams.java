@@ -139,6 +139,13 @@ public class ContextMenuParams {
     }
 
     /**
+     * @return Whether the media element is encrypted.
+     */
+    public boolean isEncrypted() {
+        return (mMediaFlags & ContextMenuDataMediaFlags.MEDIA_ENCRYPTED) != 0;
+    }
+
+    /**
      * @return The x-coordinate of the touch that triggered the context menu in dp relative to the
      *     render view; 0 corresponds to the left edge.
      */
@@ -206,6 +213,13 @@ public class ContextMenuParams {
      */
     public @Nullable AdditionalNavigationParams getAdditionalNavigationParams() {
         return mAdditionalNavigationParams;
+    }
+
+    /** Releases resources associated with this Context Menu. */
+    public void destroy() {
+        if (mAdditionalNavigationParams != null) {
+            mAdditionalNavigationParams.destroy();
+        }
     }
 
     /** Returns the {@link MenuModelBridge} associated with this context menu. */

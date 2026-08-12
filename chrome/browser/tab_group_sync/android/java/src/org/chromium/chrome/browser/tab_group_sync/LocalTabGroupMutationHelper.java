@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.tab_group_sync;
 
 import static org.chromium.build.NullUtil.assertNonNull;
+import static org.chromium.chrome.browser.tabmodel.TabGroupTitleUtils.UNSET_TAB_GROUP_TITLE;
 
 import android.text.TextUtils;
 
@@ -15,10 +16,8 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncControllerImpl.TabCreationDelegate;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter.MergeNotificationType;
+import org.chromium.chrome.browser.tabmodel.TabGroupMergeNotificationType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.components.tab_group_sync.ClosingSource;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
 import org.chromium.components.tab_group_sync.OpeningSource;
@@ -41,16 +40,16 @@ import java.util.Set;
 @NullMarked
 public class LocalTabGroupMutationHelper {
     private static final String TAG = "TG.LocalMutation";
-    private final TabGroupModelFilter mTabGroupModelFilter;
+    private final TabModel mTabModel;
     private final TabGroupSyncService mTabGroupSyncService;
     private final TabCreationDelegate mTabCreationDelegate;
 
     /** Constructor. */
     public LocalTabGroupMutationHelper(
-            TabGroupModelFilter tabGroupModelFilter,
+            TabModel tabModel,
             TabGroupSyncService tabGroupSyncService,
             TabCreationDelegate tabCreationDelegate) {
-        mTabGroupModelFilter = tabGroupModelFilter;
+        mTabModel = tabModel;
         mTabGroupSyncService = tabGroupSyncService;
         mTabCreationDelegate = tabCreationDelegate;
     }
@@ -71,13 +70,18 @@ public class LocalTabGroupMutationHelper {
 
         // We need to create a local tab group matching the remote one.
         // First create new tabs and append them to the end of tab model.
-        int position = getTabModel().getCount();
+        int position = mTabModel.getCount();
         List<Tab> tabs = new ArrayList<>();
         for (SavedTabGroupTab savedTab : tabGroup.savedTabs) {
-            String title = savedTab.title == null ? "" : savedTab.title;
+            String title = savedTab.title == null ? UNSET_TAB_GROUP_TITLE : savedTab.title;
+            GURL url = assertNonNull(savedTab.url);
+            if (!TabGroupSyncUtils.isSavableUrl(url)) {
+                title = TabGroupSyncUtils.UNSAVEABLE_TAB_TITLE;
+                url = TabGroupSyncUtils.UNSAVEABLE_URL_OVERRIDE;
+            }
             Tab newTab =
                     mTabCreationDelegate.createBackgroundTab(
-                            assertNonNull(savedTab.url), title, /* parent= */ null, position++);
+                            url, title, /* parent= */ null, position++);
             assert newTab != null;
             tabs.add(newTab);
             tabIdMappings.put(assertNonNull(savedTab.syncId), newTab.getId());
@@ -88,20 +92,20 @@ public class LocalTabGroupMutationHelper {
         // tab.
         Tab rootTab = tabs.get(0);
         if (tabs.size() == 1) {
-            mTabGroupModelFilter.createSingleTabGroup(rootTab);
+            mTabModel.createSingleTabGroup(rootTab);
         } else {
-            mTabGroupModelFilter.mergeListOfTabsToGroup(
-                    tabs, rootTab, /* notify= */ MergeNotificationType.DONT_NOTIFY);
+            mTabModel.mergeListOfTabsToGroup(
+                    tabs, rootTab, /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
         }
         Token tabGroupId = rootTab.getTabGroupId();
         assert tabGroupId != null;
         updateTabGroupVisuals(tabGroup, tabGroupId);
         // Remote group should start collapsed. Do this after the merge to avoid auto expand.
-        mTabGroupModelFilter.setTabGroupCollapsed(tabGroupId, true);
+        mTabModel.setTabGroupCollapsed(tabGroupId, true);
 
         // Notify sync backend about IDs of the newly created group and tabs.
         LocalTabGroupId localTabGroupId =
-                TabGroupSyncUtils.getLocalTabGroupId(mTabGroupModelFilter, tabGroupId);
+                TabGroupSyncUtils.getLocalTabGroupId(mTabModel, tabGroupId);
         assert localTabGroupId != null : "Local tab group ID is null after creating a group!";
         mTabGroupSyncService.updateLocalTabGroupMapping(
                 assertNonNull(tabGroup.syncId), localTabGroupId, openingSource);
@@ -149,7 +153,7 @@ public class LocalTabGroupMutationHelper {
         assert tabGroup.localId != null;
 
         Token tabGroupId = tabGroup.localId.tabGroupId;
-        List<Tab> tabs = mTabGroupModelFilter.getTabsInGroup(tabGroupId);
+        List<Tab> tabs = mTabModel.getTabsInGroup(tabGroupId);
         assert !tabs.isEmpty();
         if (tabs.isEmpty()) {
             LogUtils.log(TAG, "Found no tabs in the local group");
@@ -171,9 +175,9 @@ public class LocalTabGroupMutationHelper {
 
         // Update the remaining tabs. If the tab is already there, ensure its URL is up-to-date.
         // If the tab doesn't exist yet, create a new one.
-        int groupStartIndex = TabModelUtils.getTabIndexById(getTabModel(), tabs.get(0).getId());
+        int groupStartIndex = mTabModel.indexOf(tabs.get(0));
         Tab parent = tabs.get(0);
-        boolean wasCollapsed = mTabGroupModelFilter.getTabGroupCollapsed(tabGroupId);
+        boolean wasCollapsed = mTabModel.getTabGroupCollapsed(tabGroupId);
         for (int i = 0; i < tabGroup.savedTabs.size(); i++) {
             SavedTabGroupTab savedTab = tabGroup.savedTabs.get(i);
             int desiredTabModelIndex = groupStartIndex + i;
@@ -186,7 +190,7 @@ public class LocalTabGroupMutationHelper {
             }
 
             // If the tab exists, navigate to the desired URL. Otherwise, create a new tab.
-            String title = savedTab.title == null ? "" : savedTab.title;
+            String title = savedTab.title == null ? UNSET_TAB_GROUP_TITLE : savedTab.title;
             if (localTab != null) {
                 maybeNavigateToUrl(localTab, assertNonNull(savedTab.url), title);
             } else {
@@ -202,11 +206,11 @@ public class LocalTabGroupMutationHelper {
             }
 
             // Move tab if required.
-            getTabModel().moveTab(localTab.getId(), desiredTabModelIndex);
+            mTabModel.moveTab(localTab.getId(), desiredTabModelIndex);
         }
 
         if (!tabsToClose.isEmpty()) {
-            getTabModel()
+            mTabModel
                     .getTabRemover()
                     .forceCloseTabs(
                             TabClosureParams.closeTabs(tabsToClose).allowUndo(false).build());
@@ -214,12 +218,16 @@ public class LocalTabGroupMutationHelper {
         updateTabGroupVisuals(tabGroup, tabGroupId);
         // TODO(crbug.com/346406221): This currently causes the layout strip to flicker as events
         // still escape the filter and kick off animations. Rework somehow to avoid.
-        mTabGroupModelFilter.setTabGroupCollapsed(tabGroupId, wasCollapsed);
+        mTabModel.setTabGroupCollapsed(tabGroupId, wasCollapsed);
     }
 
     /** Helper method to create a tab with a given URL and add it to the tab group. */
     private Tab createTabAndAddToGroup(
             GURL url, String title, int desiredTabModelIndex, Tab parentTab, Token tabGroupId) {
+        if (!TabGroupSyncUtils.isSavableUrl(url)) {
+            title = TabGroupSyncUtils.UNSAVEABLE_TAB_TITLE;
+            url = TabGroupSyncUtils.UNSAVEABLE_URL_OVERRIDE;
+        }
         Tab newTab =
                 mTabCreationDelegate.createBackgroundTab(
                         url, title, parentTab, desiredTabModelIndex);
@@ -228,12 +236,12 @@ public class LocalTabGroupMutationHelper {
 
         List<Tab> tabsToMerge = new ArrayList<>();
         tabsToMerge.add(newTab);
-        int lastTabId = mTabGroupModelFilter.getGroupLastShownTabId(tabGroupId);
+        int lastTabId = mTabModel.getGroupLastShownTabId(tabGroupId);
         assert lastTabId != Tab.INVALID_TAB_ID;
-        mTabGroupModelFilter.mergeListOfTabsToGroup(
+        mTabModel.mergeListOfTabsToGroup(
                 tabsToMerge,
-                getTabModel().getTabByIdChecked(lastTabId),
-                /* notify= */ MergeNotificationType.DONT_NOTIFY);
+                mTabModel.getTabByIdChecked(lastTabId),
+                /* notify= */ TabGroupMergeNotificationType.DONT_NOTIFY);
         return newTab;
     }
 
@@ -249,14 +257,14 @@ public class LocalTabGroupMutationHelper {
     public void closeTabGroup(LocalTabGroupId localGroupId, @ClosingSource int closingSource) {
         LogUtils.log(TAG, "closeTabGroup " + localGroupId);
         Token tabGroupId = localGroupId.tabGroupId;
-        assert mTabGroupModelFilter.tabGroupExists(tabGroupId);
+        assert mTabModel.tabGroupExists(tabGroupId);
 
         SavedTabGroup group = mTabGroupSyncService.getGroup(localGroupId);
         boolean isCollaboration = group != null && !TextUtils.isEmpty(group.collaborationId);
 
         // Close the tabs.
-        List<Tab> tabs = mTabGroupModelFilter.getTabsInGroup(tabGroupId);
-        getTabModel()
+        List<Tab> tabs = mTabModel.getTabsInGroup(tabGroupId);
+        mTabModel
                 .getTabRemover()
                 .forceCloseTabs(
                         TabClosureParams.closeTabs(tabs)
@@ -281,7 +289,7 @@ public class LocalTabGroupMutationHelper {
         }
 
         List<Tab> tabsNotInSync = new ArrayList<>();
-        for (Tab localTab : mTabGroupModelFilter.getTabsInGroup(savedTabGroup.localId.tabGroupId)) {
+        for (Tab localTab : mTabModel.getTabsInGroup(savedTabGroup.localId.tabGroupId)) {
             if (!savedTabIds.contains(localTab.getId())) {
                 tabsNotInSync.add(localTab);
             }
@@ -305,29 +313,28 @@ public class LocalTabGroupMutationHelper {
             return;
         }
 
-        if (TabGroupSyncUtils.isUrlInTabRedirectChain(tab, url)) {
+        // Don't apply redirect chain URLs or non-savable URLs.
+        if (TabGroupSyncUtils.isUrlInTabRedirectChain(tab, syncUrl)
+                || !TabGroupSyncUtils.isSavableUrl(syncUrl)) {
             return;
         }
 
         boolean isCurrentTab =
-                getTabModel().getCurrentTabSupplier().get() != null
-                        && getTabModel().getCurrentTabSupplier().get().getId() == tab.getId();
+                mTabModel.getCurrentTabSupplier().get() != null
+                        && mTabModel.getCurrentTabSupplier().get().getId() == tab.getId();
         mTabCreationDelegate.navigateToUrl(tab, syncUrl, title, isCurrentTab);
     }
 
     private @Nullable Tab getLocalTabInGroup(@Nullable Integer tabId, Token tabGroupId) {
-        Tab tab = tabId == null ? null : getTabModel().getTabById(tabId);
+        Tab tab = tabId == null ? null : mTabModel.getTabById(tabId);
         // Check if the tab is still attached to the same group. If not, it belongs to another
         // group. Don't touch it and rather create a new one in subsequent step.
         return tab != null && tabGroupId.equals(tab.getTabGroupId()) ? tab : null;
     }
 
     private void updateTabGroupVisuals(SavedTabGroup tabGroup, Token tabGroupId) {
-        mTabGroupModelFilter.setTabGroupTitle(tabGroupId, tabGroup.title);
-        mTabGroupModelFilter.setTabGroupColor(tabGroupId, tabGroup.color);
-    }
-
-    private TabModel getTabModel() {
-        return mTabGroupModelFilter.getTabModel();
+        mTabModel.setTabGroupTitle(
+                tabGroupId, tabGroup.title == null ? UNSET_TAB_GROUP_TITLE : tabGroup.title);
+        mTabModel.setTabGroupColor(tabGroupId, tabGroup.color);
     }
 }

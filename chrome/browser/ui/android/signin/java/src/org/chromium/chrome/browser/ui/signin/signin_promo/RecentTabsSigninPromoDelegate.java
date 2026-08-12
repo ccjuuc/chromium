@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 
 import org.chromium.build.annotations.NullMarked;
@@ -23,10 +24,9 @@ import org.chromium.chrome.browser.ui.signin.R;
 import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.SigninFeatures;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 
@@ -151,8 +151,13 @@ public class RecentTabsSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    void onDismissButtonClicked() {
-        throw new IllegalStateException("Recent tabs promos shouldn't have a dismiss button");
+    boolean canBeDismissedPermanently() {
+        return false;
+    }
+
+    @Override
+    void permanentlyDismissPromo() {
+        throw new IllegalStateException("Does not support being dismissed permanently.");
     }
 
     @Override
@@ -161,7 +166,7 @@ public class RecentTabsSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    boolean refreshPromoState(@Nullable CoreAccountInfo visibleAccount) {
+    boolean refreshPromoState(@Nullable DisplayableProfileData visibleAccount) {
         @PromoState int newState = computePromoState();
         boolean wasStateChanged = mPromoState != newState;
         mPromoState = newState;
@@ -169,20 +174,10 @@ public class RecentTabsSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    boolean isSeamlessSigninAllowed() {
-        return SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN);
-    }
-
-    @Override
     boolean shouldHideSecondaryButton() {
         if (SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)) {
             return mPromoState != PromoState.SIGNIN;
         }
-        return true;
-    }
-
-    @Override
-    boolean shouldHideDismissButton() {
         return true;
     }
 
@@ -223,14 +218,35 @@ public class RecentTabsSigninPromoDelegate extends SigninPromoDelegate {
         return mPromoState == PromoState.HISTORY_SYNC;
     }
 
+    @Override
+    String getHistorySyncOptInTitle() {
+        if (SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)) {
+            return mContext.getString(R.string.history_sync_recent_tabs_title);
+        }
+        return super.getHistorySyncOptInTitle();
+    }
+
+    @Override
+    String getHistorySyncOptInSubtitle() {
+        if (SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)) {
+            return mContext.getString(R.string.history_sync_recent_tabs_subtitle);
+        }
+        return super.getHistorySyncOptInSubtitle();
+    }
+
+    @Override
+    @ColorInt
+    int getAccountPickerBackgroundColor() {
+        return SemanticColorUtils.getColorSurface(mContext);
+    }
+
     private @PromoState int computePromoState() {
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(mProfile);
         assumeNonNull(identityManager);
         SigninManager signinManager = IdentityServicesProvider.get().getSigninManager(mProfile);
         assumeNonNull(signinManager);
-        if (!identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)
-                && !signinManager.isSigninAllowed()) {
+        if (!identityManager.hasPrimaryAccount() && !signinManager.isSigninAllowed()) {
             // If sign-in is not possible, then history sync isn't possible either.
             return PromoState.NONE;
         }
@@ -238,8 +254,8 @@ public class RecentTabsSigninPromoDelegate extends SigninPromoDelegate {
         if (!historySyncHelper.shouldDisplayHistorySync()) {
             return PromoState.NONE;
         }
-        if (identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)) {
-                return PromoState.HISTORY_SYNC;
+        if (identityManager.hasPrimaryAccount()) {
+            return PromoState.HISTORY_SYNC;
         }
         return PromoState.SIGNIN;
     }

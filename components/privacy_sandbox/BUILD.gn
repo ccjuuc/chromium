@@ -12,6 +12,7 @@ static_library("privacy_sandbox_prefs") {
   ]
 
   deps = [
+    ":features",
     "//components/pref_registry",
     "//components/prefs",
   ]
@@ -30,10 +31,6 @@ component("features") {
   ]
 
   public_deps = [ "//base" ]
-}
-
-source_set("privacy_sandbox_survey_service") {
-  public = [ "privacy_sandbox_survey_service.h" ]
 }
 
 source_set("tracking_protection_settings") {
@@ -55,10 +52,10 @@ source_set("tracking_protection_settings") {
   public_deps = [ "//base" ]
 }
 
-# These sources depend on targets from "//content/browser", which means they can only
-# be loaded on Blink builds.
-# NOTE: If/when targets used on iOS are refactored into a separate BUILD file, this
-# check can be removed.
+# These sources depend on targets from "//content/browser", which means they can
+# only be loaded on Blink builds.
+# NOTE: If/when targets used on iOS are refactored into a separate BUILD file,
+# this check can be removed.
 if (use_blink) {
   source_set("privacy_sandbox_settings_headers") {
     sources = [
@@ -67,7 +64,6 @@ if (use_blink) {
     ]
 
     deps = [
-      "//components/browsing_topics/common",
       "//components/keyed_service/core",
       "//components/pref_registry",
       "//components/prefs",
@@ -88,8 +84,6 @@ if (use_blink) {
 
     deps = [
       ":privacy_sandbox_prefs",
-      ":privacy_sandbox_survey_service",
-      "//components/browsing_topics/common",
       "//components/content_settings/core/browser",
       "//components/content_settings/core/browser:cookie_settings",
       "//components/content_settings/core/common",
@@ -125,7 +119,6 @@ if (use_blink) {
       ":privacy_sandbox",
       ":privacy_sandbox_prefs",
       "//base/test:test_support",
-      "//components/browsing_topics:test_support",
       "//components/content_settings/core/browser",
       "//components/content_settings/core/common",
       "//components/content_settings/core/test:test_support",
@@ -174,7 +167,6 @@ source_set("unit_tests") {
     deps += [
       ":privacy_sandbox",
       ":test_support",
-      "//components/browsing_topics:test_support",
       "//components/content_settings/core/test:test_support",
       "//components/privacy_sandbox/privacy_sandbox_attestations",
       "//components/privacy_sandbox/privacy_sandbox_attestations:test_support",

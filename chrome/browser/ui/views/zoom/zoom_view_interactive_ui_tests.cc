@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_coordinator.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -35,14 +34,7 @@ namespace {
 
 class ZoomViewInteractiveUiTest : public InteractiveBrowserTest {
  public:
-  ZoomViewInteractiveUiTest() {
-    // TODO(crbug.com/441102004): Update ShowAndHideZoomBubbleByClickWithMouse
-    //   to support kAiModeOmniboxEntryPoint.
-    scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{features::kPageActionsMigration,
-          {{features::kPageActionsMigrationZoom.name, "true"}}}},
-        {omnibox::kAiModeOmniboxEntryPoint});
-  }
+  ZoomViewInteractiveUiTest() = default;
 
   ZoomViewInteractiveUiTest(const ZoomViewInteractiveUiTest&) = delete;
   ZoomViewInteractiveUiTest& operator=(const ZoomViewInteractiveUiTest&) =
@@ -107,6 +99,9 @@ IN_PROC_BROWSER_TEST_F(ZoomViewInteractiveUiTest, ZoomStateUpdates) {
       CheckViewProperty(kActionItemZoomElementId,
                         &page_actions::PageActionView::GetTooltipText,
                         u"Zoom: 110%"),
+      CheckViewProperty(kActionItemZoomElementId,
+                        &page_actions::PageActionView::GetAccessibleName,
+                        u"Zoom: 110%"),
       CheckResult([&]() { return GetZoomPercent(); }, testing::Eq(110)),
       WithView(kActionItemZoomElementId,
                [&](page_actions::PageActionView* page_action_view) {
@@ -120,6 +115,9 @@ IN_PROC_BROWSER_TEST_F(ZoomViewInteractiveUiTest, ZoomStateUpdates) {
       DoZoomOut(), WaitForShow(kActionItemZoomElementId),
       CheckViewProperty(kActionItemZoomElementId,
                         &page_actions::PageActionView::GetTooltipText,
+                        u"Zoom: 90%"),
+      CheckViewProperty(kActionItemZoomElementId,
+                        &page_actions::PageActionView::GetAccessibleName,
                         u"Zoom: 90%"),
       CheckResult([&]() { return GetZoomPercent(); }, testing::Eq(90)),
       CheckView(kActionItemZoomElementId,
@@ -189,6 +187,23 @@ IN_PROC_BROWSER_TEST_F(ZoomViewInteractiveUiTest,
                   CheckResult([&] { return GetZoomPercent(); }, 100),
                   WaitForZoomBubbleHide(),
                   WaitForHide(kActionItemZoomElementId));
+}
+
+IN_PROC_BROWSER_TEST_F(ZoomViewInteractiveUiTest,
+                       AccessibleNameUpdatesWhileBubbleVisible) {
+  RunTestSequence(
+      WaitForZoomBubbleHide(), DoZoomIn(),
+      WaitForShow(kActionItemZoomElementId),
+      CheckResult([&]() { return GetZoomPercent(); }, testing::Eq(110)),
+      CheckViewProperty(kActionItemZoomElementId,
+                        &page_actions::PageActionView::GetAccessibleName,
+                        u"Zoom: 110%"),
+      MoveMouseTo(kActionItemZoomElementId), ClickMouse(),
+      WaitForZoomBubbleShow(), DoZoomIn(),
+      CheckViewProperty(kActionItemZoomElementId,
+                        &page_actions::PageActionView::GetAccessibleName,
+                        u"Zoom: 125%"),
+      WaitForZoomBubbleShow());
 }
 
 }  // namespace

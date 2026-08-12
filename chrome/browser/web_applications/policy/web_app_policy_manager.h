@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/feature.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/externally_managed_app_manager.h"
-#include "chrome/browser/web_applications/isolated_web_apps/policy/isolated_web_app_policy_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/render_frame_host.h"
@@ -26,8 +26,8 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate_map.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -42,6 +42,7 @@ namespace web_app {
 
 BASE_DECLARE_FEATURE(kDesktopPWAsForceUnregisterOSIntegration);
 
+class WebApp;
 class WebAppProvider;
 
 // Policy installation allows enterprise admins to control and manage
@@ -146,6 +147,9 @@ class WebAppPolicyManager {
 
   bool IsPreventCloseEnabled(const webapps::AppId& app_id) const;
 
+  // Gets the `effective_web_apps_user_installable_policy_` value.
+  bool GetEffectiveInstallPolicyValue();
+
   void RefreshPolicyInstalledAppsForTesting(
       bool allow_close_and_relaunch = false);
 
@@ -153,7 +157,7 @@ class WebAppPolicyManager {
   friend class WebAppPolicyManagerTestBase;
 
   struct WebAppSetting {
-    bool Parse(const base::Value::Dict& dict, bool for_default_settings);
+    bool Parse(const base::DictValue& dict, bool for_default_settings);
 
     RunOnOsLoginPolicy run_on_os_login_policy = RunOnOsLoginPolicy::kAllowed;
     bool prevent_close = false;
@@ -195,13 +199,13 @@ class WebAppPolicyManager {
   RunOnOsLoginPolicy GetUrlRunOnOsLoginPolicyByManifestId(
       const std::string& manifest_id) const;
 
-  // Parses install options from a `base::Value::Dict`, which represents one
+  // Parses install options from a `base::DictValue`, which represents one
   // entry of the kWepAppInstallForceList. If the value contains a custom_name
   // or custom_icon, it is inserted into the custom_manifest_values_by_url_ map.
   // If the install_url in the entry is invalid, returns a `std::nullopt`, so
   // that installation can be skipped.
   std::optional<ExternalInstallOptions> ParseInstallPolicyEntry(
-      const base::Value::Dict& entry);
+      const base::DictValue& entry);
 
   void ObserveDisabledSystemFeaturesPolicy();
 
@@ -243,6 +247,11 @@ class WebAppPolicyManager {
 
   bool is_refreshing_ = false;
   bool needs_refresh_ = false;
+
+  // The web app system source of truth for the WebAppInstallByUserEnabled
+  // policy. By design, this policy cannot be modified during the browser
+  // session. This policy does not support dynamic refresh.
+  bool effective_web_apps_user_installable_policy_ = true;
 
   base::flat_map<std::string, WebAppSetting> settings_by_url_;
   base::flat_map<GURL, CustomManifestValues> custom_manifest_values_by_url_;

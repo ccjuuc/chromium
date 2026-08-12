@@ -38,9 +38,6 @@ const CGFloat kEntrypointHeightMultiplier = 0.72;
 const CGFloat kLabelTrailingSpaceMultiplier = 0.375;
 const CGFloat kLabelLeadingSpaceMultiplier = 0.095;
 
-// Entrypoint and Infobar badges separator constants.
-const CGFloat kSeparatorHeightMultiplier = 0.35;
-const CGFloat kSeparatorWidthConstant = 1;
 
 // Amount of time animating the entrypoint into the location bar should take.
 const NSTimeInterval kEntrypointDisplayingAnimationTime = 0.3;
@@ -79,9 +76,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   UIImageView* _imageView;
   UILabel* _label;
 
-  // The small vertical pill-shaped line separating the Contextual Panel
-  // entrypoint and Infobar badges, if present.
-  UIView* _separator;
 
   // Constraints for the two states of the trailing edge of the entrypoint
   // container. They are activated/deactivated as needed when the label is
@@ -125,10 +119,8 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   _entrypointItemsWrapper = [self configuredEntrypointItemsWrapper];
   _imageView = [self configuredImageView];
   _label = [self configuredLabel];
-  _separator = [self configuredSeparator];
 
   [self.view addSubview:_entrypointContainer];
-  [self.view addSubview:_separator];
   [_entrypointContainer addSubview:_entrypointItemsWrapper];
   [_entrypointItemsWrapper addSubview:_imageView];
   [_entrypointItemsWrapper addSubview:_label];
@@ -155,7 +147,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   _entrypointItemsWrapper.layer.cornerRadius =
       _entrypointItemsWrapper.bounds.size.height / 2.0;
 
-  _separator.layer.cornerRadius = _separator.bounds.size.width / 2.0;
 }
 
 - (void)displayEntrypointView:(BOOL)display {
@@ -269,6 +260,7 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   UILabel* label = [[UILabel alloc] init];
   label.translatesAutoresizingMaskIntoConstraints = NO;
   label.font = [self entrypointLabelFont];
+  label.textColor = [UIColor colorNamed:kTextPrimaryColor];
   label.numberOfLines = 1;
   label.accessibilityIdentifier = kContextualPanelEntrypointLabelIdentifier;
   label.isAccessibilityElement = NO;
@@ -279,16 +271,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   return label;
 }
 
-// Creates and configures the entrypoint's pill-shaped separator (vertical
-// line).
-- (UIView*)configuredSeparator {
-  UIView* view = [[UIView alloc] init];
-  view.translatesAutoresizingMaskIntoConstraints = NO;
-  view.isAccessibilityElement = NO;
-  view.backgroundColor = [UIColor colorNamed:kGrey400Color];
-
-  return view;
-}
 
 - (void)activateInitialConstraints {
   // Leading space before the start of the button container view.
@@ -323,12 +305,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
         constraintEqualToAnchor:_entrypointContainer.leadingAnchor],
     [_entrypointContainer.leadingAnchor
         constraintEqualToAnchor:entrypointLeadingSpace.trailingAnchor],
-    [_separator.centerXAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-    [_separator.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
-    [_separator.widthAnchor constraintEqualToConstant:kSeparatorWidthConstant],
-    [_separator.heightAnchor
-        constraintEqualToAnchor:self.view.heightAnchor
-                     multiplier:kSeparatorHeightMultiplier],
     [_entrypointContainer.heightAnchor
         constraintEqualToAnchor:self.view.heightAnchor
                      multiplier:kEntrypointHeightMultiplier],
@@ -403,10 +379,7 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
 // Sets the proper entrypoint visual features depending on current infobar
 // badges status and whether the Contextual Panel is open.
 - (void)refreshEntrypointVisualElements {
-  BOOL shouldAccountForVisibleInfobarBadges =
-      _infobarBadgesCurrentlyShown && !IsReaderModeAvailable();
-  BOOL shouldShowMutedColors =
-      shouldAccountForVisibleInfobarBadges || _entrypointTapped;
+  BOOL shouldShowMutedColors = _entrypointTapped;
 
   // Entrypoint icon tint color.
   _imageView.tintColor = shouldShowMutedColors
@@ -418,10 +391,7 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
       shouldShowMutedColors ? 0 : kEntrypointContainerShadowOpacity;
 
   // Entrypoint container background color.
-  UIColor* untappedEntrypointColor =
-      shouldAccountForVisibleInfobarBadges
-          ? nil
-          : [UIColor colorNamed:kBackgroundColor];
+  UIColor* untappedEntrypointColor = [UIColor colorNamed:kBackgroundColor];
 
   UIColor* entrypointContainerBackgroundColor =
       _entrypointTapped ? [UIColor colorNamed:kGrey100Color]
@@ -429,9 +399,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
   _entrypointContainer.configuration =
       [self entrypointContainerConfigurationWithBackgroundColor:
                 entrypointContainerBackgroundColor];
-
-  // Separator visibility.
-  _separator.hidden = !_infobarBadgesCurrentlyShown;
 }
 
 // Applies the correct color to the entrypoint (highlighted blue when the
@@ -485,21 +452,8 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
 
   _label.text = base::SysUTF8ToNSString(config->entrypoint_message);
 
-  UIImage* image;
-  switch (config->image_type) {
-    case ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol:
-      image = DefaultSymbolWithPointSize(
-          base::SysUTF8ToNSString(config->entrypoint_image_name),
-          kEntrypointSymbolPointSize);
-      break;
-    case ContextualPanelItemConfiguration::EntrypointImageType::Image:
-      image = CustomSymbolWithPointSize(
-          base::SysUTF8ToNSString(config->entrypoint_image_name),
-          kEntrypointSymbolPointSize);
-      break;
-  }
-
-  _imageView.image = image;
+  _imageView.image = SymbolWithPointSize(config->entrypoint_symbol,
+                                         kEntrypointSymbolPointSize);
 }
 
 - (void)setInfobarBadgesCurrentlyShown:(BOOL)infobarBadgesCurrentlyShown {
@@ -641,10 +595,6 @@ NSString* const kContextualPanelEntrypointLabelIdentifier =
 }
 
 - (void)setEntrypointColored:(BOOL)colored {
-  if (!ShouldHighlightContextualPanelEntrypointDuringIPH()) {
-    return;
-  }
-
   __weak ContextualPanelEntrypointViewController* weakSelf = self;
 
   [UIView animateWithDuration:kEntrypointDisplayingAnimationTime

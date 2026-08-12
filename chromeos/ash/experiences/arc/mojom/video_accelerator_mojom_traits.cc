@@ -5,6 +5,7 @@
 #include "chromeos/ash/experiences/arc/mojom/video_accelerator_mojom_traits.h"
 
 #include "base/notimplemented.h"
+#include "base/notreached.h"
 
 namespace mojo {
 
@@ -67,23 +68,8 @@ CHECK_PROFILE_ENUM(HEVCPROFILE_SCREEN_EXTENDED);
 CHECK_PROFILE_ENUM(HEVCPROFILE_SCALABLE_REXT);
 CHECK_PROFILE_ENUM(HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED);
 CHECK_PROFILE_ENUM(HEVCPROFILE_EXT_MAX);
-CHECK_PROFILE_ENUM(VVCPROFILE_MIN);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN10);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12_INTRA);
-CHECK_PROFILE_ENUM(VVCPROIFLE_MULTILAYER_MAIN10);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN10_444);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12_444);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN16_444);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12_444_INTRA);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN16_444_INTRA);
-CHECK_PROFILE_ENUM(VVCPROFILE_MULTILAYER_MAIN10_444);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN10_STILL_PICTURE);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12_STILL_PICTURE);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN10_444_STILL_PICTURE);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN12_444_STILL_PICTURE);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAIN16_444_STILL_PICTURE);
-CHECK_PROFILE_ENUM(VVCPROFILE_MAX);
+CHECK_PROFILE_ENUM(DOLBYVISION_PROFILE10);
+CHECK_PROFILE_ENUM(DOLBYVISION_PROFILE20);
 CHECK_PROFILE_ENUM(VIDEO_CODEC_PROFILE_MAX);
 
 #undef CHECK_PROFILE_ENUM
@@ -96,9 +82,9 @@ EnumTraits<arc::mojom::VideoCodecProfile, media::VideoCodecProfile>::ToMojom(
 }
 
 // static
-bool EnumTraits<arc::mojom::VideoCodecProfile, media::VideoCodecProfile>::
-    FromMojom(arc::mojom::VideoCodecProfile input,
-              media::VideoCodecProfile* output) {
+std::optional<media::VideoCodecProfile>
+EnumTraits<arc::mojom::VideoCodecProfile, media::VideoCodecProfile>::FromMojom(
+    arc::mojom::VideoCodecProfile input) {
   switch (input) {
     case arc::mojom::VideoCodecProfile::VIDEO_CODEC_PROFILE_UNKNOWN:
     case arc::mojom::VideoCodecProfile::H264PROFILE_BASELINE:
@@ -138,28 +124,14 @@ bool EnumTraits<arc::mojom::VideoCodecProfile, media::VideoCodecProfile>::
     case arc::mojom::VideoCodecProfile::AV1PROFILE_PROFILE_MAIN:
     case arc::mojom::VideoCodecProfile::AV1PROFILE_PROFILE_HIGH:
     case arc::mojom::VideoCodecProfile::AV1PROFILE_PROFILE_PRO:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN10:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12_INTRA:
-    case arc::mojom::VideoCodecProfile::VVCPROIFLE_MULTILAYER_MAIN10:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN10_444:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12_444:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN16_444:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12_444_INTRA:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN16_444_INTRA:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MULTILAYER_MAIN10_444:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN10_STILL_PICTURE:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12_STILL_PICTURE:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN10_444_STILL_PICTURE:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN12_444_STILL_PICTURE:
-    case arc::mojom::VideoCodecProfile::VVCPROFILE_MAIN16_444_STILL_PICTURE:
-      *output = static_cast<media::VideoCodecProfile>(input);
-      return true;
+    case arc::mojom::VideoCodecProfile::DOLBYVISION_PROFILE10:
+    case arc::mojom::VideoCodecProfile::DOLBYVISION_PROFILE20:
+      return static_cast<media::VideoCodecProfile>(input);
   }
   VLOG(1) << "unknown profile: "
           << media::GetProfileName(
                  static_cast<media::VideoCodecProfile>(input));
-  return false;
+  return std::nullopt;
 }
 
 // Make sure values in arc::mojom::VideoPixelFormat match to the values in
@@ -202,9 +174,9 @@ EnumTraits<arc::mojom::VideoPixelFormat, media::VideoPixelFormat>::ToMojom(
 }
 
 // static
-bool EnumTraits<arc::mojom::VideoPixelFormat, media::VideoPixelFormat>::
-    FromMojom(arc::mojom::VideoPixelFormat input,
-              media::VideoPixelFormat* output) {
+std::optional<media::VideoPixelFormat>
+EnumTraits<arc::mojom::VideoPixelFormat, media::VideoPixelFormat>::FromMojom(
+    arc::mojom::VideoPixelFormat input) {
   switch (input) {
     case arc::mojom::VideoPixelFormat::PIXEL_FORMAT_UNKNOWN:
     case arc::mojom::VideoPixelFormat::PIXEL_FORMAT_I420:
@@ -214,8 +186,7 @@ bool EnumTraits<arc::mojom::VideoPixelFormat, media::VideoPixelFormat>::
     case arc::mojom::VideoPixelFormat::PIXEL_FORMAT_ARGB:
     case arc::mojom::VideoPixelFormat::PIXEL_FORMAT_ABGR:
     case arc::mojom::VideoPixelFormat::PIXEL_FORMAT_XBGR:
-      *output = static_cast<media::VideoPixelFormat>(input);
-      return true;
+      return static_cast<media::VideoPixelFormat>(input);
   }
   NOTREACHED();
 }
@@ -302,25 +273,20 @@ EnumTraits<arc::mojom::DecoderStatus, media::DecoderStatus>::ToMojom(
 }
 
 // static
-bool EnumTraits<arc::mojom::DecoderStatus, media::DecoderStatus>::FromMojom(
-    arc::mojom::DecoderStatus input,
-    media::DecoderStatus* output) {
+std::optional<media::DecoderStatus>
+EnumTraits<arc::mojom::DecoderStatus, media::DecoderStatus>::FromMojom(
+    arc::mojom::DecoderStatus input) {
   switch (input) {
     case arc::mojom::DecoderStatus::OK:
-      *output = media::DecoderStatus::Codes::kOk;
-      return true;
+      return media::DecoderStatus::Codes::kOk;
     case arc::mojom::DecoderStatus::ABORTED:
-      *output = media::DecoderStatus::Codes::kAborted;
-      return true;
+      return media::DecoderStatus::Codes::kAborted;
     case arc::mojom::DecoderStatus::FAILED:
-      *output = media::DecoderStatus::Codes::kFailed;
-      return true;
+      return media::DecoderStatus::Codes::kFailed;
     case arc::mojom::DecoderStatus::CREATION_FAILED:
-      *output = media::DecoderStatus::Codes::kFailedToCreateDecoder;
-      return true;
+      return media::DecoderStatus::Codes::kFailedToCreateDecoder;
     case arc::mojom::DecoderStatus::INVALID_ARGUMENT:
-      *output = media::DecoderStatus::Codes::kInvalidArgument;
-      return true;
+      return media::DecoderStatus::Codes::kInvalidArgument;
   }
   NOTREACHED() << "unknown status: " << static_cast<int>(input);
 }

@@ -48,6 +48,12 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO) AudioDevicesPrefHandler
   virtual uint32_t GetVoiceIsolationPreferredEffect() const = 0;
   virtual void SetVoiceIsolationPreferredEffect(uint32_t effect) = 0;
 
+  // Reads whether input krisp noise cancellation is on from profile prefs.
+  virtual bool GetKrispNoiseCancellationState() = 0;
+  // Sets the input krisp noise cancellation in profile prefs.
+  virtual void SetKrispNoiseCancellationState(
+      bool krisp_noise_cancellation_state) = 0;
+
   // Reads whether input noise cancellation is on from profile prefs.
   virtual bool GetNoiseCancellationState() = 0;
   // Sets the input noise cancellation in profile prefs.
@@ -97,7 +103,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_AUDIO) AudioDevicesPrefHandler
       const AudioDevice& preferred_device) = 0;
 
   // Gets the preferred device stable id given a set of devices from prefs.
-  virtual const base::Value::List& GetMostRecentActivatedDeviceIdList(
+  virtual const base::ListValue& GetMostRecentActivatedDeviceIdList(
       bool is_input) = 0;
 
   virtual void UpdateMostRecentActivatedDeviceIdList(

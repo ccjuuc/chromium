@@ -14,6 +14,7 @@
 #include "base/containers/circular_deque.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/types.h"
 #include "components/sync/base/collaboration_id.h"

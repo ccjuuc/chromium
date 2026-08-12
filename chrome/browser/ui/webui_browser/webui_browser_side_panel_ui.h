@@ -7,8 +7,8 @@
 
 #include <optional>
 
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui_base.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui_base.h"
 
 class Browser;
 class WebUIBrowserWindow;
@@ -23,8 +23,7 @@ class WebUIBrowserSidePanelUI : public SidePanelUIBase {
   ~WebUIBrowserSidePanelUI() override;
 
   // SidePanelUI:
-  void Close(SidePanelEntry::PanelType panel_type,
-             SidePanelEntryHideReason reason,
+  void Close(SidePanelEntryHideReason reason,
              bool suppress_animations) override;
   void Toggle(SidePanelEntryKey key,
               SidePanelOpenTrigger open_trigger) override;
@@ -36,17 +35,17 @@ class WebUIBrowserSidePanelUI : public SidePanelUIBase {
 
   content::WebContents* GetWebContentsForId(SidePanelEntryId entry_id) const;
 
-  void OnSidePanelClosed(SidePanelEntry::PanelType type);
+  void OnSidePanelClosed();
 
  private:
   // SidePanelUIBase:
   void Show(const UniqueKey& entry,
-            std::optional<SidePanelUtil::SidePanelOpenTrigger> open_trigger,
+            std::optional<SidePanelOpenTrigger> open_trigger,
             bool suppress_animations) override;
   void PopulateSidePanel(
       bool suppress_animations,
       const UniqueKey& unique_key,
-      std::optional<SidePanelUtil::SidePanelOpenTrigger> open_trigger,
+      std::optional<SidePanelOpenTrigger> open_trigger,
       SidePanelEntry* entry,
       std::optional<std::unique_ptr<views::View>> content_view) override;
   void MaybeShowEntryOnTabStripModelChanged(

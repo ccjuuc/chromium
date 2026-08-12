@@ -51,6 +51,35 @@ class MODULES_EXPORT ML final : public ScriptWrappable,
   // mojo interface.
   void EnsureWebNNServiceConnection();
 
+  // Creates an in-renderer WebNN context provider for CPU inference that
+  // bypasses the GPU process entirely. The provider is created in the renderer
+  // process and bound to a local Mojo self-pipe.
+  void EnsureInProcessServiceConnection();
+
+  // Reset the remote of the in-renderer `WebNNContextProvider` if the
+  // remote is cut off from its receiver.
+  void OnInProcessServiceConnectionError();
+
+  // Creates a WebNN context using the in-renderer backend. Called as a
+  // fallback when the GPU-process backend signals via
+  // `Error::Code::kFallbackToInProcess`.
+  void CreateInProcessContext(ScriptPromiseResolver<MLContext>* resolver,
+                              MLContextOptions* options,
+                              webnn::ScopedTrace scoped_trace);
+
+  // In-renderer context provider for CPU device, bypassing the GPU process.
+  // Uses a cross-variant Mojo pipe: the blink-variant remote is connected to
+  // a non-blink receiver hosting WebNNContextProviderInRenderer. The wire
+  // format is identical across variants.
+  HeapMojoRemote<webnn::mojom::blink::WebNNContextProvider>
+      in_process_context_provider_;
+
+  // Resolvers for requests currently in-flight on the in-renderer path.
+  // Kept separate from `pending_resolvers_` so that a GPU-process disconnect
+  // does not incorrectly reject in-renderer requests (and vice-versa).
+  HeapHashSet<Member<ScriptPromiseResolver<MLContext>>>
+      in_process_pending_resolvers_;
+
   // WebNN support multiple types of neural network inference hardware
   // acceleration such as CPU, GPU and ML specialized accelerator, the context
   // of webnn in service is used to map different device and represent a state
@@ -58,8 +87,8 @@ class MODULES_EXPORT ML final : public ScriptWrappable,
   HeapMojoRemote<webnn::mojom::blink::WebNNContextProvider>
       webnn_context_provider_;
 
-  // Keep a set of unresolved `ScriptPromiseResolver`s which will be
-  // rejected when the Mojo pipe is unexpectedly disconnected.
+  // Resolvers for requests currently in-flight on the GPU-process
+  // WebNN backend. Rejected when that Mojo pipe disconnects.
   HeapHashSet<Member<ScriptPromiseResolver<MLContext>>> pending_resolvers_;
 };
 

@@ -33,11 +33,14 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetViewBinder;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator;
 import org.chromium.chrome.browser.ntp_customization.R;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.browser_ui.widget.MaterialSwitchWithText;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -48,18 +51,22 @@ public class MvtSettingsCoordinatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock BottomSheetDelegate mBottomSheetDelegate;
+    @Mock Profile mProfile;
+
     private MvtSettingsCoordinator mCoordinator;
     private Context mContext;
     private PropertyModel mPropertyModel;
+    private final SettableMonotonicObservableSupplier<Profile> mProfileSupplier =
+            ObservableSuppliers.createMonotonic();
 
     @Before
     public void setUp() {
         mContext =
                 new ContextThemeWrapper(
                         ApplicationProvider.getApplicationContext(),
-                        org.chromium.chrome.browser.ntp_customization.R.style
-                                .Theme_BrowserUI_DayNight);
-        mCoordinator = new MvtSettingsCoordinator(mContext, mBottomSheetDelegate);
+                        R.style.Theme_BrowserUI_DayNight);
+        mProfileSupplier.set(mProfile);
+        mCoordinator = new MvtSettingsCoordinator(mContext, mBottomSheetDelegate, mProfileSupplier);
         mPropertyModel = new PropertyModel(BOTTOM_SHEET_KEYS);
     }
 

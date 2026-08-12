@@ -6,36 +6,31 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_METRICS_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <memory>
-#include <set>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
 #include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ref.h"
+#include "base/memory/stack_allocated.h"
 #include "base/time/time.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/metrics/form_events/form_events.h"
-#include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/browser/ui/popup_interaction.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-forward.h"
-#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
-#include "components/security_state/core/security_state.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
@@ -456,6 +451,15 @@ class AutofillMetrics {
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
+  enum class AtMemoryTriggerSource {
+    kTypedTrigger = 0,
+    kContextMenu = 1,
+    kKeyboardShortcut = 2,
+    kMaxValue = kKeyboardShortcut
+  };
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
   //
   // Represents the status of Autofill prompts when at least one prompt can be
   // displayed.
@@ -599,14 +603,14 @@ class AutofillMetrics {
   static void LogScanCreditCardPromptMetric(ScanCreditCardPromptMetric metric);
   static void LogProgressDialogResultMetric(
       bool is_canceled_by_user,
-      AutofillProgressDialogType autofill_progress_dialog_type);
+      AutofillProgressUiType autofill_progress_dialog_type);
   static void LogProgressDialogShown(
-      AutofillProgressDialogType autofill_progress_dialog_type);
+      AutofillProgressUiType autofill_progress_dialog_type);
 
-  // Returns a string representation of the given AutofillProgressDialogType for
+  // Returns a string representation of the given AutofillProgressUiType for
   // constructing subhistogram paths.
   static std::string_view GetDialogTypeStringForLogging(
-      AutofillProgressDialogType autofill_progress_dialog_type);
+      AutofillProgressUiType autofill_progress_dialog_type);
 
   // Should be called when credit card scan is finished. |duration| should be
   // the time elapsed between launching the credit card scanner and getting back
@@ -880,7 +884,7 @@ class AutofillMetrics {
   // Returns the histogram string for the passed in
   // `payments::PaymentsAutofillClient::PaymentsRpcCardType` or
   // `CreditCard::RecordType`, starting with a period.
-  static std::string GetHistogramStringForCardType(
+  static std::string_view GetHistogramStringForCardType(
       std::variant<payments::PaymentsAutofillClient::PaymentsRpcCardType,
                    CreditCard::RecordType> card_type);
 
@@ -929,7 +933,7 @@ int GetFieldTypeUserEditStatusMetric(
 std::string GetCreditCardTypeSuffix(
     payments::PaymentsAutofillClient::PaymentsRpcCardType card_type);
 
-const std::string PaymentsRpcResultToMetricsSuffix(
+const std::string_view PaymentsRpcResultToMetricsSuffix(
     payments::PaymentsAutofillClient::PaymentsRpcResult result);
 
 }  // namespace autofill

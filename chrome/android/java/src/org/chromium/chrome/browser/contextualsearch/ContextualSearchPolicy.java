@@ -19,7 +19,7 @@ import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.version_info.VersionInfo;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchInternalStateController.InternalState;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchSelectionController.SelectionType;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchUma.ContextualSearchPreference;
@@ -32,6 +32,7 @@ import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.signin.services.UnifiedConsentServiceBridge;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.url.GURL;
@@ -274,10 +275,11 @@ class ContextualSearchPolicy {
     }
 
     /**
-     * Returns whether a transition that is both from and to the given state should be done.
-     * This allows prevention of the short-circuiting that ignores a state transition to the current
+     * Returns whether a transition that is both from and to the given state should be done. This
+     * allows prevention of the short-circuiting that ignores a state transition to the current
      * state in cases where rerunning the current state might safeguard against problematic
      * behavior.
+     *
      * @param state The current state, which is also the state being transitioned into.
      * @return {@code true} to go ahead with the logic for that state transition even though we're
      *     already in that state. {@code false} indicates that ignoring this redundant state
@@ -285,7 +287,7 @@ class ContextualSearchPolicy {
      */
     boolean shouldRetryCurrentState(@InternalState int state) {
         // Make sure we don't get stuck in the IDLE state if the panel is still showing.
-        // See https://crbug.com/1251774
+        // See https://crbug.com/40792729
         return state == InternalState.IDLE
                 && mSearchPanel != null
                 && (mSearchPanel.isShowing() || mSearchPanel.isActive());
@@ -306,6 +308,7 @@ class ContextualSearchPolicy {
      * @return Whether the Contextual Search feature was disabled by the user explicitly.
      */
     static boolean isContextualSearchDisabled(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return true;
         return UserPrefs.get(profile)
                 .getString(Pref.CONTEXTUAL_SEARCH_ENABLED)
                 .equals(CONTEXTUAL_SEARCH_DISABLED);
@@ -316,6 +319,7 @@ class ContextualSearchPolicy {
      * @return Whether the Contextual Search feature was enabled by the user explicitly.
      */
     static boolean isContextualSearchEnabled(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return false;
         return UserPrefs.get(profile)
                 .getString(Pref.CONTEXTUAL_SEARCH_ENABLED)
                 .equals(CONTEXTUAL_SEARCH_ENABLED);
@@ -327,6 +331,7 @@ class ContextualSearchPolicy {
      *     user).
      */
     static boolean isContextualSearchUninitialized(Profile profile) {
+        if (OmniboxCapabilities.isDesktopPlatform()) return false;
         return UserPrefs.get(profile).getString(Pref.CONTEXTUAL_SEARCH_ENABLED).isEmpty();
     }
 

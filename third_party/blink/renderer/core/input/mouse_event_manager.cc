@@ -14,6 +14,7 @@
 #include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/focus_params.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -28,6 +29,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_label_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_dialog_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/input/event_handler.h"
@@ -226,7 +228,6 @@ MouseEventManager::DispatchMouseEvent(
         mouse_event_type == event_type_names::kAuxclick) {
       click_count = click_count_;
     }
-    std::optional<EventTiming> event_timing;
     bool should_dispatch =
         !check_for_listener || target->HasEventListeners(mouse_event_type);
     if (mouse_event_type == event_type_names::kContextmenu ||
@@ -263,10 +264,8 @@ MouseEventManager::DispatchMouseEvent(
         HTMLDialogElement::HandleDialogLightDismissForClick(
             *pointer_down_target, *pointer_up_target);
       }
-      if (frame_ && frame_->DomWindow()) {
-        event_timing =
-            EventTiming::TryCreate(frame_->DomWindow(), *event, target);
-      }
+      UIEventTiming event_timing(frame_, *event);
+
       if (should_dispatch) {
         input_event_result = event_handling_util::ToWebInputEventResult(
             target->DispatchEvent(*event));
@@ -282,10 +281,8 @@ MouseEventManager::DispatchMouseEvent(
           mouse_event.FromTouch() ? MouseEvent::kFromTouch
                                   : MouseEvent::kRealOrIndistinguishable,
           mouse_event.menu_source_type);
-      if (frame_ && frame_->DomWindow()) {
-        event_timing =
-            EventTiming::TryCreate(frame_->DomWindow(), *event, target);
-      }
+      UIEventTiming event_timing(frame_, *event);
+
       if (should_dispatch) {
         input_event_result = event_handling_util::ToWebInputEventResult(
             target->DispatchEvent(*event));
@@ -377,14 +374,14 @@ WebInputEventResult MouseEventManager::DispatchMouseClickIfNeeded(
 }
 
 void MouseEventManager::RecomputeMouseHoverStateIfNeeded() {
-  // |RecomputeMouseHoverState| may set |hover_state_dirty_| to be true.
-  if (HoverStateDirty()) {
-    hover_state_dirty_ = false;
-    RecomputeMouseHoverState();
+  if (!HoverStateDirty()) {
+    return;
   }
-}
+  // JS listeners for this fake mouse event could force a re-layout, which calls
+  // `PerformPostLayoutTasks()` on completion, which unconditionally calls
+  // `MarkHoverStateDirty()` and sets `hover_state_dirty_` back to to `true`.
+  hover_state_dirty_ = false;
 
-void MouseEventManager::RecomputeMouseHoverState() {
   if (is_mouse_position_unknown_)
     return;
 
@@ -392,8 +389,13 @@ void MouseEventManager::RecomputeMouseHoverState() {
   if (!view)
     return;
 
-  if (!frame_->GetPage() || !frame_->GetPage()->GetFocusController().IsActive())
+  const bool should_page_receive_mouse_hover =
+      frame_->GetPage() &&
+      (RuntimeEnabledFeatures::SyntheticMouseHoverOverInactivePageEnabled() ||
+       frame_->GetPage()->GetFocusController().IsActive());
+  if (!should_page_receive_mouse_hover) {
     return;
+  }
 
   // Don't dispatch a synthetic mouse move event if the mouse cursor is not
   // visible to the user.
@@ -403,6 +405,12 @@ void MouseEventManager::RecomputeMouseHoverState() {
   // Don't dispatch a synthetic event if pointer is locked.
   if (frame_->GetPage()->GetPointerLockController().GetElement())
     return;
+
+  // Don't dispatch a synthetic event if a drag is ongoing.
+  if (RuntimeEnabledFeatures::SuppressPointerStreamAfterDragEnabled() &&
+      frame_->GetPage()->GetDragController().GetDragState().drag_src_) {
+    return;
+  }
 
   WebPointerEvent::Button button = WebPointerProperties::Button::kNoButton;
   int modifiers = KeyboardEventManager::GetCurrentModifierState() |
@@ -464,13 +472,40 @@ void MouseEventManager::NodeWillBeRemoved(Node& node) {
   HandleRemoveSubtree(node, /*include_root=*/true);
 }
 
+void MouseEventManager::HandlePseudoElementRemoval(PseudoElement& pseudo) {
+  Element* parent = pseudo.ParentOrShadowHostElement();
+  if (mousedown_element_ && mousedown_element_->IsPseudoElement() &&
+      pseudo.IsShadowIncludingInclusiveAncestorOf(*mousedown_element_)) {
+    mousedown_element_ = parent;
+  }
+  if (mouse_press_node_ && mouse_press_node_->IsPseudoElement() &&
+      pseudo.IsShadowIncludingInclusiveAncestorOf(*mouse_press_node_)) {
+    mouse_press_node_ = parent;
+  }
+  if (element_under_mouse_ && element_under_mouse_->IsPseudoElement() &&
+      pseudo.IsShadowIncludingInclusiveAncestorOf(*element_under_mouse_)) {
+    element_under_mouse_ = parent;
+    if (RuntimeEnabledFeatures::
+            BoundaryEventDispatchTracksNodeRemovalEnabled()) {
+      original_element_under_mouse_removed_ = true;
+    }
+  }
+}
+
 void MouseEventManager::HandleRemoveSubtree(Node& node, bool include_root) {
   Node* remaining_node = include_root ? node.parentNode() : &node;
   if (mousedown_element_ && (include_root || mousedown_element_ != node) &&
       node.IsShadowIncludingInclusiveAncestorOf(*mousedown_element_)) {
     // We don't dispatch click events if the mousedown node is removed
     // before a mouseup event. It is compatible with IE and Firefox.
-    mousedown_element_ = nullptr;
+    // However, if the removed node is a pseudo-element, it's just a style
+    // change, so we should fallback to its originating element so that
+    // click events can still be dispatched.
+    if (node.IsPseudoElement()) {
+      mousedown_element_ = node.ParentOrShadowHostElement();
+    } else {
+      mousedown_element_ = nullptr;
+    }
   }
   if (mouse_press_node_ && (include_root || mouse_press_node_ != node) &&
       node.IsShadowIncludingInclusiveAncestorOf(*mouse_press_node_)) {
@@ -531,7 +566,7 @@ WebInputEventResult MouseEventManager::HandleMouseFocus(
   // TODO(editing-dev): The use of VisibleSelection should be audited. See
   // crbug.com/657237 for details.
   if (element &&
-      frame_->Selection().ComputeVisibleSelectionInDOMTree().IsRange()) {
+      frame_->Selection().ComputeVisibleSelectionInDomTree().IsRange()) {
     // Don't check for scroll controls pseudo-elements, since they can't
     // be in selection, until we support selecting their content.
     // Just clear the selection, since it won't be cleared otherwise.
@@ -540,7 +575,7 @@ WebInputEventResult MouseEventManager::HandleMouseFocus(
       frame_->Selection().Clear();
     } else {
       const EphemeralRange& range = frame_->Selection()
-                                        .ComputeVisibleSelectionInDOMTree()
+                                        .ComputeVisibleSelectionInDomTree()
                                         .ToNormalizedEphemeralRange();
       if (IsNodeFullyContained(range, *element) &&
           element->IsDescendantOf(frame_->GetDocument()->FocusedElement())) {
@@ -835,8 +870,14 @@ WebInputEventResult MouseEventManager::HandleMouseDraggedEvent(
       return WebInputEventResult::kNotHandled;
 
     layout_object = parent->GetLayoutObject();
-    if (!layout_object || !layout_object->IsListBox()) {
+    if (!layout_object) {
       return WebInputEventResult::kNotHandled;
+    }
+
+    if (const auto* select = DynamicTo<HTMLSelectElement>(parent)) {
+      if (select->UsesMenuList()) {
+        return WebInputEventResult::kNotHandled;
+      }
     }
   }
 
@@ -861,7 +902,7 @@ WebInputEventResult MouseEventManager::HandleMouseDraggedEvent(
 
   if (layout_object && mouse_down_may_start_autoscroll_ &&
       !scroll_manager_->MiddleClickAutoscrollInProgress() &&
-      !frame_->Selection().SelectedHTMLForClipboard().empty()) {
+      !frame_->Selection().SelectedHtmlForClipboard().empty()) {
     if (AutoscrollController* controller =
             scroll_manager_->GetAutoscrollController()) {
       // Avoid updating the lifecycle unless it's possible to autoscroll.
@@ -944,14 +985,30 @@ DragHandlingResult MouseEventManager::HandleDrag(
     // as a click.
     InvalidateClick();
 
-    // Since drag operation started we need to send a pointercancel for the
-    // corresponding pointer.
-    if (initiated_by_button_press) {
+    if (RuntimeEnabledFeatures::SuppressPointerStreamAfterDragEnabled()) {
+      const auto pointerType = initiator == DragAndDropToolType::kMouse
+                                   ? WebPointerProperties::PointerType::kMouse
+                               : initiator == DragAndDropToolType::kFinger
+                                   ? WebPointerProperties::PointerType::kTouch
+                                   : WebPointerProperties::PointerType::kPen;
+      // When a drag starts we need to suppress the pointer event stream for the
+      // corresponding pointer.
       frame_->GetEventHandler().HandlePointerEvent(
           WebPointerEvent::CreatePointerCausesUaActionEvent(
-              WebPointerProperties::PointerType::kMouse,
-              event.Event().TimeStamp()),
+              pointerType, event.Event().TimeStamp()),
           Vector<WebPointerEvent>(), Vector<WebPointerEvent>());
+    } else {
+      // TODO(crbug.com/452372355): Remove this branch of the `if` once the
+      // suppression feature flag is enabled by default.
+      // Since drag operation started we need to send a pointercancel for the
+      // corresponding pointer.
+      if (initiated_by_button_press) {
+        frame_->GetEventHandler().HandlePointerEvent(
+            WebPointerEvent::CreatePointerCausesUaActionEvent(
+                WebPointerProperties::PointerType::kMouse,
+                event.Event().TimeStamp()),
+            Vector<WebPointerEvent>(), Vector<WebPointerEvent>());
+      }
     }
     drag_initiator_ = initiator;
   }
@@ -976,8 +1033,11 @@ bool MouseEventManager::TryStartDrag(
   GetDragState().drag_data_transfer_ = CreateDraggingDataTransfer();
 
   DragController& drag_controller = frame_->GetPage()->GetDragController();
-  if (!drag_controller.PopulateDragDataTransfer(frame_, GetDragState(),
-                                                mouse_down_pos_)) {
+  if (!frame_->View() ||
+      !drag_controller.PopulateDragDataTransfer(
+          frame_, GetDragState(), mouse_down_pos_,
+          frame_->View()->ConvertFromRootFrame(
+              gfx::ToFlooredPoint(event.Event().PositionInRootFrame())))) {
     return false;
   }
 
@@ -1006,7 +1066,7 @@ bool MouseEventManager::TryStartDrag(
   frame_->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kInput);
   if (GetDragState().drag_type_ == kDragSourceActionSelection &&
       IsInPasswordField(
-          frame_->Selection().ComputeVisibleSelectionInDOMTree().Start())) {
+          frame_->Selection().ComputeVisibleSelectionInDomTree().Start())) {
     return false;
   }
 
@@ -1075,16 +1135,15 @@ WebInputEventResult MouseEventManager::DispatchDragEvent(
   initializer->setRelatedTarget(related_target);
   initializer->setView(frame_->GetDocument()->domWindow());
   initializer->setComposed(true);
-  if (RuntimeEnabledFeatures::PreserveDropEffectEnabled()) {
-    if (event_type == event_type_names::kDragenter ||
-        event_type == event_type_names::kDragover) {
-      data_transfer->SetDestinationOperationFromEffectAllowed();
-    } else if (event_type == event_type_names::kDragleave) {
-      data_transfer->SetDestinationOperation(
-          ui::mojom::blink::DragOperation::kNone);
-    }
+  // Per the DnD spec, these events have a default `dropEffect`.
+  if (event_type == event_type_names::kDragenter ||
+      event_type == event_type_names::kDragover) {
+    data_transfer->SetDestinationOperationFromEffectAllowed();
+  } else if (event_type == event_type_names::kDragleave) {
+    data_transfer->SetDestinationOperation(
+        ui::mojom::blink::DragOperation::kNone);
   }
-  initializer->setGetDataTransfer(data_transfer);
+  initializer->setDataTransfer(data_transfer);
   initializer->setSourceCapabilities(
       frame_->GetDocument()->domWindow()
           ? frame_->GetDocument()
@@ -1100,8 +1159,16 @@ WebInputEventResult MouseEventManager::DispatchDragEvent(
                                         ? MouseEvent::kFromTouch
                                         : MouseEvent::kRealOrIndistinguishable);
 
-  return event_handling_util::ToWebInputEventResult(
+  const auto event_result = event_handling_util::ToWebInputEventResult(
       drag_target->DispatchEvent(*me));
+  // If the drop effect was overridden to none for a dragLeave, reset it to
+  // an uninitialized state. In cases where a drag leaves a target, having
+  // dropEffect explicitly set to none would be incorrect and may
+  // cause unintended behavior when the dataTransfer object is reused.
+  if (event_type == event_type_names::kDragleave) {
+    data_transfer->resetDropEffect();
+  }
+  return event_result;
 }
 
 void MouseEventManager::ClearDragDataTransfer() {

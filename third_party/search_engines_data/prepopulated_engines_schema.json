@@ -9,6 +9,7 @@
   "type_name": "PrepopulatedEngine",
   "headers": [
     "base/containers/span.h",
+    "base/memory/raw_ptr.h",
     "components/search_engines/search_engine_type.h",
     "components/search_engines/regulatory_extension_type.h"
   ],
@@ -105,8 +106,9 @@
     // value that will enable the pre-connections.
     { "field": "preconnect_to_search_url", "type": "string", "optional": true },
     // Whether the client is allowed to prefetch Search queries that are likely
-    // (in addition to queries that are recommended via suggestion server). This
-    // is experimental.
+    // (in addition to queries that are recommended via suggestion server).
+    // "ALLOWED" is the only value that will enable the prefetch.
+    // This is experimental.
     { "field": "prefetch_likely_navigations", "type": "string", "optional": true },
     // Unique id for this prepopulate engine (corresponds to
     // TemplateURL::prepopulate_id). This ID must be greater than zero and must
@@ -126,6 +128,20 @@
     //
     // See prepopulated_engines.json for the list of available IDs.
     { "field": "id", "type": "int" },
+
+    // Field indicating that this entry's `id` (`TemplateURL::prepopulate_id`)
+    // has changed, and the value of the field is the old `id` of the entry.
+    // This will be used when reconciling this prepopulated data with the data
+    // persisted by the client locally or in the account.
+    //
+    // The same restrictions apply here as for the `id` field.
+    { "field": "migrate_to_id", "type": "int", "optional": true, "default": 0 },
+
+    // Whether this search engine can receive the X-Geo geolocation header. The
+    // X-Geo header is used by Chrome to send the user's location when the DSE
+    // origin already has geolocation permission. However it's only sent if the
+    // DSE actually opts-in to handling this header.
+    { "field": "send_x_geo_header", "type": "bool", "optional": true, "default": false },
 
     // Regulatory specific extensions associated with this search engine.
     // Used to expand the {regulatory_extensions} keyword with parameters

@@ -4,11 +4,22 @@
 
 #include "components/affiliations/core/browser/lookup_affiliation_response_parser.h"
 
+#include <optional>
+
 #include "base/containers/flat_set.h"
+#include "url/url_constants.h"
 
 namespace affiliations {
 
 namespace {
+
+GURL GetValidCryptographicUrl(const std::string& url_spec) {
+  GURL url(url_spec);
+  if (url.is_valid() && url.SchemeIsCryptographic()) {
+    return url;
+  }
+  return GURL();
+}
 
 // Template for the affiliation_pb message:
 // > affiliation_pb::Affiliation
@@ -26,11 +37,23 @@ std::vector<Facet> ParseFacets(const MessageT& response) {
     Facet new_facet(uri);
     if (facet.has_branding_info()) {
       new_facet.branding_info = FacetBrandingInfo{
-          facet.branding_info().name(), GURL(facet.branding_info().icon_url())};
+          facet.branding_info().name(),
+          GetValidCryptographicUrl(facet.branding_info().icon_url())};
     }
     if (facet.has_change_password_info()) {
-      new_facet.change_password_url =
-          GURL(facet.change_password_info().change_password_url());
+      GURL url = GetValidCryptographicUrl(
+          facet.change_password_info().change_password_url());
+      if (!url.is_empty()) {
+        new_facet.change_password_url = std::move(url);
+      }
+      for (const auto& pattern : facet.change_password_info().patterns()) {
+        GURL pattern_url =
+            GetValidCryptographicUrl(pattern.change_password_url());
+        if (!pattern_url.is_empty()) {
+          new_facet.change_password_patterns.push_back(
+              {pattern.url_pattern_re2(), std::move(pattern_url)});
+        }
+      }
     }
     if (facet.has_main_domain()) {
       new_facet.main_domain = facet.main_domain();
@@ -48,9 +71,9 @@ GroupedFacets ParseEqClass(const affiliation_pb::FacetGroup& grouping) {
   GroupedFacets group;
   group.facets = ParseFacets(grouping);
   if (grouping.has_group_branding_info()) {
-    group.branding_info =
-        FacetBrandingInfo{grouping.group_branding_info().name(),
-                          GURL(grouping.group_branding_info().icon_url())};
+    group.branding_info = FacetBrandingInfo{
+        grouping.group_branding_info().name(),
+        GetValidCryptographicUrl(grouping.group_branding_info().icon_url())};
   }
   return group;
 }
@@ -89,23 +112,27 @@ bool ParseResponse(const std::vector<FacetURI>& requested_facet_uris,
     // affiliations must form an equivalence relation. Also check, if the class
     // was requested.
     bool is_class_requested = false;
+    // equivalence_class.facet()[0] establishes the class index that every
+    // other facet in this equivalence class must match.
+    std::optional<size_t> first_facet_class_index;
     for (const auto& facet : equivalence_class.facet()) {
       if (requested_facets.count(facet.id()))
         is_class_requested = true;
 
-      if (!facet_uri_to_class_index.count(facet.id()))
-        facet_uri_to_class_index[facet.id()] = result.size();
+      auto it =
+          facet_uri_to_class_index.try_emplace(facet.id(), result.size()).first;
 
-      if (facet_uri_to_class_index[facet.id()] !=
-          facet_uri_to_class_index[equivalence_class.facet()[0].id()]) {
+      if (!first_facet_class_index) {
+        first_facet_class_index = it->second;
+      }
+
+      if (it->second != first_facet_class_index) {
         return false;
       }
     }
 
     // Filter out duplicate or unrequested equivalence classes in the response.
-    if (is_class_requested &&
-        facet_uri_to_class_index[equivalence_class.facet()[0].id()] ==
-            result.size()) {
+    if (is_class_requested && first_facet_class_index == result.size()) {
       result.push_back(ParseEqClass(equivalence_class));
     }
   }

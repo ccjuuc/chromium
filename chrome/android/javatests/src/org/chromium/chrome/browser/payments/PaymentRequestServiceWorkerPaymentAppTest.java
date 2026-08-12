@@ -17,6 +17,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.ActivityUtils;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
@@ -28,6 +29,7 @@ import org.chromium.components.payments.PaymentAppServiceBridge;
 import org.chromium.components.payments.PaymentFeatureList;
 import org.chromium.components.payments.SupportedDelegations;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
@@ -38,11 +40,14 @@ import java.util.concurrent.TimeoutException;
     // Prevent crawling the web for real payment apps.
     "disable-features=" + PaymentFeatureList.SERVICE_WORKER_PAYMENT_APPS
 })
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376100658
 public class PaymentRequestServiceWorkerPaymentAppTest {
     @Rule
     public PaymentRequestTestRule mPaymentRequestTestRule =
             new PaymentRequestTestRule(
-                    "payment_request_bobpay_and_basic_card_with_modifier_optional_data_test.html");
+                    "payment_request_bobpay_with_modifier_optional_data_test.html");
+
+    private int mFactoryCount;
 
     /**
      * Installs a mock service worker based payment app with given supported delegations for
@@ -60,8 +65,9 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
             String name,
             boolean withIcon,
             SupportedDelegations supportedDelegations) {
+        String factoryId = "testFactoryId_" + mFactoryCount++;
         PaymentAppService.getInstance()
-                .addFactory(
+                .addUniqueFactory(
                         new PaymentAppFactoryInterface() {
                             @Override
                             public void create(PaymentAppFactoryDelegate delegate) {
@@ -88,7 +94,8 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
                                                 supportedDelegations));
                                 delegate.onDoneCreatingPaymentApps(this);
                             }
-                        });
+                        },
+                        factoryId);
     }
 
     /**
@@ -140,8 +147,7 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
     @MediumTest
     @Feature({"Payments"})
     public void testNoSupportedPaymentMethods() throws TimeoutException {
-        mPaymentRequestTestRule.clickNodeAndWait(
-                "buy_with_bobpay", mPaymentRequestTestRule.getShowFailed());
+        mPaymentRequestTestRule.clickNodeAndWait("buy", mPaymentRequestTestRule.getShowFailed());
         mPaymentRequestTestRule.expectResultContains(
                 new String[] {"show() rejected", "The payment method", "not supported"});
     }
@@ -156,27 +162,6 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
         PaymentAppServiceBridge.setCanMakePaymentForTesting(true);
         // Payment sheet skips to the app since it is the only available app.
         mPaymentRequestTestRule.clickNodeAndWait("buy", mPaymentRequestTestRule.getDismissed());
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"Payments"})
-    public void testDoNotCallCanMakePayment() throws TimeoutException {
-        String[] supportedMethodNames1 = {"https://bobpay.test"};
-        installMockServiceWorkerPaymentApp(
-                "https://bobpay.test", supportedMethodNames1, true, true);
-
-        String[] supportedMethodNames2 = {"https://kylepay.test/webpay"};
-        installMockServiceWorkerPaymentApp(
-                "https://kylepay.test/webpay", supportedMethodNames2, true, true);
-
-        // Sets setCanMakePaymentForTesting(false) to return false for CanMakePayment since there is
-        // no real sw payment app, so if CanMakePayment is called then no payment apps will be
-        // available, otherwise CanMakePayment is not called.
-        PaymentAppServiceBridge.setCanMakePaymentForTesting(false);
-
-        mPaymentRequestTestRule.triggerUiAndWait("buy", mPaymentRequestTestRule.getReadyForInput());
-        Assert.assertEquals(2, mPaymentRequestTestRule.getNumberOfPaymentApps());
     }
 
     @Test

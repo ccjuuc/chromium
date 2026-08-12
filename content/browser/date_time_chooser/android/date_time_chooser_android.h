@@ -23,7 +23,7 @@ class CONTENT_EXPORT DateTimeChooserAndroid : public DateTimeChooser {
   DateTimeChooserAndroid& operator=(const DateTimeChooserAndroid&) = delete;
 
   // Replaces the current value.
-  void ReplaceDateTime(JNIEnv* env, jdouble value);
+  void ReplaceDateTime(JNIEnv* env, double value);
 
   // Closes the dialog without propagating any changes.
   void CancelDialog(JNIEnv* env);
@@ -37,6 +37,7 @@ class CONTENT_EXPORT DateTimeChooserAndroid : public DateTimeChooser {
  private:
   FRIEND_TEST_ALL_PREFIXES(DateTimeChooserBrowserTest,
                            ResetResponseCallbackViaDisconnectionHandler);
+  FRIEND_TEST_ALL_PREFIXES(DateTimeChooserBrowserTest, DisallowSystemUiPopups);
 
   void DismissAndDestroyJavaObject();
 

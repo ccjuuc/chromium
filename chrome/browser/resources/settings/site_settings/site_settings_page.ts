@@ -83,8 +83,8 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_AUTOMATIC_DOWNLOADS,
       id: Id.AUTOMATIC_DOWNLOADS,
       label: 'siteSettingsAutomaticDownloads',
-      icon: 'cr:file-download',
-      enabledLabel: 'siteSettingsAutomaticDownloadsAllowed',
+      icon: 'cr:download',
+      enabledLabel: 'siteSettingsAutomaticDownloadsAsk',
       disabledLabel: 'siteSettingsAutomaticDownloadsBlocked',
     },
     {
@@ -114,7 +114,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.BLUETOOTH_DEVICES,
       label: 'siteSettingsBluetoothDevices',
       icon: 'settings:bluetooth',
-      enabledLabel: 'siteSettingsBluetoothDevicesAllowed',
+      enabledLabel: 'siteSettingsBluetoothDevicesAsk',
       disabledLabel: 'siteSettingsBluetoothDevicesBlocked',
       shouldShow: () =>
           loadTimeData.getBoolean('enableWebBluetoothNewPermissionsBackend'),
@@ -123,7 +123,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_BLUETOOTH_SCANNING,
       id: Id.BLUETOOTH_SCANNING,
       label: 'siteSettingsBluetoothScanning',
-      icon: 'settings:bluetooth-scanning',
+      icon: 'settings:bluetooth-searching',
       enabledLabel: 'siteSettingsBluetoothScanningAsk',
       disabledLabel: 'siteSettingsBluetoothScanningBlock',
       shouldShow: () =>
@@ -134,7 +134,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.CAMERA,
       label: 'siteSettingsCamera',
       icon: 'cr:videocam',
-      enabledLabel: 'siteSettingsCameraAllowed',
+      enabledLabel: 'siteSettingsCameraAsk',
       disabledLabel: 'siteSettingsCameraBlocked',
     },
     {
@@ -142,7 +142,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.CAPTURED_SURFACE_CONTROL,
       label: 'siteSettingsCapturedSurfaceControl',
       icon: 'settings:touchpad-mouse',
-      enabledLabel: 'siteSettingsCapturedSurfaceControlAllowed',
+      enabledLabel: 'siteSettingsCapturedSurfaceControlAsk',
       disabledLabel: 'siteSettingsCapturedSurfaceControlBlocked',
       shouldShow: () => loadTimeData.getBoolean('enableCapturedSurfaceControl'),
     },
@@ -151,7 +151,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.CLIPBOARD,
       label: 'siteSettingsClipboard',
       icon: 'privacy:content-paste',
-      enabledLabel: 'siteSettingsClipboardAllowed',
+      enabledLabel: 'siteSettingsClipboardAsk',
       disabledLabel: 'siteSettingsClipboardBlocked',
     },
     {
@@ -169,7 +169,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.FILE_SYSTEM_WRITE,
       label: 'siteSettingsFileSystemWrite',
       icon: 'privacy:file-save',
-      enabledLabel: 'siteSettingsFileSystemWriteAllowed',
+      enabledLabel: 'siteSettingsFileSystemWriteAsk',
       disabledLabel: 'siteSettingsFileSystemWriteBlocked',
     },
     {
@@ -177,7 +177,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.GEOLOCATION,
       label: 'siteSettingsLocation',
       icon: 'settings:location-on',
-      enabledLabel: 'siteSettingsLocationAllowed',
+      enabledLabel: 'siteSettingsLocationAsk',
       disabledLabel: 'siteSettingsLocationBlocked',
     },
     {
@@ -196,14 +196,14 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       label: 'siteSettingsHidDevices',
       icon: 'privacy:videogame-asset',
       enabledLabel: 'siteSettingsHidDevicesAsk',
-      disabledLabel: 'siteSettingsHidDevicesBlock',
+      disabledLabel: 'siteSettingsHidDevicesBlocked',
     },
     {
       route: routes.SITE_SETTINGS_IDLE_DETECTION,
       id: Id.IDLE_DETECTION,
       label: 'siteSettingsIdleDetection',
       icon: 'settings:devices',
-      enabledLabel: 'siteSettingsDeviceUseAllowed',
+      enabledLabel: 'siteSettingsDeviceUseAsk',
       disabledLabel: 'siteSettingsDeviceUseBlocked',
     },
     {
@@ -235,7 +235,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.KEYBOARD_LOCK,
       label: 'siteSettingsKeyboardLock',
       icon: 'settings20:keyboard-lock',
-      enabledLabel: 'siteSettingsKeyboardLockAllowed',
+      enabledLabel: 'siteSettingsKeyboardLockAsk',
       disabledLabel: 'siteSettingsKeyboardLockBlocked',
       shouldShow: () => loadTimeData.getBoolean('enableKeyboardLockPrompt'),
     },
@@ -244,24 +244,11 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.LOCAL_FONTS,
       label: 'fonts',
       icon: 'privacy:font-download',
-      enabledLabel: 'siteSettingsFontsAllowed',
+      enabledLabel: 'siteSettingsFontsAsk',
       disabledLabel: 'siteSettingsFontsBlocked',
     },
-    // If LNA is enabled, we show either the LOCAL_NETWORK_ACCESS setting, or
-    // the combo of LOCAL_NETWORK and LOOPBACK_NETWORK settings.
-    // enableLocalNetworkAccessSetting and
-    // enableLocalNetworkAccessSplitPermissions are never both true; though if
-    // LNA is off they can both be false.
-    {
-      route: routes.SITE_SETTINGS_LOCAL_NETWORK_ACCESS,
-      id: Id.LOCAL_NETWORK_ACCESS,
-      label: 'siteSettingsLocalNetworkAccess',
-      icon: 'settings20:router',
-      enabledLabel: 'siteSettingsLocalNetworkAccessAsk',
-      disabledLabel: 'siteSettingsLocalNetworkAccessBlock',
-      shouldShow: () =>
-          loadTimeData.getBoolean('enableLocalNetworkAccessSetting'),
-    },
+    // If LNA is enabled, we show the combo of LOCAL_NETWORK and
+    // LOOPBACK_NETWORK settings.
     {
       route: routes.SITE_SETTINGS_LOCAL_NETWORK,
       id: Id.LOCAL_NETWORK,
@@ -269,9 +256,8 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       icon: 'settings20:router',
       enabledLabel: 'siteSettingsLocalNetworkAsk',
       disabledLabel: 'siteSettingsLocalNetworkBlock',
-      // This is shown when we've got LNA enabled with split permissions.
       shouldShow: () =>
-          loadTimeData.getBoolean('enableLocalNetworkAccessSplitPermissions'),
+          loadTimeData.getBoolean('enableLocalNetworkAccessSetting'),
     },
     {
       route: routes.SITE_SETTINGS_LOOPBACK_NETWORK,
@@ -280,16 +266,15 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       icon: 'settings20:desktop-windows',
       enabledLabel: 'siteSettingsLoopbackNetworkAsk',
       disabledLabel: 'siteSettingsLoopbackNetworkBlock',
-      // This is shown when we've got LNA enabled with split permissions.
       shouldShow: () =>
-          loadTimeData.getBoolean('enableLocalNetworkAccessSplitPermissions'),
+          loadTimeData.getBoolean('enableLocalNetworkAccessSetting'),
     },
     {
       route: routes.SITE_SETTINGS_MICROPHONE,
       id: Id.MIC,
       label: 'siteSettingsMic',
       icon: 'privacy:mic',
-      enabledLabel: 'siteSettingsMicAllowed',
+      enabledLabel: 'siteSettingsMicAsk',
       disabledLabel: 'siteSettingsMicBlocked',
     },
     {
@@ -297,7 +282,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.MIDI_DEVICES,
       label: 'siteSettingsMidiDevices',
       icon: 'privacy:piano',
-      enabledLabel: 'siteSettingsMidiAllowed',
+      enabledLabel: 'siteSettingsMidiAsk',
       disabledLabel: 'siteSettingsMidiBlocked',
     },
     {
@@ -317,7 +302,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.OFFER_WRITING_HELP,
       id: Id.OFFER_WRITING_HELP,
       label: 'siteSettingsOfferWritingHelp',
-      icon: 'settings:compose',
+      icon: 'settings:pen-spark',
       shouldShow: () => loadTimeData.getBoolean('enableComposeProactiveNudge'),
     },
     {
@@ -342,7 +327,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.PERFORMANCE,
       id: Id.PERFORMANCE,
       label: 'siteSettingsPerformance',
-      icon: 'settings:performance',
+      icon: 'settings:speed',
       enabledLabel: 'siteSettingsPerformanceSublabel',
       disabledLabel: 'siteSettingsPerformanceSublabel',
     },
@@ -376,15 +361,16 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.SENSORS,
       label: 'siteSettingsSensors',
       icon: 'privacy:sensors',
-      enabledLabel: 'siteSettingsMotionSensorsAllowed',
-      disabledLabel: 'siteSettingsMotionSensorsBlocked',
+      enabledLabel: 'siteSettingsSensorsAllowed',
+      disabledLabel: 'siteSettingsSensorsBlocked',
+      askLabel: 'siteSettingsSensorsAsk',
     },
     {
       route: routes.SITE_SETTINGS_SERIAL_PORTS,
       id: Id.SERIAL_PORTS,
       label: 'siteSettingsSerialPorts',
       icon: 'privacy:developer-board',
-      enabledLabel: 'siteSettingsSerialPortsAllowed',
+      enabledLabel: 'siteSettingsSerialPortsAsk',
       disabledLabel: 'siteSettingsSerialPortsBlocked',
     },
     {
@@ -399,10 +385,20 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.SMART_CARD_READERS,
       label: 'siteSettingsSmartCardReaders',
       icon: 'privacy:smart-card-reader',
-      enabledLabel: 'siteSettingsSmartCardReadersAllowed',
+      enabledLabel: 'siteSettingsSmartCardReadersAsk',
       disabledLabel: 'siteSettingsSmartCardReadersBlocked',
       shouldShow: () =>
           loadTimeData.getBoolean('enableSmartCardReadersContentSetting'),
+    },
+    {
+      route: routes.SITE_SETTINGS_WEB_PRINTING,
+      id: Id.WEB_PRINTING,
+      label: 'siteSettingsWebPrinting',
+      icon: 'settings:print',
+      enabledLabel: 'siteSettingsWebPrintingAsk',
+      disabledLabel: 'siteSettingsWebPrintingBlock',
+      shouldShow: () =>
+          loadTimeData.getBoolean('enableWebPrintingContentSetting'),
     },
     // </if>
     {
@@ -417,8 +413,8 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       route: routes.SITE_SETTINGS_STORAGE_ACCESS,
       id: Id.STORAGE_ACCESS,
       label: 'siteSettingsStorageAccess',
-      icon: 'privacy:storage-access',
-      enabledLabel: 'storageAccessAllowed',
+      icon: 'privacy:vr180-create2d',
+      enabledLabel: 'storageAccessAsk',
       disabledLabel: 'storageAccessBlocked',
     },
     {
@@ -426,7 +422,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.USB_DEVICES,
       label: 'siteSettingsUsbDevices',
       icon: 'privacy:usb',
-      enabledLabel: 'siteSettingsUsbAllowed',
+      enabledLabel: 'siteSettingsUsbAsk',
       disabledLabel: 'siteSettingsUsbBlocked',
     },
     {
@@ -434,7 +430,7 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       id: Id.VR,
       label: 'siteSettingsVr',
       icon: 'privacy:cardboard',
-      enabledLabel: 'siteSettingsVrAllowed',
+      enabledLabel: 'siteSettingsVrAsk',
       disabledLabel: 'siteSettingsVrBlocked',
     },
     {
@@ -445,16 +441,6 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
       enabledLabel: 'siteSettingsWebAppInstallationAsk',
       disabledLabel: 'siteSettingsWebAppInstallationBlock',
       shouldShow: () => loadTimeData.getBoolean('enableWebAppInstallation'),
-    },
-    {
-      route: routes.SITE_SETTINGS_WEB_PRINTING,
-      id: Id.WEB_PRINTING,
-      label: 'siteSettingsWebPrinting',
-      icon: 'settings:printer',
-      enabledLabel: 'siteSettingsWebPrintingAsk',
-      disabledLabel: 'siteSettingsWebPrintingBlock',
-      shouldShow: () =>
-          loadTimeData.getBoolean('enableWebPrintingContentSetting'),
     },
     {
       route: routes.SITE_SETTINGS_WINDOW_MANAGEMENT,
@@ -553,7 +539,6 @@ export class SettingsSiteSettingsPageElement extends
               Id.VR,
               Id.HAND_TRACKING,
               Id.IDLE_DETECTION,
-              Id.WEB_PRINTING,
               Id.WINDOW_MANAGEMENT,
               Id.LOCAL_FONTS,
               Id.AUTO_PICTURE_IN_PICTURE,
@@ -561,9 +546,9 @@ export class SettingsSiteSettingsPageElement extends
               Id.KEYBOARD_LOCK,
               // <if expr="is_chromeos">
               Id.SMART_CARD_READERS,
+              Id.WEB_PRINTING,
               // </if>
               Id.WEB_APP_INSTALLATION,
-              Id.LOCAL_NETWORK_ACCESS,
               Id.LOCAL_NETWORK,
               Id.LOOPBACK_NETWORK,
             ]),

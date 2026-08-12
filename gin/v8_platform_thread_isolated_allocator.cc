@@ -15,10 +15,9 @@
 #include "gin/thread_isolation.h"
 #include "partition_alloc/thread_isolation/pkey.h"
 
-#if PA_BUILDFLAG(ENABLE_PKEYS)
-#else  // PA_BUILDFLAG(ENABLE_PKEYS)
+#if !PA_BUILDFLAG(ENABLE_PKEYS)
 #error Not implemented for non-pkey thread isolation
-#endif  // PA_BUILDFLAG(ENABLE_PKEYS)
+#endif  // !PA_BUILDFLAG(ENABLE_PKEYS)
 
 namespace gin {
 
@@ -34,8 +33,7 @@ void ThreadIsolatedAllocator::Initialize(int pkey) {
 }
 
 void* ThreadIsolatedAllocator::Allocate(size_t size) {
-  return allocator_.root()->AllocInline<partition_alloc::AllocFlags::kNoHooks>(
-      size);
+  return allocator_.root()->Alloc<partition_alloc::AllocFlags::kNoHooks>(size);
 }
 
 void ThreadIsolatedAllocator::Free(void* object) {

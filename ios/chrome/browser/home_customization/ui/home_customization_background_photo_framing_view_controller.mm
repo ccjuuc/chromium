@@ -16,10 +16,10 @@
 #import "ios/chrome/browser/home_customization/ui/home_customization_search_engine_logo_mediator_provider.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/mediator/search_engine_logo_mediator.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/ui/search_engine_logo_state.h"
+#import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
 #import "ios/chrome/browser/shared/ui/elements/passthrough_stack_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util_mac.h"
@@ -200,9 +200,7 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
   UIView* logoView = searchEngineLogoMediator.view;
   logoView.translatesAutoresizingMaskIntoConstraints = NO;
 
-  searchEngineLogoMediator.usesMonochromeLogo = YES;
-  // Real logo is always white, even in dark mode.
-  logoView.tintColor = UIColor.whiteColor;
+  [searchEngineLogoMediator setLogoTintColor:UIColor.whiteColor];
   [topSection addArrangedSubview:logoView];
 
   [NSLayoutConstraint activateConstraints:@[
@@ -344,7 +342,7 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
   [self.view addSubview:_pinchInstructionsView];
 
   // Pinch icon.
-  UIImage* pinchIcon = DefaultSymbolWithPointSize(kCropSymbol, kPinchIconSize);
+  UIImage* pinchIcon = SymbolWithPointSize(SymbolCrop, kPinchIconSize);
   UIImageView* pinchIconView = [[UIImageView alloc] initWithImage:pinchIcon];
   pinchIconView.tintColor = UIColor.whiteColor;
   pinchIconView.contentMode = UIViewContentModeScaleAspectFit;
@@ -392,11 +390,12 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
 - (void)setupGradientView {
   UIColor* startColor = [UIColor.blackColor colorWithAlphaComponent:0];
   UIColor* endColor = [UIColor.blackColor colorWithAlphaComponent:0.6];
-  UIView* gradientView = [[GradientView alloc]
-      initWithStartColor:startColor
-                endColor:endColor
-              startPoint:CGPointMake(0, 0)
-                endPoint:CGPointMake(0, kGradientEndPoint)];
+  UIView* gradientView =
+      [[GradientView alloc] initWithStartColor:startColor
+                                      endColor:endColor
+                                    startPoint:CGPointMake(0, 0)
+                                      endPoint:CGPointMake(0, kGradientEndPoint)
+                                  gradientType:GradientLayerType::kLinear];
   gradientView.translatesAutoresizingMaskIntoConstraints = NO;
 
   [self.view insertSubview:gradientView aboveSubview:_scrollView];
@@ -542,8 +541,10 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
                           std::fmax(0, _originalImage.size.height -
                                            visibleRectInOriginal.size.height));
 
-  return [[HomeCustomizationFramingCoordinates alloc]
-      initWithVisibleRect:visibleRectInOriginal];
+  HomeCustomizationFramingCoordinates* coordinates =
+      [[HomeCustomizationFramingCoordinates alloc]
+          initWithVisibleRect:visibleRectInOriginal];
+  return coordinates;
 }
 
 @end

@@ -50,6 +50,9 @@ Input before setting suggested values:
 |       shadow:pseudoId="-webkit-input-placeholder"
 |       "initial placeholder"
 |     <div>
+|       <br>
+|         aria-hidden="true"
+|         id="textarea-placeholder-break"
 | <br>
 | "
 "
@@ -80,15 +83,18 @@ Input before setting suggested values:
 |   <shadow:root>
 |     <div>
 |       aria-hidden="true"
+|       pseudo="-internal-select-inner-element"
+|       shadow:pseudoId="-internal-select-inner-element"
 |       ""
 |     <slot>
-|       id="select-button"
+|       pseudo="-internal-select-button-slot"
+|       shadow:pseudoId="-internal-select-button-slot"
 |     <div>
 |       popover="auto"
 |       pseudo="picker(select)"
 |       shadow:pseudoId="picker(select)"
 |       <slot>
-|         id="select-popover-options"
+|         id="select-options"
 |     <div>
 |       popover="manual"
 |       pseudo="-internal-select-autofill-preview"
@@ -169,6 +175,9 @@ Input after setting suggestedValue:
 |       shadow:pseudoId="-internal-input-suggested"
 |       "suggested value"
 |     <div>
+|       <br>
+|         aria-hidden="true"
+|         id="textarea-placeholder-break"
 | <br>
 | "
 "
@@ -199,15 +208,18 @@ Input after setting suggestedValue:
 |   <shadow:root>
 |     <div>
 |       aria-hidden="true"
-|       "TX"
+|       pseudo="-internal-select-inner-element"
+|       shadow:pseudoId="-internal-select-inner-element"
+|       ""
 |     <slot>
-|       id="select-button"
+|       pseudo="-internal-select-button-slot"
+|       shadow:pseudoId="-internal-select-button-slot"
 |     <div>
 |       popover="auto"
 |       pseudo="picker(select)"
 |       shadow:pseudoId="picker(select)"
 |       <slot>
-|         id="select-popover-options"
+|         id="select-options"
 |     <div>
 |       popover="manual"
 |       pseudo="-internal-select-autofill-preview"
@@ -215,6 +227,7 @@ Input after setting suggestedValue:
 |       <div>
 |         pseudo="-internal-select-autofill-preview-text"
 |         shadow:pseudoId="-internal-select-autofill-preview-text"
+|         "TX"
 | "input.value: initial value"
 | "internals.suggestedValue(input): "
 | "inputWithPlaceholder.value: "
@@ -286,6 +299,9 @@ After resetting suggestedValue value:
 |       shadow:pseudoId="-webkit-input-placeholder"
 |       "initial placeholder"
 |     <div>
+|       <br>
+|         aria-hidden="true"
+|         id="textarea-placeholder-break"
 | <br>
 | "
 "
@@ -316,15 +332,18 @@ After resetting suggestedValue value:
 |   <shadow:root>
 |     <div>
 |       aria-hidden="true"
+|       pseudo="-internal-select-inner-element"
+|       shadow:pseudoId="-internal-select-inner-element"
 |       ""
 |     <slot>
-|       id="select-button"
+|       pseudo="-internal-select-button-slot"
+|       shadow:pseudoId="-internal-select-button-slot"
 |     <div>
 |       popover="auto"
 |       pseudo="picker(select)"
 |       shadow:pseudoId="picker(select)"
 |       <slot>
-|         id="select-popover-options"
+|         id="select-options"
 |     <div>
 |       popover="manual"
 |       pseudo="-internal-select-autofill-preview"

@@ -7,7 +7,6 @@
 #include <memory>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
@@ -116,6 +115,8 @@ constexpr RendererColorIdTable kRendererColorIdMap[] = {
      kColorWebNativeControlScrollbarArrowForeground},
     {RendererColorId::kColorWebNativeControlScrollbarArrowForegroundDisabled,
      kColorWebNativeControlScrollbarArrowForegroundDisabled},
+    {RendererColorId::kColorWebNativeControlScrollbarArrowForegroundHovered,
+     kColorWebNativeControlScrollbarArrowForegroundHovered},
     {RendererColorId::kColorWebNativeControlScrollbarArrowForegroundPressed,
      kColorWebNativeControlScrollbarArrowForegroundPressed},
     {RendererColorId::kColorWebNativeControlScrollbarCorner,
@@ -152,11 +153,19 @@ ColorProviderUtilsCallbacks* g_color_provider_utils_callbacks = nullptr;
 
 ColorProviderUtilsCallbacks::~ColorProviderUtilsCallbacks() = default;
 
-#include "ui/color/color_id_map_macros.inc"
+bool ColorProviderUtilsCallbacks::NameToColorId(std::string_view color_name,
+                                                ColorId* color_id) {
+  return false;
+}
 
 std::string ColorIdName(ColorId color_id) {
+#include "ui/color/color_id_map_macros.inc"  // NOLINT(build/include)
   static constexpr auto kColorIdMap =
       base::MakeFixedFlatMap<ColorId, const char*>({COLOR_IDS});
+// Note that this second include is not redundant. The second inclusion of the
+// .inc file serves to undefine the macros the first inclusion defined.
+#include "ui/color/color_id_map_macros.inc"  // NOLINT(build/include)
+
   auto it = kColorIdMap.find(color_id);
   if (it != kColorIdMap.cend()) {
     return {it->second};
@@ -169,9 +178,36 @@ std::string ColorIdName(ColorId color_id) {
   return base::StringPrintf("ColorId(%d)", color_id);
 }
 
+std::optional<ColorId> NameToColorId(std::string_view color_id_name) {
+// Define the following macro to modify the default behavior of the macros in
+// the following include. This simply reorders the declaration for the
+// FixedFlatMap template instantiation below.
+#define COLOR_ID_MAP_ENTRY(enum_name, string_name) \
+  {                                                \
+    string_name, enum_name                         \
+  }
+#include "ui/color/color_id_map_macros.inc"  // NOLINT(build/include)
+  static constexpr auto kColorIdMap =
+      base::MakeFixedFlatMap<std::string_view, ColorId>({COLOR_IDS});
 // Note that this second include is not redundant. The second inclusion of the
 // .inc file serves to undefine the macros the first inclusion defined.
 #include "ui/color/color_id_map_macros.inc"  // NOLINT(build/include)
+
+  auto it = kColorIdMap.find(color_id_name);
+  if (it != kColorIdMap.cend()) {
+    return it->second;
+  }
+
+  if (g_color_provider_utils_callbacks) {
+    ColorId color_id;
+    if (g_color_provider_utils_callbacks->NameToColorId(color_id_name,
+                                                        &color_id)) {
+      return color_id;
+    }
+  }
+
+  return std::nullopt;
+}
 
 std::string SkColorName(SkColor color) {
   static const auto color_name_map =
@@ -488,11 +524,13 @@ std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
   return color_provider;
 }
 
-void CompleteScrollbarColorsDefinition(ui::ColorMixer& mixer) {
+void CompleteFluentScrollbarColorsDefinition(ui::ColorMixer& mixer) {
   mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
       kColorWebNativeControlScrollbarCorner};
   mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
       kColorWebNativeControlScrollbarArrowBackgroundHovered};
+  mixer[kColorWebNativeControlScrollbarArrowForegroundHovered] = {
+      kColorWebNativeControlScrollbarArrowForegroundPressed};
   mixer[kColorWebNativeControlScrollbarThumb] = {
       kColorWebNativeControlScrollbarArrowForeground};
   mixer[kColorWebNativeControlScrollbarThumbHovered] = {
@@ -548,7 +586,7 @@ void CompleteControlsForcedColorsDefinition(ui::ColorMixer& mixer) {
   mixer[kColorWebNativeControlSliderDisabled] = {kColorCssSystemGrayText};
   mixer[kColorWebNativeControlSliderHovered] = {kColorCssSystemHighlight};
   mixer[kColorWebNativeControlSliderPressed] = {kColorCssSystemHighlight};
-  CompleteScrollbarColorsDefinition(mixer);
+  CompleteFluentScrollbarColorsDefinition(mixer);
 }
 
 void CompleteDefaultCssSystemColorDefinition(ui::ColorMixer& mixer,
@@ -644,6 +682,8 @@ void COMPONENT_EXPORT(COLOR)
     mixer[kColorWebNativeControlScrollbarArrowForeground] = {SK_ColorWHITE};
     mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
         SkColorSetRGB(0xAF, 0xAF, 0xAF)};
+    mixer[kColorWebNativeControlScrollbarArrowForegroundHovered] = {
+        SK_ColorWHITE};
     mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
         SK_ColorBLACK};
     mixer[kColorWebNativeControlScrollbarCorner] = {
@@ -726,6 +766,8 @@ void COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0x50, 0x50, 0x50)};
     mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
         SkColorSetARGB(0x4D, 0x50, 0x50, 0x50)};
+    mixer[kColorWebNativeControlScrollbarArrowForegroundHovered] = {
+        SK_ColorBLACK};
     mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
         SK_ColorWHITE};
     mixer[kColorWebNativeControlScrollbarCorner] = {
@@ -793,7 +835,7 @@ bool IsRendererColorMappingEquivalent(
 
   for (const auto& table : kRendererColorIdMap) {
     // The `renderer_color_map_` should map the full set of renderer color ids.
-    DCHECK(base::Contains(renderer_color_map, table.renderer_color_id));
+    DCHECK(renderer_color_map.contains(table.renderer_color_id));
     if (color_provider->GetColor(table.color_id) !=
         renderer_color_map.at(table.renderer_color_id)) {
       return false;

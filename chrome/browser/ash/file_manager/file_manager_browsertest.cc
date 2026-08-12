@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
@@ -23,6 +24,7 @@
 #include "base/test/mock_callback.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/config/coverage/buildflags.h"
 #include "chrome/browser/ash/file_manager/file_manager_browsertest_base.h"
 #include "chrome/browser/ash/file_manager/file_manager_browsertest_utils.h"
@@ -34,9 +36,7 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/policy/device_policy/cached_device_policy_updater.h"
@@ -200,7 +200,7 @@ class ExtendedFilesAppBrowserTest : public FilesAppBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_P(ExtendedFilesAppBrowserTest, PRE_Test) {
-  profile()->GetPrefs()->SetBoolean(prefs::kNetworkFileSharesAllowed,
+  profile()->GetPrefs()->SetBoolean(ash::prefs::kNetworkFileSharesAllowed,
                                     GetOptions().native_smb);
 }
 
@@ -223,7 +223,7 @@ class QuickOfficeBrowserTestBase : public InProcessBrowserTest {
   // extensions::ExtensionApiTest:
   void SetUpOnMainThread() override {
     file_manager::test::AddDefaultComponentExtensionsOnMainThread(
-        browser()->profile());
+        browser()->GetProfile());
 
     embedded_test_server()->ServeFilesFromDirectory(GetTestDataDirectory());
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -258,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(QuickOfficeForceFileDownloadEnabledBrowserTest,
       embedded_test_server()->GetURL("/chromeos/file_manager/text.docx");
 
   content::DownloadManager* download_manager =
-      browser()->profile()->GetDownloadManager();
+      browser()->GetProfile()->GetDownloadManager();
   std::unique_ptr<content::DownloadTestObserver> download_observer(
       new content::DownloadTestObserverTerminal(
           download_manager, /*num_downloads=*/1,
@@ -601,7 +601,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("openQuickViewPdfPopup").SetEnableOopifPdf(false),
         TestCase("openQuickViewPdfPopup").SetEnableOopifPdf(true),
 #if !defined(ADDRESS_SANITIZER) || !defined(NDEBUG)
-        // TODO(http://crbug.com/1291090): Flaky on ASan non-DEBUG.
+        // TODO(http://crbug.com/40818544): Flaky on ASan non-DEBUG.
         TestCase("openQuickViewPdfPreviewsDisabled").SetEnableOopifPdf(false),
         TestCase("openQuickViewPdfPreviewsDisabled").SetEnableOopifPdf(true),
 #endif  // !defined(ADDRESS_SANITIZER) || !defined(NDEBUG)
@@ -718,7 +718,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("dirRenameToEmptyString").InGuestMode(),
         TestCase("dirRenameToExisting"),
 #if !defined(ADDRESS_SANITIZER) || !defined(NDEBUG)
-        // TODO(http://crbug.com/1230054): Flaky on ASan non-DEBUG.
+        // TODO(http://crbug.com/40778782): Flaky on ASan non-DEBUG.
         TestCase("dirRenameToExisting").InGuestMode(),
 #endif
         TestCase("dirRenameRemovableWithKeyboard"),
@@ -1288,10 +1288,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
         TestCase("mountCrostiniWithSubFolder"),
         TestCase("enableDisableCrostini"),
         TestCase("sharePathWithCrostini")
-            .FeatureIds({"screenplay-122c00f8-9842-4666-8ca0-b6bf47454551"}),
-        TestCase("pluginVmDirectoryNotSharedErrorDialog"),
-        TestCase("pluginVmFileOnExternalDriveErrorDialog"),
-        TestCase("pluginVmFileDropFailErrorDialog")));
+            .FeatureIds({"screenplay-122c00f8-9842-4666-8ca0-b6bf47454551"})));
 
 WRAPPED_INSTANTIATE_TEST_SUITE_P(
     MyFiles, /* my_files.ts */
@@ -1559,7 +1556,7 @@ WRAPPED_INSTANTIATE_TEST_SUITE_P(
     FilesAppBrowserTest,
     ::testing::Values(TestCase("fakesListed"),
                       TestCase("listUpdatedWhenGuestsChanged")
-// TODO(http://crbug.com/1486453): Flaky on ASan.
+// TODO(http://crbug.com/40933722): Flaky on ASan.
 #if !defined(ADDRESS_SANITIZER) && !defined(LEAK_SANITIZER) && \
     !defined(MEMORY_SANITIZER)
                           ,

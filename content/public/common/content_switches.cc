@@ -25,10 +25,6 @@ const char kAllowLoopbackInPeerConnection[] =
 // Allows plugins to be loaded in the command line for testing.
 const char kAllowCommandLinePlugins[] = "allow-command-line-plugins";
 
-// Causes the Attribution Report API to run without delays or noise.
-const char kAttributionReportingDebugMode[] =
-    "attribution-reporting-debug-mode";
-
 // Bypasses the dialog prompting the user for permission to capture
 // cameras and microphones. Useful in automatic tests of video-conferencing
 // Web applications.
@@ -64,9 +60,6 @@ const char kChangeStackGuardOnForkDisabled[] = "disable";
 
 // Disable antialiasing on 2d canvas.
 const char kDisable2dCanvasAntialiasing[]   = "disable-canvas-aa";
-
-// Disables Canvas2D rendering into a scanout buffer for overlay support.
-const char kDisable2dCanvasImageChromium[] = "disable-2d-canvas-image-chromium";
 
 // Disables client-visible 3D APIs, in particular WebGL.
 // This is controlled by policy and is kept separate from the other
@@ -196,6 +189,14 @@ const char kDisableLogging[]                = "disable-logging";
 // Disables using CODECAPI_AVLowLatencyMode when creating DXVA decoders.
 const char kDisableLowLatencyDxva[]         = "disable-low-latency-dxva";
 
+// Disables renaming the main browser thread to "CrBrowserMain" during browser
+// startup. The internally mapped thread name is being emitted to Perfetto
+// traces, which means that the main thread is identified as "CrBrowserMain"
+// instead of the process name. Enabling this switch will prevent the thread
+// from being named, which fixes the Perfetto trace issue.
+const char kDisableMainThreadNameOverride[] =
+    "disable-main-thread-name-override";
+
 // Disables Mojo broker capabilities in the browser during Mojo initialization.
 const char kDisableMojoBroker[] = "disable-mojo-broker";
 
@@ -260,9 +261,6 @@ const char kDisableThreadedCompositing[]    = "disable-threaded-compositing";
 
 // Disable V8 idle tasks.
 const char kDisableV8IdleTasks[]            = "disable-v8-idle-tasks";
-
-// Disables WebGL rendering into a scanout buffer for overlay support.
-const char kDisableWebGLImageChromium[]     = "disable-webgl-image-chromium";
 
 // Don't enforce the same-origin policy; meant for website testing only.
 // This switch has no effect unless --user-data-dir (as defined by the content
@@ -396,11 +394,6 @@ const char kEnableSpatialNavigation[]       = "enable-spatial-navigation";
 const char kEnableStrictMixedContentChecking[] =
     "enable-strict-mixed-content-checking";
 
-// Blocks insecure usage of a number of powerful features (device orientation,
-// for example) that we haven't yet deprecated for the web at large.
-const char kEnableStrictPowerfulFeatureRestrictions[] =
-    "enable-strict-powerful-feature-restrictions";
-
 // When specified along with a value in the range (0,1] will --enable-tracing
 // for (roughly) that percentage of tests being run. This is done in a stable
 // manner such that the same tests are chosen each run, and under the assumption
@@ -428,22 +421,23 @@ const char kEnableVtune[]                   = "enable-vtune-support";
 const char kEnableWebGLDeveloperExtensions[] =
     "enable-webgl-developer-extensions";
 
-// Enables WebGL extensions not yet approved by the community.
-const char kEnableWebGLDraftExtensions[] = "enable-webgl-draft-extensions";
-
-// Enables WebGL rendering into a scanout buffer for overlay support.
-const char kEnableWebGLImageChromium[] = "enable-webgl-image-chromium";
-
 // Define an alias root directory which is replaced with the replacement string
 // in file URLs. The format is "/alias=/replacement", which would turn
 // file:///alias/some/path.html into file:///replacement/some/path.html.
 const char kFileUrlPathAlias[] = "file-url-path-alias";
+
+// Forces recording of NavigationTimeline UKM.
+// Useful for testing NavigationTimeline UKM recording in browser tests.
+const char kForceNavigationTimelineUkmRecordingForTesting[] =
+    "force-navigation-timeline-ukm-recording-for-testing";
 
 // This forces pages to be loaded as presentation receivers.  Useful for testing
 // behavior specific to presentation receivers.
 // Spec: https://www.w3.org/TR/presentation-api/#interface-presentationreceiver
 const char kForcePresentationReceiverForTesting[] =
     "force-presentation-receiver-for-testing";
+
+const char kGpuClientId[] = "gpu-client-id";
 
 // Extra command line options for launching the GPU process (normally used
 // for debugging). Use like renderer-cmd-prefix.
@@ -579,6 +573,10 @@ const char kProcessType[]                   = "type";
 const char kProtectedAudiencesConsentedDebugToken[] =
     "protected-audiences-consented-debug-token";
 
+// Handle to shared memory containing the pseudonymization salt, passed to
+// child processes at launch. See https://crbug.com/40850085.
+const char kPseudonymizationSaltHandle[] = "pseudonymization-salt-handle";
+
 // Enables or disables pull-to-refresh gesture in response to vertical
 // overscroll.
 // Set the value to '0' to disable the feature, set to '1' to enable it for both
@@ -618,17 +616,16 @@ const char kRendererClientId[] = "renderer-client-id";
 // Useful values might be "valgrind" or "xterm -e gdb --args".
 const char kRendererCmdPrefix[]             = "renderer-cmd-prefix";
 
-#if !BUILDFLAG(IS_ANDROID)
-// Indicates that the renderer process was launched to host the initial WebUI
-// as part of WaaP (Webium-as-a-Product).
-const char kRendererForInitialWebUI[] = "renderer-for-initial-webui";
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 // Causes the process to run as renderer instead of as browser.
 const char kRendererProcess[]               = "renderer";
 
 // Time the browser launched the renderer process (in TimeTicks).
 const char kRendererProcessLaunchTimeTicks[] = "launch-time-ticks";
+
+// Time the browser process requested the GPU channel for the renderer (in
+// TimeTicks).
+const char kGpuChannelRequestStartTimeTicks[] =
+    "gpu-channel-request-start-time-ticks";
 
 // Overrides the default/calculated limit to the number of renderer processes.
 // Very high values for this setting can lead to high memory/resource usage
@@ -726,6 +723,9 @@ const char kTargetDeviceScaleForTesting[] = "target-device-scale-for-testing";
 // Type of the current test harness ("browser" or "ui" or "gpu").
 const char kTestType[]                      = "test-type";
 
+// Indicates that this RenderProcess is hosting a Top Chrome WebUI.
+const char kTopChromeWebUI[] = "top-chrome-webui";
+
 // Enable support for touch event feature detection.
 const char kTouchEventFeatureDetection[] = "touch-events";
 
@@ -738,10 +738,8 @@ const char kTouchEventFeatureDetectionEnabled[] = "enabled";
 //   disabled: touch events are disabled.
 const char kTouchEventFeatureDetectionDisabled[] = "disabled";
 
-// Accepts a number representing the time-ticks value at the Unix epoch.
-// Since different processes can produce a different value for this due to
-// system clock changes, this allows synchronizing them to a single value.
-const char kTimeTicksAtUnixEpoch[] = "time-ticks-at-unix-epoch";
+// Enables debug mode for unbounded windows (draws a red border).
+const char kUnboundedWindowDebug[] = "unbounded-window-debug";
 
 // Replaces the existing codecs supported in peer connection with a single fake
 // codec entry that create a fake video encoder and decoder.
@@ -919,6 +917,10 @@ const char kRendererWaitForJavaDebugger[] = "renderer-wait-for-java-debugger";
 
 // Disables debug crash dumps for OOPR.
 const char kDisableOoprDebugCrashDump[] = "disable-oopr-debug-crash-dump";
+
+// Enables/disables javaless renderers based on value given.
+// "enabled" or "disabled" are valid values.
+const char kJavalessRenderers[] = "javaless-renderers";
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // Enable the aggressive flushing of DOM Storage to minimize data loss.

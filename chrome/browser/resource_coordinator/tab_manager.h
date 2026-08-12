@@ -41,7 +41,7 @@ namespace resource_coordinator {
 // not reused in a session. They are stable for a given conceptual tab, and will
 // follow it through discards, reloads, tab strip operations, etc.
 //
-// TODO(fdoray): Rename to LifecycleManager. https://crbug.com/775644
+// TODO(fdoray): Rename to LifecycleManager. https://crbug.com/40545253
 class TabManager : public LifecycleUnitObserver,
                    public LifecycleUnitSourceObserver {
  public:
@@ -64,6 +64,10 @@ class TabManager : public LifecycleUnitObserver,
   // discards the least important tab using DiscardTab(). Otherwise discards
   // the given contents. Returns the new web_contents or null if no tab
   // was discarded.
+  // TODO(crbug.com/485935303): Remove this method as its callers are using
+  // TabListInterface to discard specific tabs and discarding the least
+  // important tab needs to be supported on Android whereas this method is only
+  // callable on desktop.
   content::WebContents* DiscardTabByExtension(content::WebContents* contents);
 
  private:
@@ -78,11 +82,9 @@ class TabManager : public LifecycleUnitObserver,
   static bool IsInternalPage(const GURL& url);
 
   // Discards the less important LifecycleUnit that supports discarding under
-  // |reason|. Exposes |minimum_time_in_background_to_discard| so tests can set
-  // this to 0.
-  content::WebContents* DiscardTabImpl(
-      LifecycleUnitDiscardReason reason,
-      base::TimeDelta minimum_time_in_background_to_discard);
+  // |reason|. Exposes |ignore_recent_visibility| so tests can set this.
+  content::WebContents* DiscardTabImpl(LifecycleUnitDiscardReason reason,
+                                       bool ignore_recent_visibility = false);
 
   void OnSessionRestoreStartedLoadingTabs();
   void OnSessionRestoreFinishedLoadingTabs();

@@ -4,16 +4,22 @@
 
 #include "chrome/browser/actor/actor_metrics.h"
 
+#include <string_view>
 #include <utility>
 
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/actor/actor_task.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/optimization_guide/proto/features/actions_data.pb.h"
 
 namespace actor {
 
 namespace {
+
 std::string_view ToString(ActorTask::StoppedReason stopped_reason) {
   switch (stopped_reason) {
     case ActorTask::StoppedReason::kStoppedByUser:
@@ -32,9 +38,37 @@ std::string_view ToString(ActorTask::StoppedReason stopped_reason) {
       return "NewChat";
     case ActorTask::StoppedReason::kUserLoadedPreviousChat:
       return "PreviousChat";
+    case ActorTask::StoppedReason::kUserNavigatedAway:
+      return "UserNavigatedAway";
+    case ActorTask::StoppedReason::kTimeout:
+      return "Timeout";
   }
   NOTREACHED();
 }
+
+std::string_view ToString(ApcSource source) {
+  switch (source) {
+    case ApcSource::kActor:
+      return "Actor";
+    case ApcSource::kGlic:
+      return "Glic";
+  }
+  NOTREACHED();
+}
+
+// LINT.IfChange(ToString)
+// Not using GetInvocationSourceString from metrics_types.h here because only a
+// subset of invocation sources are recorded.
+std::string_view ToString(glic::mojom::InvocationSource invocation_source) {
+  switch (invocation_source) {
+    case glic::mojom::InvocationSource::kUniversalCart:
+      return "UniversalCart";
+    default:
+      return "Other";
+  }
+}
+// LINT.ThenChange(//tools/metrics/histograms/metadata/actor/histograms.xml:GlicInvocationSourceForActor)
+
 }  // namespace
 
 void RecordActorTaskStateTransitionActionCount(size_t action_count,
@@ -78,11 +112,13 @@ void RecordActorTaskVisibilityDurationHistograms(
       non_visible_duration);
 }
 
-void RecordActorTaskCompletion(ActorTask::StoppedReason stopped_reason,
-                               base::TimeDelta total_time,
-                               base::TimeDelta controlled_time,
-                               size_t interruptions_count,
-                               size_t actions_count) {
+void RecordActorTaskCompletion(
+    ActorTask::StoppedReason stopped_reason,
+    base::TimeDelta total_time,
+    base::TimeDelta controlled_time,
+    size_t interruptions_count,
+    size_t actions_count,
+    std::optional<glic::mojom::InvocationSource> invocation_source) {
   base::UmaHistogramLongTimes100(base::StrCat({"Actor.Task.Duration.WallClock.",
                                                ToString(stopped_reason)}),
                                  total_time);
@@ -96,6 +132,26 @@ void RecordActorTaskCompletion(ActorTask::StoppedReason stopped_reason,
       base::StrCat({"Actor.Task.Count.", ToString(stopped_reason)}),
       actions_count);
   base::UmaHistogramEnumeration("Actor.Task.StoppedReason", stopped_reason);
+
+  if (base::FeatureList::IsEnabled(
+          kActorRecordInvocationSourceCompletionMetrics) &&
+      invocation_source.has_value()) {
+    glic::mojom::InvocationSource invocation_source_value =
+        invocation_source.value();
+    base::UmaHistogramLongTimes100(
+        base::StrCat({"Actor.Task.Duration.WallClock.",
+                      ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        total_time);
+    base::UmaHistogramLongTimes100(
+        base::StrCat({"Actor.Task.Duration.", ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        controlled_time);
+    base::UmaHistogramCounts1000(
+        base::StrCat({"Actor.Task.Count.", ToString(stopped_reason), ".",
+                      ToString(invocation_source_value)}),
+        actions_count);
+  }
 }
 
 void RecordActorTaskCreated(bool success) {
@@ -131,17 +187,171 @@ void RecordDownloadSaveAsDialogTriggered(bool success) {
   base::UmaHistogramBoolean("Actor.Download.SaveAsDialogTriggered", success);
 }
 
-void RecordActorNavigationGatingListSize(size_t allow_list_size,
-                                         size_t confirmed_list_size) {
-  base::UmaHistogramCounts1000("Actor.NavigationGating.AllowListSize",
-                               allow_list_size);
-  base::UmaHistogramCounts1000("Actor.NavigationGating.ConfirmedListSize",
-                               confirmed_list_size);
+void RecordApcComparisonIdentical(ApcSource source, bool identical) {
+  base::UmaHistogramBoolean(
+      base::StrCat({"Actor.PageContext.APC.Comparison.", ToString(source),
+                    ".IsIdenticalToPreviousFetch"}),
+      identical);
+}
+
+void RecordScriptToolActionResultCode(
+    actor::mojom::ActionResultCode action_result_code) {
+  base::UmaHistogramSparse("Actor.Tools.ScriptTool.ActionResultCode",
+                           std::to_underlying(action_result_code));
+  base::UmaHistogramBoolean("Actor.Tools.ScriptTool.InvocationResult",
+                            action_result_code == mojom::ActionResultCode::kOk);
+}
+
+void RecordScriptToolInputSizeBytes(size_t size_bytes) {
+  base::UmaHistogramCounts10M("Actor.Tools.ScriptTool.InputSizeBytes",
+                              size_bytes);
+}
+
+void RecordScriptToolOutputSizeBytes(size_t size_bytes) {
+  base::UmaHistogramCounts10M("Actor.Tools.ScriptTool.OutputSizeBytes",
+                              size_bytes);
 }
 
 void RecordNavigationGatingDecision(ExecutionEngine::GatingDecision decision) {
-  base::UmaHistogramEnumeration("Actor.NavigationGating.GatingDecision",
+  base::UmaHistogramEnumeration("Actor.NavigationGating.GatingDecision2",
                                 decision);
+}
+
+// Records the outcome of an post-performActions observation fetch.
+void RecordObservationOutcomeHistogram(
+    const optimization_guide::proto::ActionsResult& result,
+    bool is_for_retry) {
+  using optimization_guide::proto::TabObservation;
+
+  bool success = true;
+  for (const TabObservation& tab_observation : result.tabs()) {
+    CHECK(tab_observation.has_result(), base::NotFatalUntil::M147);
+    if (tab_observation.result() != TabObservation::TAB_OBSERVATION_OK) {
+      success = false;
+      break;
+    }
+  }
+
+  std::optional<ActorObservationOutcome> outcome;
+  if (success) {
+    outcome = is_for_retry ? ActorObservationOutcome::kSuccessAfterRetry
+                           : ActorObservationOutcome::kSuccess;
+  } else {
+    outcome = is_for_retry ? ActorObservationOutcome::kFailureAfterRetry
+                           : ActorObservationOutcome::kFailure;
+  }
+
+  base::UmaHistogramEnumeration(kActorPageContextObservationOutcome, *outcome);
+}
+
+// Records the outcome of an post-performActions observation fetch.
+void RecordTabObservationResultHistogram(
+    const optimization_guide::proto::ActionsResult& result) {
+  using optimization_guide::proto::TabObservation;
+
+  for (const TabObservation& tab_observation : result.tabs()) {
+    std::optional<ActorTabObservationResult> tab_result;
+    CHECK(tab_observation.has_result(), base::NotFatalUntil::M147);
+    switch (tab_observation.result()) {
+      case TabObservation::TAB_OBSERVATION_OK:
+        tab_result = ActorTabObservationResult::kSuccess;
+        break;
+      case TabObservation::TAB_OBSERVATION_TAB_WENT_AWAY:
+        tab_result = ActorTabObservationResult::kTabWentAway;
+        break;
+      case TabObservation::TAB_OBSERVATION_SCREENSHOT_TIMEOUT:
+        // Deprecated and unused
+        NOTREACHED(base::NotFatalUntil::M147);
+        break;
+      case TabObservation::TAB_OBSERVATION_PAGE_CRASHED:
+        tab_result = ActorTabObservationResult::kPageCrashed;
+        break;
+      case TabObservation::TAB_OBSERVATION_UNKNOWN_ERROR:
+        tab_result = ActorTabObservationResult::kUnknown;
+        break;
+      case TabObservation::TAB_OBSERVATION_WEB_CONTENTS_CHANGED:
+        tab_result = ActorTabObservationResult::kWebContentsChanged;
+        break;
+      case TabObservation::TAB_OBSERVATION_PAGE_CONTEXT_NOT_ELIGIBLE:
+        tab_result = ActorTabObservationResult::kPageContextNotEligible;
+        break;
+      case TabObservation::TAB_OBSERVATION_FETCH_ERROR: {
+        CHECK(tab_observation.has_annotated_page_content_result(),
+              base::NotFatalUntil::M147);
+        CHECK(tab_observation.has_screenshot_result(),
+              base::NotFatalUntil::M147);
+        TabObservation::AnnotatedPageContentResult apc_result =
+            tab_observation.annotated_page_content_result();
+        TabObservation::ScreenshotResult screenshot_result =
+            tab_observation.screenshot_result();
+
+        if (apc_result != TabObservation::ANNOTATED_PAGE_CONTENT_OK &&
+            screenshot_result != TabObservation::SCREENSHOT_OK) {
+          // If both APC and Screenshot failed record it as a single result to
+          // avoid combinatorial results. This should be rare.
+          tab_result = ActorTabObservationResult::kApcAndScreenshotNotOk;
+        } else {
+          switch (apc_result) {
+            case TabObservation::ANNOTATED_PAGE_CONTENT_OK:
+              break;
+            case TabObservation::ANNOTATED_PAGE_CONTENT_TIMEOUT:
+              tab_result = ActorTabObservationResult::kApcTimeout;
+              break;
+            case TabObservation::ANNOTATED_PAGE_CONTENT_ERROR:
+              tab_result = ActorTabObservationResult::kApcError;
+              break;
+            case optimization_guide::proto::
+                TabObservation_AnnotatedPageContentResult_TabObservation_AnnotatedPageContentResult_INT_MIN_SENTINEL_DO_NOT_USE_:
+            case optimization_guide::proto::
+                TabObservation_AnnotatedPageContentResult_TabObservation_AnnotatedPageContentResult_INT_MAX_SENTINEL_DO_NOT_USE_:
+              NOTREACHED(base::NotFatalUntil::M147);
+              break;
+          }
+
+          switch (screenshot_result) {
+            case TabObservation::SCREENSHOT_OK:
+              break;
+            case TabObservation::SCREENSHOT_TIMEOUT:
+              tab_result = ActorTabObservationResult::kScreenshotTimeout;
+              break;
+            case TabObservation::SCREENSHOT_ERROR:
+              tab_result = ActorTabObservationResult::kScreenshotError;
+              break;
+            case optimization_guide::proto::
+                TabObservation_ScreenshotResult_TabObservation_ScreenshotResult_INT_MIN_SENTINEL_DO_NOT_USE_:
+            case optimization_guide::proto::
+                TabObservation_ScreenshotResult_TabObservation_ScreenshotResult_INT_MAX_SENTINEL_DO_NOT_USE_:
+              NOTREACHED(base::NotFatalUntil::M147);
+              break;
+          }
+
+          // We already ensured one of APC and screenshot has a failure.
+          CHECK(tab_result.has_value(), base::NotFatalUntil::M147);
+        }
+        break;
+      }
+      case optimization_guide::proto::
+          TabObservation_TabObservationResult_TabObservation_TabObservationResult_INT_MIN_SENTINEL_DO_NOT_USE_:
+      case optimization_guide::proto::
+          TabObservation_TabObservationResult_TabObservation_TabObservationResult_INT_MAX_SENTINEL_DO_NOT_USE_:
+        NOTREACHED(base::NotFatalUntil::M147);
+        break;
+    }
+
+    CHECK(tab_result.has_value(), base::NotFatalUntil::M147);
+    base::UmaHistogramEnumeration(kActorPageContextTabObservationResult,
+                                  *tab_result);
+  }
+}
+
+void RecordSplitModeTimeOfUseFrameStatus(SplitModeTimeOfUseFrameStatus status) {
+  base::UmaHistogramEnumeration("Actor.PageTool.SplitModeTimeOfUseFrameStatus",
+                                status);
+}
+
+void RecordTimeOfUseObservationSuccess(bool success) {
+  base::UmaHistogramBoolean("Actor.PageTool.TimeOfUseObservationSuccess",
+                            success);
 }
 
 }  // namespace actor

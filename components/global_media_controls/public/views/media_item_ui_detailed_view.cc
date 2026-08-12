@@ -26,6 +26,7 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -223,7 +224,9 @@ MediaItemUIDetailedView::MediaItemUIDetailedView(
   if (media_display_page_ == MediaDisplayPage::kQuickSettingsMediaView) {
     chevron_icon_ = title_row->AddChildView(
         std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-            media_message_center::kChevronRightIcon,
+            features::IsRoundedIconsEnabled()
+                ? media_message_center::kChevronRightIcon
+                : media_message_center::kChevronRightOldIcon,
             theme_.secondary_foreground_color_id, kChevronIconSize)));
     chevron_icon_->SetFlipCanvasOnPaintForRTLUI(true);
   }
@@ -256,7 +259,9 @@ MediaItemUIDetailedView::MediaItemUIDetailedView(
   // Create the play/pause button.
   play_pause_button_ = CreateMediaActionButton(
       controls_column, static_cast<int>(MediaSessionAction::kPlay),
-      media_message_center::kPlayArrowIcon,
+      features::IsRoundedIconsEnabled()
+          ? media_message_center::kPlayArrowFilledIcon
+          : media_message_center::kPlayArrowOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY);
   play_pause_button_->SetBackground(
       views::CreateRoundedRectBackground(theme_.play_button_container_color_id,
@@ -265,20 +270,19 @@ MediaItemUIDetailedView::MediaItemUIDetailedView(
   // `controls_row` holds all the available media action buttons and the
   // progress view.
   auto* controls_row = AddChildView(std::make_unique<views::BoxLayoutView>());
-  // TODO(b/328317702): The fllowing lines are removed as a temp fix of the
-  // tobo bug.
-  // controls_row->SetCrossAxisAlignment(
-  //     views::BoxLayout::CrossAxisAlignment::kCenter);
 
   views::View* button_container = CreateControlsRow();
   if (!button_container) {
     button_container = controls_row;
   }
+  button_container_ = button_container;
 
   // Create the previous track button.
   CreateMediaActionButton(
-      button_container, static_cast<int>(MediaSessionAction::kPreviousTrack),
-      media_message_center::kMediaPreviousTrackIcon,
+      button_container_, static_cast<int>(MediaSessionAction::kPreviousTrack),
+      features::IsRoundedIconsEnabled()
+          ? media_message_center::kSkipPreviousFilledIcon
+          : media_message_center::kMediaPreviousTrackOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PREVIOUS_TRACK);
 
   // Create the progress view.
@@ -307,26 +311,32 @@ MediaItemUIDetailedView::MediaItemUIDetailedView(
 
     // Create the replay 10 button.
     CreateMediaActionButton(
-        button_container, static_cast<int>(MediaSessionAction::kSeekBackward),
-        vector_icons::kReplay10Icon,
+        button_container_, static_cast<int>(MediaSessionAction::kSeekBackward),
+        features::IsRoundedIconsEnabled() ? vector_icons::kReplay10Icon
+                                          : vector_icons::kReplay10OldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_REPLAY_10);
 
     // Create the forward 10 button.
     CreateMediaActionButton(
-        button_container, static_cast<int>(MediaSessionAction::kSeekForward),
-        vector_icons::kForward10Icon,
+        button_container_, static_cast<int>(MediaSessionAction::kSeekForward),
+        features::IsRoundedIconsEnabled() ? vector_icons::kForward10Icon
+                                          : vector_icons::kForward10OldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_FORWARD_10);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Create the next track button.
   CreateMediaActionButton(
-      button_container, static_cast<int>(MediaSessionAction::kNextTrack),
-      media_message_center::kMediaNextTrackIcon,
+      button_container_, static_cast<int>(MediaSessionAction::kNextTrack),
+      features::IsRoundedIconsEnabled()
+          ? media_message_center::kSkipNextFilledIcon
+          : media_message_center::kMediaNextTrackOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_NEXT_TRACK);
 
   const gfx::VectorIcon* devices_icon =
-      &media_message_center::kMediaCastStartIcon;
+      &(features::IsRoundedIconsEnabled()
+            ? media_message_center::kCastIcon
+            : media_message_center::kMediaCastStartOldIcon);
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (base::FeatureList::IsEnabled(media::kBackgroundListening)) {
@@ -334,58 +344,51 @@ MediaItemUIDetailedView::MediaItemUIDetailedView(
     // TODO(b/327505486): The string id is a place holder for now, the real
     // label is TBD.
     chapter_list_button_ = CreateMediaActionButton(
-        button_container, kEmptyMediaActionButtonId,
-        vector_icons::kVideoLibraryIcon,
+        button_container_, kEmptyMediaActionButtonId,
+        features::IsRoundedIconsEnabled() ? vector_icons::kVideoLibraryIcon
+                                          : vector_icons::kVideoLibraryOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SHOW_DEVICE_LIST);
     chapter_list_button_->SetCallback(
         base::BindRepeating(&MediaItemUIDetailedView::ToggleChapterListView,
                             base::Unretained(this)));
     chapter_list_button_->SetVisible(false);
 
-    // Show the `kDevicesIcon` as the device selector button's icon.
-    devices_icon = &vector_icons::kDevicesIcon;
+    // Show the `features::IsRoundedIconsEnabled() ? vector_icons::kDevicesIcon
+    // : kDevicesOldIcon` as the device selector button's icon.
+    devices_icon =
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kDevicesIcon
+                                            : vector_icons::kDevicesOldIcon);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  // Create the start casting button.
-  if (device_selector_view) {
-    start_casting_button_ = CreateMediaActionButton(
-        button_container, kEmptyMediaActionButtonId, *devices_icon,
-        IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SHOW_DEVICE_LIST);
-    start_casting_button_->SetCallback(
-        base::BindRepeating(&MediaItemUIDetailedView::StartCastingButtonPressed,
-                            base::Unretained(this)));
-    start_casting_button_->SetVisible(false);
-  }
+  // Create the start casting button. Its visibility will be updated later in
+  // UpdateDeviceSelectorAvailability().
+  start_casting_button_ = CreateMediaActionButton(
+      button_container_, kEmptyMediaActionButtonId, *devices_icon,
+      IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_SHOW_DEVICE_LIST);
+  start_casting_button_->SetCallback(
+      base::BindRepeating(&MediaItemUIDetailedView::StartCastingButtonPressed,
+                          base::Unretained(this)));
+  start_casting_button_->SetVisible(false);
 
   // Create the picture-in-picture button.
   picture_in_picture_button_ = CreateMediaActionButton(
-      button_container,
+      button_container_,
       static_cast<int>(MediaSessionAction::kEnterPictureInPicture),
-      media_message_center::kMediaEnterPipIcon,
+      features::IsRoundedIconsEnabled()
+          ? media_message_center::kPipIcon
+          : media_message_center::kMediaEnterPipOldIcon,
       IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP);
 
   // Create the stop casting button. It will only show up when this media item
   // is being casted to another device.
   if (footer_view) {
-    footer_view_ = button_container->AddChildView(std::move(footer_view));
+    footer_view_ = button_container_->AddChildView(std::move(footer_view));
     picture_in_picture_button_->SetVisible(false);
   }
 
   if (device_selector_view) {
-    // Create a separator line between the media view and device selector view.
-    device_selector_view_separator_ =
-        AddChildView(std::make_unique<views::BoxLayoutView>());
-    device_selector_view_separator_->SetInsideBorderInsets(
-        kDeviceSelectorSeparatorInsets);
-    auto* separator = device_selector_view_separator_->AddChildView(
-        std::make_unique<views::BoxLayoutView>());
-    separator->SetInsideBorderInsets(kDeviceSelectorSeparatorLineInsets);
-    separator->SetBackground(
-        views::CreateSolidBackground(theme_.separator_color_id));
-    device_selector_view_separator_->SetFlexForView(separator, 1);
-
-    // Create the device selector view.
+    CreateDeviceSelectorViewSeparator();
     device_selector_view_ = AddChildView(std::move(device_selector_view));
   }
 
@@ -415,7 +418,9 @@ void MediaItemUIDetailedView::UpdateWithMediaSessionInfo(
   if (playing) {
     play_pause_button_->Update(
         static_cast<int>(MediaSessionAction::kPause),
-        media_message_center::kPauseIcon,
+        features::IsRoundedIconsEnabled()
+            ? media_message_center::kPauseFilledIcon
+            : media_message_center::kPauseOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PAUSE,
         theme_.pause_button_foreground_color_id);
     play_pause_button_->SetBackground(views::CreateRoundedRectBackground(
@@ -424,7 +429,9 @@ void MediaItemUIDetailedView::UpdateWithMediaSessionInfo(
   } else {
     play_pause_button_->Update(
         static_cast<int>(MediaSessionAction::kPlay),
-        media_message_center::kPlayArrowIcon,
+        features::IsRoundedIconsEnabled()
+            ? media_message_center::kPlayArrowFilledIcon
+            : media_message_center::kPlayArrowOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY,
         theme_.play_button_foreground_color_id);
     play_pause_button_->SetBackground(views::CreateRoundedRectBackground(
@@ -439,13 +446,17 @@ void MediaItemUIDetailedView::UpdateWithMediaSessionInfo(
   if (in_picture_in_picture_) {
     picture_in_picture_button_->Update(
         static_cast<int>(MediaSessionAction::kExitPictureInPicture),
-        media_message_center::kMediaExitPipIcon,
+        features::IsRoundedIconsEnabled()
+            ? media_message_center::kPipExitIcon
+            : media_message_center::kMediaExitPipOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_EXIT_PIP,
         theme_.primary_foreground_color_id);
   } else {
     picture_in_picture_button_->Update(
         static_cast<int>(MediaSessionAction::kEnterPictureInPicture),
-        media_message_center::kMediaEnterPipIcon,
+        features::IsRoundedIconsEnabled()
+            ? media_message_center::kPipIcon
+            : media_message_center::kMediaEnterPipOldIcon,
         IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP,
         theme_.primary_foreground_color_id);
   }
@@ -522,13 +533,13 @@ void MediaItemUIDetailedView::UpdateWithChapterArtwork(
 
 void MediaItemUIDetailedView::UpdateDeviceSelectorAvailability(
     bool has_devices) {
-  CHECK(start_casting_button_);
   // Do not show the start casting button if this media item is being casted to
   // another device and has a footer view of stop casting button.
   bool visible = has_devices && !footer_view_;
   if (visible != start_casting_button_->GetVisible()) {
     start_casting_button_->SetVisible(visible);
     UpdateCastingState();
+    container_->OnListViewSizeChanged();
   }
 }
 
@@ -537,7 +548,8 @@ void MediaItemUIDetailedView::UpdateDeviceSelectorAvailability(
 
 void MediaItemUIDetailedView::AddedToWidget() {
   // Ink drop on the start casting button requires color provider to be ready,
-  // so we need to update the state after the widget is ready.
+  // so we need to update the state after the widget is ready. Do not update the
+  // container size during view initialization to avoid crashing.
   if (device_selector_view_) {
     UpdateCastingState();
   }
@@ -551,6 +563,33 @@ bool MediaItemUIDetailedView::OnKeyPressed(const ui::KeyEvent& event) {
 
 ///////////////////////////////////////////////////////////////////////////////
 // MediaItemUIDetailedView implementations:
+
+void MediaItemUIDetailedView::UpdateFooterView(
+    std::unique_ptr<MediaItemUIFooter> footer_view) {
+  if (footer_view_) {
+    button_container_->RemoveChildViewT(footer_view_.ExtractAsDangling());
+    footer_view_ = nullptr;
+  }
+  if (footer_view) {
+    footer_view_ = button_container_->AddChildView(std::move(footer_view));
+  }
+  picture_in_picture_button_->SetVisible(!footer_view_);
+}
+
+void MediaItemUIDetailedView::UpdateDeviceSelector(
+    std::unique_ptr<MediaItemUIDeviceSelector> device_selector_view) {
+  if (device_selector_view_) {
+    RemoveChildViewT(device_selector_view_separator_.ExtractAsDangling());
+    device_selector_view_separator_ = nullptr;
+    RemoveChildViewT(device_selector_view_.ExtractAsDangling());
+    device_selector_view_ = nullptr;
+  }
+  if (device_selector_view) {
+    CreateDeviceSelectorViewSeparator();
+    device_selector_view_ = AddChildView(std::move(device_selector_view));
+    UpdateCastingState();
+  }
+}
 
 void MediaItemUIDetailedView::MediaLabelPressed(MediaLabelButton* button) {
   // Pressing any media info label on the quick settings media view will try to
@@ -590,8 +629,8 @@ void MediaItemUIDetailedView::UpdateActionButtonsVisibility() {
   bool should_invalidate_layout = false;
 
   for (views::Button* button : action_buttons_) {
-    bool should_show = base::Contains(
-        enabled_actions_, static_cast<MediaSessionAction>(button->GetID()));
+    bool should_show = enabled_actions_.contains(
+        static_cast<MediaSessionAction>(button->GetID()));
 
     if (button == picture_in_picture_button_) {
       // Force the picture-in-picture button to be visible if the media is
@@ -716,6 +755,7 @@ void MediaItemUIDetailedView::StartCastingButtonPressed() {
         device_selector_view_->ShowDevices();
       }
       UpdateCastingState();
+      container_->OnListViewSizeChanged();
       break;
     }
     default:
@@ -724,7 +764,6 @@ void MediaItemUIDetailedView::StartCastingButtonPressed() {
 }
 
 void MediaItemUIDetailedView::UpdateCastingState() {
-  CHECK(start_casting_button_);
   CHECK(device_selector_view_);
   CHECK(device_selector_view_separator_);
 
@@ -762,8 +801,19 @@ void MediaItemUIDetailedView::UpdateCastingState() {
     device_selector_view_->SetVisible(false);
     device_selector_view_separator_->SetVisible(false);
   }
+}
 
-  container_->OnListViewSizeChanged();
+void MediaItemUIDetailedView::CreateDeviceSelectorViewSeparator() {
+  device_selector_view_separator_ =
+      AddChildView(std::make_unique<views::BoxLayoutView>());
+  device_selector_view_separator_->SetInsideBorderInsets(
+      kDeviceSelectorSeparatorInsets);
+  auto* separator = device_selector_view_separator_->AddChildView(
+      std::make_unique<views::BoxLayoutView>());
+  separator->SetInsideBorderInsets(kDeviceSelectorSeparatorLineInsets);
+  separator->SetBackground(
+      views::CreateSolidBackground(theme_.separator_color_id));
+  device_selector_view_separator_->SetFlexForView(separator, 1);
 }
 
 void MediaItemUIDetailedView::UpdateChapterListViewWithMetadata(
@@ -1007,6 +1057,7 @@ void MediaItemUIDetailedView::ToggleChapterListView() {
         device_selector_view_->IsDeviceSelectorExpanded()) {
       device_selector_view_->HideDevices();
       UpdateCastingState();
+      container_->OnListViewSizeChanged();
     }
   }
 

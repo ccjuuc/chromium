@@ -5,12 +5,12 @@
 #include "components/update_client/update_query_params.h"
 
 #include "base/check.h"
-#include "base/strings/stringprintf.h"
 #include "base/system/sys_info.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/update_client/update_query_params_delegate.h"
 #include "components/version_info/version_info.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
@@ -20,7 +20,7 @@ namespace update_client {
 
 namespace {
 
-const char kUnknown[] = "unknown";
+constexpr char kUnknown[] = "unknown";
 
 // The request extra information is the OS and architecture, this helps
 // the server select the right package to be delivered.
@@ -69,15 +69,15 @@ constexpr std::string_view kArch =
 #endif
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-const char kChrome[] = "chrome";
-const char kCrx[] = "chromecrx";
-const char kWebView[] = "googleandroidwebview";
-const char kIOsWebView[] = "googleioswebview";
+constexpr char kChrome[] = "chrome";
+constexpr char kCrx[] = "chromecrx";
+constexpr char kWebView[] = "googleandroidwebview";
+constexpr char kIOsWebView[] = "googleioswebview";
 #else
-const char kChrome[] = "chromium";
-const char kCrx[] = "chromiumcrx";
-const char kWebView[] = "androidwebview";
-const char kIOsWebView[] = "ioswebview";
+constexpr char kChrome[] = "chromium";
+constexpr char kCrx[] = "chromiumcrx";
+constexpr char kWebView[] = "androidwebview";
+constexpr char kIOsWebView[] = "ioswebview";
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 UpdateQueryParamsDelegate* g_delegate = nullptr;
@@ -86,11 +86,9 @@ UpdateQueryParamsDelegate* g_delegate = nullptr;
 
 // static
 std::string UpdateQueryParams::Get(ProdId prod) {
-  return base::StringPrintf(
-      "os=%s&arch=%s&os_arch=%s&prod=%s%s&acceptformat=crx3,puff", kOs, kArch,
-      base::SysInfo().OperatingSystemArchitecture().c_str(),
-      GetProdIdString(prod),
-      g_delegate ? g_delegate->GetExtraParams().c_str() : "");
+  return absl::StrFormat("os=%s&arch=%s&prod=%s%s&acceptformat=crx3,puff", kOs,
+                         kArch, GetProdIdString(prod),
+                         g_delegate ? g_delegate->GetExtraParams() : "");
 }
 
 // static

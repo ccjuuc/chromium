@@ -21,6 +21,7 @@ SANDBOX_POLICY_EXPORT extern const char kDisableLandlockSandbox[];
 SANDBOX_POLICY_EXPORT extern const char kDisableNamespaceSandbox[];
 SANDBOX_POLICY_EXPORT extern const char kDisableSeccompFilterSandbox[];
 SANDBOX_POLICY_EXPORT extern const char kDisableSetuidSandbox[];
+SANDBOX_POLICY_EXPORT extern const char kDisableWebNNCompilerSandbox[];
 SANDBOX_POLICY_EXPORT extern const char kGpuSandboxAllowSysVShm[];
 SANDBOX_POLICY_EXPORT extern const char kGpuSandboxFailuresFatal[];
 SANDBOX_POLICY_EXPORT extern const char kNoSandbox[];
@@ -44,6 +45,8 @@ SANDBOX_POLICY_EXPORT extern const char kUtilityProcess[];
 SANDBOX_POLICY_EXPORT extern const char kZygoteProcessType[];
 SANDBOX_POLICY_EXPORT extern const char kRelauncherProcessType[];
 SANDBOX_POLICY_EXPORT extern const char kCodeSignCloneCleanupProcessType[];
+SANDBOX_POLICY_EXPORT extern const char kAppShimProcessType[];
+SANDBOX_POLICY_EXPORT extern const char kNoOpForTestingProcessType[];
 
 }  // namespace sandbox::policy::switches
 

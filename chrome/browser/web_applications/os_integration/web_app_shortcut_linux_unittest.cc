@@ -14,7 +14,6 @@
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
@@ -267,6 +266,19 @@ TEST_F(WebAppShortcutLinuxTest, GetExistingShortcutLocations) {
 TEST_F(WebAppShortcutLinuxTest, GetExtensionShortcutFilename) {
   EXPECT_EQ(base::FilePath("chrome-extensionid-Profile_1.desktop"),
             GetAppDesktopShortcutFilename(GetProfilePath(), "extensionid"));
+}
+
+TEST_F(WebAppShortcutLinuxTest, ShortcutIdentityDoesNotChangeWhenTitleChanges) {
+  std::unique_ptr<ShortcutInfo> shortcut_info = GetShortcutInfo();
+  std::unique_ptr<ShortcutInfo> renamed_shortcut_info = GetShortcutInfo();
+  renamed_shortcut_info->title = u"renamed app";
+
+  EXPECT_EQ(GenerateApplicationNameFromInfo(*shortcut_info),
+            GenerateApplicationNameFromInfo(*renamed_shortcut_info));
+  EXPECT_EQ(GetAppDesktopShortcutFilename(shortcut_info->profile_path,
+                                          shortcut_info->app_id),
+            GetAppDesktopShortcutFilename(renamed_shortcut_info->profile_path,
+                                          renamed_shortcut_info->app_id));
 }
 
 TEST_F(WebAppShortcutLinuxTest, DeleteDesktopShortcuts) {

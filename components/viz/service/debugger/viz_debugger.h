@@ -14,6 +14,7 @@
 
 #include "base/debug/debugging_buildflags.h"
 #include "base/macros/concat.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
@@ -28,7 +29,9 @@
 #include "components/viz/service/viz_service_export.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/perfetto/include/perfetto/tracing/string_helpers.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -52,7 +55,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
  public:
   // These functions are called on a gpu thread that is not the
   // 'VizCompositorThread' and therefore have mulithreaded considerations.
-  void FilterDebugStream(base::Value::Dict json);
+  void FilterDebugStream(base::DictValue json);
   void StartDebugStream(
       mojo::PendingRemote<mojom::VizDebugOutput> pending_debug_output);
   void StopDebugStream();
@@ -89,6 +92,15 @@ class VIZ_SERVICE_EXPORT VizDebugger {
   }
 
   static VizDebugger* GetInstance();
+
+  // Parse the given hex string to produce a SkColor value. The hex string must
+  // have a length of 7 and starts with a '#', e.g. "#ffffff". Returns
+  // SK_ColorTRANSPARENT on parse failure.
+  static SkColor HexStringToSkColor(std::string_view hex_string);
+
+  // Converts a SkColor value to its corresponding hex string. e.g. SK_ColorRED
+  // will produce "#ff0000".
+  static std::string SkColorToHexString(SkColor color);
 
   VizDebugger();
   ~VizDebugger();
@@ -158,7 +170,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
           source_index(source),
           thread_id(thread),
           option(draw_option) {}
-    base::Value::Dict GetDictionaryValue() const;
+    base::DictValue GetDictionaryValue() const;
     int draw_index;
     int source_index;
     int64_t thread_id;
@@ -243,7 +255,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
   // and mutated by multiple threads simultaneously or individually.
   std::vector<DrawCall> draw_rect_calls_{kDefaultBufferSize};
   std::vector<LogCall> logs_{kDefaultBufferSize};
-  std::vector<StaticSource*> sources_;
+  std::vector<raw_ptr<StaticSource>> sources_;
   std::vector<Buffer> buffers_;
 
   // Individual tail indices tracker variables for next insertion index in
@@ -371,10 +383,9 @@ DrawRectToTraceValue(const gfx::Vector2dF& pos,
 
 #define DBG_DEFAULT_UV 0
 
-#define DBG_VIZ_DEBUGGER_TRACE_IMPL(anno, pos, size, text)            \
-  TRACE_EVENT_INSTANT1(                                               \
-      TRACE_DISABLED_BY_DEFAULT(VIZ_DEBUGGER_TRACING_CATEGORY), anno, \
-      TRACE_EVENT_FLAG_NONE, "args",                                  \
+#define DBG_VIZ_DEBUGGER_TRACE_IMPL(anno, pos, size, text)                    \
+  TRACE_EVENT_INSTANT(                                                        \
+      TRACE_DISABLED_BY_DEFAULT(VIZ_DEBUGGER_TRACING_CATEGORY), anno, "args", \
       viz::DrawRectToTraceValue(pos, size, text))
 
 #define DBG_DRAW_RECTANGLE_OPT_BUFF_UV_TEXT(anno, option, pos, size, id, uv, \
@@ -382,7 +393,7 @@ DrawRectToTraceValue(const gfx::Vector2dF& pos,
   std::ignore = option;                                                      \
   std::ignore = id;                                                          \
   std::ignore = uv;                                                          \
-  DBG_VIZ_DEBUGGER_TRACE_IMPL(anno, pos, size, text)
+  DBG_VIZ_DEBUGGER_TRACE_IMPL(perfetto::StaticString(anno), pos, size, text)
 
 #define DBG_COMPLETE_BUFFERS(buff_id, buffer) \
   std::ignore = buff_id;                      \

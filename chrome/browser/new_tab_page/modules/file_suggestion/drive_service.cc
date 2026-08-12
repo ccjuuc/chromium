@@ -13,6 +13,7 @@
 
 #include "base/hash/hash.h"
 #include "base/i18n/number_formatting.h"
+#include "base/json/json_reader.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -45,6 +46,8 @@ constexpr char kPlatform[] = "WINDOWS";
 constexpr char kPlatform[] = "MAC_OS";
 #elif BUILDFLAG(IS_CHROMEOS)
 constexpr char kPlatform[] = "CHROME_OS";
+#elif BUILDFLAG(IS_ANDROID)
+constexpr char kPlatform[] = "ANDROID";
 #else
 constexpr char kPlatform[] = "UNSPECIFIED_PLATFORM";
 #endif
@@ -101,51 +104,7 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           }
         }
       })");
-constexpr char kFakeDataWithThreeFiles[] = R"({
-  "item": [
-    {
-      "itemId": "foo",
-      "url": "https://docs.google.com",
-      "driveItem": {
-        "title": "Drive Module Design Doc",
-        "mimeType": "application/vnd.google-apps.document"
-      },
-      "justification": {
-        "unstructuredJustificationDescription": {
-          "textSegment": [{"text": "You opened yesterday"}]
-        }
-      }
-    },
-    {
-      "itemId": "bar",
-      "url": "https://sheets.google.com",
-      "driveItem": {
-        "title": "Monthly Presentation Schedule",
-        "mimeType": "application/vnd.google-apps.spreadsheet"
-      },
-      "justification": {
-        "unstructuredJustificationDescription": {
-          "textSegment": [{"text": "You opened today"}]
-        }
-      }
-    },
-    {
-      "itemId": "baz",
-      "url": "https://slides.google.com",
-      "driveItem": {
-        "title": "File With A Really Really Really Really Really Long Name",
-        "mimeType": "application/vnd.google-apps.presentation"
-      },
-      "justification": {
-        "unstructuredJustificationDescription": {
-          "textSegment": [{"text": "You opened on Monday"}]
-        }
-      }
-    }
-  ]
-}
-)";
-constexpr char kFakeDataWithSixFiles[] = R"({
+constexpr char kFakeData[] = R"({
   "item": [
     {
       "itemId": "foo",
@@ -310,14 +269,8 @@ void DriveService::GetDriveFilesInternal() {
   if (base::GetFieldTrialParamValueByFeature(
           ntp_features::kNtpDriveModule,
           ntp_features::kNtpDriveModuleDataParam) == "fake") {
-    base::FeatureList::IsEnabled(ntp_features::kNtpDriveModuleShowSixFiles)
-        ? data_decoder::DataDecoder::ParseJsonIsolated(
-              kFakeDataWithSixFiles, base::BindOnce(&DriveService::OnJsonParsed,
-                                                    weak_factory_.GetWeakPtr()))
-        : data_decoder::DataDecoder::ParseJsonIsolated(
-              kFakeDataWithThreeFiles,
-              base::BindOnce(&DriveService::OnJsonParsed,
-                             weak_factory_.GetWeakPtr()));
+    ProcessParsedJson(
+        base::JSONReader::ReadDict(kFakeData, base::JSON_PARSE_RFC));
     return;
   }
 
@@ -365,9 +318,8 @@ void DriveService::OnTokenReceived(GoogleServiceAuthError error,
           base::GetFieldTrialParamByFeatureAsInt(
               ntp_features::kNtpDriveModule,
               ntp_features::kNtpDriveModuleCacheMaxAgeSParam, 0)) {
-    data_decoder::DataDecoder::ParseJsonIsolated(
-        *cached_json_, base::BindOnce(&DriveService::OnJsonParsed,
-                                      weak_factory_.GetWeakPtr()));
+    ProcessParsedJson(
+        base::JSONReader::ReadDict(*cached_json_, base::JSON_PARSE_RFC));
     return;
   }
 
@@ -388,10 +340,7 @@ void DriveService::OnTokenReceived(GoogleServiceAuthError error,
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  kTrafficAnnotation);
   url_loader_->SetRetryOptions(0, network::SimpleURLLoader::RETRY_NEVER);
-  const int kNumFilesRequested =
-      base::FeatureList::IsEnabled(ntp_features::kNtpDriveModuleShowSixFiles)
-          ? 6
-          : 3;
+  const int kNumFilesRequested = 6;
   url_loader_->AttachStringForUpload(
       base::StringPrintf(kRequestBody, kPlatform, application_locale_.c_str(),
                          base::GetFieldTrialParamValueByFeature(
@@ -420,9 +369,8 @@ void DriveService::OnJsonReceived(const std::string& token,
     cached_json_ = std::move(response_body);
     cached_json_time_ = base::Time::Now();
     cached_json_token_ = token;
-    data_decoder::DataDecoder::ParseJsonIsolated(
-        *cached_json_, base::BindOnce(&DriveService::OnJsonParsed,
-                                      weak_factory_.GetWeakPtr()));
+    ProcessParsedJson(
+        base::JSONReader::ReadDict(*cached_json_, base::JSON_PARSE_RFC));
     return;
   }
 
@@ -433,17 +381,16 @@ void DriveService::OnJsonReceived(const std::string& token,
   } else if (!response_body) {
     LogModuleError(ntp_features::kNtpDriveModule, "no JSON response body");
   }
-    base::UmaHistogramEnumeration("NewTabPage.Drive.ItemSuggestRequestResult",
-                                  ItemSuggestRequestResult::kNetworkError);
-    for (auto& callback : callbacks_) {
-      std::move(callback).Run(std::vector<file_suggestion::mojom::FilePtr>());
-    }
-    callbacks_.clear();
+  base::UmaHistogramEnumeration("NewTabPage.Drive.ItemSuggestRequestResult",
+                                ItemSuggestRequestResult::kNetworkError);
+  for (auto& callback : callbacks_) {
+    std::move(callback).Run(std::vector<file_suggestion::mojom::FilePtr>());
+  }
+  callbacks_.clear();
 }
 
-void DriveService::OnJsonParsed(
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value()) {
+void DriveService::ProcessParsedJson(std::optional<base::DictValue> dict) {
+  if (!dict.has_value()) {
     LogModuleError(ntp_features::kNtpDriveModule, "JSON parse error");
     base::UmaHistogramEnumeration("NewTabPage.Drive.ItemSuggestRequestResult",
                                   ItemSuggestRequestResult::kJsonParseError);
@@ -453,7 +400,8 @@ void DriveService::OnJsonParsed(
     callbacks_.clear();
     return;
   }
-  auto* items = result->GetDict().FindList("item");
+
+  auto* items = dict->FindList("item");
   if (!items) {
     LogModuleError(ntp_features::kNtpDriveModule, "no items in JSON");
     base::UmaHistogramEnumeration("NewTabPage.Drive.ItemSuggestRequestResult",

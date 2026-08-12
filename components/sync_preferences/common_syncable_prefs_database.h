@@ -24,6 +24,8 @@ inline constexpr char kSyncablePriorityPrefForTesting[] =
     "syncable-test-priority-preference";
 inline constexpr char kSyncableAlwaysSyncingPriorityPrefForTesting[] =
     "syncable-always-syncing-test-priority-preference";
+inline constexpr char kSyncableAccountScopedPrefForTesting[] =
+    "syncable-account-scoped-test-preference";
 
 // This class provides an implementation for SyncablePrefsDatabase for common
 // syncable preferences, i.e. preferences which are shared between all
@@ -32,7 +34,7 @@ class CommonSyncablePrefsDatabase : public SyncablePrefsDatabase {
  public:
   // Returns the metadata associated to the pref or null if `pref_name` is not
   // syncable.
-  std::optional<SyncablePrefMetadata> GetSyncablePrefMetadata(
+  const SyncablePrefMetadata* GetSyncablePrefMetadata(
       std::string_view pref_name) const override;
 
   std::map<std::string_view, SyncablePrefMetadata> GetAllSyncablePrefsForTest()

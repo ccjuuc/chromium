@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -16,8 +15,8 @@
 #include "base/uuid.h"
 #include "chrome/browser/notifications/scheduler/internal/collection_store.h"
 #include "chrome/browser/notifications/scheduler/internal/icon_store.h"
-#include "chrome/browser/notifications/scheduler/internal/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/internal/scheduler_config.h"
+#include "chrome/browser/notifications/scheduler/public/notification_entry.h"
 #include "chrome/browser/notifications/scheduler/public/notification_params.h"
 #include "chrome/browser/notifications/scheduler/public/notification_scheduler_constant.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -57,7 +56,7 @@ void VerifyNotificationEntry(const NotificationEntry* entry,
   const auto& expected_icons = expected->notification_data.icons;
   for (const auto& icon : entry_icons) {
     auto icon_type = icon.first;
-    EXPECT_TRUE(base::Contains(expected_icons, icon_type));
+    EXPECT_TRUE(expected_icons.contains(icon_type));
     EXPECT_EQ(entry_icons.at(icon_type).bitmap.width(),
               expected_icons.at(icon_type).bitmap.width());
     EXPECT_EQ(entry_icons.at(icon_type).bitmap.height(),
@@ -477,7 +476,7 @@ TEST_F(ScheduledNotificationManagerTest, GetAllNotifications) {
 TEST_F(ScheduledNotificationManagerTest, GetNotifications) {
   auto entry = CreateNotificationEntry(SchedulerClientType::kTest1);
   InitWithData(std::vector<NotificationEntry>({entry}));
-  std::vector<const NotificationEntry*> entries;
+  std::vector<raw_ptr<const NotificationEntry>> entries;
   manager()->GetNotifications(SchedulerClientType::kTest2, &entries);
   EXPECT_TRUE(entries.empty());
 

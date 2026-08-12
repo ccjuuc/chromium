@@ -63,6 +63,11 @@ public class HomeFragment extends DevUiBaseFragment {
 
                     return true;
                 });
+
+        if (isTV()) {
+            View navBarButton = activity.findViewById(R.id.navigation_home);
+            registerBackPressToNavBarCallback(navBarButton);
+        }
     }
 
     @Override
@@ -105,6 +110,19 @@ public class HomeFragment extends DevUiBaseFragment {
 
         ArrayAdapter<InfoItem> itemsArrayAdapter = new InfoListAdapter(infoItems);
         mInfoListView.setAdapter(itemsArrayAdapter);
+
+        if (isTV()) {
+            setupTvFocusOnResume();
+        }
+    }
+
+    private void setupTvFocusOnResume() {
+        if (!shouldRequestFocus()) return;
+        mInfoListView.post(
+                () -> {
+                    mInfoListView.requestFocus();
+                    mInfoListView.setSelection(0);
+                });
     }
 
     /**

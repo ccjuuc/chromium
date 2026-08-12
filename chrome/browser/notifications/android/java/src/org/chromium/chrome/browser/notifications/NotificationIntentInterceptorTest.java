@@ -24,13 +24,12 @@ import org.robolectric.Robolectric;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLog;
 import org.robolectric.shadows.ShadowNotificationManager;
 import org.robolectric.shadows.ShadowPendingIntent;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
 import org.chromium.components.browser_ui.notifications.NotificationManagerProxyImpl;
 import org.chromium.components.browser_ui.notifications.NotificationMetadata;
@@ -44,7 +43,6 @@ import org.chromium.components.browser_ui.notifications.PendingIntentProvider;
  */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(shadows = {ShadowNotificationManager.class, ShadowPendingIntent.class})
-@LooperMode(LooperMode.Mode.LEGACY)
 public class NotificationIntentInterceptorTest {
     private static final String TEST_NOTIFICATION_TITLE = "Test notification title";
     private static final String TEST_NOTIFICATION_ACTION_TITLE = "Test notification action title";
@@ -77,7 +75,6 @@ public class NotificationIntentInterceptorTest {
 
     @Before
     public void setUp() throws Exception {
-        ShadowLog.stream = System.out;
         mContext = RuntimeEnvironment.application;
         mShadowNotificationManager =
                 shadowOf(
@@ -125,13 +122,17 @@ public class NotificationIntentInterceptorTest {
         return builder.buildNotificationWrapper();
     }
 
-    private void sendPendingIntent(PendingIntent pendingIntent) {
-        // Simulate to send a PendingIntent by manually starting the TrampolineActivity.
+    private void sendPendingIntent(PendingIntent pendingIntent) throws Exception {
         ShadowPendingIntent shadowPendingIntent = Shadows.shadowOf(pendingIntent);
-        Robolectric.buildActivity(
-                        NotificationIntentInterceptor.TrampolineActivity.class,
-                        shadowPendingIntent.getSavedIntent())
-                .create();
+        if (shadowPendingIntent.isActivity()) {
+            // Simulate to send a PendingIntent by manually starting the TrampolineActivity.
+            Robolectric.buildActivity(
+                            NotificationIntentInterceptor.TrampolineActivity.class,
+                            shadowPendingIntent.getSavedIntent())
+                    .create();
+        } else {
+            pendingIntent.send();
+        }
     }
 
     /**
@@ -150,6 +151,7 @@ public class NotificationIntentInterceptorTest {
                 TEST_NOTIFICATION_TITLE,
                 notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
         sendPendingIntent(notification.contentIntent);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Verify the intent and histograms recorded.
         Intent receivedIntent = mReceiver.intentReceived();
@@ -159,7 +161,7 @@ public class NotificationIntentInterceptorTest {
         Assert.assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
-                        "Mobile.SystemNotification.Content.Click",
+                        "Mobile.SystemNotification.Content.Click2",
                         NotificationUmaTracker.SystemNotificationType.DOWNLOAD_FILES));
     }
 
@@ -179,12 +181,13 @@ public class NotificationIntentInterceptorTest {
                 TEST_NOTIFICATION_TITLE,
                 notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
         notification.deleteIntent.send();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Verify the histogram.
         Assert.assertEquals(
                 1,
                 RecordHistogram.getHistogramValueCountForTesting(
-                        "Mobile.SystemNotification.Dismiss",
+                        "Mobile.SystemNotification.Dismiss2",
                         NotificationUmaTracker.SystemNotificationType.DOWNLOAD_FILES));
         Assert.assertNull(mReceiver.intentReceived());
     }
@@ -206,6 +209,7 @@ public class NotificationIntentInterceptorTest {
         Notification.Action action = notification.actions[0];
         Assert.assertNotNull(action.actionIntent);
         sendPendingIntent(action.actionIntent);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Verify the intent and histograms recorded.
         Intent receivedIntent = mReceiver.intentReceived();
@@ -217,5 +221,55 @@ public class NotificationIntentInterceptorTest {
                 RecordHistogram.getHistogramValueCountForTesting(
                         "Mobile.SystemNotification.Action.Click",
                         NotificationUmaTracker.ActionType.DOWNLOAD_PAUSE));
+    }
+
+    /**
+     * Verifies that multiple action buttons with different request codes produce distinct intercept
+     * PendingIntents that do not overwrite each other.
+     */
+    @Test
+    public void testMultipleActionIntentsHaveUniqueRequestCodes() {
+        NotificationMetadata metadata =
+                new NotificationMetadata(
+                        NotificationUmaTracker.SystemNotificationType.SITES,
+                        "notification_tag",
+                        /* notificationId= */ 1);
+
+        Intent intent0 = new Intent("action_0");
+        PendingIntentProvider provider0 =
+                PendingIntentProvider.getBroadcast(
+                        RuntimeEnvironment.getApplication(),
+                        /* requestCode= */ 0,
+                        intent0,
+                        PendingIntent.FLAG_UPDATE_CURRENT,
+                        /* mutable= */ false);
+
+        Intent intent1 = new Intent("action_1");
+        PendingIntentProvider provider1 =
+                PendingIntentProvider.getBroadcast(
+                        RuntimeEnvironment.getApplication(),
+                        /* requestCode= */ 1,
+                        intent1,
+                        PendingIntent.FLAG_UPDATE_CURRENT,
+                        /* mutable= */ false);
+
+        PendingIntent interceptIntent0 =
+                NotificationIntentInterceptor.createInterceptPendingIntent(
+                        NotificationIntentInterceptor.IntentType.ACTION_INTENT,
+                        NotificationUmaTracker.ActionType.UNKNOWN,
+                        metadata,
+                        provider0);
+
+        PendingIntent interceptIntent1 =
+                NotificationIntentInterceptor.createInterceptPendingIntent(
+                        NotificationIntentInterceptor.IntentType.ACTION_INTENT,
+                        NotificationUmaTracker.ActionType.UNKNOWN,
+                        metadata,
+                        provider1);
+
+        Assert.assertNotEquals(
+                "PendingIntents for Action 0 and Action 1 must not be equal",
+                interceptIntent0,
+                interceptIntent1);
     }
 }

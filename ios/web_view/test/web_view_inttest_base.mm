@@ -13,6 +13,7 @@
 #import "base/strings/string_util.h"
 #import "base/strings/stringprintf.h"
 #import "ios/web/common/uikit_ui_util.h"
+#import "ios/web_view/public/cwv_global_state.h"
 #import "ios/web_view/test/web_view_test_util.h"
 #import "net/base/url_util.h"
 #import "net/test/embedded_test_server/embedded_test_server.h"
@@ -104,10 +105,21 @@ std::unique_ptr<net::test_server::HttpResponse> TestRequestHandler(
 
 namespace ios_web_view {
 
-WebViewInttestBase::WebViewInttestBase() {
+WebViewInttestBase::WebViewInttestBase() : WebViewInttestBase(nil) {}
+
+WebViewInttestBase::WebViewInttestBase(CWVEarlyInitFlags* flags) {
   // Explicitly start global state machinery before accessing any CWV APIs.
-  [[CWVGlobalState sharedInstance] earlyInit];
+  if (!flags) {
+    flags = [[CWVEarlyInitFlags alloc] init];
+    // TODO(crbug.com/520177478): Remove when this option is enabled by default,
+    // or when there is an alternate solution for setting CWVEarlyInitFlags
+    // in unittests.
+    flags.autofillAcrossIframesEnabled = YES;
+  }
+  [[CWVGlobalState sharedInstance] earlyInitWithFlags:flags];
   [[CWVGlobalState sharedInstance] start];
+
+  [CWVWebView setWebInspectorEnabled:YES];
 
   web_view_ = test::CreateWebView();
   test_server_ = std::make_unique<net::EmbeddedTestServer>(

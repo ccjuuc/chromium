@@ -14,6 +14,7 @@
 #include "third_party/blink/renderer/core/editing/iterators/character_iterator.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/spell_check_requester.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/spell_check_requester_helper.h"
 #include "third_party/blink/renderer/core/editing/spellcheck/spell_checker.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
@@ -50,9 +51,7 @@ void ColdModeSpellCheckRequester::Trace(Visitor* visitor) const {
 }
 
 ColdModeSpellCheckRequester::ColdModeSpellCheckRequester(LocalDOMWindow& window)
-    : window_(window),
-      last_chunk_index_(kInvalidChunkIndex),
-      needs_more_invocation_for_testing_(false) {}
+    : window_(window), last_chunk_index_(kInvalidChunkIndex) {}
 
 bool ColdModeSpellCheckRequester::FullyCheckedCurrentRootEditable() const {
   if (needs_more_invocation_for_testing_) {
@@ -74,35 +73,27 @@ SpellCheckRequester& ColdModeSpellCheckRequester::GetSpellCheckRequester()
 }
 
 const Element* ColdModeSpellCheckRequester::QualifyingEditable() const {
-  // We can skip this pass if the page isn't being interacted with and
-  // `kRestrictSpellingAndGrammarHighlightsChangedContents` is enabled.
+  // We can skip this pass if the page isn't being interacted with .
   // This isn't the ideal signal, as it has a 5 second timeout, but it's
   // enough to prevent a user focused field from being taken advantage of.
   // For more see:
   // https://explainers-by-googlers.github.io/user-dictionary-leaks/
-  bool skip_due_to_contents = false;
-  if (base::FeatureList::IsEnabled(
-          features::kRestrictSpellingAndGrammarHighlights) &&
-      features::kRestrictSpellingAndGrammarHighlightsChangedContents.Get()) {
-    skip_due_to_contents =
-        !LocalFrame::HasTransientUserActivation(window_->GetFrame());
-  }
+  bool skip_due_to_contents =
+      !LocalFrame::HasTransientUserActivation(window_->GetFrame()) &&
+      !base::FeatureList::IsEnabled(
+          features::kUnrestrictSpellingAndGrammarForTesting);
   base::UmaHistogramBoolean(
       "WebCore.Editing.SpellCheckUserActionLimitation.Cold.Contents",
       skip_due_to_contents);
 
-  // We can skip this pass if the selection isn't the result of a user gesture
-  // and `kRestrictSpellingAndGrammarHighlightsChangedSelection` is enabled.
+  // We can skip this pass if the selection isn't the result of a user gesture.
   // For more see:
   // https://explainers-by-googlers.github.io/user-dictionary-leaks/
-  bool skip_due_to_selection = false;
-  if (base::FeatureList::IsEnabled(
-          features::kRestrictSpellingAndGrammarHighlights) &&
-      features::kRestrictSpellingAndGrammarHighlightsChangedSelection.Get()) {
-    const Element* focused_element = window_->document()->FocusedElement();
-    skip_due_to_selection =
-        focused_element && !focused_element->WasLastFocusFromUserGesture();
-  }
+  const Element* focused_element = window_->document()->FocusedElement();
+  bool skip_due_to_selection =
+      (!focused_element || !focused_element->WasLastFocusFromUserGesture()) &&
+      !base::FeatureList::IsEnabled(
+          features::kUnrestrictSpellingAndGrammarForTesting);
   base::UmaHistogramBoolean(
       "WebCore.Editing.SpellCheckUserActionLimitation.Cold.Selection",
       skip_due_to_selection);
@@ -113,7 +104,7 @@ const Element* ColdModeSpellCheckRequester::QualifyingEditable() const {
   }
 
   const Position position =
-      window_->GetFrame()->Selection().GetSelectionInDOMTree().Focus();
+      window_->GetFrame()->Selection().GetSelectionInDomTree().Focus();
   if (position.IsNull())
     return nullptr;
 
@@ -231,9 +222,8 @@ bool ColdModeSpellCheckRequester::RequestCheckingForNextChunk() {
           : std::min(extended_end, remaining_range.EndPosition());
   const EphemeralRange check_range(chunk_start, check_end);
 
-  GetSpellCheckRequester().RequestCheckingFor(
-      check_range, /*spelling_markers=*/{}, chunk_index,
-      /*should_force_refresh=*/false);
+  GetSpellCheckRequester().RequestCheckingFor(check_range, chunk_index,
+                                              /*should_force_refresh=*/false);
 
   last_chunk_index_ = chunk_index;
   remaining_check_range_->setStart(check_range.EndPosition());
@@ -282,7 +272,7 @@ void ColdModeSpellCheckRequester::RequestLocalChecking(
   const EphemeralRange& full_range =
       EphemeralRange::RangeOfContents(element_to_check);
   const Position position =
-      window_->GetFrame()->Selection().GetSelectionInDOMTree().Focus();
+      window_->GetFrame()->Selection().GetSelectionInDomTree().Focus();
   DCHECK(position.IsNotNull());
 
   TextIteratorBehavior behavior =

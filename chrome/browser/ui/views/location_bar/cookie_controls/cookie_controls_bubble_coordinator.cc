@@ -6,12 +6,10 @@
 
 #include "base/callback_list.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_bubble_view_controller.h"
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_bubble_view_impl.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "ui/actions/actions.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
@@ -50,19 +48,14 @@ void CookieControlsBubbleCoordinator::ShowBubble(
 
   // TODO(crbug.com/376283777): An action ID should be created and used here
   // when Cookie Controls is migrated to the new page actions framework.
-  views::View* anchor_view =
-      toolbar_button_provider->GetAnchorView(std::nullopt);
+  auto anchor = toolbar_button_provider->GetBubbleAnchor(std::nullopt);
   auto bubble_view = std::make_unique<CookieControlsBubbleViewImpl>(
-      anchor_view, web_contents,
+      anchor, web_contents,
       base::BindOnce(&CookieControlsBubbleCoordinator::OnViewIsDeleting,
                      base::Unretained(this)));
   bubble_view_ = bubble_view.get();
   bubble_view_->View::AddObserver(this);
-
-  auto* icon_view =
-      toolbar_button_provider->GetPageActionView(kActionShowCookieControls);
-  CHECK(icon_view);
-  bubble_view_->SetHighlightedButton(icon_view);
+  bubble_view_->SetHighlightedElement(kCookieControlsIconElementId);
 
   view_controller_ = std::make_unique<CookieControlsBubbleViewController>(
       bubble_view_, controller, web_contents);

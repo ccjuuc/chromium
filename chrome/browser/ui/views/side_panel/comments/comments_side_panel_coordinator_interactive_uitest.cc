@@ -9,11 +9,11 @@
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/side_panel/comments/comments_side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/test/tab_strip_interactive_test_mixin.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -81,7 +81,7 @@ class CommentsSidePanelCoordinatorInteractiveUiTest
     if (should_sign_in) {
       // Simulate a signed in primary account.
       signin::IdentityManager* identity_manager =
-          IdentityManagerFactory::GetForProfile(browser()->profile());
+          IdentityManagerFactory::GetForProfile(browser()->GetProfile());
       signin::MakePrimaryAccountAvailable(identity_manager, email,
                                           signin::ConsentLevel::kSignin);
       signin::MakePrimaryAccountAvailable(identity_manager, email,
@@ -104,24 +104,24 @@ class CommentsSidePanelCoordinatorInteractiveUiTest
 
   tab_groups::TabGroupSyncService* tab_group_sync_service() {
     return tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   data_sharing::DataSharingService* data_sharing_service() {
     data_sharing::DataSharingService* data_sharing_service =
         data_sharing::DataSharingServiceFactory::GetForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     return data_sharing_service;
   }
 
   CommentsSidePanelCoordinator* side_panel_coordinator() {
-    return browser()->GetFeatures().comments_side_panel_coordinator();
+    return CommentsSidePanelCoordinator::From(browser());
   }
 
   actions::ActionItem* GetActionItemForCommentsSidePanel() {
     return actions::ActionManager::Get().FindAction(
         kActionSidePanelShowComments,
-        browser()->GetActions()->root_action_item());
+        BrowserActions::From(browser())->root_action_item());
   }
 
  private:

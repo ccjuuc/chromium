@@ -28,12 +28,11 @@
 #include "media/base/video_color_space.h"
 #include "media/base/video_types.h"
 #include "media/parsers/h264_bit_reader.h"
+#include "media/parsers/h26x_parser.h"
 
 namespace gfx {
 class Rect;
 class Size;
-struct HdrMetadataSmpteSt2086;
-struct HdrMetadataCta861_3;
 }  // namespace gfx
 
 namespace media {
@@ -407,33 +406,11 @@ struct MEDIA_EXPORT H264SEIRecoveryPoint {
   int changing_slice_group_idc = 0;
 };
 
-struct MEDIA_EXPORT H264SEIMasteringDisplayInfo {
-  enum {
-    kNumDisplayPrimaries = 3,
-    kDisplayPrimaryComponents = 2,
-  };
-
-  std::array<std::array<uint16_t, kDisplayPrimaryComponents>,
-             kNumDisplayPrimaries>
-      display_primaries = {};
-  std::array<uint16_t, 2> white_points = {};
-  uint32_t max_luminance = 0;
-  uint32_t min_luminance = 0;
-
-  gfx::HdrMetadataSmpteSt2086 ToGfx() const;
-};
-
-struct MEDIA_EXPORT H264SEIContentLightLevelInfo {
-  uint16_t max_content_light_level = 0;
-  uint16_t max_picture_average_light_level = 0;
-
-  gfx::HdrMetadataCta861_3 ToGfx() const;
-};
-
 using H264SEIMessage = std::variant<std::monostate,
                                     H264SEIRecoveryPoint,
-                                    H264SEIMasteringDisplayInfo,
-                                    H264SEIContentLightLevelInfo>;
+                                    H26xSEIMasteringDisplayInfo,
+                                    H26xSEIContentLightLevelInfo,
+                                    H26xSEIUserDataRegisteredT35>;
 
 struct MEDIA_EXPORT H264SEI {
   H264SEI();
@@ -489,8 +466,7 @@ class MEDIA_EXPORT H264Parser {
 
   // Parses the input stream and returns all the NALUs through |nalus|. Returns
   // false if the stream is invalid.
-  static bool ParseNALUs(const uint8_t* stream,
-                         size_t stream_size,
+  static bool ParseNALUs(base::span<const uint8_t> stream,
                          std::vector<H264NALU>* nalus);
 
   H264Parser();
@@ -620,6 +596,9 @@ class MEDIA_EXPORT H264Parser {
   // This contains the range of the previous NALU found in
   // AdvanceToNextNalu(). Holds exactly one range.
   Ranges<const uint8_t*> previous_nalu_range_;
+
+  // Cached value of kExtendedVideoBitstreamValidation feature.
+  const bool validate_extended_bitstream_;
 };
 
 }  // namespace media

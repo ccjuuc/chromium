@@ -8,11 +8,11 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <sstream>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -90,7 +90,7 @@ ChecksumStatus LoadFile(const base::FilePath& file_path,
   size_t pos = contents.rfind(CHECKSUM_PREFIX);
   if (pos != std::string::npos) {
     std::string checksum = contents.substr(pos + strlen(CHECKSUM_PREFIX));
-    contents = contents.substr(0, pos);
+    contents.erase(pos);
     if (checksum != spellcheck::Md5AsHexForDictionaryChecksum(contents)) {
       return INVALID_CHECKSUM;
     }
@@ -99,7 +99,8 @@ ChecksumStatus LoadFile(const base::FilePath& file_path,
   std::vector<std::string> word_list = base::SplitString(
       base::TrimWhitespaceASCII(contents, base::TRIM_ALL), "\n",
       base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  words->insert(word_list.begin(), word_list.end());
+  words->insert(std::make_move_iterator(word_list.begin()),
+                std::make_move_iterator(word_list.end()));
   return VALID_CHECKSUM;
 }
 
@@ -282,7 +283,7 @@ bool SpellcheckCustomDictionary::RemoveWord(const std::string& word) {
 }
 
 bool SpellcheckCustomDictionary::HasWord(const std::string& word) const {
-  return base::Contains(GetWords(), word);
+  return GetWords().contains(word);
 }
 
 void SpellcheckCustomDictionary::Clear() {

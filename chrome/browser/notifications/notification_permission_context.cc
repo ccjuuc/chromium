@@ -4,6 +4,8 @@
 
 #include "chrome/browser/notifications/notification_permission_context.h"
 
+#include <variant>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -13,20 +15,23 @@
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/visibility_timer_tab_helper.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/permission_request_id.h"
+#include "components/visibility_timer/visibility_timer_tab_helper.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/permission_request_description.h"
 #include "content/public/browser/permission_result.h"
+#include "content/public/browser/render_frame_host.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
@@ -36,7 +41,7 @@
 #include "chrome/browser/webapps/installable/installed_webapp_bridge.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/notifications/notifier_state_tracker.h"
 #include "chrome/browser/notifications/notifier_state_tracker_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -45,7 +50,7 @@
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 // static
 void NotificationPermissionContext::UpdatePermission(
@@ -85,7 +90,15 @@ ContentSetting NotificationPermissionContext::GetContentSettingStatusInternal(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     const GURL& embedding_origin) const {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+  if (render_frame_host) {
+    if (render_frame_host->GetLastCommittedOrigin().opaque()) {
+      return CONTENT_SETTING_BLOCK;
+    }
+  } else if (url::Origin::Create(requesting_origin).opaque()) {
+    return CONTENT_SETTING_BLOCK;
+  }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Extensions can declare the "notifications" permission in their manifest
   // that also grant permission to use the Web Notification API.
   ContentSetting extension_status =
@@ -107,7 +120,7 @@ ContentSetting NotificationPermissionContext::GetContentSettingStatusInternal(
   return setting;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 ContentSetting NotificationPermissionContext::GetPermissionStatusForExtension(
     const GURL& origin) const {
   constexpr ContentSetting kDefaultSetting = CONTENT_SETTING_ASK;
@@ -173,8 +186,9 @@ void NotificationPermissionContext::DecidePermission(
   if (browser_context()->IsOffTheRecord()) {
     // Random number of seconds in the range [1.0, 2.0).
     double delay_seconds = 1.0 + 1.0 * base::RandDouble();
-    VisibilityTimerTabHelper::CreateForWebContents(web_contents);
-    VisibilityTimerTabHelper::FromWebContents(web_contents)
+    visibility_timer::VisibilityTimerTabHelper::CreateForWebContents(
+        web_contents);
+    visibility_timer::VisibilityTimerTabHelper::FromWebContents(web_contents)
         ->PostTaskAfterVisibleDelay(
             FROM_HERE,
             base::BindOnce(
@@ -185,8 +199,12 @@ void NotificationPermissionContext::DecidePermission(
                   if (context) {
                     context->NotifyPermissionSet(
                         *request_data, std::move(callback),
-                        /*persist=*/true, PermissionDecision::kDeny,
-                        /*is_final_decision=*/true);
+                        /*persist=*/true,
+                        /*permission_result=*/nullptr,
+                        permissions::PermissionPromptDecision{
+                            .overall_decision = PermissionDecision::kDeny,
+                            .prompt_options = std::monostate(),
+                            .is_final = true});
                   }
                 },
                 weak_factory_ui_thread_.GetWeakPtr(), std::move(request_data),
@@ -214,7 +232,7 @@ void NotificationPermissionContext::DecidePermission(
         base::BindOnce(&NotificationPermissionContext::NotifyPermissionSet,
                        weak_factory_ui_thread_.GetWeakPtr(),
                        permissions::PermissionRequestData(
-                           this, request_data->id,
+                           request_data->id,
                            content::PermissionRequestDescription(
                                content::PermissionDescriptorUtil::
                                    CreatePermissionDescriptorForPermissionType(
@@ -222,7 +240,8 @@ void NotificationPermissionContext::DecidePermission(
                            request_data->requesting_origin,
                            request_data->embedding_origin),
                        std::move(callback),
-                       /*persist=*/false));
+                       /*persist=*/false,
+                       /*permission_result=*/nullptr));
     return;
   }
 #endif  // BUILDFLAG(IS_ANDROID)

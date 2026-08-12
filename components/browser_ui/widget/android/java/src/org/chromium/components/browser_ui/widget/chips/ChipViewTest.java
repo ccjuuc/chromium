@@ -11,8 +11,10 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThan;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -38,8 +40,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowView;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -51,7 +51,6 @@ import org.chromium.ui.widget.LoadingView;
 @Config(
         manifest = Config.NONE,
         shadows = {ShadowView.class})
-@LooperMode(LooperMode.Mode.LEGACY)
 public final class ChipViewTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -67,6 +66,7 @@ public final class ChipViewTest {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mActivity.getTheme().applyStyle(R.style.Theme_BrowserUI_DayNight, true);
         mChipView = new ChipView(mActivity, null);
+        mActivity.setContentView(mChipView);
     }
 
     @Test
@@ -226,17 +226,41 @@ public final class ChipViewTest {
 
         LoadingView.Observer firstObserver = mock(LoadingView.Observer.class);
         mChipView.showLoadingView(firstObserver);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         assertEquals(View.VISIBLE, loadingView.getVisibility());
         // The start icon shouldn't be visible when the loading view is displayed.
         assertEquals(View.GONE, startIcon.getVisibility());
         verify(firstObserver).onShowLoadingUiComplete();
 
         LoadingView.Observer secondObserver = mock(LoadingView.Observer.class);
-        mChipView.hideLoadingView(secondObserver);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        mChipView.hideLoadingView(secondObserver, /* skipDelay= */ true);
         assertEquals(View.GONE, loadingView.getVisibility());
         // The start icon should be visible again when the loading view becomes hidden.
+        assertEquals(View.VISIBLE, startIcon.getVisibility());
+        verify(secondObserver).onHideLoadingUiComplete();
+    }
+
+    @Test
+    @SmallTest
+    public void loadingViewNullObserver() {
+        // Calling show/hide with null should not crash.
+        mChipView.showLoadingView(null);
+        mChipView.hideLoadingView(null);
+    }
+
+    @Test
+    @SmallTest
+    public void loadingViewSkipDelay() {
+        mChipView.setIconWithTint(R.drawable.ic_settings_gear_24dp, /* tintWithTextColor= */ false);
+        LoadingView loadingView = mChipView.findViewById(R.id.chip_view_loading_view);
+        ImageView startIcon = mChipView.findViewById(R.id.chip_view_start_icon);
+
+        LoadingView.Observer firstObserver = mock(LoadingView.Observer.class);
+        mChipView.showLoadingView(firstObserver);
+        assertEquals(View.VISIBLE, loadingView.getVisibility());
+
+        LoadingView.Observer secondObserver = mock(LoadingView.Observer.class);
+        mChipView.hideLoadingView(secondObserver, /* skipDelay= */ true);
+        assertEquals(View.GONE, loadingView.getVisibility());
         assertEquals(View.VISIBLE, startIcon.getVisibility());
         verify(secondObserver).onHideLoadingUiComplete();
     }
@@ -313,6 +337,54 @@ public final class ChipViewTest {
                         mActivity, R.drawable.test_ic_arrow_downward_black_24dp),
                 /* tintWithTextColor= */ true);
         assertEquals(View.VISIBLE, startIcon.getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    public void compactMode() {
+        mChipView.getPrimaryTextView().setText("Primary text");
+        int defaultStartPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_start_padding);
+        int defaultEndPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_end_padding);
+        int compactPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_compact_padding);
+
+        mChipView.setIsCompact(true);
+        assertTrue(mChipView.isCompact());
+        assertEquals(View.GONE, mChipView.getPrimaryTextView().getVisibility());
+        assertEquals(compactPadding, mChipView.getPaddingStart());
+        assertEquals(compactPadding, mChipView.getPaddingEnd());
+
+        mChipView.setIsCompact(false);
+        assertFalse(mChipView.isCompact());
+        assertEquals(View.VISIBLE, mChipView.getPrimaryTextView().getVisibility());
+        assertEquals(defaultStartPadding, mChipView.getPaddingStart());
+        assertEquals(defaultEndPadding, mChipView.getPaddingEnd());
+    }
+
+    @Test
+    @SmallTest
+    public void compactModeAccessibilityTextAndTooltip() {
+        mChipView.setText("Search Tab");
+        assertNull(mChipView.getContentDescription());
+        assertNull(mChipView.getTooltipText());
+
+        mChipView.setIsCompact(true);
+        assertEquals("Search Tab", mChipView.getContentDescription());
+        assertEquals("Search Tab", mChipView.getTooltipText());
+    }
+
+    @Test
+    @SmallTest
+    public void compactModePreservesExistingContentDescription() {
+        mChipView.setContentDescription("Custom accessibility description");
+        mChipView.setText("Visible text");
+        mChipView.setIsCompact(true);
+
+        // Explicitly configured content description should not be overwritten.
+        assertEquals("Custom accessibility description", mChipView.getContentDescription());
+        assertNull(mChipView.getTooltipText());
     }
 
     private void measureChip(ChipView chip) {

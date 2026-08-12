@@ -6,6 +6,7 @@ package org.chromium.android_webview.common;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.url.GURL;
 
 /**
@@ -24,7 +25,7 @@ public interface AwSupervisedUserUrlClassifierDelegate {
      * callback.onResult(true) - indicates the url should be blocked and an appropriate error page
      * shown instead.
      */
-    void shouldBlockUrl(GURL requestUrl, final Callback<Boolean> callback);
+    void shouldBlockUrl(GURL requestUrl, Callback<Boolean> callback);
 
     /**
      * Checks whether restricted content blocking should apply to this user. The result is returned
@@ -35,5 +36,5 @@ public interface AwSupervisedUserUrlClassifierDelegate {
      * <p>callback.onResult(false) - indicates the user does not require restricted content
      * blocking. callback.onResult(true) - indicates the user requires restricted content blocking.
      */
-    void needsRestrictedContentBlocking(final Callback<Boolean> callback);
+    void needsRestrictedContentBlocking(Callback<@Nullable Boolean> callback);
 }

@@ -7,12 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <set>
 #include <string_view>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "components/variations/variations_layers.h"
@@ -26,7 +26,7 @@ base::Time ConvertStudyDateToBaseTime(int64_t date_time) {
   return base::Time::UnixEpoch() + base::Seconds(date_time);
 }
 
-// Similar to base::Contains(), but specifically for ASCII strings and
+// Similar to std::ranges::contains(), but specifically for ASCII strings and
 // case-insensitive comparison.
 template <typename Collection>
 bool ContainsStringIgnoreCaseASCII(const Collection& collection,
@@ -34,6 +34,39 @@ bool ContainsStringIgnoreCaseASCII(const Collection& collection,
   return std::ranges::any_of(collection, [&value](const std::string& s) {
     return base::EqualsCaseInsensitiveASCII(s, value);
   });
+}
+
+// Checks whether a study is applicable for |client_groups| per filter with
+// include/exclude groups.
+template <typename FilterGroupType,
+          typename ClientGroupType,
+          typename RepeatedFieldType>
+bool CheckStudyGroup(const RepeatedFieldType& include_groups,
+                     const RepeatedFieldType& exclude_groups,
+                     const base::flat_set<ClientGroupType>& client_groups) {
+  if (!include_groups.empty()) {
+    if (std::ranges::none_of(include_groups,
+                             [&client_groups](const FilterGroupType& group) {
+                               return client_groups.contains(group);
+                             })) {
+      // An include group filter was specified, and the client is not a member
+      // of any of the groups.
+      return false;
+    }
+  }
+
+  if (!exclude_groups.empty()) {
+    if (std::ranges::any_of(exclude_groups,
+                            [&client_groups](const FilterGroupType& group) {
+                              return client_groups.contains(group);
+                            })) {
+      // An exclude group filter was specified, and the client is a member of
+      // at least one of the groups.
+      return false;
+    }
+  }
+
+  return true;
 }
 
 }  // namespace
@@ -46,7 +79,7 @@ bool CheckStudyChannel(const Study::Filter& filter, Study::Channel channel) {
     return true;
   }
 
-  return base::Contains(filter.channel(), channel);
+  return std::ranges::contains(filter.channel(), channel);
 }
 
 bool CheckStudyFormFactor(const Study::Filter& filter,
@@ -61,11 +94,11 @@ bool CheckStudyFormFactor(const Study::Filter& filter,
   // Note if both are specified, the excludelist is ignored. We do not expect
   // both to be present for Chrome due to server-side checks.
   if (filter.form_factor_size() > 0) {
-    return base::Contains(filter.form_factor(), form_factor);
+    return std::ranges::contains(filter.form_factor(), form_factor);
   }
 
   // Omit if there is a matching excludelist entry.
-  return !base::Contains(filter.exclude_form_factor(), form_factor);
+  return !std::ranges::contains(filter.exclude_form_factor(), form_factor);
 }
 
 bool CheckStudyCpuArchitecture(const Study::Filter& filter,
@@ -80,11 +113,12 @@ bool CheckStudyCpuArchitecture(const Study::Filter& filter,
   // Note if both are specified, the excludelist is ignored. We do not expect
   // both to be present for Chrome due to server-side checks.
   if (filter.cpu_architecture_size() > 0) {
-    return base::Contains(filter.cpu_architecture(), cpu_architecture);
+    return std::ranges::contains(filter.cpu_architecture(), cpu_architecture);
   }
 
   // Omit if there is a matching excludelist entry.
-  return !base::Contains(filter.exclude_cpu_architecture(), cpu_architecture);
+  return !std::ranges::contains(filter.exclude_cpu_architecture(),
+                                cpu_architecture);
 }
 
 bool CheckStudyHardwareClass(const Study::Filter& filter,
@@ -112,6 +146,25 @@ bool CheckStudyHardwareClass(const Study::Filter& filter,
                                         hardware_class);
 }
 
+bool CheckStudyHardwareManufacturer(const Study::Filter& filter,
+                                    const std::string& hardware_manufacturer) {
+  // If both filters are empty, match all values.
+  if (filter.hardware_manufacturer_size() == 0 &&
+      filter.exclude_hardware_manufacturer_size() == 0) {
+    return true;
+  }
+
+  // Allow the |hardware_manufacturer| if it's in the allowlist.
+  if (filter.hardware_manufacturer_size() > 0) {
+    return ContainsStringIgnoreCaseASCII(filter.hardware_manufacturer(),
+                                         hardware_manufacturer);
+  }
+
+  // Omit if there is a matching excludelist entry.
+  return !ContainsStringIgnoreCaseASCII(filter.exclude_hardware_manufacturer(),
+                                        hardware_manufacturer);
+}
+
 bool CheckStudyLocale(const Study::Filter& filter, const std::string& locale) {
   // If both filters are empty, match all values.
   if (filter.locale_size() == 0 && filter.exclude_locale_size() == 0) {
@@ -122,11 +175,11 @@ bool CheckStudyLocale(const Study::Filter& filter, const std::string& locale) {
   // Note if both are specified, the excludelist is ignored. We do not expect
   // both to be present for Chrome due to server-side checks.
   if (filter.locale_size() > 0) {
-    return base::Contains(filter.locale(), locale);
+    return std::ranges::contains(filter.locale(), locale);
   }
 
   // Omit if there is a matching excludelist entry.
-  return !base::Contains(filter.exclude_locale(), locale);
+  return !std::ranges::contains(filter.exclude_locale(), locale);
 }
 
 bool CheckStudyCountry(const Study::Filter& filter,
@@ -140,15 +193,15 @@ bool CheckStudyCountry(const Study::Filter& filter,
   // Note if both are specified, the excludelist is ignored. We do not expect
   // both to be present for Chrome due to server-side checks.
   if (filter.country_size() > 0) {
-    return base::Contains(filter.country(), country);
+    return std::ranges::contains(filter.country(), country);
   }
 
   // Omit if there is a matching excludelist entry.
-  return !base::Contains(filter.exclude_country(), country);
+  return !std::ranges::contains(filter.exclude_country(), country);
 }
 
 bool CheckStudyPlatform(const Study::Filter& filter, Study::Platform platform) {
-  return base::Contains(filter.platform(), platform);
+  return std::ranges::contains(filter.platform(), platform);
 }
 
 bool CheckStudyLowEndDevice(const Study::Filter& filter,
@@ -240,38 +293,16 @@ bool CheckStudyEnterprise(const Study::Filter& filter,
 
 bool CheckStudyGoogleGroup(const Study::Filter& filter,
                            const ClientFilterableState& client_state) {
-  if (filter.google_group_size() == 0 &&
-      filter.exclude_google_group_size() == 0) {
-    // This study doesn't have any google group configuration, so break early.
-    return true;
-  }
+  return CheckStudyGroup<int64_t>(filter.google_group(),
+                                  filter.exclude_google_group(),
+                                  client_state.GoogleGroups());
+}
 
-  // Fetch the groups this client is a member of.
-  base::flat_set<uint64_t> client_groups = client_state.GoogleGroups();
-
-  if (filter.google_group_size() > 0) {
-    if (std::ranges::none_of(filter.google_group(),
-                             [&client_groups](int64_t group) {
-                               return base::Contains(client_groups, group);
-                             })) {
-      // A google_group filter was specified, and the client is not a member of
-      // any of the groups.
-      return false;
-    }
-  }
-
-  if (filter.exclude_google_group_size() > 0) {
-    if (std::ranges::any_of(filter.exclude_google_group(),
-                            [&client_groups](int64_t group) {
-                              return base::Contains(client_groups, group);
-                            })) {
-      // An exclude_google_group filter was specified, and the client is a
-      // member of at least one of the groups.
-      return false;
-    }
-  }
-
-  return true;
+bool CheckStudyEnterpriseGroup(const Study::Filter& filter,
+                               const ClientFilterableState& client_state) {
+  return CheckStudyGroup<std::string>(filter.enterprise_group(),
+                                      filter.exclude_enterprise_group(),
+                                      client_state.EnterpriseGroups());
 }
 
 const std::string& GetClientCountryForStudy(
@@ -377,6 +408,13 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
       return false;
     }
 
+    if (!CheckStudyHardwareManufacturer(study.filter(),
+                                        client_state.hardware_manufacturer)) {
+      DVLOG(1) << "Filtered out study " << study.name()
+               << " due to hardware_manufacturer.";
+      return false;
+    }
+
     if (!CheckStudyLowEndDevice(study.filter(),
                                 client_state.is_low_end_device)) {
       DVLOG(1) << "Filtered out study " << study.name()
@@ -416,6 +454,12 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
                << " due to Google groups membership checks.";
       return false;
     }
+
+    if (!CheckStudyEnterpriseGroup(study.filter(), client_state)) {
+      DVLOG(1) << "Filtered out study " << study.name()
+               << " due to enterprise groups membership checks.";
+      return false;
+    }
   }
 
   DVLOG(1) << "Kept study " << study.name() << ".";
@@ -427,10 +471,12 @@ bool ShouldAddStudy(const ProcessedStudy& processed_study,
 std::vector<ProcessedStudy> FilterAndValidateStudies(
     const VariationsSeed& seed,
     const ClientFilterableState& client_state,
-    const VariationsLayers& layers) {
+    const VariationsLayers& layers,
+    std::optional<base::FunctionRef<bool(const Study&)>> study_filter) {
   DCHECK(client_state.version.IsValid());
 
   std::vector<ProcessedStudy> filtered_studies;
+  filtered_studies.reserve(seed.study_size());
 
   // Don't create two studies with the same name.
   // These `string_view`s contain pointers which point to memory owned by
@@ -438,6 +484,10 @@ std::vector<ProcessedStudy> FilterAndValidateStudies(
   std::set<std::string_view, std::less<>> created_studies;
 
   for (const Study& study : seed.study()) {
+    if (study_filter && !(*study_filter)(study)) {
+      continue;
+    }
+
     ProcessedStudy processed_study;
     if (!processed_study.Init(&study)) {
       continue;

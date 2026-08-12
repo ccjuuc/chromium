@@ -19,7 +19,7 @@
 #include "device/fido/public/fido_constants.h"
 #include "device/fido/public/fido_transport_protocol.h"
 #include "device/fido/public/fido_types.h"
-#include "third_party/blink/public/mojom/webauthn/authenticator.mojom-data-view.h"
+#include "third_party/blink/public/mojom/webauthn/authenticator.mojom-shared.h"
 #include "third_party/microsoft_webauthn/src/webauthn.h"
 
 namespace device {
@@ -86,12 +86,55 @@ std::optional<FidoTransportProtocol> FromWinTransportsMask(
     const DWORD transport);
 
 COMPONENT_EXPORT(DEVICE_FIDO)
+base::flat_set<FidoTransportProtocol> FromWinTransportsBitmask(
+    const DWORD transports);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
 uint32_t ToWinTransportsMask(
     const base::flat_set<FidoTransportProtocol>& transports);
 
 COMPONENT_EXPORT(DEVICE_FIDO)
 std::vector<const wchar_t*> ToWinCredentialHints(
     base::span<const blink::mojom::Hint> hints);
+
+// Utility functions for converting various structures to spans.
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToAuthenticatorDataSpan(const WEBAUTHN_ASSERTION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToAuthenticatorDataSpan(
+    const WEBAUTHN_CREDENTIAL_ATTESTATION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToUserIdSpan(const WEBAUTHN_ASSERTION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToCredentialIdSpan(
+    const WEBAUTHN_CREDENTIAL_ATTESTATION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToAttestationSpan(
+    const WEBAUTHN_CREDENTIAL_ATTESTATION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToAttestationObjectSpan(
+    const WEBAUTHN_CREDENTIAL_ATTESTATION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToIdSpan(const WEBAUTHN_CREDENTIAL& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToIdSpan(const WEBAUTHN_CREDENTIAL_EX& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToIdSpan(const WEBAUTHN_USER_ENTITY_INFORMATION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToExtensionSpan(const WEBAUTHN_EXTENSION& in);
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::span<const uint8_t> ToCredIdSpan(
+    const WEBAUTHN_CRED_WITH_HMAC_SECRET_SALT& in);
 
 }  // namespace device
 

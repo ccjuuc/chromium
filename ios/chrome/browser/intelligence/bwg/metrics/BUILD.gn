@@ -9,6 +9,19 @@ source_set("metrics") {
   ]
   deps = [
     "//base",
+    "//components/optimization_guide/core",
+    "//ios/chrome/browser/intelligence/bwg/utils:constants",
+    "//ios/public/provider/chrome/browser/bwg:gemini_api",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "gemini_metrics_unittest.mm" ]
+  deps = [
+    ":metrics",
+    "//base/test:test_support",
+    "//components/optimization_guide/core",
     "//ios/chrome/browser/intelligence/bwg/utils:constants",
   ]
 }

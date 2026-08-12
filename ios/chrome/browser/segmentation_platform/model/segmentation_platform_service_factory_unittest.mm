@@ -16,6 +16,7 @@
 #import "components/optimization_guide/core/optimization_guide_features.h"
 #import "components/prefs/pref_change_registrar.h"
 #import "components/prefs/pref_service.h"
+#import "components/segmentation_platform/embedder/home_modules/app_bundle_promo_ephemeral_module.h"
 #import "components/segmentation_platform/embedder/home_modules/constants.h"
 #import "components/segmentation_platform/embedder/home_modules/home_modules_card_registry.h"
 #import "components/segmentation_platform/embedder/home_modules/tips_manager/signal_constants.h"
@@ -125,6 +126,29 @@ void ConfigureForEnhancedSafeBrowsingModule(
   input_context->metadata_args.emplace(
       segmentation_platform::kSendTabInfobarReceivedInLastSession,
       segmentation_platform::processing::ProcessedValue::FromFloat(0.0f));
+}
+
+// Sets signals relevant for the App Bundle ephemeral module.
+void ConfigureForAppBundleModule(scoped_refptr<InputContext> input_context,
+                                 bool enable = true) {
+  float count = enable ? home_modules::kMaxAppBundleAppsInstalled
+                       : home_modules::kMaxAppBundleAppsInstalled + 1;
+  input_context->metadata_args.emplace(
+      kAppBundleAppsInstalledCount,
+      segmentation_platform::processing::ProcessedValue::FromFloat(count));
+}
+
+// Sets signals relevant for the Default Browser ephemeral module.
+void ConfigureForDefaultBrowserModule(scoped_refptr<InputContext> input_context,
+                                      bool enable = true) {
+  float signal_value = enable ? 1.0f : 0.0f;
+  input_context->metadata_args.emplace(
+      segmentation_platform::kIsNewUser,
+      segmentation_platform::processing::ProcessedValue::FromFloat(0.0f));
+  input_context->metadata_args.emplace(
+      segmentation_platform::kIsDefaultBrowserChromeIos,
+      segmentation_platform::processing::ProcessedValue::FromFloat(
+          signal_value));
 }
 
 // Observer that waits for service initialization.
@@ -375,6 +399,7 @@ TEST_F(SegmentationPlatformServiceFactoryTest, TestIosModuleRankerModel) {
   int tab_resumption_freshness_impression_count = -1;
   int parcel_tracking_freshness_impression_count = -1;
   int shop_card_freshness_impression_count = -1;
+  int level_up_freshness_impression_count = -1;
 
   input_context->metadata_args.emplace(
       segmentation_platform::kMostVisitedTilesFreshness,
@@ -400,12 +425,17 @@ TEST_F(SegmentationPlatformServiceFactoryTest, TestIosModuleRankerModel) {
       segmentation_platform::kShopCardFreshness,
       segmentation_platform::processing::ProcessedValue::FromFloat(
           shop_card_freshness_impression_count));
+  input_context->metadata_args.emplace(
+      segmentation_platform::kLevelUpFreshness,
+      segmentation_platform::processing::ProcessedValue::FromFloat(
+          level_up_freshness_impression_count));
 
   ExpectGetClassificationResult(
       segmentation_platform::kIosModuleRankerKey, prediction_options,
       input_context, PredictionStatus::kSucceeded,
       std::vector<std::string>{"MostVisitedTiles", "Shortcuts", "SafetyCheck",
-                               "TabResumption", "ParcelTracking", "ShopCard"});
+                               "TabResumption", "ParcelTracking", "ShopCard",
+                               "LevelUp"});
 }
 
 // Tests that the EphemeralHomeModuleBackend returns the PriceTracking module
@@ -416,7 +446,7 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
       SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
           profile_data_->profile.get());
   ASSERT_TRUE(registry);
-  EXPECT_EQ(4u, registry->get_all_cards_by_priority().size());
+  EXPECT_EQ(6u, registry->get_all_cards_by_priority().size());
 
   PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
@@ -429,6 +459,8 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
   ConfigureForLensModule(input_context, false);
   ConfigureForEnhancedSafeBrowsingModule(input_context, false);
   ConfigureForSendTabModule(input_context, false);
+  ConfigureForAppBundleModule(input_context, false);
+  ConfigureForDefaultBrowserModule(input_context, false);
 
   std::vector<std::string> result = {
       segmentation_platform::kPriceTrackingNotificationPromo};
@@ -446,7 +478,7 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
       SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
           profile_data_->profile.get());
   ASSERT_TRUE(registry);
-  EXPECT_EQ(4u, registry->get_all_cards_by_priority().size());
+  EXPECT_EQ(6u, registry->get_all_cards_by_priority().size());
 
   PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
@@ -459,6 +491,8 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
   ConfigureForPriceTrackingModule(input_context, false);
   ConfigureForEnhancedSafeBrowsingModule(input_context, false);
   ConfigureForSendTabModule(input_context, false);
+  ConfigureForAppBundleModule(input_context, false);
+  ConfigureForDefaultBrowserModule(input_context, false);
 
   std::vector<std::string> result = {
       segmentation_platform::kLensEphemeralModuleSearchVariation};
@@ -476,7 +510,7 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
       SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
           profile_data_->profile.get());
   ASSERT_TRUE(registry);
-  EXPECT_EQ(4u, registry->get_all_cards_by_priority().size());
+  EXPECT_EQ(6u, registry->get_all_cards_by_priority().size());
 
   PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
@@ -489,6 +523,8 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
   ConfigureForPriceTrackingModule(input_context, false);
   ConfigureForLensModule(input_context, false);
   ConfigureForSendTabModule(input_context, false);
+  ConfigureForAppBundleModule(input_context, false);
+  ConfigureForDefaultBrowserModule(input_context, false);
 
   std::vector<std::string> result = {
       segmentation_platform::kEnhancedSafeBrowsingEphemeralModule};
@@ -505,7 +541,7 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
       SegmentationPlatformServiceFactory::GetHomeCardRegistryForProfile(
           profile_data_->profile.get());
   ASSERT_TRUE(registry);
-  EXPECT_EQ(4u, registry->get_all_cards_by_priority().size());
+  EXPECT_EQ(6u, registry->get_all_cards_by_priority().size());
 
   PredictionOptions prediction_options;
   prediction_options.on_demand_execution = true;
@@ -516,6 +552,8 @@ TEST_F(SegmentationPlatformServiceFactoryTest,
   ConfigureForLensModule(input_context, true);
   ConfigureForEnhancedSafeBrowsingModule(input_context, true);
   ConfigureForSendTabModule(input_context, true);
+  ConfigureForAppBundleModule(input_context, true);
+  ConfigureForDefaultBrowserModule(input_context, true);
 
   // The highest priority card should be returned first. In this case, Price
   // Tracking takes precedence over others.

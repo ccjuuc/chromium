@@ -9,6 +9,7 @@ import("//build/util/process_version.gni")
 import("//chrome/enterprise_companion/branding.gni")
 import("//chrome/updater/apply_updater_branding.gni")
 import("//chrome/updater/branding.gni")
+import("//chrome/updater/updater.gni")
 import("//components/crx_file/crx3.gni")
 import("//testing/test.gni")
 
@@ -41,7 +42,7 @@ group("updater") {
 
   # These packages have problematic license files that we need to avoid for
   # updater redistribution.
-  assert_no_deps = [ "//third_party/libaom" ]
+  assert_no_deps = updater_assert_no_deps
 }
 
 group("all") {
@@ -219,6 +220,7 @@ if (is_win || is_mac || is_linux) {
       ":version_header",
       "//base",
       "//base:i18n",
+      "//build:branding_buildflags",
       "//build:chromeos_buildflags",
       "//chrome/enterprise_companion:client",
       "//chrome/enterprise_companion:constants_prod",
@@ -274,6 +276,8 @@ if (is_win || is_mac || is_linux) {
         "mac/setup/mac_setup.mm",
         "mac/setup/wake_task.h",
         "mac/setup/wake_task.mm",
+        "net/chunk_queue.h",
+        "net/chunk_queue.mm",
         "net/fetcher_callback_adapter.cc",
         "net/fetcher_callback_adapter.h",
         "net/network_fetcher_mac.mm",
@@ -361,6 +365,8 @@ if (is_win || is_mac || is_linux) {
         "win/ui/complete_wnd.h",
         "win/ui/l10n_util.cc",
         "win/ui/l10n_util.h",
+        "win/ui/message_loop.cc",
+        "win/ui/message_loop.h",
         "win/ui/owner_draw_controls.cc",
         "win/ui/owner_draw_controls.h",
         "win/ui/progress_wnd.cc",
@@ -371,6 +377,16 @@ if (is_win || is_mac || is_linux) {
         "win/ui/ui_ctls.h",
         "win/ui/ui_util.cc",
         "win/ui/ui_util.h",
+        "win/ui/webbrowser.cc",
+        "win/ui/webbrowser.h",
+        "win/ui/webview2_progress_wnd.cc",
+        "win/ui/webview2_progress_wnd.h",
+        "win/ui/webview2ui.cc",
+        "win/ui/webview2ui.h",
+        "win/ui/webview_progress_wnd.cc",
+        "win/ui/webview_progress_wnd.h",
+        "win/ui/window_impl.cc",
+        "win/ui/window_impl.h",
       ]
       deps += [
         "//build:branding_buildflags",
@@ -391,7 +407,8 @@ if (is_win || is_mac || is_linux) {
         "//chrome/windows_services/service_program:delegate",
         "//chrome/windows_services/service_program:lib",
         "//components/winhttp",
-        "//third_party/wtl",
+        "//third_party/webview2:webview2_static",
+        "//ui/gfx",
       ]
 
       configs -= [ "//build/config/win:winver" ]
@@ -401,7 +418,9 @@ if (is_win || is_mac || is_linux) {
       ]
 
       libs = [
+        "comctl32.lib",
         "msxml2.lib",
+        "uxtheme.lib",
         "wtsapi32.lib",
       ]
     }
@@ -548,7 +567,10 @@ if (is_win || is_mac || is_linux) {
 
     visibility = [
       "//chrome/browser",
+      "//chrome/browser/component_updater:unit_tests",
       "//chrome/browser/ui",
+      "//chrome/browser/ui/webui/help:*",
+      "//chrome/browser/ui/webui/updater:*",
       "//chrome/browser/updater:*",
       "//chrome/enterprise_companion:*",
       "//chrome/enterprise_companion/device_management_storage:*",
@@ -562,11 +584,38 @@ if (is_win || is_mac || is_linux) {
       "certificate_tag.cc",
       "certificate_tag.h",
       "certificate_tag_internal.h",
+      "pkg_tag.cc",
+      "pkg_tag.h",
       "tag.cc",
       "tag.h",
+      "tag_internal.h",
     ]
 
     deps = [ "//base" ]
+  }
+
+  source_set("public_util") {
+    public = [
+      "updater_scope.h",
+      "util/path_util.h",
+    ]
+    sources = [ "util/path_util.cc" ]
+    if (is_linux) {
+      sources += [ "util/linux_path_util.cc" ]
+    }
+    if (is_mac) {
+      sources += [
+        "util/mac_path_util.h",
+        "util/mac_path_util.mm",
+      ]
+    }
+    if (is_win) {
+      sources += [ "util/win_path_util.cc" ]
+    }
+    deps = [
+      ":branding_header",
+      "//base",
+    ]
   }
 
   source_set("public_sources") {
@@ -574,6 +623,8 @@ if (is_win || is_mac || is_linux) {
       "branded_constants.h",
       "constants.h",
       "enum_traits.h",
+      "get_updater_scope.cc",
+      "get_updater_scope.h",
       "ipc/ipc_names.h",
       "ipc/ipc_support.cc",
       "ipc/ipc_support.h",
@@ -587,11 +638,11 @@ if (is_win || is_mac || is_linux) {
       "service_proxy_factory.h",
       "update_service.cc",
       "update_service.h",
-      "updater_scope.cc",
-      "updater_scope.h",
       "util/util.cc",
       "util/util.h",
     ]
+
+    public_deps = [ ":public_util" ]
 
     deps = [
       ":branding_header",
@@ -629,6 +680,7 @@ if (is_win || is_mac || is_linux) {
         "//chrome/updater/app/server/win:updater_idl",
         "//chrome/updater/app/server/win:updater_internal_idl",
         "//chrome/windows_services/service_program:common",
+        "//components/crash/core/common",
       ]
 
       configs -= [ "//build/config/win:winver" ]
@@ -640,6 +692,7 @@ if (is_win || is_mac || is_linux) {
       defines = [ "SECURITY_WIN32" ]
 
       libs = [
+        "ntdll.lib",
         "secur32.lib",
         "taskschd.lib",
         "wtsapi32.lib",
@@ -866,6 +919,7 @@ if (is_win || is_mac || is_linux) {
       "branded_constants_unittest.cc",
       "certificate_tag_unittest.cc",
       "cleanup_task_unittest.cc",
+      "constants_unittest.cc",
       "enum_traits_unittest.cc",
       "event_history_unittest.cc",
       "event_logger_unittest.cc",
@@ -873,9 +927,12 @@ if (is_win || is_mac || is_linux) {
       "external_constants_builder.h",
       "external_constants_builder_unittest.cc",
       "external_constants_override_unittest.cc",
+      "get_updater_scope_unittest.cc",
       "installer_unittest.cc",
       "net/fallback_net_fetcher_unittest.cc",
+      "net/network_fetcher_unittest.cc",
       "net/network_unittest.cc",
+      "out_of_process_unzipper_unittest.cc",
       "persisted_data_unittest.cc",
       "policy/dm_policy_manager_unittest.cc",
       "policy/manager_unittest.cc",
@@ -900,7 +957,6 @@ if (is_win || is_mac || is_linux) {
       "update_service_impl_impl_unittest.cc",
       "update_service_impl_inactive_unittest.cc",
       "update_service_unittest.cc",
-      "updater_scope_unittest.cc",
       "updater_unittest.cc",
       "usage_stats_permissions_unittest.cc",
       "util/util_unittest.cc",
@@ -937,6 +993,7 @@ if (is_win || is_mac || is_linux) {
       "//testing/gtest",
       "//third_party/abseil-cpp:absl",
       "//third_party/crashpad/crashpad/client",
+      "//third_party/fuzztest",
       "//third_party/re2",
       "//third_party/zlib/google:compression_utils",
       "//url",
@@ -961,6 +1018,7 @@ if (is_win || is_mac || is_linux) {
       "test/data/tagged_msi/GUH-size-greater-than-max.msi",
       "test/data/tagged_msi/GUH-special-value.msi",
       "test/data/tagged_msi/GUH-untagged.msi",
+      "test/data/tagged_pkg/sample.pkg",
     ]
 
     data_deps = [
@@ -1000,6 +1058,7 @@ if (is_win || is_mac || is_linux) {
         "win/ui/l10n_util_unittest.cc",
         "win/ui/progress_wnd_unittest.cc",
         "win/updater_tests.rc",
+        "win/user_info_unittest.cc",
       ]
 
       configs -= [ "//build/config/win:winver" ]
@@ -1022,7 +1081,6 @@ if (is_win || is_mac || is_linux) {
         "win/test:test_executables",
         "win/test:test_strings",
         "win/ui/resources",
-        "//third_party/wtl",
       ]
 
       data_deps += [
@@ -1092,6 +1150,7 @@ if (is_win || is_mac || is_linux) {
         "mac/setup/ks_tickets_unittest.mm",
         "mac/setup/setup_unittest.mm",
         "mac/setup/wake_task_unittest.mm",
+        "net/chunk_queue_unittest.mm",
         "policy/mac/managed_preference_policy_manager_impl_unittest.mm",
         "policy/mac/managed_preference_policy_manager_unittest.cc",
         "test/integration_tests_mac.h",
@@ -1209,7 +1268,10 @@ if (is_win || is_mac || is_linux) {
     }
 
     if (is_posix) {
-      sources += [ "util/posix_util_unittest.cc" ]
+      sources += [
+        "activity_impl_posix_unittest.cc",
+        "util/posix_util_unittest.cc",
+      ]
 
       deps += [ "//chrome/updater/mojom" ]
     }
@@ -1233,6 +1295,24 @@ if (is_win || is_mac || is_linux) {
       ]
       outputs = [ "$root_build_dir/test_service/{{source_file_part}}" ]
     }
+  }
+
+  test("updater_fuzztests") {
+    testonly = true
+    sources = [ "tag_fuzztest.cc" ]
+    fuzztests = [
+      "TagFuzzTest.FuzzParseBroad",
+      "TagFuzzTest.FuzzParseShared",
+      "TagFuzzTest.FuzzReadTag",
+    ]
+    deps = [
+      ":base",
+      ":constants_test",
+      ":tagging",
+      "//base",
+      "//base/test:run_all_unittests",
+      "//third_party/fuzztest",
+    ]
   }
 
   # These tests are run serially since they mutate system state.

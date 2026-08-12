@@ -10,7 +10,6 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
-#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "base/json/values_util.h"
@@ -57,7 +56,7 @@ std::string GetPrefPath(AppListNudgeController::NudgeType type) {
 
 // Returns true if the app list has been reordered before.
 bool WasAppListReorderedPreviously(PrefService* prefs) {
-  const base::Value::Dict& dictionary =
+  const base::DictValue& dictionary =
       prefs->GetDict(prefs::kAppListReorderNudge);
   return dictionary.FindBool(kReorderNudgeConfirmed).value_or(false);
 }
@@ -75,7 +74,7 @@ void AppListNudgeController::RegisterProfilePrefs(
 
 // static
 int AppListNudgeController::GetShownCount(PrefService* prefs, NudgeType type) {
-  const base::Value::Dict& dictionary = prefs->GetDict(GetPrefPath(type));
+  const base::DictValue& dictionary = prefs->GetDict(GetPrefPath(type));
 
   return dictionary.FindInt(kReorderNudgeShownCount).value_or(0);
 }

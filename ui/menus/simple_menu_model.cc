@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -14,6 +15,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/models/menu_model.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/vector_icon_types.h"
 
@@ -337,6 +339,12 @@ void SimpleMenuModel::SetIcon(size_t index, const ui::ImageModel& icon) {
   MenuItemsChanged();
 }
 
+void SimpleMenuModel::SetIconForCommandId(int command_id,
+                                          const ui::ImageModel& icon) {
+  std::optional<size_t> index = GetIndexOfCommandId(command_id);
+  SetIcon(index.value(), icon);
+}
+
 void SimpleMenuModel::SetLabel(size_t index, const std::u16string& label) {
   items_[ValidateItemIndex(index)].label = label;
   MenuItemsChanged();
@@ -348,14 +356,31 @@ void SimpleMenuModel::SetAcceleratorAt(size_t index,
   MenuItemsChanged();
 }
 
+void SimpleMenuModel::SetSecondaryLabel(size_t index,
+                                        const std::u16string& secondary_label) {
+  items_[ValidateItemIndex(index)].secondary_label = secondary_label;
+  MenuItemsChanged();
+}
+
 void SimpleMenuModel::SetMinorText(size_t index,
                                    const std::u16string& minor_text) {
   items_[ValidateItemIndex(index)].minor_text = minor_text;
 }
 
+void SimpleMenuModel::SetMinorTextIsUrlAt(size_t index, bool is_url) {
+  items_[ValidateItemIndex(index)].minor_text_is_url = is_url;
+}
+
 void SimpleMenuModel::SetMinorIcon(size_t index,
                                    const ui::ImageModel& minor_icon) {
   items_[ValidateItemIndex(index)].minor_icon = minor_icon;
+}
+
+void SimpleMenuModel::SetMinorIconOnRight(
+    MenuModel::MinorIconOnRightPasskey passkey,
+    bool minor_icon_on_right) {
+  items_[ValidateItemIndex(passkey.index())].minor_icon_on_right =
+      minor_icon_on_right;
 }
 
 void SimpleMenuModel::SetEnabledAt(size_t index, bool enabled) {
@@ -377,8 +402,10 @@ void SimpleMenuModel::SetVisibleAt(size_t index, bool visible) {
 }
 
 void SimpleMenuModel::SetIsNewFeatureAt(size_t index,
-                                        IsNewFeatureAtValue is_new_feature) {
-  items_[ValidateItemIndex(index)].is_new_feature = is_new_feature;
+                                        IsNewFeatureAtValue is_new_feature,
+                                        NewBadgeType new_badge_type) {
+  items_[ValidateItemIndex(index)].new_badge_type =
+      is_new_feature ? std::make_optional(new_badge_type) : std::nullopt;
 }
 
 void SimpleMenuModel::SetMayHaveMnemonicsAt(size_t index,
@@ -454,12 +481,25 @@ std::u16string SimpleMenuModel::GetLabelAt(size_t index) const {
   return items_[ValidateItemIndex(index)].label;
 }
 
+std::u16string SimpleMenuModel::GetSecondaryLabelAt(size_t index) const {
+  return items_[ValidateItemIndex(index)].secondary_label;
+}
+
 std::u16string SimpleMenuModel::GetMinorTextAt(size_t index) const {
   return items_[ValidateItemIndex(index)].minor_text;
 }
 
+bool SimpleMenuModel::GetMinorTextIsUrlAt(size_t index) const {
+  return items_[ValidateItemIndex(index)].minor_text_is_url;
+}
+
 ImageModel SimpleMenuModel::GetMinorIconAt(size_t index) const {
   return items_[ValidateItemIndex(index)].minor_icon;
+}
+
+bool SimpleMenuModel::GetMinorIconOnRight(
+    MenuModel::MinorIconOnRightPasskey passkey) const {
+  return items_[ValidateItemIndex(passkey.index())].minor_icon_on_right;
 }
 
 bool SimpleMenuModel::IsItemDynamicAt(size_t index) const {
@@ -555,7 +595,15 @@ bool SimpleMenuModel::IsAlertedAt(size_t index) const {
 }
 
 bool SimpleMenuModel::IsNewFeatureAt(size_t index) const {
-  return items_[ValidateItemIndex(index)].is_new_feature;
+  std::optional<NewBadgeType> new_badge_type =
+      items_[ValidateItemIndex(index)].new_badge_type;
+  return new_badge_type.has_value() &&
+         (new_badge_type.value() == NewBadgeType::kNew);
+}
+
+std::optional<NewBadgeType> SimpleMenuModel::GetNewBadgeTypeAt(
+    size_t index) const {
+  return items_[ValidateItemIndex(index)].new_badge_type;
 }
 
 bool SimpleMenuModel::MayHaveMnemonicsAt(size_t index) const {

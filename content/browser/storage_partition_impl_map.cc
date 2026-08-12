@@ -9,8 +9,8 @@
 
 #include "base/barrier_closure.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/map_util.h"
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -18,6 +18,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -276,7 +277,7 @@ void BlockingGarbageCollect(
   }
   for (base::FilePath path = enumerator.Next(); !path.empty();
        path = enumerator.Next()) {
-    if (!base::Contains(active_paths, path) && path != trash_directory) {
+    if (!active_paths.contains(path) && path != trash_directory) {
       // Since |trash_directory| is unique for each run of this function there
       // can be no colllisions on the move.
       base::Move(path, trash_directory.Append(path.BaseName()));
@@ -325,6 +326,7 @@ StoragePartitionImplMap::~StoragePartitionImplMap() {
 StoragePartitionImpl* StoragePartitionImplMap::Get(
     const StoragePartitionConfig& partition_config,
     bool can_create) {
+  SCOPED_UMA_HISTOGRAM_TIMER("Storage.StoragePartitionMap.Get.Duration");
   // Find the previously created partition if it's available.
   if (auto* partition = base::FindPtrOrNull(partitions_, partition_config)) {
     return partition;
@@ -398,8 +400,7 @@ void StoragePartitionImplMap::AsyncObliterate(
   for (auto*& active_partition : active_partitions) {
     active_partition->ClearData(
         // All except shader cache.
-        ~StoragePartition::REMOVE_DATA_MASK_SHADER_CACHE,
-        StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL, blink::StorageKey(),
+        ~StoragePartition::REMOVE_DATA_MASK_SHADER_CACHE, blink::StorageKey(),
         base::Time(), base::Time::Max(), subtask_done_callback);
   }
 

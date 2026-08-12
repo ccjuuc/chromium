@@ -2,16 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/chromeos/libyuv_image_processor_backend.h"
 
 #include <sys/mman.h>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/checked_math.h"
@@ -151,8 +146,8 @@ LibYUVImageProcessorBackend::CreateWithTaskRunner(
         /*force_linear_buffer_mapper=*/true);
   }
 
-  if (!input_frame_mapper &&
-      !VideoFrame::IsStorageTypeMappable(input_config.storage_type)) {
+  if (!input_frame_mapper && !VideoFrame::StorageTypeAllowsDirectCpuAccess(
+                                 input_config.storage_type)) {
     VLOGF(2) << "Unsupported input storage type";
     return nullptr;
   }
@@ -165,8 +160,8 @@ LibYUVImageProcessorBackend::CreateWithTaskRunner(
         /*force_linear_buffer_mapper=*/true);
   }
 
-  if (!output_frame_mapper &&
-      !VideoFrame::IsStorageTypeMappable(output_config.storage_type)) {
+  if (!output_frame_mapper && !VideoFrame::StorageTypeAllowsDirectCpuAccess(
+                                  output_config.storage_type)) {
     VLOGF(2) << "Unsupported output storage type";
     return nullptr;
   }
@@ -332,14 +327,16 @@ void LibYUVImageProcessorBackend::ProcessFrame(
                          plane, crop_intermediate_frame_->format(),
                          crop_intermediate_frame_->visible_rect().height());
                row++) {
-            memcpy(dst_row_ptr, src_row_ptr,
-                   VideoFrame::Columns(
-                       plane, crop_intermediate_frame_->format(),
-                       crop_intermediate_frame_->visible_rect().width()) *
-                       VideoFrame::BytesPerElement(
-                           crop_intermediate_frame_->format(), plane));
-            src_row_ptr += crop_intermediate_frame_->row_bytes(plane);
-            dst_row_ptr += mapped_frame->row_bytes(plane);
+            UNSAFE_TODO(
+                memcpy(dst_row_ptr, src_row_ptr,
+                       VideoFrame::Columns(
+                           plane, crop_intermediate_frame_->format(),
+                           crop_intermediate_frame_->visible_rect().width()) *
+                           VideoFrame::BytesPerElement(
+                               crop_intermediate_frame_->format(), plane)));
+            UNSAFE_TODO(src_row_ptr +=
+                        crop_intermediate_frame_->row_bytes(plane));
+            UNSAFE_TODO(dst_row_ptr += mapped_frame->row_bytes(plane));
           }
         }
       }
@@ -360,6 +357,19 @@ void LibYUVImageProcessorBackend::ProcessFrame(
 int LibYUVImageProcessorBackend::DoConversion(const FrameResource* const input,
                                               FrameResource* const output) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(backend_sequence_checker_);
+
+  for (size_t i = 0; i < input->layout().num_planes(); ++i) {
+    if (!base::IsValueInRangeForNumericType<int>(input->stride(i))) {
+      VLOGF(1) << "Input stride does not fit in int: " << input->stride(i);
+      return -1;
+    }
+  }
+  for (size_t i = 0; i < output->layout().num_planes(); ++i) {
+    if (!base::IsValueInRangeForNumericType<int>(output->stride(i))) {
+      VLOGF(1) << "Output stride does not fit in int: " << output->stride(i);
+      return -1;
+    }
+  }
 
 #define Y_U_V_DATA(fr)                                                        \
   fr->visible_data(VideoFrame::Plane::kY), fr->stride(VideoFrame::Plane::kY), \

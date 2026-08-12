@@ -24,7 +24,7 @@ of the most common types:
   Secure Shell extension).
 - **Enterprise Policy**: Keywords set by a device administrator through enterprise policies. These
   can be further subdivided into:
-  - **Aggregator**: e.g.,`@agentspace`.
+  - **Aggregator**: e.g.,`@geminienterprise`.
   - **Non-aggregator**: e.g., `microsoft-documents`.
 - **Admin Policy**: Keywords set by an admin policy.
 
@@ -36,7 +36,7 @@ to generate suggestions. Site Search functionality is primarily handled by two d
 
 1. **[`FeaturedSearchProvider`](https://source.chromium.org/chromium/chromium/src/+/main:components/omnibox/browser/featured_search_provider.h)**:
    Manages the "Omnibox Starter Pack," which provides scoped search suggestions like `@history`,
-   `@bookmarks`, and `@tabs`, as well as enterprise keywords (e.g. @agentspace or
+   `@bookmarks`, and `@tabs`, as well as enterprise keywords (e.g. @geminienterprise or
    facebook-internal-documents).
 2. **[`KeywordProvider`](https://source.chromium.org/chromium/chromium/src/+/main:components/omnibox/browser/keyword_provider.h)**:
    Manages searches directed at specific, non-default search engines using keywords. This is powered
@@ -274,7 +274,7 @@ structures: `AutocompleteInput` and `AutocompleteMatch`.
 ### `AutocompleteInput`
 
 The `AutocompleteInput` object represents the user's query and the omnibox's state. It has two key
-fields, `prefer_keyword_` and `allow_exact_keyword_match_`, which are used to signal that when the
+fields, `in_keyword_mode_` and `allow_exact_keyword_match_`, which are used to signal that when the
 user is in keyword mode, providers should show more "keyword-y" suggestions. For example, a search
 for 'query' should suggest 'youtube.com/q=query' instead of 'google.com/q=query' when the user is in
 the YouTube keyword mode.

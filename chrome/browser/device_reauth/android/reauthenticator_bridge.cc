@@ -11,17 +11,18 @@
 #include "base/functional/callback.h"
 #include "chrome/browser/device_reauth/chrome_device_authenticator_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/device_reauth/android/jni_headers/ReauthenticatorBridge_jni.h"
 
-static jlong JNI_ReauthenticatorBridge_Create(
+static int64_t JNI_ReauthenticatorBridge_Create(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& java_bridge,
     const base::android::JavaRef<jobject>& activity,
     Profile* profile,
-    jint source) {
+    int32_t source) {
   return reinterpret_cast<intptr_t>(
       new ReauthenticatorBridge(java_bridge, activity, profile, source));
 }
@@ -30,7 +31,7 @@ ReauthenticatorBridge::ReauthenticatorBridge(
     const base::android::JavaRef<jobject>& java_bridge,
     const base::android::JavaRef<jobject>& activity,
     Profile* profile,
-    jint source)
+    int32_t source)
     : java_bridge_(java_bridge), profile_(profile) {
   device_reauth::DeviceAuthParams params(
       base::Seconds(0), static_cast<device_reauth::DeviceAuthSource>(source));
@@ -45,11 +46,11 @@ ReauthenticatorBridge::~ReauthenticatorBridge() {
   }
 }
 
-jint ReauthenticatorBridge::GetBiometricAvailabilityStatus(JNIEnv* env) {
+int32_t ReauthenticatorBridge::GetBiometricAvailabilityStatus(JNIEnv* env) {
   if (authenticator_ == nullptr) {
-    return static_cast<jint>(device_reauth::BiometricStatus::kUnavailable);
+    return static_cast<int32_t>(device_reauth::BiometricStatus::kUnavailable);
   }
-  return static_cast<jint>(authenticator_->GetBiometricAvailabilityStatus());
+  return static_cast<int32_t>(authenticator_->GetBiometricAvailabilityStatus());
 }
 
 void ReauthenticatorBridge::Reauthenticate(JNIEnv* env) {

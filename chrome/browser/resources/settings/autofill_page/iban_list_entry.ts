@@ -54,10 +54,18 @@ export class SettingsIbanListEntryElement extends
       /** A saved IBAN. */
       iban: Object,
 
-      showNewFopDisplayEnabled_: {
+      autofillEnableWalletBrandingEnabled_: {
         type: Boolean,
         value() {
-          return loadTimeData.getBoolean('enableNewFopDisplay');
+          return loadTimeData.getBoolean('autofillEnableWalletBranding');
+        },
+        readOnly: true,
+      },
+
+      autofillEnableGradientGoogleLogosEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('autofillEnableGradientGoogleLogos');
         },
         readOnly: true,
       },
@@ -66,7 +74,9 @@ export class SettingsIbanListEntryElement extends
 
   declare iban: chrome.autofillPrivate.IbanEntry;
 
-  declare private showNewFopDisplayEnabled_: boolean;
+  declare private autofillEnableWalletBrandingEnabled_: boolean;
+
+  declare private autofillEnableGradientGoogleLogosEnabled_: boolean;
 
   get dotsMenu(): HTMLElement|null {
     return this.shadowRoot!.getElementById('ibanMenu');
@@ -77,6 +87,14 @@ export class SettingsIbanListEntryElement extends
    */
   private showDotsMenu_(): boolean {
     return !!this.iban.metadata!.isLocal;
+  }
+
+  private shouldShowOutlinkWithWalletBranding_(): boolean {
+    return !this.showDotsMenu_() && this.autofillEnableWalletBrandingEnabled_;
+  }
+
+  private shouldShowOutlinkWithoutWalletBranding_(): boolean {
+    return !this.showDotsMenu_() && !this.autofillEnableWalletBrandingEnabled_;
   }
 
   /**
@@ -130,21 +148,15 @@ export class SettingsIbanListEntryElement extends
     return this.i18n('a11yIbanDescription', lastFourDigits);
   }
 
-  private getIbanImageSrc_(): string {
-    return this.showNewFopDisplayEnabled_ ?
-        'chrome://settings/images/iban.svg' :
-        'chrome://settings/images/iban_old.svg';
-  }
-
   private getLabel_(iban: chrome.autofillPrivate.IbanEntry): string {
-    if (this.showNewFopDisplayEnabled_ && iban.nickname) {
+    if (iban.nickname) {
       return iban.nickname;
     }
     return iban.metadata!.summaryLabel;
   }
 
   private getSubLabel_(iban: chrome.autofillPrivate.IbanEntry): string {
-    if (this.showNewFopDisplayEnabled_ && iban.nickname) {
+    if (iban.nickname) {
       return iban.metadata!.summaryLabel;
     }
     return iban.nickname || '';
@@ -159,6 +171,22 @@ export class SettingsIbanListEntryElement extends
     return this.i18n(
         'moreActionsForIban',
         iban.nickname || this.getA11yIbanDescription_(iban));
+  }
+
+  private getGooglePayLightModeLogoSrcSet_(
+      isGradientGoogleLogosEnabled: boolean): string {
+    const logoId = isGradientGoogleLogosEnabled ?
+        'chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_WITH_GRADIENT_SMALL' :
+        'chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_SMALL';
+    return this.getScaledSrcSet_(logoId);
+  }
+
+  private getGooglePayDarkModeLogoSrcSet_(
+      isGradientGoogleLogosEnabled: boolean): string {
+    const logoId = isGradientGoogleLogosEnabled ?
+        'chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_WITH_GRADIENT_DARK_SMALL' :
+        'chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_DARK_SMALL';
+    return this.getScaledSrcSet_(logoId);
   }
 }
 

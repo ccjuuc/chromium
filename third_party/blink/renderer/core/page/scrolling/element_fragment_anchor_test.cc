@@ -95,8 +95,8 @@ TEST_F(ElementFragmentAnchorTest, FocusHandlerRunBeforeRaf) {
   ASSERT_EQ(GetDocument()
                 .body()
                 ->GetLayoutObject()
-                ->Style()
-                ->VisitedDependentColor(GetCSSPropertyBackgroundColor())
+                ->StyleRef()
+                .VisitedDependentColor(GetCSSPropertyBackgroundColor())
                 .NameForLayoutTreeAsText(),
             Color(255, 0, 0).NameForLayoutTreeAsText());
 
@@ -107,8 +107,8 @@ TEST_F(ElementFragmentAnchorTest, FocusHandlerRunBeforeRaf) {
   EXPECT_EQ(GetDocument()
                 .body()
                 ->GetLayoutObject()
-                ->Style()
-                ->VisitedDependentColor(GetCSSPropertyBackgroundColor())
+                ->StyleRef()
+                .VisitedDependentColor(GetCSSPropertyBackgroundColor())
                 .NameForLayoutTreeAsText(),
             Color(0, 255, 0).NameForLayoutTreeAsText());
 }
@@ -154,7 +154,8 @@ TEST_F(ElementFragmentAnchorTest, IframeFragmentNoLayoutUntilLoad) {
 
   gfx::Rect fragment_rect_in_frame =
       fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
-  gfx::Rect viewport_rect(child_viewport->VisibleContentRect().size());
+  gfx::Rect viewport_rect(
+      child_viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()
@@ -215,7 +216,8 @@ TEST_F(ElementFragmentAnchorTest, IframeFragmentDirtyLayoutAfterLoad) {
 
   gfx::Rect fragment_rect_in_frame =
       fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
-  gfx::Rect viewport_rect(child_viewport->VisibleContentRect().size());
+  gfx::Rect viewport_rect(
+      child_viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()
@@ -348,7 +350,8 @@ TEST_F(ElementFragmentAnchorTest, HasURLEncodedCharacters) {
 
   gfx::Rect fragment_rect_in_frame =
       fragment->GetLayoutObject()->AbsoluteBoundingBoxRect();
-  gfx::Rect viewport_rect(viewport->VisibleContentRect().size());
+  gfx::Rect viewport_rect(
+      viewport->VisibleContentRect(kExcludeScrollbars).size());
 
   EXPECT_TRUE(viewport_rect.Contains(fragment_rect_in_frame))
       << "Fragment element at [" << fragment_rect_in_frame.ToString()

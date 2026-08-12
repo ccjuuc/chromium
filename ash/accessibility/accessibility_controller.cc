@@ -12,8 +12,13 @@
 
 #include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accessibility/a11y_feature_type.h"
+#include "ash/accessibility/accessibility_delegate.h"
 #include "ash/accessibility/accessibility_notification_controller.h"
 #include "ash/accessibility/accessibility_observer.h"
+#include "ash/accessibility/accessibility_prefs_custom_associator.h"
+#include "ash/accessibility/accessibility_prefs_merge_conflict_controller.h"
+#include "ash/accessibility/accessibility_prefs_merge_conflict_dialog.h"
+#include "ash/accessibility/accessibility_sync_prefs_utils.h"
 #include "ash/accessibility/autoclick/autoclick_controller.h"
 #include "ash/accessibility/disable_touchpad_event_rewriter.h"
 #include "ash/accessibility/drag_event_rewriter.h"
@@ -68,6 +73,7 @@
 #include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/wm/window_util.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -95,6 +101,7 @@
 #include "ui/base/cursor/cursor_size.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/display/screen.h"
 #include "ui/display/tablet_state.h"
 #include "ui/events/ash/keyboard_capability.h"
@@ -186,8 +193,8 @@ const FeatureData kFeatures[] = {
      IDS_ASH_STATUS_TRAY_ACCESSIBILITY_HIGH_CONTRAST_MODE},
     {FeatureType::kLargeCursor, prefs::kAccessibilityLargeCursorEnabled,
      nullptr, IDS_ASH_STATUS_TRAY_ACCESSIBILITY_LARGE_CURSOR},
-    {FeatureType::kLiveCaption, ::prefs::kLiveCaptionEnabled,
-     &vector_icons::kLiveCaptionOnIcon, IDS_ASH_STATUS_TRAY_LIVE_CAPTION},
+    {FeatureType::kLiveCaption, ::prefs::kLiveCaptionEnabled, nullptr,
+     IDS_ASH_STATUS_TRAY_LIVE_CAPTION},
     {FeatureType::kMonoAudio, prefs::kAccessibilityMonoAudioEnabled, nullptr,
      IDS_ASH_STATUS_TRAY_ACCESSIBILITY_MONO_AUDIO},
     {FeatureType::kMouseKeys, prefs::kAccessibilityMouseKeysEnabled, nullptr, 0,
@@ -249,75 +256,30 @@ constexpr const char* const kA11yPrefsForRecommendedValueOnSignin[]{
 
 // List of accessibility prefs that are to be copied (if changed by the user) on
 // signin screen profile to a newly created user profile or a guest session.
+// Add prefs here if they can be enabled in the OOBE or login screen from either
+// the accessibility screen or from the login screen accessibility shortcut
+// menu.
 constexpr const char* const kCopiedOnSigninAccessibilityPrefs[]{
-    prefs::kAccessibilityAutoclickDelayMs,
     prefs::kAccessibilityAutoclickEnabled,
-    prefs::kAccessibilityBounceKeysDelayMs,
-    prefs::kAccessibilityBounceKeysEnabled,
     prefs::kAccessibilityCaretHighlightEnabled,
-    prefs::kAccessibilityChromeVoxAutoRead,
-    prefs::kAccessibilityChromeVoxAnnounceDownloadNotifications,
-    prefs::kAccessibilityChromeVoxAnnounceRichTextAttributes,
-    prefs::kAccessibilityChromeVoxAudioStrategy,
-    prefs::kAccessibilityChromeVoxBrailleSideBySide,
     prefs::kAccessibilityChromeVoxBrailleTable,
-    prefs::kAccessibilityChromeVoxBrailleTable6,
-    prefs::kAccessibilityChromeVoxBrailleTable8,
     prefs::kAccessibilityChromeVoxBrailleTableType,
-    prefs::kAccessibilityChromeVoxBrailleWordWrap,
-    prefs::kAccessibilityChromeVoxCapitalStrategy,
-    prefs::kAccessibilityChromeVoxCapitalStrategyBackup,
-    prefs::kAccessibilityChromeVoxEnableBrailleLogging,
-    prefs::kAccessibilityChromeVoxEnableEarconLogging,
-    prefs::kAccessibilityChromeVoxEnableEventStreamLogging,
-    prefs::kAccessibilityChromeVoxEnableSpeechLogging,
-    prefs::kAccessibilityChromeVoxEventStreamFilters,
-    prefs::kAccessibilityChromeVoxLanguageSwitching,
-    prefs::kAccessibilityChromeVoxMenuBrailleCommands,
-    prefs::kAccessibilityChromeVoxNumberReadingStyle,
-    prefs::kAccessibilityChromeVoxPreferredBrailleDisplayAddress,
     prefs::kAccessibilityChromeVoxPunctuationEcho,
     prefs::kAccessibilityChromeVoxSmartStickyMode,
-    prefs::kAccessibilityChromeVoxSpeakTextUnderMouse,
-    prefs::kAccessibilityChromeVoxUsePitchChanges,
-    prefs::kAccessibilityChromeVoxUseVerboseMode,
-    prefs::kAccessibilityChromeVoxVirtualBrailleColumns,
-    prefs::kAccessibilityChromeVoxVirtualBrailleRows,
-    prefs::kAccessibilityChromeVoxVoiceName,
-    prefs::kAccessibilityColorCorrectionEnabled,
     prefs::kAccessibilityCursorHighlightEnabled,
-    prefs::kAccessibilityCursorColorEnabled,
-    prefs::kAccessibilityCursorColor,
     prefs::kAccessibilityDictationEnabled,
     prefs::kAccessibilityDictationLocale,
     prefs::kAccessibilityDictationLocaleOfflineNudge,
-    prefs::kAccessibilityDisableTrackpadEnabled,
-    prefs::kAccessibilityDisableTrackpadMode,
     prefs::kAccessibilityFocusHighlightEnabled,
     prefs::kAccessibilityHighContrastEnabled,
     prefs::kAccessibilityLargeCursorEnabled,
     prefs::kAccessibilityFaceGazeEnabled,
     prefs::kAccessibilityMonoAudioEnabled,
-    prefs::kAccessibilityReducedAnimationsEnabled,
-    prefs::kAccessibilityAlwaysShowScrollbarsEnabled,
-    prefs::kAccessibilityMouseKeysEnabled,
-    prefs::kAccessibilityMouseKeysAcceleration,
-    prefs::kAccessibilityMouseKeysMaxSpeed,
-    prefs::kAccessibilityMouseKeysUsePrimaryKeys,
-    prefs::kAccessibilityMouseKeysDominantHand,
     prefs::kAccessibilityScreenMagnifierEnabled,
-    prefs::kAccessibilityScreenMagnifierFocusFollowingEnabled,
-    prefs::kAccessibilityMagnifierFollowsChromeVox,
-    prefs::kAccessibilityMagnifierFollowsSts,
-    prefs::kAccessibilityScreenMagnifierMouseFollowingMode,
     prefs::kAccessibilityScreenMagnifierScale,
     prefs::kAccessibilitySelectToSpeakEnabled,
-    prefs::kAccessibilitySlowKeysDelayMs,
-    prefs::kAccessibilitySlowKeysEnabled,
     prefs::kAccessibilitySpokenFeedbackEnabled,
     prefs::kAccessibilityStickyKeysEnabled,
-    prefs::kAccessibilityShortcutsEnabled,
-    prefs::kAccessibilitySwitchAccessEnabled,
     prefs::kAccessibilityVirtualKeyboardEnabled,
     prefs::kDockedMagnifierEnabled,
     prefs::kDockedMagnifierScale,
@@ -357,14 +319,14 @@ bool VerifyFeaturesData() {
   // All feature prefs must be unique.
   std::set<const char*> feature_prefs;
   for (auto feature_data : kFeatures) {
-    if (base::Contains(feature_prefs, feature_data.pref)) {
+    if (feature_prefs.contains(feature_data.pref)) {
       return false;
     }
     feature_prefs.insert(feature_data.pref);
   }
 
   for (auto dialog_data : kFeatureDialogs) {
-    if (base::Contains(feature_prefs, dialog_data.pref)) {
+    if (feature_prefs.contains(dialog_data.pref)) {
       return false;
     }
     feature_prefs.insert(dialog_data.pref);
@@ -414,34 +376,8 @@ bool ShouldCopySigninPrefs(PrefService* previous_pref_service,
   return false;
 }
 
-// On a user's first login into a device, any a11y features enabled/disabled
-// by the user on the login screen are enabled/disabled in the user's profile.
-// This function copies settings from the signin prefs into the user's prefs
-// when it detects a login with a newly created profile.
-void CopySigninPrefsIfNeeded(PrefService* previous_pref_service,
-                             PrefService* current_pref_service) {
-  DCHECK(current_pref_service);
-  if (!ShouldCopySigninPrefs(previous_pref_service, current_pref_service)) {
-    return;
-  }
-
-  PrefService* signin_prefs =
-      Shell::Get()->session_controller()->GetSigninScreenPrefService();
-  DCHECK(signin_prefs);
-  for (const auto* pref_path : kCopiedOnSigninAccessibilityPrefs) {
-    const PrefService::Preference* pref =
-        signin_prefs->FindPreference(pref_path);
-
-    // Ignore if the pref has not been set by the user.
-    if (!pref || !pref->IsUserControlled()) {
-      continue;
-    }
-
-    // Copy the pref value from the signin profile.
-    const base::Value* value_on_login = pref->GetValue();
-    current_pref_service->Set(pref_path, *value_on_login);
-  }
-}
+using EnsurePrefsCustomAssociatorCallback =
+    base::OnceCallback<AccessibilityPrefsCustomAssociator*()>;
 
 // Returns notification icon based on the A11yNotificationType.
 const gfx::VectorIcon& GetNotificationIcon(A11yNotificationType type) {
@@ -654,6 +590,45 @@ std::string UmaNameForSwitchAccessCommand(SwitchAccessCommand command) {
       return "Accessibility.CrosSwitchAccess.PreviousKeyCode";
     case SwitchAccessCommand::kNone:
       NOTREACHED();
+  }
+}
+
+// This function registers the accessibility preferences that are conditionally
+// syncable - as per the respective feature flag - and require a resolution
+// policy when values set at OOBE differ from values stored at Chrome Sync.
+void RegisterAccessibilityPrefsWithConditionalSync(
+    PrefRegistrySimple* registry,
+    base::span<const AccessibilityPrefBatchEntry> prefs) {
+  for (const auto& pref : prefs) {
+    // The preference is registered elsewhere.
+    if (pref.has_custom_registration) {
+      continue;
+    }
+
+    switch (pref.default_value.type()) {
+      case base::Value::Type::BOOLEAN:
+        registry->RegisterBooleanPref(pref.pref_name,
+                                      pref.default_value.GetBool(),
+                                      pref.registration_flags);
+        break;
+      case base::Value::Type::INTEGER:
+        registry->RegisterIntegerPref(pref.pref_name,
+                                      pref.default_value.GetInt(),
+                                      pref.registration_flags);
+        break;
+      case base::Value::Type::DOUBLE:
+        registry->RegisterDoublePref(pref.pref_name,
+                                     pref.default_value.GetDouble(),
+                                     pref.registration_flags);
+        break;
+      case base::Value::Type::STRING:
+        registry->RegisterStringPref(pref.pref_name,
+                                     pref.default_value.GetString(),
+                                     pref.registration_flags);
+        break;
+      default:
+        NOTREACHED();
+    }
   }
 }
 
@@ -964,6 +939,11 @@ bool AccessibilityController::Feature::IsEnterpriseIconVisible() const {
 }
 
 const gfx::VectorIcon& AccessibilityController::Feature::icon() const {
+  if (type_ == FeatureType::kLiveCaption) {
+    return ::features::IsRoundedIconsEnabled()
+               ? vector_icons::kSubtitlesIcon
+               : vector_icons::kLiveCaptionOnOldIcon;
+  }
   DCHECK(icon_);
   if (icon_) {
     return *icon_;
@@ -1331,7 +1311,7 @@ void AccessibilityController::RegisterProfilePrefs(
   registry->RegisterBooleanPref(
       prefs::kAccessibilityChromeVoxEnableSpeechLogging, false);
   registry->RegisterDictionaryPref(
-      prefs::kAccessibilityChromeVoxEventStreamFilters, base::Value::Dict());
+      prefs::kAccessibilityChromeVoxEventStreamFilters, base::DictValue());
   registry->RegisterBooleanPref(prefs::kAccessibilityChromeVoxLanguageSwitching,
                                 false);
   registry->RegisterBooleanPref(
@@ -1547,69 +1527,14 @@ void AccessibilityController::RegisterProfilePrefs(
       prefs::kAccessibilityMagnifierFollowsSts, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF);
 
-  // Gate the first batch of visual accessibility prefs so the OS sync rollout
+  // Gate the batches of feature accessibility prefs so the OS sync rollout
   // can be staged (and rolled back) via Finch if issues arise.
-  const uint32_t syncable_registration_flag_batch1 =
-      base::FeatureList::IsEnabled(features::kOsSyncAccessibilitySettingsBatch1)
-          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
-          : 0;
-  registry->RegisterBooleanPref(prefs::kAccessibilityColorCorrectionEnabled,
-                                false, syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(
-      prefs::kAccessibilityColorCorrectionHasBeenSetup, false,
-      syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCursorHighlightEnabled,
-                                false, syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCursorColorEnabled, false,
-                                syncable_registration_flag_batch1);
-  registry->RegisterIntegerPref(prefs::kAccessibilityCursorColor,
-                                ui::kDefaultCursorColor,
-                                syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityLargeCursorEnabled, false,
-                                syncable_registration_flag_batch1);
-  registry->RegisterIntegerPref(prefs::kAccessibilityLargeCursorDipSize,
-                                kDefaultLargeCursorSize,
-                                syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityHighContrastEnabled, false,
-                                syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(
-      prefs::kHighContrastAcceleratorDialogHasBeenAccepted, false,
-      syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityCaretHighlightEnabled,
-                                false, syncable_registration_flag_batch1);
-  registry->RegisterIntegerPref(prefs::kAccessibilityCaretBlinkInterval,
-                                kDefaultCaretBlinkIntervalMs,
-                                syncable_registration_flag_batch1);
-  registry->RegisterBooleanPref(prefs::kAccessibilityFocusHighlightEnabled,
-                                false, syncable_registration_flag_batch1);
-
-  const uint32_t registration_flags_batch2 =
-      base::FeatureList::IsEnabled(features::kOsSyncAccessibilitySettingsBatch2)
-          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
-          : 0;
-  registry->RegisterBooleanPref(prefs::kAccessibilityReducedAnimationsEnabled,
-                                false, registration_flags_batch2);
-
-  const uint32_t registration_flags_batch3 =
-      base::FeatureList::IsEnabled(features::kOsSyncAccessibilitySettingsBatch3)
-          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
-          : 0;
-  registry->RegisterBooleanPref(prefs::kAccessibilityScreenMagnifierEnabled,
-                                false, registration_flags_batch3);
-  registry->RegisterBooleanPref(prefs::kAccessibilitySelectToSpeakEnabled,
-                                false, registration_flags_batch3);
-  registry->RegisterDoublePref(prefs::kAccessibilityScreenMagnifierScale,
-                               std::numeric_limits<double>::min(),
-                               registration_flags_batch3);
-  registry->RegisterBooleanPref(
-      prefs::kScreenMagnifierAcceleratorDialogHasBeenAccepted, false,
-      registration_flags_batch3);
-  registry->RegisterBooleanPref(
-      prefs::kDockedMagnifierAcceleratorDialogHasBeenAccepted, false,
-      registration_flags_batch3);
-  registry->RegisterBooleanPref(
-      prefs::kSelectToSpeakAcceleratorDialogHasBeenAccepted, false,
-      registration_flags_batch3);
+  RegisterAccessibilityPrefsWithConditionalSync(
+      registry, GetSyncableAccessibilityPrefsBatch1());
+  RegisterAccessibilityPrefsWithConditionalSync(
+      registry, GetSyncableAccessibilityPrefsBatch2());
+  RegisterAccessibilityPrefsWithConditionalSync(
+      registry, GetSyncableAccessibilityPrefsBatch3());
 
   if (::features::IsAccessibilityFlashScreenFeatureEnabled()) {
     registry->RegisterIntegerPref(prefs::kAccessibilityFlashNotificationsColor,
@@ -2450,6 +2375,18 @@ void AccessibilityController::SilenceSpokenFeedback() {
   }
 }
 
+void AccessibilityController::OnTwoFingerTouchStart() {
+  if (client_) {
+    client_->OnTwoFingerTouchStart();
+  }
+}
+
+void AccessibilityController::OnTwoFingerTouchStop() {
+  if (client_) {
+    client_->OnTwoFingerTouchStop();
+  }
+}
+
 bool AccessibilityController::ShouldToggleSpokenFeedbackViaTouch() const {
   return client_ && client_->ShouldToggleSpokenFeedbackViaTouch();
 }
@@ -2543,7 +2480,7 @@ void AccessibilityController::OnActiveUserPrefServiceChanged(
   // This is guaranteed to be received after
   // OnSigninScreenPrefServiceInitialized() so only copy the signin prefs if
   // needed here.
-  CopySigninPrefsIfNeeded(active_user_prefs_, prefs);
+  CopySigninPrefsIfNeeded(prefs);
   ObservePrefs(prefs);
 }
 
@@ -2567,6 +2504,28 @@ void AccessibilityController::OnSessionStateChanged(
   container->SetProperty(
       ui::kAXConsiderInvisibleAndIgnoreChildren,
       Shell::Get()->session_controller()->IsUserSessionBlocked());
+}
+
+void AccessibilityController::OnFirstSessionReady() {
+  // By the time the user desktop is fully loaded, any syncable or conflicting
+  // preferences have already been processed by the associator.
+  // If needed, launch the merge resolution dialog.
+  auto controller = AccessibilityPrefsMergeConflictController::MaybeCreate();
+  if (controller && controller->needs_conflict_resolution_dialog()) {
+    prefs_conflict_resolution_dialog_ =
+        AccessibilityPrefsMergeConflictDialog::CreateAndShow(
+            std::move(controller),
+            base::BindOnce(
+                &AccessibilityController::OnPrefsConflictResolutionDialogClosed,
+                GetWeakPtr()));
+  }
+
+  // After attempting to construct the dialog, the associator is no longer
+  // required and can be safely destroyed.
+  // The dialog observes changes to the preferences it displays and reacts
+  // accordingly. Any other preference changes that occur while the dialog
+  // is open will proceed through the normal flow.
+  prefs_custom_associator_.reset();
 }
 
 AccessibilityEventRewriter*
@@ -2610,8 +2569,60 @@ void AccessibilityController::OnDisplayTabletStateChanged(
   }
 }
 
+// On a user's first login into a device, any a11y features enabled/disabled
+// by the user on the login screen are enabled/disabled in the user's profile.
+// This function copies settings from the signin prefs into the user's prefs
+// when it detects a login with a newly created profile.
+void AccessibilityController::CopySigninPrefsIfNeeded(
+    PrefService* current_pref_service) {
+  DCHECK(current_pref_service);
+  if (!ShouldCopySigninPrefs(/*previous_pref_service=*/active_user_prefs_,
+                             current_pref_service)) {
+    return;
+  }
+
+  // Ensure a fresh state on the associator.
+  CHECK(!prefs_custom_associator_);
+  prefs_custom_associator_ =
+      !IsCurrentSessionGuest()
+          ? Shell::Get()->accessibility_delegate()->CreatePrefsCustomAssociator(
+                current_pref_service)
+          : nullptr;
+
+  PrefService* signin_prefs =
+      Shell::Get()->session_controller()->GetSigninScreenPrefService();
+  DCHECK(signin_prefs);
+  for (const auto* pref_path : kCopiedOnSigninAccessibilityPrefs) {
+    const PrefService::Preference* pref =
+        signin_prefs->FindPreference(pref_path);
+
+    if (!pref) {
+      continue;
+    }
+
+    const base::Value* value_on_login = pref->GetValue();
+
+    if (pref->IsUserControlled()) {
+      // Copy the pref value from the signin profile.
+      current_pref_service->Set(pref_path, *value_on_login);
+    }
+
+    // A preference is lockable when its OOBE-configured value may differ
+    // from a previously synced value.
+    if (prefs_custom_associator_ &&
+        prefs_custom_associator_->CanLockPref(pref_path)) {
+      // Lock syncable OOBE accessibility prefs so sync application is
+      // deferred until conflicts are resolved.
+      prefs_custom_associator_->TryLockPref(pref_path, *value_on_login);
+    }
+  }
+}
+
 void AccessibilityController::ObservePrefs(PrefService* prefs) {
   DCHECK(prefs);
+  if (active_user_prefs_ == prefs) {
+    return;
+  }
 
   active_user_prefs_ = prefs;
 
@@ -3054,13 +3065,26 @@ void AccessibilityController::UpdateCursorColorFromPrefs(bool notify) {
   const bool enabled =
       active_user_prefs_->GetBoolean(prefs::kAccessibilityCursorColorEnabled);
   Shell* shell = Shell::Get();
-  shell->SetCursorColor(
-      enabled
-          // Settings page only sends RGB now. Set alpha as full opaque.
-          ? SkColorSetA(active_user_prefs_->GetInteger(
-                            prefs::kAccessibilityCursorColor),
-                        0xFF)
-          : ui::kDefaultCursorColor);
+
+  const SkColor cursor_color =
+      active_user_prefs_->GetInteger(prefs::kAccessibilityCursorColor);
+  if (enabled && cursor_color == kAccessibilityCursorColorInverted) {
+    if (::features::IsAccessibilityInvertedMouseCursorEnabled()) {
+      shell->SetCursorInverted(true);
+    } else {
+      // Use default cursor if inverted cursor is not supported.
+      shell->SetCursorInverted(false);
+      shell->SetCursorColor(ui::kDefaultCursorColor);
+    }
+  } else {
+    shell->SetCursorInverted(false);
+    shell->SetCursorColor(
+        enabled
+            // Settings page only sends RGB now. Set alpha as full opaque.
+            ? SkColorSetA(cursor_color, 0xFF)
+            : ui::kDefaultCursorColor);
+  }
+
   if (notify) {
     NotifyAccessibilityStatusChanged();
   }
@@ -3386,8 +3410,7 @@ void AccessibilityController::UpdateSwitchAccessKeyCodesFromPref(
   }
 
   std::string pref_key = PrefKeyForSwitchAccessCommand(command);
-  const base::Value::Dict& key_codes_pref =
-      active_user_prefs_->GetDict(pref_key);
+  const base::DictValue& key_codes_pref = active_user_prefs_->GetDict(pref_key);
   std::map<int, std::set<std::string>> key_codes;
   for (const auto v : key_codes_pref) {
     int key_code;
@@ -3861,7 +3884,6 @@ void AccessibilityController::UpdateFeatureFromPref(FeatureType feature) {
       Shell::Get()->UpdateCursorCompositingEnabled();
       break;
     case FeatureType::kLiveCaption:
-      live_caption().SetEnabled(enabled);
       break;
     case FeatureType::kMonoAudio:
       CrasAudioHandler::Get()->SetOutputMonoEnabled(enabled);
@@ -3886,7 +3908,7 @@ void AccessibilityController::UpdateFeatureFromPref(FeatureType feature) {
         // here (as opposed to the extension) to ensure that mv3 key handling
         // is only enabled if we're guaranteed a response from the extension.
         accessibility_event_rewriter_->SetSpokenFeedbackMv3KeyHandlingEnabled(
-            false);
+            false, /*session_id=*/0);
       }
 
       // ChromeVox focus highlighting overrides the other focus highlighting.
@@ -4180,6 +4202,10 @@ void AccessibilityController::OnRequestDisableFaceGazeAction(
 
   disable_dialog_.reset();
   client_->SendFaceGazeDisableDialogResultToSettings(dialog_accepted);
+}
+
+void AccessibilityController::OnPrefsConflictResolutionDialogClosed() {
+  prefs_conflict_resolution_dialog_.reset();
 }
 
 }  // namespace ash

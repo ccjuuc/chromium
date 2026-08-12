@@ -52,7 +52,7 @@ std::string NotificationContentDetectionModel::GetSerializedMetadata(
     bool is_allowlisted_by_user,
     std::optional<double> suspicious_score) {
   auto metadata_dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set(kMetadataIsOriginOnGlobalCacheListKey, is_on_global_cache_list)
           .Set(kMetadataIsOriginAllowlistedByUserKey, is_allowlisted_by_user);
   if (suspicious_score.has_value()) {
@@ -87,7 +87,7 @@ void NotificationContentDetectionModel::Execute(
     ModelVerdictCallback model_verdict_callback) {
   // If there is no model version, then there is no valid notification content
   // detection model loaded from the server so don't check the model.
-  if (!GetModelInfo() || !GetModelInfo()->GetVersion()) {
+  if (!GetModelInfo() || !GetModelInfo()->version) {
     std::move(model_verdict_callback)
         .Run(/*is_suspicious=*/false,
              GetSerializedMetadata(did_match_allowlist, is_allowlisted_by_user,

@@ -9,11 +9,11 @@
 #import "components/policy/policy_constants.h"
 #import "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #import "components/signin/ios/browser/features.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/base/user_selectable_type.h"
 #import "components/unified_consent/pref_names.h"
+#import "google_apis/gaia/core_account_id.h"
 #import "ios/chrome/browser/authentication/test/expected_signin_histograms.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
@@ -27,8 +27,8 @@
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/policy/model/policy_earl_grey_utils.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/google_services_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_constants.h"
+#import "ios/chrome/browser/settings/google_services/public/google_services_settings_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/manage_sync_settings_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_app_interface.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/elements_constants.h"
@@ -72,6 +72,7 @@ id<GREYMatcher> ManageUMALinkMatcher() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  config.features_disabled.push_back(kAuthenticationFlowReauthFirstKillswitch);
   config.additional_args.push_back(
       "--disable-features=UpdatedFirstRunSequence");
   config.additional_args.push_back(
@@ -351,6 +352,30 @@ id<GREYMatcher> ManageUMALinkMatcher() {
   [[self class] dismissDefaultBrowserAndRemainingScreens];
   [ChromeEarlGreyUI openSettingsMenu];
   [self verifySyncOrHistoryEnabled:YES];
+}
+
+// Tests FRE with identity requiring reauthentication. The user signs in but
+// retains persistent auth error status.
+- (void)testWithUMACheckedAndSigninNeedsReauth {
+  // Add identity needing reauthentication.
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey addFakeIdentity:fakeIdentity];
+  [SigninEarlGrey setPersistentAuthErrorForAccount:CoreAccountId::FromGaiaId(
+                                                       fakeIdentity.gaiaId)];
+
+  // Verify 2 steps FRE.
+  [self verifyEnterpriseWelcomeScreenIsDisplayedWithFRESigninIntent:
+            FRESigninIntentRegular];
+  // Accept sign-in.
+  [[self elementInteractionWithGreyMatcher:chrome_test_util::
+                                               ButtonStackPrimaryButton()
+                      scrollViewIdentifier:
+                          kPromoStyleScrollViewAccessibilityIdentifier]
+      performAction:grey_tap()];
+  // Accept sync.
+  [self acceptSyncOrHistory];
+  // Check signed in.
+  [SigninEarlGrey verifySignedInWithFakeIdentity:fakeIdentity];
 }
 
 // Tests FRE with UMA default value, with sign-in and no sync.
@@ -1264,6 +1289,7 @@ id<GREYMatcher> ManageUMALinkMatcher() {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  config.features_disabled.push_back(kAuthenticationFlowReauthFirstKillswitch);
   config.additional_args.push_back("--enable-features=UpdatedFirstRunSequence");
   config.additional_args.push_back(
       "--disable-features=AnimatedDefaultBrowserPromoInFRE");
@@ -1327,7 +1353,6 @@ id<GREYMatcher> ManageUMALinkMatcher() {
                  grey_accessibilityID(
                      first_run::kFirstRunSignInScreenAccessibilityIdentifier)]
       assertWithMatcher:grey_notNil()];
-  ;
 }
 
 #pragma mark - Enterprise tests

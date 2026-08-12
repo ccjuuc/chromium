@@ -9,10 +9,11 @@
 
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/android/chrome_jni_headers/InstalledWebappGeolocationBridge_shared_jni.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/device/public/mojom/geolocation.mojom.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
-#include "url/gurl.h"
+#include "url/origin.h"
 
 class InstalledWebappGeolocationContext;
 
@@ -22,7 +23,7 @@ class InstalledWebappGeolocationBridge : public device::mojom::Geolocation {
   // |context| must outlive this object.
   InstalledWebappGeolocationBridge(
       mojo::PendingReceiver<device::mojom::Geolocation> receiver,
-      const GURL& origin,
+      const url::Origin& origin,
       InstalledWebappGeolocationContext* context);
   InstalledWebappGeolocationBridge(const InstalledWebappGeolocationBridge&) =
       delete;
@@ -43,25 +44,26 @@ class InstalledWebappGeolocationBridge : public device::mojom::Geolocation {
 
   // Called by JNI on its thread looper.
   void OnNewLocationAvailable(JNIEnv* env,
-                              jdouble latitude,
-                              jdouble longitude,
-                              jdouble time_stamp,
-                              jboolean has_altitude,
-                              jdouble altitude,
-                              jboolean has_accuracy,
-                              jdouble accuracy,
-                              jboolean has_heading,
-                              jdouble heading,
-                              jboolean has_speed,
-                              jdouble speed);
-  void OnNewErrorAvailable(JNIEnv* env, std::string& message);
+                              double latitude,
+                              double longitude,
+                              double time_stamp,
+                              bool has_altitude,
+                              double altitude,
+                              bool has_accuracy,
+                              double accuracy,
+                              bool has_heading,
+                              double heading,
+                              bool has_speed,
+                              double speed);
+  void OnNewErrorAvailable(JNIEnv* env, const std::string& message);
 
-  const GURL& url() { return url_; }
+  const url::Origin& origin() const { return origin_; }
 
  private:
   // device::mojom::Geolocation:
   void SetHighAccuracyHint(bool high_accuracy) override;
   void QueryNextPosition(QueryNextPositionCallback callback) override;
+  void QueryCachedPosition(QueryCachedPositionCallback callback) override;
 
   void OnConnectionError();
 
@@ -80,13 +82,14 @@ class InstalledWebappGeolocationBridge : public device::mojom::Geolocation {
 
   device::mojom::GeopositionResultPtr current_position_;
 
-  const GURL url_;
+  const url::Origin origin_;
 
   // Whether this instance is currently observing location updates with high
   // accuracy.
   bool high_accuracy_;
 
-  base::android::ScopedJavaGlobalRef<jobject> java_ref_;
+  base::android::ScopedJavaGlobalRef<JInstalledWebappGeolocationBridge>
+      java_ref_;
 
   // The binding between this object and the other end of the pipe.
   mojo::Receiver<device::mojom::Geolocation> receiver_;

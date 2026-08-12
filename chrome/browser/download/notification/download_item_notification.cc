@@ -24,7 +24,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_commands.h"
-#include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_stats.h"
 #include "chrome/browser/download/notification/download_notification_manager.h"
@@ -57,6 +56,7 @@
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/extension_util.h"
 #include "net/base/mime_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -65,6 +65,7 @@
 #include "ui/base/l10n/time_format.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/color_palette.h"
@@ -216,7 +217,7 @@ void RecordButtonClickAction(DownloadCommands::Command command) {
 
 bool IsExtensionDownload(DownloadUIModel* item) {
   return item->GetDownloadItem() &&
-         download_crx_util::IsExtensionDownload(*item->GetDownloadItem());
+         extensions::util::IsExtensionDownload(*item->GetDownloadItem());
 }
 
 }  // namespace
@@ -231,7 +232,9 @@ DownloadItemNotification::DownloadItemNotification(
   message_center::RichNotificationData rich_notification_data;
   rich_notification_data.should_make_spoken_feedback_for_popup_updates = false;
   rich_notification_data.vector_small_image =
-      &vector_icons::kNotificationDownloadIcon;
+      &(features::IsRoundedIconsEnabled()
+            ? vector_icons::kDownload2FilledIcon
+            : vector_icons::kNotificationDownloadOldIcon);
 
   notification_ = std::make_unique<message_center::Notification>(
       message_center::NOTIFICATION_TYPE_PROGRESS, GetNotificationId(),
@@ -376,7 +379,7 @@ void DownloadItemNotification::Click(
 
     if (command == DownloadCommands::REVIEW) {
       content::WebContents* contents =
-          GetBrowser()->tab_strip_model()->GetActiveWebContents();
+          GetBrowser()->GetTabStripModel()->GetActiveWebContents();
 
       // If there is no currently active web contents, just show the user the
       // downloads page so they get more context on the warned download needing
@@ -1000,8 +1003,9 @@ std::u16string DownloadItemNotification::GetWarningStatusString() const {
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_WARNING);
     }
     case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE:
+    case download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE:
       return l10n_util::GetStringUTF16(
-          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_GDRIVE);
+          IDS_PROMPT_DOWNLOAD_FORCED_SAVE_TO_CLOUD);
     case download::DOWNLOAD_DANGER_TYPE_SENSITIVE_CONTENT_BLOCK: {
       return l10n_util::GetStringUTF16(
           IDS_PROMPT_DOWNLOAD_SENSITIVE_CONTENT_BLOCKED);
@@ -1192,10 +1196,10 @@ bool DownloadItemNotification::AllowedToOpenWhileScanning() const {
              enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED);
 }
 
-Browser* DownloadItemNotification::GetBrowser() const {
+BrowserWindowInterface* DownloadItemNotification::GetBrowser() const {
   chrome::ScopedTabbedBrowserDisplayer browser_displayer(profile());
-  DCHECK(browser_displayer.browser());
-  return browser_displayer.browser();
+  DCHECK(browser_displayer.browser_window_interface());
+  return browser_displayer.browser_window_interface();
 }
 
 Profile* DownloadItemNotification::profile() const {

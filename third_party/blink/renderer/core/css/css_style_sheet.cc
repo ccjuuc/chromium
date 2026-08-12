@@ -103,8 +103,20 @@ const Document* CSSStyleSheet::SingleOwnerDocument(
 CSSStyleSheet* CSSStyleSheet::Create(Document& document,
                                      const CSSStyleSheetInit* options,
                                      ExceptionState& exception_state) {
-  return CSSStyleSheet::Create(document, document.BaseURL(), options,
-                               exception_state);
+  if (!RuntimeEnabledFeatures::CSSStyleSheetInitBaseURLEnabled() ||
+      options->baseURL().IsNull()) {
+    return CSSStyleSheet::Create(document, document.BaseURL(), options,
+                                 exception_state);
+  }
+
+  KURL baseUrl = KURL(document.BaseURL(), options->baseURL());
+  if (!baseUrl.IsValid()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotAllowedError,
+        "The 'baseURL' provided in CSSStyleSheetInit is invalid.");
+    return nullptr;
+  }
+  return CSSStyleSheet::Create(document, baseUrl, options, exception_state);
 }
 
 CSSStyleSheet* CSSStyleSheet::Create(Document& document,
@@ -310,6 +322,14 @@ void CSSStyleSheet::ReattachChildRuleCSSOMWrappers() {
       continue;
     }
     child_rule_cssom_wrappers_[i]->Reattach(contents_->RuleAt(i));
+  }
+}
+
+void CSSStyleSheet::DetachCSSOMWrappers() {
+  for (Member<CSSRule>& wrapper : child_rule_cssom_wrappers_) {
+    if (wrapper) {
+      wrapper->SetParentStyleSheet(nullptr);
+    }
   }
 }
 
@@ -630,6 +650,7 @@ void CSSStyleSheet::SetLoadCompleted(bool completed) {
 }
 
 void CSSStyleSheet::SetText(const String& text, CSSImportRules import_rules) {
+  DetachCSSOMWrappers();
   child_rule_cssom_wrappers_.clear();
 
   CSSStyleSheet::RuleMutationScope mutation_scope(this);
@@ -657,7 +678,7 @@ bool CSSStyleSheet::IsAlternate() const {
     auto* owner_element = DynamicTo<Element>(owner_node_.Get());
     return owner_element &&
            owner_element->FastGetAttribute(html_names::kRelAttr)
-               .Contains("alternate");
+               .contains("alternate");
   }
   return alternate_from_constructor_;
 }

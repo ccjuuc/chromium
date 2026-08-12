@@ -4,29 +4,36 @@
     xmlns:dist="http://schemas.android.com/apk/distribution"
     featureSplit="chrome"
     package="org.chromium.chrome.stable"
-    platformBuildVersionCode="36"
-    platformBuildVersionName="16"
+    platformBuildVersionCode="37"
+    platformBuildVersionName="17"
     android:versionCode="OFFSET=33"
     android:versionName="#.#.#.#">
   <dist:module dist:onDemand="false">  # DIFF-ANCHOR: 2805007f
     <dist:fusing dist:include="true"/>
   </dist:module>  # DIFF-ANCHOR: 2805007f
-  <queries>  # DIFF-ANCHOR: 2a6d7800
-    <intent>  # DIFF-ANCHOR: dd112d1c
-      <action android:name="android.intent.action.VIEW"/>
-      <category android:name="android.intent.category.BROWSABLE"/>
-      <data android:scheme="https"/>
-    </intent>  # DIFF-ANCHOR: dd112d1c
+  <queries>  # DIFF-ANCHOR: a4b06bd5
+    <package android:name="com.google.android.aicore"/>
     <package android:name="com.google.android.gms.policy_cast_dynamite"/>
-  </queries>  # DIFF-ANCHOR: 2a6d7800
+  </queries>  # DIFF-ANCHOR: a4b06bd5
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
   <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+  <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE"/>
   <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE"/>
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36"/>
   <application>
+    <activity  # DIFF-ANCHOR: f7a9141e
+        android:name="androidx.core.pip.contentpip.ContentPipInternalActivity"
+        android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+        android:excludeFromRecents="true"
+        android:exported="false"
+        android:launchMode="standard"
+        android:supportsPictureInPicture="true"
+        android:taskAffinity="androidx.core.pip.contentpip.isolated"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar">
+    </activity>  # DIFF-ANCHOR: f7a9141e
     <activity  # DIFF-ANCHOR: 28dc9019
         android:name="com.google.ar.core.InstallActivity"
         android:configChanges="keyboardHidden|orientation|screenSize"
@@ -63,7 +70,7 @@
     </activity>  # DIFF-ANCHOR: 93d41352
     <activity  # DIFF-ANCHOR: 61b2c776
         android:name="org.chromium.chrome.browser.ChromeTabbedActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:exported="true"
         android:hardwareAccelerated="false"
         android:launchMode="singleTask"
@@ -81,7 +88,7 @@
     </activity>  # DIFF-ANCHOR: 61b2c776
     <activity  # DIFF-ANCHOR: 610e8ccf
         android:name="org.chromium.chrome.browser.ChromeTabbedActivity2"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:exported="false"
         android:hardwareAccelerated="false"
         android:launchMode="singleTask"
@@ -100,6 +107,7 @@
         android:name="org.chromium.chrome.browser.LauncherShortcutActivity"
         android:excludeFromRecents="true"
         android:exported="false"
+        android:launchMode="singleInstance"
         android:taskAffinity=""
         android:theme="@style/Theme.BrowserUI.NoDisplay">
       <property android:name="android.window.PROPERTY_SUPPORTS_MULTI_INSTANCE_SYSTEM_UI" android:value="true"/>
@@ -127,13 +135,6 @@
         android:theme="@style/Theme.Chromium.DialogWhenLarge"
         android:windowSoftInputMode="stateAlwaysHidden">
     </activity>  # DIFF-ANCHOR: 002f9e99
-    <activity  # DIFF-ANCHOR: 9bfe10ab
-        android:name="org.chromium.chrome.browser.app.creator.CreatorActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
-        android:exported="false"
-        android:theme="@style/Theme.Chromium.Activity.Fullscreen"
-        android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
-    </activity>  # DIFF-ANCHOR: 9bfe10ab
     <activity  # DIFF-ANCHOR: 8f3f76d9
         android:name="org.chromium.chrome.browser.app.download.home.DownloadActivity"
         android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
@@ -141,24 +142,6 @@
         android:theme="@style/Theme.Chromium.Activity.Fullscreen"
         android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
     </activity>  # DIFF-ANCHOR: 8f3f76d9
-    <activity  # DIFF-ANCHOR: 3d32d400
-        android:name="org.chromium.chrome.browser.app.feed.feedmanagement.FeedManagementActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
-        android:exported="false"
-        android:theme="@style/Theme.Chromium.Settings"
-        android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
-    </activity>  # DIFF-ANCHOR: 3d32d400
-    <activity  # DIFF-ANCHOR: 98c8c9be
-        android:name="org.chromium.chrome.browser.app.feed.followmanagement.FollowManagementActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
-        android:exported="false"
-        android:theme="@style/Theme.Chromium.Settings"
-        android:windowSoftInputMode="stateAlwaysHidden|adjustResize">
-      <intent-filter>  # DIFF-ANCHOR: 0bc48fdf
-        <action android:name="org.chromium.chrome.browser.app.feed.followmanagement.FollowManagementActivity.ACTIVATE"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-      </intent-filter>  # DIFF-ANCHOR: 0bc48fdf
-    </activity>  # DIFF-ANCHOR: 98c8c9be
     <activity  # DIFF-ANCHOR: 50c7105b
         android:name="org.chromium.chrome.browser.app.reengagement.ReengagementActivity"
         android:excludeFromRecents="true"
@@ -197,11 +180,11 @@
         android:name="org.chromium.chrome.browser.chrome_item_picker.ChromeItemPickerActivity"
         android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
         android:exported="false"
-        android:theme="@style/Theme.Chromium.WithWindowAnimation">
+        android:theme="@style/Theme.Chromium.Activity.FakeTranslucent">
     </activity>  # DIFF-ANCHOR: 81783ca5
     <activity  # DIFF-ANCHOR: 44266a6a
         android:name="org.chromium.chrome.browser.customtabs.CustomTabActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:exported="false"
         android:hardwareAccelerated="false"
         android:resizeableActivity="true"
@@ -216,7 +199,7 @@
     </activity>  # DIFF-ANCHOR: 44266a6a
     <activity  # DIFF-ANCHOR: 4d923622
         android:name="org.chromium.chrome.browser.customtabs.TranslucentCustomTabActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:exported="false"
         android:hardwareAccelerated="false"
         android:resizeableActivity="true"
@@ -235,6 +218,14 @@
         android:exported="false"
         android:theme="@style/Theme.Chromium.DialogWhenLarge">
     </activity>  # DIFF-ANCHOR: 6ad7b5dd
+    <activity  # DIFF-ANCHOR: a6346d72
+        android:name="org.chromium.chrome.browser.devtools.DevToolsActivity"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
+        android:exported="false"
+        android:hardwareAccelerated="false"
+        android:theme="@style/Theme.Chromium.Activity"
+        android:windowSoftInputMode="adjustResize">
+    </activity>  # DIFF-ANCHOR: a6346d72
     <activity  # DIFF-ANCHOR: 1acdfd19
         android:name="org.chromium.chrome.browser.document.ChromeLauncherActivity"
         android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|density"
@@ -308,7 +299,7 @@
     </activity>  # DIFF-ANCHOR: 060360d2
     <activity  # DIFF-ANCHOR: 43bdc48f
         android:name="org.chromium.chrome.browser.media.DocumentPictureInPictureActivity"
-        android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+        android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|density|uiMode"
         android:excludeFromRecents="true"
         android:exported="false"
         android:noHistory="true"
@@ -325,8 +316,28 @@
       <intent-filter>  # DIFF-ANCHOR: 13c9b0a8
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
-        <data android:mimeType="image/*"/>
-        <data android:mimeType="video/*"/>
+        <data android:mimeType="image/apng"/>
+        <data android:mimeType="image/avif"/>
+        <data android:mimeType="image/bmp"/>
+        <data android:mimeType="image/gif"/>
+        <data android:mimeType="image/jpeg"/>
+        <data android:mimeType="image/jpg"/>
+        <data android:mimeType="image/jxl"/>
+        <data android:mimeType="image/pjpeg"/>
+        <data android:mimeType="image/png"/>
+        <data android:mimeType="image/svg+xml"/>
+        <data android:mimeType="image/vnd.microsoft.icon"/>
+        <data android:mimeType="image/webp"/>
+        <data android:mimeType="image/x-icon"/>
+        <data android:mimeType="image/x-png"/>
+        <data android:mimeType="image/x-xbitmap"/>
+        <data android:mimeType="video/3gpp"/>
+        <data android:mimeType="video/matroska"/>
+        <data android:mimeType="video/mp4"/>
+        <data android:mimeType="video/ogg"/>
+        <data android:mimeType="video/webm"/>
+        <data android:mimeType="video/x-m4v"/>
+        <data android:mimeType="video/x-matroska"/>
         <data android:scheme="content"/>
         <data android:scheme="file"/>
       </intent-filter>  # DIFF-ANCHOR: 13c9b0a8
@@ -344,16 +355,15 @@
     <activity  # DIFF-ANCHOR: e86e2b49
         android:name="org.chromium.chrome.browser.notifications.NotificationIntentInterceptor$TrampolineActivity"
         android:autoRemoveFromRecents="true"
-        android:documentLaunchMode="always"
         android:excludeFromRecents="true"
         android:exported="false"
         android:noHistory="true"
+        android:taskAffinity=""
         android:theme="@style/Theme.BrowserUI.Translucent.NoTitleBar">
     </activity>  # DIFF-ANCHOR: e86e2b49
     <activity  # DIFF-ANCHOR: 7ff74272
         android:name="org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerImpl$DismissNotificationChromeActivity"
         android:autoRemoveFromRecents="true"
-        android:documentLaunchMode="always"
         android:excludeFromRecents="true"
         android:exported="false"
         android:noHistory="true"
@@ -362,7 +372,6 @@
     <activity  # DIFF-ANCHOR: 71702606
         android:name="org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerImpl$TrampolineActivity"
         android:autoRemoveFromRecents="true"
-        android:documentLaunchMode="always"
         android:excludeFromRecents="true"
         android:exported="false"
         android:noHistory="true"
@@ -392,6 +401,14 @@
         android:label="@string/settings"
         android:theme="@style/Theme.Chromium.Settings">
     </activity>  # DIFF-ANCHOR: d32b85df
+    <activity  # DIFF-ANCHOR: e3c0dfdf
+        android:name="org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfShareTargetActivity"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize"
+        android:excludeFromRecents="true"
+        android:exported="false"
+        android:noHistory="true"
+        android:theme="@style/Theme.BrowserUI.Translucent.NoTitleBar">
+    </activity>  # DIFF-ANCHOR: e3c0dfdf
     <activity  # DIFF-ANCHOR: d4d45613
         android:name="org.chromium.chrome.browser.signin.SigninAndHistorySyncActivity"
         android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode"
@@ -423,14 +440,6 @@
         android:launchMode="singleInstance"
         android:theme="@style/Theme.Chromium.Activity">
     </activity>  # DIFF-ANCHOR: 6e34d703
-    <activity  # DIFF-ANCHOR: 43bfa5de
-        android:name="org.chromium.chrome.browser.test_dummy.TestDummyActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize"
-        android:excludeFromRecents="true"
-        android:exported="true"
-        android:noHistory="true"
-        android:theme="@style/Theme.Material3Expressive.DayNight">
-    </activity>  # DIFF-ANCHOR: 43bfa5de
     <activity  # DIFF-ANCHOR: 9bb1f409
         android:name="org.chromium.chrome.browser.webapps.ActivateWebApkActivity"
         android:exported="true"
@@ -442,7 +451,7 @@
     </activity>  # DIFF-ANCHOR: 9bb1f409
     <activity  # DIFF-ANCHOR: f1dc024a
         android:name="org.chromium.chrome.browser.webapps.SameTaskWebApkActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:exported="false"
         android:hardwareAccelerated="false"
         android:label="@string/webapp_activity_title"
@@ -459,7 +468,7 @@
     </activity>  # DIFF-ANCHOR: f1dc024a
     <activity  # DIFF-ANCHOR: 5e467d8a
         android:name="org.chromium.chrome.browser.webapps.WebappActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:documentLaunchMode="intoExisting"
         android:exported="false"
         android:hardwareAccelerated="false"
@@ -503,7 +512,7 @@
     </activity>  # DIFF-ANCHOR: 1d9b4077
     <activity  # DIFF-ANCHOR: 5d3091ca
         android:name="org.chromium.components.webxr.XrHostActivity"
-        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode"
+        android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode|navigation|density|touchscreen|colorMode|fontScale"
         android:excludeFromRecents="true"
         android:exported="false"
         android:hardwareAccelerated="false"
@@ -626,12 +635,6 @@
       <intent-filter>  # DIFF-ANCHOR: 13c9b0a8
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
-        <data android:mimeType="application/pdf"/>
-        <data android:scheme="content"/>
-      </intent-filter>  # DIFF-ANCHOR: 13c9b0a8
-      <intent-filter>  # DIFF-ANCHOR: 13c9b0a8
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
         <data android:mimeType="application/xhtml+xml"/>
         <data android:mimeType="text/html"/>
         <data android:mimeType="text/plain"/>
@@ -706,7 +709,20 @@
       <intent-filter>  # DIFF-ANCHOR: 13c9b0a8
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
-        <data android:mimeType="audio/*"/>
+        <data android:mimeType="application/ogg"/>
+        <data android:mimeType="audio/aac"/>
+        <data android:mimeType="audio/flac"/>
+        <data android:mimeType="audio/matroska"/>
+        <data android:mimeType="audio/mp3"/>
+        <data android:mimeType="audio/mp4"/>
+        <data android:mimeType="audio/mpeg"/>
+        <data android:mimeType="audio/ogg"/>
+        <data android:mimeType="audio/wav"/>
+        <data android:mimeType="audio/webm"/>
+        <data android:mimeType="audio/x-m4a"/>
+        <data android:mimeType="audio/x-matroska"/>
+        <data android:mimeType="audio/x-mp3"/>
+        <data android:mimeType="audio/x-wav"/>
         <data android:scheme="content"/>
         <data android:scheme="file"/>
       </intent-filter>  # DIFF-ANCHOR: 13c9b0a8
@@ -736,6 +752,15 @@
         android:name="com.google.android.gms.cast.framework.media.MediaIntentReceiver"
         android:exported="false">
     </receiver>  # DIFF-ANCHOR: 0a6f8fa5
+    <receiver  # DIFF-ANCHOR: 83f0ffb6
+        android:name="org.chromium.chrome.browser.actor.ActorBroadcastReceiver"
+        android:exported="false">
+      <intent-filter>  # DIFF-ANCHOR: 43c058ef
+        <action android:name="org.chromium.chrome.browser.actor.ACTION_CANCEL"/>
+        <action android:name="org.chromium.chrome.browser.actor.ACTION_PAUSE"/>
+        <action android:name="org.chromium.chrome.browser.actor.ACTION_RESUME"/>
+      </intent-filter>  # DIFF-ANCHOR: 43c058ef
+    </receiver>  # DIFF-ANCHOR: 83f0ffb6
     <receiver  # DIFF-ANCHOR: 68e22783
         android:name="org.chromium.chrome.browser.announcement.AnnouncementNotificationManager$Receiver"
         android:exported="false">
@@ -848,10 +873,6 @@
         <action android:name="com.android.chrome.safe_browsing.LOGIN"/>
       </intent-filter>  # DIFF-ANCHOR: 84a815d3
     </receiver>  # DIFF-ANCHOR: 8d506dab
-    <receiver  # DIFF-ANCHOR: 321c96f6
-        android:name="org.chromium.chrome.browser.safety_hub.UnsubscribedNotificationsNotificationManager$NotificationReceiver"
-        android:exported="false">
-    </receiver>  # DIFF-ANCHOR: 321c96f6
     <receiver  # DIFF-ANCHOR: a0d83ae5
         android:name="org.chromium.chrome.browser.searchwidget.SearchWidgetProvider"
         android:exported="true"
@@ -864,10 +885,6 @@
       </intent-filter>  # DIFF-ANCHOR: 5458f2a2
       <meta-data android:name="android.appwidget.provider" android:resource="@xml/search_widget_info"/>
     </receiver>  # DIFF-ANCHOR: a0d83ae5
-    <receiver  # DIFF-ANCHOR: 124ac9a1
-        android:name="org.chromium.chrome.browser.sharing.click_to_call.ClickToCallMessageHandler$TapReceiver"
-        android:exported="false">
-    </receiver>  # DIFF-ANCHOR: 124ac9a1
     <receiver  # DIFF-ANCHOR: 420d0678
         android:name="org.chromium.chrome.browser.sharing.sms_fetcher.SmsFetcherMessageHandler$NotificationReceiver"
         android:exported="false">
@@ -884,16 +901,16 @@
         android:exported="false">
     </receiver>  # DIFF-ANCHOR: 2553238b
     <service android:name="androidx.browser.customtabs.PostMessageService"/>
-    <service  # DIFF-ANCHOR: e97ae51b
-        android:name="androidx.pdf.service.PdfDocumentService"
+    <service  # DIFF-ANCHOR: 70fcecc3
+        android:name="org.chromium.chrome.browser.GracefulShutdownService"
         android:exported="false"
-        android:isolatedProcess="true">
-    </service>  # DIFF-ANCHOR: e97ae51b
-    <service  # DIFF-ANCHOR: 5d82e3ff
-        android:name="androidx.pdf.service.PdfDocumentServiceImpl"
+        android:foregroundServiceType="shortService|dataSync">
+    </service>  # DIFF-ANCHOR: 70fcecc3
+    <service  # DIFF-ANCHOR: 293d124f
+        android:name="org.chromium.chrome.browser.actor.ActorForegroundService"
         android:exported="false"
-        android:isolatedProcess="true">
-    </service>  # DIFF-ANCHOR: 5d82e3ff
+        android:foregroundServiceType="dataSync">
+    </service>  # DIFF-ANCHOR: 293d124f
     <service  # DIFF-ANCHOR: b56e4a55
         android:name="org.chromium.chrome.browser.app.bluetooth.BluetoothNotificationService"
         android:exported="false">
@@ -938,14 +955,6 @@
         <category android:name="androidx.browser.trusted.category.WebShareTargetV2"/>
       </intent-filter>  # DIFF-ANCHOR: d46bf795
     </service>  # DIFF-ANCHOR: ee1c39a8
-    <service  # DIFF-ANCHOR: e52d1b8f
-        android:name="org.chromium.chrome.browser.data_import.DataImporterService"
-        android:exported="true">
-      <intent-filter>  # DIFF-ANCHOR: ec53b68d
-        <action android:name="io.grpc.action.BIND"/>
-        <data android:host="" android:path="/com.google.osmigration.systemappapi.TargetService" android:scheme="grpc"/>
-      </intent-filter>  # DIFF-ANCHOR: ec53b68d
-    </service>  # DIFF-ANCHOR: e52d1b8f
     <service  # DIFF-ANCHOR: 4b22c3f5
         android:name="org.chromium.chrome.browser.download.DownloadBroadcastManager"
         android:exported="false">
@@ -962,7 +971,7 @@
     <service  # DIFF-ANCHOR: ac8469ff
         android:name="org.chromium.chrome.browser.media.MediaCaptureNotificationService"
         android:exported="false"
-        android:foregroundServiceType="mediaProjection|mediaPlayback">
+        android:foregroundServiceType="camera|microphone|mediaProjection|mediaPlayback">
     </service>  # DIFF-ANCHOR: ac8469ff
     <service  # DIFF-ANCHOR: 7ef9e4e5
         android:name="org.chromium.chrome.browser.media.ui.ChromeMediaNotificationControllerServices$CastListenerService"
@@ -1037,6 +1046,5 @@
     <uses-library android:name="android.ext.adservices" android:required="false"/>
     <uses-library android:name="androidx.window.extensions" android:required="false"/>
     <uses-library android:name="androidx.window.sidecar" android:required="false"/>
-    <uses-library android:name="com.android.extensions.xr" android:required="false"/>
   </application>
 </manifest>

@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -13,7 +14,6 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -54,7 +54,7 @@ std::map<std::string, std::string> ParseCommandLine(int argc,
   std::string key;
   for (int i = 1; i < argc; ++i) {
     std::string arg(UNSAFE_TODO(argv[i]));
-    if (base::StartsWith(arg, "-")) {
+    if (arg.starts_with('-')) {
       key = arg.substr(1);
       result[key] = "";
     } else {
@@ -114,8 +114,8 @@ void KSAgentApp::ChooseServiceForApp(
          base::OnceCallback<void(UpdaterScope)> callback,
          const std::vector<updater::UpdateService::AppState>& states) {
         std::move(callback).Run(
-            base::Contains(states, base::ToLowerASCII(app_id),
-                           &updater::UpdateService::AppState::app_id)
+            std::ranges::contains(states, base::ToLowerASCII(app_id),
+                                  &updater::UpdateService::AppState::app_id)
                 ? UpdaterScope::kSystem
                 : UpdaterScope::kUser);
       },

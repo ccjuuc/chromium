@@ -100,7 +100,8 @@ class MockMediaStreamTrack : public blink::MediaStreamTrack {
 
   std::unique_ptr<AudioSourceProvider> CreateWebAudioSource(
       int context_sample_rate,
-      base::TimeDelta platform_buffer_duration) override {
+      base::TimeDelta platform_buffer_duration,
+      uint32_t render_quantum_frames) override {
     return nullptr;
   }
 
@@ -127,6 +128,7 @@ class MockMediaStreamTrack : public blink::MediaStreamTrack {
   MOCK_METHOD1(RegisterMediaStream, void(MediaStream*));
   MOCK_METHOD1(UnregisterMediaStream, void(MediaStream*));
   MOCK_METHOD1(RegisterSink, void(SpeechRecognitionMediaStreamAudioSink*));
+  MOCK_METHOD1(UnregisterSink, void(SpeechRecognitionMediaStreamAudioSink*));
   MOCK_METHOD2(AddedEventListener,
                void(const AtomicString&, RegisteredEventListener&));
   MOCK_METHOD1(BeingTransferred, void(const base::UnguessableToken&));

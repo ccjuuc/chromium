@@ -47,7 +47,7 @@ enum SkiaBackendType {
   kGraphiteDawnMetal,
   kGraphiteDawnD3D11,
   kGraphiteDawnD3D12,
-  kGraphiteMetal,
+  kGraphiteDawnOpenGLES,
 };
 
 // LINT.IfChange(VideoCodecProfile)
@@ -90,21 +90,8 @@ enum VideoCodecProfile {
   HEVCPROFILE_SCREEN_EXTENDED = 34,
   HEVCPROFILE_SCALABLE_REXT = 35,
   HEVCPROFILE_HIGH_THROUGHPUT_SCREEN_EXTENDED = 36,
-  VVCPROFILE_MAIN10 = 37,
-  VVCPROFILE_MAIN12 = 38,
-  VVCPROFILE_MAIN12_INTRA = 39,
-  VVCPROIFLE_MULTILAYER_MAIN10 = 40,
-  VVCPROFILE_MAIN10_444 = 41,
-  VVCPROFILE_MAIN12_444 = 42,
-  VVCPROFILE_MAIN16_444 = 43,
-  VVCPROFILE_MAIN12_444_INTRA = 44,
-  VVCPROFILE_MAIN16_444_INTRA = 45,
-  VVCPROFILE_MULTILAYER_MAIN10_444 = 46,
-  VVCPROFILE_MAIN10_STILL_PICTURE = 47,
-  VVCPROFILE_MAIN12_STILL_PICTURE = 48,
-  VVCPROFILE_MAIN10_444_STILL_PICTURE = 49,
-  VVCPROFILE_MAIN12_444_STILL_PICTURE = 50,
-  VVCPROFILE_MAIN16_444_STILL_PICTURE = 51
+  DOLBYVISION_PROFILE10 = 37,
+  DOLBYVISION_PROFILE20 = 38
 };
 // LINT.ThenChange(//gpu/config/gpu_info.h:VideoCodecProfile)
 
@@ -129,28 +116,6 @@ struct VideoEncodeAcceleratorSupportedProfile {
   gfx.mojom.Size max_resolution;
   uint32 max_framerate_numerator;
   uint32 max_framerate_denominator;
-};
-
-// gpu::ImageDecodeAcceleratorType
-enum ImageDecodeAcceleratorType {
-  kJpeg,
-  kWebP,
-  kUnknown,
-};
-
-// gpu::ImageDecodeAcceleratorSubsampling
-enum ImageDecodeAcceleratorSubsampling {
-  k420,
-  k422,
-  k444,
-};
-
-// gpu::ImageDecodeAcceleratorSupportedProfile
-struct ImageDecodeAcceleratorSupportedProfile {
-  ImageDecodeAcceleratorType image_type;
-  gfx.mojom.Size min_encoded_dimensions;
-  gfx.mojom.Size max_encoded_dimensions;
-  array<ImageDecodeAcceleratorSubsampling> subsamplings;
 };
 
 // gpu::OverlaySupport

@@ -11,7 +11,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_source_location_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_compile_hints_common.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/cached_metadata_handler.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -183,7 +182,7 @@ inline base::span<const uint8_t> ToSpan(
   // SAFETY: v8::ScriptCompiler::CachedData ensures its `data` and `length`
   // are safe.
   return UNSAFE_BUFFERS(
-      base::span(data.data, static_cast<size_t>(data.length)));
+      base::span(base::unchecked, data.data, static_cast<size_t>(data.length)));
 }
 
 }  // namespace blink

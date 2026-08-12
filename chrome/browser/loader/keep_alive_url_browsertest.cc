@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/allow_check_is_test_for_testing.h"
 #include "base/test/bind.h"
@@ -18,6 +19,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/variations/net/variations_http_headers.h"
+#include "components/variations/variations_switches.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -50,6 +52,15 @@ class ChromeKeepAliveURLBrowserTestBase
       delete;
   ChromeKeepAliveURLBrowserTestBase& operator=(
       const ChromeKeepAliveURLBrowserTestBase&) = delete;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ChromeKeepAliveRequestBrowserTestBase::SetUpCommandLine(command_line);
+
+    // Add a dummy variation ID so that the X-Client-Data header is appended to
+    // eligible requests to select Google servers.
+    command_line->AppendSwitchASCII(variations::switches::kForceVariationIds,
+                                    "112233");
+  }
 };
 
 // Basic Chrome browser tests to cover behaviors when handling fetch keepalive
@@ -111,7 +122,7 @@ IN_PROC_BROWSER_TEST_P(ChromeKeepAliveURLBrowserTest,
 
 // Shutdown delay is not supported on Android.
 #if !BUILDFLAG(IS_ANDROID)
-// Mac browser shutdown is flaky: https://crbug.com/1259913
+// Mac browser shutdown is flaky: https://crbug.com/40201651
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_ReceiveResponseAfterBrowserShutdown \
   DISABLED_ReceiveResponseAfterBrowserShutdown

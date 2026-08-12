@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/task/current_thread.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/visited_manifest_manager.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -144,7 +146,8 @@ class WebContentsObserverAdapter : public content::WebContentsObserver {
 
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override {
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override {
     favicon_run_loop_.Quit();
   }
 
@@ -172,9 +175,10 @@ class MLPromotionBrowserTest : public MLPromotionBrowserTestBase {
     scoped_feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/
         {base::test::FeatureRefAndParams(
-            webapps::features::kWebAppsEnableMLModelForPromotion,
-            {{features::kWebAppsMLGuardrailResultReportProb.name, "1.0"},
-             {features::kWebAppsMLModelUserDeclineReportProb.name, "1.0"}})},
+             webapps::features::kWebAppsEnableMLModelForPromotion,
+             {{features::kWebAppsMLGuardrailResultReportProb.name, "1.0"},
+              {features::kWebAppsMLModelUserDeclineReportProb.name, "1.0"}}),
+         base::test::FeatureRefAndParams(::features::kWebAppInstallDialog, {})},
         /*disabled_features=*/{});
   }
   ~MLPromotionBrowserTest() override = default;
@@ -315,7 +319,7 @@ class MLPromotionBrowserTest : public MLPromotionBrowserTestBase {
     base::flat_map<std::string, ProcessedValue> expected_input = {
         {"origin", ProcessedValue(url::Origin::Create(site_url).GetURL())},
         {"site_url", ProcessedValue(site_url)},
-        {"manifest_id", ProcessedValue(manifest_id)}};
+        {"manifest_id", ProcessedValue(manifest_id.value())}};
     EXPECT_CALL(*GetMockSegmentation(),
                 GetClassificationResult(
                     segmentation_platform::kWebAppInstallationPromoKey, _,
@@ -684,22 +688,40 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlWithFaviconsNoManifest(),
-      /*manifest_id=*/GetUrlWithFaviconsNoManifest(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlWithFaviconsNoManifest()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
   // Since the site is not installable, the diy install dialog shows up for
   // universal install.
-  views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                       "WebAppDiyInstallDialog");
-  task_runner_->RunPendingTasks();
-  views::Widget* widget = waiter.WaitIfNeededAndGet();
-  views::test::WidgetDestroyedWaiter destroyed(widget);
-  ExpectTrainingResult(TrainingRequestId(1ll), MlInstallResponse::kAccepted);
-  views::test::AcceptDialog(widget);
-  destroyed.Wait();
+  std::string dialog_name =
+      base::FeatureList::IsEnabled(::features::kWebAppInstallDialog)
+          ? "WebAppInstallFlowDialog"
+          : "WebAppDiyInstallDialog";
+  std::optional<base::AutoReset<web_app::InstallDialogTestResponse>>
+      auto_accept;
+  std::optional<web_app::WebAppTestInstallWithOsHooksObserver> install_observer;
+  std::optional<views::NamedWidgetShownWaiter> waiter;
 
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  if (dialog_name == "WebAppInstallFlowDialog") {
+    auto_accept.emplace(web_app::SetPwaInstallationAutoRespondForTesting(
+        web_app::InstallDialogTestResponse::kAcceptAndLaunch));
+    install_observer.emplace(profile());
+    install_observer->BeginListening();
+  } else {
+    waiter.emplace(views::test::AnyWidgetTestPasskey{}, dialog_name);
+  }
+
+  ExpectTrainingResult(TrainingRequestId(1ll), MlInstallResponse::kAccepted);
+  task_runner_->RunPendingTasks();
+
+  if (auto_accept) {
+    install_observer->Wait();
+  } else {
+    views::Widget* widget = waiter->WaitIfNeededAndGet();
+    views::test::AcceptDialog(widget);
+    provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  }
 
   EXPECT_FALSE(provider().registrar_unsafe().is_empty());
   webapps::AppId app_id = provider().registrar_unsafe().GetAppIds()[0];
@@ -719,7 +741,7 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTest, MLInstallEmptyPageNoIcons) {
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlWithNoManifest(),
-      /*manifest_id=*/GetUrlWithNoManifest(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlWithNoManifest()),
       MLInstallabilityPromoter::kShowInstallPromptLabel, TrainingRequestId(1ll),
       web_contents());
   task_runner_->RunPendingTasks();
@@ -731,7 +753,7 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTest, MLInstallEmptyPageNoIcons) {
                                             GURL(url::kAboutBlankURL));
 }
 
-// Test for crbug.com/1472629, where an already open dialog would cause
+// Test for crbug.com/40069486, where an already open dialog would cause
 // the CHECK in MLInstallOperationTracker::OnMlResultForInstallation
 // to fail, since the operation tracker would outlive the results of the
 // pipeline.
@@ -742,17 +764,21 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTest,
   // Expect the pipeline to trigger both on the first and second url.
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetInstallableAppURL(),
-      /*manifest_id=*/GetInstallableAppURL(),
+      /*manifest_id=*/webapps::ManifestId(GetInstallableAppURL()),
       MLInstallabilityPromoter::kShowInstallPromptLabel, TrainingRequestId(1ll),
       web_contents());
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlOuterApp(),
-      /*manifest_id=*/GetUrlOuterApp(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlOuterApp()),
       MLInstallabilityPromoter::kShowInstallPromptLabel, TrainingRequestId(2ll),
       web_contents());
 
+  std::string dialog_name =
+      base::FeatureList::IsEnabled(::features::kWebAppInstallDialog)
+          ? "WebAppInstallFlowDialog"
+          : "WebAppSimpleInstallDialog";
   views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                       "WebAppSimpleInstallDialog");
+                                       dialog_name);
   chrome::ExecuteCommand(browser(), IDC_INSTALL_PWA);
   views::Widget* widget = waiter.WaitIfNeededAndGet();
   EXPECT_TRUE(widget != nullptr);
@@ -761,6 +787,7 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTest,
 
   // Refreshing the page should exit the pipeline early, and should not crash.
   web_app::NavigateViaLinkClickToURLAndWait(browser(), GetUrlOuterApp());
+  ml_promoter()->AwaitMetricsCollectionTasksCompleteForTesting();
   task_runner_->RunPendingTasks();
 }
 
@@ -782,7 +809,7 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTestNestedPromptBlocking,
   // time this finishes.
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlOuterApp(),
-      /*manifest_id=*/GetUrlOuterApp(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlOuterApp()),
       MLInstallabilityPromoter::kDontShowLabel, TrainingRequestId(1ll),
       web_contents());
   task_runner_->RunPendingTasks();
@@ -806,7 +833,7 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTestNestedPromptBlocking,
   // time this finishes.
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlOuterApp(),
-      /*manifest_id=*/GetUrlOuterApp(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlOuterApp()),
       MLInstallabilityPromoter::kDontShowLabel, TrainingRequestId(1ll),
       web_contents());
   task_runner_->RunPendingTasks();
@@ -819,21 +846,18 @@ IN_PROC_BROWSER_TEST_F(MLPromotionBrowserTestNestedPromptBlocking,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlInnerCraftedApp(),
-      /*manifest_id=*/GetUrlInnerCraftedApp(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlInnerCraftedApp()),
       MLInstallabilityPromoter::kShowInstallPromptLabel, TrainingRequestId(2ll),
       web_contents());
 
-  views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                       "WebAppSimpleInstallDialog");
-  task_runner_->RunPendingTasks();
+  base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+      web_app::SetPwaInstallationAutoRespondForTesting(
+          web_app::InstallDialogTestResponse::kAcceptAndLaunch);
   ExpectTrainingResult(TrainingRequestId(2ll), MlInstallResponse::kAccepted);
-
-  views::Widget* widget = waiter.WaitIfNeededAndGet();
-  views::test::WidgetDestroyedWaiter destroyed(widget);
-  views::test::AcceptDialog(widget);
-  destroyed.Wait();
-
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  web_app::WebAppTestInstallWithOsHooksObserver install_observer(profile());
+  install_observer.BeginListening();
+  task_runner_->RunPendingTasks();
+  install_observer.Wait();
 
   ASSERT_FALSE(provider().registrar_unsafe().is_empty());
   webapps::AppId app_id = provider().registrar_unsafe().GetAppIds()[0];
@@ -852,6 +876,9 @@ class MLPromotionInstallDialogBrowserTest
 
  protected:
   const std::string GetDialogName() {
+    if (base::FeatureList::IsEnabled(::features::kWebAppInstallDialog)) {
+      return "WebAppInstallFlowDialog";
+    }
     switch (GetParam()) {
       case InstallDialogState::kSimpleInstallDialog:
         return "WebAppSimpleInstallDialog";
@@ -893,8 +920,8 @@ class MLPromotionInstallDialogBrowserTest
         InstallAppForCurrentWebContents(/*install_locally=*/true);
         break;
       case InstallDialogState::kCreateShortcutDialog:
-        web_app::SetAutoAcceptWebAppDialogForTesting(
-            /*auto_accept=*/true, /*auto_open_in_window=*/false);
+        auto_accept_ = web_app::SetPwaInstallationAutoRespondForTesting(
+            web_app::InstallDialogTestResponse::kAcceptAndLaunch);
         chrome::ExecuteCommand(browser(), IDC_CREATE_SHORTCUT);
         break;
     }
@@ -903,6 +930,9 @@ class MLPromotionInstallDialogBrowserTest
   bool IsCurrentTestStateShortcutDialog() {
     return GetParam() == InstallDialogState::kCreateShortcutDialog;
   }
+
+  std::optional<base::AutoReset<web_app::InstallDialogTestResponse>>
+      auto_accept_;
 };
 
 IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest, MlInstallNotShown) {
@@ -910,8 +940,8 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest, MlInstallNotShown) {
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(), "DontShow",
-      TrainingRequestId(1ll));
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
+      "DontShow", TrainingRequestId(1ll));
 
   // This calls unblocks the metrics tasks, allowing ML to be called.
   task_runner_->RunPendingTasks();
@@ -931,7 +961,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -960,7 +990,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -992,7 +1022,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -1021,21 +1051,19 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
-  views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                       GetDialogName());
+  base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+      web_app::SetPwaInstallationAutoRespondForTesting(
+          web_app::InstallDialogTestResponse::kAcceptAndLaunch);
+  ExpectTrainingResult(TrainingRequestId(1ll), MlInstallResponse::kAccepted);
+  web_app::WebAppTestInstallWithOsHooksObserver install_observer(profile());
+  install_observer.BeginListening();
   // This calls unblocks the metrics tasks, allowing ML to be called.
   task_runner_->RunPendingTasks();
-  views::Widget* widget = waiter.WaitIfNeededAndGet();
-  views::test::WidgetDestroyedWaiter destroyed(widget);
-  ExpectTrainingResult(TrainingRequestId(1ll), MlInstallResponse::kAccepted);
-  views::test::AcceptDialog(widget);
-  destroyed.Wait();
-
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  install_observer.Wait();
 
   EXPECT_FALSE(provider().registrar_unsafe().is_empty());
   webapps::AppId app_id = provider().registrar_unsafe().GetAppIds()[0];
@@ -1075,12 +1103,12 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   // Creating a new tab should ensure that visibility changes.
   WebContentsObserverAdapter hidden_waiter(original_web_contents);
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   hidden_waiter.AwaitVisibilityHidden();
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel, TrainingRequestId(1ll),
       original_web_contents);
 
@@ -1093,16 +1121,15 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   // Navigating to the previous tab will resume the installation UX reporting,
   // so handle installation request.
-  views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                       GetDialogName());
+  base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+      web_app::SetPwaInstallationAutoRespondForTesting(
+          web_app::InstallDialogTestResponse::kAcceptAndLaunch);
+  web_app::WebAppTestInstallWithOsHooksObserver install_observer(profile());
+  install_observer.BeginListening();
   ExpectTrainingResult(TrainingRequestId(1ll), MlInstallResponse::kAccepted,
                        original_web_contents);
   chrome::SelectPreviousTab(browser());
-  views::Widget* widget = waiter.WaitIfNeededAndGet();
-  views::test::WidgetDestroyedWaiter destroyed(widget);
-  views::test::AcceptDialog(widget);
-  destroyed.Wait();
-  provider().command_manager().AwaitAllCommandsCompleteForTesting();
+  install_observer.Wait();
 
   EXPECT_FALSE(provider().registrar_unsafe().is_empty());
 }
@@ -1117,7 +1144,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -1150,7 +1177,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -1179,7 +1206,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(2ll));
   // This will cause the ML pipeline to complete, but not report anything yet.
@@ -1203,7 +1230,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -1233,7 +1260,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
   // Navigate back to the app url to re-trigger the ml pipeline.
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(2ll));
   NavigateAndAwaitMetricsCollectionPending(GetUrlBasedOnDialogState());
@@ -1256,7 +1283,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
 
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId((GetUrlBasedOnDialogState())),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(1ll));
 
@@ -1285,7 +1312,7 @@ IN_PROC_BROWSER_TEST_P(MLPromotionInstallDialogBrowserTest,
   // Navigate back to the app url to re-trigger the ml pipeline.
   ExpectClasificationCallReturnResult(
       /*site_url=*/GetUrlBasedOnDialogState(),
-      /*manifest_id=*/GetUrlBasedOnDialogState(),
+      /*manifest_id=*/webapps::ManifestId(GetUrlBasedOnDialogState()),
       MLInstallabilityPromoter::kShowInstallPromptLabel,
       TrainingRequestId(2ll));
   NavigateAndAwaitMetricsCollectionPending(GetUrlBasedOnDialogState());

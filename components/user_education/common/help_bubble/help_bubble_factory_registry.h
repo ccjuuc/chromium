@@ -16,7 +16,7 @@
 #include "components/user_education/common/help_bubble/help_bubble_params.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/framework_specific_registration_list.h"
+#include "ui/base/interaction/implementation_list.h"
 
 namespace user_education {
 
@@ -68,13 +68,14 @@ class HelpBubbleFactoryRegistry {
   }
 
  private:
-  void OnHelpBubbleClosed(HelpBubble* help_bubble, HelpBubble::CloseReason);
+  void OnHelpBubbleClosing(const HelpBubble* help_bubble,
+                           HelpBubble::CloseReason);
 
   // The list of known factories.
-  ui::FrameworkSpecificRegistrationList<HelpBubbleFactory> factories_;
+  ui::ImplementationList<HelpBubbleFactory> factories_;
 
   // The list of known help bubbles.
-  std::map<HelpBubble*, base::CallbackListSubscription> help_bubbles_;
+  std::map<raw_ptr<HelpBubble>, base::CallbackListSubscription> help_bubbles_;
 };
 
 }  // namespace user_education

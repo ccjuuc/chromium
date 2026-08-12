@@ -11,6 +11,7 @@ import android.net.Uri;
 import org.chromium.base.Callback;
 import org.chromium.blink.mojom.TextFragmentReceiver;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.SadTab;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.content_public.browser.RenderFrameHost;
@@ -71,23 +72,15 @@ public class LinkToTextHelper {
      * Fetch the canonical url for sharing
      *
      * @param tab The tab to fetch the canonical url from.
-     * @param callback The {@link Callback} to return the tab's canonical url or an empty string
+     * @param callback The {@link Callback} to return the tab's canonical url or null.
      */
-    public static void requestCanonicalUrl(Tab tab, Callback<String> callback) {
+    public static void requestCanonicalUrl(Tab tab, Callback<@Nullable GURL> callback) {
         if (!shouldRequestCanonicalUrl(tab)) {
-            callback.onResult("");
+            callback.onResult(null);
             return;
         }
 
-        assumeNonNull(tab.getWebContents())
-                .getMainFrame()
-                .getCanonicalUrlForSharing(
-                        new Callback<>() {
-                            @Override
-                            public void onResult(GURL result) {
-                                callback.onResult(result.getSpec());
-                            }
-                        });
+        assumeNonNull(tab.getWebContents()).getMainFrame().getCanonicalUrlForSharing(callback);
     }
 
     private static boolean shouldRequestCanonicalUrl(Tab tab) {
@@ -221,10 +214,34 @@ public class LinkToTextHelper {
     }
 
     /**
+     * Fetch the generated selector for the text in the viewport's center for the main frame.
+     *
+     * @param webContents The webContents to get the main frame from.
+     * @param callback The {@link Callback} to handle the generated selector.
+     */
+    public static void requestSelectorForViewportCenter(
+            WebContents webContents, Callback<String> callback) {
+        RenderFrameHost mainFrame = webContents.getMainFrame();
+        TextFragmentReceiver producer =
+                mainFrame.getInterfaceToRendererFrame(TextFragmentReceiver.MANAGER);
+
+        if (producer == null) {
+            callback.onResult("");
+            return;
+        }
+
+        producer.requestSelectorForViewportCenter(
+                (String selector, int error, int readyStatus) -> {
+                    callback.onResult(selector);
+                    producer.close();
+                });
+    }
+
+    /**
      * Fetch the generated selector that uniquely identify the highlighted text selected text.
      *
      * @param producer The {@link TextFragmentReceiver} to make the renderer call for the current
-     *         frame.
+     *     frame.
      * @param callback The {@link Callback} to handle the generated selector.
      */
     public static void requestSelector(

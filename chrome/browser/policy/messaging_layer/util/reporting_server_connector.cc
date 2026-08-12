@@ -31,7 +31,6 @@
 #include "chrome/browser/policy/messaging_layer/upload/encrypted_reporting_client.h"
 #include "chrome/browser/policy/messaging_layer/util/upload_declarations.h"
 #include "chrome/browser/policy/messaging_layer/util/upload_response_parser.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/embedder_support/user_agent_utils.h"
@@ -88,7 +87,7 @@ ReportingServerConnector::ReportingServerConnector()
   // it is initialized on the first use, but for Ash we need it to be prepared
   // for encryption key delivery early after enrollment.
 #if BUILDFLAG(IS_CHROMEOS)
-  base::IgnoreResult(EnsureUsableClient());
+  std::ignore = EnsureUsableClient();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
@@ -186,12 +185,12 @@ void ReportingServerConnector::UploadEncryptedReportInternal(
   DCHECK_CURRENTLY_ON(::content::BrowserThread::UI);
 
   // Add context elements needed by reporting server.
-  base::Value::Dict context;
+  base::DictValue context;
   std::string dm_token;
   std::string client_id;
   context.Set(json_keys::kBrowser,
-              base::Value::Dict().Set(json_keys::kUserAgent,
-                                      embedder_support::GetUserAgent()));
+              base::DictValue().Set(json_keys::kUserAgent,
+                                    embedder_support::GetUserAgent()));
   if (DeviceInfoRequiredForUpload()) {
     // Initialize the cloud policy client.
     auto client_status = EnsureUsableClient();
@@ -213,13 +212,13 @@ void ReportingServerConnector::UploadEncryptedReportInternal(
       return;
     }
     context.Set(json_keys::kDevice,
-                base::Value::Dict().Set(json_keys::kDmToken, dm_token));
+                base::DictValue().Set(json_keys::kDmToken, dm_token));
   }
 
   // Add context elements needed by reporting server.
   context.Set(json_keys::kBrowser,
-              base::Value::Dict().Set(json_keys::kUserAgent,
-                                      embedder_support::GetUserAgent()));
+              base::DictValue().Set(json_keys::kUserAgent,
+                                    embedder_support::GetUserAgent()));
 
   encrypted_reporting_client_->PresetUploads(
       std::move(context), std::move(dm_token), std::move(client_id));
@@ -264,19 +263,6 @@ ReportingServerConnector::GetUserCloudPolicyManager() {
   return g_browser_process->platform_part()
       ->browser_policy_connector_ash()
       ->GetDeviceCloudPolicyManager();
-#elif BUILDFLAG(IS_ANDROID)
-  // Android doesn't have access to a device level CloudPolicyClient, so get
-  // the PrimaryUserProfile CloudPolicyClient.
-  if (!ProfileManager::GetPrimaryUserProfile()) {
-    base::UmaHistogramEnumeration(
-        reporting::kUmaUnavailableErrorReason,
-        UnavailableErrorReason::CANNOT_GET_CLOUD_POLICY_MANAGER_FOR_PROFILE,
-        UnavailableErrorReason::MAX_VALUE);
-    return base::unexpected(Status(error::UNAVAILABLE,
-                                   "PrimaryUserProfile not fit to retrieve "
-                                   "CloudPolicyManager"));
-  }
-  return ProfileManager::GetPrimaryUserProfile()->GetUserCloudPolicyManager();
 #else
   if (!g_browser_process || !g_browser_process->browser_policy_connector()) {
     base::UmaHistogramEnumeration(

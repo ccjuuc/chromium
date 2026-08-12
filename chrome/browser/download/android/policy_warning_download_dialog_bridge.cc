@@ -9,13 +9,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
+#include "chrome/browser/download/android/download_controller.h"
 #include "chrome/browser/download/android/download_dialog_utils.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/url_formatter/elide_url.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -41,11 +40,11 @@ void PolicyWarningDownloadDialogBridge::Show(
     download::DownloadItem* download_item,
     ui::WindowAndroid* window_android) {
   // Don't show dangerous download again if it is already showing.
-  if (base::Contains(download_items_, download_item)) {
+  if (std::ranges::contains(download_items_, download_item)) {
     return;
   }
   if (!window_android) {
-    download_item->Remove();
+    DownloadController::ScheduleRemoveDownloadItem(download_item);
     return;
   }
   download_item->AddObserver(this);
@@ -67,8 +66,9 @@ void PolicyWarningDownloadDialogBridge::OnDownloadDestroyed(
   }
 }
 
-void PolicyWarningDownloadDialogBridge::Accepted(JNIEnv* env,
-                                                 std::string& download_guid) {
+void PolicyWarningDownloadDialogBridge::Accepted(
+    JNIEnv* env,
+    const std::string& download_guid) {
   download::DownloadItem* download = DownloadDialogUtils::FindAndRemoveDownload(
       &download_items_, download_guid);
   if (download) {
@@ -77,13 +77,14 @@ void PolicyWarningDownloadDialogBridge::Accepted(JNIEnv* env,
   }
 }
 
-void PolicyWarningDownloadDialogBridge::Cancelled(JNIEnv* env,
-                                                  std::string& download_guid) {
+void PolicyWarningDownloadDialogBridge::Cancelled(
+    JNIEnv* env,
+    const std::string& download_guid) {
   download::DownloadItem* download = DownloadDialogUtils::FindAndRemoveDownload(
       &download_items_, download_guid);
   if (download) {
     download->RemoveObserver(this);
-    download->Remove();
+    DownloadController::ScheduleRemoveDownloadItem(download);
   }
 }
 

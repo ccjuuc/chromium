@@ -19,7 +19,7 @@
 #include "components/sync/engine/cycle/sync_cycle.h"
 #include "components/sync/engine/events/get_updates_response_event.h"
 #include "components/sync/engine/get_updates_delegate.h"
-#include "components/sync/engine/nigori/keystore_keys_handler.h"
+#include "components/sync/engine/keystore_keys_handler.h"
 #include "components/sync/engine/syncer_error.h"
 #include "components/sync/engine/syncer_proto_util.h"
 #include "components/sync/engine/update_handler.h"
@@ -159,7 +159,7 @@ void PartitionContextMutationsByType(
 // to test.
 void InitDownloadUpdatesContext(SyncCycle* cycle,
                                 sync_pb::ClientToServerMessage* message) {
-  message->set_share(cycle->context()->account_name());
+  message->set_share(cycle->context()->account_email());
   message->set_message_contents(sync_pb::ClientToServerMessage::GET_UPDATES);
 
   sync_pb::GetUpdatesMessage* get_updates = message->mutable_get_updates();
@@ -257,8 +257,8 @@ SyncerError GetUpdatesProcessor::ExecuteDownloadUpdates(
   }
 
   if (result.type() != SyncerError::Type::kSuccess) {
-    GetUpdatesResponseEvent response_event(base::Time::Now(), update_response,
-                                           result);
+    GetUpdatesResponseEvent response_event(base::Time::Now(),
+                                           std::move(update_response), result);
     cycle->SendProtocolEvent(response_event);
 
     // Sync authorization expires every 60 mintues, so SYNC_AUTH_ERROR will
@@ -293,8 +293,8 @@ SyncerError GetUpdatesProcessor::ExecuteDownloadUpdates(
   SyncerError process_result =
       ProcessResponse(update_response.get_updates(), *request_types, status);
 
-  GetUpdatesResponseEvent response_event(base::Time::Now(), update_response,
-                                         process_result);
+  GetUpdatesResponseEvent response_event(
+      base::Time::Now(), std::move(update_response), process_result);
   cycle->SendProtocolEvent(response_event);
 
   DVLOG(1) << "GetUpdates result: " << process_result.ToString();

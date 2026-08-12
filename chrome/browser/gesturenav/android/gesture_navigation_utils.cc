@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/android/jni_callback.h"
+#include "base/android/callback_android.h"
 #include "chrome/android/chrome_jni_headers/GestureNavigationUtils_jni.h"
 #include "content/public/browser/back_forward_transition_animation_manager.h"
 
 namespace gesturenav {
 
 // static
-static jboolean JNI_GestureNavigationUtils_ShouldAnimateBackForwardTransitions(
+static bool JNI_GestureNavigationUtils_ShouldAnimateBackForwardTransitions(
     JNIEnv* env) {
   return content::BackForwardTransitionAnimationManager::
       ShouldAnimateBackForwardTransitions();
@@ -18,7 +18,7 @@ static jboolean JNI_GestureNavigationUtils_ShouldAnimateBackForwardTransitions(
 // static
 static jni_zero::ScopedJavaLocalRef<jobject>
 JNI_GestureNavigationUtils_SetMinRequiredPhysicalRamMbForTesting(JNIEnv* env,
-                                                                 jint jMb) {
+                                                                 int32_t jMb) {
   auto reset = content::BackForwardTransitionAnimationManager::
       SetMinRequiredPhysicalRamMbForTesting(jMb);
   auto callback =

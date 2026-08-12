@@ -10,12 +10,13 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
+#include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/install/crx_install_error.h"
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
 #include "extensions/browser/updater/extension_downloader.h"
@@ -28,6 +29,9 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "components/user_manager/user.h"          // nogncheck
+#include "components/user_manager/user_manager.h"  // nogncheck
+#include "components/user_manager/user_type.h"     // nogncheck
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -56,10 +60,39 @@ bool IsLowTrustEnvironment(Profile* profile) {
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_CHROMEOS)
+// Contains information about the current user.
+struct UserInfo {
+  UserInfo() = default;
+  UserInfo(user_manager::UserType user_type,
+           bool is_new_user,
+           bool is_user_present)
+      : user_type(user_type),
+        is_new_user(is_new_user),
+        is_user_present(is_user_present) {}
+
+  user_manager::UserType user_type = user_manager::UserType::kRegular;
+  const bool is_new_user = false;
+  const bool is_user_present = false;
+};
+
+// Returns user type of the user associated with the `profile` and whether the
+// user is new or not if there is an active user.
+UserInfo GetUserInfo(Profile* profile) {
+  const user_manager::User* user =
+      ash::ProfileHelper::Get()->GetUserByProfile(profile);
+  if (!user) {
+    return UserInfo();
+  }
+
+  bool is_new_user = user_manager::UserManager::Get()->IsCurrentUserNew() ||
+                     profile->IsNewProfile();
+  UserInfo current_user(user->GetType(), is_new_user, /*is_user_present=*/true);
+  return current_user;
+}
+
 // Converts user_manager::UserType to InstallStageTracker::UserType for
 // histogram purposes.
-ForceInstalledMetrics::UserType ConvertUserType(
-    InstallStageTracker::UserInfo user_info) {
+ForceInstalledMetrics::UserType ConvertUserType(UserInfo user_info) {
   switch (user_info.user_type) {
     case user_manager::UserType::kRegular: {
       if (user_info.is_new_user) {
@@ -89,8 +122,7 @@ ForceInstalledMetrics::UserType ConvertUserType(
 // Reports type of user in case Force Installed Extensions fail to
 // install only if there is a user corresponding to given profile.
 void ReportUserType(Profile* profile, bool is_stuck_in_initial_creation_stage) {
-  InstallStageTracker::UserInfo user_info =
-      InstallStageTracker::GetUserInfo(profile);
+  UserInfo user_info = GetUserInfo(profile);
   // There can be extensions on the login screen. There is no user on the login
   // screen and thus we would not report in that case.
   if (!user_info.is_user_present)
@@ -132,19 +164,19 @@ void ReportInstallationStageTimes(
         installation.download_CRX_finish_time.value() -
             installation.download_CRX_started_time.value());
   }
-  if (installation.copying_started_time) {
-    DCHECK(installation.verification_started_time);
-    base::UmaHistogramLongTimes(
-        "Extensions.ForceInstalledTime.VerificationStartTo.CopyingStart",
-        installation.copying_started_time.value() -
-            installation.verification_started_time.value());
-  }
-  if (installation.unpacking_started_time &&
+  if (installation.verification_started_time &&
       installation.copying_started_time) {
     base::UmaHistogramLongTimes(
-        "Extensions.ForceInstalledTime.CopyingStartTo.UnpackingStart",
-        installation.unpacking_started_time.value() -
+        "Extensions.ForceInstalledTime.CopyingStartTo.VerificationStart",
+        installation.verification_started_time.value() -
             installation.copying_started_time.value());
+  }
+  if (installation.unpacking_started_time &&
+      installation.verification_started_time) {
+    base::UmaHistogramLongTimes(
+        "Extensions.ForceInstalledTime.VerificationStartTo.UnpackingStart",
+        installation.unpacking_started_time.value() -
+            installation.verification_started_time.value());
   }
   if (installation.checking_expectations_started_time &&
       installation.unpacking_started_time) {
@@ -495,7 +527,7 @@ void ForceInstalledMetrics::ReportMetrics() {
 
   std::set<ExtensionId> missing_forced_extensions;
   InstallStageTracker* install_stage_tracker =
-      InstallStageTracker::Get(profile_);
+      InstallStageTrackerFactory::GetForBrowserContext(profile_);
   for (const auto& extension : tracker_->extensions()) {
     if (!IsStatusGood(extension.second.status)) {
       missing_forced_extensions.insert(extension.first);
@@ -517,8 +549,9 @@ void ForceInstalledMetrics::ReportMetrics() {
   const ExtensionSet& blocklisted_extensions =
       registry_->blocklisted_extensions();
   for (const auto& entry : installed_extensions) {
-    if (missing_forced_extensions.count(entry->id())) {
-      missing_forced_extensions.erase(entry->id());
+    if (auto it = missing_forced_extensions.find(entry->id());
+        it != missing_forced_extensions.end()) {
+      missing_forced_extensions.erase(it);
       ReportDisableReason(entry->id());
       if (blocklisted_extensions.Contains(entry->id())) {
         blocklisted_count++;

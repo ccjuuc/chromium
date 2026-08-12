@@ -17,7 +17,6 @@ static_library("android") {
     "page_info_client.h",
     "page_info_controller_android.cc",
     "page_info_controller_android.h",
-    "page_info_features.cc",
   ]
   deps = [
     "//base",
@@ -38,11 +37,8 @@ static_library("android") {
 
 android_resources("java_resources") {
   sources = [
-    "java/res/drawable/lock.xml",
-    "java/res/drawable/open_in_new.xml",
     "java/res/drawable/qwac_status.xml",
     "java/res/drawable/sticky_note_2.xml",
-    "java/res/layout/button_preference_text_button.xml",
     "java/res/layout/connection_info.xml",
     "java/res/layout/connection_security.xml",
     "java/res/layout/page_info.xml",
@@ -52,12 +48,12 @@ android_resources("java_resources") {
     "java/res/layout/page_info_title.xml",
     "java/res/values/dimens.xml",
     "java/res/values/ids.xml",
-    "java/res/xml/page_info_ad_personalization_preference.xml",
     "java/res/xml/page_info_cookie_preference.xml",
   ]
   deps = [
     "//components/browser_ui/site_settings/android:java_resources",
     "//components/browser_ui/strings/android:browser_ui_strings_grd",
+    "//components/browser_ui/styles/android:java_resources",
     "//components/permissions/android:java_resources",
     "//components/strings:components_strings_grd",
     "//ui/android:ui_java_resources",
@@ -71,8 +67,6 @@ android_library("java") {
     "java/src/org/chromium/components/page_info/CertificateViewer.java",
     "java/src/org/chromium/components/page_info/ConnectionInfoView.java",
     "java/src/org/chromium/components/page_info/ConnectionSecurityView.java",
-    "java/src/org/chromium/components/page_info/PageInfoAdPersonalizationController.java",
-    "java/src/org/chromium/components/page_info/PageInfoAdPersonalizationSettings.java",
     "java/src/org/chromium/components/page_info/PageInfoConnectionController.java",
     "java/src/org/chromium/components/page_info/PageInfoConnectionSecurityController.java",
     "java/src/org/chromium/components/page_info/PageInfoContainer.java",
@@ -81,7 +75,6 @@ android_library("java") {
     "java/src/org/chromium/components/page_info/PageInfoCookiesController.java",
     "java/src/org/chromium/components/page_info/PageInfoCookiesSettings.java",
     "java/src/org/chromium/components/page_info/PageInfoDialog.java",
-    "java/src/org/chromium/components/page_info/PageInfoFeatures.java",
     "java/src/org/chromium/components/page_info/PageInfoHighlight.java",
     "java/src/org/chromium/components/page_info/PageInfoLocationPermissionController.java",
     "java/src/org/chromium/components/page_info/PageInfoMainController.java",
@@ -146,7 +139,6 @@ generate_jni("jni_headers") {
     "java/src/org/chromium/components/page_info/ConnectionInfoView.java",
     "java/src/org/chromium/components/page_info/PageInfoConnectionSecurityController.java",
     "java/src/org/chromium/components/page_info/PageInfoController.java",
-    "java/src/org/chromium/components/page_info/PageInfoFeatures.java",
   ]
 }
 

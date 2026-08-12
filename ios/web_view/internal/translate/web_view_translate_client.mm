@@ -7,6 +7,7 @@
 #import <vector>
 
 #import "base/check.h"
+#import "base/functional/callback.h"
 #import "base/notreached.h"
 #import "components/infobars/core/infobar.h"
 #import "components/language/core/browser/language_model_manager.h"

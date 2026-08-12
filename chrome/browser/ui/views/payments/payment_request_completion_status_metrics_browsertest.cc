@@ -4,7 +4,6 @@
 
 #include <vector>
 
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
@@ -14,7 +13,6 @@
 #include "content/public/test/browser_test_utils.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
-#include "url/gurl.h"
 
 namespace payments {
 
@@ -28,7 +26,13 @@ int toInt(Event2 event) {
 
 }  // namespace
 
-using PaymentRequestCompletionStatusMetricsTest = PaymentRequestBrowserTestBase;
+class PaymentRequestCompletionStatusMetricsTest
+    : public PaymentRequestBrowserTestBase {
+ protected:
+  PaymentRequestCompletionStatusMetricsTest() {
+    SetBypassUserInteractionForTesting();
+  }
+};
 
 IN_PROC_BROWSER_TEST_F(PaymentRequestCompletionStatusMetricsTest, Completed) {
   base::HistogramTester histogram_tester;

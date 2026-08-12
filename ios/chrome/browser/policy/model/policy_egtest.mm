@@ -23,6 +23,7 @@
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
 #import "ios/chrome/browser/policy/model/cloud/user_policy_constants.h"
 #import "ios/chrome/browser/policy/model/policy_app_interface.h"
@@ -32,7 +33,6 @@
 #import "ios/chrome/browser/settings/ui_bundled/elements/elements_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/language/language_settings_ui_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/password/password_settings_app_interface.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_table_view_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/privacy/privacy_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_constants.h"
@@ -98,18 +98,25 @@ void VerifyManagedSettingItem(NSString* accessibilityID,
       onElementWithMatcher:grey_accessibilityID(containerViewAccessibilityID)]
       assertWithMatcher:grey_notNil()];
 
+  // Create a specific matcher for the info button inside the target cell.
+  id<GREYMatcher> infoButtonMatcher =
+      grey_allOf(grey_accessibilityID(kTableViewCellInfoButtonViewId),
+                 grey_ancestor(grey_accessibilityID(accessibilityID)),
+                 grey_sufficientlyVisible(), nil);
+
   // Click the info button.
-  [ChromeEarlGreyUI tapSettingsMenuButton:grey_accessibilityID(
-                                              kTableViewCellInfoButtonViewId)];
+  [[[EarlGrey selectElementWithMatcher:infoButtonMatcher]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 200)
+      onElementWithMatcher:grey_accessibilityID(containerViewAccessibilityID)]
+      performAction:grey_tap()];
 
   // Check if the contextual bubble is shown.
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                           kEnterpriseInfoBubbleViewId)]
       assertWithMatcher:grey_sufficientlyVisible()];
 
-  // Tap outside of the bubble.
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                          kTableViewCellInfoButtonViewId)]
+  // Tap outside of the bubble (tapping the info button again toggles it off).
+  [[EarlGrey selectElementWithMatcher:infoButtonMatcher]
       performAction:grey_tap()];
 
   // Check if the contextual bubble is hidden.
@@ -166,6 +173,15 @@ const char kTestPageText[] = "pony";
 - (void)openSettingsMenu {
   [ChromeEarlGreyUI openSettingsMenu];
   _settingsOpened = YES;
+}
+
+- (void)openAutofillSettingsPage {
+  [self openSettingsMenu];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  kSettingsAutofillAndPasswordsCellId)];
+  }
 }
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
@@ -242,11 +258,10 @@ const char kTestPageText[] = "pony";
           userBooleanPref:password_manager::prefs::kCredentialsEnableService],
       @"Preference was unexpectedly true");
   // Open settings menu and tap password manager.
-  [self openSettingsMenu];
+  [self openAutofillSettingsPage];
 
   // Mock successful reauth when opening the Password Manager.
-  [PasswordSettingsAppInterface setUpMockReauthenticationModule];
-  [PasswordSettingsAppInterface mockReauthenticationModuleExpectedResult:
+  [ReauthenticationAppInterface mockReauthenticationModuleExpectedResult:
                                     ReauthenticationResult::kSuccess];
 
   [ChromeEarlGreyUI
@@ -260,9 +275,6 @@ const char kTestPageText[] = "pony";
   VerifyManagedSettingItem(
       kPasswordSettingsManagedSavePasswordSwitchTableViewId,
       kPasswordsSettingsTableViewId);
-
-  // Remove mock to keep the app in the same state as before running the test.
-  [PasswordSettingsAppInterface removeMockReauthenticationModule];
 }
 
 // Tests for the AutofillAddressEnabled policy Settings UI.
@@ -273,7 +285,7 @@ const char kTestPageText[] = "pony";
       [ChromeEarlGrey userBooleanPref:autofill::prefs::kAutofillProfileEnabled],
       @"Preference was unexpectedly true");
   // Open settings menu and tap Address and More setting.
-  [self openSettingsMenu];
+  [self openAutofillSettingsPage];
   [ChromeEarlGreyUI
       tapSettingsMenuButton:chrome_test_util::AddressesAndMoreButton()];
 
@@ -290,7 +302,7 @@ const char kTestPageText[] = "pony";
           userBooleanPref:autofill::prefs::kAutofillCreditCardEnabled],
       @"Preference was unexpectedly true");
   // Open settings menu and tap Payment Method setting.
-  [self openSettingsMenu];
+  [self openAutofillSettingsPage];
   [ChromeEarlGreyUI
       tapSettingsMenuButton:chrome_test_util::PaymentMethodsButton()];
 
@@ -381,9 +393,7 @@ const char kTestPageText[] = "pony";
   // Make sure the Translate manual trigger button disabled.
   [ChromeEarlGreyUI openToolsMenu];
   id<GREYMatcher> toolsMenuMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey selectElementWithMatcher:ToolsMenuTranslateButton()]
          usingSearchAction:grey_scrollInDirection(kGREYDirectionDown,
                                                   /*amount=*/200)
@@ -814,7 +824,7 @@ const char kTestPageText[] = "pony";
   [SigninEarlGrey signinWithFakeIdentity:fakeIdentity];
 
   // Set restrictions.
-  base::Value::List restrictions;
+  base::ListValue restrictions;
   restrictions.Append("restricted");
   SetPolicy(base::Value(std::move(restrictions)),
             policy::key::kRestrictAccountsToPatterns);
@@ -862,6 +872,11 @@ const char kTestPageText[] = "pony";
 // enterprise selected No Protection as the choice of protection.
 - (void)testEnterpriseBubbleInEnhancedSafeBrowsingPage {
   SetPolicy(0, policy::key::kSafeBrowsingProtectionLevel);
+  // Under Chrome Next, the NTP's tools menu button may be scrolled offscreen.
+  // Load a standard page to ensure a visible tools menu button.
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    [ChromeEarlGrey loadURL:GURL(kChromeUIVersionURL)];
+  }
   [ChromeEarlGreyUI openSettingsMenu];
   [ChromeEarlGreyUI
       tapSettingsMenuButton:chrome_test_util::SettingsMenuPrivacyButton()];

@@ -18,6 +18,7 @@ import type {CrToggleElement} from 'chrome://resources/cr_elements/cr_toggle/cr_
 import {TooltipPosition} from 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {isRTL} from 'chrome://resources/js/util.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
@@ -25,8 +26,8 @@ import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {getCss} from './item.css.js';
 import {getHtml} from './item.html.js';
 import {ItemMixin} from './item_mixin.js';
-import {computeInspectableViewLabel, createDummyExtensionInfo, EnableControl, getEnableControl, getEnableToggleAriaLabel, getEnableToggleTooltipText, getItemSource, getItemSourceString, isEnabled, sortViews, SourceType, UPLOAD_EXTENSION_TO_ACCOUNT_ITEMS_LIST_PAGE_HISTOGRAM_NAME, userCanChangeEnablement} from './item_util.js';
-import {Mv2ExperimentStage} from './mv2_deprecation_util.js';
+import {computeInspectableViewLabel, createDummyExtensionInfo, EnableControl, getEnableControl, getEnableToggleAriaLabel, getItemSource, getItemSourceString, isEnabled, sortViews, SourceType, userCanChangeEnablement} from './item_util.js';
+import {UPLOAD_EXTENSION_TO_ACCOUNT_ITEMS_LIST_PAGE_HISTOGRAM_NAME} from './metrics_util.js';
 import {navigation, Page} from './navigation_helper.js';
 
 export interface ItemDelegate {
@@ -56,6 +57,7 @@ export interface ItemDelegate {
   setShowAccessRequestsInToolbar(id: string, showRequests: boolean): void;
   setItemPinnedToToolbar(id: string, pinnedToToolbar: boolean): void;
   uploadItemToAccount(id: string): Promise<boolean>;
+  setProfileExtensionsPinnedByDefault(extensionsPinnedByDefault: boolean): void;
 
   // TODO(tjudkins): This function is not specific to items, so should be pulled
   // out to a more generic place when we need to access it from elsewhere.
@@ -112,6 +114,7 @@ export class DummyItemDelegate {
   uploadItemToAccount(_id: string) {
     return Promise.resolve(false);
   }
+  setProfileExtensionsPinnedByDefault(_extensionsPinnedByDefault: boolean) {}
   recordUserAction(_metricName: string) {}
   getItemStateChangedTarget() {
     return new FakeChromeEvent();
@@ -157,28 +160,24 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
       // bindings.
       data: {type: Object},
 
-      mv2ExperimentStage: {type: Number},
 
       // First inspectable view after sorting.
       firstInspectView_: {type: Object},
       enableToggleTooltipPosition_: {type: String},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
   accessor delegate: ItemDelegate|null = null;
   accessor inDevMode: boolean = false;
-  accessor mv2ExperimentStage: Mv2ExperimentStage = Mv2ExperimentStage.NONE;
   accessor safetyCheckShowing: boolean = false;
   accessor data: chrome.developerPrivate.ExtensionInfo =
       createDummyExtensionInfo();
   private accessor firstInspectView_: chrome.developerPrivate.ExtensionView|
       undefined;
   protected accessor enableToggleTooltipPosition_ = TooltipPosition.LEFT;
-
-  override firstUpdated() {
-    this.enableToggleTooltipPosition_ =
-        isRTL() ? TooltipPosition.RIGHT : TooltipPosition.LEFT;
-  }
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -186,6 +185,11 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     if (changedProperties.has('data')) {
       this.firstInspectView_ = this.computeFirstInspectView_();
     }
+  }
+
+  override firstUpdated() {
+    this.enableToggleTooltipPosition_ =
+        isRTL() ? TooltipPosition.RIGHT : TooltipPosition.LEFT;
   }
 
   /** @return The "Details" button. */
@@ -207,10 +211,6 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
     return getEnableToggleAriaLabel(
         this.isEnabled_(), this.data.type, this.i18n('appEnabled'),
         this.i18n('extensionEnabled'), this.i18n('itemOff'));
-  }
-
-  protected getEnableToggleTooltipText_(): string {
-    return getEnableToggleTooltipText(this.data);
   }
 
   protected getIdElementText_() {
@@ -297,7 +297,7 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
   }
 
   protected isEnableToggleEnabled_(): boolean {
-    return userCanChangeEnablement(this.data, this.mv2ExperimentStage);
+    return userCanChangeEnablement(this.data);
   }
 
   /** @return Whether the reload button should be shown. */
@@ -327,14 +327,23 @@ export class ExtensionsItemElement extends ExtensionsItemElementBase {
   protected computeSourceIndicatorIcon_(): string {
     switch (getItemSource(this.data)) {
       case SourceType.POLICY:
-        return 'extensions-icons:business';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'extensions-icons:domain' :
+                'extensions-icons:business-old');
       case SourceType.SIDELOADED:
-        return 'extensions-icons:input';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'extensions-icons:input' :
+                'extensions-icons:input-old');
       case SourceType.UNKNOWN:
         // TODO(dpapad): Ask UX for a better icon for this case.
-        return 'extensions-icons:input';
+        return (
+            loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+                'extensions-icons:input' :
+                'extensions-icons:input-old');
       case SourceType.UNPACKED:
-        return 'extensions-icons:unpacked';
+        return 'extensions-icons:unpacked-custom';
       case SourceType.WEBSTORE:
       case SourceType.INSTALLED_BY_DEFAULT:
         return '';

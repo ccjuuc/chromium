@@ -18,7 +18,7 @@ class BrowserTabStripTracker;
 
 // TabStripModelStatsRecorder records user tab interaction stats.
 // In particular, we record tab's lifetime and state transition probability to
-// study user interaction with background tabs. (crbug.com/517335)
+// study user interaction with background tabs. (crbug.com/40430165)
 class TabStripModelStatsRecorder : public TabStripModelObserver {
  public:
   // TabState represents a lifecycle of a tab in TabStripModel.
@@ -71,8 +71,6 @@ class TabStripModelStatsRecorder : public TabStripModelObserver {
   std::vector<raw_ptr<content::WebContents, VectorExperimental>>
       active_tab_history_;
 
-  // TODO(crbug.com/364501603): revert smart pointer once the modularization is
-  // complete.
   std::unique_ptr<BrowserTabStripTracker> browser_tab_strip_tracker_;
 };
 

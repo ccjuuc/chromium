@@ -33,14 +33,16 @@
 #include "ui/webui/webui_util.h"
 
 namespace {
+
+// LINT.IfChange
 std::string GetChoiceListJSON(
     SearchEngineChoiceDialogService& search_engine_choice_dialog_service) {
-  base::Value::List choice_value_list;
+  base::ListValue choice_value_list;
   const TemplateURL::TemplateURLVector choices =
       search_engine_choice_dialog_service.GetSearchEngines();
 
   for (const auto& choice : choices) {
-    base::Value::Dict choice_value;
+    base::DictValue choice_value;
 
     choice_value.Set("prepopulateId", choice->prepopulate_id());
     choice_value.Set("name", choice->short_name());
@@ -54,6 +56,8 @@ std::string GetChoiceListJSON(
   }
   return base::WriteJson(choice_value_list).value_or("");
 }
+// LINT.ThenChange(/chrome/browser/resources/search_engine_choice/search_engine_choice.ts:SearchEngineChoice)
+
 }  // namespace
 
 bool SearchEngineChoiceUIConfig::IsWebUIEnabled(
@@ -135,9 +139,20 @@ SearchEngineChoiceUI::SearchEngineChoiceUI(content::WebUI* web_ui)
       "showGuestCheckbox",
       search_engine_choice_service->IsDsePropagationAllowedForGuest());
 
+  const bool is_first_run_desktop_refresh_enabled =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+      switches::IsFirstRunDesktopRefreshEnabled(
+          CHECK_DEREF(regional_capabilities_service)
+              .IsInSearchEngineChoiceScreenRegion());
+#else
+      false;
+#endif
+
   webui::SetupWebUIDataSource(
       source, kSearchEngineChoiceResources,
-      IDR_SEARCH_ENGINE_CHOICE_SEARCH_ENGINE_CHOICE_HTML);
+      is_first_run_desktop_refresh_enabled
+          ? IDR_SEARCH_ENGINE_CHOICE_SEARCH_ENGINE_CHOICE_REFRESH_HTML
+          : IDR_SEARCH_ENGINE_CHOICE_SEARCH_ENGINE_CHOICE_HTML);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(SearchEngineChoiceUI)

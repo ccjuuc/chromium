@@ -19,13 +19,11 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
-#include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_common.h"
-#include "ui/accessibility/ax_language_detection.h"
 #include "ui/accessibility/ax_tree_data.h"
 #include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/ax_tree_serializer.h"
@@ -35,6 +33,23 @@
 #include "ui/base/buildflags.h"
 
 namespace ui {
+
+namespace {
+
+bool CanFireGeneratedEventOnTarget(AXEventGenerator::Event event_type,
+                                   BrowserAccessibility* event_target) {
+  if (event_target->CanFireEvents()) {
+    return true;
+  }
+
+  // MENU_POPUP_END can be fired as a menu changes to ignored. Keep that close
+  // event even though the target can no longer fire normal events.
+  return event_type == AXEventGenerator::Event::MENU_POPUP_END &&
+         event_target->GetRole() == ax::mojom::Role::kMenu &&
+         event_target->node()->IsIgnored();
+}
+
+}  // namespace
 
 AXTreeUpdate MakeAXTreeUpdateForTesting(
     const AXNodeData& node1,
@@ -51,9 +66,6 @@ AXTreeUpdate MakeAXTreeUpdateForTesting(
     const AXNodeData& node12 /* = AXNodeData() */,
     const AXNodeData& node13 /* = AXNodeData() */,
     const AXNodeData& node14 /* = AXNodeData() */) {
-  static base::NoDestructor<AXNodeData> empty_data;
-  int32_t no_id = empty_data->id;
-
   AXTreeUpdate update;
   AXTreeData tree_data;
   tree_data.tree_id = AXTreeID::CreateNewAXTreeID();
@@ -63,32 +75,45 @@ AXTreeUpdate MakeAXTreeUpdateForTesting(
   update.has_tree_data = true;
   update.root_id = node1.id;
   update.nodes.push_back(node1);
-  if (node2.id != no_id)
+  if (node2.id != kInvalidAXNodeID) {
     update.nodes.push_back(node2);
-  if (node3.id != no_id)
+  }
+  if (node3.id != kInvalidAXNodeID) {
     update.nodes.push_back(node3);
-  if (node4.id != no_id)
+  }
+  if (node4.id != kInvalidAXNodeID) {
     update.nodes.push_back(node4);
-  if (node5.id != no_id)
+  }
+  if (node5.id != kInvalidAXNodeID) {
     update.nodes.push_back(node5);
-  if (node6.id != no_id)
+  }
+  if (node6.id != kInvalidAXNodeID) {
     update.nodes.push_back(node6);
-  if (node7.id != no_id)
+  }
+  if (node7.id != kInvalidAXNodeID) {
     update.nodes.push_back(node7);
-  if (node8.id != no_id)
+  }
+  if (node8.id != kInvalidAXNodeID) {
     update.nodes.push_back(node8);
-  if (node9.id != no_id)
+  }
+  if (node9.id != kInvalidAXNodeID) {
     update.nodes.push_back(node9);
-  if (node10.id != no_id)
+  }
+  if (node10.id != kInvalidAXNodeID) {
     update.nodes.push_back(node10);
-  if (node11.id != no_id)
+  }
+  if (node11.id != kInvalidAXNodeID) {
     update.nodes.push_back(node11);
-  if (node12.id != no_id)
+  }
+  if (node12.id != kInvalidAXNodeID) {
     update.nodes.push_back(node12);
-  if (node13.id != no_id)
+  }
+  if (node13.id != kInvalidAXNodeID) {
     update.nodes.push_back(node13);
-  if (node14.id != no_id)
+  }
+  if (node14.id != kInvalidAXNodeID) {
     update.nodes.push_back(node14);
+  }
   return update;
 }
 
@@ -224,22 +249,45 @@ void BrowserAccessibilityManager::FireFocusEventsIfNeeded() {
 }
 
 bool BrowserAccessibilityManager::CanFireEvents() const {
-  if (!AXTreeManager::CanFireEvents())
+  if (!AXTreeManager::CanFireEvents()) {
     return false;
+  }
 
-  BrowserAccessibilityManager* root_manager = GetManagerForRootFrame();
-  // If the check below is changed to a DCHECK, it will fail when running
-  // http/tests/devtools/resource-tree/resource-tree-frame-in-crafted-frame.js
-  // on linux. The parent `RenderFrameHostImpl` might not have an AXTreeID
-  // that isn't `AXTreeIDUnknown()`.
-  if (!root_manager)
+  // The delegate may be null in unit tests.
+  if (!delegate_) {
     return false;
+  }
 
-  // Do not fire events when the page is frozen inside the back/forward cache.
-  // Rationale for the back/forward cache behavior:
+  if (delegate_->AccessibilityIsWebContentSource()) {
+    BrowserAccessibilityManager* root_manager = GetManagerForRootFrame();
+    // If the check below is changed to a DCHECK, it will fail when running
+    // http/tests/devtools/resource-tree/resource-tree-frame-in-crafted-frame.js
+    // on linux. The parent `RenderFrameHostImpl` might not have an AXTreeID
+    // that isn't `AXTreeIDUnknown()`.
+    if (!root_manager) {
+      return false;
+    }
+  } else {
+    // TODO(crbug.com/40672441): Confirm that events aren't fired from views
+    // that aren't part of a window. This is especially important on macOS,
+    // where a blocking call from AppKit will attempt to ascend the hierarchy to
+    // find a window (more info in https://crrev.com/c/3595084).
+  }
+
+  // The delegate can decide to prevent events, too. For example, for web
+  // content, we do not fire events when the page is frozen inside the
+  // back/forward cache. Rationale for the back/forward cache behavior:
   // https://docs.google.com/document/d/1_jaEAXurfcvriwcNU-5u0h8GGioh0LelagUIIGFfiuU/
-  return !delegate_ ||  // Can be null in unit tests.
-         delegate_->CanFireAccessibilityEvents();
+  return delegate_->CanFireAccessibilityEvents();
+}
+
+bool BrowserAccessibilityManager::ShouldFireGeneratedEvent(
+    AXEventGenerator::Event event_type) const {
+  if (delegate_ && !delegate_->AccessibilityIsWebContentSource() &&
+      event_type == AXEventGenerator::Event::DOCUMENT_SELECTION_CHANGED) {
+    return false;
+  }
+  return true;
 }
 
 void BrowserAccessibilityManager::FireGeneratedEvent(
@@ -254,7 +302,9 @@ void BrowserAccessibilityManager::FireGeneratedEvent(
     return;
   }
 
-  auto* wrapper = GetFromAXNode(node);
+  // Mitigation for b/498205735. Using raw_ptr on the stack as defense-in-depth
+  // to ensure memory is quarantined if freed during the loop below.
+  raw_ptr<BrowserAccessibility> wrapper = GetFromAXNode(node);
   DCHECK(wrapper);
 
   const auto& node_data = wrapper->GetData();
@@ -456,9 +506,13 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
   // remove this exclusion.
   base::ScopedSafetyChecksExclusion scoped_unsafe;
 
-#if DCHECK_IS_ON()
+#if BUILDFLAG(IS_WIN)
+  CHECK(!in_on_accessibility_events_)
+      << "Should not re-enter OnAccessiblityEvents()";
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN) || DCHECK_IS_ON()
   base::AutoReset<bool> auto_reset(&in_on_accessibility_events_, true);
-#endif  // DCHECK_IS_ON()
+#endif  // BUILDFLAG(IS_WIN) || DCHECK_IS_ON()
 
   // Update the cached device scale factor.
   if (!use_custom_device_scale_factor_for_testing_)
@@ -571,6 +625,10 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
   BrowserAccessibility* focus = GetFocus();
   std::vector<AXEventGenerator::TargetedEvent> deferred_events;
   for (const auto& targeted_event : event_generator()) {
+    if (!ShouldFireGeneratedEvent(targeted_event.event_params->event)) {
+      continue;
+    }
+
     BrowserAccessibility* event_target = GetFromID(targeted_event.node_id);
     DCHECK(event_target) << "No event target for " << targeted_event.node_id;
 
@@ -578,8 +636,10 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
         event_target, RetargetEventType::RetargetEventTypeGenerated);
     if (!event_target)
       continue;  // Drop the event if RetargetForEvents() returns nullptr.
-    if (!event_target->CanFireEvents())
+    if (!CanFireGeneratedEventOnTarget(targeted_event.event_params->event,
+                                       event_target)) {
       continue;
+    }
 
     // IsDescendantOf() also returns true in the case of equality.
     if (focus && focus != event_target && focus->IsDescendantOf(event_target)) {
@@ -595,19 +655,23 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
   // before firing any other events on that node. No focus event will be fired
   // if the window itself isn't focused or if focus hasn't changed.
   //
-  // We need to fire focus events specifically from the root frame manager,
-  // since we need the top document's delegate to check if its view has focus.
-  //
-  // If this manager is disconnected from the top document, then
-  // root_frame_manager will be a null pointer and this code will not be
-  // reached. It's also possible for this manager to be null if it is not
-  // sourced from web content.
-  if (root_frame_manager) {
-    root_frame_manager->FireFocusEventsIfNeeded();
+  // Web content fires focus events from the root frame manager, since the top
+  // document's delegate checks whether the view has focus. Views-sourced
+  // managers are not frame managers, so they fire from this manager.
+  BrowserAccessibilityManager* focus_manager = root_frame_manager;
+  if (delegate_ && !delegate_->AccessibilityIsWebContentSource()) {
+    focus_manager = this;
+  }
+  if (focus_manager) {
+    focus_manager->FireFocusEventsIfNeeded();
   }
 
   // Now fire all of the rest of the generated events we previously deferred.
   for (const auto& targeted_event : deferred_events) {
+    if (!ShouldFireGeneratedEvent(targeted_event.event_params->event)) {
+      continue;
+    }
+
     BrowserAccessibility* event_target = GetFromID(targeted_event.node_id);
     DCHECK(event_target) << "No event target for " << targeted_event.node_id;
 
@@ -615,8 +679,10 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
         event_target, RetargetEventType::RetargetEventTypeGenerated);
     if (!event_target)
       continue;  // Drop the event if RetargetForEvents() returns nullptr.
-    if (!event_target->CanFireEvents())
+    if (!CanFireGeneratedEventOnTarget(targeted_event.event_params->event,
+                                       event_target)) {
       continue;
+    }
 
     FireGeneratedEvent(targeted_event.event_params->event,
                        event_target->node());
@@ -680,20 +746,11 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
     // the platform independent events have already fired.
     // Some screen readers need a focus event in order to work properly.
     FireFocusEventsIfNeeded();
-
-    // Perform the initial run of language detection.
-    ax_tree()->language_detection_manager->DetectLanguages();
-    ax_tree()->language_detection_manager->LabelLanguages();
-
-    // After initial language detection, enable language detection for future
-    // content updates in order to support dynamic content changes.
-    //
-    // If the LanguageDetectionDynamic feature flag is not enabled then this
-    // is a no-op.
-    ax_tree()->language_detection_manager->RegisterLanguageDetectionObserver();
   }
 
-  // Allow derived classes to do event post-processing.
+  // Allow derived classes to do event post-processing. This must run after
+  // all generated and source events so that finalized UIA events (e.g.
+  // Text_TextChanged, TestComplete) are raised in the correct order.
   FinalizeAccessibilityEvents();
 
   if (!is_post_load_) {
@@ -702,6 +759,10 @@ bool BrowserAccessibilityManager::OnAccessibilityEvents(
         is_post_load_ = true;
       }
     }
+  }
+
+  if (!accessibility_events_callback_for_testing_.is_null()) {
+    accessibility_events_callback_for_testing_.Run();
   }
 
   return true;
@@ -890,8 +951,10 @@ bool BrowserAccessibilityManager::NativeViewHasFocus() {
 }
 
 BrowserAccessibility* BrowserAccessibilityManager::GetFocus() const {
-  // TODO(crbug.com/40672441): Adjust to make it work with views-sourced
-  // managers as well.
+  if (delegate_ && !delegate_->AccessibilityIsWebContentSource()) {
+    return GetFocusFromThisOrDescendantFrame();
+  }
+
   BrowserAccessibilityManager* root_manager = GetManagerForRootFrame();
   if (!root_manager) {
     // We can't retrieved the globally focused object since we don't have access
@@ -923,9 +986,13 @@ BrowserAccessibility*
 BrowserAccessibilityManager::GetFocusFromThisOrDescendantFrame() const {
   AXNodeID focus_id = GetTreeData().focus_id;
   BrowserAccessibility* obj = GetFromID(focus_id);
-  // If nothing is focused, then the top document has the focus.
-  if (!obj)
+  // In web content, if nothing is focused, then the top document has the focus.
+  if (!obj) {
+    if (delegate_ && !delegate_->AccessibilityIsWebContentSource()) {
+      return nullptr;
+    }
     return GetBrowserAccessibilityRoot();
+  }
 
   if (obj->HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId)) {
     AXTreeID child_tree_id = AXTreeID::FromString(
@@ -983,6 +1050,11 @@ void BrowserAccessibilityManager::SetSequentialFocusNavigationStartingPoint(
 void BrowserAccessibilityManager::SetGeneratedEventCallbackForTesting(
     const GeneratedEventCallbackForTesting& callback) {
   generated_event_callback_for_testing_ = callback;
+}
+
+void BrowserAccessibilityManager::SetAccessibilityEventsCallbackForTesting(
+    const base::RepeatingClosure& callback) {
+  accessibility_events_callback_for_testing_ = callback;
 }
 
 void BrowserAccessibilityManager::SetLocationChangeCallbackForTesting(
@@ -1102,6 +1174,32 @@ void BrowserAccessibilityManager::ShowContextMenu(
   AXPlatform::GetInstance().OnActionFromAssistiveTech();
 }
 
+void BrowserAccessibilityManager::ShowTooltip(
+    const BrowserAccessibility& node) {
+  if (!delegate_) {
+    return;
+  }
+
+  AXActionData action_data;
+  action_data.action = ax::mojom::Action::kShowTooltip;
+  action_data.target_node_id = node.GetId();
+  delegate_->AccessibilityPerformAction(action_data);
+  AXPlatform::GetInstance().OnActionFromAssistiveTech();
+}
+
+void BrowserAccessibilityManager::HideTooltip(
+    const BrowserAccessibility& node) {
+  if (!delegate_) {
+    return;
+  }
+
+  AXActionData action_data;
+  action_data.action = ax::mojom::Action::kHideTooltip;
+  action_data.target_node_id = node.GetId();
+  delegate_->AccessibilityPerformAction(action_data);
+  AXPlatform::GetInstance().OnActionFromAssistiveTech();
+}
+
 void BrowserAccessibilityManager::SignalEndOfTest() {
   if (!delegate_)
     return;
@@ -1165,7 +1263,7 @@ void BrowserAccessibilityManager::ScrollToMakeVisible(
   // manager.
   BrowserAccessibilityManager* root_manager = GetManagerForRootFrame();
   if (root_manager) {
-    UpdateAccessibilityFocus(this, node);
+    root_manager->UpdateAccessibilityFocus(this, node);
   }
 #endif
 }
@@ -1224,12 +1322,80 @@ void BrowserAccessibilityManager::SetSelection(
   if (!delegate_ || range.IsNull())
     return;
 
+  // TODO(crbug.com/443078007): Add position types and affinity to AXActionData
+  // and pass them to blink to avoid ambiguity.
   AXActionData action_data;
   action_data.anchor_node_id = range.anchor()->anchor_id();
-  action_data.anchor_offset = range.anchor()->text_offset();
+  action_data.anchor_offset = range.anchor()->IsTextPosition()
+                                  ? range.anchor()->text_offset()
+                                  : range.anchor()->child_index();
   action_data.focus_node_id = range.focus()->anchor_id();
-  action_data.focus_offset = range.focus()->text_offset();
+  action_data.focus_offset = range.focus()->IsTextPosition()
+                                 ? range.focus()->text_offset()
+                                 : range.focus()->child_index();
   action_data.action = ax::mojom::Action::kSetSelection;
+  delegate_->AccessibilityPerformAction(action_data);
+  AXPlatform::GetInstance().OnActionFromAssistiveTech();
+}
+
+void BrowserAccessibilityManager::ReplaceRanges(
+    const BrowserAccessibility& node,
+    const std::vector<BrowserAccessibility::AXRange>& ranges,
+    const std::vector<std::string>& replacement_strings) {
+  if (!delegate_) {
+    return;
+  }
+
+  size_t size = ranges.size();
+  if (!size || size != replacement_strings.size()) {
+    return;
+  }
+
+  std::vector<std::string> filtered_replacement_strings;
+  std::vector<int32_t> start_anchor_ids;
+  std::vector<int32_t> start_offsets;
+  std::vector<int32_t> end_anchor_ids;
+  std::vector<int32_t> end_offsets;
+
+  filtered_replacement_strings.reserve(size);
+  start_anchor_ids.reserve(size);
+  start_offsets.reserve(size);
+  end_anchor_ids.reserve(size);
+  end_offsets.reserve(size);
+
+  for (size_t i = 0; i < ranges.size(); ++i) {
+    if (!ranges[i].anchor() || !ranges[i].focus()) {
+      continue;
+    }
+
+    auto anchor = ranges[i].anchor()->AsLeafTextPosition();
+    auto focus = ranges[i].focus()->AsLeafTextPosition();
+    if (!anchor->IsValid() || !focus->IsValid()) {
+      continue;
+    }
+
+    filtered_replacement_strings.push_back(replacement_strings[i]);
+    start_anchor_ids.push_back(anchor->anchor_id());
+    start_offsets.push_back(anchor->text_offset());
+    end_anchor_ids.push_back(focus->anchor_id());
+    end_offsets.push_back(focus->text_offset());
+  }
+
+  AXActionData action_data;
+  action_data.target_node_id = node.GetId();
+  action_data.AddStringListAttribute(
+      ax::mojom::StringListAttribute::kTextOperationReplacementStrings,
+      filtered_replacement_strings);
+  action_data.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kTextOperationStartAnchorIds,
+      start_anchor_ids);
+  action_data.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kTextOperationStartOffsets, start_offsets);
+  action_data.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kTextOperationEndAnchorIds, end_anchor_ids);
+  action_data.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kTextOperationEndOffsets, end_offsets);
+  action_data.action = ax::mojom::Action::kReplaceRanges;
   delegate_->AccessibilityPerformAction(action_data);
   AXPlatform::GetInstance().OnActionFromAssistiveTech();
 }
@@ -1304,7 +1470,7 @@ void BrowserAccessibilityManager::HitTest(const gfx::Point& frame_point,
 
 gfx::Rect BrowserAccessibilityManager::GetViewBoundsInScreenCoordinates()
     const {
-  AXPlatformTreeManagerDelegate* delegate = GetDelegateFromRootManager();
+  AXPlatformTreeManagerDelegate* delegate = GetDelegateForNativeView();
   if (delegate) {
     gfx::Rect bounds = delegate->AccessibilityGetViewBounds();
 
@@ -1809,6 +1975,14 @@ BrowserAccessibilityManager::GetDelegateFromRootManager() const {
   return nullptr;
 }
 
+AXPlatformTreeManagerDelegate*
+BrowserAccessibilityManager::GetDelegateForNativeView() const {
+  if (delegate_ && !delegate_->AccessibilityIsWebContentSource()) {
+    return delegate_.get();
+  }
+  return GetDelegateFromRootManager();
+}
+
 bool BrowserAccessibilityManager::IsRootFrameManager() const {
   // delegate_ can be null in unit tests.
   if (!delegate_)
@@ -1818,6 +1992,11 @@ bool BrowserAccessibilityManager::IsRootFrameManager() const {
   DCHECK(!is_root_tree || GetParentTreeID() == AXTreeIDUnknown())
       << "Root tree has parent tree id of: " << GetParentTreeID();
   return is_root_tree;
+}
+
+bool BrowserAccessibilityManager::IsWebContentSource() const {
+  // delegate_ can be null in unit tests.
+  return !delegate_ || delegate_->AccessibilityIsWebContentSource();
 }
 
 AXTreeUpdate BrowserAccessibilityManager::SnapshotAXTreeForTesting() {
@@ -1899,6 +2078,13 @@ BrowserAccessibility* BrowserAccessibilityManager::ApproximateHitTest(
 }
 
 void BrowserAccessibilityManager::DetachFromParentManager() {
+  // Notify the parent to invalidate its hypertext cache before disconnecting,
+  // otherwise stale hyperlink IDs can cause type confusion after reassignment.
+  if (connected_to_parent_tree_node_) {
+    if (AXNode* parent = GetParentNodeFromParentTree()) {
+      UpdateAttributesOnParent(parent);
+    }
+  }
   connected_to_parent_tree_node_ = false;
 }
 
@@ -1995,7 +2181,7 @@ void BrowserAccessibilityManager::CollectChangedNodesAndParentsForAtomicUpdate(
 
     if (!changed_node->IsIgnored()) {
       BrowserAccessibility* obj = GetFromAXNode(changed_node);
-      if (obj) {
+      if (obj && obj->GetAXPlatformNode()) {
         nodes_needing_update->insert(obj->GetAXPlatformNode());
       }
     }
@@ -2011,7 +2197,7 @@ void BrowserAccessibilityManager::CollectChangedNodesAndParentsForAtomicUpdate(
     // each embedded object character offset.
     if (changed_node->data().role != ax::mojom::Role::kInlineTextBox) {
       BrowserAccessibility* parent_obj = GetFromAXNode(parent);
-      if (parent_obj) {
+      if (parent_obj && parent_obj->GetAXPlatformNode()) {
         nodes_needing_update->insert(parent_obj->GetAXPlatformNode());
       }
     }
@@ -2026,8 +2212,9 @@ void BrowserAccessibilityManager::CollectChangedNodesAndParentsForAtomicUpdate(
     }
 
     BrowserAccessibility* editable_root_obj = GetFromAXNode(editable_root);
-    if (editable_root_obj)
+    if (editable_root_obj && editable_root_obj->GetAXPlatformNode()) {
       nodes_needing_update->insert(editable_root_obj->GetAXPlatformNode());
+    }
   }
 }
 

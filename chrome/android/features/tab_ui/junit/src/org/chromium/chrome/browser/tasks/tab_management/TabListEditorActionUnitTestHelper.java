@@ -10,7 +10,6 @@ import androidx.annotation.Nullable;
 
 import org.chromium.base.Token;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
@@ -57,10 +56,6 @@ public class TabListEditorActionUnitTestHelper {
         @Nullable
         String getCollaborationId() {
             return mIsCollaboration ? getTabGroupId().toString() + "_collaboration" : null;
-        }
-
-        int getRootId() {
-            return mTabIds[0];
         }
 
         @Nullable
@@ -114,8 +109,8 @@ public class TabListEditorActionUnitTestHelper {
     /**
      * Adds the tabs described tabs to mock objects to set up an Action unit test.
      *
-     * @param tabModel a {@link MockTabModel}.
-     * @param filter a mocked {@link TabGroupModelFilter}.
+     * @param tabModel a {@link MockTabModel} (used as both the tab container and the tab-group stub
+     *     target).
      * @param tabGroupSyncService a mocked {@link TabGroupSyncService}.
      * @param selectionDelegate a mocked {@link SelectionDelegate}.
      * @param tabIdGroups defining the tab structure.
@@ -123,7 +118,6 @@ public class TabListEditorActionUnitTestHelper {
      */
     public static TabListHolder configureTabs(
             MockTabModel tabModel,
-            TabGroupModelFilter filter,
             TabGroupSyncService tabGroupSyncService,
             SelectionDelegate<TabListEditorItemSelectionId> selectionDelegate,
             List<TabIdGroup> tabIdGroups,
@@ -138,12 +132,11 @@ public class TabListEditorActionUnitTestHelper {
             List<SavedTabGroupTab> savedTabs = new ArrayList<>();
             for (int tabId : group.getTabIds()) {
                 Tab tab = tabModel.addTab(tabId);
-                tab.setRootId(group.getRootId());
                 tab.setTabGroupId(group.getTabGroupId());
                 if (group.isSelected() && groupTabs.isEmpty()) {
                     selectedTabs.add(tab);
                 }
-                when(filter.isTabInTabGroup(tab)).thenReturn(group.getTabGroupId() != null);
+                when(tabModel.isTabInTabGroup(tab)).thenReturn(group.getTabGroupId() != null);
                 groupTabs.add(tab);
 
                 SavedTabGroupTab savedTab = new SavedTabGroupTab();
@@ -154,9 +147,8 @@ public class TabListEditorActionUnitTestHelper {
                 selectedItemIds.add(TabListEditorItemSelectionId.createTabId(group.getTabIdAt(0)));
                 selectedAndRelatedTabs.addAll(groupTabs);
             }
-            groupTabs.get(0).setRootId(group.getTabIdAt(0));
-            when(filter.getRelatedTabList(group.getTabIdAt(0))).thenReturn(groupTabs);
-            when(filter.getTabCountForGroup(group.getTabGroupId())).thenReturn(groupTabs.size());
+            when(tabModel.getRelatedTabList(group.getTabIdAt(0))).thenReturn(groupTabs);
+            when(tabModel.getTabCountForGroup(group.getTabGroupId())).thenReturn(groupTabs.size());
 
             if (!group.isGroup() || tabGroupSyncService == null) continue;
 

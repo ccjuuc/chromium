@@ -45,7 +45,7 @@ void RunVirtualCardEnrollmentFieldsLoadedCallback(
     const JavaRef<jobject>& j_callback,
     VirtualCardEnrollmentFields* virtual_card_enrollment_fields) {
   base::android::RunObjectCallbackAndroid(
-      j_callback, autofill::CreateVirtualCardEnrollmentFieldsJavaObject(
+      j_callback, CreateVirtualCardEnrollmentFieldsJavaObject(
                       virtual_card_enrollment_fields));
 }
 }  // namespace
@@ -69,8 +69,8 @@ AutofillPaymentMethodsDelegate::~AutofillPaymentMethodsDelegate() = default;
 
 // Initializes an instance of AutofillPaymentMethodsDelegate from the
 // Java side.
-static jlong JNI_AutofillPaymentMethodsDelegate_Init(JNIEnv* env,
-                                                     Profile* profile) {
+static int64_t JNI_AutofillPaymentMethodsDelegate_Init(JNIEnv* env,
+                                                       Profile* profile) {
   AutofillPaymentMethodsDelegate* instance =
       new AutofillPaymentMethodsDelegate(profile);
   return reinterpret_cast<intptr_t>(instance);

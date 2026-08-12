@@ -16,6 +16,7 @@ import '../../components/network_select_login.js';
 
 import type {SanitizeInnerHtmlOpts} from '//resources/ash/common/parse_html_subset.js';
 import {assert} from '//resources/js/assert.js';
+import {htmlEscape} from '//resources/js/util.js';
 import type {PolymerElementProperties} from '//resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -179,14 +180,14 @@ export class ErrorMessageScreen extends ErrorMessageScreenBase {
     };
   }
 
-  private uiState: ErrorScreenUiState;
-  private errorState: ErrorState;
-  private isCloseable: boolean;
-  private enableWifiScans: boolean;
-  private currentNetworkName: string;
-  private guestSessionAllowed: boolean;
-  private offlineLoginAllowed: boolean;
-  private connectingIndicatorShown: boolean;
+  declare private uiState: ErrorScreenUiState;
+  declare private errorState: ErrorState;
+  declare private isCloseable: boolean;
+  declare private enableWifiScans: boolean;
+  declare private currentNetworkName: string;
+  declare private guestSessionAllowed: boolean;
+  declare private offlineLoginAllowed: boolean;
+  declare private connectingIndicatorShown: boolean;
 
   private getDialogTitle(
       locale: string, errorState: ErrorState,
@@ -298,7 +299,7 @@ export class ErrorMessageScreen extends ErrorMessageScreenBase {
   override updateLocalizedContent(): void {
     this.updateElementWithStringAndAnchorTag(
         'captive-portal-message-text', 'captivePortalMessage',
-        {substitutions: ['<b>' + this.currentNetworkName + '</b>']},
+        {substitutions: [`<b>${htmlEscape(this.currentNetworkName)}</b>`]},
         ['captive-portal-fix-link']);
     const captivePortalFixLink =
         this.shadowRoot?.querySelector('#captive-portal-fix-link');

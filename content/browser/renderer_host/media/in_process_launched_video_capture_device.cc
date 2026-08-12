@@ -8,7 +8,6 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/token.h"
@@ -46,8 +45,8 @@ InProcessLaunchedVideoCaptureDevice::InProcessLaunchedVideoCaptureDevice(
       device_task_runner_(std::move(device_task_runner)) {}
 
 InProcessLaunchedVideoCaptureDevice::~InProcessLaunchedVideoCaptureDevice() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DCHECK(device_);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
+  CHECK(device_, base::NotFatalUntil::M154);
   device_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&StopAndReleaseDeviceOnDeviceThread, std::move(device_),
@@ -56,7 +55,7 @@ InProcessLaunchedVideoCaptureDevice::~InProcessLaunchedVideoCaptureDevice() {
 
 void InProcessLaunchedVideoCaptureDevice::GetPhotoState(
     media::VideoCaptureDevice::GetPhotoStateCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -69,7 +68,7 @@ void InProcessLaunchedVideoCaptureDevice::GetPhotoState(
 void InProcessLaunchedVideoCaptureDevice::SetPhotoOptions(
     media::mojom::PhotoSettingsPtr settings,
     media::VideoCaptureDevice::SetPhotoOptionsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -81,7 +80,7 @@ void InProcessLaunchedVideoCaptureDevice::SetPhotoOptions(
 
 void InProcessLaunchedVideoCaptureDevice::TakePhoto(
     media::VideoCaptureDevice::TakePhotoCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   TRACE_EVENT_INSTANT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
                        "InProcessLaunchedVideoCaptureDevice::TakePhoto",
                        TRACE_EVENT_SCOPE_PROCESS);
@@ -96,7 +95,7 @@ void InProcessLaunchedVideoCaptureDevice::TakePhoto(
 }
 
 void InProcessLaunchedVideoCaptureDevice::MaybeSuspendDevice() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -106,7 +105,7 @@ void InProcessLaunchedVideoCaptureDevice::MaybeSuspendDevice() {
 }
 
 void InProcessLaunchedVideoCaptureDevice::ResumeDevice() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -121,7 +120,7 @@ void InProcessLaunchedVideoCaptureDevice::ApplySubCaptureTarget(
     uint32_t sub_capture_target_version,
     base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>
         callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -138,7 +137,7 @@ void InProcessLaunchedVideoCaptureDevice::ApplySubCaptureTarget(
 }
 
 void InProcessLaunchedVideoCaptureDevice::RequestRefreshFrame() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -150,7 +149,7 @@ void InProcessLaunchedVideoCaptureDevice::RequestRefreshFrame() {
 void InProcessLaunchedVideoCaptureDevice::SetDesktopCaptureWindowIdAsync(
     gfx::NativeViewId window_id,
     base::OnceClosure done_cb) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Post |device_| to the the device_task_runner_. This is safe since the
   // device is destroyed on the device_task_runner_ and |done_cb|
   // guarantees that |this| stays alive.
@@ -163,7 +162,7 @@ void InProcessLaunchedVideoCaptureDevice::SetDesktopCaptureWindowIdAsync(
 
 void InProcessLaunchedVideoCaptureDevice::OnUtilizationReport(
     media::VideoCaptureFeedback feedback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M154);
   // Unretained() is safe to use here because |device| would be null if it
   // was scheduled for shutdown and destruction, and because this task is
   // guaranteed to run before the task that destroys the |device|.
@@ -176,7 +175,8 @@ void InProcessLaunchedVideoCaptureDevice::
     SetDesktopCaptureWindowIdOnDeviceThread(media::VideoCaptureDevice* device,
                                             gfx::NativeViewId window_id,
                                             base::OnceClosure done_cb) {
-  DCHECK(device_task_runner_->BelongsToCurrentThread());
+  CHECK(device_task_runner_->BelongsToCurrentThread(),
+        base::NotFatalUntil::M154);
 #if defined(ENABLE_SCREEN_CAPTURE) && !BUILDFLAG(IS_ANDROID)
   auto* desktop_device = static_cast<DesktopCaptureDevice*>(device);
   desktop_device->SetNotificationWindowId(window_id);

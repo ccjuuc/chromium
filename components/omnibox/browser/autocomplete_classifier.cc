@@ -10,8 +10,9 @@
 #include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
-#include "components/history_embeddings/history_embeddings_features.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -22,6 +23,10 @@
 #include "extensions/buildflags/buildflags.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif
 
 #if !BUILDFLAG(IS_IOS)
 #include "components/history_clusters/core/config.h"  // nogncheck
@@ -63,22 +68,22 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
            ? AutocompleteProvider::TYPE_RECENTLY_CLOSED_TABS
            : 0) |
       AutocompleteProvider::TYPE_CONTEXTUAL_SEARCH |
-#else
+#elif !BUILDFLAG(IS_DESKTOP_ANDROID)
       AutocompleteProvider::TYPE_CLIPBOARD |
       AutocompleteProvider::TYPE_MOST_VISITED_SITES |
-      AutocompleteProvider::TYPE_VERBATIM_MATCH |
 #endif
 #if BUILDFLAG(IS_ANDROID)
       AutocompleteProvider::TYPE_VOICE_SUGGEST |
+      // For Desktop Android's Lens Overlay integration.
+      AutocompleteProvider::TYPE_CONTEXTUAL_SEARCH |
       // Only enabled for hub search.
       AutocompleteProvider::TYPE_OPEN_TAB |
       // Only enabled for hub search.
-      (base::FeatureList::IsEnabled(omnibox::kAndroidHubSearchTabGroups)
-           ? AutocompleteProvider::TYPE_TAB_GROUP
-           : 0) |
+      AutocompleteProvider::TYPE_TAB_GROUP |
       // Keyword search for Android.
       (base::FeatureList::IsEnabled(omnibox::kOmniboxSiteSearch)
-           ? AutocompleteProvider::TYPE_KEYWORD
+           ? AutocompleteProvider::TYPE_KEYWORD |
+                 AutocompleteProvider::TYPE_FEATURED_SEARCH
            : 0) |
 #endif
 #if !BUILDFLAG(IS_IOS)
@@ -90,10 +95,16 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
       AutocompleteProvider::TYPE_ZERO_SUGGEST |
       AutocompleteProvider::TYPE_ZERO_SUGGEST_LOCAL_HISTORY |
       (base::FeatureList::IsEnabled(omnibox::kDocumentProvider)
+#if BUILDFLAG(IS_ANDROID)
+               && base::android::device_info::is_desktop()
+#endif
            ? AutocompleteProvider::TYPE_DOCUMENT
            : 0) |
       (OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForAnyMode()
            ? AutocompleteProvider::TYPE_ON_DEVICE_HEAD
+           : 0) |
+      (base::FeatureList::IsEnabled(omnibox::kOmniboxCrossDeviceTabZeroSuggest)
+           ? AutocompleteProvider::TYPE_CROSS_DEVICE_TAB
            : 0) |
       AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN |
       AutocompleteProvider::TYPE_HISTORY_QUICK |
@@ -102,6 +113,7 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
       AutocompleteProvider::TYPE_HISTORY_FUZZY |
       AutocompleteProvider::TYPE_CALCULATOR |
       AutocompleteProvider::TYPE_ENTERPRISE_SEARCH_AGGREGATOR |
+      AutocompleteProvider::TYPE_VERBATIM_MATCH |
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
       (history_embeddings::GetFeatureParameters().omnibox_scoped ||
@@ -112,7 +124,13 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       // The `chrome.omnibox` extension API uses `TYPE_KEYWORD`, including on
       // desktop Android.
+#if BUILDFLAG(IS_ANDROID)
+      (base::FeatureList::IsEnabled(omnibox::kOmniboxSiteSearch)
+           ? AutocompleteProvider::TYPE_KEYWORD
+           : 0) |
+#else
       AutocompleteProvider::TYPE_KEYWORD |
+#endif
       // `UnscopedExtensionProvider` should only be included when extensions are
       // enabled and the `ExperimentalOmniboxLabs` feature is enabled.
       (base::FeatureList::IsEnabled(
@@ -127,7 +145,7 @@ int AutocompleteClassifier::DefaultOmniboxProviders(bool is_low_memory_device) {
 
 void AutocompleteClassifier::Classify(
     const std::u16string& text,
-    bool prefer_keyword,
+    bool in_keyword_mode,
     bool allow_exact_keyword_match,
     metrics::OmniboxEventProto::PageClassification page_classification,
     AutocompleteMatch* match,
@@ -138,15 +156,7 @@ void AutocompleteClassifier::Classify(
   base::AutoReset<bool> reset(&inside_classify_, true);
   AutocompleteInput input(text, page_classification, *scheme_classifier_);
   input.set_prevent_inline_autocomplete(true);
-  // If the user in keyword mode (which is often the case when |prefer_keyword|
-  // is true), ideally we'd set |input|'s keyword_mode_entry_method field.
-  // However, in the context of this code, we don't know how the keyword mode
-  // was entered. Moreover, we cannot add that as a parameter to Classify()
-  // because many callers do not know how keyword mode was entered. Luckily,
-  // Classify()'s purpose is to determine the default match, and at this time
-  // |keyword_mode_entry_method| only ends up affecting the ranking of
-  // lower-down suggestions.
-  input.set_prefer_keyword(prefer_keyword);
+  input.set_in_keyword_mode(in_keyword_mode);
   input.set_allow_exact_keyword_match(allow_exact_keyword_match);
   input.set_omit_asynchronous_matches(true);
   controller_->Start(input);

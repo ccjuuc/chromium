@@ -8,7 +8,6 @@ import static org.chromium.components.permissions.PermissionUtil.getGeolocationT
 
 import android.Manifest;
 
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.MediumTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
@@ -17,6 +16,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ThreadUtils;
@@ -27,6 +27,8 @@ import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridgeJni;
@@ -38,7 +40,7 @@ import org.chromium.components.messages.MessageIdentifier;
 import org.chromium.components.messages.MessageStateHandler;
 import org.chromium.components.messages.MessagesTestHelper;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.permissions.AndroidPermissionDelegate;
@@ -56,14 +58,21 @@ import java.util.concurrent.TimeoutException;
 
 /** Tests for the permission update message. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@CommandLineFlags.Add({
+    ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    ContentSwitches.USE_FAKE_DEVICE_FOR_MEDIA_STREAM
+})
 public class PermissionUpdateMessageTest {
-    private static final String GEOLOCATION_PAGE =
-            "/chrome/test/data/geolocation/geolocation_on_load.html";
+    private static final String GEOLOCATION_PAGE = "/chrome/test/data/geolocation/geolocation.html";
     private static final String MEDIASTREAM_PAGE = "/content/test/data/media/getusermedia.html";
-    private EmbeddedTestServer mTestServer;
 
-    @Rule public PermissionTestRule mActivityTestRule = new PermissionTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    public PermissionTestRule mPermissionRule =
+            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
+
+    @Rule
+    public RuleChain mRuleChain = RuleChain.outerRule(mActivityTestRule).around(mPermissionRule);
 
     /**
      * Utility delegate to provide the permissions to be requested for triggering a permission
@@ -119,10 +128,7 @@ public class PermissionUpdateMessageTest {
 
     @Before
     public void setUp() throws Exception {
-        mActivityTestRule.startMainActivityOnBlankPage();
-        mTestServer =
-                EmbeddedTestServer.createAndStartServer(
-                        ApplicationProvider.getApplicationContext());
+        mPermissionRule.setUpActivity();
     }
 
     /**
@@ -221,13 +227,13 @@ public class PermissionUpdateMessageTest {
         WindowAndroid windowAndroid = mActivityTestRule.getActivity().getWindowAndroid();
         windowAndroid.setAndroidPermissionDelegate(
                 new TestAndroidPermissionDelegate(null, Arrays.asList(androidPermission), null));
-        final String url = mTestServer.getURL(testPage);
+        final String url = mPermissionRule.getURL(testPage);
         try {
             setNativeContentSetting(contentSettingsType, url, ContentSetting.ALLOW);
-            mActivityTestRule.loadUrl(mTestServer.getURL(testPage));
+            mPermissionRule.loadUrl(mPermissionRule.getURL(testPage));
 
             if (javascriptToExecute != null && !javascriptToExecute.isEmpty()) {
-                mActivityTestRule.runJavaScriptCodeInCurrentTabWithGesture(javascriptToExecute);
+                mPermissionRule.runJavaScriptCodeWithUserGestureInCurrentTab(javascriptToExecute);
             }
 
             expectMessagesCount(windowAndroid, 1);
@@ -289,7 +295,7 @@ public class PermissionUpdateMessageTest {
         runTest(
                 GEOLOCATION_PAGE,
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 getGeolocationType(),
                 /* switchContent= */ false);
     }
@@ -332,7 +338,7 @@ public class PermissionUpdateMessageTest {
         runTest(
                 GEOLOCATION_PAGE,
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 getGeolocationType(),
                 /* switchContent= */ true);
     }
@@ -341,17 +347,13 @@ public class PermissionUpdateMessageTest {
     // permissions.
     @Test
     @MediumTest
-    public void testInfobarShutsDownCleanlyForGeolocation()
+    public void testMessageShutsDownCleanlyForGeolocation()
             throws IllegalArgumentException, TimeoutException {
         ChromeTabUtils.newTabFromMenu(
                 InstrumentationRegistry.getInstrumentation(), mActivityTestRule.getActivity());
 
-        // Register for animation notifications
-        CriteriaHelper.pollInstrumentationThread(
-                () -> mActivityTestRule.getInfoBarContainer() != null);
-
         final var windowAndroid = mActivityTestRule.getActivity().getWindowAndroid();
-        final String locationUrl = mTestServer.getURL(GEOLOCATION_PAGE);
+        final String locationUrl = mPermissionRule.getURL(GEOLOCATION_PAGE);
 
         mActivityTestRule
                 .getActivity()
@@ -365,11 +367,16 @@ public class PermissionUpdateMessageTest {
 
         try {
             setNativeContentSetting(getGeolocationType(), locationUrl, ContentSetting.ALLOW);
-            mActivityTestRule.loadUrl(mTestServer.getURL(GEOLOCATION_PAGE));
+            mPermissionRule.loadUrl(mPermissionRule.getURL(GEOLOCATION_PAGE));
+            mPermissionRule.runJavaScriptCodeWithUserGestureInCurrentTab("initiate_geolocation()");
             CriteriaHelper.pollUiThread(
                     () -> {
-                        return MessagesTestHelper.getMessageIdentifier(windowAndroid, 0)
-                                == MessageIdentifier.PERMISSION_UPDATE;
+                        Criteria.checkThat(
+                                MessagesTestHelper.getMessageCount(windowAndroid),
+                                Matchers.greaterThan(0));
+                        Criteria.checkThat(
+                                MessagesTestHelper.getMessageIdentifier(windowAndroid, 0),
+                                Matchers.is(MessageIdentifier.PERMISSION_UPDATE));
                     });
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {

@@ -2,23 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/commerce/price_insights_icon_view.h"
-
 #include "base/strings/string_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/commerce/mock_commerce_ui_tab_helper.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
-#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/commerce/price_insights_page_action_view_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_container_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_container.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/commerce/core/commerce_feature_list.h"
@@ -27,9 +21,6 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/interaction/element_identifier.h"
-#include "ui/base/interaction/element_tracker.h"
-#include "ui/views/interaction/element_tracker_views.h"
 
 namespace {
 const char kTestURL[] = "about:blank";
@@ -37,9 +28,7 @@ const char kTestURL[] = "about:blank";
 
 class PriceInsightsIconViewBaseBrowserTest : public UiBrowserTest {
  public:
-  explicit PriceInsightsIconViewBaseBrowserTest(
-      bool is_migration_enabled = false)
-      : is_migration_enabled_(is_migration_enabled) {
+  PriceInsightsIconViewBaseBrowserTest() {
     commerce_ui_override_ = MockCommerceUiTabHelper::ReplaceFactory();
   }
 
@@ -82,6 +71,15 @@ class PriceInsightsIconViewBaseBrowserTest : public UiBrowserTest {
 
   void ShowUi(const std::string& name) override {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(kTestURL)));
+
+    MockCommerceUiTabHelper* mock_tab_helper = getTabHelper();
+    commerce::PriceInsightsPageActionViewController::From(
+        *browser()->GetActiveTabInterface())
+        ->UpdatePageActionIcon(
+            mock_tab_helper->ShouldShowPriceInsightsIconView(),
+            mock_tab_helper->ShouldExpandPageActionIcon(
+                PageActionIconType::kPriceInsights),
+            mock_tab_helper->GetPriceInsightsIconLabelTypeForPage());
   }
 
   bool VerifyUi() override {
@@ -101,20 +99,15 @@ class PriceInsightsIconViewBaseBrowserTest : public UiBrowserTest {
 
   void WaitForUserDismissal() override {
     // Consider closing the browser to be dismissal.
-    ui_test_utils::WaitForBrowserToClose();
+    ui_test_utils::BrowserDestroyedObserver().Wait();
   }
 
  protected:
   std::optional<commerce::PriceInsightsInfo> price_insights_info_;
 
   IconLabelBubbleView* GetChip() {
-    if (is_migration_enabled_) {
-      return GetLocationBarView()->page_action_container()->GetPageActionView(
-          kActionCommercePriceInsights);
-    }
-
-    return GetLocationBarView()->page_action_icon_controller()->GetIconView(
-        PageActionIconType::kPriceInsights);
+    return GetLocationBarView()->page_action_container()->GetPageActionView(
+        kActionCommercePriceInsights);
   }
 
  private:
@@ -123,97 +116,47 @@ class PriceInsightsIconViewBaseBrowserTest : public UiBrowserTest {
   }
 
   LocationBarView* GetLocationBarView() {
-    return GetBrowserView()->toolbar()->location_bar();
+    return GetBrowserView()->toolbar()->location_bar_view();
   }
 
-  bool is_migration_enabled_;
   ui::UserDataFactory::ScopedOverride commerce_ui_override_;
 };
 
 class PriceInsightsIconViewBrowserTest
-    : public PriceInsightsIconViewBaseBrowserTest,
-      public ::testing::WithParamInterface<bool> {
+    : public PriceInsightsIconViewBaseBrowserTest {
  public:
-  PriceInsightsIconViewBrowserTest()
-      : PriceInsightsIconViewBaseBrowserTest(GetParam()) {
-    if (GetParam()) {
-      test_features_.InitWithFeaturesAndParameters(
-          /*enabled_features=*/
-          {
-              {commerce::kPriceInsights, {}},
-              {
-                  ::features::kPageActionsMigration,
-                  {
-                      {::features::kPageActionsMigrationPriceInsights.name,
-                       "true"},
-                  },
-              },
-
-          },
-          {});
-    } else {
-      test_features_.InitWithFeatures(
-          /*enabled_features=*/{commerce::kPriceInsights},
-          /*disabled_features*/ {::features::kPageActionsMigration});
-    }
+  PriceInsightsIconViewBrowserTest() {
+    test_features_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {
+            {commerce::kPriceInsights, {}},
+        },
+        /*disabled_features=*/{});
   }
 
  private:
   base::test::ScopedFeatureList test_features_;
 };
 
-IN_PROC_BROWSER_TEST_P(PriceInsightsIconViewBrowserTest,
+IN_PROC_BROWSER_TEST_F(PriceInsightsIconViewBrowserTest,
                        InvokeUi_show_price_insights_icon) {
   ShowAndVerifyUi();
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         PriceInsightsIconViewBrowserTest,
-                         ::testing::Values(false, true),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "MigrationEnabled"
-                                             : "MigrationDisabled";
-                         });
-
 class PriceInsightsIconViewWithLabelBrowserTest
-    : public PriceInsightsIconViewBaseBrowserTest,
-      public ::testing::WithParamInterface<bool> {
+    : public PriceInsightsIconViewBaseBrowserTest {
  public:
-  PriceInsightsIconViewWithLabelBrowserTest()
-      : PriceInsightsIconViewBaseBrowserTest(GetParam()) {
-    if (GetParam()) {
-      test_features_.InitAndEnableFeaturesWithParameters(
-          /*allow_and_enable_features=*/
-          {
-              {commerce::kPriceInsights,
-               {{commerce::kPriceInsightsChipLabelExpandOnHighPriceParam,
-                 "true"}}},
-              {feature_engagement::kIPHPriceInsightsPageActionIconLabelFeature,
-               {}},
-              {
-                  ::features::kPageActionsMigration,
-                  {
-                      {::features::kPageActionsMigrationPriceInsights.name,
-                       "true"},
-                  },
-              },
-
-          },
-          /*disable_features=*/{});
-    } else {
-      test_features_.InitAndEnableFeaturesWithParameters(
-          /*allow_and_enable_features=*/
-          {
-              {
-                  commerce::kPriceInsights,
-                  {{commerce::kPriceInsightsChipLabelExpandOnHighPriceParam,
-                    "true"}},
-              },
-              {feature_engagement::kIPHPriceInsightsPageActionIconLabelFeature,
-               {}},
-          },
-          /*disable_features=*/{::features::kPageActionsMigration});
-    }
+  PriceInsightsIconViewWithLabelBrowserTest() {
+    test_features_.InitAndEnableFeaturesWithParameters(
+        /*allow_and_enable_features=*/
+        {
+            {commerce::kPriceInsights,
+             {{commerce::kPriceInsightsChipLabelExpandOnHighPriceParam,
+               "true"}}},
+            {feature_engagement::kIPHPriceInsightsPageActionIconLabelFeature,
+             {}},
+        },
+        /*disable_features=*/{});
   }
 
   // UiBrowserTest:
@@ -268,21 +211,13 @@ class PriceInsightsIconViewWithLabelBrowserTest
   feature_engagement::test::ScopedIphFeatureList test_features_;
 };
 
-IN_PROC_BROWSER_TEST_P(PriceInsightsIconViewWithLabelBrowserTest,
+IN_PROC_BROWSER_TEST_F(PriceInsightsIconViewWithLabelBrowserTest,
                        InvokeUi_show_price_insights_icon_with_low_price_label) {
   ShowAndVerifyUi();
 }
 
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     PriceInsightsIconViewWithLabelBrowserTest,
     InvokeUi_show_price_insights_icon_with_high_price_label) {
   ShowAndVerifyUi();
 }
-
-INSTANTIATE_TEST_SUITE_P(All,
-                         PriceInsightsIconViewWithLabelBrowserTest,
-                         ::testing::Values(false, true),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "MigrationEnabled"
-                                             : "MigrationDisabled";
-                         });

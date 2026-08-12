@@ -112,7 +112,7 @@ std::optional<KernelMatrix> GetKernelMatrix(const Dictionary& dict,
       return std::nullopt;
     }
 
-    result.values.AppendVector(row);
+    result.values.append_range(row);
   }
 
   return result;
@@ -190,7 +190,7 @@ ComponentTransferFunction GetComponentTransferFunction(
   std::optional<Vector<float>> table_values =
       transfer_dict.Get<IDLSequence<IDLFloat>>("tableValues", exception_state);
   if (table_values.has_value()) {
-    result.table_values.AppendVector(*table_values);
+    result.table_values.append_range(*table_values);
   }
 
   return result;
@@ -501,9 +501,8 @@ FilterOperations CanvasFilterOperationResolver::CreateFilterOperationsFromList(
         const String& message =
             (!name.has_value())
                 ? "Canvas filter require key 'name' to specify filter type."
-                : String::Format(
-                      "\"%s\" is not among supported canvas filter types.",
-                      name->Utf8().c_str());
+                : StrCat({"\"", *name,
+                          "\" is not among supported canvas filter types."});
         execution_context.AddConsoleMessage(
             MakeGarbageCollected<ConsoleMessage>(
                 mojom::blink::ConsoleMessageSource::kRendering,
@@ -538,12 +537,19 @@ CanvasFilterOperationResolver::CreateFilterOperationsFromCSSFilter(
   if (!css_value || css_value->IsCSSWideKeyword()) {
     return operations;
   }
-  // The style resolution for fonts is not available in frame-less documents.
+  // The style resolution is not available in frame-less documents.
   if (style_resolution_host != nullptr &&
       style_resolution_host->GetDocument().GetFrame() != nullptr) {
-    return style_resolution_host->GetDocument()
-        .GetStyleResolver()
-        .ComputeFilterOperations(style_resolution_host, *font, *css_value);
+    Document& document = style_resolution_host->GetDocument();
+
+    // Update the filter value to the proper base URL if needed.
+    if (css_value->MayContainUrl()) {
+      document.UpdateStyleAndLayout(DocumentUpdateReason::kCanvas);
+      css_value->ReResolveUrl(document);
+    }
+
+    return document.GetStyleResolver().ComputeFilterOperations(
+        style_resolution_host, *font, *css_value);
   } else {
     return FilterOperationResolver::CreateOffscreenFilterOperations(*css_value,
                                                                     font);

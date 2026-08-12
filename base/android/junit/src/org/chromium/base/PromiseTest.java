@@ -18,18 +18,16 @@ import static org.chromium.base.test.util.Matchers.rejectedPromise;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Promise.UnhandledRejectionException;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
 import java.util.function.Function;
 
 /** Unit tests for {@link Promise}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class PromiseTest {
     // We need a simple mutable reference type for testing.
     private static class Value {
@@ -55,6 +53,7 @@ public class PromiseTest {
         assertEquals(0, value.get());
 
         promise.fulfill(1);
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(1, value.get());
     }
 
@@ -65,7 +64,7 @@ public class PromiseTest {
 
         Promise<Integer> promise = new Promise<>();
         Callback<Integer> callback =
-                unusedArg -> {
+                _ -> {
                     value.set(value.get() + 1);
                 };
         promise.then(callback);
@@ -74,6 +73,7 @@ public class PromiseTest {
         assertEquals(0, value.get());
 
         promise.fulfill(0);
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(2, value.get());
     }
 
@@ -87,6 +87,7 @@ public class PromiseTest {
 
         promise.then(PromiseTest.setValue(value, 1));
 
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(1, value.get());
     }
 
@@ -104,7 +105,7 @@ public class PromiseTest {
                         });
 
         promise.fulfill(123);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(6, value.get());
     }
 
@@ -125,11 +126,11 @@ public class PromiseTest {
         assertEquals(0, value.get());
 
         promise.fulfill(5);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(0, value.get());
 
         innerPromise.fulfill("abc");
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(3, value.get());
     }
 
@@ -141,7 +142,7 @@ public class PromiseTest {
         boolean caught = false;
         try {
             promise.reject();
-            ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+            RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         } catch (UnhandledRejectionException e) {
             caught = true;
         }
@@ -157,7 +158,7 @@ public class PromiseTest {
         boolean caught = false;
         try {
             promise.reject();
-            ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+            RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         } catch (UnhandledRejectionException e) {
             caught = true;
         }
@@ -173,7 +174,7 @@ public class PromiseTest {
         boolean caught = false;
         try {
             promise.reject();
-            ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+            RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         } catch (UnhandledRejectionException e) {
             caught = true;
         }
@@ -189,7 +190,7 @@ public class PromiseTest {
         String message = "Promise Test";
         try {
             promise.reject(new NegativeArraySizeException(message));
-            ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+            RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
             fail();
         } catch (UnhandledRejectionException e) {
             assertTrue(e.getCause() instanceof NegativeArraySizeException);
@@ -208,7 +209,7 @@ public class PromiseTest {
         result.then(PromiseTest.pass(), PromiseTest.setValue(value, 5));
 
         promise.reject(new Exception());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         assertEquals(5, value.get());
         assertTrue(result.isRejected());
@@ -216,38 +217,40 @@ public class PromiseTest {
 
     /** Tests that Promises get rejected if a Function throws. */
     @Test
+    @SuppressWarnings("unchecked")
     public void rejectOnThrow() {
         Value value = new Value();
         Promise<Integer> promise = new Promise<>();
         promise.then(
                         (Function)
-                                unusedArg -> {
+                                _ -> {
                                     throw new IllegalArgumentException();
                                 })
                 .then(PromiseTest.pass(), PromiseTest.setValue(value, 5));
 
         promise.fulfill(0);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(5, value.get());
     }
 
     /** Tests that Promises get rejected if an AsyncFunction throws. */
     @Test
+    @SuppressWarnings("unchecked")
     public void rejectOnAsyncThrow() {
         Value value = new Value();
         Promise<Integer> promise = new Promise<>();
 
         promise.then(
                         (Promise.AsyncFunction)
-                                unusedArg -> {
+                                _ -> {
                                     throw new IllegalArgumentException();
                                 })
                 .then(PromiseTest.pass(), PromiseTest.setValue(value, 5));
 
         promise.fulfill(0);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(5, value.get());
     }
 
@@ -258,16 +261,16 @@ public class PromiseTest {
         Promise<Integer> promise = new Promise<>();
         final Promise<Integer> inner = new Promise<>();
 
-        promise.then(unusedArg -> inner).then(PromiseTest.pass(), PromiseTest.setValue(value, 5));
+        promise.then(_ -> inner).then(PromiseTest.pass(), PromiseTest.setValue(value, 5));
 
         promise.fulfill(0);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(0, value.get());
 
         inner.reject();
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(5, value.get());
     }
 
@@ -281,7 +284,7 @@ public class PromiseTest {
 
         promise.fulfill(0);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(5, value.get());
     }
 
@@ -295,7 +298,7 @@ public class PromiseTest {
 
         promise.reject();
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertEquals(5, value.get());
     }
 
@@ -313,6 +316,7 @@ public class PromiseTest {
         assertThat(chainedPromise, is(pendingPromise()));
 
         promise.fulfill(123);
+        RobolectricUtil.runAllBackgroundAndUi();
         assertThat(chainedPromise, is(fulfilledPromise()));
         assertEquals(10, value.get());
         assertEquals(3, chainedPromise.getResult().intValue());
@@ -332,13 +336,22 @@ public class PromiseTest {
         assertThat(chainedPromise, is(pendingPromise()));
 
         promise.reject();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(10, value.get()); // Both `andFinally()` still run.
         assertThat(chainedPromise, is(rejectedPromise()));
     }
 
+    @Test
+    public void testMultipleHandlersAllowed() {
+        Promise<Integer> promise = new Promise<>();
+        promise.except(_ -> {});
+        // This should not throw an AssertionError anymore.
+        promise.then(_ -> {}, _ -> {});
+    }
+
     /** Convenience method that returns a Callback that does nothing with its result. */
     private static <T> Callback<T> pass() {
-        return unusedArg -> {};
+        return _ -> {};
     }
 
     /** Convenience method that returns a Function that just passes through its argument. */
@@ -348,7 +361,7 @@ public class PromiseTest {
 
     /** Convenience method that returns a Callback that sets the given Value on execution. */
     private static <T> Callback<T> setValue(final Value toSet, final int value) {
-        return unusedArg -> {
+        return _ -> {
             toSet.set(value);
         };
     }

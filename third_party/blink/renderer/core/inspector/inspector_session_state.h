@@ -38,11 +38,11 @@ class CORE_EXPORT InspectorSessionState {
 
   // Yields and consumes the field updates that have thus far accumulated.
   // These updates are sent back to DevToolsSession on the browser side.
-  mojom::blink::DevToolsSessionStatePtr TakeUpdates();
+  mojom::blink::RendererOriginatingSessionStatePtr TakeUpdates();
 
  private:
   const mojom::blink::DevToolsSessionStatePtr reattach_state_;
-  mojom::blink::DevToolsSessionStatePtr updates_;
+  mojom::blink::RendererOriginatingSessionStatePtr updates_;
 };
 
 // InspectorAgentState connects the fields of inspector agents
@@ -146,10 +146,15 @@ class CORE_EXPORT InspectorAgentState {
     void Decode() override {
       const mojom::blink::DevToolsSessionState* reattach_state =
           session_state_->ReattachState();
-      if (!reattach_state)
+      if (!reattach_state ||
+          !reattach_state->renderer_originating_session_state) {
         return;
-      auto it = reattach_state->entries.find(prefix_key_);
-      if (it != reattach_state->entries.end()) {
+      }
+      auto it =
+          reattach_state->renderer_originating_session_state->entries.find(
+              prefix_key_);
+      if (it !=
+          reattach_state->renderer_originating_session_state->entries.end()) {
         Deserialize(crdtp::span<uint8_t>(it->value->data(), it->value->size()),
                     &value_);
       }
@@ -230,14 +235,18 @@ class CORE_EXPORT InspectorAgentState {
     void Decode() override {
       const mojom::blink::DevToolsSessionState* reattach_state =
           session_state_->ReattachState();
-      if (!reattach_state)
+      if (!reattach_state ||
+          !reattach_state->renderer_originating_session_state) {
         return;
+      }
       // TODO(johannes): Avoid scanning all keys, let session_state_ provide
       // the keys that match a prefix.
-      for (const auto& entry : reattach_state->entries) {
-        if (!entry.key.StartsWith(prefix_key_))
+      for (const auto& entry :
+           reattach_state->renderer_originating_session_state->entries) {
+        if (!entry.key.starts_with(prefix_key_)) {
           continue;
-        blink::String suffix_key = entry.key.Substring(prefix_key_.length());
+        }
+        blink::String suffix_key = entry.key.substr(prefix_key_.length());
         ValueType v;
         if (Deserialize(
                 crdtp::span<uint8_t>(entry.value->data(), entry.value->size()),
@@ -257,7 +266,6 @@ class CORE_EXPORT InspectorAgentState {
   using String = SimpleField<blink::String>;
   using Bytes = SimpleField<std::vector<uint8_t>>;
   using BooleanMap = MapField<bool>;
-  using IntegerMap = MapField<int32_t>;
   using DoubleMap = MapField<double>;
   using StringMap = MapField<blink::String>;
 

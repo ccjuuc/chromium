@@ -164,10 +164,11 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
     return use_last_baseline_for_inline_baseline_;
   }
 
-  // Some scroll-containers will force baseline synthesis for the inline-block
-  // baseline algorithm.
+  // Some block-axis scroll-containers will force baseline synthesis for the
+  // inline-block baseline algorithm.
   bool ForceInlineBaselineSynthesis() const {
     return use_last_baseline_for_inline_baseline_ && IsScrollContainer() &&
+           Style().IsOverflowValueScrollableBlock() &&
            !Style().ShouldIgnoreOverflowPropertyForInlineBlockBaseline();
   }
 
@@ -216,10 +217,13 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
     return nullptr;
   }
 
-  // The name of the page (if any) to which this fragment belongs. The page name
-  // is propagated all the way up to the page fragment, which is needed in order
-  // to support e.g. page orientation. See https://drafts.csswg.org/css-page-3
-  AtomicString PageName() const {
+  // The page name propagated from descendants of this fragment, not including
+  // any page name specified on this node directly. The page name is propagated
+  // all the way up to the page fragment, which is needed in order to support
+  // named pages.
+  //
+  // See https://drafts.csswg.org/css-page-3/#using-named-pages
+  AtomicString PropagatedPageName() const {
     if (const auto* field = GetRareField(FieldId::kPageName)) {
       return field->page_name;
     }
@@ -236,6 +240,13 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
 
   bool HasScrollableOverflow() const {
     return GetRareField(FieldId::kScrollableOverflow);
+  }
+
+  bool HasBorders() const { return !!GetRareField(FieldId::kBorders); }
+  bool HasScrollbar() const { return !!GetRareField(FieldId::kScrollbar); }
+  bool HasPadding() const { return !!GetRareField(FieldId::kPadding); }
+  bool HasInflowBounds() const {
+    return !!GetRareField(FieldId::kInflowBounds);
   }
 
   const PhysicalBoxStrut Borders() const {
@@ -346,12 +357,13 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
   // update them to use LayoutNG based overflow information from the fragment
   // and change them to use NG geometry types once LayoutNG supports overflow.
   PhysicalRect OverflowClipRect(
-      const PhysicalOffset& location,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize) const;
   PhysicalRect OverflowClipRect(
-      const PhysicalOffset& location,
       const BlockBreakToken* incoming_break_token,
       OverlayScrollbarClipBehavior = kIgnoreOverlayScrollbarSize) const;
+  // Returns the total offset of all overscroll area parents. This is used to
+  // shift content which is not within an overscroll area.
+  gfx::Vector2d PixelSnappedOverscrollContentOffset() const;
   gfx::Vector2d PixelSnappedScrolledContentOffset() const;
   PhysicalSize ScrollSize() const;
 
@@ -616,8 +628,10 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
 
 #if DCHECK_IS_ON()
   void InvalidateInkOverflow();
+#if EXPENSIVE_DCHECKS_ARE_ON()
   void AssertFragmentTreeSelf() const;
   void AssertFragmentTreeChildren(bool allow_destroyed_or_moved = false) const;
+#endif  // EXPENSIVE_DCHECKS_ARE_ON()
 #endif
 
  private:
@@ -656,11 +670,6 @@ class CORE_EXPORT PhysicalBoxFragment final : public PhysicalFragment {
   }
   bool IncludeBorderLeft() const {
     return bit_field_.get<IncludeBorderLeftFlag>();
-  }
-  bool HasBorders() const { return !!GetRareField(FieldId::kBorders); }
-  bool HasPadding() const { return !!GetRareField(FieldId::kPadding); }
-  bool HasInflowBounds() const {
-    return !!GetRareField(FieldId::kInflowBounds);
   }
 
   static size_t AdditionalByteSize(bool has_fragment_items);

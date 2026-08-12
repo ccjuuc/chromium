@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.tab_ui;
 
+import static org.junit.Assert.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -19,22 +20,21 @@ import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.JniOnceCallback;
 import org.chromium.base.Token;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_suggestion.GroupSuggestionsServiceFactory;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilterObserver;
+import org.chromium.chrome.browser.tabmodel.TabGroupObserver;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabwindow.WindowId;
@@ -56,78 +56,63 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabModel mTabModel;
     @Mock private Profile mProfile;
     @Mock private GroupSuggestionsService mGroupSuggestionsService;
     @Mock private SuggestionLifecycleObserverHandler mSuggestionLifecycleObserverHandler;
     @Mock private JniOnceCallback<UserResponseMetadata> mUserResponseCallback;
 
-    @Captor private ArgumentCaptor<TabGroupModelFilterObserver> mTabGroupModelFilterObserverCaptor;
+    @Captor private ArgumentCaptor<TabGroupObserver> mTabGroupObserverCaptor;
     @Captor private ArgumentCaptor<TabModelObserver> mTabModelObserverCaptor;
     @Captor private ArgumentCaptor<UserResponseMetadata> mUserResponseMetadataCaptor;
 
-    @Spy
-    private final ObservableSupplierImpl<TabGroupModelFilter> mTabGroupModelFilterSupplier =
-            new ObservableSupplierImpl<>();
-
+    private final SettableMonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
     private final ArrayList<Tab> mTabs = new ArrayList<>();
-
     private TabSwitcherGroupSuggestionService mService;
 
     @Before
     public void setUp() {
+        mTabModelSupplier.set(mTabModel);
         GroupSuggestionsServiceFactory.setGroupSuggestionsServiceForTesting(
                 mGroupSuggestionsService);
 
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.getProfile()).thenReturn(mProfile);
         when(mTabModel.iterator()).thenAnswer(inv -> mTabs.iterator());
-
-        mTabGroupModelFilterSupplier.set(mTabGroupModelFilter);
 
         mService =
                 new TabSwitcherGroupSuggestionService(
                         WINDOW_ID,
-                        mTabGroupModelFilterSupplier,
+                        mTabModelSupplier,
                         mProfile,
                         mSuggestionLifecycleObserverHandler);
     }
 
     @Test
     public void testConstructor_addsObservers() {
-        verify(mTabGroupModelFilter).addObserver(any());
-        verify(mTabGroupModelFilter).addTabGroupObserver(any());
+        verify(mTabModel).addObserver(any());
+        verify(mTabModel).addTabGroupObserver(any());
     }
 
     @Test
     public void testDestroy() {
         mService.destroy();
-        verify(mTabGroupModelFilterSupplier).removeObserver(any());
+        assertFalse(mTabModelSupplier.hasObservers());
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
     }
 
     @Test
     public void testFilterChanged_switchesObservers() {
-        TabGroupModelFilter newFilter = mock();
+        TabModel newFilter = mock();
 
-        mTabGroupModelFilterSupplier.set(newFilter);
-        ShadowLooper.runUiThreadTasks();
+        mTabModelSupplier.set(newFilter);
+        RobolectricUtil.runAllBackgroundAndUi();
 
-        verify(mTabGroupModelFilter).removeObserver(any());
-        verify(mTabGroupModelFilter).removeTabGroupObserver(any());
+        verify(mTabModel).removeObserver(any());
+        verify(mTabModel).removeTabGroupObserver(any());
 
         verify(newFilter).addObserver(any());
         verify(newFilter).addTabGroupObserver(any());
-    }
-
-    @Test
-    public void testFilterChanged_toNull() {
-        mTabGroupModelFilterSupplier.set(null);
-        ShadowLooper.runUiThreadTasks();
-
-        verify(mTabGroupModelFilter).removeObserver(any());
-        verify(mTabGroupModelFilter).removeTabGroupObserver(any());
     }
 
     @Test
@@ -232,7 +217,7 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
 
     @Test
     public void testTabModelObserver() {
-        verify(mTabGroupModelFilter).addObserver(mTabModelObserverCaptor.capture());
+        verify(mTabModel).addObserver(mTabModelObserverCaptor.capture());
         TabModelObserver observer = mTabModelObserverCaptor.getValue();
 
         Tab mockTab = mock();
@@ -262,10 +247,9 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
     }
 
     @Test
-    public void testTabGroupModelFilterObserver() {
-        verify(mTabGroupModelFilter)
-                .addTabGroupObserver(mTabGroupModelFilterObserverCaptor.capture());
-        TabGroupModelFilterObserver observer = mTabGroupModelFilterObserverCaptor.getValue();
+    public void testTabGroupObserver() {
+        verify(mTabModel).addTabGroupObserver(mTabGroupObserverCaptor.capture());
+        TabGroupObserver observer = mTabGroupObserverCaptor.getValue();
 
         Tab mockTab = mock();
 
@@ -281,7 +265,7 @@ public class TabSwitcherGroupSuggestionServiceUnitTest {
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);
-        observer.didCreateNewGroup(mockTab, mTabGroupModelFilter);
+        observer.didCreateNewGroup(mockTab, mTabModel);
         verify(mSuggestionLifecycleObserverHandler).onSuggestionIgnored();
 
         reset(mSuggestionLifecycleObserverHandler);

@@ -25,10 +25,12 @@
 #include "media/formats/hls/types.h"
 #include "media/formats/hls/variable_dictionary.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace media::hls {
 
 struct MediaPlaylist::CtorArgs {
+  url::Origin security_origin;
   GURL uri;
   types::DecimalInteger version;
   bool independent_segments;
@@ -52,7 +54,8 @@ MediaPlaylist::~MediaPlaylist() = default;
 // static
 ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
     std::string_view source,
-    GURL uri,
+    GURL playlist_uri,
+    url::Origin playlist_origin,
     types::DecimalInteger version,
     const MultivariantPlaylist* parent_playlist) {
   DCHECK(version != 0);
@@ -61,8 +64,18 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
     return ParseStatusCode::kPlaylistHasUnsupportedVersion;
   }
 
-  if (!uri.is_valid()) {
+  if (!playlist_uri.is_valid()) {
     return ParseStatusCode::kInvalidUri;
+  }
+
+  GURL resolution_uri;
+  if (playlist_uri.SchemeIs("data")) {
+    if (!parent_playlist) {
+      return ParseStatusCode::kInvalidUri;
+    }
+    resolution_uri = parent_playlist->Uri();
+  } else {
+    resolution_uri = playlist_uri;
   }
 
   SourceLineIterator src_iter{source};
@@ -97,6 +110,7 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
   bool new_encryption_data = false;
 
   types::DecimalInteger discontinuity_sequence_number = 0;
+  std::optional<base::Time> current_pdt;
 
   // If this media playlist was found through a multivariant playlist, it may
   // import variables from that playlist.
@@ -240,7 +254,8 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
             }
             encryption_data = nullptr;
           } else {
-            auto resource_uri = uri.Resolve(value.uri.value().Str());
+            auto declared_uri_value = value.uri.value().Str();
+            auto resource_uri = resolution_uri.Resolve(declared_uri_value);
             if (!resource_uri.is_valid()) {
               return ParseStatusCode::kInvalidUri;
             }
@@ -262,7 +277,7 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
           auto value = std::move(result).value();
 
           // Resolve the URI against the playlist URI
-          auto resource_uri = uri.Resolve(value.uri.Str());
+          auto resource_uri = resolution_uri.Resolve(value.uri.Str());
           if (!resource_uri.is_valid()) {
             return ParseStatusCode::kInvalidUri;
           }
@@ -319,8 +334,11 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
           break;
         }
         case MediaPlaylistTagName::kXProgramDateTime: {
-          // TODO(crbug.com/40057824): Implement the EXT-X-PROGRAM-DATE-TIME
-          // tag.
+          auto result = XProgramDateTimeTag::Parse(*tag);
+          if (!result.has_value()) {
+            return std::move(result).error();
+          }
+          current_pdt = std::move(result).value().time;
           break;
         }
         case MediaPlaylistTagName::kXRenditionReport: {
@@ -356,8 +374,10 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
     // `GetNextLineItem` should return either a TagItem (handled above) or a
     // UriItem.
     static_assert(std::variant_size<GetNextLineItemResult>() == 2);
-    auto segment_uri_result = ParseUri(std::get<UriItem>(std::move(item)), uri,
-                                       common_state, sub_buffer);
+
+    auto segment_uri_result =
+        ParseUri(std::get<UriItem>(std::move(item)), resolution_uri,
+                 common_state, sub_buffer);
     if (!segment_uri_result.has_value()) {
       return std::move(segment_uri_result).error();
     }
@@ -418,9 +438,13 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
 
     segments.push_back(base::MakeRefCounted<MediaSegment>(
         inf_tag->duration, media_sequence_number, discontinuity_sequence_number,
-        std::move(segment_uri), initialization_segment, encryption_data,
-        byterange, bitrate, discontinuity_tag.has_value(), gap_tag.has_value(),
-        new_init_segment, new_encryption_data));
+        std::move(segment_uri), playlist_origin, initialization_segment,
+        encryption_data, byterange, bitrate, discontinuity_tag.has_value(),
+        gap_tag.has_value(), new_init_segment, new_encryption_data,
+        current_pdt));
+    if (current_pdt.has_value()) {
+      current_pdt = current_pdt.value() + inf_tag->duration;
+    }
     new_init_segment = false;
     new_encryption_data = false;
 
@@ -544,7 +568,8 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
 
   return base::MakeRefCounted<MediaPlaylist>(
       base::PassKey<MediaPlaylist>(),
-      CtorArgs{.uri = std::move(uri),
+      CtorArgs{.security_origin = playlist_origin,
+               .uri = std::move(playlist_uri),
                .version = version,
                .independent_segments = independent_segments,
                .target_duration = target_duration,
@@ -563,7 +588,10 @@ ParseStatus::Or<scoped_refptr<MediaPlaylist>> MediaPlaylist::Parse(
 }
 
 MediaPlaylist::MediaPlaylist(base::PassKey<MediaPlaylist>, CtorArgs args)
-    : Playlist(std::move(args.uri), args.version, args.independent_segments),
+    : Playlist(std::move(args.security_origin),
+               std::move(args.uri),
+               args.version,
+               args.independent_segments),
       target_duration_(args.target_duration),
       partial_segment_info_(std::move(args.partial_segment_info)),
       segments_(std::move(args.segments)),

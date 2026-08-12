@@ -9,12 +9,13 @@ import static androidx.test.espresso.action.ViewActions.longClick;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.isClickable;
 import static androidx.test.espresso.matcher.ViewMatchers.isEnabled;
-import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 
 import android.os.Build;
+import android.view.View;
 
 import androidx.test.filters.LargeTest;
 
@@ -30,16 +31,18 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.SupportedProfileType;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuTestSupport;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
+import org.chromium.chrome.test.util.BottomBarTestUtils;
 import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 
 /** Verifies the main user journeys for supervised users. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -109,8 +112,12 @@ public class SupervisedUserCriticalJourneysIntegrationTest {
     @Test
     @LargeTest
     @DisableIf.Build(sdk_equals = Build.VERSION_CODES.S_V2, message = "crbug.com/41485872")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288668
     public void incognitoModeIsUnavailableFromTabSwitcherActionMenu() {
-        onView(withId(R.id.tab_switcher_button)).perform(longClick());
+        View tabSwitcherBtn =
+                BottomBarTestUtils.findViewById(
+                        mActivityTestRule.getActivity(), R.id.tab_switcher_button);
+        onView(is(tabSwitcherBtn)).perform(longClick());
         int incognitoMenuItemStringId =
                 mActivityTestRule.getActivity().getSupportedProfileType()
                                 == SupportedProfileType.REGULAR

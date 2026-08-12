@@ -13,7 +13,6 @@
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
-#import "ios/chrome/browser/shared/public/commands/reader_mode_chip_commands.h"
 #import "ios/chrome/browser/shared/public/commands/reader_mode_options_commands.h"
 
 @implementation ReaderModeChipCoordinator {
@@ -26,19 +25,15 @@
 - (void)start {
   _viewController = [[ReaderModeChipViewController alloc] init];
   [self.baseViewController addChildViewController:_viewController];
-  [self.viewController didMoveToParentViewController:_viewController];
-  [self.browser->GetCommandDispatcher()
-      startDispatchingToTarget:self
-                   forProtocol:@protocol(ReaderModeChipCommands)];
+  [_viewController didMoveToParentViewController:self.baseViewController];
   _readerModeChipFullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
-      FullscreenController::FromBrowser(self.browser), self.viewController);
+      FullscreenController::FromBrowser(self.browser), _viewController);
   _helpCommandsHandler =
       HandlerForProtocol(self.browser->GetCommandDispatcher(), HelpCommands);
 }
 
 - (void)stop {
   _readerModeChipFullscreenUIUpdater = nullptr;
-  [self.browser->GetCommandDispatcher() stopDispatchingToTarget:self];
   [_viewController willMoveToParentViewController:nil];
   [_viewController removeFromParentViewController];
   _viewController = nil;

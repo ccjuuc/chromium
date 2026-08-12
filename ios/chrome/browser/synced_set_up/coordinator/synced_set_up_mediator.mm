@@ -11,7 +11,6 @@
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/prefs/pref_service.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/signin/public/identity_manager/primary_account_change_event.h"
@@ -31,8 +30,9 @@
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message_action.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/browser/synced_set_up/coordinator/synced_set_up_mediator_delegate.h"
 #import "ios/chrome/browser/synced_set_up/public/synced_set_up_metrics.h"
@@ -403,18 +403,18 @@ void LogSnackbarInteraction(SyncedSetUpState state,
   return NO;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Called when the primary account changes (e.g., sign-in, sign-out, account
 // switch).
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   [self updatePrimaryIdentity];
 }
 
 // Called when the extended account info (i.e., name and avatar) is
 // updated/fetched.
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   if (!_primaryIdentity || _primaryIdentity.gaiaId != info.gaia) {
     return;
   }
@@ -476,7 +476,7 @@ void LogSnackbarInteraction(SyncedSetUpState state,
 // consumer.
 - (void)updatePrimaryIdentity {
   id<SystemIdentity> newPrimaryIdentity =
-      _authenticationService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+      _authenticationService->GetPrimaryIdentity();
 
   if (newPrimaryIdentity == _primaryIdentity) {
     return;
@@ -504,8 +504,7 @@ void LogSnackbarInteraction(SyncedSetUpState state,
   // Get the avatar. `GetIdentityAvatarWithIdentityOnDevice()` handles
   // asynchronous loading. It returns a cached image or a placeholder
   // immediately and initiates a fetch in the background if necessary. When the
-  // fetch completes,
-  // `-onExtendedAccountInfoUpdated:` will be called.
+  // fetch completes, `-extendedAccountInfoDidUpdate:` will be called.
   UIImage* avatar =
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           _primaryIdentity, IdentityAvatarSize::Large);
@@ -513,7 +512,8 @@ void LogSnackbarInteraction(SyncedSetUpState state,
   [_consumer setWelcomeMessage:
                  l10n_util::GetNSStringF(
                      IDS_IOS_SYNCED_SET_UP_WELCOME_MESSAGE_WITH_USER_NAME_TITLE,
-                     base::SysNSStringToUTF16(_primaryIdentity.userGivenName))];
+                     base::SysNSStringToUTF16(
+                         UserGivenNameFullNameOrEmail(_primaryIdentity)))];
   [_consumer setAvatarImage:avatar];
 }
 

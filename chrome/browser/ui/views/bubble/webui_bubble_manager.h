@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -17,6 +18,8 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_manager_observer.h"
@@ -26,6 +29,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/widget/widget.h"
@@ -38,9 +42,10 @@ class WebUIBubbleDialogView;
 // This is needed to deal with the asynchronous presentation of WebUI.
 class WebUIBubbleManager : public views::WidgetObserver {
  public:
+  using Anchor = std::variant<views::View*, gfx::Rect>;
+
   template <typename Controller>
   static std::unique_ptr<WebUIBubbleManager> Create(
-      views::View* anchor_view,
       BrowserWindowInterface* browser_window_interface,
       const GURL& webui_url,
       int task_manager_string_id,
@@ -55,7 +60,7 @@ class WebUIBubbleManager : public views::WidgetObserver {
   // hidden and will be made visible at a later time when the page invokes
   // `MojoBubbleWebUIController::Embedder::ShowUI()`.
   bool ShowBubble(
-      const std::optional<gfx::Rect>& anchor = std::nullopt,
+      Anchor anchor,
       views::BubbleBorder::Arrow arrow = views::BubbleBorder::TOP_RIGHT,
       ui::ElementIdentifier identifier = ui::ElementIdentifier());
 
@@ -89,18 +94,17 @@ class WebUIBubbleManager : public views::WidgetObserver {
   }
   void ResetContentsWrapperForTesting();
   void DisableCloseBubbleHelperForTesting();
-  WebUIContentsWrapper* GetContentsWrapperForTesting();
+
+  // Gets the WebUIContentsWrapper. This is available after calling
+  // ShowBubble().
+  virtual WebUIContentsWrapper* GetContentsWrapper() = 0;
 
  protected:
   WebUIBubbleManager();
 
   virtual base::WeakPtr<WebUIBubbleDialogView> CreateWebUIBubbleDialog(
-      const std::optional<gfx::Rect>& anchor,
+      Anchor anchor,
       views::BubbleBorder::Arrow arrow) = 0;
-
-  // Gets the WebUIContentsWrapper. This is available after calling
-  // ShowBubble().
-  virtual WebUIContentsWrapper* GetContentsWrapper() = 0;
 
   WebUIContentsWrapper* cached_contents_wrapper() {
     return cached_contents_wrapper_.get();
@@ -141,7 +145,7 @@ class WebUIBubbleManager : public views::WidgetObserver {
       bubble_widget_observation_{this};
 
   // This is necessary to prevent a bug closing the active tab in the bubble.
-  // See https://crbug.com/1139028.
+  // See https://crbug.com/40153251.
   std::unique_ptr<CloseBubbleOnTabActivationHelper> close_bubble_helper_;
 
   // Controls whether `close_bubble_helper_` is set when ShowBubble() is called.
@@ -151,13 +155,11 @@ class WebUIBubbleManager : public views::WidgetObserver {
 template <typename T>
 class WebUIBubbleManagerImpl : public WebUIBubbleManager {
  public:
-  WebUIBubbleManagerImpl(views::View* anchor_view,
-                         BrowserWindowInterface* browser_window_interface,
+  WebUIBubbleManagerImpl(BrowserWindowInterface* browser_window_interface,
                          const GURL& webui_url,
                          int task_manager_string_id,
                          bool force_load_on_create)
-      : anchor_view_(anchor_view),
-        browser_window_interface_(browser_window_interface),
+      : browser_window_interface_(browser_window_interface),
         webui_url_(webui_url),
         task_manager_string_id_(task_manager_string_id),
         force_load_on_create_(force_load_on_create) {}
@@ -166,11 +168,10 @@ class WebUIBubbleManagerImpl : public WebUIBubbleManager {
  private:
   // WebUIBubbleManager:
   base::WeakPtr<WebUIBubbleDialogView> CreateWebUIBubbleDialog(
-      const std::optional<gfx::Rect>& anchor,
+      Anchor anchor,
       views::BubbleBorder::Arrow arrow) override;
   WebUIContentsWrapper* GetContentsWrapper() override;
 
-  const raw_ptr<views::View> anchor_view_;
   const raw_ptr<BrowserWindowInterface> browser_window_interface_;
   const GURL webui_url_;
   const int task_manager_string_id_;
@@ -183,20 +184,19 @@ class WebUIBubbleManagerImpl : public WebUIBubbleManager {
 
 template <typename Controller>
 std::unique_ptr<WebUIBubbleManager> WebUIBubbleManager::Create(
-    views::View* anchor_view,
     BrowserWindowInterface* browser_window_interface,
     const GURL& webui_url,
     int task_manager_string_id,
     bool force_load_on_create) {
   return std::make_unique<WebUIBubbleManagerImpl<Controller>>(
-      anchor_view, browser_window_interface, webui_url, task_manager_string_id,
+      browser_window_interface, webui_url, task_manager_string_id,
       force_load_on_create);
 }
 
 template <typename T>
 base::WeakPtr<WebUIBubbleDialogView>
 WebUIBubbleManagerImpl<T>::CreateWebUIBubbleDialog(
-    const std::optional<gfx::Rect>& anchor,
+    Anchor anchor,
     views::BubbleBorder::Arrow arrow) {
   WebUIContentsWrapper* contents_wrapper = nullptr;
 
@@ -222,8 +222,27 @@ WebUIBubbleManagerImpl<T>::CreateWebUIBubbleDialog(
     contents_wrapper->ReloadWebContents();
   }
 
+  views::View* anchor_view = nullptr;
+  std::optional<gfx::Rect> anchor_rect;
+  if (std::holds_alternative<views::View*>(anchor)) {
+    anchor_view = std::get<views::View*>(anchor);
+    CHECK(anchor_view);
+  } else {
+    anchor_rect = std::get<gfx::Rect>(anchor);
+  }
+
   auto bubble_view = std::make_unique<WebUIBubbleDialogView>(
-      anchor_view_, contents_wrapper->GetWeakPtr(), anchor, arrow);
+      anchor_view, contents_wrapper->GetWeakPtr(), anchor_rect, arrow);
+
+  // Anchor bubbles with no `anchor_view` to their host browsers.
+  if (!anchor_view) {
+    gfx::NativeWindow parent_window =
+        browser_window_interface_->GetWindow()->GetNativeWindow();
+    if (parent_window) {
+      bubble_view->set_parent_window(
+          platform_util::GetViewForWindow(parent_window));
+    }
+  }
 
   if (!widget_initialization_callback_.is_null()) {
     bubble_view->RegisterWidgetInitializedCallback(

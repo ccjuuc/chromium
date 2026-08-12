@@ -12,29 +12,19 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
 #include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
+#include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/test/split_view_browser_test_mixin.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/common/drop_data.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/dragdrop/drag_drop_types.h"
-#include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/base/interaction/element_identifier.h"
-#include "ui/base/interaction/element_tracker.h"
-#include "ui/events/test/event_generator.h"
-#include "ui/gfx/geometry/point_f.h"
-#include "ui/ozone/public/ozone_platform.h"
 #include "ui/views/interaction/element_tracker_views.h"
-#include "ui/views/view_class_properties.h"
-#include "ui/views/widget/widget_utils.h"
 
 class MockTabDragController : public TabDragTarget::DragController {
  public:
@@ -43,6 +33,7 @@ class MockTabDragController : public TabDragTarget::DragController {
               (int drag_idx),
               (override));
   MOCK_METHOD(const DragSessionData&, GetSessionData, (), (const, override));
+  MOCK_METHOD(const TabDragContext*, GetAttachedContext, (), (const, override));
 };
 
 class MultiContentsViewDropTargetControllerBrowserTest
@@ -52,8 +43,8 @@ class MultiContentsViewDropTargetControllerBrowserTest
     SplitViewBrowserTestMixin::SetUpOnMainThread();
     delegate_ = std::make_unique<MultiContentsViewDelegateImpl>(*browser());
     controller_ = std::make_unique<MultiContentsViewDropTargetController>(
-        *drop_target_view(), *delegate_.get(),
-        g_browser_process->local_state());
+        *drop_target_view(), *delegate_.get(), g_browser_process->local_state(),
+        browser()->tab_strip_model());
   }
 
   void TearDownOnMainThread() override {
@@ -62,9 +53,14 @@ class MultiContentsViewDropTargetControllerBrowserTest
   }
 
   MultiContentsViewDropTargetController& controller() { return *controller_; }
-  TabStrip* tabstrip() { return browser()->GetBrowserView().tabstrip(); }
+  TabStrip* tabstrip() {
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->horizontal_tab_strip_for_testing();
+  }
 
-  int GetViewWidth() { return browser()->GetBrowserView().width(); }
+  int GetViewWidth() {
+    return BrowserView::GetBrowserViewForBrowser(browser())->width();
+  }
 
   void SimulateTabDrag(
       bool is_maximized,
@@ -83,7 +79,7 @@ class MultiContentsViewDropTargetControllerBrowserTest
 
     // Maximize the browser if necessary
     if (is_maximized) {
-      browser()->GetBrowserView().Maximize();
+      BrowserView::GetBrowserViewForBrowser(browser())->Maximize();
       EXPECT_TRUE(ui_test_utils::WaitForMaximized(browser()));
     }
 

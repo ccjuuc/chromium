@@ -9,7 +9,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/device_notifications/device_pinned_notification_unittest.h"
-#include "chrome/browser/usb/usb_connection_tracker.h"
 #include "chrome/browser/usb/usb_connection_tracker_factory.h"
 #include "chrome/browser/usb/usb_test_utils.h"
 #include "chrome/grit/branded_strings.h"
@@ -30,7 +29,8 @@ class UsbPinnedNotificationTest : public DevicePinnedNotificationTestBase {
             /*device_content_settings_label=*/u"USB settings") {}
 
   void ResetTestingBrowserProcessSystemTrayIcon() override {
-    TestingBrowserProcess::GetGlobal()->SetUsbSystemTrayIcon(nullptr);
+    TestingBrowserProcess::GetGlobal()->set_usb_system_tray_icon_for_test(
+        nullptr);
   }
 
   std::u16string GetExpectedTitle(size_t num_origins,

@@ -10,10 +10,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace updater {
@@ -30,7 +31,7 @@ TEST_F(PolicyManagerTests, NoPolicies) {
 }
 
 TEST_F(PolicyManagerTests, InvalidPolicies) {
-  base::Value::Dict policies;
+  base::DictValue policies;
   policies.Set("autoupdatecheckperiodminutes", "NotAnInteger");
 
   scoped_refptr<PolicyManagerInterface> policy_manager =
@@ -69,7 +70,7 @@ TEST_F(PolicyManagerTests, InvalidPolicies) {
 }
 
 TEST_F(PolicyManagerTests, PolicyRead) {
-  base::Value::Dict policies;
+  base::DictValue policies;
 
   policies.Set("autoupdatecheckperiodminutes", 480);
   policies.Set("updatessuppressedstarthour", 2);
@@ -157,7 +158,7 @@ TEST_F(PolicyManagerTests, PolicyRead) {
 }
 
 TEST_F(PolicyManagerTests, WrongPolicyValueType) {
-  base::Value::Dict policies;
+  base::DictValue policies;
 
   // Set global policies.
   policies.Set("autoupdatecheckperiodminutes", "NotAnInteger");

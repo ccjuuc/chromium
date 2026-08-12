@@ -9,15 +9,18 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "chrome/browser/extensions/api/settings_private/generated_pref_test_base.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/safe_browsing/generated_safe_browsing_pref.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/ui/browser_manager_service.h"
+#include "chrome/browser/ui/browser_manager_service_factory.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -36,11 +39,11 @@
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
-#include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
-#include "content/public/test/web_contents_tester.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "url/gurl.h"
 
 class Profile;
@@ -52,6 +55,63 @@ const bool kTailoredSecurityEnabled = true;
 const bool kTailoredSecurityDisabled = false;
 
 namespace {
+class DummyBaseWindow : public ui::BaseWindow {
+ public:
+  bool IsActive() const override { return false; }
+  bool IsMaximized() const override { return false; }
+  bool IsMinimized() const override { return false; }
+  bool IsFullscreen() const override { return false; }
+  gfx::NativeWindow GetNativeWindow() const override {
+    return gfx::NativeWindow();
+  }
+  gfx::Rect GetRestoredBounds() const override { return gfx::Rect(); }
+  ui::mojom::WindowShowState GetRestoredState() const override {
+    return ui::mojom::WindowShowState::kDefault;
+  }
+  gfx::Rect GetBounds() const override { return gfx::Rect(); }
+  void Show() override {}
+  void Hide() override {}
+  bool IsVisible() const override { return true; }
+  void ShowInactive() override {}
+  void Close() override {}
+  void Activate() override {}
+  void Deactivate() override {}
+  void Maximize() override {}
+  void Minimize() override {}
+  void Restore() override {}
+  void SetBounds(const gfx::Rect& bounds) override {}
+  void FlashFrame(bool flash) override {}
+  ui::ZOrderLevel GetZOrderLevel() const override {
+    return ui::ZOrderLevel::kNormal;
+  }
+  void SetZOrderLevel(ui::ZOrderLevel order) override {}
+#if BUILDFLAG(IS_ANDROID)
+  bool CanResize(ui::WindowResizePrecheckResult& result) const override {
+    return false;
+  }
+#endif
+};
+
+class FakeBrowserManagerService : public BrowserManagerService {
+ public:
+  explicit FakeBrowserManagerService(Profile* profile)
+      : BrowserManagerService(profile) {}
+  ~FakeBrowserManagerService() override = default;
+
+  // Inject the mock browser to be returned.
+  void set_mock_browser(BrowserWindowInterface* mock) { mock_ = mock; }
+
+  // ProfileBrowserCollection:
+  BrowserVector GetBrowsers(Order order) override {
+    if (mock_) {
+      return {mock_};
+    }
+    return {};
+  }
+
+ private:
+  raw_ptr<BrowserWindowInterface> mock_ = nullptr;
+};
 // (TODO:crbug.com/394659061): We extracted the preference based retry logic to
 // a new class, however, we need to find a way to mock the new handler and test
 // the intended behavior. Explicitly the history sync on and policy controlled
@@ -145,6 +205,11 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
   // will need to call `SetUpPrerequisites()` from their `SetUp()` method.
   void SetUpPrerequisites(bool history_sync_enabled,
                           bool policy_controlled_sb_enabled) {
+    if (mock_browser_ && profile_) {
+      static_cast<FakeBrowserManagerService*>(
+          BrowserManagerServiceFactory::GetForProfile(profile_))
+          ->set_mock_browser(nullptr);
+    }
     if (profile_manager_needs_setup_) {
       ASSERT_TRUE(profile_manager_.SetUp());
     }
@@ -181,13 +246,24 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
 
     // This may be called multiple times, we must reset the original test
     // browser and its associated window.
-    browser_.reset();
+    mock_browser_.reset();
+    mock_browser_ =
+        std::make_unique<testing::NiceMock<MockBrowserWindowInterface>>();
+    ON_CALL(*mock_browser_, GetType())
+        .WillByDefault(testing::Return(BrowserWindowInterface::TYPE_NORMAL));
+    ON_CALL(*mock_browser_, GetProfile())
+        .WillByDefault(testing::Return(profile()));
+    ON_CALL(*mock_browser_, IsDeleteScheduled())
+        .WillByDefault(testing::Return(false));
+    ON_CALL(*mock_browser_, GetWindow())
+        .WillByDefault(testing::Return(&dummy_window_));
+    ON_CALL(*mock_browser_, GetBrowserForMigrationOnly())
+        .WillByDefault(testing::Return(nullptr));
 
-    auto browser_window = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params(profile(), true);
-    params.type = Browser::TYPE_NORMAL;
-    params.window = browser_window.release();
-    browser_ = Browser::DeprecatedCreateOwnedForTesting(params);
+    // Get the injected fake service and hand it the mock.
+    static_cast<FakeBrowserManagerService*>(
+        BrowserManagerServiceFactory::GetForProfile(profile()))
+        ->set_mock_browser(mock_browser_.get());
     chrome_tailored_security_service_ =
         std::make_unique<TestChromeTailoredSecurityService>(profile_);
   }
@@ -206,18 +282,24 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
             [](content::BrowserContext*) -> std::unique_ptr<KeyedService> {
               return std::make_unique<syncer::TestSyncService>();
             }));
+    factories.emplace_back(
+        BrowserManagerServiceFactory::GetInstance(),
+        base::BindRepeating([](content::BrowserContext* context)
+                                -> std::unique_ptr<KeyedService> {
+          return std::make_unique<FakeBrowserManagerService>(
+              Profile::FromBrowserContext(context));
+        }));
     return factories;
   }
 
   void TearDown() override {
     // Remove any tabs in the tab strip otherwise the test will crash.
-    if (browser_) {
-      while (!browser_->tab_strip_model()->empty()) {
-        browser_->tab_strip_model()->DetachAndDeleteWebContentsAt(0);
-      }
+    if (mock_browser_ && profile_) {
+      static_cast<FakeBrowserManagerService*>(
+          BrowserManagerServiceFactory::GetForProfile(profile_))
+          ->set_mock_browser(nullptr);
     }
-
-    browser_.reset();
+    mock_browser_.reset();
     chrome_tailored_security_service_->Shutdown();
     chrome_tailored_security_service_.reset();
 
@@ -231,26 +313,6 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
 
   TestChromeTailoredSecurityService* tailored_security_service() {
     return chrome_tailored_security_service_.get();
-  }
-
-  Browser* browser() { return browser_.get(); }
-
-  // Add a tab with a test `content::WebContents` to the browser.
-  content::WebContents* AddTab(const GURL& url) {
-    std::unique_ptr<content::WebContents> web_contents(
-        content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
-    content::WebContents* raw_contents = web_contents.get();
-
-    browser()->tab_strip_model()->AppendWebContents(std::move(web_contents),
-                                                    true);
-    EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents(),
-              raw_contents);
-
-    content::NavigationSimulator::NavigateAndCommitFromBrowser(raw_contents,
-                                                               url);
-    EXPECT_EQ(url, raw_contents->GetLastCommittedURL());
-
-    return raw_contents;
   }
 
   sync_preferences::TestingPrefServiceSyncable* prefs() {
@@ -295,6 +357,7 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  base::test::ScopedFeatureList scoped_feature_list_;
 
  private:
   // Must be declared before anything that may make use of the
@@ -310,7 +373,8 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
       identity_test_env_adaptor_;
   TestingProfileManager profile_manager_;
   raw_ptr<TestingProfile> profile_;
-  std::unique_ptr<Browser> browser_;
+  std::unique_ptr<MockBrowserWindowInterface> mock_browser_;
+  DummyBaseWindow dummy_window_;
   std::unique_ptr<TestChromeTailoredSecurityService>
       chrome_tailored_security_service_;
   bool profile_manager_needs_setup_ = true;
@@ -323,8 +387,7 @@ class ChromeTailoredSecurityServiceTest : public testing::Test {
 TEST_F(ChromeTailoredSecurityServiceTest,
        TailoredSecurityEnabledShowsEnableDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   int initial_times_displayed =
       tailored_security_service()->times_dialog_displayed();
 
@@ -340,8 +403,7 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        TailoredSecurityEnabledButHistorySyncDisabledDoesNotShowEnableDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   int initial_times_displayed =
       tailored_security_service()->times_dialog_displayed();
 
@@ -359,8 +421,6 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        TailoredSecurityEnabledButHistorySyncDisabledLogsHistoryNotSynced) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
 
   // disable history sync
   sync_service()->GetUserSettings()->SetSelectedTypes(
@@ -378,8 +438,6 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        TailoredSecurityEnabledButHistorySyncEnabledDoesNotLogHistoryNotSynced) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
 
   // enable history sync
   sync_service()->GetUserSettings()->SetSelectedTypes(
@@ -396,8 +454,7 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 
 TEST_F(ChromeTailoredSecurityServiceTest, TsEnabledEnablesEp) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   EXPECT_FALSE(IsEnhancedProtectionEnabled(*prefs()));
   tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
                                                    base::Time::Now());
@@ -406,8 +463,7 @@ TEST_F(ChromeTailoredSecurityServiceTest, TsEnabledEnablesEp) {
 
 TEST_F(ChromeTailoredSecurityServiceTest, EpAlreadyEnabledDoesNotShowDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::ENHANCED_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   int initial_times_displayed =
       tailored_security_service()->times_dialog_displayed();
   tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
@@ -418,8 +474,7 @@ TEST_F(ChromeTailoredSecurityServiceTest, EpAlreadyEnabledDoesNotShowDialog) {
 
 TEST_F(ChromeTailoredSecurityServiceTest, EpAlreadyEnabledLeavesEpEnabled) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::ENHANCED_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   EXPECT_TRUE(IsEnhancedProtectionEnabled(*prefs()));
   tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
                                                    base::Time::Now());
@@ -429,8 +484,7 @@ TEST_F(ChromeTailoredSecurityServiceTest, EpAlreadyEnabledLeavesEpEnabled) {
 TEST_F(ChromeTailoredSecurityServiceTest,
        EpWasEnabledByTsAndTsNowDisabledShowsDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   int initial_times_displayed =
       tailored_security_service()->times_dialog_displayed();
   // Enable ESB - this will display the dialog once.
@@ -453,8 +507,7 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        EpEnabledByTsAndTsNowDisabledDisablesEp) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   // Enable ESB
   tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
                                                    base::Time::Now());
@@ -471,8 +524,7 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        SpEnabledAndTsNowDisabledDoesNotShowDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
+
   int initial_times_displayed =
       tailored_security_service()->times_dialog_displayed();
   tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityDisabled,
@@ -484,8 +536,6 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        SpEnabledAndTsNowDisabledDoesNotChangeSb) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::STANDARD_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
 
   EXPECT_FALSE(IsEnhancedProtectionEnabled(*prefs()));
   EXPECT_TRUE(IsSafeBrowsingEnabled(*prefs()));
@@ -499,8 +549,6 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        EpEnabledByUserTsDisabledDoesNotShowDialog) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::ENHANCED_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
 
   int times_dialog_displayed_before =
       tailored_security_service()->times_dialog_displayed();
@@ -513,8 +561,6 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 TEST_F(ChromeTailoredSecurityServiceTest,
        EpEnabledByUserTsDisabledDoesNotChangeSb) {
   SetSafeBrowsingState(prefs(), SafeBrowsingState::ENHANCED_PROTECTION);
-  const GURL google_url("https://www.google.com");
-  AddTab(google_url);
 
   EXPECT_TRUE(IsEnhancedProtectionEnabled(*prefs()));
   EXPECT_FALSE(prefs()->GetBoolean(
@@ -580,6 +626,191 @@ TEST_F(ChromeTailoredSecurityServiceTest,
 
   EXPECT_EQ(prefs()->GetInteger(prefs::kTailoredSecuritySyncFlowRetryState),
             safe_browsing::TailoredSecurityRetryState::NO_RETRY_NEEDED);
+}
+
+// TODO(crbug.com/483770964): Create a parameterized test suite that runs with
+// kBundledSecuritySettings enabled and disabled.
+TEST_F(ChromeTailoredSecurityServiceTest, EnableEnhancedBundlePref) {
+  // Set initial state.
+  scoped_feature_list_.InitAndEnableFeature(
+      safe_browsing::kBundledSecuritySettings);
+
+  // Verify initial preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::STANDARD);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+
+  // Set up an observer for generated Safe Browsing preferences.
+  GeneratedSafeBrowsingPref generatedSafeBrowsingPref(profile());
+  extensions::settings_private::TestGeneratedPrefObserver test_observer;
+  generatedSafeBrowsingPref.AddObserver(&test_observer);
+
+  // Enable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
+                                                   base::Time::Now());
+
+  // Verify current preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_TRUE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+}
+
+TEST_F(ChromeTailoredSecurityServiceTest, DisableEnhancedBundlePref) {
+  // Set initial state.
+  scoped_feature_list_.InitAndEnableFeature(
+      safe_browsing::kBundledSecuritySettings);
+
+  // Verify initial preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::STANDARD);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+
+  // Set up an observer for generated Safe Browsing preferences.
+  GeneratedSafeBrowsingPref generatedSafeBrowsingPref(profile());
+  extensions::settings_private::TestGeneratedPrefObserver test_observer;
+  generatedSafeBrowsingPref.AddObserver(&test_observer);
+
+  // Enable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
+                                                   base::Time::Now());
+
+  // Verify current preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_TRUE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+
+  // Disable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityDisabled,
+                                                   base::Time::Now());
+
+  // Verify current preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::STANDARD);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+}
+
+TEST_F(ChromeTailoredSecurityServiceTest,
+       EsbAlreadyEnabledBundlePrefNotChanged) {
+  // Set up an observer for generated Safe Browsing preferences.
+  GeneratedSafeBrowsingPref generatedSafeBrowsingPref(profile());
+  extensions::settings_private::TestGeneratedPrefObserver test_observer;
+  generatedSafeBrowsingPref.AddObserver(&test_observer);
+
+  // Set initial state.
+  scoped_feature_list_.InitAndEnableFeature(
+      safe_browsing::kBundledSecuritySettings);
+  SetSecurityBundleSetting(*prefs(), SecuritySettingsBundleSetting::ENHANCED);
+
+  // Verify initial preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+
+  // Attempt to enable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityEnabled,
+                                                   base::Time::Now());
+
+  // Verify that the current preference state has not changed.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  EXPECT_EQ(prefs()->GetInteger(prefs::kTailoredSecuritySyncFlowRetryState),
+            safe_browsing::TailoredSecurityRetryState::NO_RETRY_NEEDED);
+  test_observer.Reset();
+}
+
+TEST_F(ChromeTailoredSecurityServiceTest,
+       EsbAlreadyDisabledBundlePrefNotChanged) {
+  // Set initial state.
+  scoped_feature_list_.InitAndEnableFeature(
+      safe_browsing::kBundledSecuritySettings);
+
+  // Verify initial preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::STANDARD);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+
+  // Set up an observer for generated Safe Browsing preferences.
+  GeneratedSafeBrowsingPref generatedSafeBrowsingPref(profile());
+  extensions::settings_private::TestGeneratedPrefObserver test_observer;
+  generatedSafeBrowsingPref.AddObserver(&test_observer);
+
+  // Attempt to disable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityDisabled,
+                                                   base::Time::Now());
+
+  // Verify that the current preference state has not changed.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::STANDARD_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::STANDARD);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+}
+
+TEST_F(
+    ChromeTailoredSecurityServiceTest,
+    EnhancedBundleEnabledManuallyTailoredSecurityDisabledDoesNotChangeBundle) {
+  // Set up an observer for generated Safe Browsing preferences.
+  GeneratedSafeBrowsingPref generatedSafeBrowsingPref(profile());
+  extensions::settings_private::TestGeneratedPrefObserver test_observer;
+  generatedSafeBrowsingPref.AddObserver(&test_observer);
+
+  // Set initial state.
+  scoped_feature_list_.InitAndEnableFeature(
+      safe_browsing::kBundledSecuritySettings);
+  SetSecurityBundleSetting(*prefs(), SecuritySettingsBundleSetting::ENHANCED);
+
+  // Verify initial preference state.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
+
+  // Attempt to disable ESB through account integration.
+  tailored_security_service()->MaybeNotifySyncUser(kTailoredSecurityDisabled,
+                                                   base::Time::Now());
+
+  // Verify that the current preference state has not changed.
+  EXPECT_EQ(GetSafeBrowsingState(*prefs()),
+            SafeBrowsingState::ENHANCED_PROTECTION);
+  EXPECT_EQ(GetSecurityBundleSetting(*prefs()),
+            SecuritySettingsBundleSetting::ENHANCED);
+  EXPECT_FALSE(prefs()->GetBoolean(
+      prefs::kEnhancedProtectionEnabledViaTailoredSecurity));
+  test_observer.Reset();
 }
 
 }  // namespace safe_browsing

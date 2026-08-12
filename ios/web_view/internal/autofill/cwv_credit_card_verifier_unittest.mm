@@ -22,6 +22,7 @@
 #import "components/autofill/core/common/autofill_prefs.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/testing_pref_service.h"
+#import "ios/web/common/uikit_ui_util.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "ios/web/public/thread/web_task_traits.h"
 #import "ios/web/public/thread/web_thread.h"
@@ -53,12 +54,8 @@ class FakeCardUnmaskDelegate : public autofill::CardUnmaskDelegate {
     unmask_details_ = unmask_details;
     // Fake the actual verification and just respond with success.
     web::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(^{
-          autofill::payments::PaymentsAutofillClient::PaymentsRpcResult result =
-              autofill::payments::PaymentsAutofillClient::PaymentsRpcResult::
-                  kSuccess;
-          [credit_card_verifier_ didReceiveUnmaskVerificationResult:result];
-        }));
+        FROM_HERE, base::BindOnce(&FakeCardUnmaskDelegate::RespondSuccess,
+                                  weak_factory_.GetWeakPtr()));
   }
   void OnUnmaskPromptCancelled() override {}
   bool ShouldOfferFidoAuth() const override { return false; }
@@ -76,6 +73,14 @@ class FakeCardUnmaskDelegate : public autofill::CardUnmaskDelegate {
   }
 
  private:
+  void RespondSuccess() {
+    if (credit_card_verifier_) {
+      [credit_card_verifier_ didReceiveUnmaskVerificationResult:
+                                 autofill::payments::PaymentsAutofillClient::
+                                     PaymentsRpcResult::kSuccess];
+    }
+  }
+
   // Used to pass fake verification result back.
   __weak CWVCreditCardVerifier* credit_card_verifier_;
 
@@ -143,8 +148,9 @@ TEST_F(CWVCreditCardVerifierTest, Properties) {
   // ui::ResourceBundle will return a placeholder image at @1x scale if the
   // underlying resource id is not found. Since no @1x devices are supported
   // anymore, check to make sure the UIImage scale matches that of the UIScreen.
-  EXPECT_EQ(UIScreen.mainScreen.scale,
-            credit_card_verifier_.CVCHintImage.scale);
+  CGFloat scale = GetAnyKeyWindow().traitCollection.displayScale;
+  ASSERT_GT(scale, 1);
+  EXPECT_EQ(scale, credit_card_verifier_.CVCHintImage.scale);
   EXPECT_GT(credit_card_verifier_.expectedCVCLength, 0);
   EXPECT_FALSE(credit_card_verifier_.shouldRequestUpdateForExpirationDate);
   [credit_card_verifier_ requestUpdateForExpirationDate];
@@ -166,7 +172,7 @@ TEST_F(CWVCreditCardVerifierTest, IsExpirationDateValid) {
   EXPECT_FALSE([credit_card_verifier_ isExpirationDateValidForMonth:@"11"
                                                                year:@"2"]);
   EXPECT_TRUE([credit_card_verifier_ isExpirationDateValidForMonth:@"1"
-                                                              year:@"26"]);
+                                                              year:@"31"]);
   EXPECT_TRUE([credit_card_verifier_ isExpirationDateValidForMonth:@"11"
                                                               year:@"2226"]);
 }

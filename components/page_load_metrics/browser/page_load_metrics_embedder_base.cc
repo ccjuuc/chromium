@@ -6,6 +6,7 @@
 
 #include "base/feature_list.h"
 #include "base/timer/timer.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/observers/back_forward_cache_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/core/unstarted_page_paint_observer.h"
@@ -17,7 +18,7 @@
 #include "components/page_load_metrics/browser/observers/privacy_sandbox_ads_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/same_origin_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/service_worker_page_load_metrics_observer.h"
-#include "components/page_load_metrics/browser/observers/shared_storage_page_load_metrics_observer.h"
+#include "components/page_load_metrics/browser/observers/soft_navigation_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/uma_file_and_data_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/use_counter_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
@@ -40,6 +41,11 @@ void PageLoadMetricsEmbedderBase::RegisterObservers(
   RegisterCommonObservers(tracker);
 }
 
+NavigationScenario PageLoadMetricsEmbedderBase::GetNavigationScenario(
+    content::NavigationHandle* navigation_handle) const {
+  return NavigationScenario::kUnknown;
+}
+
 void PageLoadMetricsEmbedderBase::RegisterCommonObservers(
     PageLoadTracker* tracker) {
   if (IsNoStatePrefetch(web_contents())) {
@@ -53,12 +59,10 @@ void PageLoadMetricsEmbedderBase::RegisterCommonObservers(
   tracker->AddObserver(std::make_unique<EarlyHintsPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<FencedFramesPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<PrerenderPageLoadMetricsObserver>());
+  tracker->AddObserver(
+      std::make_unique<SoftNavigationPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<SameOriginPageLoadMetricsObserver>());
   tracker->AddObserver(std::make_unique<CrossOriginPageLoadMetricsObserver>());
-  if (base::FeatureList::IsEnabled(network::features::kSharedStorageAPI)) {
-    tracker->AddObserver(
-        std::make_unique<SharedStoragePageLoadMetricsObserver>());
-  }
   tracker->AddObserver(
       std::make_unique<PrivacySandboxAdsPageLoadMetricsObserver>());
   tracker->AddObserver(

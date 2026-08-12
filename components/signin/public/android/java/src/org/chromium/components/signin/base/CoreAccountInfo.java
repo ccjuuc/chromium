@@ -9,6 +9,7 @@ import android.accounts.Account;
 import com.google.errorprone.annotations.DoNotMock;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 
 import org.chromium.build.annotations.Contract;
@@ -27,6 +28,7 @@ import org.chromium.google_apis.gaia.GaiaId;
  */
 @NullMarked
 @DoNotMock("Use TestAccounts or create a real instance.")
+@JNINamespace("signin")
 public class CoreAccountInfo {
     private final CoreAccountId mId;
     private final String mEmail;
@@ -96,7 +98,9 @@ public class CoreAccountInfo {
      * Null-checking helper to create {@link Account} from a possibly null {@link CoreAccountInfo}.
      *
      * @return {@link Account} for the argument if it is not null, null otherwise.
+     * @deprecated Use {@link AccountInfo#getAndroidAccountFrom(AccountInfo)} instead.
      */
+    @Deprecated
     @Contract("!null -> !null")
     public static @Nullable Account getAndroidAccountFrom(@Nullable CoreAccountInfo accountInfo) {
         return accountInfo == null
@@ -108,7 +112,9 @@ public class CoreAccountInfo {
      * Null-checking helper to get an account id from a possibly null {@link CoreAccountInfo}.
      *
      * @return {@link #getId()} for the argument if it is not null, null otherwise.
+     * @deprecated Use {@link AccountInfo#getIdFrom(AccountInfo)} instead.
      */
+    @Deprecated
     @Contract("!null -> !null")
     public static @Nullable CoreAccountId getIdFrom(@Nullable CoreAccountInfo accountInfo) {
         return accountInfo == null ? null : accountInfo.getId();
@@ -118,7 +124,9 @@ public class CoreAccountInfo {
      * Null-checking helper to get an email from a possibly null {@link CoreAccountInfo}.
      *
      * @return {@link #getEmail()} for the argument if it is not null, null otherwise.
+     * @deprecated Use {@link AccountInfo#getEmailFrom(AccountInfo)} instead.
      */
+    @Deprecated
     @Contract("!null -> !null")
     public static @Nullable String getEmailFrom(@Nullable CoreAccountInfo accountInfo) {
         return accountInfo == null ? null : accountInfo.getEmail();
@@ -128,7 +136,9 @@ public class CoreAccountInfo {
      * Null-checking helper to get a GaiaId from a possibly null {@link CoreAccountInfo}.
      *
      * @return {@link #getGaiaId()} ()} for the argument if it is not null, null otherwise.
+     * @deprecated Use {@link AccountInfo#getGaiaIdFrom(AccountInfo)} instead.
      */
+    @Deprecated
     @Contract("!null -> !null")
     public static @Nullable GaiaId getGaiaIdFrom(@Nullable CoreAccountInfo accountInfo) {
         return accountInfo == null ? null : accountInfo.getGaiaId();

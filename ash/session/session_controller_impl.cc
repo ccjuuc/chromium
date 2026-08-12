@@ -34,6 +34,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_type.h"
+#include "ui/aura/window_occlusion_tracker.h"
 #include "ui/message_center/message_center.h"
 
 using session_manager::SessionState;
@@ -398,6 +399,44 @@ void SessionControllerImpl::SetClient(SessionControllerClient* client) {
 }
 
 void SessionControllerImpl::SetSessionInfo(const SessionInfo& info) {
+  auto to_string = [](SessionState type) {
+    switch (type) {
+      case SessionState::UNKNOWN:
+        return "UNKNOWN";
+      case SessionState::OOBE:
+        return "OOBE";
+      case SessionState::LOGIN_PRIMARY:
+        return "LOGIN_PRIMARY";
+      case SessionState::LOGGED_IN_NOT_ACTIVE:
+        return "LOGGED_IN_NOT_ACTIVE";
+      case SessionState::ACTIVE:
+        return "ACTIVE";
+      case SessionState::LOCKED:
+        return "LOCKED";
+      case SessionState::LOGIN_SECONDARY:
+        return "LOGIN_SECONDARY";
+      case SessionState::RMA:
+        return "RMA";
+    }
+    return "UNKNOWN";
+  };
+  if (is_chrome_terminating_) {
+    // TOOD(crbug.com/515743514): Reduce or eliminate the transition during
+    // shutdown.
+    bool known_transition_during_shutdown =
+        (state_ == SessionState::OOBE &&
+         info.state == SessionState::LOGGED_IN_NOT_ACTIVE) ||
+        (state_ == SessionState::LOGGED_IN_NOT_ACTIVE &&
+         info.state == SessionState::ACTIVE) ||
+        (state_ == SessionState::LOGIN_SECONDARY &&
+         info.state == SessionState::ACTIVE) ||
+        (state_ == SessionState::LOCKED && info.state == SessionState::ACTIVE);
+
+    DUMP_WILL_BE_CHECK(known_transition_during_shutdown)
+        << "This state transition not allowed after shutdown started:"
+        << to_string(state_) << " => " << to_string(info.state);
+    return;
+  }
   can_lock_ = info.can_lock_screen;
   should_lock_screen_automatically_ = info.should_lock_screen_automatically;
   if (info.is_running_in_app_mode) {
@@ -493,6 +532,12 @@ void SessionControllerImpl::PrepareForLock(PrepareForLockCallback callback) {
 }
 
 void SessionControllerImpl::StartLock(StartLockCallback callback) {
+  if (is_chrome_terminating_) {
+    // Don't change the state during shutdown.
+    std::move(callback).Run(/*locked=*/false);
+    return;
+  }
+
   DCHECK(start_lock_callback_.is_null());
   start_lock_callback_ = std::move(callback);
 
@@ -510,6 +555,11 @@ void SessionControllerImpl::NotifyChromeLockAnimationsComplete() {
 
 void SessionControllerImpl::RunUnlockAnimation(
     RunUnlockAnimationCallback callback) {
+  if (is_chrome_terminating_) {
+    // Don't change the state during shutdown.
+    std::move(callback).Run(/*aborted=*/true);
+    return;
+  }
   is_unlocking_ = true;
 
   // Shell could have no instance in tests.
@@ -611,8 +661,16 @@ void SessionControllerImpl::SetSessionState(SessionState state) {
   }
 
   state_ = state;
-  for (auto& observer : observers_)
-    observer.OnSessionStateChanged(state_);
+  // Keep the occlusion state while switching the session state. This reduces
+  // recomputing occlusion state while updating UI for the states. This is also
+  // necessary for exo windows to lock the window's occlusion state to the state
+  // before the screen is locked.
+  {
+    aura::WindowOcclusionTracker::ScopedPause pause;
+    for (auto& observer : observers_) {
+      observer.OnSessionStateChanged(state_);
+    }
+  }
 
   // NOTE: This pref is intentionally set *after* notifying observers of state
   // changes so observers can use time of last activation during event handling.

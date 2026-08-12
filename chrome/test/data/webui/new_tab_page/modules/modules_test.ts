@@ -4,9 +4,8 @@
 
 import type {Module, ModuleWrapperElement, NamedWidth} from 'chrome://new-tab-page/lazy_load.js';
 import {ModuleDescriptor, ModuleRegistry, ModulesElement, SUPPORTED_MODULE_WIDTHS} from 'chrome://new-tab-page/lazy_load.js';
-import {NewTabPageProxy} from 'chrome://new-tab-page/new_tab_page.js';
-import type {PageRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.mojom-webui.js';
+import type {PageRemote} from 'chrome://new-tab-page/new_tab_page.js';
+import {NewTabPageProxy, PageCallbackRouter, PageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -333,7 +332,8 @@ suite('NewTabPageModulesModulesV2Test', () => {
 
               // Assert.
               assertDeepEquals(
-                  ['foo', true], handler.getArgs('setModuleDisabled')[0]);
+                  [['foo'], /*disabled=*/ true, /*is_user_action=*/ true],
+                  handler.getArgs('setModulesDisabled')[0]);
 
               // Act.
               callbackRouterRemote.setDisabledModules(false, [moduleId]);
@@ -369,7 +369,8 @@ suite('NewTabPageModulesModulesV2Test', () => {
 
               // Assert.
               assertDeepEquals(
-                  ['foo', false], handler.getArgs('setModuleDisabled')[1]);
+                  [['foo'], /*disabled=*/ false, /*is_user_action=*/ true],
+                  handler.getArgs('setModulesDisabled')[1]);
 
               // Act.
               callbackRouterRemote.setDisabledModules(false, []);
@@ -587,7 +588,8 @@ suite('NewTabPageModulesModulesV2Test', () => {
                 },
               }));
           assertDeepEquals(
-              ['foo', true], handler.getArgs('setModuleDisabled')[0]);
+              [['foo'], /*disabled=*/ true, /*is_user_action=*/ true],
+              handler.getArgs('setModulesDisabled')[0]);
           callbackRouterRemote.setDisabledModules(false, ['foo']);
           await callbackRouterRemote.$.flushForTesting();
           await microtasksFinished();
@@ -705,14 +707,26 @@ suite('NewTabPageModulesModulesV2Test', () => {
 
     function setupAutoRemovalListener() {
       let event: CustomEvent<{message: string, undo: () => void}>|null = null;
-      document.body.addEventListener('modules-auto-removed', (e: any) => {
-        event = e;
+      document.body.addEventListener('modules-auto-removed', (e: Event) => {
+        event = e as CustomEvent<{message: string, undo: () => void}>;
       }, {once: true});
       return {
         get event() {
           return event;
         },
       };
+    }
+
+    function assertAutoRemovalMetrics(
+        moduleIds: string[], disabled: boolean, expectedCount: number) {
+      const histogramBase = disabled ? 'NewTabPage.Modules.AutoRemoval' :
+                                       'NewTabPage.Modules.AutoRemovalUndone';
+
+      assertEquals(expectedCount, metrics.count(histogramBase, 1));
+      for (const moduleId of moduleIds) {
+        assertEquals(
+            expectedCount, metrics.count(`${histogramBase}ModuleId`, moduleId));
+      }
     }
 
     test('ModulesAutoRemoval: Single module auto removed', async () => {
@@ -755,12 +769,15 @@ suite('NewTabPageModulesModulesV2Test', () => {
       // Assert.
       assertEquals(1, handler.getCallCount('setModulesDisabled'));
       assertDeepEquals(
-          [removedModuleIds, true], handler.getArgs('setModulesDisabled')[0]);
+          [removedModuleIds, /*disabled=*/ true, /*is_user_action=*/ false],
+          handler.getArgs('setModulesDisabled')[0]);
       assertNotEquals(null, autoRemovalListener.event);
       assertEquals(
           'Single module has been removed',
           autoRemovalListener.event!.detail.message);
       assertFalse(modulesElement.$.undoToast.open);
+      assertAutoRemovalMetrics(
+          removedModuleIds, /*disabled=*/ true, /*expectedCount=*/ 1);
 
       // Act - Execute the undo callback.
       autoRemovalListener.event!.detail.undo();
@@ -768,7 +785,10 @@ suite('NewTabPageModulesModulesV2Test', () => {
       // Assert.
       assertEquals(2, handler.getCallCount('setModulesDisabled'));
       assertDeepEquals(
-          [removedModuleIds, false], handler.getArgs('setModulesDisabled')[1]);
+          [removedModuleIds, /*disabled=*/ false, /*is_user_action=*/ true],
+          handler.getArgs('setModulesDisabled')[1]);
+      assertAutoRemovalMetrics(
+          removedModuleIds, /*disabled=*/ false, /*expectedCount=*/ 1);
     });
 
     test('ModulesAutoRemoval: Multiple modules auto removed', async () => {
@@ -817,12 +837,15 @@ suite('NewTabPageModulesModulesV2Test', () => {
       // Assert.
       assertEquals(1, handler.getCallCount('setModulesDisabled'));
       assertDeepEquals(
-          [removedModuleIds, true], handler.getArgs('setModulesDisabled')[0]);
+          [removedModuleIds, /*disabled=*/ true, /*is_user_action=*/ false],
+          handler.getArgs('setModulesDisabled')[0]);
       assertNotEquals(null, autoRemovalListener.event);
       assertEquals(
           'Multiple modules have been removed',
           autoRemovalListener.event!.detail.message);
       assertFalse(modulesElement.$.undoToast.open);
+      assertAutoRemovalMetrics(
+          removedModuleIds, /*disabled=*/ true, /*expectedCount=*/ 1);
 
       // Act - Execute the undo callback.
       autoRemovalListener.event!.detail.undo();
@@ -830,7 +853,10 @@ suite('NewTabPageModulesModulesV2Test', () => {
       // Assert.
       assertEquals(2, handler.getCallCount('setModulesDisabled'));
       assertDeepEquals(
-          [removedModuleIds, false], handler.getArgs('setModulesDisabled')[1]);
+          [removedModuleIds, /*disabled=*/ false, /*is_user_action=*/ true],
+          handler.getArgs('setModulesDisabled')[1]);
+      assertAutoRemovalMetrics(
+          removedModuleIds, /*disabled=*/ false, /*expectedCount=*/ 1);
     });
 
     test(
@@ -871,6 +897,8 @@ suite('NewTabPageModulesModulesV2Test', () => {
           assertEquals(0, handler.getCallCount('setModulesDisabled'));
           assertEquals(null, autoRemovalListener.event);
           assertFalse(modulesElement.$.undoToast.open);
+          assertAutoRemovalMetrics(
+              removedModuleIds, /*disabled=*/ true, /*expectedCount=*/ 0);
         });
 
     test(
@@ -905,14 +933,23 @@ suite('NewTabPageModulesModulesV2Test', () => {
           // Assert.
           const instance = modulesElement.moduleInstances_[0];
           assertTrue(!!instance);
-          assertTrue((modulesElement as any).moduleDisabled_(instance));
+          let hiddenModule =
+              modulesElement.shadowRoot.querySelector<ModuleWrapperElement>(
+                  'ntp-module-wrapper[hidden]');
+          assertTrue(!!hiddenModule);
+          assertEquals(hiddenModule.module, instance);
 
           // Act - Trigger the callback with the module ID as disabled.
           callbackRouterRemote.setDisabledModules(false, [removedModuleId]);
           await callbackRouterRemote.$.flushForTesting();
+          await microtasksFinished();
 
           // Assert.
-          assertTrue((modulesElement as any).moduleDisabled_(instance));
+          hiddenModule =
+              modulesElement.shadowRoot.querySelector<ModuleWrapperElement>(
+                  'ntp-module-wrapper[hidden]');
+          assertTrue(!!hiddenModule);
+          assertEquals(hiddenModule.module, instance);
         });
   });
 
@@ -939,8 +976,7 @@ suite('NewTabPageModulesModulesV2Test', () => {
           waitToLoadModules: false,
         });
 
-        handler.setResultFor(
-            'getModulesOrder', Promise.resolve({moduleIds: []}));
+        handler.setPromiseResolveFor('getModulesOrder', {moduleIds: []});
       });
 
       test('loads module container with newly enabled module', async () => {
@@ -1048,9 +1084,9 @@ suite('NewTabPageModulesModulesV2Test', () => {
         const barModulePromise = getModulePromise(barDescriptor);
         moduleRegistry.setResultFor('initializeModuleById', barModulePromise);
         // Set the modules order, without the foo module, to be verified later.
-        handler.setResultFor('getModulesOrder', Promise.resolve({
+        handler.setPromiseResolveFor('getModulesOrder', {
           moduleIds: [barDescriptor.id, bazDescriptor.id],
-        }));
+        });
 
         // Act - Enable the bar module by removing it from the disabled modules
         // list and trigger a reload operation.
@@ -1147,9 +1183,9 @@ suite('NewTabPageModulesModulesV2Test', () => {
         const barModulePromise = getModulePromise(barDescriptor);
         moduleRegistry.setResultFor('initializeModuleById', barModulePromise);
         // Set the module order, to be verified later.
-        handler.setResultFor(
+        handler.setPromiseResolveFor(
             'getModulesOrder',
-            Promise.resolve({moduleIds: [fooDescriptor.id, barDescriptor.id]}));
+            {moduleIds: [fooDescriptor.id, barDescriptor.id]});
 
         // Act - Clear the disabled modules list multiple times.
         callbackRouterRemote.setDisabledModules(false, []);

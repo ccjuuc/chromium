@@ -7,15 +7,17 @@
 #import <string>
 
 #import "base/strings/sys_string_conversions.h"
-#import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
 #import "base/time/time.h"
 #import "base/values.h"
+#import "components/desktop_to_mobile_promos/features.h"
 #import "components/ntp_tiles/pref_names.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/sync_device_info/device_info.h"
 #import "components/sync_device_info/device_info_util.h"
 #import "components/sync_device_info/fake_device_info_sync_service.h"
+#import "components/sync_device_info/test_device_info_builder.h"
 #import "components/sync_preferences/cross_device_pref_tracker/cross_device_pref_tracker.h"
 #import "components/sync_preferences/cross_device_pref_tracker/prefs/cross_device_pref_names.h"
 #import "ios/chrome/app/app_startup_parameters.h"
@@ -38,12 +40,13 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/synced_set_up/coordinator/synced_set_up_mediator_delegate.h"
 #import "ios/chrome/browser/synced_set_up/ui/synced_set_up_consumer.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/testing_application_context.h"
-#import "ios/web/common/features.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest_mac.h"
@@ -54,6 +57,8 @@
 #import "url/gurl.h"
 
 namespace {
+
+using ServiceStatus = ::sync_preferences::CrossDevicePrefTracker::ServiceStatus;
 
 // Test implementation of `CrossDevicePrefTracker`.
 class TestCrossDevicePrefTracker
@@ -68,6 +73,7 @@ class TestCrossDevicePrefTracker
   // `CrossDevicePrefTracker` overrides.
   void AddObserver(Observer* observer) override {}
   void RemoveObserver(Observer* observer) override {}
+  ServiceStatus GetServiceStatus() const override { return service_status_; }
 
   std::vector<sync_preferences::TimestampedPrefValue> GetValues(
       std::string_view pref_name,
@@ -104,6 +110,7 @@ class TestCrossDevicePrefTracker
   std::map<std::string_view,
            std::vector<sync_preferences::TimestampedPrefValue>>
       pref_values_;
+  ServiceStatus service_status_ = ServiceStatus::kAvailable;
 };
 
 }  // namespace
@@ -117,10 +124,12 @@ class SyncedSetUpMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
     web_state_list_ = browser_.get()->GetWebStateList();
     web_state_ = std::make_unique<web::FakeWebState>();
@@ -181,8 +190,6 @@ class SyncedSetUpMediatorTest : public PlatformTest {
   // Configures `web_state_list_` with a an active WebState, given whether the
   // visible page should be the NTP.
   void ConfigureWebStateList(bool on_ntp = false) {
-    scoped_feature_list_.InitAndEnableFeature(
-        web::features::kCreateTabHelperOnlyForRealizedWebStates);
     web_state_->SetIsRealized(false);
     if (on_ntp) {
       web_state_->SetVisibleURL(GURL("chrome://newtab"));
@@ -194,50 +201,6 @@ class SyncedSetUpMediatorTest : public PlatformTest {
     int index = web_state_list_->InsertWebState(std::move(web_state_));
     ASSERT_NE(index, -1);
     web_state_list_->ActivateWebStateAt(index);
-  }
-
-  // Creates a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateDeviceInfoForTesting(
-      std::string guid,
-      syncer::DeviceInfo::FormFactor form_factor,
-      syncer::DeviceInfo::OsType os_type,
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return CreateFakeDeviceInfo(guid, "Device Name", std::nullopt,
-                                sync_pb::SyncEnums::TYPE_UNSET, os_type,
-                                form_factor, "manufacturer", "model",
-                                std::string(), last_updated_timestamp);
-  }
-
-  // Helper for creating a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateFakeDeviceInfo(
-      const std::string& guid,
-      const std::string& name = "name",
-      const std::optional<syncer::DeviceInfo::SharingInfo>& sharing_info =
-          std::nullopt,
-      sync_pb::SyncEnums_DeviceType device_type =
-          sync_pb::SyncEnums_DeviceType_TYPE_UNSET,
-      syncer::DeviceInfo::OsType os_type = syncer::DeviceInfo::OsType::kUnknown,
-      syncer::DeviceInfo::FormFactor form_factor =
-          syncer::DeviceInfo::FormFactor::kUnknown,
-      const std::string& manufacturer_name = "manufacturer",
-      const std::string& model_name = "model",
-      const std::string& full_hardware_class = std::string(),
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return std::make_unique<syncer::DeviceInfo>(
-        guid, name, "chrome_version", "user_agent", device_type, os_type,
-        form_factor, "device_id", manufacturer_name, model_name,
-        full_hardware_class, last_updated_timestamp,
-        syncer::DeviceInfoUtil::GetPulseInterval(),
-        /*send_tab_to_self_receiving_enabled=*/
-        false,
-        sync_pb::
-            SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-        sharing_info,
-        /*paask_info=*/std::nullopt,
-        /*fcm_registration_token=*/std::string(),
-        /*interested_data_types=*/syncer::DataTypeSet(),
-        /*auto_sign_out_last_signin_timestamp=*/std::nullopt,
-        /*desktop_to_ios_promo_receiving_enabled=*/false);
   }
 
   // Helper for configuring a TimestampedPrefValue.
@@ -257,7 +220,6 @@ class SyncedSetUpMediatorTest : public PlatformTest {
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
   raw_ptr<TestProfileIOS> profile_;
-  base::test::ScopedFeatureList scoped_feature_list_;
   TestCrossDevicePrefTracker pref_tracker_;
   syncer::FakeDeviceInfoSyncService device_info_sync_service_;
   raw_ptr<AuthenticationService> authentication_service_;
@@ -293,9 +255,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnNTP) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -328,9 +290,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnURLPage) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -363,9 +325,9 @@ TEST_F(SyncedSetUpMediatorTest,
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetLocalStatePref(omnibox::kIsOmniboxInBottomPosition, base::Value(false));
@@ -437,7 +399,7 @@ TEST_F(SyncedSetUpMediatorTest, TestConsumerUpdatesOnSignedInState) {
       GetApplicationContext()->GetSystemIdentityManager())
       ->AddIdentity(fake_identity_);
   authentication_service_->SignIn(fake_identity_,
-                                  signin_metrics::AccessPoint::kUnknown);
+                                  signin_metrics::AccessPoint::kStartPage);
 
   NSString* expectedTitle = l10n_util::GetNSStringF(
       IDS_IOS_SYNCED_SET_UP_WELCOME_MESSAGE_WITH_USER_NAME_TITLE,
@@ -468,9 +430,9 @@ TEST_F(SyncedSetUpMediatorTest, TestPrefsChangeOnApply) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -519,7 +481,7 @@ TEST_F(SyncedSetUpMediatorTest, TestConsumerUpdatesOnSignIn) {
       GetApplicationContext()->GetSystemIdentityManager())
       ->AddIdentity(fake_identity_);
   authentication_service_->SignIn(fake_identity_,
-                                  signin_metrics::AccessPoint::kUnknown);
+                                  signin_metrics::AccessPoint::kStartPage);
 
   EXPECT_OCMOCK_VERIFY(consumer_mock_);
 }
@@ -533,7 +495,7 @@ TEST_F(SyncedSetUpMediatorTest, TestConsumerUpdatesOnAccountInfoUpdated) {
           GetApplicationContext()->GetSystemIdentityManager());
   system_identity_manager->AddIdentity(fake_identity_);
   authentication_service_->SignIn(fake_identity_,
-                                  signin_metrics::AccessPoint::kUnknown);
+                                  signin_metrics::AccessPoint::kStartPage);
 
   NSString* signedInTitle = l10n_util::GetNSStringF(
       IDS_IOS_SYNCED_SET_UP_WELCOME_MESSAGE_WITH_USER_NAME_TITLE,

@@ -36,7 +36,7 @@ bool IsMemoryAvailable(size_t required_memory) {
 #else
   uint64_t max_allocatable =
       std::min(base::SysInfo::AmountOfAvailablePhysicalMemory().InBytes(),
-               static_cast<uint64_t>(partition_alloc::MaxDirectMapped()));
+               static_cast<uint64_t>(partition_alloc::MaxAllocationSize()));
 
   return max_allocatable >= required_memory;
 #endif
@@ -555,10 +555,10 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 // If required memory is bigger than half of the max allocatable memory block,
 // reserve first to avoid STL getting more than required memory.
 // See crbug.com/1043914 for more context.
-// |MaxDirectMapped| function is not implemented on FUCHSIA, yet.
+// |MaxAllocationSize| function is not implemented on FUCHSIA, yet.
 // (crbug.com/986608)
 #if !BUILDFLAG(IS_FUCHSIA)
-    if (last_position >= partition_alloc::MaxDirectMapped() / 2) {
+    if (last_position >= partition_alloc::MaxAllocationSize() / 2) {
       // TODO(crbug.com/40669351): Allocated memory is rounded up to
       // 100MB blocks to reduce memory allocation delays. Switch to a more
       // proper container to remove this dependency.
@@ -571,17 +571,20 @@ int ObfuscatedFileUtilMemoryDelegate::WriteFile(
 #endif
   }
 
+  const auto data_to_append = buf->first(base::checked_cast<size_t>(buf_len));
   if (offset_u == dp->entry->file_content.size()) {
-    dp->entry->file_content.insert(dp->entry->file_content.end(), buf->data(),
-                                   UNSAFE_TODO(buf->data() + buf_len));
+    dp->entry->file_content.insert(dp->entry->file_content.end(),
+                                   data_to_append.begin(),
+                                   data_to_append.end());
   } else {
     if (last_position > dp->entry->file_content.size())
       dp->entry->file_content.resize(last_position);
 
     // if |offset_u| is larger than the original file size, there will be null
     // bytes between the end of the file and |offset_u|.
-    UNSAFE_TODO(
-        memcpy(dp->entry->file_content.data() + offset, buf->data(), buf_len));
+    base::span(dp->entry->file_content)
+        .subspan(offset_u, base::checked_cast<size_t>(buf_len))
+        .copy_from(buf->first(base::checked_cast<size_t>(buf_len)));
   }
   return buf_len;
 }

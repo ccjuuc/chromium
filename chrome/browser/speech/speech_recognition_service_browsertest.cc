@@ -13,6 +13,7 @@
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/sync_socket.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/threading/thread_restrictions.h"
@@ -79,6 +80,7 @@ class TestStreamFactory : public audio::FakeStreamFactory {
       mojo::PendingRemote<media::mojom::AudioLog> log,
       const std::string& device_id,
       const media::AudioParameters& params,
+      const base::UnguessableToken& group_id,
       uint32_t shared_memory_count,
       bool enable_agc,
       media::mojom::AudioProcessingConfigPtr processing_config,
@@ -172,6 +174,8 @@ class SpeechRecognitionServiceTest
   void SendAudioChunk(const std::vector<int16_t>& audio_data,
                       media::WavAudioHandler* handler,
                       size_t kMaxChunkSize);
+  void WaitForRecognitionResult(const std::string& expected_result);
+  void WaitForRecognitionEventAfterBubbleClosed();
 
   // The root directory for test files.
   base::FilePath test_data_dir_;
@@ -194,6 +198,14 @@ class SpeechRecognitionServiceTest
   std::unique_ptr<ChromeSpeechRecognitionService> service_;
 
   bool is_client_requesting_speech_recognition_ = true;
+
+  // Tracks whether the test client has successfully informed the speech
+  // recognition service that it no longer wants transcriptions (which occurs
+  // after the caption bubble is closed).
+  bool has_stopped_requesting_recognition_ = false;
+
+  std::unique_ptr<base::RunLoop> run_loop_;
+  std::string expected_recognition_result_;
 };
 
 void SpeechRecognitionServiceTest::SetUp() {
@@ -211,11 +223,45 @@ void SpeechRecognitionServiceTest::OnSpeechRecognitionRecognitionEvent(
     const media::SpeechRecognitionResult& result,
     OnSpeechRecognitionRecognitionEventCallback reply) {
   std::string transcription = result.transcription;
-  // The language pack used by the MacOS builder is newer and has punctuation
-  // enabled whereas the one used by the Linux builder does not.
-  std::erase(transcription, ',');
+  // The language pack used by some builders is newer and has punctuation
+  // enabled whereas the ones used by others do not.
+  std::erase_if(transcription,
+                [](char c) { return base::IsAsciiPunctuation(c); });
   recognition_results_.push_back(std::move(transcription));
+
+  if (!is_client_requesting_speech_recognition_) {
+    has_stopped_requesting_recognition_ = true;
+    if (run_loop_) {
+      run_loop_->Quit();
+    }
+  } else if (run_loop_) {
+    if (recognition_results_.back().find(expected_recognition_result_) !=
+        std::string::npos) {
+      run_loop_->Quit();
+    }
+  }
   std::move(reply).Run(is_client_requesting_speech_recognition_);
+}
+
+void SpeechRecognitionServiceTest::WaitForRecognitionEventAfterBubbleClosed() {
+  if (has_stopped_requesting_recognition_) {
+    return;
+  }
+  run_loop_ = std::make_unique<base::RunLoop>();
+  run_loop_->Run();
+  run_loop_.reset();
+}
+
+void SpeechRecognitionServiceTest::WaitForRecognitionResult(
+    const std::string& expected_result) {
+  if (!recognition_results_.empty() &&
+      recognition_results_.back().find(expected_result) != std::string::npos) {
+    return;
+  }
+  expected_recognition_result_ = expected_result;
+  run_loop_ = std::make_unique<base::RunLoop>();
+  run_loop_->Run();
+  run_loop_.reset();
 }
 
 void SpeechRecognitionServiceTest::OnSpeechRecognitionStopped() {
@@ -260,7 +306,7 @@ void SpeechRecognitionServiceTest::SetUpPrefs() {
 void SpeechRecognitionServiceTest::LaunchService() {
   // Launch the Speech Recognition service.
   auto* browser_context =
-      static_cast<content::BrowserContext*>(browser()->profile());
+      static_cast<content::BrowserContext*>(browser()->GetProfile());
   service_ = std::make_unique<ChromeSpeechRecognitionService>(browser_context);
 
   service_->BindSpeechRecognitionContext(
@@ -292,7 +338,7 @@ void SpeechRecognitionServiceTest::LaunchService() {
 void SpeechRecognitionServiceTest::LaunchServiceWithAudioSourceFetcher() {
   // Launch the Speech Recognition service.
   auto* browser_context =
-      static_cast<content::BrowserContext*>(browser()->profile());
+      static_cast<content::BrowserContext*>(browser()->GetProfile());
   service_ = std::make_unique<ChromeSpeechRecognitionService>(browser_context);
 
   service_->BindAudioSourceSpeechRecognitionContext(
@@ -376,9 +422,8 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest, RecognizePhrase) {
   size_t bytes_written = 0u;
   ASSERT_TRUE(handler->CopyTo(bus.get(), &bytes_written));
 
-  std::vector<int16_t> audio_data(bus->frames());
-  bus->ToInterleaved<media::SignedInt16SampleTypeTraits>(bus->frames(),
-                                                         audio_data.data());
+  std::vector<int16_t> audio_data(bus->frames() * bus->channels());
+  bus->ToInterleaved<media::SignedInt16SampleTypeTraits>(audio_data);
 
   constexpr size_t kMaxChunkSize = 1024;
   constexpr int kReplayAudioCount = 2;
@@ -386,17 +431,13 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest, RecognizePhrase) {
     SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
   }
 
+  WaitForRecognitionResult("Hey Google Hey Google");
+
   speech_recognition_recognizer_.reset();
   base::RunLoop().RunUntilIdle();
 
-  // Sleep for 100ms to ensure SODA has returned real-time results.
-#if BUILDFLAG(IS_WIN)
-  ::Sleep(100);
-#else
-  usleep(100000);
-#endif
   ASSERT_GT(static_cast<int>(recognition_results_.size()), kReplayAudioCount);
-  ASSERT_EQ(recognition_results_.back(), "Hey Google Hey Google");
+  EXPECT_EQ(recognition_results_.back(), "Hey Google Hey Google");
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
   histograms.ExpectUniqueTimeSample(
@@ -432,17 +473,13 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest,
   size_t bytes_written = 0u;
   ASSERT_TRUE(handler->CopyTo(bus.get(), &bytes_written));
 
-  std::vector<int16_t> audio_data(bus->frames());
-  bus->ToInterleaved<media::SignedInt16SampleTypeTraits>(bus->frames(),
-                                                         audio_data.data());
+  std::vector<int16_t> audio_data(bus->frames() * bus->channels());
+  bus->ToInterleaved<media::SignedInt16SampleTypeTraits>(audio_data);
   constexpr size_t kMaxChunkSize = 1024;
 
-  // Send an audio chunk to the service. It will output "Hey Google". When the
-  // client receives the result, it responds to the service with `success =
-  // true`, informing the speech recognition service that it still wants
-  // transcriptions.
+  // Send an audio chunk to the service while the caption bubble is open.
   SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
-  base::RunLoop().RunUntilIdle();
+  speech_recognition_recognizer_.FlushForTesting();
 
   // Close caption bubble. This means that the next time the client receives a
   // transcription, it will respond to the speech service with `success =
@@ -455,22 +492,24 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest,
   // false`, informing the speech recognition service that it is no longer
   // requesting speech recognition.
   SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
-  base::RunLoop().RunUntilIdle();
+  WaitForRecognitionEventAfterBubbleClosed();
+
+  // Flush the mojo pipe to ensure the `success = false` reply has been
+  // received and processed by the speech recognition service.
+  speech_recognition_recognizer_.FlushForTesting();
+
+  size_t results_size_before_third_chunk = recognition_results_.size();
 
   // Send an audio chunk to the service. It does not get transcribed.
   SendAudioChunk(audio_data, handler.get(), kMaxChunkSize);
 
+  // Flush again to ensure the third chunk is processed by the service.
+  speech_recognition_recognizer_.FlushForTesting();
+
   speech_recognition_recognizer_.reset();
   base::RunLoop().RunUntilIdle();
 
-  // Sleep for 100ms to ensure SODA has returned real-time results.
-#if BUILDFLAG(IS_WIN)
-  ::Sleep(100);
-#else
-  usleep(100000);
-#endif
-  ASSERT_GT(recognition_results_.size(), 3u);
-  ASSERT_EQ(recognition_results_.back(), "Hey Google Hey Google");
+  EXPECT_EQ(results_size_before_third_chunk, recognition_results_.size());
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
   histograms.ExpectUniqueTimeSample(
@@ -534,7 +573,7 @@ IN_PROC_BROWSER_TEST_F(SpeechRecognitionServiceTest, CompromisedRenderer) {
 
   // Launch the Speech Recognition service.
   auto* browser_context =
-      static_cast<content::BrowserContext*>(browser()->profile());
+      static_cast<content::BrowserContext*>(browser()->GetProfile());
   service_ = std::make_unique<ChromeSpeechRecognitionService>(browser_context);
   service_->BindSpeechRecognitionContext(
       speech_recognition_context_.BindNewPipeAndPassReceiver());

@@ -44,7 +44,6 @@
 <translation id="1155154308031262006">Enter a prompt</translation>
 <translation id="115705039208660697">pineapples</translation>
 <translation id="1164939766849482256">Dawn to dark screen saver</translation>
-<translation id="1167755866710282443">Open menu to customise keys. Drag menu to move.</translation>
 <translation id="1171349345463658120">sandy lagoon</translation>
 <translation id="1174073918202301297">Shortcut added</translation>
 <translation id="11743817593307477">Use arrow keys to move this control to the game action that you want. Use the enter key to place the control. Use the escape key to cancel.</translation>
@@ -167,6 +166,7 @@
 <translation id="1621067168122174824">Run charge test</translation>
 <translation id="1622402072367425417">glowing bubbles</translation>
 <translation id="1626590945318984973">Shortcut not available. Press a new shortcut without using function and <ph name="META_KEY" /> keys.</translation>
+<translation id="163774412591892664">Your administrator disabled your device and can access its location.</translation>
 <translation id="1639239467298939599">Loading</translation>
 <translation id="1641857168437328880">Document feeder (one-sided)</translation>
 <translation id="1642396894598555413">bicycles</translation>
@@ -272,7 +272,6 @@
 <translation id="200669432486043882">Replace file</translation>
 <translation id="2006864819935886708">Connectivity</translation>
 <translation id="2008685064673031089">Prime search</translation>
-<translation id="2011174342667534258">SDK version:</translation>
 <translation id="2016697457005847575">Try troubleshooting steps</translation>
 <translation id="202500043506723828">EID</translation>
 <translation id="2045814230297767491">cutlery</translation>
@@ -404,6 +403,7 @@
 <translation id="2618015542787108131">sand dune</translation>
 <translation id="2619761439309613843">Daily Refresh</translation>
 <translation id="2620436844016719705">System</translation>
+<translation id="2626848494898563581">Can't reach Google services</translation>
 <translation id="2637303424821734920">OFF – to display local weather <ph name="BEGIN_LINK" />turn on system location access<ph name="END_LINK" /></translation>
 <translation id="2638662041295312666">Sign-in image</translation>
 <translation id="2640549051766135490">Album <ph name="TITLE" /> <ph name="DESC" /> selected</translation>
@@ -507,7 +507,6 @@
 <translation id="3211671540163313381">Keymapping D-pad</translation>
 <translation id="3217462202230355157">Make sure that your mic is connected or try restarting your <ph name="DEVICE_TYPE" /></translation>
 <translation id="3226405216343213872">Looking for scanners</translation>
-<translation id="3226657629376379887">Layout actions menu</translation>
 <translation id="3227186760713762082">Divide the <ph name="CATEGORY_TEXT" /> value by <ph name="CONVERSION_RATE" /></translation>
 <translation id="3242622575335502454">digital art</translation>
 <translation id="3246869037381808805">Print jobs older than 1 day will be removed</translation>
@@ -522,7 +521,6 @@
 <translation id="3291996639387199448">Key direction</translation>
 <translation id="3294437725009624529">Guest</translation>
 <translation id="3303855915957856445">No search results found</translation>
-<translation id="3305294846493618482">more</translation>
 <translation id="3310640316857623290">DNS latency significantly above allowable threshold</translation>
 <translation id="3316495615885967552">Summary and title creation model download completed</translation>
 <translation id="3321030238473337787">Playback speed</translation>
@@ -581,6 +579,7 @@
 <translation id="3577473026931028326">Something went wrong. Try again.</translation>
 <translation id="357889014807611375">metered Wi-Fi</translation>
 <translation id="3583278742022654445">Weak signal strength. Try moving closer to the Wi-Fi signal source.</translation>
+<translation id="3586931643579894722">Hide details</translation>
 <translation id="3588034708467091142">Make sure that you're connected to the Internet and try again.</translation>
 <translation id="3594280220611906414"><ph name="USER_FRIENDLY_APN_NAME" /> is the user-friendly name for <ph name="APN_NAME" />.</translation>
 <translation id="3595596368722241419">Battery full</translation>
@@ -701,7 +700,6 @@
 <translation id="4126551873361000548">Backwards 10 seconds</translation>
 <translation id="4128271910628504223">Enter a prompt like 'draw a misty forest'</translation>
 <translation id="4130035430755296270">Keep hovering for more layout options</translation>
-<translation id="4130750466177569591">I agree</translation>
 <translation id="4131410914670010031">Black and white</translation>
 <translation id="4137700675046373159">on Saturday</translation>
 <translation id="4139326893730851150">Firmware updates</translation>
@@ -727,6 +725,7 @@
 <translation id="4212169537710712814"><ph name="LANGUAGE_NAME" /> transcription model download completed</translation>
 <translation id="42126664696688958">Export</translation>
 <translation id="4213104098953699324">USB keyboard</translation>
+<translation id="4217571870635786043">Dictation</translation>
 <translation id="4227825898293920515">Password expires in <ph name="TIME" /></translation>
 <translation id="4238516577297848345">No print jobs in progress</translation>
 <translation id="4239069858505860023">GPRS</translation>
@@ -1049,7 +1048,6 @@
 <translation id="5606865426897221650">Tab</translation>
 <translation id="5612205513582918357">Class tools is sharing your screen to <ph name="RECEIVER_NAME" /></translation>
 <translation id="5613201299517339763">You've been signed out</translation>
-<translation id="5620281292257375798">Internal only</translation>
 <translation id="5628106863521633649">Available languages</translation>
 <translation id="5630438231335788050">Bauhaus</translation>
 <translation id="5631759159893697722">abstract</translation>
@@ -1165,6 +1163,7 @@
 <translation id="6136285399872347291">backspace</translation>
 <translation id="6137614725462089991">cyberpunk</translation>
 <translation id="6137767437444130246">User certificate</translation>
+<translation id="6140948187512243695">Show details</translation>
 <translation id="6146993107019042706">To finish, enter your new password</translation>
 <translation id="6147514244879357420">PNG</translation>
 <translation id="6149015141270619212">Can't connect to the Internet</translation>
@@ -1185,6 +1184,7 @@
 <translation id="6234024205316847054">Show outlines</translation>
 <translation id="6243280677745499710">Currently set</translation>
 <translation id="6250316632541035980">bacon and eggs</translation>
+<translation id="6262413940100821797">an unknown receiver</translation>
 <translation id="6265268291107409527">Selected key is <ph name="KEYS" />. <ph name="ASSIGN_INSTRUCTION" /></translation>
 <translation id="6275224645089671689">Right arrow</translation>
 <translation id="6278428485366576908">Theme</translation>
@@ -1410,11 +1410,8 @@
 <translation id="7177485034254901881">This <ph name="DEVICE_TYPE" /> is managed by <ph name="MANAGER" />. Administrators may remotely configure the device.</translation>
 <translation id="7180611975245234373">Refresh</translation>
 <translation id="7180865173735832675">Customise</translation>
-<translation id="7182063559013288142">Instant hotspot</translation>
-<translation id="7184043045742675738">Click on any key to customise your button. Reposition key with mouse or arrow keys.</translation>
 <translation id="7187669805838282391">on Wednesday</translation>
 <translation id="7205318498545665455">Choose your mic</translation>
-<translation id="7206979415662233817">Terms of Service</translation>
 <translation id="7210635925306941239">cyan</translation>
 <translation id="7212547870105584639">Manage network APN settings. APNs establish a connection between a cellular network and the internet. <ph name="BEGIN_LINK_LEARN_MORE" />Learn more<ph name="END_LINK_LEARN_MORE" /></translation>
 <translation id="7212734716605298123">Firmware updates for external devices</translation>
@@ -1445,11 +1442,6 @@
 <translation id="7319430975418800333">A3</translation>
 <translation id="7321055305895875150">green and teal</translation>
 <translation id="7328475450575141167">bird of paradise</translation>
-<translation id="7331297744262591636">You must be at least 18 years old and agree that your use of AI wallpapers is subject to <ph name="GOOGLE_TERMS_OF_SERVICE_LINK" />Google Terms of Service<ph name="END_LINK_GOOGLE_TERMS_OF_SERVICE" /> and <ph name="BEGIN_LINK_GEN_AI_TERMS_OF_SERVICE" />Generative AI Additional Terms of Service<ph name="END_LINK_GEN_AI_TERMS_OF_SERVICE" />.
-          <ph name="LINE_BREAK" />
-          <ph name="LINE_BREAK" />
-          You can only create wallpapers with AI for personal and non-commercial use. When you get wallpaper help, text is sent to Google AI servers to generate wallpaper suggestions, subject to <ph name="BEGIN_LINK_GOOGLE_PRIVACY_POLICY" />Google's Privacy Policy<ph name="END_LINK_GOOGLE_PRIVACY_POLICY" />. <ph name="BEGIN_LINK_LEARN_MORE" />Learn more<ph name="END_LINK_LEARN_MORE" /></translation>
-<translation id="7343581795491695942"><ph name="QUERY_TEXT" />; <ph name="RESULT_TEXT" />; press Search plus Space to see the result in Google Search.</translation>
 <translation id="7343649194310845056">Network devices</translation>
 <translation id="7344788170842919262">earthy</translation>
 <translation id="7346768383111016081">Place control on game action to play with your keyboard</translation>
@@ -1506,7 +1498,6 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="7590883480672980941">Input settings</translation>
 <translation id="7595982850646262331"><ph name="TIME_VALUE" /> left</translation>
 <translation id="7600430297804876776">The <ph name="MANAGER" /> administrator has set when this <ph name="DEVICE_TYPE" /> can be used.</translation>
-<translation id="7613724632293948900">Reposition with mouse or arrow keys.</translation>
 <translation id="7618216277886673749">Select <ph name="LANGUAGE_NAME" /></translation>
 <translation id="7618774594543487847">Neutral</translation>
 <translation id="7620771111601174153">Find out more in the Help Centre</translation>
@@ -1640,6 +1631,7 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="819278132617411009">Use Google AI to be more productive</translation>
 <translation id="8200772114523450471">Resume</translation>
 <translation id="8206859287963243715">Mobile</translation>
+<translation id="8208043093301544621">Home</translation>
 <translation id="8208861521865154048">Perks</translation>
 <translation id="8226628635270268143">Choose your favourite photos and albums</translation>
 <translation id="8227119283605456246">Attach file</translation>
@@ -1686,6 +1678,7 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="8420955526972171689">Run tests and troubleshooting for hardware issues</translation>
 <translation id="8422748173858722634">IMEI</translation>
 <translation id="8424039430705546751">down</translation>
+<translation id="8427213022735114808">Dictation sends your voice to Google to allow voice typing in any text field.</translation>
 <translation id="8428213095426709021">Settings</translation>
 <translation id="8431300646573772016">What's new with Chrome OS</translation>
 <translation id="8433186206711564395">Network settings</translation>
@@ -1724,6 +1717,7 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="8584654835905316966">A restart is required to complete the installation of firmware for <ph name="DEVICE_NAME" /> to version <ph name="VERSION" />. Your computer may appear to reboot several times. This behaviour is expected.</translation>
 <translation id="8593058461203131755">pause media</translation>
 <translation id="8620617069779373398">Roaming status</translation>
+<translation id="8624524972189162859">Your <ph name="DOMAIN_NAME" /> administrator disabled your device and can access its location.</translation>
 <translation id="8626489604350149811">More actions for <ph name="APN_NAME" /></translation>
 <translation id="86356131183441916">Light purple</translation>
 <translation id="8647595191512746911">Audio transcription</translation>
@@ -1835,10 +1829,8 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="9073281213608662541">PAP</translation>
 <translation id="9074739597929991885">Bluetooth</translation>
 <translation id="9082718469794970195">Use this video</translation>
-<translation id="9087578468327036362">Report this query</translation>
 <translation id="9088306295921699330">Current usage</translation>
 <translation id="9088994563996376283">Simplify</translation>
-<translation id="9095775724867566971">PluginVm</translation>
 <translation id="909856219855259344">More info on reset date</translation>
 <translation id="9100765901046053179">Advanced settings</translation>
 <translation id="910415269708673980">Refresh ticket for <ph name="PRINCIPAL_NAME" /></translation>
@@ -1868,7 +1860,6 @@ Download the transcription model (up to 100 MB) to get these transcriptions.</tr
 <translation id="921080052717160800">Image set as camera background</translation>
 <translation id="9211490828691860325">All desks</translation>
 <translation id="9218016617214286986">Show known APNs</translation>
-<translation id="932327136139879170">Home</translation>
 <translation id="939519157834106403">SSID</translation>
 <translation id="945522503751344254">Send feedback</translation>
 <translation id="950520315903467048">Key is missing for <ph name="DIRECTION" />. <ph name="ASSIGN_INSTRUCTION" /></translation>

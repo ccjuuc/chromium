@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/task/bind_post_task.h"
@@ -22,6 +21,7 @@
 #include "device/vr/android/xr_java_coordinator.h"
 #include "device/vr/public/cpp/features.h"
 #include "device/vr/public/cpp/xr_frame_sink_client.h"
+#include "ipc/constants.mojom-forward.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 #include "ui/android/window_android.h"
 #include "ui/display/display.h"
@@ -41,11 +41,8 @@ const std::vector<mojom::XRSessionFeature>& GetSupportedFeatures() {
                           mojom::XRSessionFeature::DOM_OVERLAY,
                           mojom::XRSessionFeature::LIGHT_ESTIMATION,
                           mojom::XRSessionFeature::ANCHORS,
-                          mojom::XRSessionFeature::PLANE_DETECTION,
                           mojom::XRSessionFeature::DEPTH,
-                          mojom::XRSessionFeature::IMAGE_TRACKING,
-                          mojom::XRSessionFeature::HIT_TEST,
-                          mojom::XRSessionFeature::FRONT_FACING}};
+                          mojom::XRSessionFeature::HIT_TEST}};
 
   return *kSupportedFeatures;
 }
@@ -84,10 +81,22 @@ ArCoreDevice::ArCoreDevice(
   // Only support camera access if the device supports shared buffers.
   device_features.emplace_back(mojom::XRSessionFeature::CAMERA_ACCESS);
 
+  // Only support plane detection if the appropriate feature flag is enabled.
+  if (base::FeatureList::IsEnabled(features::kWebXRPlaneDetection)) {
+    device_features.emplace_back(mojom::XRSessionFeature::PLANE_DETECTION);
+  }
+
   // Only support WebGPU sessions if the appropriate feature flag is enabled
   // and shared buffers will be used.
   if (base::FeatureList::IsEnabled(features::kWebXRWebGPUBinding)) {
     device_features.emplace_back(mojom::XRSessionFeature::WEBGPU);
+  }
+
+  // Only support Front Facing mode and Image Tracking if the WebXR incubations
+  // flag is enabled.
+  if (base::FeatureList::IsEnabled(features::kWebXRIncubations)) {
+    device_features.emplace_back(mojom::XRSessionFeature::FRONT_FACING);
+    device_features.emplace_back(mojom::XRSessionFeature::IMAGE_TRACKING);
   }
 
   SetSupportedFeatures(device_features);
@@ -147,10 +156,10 @@ void ArCoreDevice::RequestSession(
   session_state_->request_session_trace_id_ = options->trace_id;
 
   const bool use_dom_overlay =
-      base::Contains(options->required_features,
-                     device::mojom::XRSessionFeature::DOM_OVERLAY) ||
-      base::Contains(options->optional_features,
-                     device::mojom::XRSessionFeature::DOM_OVERLAY);
+      std::ranges::contains(options->required_features,
+                            device::mojom::XRSessionFeature::DOM_OVERLAY) ||
+      std::ranges::contains(options->optional_features,
+                            device::mojom::XRSessionFeature::DOM_OVERLAY);
 
   session_state_->depth_options_ = std::move(options->depth_options);
 
@@ -158,10 +167,17 @@ void ArCoreDevice::RequestSession(
   // OnSessionEnded().
   DCHECK(mailbox_bridge_);
 
+  network::RendererProcessId render_process_id;
+  int render_frame_id = IPC::mojom::kRoutingIdNone;
+  if (options->renderer_information) {
+    render_process_id = options->renderer_information->render_process_id;
+    render_frame_id = options->renderer_information->render_frame_id;
+  }
+
   // We create the FrameSinkClient here and clear it in OnSessionEnded.
   DCHECK(!frame_sink_client_);
-  frame_sink_client_ = xr_frame_sink_client_factory_.Run(
-      options->render_process_id, options->render_frame_id);
+  frame_sink_client_ =
+      xr_frame_sink_client_factory_.Run(render_process_id, render_frame_id);
   DCHECK(frame_sink_client_);
 
   for (auto& image : options->tracked_images) {
@@ -175,12 +191,11 @@ void ArCoreDevice::RequestSession(
       base::BindPostTask(
           main_thread_task_runner_,
           base::BindOnce(&ArCoreDevice::OnGlThreadReady, GetWeakPtr(),
-                         options->render_process_id, options->render_frame_id,
-                         use_dom_overlay)));
+                         render_process_id, render_frame_id, use_dom_overlay)));
   session_state_->arcore_gl_thread_->Start();
 }
 
-void ArCoreDevice::OnGlThreadReady(int render_process_id,
+void ArCoreDevice::OnGlThreadReady(network::RendererProcessId render_process_id,
                                    int render_frame_id,
                                    bool use_overlay) {
   auto ready_callback =
@@ -283,10 +298,6 @@ void ArCoreDevice::OnSessionEnded() {
   // session with fresh associated resources. Also go through these steps in
   // case the GL thread hadn't completed, or had initialized partially, to
   // ensure consistent state.
-
-  // TODO(crbug.com/41392761): Instead of splitting the initialization
-  // of this class between construction and RequestSession, perform all the
-  // initialization at once on the first successful RequestSession call.
 
   // If we have a frame sink client, notify it that it's surface has been
   // destroyed. While this is required in the case of the surface actually being

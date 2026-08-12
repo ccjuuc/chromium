@@ -72,12 +72,11 @@ source_set("common_sources") {
     "gpu_command_buffer_common_export.h",
     "id_allocator.cc",
     "id_allocator.h",
-    "mailbox_holder.cc",
-    "mailbox_holder.h",
     "scheduling_priority.cc",
     "scheduling_priority.h",
     "shared_image_capabilities.cc",
     "shared_image_capabilities.h",
+    "shared_image_info.h",
     "shared_image_pool_id.cc",
     "shared_image_pool_id.h",
     "shared_image_trace_utils.cc",
@@ -102,11 +101,25 @@ source_set("common_sources") {
     "//base",
     "//components/viz/common/resources:shared_image_format",
     "//mojo/public/cpp/system",
+    "//skia",
+    "//ui/gfx:color_space",
     "//ui/gfx:memory_buffer",
     "//ui/gfx/geometry",
   ]
 
   deps = [ "//base" ]
+
+  if (is_apple) {
+    sources += [
+      "iosurface_validation.cc",
+      "iosurface_validation.h",
+    ]
+
+    frameworks = [
+      "CoreVideo.framework",
+      "IOSurface.framework",
+    ]
+  }
 }
 
 source_set("mailbox_sources") {

@@ -6,11 +6,14 @@
 
 #include <utility>
 
+#include "base/metrics/histogram_functions.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/screen_orientation_delegate.h"
 #include "content/public/browser/web_contents.h"
+#include "services/network/public/mojom/web_sandbox_flags.mojom.h"
 
 namespace content {
 
@@ -33,6 +36,9 @@ void ScreenOrientationProvider::BindScreenOrientation(
 }
 
 bool ScreenOrientationProvider::IsOrientationLockSupported() const {
+  if (devtools_emulation_enabled_) {
+    return true;
+  }
   return delegate_ &&
          delegate_->ScreenOrientationProviderSupported(web_contents());
 }
@@ -40,6 +46,17 @@ bool ScreenOrientationProvider::IsOrientationLockSupported() const {
 void ScreenOrientationProvider::LockOrientation(
     device::mojom::ScreenOrientationLockType orientation,
     LockOrientationCallback callback) {
+  RenderFrameHostImpl* rfh =
+      static_cast<RenderFrameHostImpl*>(&receivers_.CurrentTargetFrame());
+  const bool is_sandboxed =
+      rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrientationLock);
+  base::UmaHistogramBoolean("Security.ScreenOrientation.LockRequestIsSandboxed",
+                            is_sandboxed);
+
+  // Media controls intentionally bypass ScreenOrientation::lock() and can issue
+  // orientation lock requests from sandboxed frames. Record these requests to
+  // measure their usage, but do not treat them as bad IPC.
+
   // Cancel any pending lock request.
   NotifyLockResult(ScreenOrientationLockResult::
                        SCREEN_ORIENTATION_LOCK_RESULT_ERROR_CANCELED);
@@ -49,6 +66,26 @@ void ScreenOrientationProvider::LockOrientation(
   if (!IsOrientationLockSupported()) {
     NotifyLockResult(ScreenOrientationLockResult::
                          SCREEN_ORIENTATION_LOCK_RESULT_ERROR_NOT_AVAILABLE);
+    return;
+  }
+
+  // In DevTools emulation mode, skip delegate checks and succeed immediately.
+  if (devtools_emulation_enabled_) {
+    if (orientation == device::mojom::ScreenOrientationLockType::NATURAL) {
+      orientation = GetNaturalLockType();
+      if (orientation == device::mojom::ScreenOrientationLockType::DEFAULT) {
+        NotifyLockResult(ScreenOrientationLockResult::
+                             SCREEN_ORIENTATION_LOCK_RESULT_ERROR_CANCELED);
+        return;
+      }
+    }
+
+    lock_applied_ = true;
+    if (lock_changed_callback_) {
+      lock_changed_callback_.Run(true, orientation);
+    }
+    NotifyLockResult(
+        ScreenOrientationLockResult::SCREEN_ORIENTATION_LOCK_RESULT_SUCCESS);
     return;
   }
 
@@ -101,8 +138,22 @@ void ScreenOrientationProvider::UnlockOrientation() {
   NotifyLockResult(ScreenOrientationLockResult::
                        SCREEN_ORIENTATION_LOCK_RESULT_ERROR_CANCELED);
 
-  if (!lock_applied_ || !delegate_)
+  if (!lock_applied_) {
     return;
+  }
+
+  // In DevTools emulation mode, handle unlock without delegate.
+  if (devtools_emulation_enabled_) {
+    lock_applied_ = false;
+    if (lock_changed_callback_) {
+      lock_changed_callback_.Run(false, std::nullopt);
+    }
+    return;
+  }
+
+  if (!delegate_) {
+    return;
+  }
 
   delegate_->Unlock(web_contents());
   if (auto* view = web_contents()->GetRenderWidgetHostView())
@@ -172,6 +223,36 @@ bool ScreenOrientationProvider::LockMatchesOrientation(
   }
 
   return false;
+}
+
+void ScreenOrientationProvider::SetDevToolsEmulationEnabled(bool enabled) {
+  devtools_emulation_enabled_ = enabled;
+  if (!enabled && lock_applied_) {
+    // When emulation is disabled, unlock any emulated lock.
+    lock_applied_ = false;
+    if (lock_changed_callback_) {
+      lock_changed_callback_.Run(false, std::nullopt);
+    }
+  }
+}
+
+void ScreenOrientationProvider::SetOrientationLockChangedCallback(
+    OrientationLockChangedCallback callback) {
+  lock_changed_callback_ = std::move(callback);
+}
+
+void ScreenOrientationProvider::SetCurrentTargetFrameForTesting(  // IN-TEST
+    RenderFrameHost* render_frame_host) {
+  receivers_.SetCurrentTargetFrameForTesting(render_frame_host);  // IN-TEST
+}
+
+void ScreenOrientationProvider::NotifyOrientationLockChanged(
+    bool locked,
+    std::optional<device::mojom::ScreenOrientationLockType> orientation) {
+  lock_applied_ = locked;
+  if (lock_changed_callback_) {
+    lock_changed_callback_.Run(locked, orientation);
+  }
 }
 
 void ScreenOrientationProvider::DidToggleFullscreenModeForTab(

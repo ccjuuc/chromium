@@ -20,8 +20,8 @@
 #import "components/prefs/testing_pref_service.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #import "components/safety_check/features.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/password_checkup_utils.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
@@ -38,6 +38,8 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/upgrade/model/upgrade_recommended_details.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/testing_application_context.h"
@@ -60,8 +62,10 @@ class IOSChromeSafetyCheckManagerTest : public PlatformTest {
                        ProfileIOS, password_manager::TestPasswordStore>));
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
     ProfileIOS* profile =
         profile_manager_.AddProfileWithBuilder(std::move(builder));
@@ -90,7 +94,8 @@ class IOSChromeSafetyCheckManagerTest : public PlatformTest {
     system_identity_manager->AddIdentity(fake_identity);
     // Signing in at `kSignin` level (default for `SignIn()`).
     // This triggers `IdentityManager` observers.
-    auth_service_->SignIn(fake_identity, signin_metrics::AccessPoint::kUnknown);
+    auth_service_->SignIn(fake_identity,
+                          signin_metrics::AccessPoint::kStartPage);
   }
 
   // Helper method to sign out.
@@ -625,7 +630,7 @@ TEST_F(IOSChromeSafetyCheckManagerTest,
 // incoming insecure password counts change.
 TEST_F(IOSChromeSafetyCheckManagerTest,
        StoppingRunningPasswordCheckIgnoresInsecurePasswordCountsChange) {
-  base::Value::Dict insecure_password_counts;
+  base::DictValue insecure_password_counts;
   insecure_password_counts.Set(kSafetyCheckCompromisedPasswordsCountKey, 1);
   insecure_password_counts.Set(kSafetyCheckDismissedPasswordsCountKey, 2);
   insecure_password_counts.Set(kSafetyCheckReusedPasswordsCountKey, 3);
@@ -732,14 +737,13 @@ TEST_F(IOSChromeSafetyCheckManagerTest, ClearsPasswordStateOnSignOut) {
 
   // Simulate sign-in first.
   SignIn();
-  ASSERT_TRUE(auth_service_->HasPrimaryIdentity(signin::ConsentLevel::kSignin));
+  ASSERT_TRUE(auth_service_->HasPrimaryIdentity());
 
   // Simulate sign-out (clearing the primary account at the `kSignin` level).
   // This will trigger `OnPrimaryAccountChanged()` in the `SafetyCheckManager`
   // via the `AuthenticationService` updating the `IdentityManager`.
   SignOut();
-  ASSERT_FALSE(
-      auth_service_->HasPrimaryIdentity(signin::ConsentLevel::kSignin));
+  ASSERT_FALSE(auth_service_->HasPrimaryIdentity());
 
   // Verify that the password state has been reset.
   password_manager::InsecurePasswordCounts reset_counts = {
@@ -1066,7 +1070,7 @@ TEST_F(IOSChromeSafetyCheckManagerTest,
 // password counts.
 TEST_F(IOSChromeSafetyCheckManagerTest,
        ConvertsDictionaryToInsecurePasswordCounts) {
-  base::Value::Dict dict_without_duplicate_keys;
+  base::DictValue dict_without_duplicate_keys;
   dict_without_duplicate_keys.Set(kSafetyCheckCompromisedPasswordsCountKey, 3);
   dict_without_duplicate_keys.Set(kSafetyCheckDismissedPasswordsCountKey, 4);
   dict_without_duplicate_keys.Set(kSafetyCheckReusedPasswordsCountKey, 5);
@@ -1079,7 +1083,7 @@ TEST_F(IOSChromeSafetyCheckManagerTest,
   EXPECT_EQ(expected_counts_without_duplicate_keys,
             DictToInsecurePasswordCounts(dict_without_duplicate_keys));
 
-  base::Value::Dict dict_with_missing_keys;
+  base::DictValue dict_with_missing_keys;
   dict_with_missing_keys.Set(kSafetyCheckCompromisedPasswordsCountKey, 3);
   dict_with_missing_keys.Set(kSafetyCheckDismissedPasswordsCountKey, 4);
   dict_with_missing_keys.Set(kSafetyCheckWeakPasswordsCountKey, 6);

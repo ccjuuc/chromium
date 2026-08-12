@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "cc/metrics/custom_metrics_recorder.h"
@@ -26,7 +27,6 @@
 #include "ui/aura/env_input_state_controller.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_targeter.h"
-#include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/ime/input_method.h"
@@ -151,16 +151,17 @@ void WindowEventDispatcher::DispatchCancelModeEvent() {
 void WindowEventDispatcher::DispatchGestureEvent(
     ui::GestureConsumer* raw_input_consumer,
     ui::GestureEvent* event) {
+  base::WeakPtr<ui::GestureConsumer> consumer_weak_ptr =
+      raw_input_consumer ? raw_input_consumer->GetWeakPtr() : nullptr;
+
   DispatchDetails details = DispatchHeldEvents();
-  if (details.dispatcher_destroyed)
+  if (details.dispatcher_destroyed || !consumer_weak_ptr) {
     return;
-  Window* target = ConsumerToWindow(raw_input_consumer);
-  if (target) {
-    event->ConvertLocationToTarget(window(), target);
-    details = DispatchEvent(target, event);
-    if (details.dispatcher_destroyed)
-      return;
   }
+
+  Window* target = ConsumerToWindow(consumer_weak_ptr.get());
+  event->ConvertLocationToTarget(window(), target);
+  details = DispatchEvent(target, event);
 }
 
 DispatchDetails WindowEventDispatcher::DispatchMouseExitAtPoint(
@@ -192,8 +193,9 @@ void WindowEventDispatcher::HoldPointerMoves() {
     held_event_factory_.InvalidateWeakPtrs();
   }
   ++move_hold_count_;
-  TRACE_EVENT_BEGIN("ui", "WindowEventDispatcher::HoldPointerMoves",
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN(
+      "ui", "WindowEventDispatcher::HoldPointerMoves",
+      perfetto::NamedTrack::FromPointer("aura::WindowEventDispatcher", this));
 }
 
 void WindowEventDispatcher::ReleasePointerMoves() {
@@ -226,8 +228,9 @@ void WindowEventDispatcher::ReleasePointerMoves() {
       }
     }
   }
-  TRACE_EVENT_END("ui", /*"WindowEventDispatcher::HoldPointerMoves"*/
-                  perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END(
+      "ui", /*"WindowEventDispatcher::HoldPointerMoves"*/ perfetto::NamedTrack::
+          FromPointer("aura::WindowEventDispatcher", this));
 }
 
 gfx::Point WindowEventDispatcher::GetLastMouseLocationInRoot() const {
@@ -376,9 +379,12 @@ void WindowEventDispatcher::OnWindowHidden(Window* invisible,
   if (invisible->Contains(old_dispatch_target_))
     old_dispatch_target_ = nullptr;
 
+  // Block the deletion of the root window, its host thus this dispatcher.
+  aura::Window::ScopedDeleteBlocker blocker(host_->window());
+
   // Cleaning up gesture state may end up destroying the hidden window. We use a
-  // tracker to detect this.
-  WindowTracker invisible_tracker({invisible});
+  // weak pointer to detect this.
+  base::WeakPtr<aura::Window> invisible_weak = invisible->GetWeakPtrAsWindow();
   invisible->CleanupGestureState();
 
   // Do not clear the capture, and the |event_dispatch_target_| if the
@@ -394,16 +400,15 @@ void WindowEventDispatcher::OnWindowHidden(Window* invisible,
     Window* capture_window =
         capture_client ? capture_client->GetCaptureWindow() : nullptr;
 
-    if (!invisible_tracker.Contains(invisible) ||
-        invisible->Contains(event_dispatch_target_)) {
+    if (!invisible_weak || invisible->Contains(event_dispatch_target_)) {
       event_dispatch_target_ = nullptr;
     }
 
     // If the ancestor of the capture window is hidden, release the capture.
     // Note that this may delete the window so do not use capture_window
     // after this.
-    if (invisible_tracker.Contains(invisible) &&
-        invisible->Contains(capture_window) && invisible != window()) {
+    if (invisible_weak && invisible->Contains(capture_window) &&
+        invisible != window()) {
       capture_window->ReleaseCapture();
     }
   }
@@ -424,6 +429,12 @@ void WindowEventDispatcher::UpdateCapture(Window* old_capture,
   // Window.
   if (mouse_moved_handler_ && !window()->Contains(mouse_moved_handler_))
     mouse_moved_handler_ = nullptr;
+
+  std::unique_ptr<Window::ScopedDeleteBlocker> new_capture_blocker;
+  if (new_capture) {
+    new_capture_blocker =
+        std::make_unique<Window::ScopedDeleteBlocker>(new_capture);
+  }
 
   if (old_capture && old_capture->GetRootWindow() == window() &&
       old_capture->delegate()) {
@@ -528,8 +539,7 @@ ui::EventDispatchDetails WindowEventDispatcher::PreDispatchEvent(
   Window* target_window = static_cast<Window*>(target);
   CHECK(window()->Contains(target_window));
 
-  WindowTracker target_window_tracker;
-  target_window_tracker.Add(target_window);
+  auto target_window_weak = target_window->GetWeakPtrAsWindow();
   if (!dispatching_held_event_) {
     bool can_be_held = IsEventCandidateForHold(*event);
     if (!move_hold_count_ || !can_be_held) {
@@ -540,7 +550,7 @@ ui::EventDispatchDetails WindowEventDispatcher::PreDispatchEvent(
         return details;
     }
   }
-  if (target_window_tracker.windows().empty()) {
+  if (!target_window_weak) {
     // The event target is destroyed while processing the held event.
     DispatchDetails details;
     details.target_destroyed = true;
@@ -613,6 +623,10 @@ ui::EventDispatchDetails WindowEventDispatcher::PostDispatchEvent(
 
 ////////////////////////////////////////////////////////////////////////////////
 // WindowEventDispatcher, ui::GestureEventHelper implementation:
+
+base::WeakPtr<ui::GestureEventHelper> WindowEventDispatcher::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
 
 bool WindowEventDispatcher::CanDispatchToConsumer(
     ui::GestureConsumer* consumer) {
@@ -970,15 +984,14 @@ DispatchDetails WindowEventDispatcher::PreDispatchMouseEvent(
       // dispatch.
       if (target != mouse_moved_handler_) {
         aura::Window* old_mouse_moved_handler = mouse_moved_handler_;
-        WindowTracker live_window;
-        live_window.Add(target);
+        base::WeakPtr<ui::GestureConsumer> live_window = target->GetWeakPtr();
         DispatchDetails details = DispatchMouseEnterOrExit(
             target, *event, ui::EventType::kMouseExited);
         // |details| contains information about |mouse_moved_handler_| being
         // destroyed which is not our |target|. Return value of this function
         // should be about our |target|.
         DispatchDetails target_details = details;
-        target_details.target_destroyed = !live_window.Contains(target);
+        target_details.target_destroyed = !live_window;
         if (details.dispatcher_destroyed) {
           event->SetHandled();
           return target_details;
@@ -994,7 +1007,6 @@ DispatchDetails WindowEventDispatcher::PreDispatchMouseEvent(
           event->SetHandled();
           return target_details;
         }
-        live_window.Remove(target);
 
         mouse_moved_handler_ = target;
         details = DispatchMouseEnterOrExit(target, *event,
@@ -1114,19 +1126,23 @@ WindowEventDispatcher::CreateScropedMetricsMonitorForEvent(
       metrics = cc::ScrollUpdateEventMetrics::CreateForBrowser(
           ui::EventType::kGestureScrollUpdate, input_type,
           /*is_inertial=*/false,
-          has_seen_gesture_scroll_update_after_begin_
+          scroll_tracker_.has_seen_scroll_update_after_begin()
               ? cc::ScrollUpdateEventMetrics::ScrollUpdateType::kContinued
               : cc::ScrollUpdateEventMetrics::ScrollUpdateType::kStarted,
           gesture->details().scroll_y(), gesture->time_stamp(),
-          base::IdType64<class ui::LatencyInfo>(event.latency()->trace_id()));
-      has_seen_gesture_scroll_update_after_begin_ = true;
+          base::IdType64<class ui::LatencyInfo>(event.latency()->trace_id()),
+          scroll_tracker_.scroll_begin_generated_timestamp(),
+          scroll_tracker_.scroll_begin_arrival_timestamp());
+      scroll_tracker_.OnScrollUpdate();
     } else if (gesture->IsScrollGestureEvent()) {
       metrics = cc::ScrollEventMetrics::CreateForBrowser(
           gesture->type(), input_type,
           /*is_inertial=*/false, gesture->time_stamp(),
-          base::IdType64<class ui::LatencyInfo>(event.latency()->trace_id()));
+          base::IdType64<class ui::LatencyInfo>(event.latency()->trace_id()),
+          scroll_tracker_.scroll_begin_generated_timestamp(),
+          scroll_tracker_.scroll_begin_arrival_timestamp());
       if (gesture->type() == ui::EventType::kGestureScrollBegin) {
-        has_seen_gesture_scroll_update_after_begin_ = false;
+        scroll_tracker_.OnScrollBegin(metrics.get());
       }
     } else {
       DCHECK(gesture->IsPinchEvent());

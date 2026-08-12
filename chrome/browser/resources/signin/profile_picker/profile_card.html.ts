@@ -14,7 +14,9 @@ export function getHtml(this: ProfileCardElement) {
       ?disabled="${this.disabled}"
       aria-label="${this.profileState.profileCardButtonLabel}">
     <div id="avatarContainer">
-      <img class="profile-avatar" alt="" .src="${this.profileState.avatarIcon}">
+      <img class="profile-avatar ${
+      this.profileState.hasAvatarRing ? 'with-avatar-ring' : ''}"
+          alt="" .src="${this.profileState.avatarIcon}">
       <div id="iconContainer"
           ?hidden="${!this.profileState.avatarBadge.length}">
         <cr-icon icon="${this.profileState.avatarBadge}"></cr-icon>
@@ -27,19 +29,22 @@ export function getHtml(this: ProfileCardElement) {
     <div id="forceSigninContainer" class="profile-card-info secondary-text"
         ?hidden="${!this.profileState.needsSignin}">
       <div>$i18n{needsSigninPrompt}</div>
-      <cr-icon id="forceSigninIcon" icon="profiles:lock"></cr-icon>
+      <cr-icon id="forceSigninIcon"
+          icon="${
+      this.webuiRoundedIconsEnabled_ ? 'profiles:lock-filled' :
+                                       'profiles:lock-old'}"></cr-icon>
     </div>
   </cr-button>
   <div id="profileNameInputWrapper">
     <cr-input class="profile-card-info prominent-text" id="nameInput"
         aria-label="$i18n{profileCardInputLabel}"
         .value="${this.profileState.localProfileName}"
-        @change="${this.onProfileNameChanged_}"
+        @change="${this.onProfileNameChange_}"
         @keydown="${this.onProfileNameKeydown_}"
         @blur="${this.onProfileNameInputBlur_}" pattern="${this.pattern_}"
         auto-validate spellcheck="false"
-        @pointerenter="${this.onNameInputPointerEnter_}"
-        @pointerleave="${this.onNameInputPointerLeave_}"
+        @pointerenter="${this.onNameInputPointerenter_}"
+        @pointerleave="${this.onNameInputPointerleave_}"
         ?disabled="${
       isGlicVersion() || this.profileState.hasEnterpriseLabel}" required>
     </cr-input>

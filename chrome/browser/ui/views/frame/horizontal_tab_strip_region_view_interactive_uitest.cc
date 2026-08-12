@@ -2,28 +2,39 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+
+#include "base/i18n/base_i18n_switches.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/frame/window_frame_util.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
+#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+#include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+#include "chrome/browser/ui/views/tabs/horizontal/tab_scroll_button_container.h"
 #include "chrome/browser/ui/views/tabs/new_tab_button.h"
-#include "chrome/browser/ui/views/tabs/tab_search_button.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/common/pref_names.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/interaction/interactive_browser_test.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/ui_base_features.h"
+#include "ui/base/ui_base_switches.h"
 #include "ui/events/event_constants.h"
+#include "ui/gfx/animation/animation_test_api.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/flex_layout.h"
+#include "ui/views/test/views_test_utils.h"
+#include "ui/views/view_utils.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/constants/chromeos_features.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 class HorizontalTabStripRegionViewBrowserBaseTest : public InProcessBrowserTest {
  public:
@@ -45,18 +56,14 @@ class HorizontalTabStripRegionViewBrowserBaseTest : public InProcessBrowserTest 
 
   TabStrip* tab_strip() { return tab_strip_region_view()->tab_strip(); }
 
-  TabSearchContainer* tab_search_container() {
-    return BrowserElementsViews::From(browser())->GetViewAs<TabSearchContainer>(
-        kTabSearchContainerElementId);
-  }
-
-  TabSearchButton* tab_search_button() {
-    return BrowserElementsViews::From(browser())->GetViewAs<TabSearchButton>(
+  views::LabelButton* tab_search_button() {
+    return BrowserElementsViews::From(browser())->GetViewAs<views::LabelButton>(
         kTabSearchButtonElementId);
   }
 
   views::View* new_tab_button() {
-    return tab_strip_region_view()->new_tab_button_for_testing();
+    return BrowserElementsViews::From(browser())->GetViewAs<views::View>(
+        kNewTabButtonElementId);
   }
 
  protected:
@@ -67,8 +74,14 @@ class HorizontalTabStripRegionViewBrowserTest : public HorizontalTabStripRegionV
  public:
   HorizontalTabStripRegionViewBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{});
+        /*enabled_features=*/{features::kGlic, features::kGlicRollout,
+#if BUILDFLAG(IS_CHROMEOS)
+                              chromeos::features::kFeatureManagementGlic
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        },
+        /*disabled_features=*/{features::kGlicLocaleFiltering,
+                               features::kGlicCountryFiltering,
+                               tabs::kTabStripUnification});
   }
   HorizontalTabStripRegionViewBrowserTest(const HorizontalTabStripRegionViewBrowserTest&) = delete;
   HorizontalTabStripRegionViewBrowserTest& operator=(
@@ -113,19 +126,12 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestForwardFocus
   EXPECT_TRUE(new_tab_button()->HasFocus());
 
   press_right();
-  if (!features::HasTabSearchToolbarButton()) {
-    EXPECT_TRUE(tab_search_button()->HasFocus());
-  } else {
-    EXPECT_TRUE(tab_0->HasFocus());
-    EXPECT_TRUE(tab_strip_region_view()->pane_has_focus());
-  }
+  EXPECT_TRUE(tab_search_button()->HasFocus());
 
-  if (!features::HasTabSearchToolbarButton()) {
-    // Focus should cycle back around to tab_0.
-    press_right();
-    EXPECT_TRUE(tab_0->HasFocus());
-    EXPECT_TRUE(tab_strip_region_view()->pane_has_focus());
-  }
+  // Focus should cycle back around to tab_0.
+  press_right();
+  EXPECT_TRUE(tab_0->HasFocus());
+  EXPECT_TRUE(tab_strip_region_view()->pane_has_focus());
 }
 
 IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestReverseFocus) {
@@ -157,23 +163,13 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestReverseFocus
 
   // Pressing left should immediately cycle back around to the last button.
   press_left();
-  if (features::HasTabSearchToolbarButton()) {
-    EXPECT_TRUE(new_tab_button()->HasFocus());
-  } else {
-    EXPECT_TRUE(tab_search_button()->HasFocus());
-  }
+  EXPECT_TRUE(tab_search_button()->HasFocus());
 
   press_left();
-  if (!features::HasTabSearchToolbarButton()) {
-    EXPECT_TRUE(new_tab_button()->HasFocus());
-  } else {
-    EXPECT_TRUE(tab_2->HasFocus());
-  }
+  EXPECT_TRUE(new_tab_button()->HasFocus());
 
-  if (!features::HasTabSearchToolbarButton()) {
-    move_back_to_tab(tab_2);
-    EXPECT_TRUE(tab_2->HasFocus());
-  }
+  move_back_to_tab(tab_2);
+  EXPECT_TRUE(tab_2->HasFocus());
 
   move_back_to_tab(tab_1);
   EXPECT_TRUE(tab_1->HasFocus());
@@ -193,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestBeginEndFocu
   tab_strip_region_view()->RequestFocus();
   EXPECT_TRUE(tab_strip_region_view()->pane_has_focus());
 
-  if (tabs::GetTabSearchPosition(browser()->profile()) ==
+  if (tabs::GetTabSearchPosition(browser()) ==
       tabs::TabSearchPosition::kLeadingHorizontalTabstrip) {
     EXPECT_TRUE(tab_0->HasFocus());
 
@@ -205,12 +201,7 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestBeginEndFocu
 
     EXPECT_TRUE(tab_strip_region_view()->AcceleratorPressed(
         tab_strip_region_view()->home_key()));
-    if (features::HasTabSearchToolbarButton()) {
-      EXPECT_TRUE(new_tab_button()->HasFocus());
-    } else {
-      EXPECT_TRUE(tab_search_button()->HasFocus());
-    }
-
+    EXPECT_TRUE(tab_search_button()->HasFocus());
   } else {
     // The first tab should be active.
     EXPECT_TRUE(tab_0->HasFocus());
@@ -218,11 +209,7 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestBeginEndFocu
 #if !BUILDFLAG(IS_WIN)
     EXPECT_TRUE(tab_strip_region_view()->AcceleratorPressed(
         tab_strip_region_view()->end_key()));
-    if (features::HasTabSearchToolbarButton()) {
-      EXPECT_TRUE(new_tab_button()->HasFocus());
-    } else {
-      EXPECT_TRUE(tab_search_button()->HasFocus());
-    }
+    EXPECT_TRUE(tab_search_button()->HasFocus());
 #endif  // !BUILDFLAG(IS_WIN)
 
     EXPECT_TRUE(tab_strip_region_view()->AcceleratorPressed(
@@ -232,24 +219,24 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest, TestBeginEndFocu
 }
 
 IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest,
-                       DefaultTestSearchContainerIsEndAligned) {
-  if (tabs::GetTabSearchPosition(browser()->profile()) ==
+                       DefaultTabSearchButtonIsEndAligned) {
+  if (tabs::GetTabSearchPosition(browser()) ==
       tabs::TabSearchPosition::kLeadingHorizontalTabstrip) {
-    // The TabSearchContainer is calculated as controls padding away from the
+    // The tab search button is calculated as controls padding away from the
     // first tab (not including bottom corner radius)
-    const int tab_search_container_expected_end =
-        tab_strip_region_view()->GetTabStripContainerForTesting()->x() +
+    int tab_search_button_expected_end =
+        tab_strip_region_view()->tab_strip()->x() +
         TabStyle::Get()->GetBottomCornerRadius() -
-        GetLayoutConstant(TAB_STRIP_PADDING);
+        (2 * GetLayoutConstant(LayoutConstant::kTabStripPadding));
 
-    EXPECT_EQ(tab_search_container()->bounds().right(),
-              tab_search_container_expected_end);
-  } else if (!features::HasTabSearchToolbarButton()) {
-    const int tab_search_container_expected_end =
+    EXPECT_EQ(tab_search_button()->bounds().right(),
+              tab_search_button_expected_end);
+  } else {
+    const int tab_search_button_expected_end =
         tab_strip_region_view()->GetLocalBounds().right() -
-        GetLayoutConstant(TAB_STRIP_PADDING);
-    EXPECT_EQ(tab_search_container()->bounds().right(),
-              tab_search_container_expected_end);
+        GetLayoutConstant(LayoutConstant::kTabStripPadding);
+    EXPECT_EQ(tab_search_button()->bounds().right(),
+              tab_search_button_expected_end);
   }
 }
 
@@ -303,4 +290,218 @@ IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewBrowserTest,
   EXPECT_TRUE(tab_0->IsActive());
 }
 
+class HorizontalTabStripRegionViewNewInteractiveUiTest
+    : public InteractiveBrowserTest {
+ public:
+  HorizontalTabStripRegionViewNewInteractiveUiTest()
+      : render_mode_resetter_(gfx::AnimationTestApi::SetRichAnimationRenderMode(
+            gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED)) {
+    scoped_feature_list_.InitAndEnableFeature(tabs::kTabStripUnification);
+  }
+  HorizontalTabStripRegionViewNewInteractiveUiTest(
+      const HorizontalTabStripRegionViewNewInteractiveUiTest&) = delete;
+  HorizontalTabStripRegionViewNewInteractiveUiTest& operator=(
+      const HorizontalTabStripRegionViewNewInteractiveUiTest&) = delete;
+  ~HorizontalTabStripRegionViewNewInteractiveUiTest() override = default;
 
+  void SetUpOnMainThread() override {
+    InteractiveBrowserTest::SetUpOnMainThread();
+  }
+
+  auto SetWindowBounds(const gfx::Rect& bounds) {
+    return Do([this, bounds]() {
+      BrowserView::GetBrowserViewForBrowser(browser())->GetWidget()->SetBounds(
+          bounds);
+    });
+  }
+
+  TabStripView* tab_strip_view() {
+    auto* const browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    auto* const region_view =
+        views::AsViewClass<HorizontalTabStripRegionViewNew>(
+            browser_view->tab_strip_view());
+    return views::AsViewClass<TabStripView>(region_view->GetTabStripView());
+  }
+
+  // Checks if the unpinned tab at `index` is visible in the unpinned scroll
+  // view.
+  bool IsTabVisible(int index) {
+    views::ScrollView* scroll_view =
+        tab_strip_view()->unpinned_tabs_scroll_view();
+    views::View* tab =
+        tab_strip_view()->GetUnpinnedTabsContainer()->children()[index];
+    return scroll_view->GetVisibleRect().Intersects(tab->bounds());
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+  gfx::AnimationTestApi::RenderModeResetter render_mode_resetter_;
+};
+
+class HorizontalTabStripRegionViewNewRTLInteractiveUiTest
+    : public HorizontalTabStripRegionViewNewInteractiveUiTest {
+ public:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    HorizontalTabStripRegionViewNewInteractiveUiTest::SetUpCommandLine(
+        command_line);
+    command_line->AppendSwitchASCII(::switches::kForceUIDirection,
+                                    ::switches::kForceDirectionRTL);
+    command_line->AppendSwitchASCII(::switches::kForceTextDirection,
+                                    ::switches::kForceDirectionRTL);
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewInteractiveUiTest,
+                       ScrollButtonsHiddenWhenTabsFit) {
+  for (int i = 0; i < 4; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      EnsureNotPresent(TabScrollButtonContainer::kTabScrollButtonContainer));
+}
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewInteractiveUiTest,
+                       ScrollButtonsShowOnTabsOverflowAndHideWhenTabsFitAgain) {
+  for (int i = 0; i < 50; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      WaitForShow(TabScrollButtonContainer::kTabScrollButtonContainer),
+      Do([this]() {
+        auto* const model = browser()->tab_strip_model();
+        for (int i = 0; i < 40; ++i) {
+          model->CloseWebContentsAt(model->count() - 1,
+                                    TabCloseTypes::CLOSE_USER_GESTURE);
+        }
+      }),
+      WaitForHide(TabScrollButtonContainer::kTabScrollButtonContainer));
+}
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewInteractiveUiTest,
+                       ScrollButtonsRespondToWindowResize) {
+  for (int i = 0; i < 20; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      SetWindowBounds(gfx::Rect(100, 100, 1200, 600)),
+      EnsureNotPresent(TabScrollButtonContainer::kTabScrollButtonContainer),
+      SetWindowBounds(gfx::Rect(100, 100, 300, 600)),
+      WaitForShow(TabScrollButtonContainer::kTabScrollButtonContainer),
+      SetWindowBounds(gfx::Rect(100, 100, 1200, 600)),
+      WaitForHide(TabScrollButtonContainer::kTabScrollButtonContainer));
+}
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewInteractiveUiTest,
+                       ScrollButtonsShowOnOverflowWithPinnedTabs) {
+  // Add unpinned tabs and pinned tabs. The pinned tabs
+  // should cause the unpinned tabs container to overflow.
+  for (int i = 0; i < 20; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  for (int i = 0; i < 20; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+    browser()->tab_strip_model()->SetTabPinned(
+        browser()->tab_strip_model()->count() - 1, true);
+  }
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      SetWindowBounds(gfx::Rect(100, 100, 1000, 600)),
+      WaitForShow(TabScrollButtonContainer::kTabScrollButtonContainer),
+      Do([this]() {
+        auto* const model = browser()->tab_strip_model();
+        for (int i = model->IndexOfFirstNonPinnedTab() - 1; i >= 0; --i) {
+          model->CloseWebContentsAt(i, /*close_types=*/0);
+        }
+      }),
+      WaitForHide(TabScrollButtonContainer::kTabScrollButtonContainer));
+}
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewInteractiveUiTest,
+                       ClickHorizontalScrollButtons) {
+  // We set the window size and number of tabs explicitly so that
+  // first and last tabs are scrolled into and out of view.
+  BrowserView::GetBrowserViewForBrowser(browser())->GetWidget()->SetBounds(
+      gfx::Rect(10, 10, 1000, 780));
+
+  for (int i = 0; i < 40; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  browser()->tab_strip_model()->ActivateTabAt(0);
+
+  const int last_tab_index = browser()->tab_strip_model()->count() - 1;
+
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                      kFirstTabVisibleObserver);
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                      kLastTabVisibleObserver);
+
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      WaitForShow(TabScrollButtonContainer::kTabScrollButtonContainer),
+      PollState(
+          kFirstTabVisibleObserver,
+          base::BindRepeating(
+              &HorizontalTabStripRegionViewNewInteractiveUiTest::IsTabVisible,
+              base::Unretained(this), 0)),
+      PollState(
+          kLastTabVisibleObserver,
+          base::BindRepeating(
+              &HorizontalTabStripRegionViewNewInteractiveUiTest::IsTabVisible,
+              base::Unretained(this), last_tab_index)),
+      WaitForState(kFirstTabVisibleObserver, true),
+      WaitForState(kLastTabVisibleObserver, false),
+      // After scrolling to the end, last tab should be scrolled into view and
+      // first tab should no longer be visible.
+      PressButton(TabScrollButtonContainer::kEndScrollButton),
+      WaitForState(kFirstTabVisibleObserver, false),
+      WaitForState(kLastTabVisibleObserver, true),
+      // We should be in previous state.
+      PressButton(TabScrollButtonContainer::kStartScrollButton),
+      WaitForState(kFirstTabVisibleObserver, true),
+      WaitForState(kLastTabVisibleObserver, false));
+}
+
+IN_PROC_BROWSER_TEST_F(HorizontalTabStripRegionViewNewRTLInteractiveUiTest,
+                       ClickHorizontalScrollButtonsRTL) {
+  BrowserView::GetBrowserViewForBrowser(browser())->GetWidget()->SetBounds(
+      gfx::Rect(10, 10, 1000, 780));
+  for (int i = 0; i < 40; ++i) {
+    chrome::AddTabAt(browser(), GURL("about:blank"), -1, false);
+  }
+  browser()->tab_strip_model()->ActivateTabAt(0);
+
+  const int last_tab_index = browser()->tab_strip_model()->count() - 1;
+
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                      kFirstTabVisibleObserver);
+  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
+                                      kLastTabVisibleObserver);
+
+  RunTestSequence(
+      EnsurePresent(kTabStripRegionElementId),
+      WaitForShow(TabScrollButtonContainer::kTabScrollButtonContainer),
+      PollState(
+          kFirstTabVisibleObserver,
+          base::BindRepeating(
+              &HorizontalTabStripRegionViewNewInteractiveUiTest::IsTabVisible,
+              base::Unretained(this), 0)),
+      PollState(
+          kLastTabVisibleObserver,
+          base::BindRepeating(
+              &HorizontalTabStripRegionViewNewInteractiveUiTest::IsTabVisible,
+              base::Unretained(this), last_tab_index)),
+      WaitForState(kFirstTabVisibleObserver, true),
+      WaitForState(kLastTabVisibleObserver, false),
+      // After scrolling to the left, last tab should be scrolled into view and
+      // first tab should no longer be visible. Note we are in RTL.
+      PressButton(TabScrollButtonContainer::kStartScrollButton),
+      WaitForState(kFirstTabVisibleObserver, false),
+      WaitForState(kLastTabVisibleObserver, true),
+      PressButton(TabScrollButtonContainer::kEndScrollButton),
+      // We should be in previous state.
+      WaitForState(kFirstTabVisibleObserver, true),
+      WaitForState(kLastTabVisibleObserver, false));
+}

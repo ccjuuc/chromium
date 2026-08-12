@@ -33,12 +33,12 @@ export enum ContentSettingsTypes {
   HID_DEVICES = 'hid-devices',
   IDLE_DETECTION = 'idle-detection',
   IMAGES = 'images',
+  INLINE_CUE_MENU = 'inline-cue-menu',
   JAVASCRIPT = 'javascript',
   JAVASCRIPT_OPTIMIZER = 'javascript-optimizer',
   KEYBOARD_LOCK = 'keyboard-lock',
   LOCAL_FONTS = 'local-fonts',
   LOCAL_NETWORK = 'local-network',
-  LOCAL_NETWORK_ACCESS = 'local-network-access',
   LOOPBACK_NETWORK = 'loopback-network',
   MIC = 'media-stream-mic',  // AKA Microphone.
   MIDI_DEVICES = 'midi-sysex',
@@ -48,7 +48,6 @@ export enum ContentSettingsTypes {
   PERFORMANCE = 'performance',
   POINTER_LOCK = 'pointer-lock',
   POPUPS = 'popups',
-  PRIVATE_NETWORK_DEVICES = 'private-network-devices',
   PROTECTED_CONTENT = 'protected-content',
   PROTOCOL_HANDLERS = 'register-protocol-handler',
   SENSORS = 'sensors',
@@ -56,7 +55,6 @@ export enum ContentSettingsTypes {
   SMART_CARD_READERS = 'smart-card-readers',
   SOUND = 'sound',
   STORAGE_ACCESS = 'storage-access',
-  TRACKING_PROTECTION = 'tracking-protection',
   TOP_LEVEL_STORAGE_ACCESS = 'top-level-storage-access',
   USB_DEVICES = 'usb-devices',
   VR = 'vr',
@@ -96,7 +94,6 @@ export enum ChooserType {
   SERIAL_PORTS = 'serial-ports-data',
   HID_DEVICES = 'hid-devices-data',
   BLUETOOTH_DEVICES = 'bluetooth-devices-data',
-  PRIVATE_NETWORK_DEVICES = 'private-network-devices-data',
   // <if expr="is_chromeos">
   SMART_CARD_READERS_DEVICES = 'smart-card-readers-data',
   // </if>
@@ -112,7 +109,6 @@ export enum CookieControlsMode {
   OFF = 0,
   BLOCK_THIRD_PARTY = 1,
   INCOGNITO_ONLY = 2,
-  LIMITED = 3,
 }
 // LINT.ThenChange(//tools/metrics/histograms/metadata/privacy/enums.xml:CookieControlsMode, //components/content_settings/core/browser/cookie_settings.h:CookieControlsMode)
 
@@ -140,16 +136,16 @@ export enum SiteSettingSource {
  * chrome/browser/content_settings/generated_permission_prompting_behavior_pref.h
  */
 export enum SettingsState {
+  UNDEFINED = -1,
   LOUD = 0,
   QUIET = 1,
   CPSS = 2,
-  BLOCK = 3,
 }
 
 /**
  * Enumeration of states for the Javascript optimizer default setting generated
  * pref. Must be kept in sync with the JavascriptOptimizerSetting enum in:
- * chrome/browser/content_settings/generated_javascript_optimizer_pref.h
+ * components/content_settings/browser/ui/javascript_optimizer_setting.h
  */
 // LINT.IfChange(JavascriptOptimizerSetting)
 export enum JavascriptOptimizerSetting {
@@ -157,7 +153,7 @@ export enum JavascriptOptimizerSetting {
   ALLOWED = 1,
   BLOCKED_FOR_UNFAMILIAR_SITES = 2,
 }
-// LINT.ThenChange(//chrome/browser/content_settings/generated_javascript_optimizer_pref.h:JavascriptOptimizerSetting)
+// LINT.ThenChange(//components/content_settings/browser/ui/javascript_optimizer_setting.h)
 
 /**
  * An invalid subtype value.

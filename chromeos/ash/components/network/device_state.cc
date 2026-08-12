@@ -9,7 +9,6 @@
 
 #include "ash/constants/ash_features.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/values.h"
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "chromeos/ash/components/network/shill_property_util.h"
@@ -60,7 +59,7 @@ bool DeviceState::PropertyChanged(const std::string& key,
       country_code_.clear();
       return true;
     }
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
 
     const std::string* operator_name = dict.FindString(shill::kOperatorNameKey);
     if (operator_name) {
@@ -102,7 +101,7 @@ bool DeviceState::PropertyChanged(const std::string& key,
     if (!value.is_dict()) {
       return false;
     }
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
 
     // Set default values for SIM properties.
     sim_lock_type_.erase();
@@ -167,7 +166,7 @@ bool DeviceState::IsActive() const {
 }
 
 void DeviceState::IPConfigPropertiesChanged(const std::string& ip_config_path,
-                                            base::Value::Dict properties) {
+                                            base::DictValue properties) {
   NET_LOG(EVENT) << "IPConfig for: " << path()
                  << " Changed: " << ip_config_path;
   ip_configs_.Set(ip_config_path, std::move(properties));
@@ -207,7 +206,7 @@ std::string DeviceState::GetIpAddressByType(const std::string& type) const {
   for (const auto iter : ip_configs_) {
     if (!iter.second.is_dict())
       continue;
-    const base::Value::Dict& ip_config = iter.second.GetDict();
+    const base::DictValue& ip_config = iter.second.GetDict();
     const std::string* ip_config_method =
         ip_config.FindString(shill::kMethodProperty);
     if (!ip_config_method)

@@ -4,14 +4,19 @@
 
 #include "net/device_bound_sessions/session.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/escape.h"
 #include "base/types/expected_macros.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "net/base/features.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "net/base/schemeful_site.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_params.h"
 #include "net/cookies/cookie_constants.h"
@@ -23,6 +28,7 @@
 #include "net/device_bound_sessions/inclusion_result.h"
 #include "net/device_bound_sessions/proto/storage.pb.h"
 #include "net/device_bound_sessions/session_binding_utils.h"
+#include "net/device_bound_sessions/session_display.h"
 #include "net/device_bound_sessions/session_error.h"
 #include "net/device_bound_sessions/session_inclusion_rules.h"
 #include "net/device_bound_sessions/session_usage.h"
@@ -60,6 +66,33 @@ constexpr net::BackoffEntry::Policy kBackoffPolicy = {
     // Don't use initial delay unless the last request was an error.
     false,
 };
+
+// Returns the remaining lifetime of the real cookie in `cookie_list` that
+// satisfies `craving`. Returns std::nullopt if no cookie in `cookie_list`
+// satisfies `craving`. Returns base::TimeDelta::Max() if the satisfying cookie
+// is a non-persistent session cookie.
+// NOTE: `cookie_list` can contain at most one cookie satisfying `craving`, as
+// cookies in the store are uniquely identified by their name, domain, path, and
+// partition key, all of which are matched by `IsSatisfiedBy()`.
+std::optional<base::TimeDelta> GetMinimumLifetimeForCraving(
+    const CookieCraving& craving,
+    base::span<const CookieWithAccessResult> cookie_list,
+    base::Time current_time = base::Time::Now()) {
+  for (const auto& cookie : cookie_list) {
+    // Note that any cookie in `cookie_list` that satisfies the craving is fine,
+    // even if it does not ultimately get included when sending the request. We
+    // only need to ensure the cookie is present in the store.
+    if (craving.IsSatisfiedBy(cookie.cookie)) {
+      return cookie.cookie.IsPersistent()
+                 ? std::max(base::TimeDelta(),
+                            cookie.cookie.ExpiryDate() - current_time)
+                 : base::TimeDelta::Max();
+    }
+  }
+
+  return std::nullopt;
+}
+
 }  // namespace
 
 Session::Session(Id id, SessionInclusionRules inclusion_rules, GURL refresh)
@@ -75,7 +108,8 @@ Session::Session(Id id,
                  bool should_defer_when_expired,
                  base::Time creation_date,
                  base::Time expiry_date,
-                 std::vector<std::string> allowed_refresh_initiators)
+                 std::vector<std::string> allowed_refresh_initiators,
+                 AttestationMode attestation_mode)
     : id_(id),
       refresh_url_(refresh),
       inclusion_rules_(std::move(inclusion_rules)),
@@ -83,6 +117,11 @@ Session::Session(Id id,
       should_defer_when_expired_(should_defer_when_expired),
       creation_date_(creation_date),
       expiry_date_(expiry_date),
+      maybe_attestation_key_id_or_error_(
+          attestation_mode == AttestationMode::kRequired
+              ? MaybeAttestationKeyIdOrError(base::unexpected(
+                    unexportable_keys::ServiceError::kKeyNotReady))
+              : MaybeAttestationKeyIdOrError(std::nullopt)),
       backoff_(&kBackoffPolicy),
       allowed_refresh_initiators_(std::move(allowed_refresh_initiators)) {}
 
@@ -122,6 +161,14 @@ base::expected<std::unique_ptr<Session>, SessionError> Session::CreateIfValid(
       net::SchemefulSite(params.fetcher_url)) {
     return base::unexpected(
         SessionError{SessionError::kScopeOriginSameSiteMismatch});
+  }
+
+  // Cross-origin registrations must specify `include_site = true`.
+  const bool is_same_origin =
+      url::Origin::Create(params.fetcher_url).IsSameOriginWith(scope_origin);
+  if (!is_same_origin && !params.scope.include_site) {
+    return base::unexpected(
+        SessionError{SessionError::kCrossOriginRegistrationSiteNotIncluded});
   }
 
   // The refresh endpoint can be a full URL (samesite with request origin)
@@ -167,6 +214,8 @@ base::expected<std::unique_ptr<Session>, SessionError> Session::CreateIfValid(
   session->set_creation_date(base::Time::Now());
   session->set_expiry_date(base::Time::Now() + kSessionTtl);
   session->set_unexportable_key_id(std::move(params.key_id));
+  session->set_unexportable_attestation_key_id(
+      std::move(params.attestation_key_id));
 
   for (const std::string& initiator : params.allowed_refresh_initiators) {
     if (!IsValidHostPattern(initiator)) {
@@ -234,10 +283,20 @@ std::unique_ptr<Session> Session::CreateFromProto(const proto::Session& proto) {
     allowed_refresh_initiators.emplace_back(initiator);
   }
 
+  // If the proto contains a wrapped attestation key, it means this session
+  // is configured to use one, so we pass `AttestationMode::kRequired` to
+  // initialize its state to `kKeyNotReady`, indicating it needs to be loaded
+  // into the TPM. Since this is an expensive operation, we only do this if
+  // absolutely needed.
+  //
+  // Otherwise, we pass `AttestationMode::kNone` indicating no attestation key
+  // is expected.
   return base::WrapUnique(new Session(
       Id(proto.id()), std::move(refresh), std::move(*inclusion_rules),
       std::move(cravings), proto.should_defer_when_expired(), creation_date,
-      expiry_date, std::move(allowed_refresh_initiators)));
+      expiry_date, std::move(allowed_refresh_initiators),
+      proto.has_wrapped_attestation_key() ? AttestationMode::kRequired
+                                          : AttestationMode::kNone));
 }
 
 proto::Session Session::ToProto() const {
@@ -263,24 +322,39 @@ proto::Session Session::ToProto() const {
   return session_proto;
 }
 
+SessionDisplay Session::ToDisplay() const {
+  std::vector<CookieCravingDisplay> display_cravings =
+      base::ToVector(cookie_cravings_,
+                     [](const auto& craving) { return craving.ToDisplay(); });
+  return SessionDisplay(SessionKey(SchemefulSite(origin()), id_), refresh_url_,
+                        inclusion_rules_.ToDisplay(),
+                        std::move(display_cravings), expiry_date_,
+                        cached_challenge_, allowed_refresh_initiators_);
+}
+
 bool Session::IsInScope(DbscRequest& request) {
+  SchemefulSite session_site = SchemefulSite(this->origin());
+  SessionKey session_key{session_site, id()};
+  if (SchemefulSite(request.url()) == session_site) {
+    MaybeIncreaseSessionUsage(session_key, request,
+                              SessionUsage::kSiteMatchNotInScope);
+  }
+
   if (!IncludesUrl(request.url())) {
     // Request is not in scope for this session.
     return false;
   }
 
-  if (request.device_bound_session_usage() <
-      SessionUsage::kInScopeNotDeferred) {
-    request.set_device_bound_session_usage(SessionUsage::kInScopeNotDeferred);
-  }
+  MaybeIncreaseSessionUsage(session_key, request,
+                            SessionUsage::kInScopeRefreshNotYetNeeded);
 
   request.net_log().AddEvent(
       net::NetLogEventType::DBSC_REQUEST, [&](NetLogCaptureMode capture_mode) {
-        base::Value::Dict dict;
+        base::DictValue dict;
         dict.Set("refresh_url", refresh_url_.spec());
         dict.Set("scope", inclusion_rules_.DebugString());
 
-        base::Value::List credentials;
+        base::ListValue credentials;
         for (const CookieCraving& craving : cookie_cravings_) {
           credentials.Append(craving.DebugString());
         }
@@ -295,10 +369,12 @@ bool Session::IsInScope(DbscRequest& request) {
       });
 
   if (!AllowedToInitiateRefresh(request.initiator())) {
+    MaybeIncreaseSessionUsage(session_key, request,
+                              SessionUsage::kInScopeRefreshNotAllowed);
     request.net_log().AddEvent(
         net::NetLogEventType::CHECK_DBSC_REFRESH_REQUIRED,
         [&](NetLogCaptureMode capture_mode) {
-          base::Value::Dict dict;
+          base::DictValue dict;
           dict.Set("refresh_required_reason",
                    "refresh_not_allowed_for_initiator");
           return dict;
@@ -311,15 +387,21 @@ bool Session::IsInScope(DbscRequest& request) {
 
 base::TimeDelta Session::MinimumBoundCookieLifetime(
     DbscRequest& request,
-    const FirstPartySetMetadata& first_party_set_metadata) {
+    const FirstPartySetMetadata& first_party_set_metadata,
+    const SessionKey& session_key) {
+  base::Time current_time = base::Time::Now();
+
   // TODO(crbug.com/438783631): Refactor this.
   // The below is all copied from AddCookieHeaderAndStart. We should refactor
   // it.
   CookieStore* cookie_store = request.context()->cookie_store();
-  bool force_ignore_site_for_cookies = request.force_ignore_site_for_cookies();
+  bool force_ignore_site_for_cookies =
+      request.ShouldForceIgnoreSiteForCookies();
   if (cookie_store->cookie_access_delegate() &&
       cookie_store->cookie_access_delegate()->ShouldIgnoreSameSiteRestrictions(
-          request.url(), request.site_for_cookies())) {
+          request.url(), request.site_for_cookies(),
+          request.isolation_info().top_frame_origin().value_or(
+              url::Origin()))) {
     force_ignore_site_for_cookies = true;
   }
 
@@ -336,6 +418,7 @@ base::TimeDelta Session::MinimumBoundCookieLifetime(
 
   CookieOptions options;
   options.set_same_site_cookie_context(same_site_context);
+  // DBSC cookie cravings include HttpOnly cookies.
   options.set_include_httponly();
   // Not really relevant for CookieCraving, but might as well make it explicit.
   options.set_do_not_update_access_time();
@@ -347,73 +430,75 @@ base::TimeDelta Session::MinimumBoundCookieLifetime(
 
   // The main logic. This checks every CookieCraving against every (real)
   // CanonicalCookie.
-  base::Time current_timestamp = base::Time::Now();
   base::TimeDelta minimum_remaining_lifetime = base::TimeDelta::Max();
-  for (const CookieCraving& cookie_craving : cookie_cravings_) {
-    if (!cookie_craving.ShouldIncludeForRequest(
-            request, first_party_set_metadata, options, params)) {
+  for (const CookieCraving& craving : cookie_cravings_) {
+    if (!craving.ShouldIncludeForRequest(request, first_party_set_metadata,
+                                         options, params)) {
       continue;
     }
-
-    bool satisfied = false;
-    for (const CookieWithAccessResult& request_cookie :
-         request.maybe_sent_cookies()) {
-      // Note that any request_cookie that satisfies the craving is fine, even
-      // if it does not ultimately get included when sending the request. We
-      // only need to ensure the cookie is present in the store.
-      //
-      // Note that in general if a CanonicalCookie isn't included, then the
-      // corresponding CookieCraving typically also isn't included, but there
-      // are exceptions.
-      //
-      // For example, if a CookieCraving is for a secure cookie, and the
-      // request is insecure, then the CookieCraving will be excluded, but the
-      // CanonicalCookie will be included. DBSC only applies to secure context
-      // but there might be similar cases.
-      if (cookie_craving.IsSatisfiedBy(request_cookie.cookie)) {
-        satisfied = true;
-        if (!request_cookie.cookie.ExpiryDate().is_null()) {
-          minimum_remaining_lifetime =
-              std::min(minimum_remaining_lifetime,
-                       request_cookie.cookie.ExpiryDate() - current_timestamp);
-        }
-        break;
-      }
-    }
-
-    if (!satisfied) {
+    // Note that in general if a CanonicalCookie isn't included, then the
+    // corresponding CookieCraving typically also isn't included, but there
+    // are exceptions.
+    //
+    // For example, if a CookieCraving is for a secure cookie, and the
+    // request is insecure, then the CookieCraving will be excluded, but the
+    // CanonicalCookie will be included. DBSC only applies to secure context
+    // but there might be similar cases.
+    std::optional<base::TimeDelta> lifetime = GetMinimumLifetimeForCraving(
+        craving, request.maybe_sent_cookies(), current_time);
+    if (!lifetime.has_value()) {
       request.net_log().AddEvent(
           net::NetLogEventType::CHECK_DBSC_REFRESH_REQUIRED,
           [&](NetLogCaptureMode capture_mode) {
-            base::Value::Dict dict;
+            base::DictValue dict;
             dict.Set("refresh_required_reason", "missing_cookie");
 
             if (NetLogCaptureIncludesSensitive(capture_mode)) {
-              dict.Set("refresh_missing_cookie", cookie_craving.Name());
+              dict.Set("refresh_missing_cookie", craving.Name());
             }
 
             return dict;
           });
 
       // There's an unsatisfied craving. Defer the request.
-      request.set_device_bound_session_usage(SessionUsage::kDeferred);
+      MaybeIncreaseSessionUsage(session_key, request, SessionUsage::kDeferred);
       return base::TimeDelta();
     }
+    minimum_remaining_lifetime =
+        std::min(minimum_remaining_lifetime, *lifetime);
   }
 
-  last_proactive_refresh_opportunity_ = current_timestamp;
+  last_proactive_refresh_opportunity_ = current_time;
   last_proactive_refresh_opportunity_minimum_cookie_lifetime_ =
       minimum_remaining_lifetime;
 
   request.net_log().AddEvent(net::NetLogEventType::CHECK_DBSC_REFRESH_REQUIRED,
                              [&](NetLogCaptureMode capture_mode) {
-                               base::Value::Dict dict;
+                               base::DictValue dict;
                                dict.Set("refresh_required_reason",
                                         "refresh_not_required");
                                return dict;
                              });
 
   // All cookiecravings satisfied.
+  return minimum_remaining_lifetime;
+}
+
+base::TimeDelta Session::MinimumBoundCookieLifetime(
+    base::span<const CookieWithAccessResult> cookies) const {
+  base::Time current_time = base::Time::Now();
+  base::TimeDelta minimum_remaining_lifetime = base::TimeDelta::Max();
+  // NOTE: Searching `cookies` for each craving is O(N*M), but the number of
+  // `cookie_cravings_` is expected to be small (typically 1 or 2 per session).
+  for (const CookieCraving& craving : cookie_cravings_) {
+    if (std::optional<base::TimeDelta> lifetime =
+            GetMinimumLifetimeForCraving(craving, cookies, current_time)) {
+      minimum_remaining_lifetime =
+          std::min(minimum_remaining_lifetime, *lifetime);
+    } else {
+      return base::TimeDelta();
+    }
+  }
   return minimum_remaining_lifetime;
 }
 
@@ -432,6 +517,8 @@ bool Session::IsEqualForTesting(const Session& other) const {
          creation_date_ == other.creation_date_ &&
          expiry_date_ == other.expiry_date_ &&
          key_id_or_error_ == other.key_id_or_error_ &&
+         maybe_attestation_key_id_or_error_ ==
+             other.maybe_attestation_key_id_or_error_ &&
          cached_challenge_ == other.cached_challenge_ &&
          allowed_refresh_initiators_ == other.allowed_refresh_initiators_;
 }
@@ -476,7 +563,6 @@ void Session::InformOfRefreshResult(bool was_proactive,
       backoff_.InformOfRequest(/*succeeded=*/true);
       break;
     // Fatal errors, no backoff needed
-    case kKeyError:
     case kSigningError:
     case kServerRequestedTermination:
     case kInvalidConfigJson:
@@ -535,10 +621,13 @@ void Session::InformOfRefreshResult(bool was_proactive,
     case kSigningQuotaExceeded:
       break;
     case kTransientHttpError:
+    case kTransientSigningError:
     case kBoundCookieSetForbidden:
       backoff_.InformOfRequest(/*succeeded=*/false);
       break;
     // Registration-only errors
+    case kSigningKeyGenerationError:
+    case kAttestationKeyGenerationError:
     case kSubdomainRegistrationWellKnownUnavailable:
     case kSubdomainRegistrationUnauthorized:
     case kSubdomainRegistrationWellKnownMalformed:
@@ -555,6 +644,10 @@ void Session::InformOfRefreshResult(bool was_proactive,
     case kRegistrationAttemptedChallenge:
     case kInvalidFederatedSessionProviderFailedToRestoreKey:
     case kFailedToUnwrapKey:
+    case kCrossOriginRegistrationSiteNotIncluded:
+    case kInvalidPreProvisionedKeyInitiatorMissing:
+    case kPreProvisionedKeyAccessNotGranted:
+    case kPreProvisionedKeyNotFound:
       NOTREACHED();
   }
 
@@ -579,10 +672,13 @@ bool Session::CanSetBoundCookie(
     return false;
   }
 
-  bool force_ignore_site_for_cookies = request.force_ignore_site_for_cookies();
+  bool force_ignore_site_for_cookies =
+      request.ShouldForceIgnoreSiteForCookies();
   if (cookie_store->cookie_access_delegate() &&
       cookie_store->cookie_access_delegate()->ShouldIgnoreSameSiteRestrictions(
-          request.url(), request.site_for_cookies())) {
+          request.url(), request.site_for_cookies(),
+          request.isolation_info().top_frame_origin().value_or(
+              url::Origin()))) {
     force_ignore_site_for_cookies = true;
   }
   bool is_main_frame_navigation =

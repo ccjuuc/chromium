@@ -4,6 +4,8 @@
 
 #include "third_party/blink/renderer/core/html/media/media_video_visibility_tracker.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_macros.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
@@ -19,7 +21,6 @@
 #include "third_party/blink/renderer/platform/graphics/paint/display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/display_item_list.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -258,6 +259,19 @@ bool IsContentType(DisplayItem::Type type) {
            type == DisplayItem::kForeignLayerViewportScrollbar);
 }
 
+// Returns true if `layout` is perceptually visible, false otherwise.
+//
+// In the context of `MediaVideoVisibilityTracker`, an element is considered
+// perceptually visible if it and all of its ancestors have a non-zero opacity
+// and its visibility style is set to visible.
+bool IsPerceptuallyVisible(const LayoutObject* layout) {
+  // Check if the element itself or any of its ancestors are styled to be
+  // invisible. HasNonZeroEffectiveOpacity() is a pre-calculated check
+  // performed during the PrePaint lifecycle phase.
+  return layout && layout->HasNonZeroEffectiveOpacity() &&
+         layout->StyleRef().Visibility() == EVisibility::kVisible;
+}
+
 void RecordVideoOcclusionState(
     const HTMLVideoElement& video_element,
     const MediaVideoVisibilityTracker::OcclusionState& occlusion_state,
@@ -271,7 +285,7 @@ void RecordVideoOcclusionState(
     occluding_rects_stream << String::Format(
         "[x: %d, y: %d, width: %d, height: %d]", rect.x(), rect.y(),
         rect.width(), rect.height());
-    if (i >= 0 && i < occluding_rects.size() - 1) {
+    if (i < occluding_rects.size() - 1) {
       occluding_rects_stream << ", ";
     }
   }
@@ -300,17 +314,16 @@ void RecordVideoOcclusionState(
                            video_element_rect.Width().ToInt(),
                            video_element_rect.Height().ToInt());
 
-  const String occlusion_state_string = String::Format(
+  const String occlusion_state_string = UNSAFE_TODO(String::Format(
       "has sufficiently visible video: {%s}, occluded area: {%.2f}, occluding "
       "rects: {%s}, intersection rect: {%s}, video element rect: {%s}, "
       "visibility threshold: {%d}",
       has_sufficiently_visible_video ? "True" : "False",
       occlusion_state.occluded_area, occluding_rects_stream.str().c_str(),
       intersection_rect_string.Ascii().c_str(),
-      video_element_rect_string.Ascii().c_str(), visibility_threshold);
+      video_element_rect_string.Ascii().c_str(), visibility_threshold));
 
-  video_element.RecordVideoOcclusionState(
-      occlusion_state_string.Ascii().c_str());
+  video_element.RecordVideoOcclusionState(occlusion_state_string.Ascii());
 }
 
 }  // anonymous namespace
@@ -318,13 +331,13 @@ void RecordVideoOcclusionState(
 MediaVideoVisibilityTracker::MediaVideoVisibilityTracker(
     HTMLVideoElement& video,
     const int visibility_threshold,
-    ReportVisibilityCb report_visibility_cb,
+    ReportContinuousVisibilityCb report_continuous_visibility_cb,
     base::TimeDelta hit_test_interval)
     : video_element_(video),
       visibility_threshold_(visibility_threshold),
-      report_visibility_cb_(std::move(report_visibility_cb)),
+      report_continuous_visibility_cb_(
+          std::move(report_continuous_visibility_cb)),
       hit_test_interval_(hit_test_interval) {
-  DCHECK(report_visibility_cb_);
   DCHECK_GT(visibility_threshold_, 0)
       << "Invalid threshold: " << visibility_threshold_;
   DCHECK_GE(hit_test_interval_, kMinimumAllowedHitTestInterval);
@@ -369,7 +382,21 @@ void MediaVideoVisibilityTracker::Detach() {
   tracker_attached_to_document_ = nullptr;
 }
 
+bool MediaVideoVisibilityTracker::HasActiveVisibilityRequests() const {
+  return report_continuous_visibility_cb_ || on_demand_visibility_cb_ ||
+         on_demand_visibility_ratio_cb_;
+}
+
 void MediaVideoVisibilityTracker::UpdateVisibilityTrackerState() {
+  // If we don't have any active continuous visibility callbacks or pending
+  // one-shot requests, we don't need the tracker. This ensures the tracker
+  // dynamically detaches itself once its one-shot work (like a visibility
+  // ratio report) is completed.
+  if (!HasActiveVisibilityRequests()) {
+    Detach();
+    return;
+  }
+
   const auto& video_element = VideoElement();
 
   // `fullscreen_element` is used to determine if any element within the
@@ -393,7 +420,7 @@ void MediaVideoVisibilityTracker::ElementDidMoveToNewDocument() {
 
 void MediaVideoVisibilityTracker::Invoke(ExecutionContext* context,
                                          Event* event) {
-  DCHECK(base::Contains(FullscreenEventTypes(), event->type()));
+  DCHECK(std::ranges::contains(FullscreenEventTypes(), event->type()));
 
   // Video is not loaded yet.
   if (VideoElement().getReadyState() < HTMLMediaElement::kHaveMetadata) {
@@ -448,16 +475,24 @@ void MediaVideoVisibilityTracker::MaybeRemoveFullscreenEventListeners() {
 }
 
 void MediaVideoVisibilityTracker::RequestVisibility(
-    RequestVisibilityCallback request_visibility_callback) {
+    OnDemandRequestVisibilityCb request_visibility_callback) {
   // Latest requests take precedence over old ones. Therefore, if we had a
   // pending request, we simply run the current callback with `false` and store
   // the new one.
-  if (request_visibility_callback_) {
-    std::move(request_visibility_callback_).Run(false);
+  if (on_demand_visibility_cb_) {
+    std::move(on_demand_visibility_cb_).Run(false);
   }
 
-  request_visibility_callback_ = std::move(request_visibility_callback);
+  on_demand_visibility_cb_ = std::move(request_visibility_callback);
+  Attach();
   MaybeComputeVisibility(ShouldReportVisibility::kNo);
+}
+
+void MediaVideoVisibilityTracker::RequestVisibilityRatio(
+    OnDemandRequestVisibilityRatioCb callback) {
+  on_demand_visibility_ratio_cb_ = std::move(callback);
+  Attach();
+  MaybeComputeVisibilityRatio();
 }
 
 const MediaVideoVisibilityTracker::ClientIdsSet
@@ -554,8 +589,7 @@ MediaVideoVisibilityTracker::GetClientIdsSet(
 ListBasedHitTestBehavior MediaVideoVisibilityTracker::ComputeOcclusion(
     const ClientIdsSet& client_ids_set,
     Metrics& counts,
-    const Node& node,
-    DOMNodeId node_id) {
+    const Node& node) {
   counts.total_hit_tested_nodes++;
 
   if (node == VideoElement()) {
@@ -633,16 +667,18 @@ bool MediaVideoVisibilityTracker::MeetsVisibilityThreshold(
 }
 
 bool MediaVideoVisibilityTracker::ComputeVisibility() {
-  DCHECK(VideoElement().GetLayoutObject());
-  occlusion_state_.occluded_area =
-      ComputeOccludingArea(occlusion_state_.occluding_rects,
-                           ComputeArea(occlusion_state_.video_element_rect));
+  if (!IsPerceptuallyVisible(VideoElement().GetLayoutObject())) {
+    return false;
+  }
+
+  ComputeAreaOccludedByViewport(
+      *tracker_attached_to_document_->GetFrame()->View());
+
   auto intersection_area = ComputeArea(occlusion_state_.intersection_rect);
 
-  auto* layout = VideoElement().GetLayoutObject();
   // Return early if the area of the video that intersects with the view is
   // below |visibility_threshold_|.
-  if (!layout || intersection_area < visibility_threshold_) {
+  if (intersection_area < visibility_threshold_) {
     return false;
   }
 
@@ -654,17 +690,52 @@ bool MediaVideoVisibilityTracker::ComputeVisibility() {
       base::saturated_cast<int>(occlusion_state_.occluding_rects.size());
   RecordTotalCounts(counts);
 
-  if (meets_visibility_threshold) {
-    return true;
+  return meets_visibility_threshold;
+}
+
+double MediaVideoVisibilityTracker::ComputeVisibilityRatio() {
+  if (!IsPerceptuallyVisible(VideoElement().GetLayoutObject())) {
+    return 0.0;
   }
 
-  return false;
+  ComputeAreaOccludedByViewport(
+      *tracker_attached_to_document_->GetFrame()->View());
+
+  auto total_area = ComputeArea(occlusion_state_.video_element_rect);
+  if (total_area <= 0.0f) {
+    return 0.0;
+  }
+
+  auto intersection_area = ComputeArea(occlusion_state_.intersection_rect);
+  if (intersection_area > 0.0f) {
+    Metrics counts;
+    const ClientIdsSet client_ids_set =
+        GetClientIdsSet(VideoElement().GetLayoutObject()->Id());
+
+    {
+      // The hit test triggers the `ComputeOcclusion` callback for each hit
+      // node, which accumulates the occluding rects in `occlusion_state_`. The
+      // `HitTestResult` is not used directly.
+      HitTestResult result(HitTestForOcclusionRatio(
+          VideoElement(), occlusion_state_.intersection_rect,
+          BindRepeating(&MediaVideoVisibilityTracker::ComputeOcclusion,
+                        WrapPersistent(this), client_ids_set,
+                        std::ref(counts))));
+    }
+  }
+
+  occlusion_state_.occluded_area =
+      ComputeOccludingArea(occlusion_state_.occluding_rects, total_area);
+
+  float visible_area = total_area - occlusion_state_.occluded_area;
+  return std::max(0.0f, visible_area) / total_area;
 }
 
 void MediaVideoVisibilityTracker::ComputeAreaOccludedByViewport(
     const LocalFrameView& local_frame_view) {
   DCHECK(VideoElement().GetLayoutObject());
 
+  occlusion_state_ = {};
   LayoutBox* box = To<LayoutBox>(VideoElement().GetLayoutObject());
   gfx::Rect bounds(box->AbsoluteBoundingBoxRect());
 
@@ -687,9 +758,13 @@ void MediaVideoVisibilityTracker::ComputeAreaOccludedByViewport(
       local_frame_view.GetFrame().GetPage()->GetVisualViewport().VisibleRect());
   gfx::Rect absolute_viewport(
       local_frame_view.ConvertFromRootFrame(viewport_in_root_frame));
+
+  // `intersection_rect` is the area of the video element that intersects with
+  // the viewport.
   occlusion_state_.intersection_rect =
       PhysicalRect(IntersectRects(absolute_viewport, content_bounds));
 
+  // `video_element_rect` is the total area of the video element.
   occlusion_state_.video_element_rect = PhysicalRect(content_bounds);
 
   // Compute the VideoElement area that is occluded by the viewport, if any.
@@ -700,34 +775,33 @@ void MediaVideoVisibilityTracker::ComputeAreaOccludedByViewport(
     for (SkRegion::Iterator it(region); !it.done(); it.next()) {
       auto occluding_rect = it.rect();
       occlusion_state_.occluding_rects.push_back(occluding_rect);
-      it.next();
     }
   }
+
+  occlusion_state_.occluded_area =
+      ComputeOccludingArea(occlusion_state_.occluding_rects,
+                           ComputeArea(occlusion_state_.video_element_rect));
 }
 
 void MediaVideoVisibilityTracker::MaybeComputeVisibility(
     ShouldReportVisibility should_report_visibility) {
-  if (!tracker_attached_to_document_ ||
-      !tracker_attached_to_document_->GetFrame()->View() ||
-      !tracker_attached_to_document_->GetFrame()->IsOutermostMainFrame() ||
-      !VideoElement().GetLayoutObject()) {
-    if (request_visibility_callback_) {
+  if (!HasValidFrameAndLayout()) {
+    if (on_demand_visibility_cb_) {
       RecordVideoOcclusionState(VideoElement(), occlusion_state_, false,
                                 visibility_threshold_);
-      std::move(request_visibility_callback_).Run(false);
+      std::move(on_demand_visibility_cb_).Run(false);
     }
     return;
   }
 
-  if (VideoElement().GetDocument().Lifecycle().GetState() !=
-      DocumentLifecycle::kPaintClean) {
+  if (!IsPaintClean()) {
     // If we have a pending visibility request, run it now with the cached
     // `meets_visibility_threshold_` value.
-    if (request_visibility_callback_) {
+    if (on_demand_visibility_cb_) {
       RecordVideoOcclusionState(VideoElement(), occlusion_state_,
                                 meets_visibility_threshold_,
                                 visibility_threshold_);
-      std::move(request_visibility_callback_).Run(meets_visibility_threshold_);
+      std::move(on_demand_visibility_cb_).Run(meets_visibility_threshold_);
     }
     return;
   }
@@ -735,27 +809,41 @@ void MediaVideoVisibilityTracker::MaybeComputeVisibility(
   SCOPED_UMA_HISTOGRAM_TIMER(
       "Media.MediaVideoVisibilityTracker.UpdateTime.TotalDuration");
 
-  occlusion_state_ = {};
-  ComputeAreaOccludedByViewport(
-      *tracker_attached_to_document_->GetFrame()->View());
-
   meets_visibility_threshold_ = ComputeVisibility();
   if (should_report_visibility == ShouldReportVisibility::kYes) {
-    report_visibility_cb_.Run(meets_visibility_threshold_);
+    if (report_continuous_visibility_cb_) {
+      report_continuous_visibility_cb_.Run(meets_visibility_threshold_);
+    }
   }
-  if (request_visibility_callback_) {
+  if (on_demand_visibility_cb_) {
     RecordVideoOcclusionState(VideoElement(), occlusion_state_,
                               meets_visibility_threshold_,
                               visibility_threshold_);
-    std::move(request_visibility_callback_).Run(meets_visibility_threshold_);
+    std::move(on_demand_visibility_cb_).Run(meets_visibility_threshold_);
+  }
+}
+
+void MediaVideoVisibilityTracker::MaybeComputeVisibilityRatio() {
+  if (!on_demand_visibility_ratio_cb_ || !HasValidFrameAndLayout() ||
+      !IsPaintClean()) {
+    return;
+  }
+
+  last_visibility_ratio_ = ComputeVisibilityRatio();
+  std::move(on_demand_visibility_ratio_cb_).Run(last_visibility_ratio_);
+
+  // Detach if no continuous reporting is needed, and we don't have a pending
+  // visibility request.
+  if (!HasActiveVisibilityRequests()) {
+    Detach();
   }
 }
 
 void MediaVideoVisibilityTracker::DidFinishLifecycleUpdate(
     const LocalFrameView& local_frame_view) {
-  if ((base::TimeTicks::Now() - last_hit_test_timestamp_ <
-       hit_test_interval_) &&
-      !request_visibility_callback_) {
+  const auto now = base::TimeTicks::Now();
+  if ((now - last_hit_test_timestamp_ < hit_test_interval_) &&
+      !on_demand_visibility_cb_ && !on_demand_visibility_ratio_cb_) {
     return;
   }
 
@@ -763,9 +851,31 @@ void MediaVideoVisibilityTracker::DidFinishLifecycleUpdate(
     return;
   }
 
-  last_hit_test_timestamp_ = base::TimeTicks::Now();
+  MaybeComputeVisibilityRatio();
+  if (!tracker_attached_to_document_) {
+    // If the ratio request was the only active request, the tracker will have
+    // detached itself during `MaybeComputeVisibilityRatio`.
+    return;
+  }
 
-  MaybeComputeVisibility(ShouldReportVisibility::kYes);
+  // We need to check if the interval has passed again, as we could have entered
+  // this method solely to handle a ratio request.
+  if ((now - last_hit_test_timestamp_ >= hit_test_interval_) ||
+      on_demand_visibility_cb_) {
+    last_hit_test_timestamp_ = now;
+    MaybeComputeVisibility(ShouldReportVisibility::kYes);
+  }
+}
+
+bool MediaVideoVisibilityTracker::HasValidFrameAndLayout() const {
+  return tracker_attached_to_document_ &&
+         tracker_attached_to_document_->GetFrame()->IsOutermostMainFrame() &&
+         VideoElement().GetLayoutObject();
+}
+
+bool MediaVideoVisibilityTracker::IsPaintClean() const {
+  return VideoElement().GetDocument().Lifecycle().GetState() ==
+         DocumentLifecycle::kPaintClean;
 }
 
 void MediaVideoVisibilityTracker::Trace(Visitor* visitor) const {

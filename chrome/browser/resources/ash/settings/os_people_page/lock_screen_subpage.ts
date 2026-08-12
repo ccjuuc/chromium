@@ -16,10 +16,10 @@
 
 import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/ash/common/cr_elements/cr_radio_button/cr_radio_button.js';
-import 'chrome://resources/ash/common/cr_elements/cr_radio_group/cr_radio_group.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/ash/common/cr_elements/policy/cr_policy_indicator.js';
 import '../controls/settings_toggle_button.js';
+import '../controls/settings_radio_group.js';
 import './setup_pin_dialog.js';
 import './pin_autosubmit_dialog.js';
 import './local_data_recovery_dialog.js';
@@ -28,6 +28,7 @@ import '../multidevice_page/multidevice_smartlock_item.js';
 import './password_settings.js';
 import './pin_settings.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {fireAuthTokenInvalidEvent} from 'chrome://resources/ash/common/quick_unlock/utils.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
@@ -38,8 +39,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
+import {isManagedLocalPinAndPasswordEnabled} from '../common/load_time_booleans.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import type {PrefsState} from '../common/types.js';
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {LockStateMixin} from '../lock_state_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
@@ -49,9 +50,11 @@ import {Router, routes} from '../router.js';
 import type {FingerprintBrowserProxy} from './fingerprint_browser_proxy.js';
 import {FingerprintBrowserProxyImpl} from './fingerprint_browser_proxy.js';
 import {getTemplate} from './lock_screen_subpage.html.js';
+import {AllowedLocalAuthFactors, AllowedLocalAuthFactorsPref} from './lock_screen_subpage_constants.js';
 
-const SettingsLockScreenElementBase =
-    RouteObserverMixin(LockStateMixin(DeepLinkingMixin(PolymerElement)));
+
+const SettingsLockScreenElementBase = RouteObserverMixin(
+    LockStateMixin(DeepLinkingMixin(PrefsMixin(PolymerElement))));
 
 export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
   static get is() {
@@ -64,10 +67,6 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
 
   static get properties() {
     return {
-      prefs: {
-        type: Object,
-        notify: true,
-      },
 
       /**
        * Authentication token provided by lock-screen-password-prompt-dialog.
@@ -98,31 +97,6 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
 
       numFingerprintDescription_: {
         type: String,
-      },
-
-      /**
-       * Whether notifications on the lock screen are enable by the feature
-       * flag.
-       */
-      lockScreenNotificationsEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('lockScreenNotificationsEnabled');
-        },
-        readOnly: true,
-      },
-
-      /**
-       * Whether the "hide sensitive notification" option on the lock screen can
-       * be enable by the feature flag.
-       */
-      lockScreenHideSensitiveNotificationSupported_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean(
-              'lockScreenHideSensitiveNotificationsSupported');
-        },
-        readOnly: true,
       },
 
       /**
@@ -168,8 +142,7 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     };
   }
 
-  prefs: PrefsState;
-  authToken: string|undefined;
+  declare authToken: string|undefined;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -179,23 +152,24 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     Setting.kDataRecovery,
   ]);
 
-  private fingerprintUnlockEnabled_: boolean;
-  private numFingerprints_: number;
-  private numFingerprintDescription_: string;
+  declare private fingerprintUnlockEnabled_: boolean;
+  declare private numFingerprints_: number;
+  declare private numFingerprintDescription_: string;
   private lockScreenNotificationsEnabled_: boolean;
   private lockScreenHideSensitiveNotificationSupported_: boolean;
-  private recovery_: chrome.settingsPrivate.PrefObject|null;
-  private noRecoveryVirtualPref_: chrome.settingsPrivate.PrefObject;
-  private recoveryChangeInProcess_: boolean;
-  private showPasswordSettings_: boolean;
-  private showDisableRecoveryDialog_: boolean;
+  declare private recovery_: chrome.settingsPrivate.PrefObject|null;
+  declare private noRecoveryVirtualPref_: chrome.settingsPrivate.PrefObject;
+  declare private recoveryChangeInProcess_: boolean;
+  declare private showPasswordSettings_: boolean;
+  declare private showDisableRecoveryDialog_: boolean;
   private fingerprintBrowserProxy_: FingerprintBrowserProxy;
-  private deviceAccountManaged_: boolean;
+  declare private deviceAccountManaged_: boolean;
 
   static get observers() {
     return [
       'updateRecoveryState_(authToken)',
       'updatePasswordState_(authToken)',
+      'updateCurrentUnlockMethodLabel_(authToken)',
     ];
   }
 
@@ -355,18 +329,52 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
   /**
    * Called by chrome when the state of an auth factor changes.
    * */
-  onFactorChanged(factor: AuthFactor): void {
+  onFactorChanged(factor: AuthFactor, _result: ConfigureResult): void {
+    // We want to update the state of the UI regardless of success or failure
+    // which is why we do not use `_result`.
     switch (factor) {
       case AuthFactor.kRecovery:
         this.updateRecoveryState_(this.authToken);
         break;
       case AuthFactor.kGaiaPassword:
       case AuthFactor.kLocalPassword:
-        this.updatePasswordState_(this.authToken);
+      case AuthFactor.kCryptohomePin:
+      case AuthFactor.kCryptohomePinV2:
+        this.updateCurrentUnlockMethodLabel_(this.authToken);
         break;
       default:
         break;
     }
+  }
+
+
+
+  private async updateCurrentUnlockMethodLabel_(authToken: string|undefined):
+      Promise<void> {
+    if (authToken === undefined) {
+      return;
+    }
+
+    const [
+      {configured: hasGaiaPassword},
+      {configured: hasLocalPassword},
+      {configured: hasCryptohomePin},
+      {configured: hasCryptohomePinV2},
+      numFingerprints,
+    ] = await Promise.all([
+      this.authFactorConfig.isConfigured(authToken, AuthFactor.kGaiaPassword),
+      this.authFactorConfig.isConfigured(authToken, AuthFactor.kLocalPassword),
+      this.authFactorConfig.isConfigured(authToken, AuthFactor.kCryptohomePin),
+      this.authFactorConfig.isConfigured(
+          authToken, AuthFactor.kCryptohomePinV2),
+      this.fingerprintBrowserProxy_.getNumFingerprints(),
+    ]);
+
+    const hasPassword = hasGaiaPassword || hasLocalPassword;
+    const hasPin = hasCryptohomePin || hasCryptohomePinV2;
+    const hasFingerprint = numFingerprints > 0;
+
+    this.determineUnlockType(hasPassword, hasPin, hasFingerprint);
   }
 
   /**
@@ -456,12 +464,13 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
         this.authToken, AuthFactor.kLocalPassword),
       PinFactorEditor.getRemote().getConfiguredPinFactor(this.authToken),
     ]);
-
+    const localPasswordAllowed =
+        isManagedLocalPinAndPasswordEnabled() && this.isLocalPasswordAllowed();
     if (hasLocalPassword) {
       // Local Password is the overriding factor here. We need to show change
       // option here.
       this.showPasswordSettings_ = true;
-    } else if (!this.deviceAccountManaged_) {
+    } else if (!this.deviceAccountManaged_ || localPasswordAllowed) {
       // Onto scenarios for non managed accounts now.
       if (hasGaiaPassword) {
         // If the gaia password is setup, for non managed users, we will allow
@@ -521,6 +530,15 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     } finally {
       this.recoveryChangeInProcess_ = false;
     }
+  }
+
+  private isLocalPasswordAllowed(): boolean {
+    const allowedLocalAuthFactors =
+        this.getPref<AllowedLocalAuthFactors[]>(AllowedLocalAuthFactorsPref)
+            .value;
+    const authFactorsSet = new Set(allowedLocalAuthFactors);
+    return authFactorsSet.has(AllowedLocalAuthFactors.ALL) ||
+        authFactorsSet.has(AllowedLocalAuthFactors.LOCAL_PASSWORD);
   }
 }
 

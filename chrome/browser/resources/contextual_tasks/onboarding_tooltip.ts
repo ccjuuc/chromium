@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import '//resources/cr_elements/cr_button/cr_button.js';
 import '//resources/cr_elements/icons.html.js';
 import '//resources/cr_elements/cr_tooltip/cr_tooltip.js';
 
@@ -32,21 +32,40 @@ export class ContextualTasksOnboardingTooltipElement extends CrLitElement {
     return {
       target: {type: Object},
       shouldShow: {type: Boolean},
+      isCoinsEnabled: {
+        type: Boolean,
+        reflect: true,
+      },
     };
   }
 
   // The element that the tooltip is anchored to.
   accessor target: Element|null = null;
   accessor shouldShow: boolean = false;
-  protected onboardingTitle_: string =
-      loadTimeData.getString('onboardingTitle');
-  protected onboardingBody_: string = loadTimeData.getString('onboardingBody');
-  protected onboardingLink_: string = loadTimeData.getString('onboardingLink');
-  protected onboardingLinkUrl_: string =
-      loadTimeData.getString('onboardingLinkUrl');
+  accessor isCoinsEnabled: boolean =
+      loadTimeData.getBoolean('tabFaviconChipsToCoinsEnabled');
+
+  private onboardingTooltipIsVisible_: boolean = false;
+  private numberOfTimesTooltipShown_: number = 0;
+  private readonly maximumTimesTooltipShown_: number = loadTimeData.getInteger(
+      'composeboxShowOnboardingTooltipSessionImpressionCap');
+  private isOnboardingTooltipDismissCountBelowCap_: boolean =
+      loadTimeData.getBoolean('isOnboardingTooltipDismissCountBelowCap');
+  private userDismissedTooltip_: boolean = false;
+  private tooltipResizeObserver_: ResizeObserver|null = null;
+  private tooltipMutationObserver_: MutationObserver|null = null;
+  private tooltipImpressionTimer_: number|null = null;
+  private readonly tooltipImpressionDelay_: number =
+      loadTimeData.getInteger('composeboxShowOnboardingTooltipImpressionDelay');
 
   private get tooltip_(): CrTooltipElement {
     return this.shadowRoot.querySelector('cr-tooltip')!;
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.stopObservingTooltipResize_();
+    this.clearTooltipImpressionTimer_();
   }
 
   override updated(changedProperties: PropertyValues<this>) {
@@ -93,18 +112,124 @@ export class ContextualTasksOnboardingTooltipElement extends CrLitElement {
         this.tooltip_.style.left = `${left}px`;
         this.tooltip_.style.top = `${top}px`;
         this.tooltip_.style.right = 'auto';
+        this.tooltip_.style.bottom = 'auto';
       }
     }
   }
 
-  protected onTooltipClose_(e: Event) {
+  updateTooltipVisibility(
+      hasToken: boolean, target: Element|null, container?: HTMLElement) {
+    if (!loadTimeData.getBoolean('showOnboardingTooltip')) {
+      return;
+    }
+
+    if (this.onboardingTooltipIsVisible_ && !hasToken) {
+      this.hide();
+      this.onboardingTooltipIsVisible_ = false;
+      this.stopObservingTooltipResize_();
+      this.clearTooltipImpressionTimer_();
+    } else if (hasToken) {
+      if (target) {
+        this.target = target;
+      }
+
+      if (this.onboardingTooltipIsVisible_) {
+        this.updatePosition();
+      } else if (this.shouldShowOnboardingTooltip()) {
+        this.show();
+        this.startObservingTooltipResize_(target, container);
+        this.onboardingTooltipIsVisible_ = true;
+
+        this.tooltipImpressionTimer_ = setTimeout(() => {
+          this.numberOfTimesTooltipShown_++;
+          this.tooltipImpressionTimer_ = null;
+        }, this.tooltipImpressionDelay_);
+      }
+    }
+    this.shouldShow = this.onboardingTooltipIsVisible_;
+  }
+
+  private shouldShowOnboardingTooltip(): boolean {
+    return this.numberOfTimesTooltipShown_ < this.maximumTimesTooltipShown_ &&
+        this.isOnboardingTooltipDismissCountBelowCap_ &&
+        !this.userDismissedTooltip_ && this.target !== null;
+  }
+
+  private clearTooltipImpressionTimer_() {
+    if (this.tooltipImpressionTimer_) {
+      clearTimeout(this.tooltipImpressionTimer_);
+      this.tooltipImpressionTimer_ = null;
+    }
+  }
+
+  private startObservingTooltipResize_(
+      target: Element|null, container?: HTMLElement) {
+    this.stopObservingTooltipResize_();
+
+    // Observe the tooltip target for any size changes.
+    this.tooltipResizeObserver_ = new ResizeObserver(() => {
+      if (this.target) {
+        this.updatePosition();
+      }
+    });
+    if (target) {
+      this.tooltipResizeObserver_.observe(target);
+    }
+
+    // Observe container and target for any style or class changes.
+    this.tooltipMutationObserver_ = new MutationObserver(() => {
+      if (this.target) {
+        this.updatePosition();
+      }
+    });
+    const mutationObserverOptions = {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    };
+    if (container) {
+      this.tooltipMutationObserver_.observe(container, mutationObserverOptions);
+    }
+    if (target) {
+      this.tooltipMutationObserver_.observe(target, mutationObserverOptions);
+    }
+  }
+
+  private stopObservingTooltipResize_() {
+    if (this.tooltipResizeObserver_) {
+      this.tooltipResizeObserver_.disconnect();
+      this.tooltipResizeObserver_ = null;
+    }
+    if (this.tooltipMutationObserver_) {
+      this.tooltipMutationObserver_.disconnect();
+      this.tooltipMutationObserver_ = null;
+    }
+  }
+
+  protected onTooltipCloseClick_(e: Event) {
     e.stopPropagation();
     BrowserProxyImpl.getInstance().handler.onboardingTooltipDismissed();
+    this.userDismissedTooltip_ = true;
+    this.onboardingTooltipIsVisible_ = false;
+    this.stopObservingTooltipResize_();
+    this.clearTooltipImpressionTimer_();
     this.hide();
-    this.dispatchEvent(new CustomEvent('onboarding-tooltip-dismissed', {
-      bubbles: true,
-      composed: true,
-    }));
+    this.fire('onboarding-tooltip-dismissed');
+  }
+
+  get numberOfTimesTooltipShownForTesting() {
+    return this.numberOfTimesTooltipShown_;
+  }
+
+  set numberOfTimesTooltipShownForTesting(n: number) {
+    this.numberOfTimesTooltipShown_ = n;
+  }
+
+  set userDismissedTooltipForTesting(dismissed: boolean) {
+    this.userDismissedTooltip_ = dismissed;
+  }
+
+  get tooltipResizeObserverForTesting() {
+    return this.tooltipResizeObserver_;
   }
 
   protected onHelpLinkClick_(e: Event) {

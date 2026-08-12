@@ -144,8 +144,8 @@ std::string CtapDeviceResponseCodeName(CtapDeviceResponseCode code) {
       return "kCtap2ErrOther";
     case CtapDeviceResponseCode::kCtap2ErrSpecLast:
       return "kCtap2ErrSpecLast";
-    case CtapDeviceResponseCode::kCtap2ErrExtensionFirst:
-      return "kCtap2ErrExtensionFirst";
+    case CtapDeviceResponseCode::kCtap2ErrFallbackUrlProcessed:
+      return "kCtap2ErrFallbackUrlProcessed";
     case CtapDeviceResponseCode::kCtap2ErrExtensionLast:
       return "kCtap2ErrExtensionLast";
     case CtapDeviceResponseCode::kCtap2ErrVendorFirst:
@@ -217,8 +217,11 @@ const char kCableClientHelloMessage[] = "caBLE v1 client hello";
 const char kCtap2Version[] = "FIDO_2_0";
 const char kU2fVersion[] = "U2F_V2";
 const char kCtap2_1Version[] = "FIDO_2_1";
+const char kCtap2_2Version[] = "FIDO_2_2";
 
 const char kExtensionHmacSecret[] = "hmac-secret";
+const char kExtensionCrossDeviceFallbackUrl[] = "crossDeviceFallbackUrl";
+const char kExtensionHmacSecretMc[] = "hmac-secret-mc";
 const char kExtensionCredProtect[] = "credProtect";
 const char kExtensionLargeBlob[] = "largeBlob";
 const char kExtensionLargeBlobKey[] = "largeBlobKey";
@@ -232,6 +235,7 @@ const char kExtensionPRFEvalByCredential[] = "evalByCredential";
 const char kExtensionPRFFirst[] = "first";
 const char kExtensionPRFResults[] = "results";
 const char kExtensionPRFSecond[] = "second";
+const char kExtensionCmtgKey[] = "cmtgKey";
 
 const char kExtensionLargeBlobBlob[] = "blob";
 const char kExtensionLargeBlobOriginalSize[] = "originalSize";

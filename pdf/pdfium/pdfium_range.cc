@@ -4,6 +4,7 @@
 
 #include "pdf/pdfium/pdfium_range.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -11,7 +12,9 @@
 #include "base/containers/span.h"
 #include "base/debug/alias.h"
 #include "base/numerics/checked_math.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "pdf/accessibility_structs.h"
 #include "pdf/pdfium/pdfium_api_string_buffer_adapter.h"
 #include "pdf/pdfium/pdfium_api_wrappers.h"
@@ -129,7 +132,7 @@ bool IsIgnorableCharacter(char16_t c) {
 
 // static
 PDFiumRange PDFiumRange::AllTextOnPage(PDFiumPage* page) {
-  return PDFiumRange(page, 0, page->GetCharCount());
+  return PDFiumRange(page, 0, std::max(page->GetCharCount(), 0));
 }
 
 // static
@@ -157,7 +160,7 @@ PDFiumRange::PDFiumRange(PDFiumPage* page, int char_index, int char_count)
   [[maybe_unused]] FPDF_TEXTPAGE text_page = page_->GetTextPage();
 #if DCHECK_IS_ON()
   AdjustForBackwardsRange(char_index, char_count);
-  DCHECK_LE(char_count, FPDFText_CountChars(text_page));
+  DCHECK_LE(char_count, std::max(FPDFText_CountChars(text_page), 0));
 #endif
 }
 
@@ -178,9 +181,9 @@ void PDFiumRange::SetCharCount(int char_count) {
 
   char_count_ = char_count;
 #if DCHECK_IS_ON()
-  int dummy_index = 0;
-  AdjustForBackwardsRange(dummy_index, char_count);
-  DCHECK_LE(char_count, FPDFText_CountChars(page_->GetTextPage()));
+  int placeholder_index = 0;
+  AdjustForBackwardsRange(placeholder_index, char_count);
+  DCHECK_LE(char_count, std::max(FPDFText_CountChars(page_->GetTextPage()), 0));
 #endif
 
   cached_screen_rects_point_ = gfx::Point();
@@ -359,6 +362,14 @@ std::u16string PDFiumRange::GetText() const {
   std::erase_if(result, IsIgnorableCharacter);
 
   return result;
+}
+
+std::ostream& operator<<(std::ostream& os, const PDFiumRange& range) {
+  // Use hex encoding to make non-printable characters visible.
+  return (os << "page_index: " << range.page_index()
+             << ", char_index: " << range.char_index()
+             << ", char_count: " << range.char_count() << ", text: "
+             << base::HexEncode(base::UTF16ToUTF8(range.GetText())));
 }
 
 }  // namespace chrome_pdf

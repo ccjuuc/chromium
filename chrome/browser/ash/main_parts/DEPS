@@ -17,10 +17,8 @@ include_rules = [
   "+chrome/browser/ash/certs",
   "+chrome/browser/ash/child_accounts/parent_access_code",
   "+chrome/browser/ash/chromebox_for_meetings",
-  "+chrome/browser/ash/crosapi",
   "+chrome/browser/ash/crostini",
   "+chrome/browser/ash/dbus",
-  "+chrome/browser/ash/device_name",
   "+chrome/browser/ash/diagnostics",
   "+chrome/browser/ash/events",
   "+chrome/browser/ash/extensions",
@@ -58,14 +56,12 @@ include_rules = [
   "+chrome/browser/browser_process.h",
   "+chrome/browser/browser_process_platform_part_ash.h",
   "+chrome/browser/chrome_browser_main_linux.h",
-  "+chrome/browser/chromeos/printing/print_preview",
   "+chrome/browser/chromeos/video_conference",
   "+chrome/browser/component_updater",
   "+chrome/browser/defaults.h",
   "+chrome/browser/device_identity",
   "+chrome/browser/first_run",
   "+chrome/browser/global_features.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/memory",
   "+chrome/browser/metrics",
   "+chrome/browser/net",
@@ -75,6 +71,7 @@ include_rules = [
   "+chrome/browser/tracing",
   "+chrome/browser/ui/ash/assistant",
   "+chrome/browser/ui/ash/keyboard",
+  "+chrome/browser/ui/ash/login",
   "+chrome/browser/ui/ash/session",
   "+chrome/browser/ui/webui/ash/emoji",
   "+chrome/common/chrome_constants.h",
@@ -84,3 +81,13 @@ include_rules = [
   "+chrome/common/logging_chrome.h",
   "+chrome/common/pref_names.h",
 ]
+
+specific_include_rules = {
+  "chrome_browser_main_parts_ash\\.cc": [
+    # For fake SIGTERM handler implementation.
+    "+chrome/browser/lifetime/application_lifetime.h",
+
+    # To bridge Chrome's termination notification to Ash system.
+    "+chrome/browser/lifetime/termination_notification.h",
+  ]
+}

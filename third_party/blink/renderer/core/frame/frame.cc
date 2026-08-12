@@ -374,11 +374,6 @@ bool Frame::ConsumeTransientUserActivationInFrameTree() {
   bool was_active = user_activation_state_.IsActive();
   Frame& root = Tree().Top();
 
-  // To record UMA once per consumption, we arbitrarily picked the LocalFrame
-  // for root.
-  if (IsA<LocalFrame>(root))
-    root.user_activation_state_.RecordPreconsumptionUma();
-
   for (Frame* node = &root; node; node = node->Tree().TraverseNext())
     node->user_activation_state_.ConsumeIfActive();
 
@@ -493,7 +488,7 @@ void Frame::UpdateVisibleToHitTesting() {
   if (auto* local_owner = DynamicTo<HTMLFrameOwnerElement>(owner_.Get())) {
     self_visible_to_hit_testing =
         !local_owner->GetLayoutObject() ||
-        local_owner->GetLayoutObject()->Style()->VisibleToHitTesting();
+        local_owner->GetLayoutObject()->StyleRef().VisibleToHitTesting();
   }
 
   bool visible_to_hit_testing =
@@ -588,6 +583,7 @@ void Frame::ApplyFrameOwnerProperties(
   owner->SetAllowFullscreen(properties->allow_fullscreen);
   owner->SetAllowPaymentRequest(properties->allow_payment_request);
   owner->SetIsDisplayNone(properties->is_display_none);
+  owner->SetResponsiveSizing(properties->responsive_sizing);
   owner->SetColorScheme(properties->color_scheme);
   owner->SetPreferredColorScheme(properties->preferred_color_scheme);
 }
@@ -677,8 +673,7 @@ void Frame::FocusPage(LocalFrame* originating_frame) {
   // is specially permitted to change focus without user interaction.
   if (originating_frame &&
       (LocalFrame::HasTransientUserActivation(originating_frame) ||
-       originating_frame->GetSettings()
-           ->GetAllowWindowFocusWithoutUserGesture())) {
+       originating_frame->GetSettings()->GetAllowUnrestrictedWindowFocus())) {
     // Ask the browser process to focus the page.
     GetPage()->GetChromeClient().FocusPage();
 
@@ -717,6 +712,66 @@ Frame* Frame::Top() {
     parent = next_parent;
   }
   return parent;
+}
+
+Frame* Frame::CommonAncestor(const Frame* other) const {
+  if (!other || &Tree().Top() != &other->Tree().Top()) {
+    return nullptr;
+  }
+
+  const Frame* frame_a = this;
+  const Frame* frame_b = other;
+  unsigned depth_a = 0;
+  for (const Frame* frame = frame_a; frame; frame = frame->Parent()) {
+    ++depth_a;
+  }
+  unsigned depth_b = 0;
+  for (const Frame* frame = frame_b; frame; frame = frame->Parent()) {
+    ++depth_b;
+  }
+
+  while (depth_a > depth_b) {
+    frame_a = frame_a->Parent();
+    --depth_a;
+  }
+  while (depth_b > depth_a) {
+    frame_b = frame_b->Parent();
+    --depth_b;
+  }
+  while (frame_a != frame_b) {
+    frame_a = frame_a->Parent();
+    frame_b = frame_b->Parent();
+  }
+  return const_cast<Frame*>(frame_a);
+}
+
+bool Frame::IsFrameTreePathSameOrigin(const Frame* other) const {
+  Frame* common_ancestor = CommonAncestor(other);
+  if (!common_ancestor || !GetSecurityContext()) {
+    return false;
+  }
+
+  const SecurityOrigin* origin = GetSecurityContext()->GetSecurityOrigin();
+  auto has_same_origin = [origin](const Frame* frame) {
+    const SecurityContext* security_context = frame->GetSecurityContext();
+    const SecurityOrigin* frame_origin =
+        security_context ? security_context->GetSecurityOrigin() : nullptr;
+    return origin && frame_origin && origin->IsSameOriginWith(frame_origin);
+  };
+
+  for (const Frame* frame = this; frame != common_ancestor;
+       frame = frame->Parent()) {
+    if (!has_same_origin(frame)) {
+      return false;
+    }
+  }
+  for (const Frame* frame = other; frame != common_ancestor;
+       frame = frame->Parent()) {
+    if (!has_same_origin(frame)) {
+      return false;
+    }
+  }
+  return has_same_origin(common_ancestor);
 }
 
 bool Frame::AllowFocusWithoutUserActivation() {
@@ -948,9 +1003,8 @@ bool Frame::SwapImpl(
 
       // This trace event is needed to detect the main frame of the
       // renderer in telemetry metrics. See crbug.com/692112#c11.
-      TRACE_EVENT_INSTANT1("loading", "markAsMainFrame",
-                           TRACE_EVENT_SCOPE_THREAD, "frame",
-                           ::blink::GetFrameIdForTracing(new_local_frame));
+      TRACE_EVENT_INSTANT("loading", "markAsMainFrame", "frame",
+                          ::blink::GetFrameIdForTracing(new_local_frame));
     }
   }
 
@@ -1027,16 +1081,27 @@ void Frame::DetachFromParent() {
   Parent()->RemoveChild(this);
 }
 
-void Frame::AdjustOffsetByAncestorFrames(gfx::Point* origin_point) {
+void Frame::DeprecatedAdjustOffsetByAncestorFrames(gfx::Point* origin_point) {
+  CHECK(!RuntimeEnabledFeatures::AvoidEmbeddedContentViewLocationEnabled());
   CHECK(origin_point);
   Frame* current_frame = this;
   while (current_frame->Owner()) {
     if (auto* frame_view = current_frame->View()) {
-      gfx::Point location = frame_view->Location();
+      gfx::Point location = frame_view->DeprecatedLocation();
       origin_point->Offset(-location.x(), -location.y());
     }
     current_frame = current_frame->Parent();
   }
+}
+
+bool Frame::IsDescendantOf(const Frame* other) const {
+  const Frame* current = this;
+  do {
+    if (current == other) {
+      return true;
+    }
+  } while ((current = current->Parent()));
+  return false;
 }
 
 }  // namespace blink

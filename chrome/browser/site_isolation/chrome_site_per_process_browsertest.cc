@@ -63,7 +63,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_PDF)
-#include "chrome/browser/pdf/test_pdf_viewer_stream_manager.h"
+#include "chrome/browser/pdf/test_mime_handler_stream_manager.h"
 #include "pdf/pdf_features.h"
 #endif
 
@@ -95,8 +95,9 @@ class RedirectObserver : public content::WebContentsObserver {
 
   void WebContentsDestroyed() override {
     // Make sure we don't close the tab while the observer is in scope.
-    // See http://crbug.com/314036.
-    FAIL() << "WebContents closed during navigation (http://crbug.com/314036).";
+    // See http://crbug.com/40339462.
+    FAIL()
+        << "WebContents closed during navigation (http://crbug.com/40339462).";
   }
 
   ui::PageTransition transition() const { return transition_; }
@@ -145,7 +146,7 @@ double GetFrameDeviceScaleFactor(const content::ToRenderFrameHost& adapter) {
   return content::EvalJs(adapter, kGetFrameDeviceScaleFactor).ExtractDouble();
 }
 
-// Flaky on Windows 10. http://crbug.com/700150
+// Flaky on Windows 10. http://crbug.com/41306592
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_InterstitialLoadsWithCorrectDeviceScaleFactor \
   DISABLED_InterstitialLoadsWithCorrectDeviceScaleFactor
@@ -220,7 +221,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 
 // Ensure that creating a plugin in a cross-site subframe doesn't crash.  This
 // involves querying content settings from the renderer process and using the
-// top frame's origin as one of the parameters.  See https://crbug.com/426658.
+// top frame's origin as one of the parameters.  See https://crbug.com/40390747.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest, PluginWithRemoteTopFrame) {
   GURL main_url(
       embedded_test_server()->GetURL("a.com", "/chrome/test/data/iframe.html"));
@@ -237,7 +238,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest, PluginWithRemoteTopFrame) {
 }
 
 // Verify that ctrl-click of an anchor targeting a remote frame works (i.e. that
-// it opens the link in a new tab).  See also https://crbug.com/647772.
+// it opens the link in a new tab).  See also https://crbug.com/40485278.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        AnchorCtrlClickWhenTargetIsCrossSite) {
   // Navigate to anchor_targeting_remote_frame.html.
@@ -290,8 +291,8 @@ class ChromeSitePerProcessGuestViewPDFTest : public ChromeSitePerProcessTest {
   void SetUpOnMainThread() override {
     ChromeSitePerProcessTest::SetUpOnMainThread();
     test_guest_view_manager_ = factory_.GetOrCreateTestGuestViewManager(
-        browser()->profile(), extensions::ExtensionsAPIClient::Get()
-                                  ->CreateGuestViewManagerDelegate());
+        browser()->GetProfile(), extensions::ExtensionsAPIClient::Get()
+                                     ->CreateGuestViewManagerDelegate());
   }
 
   void TearDownOnMainThread() override {
@@ -311,7 +312,7 @@ class ChromeSitePerProcessGuestViewPDFTest : public ChromeSitePerProcessTest {
 
 // This test verifies that when navigating an OOPIF to a page with <embed>-ed
 // PDF, the guest is properly created, and by removing the embedder frame, the
-// guest is properly destroyed (https://crbug.com/649856).
+// guest is properly destroyed (https://crbug.com/40486257).
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessGuestViewPDFTest,
                        EmbeddedPDFInsideCrossOriginFrame) {
   // Navigate to a page with an <iframe>.
@@ -361,20 +362,21 @@ class ChromeSitePerProcessOopifPDFTest : public ChromeSitePerProcessTest {
   ~ChromeSitePerProcessOopifPDFTest() override = default;
 
   // Return value could be nullptr.
-  pdf::PdfViewerStreamManager* GetPdfViewerStreamManager() {
-    return pdf::PdfViewerStreamManager::FromWebContents(
+  extensions::mime_handler::MimeHandlerStreamManager*
+  GetMimeHandlerStreamManager() {
+    return extensions::mime_handler::MimeHandlerStreamManager::FromWebContents(
         browser()->tab_strip_model()->GetActiveWebContents());
   }
 
   // Return value is always non-nullptr. This should only be called after a PDF
   // navigation occurs in the active `content::WebContents`.
-  pdf::TestPdfViewerStreamManager* GetTestPdfViewerStreamManager() {
-    return factory_.GetTestPdfViewerStreamManager(
+  pdf::TestMimeHandlerStreamManager* GetTestMimeHandlerStreamManager() {
+    return factory_.GetTestMimeHandlerStreamManager(
         browser()->tab_strip_model()->GetActiveWebContents());
   }
 
  private:
-  pdf::TestPdfViewerStreamManagerFactory factory_;
+  pdf::TestMimeHandlerStreamManagerFactory factory_;
 };
 
 // This test verifies that when navigating an OOPIF to a page with <embed>-ed
@@ -387,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessOopifPDFTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_url));
 
   // Initially, the stream manager shouldn't be created.
-  EXPECT_FALSE(GetPdfViewerStreamManager());
+  EXPECT_FALSE(GetMimeHandlerStreamManager());
 
   content::WebContents* active_web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -406,13 +408,13 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessOopifPDFTest,
   content::RenderFrameHost* embedder_host = ChildFrameAt(subframe_main_host, 0);
   ASSERT_TRUE(embedder_host);
   ASSERT_TRUE(
-      GetTestPdfViewerStreamManager()->WaitUntilPdfLoaded(embedder_host));
+      GetTestMimeHandlerStreamManager()->WaitUntilPdfLoaded(embedder_host));
 
   // The primary main frame shouldn't be the PDF embedder and shouldn't have a
   // PDF stream.
   auto* primary_main_frame = active_web_contents->GetPrimaryMainFrame();
-  ASSERT_FALSE(
-      GetTestPdfViewerStreamManager()->GetStreamContainer(primary_main_frame));
+  ASSERT_FALSE(GetTestMimeHandlerStreamManager()->GetStreamContainer(
+      primary_main_frame));
 
   // Now detach the frame and observe that the stream manager is destroyed.
   content::RenderFrameDeletedObserver deleted_observer(subframe_main_host);
@@ -421,7 +423,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessOopifPDFTest,
              "document.body.removeChild(document.querySelector('iframe'));"));
   deleted_observer.WaitUntilDeleted();
 
-  EXPECT_FALSE(GetPdfViewerStreamManager());
+  EXPECT_FALSE(GetMimeHandlerStreamManager());
 }
 
 // Check that navigating to a PDF and then trying to access localStorage or
@@ -436,7 +438,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessOopifPDFTest,
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   EXPECT_EQ(pdf_url, web_contents->GetLastCommittedURL());
-  ASSERT_TRUE(GetTestPdfViewerStreamManager()->WaitUntilPdfLoaded(
+  ASSERT_TRUE(GetTestMimeHandlerStreamManager()->WaitUntilPdfLoaded(
       web_contents->GetPrimaryMainFrame()));
 
   // The PDF document should be in the grandchild frame, embedded in the PDF
@@ -520,11 +522,11 @@ class MailtoExternalProtocolHandlerDelegate
 // navigations before getting to external protocol code.
 
 // This test verifies that external protocol requests succeed when made from an
-// OOPIF (https://crbug.com/668289).
+// OOPIF (https://crbug.com/40495154).
 
 // Disabled due to flakiness. If enabled, still skip for ChromeOS based on
 // comment above.
-// See https://crbug.com/980446
+// See https://crbug.com/41468843
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        DISABLED_LaunchExternalProtocolFromSubframe) {
   GURL start_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
@@ -563,7 +565,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 
 // Verify that a popup can be opened after navigating a remote frame.  This has
 // to be a chrome/ test to ensure that the popup blocker doesn't block the
-// popup.  See https://crbug.com/670770.
+// popup.  See https://crbug.com/40496335.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        NavigateRemoteFrameAndOpenPopup) {
   // Start on a page with an <iframe>.
@@ -599,7 +601,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 // Ensure that a transferred cross-process navigation does not generate
 // DidStopLoading events until the navigation commits.  If it did, then
 // ui_test_utils::NavigateToURL would proceed before the URL had committed.
-// http://crbug.com/243957.
+// http://crbug.com/40319203.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        NoStopDuringTransferUntilCommit) {
   GURL init_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
@@ -706,7 +708,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest, PrintIgnoredInUnloadHandler) {
 
 // Ensure that when a window closes itself via window.close(), its process does
 // not get destroyed if there's a pending cross-process navigation in the same
-// process from another tab.  See https://crbug.com/799399.
+// process from another tab.  See https://crbug.com/41363309.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        ClosePopupWithPendingNavigationInOpener) {
   // Start on a.com and open a popup to b.com.
@@ -1210,7 +1212,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 }
 
 // Test that opening a window with `noopener` consumes user activation.
-// crbug.com/1264543, crbug.com/1291210
+// crbug.com/40057754, crbug.com/40058598
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        UserActivationConsumptionNoopener) {
   // Start on a page a.com.
@@ -1259,7 +1261,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 
 // TODO(crbug.com/40106376): Flaky.
 // Tests that a cross-site iframe runs its beforeunload handler when closing a
-// tab.  See https://crbug.com/853021.
+// tab.  See https://crbug.com/40580860.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        DISABLED_TabCloseWithCrossSiteBeforeUnloadIframe) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
@@ -1312,8 +1314,8 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 
 // Tests that a same-site iframe runs its beforeunload handler when closing a
 // tab.  Same as the test above, but for a same-site rather than cross-site
-// iframe.  See https://crbug.com/1010456.
-// Flaky (timeout) on Linux, ChromeOS, MacOS, and Windows (crbug.com/1033002)
+// iframe.  See https://crbug.com/40651135.
+// Flaky (timeout) on Linux, ChromeOS, MacOS, and Windows (crbug.com/40663129)
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        DISABLED_TabCloseWithSameSiteBeforeUnloadIframe) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
@@ -1367,7 +1369,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 // 2. The user tries to close the popup, triggering beforeunload.
 // 3. While waiting for the subframe's beforeunload, the original page closes
 //    the popup via window.close().
-// See https://crbug.com/866382.
+// See https://crbug.com/41403196.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        CrossProcessWindowCloseWithBeforeUnloadIframe) {
   GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
@@ -1420,7 +1422,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
 // 2. The user tries to close the popup, triggering beforeunload.
 // 3. While waiting for second subframe's beforeunload, the original page
 //    closes the popup via window.close().
-// See https://crbug.com/866382.  This is a variant of the test above, but
+// See https://crbug.com/41403196.  This is a variant of the test above, but
 // with two iframes, which used to trigger a different crash.
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        CrossProcessWindowCloseWithTwoBeforeUnloadIframes) {
@@ -1493,7 +1495,7 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest, JSPrintDuringSwap) {
 // This test verifies that an OOPIF created in a tab on a secondary display
 // doesn't initialize its device scale factor based on the primary display.
 // Note: This test could probably be expanded to run on all ASH platforms.
-// Disabled due to flakiness. https://crbug.com/1359423
+// Disabled due to flakiness. https://crbug.com/40862378
 IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
                        DISABLED_TestInitialDSFForOOPIF) {
   // Spec for a two-display system, where the primary display has non-unit
@@ -1511,7 +1513,8 @@ IN_PROC_BROWSER_TEST_F(ChromeSitePerProcessTest,
   display::Screen* screen = display::Screen::Get();
   int64_t display2 = display_manager_test_api.GetSecondaryDisplay().id();
   screen->SetDisplayForNewWindows(display2);
-  Browser* browser_on_secondary_display = CreateBrowser(browser()->profile());
+  Browser* browser_on_secondary_display =
+      CreateBrowser(browser()->GetProfile());
 
   // Open a page with an OOPIF on the secondary display.
   GURL main_url(embedded_test_server()->GetURL(

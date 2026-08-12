@@ -12,6 +12,10 @@
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -26,6 +30,7 @@
 #include "extensions/test/extension_test_message_listener.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -162,8 +167,9 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperBrowserTest,
       ReloadPageDialogController::AcceptDialogForTesting(true);
 
   // on all sites -> on site
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   // We assume that there is only ever one action that wants to run for the test
@@ -173,8 +179,9 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperBrowserTest,
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on site -> on-click (refresh needed due to revoking permissions)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   ASSERT_TRUE(WaitForReloadToFinish());
@@ -183,8 +190,9 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperBrowserTest,
 
   // on click -> on site (refresh needed due to script wanting to load at
   // start)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   ASSERT_TRUE(WaitForReloadToFinish());
@@ -192,16 +200,18 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperBrowserTest,
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on site -> on all sites
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnAllSites);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnAllSites,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnAllSites);
   ASSERT_TRUE(ContentScriptInjected());
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on all sites -> on-click (refresh needed due to revoking permissions)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   EXPECT_TRUE(WaitForReloadToFinish());
@@ -236,8 +246,9 @@ IN_PROC_BROWSER_TEST_F(
       ReloadPageDialogController::AcceptDialogForTesting(true);
 
   // on all sites -> on site
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   // We assume that there is only ever one action that wants to run for the test
@@ -247,8 +258,9 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on site -> on-click (refresh needed due to revoking permissions)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   EXPECT_TRUE(ContentScriptInjected() && !ExtensionWantsToRun());
@@ -258,8 +270,9 @@ IN_PROC_BROWSER_TEST_F(
 
   // on click -> on site (refresh needed due to script wanting to load at
   // start)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   EXPECT_TRUE(!ContentScriptInjected() && ExtensionWantsToRun());
@@ -268,16 +281,18 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on site -> on all sites
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnAllSites);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnAllSites,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnAllSites);
   ASSERT_TRUE(ContentScriptInjected());
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on all sites -> on-click (refresh needed due to revoking permissions)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   EXPECT_TRUE(ContentScriptInjected() && !ExtensionWantsToRun());
@@ -285,11 +300,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(!ContentScriptInjected() && ExtensionWantsToRun());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Provides test cases with an extension that executes a script programmatically
 // on every site it visits.
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported. chrome.tabs is used by the test extension.
 class SitePermissionsHelperExecuteSciptBrowserTest
     : public SitePermissionsHelperBrowserTest {
  public:
@@ -341,7 +353,7 @@ class SitePermissionsHelperExecuteSciptBrowserTest
 
 // Tests that active tab is cleared when we revoke site permissions of an
 // extension that injects a script programmatically into the page. To fix
-// crbug.com/1433399.
+// crbug.com/40264393.
 IN_PROC_BROWSER_TEST_F(
     SitePermissionsHelperExecuteSciptBrowserTest,
     UpdateSiteAccess_RevokingSitePermission_AlsoClearsActiveTab) {
@@ -354,7 +366,10 @@ IN_PROC_BROWSER_TEST_F(
     // on all sites -> on click (revokes access)
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     ASSERT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -369,8 +384,9 @@ IN_PROC_BROWSER_TEST_F(
 
   ExtensionTestMessageListener listener("injection succeeded");
   // on click -> on site (grants site access and active tab permission)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   ASSERT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   ASSERT_EQ(permissions_helper_->GetSiteInteraction(*extension_,
@@ -385,7 +401,10 @@ IN_PROC_BROWSER_TEST_F(
     // permissions)
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     ASSERT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -412,7 +431,7 @@ IN_PROC_BROWSER_TEST_F(
 
 // Tests that active tab is cleared when we revoke site permissions after
 // granting active tab permissions of an extension that injects a script
-// programmatically into the page.  To fix crbug.com/1433399.
+// programmatically into the page.  To fix crbug.com/40264393.
 IN_PROC_BROWSER_TEST_F(
     SitePermissionsHelperExecuteSciptBrowserTest,
     UpdateSiteAccess_RevokingSitePermissionAfterGrantTab_AlsoClearsActiveTab) {
@@ -423,7 +442,10 @@ IN_PROC_BROWSER_TEST_F(
     // on all sites -> on click (revokes access)
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     ASSERT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -445,8 +467,9 @@ IN_PROC_BROWSER_TEST_F(
 
   // on click -> on site (grants site access and redundantly active tab
   // permission)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   ASSERT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   ASSERT_EQ(permissions_helper_->GetSiteInteraction(*extension_,
@@ -460,7 +483,10 @@ IN_PROC_BROWSER_TEST_F(
     // permissions)
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     ASSERT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -552,7 +578,6 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperExecuteSciptBrowserTest,
     EXPECT_TRUE(ExtensionWantsToRun());
   }
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 class SitePermissionsHelperContentScriptBrowserTest
     : public SitePermissionsHelperBrowserTest {
@@ -590,7 +615,7 @@ class SitePermissionsHelperContentScriptBrowserTest
 };
 
 // Tests that active tab is cleared when we revoke site permissions of an
-// extension that injects a content script. To fix crbug.com/1433399.
+// extension that injects a content script. To fix crbug.com/40264393.
 IN_PROC_BROWSER_TEST_F(
     SitePermissionsHelperContentScriptBrowserTest,
     UpdateSiteAccess_RevokingSitePermission_AlsoClearsActiveTab) {
@@ -600,8 +625,9 @@ IN_PROC_BROWSER_TEST_F(
       ReloadPageDialogController::AcceptDialogForTesting(true);
 
   // on all sites -> on click (revokes access)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   ASSERT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   ASSERT_EQ(permissions_helper_->GetSiteInteraction(*extension_,
@@ -613,8 +639,9 @@ IN_PROC_BROWSER_TEST_F(
 
   ExtensionTestMessageListener listener("injection succeeded");
   // on click -> on site (grants site access and active tab permission)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnSite);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnSite,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   ASSERT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnSite);
   ASSERT_EQ(permissions_helper_->GetSiteInteraction(*extension_,
@@ -625,8 +652,9 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_FALSE(ExtensionWantsToRun());
 
   // on site -> on-click (should remove site access and active tab permissions)
-  permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                        UserSiteAccess::kOnClick);
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, GetActiveWebContents(), UserSiteAccess::kOnClick,
+      GetActiveWebContents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   EXPECT_EQ(permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
             UserSiteAccess::kOnClick);
   EXPECT_EQ(permissions_helper_->GetSiteInteraction(*extension_,
@@ -643,9 +671,6 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(ExtensionWantsToRun());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when the chrome.tabs API
-// is supported. chrome.tabs is used by the test extension.
 class SitePermissionsHelperOptionalHostPermissions
     : public SitePermissionsHelperBrowserTest {
  public:
@@ -703,7 +728,10 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     // on all sites -> on site.
     ExtensionTestMessageListener listener("success");
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnSite);
+                                          UserSiteAccess::kOnSite,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     EXPECT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnSite);
@@ -718,7 +746,10 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     // on site -> on-click (refresh needed due to revoking permissions).
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     EXPECT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -732,7 +763,10 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     // on click -> on site
     ExtensionTestMessageListener listener("success");
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnSite);
+                                          UserSiteAccess::kOnSite,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     EXPECT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnSite);
@@ -745,7 +779,10 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     // on site -> on all sites
     ExtensionTestMessageListener listener("success");
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnAllSites);
+                                          UserSiteAccess::kOnAllSites,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     EXPECT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnAllSites);
@@ -759,7 +796,10 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     // on all sites -> on-click
     BlockedActionWaiter blocked_action_waiter(active_action_runner());
     permissions_helper_->UpdateSiteAccess(*extension_, GetActiveWebContents(),
-                                          UserSiteAccess::kOnClick);
+                                          UserSiteAccess::kOnClick,
+                                          GetActiveWebContents()
+                                              ->GetPrimaryMainFrame()
+                                              ->GetLastCommittedOrigin());
     EXPECT_EQ(
         permissions_manager_->GetUserSiteAccess(*extension_, original_url_),
         UserSiteAccess::kOnClick);
@@ -769,6 +809,48 @@ IN_PROC_BROWSER_TEST_F(SitePermissionsHelperOptionalHostPermissions,
     EXPECT_TRUE(ExtensionWantsToRun());
   }
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(SitePermissionsHelperBrowserTest,
+                       UpdateSiteAccess_MultipleTabsSameOrigin) {
+  content::WebContents* tab_a = GetActiveWebContents();
+  ASSERT_TRUE(ContentScriptInjected());
+
+  // Open Tab B on the same origin.
+  ASSERT_TRUE(AddTabAtIndex(1, original_url_, ui::PAGE_TRANSITION_TYPED));
+  content::WebContents* tab_b =
+      browser()->tab_strip_model()->GetWebContentsAt(1);
+  ASSERT_TRUE(content::WaitForLoadStop(tab_b));
+
+  // Switch back to Tab A.
+  browser()->tab_strip_model()->ActivateTabAt(0);
+
+  auto reload_page_dialog_reset =
+      ReloadPageDialogController::AcceptDialogForTesting(true);
+
+  // Update site access on Tab A to kOnClick.
+  permissions_helper_->UpdateSiteAccess(
+      *extension_, tab_a, UserSiteAccess::kOnClick,
+      tab_a->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+
+  // Tab A reloads immediately via the accepted reload bubble dialog, resetting
+  // its reload requirement.
+  ASSERT_TRUE(WaitForReloadToFinish());
+  TabHelper* tab_helper_a = TabHelper::FromWebContents(tab_a);
+  ASSERT_TRUE(tab_helper_a);
+  EXPECT_FALSE(tab_helper_a->IsReloadRequired());
+
+  // Tab B is marked as requiring a reload.
+  TabHelper* tab_helper_b = TabHelper::FromWebContents(tab_b);
+  ASSERT_TRUE(tab_helper_b);
+  EXPECT_TRUE(tab_helper_b->IsReloadRequired());
+
+  // Activating Tab B triggers OnVisibilityChanged(), which displays the Reload
+  // Page bubble on Tab B.
+  browser()->tab_strip_model()->ActivateTabAt(1);
+  ASSERT_TRUE(WaitForReloadToFinish());
+  EXPECT_FALSE(tab_helper_b->IsReloadRequired());
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "chrome/browser/local_discovery/service_discovery_shared_client.h"  // nogncheck
 #include "chrome/browser/media/router/discovery/mdns/dns_sd_device_lister.h"
@@ -45,8 +46,8 @@ bool DnsSdRegistry::ServiceTypeData::UpdateService(
   bool known = (it != service_list_.end());
   if (known) {
     // If added == true, but we still found the service in our cache, then just
-    // update the existing entry, but this should not happen!
-    DCHECK(!added);
+    // update the existing entry. This can happen due to duplicate network
+    // notifications.
     if (*it != service) {
       *it = service;
       updated_or_added = true;

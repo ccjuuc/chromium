@@ -17,11 +17,12 @@
 #include "ui/gfx/native_ui_types.h"
 #include "ui/menus/simple_menu_model.h"
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 class BookmarkMergedSurfaceService;
 struct BookmarkParentFolder;
+class BookmarkUIOperationsHelperMergedSurfaces;
 
 // An interface implemented by an object that performs actions on the actual
 // menu for the controller.
@@ -51,18 +52,19 @@ class BookmarkContextMenuController
   // Creates the bookmark context menu.
   // `browser` is used to open the bookmark manager and is null in tests.
   // `profile` is used for opening urls as well as enabling 'open incognito'.
-  // Uses a callback since this can be asynchronous. See crbug.com/1161144.
+  // Uses a callback since this can be asynchronous. See crbug.com/40054262.
   // `selection` is the nodes the context menu operates on and must be not
   // empty. The parent for newly created nodes is `selection[0]` if `selection`
   // has one element and it is a folder, otherwise it is `selection[0]->parent`.
   BookmarkContextMenuController(
       gfx::NativeWindow parent_window,
       BookmarkContextMenuControllerDelegate* delegate,
-      Browser* browser,
+      BrowserWindowInterface* browser,
       Profile* profile,
       BookmarkLaunchLocation opened_from,
       const std::vector<raw_ptr<const bookmarks::BookmarkNode,
-                                VectorExperimental>>& selection);
+                                VectorExperimental>>& selection,
+      bool can_paste);
 
   BookmarkContextMenuController(const BookmarkContextMenuController&) = delete;
   BookmarkContextMenuController& operator=(
@@ -71,6 +73,7 @@ class BookmarkContextMenuController
   ~BookmarkContextMenuController() override;
 
   ui::SimpleMenuModel* menu_model() { return menu_model_.get(); }
+  Profile* profile() const { return profile_; }
 
   // Public for testing.
   // Returns the parent for newly created folders/bookmarks. If `selection` has
@@ -93,6 +96,9 @@ class BookmarkContextMenuController
   size_t GetIndexForNewNodes() const;
 
  private:
+  void OnPasteFinished(
+      std::unique_ptr<BookmarkUIOperationsHelperMergedSurfaces> paste_helper);
+
   friend class BookmarkContextMenuControllerTest;
   FRIEND_TEST_ALL_PREFIXES(
       BookmarkContextMenuControllerTest,
@@ -125,16 +131,23 @@ class BookmarkContextMenuController
   // Returns null if no node should be focused.
   const bookmarks::BookmarkNode* ComputeNodeToFocusForBookmarkManager() const;
 
+  // Adds a submenu to the menu with items for the visibility of the bookmark
+  // bar.
+  void AddSubmenuItems();
+
   gfx::NativeWindow parent_window_;
   raw_ptr<BookmarkContextMenuControllerDelegate> delegate_;
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   raw_ptr<Profile> profile_;
   const BookmarkLaunchLocation opened_from_;
   std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
       selection_;
   const raw_ptr<BookmarkMergedSurfaceService> bookmark_service_;
   std::unique_ptr<ui::SimpleMenuModel> menu_model_;
+  std::unique_ptr<ui::SimpleMenuModel> submenu_model_;
   const std::unique_ptr<BookmarkParentFolder> new_nodes_parent_;
+  // Whether IDC_PASTE is enabled.
+  const bool can_paste_;
   // Used to detect deletion of |this| executing a command.
   base::WeakPtrFactory<BookmarkContextMenuController> weak_factory_{this};
 };

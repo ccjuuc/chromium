@@ -32,6 +32,9 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Query embedding failed"/>
   <int value="3" label="Query embedding output malformed"/>
   <int value="4" label="No eligible tabs"/>
+  <int value="5" label="Timed out"/>
+  <int value="6" label="Query empty"/>
+  <int value="7" label="Query too few words"/>
 </enum>
 
 <!-- LINT.IfChange(EntrypointSource) -->
@@ -40,9 +43,19 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="From Web"/>
   <int value="1" label="From Omnibox"/>
   <int value="2" label="From New Tab Page"/>
+  <int value="3" label="From Lens"/>
 </enum>
 
 <!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_ui_service.cc:EntrypointSource) -->
+
+<!-- LINT.IfChange(ContextualTasksTabCloseState) -->
+
+<enum name="ContextualTasksTabCloseState">
+  <int value="0" label="Active tab"/>
+  <int value="1" label="Background tab"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h:ContextualTasksTabCloseState) -->
 
 </enums>
 

@@ -10,6 +10,9 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
+#include "ash/strings/grit/ash_strings.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
@@ -22,6 +25,7 @@
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/signin_partition_manager.h"
+#include "chrome/browser/ash/login/signin_partition_manager_factory.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/policy_oauth2_token_fetcher.h"
@@ -269,8 +273,11 @@ void EnrollmentScreenHandler::ShowAuthError(
     case GoogleServiceAuthError::SERVICE_UNAVAILABLE:
       ShowError(IDS_ENTERPRISE_ENROLLMENT_AUTH_NETWORK_ERROR, /*retry=*/true);
       return;
+    case GoogleServiceAuthError::DEVICE_MANAGEMENT_ERROR:
+      // DEVICE_MANAGEMENT_ERROR is not supported on ChromeOS.
+      NOTREACHED();
     case GoogleServiceAuthError::NUM_STATES:
-      break;
+      NOTREACHED();
   }
   NOTREACHED();
 }
@@ -312,22 +319,32 @@ void EnrollmentScreenHandler::ShowEnrollmentStatus(
       // Some special cases for generating a nicer message that's more helpful.
       switch (status.client_status()) {
         case policy::DM_STATUS_SERVICE_MANAGEMENT_NOT_SUPPORTED:
-          if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+          // TODO(crbug.com/489929275): Remove g_browser_process use.
+          if (policy::EnrollmentRequisitionManager::IsMeetDevice(
+                  CHECK_DEREF(g_browser_process->local_state()))) {
             ShowError(IDS_ENTERPRISE_ENROLLMENT_ACCOUNT_ERROR_MEETS,
                       /*retry=*/true);
           } else {
             ShowError(IDS_ENTERPRISE_ENROLLMENT_ACCOUNT_ERROR, /*retry=*/true);
           }
           break;
-        case policy::DM_STATUS_SERVICE_MISSING_LICENSES:
-          if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
-            ShowError(IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR_MEETS,
-                      /*retry=*/true);
-          } else {
-            ShowError(IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR,
-                      /*retry=*/true);
+        case policy::DM_STATUS_SERVICE_MISSING_LICENSES: {
+          int message_id = IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR;
+          if (policy::EnrollmentRequisitionManager::IsSquidDevice()) {
+            message_id = IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR_BEAM;
+          } else if (policy::EnrollmentRequisitionManager::
+                         IsCuttlefishDevice()) {
+            message_id =
+                IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR_BEAM_MEET;
+          } else if (
+              // TODO(crbug.com/489929275): Remove g_browser_process use.
+              policy::EnrollmentRequisitionManager::IsMeetDevice(
+                  CHECK_DEREF(g_browser_process->local_state()))) {
+            message_id = IDS_ENTERPRISE_ENROLLMENT_MISSING_LICENSES_ERROR_MEETS;
           }
+          ShowError(message_id, /*retry=*/true);
           break;
+        }
         case policy::DM_STATUS_SERVICE_DEPROVISIONED:
           ShowError(IDS_ENTERPRISE_ENROLLMENT_DEPROVISIONED_ERROR,
                     /*retry=*/true);
@@ -356,7 +373,9 @@ void EnrollmentScreenHandler::ShowEnrollmentStatus(
               /*retry=*/true);
           break;
         case policy::DM_STATUS_SERVICE_ENTERPRISE_TOS_HAS_NOT_BEEN_ACCEPTED:
-          if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+          // TODO(crbug.com/489929275): Remove g_browser_process use.
+          if (policy::EnrollmentRequisitionManager::IsMeetDevice(
+                  CHECK_DEREF(g_browser_process->local_state()))) {
             ShowError(
                 IDS_ENTERPRISE_ENROLLMENT_ENTERPRISE_TOS_HAS_NOT_BEEN_ACCEPTED_MEETS,
                 /*retry=*/true);
@@ -499,7 +518,9 @@ void EnrollmentScreenHandler::DeclareLocalizedValues(
                IDS_EDUCATION_ENROLLMENT_SCREEN_TITLE);
   builder->Add("oauthEnrollNextBtn", IDS_OFFLINE_LOGIN_NEXT_BUTTON_TEXT);
   builder->Add("oauthEnrollSkip", IDS_ENTERPRISE_ENROLLMENT_SKIP);
-  if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
+  // TODO(crbug.com/489929275): Remove g_browser_process use.
+  if (policy::EnrollmentRequisitionManager::IsMeetDevice(
+          CHECK_DEREF(g_browser_process->local_state()))) {
     // Use Next text since the setup is not finished.
     builder->Add("oauthEnrollDone", IDS_EULA_NEXT_BUTTON);
   } else {
@@ -649,7 +670,7 @@ void EnrollmentScreenHandler::HandleCompleteLogin(const std::string& user,
   // cookie headers. So manually fetch the cookies for the GAIA URL from the
   // CookieManager.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
 
   // Validity check that partition did not change during enrollment flow.
@@ -778,7 +799,7 @@ void EnrollmentScreenHandler::DoShow() {
   // Start a new session with SigninPartitionManager, generating a unique
   // StoragePartition.
   login::SigninPartitionManager* signin_partition_manager =
-      login::SigninPartitionManager::Factory::GetForBrowserContext(
+      login::SigninPartitionManagerFactory::GetForBrowserContext(
           Profile::FromWebUI(web_ui()));
   signin_partition_manager->StartSigninSession(
       web_ui()->GetWebContents(),
@@ -799,7 +820,7 @@ void EnrollmentScreenHandler::DoShowWithPartition(
   DoShowWithData(ScreenDataForOAuthEnrollment());
 }
 
-void EnrollmentScreenHandler::DoShowWithData(base::Value::Dict screen_data) {
+void EnrollmentScreenHandler::DoShowWithData(base::DictValue screen_data) {
   ShowInWebUI(std::move(screen_data));
   if (first_show_) {
     first_show_ = false;
@@ -807,14 +828,14 @@ void EnrollmentScreenHandler::DoShowWithData(base::Value::Dict screen_data) {
   }
 }
 
-base::Value::Dict EnrollmentScreenHandler::ScreenDataForAutomaticEnrollment() {
+base::DictValue EnrollmentScreenHandler::ScreenDataForAutomaticEnrollment() {
   // Automatic enrollment (attestation or token-based) doesn't require
   // additional screen data.
   return ScreenDataCommon();
 }
 
-base::Value::Dict EnrollmentScreenHandler::ScreenDataForOAuthEnrollment() {
-  base::Value::Dict screen_data = ScreenDataCommon();
+base::DictValue EnrollmentScreenHandler::ScreenDataForOAuthEnrollment() {
+  base::DictValue screen_data = ScreenDataCommon();
 
   screen_data.Set("webviewPartitionName", signin_partition_name_);
   screen_data.Set("gaiaUrl", GaiaUrls::GetInstance()->gaia_url().spec());
@@ -838,8 +859,8 @@ base::Value::Dict EnrollmentScreenHandler::ScreenDataForOAuthEnrollment() {
   return screen_data;
 }
 
-base::Value::Dict EnrollmentScreenHandler::ScreenDataCommon() {
-  base::Value::Dict screen_data;
+base::DictValue EnrollmentScreenHandler::ScreenDataCommon() {
+  base::DictValue screen_data;
 
   screen_data.Set("enrollment_mode", EnrollmentModeToUIMode(config_.mode));
   screen_data.Set("is_enrollment_enforced", config_.is_forced());

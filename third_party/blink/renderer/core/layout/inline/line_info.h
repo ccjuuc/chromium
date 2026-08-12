@@ -55,6 +55,11 @@ class CORE_EXPORT LineInfo {
   bool IsFirstFormattedLine() const { return is_first_formatted_line_; }
   void SetIsFirstFormattedLine(bool value) { is_first_formatted_line_ = value; }
 
+  // True if this line is the first line in the IFC, or next of a forced
+  // line break.
+  bool IsStartOfParagraph() const { return is_start_of_paragraph_; }
+  void SetIsStartOfParagraph(bool value) { is_start_of_paragraph_ = value; }
+
   // Use ::first-line style if true.
   // https://drafts.csswg.org/css-pseudo/#selectordef-first-line
   // This is false for the "first formatted line" if '::first-line' rule is not
@@ -123,6 +128,13 @@ class CORE_EXPORT LineInfo {
     } else {
       minimum_space_shortage_ = shortage;
     }
+  }
+  LayoutUnit TallestUnbreakableBlockSize() const {
+    return tallest_unbreakable_block_size_;
+  }
+  void PropagateTallestUnbreakableBlockSize(LayoutUnit size) {
+    DCHECK_GE(size, LayoutUnit());
+    tallest_unbreakable_block_size_ = size;
   }
 
   void SetTextIndent(LayoutUnit indent) { text_indent_ = indent; }
@@ -234,6 +246,10 @@ class CORE_EXPORT LineInfo {
     block_in_inline_layout_result_ = std::move(layout_result);
   }
 
+  // True if this line has unsuccessful block-in-inline children that need to
+  // propagate the results.
+  bool HasUnsuccessfulBlockInInline() const;
+
   // |MayHaveTextCombineOrRubyItem()| is a flag for special text handling
   // during "text-align:justify".
   bool MayHaveTextCombineOrRubyItem() const {
@@ -283,6 +299,9 @@ class CORE_EXPORT LineInfo {
     initial_letter_box_block_size_ = block_size;
   }
 
+  void SetTextFitScale(float scale) { text_fit_scale_ = scale; }
+  float TextFitScale() const { return text_fit_scale_; }
+
  private:
   ETextAlign GetTextAlign(bool is_last_line = false) const;
   bool ComputeNeedsAccurateEndPosition() const;
@@ -304,6 +323,7 @@ class CORE_EXPORT LineInfo {
   Member<const LayoutResult> block_in_inline_layout_result_;
 
   std::optional<LayoutUnit> minimum_space_shortage_;
+  LayoutUnit tallest_unbreakable_block_size_;
 
   LayoutUnit available_width_;
   LayoutUnit width_;
@@ -318,10 +338,15 @@ class CORE_EXPORT LineInfo {
   unsigned end_item_index_;
   unsigned end_offset_for_justify_;
 
+  // Text scaling factor computed in `text-fit` processing.
+  // ApplyTextBoxTrim() refers to this.
+  float text_fit_scale_ = 1.0f;
+
   ETextAlign text_align_ = ETextAlign::kLeft;
   TextDirection base_direction_ = TextDirection::kLtr;
 
   bool is_first_formatted_line_ = false;
+  bool is_start_of_paragraph_ = false;
   bool use_first_line_style_ = false;
   bool is_last_line_ = false;
   bool has_forced_break_ = false;

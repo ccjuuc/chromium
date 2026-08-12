@@ -96,7 +96,7 @@ NSString* ViewControllerPresentationStatusDescription(
     UIViewController* view_controller);
 
 // Returns an alert coordinator asking the user whether they accept to switch to
-// a managed account.
+// a managed account. Must only be called if separate profiles is disabled.
 AlertCoordinator* ManagedConfirmationDialogContentForHostedDomain(
     NSString* hosted_domain,
     Browser* browser,
@@ -108,7 +108,6 @@ AlertCoordinator* ManagedConfirmationDialogContentForHostedDomain(
 // hosted domain.
 BOOL ShouldShowManagedConfirmationForHostedDomain(
     NSString* hosted_domain,
-    signin_metrics::AccessPoint access_point,
     const GaiaId& gaia_ID,
     PrefService* prefs);
 
@@ -123,7 +122,8 @@ SignedInUserState GetSignedInUserState(
 // there is no unsynced data.
 bool ForceLeavingPrimaryAccountConfirmationDialog(
     SignedInUserState signed_in_user_state,
-    ProfileIOS* profile);
+    ProfileIOS* profile,
+    const GaiaId& gaia_id_to_sign_in);
 
 // Returns a dialog for the user to confirm to sign out, switch account.
 // `anchorView` and `anchorRect` is the position that triggered sign-in.

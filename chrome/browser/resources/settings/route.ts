@@ -32,25 +32,6 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
 
   r.COOKIES = r.PRIVACY.createChild('/cookies');
 
-  if (!loadTimeData.getBoolean('isPrivacySandboxRestricted')) {
-    r.PRIVACY_SANDBOX = r.PRIVACY.createChild('/adPrivacy');
-    r.PRIVACY_SANDBOX_TOPICS =
-        r.PRIVACY_SANDBOX.createChild('/adPrivacy/interests');
-    r.PRIVACY_SANDBOX_MANAGE_TOPICS =
-        r.PRIVACY_SANDBOX_TOPICS.createChild('/adPrivacy/interests/manage');
-    r.PRIVACY_SANDBOX_FLEDGE =
-        r.PRIVACY_SANDBOX.createChild('/adPrivacy/sites');
-    r.PRIVACY_SANDBOX_AD_MEASUREMENT =
-        r.PRIVACY_SANDBOX.createChild('/adPrivacy/measurement');
-  } else if (loadTimeData.getBoolean(
-                 'isPrivacySandboxRestrictedNoticeEnabled')) {
-    r.PRIVACY_SANDBOX = r.PRIVACY.createChild('/adPrivacy');
-    // When the view is restricted, but the notice is configured to show, allow
-    // measurement settings only.
-    r.PRIVACY_SANDBOX_AD_MEASUREMENT =
-        r.PRIVACY_SANDBOX.createChild('/adPrivacy/measurement');
-  }
-
   if (loadTimeData.getBoolean('enableSecurityKeysSubpage')) {
     r.SECURITY_KEYS = r.SECURITY.createChild('/securityKeys');
   }
@@ -77,6 +58,9 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
   if (loadTimeData.getBoolean('enableSmartCardReadersContentSetting')) {
     r.SITE_SETTINGS_SMART_CARD_READERS =
         r.SITE_SETTINGS.createChild('smartCardReaders');
+  }
+  if (loadTimeData.getBoolean('enableWebPrintingContentSetting')) {
+    r.SITE_SETTINGS_WEB_PRINTING = r.SITE_SETTINGS.createChild('webPrinting');
   }
   // </if>
   r.SITE_SETTINGS_AUTO_VERIFY = r.SITE_SETTINGS.createChild('autoVerify');
@@ -105,9 +89,6 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
   r.SITE_SETTINGS_USB_DEVICES = r.SITE_SETTINGS.createChild('usbDevices');
   r.SITE_SETTINGS_HID_DEVICES = r.SITE_SETTINGS.createChild('hidDevices');
   r.SITE_SETTINGS_SERIAL_PORTS = r.SITE_SETTINGS.createChild('serialPorts');
-  if (loadTimeData.getBoolean('enableWebPrintingContentSetting')) {
-    r.SITE_SETTINGS_WEB_PRINTING = r.SITE_SETTINGS.createChild('webPrinting');
-  }
   if (loadTimeData.getBoolean('enableWebBluetoothNewPermissionsBackend')) {
     r.SITE_SETTINGS_BLUETOOTH_DEVICES =
         r.SITE_SETTINGS.createChild('bluetoothDevices');
@@ -147,10 +128,6 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
         r.SITE_SETTINGS.createChild('webApplications');
   }
   if (loadTimeData.getBoolean('enableLocalNetworkAccessSetting')) {
-    r.SITE_SETTINGS_LOCAL_NETWORK_ACCESS =
-        r.SITE_SETTINGS.createChild('localNetworkAccess');
-  }
-  if (loadTimeData.getBoolean('enableLocalNetworkAccessSplitPermissions')) {
     r.SITE_SETTINGS_LOCAL_NETWORK = r.SITE_SETTINGS.createChild('localNetwork');
     r.SITE_SETTINGS_LOOPBACK_NETWORK =
         r.SITE_SETTINGS.createChild('loopbackNetwork');
@@ -172,22 +149,24 @@ function createRoutes(): SettingsRoutes {
   // Search page.
   r.SEARCH = r.BASIC.createSection(
       '/search', 'search', loadTimeData.getString('searchPageTitle'));
-  r.SEARCH_ENGINES = r.SEARCH.createChild('/searchEngines');
+  if (!loadTimeData.getBoolean('searchSettingsUpdate')) {
+    r.SEARCH_ENGINES = r.SEARCH.createChild('/searchEngines');
+  }
 
   const visibility = pageVisibility || {};
 
   if (visibility.people !== false) {
     r.PEOPLE = r.BASIC.createSection(
         '/people', 'people', loadTimeData.getString('peoplePageTitle'));
+    if (loadTimeData.getBoolean('replaceSyncPromosWithSignInPromos')) {
+      r.ACCOUNT = r.PEOPLE.createChild('/account');
+      r.GOOGLE_SERVICES = r.PEOPLE.createChild('/googleServices');
+    }
     // <if expr="not is_chromeos">
     r.SIGN_OUT = r.PEOPLE.createChild('/signOut');
     r.SIGN_OUT.isNavigableDialog = true;
     r.IMPORT_DATA = r.PEOPLE.createChild('/importData');
     r.IMPORT_DATA.isNavigableDialog = true;
-    if (loadTimeData.getBoolean('replaceSyncPromosWithSignInPromos')) {
-      r.ACCOUNT = r.PEOPLE.createChild('/account');
-      r.GOOGLE_SERVICES = r.PEOPLE.createChild('/googleServices');
-    }
     r.MANAGE_PROFILE = r.PEOPLE.createChild('/manageProfile');
     // </if>
 
@@ -197,9 +176,9 @@ function createRoutes(): SettingsRoutes {
 
   if (visibility.ai !== false && loadTimeData.getBoolean('showAiPage')) {
     r.AI = r.BASIC.createSection(
-        '/ai', 'ai', loadTimeData.getString('aiInnovationsPageTitle'));
-    if (loadTimeData.getBoolean('showTabOrganizationControl')) {
-      r.AI_TAB_ORGANIZATION = r.AI.createChild('/ai/tabOrganizer');
+        '/ai', 'ai', loadTimeData.getString('aiPageTitle'));
+    if (loadTimeData.getBoolean('enableAiModeSearchSetting')) {
+      r.AI_MODE_SEARCH = r.AI.createChild('/ai/aiModeSearch');
     }
     if (loadTimeData.getBoolean('showHistorySearchControl')) {
       r.HISTORY_SEARCH = r.AI.createChild('/ai/historySearch');
@@ -207,14 +186,21 @@ function createRoutes(): SettingsRoutes {
     if (loadTimeData.getBoolean('showComposeControl')) {
       r.OFFER_WRITING_HELP = r.AI.createChild('/ai/helpMeWrite');
     }
-    if (loadTimeData.getBoolean('showCompareControl')) {
-      r.COMPARE = r.AI.createChild('/ai/compareProducts');
-    }
-    // <if expr="enable_glic">
     if (loadTimeData.getBoolean('showGlicSettings')) {
       r.GEMINI = r.AI.createChild('/ai/gemini');
+      if (loadTimeData.getBoolean('actorLoginFederatedLoginSupportEnabled')) {
+        r.GEMINI_LOGIN = r.GEMINI.createChild('/ai/gemini/login');
+      }
     }
-    // </if>
+    if (loadTimeData.getBoolean('showAiSuggestionsControl')) {
+      r.AI_SUGGESTIONS = r.AI.createChild('/ai/suggestions');
+    }
+    if (loadTimeData.getBoolean('showInlineCueMenuControl')) {
+      r.INLINE_CUE_MENU = r.AI.createChild('/ai/inlineCueMenu');
+    }
+    if (loadTimeData.getBoolean('showSkillsSettingPage')) {
+      r.SKILLS = r.AI.createChild('/ai/skills');
+    }
   }
 
   if (visibility.appearance !== false) {
@@ -224,33 +210,24 @@ function createRoutes(): SettingsRoutes {
     r.FONTS = r.APPEARANCE.createChild('/fonts');
   }
 
-  if (loadTimeData.getBoolean('enableYourSavedInfoSettingsPage')) {
-    if (visibility.yourSavedInfo !== false) {
-      r.YOUR_SAVED_INFO = r.BASIC.createSection(
-          '/yourSavedInfo', 'yourSavedInfo',
-          loadTimeData.getString('yourSavedInfoPageTitle'));
-
-      r.PAYMENTS = r.YOUR_SAVED_INFO.createChild('/payments');
-      r.YOUR_SAVED_INFO_CONTACT_INFO =
-          r.YOUR_SAVED_INFO.createChild('/contactInfo');
-      r.YOUR_SAVED_INFO_IDENTITY_DOCS =
-          r.YOUR_SAVED_INFO.createChild('/identityDocs');
-      r.YOUR_SAVED_INFO_TRAVEL = r.YOUR_SAVED_INFO.createChild('/travel');
-
-      // <if expr="is_win or is_macosx">
-      r.PASSKEYS = r.YOUR_SAVED_INFO.createChild('/passkeys');
-      // </if>
-    }
-  } else if (visibility.autofill !== false) {
+  if (visibility.yourSavedInfo !== false) {
     r.AUTOFILL = r.BASIC.createSection(
-        '/autofill', 'autofill', loadTimeData.getString('autofillPageTitle'));
+        '/autofill', 'yourSavedInfo',
+        loadTimeData.getString('autofillPageTitle'));
+
     r.PAYMENTS = r.AUTOFILL.createChild('/payments');
-    r.ADDRESSES = r.AUTOFILL.createChild('/addresses');
-
-    if (loadTimeData.getBoolean('showAutofillAiControl')) {
-      r.AUTOFILL_AI = r.AUTOFILL.createChild('/enhancedAutofill');
+    r.CONTACT_INFO =
+        r.AUTOFILL.createChild('/contactInfo');
+    r.IDENTITY_DOCS =
+        r.AUTOFILL.createChild('/identityDocs');
+    r.TRAVEL = r.AUTOFILL.createChild('/travel');
+    if (loadTimeData.getBoolean('shoppingIntegrationEnabled')) {
+      r.SHOPPING = r.AUTOFILL.createChild('/shopping');
     }
-
+    if (loadTimeData.getBoolean('showSuggestionsFromGeminiSettings')) {
+      r.SUGGESTIONS_FROM_GEMINI =
+          r.AUTOFILL.createChild('/enhancedAutofill');
+    }
     // <if expr="is_win or is_macosx">
     r.PASSKEYS = r.AUTOFILL.createChild('/passkeys');
     // </if>

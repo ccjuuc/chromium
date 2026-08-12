@@ -9,17 +9,15 @@
 #include "base/test/values_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace autofill::payments {
 namespace {
+
 using base::MockCallback;
 using base::test::IsJson;
 using testing::Field;
-using Dict = base::Value::Dict;
+using Dict = base::DictValue;
 using base::OnceCallback;
-using PaymentsRpcResult =
-    autofill::payments::PaymentsAutofillClient::PaymentsRpcResult;
-}  // namespace
-
-namespace autofill::payments {
+using PaymentsRpcResult = PaymentsAutofillClient::PaymentsRpcResult;
 
 class GetBnplPaymentInstrumentForFetchingUrlRequestTest : public testing::Test {
  public:
@@ -79,7 +77,7 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, GetRequestContent) {
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         PaymentsRequest::BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
@@ -202,6 +200,18 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest,
   EXPECT_FALSE(request_->IsResponseComplete());
 }
 
+TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest,
+       IsResponseComplete_ParseResponseCalled_NonHttpRedirectUrl) {
+  Dict response = GetFullResponse();
+  response.SetByDottedPath(
+      "buy_now_pay_later_info.get_redirect_url_response_"
+      "info.redirect_url",
+      "chrome://version/");
+  request_->ParseResponse(response);
+
+  EXPECT_FALSE(request_->IsResponseComplete());
+}
+
 TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, RespondToDelegate) {
   Dict response_dict = Dict().Set(
       "buy_now_pay_later_info",
@@ -230,4 +240,5 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, RespondToDelegate) {
   request_->RespondToDelegate(PaymentsRpcResult::kSuccess);
 }
 
+}  // namespace
 }  // namespace autofill::payments

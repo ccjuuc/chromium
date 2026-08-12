@@ -21,17 +21,21 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.internal.Nullable;
 
+import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.HomeModulesConfigManager;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
+import org.chromium.chrome.browser.magic_stack.ModuleRegistry;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.ListContainerViewDelegate;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationMetricsUtils;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.ui.modelutil.PropertyModel;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -43,8 +47,10 @@ import java.util.function.Supplier;
 @NullMarked
 public class NtpCardsMediator {
 
+    private static final String TAG = "XplatSyncedSetup";
+
     // LINT.IfChange(HomeModuleTypes)
-    private static final Map<Integer, String> MODULE_TYPE_TO_USER_PREFS_KEY =
+    public static final Map<Integer, String> MODULE_TYPE_TO_USER_PREFS_KEY =
             Map.of(
                     ModuleType.SINGLE_TAB, Pref.TAB_RESUMPTION_HOME_MODULE_ENABLED,
                     ModuleType.PRICE_CHANGE, Pref.PRICE_TRACKING_HOME_MODULE_ENABLED,
@@ -57,17 +63,20 @@ public class NtpCardsMediator {
     private final PropertyModel mBottomSheetPropertyModel;
     private final PropertyModel mNtpCardsPropertyModel;
     private final Supplier<@Nullable Profile> mProfileSupplier;
+    private final @Nullable ModuleRegistry mModuleRegistry;
 
     public NtpCardsMediator(
             PropertyModel containerPropertyModel,
             PropertyModel bottomSheetPropertyModel,
             PropertyModel ntpCardsPropertyModel,
             BottomSheetDelegate delegate,
-            Supplier<@Nullable Profile> profileSupplier) {
+            Supplier<@Nullable Profile> profileSupplier,
+            @Nullable ModuleRegistry moduleRegistry) {
         mContainerPropertyModel = containerPropertyModel;
         mBottomSheetPropertyModel = bottomSheetPropertyModel;
         mNtpCardsPropertyModel = ntpCardsPropertyModel;
         mProfileSupplier = profileSupplier;
+        mModuleRegistry = moduleRegistry;
 
         mContainerPropertyModel.set(LIST_CONTAINER_VIEW_DELEGATE, createListDelegate());
         // Hides the back button when the NTP Cards bottom sheet is displayed standalone.
@@ -95,9 +104,9 @@ public class NtpCardsMediator {
         return new ListContainerViewDelegate() {
             @Override
             public List<Integer> getListItems() {
-                HomeModulesConfigManager homeModulesConfigManager =
-                        HomeModulesConfigManager.getInstance();
-                return homeModulesConfigManager.getModuleListShownInSettings();
+                return mModuleRegistry != null
+                        ? mModuleRegistry.getModuleListShownInSettings()
+                        : new ArrayList<>();
             }
 
             @Override
@@ -142,11 +151,33 @@ public class NtpCardsMediator {
 
     @VisibleForTesting
     void updateUserPrefs() {
-        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)) return;
+        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)) {
+            if (ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.CROSS_DEVICE_PREF_TRACKER_EXTRA_LOGS)) {
+                Log.i(
+                        TAG,
+                        "NtpCardsMediator:updateUserPrefs - HomeModulePrefRefactor was off, return"
+                                + " early");
+            }
+            return;
+        }
 
         @Nullable Profile profile = mProfileSupplier.get();
-        if (profile == null) return; // Return if profile not ready yet
+        if (profile == null) {
+            if (ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.CROSS_DEVICE_PREF_TRACKER_EXTRA_LOGS)) {
+                Log.i(
+                        TAG,
+                        "NtpCardsMediatorupdateUserPrefs - profile supplier gave null profile,"
+                                + " return early");
+            }
+            return; // Return if profile not ready yet
+        }
 
+        updateBooleanUserPrefs(
+                ChromePreferenceKeys.HOME_MODULE_CARDS_ENABLED,
+                Pref.MAGIC_STACK_HOME_MODULE_ENABLED,
+                profile);
         for (@ModuleType int moduleType : MODULE_TYPE_TO_USER_PREFS_KEY.keySet()) {
             updateBooleanUserPrefs(
                     getSettingsPreferenceKey(moduleType),

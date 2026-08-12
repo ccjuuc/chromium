@@ -121,6 +121,12 @@ class ExtensionRegistrar : public KeyedService,
     // Checks if there are any new external extensions to notify the user about.
     virtual void UpdateExternalExtensionAlert() = 0;
 
+    // Computes the disable reasons to use when installing or updating an
+    // extension.
+    virtual base::flat_set<int> GetDisableReasonsOnInstalled(
+        const Extension* extension,
+        int install_flags);
+
     // Informs the service that an extension's files are in place for loading.
     //
     // `extension`                the extension
@@ -133,7 +139,7 @@ class ExtensionRegistrar : public KeyedService,
         const Extension* extension,
         const syncer::StringOrdinal& page_ordinal,
         int install_flags,
-        base::Value::Dict ruleset_install_prefs) = 0;
+        base::DictValue ruleset_install_prefs) = 0;
   };
 
   explicit ExtensionRegistrar(content::BrowserContext* browser_context);
@@ -179,11 +185,10 @@ class ExtensionRegistrar : public KeyedService,
   // AddExtension.
   // `install_flags` is a bitmask of InstallFlags.
   void AddNewOrUpdatedExtension(const Extension* extension,
-                                const base::flat_set<int>& disable_reasons,
                                 int install_flags,
                                 const syncer::StringOrdinal& page_ordinal,
                                 const std::string& install_parameter,
-                                base::Value::Dict ruleset_install_prefs);
+                                base::DictValue ruleset_install_prefs);
 
   // Informs the service that an extension's files are in place for loading.
   //
@@ -196,7 +201,7 @@ class ExtensionRegistrar : public KeyedService,
   void OnExtensionInstalled(const Extension* extension,
                             const syncer::StringOrdinal& page_ordinal,
                             int install_flags,
-                            base::Value::Dict ruleset_install_prefs = {});
+                            base::DictValue ruleset_install_prefs = {});
   void OnExtensionInstalled(const Extension* extension,
                             const syncer::StringOrdinal& page_ordinal) {
     OnExtensionInstalled(extension, page_ordinal,
@@ -385,6 +390,12 @@ class ExtensionRegistrar : public KeyedService,
     extensions_enabled_ = value;
   }
 
+  // Overrides the browser version used to detect whether a component
+  // extension's code may have changed across a browser update, allowing tests
+  // to simulate one. Pass nullptr to restore the real version.
+  static base::AutoReset<const char*> OverrideBrowserVersionForTesting(
+      const char* version);
+
  private:
   // How to surface an extension load error, e.g. showing an error dialog. The
   // actual behavior is up to the embedder.
@@ -413,6 +424,13 @@ class ExtensionRegistrar : public KeyedService,
   // afterwards.
   void DoReloadExtension(ExtensionId extension_id,
                          LoadErrorBehavior load_error_behavior);
+
+  // Records the current browser version in `extension_id`'s prefs and returns
+  // whether it differed from the previously recorded one (also true if there
+  // was no recorded version). Used to detect that a component extension's
+  // code may have changed across a browser update, since component extensions
+  // are packaged with the browser and may change without a version bump.
+  bool CheckAndUpdateLastLoadedBrowserVersion(const ExtensionId& extension_id);
 
   // Unregister the service worker that is not from manifest and has extension
   // root scope.

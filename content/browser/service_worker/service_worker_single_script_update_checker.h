@@ -5,6 +5,7 @@
 #ifndef CONTENT_BROWSER_SERVICE_WORKER_SERVICE_WORKER_SINGLE_SCRIPT_UPDATE_CHECKER_H_
 #define CONTENT_BROWSER_SERVICE_WORKER_SERVICE_WORKER_SINGLE_SCRIPT_UPDATE_CHECKER_H_
 
+#include "base/byte_size.h"
 #include "base/time/time.h"
 #include "content/browser/renderer_host/policy_container_host.h"
 #include "content/browser/service_worker/service_worker_updated_script_loader.h"
@@ -82,7 +83,7 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
         mojo::PendingReceiver<network::mojom::URLLoaderClient>
             network_client_receiver,
         scoped_refptr<network::MojoToNetPendingBuffer> pending_network_buffer,
-        uint32_t consumed_bytes,
+        base::ByteSize consumed_bytes,
         ServiceWorkerUpdatedScriptLoader::LoaderState network_loader_state,
         ServiceWorkerUpdatedScriptLoader::WriterState body_writer_state);
     PausedState(const PausedState& other) = delete;
@@ -115,7 +116,7 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
     scoped_refptr<network::MojoToNetPendingBuffer> pending_network_buffer;
     // The number of bytes in |pending_network_buffer| that have already been
     // processed by the cache writer.
-    uint32_t consumed_bytes;
+    base::ByteSize consumed_bytes;
 
     ServiceWorkerUpdatedScriptLoader::LoaderState network_loader_state;
     ServiceWorkerUpdatedScriptLoader::WriterState body_writer_state;
@@ -160,6 +161,8 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
       int64_t write_resource_id,
       ScriptChecksumUpdateOption script_checksum_update_option,
       const blink::StorageKey& storage_key,
+      const std::optional<base::UnguessableToken>& network_restrictions_id,
+      PolicyContainerPolicies creator_policies,
       ResultCallback callback);
 
   ServiceWorkerSingleScriptUpdateChecker(
@@ -188,6 +191,7 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
   const scoped_refptr<PolicyContainerHost> policy_container_host() const {
     return policy_container_host_;
   }
+  void FlushRemotesForTesting();
 
   static const char* ResultToString(Result result);
 
@@ -202,10 +206,10 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
                               const mojo::HandleSignalsState& state);
   void CompareData(
       scoped_refptr<network::MojoToNetPendingBuffer> pending_buffer,
-      uint32_t bytes_available);
+      base::ByteSize bytes_available);
   void OnCompareDataComplete(
       scoped_refptr<network::MojoToNetPendingBuffer> pending_buffer,
-      uint32_t bytes_written,
+      base::ByteSize bytes_written,
       net::Error error);
 
   // Called when the update check for this script failed. It calls Finish().
@@ -246,6 +250,10 @@ class CONTENT_EXPORT ServiceWorkerSingleScriptUpdateChecker
   std::unique_ptr<blink::ThrottlingURLLoader> network_loader_;
 
   std::unique_ptr<ServiceWorkerCacheWriter> cache_writer_;
+
+  const std::optional<base::UnguessableToken> network_restrictions_id_;
+  const PolicyContainerPolicies creator_policies_;
+
   ResultCallback callback_;
 
   // Represents the state of |network_loader_|.

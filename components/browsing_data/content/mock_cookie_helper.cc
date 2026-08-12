@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
 #include "net/cookies/cookie_options.h"
@@ -27,7 +26,7 @@ void MockCookieHelper::StartFetching(FetchCallback callback) {
 }
 
 void MockCookieHelper::DeleteCookie(const net::CanonicalCookie& cookie) {
-  ASSERT_TRUE(base::Contains(cookies_, cookie));
+  ASSERT_TRUE(cookies_.contains(cookie));
   cookies_[cookie] = false;
 }
 
@@ -37,8 +36,8 @@ void MockCookieHelper::AddCookieSamples(
     std::optional<net::CookiePartitionKey> cookie_partition_key) {
   std::unique_ptr<net::CanonicalCookie> cc(
       net::CanonicalCookie::CreateForTesting(
-          url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-          cookie_partition_key));
+          url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther,
+          std::nullopt /* server_time */, cookie_partition_key));
 
   if (cc.get()) {
     if (cookies_.count(*cc))

@@ -43,6 +43,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "value": 0
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 0
           }
         }
       },
@@ -83,6 +86,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 0
           }
         }
       },
@@ -123,6 +129,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "value": 2
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 1
           }
         }
       },
@@ -161,6 +170,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "default_value": 0
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "default_value": 0
           }
         }
       },
@@ -177,7 +189,8 @@
           "AIModeSettings": 1,
           "LensOverlaySettings": 1,
           "AutomatedPasswordChangeSettings": 2,
-          "SearchContentSharingSettings": 1
+          "SearchContentSharingSettings": 1,
+          "ThirdPartyAiChatSettings": 1
         },
         "prefs": {
           "devtools.gen_ai_settings": {
@@ -211,6 +224,9 @@
             "value": 2
           },
           "contextual_search.search_content_sharing_settings": {
+            "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
             "value": 1
           }
         }
@@ -283,6 +299,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "value": 0
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 0
           }
         }
       },
@@ -345,6 +364,9 @@
           },
           "optimization_guide.model_execution.password_change_submission_enterprise_policy_allowed": {
             "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 0
           }
         }
       },
@@ -368,7 +390,8 @@
           "AIModeSettings": 1,
           "LensOverlaySettings": 1,
           "AutomatedPasswordChangeSettings": 2,
-          "SearchContentSharingSettings": 1
+          "SearchContentSharingSettings": 1,
+          "ThirdPartyAiChatSettings": 1
         },
         "prefs": {
           "ash.gen_ai_photo_editing_settings": {
@@ -427,6 +450,9 @@
           },
           "contextual_search.search_content_sharing_settings": {
             "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 1
           }
         }
       }
@@ -447,6 +473,12 @@
           },
           "contextual_search.search_content_sharing_settings": {
             "value": 0
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "value": 0
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 0
           }
         }
       },
@@ -459,6 +491,12 @@
             "value": 0
           },
           "contextual_search.search_content_sharing_settings": {
+            "value": 0
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
             "value": 0
           }
         }
@@ -473,6 +511,12 @@
           },
           "contextual_search.search_content_sharing_settings": {
             "value": 1
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "value": 2
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "value": 1
           }
         }
       },
@@ -484,6 +528,12 @@
           },
           "contextual_search.search_content_sharing_settings": {
             "default_value": 0
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "default_value": 0
+          },
+          "omnibox.third_party_ai_chat_settings": {
+            "default_value": 0
           }
         }
       },
@@ -491,13 +541,21 @@
         "policies": {
           "GenAiDefaultSettings": 1,
           "AIModeSettings": 1,
-          "SearchContentSharingSettings": 1
+          "SearchContentSharingSettings": 1,
+          "FindsSettings": 1,
+          "ThirdPartyAiChatSettings": 1
         },
         "prefs": {
           "omnibox.ai_mode_settings": {
             "value": 1
           },
           "contextual_search.search_content_sharing_settings": {
+            "value": 1
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
             "value": 1
           }
         }
@@ -506,13 +564,21 @@
         "policies": {
           "GenAiDefaultSettings": 2,
           "AIModeSettings": 1,
-          "SearchContentSharingSettings": 1
+          "SearchContentSharingSettings": 1,
+          "FindsSettings": 1,
+          "ThirdPartyAiChatSettings": 1
         },
         "prefs": {
           "omnibox.ai_mode_settings": {
             "value": 1
           },
           "contextual_search.search_content_sharing_settings": {
+            "value": 1
+          },
+          "optimization_guide.model_execution.finds_enterprise_policy_allowed": {
+            "value": 1
+          },
+          "omnibox.third_party_ai_chat_settings": {
             "value": 1
           }
         }

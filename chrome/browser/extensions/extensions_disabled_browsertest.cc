@@ -11,10 +11,13 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/switches.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -46,7 +49,7 @@ class ExtensionsDisabledBrowserTest : public ExtensionBrowserTest {
 };
 
 // Tests installing a number of extensions, and then restarting Chrome with the
-// --disable-extensions switch. Regression test for https://crbug.com/836624.
+// --disable-extensions switch. Regression test for https://crbug.com/41385385.
 IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
                        PRE_TestStartupWithInstalledExtensions) {
   const Extension* unpacked_extension =
@@ -68,6 +71,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
   EXPECT_TRUE(prefs->GetInstalledExtensionInfo(kGoodExtensionId));
   EXPECT_TRUE(prefs->GetInstalledExtensionInfo(kSimpleWithKeyExtensionId));
 }
+
 IN_PROC_BROWSER_TEST_F(ExtensionsDisabledBrowserTest,
                        TestStartupWithInstalledExtensions) {
   EXPECT_TRUE(ExtensionsBrowserClient::Get()->AreExtensionsDisabled(

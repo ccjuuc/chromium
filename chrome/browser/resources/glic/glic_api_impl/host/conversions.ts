@@ -11,6 +11,7 @@
 //   undefined.
 
 import type {BigBuffer} from '//resources/mojo/mojo/public/mojom/base/big_buffer.mojom-webui.js';
+import type {ProtoWrapper} from '//resources/mojo/mojo/public/mojom/base/proto_wrapper.mojom-webui.js';
 import type {TimeDelta} from '//resources/mojo/mojo/public/mojom/base/time.mojom-webui.js';
 import type {BitmapN32} from '//resources/mojo/skia/public/mojom/bitmap.mojom-webui.js';
 import {AlphaType} from '//resources/mojo/skia/public/mojom/image_info.mojom-webui.js';
@@ -18,16 +19,22 @@ import type {Origin} from '//resources/mojo/url/mojom/origin.mojom-webui.js';
 import type {Url} from '//resources/mojo/url/mojom/url.mojom-webui.js';
 
 import type {PageMetadata as PageMetadataMojo} from '../../ai_page_content_metadata.mojom-webui.js';
-import type {AnnotatedPageData as AnnotatedPageDataMojo, CaptureRegionResult as CaptureRegionResultMojo, ContextData as ContextDataMojo, ConversationInfo as ConversationInfoMojo, FocusedTabData as FocusedTabDataMojo, GetPinCandidatesOptions as GetPinCandidatesOptionsMojo, GetTabContextOptions as TabContextOptionsMojo, HostCapability as HostCapabilityMojo, PanelOpeningData as PanelOpeningDataMojo, PanelState as PanelStateMojo, PdfDocumentData as PdfDocumentDataMojo, PinTabsOptions as PinTabsOptionsMojo, Platform as PlatformMojo, Screenshot as ScreenshotMojo, TabContext as TabContextMojo, TabData as TabDataMojo, UnpinTabsOptions as UnpinTabsOptionsMojo, WebPageData as WebPageDataMojo} from '../../glic.mojom-webui.js';
-import {PinTrigger as PinTriggerMojo, UnpinTrigger as UnpinTriggerMojo, WebClientMode as WebClientModeMojo} from '../../glic.mojom-webui.js';
-import type {CaptureRegionResult, ConversationInfo, GetPinCandidatesOptions, HostCapability, PageMetadata, PanelOpeningData, PanelState, PinTabsOptions, PinTrigger, Platform, Screenshot, TabContextOptions, TaskOptions, UnpinTabsOptions, UnpinTrigger, WebPageData} from '../../glic_api/glic_api.js';
-import {DEFAULT_INNER_TEXT_BYTES_LIMIT, DEFAULT_PDF_SIZE_LIMIT, WebClientMode} from '../../glic_api/glic_api.js';
+import {enumFromClient, enumToClient} from '../../enum_conversions.js';
+import type {AdditionalContext as AdditionalContextMojo, AdditionalContextPart as AdditionalContextPartMojo, AnnotatedPageData as AnnotatedPageDataMojo, CaptureRegionResult as CaptureRegionResultMojo, ContextData as ContextDataMojo, ConversationInfo as ConversationInfoMojo, CounterAbuseVerdict as CounterAbuseVerdictMojo, FileUploadPolicyState as FileUploadPolicyStateMojo, FocusedTabData as FocusedTabDataMojo, GetPinCandidatesOptions as GetPinCandidatesOptionsMojo, HostCapability as HostCapabilityMojo, ImageBytesResult as ImageBytesResultMojo, ImageInfo as ImageInfoMojo, InvocationPayload as InvocationPayloadMojo, InvokeOptions as InvokeOptionsMojo, PanelOpeningData as PanelOpeningDataMojo, PanelState as PanelStateMojo, PdfDocumentData as PdfDocumentDataMojo, PinTabsOptions as PinTabsOptionsMojo, Screenshot as ScreenshotMojo, ScreenshotCollectionOptions as ScreenshotCollectionOptionsMojo, SkillPreview as SkillPreviewMojo, SkillsPayload as SkillsPayloadMojo, SubscriberObservationType as SubscriberObservationTypeMojo, TabContextOptions as TabContextOptionsMojo, TabContextResult as TabContextResultMojo, TabData as TabDataMojo, UnpinTabsOptions as UnpinTabsOptionsMojo, WebPageData as WebPageDataMojo, ZeroStateSuggestionsV2 as ZeroStateSuggestionsV2Mojo, ZssConfig as ZssConfigMojo} from '../../glic.mojom-webui.js';
+import {MicrophoneStatus as MicrophoneStatusMojo, PinTrigger as PinTriggerMojo, ScreenshotCompressionQuality as ScreenshotCompressionQualityMojo, ScreenshotImageFormat as ScreenshotImageFormatMojo, UnpinTrigger as UnpinTriggerMojo, WebClientMode as WebClientModeMojo} from '../../glic.mojom-webui.js';
+import type {CaptureRegionResult, ConversationInfo, CounterAbuseVerdict, FileUploadPolicyState as FileUploadPolicyStateApi, GetPinCandidatesOptions, HostCapability, InvocationPayload, PageMetadata, PanelOpeningData, PanelState, PinTabsOptions, PinTrigger, Screenshot, ScreenshotCollectionOptions, SkillPreview, SkillsPayload, TabContextOptions, UnpinTabsOptions, UnpinTrigger, WebPageData, ZeroStateSuggestionsV2, ZssConfig} from '../../glic_api/glic_api.js';
+import {DEFAULT_INNER_TEXT_BYTES_LIMIT, DEFAULT_PDF_SIZE_LIMIT, MicrophoneStatus, Platform, WebClientMode} from '../../glic_api/glic_api.js';
+import type {ResponseExtras} from '../transport/messaging.js';
 
-import type {ConfirmationRequestErrorReason as ConfirmationRequestErrorReasonMojo, NavigationConfirmationRequest as NavigationConfirmationRequestMojo, NavigationConfirmationResponse as NavigationConfirmationResponseMojo, SelectAutofillSuggestionsDialogErrorReason as SelectAutofillSuggestionsDialogErrorReasonMojo, SelectAutofillSuggestionsDialogRequest as SelectAutofillSuggestionsDialogRequestMojo, SelectAutofillSuggestionsDialogResponse as SelectAutofillSuggestionsDialogResponseMojo, SelectCredentialDialogErrorReason as SelectCredentialDialogErrorReasonMojo, SelectCredentialDialogRequest as SelectCredentialDialogRequestMojo, SelectCredentialDialogResponse as SelectCredentialDialogResponseMojo, TaskOptions as TaskOptionsMojo, UserConfirmationDialogRequest as UserConfirmationDialogRequestMojo, UserConfirmationDialogResponse as UserConfirmationDialogResponseMojo, UserGrantedPermissionDuration as UserGrantedPermissionDurationMojo} from './../../actor_webui.mojom-webui.js';
 import {replaceProperties} from './../conversions.js';
-import type {ResponseExtras} from './../post_message_transport.js';
-import type {AnnotatedPageDataPrivate, FocusedTabDataPrivate, NavigationConfirmationRequestPrivate, NavigationConfirmationResponsePrivate, PdfDocumentDataPrivate, ResumeActorTaskResultPrivate, RgbaImage, SelectAutofillSuggestionsDialogRequestPrivate, SelectAutofillSuggestionsDialogResponsePrivate, SelectCredentialDialogRequestPrivate, SelectCredentialDialogResponsePrivate, TabContextResultPrivate, TabDataPrivate, UserConfirmationDialogRequestPrivate, UserConfirmationDialogResponsePrivate} from './../request_types.js';
+import type {AdditionalContextPartPrivate, AdditionalContextPrivate, AnnotatedPageDataPrivate, FocusedTabDataPrivate, ImageBytesResultPrivate, ImageInfoPrivate, InvokeOptionsPrivate, PdfDocumentDataPrivate, RgbaImage, TabContextResultPrivate, TabDataPrivate} from './../request_types.js';
 import {ImageAlphaType, ImageColorType} from './../request_types.js';
+import type {SubscriberObservationType} from './../request_types.js';
+
+export const conversionSettings = {
+  platform: undefined as Platform | undefined,
+  omitFaviconInTabData: false as boolean,
+};
 
 
 export function idToClient(windowId: number): string;
@@ -74,6 +81,7 @@ export function screenshotToClient(
     data: buffer,
     mimeType: screenshot.mimeType,
     originAnnotations: {},
+    encryptionScheme: enumToClient(screenshot.encryptionScheme),
   };
 }
 
@@ -116,9 +124,22 @@ export function pdfDocumentDataToClient(
   }
   return {
     origin: originToClient(pdfDocumentData.origin),
-    pdfSizeLimitExceeded: pdfDocumentData.sizeLimitExceeded,
+    pdfSizeLimitExceeded: pdfDocumentData.pdfSizeLimitExceeded,
     pdfData,
   };
+}
+
+export function protoWrapperToClient(
+    protoWrapper: ProtoWrapper|null|undefined,
+    extras: ResponseExtras): ArrayBuffer|undefined {
+  if (!protoWrapper) {
+    return undefined;
+  }
+  const buffer = getArrayBufferFromBigBuffer(protoWrapper.smuggled);
+  if (buffer) {
+    extras.addTransfer(buffer);
+  }
+  return buffer;
 }
 
 export function annotatedPageDataToClient(
@@ -127,13 +148,8 @@ export function annotatedPageDataToClient(
   if (!annotatedPageData) {
     return undefined;
   }
-  const annotatedPageContent = annotatedPageData.annotatedPageContent ?
-      getArrayBufferFromBigBuffer(
-          annotatedPageData.annotatedPageContent.smuggled) :
-      undefined;
-  if (annotatedPageContent) {
-    extras.addTransfer(annotatedPageContent);
-  }
+  const annotatedPageContent =
+      protoWrapperToClient(annotatedPageData.annotatedPageContent, extras);
   let metadata: PageMetadata|undefined = undefined;
   if (annotatedPageData.metadata) {
     metadata = {
@@ -164,11 +180,11 @@ export function urlToClient(url: Url|null): string|undefined {
   if (url === null) {
     return undefined;
   }
-  return url.url;
+  return url;
 }
 
 export function urlFromClient(url: string): Url {
-  return {url};
+  return url;
 }
 
 export function originToClient(origin: Origin): string;
@@ -187,6 +203,15 @@ export function originToClient(origin: Origin|null): string|undefined {
   return originBase;
 }
 
+export function originToClientOpaqueAsNull(origin: Origin): string;
+export function originToClientOpaqueAsNull(origin: Origin|null): string|undefined;
+export function originToClientOpaqueAsNull(origin: Origin|null): string|undefined {
+  if (origin?.nonceIfOpaque) {
+    return 'null';
+  }
+  return originToClient(origin);
+}
+
 export function tabDataToClient(
     tabData: TabDataMojo, extras: ResponseExtras): TabDataPrivate;
 export function tabDataToClient(
@@ -200,7 +225,7 @@ export function tabDataToClient(
   }
 
   let favicon: RgbaImage|undefined = undefined;
-  if (tabData.favicon) {
+  if (tabData.favicon && !conversionSettings.omitFaviconInTabData) {
     favicon = bitmapN32ToRGBAImage(tabData.favicon);
     if (favicon) {
       extras.addTransfer(favicon.dataRGBA);
@@ -225,6 +250,21 @@ export function tabDataToClient(
     isTabContentCaptured,
     isActiveInWindow,
     isWindowActive,
+    lightweightPageFeatures:
+        tabData.lightweightPageFeatures?.map(feature => enumToClient(feature)),
+  };
+}
+
+export function skillPreviewToClient(s: SkillPreviewMojo): SkillPreview {
+  return {
+    id: s.id,
+    name: s.name,
+    icon: s.icon,
+    source: enumToClient(s.source),
+    description: s.description,
+    curatedBy: s.curatedBy || undefined,
+    imageUrl: urlToClient(s.imageUrl),
+    category: optionalToClient(s.category),
   };
 }
 
@@ -264,10 +304,11 @@ export function bitmapN32ToRGBAImage(bitmap: BitmapN32): RgbaImage|undefined {
   if (!bytes) {
     return undefined;
   }
-  // We don't transmit ColorType over mojo, because it's determined by the
-  // endianness of the platform. Chromium only supports little endian, which
-  // maps to BGRA. See third_party/skia/include/core/SkColorType.h.
-  const colorType = ImageColorType.BGRA;
+  // Color type on Android is different from other platforms. Because color type
+  // isn't transmitted over mojo, we need use platform to detect it here.
+  const colorType = conversionSettings.platform === Platform.ANDROID ?
+      ImageColorType.RGBA :
+      ImageColorType.BGRA;
 
   return {
     width: bitmap.imageInfo.width,
@@ -286,14 +327,16 @@ export function panelOpeningDataToClient(
       conversationInfoToClient(panelOpeningData.conversationInfo);
   return {
     panelState: panelStateToClient(panelOpeningData.panelState),
-    invocationSource: panelOpeningData.invocationSource as number,
+    invocationSource: enumToClient(panelOpeningData.invocationSource),
     conversationId: conversationInfo?.conversationId || undefined,
     promptSuggestion: optionalToClient(panelOpeningData.promptSuggestion),
+    autoSend: panelOpeningData.autoSend && !!panelOpeningData.promptSuggestion,
     recentlyActiveConversations: panelOpeningData.recentlyActiveConversations ?
         panelOpeningData.recentlyActiveConversations.map(
             conversationInfoToClient) :
         undefined,
     conversationInfo,
+    freOverride: enumToClient(panelOpeningData.freOverride),
   };
 }
 
@@ -306,6 +349,7 @@ export function conversationInfoToClient(
         new TextDecoder().decode(
             new Uint8Array(conversationInfo.clientData.data)) :
         undefined,
+    turnId: optionalToClient(conversationInfo.turnId),
   };
 }
 
@@ -318,12 +362,24 @@ export function conversationInfoFromClient(conversationInfo: ConversationInfo):
       data: Array.from(new TextEncoder().encode(conversationInfo.clientData)),
     } :
                                               null,
+    turnId: optionalFromClient(conversationInfo.turnId),
+  };
+}
+
+export function counterAbuseVerdictFromClient(verdict: CounterAbuseVerdict):
+    CounterAbuseVerdictMojo {
+  return {
+    sbVerdictResult: {
+      url: verdict.sbVerdictResult.url,
+      threatType: enumFromClient(verdict.sbVerdictResult.threatType),
+      showInterstitial: verdict.sbVerdictResult.showInterstitial,
+    },
   };
 }
 
 export function panelStateToClient(panelState: PanelStateMojo): PanelState {
   return {
-    kind: panelState.kind as number,
+    kind: enumToClient(panelState.kind),
     windowId: idToClient(panelState.windowId),
   };
 }
@@ -348,12 +404,14 @@ export function timeDeltaFromClient(durationMs: number = 0): TimeDelta {
 }
 
 export function tabContextToClient(
-    tabContext: TabContextMojo,
+    tabContext: TabContextResultMojo,
     extras: ResponseExtras): TabContextResultPrivate {
   const tabData: TabDataPrivate = tabDataToClient(tabContext.tabData, extras);
   const webPageData = webPageDataToClient(tabContext.webPageData);
   const viewportScreenshot =
       screenshotToClient(tabContext.viewportScreenshot, extras);
+  const screenshotInfo =
+      protoWrapperToClient(tabContext.screenshotInfo, extras);
   const pdfDocumentData =
       pdfDocumentDataToClient(tabContext.pdfDocumentData, extras);
   const annotatedPageData =
@@ -363,42 +421,22 @@ export function tabContextToClient(
     tabData,
     webPageData,
     viewportScreenshot,
+    screenshotInfo,
     pdfDocumentData,
     annotatedPageData,
-  };
-}
-
-export function resumeActorTaskResultToClient(
-    tabContext: TabContextMojo, actionResult: number,
-    extras: ResponseExtras): ResumeActorTaskResultPrivate {
-  const tabData: TabDataPrivate = tabDataToClient(tabContext.tabData, extras);
-  const webPageData = webPageDataToClient(tabContext.webPageData);
-  const viewportScreenshot =
-      screenshotToClient(tabContext.viewportScreenshot, extras);
-  const pdfDocumentData =
-      pdfDocumentDataToClient(tabContext.pdfDocumentData, extras);
-  const annotatedPageData =
-      annotatedPageDataToClient(tabContext.annotatedPageData, extras);
-
-  return {
-    tabData,
-    webPageData,
-    viewportScreenshot,
-    pdfDocumentData,
-    annotatedPageData,
-    actionResult,
   };
 }
 
 export function tabContextOptionsFromClient(options: TabContextOptions):
     TabContextOptionsMojo {
   return {
-    includeInnerText: options.innerText ?? false,
+    innerText: options.innerText ?? false,
     innerTextBytesLimit:
         options.innerTextBytesLimit ?? DEFAULT_INNER_TEXT_BYTES_LIMIT,
-    includeViewportScreenshot: options.viewportScreenshot ?? false,
-    includePdf: options.pdfData ?? false,
-    includeAnnotatedPageContent: options.annotatedPageContent ?? false,
+    viewportScreenshot: options.viewportScreenshot === true ||
+        options.screenshotCollectionOptions !== undefined,
+    pdfData: options.pdfData ?? false,
+    annotatedPageContent: options.annotatedPageContent ?? false,
     maxMetaTags: options.maxMetaTags ?? 0,
     pdfSizeLimit: options.pdfSizeLimit === undefined ?
         DEFAULT_PDF_SIZE_LIMIT :
@@ -406,6 +444,8 @@ export function tabContextOptionsFromClient(options: TabContextOptions):
     annotatedPageContentMode: options.annotatedPageContentMode === undefined ?
         0 :
         options.annotatedPageContentMode,
+    screenshotCollectionOptions: screenshotCollectionOptionsFromClient(
+        options.screenshotCollectionOptions),
   };
 }
 
@@ -455,158 +495,7 @@ export function byteArrayFromClient(buffer: ArrayBuffer): number[] {
 
 export function hostCapabilitiesToClient(capabilities: HostCapabilityMojo[]):
     HostCapability[] {
-  return capabilities.map(capability => capability as number as HostCapability);
-}
-
-export function platformToClient(platform: PlatformMojo): Platform {
-  return platform as number as Platform;
-}
-
-export function selectCredentialDialogResponseToMojo(
-    response: SelectCredentialDialogResponsePrivate):
-    SelectCredentialDialogResponseMojo {
-  return response.errorReason ?
-      {
-        taskId: response.taskId,
-        errorReason: response.errorReason as number as
-            SelectCredentialDialogErrorReasonMojo,
-        permissionDuration: null,
-        selectedCredentialId: null,
-      } :
-      {
-        ...response,
-        errorReason: null,
-        permissionDuration: optionalFromClient(response.permissionDuration) as
-                UserGrantedPermissionDurationMojo |
-            null,
-        selectedCredentialId: response.selectedCredentialId ?? null,
-      };
-}
-
-export function selectCredentialDialogRequestToClient(
-    request: SelectCredentialDialogRequestMojo):
-    SelectCredentialDialogRequestPrivate {
-  const icons = new Map<string, RgbaImage>();
-  if (request.icons) {
-    for (const [siteOrApp, value] of Object.entries(request.icons)) {
-      const rgbaImage = bitmapN32ToRGBAImage(value);
-      if (rgbaImage) {
-        icons.set(siteOrApp, rgbaImage);
-      }
-    }
-  }
-  return {
-    ...request,
-    credentials: request.credentials.map(
-        credential => ({
-          ...credential,
-          requestOrigin: originToClient(credential.requestOrigin),
-        })),
-    icons,
-  };
-}
-
-export function userConfirmationDialogRequestToClient(
-    request: UserConfirmationDialogRequestMojo):
-    UserConfirmationDialogRequestPrivate {
-  return {
-    navigationOrigin: request.payload.navigationOrigin ?
-        originToClient(request.payload.navigationOrigin) :
-        undefined,
-    forBlocklistedOrigin: request.payload.forBlocklistedOrigin,
-  };
-}
-
-export function userConfirmationDialogResponseToMojo(
-    response: UserConfirmationDialogResponsePrivate):
-    UserConfirmationDialogResponseMojo {
-  if (response.errorReason) {
-    return {
-      result: {
-        errorReason: response.errorReason as number as
-            ConfirmationRequestErrorReasonMojo,
-      },
-    };
-  }
-  return {
-    result: {permissionGranted: response.permissionGranted},
-  };
-}
-
-export function navigationConfirmationRequestToClient(
-    request: NavigationConfirmationRequestMojo):
-    NavigationConfirmationRequestPrivate {
-  return {
-    taskId: request.taskId,
-    navigationOrigin: originToClient(request.navigationOrigin),
-  };
-}
-
-export function navigationConfirmationResponseToMojo(
-    response: NavigationConfirmationResponsePrivate):
-    NavigationConfirmationResponseMojo {
-  if (response.errorReason) {
-    return {
-      result: {
-        errorReason: response.errorReason as number as
-            ConfirmationRequestErrorReasonMojo,
-      },
-    };
-  }
-  return {
-    result: {
-      permissionGranted: response.permissionGranted,
-    },
-  };
-}
-
-export function selectAutofillSuggestionsDialogRequestToClient(
-    request: SelectAutofillSuggestionsDialogRequestMojo):
-    SelectAutofillSuggestionsDialogRequestPrivate {
-  return {
-    ...request,
-    formFillingRequests: request.formFillingRequests.map(
-        r => ({
-          ...r,
-          requestedData: Number(r.requestedData),
-          suggestions: r.suggestions.map(
-              s => ({
-                ...s,
-                icon: s.icon ? bitmapN32ToRGBAImage(s.icon) : undefined,
-              })),
-        })),
-  };
-}
-
-export function selectAutofillSuggestionsDialogResponseToMojo(
-    response: SelectAutofillSuggestionsDialogResponsePrivate):
-    SelectAutofillSuggestionsDialogResponseMojo {
-  if (response.errorReason) {
-    return {
-      taskId: response.taskId,
-      result: {
-        errorReason: response.errorReason as number as
-            SelectAutofillSuggestionsDialogErrorReasonMojo,
-      },
-    };
-  } else {
-    return {
-      taskId: response.taskId,
-      result: {
-        selectedSuggestions: response.selectedSuggestions,
-      },
-    };
-  }
-}
-
-export function taskOptionsToMojo(taskOptions?: TaskOptions): TaskOptionsMojo|
-    null {
-  if (taskOptions) {
-    return {
-      title: taskOptions.title ?? null,
-    };
-  }
-  return null;
+  return capabilities.map(capability => enumToClient(capability));
 }
 
 export function webClientModeToMojo(mode: WebClientMode|undefined):
@@ -621,14 +510,230 @@ export function webClientModeToMojo(mode: WebClientMode|undefined):
   }
 }
 
+export function microphoneStatusToMojo(status: MicrophoneStatus):
+    MicrophoneStatusMojo {
+  switch (status) {
+    case MicrophoneStatus.LISTENING:
+      return MicrophoneStatusMojo.kListening;
+    case MicrophoneStatus.NOT_LISTENING:
+      return MicrophoneStatusMojo.kNotListening;
+    case MicrophoneStatus.UNKNOWN:
+    default:
+      return MicrophoneStatusMojo.kUnknown;
+  }
+}
+
 export function captureRegionResultToClient(
     result: CaptureRegionResultMojo|null): CaptureRegionResult|undefined {
   if (!result) {
     return undefined;
   }
-  const region = result.region.rect ? {rect: result.region.rect} : undefined;
+  const region = result.region.rect ? {rect: result.region.rect} :
+      result.region.polyline        ? {polyline: result.region.polyline} :
+                                      undefined;
   return {
     tabId: idToClient(result.tabId),
     region,
   };
+}
+
+export function zeroStateSuggestionsToClient(
+    zeroStateSuggestions: ZeroStateSuggestionsV2Mojo): ZeroStateSuggestionsV2 {
+  return {
+    suggestions: zeroStateSuggestions.suggestions,
+    isPending: zeroStateSuggestions.isPending,
+    invocationSource: enumToClient(zeroStateSuggestions.invocationSource),
+  };
+}
+
+export function zssConfigToClient(zssConfig: ZssConfigMojo): ZssConfig {
+  return {
+    additionalContent: zssConfig.additionalContent || undefined,
+  };
+}
+
+export function skillsPayloadToClient(payload: SkillsPayloadMojo):
+    SkillsPayload {
+  return {
+    skillId: payload.skillId || '',
+    skillName: payload.skillName,
+    skillIcon: payload.skillIcon,
+  };
+}
+
+export function invokeOptionsToClient(
+    options: InvokeOptionsMojo, extras: ResponseExtras): InvokeOptionsPrivate {
+  return {
+    invocationSource: enumToClient(options.invocationSource),
+    prompts: options.prompts || undefined,
+    context: options.context ?
+        additionalContextToClient(options.context, extras) :
+        undefined,
+    autoSubmit: options.autoSubmit,
+    featureMode: enumToClient(options.featureMode),
+    actuationTarget: enumToClient(options.actuationTarget),
+    disableZeroStateSuggestions: options.disableZeroStateSuggestions,
+    skillId: options.skillId || undefined,
+    zssConfig: options.zssConfig ? zssConfigToClient(options.zssConfig) :
+                                   undefined,
+    payload: invocationPayloadToClient(options.payload, extras),
+    actuationTabId: idToClient(options.actuationTabId),
+  };
+}
+
+export function invocationPayloadToClient(
+    payload: InvocationPayloadMojo, extras: ResponseExtras): InvocationPayload;
+export function invocationPayloadToClient(
+    payload: InvocationPayloadMojo|null,
+    extras: ResponseExtras): InvocationPayload|undefined;
+export function invocationPayloadToClient(
+    payload: InvocationPayloadMojo|null,
+    extras: ResponseExtras): InvocationPayload|undefined {
+  if (!payload) {
+    return undefined;
+  }
+  if (payload.universalCart) {
+    const buffer =
+        new Uint8Array(payload.universalCart.serializedMetadata).buffer;
+    extras.addTransfer(buffer);
+    return {
+      universalCart: {
+        serializedMetadata: buffer,
+      },
+    };
+  }
+  if (payload.skillsPayload) {
+    return {
+      skillsPayload: skillsPayloadToClient(payload.skillsPayload),
+    };
+  }
+  throw new Error('Unknown payload type');
+}
+
+export function additionalContextToClient(
+    context: AdditionalContextMojo,
+    extras: ResponseExtras): AdditionalContextPrivate {
+  const parts = context.parts ?
+      context.parts.map(p => additionalContextPartToClient(p, extras)) :
+      [];
+  // Filter out undefined parts if any.
+  const validParts: AdditionalContextPartPrivate[] = [];
+  for (const p of parts) {
+    if (p) {
+      validParts.push(p);
+    }
+  }
+
+  return {
+    source: enumToClient(context.source),
+    name: context.name || undefined,
+    tabId: idToClient(context.tabId),
+    origin: context.origin ? originToClient(context.origin) : undefined,
+    frameUrl: context.frameUrl ? urlToClient(context.frameUrl) : undefined,
+    parts: validParts,
+  };
+}
+
+export function additionalContextPartToClient(
+    part: AdditionalContextPartMojo,
+    extras: ResponseExtras): AdditionalContextPartPrivate|undefined {
+  const result: AdditionalContextPartPrivate = {};
+  if (part.data) {
+    result.data = {
+      mimeType: part.data.mimeType,
+      data: getArrayBufferFromBigBuffer(part.data.data)!,
+    };
+    result.filename = optionalToClient(part.data.filename);
+    extras.addTransfer(result.data.data);
+  } else if (part.screenshot) {
+    result.screenshot = screenshotToClient(part.screenshot, extras);
+  } else if (part.webPageData) {
+    result.webPageData = webPageDataToClient(part.webPageData);
+  } else if (part.annotatedPageData) {
+    result.annotatedPageData =
+        annotatedPageDataToClient(part.annotatedPageData, extras);
+  } else if (part.pdfDocumentData) {
+    result.pdf = pdfDocumentDataToClient(part.pdfDocumentData, extras);
+  } else if (part.tabContext) {
+    result.tabContext = tabContextToClient(part.tabContext, extras);
+  } else if (part.region) {
+    const regionMojo = part.region;
+    if (regionMojo) {
+      return {
+        region: {
+          rect: regionMojo.rect,
+          polyline: regionMojo.polyline,
+        },
+      };
+    }
+  } else if (part.pendingRegion) {
+    const regionMojo = part.pendingRegion.region;
+    if (regionMojo) {
+      return {
+        pendingRegion: {
+          id: part.pendingRegion.id,
+          region: {
+            rect: regionMojo.rect,
+            polyline: regionMojo.polyline,
+          },
+        },
+      };
+    }
+  } else if (part.parentConversationMetadata) {
+    result.parentConversationMetadata = {
+      conversationId:
+          optionalToClient(part.parentConversationMetadata.conversationId),
+      conversationTitle:
+          optionalToClient(part.parentConversationMetadata.conversationTitle),
+    };
+  }
+  return result;
+}
+
+export function screenshotCollectionOptionsFromClient(
+    options: ScreenshotCollectionOptions|
+    undefined): ScreenshotCollectionOptionsMojo {
+  return {
+    maxWidth: options?.maxWidth ?? 0,
+    maxHeight: options?.maxHeight ?? 0,
+    screenshotImageFormat: options?.screenshotImageFormat ?
+        enumFromClient(options.screenshotImageFormat) :
+        ScreenshotImageFormatMojo.kJpeg,
+    screenshotCompressionQuality: options?.screenshotCompressionQuality ?
+        enumFromClient(options.screenshotCompressionQuality) :
+        ScreenshotCompressionQualityMojo.kMedium,
+  };
+}
+
+export function subscriberObservationTypeFromClient(
+    val: SubscriberObservationType): SubscriberObservationTypeMojo {
+  return val as number as SubscriberObservationTypeMojo;
+}
+
+export function imageInfoToClient(info: ImageInfoMojo): ImageInfoPrivate {
+  return {
+    caption: optionalToClient(info.caption),
+    sourceOrigin: originToClientOpaqueAsNull(info.sourceOrigin),
+    url: urlToClient(info.url),
+    mimeType: optionalToClient(info.mimeType),
+  };
+}
+
+export function imageBytesResultToClient(
+    result: ImageBytesResultMojo,
+    extras: ResponseExtras): ImageBytesResultPrivate|null {
+  const buffer = getArrayBufferFromBigBuffer(result.bytes);
+  if (!buffer) {
+    return null;
+  }
+  extras.addTransfer(buffer);
+  return {
+    bytes: buffer,
+    imageInfo: imageInfoToClient(result.imageInfo),
+  };
+}
+
+export function fileUploadPolicyStateToClient(state: FileUploadPolicyStateMojo):
+    FileUploadPolicyStateApi {
+  return enumToClient(state);
 }

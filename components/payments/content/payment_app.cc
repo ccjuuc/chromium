@@ -5,9 +5,11 @@
 #include "components/payments/content/payment_app.h"
 
 #include <algorithm>
+#include <optional>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
+#include "base/notreached.h"
+#include "url/origin.h"
 
 namespace payments {
 namespace {
@@ -56,6 +58,11 @@ PaymentApp::GetPaymentEntitiesLogos() {
   return {};
 }
 
+const mojom::PaymentItemPtr& PaymentApp::GetTotalForSpc() const {
+  NOTREACHED()
+      << "Only SecurePaymentConfirmationApp is expected to return the total.";
+}
+
 std::string PaymentApp::GetApplicationIdentifierToHide() const {
   return std::string();
 }
@@ -68,7 +75,7 @@ std::set<std::string> PaymentApp::GetApplicationIdentifiersThatHideThisApp()
 void PaymentApp::IsValidForPaymentMethodIdentifier(
     const std::string& payment_method_identifier,
     bool* is_valid) const {
-  *is_valid = base::Contains(app_method_names_, payment_method_identifier);
+  *is_valid = app_method_names_.contains(payment_method_identifier);
 }
 
 const std::set<std::string>& PaymentApp::GetAppMethodNames() const {
@@ -157,6 +164,10 @@ bool PaymentApp::operator<(const PaymentApp& other) const {
   if (CanPreselect() != other.CanPreselect())
     return CanPreselect();
   return false;
+}
+
+std::optional<url::Origin> PaymentApp::GetPaymentHandlerOrigin() const {
+  return std::nullopt;
 }
 
 }  // namespace payments

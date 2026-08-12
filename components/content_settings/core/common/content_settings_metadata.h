@@ -28,7 +28,6 @@ class RuleMetaData {
  public:
   RuleMetaData();
   RuleMetaData(RuleMetaData&& other);
-  RuleMetaData(const RuleMetaData& other) = delete;
   RuleMetaData& operator=(const RuleMetaData& other) = delete;
   RuleMetaData& operator=(RuleMetaData&& other);
 
@@ -105,13 +104,17 @@ class RuleMetaData {
     decided_by_related_website_sets_ = decided_by_related_website_sets;
   }
 
-  const base::Value& rule_options() const { return rule_options_; }
-
-  void set_rule_options(const base::Value& rule_options) {
-    rule_options_ = rule_options.Clone();
+  bool autorevocation_bypassed_by_user() const {
+    return autorevocation_bypassed_by_user_;
+  }
+  void set_autorevocation_bypassed_by_user(
+      bool autorevocation_bypassed_by_user) {
+    autorevocation_bypassed_by_user_ = autorevocation_bypassed_by_user;
   }
 
  private:
+  RuleMetaData(const RuleMetaData& other);
+
   // mojo (de)serialization needs access to private details.
   friend struct mojo::
       StructTraits<content_settings::mojom::RuleMetaDataDataView, RuleMetaData>;
@@ -146,8 +149,9 @@ class RuleMetaData {
   // Set to true if the storage access was decided by a Related Website Set.
   bool decided_by_related_website_sets_ = false;
 
-  // Represents options which apply to the rule. May be empty.
-  base::Value rule_options_;
+  // Set to true if the user has explicitly "undone" the autorevocation using
+  // the Safety Hub UI.
+  bool autorevocation_bypassed_by_user_ = false;
 };
 
 }  // namespace content_settings

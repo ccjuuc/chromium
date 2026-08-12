@@ -39,11 +39,12 @@ import zlib
 # These fields are written by //tools/clang/scripts/upload_revision.py, and
 # should not be changed manually.
 # They are also read by build/config/compiler/BUILD.gn.
-CLANG_REVISION = 'llvmorg-22-init-17020-gbd1bd178'
+CLANG_REVISION = 'llvmorg-23-init-19482-g53d18800'
 CLANG_SUB_REVISION = 2
 
 PACKAGE_VERSION = '%s-%s' % (CLANG_REVISION, CLANG_SUB_REVISION)
-RELEASE_VERSION = '22'
+# TODO(crbug.com/534655507): Bump to 24 in next Clang roll.
+RELEASE_VERSION = '23'
 
 CDS_URL = os.environ.get('CDS_CLANG_BUCKET_OVERRIDE',
     'https://commondatastorage.googleapis.com/chromium-browser-clang')
@@ -375,6 +376,11 @@ def main():
                       'directory will be preserved when syncing. Useful for'
                       'local development.')
   args = parser.parse_args()
+
+  # TODO(crbug.com/534655507): Remove in next Clang roll.
+  if args.llvm_force_head_revision:
+    global RELEASE_VERSION
+    RELEASE_VERSION = '24'
 
   if args.print_clang_version:
     print(RELEASE_VERSION)

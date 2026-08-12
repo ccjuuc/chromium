@@ -8,10 +8,10 @@
 #include "base/time/time.h"
 #include "base/types/expected.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/actor_logging.h"
-#include "chrome/common/actor/journal_details_builder.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/renderer/actor/tool_utils.h"
+#include "components/actor/core/actor_logging.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
@@ -64,14 +64,10 @@ DragAndReleaseTool::DragAndReleaseTool(
 DragAndReleaseTool::~DragAndReleaseTool() = default;
 
 void DragAndReleaseTool::Execute(ToolFinishedCallback callback) {
-  ValidatedResult validated_result = Validate();
-  if (!validated_result.has_value()) {
-    std::move(callback).Run(std::move(validated_result.error()));
-    return;
-  }
-
-  ResolvedTarget from_target = validated_result->from;
-  ResolvedTarget to_target = validated_result->to;
+  CHECK(validated_drag_params_.has_value())
+      << "Execute tool was called before validation";
+  ResolvedTarget from_target = validated_drag_params_->from;
+  ResolvedTarget to_target = validated_drag_params_->to;
 
   journal_->Log(task_id_, "DragAndReleaseTool::Execute",
                 JournalDetailsBuilder()
@@ -83,13 +79,20 @@ void DragAndReleaseTool::Execute(ToolFinishedCallback callback) {
   CHECK(widget);
 
   // TODO(crbug.com/409333494): How should partial success be returned.
-
   // Move and press down the mouse on the from_point.
+  base::WeakPtr<DragAndReleaseTool> weak_this = weak_ptr_factory_.GetWeakPtr();
   if (!InjectMouseEvent(*widget, from_target.widget_point,
                         EventType::kMouseMove,
                         WebMouseEvent::Button::kNoButton)) {
+    if (!weak_this) {
+      return;
+    }
     std::move(callback).Run(
         MakeResult(mojom::ActionResultCode::kDragAndReleaseFromMoveSuppressed));
+    return;
+  }
+
+  if (!weak_this) {
     return;
   }
 
@@ -104,9 +107,16 @@ void DragAndReleaseTool::Execute(ToolFinishedCallback callback) {
 
   if (!InjectMouseEvent(*widget, from_target.widget_point,
                         EventType::kMouseDown, WebMouseEvent::Button::kLeft)) {
+    if (!weak_this) {
+      return;
+    }
     std::move(callback).Run(
         MakeResult(mojom::ActionResultCode::kDragAndReleaseDownSuppressed,
                    /*requires_page_stabilization=*/true));
+    return;
+  }
+
+  if (!weak_this) {
     return;
   }
 
@@ -115,14 +125,15 @@ void DragAndReleaseTool::Execute(ToolFinishedCallback callback) {
   task_runner_->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&DragAndReleaseTool::ProcessDrag,
-                     weak_ptr_factory_.GetWeakPtr(), validated_result->from,
-                     validated_result->to, std::move(callback)),
+                     weak_ptr_factory_.GetWeakPtr(), from_target, to_target,
+                     std::move(callback)),
       kInitialMoveDelay);
 }
 
 void DragAndReleaseTool::ProcessDrag(ResolvedTarget from,
                                      ResolvedTarget to,
                                      ToolFinishedCallback callback) {
+  base::WeakPtr<DragAndReleaseTool> weak_this = weak_ptr_factory_.GetWeakPtr();
   WebWidget* widget = from.GetWidget(*this);
   if (!widget) {
     std::move(callback).Run(
@@ -150,9 +161,15 @@ void DragAndReleaseTool::ProcessDrag(ResolvedTarget from,
 
   if (!InjectMouseEvent(*widget, drag_point, EventType::kMouseMove,
                         WebMouseEvent::Button::kLeft)) {
+    if (!weak_this) {
+      return;
+    }
     std::move(callback).Run(
         MakeResult(mojom::ActionResultCode::kDragAndReleaseToMoveSuppressed,
                    /*requires_page_stabilization=*/true));
+    return;
+  }
+  if (!weak_this) {
     return;
   }
   if (!done) {
@@ -179,6 +196,7 @@ void DragAndReleaseTool::ProcessDrag(ResolvedTarget from,
 
 void DragAndReleaseTool::ProcessRelease(ResolvedTarget to_target,
                                         ToolFinishedCallback callback) {
+  base::WeakPtr<DragAndReleaseTool> weak_this = weak_ptr_factory_.GetWeakPtr();
   WebWidget* widget = to_target.GetWidget(*this);
   if (!widget) {
     std::move(callback).Run(
@@ -188,9 +206,16 @@ void DragAndReleaseTool::ProcessRelease(ResolvedTarget to_target,
 
   if (!InjectMouseEvent(*widget, to_target.widget_point, EventType::kMouseUp,
                         WebMouseEvent::Button::kLeft)) {
+    if (!weak_this) {
+      return;
+    }
     std::move(callback).Run(
         MakeResult(mojom::ActionResultCode::kDragAndReleaseUpSuppressed,
                    /*requires_page_stabilization=*/true));
+    return;
+  }
+
+  if (!weak_this) {
     return;
   }
 
@@ -203,7 +228,7 @@ std::string DragAndReleaseTool::DebugString() const {
                          ToDebugString(action_->to_target));
 }
 
-DragAndReleaseTool::ValidatedResult DragAndReleaseTool::Validate() const {
+ValidationResult DragAndReleaseTool::Validate() {
   CHECK(frame_->GetWebFrame());
   CHECK(frame_->GetWebFrame()->FrameWidget());
 
@@ -217,11 +242,11 @@ DragAndReleaseTool::ValidatedResult DragAndReleaseTool::Validate() const {
   ResolveResult resolved_to = ResolveTarget(*to_target);
 
   if (!resolved_from.has_value()) {
-    return base::unexpected(std::move(resolved_from.error()));
+    return ValidationResult(std::move(resolved_from.error()));
   }
 
   if (!resolved_to.has_value()) {
-    return base::unexpected(std::move(resolved_to.error()));
+    return ValidationResult(std::move(resolved_to.error()));
   }
 
   if (resolved_from->GetWidget(*this) != resolved_to->GetWidget(*this)) {
@@ -230,7 +255,7 @@ DragAndReleaseTool::ValidatedResult DragAndReleaseTool::Validate() const {
     static constexpr std::string_view kErrorMessage =
         "Drag across widgets is not supported.";
     NOTIMPLEMENTED() << kErrorMessage;
-    return base::unexpected(MakeResult(mojom::ActionResultCode::kNotImplemented,
+    return ValidationResult(MakeResult(mojom::ActionResultCode::kNotImplemented,
                                        /*requires_page_stabilization=*/false,
                                        kErrorMessage));
   }
@@ -238,7 +263,9 @@ DragAndReleaseTool::ValidatedResult DragAndReleaseTool::Validate() const {
   // TODO(b/450018073): This should be checking the targets for time-of-use
   // validity.
 
-  return DragParams{resolved_from.value(), resolved_to.value()};
+  validated_drag_params_ =
+      DragParams{resolved_from.value(), resolved_to.value()};
+  return ValidationResult(MakeOkResult());
 }
 
 bool DragAndReleaseTool::InjectMouseEvent(WebWidget& widget,

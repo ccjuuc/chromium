@@ -7,7 +7,9 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/service/shared_image/gl_common_image_backing_factory.h"
+#include "gpu/command_buffer/service/shared_image/gl_texture_holder.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "ui/gfx/buffer_types.h"
 #include "ui/gl/gl_bindings.h"
@@ -29,17 +31,19 @@ struct Mailbox;
 // group. This is achieved by using locks and fences for proper synchronization.
 class EGLImageBacking : public ClearTrackingSharedImageBacking {
  public:
+  // Returns true if EGLImageBacking supports UploadFromMemory for the given
+  // format.
+  static bool SupportsPixelUploadWithFormat(viz::SharedImageFormat format);
+
+  // Returns true if EGLImageBacking supports ReadbackToMemory for the given
+  // format.
+  static bool SupportsPixelReadbackWithFormat(viz::SharedImageFormat format);
+
   EGLImageBacking(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       size_t estimated_size,
-      const std::vector<GLCommonImageBackingFactory::FormatInfo>& format_into,
+      const std::vector<GLCommonImageBackingFactory::FormatInfo>& format_info,
       const GpuDriverBugWorkarounds& workarounds,
       bool use_passthrough,
       base::span<const uint8_t> pixel_data);
@@ -53,6 +57,8 @@ class EGLImageBacking : public ClearTrackingSharedImageBacking {
   SharedImageBackingType GetType() const override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
   void MarkForDestruction() override;
+  bool UploadFromMemory(const std::vector<SkPixmap>& pixmaps) override;
+  bool ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) override;
 
  protected:
   std::unique_ptr<GLTextureImageRepresentation> ProduceGLTexture(
@@ -77,7 +83,6 @@ class EGLImageBacking : public ClearTrackingSharedImageBacking {
       scoped_refptr<SharedContextState> context_state) final;
 
  private:
-  class TextureHolder;
   class GLRepresentationShared;
   class GLTextureEGLImageRepresentation;
   class GLTexturePassthroughEGLImageRepresentation;
@@ -97,11 +102,11 @@ class EGLImageBacking : public ClearTrackingSharedImageBacking {
   gl::ScopedEGLImage GenEGLImageSibling(base::span<const uint8_t> pixel_data,
                                         std::vector<GLuint>& service_ids,
                                         int plane);
-  std::vector<scoped_refptr<TextureHolder>> GenEGLImageSiblings(
+  std::vector<scoped_refptr<GLTextureHolder>> GenEGLImageSiblings(
       base::span<const uint8_t> pixel_data);
 
   const std::vector<GLCommonImageBackingFactory::FormatInfo> format_info_;
-  std::vector<scoped_refptr<TextureHolder>> source_texture_holders_;
+  std::vector<scoped_refptr<GLTextureHolder>> source_texture_holders_;
   raw_ptr<gl::GLApi> created_on_context_;
 
   std::vector<gl::ScopedEGLImage> egl_images_ GUARDED_BY(lock_);

@@ -9,11 +9,11 @@
 #include "base/check_deref.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ref.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/grit/components_scaled_resources.h"
 
 namespace autofill::payments {
@@ -52,18 +52,27 @@ AndroidBnplUiDelegate::~AndroidBnplUiDelegate() = default;
 void AndroidBnplUiDelegate::ShowSelectBnplIssuerUi(
     std::vector<BnplIssuerContext> bnpl_issuer_context,
     std::string app_locale,
-    base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+    base::RepeatingCallback<void(BnplIssuer)> selected_issuer_callback,
     base::OnceClosure cancel_callback,
     bool has_seen_ai_terms) {
+  // `has_seen_ai_terms` is a no-op on Android. Instead this preference is read
+  // directly on the Java layer in the TouchToFillPaymentMethodMediator.
   client_->ShowTouchToFillBnplIssuers(bnpl_issuer_context, app_locale,
                                       std::move(selected_issuer_callback),
                                       std::move(cancel_callback));
 }
 
-void AndroidBnplUiDelegate::UpdateBnplIssuerDialogUi(
-    std::vector<BnplIssuerContext> issuer_contexts) {
-  // TODO(crbug.com/438783909): Add JNI call to update the TouchToFill bottom
-  // sheet once the new list of BNPL issuers comes back.
+void AndroidBnplUiDelegate::UpdateBnplIssuerUi(
+    std::vector<BnplIssuerContext> issuer_contexts,
+    std::optional<int64_t> extracted_amount,
+    bool is_amount_supported_by_any_issuer,
+    const std::optional<std::string>& app_locale,
+    base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
+    base::OnceClosure cancel_callback) {
+  client_->OnPurchaseAmountExtracted(
+      issuer_contexts, extracted_amount, is_amount_supported_by_any_issuer,
+      app_locale, std::move(selected_issuer_callback),
+      std::move(cancel_callback));
 }
 
 void AndroidBnplUiDelegate::RemoveSelectBnplIssuerOrProgressUi() {
@@ -85,7 +94,7 @@ void AndroidBnplUiDelegate::RemoveBnplTosOrProgressUi() {
 }
 
 void AndroidBnplUiDelegate::ShowProgressUi(
-    AutofillProgressDialogType autofill_progress_dialog_type,
+    AutofillProgressUiType autofill_progress_dialog_type,
     base::OnceClosure cancel_callback) {
   client_->ShowTouchToFillProgress(std::move(cancel_callback));
 }

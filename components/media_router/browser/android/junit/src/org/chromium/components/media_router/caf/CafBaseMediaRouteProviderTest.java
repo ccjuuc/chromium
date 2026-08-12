@@ -24,7 +24,6 @@ import static org.chromium.components.media_router.caf.CafBaseMediaRouteProvider
 
 import android.content.Context;
 
-import androidx.annotation.NonNull;
 import androidx.mediarouter.media.MediaRouteSelector;
 import androidx.mediarouter.media.MediaRouter;
 
@@ -33,18 +32,20 @@ import com.google.android.gms.cast.framework.CastSession;
 import com.google.android.gms.cast.framework.SessionManager;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.components.media_router.MediaRoute;
 import org.chromium.components.media_router.MediaRouteManager;
 import org.chromium.components.media_router.MediaRouterClient;
@@ -62,8 +63,8 @@ import java.util.List;
         shadows = {ShadowMediaRouter.class, ShadowCastContext.class, ShadowLooper.class},
         // Required to mock final.
         instrumentedPackages = {"androidx.mediarouter.media.MediaRouteSelector"})
-@LooperMode(LooperMode.Mode.LEGACY)
 public class CafBaseMediaRouteProviderTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private Context mContext;
     private TestMRP mProvider;
     private MediaRouterTestHelper mMediaRouterHelper;
@@ -76,7 +77,6 @@ public class CafBaseMediaRouteProviderTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mContext = RuntimeEnvironment.application;
         mMediaRouterHelper = new MediaRouterTestHelper();
         MediaRouterClient.setInstance(new TestMediaRouterClient());
@@ -94,7 +94,7 @@ public class CafBaseMediaRouteProviderTest {
         sinks.add(mock(MediaSink.class));
 
         mProvider.onSinksReceived("source-id", sinks);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mManager).onSinksReceived("source-id", mProvider, sinks);
     }
@@ -114,8 +114,8 @@ public class CafBaseMediaRouteProviderTest {
     public void testStartObservingMediaSinks_unsupportedSource() {
         doReturn(null).when(mProvider).getSourceFromId(any(String.class));
 
-        mProvider.startObservingMediaSinks("source-id");
-        ShadowLooper.idleMainLooper();
+        mProvider.startObservingMediaSinks("source-id", "origin");
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mManager).onSinksReceived("source-id", mProvider, NO_SINKS);
         verify(mMediaRouterHelper.getShadowImpl(), never())
@@ -130,8 +130,8 @@ public class CafBaseMediaRouteProviderTest {
         doReturn(mockSource).when(mProvider).getSourceFromId(any(String.class));
         doReturn(null).when(mockSource).buildRouteSelector();
 
-        mProvider.startObservingMediaSinks("source-id");
-        ShadowLooper.idleMainLooper();
+        mProvider.startObservingMediaSinks("source-id", "origin");
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mManager).onSinksReceived("source-id", mProvider, NO_SINKS);
         verify(mMediaRouterHelper.getShadowImpl(), never())
@@ -150,9 +150,10 @@ public class CafBaseMediaRouteProviderTest {
         prepareMediaSource(mockSource1, mockSelector1, "source-id-1", "app-id-1");
         prepareMediaSource(mockSource2, mockSelector2, "source-id-2", "app-id-2");
 
-        mProvider.startObservingMediaSinks("source-id-1");
-        mProvider.startObservingMediaSinks("source-id-2");
-        ShadowLooper.idleMainLooper();
+        mProvider.startObservingMediaSinks("source-id-1", "origin");
+        mProvider.startObservingMediaSinks("source-id-2", "origin");
+        RobolectricUtil.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Empty devices are published while the callbacks are constructed.
         verify(mManager).onSinksReceived(eq("source-id-1"), eq(mProvider), eq(NO_SINKS));
@@ -176,6 +177,7 @@ public class CafBaseMediaRouteProviderTest {
         MediaRouter.RouteInfo routeInfo = mock(MediaRouter.RouteInfo.class);
         doReturn(true).when(routeInfo).matchesSelector(any(MediaRouteSelector.class));
         mProvider.mDiscoveryCallbacks.get("app-id-1").onRouteAdded(mMediaRouter, routeInfo);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         ArgumentCaptor<List<MediaSink>> sinksCaptor = ArgumentCaptor.forClass(List.class);
 
@@ -194,9 +196,10 @@ public class CafBaseMediaRouteProviderTest {
         prepareMediaSource(mockSource1, mockSelector1, "source-id-1", "app-id-1");
         prepareMediaSource(mockSource2, mockSelector2, "source-id-2", "app-id-1");
 
-        mProvider.startObservingMediaSinks("source-id-1");
-        mProvider.startObservingMediaSinks("source-id-2");
-        ShadowLooper.idleMainLooper();
+        mProvider.startObservingMediaSinks("source-id-1", "origin");
+        mProvider.startObservingMediaSinks("source-id-2", "origin");
+        RobolectricUtil.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Empty devices are published while the callbacks are constructed.
         verify(mManager).onSinksReceived(eq("source-id-1"), eq(mProvider), eq(NO_SINKS));
@@ -214,6 +217,7 @@ public class CafBaseMediaRouteProviderTest {
         MediaRouter.RouteInfo routeInfo = mock(MediaRouter.RouteInfo.class);
         doReturn(true).when(routeInfo).matchesSelector(any(MediaRouteSelector.class));
         mProvider.mDiscoveryCallbacks.get("app-id-1").onRouteAdded(mMediaRouter, routeInfo);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         ArgumentCaptor<List<MediaSink>> sinksCaptor = ArgumentCaptor.forClass(List.class);
 
@@ -238,8 +242,8 @@ public class CafBaseMediaRouteProviderTest {
         MediaRouteSelector mockSelector = mock(MediaRouteSelector.class);
         prepareMediaSource(mockSource, mockSelector, "source-id", "app-id");
 
-        mProvider.startObservingMediaSinks("source-id");
-        ShadowLooper.idleMainLooper();
+        mProvider.startObservingMediaSinks("source-id", "origin");
+        RobolectricUtil.runAllBackgroundAndUi();
 
         // Existing devices that match the selector should be published upon start observing.
         ArgumentCaptor<List<MediaSink>> sinksCaptor = ArgumentCaptor.forClass(List.class);
@@ -256,8 +260,8 @@ public class CafBaseMediaRouteProviderTest {
         prepareMediaSource(mockSource1, mockSelector1, "source-id-1", "app-id-1");
         prepareMediaSource(mockSource2, mockSelector2, "source-id-2", "app-id-1");
 
-        mProvider.startObservingMediaSinks("source-id-1");
-        mProvider.startObservingMediaSinks("source-id-2");
+        mProvider.startObservingMediaSinks("source-id-1", "origin");
+        mProvider.startObservingMediaSinks("source-id-2", "origin");
         mProvider.stopObservingMediaSinks("source-id-1");
 
         verify(mMediaRouterHelper.getShadowImpl(), never())
@@ -682,7 +686,7 @@ public class CafBaseMediaRouteProviderTest {
         }
 
         @Override
-        public MediaSource getSourceFromId(@NonNull String sourceId) {
+        public MediaSource getSourceFromId(String sourceId) {
             return null;
         }
 

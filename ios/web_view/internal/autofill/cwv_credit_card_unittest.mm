@@ -11,6 +11,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/autofill/core/browser/data_model/payments/credit_card.h"
 #import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "ios/web/common/uikit_ui_util.h"
 #import "ios/web_view/internal/autofill/cwv_credit_card_internal.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
@@ -62,7 +63,9 @@ TEST_F(CWVCreditCardTest, Initialization) {
   // ui::ResourceBundle will return a placeholder image at @1x scale if the
   // underlying resource id is not found. Since no @1x devices are supported
   // anymore, check to make sure the UIImage scale matches that of the UIScreen.
-  EXPECT_TRUE(cwv_credit_card.networkIcon.scale == UIScreen.mainScreen.scale);
+  CGFloat scale = GetAnyKeyWindow().traitCollection.displayScale;
+  ASSERT_GT(scale, 1);
+  EXPECT_TRUE(cwv_credit_card.networkIcon.scale == scale);
 }
 
 // Tests CWVCreditCard properly wraps the internal card.
@@ -85,6 +88,21 @@ TEST_F(CWVCreditCardTest, ReadProperties) {
   EXPECT_NSEQ(card_number, cwv_credit_card.cardNumber);
   EXPECT_NSEQ(expiration_month, cwv_credit_card.expirationMonth);
   EXPECT_NSEQ(expiration_year, cwv_credit_card.expirationYear);
+  EXPECT_NSEQ(base::SysUTF8ToNSString(credit_card.guid()),
+              cwv_credit_card.GUID);
+  EXPECT_EQ(CWVCreditCardRecordTypeLocalCard, cwv_credit_card.recordType);
+  EXPECT_FALSE(cwv_credit_card.isVirtual);
+}
+
+// Tests CWVCreditCard properly handles virtual cards.
+TEST_F(CWVCreditCardTest, VirtualCard) {
+  autofill::CreditCard credit_card = autofill::test::GetCreditCard();
+  credit_card.set_record_type(autofill::CreditCard::RecordType::kVirtualCard);
+  CWVCreditCard* cwv_credit_card =
+      [[CWVCreditCard alloc] initWithCreditCard:credit_card];
+
+  EXPECT_EQ(CWVCreditCardRecordTypeVirtualCard, cwv_credit_card.recordType);
+  EXPECT_TRUE(cwv_credit_card.isVirtual);
 }
 
 }  // namespace ios_web_view

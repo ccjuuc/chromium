@@ -1,7 +1,13 @@
 include_rules = [
   # go/keep-sorted start
+  "+components/accessibility_annotator/core",
+  "+components/accessibility_annotator/core/annotation_reducer",
+  "+components/affiliations",
   "+components/browser_ui/device_lock/android",
+  "+components/consent_auditor",
+  "+components/content_settings/core/common",
   "+components/device_reauth/device_authenticator.h",
+  "+components/facilitated_payments/core/features",
   "+components/feature_engagement",
   "+components/google/core/common/google_util.h",
   "+components/grit/components_scaled_resources.h",
@@ -18,25 +24,30 @@ include_rules = [
   "+components/optimization_guide/core",
   "+components/password_manager/core/browser/features/password_features.h",
   "+components/payments/core/currency_formatter.h",
+  "+components/personal_context",
   "+components/policy",
   "+components/profile_metrics",
   "+components/resources",
   "+components/security_interstitials/core/insecure_form_util.h",
   "+components/security_interstitials/core/pref_names.h",
   "+components/security_state",
+  "+components/sessions/core/session_id.h",
   "+components/signin/public",
   "+components/strike_database",
   "+components/strings",
+  "+components/subscription_eligibility",
   "+components/sync",
   "+components/sync_preferences",
   "+components/translate/core/browser",
   "+components/translate/core/common",
   "+components/variations",
   "+components/version_info",
+  "+components/wallet/core/browser",
+  "+components/wallet/core/common",
   "+components/webdata/common",
   "+components/webdata_services",
   "+crypto/hash.h",
-  "+crypto/hkdf.h",
+  "+crypto/kdf.h",
   "+crypto/random.h",
   "+google_apis/common",
   "+google_apis/gaia",
@@ -64,48 +75,54 @@ specific_include_rules = {
     "+components/device_reauth",
     "+content/public/test",
   ],
-  "autofill_manager_unittest\.cc": [
+  "at_memory_cross_tab_copy_paste_tracker_unittest\\.cc": [
     "+components/ukm",
   ],
-  "autofill_metrics_unittest\.cc": [
+  "at_memory_metrics_recorder_unittest\\.cc": [
     "+components/ukm",
   ],
-  "bnpl_manager_unittest\.cc": [
+  "autofill_manager_unittest\\.cc": [
     "+components/ukm",
   ],
-  "(test_)?credit_card_fido_authenticator\.(cc|h)": [
+  "autofill_metrics_unittest\\.cc": [
+    "+components/ukm",
+  ],
+  "bnpl_manager_unittest\\.cc": [
+    "+components/ukm",
+  ],
+  "(test_)?credit_card_fido_authenticator\\.(cc|h)": [
     "+device/fido/public",
     "+third_party/blink/public/mojom/webauthn",
   ],
-  "(test_)?internal_authenticator\.h": [
+  "(test_)?internal_authenticator\\.h": [
     "+device/fido/public",
     "+third_party/blink/public/mojom/webauthn",
   ],
-  "autofill_driver\.h": [
+  "autofill_driver\\.h": [
     "+third_party/blink/public/mojom/webauthn",
   ],
-  "test_autofill_driver\.h": [
+  "test_autofill_driver\\.h": [
     "+components/autofill/content/browser/content_autofill_driver.h",
     "+components/autofill/core/browser/autofill_driver_router.h",
   ],
-  "credit_card_access_manager(_unittest)?\.cc": [
+  "credit_card_access_manager(_unittest)?\\.cc": [
     "+components/device_reauth",
     "+content/public/test",
   ],
-  "credit_card_save_manager_unittest\.cc": [
+  "credit_card_save_manager_unittest\\.cc": [
     "+components/ukm",
   ],
-  "test_autofill_client\.h": [
+  "test_autofill_client\\.h": [
     "+components/device_reauth",
     "+components/ukm",
   ],
-  "password_requirements_spec_fetcher_unittest\.cc": [
+  "password_requirements_spec_fetcher_unittest\\.cc": [
     "+services/network/test",
   ],
-  "autofill_image_fetcher(_unittest)?\.cc": [
+  "autofill_image_fetcher(_unittest)?\\.cc": [
     "+components/image_fetcher",
   ],
-  "autofill_optimization_guide(_unittest)?\.(cc|h)": [
+  "autofill_optimization_guide(_unittest)?\\.(cc|h)": [
     "+components/optimization_guide",
   ],
 }

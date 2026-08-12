@@ -14,4 +14,19 @@ ContextualSearchWebContentsHelper::ContextualSearchWebContentsHelper(
 ContextualSearchWebContentsHelper::~ContextualSearchWebContentsHelper() =
     default;
 
+std::unique_ptr<contextual_search::InputStateModel>
+ContextualSearchWebContentsHelper::TakeInputStateModel() {
+  return std::move(input_state_model_);
+}
+
+std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+ContextualSearchWebContentsHelper::TakeSessionHandle() {
+  return std::move(session_handle_);
+}
+
+const std::vector<int32_t>&
+ContextualSearchWebContentsHelper::GetSelectedTabIds() const {
+  return selected_tab_ids_;
+}
+
 WEB_CONTENTS_USER_DATA_KEY_IMPL(ContextualSearchWebContentsHelper);

@@ -1,3 +1,5 @@
+
+
 // Copyright 2016 Google Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +27,11 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/memory/memory.h"
+#include "absl/random/random.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "util.h"
 
 namespace sentencepiece {
@@ -59,11 +63,25 @@ inline float LogSumExp(float x, float y, bool init_mode) {
   }
 }
 
+// Calculates the score of user defined symbol.
+//
+// This scoring function prioritizes longer tokens when the total character
+// length is the same (Maximal Matching). By using (length - 1),
+// we effectively apply a "segmentation penalty" to each additional token.
+// Since normal scores are log probabilities (where score <= 0), the
+// user-defined score will always be selected.
+//
+// Examples (Total length = 4):
+// - Single token ["abcd"] (len:4)        => 0.1 * (4 - 1) = 0.3  (Highest)
+// - Two tokens   ["abc", "d"] (len:3,1)  => 0.2 + 0.0     = 0.2
+// - Four tokens  ["a","b","c","d"]       => 0.0 + 0.0...  = 0.0  (Lowest)
+inline float GetUserDefinedScore(int length) { return 0.1 * (length - 1); }
+
 // Returns a sample from a standard Gumbel distribution.
 // If U  ~ U[0, 1], -log(-log U) ~ G(0,1)
 inline float Gumbel() {
   const float kEpsilon = 1e-7;
-  auto* mt = random::GetRandomGenerator();
+  auto *mt = random::GetRandomGenerator();
   std::uniform_real_distribution<float> dis(0.0, 1.0);
   float noise = -std::log(-(std::log(dis(*mt) + kEpsilon)));
 
@@ -125,12 +143,12 @@ void Lattice::SetSentence(absl::string_view sentence) {
   }
   surface_.push_back(sentence.data());
 
-  const int len = size();
+  const size_t len = size();
   begin_nodes_.resize(len + 1);
   end_nodes_.resize(len + 1);
 
   constexpr size_t kReservedNodeSize = 16;
-  for (int i = 0; i <= len; ++i) {
+  for (size_t i = 0; i <= len; ++i) {
     begin_nodes_[i].reserve(kReservedNodeSize);
     end_nodes_[i].reserve(kReservedNodeSize);
   }
@@ -160,9 +178,9 @@ Lattice::Node *Lattice::Insert(int pos, int length) {
 }
 
 Lattice::LatticePathWithScore Lattice::Viterbi() {
-  const int len = size();
+  const size_t len = size();
 
-  for (int pos = 0; pos <= len; ++pos) {
+  for (size_t pos = 0; pos <= len; ++pos) {
     for (Node *rnode : begin_nodes_[pos]) {
       rnode->prev = nullptr;
       float best_score = 0.0;
@@ -175,7 +193,7 @@ Lattice::LatticePathWithScore Lattice::Viterbi() {
         }
       }
       if (best_node == nullptr) {
-        LOG(ERROR) << "Failed to find the best path in Viterbi.";
+        ABSL_LOG(ERROR) << "Failed to find the best path in Viterbi.";
         return {};
       }
       rnode->prev = best_node;
@@ -199,10 +217,10 @@ Lattice::LatticePathWithScore Lattice::Viterbi() {
 }
 
 std::vector<float> Lattice::ForwardAlgorithm(float inv_theta) const {
-  const int len = size();
+  const size_t len = size();
   std::vector<float> alpha(node_allocator_.size(), 0.0);
 
-  for (int pos = 0; pos <= len; ++pos) {
+  for (size_t pos = 0; pos <= len; ++pos) {
     for (Node *rnode : begin_nodes_[pos]) {
       for (Node *lnode : end_nodes_[pos]) {
         alpha[rnode->node_id] =
@@ -217,7 +235,7 @@ std::vector<float> Lattice::ForwardAlgorithm(float inv_theta) const {
 }
 
 std::vector<float> Lattice::BackwardAlgorithm(float inv_theta) const {
-  const int len = size();
+  const size_t len = size();
   std::vector<float> beta(node_allocator_.size(), 0.0);
 
   for (int pos = len; pos >= 0; --pos) {
@@ -234,12 +252,10 @@ std::vector<float> Lattice::BackwardAlgorithm(float inv_theta) const {
 }
 
 float Lattice::PopulateMarginal(float freq,
-                                std::vector<float>* expected) const {
-  if (expected == nullptr) {
-    return 0.0;
-  }
+                                std::vector<float> *expected) const {
+  if (expected == nullptr) return 0.0;
 
-  const int len = size();
+  const size_t len = size();
 
   // alpha and beta (accumulative log prob) in Forward Backward.
   // the index of alpha/beta is Node::node_id.
@@ -248,7 +264,7 @@ float Lattice::PopulateMarginal(float freq,
   const auto beta = BackwardAlgorithm(1.0);
 
   const float Z = alpha[begin_nodes_[len][0]->node_id];
-  for (int pos = 0; pos < len; ++pos) {
+  for (size_t pos = 0; pos < len; ++pos) {
     for (Node *node : begin_nodes_[pos]) {
       if (node->id >= 0) {
         // the index of |expected| is a Node::id, which is a vocabulary id.
@@ -264,7 +280,7 @@ float Lattice::PopulateMarginal(float freq,
 }
 
 float Lattice::CalculateEntropy(float inv_theta) const {
-  const int len = size();
+  const size_t len = size();
 
   // alpha[node_id] is the marginal prob of sequence up to start of node
   // H is entropy of sequence
@@ -275,9 +291,9 @@ float Lattice::CalculateEntropy(float inv_theta) const {
   const auto alpha = ForwardAlgorithm(inv_theta);
 
   // Now populate the forward entropies
-  for (int pos = 0; pos <= len; ++pos) {
-    for (Node* rnode : begin_nodes_[pos]) {
-      for (Node* lnode : end_nodes_[pos]) {
+  for (size_t pos = 0; pos <= len; ++pos) {
+    for (Node *rnode : begin_nodes_[pos]) {
+      for (Node *lnode : end_nodes_[pos]) {
         // Contribution each lnode makes = p(lnode) * (H(lnode) + log p(lnode))
 
         // We have to normalise p(lnode) by the marginal contribution it makes
@@ -297,8 +313,8 @@ namespace {
 
 // The node structure to support A* algorithm in Lattice::NBest()
 struct Hypothesis {
-  Lattice::Node* node;
-  Hypothesis* next;
+  Lattice::Node *node;
+  Hypothesis *next;
   float fx;  // the priority to pop a new hypothesis from the priority queue.
   float gx;  // the sum of scores from EOS to the left-most node in x.
 };
@@ -313,12 +329,12 @@ struct Hypothesis {
 // Returns the cloned Hypothesis*. All Hypothesis on its "next" chain are also
 // guaranteed to have been allocated via "allocator", and "clone_map" is updated
 // with all new mappings.
-Hypothesis* CloneHypAndDependents(
-    const Hypothesis* to_clone,
-    absl::flat_hash_map<const Hypothesis*, Hypothesis*>* clone_map,
-    model::FreeList<Hypothesis>* allocator) {
-  Hypothesis* cloned = nullptr;
-  Hypothesis** result_callback = &cloned;
+Hypothesis *CloneHypAndDependents(
+    const Hypothesis *to_clone,
+    absl::flat_hash_map<const Hypothesis *, Hypothesis *> *clone_map,
+    model::FreeList<Hypothesis> *allocator) {
+  Hypothesis *cloned = nullptr;
+  Hypothesis **result_callback = &cloned;
 
   // Iteratively clone "to_clone" and its dependencies.
   // The new pointer will be written back to *result_callback.
@@ -331,7 +347,7 @@ Hypothesis* CloneHypAndDependents(
     }
 
     // Allocate a new Hypothesis and copy the values.
-    Hypothesis* new_hyp = allocator->Allocate();
+    Hypothesis *new_hyp = allocator->Allocate();
     *new_hyp = *to_clone;
     *result_callback = new_hyp;
     clone_map->insert({to_clone, new_hyp});
@@ -349,13 +365,16 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
                                                           bool sample,
                                                           float inv_theta) {
   if (nbest_size < 1) {
-    LOG(WARNING) << "nbest_size >= 1. Returns empty result.";
+    ABSL_LOG(WARNING) << "nbest_size >= 1. Returns empty result.";
     return {};
   }
 
   if (nbest_size == 1 && !sample) {
     return {Viterbi()};
   }
+
+  const int timeout_ms = sentencepiece::GetNBestTimeout();
+  const absl::Time start_time = absl::Now();
 
   // Uses A* search to enumerate N-bests.
   // Given a lattice, enumerates hypotheses (paths) from EOS.
@@ -423,7 +442,7 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
       continue;
     }
 
-    const int end_nodes_size = end_nodes(node->pos).size();
+    const size_t end_nodes_size = end_nodes(node->pos).size();
     std::vector<float> probs(end_nodes_size, 0.0);
     std::vector<float> perturbed_probs(end_nodes_size, 0.0);
     std::vector<double> adjusted_probs(end_nodes_size, 0.0);
@@ -431,8 +450,8 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
     if (sample) {
       float max_score = -1e8;
       // Calculate the marginal and perturbed scores for stochastic search
-      for (int i = 0; i < end_nodes(node->pos).size(); i++) {
-        Node* lnode = end_nodes(node->pos)[i];
+      for (size_t i = 0; i < end_nodes(node->pos).size(); i++) {
+        Node *lnode = end_nodes(node->pos)[i];
         // Calculate backwards transition score
         probs[i] =
             top->gx + alpha[lnode->node_id] + (inv_theta * lnode->score) - Z;
@@ -442,7 +461,7 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
         }
       }
       // Now constrain the sampled continuations to match the score of parent
-      for (int i = 0; i < adjusted_probs.size(); i++) {
+      for (size_t i = 0; i < adjusted_probs.size(); i++) {
         // Use numerically stable version of truncated Gumbel:
         // https://arxiv.org/pdf/1903.06059.pdf appendix B.3
         const float v = top->fx - perturbed_probs[i] +
@@ -453,8 +472,8 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
     }
 
     // Expands new node ending at node->pos
-    for (int i = 0; i < end_nodes(node->pos).size(); i++) {
-      Node* lnode = end_nodes(node->pos)[i];
+    for (size_t i = 0; i < end_nodes(node->pos).size(); i++) {
+      Node *lnode = end_nodes(node->pos)[i];
       auto *hyp = hypothesis_allocator.Allocate();
       hyp->node = lnode;
       if (sample) {
@@ -473,7 +492,7 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
     if (hypothesis_allocator.size() >= kOneBillion) {
       if (!printed_memory_warning) {
         printed_memory_warning = true;
-        LOG(WARNING) << "Allocator size exceeds " << kOneBillion
+        ABSL_LOG(WARNING) << "Allocator size exceeds " << kOneBillion
                      << " with an example of length " << this->size();
       }
     }
@@ -484,35 +503,44 @@ std::vector<Lattice::LatticePathWithScore> Lattice::NBest(size_t nbest_size,
     constexpr int kMaxAgendaSize = 10000;
     constexpr int kMinAgendaSize = 512;
     if (agenda.size() >= kMaxAgendaSize) {
+      if (timeout_ms > 0) {
+        const auto elapsed =
+            absl::ToInt64Milliseconds(absl::Now() - start_time);
+        if (elapsed >= timeout_ms) {
+          ABSL_LOG(WARNING) << "NBest search timed out after " << elapsed << " ms. "
+                       << "Falling back to Viterbi best path.";
+          return {Viterbi()};
+        }
+      }
       // Keeps the top `kMinAgendaSize` hypothesis.
       Agenda new_agenda;
       // Keeps the top hypothesis and the ones on their "next" paths.
       model::FreeList<Hypothesis> new_allocator(kPreallocatedHypothesisSize);
       // Map between old Hypothesis* and new Hypothesis*.
-      absl::flat_hash_map<const Hypothesis*, Hypothesis*> clone_map;
+      absl::flat_hash_map<const Hypothesis *, Hypothesis *> clone_map;
 
-      const int size = std::min<int>(kMinAgendaSize, nbest_size * 10);
+      const size_t size = std::min<size_t>(kMinAgendaSize, nbest_size * 10);
       shrink_count++;
-      LOG(WARNING) << "Too big agenda size " << agenda.size()
+      ABSL_LOG(WARNING) << "Too big agenda size " << agenda.size()
                    << ". Shrinking (round " << shrink_count << ") down to "
                    << size << ".";
-      for (int i = 0; i < size; ++i) {
-        const Hypothesis* top_hyp = agenda.top();
-        Hypothesis* cloned_hyp =
+      for (size_t i = 0; i < size; ++i) {
+        const Hypothesis *top_hyp = agenda.top();
+        Hypothesis *cloned_hyp =
             CloneHypAndDependents(top_hyp, &clone_map, &new_allocator);
         new_agenda.push(cloned_hyp);
         agenda.pop();
       }
       agenda = std::move(new_agenda);
-      hypothesis_allocator.swap(new_allocator);
+      hypothesis_allocator = std::move(new_allocator);
     }
   }
 
   return results;
 }
 
-std::vector<Lattice::Node*> Lattice::Sample(float inv_theta) {
-  const int len = size();
+std::vector<Lattice::Node *> Lattice::Sample(float inv_theta) {
+  const size_t len = size();
   if (len == 0) return {};
 
   std::vector<float> alpha(node_allocator_.size(), 0.0);
@@ -544,9 +572,6 @@ std::vector<Lattice::Node*> Lattice::Sample(float inv_theta) {
   return results;
 }
 
-// Model::Model() {}
-// Model::~Model() {}
-
 void Model::PopulateNodes(Lattice *lattice) const {
   auto get_chars_length = [&lattice](int begin_pos, const char *end) {
     int pos = begin_pos;
@@ -556,21 +581,26 @@ void Model::PopulateNodes(Lattice *lattice) const {
 
   const float unk_score = min_score() - kUnkPenalty;
 
-  const int len = lattice->size();
+  const size_t len = lattice->size();
   const char *end = lattice->sentence() + lattice->utf8_size();
 
   // +1 just in case.
   std::vector<Darts::DoubleArray::result_pair_type> trie_results(
       trie_results_size_ + 1);
 
-  for (int begin_pos = 0; begin_pos < len; ++begin_pos) {
+  for (size_t begin_pos = 0; begin_pos < len; ++begin_pos) {
     const char *begin = lattice->surface(begin_pos);
 
     // Finds all pieces which are prefix of surface(begin_pos).
-    const size_t num_nodes = trie_->commonPrefixSearch(
-        begin, trie_results.data(), trie_results.size(),
-        static_cast<int>(end - begin));
-    CHECK_LT(num_nodes, trie_results.size());
+    size_t num_nodes = trie_->commonPrefixSearch(begin, trie_results.data(),
+                                                 trie_results.size(),
+                                                 static_cast<int>(end - begin));
+    if (num_nodes > trie_results.size()) {
+      trie_results.resize(num_nodes + 1);
+      num_nodes = trie_->commonPrefixSearch(begin, trie_results.data(),
+                                            trie_results.size(),
+                                            static_cast<int>(end - begin));
+    }
 
     bool has_single_node = false;
 
@@ -583,7 +613,7 @@ void Model::PopulateNodes(Lattice *lattice) const {
       Lattice::Node *node = lattice->Insert(begin_pos, length);
       node->id = id;  // the value of Trie stores vocab_id.
       // User defined symbol receives extra bonus to always be selected.
-      node->score = IsUserDefinedInlined(id) ? (length * max_score_ - 0.1)
+      node->score = IsUserDefinedInlined(id) ? GetUserDefinedScore(length)
                                              : GetScoreInlined(id);
       if (!has_single_node && node->length == 1) {
         has_single_node = true;
@@ -612,7 +642,7 @@ void Model::BuildTrie(std::vector<std::pair<absl::string_view, int>> *pieces) {
   if (!status().ok()) return;
 
   if (pieces->empty()) {
-    status_ = util::InternalError("no pieces are loaded.");
+    status_ = absl::InternalError("no pieces are loaded.");
     return;
   }
 
@@ -620,18 +650,20 @@ void Model::BuildTrie(std::vector<std::pair<absl::string_view, int>> *pieces) {
   // only accepts sorted strings.
   sort(pieces->begin(), pieces->end());
 
-  // Makes key/value set for DoubleArrayTrie.
+  // Makes key/value/length set for DoubleArrayTrie.
   std::vector<const char *> key(pieces->size());
+  std::vector<size_t> length(pieces->size());
   std::vector<int> value(pieces->size());
   for (size_t i = 0; i < pieces->size(); ++i) {
     key[i] = (*pieces)[i].first.data();  // sorted piece.
-    value[i] = (*pieces)[i].second;      // vocab_id
+    length[i] = (*pieces)[i].first.size();
+    value[i] = (*pieces)[i].second;  // vocab_id
   }
 
-  trie_ = absl::make_unique<Darts::DoubleArray>();
-  if (trie_->build(key.size(), const_cast<char **>(&key[0]), nullptr,
-                   &value[0]) != 0) {
-    status_ = util::InternalError("cannot build double-array.");
+  trie_ = std::make_unique<Darts::DoubleArray>();
+  if (trie_->build(key.size(), const_cast<char **>(&key[0]),
+                   const_cast<size_t *>(&length[0]), &value[0]) != 0) {
+    status_ = absl::InternalError("cannot build double-array.");
     return;
   }
 
@@ -649,7 +681,7 @@ void Model::BuildTrie(std::vector<std::pair<absl::string_view, int>> *pieces) {
   pieces_.clear();
 
   if (trie_results_size_ == 0)
-    status_ = util::InternalError("no entry is found in the trie.");
+    status_ = absl::InternalError("no entry is found in the trie.");
 }
 
 Model::Model(const ModelProto &model_proto) {
@@ -658,11 +690,9 @@ Model::Model(const ModelProto &model_proto) {
   InitializePieces();
 
   min_score_ = FLT_MAX;
-  max_score_ = FLT_MIN;
   for (const auto &sp : model_proto_->pieces()) {
     if (sp.type() == ModelProto::SentencePiece::NORMAL) {
       min_score_ = std::min(min_score_, sp.score());
-      max_score_ = std::max(max_score_, sp.score());
     }
   }
 
@@ -675,24 +705,7 @@ Model::Model(const ModelProto &model_proto) {
 Model::~Model() {}
 
 EncodeResult Model::Encode(absl::string_view normalized) const {
-  if (encoder_version_ == EncoderVersion::kOptimized) {
-    return EncodeOptimized(normalized);
-  }
-
-  if (!status().ok() || normalized.empty()) {
-    return {};
-  }
-
-  Lattice lattice;
-  lattice.SetSentence(normalized);
-  PopulateNodes(&lattice);
-
-  EncodeResult results;
-  for (const auto* node : lattice.Viterbi().first) {
-    results.emplace_back(node->piece, node->id);
-  }
-
-  return results;
+  return EncodeOptimized(normalized);
 }
 
 NBestEncodeResult Model::NBestEncode(absl::string_view normalized,
@@ -712,9 +725,9 @@ NBestEncodeResult Model::NBestEncode(absl::string_view normalized,
   PopulateNodes(&lattice);
 
   NBestEncodeResult nbest_results;
-  for (const auto& nbest : lattice.NBest(nbest_size, false, 0.0)) {
+  for (const auto &nbest : lattice.NBest(nbest_size, false, 0.0)) {
     EncodeResult results;
-    for (const auto* node : nbest.first) {
+    for (const auto *node : nbest.first) {
       results.emplace_back(node->piece, node->id);
     }
     nbest_results.emplace_back(results, nbest.second);
@@ -734,7 +747,7 @@ EncodeResult Model::SampleEncode(absl::string_view normalized,
   PopulateNodes(&lattice);
 
   EncodeResult results;
-  for (const auto* node : lattice.Sample(inv_theta)) {
+  for (const auto *node : lattice.Sample(inv_theta)) {
     results.emplace_back(node->piece, node->id);
   }
 
@@ -742,8 +755,7 @@ EncodeResult Model::SampleEncode(absl::string_view normalized,
 }
 
 NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
-                                              float inv_theta,
-                                              int samples,
+                                              float inv_theta, int samples,
                                               bool wor,
                                               bool include_best) const {
   if (!status().ok() || normalized.empty()) {
@@ -759,12 +771,12 @@ NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
 
   if (include_best) {
     if (!wor) {
-      LOG(ERROR) << "include_best not supported for wor false";
+      ABSL_LOG(ERROR) << "include_best not supported for wor false";
       return {};
     }
     EncodeResult result;
     const auto best_path = lattice.Viterbi();
-    for (const auto* node : best_path.first) {
+    for (const auto *node : best_path.first) {
       result.emplace_back(node->piece, node->id);
     }
 
@@ -777,9 +789,9 @@ NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
     auto nbest_samples = lattice.NBest(samples + 1, true, inv_theta);
 
     if (include_best) {
-      std::vector<std::vector<Lattice::Node*>> nbest_paths(
+      std::vector<std::vector<Lattice::Node *>> nbest_paths(
           nbest_samples.size());
-      for (int i = 0; i < nbest_samples.size(); i++) {
+      for (size_t i = 0; i < nbest_samples.size(); i++) {
         nbest_paths[i] = nbest_samples[i].first;
       }
       // Remove the best result from the samples if necessary
@@ -789,22 +801,30 @@ NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
           (std::find(nbest_paths.begin(), nbest_paths.end(), best_path.first) -
            nbest_paths.begin());
 
-      if (index_of_best != nbest_samples.size()) {
+      if (static_cast<size_t>(index_of_best) != nbest_samples.size()) {
+        ABSL_LOG(INFO) << "removing best path from samples";
         nbest_samples.erase(nbest_samples.begin() + index_of_best);
       } else {
         nbest_samples.pop_back();
       }
     }
+
+    if (nbest_samples.empty()) {
+      // No additional samples available (e.g. only one unique path exists).
+      // Return the best-path result that was already added above.
+      return results;
+    }
+
     // We use the perturbed score of the k+1th element to calculate the
     // inclusion probability.
     const double kappa = static_cast<double>(nbest_samples.back().second);
     // Discard the last sample
     nbest_samples.pop_back();
-    for (const auto& nbest : nbest_samples) {
+    for (const auto &nbest : nbest_samples) {
       EncodeResult result;
       float score = 0.0;
 
-      for (const auto* node : nbest.first) {
+      for (const auto *node : nbest.first) {
         score += (inv_theta * node->score);
         result.emplace_back(node->piece, node->id);
       }
@@ -813,7 +833,7 @@ NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
     }
 
     // Now calculate the inclusion probability
-    for (auto& it : results) {
+    for (auto &it : results) {
       // Only modify non best sample inclusion probabilities.
       if (it.second != 0.0) {
         const double x = it.second - kappa;
@@ -837,8 +857,8 @@ NBestEncodeResult Model::SampleEncodeAndScore(absl::string_view normalized,
 
       float score = 0.0;
       EncodeResult result;
-      const std::vector<Lattice::Node*> sample = lattice.Sample(inv_theta);
-      for (const auto* node : sample) {
+      const std::vector<Lattice::Node *> sample = lattice.Sample(inv_theta);
+      for (const auto *node : sample) {
         result.emplace_back(node->piece, node->id);
         score += (inv_theta * node->score);
       }
@@ -871,7 +891,7 @@ bool Model::VerifyOutputsEquivalent(absl::string_view expected,
           } else {
             const int length = p.size();
             total_score += IsUserDefinedInlined(id)
-                               ? (length * max_score_ - 0.1)
+                               ? GetUserDefinedScore(length)
                                : GetScoreInlined(id);
           }
         }
@@ -882,7 +902,7 @@ bool Model::VerifyOutputsEquivalent(absl::string_view expected,
   const auto actual_score =
       compute_unigram_model_score(absl::StrSplit(actual, ' '));
   if (std::abs(expected_score - actual_score) > kEpsilon) {
-    LOG(WARNING) << "Two sentence piece sequences are not equivalent! Left: "
+    ABSL_LOG(WARNING) << "Two sentence piece sequences are not equivalent! Left: "
                  << expected << ", Score: " << expected_score
                  << ". Right: " << actual << ", Score: " << actual_score << ".";
     return false;
@@ -955,12 +975,12 @@ EncodeResult Model::EncodeOptimized(absl::string_view normalized) const {
         -1;  // The starting position (in utf-8) of this node. The entire best
              // path can be constructed by backtracking along this link.
   };
-  const int size = normalized.size();
+  const size_t size = normalized.size();
   const float unk_score = min_score() - kUnkPenalty;
   // The ends are exclusive.
   std::vector<BestPathNode> best_path_ends_at(size + 1);
   // Generate lattice on-the-fly (not stored) and update best_path_ends_at.
-  int starts_at = 0;
+  size_t starts_at = 0;
   while (starts_at < size) {
     std::size_t node_pos = 0;
     std::size_t key_pos = starts_at;
@@ -973,19 +993,15 @@ EncodeResult Model::EncodeOptimized(absl::string_view normalized) const {
     while (key_pos < size) {
       const int ret =
           trie_->traverse(normalized.data(), node_pos, key_pos, key_pos + 1);
-      if (ret == -2) {
-        break;
-      }
-      if (ret >= 0) {
-        if (IsUnusedInlined(ret)) {
-          continue;
-        }
+      if (ret == -2) break;
+      if (ret >= 0 && ret < GetPieceSize()) {
+        if (IsUnusedInlined(ret)) continue;
         // Update the best path node.
-        auto& target_node = best_path_ends_at[key_pos];
+        auto &target_node = best_path_ends_at[key_pos];
         const auto length = (key_pos - starts_at);
         // User defined symbol receives extra bonus to always be selected.
         const auto score = IsUserDefinedInlined(ret)
-                               ? (length * max_score_ - 0.1)
+                               ? GetUserDefinedScore(length)
                                : GetScoreInlined(ret);
         const auto candidate_best_path_score =
             score + best_path_score_till_here;
@@ -995,13 +1011,13 @@ EncodeResult Model::EncodeOptimized(absl::string_view normalized) const {
           target_node.starts_at = starts_at;
           target_node.id = ret;
         }
-        if (!has_single_node && length == mblen) {
+        if (!has_single_node && length == static_cast<size_t>(mblen)) {
           has_single_node = true;
         }
       }
     }
     if (!has_single_node) {
-      auto& target_node = best_path_ends_at[starts_at + mblen];
+      auto &target_node = best_path_ends_at[starts_at + mblen];
       const auto candidate_best_path_score =
           unk_score + best_path_score_till_here;
       if (target_node.starts_at == -1 ||
@@ -1016,9 +1032,10 @@ EncodeResult Model::EncodeOptimized(absl::string_view normalized) const {
   }
   // Backtrack to identify the best path.
   EncodeResult results;
+  results.reserve(size / 4 + 1);
   int ends_at = size;
   while (ends_at > 0) {
-    const auto& node = best_path_ends_at[ends_at];
+    const auto &node = best_path_ends_at[ends_at];
     results.emplace_back(
         normalized.substr(node.starts_at, ends_at - node.starts_at), node.id);
     ends_at = node.starts_at;

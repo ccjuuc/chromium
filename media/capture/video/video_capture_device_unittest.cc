@@ -2,22 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
-
 #include "media/capture/video/video_capture_device.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
@@ -188,7 +186,7 @@ class MockImageCaptureClient
 
   // GMock doesn't support move-only arguments, so we use this forward method.
   void DoOnPhotoTaken(mojom::BlobPtr blob) {
-    if (strcmp("image/jpeg", blob->mime_type.c_str()) == 0) {
+    if (UNSAFE_TODO(strcmp("image/jpeg", blob->mime_type.c_str())) == 0) {
       ASSERT_GT(blob->data.size(), 4u);
       // Check some bytes that univocally identify |data| as a JPEG File.
       // The first two bytes must be the SOI marker.
@@ -198,7 +196,7 @@ class MockImageCaptureClient
       EXPECT_EQ(0xD8, blob->data[1]);  // Second SOI byte
       EXPECT_EQ(0xFF, blob->data[2]);  // First byte of the next marker
       OnCorrectPhotoTaken();
-    } else if (strcmp("image/png", blob->mime_type.c_str()) == 0) {
+    } else if (UNSAFE_TODO(strcmp("image/png", blob->mime_type.c_str())) == 0) {
       ASSERT_GT(blob->data.size(), 4u);
       EXPECT_EQ('P', blob->data[1]);
       EXPECT_EQ('N', blob->data[2]);
@@ -276,11 +274,7 @@ class VideoCaptureDeviceTest
   }
 
   void SetUp() override {
-#if BUILDFLAG(IS_ANDROID)
-    static_cast<VideoCaptureDeviceFactoryAndroid*>(
-        video_capture_device_factory_.get())
-        ->ConfigureForTesting();
-#elif BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
     static_cast<VideoCaptureDeviceFactoryWin*>(
         video_capture_device_factory_.get())
         ->set_use_media_foundation_for_testing(UseWinMediaFoundation());
@@ -314,11 +308,10 @@ class VideoCaptureDeviceTest
     EXPECT_CALL(*result, DoOnIncomingCapturedBuffer).Times(0);
     EXPECT_CALL(*result, DoOnIncomingCapturedBufferExt).Times(0);
     ON_CALL(*result, OnIncomingCapturedData)
-        .WillByDefault(WithArgs<0, 1, 2>(
-            [this](const uint8_t* data, int length,
+        .WillByDefault(WithArgs<0, 1>(
+            [this](base::span<const uint8_t> data,
                    const media::VideoCaptureFormat& frame_format) {
-              ASSERT_GT(length, 0);
-              ASSERT_TRUE(data);
+              ASSERT_FALSE(data.empty());
               main_thread_task_runner_->PostTask(
                   FROM_HERE,
                   base::BindOnce(&VideoCaptureDeviceTest::OnFrameCaptured,
@@ -392,8 +385,8 @@ class VideoCaptureDeviceTest
   bool IsCaptureSizeSupported(const VideoCaptureDeviceInfo& device_info,
                               const gfx::Size& size) {
     auto& supported_formats = device_info.supported_formats;
-    if (!base::Contains(supported_formats, size,
-                        &VideoCaptureFormat::frame_size)) {
+    if (!std::ranges::contains(supported_formats, size,
+                               &VideoCaptureFormat::frame_size)) {
       DVLOG(1) << "Size " << size.ToString() << " is not supported.";
       return false;
     }

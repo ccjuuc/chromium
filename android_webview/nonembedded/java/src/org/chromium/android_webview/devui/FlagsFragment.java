@@ -174,6 +174,48 @@ public class FlagsFragment extends DevUiBaseFragment {
                 (View v, boolean hasFocus) -> {
                     if (!hasFocus) hideKeyboard(mContext, v);
                 });
+
+        if (isTV()) {
+            View navBarButton = activity.findViewById(R.id.navigation_flags_ui);
+            setupTvFocusOnCreated(flagsListView, resetFlagsButton, mSearchBar, navBarButton);
+        }
+    }
+
+    private void setupTvFocusOnCreated(
+            ListView flagsListView, Button resetFlagsButton, View searchBar, View navBarButton) {
+        if (shouldRequestFocus()) {
+            searchBar.requestFocus();
+        }
+        flagsListView.setItemsCanFocus(true);
+
+        // Without forcing this, the focus will focus on a random item in the list.
+        registerDownPressToFocusOnFirstFlag(searchBar, flagsListView);
+        registerDownPressToFocusOnFirstFlag(resetFlagsButton, flagsListView);
+
+        registerBackPressToNavBarCallback(navBarButton);
+    }
+
+    private void registerDownPressToFocusOnFirstFlag(View view, ListView flagsListView) {
+        // When the user presses the down key, force the focus to the first item in the list.
+        View.OnKeyListener forceFocusToTopListener =
+                (v, keyCode, event) -> {
+                    if (event.getAction() == MotionEvent.ACTION_DOWN
+                            && keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
+                        if (mListAdapter.getCount() > 0) {
+                            flagsListView.setSelection(0);
+                            flagsListView.post(
+                                    () -> {
+                                        View firstChild = flagsListView.getChildAt(0);
+                                        if (firstChild != null) {
+                                            firstChild.requestFocus();
+                                        }
+                                    });
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+        view.setOnKeyListener(forceFocusToTopListener);
     }
 
     private static void hideKeyboard(Context context, View view) {
@@ -443,14 +485,17 @@ public class FlagsFragment extends DevUiBaseFragment {
                         protected void publishResults(
                                 CharSequence constraint, FilterResults results) {
                             mQuery = new FlagQuery(constraint);
-                            mItems = (List<Flag>) results.values;
+                            // performFiltering() always stores a List<Flag> here.
+                            @SuppressWarnings("unchecked")
+                            List<Flag> matches = (List<Flag>) results.values;
+                            mItems = matches;
                             notifyDataSetChanged();
                             onFilterDone();
                         }
                     };
         }
 
-        private View getToggleableFlag(@NonNull Flag flag, View view) {
+        private View getToggleableFlag(@NonNull Flag flag, View view, int position) {
             // If the the old view is already created then reuse it, else create a new one by layout
             // inflation.
             if (view == null) {
@@ -472,6 +517,10 @@ public class FlagsFragment extends DevUiBaseFragment {
 
             Spinner flagToggle = view.findViewById(R.id.flag_toggle);
             flagToggle.setEnabled(mEnabled);
+
+            if (isTV()) {
+                setupTvFocusForToggleableFlag(view, flagToggle, position);
+            }
 
             ArrayAdapter<String> adapter;
             if (flag.isBaseFeature()) {
@@ -495,6 +544,22 @@ public class FlagsFragment extends DevUiBaseFragment {
             formatListEntry(view, state);
 
             return view;
+        }
+
+        private void setupTvFocusForToggleableFlag(View view, Spinner flagToggle, int position) {
+            // Properties handled by styles in values-television/styles.xml:
+            // - view focusable/clickable
+            // - flagName/flagDescription/flagToggle not focusable
+            // - flagToggle clickable
+
+            view.setOnClickListener(
+                    v -> {
+                        // Because the flag view is focusable, user would perform click on the flag
+                        // view. We need to trigger the toggle when the flag view is clicked.
+                        flagToggle.post(() -> flagToggle.performClick());
+                    });
+            // Without this, the focus escape to the nav bar when pressing down on the last item.
+            preventFocusEscapeFromLastItem(view, position == getCount() - 1);
         }
 
         private View getWarningMessage(View view) {
@@ -541,7 +606,7 @@ public class FlagsFragment extends DevUiBaseFragment {
             if (getItemViewType(position) == LayoutType.WARNING_MESSAGE) {
                 return getWarningMessage(view);
             } else {
-                return getToggleableFlag(flag, view);
+                return getToggleableFlag(flag, view, position);
             }
         }
 

@@ -4,6 +4,7 @@
 
 #include "media/cast/sender/openscreen_frame_sender.h"
 
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -53,7 +54,7 @@ static const FrameSenderConfig kVideoConfig{
     /* channels = */ 1,
     kDefaultMaxVideoBitrate,
     kDefaultMinVideoBitrate,
-    std::midpoint<int>(kDefaultMinVideoBitrate, kDefaultMaxVideoBitrate),
+    std::midpoint<uint32_t>(kDefaultMinVideoBitrate, kDefaultMaxVideoBitrate),
     kDefaultMaxFrameRate,
     VideoCodecParams(VideoCodec::kVP8),
     std::nullopt};
@@ -86,7 +87,7 @@ class OpenscreenFrameSenderTest : public TestWithCastEnvironment,
             std::move(openscreen_test_senders_.video_sender),
             *this)) {}
 
-  void set_suggested_bitrate(int bitrate) { suggested_bitrate_ = bitrate; }
+  void set_suggested_bitrate(uint32_t bitrate) { suggested_bitrate_ = bitrate; }
 
   OpenscreenFrameSender& audio_sender() { return *audio_sender_; }
 
@@ -97,7 +98,7 @@ class OpenscreenFrameSenderTest : public TestWithCastEnvironment,
   std::unique_ptr<OpenscreenFrameSender> audio_sender_;
   std::unique_ptr<OpenscreenFrameSender> video_sender_;
 
-  int suggested_bitrate_ = 0;
+  uint32_t suggested_bitrate_ = 0;
 };
 
 TEST_F(OpenscreenFrameSenderTest, RespectsTargetPlayoutDelay) {
@@ -222,6 +223,24 @@ TEST_F(OpenscreenFrameSenderTest, HandlesReferencingUnknownFrameIds) {
   video_frame_two->data = base::HeapArray<uint8_t>::WithSize(10);
   EXPECT_EQ(CastStreamingFrameDropReason::kInvalidReferencedFrameId,
             video_sender().EnqueueFrame(std::move(video_frame_two)));
+}
+
+TEST_F(OpenscreenFrameSenderTest, ClampsLargePlayoutDelay) {
+  FrameSenderConfig large_config = kVideoConfig;
+  large_config.min_playout_delay = base::Milliseconds(100);
+  large_config.max_playout_delay = base::Milliseconds(70000);  // > 65535ms
+
+  auto mock_sender = std::make_unique<MockSender>();
+
+  OpenscreenFrameSender sender(cast_environment(), large_config,
+                               std::move(mock_sender), *this);
+
+  // Set a very large target playout delay.
+  sender.SetTargetPlayoutDelay(base::Milliseconds(80000));
+
+  // It should be clamped to std::numeric_limits<uint16_t>::max() (65535ms).
+  EXPECT_EQ(base::Milliseconds(std::numeric_limits<uint16_t>::max()),
+            sender.GetTargetPlayoutDelay());
 }
 
 }  // namespace media::cast

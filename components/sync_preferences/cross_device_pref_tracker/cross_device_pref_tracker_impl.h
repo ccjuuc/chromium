@@ -25,6 +25,7 @@
 #include "components/sync_device_info/device_info_tracker.h"
 #include "components/sync_preferences/cross_device_pref_tracker/cross_device_pref_provider.h"
 #include "components/sync_preferences/cross_device_pref_tracker/cross_device_pref_tracker.h"
+#include "components/sync_preferences/pref_service_syncable_observer.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_java_ref.h"
@@ -39,13 +40,16 @@ class SyncService;
 
 namespace sync_preferences {
 
+class PrefServiceSyncable;
+
 // Concrete implementation of `CrossDevicePrefTracker`.
 class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
+                                   public PrefServiceSyncableObserver,
                                    public syncer::DeviceInfoTracker::Observer,
                                    public syncer::SyncServiceObserver {
  public:
   CrossDevicePrefTrackerImpl(
-      PrefService* profile_pref_service,
+      PrefServiceSyncable* profile_pref_service,
       PrefService* local_pref_service,
       syncer::DeviceInfoSyncService* device_info_sync_service,
       syncer::SyncService* sync_service,
@@ -56,9 +60,10 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   CrossDevicePrefTrackerImpl& operator=(const CrossDevicePrefTrackerImpl&) =
       delete;
 
-  // `CrossDevicePrefTracker` overrides
+  // `CrossDevicePrefTracker` overrides.
   void AddObserver(CrossDevicePrefTracker::Observer* observer) override;
   void RemoveObserver(CrossDevicePrefTracker::Observer* observer) override;
+  ServiceStatus GetServiceStatus() const override;
   std::vector<TimestampedPrefValue> GetValues(
       std::string_view pref_name,
       const DeviceFilter& filter) const override;
@@ -66,32 +71,36 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
       std::string_view pref_name,
       const DeviceFilter& filter) const override;
 
-  // `KeyedService` overrides
+  // `PrefServiceSyncableObserver` overrides.
+  void OnIsSyncingChanged() override;
+
+  // `KeyedService` overrides.
   void Shutdown() override;
 
-  // `syncer::DeviceInfoTracker::Observer` overrides
+  // `syncer::DeviceInfoTracker::Observer` overrides.
   void OnDeviceInfoChange() override;
 
-  // `syncer::SyncServiceObserver` overrides
+  // `syncer::SyncServiceObserver` overrides.
   void OnStateChanged(syncer::SyncService* sync) override;
   void OnSyncShutdown(syncer::SyncService* sync) override;
 
 #if BUILDFLAG(IS_ANDROID)
   // Return the java object that allows access to the SyncService.
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject() override;
+  int GetServiceStatus(JNIEnv* env) const override;
   // Java versions of query methods.
   base::android::ScopedJavaLocalRef<jobjectArray> GetValues(
       JNIEnv* env,
       const base::android::JavaRef<jstring>& pref_name,
       std::optional<int> os_type,
       std::optional<int> form_factor,
-      std::optional<jlong> max_sync_recency_microseconds) const override;
+      std::optional<int64_t> max_sync_recency_microseconds) const override;
   base::android::ScopedJavaLocalRef<jobject> GetMostRecentValue(
       JNIEnv* env,
       const base::android::JavaRef<jstring>& pref_name,
       std::optional<int> os_type,
       std::optional<int> form_factor,
-      std::optional<jlong> max_sync_recency_microseconds) const override;
+      std::optional<int64_t> max_sync_recency_microseconds) const override;
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // Exposed for testing.
@@ -132,8 +141,8 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // Compares the old and new states of a dictionary to identify changes and
   // notifies observers only if the changes are remote.
   void ProcessRemoteUpdates(const std::string& cross_device_pref_name,
-                            const base::Value::Dict& old_dict,
-                            const base::Value::Dict& new_dict);
+                            const base::DictValue& old_dict,
+                            const base::DictValue& new_dict);
 
   // Attempts to parse the dictionary `entry` (if provided) associated with
   // `remote_device_info` and notifies observers if successful. If `entry` is
@@ -141,13 +150,13 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // `remote_device_info` is guaranteed to be valid for the duration of the
   // synchronous observer calls.
   void NotifyRemotePrefChanged(const std::string& cross_device_pref_name,
-                               const base::Value::Dict* entry,
+                               const base::DictValue* entry,
                                const syncer::DeviceInfo& remote_device_info);
 
   // Checks if local device info became ready and performs initial sync if so.
   void HandleLocalDeviceInfoIfAvailable();
 
-  // Checks if Sync is active and ready for writes, and performs a full refresh
+  // Checks if sync is active and ready for writes, and performs a full refresh
   // if the state changed from unconfigured to configured.
   void OnSyncStateChanged();
 
@@ -158,6 +167,12 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // Pushes the current state of all tracked prefs. Used when Sync state changes
   // or local device info becomes ready.
   void SyncAllOnDevicePrefsToCrossDevice();
+
+  // Helper to record an observed preference change. It will either apply the
+  // change immediately (if syncing) or queue it for later.
+  void RecordObservedPrefChange(std::string_view tracked_pref_name,
+                                std::optional<base::Time> observed_time,
+                                PrefService* tracked_pref_service);
 
   // Detects newly available devices by comparing known GUIDs with the current
   // list from `DeviceInfoTracker`, and triggers notifications for their prefs.
@@ -178,9 +193,14 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // it has not expired, based on its `DeviceInfo::last_updated_timestamp`.
   std::vector<const syncer::DeviceInfo*> GetActiveDevices() const;
 
+  // Compares the old and new service status of the tracker and notifies
+  // observers if changes have occurred. Also triggers initial sync and
+  // flushes queued updates when the service becomes available.
+  void RefreshServiceStatusAndSyncState();
+
   // `PrefService` for profile-based preferences (including syncable prefs).
   // Must outlive this object until `Shutdown()`.
-  raw_ptr<PrefService> profile_pref_service_;
+  raw_ptr<PrefServiceSyncable> profile_pref_service_;
 
   // `PrefService` for local-state preferences.
   // Must outlive this object until `Shutdown()`.
@@ -198,8 +218,13 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // Provides the lists of prefs to be tracked.
   std::unique_ptr<CrossDevicePrefProvider> pref_provider_;
 
-  // Registrars for observing changes to tracked prefs.
+  // Maps `tracked_pref_name` -> most recent observed change time for
+  // preferences that changed while sync was not yet ready.
+  base::flat_map<std::string, base::Time> pending_observed_changes_;
+
+  // Registrar for observing changes to tracked prefs.
   PrefChangeRegistrar profile_pref_registrar_;
+
   PrefChangeRegistrar local_pref_registrar_;
 
   // Registrar for observing changes to cross-device storage prefs (remote
@@ -209,7 +234,7 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // Cache of the last known state for each cross-device dictionary.
   // Used to identify changes when a pref is updated on a remote device.
   // Maps `cross_device_pref_name` -> dictionary value.
-  base::flat_map<std::string, base::Value::Dict> cross_device_storage_cache_;
+  base::flat_map<std::string, base::DictValue> cross_device_storage_cache_;
 
   // Set of Cache GUIDs for devices that have available `DeviceInfo` from the
   // tracker and are considered active (i.e., not expired). A device is active
@@ -226,6 +251,10 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
       sync_service_observation_{this};
 
+  // Observation for changes in `PrefServiceSyncable` state.
+  base::ScopedObservation<PrefServiceSyncable, PrefServiceSyncableObserver>
+      syncable_pref_observation_{this};
+
   // List of observers notified of remote preference changes.
   base::ObserverList<CrossDevicePrefTracker::Observer, true> observers_;
 
@@ -237,6 +266,13 @@ class CrossDevicePrefTrackerImpl : public CrossDevicePrefTracker,
   // Tracks the last known state of Sync configuration for writes. Used to
   // detect transitions from unconfigured to configured and trigger refreshes.
   bool is_sync_configured_for_writes_ = false;
+
+  // Tracks whether the profile preferences are currently syncing. Cached to
+  // avoid expensive calls to `PrefServiceSyncable::IsSyncing()`.
+  bool is_profile_prefs_syncing_ = false;
+
+  // The current service status.
+  ServiceStatus service_status_ = ServiceStatus::kSyncNotConfigured;
 
 #if BUILDFLAG(IS_ANDROID)
   base::android::ScopedJavaGlobalRef<jobject> java_object_;

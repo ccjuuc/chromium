@@ -6,8 +6,18 @@ module network.mojom;
 
 import "mojo/public/mojom/base/read_only_buffer.mojom";
 import "mojo/public/mojom/base/time.mojom";
+import "services/network/public/mojom/http_request_headers.mojom";
+import "services/network/public/mojom/http_response_headers.mojom";
 import "services/network/public/mojom/ip_endpoint.mojom";
 import "services/network/public/mojom/network_param.mojom";
+
+// A hint for what kind of congestion control algorithm the application prefers.
+// https://w3c.github.io/webtransport/#enumdef-webtransportcongestioncontrol
+enum WebTransportCongestionControl {
+  kDefault,
+  kThroughput,
+  kLowLatency,
+};
 
 // Represents a WebTransport error.
 // See also: net/quic/quic_transport_client.h
@@ -37,6 +47,13 @@ struct WebTransportCertificateFingerprint {
   string fingerprint;
 };
 
+// Additional HTTP headers attached to a WebTransport CONNECT request, as
+// supplied via WebTransportOptions.headers
+// (https://w3c.github.io/webtransport/#dom-webtransportoptions-headers).
+struct WebTransportHttpRequestHeaders {
+  array<HttpRequestHeaderKeyValuePair> headers;
+};
+
 // Data (possibly) attached when WebTransport is closed gracefully.
 // https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3/#section-5
 // https://w3c.github.io/webtransport/#web-transport-close-info
@@ -58,6 +75,20 @@ struct WebTransportStats {
   // WebTransportStats; thus those two structs are merged here.
   uint64 datagrams_expired_outgoing;
   uint64 datagrams_lost_outgoing;
+};
+
+// Represents the priority of a WebTransport stream.
+// https://w3c.github.io/webtransport/#dictdef-webtransportsendoptions
+// Default values (null send_group_id, send_order=0) match QUICHE's
+// webtransport::StreamPriority defaults (send_group_id=0, send_order=0),
+// where null maps to 0 via value_or(0).
+struct WebTransportStreamPriority {
+  // https://w3c.github.io/webtransport/#dom-webtransportsendoptions-sendgroup
+  // Null means "no group" (ungrouped / default group), mapped to
+  // SendGroupId 0 in QUICHE via value_or(0).
+  uint32? send_group_id;
+  // https://w3c.github.io/webtransport/#dom-webtransportsendoptions-sendorder
+  int64 send_order = 0;
 };
 
 // A mojo interface for https://w3c.github.io/web-transport/#web-transport.
@@ -93,19 +124,24 @@ interface WebTransport {
   // Stream creation initiated by the client. |succeeded| represents whether
   // the stream is created successfully, and |stream_id| is meaningful only
   // when |succeeded| is true. |writable| is nullable, to support both
-  // unidirectional and bidirectional streams.
+  // unidirectional and bidirectional streams. |priority| optionally sets the
+  // stream's scheduling priority; when null, the stream uses QUICHE's defaults
+  // (send_group_id=0, send_order=0). Passing a struct with those same default
+  // values is functionally equivalent but triggers a redundant SetPriority()
+  // call in the network service.
   CreateStream(handle<data_pipe_consumer> readable,
-               handle<data_pipe_producer>? writable) =>
-      (bool succeeded, uint32 stream_id);
+               handle<data_pipe_producer>? writable,
+               WebTransportStreamPriority? priority)
+      => (bool succeeded, uint32 stream_id);
 
   // Accepts a bidirectional stream created by the server.
   AcceptBidirectionalStream() => (uint32 stream_id,
-                  handle<data_pipe_consumer> readable,
-                  handle<data_pipe_producer> writable);
+                                  handle<data_pipe_consumer> readable,
+                                  handle<data_pipe_producer> writable);
 
   // Accepts a unidirectional stream created by the server.
-  AcceptUnidirectionalStream() => (uint32 stream_id,
-                  handle<data_pipe_consumer> readable);
+  AcceptUnidirectionalStream()
+      => (uint32 stream_id, handle<data_pipe_consumer> readable);
 
   // Expresses that the client will not write data to the stream for
   // |stream_id|. After calling this function on a stream, the client will not
@@ -135,6 +171,11 @@ interface WebTransport {
   // This is the last message and it is not allowed to call methods after
   // calling this.
   Close(WebTransportCloseInfo? close_info);
+
+  // Updates the scheduling priority of a previously created outgoing stream
+  // identified by |stream_id|. Corresponds to the JavaScript
+  // WebTransportSendStream.sendGroup and .sendOrder setters.
+  SetStreamPriority(uint32 stream_id, WebTransportStreamPriority priority);
 };
 
 // A mojo interface for the client of WebTransport.
@@ -170,6 +211,15 @@ interface WebTransportClient {
   // This is the last message and it is not allowed to call methods after
   // calling this.
   OnClosed(WebTransportCloseInfo? close_info, WebTransportStats final_stats);
+
+  // Called when the session enters the "draining" state, i.e. the server has
+  // indicated (via a DRAIN_WEBTRANSPORT_SESSION capsule or an HTTP/3 GOAWAY on
+  // the underlying connection) that it intends to gracefully retire this
+  // session. https://w3c.github.io/webtransport/#dom-webtransport-draining
+  // Existing streams remain usable and the session is not closed; this is a
+  // hint to the application to start migrating work to another session. Unlike
+  // OnClosed, this is not the last message and is delivered at most once.
+  OnDraining();
 };
 
 // Used to create a WebTransport session. This is split from WebTransport

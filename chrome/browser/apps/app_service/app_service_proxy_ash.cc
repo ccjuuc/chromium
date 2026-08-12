@@ -9,12 +9,15 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
+#include "base/check_deref.h"
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
+#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_factory.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_util.h"
 #include "chrome/browser/apps/app_service/app_install/app_install_service.h"
@@ -38,6 +41,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/account_id/account_id.h"
@@ -47,7 +51,7 @@
 #include "components/grit/components_resources.h"
 #include "components/services/app_service/public/cpp/app_capability_access_cache_wrapper.h"
 #include "components/services/app_service/public/cpp/app_registry_cache_wrapper.h"
-#include "components/services/app_service/public/cpp/features.h"
+#include "components/services/app_service/public/cpp/app_service_registry.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
 #include "components/services/app_service/public/cpp/intent_filter_util.h"
@@ -70,6 +74,26 @@ constexpr int32_t kAppDialogIconSize = 48;
 
 namespace apps {
 
+AppServiceProxyAsh::ScopedAppServiceRegistrar::ScopedAppServiceRegistrar(
+    AppServiceRegistry* registry)
+    : registry_(CHECK_DEREF(registry)) {}
+
+AppServiceProxyAsh::ScopedAppServiceRegistrar::~ScopedAppServiceRegistrar() {
+  if (!account_id_.empty()) {
+    registry_->Unregister(account_id_);
+  }
+}
+
+void AppServiceProxyAsh::ScopedAppServiceRegistrar::Register(
+    const AccountId& account_id,
+    AppService* app_service) {
+  CHECK(account_id_.empty());
+  CHECK(!account_id.empty());
+  CHECK(app_service);
+  account_id_ = account_id;
+  registry_->Register(account_id_, app_service);
+}
+
 AppServiceProxyAsh::OnAppsRequest::OnAppsRequest(std::vector<AppPtr> deltas,
                                                  AppType app_type,
                                                  bool should_notify_initialized)
@@ -85,7 +109,22 @@ AppServiceProxyAsh::AppServiceProxyAsh(
     : AppServiceProxyBase(profile, publisher_host_factory),
       icon_reader_(profile),
       icon_writer_(profile) {
-  instance_registry_observer_.Observe(&instance_registry_);
+  // For regular users, the instance is created against the main profile,
+  // but for guest users, the instance is created against their incognito
+  // profiles. To take the AccountId properly for both cases, we pass the
+  // original profile to AnnotatedAccountId::Get().
+  const AccountId* account_id =
+      ash::AnnotatedAccountId::Get(profile->GetOriginalProfile());
+  if (auto* registry = apps::AppServiceRegistry::Get();
+      account_id && registry) {
+    app_service_registrar_.emplace(registry).Register(*account_id, this);
+  } else {
+    // On unittests, AppServiceRegistry may not be yet instantiated.
+    // TODO(crbug.com/477191550): After migrating ChromeOS system into
+    // AppServiceRegistry use, revisit here to decide whether or not to keep
+    // this condition.
+    CHECK_IS_TEST();
+  }
 }
 
 AppServiceProxyAsh::~AppServiceProxyAsh() {
@@ -140,21 +179,21 @@ void AppServiceProxyAsh::Initialize() {
   ::full_restore::FullRestoreSaveHandler::GetInstance()->SetAppRegistryCache(
       profile_->GetPath(), &app_registry_cache_);
 
-  AppServiceProxyBase::Initialize();
-
   auto* cache = &AppRegistryCache();
   if (!app_registry_cache_observer_.IsObservingSource(cache)) {
     app_registry_cache_observer_.Reset();
     app_registry_cache_observer_.Observe(cache);
   }
 
-  publisher_host_ = publisher_host_factory_->CreatePublisherHost(this);
+  AppServiceProxyBase::Initialize();
 
   if (!profile_->AsTestingProfile() &&
-      (!::ash::features::IsShimlessRMA3pDiagnosticsEnabled() ||
-       !::ash::IsShimlessRmaAppBrowserContext(profile_))) {
+      !::ash::IsShimlessRmaAppBrowserContext(profile_)) {
     app_platform_metrics_service_ =
-        std::make_unique<apps::AppPlatformMetricsService>(profile_);
+        std::make_unique<apps::AppPlatformMetricsService>(
+            profile_, base::DefaultClock::GetInstance(),
+            base::DefaultTickClock::GetInstance(),
+            base::SequencedTaskRunner::GetCurrentDefault());
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&AppServiceProxyAsh::InitAppPlatformMetrics,
                                   weak_ptr_factory_.GetWeakPtr()));
@@ -205,7 +244,7 @@ void AppServiceProxyAsh::OnApps(std::vector<AppPtr> deltas,
       // If there's already a deletion in progress, skip the deletion request.
       // For app types, not using AppService icon cache, e.g. remote apps, skip
       // the deletion request.
-      if (base::Contains(pending_read_icon_requests_, delta->app_id) ||
+      if (pending_read_icon_requests_.contains(delta->app_id) ||
           !ShouldReadIcons(app_type)) {
         continue;
       }
@@ -227,7 +266,7 @@ void AppServiceProxyAsh::OnApps(std::vector<AppPtr> deltas,
   for (const AppPtr& delta : deltas) {
     if (delta->readiness != Readiness::kUnknown &&
         !apps_util::IsInstalled(delta->readiness) &&
-        base::Contains(uninstall_dialogs_, delta->app_id)) {
+        uninstall_dialogs_.contains(delta->app_id)) {
       uninstall_dialogs_[delta->app_id]->CloseDialog();
     }
   }
@@ -375,10 +414,6 @@ void AppServiceProxyAsh::LaunchAppWithIntent(const std::string& app_id,
   } else {
     std::move(launch_callback).Run(/*is_allowed=*/true);
   }
-}
-
-base::WeakPtr<AppServiceProxyAsh> AppServiceProxyAsh::GetWeakPtr() {
-  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void AppServiceProxyAsh::ReInitializeCrostiniForTesting() {
@@ -632,18 +667,8 @@ bool AppServiceProxyAsh::MaybeShowLaunchPreventionDialog(
 }
 
 void AppServiceProxyAsh::OnLaunched(LaunchCallback callback,
-                                    LaunchResult&& launch_result) {
-  base::RepeatingCallback<bool(void)> ready_to_run_callback =
-      base::BindRepeating(&AppServiceProxyAsh::CanRunLaunchCallback,
-                          base::Unretained(this), launch_result.instance_ids);
-  base::OnceClosure launch_callback =
-      base::BindOnce(std::move(callback), std::move(launch_result));
-  if (ready_to_run_callback.Run()) {
-    std::move(launch_callback).Run();
-  } else {
-    callback_list_.emplace_back(
-        std::make_pair(ready_to_run_callback, std::move(launch_callback)));
-  }
+                                    LaunchResult launch_result) {
+  std::move(callback).Run(launch_result);
 }
 
 bool AppServiceProxyAsh::ShouldExcludeBrowserTabApps(
@@ -803,41 +828,6 @@ void AppServiceProxyAsh::PerformPostLaunchTasks(
   }
 }
 
-void AppServiceProxyAsh::OnInstanceUpdate(const apps::InstanceUpdate& update) {
-  if (!update.IsCreation()) {
-    return;
-  }
-
-  callback_list_.remove_if([](std::pair<base::RepeatingCallback<bool(void)>,
-                                        base::OnceClosure>& callbacks) {
-    if (callbacks.first.Run()) {
-      std::move(callbacks.second).Run();
-      return true;
-    }
-    return false;
-  });
-}
-
-void AppServiceProxyAsh::OnInstanceRegistryWillBeDestroyed(
-    apps::InstanceRegistry* cache) {
-  instance_registry_observer_.Reset();
-}
-
-bool AppServiceProxyAsh::CanRunLaunchCallback(
-    const std::vector<base::UnguessableToken>& instance_ids) {
-  for (const base::UnguessableToken& instance_id : instance_ids) {
-    bool exists = false;
-    InstanceRegistry().ForOneInstance(
-        instance_id,
-        [&exists](const apps::InstanceUpdate& update) { exists = true; });
-    if (!exists) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 void AppServiceProxyAsh::LaunchAppWithIntentIfAllowed(
     const std::string& app_id,
     int32_t event_flags,
@@ -847,7 +837,7 @@ void AppServiceProxyAsh::LaunchAppWithIntentIfAllowed(
     LaunchCallback callback,
     bool is_allowed) {
   if (!is_allowed) {
-    std::move(callback).Run(LaunchResult(State::kFailed));
+    std::move(callback).Run(LaunchResult::kFailed);
     return;
   }
   AppServiceProxyBase::LaunchAppWithIntent(

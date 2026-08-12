@@ -7,27 +7,37 @@
 
 #include <memory>
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/model_execution/on_device_asset_manager.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_component.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_download_progress_manager.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
 #include "components/optimization_guide/core/model_execution/performance_class.h"
 #include "components/optimization_guide/core/model_execution/usage_tracker.h"
 #include "components/optimization_guide/public/mojom/model_broker.mojom.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
 
 namespace optimization_guide {
 
 // This holds the state for the on-device model broker. This is an abstraction
 // to allow chrome and other embedders to share the same broker logic while
 // owning the state separately.
-class ModelBrokerState final : public OnDeviceCapability {
+class ModelBrokerState final
+    : public OnDeviceCapability,
+      mojom::ModelBrokerDebug,
+      public OnDeviceModelComponentStateManager::Observer {
  public:
   ModelBrokerState(
       PrefService& local_state,
       OptimizationGuideModelProvider& model_provider,
-      std::unique_ptr<OnDeviceModelComponentStateManager::Delegate> delegate,
-      on_device_model::ServiceClient::LaunchFn launch_fn);
+      std::unique_ptr<OnDeviceModelComponentStateManager::Delegate>
+          base_delegate,
+      on_device_model::ServiceClient::LaunchFn launch_fn,
+      component_updater::ComponentUpdateService* component_update_service);
   ~ModelBrokerState() override;
 
   ModelBrokerState(const ModelBrokerState&) = delete;
@@ -43,13 +53,16 @@ class ModelBrokerState final : public OnDeviceCapability {
     return component_state_manager_;
   }
 
-  OnDeviceModelServiceController& service_controller() {
-    return service_controller_;
+  OnDeviceModelServiceController& base_model_controller() {
+    return base_model_controller_;
   }
 
   // OnDeviceCapability
   void BindModelBroker(
       mojo::PendingReceiver<mojom::ModelBroker> receiver) override;
+  void BindModelBrokerDebug(
+      base::PassKey<on_device_internals::PageHandler> key,
+      mojo::PendingReceiver<mojom::ModelBrokerDebug> receiver) override;
   std::unique_ptr<OnDeviceSession> StartSession(
       mojom::OnDeviceFeature feature,
       const SessionConfigParams& config_params,
@@ -61,31 +74,52 @@ class ModelBrokerState final : public OnDeviceCapability {
       const on_device_model::Capabilities& capabilities,
       base::OnceCallback<void(OnDeviceModelEligibilityReason)> callback)
       override;
-  std::optional<SamplingParamsConfig> GetSamplingParamsConfig(
-      mojom::OnDeviceFeature feature) override;
-  std::optional<const optimization_guide::proto::Any> GetFeatureMetadata(
-      mojom::OnDeviceFeature feature) override;
   void AddOnDeviceModelAvailabilityChangeObserver(
       mojom::OnDeviceFeature feature,
       OnDeviceModelAvailabilityObserver* observer) override;
   void RemoveOnDeviceModelAvailabilityChangeObserver(
       mojom::OnDeviceFeature feature,
       OnDeviceModelAvailabilityObserver* observer) override;
-  on_device_model::Capabilities GetOnDeviceCapabilities() override;
+
+  // mojom::ModelBrokerDebug
+  void GetStateInfo(
+      mojom::ModelBrokerDebug::GetStateInfoCallback callback) override;
+  void SetUseCaseRequested(const std::string& use_case,
+                           bool requested) override;
+  void UninstallModels() override;
+  void ResetModelCrashCount() override;
+  void AddObserver(
+      mojo::PendingRemote<mojom::ModelBrokerDebugObserver> observer) override;
+  void AddAssetDownloadObserver(
+      const std::string& asset_name,
+      mojo::PendingRemote<on_device_model::mojom::DownloadObserver> observer)
+      override;
+
+  // OnDeviceModelComponentStateManager::Observer:
+  void StateChanged(MaybeOnDeviceModelComponentState) override;
 
  private:
+  // Ensure any delayed initialization tasks are complete, then call `callback`.
+  void EnsureInitialization(ModelBrokerImpl::InitCallback callback);
+  void EnsureInitializationComplete(ModelBrokerImpl::InitCallback callback);
+
   void FinishGetOnDeviceModelEligibility(
       mojom::OnDeviceFeature feature,
       const on_device_model::Capabilities& capabilities,
       base::OnceCallback<
           void(optimization_guide::OnDeviceModelEligibilityReason)> callback);
 
+  raw_ref<PrefService> local_state_;
   on_device_model::ServiceClient service_client_;
+  OnDeviceModelDownloadProgressManager download_progress_manager_;
   UsageTracker usage_tracker_;
+  ModelBrokerImpl model_broker_impl_;
   PerformanceClassifier performance_classifier_;
   OnDeviceModelComponentStateManager component_state_manager_;
-  OnDeviceModelServiceController service_controller_;
+  OnDeviceModelServiceController base_model_controller_;
   OnDeviceAssetManager asset_manager_;
+  mojo::ReceiverSet<ModelBrokerDebug> receivers_;
+  mojo::RemoteSet<mojom::ModelBrokerDebugObserver> debug_observers_;
   base::WeakPtrFactory<ModelBrokerState> weak_ptr_factory_{this};
 };
 

@@ -182,10 +182,9 @@ export class PowerBookmarksService {
       });
       this.addListener_(
           'onTabUpdated',
-          (_tabId: number, _changeInfo: object, tab: chrome.tabs.Tab) => {
-            if (tab.active) {
-              this.delegate_.setCurrentUrl(tab.url);
-            }
+          (_tabId: number, _changeInfo: object, _tab: chrome.tabs.Tab) => {
+            this.bookmarksApi_.getActiveUrl().then(
+                url => this.delegate_.setCurrentUrl(url));
           });
 
       this.bookmarksApi_.pageCallbackRouter.onBookmarkNodeAdded.addListener(
@@ -211,7 +210,10 @@ export class PowerBookmarksService {
    */
   stopListening() {
     for (const [eventName, callback] of this.listeners_.entries()) {
-      this.bookmarksApi_.callbackRouter[eventName].removeListener(callback);
+      const router = this.bookmarksApi_.callbackRouter[eventName];
+      if (router) {
+        router.removeListener(callback);
+      }
     }
   }
 
@@ -393,8 +395,11 @@ export class PowerBookmarksService {
   }
 
   private addListener_(eventName: string, callback: Function): void {
-    this.bookmarksApi_.callbackRouter[eventName].addListener(callback);
-    this.listeners_.set(eventName, callback);
+    const router = this.bookmarksApi_.callbackRouter[eventName];
+    if (router) {
+      router.addListener(callback);
+      this.listeners_.set(eventName, callback);
+    }
   }
 
   private onBookmarkNodeChanged_(id: string, newTitle: string, newUrl: string) {
@@ -435,6 +440,7 @@ export class PowerBookmarksService {
     // Remove node from oldParent at oldIndex.
     const oldParent = this.findBookmarkWithId(oldParentId)!;
     const movedNode = oldParent.children![oldIndex];
+    assert(movedNode);
     Object.assign(movedNode, {index: newIndex, parentId: newParentId});
     oldParent.children!.splice(oldIndex, 1);
 
@@ -452,6 +458,7 @@ export class PowerBookmarksService {
       const path = this.findPathToId(id);
       const removedNode = path.pop()!;
       const parent = path[path.length - 1];
+      assert(parent);
       parent.children!.splice(parent.children!.indexOf(removedNode), 1);
       this.delegate_.onBookmarkRemoved(removedNode);
     }
@@ -524,8 +531,7 @@ export class PowerBookmarksService {
    */
   private findBookmarkImageUrls_(
       bookmark: BookmarksTreeNode, recurse: boolean, forceUpdate: boolean) {
-    const hasImage =
-        this.bookmarksWithCachedImages_.has(bookmark.id.toString());
+    const hasImage = this.bookmarksWithCachedImages_.has(bookmark.id);
     if (forceUpdate || !hasImage) {
       // Reset image url to ensure old images don't persist while the new image
       // is being fetched.
@@ -534,7 +540,7 @@ export class PowerBookmarksService {
         const productImageUrl = this.delegate_.getProductImageUrl(bookmark);
         if (productImageUrl) {
           this.delegate_.setImageUrl(bookmark, productImageUrl);
-          this.bookmarksWithCachedImages_.add(bookmark.id.toString());
+          this.bookmarksWithCachedImages_.add(bookmark.id);
         } else {
           if (this.activeImageServiceRequestCount_ <
               this.maxImageServiceRequests_) {
@@ -558,7 +564,7 @@ export class PowerBookmarksService {
       return;
     }
 
-    const url: Url = {url: bookmark.url};
+    const url: Url = bookmark.url;
 
     // Fetch the representative image for this page, if possible.
     this.activeImageServiceRequestCount_++;
@@ -576,8 +582,8 @@ export class PowerBookmarksService {
 
     // If there is no result, cache an empty URL because we are unlikely to get
     // a different result in the same session.
-    this.delegate_.setImageUrl(bookmark, result ? result.imageUrl.url : '');
-    this.bookmarksWithCachedImages_.add(bookmark.id.toString());
+    this.delegate_.setImageUrl(bookmark, result ? result.imageUrl : '');
+    this.bookmarksWithCachedImages_.add(bookmark.id);
 
     if (this.inactiveImageServiceRequests_.size > 0) {
       this.findBookmarkImageUrl_(

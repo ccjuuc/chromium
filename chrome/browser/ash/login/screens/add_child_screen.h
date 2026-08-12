@@ -67,7 +67,7 @@ class AddChildScreen
   bool MaybeSkip(WizardContext& context) override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
   bool HandleAccelerator(LoginAcceleratorAction action) override;
 
   base::WeakPtr<AddChildScreenView> view_;
@@ -88,11 +88,5 @@ class AddChildScreen
 };
 
 }  // namespace ash
-
-// TODO(crbug.com/40163357): remove after the //chrome/browser/chromeos
-// source migration is finished.
-namespace chromeos {
-using ::ash ::AddChildScreen;
-}
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_SCREENS_ADD_CHILD_SCREEN_H_

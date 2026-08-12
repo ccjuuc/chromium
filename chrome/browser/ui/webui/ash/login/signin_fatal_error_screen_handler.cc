@@ -6,10 +6,10 @@
 
 #include <string>
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "base/values.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/screens/signin_fatal_error_screen.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/login/localized_values_builder.h"
 #include "components/strings/grit/components_strings.h"
@@ -45,8 +45,8 @@ void SignInFatalErrorScreenHandler::DeclareLocalizedValues(
 }
 
 void SignInFatalErrorScreenHandler::Show(SignInFatalErrorScreen::Error error,
-                                         const base::Value::Dict& params) {
-  base::Value::Dict screen_data = params.Clone();
+                                         const base::DictValue& params) {
+  base::DictValue screen_data = params.Clone();
   screen_data.Set("errorState", base::Value(static_cast<int>(error)));
 
   ShowInWebUI(std::move(screen_data));

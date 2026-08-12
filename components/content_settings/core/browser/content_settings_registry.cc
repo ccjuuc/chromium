@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/values.h"
 #include "build/blink_buildflags.h"
@@ -233,7 +232,7 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
-  Register(ContentSettingsType::DURABLE_STORAGE, "durable-storage",
+  Register(ContentSettingsType::PERSISTENT_STORAGE, "durable-storage",
            CONTENT_SETTING_ASK, WebsiteSettingsInfo::UNSYNCABLE,
            /*allowlisted_primary_schemes=*/{},
            /*valid_settings=*/
@@ -304,16 +303,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 
-  Register(ContentSettingsType::TPCD_HEURISTICS_GRANTS,
-           "3pcd-heuristics-grants", CONTENT_SETTING_BLOCK,
-           WebsiteSettingsInfo::UNSYNCABLE,
-           /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-           WebsiteSettingsInfo::REQUESTING_AND_TOP_SCHEMEFUL_SITE_SCOPE,
-           WebsiteSettingsRegistry::ALL_PLATFORMS,
-           ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
-
   Register(ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL,
            "storage-access-header-origin-trial", CONTENT_SETTING_BLOCK,
            WebsiteSettingsInfo::UNSYNCABLE,
@@ -362,7 +351,8 @@ void ContentSettingsRegistry::Init() {
   // contexts.
   Register(ContentSettingsType::SENSORS, "sensors", CONTENT_SETTING_ALLOW,
            WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
+           /*valid_settings=*/
+           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
            WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
            WebsiteSettingsRegistry::DESKTOP |
                WebsiteSettingsRegistry::PLATFORM_ANDROID,
@@ -423,7 +413,8 @@ void ContentSettingsRegistry::Init() {
            WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
            /*valid_settings=*/{CONTENT_SETTING_ASK, CONTENT_SETTING_BLOCK},
            WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
-           WebsiteSettingsRegistry::DESKTOP,
+           WebsiteSettingsRegistry::DESKTOP |
+               WebsiteSettingsRegistry::PLATFORM_ANDROID,
            ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
@@ -659,21 +650,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
-  Register(ContentSettingsType::THIRD_PARTY_STORAGE_PARTITIONING,
-           "third-party-storage-partitioning", CONTENT_SETTING_ALLOW,
-           WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
-           WebsiteSettingsRegistry::ALL_PLATFORMS,
-           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
-
-  // Controls automatic picture-in-picture (auto-PiP).
-  // On Desktop, this controls both video and document auto-PiP and prompts the
-  // user for permission.
-  // On Android, this is for video auto-PiP only. It defaults to ALLOW in
-  // regular profiles and BLOCK in incognito. This default is shown in the UI
-  // instead of "Ask". The setting can still be explicitly changed.
   Register(ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
            "auto-picture-in-picture", CONTENT_SETTING_ASK,
            WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
@@ -768,19 +744,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
-  Register(
-      ContentSettingsType::TRACKING_PROTECTION, "tracking-protection",
-      CONTENT_SETTING_BLOCK, WebsiteSettingsInfo::SYNCABLE,
-      /*allowlisted_primary_schemes=*/{kChromeUIScheme, kChromeDevToolsScheme},
-      /*valid_settings=*/
-      {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-      WebsiteSettingsInfo::REQUESTING_ORIGIN_WITH_TOP_ORIGIN_EXCEPTIONS_SCOPE,
-      WebsiteSettingsRegistry::DESKTOP |
-          WebsiteSettingsRegistry::PLATFORM_ANDROID |
-          WebsiteSettingsRegistry::PLATFORM_IOS,
-      ContentSettingsInfo::INHERIT_IN_INCOGNITO,
-      PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
-
   // This setting is only available to WebUI pages and should be set through
   // WebUIAllowlist.
   Register(ContentSettingsType::DISPLAY_MEDIA_SYSTEM_AUDIO,
@@ -870,6 +833,26 @@ void ContentSettingsRegistry::Init() {
            WebsiteSettingsRegistry::PLATFORM_CHROMEOS,
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+
+  Register(ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS,
+           "sub-apps-without-prompts", CONTENT_SETTING_ASK,
+           WebsiteSettingsInfo::UNSYNCABLE,
+           /*allowlisted_primary_schemes=*/{},
+           /*valid_settings=*/
+           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
+           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+           WebsiteSettingsRegistry::DESKTOP,
+           ContentSettingsInfo::DONT_INHERIT_IN_INCOGNITO,
+           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+
+  Register(ContentSettingsType::INLINE_CUE_MENU, "inline-cue-menu",
+           CONTENT_SETTING_ALLOW, WebsiteSettingsInfo::SYNCABLE,
+           /*allowlisted_primary_schemes=*/{},
+           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
+           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+           WebsiteSettingsRegistry::DESKTOP,
+           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
+           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 }
 
 void ContentSettingsRegistry::Register(
@@ -886,7 +869,7 @@ void ContentSettingsRegistry::Register(
   // Ensure that nothing has been registered yet for the given type.
   DCHECK(!permission_settings_registry_->Get(type)) << type;
   DCHECK(!website_settings_registry_->Get(type)) << type;
-  DCHECK(!base::Contains(content_settings_info_, type)) << type;
+  DCHECK(!content_settings_info_.contains(type)) << type;
 
   auto delegate = std::make_unique<ContentSettingsInfo::Delegate>();
   auto* delegate_ptr = delegate.get();

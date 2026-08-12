@@ -14,10 +14,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/task/bind_post_task.h"
 #include "base/win/scoped_co_mem.h"
+#include "media/audio/audio_constants.h"
 #include "media/audio/win/audio_device_listener_win.h"
 #include "media/audio/win/audio_session_creation_observer_win.h"
 #include "media/audio/win/core_audio_util_win.h"
-#include "media/base/media_switches.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -87,11 +87,6 @@ bool ForEachAudioSession(
   return no_errors;
 }
 
-float GetAttenuationMultiplier() {
-  return 1.0 -
-         (std::clamp(media::kAudioDuckingAttenuation.Get(), 0, 100) / 100.0);
-}
-
 void RecordSessionUnduckResult(bool success) {
   base::UmaHistogramBoolean("Media.AudioDuckerWin.UnduckSessionResult",
                             success);
@@ -121,13 +116,13 @@ void AudioDuckerWin::StartDuckingOtherWindowsApplications() {
 
   if (!session_creation_observer_) {
     session_creation_observer_ =
-        std::make_unique<AudioSessionCreationObserverWin>(
+        Microsoft::WRL::Make<AudioSessionCreationObserverWin>(
             base::BindPostTaskToCurrentDefault(base::BindRepeating(
                 &AudioDuckerWin::DuckNewAudioSessionsIfNecessary,
                 weak_factory_.GetWeakPtr())));
   }
   ducked_audio_session_manager_->RegisterSessionNotification(
-      session_creation_observer_.get());
+      session_creation_observer_.Get());
 
   // `base::Unretained()` is safe here because this callback is called
   // synchronously.
@@ -151,7 +146,7 @@ void AudioDuckerWin::StopDuckingOtherWindowsApplications() {
     if (ducked_audio_session_manager_) {
       CHECK(session_creation_observer_);
       ducked_audio_session_manager_->UnregisterSessionNotification(
-          session_creation_observer_.get());
+          session_creation_observer_.Get());
       ducked_audio_session_manager_.Reset();
     }
     return;
@@ -174,7 +169,7 @@ void AudioDuckerWin::StopDuckingOtherWindowsApplications() {
 
   ducked_applications_.clear();
   ducked_audio_session_manager_->UnregisterSessionNotification(
-      session_creation_observer_.get());
+      session_creation_observer_.Get());
   ducked_audio_session_manager_.Reset();
 }
 
@@ -212,7 +207,7 @@ void AudioDuckerWin::StartDuckingAudioSessionIfNecessary(
     return;
   }
   hr = simple_audio_volume->SetMasterVolume(
-      current_volume * GetAttenuationMultiplier(), nullptr);
+      current_volume * media::kDefaultDuckingVolumeMultiplier, nullptr);
   if (!SUCCEEDED(hr)) {
     return;
   }

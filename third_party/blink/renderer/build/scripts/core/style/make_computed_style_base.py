@@ -24,105 +24,98 @@ from itertools import chain
 # FIXME: Put alignment sizes into code form, rather than linking to a CL
 # which may disappear.
 ALIGNMENT_ORDER = [
-    # Aligns like double
-    'ScaleTransformOperation',
-    'RotateTransformOperation',
-    'TranslateTransformOperation',
-    'GridTrackList',
-    'StyleHighlightData',
-    'FilterOperations',
-    'DynamicRangeLimit',
-    'std::optional<gfx::Size>',
-    'double',
-    'StyleViewTransitionGroup',
+    # Aligns like double (always 64 bits)
+    'StyleInterestDelay',
     'Superellipse',
-    'ItemTolerance',
     # Aligns like a pointer (can be 32 or 64 bits)
-    'NamedGridLinesMap',
-    'NamedGridAreaMap',
-    'TransformOperations',
-    'Vector<CSSPropertyID>',
-    'Vector<AtomicString>',
-    'Vector<TimelineAttachment>',
-    'Vector<TimelineAxis>',
-    'Vector<TimelineInset>',
-    'HeapVector<Member<StyleTriggerAttachmentVector>>',
-    'GridPosition',
     'AtomicString',
-    'scoped_refptr',
-    'std::unique_ptr',
-    'Vector<String>',
-    'Font',
-    'FillLayer',
-    'NinePieceImage',
-    'SVGPaint',
-    'IntrinsicLength',
-    'TextBoxEdge',
-    'TextDecorationThickness',
-    'TextOverflowData',
-    'StyleAnchorScope',
-    'StyleAspectRatio',
-    'StyleIntrinsicLength',
-    'StyleInheritedVariables',
-    'StyleNameScope',
-    'StyleNonInheritedVariables',
-    'StylePositionAnchor',
-    'StyleTriggerScope',
-    'std::optional<StyleOverflowClipMargin>',
-    'std::optional<blink::PositionAreaOffsets>',
-    'std::optional<PhysicalOffset>',
+    'FilterOperations',
+    'GapDataList<EBorderStyle>',
     'GapDataList<StyleColor>',
     'GapDataList<int>',
-    'GapDataList<EBorderStyle>',
-    'gfx::Size',
+    'GridPosition',
+    'GridTrackList',
+    'StyleHighlightData',
+    'StyleTimelineScope',
+    'StyleViewTransitionGroup',
+    'TextOverflowData',
+    'TransformOperations',
+    'Vector<AtomicString>',
+    'Vector<String>',
+    'Vector<TimelineAxis>',
+    'Vector<TimelineInset>',
+    'scoped_refptr',
+    'std::unique_ptr',
     # Compressed builds a Member can be 32 bits, vs. a pointer will be 64.
+    'FillLayer',
     'Member',
-    # Aligns like float
-    'std::optional<Length>',
-    'StyleInitialLetter',
-    'StyleOffsetRotation',
-    'TransformOrigin',
-    'ScrollPadding',
-    'ScrollMargin',
-    'LengthBox',
-    'LengthSize',
-    'gfx::SizeF',
-    'LengthPoint',
+    'NinePieceImage',
+    'SVGPaint',
+    'StyleAnchorScope',
+    'StyleInheritedVariables',
+    'StyleNonInheritedVariables',
+    'StyleTriggerScope',
+    # Aligns like float (32 bits)
+    'DynamicRangeLimit',
+    'FlowTolerance',
     'Length',
-    'UnzoomedLength',
-    'TextSizeAdjust',
-    'FitText',
+    'LengthBox',
+    'LengthPoint',
+    'LengthSize',
+    'StyleAspectRatio',
+    'StyleInitialLetter',
+    'StyleIntrinsicLength',
+    'StyleOffsetRotation',
+    'StylePositionAnchor',
     'TabSize',
+    'TextDecorationInset',
+    'TextDecorationThickness',
+    'TextFit',
+    'TextSizeAdjust',
+    'TransformOrigin',
+    'UnzoomedLength',
     'float',
-    'StyleInterestDelay',
-    # Aligns like int
-    'cc::ScrollSnapType',
-    'cc::ScrollSnapAlign',
-    'BorderValue',
-    'StyleColor',
+    'gfx::SizeF',
+    'std::optional<Length>',
+    # Aligns like int (32 bits)
+    'GridLanesDirection',
     'StyleAutoColor',
-    'Color',
-    'StyleHyphenateLimitChars',
-    'LayoutUnit',
-    'LineClampValue',
-    'OutlineValue',
-    'unsigned',
-    'size_t',
-    'wtf_size_t',
-    'int',
-    'PositionArea',
-    # Aligns like short
-    'StyleFlexWrapData',
-    'unsigned short',
-    'short',
-    # Aligns like char
-    'StyleSelfAlignmentData',
+    'StyleCaretColor',
+    'StyleColor',
     'StyleContentAlignmentData',
-    'uint8_t',
-    'char',
-    # Aligns like bool
+    'StyleSelfAlignmentData',
+    'cc::ScrollSnapAlign',
+    'cc::ScrollSnapType',
+    'gfx::Size',
+    'int',
+    'std::optional<PhysicalOffset>',
+    'std::optional<StyleOverflowClipMargin>',
+    'std::optional<blink::PositionAreaOffsets>',
+    'unsigned',
+    # Aligns like short (16 bits)
+    'MaxLinesData',
+    'short',
+    'uint16_t',
+    'unsigned short',
+    # Aligns like char (8 bits)
+    'PositionArea',
+    'StyleFlexWrapData',
+    'StyleHyphenateLimitChars',
+    'TextBoxEdge',
+    # Aligns like bool (8 bits)
     'bool'
 ]
+
+
+def _check_unused_alignment_types(fields):
+    """Check if the ALIGNMENT_ORDER order list contains type entries that are
+    not used by any fields.
+    """
+    diff = set(ALIGNMENT_ORDER).difference(
+        {field.alignment_type
+         for field in fields})
+    assert len(diff) == 0, \
+        "Unused alignment types in ALIGNMENT_ORDER: {}".format(list(diff))
 
 # FIXME: Improve documentation and add docstrings.
 
@@ -216,8 +209,8 @@ def _create_enums(properties):
     for property_ in properties:
         # Only generate enums for keyword properties that do not
         # require includes.
-        if (property_.field_template in ('keyword', 'multi_keyword',
-                                         'bitset_keyword')
+        if (property_.field_template in ('keyword', 'keyword_custom',
+                                         'multi_keyword', 'bitset_keyword')
                 and len(property_.include_paths) == 0):
             if property_.field_template == 'multi_keyword':
                 set_type = 'multi'
@@ -250,7 +243,7 @@ def _create_enums(properties):
 
 
 def _find_size_for_property(property_):
-    if property_.field_template == 'keyword':
+    if property_.field_template in ('keyword', 'keyword_custom'):
         assert property_.field_size is None, \
             ("'" + property_.name + "' is a keyword field, "
              "so it should not specify a field_size")
@@ -286,33 +279,36 @@ def _create_property_field(property_):
 
     size = _find_size_for_property(property_)
 
-    return Field(
-        'property',
-        name_for_methods,
-        property_name=property_.name.original,
-        inherited=property_.inherited,
-        independent=property_.independent,
-        semi_independent_variable=property_.semi_independent_variable,
-        type_name=property_.type_name,
-        wrapper_pointer_name=property_.wrapper_pointer_name,
-        field_template=property_.field_template,
-        size=size,
-        default_value=property_.default_value,
-        invalidate=property_.invalidate,
-        derived_from=property_.derived_from,
-        reset_on_new_style=property_.reset_on_new_style,
-        custom_compare=property_.custom_compare,
-        highlight_style_comes_from_originating_element=property_.
-        highlight_style_comes_from_originating_element,
-        mutable=property_.mutable,
-        getter_method_name=property_.getter,
-        setter_method_name=property_.setter,
-        initial_method_name=property_.initial,
-        computed_style_custom_functions=property_.
-        computed_style_custom_functions,
-        computed_style_protected_functions=property_.
-        computed_style_protected_functions,
-    )
+    return Field('property',
+                 name_for_methods,
+                 property_name=property_.name.original,
+                 inherited=property_.inherited,
+                 independent=property_.independent,
+                 semi_independent_variable=property_.semi_independent_variable,
+                 type_name=property_.type_name,
+                 wrapper_pointer_name=property_.wrapper_pointer_name,
+                 field_template=property_.field_template,
+                 size=size,
+                 default_value=property_.default_value,
+                 invalidate=property_.invalidate,
+                 derived_from=property_.derived_from,
+                 reset_on_new_style=property_.reset_on_new_style,
+                 custom_compare=property_.custom_compare,
+                 highlight_style_comes_from_originating_element=property_.
+                 highlight_style_comes_from_originating_element,
+                 mutable=property_.mutable,
+                 getter_method_name=property_.getter,
+                 setter_method_name=property_.setter,
+                 initial_method_name=property_.initial,
+                 computed_style_custom_functions=property_.
+                 computed_style_custom_functions,
+                 computed_style_protected_functions=property_.
+                 computed_style_protected_functions,
+                 may_be_affected_by_transition_all=property_.
+                 may_be_affected_by_transition_all,
+                 may_be_affected_by_transition_all_discrete=property_.
+                 may_be_affected_by_transition_all_discrete,
+                 is_extra_field=property_.is_extra_field)
 
 
 def _create_inherited_flag_field(property_):
@@ -346,6 +342,9 @@ def _create_inherited_flag_field(property_):
         computed_style_custom_functions,
         computed_style_protected_functions=property_.
         computed_style_protected_functions,
+        may_be_affected_by_transition_all=False,
+        may_be_affected_by_transition_all_discrete=False,
+        is_extra_field=False,
     )
 
 
@@ -368,6 +367,10 @@ def _create_fields(property_):
             flag_field = _create_inherited_flag_field(property_)
 
         field = _create_property_field(property_)
+
+        # Link the two against each other.
+        property_.main_field = field
+        field.property_if_main_field = property_
 
     return field, flag_field
 
@@ -521,6 +524,7 @@ class ComputedStyleBaseWriter(json5_generator.Writer):
         _evaluate_misc_group(self._properties, bitfield_properties, False)
         _evaluate_misc_group(self._properties, bitfield_properties, True)
         self._root_group = _create_groups(self._properties)
+        _check_unused_alignment_types(self._root_group.all_fields)
         # We create separate groups/fields for generating ComputedStyle-
         # BuilderBase. The only difference between these fields and the regular
         # fields, is that the builder fields have the "builder" flag set, which

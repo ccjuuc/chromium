@@ -17,7 +17,7 @@ import {setShimlessRmaServiceForTesting} from 'chrome://shimless-rma/mojo_interf
 import {BooleanOrDefaultOptions, ReimagingDeviceInformationPage} from 'chrome://shimless-rma/reimaging_device_information_page.js';
 import type {StateResult} from 'chrome://shimless-rma/shimless_rma.mojom-webui.js';
 import {FeatureLevel} from 'chrome://shimless-rma/shimless_rma.mojom-webui.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks, waitAfterNextRender} from 'chrome://webui-test/polymer_test_util.js';
 import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
 
@@ -97,7 +97,6 @@ suite('reimagingDeviceInformationPageTest', function() {
 
   suiteSetup(() => {
     loadTimeData.overrideValues({
-      'dynamicDeviceInfoInputsEnabled': true,
       'flexibleSerialNumberNameEnabled': true,
       'hideGoogleSKUEnabled': true,
     });
@@ -280,7 +279,7 @@ suite('reimagingDeviceInformationPageTest', function() {
         newCustomLabelIndex, setDeviceInformationResults.customLabelIndex);
     assertEquals(newSkuIndex, setDeviceInformationResults.skuIndex);
     assertEquals(newDramPartNumber, setDeviceInformationResults.dramPartNumber);
-    assertEquals(false, setDeviceInformationResults.isChassisBranded);
+    assertFalse(setDeviceInformationResults.isChassisBranded);
     assertEquals(0, setDeviceInformationResults.hwComplianceVersion);
   });
 

@@ -19,11 +19,11 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/isolated_web_apps/jobs/prepare_install_info_job.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
+#include "chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
@@ -32,26 +32,13 @@
 
 class Profile;
 
-namespace content {
-class WebContents;
-}
-
 namespace webapps {
 enum class InstallResultCode;
 }
 
 namespace web_app {
 
-// Represents an error during the application of a pending IWA update.
-struct IsolatedWebAppApplyUpdateCommandError {
-  std::string message;
-};
-
-std::ostream& operator<<(std::ostream& os,
-                         const IsolatedWebAppApplyUpdateCommandError& error);
-
-using IsolatedWebAppApplyUpdateCommandResult =
-    base::expected<void, IsolatedWebAppApplyUpdateCommandError>;
+class FinalizeInstallOrUpdateJob;
 
 // This command applies a pending update of an Isolated Web App. Information
 // about the pending update is read from
@@ -64,11 +51,11 @@ class IsolatedWebAppApplyUpdateCommand
   // updated, in which case it will gracefully fail.
   IsolatedWebAppApplyUpdateCommand(
       IsolatedWebAppUrlInfo url_info,
-      std::unique_ptr<content::WebContents> web_contents,
+      Profile& profile,
       std::unique_ptr<ScopedKeepAlive> optional_keep_alive,
       std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive,
-      base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback,
-      std::unique_ptr<IsolatedWebAppInstallCommandHelper> command_helper);
+      base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)>
+          callback);
 
   IsolatedWebAppApplyUpdateCommand(const IsolatedWebAppApplyUpdateCommand&) =
       delete;
@@ -80,6 +67,16 @@ class IsolatedWebAppApplyUpdateCommand
       IsolatedWebAppApplyUpdateCommand&&) = delete;
 
   ~IsolatedWebAppApplyUpdateCommand() override;
+
+  void OverrideUpdateJobForTesting(
+      base::OnceCallback<
+          std::pair<webapps::AppId, webapps::InstallResultCode>()> callback) {
+    on_finalize_before_job_callback_for_testing_ = std::move(callback);
+  }
+
+  base::WeakPtr<IsolatedWebAppApplyUpdateCommand> AsWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
 
  protected:
   // WebAppCommand:
@@ -127,16 +124,17 @@ class IsolatedWebAppApplyUpdateCommand
 
   const IsolatedWebAppUrlInfo url_info_;
 
-  std::unique_ptr<content::WebContents> web_contents_;
+  const raw_ref<Profile> profile_;
 
   const std::unique_ptr<ScopedKeepAlive> optional_keep_alive_;
   const std::unique_ptr<ScopedProfileKeepAlive> optional_profile_keep_alive_;
 
   std::optional<IsolationData> isolation_data_;
 
-  const std::unique_ptr<IsolatedWebAppInstallCommandHelper> command_helper_;
-
   std::unique_ptr<PrepareInstallInfoJob> prepare_install_info_job_;
+  std::unique_ptr<FinalizeInstallOrUpdateJob> install_update_job_;
+  base::OnceCallback<std::pair<webapps::AppId, webapps::InstallResultCode>()>
+      on_finalize_before_job_callback_for_testing_;
 
   base::WeakPtrFactory<IsolatedWebAppApplyUpdateCommand> weak_factory_{this};
 };

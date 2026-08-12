@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -48,10 +47,10 @@ using remoting::protocol::PairingRegistry;
 using remoting::protocol::SynchronousPairingRegistry;
 using ::testing::Optional;
 
-void VerifyHelloResponse(const base::Value::Dict& response) {
+void VerifyHelloResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("helloResponse", *value);
+  EXPECT_EQ(*value, "helloResponse");
 
   value = response.FindString("version");
   ASSERT_TRUE(value);
@@ -61,101 +60,104 @@ void VerifyHelloResponse(const base::Value::Dict& response) {
 #ifndef VERSION
 #error VERSION must be defined
 #endif
-  EXPECT_EQ(STRINGIZE(VERSION), *value);
+  EXPECT_EQ(*value, STRINGIZE(VERSION));
 }
 
-void VerifyGetHostNameResponse(const base::Value::Dict& response) {
+void VerifyGetHostNameResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getHostNameResponse", *value);
+  EXPECT_EQ(*value, "getHostNameResponse");
   value = response.FindString("hostname");
   ASSERT_TRUE(value);
-  EXPECT_EQ(net::GetHostName(), *value);
+  EXPECT_EQ(*value, net::GetHostName());
 }
 
-void VerifyGetPinHashResponse(const base::Value::Dict& response) {
+void VerifyGetPinHashResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getPinHashResponse", *value);
+  EXPECT_EQ(*value, "getPinHashResponse");
   value = response.FindString("hash");
   ASSERT_TRUE(value);
-  EXPECT_EQ(remoting::MakeHostPinHash("my_host", "1234"), *value);
+  EXPECT_EQ(*value, remoting::MakeHostPinHash("my_host", "1234"));
 }
 
-void VerifyGenerateKeyPairResponse(const base::Value::Dict& response) {
+void VerifyGenerateKeyPairResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("generateKeyPairResponse", *value);
+  EXPECT_EQ(*value, "generateKeyPairResponse");
   EXPECT_TRUE(response.FindString("privateKey"));
   EXPECT_TRUE(response.FindString("publicKey"));
 }
 
-void VerifyGetDaemonConfigResponse(const base::Value::Dict& response) {
+void VerifyGetDaemonConfigResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getDaemonConfigResponse", *value);
-  const base::Value::Dict* config = response.FindDict("config");
+  EXPECT_EQ(*value, "getDaemonConfigResponse");
+  const base::DictValue* config = response.FindDict("config");
   ASSERT_TRUE(config);
-  EXPECT_EQ(base::Value::Dict(), *config);
+  EXPECT_EQ(*config, base::DictValue());
 }
 
-void VerifyGetUsageStatsConsentResponse(const base::Value::Dict& response) {
+void VerifyGetUsageStatsConsentResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getUsageStatsConsentResponse", *value);
+  EXPECT_EQ(*value, "getUsageStatsConsentResponse");
 
   EXPECT_THAT(response.FindBool("supported"), Optional(true));
   EXPECT_THAT(response.FindBool("allowed"), Optional(true));
   EXPECT_THAT(response.FindBool("setByPolicy"), Optional(true));
 }
 
-void VerifyStopDaemonResponse(const base::Value::Dict& response) {
+void VerifyStopDaemonResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("stopDaemonResponse", *value);
+  EXPECT_EQ(*value, "stopDaemonResponse");
   value = response.FindString("result");
   ASSERT_TRUE(value);
-  EXPECT_EQ("OK", *value);
+  EXPECT_EQ(*value, "OK");
 }
 
-void VerifyGetDaemonStateResponse(const base::Value::Dict& response) {
+void VerifyGetDaemonStateResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getDaemonStateResponse", *value);
+  EXPECT_EQ(*value, "getDaemonStateResponse");
   value = response.FindString("state");
   ASSERT_TRUE(value);
-  EXPECT_EQ("STARTED", *value);
+  EXPECT_EQ(*value, "STARTED");
 }
 
-void VerifyUpdateDaemonConfigResponse(const base::Value::Dict& response) {
+void VerifyUpdateDaemonConfigResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("updateDaemonConfigResponse", *value);
+  EXPECT_EQ(*value, "updateDaemonConfigResponse");
   value = response.FindString("result");
   ASSERT_TRUE(value);
-  EXPECT_EQ("OK", *value);
+  EXPECT_EQ(*value, "OK");
 }
 
-void VerifyStartDaemonResponse(const base::Value::Dict& response) {
+void VerifyStartDaemonResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("startDaemonResponse", *value);
+  EXPECT_EQ(*value, "startDaemonResponse");
   value = response.FindString("result");
   ASSERT_TRUE(value);
-  EXPECT_EQ("OK", *value);
+#if BUILDFLAG(IS_LINUX)
+  EXPECT_EQ(*value, "FAILED");
+#else
+  EXPECT_EQ(*value, "OK");
+#endif
 }
 
-void VerifyGetCredentialsFromAuthCodeResponse(
-    const base::Value::Dict& response) {
+void VerifyGetCredentialsFromAuthCodeResponse(const base::DictValue& response) {
   const std::string* value = response.FindString("type");
   ASSERT_TRUE(value);
-  EXPECT_EQ("getCredentialsFromAuthCodeResponse", *value);
+  EXPECT_EQ(*value, "getCredentialsFromAuthCodeResponse");
   value = response.FindString("userEmail");
   ASSERT_TRUE(value);
-  EXPECT_EQ("fake_user_email", *value);
+  EXPECT_EQ(*value, "fake_user_email");
   value = response.FindString("refreshToken");
   ASSERT_TRUE(value);
-  EXPECT_EQ("fake_refresh_token", *value);
+  EXPECT_EQ(*value, "fake_refresh_token");
 }
 
 }  // namespace
@@ -174,16 +176,20 @@ class MockDaemonControllerDelegate : public DaemonController::Delegate {
 
   // DaemonController::Delegate interface.
   DaemonController::State GetState() override;
-  std::optional<base::Value::Dict> GetConfig() override;
+  std::optional<base::DictValue> GetConfig() override;
   void CheckPermission(bool it2me,
                        DaemonController::BoolCallback callback) override;
-  void SetConfigAndStart(base::Value::Dict config,
+  void SetConfigAndStart(base::DictValue config,
                          bool consent,
                          DaemonController::CompletionCallback done) override;
-  void UpdateConfig(base::Value::Dict config,
+  void UpdateConfig(base::DictValue config,
                     DaemonController::CompletionCallback done) override;
   void Stop(DaemonController::CompletionCallback done) override;
   DaemonController::UsageStatsConsent GetUsageStatsConsent() override;
+  bool is_privileged() const override;
+#if BUILDFLAG(IS_LINUX)
+  bool is_multi_process() const override;
+#endif
 };
 
 MockDaemonControllerDelegate::MockDaemonControllerDelegate() = default;
@@ -194,8 +200,8 @@ DaemonController::State MockDaemonControllerDelegate::GetState() {
   return DaemonController::STATE_STARTED;
 }
 
-std::optional<base::Value::Dict> MockDaemonControllerDelegate::GetConfig() {
-  return base::Value::Dict();
+std::optional<base::DictValue> MockDaemonControllerDelegate::GetConfig() {
+  return base::DictValue();
 }
 
 void MockDaemonControllerDelegate::CheckPermission(
@@ -205,7 +211,7 @@ void MockDaemonControllerDelegate::CheckPermission(
 }
 
 void MockDaemonControllerDelegate::SetConfigAndStart(
-    base::Value::Dict config,
+    base::DictValue config,
     bool consent,
     DaemonController::CompletionCallback done) {
   // Verify parameters passed in.
@@ -217,7 +223,7 @@ void MockDaemonControllerDelegate::SetConfigAndStart(
 }
 
 void MockDaemonControllerDelegate::UpdateConfig(
-    base::Value::Dict config,
+    base::DictValue config,
     DaemonController::CompletionCallback done) {
   if (config.Find("update")) {
     std::move(done).Run(DaemonController::RESULT_OK);
@@ -240,6 +246,16 @@ MockDaemonControllerDelegate::GetUsageStatsConsent() {
   return consent;
 }
 
+bool MockDaemonControllerDelegate::is_privileged() const {
+  return true;
+}
+
+#if BUILDFLAG(IS_LINUX)
+bool MockDaemonControllerDelegate::is_multi_process() const {
+  return false;
+}
+#endif
+
 class Me2MeNativeMessagingHostTest : public testing::Test {
  public:
   Me2MeNativeMessagingHostTest();
@@ -253,7 +269,7 @@ class Me2MeNativeMessagingHostTest : public testing::Test {
   void SetUp() override;
   void TearDown() override;
 
-  std::optional<base::Value::Dict> ReadMessageFromOutputPipe();
+  std::optional<base::DictValue> ReadMessageFromOutputPipe();
 
   void WriteMessageToInputPipe(const base::ValueView& message);
 
@@ -366,10 +382,9 @@ void Me2MeNativeMessagingHostTest::StartHost() {
                              base::Unretained(this))),
           test_url_loader_factory_);
 
-  std::unique_ptr<remoting::Me2MeNativeMessagingHost> host(
-      new Me2MeNativeMessagingHost(false, 0, std::move(context),
-                                   daemon_controller, pairing_registry,
-                                   std::move(oauth_client)));
+  auto host = std::make_unique<Me2MeNativeMessagingHost>(
+      0, std::move(context), daemon_controller, pairing_registry,
+      std::move(oauth_client));
   host->Start(native_messaging_pipe_.get());
 
   native_messaging_pipe_->Start(std::move(host), std::move(channel));
@@ -411,7 +426,7 @@ void Me2MeNativeMessagingHostTest::TearDown() {
   test_run_loop_->Run();
 
   // Verify there are no more message in the output pipe.
-  std::optional<base::Value::Dict> response = ReadMessageFromOutputPipe();
+  std::optional<base::DictValue> response = ReadMessageFromOutputPipe();
   EXPECT_FALSE(response);
 
   // The It2MeMe2MeNativeMessagingHost dtor closes the handles that are passed
@@ -419,24 +434,22 @@ void Me2MeNativeMessagingHostTest::TearDown() {
   output_read_file_.Close();
 }
 
-std::optional<base::Value::Dict>
+std::optional<base::DictValue>
 Me2MeNativeMessagingHostTest::ReadMessageFromOutputPipe() {
   while (true) {
     uint32_t length;
-    int read_result = UNSAFE_TODO(output_read_file_.ReadAtCurrentPos(
-        reinterpret_cast<char*>(&length), sizeof(length)));
-    if (read_result != sizeof(length)) {
+    if (!output_read_file_.ReadAtCurrentPosAndCheck(
+            base::byte_span_from_ref(length))) {
       return std::nullopt;
     }
 
     std::string message_json(length, '\0');
-    read_result = UNSAFE_TODO(
-        output_read_file_.ReadAtCurrentPos(std::data(message_json), length));
-    if (read_result != static_cast<int>(length)) {
+    if (!output_read_file_.ReadAtCurrentPosAndCheck(
+            base::as_writable_byte_span(message_json))) {
       return std::nullopt;
     }
 
-    std::optional<base::Value::Dict> message = base::JSONReader::ReadDict(
+    std::optional<base::DictValue> message = base::JSONReader::ReadDict(
         message_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (!message) {
       return std::nullopt;
@@ -460,7 +473,7 @@ void Me2MeNativeMessagingHostTest::WriteMessageToInputPipe(
 }
 
 void Me2MeNativeMessagingHostTest::TestBadRequest(const base::Value& message) {
-  base::Value::Dict good_message;
+  base::DictValue good_message;
   good_message.Set("type", "hello");
 
   // This test currently relies on synchronous processing of hello messages and
@@ -470,7 +483,7 @@ void Me2MeNativeMessagingHostTest::TestBadRequest(const base::Value& message) {
   WriteMessageToInputPipe(good_message);
 
   // Read from output pipe, and verify responses.
-  std::optional<base::Value::Dict> response = ReadMessageFromOutputPipe();
+  std::optional<base::DictValue> response = ReadMessageFromOutputPipe();
   ASSERT_TRUE(response);
   VerifyHelloResponse(std::move(*response));
 
@@ -482,7 +495,7 @@ void Me2MeNativeMessagingHostTest::TestBadRequest(const base::Value& message) {
 // Test all valid request-types.
 TEST_F(Me2MeNativeMessagingHostTest, All) {
   int next_id = 0;
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("id", next_id++);
   message.Set("type", "hello");
   WriteMessageToInputPipe(message);
@@ -519,7 +532,7 @@ TEST_F(Me2MeNativeMessagingHostTest, All) {
   WriteMessageToInputPipe(message);
 
   // Following messages require a "config" dictionary.
-  base::Value::Dict config;
+  base::DictValue config;
   config.Set("update", true);
   message.Set("config", config.Clone());
   message.Set("id", next_id++);
@@ -539,7 +552,7 @@ TEST_F(Me2MeNativeMessagingHostTest, All) {
   message.Set("authorizationCode", "fake_auth_code");
   WriteMessageToInputPipe(message);
 
-  auto verify_routines = std::to_array<void (*)(const base::Value::Dict&)>({
+  auto verify_routines = std::to_array<void (*)(const base::DictValue&)>({
       &VerifyHelloResponse,
       &VerifyGetHostNameResponse,
       &VerifyGetPinHashResponse,
@@ -552,11 +565,11 @@ TEST_F(Me2MeNativeMessagingHostTest, All) {
       &VerifyStartDaemonResponse,
       &VerifyGetCredentialsFromAuthCodeResponse,
   });
-  ASSERT_EQ(std::size(verify_routines), static_cast<size_t>(next_id));
+  ASSERT_EQ(static_cast<size_t>(next_id), std::size(verify_routines));
 
   // Read all responses from output pipe, and verify them.
   for (int i = 0; i < next_id; ++i) {
-    std::optional<base::Value::Dict> response = ReadMessageFromOutputPipe();
+    std::optional<base::DictValue> response = ReadMessageFromOutputPipe();
     ASSERT_TRUE(response);
 
     // Make sure that id is available and is in the range.
@@ -575,13 +588,13 @@ TEST_F(Me2MeNativeMessagingHostTest, All) {
 
 // Verify that response ID matches request ID.
 TEST_F(Me2MeNativeMessagingHostTest, Id) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "hello");
   WriteMessageToInputPipe(message);
   message.Set("id", "42");
   WriteMessageToInputPipe(message);
 
-  std::optional<base::Value::Dict> response = ReadMessageFromOutputPipe();
+  std::optional<base::DictValue> response = ReadMessageFromOutputPipe();
   EXPECT_TRUE(response);
   std::string* value = response->FindString("id");
   EXPECT_FALSE(value);
@@ -590,7 +603,7 @@ TEST_F(Me2MeNativeMessagingHostTest, Id) {
   EXPECT_TRUE(response);
   value = response->FindString("id");
   EXPECT_TRUE(value);
-  EXPECT_EQ("42", *value);
+  EXPECT_EQ(*value, "42");
 }
 
 // Verify non-Dictionary requests are rejected.
@@ -605,14 +618,14 @@ TEST_F(Me2MeNativeMessagingHostTest, MissingType) {
 
 // Verify rejection if type is unrecognized.
 TEST_F(Me2MeNativeMessagingHostTest, InvalidType) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "xxx");
   TestBadRequest(base::Value(std::move(message)));
 }
 
 // Verify rejection if getPinHash request has no hostId.
 TEST_F(Me2MeNativeMessagingHostTest, GetPinHashNoHostId) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "getPinHash");
   message.Set("pin", "1234");
   TestBadRequest(base::Value(std::move(message)));
@@ -620,7 +633,7 @@ TEST_F(Me2MeNativeMessagingHostTest, GetPinHashNoHostId) {
 
 // Verify rejection if getPinHash request has no pin.
 TEST_F(Me2MeNativeMessagingHostTest, GetPinHashNoPin) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "getPinHash");
   message.Set("hostId", "my_host");
   TestBadRequest(base::Value(std::move(message)));
@@ -628,15 +641,16 @@ TEST_F(Me2MeNativeMessagingHostTest, GetPinHashNoPin) {
 
 // Verify rejection if updateDaemonConfig request has invalid config.
 TEST_F(Me2MeNativeMessagingHostTest, UpdateDaemonConfigInvalidConfig) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "updateDaemonConfig");
   message.Set("config", "xxx");
   TestBadRequest(base::Value(std::move(message)));
 }
 
+#if !BUILDFLAG(IS_LINUX)
 // Verify rejection if startDaemon request has invalid config.
 TEST_F(Me2MeNativeMessagingHostTest, StartDaemonInvalidConfig) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "startDaemon");
   message.Set("config", "xxx");
   message.Set("consent", true);
@@ -645,15 +659,16 @@ TEST_F(Me2MeNativeMessagingHostTest, StartDaemonInvalidConfig) {
 
 // Verify rejection if startDaemon request has no "consent" parameter.
 TEST_F(Me2MeNativeMessagingHostTest, StartDaemonNoConsent) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "startDaemon");
-  message.Set("config", base::Value::Dict());
+  message.Set("config", base::DictValue());
   TestBadRequest(base::Value(std::move(message)));
 }
+#endif  // !BUILDFLAG(IS_LINUX)
 
 // Verify rejection if getCredentialsFromAuthCode has no auth code.
 TEST_F(Me2MeNativeMessagingHostTest, GetCredentialsFromAuthCodeNoAuthCode) {
-  base::Value::Dict message;
+  base::DictValue message;
   message.Set("type", "getCredentialsFromAuthCode");
   TestBadRequest(base::Value(std::move(message)));
 }

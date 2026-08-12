@@ -7,6 +7,7 @@ import {html} from '//resources/lit/v3_0/lit.rollup.js';
 import type {ProfileTypeChoiceElement} from './profile_type_choice.js';
 
 export function getHtml(this: ProfileTypeChoiceElement) {
+  // clang-format off
   return html`<!--_html_template_start_-->
 <div id="headerContainer"
     .style="--theme-frame-color:${this.profileThemeInfo.themeFrameColor};
@@ -28,15 +29,41 @@ export function getHtml(this: ProfileTypeChoiceElement) {
   <div class="subtitle">$i18n{profileTypeChoiceSubtitle}</div>
 </div>
 <div id="actionContainer">
-  <cr-button id="signInButton" class="action-button"
-      @click="${this.onSignInClick_}"
-      ?disabled="${this.profileCreationInProgress}">
-    $i18n{signInButtonLabel}
-  </cr-button>
-  <cr-button id="notNowButton" @click="${this.onNotNowClick_}"
-      ?disabled="${this.profileCreationInProgress}">
-    $i18n{declineSignInButtonLabel}
-  </cr-button>
+  ${this.isRefreshedUi_ ? html`
+    <if expr="not is_win">
+      <cr-button id="notNowButton"
+          class="tonal-button"
+          @click="${this.onNotNowClick_}"
+          ?disabled="${this.profileCreationInProgress}">
+        $i18n{declineSignInButtonLabel}
+      </cr-button>
+    </if>
+    <cr-button id="signInButton" class="action-button"
+        @click="${this.onSignInClick_}"
+        ?disabled="${this.profileCreationInProgress}">
+      $i18n{signInButtonLabel}
+    </cr-button>
+    <if expr="is_win">
+      <cr-button id="notNowButton"
+          class="tonal-button"
+          @click="${this.onNotNowClick_}"
+          ?disabled="${this.profileCreationInProgress}">
+        $i18n{declineSignInButtonLabel}
+      </cr-button>
+    </if>
+  ` : html`
+    <cr-button id="signInButton" class="action-button"
+        @click="${this.onSignInClick_}"
+        ?disabled="${this.profileCreationInProgress}">
+      $i18n{signInButtonLabel}
+    </cr-button>
+    <cr-button id="notNowButton"
+        class="tonal-button"
+        @click="${this.onNotNowClick_}"
+        ?disabled="${this.profileCreationInProgress}">
+      $i18n{declineSignInButtonLabel}
+    </cr-button>
+  `}
 </div>
 
 ${this.managedDeviceDisclaimer_ ? html`
@@ -50,4 +77,5 @@ ${this.managedDeviceDisclaimer_ ? html`
   </div>
 ` : ''}
 <!--_html_template_end_-->`;
+  // clang-format on
 }

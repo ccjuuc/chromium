@@ -5,13 +5,11 @@
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_GRAPH_WORKER_NODE_IMPL_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_GRAPH_WORKER_NODE_IMPL_H_
 
-#include <memory>
-#include <string>
-
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/pass_key.h"
+#include "base/unguessable_token.h"
 #include "components/performance_manager/execution_context/execution_context_impl.h"
 #include "components/performance_manager/graph/node_attached_data_storage.h"
 #include "components/performance_manager/graph/node_base.h"
@@ -40,7 +38,7 @@ class WorkerNodeImpl
 
   using TypedNodeBase<WorkerNodeImpl, WorkerNode, WorkerNodeObserver>::FromNode;
 
-  WorkerNodeImpl(const std::string& browser_context_id,
+  WorkerNodeImpl(const base::UnguessableToken& browser_context_id,
                  WorkerType worker_type,
                  ProcessNodeImpl* process_node,
                  const blink::WorkerToken& worker_token,
@@ -53,14 +51,14 @@ class WorkerNodeImpl
 
   // Partial WorkerNode implementation:
   WorkerType GetWorkerType() const override;
-  const std::string& GetBrowserContextID() const override;
+  const base::UnguessableToken& GetBrowserContextID() const override;
   const blink::WorkerToken& GetWorkerToken() const override;
   resource_attribution::WorkerContext GetResourceContext() const override;
   const GURL& GetURL() const override;
   const url::Origin& GetOrigin() const override;
   const PriorityAndReason& GetPriorityAndReason() const override;
-  base::ByteCount GetResidentSetEstimate() const override;
-  base::ByteCount GetPrivateFootprintEstimate() const override;
+  base::ByteSize GetResidentSetEstimate() const override;
+  base::ByteSize GetPrivateFootprintEstimate() const override;
 
   // Invoked when a frame starts/stops being a client of this worker.
   void AddClientFrame(FrameNodeImpl* frame_node);
@@ -72,8 +70,8 @@ class WorkerNodeImpl
 
   // Setters are not thread safe.
   void SetPriorityAndReason(const PriorityAndReason& priority_and_reason);
-  void SetResidentSetEstimate(base::ByteCount rss_estimate);
-  void SetPrivateFootprintEstimate(base::ByteCount pmf_estimate);
+  void SetResidentSetEstimate(base::ByteSize rss_estimate);
+  void SetPrivateFootprintEstimate(base::ByteSize pmf_estimate);
 
   // Invoked when the worker script was fetched and the final response URL is
   // available.
@@ -110,7 +108,7 @@ class WorkerNodeImpl
   void RemoveChildWorker(WorkerNodeImpl* worker_node);
 
   // The unique ID of the browser context that this worker belongs to.
-  const std::string browser_context_id_;
+  const base::UnguessableToken browser_context_id_;
 
   // The type of this worker.
   const WorkerType worker_type_;
@@ -144,16 +142,16 @@ class WorkerNodeImpl
   // distinction between client workers and child workers.
   NodeSet child_workers_ GUARDED_BY_CONTEXT(sequence_checker_);
 
-  base::ByteCount resident_set_estimate_;
+  base::ByteSize resident_set_estimate_;
 
-  base::ByteCount private_footprint_estimate_;
+  base::ByteSize private_footprint_estimate_;
 
   // Worker priority information. Set via ExecutionContextPriorityDecorator.
   ObservedProperty::NotifiesOnlyOnChangesWithPreviousValue<
       PriorityAndReason,
       &WorkerNodeObserver::OnPriorityAndReasonChanged>
       priority_and_reason_ GUARDED_BY_CONTEXT(sequence_checker_){
-          PriorityAndReason(base::TaskPriority::LOWEST,
+          PriorityAndReason(base::Process::Priority::kMinValue,
                             kDefaultPriorityReason)};
 
   base::WeakPtrFactory<WorkerNodeImpl> weak_factory_

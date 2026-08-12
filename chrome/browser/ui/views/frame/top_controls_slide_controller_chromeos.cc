@@ -12,13 +12,14 @@
 #include "cc/input/browser_controls_state.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/ssl/chrome_security_state_util.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/common/url_constants.h"
 #include "components/permissions/permission_request_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
+#include "content/public/browser/editable_level.h"
 #include "content/public/browser/focused_node_details.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -36,8 +37,22 @@
 #include "ui/display/screen.h"
 #include "ui/display/tablet_state.h"
 #include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
+
+// Handles the case where the layer may be in a transitional state during
+// layout. See crbug.com/470873053.
+void MaybeSetMasksToBounds(views::Widget* widget, bool masks_to_bounds) {
+  if (!widget) {
+    return;
+  }
+  ui::Layer* layer = widget->GetLayer();
+  if (!layer || !layer->GetCompositor()) {
+    return;
+  }
+  layer->SetMasksToBounds(masks_to_bounds);
+}
 
 bool IsSpokenFeedbackEnabled() {
   auto* accessibility_manager = ash::AccessibilityManager::Get();
@@ -78,8 +93,7 @@ cc::BrowserControlsState GetBrowserControlsStateConstraints(
     return cc::BrowserControlsState::kShown;
   }
 
-  auto* helper = SecurityStateTabHelper::FromWebContents(contents);
-  switch (helper->GetSecurityLevel()) {
+  switch (chrome_security_state::GetSecurityLevel(contents)) {
     case security_state::WARNING:
     case security_state::DANGEROUS:
       return cc::BrowserControlsState::kShown;
@@ -223,7 +237,8 @@ class TopControlsSlideTabObserver
     // Even if a non-editable node gets focused, if top-chrome is fully shown,
     // we should also update the browser controls state constraints so that
     // top-chrome is able to be hidden again.
-    if (details.is_editable_node || shown_ratio_ == 1.f) {
+    if (details.editable_level != content::EditableLevel::kNotEditable ||
+        shown_ratio_ == 1.f) {
       UpdateBrowserControlsStateShown(/*animate=*/true);
     }
   }
@@ -271,7 +286,7 @@ class TopControlsSlideTabObserver
   // sliding is in progress. It is updated only once right before sliding begins
   // and remains unchanged until sliding ends, at which point it is updated
   // right before the final layout of the BrowserView.
-  // https://crbug.com/885223.
+  // https://crbug.com/41414489.
   bool shrink_renderer_size_ = true;
 };
 
@@ -286,11 +301,9 @@ TopControlsSlideControllerChromeOS::TopControlsSlideControllerChromeOS(
   DCHECK(browser_view->browser());
   DCHECK(browser_view->GetIsNormalType());
   DCHECK(browser_view->browser()->tab_strip_model());
-  DCHECK(browser_view->GetLocationBarView());
-  DCHECK(browser_view->GetLocationBarView()->omnibox_view());
-
-  observed_omni_box_ = browser_view->GetLocationBarView()->omnibox_view();
-  observed_omni_box_->AddObserver(this);
+  if (LocationBar* location_bar = browser_view->GetLocationBar()) {
+    observed_location_bar_.Observe(location_bar);
+  }
 
   browser_view_->browser()->tab_strip_model()->AddObserver(this);
 
@@ -309,10 +322,6 @@ TopControlsSlideControllerChromeOS::~TopControlsSlideControllerChromeOS() {
   OnEnabledStateChanged(false);
 
   browser_view_->browser()->tab_strip_model()->RemoveObserver(this);
-
-  if (observed_omni_box_) {
-    observed_omni_box_->RemoveObserver(this);
-  }
 }
 
 bool TopControlsSlideControllerChromeOS::IsEnabled() const {
@@ -510,10 +519,12 @@ void TopControlsSlideControllerChromeOS::OnTabStripModelChanged(
   UpdateBrowserControlsStateShown(new_active_contents, /*animate=*/true);
 }
 
-void TopControlsSlideControllerChromeOS::OnTabNeedsAttentionChanged(
-    int index,
-    bool attention) {
-  UpdateBrowserControlsStateShown(/*web_contents=*/nullptr, /*animate=*/true);
+void TopControlsSlideControllerChromeOS::OnTabChangedAt(
+    tabs::TabInterface* tab,
+    TabChangeType change_type) {
+  if (change_type == TabChangeType::kAttentionOnly) {
+    UpdateBrowserControlsStateShown(/*web_contents=*/nullptr, /*animate=*/true);
+  }
 }
 
 void TopControlsSlideControllerChromeOS::OnDisplayMetricsChanged(
@@ -568,22 +579,7 @@ void TopControlsSlideControllerChromeOS::OnDisplayMetricsChanged(
   OnEnabledStateChanged(false);
 }
 
-void TopControlsSlideControllerChromeOS::OnViewIsDeleting(
-    views::View* observed_view) {
-  DCHECK_EQ(observed_view, observed_omni_box_);
-  observed_omni_box_ = nullptr;
-  UpdateBrowserControlsStateShown(/*web_contents=*/nullptr, /*animate=*/true);
-}
-
-void TopControlsSlideControllerChromeOS::OnViewFocused(
-    views::View* observed_view) {
-  DCHECK_EQ(observed_view, observed_omni_box_);
-  UpdateBrowserControlsStateShown(/*web_contents=*/nullptr, /*animate=*/true);
-}
-
-void TopControlsSlideControllerChromeOS::OnViewBlurred(
-    views::View* observed_view) {
-  DCHECK_EQ(observed_view, observed_omni_box_);
+void TopControlsSlideControllerChromeOS::OnLocationBarFocusChanged() {
   UpdateBrowserControlsStateShown(/*web_contents=*/nullptr, /*animate=*/true);
 }
 
@@ -596,10 +592,12 @@ void TopControlsSlideControllerChromeOS::UpdateBrowserControlsStateShown(
     return;
   }
 
+  auto* location_bar = observed_location_bar_.GetSource();
+
   // If the omnibox is focused, then the top controls should be constrained to
   // remain fully shown until the omnibox is blurred.
   const cc::BrowserControlsState constraints_state =
-      observed_omni_box_ && observed_omni_box_->HasFocus()
+      location_bar && location_bar->IsFocusWithin()
           ? cc::BrowserControlsState::kShown
           : GetBrowserControlsStateConstraints(web_contents);
 
@@ -644,7 +642,7 @@ void TopControlsSlideControllerChromeOS::OnEnabledStateChanged(bool new_state) {
     // we get called by the renderer to set the shown ratio to 1.f. Otherwise
     // we will layout the page to a smaller height before the renderer gets
     // to know that it needs to update the shown ratio to 1.f.
-    // https://crbug.com/884453.
+    // https://crbug.com/40593842.
     is_enabled_ = true;
     defer_disabling_ = true;
   } else {
@@ -777,10 +775,8 @@ void TopControlsSlideControllerChromeOS::OnBeginSliding() {
   // deal with layout being performed during the slide.
   root_view->GetWidget()->LayoutRootViewIfNecessary();
 
-  // We don't want anything to show outside the browser window's bounds. Do not
-  // reuse the pointer to the layer of the widget as the layer may be
-  // recreated. (crbug.com/443811562)
-  browser_widget->GetLayer()->SetMasksToBounds(true);
+  // We don't want anything to show outside the browser window's bounds.
+  MaybeSetMasksToBounds(browser_widget, true);
 }
 
 void TopControlsSlideControllerChromeOS::OnEndSliding() {
@@ -846,9 +842,8 @@ void TopControlsSlideControllerChromeOS::OnEndSliding() {
 
   // If the top controls are fully hidden, then the top container is laid out
   // such that its bounds are outside the window. The window should continue to
-  // mask anything outside its bounds. Do not reuse the pointer to the layer of
-  // the widget as the layer may be recreated. (crbug.com/443811562)
-  browser_widget->GetLayer()->SetMasksToBounds(shown_ratio_ < 1.f);
+  // mask anything outside its bounds.
+  MaybeSetMasksToBounds(browser_widget, shown_ratio_ < 1.f);
 }
 
 void TopControlsSlideControllerChromeOS::

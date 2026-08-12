@@ -27,14 +27,14 @@ import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.compositor.layouts.Layout.Orientation;
+import org.chromium.chrome.browser.compositor.overlay_panel.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.layouts.SceneOverlay;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.bottom.ScrollingBottomViewSceneLayer;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarOverlayCoordinator;
 
@@ -55,9 +55,7 @@ public class SceneOverlayTest {
 
     @Mock private ViewGroup mContainerView;
 
-    @Mock private ObservableSupplier<TabContentManager> mTabContentManagerSupplier;
-
-    @Mock private TopUiThemeColorProvider mTopUiThemeColorProvider;
+    @Mock private ToolbarThemeColorProvider mToolbarThemeColorProvider;
 
     // Use different classes so the overlays can be uniquely ordered. Each supported class has an
     // assigned slot; multiple SceneOverlays of the same class are ordered within that slot by time
@@ -71,6 +69,8 @@ public class SceneOverlayTest {
     @Mock private Layout mLayout;
 
     private final DisplayMetrics mDisplayMetrics = new DisplayMetrics();
+    private final MonotonicObservableSupplier<TabContentManager> mTabContentManagerSupplier =
+            ObservableSuppliers.alwaysNull();
     private LayoutManagerImpl mLayoutManager;
 
     @Before
@@ -80,22 +80,22 @@ public class SceneOverlayTest {
         when(mContext.getResources()).thenReturn(mResources);
         when(mResources.getDisplayMetrics()).thenReturn(mDisplayMetrics);
 
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay1)
                 .getHandleBackPressChangedSupplier();
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay2)
                 .getHandleBackPressChangedSupplier();
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay3)
                 .getHandleBackPressChangedSupplier();
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay4)
                 .getHandleBackPressChangedSupplier();
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay5)
                 .getHandleBackPressChangedSupplier();
-        doReturn(new ObservableSupplierImpl<>())
+        doReturn(ObservableSuppliers.alwaysFalse())
                 .when(mOverlay6)
                 .getHandleBackPressChangedSupplier();
 
@@ -104,7 +104,7 @@ public class SceneOverlayTest {
                         mLayoutManagerHost,
                         mContainerView,
                         mTabContentManagerSupplier,
-                        () -> mTopUiThemeColorProvider);
+                        () -> mToolbarThemeColorProvider);
     }
 
     @Test

@@ -5,13 +5,13 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/device/device_keyboard_handler.h"
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/observer_list.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "content/public/test/test_web_ui.h"
@@ -57,7 +57,7 @@ class KeyboardHandlerTest : public ChromeAshTestBase {
       bool* has_internal_search_out,
       bool* has_assistant_key_out) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_.call_data())) {
+         std::views::reverse(web_ui_.call_data())) {
       const std::string* name = data->arg1()->GetIfString();
       if (data->function_name() != "cr.webUIListenerCallback" || !name ||
           *name != KeyboardHandler::kShowKeysChangedName) {
@@ -68,7 +68,7 @@ class KeyboardHandlerTest : public ChromeAshTestBase {
         return false;
       }
 
-      const base::Value::Dict& keyboard_params = data->arg2()->GetDict();
+      const base::DictValue& keyboard_params = data->arg2()->GetDict();
       const std::vector<std::pair<std::string, bool*>> path_to_out_param = {
           {"showCapsLock", has_caps_lock_out},
           {"showExternalMetaKey", has_external_meta_key_out},
@@ -313,7 +313,7 @@ TEST_F(KeyboardHandlerTest, ExternalKeyboard) {
   // Some keyboard devices don't report the string "keyboard" as part of their
   // device names. Those should also be detected as external keyboards, and
   // should show the capslock and external meta remapping.
-  // https://crbug.com/834594.
+  // https://crbug.com/40572504.
   device_data_manager_test_api_.SetKeyboardDevices(
       std::vector<ui::KeyboardDevice>{
           {6, ui::INPUT_DEVICE_USB, "Topre Corporation Realforce 87", "",

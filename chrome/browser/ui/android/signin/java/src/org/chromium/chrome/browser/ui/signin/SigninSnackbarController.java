@@ -17,8 +17,7 @@ import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.components.signin.metrics.SignoutReason;
@@ -45,7 +44,7 @@ class SigninSnackbarController implements SnackbarManager.SnackbarController {
          * callback executes after the user has been signed out and history sync has been optionally
          * opted out.
          */
-        void onUndoSignin();
+        void onSigninUndone();
     }
 
     private final Activity mActivity;
@@ -90,7 +89,7 @@ class SigninSnackbarController implements SnackbarManager.SnackbarController {
                 mSnackbarManager,
                 mSignoutReason,
                 () -> {
-                    assertNonNull(mListener).onUndoSignin();
+                    assertNonNull(mListener).onSigninUndone();
                     mListener = null;
                 });
     }
@@ -119,8 +118,7 @@ class SigninSnackbarController implements SnackbarManager.SnackbarController {
             // with the X button.
             IdentityManager identityManager =
                     assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile));
-            CoreAccountInfo accountInfo =
-                    identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
+            @Nullable AccountInfo accountInfo = identityManager.getPrimaryAccountInfo();
             if (accountInfo == null) {
                 return;
             }
@@ -151,6 +149,9 @@ class SigninSnackbarController implements SnackbarManager.SnackbarController {
 
         } else if (signinAccessPoint == SigninAccessPoint.RECENT_TABS) {
             return SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_RECENT_TABS;
+
+        } else if (signinAccessPoint == SigninAccessPoint.SETTINGS_AUTOFILL_AND_PASSWORDS) {
+            return SignoutReason.USER_TAPPED_UNDO_RIGHT_AFTER_SIGN_IN_FROM_AUTOFILL_AND_PASSWORDS;
         }
 
         throw new IllegalStateException("Forbidden access point: " + signinAccessPoint);

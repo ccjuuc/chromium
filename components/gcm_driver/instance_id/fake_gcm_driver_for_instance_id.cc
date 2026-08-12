@@ -69,6 +69,11 @@ FakeGCMDriverForInstanceID::FakeGCMDriverForInstanceID(
 
 FakeGCMDriverForInstanceID::~FakeGCMDriverForInstanceID() = default;
 
+base::WeakPtr<FakeGCMDriverForInstanceID>
+FakeGCMDriverForInstanceID::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 gcm::InstanceIDHandler*
 FakeGCMDriverForInstanceID::GetInstanceIDHandlerInternal() {
   return this;
@@ -219,7 +224,7 @@ void FakeGCMDriverForInstanceID::StoreTokensIfNeeded() {
     return;
   }
 
-  base::Value::Dict value;
+  base::DictValue value;
   for (const auto& key_and_token : tokens_) {
     value.Set(key_and_token.first, key_and_token.second);
   }

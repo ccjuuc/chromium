@@ -118,7 +118,7 @@ def cq_build_perf_builder(description_html, **kwargs):
             "scandeps_server": True,
         }
     return ci.builder(
-        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_gaAdI3x6o6\">http://shortn/_gaAdI3x6o6</a>.",
+        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_wiYV1BraSr\">http://shortn/_wiYV1BraSr</a>.",
         siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
         siso_project = siso.project.DEFAULT_UNTRUSTED,
         use_clang_coverage = True,
@@ -131,47 +131,11 @@ def ci_build_perf_builder(description_html, **kwargs):
     if not "siso_configs" in kwargs:
         kwargs["siso_configs"] = ["builder", "remote-link"]
     return ci.builder(
-        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_gaAdI3x6o6\">http://shortn/_gaAdI3x6o6</a>.",
+        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_wiYV1BraSr\">http://shortn/_wiYV1BraSr</a>.",
         siso_remote_jobs = siso.remote_jobs.DEFAULT,
         siso_project = siso.project.DEFAULT_TRUSTED,
         **kwargs
     )
-
-cq_build_perf_builder(
-    name = "android-build-perf-ninja",
-    description_html = "This builder measures Android CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "android-arm64-rel-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "ninja_staging",
-                "android",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "main_builder",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.RELEASE,
-            target_arch = builder_config.target_arch.ARM,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.ANDROID,
-        ),
-        android_config = builder_config.android_config(
-            config = "base_config",
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/android-arm64-rel", "reclient", "no_siso"]),
-    os = os.LINUX_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|android",
-        short_name = "ninja",
-    ),
-    siso_enabled = False,
-)
 
 cq_build_perf_builder(
     name = "android-build-perf-siso",
@@ -209,36 +173,7 @@ cq_build_perf_builder(
         category = "build perf|android",
         short_name = "siso",
     ),
-)
-
-cq_build_perf_builder(
-    name = "linux-build-perf-ninja",
-    description_html = "This builder measures Linux CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "linux-rel-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "android",
-                "ninja_staging",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            target_platform = builder_config.target_platform.LINUX,
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/linux-rel", "reclient", "no_siso"]),
-    os = os.LINUX_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|linux",
-        short_name = "ninja",
-    ),
-    siso_enabled = False,
+    siso_profile_mode = "local",
 )
 
 cq_build_perf_builder(
@@ -270,35 +205,7 @@ cq_build_perf_builder(
         category = "build perf|linux",
         short_name = "siso",
     ),
-)
-
-cq_build_perf_builder(
-    name = "win-build-perf-ninja",
-    description_html = "This builder measures Windows CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "win-rel-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "ninja_staging",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            target_platform = builder_config.target_platform.WIN,
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/win-rel", "reclient", "no_siso"]),
-    os = os.WINDOWS_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|windows",
-        short_name = "ninja",
-    ),
-    siso_enabled = False,
+    siso_profile_mode = "local",
 )
 
 cq_build_perf_builder(
@@ -330,6 +237,8 @@ cq_build_perf_builder(
         category = "build perf|windows",
         short_name = "siso",
     ),
+    # Enabling local profiler hangs windows builders (http://b/476821630). So set cloud explicitly here.
+    siso_profile_mode = "cloud",
 )
 
 ci_build_perf_builder(
@@ -365,36 +274,8 @@ ci_build_perf_builder(
     # TODO(333491525): enable no-fallback once OOM fallback mitigated.
     siso_experiments = [],
     siso_limits = "fastlocal=0",
-)
-
-cq_build_perf_builder(
-    name = "linux-chromeos-build-perf-ninja",
-    description_html = "This builder measures CrOS CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "linux-chromeos-rel-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "chromeos",
-                "ninja_staging",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            target_platform = builder_config.target_platform.CHROMEOS,
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/linux-chromeos-rel", "reclient", "no_siso"]),
-    os = os.LINUX_DEFAULT,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|cros",
-        short_name = "ninja",
-    ),
-    siso_enabled = False,
+    # Enabling local profiler hangs windows builders (http://b/476821630). So set cloud explicitly here.
+    siso_profile_mode = "cloud",
 )
 
 cq_build_perf_builder(
@@ -427,39 +308,7 @@ cq_build_perf_builder(
         category = "build perf|cros",
         short_name = "siso",
     ),
-)
-
-cq_build_perf_builder(
-    name = "mac-build-perf-ninja",
-    description_html = "This builder measures Mac CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "mac-rel-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "chromium",
-            apply_configs = [
-                "ninja_staging",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-            ],
-            build_config = builder_config.build_config.RELEASE,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.MAC,
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/mac-rel", "reclient", "no_siso"]),
-    os = os.MAC_DEFAULT,
-    cpu = cpu.ARM64,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|mac",
-        short_name = "ninja",
-    ),
-    siso_configs = ["builder"],
-    siso_enabled = False,
+    siso_profile_mode = "local",
 )
 
 cq_build_perf_builder(
@@ -495,41 +344,7 @@ cq_build_perf_builder(
         short_name = "siso",
     ),
     siso_configs = ["builder"],
-)
-
-cq_build_perf_builder(
-    name = "ios-build-perf-ninja",
-    description_html = "This builder measures iOS CQ build performance with Ninja.<br/>" +
-                       "The build configs and the bot specs should be in sync with " + linkify_builder("try", "ios-simulator-compilator", "chromium"),
-    executable = "recipe:chrome_build/build_perf",
-    builder_spec = builder_config.builder_spec(
-        gclient_config = builder_config.gclient_config(
-            config = "ios",
-            apply_configs = [
-                "ninja_staging",
-            ],
-        ),
-        chromium_config = builder_config.chromium_config(
-            config = "chromium",
-            apply_configs = [
-                "mb",
-                "mac_toolchain",
-            ],
-            build_config = builder_config.build_config.DEBUG,
-            target_bits = 64,
-            target_platform = builder_config.target_platform.IOS,
-        ),
-    ),
-    gn_args = gn_args.config(configs = ["try/ios-simulator", "reclient", "no_siso"]),
-    os = os.MAC_DEFAULT,
-    cpu = cpu.ARM64,
-    console_view_entry = consoles.console_view_entry(
-        category = "build perf|ios",
-        short_name = "ninja",
-    ),
-    siso_configs = ["builder"],
-    siso_enabled = False,
-    xcode = xcode.xcode_default,
+    siso_profile_mode = "local",
 )
 
 cq_build_perf_builder(
@@ -566,13 +381,11 @@ cq_build_perf_builder(
         short_name = "siso",
     ),
     siso_configs = ["builder"],
+    siso_profile_mode = "local",
     xcode = xcode.xcode_default,
 )
 
 def developer_build_perf_builder(description_html, reclient_jobs = None, **kwargs):
-    # Use CQ siso.project and high siso_remote_jobs/cores to simulate CQ builds.
-    if not "siso_configs" in kwargs:
-        kwargs["siso_configs"] = ["remote-link"]
     props = {
         "$build/reclient": {
             "instance": siso.project.DEFAULT_UNTRUSTED,
@@ -582,7 +395,7 @@ def developer_build_perf_builder(description_html, reclient_jobs = None, **kwarg
         },
     }
     return ci.builder(
-        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_gaAdI3x6o6\">http://shortn/_gaAdI3x6o6</a>." +
+        description_html = description_html + "<br>Build stats are shown in <a href=\"http://shortn/_wiYV1BraSr\">http://shortn/_wiYV1BraSr</a>." +
                            "<br>This is also used to compare build performance between w/ and w/o clang modules.",
         executable = "recipe:chrome_build/build_perf_developer",
         # developer build usually interactive and not-batch build.
@@ -622,9 +435,9 @@ This builder measures build performance for Android developer builds, by simulat
         ),
     ),
     gn_args = {
-        "ninja": gn_args.config(configs = ["android_developer", "android_fastbuild", "remoteexec", "no_siso", "reclient"]),
-        "siso_native": gn_args.config(configs = ["android_developer", "android_fastbuild", "remoteexec", "no_reclient"]),
-        "siso_no_clang_modules": gn_args.config(configs = ["android_developer", "android_fastbuild", "remoteexec", "no_reclient", "no_clang_modules"]),
+        "ninja": gn_args.config(configs = ["android_developer", "remoteexec", "no_siso", "reclient"]),
+        "siso_native": gn_args.config(configs = ["android_developer", "remoteexec", "no_reclient"]),
+        "siso_no_clang_modules": gn_args.config(configs = ["android_developer", "remoteexec", "no_reclient", "no_clang_modules"]),
     },
     os = os.LINUX_DEFAULT,
     console_view_entry = consoles.console_view_entry(
@@ -632,7 +445,9 @@ This builder measures build performance for Android developer builds, by simulat
         short_name = "dev",
     ),
     reclient_jobs = 5120,
-    siso_remote_jobs = 5120,
+    siso_profile_mode = "local",
+    # Setting -1 makes siso use the default remote concurrency.
+    siso_remote_jobs = -1,
 )
 
 developer_build_perf_builder(
@@ -666,7 +481,9 @@ This builder measures build performance for Linux developer builds, by simulatin
         short_name = "dev",
     ),
     reclient_jobs = 5120,
-    siso_remote_jobs = 5120,
+    siso_profile_mode = "local",
+    # Setting -1 makes siso use the default remote concurrency.
+    siso_remote_jobs = -1,
 )
 
 developer_build_perf_builder(
@@ -690,8 +507,8 @@ This builder measures build performance for Windows developer builds, by simulat
         ),
     ),
     gn_args = {
-        "ninja": gn_args.config(configs = ["developer", "remoteexec", "no_siso", "reclient", "win", "x64"]),
-        "siso_native": gn_args.config(configs = ["developer", "remoteexec", "no_reclient", "win", "x64"]),
+        "ninja": gn_args.config(configs = ["windows_developer", "remoteexec", "no_siso", "reclient"]),
+        "siso_native": gn_args.config(configs = ["windows_developer", "remoteexec", "no_reclient"]),
         # TODO(https://crbug.com/425537956): Add no clang modules build config after enabling clang modules on Windows.
     },
     os = os.WINDOWS_DEFAULT,
@@ -700,7 +517,10 @@ This builder measures build performance for Windows developer builds, by simulat
         short_name = "dev",
     ),
     reclient_jobs = 1000,
-    siso_remote_jobs = 5120,  # Siso doesn't set remote limit for Window builds.
+    # Enabling local profiler hangs windows builders (http://b/476821630). So set cloud explicitly here.
+    siso_profile_mode = "cloud",
+    # Setting -1 makes siso use the default remote concurrency.
+    siso_remote_jobs = -1,
 )
 
 developer_build_perf_builder(
@@ -724,9 +544,9 @@ This builder measures build performance for Mac developer builds, by simulating 
         ),
     ),
     gn_args = {
-        "ninja": gn_args.config(configs = ["developer", "remoteexec", "no_siso", "reclient", "mac", "arm64"]),
-        "siso_native": gn_args.config(configs = ["developer", "remoteexec", "no_reclient", "mac", "arm64"]),
-        "siso_no_clang_modules": gn_args.config(configs = ["developer", "remoteexec", "no_reclient", "mac", "arm64", "no_clang_modules"]),
+        "ninja": gn_args.config(configs = ["mac_developer", "remoteexec", "no_siso", "reclient"]),
+        "siso_native": gn_args.config(configs = ["mac_developer", "remoteexec", "no_reclient"]),
+        "siso_no_clang_modules": gn_args.config(configs = ["mac_developer", "remoteexec", "no_reclient", "no_clang_modules"]),
     },
     os = os.MAC_DEFAULT,
     cpu = cpu.ARM64,
@@ -736,7 +556,9 @@ This builder measures build performance for Mac developer builds, by simulating 
     ),
     reclient_jobs = 640,
     siso_configs = [],
-    siso_remote_jobs = 5120,  # Siso doesn't set remote limit for Mac builds.
+    siso_profile_mode = "local",
+    # Setting -1 makes siso use the default remote concurrency.
+    siso_remote_jobs = -1,
 )
 
 developer_build_perf_builder(
@@ -775,14 +597,16 @@ This builder measures build performance for iOS developer builds, by simulating 
     ),
     reclient_jobs = 640,
     siso_configs = [],
-    siso_remote_jobs = 5120,  # Siso doesn't set remote limit for iOS builds.
+    siso_profile_mode = "local",
+    # Setting -1 makes siso use the default remote concurrency.
+    siso_remote_jobs = -1,
     xcode = xcode.xcode_default,
 )
 
 # Experimental builder set up to track local CPU time for Chromium build. b/333389736
 ci.builder(
     name = "linux-build-perf-no-rbe",
-    description_html = "Monitoring CPU time to build `chrome` target locally without remote executions.<br>Build stats are shown in <a href=\"http://shortn/_gaAdI3x6o6\">http://shortn/_gaAdI3x6o6</a>.",
+    description_html = "Monitoring CPU time to build `chrome` target locally without remote executions.<br>Build stats are shown in <a href=\"http://shortn/_wiYV1BraSr\">http://shortn/_wiYV1BraSr</a>.",
     executable = "recipe:chrome_build/build_perf_without_rbe",
     builder_spec = builder_config.builder_spec(
         gclient_config = builder_config.gclient_config(
@@ -815,6 +639,7 @@ ci.builder(
     contact_team_email = "chrome-build-team@google.com",
     notifies = ["Chromium Build Time Watcher"],
     siso_fail_if_reapi_used = True,
+    siso_profile_mode = "local",
     siso_project = siso.project.DEFAULT_UNTRUSTED,
 )
 

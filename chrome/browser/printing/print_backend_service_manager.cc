@@ -12,7 +12,6 @@
 #include <variant>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -43,16 +42,9 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/win_util.h"
-#include "chrome/browser/printing/printer_xml_parser_impl.h"
-#include "chrome/services/printing/public/mojom/printer_xml_parser.mojom.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "printing/backend/win_helper.h"
 #include "printing/printed_page_win.h"
 #include "ui/views/win/hwnd_util.h"
-#endif
-
-#if BUILDFLAG(ENABLE_OOP_BASIC_PRINT_DIALOG)
-#include "base/notreached.h"
 #endif
 
 namespace printing {
@@ -245,13 +237,6 @@ void PrintBackendServiceManager::UnregisterClient(ClientId id) {
                                                      remote_id.value());
   if (new_timeout.has_value())
     UpdateServiceIdleTimeoutByRemoteId(remote_id.value(), new_timeout.value());
-
-#if BUILDFLAG(IS_WIN)
-  if (base::FeatureList::IsEnabled(features::kReadPrinterCapabilitiesWithXps) &&
-      query_clients_.empty()) {
-    xml_parser_.reset();
-  }
-#endif  // BUILDFLAG(IS_WIN)
 }
 
 void PrintBackendServiceManager::EnumeratePrinters(
@@ -448,7 +433,7 @@ void PrintBackendServiceManager::UpdatePrintSettings(
     ClientId client_id,
     const std::string& printer_name,
     ContextId context_id,
-    base::Value::Dict job_settings,
+    base::DictValue job_settings,
     mojom::PrintBackendService::UpdatePrintSettingsCallback callback) {
   // A blank `printer_name` indicates the destination is unknown, which occurs
   // when initiating a system print dialog.  When printing a document the
@@ -682,7 +667,7 @@ PrintBackendServiceManager::GetRemoteIdForPrinterName(
       !features::kEnableOopPrintDriversSingleProcess.Get()) {
     // Windows drivers are not thread safe.  Use a process per driver to prevent
     // bad interactions when interfacing to multiple drivers in parallel.
-    // https://crbug.com/957242
+    // https://crbug.com/41455488
     auto iter = remote_id_map_.find(printer_name);
     if (iter != remote_id_map_.end()) {
       return iter->second;
@@ -760,8 +745,8 @@ PrintBackendServiceManager::RegisterClient(
   // System print is a special case because it can display a system dialog and
   // is window modal.  In this scenario we do not want the print backend to
   // self-terminate even if the user is idle for a long period of time.
-  if (base::Contains(sandboxed_remotes_bundles_, remote_id) ||
-      base::Contains(unsandboxed_remotes_bundles_, remote_id) ||
+  if (sandboxed_remotes_bundles_.contains(remote_id) ||
+      unsandboxed_remotes_bundles_.contains(remote_id) ||
       sandboxed_service_remote_for_test_) {
     // Service already existed, possibly was recently marked for being reset
     // with a short timeout or is already in use for other client types.
@@ -801,7 +786,7 @@ bool PrintBackendServiceManager::PrinterDriverKnownToRequireElevatedPrivilege(
     ClientType client_type) const {
   // Any Windows printer driver which causes a UI dialog to be displayed does
   // not work if printing is started from within a sandboxed environment.
-  // crbug.com/1243873
+  // crbug.com/40787526
   switch (client_type) {
     case ClientType::kQuery:
       return false;
@@ -912,22 +897,8 @@ PrintBackendServiceManager::GetServiceFromBundle(
     // We may want to have the service terminated when idle.
     SetServiceIdleHandler(service, sandboxed, remote_id,
                           GetClientTypeIdleTimeout(client_type));
-#if BUILDFLAG(IS_WIN)
-    // Initialize the new service for the desired locale. Bind
-    // PrintBackendService with a Remote that allows pass-through requests to an
-    // XML parser.
-    mojo::PendingRemote<mojom::PrinterXmlParser> remote;
-    if (base::FeatureList::IsEnabled(
-            features::kReadPrinterCapabilitiesWithXps)) {
-      if (!xml_parser_)
-        xml_parser_ = std::make_unique<PrinterXmlParserImpl>();
-      remote = xml_parser_->GetRemote();
-    }
-    service->Init(g_browser_process->GetApplicationLocale(), std::move(remote));
-#else
     // Initialize the new service for the desired locale.
     service->Init(g_browser_process->GetApplicationLocale());
-#endif  // BUILDFLAG(IS_WIN)
   }
 
   return service;

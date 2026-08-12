@@ -80,8 +80,16 @@ namespace subresource_filter {
 class RulesetService;
 }
 
+namespace supervised_user {
+class DeviceParentalControls;
+}  // namespace supervised_user
+
 namespace variations {
 class VariationsService;
+}
+
+namespace activity_reporter {
+class ActivityReporter;
 }
 
 namespace component_updater {
@@ -152,10 +160,6 @@ class BrowserProcess {
   // shutdown.
   virtual void EndSession() = 0;
 
-  // Ensures |local_state()| was flushed to disk and then posts |reply| back on
-  // the current sequence.
-  virtual void FlushLocalStateAndReply(base::OnceClosure reply) = 0;
-
   // Gets the manager for the various metrics-related services, constructing it
   // if necessary.
   virtual metrics_services_manager::MetricsServicesManager*
@@ -216,6 +220,14 @@ class BrowserProcess {
   virtual printing::BackgroundPrintingManager*
   background_printing_manager() = 0;
 
+  // Returns a handle to the manager of device parental controls, which
+  // are independent from the profile. This handler is member of browser process
+  // directly and cannot be moved to GlobalFeatures, because it is also required
+  // early to initialize the pref service on Android.
+  // Platforms not implementing device parental control return a no-op stub.
+  virtual supervised_user::DeviceParentalControls&
+  device_parental_controls() = 0;
+
 #if !BUILDFLAG(IS_ANDROID)
   virtual IntranetRedirectDetector* intranet_redirect_detector() = 0;
 #endif
@@ -275,6 +287,8 @@ class BrowserProcess {
   virtual void StartAutoupdateTimer() = 0;
 #endif
 
+  virtual activity_reporter::ActivityReporter* activity_reporter() = 0;
+
   virtual component_updater::ComponentUpdateService* component_updater() = 0;
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -306,10 +320,14 @@ class BrowserProcess {
   // Returns the object which maintains Human Interface Device (HID) system tray
   // icon.
   virtual HidSystemTrayIcon* hid_system_tray_icon() = 0;
+  virtual void set_hid_system_tray_icon_for_test(
+      std::unique_ptr<HidSystemTrayIcon> icon) = 0;
 
   // Returns the object which maintains Universal Serial Bus (USB) system tray
   // icon.
   virtual UsbSystemTrayIcon* usb_system_tray_icon() = 0;
+  virtual void set_usb_system_tray_icon_for_test(
+      std::unique_ptr<UsbSystemTrayIcon> icon) = 0;
 #endif
 
   // Obtain the browser instance of OSCryptAsync, which should be used for data

@@ -13,7 +13,6 @@
 #include "chromeos/ash/components/mojo_service_manager/fake_mojo_service_manager.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/fake_cros_healthd.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-shared.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -366,7 +365,7 @@ class RevenLogSourceTest : public ::testing::Test {
     auto dmi_info = CreateDmiInfo();
     SetSystemInfo(info, std::move(os_info), std::move(dmi_info));
     ash::cros_healthd::FakeCrosHealthd::Get()
-        ->SetProbeTelemetryInfoResponseForTesting(info);
+        ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
   }
 
   void VerifyOutputContains(const std::unique_ptr<SystemLogsResponse>& response,
@@ -389,7 +388,7 @@ TEST_F(RevenLogSourceTest, FetchCpuInfoSuccess) {
   auto info = healthd::TelemetryInfo::New();
   SetCpuInfo(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenCpuNameKey,
@@ -400,7 +399,7 @@ TEST_F(RevenLogSourceTest, FetchCpuInfoFailure) {
   auto info = healthd::TelemetryInfo::New();
   SetCpuInfoWithProbeError(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   VerifyOutputContains(Fetch(), kRevenCpuNameKey, "<not available>");
 }
@@ -409,7 +408,7 @@ TEST_F(RevenLogSourceTest, FetchMemoryInfoSuccess) {
   auto info = healthd::TelemetryInfo::New();
   SetMemoryInfo(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenTotalMemoryKey, "2048");
@@ -421,7 +420,7 @@ TEST_F(RevenLogSourceTest, FetchMemoryInfoFailure) {
   auto info = healthd::TelemetryInfo::New();
   SetMemoryInfoWithProbeError(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   const std::string not_available = "<not available>";
@@ -436,7 +435,7 @@ TEST_F(RevenLogSourceTest, FetchDmiInfoWithValues) {
   auto dmi_info = CreateDmiInfo();
   SetSystemInfo(info, std::move(os_info), std::move(dmi_info));
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenProductVendorKey, "LENOVO");
@@ -452,7 +451,7 @@ TEST_F(RevenLogSourceTest, FetchDmiInfoWithoutValues) {
   auto dmi_info = healthd::DmiInfo::New();
   SetSystemInfo(info, std::move(os_info), std::move(dmi_info));
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   const std::string not_available = "<not available>";
@@ -511,7 +510,7 @@ TEST_F(RevenLogSourceTest, PciEthernetDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetPciEthernetDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenEthernetNameKey, "intel product1");
@@ -525,7 +524,7 @@ TEST_F(RevenLogSourceTest, PciBluetoothDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetPciBluetoothDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenBluetoothNameKey,
@@ -541,7 +540,7 @@ TEST_F(RevenLogSourceTest, PciWirelessDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetPciWirelessDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenWirelessNameKey,
@@ -557,7 +556,7 @@ TEST_F(RevenLogSourceTest, PciGpuInfo) {
   auto info = healthd::TelemetryInfo::New();
   SetPciDisplayDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenGpuNameKey, "intel 945GM");
@@ -569,7 +568,7 @@ TEST_F(RevenLogSourceTest, UsbEthernetDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetUsbEthernetDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenEthernetNameKey, "intel product1");
@@ -583,7 +582,7 @@ TEST_F(RevenLogSourceTest, UsbBluetoothDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetUsbBluetoothDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenBluetoothNameKey,
@@ -599,7 +598,7 @@ TEST_F(RevenLogSourceTest, UsbWirelessDevices) {
   auto info = healthd::TelemetryInfo::New();
   SetUsbWirelessDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenWirelessNameKey,
@@ -615,7 +614,7 @@ TEST_F(RevenLogSourceTest, UsbGpuInfo) {
   auto info = healthd::TelemetryInfo::New();
   SetUsbDisplayDevices(info);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenGpuNameKey, "intel product1");
@@ -632,7 +631,7 @@ TEST_F(RevenLogSourceTest, TpmInfoVersion_1_2WithDidVid_Owned_Allowed) {
   auto info = healthd::TelemetryInfo::New();
   SetTpmInfo(info, did_vid, version, is_owned, is_allowed);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenTpmVersionKey, "1.2");
@@ -652,7 +651,7 @@ TEST_F(RevenLogSourceTest, TpmInfoVersion_2_0WithoutDidVid_Owned_NotAllowed) {
   auto info = healthd::TelemetryInfo::New();
   SetTpmInfo(info, did_vid, version, is_owned, is_allowed);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenTpmVersionKey, "2.0");
@@ -673,7 +672,7 @@ TEST_F(RevenLogSourceTest,
   auto info = healthd::TelemetryInfo::New();
   SetTpmInfo(info, did_vid, version, is_owned, is_allowed);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenTpmVersionKey, "unknown");
@@ -694,7 +693,7 @@ TEST_F(RevenLogSourceTest,
   auto info = healthd::TelemetryInfo::New();
   SetTpmInfo(info, did_vid, version, is_owned, is_allowed);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenTpmVersionKey, "unknown");
@@ -710,7 +709,7 @@ TEST_F(RevenLogSourceTest, GraphicsInfoNoExtensions) {
   std::vector<std::string> extensions;
   SetGraphicsInfo(info, extensions);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenGlVersionKey, "fake_version");
@@ -726,7 +725,7 @@ TEST_F(RevenLogSourceTest, GraphicsInfoOneExtension) {
   std::vector<std::string> extensions{"ext1"};
   SetGraphicsInfo(info, extensions);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenGlVersionKey, "fake_version");
@@ -742,7 +741,7 @@ TEST_F(RevenLogSourceTest, GraphicsInfoTwoExtensions) {
   std::vector<std::string> extensions{"ext1", "ext2"};
   SetGraphicsInfo(info, extensions);
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(std::move(info));
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   VerifyOutputContains(response, kRevenGlVersionKey, "fake_version");
@@ -754,9 +753,8 @@ TEST_F(RevenLogSourceTest, GraphicsInfoTwoExtensions) {
 }
 
 TEST_F(RevenLogSourceTest, TouchpadStack) {
-  auto info = healthd::TelemetryInfo::New();
   ash::cros_healthd::FakeCrosHealthd::Get()
-      ->SetProbeTelemetryInfoResponseForTesting(info);
+      ->SetProbeTelemetryInfoResponseForTesting(healthd::TelemetryInfo::New());
 
   const std::unique_ptr<SystemLogsResponse> response = Fetch();
   ASSERT_NE(response, nullptr);

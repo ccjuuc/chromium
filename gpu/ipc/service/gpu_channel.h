@@ -29,17 +29,13 @@
 #include "gpu/ipc/service/command_buffer_stub.h"
 #include "gpu/ipc/service/gpu_ipc_service_export.h"
 #include "gpu/ipc/service/shared_image_stub.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "mojo/public/cpp/bindings/generic_pending_associated_receiver.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_extra_info.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gpu_preference.h"
-
-namespace base {
-class WaitableEvent;
-}
 
 namespace gpu {
 class DCOMPTexture;
@@ -71,12 +67,13 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
       uint64_t client_tracing_id,
       bool is_gpu_host,
       bool enable_extra_handles_validation,
-      const gfx::GpuExtraInfo& gpu_extra_info);
+      const gfx::GpuExtraInfo& gpu_extra_info,
+      const gpu::GPUInfo& gpu_info,
+      const gpu::GpuFeatureInfo& gpu_feature_info);
 
   // Init() sets up the underlying IPC channel.  Use a separate method because
   // we don't want to do that in tests.
-  void Init(mojo::MessagePipeHandle channel_handle,
-            base::WaitableEvent* shutdown_event);
+  void Init(mojo::MessagePipeHandle channel_handle);
 
   // Start receiving messages on the GpuChannel interface and scheduling
   // appropriate tasks as needed to handle them.
@@ -188,15 +185,20 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
   // Called by DCOMPTexture to remove the GpuChannel's reference to the
   // DCOMPTexture.
   void DestroyDCOMPTexture(int32_t route_id);
-
-  bool RegisterOverlayStateObserver(
-      mojo::PendingRemote<gpu::mojom::OverlayStateObserver>
-          promotion_hint_observer,
-      const gpu::Mailbox& mailbox);
 #endif  // BUILDFLAG(IS_WIN)
 
   SharedImageStub* shared_image_stub() const {
     return shared_image_stub_.get();
+  }
+
+  const gpu::GPUInfo& gpu_info() const { return gpu_info_; }
+  const gpu::GpuFeatureInfo& gpu_feature_info() const {
+    return gpu_feature_info_;
+  }
+
+  const gpu::SharedImageCapabilities& shared_image_capabilities() const {
+    CHECK(shared_image_stub_);
+    return shared_image_capabilities_;
   }
 
   void CreateCommandBuffer(
@@ -231,7 +233,9 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
              uint64_t client_tracing_id,
              bool is_gpu_host,
              bool enable_extra_handles_validation,
-             const gfx::GpuExtraInfo& gpu_extra_info);
+             const gfx::GpuExtraInfo& gpu_extra_info,
+             const gpu::GPUInfo& gpu_info,
+             const gpu::GpuFeatureInfo& gpu_feature_info);
 
   void OnDestroyCommandBuffer(int32_t route_id);
 
@@ -242,7 +246,7 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
   // already disconnected.
   void Destroy();
 
-  std::unique_ptr<IPC::SyncChannel> sync_channel_;  // nullptr in tests.
+  std::unique_ptr<IPC::ChannelProxy> channel_proxy_;  // nullptr in tests.
 
   base::ProcessId client_pid_ = base::kNullProcessId;
 
@@ -268,6 +272,10 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
 
   // The id of the client who is on the other side of the channel.
   const int32_t client_id_;
+
+  const gpu::GPUInfo gpu_info_;
+  const gpu::GpuFeatureInfo gpu_feature_info_;
+  gpu::SharedImageCapabilities shared_image_capabilities_;
 
   // The tracing ID used for memory allocations associated with this client.
   const uint64_t client_tracing_id_;

@@ -14,18 +14,17 @@
 #include "chrome/browser/ash/input_method/editor_context.h"
 #include "chrome/browser/ash/input_method/editor_geolocation_mock_provider.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/test/base/scoped_browser_locale.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_consent_status.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_mode.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/common/constants.h"
@@ -62,12 +61,8 @@ TextFieldContextualInfo CreateFakeTextFieldContextualInfo(
 
 std::unique_ptr<TestingProfile> CreateTestingProfile(std::string email) {
   std::unique_ptr<TestingProfile> profile = TestingProfile::Builder().Build();
-
-  signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile.get());
-
-  signin::MakePrimaryAccountAvailable(identity_manager, email,
-                                      signin::ConsentLevel::kSync);
+  ash::AnnotatedAccountId::Set(profile.get(), AccountId::FromUserEmailGaiaId(
+                                                  email, GaiaId("987654321")));
   return profile;
 }
 
@@ -556,8 +551,7 @@ INSTANTIATE_TEST_SUITE_P(
          .expected_editor_mode = EditorMode::kRewrite,
          .expected_editor_opportunity_mode = EditorOpportunityMode::kRewrite,
          .expected_blocked_reasons = {}},
-        {.test_name = "TriggersRewriteModeWhenOrcaRestrictedInEnglishLocalesFla"
-                      "gIsSetAsDefault",
+        {.test_name = "TriggersRewriteModeInFrenchLocale",
          .additional_enabled_flags = {},
          .email = "testuser@gmail.com",
          .active_engine_id = "xkb:us::eng",
@@ -573,44 +567,6 @@ INSTANTIATE_TEST_SUITE_P(
          .is_selection_valid = true,
          .num_chars_selected = 100,
          .expected_editor_mode = EditorMode::kRewrite,
-         .expected_editor_opportunity_mode = EditorOpportunityMode::kRewrite,
-         .expected_blocked_reasons = {}},
-        {.test_name = "DoNotTriggerFeatureInEnUsLocaleWhenOrcaOnlyInEnglishLoca"
-                      "lesFlagIsEnabled",
-         .additional_enabled_flags = {features::kOrcaOnlyInEnglishLocales},
-         .email = "testuser@gmail.com",
-         .active_engine_id = "xkb:us::eng",
-         .locale = "en-us",
-         .url = kAllowedTestUrl,
-         .input_type = ui::TEXT_INPUT_TYPE_TEXT,
-         .app_type = chromeos::AppType::BROWSER,
-         .is_in_tablet_mode = false,
-         .network_status = net::NetworkChangeNotifier::CONNECTION_UNKNOWN,
-         .user_pref = true,
-         .consent_status =
-             chromeos::editor_menu::EditorConsentStatus::kApproved,
-         .is_selection_valid = true,
-         .num_chars_selected = 100,
-         .expected_editor_mode = EditorMode::kRewrite,
-         .expected_editor_opportunity_mode = EditorOpportunityMode::kRewrite,
-         .expected_blocked_reasons = {}},
-        {.test_name = "DoNotTriggerFeatureInFrenchLocaleWhenOrcaOnlyInEnglishLo"
-                      "calesFlagIsEnabled",
-         .additional_enabled_flags = {features::kOrcaOnlyInEnglishLocales},
-         .email = "testuser@gmail.com",
-         .active_engine_id = "xkb:us::eng",
-         .locale = "fr",
-         .url = kAllowedTestUrl,
-         .input_type = ui::TEXT_INPUT_TYPE_TEXT,
-         .app_type = chromeos::AppType::BROWSER,
-         .is_in_tablet_mode = false,
-         .network_status = net::NetworkChangeNotifier::CONNECTION_UNKNOWN,
-         .user_pref = true,
-         .consent_status =
-             chromeos::editor_menu::EditorConsentStatus::kApproved,
-         .is_selection_valid = true,
-         .num_chars_selected = 100,
-         .expected_editor_mode = EditorMode::kSoftBlocked,
          .expected_editor_opportunity_mode = EditorOpportunityMode::kRewrite,
          .expected_blocked_reasons = {}},
 
@@ -716,8 +672,7 @@ TEST_P(EditorSwitchDenylistTest, IsBlockedWhenVisitingUrlInDenylist) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
       /*enabled_features=*/{chromeos::features::kOrca,
-                            chromeos::features::kFeatureManagementOrca,
-                            chromeos::features::kOrcaInternationalize},
+                            chromeos::features::kFeatureManagementOrca},
       /*disabled_features=*/{ash::features::kOrcaUseAccountCapabilities,
                              ash::features::kOrcaOnWorkspace});
   ScopedBrowserLocale browser_locale("en");
@@ -969,6 +924,22 @@ TEST_P(EditorSwitchAllFlagsEnabledTest, EditorModeHasCorrectState) {
 
   EXPECT_TRUE(editor_switch.IsAllowedForUse());
   EXPECT_EQ(editor_switch.GetEditorMode(), expected_mode);
+}
+
+TEST(EditorSwitchTest, AllowedForUseForGooglers) {
+  content::BrowserTaskEnvironment task_environment;
+  std::unique_ptr<TestingProfile> profile =
+      CreateTestingProfile("testuser@google.com");
+  FakeSystem system;
+  FakeEditorContextObserver context_observer;
+  FakeEditorSwitchObserver switch_observer;
+  EditorGeolocationMockProvider geolocation_provider("unknown_country");
+  EditorContext context(&context_observer, &system, &geolocation_provider);
+  EditorSwitch editor_switch(/*observer=*/&switch_observer,
+                             /*profile=*/profile.get(),
+                             /*context=*/&context);
+
+  EXPECT_TRUE(editor_switch.IsAllowedForUse());
 }
 
 }  // namespace

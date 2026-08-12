@@ -8,6 +8,7 @@
 #include "build/build_config.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
 #include "extensions/browser/api/messaging/native_message_port_dispatcher.h"
+#include "extensions/browser/api/system_display/display_info_provider.h"
 
 namespace extensions {
 
@@ -15,14 +16,18 @@ namespace {
 ExtensionsAPIClient* g_instance = nullptr;
 }  // namespace
 
-ExtensionsAPIClient::ExtensionsAPIClient() { g_instance = this; }
+ExtensionsAPIClient::ExtensionsAPIClient() {
+  g_instance = this;
+}
 
 ExtensionsAPIClient::~ExtensionsAPIClient() {
   g_instance = nullptr;
 }
 
 // static
-ExtensionsAPIClient* ExtensionsAPIClient::Get() { return g_instance; }
+ExtensionsAPIClient* ExtensionsAPIClient::Get() {
+  return g_instance;
+}
 
 void ExtensionsAPIClient::AddAdditionalValueStoreCaches(
     content::BrowserContext* context,
@@ -32,8 +37,7 @@ void ExtensionsAPIClient::AddAdditionalValueStoreCaches(
              raw_ptr<ValueStoreCache, CtnExperimental>>* caches) {}
 
 void ExtensionsAPIClient::AttachWebContentsHelpers(
-    content::WebContents* web_contents) const {
-}
+    content::WebContents* web_contents) const {}
 
 bool ExtensionsAPIClient::ShouldHideResponseHeader(
     const GURL& url,
@@ -82,11 +86,13 @@ ExtensionsAPIClient::CreateGuestViewManagerDelegate() const {
   return nullptr;
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 std::unique_ptr<MimeHandlerViewGuestDelegate>
 ExtensionsAPIClient::CreateMimeHandlerViewGuestDelegate(
     MimeHandlerViewGuest* guest) const {
   return nullptr;
 }
+#endif
 
 std::unique_ptr<WebViewGuestDelegate>
 ExtensionsAPIClient::CreateWebViewGuestDelegate(
@@ -115,8 +121,8 @@ ExtensionsAPIClient::CreateContentRulesRegistry(
   return nullptr;
 }
 
-std::unique_ptr<DevicePermissionsPrompt>
-ExtensionsAPIClient::CreateDevicePermissionsPrompt(
+std::unique_ptr<UsbDevicePermissionsPrompt>
+ExtensionsAPIClient::CreateUsbDevicePermissionsPrompt(
     content::WebContents* web_contents) const {
   return nullptr;
 }
@@ -125,13 +131,13 @@ ExtensionsAPIClient::CreateDevicePermissionsPrompt(
 bool ExtensionsAPIClient::ShouldAllowDetachingUsb(int vid, int pid) const {
   return false;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::unique_ptr<VirtualKeyboardDelegate>
 ExtensionsAPIClient::CreateVirtualKeyboardDelegate(
     content::BrowserContext* context) const {
   return nullptr;
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 ManagementAPIDelegate* ExtensionsAPIClient::CreateManagementAPIDelegate()
     const {
@@ -202,6 +208,11 @@ ExtensionsAPIClient::CreateNativeMessagePortDispatcher(
 std::vector<KeyedServiceBaseFactory*>
 ExtensionsAPIClient::GetFactoryDependencies() {
   return {};
+}
+
+WebstorePrivateAPIDelegate*
+ExtensionsAPIClient::GetWebstorePrivateAPIDelegate() {
+  return nullptr;
 }
 
 }  // namespace extensions

@@ -5,15 +5,18 @@
 #ifndef UI_VIEWS_VIEW_CLASS_PROPERTIES_H_
 #define UI_VIEWS_VIEW_CLASS_PROPERTIES_H_
 
+#include <string>
+
 #include "ui/base/class_property.h"
 #include "ui/base/interaction/element_identifier.h"
-#include "ui/gfx/geometry/size.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/views_export.h"
 
 namespace gfx {
 class Insets;
+class Rect;
+class Size;
 }  // namespace gfx
 
 namespace views {
@@ -96,14 +99,27 @@ VIEWS_EXPORT extern const ui::ClassProperty<LayoutAlignment*>* const
 VIEWS_EXPORT extern const ui::ClassProperty<bool>* const
     kViewIgnoredByLayoutKey;
 
+// Property indicating whether a view should not lay out its own children.
+VIEWS_EXPORT extern const ui::ClassProperty<bool>* const
+    kViewDoesNotLayOutChildren;
+
 // Tag for the view associated with ui::ElementTracker.
 VIEWS_EXPORT extern const ui::ClassProperty<ui::ElementIdentifier>* const
     kElementIdentifierKey;
+
+// Secondary identifier (optional) used to differentiate between elements with
+// the same `kElementIdentifierKey`.
+VIEWS_EXPORT extern const ui::ClassProperty<std::string*>* const
+    kElementSecondaryIdentifierKey;
 
 // A property to store a FocusManager* that should be used for a view that is
 // not (yet) attached to a widget. This makes View::GetFocusManager() work.
 VIEWS_EXPORT extern const ui::ClassProperty<FocusManager*>* const
     kDetachedViewFocusManagerKey;
+
+// A property indicating whether a view (usually a WebView or NativeViewHost)
+// is currently blocked by a tab-modal dialog.
+VIEWS_EXPORT extern const ui::ClassProperty<bool>* const kIsBlockedByModalKey;
 
 }  // namespace views
 
@@ -125,7 +141,9 @@ DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, views::Widget*)
 
 #if !defined(USE_AURA)
 // aura_constants.h declares this.
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Rect*)
 DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, gfx::Size*)
+DECLARE_EXPORTED_UI_CLASS_PROPERTY_TYPE(VIEWS_EXPORT, std::string*)
 #endif
 
 #endif  // UI_VIEWS_VIEW_CLASS_PROPERTIES_H_

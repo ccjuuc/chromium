@@ -304,7 +304,7 @@ TEST_F(ActiveTabTest, CapturingPagesWithActiveTab) {
   std::vector<GURL> test_urls = {
       GURL("https://example.com"),
       GURL(chrome::kChromeUIVersionURL),
-      GURL(chrome::kChromeUINewTabURL),
+      chrome::ChromeUINewTabURLAsGURL(),
       GURL("http://[2607:f8b0:4005:805::200e]"),
       ExtensionsClient::Get()->GetWebstoreBaseURL(),
       ExtensionsClient::Get()->GetNewWebstoreBaseURL(),
@@ -500,7 +500,7 @@ void ActiveTabWithServiceTest::SetUp() {
 
 // Tests that an extension can only capture file:// URLs with the active tab
 // permission when it has file access granted.
-// Regression test for https://crbug.com/810220.
+// Regression test for https://crbug.com/40090425.
 TEST_F(ActiveTabWithServiceTest, FileURLs) {
   InitializeEmptyExtensionService();
 

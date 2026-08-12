@@ -13,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/trace_event/trace_event.h"
@@ -557,7 +556,7 @@ void PictureLayerTilingSet::GetAllPrioritizedTilesForTracing(
 PictureLayerTilingSet::CoverageIterator PictureLayerTilingSet::Cover(
     const gfx::Rect& coverage_rect,
     float coverage_scale,
-    float ideal_contents_scale) {
+    float ideal_contents_scale) const {
   return CoverageIterator(tilings_, coverage_rect, coverage_scale,
                           ideal_contents_scale);
 }

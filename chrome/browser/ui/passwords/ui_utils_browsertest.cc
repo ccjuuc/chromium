@@ -24,8 +24,7 @@ class ManagePasswordsUiUtilsBrowserTest : public InProcessBrowserTest {
   ManagePasswordsUiUtilsBrowserTest() {
     feature_list_.InitWithFeatures(
         /*enabled_features=*/
-        {autofill::features::kManagePasswordsPerceptionSurvey,
-         autofill::features::kYourSavedInfoSettingsPage},
+        {autofill::features::kManagePasswordsPerceptionSurvey},
         /*disabled_features=*/{});
   }
 
@@ -33,7 +32,8 @@ class ManagePasswordsUiUtilsBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     mock_hats_service_ = static_cast<MockHatsService*>(
         HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-            browser()->profile(), base::BindRepeating(&BuildMockHatsService)));
+            browser()->GetProfile(),
+            base::BindRepeating(&BuildMockHatsService)));
   }
 
   void TearDownOnMainThread() override {

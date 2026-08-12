@@ -13,7 +13,6 @@ import android.view.ContextThemeWrapper;
 
 import androidx.annotation.ColorRes;
 import androidx.annotation.StyleRes;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.appcompat.widget.AppCompatButton;
 
 import org.chromium.build.annotations.NullMarked;
@@ -93,6 +92,7 @@ public class ButtonCompat extends AppCompatButton {
                 a.getDimensionPixelSize(
                         R.styleable.ButtonCompat_verticalInset,
                         getResources().getDimensionPixelSize(R.dimen.button_bg_vertical_inset));
+        int horizontalInset = a.getDimensionPixelSize(R.styleable.ButtonCompat_horizontalInset, 0);
 
         // Border style attribute
         @BorderType
@@ -121,7 +121,7 @@ public class ButtonCompat extends AppCompatButton {
                 a.getResourceId(R.styleable.ButtonCompat_buttonTextColor, -1);
 
         if (textColorRes != -1) {
-            setTextColor(AppCompatResources.getColorStateList(getContext(), textColorRes));
+            setTextColor(getContext().getColorStateList(textColorRes));
         }
 
         float[] radii;
@@ -160,7 +160,8 @@ public class ButtonCompat extends AppCompatButton {
                         radii,
                         borderColorId,
                         borderWidthId,
-                        verticalInset);
+                        verticalInset,
+                        horizontalInset);
 
         setBorderStyle(borderStyle);
     }

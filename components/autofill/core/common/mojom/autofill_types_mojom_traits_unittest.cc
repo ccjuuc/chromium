@@ -30,6 +30,10 @@
 namespace autofill {
 namespace {
 
+using ::autofill::test::FormDataEq;
+using ::autofill::test::FormFieldDataEq;
+using ::autofill::test::WithoutUnserializedData;
+
 const std::vector<const char*> kOptions = {"Option1", "Option2", "Option3",
                                            "Option4"};
 
@@ -48,6 +52,7 @@ void CreateTestFieldDataPredictions(const std::string& signature,
   field_predict->rank_in_signature_group = 1;
   field_predict->rank_in_host_form = 2;
   field_predict->rank_in_host_form_signature_group = 3;
+  field_predict->did_trigger_javascript_autofill = true;
 }
 
 void CreateTestPasswordFormFillData(PasswordFormFillData* fill_data) {
@@ -86,7 +91,8 @@ void CreatePasswordGenerationUIData(
 }
 
 void CreateTriggeringField(TriggeringField* data) {
-  data->element_id = FieldRendererId(123);
+  data->element_id = {.frame_token = LocalFrameToken(),
+                      .renderer_id = FieldRendererId(123)};
   data->trigger_source =
       AutofillSuggestionTriggerSource::kFormControlElementClicked;
   data->text_direction = base::i18n::RIGHT_TO_LEFT;
@@ -98,8 +104,8 @@ void CreateTriggeringField(TriggeringField* data) {
 void CreatePasswordSuggestionRequest(PasswordSuggestionRequest* data) {
   CreateTriggeringField(&data->field);
   data->form_data = test::CreateTestAddressFormData();
-  data->username_field_index = 0ul;
-  data->password_field_index = 1ul;
+  data->username_field_id = data->form_data.fields()[0].global_id();
+  data->password_field_id = data->form_data.fields()[1].global_id();
 }
 
 void CheckEqualPasswordFormFillData(const PasswordFormFillData& expected,
@@ -123,8 +129,8 @@ void CheckEqualPassPasswordGenerationUIData(
   EXPECT_EQ(expected.is_generation_element_password_type,
             actual.is_generation_element_password_type);
   EXPECT_EQ(expected.text_direction, actual.text_direction);
-  EXPECT_EQ(test::WithoutUnserializedData(expected.form_data),
-            test::WithoutUnserializedData(actual.form_data));
+  EXPECT_THAT(WithoutUnserializedData(expected.form_data),
+              FormDataEq(WithoutUnserializedData(actual.form_data)));
 }
 
 void CheckEqualTriggeringField(const TriggeringField& expected,
@@ -144,10 +150,14 @@ void CheckEqualPasswordSuggestionRequest(
     const PasswordSuggestionRequest& expected,
     const PasswordSuggestionRequest& actual) {
   CheckEqualTriggeringField(expected.field, actual.field);
-  EXPECT_EQ(test::WithoutUnserializedData(expected.form_data),
-            test::WithoutUnserializedData(actual.form_data));
-  EXPECT_EQ(expected.username_field_index, actual.username_field_index);
-  EXPECT_EQ(expected.password_field_index, actual.password_field_index);
+  EXPECT_THAT(WithoutUnserializedData(expected.form_data),
+              FormDataEq(WithoutUnserializedData(actual.form_data)));
+  EXPECT_TRUE(actual.username_field_id.frame_token.is_empty());
+  EXPECT_TRUE(actual.password_field_id.frame_token.is_empty());
+  EXPECT_EQ(expected.username_field_id.renderer_id,
+            actual.username_field_id.renderer_id);
+  EXPECT_EQ(expected.password_field_id.renderer_id,
+            actual.password_field_id.renderer_id);
 }
 
 class AutofillTypeTraitsTestImpl : public testing::Test,
@@ -218,9 +228,8 @@ void ExpectFormFieldData(const FormFieldData& expected,
                          base::OnceClosure closure,
                          const FormFieldData& passed) {
   EXPECT_TRUE(passed.host_frame().is_empty());
-  EXPECT_TRUE(FormFieldData::IdenticalAndEquivalentDomElements(
-      test::WithoutUnserializedData(expected),
-      test::WithoutUnserializedData(passed)));
+  EXPECT_THAT(WithoutUnserializedData(expected),
+              FormFieldDataEq(WithoutUnserializedData(passed)));
   std::move(closure).Run();
 }
 
@@ -228,8 +237,8 @@ void ExpectFormData(const FormData& expected,
                     base::OnceClosure closure,
                     const FormData& passed) {
   EXPECT_TRUE(passed.host_frame().is_empty());
-  EXPECT_EQ(test::WithoutUnserializedData(expected),
-            test::WithoutUnserializedData(passed));
+  EXPECT_THAT(WithoutUnserializedData(expected),
+              FormDataEq(WithoutUnserializedData(passed)));
   std::move(closure).Run();
 }
 
@@ -243,7 +252,7 @@ void ExpectFormFieldDataPredictions(const FormFieldDataPredictions& expected,
 void ExpectFormDataPredictions(FormDataPredictions expected,
                                base::OnceClosure closure,
                                const FormDataPredictions& passed) {
-  expected.data = test::WithoutUnserializedData(expected.data);
+  expected.data = WithoutUnserializedData(expected.data);
   EXPECT_EQ(expected, passed);
   std::move(closure).Run();
 }
@@ -303,8 +312,7 @@ TEST_F(AutofillTypeTraitsTestImpl, PassFormFieldData) {
   input.set_renderer_id(FieldRendererId(1234));
   input.set_host_form_id(FormRendererId(123));
   input.set_max_length(12345);
-  input.set_is_autofilled(true);
-  input.set_is_user_edited(true);
+  input.set_is_autofilled_according_to_renderer(true);
   input.set_check_status(FormFieldData::CheckStatus::kChecked);
   input.set_should_autocomplete(true);
   input.set_role(FormFieldData::RoleAttribute::kPresentation);
@@ -338,8 +346,7 @@ TEST_F(AutofillTypeTraitsTestImpl, PassDataListFormFieldData) {
   input.set_aria_label(u"aria label");
   input.set_aria_description(u"aria description");
   input.set_max_length(12345);
-  input.set_is_autofilled(true);
-  input.set_is_user_edited(true);
+  input.set_is_autofilled_according_to_renderer(true);
   input.set_check_status(FormFieldData::CheckStatus::kChecked);
   input.set_should_autocomplete(true);
   input.set_role(FormFieldData::RoleAttribute::kPresentation);
@@ -466,6 +473,7 @@ TEST(AutofillTypesMojomTraitsTest, AutocompleteParsingResult) {
   original.field_type = HtmlFieldType::kName;
   original.webauthn = true;
   original.webidentity = true;
+  original.email_verification_token = true;
 
   autofill::AutocompleteParsingResult copy;
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<

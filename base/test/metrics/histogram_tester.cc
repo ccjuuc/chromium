@@ -261,6 +261,21 @@ HistogramTester::CountsMap HistogramTester::GetTotalCountsForPrefix(
   return result;
 }
 
+HistogramBase::Count32 HistogramTester::GetTotalCountForPrefix(
+    std::string_view prefix) const {
+  HistogramBase::Count32 total_count = 0;
+  for (const HistogramBase* histogram : StatisticsRecorder::GetHistograms(
+           /*include_persistent=*/true, HistogramBase::kNoFlags)) {
+    if (StartsWith(histogram->histogram_name(), prefix,
+                   CompareCase::SENSITIVE)) {
+      total_count +=
+          GetHistogramSamplesSinceCreation(histogram->histogram_name())
+              ->TotalCount();
+    }
+  }
+  return total_count;
+}
+
 std::unique_ptr<HistogramSamples>
 HistogramTester::GetHistogramSamplesSinceCreation(
     std::string_view histogram_name) const {
@@ -331,7 +346,7 @@ std::string HistogramTester::SnapshotToString(
   std::unique_ptr<HistogramSamples> snapshot =
       GetHistogramSamplesSinceCreation(histogram.histogram_name());
 
-  base::Value::Dict graph_dict =
+  base::DictValue graph_dict =
       snapshot->ToGraphDict(histogram.histogram_name(), histogram.flags());
   std::string tmp;
   // The header message describes this histogram samples (name of the histogram

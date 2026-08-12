@@ -9,6 +9,7 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_switches.h"
@@ -97,7 +98,7 @@ bool ShouldShowForState(PrefService* local_state,
   // Set the last version here to indicate that What's New should not attempt
   // to display again for this milestone. This prevents the page from
   // potentially displaying multiple times in a given milestone, e.g. for
-  // multiple profile relaunches (see https://crbug.com/1274313).
+  // multiple profile relaunches (see https://crbug.com/40807492).
   local_state->SetInteger(prefs::kLastWhatsNewVersion, CHROME_VERSION_MAJOR);
   return true;
 #endif
@@ -110,6 +111,11 @@ GURL GetWebUIStartupURL() {
 #else
   NOTREACHED();
 #endif
+}
+
+bool UseStagingOverrideEnabled() {
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kWhatsNewUseStaging);
 }
 
 }  // namespace whats_new

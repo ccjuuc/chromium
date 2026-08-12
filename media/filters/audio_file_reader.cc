@@ -14,6 +14,7 @@
 
 #include "base/auto_reset.h"
 #include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -27,6 +28,7 @@
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/ffmpeg/scoped_av_packet.h"
 #include "media/filters/ffmpeg_audio_decoder.h"
+#include "media/filters/opus_audio_decoder.h"
 #include "media/formats/mpeg/mpeg1_audio_stream_parser.h"
 
 #if BUILDFLAG(ENABLE_SYMPHONIA)
@@ -61,11 +63,13 @@ bool AudioFileReader::OpenDecoder() {
     return false;
   }
 
+  if (!config.IsValidConfig()) {
+    return false;
+  }
+
   // Verify the channel layout is supported by Chrome.  Acts as a sanity check
   // against invalid files.  See http://crbug.com/171962
-  if (ChannelLayoutToChromeChannelLayout(
-          codec_context_->ch_layout.u.mask,
-          codec_context_->ch_layout.nb_channels) ==
+  if (ChannelLayoutToChromeChannelLayout(codec_context_->ch_layout) ==
       CHANNEL_LAYOUT_UNSUPPORTED) {
     return false;
   }
@@ -73,17 +77,34 @@ bool AudioFileReader::OpenDecoder() {
   // Under a very specific set of circumstances, we can use the
   // SymphoniaAudioDecoder.
 #if BUILDFLAG(ENABLE_SYMPHONIA)
-  if (base::FeatureList::IsEnabled(kSymphoniaAudioDecoding) &&
-      SymphoniaAudioDecoder::IsCodecSupported(config.codec())) {
+  if (SymphoniaAudioDecoder::IsCodecSupported(config.codec())) {
     decoder_ = std::make_unique<SymphoniaAudioDecoder>(
         nullptr, &media_log_,
         SymphoniaAudioDecoder::ExecutionMode::kSynchronous);
   }
 #endif
+
+  if (!decoder_ && config.codec() == AudioCodec::kOpus &&
+      base::FeatureList::IsEnabled(kDirectOpusAudioDecoding)) {
+    decoder_ = std::make_unique<OpusAudioDecoder>(
+        nullptr, OpusAudioDecoder::ExecutionMode::kSynchronous);
+  }
+
   // By default, use the FFmpegAudioDecoder.
   if (!decoder_) {
     decoder_ = std::make_unique<FFmpegAudioDecoder>(
         nullptr, &media_log_, FFmpegAudioDecoder::ExecutionMode::kSynchronous);
+  }
+
+  // When demuxing opus from an Ogg container, ffmpeg somehow ends up generating
+  // the skip information twice. Once as discard adding and once as internally
+  // handled pre-skip. Setting the flag below forces FFmpegAudioDecoder to tell
+  // ffmpeg to disable any manual trimming of the stream. Trimming is instead
+  // handled by the AudioDiscardHelper within FFmpegAudioDecoder.
+  if (config.codec() == AudioCodec::kOpus &&
+      glue_->container() ==
+          container_names::MediaContainerName::kContainerOgg) {
+    config.disable_discard_decoder_delay();
   }
 
   std::optional<bool> initialize_status;
@@ -154,6 +175,7 @@ size_t AudioFileReader::Read(
       << "AudioFileReader::Read() : reader is not opened!";
 
   base::AutoReset packet_reset(&decoded_audio_packets_, decoded_audio_packets);
+  num_frames_emitted_ = 0;
 
   bool decode_success = true;
   auto packet = ScopedAVPacket::Allocate();
@@ -181,30 +203,19 @@ size_t AudioFileReader::Read(
     CHECK(flush_status.has_value());
   }
 
+  if (pending_output_buffer_) {
+    FinalizeDecodedBuffer(
+        std::move(pending_output_buffer_),
+        /*is_final_output=*/decode_success && !on_output_error_);
+  }
+
   return std::accumulate(
       decoded_audio_packets->begin(), decoded_audio_packets->end(), 0,
       [](size_t total, const auto& bus) { return total + bus->frames(); });
 }
 
-void AudioFileReader::OnOutput(scoped_refptr<AudioBuffer> buffer) {
-  // Ensure that there are no unsupported midstream configuration changes.
-  if (buffer->sample_rate() != config_->samples_per_second() ||
-      buffer->channel_count() != config_->channels() ||
-      buffer->channel_layout() != config_->channel_layout()) {
-    DLOG(ERROR) << "Unsupported midstream configuration change! sample_rate="
-                << buffer->sample_rate() << " (expected "
-                << config_->samples_per_second()
-                << "), channel_layout=" << buffer->channel_layout()
-                << " (expected " << config_->channel_layout()
-                << "), channels=" << buffer->channel_count() << " (expected "
-                << config_->channels() << "\")";
-
-    // This is an unrecoverable error, so bail out.  We'll return
-    // whatever we've decoded up to this point.
-    on_output_error_ = true;
-    return;
-  }
-
+void AudioFileReader::FinalizeDecodedBuffer(scoped_refptr<AudioBuffer> buffer,
+                                            bool is_final_output) {
   // Drop buffers that are entirely before the zero start time.
   if (buffer->timestamp() + buffer->duration() < base::TimeDelta()) {
     return;
@@ -224,15 +235,40 @@ void AudioFileReader::OnOutput(scoped_refptr<AudioBuffer> buffer) {
     return;
   }
 
-  // AAC decoding doesn't properly trim the last packet in a stream, so if we
-  // have duration information, use it to set the correct length to avoid extra
-  // silence from being output. In the case where we are also discarding some
-  // portion of the packet (as indicated by a negative pts), we further want to
-  // adjust the duration downward by however much exists before zero.
-  if (config_->codec() == AudioCodec::kAAC &&
-      last_packet_duration_ > base::TimeDelta()) {
-    int frames_read = buffer->frame_count();
+  if (is_final_output) {
+    MaybeTrimAacFinalBuffer(buffer.get());
+  }
 
+  if (!buffer->frame_count()) {
+    return;
+  }
+
+  num_frames_emitted_ += buffer->frame_count();
+
+  if (decoded_audio_packets_) {
+    decoded_audio_packets_->push_back(
+        AudioBuffer::WrapOrCopyToAudioBus(std::move(buffer)));
+  }
+}
+
+void AudioFileReader::MaybeTrimAacFinalBuffer(AudioBuffer* buffer) {
+  if (config_->codec() != AudioCodec::kAAC) {
+    return;
+  }
+
+  // AAC encoders introduce padding (priming and remainder samples) to fill
+  // fixed-size transform blocks. We need to trim these padding samples from
+  // the end of the stream to ensure gapless playback.
+  //
+  // We attempt two methods:
+  // 1. Packet-duration based trim (precise, uses sample table metadata).
+  // 2. Container-duration based trim (fallback, uses overall track duration).
+
+  // Method 1: Try to trim based on the last packet's duration reported by the
+  // demuxer (usually derived from the `stts` sample table). This is preferred
+  // because it uses the stream's native timescale and is sample-accurate.
+  if (last_packet_duration_ > base::TimeDelta()) {
+    int frames_read = buffer->frame_count();
     const base::TimeDelta frame_duration =
         AudioTimestampHelper::FramesToTime(frames_read, sample_rate());
 
@@ -243,20 +279,68 @@ void AudioFileReader::OnOutput(scoped_refptr<AudioBuffer> buffer) {
                << new_frames_read << " based on packet duration.";
       frames_read = new_frames_read;
 
-      // The above process may delete the entire packet.
-      if (!frames_read) {
-        return;
-      }
-
-      // Otherwise, trim the empty frames at the end.
+      // Trim the empty frames at the end.
       buffer->TrimEnd(buffer->frame_count() - frames_read);
+      return;
     }
   }
 
-  if (decoded_audio_packets_) {
-    decoded_audio_packets_->push_back(
-        AudioBuffer::WrapOrCopyToAudioBus(std::move(buffer)));
+  // Method 2: If the demuxer did not report a shortened duration for the last
+  // packet (common for encoders like Apple's `afconvert` that rely solely on
+  // the edit list `elst` to specify track duration), we fall back to trimming
+  // based on the overall container duration.
+  //
+  // This is a fallback because container duration (often in milliseconds or
+  // movie timescale) can suffer from minor precision loss when converted back
+  // to sample frames.
+  //
+  // We exclude raw AAC streams (ADTS) because they lack container headers and
+  // their duration is only an estimate, which is not reliable for trimming.
+  if (HasKnownDuration() &&
+      glue_->container() !=
+          container_names::MediaContainerName::kContainerAAC) {
+    const base::TimeDelta raw_duration = ConvertFromTimeBase(
+        {1, AV_TIME_BASE}, glue_->format_context()->duration);
+    const int expected_total_frames =
+        AudioTimestampHelper::TimeToFrames(raw_duration, sample_rate());
+    const int max_remaining_frames =
+        std::max(0, expected_total_frames - num_frames_emitted_);
+    if (buffer->frame_count() > max_remaining_frames) {
+      DVLOG(2) << "Shrinking AAC frame from " << buffer->frame_count() << " to "
+               << max_remaining_frames << " based on container duration.";
+      buffer->TrimEnd(buffer->frame_count() - max_remaining_frames);
+    }
   }
+}
+
+void AudioFileReader::OnOutput(scoped_refptr<AudioBuffer> buffer) {
+  if (on_output_error_) {
+    return;
+  }
+
+  // Ensure that there are no unsupported midstream configuration changes.
+  // We allow channel layout changes as long as the channel count remains the
+  // same, to handle cases where FFmpeg refines the layout during decoding.
+  if (buffer->sample_rate() != config_->samples_per_second() ||
+      buffer->channel_count() != config_->channels()) {
+    DLOG(ERROR) << "Unsupported midstream configuration change! sample_rate="
+                << buffer->sample_rate() << " (expected "
+                << config_->samples_per_second()
+                << "), channels=" << buffer->channel_count() << " (expected "
+                << config_->channels() << "\")";
+
+    // This is an unrecoverable error, so bail out.  We'll return
+    // whatever we've decoded up to this point.
+    on_output_error_ = true;
+    return;
+  }
+
+  if (pending_output_buffer_) {
+    FinalizeDecodedBuffer(std::move(pending_output_buffer_),
+                          /*is_final_output=*/false);
+  }
+
+  pending_output_buffer_ = std::move(buffer);
 }
 
 base::TimeDelta AudioFileReader::GetDuration() const {
@@ -326,8 +410,7 @@ bool AudioFileReader::ReadPacket(AVPacket* output_packet) {
     packet_data = packet_data.subspan(trim_count);
 
     if (packet_data.size() < MPEG1AudioStreamParser::kHeaderSize ||
-        !MPEG1AudioStreamParser::ParseHeader(nullptr, nullptr, packet_data,
-                                             nullptr)) {
+        !MPEG1AudioStreamParser::ParseHeader(packet_data)) {
       av_packet_unref(output_packet);
       continue;
     }

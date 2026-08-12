@@ -9,15 +9,15 @@
 #include "ash/constants/ash_features.h"
 #include "ash/webui/boca_ui/boca_app_page_handler.h"
 #include "ash/webui/boca_ui/boca_util.h"
+#include "ash/webui/boca_ui/provider/tab_info_collector.h"
 #include "ash/webui/boca_ui/url_constants.h"
-#include "ash/webui/boca_ui/webview_auth_delegate.h"
-#include "ash/webui/boca_ui/webview_auth_handler.h"
 #include "ash/webui/common/chrome_os_webui_config.h"
 #include "ash/webui/grit/ash_boca_ui_resources.h"
 #include "ash/webui/grit/ash_boca_ui_resources_map.h"
 #include "chrome/browser/ash/boca/boca_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/boca/boca_app_client.h"
+#include "chromeos/ash/components/boca/gemini/gemini_status_fetcher.h"
 #include "chromeos/grit/chromeos_boca_app_bundle_resources.h"
 #include "chromeos/grit/chromeos_boca_app_bundle_resources_map.h"
 #include "content/public/browser/web_contents.h"
@@ -36,7 +36,7 @@ content::WebUIDataSource* CreateAndAddHostDataSource(
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       browser_context, kChromeBocaAppUntrustedURL);
 
-  source->AddResourcePath("", IDR_ASH_BOCA_UI_INDEX_HTML);
+  source->SetDefaultResource(IDR_ASH_BOCA_UI_INDEX_HTML);
   source->AddResourcePaths(kAshBocaUiResources);
 
   // Resources obtained from CIPD.
@@ -119,10 +119,6 @@ void BocaUI::Create(
   content::BrowserContext* context =
       web_ui()->GetWebContents()->GetBrowserContext();
   CHECK(context);
-  const std::string host_name =
-      web_ui()->GetWebContents()->GetVisibleURL().GetHost();
-  auto auth_handler = std::make_unique<WebviewAuthHandler>(
-      std::make_unique<WebviewAuthDelegate>(), context, host_name);
   auto* const profile = Profile::FromWebUI(web_ui());
   auto content_settings_handler =
       std::make_unique<ContentSettingsHandler>(profile);
@@ -136,10 +132,11 @@ void BocaUI::Create(
   BocaAppClient::Get()->GetSessionManager()->OnAppWindowOpened();
   page_handler_impl_ = std::make_unique<BocaAppHandler>(
       std::move(page_handler), std::move(page), web_ui(),
-      std::move(auth_handler), std::make_unique<ClassroomPageHandlerImpl>(),
-      std::move(content_settings_handler), system_web_app_manager,
+      std::make_unique<ClassroomPageHandlerImpl>(),
+      std::move(content_settings_handler),
+      TabInfoCollector::Create(web_ui(), is_producer_), system_web_app_manager,
       BocaAppClient::Get()->GetSessionManager()->session_client_impl(),
-      is_producer_);
+      boca_manager->GetGeminiStatusFetcher(), is_producer_);
   page_handler_impl_->SetSpotlightService(&spotlight_service_);
   if (ash::features::IsAnnotatorModeEnabled() && is_producer_) {
     ash::boca::util::EnableOrDisableMarkerMode(/*enable=*/true);

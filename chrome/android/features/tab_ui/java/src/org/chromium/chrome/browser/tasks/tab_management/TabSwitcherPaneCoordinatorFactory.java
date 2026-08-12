@@ -14,9 +14,11 @@ import android.view.ViewGroup;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplier;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -32,12 +34,10 @@ import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
@@ -73,9 +73,9 @@ public class TabSwitcherPaneCoordinatorFactory {
     private final DataSharingTabManager mDataSharingTabManager;
     private final BackPressManager mBackPressManager;
     private final @Nullable DesktopWindowStateManager mDesktopWindowStateManager;
-    private final ObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
-    private final ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
-    private final ObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
+    private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
+    private final MonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier;
+    private final MonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier;
     private final UndoBarThrottle mUndoBarThrottle;
     private final Supplier<PaneManager> mPaneManagerSupplier;
     private final Supplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
@@ -127,9 +127,9 @@ public class TabSwitcherPaneCoordinatorFactory {
             DataSharingTabManager dataSharingTabManager,
             BackPressManager backPressManager,
             @Nullable DesktopWindowStateManager desktopWindowStateManager,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
-            ObservableSupplier<ShareDelegate> shareDelegateSupplier,
-            ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
+            MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
             UndoBarThrottle undoBarThrottle,
             Supplier<PaneManager> paneManagerSupplier,
             Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
@@ -148,7 +148,7 @@ public class TabSwitcherPaneCoordinatorFactory {
         mModalDialogManager = modalDialogManager;
         mBottomSheetController = bottomSheetController;
         mDataSharingTabManager = dataSharingTabManager;
-        mMode = TabListCoordinator.TabListMode.GRID;
+        mMode = TabListMode.GRID;
         mBackPressManager = backPressManager;
         mDesktopWindowStateManager = desktopWindowStateManager;
         mEdgeToEdgeSupplier = edgeToEdgeSupplier;
@@ -181,12 +181,12 @@ public class TabSwitcherPaneCoordinatorFactory {
     TabSwitcherPaneCoordinator create(
             ViewGroup parentView,
             TabSwitcherResetHandler resetHandler,
-            ObservableSupplier<Boolean> isVisibleSupplier,
-            ObservableSupplier<Boolean> isAnimatingSupplier,
+            NonNullObservableSupplier<Boolean> isVisibleSupplier,
+            NonNullObservableSupplier<Boolean> isAnimatingSupplier,
             Callback<Integer> onTabClickCallback,
             boolean isIncognito,
             @Nullable Runnable onTabGroupCreation,
-            ObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             Callback<@Nullable View> setOverlayViewCallback,
             SettableNonNullObservableSupplier<Boolean> hubSearchBoxVisibilitySupplier) {
         int token = mMessageManagerTokenHolder.acquireToken();
@@ -195,7 +195,7 @@ public class TabSwitcherPaneCoordinatorFactory {
         return new TabSwitcherPaneCoordinator(
                 mActivity,
                 assertNonNull(mProfileProviderSupplier.get()),
-                createTabGroupModelFilterSupplier(isIncognito),
+                createTabModelSupplier(isIncognito),
                 mTabContentManager,
                 mBrowserControlsStateProvider,
                 mScrimManager,
@@ -232,34 +232,25 @@ public class TabSwitcherPaneCoordinatorFactory {
     }
 
     @VisibleForTesting
-    ObservableSupplier<@Nullable TabGroupModelFilter> createTabGroupModelFilterSupplier(
-            boolean isIncognito) {
-        ObservableSupplierImpl<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier =
-                new ObservableSupplierImpl<>();
+    MonotonicObservableSupplier<TabModel> createTabModelSupplier(boolean isIncognito) {
+        SettableMonotonicObservableSupplier<TabModel> tabModelSupplier =
+                ObservableSuppliers.createMonotonic();
         // This implementation doesn't wait for isTabStateInitialized because we want to be able to
         // show the TabSwitcherPane before tab state initialization finishes. Tab state
         // initialization is an async process; when tab state restoration completes
         // TabModelObserver#restoreCompleted() is called which is listened for in
         // TabSwitcherPaneMediator to properly refresh the list in the event the contents changed.
-        TabModelSelector selector = mTabModelSelector;
-        if (!selector.getModels().isEmpty()) {
-            TabGroupModelFilter filter = selector.getTabGroupModelFilter(isIncognito);
-            tabGroupModelFilterSupplier.set(filter);
-        } else {
-            selector.addObserver(
-                    new TabModelSelectorObserver() {
-                        @Override
-                        public void onChange() {
-                            assert !selector.getModels().isEmpty();
-                            TabGroupModelFilter filter =
-                                    selector.getTabGroupModelFilter(isIncognito);
-                            assert filter != null;
-                            selector.removeObserver(this);
-                            tabGroupModelFilterSupplier.set(filter);
-                        }
-                    });
-        }
-        return tabGroupModelFilterSupplier;
+        Callback<TabModel> observer =
+                new Callback<TabModel>() {
+                    @Override
+                    public void onResult(TabModel unused) {
+                        assert !mTabModelSelector.getModels().isEmpty();
+                        tabModelSupplier.set(mTabModelSelector.getModel(isIncognito));
+                        mTabModelSelector.getCurrentTabModelSupplier().removeObserver(this);
+                    }
+                };
+        mTabModelSelector.getCurrentTabModelSupplier().addSyncObserverAndCallIfNonNull(observer);
+        return tabModelSupplier;
     }
 
     private void onMessageManagerTokenStateChanged() {
@@ -269,7 +260,7 @@ public class TabSwitcherPaneCoordinatorFactory {
                     new TabSwitcherMessageManager(
                             mActivity,
                             mLifecycleDispatcher,
-                            mTabModelSelector.getCurrentTabGroupModelFilterSupplier(),
+                            mTabModelSelector.getCurrentTabModelSupplier(),
                             mMultiWindowModeStateDispatcher,
                             mSnackbarManager,
                             mModalDialogManager,

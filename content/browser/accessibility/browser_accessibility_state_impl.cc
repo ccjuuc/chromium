@@ -42,17 +42,7 @@ namespace {
 
 BrowserAccessibilityStateImpl* g_instance = nullptr;
 
-// Auto-disable accessibility if this many seconds elapse with user input
-// events but no accessibility API usage.
-constexpr int kAutoDisableAccessibilityTimeSecs = 30;
 
-// Minimum number of user input events with no accessibility API usage
-// before auto-disabling accessibility.
-constexpr int kAutoDisableAccessibilityEventCount = 3;
-
-// Updating Active/Inactive time on every accessibility api calls would not be
-// good for perf. Instead, delay the update task.
-constexpr int kOnAccessibilityUsageUpdateDelaySecs = 5;
 
 // Parameter values for --force-renderer-accessibility=[bundle-name].
 const char kAXModeBundleBasic[] = "basic";
@@ -61,9 +51,8 @@ const char kAXModeBundleComplete[] = "complete";
 const char kAXModeBundleOnScreen[] = "on-screen";
 
 // A data holder attached to a WebContents while it is hidden and has
-// accessibility enabled. Used only when the disable_on_hide feature of
-// ProgressiveAccessibility is enabled and an active screen reader has not been
-// detected.
+// accessibility enabled. Used only when the ProgressiveAccessibilityPhase2
+// feature is enabled and an active screen reader has not been detected.
 //
 // An instance of this class is attached to a WebContents when it is hidden
 // (thereby recording the TimeTicks at which the hide event took place). Its
@@ -243,6 +232,16 @@ ui::AXMode FilterAccessibilityModeInvariants(ui::AXMode mode) {
     mode.set_mode(ui::AXMode::kLabelImages, false);
   }
 
+  // If the native adapted mode is requested, and native platform APIs are
+  // active, automatically upgrade it to include kWebContents. This ensures
+  // adapted views (like Webium's toolbar) are accessible to any native client
+  // querying the UI, while keeping accessibility off (zero performance cost)
+  // when no client is active.
+  if (mode.has_mode(ui::AXMode::kNativeAdaptedWebContents) &&
+      mode.has_mode(ui::AXMode::kNativeAPIs)) {
+    mode.set_mode(ui::AXMode::kWebContents, true);
+  }
+
   // Modes above kNativeAPIs and kWebContents require kWebContents. Some
   // components may enable higher bits, but those should only be given to a
   // WebContents if that WebContents also has the kWebContents mode enabled;
@@ -313,7 +312,7 @@ constexpr int kDisableDelayVarianceSeconds = 20;
 
 // static
 base::TimeDelta BrowserAccessibilityStateImpl::GetRandomizedDisableDelay() {
-  const base::TimeDelta variance = base::Seconds(base::RandInt(
+  const base::TimeDelta variance = base::Seconds(base::RandIntInclusive(
       -kDisableDelayVarianceSeconds, kDisableDelayVarianceSeconds));
   return kDisableDelay + variance;
 }
@@ -409,10 +408,10 @@ void BrowserAccessibilityStateImpl::OnAssistiveTechFound(
   const bool was_screenreader_active = ax_platform_.IsScreenReaderActive();
   ax_platform_.NotifyAssistiveTechChanged(assistive_tech);
 
-  // Terminate disable_on_hide if a screen reader has just become active. Do
-  // this without first checking the feature to avoid activating the field trial
-  // when it's not already active. Performing this removal when the feature is
-  // off is harmless.
+  // Terminate kProgressiveAccessibilityPhase2 if a screen reader has just
+  // become active. Do this without first checking the feature to avoid
+  // activating the field trial when it's not already active. Performing this
+  // removal when the feature is off is harmless.
   if (!was_screenreader_active && ax_platform_.IsScreenReaderActive()) {
     // Cancel all disablers. There is one for each WebContents in `last_hidden_`
     // and one for each that has had `AccessibilityDisabler::Schedule()` called.
@@ -485,6 +484,10 @@ void BrowserAccessibilityStateImpl::RefreshAssistiveTechIfNecessary(
   }
 }
 
+void BrowserAccessibilityStateImpl::RecordPlatformClientHistograms(
+    ui::AXMode old_mode,
+    ui::AXMode new_mode) {}
+
 ui::AssistiveTech BrowserAccessibilityStateImpl::ActiveAssistiveTech() const {
   return ax_platform_.active_assistive_tech();
 }
@@ -498,25 +501,6 @@ bool BrowserAccessibilityStateImpl::IsPerformanceFilteringAllowed() {
   return performance_filtering_allowed_;
 }
 
-void BrowserAccessibilityStateImpl::UpdateAccessibilityActivityTask() {
-  if (!g_instance) {
-    // There can be a race on shutdown since this is posted as a delayed task.
-    return;
-  }
-  base::TimeTicks now = ui::EventTimeForNow();
-  accessibility_last_usage_time_ = now;
-  if (accessibility_active_start_time_.is_null()) {
-    accessibility_active_start_time_ = now;
-  }
-  // If accessibility was enabled but inactive until now, log the amount
-  // of time between now and the last API usage.
-  if (!accessibility_inactive_start_time_.is_null()) {
-    base::UmaHistogramLongTimes("Accessibility.InactiveTime",
-                                now - accessibility_inactive_start_time_);
-    accessibility_inactive_start_time_ = base::TimeTicks();
-  }
-  accessibility_update_task_pending_ = false;
-}
 
 ui::AXMode BrowserAccessibilityStateImpl::GetAccessibilityMode() {
   return scoped_modes_for_process_.accessibility_mode();
@@ -529,91 +513,14 @@ ui::AXMode BrowserAccessibilityStateImpl::GetAccessibilityModeForBrowserContext(
       ModeCollectionForTarget::GetAccessibilityMode(browser_context));
 }
 
-bool BrowserAccessibilityStateImpl::ShouldBlockAutoDisable() {
-  // This condition should only occur if a known assistive tech is active.
-  // * If the assistive tech is actually still active, it indicates an error
-  // with the heuristic, and we should notify a histogram so that we can
-  // gather data and improve the heuristic's logic, as well as block the auto
-  // disable from occurring.
-  // * If the assistive tech is no longer active, then it has been unloaded
-  // and it is fine to auto-disable.
-  // Reaching here should be a rare case, and therefore we call the 'slow'
-  // code (uses system calls on Windows/Linux) to update the running active
-  // assistive tech state, before we make a determination.
-  return ActiveAssistiveTech() != ui::AssistiveTech::kNone;
-}
 
-void BrowserAccessibilityStateImpl::OnUserInputEvent() {
-  // No need to do anything if accessibility is off, or if it was forced on.
-  if (GetAccessibilityMode().is_mode_off() || !allow_ax_mode_changes_) {
-    return;
-  }
-
-  // If we get at least kAutoDisableAccessibilityEventCount user input
-  // events, more than kAutoDisableAccessibilityTimeSecs apart, with
-  // no accessibility API usage in-between disable accessibility.
-  // (See also OnAccessibilityApiUsage()).
-  // TODO(accessibility) This heuristic will possibly be removed because it's
-  // easy for user input events to occur without causing any changes to the
-  // a11y tree, or firing any events that an assistive tech would process.
-  // However, we should also consider whether to use this heuristic in addition
-  // to the focus/load complete one. Some categories of AT don't listen to focus
-  // or load complete either e.g. Select to Speak. It may not be necessary for
-  // Select-To-Speak to block auto disable if the disabling is lazy, e.g. on
-  // next page load and just for this WebContents.
-  base::TimeTicks now = ui::EventTimeForNow();
-  user_input_event_count_++;
-  if (user_input_event_count_ == 1) {
-    first_user_input_event_time_ = now;
-    return;
-  }
-
-  if (user_input_event_count_ < kAutoDisableAccessibilityEventCount) {
-    return;
-  }
-
-  if (ShouldBlockAutoDisable()) {
-    base::UmaHistogramEnumeration(
-        "Accessibility.AutoDisabled.BlockedAfter.UserInput",
-        ActiveAssistiveTech());
-    return;
-  }
-
-  if (now - first_user_input_event_time_ >
-      base::Seconds(kAutoDisableAccessibilityTimeSecs)) {
-    if (!accessibility_active_start_time_.is_null()) {
-      base::UmaHistogramLongTimes(
-          "Accessibility.ActiveTime",
-          accessibility_last_usage_time_ - accessibility_active_start_time_);
-
-      // This will help track the time accessibility spends enabled, but
-      // inactive.
-      if (!features::IsAutoDisableAccessibilityEnabled()) {
-        accessibility_inactive_start_time_ = accessibility_last_usage_time_;
-      }
-
-      accessibility_active_start_time_ = base::TimeTicks();
-    }
-
-    // Check if the feature to auto-disable accessibility is even enabled.
-    if (features::IsAutoDisableAccessibilityEnabled()) {
-      base::UmaHistogramCounts1000("Accessibility.AutoDisabled.EventCount",
-                                   user_input_event_count_);
-      DCHECK(!accessibility_enabled_time_.is_null());
-      base::UmaHistogramLongTimes("Accessibility.AutoDisabled.EnabledTime",
-                                  now - accessibility_enabled_time_);
-
-      accessibility_disabled_time_ = now;
-
-      // TODO(accessibility) Reimplement by making a11y dormant as opposed to
-      // turning off flags, which leads to thrashing.
-    }
-  }
-}
 
 void BrowserAccessibilityStateImpl::SetAXModeChangeAllowed(bool allowed) {
+  if (allow_ax_mode_changes_ == allowed) {
+    return;
+  }
   allow_ax_mode_changes_ = allowed;
-  ui::AXPlatformNode::SetAXModeChangeAllowed(allowed);
+  scoped_modes_for_process_.Recompute(MakePassKey());
 }
 
 bool BrowserAccessibilityStateImpl::IsAXModeChangeAllowed() const {
@@ -659,24 +566,6 @@ void BrowserAccessibilityStateImpl::EnableAXModeFromPlatform(
     platform_ax_mode_ =
         CreateScopedModeForProcess(new_mode | ui::AXMode::kFromPlatform);
   }
-
-  // If AXMode::kWebContent is being requested, turn off auto-disable.
-  // TODO(accessibility) Re-work the auto-disable feature.
-  // Platform accessibility API usage affects auto-disable.
-  // See OnUserInputEvent for how this is used to disable accessibility.
-  user_input_event_count_ = 0;
-
-  // See comment above kOnAccessibilityUsageUpdateDelaySecs for why we post a
-  // delayed task.
-  if (!accessibility_update_task_pending_) {
-    accessibility_update_task_pending_ = true;
-    GetUIThreadTaskRunner({})->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(
-            &BrowserAccessibilityStateImpl::UpdateAccessibilityActivityTask,
-            base::Unretained(this)),
-        base::Seconds(kOnAccessibilityUsageUpdateDelaySecs));
-  }
 }
 
 void BrowserAccessibilityStateImpl::OnMinimalPropertiesUsed() {
@@ -711,8 +600,6 @@ void BrowserAccessibilityStateImpl::OnHTMLAttributesUsed() {
 }
 
 void BrowserAccessibilityStateImpl::OnActionFromAssistiveTech() {
-  // See OnUserInputEvent for how this is used to disable accessibility.
-  user_input_event_count_ = 0;
   if (has_recently_checked_for_screen_reader_) {
     return;
   }
@@ -738,7 +625,12 @@ void BrowserAccessibilityStateImpl::OnActionFromAssistiveTech() {
   }
 }
 
-void BrowserAccessibilityStateImpl::OnPageNavigationComplete() {
+void BrowserAccessibilityStateImpl::OnPageNavigationComplete(
+    WebContents* web_contents) {
+  if (web_contents && web_contents->GetAccessibilityMode().has_mode(
+                          ui::AXMode::kNativeAdaptedWebContents)) {
+    return;
+  }
   ++num_page_navs_before_first_use_;
   has_recently_checked_for_screen_reader_ = false;
 }
@@ -757,11 +649,9 @@ void BrowserAccessibilityStateImpl::OnWebContentsInitialized(
     return;
   }
 
-  // Do not set any initial accessibility mode if ProgressiveAccessibility is
-  // enabled and the WebContents is initially hidden. This behavior is the same
-  // for both the only_enable and disable_on_hide variants of the feature.
-  if (web_contents->GetVisibility() == Visibility::HIDDEN &&
-      base::FeatureList::IsEnabled(features::kProgressiveAccessibility)) {
+  // Do not set any initial accessibility mode if the WebContents is initially
+  // hidden.
+  if (web_contents->GetVisibility() == Visibility::HIDDEN) {
     return;
   }
 
@@ -770,13 +660,13 @@ void BrowserAccessibilityStateImpl::OnWebContentsInitialized(
 
 void BrowserAccessibilityStateImpl::OnWebContentsRevealed(
     WebContentsImpl* web_contents) {
-  // Unconditionally cancel the disabler; even if the "disable_on_hide" mode is
-  // not selected. Do this without first checking the feature to avoid
-  // activating the field trial when it's not already active. Performing this
-  // removal when the feature is off is harmless. When the feature is active,
-  // this removal will call OnDisablerDestroyedForWebContents to remove
-  // `web_contents` from `last_hidden_` if the disabler has not yet been
-  // scheduled.
+  // Unconditionally cancel the disabler; even if
+  // kProgressiveAccessibilityPhase2 is not enabled. Do this without first
+  // checking the feature to avoid activating the field trial when it's not
+  // already active. Performing this removal when the feature is off is
+  // harmless. When the feature is active, this removal will call
+  // OnDisablerDestroyedForWebContents to remove `web_contents` from
+  // `last_hidden_` if the disabler has not yet been scheduled.
   AccessibilityDisabler::Remove(web_contents);
 
   const ui::AXMode effective_mode = FilterAccessibilityModeInvariants(
@@ -788,11 +678,6 @@ void BrowserAccessibilityStateImpl::OnWebContentsRevealed(
   // Return early to avoid activating the field trial when accessibility is not
   // enabled.
   if (effective_mode == web_contents->GetAccessibilityMode()) {
-    return;
-  }
-
-  // No special behavior when ProgressiveAccessibility is not enabled.
-  if (!base::FeatureList::IsEnabled(features::kProgressiveAccessibility)) {
     return;
   }
 
@@ -808,21 +693,19 @@ void BrowserAccessibilityStateImpl::OnWebContentsHidden(
     return;
   }
 
-  // No special behavior if ProgressiveAccessibility is not enabled, the
-  // "disable_on_hide" mode is not selected, or if a screen reader has been
-  // detected. This final limitation in in place because screen readers may lose
-  // their "point of regard" if the accessibility tree is destroyed and rebuilt;
-  // and because functional and fast accessibility is required to serve users of
-  // screen readers.
-  if (!base::FeatureList::IsEnabled(features::kProgressiveAccessibility) ||
-      features::kProgressiveAccessibilityModeParam.Get() !=
-          features::ProgressiveAccessibilityMode::kDisableOnHide ||
-      ax_platform_.IsScreenReaderActive()) {
+  // No special behavior if a screen reader has been detected or if
+  // ProgressiveAccessibilityPhase2 is not enabled. The former limitation is in
+  // place because screen readers may lose their "point of regard" if the
+  // accessibility tree is destroyed and rebuilt; and because functional and
+  // fast accessibility is required to serve users of screen readers.
+  if (ax_platform_.IsScreenReaderActive() ||
+      !base::FeatureList::IsEnabled(
+          features::kProgressiveAccessibilityPhase2)) {
     return;
   }
 
   // Add `web_contents` to the list of the last five hidden WCs.
-  CHECK(!base::Contains(last_hidden_, web_contents));
+  CHECK(!std::ranges::contains(last_hidden_, web_contents));
   last_hidden_.push_back(web_contents);
 
   // Create the disabler for this WebContents. The provided callback will be run
@@ -849,20 +732,6 @@ void BrowserAccessibilityStateImpl::OnDisablerDestroyedForWebContents(
   CHECK(std::erase(last_hidden_, web_contents));
 }
 
-void BrowserAccessibilityStateImpl::OnInputEvent(
-    const RenderWidgetHost& widget,
-    const blink::WebInputEvent& event,
-    InputEventSource source) {
-  // |this| observer cares about user input events (specifically keyboard,
-  // mouse & touch events) to decide if the accessibility APIs can be disabled.
-  if (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
-      event.GetType() == blink::WebInputEvent::Type::kGestureTapDown ||
-      event.GetType() == blink::WebInputEvent::Type::kTouchStart ||
-      event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
-      event.GetType() == blink::WebInputEvent::Type::kKeyDown) {
-    OnUserInputEvent();
-  }
-}
 
 std::unique_ptr<ScopedAccessibilityMode>
 BrowserAccessibilityStateImpl::CreateScopedModeForProcess(ui::AXMode mode) {
@@ -908,13 +777,6 @@ void BrowserAccessibilityStateImpl::ApplyAccessibilityModeToWebContents(
     return;
   }
 
-  // Unconditionally update the WebContents if ProgressiveAccessibility is not
-  // enabled.
-  if (!base::FeatureList::IsEnabled(features::kProgressiveAccessibility)) {
-    web_contents->SetAccessibilityMode(effective_mode);
-    return;
-  }
-
   // Only update the WebContents if it is not hidden.
   if (web_contents->GetVisibility() != Visibility::HIDDEN) {
     web_contents->SetAccessibilityMode(effective_mode);
@@ -926,8 +788,13 @@ void BrowserAccessibilityStateImpl::ApplyAccessibilityModeToWebContents(
 // scopers targeting the process changes.
 void BrowserAccessibilityStateImpl::OnModeChanged(ui::AXMode old_mode,
                                                   ui::AXMode new_mode) {
+  // Strip kNativeAdaptedWebContents so it never pollutes process-wide UMA
+  old_mode.set_mode(ui::AXMode::kNativeAdaptedWebContents, false);
+  new_mode.set_mode(ui::AXMode::kNativeAdaptedWebContents, false);
+
   ui::RecordAccessibilityModeHistograms(ui::AXHistogramPrefix::kNone, new_mode,
                                         old_mode);
+  RecordPlatformClientHistograms(old_mode, new_mode);
 
   // Track the time since start-up before the kWebContents mode was enabled,
   // ensuring we record this value only one time.
@@ -968,17 +835,6 @@ void BrowserAccessibilityStateImpl::OnModeChanged(ui::AXMode old_mode,
 
   // Handle additions to the process's mode flags.
   if (const auto additions = new_mode & ~old_mode; !additions.is_mode_off()) {
-    // Keep track of the total time accessibility is enabled, and the time
-    // it was previously disabled.
-    if (old_mode.is_mode_off()) {
-      base::TimeTicks now = ui::EventTimeForNow();
-      accessibility_enabled_time_ = now;
-      if (!accessibility_disabled_time_.is_null()) {
-        base::UmaHistogramLongTimes("Accessibility.AutoDisabled.DisabledTime",
-                                    now - accessibility_disabled_time_);
-      }
-    }
-
     // Broadcast the new mode flags, if any, to the AXModeObservers.
     ax_platform_.NotifyModeAdded(additions);
   }
@@ -988,8 +844,8 @@ void BrowserAccessibilityStateImpl::OnModeChanged(ui::AXMode old_mode,
 // scoped_modes_for_process_ when recomputing the effective mode for the
 // collection of scopers targeting the process.
 ui::AXMode BrowserAccessibilityStateImpl::FilterModeFlags(ui::AXMode mode) {
-  if (activation_from_platform_enabled_) {
-    // Allow mode changes with `kFromPlatform`, but filter out that one bit.
+  if (activation_from_platform_enabled_ && allow_ax_mode_changes_) {
+    // Allow mode changes with kFromPlatform, but filter out that one bit.
     // It need not be sent to renderers.
     return mode & ~ui::AXMode(ui::AXMode::kFromPlatform);
   }

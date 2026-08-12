@@ -101,7 +101,8 @@ class ReadingListModelImpl : public ReadingListModel {
   // API specifically for changes received via sync.
   ReadingListEntry* SyncMergeEntry(scoped_refptr<ReadingListEntry> entry);
   void SyncRemoveEntry(const GURL& url);
-  void SyncDeleteAllEntriesAndSyncMetadata();
+  void SyncDeleteAllEntriesAndSyncMetadata(
+      std::unique_ptr<syncer::MetadataChangeList> metadata_change_list);
 
   class ScopedReadingListBatchUpdateImpl : public ScopedReadingListBatchUpdate,
                                            public ReadingListModelObserver {
@@ -204,7 +205,12 @@ class ReadingListModelImpl : public ReadingListModel {
 
   ReadingListSyncBridge sync_bridge_;
 
-  base::ObserverList<ReadingListModelObserver>::Unchecked observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      ReadingListModelObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observers_;
 
   bool loaded_ = false;
 

@@ -4,13 +4,17 @@
 
 #import "ui/menus/cocoa/menu_controller.h"
 
-#include <AppKit/AppKit.h>
+#import <AppKit/AppKit.h>
+#include <CoreFoundation/CoreFoundation.h>
+#import <Foundation/Foundation.h>
 
 #include "base/apple/bridging.h"
 #include "base/apple/foundation_util.h"
 #include "base/apple/owned_objc.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
+#include "base/mac/mac_util.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -18,13 +22,20 @@
 #include "ui/base/interaction/element_tracker_mac.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/models/menu_model.h"
+#include "ui/base/themed_vector_icon.h"
 #import "ui/events/event_utils.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/strings/grit/ui_strings.h"
 
 namespace {
+
+// Whether MenuControllerCocoa uses the new menu icon scheme. See the method
+// comment on +initializeWithNewMenuIconScheme: for more details.
+static bool g_use_new_menu_icon_scheme = false;
 
 // Called when an empty submenu is created. This inserts a menu item labeled
 // "(empty)" into the submenu. Matches Windows behavior.
@@ -47,6 +58,163 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
     }
   }
   return false;
+}
+
+void SetMenuItemIcon(NSMenuItem* menu_item,
+                     ui::ImageModel icon,
+                     BOOL is_context_menu) {
+  bool should_use_icons = [is_context_menu] {
+    // The question of whether icons should be used is a question of context
+    // menus.
+    if (!is_context_menu) {
+      return true;
+    }
+
+    // For new-scheme menu icons, macOS 26+ gets icons; earlier versions don't.
+    if (g_use_new_menu_icon_scheme) {
+      return base::mac::MacOSMajorVersion() >= 26;
+    }
+
+    // For old-scheme menu icons, icons are always shown, though not all icons
+    // (as per `should_use_vector_icons`).
+    return true;
+  }();
+
+  if (!should_use_icons) {
+    return;
+  }
+
+  bool should_use_vector_icons = [is_context_menu] {
+    // The question of whether icons should be used is a question of context
+    // menus.
+    if (!is_context_menu) {
+      return true;
+    }
+
+    // Vector icons are only shown with the new icon scheme.
+    return g_use_new_menu_icon_scheme;
+  }();
+
+  NSImage* menu_item_image;
+
+  if (icon.IsImage()) {
+    menu_item_image = icon.GetImage().ToNSImage();
+  } else if (icon.IsVectorIcon()) {
+    if (should_use_vector_icons) {
+      ui::ThemedVectorIcon themed_icon(icon.GetVectorIcon());
+      menu_item_image =
+          gfx::Image(themed_icon.GetImageSkia(SK_ColorBLACK)).ToNSImage();
+      [menu_item_image setTemplate:YES];
+    } else {
+      menu_item_image = nil;
+    }
+  } else if (icon.IsEmpty()) {
+    menu_item_image = nil;
+  } else {
+    // A non-empty ui::ImageModel can be one of three types. The "image
+    // generator" type isn't currently used for any menu items shown on the Mac,
+    // so die if it is encountered. Implement handling it if that changes.
+    CHECK(icon.IsImageGenerator());
+    NOTREACHED();
+  }
+
+  menu_item.image = menu_item_image;
+}
+
+NSImage* CreatePaddedImage(CGFloat width, NSImage* image) {
+  NSImage* result = [NSImage
+       imageWithSize:NSMakeSize(width, image.size.height)
+             flipped:NO
+      drawingHandler:^BOOL(NSRect dest_rect) {
+        if (image) {
+          // Draw the image centered in the given space.
+          CGFloat extra_width = dest_rect.size.width - image.size.width;
+          CGFloat extra_height = dest_rect.size.height - image.size.height;
+          dest_rect =
+              NSIntegralRect(NSInsetRect(dest_rect, /*dX=*/extra_width / 2,
+                                         /*dY=*/extra_height / 2));
+          [image drawInRect:dest_rect];
+        }
+        return YES;
+      }];
+  [result setTemplate:[image isTemplate]];
+  return result;
+}
+
+void CreateSharedIndentsForMenu(NSMenu* menu) {
+  if (!g_use_new_menu_icon_scheme || base::mac::MacOSMajorVersion() < 26) {
+    return;
+  }
+
+  // For the new menu icon scheme, on macOS 26+, what is wanted is for menu
+  // items to be indented within a section if any item in that section has an
+  // image set. For example:
+  //
+  // ┌───────────────┐
+  // │ [img] Item 1  │
+  // │       Item 2  │ ← This is indented due to items 1 and 3.
+  // │ [img] Item 3  │
+  // │       Item 4  │ ← This is indented due to items 1 and 3.
+  // ├───────────────┤
+  // │ Item 5        │
+  // │ Item 6        │
+  // └───────────────┘
+  //
+  // macOS 26+ has this style as well, but with a huge caveat. Only symbol
+  // images will cause this shared indentation. If a non-symbol image is set,
+  // then no shared indentation will happen.
+  //
+  // Earlier versions of this code (see the commit history) resolved this issue
+  // by overriding +[NSContextMenuItemView _imageWidthSharingForItem:], and
+  // having it return "true" for any image, not just symbol images.
+  //
+  // However, things changed in macOS 27. That release requires more than half
+  // of the items in a section to have an icon for the remaining items in the
+  // section to share the indent. In the example above, because only 50% of the
+  // items have an image, the other items would not share the indent.
+  //
+  // The machinery within AppKit's NSContextMenuImpl that manages sharing the
+  // indent is complicated. While overriding a function to return "true" to
+  // share the indent was simple enough, overriding the "more than 50%" code is
+  // too intricate and prone to change to make it worth trying to hack. Instead,
+  // do it manually.
+
+  // Make a copy of the menu items for two reasons. First, this makes walking
+  // the item array easier, both in terms of syntax as well as not hammering the
+  // NSMenu. Second, this allows the appending of a separator item locally, to
+  // allow the code below to assume that every section is ended by a separator
+  // item, and as a result be simpler.
+  NSMutableArray<NSMenuItem*>* items = [menu.itemArray mutableCopy];
+  [items addObject:[NSMenuItem separatorItem]];
+
+  CGFloat largest_image_width = 0;
+  for (NSMenuItem* item in items) {
+    largest_image_width = std::max(largest_image_width, item.image.size.width);
+  }
+
+  NSUInteger start_of_section = 0;
+  bool section_has_image = false;
+  for (NSUInteger i = 0; i < items.count; ++i) {
+    NSMenuItem* item = items[i];
+    if (!item.separatorItem) {
+      section_has_image |= (item.image != nil);
+      continue;
+    }
+
+    // End of section. Did any item in that section have an image? If so,
+    // pad all the images (and create empty pads for those items with no image).
+    if (section_has_image) {
+      for (NSUInteger j = start_of_section; j < i; ++j) {
+        NSMenuItem* section_item = items[j];
+        section_item.image =
+            CreatePaddedImage(largest_image_width, section_item.image);
+      }
+    }
+
+    // Reset tracking variables and move on to the next section (if any).
+    section_has_image = false;
+    start_of_section = i + 1;
+  }
 }
 
 }  // namespace
@@ -117,7 +285,12 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
   base::WeakPtr<ui::MenuModel> _model;
   NSMenu* __strong _menu;
   BOOL _isMenuOpen;
+  BOOL _isContextMenu;
   id<MenuControllerCocoaDelegate> __weak _delegate;
+}
+
++ (void)initializeWithNewMenuIconScheme:(BOOL)newScheme {
+  g_use_new_menu_icon_scheme = newScheme;
 }
 
 - (ui::MenuModel*)model {
@@ -129,9 +302,11 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
 }
 
 - (instancetype)initWithModel:(ui::MenuModel*)model
+                isContextMenu:(BOOL)contextMenu
                      delegate:(id<MenuControllerCocoaDelegate>)delegate {
   if ((self = [super init])) {
     _model = model->AsWeakPtr();
+    _isContextMenu = contextMenu;
     _delegate = delegate;
     [self buildMenu];
   }
@@ -169,6 +344,7 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
     }
   }
 
+  CreateSharedIndentsForMenu(menu);
   return menu;
 }
 
@@ -188,11 +364,7 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
                                                 action:@selector(itemSelected:)
                                          keyEquivalent:@""];
 
-  // If the menu item has an icon, set it.
-  ui::ImageModel icon = model->GetIconAt(index);
-  if (icon.IsImage()) {
-    item.image = icon.GetImage().ToNSImage();
-  }
+  SetMenuItemIcon(item, model->GetIconAt(index), _isContextMenu);
 
   ui::MenuModel::ItemType type = model->GetTypeAt(index);
   const NSInteger modelIndex = base::checked_cast<NSInteger>(index);
@@ -264,15 +436,16 @@ bool MenuHasVisibleItems(const ui::MenuModel* model) {
   BOOL checked = model->IsItemCheckedAt(modelIndex);
   menuItem.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
   menuItem.hidden = !model->IsVisibleAt(modelIndex);
+
   if (model->IsItemDynamicAt(modelIndex)) {
     // Update the label and the icon.
     NSString* label =
         l10n_util::FixUpWindowsStyleLabel(model->GetLabelAt(modelIndex));
     menuItem.title = label;
 
-    ui::ImageModel icon = model->GetIconAt(modelIndex);
-    menuItem.image = icon.IsImage() ? icon.GetImage().ToNSImage() : nil;
+    SetMenuItemIcon(menuItem, model->GetIconAt(modelIndex), _isContextMenu);
   }
+
   const gfx::FontList* font_list = model->GetLabelFontListAt(modelIndex);
   if (font_list) {
     CTFontRef font = font_list->GetPrimaryFont().GetCTFont();

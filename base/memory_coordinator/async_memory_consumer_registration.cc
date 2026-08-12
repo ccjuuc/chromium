@@ -14,6 +14,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/pass_key.h"
 
 namespace base {
 
@@ -23,17 +24,34 @@ class AsyncMemoryConsumerRegistration::MainThread : public MemoryConsumer {
  public:
   MainThread() { DETACH_FROM_THREAD(thread_checker_); }
 
-  void Init(std::string consumer_id,
-            MemoryConsumerTraits traits,
+  void Init(std::string consumer_name,
+            std::optional<MemoryConsumerTraits> traits,
+            bool is_passive,
             CheckUnregister check_unregister,
-            CheckRegistryExists check_registry_exists,
             WeakPtr<AsyncMemoryConsumerRegistration> parent,
             scoped_refptr<SequencedTaskRunner> consumer_task_runner) {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     consumer_task_runner_ = std::move(consumer_task_runner);
     parent_ = std::move(parent);
-    registration_.emplace(consumer_id, traits, this, check_unregister,
-                          check_registry_exists);
+    is_passive_ = is_passive;
+    registration_.emplace(consumer_name, traits, this, check_unregister);
+    registration_->SetAsyncHandleDestroyedFlag(
+        &async_handle_destroyed_, PassKey<AsyncMemoryConsumerRegistration>());
+
+    // The memory limit could already have been set by a policy. The
+    // consumer implementation on the other sequence must be notified.
+    if (memory_limit() != base::MemoryConsumer::kDefaultMemoryLimit) {
+      consumer_task_runner_->PostTask(
+          FROM_HERE,
+          BindOnce(&AsyncMemoryConsumerRegistration::NotifyUpdateMemoryLimit,
+                   parent_, memory_limit()));
+    }
+  }
+
+  void NotifyAsyncHandleDestroyed() {
+    // Use release/acquire ordering to ensure the main thread sees this update
+    // before the registry is potentially destroyed.
+    async_handle_destroyed_.store(true, std::memory_order_release);
   }
 
  private:
@@ -53,6 +71,11 @@ class AsyncMemoryConsumerRegistration::MainThread : public MemoryConsumer {
                  parent_));
   }
 
+  bool IsPassive() const override {
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    return is_passive_;
+  }
+
   // The task runner on which the off-sequence consumer lives.
   scoped_refptr<SequencedTaskRunner> consumer_task_runner_
       GUARDED_BY_CONTEXT(thread_checker_);
@@ -65,30 +88,42 @@ class AsyncMemoryConsumerRegistration::MainThread : public MemoryConsumer {
   std::optional<MemoryConsumerRegistration> registration_
       GUARDED_BY_CONTEXT(thread_checker_);
 
+  std::atomic<bool> async_handle_destroyed_{false};
+
+  bool is_passive_ GUARDED_BY_CONTEXT(thread_checker_) = false;
+
   THREAD_CHECKER(thread_checker_);
 };
 
 // AsyncMemoryConsumerRegistration ---------------------------------------------
 
 AsyncMemoryConsumerRegistration::AsyncMemoryConsumerRegistration(
-    std::string_view consumer_id,
-    MemoryConsumerTraits traits,
+    std::string_view consumer_name,
+    std::optional<MemoryConsumerTraits> traits,
     MemoryConsumer* consumer,
-    CheckUnregister check_unregister,
-    CheckRegistryExists check_registry_exists)
+    CheckUnregister check_unregister)
     : consumer_(consumer) {
+  // TODO(crbug.com/441951621): DCHECK instead of silently failing when a
+  // AsyncMemoryConsumerRegistration is created in a non-sequenced context.
+  // Tests will need to be adjusted for that to work.
+  if (!SingleThreadTaskRunner::HasMainThreadDefault()) {
+    return;
+  }
+
   main_thread_task_runner_ = SingleThreadTaskRunner::GetMainThreadDefault();
   main_thread_ = std::make_unique<MainThread>();
   main_thread_task_runner_->PostTask(
-      FROM_HERE, BindOnce(&MainThread::Init, Unretained(main_thread_.get()),
-                          std::string(consumer_id), traits, check_unregister,
-                          check_registry_exists, weak_ptr_factory_.GetWeakPtr(),
-                          SequencedTaskRunner::GetCurrentDefault()));
+      FROM_HERE,
+      BindOnce(&MainThread::Init, Unretained(main_thread_.get()),
+               std::string(consumer_name), traits, consumer->IsPassive(),
+               check_unregister, weak_ptr_factory_.GetWeakPtr(),
+               SequencedTaskRunner::GetCurrentDefault()));
 }
 
 AsyncMemoryConsumerRegistration::~AsyncMemoryConsumerRegistration() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (main_thread_) {
+    main_thread_->NotifyAsyncHandleDestroyed();
     // In tests, tasks on the main thread are not executed upon destruction of
     // the TaskEnvironment. The main thread object thus gets tagged as leaking,
     // which is fine in this case.

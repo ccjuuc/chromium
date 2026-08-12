@@ -10,9 +10,10 @@
 #import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
 #import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/authentication/test/signin_matchers.h"
-#import "ios/chrome/browser/popup_menu/overflow_menu/public/feature_flags.h"
+#import "ios/chrome/browser/infobars/ui_bundled/banners/infobar_banner_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/privacy/privacy_constants.h"
 #import "ios/chrome/browser/settings/ui_bundled/privacy/safe_browsing/safe_browsing_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/common/string_util.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -105,7 +106,7 @@ void PressInfoButtonForCell(NSString* cellId) {
 @implementation PrivacySafeBrowsingTestCase
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config;
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
   // TODO: crbug.com/444244681 - Remove this and tests when fully deployed.
   config.features_enabled.push_back(
       safe_browsing::kMovePasswordLeakDetectionToggleIos);
@@ -199,11 +200,14 @@ void PressInfoButtonForCell(NSString* cellId) {
 }
 
 // Tests UI and preference value updates between multiple windows.
-- (void)testPrivacySafeBrowsingMultiWindow {
+//
+//  TODO(crbug.com/485866589): The test is failign on all iOS versions,
+//  including iOS 26. Re-enable it once fixed.
+- (void)DISABLED_testPrivacySafeBrowsingMultiWindow {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
   }
-  if (@available(iOS 19.0, *)) {
+  if (@available(iOS 26.0, *)) {
     // TODO(crbug.com/427699033): Re-enable test on iOS 26.
     // Fails to interact with second window.
     EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.");
@@ -391,6 +395,11 @@ void PressInfoButtonForCell(NSString* cellId) {
   // TODO: crbug.com/444244681 - Remove when this is fully deployed.
   config.features_enabled.push_back(
       safe_browsing::kMovePasswordLeakDetectionToggleIos);
+  // TODO(crbug.com/514608938): Fix test for Chrome Next.
+  if ([self isRunningTest:@selector
+            (testPasswordLeakCheckToggle_MissingWhenFeatureFlagEnabled)]) {
+    config.features_disabled.push_back(kChromeNextIa);
+  }
   return config;
 }
 

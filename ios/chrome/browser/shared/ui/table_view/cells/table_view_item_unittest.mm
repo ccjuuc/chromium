@@ -5,7 +5,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_item.h"
 
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -22,24 +21,21 @@ TEST_F(TableViewItemTest, ConfigureCellPortsAccessibilityProperties) {
   EXPECT_TRUE([cell isMemberOfClass:[LegacyTableViewCell class]]);
   EXPECT_EQ(UIAccessibilityTraitNone, [cell accessibilityTraits]);
   EXPECT_FALSE([cell accessibilityIdentifier]);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
   EXPECT_EQ(UIAccessibilityTraitButton, [cell accessibilityTraits]);
   EXPECT_NSEQ(@"test_identifier", [cell accessibilityIdentifier]);
 }
 
 TEST_F(TableViewItemTest, ConfigureCellAccessoryViewProperties) {
   UIImageView* expectedImage = [[UIImageView alloc]
-      initWithImage:DefaultSymbolTemplateWithPointSize(
-                        kChevronForwardSymbol, kSymbolAccessoryPointSize)];
+      initWithImage:SymbolTemplateWithPointSize(SymbolChevronForward,
+                                                kSymbolAccessoryPointSize)];
   TableViewItem* item = [[TableViewItem alloc] initWithType:0];
   item.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
   item.accessoryView = expectedImage;
 
   LegacyTableViewCell* cell = [[[item cellClass] alloc] init];
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
   // Internally in UITableViewCell, accessoryView takes precedence over
   // accessoryType property.
   EXPECT_EQ(cell.accessoryType, UITableViewCellAccessoryDisclosureIndicator);

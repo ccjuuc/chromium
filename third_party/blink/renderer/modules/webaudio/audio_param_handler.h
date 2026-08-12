@@ -10,8 +10,10 @@
 #include <atomic>
 #include <tuple>
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/synchronization/lock.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_destination_node.h"
@@ -36,8 +38,9 @@ namespace blink {
 // dies.
 //
 // Connected to AudioNodeOutput using AudioNodeWiring.
-class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
-                                public AudioSummingJunction {
+class MODULES_EXPORT AudioParamHandler final
+    : public ThreadSafeRefCounted<AudioParamHandler>,
+      public AudioSummingJunction {
  public:
   // Each AudioParam gets an identifier here.  This is mostly for instrospection
   // if warnings or other messages need to be printed. It's useful to know what
@@ -79,14 +82,6 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
     kParamTypeAudioWorklet,
   };
 
-  // Automation rate of the AudioParam
-  enum class AutomationRate {
-    // a-rate
-    kAudio,
-    // k-rate
-    kControl
-  };
-
   // Indicates whether automation rate can be changed.
   enum class AutomationRateMode {
     // Rate can't be changed after construction
@@ -98,7 +93,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   static scoped_refptr<AudioParamHandler> Create(BaseAudioContext& context,
                                                  AudioParamType param_type,
                                                  double default_value,
-                                                 AutomationRate rate,
+                                                 V8AutomationRate::Enum rate,
                                                  AutomationRateMode rate_mode,
                                                  float min_value,
                                                  float max_value) {
@@ -112,11 +107,11 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
 
   float Value();
   void SetValue(float value);
-  AutomationRate GetAutomationRate() const {
+  V8AutomationRate::Enum GetAutomationRate() const {
     base::AutoLock rate_locker(RateLock());
     return automation_rate_;
   }
-  void SetAutomationRate(AutomationRate automation_rate) {
+  void SetAutomationRate(V8AutomationRate::Enum automation_rate) {
     base::AutoLock rate_locker(RateLock());
     automation_rate_ = automation_rate;
   }
@@ -170,7 +165,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   bool HasSampleAccurateValues() const;
 
   bool IsAudioRate() const {
-    return automation_rate_ == AutomationRate::kAudio;
+    return automation_rate_ == V8AutomationRate::Enum::kARate;
   }
 
   // Calculates parameter values starting at the context's current time.  Must
@@ -184,7 +179,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   base::Lock& RateLock() const { return rate_lock_; }
 
  private:
-  class ParamEvent {
+  class MODULES_EXPORT ParamEvent {
    public:
     enum class Type {
       kSetValue,
@@ -349,10 +344,13 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
 
   friend class AudioNodeWiring;
 
+  FRIEND_TEST_ALL_PREFIXES(AudioParamHandlerTest,
+                           TimelinePruningOnDisconnectedNode);
+
   AudioParamHandler(BaseAudioContext&,
                     AudioParamType,
                     double default_value,
-                    AutomationRate rate,
+                    V8AutomationRate::Enum rate,
                     AutomationRateMode rate_mode,
                     float min,
                     float max);
@@ -407,13 +405,13 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   // starts after `start_frame`.  These initial values are filled using
   // `default_value`.  The updated `current_frame` and `write_index` is
   // returned.
-  std::tuple<size_t, unsigned> HandleFirstEvent(base::span<float> values,
-                                                float default_value,
-                                                size_t start_frame,
-                                                size_t end_frame,
-                                                double sample_rate,
-                                                size_t current_frame,
-                                                unsigned write_index)
+  std::tuple<size_t, size_t> HandleFirstEvent(base::span<float> values,
+                                              float default_value,
+                                              size_t start_frame,
+                                              size_t end_frame,
+                                              double sample_rate,
+                                              size_t current_frame,
+                                              size_t write_index)
       EXCLUSIVE_LOCKS_REQUIRED(events_lock_);
 
   // Return true if `current_event` starts after `current_frame`, but
@@ -454,7 +452,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   // special handling because the ramp should start at whatever value
   // the SetTarget event has reached at this time, instead of using
   // the value of the SetTarget event.
-  void ProcessSetTargetFollowedByRamp(int event_index,
+  void ProcessSetTargetFollowedByRamp(wtf_size_t event_index,
                                       ParamEvent*& current_event,
                                       ParamEvent::Type next_event_type,
                                       size_t current_frame,
@@ -466,7 +464,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   // Handle processing of LinearRampEvent, writing the appropriate
   // values to `values`.  Returns the updated `current_frame`, last
   // computed `value`, and the updated `write_index`.
-  std::tuple<size_t, float, unsigned> ProcessLinearRamp(
+  std::tuple<size_t, float, size_t> ProcessLinearRamp(
       const size_t fill_to_frame,
       const double time1,
       const double time2,
@@ -476,12 +474,12 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
       base::span<float> values,
       size_t current_frame,
       float value,
-      unsigned write_index);
+      size_t write_index);
 
   // Handle processing of ExponentialRampEvent, writing the appropriate
   // values to `values`.  Returns the updated `current_frame`, last
   // computed `value`, and the updated `write_index`.
-  std::tuple<size_t, float, unsigned> ProcessExponentialRamp(
+  std::tuple<size_t, float, size_t> ProcessExponentialRamp(
       const size_t fill_to_frame,
       const double time1,
       const double time2,
@@ -491,12 +489,12 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
       base::span<float> values,
       size_t current_frame,
       float value,
-      unsigned write_index);
+      size_t write_index);
 
   // Handle processing of SetTargetEvent, writing the appropriate
   // values to `values`.  Returns the updated `current_frame`, last
   // computed `value`, and the updated `write_index`.
-  std::tuple<size_t, float, unsigned> ProcessSetTarget(
+  std::tuple<size_t, float, size_t> ProcessSetTarget(
       const size_t fill_to_frame,
       const double time1,
       const float value1,
@@ -507,12 +505,12 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
       base::span<float> values,
       size_t current_frame,
       float value,
-      unsigned write_index);
+      size_t write_index);
 
   // Handle processing of SetValueCurveEvent, writing the appropriate
   // values to `values`.  Returns the updated `current_frame`, last
   // computed `value`, and the updated `write_index`.
-  std::tuple<size_t, float, unsigned> ProcessSetValueCurve(
+  std::tuple<size_t, float, size_t> ProcessSetValueCurve(
       size_t fill_to_frame,
       const double time1,
       const double sample_rate,
@@ -523,31 +521,23 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
       base::span<float> values,
       size_t current_frame,
       float value,
-      unsigned write_index);
+      size_t write_index);
 
   // Handle processing of CancelValuesEvent, writing the appropriate
   // values to `values`.  Returns the updated `current_frame`, last
   // computed `value`, and the updated `write_index`.
-  std::tuple<size_t, float, unsigned> ProcessCancelValues(
+  std::tuple<size_t, float, size_t> ProcessCancelValues(
       const size_t fill_to_frame,
       const double time1,
       const double sample_rate,
       const double control_rate,
       const size_t fill_to_end_frame,
       const ParamEvent* const event,
-      const int event_index,
+      const wtf_size_t event_index,
       base::span<float> values,
       size_t current_frame,
       float value,
-      unsigned write_index) EXCLUSIVE_LOCKS_REQUIRED(events_lock_);
-
-  // Fill the output vector `values` with the value `default_value`,
-  // starting at `write_index` and continuing up to `end_frame`
-  // (exclusive).  `write_index` is updated with the new index.
-  uint32_t FillWithDefault(float* values,
-                           float default_value,
-                           uint32_t end_frame,
-                           uint32_t write_index);
+      size_t write_index) EXCLUSIVE_LOCKS_REQUIRED(events_lock_);
 
   // When cancelling events, remove the items from `events_` starting
   // at the given index.
@@ -586,7 +576,7 @@ class AudioParamHandler final : public ThreadSafeRefCounted<AudioParamHandler>,
   mutable base::Lock rate_lock_;
 
   // The automation rate of the AudioParam (k-rate or a-rate)
-  AutomationRate automation_rate_;
+  V8AutomationRate::Enum automation_rate_;
 
   // `rate_mode_` determines if the user can change the automation rate to a
   // different value.

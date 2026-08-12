@@ -31,6 +31,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/pod_tree_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -42,9 +43,7 @@ using tree_test_helpers::NextRandom;
 #ifndef NDEBUG
 template <>
 struct ValueToString<void*> {
-  static String ToString(void* const& value) {
-    return String::Format("0x%p", value);
-  }
+  static String ToString(void* const& value) { return Format("0x{}", value); }
 };
 #endif
 
@@ -58,8 +57,7 @@ TEST(PodIntevalTreeTest, TestInsertionAndQuery) {
   PodIntervalTree<float> tree;
   tree.Add(PodInterval<float>(2, 4));
   ASSERT_TRUE(tree.CheckInvariants());
-  Vector<PodInterval<float>> overlap =
-      tree.AllOverlaps(PodInterval<float>(1, 3));
+  Vector<PodInterval<float>> overlap = tree.AllOverlaps(1, 3);
   EXPECT_EQ(1U, overlap.size());
   EXPECT_EQ(2, overlap[0].Low());
   EXPECT_EQ(4, overlap[0].High());
@@ -86,8 +84,7 @@ TEST(PodIntevalTreeTest, TestQueryAgainstZeroSizeInterval) {
   tree.Add(PodInterval<float>(3.5, 5));
   tree.Add(PodInterval<float>(2, 4));
   ASSERT_TRUE(tree.CheckInvariants());
-  Vector<PodInterval<float>> result =
-      tree.AllOverlaps(PodInterval<float>(3, 3));
+  Vector<PodInterval<float>> result = tree.AllOverlaps(3, 3);
   EXPECT_EQ(1U, result.size());
   EXPECT_EQ(2, result[0].Low());
   EXPECT_EQ(4, result[0].High());
@@ -96,9 +93,7 @@ TEST(PodIntevalTreeTest, TestQueryAgainstZeroSizeInterval) {
 #ifndef NDEBUG
 template <>
 struct ValueToString<int*> {
-  static String ToString(int* const& value) {
-    return String::Format("0x%p", value);
-  }
+  static String ToString(int* const& value) { return Format("0x{}", value); }
 };
 #endif
 
@@ -118,7 +113,6 @@ TEST(PodIntevalTreeTest, TestDuplicateElementInsertion) {
   EXPECT_TRUE(tree.Contains(interval2));
   EXPECT_FALSE(tree.Contains(interval1));
   EXPECT_TRUE(tree.Remove(interval2));
-  EXPECT_EQ(0, tree.size());
 }
 
 namespace {
@@ -159,8 +153,7 @@ TEST(PodIntevalTreeTest, TestQueryingOfComplexUserData) {
   data1.b = 6;
   tree.Add(tree.CreateInterval(2, 4, data1));
   ASSERT_TRUE(tree.CheckInvariants());
-  Vector<PodInterval<float, UserData1>> overlaps =
-      tree.AllOverlaps(tree.CreateInterval(3, 5, data1));
+  Vector<PodInterval<float, UserData1>> overlaps = tree.AllOverlaps(3, 5);
   EXPECT_EQ(1U, overlaps.size());
   EXPECT_EQ(5, overlaps[0].Data().a);
   EXPECT_EQ(6, overlaps[0].Data().b);

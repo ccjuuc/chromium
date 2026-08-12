@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "base/gtest_prod_util.h"
-#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/site_engagement/core/mojom/site_engagement_details.mojom-forward.h"
@@ -199,7 +199,7 @@ class SiteEngagementScore {
   // This version of the constructor is used in unit tests.
   SiteEngagementScore(base::Clock* clock,
                       const GURL& origin,
-                      std::optional<base::Value::Dict> score_dict);
+                      std::optional<base::DictValue> score_dict);
 
   // Determine the score, accounting for any decay.
   double DecayedScore() const;
@@ -209,13 +209,13 @@ class SiteEngagementScore {
 
   // Updates the content settings dictionary |score_dict| with the current score
   // fields. Returns true if |score_dict| changed, otherwise return false.
-  bool UpdateScoreDict(base::Value::Dict& score_dict);
+  bool UpdateScoreDict(base::DictValue& score_dict);
 
   // The clock used to vend times. Enables time travelling in tests. Owned by
   // the SiteEngagementService.
-  // `clock_` is not a raw_ptr<...> for performance reasons (based on analysis
-  // of sampling profiler data).
-  RAW_PTR_EXCLUSION base::Clock* clock_;
+  // `clock_` uses UnprotectedInRelease for performance reasons (based on
+  // analysis of sampling profiler data).
+  raw_ptr<base::Clock, UnprotectedInRelease> clock_;
 
   // |raw_score_| is the score before any decay is applied.
   double raw_score_;
@@ -234,15 +234,15 @@ class SiteEngagementScore {
   base::Time last_shortcut_launch_time_;
 
   // The dictionary that represents this engagement score.
-  std::optional<base::Value::Dict> score_dict_;
+  std::optional<base::DictValue> score_dict_;
 
   // The origin this score represents.
   GURL origin_;
 
   // The settings to write this score to when Commit() is called.
-  // `settings_map_` is not a raw_ptr<...> for performance reasons (based on
-  // analysis of sampling profiler data).
-  RAW_PTR_EXCLUSION HostContentSettingsMap* settings_map_;
+  // `settings_map_` uses UnprotectedInRelease for performance reasons (based
+  // on analysis of sampling profiler data).
+  raw_ptr<HostContentSettingsMap, UnprotectedInRelease> settings_map_;
 };
 
 }  // namespace site_engagement

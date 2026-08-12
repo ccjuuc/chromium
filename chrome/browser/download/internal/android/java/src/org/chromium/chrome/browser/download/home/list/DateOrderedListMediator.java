@@ -24,6 +24,7 @@ import org.chromium.chrome.browser.download.home.DownloadManagerUiConfig;
 import org.chromium.chrome.browser.download.home.FaviconProvider;
 import org.chromium.chrome.browser.download.home.JustNowProvider;
 import org.chromium.chrome.browser.download.home.OfflineItemSource;
+import org.chromium.chrome.browser.download.home.filter.BlockedSensitiveOfflineItemFilter;
 import org.chromium.chrome.browser.download.home.filter.DangerousOfflineItemFilter;
 import org.chromium.chrome.browser.download.home.filter.DeleteUndoOfflineItemFilter;
 import org.chromium.chrome.browser.download.home.filter.Filters.FilterType;
@@ -123,6 +124,7 @@ class DateOrderedListMediator implements BackPressHandler {
     private final ListItemModel mModel;
     private final DeleteController mDeleteController;
     private final RenameController mRenameController;
+    private final Callback<OfflineItem> mOpenWithHandler;
     private final WarningBypassDialogController mWarningBypassDialogController;
 
     private final OfflineItemSource mSource;
@@ -132,6 +134,7 @@ class DateOrderedListMediator implements BackPressHandler {
     private final SelectionDelegate<ListItem> mSelectionDelegate;
     private final DownloadManagerUiConfig mUiConfig;
 
+    private final BlockedSensitiveOfflineItemFilter mBlockedSensitiveFilter;
     private final DangerousOfflineItemFilter mDangerousFilter;
     private final OffTheRecordOfflineItemFilter mOffTheRecordFilter;
     private final InvalidStateOfflineItemFilter mInvalidStateFilter;
@@ -193,6 +196,7 @@ class DateOrderedListMediator implements BackPressHandler {
             ShareController shareController,
             DeleteController deleteController,
             RenameController renameController,
+            Callback<OfflineItem> openWithHandler,
             WarningBypassDialogController warningBypassDialogController,
             SelectionDelegate<ListItem> selectionDelegate,
             DownloadManagerUiConfig config,
@@ -202,11 +206,12 @@ class DateOrderedListMediator implements BackPressHandler {
         // Build a chain from the data source to the model.  The chain will look like:
         // [OfflineContentProvider] ->
         //     [OfflineItemSource] ->
-        //         [DangerousOfflineItemFilter] ->
-        //             [OffTheRecordOfflineItemFilter] ->
-        //                 [InvalidStateOfflineItemFilter] ->
-        //                     [DeleteUndoOfflineItemFilter] ->
-        //                         [SearchOfflineItemFilter] ->
+        //         [BlockedSensitiveOfflineItemFilter] ->
+        //             [DangerousOfflineItemFilter] ->
+        //                 [OffTheRecordOfflineItemFilter] ->
+        //                     [InvalidStateOfflineItemFilter] ->
+        //                         [DeleteUndoOfflineItemFilter] ->
+        //                             [SearchOfflineItemFilter] ->
         //                             [TypeOfflineItemFilter] ->
         //                                 [DateOrderedListMutator] ->
         //                                     [ListItemModel]
@@ -219,12 +224,14 @@ class DateOrderedListMediator implements BackPressHandler {
         mModel = model;
         mDeleteController = deleteController;
         mRenameController = renameController;
+        mOpenWithHandler = openWithHandler;
         mWarningBypassDialogController = warningBypassDialogController;
         mSelectionDelegate = selectionDelegate;
         mUiConfig = config;
 
         mSource = new OfflineItemSource(mProvider);
-        mDangerousFilter = new DangerousOfflineItemFilter(config, mSource);
+        mBlockedSensitiveFilter = new BlockedSensitiveOfflineItemFilter(config, mSource);
+        mDangerousFilter = new DangerousOfflineItemFilter(config, mBlockedSensitiveFilter);
         mOffTheRecordFilter =
                 new OffTheRecordOfflineItemFilter(
                         OtrProfileId.isOffTheRecord(config.otrProfileId), mDangerousFilter);
@@ -244,7 +251,7 @@ class DateOrderedListMediator implements BackPressHandler {
                         discardableReferencePool,
                         config.inMemoryThumbnailCacheSizeBytes,
                         ThumbnailProviderImpl.ClientType.DOWNLOAD_HOME,
-                        true /* useMultipleRequests */);
+                        /* useMultiRequests= */ true);
         new MediatorSelectionObserver(selectionDelegate);
 
         mModel.getProperties().set(ListProperties.ENABLE_ITEM_ANIMATIONS, true);
@@ -258,6 +265,7 @@ class DateOrderedListMediator implements BackPressHandler {
         mModel.getProperties().set(ListProperties.PROVIDER_FAVICON, this::getFavicon);
         mModel.getProperties().set(ListProperties.CALLBACK_SELECTION, this::onSelection);
         mModel.getProperties().set(ListProperties.CALLBACK_RENAME, this::onRenameItem);
+        mModel.getProperties().set(ListProperties.CALLBACK_OPEN_WITH, this::onOpenWithItem);
         mModel.getProperties()
                 .set(
                         ListProperties.CALLBACK_SHOW_WARNING_BYPASS_DIALOG,
@@ -294,9 +302,13 @@ class DateOrderedListMediator implements BackPressHandler {
 
     /**
      * To be called when this mediator should filter its content based on {@code filter}.
+     *
      * @see SearchOfflineItemFilter#onQueryChanged(String)
      */
     public void onFilterStringChanged(@Nullable String filter) {
+        if (filter != null && mSelectionDelegate.isSelectionEnabled()) {
+            mSelectionDelegate.clearSelection();
+        }
         try (AnimationDisableClosable closeable = new AnimationDisableClosable()) {
             mSearchFilter.onQueryChanged(filter);
         }
@@ -401,6 +413,12 @@ class DateOrderedListMediator implements BackPressHandler {
                 (newName, renameCallback) -> {
                     mProvider.renameItem(assumeNonNull(item.id), newName, renameCallback);
                 });
+    }
+
+    private void onOpenWithItem(OfflineItem item) {
+        if (mOpenWithHandler != null) {
+            mOpenWithHandler.onResult(item);
+        }
     }
 
     private void onShowWarningBypassDialog(OfflineItem item) {

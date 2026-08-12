@@ -30,11 +30,13 @@
 #import "ios/chrome/browser/first_run/public/features.h"
 #import "ios/chrome/browser/first_run/public/first_run_screen_delegate.h"
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/screen/ui_bundled/screen_provider.h"
 #import "ios/chrome/browser/screen/ui_bundled/screen_type.h"
 #import "ios/chrome/browser/search_engine_choice/coordinator/search_engine_choice_coordinator.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/new_tab_page_commands.h"
@@ -82,8 +84,7 @@ class FirstRunCoordinatorMetricsHelper final {
                             screenProvider:(ScreenProvider*)screenProvider {
   self = [super initWithBaseViewController:viewController browser:browser];
   if (self) {
-    CHECK_EQ(browser->type(), Browser::Type::kRegular,
-             base::NotFatalUntil::M145);
+    CHECK_EQ(browser->type(), Browser::Type::kRegular);
     _screenProvider = screenProvider;
     _navigationController =
         [[UINavigationController alloc] initWithNavigationBarClass:nil
@@ -91,6 +92,11 @@ class FirstRunCoordinatorMetricsHelper final {
     _navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
   }
   return self;
+}
+
+- (void)dealloc {
+  CHECK(!_navigationController, base::NotFatalUntil::M155);
+  CHECK(!_childCoordinator, base::NotFatalUntil::M155);
 }
 
 - (void)start {
@@ -126,7 +132,9 @@ class FirstRunCoordinatorMetricsHelper final {
 
 #pragma mark - FirstRunScreenDelegate
 
-- (void)screenWillFinishPresenting {
+- (void)firstRunScreenCoordinatorWantsToBeStopped:
+    (ChromeCoordinator*)coordinator {
+  CHECK_EQ(coordinator, self.childCoordinator, base::NotFatalUntil::M155);
   [self stopChildCoordinator];
   [self presentScreen:[self.screenProvider nextScreenType]];
 
@@ -163,14 +171,32 @@ class FirstRunCoordinatorMetricsHelper final {
     WriteFirstRunSentinel();
     [self.delegate didFinishFirstRun];
 
-    if (IsBestOfAppLensAnimatedPromoEnabled()) {
-      // Present the Lens entrypoint IPH.
-      [HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                          NewTabPageCommands) presentLensIconBubble];
-    } else {
-      // Present feed swipe IPH.
-      [HandlerForProtocol(self.browser->GetCommandDispatcher(),
-                          NewTabPageCommands) presentFeedSwipeFirstRunBubble];
+    if (!first_run::IsPostFREIphInProfileAgentEnabled()) {
+      if (self.browser == nullptr) {
+        // Speculative fix for some of the crashes in crbug.com/474279386. There
+        // is most likely an underlying issue somewhere in the cleanup logic,
+        // but null checking here should at least prevent some crashes.
+        return;
+      }
+
+      if (IsAppStoreInAppEventsEnabled() && self.profile &&
+          self.profile->GetPrefs() &&
+          self.profile->GetPrefs()->GetBoolean(
+              prefs::kAppStoreGeminiPromoTriggered)) {
+        // If first run started due to app store external action, do not show
+        // any follow up IPH.
+        return;
+      }
+
+      if (IsBestOfAppLensAnimatedPromoEnabled()) {
+        // Present the Lens entrypoint IPH.
+        [HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                            NewTabPageCommands) presentLensIconBubble];
+      } else {
+        // Present feed swipe IPH.
+        [HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                            NewTabPageCommands) presentFeedSwipeFirstRunBubble];
+      }
     }
 
     return;
@@ -214,11 +240,6 @@ class FirstRunCoordinatorMetricsHelper final {
           initForFirstRunWithBaseNavigationController:_navigationController
                                               browser:self.browser
                                      firstRunDelegate:self];
-    case kDockingPromo:
-      return [[DockingPromoCoordinator alloc]
-          initWithBaseNavigationController:_navigationController
-                                   browser:self.browser
-                                  delegate:self];
     case kBestFeatures:
       return [[BestFeaturesScreenCoordinator alloc]
           initWithBaseNavigationController:_navigationController
@@ -254,12 +275,13 @@ class FirstRunCoordinatorMetricsHelper final {
 - (void)historySyncCoordinator:(HistorySyncCoordinator*)historySyncCoordinator
                     withResult:(HistorySyncResult)result {
   CHECK_EQ(self.childCoordinator, historySyncCoordinator);
-  [self screenWillFinishPresenting];
+  [self firstRunScreenCoordinatorWantsToBeStopped:historySyncCoordinator];
 }
 
 #pragma mark - Private
 
 - (void)stopChildCoordinator {
+  // The child's `stop` method must unset the delegate.
   [self.childCoordinator stop];
   self.childCoordinator = nil;
 }

@@ -18,6 +18,7 @@
 #include "components/contextual_tasks/public/contextual_tasks_service.h"
 #include "components/sessions/core/session_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "url/gurl.h"
 
 namespace syncer {
@@ -51,7 +52,6 @@ class MockContextualTasksService : public ContextualTasksService {
               RemoveObserver,
               (ContextualTasksService::Observer*),
               (override));
-  MOCK_METHOD(FeatureEligibility, GetFeatureEligibility, (), (override));
   MOCK_METHOD(bool, IsInitialized, (), (override));
   MOCK_METHOD(ContextualTask, CreateTask, (), (override));
   MOCK_METHOD(ContextualTask, CreateTaskFromUrl, (const GURL&), (override));
@@ -110,14 +110,23 @@ class MockContextualTasksService : public ContextualTasksService {
               GetTabsAssociatedWithTask,
               (const base::Uuid&),
               (const, override));
-  MOCK_METHOD(void,
-              ClearAllTabAssociationsForTask,
-              (const base::Uuid&),
-              (override));
+  MOCK_METHOD(void, SetLastActiveTask, (const base::Uuid&), (override));
   MOCK_METHOD(base::WeakPtr<syncer::DataTypeControllerDelegate>,
               GetAiThreadControllerDelegate,
               (),
               (override));
+  MOCK_METHOD(base::WeakPtr<syncer::DataTypeControllerDelegate>,
+              GetGeminiThreadControllerDelegate,
+              (),
+              (override));
+  MOCK_METHOD(void,
+              GetThreadUrlFromTaskId,
+              (const base::Uuid& task_id,
+               const std::string& locale,
+               omnibox::ChromeAimEntryPoint entry_point,
+               base::OnceCallback<void(GURL)> callback),
+              (override));
+  MOCK_METHOD(bool, IsGeminiThreadsEligible, (), (override));
 };
 
 }  // namespace contextual_tasks

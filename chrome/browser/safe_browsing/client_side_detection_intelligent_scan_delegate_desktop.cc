@@ -9,8 +9,10 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/safe_browsing/client_side_detection_intelligent_scan_delegate_util.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/public/mojom/model_broker.mojom-data-view.h"
+#include "components/optimization_guide/public/mojom/model_broker.mojom-shared.h"
+#include "components/policy/core/common/management/management_service.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -19,10 +21,11 @@
 namespace {
 using ScamDetectionRequest = optimization_guide::proto::ScamDetectionRequest;
 using ScamDetectionResponse = optimization_guide::proto::ScamDetectionResponse;
+using ModelType = safe_browsing::IntelligentScanDelegate::ModelType;
 
 // Intelligent scan is always performed on the on-device model on desktop.
-constexpr auto kOnDeviceModelType = safe_browsing::ClientSideDetectionHost::
-    IntelligentScanDelegate::ModelType::kOnDevice;
+constexpr auto kOnDeviceModelType =
+    safe_browsing::IntelligentScanDelegate::ModelType::kOnDevice;
 
 // Currently, the following errors, which are used when a model may have been
 // installed but not yet loaded, are treated as waitable.
@@ -100,7 +103,8 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::Inquiry::Start(
   if (!session_) {
     LogOnDeviceModelSessionCreationSuccess(false);
     std::move(callback_).Run(IntelligentScanResult::Failure(
-        IntelligentScanResult::kModelVersionUnavailable, kOnDeviceModelType));
+        IntelligentScanResult::kModelVersionUnavailable, kOnDeviceModelType,
+        IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING));
     return;
   }
 
@@ -135,8 +139,9 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::Inquiry::
     client_side_detection::LogOnDeviceModelExecutionSuccessAndTime(
         /*success=*/false, session_execution_start_time_);
     if (callback_) {
-      std::move(callback_).Run(
-          IntelligentScanResult::Failure(model_version, kOnDeviceModelType));
+      std::move(callback_).Run(IntelligentScanResult::Failure(
+          model_version, kOnDeviceModelType,
+          IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING));
     }
     return;
   }
@@ -157,8 +162,9 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::Inquiry::
   if (!scam_detection_response) {
     LogOnDeviceModelExecutionParse(false);
     if (callback_) {
-      std::move(callback_).Run(
-          IntelligentScanResult::Failure(model_version, kOnDeviceModelType));
+      std::move(callback_).Run(IntelligentScanResult::Failure(
+          model_version, kOnDeviceModelType,
+          IntelligentScanInfo::ON_DEVICE_MODEL_OUTPUT_MISSING));
     }
     return;
   }
@@ -167,11 +173,13 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::Inquiry::
   LogOnDeviceModelCallbackStateOnSuccessfulResponse(!!callback_);
 
   if (callback_) {
-    std::move(callback_).Run({.brand = scam_detection_response->brand(),
-                              .intent = scam_detection_response->intent(),
-                              .model_version = model_version,
-                              .execution_success = true,
-                              .model_type = kOnDeviceModelType});
+    std::optional<float> scam_score = std::nullopt;
+    if (scam_detection_response->has_scam_score()) {
+      scam_score = scam_detection_response->scam_score();
+    }
+    std::move(callback_).Run(IntelligentScanResult::Success(
+        scam_detection_response->brand(), scam_detection_response->intent(),
+        model_version, kOnDeviceModelType, scam_score));
   }
 
   // Reset session immediately so that future inference is not affected by the
@@ -182,8 +190,11 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::Inquiry::
 ClientSideDetectionIntelligentScanDelegateDesktop::
     ClientSideDetectionIntelligentScanDelegateDesktop(
         PrefService& pref,
-        OptimizationGuideKeyedService* opt_guide)
-    : pref_(pref), opt_guide_(opt_guide) {
+        OptimizationGuideKeyedService* opt_guide,
+        policy::ManagementService* management_service)
+    : pref_(pref),
+      opt_guide_(opt_guide),
+      management_service_(management_service) {
   pref_change_registrar_.Init(&pref);
   pref_change_registrar_.Add(
       prefs::kSafeBrowsingEnhanced,
@@ -208,20 +219,20 @@ bool ClientSideDetectionIntelligentScanDelegateDesktop::
       ClientSideDetectionType::KEYBOARD_LOCK_REQUESTED;
 
   bool is_intelligent_scan_requested =
-      base::FeatureList::IsEnabled(
-          kClientSideDetectionLlamaForcedTriggerInfoForScamDetection) &&
       verdict->has_llama_forced_trigger_info() &&
       verdict->llama_forced_trigger_info().intelligent_scan();
 
   return is_keyboard_lock_requested || is_intelligent_scan_requested;
 }
 
-bool ClientSideDetectionIntelligentScanDelegateDesktop::
-    IsIntelligentScanAvailable(bool log_failed_eligibility_reason) {
+ModelType
+ClientSideDetectionIntelligentScanDelegateDesktop::GetIntelligentScanModelType(
+    bool log_failed_eligibility_reason) {
   if (log_failed_eligibility_reason && !on_device_model_available_) {
     LogOnDeviceModelEligibilityReason();
   }
-  return on_device_model_available_;
+  return on_device_model_available_ ? ModelType::kOnDevice
+                                    : ModelType::kNotSupportedOnDevice;
 }
 
 bool ClientSideDetectionIntelligentScanDelegateDesktop::ShouldShowScamWarning(
@@ -229,14 +240,15 @@ bool ClientSideDetectionIntelligentScanDelegateDesktop::ShouldShowScamWarning(
   if (!verdict.has_value() ||
       *verdict ==
           IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_UNSPECIFIED ||
-      *verdict == IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE) {
+      *verdict == IntelligentScanVerdict::INTELLIGENT_SCAN_VERDICT_SAFE ||
+      *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_TELEMETRY) {
     return false;
   }
 
   return *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_1 ||
-         (base::FeatureList::IsEnabled(
-              kClientSideDetectionShowLlamaScamVerdictWarning) &&
-          *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2) ||
+         *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_2 ||
+         *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_3 ||
+         *verdict == IntelligentScanVerdict::SCAM_EXPERIMENT_VERDICT_4 ||
          *verdict ==
              IntelligentScanVerdict::SCAM_EXPERIMENT_CATCH_ALL_ENFORCEMENT;
 }
@@ -246,7 +258,9 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::OnPrefsUpdated() {
     return;
   }
 
-  if (IsEnhancedProtectionEnabled(*pref_)) {
+  bool is_managed = management_service_ && management_service_->IsManaged();
+
+  if (IsEnhancedProtectionEnabled(*pref_) && !is_managed) {
     StartListeningToOnDeviceModelUpdate();
   } else {
     StopListeningToOnDeviceModelUpdate();
@@ -259,9 +273,12 @@ ClientSideDetectionIntelligentScanDelegateDesktop::StartIntelligentScan(
     IntelligentScanDoneCallback callback) {
   // We have checked the model availability prior to calling this function, but
   // we want to check one last time before creating a session.
-  if (!IsIntelligentScanAvailable(/*log_failed_eligibility_reason=*/false)) {
+  if (!IntelligentScanDelegate::IsIntelligentScanAvailable(
+          GetIntelligentScanModelType(
+              /*log_failed_eligibility_reason=*/false))) {
     std::move(callback).Run(IntelligentScanResult::Failure(
-        IntelligentScanResult::kModelVersionUnavailable, kOnDeviceModelType));
+        IntelligentScanResult::kModelVersionUnavailable, kOnDeviceModelType,
+        IntelligentScanInfo::ON_DEVICE_MODEL_UNAVAILABLE));
     return std::nullopt;
   }
 
@@ -344,7 +361,7 @@ void ClientSideDetectionIntelligentScanDelegateDesktop::
     client_side_detection::LogOnDeviceModelFetchTime(on_device_fetch_time_);
     NotifyOnDeviceModelAvailable();
   } else {
-    client_side_detection::LogOnDeviceModelDownloadSuccess(false);
+    client_side_detection::LogOnDeviceModelDownloadSuccess(false, reason);
   }
 }
 

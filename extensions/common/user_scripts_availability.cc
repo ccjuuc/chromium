@@ -24,17 +24,13 @@ namespace extensions::user_scripts_availability {
 namespace {
 
 // The set of features which this delegated availability check should apply to.
-constexpr static std::array<std::string_view, 4>
-    kUserScriptOverrideFeatureList = {
+constexpr static auto kUserScriptOverrideFeatureList =
+    std::to_array<const std::string_view>({
         // LINT.IfChange
 
         "userScripts",
-        // These additional items are necessary because they are listed as
-        // individual api features in _api_features.json.
-        "userScripts.execute", "userScripts.getWorldConfigurations",
-        "userScripts.resetWorldConfiguration",
-        // LINT.ThenChange(chrome/common/extensions/extension_test_util.cc)
-};
+        // LINT.ThenChange(//chrome/common/extensions/extension_test_util.cc)
+    });
 
 bool AreUserScriptsFeaturesAvailable(
     const std::string& api_full_name,
@@ -45,11 +41,6 @@ bool AreUserScriptsFeaturesAvailable(
     int context_id,
     bool check_developer_mode,
     const extensions::ContextData& context_data) {
-  if (!base::FeatureList::IsEnabled(
-          extensions_features::kUserScriptUserExtensionToggle)) {
-    return true;
-  }
-
   // An extension that no longer exists shouldn't have an API bound for it.
   if (!extension) {
     return false;

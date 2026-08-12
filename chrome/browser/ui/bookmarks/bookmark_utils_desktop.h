@@ -16,9 +16,10 @@
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_ui_types.h"
 
-class Browser;
+class BrowserWindowInterface;
 struct NavigateParams;
 class TabGroup;
+class TabStripModel;
 
 namespace content {
 class BrowserContext;
@@ -31,9 +32,6 @@ class TabGroupSyncService;
 
 namespace bookmarks {
 class BookmarkNode;
-
-inline constexpr char kReplaceOrCreateGroupDialogName[] =
-    "ReplaceOrCreateGroupDialog";
 
 enum OpenAllBookmarksContext {
   kNone = 0,     // Open all bookmarks as separate tabs.
@@ -76,7 +74,7 @@ extern size_t kNumBookmarkUrlsBeforePrompting;
 // TODO(crbug.com/40914589): This should be made non-optional once all callsites
 // have all the information needed to correctly construct the `launch_action`.
 void OpenAllIfAllowed(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const std::vector<
         raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>& nodes,
     WindowOpenDisposition initial_disposition,
@@ -84,7 +82,7 @@ void OpenAllIfAllowed(
         bookmarks::OpenAllBookmarksContext::kNone,
     page_load_metrics::NavigationHandleUserData::InitiatorLocation
         navigation_type = page_load_metrics::NavigationHandleUserData::
-            InitiatorLocation::kOther,
+            kInitiatorLocationOther,
     std::optional<BookmarkLaunchAction> launch_action = std::nullopt);
 
 // Returns the count of bookmarks that would be opened by OpenAll. If
@@ -103,14 +101,8 @@ bool ConfirmDeleteBookmarkNode(gfx::NativeWindow window,
                                const bookmarks::BookmarkNode* node);
 
 // Shows the bookmark all tabs dialog.
-void ShowBookmarkAllTabsDialog(Browser* browser);
+void ShowBookmarkAllTabsDialog(BrowserWindowInterface* browser);
 
-// Shows the bookmark tab group dialog.
-void ShowBookmarkTabGroupDialog(
-    Browser* browser,
-    const TabGroup& tab_group,
-    base::OnceCallback<void(Browser*, const tab_groups::TabGroupId&)>
-        on_save_callback = base::DoNothing());
 
 // Returns true if OpenAll() can open at least one bookmark of type url
 // in |selection|.
@@ -123,6 +115,13 @@ bool HasBookmarkURLsAllowedInIncognitoMode(
     const std::vector<
         raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>& selection);
 
+// Returns true if the "Open in Incognito Window" command should be enabled
+// for the given |selection| and |profile|.
+bool IsOpenInIncognitoAllowed(
+    const std::vector<
+        raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>& selection,
+    Profile* profile);
+
 // Populates |folder_data| with all tab items and sub-folders for any open tab
 // groups.
 void GetURLsAndFoldersForTabEntries(
@@ -132,7 +131,7 @@ void GetURLsAndFoldersForTabEntries(
 
 // Populates |folder_data| with all tabs from the tab group.
 void GetURLsAndFoldersForTabGroup(
-    const Browser* browser,
+    const TabStripModel* tab_strip_model,
     const TabGroup& tab_group,
     std::vector<BookmarkEditor::EditDetails::BookmarkData>* folder_data);
 

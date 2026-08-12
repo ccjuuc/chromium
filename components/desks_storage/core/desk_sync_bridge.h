@@ -47,8 +47,6 @@ class DeskSyncBridge : public syncer::DataTypeSyncBridge, public DeskModel {
   ~DeskSyncBridge() override;
 
   // syncer::DataTypeSyncBridge overrides.
-  std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList()
-      override;
   std::optional<syncer::ModelError> MergeFullSyncData(
       std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       syncer::EntityChangeList entity_data) override;
@@ -62,6 +60,8 @@ class DeskSyncBridge : public syncer::DataTypeSyncBridge, public DeskModel {
       const syncer::EntityData& entity_data) const override;
   std::string GetStorageKey(
       const syncer::EntityData& entity_data) const override;
+  sync_pb::EntitySpecifics TrimAllSupportedFieldsFromRemoteSpecifics(
+      const sync_pb::EntitySpecifics& entity_specifics) const override;
   bool IsEntityDataValid(const syncer::EntityData& entity_data) const override;
 
   // DeskModel overrides.

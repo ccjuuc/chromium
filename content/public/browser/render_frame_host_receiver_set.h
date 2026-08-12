@@ -25,7 +25,7 @@ class WebContents;
 // message dispatch.
 //
 // When messages are dispatched to the implementation, the implementation can
-// call GetCurrentTargetFrame() on this object (see below) to determine which
+// call CurrentTargetFrame() on this object (see below) to determine which
 // frame sent the message.
 //
 // In order to expose the interface to all RenderFrames, a binder must be
@@ -83,16 +83,15 @@ class CONTENT_EXPORT RenderFrameHostReceiverSet : public WebContentsObserver {
     return frame_to_receivers_map_.contains(render_frame_host);
   }
 
-  // Implementations of `Interface` can call `GetCurrentTargetFrame()` to
-  // determine which frame sent the message. `GetCurrentTargetFrame()` will
-  // never return `nullptr`.
+  // Implementations of `Interface` can call `CurrentTargetFrame()` to
+  // determine which frame sent the message.
   //
   // Important: this method must only be called while the incoming message is
   // being dispatched on the stack.
-  RETURNS_NONNULL RenderFrameHost* GetCurrentTargetFrame() {
+  RenderFrameHost& CurrentTargetFrame() {
     if (current_target_frame_for_testing_)
-      return current_target_frame_for_testing_;
-    return receivers_.current_context();
+      return *current_target_frame_for_testing_;
+    return *receivers_.current_context();
   }
 
   // Reports the currently dispatching Message as bad and closes+removes the
@@ -103,7 +102,7 @@ class CONTENT_EXPORT RenderFrameHostReceiverSet : public WebContentsObserver {
   //
   // Important: this method must only be called while the incoming message is
   // being dispatched on the stack. To report a bad message after asynchronous
-  // processing (e.g. posting a task that then reports a the bad message), use
+  // processing (e.g. posting a task that then reports the bad message), use
   // `GetMessageCallback()` and pass the returned callback to the async task
   // that needs to report the message as bad.
   NOT_TAIL_CALLED void ReportBadMessage(const std::string& message) {
@@ -147,7 +146,7 @@ class CONTENT_EXPORT RenderFrameHostReceiverSet : public WebContentsObserver {
     for (const auto& it : frame_to_receivers_map_) {
       const std::vector<mojo::ReceiverId>& receiver_ids = it.second;
       for (const mojo::ReceiverId& id : receiver_ids) {
-        // RenderFrameHostReceiverSet only allows all-or=nothing swaps, so
+        // RenderFrameHostReceiverSet only allows all-or-nothing swaps, so
         // all the old impls are expected to be equal to `this`'s old impl_.
         CHECK_EQ(old_impl, receivers_.SwapImplForTesting(id, new_impl));
       }
@@ -173,7 +172,7 @@ class CONTENT_EXPORT RenderFrameHostReceiverSet : public WebContentsObserver {
   mojo::AssociatedReceiverSet<Interface, RenderFrameHost*> receivers_;
 
   // Track which RenderFrameHosts are in the |receivers_| set so they can
-  // be removed them when a RenderFrameHost is removed.
+  // be removed when a RenderFrameHost is removed.
   std::map<RenderFrameHost*, std::vector<mojo::ReceiverId>>
       frame_to_receivers_map_;
 

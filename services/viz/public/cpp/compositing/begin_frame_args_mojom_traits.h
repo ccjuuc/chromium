@@ -5,7 +5,11 @@
 #ifndef SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_BEGIN_FRAME_ARGS_MOJOM_TRAITS_H_
 #define SERVICES_VIZ_PUBLIC_CPP_COMPOSITING_BEGIN_FRAME_ARGS_MOJOM_TRAITS_H_
 
+#include <optional>
+
+#include "base/types/expected.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/mojom/compositing/begin_frame_args.mojom-shared.h"
 
 namespace mojo {
@@ -16,8 +20,8 @@ struct EnumTraits<viz::mojom::BeginFrameArgsType,
   static viz::mojom::BeginFrameArgsType ToMojom(
       viz::BeginFrameArgs::BeginFrameArgsType type);
 
-  static bool FromMojom(viz::mojom::BeginFrameArgsType input,
-                        viz::BeginFrameArgs::BeginFrameArgsType* out);
+  static viz::BeginFrameArgs::BeginFrameArgsType FromMojom(
+      viz::mojom::BeginFrameArgsType input);
 };
 
 template <>
@@ -30,8 +34,9 @@ struct StructTraits<viz::mojom::BeginFrameIdDataView, viz::BeginFrameId> {
     return frame_id.sequence_number;
   }
 
-  static bool Read(viz::mojom::BeginFrameIdDataView data,
-                   viz::BeginFrameId* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::BeginFrameIdDataView data,
+      viz::BeginFrameId* out);
 };
 
 template <>
@@ -46,6 +51,15 @@ struct StructTraits<viz::mojom::BeginFrameArgsDataView, viz::BeginFrameArgs> {
 
   static base::TimeDelta interval(const viz::BeginFrameArgs& args) {
     return args.interval;
+  }
+
+  static std::optional<base::TimeDelta> unthrottled_interval(
+      const viz::BeginFrameArgs& args) {
+    if (args.unthrottled_interval == args.interval ||
+        !args.unthrottled_interval.is_positive()) {
+      return std::nullopt;
+    }
+    return args.unthrottled_interval;
   }
 
   static viz::BeginFrameId frame_id(const viz::BeginFrameArgs& args) {
@@ -81,8 +95,9 @@ struct StructTraits<viz::mojom::BeginFrameArgsDataView, viz::BeginFrameArgs> {
     return args.animate_only;
   }
 
-  static bool Read(viz::mojom::BeginFrameArgsDataView data,
-                   viz::BeginFrameArgs* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::BeginFrameArgsDataView data,
+      viz::BeginFrameArgs* out);
 };
 
 template <>
@@ -103,8 +118,9 @@ struct StructTraits<viz::mojom::BeginFrameAckDataView, viz::BeginFrameAck> {
     return ack.has_damage;
   }
 
-  static bool Read(viz::mojom::BeginFrameAckDataView data,
-                   viz::BeginFrameAck* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::BeginFrameAckDataView data,
+      viz::BeginFrameAck* out);
 };
 
 #if BUILDFLAG(IS_MAC)
@@ -128,8 +144,14 @@ struct StructTraits<viz::mojom::CADisplayLinkParamsDataView,
     return params.interval;
   }
 
-  static bool Read(viz::mojom::CADisplayLinkParamsDataView data,
-                   viz::CADisplayLinkParams* out);
+  static base::TimeTicks ipc_begin_timestamp(
+      const viz::CADisplayLinkParams& params) {
+    return params.ipc_begin_timestamp;
+  }
+
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::CADisplayLinkParamsDataView data,
+      viz::CADisplayLinkParams* out);
 };
 #endif
 

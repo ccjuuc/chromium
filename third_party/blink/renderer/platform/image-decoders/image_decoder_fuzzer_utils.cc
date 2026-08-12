@@ -5,11 +5,16 @@
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder_fuzzer_utils.h"
 
 #include "third_party/blink/renderer/platform/graphics/color_behavior.h"
-#include "third_party/blink/renderer/platform/image-decoders/avif/crabbyavif_image_decoder.h"
+#include "third_party/blink/renderer/platform/image-decoders/avif/avif_image_decoder.h"
 #include "third_party/blink/renderer/platform/image-decoders/bmp/bmp_image_decoder.h"
+#include "third_party/blink/renderer/platform/image-decoders/bmp/bmp_rust_image_decoder.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_decoder.h"
 #include "third_party/blink/renderer/platform/image-decoders/jpeg/jpeg_image_decoder.h"
 #include "third_party/blink/renderer/platform/image-decoders/png/png_image_decoder.h"
+
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+#include "third_party/blink/renderer/platform/image-decoders/jxl/jxl_image_decoder.h"
+#endif
 
 namespace blink {
 
@@ -60,11 +65,14 @@ std::unique_ptr<ImageDecoder> CreateImageDecoder(DecoderType decoder_type,
       return std::make_unique<BMPImageDecoder>(
           GetAlphaOption(fdp), GetColorBehavior(fdp),
           /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>());
+    case DecoderType::kBmpRustDecoder:
+      return std::make_unique<BmpRustImageDecoder>(
+          GetAlphaOption(fdp), GetColorBehavior(fdp),
+          /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>());
     case DecoderType::kJpegDecoder: {
       return std::make_unique<JPEGImageDecoder>(
           GetAlphaOption(fdp), GetColorBehavior(fdp), GetAuxImageType(fdp),
-          /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>(),
-          /*offset=*/fdp.ConsumeIntegral<uint32_t>());
+          /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>());
     }
     case DecoderType::kPngDecoder: {
       return std::make_unique<PngImageDecoder>(
@@ -73,13 +81,22 @@ std::unique_ptr<ImageDecoder> CreateImageDecoder(DecoderType decoder_type,
           /*offset=*/fdp.ConsumeIntegral<uint32_t>(),
           /*bit_depth_option=*/GetHbdOption(fdp));
     }
-    case DecoderType::kCrabbyAvifDecoder: {
-      return std::make_unique<CrabbyAVIFImageDecoder>(
+    case DecoderType::kAvifDecoder: {
+      return std::make_unique<AVIFImageDecoder>(
           GetAlphaOption(fdp), GetHbdOption(fdp), GetColorBehavior(fdp),
           GetAuxImageType(fdp),
           /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>(),
           GetAnimationOption(fdp));
     }
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+    case DecoderType::kJxlDecoder: {
+      return std::make_unique<JXLImageDecoder>(
+          GetAlphaOption(fdp), GetHbdOption(fdp), GetColorBehavior(fdp),
+          GetAuxImageType(fdp),
+          /*max_decoded_bytes=*/fdp.ConsumeIntegral<uint32_t>(),
+          GetAnimationOption(fdp));
+    }
+#endif
   }
 }
 

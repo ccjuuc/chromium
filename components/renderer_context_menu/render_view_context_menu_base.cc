@@ -25,6 +25,7 @@
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "url/origin.h"
 
 using content::BrowserContext;
@@ -109,9 +110,11 @@ void RenderViewContextMenuBase::AddCustomItemsToMenu(
                 item->action),
             item->label);
         if (item->is_experimental_feature) {
-          menu_model->SetMinorIcon(
-              menu_model->GetItemCount() - 1,
-              ui::ImageModel::FromVectorIcon(vector_icons::kScienceIcon));
+          menu_model->SetMinorIcon(menu_model->GetItemCount() - 1,
+                                   ui::ImageModel::FromVectorIcon(
+                                       features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kScienceIcon
+                                           : vector_icons::kScienceOldIcon));
         }
         if (!item->feature_name.empty()) {
           menu_model->SetIsNewFeatureAt(
@@ -136,9 +139,11 @@ void RenderViewContextMenuBase::AddCustomItemsToMenu(
                 item->action),
             item->label);
         if (item->is_experimental_feature) {
-          menu_model->SetMinorIcon(
-              menu_model->GetItemCount() - 1,
-              ui::ImageModel::FromVectorIcon(vector_icons::kScienceIcon));
+          menu_model->SetMinorIcon(menu_model->GetItemCount() - 1,
+                                   ui::ImageModel::FromVectorIcon(
+                                       features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kScienceIcon
+                                           : vector_icons::kScienceOldIcon));
         }
         break;
       }
@@ -464,8 +469,7 @@ void RenderViewContextMenuBase::MenuClosed(ui::SimpleMenuModel* source) {
     return;
 
   source_web_contents_->SetShowingContextMenu(false);
-  source_web_contents_->NotifyContextMenuClosed(params_.link_followed,
-                                                params_.impression);
+  source_web_contents_->NotifyContextMenuClosed(params_.link_followed);
   for (auto& observer : observers_) {
     observer.OnMenuClosed();
   }
@@ -540,9 +544,6 @@ RenderViewContextMenuBase::GetOpenURLParamsWithExtraHeaders(
   open_url_params.initiator_origin = initiator;
 
   open_url_params.source_site_instance = site_instance_;
-
-  if (disposition != WindowOpenDisposition::OFF_THE_RECORD)
-    open_url_params.impression = params_.impression;
 
   return open_url_params;
 }

@@ -209,10 +209,11 @@ bool OffsetMapping::AcceptsPosition(const Position& position) {
   }
   if (!position.IsBeforeAnchor() && !position.IsAfterAnchor())
     return false;
-  const LayoutObject* layout_object = position.AnchorNode()->GetLayoutObject();
-  if (!layout_object || !layout_object->IsInline())
-    return false;
-  return layout_object->IsText() || layout_object->IsAtomicInlineLevel();
+  if (const LayoutObject* layout_object =
+          position.AnchorNode()->GetLayoutObject()) {
+    return layout_object->IsText() || layout_object->IsAtomicInline();
+  }
+  return false;
 }
 
 // static
@@ -375,7 +376,7 @@ OffsetMapping::GetMappingUnitsForLayoutObject(
                    });
   DCHECK_LT(begin, end);
   // SAFETY: Both of `begin` and `end` are valid iterators for `units_`.
-  return UNSAFE_BUFFERS(base::span(begin, end));
+  return UNSAFE_BUFFERS(base::span(base::unchecked, begin, end));
 }
 
 base::span<const OffsetMappingUnit>
@@ -398,7 +399,7 @@ OffsetMapping::GetMappingUnitsForTextContentOffsetRange(unsigned start,
       units_, end, std::less_equal<>{}, &OffsetMappingUnit::TextContentStart);
   // SAFETY: Both of `result_begin` and `result_end` are valid iterators for
   // `units_`.
-  return UNSAFE_BUFFERS(base::span(result_begin, result_end));
+  return UNSAFE_BUFFERS(base::span(base::unchecked, result_begin, result_end));
 }
 
 std::optional<unsigned> OffsetMapping::GetTextContentOffset(

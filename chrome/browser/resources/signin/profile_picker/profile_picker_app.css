@@ -16,7 +16,7 @@
   height: 100%;
 }
 
-:host([app-mode_="glic"]) {
+:host([app-mode_='glic']) {
   @media (prefers-color-scheme: dark) {
     background-color: #131314;
   }
@@ -48,7 +48,7 @@
   }
 }
 
-:host([app-mode_="regular"]) {
+:host([app-mode_='regular']) {
 
   #banner-right,
   #banner-left {
@@ -76,6 +76,22 @@
     }
   }
 }
+
+:host([app-mode_='regular-refreshed']) {
+  #banner-right,
+  #banner-left {
+    display: none;
+  }
+
+  background-image: url(profile_picker_light_background.svg);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+
+  @media (prefers-color-scheme: dark) {
+    background-image: url(profile_picker_dark_background.svg);
+  }
+}
+
 
 cr-view-manager {
   display: flex;

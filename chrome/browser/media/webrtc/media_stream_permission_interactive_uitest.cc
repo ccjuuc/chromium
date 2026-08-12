@@ -63,7 +63,7 @@ class MediaStreamPermissionTest : public WebRtcTestBase {
                                           ContentSettingsType setting_to_clear,
                                           bool should_video_stop) {
     HostContentSettingsMap* settings_map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
     content::WebContents* tab_contents = LoadTestPageInTab();
     ASSERT_EQ(tab_contents,
@@ -135,7 +135,7 @@ IN_PROC_BROWSER_TEST_F(MediaStreamPermissionTest, TestDenyingUserMedia) {
   GetUserMediaAndDeny(tab_contents);
 }
 
-// Disabled: https://crbug.com/1263442
+// Disabled: https://crbug.com/40800207
 #if defined(THREAD_SANITIZER)
 #define MAYBE_TestDismissingRequest DISABLED_TestDismissingRequest
 #else
@@ -192,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(MediaStreamPermissionTest,
   GetUserMediaAndExpectAutoDenyWithoutPrompt(tab_contents);
 
   HostContentSettingsMap* settings_map =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
 
   settings_map->ClearSettingsForOneType(ContentSettingsType::MEDIASTREAM_MIC);
   settings_map->ClearSettingsForOneType(

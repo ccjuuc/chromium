@@ -7,6 +7,8 @@
 #include <algorithm>
 
 #include "base/compiler_specific.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/time/time.h"
@@ -16,6 +18,12 @@
 #include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/window_event_manager.h"
 #include "ui/gfx/x/xproto.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/strings/string_view_util.h"
+#include "ui/base/clipboard/clipboard_constants.h"
+#include "ui/base/clipboard/clipboard_util_linux.h"
+#endif
 
 namespace ui {
 
@@ -99,8 +107,37 @@ SelectionOwner::~SelectionOwner() {
 }
 
 void SelectionOwner::RetrieveTargets(std::vector<x11::Atom>* targets) {
+  base::flat_set<x11::Atom> seen(targets->begin(), targets->end());
+  auto add_if_present = [&](const std::vector<x11::Atom>& preferred) {
+    for (x11::Atom p : preferred) {
+      if (format_map_.contains(p) && seen.insert(p).second) {
+        targets->push_back(p);
+      }
+    }
+  };
+
+  add_if_present(GetURIListAtomsFrom());
+
+#if BUILDFLAG(IS_LINUX)
+  // Lazily advertise portal atoms if we have a URI list.
+  if (format_map_.contains(x11::GetAtom(kMimeTypeUriList))) {
+    for (const char* mime :
+         {kMimeTypePortalFileTransfer, kMimeTypePortalFiles}) {
+      x11::Atom portal_atom = x11::GetAtom(mime);
+      if (seen.insert(portal_atom).second) {
+        targets->push_back(portal_atom);
+      }
+    }
+  }
+#endif
+
+  add_if_present(GetURLAtomsFrom());
+  add_if_present(GetTextAtomsFrom());
+
   for (const auto& format_target : format_map_) {
-    targets->push_back(format_target.first);
+    if (seen.insert(format_target.first).second) {
+      targets->push_back(format_target.first);
+    }
   }
 }
 
@@ -124,6 +161,25 @@ void SelectionOwner::OnSelectionRequest(
   auto requestor = request.requestor;
   x11::Atom requested_target = request.target;
   x11::Atom requested_property = request.property;
+
+#if BUILDFLAG(IS_LINUX)
+  // Handle portal requests asynchronously.
+  // NOTE: MULTIPLE requests are intentionally unsupported for portal paths
+  // because we handle them by early-returning here before the MULTIPLE logic.
+  if (requested_target == x11::GetAtom(kMimeTypePortalFileTransfer) ||
+      requested_target == x11::GetAtom(kMimeTypePortalFiles)) {
+    auto it = format_map_.find(x11::GetAtom(kMimeTypeUriList));
+    if (it != format_map_.end()) {
+      std::vector<std::string> paths = ui::clipboard_util::GetPathsFromUriList(
+          base::as_string_view(*it->second));
+
+      ui::clipboard_util::RegisterPathsWithPortal(
+          paths, base::BindOnce(&SelectionOwner::OnPortalPathsRegistered,
+                                weak_factory_.GetWeakPtr(), request));
+      return;
+    }
+  }
+#endif
 
   // Incrementally build our selection. By default this is a refusal, and we'll
   // override the parts indicating success in the different cases.
@@ -168,6 +224,28 @@ void SelectionOwner::OnSelectionRequest(
   // Send off the reply.
   connection_->SendEvent(reply, requestor, x11::EventMask::NoEvent);
 }
+
+#if BUILDFLAG(IS_LINUX)
+void SelectionOwner::OnPortalPathsRegistered(x11::SelectionRequestEvent request,
+                                             std::string key) {
+  x11::SelectionNotifyEvent reply{
+      .time = request.time,
+      .requestor = request.requestor,
+      .selection = request.selection,
+      .target = request.target,
+      .property = x11::Atom::None,
+  };
+
+  if (!key.empty()) {
+    std::vector<uint8_t> data(key.begin(), key.end());
+    connection_->SetArrayProperty(request.requestor, request.property,
+                                  request.target, data);
+    reply.property = request.property;
+  }
+
+  connection_->SendEvent(reply, request.requestor, x11::EventMask::NoEvent);
+}
+#endif
 
 void SelectionOwner::OnSelectionClear(const x11::SelectionClearEvent& event) {
   DVLOG(1) << "SelectionClear";
@@ -255,10 +333,9 @@ bool SelectionOwner::ProcessTarget(x11::Atom target,
             &SelectionOwner::AbortStaleIncrementalTransfers);
       }
     } else {
-      auto& mem = it->second;
-      std::vector<uint8_t> data(mem->data(),
-                                UNSAFE_TODO(mem->data() + mem->size()));
-      connection_->SetArrayProperty(requestor, property, target, data);
+      const scoped_refptr<base::RefCountedMemory>& mem = it->second;
+      connection_->SetArrayProperty(requestor, property, target,
+                                    base::span<const uint8_t>(*mem));
     }
     return true;
   }
@@ -271,10 +348,10 @@ bool SelectionOwner::ProcessTarget(x11::Atom target,
 void SelectionOwner::ProcessIncrementalTransfer(IncrementalTransfer* transfer) {
   size_t remaining = transfer->data->size() - transfer->offset;
   size_t chunk_length = std::min(remaining, GetMaxIncrementalTransferSize());
-  const uint8_t* data = UNSAFE_TODO(transfer->data->data() + transfer->offset);
-  std::vector<uint8_t> buf(data, UNSAFE_TODO(data + chunk_length));
+  base::span<const uint8_t> span = base::span<const uint8_t>(*transfer->data)
+                                       .subspan(transfer->offset, chunk_length);
   connection_->SetArrayProperty(transfer->window, transfer->property,
-                                transfer->target, buf);
+                                transfer->target, span);
   transfer->offset += chunk_length;
   transfer->timeout = base::TimeTicks::Now() + kIncrementalTransferTimeout;
 

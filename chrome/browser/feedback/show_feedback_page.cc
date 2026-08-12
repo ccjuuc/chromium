@@ -7,12 +7,14 @@
 #include <string>
 
 #include "base/json/json_writer.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/feedback/feedback_dialog_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -21,17 +23,20 @@
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_capabilities.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "extensions/browser/api/feedback_private/feedback_private_api.h"
 #include "third_party/re2/src/re2/re2.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/webui/os_feedback_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/gaia/gaia_auth_util.h"
@@ -75,7 +80,7 @@ GURL BuildFeedbackUrl(const std::string& extra_diagnostics,
                       const std::string& category_tag,
                       const GURL& page_url,
                       feedback::FeedbackSource source,
-                      base::Value::Dict autofill_metadata) {
+                      base::DictValue autofill_metadata) {
   std::vector<std::string> query_params;
 
   if (!extra_diagnostics.empty()) {
@@ -199,8 +204,8 @@ void RequestFeedbackFlow(const GURL& page_url,
                          const std::string& description_placeholder_text,
                          const std::string& category_tag,
                          const std::string& extra_diagnostics,
-                         base::Value::Dict autofill_metadata,
-                         base::Value::Dict ai_metadata) {
+                         base::DictValue autofill_metadata,
+                         base::DictValue ai_metadata) {
   feedback_private::FeedbackFlow flow = GetFeedbackFlowFromSource(source);
   bool include_bluetooth_logs = false;
   bool show_questionnaire = false;
@@ -241,14 +246,52 @@ void RequestFeedbackFlow(const GURL& page_url,
 
 }  // namespace
 
+bool CanShowFeedback(const Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+
+  if (!profile->GetPrefs()->GetBoolean(prefs::kUserFeedbackAllowed)) {
+    // Enterprise policy does not allow feedback.
+    return false;
+  }
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (!base::FeatureList::IsEnabled(switches::kDisableU18FeedbackDesktop)) {
+    return true;
+  }
+
+  // Incognito profiles should apply the same restrictions as their original
+  // profile.
+  const Profile* original_profile = profile->GetOriginalProfile();
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfileIfExists(original_profile);
+  if (!identity_manager) {
+    return true;
+  }
+
+  if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
+    return true;
+  }
+
+  AccountInfo account_info = identity_manager->FindExtendedAccountInfo(
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin));
+  return account_info.GetAccountCapabilities().can_submit_feedback() !=
+         signin::Tribool::kFalse;
+#else
+  // TODO(crbug.com/495657977): add ChromeOS implementation.
+  return true;
+#endif
+}
+
 void ShowFeedbackPage(BrowserWindowInterface* bwi,
                       feedback::FeedbackSource source,
                       const std::string& description_template,
                       const std::string& description_placeholder_text,
                       const std::string& category_tag,
                       const std::string& extra_diagnostics,
-                      base::Value::Dict autofill_metadata,
-                      base::Value::Dict ai_metadata) {
+                      base::DictValue autofill_metadata,
+                      base::DictValue ai_metadata) {
   GURL page_url;
   if (bwi) {
     page_url = GetTargetTabUrl(bwi, bwi->GetTabStripModel()->active_index());
@@ -269,15 +312,18 @@ void ShowFeedbackPage(const GURL& page_url,
                       const std::string& description_placeholder_text,
                       const std::string& category_tag,
                       const std::string& extra_diagnostics,
-                      base::Value::Dict autofill_metadata,
-                      base::Value::Dict ai_metadata) {
+                      base::DictValue autofill_metadata,
+                      base::DictValue ai_metadata) {
   if (!profile) {
     LOG(ERROR) << "Cannot invoke feedback: No profile found!";
     return;
   }
-  if (!profile->GetPrefs()->GetBoolean(prefs::kUserFeedbackAllowed)) {
+  if (!CanShowFeedback(profile)) {
+    base::UmaHistogramEnumeration("Feedback.NotAllowed.RequestSource", source,
+                                  feedback::kFeedbackSourceCount);
     return;
   }
+
   // Record an UMA histogram to know the most frequent feedback request source.
   UMA_HISTOGRAM_ENUMERATION("Feedback.RequestSource", source,
                             feedback::kFeedbackSourceCount);

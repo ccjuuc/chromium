@@ -8,11 +8,26 @@
 #include "third_party/blink/renderer/modules/accessibility/ax_object-inl.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
 #include "third_party/blink/renderer/modules/accessibility/testing/accessibility_test.h"
+#include "third_party/blink/renderer/platform/graphics/color.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/ax_node_data.h"
 
 namespace blink {
 namespace test {
+
+TEST_F(AccessibilityTest, ColorValueSupportsCSSColorSyntax) {
+  ScopedInputTypeColorEnhancementsForTest color_enhancements(true);
+  SetBodyInnerHTML(R"HTML(
+      <input id="color" type="color" alpha
+             value="color(srgb 0.2 0.4 0.6 / 0.5)">
+  )HTML");
+
+  const AXObject* ax_color = GetAXObjectByElementId("color");
+  ASSERT_NE(nullptr, ax_color);
+  ASSERT_EQ(ax::mojom::Role::kColorWell, ax_color->RoleValue());
+  EXPECT_EQ(Color::FromRGBA(51, 102, 153, 128).Rgb(), ax_color->ColorValue());
+}
 
 TEST_F(AccessibilityTest, TextOffsetInFormattingContextWithLayoutReplaced) {
   SetBodyInnerHTML(R"HTML(
@@ -100,6 +115,74 @@ TEST_F(AccessibilityTest, TextOffsetInFormattingContextWithLayoutText) {
   // space is of length 7.
   EXPECT_EQ(7, ax_text->TextOffsetInFormattingContext(0));
   EXPECT_EQ(8, ax_text->TextOffsetInFormattingContext(1));
+}
+
+TEST_F(AccessibilityTest, TextAlternativeFromInterestForAttribute) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="target" class="hint">Tooltip text</div>
+      <button id="button" interestfor="target">Button</button>")HTML");
+
+  const AXObject* ax_button = GetAXObjectByElementId("button");
+  ASSERT_NE(nullptr, ax_button);
+  ASSERT_EQ(ax::mojom::Role::kButton, ax_button->RoleValue());
+
+  // Verify the button's computed name doesn't include the tooltip
+  ASSERT_EQ("Button", ax_button->ComputedName());
+}
+
+TEST_F(AccessibilityTest, TextAlternativeFromPopoverTargetAttribute) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="hint" popover="hint">Tooltip text</div>
+      <button id="button" popovertarget="hint">Button</button>")HTML");
+
+  const AXObject* ax_button = GetAXObjectByElementId("button");
+  ASSERT_NE(nullptr, ax_button);
+  ASSERT_EQ(ax::mojom::Role::kButton, ax_button->RoleValue());
+
+  // Verify the button's computed name doesn't include the tooltip
+  ASSERT_EQ("Button", ax_button->ComputedName());
+}
+
+// Regression test for the symbols() function in the counter() alt-text path.
+// The CSS alt text uses the inline symbols() counter style, not the 'decimal'
+// fallback.
+TEST_F(AccessibilityTest, CSSAltTextCounterWithSymbolsFunction) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  SetBodyInnerHTML(R"HTML(
+      <style>
+        #target { counter-reset: c 1; }
+        #target::before {
+          content: "x" / counter(c, symbols('A' 'B' 'C'));
+        }
+      </style>
+      <div id="target"></div>)HTML");
+
+  const AXObject* before = GetAXObjectByElementId("target", kPseudoIdBefore);
+  ASSERT_NE(nullptr, before);
+  // With counter value 1 and the symbolic system, the alt text is "A". If the
+  // symbols() style were ignored (resolving to 'decimal'), it would be "1".
+  EXPECT_EQ("A", before->ComputedName());
+}
+
+// Regression test for the symbols() function in the counters() alt-text path.
+// counters() (with a separator) also uses the inline symbols() counter style,
+// not the 'decimal' fallback.
+TEST_F(AccessibilityTest, CSSAltTextCountersWithSymbolsFunction) {
+  ScopedCSSCounterStyleSymbolsFunctionForTest scoped_feature(true);
+  SetBodyInnerHTML(R"HTML(
+      <style>
+        #target { counter-reset: c 2; }
+        #target::before {
+          content: "x" / counters(c, '.', symbols('A' 'B' 'C'));
+        }
+      </style>
+      <div id="target"></div>)HTML");
+
+  const AXObject* before = GetAXObjectByElementId("target", kPseudoIdBefore);
+  ASSERT_NE(nullptr, before);
+  // With counter value 2 and the symbolic system, the alt text is "B". If the
+  // symbols() style were ignored (resolving to 'decimal'), it would be "2".
+  EXPECT_EQ("B", before->ComputedName());
 }
 
 TEST_F(AccessibilityTest, TextOffsetInFormattingContextWithLayoutBr) {
@@ -233,7 +316,9 @@ TEST_F(AccessibilityTest, FocusgroupItemImpliedRoleMenubar) {
 TEST_F(AccessibilityTest, FocusgroupItemExplicitRolePreserved) {
   SetBodyInnerHTML(R"HTML(
       <div id="fg" focusgroup="tablist">
-        <span tabindex="0" id="child" role="listitem">Item</span>
+        <div role="list">
+          <span tabindex="0" id="child" role="listitem">Item</span>
+        </div>
       </div>)HTML");
   const AXObject* child = GetAXObjectByElementId("child");
   ASSERT_NE(nullptr, child);
@@ -245,12 +330,197 @@ TEST_F(AccessibilityTest, FocusgroupItemExplicitRolePreserved) {
 TEST_F(AccessibilityTest, FocusgroupItemNativeSemanticsPreserved) {
   SetBodyInnerHTML(R"HTML(
       <div id="fg" focusgroup="radiogroup">
-        <button id="child">Button</button>
+        <a href="#" id="child">Link</a>
       </div>)HTML");
   const AXObject* child = GetAXObjectByElementId("child");
   ASSERT_NE(nullptr, child);
-  // Native button semantics should remain, not replaced by radio.
-  EXPECT_EQ(ax::mojom::Role::kButton,
+  // Native link semantics should remain, not replaced by radio.
+  EXPECT_EQ(ax::mojom::Role::kLink, child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupButtonChildInferredRoleTablist) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="tablist">
+        <button id="child">Tab</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Button inside tablist should be inferred as tab.
+  EXPECT_EQ(ax::mojom::Role::kTab, child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupButtonChildInferredRoleRadiogroup) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="radiogroup">
+        <button id="child">Radio</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Button inside radiogroup should be inferred as radio.
+  EXPECT_EQ(ax::mojom::Role::kRadioButton,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupButtonChildInferredRoleMenu) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menu">
+        <button id="child">Menu Item</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Button inside menu should be inferred as menuitem.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonChildInferredRoleMenu) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menu">
+        <button id="child" aria-haspopup="menu">Submenu</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Popup button inside menu should be inferred as menuitem.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonChildInferredRoleMenubar) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menubar">
+        <button id="child" aria-haspopup="menu">Submenu</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Popup button inside menubar should be inferred as menuitem.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonChildInferredRoleTablist) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="tablist">
+        <button id="child" aria-haspopup="menu">Tab with popup</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Popup button inside tablist should be inferred as tab.
+  EXPECT_EQ(ax::mojom::Role::kTab, child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonChildInferredRoleRadiogroup) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="radiogroup">
+        <button id="child" aria-haspopup="menu">Radio with popup</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Popup button inside radiogroup should be inferred as radio.
+  EXPECT_EQ(ax::mojom::Role::kRadioButton,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonLegacyHaspopupInferredRole) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menubar">
+        <button id="child" aria-haspopup="true">Submenu</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Popup button with legacy aria-haspopup="true" inside menubar should be
+  // inferred as menuitem.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonListboxHaspopupInferredRole) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menubar">
+        <button id="child" aria-haspopup="listbox">Options</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // aria-haspopup="listbox" also produces kPopUpButton; should be inferred as
+  // menuitem inside a menubar focusgroup.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonDialogHaspopupInferredRole) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menubar">
+        <button id="child" aria-haspopup="dialog">Open Dialog</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // aria-haspopup="dialog" produces kButton (not kPopUpButton) because screen
+  // readers use the popup-button role as a cue to disable virtual buffer mode.
+  // It should still be inferred as menuitem via the kButton branch.
+  EXPECT_EQ(ax::mojom::Role::kMenuItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupPopupButtonExplicitRolePreserved) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menubar">
+        <div role="list">
+          <button id="child" aria-haspopup="menu" role="listitem">List Item</button>
+        </div>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Explicit author role on popup button should be preserved over inference.
+  EXPECT_EQ(ax::mojom::Role::kListItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupToggleButtonRoleNotInferred) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="menu">
+        <button id="child" aria-pressed="false">Bold</button>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Toggle button (aria-pressed) should NOT have its role inferred by a
+  // focusgroup; aria-pressed declares explicit stateful semantics.
+  EXPECT_EQ(ax::mojom::Role::kToggleButton,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupButtonExplicitRolePreserved) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="tablist">
+        <div role="list">
+          <button id="child" role="listitem">List Item</button>
+        </div>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Explicit author role on button should be preserved over inference.
+  EXPECT_EQ(ax::mojom::Role::kListItem,
+            child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupLinkNativeSemanticsPreserved) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="tablist">
+        <a href="#" id="child">Link</a>
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Native link semantics should be preserved, not replaced by tab.
+  EXPECT_EQ(ax::mojom::Role::kLink, child->ComputeFinalRoleForSerialization());
+}
+
+TEST_F(AccessibilityTest, FocusgroupInputNativeSemanticsPreserved) {
+  SetBodyInnerHTML(R"HTML(
+      <div id="fg" focusgroup="tablist">
+        <input id="child" type="text">
+      </div>)HTML");
+  const AXObject* child = GetAXObjectByElementId("child");
+  ASSERT_NE(nullptr, child);
+  // Native input semantics should be preserved, not replaced by tab.
+  EXPECT_EQ(ax::mojom::Role::kTextField,
             child->ComputeFinalRoleForSerialization());
 }
 
@@ -420,6 +690,36 @@ TEST_F(AccessibilityTest,
   EXPECT_EQ(kSelectedStateUndefined, item2->IsSelected());
 }
 
+class AccessibilityChildFrameTest : public AccessibilityTest {
+ public:
+  AccessibilityChildFrameTest()
+      : AccessibilityTest(MakeGarbageCollected<SingleChildLocalFrameClient>()) {
+  }
+};
+
+// Regression test for crbug.com/440841515: an <iframe role="heading"> must stay
+// an embedding element across role recomputation, so SerializeChildTreeID()
+// keeps treating it as a child-tree owner.
+TEST_F(AccessibilityChildFrameTest,
+       IframeWithAriaHeadingRoleStaysEmbeddingElement) {
+  GetDocument().SetBaseURLOverride(KURL("http://test.com"));
+  SetBodyInnerHTML(R"HTML(
+      <iframe id="frame" role="heading" src="http://test.com"></iframe>)HTML");
+  SetChildFrameHTML("<!DOCTYPE html><body></body>");
+  UpdateAllLifecyclePhasesForTest();
+  GetAXObjectCache().UpdateAXForAllDocuments();
+
+  AXObject* ax_frame = GetAXObjectByElementId("frame");
+  ASSERT_NE(nullptr, ax_frame);
+  EXPECT_EQ(ax::mojom::Role::kHeading, ax_frame->RoleValue());
+  EXPECT_TRUE(ax_frame->IsEmbeddingElement());
+
+  // A second role computation must preserve the native role.
+  ax_frame->UpdateRole();
+  EXPECT_EQ(ax::mojom::Role::kHeading, ax_frame->RoleValue());
+  EXPECT_TRUE(ax_frame->IsEmbeddingElement());
+}
+
 }  // namespace test
 
 TEST_F(AccessibilityTest, RadioButtonsInGroupInTableRows) {
@@ -474,6 +774,44 @@ TEST_F(AccessibilityTest, RadioButtonsInGroupInTableRows) {
   std::vector<int32_t> radio_group_ids = node_data.GetIntListAttribute(
       ax::mojom::IntListAttribute::kRadioGroupIds);
   EXPECT_EQ(6u, radio_group_ids.size());
+}
+
+// Regression test for crbug.com/501371770. Verifies that an aria-owned element
+// is not pruned via RemoveSubtree while its own AddChildren() is in progress.
+// The exact crash requires a deeply nested cascade during tree building (found
+// by ClusterFuzz) that is difficult to reproduce in a unit test. This test
+// exercises the broader scenario: dynamic aria-owns removal triggers tree
+// rebuilding that includes the RestoreParentOrPrune path.
+TEST_F(AccessibilityTest, NoDetachDuringAddChildrenViaAriaOwns) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="owner" aria-owns="target">Owner</div>
+    <ul id="list">
+      <li id="target">
+        <span>Item text</span>
+      </li>
+    </ul>
+  )HTML");
+
+  // Build the initial tree.
+  GetAXRootObject();
+  GetAXObjectCache().UpdateAXForAllDocuments();
+
+  const AXObject* target = GetAXObjectByElementId("target");
+  ASSERT_NE(nullptr, target);
+  EXPECT_FALSE(target->IsDetached());
+
+  // Remove the owner, which will trigger un-owning the target and
+  // RestoreParentOrPrune logic.
+  Element* owner = GetDocument().getElementById(AtomicString("owner"));
+  ASSERT_NE(nullptr, owner);
+  owner->remove();
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  GetAXObjectCache().UpdateAXForAllDocuments();
+
+  // The target should still exist, parented under its natural <ul> parent.
+  target = GetAXObjectByElementId("target");
+  ASSERT_NE(nullptr, target);
+  EXPECT_FALSE(target->IsDetached());
 }
 
 }  // namespace blink

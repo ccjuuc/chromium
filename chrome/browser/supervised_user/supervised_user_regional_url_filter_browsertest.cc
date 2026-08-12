@@ -20,7 +20,6 @@
 #include "chrome/browser/ssl/https_upgrades_util.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/supervised_user/supervision_mixin.h"
@@ -88,7 +87,7 @@ class SupervisedUserRegionalURLFilterTest
   bool IsUrlFilteringEnabled() const {
     return signin::Tribool::kTrue ==
            supervised_user::IsPrimaryAccountSubjectToParentalControls(
-               IdentityManagerFactory::GetForProfile(browser()->profile()));
+               IdentityManagerFactory::GetForProfile(browser()->GetProfile()));
   }
 
  private:
@@ -112,7 +111,7 @@ class SupervisedUserRegionalURLFilterTest
 // Verifies that the regional setting is passed to the RPC backend.
 IN_PROC_BROWSER_TEST_P(SupervisedUserRegionalURLFilterTest, RegionIsAdded) {
   ScopedAllowHttpForHostnamesForTesting allow_http(
-      {"www.example.com"}, browser()->profile()->GetPrefs());
+      {"www.example.com"}, browser()->GetProfile()->GetPrefs());
 
   std::string url_to_classify =
       "http://www.example.com/simple.html";  // Hostname of this url must be

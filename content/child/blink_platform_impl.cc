@@ -10,11 +10,13 @@
 #include <string_view>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/rand_util.h"
@@ -168,7 +170,7 @@ std::string BlinkPlatformImpl::GetDataResourceString(int resource_id) {
   return GetContentClient()->GetDataResourceString(resource_id);
 }
 
-base::RefCountedMemory* BlinkPlatformImpl::GetDataResourceBytes(
+scoped_refptr<base::RefCountedMemory> BlinkPlatformImpl::GetDataResourceBytes(
     int resource_id) {
   return GetContentClient()->GetDataResourceBytes(resource_id);
 }
@@ -176,7 +178,7 @@ base::RefCountedMemory* BlinkPlatformImpl::GetDataResourceBytes(
 WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id) {
   if (resource_id < 0)
     return WebString();
-  return WebString::FromUTF16(
+  return WebString::FromUtf16(
       GetContentClient()->GetLocalizedString(resource_id));
 }
 
@@ -198,7 +200,7 @@ WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id,
   if (format_string.empty())
     return WebString();
 
-  return WebString::FromUTF16(
+  return WebString::FromUtf16(
       base::ReplaceStringPlaceholders(format_string, value.Utf16(), nullptr));
 }
 
@@ -211,7 +213,7 @@ WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id,
   values.reserve(2);
   values.push_back(value1.Utf16());
   values.push_back(value2.Utf16());
-  return WebString::FromUTF16(base::ReplaceStringPlaceholders(
+  return WebString::FromUtf16(base::ReplaceStringPlaceholders(
       GetContentClient()->GetLocalizedString(resource_id), values, nullptr));
 }
 
@@ -245,7 +247,7 @@ size_t BlinkPlatformImpl::MaxDecodedImageBytes() {
   // that 1.6GB of reported physical memory on a 2GB device is enough to set the
   // limit at 16M pixels, which is a desirable value since 4K*4K is a relatively
   // common texture size.
-  return base::SysInfo::AmountOfPhysicalMemory().InBytes() / 25;
+  return base::SysInfo::AmountOfTotalPhysicalMemory().InBytes() / 25;
 #else
   size_t max_decoded_image_byte_limit = kNoDecodedImageByteLimit;
   base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();

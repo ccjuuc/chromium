@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//components/optimization_guide/features.gni")
-
 source_set("model") {
   sources = [
     "ios_chrome_bulk_leak_check_service_factory.h",
@@ -18,6 +16,8 @@ source_set("model") {
     "ios_chrome_password_reuse_detection_manager_client.mm",
     "ios_chrome_shared_password_controller.h",
     "ios_chrome_shared_password_controller.mm",
+    "ios_password_field_classification_model_handler_factory.h",
+    "ios_password_field_classification_model_handler_factory.mm",
     "ios_password_requirements_service_factory.cc",
     "ios_password_requirements_service_factory.h",
     "notify_auto_signin_view_controller.h",
@@ -32,6 +32,8 @@ source_set("model") {
     "password_manager_log_router_factory.h",
     "password_manager_util_ios.cc",
     "password_manager_util_ios.h",
+    "password_native_keystroke_autologin.h",
+    "password_native_keystroke_autologin.mm",
     "password_store_observer_bridge.h",
     "password_store_observer_bridge.mm",
     "password_tab_helper.h",
@@ -39,15 +41,8 @@ source_set("model") {
     "well_known_change_password_tab_helper.h",
     "well_known_change_password_tab_helper.mm",
   ]
-  if (build_with_tflite_lib) {
-    sources += [
-      "ios_password_field_classification_model_handler_factory.h",
-      "ios_password_field_classification_model_handler_factory.mm",
-    ]
-  }
   deps = [
     ":features",
-    ":infobar_delegates",
     ":password_checkup_metrics",
     ":store_factory",
     "//base",
@@ -59,6 +54,7 @@ source_set("model") {
     "//components/autofill/ios/browser:util",
     "//components/autofill/ios/form_util",
     "//components/browser_sync",
+    "//components/device_reauth",
     "//components/enterprise/connectors/core",
     "//components/image_fetcher/core",
     "//components/image_fetcher/ios",
@@ -71,6 +67,7 @@ source_set("model") {
     "//components/password_manager/core/common",
     "//components/password_manager/ios",
     "//components/password_manager/ios:account_select_fill_data",
+    "//components/password_manager/ios:features",
     "//components/prefs",
     "//components/safe_browsing/core/browser/password_protection",
     "//components/safe_browsing/core/browser/password_protection:password_reuse_detection_manager_client",
@@ -88,11 +85,15 @@ source_set("model") {
     "//ios/chrome/browser/affiliations/model",
     "//ios/chrome/browser/autofill/model:model_shared",
     "//ios/chrome/browser/autofill/model/bottom_sheet",
+    "//ios/chrome/browser/device_reauth/model",
     "//ios/chrome/browser/enterprise/connectors/reporting",
     "//ios/chrome/browser/infobars/model",
     "//ios/chrome/browser/infobars/model:public",
     "//ios/chrome/browser/infobars/ui_bundled/coordinators",
-    "//ios/chrome/browser/passwords/ui_bundled:password_suggestion_utils",
+    "//ios/chrome/browser/metrics/model:profile_metrics_service_factory",
+    "//ios/chrome/browser/optimization_guide/model",
+    "//ios/chrome/browser/passwords/infobars/model",
+    "//ios/chrome/browser/passwords/password_suggestion/ui:password_suggestion_utils",
     "//ios/chrome/browser/safe_browsing/model",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/browser",
@@ -120,9 +121,6 @@ source_set("model") {
     "//ui/base",
     "//url",
   ]
-  if (build_with_tflite_lib) {
-    deps += [ "//ios/chrome/browser/optimization_guide/model" ]
-  }
   public_deps = [
     ":password_controller_delegate",
     ":store_factory",
@@ -131,14 +129,6 @@ source_set("model") {
 
 source_set("password_controller_delegate") {
   sources = [ "password_controller_delegate.h" ]
-}
-
-source_set("save_passwords_consumer") {
-  sources = [
-    "save_passwords_consumer.h",
-    "save_passwords_consumer.mm",
-  ]
-  deps = [ "//components/password_manager/core/browser" ]
 }
 
 source_set("store_factory") {
@@ -153,8 +143,8 @@ source_set("store_factory") {
     "ios_chrome_profile_password_store_factory.mm",
     "ios_password_manager_settings_service_factory.h",
     "ios_password_manager_settings_service_factory.mm",
-    "ios_password_store_utils.h",
-    "ios_password_store_utils.mm",
+    "ios_password_store.h",
+    "ios_password_store.mm",
   ]
   deps = [
     "//base",
@@ -162,6 +152,7 @@ source_set("store_factory") {
     "//components/password_manager/core/browser/affiliation:affiliation_fetching",
     "//components/password_manager/core/browser/affiliation:affiliation_match_helper",
     "//components/password_manager/core/browser/features:password_features",
+    "//components/password_manager/core/browser/password_store:password_store_impl",
     "//components/password_manager/core/common:features",
     "//components/signin/public/identity_manager",
     "//components/sync",
@@ -175,35 +166,6 @@ source_set("store_factory") {
     "//ios/web/public",
     "//services/network/public/cpp",
   ]
-}
-
-source_set("infobar_delegates") {
-  sources = [
-    "ios_chrome_save_password_infobar_delegate.h",
-    "ios_chrome_save_password_infobar_delegate.mm",
-  ]
-  deps = [
-    ":public",
-    "//base",
-    "//components/autofill/ios/common",
-    "//components/infobars/core",
-    "//components/password_manager/core/browser",
-    "//components/password_manager/core/common",
-    "//components/strings",
-    "//ios/chrome/app/strings",
-    "//ios/chrome/app/theme",
-    "//ios/chrome/browser/shared/public/commands",
-    "//services/metrics/public/cpp:metrics_cpp",
-    "//ui/base",
-  ]
-}
-
-source_set("public") {
-  sources = [
-    "ios_chrome_password_infobar_metrics_recorder.h",
-    "ios_chrome_password_infobar_metrics_recorder.mm",
-  ]
-  deps = [ "//base" ]
 }
 
 source_set("password_checkup_metrics") {
@@ -262,7 +224,6 @@ source_set("unit_tests") {
   sources = [
     "ios_chrome_password_check_manager_unittest.mm",
     "ios_chrome_password_manager_client_unittest.mm",
-    "ios_chrome_save_password_infobar_delegate_unittest.mm",
     "ios_chrome_shared_password_controller_unittest.mm",
     "password_checkup_utils_unittest.mm",
     "password_controller_js_unittest.mm",
@@ -272,7 +233,6 @@ source_set("unit_tests") {
   ]
   deps = [
     ":features",
-    ":infobar_delegates",
     ":model",
     ":password_checkup_metrics",
     "//base",
@@ -284,10 +244,13 @@ source_set("unit_tests") {
     "//components/autofill/ios/browser:util",
     "//components/autofill/ios/common",
     "//components/autofill/ios/form_util",
+    "//components/device_reauth:test_support",
     "//components/enterprise/connectors/core",
     "//components/infobars/core",
+    "//components/metrics",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:test_support",
+    "//components/password_manager/core/browser/features:password_features",
     "//components/password_manager/core/browser/leak_detection:leak_detection_interface_headers",
     "//components/password_manager/core/browser/leak_detection:test_support",
     "//components/password_manager/core/common",
@@ -297,25 +260,30 @@ source_set("unit_tests") {
     "//components/prefs:test_support",
     "//components/safe_browsing/core/browser/password_protection:test_support",
     "//components/safe_browsing/core/common:safe_browsing_prefs",
+    "//components/strings",
     "//components/sync_preferences:test_support",
     "//components/test/ios",
+    "//components/trusted_vault",
     "//components/ukm:test_support",
+    "//components/webauthn/ios:features",
     "//ios/chrome/app/strings",
     "//ios/chrome/browser/affiliations/model",
+    "//ios/chrome/browser/autofill/form_input_accessory/coordinator",
     "//ios/chrome/browser/autofill/model",
     "//ios/chrome/browser/autofill/model:features",
     "//ios/chrome/browser/autofill/model/bottom_sheet",
     "//ios/chrome/browser/autofill/ui_bundled:coordinator",
-    "//ios/chrome/browser/autofill/ui_bundled/form_input_accessory",
     "//ios/chrome/browser/enterprise/connectors/reporting",
     "//ios/chrome/browser/infobars/model",
+    "//ios/chrome/browser/passwords/infobars/model",
     "//ios/chrome/browser/passwords/model:store_factory",
-    "//ios/chrome/browser/passwords/model/test",
-    "//ios/chrome/browser/passwords/ui_bundled:password_suggestion_utils",
+    "//ios/chrome/browser/passwords/password_suggestion/ui:password_suggestion_utils",
     "//ios/chrome/browser/shared/model/browser/test:test_support",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/profile/test",
     "//ios/chrome/browser/shared/public/commands",
+    "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/browser/web/model:web_internal",
     "//ios/chrome/test:test_support",
     "//ios/testing:ocmock_support",
@@ -323,6 +291,7 @@ source_set("unit_tests") {
     "//ios/web/js_messaging:web_view_js_utils",
     "//ios/web/public/js_messaging",
     "//ios/web/public/test",
+    "//ios/web/public/test:javascript_test",
     "//ios/web/public/test/fakes",
     "//net:test_support",
     "//services/metrics/public/cpp:metrics_cpp",
@@ -344,9 +313,9 @@ source_set("eg2_tests") {
     "//components/autofill/core/browser:test_support",
     "//components/autofill/ios/common",
     "//components/enterprise/connectors/core:test_support",
+    "//components/feature_engagement/public:feature_constants",
     "//components/password_manager/core/browser/features:password_features",
     "//components/password_manager/core/common",
-    "//components/plus_addresses/core/common:features",
     "//components/policy/core/common:common_constants",
     "//components/strings",
     "//components/sync/base",
@@ -358,14 +327,14 @@ source_set("eg2_tests") {
     "//ios/chrome/browser/badges/ui_bundled:public",
     "//ios/chrome/browser/infobars/ui_bundled/banners:public",
     "//ios/chrome/browser/metrics/model:eg_test_support+eg2",
-    "//ios/chrome/browser/passwords/ui_bundled:constants",
-    "//ios/chrome/browser/passwords/ui_bundled/bottom_sheet:eg_test_support+eg2",
-    "//ios/chrome/browser/settings/ui_bundled/google_services:constants",
+    "//ios/chrome/browser/passwords/bottom_sheet/test:eg_test_support+eg2",
+    "//ios/chrome/browser/passwords/password_breach/public",
+    "//ios/chrome/browser/settings/manage_sync/public",
+    "//ios/chrome/browser/shared/model/prefs:pref_names",
     "//ios/chrome/browser/signin/model:fake_system_identity",
     "//ios/chrome/test:eg_test_support+eg2",
     "//ios/chrome/test/earl_grey:eg_test_support+eg2",
     "//ios/testing/earl_grey:eg_test_support+eg2",
-    "//ios/web/public/test/http_server",
     "//net:test_support",
     "//ui/base",
   ]

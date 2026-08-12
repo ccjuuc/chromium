@@ -19,8 +19,6 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 
-// TODO(michaelpg): Port these tests to app_shell: crbug.com/505926.
-
 namespace content {
 class BrowserContext;
 }
@@ -303,6 +301,27 @@ IN_PROC_BROWSER_TEST_F(
       {.launch_as_platform_app = true}))
       << message_;
   CheckStoredDirectoryMatches(test_file);
+}
+
+IN_PROC_BROWSER_TEST_F(FileSystemApiTest,
+                       FileSystemApiOpenSuggestedNameIgnoredTest) {
+  base::FilePath test_dir = TempFilePath("sub_dir", true);
+  ASSERT_FALSE(test_dir.empty());
+  {
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(base::DeleteFile(test_dir));
+    ASSERT_TRUE(base::CreateDirectory(test_dir));
+    ASSERT_TRUE(base::PathService::OverrideAndCreateIfNeeded(
+        chrome::DIR_USER_DOCUMENTS, test_dir.DirName(), false, false));
+  }
+  const FileSystemChooseEntryFunction::TestOptions test_options{
+      .use_suggested_path = true};
+  auto reset_options =
+      FileSystemChooseEntryFunction::SetOptionsForTesting(test_options);
+  ASSERT_TRUE(
+      RunExtensionTest("api_test/file_system/open_suggested_name_ignored",
+                       {.launch_as_platform_app = true}))
+      << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(FileSystemApiTest, FileSystemApiOpenMultipleSuggested) {
@@ -644,7 +663,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemApiTest,
 }
 
 #if BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)
-// TODO(http://crbug.com/1230100): Timing-out on Mac ASan.
+// TODO(http://crbug.com/40778804): Timing-out on Mac ASan.
 #define MAYBE_FileSystemApiSaveMultipleFilesTest \
   DISABLED_FileSystemApiSaveMultipleFilesTest
 #else

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest-death-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -397,8 +398,10 @@ TEST(NativeValueTraitsImplTest, IDLBigint) {
 template <typename Arr>
 v8::Local<Arr> MakeArray(v8::Isolate* isolate, size_t size) {
   auto arr = Arr::New(isolate, size);
-  v8::MemorySpan<uint8_t> span(static_cast<uint8_t*>(arr->Data()),
-                               arr->ByteLength());
+  // SAFETY: `v8::[Shared]ArrayBuffer::New` ensures that using `arr->Data()`
+  // and `arr->ByteLength()` below is safe.
+  auto span = UNSAFE_BUFFERS(base::span<uint8_t>(
+      static_cast<uint8_t*>(arr->Data()), arr->ByteLength()));
   std::iota(span.begin(), span.end(), 0);
   return arr;
 }
@@ -482,22 +485,52 @@ TEST(NativeValueTraitsImplTest, PassAsSpanDataView) {
                   scope.GetIsolate(), 0, subarray, exception_state)
                   .as_span(),
               testing::IsEmpty());
+}
 
-  v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
-        (function() {
-          const arr = new ArrayBuffer(8, {maxByteLength: 8});
-          const view = new Uint8Array(arr);
+TEST(NativeValueTraitsImplTest, PassAsSpanResizable) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
 
-          for (let i = 0; i < 8; ++i) view[i] = i;
-          arr.resize(4);
-          return view;
-        })()
-      )");
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        new ArrayBuffer(8, {maxByteLength: 8});
+    )");
 
-  EXPECT_THAT(NativeValueTraits<PassAsSpanShared>::ArgumentValue(
-                  scope.GetIsolate(), 0, v8_object, exception_state)
-                  .as_span(),
-              testing::ElementsAre(0, 1, 2, 3));
+    ASSERT_TRUE(v8_object->IsArrayBuffer());
+    EXPECT_TRUE(v8_object.As<v8::ArrayBuffer>()->IsResizableByUserJavaScript());
+    DummyExceptionStateForTesting exception_state;
+    std::ignore = NativeValueTraits<PassAsSpanShared>::ArgumentValue(
+        scope.GetIsolate(), 0, v8_object, exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+  }
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        new Uint8Array(new ArrayBuffer(8, {maxByteLength: 8}));
+    )");
+
+    ASSERT_TRUE(v8_object->IsArrayBufferView());
+    EXPECT_TRUE(v8_object.As<v8::ArrayBufferView>()
+                    ->Buffer()
+                    ->IsResizableByUserJavaScript());
+    DummyExceptionStateForTesting exception_state;
+    std::ignore = NativeValueTraits<PassAsSpanShared>::ArgumentValue(
+        scope.GetIsolate(), 0, v8_object, exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+  }
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        new SharedArrayBuffer(8, {maxByteLength: 8});
+    )");
+
+    ASSERT_TRUE(v8_object->IsSharedArrayBuffer());
+    EXPECT_TRUE(v8_object.As<v8::SharedArrayBuffer>()
+                    ->GetBackingStore()
+                    ->IsResizableByUserJavaScript());
+    DummyExceptionStateForTesting exception_state;
+    std::ignore = NativeValueTraits<PassAsSpanShared>::ArgumentValue(
+        scope.GetIsolate(), 0, v8_object, exception_state);
+    EXPECT_TRUE(exception_state.HadException());
+  }
 }
 
 TEST(NativeValueTraitsImplTest, PassAsSpanInlineStorage) {
@@ -752,6 +785,53 @@ TEST(NativeValueTraitsImplTest, PassAsSpanSequenceOfUnrestricted) {
           .as_span(),
       testing::ElementsAre(1, -std::numeric_limits<double>::infinity(), IsNan(),
                            std::numeric_limits<double>::infinity(), 42));
+}
+
+using PassAsSpanWithDetachCheck =
+    PassAsSpan<PassAsSpanMarkerBase::Flags::kPerformDetachCheck, void>;
+
+template <typename T>
+using TypedPassAsSpanWithDetachCheck =
+    PassAsSpan<PassAsSpanMarkerBase::Flags::kPerformDetachCheck, T>;
+
+TEST(NativeValueTraitsImplTest, TypedPassAsSpanDetach) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  NonThrowableExceptionState exception_state;
+
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        self.arrbuf = new Uint8Array(10000).fill(42).buffer;
+    )");
+    auto converted =
+        NativeValueTraits<PassAsSpanWithDetachCheck>::ArgumentValue(
+            scope.GetIsolate(), 0, v8_object, exception_state);
+
+    EvaluateScriptForObject(scope, "self.arrbuf.transfer(0)");
+    EXPECT_THAT(converted.as_span(), testing::IsEmpty());
+  }
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        self.arr1 = new Uint8Array(10000).fill(42);
+    )");
+    auto converted =
+        NativeValueTraits<PassAsSpanWithDetachCheck>::ArgumentValue(
+            scope.GetIsolate(), 0, v8_object, exception_state);
+
+    EvaluateScriptForObject(scope, "self.arr1.buffer.transfer(0)");
+    EXPECT_THAT(converted.as_span(), testing::IsEmpty());
+  }
+  {
+    v8::Local<v8::Object> v8_object = EvaluateScriptForObject(scope, R"(
+        self.arr2 = new Uint16Array(10000).fill(42);
+    )");
+    auto converted =
+        NativeValueTraits<TypedPassAsSpanWithDetachCheck<uint16_t>>::
+            ArgumentValue(scope.GetIsolate(), 0, v8_object, exception_state);
+
+    EvaluateScriptForObject(scope, "self.arr2.buffer.transfer(0)");
+    EXPECT_THAT(converted.as_span(), testing::IsEmpty());
+  }
 }
 
 }  // namespace

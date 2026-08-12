@@ -6,8 +6,8 @@ package org.chromium.chrome.browser.share.link_to_text;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplier;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
@@ -43,14 +43,14 @@ public class LinkToTextIphController {
     /**
      * Creates an {@link LinkToTextIphController}.
      *
-     * @param tabSupplier An {@link ObservableSupplier} for {@link Tab} where the IPH will be
+     * @param tabSupplier An {@link MonotonicObservableSupplier} for {@link Tab} where the IPH will be
      *     rendered.
      * @param tabModelSelector The {@link TabModelSelector} to open a new tab.
      */
     public LinkToTextIphController(
             NullableObservableSupplier<Tab> tabSupplier,
             TabModelSelector tabModelSelector,
-            ObservableSupplier<Profile> profileSupplier) {
+            MonotonicObservableSupplier<Profile> profileSupplier) {
         mTabModelSelector = tabModelSelector;
         new CurrentTabObserver(
                 tabSupplier,
@@ -82,9 +82,9 @@ public class LinkToTextIphController {
     }
 
     private void showMessageIph(Tab tab) {
-        MessageDispatcher mMessageDispatcher =
+        MessageDispatcher messageDispatcher =
                 MessageDispatcherProvider.from(tab.getWindowAndroid());
-        if (mMessageDispatcher == null) return;
+        if (messageDispatcher == null) return;
         PropertyModel model =
                 new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
                         .with(
@@ -109,7 +109,7 @@ public class LinkToTextIphController {
                                 MessageBannerProperties.ON_PRIMARY_ACTION,
                                 this::onMessageButtonClicked)
                         .build();
-        mMessageDispatcher.enqueueMessage(
+        messageDispatcher.enqueueMessage(
                 model, assumeNonNull(tab.getWebContents()), MessageScopeType.NAVIGATION, false);
     }
 

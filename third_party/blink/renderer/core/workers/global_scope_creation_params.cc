@@ -12,6 +12,7 @@
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_parsers.h"
 
 namespace blink {
@@ -28,6 +29,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
     Vector<network::mojom::blink::ContentSecurityPolicyPtr>
         response_content_security_policies,
     network::mojom::ReferrerPolicy referrer_policy,
+    DocumentPolicy::DocumentPolicyBundle document_policy,
     const SecurityOrigin* starter_origin,
     bool starter_secure_context,
     HttpsState starter_https_state,
@@ -47,8 +49,9 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
     base::UnguessableToken agent_cluster_id,
     ukm::SourceId ukm_source_id,
     const std::optional<ExecutionContextToken>& parent_context_token,
-    bool parent_cross_origin_isolated_capability,
+    bool cross_origin_isolated_capability,
     bool parent_is_isolated_context,
+    bool direct_sockets_force_enabled_in_parent,
     InterfaceRegistry* interface_registry,
     scoped_refptr<base::SingleThreadTaskRunner>
         agent_group_scheduler_compositor_task_runner,
@@ -71,6 +74,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
       response_content_security_policies(
           std::move(response_content_security_policies)),
       referrer_policy(referrer_policy),
+      document_policy(std::move(document_policy)),
       starter_origin(starter_origin ? starter_origin->IsolatedCopy() : nullptr),
       origin_to_use(std::move(origin_to_use)),
       starter_secure_context(starter_secure_context),
@@ -101,9 +105,10 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
       agent_cluster_id(agent_cluster_id),
       ukm_source_id(ukm_source_id),
       parent_context_token(parent_context_token),
-      parent_cross_origin_isolated_capability(
-          parent_cross_origin_isolated_capability),
+      cross_origin_isolated_capability(cross_origin_isolated_capability),
       parent_is_isolated_context(parent_is_isolated_context),
+      direct_sockets_force_enabled_in_parent(
+          direct_sockets_force_enabled_in_parent),
       interface_registry(interface_registry),
       agent_group_scheduler_compositor_task_runner(
           std::move(agent_group_scheduler_compositor_task_runner)),
@@ -123,6 +128,42 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
       this->inherited_trial_features->push_back(feature);
     }
   }
+}
+
+// static
+std::unique_ptr<GlobalScopeCreationParams>
+GlobalScopeCreationParams::CreateForWorkerForTesting(
+    const SecurityOrigin* starter_origin,
+    const KURL& script_url,
+    const std::optional<ExecutionContextToken>& parent_context_token,
+    std::unique_ptr<WorkerSettings> worker_settings) {
+  return std::make_unique<GlobalScopeCreationParams>(
+      script_url, mojom::blink::ScriptType::kClassic, "fake global scope name",
+      "fake user agent", UserAgentMetadata(),
+      /*web_worker_fetch_context=*/nullptr,
+      Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+      Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+      network::mojom::ReferrerPolicy::kDefault,
+      DocumentPolicy::DocumentPolicyBundle{}, starter_origin,
+      /*starter_secure_context=*/false, CalculateHttpsState(starter_origin),
+      MakeGarbageCollected<WorkerClients>(),
+      /*content_settings_client=*/nullptr,
+      /*inherited_trial_features=*/nullptr, base::UnguessableToken::Create(),
+      std::move(worker_settings), mojom::blink::V8CacheOptions::kDefault,
+      /*worklet_module_responses_map=*/nullptr, mojo::NullRemote(),
+      mojo::NullRemote(), mojo::NullRemote(), BeginFrameProviderParams(),
+      /*parent_permissions_policy=*/nullptr, base::UnguessableToken::Create(),
+      ukm::kInvalidSourceId, parent_context_token);
+}
+
+// static
+std::unique_ptr<GlobalScopeCreationParams>
+GlobalScopeCreationParams::CreateForWorkerForTesting(
+    const SecurityOrigin* starter_origin,
+    const KURL& script_url) {
+  return CreateForWorkerForTesting(
+      starter_origin, script_url, LocalFrameToken(),
+      std::make_unique<WorkerSettings>(std::make_unique<Settings>().get()));
 }
 
 }  // namespace blink

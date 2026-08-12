@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/i18n/streaming_utf8_validator.h"
 #include "base/numerics/safe_conversions.h"
@@ -23,6 +22,7 @@
 #include "components/device_event_log/device_event_log.h"
 #include "device/fido/authenticator_data.h"
 #include "device/fido/authenticator_supported_options.h"
+#include "device/fido/cmtg_key_response.h"
 #include "device/fido/fido_parsing_utils.h"
 #include "device/fido/opaque_attestation_statement.h"
 #include "device/fido/public/features.h"
@@ -35,9 +35,30 @@ namespace {
 
 constexpr size_t kResponseCodeLength = 1;
 
+std::optional<CmtgKeyResponse> ParseCmtgKeyResponse(
+    const cbor::Value& signature_value,
+    const std::optional<cbor::Value>& auth_extensions) {
+  if (!signature_value.is_bytestring()) {
+    return std::nullopt;
+  }
+  if (!auth_extensions || !auth_extensions->is_map()) {
+    return std::nullopt;
+  }
+  const auto& ext_map = auth_extensions->GetMap();
+  const auto public_key_it = ext_map.find(cbor::Value(kExtensionCmtgKey));
+  if (public_key_it == ext_map.end() ||
+      !public_key_it->second.is_bytestring()) {
+    return std::nullopt;
+  }
+  return CmtgKeyResponse(public_key_it->second.GetBytestring(),
+                         signature_value.GetBytestring());
+}
+
 ProtocolVersion ConvertStringToProtocolVersion(std::string_view version) {
-  if (version == kCtap2Version || version == kCtap2_1Version)
+  if (version == kCtap2Version || version == kCtap2_1Version ||
+      version == kCtap2_2Version) {
     return ProtocolVersion::kCtap2;
+  }
   if (version == kU2fVersion)
     return ProtocolVersion::kU2f;
 
@@ -50,6 +71,9 @@ std::optional<Ctap2Version> ConvertStringToCtap2Version(
     return Ctap2Version::kCtap2_0;
   if (version == kCtap2_1Version)
     return Ctap2Version::kCtap2_1;
+  if (version == kCtap2_2Version) {
+    return Ctap2Version::kCtap2_2;
+  }
 
   return std::nullopt;
 }
@@ -192,6 +216,13 @@ ReadCTAPMakeCredentialResponse(FidoTransportProtocol transport_used,
             response.large_blob_type = LargeBlobSupportType::kExtension;
           }
         }
+      } else if (extension_name == device::kExtensionCmtgKey) {
+        response.cmtg_key = ParseCmtgKeyResponse(
+            map_it.second,
+            response.attestation_object.authenticator_data().extensions());
+        if (!response.cmtg_key) {
+          return std::nullopt;
+        }
       }
     }
   }
@@ -330,6 +361,12 @@ std::optional<AuthenticatorGetAssertionResponse> ReadCTAPGetAssertionResponse(
           // No other pattern of members is allowed.
           return std::nullopt;
         }
+      } else if (extension_name == kExtensionCmtgKey) {
+        response.cmtg_key = ParseCmtgKeyResponse(
+            map_it.second, response.authenticator_data.extensions());
+        if (!response.cmtg_key) {
+          return std::nullopt;
+        }
       }
     }
   }
@@ -402,7 +439,7 @@ std::optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
   }
 
   if (protocol_versions.empty() ||
-      (base::Contains(protocol_versions, ProtocolVersion::kCtap2) &&
+      (protocol_versions.contains(ProtocolVersion::kCtap2) &&
        ctap2_versions.empty())) {
     return std::nullopt;
   }
@@ -443,12 +480,16 @@ std::optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
         options.supports_min_pin_length_extension = true;
       } else if (extension_str == kExtensionHmacSecret) {
         options.supports_hmac_secret = true;
+      } else if (extension_str == kExtensionHmacSecretMc) {
+        options.supports_hmac_secret_mc = true;
       } else if (extension_str == kExtensionPRF) {
         options.supports_prf = true;
       } else if (extension_str == kExtensionLargeBlob) {
         options.large_blob_type = LargeBlobSupportType::kExtension;
       } else if (extension_str == kExtensionLargeBlobKey) {
         large_blob_key_extension_seen = true;
+      } else if (extension_str == kExtensionCmtgKey) {
+        options.supports_cmtg_key = true;
       }
       extensions.push_back(extension_str);
     }

@@ -39,7 +39,6 @@ import org.chromium.chrome.browser.test.MockCertVerifierRuleAndroid;
 import org.chromium.components.browser_ui.site_settings.GeolocationSetting;
 import org.chromium.components.browser_ui.site_settings.PermissionInfo;
 import org.chromium.components.content_settings.ContentSetting;
-import org.chromium.components.content_settings.SessionModel;
 import org.chromium.components.permissions.PermissionsAndroidFeatureList;
 import org.chromium.components.permissions.PermissionsAndroidFeatureMap;
 import org.chromium.content_public.common.ContentSwitches;
@@ -129,12 +128,12 @@ public class TrustedWebActivityLocationDelegationTest {
     @MediumTest
     public void getLocationFromChrome_afterNavigateAwayFromTrustedOrigin()
             throws TimeoutException, Exception {
-        String other_page =
+        String otherPage =
                 mCustomTabActivityTestRule
                         .getTestServer()
                         .getURLWithHostName("www.otherexample.com", TEST_FILE);
 
-        mCustomTabActivityTestRule.loadUrl(other_page);
+        mCustomTabActivityTestRule.loadUrl(otherPage);
         assertFalse(isTrustedWebActivity(mCustomTabActivityTestRule.getActivity()));
 
         verifyLocationFromChrome();
@@ -152,8 +151,7 @@ public class TrustedWebActivityLocationDelegationTest {
                         getGeolocationType(),
                         url.getSpec(),
                         /* embedder= */ null,
-                        /* isEmbargoed= */ false,
-                        SessionModel.DURABLE);
+                        /* isEmbargoed= */ false);
 
         boolean approxGeoEnabled =
                 PermissionsAndroidFeatureMap.isEnabled(

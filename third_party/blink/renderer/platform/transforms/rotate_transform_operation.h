@@ -77,6 +77,8 @@ class PLATFORM_EXPORT RotateTransformOperation : public TransformOperation {
            type == kRotateZ || type == kRotate3D;
   }
 
+  String DebugString() const override;
+
  protected:
   bool IsEqualAssumingSameType(const TransformOperation&) const override;
 
@@ -85,6 +87,8 @@ class PLATFORM_EXPORT RotateTransformOperation : public TransformOperation {
   }
 
   TransformOperation* Accumulate(const TransformOperation& other) override;
+  TransformOperation* AccumulateN(const TransformOperation& other,
+                                  int n) override;
   TransformOperation* Blend(const TransformOperation* from,
                             double progress,
                             bool blend_to_identity = false) override;

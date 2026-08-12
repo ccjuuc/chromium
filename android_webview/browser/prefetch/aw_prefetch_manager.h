@@ -5,10 +5,24 @@
 #ifndef ANDROID_WEBVIEW_BROWSER_PREFETCH_AW_PREFETCH_MANAGER_H_
 #define ANDROID_WEBVIEW_BROWSER_PREFETCH_AW_PREFETCH_MANAGER_H_
 
+#include <jni.h>
+
+#include <mutex>
+#include <optional>
+#include <vector>
+
+#include "android_webview/browser/aw_contents.h"
+#include "android_webview/browser/prefetch/aw_prefetch_handle_wrapper.h"
+#include "android_webview/browser/prefetch/aw_prefetch_manager_data.h"
+#include "android_webview/browser/prefetch/aw_prefetch_prefs.h"
+#include "base/android/jni_android.h"
+#include "base/android/scoped_java_ref.h"
 #include "base/containers/circular_deque.h"
 #include "base/memory/raw_ref.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/pre_prefetch_handle.h"
+#include "content/public/browser/pre_prefetch_service.h"
 #include "content/public/browser/prefetch_handle.h"
 #include "content/public/browser/prefetch_request_status_listener.h"
 #include "net/http/http_no_vary_search_data.h"
@@ -18,28 +32,32 @@
 
 namespace android_webview {
 
-// The default TTL value in `//content` is 10 minutes which is too long for most
-// of WebView cases. This value here can change in the future and that shouldn't
-// affect the `//content` TTL default value.
-inline constexpr int DEFAULT_TTL_IN_SEC = 60;
-// The MaxPrefetches number is not present in the `//content` layer, so it is
-// specific to WebView.
-inline constexpr size_t DEFAULT_MAX_PREFETCHES = 10;
-// This is the source of truth for the absolute maximum number of prefetches
-// that can ever be cached in WebView. It can override the number set by the
-// AndroidX API.
-inline constexpr int32_t ABSOLUTE_MAX_PREFETCHES = 20;
-// Returned from `AwPrefetchManager::StartPrefetchRequest` if the prefetch
-// request was unsuccessful (i.e. there is no key for the prefetch).
-inline constexpr int NO_PREFETCH_KEY = -1;
-
 // The suffix used for generating `//content` prefetch internal histogram names
 // recorded per trigger.
 // TODO(crbug.com/379140429): Merge this with prerender one.
 inline constexpr char AW_PREFETCH_METRICS_SUFFIX[] = "WebView";
 
 // Manages prefetch operations for this Profile.
+//
 // Lifetime: Profile
+//
+// Thread model:
+// - Must be created on UI thread.
+// - Public non-test methods can be categorized as below:
+//   - `StartPrePrefetchRequest()` is called from the worker thread.
+//   - `StartPrefetchRequest()`, `StartPrefetchFromPrePrefetch()`,
+//     `CancelPrefetch()`, `SetTtlInSec()`, `SetMaxPrefetches()` are called
+//     from the UI thread.
+// - They will possibly access the `AwPrefetchManagerData` simultaneously,
+//   which is safe because `AwPrefetchManagerData` is thread-safe. Please see
+//   its class comment for more details.
+// - `AwPrefetchManager` is owned by `AwBrowserContext(Store)` as a
+//   static `base::NoDestructor`, so `this` will never be destructed. This
+//   prevents the data race for `AwPrefetchManagerData` etc between a non-main
+//   thread API call and the main thread dtor of `this`.
+//   TODO(crbug.com/497983835): This should be reconsidered upon future
+//   `AwBrowserContext` changes.
+
 class AwPrefetchManager {
  public:
   explicit AwPrefetchManager(content::BrowserContext* browser_context);
@@ -68,85 +86,124 @@ class AwPrefetchManager {
   static bool IsSecPurposeForPrefetch(
       std::optional<std::string> sec_purpose_header_value);
 
+  static void SetPrefServiceForTesting(PrefService* prefs);
+
+  // Functions to start Prefetch/PrePrefetch.
   // Returns the key associated with the outgoing prefetch request
   // and thus the prefetch handle inside of `all_prefetches_map_` (if
   // successful), otherwise returns `NO_PREFETCH_KEY`.
-  int StartPrefetchRequest(
+  //
+  // Called from Java side UI thread to start a Prefetch request.
+  AwPrefetchKey StartPrefetchRequest(
+      JNIEnv* env,
+      const std::string& url,
+      const base::android::JavaRef<jobject>& prefetch_params,
+      const base::android::JavaRef<jobject>& callback,
+      const base::android::JavaRef<jobject>& callback_executor);
+  // From `AwContents::StartPrerendering()`.
+  AwPrefetchKey StartPrefetchRequestAheadOfPrerender(
+      base::PassKey<AwContents>,
+      JNIEnv* env,
+      const std::string& url,
+      const base::android::JavaRef<jobject>& prefetch_params,
+      scoped_refptr<content::PreloadPipelineInfo> preload_pipeline_info);
+
+  // Called from Java side worker thread to start a PrePrefetch request.
+  AwPrefetchKey StartPrePrefetchRequest(
       JNIEnv* env,
       const std::string& url,
       const base::android::JavaRef<jobject>& prefetch_params,
       const base::android::JavaRef<jobject>& callback,
       const base::android::JavaRef<jobject>& callback_executor);
 
-  void CancelPrefetch(JNIEnv* env, jint prefetch_key);
+  // Called from Java side UI thread to start a Prefetch request from a
+  // previously completed PrePrefetch request.
+  AwPrefetchKey StartPrefetchFromPrePrefetch(JNIEnv* env,
+                                             AwPrefetchKey prefetch_key);
 
-  bool GetIsPrefetchInCacheForTesting(JNIEnv* env, jint prefetch_key);
+  void CancelPrefetch(JNIEnv* env, AwPrefetchKey prefetch_key);
 
   // Updates Time-To-Live (TTL) for the prefetched content in seconds.
-  void SetTtlInSec(JNIEnv* env, jint ttl_in_sec) { ttl_in_sec_ = ttl_in_sec; }
+  void SetTtlInSec(JNIEnv* env, int ttl_in_sec);
 
   // Updates the maximum number of allowed prefetches in cache
-  void SetMaxPrefetches(JNIEnv* env, jint max_prefetches) {
-    max_prefetches_ = std::min(max_prefetches, ABSOLUTE_MAX_PREFETCHES);
-  }
+  void SetMaxPrefetches(JNIEnv* env, int max_prefetches);
 
-  // Returns the Time-to-Live (TTL) for prefetched content in seconds.
-  jint GetTtlInSec(JNIEnv* env) const { return ttl_in_sec_; }
+  // Returns the Time-To-Live (TTL) for the prefetched content in seconds.
+  int GetTtlInSec(JNIEnv* env) const;
 
   // Returns the maximum number of allowed prefetches in cache.
-  jint GetMaxPrefetches(JNIEnv* env) const { return max_prefetches_; }
+  size_t GetMaxPrefetches(JNIEnv* env) const;
 
-  // Returns the key associated with the prefetch handle inside of
-  // `all_prefetches_map_`.
-  int AddPrefetchHandle(
-      std::unique_ptr<content::PrefetchHandle> prefetch_handle) {
-    CHECK(prefetch_handle);
-    CHECK(max_prefetches_ > 0u);
-    CHECK(all_prefetches_map_.size() < max_prefetches_);
+  // Updates the maximum number of allowed prefetches in cache to the default
+  // value.
+  void ClearTtl(JNIEnv* env);
 
-    const int32_t new_prefetch_key = GetNextPrefetchKey();
-    all_prefetches_map_[new_prefetch_key] = std::move(prefetch_handle);
-    UpdateLastPrefetchKey(new_prefetch_key);
-    return new_prefetch_key;
-  }
+  // Updates the Time-To-Live (TTL) for the prefetched content in seconds to the
+  // default value.
+  void ClearMaxPrefetches(JNIEnv* env);
 
-  std::vector<int32_t> GetAllPrefetchKeysForTesting() const {
-    std::vector<int32_t> prefetch_keys;
-    prefetch_keys.reserve(all_prefetches_map_.size());
-    for (const auto& prefetch_pair : all_prefetches_map_) {
-      prefetch_keys.push_back(prefetch_pair.first);
-    }
-    return prefetch_keys;
-  }
+  std::vector<AwPrefetchKey> GetAllPrefetchKeysForTesting() const;
 
-  int GetLastPrefetchKeyForTesting() const { return last_prefetch_key_; }
+  AwPrefetchKey GetLastPrefetchKeyForTesting() const;
+
+  bool GetIsPrefetchInCacheForTesting(JNIEnv* env,
+                                      AwPrefetchKey prefetch_key) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaPrefetchManager();
 
  private:
-  raw_ref<content::BrowserContext> browser_context_;
+  // Registers an external experiment (synthetic trial) in UMA for the current
+  // prefetch request. The experiment ID is derived from the Variations ID
+  // provided by the embedder.
+  //
+  // This is called during `StartRequest()` to ensure the metrics state reflects
+  // the parameters of the most recent request. If no Variations ID is provided,
+  // any previously registered prefetch experiment will be cleared.
+  //
+  // Must be called on the UI thread.
+  static void SetOrClearExternalPrefetchExperiment(
+      std::optional<int> variations_id);
 
-  int ttl_in_sec_ = DEFAULT_TTL_IN_SEC;
+  // Actually read/write the latest prefetch info to/from `PrefService`.
+  // Must be called on the UI thread, since `PrefService` is bound to the UI
+  // thread.
+  // Only used when `kWebViewPrefetchOffTheMainThread` is enabled.
+  PrefService* GetPrefService();
+  std::optional<AwPrefetchLatestInfoPref> ReadLatestPrefetchInfoFromPref();
+  void WriteLatestPrefetchInfoToPref(AwPrefetchLatestInfoPref pref);
 
-  size_t max_prefetches_ = DEFAULT_MAX_PREFETCHES;
+  // Called from either:
+  // - `StartPrefetchRequest` with `is_pre_prefetch` set to false (on UI thread)
+  // - `StartPrefetchRequestAheadOfPrerender` with `is_pre_prefetch` set to
+  //   false (on UI thread)
+  // - `StartPrePrefetchRequest` with `is_pre_prefetch` set to true (on worker
+  //   thread)
+  AwPrefetchKey StartRequest(
+      JNIEnv* env,
+      const std::string& url,
+      bool is_pre_prefetch,
+      scoped_refptr<content::PreloadPipelineInfo> preload_pipeline_info,
+      const base::android::JavaRef<jobject>& prefetch_params,
+      const base::android::JavaRef<jobject>& callback,
+      const base::android::JavaRef<jobject>& callback_executor);
 
-  std::map<int32_t, std::unique_ptr<content::PrefetchHandle>>
-      all_prefetches_map_;
+  const raw_ref<content::BrowserContext> browser_context_;
+
+  // Manages all the mutable states of `this`. Acquires a lock internally so
+  // it should be thread safe from any accesses from any threads.
+  // Should be initialized prior to `aw_pre_prefetch_service_`, because
+  // `aw_prefetch_manager_data_` is needed for `PrePrefetchService`'s
+  // construction.
+  AwPrefetchManagerData aw_prefetch_manager_data_;
+
+  // Since `AwPrefetchManager` is owned by `AwBrowserContext(Store)` as a static
+  // `base::NoDestructor`, `content::PrePrefetchService`'s dtor will never be
+  // called.
+  const std::unique_ptr<content::PrePrefetchService> aw_pre_prefetch_service_;
 
   // Java object reference.
   base::android::ScopedJavaGlobalRef<jobject> java_obj_;
-
-  // Should only be incremented. Acts as an "order added" mechanism
-  // inside of `all_prefetches_map_` since `std::map` stores keys
-  // in a sorted order.
-  int32_t last_prefetch_key_ = -1;
-
-  int32_t GetNextPrefetchKey() const { return last_prefetch_key_ + 1; }
-
-  void UpdateLastPrefetchKey(int new_key) {
-    CHECK(new_key > last_prefetch_key_);
-    last_prefetch_key_ = new_key;
-  }
 };
 
 }  // namespace android_webview

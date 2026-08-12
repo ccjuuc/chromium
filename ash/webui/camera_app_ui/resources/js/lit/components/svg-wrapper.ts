@@ -2,11 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {
-  css,
-  LitElement,
-  PropertyDeclarations,
-} from 'chrome://resources/mwc/lit/index.js';
+import type {PropertyDeclarations} from 'chrome://resources/mwc/lit/index.js';
+import {css, LitElement} from 'chrome://resources/mwc/lit/index.js';
 
 import {assertExists} from '../../assert.js';
 import {preloadedImages} from '../../preload_images.js';

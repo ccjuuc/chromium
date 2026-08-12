@@ -266,9 +266,10 @@ TEST_F(WebStateTest, CreateFullPagePdf_InvalidURLs) {
   }
 }
 
-// Tests that CreateFullPagePdf invokes completion callback nil when the
-// WebState content is not HTML (e.g. a PDF file).
+// Tests that CreateFullPagePdf returns PDF data when the WebState content is a
+// PDF file.
 TEST_F(WebStateTest, CreateFullPagePdfWebStatePdfContent) {
+  [GetAnyKeyWindow() addSubview:web_state()->GetView()];
   CGRect fake_bounds = CGRectMake(0, 0, 100, 100);
   UIGraphicsPDFRenderer* pdf_renderer =
       [[UIGraphicsPDFRenderer alloc] initWithBounds:fake_bounds];
@@ -280,6 +281,14 @@ TEST_F(WebStateTest, CreateFullPagePdfWebStatePdfContent) {
       }];
 
   GURL test_url("https://www.chromium.org/somePDF.pdf");
+  web::NavigationManager::WebLoadParams load_params(test_url);
+  web_state()->GetNavigationManager()->LoadURLWithParams(load_params);
+  ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
+      base::test::ios::kWaitForPageLoadTimeout, ^bool {
+        return web_state()->GetLastCommittedURL() == test_url &&
+               !web_state()->IsLoading();
+      }));
+
   std::string mime_type = "application/pdf";
   web_state()->LoadData(
       pdf_data, [NSString stringWithUTF8String:mime_type.c_str()], test_url);
@@ -300,7 +309,7 @@ TEST_F(WebStateTest, CreateFullPagePdfWebStatePdfContent) {
     return callback_called;
   }));
 
-  ASSERT_FALSE(callback_data);
+  ASSERT_TRUE(callback_data);
 }
 
 // Tests that the web state has an opener after calling SetHasOpener().
@@ -308,6 +317,43 @@ TEST_F(WebStateTest, SetHasOpener) {
   ASSERT_FALSE(web_state()->HasOpener());
   web_state()->SetHasOpener(true);
   EXPECT_TRUE(web_state()->HasOpener());
+}
+
+// Tests that setting and getting user agent override works.
+TEST_F(WebStateTest, UserAgentOverride) {
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
+  std::string ua_override = "Fake UA String";
+  web_state()->SetUserAgentOverride(ua_override);
+  EXPECT_EQ(ua_override, web_state()->GetUserAgentOverride().value());
+
+  web_state()->SetUserAgentOverride(std::nullopt);
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
+
+  web_state()->SetUserAgentOverride(ua_override);
+  EXPECT_TRUE(web_state()->GetUserAgentOverride().has_value());
+
+  // An explicit empty string is treated as no override (std::nullopt).
+  web_state()->SetUserAgentOverride("");
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
+}
+
+// Tests that setting an invalid user agent override is ignored.
+TEST_F(WebStateTest, UserAgentOverrideValidation) {
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
+
+  // String with a newline is an invalid header value.
+  std::string invalid_ua = "Fake\nUA";
+  web_state()->SetUserAgentOverride(invalid_ua);
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
+
+  // Normal string should still work.
+  std::string valid_ua = "Fake UA";
+  web_state()->SetUserAgentOverride(valid_ua);
+  EXPECT_EQ(valid_ua, web_state()->GetUserAgentOverride().value());
+
+  // Clearing still works.
+  web_state()->SetUserAgentOverride(std::nullopt);
+  EXPECT_FALSE(web_state()->GetUserAgentOverride().has_value());
 }
 
 // Verifies that large session can be restored with max session size limit

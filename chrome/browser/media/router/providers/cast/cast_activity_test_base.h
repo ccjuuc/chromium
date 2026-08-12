@@ -24,7 +24,6 @@
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -47,7 +46,7 @@ class MockCastSessionClient : public CastSessionClient {
   MOCK_METHOD1(SendMessageToClient,
                void(blink::mojom::PresentationConnectionMessagePtr message));
   MOCK_METHOD2(SendMediaMessageToClient,
-               void(const base::Value::Dict& payload,
+               void(const base::DictValue& payload,
                     std::optional<int> request_id));
   MOCK_METHOD1(
       CloseConnection,
@@ -60,7 +59,7 @@ class MockCastSessionClient : public CastSessionClient {
                     CastInternalMessage::ErrorCode error_code,
                     std::optional<std::string> description));
   MOCK_METHOD2(SendErrorToClient,
-               void(int sequence_number, base::Value::Dict error));
+               void(int sequence_number, base::DictValue error));
   MOCK_METHOD1(OnMessage,
                void(blink::mojom::PresentationConnectionMessagePtr message));
   MOCK_METHOD1(DidChangeState,
@@ -135,7 +134,6 @@ class CastActivityTestBase : public testing::Test,
   // CastActivityManagerTest.
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   TestMediaSinkService media_sink_service_;
   cast_channel::MockCastSocketService socket_service_{
       task_environment_.GetMainThreadTaskRunner()};

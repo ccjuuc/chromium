@@ -10,11 +10,13 @@ source_set("identity_manager") {
   sources = [
     "account_capabilities_fetcher.cc",
     "account_capabilities_fetcher.h",
-    "account_capabilities_fetcher_factory.h",
+    "account_fetcher_factory.h",
     "account_fetcher_service.cc",
     "account_fetcher_service.h",
     "account_info_fetcher.cc",
     "account_info_fetcher.h",
+    "account_info_fetcher_gaia.cc",
+    "account_info_fetcher_gaia.h",
     "account_info_util.cc",
     "account_info_util.h",
     "account_tracker_service.cc",
@@ -62,6 +64,7 @@ source_set("identity_manager") {
 
   deps = [
     "//components/image_fetcher/core",
+    "//components/metrics",
     "//components/prefs",
     "//components/signin/public/identity_manager:tribool",
     "//components/signin/public/webdata",
@@ -78,8 +81,8 @@ source_set("identity_manager") {
     sources += [
       "account_capabilities_fetcher_android.cc",
       "account_capabilities_fetcher_android.h",
-      "account_capabilities_fetcher_factory_android.cc",
-      "account_capabilities_fetcher_factory_android.h",
+      "account_fetcher_factory_android.cc",
+      "account_fetcher_factory_android.h",
       "profile_oauth2_token_service_delegate_android.cc",
       "profile_oauth2_token_service_delegate_android.h",
     ]
@@ -89,10 +92,10 @@ source_set("identity_manager") {
     ]
   } else {
     sources += [
-      "account_capabilities_fetcher_factory_gaia.cc",
-      "account_capabilities_fetcher_factory_gaia.h",
       "account_capabilities_fetcher_gaia.cc",
       "account_capabilities_fetcher_gaia.h",
+      "account_fetcher_factory_gaia.cc",
+      "account_fetcher_factory_gaia.h",
     ]
   }
 
@@ -100,6 +103,8 @@ source_set("identity_manager") {
     sources += [
       "mutable_profile_oauth2_token_service_delegate.cc",
       "mutable_profile_oauth2_token_service_delegate.h",
+      "oauth2_upgrade_token_flow.cc",
+      "oauth2_upgrade_token_flow.h",
       "token_binding_helper.cc",
       "token_binding_helper.h",
       "token_binding_oauth2_access_token_fetcher.cc",
@@ -172,6 +177,7 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//components/image_fetcher/core",
     "//components/image_fetcher/core:test_support",
+    "//components/metrics",
     "//components/os_crypt/async/browser:key_provider_interface",
     "//components/os_crypt/async/browser:test_support",
     "//components/prefs",
@@ -183,9 +189,11 @@ source_set("unit_tests") {
     "//components/signin/public/identity_manager:test_support",
     "//components/signin/public/webdata",
     "//components/supervised_user/core/common:features",
+    "//components/sync/base:features",
     "//components/sync_preferences:test_support",
     "//components/webdata/common",
     "//google_apis",
+    "//google_apis:test_support",
     "//net",
     "//net:test_support",
     "//services/network:test_support",
@@ -220,6 +228,7 @@ source_set("unit_tests") {
   if (enable_dice_support) {
     sources += [
       "mutable_profile_oauth2_token_service_delegate_unittest.cc",
+      "oauth2_upgrade_token_flow_unittest.cc",
       "token_binding_helper_unittest.cc",
       "token_binding_oauth2_access_token_fetcher_unittest.cc",
     ]
@@ -245,8 +254,8 @@ static_library("test_support") {
   sources = [
     "fake_account_capabilities_fetcher.cc",
     "fake_account_capabilities_fetcher.h",
-    "fake_account_capabilities_fetcher_factory.cc",
-    "fake_account_capabilities_fetcher_factory.h",
+    "fake_account_fetcher_factory.cc",
+    "fake_account_fetcher_factory.h",
     "fake_profile_oauth2_token_service.cc",
     "fake_profile_oauth2_token_service.h",
     "fake_profile_oauth2_token_service_delegate.cc",
@@ -265,7 +274,6 @@ static_library("test_support") {
       "test_profile_oauth2_token_service_delegate_chromeos.cc",
       "test_profile_oauth2_token_service_delegate_chromeos.h",
     ]
-    deps = [ "//chromeos/crosapi/mojom" ]
   }
 
   public_deps = [

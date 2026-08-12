@@ -350,6 +350,11 @@ void AddSysColorMixer(ColorProvider* provider, const ColorProviderKey& key) {
   mixer[kColorSysActorUiGradientMiddle] = {ui::kColorRefPrimary40};
   mixer[kColorSysActorUiGradientEnd] = {ui::kColorRefPrimary60};
 
+  // Glic
+  mixer[kColorGlicTabUnderline1] = {ui::kColorRefPrimary50};
+  mixer[kColorGlicTabUnderline2] = {ui::kColorRefPrimary60};
+  mixer[kColorGlicTabUnderline3] = {ui::kColorRefPrimary70};
+
   // AI.
   mixer[kColorSysAiIllustrationShapeSurface1] = {
       dark_mode ? ui::kColorRefPrimary40 : ui::kColorRefPrimary70};
@@ -363,6 +368,15 @@ void AddSysColorMixer(ColorProvider* provider, const ColorProviderKey& key) {
   // Experimentation.
   mixer[kColorSysOmniboxContainer] = {dark_mode ? kColorRefNeutral15
                                                 : kColorSysSurface4};
+
+  // TODO(crbug.com/517162116): Reconcile color token dark-mode swapping
+  // These tokens are temporarily added to solve a missing need. They need
+  // further work with UX to work these cases into the design system.
+  // Please DO NOT add additional usages of these tokens.
+  mixer[kColorSysSurfaceSection] = {dark_mode ? kColorSysSurface1
+                                              : kColorSysSurface};
+  mixer[kColorSysBaseContainerOnSurface] = {dark_mode ? kColorRefSecondary25
+                                                      : kColorSysSurface4};
 
   // Deprecated.
   // TODO(crbug.com/350783235): Remove remaining uses of these deprecated sys

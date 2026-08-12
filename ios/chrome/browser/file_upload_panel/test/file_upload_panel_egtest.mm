@@ -9,10 +9,14 @@
 #import "base/strings/stringprintf.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "ios/chrome/browser/authentication/test/signin_earl_grey.h"
+#import "ios/chrome/browser/authentication/test/signin_earl_grey_ui_test_util.h"
 #import "ios/chrome/browser/download/model/download_app_interface.h"
+#import "ios/chrome/browser/drive_file_picker/ui/drive_file_picker_constants.h"
 #import "ios/chrome/browser/file_upload_panel/ui/constants.h"
 #import "ios/chrome/browser/metrics/model/metrics_app_interface.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/buildflags.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
@@ -124,6 +128,9 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 - (XCUIElement*)cellWithIdentifierPrefix:(NSString*)prefix
                                    inApp:(XCUIElement*)app;
 
+// Returns the "Add" or "Done" button in `app`.
+- (XCUIElement*)addOrDoneButtonInApp:(XCUIElement*)app;
+
 @end
 
 @implementation FileUploadPanelTestCase {
@@ -132,7 +139,10 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
-  config.features_enabled.push_back(kIOSCustomFileUploadMenu);
+  config.features_enabled.push_back(kIOSChooseFromDrive);
+  if ([self isRunningTest:@selector(testDriveInContextMenuWhenSignedOut)]) {
+    config.features_enabled.push_back(kIOSChooseFromDriveSignedOut);
+  }
   return config;
 }
 
@@ -159,16 +169,19 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 }
 
 - (void)checkAndAcceptSystemDialog {
-  // Allow system permission if shown.
-  NSError* systemAlertFoundError = nil;
-  [[EarlGrey selectElementWithMatcher:grey_systemAlertViewShown()]
-      assertWithMatcher:grey_nil()
-                  error:&systemAlertFoundError];
-  if (systemAlertFoundError) {
-    NSError* acceptAlertError = nil;
-    [self grey_acceptSystemDialogWithError:&acceptAlertError];
-    GREYAssertNil(acceptAlertError, @"Error accepting system alert.\n%@",
-                  acceptAlertError);
+  // Allow system permission if shown on Springboard without using eDO calls.
+  XCUIApplication* springboardApp = [[XCUIApplication alloc]
+      initWithBundleIdentifier:@"com.apple.springboard"];
+  XCUIElement* alert = [[springboardApp
+      descendantsMatchingType:XCUIElementTypeAlert] firstMatch];
+  if ([alert waitForExistenceWithTimeout:1]) {
+    XCUIElement* allowButton = alert.buttons[@"Allow"];
+    if (![allowButton exists]) {
+      allowButton = [alert.buttons elementBoundByIndex:1];
+    }
+    if ([allowButton exists]) {
+      [allowButton tap];
+    }
   }
 }
 
@@ -268,6 +281,13 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
   return [app.cells matchingPredicate:predicate].firstMatch;
 }
 
+// Returns the "Add" or "Done" button in `app`.
+- (XCUIElement*)addOrDoneButtonInApp:(XCUIElement*)app {
+  NSPredicate* addOrDonePredicate =
+      [NSPredicate predicateWithFormat:@"label == 'Add' || label == 'Done'"];
+  return [[app.buttons matchingPredicate:addOrDonePredicate] firstMatch];
+}
+
 // Taps on `cell` until it is selected, with a maximum of 3 taps.
 - (void)tapCellUntilSelected:(XCUIElement*)cell inApp:(XCUIApplication*)app {
   GREYAssertTrue([cell waitForExistenceWithTimeout:10], @"'Cell not found:\n%@",
@@ -331,6 +351,42 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
   // Wait for the alert to appear and accept it, or for the changes to complete.
   // The alert might not appear if the permission was already granted.
+  BOOL success =
+      base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(30), ^{
+        if (changesPerformed) {
+          return YES;
+        }
+        [self checkAndAcceptSystemDialog];
+        return changesPerformed;
+      });
+
+  GREYAssertTrue(success, @"Failed to add video to photo library: %@", error);
+}
+
+// Adds an image to the photo library.
+- (void)addImageToPhotoLibrary {
+  base::FilePath imagePath;
+  base::PathService::Get(base::DIR_ASSETS, &imagePath);
+  imagePath = imagePath.AppendASCII(
+      "ios/testing/data/http_server_files/chromium_logo.png");
+
+  NSURL* imageURL =
+      [NSURL fileURLWithPath:base::SysUTF8ToNSString(imagePath.value())];
+
+  __block BOOL changesPerformed = NO;
+  __block NSError* error = nil;
+  [[PHPhotoLibrary sharedPhotoLibrary]
+      performChanges:^{
+        [PHAssetChangeRequest
+            creationRequestForAssetFromImageAtFileURL:imageURL];
+      }
+      completionHandler:^(BOOL success, NSError* errorOut) {
+        changesPerformed = YES;
+        error = errorOut;
+      }];
+
+  // Wait for the alert to appear and accept it, or for the changes to complete.
+  // The alert might not appear if the permission was already granted.
   BOOL success = base::test::ios::WaitUntilConditionOrTimeout(
       base::test::ios::kWaitForActionTimeout, ^{
         if (changesPerformed) {
@@ -340,7 +396,7 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
         return changesPerformed;
       });
 
-  GREYAssertTrue(success, @"Failed to add video to photo library: %@", error);
+  GREYAssertTrue(success, @"Failed to add image to photo library: %@", error);
 }
 
 #endif
@@ -647,6 +703,53 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
   chrome_test_util::GREYAssertErrorNil(error);
 }
 
+// Tests that tapping "Google Drive" in the file upload context menu presents
+// the Drive file picker.
+- (void)testDriveFilePickerFromContextMenu {
+  // The file upload panel is only available on iOS 18.4+.
+  if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
+    EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
+  }
+
+  FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
+  [SigninEarlGrey signinWithFakeIdentity:fakeIdentity];
+
+  [self loadURLAndTapInputWithPath:"" waitForText:"File input"];
+
+  // Verify "Google Drive" action is present.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                     IDS_IOS_CHOOSE_FROM_DRIVE_ACTION_NAME)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
+  // Tap "Google Drive".
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                     IDS_IOS_CHOOSE_FROM_DRIVE_ACTION_NAME)]
+      performAction:grey_tap()];
+
+  // Verify Drive File Picker is presented.
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:
+          grey_accessibilityID(kDriveFilePickerAccessibilityIdentifier)];
+}
+
+// Tests that "Google Drive" is present in the file upload context menu.
+- (void)testDriveInContextMenuWhenSignedOut {
+  // The file upload panel is only available on iOS 18.4+.
+  if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
+    EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
+  }
+
+  [self loadURLAndTapInputWithPath:"" waitForText:"File input"];
+
+  // Verify "Google Drive" action is present.
+  [[EarlGrey selectElementWithMatcher:
+                 chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                     IDS_IOS_CHOOSE_FROM_DRIVE_ACTION_NAME)]
+      assertWithMatcher:grey_sufficientlyVisible()];
+}
+
 // Tests that tapping the camera action logs the correct metric.
 // TODO(crbug.com/459838957): Test is flaky on devices.
 #if TARGET_OS_SIMULATOR
@@ -734,9 +837,13 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
 // Tests that cancelling the file picker logs the correct metric.
 - (void)testFilePickerCancel {
-  // The file upload panel is only available on iOS 18.4+.
-  if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
-    EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
+  // The file upload panel is only available on iOS 18.4+, but is failing on
+  // iOS 18.5.
+  // TODO(crbug.com/544412706): Re-enable test on iOS 18.5+.
+  if (!base::ios::IsRunningOnOrLater(18, 6, 0)) {
+    EARL_GREY_TEST_SKIPPED(
+        @"Test is available for iOS 18.4+ but currently failing on iOS 18.5, "
+        @"skipping.");
   }
 
   GURL url = self.testServer->GetURL("/directory");
@@ -796,15 +903,8 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
 // Tests that picking a directory logs the success metrics.
 // TODO(crbug.com/464179603): Marked flaky on simulator because of an iOS bug,
-// re-enable test when it has been fixed.
-#if TARGET_IPHONE_SIMULATOR
-#define MAYBE_testFilePickerDirectorySelectionSuccess \
-  FLAKY_testFilePickerDirectorySelectionSuccess
-#else
-#define MAYBE_testFilePickerDirectorySelectionSuccess \
-  testFilePickerDirectorySelectionSuccess
-#endif
-- (void)MAYBE_testFilePickerDirectorySelectionSuccess {
+// re-enable test when it has been fixed. The test is also flaky on device.
+- (void)FLAKY_testFilePickerDirectorySelectionSuccess {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -940,15 +1040,8 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 // Tests that the `accept` attribute for images correctly disables non-matching
 // files.
 // TODO(crbug.com/464179603): Marked flaky on simulator because of an iOS bug,
-// re-enable test when it has been fixed.
-#if TARGET_IPHONE_SIMULATOR
-#define MAYBE_testFilePickerAcceptAttributeImage \
-  FLAKY_testFilePickerAcceptAttributeImage
-#else
-#define MAYBE_testFilePickerAcceptAttributeImage \
-  testFilePickerAcceptAttributeImage
-#endif
-- (void)MAYBE_testFilePickerAcceptAttributeImage {
+// re-enable test when it has been fixed. The test is also flaky on device.
+- (void)FLAKY_testFilePickerAcceptAttributeImage {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -998,16 +1091,9 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
 // Tests that the `accept` attribute for video correctly disables non-matching
 // files.
-// TODO(crbug.com/464179603): Marked flaky on simulator because of an iOS bug,
+// TODO(crbug.com/464179603): Marked flaky because of an iOS bug,
 // re-enable test when it has been fixed.
-#if TARGET_IPHONE_SIMULATOR
-#define MAYBE_testFilePickerAcceptAttributeVideo \
-  FLAKY_testFilePickerAcceptAttributeVideo
-#else
-#define MAYBE_testFilePickerAcceptAttributeVideo \
-  testFilePickerAcceptAttributeVideo
-#endif
-- (void)MAYBE_testFilePickerAcceptAttributeVideo {
+- (void)FLAKY_testFilePickerAcceptAttributeVideo {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -1178,16 +1264,11 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
   chrome_test_util::GREYAssertErrorNil(error);
 }
 
+#if BUILDFLAG(IOS_CHROME_ENABLE_PROFILE_ALTERING_TESTS)
+
 // Tests that picking a single photo from the photo picker logs the success
 // metrics.
-// TODO(crbug.com/469417242): Fails on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testPhotoPickerSingleSelection testPhotoPickerSingleSelection
-#else
-#define MAYBE_testPhotoPickerSingleSelection \
-  DISABLED_testPhotoPickerSingleSelection
-#endif
-- (void)MAYBE_testPhotoPickerSingleSelection {
+- (void)testPhotoPickerSingleSelection {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -1208,13 +1289,42 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
                             timeout:30],
       @"Photo picker did not launch");
 
+  NSPredicate* imagePredicate =
+      [NSPredicate predicateWithFormat:@"label BEGINSWITH 'Photo'"];
+  XCUIElementQuery* images =
+      [photosPickerApp.images matchingPredicate:imagePredicate];
+
+  if (![images.firstMatch waitForExistenceWithTimeout:5]) {
+    // Close the picker to add the image.
+    [photosPickerApp.buttons[@"Cancel"] tap];
+
+    [self addImageToPhotoLibrary];
+    [self loadURLAndTapInputWithPath:"" waitForText:"File input"];
+
+    // Re-open picker.
+    [[EarlGrey selectElementWithMatcher:
+                   chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                       IDS_IOS_FILE_UPLOAD_PANEL_PHOTO_LIBRARY_ACTION_LABEL)]
+        performAction:grey_tap()];
+
+    GREYAssertTrue(
+        [photosPickerApp waitForState:XCUIApplicationStateRunningForeground
+                              timeout:30],
+        @"Photo picker did not launch");
+
+    images = [photosPickerApp.images matchingPredicate:imagePredicate];
+  }
+
   // Select a photo.
   XCUIElement* photo = [[photosPickerApp.images
       matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:0];
   GREYAssertTrue([photo waitForExistenceWithTimeout:10],
                  @"Photo button not hittable.");
   [self forceTap:photo];
-  [photosPickerApp.buttons[@"Done"].firstMatch tap];
+  XCUIElement* addOrDoneButton = [self addOrDoneButtonInApp:photosPickerApp];
+  GREYAssertTrue([addOrDoneButton waitForExistenceWithTimeout:10],
+                 @"'Add' or 'Done' button not found.");
+  [addOrDoneButton tap];
 
   // Check histograms.
   [self waitForSubmittedFileCount:1];
@@ -1247,14 +1357,7 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
 // Tests that picking multiple photos from the photo picker logs the success
 // metrics.
-// TODO(crbug.com/469417242): Fails on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testPhotoPickerMultipleSelection testPhotoPickerMultipleSelection
-#else
-#define MAYBE_testPhotoPickerMultipleSelection \
-  DISABLED_testPhotoPickerMultipleSelection
-#endif
-- (void)MAYBE_testPhotoPickerMultipleSelection {
+- (void)testPhotoPickerMultipleSelection {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -1275,41 +1378,47 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
                             timeout:30],
       @"Photo picker did not launch");
 
+  XCUIElementQuery* images =
+      [photosPickerApp.images matchingIdentifier:@"PXGGridLayout-Info"];
+
+  if (images.count < 2) {
+    // Close the picker to add the images.
+    [photosPickerApp.buttons[@"Cancel"] tap];
+
+    [self addImageToPhotoLibrary];
+    [self addImageToPhotoLibrary];
+    [self loadURLAndTapInputWithPath:"" waitForText:"File input"];
+
+    // Re-open picker.
+    [[EarlGrey selectElementWithMatcher:
+                   chrome_test_util::ContextMenuItemWithAccessibilityLabelId(
+                       IDS_IOS_FILE_UPLOAD_PANEL_PHOTO_LIBRARY_ACTION_LABEL)]
+        performAction:grey_tap()];
+
+    GREYAssertTrue(
+        [photosPickerApp waitForState:XCUIApplicationStateRunningForeground
+                              timeout:30],
+        @"Photo picker did not launch");
+
+    images = [photosPickerApp.images matchingIdentifier:@"PXGGridLayout-Info"];
+  }
+
   // Select multiple photos.
-  XCUIElement* photo1 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:0];
-  XCUIElement* photo2 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:1];
-  XCUIElement* photo3 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:2];
-  XCUIElement* photo4 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:3];
-  XCUIElement* photo5 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:4];
-  XCUIElement* photo6 = [[photosPickerApp.images
-      matchingIdentifier:@"PXGGridLayout-Info"] elementBoundByIndex:5];
+  XCUIElement* photo1 = [images elementBoundByIndex:0];
+  XCUIElement* photo2 = [images elementBoundByIndex:1];
   GREYAssertTrue([photo1 waitForExistenceWithTimeout:10],
                  @"Photo 1 button not hittable.");
   [self forceTap:photo1];
   GREYAssertTrue([photo2 waitForExistenceWithTimeout:10],
                  @"Photo 2 button not hittable.");
   [self forceTap:photo2];
-  GREYAssertTrue([photo3 waitForExistenceWithTimeout:10],
-                 @"Photo 3 button not hittable.");
-  [self forceTap:photo3];
-  GREYAssertTrue([photo4 waitForExistenceWithTimeout:10],
-                 @"Photo 4 button not hittable.");
-  [self forceTap:photo4];
-  GREYAssertTrue([photo5 waitForExistenceWithTimeout:10],
-                 @"Photo 5 button not hittable.");
-  [self forceTap:photo5];
-  GREYAssertTrue([photo6 waitForExistenceWithTimeout:10],
-                 @"Photo 6 button not hittable.");
-  [self forceTap:photo6];
-  [photosPickerApp.buttons[@"Done"].firstMatch tap];
+  XCUIElement* addOrDoneButton = [self addOrDoneButtonInApp:photosPickerApp];
+  GREYAssertTrue([addOrDoneButton waitForExistenceWithTimeout:10],
+                 @"'Add' or 'Done' button not found.");
+  [addOrDoneButton tap];
 
   // Check histograms.
-  [self waitForSubmittedFileCount:6];
+  [self waitForSubmittedFileCount:2];
 
   NSError* error = nil;
   error = [MetricsAppInterface
@@ -1320,7 +1429,7 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
   error = [MetricsAppInterface
        expectCount:1
-         forBucket:6
+         forBucket:2
       forHistogram:@"IOS.FileUploadPanel.PhotoPicker.FileCount"];
   chrome_test_util::GREYAssertErrorNil(error);
 
@@ -1332,15 +1441,19 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
 
   error = [MetricsAppInterface
        expectCount:1
-         forBucket:6
+         forBucket:2
       forHistogram:@"IOS.FileUploadPanel.PhotoPicker.ResultLoader.FileCount"];
   chrome_test_util::GREYAssertErrorNil(error);
 }
 
-#if BUILDFLAG(IOS_CHROME_ENABLE_PROFILE_ALTERING_TESTS)
-
 // Tests that picking a video from the photo picker logs the success metrics.
-- (void)testPhotoPickerVideoSelection {
+// TODO(crbug.com/477857213): Flaky on device.
+#if TARGET_OS_SIMULATOR
+#define MAYBE_testPhotoPickerVideoSelection testPhotoPickerVideoSelection
+#else
+#define MAYBE_testPhotoPickerVideoSelection FLAKY_testPhotoPickerVideoSelection
+#endif
+- (void)MAYBE_testPhotoPickerVideoSelection {
   // The file upload panel is only available on iOS 18.4+.
   if (!base::ios::IsRunningOnOrLater(18, 4, 0)) {
     EARL_GREY_TEST_SKIPPED(@"Test is only available for iOS 18.4+, skipping.");
@@ -1371,6 +1484,7 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
     [photosPickerApp.buttons[@"Cancel"] tap];
 
     [self addVideoToPhotoLibrary];
+    [self checkAndAcceptSystemDialog];
     [self loadURLAndTapInputWithPath:"" waitForText:"File input"];
 
     // Re-open picker.
@@ -1392,7 +1506,10 @@ std::unique_ptr<net::test_server::HttpResponse> TestPageResponse(
                  @"Video button not hittable.");
   [self forceTap:video];
 
-  [photosPickerApp.buttons[@"Add"] tap];
+  XCUIElement* addOrDoneButton = [self addOrDoneButtonInApp:photosPickerApp];
+  GREYAssertTrue([addOrDoneButton waitForExistenceWithTimeout:10],
+                 @"'Add' or 'Done' button not found.");
+  [addOrDoneButton tap];
 
   // Check histograms.
   [self waitForSubmittedFileCount:1];

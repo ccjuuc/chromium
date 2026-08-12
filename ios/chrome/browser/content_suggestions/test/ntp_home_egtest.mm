@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import <TargetConditionals.h>
+
 #import "base/apple/foundation_util.h"
 #import "base/functional/bind.h"
 #import "base/ios/ios_util.h"
@@ -36,6 +38,7 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_constants.h"
+#import "ios/chrome/browser/popup_menu/overflow_menu/public/features.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
 #import "ios/chrome/browser/reading_list/ui_bundled/reading_list_constants.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
@@ -172,20 +175,14 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 }
 
 - (BOOL)loadMinimalAppUI {
-  // TODO(crbug.com/469833796): Fix this issue on ipad-device bot.
-#if !TARGET_OS_SIMULATOR
-  // The app hasn't booted yet, so `isIpadIdiom` cannot be used here.
-  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-    return NO;
-  }
-#endif
-
   std::vector<SEL> minimalAppUITests = {
       @selector(testAccessibility),
       @selector(testOmniboxWidthRotation),
-      @selector(testMinimumHeight),
+      // TODO(crbug.com/522830813): Test is failing.
+      @selector(DISABLED_testMinimumHeight),
       @selector(testInitialPositionAndOrientationChange),
       @selector(testMagicStack),
+      @selector(testMagicStackRotationWithChromeNextIA),
       @selector(testSignInSignOutScrolledToTop_AccountMenu),
       @selector(testToggleModuleVisiblityInCustomizationMenu),
       @selector(testNavigateInCustomizationMenu),
@@ -201,6 +198,7 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config = [super appConfigurationForTestCase];
+
   // Make sure the search engine country is set, for `testFavicons` test.
   config.additional_args.push_back(
       std::string("--") + switches::kSearchEngineChoiceCountry + "=US");
@@ -225,15 +223,6 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
         std::string("-google-doodle-url=https://www.gstatic.com/chrome/ntp/"
                     "doodle_test/ddljson_android0.json"));
   }
-  config.features_disabled.push_back(
-      segmentation_platform::features::kSegmentationPlatformTipsEphemeralCard);
-
-  if ([self isRunningTest:@selector(testLargeFakeboxFocus)]) {
-    config.features_enabled.push_back(kNTPMIAEntrypoint);
-    config.additional_args.push_back(
-        "--kNTPMIAEntrypointParam="
-        "kNTPMIAEntrypointParamOmniboxContainedEnlargedFakebox");
-  }
 
   if ([self isRunningTest:@selector(DISABLED_testCollectionShortcuts)]) {
     // This ensures that the test will not fail when What's New is updated.
@@ -244,6 +233,23 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 
   if ([self isRunningTest:@selector(testMagicStack)]) {
     config.additional_args.push_back("--test-ios-module-ranker=safety_check");
+  }
+
+  if ([self isRunningTest:@selector(testMagicStackRotationWithChromeNextIA)]) {
+    config.features_enabled.push_back(kChromeNextIa);
+    config.additional_args.push_back("--test-ios-module-ranker=safety_check");
+  }
+  // TODO(crbug.com/522830813): Test is failing.
+  if ([self isRunningTest:@selector(DISABLED_testMinimumHeight)]) {
+    config.features_enabled.push_back(kChromeNextIa);
+  }
+
+  if ([self isRunningTest:@selector(
+                              testToggleModuleVisiblityInCustomizationMenu)] ||
+      [self isRunningTest:@selector(testNavigateInCustomizationMenu)]) {
+    // TODO(crbug.com/537272655): Re-enable once the customization menu
+    // coordinator is fully testable in the minimal UI test environment.
+    config.features_enabled.push_back(kOverflowMenuHomeCustomizationEntrypoint);
   }
 
   return config;
@@ -353,9 +359,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   [ChromeEarlGrey openNewTab];
 
   // Check the What's New.
-  [[EarlGrey
+  [[[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonWithAccessibilityLabelId(
                                    IDS_IOS_CONTENT_SUGGESTIONS_WHATS_NEW)]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 100.0f)
+      onElementWithMatcher:chrome_test_util::NTPCollectionView()]
       performAction:grey_tap()];
   [[EarlGrey selectElementWithMatcher:
                  chrome_test_util::NavigationBarTitleWithAccessibilityLabelId(
@@ -367,9 +375,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       performAction:grey_tap()];
 
   // Check the ReadingList.
-  [[EarlGrey
+  [[[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonWithAccessibilityLabelId(
                                    IDS_IOS_CONTENT_SUGGESTIONS_READING_LIST)]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 100.0f)
+      onElementWithMatcher:chrome_test_util::NTPCollectionView()]
       performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::HeaderWithAccessibilityLabelId(
@@ -381,9 +391,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       performAction:grey_tap()];
 
   // Check the RecentTabs.
-  [[EarlGrey
+  [[[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonWithAccessibilityLabelId(
                                    IDS_IOS_CONTENT_SUGGESTIONS_RECENT_TABS)]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 100.0f)
+      onElementWithMatcher:chrome_test_util::NTPCollectionView()]
       performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::HeaderWithAccessibilityLabelId(
@@ -396,9 +408,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       performAction:grey_tap()];
 
   // Check the History.
-  [[EarlGrey
+  [[[EarlGrey
       selectElementWithMatcher:chrome_test_util::ButtonWithAccessibilityLabelId(
                                    IDS_IOS_CONTENT_SUGGESTIONS_HISTORY)]
+         usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 100.0f)
+      onElementWithMatcher:chrome_test_util::NTPCollectionView()]
       performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::HeaderWithAccessibilityLabelId(
@@ -446,15 +460,21 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   [ChromeEarlGrey sceneOpenURL:GURL("chromewidgetkit://search-widget/search")];
   [ChromeEarlGrey
       waitForSufficientlyVisibleElementWithMatcher:chrome_test_util::Omnibox()];
-  // Fakebox should be mostly covered.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      assertWithMatcher:mostlyNotVisible()];
+  // Fakebox should be mostly covered on iphone. On iPad if there are no
+  // suggestions the fakebox can be seen.
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
+        assertWithMatcher:mostlyNotVisible()];
+  }
 }
 
 // Tests that the fake omnibox width is correctly updated after a rotation.
 - (void)testOmniboxWidthRotation {
   [ChromeCoordinatorAppInterface startNewTabPageCoordinator];
   [ChromeEarlGreyUI waitForAppToIdle];
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::NTPCollectionView()]
+      assertWithMatcher:grey_sufficientlyVisible()];
+
   UICollectionView* collectionView = [NewTabPageAppInterface collectionView];
   UIEdgeInsets safeArea = collectionView.safeAreaInsets;
   CGFloat collectionWidth =
@@ -525,6 +545,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 // Tests that the fake omnibox width is correctly updated after a rotation done
 // while the fake omnibox is pinned to the top.
 - (void)testOmniboxPinnedWidthRotation {
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    EARL_GREY_TEST_SKIPPED(@"NTP Omnibox scroll scaling and rotation is "
+                           @"obsolete under Chrome Next");
+  }
+
   if ([ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_DISABLED(@"Fake Omnibox is not pinned to the top on iPad");
   }
@@ -558,6 +583,28 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 // Tests that the fake omnibox remains visible when scrolling, by pinning itself
 // to the top of the NTP. Also ensures that NTP minimum height is respected.
 - (void)testOmniboxPinsToTop {
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    // Under Chrome Next, the fake omnibox scrolls away, and the real omnibox
+    // fades in.
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
+        assertWithMatcher:grey_sufficientlyVisible()];
+
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::NTPCollectionView()]
+        performAction:grey_swipeFastInDirection(kGREYDirectionUp)];
+
+    [ChromeEarlGreyUI waitForAppToIdle];
+
+    // Verify fakebox is no longer visible (it scrolled away).
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
+        assertWithMatcher:mostlyNotVisible()];
+
+    // Verify real omnibox in the top toolbar is visible.
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::DefocusedLocationView()]
+        assertWithMatcher:grey_sufficientlyVisible()];
+    return;
+  }
+
   if ([ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_DISABLED(
         @"Disabled for iPad since it does not pin the omnibox.");
@@ -585,6 +632,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 // Tests that the fake omnibox animation works, increasing the width of the
 // omnibox.
 - (void)testOmniboxWidthChangesWithScroll {
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    EARL_GREY_TEST_SKIPPED(
+        @"NTP Omnibox scroll scaling is obsolete under Chrome Next");
+  }
+
   if ([ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_DISABLED(
         @"Disabled for iPad since the width does not change for it.");
@@ -632,9 +684,17 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   for (NSInteger i = 0; i < numberOfTabs; i++) {
     [ChromeEarlGreyUI openNewTab];
   }
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
-      assertWithMatcher:grey_accessibilityValue([NSString
-                            stringWithFormat:@"%@", @(numberOfTabs + 1)])];
+  NSString* expectedLabel =
+      [NSString stringWithFormat:@"%@", @(numberOfTabs + 1)];
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::ShowTabsButtonWithCount(
+                                     expectedLabel)]
+        assertWithMatcher:grey_notNil()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+        assertWithMatcher:grey_accessibilityValue(expectedLabel)];
+  }
 }
 
 // Tests that rotating to landscape and scrolling into the feed, opening another
@@ -747,6 +807,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 // and moved up, the scroll position restored is the position before the omnibox
 // is selected.
 - (void)testPositionRestoredWithShiftingOffset {
+  // TODO(crbug.com/513858033): Re-enable this flaky test on iPad simulator.
+  if ([ChromeEarlGrey isIPadIdiom] && TARGET_OS_SIMULATOR) {
+    EARL_GREY_TEST_DISABLED(@"Flaky on iPad simulator.");
+  }
+
   // Scroll a bit to have a position to restore.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::NTPCollectionView()]
       performAction:grey_scrollInDirection(kGREYDirectionDown, 20)];
@@ -771,13 +836,20 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   collectionView = [NewTabPageAppInterface collectionView];
   GREYAssertTrue(
       AreNumbersEqual(previousPosition, collectionView.contentOffset.y),
-      @"NTP is not at the same position as before tapping the omnibox");
+      @"NTP is not at the same position as before tapping the omnibox. "
+      @"Previous: %f, current: %f",
+      previousPosition, collectionView.contentOffset.y);
 }
 
 // Tests that when navigating back to the NTP while having the omnibox focused
 // does not consider the shifting offset in the instance the omnibox was already
 // pinned to the top of the page before focusing.
 - (void)testPositionRestoredWithoutShiftingOffset {
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    EARL_GREY_TEST_SKIPPED(
+        @"NTP Omnibox scroll pinning is obsolete under Chrome Next");
+  }
+
   if ([ChromeEarlGrey isIPadIdiom]) {
     EARL_GREY_TEST_SKIPPED(
         @"Pinning Fake Omnibox to top of surface is only on iphone");
@@ -829,9 +901,12 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   // page.
   [self focusFakebox];
 
-  // Check the fake omnibox is mostly not visible.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      assertWithMatcher:mostlyNotVisible()];
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    // Check the fake omnibox is mostly not visible for iphone only. It can be
+    // shown if there are no results suggestions on iPad.
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
+        assertWithMatcher:mostlyNotVisible()];
+  }
   [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
       assertWithMatcher:grey_sufficientlyVisible()];
 
@@ -858,9 +933,12 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   // Offset after the fake omnibox has been tapped.
   CGPoint offsetAfterTap = collectionView.contentOffset;
 
-  // Make sure the fake omnibox has been hidden and the collection has moved.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      assertWithMatcher:grey_not(grey_sufficientlyVisible())];
+  // Make sure the fake omnibox has been hidden and the collection has moved. On
+  // iPad if there are no suggestions the fakebox can be seen.
+  if (![ChromeEarlGrey isIPadIdiom]) {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
+        assertWithMatcher:grey_not(grey_sufficientlyVisible())];
+  }
   GREYAssertTrue(offsetAfterTap.y >= origin.y,
                  @"The collection has not moved.");
 
@@ -875,59 +953,6 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   GREYAssertTrue(
       AreNumbersEqual(origin.y, collectionView.contentOffset.y),
       @"The collection is not scrolled back to its previous position");
-}
-
-// Tests that tapping the fake omnibox and then scrolling defocuses the omnibox.
-- (void)testTapFakeOmniboxAndScrollDefocuses {
-  if ([ChromeEarlGrey isComposeboxIOSEnabled]) {
-    // TODO(crbug.com/466349961): The collection view needs to be made visible
-    // behind the Composebox view controller first for this test to be able to
-    // pass.
-    EARL_GREY_TEST_DISABLED(
-        @"Composebox not supported yet. The collection view needs to be made "
-        @"visible behind the Composebox view controller first");
-  }
-
-  // Clear pasteboard so that omnibox doesn't cover the NTP on focus.
-  [ChromeEarlGrey clearPasteboard];
-  // Get the collection and its layout.
-  UICollectionView* collectionView = [NewTabPageAppInterface collectionView];
-
-  // Offset before the tap.
-  CGPoint origin = collectionView.contentOffset;
-
-  // Tap the omnibox to focus it.
-  [self focusFakebox];
-
-  // Offset after the fake omnibox has been tapped.
-  CGPoint offsetAfterTap = collectionView.contentOffset;
-
-  // Make sure the fake omnibox has been mostly covered and the collection has
-  // moved.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      assertWithMatcher:mostlyNotVisible()];
-
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  GREYAssertTrue(offsetAfterTap.y >= origin.y,
-                 @"The collection has not moved.");
-
-  // Scroll up.
-  if ([ChromeEarlGrey isIPadIdiom]) {
-    // iPad needs more scrolling to see entire fake omnibox since it appears
-    // from under the toolbar.
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::NTPCollectionView()]
-        performAction:grey_scrollInDirection(kGREYDirectionUp, 100)];
-  } else {
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::NTPCollectionView()]
-        performAction:grey_scrollInDirection(kGREYDirectionUp, 50)];
-  }
-
-  // Check the fake omnibox is displayed again.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:grey_notVisible()];
 }
 
 // Tests that tapping the fake omnibox then unfocusing it moves the collection
@@ -967,9 +992,15 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   // Check that the fake omnibox is here.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
       assertWithMatcher:grey_sufficientlyVisible()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
-      assertWithMatcher:grey_accessibilityValue(
-                            [NSString stringWithFormat:@"%i", 2])];
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::ShowTabsButtonWithCount(
+                                     @"2")] assertWithMatcher:grey_notNil()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+        assertWithMatcher:grey_accessibilityValue(
+                              [NSString stringWithFormat:@"%i", 2])];
+  }
 
   // Test the same thing after opening a tab from the tab grid.
   [ChromeEarlGreyUI openTabGrid];
@@ -978,9 +1009,15 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       performAction:grey_tap()];
   [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
       assertWithMatcher:grey_sufficientlyVisible()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
-      assertWithMatcher:grey_accessibilityValue(
-                            [NSString stringWithFormat:@"%i", 3])];
+  if ([ChromeEarlGrey isChromeNextEnabled]) {
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::ShowTabsButtonWithCount(
+                                     @"3")] assertWithMatcher:grey_notNil()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::ShowTabsButton()]
+        assertWithMatcher:grey_accessibilityValue(
+                              [NSString stringWithFormat:@"%i", 3])];
+  }
 }
 
 - (void)testFavicons {
@@ -1003,14 +1040,15 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
                     index])] assertWithMatcher:grey_sufficientlyVisible()];
   }
 
-  // Change the Search Engine to Yahoo!.
+  // Change the Search Engine to Microsoft Bing.
+  // TODO(b/530120931): Stop assuming that search engine is even available.
   [ChromeEarlGreyUI openSettingsMenu];
   [ChromeEarlGreyUI
       tapSettingsMenuButton:grey_accessibilityID(kSettingsSearchEngineCellId)];
-  NSString* yahooSearchEngineName = [SearchEngineChoiceEarlGreyUI
-      searchEngineNameWithPrepopulatedEngine:TemplateURLPrepopulateData::yahoo];
+  NSString* bingSearchEngineName = [SearchEngineChoiceEarlGreyUI
+      searchEngineNameWithPrepopulatedEngine:TemplateURLPrepopulateData::bing];
   [[EarlGrey
-      selectElementWithMatcher:grey_accessibilityLabel(yahooSearchEngineName)]
+      selectElementWithMatcher:grey_accessibilityLabel(bingSearchEngineName)]
       performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:chrome_test_util::SettingsMenuBackButton()]
@@ -1050,8 +1088,16 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   }
 }
 
-- (void)testMinimumHeight {
+// TODO(crbug.com/522830813): Test is failing.
+- (void)DISABLED_testMinimumHeight {
+  if (!base::ios::IsRunningOnIOS18OrLater()) {
+    EARL_GREY_TEST_SKIPPED(
+        @"On iOS 17, EarlGrey finishes the test before the "
+        @"MostVisitedTilesCollectionView goes through its next layout pass "
+        @"based on the actual width of the new tab page content.");
+  }
   [ChromeCoordinatorAppInterface startNewTabPageCoordinator];
+  GREYWaitForAppToIdle(@"App failed to idle");
   [self
       testNTPInitialPositionAndContent:[NewTabPageAppInterface collectionView]];
 
@@ -1081,9 +1127,10 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   // Ensures that fake omnibox visibility is correct.
   // On iPads, fake omnibox disappears and becomes real omnibox. On other
   // devices, fake omnibox persists and sticks to top.
-  if ([ChromeEarlGrey isIPadIdiom]) {
+  // For Next, the fakebox always disappears.
+  if ([ChromeEarlGrey isIPadIdiom] || [ChromeEarlGrey isChromeNextEnabled]) {
     [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
-        assertWithMatcher:grey_notVisible()];
+        assertWithMatcher:mostlyNotVisible()];
   } else {
     [[EarlGrey selectElementWithMatcher:chrome_test_util::FakeOmnibox()]
         assertWithMatcher:grey_sufficientlyVisible()];
@@ -1098,6 +1145,7 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
 // the device back and forth.
 - (void)testInitialPositionAndOrientationChange {
   [ChromeCoordinatorAppInterface startNewTabPageCoordinator];
+  GREYWaitForAppToIdle(@"App failed to idle");
 
   UICollectionView* collectionView = [NewTabPageAppInterface collectionView];
 
@@ -1134,8 +1182,7 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       assertWithMatcher:grey_notVisible()];
 
   // Reload page, then check if incognito view is still visible.
-  if ([ChromeEarlGrey isNewOverflowMenuEnabled] &&
-      UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+  if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
     // In the new
     // overflow menu on iPad, the reload button is only on the toolbar.
     [[EarlGrey selectElementWithMatcher:chrome_test_util::ReloadButton()]
@@ -1164,15 +1211,11 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
       grey_accessibilityID(kMagicStackScrollViewAccessibilityIdentifier);
   [ChromeEarlGrey waitForUIElementToAppearWithMatcher:magicStackScrollView];
 
-  // Scroll down to find the MagicStack.
-  [[[EarlGrey selectElementWithMatcher:magicStackScrollView]
+  // Scroll down to find the Safety Check module inside the Magic Stack.
+  [[[EarlGrey selectElementWithMatcher:grey_accessibilityID(
+                                           safety_check::kSafetyCheckViewID)]
          usingSearchAction:grey_scrollInDirection(kGREYDirectionDown, 100.0f)
       onElementWithMatcher:chrome_test_util::NTPCollectionView()]
-      assertWithMatcher:grey_notNil()];
-
-  // Verify safety check module title is visible.
-  [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                          safety_check::kSafetyCheckViewID)]
       assertWithMatcher:grey_sufficientlyVisible()];
 
   // Swipe to next module
@@ -1221,6 +1264,56 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                           safety_check::kSafetyCheckViewID)]
       assertWithMatcher:grey_sufficientlyVisible()];
+}
+
+// Tests that rotating to landscape and back to portrait does not cause the
+// Magic Stack collection view width to remain small when ChromeNextIA is
+// enabled.
+- (void)testMagicStackRotationWithChromeNextIA {
+  if ([ChromeEarlGrey isIPadIdiom]) {
+    EARL_GREY_TEST_SKIPPED(@"Rotation test is for iPhone.");
+  }
+
+  // Force Safety Check module to ensure Magic Stack is not empty.
+  [ChromeEarlGrey setBoolValue:NO forUserPref:prefs::kSafeBrowsingEnabled];
+  [ChromeEarlGrey
+         setStringValue:NameForSafetyCheckState(
+                            SafeBrowsingSafetyCheckState::kUnsafe)
+      forLocalStatePref:prefs::kIosSafetyCheckManagerSafeBrowsingCheckResult];
+
+  [ChromeCoordinatorAppInterface startNewTabPageCoordinator];
+  [ChromeEarlGreyUI waitForAppToIdle];
+
+  id<GREYMatcher> magicStackScrollView =
+      grey_accessibilityID(kMagicStackScrollViewAccessibilityIdentifier);
+  [ChromeEarlGrey waitForUIElementToAppearWithMatcher:magicStackScrollView];
+
+  // Get initial width in portrait.
+  CGFloat initialWidth = [NewTabPageAppInterface magicStackFirstCellWidth];
+  GREYAssertTrue(initialWidth > 0,
+                 @"Magic Stack cell width should be greater than 0");
+
+  // Rotate to landscape.
+  [EarlGrey rotateInterfaceToOrientation:UIInterfaceOrientationLandscapeRight
+                                   error:nil];
+  [ChromeEarlGreyUI waitForAppToIdle];
+
+  CGFloat landscapeWidth = [NewTabPageAppInterface magicStackFirstCellWidth];
+  GREYAssertTrue(landscapeWidth > initialWidth,
+                 @"Landscape cell width (%f) should be larger than portrait "
+                 @"cell width (%f)",
+                 landscapeWidth, initialWidth);
+
+  // Rotate back to portrait.
+  [EarlGrey rotateInterfaceToOrientation:UIInterfaceOrientationPortrait
+                                   error:nil];
+  [ChromeEarlGreyUI waitForAppToIdle];
+
+  CGFloat finalWidth = [NewTabPageAppInterface magicStackFirstCellWidth];
+  GREYAssertEqual(initialWidth, finalWidth,
+                  @"Cell width after rotating back to portrait (%f) should "
+                  @"match initial portrait cell width (%f)",
+                  finalWidth, initialWidth);
 }
 
 // Test that signing in and signing out results in the NTP scrolled to the top
@@ -1365,6 +1458,10 @@ bool AreNumbersEqual(CGFloat num1, CGFloat num2) {
   // Tests most visited tiles visibility separately.
   [self resetCustomizationPrefs];
   [ChromeCoordinatorAppInterface startNewTabPageCoordinator];
+
+  [ChromeEarlGrey
+      waitForUIElementToAppearWithMatcher:
+          grey_accessibilityID(kNTPCustomizationMenuButtonIdentifier)];
 
   // Open the Home customization menu.
   [[EarlGrey

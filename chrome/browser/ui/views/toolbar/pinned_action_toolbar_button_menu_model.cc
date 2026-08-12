@@ -14,10 +14,13 @@
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/actions/chrome_action_properties.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+#include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
@@ -27,9 +30,12 @@
 #include "ui/actions/action_id.h"
 #include "ui/actions/actions.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/window_open_disposition_utils.h"
 #include "ui/menus/simple_menu_model.h"
 
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kPinnedActionToolbarPinElementId);
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kPinnedActionToolbarUnpinElementId);
+DEFINE_ELEMENT_IDENTIFIER_VALUE(kPinnedActionToolbarCustomizeElementId);
 
 namespace {
 // Returns true if the button pin state is managed through prefs instead of
@@ -61,10 +67,12 @@ PinnedActionToolbarButtonMenuModel::PinnedActionToolbarButtonMenuModel(
     : browser_(browser_interface), action_id_(action_id) {
   AddActionSpecificItems();
   // Add the pin/unpin and customize toolbar items.
-  items_.emplace_back(kActionPinActionToToolbar, TYPE_COMMAND);
+  items_.emplace_back(kActionPinActionToToolbar, TYPE_COMMAND,
+                      kPinnedActionToolbarPinElementId);
   items_.emplace_back(kActionUnpinActionFromToolbar, TYPE_COMMAND,
                       kPinnedActionToolbarUnpinElementId);
-  items_.emplace_back(kActionSidePanelShowCustomizeChromeToolbar, TYPE_COMMAND);
+  items_.emplace_back(kActionSidePanelShowCustomizeChromeToolbar, TYPE_COMMAND,
+                      kPinnedActionToolbarCustomizeElementId);
 }
 
 PinnedActionToolbarButtonMenuModel::~PinnedActionToolbarButtonMenuModel() =
@@ -206,7 +214,15 @@ void PinnedActionToolbarButtonMenuModel::ActivatedAt(size_t index,
       action_id == kActionUnpinActionFromToolbar) {
     UpdatePinState(action_id);
   } else {
-    GetActionItemFor(action_id)->InvokeAction();
+    GetActionItemFor(action_id)->InvokeAction(
+        actions::ActionInvocationContext::Builder()
+            .SetProperty(chrome::kDispositionKey,
+                         ui::DispositionFromEventFlags(event_flags))
+            .SetProperty(
+                kSidePanelOpenTriggerKey,
+                static_cast<std::underlying_type_t<SidePanelOpenTrigger>>(
+                    SidePanelOpenTrigger::kPinnedEntryToolbarButton))
+            .Build());
   }
 }
 
@@ -245,7 +261,8 @@ void PinnedActionToolbarButtonMenuModel::AddActionSpecificItems() {
         // Adding all ActionItems as Command types here, if the ActionItem
         // should be displayed as Checked that is handled in `GetTypeAt` which
         // will evaluated the ActionItem's checked state when the menu is run.
-        items_.emplace_back(*child_item->GetActionId(), TYPE_COMMAND);
+        auto* child_action_item = child_item->GetActionItem();
+        items_.emplace_back(*child_action_item->GetActionId(), TYPE_COMMAND);
       }
       items_.emplace_back(TYPE_SEPARATOR);
     }
@@ -255,7 +272,7 @@ void PinnedActionToolbarButtonMenuModel::AddActionSpecificItems() {
 actions::ActionItem* PinnedActionToolbarButtonMenuModel::GetActionItemFor(
     actions::ActionId id) const {
   return actions::ActionManager::Get().FindAction(
-      id, browser_->GetActions()->root_action_item());
+      id, BrowserActions::From(browser_)->root_action_item());
 }
 
 bool PinnedActionToolbarButtonMenuModel::IsPinnable() const {

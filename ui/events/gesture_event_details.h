@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include "base/check_op.h"
-#include "base/compiler_specific.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event_latency_metadata.h"
 #include "ui/events/events_base_export.h"
@@ -105,9 +104,44 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
     return data_.scroll_update.y;
   }
 
+  float scroll_x_unconstrained() const {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    return data_.scroll_update.x_unconstrained;
+  }
+
+  float scroll_y_unconstrained() const {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    return data_.scroll_update.y_unconstrained;
+  }
+
+  void set_scroll_x_unconstrained(float x) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.x_unconstrained = x;
+  }
+
+  void set_scroll_y_unconstrained(float y) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.y_unconstrained = y;
+  }
+
   ui::ScrollGranularity scroll_update_units() const {
     DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
     return data_.scroll_update.delta_units;
+  }
+
+  float scroll_x_compensated() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.x_compensated;
+  }
+
+  float scroll_y_compensated() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.y_compensated;
+  }
+
+  ui::ScrollGranularity scroll_end_units() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.delta_units;
   }
 
   float velocity_x() const {
@@ -225,13 +259,7 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
   }
 
   // Supports comparison over internal structures for testing.
-  bool operator==(const GestureEventDetails& other) const {
-    return type_ == other.type_ &&
-           !UNSAFE_TODO(memcmp(&data_, &other.data_, sizeof(Details))) &&
-           device_type_ == other.device_type_ &&
-           touch_points_ == other.touch_points_ &&
-           bounding_box_ == other.bounding_box_;
-  }
+  bool operator==(const GestureEventDetails& other) const;
 
  private:
   EventType type_;
@@ -248,10 +276,23 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
     struct {  // SCROLL delta.
       float x;
       float y;
+      // The raw, unconstrained scroll deltas before any axis locking (railing)
+      // or snapping constraints are applied by the browser. Used when
+      // scroll-axis-lock: none is active to allow diagonal scrolling.
+      float x_unconstrained;
+      float y_unconstrained;
       ui::ScrollGranularity delta_units;
       // Whether any previous scroll update in the current scroll sequence was
       // suppressed because the underlying touch was consumed.
     } scroll_update;
+
+    struct {
+      // The scroll delta that is compensated for latency i.e. the scroll delta
+      // that was not sent to the renderer as scroll updates.
+      float x_compensated;
+      float y_compensated;
+      ui::ScrollGranularity delta_units;
+    } scroll_end;
 
     struct {  // PINCH details.
       float scale;

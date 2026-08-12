@@ -12,16 +12,20 @@
 #include "media/base/audio_decoder_config.h"
 #include "media/base/media_util.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
+
+const ChannelLayoutConfig kSurroundChannelLayout =
+    ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_SURROUND>();
 
 TEST(AudioDecoderConfigStructTraitsTest, Normal) {
   const std::vector<uint8_t> kExtraData =
       base::ToVector(base::as_byte_span("input extra data"));
 
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, kExtraData, EncryptionScheme::kUnencrypted,
                    base::TimeDelta(), 0);
   std::vector<uint8_t> data = mojom::AudioDecoderConfig::Serialize(&input);
@@ -32,7 +36,7 @@ TEST(AudioDecoderConfigStructTraitsTest, Normal) {
 
 TEST(AudioDecoderConfigStructTraitsTest, EmptyExtraData) {
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, EmptyExtraData(), EncryptionScheme::kUnencrypted,
                    base::TimeDelta(), 0);
   std::vector<uint8_t> data = mojom::AudioDecoderConfig::Serialize(&input);
@@ -43,7 +47,7 @@ TEST(AudioDecoderConfigStructTraitsTest, EmptyExtraData) {
 
 TEST(AudioDecoderConfigStructTraitsTest, Encrypted) {
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, EmptyExtraData(), EncryptionScheme::kCenc,
                    base::TimeDelta(), 0);
   std::vector<uint8_t> data = mojom::AudioDecoderConfig::Serialize(&input);
@@ -54,7 +58,7 @@ TEST(AudioDecoderConfigStructTraitsTest, Encrypted) {
 
 TEST(AudioDecoderConfigStructTraitsTest, WithProfile) {
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, EmptyExtraData(), EncryptionScheme::kUnencrypted,
                    base::TimeDelta(), 0);
   input.set_profile(AudioCodecProfile::kXHE_AAC);
@@ -66,7 +70,7 @@ TEST(AudioDecoderConfigStructTraitsTest, WithProfile) {
 
 TEST(AudioDecoderConfigStructTraitsTest, DisableDiscardDecoderDelay) {
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, EmptyExtraData(), EncryptionScheme::kUnencrypted,
                    base::TimeDelta(), 0);
   input.disable_discard_decoder_delay();
@@ -79,17 +83,21 @@ TEST(AudioDecoderConfigStructTraitsTest, DisableDiscardDecoderDelay) {
 
 TEST(AudioDecoderConfigStructTraitsTest, TargetOutputChannelLayout) {
   AudioDecoderConfig input;
-  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, CHANNEL_LAYOUT_SURROUND,
+  input.Initialize(AudioCodec::kAAC, kSampleFormatU8, kSurroundChannelLayout,
                    48000, EmptyExtraData(), EncryptionScheme::kUnencrypted,
                    base::TimeDelta(), 0);
-  input.set_target_output_channel_layout(CHANNEL_LAYOUT_5_1);
+  input.set_target_output_channel_layout(
+      ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_5_1>());
   input.set_target_output_sample_format(kSampleFormatDts);
   std::vector<uint8_t> data = mojom::AudioDecoderConfig::Serialize(&input);
   AudioDecoderConfig output;
   EXPECT_TRUE(mojom::AudioDecoderConfig::Deserialize(std::move(data), &output));
   EXPECT_TRUE(output.Matches(input));
-  EXPECT_EQ(output.target_output_channel_layout(), CHANNEL_LAYOUT_5_1);
+  EXPECT_EQ(output.target_output_channel_layout(),
+            ChannelLayoutConfig::FromLayout<CHANNEL_LAYOUT_5_1>());
   EXPECT_EQ(output.target_output_sample_format(), kSampleFormatDts);
 }
+
+
 
 }  // namespace media

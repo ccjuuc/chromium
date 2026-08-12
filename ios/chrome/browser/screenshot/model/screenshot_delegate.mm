@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/screenshot/model/screenshot_delegate.h"
 
+#import "ios/chrome/browser/enterprise/data_protection/model/data_protection_tab_helper.h"
 #import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/model/reader_mode_tab_helper.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -49,6 +50,14 @@
     return;
   }
 
+  DataProtectionTabHelper* dataProtectionTabHelper =
+      DataProtectionTabHelper::FromWebState(webState);
+  if (dataProtectionTabHelper &&
+      dataProtectionTabHelper->IsScreenshotProtectionEnabled()) {
+    completionHandler(nil, 0, CGRectZero);
+    return;
+  }
+
   // Pass the currently viewed frame to maintain scroll position in the
   // screenshot editing tool.
   id<CRWWebViewProxy> webProxy = webState->GetWebViewProxy();
@@ -65,14 +74,11 @@
         completionHandler(pdfDoumentData, 0, webViewFrame);
       });
 
-  if (IsReaderModeAvailable()) {
-    ReaderModeTabHelper* tabHelper =
-        ReaderModeTabHelper::FromWebState(webState);
-    if (tabHelper) {
-      web::WebState* readerModeWebState = tabHelper->GetReaderModeWebState();
-      if (readerModeWebState) {
-        webState = readerModeWebState;
-      }
+  ReaderModeTabHelper* tabHelper = ReaderModeTabHelper::FromWebState(webState);
+  if (tabHelper) {
+    web::WebState* readerModeWebState = tabHelper->GetReaderModeWebState();
+    if (readerModeWebState) {
+      webState = readerModeWebState;
     }
   }
 

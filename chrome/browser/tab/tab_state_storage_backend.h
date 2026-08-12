@@ -23,7 +23,8 @@ namespace tabs {
 // layer.
 class TabStateStorageBackend {
  public:
-  explicit TabStateStorageBackend(const base::FilePath& profile_path);
+  TabStateStorageBackend(const base::FilePath& profile_path,
+                         bool support_off_the_record_data);
   TabStateStorageBackend(const TabStateStorageBackend&) = delete;
   TabStateStorageBackend& operator=(const TabStateStorageBackend&) = delete;
   ~TabStateStorageBackend();
@@ -47,9 +48,30 @@ class TabStateStorageBackend {
                     std::unique_ptr<StorageLoadedData::Builder> builder,
                     OnStorageLoadedData on_storage_loaded_data);
 
+  using OnCountTabsForWindow = base::OnceCallback<void(int)>;
+  void CountTabsForWindow(std::string_view window_tag,
+                          bool is_off_the_record,
+                          OnCountTabsForWindow on_counted);
+
   void ClearAllNodes();
 
+  void ClearAllDivergentNodes();
+
   void ClearWindow(std::string_view window_tag);
+
+  void ClearDivergentNodesForWindow(std::string_view window_tag,
+                                    bool is_off_the_record);
+
+  void ClearDivergenceWindow(std::string_view window_tag);
+
+  void ClearAllWindowsExcept(std::vector<std::string> window_tags);
+
+  void ClearNodesForWindowExcept(std::string_view window_tag,
+                                 bool is_off_the_record,
+                                 std::vector<StorageId> ids);
+
+  void SetKey(std::string_view window_tag, std::vector<uint8_t> key);
+  void RemoveKey(std::string_view window_tag);
 
 #if defined(NDEBUG)
   void PrintAll();
@@ -65,6 +87,7 @@ class TabStateStorageBackend {
                   std::unique_ptr<StorageLoadedData> storage_loaded_data);
 
   const base::FilePath profile_path_;
+  const bool support_off_the_record_data_;
   scoped_refptr<base::UpdateableSequencedTaskRunner> db_task_runner_;
   int boosted_priority_count_{0};
 

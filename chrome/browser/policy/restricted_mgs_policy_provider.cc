@@ -8,7 +8,7 @@
 
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/webui/certificates_handler.h"
+#include "chrome/browser/ui/webui/certificate_manager/certificate_manager_utils.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
@@ -57,8 +57,9 @@ void RestrictedMGSPolicyProvider::UpdatePolicyBundle() {
 
   PolicyMap& chrome_policy =
       bundle.Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
-  if (IsDeviceRestrictedManagedGuestSessionEnabled())
+  if (IsDeviceRestrictedManagedGuestSessionEnabled()) {
     ApplyRestrictedManagedGuestSessionOverride(&chrome_policy);
+  }
 
   UpdatePolicy(std::move(bundle));
 }
@@ -68,22 +69,21 @@ void RestrictedMGSPolicyProvider::UpdatePolicyBundle() {
 void RestrictedMGSPolicyProvider::ApplyRestrictedManagedGuestSessionOverride(
     PolicyMap* chrome_policy) {
   std::pair<std::string, base::Value> policy_overrides[] = {
-    {key::kArcEnabled, base::Value(false)},
-    {key::kCrostiniAllowed, base::Value(false)},
-    {key::kDeletePrintJobHistoryAllowed, base::Value(true)},
-    {key::kKerberosEnabled, base::Value(false)},
-    {key::kNetworkFileSharesAllowed, base::Value(false)},
-    {key::kUserBorealisAllowed, base::Value(false)},
-    {key::kUserPluginVmAllowed, base::Value(false)},
-    {key::kAllowDeletingBrowserHistory, base::Value(true)},
-    {key::kCACertificateManagementAllowed,
-     base::Value(static_cast<int>(CACertificateManagementPermission::kNone))},
-    {key::kClientCertificateManagementAllowed,
-     base::Value(
-         static_cast<int>(ClientCertificateManagementPermission::kNone))},
-    {key::kEnableMediaRouter, base::Value(false)},
-    {key::kPasswordManagerEnabled, base::Value(false)},
-    {key::kScreenCaptureAllowed, base::Value(false)},
+      {key::kArcEnabled, base::Value(false)},
+      {key::kCrostiniAllowed, base::Value(false)},
+      {key::kDeletePrintJobHistoryAllowed, base::Value(true)},
+      {key::kKerberosEnabled, base::Value(false)},
+      {key::kNetworkFileSharesAllowed, base::Value(false)},
+      {key::kUserBorealisAllowed, base::Value(false)},
+      {key::kAllowDeletingBrowserHistory, base::Value(true)},
+      {key::kCACertificateManagementAllowed,
+       base::Value(static_cast<int>(CACertificateManagementPermission::kNone))},
+      {key::kClientCertificateManagementAllowed,
+       base::Value(
+           static_cast<int>(ClientCertificateManagementPermission::kNone))},
+      {key::kEnableMediaRouter, base::Value(false)},
+      {key::kPasswordManagerEnabled, base::Value(false)},
+      {key::kScreenCaptureAllowed, base::Value(false)},
   };
 
   for (auto& policy_override : policy_overrides) {

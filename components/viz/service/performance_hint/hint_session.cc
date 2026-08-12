@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
@@ -24,6 +23,10 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/native_library.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread_checker.h"
 #include "base/trace_event/trace_event.h"
 #include "components/viz/common/switches.h"
@@ -62,8 +65,6 @@ using pAPerformanceHint_notifyWorkloadIncrease =
             bool cpu,
             bool gpu,
             const char* identifier);
-using pAPerformanceHint_setPreferPowerEfficiency =
-    int (*)(APerformanceHintSession* session, bool preferPowerEfficiency);
 }
 
 namespace viz {
@@ -87,14 +88,9 @@ bool ShouldUseWorkloadReset() {
 }
 
 bool ShouldUseWorkloadIncrease() {
-  return android_get_device_api_level() > __ANDROID_API_V__ &&
-         base::FeatureList::IsEnabled(
-             features::kEnableADPFWorkloadIncreaseOnPageLoad);
+  return android_get_device_api_level() > __ANDROID_API_V__;
 }
 
-bool CanUsePowerEfficiencyHint() {
-  return android_get_device_api_level() >= __ANDROID_API_V__;
-}
 
 struct AdpfMethods {
   static const AdpfMethods& Get() {
@@ -126,9 +122,6 @@ struct AdpfMethods {
     if (ShouldUseWorkloadIncrease()) {
       LOAD_FUNCTION(main_dl_handle, APerformanceHint_notifyWorkloadIncrease);
     }
-    if (CanUsePowerEfficiencyHint()) {
-      LOAD_FUNCTION(main_dl_handle, APerformanceHint_setPreferPowerEfficiency);
-    }
   }
 
   ~AdpfMethods() = default;
@@ -145,8 +138,6 @@ struct AdpfMethods {
   pAPerformanceHint_notifyWorkloadReset APerformanceHint_notifyWorkloadResetFn;
   pAPerformanceHint_notifyWorkloadIncrease
       APerformanceHint_notifyWorkloadIncreaseFn;
-  pAPerformanceHint_setPreferPowerEfficiency
-      APerformanceHint_setPreferPowerEfficiencyFn;
 };
 
 class AdpfHintSession : public HintSession {
@@ -163,23 +154,23 @@ class AdpfHintSession : public HintSession {
                                BoostType preferable_boost_type) override;
   void SetThreads(
       const base::flat_set<base::PlatformThreadId>& thread_ids) override;
-
   void NotifyWorkloadReset() override;
   void NotifyWorkloadIncrease() override;
+
   void WakeUp();
 
  private:
-  bool ShouldScheduleForEfficiency() const;
-  void UpdateEfficiencyHintIfNeeded(const bool);
+  void CloseSessionImpl(base::WaitableEvent* session_closed);
+  void SetThreadsImpl(std::vector<int> thread_ids);
 
   const raw_ptr<APerformanceHintSession> hint_session_;
   const raw_ptr<HintSessionFactoryImpl> factory_;
   base::TimeDelta target_duration_;
   const SessionType type_;
   BoostManager boost_manager_;
-  // Stores whether the session is current configured for efficiency. Used to
-  // de-bounce calls to setPreferPowerEfficiency.
-  bool prefer_efficiency_;
+
+  // Task runner for making heavier calls to the ADPF API off the Viz thread.
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 };
 
 class HintSessionFactoryImpl : public HintSessionFactory {
@@ -209,6 +200,13 @@ class HintSessionFactoryImpl : public HintSessionFactory {
   THREAD_CHECKER(thread_checker_);
 };
 
+bool IsAsyncSetThreadsEnabled() {
+  // Earlier Android versions don't support SetThreads so it's not used at all,
+  // sync or async.
+  return android_get_device_api_level() >= __ANDROID_API_U__ &&
+         base::FeatureList::IsEnabled(features::kEnableADPFAsyncSetThreads);
+}
+
 AdpfHintSession::AdpfHintSession(APerformanceHintSession* session,
                                  HintSessionFactoryImpl* factory,
                                  base::TimeDelta target_duration,
@@ -219,12 +217,34 @@ AdpfHintSession::AdpfHintSession(APerformanceHintSession* session,
       type_(type) {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
   factory_->hint_sessions_.insert(this);
+  if (IsAsyncSetThreadsEnabled()) {
+    // USER_BLOCKING because updating the set of threads in the ADPF session
+    // in a timely fashion can affect user-visible behaviors like scroll jank.
+    task_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
+        {base::MayBlock(), base::TaskPriority::USER_BLOCKING});
+  }
+}
+
+void AdpfHintSession::CloseSessionImpl(base::WaitableEvent* session_closed) {
+  AdpfMethods::Get().APerformanceHint_closeSessionFn(hint_session_);
+  session_closed->Signal();
 }
 
 AdpfHintSession::~AdpfHintSession() {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
   factory_->hint_sessions_.erase(this);
-  AdpfMethods::Get().APerformanceHint_closeSessionFn(hint_session_);
+  if (IsAsyncSetThreadsEnabled()) {
+    // Run on a sequenced task runner to make sure that we don't close the
+    // session before the already posted SetThreads tasks are executed.
+    // Otherwise those SetThreads tasks may crash.
+    base::WaitableEvent session_closed;
+    task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&AdpfHintSession::CloseSessionImpl,
+                                  base::Unretained(this), &session_closed));
+    session_closed.Wait();
+  } else {
+    AdpfMethods::Get().APerformanceHint_closeSessionFn(hint_session_);
+  }
 }
 
 void AdpfHintSession::UpdateTargetDuration(base::TimeDelta target_duration) {
@@ -239,42 +259,10 @@ void AdpfHintSession::UpdateTargetDuration(base::TimeDelta target_duration) {
       hint_session_, target_duration.InNanoseconds());
 }
 
-bool AdpfHintSession::ShouldScheduleForEfficiency() const {
-  switch (features::kAdpfEfficiencyModeParam.Get()) {
-    case features::AdpfEfficiencyMode::kNever:
-      [[likely]] return false;
-    default:
-      return true;
-  }
-}
-
-void AdpfHintSession::UpdateEfficiencyHintIfNeeded(
-    const bool prefer_efficiency) {
-  if (prefer_efficiency_ == prefer_efficiency || !CanUsePowerEfficiencyHint())
-      [[likely]] {
-    return;
-  }
-  const int result =
-      AdpfMethods::Get().APerformanceHint_setPreferPowerEfficiencyFn(
-          hint_session_, prefer_efficiency);
-  if (result == 0) [[likely]] {
-    prefer_efficiency_ = prefer_efficiency;
-  } else {
-    LOG(ERROR) << "setPreferPowerEfficiency (service failure). Returned: "
-               << std::strerror(result);
-  }
-  TRACE_EVENT_INSTANT("android.adpf", "SetPowerEfficiencyHint",
-                      "prefer_efficiency", prefer_efficiency, "success",
-                      result == 0);
-}
-
 void AdpfHintSession::ReportCpuCompletionTime(base::TimeDelta actual_duration,
                                               base::TimeTicks draw_start,
                                               BoostType preferable_boost_type) {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
-
-  // Update whether this session should be scheduled for efficiency.
-  UpdateEfficiencyHintIfNeeded(ShouldScheduleForEfficiency());
 
   // At the moment, we don't have a good way to distinguish repeating animation
   // work from other workloads on CrRendererMain, so we don't report any timing
@@ -292,6 +280,14 @@ void AdpfHintSession::ReportCpuCompletionTime(base::TimeDelta actual_duration,
       hint_session_, frame_duration.InNanoseconds());
 }
 
+
+void AdpfHintSession::SetThreadsImpl(std::vector<int> thread_ids) {
+  int retval = AdpfMethods::Get().APerformanceHint_setThreadsFn(
+      hint_session_, thread_ids.data(), thread_ids.size());
+  TRACE_EVENT_INSTANT("android.adpf", "SetThreads", "thread_ids", thread_ids,
+                      "success", retval == 0);
+}
+
 void AdpfHintSession::SetThreads(
     const base::flat_set<base::PlatformThreadId>& thread_ids) {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
@@ -306,10 +302,13 @@ void AdpfHintSession::SetThreads(
   tids.reserve(thread_ids.size());
   std::transform(thread_ids.begin(), thread_ids.end(), std::back_inserter(tids),
                  [](const base::PlatformThreadId& tid) { return tid.raw(); });
-  int retval = AdpfMethods::Get().APerformanceHint_setThreadsFn(
-      hint_session_, tids.data(), tids.size());
-  TRACE_EVENT_INSTANT("android.adpf", "SetThreads", "thread_ids", thread_ids,
-                      "type", type_, "success", retval == 0);
+  if (IsAsyncSetThreadsEnabled()) {
+    task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&AdpfHintSession::SetThreadsImpl,
+                                  base::Unretained(this), std::move(tids)));
+  } else {
+    SetThreadsImpl(std::move(tids));
+  }
 }
 
 void AdpfHintSession::NotifyWorkloadReset() {
@@ -387,6 +386,7 @@ std::unique_ptr<HintSession> HintSessionFactoryImpl::CreateSession(
   return std::make_unique<AdpfHintSession>(hint_session, this, target_duration,
                                            type);
 }
+
 
 void HintSessionFactoryImpl::WakeUp() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);

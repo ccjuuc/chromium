@@ -45,7 +45,6 @@
 #include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector_traits.h"
@@ -172,16 +171,13 @@ class PLATFORM_EXPORT FixedPoint {
       float end_value) {
     FixedPoint start_position;
     FixedPoint end_position;
-    if (start_value < end_value ||
-        (!RuntimeEnabledFeatures::EquivalentEncompassRoundingEnabled() &&
-         start_value == end_value)) [[likely]] {
+    if (start_value < end_value) [[likely]] {
       start_position = FromFloatFloor(start_value);
       end_position = FromFloatCeil(end_value);
     } else if (start_value > end_value) [[unlikely]] {
       start_position = FromFloatCeil(start_value);
       end_position = FromFloatFloor(end_value);
     } else {
-      CHECK(RuntimeEnabledFeatures::EquivalentEncompassRoundingEnabled());
       start_position = end_position = FromFloatFloor(start_value);
     }
     return {start_position, end_position};
@@ -709,7 +705,7 @@ template <unsigned fractional_bits, typename RawValue>
 inline FixedPoint<fractional_bits, RawValue> operator-(
     const FixedPoint<fractional_bits, RawValue>& a) {
   return FixedPoint<fractional_bits, RawValue>::FromRawValue(
-      (-base::MakeClampedNum(a.RawValue())).RawValue());
+      (-base::ClampedNumeric(a.RawValue())).RawValue());
 }
 
 // Returns the remainder after a division with integer results.

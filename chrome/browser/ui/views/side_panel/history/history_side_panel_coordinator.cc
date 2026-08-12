@@ -10,12 +10,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_side_panel_utils.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui/side_panel/history/history_side_panel_ui.h"
 #include "chrome/common/webui_url_constants.h"
@@ -23,7 +23,6 @@
 #include "components/history_clusters/core/history_clusters_prefs.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
 
@@ -33,14 +32,25 @@ BEGIN_TEMPLATE_METADATA(SidePanelWebUIViewT_HistorySidePanelUI,
                         SidePanelWebUIViewT)
 END_METADATA
 
+DEFINE_USER_DATA(HistorySidePanelCoordinator);
+
 HistorySidePanelCoordinator::HistorySidePanelCoordinator(
     BrowserWindowInterface* browser)
-    : browser_(browser) {
+    : browser_(browser),
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {
   pref_change_registrar_.Init(browser->GetProfile()->GetPrefs());
   base::RepeatingClosure callback(base::BindRepeating(
       &HistorySidePanelCoordinator::OnHistoryClustersPreferenceChanged,
       base::Unretained(this)));
   pref_change_registrar_.Add(history_clusters::prefs::kVisible, callback);
+}
+
+HistorySidePanelCoordinator::~HistorySidePanelCoordinator() = default;
+
+// static
+HistorySidePanelCoordinator* HistorySidePanelCoordinator::From(
+    BrowserWindowInterface* interface) {
+  return Get(interface->GetUnownedUserDataHost());
 }
 
 // static

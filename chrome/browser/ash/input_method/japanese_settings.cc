@@ -24,20 +24,16 @@ constexpr auto kHistValInputModes =
         {JapaneseSettings::InputMode::kKana, HistInputMode::kKana},
     });
 
-// TODO(b:466239577): Fix misnomers in JapaneseSettings::PunctuationStyle Mojo
-// enum (CrOS IME Service) then adapt here (CrOS Input Method Framework), so
-// they match Mozc Config protobuf, just like HistPunctuationStyle C++ enum. The
-// misnomers originate from Mozc Config protobuf but have now been fixed there.
 constexpr auto kHistValPunctuations =
     base::MakeFixedFlatMap<JapaneseSettings::PunctuationStyle,
                            HistPunctuationStyle>({
-        {JapaneseSettings::PunctuationStyle::kKutenTouten,
+        {JapaneseSettings::PunctuationStyle::kToutenKuten,
          HistPunctuationStyle::kToutenKuten},
         {JapaneseSettings::PunctuationStyle::kCommaPeriod,
          HistPunctuationStyle::kCommaPeriod},
-        {JapaneseSettings::PunctuationStyle::kKutenPeriod,
+        {JapaneseSettings::PunctuationStyle::kToutenPeriod,
          HistPunctuationStyle::kToutenPeriod},
-        {JapaneseSettings::PunctuationStyle::kCommaTouten,
+        {JapaneseSettings::PunctuationStyle::kCommaKuten,
          HistPunctuationStyle::kCommaKuten},
     });
 
@@ -105,14 +101,14 @@ constexpr auto kInputModes =
 constexpr auto kPunctuations =
     base::MakeFixedFlatMap<std::string_view,
                            JapaneseSettings::PunctuationStyle>({
-        {kJpPrefPunctuationStyleKutenTouten,
-         JapaneseSettings::PunctuationStyle::kKutenTouten},
+        {kJpPrefPunctuationStyleToutenKuten,
+         JapaneseSettings::PunctuationStyle::kToutenKuten},
         {kJpPrefPunctuationStyleCommaPeriod,
          JapaneseSettings::PunctuationStyle::kCommaPeriod},
-        {kJpPrefPunctuationStyleKutenPeriod,
-         JapaneseSettings::PunctuationStyle::kKutenPeriod},
-        {kJpPrefPunctuationStyleCommaTouten,
-         JapaneseSettings::PunctuationStyle::kCommaTouten},
+        {kJpPrefPunctuationStyleToutenPeriod,
+         JapaneseSettings::PunctuationStyle::kToutenPeriod},
+        {kJpPrefPunctuationStyleCommaKuten,
+         JapaneseSettings::PunctuationStyle::kCommaKuten},
     });
 
 constexpr auto kSymbols =
@@ -183,7 +179,7 @@ JapaneseSettingsPtr MakeDefaultJapaneseSettings() {
   response->number_of_suggestions = 3;
   response->input_mode = JapaneseSettings::InputMode::kRomaji;
   response->punctuation_style =
-      JapaneseSettings::PunctuationStyle::kKutenTouten;
+      JapaneseSettings::PunctuationStyle::kToutenKuten;
   response->symbol_style =
       JapaneseSettings::SymbolStyle::kCornerBracketMiddleDot;
   response->space_input_style = JapaneseSettings::SpaceInputStyle::kInputMode;
@@ -195,13 +191,13 @@ JapaneseSettingsPtr MakeDefaultJapaneseSettings() {
   // config, but since all data is collected using UMA, this was ignored and the
   // UMA setting was the main toggle for sending statistics.
   response->unused2 = false;
-  // LINT.ThenChange(/chrome/browser/resources/ash/settings/os_languages_page/input_method_util.ts:JpPrefDefaults)
+  // LINT.ThenChange(/chrome/browser/resources/ash/settings/os_languages_page/input_method_prefs_defaults.ts:JpPrefDefaults)
   return response;
 }
 
 }  // namespace
 
-JapaneseSettingsPtr ToMojomInputMethodSettings(const base::Value::Dict& prefs) {
+JapaneseSettingsPtr ToMojomInputMethodSettings(const base::DictValue& prefs) {
   JapaneseSettingsPtr response = MakeDefaultJapaneseSettings();
   if (const std::string* val = prefs.FindString(kJpPrefInputMode);
       val != nullptr) {

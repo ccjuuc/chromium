@@ -13,16 +13,17 @@
 // limitations under the License.!
 
 #include "unicode_script.h"
-#include "absl/strings/string_view.h"
+
 #include "common.h"
 #include "testharness.h"
+#include "absl/strings/string_view.h"
 #include "util.h"
 
 namespace sentencepiece {
 namespace unicode_script {
 ScriptType GetScriptType(absl::string_view s) {
   const auto ut = string_util::UTF8ToUnicodeText(s);
-  CHECK_EQ(1, ut.size());
+  ABSL_CHECK_EQ(1, ut.size());
   return GetScript(ut[0]);
 }
 

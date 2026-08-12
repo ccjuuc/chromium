@@ -10,12 +10,13 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
+#include "components/webapps/common/web_app_id.h"
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 namespace content {
@@ -31,7 +32,7 @@ class WebAppProvider;
 // launching.
 class LaunchWebAppCommand
     : public WebAppCommand<AppLock,
-                           base::WeakPtr<Browser>,
+                           base::WeakPtr<BrowserWindowInterface>,
                            base::WeakPtr<content::WebContents>,
                            apps::LaunchContainer> {
  public:
@@ -48,13 +49,14 @@ class LaunchWebAppCommand
  private:
   void OnOsIntegrationSynchronized();
   void DoLaunch();
-  void OnAppLaunched(base::WeakPtr<Browser> browser,
+  void OnAppLaunched(base::WeakPtr<BrowserWindowInterface> browser,
                      base::WeakPtr<content::WebContents> web_contents,
                      apps::LaunchContainer container,
                      base::Value debug_value);
 
   apps::AppLaunchParams params_;
-  LaunchWebAppWindowSetting launch_setting_;
+  webapps::AppId app_id_;
+  const LaunchWebAppWindowSetting launch_setting_;
 
   std::unique_ptr<AppLock> lock_;
 

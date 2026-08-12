@@ -26,8 +26,8 @@
 #import "ios/web/public/web_state_observer_bridge.h"
 
 @interface TabEventsMediator () <CRWWebStateObserver,
-                                 WebStateListObserving,
-                                 URLLoadingObserving>
+                                 URLLoadingObserving,
+                                 WebStateListObserving>
 
 @end
 
@@ -111,7 +111,7 @@
   // Thus, Webview will also become first responder in [BrowserViewController
   // viewDidAppear:].
   if (!GetFirstResponder() && currentWebState) {
-    if (IsVisibleURLNewTabPage(webState)) {
+    if (IsVisibleURLNewTabPage(currentWebState)) {
       // TODO(crbug.com/40233361): Stop lazy loading in NTPCoordinator and
       // remove this dependency.
       UIViewController* viewController = _ntpCoordinator.viewController;
@@ -303,13 +303,12 @@
 }
 
 - (void)tabWillLoadURL:(const GURL&)URL
-        transitionType:(ui::PageTransition)transitionType {
+        transitionType:(ui::PageTransition)transitionType
+              webState:(base::WeakPtr<web::WebState>)webState {
   [self.consumer dismissBookmarkModalController];
 
-  web::WebState* currentWebState = _webStateList->GetActiveWebState();
-  if (currentWebState &&
-      (transitionType & ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)) {
-    new_tab_page_uma::RecordActionFromOmnibox(_incognito, currentWebState, URL,
+  if (webState && (transitionType & ui::PAGE_TRANSITION_FROM_ADDRESS_BAR)) {
+    new_tab_page_uma::RecordActionFromOmnibox(_incognito, webState.get(), URL,
                                               transitionType);
   }
 }

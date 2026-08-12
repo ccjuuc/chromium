@@ -32,7 +32,7 @@ TEST(WebRequestInfoTest, CreateRequestBodyDataFromFile) {
   request.request_body->AppendFileRange(base::FilePath::FromASCII(kFilePath), 0,
                                         std::numeric_limits<uint64_t>::max(),
                                         base::Time());
-  WebRequestInfo info(WebRequestInfoInitParams(0, 0, 0, nullptr, request, false,
+  WebRequestInfo info(WebRequestInfoInitParams(0, {}, nullptr, request, false,
                                                false, false, std::nullopt));
   ASSERT_TRUE(info.request_body_data);
   base::Value* value = info.request_body_data->Find(
@@ -40,7 +40,7 @@ TEST(WebRequestInfoTest, CreateRequestBodyDataFromFile) {
   ASSERT_TRUE(value);
 
   base::Value expected_value(base::Value::Type::LIST);
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(extension_web_request_api_constants::kRequestBodyRawFileKey,
            kFilePath);
   expected_value.GetList().Append(std::move(dict));

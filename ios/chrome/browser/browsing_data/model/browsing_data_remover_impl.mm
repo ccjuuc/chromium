@@ -19,6 +19,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/task/sequenced_task_runner.h"
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#import "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/autofill/core/browser/webdata/autofill_webdata_service.h"
@@ -37,6 +38,7 @@
 #import "components/signin/ios/browser/account_consistency_service.h"
 #import "components/signin/public/base/signin_pref_names.h"
 #import "components/strike_database/strike_database.h"
+#import "ios/chrome/browser/autofill/model/ios_autofill_entity_data_manager_factory.h"
 #import "ios/chrome/browser/autofill/model/personal_data_manager_factory.h"
 #import "ios/chrome/browser/autofill/model/strike_database_factory.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_remover_helper.h"
@@ -70,6 +72,7 @@
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/signin/model/account_consistency_service_factory.h"
+#import "ios/chrome/browser/tracing/ios_tracing_controller.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_tab_helper.h"
 #import "ios/chrome/browser/web_state_list/model/web_usage_enabler/web_usage_enabler_browser_agent.h"
 #import "ios/chrome/browser/webdata_services/model/web_data_service_factory.h"
@@ -573,6 +576,11 @@ void BrowsingDataRemoverImpl::RemoveImpl(base::Time delete_begin,
     }
 
     crash_helper::ClearReportsBetween(delete_begin, delete_end);
+
+    if (IOSTracingController::HasInstance()) {
+      IOSTracingController::GetInstance().DeleteTracesInDateRange(delete_begin,
+                                                                  delete_end);
+    }
   }
 
   if (IsRemoveDataMaskSet(mask, BrowsingDataRemoveMask::REMOVE_PASSWORDS)) {
@@ -611,8 +619,11 @@ void BrowsingDataRemoverImpl::RemoveImpl(base::Time delete_begin,
     if (web_data_service.get()) {
       web_data_service->RemoveFormElementsAddedBetween(delete_begin,
                                                        delete_end);
-      web_data_service->RemoveEntityInstancesModifiedBetween(delete_begin,
-                                                             delete_end);
+      if (autofill::EntityDataManager* entity_data_manager =
+              IOSAutofillEntityDataManagerFactory::GetForProfile(profile_)) {
+        entity_data_manager->RemoveEntityInstancesModifiedBetween(delete_begin,
+                                                                  delete_end);
+      }
 
       // Clear out the Autofill StrikeDatabase in its entirety.
       strike_database::StrikeDatabase* strike_database =
@@ -648,7 +659,7 @@ void BrowsingDataRemoverImpl::RemoveImpl(base::Time delete_begin,
     profile_->GetPrefs()->SetString(omnibox::kZeroSuggestCachedResults,
                                     std::string());
     profile_->GetPrefs()->SetDict(omnibox::kZeroSuggestCachedResultsWithURL,
-                                  base::Value::Dict());
+                                  base::DictValue());
   }
 
   if (IsRemoveDataMaskSet(mask, BrowsingDataRemoveMask::REMOVE_DOWNLOADS)) {
@@ -695,9 +706,7 @@ void BrowsingDataRemoverImpl::RemoveImpl(base::Time delete_begin,
     // The user just changed the account and chose to clear the previously
     // existing data. As browsing data is being cleared, it is fine to clear the
     // last username, as there will be no data to be merged.
-    profile_->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingGaiaId);
     profile_->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSignedInUsername);
-    profile_->GetPrefs()->ClearPref(prefs::kGoogleServicesLastSyncingUsername);
   }
 
   // Remove stored zoom levels.
@@ -735,15 +744,14 @@ void BrowsingDataRemoverImpl::RemoveImpl(base::Time delete_begin,
 
   UMA_HISTOGRAM_ENUMERATION(
       "History.ClearBrowsingData.UserDeletedCookieOrCache", choice);
+  base::RecordAction(
+      base::UserMetricsAction("ClearBrowsingData_UserDeletedCookieOrCache"));
 }
 
 void BrowsingDataRemoverImpl::RemoveDataFromWKWebsiteDataStore(
     base::Time delete_begin,
     BrowsingDataRemoveMask mask) {
   web::ClearBrowsingDataMask types = web::ClearBrowsingDataMask::kRemoveNothing;
-  if (IsRemoveDataMaskSet(mask, BrowsingDataRemoveMask::REMOVE_APPCACHE)) {
-    types |= web::ClearBrowsingDataMask::kRemoveAppCache;
-  }
   if (IsRemoveDataMaskSet(mask, BrowsingDataRemoveMask::REMOVE_COOKIES)) {
     types |= web::ClearBrowsingDataMask::kRemoveCookies;
   }

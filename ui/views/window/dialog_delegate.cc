@@ -10,7 +10,6 @@
 #include "base/debug/alias.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -72,6 +71,17 @@ bool HasCallback(
       [](const auto& variant) { return static_cast<bool>(variant); }, callback);
 }
 
+#if !BUILDFLAG(IS_APPLE)
+bool UseDesktopWidgetOverride(WidgetDelegate* delegate) {
+#if BUILDFLAG(IS_CHROMEOS)
+  return false;
+#else
+  return delegate->use_desktop_widget_override();
+#endif
+}
+
+#endif  // !BUILDFLAG(IS_APPLE)
+
 }  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -83,12 +93,9 @@ DialogDelegate::Params::~Params() = default;
 // DialogDelegate:
 
 DialogDelegate::DialogDelegate() {
-  LayoutProvider* const layout_provider = LayoutProvider::Get();
-  if (layout_provider) {
+  if (auto* const layout_provider = LayoutProvider::Get()) {
     set_frame_margins({
-        .contents = gfx::Insets(),
         .title = layout_provider->GetInsetsMetric(INSETS_DIALOG_TITLE),
-        .footnote = gfx::Insets(),
     });
   }
 
@@ -167,7 +174,7 @@ Widget::InitParams DialogDelegate::GetDialogWidgetInitParams(
   // simultaneously.
   params.child = parent &&
                  (delegate->GetModalType() == ui::mojom::ModalType::kChild) &&
-                 !delegate->use_desktop_widget_override();
+                 !UseDesktopWidgetOverride(delegate);
 #endif
 
   if (BubbleDialogDelegate* bubble = delegate->AsBubbleDialogDelegate()) {
@@ -370,14 +377,13 @@ std::unique_ptr<FrameView> DialogDelegate::CreateDialogFrameView(
   std::unique_ptr<views::BubbleFrameView> frame;
 
   if (delegate) {
-    const FrameMargins& margin = delegate->frame_margins();
-    frame =
-        std::make_unique<BubbleFrameView>(margin.title.value(), gfx::Insets());
+    const FrameMargins& margins = delegate->frame_margins();
+    frame = std::make_unique<BubbleFrameView>(margins.title, gfx::Insets());
     if (delegate->GetParams().round_corners) {
       border->set_rounded_corners(
           gfx::RoundedCornersF(delegate->GetCornerRadius()));
     }
-    frame->SetFootnoteMargins(margin.footnote.value());
+    frame->SetFootnoteMargins(margins.footnote);
     frame->SetFootnoteView(delegate->DisownFootnoteView());
   } else {
     LayoutProvider* provider = LayoutProvider::Get();
@@ -616,7 +622,7 @@ int DialogDelegate::GetCornerRadius() const {
     return 0;
   }
 #if BUILDFLAG(IS_MAC)
-  // TODO(crbug.com/40144839): On Mac MODAL_TYPE_WINDOW is implemented using
+  // TODO(crbug.com/40144839): On Mac ModalType::kWindow is implemented using
   // sheets which causes visual artifacts when corner radius is increased for
   // modal types. Remove this after this issue has been addressed.
   if (GetModalType() == ui::mojom::ModalType::kWindow) {
@@ -634,7 +640,7 @@ std::unique_ptr<View> DialogDelegate::DisownFootnoteView() {
   return std::move(footnote_view_);
 }
 
-void DialogDelegate::set_frame_margins(const FrameMargins& margins) {
+void DialogDelegate::set_frame_margins(const FrameMarginsParams& margins) {
   if (margins.contents) {
     margins_.contents = margins.contents.value();
   }

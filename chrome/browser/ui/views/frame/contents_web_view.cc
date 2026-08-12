@@ -5,20 +5,22 @@
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 
 #include "base/debug/dump_without_crashing.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
 #include "chrome/browser/ui/views/status_bubble_views.h"
-#include "components/search/ntp_features.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
-#include "ui/compositor/layer_type.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
@@ -73,13 +75,59 @@ void ContentsWebView::SetBackgroundRadii(const gfx::RoundedCornersF& radii) {
   background_layer->SetIsFastRoundedCorner(true);
 }
 
+void ContentsWebView::SetIsAnimatingBounds(bool is_animating) {
+  if (is_animating_bounds_ == is_animating) {
+    return;
+  }
+
+  is_animating_bounds_ = is_animating;
+
+  if (is_animating_bounds_) {
+    if (status_bubble_) {
+      status_bubble_->Hide();
+    }
+
+    if (use_default_deadline_when_animating_ && web_contents()) {
+      // Update the render widget host view to set to use default deadline when
+      // animating. This is a best effort synchronization between browser and
+      // web contents.
+      if (content::RenderWidgetHostView* rwhv =
+              web_contents()->GetRenderWidgetHostView()) {
+        rwhv->SetShouldUseDefaultDeadlineOnResize(true);
+      }
+    }
+  }
+}
+
+void ContentsWebView::UpdateIsBlockedByModal() {
+  bool is_blocked = false;
+  if (web_contents()) {
+    if (auto* tab = tabs::TabInterface::MaybeGetFromContents(web_contents())) {
+      is_blocked = tab->IsBlocked();
+    }
+  }
+  holder()->SetProperty(views::kIsBlockedByModalKey, is_blocked);
+}
+
 bool ContentsWebView::GetNeedsNotificationWhenVisibleBoundsChange() const {
   return true;
 }
 
 void ContentsWebView::OnVisibleBoundsChanged() {
-  if (status_bubble_) {
+  // If we are animating, the status bubble is hidden and avoid reposition the
+  // bubble as an optimization since it's expensive on some platform.
+  if (!is_animating_bounds_ && status_bubble_) {
     status_bubble_->Reposition();
+  }
+
+  // Reset using default deadline once animation is completed after the final
+  // bounds changes are made.
+  if (!is_animating_bounds_ && use_default_deadline_when_animating_ &&
+      web_contents()) {
+    if (content::RenderWidgetHostView* rwhv =
+            web_contents()->GetRenderWidgetHostView()) {
+      rwhv->SetShouldUseDefaultDeadlineOnResize(false);
+    }
   }
 }
 
@@ -97,14 +145,17 @@ void ContentsWebView::OnLetterboxingChanged() {
 void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
   views::WebView::SetWebContents(web_contents);
   if (web_contents == nullptr) {
-    status_bubble_ = nullptr;
+    status_bubble_.reset();
+    holder()->SetProperty(views::kIsBlockedByModalKey, false);
     // Early exit: Without web contents, views dependent on ContentsWebView's
     // bounds cannot be properly created or positioned. These views will
     // initialize later when valid web contents exist.
     return;
   }
 
-  if (status_bubble_ == nullptr) {
+  UpdateIsBlockedByModal();
+
+  if (!status_bubble_) {
     status_bubble_ = std::make_unique<StatusBubbleViews>(this);
     status_bubble_->Reposition();
   }
@@ -117,6 +168,22 @@ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
     dialog_manager->UpdateDialogHost();
   }
 }
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+void ContentsWebView::DidGetUserInteraction(const blink::WebInputEvent& event) {
+  // If the user interacts with the web contents, ensure it is activated.
+  // This handles cases where the native window does not receive a focus
+  // event, such as when a permission prompt is open in another split view.
+  if (event.GetType() == blink::WebInputEvent::Type::kMouseDown ||
+      event.GetType() == blink::WebInputEvent::Type::kTouchStart) {
+    // RequestFocus() ensures the container view receives focus,
+    // which is sufficient to update the browser UI.
+    if (!HasFocus()) {
+      RequestFocus();
+    }
+  }
+}
+#endif
 
 void ContentsWebView::UpdateBackgroundColor() {
   const SkColor color = GetColorProvider()->GetColor(
@@ -132,8 +199,9 @@ void ContentsWebView::UpdateBackgroundColor() {
     }
   }
 
-  ui::Layer* background_layer = layer();
-  background_layer->SetColor(background_visible_ ? color : SK_ColorTRANSPARENT);
+  auto* background_layer = layer()->AsSolidColor();
+  background_layer->SetColor(
+      SkColor4f::FromColor(background_visible_ ? color : SK_ColorTRANSPARENT));
 
   if (web_contents()) {
     content::RenderWidgetHostView* rwhv =
@@ -168,6 +236,12 @@ void ContentsWebView::CloneWebContentsLayer() {
   if (!web_contents()) {
     return;
   }
+
+  views::Widget* widget = GetWidget();
+  if (!widget || !widget->GetNativeWindow()) {
+    return;
+  }
+
 #if defined(USE_AURA)
   // We don't need to clone the layers on non-Aura (Mac), because closing an
   // NSWindow does not animate.

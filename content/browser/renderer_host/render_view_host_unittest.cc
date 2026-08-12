@@ -11,22 +11,23 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_delegate_view.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/bindings_policy.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/drop_data.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/test/navigation_simulator_impl.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -84,14 +85,14 @@ class MockDraggingRenderViewHostDelegateView
     : public RenderViewHostDelegateView {
  public:
   ~MockDraggingRenderViewHostDelegateView() override {}
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask allowed_ops,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override {
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask allowed_ops,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override {
     drag_url_ = drop_data.url_infos.front().url;
     html_base_url_ = drop_data.html_base_url;
   }
@@ -172,16 +173,17 @@ TEST_F(RenderViewHostTest, DragEnteredFileURLsStillBlocked) {
       base::DoNothing());
 
   int id = process()->GetDeprecatedID();
+  ChildProcessId process_id = process()->GetID();
   ChildProcessSecurityPolicyImpl* policy =
       ChildProcessSecurityPolicyImpl::GetInstance();
 
   // Permissions are not granted at DragEnter.
   EXPECT_FALSE(policy->CanRequestURL(id, highlighted_file_url));
-  EXPECT_FALSE(policy->CanReadFile(id, highlighted_file_path));
+  EXPECT_FALSE(policy->CanReadFile(process_id, highlighted_file_path));
   EXPECT_FALSE(policy->CanRequestURL(id, dragged_file_url));
-  EXPECT_FALSE(policy->CanReadFile(id, dragged_file_path));
+  EXPECT_FALSE(policy->CanReadFile(process_id, dragged_file_path));
   EXPECT_FALSE(policy->CanRequestURL(id, sensitive_file_url));
-  EXPECT_FALSE(policy->CanReadFile(id, sensitive_file_path));
+  EXPECT_FALSE(policy->CanReadFile(process_id, sensitive_file_path));
 }
 
 TEST_F(RenderViewHostTest, MessageWithBadHistoryItemFiles) {
@@ -193,7 +195,7 @@ TEST_F(RenderViewHostTest, MessageWithBadHistoryItemFiles) {
   EXPECT_EQ(1, process()->bad_msg_count());
 
   ChildProcessSecurityPolicyImpl::GetInstance()->GrantReadFile(
-      process()->GetDeprecatedID(), file_path);
+      process()->GetID(), file_path);
   test_rvh()->TestOnUpdateStateWithFile(file_path);
   EXPECT_EQ(1, process()->bad_msg_count());
 }
@@ -213,7 +215,7 @@ TEST_F(RenderViewHostTest, NavigationWithBadHistoryItemFiles) {
   EXPECT_EQ(1, process()->bad_msg_count());
 
   ChildProcessSecurityPolicyImpl::GetInstance()->GrantReadFile(
-      process()->GetDeprecatedID(), file_path);
+      process()->GetID(), file_path);
   auto navigation2 =
       NavigationSimulatorImpl::CreateRendererInitiated(url, main_test_rfh());
   navigation2->set_page_state(
@@ -228,6 +230,10 @@ TEST_F(RenderViewHostTest, RoutingIdSane) {
   EXPECT_EQ(contents()->GetPrimaryMainFrame(), root_rfh);
   EXPECT_EQ(test_rvh()->GetProcess(), root_rfh->GetProcess());
   EXPECT_NE(test_rvh()->GetRoutingID(), root_rfh->GetRoutingID());
+}
+
+TEST_F(RenderViewHostTest, ViewWidgetType) {
+  EXPECT_EQ(test_rvh()->ViewWidgetType(), mojom::ViewWidgetType::kTopLevel);
 }
 
 class RenderViewHostTestIgnoringKeyboardEvents

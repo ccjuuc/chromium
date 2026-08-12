@@ -8,20 +8,60 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/app_bar/ui/app_bar_consumer.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
+#import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 
 @protocol AppBarMutator;
-@protocol ApplicationCommands;
+@protocol GeminiCommands;
 @class LayoutGuideCenter;
+@protocol SceneCommands;
+@class SceneLayoutState;
+@protocol TabGridCommands;
 
-// View controller for the app bar.
-@interface AppBarViewController : UIViewController <AppBarConsumer>
+// View controller for the App Bar.
+@interface AppBarViewController
+    : UIViewController <AppBarConsumer,
+                        FullscreenBrowserAgentObserving,
+                        FullscreenUIElement>
+
+// The layout state.
+@property(nonatomic, weak) SceneLayoutState* layoutState;
 
 // The mutator.
 @property(nonatomic, weak) id<AppBarMutator> mutator;
+
 // This view controller's LayoutGuideCenter.
 @property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
-// Command handler for the Application commands.
-@property(nonatomic, weak) id<ApplicationCommands> applicationHandler;
+
+// Command handler for the Scene commands.
+@property(nonatomic, weak) id<SceneCommands> sceneHandler;
+
+// Tab Grid handler.
+@property(nonatomic, weak) id<TabGridCommands> tabGridHandler;
+
+// Handler for Gemini commands.
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
+
+// Dynamically updates the corner radius of the app bar.
+- (void)updateCornerRadius:(CGFloat)cornerRadius;
+
+// Updates the App Bar's subviews for a given rotation angle.
+- (void)updateForAngle:(CGFloat)angle;
+
+// Unhides the spotlight anchor view if `shouldShow`.
+- (void)toggleSpotlightView:(BOOL)shouldShow;
+
+// Shows the blue-ish background with a circular gradient.
+// If `centered` is YES, the gradient is centered. Otherwise, it is left-bottom
+// aligned.
+- (void)showIPHBackgroundWithCentering:(BOOL)centered;
+
+// Hides the blue-ish background.
+- (void)hideIPHBackground;
+
+// Returns the current portrait height of the App Bar, taking into account
+// whether the Gemini floaty is currently invoked.
+- (CGFloat)currentAppBarHeightPortrait;
 
 @end
 

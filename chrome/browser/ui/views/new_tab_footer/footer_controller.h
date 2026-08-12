@@ -36,7 +36,8 @@ class NewTabFooterController {
  public:
   explicit NewTabFooterController(
       Profile* profile,
-      std::vector<ContentsContainerView*> contents_container_views);
+      const std::vector<raw_ptr<ContentsContainerView, DanglingUntriaged>>&
+          contents_container_views);
   NewTabFooterController(const NewTabFooterController&) = delete;
   NewTabFooterController& operator=(const NewTabFooterController&) = delete;
   ~NewTabFooterController();
@@ -93,7 +94,12 @@ class NewTabFooterController {
   PrefChangeRegistrar local_state_pref_change_registrar_;
   raw_ptr<Profile> profile_;
 
-  base::ObserverList<NewTabFooterControllerObserver> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      NewTabFooterControllerObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   base::WeakPtrFactory<NewTabFooterController> weak_factory_{this};
 };

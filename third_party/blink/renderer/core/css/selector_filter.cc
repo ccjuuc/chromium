@@ -64,10 +64,10 @@ inline void CollectElementIdentifierHashes(const Element& element,
                                      Element::kExcludeStandardAttributesOnly)) {
       continue;
     }
-    if (attribute_name.IsLowerASCII()) {
+    if (attribute_name.ContainsNoAsciiUpper()) {
       func(attribute_name.Hash() * kAttributeSalt);
     } else {
-      func(attribute_name.LowerASCII().Hash() * kAttributeSalt);
+      func(attribute_name.ToAsciiLower().Hash() * kAttributeSalt);
     }
   }
 }
@@ -108,9 +108,7 @@ inline void CollectDescendantSelectorIdentifierHashes(
         break;
       }
       const AtomicString& attribute_name = selector.Attribute().LocalName();
-      auto lower_name = attribute_name.IsLowerASCII()
-                            ? attribute_name
-                            : attribute_name.LowerASCII();
+      auto lower_name = attribute_name.ToAsciiLower();
       hashes.push_back(lower_name.Hash() * kAttributeSalt);
     } break;
     case CSSSelector::kPseudoClass:
@@ -201,71 +199,79 @@ void SelectorFilter::CollectSubjectIdentifierHashes(
     Element::TinyBloomFilter& subject_filter) {
   for (const CSSSelector* current = selector; current;
        current = current->NextSimpleSelector()) {
-    switch (current->Match()) {
-      case CSSSelector::kClass:
-        if (!current->Value().empty()) {
-          subject_filter |= Element::FilterForString(current->Value());
-        }
-        break;
-      case CSSSelector::kAttributeExact:
-      case CSSSelector::kAttributeSet:
-      case CSSSelector::kAttributeList:
-      case CSSSelector::kAttributeContain:
-      case CSSSelector::kAttributeBegin:
-      case CSSSelector::kAttributeEnd:
-      case CSSSelector::kAttributeHyphen: {
-        if (Element::IsExcludedAttribute(current->Attribute(),
-                                         attributes_to_exclude)) {
-          break;
-        }
-        subject_filter |= Element::FilterForAttribute(current->Attribute());
-        break;
-      }
-      case CSSSelector::kPseudoClass:
-        switch (current->GetPseudoType()) {
-          case CSSSelector::kPseudoIs:
-          case CSSSelector::kPseudoWhere:
-          case CSSSelector::kPseudoParent: {
-            // If we have a :is(), :where() or &, and all alternatives share
-            // one or more bits (for instance because there is only one
-            // alternative), we can require those bits.
-            //
-            // If the list is empty, this ends up requiring all bits, which is
-            // fine (since :is() can never match anything anyway). The exception
-            // is if an empty list signifies parent-for-scope.
-            if (current->GetPseudoType() == CSSSelector::kPseudoParent &&
-                !current->SelectorListOrParent()) {
-              // & for @scope (as opposed to & for nesting). We don't know
-              // what this ends up pointing to, so we also cannot add
-              // anything to the filter.
-            } else {
-              Element::TinyBloomFilter intersection =
-                  ~Element::TinyBloomFilter{0};
-              for (const CSSSelector* sub_selector =
-                       current->SelectorListOrParent();
-                   sub_selector;
-                   sub_selector = CSSSelectorList::Next(*sub_selector)) {
-                Element::TinyBloomFilter sub_filter = 0;
-                CollectSubjectIdentifierHashes(
-                    sub_selector, attributes_to_exclude, sub_filter);
-                intersection &= sub_filter;
-              }
-              subject_filter |= intersection;
-            }
-            break;
-          }
-          default:
-            break;
-        }
-        break;
-      default:
-        break;
-    }
+    CollectSingleSelectorIdentifierHashes(current, attributes_to_exclude,
+                                          subject_filter);
 
     // Don't look past the subject.
     if (current->Relation() != CSSSelector::kSubSelector) {
       break;
     }
+  }
+}
+
+void SelectorFilter::CollectSingleSelectorIdentifierHashes(
+    const CSSSelector* current,
+    Element::AttributesToExcludeHashesFor attributes_to_exclude,
+    Element::TinyBloomFilter& subject_filter) {
+  switch (current->Match()) {
+    case CSSSelector::kClass:
+      if (!current->Value().empty()) {
+        subject_filter |= Element::FilterForString(current->Value());
+      }
+      break;
+    case CSSSelector::kAttributeExact:
+    case CSSSelector::kAttributeSet:
+    case CSSSelector::kAttributeList:
+    case CSSSelector::kAttributeContain:
+    case CSSSelector::kAttributeBegin:
+    case CSSSelector::kAttributeEnd:
+    case CSSSelector::kAttributeHyphen: {
+      if (Element::IsExcludedAttribute(current->Attribute(),
+                                       attributes_to_exclude)) {
+        break;
+      }
+      subject_filter |= Element::FilterForAttribute(current->Attribute());
+      break;
+    }
+    case CSSSelector::kPseudoClass:
+      switch (current->GetPseudoType()) {
+        case CSSSelector::kPseudoIs:
+        case CSSSelector::kPseudoWhere:
+        case CSSSelector::kPseudoParent: {
+          // If we have a :is(), :where() or &, and all alternatives share
+          // one or more bits (for instance because there is only one
+          // alternative), we can require those bits.
+          //
+          // If the list is empty, this ends up requiring all bits, which is
+          // fine (since :is() can never match anything anyway). The exception
+          // is if an empty list signifies parent-for-scope.
+          if (current->GetPseudoType() == CSSSelector::kPseudoParent &&
+              !current->SelectorListOrParent()) {
+            // & for @scope (as opposed to & for nesting). We don't know
+            // what this ends up pointing to, so we also cannot add
+            // anything to the filter.
+          } else {
+            Element::TinyBloomFilter intersection =
+                ~Element::TinyBloomFilter{0};
+            for (const CSSSelector* sub_selector =
+                     current->SelectorListOrParent();
+                 sub_selector;
+                 sub_selector = CSSSelectorList::Next(*sub_selector)) {
+              Element::TinyBloomFilter sub_filter = 0;
+              CollectSubjectIdentifierHashes(sub_selector,
+                                             attributes_to_exclude, sub_filter);
+              intersection &= sub_filter;
+            }
+            subject_filter |= intersection;
+          }
+          break;
+        }
+        default:
+          break;
+      }
+      break;
+    default:
+      break;
   }
 }
 
@@ -284,7 +290,8 @@ void SelectorFilter::PushAncestors(const Node& node) {
 void SelectorFilter::PushParent(Element& parent) {
 #if DCHECK_IS_ON()
   if (parent_stack_.empty()) {
-    DCHECK_EQ(parent, parent.GetDocument().documentElement());
+    DCHECK(parent == parent.GetDocument().documentElement() ||
+           parent.IsSkeletonPseudoElement());
   } else if (parent_stack_.back() != FlatTreeTraversal::ParentElement(parent) &&
              parent_stack_.back() != parent.ParentOrShadowHostElement()) {
     LOG(DFATAL) << "Parent stack must be consistent; pushed " << parent

@@ -21,6 +21,14 @@ cargo_crate("{{this.name}}") {
   enabled = {{cond}}
   {{/if}}
   crate_type = "{{crate_type}}"
+  {{#if_key_present "override_crate_type_as_dylib_in_component_builds" extra_kv
+    }}override_crate_type_as_dylib_in_component_builds = {{#if
+      extra_kv.override_crate_type_as_dylib_in_component_builds}}
+        true
+    {{else}}
+      false
+    {{/if}}
+  {{/if_key_present}}
   crate_root = "{{crate_root}}"
   sources = [
     {{#each sources}}
@@ -32,6 +40,21 @@ cargo_crate("{{this.name}}") {
     "{{this}}",
     {{/each}}
   ]
+
+  {{#if_key_present "cpp_api_from_rust" extra_kv}}
+  {{#with extra_kv.cpp_api_from_rust}}
+  cpp_api_from_rust = {
+    target_name = "cpp_api_from_rust"
+    {{#if_key_present "deps" this}}
+      deps = [
+        {{#each this.deps}}
+          "//third_party/rust/{{this}}:cpp_api_from_rust",
+        {{/each}}
+      ]
+    {{/if_key_present}}
+  }
+  {{/with}}
+  {{/if_key_present}}
 
   build_native_rust_unit_tests = false
   edition = "{{edition}}"
@@ -169,7 +192,13 @@ cargo_crate("{{this.name}}") {
     {{/each}}
   {{/if}}
   {{#if gn_visibility.testonly}}
+  {{#if_key_present "testonly" detail.extra_kv}}
+    {{#if detail.extra_kv.testonly}}
   testonly = true
+    {{/if}}
+  {{else}}
+  testonly = true
+  {{/if_key_present}}
   {{/if}}
 
   {{#if detail.extra_kv.allow_unstable_features}}

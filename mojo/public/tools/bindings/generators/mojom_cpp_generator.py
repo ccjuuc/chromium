@@ -179,6 +179,25 @@ def ShouldInlineUnion(union):
   return not any(mojom.IsReferenceKind(field.kind) for field in union.fields)
 
 
+def ShouldGenerateDirectReturnStub(iface):
+  marked_for_direct_return_stub = \
+    iface.attributes and ('GenerateDirectReturnStub' in iface.attributes)
+
+  # Note that this is not clean code, we should not be doing validation inside
+  # of this method. But since this is experimental atm, we'll just use this
+  # to ensure that the interface has the correct shape.
+  if marked_for_direct_return_stub:
+    for method in iface.methods:
+      if method.result_response is None:
+        raise Exception(
+            "GenerateDirectReturnStub requires every method to return result<T,E>"
+        )
+
+  return marked_for_direct_return_stub
+
+def ShouldUseCbPattern(method):
+  return method.attributes and ('UseCbReturn' in method.attributes)
+
 def _IpcHash(message_name):
   sha256_hash = hashlib.sha256(message_name.encode('utf-8'))
   return f'0x{sha256_hash.hexdigest()[:8]}'
@@ -333,6 +352,17 @@ class Generator(generator.Generator):
     """
     return any(map(self._HasEstimateSizeMethods, self.module.interfaces))
 
+  def _UsesStdIntTypes(self):
+    """Returns whether this module has any constants that use types from
+    <stdint.h>.
+
+    When true, the generated headers need to include <stdint.h>.
+    """
+    for constant in self.module.constants:
+      if mojom.IsIntegralKind(constant.kind) and not mojom.IsBoolKind(constant.kind):
+        return True
+    return False
+
   def _GetDirectlyUsedKinds(self):
     for struct in self.module.structs + self.module.unions:
       for field in struct.fields:
@@ -437,6 +467,7 @@ class Generator(generator.Generator):
         "uses_interfaces": self._ReferencesAnyHandleOrInterfaceType(),
         "uses_message_size_estimator": self._UsesMessageSizeEstimator(),
         "uses_native_types": self._ReferencesAnyNativeType(),
+        "uses_stdint_types": self._UsesStdIntTypes(),
         "variant": self.variant,
         "send_validation_modules": self._GetSendValidationModules(),
     }
@@ -485,6 +516,8 @@ class Generator(generator.Generator):
         "requires_context_for_data_view": RequiresContextForDataView,
         "should_inline": ShouldInlineStruct,
         "should_inline_union": ShouldInlineUnion,
+        "should_generate_direct_return_stub": ShouldGenerateDirectReturnStub,
+        "should_use_cb_pattern": ShouldUseCbPattern,
         "ipc_hash": _IpcHash,
         "is_array_kind": mojom.IsArrayKind,
         "is_bool_kind": mojom.IsBoolKind,
@@ -650,7 +683,7 @@ class Generator(generator.Generator):
     return generator.ToCamel(generator.ToLowerSnakeCase(value),
                              digits_split=digits_split)
 
-  def _DefaultValue(self, field):
+  def _DefaultValue(self, field, add_same_module_namespaces=False):
     if not field.default:
       if mojom.IsNullableKind(field.kind) or self._IsDefaultConstructible(
           field.kind):
@@ -661,13 +694,19 @@ class Generator(generator.Generator):
       assert field.default == "default"
       if self._IsTypemappedKind(field.kind):
         return ""
-      return "%s::New()" % self._GetNameForKind(field.kind)
+      return "%s::New()" % self._GetNameForKind(
+          field.kind, add_same_module_namespaces=add_same_module_namespaces)
 
-    expression = self._ExpressionToText(field.default, kind=field.kind)
+    expression = self._ExpressionToText(
+        field.default,
+        kind=field.kind,
+        add_same_module_namespaces=add_same_module_namespaces)
     if mojom.IsEnumKind(field.kind) and self._IsTypemappedKind(field.kind):
       expression = "mojo::internal::ConvertEnumValue<%s, %s>(%s)" % (
-          self._GetNameForKind(field.kind), self._GetCppWrapperType(field.kind),
-          expression)
+          self._GetNameForKind(
+              field.kind,
+              add_same_module_namespaces=add_same_module_namespaces),
+          self._GetCppWrapperType(field.kind), expression)
     return expression
 
   def _GetNameForKind(self, kind, internal=False, flatten_nested_kind=False,
@@ -1088,9 +1127,12 @@ class Generator(generator.Generator):
 
     return False
 
-  def _TranslateConstants(self, token, kind):
+  def _TranslateConstants(self, token, kind, add_same_module_namespaces=False):
     if isinstance(token, mojom.NamedValue):
-      return self._GetNameForKind(token, flatten_nested_kind=True)
+      return self._GetNameForKind(
+          token,
+          flatten_nested_kind=True,
+          add_same_module_namespaces=add_same_module_namespaces)
 
     if isinstance(token, mojom.BuiltinValue):
       if token.value == "double.INFINITY":
@@ -1111,8 +1153,12 @@ class Generator(generator.Generator):
 
     return "%s%s" % (token, _kind_to_cpp_literal_suffix.get(kind, ""))
 
-  def _ExpressionToText(self, value, kind=None):
-    return self._TranslateConstants(value, kind)
+  def _ExpressionToText(self,
+                        value,
+                        kind=None,
+                        add_same_module_namespaces=False):
+    return self._TranslateConstants(
+        value, kind, add_same_module_namespaces=add_same_module_namespaces)
 
   def _ContainsMoveOnlyMembers(self, struct):
     for field in struct.fields:

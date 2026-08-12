@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/containers/flat_set.h"
+#include "base/metrics/histogram_functions.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/form_data.h"
@@ -16,11 +18,11 @@
 
 namespace autofill {
 
-bool IsValidString(const std::string& str) {
+bool IsValidString(std::string_view str) {
   return str.size() <= kMaxStringLength;
 }
 
-bool IsValidString16(const std::u16string& str) {
+bool IsValidString16(std::u16string_view str) {
   return str.size() <= kMaxStringLength;
 }
 
@@ -35,18 +37,27 @@ bool IsValidOption(const SelectOption& option) {
 bool IsValidFormFieldData(const FormFieldData& field) {
   return IsValidString16(field.label()) && IsValidString16(field.name()) &&
          IsValidString16(field.value()) &&
-         std::to_underlying(field.form_control_type()) >=
-             std::to_underlying(FormControlType::kMinValue) &&
-         std::to_underlying(field.form_control_type()) <=
-             std::to_underlying(FormControlType::kMaxValue) &&
+         mojom::IsKnownEnumValue(field.form_control_type()) &&
+         (!field.IsSelectElement() || field.max_length() == 0) &&
          IsValidString(field.autocomplete_attribute()) &&
          IsValidOptionVector(field.options());
 }
 
+bool IsValidFormFields(base::span<const FormFieldData> fields) {
+  if (fields.size() > kMaxListSize ||
+      !std::ranges::all_of(fields, &IsValidFormFieldData)) {
+    // Return early to avoid the construction of the set if the fields are
+    // invalid anyway.
+    return false;
+  }
+  const auto unique_global_ids =
+      base::MakeFlatSet<FieldGlobalId>(fields, {}, &FormFieldData::global_id);
+  return unique_global_ids.size() == fields.size();
+}
+
 bool IsValidFormData(const FormData& form) {
   return IsValidString16(form.name()) && IsValidGURL(form.url()) &&
-         IsValidGURL(form.action()) && form.fields().size() <= kMaxListSize &&
-         std::ranges::all_of(form.fields(), &IsValidFormFieldData);
+         IsValidGURL(form.action()) && IsValidFormFields(form.fields());
 }
 
 bool IsValidPasswordFormFillData(const PasswordFormFillData& form) {
@@ -61,17 +72,17 @@ bool IsValidPasswordFormFillData(const PasswordFormFillData& form) {
          });
 }
 
-bool IsValidOptionVector(const base::span<const SelectOption>& options) {
+bool IsValidOptionVector(base::span<const SelectOption> options) {
   return options.size() <= kMaxListSize &&
          std::ranges::all_of(options, &IsValidOption);
 }
 
-bool IsValidString16Vector(const base::span<const std::u16string>& strings) {
+bool IsValidString16Vector(base::span<const std::u16string> strings) {
   return strings.size() <= kMaxListSize &&
          std::ranges::all_of(strings, &IsValidString16);
 }
 
-bool IsValidFormDataVector(const base::span<const FormData>& forms) {
+bool IsValidFormDataVector(base::span<const FormData> forms) {
   return forms.size() <= kMaxListSize &&
          std::ranges::all_of(forms, &IsValidFormData);
 }

@@ -81,7 +81,7 @@ class IncomingStream::UnderlyingByteSource final
 
 IncomingStream::IncomingStream(
     ScriptState* script_state,
-    base::OnceCallback<void(std::optional<uint8_t>)> on_abort,
+    base::OnceCallback<void(std::optional<uint8_t>, bool)> on_abort,
     mojo::ScopedDataPipeConsumerHandle handle)
     : script_state_(script_state),
       on_abort_(std::move(on_abort)),
@@ -92,7 +92,7 @@ IncomingStream::~IncomingStream() = default;
 
 void IncomingStream::Init(ExceptionState& exception_state) {
   DVLOG(1) << "IncomingStream::Init() this=" << this;
-  auto* stream = MakeGarbageCollected<ReadableStream>();
+  auto* stream = MakeGarbageCollected<ReadableStream>(script_state_);
   InitWithExistingReadableStream(stream, exception_state);
 }
 
@@ -203,8 +203,7 @@ void IncomingStream::ProcessClose() {
   {
     ScriptState::Scope scope(script_state_);
     DOMExceptionCode code = DOMExceptionCode::kNetworkError;
-    String message =
-        String::Format("The stream was aborted by the remote server");
+    String message = "The stream was aborted by the remote server";
 
     error = ScriptValue(script_state_->GetIsolate(),
                         V8ThrowDOMException::CreateOrEmpty(
@@ -323,7 +322,8 @@ void IncomingStream::AbortAndReset(std::optional<uint8_t> code) {
 
   if (on_abort_) {
     // Cause WebTransport to drop its reference to us.
-    std::move(on_abort_).Run(code);
+    // Pass whether OnIncomingStreamClosed() was called (fin_received_ is set).
+    std::move(on_abort_).Run(code, fin_received_.has_value());
   }
 
   ResetPipe();

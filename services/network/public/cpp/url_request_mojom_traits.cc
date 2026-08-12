@@ -7,13 +7,13 @@
 #include <vector>
 
 #include "base/debug/dump_without_crashing.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "mojo/public/cpp/base/file_mojom_traits.h"
 #include "mojo/public/cpp/base/file_path_mojom_traits.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/base/unguessable_token_mojom_traits.h"
+#include "net/http/http_util.h"
 #include "services/network/public/cpp/crash_keys.h"
 #include "services/network/public/cpp/http_request_headers_mojom_traits.h"
 #include "services/network/public/cpp/isolation_info_mojom_traits.h"
@@ -87,6 +87,19 @@ bool StructTraits<network::mojom::TrustedUrlRequestParamsDataView,
       mojo::PendingRemote<network::mojom::AcceptCHFrameObserver>>();
   out->shared_dictionary_observer = data.TakeSharedDictionaryObserver<
       mojo::PendingRemote<network::mojom::SharedDictionaryAccessObserver>>();
+  mojo::ScopedDataPipeProducerHandle response_body_stream =
+      data.TakeResponseBodyStream();
+  if (response_body_stream.is_valid()) {
+    out->response_body_stream =
+        base::MakeRefCounted<network::SharedDataPipeProducerHandle>(
+            std::move(response_body_stream));
+  }
+  if (!data.ReadExpectedResponseHeadersForSyntheticResponse(
+          &out->expected_response_headers_for_synthetic_response)) {
+    return false;
+  }
+  out->is_ad_auction_trusted_signals_request =
+      data.is_ad_auction_trusted_signals_request();
   return true;
 }
 
@@ -155,8 +168,6 @@ bool StructTraits<
       !data.ReadNetLogCreateInfo(&out->net_log_create_info) ||
       !data.ReadNetLogReferenceInfo(&out->net_log_reference_info) ||
       !data.ReadNavigationRedirectChain(&out->navigation_redirect_chain) ||
-      !data.ReadAttributionReportingSrcToken(
-          &out->attribution_reporting_src_token) ||
       !data.ReadKeepaliveToken(&out->keepalive_token) ||
       !data.ReadStorageAccessApiStatus(&out->storage_access_api_status) ||
       !data.ReadSocketTag(&out->socket_tag) ||
@@ -183,34 +194,43 @@ bool StructTraits<
   out->skip_service_worker = data.skip_service_worker();
   out->destination = data.destination();
   out->keepalive = data.keepalive();
-  out->browsing_topics = data.browsing_topics();
-  out->ad_auction_headers = data.ad_auction_headers();
-  out->shared_storage_writable_eligible =
-      data.shared_storage_writable_eligible();
   out->has_user_gesture = data.has_user_gesture();
   out->enable_load_timing = data.enable_load_timing();
   out->enable_upload_progress = data.enable_upload_progress();
   out->do_not_prompt_for_login = data.do_not_prompt_for_login();
   out->is_outermost_main_frame = data.is_outermost_main_frame();
   out->transition_type = data.transition_type();
+  out->is_reload_navigation = data.is_reload_navigation();
   out->previews_state = data.previews_state();
   out->upgrade_if_insecure = data.upgrade_if_insecure();
   out->is_revalidating = data.is_revalidating();
+  if (!data.ReadRevalidationEtag(&out->revalidation_etag) ||
+      !data.ReadRevalidationLastModified(&out->revalidation_last_modified)) {
+    return false;
+  }
+  if (out->revalidation_etag.has_value()) {
+    if (out->revalidation_etag->empty() ||
+        !net::HttpUtil::IsValidHeaderValue(*out->revalidation_etag)) {
+      return false;
+    }
+  }
+  if (out->revalidation_last_modified.has_value()) {
+    if (out->revalidation_last_modified->empty() ||
+        !net::HttpUtil::IsValidHeaderValue(*out->revalidation_last_modified)) {
+      return false;
+    }
+  }
   out->is_fetch_like_api = data.is_fetch_like_api();
   out->is_fetch_later_api = data.is_fetch_later_api();
   out->is_favicon = data.is_favicon();
   out->original_destination = data.original_destination();
-  out->attribution_reporting_support = data.attribution_reporting_support();
-  out->attribution_reporting_eligibility =
-      data.attribution_reporting_eligibility();
   out->is_ad_tagged = data.is_ad_tagged();
   out->shared_dictionary_writer_enabled =
       data.shared_dictionary_writer_enabled();
   out->client_side_content_decoding_enabled =
       data.client_side_content_decoding_enabled();
   out->required_ip_address_space = data.required_ip_address_space();
-  out->allows_device_bound_session_registration =
-      data.allows_device_bound_session_registration();
+  out->allows_device_bound_sessions = data.allows_device_bound_sessions();
   return true;
 }
 

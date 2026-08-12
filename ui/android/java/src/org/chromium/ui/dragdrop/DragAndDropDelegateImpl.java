@@ -16,7 +16,7 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
 import android.media.ThumbnailUtils;
 import android.net.Uri;
-import android.os.SystemClock;
+import android.os.PersistableBundle;
 import android.text.TextUtils;
 import android.view.DragAndDropPermissions;
 import android.view.DragEvent;
@@ -37,7 +37,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
 import org.chromium.ui.accessibility.AccessibilityState;
-import org.chromium.ui.base.MimeTypeUtils;
 import org.chromium.ui.dragdrop.AnimatedImageDragShadowBuilder.CursorOffset;
 import org.chromium.ui.dragdrop.AnimatedImageDragShadowBuilder.DragShadowSpec;
 import org.chromium.ui.dragdrop.DragDropMetricUtils.UrlIntentSource;
@@ -59,6 +58,7 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
      * be treated as append-only. TODO (crbug.com/1484695) Revisit hists to capture drag and drop
      * source.
      */
+    // LINT.IfChange(DragTargetType)
     @IntDef({
         DragTargetType.INVALID,
         DragTargetType.TEXT,
@@ -77,6 +77,7 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
 
         int NUM_ENTRIES = 5;
     }
+    // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:AndroidDragTargetType)
 
     private int mShadowWidth;
     private int mShadowHeight;
@@ -87,8 +88,6 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
 
     /** The type of drag target from the view this object tracks. */
     private @DragTargetType int mDragTargetType;
-
-    private long mDragStartSystemElapsedTime;
 
     private @Nullable DragAndDropBrowserDelegate mDragAndDropBrowserDelegate;
 
@@ -156,8 +155,14 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
     private boolean startDragAndDropInternal(
             View containerView, DragShadowBuilder dragShadowBuilder, DropDataAndroid dropData) {
         ClipData clipdata = buildClipData(dropData);
+        // A null clipdata is ok where DOM elements are being moved
+        // (crbug.com/363930156) but not for images which can happen in webview
+        // where DropDataProvider is not registered and will result in a crash
+        // (crbug.com/491018397).
+        if (clipdata == null && dropData.hasImage()) {
+            return false;
+        }
         mIsDragStarted = true;
-        mDragStartSystemElapsedTime = SystemClock.elapsedRealtime();
         mDragTargetType = getDragTargetType(dropData);
 
         Object myLocalState = null;
@@ -233,15 +238,34 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
      * @return ClipData based on the dropData type.
      */
     protected @Nullable ClipData buildClipData(DropDataAndroid dropData) {
+        return addCustomDataToClipData(buildClipDataInternal(dropData), dropData);
+    }
+
+    private @Nullable ClipData addCustomDataToClipData(
+            @Nullable ClipData clipData, DropDataAndroid dropData) {
+        if (clipData == null || clipData.getDescription() == null) {
+            return clipData;
+        }
+
+        PersistableBundle extras = clipData.getDescription().getExtras();
+        if (extras == null) {
+            extras = new PersistableBundle();
+        }
+        if (dropData.customData != null) {
+            extras.putString(DropDataAndroid.EXTRA_CUSTOM_DATA, dropData.customData);
+        }
+        if (dropData.effectAllowed != null) {
+            extras.putString(DropDataAndroid.EXTRA_EFFECT_ALLOWED, dropData.effectAllowed);
+        }
+        clipData.getDescription().setExtras(extras);
+        return clipData;
+    }
+
+    protected @Nullable ClipData buildClipDataInternal(DropDataAndroid dropData) {
         @DragTargetType int type = getDragTargetType(dropData);
         switch (type) {
             case DragTargetType.TEXT:
-                return new ClipData(
-                        null,
-                        new String[] {
-                            ClipDescription.MIMETYPE_TEXT_PLAIN, MimeTypeUtils.CHROME_MIMETYPE_TEXT
-                        },
-                        new Item(dropData.text));
+                return ClipData.newPlainText(null, dropData.text);
             case DragTargetType.IMAGE:
                 Uri cachedUri = DropDataProviderUtils.cacheImageData(dropData);
                 // If there's no content provider we shouldn't start the drag.
@@ -261,8 +285,7 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
                                 null,
                                 new String[] {
                                     ClipDescription.MIMETYPE_TEXT_PLAIN,
-                                    ClipDescription.MIMETYPE_TEXT_INTENT,
-                                    MimeTypeUtils.CHROME_MIMETYPE_LINK
+                                    ClipDescription.MIMETYPE_TEXT_INTENT
                                 },
                                 new Item(getTextForLinkData(dropData), intent, null));
                     }
@@ -413,9 +436,6 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
 
     private void onDrop() {
         mIsDropOnView = true;
-        long dropDuration = SystemClock.elapsedRealtime() - mDragStartSystemElapsedTime;
-        RecordHistogram.deprecatedRecordMediumTimesHistogram(
-                "Android.DragDrop.FromWebContent.DropInWebContent.Duration", dropDuration);
     }
 
     private void onDropFromOutside(DragEvent dropEvent) {
@@ -436,7 +456,6 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
 
         // Only record metrics when drop does not happen for ContentView.
         if (!mIsDropOnView) {
-            assert mDragStartSystemElapsedTime > 0;
             recordDragTargetType(mDragTargetType);
         }
         // Allow drop into ContentView when files are supported by clank.
@@ -476,7 +495,6 @@ public class DragAndDropDelegateImpl implements DragAndDropDelegate, DragStateTr
         mDragTargetType = DragTargetType.INVALID;
         mIsDragStarted = false;
         mIsDropOnView = false;
-        mDragStartSystemElapsedTime = -1;
         mImageView = null;
     }
 

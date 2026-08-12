@@ -36,7 +36,7 @@ class DevToolsDeviceDiscovery {
     RemotePage(scoped_refptr<AndroidDeviceManager::Device> device,
                const std::string& browser_id,
                const std::string& browser_version,
-               base::Value::Dict dict);
+               base::DictValue dict);
 
     virtual ~RemotePage();
 
@@ -44,7 +44,7 @@ class DevToolsDeviceDiscovery {
     std::string browser_id_;
     std::string browser_version_;
     std::string frontend_url_;
-    base::Value::Dict dict_;
+    base::DictValue dict_;
     scoped_refptr<content::DevToolsAgentHost> agent_host_;
   };
 
@@ -143,6 +143,10 @@ class DevToolsDeviceDiscovery {
   static scoped_refptr<content::DevToolsAgentHost> CreateBrowserAgentHost(
       scoped_refptr<AndroidDeviceManager::Device> device,
       scoped_refptr<RemoteBrowser> browser);
+
+  static std::string GetFrontendURLFromValue(
+      const base::DictValue& value,
+      const std::string& browser_version);
 
  private:
   class DiscoveryRequest;

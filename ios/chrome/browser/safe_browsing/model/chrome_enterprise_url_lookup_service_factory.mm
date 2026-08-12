@@ -6,16 +6,19 @@
 
 #import <memory>
 
+#import "base/functional/callback_helpers.h"
 #import "components/enterprise/connectors/core/common.h"
 #import "components/enterprise/connectors/core/content_area_user_provider.h"
 #import "components/policy/core/common/cloud/affiliation.h"
 #import "components/safe_browsing/core/browser/realtime/chrome_enterprise_url_lookup_service.h"
 #import "components/safe_browsing/core/browser/sync/safe_browsing_primary_account_token_fetcher.h"
+#import "components/safe_browsing/ios/browser/web_ui/web_ui_ios_info_singleton.h"
+#import "ios/chrome/browser/enterprise/connectors/connectors_service.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_service_factory.h"
 #import "ios/chrome/browser/enterprise/connectors/connectors_util.h"
+#import "ios/chrome/browser/policy/model/browser_management_service.h"
+#import "ios/chrome/browser/policy/model/browser_management_service_factory.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
-#import "ios/chrome/browser/policy/model/management_service_ios.h"
-#import "ios/chrome/browser/policy/model/management_service_ios_factory.h"
 #import "ios/chrome/browser/safe_browsing/model/user_population_helper.h"
 #import "ios/chrome/browser/safe_browsing/model/verdict_cache_manager_factory.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -75,7 +78,7 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::
   DependsOn(enterprise_connectors::ConnectorsServiceFactory::GetInstance());
   // SyncServiceFactory dependency through GetUserPopulationForProfile.
   DependsOn(SyncServiceFactory::GetInstance());
-  DependsOn(policy::ManagementServiceIOSFactory::GetInstance());
+  DependsOn(policy::BrowserManagementServiceFactory::GetInstance());
 }
 
 ChromeEnterpriseRealTimeUrlLookupServiceFactory::
@@ -94,7 +97,7 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::BuildServiceInstanceFor(
       IdentityManagerFactory::GetForProfile(profile);
 
   auto* management_service =
-      policy::ManagementServiceIOSFactory::GetForProfile(profile);
+      policy::BrowserManagementServiceFactory::GetForProfile(profile);
   CHECK(management_service);
 
   return std::make_unique<ChromeEnterpriseRealTimeUrlLookupService>(
@@ -106,9 +109,7 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::BuildServiceInstanceFor(
       enterprise_connectors::ConnectorsServiceFactory::GetForProfile(profile),
       // Referrer chain provider is not currently supported in iOS.
       /*referrer_chain_provider=*/nullptr, profile->GetPrefs(),
-      // TODO(crbug.com/40704516): Pass non-null delegate to display relevant
-      // events once chrome://safe-browsing is supported on iOS.
-      /*webui_delegate=*/nullptr,
+      /*webui_delegate=*/safe_browsing::WebUIIOSInfoSingleton::GetInstance(),
       IdentityManagerFactory::GetForProfile(profile), management_service,
       profile->IsOffTheRecord(),
       /*is_guest_session=*/false,
@@ -118,7 +119,10 @@ ChromeEnterpriseRealTimeUrlLookupServiceFactory::BuildServiceInstanceFor(
           &enterprise_connectors::GetNavigationActiveContentAreaUser,
           IdentityManagerFactory::GetForProfile(profile)),
       base::BindRepeating(&IsProfileAffiliated, profile),
-      IsCommandLineSwitchEnabled());
+      IsCommandLineSwitchEnabled(),
+      /*intelligent_scan_delegate=*/nullptr,
+      // iOS doesn't support referrer chains yet.
+      /*network_context_getter=*/base::NullCallback());
 }
 
 }  // namespace safe_browsing

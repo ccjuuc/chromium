@@ -2,26 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
 import 'chrome://history/history.js';
 
 import type {HistoryAppElement} from 'chrome://history/history.js';
-import {BrowserServiceImpl, CrRouter, HistoryEmbeddingsBrowserProxyImpl, HistoryEmbeddingsPageHandlerRemote} from 'chrome://history/history.js';
+import {BrowserProxyImpl, CrRouter, historyEmbeddingsBrowserProxyFactory, HistoryEmbeddingsPageHandlerRemote} from 'chrome://history/history.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {TestMock} from 'chrome://webui-test/test_mock.js';
-import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
-
+import {eventToPromise, isChildVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
+import {COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 // <if expr="not is_chromeos">
-import { isChildVisible } from 'chrome://webui-test/test_util.js';
 import {webUIListenerCallback} from 'chrome://resources/js/cr.js';
 import {HistorySignInState, SyncState} from 'chrome://history/history.js';
+
 // </if>
 
-import {TestBrowserService} from './test_browser_service.js';
+import {TestHistoryBrowserProxy} from './test_browser_proxy.js';
+// clang-format on
 
 suite('HistoryAppTest', function() {
   let element: HistoryAppElement;
-  let browserService: TestBrowserService;
+  let browserProxy: TestHistoryBrowserProxy;
   let embeddingsHandler: TestMock<HistoryEmbeddingsPageHandlerRemote>&
       HistoryEmbeddingsPageHandlerRemote;
 
@@ -43,11 +45,12 @@ suite('HistoryAppTest', function() {
       maybeShowEmbeddingsIph: false,
     });
 
-    browserService = new TestBrowserService();
-    BrowserServiceImpl.setInstance(browserService);
+    browserProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(browserProxy);
     embeddingsHandler = TestMock.fromClass(HistoryEmbeddingsPageHandlerRemote);
-    HistoryEmbeddingsBrowserProxyImpl.setInstance(
-        new HistoryEmbeddingsBrowserProxyImpl(embeddingsHandler));
+    const {instance} =
+        historyEmbeddingsBrowserProxyFactory.createForTest(embeddingsHandler);
+    historyEmbeddingsBrowserProxyFactory.setInstance(instance);
     embeddingsHandler.setResultFor(
         'search', Promise.resolve({result: {items: []}}));
 
@@ -142,7 +145,7 @@ suite('HistoryAppTest', function() {
     historyEmbeddings.dispatchEvent(new CustomEvent('more-from-site-click', {
       detail: {
         title: 'Google',
-        url: {url: 'http://google.com'},
+        url: 'http://google.com',
         urlForDisplay: 'google.com',
         relativeTime: '2 hours ago',
         sourcePassage: 'Google description',
@@ -165,7 +168,7 @@ suite('HistoryAppTest', function() {
     historyEmbeddings.dispatchEvent(new CustomEvent('remove-item-click', {
       detail: {
         title: 'Google',
-        url: {url: 'http://google.com'},
+        url: 'http://google.com',
         urlForDisplay: 'google.com',
         relativeTime: '2 hours ago',
         sourcePassage: 'Google description',
@@ -173,7 +176,7 @@ suite('HistoryAppTest', function() {
       },
     }));
     const removeVisitsArg =
-        await browserService.handler.whenCalled('removeVisits');
+        await browserProxy.handler.whenCalled('removeVisits');
     assertEquals(1, removeVisitsArg.length);
     assertEquals('http://google.com', removeVisitsArg[0].url);
     assertEquals(1, removeVisitsArg[0].timestamps.length);
@@ -246,7 +249,7 @@ suite('HistoryAppTest', function() {
       },
     }));
     await microtasksFinished();
-    assertEquals(null, historyEmbeddings.timeRangeStart);
+    assertEquals(undefined, historyEmbeddings.timeRangeStart);
   });
 
   test('UsesMinWordCount', async () => {
@@ -325,6 +328,7 @@ suite('HistoryAppTest', function() {
 
     // Recreate the app with the promo enabled.
     loadTimeData.overrideValues({maybeShowEmbeddingsIph: true});
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
     element = document.createElement('history-app');
     document.body.appendChild(element);
     await microtasksFinished();
@@ -384,16 +388,16 @@ suite('HistoryAppTest', function() {
 // history sync promo is not shown for ChromeOS.
 suite('HistoryAppUnoPhase2FollowUpTest', () => {
   let element: HistoryAppElement;
-  let browserService: TestBrowserService;
+  let browserProxy: TestHistoryBrowserProxy;
 
   setup(() => {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     loadTimeData.overrideValues({
       unoPhase2FollowUp: true,
     });
-    browserService = new TestBrowserService();
-    BrowserServiceImpl.setInstance(browserService);
-    browserService.handler.setResultFor(
+    browserProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(browserProxy);
+    browserProxy.handler.setResultFor(
         'shouldShowHistoryPageHistorySyncPromo', Promise.resolve({
           shouldShow: true,
         }));
@@ -416,7 +420,7 @@ suite('HistoryAppUnoPhase2FollowUpTest', () => {
   });
 
   test('HidesHistorySyncPromoElementWhenDataIsFalse', async () => {
-    browserService.handler.setResultFor(
+    browserProxy.handler.setResultFor(
         'shouldShowHistoryPageHistorySyncPromo',
         Promise.resolve({shouldShow: false}));
     // Re-create the element to pick up the new loadTimeData.
@@ -565,3 +569,161 @@ suite('HistoryAppUnoPhase2FollowUpTest', () => {
   });
 });
 // </if>
+
+suite('HistoryFilterChipsVisibility', function() {
+  let element: HistoryAppElement;
+
+  setup(() => {
+    const browserProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(browserProxy);
+
+    // Some of the tests below assume the query state is fully reset to empty
+    // between tests.
+    window.history.replaceState({}, '', '/');
+    CrRouter.resetForTesting();
+  });
+
+  teardown(() => {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+  });
+
+  function createPage() {
+    element = document.createElement('history-app');
+    document.body.appendChild(element);
+    return microtasksFinished();
+  }
+
+  test('FilterChipsVisible', async () => {
+    loadTimeData.overrideValues({
+      isBrowsingHistoryActorIntegrationM3Enabled: true,
+      isGlicWebActuationAvailable: true,
+    });
+    // Re-create the element to pick up the new loadTimeData.
+    await createPage();
+    assertTrue(isChildVisible(element, '#historyFilterChips'));
+  });
+
+  test('FilterChipsNotVisible_M3Off', async () => {
+    loadTimeData.overrideValues({
+      isBrowsingHistoryActorIntegrationM3Enabled: false,
+      isGlicWebActuationAvailable: true,
+    });
+    // Re-create the element to pick up the new loadTimeData.
+    await createPage();
+    assertFalse(isChildVisible(element, '#historyFilterChips'));
+  });
+
+  test('FilterChipsNotVisibile_GlicActuationOff', async () => {
+    loadTimeData.overrideValues({
+      isBrowsingHistoryActorIntegrationM3Enabled: true,
+      isGlicWebActuationAvailable: false,
+    });
+    // Re-create the element to pick up the new loadTimeData.
+    await createPage();
+    assertFalse(isChildVisible(element, '#historyFilterChips'));
+  });
+
+  test('PropagatesFilterChanges', async () => {
+    loadTimeData.overrideValues({
+      isBrowsingHistoryActorIntegrationM3Enabled: true,
+      isGlicWebActuationAvailable: true,
+    });
+    await createPage();
+
+    const filterChips =
+        element.shadowRoot.querySelector<HTMLElement>('#historyFilterChips');
+    assertTrue(!!filterChips);
+
+    const changeQueryEventPromise = eventToPromise<CustomEvent<{
+      search: string,
+      includeUserVisits: boolean,
+      includeActorVisits: boolean,
+    }>>('change-query', element);
+
+    filterChips.dispatchEvent(new CustomEvent('filter-changed', {
+      detail: {
+        userVisits: false,
+        actorVisits: true,
+      },
+      bubbles: true,
+      composed: true,
+    }));
+
+    const event = await changeQueryEventPromise;
+
+    // The query sent to the manager includes the new filters.
+    assertFalse(event.detail.includeUserVisits);
+    assertTrue(event.detail.includeActorVisits);
+    assertEquals('', event.detail.search);
+  });
+
+  test('HidesFilterChipsOnGroupedView', async () => {
+    loadTimeData.overrideValues({
+      isBrowsingHistoryActorIntegrationM3Enabled: true,
+      isGlicWebActuationAvailable: true,
+    });
+    await createPage();
+
+    assertTrue(isChildVisible(element, '#historyFilterChips'));
+
+    element.$.router.selectedPage = 'grouped';
+    await microtasksFinished();
+
+    // Should be hidden for grouped view.
+    assertFalse(isChildVisible(element, '#historyFilterChips'));
+
+    element.$.router.selectedPage = 'history';
+    await microtasksFinished();
+    assertTrue(isChildVisible(element, '#historyFilterChips'));
+  });
+});
+
+suite('WebuiRefresh2026', function() {
+  const WEBUI_REFRESH_ATTR = 'webui-refresh-2026';
+  let element: HistoryAppElement;
+  let browserProxy: TestHistoryBrowserProxy;
+  let embeddingsHandler: TestMock<HistoryEmbeddingsPageHandlerRemote>&
+      HistoryEmbeddingsPageHandlerRemote;
+
+  setup(() => {
+    document.body.innerHTML = window.trustedTypes!.emptyHTML;
+
+    loadTimeData.overrideValues({
+      historyEmbeddingsSearchMinimumWordCount: 2,
+      enableHistoryEmbeddings: true,
+      maybeShowEmbeddingsIph: false,
+    });
+
+    browserProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(browserProxy);
+    embeddingsHandler = TestMock.fromClass(HistoryEmbeddingsPageHandlerRemote);
+    const {instance} =
+        historyEmbeddingsBrowserProxyFactory.createForTest(embeddingsHandler);
+    historyEmbeddingsBrowserProxyFactory.setInstance(instance);
+    embeddingsHandler.setResultFor(
+        'search', Promise.resolve({result: {items: []}}));
+
+    window.history.replaceState({}, '', '/');
+    CrRouter.resetForTesting();
+  });
+
+  function createPage() {
+    element = document.createElement('history-app');
+    document.body.appendChild(element);
+    return microtasksFinished();
+  }
+
+  test('Enabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: WEBUI_REFRESH_ATTR});
+    await createPage();
+
+    assertNotEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
+  });
+
+  test('Disabled', async () => {
+    loadTimeData.overrideValues({webuiRefresh2026: ''});
+    await createPage();
+
+    assertEquals(null, document.body.querySelector(COLORS_CSS_SELECTOR));
+  });
+});

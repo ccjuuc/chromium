@@ -28,8 +28,8 @@
 #include "chrome/browser/password_manager/password_change_delegate_impl.h"
 #include "chrome/browser/password_manager/password_change_service_factory.h"
 #include "chrome/browser/password_manager/password_manager_test_base.h"
+#include "chrome/browser/password_manager/password_manager_test_util.h"
 #include "chrome/browser/password_manager/passwords_navigation_observer.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/passwords/bubble_controllers/password_bubble_controller_base.h"
@@ -39,7 +39,6 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
 #include "chrome/browser/ui/views/passwords/password_change/password_change_toast.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/affiliations/core/browser/mock_affiliation_service.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
@@ -61,6 +60,7 @@
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
@@ -76,6 +76,7 @@
 #include "ui/events/test/test_event.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/test/button_test_api.h"
+#include "url/origin.h"
 
 namespace {
 
@@ -135,18 +136,6 @@ std::unique_ptr<KeyedService> CreateOptimizationService(
   return opt_guide_keyed_service;
 }
 
-password_manager::PasswordForm CreatePasswordForm(
-    const GURL& url,
-    const std::u16string& username,
-    const std::u16string& password) {
-  password_manager::PasswordForm form;
-  form.url = GURL(url);
-  form.signon_realm = url.GetWithEmptyPath().spec();
-  form.username_value = username;
-  form.password_value = password;
-  return form;
-}
-
 void NavigateToURL(content::WebContents* web_contents, const GURL& url) {
   ASSERT_TRUE(content::NavigateToURL(web_contents, url));
 }
@@ -162,8 +151,27 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
         // kShowDomNodeIDs is required in order to extract the dom_node_id for
         // the submission step.
         {autofill::features::debug::kShowDomNodeIDs,
-         password_manager::features::kStopLoginCheckOnFailedLogin},
+         password_manager::features::kUseDetachedWidget},
         {});
+  }
+
+  password_manager::PasswordForm CreatePasswordForm(
+      const GURL& url,
+      const std::u16string& username,
+      const std::u16string& password,
+      const std::string& change_pwd_path = "") {
+    password_manager::PasswordForm form;
+    form.url = GURL(url);
+    form.signon_realm = url.GetWithEmptyPath().spec();
+    form.username_value = username;
+    form.password_value = password;
+    if (!change_pwd_path.empty()) {
+      form.change_password_url =
+          embedded_test_server()->GetURL(url.host(), change_pwd_path);
+    } else {
+      form.change_password_url = url.Resolve("/change-password");
+    }
+    return form;
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -223,12 +231,6 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
         .WillByDefault(Return(true));
   }
 
-  void SetChangePasswordUrl(const std::string& url) {
-    const GURL main_url = WebContents()->GetLastCommittedURL();
-    EXPECT_CALL(*affiliation_service(), GetChangePasswordURL(main_url))
-        .WillOnce(Return(embedded_test_server()->GetURL(url)));
-  }
-
   TestModelQualityLogsUploaderService& logs_uploader() {
     return *static_cast<TestModelQualityLogsUploaderService*>(
         mock_optimization_guide_keyed_service()
@@ -237,17 +239,17 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
 
   MockAffiliationService* affiliation_service() {
     return static_cast<MockAffiliationService*>(
-        AffiliationServiceFactory::GetForProfile(browser()->profile()));
+        AffiliationServiceFactory::GetForProfile(browser()->GetProfile()));
   }
 
   MockOptimizationGuideKeyedService* mock_optimization_guide_keyed_service() {
     return static_cast<MockOptimizationGuideKeyedService*>(
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile()));
+            browser()->GetProfile()));
   }
 
   ChromePasswordChangeService* password_change_service() {
-    return PasswordChangeServiceFactory::GetForProfile(browser()->profile());
+    return PasswordChangeServiceFactory::GetForProfile(browser()->GetProfile());
   }
 
   ChromePasswordManagerClient* client() const {
@@ -270,7 +272,7 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
         .ExtractInt();
   }
 
-  void MockLoginOutcome(LoginCheckResult outcome) {
+  void MockLoginOutcome(LoginCheckResult::Status outcome) {
     base::RunLoop run_loop;
     MockOptimizationGuideKeyedService* optimization_service =
         mock_optimization_guide_keyed_service();
@@ -284,13 +286,13 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
             WithArg<3>([&](auto callback) {
               optimization_guide::proto::PasswordChangeResponse response;
               switch (outcome) {
-                case LoginCheckResult::kLoggedIn:
+                case LoginCheckResult::Status::kLoggedIn:
                   response.mutable_is_logged_in_data()->set_is_logged_in(true);
                   break;
-                case LoginCheckResult::kLoggedOut:
+                case LoginCheckResult::Status::kLoggedOut:
                   response.mutable_is_logged_in_data()->set_is_logged_in(false);
                   break;
-                case LoginCheckResult::kError:
+                case LoginCheckResult::Status::kError:
                   response.mutable_is_logged_in_data()->set_is_logged_in(false);
                   response.mutable_is_logged_in_data()->set_error_case(
                       optimization_guide::proto::IsLoggedInResponseData::
@@ -315,8 +317,9 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
   }
 
   void MockSuccessfulSubmitButtonClick(PasswordChangeDelegate* delegate) {
-    SetWebContents(
-        static_cast<PasswordChangeDelegateImpl*>(delegate)->executor());
+    SetWebContents(static_cast<PasswordChangeDelegateImpl*>(delegate)
+                       ->actuator()
+                       ->GetExecutorWebContents());
 
     base::RunLoop run_loop;
     MockOptimizationGuideKeyedService* optimization_service =
@@ -369,11 +372,12 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
     autofill::LocalFrameToken frame_token(rfh->GetFrameToken().value());
     autofill::FormData form;
     form.set_url(GURL("https://www.foo.com"));
+    form.set_main_frame_origin(url::Origin::Create(form.url()));
     form.set_renderer_id(autofill::test::MakeFormRendererId());
     autofill::FormFieldData field = {autofill::test::CreateTestFormField(
         "some_label", "some_name", "some_value",
         autofill::FormControlType::kInputText)};
-
+    field.set_origin(url::Origin::Create(form.url()));
     form.set_fields({field});
     return autofill::test::CreateFormDataForFrame(form, frame_token);
   }
@@ -402,7 +406,8 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
         &TestAutofillManager::Observer::OnFieldTypesDetermined,
         form.global_id(),
         TestAutofillManager::Observer::FieldTypeSource::
-            kHeuristicsOrAutocomplete);
+            kHeuristicsOrAutocomplete,
+        /*small_forms_were_parsed=*/false);
   }
 
  private:
@@ -411,6 +416,7 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
   autofill::TestAutofillManagerInjector<TestAutofillManager>
       autofill_manager_injector_;
   base::test::ScopedFeatureList scoped_feature_list_;
+  GURL change_password_url_;
   base::WeakPtrFactory<PasswordChangeBrowserTest> weak_ptr_factory_{this};
 };
 
@@ -425,19 +431,20 @@ class PasswordChangeBrowserTest : public PasswordManagerBrowserTestBase {
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        MAYBE_ChangePasswordFormIsFilledAutomatically) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields_no_submit.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields_no_submit.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   content::WebContents* web_contents =
-      static_cast<PasswordChangeDelegateImpl*>(delegate)->executor();
+      static_cast<PasswordChangeDelegateImpl*>(delegate)
+          ->actuator()
+          ->GetExecutorWebContents();
   // Start observing web_contents where password change happens.
   SetWebContents(web_contents);
   PasswordsNavigationObserver observer(web_contents);
@@ -454,20 +461,19 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, GeneratedPasswordIsPreSaved) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields_no_submit.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields_no_submit.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   // Start observing web_contents where password change happens.
   auto* delegate_impl = static_cast<PasswordChangeDelegateImpl*>(delegate);
-  SetWebContents(delegate_impl->executor());
+  SetWebContents(delegate_impl->actuator()->GetExecutorWebContents());
   PasswordsNavigationObserver observer(WebContents());
   EXPECT_TRUE(observer.Wait());
 
@@ -484,11 +490,9 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, GeneratedPasswordIsPreSaved) {
 // returned.
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, StopPasswordChange) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   ASSERT_TRUE(
       password_change_service()->GetPasswordChangeDelegate(WebContents()));
@@ -500,16 +504,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, StopPasswordChange) {
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, NewPasswordIsSaved) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   MockSuccessfulSubmitButtonClick(delegate);
   MockPasswordChangeOutcome(
       PasswordChangeOutcome::
@@ -553,23 +556,21 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OldPasswordIsUpdated) {
 
   // Add an existing password for this site.
   ASSERT_TRUE(content::NavigateToURL(
-      WebContents(),
-      embedded_test_server()->GetURL("/password/simple_password.html")));
+      WebContents(), embedded_test_server()->GetURL(
+                         kMainHost, "/password/simple_password.html")));
   password_manager::PasswordStoreInterface* password_store =
-      ProfilePasswordStoreFactory::GetForProfile(
-          browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS)
-          .get();
+      GetDefaultPasswordStore(browser()->GetProfile());
   password_manager::PasswordForm form = CreatePasswordForm(
-      WebContents()->GetLastCommittedURL(), u"test", u"pa$$word");
-  password_store->AddLogin(form);
+      WebContents()->GetLastCommittedURL(), u"test", u"pa$$word",
+      "/password/update_form_empty_fields.html");
+  password_store->AddLogin(password_manager::FromPasswordForm(form));
   WaitForPasswordStore();
 
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
   password_change_service()->OfferPasswordChangeUi(form, WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   MockSuccessfulSubmitButtonClick(delegate);
   MockPasswordChangeOutcome(
       PasswordChangeOutcome::
@@ -590,16 +591,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OldPasswordIsUpdated) {
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OpenTabWithPasswordChange) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   TabStripModel* tab_strip = browser()->tab_strip_model();
   ASSERT_EQ(tab_strip->count(), 1);
@@ -622,11 +622,10 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OpenTabWithPasswordChange) {
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        LeakCheckDialogWithPrivacyNoticeDisplayed) {
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
@@ -640,16 +639,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, FailureDialogDisplayed) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   MockPasswordChangeOutcome(
       PasswordChangeOutcome::
           PasswordChangeSubmissionData_PasswordChangeOutcome_UNSUCCESSFUL_OUTCOME);
@@ -666,11 +664,10 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, FailureDialogDisplayed) {
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        LeakCheckDialogWithoutPrivacyNoticeDisplayed) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
 
   PasswordChangeDelegate* delegate =
@@ -683,66 +680,20 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                   ->IsVisible());
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OTPDetectionHaltsTheFlow) {
-  SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
 
-  password_change_service()->OfferPasswordChangeUi(
-      CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
-      WebContents());
-  PasswordChangeDelegate* delegate =
-      password_change_service()->GetPasswordChangeDelegate(WebContents());
-  delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
-  EXPECT_EQ(delegate->GetCurrentState(),
-            PasswordChangeDelegate::State::kWaitingForChangePasswordForm);
-
-  auto* delegate_impl = static_cast<PasswordChangeDelegateImpl*>(delegate);
-  delegate_impl->OnOtpFieldDetected();
-
-  EXPECT_EQ(delegate->GetCurrentState(),
-            PasswordChangeDelegate::State::kOtpDetected);
-  EXPECT_TRUE(delegate_impl->ui_controller()->dialog_widget()->IsVisible());
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
-  delegate_impl->ui_controller()->CallOnDialogCanceledForTesting();
-
-  // The quality log is uploaded in the destructor.
-  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
-      delegate->AsWeakPtr();
-  EXPECT_TRUE(base::test::RunUntil(
-      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
-
-  VerifyUniqueQualityLog(
-      /*login_check_status=*/QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
-      /*open_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_OTP_DETECTED,
-      /*submit_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_UNKNOWN_STATUS,
-      /*verify_submission_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_UNKNOWN_STATUS,
-      /*final_status=*/
-      FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
-}
 
 // Verify that clicking cancel on the toast, stops the flow
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, CancelFromToast) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   EXPECT_TRUE(delegate);
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   PasswordChangeUIController* ui_controller =
       static_cast<PasswordChangeDelegateImpl*>(delegate)->ui_controller();
@@ -789,16 +740,16 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, CancelFromToast) {
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        ViewDetailsFromToastAfterPageNavigation) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   MockSuccessfulSubmitButtonClick(delegate);
   MockPasswordChangeOutcome(
@@ -815,6 +766,11 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
   // Verify action button is present and visible.
   EXPECT_TRUE(toast->action_button());
   EXPECT_TRUE(toast->action_button()->GetVisible());
+
+  // Navigate away to a different host.
+  ASSERT_TRUE(content::NavigateToURL(
+      WebContents(), https_test_server().GetURL(
+                         kDifferentHost, "/password/simple_password.html")));
 
   // Click action button, this should open Password Management.
   views::test::ButtonTestApi clicker(toast->action_button());
@@ -837,20 +793,20 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, ViewPasswordBubbleFromToast) {
   ASSERT_TRUE(content::NavigateToURL(
-      WebContents(),
-      embedded_test_server()->GetURL("/password/simple_password.html")));
+      WebContents(), embedded_test_server()->GetURL(
+                         kMainHost, "/password/simple_password.html")));
 
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   MockSuccessfulSubmitButtonClick(delegate);
   MockPasswordChangeOutcome(
       PasswordChangeOutcome::
@@ -883,11 +839,10 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, ViewPasswordBubbleFromToast) {
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        CrossOriginNavigationDetected) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
 
   // Verify the delegate is created.
@@ -900,7 +855,7 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
   // Verify delegate is waiting for change password form when password change
   // starts.
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kWaitingForChangePasswordForm);
 
@@ -912,7 +867,9 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
   GURL url = https_test_server().GetURL(kDifferentHost,
                                         "/password/simple_password.html");
   (void)content::NavigateToURL(
-      static_cast<PasswordChangeDelegateImpl*>(delegate.get())->executor(),
+      static_cast<PasswordChangeDelegateImpl*>(delegate.get())
+          ->actuator()
+          ->GetExecutorWebContents(),
       url);
 
   EXPECT_TRUE(base::test::RunUntil([&delegate]() {
@@ -946,13 +903,13 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        CrossOriginNavigationDetectedBeforeStartingTheFlow) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
 
   AddOtpToThePage();
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
 
   // Verify the delegate is created.
@@ -975,19 +932,18 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        OnTabCloseLogsUnexpectedFailure) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
 
   int original_apc_flow_tab_index =
       browser()->tab_strip_model()->GetIndexOfWebContents(WebContents());
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   EXPECT_TRUE(base::test::RunUntil([delegate]() {
     return delegate->GetCurrentState() ==
@@ -998,7 +954,7 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
   // the tab where the main flow is active.
   std::unique_ptr<content::WebContents> extra_web_contents =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
   content::WebContents* new_active_web_contents = extra_web_contents.get();
   browser()->tab_strip_model()->AppendWebContents(std::move(extra_web_contents),
                                                   true /* foreground */);
@@ -1032,16 +988,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        FlowInterruptedDuringOpenFormStep) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   PasswordChangeUIController* ui_controller =
       static_cast<PasswordChangeDelegateImpl*>(delegate)->ui_controller();
@@ -1078,16 +1033,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        FlowInterruptedAfterOpenFormStep) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
 
   EXPECT_TRUE(base::test::RunUntil([delegate]() {
     return delegate->GetCurrentState() ==
@@ -1129,16 +1083,15 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        FlowInterruptedAfterSubmitFormStep) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   MockSuccessfulSubmitButtonClick(delegate);
 
   EXPECT_EQ(PasswordChangeDelegate::State::kChangingPassword,
@@ -1170,99 +1123,13 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
       FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
 }
 
-IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
-                       OtpDetectedDuringSubmitFormStep) {
-  SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
 
-  password_change_service()->OfferPasswordChangeUi(
-      CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
-      WebContents());
-  PasswordChangeDelegate* delegate =
-      password_change_service()->GetPasswordChangeDelegate(WebContents());
-  delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
-
-  EXPECT_TRUE(base::test::RunUntil([delegate]() {
-    return delegate->GetCurrentState() ==
-           PasswordChangeDelegate::State::kChangingPassword;
-  }));
-
-  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
-      delegate->AsWeakPtr();
-
-  auto* delegate_impl = static_cast<PasswordChangeDelegateImpl*>(delegate);
-  delegate_impl->OnOtpFieldDetected();
-  EXPECT_EQ(delegate->GetCurrentState(),
-            PasswordChangeDelegate::State::kOtpDetected);
-  delegate_impl->ui_controller()->CallOnDialogCanceledForTesting();
-  EXPECT_TRUE(base::test::RunUntil(
-      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
-
-  VerifyUniqueQualityLog(
-      /*login_check_status=*/QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
-      /*open_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_STEP_SKIPPED,
-      /*submit_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_OTP_DETECTED,
-      /*verify_submission_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_UNKNOWN_STATUS,
-      /*final_status=*/
-      FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
-}
-
-IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
-                       OtpDetectedDuringVerificationStep) {
-  SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
-
-  password_change_service()->OfferPasswordChangeUi(
-      CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
-      WebContents());
-  PasswordChangeDelegate* delegate =
-      password_change_service()->GetPasswordChangeDelegate(WebContents());
-  delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
-  MockSuccessfulSubmitButtonClick(delegate);
-
-  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
-      delegate->AsWeakPtr();
-
-  auto* delegate_impl = static_cast<PasswordChangeDelegateImpl*>(delegate);
-  delegate_impl->OnOtpFieldDetected();
-  EXPECT_EQ(delegate->GetCurrentState(),
-            PasswordChangeDelegate::State::kOtpDetected);
-  delegate_impl->ui_controller()->CallOnDialogCanceledForTesting();
-  EXPECT_TRUE(base::test::RunUntil(
-      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
-
-  VerifyUniqueQualityLog(
-      /*login_check_status=*/QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
-      /*open_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_STEP_SKIPPED,
-      /*submit_form_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
-      /*verify_submission_status=*/
-      QualityStatus::
-          PasswordChangeQuality_StepQuality_SubmissionStatus_OTP_DETECTED,
-      /*final_status=*/
-      FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
-}
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OpenTabWhenLoggedOut) {
-  SetChangePasswordUrl("/password/update_form_empty_fields.html");
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   auto* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
@@ -1270,12 +1137,12 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OpenTabWhenLoggedOut) {
 
   auto* delegate_impl = static_cast<PasswordChangeDelegateImpl*>(delegate);
   // Verify that the background tab was not created yet.
-  EXPECT_FALSE(delegate_impl->executor());
+  EXPECT_FALSE(delegate_impl->actuator()->GetExecutorWebContents());
   EXPECT_TRUE(delegate_impl->login_checker());
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kWaitingForChangePasswordForm);
 
-  MockLoginOutcome(LoginCheckResult::kLoggedOut);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedOut);
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kLoginFormDetected);
   delegate->Stop();
@@ -1289,21 +1156,19 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, OpenTabWhenLoggedOut) {
       browser()->tab_strip_model()->GetWebContentsAt(1);
   ASSERT_EQ(change_password_contents->GetVisibleURL(),
             embedded_test_server()->GetURL(
-                "/password/update_form_empty_fields.html"));
+                kMainHost, "/password/update_form_empty_fields.html"));
 }
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        UserIsLoggedInOnSecondAttempt) {
-  SetChangePasswordUrl("/password/done.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   auto* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedOut);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedOut);
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kLoginFormDetected);
 
@@ -1312,7 +1177,7 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
       FROM_HERE, base::BindOnce(&NavigateToURL, WebContents(),
                                 embedded_test_server()->GetURL(
                                     kMainHost, "/password/done.html")));
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kWaitingForChangePasswordForm);
   // Stop the flow to check the correct state of the quality log.
@@ -1340,10 +1205,9 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        LoginCheckRespondedWithError) {
-  SetChangePasswordUrl("/password/done.html");
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   auto* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
@@ -1351,7 +1215,7 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
   delegate->StartPasswordChangeFlow();
 
   // Verify that password change fails if login check ends with an error.
-  MockLoginOutcome(LoginCheckResult::kError);
+  MockLoginOutcome(LoginCheckResult::Status::kError);
   EXPECT_EQ(delegate->GetCurrentState(),
             PasswordChangeDelegate::State::kChangePasswordFormNotFound);
   // Stop the flow to check the correct state of the quality log.
@@ -1378,14 +1242,14 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
       FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
 }
 
+
+
 IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
                        FlowInterruptedBeforeLoginCheck) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/done.html");
-
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word", "/password/done.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
@@ -1428,33 +1292,170 @@ IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
       FinalModelStatus::FINAL_MODEL_STATUS_UNSPECIFIED);
 }
 
-class PasswordChangeBrowserTestShowHiddenTab
-    : public PasswordChangeBrowserTest {
- public:
-  PasswordChangeBrowserTestShowHiddenTab() {
-    scoped_feature_list_.InitAndEnableFeature(
-        password_manager::features::kRunPasswordChangeInBackgroundTab);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTestShowHiddenTab,
-                       ShowHiddenTabDuringPasswordChange) {
+IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
+                       UserInterventionAfterSubmission_TaskWasTakenOver) {
   SetPrivacyNoticeAcceptedPref();
-  SetChangePasswordUrl("/password/update_form_empty_fields_no_submit.html");
 
   password_change_service()->OfferPasswordChangeUi(
       CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
-                         u"pa$$word"),
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
+      WebContents());
+  PasswordChangeDelegate* delegate =
+      password_change_service()->GetPasswordChangeDelegate(WebContents());
+
+  // Start the password change flow.
+  delegate->StartPasswordChangeFlow();
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
+  MockSuccessfulSubmitButtonClick(delegate);
+  MockPasswordChangeOutcome(
+      PasswordChangeOutcome::
+          PasswordChangeSubmissionData_PasswordChangeOutcome_USER_INTERVENTION_NEEDED);
+  EXPECT_EQ(PasswordChangeDelegate::State::kOtpDetected,
+            delegate->GetCurrentState());
+  EXPECT_TRUE(static_cast<PasswordChangeDelegateImpl*>(delegate)
+                  ->ui_controller()
+                  ->dialog_widget()
+                  ->IsVisible());
+
+  // Simulate the user clicking taking over.
+  delegate->OpenPasswordChangeTab();
+  WaitForPasswordStore();
+  CheckThatCredentialsStored(
+      /*username=*/"test",
+      base::UTF16ToUTF8(static_cast<PasswordChangeDelegateImpl*>(delegate)
+                            ->generated_password()),
+      "pa$$word", password_manager::PasswordForm::Type::kChangeSubmission);
+
+  // Stop the flow.
+  delegate->Stop();
+  // The quality log is uploaded in the destructor.
+  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
+      delegate->AsWeakPtr();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
+
+  VerifyUniqueQualityLog(
+      /*login_check_status=*/QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*open_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_STEP_SKIPPED,
+      /*submit_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*verify_submission_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_USER_INTERVENTION_NEEDED,
+      /*final_status=*/
+      FinalModelStatus::FINAL_MODEL_STATUS_FAILURE);
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest,
+                       UserInterventionAfterSubmission_TaskWasNotTakenOver) {
+  SetPrivacyNoticeAcceptedPref();
+  ASSERT_TRUE(content::NavigateToURL(
+      WebContents(), embedded_test_server()->GetURL(
+                         kMainHost, "/password/simple_password.html")));
+
+  password_manager::PasswordStoreInterface* password_store =
+      GetDefaultPasswordStore(browser()->GetProfile());
+  password_manager::PasswordForm form = CreatePasswordForm(
+      WebContents()->GetLastCommittedURL(), u"test", u"old_pa$$word",
+      "/password/update_form_empty_fields.html");
+  password_store->AddLogin(password_manager::FromPasswordForm(form));
+  WaitForPasswordStore();
+
+  // Start the Password Change Flow.
+  password_change_service()->OfferPasswordChangeUi(form, WebContents());
+  PasswordChangeDelegate* delegate =
+      password_change_service()->GetPasswordChangeDelegate(WebContents());
+  delegate->StartPasswordChangeFlow();
+
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
+  MockSuccessfulSubmitButtonClick(delegate);
+  MockPasswordChangeOutcome(
+      PasswordChangeOutcome::
+          PasswordChangeSubmissionData_PasswordChangeOutcome_USER_INTERVENTION_NEEDED);
+
+  // Verify the UI is showing the intervention dialog.
+  EXPECT_EQ(PasswordChangeDelegate::State::kOtpDetected,
+            delegate->GetCurrentState());
+  EXPECT_TRUE(static_cast<PasswordChangeDelegateImpl*>(delegate)
+                  ->ui_controller()
+                  ->dialog_widget()
+                  ->IsVisible());
+
+  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
+      delegate->AsWeakPtr();
+  // Stop the flow, user did not take over.
+  delegate->Stop();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
+
+  // Verify credentials were not updated.
+  WaitForPasswordStore();
+  CheckThatCredentialsStored("test", "old_pa$$word", std::nullopt);
+
+  VerifyUniqueQualityLog(
+      /*login_check_status=*/QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*open_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_STEP_SKIPPED,
+      /*submit_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*verify_submission_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_USER_INTERVENTION_NEEDED,
+      /*final_status=*/
+      FinalModelStatus::FINAL_MODEL_STATUS_FAILURE);
+}
+
+IN_PROC_BROWSER_TEST_F(PasswordChangeBrowserTest, StandardFailure) {
+  SetPrivacyNoticeAcceptedPref();
+  password_change_service()->OfferPasswordChangeUi(
+      CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
+                         u"pa$$word",
+                         "/password/update_form_empty_fields.html"),
       WebContents());
   PasswordChangeDelegate* delegate =
       password_change_service()->GetPasswordChangeDelegate(WebContents());
   delegate->StartPasswordChangeFlow();
-  MockLoginOutcome(LoginCheckResult::kLoggedIn);
+  MockLoginOutcome(LoginCheckResult::Status::kLoggedIn);
+  MockSuccessfulSubmitButtonClick(delegate);
+  MockPasswordChangeOutcome(
+      PasswordChangeOutcome::
+          PasswordChangeSubmissionData_PasswordChangeOutcome_UNSUCCESSFUL_OUTCOME);
 
-  TabStripModel* tab_strip = browser()->tab_strip_model();
-  // Assert that password change tab is opened.
-  ASSERT_EQ(tab_strip->count(), 2);
+  // Verify the password change failed.
+  EXPECT_EQ(PasswordChangeDelegate::State::kPasswordChangeFailed,
+            delegate->GetCurrentState());
+  EXPECT_TRUE(static_cast<PasswordChangeDelegateImpl*>(delegate)
+                  ->ui_controller()
+                  ->dialog_widget()
+                  ->IsVisible());
+
+  // Stop the flow.
+  delegate->Stop();
+  base::WeakPtr<PasswordChangeDelegate> delegate_weak_ptr =
+      delegate->AsWeakPtr();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&delegate_weak_ptr]() { return !delegate_weak_ptr; }));
+
+  VerifyUniqueQualityLog(
+      /*login_check_status=*/QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*open_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_STEP_SKIPPED,
+      /*submit_form_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_ACTION_SUCCESS,
+      /*verify_submission_status=*/
+      QualityStatus::
+          PasswordChangeQuality_StepQuality_SubmissionStatus_FAILURE_STATUS,
+      /*final_status=*/
+      FinalModelStatus::FINAL_MODEL_STATUS_FAILURE);
 }

@@ -14,6 +14,7 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/singleton_tabs.h"
@@ -30,8 +31,7 @@ namespace {
 
 bool IsNormalBrowserWithProfile(BrowserWindowInterface* browser,
                                 Profile* profile) {
-  return profile == browser->GetProfile() &&
-         !browser->GetBrowserForMigrationOnly()->is_delete_scheduled() &&
+  return profile == browser->GetProfile() && !browser->IsDeleteScheduled() &&
          browser->GetType() == Browser::TYPE_NORMAL;
 }
 
@@ -132,7 +132,7 @@ void EnterpriseSigninService::OpenOrActivateGaiaReauthTab() {
   browser_collection_observation_.Reset();
 
   content::WebContents* tab =
-      browser->GetFeatures().tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   const GURL& tab_url = tab->GetVisibleURL();
   if (tab_url.SchemeIsHTTPOrHTTPS() &&
       GaiaUrls::GetInstance()->gaia_origin().IsSameOriginWith(tab_url)) {

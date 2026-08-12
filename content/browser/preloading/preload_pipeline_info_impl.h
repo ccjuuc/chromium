@@ -5,12 +5,15 @@
 #ifndef CONTENT_BROWSER_PRELOADING_PRELOAD_PIPELINE_INFO_IMPL_H_
 #define CONTENT_BROWSER_PRELOADING_PRELOAD_PIPELINE_INFO_IMPL_H_
 
+#include "base/containers/flat_set.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/unguessable_token.h"
 #include "content/browser/preloading/prefetch/prefetch_status.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/preload_pipeline_info.h"
 #include "content/public/browser/preloading.h"
+#include "content/public/browser/prerender_host_id.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
@@ -30,7 +33,7 @@ class CONTENT_EXPORT PreloadPipelineInfoImpl final
   PreloadPipelineInfoImpl(const PreloadPipelineInfoImpl&) = delete;
   PreloadPipelineInfoImpl& operator=(const PreloadPipelineInfoImpl&) = delete;
 
-  const perfetto::Track& GetTrack() const;
+  const perfetto::NamedTrack& GetTrack() const;
   perfetto::Flow GetFlow() const;
 
   const base::UnguessableToken& id() const { return id_; }
@@ -49,8 +52,12 @@ class CONTENT_EXPORT PreloadPipelineInfoImpl final
   }
   void SetPrefetchStatus(PrefetchStatus prefetch_status);
 
+  bool IsPrerenderMatchedWithPrefetch(
+      const PrerenderHostId& prerender_host_id) const;
+  void MarkPrerenderMatchedWithPrefetch(PrerenderHostId prerender_host_id);
+
  private:
-  friend class base::RefCounted<PreloadPipelineInfo>;
+  friend class base::RefCountedThreadSafe<PreloadPipelineInfo>;
 
   ~PreloadPipelineInfoImpl() override;
 
@@ -58,11 +65,15 @@ class CONTENT_EXPORT PreloadPipelineInfoImpl final
 
   const PreloadingType planned_max_preloading_type_;
 
-  const perfetto::Track track_;
+  const perfetto::NamedTrack track_;
 
   PreloadingEligibility prefetch_eligibility_ =
       PreloadingEligibility::kUnspecified;
   std::optional<PrefetchStatus> prefetch_status_ = std::nullopt;
+
+  // Records `PrerenderHostId` that matched to a prefetch. Note that the
+  // prefetch may not be the prefetch in this pipeline.
+  base::flat_set<PrerenderHostId> prerender_ids_matched_with_prefetch_;
 };
 
 }  // namespace content

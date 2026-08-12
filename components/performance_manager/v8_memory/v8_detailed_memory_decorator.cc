@@ -4,12 +4,12 @@
 
 #include "components/performance_manager/v8_memory/v8_detailed_memory_decorator.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -495,9 +495,19 @@ void NodeAttachedProcessData::OnV8MemoryUsage(
       v8_memory;
   std::vector<std::pair<ExecutionContextToken, PerContextCanvasMemoryUsagePtr>>
       canvas_memory;
+  std::vector<V8DetailedMemoryProcessData::NonMainWorldMemoryEntry>
+      non_main_world_entries;
   for (auto& isolate : result->isolates) {
     for (auto& entry : isolate->contexts) {
-      v8_memory.emplace_back(entry->token, std::move(entry));
+      if (entry->world_stable_id.has_value()) {
+        // Non-main-world context — collect with frame token and stable ID.
+        non_main_world_entries.push_back(
+            {std::move(entry->world_stable_id.value()), entry->token,
+             entry->memory_used});
+      } else {
+        // Main-world context — goes into the per-frame lookup map.
+        v8_memory.emplace_back(entry->token, std::move(entry));
+      }
     }
     for (auto& entry : isolate->canvas_contexts) {
       canvas_memory.emplace_back(entry->token, std::move(entry));
@@ -581,6 +591,7 @@ void NodeAttachedProcessData::OnV8MemoryUsage(
   data_.set_detached_canvas_memory_used(detached_canvas_memory_used);
   data_.set_shared_v8_memory_used(shared_v8_memory_used);
   data_.set_blink_memory_used(blink_memory_used);
+  data_.set_non_main_world_entries(std::move(non_main_world_entries));
 
   // Schedule another measurement for this process node unless one is already
   // scheduled.
@@ -694,31 +705,31 @@ void V8DetailedMemoryDecorator::OnBeforeProcessNodeRemoved(
   process_data->process_measurement_requests().OnOwnerUnregistered();
 }
 
-base::Value::Dict V8DetailedMemoryDecorator::DescribeFrameNodeData(
+base::DictValue V8DetailedMemoryDecorator::DescribeFrameNodeData(
     const FrameNode* frame_node) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const auto* const frame_data =
       V8DetailedMemoryExecutionContextData::ForFrameNode(frame_node);
   if (!frame_data)
-    return base::Value::Dict();
+    return base::DictValue();
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("v8_bytes_used",
            static_cast<int>(frame_data->v8_memory_used().InBytes()));
   return dict;
 }
 
-base::Value::Dict V8DetailedMemoryDecorator::DescribeProcessNodeData(
+base::DictValue V8DetailedMemoryDecorator::DescribeProcessNodeData(
     const ProcessNode* process_node) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const auto* const process_data =
       V8DetailedMemoryProcessData::ForProcessNode(process_node);
   if (!process_data)
-    return base::Value::Dict();
+    return base::DictValue();
 
   DCHECK_EQ(content::PROCESS_TYPE_RENDERER, process_node->GetProcessType());
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("detached_v8_bytes_used",
            static_cast<int>(process_data->detached_v8_memory_used().InBytes()));
   dict.Set("shared_v8_bytes_used",
@@ -877,7 +888,7 @@ void V8DetailedMemoryRequestQueue::AddMeasurementRequest(
       measurement_requests =
           IsMeasurementBounded(request->mode()) ? bounded_measurement_requests_
                                                 : lazy_measurement_requests_;
-  DCHECK(!base::Contains(measurement_requests, request))
+  DCHECK(!std::ranges::contains(measurement_requests, request))
       << "V8DetailedMemoryRequest object added twice";
   // Each user of the decorator is expected to issue a single
   // V8DetailedMemoryRequest, so the size of measurement_requests is too low

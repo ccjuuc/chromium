@@ -162,7 +162,7 @@ export class CalendarElement extends CrLitElement {
     return index === this.expandedEventIndex_;
   }
 
-  protected recordSeeMoreClick_() {
+  protected onSeeMoreClick_() {
     this.dispatchEvent(new Event('usage', {composed: true, bubbles: true}));
     recordCalendarAction(CalendarAction.SEE_MORE_CLICKED, this.moduleName);
   }
@@ -183,6 +183,12 @@ export class CalendarElement extends CrLitElement {
       this.expandedEventIndex_ = firstDoubleBookedEventIndex;
       this.events.splice(this.expandedEventIndex_, 0, expandedEvent);
     }
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-calendar': CalendarElement;
   }
 }
 

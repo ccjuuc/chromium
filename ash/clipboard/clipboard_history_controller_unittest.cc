@@ -32,7 +32,7 @@
 #include "base/test/test_future.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "chromeos/ui/clipboard_history/clipboard_history_util.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
 #include "components/vector_icons/vector_icons.h"
@@ -45,6 +45,7 @@
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
@@ -60,7 +61,7 @@
 #include "ui/views/controls/textfield/textfield_test_api.h"
 
 namespace ash {
-using crosapi::mojom::ClipboardHistoryControllerShowSource;
+using chromeos::clipboard_history::ShowSource;
 
 namespace {
 
@@ -121,6 +122,8 @@ class MockClipboardImageModelFactory : public ClipboardImageModelFactory {
 
   void CancelRequest(const base::UnguessableToken& request_id) override {}
 
+  void CancelAllRequests() override {}
+
   void Activate() override {}
 
   void Deactivate() override {}
@@ -151,7 +154,7 @@ void FlushMessageLoop() {
 void ExpectHistoryItemImageMatchesBitmap(const ClipboardHistoryItem& item,
                                          const SkBitmap& expected_bitmap) {
   EXPECT_EQ(item.display_format(),
-            crosapi::mojom::ClipboardHistoryDisplayFormat::kPng);
+            chromeos::clipboard_history::DisplayFormat::kPng);
 
   const auto& image = item.display_image();
   ASSERT_TRUE(image.has_value());
@@ -161,17 +164,13 @@ void ExpectHistoryItemImageMatchesBitmap(const ClipboardHistoryItem& item,
                                    expected_bitmap));
 }
 
-std::vector<ClipboardHistoryControllerShowSource>
-GetClipboardHistoryShowSources() {
-  std::vector<ClipboardHistoryControllerShowSource> sources;
-  for (int i =
-           static_cast<int>(ClipboardHistoryControllerShowSource::kMinValue);
-       i <= static_cast<int>(ClipboardHistoryControllerShowSource::kMaxValue);
-       ++i) {
+std::vector<ShowSource> GetClipboardHistoryShowSources() {
+  std::vector<ShowSource> sources;
+  for (int i = static_cast<int>(ShowSource::kMinValue);
+       i <= static_cast<int>(ShowSource::kMaxValue); ++i) {
     // kControlVLongpress is deprecated.
-    if (static_cast<ClipboardHistoryControllerShowSource>(i) !=
-        ClipboardHistoryControllerShowSource::kControlVLongpress) {
-      sources.push_back(static_cast<ClipboardHistoryControllerShowSource>(i));
+    if (static_cast<ShowSource>(i) != ShowSource::kControlVLongpress) {
+      sources.push_back(static_cast<ShowSource>(i));
     }
   }
   return sources;
@@ -717,45 +716,41 @@ TEST_F(ClipboardHistoryControllerWithTextfieldTest, PasteClipboardItemById) {
 
   struct {
     size_t paste_data_index;
-    crosapi::mojom::ClipboardHistoryControllerShowSource paste_source;
+    chromeos::clipboard_history::ShowSource paste_source;
     int event_flags;
     ClipboardHistoryControllerImpl::ClipboardHistoryPasteType paste_type;
   } test_cases[] = {
       {/*paste_data_index=*/0,
        /*paste_source=*/
-       crosapi::mojom::ClipboardHistoryControllerShowSource::kVirtualKeyboard,
+       chromeos::clipboard_history::ShowSource::kVirtualKeyboard,
        /*event_flags=*/ui::EF_NONE,
        /*paste_type=*/
        ClipboardHistoryControllerImpl::ClipboardHistoryPasteType::
            kRichTextVirtualKeyboard},
       {/*paste_data_index=*/1,
        /*paste_source=*/
-       crosapi::mojom::ClipboardHistoryControllerShowSource::
-           kTextfieldContextMenu,
+       chromeos::clipboard_history::ShowSource::kTextfieldContextMenu,
        /*event_flags=*/ui::EF_MOUSE_BUTTON,
        /*paste_type=*/
        ClipboardHistoryControllerImpl::ClipboardHistoryPasteType::
            kRichTextMouse},
       {/*paste_data_index=*/2,
        /*paste_source=*/
-       crosapi::mojom::ClipboardHistoryControllerShowSource::
-           kRenderViewContextMenu,
+       chromeos::clipboard_history::ShowSource::kRenderViewContextMenu,
        /*event_flags=*/ui::EF_SHIFT_DOWN | ui::EF_FROM_TOUCH,
        /*paste_type=*/
        ClipboardHistoryControllerImpl::ClipboardHistoryPasteType::
            kPlainTextTouch},
       {/*paste_data_index=*/3,
        /*paste_source=*/
-       crosapi::mojom::ClipboardHistoryControllerShowSource::
-           kRenderViewContextSubmenu,
+       chromeos::clipboard_history::ShowSource::kRenderViewContextSubmenu,
        /*event_flags=*/ui::EF_MOUSE_BUTTON,
        /*paste_type=*/
        ClipboardHistoryControllerImpl::ClipboardHistoryPasteType::
            kRichTextMouse},
       {/*paste_data_index=*/4,
        /*paste_source=*/
-       crosapi::mojom::ClipboardHistoryControllerShowSource::
-           kTextfieldContextSubmenu,
+       chromeos::clipboard_history::ShowSource::kTextfieldContextSubmenu,
        /*event_flags=*/ui::EF_MOUSE_BUTTON,
        /*paste_type=*/
        ClipboardHistoryControllerImpl::ClipboardHistoryPasteType::
@@ -789,11 +784,11 @@ TEST_F(ClipboardHistoryControllerWithTextfieldTest, PasteClipboardItemById) {
 // Ctrl+V longpress.
 class ClipboardHistoryControllerShowSourceTest
     : public ClipboardHistoryControllerTest,
-      public testing::WithParamInterface<ClipboardHistoryControllerShowSource> {
+      public testing::WithParamInterface<ShowSource> {
  public:
   ClipboardHistoryControllerShowSourceTest() = default;
 
-  ClipboardHistoryControllerShowSource GetSource() const { return GetParam(); }
+  ShowSource GetSource() const { return GetParam(); }
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
@@ -862,7 +857,8 @@ TEST_P(ClipboardHistoryControllerShowSourceTest, OnMenuClosingCallback) {
   WriteTextToClipboardAndConfirm(u"test");
 
   gfx::Rect test_window_rect(100, 100, 100, 100);
-  std::unique_ptr<aura::Window> window(CreateTestWindow(test_window_rect));
+  std::unique_ptr<aura::Window> window =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, test_window_rect);
 
   // Show the menu with an `OnMenuClosingCallback`.
   GetClipboardHistoryController()->ShowMenu(
@@ -906,8 +902,8 @@ TEST_P(ClipboardHistoryControllerShowSourceTest, OnMenuClosingCallback) {
 class ClipboardHistoryRefreshDisplayFormatTest
     : public ClipboardHistoryControllerWithTextfieldTest,
       public testing::WithParamInterface<
-          /*display_format_under_test=*/crosapi::mojom::
-              ClipboardHistoryDisplayFormat> {
+          /*display_format_under_test=*/chromeos::clipboard_history::
+              DisplayFormat> {
  public:
   ClipboardHistoryRefreshDisplayFormatTest() = default;
 
@@ -928,15 +924,18 @@ class ClipboardHistoryRefreshDisplayFormatTest
     const std::u16string show_clipboard_menu_label =
         l10n_util::GetStringUTF16(IDS_APP_SHOW_CLIPBOARD_HISTORY);
     switch (GetDisplayFormat()) {
-      case crosapi::mojom::ClipboardHistoryDisplayFormat::kText:
+      case chromeos::clipboard_history::DisplayFormat::kText:
         WriteTextToClipboardAndConfirm(u"A");
         WriteTextToClipboardAndConfirm(u"B");
         WriteTextToClipboardAndConfirm(u"https://google.com/");
-        return {{u"https://google.com/", get_icon(vector_icons::kLinkIcon)},
+        return {{u"https://google.com/",
+                 get_icon(::features::IsRoundedIconsEnabled()
+                              ? vector_icons::kLinkIcon
+                              : vector_icons::kLinkOldIcon)},
                 {u"B", get_icon(chromeos::kTextIcon)},
                 {u"A", get_icon(chromeos::kTextIcon)},
                 {show_clipboard_menu_label, gfx::Image()}};
-      case crosapi::mojom::ClipboardHistoryDisplayFormat::kPng:
+      case chromeos::clipboard_history::DisplayFormat::kPng:
         WriteImageToClipboardAndConfirm(
             gfx::test::CreateBitmap(/*width=*/3, /*height=*/3));
         WriteImageToClipboardAndConfirm(
@@ -944,13 +943,17 @@ class ClipboardHistoryRefreshDisplayFormatTest
         return {{u"Image", get_icon(chromeos::kFiletypeImageIcon)},
                 {u"Image", get_icon(chromeos::kFiletypeImageIcon)},
                 {show_clipboard_menu_label, gfx::Image()}};
-      case crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml:
+      case chromeos::clipboard_history::DisplayFormat::kHtml:
         WriteHtmlAndConfirm("<table>A</table>");
         WriteHtmlAndConfirm("<table>B></table>");
-        return {{u"HTML Content", get_icon(vector_icons::kCodeIcon)},
-                {u"HTML Content", get_icon(vector_icons::kCodeIcon)},
+        return {{u"HTML Content", get_icon(::features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kCodeIcon
+                                               : vector_icons::kCodeOldIcon)},
+                {u"HTML Content", get_icon(::features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kCodeIcon
+                                               : vector_icons::kCodeOldIcon)},
                 {show_clipboard_menu_label, gfx::Image()}};
-      case crosapi::mojom::ClipboardHistoryDisplayFormat::kFile:
+      case chromeos::clipboard_history::DisplayFormat::kFile:
         // Use dummy file paths. The corresponding files do not have to exist
         // because only file extensions are required to calculate icons.
 
@@ -960,10 +963,12 @@ class ClipboardHistoryRefreshDisplayFormatTest
         // Copy multiple files at the same time.
         WriteFilePathsAndConfirm({u"dummy_child1.jpg", u"dummy_child2.png"});
 
-        return {{u"2 files", get_icon(vector_icons::kContentCopyIcon)},
+        return {{u"2 files", get_icon(::features::IsRoundedIconsEnabled()
+                                          ? vector_icons::kContentCopyIcon
+                                          : vector_icons::kContentCopyOldIcon)},
                 {u"dummy_file.webm", get_icon(chromeos::kFiletypeVideoIcon)},
                 {show_clipboard_menu_label, gfx::Image()}};
-      case crosapi::mojom::ClipboardHistoryDisplayFormat::kUnknown:
+      case chromeos::clipboard_history::DisplayFormat::kUnknown:
         NOTREACHED();
     }
 
@@ -994,7 +999,7 @@ class ClipboardHistoryRefreshDisplayFormatTest
     WaitForOperationConfirmed();
   }
 
-  crosapi::mojom::ClipboardHistoryDisplayFormat GetDisplayFormat() const {
+  chromeos::clipboard_history::DisplayFormat GetDisplayFormat() const {
     return GetParam();
   }
 
@@ -1010,10 +1015,10 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     ClipboardHistoryRefreshDisplayFormatTest,
     /*display_format_under_test=*/
-    testing::Values(crosapi::mojom::ClipboardHistoryDisplayFormat::kText,
-                    crosapi::mojom::ClipboardHistoryDisplayFormat::kPng,
-                    crosapi::mojom::ClipboardHistoryDisplayFormat::kHtml,
-                    crosapi::mojom::ClipboardHistoryDisplayFormat::kFile));
+    testing::Values(chromeos::clipboard_history::DisplayFormat::kText,
+                    chromeos::clipboard_history::DisplayFormat::kPng,
+                    chromeos::clipboard_history::DisplayFormat::kHtml,
+                    chromeos::clipboard_history::DisplayFormat::kFile));
 
 // Verifies that the clipboard history submenu model of the text services
 // context menu in Ash works as expected.
@@ -1088,7 +1093,7 @@ TEST_P(ClipboardHistoryRefreshDisplayFormatTest,
   ShowTextfieldContextMenu(*textfield_);
 
   // Expect the menu item that hosts the clipboard history submenu exists.
-  const views::MenuItemView* const submenu_item = WaitForMenuItemWithLabel(
+  views::MenuItemView* const submenu_item = WaitForMenuItemWithLabel(
       l10n_util::GetStringUTF16(IDS_APP_PASTE_FROM_CLIPBOARD));
   ASSERT_TRUE(submenu_item);
 
@@ -1103,9 +1108,7 @@ TEST_P(ClipboardHistoryRefreshDisplayFormatTest,
   // `submenu_view` shows.
   submenu_histogram_tester.ExpectUniqueSample(
       "Ash.ClipboardHistory.ContextMenu.ShowMenu",
-      crosapi::mojom::ClipboardHistoryControllerShowSource::
-          kTextfieldContextSubmenu,
-      1);
+      chromeos::clipboard_history::ShowSource::kTextfieldContextSubmenu, 1);
 
   // Expect that the menu option to launch the clipboard history menu exists.
   const views::View* const menu_item = WaitForMenuItemWithLabel(
@@ -1123,9 +1126,7 @@ TEST_P(ClipboardHistoryRefreshDisplayFormatTest,
   // The source of the standalone clipboard history menu should be recorded.
   histogram_tester.ExpectUniqueSample(
       "Ash.ClipboardHistory.ContextMenu.ShowMenu",
-      crosapi::mojom::ClipboardHistoryControllerShowSource::
-          kTextfieldContextMenu,
-      1);
+      chromeos::clipboard_history::ShowSource::kTextfieldContextMenu, 1);
 }
 
 }  // namespace ash

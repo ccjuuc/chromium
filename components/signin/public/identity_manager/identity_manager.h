@@ -6,6 +6,7 @@
 #define COMPONENTS_SIGNIN_PUBLIC_IDENTITY_MANAGER_IDENTITY_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/gtest_prod_util.h"
@@ -27,7 +28,12 @@
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_mutator.h"
+#include "crypto/signature_verifier.h"
 #include "google_apis/gaia/oauth2_access_token_manager.h"
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "components/signin/public/base/binding_key_registration_token_result.h"
+#endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
@@ -309,9 +315,29 @@ class IdentityManager : public KeyedService,
       const CoreAccountId& account_id) const;
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // Asynchronously generates a registration token for binding a refresh token
+  // to a shared binding key.
+  // `supported_algorithms` is a space-separated list of acceptable signature
+  // algorithm names (e.g., "ES256 RS256"). This parameter may be ignored if an
+  // existing binding key is reused instead of generating a new one.
+  // Returns false if the generation cannot be started. In that case, `callback`
+  // will not be invoked.
+  bool GenerateBindingKeyRegistrationToken(
+      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+          supported_algorithms,
+      std::string_view auth_code,
+      base::OnceCallback<void(
+          std::optional<signin::BindingKeyRegistrationTokenResult>)> callback);
+
   // Returns `true` if (a) a refresh token exists for `account_id`, and (b) the
   // refresh token is bound to a device, it returns `false` otherwise.
   bool HasAccountWithBoundRefreshToken(const CoreAccountId& account_id) const;
+
+  // Returns `true` if (a) a refresh token exists for `account_id`, and (b) the
+  // refresh token is bound to an mTLS certificate. It returns `false`
+  // otherwise.
+  bool HasAccountWithRefreshTokenBoundToMtls(
+      const CoreAccountId& account_id) const;
 
   // Returns whether all bound refresh tokens share the same binding key.
   //
@@ -354,10 +380,22 @@ class IdentityManager : public KeyedService,
 
   // Provides the information of all accounts that are present in the Gaia
   // cookie in the cookie jar, ordered by their order in the cookie.
-  // If the returned accounts are not fresh, an internal update will be
-  // triggered and there will be a subsequent invocation of
-  // IdentityManager::Observer::OnAccountsInCookieJarChanged().
+  //
+  // When `switches::kAvoidAutoTriggerListAccountsOnStale` is enabled, this
+  // method will not trigger an update even if the accounts are stale.
   AccountsInCookieJarInfo GetAccountsInCookieJar() const;
+
+  // Returns the accounts in the cookie jar without triggering an internal
+  // update even if the accounts in the cookie jar are stale.
+  //
+  // TODO(crbug.com/517864199): Remove once GetAccountsInCookieJar() no longer
+  // triggers an update.
+  AccountsInCookieJarInfo GetCachedAccountsInCookieJar() const;
+
+  // Returns the session index of the primary account in the cookie jar, or
+  // std::nullopt if the primary account is not signed in or not found in the
+  // cookie jar.
+  std::optional<size_t> GetSessionIndexForPrimaryAccount() const;
 
   // Returns pointer to the object used to change the signed-in state of the
   // primary account, if supported on the current platform. Otherwise, returns
@@ -383,6 +421,12 @@ class IdentityManager : public KeyedService,
   // were added).
   [[nodiscard]] std::vector<AccountInfo> GetAccountsOnDevice();
 #endif
+
+  // Overrides the value of the given account capability for the account.
+  // Passing `std::nullopt` clears the override.
+  void SetCapabilityOverride(const CoreAccountId& account_id,
+                             std::string_view capability_name,
+                             std::optional<Tribool> override_value);
 
   // Observer interface for classes that want to monitor status of various
   // requests. Mostly useful in tests and debugging contexts (e.g., WebUI).
@@ -449,11 +493,6 @@ class IdentityManager : public KeyedService,
     std::unique_ptr<AccountsMutator> accounts_mutator;
     std::unique_ptr<DeviceAccountsSynchronizer> device_accounts_synchronizer;
     std::unique_ptr<DiagnosticsProvider> diagnostics_provider;
-    AccountConsistencyMethod account_consistency =
-        AccountConsistencyMethod::kDisabled;
-    // TODO(crbug.com/325904258): Reconsider whether completely disabling the
-    // scope checking is the right approach in the long run.
-    bool require_sync_consent_for_scope_verification = true;
     raw_ptr<SigninClient> signin_client = nullptr;
 #if BUILDFLAG(IS_CHROMEOS)
     raw_ptr<account_manager::AccountManagerFacade, DanglingUntriaged>
@@ -497,11 +536,6 @@ class IdentityManager : public KeyedService,
   // state of IdentityManager.
   DiagnosticsProvider* GetDiagnosticsProvider();
 
-  // Returns account consistency method for this profile.
-  AccountConsistencyMethod GetAccountConsistency() {
-    return account_consistency_;
-  }
-
   // Calling this method provides a hint that a new account may be added in the
   // near future, and front-loads some processing to speed that up.
   //
@@ -533,8 +567,7 @@ class IdentityManager : public KeyedService,
   bool HasPrimaryAccount(JNIEnv* env) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountInfo(
-      JNIEnv* env,
-      jint consent_level) const;
+      JNIEnv* env) const;
 
   base::android::ScopedJavaLocalRef<jobject> GetPrimaryAccountId(
       JNIEnv* env) const;
@@ -548,15 +581,12 @@ class IdentityManager : public KeyedService,
       JNIEnv* env,
       const base::android::JavaRef<jstring>& j_email) const;
 
-  base::android::ScopedJavaLocalRef<jobjectArray> GetAccountsWithRefreshTokens(
-      JNIEnv* env) const;
-
   // Refreshes all accounts with refresh tokens if they are stale. See
   // RefreshAccountInfoIfStale(const CoreAccountId&).
   void RefreshAccountInfoIfStale(JNIEnv* env);
 
   // Returns true if the browser allows the primary account to be cleared.
-  jboolean IsClearPrimaryAccountAllowed(JNIEnv* env) const;
+  bool IsClearPrimaryAccountAllowed(JNIEnv* env) const;
 #endif
 
   // Returns a weak pointer of this.
@@ -582,7 +612,7 @@ class IdentityManager : public KeyedService,
       IdentityManager* identity_manager,
       const CoreAccountId& account_id,
       const std::string& token_value,
-      const std::vector<uint8_t>& wrapped_binding_key);
+      const TokenBindingInfo& token_binding_info);
   friend void SetInvalidRefreshTokenForAccount(
       IdentityManager* identity_manager,
       const CoreAccountId& account_id,
@@ -795,16 +825,15 @@ class IdentityManager : public KeyedService,
 
   // Lists of observers.
   // Makes sure lists are empty on destruction.
-  base::ObserverList<Observer, true>::Unchecked observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/true,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observer_list_;
   base::ObserverList<DiagnosticsObserver, true>::Unchecked
       diagnostics_observation_list_;
-
-  AccountConsistencyMethod account_consistency_ =
-      AccountConsistencyMethod::kDisabled;
-
-  // TODO(crbug.com/40067025): Remove this field once
-  // kReplaceSyncPromosWithSignInPromos launches.
-  const bool require_sync_consent_for_scope_verification_;
 
 #if BUILDFLAG(IS_ANDROID)
   // Java-side IdentityManager object.

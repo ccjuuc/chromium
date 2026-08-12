@@ -4,7 +4,8 @@
 
 #include "chrome/browser/safe_browsing/incident_reporting/extension_data_collection.h"
 
-#include "base/containers/contains.h"
+#include <utility>
+
 #include "base/json/json_string_value_serializer.h"
 #include "base/time/time.h"
 #include "base/version.h"
@@ -22,8 +23,9 @@
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
 #endif
 
@@ -42,7 +44,8 @@ void PopulateExtensionInfo(
   extension_info->set_id(extension_id);
   extension_info->set_version(extension.version().GetString());
   extension_info->set_name(extension.name());
-  extension_info->set_description(extension.description());
+  extension_info->set_description(
+      extensions::DescriptionInfo::GetDescription(extension));
 
   typedef ClientIncidentReport_ExtensionData_ExtensionInfo Info;
   if (extension_registry.enabled_extensions().Contains(extension_id))
@@ -56,7 +59,7 @@ void PopulateExtensionInfo(
   else if (extension_registry.terminated_extensions().Contains(extension_id))
     extension_info->set_state(Info::STATE_TERMINATED);
 
-  extension_info->set_type(extension.GetType());
+  extension_info->set_type(std::to_underlying(extension.GetType()));
   if (const std::string* update_url = extension.manifest()->FindStringPath(
           extensions::manifest_keys::kUpdateURL)) {
     extension_info->set_update_url(*update_url);
@@ -79,11 +82,10 @@ void PopulateExtensionInfo(
       extensions::InstallSignature::FromDict(
           extension_prefs.GetInstallSignature());
   if (signature_from_prefs) {
-    if (base::Contains(signature_from_prefs->ids, extension_id)) {
+    if (signature_from_prefs->ids.contains(extension_id)) {
       extension_info->set_has_signature_validation(true);
       extension_info->set_signature_is_valid(true);
-    } else if (base::Contains(signature_from_prefs->invalid_ids,
-                              extension_id)) {
+    } else if (signature_from_prefs->invalid_ids.contains(extension_id)) {
       extension_info->set_has_signature_validation(true);
       extension_info->set_signature_is_valid(false);
     }
@@ -103,7 +105,7 @@ void PopulateExtensionInfo(
 // Finds the last installed extension and adds relevant information to data's
 // last_installed_extension field.
 void CollectExtensionData(ClientIncidentReport_ExtensionData* data) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   scoped_refptr<const extensions::Extension> last_installed_extension;
   Profile* profile_for_last_installed_extension = nullptr;
   base::Time last_install_time;

@@ -7,7 +7,7 @@
 
 #import <UIKit/UIKit.h>
 
-#import <string>
+#import <string_view>
 
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/ui_blocker_target.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
@@ -16,46 +16,26 @@
 
 @class AppState;
 @protocol BrowserProviderInterface;
+@class IncognitoState;
+@class LensOverlayStateNotifier;
 @class ProfileState;
+@protocol SceneAgent;
 @class SceneController;
+@class SceneLayoutState;
 @class SceneState;
+@protocol SceneStateAnimator;
+@class SceneStatePrefs;
+@class SceneUIBlockerState;
 class SigninInProgress;
-
-// During profile switching, it is possible that an animation is displayed
-// over the SceneState until the transition is complete. In that case the
-// object responsible should implement this protocol to allow cancellation
-// of the animation if the Profile initialisation needs to present wait for
-// the user to interact with some mandatory interactive step.
-@protocol SceneStateAnimator
-
-// Cancel any in progress animation. The animation can be restarted with
-// the -restartAnimation method.
-- (void)cancelAnimation;
-
-// Restart the animation if it has been cancelled. Does nothing if the
-// animation has not been cancelled before.
-- (void)restartAnimation;
-
-@end
-
-// Scene agents are objects owned by a scene state and providing some
-// scene-scoped function. They can be driven by SceneStateObserver events.
-@protocol SceneAgent <NSObject>
-
-@required
-// Sets the associated scene state. Called once and only once. Consider using
-// this method to add the agent as an observer.
-- (void)setSceneState:(SceneState*)scene;
-
-@end
+@class TabGridState;
 
 // An object containing the state of a UIWindowScene. One state object
 // corresponds to one scene.
 // TODO(b/326186137): This class should implement BrowserProviderInterface.
 @interface SceneState : NSObject <UIBlockerTarget>
 
-- (instancetype)initWithAppState:(AppState*)appState NS_DESIGNATED_INITIALIZER;
-- (instancetype)init NS_UNAVAILABLE;
+// Designated initializer.
+- (instancetype)init NS_DESIGNATED_INITIALIZER;
 
 // The profile state for profile that owns this scene.
 @property(nonatomic, weak) ProfileState* profileState;
@@ -70,12 +50,8 @@ class SigninInProgress;
 // WindowActivityRestoredOrigin.
 @property(nonatomic, assign) WindowActivityOrigin currentOrigin;
 
-// YES if some incognito content is visible, for example an incognito tab or the
-// incognito tab switcher.
-@property(nonatomic) BOOL incognitoContentVisible;
-
 // Window for the associated scene, if any.
-@property(nonatomic, readonly) UIWindow* window;
+@property(nonatomic, weak) UIWindow* window;
 
 // The scene object backing this scene state. It's in a 1-to-1 relationship and
 // the window scene owns this object (indirectly through scene delegate).
@@ -90,13 +66,10 @@ class SigninInProgress;
 
 // The persistent identifier for the scene session. This should be used instead
 // of -[UISceneSession persistentIdentifier].
-@property(nonatomic, readonly) const std::string& sceneSessionID;
+@property(nonatomic, assign) std::string_view sceneSessionID;
 
 // The controller for this scene.
 @property(nonatomic, weak) SceneController* controller;
-
-// When this is YES, the scene is showing the modal overlay.
-@property(nonatomic, assign) BOOL presentingModalOverlay;
 
 // When this is YES, the scene either resumed or started up in response to an
 // external intent.
@@ -123,6 +96,26 @@ class SigninInProgress;
 // sign-in prompt UI.
 @property(nonatomic, readonly) BOOL signinInProgress;
 
+// Object containing the state of whether some incognito content is visible, for
+// example an incognito tab or the incognito tab switcher.
+@property(nonatomic, strong, readonly) IncognitoState* incognitoState;
+
+// Object containing the state of the scene UI blocker.
+@property(nonatomic, strong, readonly) SceneUIBlockerState* uiBlockerState;
+
+// Object containing the state of the tab grid.
+@property(nonatomic, strong, readonly) TabGridState* tabGridState;
+
+// Object containing the state of the layout.
+@property(nonatomic, strong, readonly) SceneLayoutState* layoutState;
+
+// Object used to notify of changes to the LensOverlay state.
+@property(nonatomic, strong, readonly)
+    LensOverlayStateNotifier* lensOverlayStateNotifier;
+
+// Object allowing access to the SceneState scoped preferences.
+@property(nonatomic, strong) SceneStatePrefs* prefs;
+
 // Adds an observer to this scene state. The observers will be notified about
 // scene state changes per SceneStateObserver protocol.
 - (void)addObserver:(id<SceneStateObserver>)observer;
@@ -135,14 +128,6 @@ class SigninInProgress;
 
 // Array of all agents added to this scene state.
 - (NSArray*)connectedAgents;
-
-// Retrieves per-session preference for `key`. May return nil if the key is
-// not found.
-- (NSObject*)sessionObjectForKey:(NSString*)key;
-
-// Stores `object` as a per-session preference if supported by the device or
-// into NSUserDefaults otherwise (old table, phone, ...).
-- (void)setSessionObject:(NSObject*)object forKey:(NSString*)key;
 
 // Records that an extra sign-in process started. When the returned value is
 // destructed, the sign-in ended.

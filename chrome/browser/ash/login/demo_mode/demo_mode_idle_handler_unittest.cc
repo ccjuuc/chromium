@@ -12,6 +12,7 @@
 #include "ash/public/cpp/wallpaper/wallpaper_info.h"
 #include "ash/public/cpp/wallpaper/wallpaper_types.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/wallpaper/test_wallpaper_controller_client.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/files/scoped_temp_dir.h"
@@ -26,9 +27,7 @@
 #include "chrome/browser/ash/login/demo_mode/demo_mode_window_closer.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -175,14 +174,16 @@ TEST_F(DemoModeIdleHandlerTest, CloseAllBrowsers) {
       Browser::CreateParams(profile(), /*user_gesture=*/true));
   std::unique_ptr<Browser> browser_2 = CreateBrowserWithTestWindowForParams(
       Browser::CreateParams(profile(), /*user_gesture=*/true));
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2U);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2U);
 
   // Trigger close all browsers by being idle for
   // `kReLuanchDemoAppIdleDuration`.
   SimulateUserActivity();
   FastForwardBy(kReLuanchDemoAppIdleDuration);
-  EXPECT_TRUE(static_cast<TestBrowserWindow*>(browser_1->window())->IsClosed());
-  EXPECT_TRUE(static_cast<TestBrowserWindow*>(browser_2->window())->IsClosed());
+  EXPECT_TRUE(
+      static_cast<TestBrowserWindow*>(browser_1->GetWindow())->IsClosed());
+  EXPECT_TRUE(
+      static_cast<TestBrowserWindow*>(browser_2->GetWindow())->IsClosed());
   // `TestBrowserWindow` does not destroy `Browser` when `Close()` is called,
   // but real browser window does. Reset both browsers here to fake this
   // behavior.

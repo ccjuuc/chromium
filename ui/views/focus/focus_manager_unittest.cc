@@ -175,6 +175,75 @@ TEST_F(FocusManagerTest, FocusChangeListener) {
   RemoveFocusChangeListener(&listener);
 }
 
+namespace {
+
+class DestructiveView : public View {
+  METADATA_HEADER(DestructiveView, View)
+ public:
+  explicit DestructiveView(View* view_to_delete) {
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    tracker_.SetView(view_to_delete);
+  }
+
+  void OnFocus() override {
+    if (View* v = tracker_.view()) {
+      v->parent()->RemoveChildViewT(v);
+    }
+    View::OnFocus();
+  }
+
+ private:
+  ViewTracker tracker_;
+};
+
+BEGIN_METADATA(DestructiveView)
+END_METADATA
+
+class DidChangeFocusListener : public FocusChangeListener {
+ public:
+  void OnWillChangeFocus(View* focused_before, View* focused_now) override {}
+  void OnDidChangeFocus(View* focused_before, View* focused_now) override {
+    focus_changes_.emplace_back(focused_before, focused_now);
+  }
+
+  const std::vector<ViewPair>& focus_changes() const { return focus_changes_; }
+  void ClearFocusChanges() { focus_changes_.clear(); }
+
+ private:
+  std::vector<ViewPair> focus_changes_;
+};
+
+}  // namespace
+
+TEST_F(FocusManagerTest, FocusChangeWithSynchronousDestruction) {
+  auto view1_ptr = std::make_unique<View>();
+  view1_ptr->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+  View* view1 = GetContentsView()->AddChildView(std::move(view1_ptr));
+
+  DestructiveView* view2 =
+      GetContentsView()->AddChildView(std::make_unique<DestructiveView>(view1));
+
+  DidChangeFocusListener listener;
+  AddFocusChangeListener(&listener);
+
+  view1->RequestFocus();
+  ASSERT_EQ(1u, listener.focus_changes().size());
+  EXPECT_EQ(nullptr, listener.focus_changes()[0].first);
+  EXPECT_EQ(view1, listener.focus_changes()[0].second);
+  listener.ClearFocusChanges();
+
+  // This will trigger view2->OnFocus() which will synchronously delete view1.
+  view2->RequestFocus();
+  ASSERT_EQ(1u, listener.focus_changes().size());
+  // Since view1 was synchronously destroyed, the old focused view should be
+  // nullptr.
+  EXPECT_EQ(nullptr, listener.focus_changes()[0].first);
+  EXPECT_EQ(view2, listener.focus_changes()[0].second);
+  listener.ClearFocusChanges();
+
+  RemoveFocusChangeListener(&listener);
+}
+
 TEST_F(FocusManagerTest, NativeViewFocusChangeListener) {
   // First, ensure the simulator is aware of the Widget created in SetUp() being
   // currently active.
@@ -670,6 +739,56 @@ TEST_F(FocusManagerTest, RadioButtonGroupOwnerUndefined) {
   EXPECT_EQ(radio2, focus_manager->GetFocusedView());
 
   // Focus should wrap within the group and not go to radio3.
+  focus_manager->OnKeyEvent(down_key);
+  EXPECT_EQ(radio1, focus_manager->GetFocusedView());
+}
+
+// Verifies that when arrow key traversal is enabled for the widget, pressing
+// arrow keys on a grouped view (like a radio button) still navigates within the
+// group, rather than traversing to other controls.
+TEST_F(FocusManagerTest,
+       RadioButtonGroupTraversalWithArrowKeyTraversalEnabled) {
+  FocusManager* focus_manager = GetFocusManager();
+  GetWidget()->widget_delegate()->SetEnableArrowKeyTraversal(true);
+
+  // Create a radio button group ID.
+  const int kRadioGroupID = 1;
+
+  // Create a parent view.
+  views::View* parent_view =
+      GetContentsView()->AddChildView(std::make_unique<views::View>());
+  parent_view->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  // Create 3 radio buttons in a radio button group.
+  auto* radio1 = parent_view->AddChildView(
+      std::make_unique<RadioButton>(u"Option 1", kRadioGroupID));
+  radio1->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  auto* radio2 = parent_view->AddChildView(
+      std::make_unique<RadioButton>(u"Option 2", kRadioGroupID));
+  radio2->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  auto* radio3 = parent_view->AddChildView(
+      std::make_unique<RadioButton>(u"Option 3", kRadioGroupID));
+  radio3->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  // This view is not in the radio button group.
+  auto* other_view = GetContentsView()->AddChildView(std::make_unique<View>());
+  other_view->SetFocusBehavior(View::FocusBehavior::ALWAYS);
+
+  // Focus the first radio button.
+  radio1->RequestFocus();
+  EXPECT_EQ(radio1, focus_manager->GetFocusedView());
+
+  const ui::KeyEvent down_key(ui::EventType::kKeyPressed, ui::VKEY_DOWN,
+                              ui::EF_NONE);
+  focus_manager->OnKeyEvent(down_key);
+  EXPECT_EQ(radio2, focus_manager->GetFocusedView());
+
+  focus_manager->OnKeyEvent(down_key);
+  EXPECT_EQ(radio3, focus_manager->GetFocusedView());
+
+  // Focus should wrap within the group and not go to other_view.
   focus_manager->OnKeyEvent(down_key);
   EXPECT_EQ(radio1, focus_manager->GetFocusedView());
 }

@@ -489,14 +489,8 @@ PhysicalFragment::OofData* PhysicalFragment::OofDataFromBuilder(
         builder->oof_positioned_descendants_.size());
     for (const LogicalOofPositionedNode& descendant :
          builder->oof_positioned_descendants_) {
-      OofInlineContainer<PhysicalOffset> inline_container(
-          descendant.inline_container.container,
-          converter.ToPhysical(descendant.inline_container.relative_offset,
-                               PhysicalSize()));
-      oof_data->OofPositionedDescendants().emplace_back(
-          descendant.Node(), descendant.break_token,
-          descendant.static_position.ConvertToPhysical(converter),
-          descendant.requires_content_before_breaking, inline_container);
+      oof_data->OofPositionedDescendants().push_back(
+          LogicalOofPositionedNodeToPhysical(descendant, converter));
     }
   }
 
@@ -525,13 +519,13 @@ PhysicalFragment::OofData* PhysicalFragment::FragmentedOofDataFromBuilder(
   for (const auto& descendant :
        builder->oof_positioned_fragmentainer_descendants_) {
     OofInlineContainer<PhysicalOffset> inline_container(
-        descendant.inline_container.container,
-        converter.ToPhysical(descendant.inline_container.relative_offset,
+        descendant.InlineContainer(),
+        converter.ToPhysical(descendant.InlineContainerInfo().RelativeOffset(),
                              PhysicalSize()));
     OofInlineContainer<PhysicalOffset> fixedpos_inline_container(
-        descendant.fixedpos_inline_container.container,
+        descendant.fixedpos_inline_container.Container(),
         converter.ToPhysical(
-            descendant.fixedpos_inline_container.relative_offset,
+            descendant.fixedpos_inline_container.RelativeOffset(),
             PhysicalSize()));
 
     // The static position should remain relative to the containing block.
@@ -544,9 +538,9 @@ PhysicalFragment::OofData* PhysicalFragment::FragmentedOofDataFromBuilder(
 
     fragmented_data->oof_positioned_fragmentainer_descendants.emplace_back(
         descendant.Node(),
-        descendant.static_position.ConvertToPhysical(
+        descendant.StaticPosition().ConvertToPhysical(
             containing_block_converter),
-        descendant.requires_content_before_breaking, inline_container,
+        descendant.RequiresContentBeforeBreaking(), inline_container,
         PhysicalContainingBlock(builder, size, containing_block_size,
                                 descendant.containing_block),
         PhysicalContainingBlock(builder, size,
@@ -556,8 +550,8 @@ PhysicalFragment::OofData* PhysicalFragment::FragmentedOofDataFromBuilder(
   for (const auto& multicol : builder->multicols_with_pending_oofs_) {
     auto& value = multicol.value;
     OofInlineContainer<PhysicalOffset> fixedpos_inline_container(
-        value->fixedpos_inline_container.container,
-        converter.ToPhysical(value->fixedpos_inline_container.relative_offset,
+        value->fixedpos_inline_container.Container(),
+        converter.ToPhysical(value->fixedpos_inline_container.RelativeOffset(),
                              PhysicalSize()));
     fragmented_data->multicols_with_pending_oofs.insert(
         multicol.key,
@@ -658,8 +652,7 @@ void PhysicalFragment::CheckType() const {
       DCHECK_EQ(IsFloating(), layout_object_->IsFloating());
       DCHECK_EQ(IsOutOfFlowPositioned(),
                 layout_object_->IsOutOfFlowPositioned());
-      DCHECK_EQ(IsAtomicInline(), layout_object_->IsInline() &&
-                                      layout_object_->IsAtomicInlineLevel());
+      DCHECK_EQ(IsAtomicInline(), layout_object_->IsAtomicInline());
       break;
     case kFragmentLineBox:
       DCHECK(layout_object_->IsLayoutBlockFlow());
@@ -734,6 +727,18 @@ void PhysicalFragment::TraceAfterDispatch(Visitor* visitor) const {
   visitor->Trace(oof_data_);
 }
 
+const GCedHeapVector<SplitAxisItem<LayoutBoxModelObject>>&
+PhysicalFragment::StickyDescendants() const {
+  if (propagated_data_ && propagated_data_->sticky_descendants) {
+    return *propagated_data_->sticky_descendants;
+  }
+  DEFINE_STATIC_LOCAL(
+      Persistent<GCedHeapVector<SplitAxisItem<LayoutBoxModelObject>>>, empty,
+      (MakeGarbageCollected<
+          GCedHeapVector<SplitAxisItem<LayoutBoxModelObject>>>()));
+  return *empty;
+}
+
 bool PhysicalFragment::DependsOnPercentageBlockSize(
     const FragmentBuilder& builder) {
   if (!builder.node_ || builder.node_.IsInline()) {
@@ -751,24 +756,11 @@ bool PhysicalFragment::DependsOnPercentageBlockSize(
   // element if it has a percentage block-size however, but this will return
   // the correct result from below.
 
-  // There are two conditions where we need to know about an (arbitrary)
-  // descendant which depends on a %-block-size.
-  //  - In quirks mode, the arbitrary descendant may depend the percentage
-  //    resolution block-size given (to this node), and need to relayout if
-  //    this size changes.
-  //  - A flex-item may have its "definiteness" change, (e.g. if itself is a
-  //    flex item which is being stretched). This definiteness change will
-  //    affect any %-block-size children.
-  //
-  // NOTE(ikilpatrick): For the flex-item case this is potentially too general.
-  // We only need to know about if this flex-item has a %-block-size child if
-  // the "definiteness" changes, not if the percentage resolution size changes.
+  // In quirks mode, we may need to know about an (arbitrary) descendant which
+  // depends on a %-block-size, to relayout if this size changes.
   const BlockNode node = To<BlockNode>(builder.node_);
-  const bool is_flex_item =
-      !RuntimeEnabledFeatures::LayoutFlexCacheFixEnabled() && node.IsFlexItem();
   if (builder.has_descendant_that_depends_on_percentage_block_size_ &&
-      (node.UseParentPercentageResolutionBlockSizeForChildren() ||
-       is_flex_item)) {
+      node.UseParentPercentageResolutionBlockSizeForChildren()) {
     return true;
   }
 

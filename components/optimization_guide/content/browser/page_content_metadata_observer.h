@@ -11,6 +11,9 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "components/optimization_guide/content/browser/media_transcript_provider.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -27,6 +30,30 @@ class WebContents;
 
 namespace optimization_guide {
 
+class PageContentMetadataObserver;
+
+class MediaTranscriptObserver
+    : public content::DocumentUserData<MediaTranscriptObserver> {
+ public:
+  ~MediaTranscriptObserver() override;
+
+  // Called when transcription begins for the frame.
+  void OnTranscriptionBegin(content::RenderFrameHost* rfh);
+
+  void AddOwner(base::WeakPtr<PageContentMetadataObserver> owner);
+
+  DOCUMENT_USER_DATA_KEY_DECL();
+
+ protected:
+  explicit MediaTranscriptObserver(content::RenderFrameHost* rfh);
+
+ private:
+  friend class content::DocumentUserData<MediaTranscriptObserver>;
+
+  // Needs a list of owners to be able to support multiple instances of GiC.
+  std::list<base::WeakPtr<PageContentMetadataObserver>> owners_;
+};
+
 // A class that is responsible for observing metadata for all frames in a
 // WebContents. For each remote frame, it will register a MetaTagsObserver to
 // receive metadata from the frame.
@@ -36,6 +63,9 @@ namespace optimization_guide {
 // for a set of meta tags.
 class PageContentMetadataObserver : public content::WebContentsObserver {
  public:
+  // Callback invoked when page metadata changes. A null value implies that the
+  // current page metadata state is unknown (e.g. during navigation or before
+  // initial metadata from the primary main frame is received).
   using OnPageMetadataChangedCallback =
       base::RepeatingCallback<void(blink::mojom::PageMetadataPtr)>;
 
@@ -47,11 +77,18 @@ class PageContentMetadataObserver : public content::WebContentsObserver {
   PageContentMetadataObserver& operator=(const PageContentMetadataObserver&) =
       delete;
 
-  // Delivers the current metadata to the callback.  Clients may use this to
-  // prompt sending the most recent metadata.
-  void DispatchMetadata();
+  // Returns the current metadata for the page, or null if the initial
+  // metadata from the primary main frame has not yet been received.
+  blink::mojom::PageMetadataPtr GetCurrentMetadata() const;
+
+  // Called when transcription begins for a frame.
+  // Marked virtual for testing.
+  virtual void OnTranscriptionBegin(content::RenderFrameHost* rfh);
 
  private:
+  // Delivers the current metadata (`GetCurrentMetadata()`) to the callback if
+  // ready.
+  void DispatchMetadata();
   // content::WebContentsObserver:
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
@@ -91,13 +128,21 @@ class PageContentMetadataObserver : public content::WebContentsObserver {
 
     std::unique_ptr<FrameMetaTagsObserver> observer;
     blink::mojom::FrameMetadataPtr metadata;
+    bool received_initial_metadata = false;
   };
+
+  bool UpdateMediaTranscriptsFlag(
+      FrameData& curr_frame_metadata,
+      content::RenderFrameHost* render_frame_host,
+      std::vector<blink::mojom::MetaTagPtr>& meta_tags);
 
   const std::vector<std::string> names_;
 
   base::flat_map<content::RenderFrameHost*, FrameData> frame_data_;
 
   OnPageMetadataChangedCallback callback_;
+
+  base::WeakPtrFactory<PageContentMetadataObserver> weak_ptr_factory_{this};
 };
 
 }  // namespace optimization_guide

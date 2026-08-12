@@ -5,7 +5,7 @@
 import 'chrome://password-manager/password_manager.js';
 
 import type {CrExpandButtonElement} from 'chrome://password-manager/password_manager.js';
-import {CheckupSubpage, OpenWindowProxyImpl, Page, PasswordCheckInteraction, PasswordManagerImpl, PluralStringProxyImpl, Router} from 'chrome://password-manager/password_manager.js';
+import {CheckupSubpage, OpenWindowProxyImpl, Page, PasswordAutomaticChangeState, PasswordCheckInteraction, PasswordManagerImpl, PluralStringProxyImpl, Router} from 'chrome://password-manager/password_manager.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
@@ -485,7 +485,9 @@ suite('CheckupDetailsSectionTest', function() {
 
     const section = document.createElement('checkup-details-section');
     section.prefs = makePasswordManagerPrefs();
-    section.prefs.profile.password_dismiss_compromised_alert.value = false;
+    const prefObject =
+        section.getPref<boolean>('profile.password_dismiss_compromised_alert');
+    prefObject.value = false;
     document.body.appendChild(section);
     await passwordManager.whenCalled('getInsecureCredentials');
     await flushTasks();
@@ -560,6 +562,71 @@ suite('CheckupDetailsSectionTest', function() {
 
             // Verify that 'Already change password?' link is visible.
             assertFalse(alreadyChange.hidden);
+          }));
+
+  [CheckupSubpage.COMPROMISED, CheckupSubpage.REUSED, CheckupSubpage.WEAK]
+      .forEach(
+        type => test(
+          `Automated change password click for ${type}`, async function () {
+            Router.getInstance().navigateTo(Page.CHECKUP_DETAILS, type);
+
+            const insecureCredential = makeInsecureCredential({
+              id: 42,
+              url: 'test.com',
+              username: 'viking',
+              types: [
+                CompromiseType.LEAKED,
+                CompromiseType.WEAK,
+                CompromiseType.REUSED,
+              ],
+              isAutomaticPasswordChangeSupported: true,
+            });
+            passwordManager.data.insecureCredentials = [insecureCredential];
+            passwordManager.data.credentialWithReusedPassword =
+                [{entries: [insecureCredential]}];
+
+            const section = document.createElement('checkup-details-section');
+            document.body.appendChild(section);
+            await passwordManager.whenCalled('getInsecureCredentials');
+            if (type === CheckupSubpage.REUSED) {
+              await passwordManager.whenCalled(
+                  'getCredentialsWithReusedPassword');
+            }
+            await pluralString.whenCalled('getPluralString');
+            await flushTasks();
+
+            const listItemElements =
+                section.shadowRoot!.querySelectorAll('checkup-list-item');
+            assertEquals(1, listItemElements.length);
+            assertTrue(!!listItemElements[0]);
+            assertTrue(isVisible(listItemElements[0]));
+
+            // Verify that standard 'Change password' button is hidden.
+            const changePassword =
+                listItemElements[0].shadowRoot!.querySelector<HTMLElement>(
+                    '#changePasswordButton');
+            assertFalse(!!changePassword);
+
+            // Verify that 'Already change password?' link is hidden.
+            const alreadyChange =
+                listItemElements[0].shadowRoot!.querySelector<HTMLElement>(
+                    '#alreadyChanged');
+            assertTrue(!!alreadyChange);
+            assertTrue(alreadyChange.hidden);
+
+            const autoChangePassword =
+                listItemElements[0].shadowRoot!.querySelector<HTMLElement>(
+                    '#autoChangePasswordButton');
+            assertTrue(!!autoChangePassword);
+            assertTrue(autoChangePassword.classList.contains('tonal-button'));
+
+            // Verify ARIA label is set.
+            assertTrue(!!autoChangePassword.getAttribute('aria-label'));
+
+            autoChangePassword.click();
+            const id =
+                await passwordManager.whenCalled('requestChangePassword');
+            assertEquals(insecureCredential.id, id);
           }));
 
   [CheckupSubpage.COMPROMISED, CheckupSubpage.REUSED, CheckupSubpage.WEAK]
@@ -789,4 +856,179 @@ suite('CheckupDetailsSectionTest', function() {
     assertEquals(params.fromStores, credential.storedIn);
     assertEquals(PasswordCheckInteraction.REMOVE_PASSWORD, interaction);
   });
+
+  test(
+      'Automatic password change state updates are propagated to items',
+      async function() {
+        Router.getInstance().navigateTo(
+            Page.CHECKUP_DETAILS, CheckupSubpage.COMPROMISED);
+
+        const credential = makeInsecureCredential({
+          id: 42,
+          url: 'test.com',
+          username: 'viking',
+          types: [
+            CompromiseType.LEAKED,
+          ],
+          isAutomaticPasswordChangeSupported: true,
+        });
+        passwordManager.data.insecureCredentials = [credential];
+
+        const section = document.createElement('checkup-details-section');
+        document.body.appendChild(section);
+        await passwordManager.whenCalled('getInsecureCredentials');
+        await flushTasks();
+
+        const listItem = section.shadowRoot!.querySelector('checkup-list-item');
+        assertTrue(!!listItem);
+
+        // Initially state is Inactive.
+        assertEquals(
+            PasswordAutomaticChangeState.kInactive,
+            listItem.passwordChangeState);
+
+        // Fire state update to kChangingPassword.
+        passwordManager.callbackRouterRemote
+            .onPasswordAutomaticChangeStateUpdated(
+                credential.id, PasswordAutomaticChangeState.kChangingPassword);
+        await passwordManager.callbackRouterRemote.$.flushForTesting();
+        await flushTasks();
+
+        // Verify that the state was propagated down to the list item property.
+        assertEquals(
+            PasswordAutomaticChangeState.kChangingPassword,
+            listItem.passwordChangeState);
+
+        // Fire state update to kPasswordChangedSuccessfully.
+        passwordManager.callbackRouterRemote
+            .onPasswordAutomaticChangeStateUpdated(
+                credential.id,
+                PasswordAutomaticChangeState.kPasswordChangedSuccessfully);
+        await passwordManager.callbackRouterRemote.$.flushForTesting();
+        await flushTasks();
+
+        // Verify that the success state was propagated down to the list item
+        // property.
+        assertEquals(
+            PasswordAutomaticChangeState.kPasswordChangedSuccessfully,
+            listItem.passwordChangeState);
+      });
+
+  test('does not leak listeners when disconnected', async function() {
+    Router.getInstance().navigateTo(
+        Page.CHECKUP_DETAILS, CheckupSubpage.COMPROMISED);
+
+    const credential = makeInsecureCredential({
+      id: 42,
+      url: 'test.com',
+      username: 'viking',
+      types: [
+        CompromiseType.LEAKED,
+      ],
+      isAutomaticPasswordChangeSupported: true,
+    });
+    passwordManager.data.insecureCredentials = [credential];
+
+    const section = document.createElement('checkup-details-section');
+    document.body.appendChild(section);
+    await passwordManager.whenCalled('getInsecureCredentials');
+    await flushTasks();
+
+    const listItem = section.shadowRoot!.querySelector('checkup-list-item');
+    assertTrue(!!listItem);
+
+    // Verify initial state.
+    assertEquals(
+        PasswordAutomaticChangeState.kInactive, listItem.passwordChangeState);
+
+    // Fire state update while connected.
+    passwordManager.callbackRouterRemote.onPasswordAutomaticChangeStateUpdated(
+        credential.id, PasswordAutomaticChangeState.kChangingPassword);
+    await passwordManager.callbackRouterRemote.$.flushForTesting();
+    await flushTasks();
+
+    assertEquals(
+        PasswordAutomaticChangeState.kChangingPassword,
+        listItem.passwordChangeState);
+
+    // Remove section from DOM (disconnectedCallback is called).
+    section.remove();
+    await flushTasks();
+
+    // Fire state update while disconnected.
+    passwordManager.callbackRouterRemote.onPasswordAutomaticChangeStateUpdated(
+        credential.id,
+        PasswordAutomaticChangeState.kPasswordChangedSuccessfully);
+    await passwordManager.callbackRouterRemote.$.flushForTesting();
+    await flushTasks();
+
+    // Verify state was not updated because listener was removed.
+    assertEquals(
+        PasswordAutomaticChangeState.kChangingPassword,
+        listItem.passwordChangeState);
+  });
+
+  [CheckupSubpage.COMPROMISED, CheckupSubpage.REUSED, CheckupSubpage.WEAK]
+      .forEach(
+          type => test(
+              `Automated change password cancel button visibility and click for
+                   ${type}`,
+              async function() {
+                Router.getInstance().navigateTo(Page.CHECKUP_DETAILS, type);
+
+                const insecureCredential = makeInsecureCredential({
+                  id: 42,
+                  url: 'test.com',
+                  username: 'viking',
+                  types: [
+                    CompromiseType.LEAKED,
+                    CompromiseType.WEAK,
+                    CompromiseType.REUSED,
+                  ],
+                  isAutomaticPasswordChangeSupported: true,
+                });
+                passwordManager.data.insecureCredentials = [insecureCredential];
+                passwordManager.data.credentialWithReusedPassword =
+                    [{entries: [insecureCredential]}];
+
+                const section =
+                    document.createElement('checkup-details-section');
+                document.body.appendChild(section);
+                await passwordManager.whenCalled('getInsecureCredentials');
+                if (type === CheckupSubpage.REUSED) {
+                  await passwordManager.whenCalled(
+                      'getCredentialsWithReusedPassword');
+                }
+                await flushTasks();
+
+                const listItemElements =
+                    section.shadowRoot!.querySelectorAll('checkup-list-item');
+                assertEquals(1, listItemElements.length);
+                const listItem = listItemElements[0]!;
+
+                // Initially idle, cancel button should not exist.
+                assertFalse(!!listItem.shadowRoot!.querySelector(
+                    '#cancelAutoChangeButton'));
+
+                // Set state to active.
+                listItem.passwordChangeState =
+                    PasswordAutomaticChangeState.kChangingPassword;
+                await flushTasks();
+
+                const cancelButton =
+                    listItem.shadowRoot!.querySelector<HTMLElement>(
+                        '#cancelAutoChangeButton');
+                assertTrue(!!cancelButton);
+                assertTrue(isVisible(cancelButton));
+
+                // Click cancel.
+                cancelButton.click();
+                await passwordManager.whenCalled('stopPasswordChange');
+                listItem.passwordChangeState =
+                    PasswordAutomaticChangeState.kInactive;
+                await flushTasks();
+
+                // Cancel button should be hidden.
+                assertFalse(isVisible(cancelButton));
+              }));
 });

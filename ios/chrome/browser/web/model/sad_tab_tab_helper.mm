@@ -9,6 +9,7 @@
 
 #import <memory>
 
+#import "base/check.h"
 #import "base/check_op.h"
 #import "base/functional/callback_helpers.h"
 #import "base/memory/ptr_util.h"
@@ -19,7 +20,6 @@
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/utils/notification_observer_bridge.h"
-#import "ios/chrome/browser/web/model/features.h"
 #import "ios/chrome/browser/web/model/page_placeholder_tab_helper.h"
 #import "ios/chrome/browser/web/model/sad_tab_tab_helper_delegate.h"
 #import "ios/components/webui/web_ui_url_constants.h"
@@ -38,10 +38,17 @@ bool IsApplicationStateActive() {
 SadTabTabHelper::SadTabTabHelper(web::WebState* web_state,
                                  base::TimeDelta repeat_failure_interval)
     : web_state_(web_state), repeat_failure_interval_(repeat_failure_interval) {
+  CHECK(web_state_->IsRealized());
   web_state_->AddObserver(this);
-  if (web_state_->IsRealized()) {
-    CreateNotificationObserver();
-  }
+  base::RepeatingCallback<void(NSNotification*)> backgrounding_closure =
+      base::IgnoreArgs<NSNotification*>(base::BindRepeating(
+          &SadTabTabHelper::OnAppDidBecomeActive, weak_factory_.GetWeakPtr()));
+
+  background_notification_observer_ = [[NSNotificationCenter defaultCenter]
+      addObserverForName:UIApplicationDidBecomeActiveNotification
+                  object:nil
+                   queue:nil
+              usingBlock:base::CallbackToBlock(backgrounding_closure)];
 }
 
 SadTabTabHelper::~SadTabTabHelper() {
@@ -131,23 +138,6 @@ void SadTabTabHelper::WebStateDestroyed(web::WebState* web_state) {
   DCHECK_EQ(web_state_, web_state);
   web_state_->RemoveObserver(this);
   web_state_ = nullptr;
-}
-
-void SadTabTabHelper::WebStateRealized(web::WebState* web_state) {
-  CHECK(!background_notification_observer_);
-  CreateNotificationObserver();
-}
-
-void SadTabTabHelper::CreateNotificationObserver() {
-  base::RepeatingCallback<void(NSNotification*)> backgrounding_closure =
-      base::IgnoreArgs<NSNotification*>(base::BindRepeating(
-          &SadTabTabHelper::OnAppDidBecomeActive, weak_factory_.GetWeakPtr()));
-
-  background_notification_observer_ = [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIApplicationDidBecomeActiveNotification
-                  object:nil
-                   queue:nil
-              usingBlock:base::CallbackToBlock(backgrounding_closure)];
 }
 
 void SadTabTabHelper::OnVisibleCrash(const GURL& url_causing_failure) {

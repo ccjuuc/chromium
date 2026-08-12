@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
@@ -51,15 +52,6 @@ std::vector<uint8_t> StringToVector(const std::string& str) {
   return std::vector<uint8_t>(str.begin(), str.end());
 }
 
-// testing::InvokeArgument<N> does not work with base::OnceCallback. Use this
-// gmock action template to invoke base::OnceCallback. `k` is the k-th argument
-// and `T` is the callback's type.
-ACTION_TEMPLATE(InvokeCallbackArgument,
-                HAS_2_TEMPLATE_PARAMS(int, k, typename, T),
-                AND_1_VALUE_PARAMS(p0)) {
-  std::move(const_cast<T&>(std::get<k>(args))).Run(p0);
-}
-
 }  // namespace
 
 using Microsoft::WRL::ComPtr;
@@ -89,6 +81,7 @@ class MediaFoundationCdmTest : public testing::Test {
         mf_cdm_session_(MakeComPtr<StrictMock<MockMFCdmSession>>()),
         cdm_(base::MakeRefCounted<MediaFoundationCdm>(
             kTestUmaPrefix,
+            /*content_protection_hwnd=*/nullptr,
             base::BindRepeating(&MediaFoundationCdmTest::CreateMFCdm,
                                 base::Unretained(this)),
             base::BindRepeating(
@@ -244,16 +237,31 @@ TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpNone_KeyStatusUsable) {
   EXPECT_EQ(CdmKeyInformation::KeyStatus::USABLE, key_status);
 }
 
-TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
+TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_0_KeyStatusUsable) {
   StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
       is_type_supported_cb;
   Initialize();
   EXPECT_CALL(is_type_supported_cb,
               Run("video/mp4;codecs=\"avc1\";features=\"hdcp=1\"", _))
-      .WillOnce(
-          InvokeCallbackArgument<1,
-                                 MediaFoundationCdm::IsTypeSupportedResultCB>(
-              /*value_or_error=*/base::ok(true)));
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(true)));
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
+
+  CdmKeyInformation::KeyStatus key_status;
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion1_0,
+                           std::make_unique<MockCdmKeyStatusPromise>(
+                               /*expect_success=*/true, &key_status));
+  EXPECT_EQ(CdmKeyInformation::KeyStatus::USABLE, key_status);
+}
+
+TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
+  Initialize();
+  EXPECT_CALL(is_type_supported_cb,
+              Run("video/mp4;codecs=\"avc1\";features=\"hdcp=2\"", _))
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(true)));
   is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
 
   CdmKeyInformation::KeyStatus key_status;
@@ -264,16 +272,29 @@ TEST_F(MediaFoundationCdmTest, GetStatusForPolicy_HdcpV1_1_KeyStatusUsable) {
 }
 
 TEST_F(MediaFoundationCdmTest,
-       GetStatusForPolicy_HdcpV2_3_KeyStatusOutputRestricted) {
+       GetStatusForPolicy_HdcpV2_1_KeyStatusOutputRestricted) {
   StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
       is_type_supported_cb;
   Initialize();
   EXPECT_CALL(is_type_supported_cb,
               Run("video/mp4;codecs=\"avc1\";features=\"hdcp=2\"", _))
-      .WillOnce(
-          InvokeCallbackArgument<1,
-                                 MediaFoundationCdm::IsTypeSupportedResultCB>(
-              /*value_or_error=*/base::ok(false)));
+      .WillOnce(base::test::RunOnceCallback<1>(
+          /*value_or_error=*/base::ok(false)));
+  is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
+
+  CdmKeyInformation::KeyStatus key_status;
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_1,
+                           std::make_unique<MockCdmKeyStatusPromise>(
+                               /*expect_success=*/true, &key_status));
+  EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);
+}
+
+TEST_F(MediaFoundationCdmTest,
+       GetStatusForPolicy_HdcpV2_3_KeyStatusOutputRestricted) {
+  StrictMock<base::MockCallback<MediaFoundationCdm::IsTypeSupportedCB>>
+      is_type_supported_cb;
+  Initialize();
+  EXPECT_CALL(is_type_supported_cb, Run(_, _)).Times(0);
   is_type_supported_cb_handler_.SetBehavior(is_type_supported_cb.Get());
 
   CdmKeyInformation::KeyStatus key_status;
@@ -294,7 +315,7 @@ TEST_F(MediaFoundationCdmTest,
       }));
 
   CdmKeyInformation::KeyStatus key_status;
-  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_3,
+  cdm_->GetStatusForPolicy(HdcpVersion::kHdcpVersion2_2,
                            std::make_unique<MockCdmKeyStatusPromise>(
                                /*expect_success=*/true, &key_status));
   EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);

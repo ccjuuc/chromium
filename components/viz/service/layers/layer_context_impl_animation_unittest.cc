@@ -12,6 +12,7 @@
 #include "cc/trees/target_property.h"
 #include "components/viz/service/layers/layer_context_impl.h"
 #include "components/viz/service/layers/layer_context_impl_base_unittest.h"
+#include "components/viz/service/layers/viz_layer_tree_host_impl.h"
 #include "services/viz/public/mojom/compositing/layer_context.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -96,7 +97,8 @@ class LayerContextImplAnimationTest : public LayerContextImplTest {
     model->playback_rate = kDefaultPlaybackRate;
     model->iterations = kDefaultIterations;
     model->iteration_start = kDefaultIterationStart;
-    model->time_offset = base::TimeDelta();
+    model->start_delay = base::TimeDelta();
+    model->hold_time = std::nullopt;
     model->element_id = kDefaultElementId;
     // Add default keyframes for opacity as a common case.
     if (target_property_type == cc::TargetProperty::OPACITY) {
@@ -296,7 +298,8 @@ TEST_F(LayerContextImplAnimationTest, AddNewAnimationTimelineAndAnimation) {
   EXPECT_EQ(gfx_keyframe_model->fill_mode(),
             gfx::KeyframeModel::FillMode::FORWARDS);
   EXPECT_EQ(gfx_keyframe_model->playback_rate(), kDefaultPlaybackRate);
-  EXPECT_EQ(gfx_keyframe_model->time_offset(), base::TimeDelta());
+  EXPECT_EQ(gfx_keyframe_model->start_delay(), base::TimeDelta());
+  EXPECT_FALSE(gfx_keyframe_model->hold_time().has_value());
 
   // Verify cc::KeyframeModel specific properties
   EXPECT_EQ(cc_keyframe_model->group(), kGroupId);
@@ -501,6 +504,33 @@ TEST_F(LayerContextImplAnimationTest, AnimationWithNoKeyframesFails) {
   EXPECT_EQ(result.error(), "Unexpected animation with no keyframes");
 }
 
+TEST_F(LayerContextImplAnimationTest, AnimationWithInvalidGroupFails) {
+  constexpr int kTimelineId = 7;
+  constexpr int kAnimationId = 70;
+  // Use an ElementId distinct from kDefaultElementId.
+  const cc::ElementId kDistinctElementId(777);
+  constexpr int kKeyframeModelId = 700;
+  constexpr int kGroupId = cc::KeyframeModel::kInvalidGroup;
+
+  auto update = CreateDefaultUpdate();
+  update->animation_timelines = std::vector<mojom::AnimationTimelinePtr>();
+
+  auto timeline_mojom = CreateDefaultMojomTimeline(kTimelineId);
+  auto animation_mojom = mojom::Animation::New();
+  animation_mojom->id = kAnimationId;
+  animation_mojom->element_id = kDistinctElementId;
+  auto keyframe_model_mojom = CreateDefaultMojomKeyframeModel(
+      kKeyframeModelId, kGroupId, cc::TargetProperty::OPACITY);
+  animation_mojom->keyframe_models.push_back(std::move(keyframe_model_mojom));
+
+  timeline_mojom->new_animations.push_back(std::move(animation_mojom));
+  update->animation_timelines->push_back(std::move(timeline_mojom));
+
+  auto result = layer_context_impl_->DoUpdateDisplayTree(std::move(update));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), "Invalid group_id");
+}
+
 TEST_F(LayerContextImplAnimationTest, DeserializeColorAnimationCurve) {
   constexpr int kTimelineId = 8;
   constexpr int kAnimationId = 80;
@@ -568,26 +598,9 @@ TEST_F(LayerContextImplAnimationTest, DeserializeSizeAnimationCurve) {
   timeline_mojom->new_animations.push_back(std::move(animation_mojom));
   update->animation_timelines->push_back(std::move(timeline_mojom));
 
-  EXPECT_TRUE(
-      layer_context_impl_->DoUpdateDisplayTree(std::move(update)).has_value());
-
-  cc::AnimationHost* host = GetAnimationHost();
-  cc::AnimationTimeline* timeline_impl = host->GetTimelineById(kTimelineId);
-  ASSERT_NE(nullptr, timeline_impl);
-  cc::Animation* animation_impl = timeline_impl->GetAnimationById(kAnimationId);
-  ASSERT_NE(nullptr, animation_impl);
-  cc::KeyframeEffect* effect_impl = animation_impl->keyframe_effect();
-  ASSERT_NE(nullptr, effect_impl);
-  ASSERT_EQ(effect_impl->keyframe_models().size(), 1u);
-  gfx::KeyframeModel* gfx_model_impl = effect_impl->keyframe_models()[0].get();
-  ASSERT_NE(nullptr, gfx_model_impl);
-  EXPECT_EQ(gfx_model_impl->curve()->Type(), gfx::AnimationCurve::SIZE);
-  const auto* size_curve = static_cast<const gfx::KeyframedSizeAnimationCurve*>(
-      gfx_model_impl->curve());
-  ASSERT_NE(nullptr, size_curve);
-  ASSERT_EQ(size_curve->keyframes().size(), 2u);
-  EXPECT_EQ(size_curve->keyframes()[0]->Value(), kStartSize);
-  EXPECT_EQ(size_curve->keyframes()[1]->Value(), kEndSize);
+  auto result = layer_context_impl_->DoUpdateDisplayTree(std::move(update));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), "Unsupported keyframe value type");
 }
 
 TEST_F(LayerContextImplAnimationTest, DeserializeRectAnimationCurve) {
@@ -612,26 +625,9 @@ TEST_F(LayerContextImplAnimationTest, DeserializeRectAnimationCurve) {
   timeline_mojom->new_animations.push_back(std::move(animation_mojom));
   update->animation_timelines->push_back(std::move(timeline_mojom));
 
-  EXPECT_TRUE(
-      layer_context_impl_->DoUpdateDisplayTree(std::move(update)).has_value());
-
-  cc::AnimationHost* host = GetAnimationHost();
-  cc::AnimationTimeline* timeline_impl = host->GetTimelineById(kTimelineId);
-  ASSERT_NE(nullptr, timeline_impl);
-  cc::Animation* animation_impl = timeline_impl->GetAnimationById(kAnimationId);
-  ASSERT_NE(nullptr, animation_impl);
-  cc::KeyframeEffect* effect_impl = animation_impl->keyframe_effect();
-  ASSERT_NE(nullptr, effect_impl);
-  ASSERT_EQ(effect_impl->keyframe_models().size(), 1u);
-  gfx::KeyframeModel* gfx_model_impl = effect_impl->keyframe_models()[0].get();
-  ASSERT_NE(nullptr, gfx_model_impl);
-  EXPECT_EQ(gfx_model_impl->curve()->Type(), gfx::AnimationCurve::RECT);
-  const auto* rect_curve = static_cast<const gfx::KeyframedRectAnimationCurve*>(
-      gfx_model_impl->curve());
-  ASSERT_NE(nullptr, rect_curve);
-  ASSERT_EQ(rect_curve->keyframes().size(), 2u);
-  EXPECT_EQ(rect_curve->keyframes()[0]->Value(), kStartRect);
-  EXPECT_EQ(rect_curve->keyframes()[1]->Value(), kEndRect);
+  auto result = layer_context_impl_->DoUpdateDisplayTree(std::move(update));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(), "Unsupported keyframe value type");
 }
 
 TEST_F(LayerContextImplAnimationTest, DeserializeTransformAnimationCurve) {
@@ -899,6 +895,35 @@ TEST_F(LayerContextImplAnimationTest,
             gfx::TimingFunction::Type::CUBIC_BEZIER);
 }
 
+TEST_F(LayerContextImplAnimationTest,
+       DeserializeWithInvalidLinearTimingFunctionFails) {
+  constexpr int kTimelineId = 27;
+  constexpr int kAnimationId = 270;
+  constexpr int kKeyframeModelId = 2700;
+  constexpr int kGroupId = 27;
+
+  auto update = CreateDefaultUpdate();
+  update->animation_timelines = std::vector<mojom::AnimationTimelinePtr>();
+
+  auto timeline_mojom = CreateDefaultMojomTimeline(kTimelineId);
+  auto animation_mojom =
+      CreateDefaultMojomAnimation(kAnimationId, kKeyframeModelId, kGroupId);
+
+  // Set up a linear timing function with only one point.
+  std::vector<mojom::LinearEasingPointPtr> linear_timing;
+  linear_timing.push_back(mojom::LinearEasingPoint::New(0.5, 0.5));
+  animation_mojom->keyframe_models[0]->timing_function =
+      mojom::TimingFunction::NewLinear(std::move(linear_timing));
+
+  timeline_mojom->new_animations.push_back(std::move(animation_mojom));
+  update->animation_timelines->push_back(std::move(timeline_mojom));
+
+  auto result = layer_context_impl_->DoUpdateDisplayTree(std::move(update));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(),
+            "Invalid number of points: must be at least 2 for LinearTiming");
+}
+
 TEST_F(LayerContextImplAnimationTest, DeserializeWithStepsTimingFunction) {
   constexpr int kTimelineId = 13;
   constexpr int kAnimationId = 130;
@@ -946,6 +971,48 @@ TEST_F(LayerContextImplAnimationTest, DeserializeWithStepsTimingFunction) {
   EXPECT_EQ(steps_timing_fn->steps(), static_cast<int>(kNumSteps));
   EXPECT_EQ(steps_timing_fn->step_position(),
             gfx::StepsTimingFunction::StepPosition::END);
+}
+
+TEST_F(LayerContextImplAnimationTest,
+       DeserializeWithInvalidStepsTimingFunctionFails) {
+  constexpr int kTimelineId = 26;
+  constexpr int kAnimationId = 260;
+  constexpr int kKeyframeModelId = 2600;
+  constexpr int kGroupId = 26;
+
+  auto update = CreateDefaultUpdate();
+  update->animation_timelines = std::vector<mojom::AnimationTimelinePtr>();
+
+  auto timeline_mojom = CreateDefaultMojomTimeline(kTimelineId);
+  auto animation_mojom =
+      CreateDefaultMojomAnimation(kAnimationId, kKeyframeModelId, kGroupId);
+  // Override the keyframe model's timing function with zero steps.
+  animation_mojom->keyframe_models[0]->timing_function =
+      CreateMojomStepsTimingFunction(0, mojom::TimingStepPosition::kEnd);
+  timeline_mojom->new_animations.push_back(std::move(animation_mojom));
+  update->animation_timelines->push_back(std::move(timeline_mojom));
+
+  auto result = layer_context_impl_->DoUpdateDisplayTree(std::move(update));
+  ASSERT_FALSE(result.has_value());
+  EXPECT_EQ(result.error(),
+            "Invalid num_steps: must be greater than 0 (or 1 for JumpNone)");
+
+  // Test case for JumpNone with 1 step.
+  auto update2 = CreateDefaultUpdate();
+  update2->animation_timelines = std::vector<mojom::AnimationTimelinePtr>();
+
+  auto timeline_mojom2 = CreateDefaultMojomTimeline(kTimelineId + 1);
+  auto animation_mojom2 = CreateDefaultMojomAnimation(
+      kAnimationId + 1, kKeyframeModelId + 1, kGroupId + 1);
+  animation_mojom2->keyframe_models[0]->timing_function =
+      CreateMojomStepsTimingFunction(1, mojom::TimingStepPosition::kJumpNone);
+  timeline_mojom2->new_animations.push_back(std::move(animation_mojom2));
+  update2->animation_timelines->push_back(std::move(timeline_mojom2));
+
+  auto result2 = layer_context_impl_->DoUpdateDisplayTree(std::move(update2));
+  ASSERT_FALSE(result2.has_value());
+  EXPECT_EQ(result2.error(),
+            "Invalid num_steps: must be greater than 0 (or 1 for JumpNone)");
 }
 
 struct StepsTimingFunctionTestData {

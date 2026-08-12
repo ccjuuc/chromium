@@ -21,19 +21,26 @@
 
 namespace media {
 
-static bool IsStreamValid(DemuxerStream* stream) {
+namespace {
+bool IsStreamValid(DemuxerStream* stream) {
   return ((stream->type() == DemuxerStream::AUDIO &&
            stream->audio_decoder_config().IsValidConfig()) ||
           (stream->type() == DemuxerStream::VIDEO &&
            stream->video_decoder_config().IsValidConfig()));
 }
 
+perfetto::NamedTrack GetTracingTrack(const DecryptingDemuxerStream* stream) {
+  return perfetto::NamedTrack::FromPointer("media::DecryptingDemuxerStream",
+                                           stream);
+}
+}  // namespace
+
 DecryptingDemuxerStream::DecryptingDemuxerStream(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     MediaLog* media_log,
     const WaitingCB& waiting_cb)
     : task_runner_(task_runner),
-      media_log_(media_log),
+      media_log_(MediaLog::CloneSafely(media_log)),
       waiting_cb_(waiting_cb) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
@@ -196,7 +203,7 @@ void DecryptingDemuxerStream::OnBufferReadFromDemuxerStream(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(state_, kPendingDemuxerRead) << state_;
   DCHECK(read_cb_);
-  DCHECK_EQ(buffer.get() != nullptr, status == kOk) << status;
+  DCHECK_EQ(buffer != nullptr, status == kOk) << status;
 
   // Even when |reset_cb_|, we need to pass |kConfigChanged| back to
   // the caller so that the downstream decoder can be properly reinitialized.
@@ -244,6 +251,9 @@ void DecryptingDemuxerStream::OnBufferReadFromDemuxerStream(
   // One time set of `has_clear_lead_`.
   if (!has_clear_lead_.has_value()) {
     has_clear_lead_ = !buffer->decrypt_config();
+    if (!has_clear_lead_.value()) {
+      LogMetadata();
+    }
   }
 
   if (!buffer->decrypt_config()) {
@@ -263,7 +273,7 @@ void DecryptingDemuxerStream::DecryptPendingBuffer() {
   DCHECK_EQ(state_, kPendingDecrypt) << state_;
   DCHECK(!pending_buffer_to_decrypt_->end_of_stream());
   TRACE_EVENT_BEGIN("media", "DecryptingDemuxerStream::DecryptPendingBuffer",
-                    perfetto::Track::FromPointer(this), "type",
+                    GetTracingTrack(this), "type",
                     DemuxerStream::GetTypeName(demuxer_stream_->type()),
                     "timestamp_us",
                     pending_buffer_to_decrypt_->timestamp().InMicroseconds());
@@ -279,8 +289,10 @@ void DecryptingDemuxerStream::DecryptPendingBuffer() {
   if (HasClearLead() && !switched_clear_to_encrypted_ &&
       pending_buffer_to_decrypt_->is_encrypted()) {
     MEDIA_LOG(INFO, media_log_)
-        << "First switch from clear to encrypted buffers.";
+        << DemuxerStream::GetTypeName(demuxer_stream_->type())
+        << " stream: First switch from clear to encrypted buffers.";
     switched_clear_to_encrypted_ = true;
+    LogMetadata();
   }
 
   decryptor_->Decrypt(GetDecryptorStreamType(), pending_buffer_to_decrypt_,
@@ -342,7 +354,7 @@ void DecryptingDemuxerStream::OnBufferDecrypted(
 
     TRACE_EVENT_BEGIN("media",
                       "DecryptingDemuxerStream::WaitingForDecryptionKey",
-                      perfetto::Track::FromPointer(this));
+                      GetTracingTrack(this));
     waiting_cb_.Run(WaitingReason::kNoDecryptionKey);
     return;
   }
@@ -429,22 +441,44 @@ void DecryptingDemuxerStream::InitializeDecoderConfig() {
 }
 
 void DecryptingDemuxerStream::LogMetadata() {
-  std::vector<AudioDecoderConfig> audio_metadata{audio_config_};
-  std::vector<VideoDecoderConfig> video_metadata{video_config_};
-  media_log_->SetProperty<MediaLogProperty::kAudioTracks>(audio_metadata);
-  media_log_->SetProperty<MediaLogProperty::kVideoTracks>(video_metadata);
-  // FFmpegDemuxer also provides a max diration, start time, and bitrate.
+  if (!demuxer_stream_ || !IsStreamValid(demuxer_stream_)) {
+    return;
+  }
+
+  const bool should_log_encrypted_config =
+      has_clear_lead_.has_value() &&
+      (!has_clear_lead_.value() || switched_clear_to_encrypted_);
+
+  switch (demuxer_stream_->type()) {
+    case AUDIO: {
+      std::vector<AudioDecoderConfig> audio_metadata{
+          should_log_encrypted_config ? demuxer_stream_->audio_decoder_config()
+                                      : audio_config_};
+      media_log_->SetProperty<MediaLogProperty::kAudioTracks>(audio_metadata);
+      break;
+    }
+    case VIDEO: {
+      std::vector<VideoDecoderConfig> video_metadata{
+          should_log_encrypted_config ? demuxer_stream_->video_decoder_config()
+                                      : video_config_};
+      media_log_->SetProperty<MediaLogProperty::kVideoTracks>(video_metadata);
+      break;
+    }
+
+    default:
+      break;
+  }
 }
 
 void DecryptingDemuxerStream::CompletePendingDecrypt(Decryptor::Status status) {
   DCHECK_EQ(state_, kPendingDecrypt);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "status",
+  TRACE_EVENT_END("media", GetTracingTrack(this), "status",
                   Decryptor::GetStatusName(status));
 }
 
 void DecryptingDemuxerStream::CompleteWaitingForDecryptionKey() {
   DCHECK_EQ(state_, kWaitingForKey);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("media", GetTracingTrack(this));
 }
 
 }  // namespace media

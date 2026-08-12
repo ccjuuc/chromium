@@ -8,7 +8,6 @@
 #import <vector>
 
 #import "base/check.h"
-#import "base/containers/contains.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/notreached.h"
@@ -53,8 +52,8 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
 using bookmarks::BookmarkNode;
 
-@interface BookmarksFolderChooserViewController () <UISearchResultsUpdating,
-                                                    UISearchControllerDelegate,
+@interface BookmarksFolderChooserViewController () <UISearchControllerDelegate,
+                                                    UISearchResultsUpdating,
                                                     UITableViewDataSource,
                                                     UITableViewDelegate>
 @end
@@ -67,10 +66,10 @@ using bookmarks::BookmarkNode;
   BOOL _allowsNewFolders;
   // A linear list of folders. This will be populated in `reloadView` when the
   // UI is updated.
-  std::vector<const BookmarkNode*> _accountFolderNodes;
+  std::vector<int64_t> _accountFolderNodeIds;
   // A linear list of folders. This will be populated in `reloadView` when the
   // UI is updated.
-  std::vector<const BookmarkNode*> _localOrSyncableFolderNodes;
+  std::vector<int64_t> _localOrSyncableFolderNodeIds;
   // This ViewController's searchController;
   UISearchController* _searchController;
   // What the user is currently searching.
@@ -172,29 +171,38 @@ using bookmarks::BookmarkNode;
 
 - (BOOL)tableView:(UITableView*)tableView
     shouldHighlightRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (self.mutator.UIDisabled) {
+    return NO;
+  }
   NSInteger sectionID =
       [self.tableViewModel sectionIdentifierForSectionIndex:indexPath.section];
   if (sectionID == SectionIdentifierAccountBookmarks) {
-    return !_accountFolderNodes.empty();
+    return !_accountFolderNodeIds.empty();
   } else {
-    return !_localOrSyncableFolderNodes.empty();
+    return !_localOrSyncableFolderNodeIds.empty();
   }
 }
 
 - (BOOL)tableView:(UITableView*)tableView
     canPerformPrimaryActionForRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (self.mutator.UIDisabled) {
+    return NO;
+  }
   NSInteger sectionID =
       [self.tableViewModel sectionIdentifierForSectionIndex:indexPath.section];
   if (sectionID == SectionIdentifierAccountBookmarks) {
-    return !_accountFolderNodes.empty();
+    return !_accountFolderNodeIds.empty();
   } else {
-    return !_localOrSyncableFolderNodes.empty();
+    return !_localOrSyncableFolderNodeIds.empty();
   }
 }
 
 - (void)tableView:(UITableView*)tableView
     performPrimaryActionForRowAtIndexPath:(NSIndexPath*)indexPath {
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
+  if (self.mutator.UIDisabled) {
+    return;
+  }
 
   size_t folderIndex = indexPath.row;
   NSInteger sectionID =
@@ -225,14 +233,23 @@ using bookmarks::BookmarkNode;
     folderIndex--;
   }
 
-  const BookmarkNode* folder;
+  int64_t folderId = 0;
   if (sectionID == SectionIdentifierAccountBookmarks) {
-    CHECK(folderIndex < _accountFolderNodes.size(), base::NotFatalUntil::M152);
-    folder = _accountFolderNodes[folderIndex];
-  } else {
-    CHECK(folderIndex < _localOrSyncableFolderNodes.size(),
+    CHECK(folderIndex < _accountFolderNodeIds.size(),
           base::NotFatalUntil::M152);
-    folder = _localOrSyncableFolderNodes[folderIndex];
+    folderId = _accountFolderNodeIds[folderIndex];
+  } else {
+    CHECK(folderIndex < _localOrSyncableFolderNodeIds.size(),
+          base::NotFatalUntil::M152);
+    folderId = _localOrSyncableFolderNodeIds[folderIndex];
+  }
+  const BookmarkNode* folder =
+      (sectionID == SectionIdentifierAccountBookmarks)
+          ? [self.dataSource.accountDataSource bookmarkNodeForId:folderId]
+          : [self.dataSource.localOrSyncableDataSource
+                bookmarkNodeForId:folderId];
+  if (!folder) {
+    return;
   }
   [_mutator setSelectedFolderNode:folder];
   [self delayedNotifyDelegateOfSelection];
@@ -247,6 +264,10 @@ using bookmarks::BookmarkNode;
 #pragma mark - Actions
 
 - (void)done:(id)sender {
+  if (self.mutator.UIDisabled) {
+    return;
+  }
+  self.mutator.UIDisabled = YES;
   if (_currentlyShowingSearchResults) {
     base::RecordAction(
         base::UserMetricsAction("MobileBookmarksFolderChooserDoneSearch"));
@@ -261,6 +282,10 @@ using bookmarks::BookmarkNode;
 }
 
 - (void)cancel:(id)sender {
+  if (self.mutator.UIDisabled) {
+    return;
+  }
+  self.mutator.UIDisabled = YES;
   base::RecordAction(
       base::UserMetricsAction("MobileBookmarksFolderChooserCanceled"));
   [self.delegate bookmarksFolderChooserViewControllerDidCancel:self];
@@ -328,11 +353,11 @@ using bookmarks::BookmarkNode;
       query.word_phrase_query = std::make_unique<std::u16string>(
           base::SysNSStringToUTF16(_searchTerm));
 
-      _accountFolderNodes =
-          [self.dataSource.accountDataSource visibleFolderNodesForQuery:query];
+      _accountFolderNodeIds = [self.dataSource.accountDataSource
+          visibleFolderNodeIdsForQuery:query];
     } else {
-      _accountFolderNodes =
-          [self.dataSource.accountDataSource visibleFolderNodes];
+      _accountFolderNodeIds =
+          [self.dataSource.accountDataSource visibleFolderNodeIds];
     }
     [self reloadSectionWithIdentifier:SectionIdentifierAccountBookmarks];
   }
@@ -341,11 +366,11 @@ using bookmarks::BookmarkNode;
     query.word_phrase_query =
         std::make_unique<std::u16string>(base::SysNSStringToUTF16(_searchTerm));
 
-    _localOrSyncableFolderNodes = [self.dataSource.localOrSyncableDataSource
-        visibleFolderNodesForQuery:query];
+    _localOrSyncableFolderNodeIds = [self.dataSource.localOrSyncableDataSource
+        visibleFolderNodeIdsForQuery:query];
   } else {
-    _localOrSyncableFolderNodes =
-        [self.dataSource.localOrSyncableDataSource visibleFolderNodes];
+    _localOrSyncableFolderNodeIds =
+        [self.dataSource.localOrSyncableDataSource visibleFolderNodeIds];
   }
 
   [self reloadSectionWithIdentifier:SectionIdentifierLocalOrSyncableBookmarks];
@@ -387,10 +412,10 @@ using bookmarks::BookmarkNode;
   }
 
   // Add Folders entries.
-  const std::vector<const BookmarkNode*>& folders =
+  const std::vector<int64_t>& folders =
       (sectionID == SectionIdentifierAccountBookmarks)
-          ? _accountFolderNodes
-          : _localOrSyncableFolderNodes;
+          ? _accountFolderNodeIds
+          : _localOrSyncableFolderNodeIds;
   if (folders.empty()) {
     TableViewTextItem* item =
         [[TableViewTextItem alloc] initWithType:ItemTypeMessage];
@@ -399,7 +424,15 @@ using bookmarks::BookmarkNode;
     [self.tableViewModel addItem:item toSectionWithIdentifier:sectionID];
     return;
   }
-  for (const BookmarkNode* folderNode : folders) {
+  for (int64_t folderId : folders) {
+    const BookmarkNode* folderNode =
+        (sectionID == SectionIdentifierAccountBookmarks)
+            ? [self.dataSource.accountDataSource bookmarkNodeForId:folderId]
+            : [self.dataSource.localOrSyncableDataSource
+                  bookmarkNodeForId:folderId];
+    if (!folderNode) {
+      continue;
+    }
     TableViewBookmarksFolderItem* folderItem =
         [[TableViewBookmarksFolderItem alloc]
             initWithType:ItemTypeBookmarkFolder
@@ -452,14 +485,13 @@ using bookmarks::BookmarkNode;
   dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
       dispatch_get_main_queue(), ^{
-        BookmarksFolderChooserViewController* strongSelf = weakSelf;
-        // Early return if the controller has been deallocated.
-        if (!strongSelf) {
-          return;
-        }
-        strongSelf.view.userInteractionEnabled = YES;
-        [strongSelf done:nil];
+        [weakSelf delayedNotifyDelegateOfSelectionCallback];
       });
+}
+
+- (void)delayedNotifyDelegateOfSelectionCallback {
+  self.view.userInteractionEnabled = YES;
+  [self done:nil];
 }
 
 // Shows the scrim overlay.
@@ -469,13 +501,22 @@ using bookmarks::BookmarkNode;
   // Add constraints with the superview as adding it to the table view adds it
   // to a scroll view.
   UIView* superview = self.tableView.superview;
-  [NSLayoutConstraint activateConstraints:@[
-    [_scrim.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
-    [_scrim.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
-    [_scrim.topAnchor constraintEqualToAnchor:self.navigationController
-                                                  .navigationBar.bottomAnchor],
-    [_scrim.bottomAnchor constraintEqualToAnchor:superview.bottomAnchor],
-  ]];
+  if (@available(iOS 26, *)) {
+    // On iOS 26+, the search bar won't be obscured by the scrim view even when
+    // the scrim view's top constraint is aligned with the superview's top,
+    // likely due to changes in UIKit's layout system or view hierarchy
+    // handling.
+    AddSameConstraints(_scrim, superview);
+  } else {
+    [NSLayoutConstraint activateConstraints:@[
+      [_scrim.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
+      [_scrim.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
+      [_scrim.topAnchor
+          constraintEqualToAnchor:self.navigationController.navigationBar
+                                      .bottomAnchor],
+      [_scrim.bottomAnchor constraintEqualToAnchor:superview.bottomAnchor],
+    ]];
+  }
   [self.tableView layoutIfNeeded];
   self.tableView.accessibilityElementsHidden = YES;
   self.tableView.scrollEnabled = NO;
@@ -495,10 +536,14 @@ using bookmarks::BookmarkNode;
         scrim.alpha = 0.0f;
       }
       completion:^(BOOL finished) {
-        [scrim removeFromSuperview];
-        weakSelf.tableView.accessibilityElementsHidden = NO;
-        weakSelf.tableView.scrollEnabled = YES;
+        [weakSelf hideScrimCallbackWithScrim:scrim];
       }];
+}
+
+- (void)hideScrimCallbackWithScrim:(UIView*)scrim {
+  [scrim removeFromSuperview];
+  self.tableView.accessibilityElementsHidden = NO;
+  self.tableView.scrollEnabled = YES;
 }
 
 // Dismiss the search controller when there's a touch event on the scrim.

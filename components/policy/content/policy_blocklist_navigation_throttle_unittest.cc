@@ -17,6 +17,7 @@
 #include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/browser/url_list/url_blocklist_manager.h"
 #include "components/policy/core/browser/url_list/url_blocklist_policy_handler.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/safe_search_api/stub_url_checker.h"
@@ -203,7 +204,7 @@ class PolicyBlocklistNavigationThrottleTest
   }
 
   void SetBlocklistUrlPattern(const std::string& pattern) {
-    base::Value::List value;
+    base::ListValue value;
     value.Append(pattern);
     pref_service_.SetManagedPref(policy::policy_prefs::kUrlBlocklist,
                                  std::move(value));
@@ -211,7 +212,7 @@ class PolicyBlocklistNavigationThrottleTest
   }
 
   void SetAllowlistUrlPattern(const std::string& pattern) {
-    base::Value::List value;
+    base::ListValue value;
     value.Append(pattern);
     pref_service_.SetManagedPref(policy::policy_prefs::kUrlAllowlist,
                                  std::move(value));
@@ -219,7 +220,7 @@ class PolicyBlocklistNavigationThrottleTest
   }
 
   void SetIncognitoBlocklistUrlPattern(const std::string& pattern) {
-    base::Value::List value;
+    base::ListValue value;
     value.Append(pattern);
     pref_service_.SetManagedPref(
         policy::policy_prefs::kIncognitoModeUrlBlocklist, std::move(value));
@@ -227,7 +228,7 @@ class PolicyBlocklistNavigationThrottleTest
   }
 
   void SetIncognitoAllowlistUrlPattern(const std::string& pattern) {
-    base::Value::List value;
+    base::ListValue value;
     value.Append(pattern);
     pref_service_.SetManagedPref(
         policy::policy_prefs::kIncognitoModeUrlAllowlist, std::move(value));
@@ -320,7 +321,29 @@ TEST_P(PolicyBlocklistNavigationThrottleTest,
 }
 
 TEST_P(PolicyBlocklistNavigationThrottleTest,
-       IncognitoAllowlistAgainstURLBlocklist) {
+       IncognitoAllowlistAgainstURLBlocklistFeatureEnabled) {
+  base::test::ScopedFeatureList local_feature_list;
+  local_feature_list.InitAndEnableFeature(
+      policy::features::kURLBlocklistOverridesIncognitoAllowlist);
+
+  base::HistogramTester histogram_tester;
+
+  SetIncognitoAllowlistUrlPattern("www.example.com");
+  SetBlocklistUrlPattern("example.com");
+
+  // General blocklists cannot be bypassed by an incognito allowlist by default.
+  TestNavigationThrottleCheckResult(
+      GURL("http://www.example.com/"),
+      content::NavigationThrottle::BLOCK_REQUEST,
+      std::make_optional(net::ERR_BLOCKED_BY_ADMINISTRATOR));
+}
+
+TEST_P(PolicyBlocklistNavigationThrottleTest,
+       IncognitoAllowlistAgainstURLBlocklistFeatureDisabled) {
+  base::test::ScopedFeatureList local_feature_list;
+  local_feature_list.InitAndDisableFeature(
+      policy::features::kURLBlocklistOverridesIncognitoAllowlist);
+
   base::HistogramTester histogram_tester;
 
   SetIncognitoAllowlistUrlPattern("www.example.com");
@@ -688,7 +711,7 @@ TEST_P(PolicyBlocklistNavigationThrottleTest,
 #if BUILDFLAG(IS_CHROMEOS)
 TEST_P(PolicyBlocklistNavigationThrottleTest, UseVpnPreConnectFiltering) {
   SetBlocklistUrlPattern("block-by-general-pref.com");
-  base::Value::List list;
+  base::ListValue list;
   list.Append("allowed-preconnect.com");
   pref_service_.SetManagedPref(
       policy::policy_prefs::kAlwaysOnVpnPreConnectUrlAllowlist,

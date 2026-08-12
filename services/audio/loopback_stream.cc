@@ -8,13 +8,12 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/sync_socket.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/trace_event.h"
-#include "base/types/zip.h"
 #include "media/base/audio_bus.h"
 #include "media/base/vector_math.h"
 #include "mojo/public/cpp/system/buffer.h"
@@ -123,8 +122,7 @@ void LoopbackStream::Record() {
 void LoopbackStream::SetVolume(double volume) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  TRACE_EVENT_INSTANT1("audio", "LoopbackStream::SetVolume",
-                       TRACE_EVENT_SCOPE_THREAD, "volume", volume);
+  TRACE_EVENT_INSTANT("audio", "LoopbackStream::SetVolume", "volume", volume);
 
   if (!std::isfinite(volume) || volume < 0.0) {
     receiver_.ReportBadMessage("Invalid volume");
@@ -264,9 +262,8 @@ void LoopbackStream::LoopbackSignalForwarder::GenerateMoreAudio() {
                          output_params_.sample_rate());
   const base::TimeTicks now = clock_->NowTicks();
   if (next_generate_time_ < now) {
-    TRACE_EVENT_INSTANT1("audio", "GenerateMoreAudio Is Behind",
-                         TRACE_EVENT_SCOPE_THREAD, "µsec_behind",
-                         (now - next_generate_time_).InMicroseconds());
+    TRACE_EVENT_INSTANT("audio", "GenerateMoreAudio Is Behind", "µsec_behind",
+                        (now - next_generate_time_).InMicroseconds());
     // Audio generation has fallen behind. Skip-ahead the frame counter so
     // that audio generation will resume for the next buffer after the one
     // that should be generating right now. http://crbug.com/847487

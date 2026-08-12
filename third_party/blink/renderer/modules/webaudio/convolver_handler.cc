@@ -17,6 +17,8 @@
 #include "third_party/blink/renderer/platform/audio/reverb.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -52,7 +54,8 @@ ConvolverHandler::ConvolverHandler(AudioNode& node, float sample_rate)
   // Until something is connected, we're not actively processing, so disable
   // outputs so that we produce a single channel of silence.  The graph lock is
   // needed to be able to disable outputs.
-  DeferredTaskHandler::GraphAutoLocker context_locker(Context());
+  DeferredTaskHandler::GraphAutoLocker context_locker(
+      Context()->GetDeferredTaskHandler());
 
   DisableOutputs();
 }
@@ -67,8 +70,11 @@ ConvolverHandler::~ConvolverHandler() {
 }
 
 void ConvolverHandler::Process(uint32_t frames_to_process) {
+  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webaudio.audionode"),
+               "ConvolverHandler::Process");
   AudioBus* output_bus = Output(0).Bus();
   DCHECK(output_bus);
+  DCHECK(Context()->IsAudioThread());
 
   // Synchronize with possible dynamic changes to the impulse response.
   base::AutoTryLock try_locker(process_lock_);
@@ -94,7 +100,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
   DCHECK(IsMainThread());
 
   if (!buffer) {
-    DeferredTaskHandler::GraphAutoLocker context_locker(Context());
+    DeferredTaskHandler::GraphAutoLocker context_locker(
+        Context()->GetDeferredTaskHandler());
     base::AutoLock locker(process_lock_);
     reverb_.reset();
     shared_buffer_ = nullptr;
@@ -156,7 +163,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
     // If any channel is detached, we're supposed to treat it as if all were.
     // This means the buffer effectively has length 0, which is the same as if
     // no buffer were given.
-    DeferredTaskHandler::GraphAutoLocker context_locker(Context());
+    DeferredTaskHandler::GraphAutoLocker context_locker(
+        Context()->GetDeferredTaskHandler());
     base::AutoLock locker(process_lock_);
     reverb_.reset();
     shared_buffer_ = nullptr;
@@ -164,8 +172,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
   }
 
   for (unsigned i = 0; i < number_of_channels; ++i) {
-    buffer_bus->SetChannelMemory(i, buffer->getChannelData(i)->Data(),
-                                 buffer_length);
+    buffer_bus->SetChannelMemory(
+        i, buffer->getChannelData(i)->AsSpan().first(buffer_length));
   }
 
   buffer_bus->SetSampleRate(buffer->sampleRate());
@@ -178,7 +186,8 @@ void ConvolverHandler::SetBuffer(AudioBuffer* buffer,
   {
     // The context must be locked since changing the buffer can
     // re-configure the number of channels that are output.
-    DeferredTaskHandler::GraphAutoLocker context_locker(Context());
+    DeferredTaskHandler::GraphAutoLocker context_locker(
+        Context()->GetDeferredTaskHandler());
 
     // Synchronize with process().
     base::AutoLock locker(process_lock_);
@@ -199,6 +208,7 @@ bool ConvolverHandler::RequiresTailProcessing() const {
 }
 
 double ConvolverHandler::TailTime() const {
+  DCHECK(Context()->IsAudioThread());
   base::AutoTryLock try_locker(process_lock_);
   if (try_locker.is_acquired()) {
     return reverb_ ? reverb_->ImpulseResponseLength() /
@@ -211,6 +221,7 @@ double ConvolverHandler::TailTime() const {
 }
 
 double ConvolverHandler::LatencyTime() const {
+  DCHECK(Context()->IsAudioThread());
   base::AutoTryLock try_locker(process_lock_);
   if (try_locker.is_acquired()) {
     return reverb_ ? reverb_->LatencyFrames() /
@@ -234,7 +245,8 @@ unsigned ConvolverHandler::ComputeNumberOfOutputChannels(
 void ConvolverHandler::SetChannelCount(unsigned channel_count,
                                        ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(
+      Context()->GetDeferredTaskHandler());
 
   // channelCount must be 1 or 2
   if (channel_count == 1 || channel_count == 2) {
@@ -255,7 +267,8 @@ void ConvolverHandler::SetChannelCount(unsigned channel_count,
 void ConvolverHandler::SetChannelCountMode(V8ChannelCountMode::Enum mode,
                                            ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  DeferredTaskHandler::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(
+      Context()->GetDeferredTaskHandler());
 
   V8ChannelCountMode::Enum old_mode = InternalChannelCountMode();
 
@@ -287,34 +300,42 @@ void ConvolverHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
   DCHECK(input);
   DCHECK_EQ(input, &Input(0));
 
-  bool has_shared_buffer = false;
-  unsigned number_of_channels = 1;
-  bool lock_successfully_acquired = false;
+  {
+    base::AutoTryLock try_locker(process_lock_);
 
-  // TODO(crbug.com/1447093): Check what to do when the lock cannot be acquired.
-  base::AutoTryLock try_locker(process_lock_);
-  if (try_locker.is_acquired()) {
-    lock_successfully_acquired = true;
-    has_shared_buffer = !!shared_buffer_;
-    if (has_shared_buffer)
-      number_of_channels = shared_buffer_->numberOfChannels();
-  }
+    // If we couldn't get the lock, it means the main thread is in SetBuffer().
+    //
+    // Note: Other methods like Process(), TailTime(), and LatencyTime() also
+    // acquire this lock using AutoTryLock, but they are called sequentially
+    // on the audio thread and cannot run concurrently with this method (which
+    // is also on the audio thread). Therefore, the only source of contention
+    // in production is the main thread inside SetBuffer(), which uses a
+    // blocking AutoLock.
+    //
+    // We can skip the update here because SetBuffer() will update the output
+    // channel count itself.
+    if (try_locker.is_acquired()) {
+      unsigned number_of_channels = 1;
+      if (shared_buffer_) {
+        number_of_channels = shared_buffer_->numberOfChannels();
+      }
 
-  if (has_shared_buffer || !lock_successfully_acquired) {
-    unsigned number_of_output_channels = ComputeNumberOfOutputChannels(
-        input->NumberOfChannels(), number_of_channels);
+      unsigned number_of_output_channels =
+          ComputeNumberOfOutputChannels(input->NumberOfChannels(),
+                                        number_of_channels);
 
-    if (IsInitialized() &&
-        number_of_output_channels != Output(0).NumberOfChannels()) {
-      // We're already initialized but the channel count has changed.
-      Uninitialize();
-    }
+      if (IsInitialized() &&
+          number_of_output_channels != Output(0).NumberOfChannels()) {
+        // We're already initialized but the channel count has changed.
+        Uninitialize();
+      }
 
-    if (!IsInitialized()) {
-      // This will propagate the channel count to any nodes connected further
-      // downstream in the graph.
-      Output(0).SetNumberOfChannels(number_of_output_channels);
-      Initialize();
+      if (!IsInitialized()) {
+        // This will propagate the channel count to any nodes connected further
+        // downstream in the graph.
+        Output(0).SetNumberOfChannels(number_of_output_channels);
+        Initialize();
+      }
     }
   }
 

@@ -150,11 +150,16 @@ public class ContentViewScrollingTest {
                                         .getEventForwarder()
                                         .startFling(
                                                 SystemClock.uptimeMillis(),
+                                                /* x= */ 0f,
+                                                /* y= */ 0f,
+                                                /* rawX= */ 0f,
+                                                /* rawY= */ 0f,
                                                 vx,
                                                 vy,
-                                                false,
-                                                true,
-                                                false);
+                                                /* syntheticScroll= */ false,
+                                                /* preventBoosting= */ true,
+                                                /* isTouchpadEvent= */ false,
+                                                /* targetViewport= */ true);
                             }
                         });
     }
@@ -270,19 +275,19 @@ public class ContentViewScrollingTest {
         int velocity = (int) (1000 * deviceScaleFactor);
         // Expected total fling distance calculated by FlingCurve with initial
         // velocity 1000.
-        int expected_dist = (int) (194 * deviceScaleFactor);
+        int expectedDist = (int) (194 * deviceScaleFactor);
 
         // Vertical fling to lower-left.
         fling(0, -velocity);
-        waitForScrollToPosition(0, expected_dist);
+        waitForScrollToPosition(0, expectedDist);
 
         // Horizontal fling to lower-right.
         fling(-velocity, 0);
-        waitForScrollToPosition(expected_dist, expected_dist);
+        waitForScrollToPosition(expectedDist, expectedDist);
 
         // Vertical fling to upper-right.
         fling(0, velocity);
-        waitForScrollToPosition(expected_dist, 0);
+        waitForScrollToPosition(expectedDist, 0);
 
         // Horizontal fling to top-left.
         fling(velocity, 0);
@@ -378,8 +383,8 @@ public class ContentViewScrollingTest {
     }
 
     /**
-     * To ensure the device properly responds to bounds-exceeding scrolls, e.g., overscroll
-     * effects are properly initialized.
+     * To ensure the device properly responds to bounds-exceeding scrolls, e.g., overscroll effects
+     * are properly initialized.
      */
     @Test
     @SmallTest

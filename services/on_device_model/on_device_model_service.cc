@@ -18,9 +18,11 @@
 #include "services/on_device_model/backend.h"
 #include "services/on_device_model/fake/on_device_model_fake.h"
 #include "services/on_device_model/ml/on_device_model_executor.h"
+#include "services/on_device_model/ml_internal_buildflags.h"
 #include "services/on_device_model/on_device_model_mojom_impl.h"
 #include "services/on_device_model/public/cpp/features.h"
 #include "services/on_device_model/public/cpp/service_client.h"
+#include "services/on_device_model/safety/safety_model_holder.h"
 
 namespace on_device_model {
 namespace {
@@ -33,11 +35,11 @@ scoped_refptr<Backend> DefaultImpl() {
   if (base::FeatureList::IsEnabled(features::kUseFakeChromeML)) {
     return base::MakeRefCounted<ml::BackendImpl>(fake_ml::GetFakeChromeML());
   }
-#if defined(ENABLE_ML_INTERNAL)
+#if BUILDFLAG(ENABLE_ML_INTERNAL)
   return base::MakeRefCounted<ml::BackendImpl>(::ml::ChromeML::Get());
 #else
   return base::MakeRefCounted<ml::BackendImpl>(fake_ml::GetFakeChromeML());
-#endif  // defined(ENABLE_ML_INTERNAL)
+#endif  // BUILDFLAG(ENABLE_ML_INTERNAL)
 }
 
 }  // namespace
@@ -157,7 +159,10 @@ void OnDeviceModelService::LoadTextSafetyModel(
     mojo::PendingReceiver<mojom::TextSafetyModel> model) {
   TRACE_EVENT("optimization_guide",
               "OnDeviceModelService::LoadTextSafetyModel");
-  backend_->LoadTextSafetyModel(std::move(params), std::move(model));
+#if !BUILDFLAG(IS_FUCHSIA)
+  safety_model_holder_.AsyncCall(&SafetyModelHolder::Reset)
+      .WithArgs(std::move(params), std::move(model));
+#endif
 }
 
 void OnDeviceModelService::SetForceQueueingForTesting(bool force_queueing) {

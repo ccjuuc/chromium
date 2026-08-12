@@ -27,6 +27,7 @@
 #import "ios/web/public/navigation/web_state_policy_decider.h"
 #import "ios/web/public/web_state.h"
 #import "ios/web/public/web_state_delegate.h"
+#import "ios/web/web_state/web_view_pass_key.h"
 #import "url/gurl.h"
 #import "url/origin.h"
 
@@ -36,6 +37,7 @@
 @class UIViewController;
 @protocol CRWFindInteraction;
 enum WKPermissionDecision : NSInteger;
+@class WKWebView;
 
 namespace web {
 
@@ -167,7 +169,7 @@ class WebStateImpl final : public WebState {
   // a message is received from the web ui JavaScript via `chrome.send` API.
   void HandleWebUIMessage(const GURL& source_url,
                           std::string_view message,
-                          const base::Value::List& args);
+                          const base::ListValue& args);
 
   // Explicitly sets the MIME type, overwriting any MIME type that was set by
   // headers. Note that this should be called after OnNavigationCommitted, as
@@ -257,11 +259,16 @@ class WebStateImpl final : public WebState {
                               const GURL& opener_url,
                               bool initiated_by_user);
 
-  // Notifies the delegate that request receives an authentication challenge
+  // Notifies the delegate that request receives a HTTP authentication challenge
   // and is unable to respond using cached credentials.
   void OnAuthRequired(NSURLProtectionSpace* protection_space,
                       NSURLCredential* proposed_credential,
-                      WebStateDelegate::AuthCallback callback);
+                      WebStateDelegate::HTTPAuthCallback callback);
+
+  // Notifies the delegate that request receives a client certificate
+  // authentication challenge and is unable to respond using cached credentials.
+  void OnAuthRequired(NSURLProtectionSpace* protection_space,
+                      WebStateDelegate::ClientCertAuthCallback callback);
 
   // Cancels all dialogs associated with this web_state.
   void CancelDialogs();
@@ -269,6 +276,12 @@ class WebStateImpl final : public WebState {
   // Returns a CRWWebViewNavigationProxy protocol that can be used to access
   // navigation related functions on the main WKWebView.
   id<CRWWebViewNavigationProxy> GetWebViewNavigationProxy() const;
+
+  // Returns the WKWebView of the WebState if it exists.
+  //
+  // Access to this function is restricted. See web_view_pass_key.h for more
+  // context.
+  WKWebView* GetWebView(WebViewPassKey pass_key);
 
   // Broadcasts a JavaScript message to request the frameId of all frames.
   void RetrieveExistingFrames();
@@ -311,6 +324,8 @@ class WebStateImpl final : public WebState {
                             NSData* response_data,
                             NSString* mime_type) final;
   void Stop() final;
+  std::optional<std::string> GetUserAgentOverride() const final;
+  void SetUserAgentOverride(std::optional<std::string> ua_override) final;
   const NavigationManager* GetNavigationManager() const final;
   NavigationManager* GetNavigationManager() final;
   WebFramesManager* GetPageWorldWebFramesManager() final;
@@ -363,6 +378,8 @@ class WebStateImpl final : public WebState {
   void SetFindInteractionEnabled(bool enabled) final;
   id<CRWFindInteraction> GetFindInteraction() final API_AVAILABLE(ios(16));
   id GetActivityItem() final API_AVAILABLE(ios(16.4));
+  bool IsCustomOpenPanelSupported() const final;
+  void SetCustomOpenPanelSupported(bool supports) final;
   UIColor* GetThemeColor() final;
   UIColor* GetUnderPageBackgroundColor() final;
 
@@ -372,12 +389,9 @@ class WebStateImpl final : public WebState {
   void RemovePolicyDecider(WebStatePolicyDecider* decider) final;
 
  private:
-  // Type aliases for the various ObserverList map used by WebStateImpl (reused
-  // by the RealizedWebState class).
-  using WebStateObserverList = base::ObserverList<WebStateObserver, true>;
-
+  // A list of WebStatePolicyDecider.
   using WebStatePolicyDeciderList =
-      base::ObserverList<WebStatePolicyDecider, true>;
+      base::ReentrantObserverList<WebStatePolicyDecider, true>;
 
   // Force the WebState to become realized (if in "unrealized" state) and
   // then return a pointer to the RealizedWebState. Safe to call if the

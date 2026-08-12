@@ -13,10 +13,12 @@
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/synchronization/lock.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "base/thread_annotations.h"
 #include "device/gamepad/gamepad_consumer.h"
 #include "device/gamepad/gamepad_test_helpers.h"
 #include "device/gamepad/public/cpp/gamepad_features.h"
@@ -43,7 +45,6 @@ class MockGamepadConsumer : public GamepadConsumer {
     // Expect no connections or disconnections by default.
     EXPECT_CALL(*this, OnGamepadConnected).Times(0);
     EXPECT_CALL(*this, OnGamepadDisconnected).Times(0);
-    EXPECT_CALL(*this, OnGamepadRawInputChanged).Times(0);
   }
 
   MockGamepadConsumer(MockGamepadConsumer&) = delete;
@@ -337,8 +338,7 @@ TEST_F(GamepadServiceTest, ConnectWhileInactiveTest) {
   }
 }
 
-// https://crbug.com/1405460: Flaky on Android.
-TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
+TEST_F(GamepadServiceTest, ConnectAndDisconnectWhileInactiveTest) {
   // Create two active consumers.
   auto* consumer1 = CreateConsumer();
   auto* consumer2 = CreateConsumer();
@@ -373,6 +373,7 @@ TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer inactive.
   EXPECT_TRUE(service()->ConsumerBecameInactive(consumer2));
@@ -399,16 +400,20 @@ TEST_F(GamepadServiceTest, DISABLED_ConnectAndDisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer active again. The second consumer is not notified
   // because the connected gamepads were disconnected while the consumer was
   // still inactive.
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer2));
   WaitForData();
+
+  // Cleanup: disconnect gamepads before exiting.
+  SetPadsConnected(0);
+  WaitForData();
 }
 
-// https://crbug.com/1346527 Flaky on Android and Linux.
-TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
+TEST_F(GamepadServiceTest, DisconnectWhileInactiveTest) {
   // Create two active consumers.
   auto* consumer1 = CreateConsumer();
   auto* consumer2 = CreateConsumer();
@@ -430,6 +435,7 @@ TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
     SimulateUserGesture(/*has_gesture=*/true);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer inactive.
   EXPECT_TRUE(service()->ConsumerBecameInactive(consumer2));
@@ -445,6 +451,7 @@ TEST_F(GamepadServiceTest, DISABLED_DisconnectWhileInactiveTest) {
     SetPadsConnected(/*connected_count=*/0);
     loop.Run();
   }
+  WaitForData();
 
   // Mark the second consumer active again. The second consumer is notified for
   // gamepads that were disconnected while it was inactive.
@@ -557,7 +564,6 @@ TEST_F(GamepadServiceTest, RemoveUnregisteredConsumer) {
   // ConsumerBecameActive. RemoveConsumer should fail.
   EXPECT_FALSE(service()->RemoveConsumer(consumer));
 }
-
 class GamepadServiceSimulationTest : public GamepadServiceTest {
  public:
   std::unique_ptr<GamepadDataFetcher> CreateTestDataFetcher() override {
@@ -568,15 +574,22 @@ class GamepadServiceSimulationTest : public GamepadServiceTest {
   }
 
   void OnPoll() {
-    if (poll_loop_.has_value()) {
-      poll_loop_.value().Quit();
+    base::AutoLock lock(poll_loop_lock_);
+    if (poll_loop_ptr_) {
+      poll_loop_ptr_->Quit();
+      poll_loop_ptr_ = nullptr;
     }
   }
 
   void WaitForPoll() {
-    poll_loop_.emplace();
-    poll_loop_.value().Run();
-    poll_loop_.reset();
+    base::RunLoop poll_loop;
+    {
+      // Do not hold the lock while in Run() as that would cause a livelock. Let
+      // OnPoll() cleanup the state after it unblocks this.
+      base::AutoLock lock(poll_loop_lock_);
+      poll_loop_ptr_ = &poll_loop;
+    }
+    poll_loop.Run();
   }
 
  protected:
@@ -614,7 +627,8 @@ class GamepadServiceSimulationTest : public GamepadServiceTest {
   }
 
  private:
-  std::optional<base::RunLoop> poll_loop_;
+  base::Lock poll_loop_lock_;
+  raw_ptr<base::RunLoop> poll_loop_ptr_ GUARDED_BY(poll_loop_lock_);
 };
 
 TEST_F(GamepadServiceSimulationTest, ConnectDisconnect) {
@@ -747,6 +761,43 @@ TEST_F(GamepadServiceSimulationTest, SimulateButtonInput) {
   EXPECT_EQ(disconnected_gamepad.buttons[0].value, 0.0);
   EXPECT_FALSE(disconnected_gamepad.buttons[0].pressed);
   EXPECT_FALSE(disconnected_gamepad.buttons[0].touched);
+}
+
+TEST_F(GamepadServiceSimulationTest, SimulatedButtonTypes) {
+  // Mark `consumer` active.
+  auto* consumer = CreateConsumer();
+  EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
+
+  // Add a simulated gamepad with three buttons and configured types for the
+  // first two buttons. The missing third entry should default to non-standard.
+  SimulatedGamepadParams params;
+  params.name = "3 buttons";
+  params.button_bounds = {std::nullopt, std::nullopt, std::nullopt};
+  params.button_types = {GamepadButtonType::kTrackpad,
+                         GamepadButtonType::kStandard};
+  auto token = service()->AddSimulatedGamepad(std::move(params));
+
+  TestFuture<uint32_t, const Gamepad&> connected_future;
+  EXPECT_CALL(*consumer, OnGamepadConnected)
+      .WillOnce(InvokeFuture(connected_future));
+  service()->SimulateButtonInput(token, /*index=*/0, /*logical_value=*/1.0,
+                                 /*pressed=*/std::nullopt,
+                                 /*touched=*/std::nullopt);
+  service()->SimulateInputFrame(token);
+
+  EXPECT_EQ(connected_future.Get<0>(), 0u);
+  const Gamepad& connected_gamepad = connected_future.Get<1>();
+  EXPECT_EQ(connected_gamepad.buttons_length, 3u);
+  EXPECT_EQ(connected_gamepad.buttons[0].type, GamepadButtonType::kTrackpad);
+  EXPECT_EQ(connected_gamepad.buttons[1].type, GamepadButtonType::kStandard);
+  EXPECT_EQ(connected_gamepad.buttons[2].type, GamepadButtonType::kNonStandard);
+
+  // Remove the simulated gamepad.
+  TestFuture<uint32_t, const Gamepad&> disconnected_future;
+  EXPECT_CALL(*consumer, OnGamepadDisconnected)
+      .WillOnce(InvokeFuture(disconnected_future));
+  service()->RemoveSimulatedGamepad(token);
+  EXPECT_EQ(disconnected_future.Get<0>(), 0u);
 }
 
 TEST_F(GamepadServiceSimulationTest, SimulateAxisInput) {
@@ -994,7 +1045,14 @@ TEST_F(GamepadServiceSimulationTest, Vibration) {
   EXPECT_EQ(disconnected_future.Get<0>(), 0u);
 }
 
-TEST_F(GamepadServiceSimulationTest, TokenNotFound) {
+// TODO(crbug.com/499019944): Re-enable this test.
+#if BUILDFLAG(IS_LINUX)
+// Flaky on linux TSAN.
+#define MAYBE_TokenNotFound DISABLED_TokenNotFound
+#else
+#define MAYBE_TokenNotFound TokenNotFound
+#endif
+TEST_F(GamepadServiceSimulationTest, MAYBE_TokenNotFound) {
   // Mark `consumer` active.
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
@@ -1252,11 +1310,19 @@ TEST_F(GamepadServiceSimulationTest, SurfaceIdNotFound) {
   EXPECT_EQ(disconnected_gamepad.touch_events_length, 0u);
 }
 
-TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionButton) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kGamepadRawInputChangeEvent);
+class GamepadServiceSimulationTestWithRawInputChange
+    : public GamepadServiceSimulationTest {
+ public:
+  GamepadServiceSimulationTestWithRawInputChange() {
+    scoped_feature_list.InitAndEnableFeature(
+        features::kGamepadRawInputChangeEvent);
+  }
 
+ private:
+  base::test::ScopedFeatureList scoped_feature_list;
+};
+
+TEST_F(GamepadServiceSimulationTestWithRawInputChange, DetectionButton) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 
@@ -1281,11 +1347,7 @@ TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionButton) {
   CleanupRawInputGamepad(consumer, token);
 }
 
-TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionAxis) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kGamepadRawInputChangeEvent);
-
+TEST_F(GamepadServiceSimulationTestWithRawInputChange, DetectionAxis) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 
@@ -1311,11 +1373,7 @@ TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionAxis) {
   CleanupRawInputGamepad(consumer, token);
 }
 
-TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionTouch) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kGamepadRawInputChangeEvent);
-
+TEST_F(GamepadServiceSimulationTestWithRawInputChange, DetectionTouch) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 
@@ -1382,12 +1440,8 @@ TEST_F(GamepadServiceSimulationTest, RawInputChangeDetectionTouch) {
   CleanupRawInputGamepad(consumer, token);
 }
 
-TEST_F(GamepadServiceSimulationTest,
-       RawInputChangeDetectionMultipleInputTypes) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kGamepadRawInputChangeEvent);
-
+TEST_F(GamepadServiceSimulationTestWithRawInputChange,
+       DetectionMultipleInputTypes) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 
@@ -1428,11 +1482,7 @@ TEST_F(GamepadServiceSimulationTest,
   CleanupRawInputGamepad(consumer, token);
 }
 
-TEST_F(GamepadServiceSimulationTest, RawInputChangeRequiresUserGesture) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kGamepadRawInputChangeEvent);
-
+TEST_F(GamepadServiceSimulationTestWithRawInputChange, RequiresUserGesture) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 
@@ -1484,11 +1534,19 @@ TEST_F(GamepadServiceSimulationTest, RawInputChangeRequiresUserGesture) {
   CleanupRawInputGamepad(consumer, token);
 }
 
-TEST_F(GamepadServiceSimulationTest, RawInputChangeDisabledByFeatureFlag) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kGamepadRawInputChangeEvent);
+class GamepadServiceSimulationTestWithoutRawInputChange
+    : public GamepadServiceSimulationTest {
+ public:
+  GamepadServiceSimulationTestWithoutRawInputChange() {
+    scoped_feature_list.InitAndDisableFeature(
+        features::kGamepadRawInputChangeEvent);
+  }
 
+ private:
+  base::test::ScopedFeatureList scoped_feature_list;
+};
+TEST_F(GamepadServiceSimulationTestWithoutRawInputChange,
+       DisabledByFeatureFlag) {
   auto* consumer = CreateConsumer();
   EXPECT_TRUE(service()->ConsumerBecameActive(consumer));
 

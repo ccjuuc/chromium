@@ -248,6 +248,7 @@ class CORE_EXPORT InputType : public GarbageCollected<InputType> {
   bool CanSetStringValue() const;
   virtual String LocalizeValue(const String&) const;
   virtual String VisibleValue() const;
+  virtual String ConvertFromVisibleValue(const String&) const;
   // Returing the null string means "use the default value."
   // This function must be called only by HTMLInputElement::sanitizeValue().
   virtual String SanitizeValue(const String&) const;
@@ -268,6 +269,9 @@ class CORE_EXPORT InputType : public GarbageCollected<InputType> {
   virtual void CountUsage();
   virtual void DidRecalcStyle(const StyleRecalcChange);
   virtual void SanitizeValueInResponseToMinOrMaxAttributeChange();
+  // Called when the `colorspace` or `alpha` content attribute changes (only
+  // meaningful for <input type=color>) so the value can be re-sanitized.
+  virtual void ColorSpaceOrAlphaAttributeChanged();
   virtual bool ShouldRespectAlignAttribute();
   virtual FileList* Files();
   // Should return true if the file list was were changed.
@@ -290,7 +294,8 @@ class CORE_EXPORT InputType : public GarbageCollected<InputType> {
   virtual bool IsEnumeratable();
   virtual bool IsCheckable();
   bool IsSteppable() const;
-  virtual PopoverTriggerSupport SupportsPopoverTriggering() const;
+  virtual HTMLFormControlElement::PopoverTriggerSupport
+  SupportsPopoverTriggering() const;
   virtual bool ShouldRespectHeightAndWidthAttributes();
   virtual int MaxLength() const;
   virtual int MinLength() const;
@@ -301,6 +306,8 @@ class CORE_EXPORT InputType : public GarbageCollected<InputType> {
   virtual bool HasLegalLinkAttribute(const QualifiedName&) const;
   virtual void CopyNonAttributeProperties(const HTMLInputElement&);
   virtual void OnAttachWithLayoutObject();
+  virtual void OnDetachWithLayoutObject();
+  virtual void UpdateWheelEventRegistration(bool is_detaching);
   virtual bool SupportsBaseAppearance(Element::BaseAppearanceValue value) const;
 
   // Parses the specified string for the type, and return

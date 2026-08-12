@@ -7,12 +7,13 @@ module network.mojom;
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/alternate_protocol_usage.mojom";
-import "services/network/public/mojom/attribution.mojom";
+import "services/network/public/mojom/auth.mojom";
 import "services/network/public/mojom/cors.mojom";
 import "services/network/public/mojom/device_bound_sessions.mojom";
 import "services/network/public/mojom/encoded_body_length.mojom";
 import "services/network/public/mojom/fetch_api.mojom";
 import "services/network/public/mojom/http_request_headers.mojom";
+import "services/network/public/mojom/http_response_headers.mojom";
 import "services/network/public/mojom/ip_address_space.mojom";
 import "services/network/public/mojom/ip_endpoint.mojom";
 import "services/network/public/mojom/load_timing_info.mojom";
@@ -23,6 +24,7 @@ import "services/network/public/mojom/parsed_headers.mojom";
 import "services/network/public/mojom/parsed_request_cookie.mojom";
 import "services/network/public/mojom/service_worker_router_info.mojom";
 import "services/network/public/mojom/source_type.mojom";
+import "services/network/public/mojom/ssl_info.mojom";
 import "services/network/public/mojom/unencoded_digest.mojom";
 import "services/proxy_resolver/public/mojom/proxy_resolver.mojom";
 import "url/mojom/url.mojom";
@@ -51,7 +53,7 @@ struct URLResponseHead {
   mojo_base.mojom.Time original_response_time;
 
   // The response headers or NULL if the URL type does not support headers.
-  HttpResponseHeaders headers;
+  HttpResponseHeaders? headers;
 
   // The mime type of the response.  This may be a derived value.
   string mime_type;
@@ -112,11 +114,11 @@ struct URLResponseHead {
   IPEndPoint remote_endpoint;
 
   // The IP address space of the request client/the request's policy container.
-  // https://wicg.github.io/private-network-access/#policy-container-ip-address-space
+  // https://wicg.github.io/local-network-access/#policy-container-ip-address-space
   IPAddressSpace client_address_space = IPAddressSpace.kUnknown;
 
   // The IP address space of the response, derived from the remote IP endpoint.
-  // https://wicg.github.io/private-network-access/#response-ip-address-space
+  // https://wicg.github.io/local-network-access/#response-ip-address-space
   IPAddressSpace response_address_space = IPAddressSpace.kUnknown;
 
   // True if the response was fetched from the cache and validated over the
@@ -290,8 +292,14 @@ struct URLResponseHead {
   // matches the cached bytecode.
   bool should_use_source_hash_for_js_code_cache = false;
 
+  // True if the request included an available compression dictionary.
+  bool did_send_available_dictionary = false;
+
   // True if the response used a shared dictionary for decoding its body.
   bool did_use_shared_dictionary = false;
+
+  // True if this request used the pervasive/unpartitioned cache-key scope.
+  bool is_shared_resource = false;
 
   // True if the client should load the response content after setting the
   // environment's `has storage access` bit.

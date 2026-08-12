@@ -7,6 +7,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_quality_logger_interface.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
 
@@ -21,6 +22,7 @@ class ActorLoginDelegate {
 
   // Asynchronously retrieves credentials.
   virtual void GetCredentials(
+      bool has_sign_in_with_google_button,
       base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
       CredentialsOrErrorReply callback) = 0;
 
@@ -31,7 +33,10 @@ class ActorLoginDelegate {
       const Credential& credential,
       bool should_store_permission,
       base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
-      LoginStatusResultOrErrorReply callback) = 0;
+      base::TimeTicks attempt_login_tool_start_time,
+      FrameFillingStartedCallback frame_filling_started_cb,
+      LoginStatusResultOrErrorReply done_callback,
+      base::WeakPtr<ActionSequenceDelegate> action_sequence_delegate) = 0;
 };
 
 }  // namespace actor_login

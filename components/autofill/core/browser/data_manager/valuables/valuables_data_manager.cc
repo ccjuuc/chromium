@@ -4,16 +4,26 @@
 
 #include "components/autofill/core/browser/data_manager/valuables/valuables_data_manager.h"
 
+#include <algorithm>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
+#include "base/check_op.h"
+#include "base/functional/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
+#include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
 #include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
-#include "components/autofill/core/browser/webdata/autofill_change.h"
+#include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_prefs.h"
-#include "components/sync/base/features.h"
+#include "components/sync/base/data_type.h"
 #include "components/webdata/common/web_data_results.h"
+#include "components/webdata/common/web_data_service_base.h"
 #include "url/gurl.h"
 
 namespace autofill {
@@ -30,9 +40,7 @@ ValuablesDataManager::ValuablesDataManager(
     return;
   }
   webdata_service_observer_.Observe(webdata_service_.get());
-  if (base::FeatureList::IsEnabled(syncer::kSyncAutofillLoyaltyCard)) {
-    LoadLoyaltyCards();
-  }
+  LoadLoyaltyCards();
 }
 
 ValuablesDataManager::~ValuablesDataManager() = default;
@@ -67,12 +75,21 @@ std::optional<LoyaltyCard> ValuablesDataManager::GetLoyaltyCardById(
   if (!IsAutofillPaymentMethodsEnabled()) {
     return std::nullopt;
   }
-  auto it = std::ranges::find(
-      loyalty_cards_, id, [](const LoyaltyCard& card) { return card.id(); });
+  auto it = std::ranges::find(loyalty_cards_, id, &LoyaltyCard::id);
   if (it != loyalty_cards_.end()) {
     return *it;
   }
   return std::nullopt;
+}
+
+void ValuablesDataManager::RecordLoyaltyCardUsed(const ValuableId& id,
+                                                 base::Time use_date) {
+  base::optional_ref<LoyaltyCard> loyalty_card = GetMutableLoyaltyCardById(id);
+  if (!loyalty_card) {
+    return;
+  }
+  loyalty_card->RecordLoyaltyCardUsed(use_date);
+  webdata_service_->UpdateValuableMetadata(loyalty_card->metadata());
 }
 
 const gfx::Image* ValuablesDataManager::GetCachedValuableImageForUrl(
@@ -89,6 +106,18 @@ const gfx::Image* ValuablesDataManager::GetCachedValuableImageForUrl(
 
 bool ValuablesDataManager::IsAutofillPaymentMethodsEnabled() const {
   return prefs::IsAutofillPaymentMethodsEnabled(pref_service_);
+}
+
+base::optional_ref<LoyaltyCard> ValuablesDataManager::GetMutableLoyaltyCardById(
+    const ValuableId& id) {
+  if (!IsAutofillPaymentMethodsEnabled()) {
+    return std::nullopt;
+  }
+  auto it = std::ranges::find(loyalty_cards_, id, &LoyaltyCard::id);
+  if (it != loyalty_cards_.end()) {
+    return *it;
+  }
+  return std::nullopt;
 }
 
 void ValuablesDataManager::OnDataRetrieved(
@@ -148,7 +177,8 @@ bool ValuablesDataManager::HasPendingQueries() const {
 }
 
 void ValuablesDataManager::OnAutofillChangedBySync(syncer::DataType data_type) {
-  if (data_type == syncer::DataType::AUTOFILL_VALUABLE) {
+  if (data_type == syncer::DataType::AUTOFILL_VALUABLE ||
+      data_type == syncer::DataType::AUTOFILL_VALUABLE_METADATA) {
     LoadLoyaltyCards();
   }
 }

@@ -196,7 +196,7 @@ class CastWebContents : public mojom::CastWebContents {
                             additional_feature_permission_origins) override = 0;
   void SetGroupInfo(const std::string& session_id,
                     bool is_multizone_launch) override = 0;
-  void AddRendererFeatures(base::Value::Dict features) override = 0;
+  void AddRendererFeatures(base::DictValue features) override = 0;
   void SetInterfacesForRenderer(mojo::PendingRemote<mojom::RemoteInterfaces>
                                     remote_interfaces) override = 0;
   void LoadUrl(const GURL& url) override = 0;
@@ -274,10 +274,6 @@ class CastWebContents : public mojom::CastWebContents {
 
   // Locally-registered interfaces which are exposed to render frames.
   virtual InterfaceBundle* local_interfaces() = 0;
-
-  // Returns true if WebSQL database is configured enabled for this
-  // CastWebContents.
-  virtual bool is_websql_enabled() = 0;
 
   // Returns true if mixer audio is enabled.
   virtual bool is_mixer_audio_enabled() = 0;

@@ -22,6 +22,7 @@ if (!is_chromeos_device) {
       "//chrome/browser/ui",
       "//chrome/test:test_support_ui",
       "//chrome/test/base/ash/interactive:test_support",
+      "//chromeos/ash/experiences/settings_ui",
       "//ui/base",
     ]
   }
@@ -35,7 +36,6 @@ source_set("browser_tests") {
   sources = [
     "os_settings_auto_screen_lock_browsertest.cc",
     "os_settings_lock_screen_authentication_browsertest.cc",
-    "os_settings_notification_settings_browsertest.cc",
     "os_settings_password_setup_browsertest.cc",
     "os_settings_pin_setup_browsertest.cc",
     "os_settings_recovery_browsertest.cc",
@@ -54,6 +54,7 @@ source_set("browser_tests") {
     "//chrome/browser/ui/webui/ash/settings/test_support",
     "//chrome/common:constants",
     "//chrome/test/data/webui/chromeos/settings:test_api_mojom",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/osauth/impl",
     "//chromeos/ash/components/osauth/public",
     "//components/policy/core/browser",

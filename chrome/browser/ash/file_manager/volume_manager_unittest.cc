@@ -15,8 +15,9 @@
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
@@ -39,7 +40,6 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/download/download_dir_util.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -91,7 +91,7 @@ const policy::DeviceId kAllowlistedDeviceId{0xA123, 0x456B};
 void SetExternalStorageAllowlist(PrefService* pref_service) {
   pref_service->SetList(
       disks::prefs::kExternalStorageAllowlist,
-      base::Value::List().Append(kAllowlistedDeviceId.ToDict()));
+      base::ListValue().Append(kAllowlistedDeviceId.ToDict()));
 }
 
 std::unique_ptr<Disk> CreateAllowlistedDisk(const std::string& disk_path) {
@@ -343,6 +343,7 @@ class VolumeManagerTest : public testing::Test {
                   std::string(),
                   base::FilePath())),
           volume_manager_(std::make_unique<VolumeManager>(
+              TestingBrowserProcess::GetGlobal()->local_state(),
               profile_,
               drive_integration_service_.get(),  // DriveIntegrationService
               chromeos::PowerManagerClient::Get(),
@@ -1544,7 +1545,7 @@ class VolumeManagerLocalUserFilesTest : public VolumeManagerArcTest {
  public:
   void SetUp() override {
     scoped_feature_list_.InitWithFeatures(
-        {features::kSkyVault, features::kSkyVaultV2}, {});
+        {features::kSkyVault, ash::features::kSkyVaultV2}, {});
     VolumeManagerArcTest::SetUp();
   }
 
@@ -1552,12 +1553,12 @@ class VolumeManagerLocalUserFilesTest : public VolumeManagerArcTest {
 
   void SetLocalUserFilesPolicy(bool allowed) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-        prefs::kLocalUserFilesAllowed, allowed);
+        ash::prefs::kLocalUserFilesAllowed, allowed);
   }
 
   void SetLocalUserFilesMigrationPolicy(const std::string& destination) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetString(
-        prefs::kLocalUserFilesMigrationDestination, destination);
+        ash::prefs::kLocalUserFilesMigrationDestination, destination);
     volume_manager()->OnMigrationSucceededForTesting();
   }
 

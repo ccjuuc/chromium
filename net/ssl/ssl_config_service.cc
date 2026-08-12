@@ -6,12 +6,17 @@
 
 #include <tuple>
 
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/observer_list.h"
 #include "net/base/features.h"
+#include "net/cert/x509_util.h"
 #include "net/ssl/ssl_config_service_defaults.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "third_party/boringssl/src/pki/signature_algorithm.h"
 
 namespace net {
 
@@ -41,14 +46,8 @@ void AddTrustAnchorIdToEncodedList(
                                    trust_anchor_id.end());
 }
 
-}  // namespace
 
-// This function should be kept updated to include all the post-quantum groups
-// that //net and callers know about and may configure.
-bool SSLNamedGroupInfo::IsPostQuantum() const {
-  return group_id == SSL_GROUP_X25519_MLKEM768 ||
-         group_id == SSL_GROUP_MLKEM1024;
-}
+}  // namespace
 
 SSLContextConfig::SSLContextConfig() {
   supported_named_groups.assign(std::begin(kDefaultSSLSupportedGroups),
@@ -74,30 +73,50 @@ std::vector<uint16_t> SSLContextConfig::GetSupportedGroups(
   return groups_out;
 }
 
-bool SSLContextConfig::ShouldAdvertiseTrustAnchorIDs() const {
-  return (base::FeatureList::IsEnabled(features::kTLSTrustAnchorIDs) &&
-          (!trust_anchor_ids.empty() || !mtc_trust_anchor_ids.empty()));
+std::optional<uint16_t> SSLContextConfig::RequestServerPadding() const {
+  if (!base::FeatureList::IsEnabled(features::kAddTLSServerHandshakePadding)) {
+    return std::nullopt;
+  }
+  return base::saturated_cast<uint16_t>(
+      features::kAddTLSServerHandshakePaddingBytes.Get());
 }
 
-std::vector<uint8_t> SSLContextConfig::SelectTrustAnchorIDs(
-    const std::vector<std::vector<uint8_t>>& server_advertised_trust_anchor_ids)
-    const {
+bool SSLContextConfig::ShouldAdvertiseTrustAnchorIDs() const {
+  if (!base::FeatureList::IsEnabled(features::kTLSTrustAnchorIDs)) {
+    return false;
+  }
+  bool has_non_mtc_advertisable =
+      base::FeatureList::IsEnabled(features::kNonMtcTrustAnchorIDs) &&
+      !trust_anchor_ids.empty();
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+  bool has_mtc_advertisable =
+      base::FeatureList::IsEnabled(features::kVerifyMTCs) &&
+      !mtc_trust_anchor_ids.empty();
+#else
+  bool has_mtc_advertisable = false;
+#endif
+  return has_non_mtc_advertisable || has_mtc_advertisable;
+}
+
+std::vector<uint8_t> SSLContextConfig::SelectAllTrustAnchorIDs() const {
   std::vector<uint8_t> selected_trust_anchor_ids;
 
-  for (const auto& server_advertised_tai : server_advertised_trust_anchor_ids) {
-    if (trust_anchor_ids.contains(server_advertised_tai)) {
-      AddTrustAnchorIdToEncodedList(server_advertised_tai,
-                                    selected_trust_anchor_ids);
+  if (base::FeatureList::IsEnabled(features::kTLSTrustAnchorIDs)) {
+    if (base::FeatureList::IsEnabled(features::kNonMtcTrustAnchorIDs)) {
+      for (const auto& trust_anchor_id : trust_anchor_ids) {
+        AddTrustAnchorIdToEncodedList(trust_anchor_id,
+                                      selected_trust_anchor_ids);
+      }
     }
-  }
 
-  // In the current experiment, MTC trust anchor IDs are sent unconditionally,
-  // so logic to intersect advertised IDs with MTC trust anchor ranges isn't
-  // implemented. `mtc_trust_anchor_ids` is only populated when the experiment
-  // is enabled, so the feature flag isn't explicitly checked here.
-  for (const auto& mtc_trust_anchor_id : mtc_trust_anchor_ids) {
-    AddTrustAnchorIdToEncodedList(mtc_trust_anchor_id,
-                                  selected_trust_anchor_ids);
+#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+    if (base::FeatureList::IsEnabled(features::kVerifyMTCs)) {
+      for (const auto& mtc_trust_anchor_id : mtc_trust_anchor_ids) {
+        AddTrustAnchorIdToEncodedList(mtc_trust_anchor_id,
+                                      selected_trust_anchor_ids);
+      }
+    }
+#endif
   }
 
   return selected_trust_anchor_ids;

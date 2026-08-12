@@ -7,22 +7,26 @@
 #include <memory>
 
 #include "base/check_deref.h"
+#include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view_interface.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -30,10 +34,12 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/webapps/browser/installable/ml_install_operation_tracker.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/interaction/element_tracker_views.h"
@@ -70,44 +76,25 @@ NewPageActionHighlight(content::WebContents& web_contents) {
     return std::nullopt;
   }
 
-  if (IsPageActionMigrated(PageActionIconType::kPwaInstall)) {
-    tabs::TabFeatures* tab_features = tab->GetTabFeatures();
-    CHECK(tab_features);
+  tabs::TabFeatures* tab_features = tab->GetTabFeatures();
+  CHECK(tab_features);
 
-    return tab_features->page_action_controller()->AddActivity(
-        kActionInstallPwa);
-  }
-
-  // TODO(crbug.com/425953501): We shouldn't be using this. Once
-  // `ToolbarButtonProvider` is migrated to `BrowserWindowInterface`, we can
-  // use that directly.
-  Browser* browser =
-      tab->GetBrowserWindowInterface()->GetBrowserForMigrationOnly();
-
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-  if (!browser_view) {
-    return std::nullopt;
-  }
-
-  ToolbarButtonProvider* toolbar_button_provider =
-      browser_view->toolbar_button_provider();
-  if (!toolbar_button_provider) {
-    return std::nullopt;
-  }
-
-  views::Button* install_icon = toolbar_button_provider->GetPageActionIconView(
-      PageActionIconType::kPwaInstall);
-
-  if (install_icon) {
-    // TODO(crbug.com/40841129): move this to dialog->SetHighlightedButton.
-    return install_icon->AddAnchorHighlight();
-  }
-
-  return std::nullopt;
+  return tab_features->page_action_controller()->AddActivity(kActionInstallPwa);
 }
+
 }  // namespace
 
-constexpr int kMinBoundsForInstallDialog = 50;
+std::ostream& operator<<(std::ostream& os, InstallDialogType type) {
+  switch (type) {
+    case InstallDialogType::kSimple:
+      return os << "kSimple";
+    case InstallDialogType::kDetailed:
+      return os << "kDetailed";
+    case InstallDialogType::kDiy:
+      return os << "kDiy";
+  }
+  return os << "Unknown";
+}
 
 std::u16string NormalizeSuggestedAppTitle(const std::u16string& title) {
   std::u16string normalized = title;
@@ -120,12 +107,26 @@ std::u16string NormalizeSuggestedAppTitle(const std::u16string& title) {
   return normalized;
 }
 
-bool IsWidgetCurrentSizeSmallerThanPreferredSize(views::Widget* widget) {
+MaxAllowedShrinkage GetMaxAllowedShrinkage(InstallDialogType type) {
+  switch (type) {
+    case InstallDialogType::kSimple:
+      return kSimpleMaxShrinkage;
+    case InstallDialogType::kDetailed:
+      return kDetailedMaxShrinkage;
+    case InstallDialogType::kDiy:
+      return kDiyMaxShrinkage;
+  }
+  return kSimpleMaxShrinkage;
+}
+
+bool IsWidgetCurrentSizeSmallerThanPreferredSize(
+    views::Widget* widget,
+    MaxAllowedShrinkage shrinkage) {
   const gfx::Size& current_size = widget->GetSize();
   const gfx::Size& preferred_size =
       widget->GetContentsView()->GetPreferredSize();
-  int min_width = preferred_size.width() - kMinBoundsForInstallDialog;
-  int min_height = preferred_size.height() - kMinBoundsForInstallDialog;
+  int min_width = preferred_size.width() - shrinkage.max_width_shrinkage;
+  int min_height = preferred_size.height() - shrinkage.max_height_shrinkage;
   return current_size.width() < min_width || current_size.height() < min_height;
 }
 
@@ -162,7 +163,14 @@ WebAppInstallDialogDelegate::WebAppInstallDialogDelegate(
   CHECK(prefs_);
 }
 
-WebAppInstallDialogDelegate::~WebAppInstallDialogDelegate() = default;
+WebAppInstallDialogDelegate::~WebAppInstallDialogDelegate() {
+  MaybeRestoreFocusToInstallPageAction();
+}
+
+bool WebAppInstallDialogDelegate::OnOkButtonClicked() {
+  OnAccept();
+  return true;
+}
 
 void WebAppInstallDialogDelegate::OnAccept() {
   MeasureAcceptUserActionsForInstallDialog();
@@ -258,8 +266,19 @@ void WebAppInstallDialogDelegate::OnDestroyed() {
 void WebAppInstallDialogDelegate::OnTextFieldChangedMaybeUpdateButton(
     const std::u16string& text_field_contents) {
   text_field_contents_ = text_field_contents;
-  ui::DialogModel::Button* ok_button =
-      dialog_model()->GetButtonByUniqueId(kDiyAppsDialogOkButtonId);
+  if (!dialog_model() || !dialog_model()->host()) {
+    return;
+  }
+
+  ui::DialogModel::Button* ok_button = nullptr;
+  if (dialog_model()->HasField(kDiyAppsDialogOkButtonId)) {
+    ok_button = dialog_model()->GetButtonByUniqueId(kDiyAppsDialogOkButtonId);
+  } else if (dialog_model()->HasField(kPwaInstallDialogInstallButton)) {
+    // Use the kPwaInstallDialogInstallButton id for for the Flow view.
+    ok_button =
+        dialog_model()->GetButtonByUniqueId(kPwaInstallDialogInstallButton);
+  }
+
   CHECK(ok_button);
   dialog_model()->SetButtonEnabled(ok_button,
                                    /*enabled=*/!text_field_contents.empty());
@@ -268,7 +287,8 @@ void WebAppInstallDialogDelegate::OnTextFieldChangedMaybeUpdateButton(
 void WebAppInstallDialogDelegate::OnWidgetBoundsChanged(
     views::Widget* widget,
     const gfx::Rect& new_bounds) {
-  if (IsWidgetCurrentSizeSmallerThanPreferredSize(widget)) {
+  if (IsWidgetCurrentSizeSmallerThanPreferredSize(
+          widget, GetMaxAllowedShrinkage(dialog_type_))) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&WebAppInstallDialogDelegate::CloseDialogAsIgnored,

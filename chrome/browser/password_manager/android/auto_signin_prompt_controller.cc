@@ -7,7 +7,6 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "chrome/browser/android/tab_android.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -24,7 +23,7 @@ void ShowAutoSigninPrompt(content::WebContents* web_contents,
 
   JNIEnv* env = base::android::AttachCurrentThread();
   TabAndroid* tab = TabAndroid::FromWebContents(web_contents);
-  // TODO(melandory): https://crbug.com/590838 Introduce proper fix.
+  // TODO(melandory): https://crbug.com/40459011 Introduce proper fix.
   if (tab == nullptr) {
     return;
   }

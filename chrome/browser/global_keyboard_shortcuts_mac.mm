@@ -150,6 +150,7 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
       {true,  false, false, true,  kVK_DownArrow,         IDC_FOCUS_NEXT_PANE},
       {true,  false, false, true,  kVK_UpArrow,           IDC_FOCUS_PREVIOUS_PANE},
       {true,  true,  false, true,  kVK_ANSI_A,            IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY},
+      {true,  false, false, true,  kVK_ANSI_R,            IDC_SHOW_READING_MODE_KEYBOARD},
     });
     // clang-format on
 
@@ -172,8 +173,6 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
       keys.push_back({false, true, true, true, kVK_ANSI_M,
                       IDC_DEBUG_PRINT_VIEW_TREE_DETAILS});
     }
-
-    keys.push_back({true, false, false, true, kVK_ANSI_N, IDC_NEW_SPLIT_TAB});
 
     return keys;
   }());

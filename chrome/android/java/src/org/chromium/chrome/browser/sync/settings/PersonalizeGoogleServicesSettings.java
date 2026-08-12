@@ -11,8 +11,9 @@ import android.os.Bundle;
 import androidx.preference.Preference;
 
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -25,7 +26,6 @@ import org.chromium.chrome.browser.ui.signin.GoogleActivityController;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.sync.SyncService;
 
 /*
@@ -40,7 +40,8 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
     private SyncService mSyncService;
     private Preference mWebAndAppActivity;
     private Preference mLinkedGoogleServices;
-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+    private final SettableMonotonicObservableSupplier<String> mPageTitle =
+            ObservableSuppliers.createMonotonic();
 
     @Override
     public void onCreatePreferences(@Nullable Bundle bundle, @Nullable String s) {
@@ -54,7 +55,7 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
     }
 
     @Override
-    public ObservableSupplier<String> getPageTitle() {
+    public MonotonicObservableSupplier<String> getPageTitle() {
         return mPageTitle;
     }
 
@@ -82,7 +83,7 @@ public class PersonalizeGoogleServicesSettings extends ChromeBaseSettingsFragmen
                         assumeNonNull(
                                         IdentityServicesProvider.get()
                                                 .getIdentityManager(getProfile()))
-                                .getPrimaryAccountInfo(ConsentLevel.SIGNIN));
+                                .getPrimaryAccountInfo());
         // May happen if account is removed from the device while this screen is shown.
         if (signedInAccountName == null) {
             if (SettingsIndexData.getInstance() != null) {

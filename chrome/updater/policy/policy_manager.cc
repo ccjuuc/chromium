@@ -15,9 +15,10 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/policy/manager.h"
-#include "chrome/updater/updater_scope.h"
 
 namespace updater {
 
@@ -66,7 +67,7 @@ constexpr char kMinorVersionRolloutPrefix[] = "MinorVersionRollout";
 
 }  // namespace
 
-PolicyManager::PolicyManager(base::Value::Dict policies)
+PolicyManager::PolicyManager(base::DictValue policies)
     : policies_(std::move(policies)) {
   static constexpr size_t kInstallAppPrefixLength =
       std::string_view(kInstallAppPrefix).length();
@@ -249,7 +250,7 @@ std::optional<std::string> PolicyManager::GetStringPolicy(
 }
 
 scoped_refptr<PolicyManagerInterface> CreateDictPolicyManager(
-    base::Value::Dict policies) {
+    base::DictValue policies) {
   return policies.empty()
              ? nullptr
              : base::MakeRefCounted<PolicyManager>(std::move(policies));

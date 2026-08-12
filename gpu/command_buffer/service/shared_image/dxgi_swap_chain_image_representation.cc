@@ -38,13 +38,7 @@ DXGISwapChainOverlayImageRepresentation::GetDCLayerOverlayImage() {
 
 bool DXGISwapChainOverlayImageRepresentation::BeginReadAccess(
     gfx::GpuFenceHandle& acquire_fence) {
-  // For the time being, let's use present interval 0.
-  const bool should_synchronize_present_with_vblank = false;
-
-  bool success = static_cast<DXGISwapChainImageBacking*>(backing())->Present(
-      should_synchronize_present_with_vblank);
-
-  return success;
+  return static_cast<DXGISwapChainImageBacking*>(backing())->Present();
 }
 
 void DXGISwapChainOverlayImageRepresentation::EndReadAccess(
@@ -61,8 +55,8 @@ GLTexturePassthroughDXGISwapChainBufferRepresentation::
 
 const scoped_refptr<gles2::TexturePassthrough>&
 GLTexturePassthroughDXGISwapChainBufferRepresentation::GetTexturePassthrough(
-    int plane_index) {
-  DCHECK_EQ(plane_index, 0);
+    size_t plane_index) {
+  DCHECK_EQ(plane_index, 0u);
   return texture_holder_->texture_passthrough();
 }
 

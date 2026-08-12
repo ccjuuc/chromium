@@ -8,9 +8,11 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -20,7 +22,6 @@
 #include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/ash/child_accounts/edu_coexistence_tos_store_utils.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
@@ -41,6 +42,7 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/sync/base/features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -166,7 +168,10 @@ EduCoexistenceLoginHandler::EduCoexistenceLoginHandler(
               &EduCoexistenceLoginHandler::OnOAuthAccessTokensFetched,
               base::Unretained(this)),
           signin::PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable,
-          signin::ConsentLevel::kSync);
+          base::FeatureList::IsEnabled(
+              syncer::kReplaceSyncPromosWithSignInPromos)
+              ? signin::ConsentLevel::kSignin
+              : signin::ConsentLevel::kSync);
 }
 
 EduCoexistenceLoginHandler::~EduCoexistenceLoginHandler() {
@@ -256,7 +261,7 @@ void EduCoexistenceLoginHandler::OnOAuthAccessTokensFetched(
 }
 
 void EduCoexistenceLoginHandler::InitializeEduArgs(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   initialize_edu_args_callback_ = args[0].GetString();
@@ -277,7 +282,7 @@ void EduCoexistenceLoginHandler::InitializeEduArgs(
 void EduCoexistenceLoginHandler::SendInitializeEduArgs() {
   DCHECK(oauth_access_token_.has_value());
   DCHECK(initialize_edu_args_callback_.has_value());
-  base::Value::Dict params;
+  base::DictValue params;
 
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
   params.Set("hl", app_locale);
@@ -322,14 +327,14 @@ void EduCoexistenceLoginHandler::SendInitializeEduArgs() {
   initialize_edu_args_callback_ = std::nullopt;
 }
 
-void EduCoexistenceLoginHandler::ConsentValid(const base::Value::List& args) {
+void EduCoexistenceLoginHandler::ConsentValid(const base::ListValue& args) {
   AllowJavascript();
   DCHECK(!in_error_state_);
   EduCoexistenceStateTracker::Get()->OnWebUiStateChanged(
       web_ui(), EduCoexistenceStateTracker::FlowResult::kConsentValid);
 }
 
-void EduCoexistenceLoginHandler::ConsentLogged(const base::Value::List& args) {
+void EduCoexistenceLoginHandler::ConsentLogged(const base::ListValue& args) {
   if (args.size() == 0) {
     return;
   }
@@ -338,7 +343,7 @@ void EduCoexistenceLoginHandler::ConsentLogged(const base::Value::List& args) {
 
   account_added_callback_ = args[0].GetString();
 
-  const base::Value::List& arguments = args[1].GetList();
+  const base::ListValue& arguments = args[1].GetList();
 
   edu_account_email_ = arguments[0].GetString();
   terms_of_service_version_number_ = arguments[1].GetString();
@@ -348,7 +353,7 @@ void EduCoexistenceLoginHandler::ConsentLogged(const base::Value::List& args) {
                                                      edu_account_email_);
 }
 
-void EduCoexistenceLoginHandler::OnError(const base::Value::List& args) {
+void EduCoexistenceLoginHandler::OnError(const base::ListValue& args) {
   AllowJavascript();
   if (args.size() == 0) {
     return;

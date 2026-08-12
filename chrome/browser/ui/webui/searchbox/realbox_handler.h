@@ -23,6 +23,7 @@ class RealboxHandler : public ContextualSearchboxHandler {
  public:
   RealboxHandler(
       mojo::PendingReceiver<searchbox::mojom::PageHandler> pending_page_handler,
+      mojo::PendingRemote<searchbox::mojom::Page> pending_page,
       Profile* profile,
       content::WebContents* web_contents,
       GetSessionHandleCallback get_session_callback);
@@ -37,10 +38,9 @@ class RealboxHandler : public ContextualSearchboxHandler {
   void UpdateSelection(OmniboxPopupSelection old_selection,
                        OmniboxPopupSelection selection);
 
- protected:
-  // ContextualSearchboxHandler:
-  std::optional<lens::LensOverlayInvocationSource> GetInvocationSource()
-      const override;
+  // SearchboxHandler:
+  std::string AutocompleteIconToResourceName(
+      const gfx::VectorIcon& icon) const override;
 
  private:
   base::WeakPtrFactory<RealboxHandler> weak_ptr_factory_{this};

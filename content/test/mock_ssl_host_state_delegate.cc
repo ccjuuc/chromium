@@ -4,7 +4,6 @@
 
 #include "content/test/mock_ssl_host_state_delegate.h"
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "url/gurl.h"
 
@@ -16,7 +15,7 @@ MockSSLHostStateDelegate::~MockSSLHostStateDelegate() {}
 
 void MockSSLHostStateDelegate::AllowCert(const std::string& host,
                                          const net::X509Certificate& cert,
-                                         int error,
+                                         net::Error error,
                                          StoragePartition* storage_partition) {
   exceptions_.insert(host);
 }
@@ -41,9 +40,9 @@ void MockSSLHostStateDelegate::Clear(
 SSLHostStateDelegate::CertJudgment MockSSLHostStateDelegate::QueryPolicy(
     const std::string& host,
     const net::X509Certificate& cert,
-    int error,
+    net::Error error,
     StoragePartition* storage_partition) {
-  if (!base::Contains(exceptions_, host)) {
+  if (!exceptions_.contains(host)) {
     return SSLHostStateDelegate::DENIED;
   }
 
@@ -59,7 +58,7 @@ void MockSSLHostStateDelegate::HostRanInsecureContent(
 bool MockSSLHostStateDelegate::DidHostRunInsecureContent(
     const std::string& host,
     InsecureContentType content_type) {
-  return base::Contains(hosts_ran_insecure_content_, host);
+  return hosts_ran_insecure_content_.contains(host);
 }
 
 void MockSSLHostStateDelegate::AllowHttpForHost(
@@ -71,7 +70,7 @@ void MockSSLHostStateDelegate::AllowHttpForHost(
 bool MockSSLHostStateDelegate::IsHttpAllowedForHost(
     const std::string& host,
     StoragePartition* storage_partition) {
-  return base::Contains(allow_http_hosts_, host);
+  return allow_http_hosts_.contains(host);
 }
 
 void MockSSLHostStateDelegate::SetHttpsEnforcementForHost(
@@ -92,7 +91,7 @@ bool MockSSLHostStateDelegate::IsHttpsEnforcedForUrl(
   if (!url.GetPort().empty()) {
     return false;
   }
-  return base::Contains(enforce_https_hosts_, url.GetHost());
+  return enforce_https_hosts_.contains(url.GetHost());
 }
 
 void MockSSLHostStateDelegate::RevokeUserAllowExceptions(
@@ -103,7 +102,7 @@ void MockSSLHostStateDelegate::RevokeUserAllowExceptions(
 bool MockSSLHostStateDelegate::HasAllowException(
     const std::string& host,
     StoragePartition* storage_partition) {
-  return base::Contains(exceptions_, host);
+  return exceptions_.contains(host);
 }
 
 bool MockSSLHostStateDelegate::HasAllowExceptionForAnyHost(

@@ -7,6 +7,7 @@
 #include <bit>
 #include <optional>
 
+#include "base/containers/adapters.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
 #include "third_party/blink/renderer/core/animation/css_interpolation_environment.h"
@@ -67,6 +68,7 @@
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/route_matching/route_map.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/style_property_shorthand.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -84,8 +86,16 @@ namespace {
 AtomicString ConsumeVariableName(CSSParserTokenStream& stream) {
   stream.ConsumeWhitespace();
   CSSParserToken ident_token = stream.ConsumeIncludingWhitespaceRaw();
-  DCHECK_EQ(ident_token.GetType(), kIdentToken);
+  CHECK_EQ(ident_token.GetType(), kIdentToken);
   return ident_token.Value().ToAtomicString();
+}
+
+AtomicString ConsumeIfVariableName(CSSParserTokenStream& stream) {
+  stream.ConsumeWhitespace();
+  if (stream.Peek().GetType() != kIdentToken) {
+    return g_null_atom;
+  }
+  return stream.ConsumeIncludingWhitespace().Value().ToAtomicString();
 }
 
 AtomicString ConsumeAndComputeVariableName(CSSParserTokenStream& stream,
@@ -118,10 +128,11 @@ bool ConsumeComma(CSSParserTokenStream& stream) {
   return false;
 }
 
-const CSSValue* ParseAsCSSWideKeyword(const CSSVariableData& data) {
+const CSSValue* ParseAsCSSWideKeyword(const CSSVariableData& data,
+                                      const CSSParserContext& context) {
   CSSParserTokenStream stream(data.OriginalText());
   stream.ConsumeWhitespace();
-  CSSValue* value = css_parsing_utils::ConsumeCSSWideKeyword(stream);
+  CSSValue* value = css_parsing_utils::ConsumeCSSWideKeyword(stream, context);
   return stream.AtEnd() ? value : nullptr;
 }
 
@@ -132,35 +143,32 @@ const CSSValue* Parse(const CSSProperty& property,
                                              context);
 }
 
-const CSSValue* ValueAt(const MatchResult& result, uint32_t position) {
-  wtf_size_t matched_properties_index = DecodeMatchedPropertiesIndex(position);
-  wtf_size_t declaration_index = DecodeDeclarationIndex(position);
+const CSSValue* ValueAt(const MatchResult& result,
+                        wtf_size_t rule_index,
+                        wtf_size_t declaration_index) {
   const MatchedPropertiesVector& vector = result.GetMatchedProperties();
-  const CSSPropertyValueSet* set = vector[matched_properties_index].properties;
+  const CSSPropertyValueSet* set = vector[rule_index].properties;
   return &set->PropertyAt(declaration_index).Value();
 }
 
-const TreeScope& TreeScopeAt(const MatchResult& result, uint32_t position) {
-  wtf_size_t matched_properties_index = DecodeMatchedPropertiesIndex(position);
+const TreeScope& TreeScopeAt(const MatchResult& result, wtf_size_t rule_index) {
   const MatchedProperties& properties =
-      result.GetMatchedProperties()[matched_properties_index];
+      result.GetMatchedProperties()[rule_index];
   DCHECK_EQ(properties.data_.origin, CascadeOrigin::kAuthor);
   return result.ScopeFromTreeOrder(properties.data_.tree_order);
 }
 
 const MixinParameterBindings* MixinParameterBindingsAt(
     const MatchResult& result,
-    uint32_t position) {
-  wtf_size_t matched_properties_index = DecodeMatchedPropertiesIndex(position);
+    wtf_size_t rule_index) {
   const MatchedProperties& properties =
-      result.GetMatchedProperties()[matched_properties_index];
+      result.GetMatchedProperties()[rule_index];
   return properties.mixin_parameter_bindings;
 }
 
 PropertyHandle ToPropertyHandle(const CSSProperty& property,
                                 CascadePriority priority) {
-  uint32_t position = priority.GetPosition();
-  CSSPropertyID id = DecodeInterpolationPropertyID(position);
+  CSSPropertyID id = static_cast<CSSPropertyID>(priority.GetRuleIndex());
   if (id == CSSPropertyID::kVariable) {
     DCHECK(IsA<CustomProperty>(property));
     return PropertyHandle(property.GetPropertyNameAtomicString());
@@ -183,17 +191,6 @@ CascadeOrigin TargetOriginForRevert(CascadeOrigin origin) {
     case CascadeOrigin::kAnimation:
       return CascadeOrigin::kUser;
   }
-}
-
-CSSPropertyID UnvisitedID(CSSPropertyID id) {
-  if (id == CSSPropertyID::kVariable) {
-    return id;
-  }
-  const CSSProperty& property = CSSProperty::Get(id);
-  if (!property.IsVisited()) {
-    return id;
-  }
-  return property.GetUnvisitedProperty()->PropertyID();
 }
 
 bool IsInterpolation(CascadePriority priority) {
@@ -233,35 +230,42 @@ const CSSSyntaxDefinition* FindOrNull(
 // The `container_tree_scope` is the tree scope holding the @container
 // rule being evaluated. For @container rules within @function, this is
 // the same tree scope as the enclosing @function is defined in.
-bool EvaluateContainerQuery(Element& element,
-                            PseudoId pseudo_id,
-                            const ContainerQuery& query,
-                            const TreeScope* container_tree_scope,
-                            Element* nearest_size_container,
-                            MatchResult& match_result) {
-  const ContainerSelector& selector = query.Selector();
-  if (!selector.SelectsAnyContainer()) {
-    return false;
-  }
-  // TODO(crbug.com/394500600): Calling SetDependencyFlags here works,
-  // but it's arguably a bit late when considering that MatchResult
-  // is supposed to be the output of ElementRuleCollector.
-  // Consider refactoring.
-  ContainerQueryEvaluator::SetDependencyFlags(query, match_result);
+bool EvaluateContainerQueries(Element& element,
+                              PseudoId pseudo_id,
+                              const ContainerQuerySet& queries,
+                              const TreeScope* container_tree_scope,
+                              Element* nearest_size_container,
+                              MatchResult& match_result) {
+  for (const ContainerQuery* query : queries.Queries()) {
+    const ContainerSelector& selector = query->Selector();
+    if (!selector.SelectsAnyContainer()) {
+      continue;
+    }
+    // TODO(crbug.com/394500600): Calling SetDependencyFlags here works,
+    // but it's arguably a bit late when considering that MatchResult
+    // is supposed to be the output of ElementRuleCollector.
+    // Consider refactoring.
+    ContainerQueryEvaluator::SetDependencyFlags(*query, match_result);
 
-  Element* starting_element = ContainerQueryEvaluator::DetermineStartingElement(
-      element, pseudo_id, selector, nearest_size_container);
-  Element* container = ContainerQueryEvaluator::FindContainer(
-      starting_element, selector, container_tree_scope);
-  if (!container) {
-    return false;
+    Element* starting_element =
+        ContainerQueryEvaluator::DetermineStartingElement(
+            element, pseudo_id, selector, nearest_size_container);
+    Element* container = ContainerQueryEvaluator::FindContainer(
+        starting_element, selector, container_tree_scope);
+    if (!container) {
+      continue;
+    }
+    ContainerQueryEvaluator& evaluator =
+        container->EnsureContainerQueryEvaluator();
+    using Change = ContainerQueryEvaluator::Change;
+    Change change = starting_element == container
+                        ? Change::kNearestContainer
+                        : Change::kDescendantContainers;
+    if (evaluator.EvalAndAdd(*query, change, match_result)) {
+      return true;
+    }
   }
-  ContainerQueryEvaluator& evaluator =
-      container->EnsureContainerQueryEvaluator();
-  using Change = ContainerQueryEvaluator::Change;
-  Change change = starting_element == container ? Change::kNearestContainer
-                                                : Change::kDescendantContainers;
-  return evaluator.EvalAndAdd(query, change, match_result);
+  return false;
 }
 
 bool IsVariableNameOnly(StringView str) {
@@ -279,24 +283,29 @@ bool IsVariableNameOnly(StringView str) {
 }  // namespace
 
 MatchResult& StyleCascade::MutableMatchResult() {
-  DCHECK(!generation_) << "Apply has already been called";
-  needs_match_result_analyze_ = true;
+  DCHECK(!has_applied_);
+  needs_collect_from_match_result_ = true;
   return match_result_;
 }
 
 void StyleCascade::AddInterpolations(const ActiveInterpolationsMap* map,
                                      CascadeOrigin origin) {
   DCHECK(map);
-  needs_interpolations_analyze_ = true;
+  needs_collect_from_interpolations_ = true;
   interpolations_.Add(map, origin);
 }
 
 void StyleCascade::Apply(CascadeFilter filter) {
-  AnalyzeIfNeeded();
-  state_.UpdateLengthConversionData();
+  CollectDeclarationsIfNeeded();
+  state_.InvalidateLengthConversionData();
+
+  if (has_applied_) {
+    map_.ClearAppliedFlags();
+  }
+  has_applied_ = true;
 
   // For performance avoid stack initialization on this large object.
-  STACK_UNINITIALIZED CascadeResolver resolver(filter, ++generation_);
+  STACK_UNINITIALIZED CascadeResolver resolver(filter);
 
   ApplyCascadeAffecting(resolver);
 
@@ -325,26 +334,16 @@ void StyleCascade::Apply(CascadeFilter filter) {
   ApplyUnresolvedEnv(resolver);
 }
 
-std::unique_ptr<CSSBitset> StyleCascade::GetImportantSet() {
-  AnalyzeIfNeeded();
-  if (!map_.HasImportant()) {
-    return nullptr;
-  }
-  auto set = std::make_unique<CSSBitset>();
-  for (CSSPropertyID id : map_.NativeBitset()) {
-    // We use the unvisited ID because visited/unvisited colors are currently
-    // interpolated together.
-    // TODO(crbug.com/1062217): Interpolate visited colors separately
-    set->Or(UnvisitedID(id), map_.At(CSSPropertyName(id)).IsImportant());
-  }
-  return set;
+std::unique_ptr<CSSBitset> StyleCascade::ReleaseImportantSet() {
+  CollectDeclarationsIfNeeded();
+  return map_.ReleaseImportantSet();
 }
 
 void StyleCascade::Reset() {
   map_.Reset();
   match_result_.Reset();
   interpolations_.Reset();
-  generation_ = 0;
+  has_applied_ = false;
   depends_on_cascade_affecting_property_ = false;
 }
 
@@ -355,7 +354,7 @@ const CSSValue* StyleCascade::Resolve(
     const MixinParameterBindings* mixin_parameter_bindings,
     CascadeOrigin origin,
     CascadeResolver& resolver) {
-  CSSPropertyRef ref(name, state_.GetDocument());
+  CSSPropertyRef ref(&name, state_.GetDocument());
 
   const CSSValue* resolved = Resolve(ResolveSurrogate(ref.GetProperty()), value,
                                      tree_scope, mixin_parameter_bindings,
@@ -381,9 +380,8 @@ const CSSValue* StyleCascade::Resolve(
 
 HeapHashMap<CSSPropertyName, Member<const CSSValue>>
 StyleCascade::GetCascadedValues() const {
-  DCHECK(!needs_match_result_analyze_);
-  DCHECK(!needs_interpolations_analyze_);
-  DCHECK_GE(generation_, 0);
+  DCHECK(!needs_collect_from_match_result_);
+  DCHECK(!needs_collect_from_interpolations_);
 
   HeapHashMap<CSSPropertyName, Member<const CSSValue>> result;
 
@@ -398,7 +396,8 @@ StyleCascade::GetCascadedValues() const {
       // should not be observable.
       continue;
     }
-    const CSSValue* cascaded = ValueAt(match_result_, priority.GetPosition());
+    const CSSValue* cascaded = ValueAt(match_result_, priority.GetRuleIndex(),
+                                       priority.GetDeclarationIndex());
     DCHECK(cascaded);
     result.Set(name, cascaded);
   }
@@ -409,7 +408,8 @@ StyleCascade::GetCascadedValues() const {
     if (IsInterpolation(priority)) {
       continue;
     }
-    const CSSValue* cascaded = ValueAt(match_result_, priority.GetPosition());
+    const CSSValue* cascaded = ValueAt(match_result_, priority.GetRuleIndex(),
+                                       priority.GetDeclarationIndex());
     DCHECK(cascaded);
     result.Set(CSSPropertyName(name), cascaded);
   }
@@ -428,7 +428,7 @@ const CSSValue* StyleCascade::Resolve(
   // Since the cascade map is empty, the CascadeResolver isn't important,
   // as there can be no cycles in an empty map. We just instantiate it to
   // satisfy the API.
-  CascadeResolver resolver(CascadeFilter(), /* generation */ 0);
+  CascadeResolver resolver{CascadeFilter()};
 
   // The origin is relevant for 'revert', but since the cascade map
   // is empty, there will be nothing to revert to regardless of the origin
@@ -446,7 +446,7 @@ const CSSUnparsedDeclarationValue* StyleCascade::ResolveSubstitutions(
     const TreeScope* tree_scope,
     const MixinParameterBindings* mixin_parameter_bindings) {
   STACK_UNINITIALIZED StyleCascade cascade(state);
-  CascadeResolver resolver(CascadeFilter(), /*generation=*/0);
+  CascadeResolver resolver{CascadeFilter()};
   const CSSParserContext* context = cascade.GetParserContext(value);
   CSSParserTokenStream stream(value.VariableDataValue()->OriginalText());
   TokenSequence sequence;
@@ -456,21 +456,21 @@ const CSSUnparsedDeclarationValue* StyleCascade::ResolveSubstitutions(
     return nullptr;
   }
   return MakeGarbageCollected<CSSUnparsedDeclarationValue>(
-      sequence.BuildVariableData());
+      sequence.BuildVariableData(), context);
 }
 
-void StyleCascade::AnalyzeIfNeeded() {
-  if (needs_match_result_analyze_) {
-    AnalyzeMatchResult();
-    needs_match_result_analyze_ = false;
+void StyleCascade::CollectDeclarationsIfNeeded() {
+  if (needs_collect_from_match_result_) {
+    CollectFromMatchResult();
+    needs_collect_from_match_result_ = false;
   }
-  if (needs_interpolations_analyze_) {
-    AnalyzeInterpolations();
-    needs_interpolations_analyze_ = false;
+  if (needs_collect_from_interpolations_) {
+    CollectFromInterpolations();
+    needs_collect_from_interpolations_ = false;
   }
 }
 
-void StyleCascade::AnalyzeMatchResult() {
+void StyleCascade::CollectFromMatchResult() {
   AddExplicitDefaults();
 
   int index = 0;
@@ -494,21 +494,23 @@ void StyleCascade::AnalyzeMatchResult() {
   }
 }
 
-void StyleCascade::AnalyzeInterpolations() {
+void StyleCascade::CollectFromInterpolations() {
   const auto& entries = interpolations_.GetEntries();
   for (wtf_size_t i = 0; i < entries.size(); ++i) {
     for (const auto& active_interpolation : *entries[i].map) {
       auto name = active_interpolation.key.GetCSSPropertyName();
-      uint32_t position = EncodeInterpolationPosition(name.Id(), i);
+      // NOTE: This uses the CascadePriority's rule and declaration index
+      // variables for CSS property ID and interpolation index.
       CascadePriority priority(entries[i].origin,
                                /* important */ false,
                                /* tree_order */ 0,
                                /* is_inline_style */ false,
                                /* is_try_style */ false,
                                /* is_try_tactics_style */ false,
-                               /* layer_order */ 0, position);
+                               /* layer_order */ 0,
+                               static_cast<uint16_t>(name.Id()), i);
 
-      CSSPropertyRef ref(name, GetDocument());
+      CSSPropertyRef ref(&name, GetDocument());
       DCHECK(ref.IsValid());
 
       if (name.IsCustomProperty()) {
@@ -529,18 +531,36 @@ void StyleCascade::AnalyzeInterpolations() {
   }
 }
 
-// The implicit defaulting behavior of inherited properties is to take
-// the value of the parent style [1]. However, we never reach
-// Longhand::ApplyInherit for implicit defaults, which is needed to adjust
-// Lengths with premultiplied zoom. Therefore, all inherited properties
-// are instead explicitly defaulted [2] when the effective zoom has changed
-// versus the parent zoom.
+// StyleCascade collects declarations before all cascade-affecting properties
+// have necessarily reached their final values. If CSS zoom changes the
+// effective zoom during cascade, implicit defaults [1] with premultiplied
+// lengths need to be explicitly defaulted [2] so their
+// ApplyInitial/ApplyInherit paths run with the element's new zoom.
 //
 // [1] https://drafts.csswg.org/css-cascade/#defaulting
 // [2] https://drafts.csswg.org/css-cascade/#defaulting-keywords
 void StyleCascade::AddExplicitDefaults() {
-  if (state_.GetDocument().StandardizedBrowserZoomEnabled() &&
-      effective_zoom_changed_) {
+  if (!effective_zoom_changed_) {
+    return;
+  }
+
+  // These non-inherited initial values are stored zoomed in `ComputedStyle`.
+  // The document initial style only accounts for `InitialZoom`, so recompute
+  // them when CSS zoom changes this element's effective zoom during cascade.
+  map_.Add(CSSPropertyID::kBorderTopWidth,
+           CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kBorderRightWidth,
+           CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kBorderBottomWidth,
+           CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kBorderLeftWidth,
+           CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kOutlineWidth, CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kColumnRuleWidth,
+           CascadePriority(CascadeOrigin::kNone));
+  map_.Add(CSSPropertyID::kRowRuleWidth, CascadePriority(CascadeOrigin::kNone));
+
+  if (state_.GetDocument().StandardizedBrowserZoomEnabled()) {
     // These inherited properties can contain lengths:
     //
     //   -webkit-border-horizontal-spacing
@@ -583,22 +603,21 @@ void StyleCascade::AddExplicitDefaults() {
   }
 }
 
-void StyleCascade::Reanalyze() {
+void StyleCascade::ResetAndCollectAgain() {
   map_.Reset();
-  generation_ = 0;
   depends_on_cascade_affecting_property_ = false;
 
-  needs_match_result_analyze_ = true;
-  needs_interpolations_analyze_ = true;
-  AnalyzeIfNeeded();
+  needs_collect_from_match_result_ = true;
+  needs_collect_from_interpolations_ = true;
+  CollectDeclarationsIfNeeded();
 }
 
 void StyleCascade::ApplyCascadeAffecting(CascadeResolver& resolver) {
-  // During the initial call to Analyze, we speculatively assume that the
-  // direction/writing-mode inherited from the parent will be the final
-  // direction/writing-mode. If either property ends up with another value,
-  // our assumption was incorrect, and we have to Reanalyze with the correct
-  // values on ComputedStyle.
+  // During the initial call to CollectDeclarationsIfNeeded, we speculatively
+  // assume that the direction/writing-mode inherited from the parent will be
+  // the final direction/writing-mode. If either property ends up with another
+  // value, our assumption was incorrect, and we have to ResetAndCollectAgain()
+  // with the correct values on ComputedStyle.
   auto direction = state_.StyleBuilder().Direction();
   auto writing_mode = state_.StyleBuilder().GetWritingMode();
   // Similarly, we assume that the effective zoom of this element
@@ -618,21 +637,21 @@ void StyleCascade::ApplyCascadeAffecting(CascadeResolver& resolver) {
     LookupAndApply(GetCSSPropertyZoom(), resolver);
   }
 
-  bool reanalyze = false;
+  bool reset_and_collect_again = false;
 
   if (depends_on_cascade_affecting_property_) {
     if (direction != state_.StyleBuilder().Direction() ||
         writing_mode != state_.StyleBuilder().GetWritingMode()) {
-      reanalyze = true;
+      reset_and_collect_again = true;
     }
   }
   if (effective_zoom != state_.StyleBuilder().EffectiveZoom()) {
     effective_zoom_changed_ = true;
-    reanalyze = true;
+    reset_and_collect_again = true;
   }
 
-  if (reanalyze) {
-    Reanalyze();
+  if (reset_and_collect_again) {
+    ResetAndCollectAgain();
   }
 }
 
@@ -703,12 +722,12 @@ void StyleCascade::ApplyWideOverlapping(CascadeResolver& resolver) {
 
   // Skip `property` if its priority is lower than the incoming priority.
   // Skipping basically means pretending it's already applied by setting the
-  // generation.
-  auto maybe_skip = [this, &resolver](const CSSProperty& property,
-                                      CascadePriority priority) {
+  // appropriate bit.
+  auto maybe_skip = [this](const CSSProperty& property,
+                           CascadePriority priority) {
     if (CascadePriority* p = map_.Find(property.GetCSSPropertyName())) {
       if (*p < priority) {
-        *p = CascadePriority(*p, resolver.generation_);
+        *p = CascadePriority(*p, /*already_applied=*/true);
       }
     }
   };
@@ -770,24 +789,36 @@ void StyleCascade::ApplyWideOverlapping(CascadeResolver& resolver) {
       maybe_skip(GetCSSPropertyBoxDecorationBreak(), *priority);
     }
   }
+
+  if (RuntimeEnabledFeatures::CSSLineClampEnabled() &&
+      !RuntimeEnabledFeatures::CSSLineClampAsShorthandEnabled()) {
+    const CSSProperty& line_clamp = GetCSSPropertyLineClamp();
+    if (resolver.filter_.Accepts(line_clamp)) {
+      if (const CascadePriority* priority =
+              map_.Find(line_clamp.GetCSSPropertyName())) {
+        LookupAndApply(line_clamp, resolver);
+        maybe_skip(GetCSSPropertyAlternativeWebkitLineClampLonghand(),
+                   *priority);
+      }
+    }
+  }
 }
 
-// Go through all properties that were found during the analyze phase
-// (e.g. in AnalyzeMatchResult()) and actually apply them. We need to do this
+// Go through all properties that were found during the "collect" phase
+// (CollectFromMatchResult()) and actually apply them. We need to do this
 // in a second phase so that we know which ones actually won the cascade
 // before we start applying, as some properties can affect others.
 void StyleCascade::ApplyMatchResult(CascadeResolver& resolver) {
   // All the high-priority properties were dealt with in ApplyHighPriority(),
   // so we don't need to look at them again. (That would be a no-op due to
-  // the generation check below, but it's cheaper just to mask them out
+  // the already_applied check below, but it's cheaper just to mask them out
   // entirely.)
   for (auto it = map_.NativeBitset().BeginAfterHighPriority();
        it != map_.NativeBitset().end(); ++it) {
     CSSPropertyID id = *it;
     CascadePriority* p = map_.FindKnownToExist(id);
     const CascadePriority priority = *p;
-    if (priority.GetGeneration() >= resolver.generation_) {
-      // Already applied this generation.
+    if (priority.IsAlreadyApplied()) {
       // Also checked in LookupAndApplyDeclaration,
       // but done here to get a fast exit.
       continue;
@@ -806,14 +837,14 @@ void StyleCascade::ApplyMatchResult(CascadeResolver& resolver) {
   for (auto& [name, priority_list] : map_.GetCustomMap()) {
     CascadePriority* p = &map_.Top(priority_list);
     CascadePriority priority = *p;
-    if (priority.GetGeneration() >= resolver.generation_) {
+    if (priority.IsAlreadyApplied()) {
       continue;
     }
     if (IsInterpolation(priority)) {
       continue;
     }
 
-    CustomProperty property(name, GetDocument());
+    CustomProperty property(&name, GetDocument());
     if (resolver.Rejects(property)) {
       continue;
     }
@@ -835,17 +866,19 @@ void StyleCascade::ApplyInterpolationMap(const ActiveInterpolationsMap& map,
                                          CascadeResolver& resolver) {
   for (const auto& entry : map) {
     auto name = entry.key.GetCSSPropertyName();
-    uint32_t position = EncodeInterpolationPosition(name.Id(), index);
+    // NOTE: This uses the CascadePriority's rule and declaration index
+    // variables for CSS property ID and interpolation index.
     CascadePriority priority(origin,
                              /* important */ false,
                              /* tree_order */ 0,
                              /* is_inline_style */ false,
                              /* is_try_style */ false,
                              /* is_try_tactics_style */ false,
-                             /* layer_order */ 0, position);
-    priority = CascadePriority(priority, resolver.generation_);
+                             /* layer_order */ 0,
+                             static_cast<uint16_t>(name.Id()), index);
+    priority = CascadePriority(priority, /*already_applied=*/true);
 
-    CSSPropertyRef ref(name, GetDocument());
+    CSSPropertyRef ref(&name, GetDocument());
     if (resolver.Rejects(ref.GetProperty())) {
       continue;
     }
@@ -892,9 +925,10 @@ void StyleCascade::ApplyInterpolation(
         map_.Find(visited->GetCSSPropertyName());
     if (visited_priority && priority < *visited_priority) {
       DCHECK(visited_priority->IsImportant());
-      // Resetting generation to zero makes it possible to apply the
+      // Resetting already_applied makes it possible to apply the
       // visited property again.
-      *visited_priority = CascadePriority(*visited_priority, 0);
+      *visited_priority =
+          CascadePriority(*visited_priority, /*already_applied=*/false);
       LookupAndApply(*visited, resolver);
     }
   }
@@ -902,7 +936,7 @@ void StyleCascade::ApplyInterpolation(
 
 void StyleCascade::LookupAndApply(const CSSPropertyName& name,
                                   CascadeResolver& resolver) {
-  CSSPropertyRef ref(name, state_.GetDocument());
+  CSSPropertyRef ref(&name, state_.GetDocument());
   DCHECK(ref.IsValid());
   LookupAndApply(ref.GetProperty(), resolver);
 }
@@ -941,11 +975,10 @@ void StyleCascade::LookupAndApplyValue(const CSSProperty& property,
 void StyleCascade::LookupAndApplyDeclaration(const CSSProperty& property,
                                              CascadePriority* priority,
                                              CascadeResolver& resolver) {
-  if (priority->GetGeneration() >= resolver.generation_) {
-    // Already applied this generation.
+  if (priority->IsAlreadyApplied()) {
     return;
   }
-  *priority = CascadePriority(*priority, resolver.generation_);
+  *priority = CascadePriority(*priority, /*already_applied=*/true);
   DCHECK(!property.IsSurrogate());
   DCHECK(priority->GetOrigin() < CascadeOrigin::kAnimation);
   CascadeOrigin origin = priority->GetOrigin();
@@ -953,7 +986,8 @@ void StyleCascade::LookupAndApplyDeclaration(const CSSProperty& property,
   // see StyleCascade::AddExplicitDefaults.
   const CSSValue* value = (origin == CascadeOrigin::kNone)
                               ? cssvalue::CSSUnsetValue::Create()
-                              : ValueAt(match_result_, priority->GetPosition());
+                              : ValueAt(match_result_, priority->GetRuleIndex(),
+                                        priority->GetDeclarationIndex());
   DCHECK(value);
   const TreeScope* tree_scope = GetTreeScope(*priority);
   const MixinParameterBindings* mixin_parameter_bindings =
@@ -969,11 +1003,10 @@ void StyleCascade::LookupAndApplyDeclaration(const CSSProperty& property,
 void StyleCascade::LookupAndApplyInterpolation(const CSSProperty& property,
                                                CascadePriority* priority,
                                                CascadeResolver& resolver) {
-  if (priority->GetGeneration() >= resolver.generation_) {
-    // Already applied this generation.
+  if (priority->IsAlreadyApplied()) {
     return;
   }
-  *priority = CascadePriority(*priority, resolver.generation_);
+  *priority = CascadePriority(*priority, /*already_applied=*/true);
 
   DCHECK(!property.IsSurrogate());
 
@@ -985,7 +1018,7 @@ void StyleCascade::LookupAndApplyInterpolation(const CSSProperty& property,
     return;
   }
   DCHECK(priority->GetOrigin() >= CascadeOrigin::kAnimation);
-  wtf_size_t index = DecodeInterpolationIndex(priority->GetPosition());
+  wtf_size_t index = priority->GetDeclarationIndex();
   DCHECK_LE(index, interpolations_.GetEntries().size());
   const ActiveInterpolationsMap& map = *interpolations_.GetEntries()[index].map;
   PropertyHandle handle = ToPropertyHandle(property, *priority);
@@ -1000,10 +1033,9 @@ bool StyleCascade::IsRootElement() const {
 
 StyleCascade::TokenSequence::TokenSequence(const CSSVariableData* data)
     : is_animation_tainted_(data->IsAnimationTainted()),
-      has_font_units_(data->HasFontUnits()),
-      has_root_font_units_(data->HasRootFontUnits()),
-      has_line_height_units_(data->HasLineHeightUnits()),
-      has_dashed_functions_(data->HasDashedFunctions()) {}
+      features_(data->GetVariableDataFeatures() &
+                ~static_cast<VariableDataFeatures>(
+                    VariableDataFeature::kHasReferences)) {}
 
 bool StyleCascade::TokenSequence::AppendFallback(const TokenSequence& sequence,
                                                  bool is_attr_tainted,
@@ -1034,10 +1066,7 @@ bool StyleCascade::TokenSequence::AppendFallback(const TokenSequence& sequence,
       sequence.last_non_whitespace_token_;
 
   is_animation_tainted_ |= sequence.is_animation_tainted_;
-  has_font_units_ |= sequence.has_font_units_;
-  has_root_font_units_ |= sequence.has_root_font_units_;
-  has_line_height_units_ |= sequence.has_line_height_units_;
-  has_dashed_functions_ |= sequence.has_dashed_functions_;
+  features_ |= sequence.features_;
 
   size_t end = original_text_.length();
   if (is_attr_tainted) {
@@ -1062,9 +1091,7 @@ bool StyleCascade::TokenSequence::Append(StringView str,
   CSSTokenizer tokenizer(str);
   const CSSParserToken first_token = tokenizer.TokenizeSingleWithComments();
   if (first_token.GetType() != kEOFToken) {
-    CSSVariableData::ExtractFeatures(
-        first_token, has_font_units_, has_root_font_units_,
-        has_line_height_units_, has_dashed_functions_);
+    features_ |= CSSVariableData::ExtractFeatures(first_token);
     if (NeedsInsertedComment(last_token_, first_token)) {
       original_text_.Append("/**/");
     }
@@ -1077,9 +1104,7 @@ bool StyleCascade::TokenSequence::Append(StringView str,
       if (token.GetType() == kEOFToken) {
         break;
       } else {
-        CSSVariableData::ExtractFeatures(
-            token, has_font_units_, has_root_font_units_,
-            has_line_height_units_, has_dashed_functions_);
+        features_ |= CSSVariableData::ExtractFeatures(token);
         last_token_ = token.CopyWithoutValue();
         if (IsNonWhitespaceToken(token)) {
           last_non_whitespace_token_ = token;
@@ -1115,9 +1140,7 @@ bool StyleCascade::TokenSequence::Append(CSSVariableData* data,
 void StyleCascade::TokenSequence::Append(const CSSParserToken& token,
                                          bool is_attr_tainted,
                                          StringView original_text) {
-  CSSVariableData::ExtractFeatures(token, has_font_units_, has_root_font_units_,
-                                   has_line_height_units_,
-                                   has_dashed_functions_);
+  features_ |= CSSVariableData::ExtractFeatures(token);
   size_t start = original_text_.length();
   if (NeedsInsertedComment(last_token_, token)) {
     original_text_.Append("/**/");
@@ -1146,10 +1169,10 @@ bool StyleCascade::TokenSequence::Append(TokenSequence& sequence,
 }
 
 CSSVariableData* StyleCascade::TokenSequence::BuildVariableData() {
-  return CSSVariableData::Create(
-      original_text_, is_animation_tainted_, !attr_taint_ranges_.empty(),
-      /*needs_variable_resolution=*/false, has_font_units_,
-      has_root_font_units_, has_line_height_units_, has_dashed_functions_);
+  CHECK(!(features_ & static_cast<VariableDataFeatures>(
+                          VariableDataFeature::kHasReferences)));
+  return CSSVariableData::Create(original_text_, is_animation_tainted_,
+                                 !attr_taint_ranges_.empty(), features_);
 }
 
 const CSSValue* StyleCascade::Resolve(
@@ -1200,7 +1223,7 @@ StyleCascade::MakeFunctionContextFromMixinAndResolveSubstitutions(
     // We have all the mixin context that we need, so we can now do the actual
     // resolution.
     if (const auto* v = DynamicTo<CSSUnparsedDeclarationValue>(value)) {
-      if (property.GetCSSPropertyName().IsCustomProperty()) {
+      if (IsA<CustomProperty>(property)) {
         return ResolveCustomProperty(property, *v, tree_scope, function_context,
                                      resolver);
       } else {
@@ -1248,10 +1271,36 @@ StyleCascade::MakeFunctionContextFromMixinAndResolveSubstitutions(
     return nullptr;
   }
 
+  // TODO(sesse): Can we avoid taking a copy here if there are no CQ-dependent
+  // locals?
+  HeapHashMap<String, Member<CSSVariableData>> locals_after_cq =
+      mixin_parameter_bindings->GetBaseLocals();
+  for (const auto& [name, candidates] :
+       mixin_parameter_bindings->GetConditionalOverrideLocals()) {
+    // Mark this as uncacheable in the MPC.
+    // TODO(sesse): Loosen this restriction, by including the CQ evaluation
+    // results in the MPC key (and also update operator== and GetHash() to
+    // include CQ-dependent locals).
+    state_.StyleBuilder().SetHasContainerRelativeValue();
+
+    // Find the last-declared value with a matching container query (if any),
+    // and apply it.
+    for (const MixinParameterBindings::CQDependentValue& candidate :
+         base::Reversed(candidates)) {
+      if (EvaluateContainerQueries(state_.GetElement(), state_.GetPseudoId(),
+                                   *candidate.container_queries, tree_scope,
+                                   state_.NearestSizeContainer(),
+                                   match_result_)) {
+        locals_after_cq.Set(name, candidate.data);
+        break;
+      }
+    }
+  }
+
   FunctionContext ctx = {
       .arguments = function_arguments,
       .locals = {},  // Populated by ApplyLocalVariables.
-      .unresolved_locals = {},
+      .unresolved_locals = std::move(locals_after_cq),
       .local_types = local_types,
       .parent = function_context,
   };
@@ -1347,7 +1396,8 @@ const CSSValue* StyleCascade::ResolveCustomProperty(
   {
     CSSParserTokenStream stream(data->OriginalText());
     stream.ConsumeWhitespace();
-    CSSValue* value = css_parsing_utils::ConsumeCSSWideKeyword(stream);
+    CSSValue* value =
+        css_parsing_utils::ConsumeCSSWideKeyword(stream, *decl.ParserContext());
     if (value && stream.AtEnd()) {
       return value;
     }
@@ -1432,7 +1482,8 @@ const CSSValue* StyleCascade::ResolvePendingSubstitution(
 
     // NOTE: We don't actually need the original text to be comment-stripped,
     // since we're not storing it in a custom property anywhere.
-    CSSParserTokenStream stream2(sequence.OriginalText());
+    CSSParserTokenStream stream2(sequence.OriginalText(),
+                                 sequence.GetAttrTaintedRanges());
     if (!CSSPropertyParser::ParseValue(
             shorthand_property_id, /*allow_important_annotation=*/false,
             stream2, shorthand_value->ParserContext(), parsed_properties,
@@ -1499,9 +1550,11 @@ const CSSValue* StyleCascade::ResolveRevert(const CSSProperty& property,
         return cssvalue::CSSUnsetValue::Create();
       }
       origin = p->GetOrigin();
-      return Resolve(property, *ValueAt(match_result_, p->GetPosition()),
-                     GetTreeScope(*p), GetMixinParameterBindings(*p), *p,
-                     origin, resolver);
+      return Resolve(
+          property,
+          *ValueAt(match_result_, p->GetRuleIndex(), p->GetDeclarationIndex()),
+          GetTreeScope(*p), GetMixinParameterBindings(*p), *p, origin,
+          resolver);
     }
   }
 }
@@ -1518,9 +1571,10 @@ const CSSValue* StyleCascade::ResolveRevertLayer(const CSSProperty& property,
     return cssvalue::CSSUnsetValue::Create();
   }
   origin = p->GetOrigin();
-  return Resolve(property, *ValueAt(match_result_, p->GetPosition()),
-                 GetTreeScope(*p), GetMixinParameterBindings(*p), *p, origin,
-                 resolver);
+  return Resolve(
+      property,
+      *ValueAt(match_result_, p->GetRuleIndex(), p->GetDeclarationIndex()),
+      GetTreeScope(*p), GetMixinParameterBindings(*p), *p, origin, resolver);
 }
 
 const CSSValue* StyleCascade::ResolveRevertRule(const CSSProperty& property,
@@ -1528,16 +1582,17 @@ const CSSValue* StyleCascade::ResolveRevertRule(const CSSProperty& property,
                                                 CascadePriority priority,
                                                 CascadeOrigin& origin,
                                                 CascadeResolver& resolver) {
-  const CascadePriority* p = map_.FindRevertRule(property.GetCSSPropertyName(),
-                                                 priority.GetRuleIndex());
+  const CascadePriority* p =
+      map_.FindRevertRule(property.GetCSSPropertyName(), priority);
   if (!p || !p->HasOrigin()) {
     origin = CascadeOrigin::kNone;
     return cssvalue::CSSUnsetValue::Create();
   }
   origin = p->GetOrigin();
-  return Resolve(property, *ValueAt(match_result_, p->GetPosition()),
-                 GetTreeScope(*p), GetMixinParameterBindings(*p), *p, origin,
-                 resolver);
+  return Resolve(
+      property,
+      *ValueAt(match_result_, p->GetRuleIndex(), p->GetDeclarationIndex()),
+      GetTreeScope(*p), GetMixinParameterBindings(*p), *p, origin, resolver);
 }
 
 const CSSValue* StyleCascade::ResolveFlipRevert(const CSSProperty& property,
@@ -1646,8 +1701,7 @@ bool StyleCascade::ResolveTokensInto(CSSParserTokenStream& stream,
       CSSParserTokenStream::BlockGuard guard(stream);
       success &=
           ResolveAutoBaseInto(stream, tree_scope, resolver, context, out);
-    } else if (token.FunctionId() == CSSValueID::kIf &&
-               RuntimeEnabledFeatures::CSSInlineIfForStyleQueriesEnabled()) {
+    } else if (token.FunctionId() == CSSValueID::kIf) {
       CSSParserTokenStream::BlockGuard guard(stream);
       success &= ResolveIfInto(stream, tree_scope, resolver, context,
                                function_context, out);
@@ -1733,7 +1787,7 @@ bool StyleCascade::ResolveVarInto(CSSParserTokenStream& stream,
     }
   }
 
-  CustomProperty property(var_name, state_.GetDocument());
+  CustomProperty property(&var_name, state_.GetDocument());
 
   // Any custom property referenced (by anything, even just once) in the
   // document can currently not be animated on the compositor. Hence we mark
@@ -1791,7 +1845,7 @@ bool StyleCascade::ResolveInheritInto(CSSParserTokenStream& stream,
   if (!stream.AtEnd()) {
     DCHECK_EQ(stream.Peek().GetType(), kCommaToken);
   }
-  CustomProperty property(var_name, state_.GetDocument());
+  CustomProperty property(&var_name, state_.GetDocument());
   if (!property.IsInherited()) {
     state_.StyleBuilder().SetHasExplicitInheritance();
     state_.ParentStyle()->SetChildHasExplicitInheritance();
@@ -1874,7 +1928,7 @@ bool StyleCascade::ResolveFunctionInto(StringView function_name,
       CSSVariableData* argument_data = CSSVariableData::Create(
           arguments[parameter_idx],
           /*is_animation_tainted=*/false, /*is_attr_tainted=*/false,
-          /*needs_variable_resolution=*/true);
+          CSSVariableData::HasReferences(true));
 
       ResolveFunctionParameter(parameter.name, argument_data,
                                parameter.default_value, parameter.type,
@@ -1924,9 +1978,11 @@ bool StyleCascade::ResolveFunctionInto(StringView function_name,
     return false;
   }
 
+  CSSPropertyName context_property_name =
+      GetCSSPropertyResult().GetCSSPropertyName();
   CSSVariableData* ret_data = ResolveTypedExpression(
       *unresolved_result, function_tree_scope, &function->GetReturnType(),
-      resolver, context, &local_function_context);
+      resolver, context, &local_function_context, &context_property_name);
   if (ret_data == nullptr) {
     return false;
   }
@@ -1959,8 +2015,10 @@ void StyleCascade::ResolveFunctionParameter(
     // the same), we will effectively do type parsing of exactly the
     // same data twice. This is wasteful, and it's possible that we
     // should do something about it if it proves to be a common case.
+    CSSPropertyName context_property_name((AtomicString(name)));
     argument_data = ResolveTypedExpression(*argument_data, tree_scope, &type,
-                                           resolver, context, function_context);
+                                           resolver, context, function_context,
+                                           &context_property_name);
   }
 
   // An argument generally "captures" a failed resolution, without
@@ -2053,6 +2111,26 @@ bool StyleCascade::AppendDataWithFallback(CSSVariableData* data,
   return false;
 }
 
+CSSParserLocalContext StyleCascade::GetCSSParserLocalContext(
+    FunctionContext* function_context,
+    const CSSPropertyName* property_name) {
+  // TODO(crbug.com/475808971): Ideally we should always have some parser
+  // context, but since we currently disallow random() inside if() style()
+  // condition, we are using nullptr property_name for that case.
+  if (!property_name) {
+    return CSSParserLocalContext::CreateWithoutPropertyForAtRules();
+  }
+  // TODO(crbug.com/489688671): We might have the same function name between
+  // different tree scopes, then we need to make CSSParserLocalContext aware of
+  // tree scope name.
+  const AtomicString& function_name =
+      function_context && function_context->function
+          ? function_context->function->Name()
+          : g_null_atom;
+  return CSSParserLocalContext(*property_name, CSSPropertyID::kInvalid,
+                               function_name);
+}
+
 // Resolves a typed expression; in practice, either a function
 // argument or its return value. In practice, this is about taking a string
 // and coercing it into the given type -- and then the caller will convert it
@@ -2067,7 +2145,8 @@ CSSVariableData* StyleCascade::ResolveTypedExpression(
     const CSSSyntaxDefinition* type,
     CascadeResolver& resolver,
     const CSSParserContext& context,
-    FunctionContext* function_context) {
+    FunctionContext* function_context,
+    const CSSPropertyName* property_name) {
   CSSVariableData* data = &unresolved;
   if (data->NeedsVariableResolution()) {
     data = ResolveVariableData(data, tree_scope, context, function_context,
@@ -2082,8 +2161,11 @@ CSSVariableData* StyleCascade::ResolveTypedExpression(
   if (!type || type->IsUniversal()) {
     return data;
   }
-  const CSSValue* value = type->Parse(data->OriginalText(), context,
-                                      /*is_animation_tainted=*/false);
+  CSSParserLocalContext parser_local_context =
+      GetCSSParserLocalContext(function_context, property_name);
+  const CSSValue* value =
+      type->Parse(data->OriginalText(), context, parser_local_context,
+                  /*is_animation_tainted=*/false);
   if (!value) {
     return nullptr;
   }
@@ -2172,10 +2254,11 @@ CSSVariableData* StyleCascade::ResolveLocalVariable(
     return nullptr;
   }
   CascadeResolver::AutoLock lock(cycle_node, resolver);
+  CSSPropertyName context_property_name((AtomicString(name)));
   // See comment about mixin_parameter_bindings in ResolveFunctionInto().
-  CSSVariableData* resolved =
-      ResolveTypedExpression(unresolved, function_context.tree_scope, type,
-                             resolver, context, &function_context);
+  CSSVariableData* resolved = ResolveTypedExpression(
+      unresolved, function_context.tree_scope, type, resolver, context,
+      &function_context, &context_property_name);
 
   if (!resolved) {
     return nullptr;
@@ -2187,7 +2270,7 @@ CSSVariableData* StyleCascade::ResolveLocalVariable(
   // frame.
   //
   // https://drafts.csswg.org/css-mixins-1/#resolve-function-styles
-  if (const CSSValue* css_wide = ParseAsCSSWideKeyword(*resolved)) {
+  if (const CSSValue* css_wide = ParseAsCSSWideKeyword(*resolved, context)) {
     return GetKeywordVariableData(name, *css_wide, resolver, context,
                                   &function_context);
   }
@@ -2203,10 +2286,10 @@ void StyleCascade::FlattenFunctionBody(
   for (const Member<StyleRuleBase>& child : group.ChildRules()) {
     if (auto* function_declarations =
             DynamicTo<StyleRuleFunctionDeclarations>(child.Get())) {
-      const CSSPropertyValueSet& propety_value_set =
+      const CSSPropertyValueSet& property_value_set =
           function_declarations->Properties();
       for (const CSSPropertyValue& property_value :
-           propety_value_set.Properties()) {
+           property_value_set.Properties()) {
         if (property_value.PropertyID() == CSSPropertyID::kVariable) {
           const auto& unresolved_local =
               To<CSSUnparsedDeclarationValue>(property_value.Value());
@@ -2215,7 +2298,7 @@ void StyleCascade::FlattenFunctionBody(
         }
       }
       if (auto* r = DynamicTo<CSSUnparsedDeclarationValue>(
-              propety_value_set.GetPropertyCSSValue(CSSPropertyID::kResult))) {
+              property_value_set.GetPropertyCSSValue(CSSPropertyID::kResult))) {
         result = r->VariableDataValue();
       }
     } else if (auto* supports_rule =
@@ -2233,18 +2316,18 @@ void StyleCascade::FlattenFunctionBody(
     } else if (auto* container_rule =
                    DynamicTo<StyleRuleContainer>(child.Get())) {
       state_.StyleBuilder().SetHasContainerRelativeValue();
-      if (EvaluateContainerQuery(
+      if (EvaluateContainerQueries(
               state_.GetElement(), state_.GetPseudoId(),
-              container_rule->GetContainerQuery(), function_tree_scope,
+              container_rule->GetContainerQuerySet(), function_tree_scope,
               state_.NearestSizeContainer(), match_result_)) {
         FlattenFunctionBody(*container_rule, function_tree_scope, result,
                             locals);
       }
     } else if (auto* navigation_rule =
                    DynamicTo<StyleRuleNavigation>(child.Get())) {
-      // TODO(crbug.com/431374376): Implement
+      state_.StyleBuilder().SetAffectedByFunctionalNavigation();
+      // TODO(crbug.com/493044687): Implement
       (void)navigation_rule;
-      NOTREACHED() << "Not yet implemented.";
     }
   }
 }
@@ -2301,20 +2384,46 @@ bool StyleCascade::ResolveAttrInto(CSSParserTokenStream& stream,
                                    const CSSParserContext& context,
                                    FunctionContext* function_context,
                                    TokenSequence& out) {
-  AtomicString local_name = ConsumeVariableName(stream);
+  AtomicString local_name;
+  std::optional<CSSAttrType> attr_type;
+  bool missing_attr_type = false;
+  if (RuntimeEnabledFeatures::CSSArgumentGrammarEnabled()) {
+    TokenSequence first_arg_token_sequence;
+    if (!ResolveTokensInto(
+            stream, tree_scope, resolver, context, function_context,
+            /*stop_type=*/kCommaToken, first_arg_token_sequence)) {
+      return false;
+    }
+    CSSParserTokenStream first_arg_stream(
+        first_arg_token_sequence.OriginalText());
+
+    local_name = ConsumeIfVariableName(first_arg_stream);
+    attr_type = CSSAttrType::Consume(first_arg_stream);
+    if (!attr_type.has_value()) {
+      missing_attr_type = true;
+      attr_type = CSSAttrType::GetDefaultValue();
+    }
+
+    if (local_name.IsNull() || !first_arg_stream.AtEnd()) {
+      return false;
+    }
+  } else {
+    local_name = ConsumeVariableName(stream);
+    attr_type = CSSAttrType::Consume(stream);
+    if (!attr_type.has_value()) {
+      missing_attr_type = true;
+      attr_type = CSSAttrType::GetDefaultValue();
+    }
+  }
+
+  DCHECK(stream.AtEnd() || stream.Peek().GetType() == kCommaToken);
+
   CascadeResolver::CycleNode cycle_node = {
       .type = CascadeResolver::CycleNode::Type::kAttribute, .name = local_name};
   if (resolver.DetectCycle(cycle_node)) {
     return false;
   }
   CascadeResolver::AutoLock lock(cycle_node, resolver);
-  std::optional<CSSAttrType> attr_type = CSSAttrType::Consume(stream);
-  bool missing_attr_type = false;
-  if (!attr_type.has_value()) {
-    missing_attr_type = true;
-    attr_type = CSSAttrType::GetDefaultValue();
-  }
-  DCHECK(stream.AtEnd() || stream.Peek().GetType() == kCommaToken);
 
   Element& element = state_.GetUltimateOriginatingElementOrSelf();
   // TODO(crbug.com/387281256): Support namespaces.
@@ -2352,12 +2461,21 @@ bool StyleCascade::ResolveAttrInto(CSSParserTokenStream& stream,
     substituted_attribute_value = g_null_atom;
   }
 
+  // We only use this `local_context` to parse attribute value against attr()
+  // type, we don't actually compute attribute_value here. The computation is
+  // done later on the property where attr() is used and we already have the
+  // right property context there. Hence we don't need to use the property in
+  // the CSSParserLocalContext here, since it's only needed for computing
+  // random() values, not during parsing.
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForSyntaxParsing();
   // Parse value according to the attribute type.
   // https://drafts.csswg.org/css-values-5/#typedef-attr-type
   const CSSValue* substitution_value =
       (substituted_attribute_value.IsNull())
           ? nullptr
-          : attr_type->Parse(substituted_attribute_value, context);
+          : attr_type->Parse(substituted_attribute_value, context,
+                             local_context);
 
   if (substitution_value) {
     return out.Append(substitution_value, /*is_attr_tainted=*/true,
@@ -2466,7 +2584,7 @@ CSSVariableData* StyleCascade::GetKeywordVariableData(
     }
     // "All other CSS-wide keywords resolve to the guaranteed-invalid value."
   } else {
-    CustomProperty property(name, GetDocument());
+    CustomProperty property(&name, GetDocument());
     if (keyword_value.IsInitialValue()) {
       return GetInitialVariableData(property);
     }
@@ -2491,7 +2609,7 @@ const CSSValue* StyleCascade::CoerceIntoNumericValue(
     const TreeScope* tree_scope,
     const CSSParserContext& context) {
   STACK_UNINITIALIZED StyleCascade cascade(state);
-  CascadeResolver resolver(CascadeFilter(), /* generation */ 0);
+  CascadeResolver resolver{CascadeFilter()};
   bool is_attr_tainted_unused;
   return cascade.CoerceIntoNumericValueInternal(unparsed_value, tree_scope,
                                                 resolver, context, nullptr,
@@ -2529,12 +2647,22 @@ const CSSValue* StyleCascade::CoerceIntoNumericValueInternal(
 
   CSSSyntaxDefinition syntax_definition =
       CSSSyntaxDefinition::CreateNumericSyntax();
+  // TODO(crbug.com/475808971): We call this function only for evaluating
+  // style() inside @container query or if() function. Since random() is
+  // disallowed outside of an element context (including all at-rules), we use
+  // CSSParserLocalContext without a property name for now. Ideally, this
+  // constructor should be removed once random() is supported within style()
+  // queries.
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext::CreateWithoutPropertyForAtRules();
   const CSSValue* parsed_value = syntax_definition.Parse(
-      data->OriginalText(), context,
+      data->OriginalText(), context, local_context,
       /* is_animation_tainted= */ data->IsAnimationTainted(),
       /* is_attr_tainted= */ data->IsAttrTainted());
 
-  if (!parsed_value) {
+  // TODO(crbug.com/475808971): We use this function only when evaluating
+  // style() query in @container or if(). We disallow random() there for now.
+  if (!parsed_value || parsed_value->HasRandomFunctions()) {
     return nullptr;
   }
 
@@ -2672,9 +2800,11 @@ KleeneValue StyleCascade::EvalIfStyleFeature(
     const auto& decl_value = To<CSSUnparsedDeclarationValue>(query_specified);
     const CSSSyntaxDefinition* type =
         FindVariableType(property_name, function_context);
-    computed_query_data =
-        ResolveTypedExpression(*decl_value.VariableDataValue(), tree_scope,
-                               type, resolver, context, function_context);
+    // TODO(crbug.com/475808971): We don't allow random() in if() condition for
+    // now, so we don't need property_name to resolve values in the condition.
+    computed_query_data = ResolveTypedExpression(
+        *decl_value.VariableDataValue(), tree_scope, type, resolver, context,
+        function_context, /*property_name=*/nullptr);
   }
 
   if (!computed_data || !computed_query_data) {
@@ -2720,8 +2850,13 @@ bool StyleCascade::EvalIfCondition(CSSParserTokenStream& stream,
     KleeneValue EvaluateNavigationExpNode(
         const NavigationExpNode& node) override {
       // Evaluate navigation() function
+      resolver_state_.StyleBuilder().SetAffectedByFunctionalNavigation();
+      RouteMap::Ensure(resolver_state_.GetDocument())
+          .SetNeedsStyleUpdateOnNavigation();
+      StyleEngine& style_engine =
+          resolver_state_.GetDocument().GetStyleEngine();
       bool result =
-          node.NavigationTest().Matches(resolver_state_.GetDocument());
+          style_engine.EvaluateFunctionalNavigationQuery(node.NavigationTest());
       return result ? KleeneValue::kTrue : KleeneValue::kFalse;
     }
 
@@ -2733,7 +2868,6 @@ bool StyleCascade::EvalIfCondition(CSSParserTokenStream& stream,
 
     KleeneValue EvaluateMediaQuerySet(const MediaQuerySet& query) override {
       // Evaluate media() function
-      DCHECK(RuntimeEnabledFeatures::CSSInlineIfForMediaQueriesEnabled());
       resolver_state_.StyleBuilder().SetAffectedByFunctionalMedia();
       StyleEngine& style_engine =
           resolver_state_.GetDocument().GetStyleEngine();
@@ -2846,7 +2980,7 @@ const CSSParserContext* StyleCascade::GetParserContext(
 
 bool StyleCascade::HasFontSizeDependency(const CustomProperty& property,
                                          CSSVariableData* data) const {
-  if (!property.IsRegistered() || !data) {
+  if (!property.IsRegistered() || property.HasUniversalSyntax() || !data) {
     return false;
   }
   if (data->HasFontUnits() || data->HasLineHeightUnits()) {
@@ -2867,18 +3001,6 @@ bool StyleCascade::HasLineHeightDependency(const CustomProperty& property,
     return true;
   }
   return false;
-}
-
-bool StyleCascade::ValidateFallback(const CustomProperty& property,
-                                    StringView value) const {
-  if (!property.IsRegistered()) {
-    return true;
-  }
-  auto context_mode =
-      state_.GetDocument().GetExecutionContext()->GetSecureContextMode();
-  auto* context = StrictCSSParserContext(context_mode);
-  auto local_context = CSSParserLocalContext();
-  return property.Parse(value, *context, local_context);
 }
 
 void StyleCascade::MarkIsReferenced(const CustomProperty& referenced) {
@@ -2912,7 +3034,8 @@ void StyleCascade::ApplyIsBottomRelativeToSafeAreaInset(
     return;
   }
 
-  const CSSValue* value = ValueAt(match_result_, p->GetPosition());
+  const CSSValue* value =
+      ValueAt(match_result_, p->GetRuleIndex(), p->GetDeclarationIndex());
   const auto* unparsed = DynamicTo<CSSUnparsedDeclarationValue>(value);
   if (!unparsed) {
     return;  // Does not contain env().
@@ -2929,7 +3052,7 @@ void StyleCascade::ApplyIsBottomRelativeToSafeAreaInset(
   // up with a simple calc() sum of literal <length> values.
   CascadeResolver::AutoLock lock(GetCSSPropertyBottom(), resolver);
   TokenSequence sequence;
-  const TreeScope& tree_scope = TreeScopeAt(match_result_, p->GetPosition());
+  const TreeScope& tree_scope = TreeScopeAt(match_result_, p->GetRuleIndex());
   CSSParserTokenStream stream(unparsed->VariableDataValue()->OriginalText());
   if (!ResolveTokensInto(stream, &tree_scope, resolver,
                          *unparsed->ParserContext(),
@@ -2959,7 +3082,7 @@ const Document& StyleCascade::GetDocument() const {
 const TreeScope* StyleCascade::GetTreeScope(CascadePriority priority) const {
   CascadeOrigin origin = priority.GetOrigin();
   if (origin == CascadeOrigin::kAuthor) {
-    return &TreeScopeAt(match_result_, priority.GetPosition());
+    return &TreeScopeAt(match_result_, priority.GetRuleIndex());
   }
   if (origin == CascadeOrigin::kAuthorPresentationalHint) {
     return &GetDocument();
@@ -2971,7 +3094,7 @@ const MixinParameterBindings* StyleCascade::GetMixinParameterBindings(
     CascadePriority priority) const {
   CascadeOrigin origin = priority.GetOrigin();
   if (origin == CascadeOrigin::kAuthor) {
-    return MixinParameterBindingsAt(match_result_, priority.GetPosition());
+    return MixinParameterBindingsAt(match_result_, priority.GetRuleIndex());
   }
   return nullptr;
 }

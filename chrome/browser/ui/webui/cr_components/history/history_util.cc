@@ -10,12 +10,14 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/webui/cr_components/history_clusters/history_clusters_util.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/history_resources.h"
 #include "chrome/grit/history_resources_map.h"
 #include "chrome/grit/locale_settings.h"
 #include "components/browsing_data/core/features.h"
+#include "components/critical_actions/core/browser/features.h"
 #include "components/favicon_base/favicon_url_parser.h"
 #include "components/history/core/browser/features.h"
 #include "components/history/core/common/pref_names.h"
@@ -50,7 +52,6 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
       {"entrySummary", IDS_HISTORY_ENTRY_SUMMARY},
       {"expandSessionButton", IDS_HISTORY_OTHER_SESSIONS_EXPAND_SESSION},
       {"foundSearchResults", IDS_HISTORY_FOUND_SEARCH_RESULTS},
-      {"actorTaskTooltip", IDS_ACTOR_TASK},
       {"historyMenuButton", IDS_HISTORY_HISTORY_MENU_DESCRIPTION},
       {"historyMenuItem", IDS_HISTORY_HISTORY_MENU_ITEM},
       {"itemsSelected", IDS_HISTORY_ITEMS_SELECTED},
@@ -66,14 +67,37 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
       {"removeBookmark", IDS_HISTORY_REMOVE_BOOKMARK},
       {"removeFromHistory", IDS_HISTORY_REMOVE_PAGE},
       {"removeSelected", IDS_HISTORY_REMOVE_SELECTED_ITEMS},
+      {"reviewGeminiActivity", IDS_HISTORY_REVIEW_GEMINI_ACTIVITY},
+      {"geminiKeyBrowsingActionsTitle",
+       IDS_HISTORY_GEMINI_KEY_BROWSING_ACTIONS_TITLE},
       {"searchPrompt", IDS_HISTORY_SEARCH_PROMPT},
       {"searchResult", IDS_HISTORY_SEARCH_RESULT},
       {"searchResults", IDS_HISTORY_SEARCH_RESULTS},
       {"searchResultExactMatch", IDS_HISTORY_SEARCH_EXACT_MATCH_RESULT},
       {"searchResultExactMatches", IDS_HISTORY_SEARCH_EXACT_MATCH_RESULTS},
+      {"sourceFilterChipsAriaLabel",
+       IDS_HISTORY_SOURCE_FILTER_CHIPS_ARIA_LABEL},
+      {"sourceFilterChipUser", IDS_HISTORY_SOURCE_FILTER_CHIP_USER},
       {"title", IDS_HISTORY_TITLE},
   };
   source->AddLocalizedStrings(kStrings);
+
+  source->AddLocalizedString(
+      "sourceFilterChipActor",
+      base::FeatureList::IsEnabled(
+          critical_actions::features::kCriticalActionHistory)
+          ? IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR_GEMINI
+          : IDS_HISTORY_SOURCE_FILTER_CHIP_ACTOR);
+
+  source->AddLocalizedString(
+      "actorTaskTooltip",
+      base::FeatureList::IsEnabled(
+          critical_actions::features::kCriticalActionHistory)
+          ? IDS_HISTORY_ACTOR_TASK_TOOLTIP_GEMINI
+          : IDS_HISTORY_ACTOR_TASK_TOOLTIP);
+
+  source->AddString("myActivityGeminiAppsUrl",
+                    chrome::kMyActivityGeminiAppsUrl);
 
   PrefService* prefs = profile->GetPrefs();
   bool allow_deleting_history =
@@ -83,9 +107,6 @@ content::WebUIDataSource* HistoryUtil::PopulateCommonSourceForHistory(
   source->AddBoolean("isGuestSession", profile->IsGuestSession());
   source->AddBoolean("isSignInAllowed",
                      prefs->GetBoolean(prefs::kSigninAllowed));
-
-  source->AddBoolean("enableBrowsingHistoryActorIntegrationM1",
-                     history::IsBrowsingHistoryActorIntegrationM1Enabled());
 
   source->AddInteger(
       "lastSelectedTab",

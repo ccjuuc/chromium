@@ -44,18 +44,29 @@
 <if expr="_google_chrome">
       <picture id="paymentsIcon">
         <source
-            srcset="[[getScaledSrcSet_('chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_DARK_SMALL')]]"
+            srcset="[[getGooglePayDarkModeLogoSrcSet_(
+                autofillEnableGradientGoogleLogosEnabled_)]]"
             media="(prefers-color-scheme: dark)">
-        <img alt="" srcset="[[getScaledSrcSet_('chrome://theme/IDR_AUTOFILL_GOOGLE_PAY_SMALL')]]">
+        <img alt=""
+            srcset="[[getGooglePayLightModeLogoSrcSet_(
+                autofillEnableGradientGoogleLogosEnabled_)]]">
       </picture>
 </if>
 <if expr="not _google_chrome">
       <span class="sub-label">$i18n{googlePayments}</span>
 </if>
     </div>
-    <cr-icon-button class="icon-external" id="remotePayOverTimeIssuerLink"
-        title="$i18n{remotePaymentMethodsLinkLabel}" role="link"
-        on-click="onRemoteEditClick_"
-        aria-description="$i18n{opensInNewTab}"></cr-icon-button>
+    <template is="dom-if" if="[[autofillEnableWalletBrandingEnabled_]]">
+      <cr-icon-button class="icon-external" id="remotePayOverTimeIssuerLink"
+          title="$i18n{remotePaymentMethodsWalletLinkLabel}" role="link"
+          on-click="onRemoteEditClick_"
+          aria-description="$i18n{opensInNewTab}"></cr-icon-button>
+    </template>
+    <template is="dom-if" if="[[!autofillEnableWalletBrandingEnabled_]]">
+      <cr-icon-button class="icon-external" id="remotePayOverTimeIssuerLink"
+          title="$i18n{remotePaymentMethodsLinkLabel}" role="link"
+          on-click="onRemoteEditClick_"
+          aria-description="$i18n{opensInNewTab}"></cr-icon-button>
+    </template>
   </div>
 </div>

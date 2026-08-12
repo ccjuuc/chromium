@@ -10,7 +10,7 @@ import {CrInputElement} from 'chrome://resources/ash/common/cr_elements/cr_input
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertInstanceof, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {PasswordComplexity, PasswordFactorEditor} from 'chrome://resources/mojo/chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-webui.js';
+import {AuthFactorConfig, LocalAuthFactorsComplexity, PasswordComplexity, PasswordFactorEditor} from 'chrome://resources/mojo/chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-webui.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './set_local_password_input.html.js';
@@ -27,6 +27,8 @@ export interface SetLocalPasswordInputElement {
 enum FirstInputValidity {
   OK,
   TOO_SHORT,
+  MISSES_CHARACTERS,
+  CONTAINS_TRIVIAL_SEQUENCE,
 }
 
 enum ConfirmInputValidity {
@@ -90,6 +92,14 @@ export class SetLocalPasswordInputElement extends
       },
 
       /**
+       * Auth token for making mojo calls.
+       */
+      authToken: {
+        type: String,
+        observer: 'fetchLocalAuthFactorsComplexity',
+      },
+
+      /**
        * Aria label to apply to the first input.
        */
       firstInputAriaLabel: {
@@ -116,17 +126,23 @@ export class SetLocalPasswordInputElement extends
         type: Boolean,
         value: false,
       },
+
+      localAuthFactorsComplexity_: {
+        type: LocalAuthFactorsComplexity,
+        value: LocalAuthFactorsComplexity.kUnset,
+      },
     };
   }
 
-  value: string|null;
+  declare value: string|null;
+  declare locale: string;
+  declare authToken: string|undefined|null;
 
-  private firstInputValidity_: null|FirstInputValidity;
-  private confirmInputValidity_: null|ConfirmInputValidity;
-  private isFirstPasswordVisible_: boolean;
-  private isConfirmPasswordVisible_: boolean;
-
-  locale: string;
+  declare private firstInputValidity_: null|FirstInputValidity;
+  declare private confirmInputValidity_: null|ConfirmInputValidity;
+  declare private isFirstPasswordVisible_: boolean;
+  declare private isConfirmPasswordVisible_: boolean;
+  declare private localAuthFactorsComplexity_: LocalAuthFactorsComplexity;
 
   constructor() {
     super();
@@ -164,26 +180,34 @@ export class SetLocalPasswordInputElement extends
     }
 
     const value = this.$.firstInput.value;
-    const {complexity} =
-        await PasswordFactorEditor.getRemote().checkLocalPasswordComplexity(
-            value);
+    const complexity = await this.checkLocalPasswordComplexity(value);
 
     // Abort validation if the user has changed the input value while we were
     // waiting for the async function call above to return.
     if (value !== this.$.firstInput.value) {
       return;
     }
-
-    switch (complexity) {
-      case PasswordComplexity.kOk:
-        this.firstInputValidity_ = FirstInputValidity.OK;
-        break;
-      case PasswordComplexity.kTooShort:
-        this.firstInputValidity_ = FirstInputValidity.TOO_SHORT;
-        break;
-      default:
-        assertNotReached();
+    // If the auth token expires then the returned complexity will be null.
+    // Early return in this case to avoid running extra validation logic.
+    if (complexity === null) {
+      return;
     }
+
+    const complexityToValidityMap:
+        Record<PasswordComplexity, FirstInputValidity> = {
+          [PasswordComplexity.kOk]: FirstInputValidity.OK,
+          [PasswordComplexity.kTooShort]: FirstInputValidity.TOO_SHORT,
+          [PasswordComplexity.kMissesCharacters]:
+              FirstInputValidity.MISSES_CHARACTERS,
+          [PasswordComplexity.kContainsTrivialSequence]:
+              FirstInputValidity.CONTAINS_TRIVIAL_SEQUENCE,
+        };
+
+    const validity = complexityToValidityMap[complexity];
+    if (validity === undefined) {
+      assertNotReached();
+    }
+    this.firstInputValidity_ = validity;
   }
 
   private validateConfirmInput(): void {
@@ -304,10 +328,73 @@ export class SetLocalPasswordInputElement extends
   private showFirstInputError(): boolean {
     switch (this.firstInputValidity_) {
       case FirstInputValidity.TOO_SHORT:
+      case FirstInputValidity.MISSES_CHARACTERS:
+      case FirstInputValidity.CONTAINS_TRIVIAL_SEQUENCE:
         return true;
       case null:
       case FirstInputValidity.OK:
         return false;
+    }
+  }
+
+  private getFirstInputHint(
+      locale: string,
+      localAuthFactorsComplexity: LocalAuthFactorsComplexity): string {
+    switch (localAuthFactorsComplexity) {
+      case LocalAuthFactorsComplexity.kUnset:
+        // LocalAuthFactorsComplexity policy isn't set, use the older message.
+        return this.i18nDynamic(locale, 'setLocalPasswordMinCharsHint');
+      case LocalAuthFactorsComplexity.kNone:
+        return this.i18nDynamic(locale, 'setLocalPasswordComplexityErrorNone');
+      case LocalAuthFactorsComplexity.kLow:
+        return this.i18nDynamic(locale, 'setLocalPasswordComplexityErrorLow');
+      case LocalAuthFactorsComplexity.kMedium:
+        return this.i18nDynamic(
+            locale, 'setLocalPasswordComplexityErrorMedium');
+      case LocalAuthFactorsComplexity.kHigh:
+        return this.i18nDynamic(locale, 'setLocalPasswordComplexityErrorHigh');
+    }
+  }
+
+  private getFirstInputError(
+      locale: string, complexity: LocalAuthFactorsComplexity,
+      validity: FirstInputValidity): string {
+    // Legacy QuickUnlock flow message (kUnset only occurs with TOO_SHORT
+    // validity).
+    if (complexity === LocalAuthFactorsComplexity.kUnset) {
+      return this.i18nDynamic(locale, 'setLocalPasswordMinCharsHint');
+    }
+
+    const minLengths = {
+      [LocalAuthFactorsComplexity.kNone]: '1',
+      [LocalAuthFactorsComplexity.kLow]: '6',
+      [LocalAuthFactorsComplexity.kMedium]: '8',
+      [LocalAuthFactorsComplexity.kHigh]: '12',
+    };
+
+    const classReqIds = {
+      [LocalAuthFactorsComplexity.kNone]: '',
+      [LocalAuthFactorsComplexity.kLow]: 'setLocalPasswordReqLetterOrSymbol',
+      [LocalAuthFactorsComplexity.kMedium]: 'setLocalPasswordReqTwoClasses',
+      [LocalAuthFactorsComplexity.kHigh]: 'setLocalPasswordReqFourClasses',
+    };
+
+    switch (validity) {
+      case FirstInputValidity.TOO_SHORT:
+        const minLength = minLengths[complexity] || '';
+        return this.i18nDynamic(
+            locale, 'setLocalPasswordErrorTooShort', minLength);
+
+      case FirstInputValidity.MISSES_CHARACTERS:
+        const classReqId = classReqIds[complexity];
+        return classReqId ? this.i18nDynamic(locale, classReqId) : '';
+
+      case FirstInputValidity.CONTAINS_TRIVIAL_SEQUENCE:
+        return this.i18nDynamic(
+            locale, 'setLocalPasswordErrorContainsTrivialSequence');
+
+      default:
+        return '';
     }
   }
 
@@ -343,6 +430,45 @@ export class SetLocalPasswordInputElement extends
   }
   private onConfirmShowHidePasswordButtonClick() {
     this.isConfirmPasswordVisible_ = !this.isConfirmPasswordVisible_;
+  }
+
+  private async fetchLocalAuthFactorsComplexity(): Promise<void> {
+    if (!this.authToken) {
+      console.error(
+          'Invalid authToken while calling fetchLocalAuthFactorsComplexity:',
+          this.authToken);
+      return;
+    }
+    try {
+      this.localAuthFactorsComplexity_ =
+          await AuthFactorConfig.getRemote().getLocalAuthFactorsComplexity(
+              this.authToken!);
+    } catch (e) {
+      console.error('Error calling fetchLocalAuthFactorsComplexity:', e);
+      this.localAuthFactorsComplexity_ = LocalAuthFactorsComplexity.kUnset;
+    }
+  }
+
+  private async checkLocalPasswordComplexity(value: string):
+      Promise<PasswordComplexity|null> {
+    let authToken = '';
+    if (!this.authToken) {
+      console.warn(
+          'Invalid authToken while calling checkLocalPasswordComplexity:',
+          this.authToken);
+    } else {
+      authToken = this.authToken;
+    }
+
+    try {
+      return await PasswordFactorEditor.getRemote()
+          .checkLocalPasswordComplexity(authToken, value);
+    } catch (e) {
+      console.error(
+          'Expired authToken while calling checkLocalPasswordComplexity: ',
+          authToken);
+      return null;
+    }
   }
 }
 

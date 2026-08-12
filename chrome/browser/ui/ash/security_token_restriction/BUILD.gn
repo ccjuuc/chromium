@@ -13,8 +13,10 @@ static_library("security_token_restriction") {
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 
   deps = [
+    "//ash/strings",
     "//base",
     "//chrome/browser/ash/login",
+    "//chrome/browser/ui/views/apps/app_dialog",
     "//chromeos/ui/vector_icons",
     "//ui/base",
     "//ui/chromeos",

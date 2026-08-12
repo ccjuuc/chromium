@@ -13,6 +13,7 @@ buildflag_header("buildflags") {
   header = "buildflags.h"
   flags = [
     "WEBNN_USE_TFLITE=$webnn_use_tflite",
+    "WEBNN_USE_LITERT=$webnn_use_litert",
     "WEBNN_USE_CHROME_ML_API=$webnn_use_chrome_ml_api",
     "WEBNN_ENABLE_TFLITE_PROFILER=$webnn_enable_tflite_profiler",
     "WEBNN_INSTALL_RUNTIME_IN_CHROME_INSTALLER=$webnn_install_runtime_in_chrome_installer",
@@ -30,13 +31,15 @@ source_set("webnn_switches") {
   ]
 }
 
-component("webnn_service") {
-  defines = [ "IS_WEBNN_SERVICE_IMPL" ]
+source_set("webnn_service_base") {
+  visibility = [ ":*" ]
 
   sources = [
     "error.h",
-    "scoped_gpu_sequence.cc",
-    "scoped_gpu_sequence.h",
+    "gpu_task_scheduler.cc",
+    "gpu_task_scheduler.h",
+    "graph_builder_context.cc",
+    "graph_builder_context.h",
     "sequence_deleter.cc",
     "sequence_deleter.h",
     "webnn_constant_operand.cc",
@@ -45,6 +48,8 @@ component("webnn_service") {
     "webnn_context_impl.h",
     "webnn_context_provider_impl.cc",
     "webnn_context_provider_impl.h",
+    "webnn_context_provider_in_renderer.cc",
+    "webnn_context_provider_in_renderer.h",
     "webnn_graph_builder_impl.cc",
     "webnn_graph_builder_impl.h",
     "webnn_graph_impl.cc",
@@ -71,46 +76,71 @@ component("webnn_service") {
     "//third_party/tflite:buildflags",
   ]
 
-  if (is_win) {
-    sources += [
-      "dml/adapter.cc",
-      "dml/adapter.h",
-      "dml/command_queue.cc",
-      "dml/command_queue.h",
-      "dml/command_recorder.cc",
-      "dml/command_recorder.h",
-      "dml/context_impl_dml.cc",
-      "dml/context_impl_dml.h",
-      "dml/context_provider_dml.cc",
-      "dml/context_provider_dml.h",
-      "dml/error.h",
-      "dml/graph_builder_dml.cc",
-      "dml/graph_builder_dml.h",
-      "dml/graph_impl_dml.cc",
-      "dml/graph_impl_dml.h",
-      "dml/platform_functions.cc",
-      "dml/platform_functions.h",
-      "dml/tensor_desc.cc",
-      "dml/tensor_desc.h",
-      "dml/tensor_impl_dml.cc",
-      "dml/tensor_impl_dml.h",
-      "dml/utils.cc",
-      "dml/utils.h",
-    ]
+  if (build_tflite_with_xnnpack) {
     deps += [
-      "//third_party/fp16",
-      "//third_party/microsoft_dxheaders:dxguids",
-      "//ui/gl",
-      "//ui/gl/init",
+      "//third_party/pthreadpool",
+      "//third_party/xnnpack",
+    ]
+  }
+
+  if (is_win) {
+    deps += [ "//services/webnn/public/cpp:win" ]
+  }
+
+  configs += [ "//build/config/compiler:prevent_unsafe_narrowing" ]
+
+  defines = [ "IS_WEBNN_SERVICE_IMPL" ]
+}
+
+if (is_apple || webnn_use_tflite || webnn_use_litert) {
+  source_set("webnn_service_resource_management") {
+    visibility = [ ":*" ]
+
+    sources = [
+      "queueable_resource_state.h",
+      "queueable_resource_state_base.cc",
+      "queueable_resource_state_base.h",
+      "resource_task.cc",
+      "resource_task.h",
     ]
 
-    libs = [ "dxgi.lib" ]
+    deps = [ "//base" ]
+
+    configs += [ "//build/config/compiler:prevent_unsafe_narrowing" ]
+
+    defines = [ "IS_WEBNN_SERVICE_IMPL" ]
   }
+}
+
+component("webnn_service") {
+  _configs = configs
+  configs = []
+  configs = [ "//third_party/tflite:tflite_shim_config" ] + _configs
+  defines = [ "IS_WEBNN_SERVICE_IMPL" ]
+
+  sources = []
+
+  public_deps = [ ":webnn_service_base" ]
+
+  deps = [
+    ":buildflags",
+    ":webnn_switches",
+    "//base",
+    "//gpu/command_buffer/service",
+    "//gpu/command_buffer/service:gles2",
+    "//gpu/config",
+    "//mojo/public/cpp/bindings",
+    "//services/viz/privileged/mojom/gl",
+    "//services/webnn/public/mojom",
+    "//third_party/tflite:buildflags",
+  ]
 
   if (is_apple) {
     sources += [
       "coreml/buffer_content_coreml.h",
       "coreml/buffer_content_coreml.mm",
+      "coreml/compiler_context_impl_coreml.h",
+      "coreml/compiler_context_impl_coreml.mm",
       "coreml/context_impl_coreml.h",
       "coreml/context_impl_coreml.mm",
       "coreml/graph_builder_coreml.cc",
@@ -135,21 +165,24 @@ component("webnn_service") {
     ]
   }
 
-  if (webnn_use_tflite) {
+  if (webnn_use_tflite || webnn_use_litert) {
     sources += [
       "tflite/buffer_content_tflite.cc",
       "tflite/buffer_content_tflite.h",
-      "tflite/context_impl_tflite.cc",
-      "tflite/context_impl_tflite.h",
       "tflite/graph_builder_tflite.cc",
       "tflite/graph_builder_tflite.h",
-      "tflite/graph_impl_tflite.cc",
-      "tflite/graph_impl_tflite.h",
-      "tflite/op_resolver.cc",
-      "tflite/op_resolver.h",
       "tflite/tensor_impl_tflite.cc",
       "tflite/tensor_impl_tflite.h",
     ]
+
+    if (webnn_use_litert) {
+      sources += [
+        "tflite/context_impl_litert.cc",
+        "tflite/context_impl_litert.h",
+        "tflite/graph_impl_litert.cc",
+        "tflite/graph_impl_litert.h",
+      ]
+    }
 
     deps += [
       "//third_party/flatbuffers",
@@ -159,25 +192,30 @@ component("webnn_service") {
       "//third_party/tflite:tflite_public_headers",
     ]
 
-    if (build_tflite_with_xnnpack) {
-      deps += [ "//third_party/xnnpack" ]
+    if (webnn_use_litert) {
+      deps += [
+        "//third_party/litert",
+        "//third_party/litert:buildflags",
+      ]
     }
 
     if (enable_ml_internal) {
       deps += [ "//services/on_device_model/ml" ]
-
-      defines += [ "ENABLE_ML_INTERNAL" ]
     }
   }
 
   if (is_win) {
     sources += [
+      "ort/compiler_context_impl_ort.cc",
+      "ort/compiler_context_impl_ort.h",
       "ort/context_impl_ort.cc",
       "ort/context_impl_ort.h",
       "ort/context_provider_ort.cc",
       "ort/context_provider_ort.h",
       "ort/device_allocator.cc",
       "ort/device_allocator.h",
+      "ort/dispatch_context_impl_ort.cc",
+      "ort/dispatch_context_impl_ort.h",
       "ort/environment.cc",
       "ort/environment.h",
       "ort/external_weights_manager.cc",
@@ -201,27 +239,24 @@ component("webnn_service") {
       "ort/scoped_ort_types.h",
       "ort/tensor_impl_ort.cc",
       "ort/tensor_impl_ort.h",
+      "ort/trivial_model.h",
+      "webnn_compiler_service_impl.cc",
+      "webnn_compiler_service_impl.h",
     ]
     deps += [
       "//services/webnn/public/cpp:win",
       "//third_party/windows_app_sdk_headers",
     ]
 
-    libs += [ "runtimeobject.lib" ]
+    libs = [ "runtimeobject.lib" ]
 
     # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
     # enable the diagnostic by removing this line.
     configs += [ "//build/config/compiler:no_exit_time_destructors" ]
   }
 
-  if (is_apple || webnn_use_tflite) {
-    sources += [
-      "queueable_resource_state.h",
-      "queueable_resource_state_base.cc",
-      "queueable_resource_state_base.h",
-      "resource_task.cc",
-      "resource_task.h",
-    ]
+  if (is_apple || webnn_use_tflite || webnn_use_litert) {
+    deps += [ ":webnn_service_resource_management" ]
   }
 }
 
@@ -244,9 +279,15 @@ source_set("webnn_test_support") {
     "//services/webnn/public/mojom",
   ]
 
+  public_deps = [ ":buildflags" ]
+
+  if (webnn_use_tflite || webnn_use_litert) {
+    deps += [ "//services/webnn/public/cpp:in_process_context_provider" ]
+  }
+
   if (is_win) {
     deps += [
-      "//services/webnn/host",
+      "//services/webnn/public/cpp:win",
       "//ui/gfx/mojom",
     ]
   }
@@ -263,21 +304,7 @@ source_set("tests") {
     "webnn_test_utils.h",
   ]
 
-  if (is_win) {
-    sources += [
-      "dml/adapter_test.cc",
-      "dml/command_queue_test.cc",
-      "dml/command_recorder_test.cc",
-      "dml/context_impl_dml_test.cc",
-      "dml/graph_builder_dml_test.cc",
-      "dml/platform_functions_test.cc",
-      "dml/tensor_desc_test.cc",
-      "dml/test_base.cc",
-      "dml/test_base.h",
-    ]
-  }
-
-  if (webnn_use_tflite || is_mac || is_win) {
+  if (webnn_use_tflite || webnn_use_litert || is_mac) {
     sources += [
       "webnn_graph_impl_backend_test.cc",
       "webnn_tensor_impl_backend_test.cc",
@@ -299,6 +326,7 @@ source_set("tests") {
     ":webnn_test_support",
     "//base",
     "//base/test:test_support",
+    "//gpu/config",
     "//mojo/public/cpp/bindings",
     "//mojo/public/cpp/test_support:test_utils",
     "//services/webnn/public/mojom",
@@ -314,15 +342,231 @@ source_set("tests") {
   }
 }
 
-mojolpm_fuzzer_test("webnn_graph_mojolpm_fuzzer") {
+# TODO(crbug.com/500747202): Re-enable in debug builds when timeout issues is
+# fixed.
+if (!is_debug) {
+  test("webnn_graph_impl_fuzzer") {
+    sources = [
+      "webnn_graph_impl_fuzzer.cc",
+      "webnn_test_utils.cc",
+      "webnn_test_utils.h",
+    ]
+
+    fuzztests = [
+      "CPU.Activation",
+      "CPU.ArgMinMax",
+      "CPU.BatchNormalization",
+      "CPU.Clamp",
+      "CPU.Concat",
+      "CPU.Conv2d",
+      "CPU.CumulativeSum",
+      "CPU.DequantizeLinear",
+      "CPU.ElementWiseBinary",
+      "CPU.Elu",
+      "CPU.Expand",
+      "CPU.Gather",
+      "CPU.GatherElements",
+      "CPU.GatherND",
+      "CPU.Gemm",
+      "CPU.Gru",
+      "CPU.GruCell",
+      "CPU.HardSigmoid",
+      "CPU.InstanceNormalization",
+      "CPU.LayerNormalization",
+      "CPU.LeakyRelu",
+      "CPU.Linear",
+      "CPU.Lstm",
+      "CPU.LstmCell",
+      "CPU.Matmul",
+      "CPU.Pad",
+      "CPU.Pool2d",
+      "CPU.Prelu",
+      "CPU.QuantizeLinear",
+      "CPU.Reduce",
+      "CPU.Resample2d",
+      "CPU.Reshape",
+      "CPU.Reverse",
+      "CPU.ScatterElements",
+      "CPU.ScatterND",
+      "CPU.Slice",
+      "CPU.Softmax",
+      "CPU.Split",
+      "CPU.Tile",
+      "CPU.Transpose",
+      "CPU.Triangular",
+      "CPU.Where",
+      "CPU.DQActivationQ",
+      "CPU.DQArgMax",
+      "CPU.DQClampQ",
+      "CPU.DQConcatQ",
+      "CPU.DQConv2dQ",
+      "CPU.DQElementWiseBinaryQ",
+      "CPU.DQEluQ",
+      "CPU.DQGatherQ",
+      "CPU.DQGemmQ",
+      "CPU.DQLeakyReluQ",
+      "CPU.DQPadQ",
+      "CPU.DQPool2dQ",
+      "CPU.DQReduceQ",
+      "CPU.DQResample2dQ",
+      "CPU.DQReshapeQ",
+      "CPU.DQSliceQ",
+      "CPU.DQSoftmaxQ",
+      "CPU.DQSplitQ",
+      "CPU.DQTransposeQ",
+      "GPU.Activation",
+      "GPU.ArgMinMax",
+      "GPU.BatchNormalization",
+      "GPU.Clamp",
+      "GPU.Concat",
+      "GPU.Conv2d",
+      "GPU.CumulativeSum",
+      "GPU.DequantizeLinear",
+      "GPU.ElementWiseBinary",
+      "GPU.Elu",
+      "GPU.Expand",
+      "GPU.Gather",
+      "GPU.GatherElements",
+      "GPU.GatherND",
+      "GPU.Gemm",
+      "GPU.Gru",
+      "GPU.GruCell",
+      "GPU.HardSigmoid",
+      "GPU.InstanceNormalization",
+      "GPU.LayerNormalization",
+      "GPU.LeakyRelu",
+      "GPU.Linear",
+      "GPU.Lstm",
+      "GPU.LstmCell",
+      "GPU.Matmul",
+      "GPU.Pad",
+      "GPU.Pool2d",
+      "GPU.Prelu",
+      "GPU.QuantizeLinear",
+      "GPU.Reduce",
+      "GPU.Resample2d",
+      "GPU.Reshape",
+      "GPU.Reverse",
+      "GPU.ScatterElements",
+      "GPU.ScatterND",
+      "GPU.Slice",
+      "GPU.Softmax",
+      "GPU.Split",
+      "GPU.Tile",
+      "GPU.Transpose",
+      "GPU.Triangular",
+      "GPU.Where",
+      "GPU.DQActivationQ",
+      "GPU.DQArgMax",
+      "GPU.DQClampQ",
+      "GPU.DQConcatQ",
+      "GPU.DQConv2dQ",
+      "GPU.DQElementWiseBinaryQ",
+      "GPU.DQEluQ",
+      "GPU.DQGatherQ",
+      "GPU.DQGemmQ",
+      "GPU.DQLeakyReluQ",
+      "GPU.DQPadQ",
+      "GPU.DQPool2dQ",
+      "GPU.DQReduceQ",
+      "GPU.DQResample2dQ",
+      "GPU.DQReshapeQ",
+      "GPU.DQSliceQ",
+      "GPU.DQSoftmaxQ",
+      "GPU.DQSplitQ",
+      "GPU.DQTransposeQ",
+      "NPU.Activation",
+      "NPU.ArgMinMax",
+      "NPU.BatchNormalization",
+      "NPU.Clamp",
+      "NPU.Concat",
+      "NPU.Conv2d",
+      "NPU.CumulativeSum",
+      "NPU.DequantizeLinear",
+      "NPU.ElementWiseBinary",
+      "NPU.Elu",
+      "NPU.Expand",
+      "NPU.Gather",
+      "NPU.GatherElements",
+      "NPU.GatherND",
+      "NPU.Gemm",
+      "NPU.Gru",
+      "NPU.GruCell",
+      "NPU.HardSigmoid",
+      "NPU.InstanceNormalization",
+      "NPU.LayerNormalization",
+      "NPU.LeakyRelu",
+      "NPU.Linear",
+      "NPU.Lstm",
+      "NPU.LstmCell",
+      "NPU.Matmul",
+      "NPU.Pad",
+      "NPU.Pool2d",
+      "NPU.Prelu",
+      "NPU.QuantizeLinear",
+      "NPU.Reduce",
+      "NPU.Resample2d",
+      "NPU.Reshape",
+      "NPU.Reverse",
+      "NPU.ScatterElements",
+      "NPU.ScatterND",
+      "NPU.Slice",
+      "NPU.Softmax",
+      "NPU.Split",
+      "NPU.Tile",
+      "NPU.Transpose",
+      "NPU.Triangular",
+      "NPU.Where",
+      "NPU.DQActivationQ",
+      "NPU.DQArgMax",
+      "NPU.DQClampQ",
+      "NPU.DQConcatQ",
+      "NPU.DQConv2dQ",
+      "NPU.DQElementWiseBinaryQ",
+      "NPU.DQEluQ",
+      "NPU.DQGatherQ",
+      "NPU.DQGemmQ",
+      "NPU.DQLeakyReluQ",
+      "NPU.DQPadQ",
+      "NPU.DQPool2dQ",
+      "NPU.DQReduceQ",
+      "NPU.DQResample2dQ",
+      "NPU.DQReshapeQ",
+      "NPU.DQSliceQ",
+      "NPU.DQSoftmaxQ",
+      "NPU.DQSplitQ",
+      "NPU.DQTransposeQ",
+    ]
+
+    deps = [
+      ":webnn_service",
+      ":webnn_test_support",
+      "//base",
+      "//base/test:test_support",
+      "//mojo/core/embedder",
+      "//mojo/public/cpp/bindings",
+      "//services/webnn/public/cpp",
+      "//services/webnn/public/mojom",
+      "//testing/gtest",
+      "//third_party/fp16",
+      "//third_party/fuzztest:fuzztest_gtest_main",
+    ]
+
+    # ASan inflates stack frames significantly, and the fuzzer deep call chain
+    # overflows the default 1MB stack on Windows. Set to 8MB instead.
+    if (is_win) {
+      ldflags = [ "/STACK:0x800000" ]
+    }
+  }
+}
+
+mojolpm_fuzzer_test("webnn_graph_mojolpm_textproto_fuzzer") {
   sources = [ "webnn_graph_mojolpm_fuzzer.cc" ]
 
   proto_source = "webnn_graph_mojolpm_fuzzer.proto"
 
   proto_deps = [ "//services/webnn/public/mojom:mojom_mojolpm" ]
-  testcase_proto_kind = "services.fuzzing.webnn_graph.proto.Testcase"
-  seed_corpus_sources =
-      [ "webnn_graph_mojolpm_fuzzer_seed_corpus/simple.textproto" ]
+  seed_corpus = "webnn_graph_mojolpm_fuzzer_seed_corpus"
   deps = [
     ":webnn_service",
     ":webnn_test_support",

@@ -76,8 +76,9 @@ if (!limit_android_deps) {
     if (defined(android_proto_runtime)) {
       deps = [ android_proto_runtime ]
     } else if (is_cronet_for_aosp_build) {
-      # Note: This exists for Cronet in AOSP where we can't import prebuilts. We import
-      # the raw sources and compile them using a specialized pipeline. See crbug.com/419480317.
+      # Note: This exists for Cronet in AOSP where we can't import prebuilts. We
+      # import the raw sources and compile them using a specialized pipeline.
+      # See crbug.com/419480317.
       # TODO(https://crbug.com/425901872): Once we fix the proguard issue, also build Cronet in Chromium against raw sources to stay consistent.
       deps = [ "//third_party/protobuf:proto_runtime_lite_java" ]
     } else {
@@ -238,19 +239,6 @@ if (!limit_android_deps) {
   }
 
   # This is generated, do not edit. Update BuildConfigGenerator.groovy instead.
-  java_prebuilt("org_jetbrains_kotlinx_kotlinx_coroutines_guava_java") {
-    jar_path = "cipd/libs/org_jetbrains_kotlinx_kotlinx_coroutines_guava/kotlinx-coroutines-guava.jar"
-    output_name = "org_jetbrains_kotlinx_kotlinx_coroutines_guava"
-    supports_android = true
-    requires_android = true
-    enable_bytecode_checks = false
-    deps = [
-      ":org_jetbrains_kotlinx_kotlinx_coroutines_core_java",
-      "//third_party/kotlin_stdlib:kotlin_stdlib_java",
-    ]
-  }
-
-  # This is generated, do not edit. Update BuildConfigGenerator.groovy instead.
   java_prebuilt("org_jsoup_jsoup_java") {
     jar_path = "cipd/libs/org_jsoup_jsoup/jsoup.jar"
     output_name = "org_jsoup_jsoup"
@@ -319,7 +307,7 @@ if (!limit_android_deps) {
     enable_bytecode_checks = false
 
     # To remove visibility constraint, add this dependency to
-    # //third_party/android_deps/build.gradle.
+    # //third_party/android_deps/build.gradle.template
     visibility = [
       ":*",
       "//third_party/androidx:*",
@@ -336,7 +324,7 @@ if (!limit_android_deps) {
     enable_bytecode_checks = false
 
     # To remove visibility constraint, add this dependency to
-    # //third_party/android_deps/build.gradle.
+    # //third_party/android_deps/build.gradle.template
     visibility = [
       ":*",
       "//third_party/androidx:*",
@@ -353,7 +341,7 @@ if (!limit_android_deps) {
     enable_bytecode_checks = false
 
     # To remove visibility constraint, add this dependency to
-    # //third_party/android_deps/build.gradle.
+    # //third_party/android_deps/build.gradle.template
     visibility = [
       ":*",
       "//third_party/androidx:*",

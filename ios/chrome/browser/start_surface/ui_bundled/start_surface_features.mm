@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/start_surface/ui_bundled/start_surface_features.h"
 
+#import <Foundation/Foundation.h>
+
 #import "base/metrics/field_trial_params.h"
 
 namespace {
@@ -12,57 +14,20 @@ constexpr base::TimeDelta kDefaultShowTabGroupInGridInactiveDuration =
     base::Hours(1);
 }  // anonymous namespace
 
-BASE_FEATURE(kShowTabGroupInGridOnStart, base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kIOSStartTimeBrowserBackgroundRemediations,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kIOSStartTimeStartupRemediations,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-const char kShowTabGroupInGridInactiveDurationInSeconds[] =
-    "ShowTabGridInactiveDurationInSeconds";
+// Key for the tab group in grid inactive duration testing override.
+NSString* const kShowTabGroupInGridInactiveDurationKey =
+    @"ShowTabGroupInGridInactiveDuration";
 
 const char kReturnToStartSurfaceInactiveDurationInSeconds[] =
     "ReturnToStartSurfaceInactiveDurationInSeconds";
 
-const char kIOSStartTimeBackgroundRemediationsAvoidNTPCleanup[] =
-    "ios-startup-remediations-avoid-ntp-cleanup";
-
-const char kIOSStartTimeBrowserBackgroundRemediationsUpdateFeedRefresh[] =
-    "ios-startup-remediations-update-feed-refresh";
-
-const char kIOSStartTimeStartupRemediationsSaveNTPWebState[] =
-    "ios-startup-remediations-save-ntp-web-state";
-
-bool IsShowTabGroupInGridOnStartEnabled() {
-  return base::FeatureList::IsEnabled(kShowTabGroupInGridOnStart);
-}
-
 base::TimeDelta GetReturnToTabGroupInGridDuration() {
-  return base::Seconds(base::GetFieldTrialParamByFeatureAsDouble(
-      kShowTabGroupInGridOnStart, kShowTabGroupInGridInactiveDurationInSeconds,
-      kDefaultShowTabGroupInGridInactiveDuration.InSecondsF()));
-}
-StartupRemediationsType GetIOSStartTimeStartupRemediationsEnabledType() {
-  if (base::GetFieldTrialParamByFeatureAsBool(
-          kIOSStartTimeStartupRemediations,
-          kIOSStartTimeStartupRemediationsSaveNTPWebState, false)) {
-    return StartupRemediationsType::kSaveNewNTPWebState;
+  NSNumber* testing_override = [[NSUserDefaults standardUserDefaults]
+      objectForKey:kShowTabGroupInGridInactiveDurationKey];
+  if (testing_override) {
+    return base::Seconds([testing_override doubleValue]);
   }
-  return base::FeatureList::IsEnabled(kIOSStartTimeStartupRemediations)
-             ? StartupRemediationsType::kOpenNewNTPTab
-             : StartupRemediationsType::kDisabled;
+  return kDefaultShowTabGroupInGridInactiveDuration;
 }
 
-bool IsAvoidNTPCleanupOnBackgroundEnabled() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-      kIOSStartTimeBrowserBackgroundRemediations,
-      kIOSStartTimeBackgroundRemediationsAvoidNTPCleanup, false);
-}
-
-bool IsAvoidFeedRefreshOnBackgroundEnabled() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-      kIOSStartTimeBrowserBackgroundRemediations,
-      kIOSStartTimeBrowserBackgroundRemediationsUpdateFeedRefresh, false);
-}
+BASE_FEATURE(kStartSurfaceUserSetting, base::FEATURE_DISABLED_BY_DEFAULT);

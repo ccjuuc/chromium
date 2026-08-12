@@ -14,11 +14,14 @@ class AuthenticationService;
 @class GeminiPageContext;
 @protocol SingleSignOnService;
 
+namespace gemini {
+enum class EntryPoint;
+}  // namespace gemini
+
 namespace ios::provider {
-enum class BWGLocationPermissionState;
-enum class BWGPageContextState;
-enum class BWGPageContextComputationState;
-enum class BWGPageContextAttachmentState;
+enum class GeminiLocationPermissionState;
+enum class GeminiPageContextComputationState;
+enum class GeminiPageContextAttachmentState;
 }  // namespace ios::provider
 
 namespace optimization_guide::proto {
@@ -43,17 +46,17 @@ class PageContext;
     std::unique_ptr<optimization_guide::proto::PageContext>
         uniquePageContext;
 
-// The state of the BWG location permission.
+// The state of the Gemini location permission.
 @property(nonatomic, assign)
-    ios::provider::BWGLocationPermissionState BWGLocationPermissionState;
+    ios::provider::GeminiLocationPermissionState geminiLocationPermissionState;
 
-// The state of the BWG PageContext computation.
-@property(nonatomic, assign) ios::provider::BWGPageContextComputationState
-    BWGPageContextComputationState;
+// The state of the Gemini PageContext computation.
+@property(nonatomic, assign) ios::provider::GeminiPageContextComputationState
+    geminiPageContextComputationState;
 
-// The state of the BWG PageContext attachment.
-@property(nonatomic, assign)
-    ios::provider::BWGPageContextAttachmentState BWGPageContextAttachmentState;
+// The state of the Gemini PageContext attachment.
+@property(nonatomic, assign) ios::provider::GeminiPageContextAttachmentState
+    geminiPageContextAttachmentState;
 
 // The favicon of the attached page. Uses a default icon if it's unavailable.
 @property(nonatomic, strong) UIImage* favicon;
@@ -83,11 +86,42 @@ class PageContext;
 // Whether the zero-state suggestion chips should be shown.
 @property(nonatomic, assign) BOOL shouldShowSuggestionChips;
 
+// Whether to show the account snackbar when the active account is mismatched.
+@property(nonatomic, assign) BOOL shouldShowAccountSnackbar;
+
 // Label displayed from a Gemini contextual cue chip.
 @property(nonatomic, copy) NSString* contextualCueChipLabel;
 
 // Image to be attached to the Gemini instance.
 @property(nonatomic, strong) UIImage* imageAttachment;
+
+// Whether to show the Gemini image remix in-product help in the Floaty.
+@property(nonatomic, assign) BOOL imageRemixIPHShouldShow;
+
+// Whether to show the Gemini Live onboarding in-product help.
+@property(nonatomic, assign) BOOL shouldShowGeminiLiveIPH;
+
+// Whether to show the Gemini Live "new" badge.
+@property(nonatomic, assign) BOOL shouldShowGeminiLiveNewBadge;
+
+// The text to display for the Gemini Live in-product help.
+@property(nonatomic, copy) NSString* geminiLiveIPHText;
+
+// The initial bottom offset of the floaty.
+@property(nonatomic, assign) CGFloat initialBottomOffset;
+
+// The window scene in which the Gemini view window is initialized and
+// presented.
+@property(nonatomic, strong) UIWindowScene* hostWindowScene;
+
+// The entry point where the floaty was triggered from.
+@property(nonatomic, assign) gemini::EntryPoint entryPoint;
+
+// Whether the account requires capability-based restriction.
+@property(nonatomic, assign) BOOL needsAccountCapabilityRestriction;
+
+// Whether full page context is required before initiating the Gemini session.
+@property(nonatomic, assign) BOOL requireFullPageContext;
 
 @end
 

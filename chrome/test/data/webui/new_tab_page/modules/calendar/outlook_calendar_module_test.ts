@@ -4,8 +4,7 @@
 
 import type {DisableModuleEvent, DismissModuleInstanceEvent, OutlookCalendarModuleElement} from 'chrome://new-tab-page/lazy_load.js';
 import {outlookCalendarDescriptor, OutlookCalendarProxyImpl, ParentTrustedDocumentProxy} from 'chrome://new-tab-page/lazy_load.js';
-import {MicrosoftAuthUntrustedDocumentRemote} from 'chrome://new-tab-page/ntp_microsoft_auth_shared_ui.mojom-webui.js';
-import {OutlookCalendarPageHandlerRemote} from 'chrome://new-tab-page/outlook_calendar.mojom-webui.js';
+import {MicrosoftAuthUntrustedDocumentRemote, OutlookCalendarPageHandlerRemote} from 'chrome://new-tab-page/new_tab_page.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import type {TestMock} from 'chrome://webui-test/test_mock.js';
@@ -37,21 +36,19 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
   });
 
   test(`creates module`, async () => {
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(1)}));
+    handler.setPromiseResolveFor('getEvents', {events: createEvents(1)});
     module = await outlookCalendarDescriptor.initialize(0) as
         OutlookCalendarModuleElement;
     assertTrue(!!module);
     document.body.append(module);
 
     // Assert.
-    assertTrue(isVisible(module.$.moduleHeaderElementV2));
-    assertEquals(module.$.moduleHeaderElementV2.headerText, title);
+    assertTrue(isVisible(module.$.moduleHeader));
+    assertEquals(module.$.moduleHeader.headerText, title);
   });
 
   test(`module not created when there are no events`, async () => {
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(0)}));
+    handler.setPromiseResolveFor('getEvents', {events: createEvents(0)});
     module = await outlookCalendarDescriptor.initialize(0) as
         OutlookCalendarModuleElement;
     assertEquals(module, null);
@@ -59,8 +56,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
 
   test('clicking the disable button fires a disable module event', async () => {
     // Arrange.
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(1)}));
+    handler.setPromiseResolveFor('getEvents', {events: createEvents(1)});
     module = await outlookCalendarDescriptor.initialize(0) as
         OutlookCalendarModuleElement;
     assertTrue(!!module);
@@ -69,8 +65,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
     // Act.
     const whenFired = eventToPromise('disable-module', module);
     const disableButton =
-        module.$.moduleHeaderElementV2.shadowRoot.querySelector<HTMLElement>(
-            '#disable');
+        module.$.moduleHeader.shadowRoot.querySelector<HTMLElement>('#disable');
     assertTrue(!!disableButton);
     disableButton.click();
 
@@ -83,8 +78,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
 
   test(`dismiss and restore module`, async () => {
     // Set up module.
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(1)}));
+    handler.setPromiseResolveFor('getEvents', {events: createEvents(1)});
     module = await outlookCalendarDescriptor.initialize(0) as
         OutlookCalendarModuleElement;
     assertTrue(!!module);
@@ -93,8 +87,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
     // Dismiss module.
     const whenFired = eventToPromise('dismiss-module-instance', module);
     const dismissButton =
-        module.$.moduleHeaderElementV2.shadowRoot.querySelector<HTMLElement>(
-            '#dismiss');
+        module.$.moduleHeader.shadowRoot.querySelector<HTMLElement>('#dismiss');
     assertTrue(!!dismissButton);
     dismissButton.click();
 
@@ -110,8 +103,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
 
   test('clicking the sign out button sends sign out request', async () => {
     // Arrange.
-    handler.setResultFor(
-        'getEvents', Promise.resolve({events: createEvents(1)}));
+    handler.setPromiseResolveFor('getEvents', {events: createEvents(1)});
     module = await outlookCalendarDescriptor.initialize(0) as
         OutlookCalendarModuleElement;
     assertTrue(!!module);
@@ -119,8 +111,7 @@ suite('NewTabPageModulesOutlookCalendarModuleTest', () => {
 
     // Act.
     const signoutButton =
-        module.$.moduleHeaderElementV2.shadowRoot.querySelector<HTMLElement>(
-            '#signout');
+        module.$.moduleHeader.shadowRoot.querySelector<HTMLElement>('#signout');
     assertTrue(!!signoutButton);
     signoutButton.click();
 

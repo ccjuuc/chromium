@@ -23,9 +23,9 @@ std::string TestToolbarActionViewModel::GetId() const {
 }
 
 base::CallbackListSubscription
-TestToolbarActionViewModel::RegisterUpdateObserver(
+TestToolbarActionViewModel::RegisterIconUpdateObserver(
     base::RepeatingClosure observer) {
-  return observers_.Add(observer);
+  return icon_observers_.Add(observer);
 }
 
 ui::ImageModel TestToolbarActionViewModel::GetIcon(
@@ -63,6 +63,14 @@ TestToolbarActionViewModel::GetHoverCardState(
   return state;
 }
 
+ToolbarActionViewModel::HoverCardUiState
+TestToolbarActionViewModel::GetHoverCardUiState(
+    const ToolbarActionViewModel::HoverCardState& state,
+    content::WebContents* web_contents) const {
+  ToolbarActionViewModel::HoverCardUiState ui_state;
+  return ui_state;
+}
+
 bool TestToolbarActionViewModel::IsEnabled(
     content::WebContents* web_contents) const {
   return is_enabled_;
@@ -76,7 +84,7 @@ void TestToolbarActionViewModel::HidePopup() {
   popup_showing_ = false;
 }
 
-gfx::NativeView TestToolbarActionViewModel::GetPopupNativeView() {
+gfx::NativeView TestToolbarActionViewModel::GetPopupNativeViewForTesting() {
   return gfx::NativeView();
 }
 
@@ -99,35 +107,58 @@ TestToolbarActionViewModel::GetSiteInteraction(
   return extensions::SitePermissionsHelper::SiteInteraction::kNone;
 }
 
+bool TestToolbarActionViewModel::CanHandleAccelerators() const {
+  return true;
+}
+
+bool TestToolbarActionViewModel::TryHandleAcceleratorPress() {
+  return true;
+}
+
 void TestToolbarActionViewModel::ShowPopup(bool by_user) {
   popup_showing_ = true;
 }
 
 void TestToolbarActionViewModel::SetActionName(const std::u16string& name) {
   action_name_ = name;
-  NotifyObservers();
+
+  // TODO(crbug.com/461983701): We're using the icon observer as a view model
+  // observer for testing purposes.
+  NotifyIconObservers();
 }
 
 void TestToolbarActionViewModel::SetActionTitle(const std::u16string& title) {
   action_title_ = title;
-  NotifyObservers();
+
+  // TODO(crbug.com/461983701): We're using the icon observer as a view model
+  // observer for testing purposes.
+  NotifyIconObservers();
 }
 
 void TestToolbarActionViewModel::SetAccessibleName(const std::u16string& name) {
   accessible_name_ = name;
-  NotifyObservers();
+
+  // TODO(crbug.com/461983701): We're using the icon observer as a view model
+  // observer for testing purposes.
+  NotifyIconObservers();
 }
 
 void TestToolbarActionViewModel::SetTooltip(const std::u16string& tooltip) {
   tooltip_ = tooltip;
-  NotifyObservers();
+
+  // TODO(crbug.com/461983701): We're using the icon observer as a view model
+  // observer for testing purposes.
+  NotifyIconObservers();
 }
 
 void TestToolbarActionViewModel::SetEnabled(bool is_enabled) {
   is_enabled_ = is_enabled;
-  NotifyObservers();
+
+  // TODO(crbug.com/461983701): We're using the icon observer as a view model
+  // observer for testing purposes.
+  NotifyIconObservers();
 }
 
-void TestToolbarActionViewModel::NotifyObservers() {
-  observers_.Notify();
+void TestToolbarActionViewModel::NotifyIconObservers() {
+  icon_observers_.Notify();
 }

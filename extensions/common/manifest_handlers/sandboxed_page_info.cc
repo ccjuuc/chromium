@@ -27,12 +27,15 @@ static base::LazyInstance<SandboxedPageInfo>::DestructorAtExit
     g_empty_sandboxed_info = LAZY_INSTANCE_INITIALIZER;
 
 const SandboxedPageInfo& GetSandboxedPageInfo(const Extension* extension) {
-  SandboxedPageInfo* info = static_cast<SandboxedPageInfo*>(
-      extension->GetManifestData(keys::kSandboxedPages));
+  const SandboxedPageInfo* info =
+      extension->GetManifestData<SandboxedPageInfo>();
   return info ? *info : g_empty_sandboxed_info.Get();
 }
 
 }  // namespace
+
+// static
+const char* SandboxedPageInfo::kManifestDataKey = keys::kSandboxedPages;
 
 SandboxedPageInfo::SandboxedPageInfo() = default;
 SandboxedPageInfo::~SandboxedPageInfo() = default;
@@ -58,7 +61,7 @@ bool SandboxedPageHandler::Parse(Extension* extension, std::u16string* error) {
     return false;
   }
 
-  const base::Value::List& list = list_value->GetList();
+  const base::ListValue& list = list_value->GetList();
   for (size_t i = 0; i < list.size(); ++i) {
     if (!list[i].is_string()) {
       *error = ErrorUtils::FormatErrorMessageUTF16(
@@ -79,7 +82,7 @@ bool SandboxedPageHandler::Parse(Extension* extension, std::u16string* error) {
     sandboxed_info->pages.AddPattern(pattern);
   }
 
-  extension->SetManifestData(keys::kSandboxedPages, std::move(sandboxed_info));
+  extension->SetManifestData(std::move(sandboxed_info));
   return true;
 }
 

@@ -14,7 +14,6 @@
 #include "base/threading/platform_thread.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
@@ -30,7 +29,7 @@ TextInputTestBase::TextInputTestBase() = default;
 TextInputTestBase::~TextInputTestBase() = default;
 
 ui::InputMethod* TextInputTestBase::GetInputMethod() const {
-  return browser()->window()->GetNativeWindow()->GetHost()->GetInputMethod();
+  return browser()->GetWindow()->GetNativeWindow()->GetHost()->GetInputMethod();
 }
 
 TextInputTestHelper::TextInputTestHelper(ui::InputMethod* input_method)

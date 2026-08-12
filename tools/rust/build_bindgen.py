@@ -7,6 +7,7 @@
 import argparse
 import collections
 import os
+from pathlib import Path
 import platform
 import shutil
 import subprocess
@@ -27,8 +28,8 @@ from build import (CheckoutGitRepo, DownloadAndUnpack, LLVM_BUILD_TOOLS_DIR,
 from update import (RmTree)
 
 # The git hash to use.  See https://github.com/rust-lang/rust-bindgen/tags.
-# The current hash below corresponds to something between 0.72.0 and 0.73.0.
-BINDGEN_GIT_VERSION = '2426dd68cd12e0ac022bca18efb9c7d0acd27e12'
+# The current hash below corresponds to 0.72.1
+BINDGEN_GIT_VERSION = 'd874de8d646d9b8a3e7ba2db2bcd52f2fba8f1f5'
 BINDGEN_GIT_REPO = ('https://chromium.googlesource.com/external/' +
                     'github.com/rust-lang/rust-bindgen')
 
@@ -163,6 +164,9 @@ def RunCargo(cargo_args):
         env['CXXFLAGS'] += f' -isysroot {sdk_path}'
         env['LDFLAGS'] += f' -isysroot {sdk_path}'
         env['RUSTFLAGS'] += f' -Clink-arg=-isysroot -Clink-arg={sdk_path}'
+        if 'x86_64' in RustTargetTriple():
+            env['LDFLAGS'] += ' -fapple-link-rtlib'
+            env['RUSTFLAGS'] += ' -Clink-arg=-fapple-link-rtlib'
 
     # This will `fail_hard` and not return if `cargo` reports problems.
     RunCommand([cargo_bin] + cargo_args, setenv=True, env=env)
@@ -188,18 +192,32 @@ def main():
         RmTree(build_dir)
 
     print(f'Building bindgen in {build_dir} ...')
+    cargo_shared_args = [
+        f'--manifest-path={BINDGEN_SRC_DIR}/Cargo.toml',
+        f'--target-dir={build_dir}',
+    ]
+    # We've run into incremental compilation bugs while building bindgen in
+    # https://crbug.com/488049150, so clean the build directory first. This
+    # doesn't take long compared to the rest of the build anyway.
+    # `cargo clean` requires a CACHEDIR.TAG file in the directory.
+    cachedir_tag = Path(build_dir) / 'CACHEDIR.TAG'
+    cachedir_tag.parent.mkdir(exist_ok=True, parents=True)
+    cachedir_tag.write_bytes(
+        b"Signature: 8a477f597d28d172789f06886806bc55\n"
+        b"# Written by build_bindgen.py to make `cargo clean` happy.\n")
+    RunCargo([
+        'clean',
+    ] + cargo_shared_args)
     static_feature = ",static" if ('windows' not in RustTargetTriple()) else ""
     cargo_args = [
         'build',
-        f'--manifest-path={BINDGEN_SRC_DIR}/Cargo.toml',
-        f'--target-dir={build_dir}',
         f'--target={RustTargetTriple()}',
         f'--no-default-features',
         f'--features=logging' + static_feature,
         '--release',
         '--bin',
         'bindgen',
-    ]
+    ] + cargo_shared_args
     RunCargo(cargo_args)
 
     install_dir = os.path.join(RUST_TOOLCHAIN_OUT_DIR)
@@ -227,7 +245,9 @@ def main():
                             follow_symlinks=False)
 
     if not args.skip_test:
-        test_args = ['test', '--lib', '--bins', '--tests', '--']
+        test_args = ['test', '--lib', '--bins', '--tests']
+        test_args += cargo_shared_args
+        test_args.append('--')
         for excluded in EXCLUDED_TESTS:
             test_args.append('--skip')
             test_args.append(excluded)

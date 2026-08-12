@@ -27,21 +27,18 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
-#include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/background.h"
-#include "ui/views/controls/button/label_button_border.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
@@ -302,7 +299,7 @@ class OmniboxSuggestionRowButton : public views::MdTextButton {
     SetImageLabelSpacing(8);
     SetCustomPadding(ChromeLayoutProvider::Get()->GetInsetsMetric(
         INSETS_OMNIBOX_PILL_BUTTON));
-    SetCornerRadius(GetLayoutConstant(TOOLBAR_CORNER_RADIUS));
+    SetCornerRadius(GetLayoutConstant(LayoutConstant::kToolbarCornerRadius));
 
     auto* const ink_drop = views::InkDrop::Get(this);
     SetAnimationDuration(base::TimeDelta());
@@ -355,12 +352,13 @@ class OmniboxSuggestionRowButton : public views::MdTextButton {
       SetImageModel(views::Button::STATE_NORMAL,
                     ui::ImageModel::FromImage(image_));
     } else {
-      SetImageModel(views::Button::STATE_NORMAL,
-                    ui::ImageModel::FromVectorIcon(
-                        *icon_,
-                        selected ? kColorOmniboxResultsButtonIconSelected
-                                 : kColorOmniboxResultsButtonIcon,
-                        GetLayoutConstant(LOCATION_BAR_ICON_SIZE)));
+      SetImageModel(
+          views::Button::STATE_NORMAL,
+          ui::ImageModel::FromVectorIcon(
+              *icon_,
+              selected ? kColorOmniboxResultsButtonIconSelected
+                       : kColorOmniboxResultsButtonIcon,
+              GetLayoutConstant(LayoutConstant::kLocationBarIconSize)));
     }
     SetEnabledTextColors(color_provider->GetColor(
         selected ? kColorOmniboxResultsTextSelected : kColorOmniboxText));
@@ -454,7 +452,10 @@ void OmniboxSuggestionButtonRowView::BuildViews() {
     keyword_button_ = AddChildView(std::make_unique<OmniboxSuggestionRowButton>(
         base::BindRepeating(&OmniboxSuggestionButtonRowView::ButtonPressed,
                             base::Unretained(this), selection),
-        CONTEXT_OMNIBOX_PRIMARY, vector_icons::kSearchChromeRefreshIcon,
+        CONTEXT_OMNIBOX_PRIMARY,
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kSearchIcon
+            : vector_icons::kSearchChromeRefreshOldIcon,
         gfx::Image(), popup_view_, selection));
   }
 
@@ -563,11 +564,11 @@ void OmniboxSuggestionButtonRowView::SelectionStateChanged() {
     return;
   }
   if (previous_active_button_) {
-    views::FocusRing::Get(previous_active_button_)->SchedulePaint();
+    views::FocusRing::Get(previous_active_button_)->Refresh();
     previous_active_button_->GetViewAccessibility().SetIsSelected(false);
   }
   if (active_button) {
-    views::FocusRing::Get(active_button)->SchedulePaint();
+    views::FocusRing::Get(active_button)->Refresh();
     active_button->GetViewAccessibility().SetIsSelected(true);
   }
   previous_active_button_ = active_button;

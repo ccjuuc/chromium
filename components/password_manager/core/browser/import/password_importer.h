@@ -13,6 +13,7 @@
 #include "base/types/expected.h"
 #include "components/password_manager/core/browser/import/import_results.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #include "components/password_manager/services/csv_password/csv_password_parser_service.h"
 #include "components/password_manager/services/csv_password/public/mojom/csv_password_parser.mojom.h"
@@ -42,9 +43,9 @@ struct IncomingPasswords {
   IncomingPasswords& operator=(IncomingPasswords&& other);
 
   // Passwords that should be added to the store.
-  std::vector<password_manager::CredentialUIEntry> add_credentials;
+  std::vector<CredentialUIEntry> add_credentials;
   // Passwords that should be updated in the store.
-  std::vector<password_manager::PasswordForm> edit_forms;
+  std::vector<StoredCredential> edit_credentials;
 };
 
 struct ConflictsResolutionCache;
@@ -76,11 +77,9 @@ class PasswordImporter {
 
   // ConsumePasswordsCallback is the type of the processing function for parsed
   // passwords.
-  using ConsumePasswordsCallback =
-      password_manager::mojom::CSVPasswordParser::ParseCSVCallback;
+  using ConsumePasswordsCallback = mojom::CSVPasswordParser::ParseCSVCallback;
 
-  using ImportResultsCallback =
-      base::OnceCallback<void(const password_manager::ImportResults&)>;
+  using ImportResultsCallback = base::OnceCallback<void(const ImportResults&)>;
 
   using DeleteFileCallback =
       base::RepeatingCallback<bool(const base::FilePath&)>;
@@ -95,14 +94,14 @@ class PasswordImporter {
   // |results_callback| is used to return import summary back to the user.
   // The only supported data format is CSV.
   void Import(std::string csv_data,
-              password_manager::PasswordForm::Store to_store,
+              PasswordForm::Store to_store,
               ImportResultsCallback results_callback);
 
   // Imports passwords from the file at |path| into the |to_store|.
   // |results_callback| is used to return import summary back to the user.
   // The only supported file format is CSV.
   void Import(const base::FilePath& path,
-              password_manager::PasswordForm::Store to_store,
+              PasswordForm::Store to_store,
               ImportResultsCallback results_callback);
 
   // Imports `passwords` into the `to_store`.
@@ -152,10 +151,9 @@ class PasswordImporter {
   // are no errors, proceeds to consuming the passwords. Otherwise, invokes
   // `results_callback` to inform the user about the error and resets the
   // importer to the initial state.
-  void OnCSVPasswordsParsed(
-      PasswordForm::Store to_store,
-      ImportResultsCallback results_callback,
-      password_manager::mojom::CSVPasswordSequencePtr seq);
+  void OnCSVPasswordsParsed(PasswordForm::Store to_store,
+                            ImportResultsCallback results_callback,
+                            mojom::CSVPasswordSequencePtr seq);
 
   // Processes `csv_passwords` by identifying errors and conflicts with the
   // existing password in the store. If there are no errors or user interaction
@@ -171,14 +169,12 @@ class PasswordImporter {
       ImportResultsCallback results_callback,
       ImportResults results,
       IncomingPasswords incoming_passwords,
-      std::vector<std::vector<password_manager::PasswordForm>> conflicts,
-      base::Time start_time);
+      std::vector<std::vector<StoredCredential>> conflicts);
 
   // Triggers the processes for adding and updating `incoming_passwords`.
   void ExecuteImport(ImportResultsCallback results_callback,
                      ImportResults results,
                      IncomingPasswords incoming_passwords,
-                     base::Time start_time,
                      size_t conflicts_count);
 
   // Runs `results_callback` with aggregate results `results_` after all
@@ -186,7 +182,6 @@ class PasswordImporter {
   // Also, reports import results metrics.
   void ImportFinished(ImportResultsCallback results_callback,
                       ImportResults results,
-                      base::Time start_time,
                       size_t conflicts_count);
 
   const mojo::Remote<mojom::CSVPasswordParser>& GetParser();

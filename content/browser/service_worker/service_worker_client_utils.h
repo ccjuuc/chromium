@@ -7,6 +7,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_client.mojom.h"
@@ -19,6 +20,7 @@ class StorageKey;
 
 namespace content {
 
+class PolicyContainerHost;
 struct GlobalRenderFrameHostId;
 class ServiceWorkerClient;
 class ServiceWorkerContextCore;
@@ -54,23 +56,28 @@ void FocusWindowClient(
 // its scope. What an "installed app" is depends on the embedder of content. In
 // Chrome's case, it is an installed Progressive Web App. If there is no such
 // app, we will open a new foreground tab instead.
-void OpenWindow(const GURL& url,
-                const GURL& script_url,
-                const blink::StorageKey& key,
-                int worker_id,
-                int worker_process_id,
-                const base::WeakPtr<ServiceWorkerContextCore>& context,
-                WindowType type,
-                NavigationCallback callback);
+void OpenWindow(
+    const GURL& url,
+    const GURL& script_url,
+    const blink::StorageKey& key,
+    int worker_id,
+    int worker_process_id,
+    scoped_refptr<PolicyContainerHost> service_worker_policy_container_host,
+    const base::WeakPtr<ServiceWorkerContextCore>& context,
+    WindowType type,
+    NavigationCallback callback);
 
 // Navigates the client specified by `rfh_id` to `url`. `callback` is called
 // with the client information on completion.
-void NavigateClient(const GURL& url,
-                    const GURL& script_url,
-                    const blink::StorageKey& key,
-                    const GlobalRenderFrameHostId& rfh_id,
-                    const base::WeakPtr<ServiceWorkerContextCore>& context,
-                    NavigationCallback callback);
+void NavigateClient(
+    const GURL& url,
+    const GURL& script_url,
+    const blink::StorageKey& key,
+    const GlobalRenderFrameHostId& rfh_id,
+    const network::mojom::ClientSecurityStatePtr worker_client_security_state,
+    scoped_refptr<PolicyContainerHost> service_worker_policy_container_host,
+    const base::WeakPtr<ServiceWorkerContextCore>& context,
+    NavigationCallback callback);
 
 // Gets the client specified by |service_worker_client|. |callback| is called
 // with the client information on completion.

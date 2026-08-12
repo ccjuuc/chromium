@@ -11,13 +11,15 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/chromeos/policy/dlp/dialogs/dlp_warn_notifier.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_confidential_contents.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_manager_observer.h"
@@ -27,7 +29,6 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.h"
 #include "chrome/browser/enterprise/data_controls/dlp_reporting_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/enterprise/data_controls/core/browser/dlp_histogram_helper.h"
@@ -133,10 +134,11 @@ DlpContentManager* DlpContentManager::Get() {
 
 DlpContentRestrictionSet DlpContentManager::GetConfidentialRestrictions(
     content::WebContents* web_contents) const {
-  if (!base::Contains(confidential_web_contents_, web_contents)) {
-    return DlpContentRestrictionSet();
+  if (auto it = confidential_web_contents_.find(web_contents);
+      it != confidential_web_contents_.end()) {
+    return it->second;
   }
-  return confidential_web_contents_.at(web_contents);
+  return DlpContentRestrictionSet();
 }
 
 bool DlpContentManager::IsScreenShareBlocked(
@@ -521,15 +523,20 @@ DlpContentManager::DlpContentManager() {
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [this](BrowserWindowInterface* browser_window_interface) {
         // TODO(crbug.com/452120900): TabStripModel auto-unregistered by dtor
-        browser_window_interface->GetTabStripModel()->AddObserver(this);
+        TabStripModel* tab_strip_model =
+            browser_window_interface->GetTabStripModel();
+        CHECK(observed_tab_strip_models_.insert(tab_strip_model).second);
+        tab_strip_model->AddObserver(this);
         return true;
       });
-  BrowserList::GetInstance()->AddObserver(this);
+  if (auto* browser_controller = ash::BrowserController::GetInstance()) {
+    browser_controller_observation_.Observe(browser_controller);
+  } else {
+    CHECK_IS_TEST();
+  }
 }
 
-DlpContentManager::~DlpContentManager() {
-  BrowserList::GetInstance()->RemoveObserver(this);
-}
+DlpContentManager::~DlpContentManager() = default;
 
 // static
 void DlpContentManager::ReportWarningProceededEvent(
@@ -587,8 +594,9 @@ void DlpContentManager::OnConfidentialityChanged(
     content::WebContents* web_contents,
     const DlpContentRestrictionSet& restriction_set) {
   DlpContentRestrictionSet old_restriction_set;
-  if (confidential_web_contents_.contains(web_contents)) {
-    old_restriction_set = confidential_web_contents_[web_contents];
+  if (auto it = confidential_web_contents_.find(web_contents);
+      it != confidential_web_contents_.end()) {
+    old_restriction_set = it->second;
   }
   UpdateConfidentiality(web_contents, restriction_set);
   NotifyOnConfidentialityChanged(old_restriction_set, restriction_set,
@@ -600,12 +608,17 @@ void DlpContentManager::OnWebContentsDestroyed(
   RemoveFromConfidential(web_contents);
 }
 
-void DlpContentManager::OnBrowserAdded(Browser* browser) {
-  browser->tab_strip_model()->AddObserver(this);
-}
-
-void DlpContentManager::OnBrowserRemoved(Browser* browser) {
-  browser->tab_strip_model()->RemoveObserver(this);
+void DlpContentManager::OnBrowserCreated(ash::BrowserDelegate* browser) {
+  // DlpContentManager is a singleton that outlives any browser instance. When a
+  // browser gets destroyed, its tab strip model gets destroyed too, so there's
+  // no need to unregister the observer. However, it gets lazily created, which
+  // can happen inside BrowserController's OnBrowserCreated notification loop.
+  // Hence we must guard against trying to observe the same tab strip model
+  // twice.
+  TabStripModel* tab_strip_model = browser->GetBrowser().GetTabStripModel();
+  if (observed_tab_strip_models_.insert(tab_strip_model).second) {
+    tab_strip_model->AddObserver(this);
+  }
 }
 
 void DlpContentManager::OnTabStripModelChanged(
@@ -617,6 +630,11 @@ void DlpContentManager::OnTabStripModelChanged(
   if (change.type() == TabStripModelChange::kSelectionOnly) {
     TabLocationMaybeChanged(selection.new_contents);
   }
+}
+
+void DlpContentManager::OnTabStripModelDestroyed(
+    TabStripModel* tab_strip_model) {
+  observed_tab_strip_models_.erase(tab_strip_model);
 }
 
 void DlpContentManager::RemoveFromConfidential(
@@ -801,12 +819,13 @@ void DlpContentManager::CheckRunningScreenShares() {
         data_controls::dlp::kScreenShareWarnedUMA,
         IsWarn(info.restriction_info));
     if (IsBlocked(info.restriction_info)) {
+      screen_share->MaybeCloseDialogWidget();
       if (screen_share->state() == ScreenShareInfo::State::kRunning) {
         screen_share->Pause();
         data_controls::DlpBooleanHistogram(
             data_controls::dlp::kScreenSharePausedOrResumedUMA, true);
-        screen_share->MaybeUpdateNotifications();
       }
+      screen_share->MaybeUpdateNotifications();
       continue;
     }
 
@@ -899,6 +918,10 @@ void DlpContentManager::OnDlpScreenShareWarnDialogReply(
       ReportWarningProceededEvent(info.restriction_info.url,
                                   DlpRulesManager::Restriction::kScreenShare,
                                   reporting_manager_);
+
+    if (IsBlocked(screen_share->GetLatestRestriction())) {
+      return;
+    }
 
     screen_share->Resume();
     for (const auto& content : info.confidential_contents.GetContents()) {

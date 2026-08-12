@@ -4,11 +4,12 @@
 
 #import "components/remote_cocoa/app_shim/native_widget_mac_nswindow.h"
 
+#include <memory>
+
 #include "base/apple/foundation_util.h"
 #include "base/auto_reset.h"
 #include "base/check.h"
 #include "base/debug/dump_without_crashing.h"
-#include "base/debug/stack_trace.h"
 #include "base/feature_list.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -24,6 +25,7 @@
 #include "ui/accessibility/platform/ax_platform_node.h"
 #import "ui/base/cocoa/user_interface_item_command_handler.h"
 #import "ui/base/cocoa/window_size_constants.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace {
@@ -139,10 +141,18 @@ struct NSEdgeAndCornerThicknesses {
 - (void)_regularMinimizeToDock;
 @end
 
+// Private API for window fill.
+@interface NSWindow (NSWindow_Fill)
+- (void)_zoomFill:(id)sender;
+@end
+
 @interface NativeWidgetMacNSWindow () <NSKeyedArchiverDelegate>
 - (ViewsNSWindowDelegate*)viewsNSWindowDelegate;
 - (BOOL)hasViewsMenuActive;
 - (id<NSAccessibility>)rootAccessibilityObject;
+
+// The child window with the highest z-order that is visible and modal, if any.
+- (NSWindow*)topmostVisibleChildModalWindow;
 
 // Private API on NSWindow, determines whether the title is drawn on the title
 // bar. The title is still visible in menus, Expose, etc.
@@ -167,8 +177,9 @@ struct NSEdgeAndCornerThicknesses {
 
 @implementation NativeWidgetMacNSWindowTitledFrame
 - (void)mouseDown:(NSEvent*)event {
-  if (self.window.isMovable)
+  if (self.window.movable) {
     [self cr_mouseDownOnFrameView:event];
+  }
   [super mouseDown:event];
 }
 - (BOOL)usesCustomDrawing {
@@ -206,14 +217,13 @@ struct NSEdgeAndCornerThicknesses {
   BOOL _isEnforcingNeverMadeVisible;
   BOOL _activationIndependence;
   BOOL _isTooltip;
-  BOOL _isHeadless;
   BOOL _isShufflingForOrdering;
   BOOL _miniaturizationInProgress;
+  std::unique_ptr<NativeWidgetMacNSWindowHeadlessInfo> _headless_info;
 }
 @synthesize bridgedNativeWidgetId = _bridgedNativeWidgetId;
 @synthesize bridge = _bridge;
 @synthesize isTooltip = _isTooltip;
-@synthesize isHeadless = _isHeadless;
 @synthesize isShufflingForOrdering = _isShufflingForOrdering;
 @synthesize preventKeyWindow = _preventKeyWindow;
 @synthesize childWindowAddedHandler = _childWindowAddedHandler;
@@ -233,6 +243,33 @@ struct NSEdgeAndCornerThicknesses {
     self.releasedWhenClosed = NO;
   }
   return self;
+}
+
+- (BOOL)isHeadless {
+  return _headless_info != nullptr;
+}
+
+- (void)setIsHeadless:(BOOL)isHeadless {
+  // NativeWidgetMacNSWindowHeadlessInfo constructor overrides certain NSWindow
+  // methods in order to implement headless mode behavior. This affects all
+  // NativeWidgetMacNSWindow instances, however, the overrides will fallback to
+  // the original implementations if there is no headless info associated with
+  // the window.
+  if (isHeadless) {
+    _headless_info = std::make_unique<NativeWidgetMacNSWindowHeadlessInfo>();
+  } else {
+    _headless_info.reset();
+  }
+}
+
+- (NativeWidgetMacNSWindowHeadlessInfo*)headlessInfo {
+  return _headless_info.get();
+}
+
+- (BOOL)invokeOriginalIsVisibleForTesting {
+  // In headless mode this is overridden and returns actual platform window
+  // visibility state which is expected to aways be hidden.
+  return [self isVisible];
 }
 
 // This is called by the "Move Window to {Left/Right} Side of Screen"
@@ -351,19 +388,6 @@ struct NSEdgeAndCornerThicknesses {
   [self orderWindow:NSWindowAbove relativeTo:0];
 }
 
-- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
-  if (_isHeadless || self.parentWindow) {
-    // AppKit's default implementation moves child windows down to avoid
-    // the menu bar. We don't want that behavior, because widgets like the
-    // Omnibox may have a big shadow that could cause invisible menu bar
-    // collision in fullscreen/maximized state. We override it here to
-    // return the original frameRect before the adjustment.
-    return frameRect;
-  }
-
-  return [super constrainFrameRect:frameRect toScreen:screen];
-}
-
 // Private methods.
 
 - (ViewsNSWindowDelegate*)viewsNSWindowDelegate {
@@ -402,6 +426,38 @@ struct NSEdgeAndCornerThicknesses {
     return customFrame;
   }
   return [super frameViewClassForStyleMask:windowStyle];
+}
+
+- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
+  if (self.isHeadless || self.parentWindow) {
+    // AppKit's default implementation moves child windows down to avoid
+    // the menu bar. We don't want that behavior, because widgets like the
+    // Omnibox may have a big shadow that could cause invisible menu bar
+    // collision in fullscreen/maximized state. We override it here to
+    // return the original frameRect before the adjustment.
+    return frameRect;
+  }
+
+  return [super constrainFrameRect:frameRect toScreen:screen];
+}
+
+- (NSWindow*)topmostVisibleChildModalWindow {
+  if (!_bridge) {
+    return nil;
+  }
+
+  for (remote_cocoa::NativeWidgetNSWindowBridge* child_bridge :
+       base::Reversed(_bridge->child_windows())) {
+    if (child_bridge->modal_type() == ui::mojom::ModalType::kNone) {
+      continue;
+    }
+    NSWindow* child_ns_window = child_bridge->ns_window();
+    if ([child_ns_window isVisible]) {
+      return child_ns_window;
+    }
+  }
+
+  return nil;
 }
 
 - (BOOL)_isTitleHidden {
@@ -505,11 +561,40 @@ struct NSEdgeAndCornerThicknesses {
 
   // Let CommandDispatcher check if this is a redispatched event.
   if ([_commandDispatcher preSendEvent:event]) {
-    TRACE_EVENT_INSTANT0("browser", "StopSendEvent", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("browser", "StopSendEvent");
     return;
   }
 
   NSEventType type = [event type];
+
+  // Handle double-click on custom draggable regions outside the native
+  // titlebar. macOS AppKit natively handles double-click-to-zoom for the
+  // native titlebar region (via _NSTitlebarContainerView), but not for custom
+  // draggable areas like the empty space in a vertical tab strip.
+  //
+  // Only intercept mouse-up events within contentLayoutRect (which excludes
+  // the native titlebar and the window resize handle) where hitTest: returns
+  // nil (indicating a custom draggable background). Performing the action on
+  // mouse-up matches the native titlebar behavior.
+  if (type == NSEventTypeLeftMouseUp && [event clickCount] == 2) {
+    const BOOL hitCustomDraggableArea =
+        NSPointInRect(event.locationInWindow, self.contentLayoutRect) &&
+        [[self contentView] hitTest:event.locationInWindow] == nil;
+    if (hitCustomDraggableArea) {
+      NSString* action = [[NSUserDefaults standardUserDefaults]
+          stringForKey:@"AppleActionOnDoubleClick"];
+      if ([action isEqualToString:@"Fill"] &&
+          [self respondsToSelector:@selector(_zoomFill:)]) {
+        [self _zoomFill:nil];
+      } else if (!action || [action isEqualToString:@"Maximize"]) {
+        [self performZoom:nil];
+      } else if ([action isEqualToString:@"Minimize"]) {
+        [self performMiniaturize:nil];
+      }
+      // "None" or unrecognized value => do nothing.
+      return;
+    }
+  }
 
   // Draggable regions only respond to left-click dragging, but the system will
   // still suppress right-clicks in a draggable region. Forwarding right-clicks
@@ -525,6 +610,32 @@ struct NSEdgeAndCornerThicknesses {
   } else if (type == NSEventTypeRightMouseUp) {
     if ([[self contentView] hitTest:event.locationInWindow] == nil) {
       [[self contentView] rightMouseUp:event];
+      return;
+    }
+  } else if (type == NSEventTypeLeftMouseDown) {
+    // Check whether the click was in a blocked area via a hit test.
+    bool is_blocked_by_modal = false;
+    if (_bridge) {
+      NSView* content_view = [self contentView];
+      NSPoint point_in_view = [content_view convertPoint:event.locationInWindow
+                                                fromView:nil];
+      gfx::Point flipped_point(
+          point_in_view.x, NSHeight([content_view frame]) - point_in_view.y);
+      remote_cocoa::mojom::HitTestResult hit_test_result =
+          remote_cocoa::mojom::HitTestResult::kOther;
+      _bridge->host()->GetHitTestResult(flipped_point, &hit_test_result);
+      is_blocked_by_modal = hit_test_result ==
+                            remote_cocoa::mojom::HitTestResult::kBlockedSubView;
+    }
+
+    NSWindow* child_modal_window = [self topmostVisibleChildModalWindow];
+    // If the click was in a blocked area and we're displaying a child modal
+    // window, swallow the event to prevent the web contents from processing it
+    // (and potentially triggering new dialogs).
+    if (is_blocked_by_modal && child_modal_window) {
+      if (![child_modal_window isKeyWindow]) {
+        [child_modal_window makeKeyWindow];
+      }
       return;
     }
   } else if ([self hasViewsMenuActive]) {
@@ -583,40 +694,45 @@ struct NSEdgeAndCornerThicknesses {
 // -orderWindowByShuffling:relativeTo: instead.
 - (void)orderWindow:(NSWindowOrderingMode)orderingMode
          relativeTo:(NSInteger)otherWindowNumber {
+  // Prevent a window that should never be visible from being ordered in.
+  // External frameworks (e.g., AuthenticationServicesCore presenting
+  // passkey/WebAuthn dialogs) can trigger window ordering on the invisible
+  // browser-side proxy window for app shims, causing a DumpWithoutCrashing.
+  // See https://crbug.com/325931972 and https://crbug.com/40626510.
+  if (_isEnforcingNeverMadeVisible && orderingMode != NSWindowOut) {
+    return;
+  }
   [super orderWindow:orderingMode relativeTo:otherWindowNumber];
   [[self viewsNSWindowDelegate] onWindowOrderChanged:nil];
 }
 
 - (void)miniaturize:(id)sender {
-  static const BOOL isMacOS13OrHigher = base::mac::MacOSMajorVersion() >= 13;
-  // On macOS 13, the miniaturize operation appears to no longer be "atomic"
-  // because of non-blocking roundtrip IPC with the Dock. We want to note here
-  // that miniaturization is in progress. The process completes when we
-  // reach -_regularMinimizeToDock:.
-  _miniaturizationInProgress = isMacOS13OrHigher;
+  // The miniaturize operation appears to not be "atomic" because of
+  // non-blocking roundtrip IPC with the Dock. We want to note here that
+  // miniaturization is in progress. The process completes when we reach
+  // -_regularMinimizeToDock:.
+  _miniaturizationInProgress = YES;
 
   [super miniaturize:sender];
 }
 
 - (void)_regularMinimizeToDock {
-  // On macOS 13, a call to -miniaturize: kicks of an async round-trip IPC with
-  // the Dock that ends up in this method. Unfortunately, it appears that if we
-  // immediately follow a call to -miniaturize: with -makeKeyAndOrderFront:,
-  // the AppKit doesn't cancel the in-flight round-trip IPC. As a result,
+  // A call to -miniaturize: kicks of an async round-trip IPC with the Dock that
+  // ends up in this method. Unfortunately, it appears that if we immediately
+  // follow a call to -miniaturize: with -makeKeyAndOrderFront:, the AppKit
+  // doesn't cancel the in-flight round-trip IPC. As a result,
   // _regularMinimizeToDock gets called sometime after -makeKeyAndOrderFront:
-  // and miniaturizes the window anyway. This is  a potential problem in
-  // session restore where we might restart with a single browser window
-  // sitting Dock. In that case, Session Restore creates the window,
-  // miniaturizes to the dock, and then brings it back out. With this new macOS
-  // 13 behavior (which seems like a bug), the browser window may not be
-  // restored from the Dock.
+  // and miniaturizes the window anyway. This is  a potential problem in session
+  // restore where we might restart with a single browser window sitting Dock.
+  // In that case, Session Restore creates the window, miniaturizes to the dock,
+  // and then brings it back out. With this behavior (which seems like a bug),
+  // the browser window may not be restored from the Dock.
   //
   // To get around this problem, if we arrive here and
-  // _miniaturizationInProgress is NO, the miniaturization process was
-  // cancelled by a call to -makeKeyAndOrderFront:. In that case, we don't want
-  // to proceed with miniaturization.
-  static const BOOL isMacOS13OrHigher = base::mac::MacOSMajorVersion() >= 13;
-  if (isMacOS13OrHigher && !_miniaturizationInProgress) {
+  // _miniaturizationInProgress is NO, the miniaturization process was cancelled
+  // by a call to -makeKeyAndOrderFront:. In that case, we don't want to proceed
+  // with miniaturization.
+  if (!_miniaturizationInProgress) {
     return;
   }
 
@@ -829,6 +945,18 @@ struct NSEdgeAndCornerThicknesses {
                                             forHandler:_commandHandler];
 }
 
+// Override performClose: to forward to the parent window when this window
+// doesn't have NSWindowStyleMaskClosable. This ensures that when a bubble
+// (child window) is focused in a PWA and the user presses Cmd+W, the action
+// closes the parent window.
+- (void)performClose:(id)sender {
+  if (!(self.styleMask & NSWindowStyleMaskClosable) && self.parentWindow) {
+    [self.parentWindow performClose:sender];
+    return;
+  }
+  [super performClose:sender];
+}
+
 // NSWindow overrides (NSAccessibility informal protocol implementation).
 
 - (NSString*)accessibilityDocument {
@@ -908,19 +1036,13 @@ struct NSEdgeAndCornerThicknesses {
 // TODO(http://crbug.com/1454606): Remove this workaround once FB13529873 is
 // fixed in AppKit.
 - (void)maybeRemoveTreeFromOrderingGroups {
-  // This workaround only needed for macOS 13 and greater.
-  if (@available(macOS 13.0, *)) {
-  } else {
-    return;
-  }
-
   if (!base::FeatureList::IsEnabled(
           remote_cocoa::features::kImmersiveFullscreenSpaceSwitchMitigation)) {
     return;
   }
 
   // Only remove from groups if this window is not on the active space.
-  if (self.isOnActiveSpace) {
+  if (self.onActiveSpace) {
     return;
   }
 

@@ -13,6 +13,7 @@ namespace cc::slim {
 class Layer;
 class NinePatchLayer;
 class UIResourceLayer;
+class SolidColorLayer;
 }  // namespace cc::slim
 
 namespace ui {
@@ -27,6 +28,9 @@ class TabHandleLayer : public Layer {
  public:
   static scoped_refptr<TabHandleLayer> Create(
       LayerTitleCache* layer_title_cache);
+  static void SetConstants(float tab_underline_thickness,
+                           float tab_underline_corner_radius,
+                           float tab_underline_bottom_margin);
 
   TabHandleLayer(const TabHandleLayer&) = delete;
   TabHandleLayer& operator=(const TabHandleLayer&) = delete;
@@ -47,6 +51,13 @@ class TabHandleLayer : public Layer {
                      bool should_show_media_indicator,
                      ui::Resource* media_indicator_resource,
                      float media_indicator_width,
+                     float media_indicator_spacing,
+                     float media_indicator_internal_padding,
+                     float title_to_media_indicator_spacing,
+                     float media_indicator_opacity,
+                     ui::Resource* tab_indicator_overlay_resource,
+                     float target_rotation,
+                     float tab_indicator_overlay_width,
                      float toolbar_width,
                      float x,
                      float y,
@@ -57,6 +68,7 @@ class TabHandleLayer : public Layer {
                      float bottom_margin,
                      float top_margin,
                      float close_button_padding,
+                     float close_button_extra_offset,
                      float close_button_alpha,
                      bool is_start_divider_visible,
                      bool is_end_divider_visible,
@@ -68,7 +80,12 @@ class TabHandleLayer : public Layer {
                      int keyboard_focus_ring_offset,
                      int stroke_width,
                      float folio_foot_length,
-                     float width_to_hide_tab_title);
+                     float desktop_min_tab_width,
+                     float underline_opacity,
+                     float underline_shimmer_offset,
+                     SkColor underline_start_color,
+                     SkColor underline_end_color,
+                     int underline_width_threshold);
   bool foreground();
   bool is_pinned();
   scoped_refptr<cc::slim::Layer> layer() override;
@@ -78,6 +95,10 @@ class TabHandleLayer : public Layer {
   ~TabHandleLayer() override;
 
  private:
+  UI_ANDROID_EXPORT static inline float tab_underline_thickness_;
+  UI_ANDROID_EXPORT static inline float tab_underline_corner_radius_;
+  UI_ANDROID_EXPORT static inline float tab_underline_bottom_margin_;
+
   raw_ptr<LayerTitleCache> layer_title_cache_;
 
   scoped_refptr<cc::slim::Layer> layer_;
@@ -88,13 +109,18 @@ class TabHandleLayer : public Layer {
   scoped_refptr<cc::slim::UIResourceLayer> start_divider_;
   scoped_refptr<cc::slim::UIResourceLayer> end_divider_;
   scoped_refptr<cc::slim::UIResourceLayer> media_indicator_layer_;
+  scoped_refptr<cc::slim::UIResourceLayer> tab_indicator_overlay_layer_;
   scoped_refptr<cc::slim::NinePatchLayer> decoration_tab_;
   scoped_refptr<cc::slim::NinePatchLayer> tab_outline_;
   scoped_refptr<cc::slim::Layer> title_layer_;
+  scoped_refptr<cc::slim::SolidColorLayer> underline_end_layer_;
+  scoped_refptr<cc::slim::SolidColorLayer> underline_start_layer_;
 
   scoped_refptr<cc::slim::NinePatchLayer> keyboard_focus_ring_;
 
   float opacity_;
+  float tab_indicator_overlay_rotation_ = 0.f;
+  std::unique_ptr<gfx::Transform> transform_;
   bool foreground_ = false;
   bool is_pinned_ = false;
 };

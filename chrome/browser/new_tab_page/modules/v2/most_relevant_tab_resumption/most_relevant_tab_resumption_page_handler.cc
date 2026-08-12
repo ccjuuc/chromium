@@ -12,6 +12,7 @@
 #include <string>
 
 #include "base/hash/hash.h"
+#include "base/i18n/rtl.h"
 #include "base/json/values_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -23,10 +24,8 @@
 #include "chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption/most_relevant_tab_resumption.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption/url_visit_types.mojom.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/browser/visited_url_ranking/visited_url_ranking_service_factory.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -57,6 +56,39 @@ namespace {
 const char kDismissedVisitsPrefName[] =
     "NewTabPage.MostRelevantTabResumption.DismissedVisits";
 
+const char kRTLHtmlTextDirection[] = "rtl";
+const char kLTRHtmlTextDirection[] = "ltr";
+
+const char* GetHtmlTextDirection(const std::u16string& text) {
+  if (base::i18n::IsRTL() && base::i18n::StringContainsStrongRTLChars(text)) {
+    return kRTLHtmlTextDirection;
+  }
+  return kLTRHtmlTextDirection;
+}
+
+void SetUrlTitleAndDirection(base::DictValue* dictionary,
+                             const std::u16string& title,
+                             const GURL& gurl) {
+  dictionary->Set("url", gurl.spec());
+
+  bool using_url_as_the_title = false;
+  std::u16string title_to_set(title);
+  if (title_to_set.empty()) {
+    using_url_as_the_title = true;
+    title_to_set = base::UTF8ToUTF16(gurl.spec());
+  }
+
+  std::string direction;
+  if (using_url_as_the_title) {
+    direction = kLTRHtmlTextDirection;
+  } else {
+    direction = GetHtmlTextDirection(title);
+  }
+
+  dictionary->Set("title", title_to_set);
+  dictionary->Set("direction", direction);
+}
+
 std::u16string FormatRelativeTime(const base::Time& time) {
   // Return a time like "1 hour ago", "2 days ago", etc.
   base::Time now = base::Time::Now();
@@ -75,9 +107,8 @@ ntp::most_relevant_tab_resumption::mojom::URLVisitPtr TabToMojom(
   url_visit_mojom->form_factor = tab.visit.device_type;
   url_visit_mojom->session_name = tab.session_name;
 
-  base::Value::Dict dictionary;
-  NewTabUI::SetUrlTitleAndDirection(&dictionary, tab.visit.title,
-                                    tab.visit.url);
+  base::DictValue dictionary;
+  SetUrlTitleAndDirection(&dictionary, tab.visit.title, tab.visit.url);
   url_visit_mojom->title = *dictionary.FindString("title");
 
   url_visit_mojom->is_known_to_sync = false;
@@ -97,9 +128,9 @@ ntp::most_relevant_tab_resumption::mojom::URLVisitPtr HistoryEntryVisitToMojom(
     url_visit_mojom->session_name = client_name.value();
   }
 
-  base::Value::Dict dictionary;
-  NewTabUI::SetUrlTitleAndDirection(&dictionary, visit.url_row.title(),
-                                    visit.url_row.url());
+  base::DictValue dictionary;
+  SetUrlTitleAndDirection(&dictionary, visit.url_row.title(),
+                          visit.url_row.url());
   url_visit_mojom->title = *dictionary.FindString("title");
 
   url_visit_mojom->is_known_to_sync = visit.visit_row.is_known_to_sync;
@@ -489,14 +520,13 @@ void MostRelevantTabResumptionPageHandler::OnGotDecoratedURLVisitAggregates(
 // static
 void MostRelevantTabResumptionPageHandler::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(kDismissedVisitsPrefName,
-                                   base::Value::Dict());
+  registry->RegisterDictionaryPref(kDismissedVisitsPrefName, base::DictValue());
 }
 
 bool MostRelevantTabResumptionPageHandler::IsNewURL(
     const std::string& url_key,
     const base::Time& timestamp) {
-  const base::Value::Dict& cached_urls =
+  const base::DictValue& cached_urls =
       profile_->GetPrefs()->GetDict(kDismissedVisitsPrefName);
   auto* val = cached_urls.Find(url_key);
   if (val) {

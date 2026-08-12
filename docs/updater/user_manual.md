@@ -51,6 +51,15 @@ UpdaterSetup.exe also provides UI and manages integration with the updater.
 UpdaterSetup.exe can also be used to install the updater alone, by running
 `UpdaterSetup.exe --install --system`. (For user installs, elide `--system`.)
 
+By default, if a silent install is triggered (e.g. by passing `--silent`
+on the command line) and elevation is required, the installer will fail
+silently with `UNEXPECTED_ELEVATION_LOOP_SILENT` to avoid rendering UAC
+prompts or blocking unattended installations. If prompting for UAC is
+permissible (for instance, allowing a non-elevated user to approve the
+UAC prompt for a silent install), the `--silent` parameter value can
+be set to `allow-uac` to explicitly allow elevation:
+`UpdaterSetup.exe --install --system --silent=allow-uac`.
+
 For security reasons, applications that install at system scope must install
 into `C:\Program Files` or a similar path that non-admins don't have write
 access to. System-scope installers are run with system privileges, and writing
@@ -84,7 +93,7 @@ If the app is running as root, it must add ` --system` to the install command
 above, use `-S` instead of `-U` in the ksadmin command, and use the ksadmin in
 `/Library` instead of `~/Library`.
 
-Additional [registration arguments](functional_spec#keystone-shims) are
+Additional [registration arguments](functional_spec.md#keystone-shims) are
 available to register additional data and provide alternative ways to track the
 version of a product.
 
@@ -109,8 +118,8 @@ ready-to-bundle [GoogleUpdater.zip here](http://go/googleupdatermacoszip).
 
 ## Updating Applications
 
-Serving updates to your application depends on your server integration.
-Googlers should consult the [guide here](go/omaharelease-getting-started).
+Serving updates to your application depends on your server integration. Googlers
+should consult the [guide here](http://go/omaharelease-getting-started).
 
 Updates are delivered as CRX archives containing your application's installer
 executables. When run, the executables should emplace the new version of your
@@ -118,7 +127,7 @@ software on the disk.
 
 More details are available:
 [Windows details](https://source.chromium.org/chromium/chromium/src/+/main:chrome/updater/win/installer_api.h),
-[macOS details](install_api_mac.md).
+[macOS details](installer_api_mac.md).
 
 ## Uninstalling Applications and the Updater
 

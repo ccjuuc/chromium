@@ -20,6 +20,9 @@
 #if BUILDFLAG(IS_APPLE)
 #include "base/mac/mac_util.h"
 #endif
+#if BUILDFLAG(IS_MAC)
+#include "device/bluetooth/bluetooth_adapter_mac_permission.h"
+#endif
 #if BUILDFLAG(IS_WIN)
 #include "device/bluetooth/bluetooth_adapter_win.h"
 #endif
@@ -52,6 +55,16 @@ bool BluetoothAdapterFactory::IsBluetoothSupported() {
     return true;
   }
   return kBluetoothSupportedByPlatform;
+}
+
+// static
+BluetoothAdapter::PermissionStatus
+BluetoothAdapterFactory::GetOsPermissionStatus() {
+#if BUILDFLAG(IS_MAC)
+  return GetMacBluetoothPermissionStatus();
+#else
+  return BluetoothAdapter::PermissionStatus::kAllowed;
+#endif
 }
 
 bool BluetoothAdapterFactory::IsLowEnergySupported() {
@@ -122,8 +135,11 @@ void BluetoothAdapterFactory::Shutdown() {
 void BluetoothAdapterFactory::SetAdapterForTesting(
     scoped_refptr<BluetoothAdapter> adapter) {
   Get()->adapter_ = adapter->GetWeakPtrForTesting();
-  if (!adapter->IsInitialized())
+  if (!adapter->IsInitialized()) {
     Get()->adapter_under_initialization_ = adapter;
+    adapter->Initialize(base::BindOnce(
+        &BluetoothAdapterFactory::AdapterInitialized, base::Unretained(Get())));
+  }
 #if BUILDFLAG(IS_WIN)
   Get()->classic_adapter_ = adapter->GetWeakPtrForTesting();
 #endif

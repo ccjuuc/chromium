@@ -6,7 +6,7 @@ package org.chromium.chrome.browser.privacy.settings;
 
 import androidx.annotation.UiThread;
 
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.minidump_uploader.util.CrashReportingPermissionManager;
 
@@ -76,9 +76,8 @@ public interface PrivacyPreferencesManager extends CrashReportingPermissionManag
      * upload) into consideration. A crash dump may be retried if this check passes.
      *
      * @return whether the user has consented to reporting usage metrics and crash dumps.
-     *
-     * Do not use this API because it doesn't abide by the constraint imposed by the native API.
-     * (crbug.com/1203437)
+     *     <p>Do not use this API because it doesn't abide by the constraint imposed by the native
+     *     API. (crbug.com/40763535)
      */
     @Override
     boolean isUsageAndCrashReportingPermittedByUser();
@@ -110,5 +109,5 @@ public interface PrivacyPreferencesManager extends CrashReportingPermissionManag
      * Must be used on UI thread.
      */
     @UiThread
-    ObservableSupplier<Boolean> getUsageAndCrashReportingPermittedObservableSupplier();
+    MonotonicObservableSupplier<Boolean> getUsageAndCrashReportingPermittedObservableSupplier();
 }

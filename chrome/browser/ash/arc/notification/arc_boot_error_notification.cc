@@ -8,17 +8,17 @@
 #include <utility>
 
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
 #include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
@@ -44,7 +44,7 @@ const char kNotifierId[] = "arc_boot_error";
 
 void ShowLowDiskSpaceErrorNotification(content::BrowserContext* context) {
   // We suppress the low-disk notification when there are multiple users on an
-  // enterprise managed device. crbug.com/656788.
+  // enterprise managed device. crbug.com/40489355.
   if (ash::InstallAttributes::Get()->IsEnterpriseManaged() &&
       user_manager::UserManager::Get()->GetPersistedUsers().size() > 1) {
     LOG(WARNING) << "ARC booting is aborted due to low disk space, but the "
@@ -91,7 +91,7 @@ void ShowLowDiskSpaceErrorNotification(content::BrowserContext* context) {
                 }
               },
               user)),
-      kNotificationStorageFullIcon,
+      ash::kNotificationStorageFullIcon,
       message_center::SystemNotificationWarningLevel::CRITICAL_WARNING);
 
   message_center::MessageCenter::Get()->AddNotification(
@@ -108,11 +108,12 @@ class ArcBootErrorNotificationFactory
   static constexpr const char* kName = "ArcBootErrorNotificationFactory";
 
   static ArcBootErrorNotificationFactory* GetInstance() {
-    return base::Singleton<ArcBootErrorNotificationFactory>::get();
+    static base::NoDestructor<ArcBootErrorNotificationFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcBootErrorNotificationFactory>;
+  friend base::NoDestructor<ArcBootErrorNotificationFactory>;
   ArcBootErrorNotificationFactory() = default;
   ~ArcBootErrorNotificationFactory() override = default;
 };

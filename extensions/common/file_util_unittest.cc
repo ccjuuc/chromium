@@ -19,6 +19,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/values_test_util.h"
 #include "base/types/optional_ref.h"
@@ -30,6 +31,7 @@
 #include "extensions/common/extension_paths.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/strings/grit/extensions_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -55,7 +57,7 @@ const base::FilePath::CharType kCustomManifestFilename[] =
     FILE_PATH_LITERAL("custom_manifest.json");
 
 scoped_refptr<Extension> LoadExtensionManifest(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& manifest_dir,
     ManifestLocation location,
     int extra_flags,
@@ -71,7 +73,7 @@ scoped_refptr<Extension> LoadExtensionManifest(
     ManifestLocation location,
     int extra_flags,
     std::u16string* error) {
-  std::optional<base::Value::Dict> result = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> result = base::JSONReader::ReadDict(
       manifest_value, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!result) {
     return nullptr;
@@ -303,7 +305,8 @@ TEST_F(FileUtilTest, LoadExtensionWithValidLocales) {
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kUnpacked, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() != nullptr);
-  EXPECT_EQ("The first extension that I made.", extension->description());
+  EXPECT_EQ("The first extension that I made.",
+            DescriptionInfo::GetDescription(*extension));
 }
 
 TEST_F(FileUtilTest, LoadExtensionWithGzippedLocalesAllowed) {
@@ -315,7 +318,8 @@ TEST_F(FileUtilTest, LoadExtensionWithGzippedLocalesAllowed) {
   scoped_refptr<Extension> extension(file_util::LoadExtension(
       install_dir, ManifestLocation::kComponent, Extension::NO_FLAGS, &error));
   ASSERT_TRUE(extension.get() != nullptr);
-  EXPECT_EQ("The first extension that I made.", extension->description());
+  EXPECT_EQ("The first extension that I made.",
+            DescriptionInfo::GetDescription(*extension));
   ASSERT_TRUE(error.empty());
 }
 
@@ -481,12 +485,12 @@ TEST_F(FileUtilTest, BackgroundScriptsMustExist) {
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  base::Value::Dict value;
+  base::DictValue value;
   value.Set("name", "test");
   value.Set("version", "1");
   value.Set("manifest_version", 2);
 
-  base::Value::List* scripts =
+  base::ListValue* scripts =
       value.EnsureDict("background")->EnsureList("scripts");
   scripts->Append("foo.js");
 

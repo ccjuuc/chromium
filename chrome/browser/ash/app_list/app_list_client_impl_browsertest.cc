@@ -23,6 +23,8 @@
 #include "ash/shell.h"
 #include "ash/test/active_window_waiter.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
@@ -40,7 +42,6 @@
 #include "base/test/test_future.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
@@ -66,7 +67,6 @@
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
@@ -79,17 +79,14 @@
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/webui_url_constants.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -100,9 +97,10 @@
 #include "components/app_constants/constants.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/package_id.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/user_manager/test_helper.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "components/user_manager/user_type.h"
@@ -115,6 +113,7 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "ui/aura/window.h"
 #include "ui/display/display.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/display/screen.h"
 #include "ui/display/test/display_manager_test_api.h"
@@ -234,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, UninstallApp) {
   AppListClientImpl* client = AppListClientImpl::GetInstance();
   const extensions::Extension* app = InstallPlatformApp("minimal");
   auto* app_service_proxy =
-      apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
   ASSERT_TRUE(app_service_proxy);
 
   // Bring up the app list.
@@ -260,6 +259,69 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, UninstallApp) {
   EXPECT_TRUE(client->GetAppListWindow());
 }
 
+IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
+                       UninstallDialogRepositionOnRotation) {
+  AppListClientImpl* client = AppListClientImpl::GetInstance();
+  const extensions::Extension* app = InstallPlatformApp("minimal");
+  auto* app_service_proxy =
+      apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
+  ASSERT_TRUE(app_service_proxy);
+
+  // Bring up the app list.
+  EXPECT_FALSE(client->GetAppListWindow());
+  client->ShowAppList(ash::AppListShowSource::kSearchKey);
+  ash::AppListTestApi().WaitForBubbleWindow(
+      /*wait_for_opening_animation=*/false);
+  aura::Window* app_list_window = client->GetAppListWindow();
+  ASSERT_TRUE(app_list_window);
+
+  // Open the uninstall dialog.
+  base::RunLoop run_loop;
+  app_service_proxy->UninstallForTesting(
+      app->id(), app_list_window,
+      base::BindLambdaForTesting([&](bool) { run_loop.Quit(); }));
+  run_loop.Run();
+
+  aura::Window::Windows transient_children =
+      wm::GetTransientChildren(app_list_window);
+  ASSERT_EQ(1u, transient_children.size());
+  aura::Window* dialog_window = transient_children[0];
+  ASSERT_TRUE(dialog_window);
+
+  // Verify the dialog is roughly centered in the app list window.
+  int x_offset = app_list_window->GetBoundsInScreen().CenterPoint().x() -
+                 dialog_window->GetBoundsInScreen().CenterPoint().x();
+  int y_offset = app_list_window->GetBoundsInScreen().CenterPoint().y() -
+                 dialog_window->GetBoundsInScreen().CenterPoint().y();
+  EXPECT_LE(std::abs(x_offset), 10);
+  EXPECT_LE(std::abs(y_offset), 10);
+
+  // Rotate the display.
+  display::DisplayManager* display_manager =
+      ash::Shell::Get()->display_manager();
+  int64_t display_id =
+      display::Screen::Get()->GetDisplayNearestWindow(app_list_window).id();
+
+  // Rotate 90 degrees.
+  display_manager->SetDisplayRotation(display_id, display::Display::ROTATE_90,
+                                      display::Display::RotationSource::ACTIVE);
+
+  // Wait for bounds to update (wait for rotation to be completed).
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return display::Screen::Get()
+               ->GetDisplayNearestWindow(app_list_window)
+               .rotation() == display::Display::ROTATE_90;
+  }));
+
+  // Verify the relative offset is preserved after rotation.
+  int new_x_offset = app_list_window->GetBoundsInScreen().CenterPoint().x() -
+                     dialog_window->GetBoundsInScreen().CenterPoint().x();
+  int new_y_offset = app_list_window->GetBoundsInScreen().CenterPoint().y() -
+                     dialog_window->GetBoundsInScreen().CenterPoint().y();
+  EXPECT_EQ(x_offset, new_x_offset);
+  EXPECT_EQ(y_offset, new_y_offset);
+}
+
 IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, ShowAppInfo) {
   ash::SystemWebAppManager::GetForTest(profile())
       ->InstallSystemAppsForTesting();
@@ -278,17 +340,18 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, ShowAppInfo) {
   client->DoShowAppInfoFlow(profile(), app->id());
   browser_created_observer.Wait();
 
-  Browser* settings_app =
+  BrowserWindowInterface* settings_app =
       chrome::SettingsWindowManager::GetInstance()->FindBrowserForProfile(
           profile());
   EXPECT_TRUE(content::WaitForLoadStop(
-      settings_app->tab_strip_model()->GetActiveWebContents()));
+      settings_app->GetTabStripModel()->GetActiveWebContents()));
 
-  EXPECT_EQ(
-      chrome::GetOSSettingsUrl(
-          base::StrCat({chromeos::settings::mojom::kAppDetailsSubpagePath,
-                        "?id=", app->id()})),
-      settings_app->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+  EXPECT_EQ(chromeos::settings::GetOSSettingsUrl(
+                base::StrCat({chromeos::settings::mojom::kAppDetailsSubpagePath,
+                              "?id=", app->id()})),
+            settings_app->GetTabStripModel()
+                ->GetActiveWebContents()
+                ->GetVisibleURL());
   // The app list should be dismissed when the dialog is shown.
   EXPECT_FALSE(client->app_list_visible());
   EXPECT_FALSE(client->GetAppListWindow());
@@ -300,20 +363,24 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, CreateNewWindow) {
   AppListControllerDelegate* controller = client;
   ASSERT_TRUE(controller);
 
-  EXPECT_EQ(1U, chrome::GetBrowserCount(browser()->profile()));
-  EXPECT_EQ(0U,
-            chrome::GetBrowserCount(browser()->profile()->GetPrimaryOTRProfile(
-                /*create_if_needed=*/true)));
+  EXPECT_EQ(1U, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
+  EXPECT_EQ(0U, ProfileBrowserCollection::GetForProfile(
+                    browser()->GetProfile()->GetPrimaryOTRProfile(
+                        /*create_if_needed=*/true))
+                    ->GetSize());
 
   controller->CreateNewWindow(/*incognito=*/false,
                               /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(2U, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(2U, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   controller->CreateNewWindow(/*incognito=*/true,
                               /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(1U,
-            chrome::GetBrowserCount(browser()->profile()->GetPrimaryOTRProfile(
-                /*create_if_needed=*/true)));
+  EXPECT_EQ(1U, ProfileBrowserCollection::GetForProfile(
+                    browser()->GetProfile()->GetPrimaryOTRProfile(
+                        /*create_if_needed=*/true))
+                    ->GetSize());
 }
 
 // When getting activated, SelfDestroyAppItem has itself removed from the
@@ -337,7 +404,7 @@ class SelfDestroyAppItem : public ChromeAppListItem {
 };
 
 // Verifies that activating an app item which destroys itself during activation
-// will not cause crash (see https://crbug.com/990282).
+// will not cause crash (see https://crbug.com/41474255).
 IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, ActivateSelfDestroyApp) {
   AppListClientImpl* client = AppListClientImpl::GetInstance();
   client->UpdateProfile();
@@ -347,7 +414,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, ActivateSelfDestroyApp) {
   // Add an app item which destroys itself during activation.
   const std::string app_id("fake_id");
   model_updater->AddItem(std::make_unique<SelfDestroyAppItem>(
-      browser()->profile(), app_id, model_updater));
+      browser()->GetProfile(), app_id, model_updater));
   ChromeAppListItem* item = model_updater->FindItem(app_id);
   ASSERT_TRUE(item);
 
@@ -373,7 +440,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
   // Add an app item.
   AppListModelUpdater* model_updater = test::GetModelUpdater(client);
   const std::string app_id("fake_id");
-  auto new_item = std::make_unique<ChromeAppListItem>(browser()->profile(),
+  auto new_item = std::make_unique<ChromeAppListItem>(browser()->GetProfile(),
                                                       app_id, model_updater);
   new_item->SetChromeName("Fake app");
   model_updater->AddItem(std::move(new_item));
@@ -621,7 +688,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, OpenSearchResult) {
   ASSERT_TRUE(search_controller->FindSearchResult(app_result_id));
 
   // Expect that the browser window is not minimized.
-  ASSERT_FALSE(browser()->window()->IsMinimized());
+  ASSERT_FALSE(browser()->GetWindow()->IsMinimized());
 
   // Open the app result.
   base::HistogramTester histogram_tester;
@@ -652,7 +719,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest, OpenSearchResult) {
   EXPECT_FALSE(client->app_list_target_visibility());
 
   // Minimize the browser. Then show the app list and open the app result.
-  browser()->window()->Minimize();
+  browser()->GetWindow()->Minimize();
   client->ShowAppList(ash::AppListShowSource::kSearchKey);
   client->OpenSearchResult(model_updater->model_id(), app_result_id,
                            ui::EF_NONE,
@@ -849,15 +916,16 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
   AppListControllerDelegate* controller = client;
   ASSERT_TRUE(controller);
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   Profile* profile_otr =
       profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
 
   extensions::ExtensionPrefs* prefs = extensions::ExtensionPrefs::Get(profile);
 
   // Starting with just one regular browser.
-  EXPECT_EQ(1U, chrome::GetBrowserCount(profile));
-  EXPECT_EQ(0U, chrome::GetBrowserCount(profile_otr));
+  EXPECT_EQ(1U, ProfileBrowserCollection::GetForProfile(profile)->GetSize());
+  EXPECT_EQ(0U,
+            ProfileBrowserCollection::GetForProfile(profile_otr)->GetSize());
 
   // First browser launch time should be recorded.
   const base::Time time_recorded1 =
@@ -868,14 +936,16 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
   // exiting the test.
   controller->CreateNewWindow(/*incognito=*/true,
                               /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(1U, chrome::GetBrowserCount(profile_otr));
+  EXPECT_EQ(1U,
+            ProfileBrowserCollection::GetForProfile(profile_otr)->GetSize());
   // Creating incognito browser should not update the launch time.
   EXPECT_EQ(time_recorded1,
             prefs->GetLastLaunchTime(app_constants::kChromeAppId));
 
   // Close the regular browser.
-  CloseBrowserSynchronously(chrome::FindBrowserWithProfile(profile));
-  EXPECT_EQ(0U, chrome::GetBrowserCount(profile));
+  CloseBrowserSynchronously(
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser());
+  EXPECT_EQ(0U, ProfileBrowserCollection::GetForProfile(profile)->GetSize());
   // Recorded the launch time should not update.
   EXPECT_EQ(time_recorded1,
             prefs->GetLastLaunchTime(app_constants::kChromeAppId));
@@ -885,7 +955,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
   controller->CreateNewWindow(/*incognito=*/false,
                               /*should_trigger_session_restore=*/true);
   const base::Time time_after_launch = base::Time::Now();
-  EXPECT_EQ(1U, chrome::GetBrowserCount(profile));
+  EXPECT_EQ(1U, ProfileBrowserCollection::GetForProfile(profile)->GetSize());
 
   const base::Time time_recorded2 =
       prefs->GetLastLaunchTime(app_constants::kChromeAppId);
@@ -895,7 +965,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientImplBrowserTest,
   // Creating a second regular browser should not update the launch time.
   controller->CreateNewWindow(/*incognito=*/false,
                               /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(2U, chrome::GetBrowserCount(profile));
+  EXPECT_EQ(2U, ProfileBrowserCollection::GetForProfile(profile)->GetSize());
   EXPECT_EQ(time_recorded2,
             prefs->GetLastLaunchTime(app_constants::kChromeAppId));
 }
@@ -1001,11 +1071,13 @@ IN_PROC_BROWSER_TEST_F(AppListClientSearchResultsBrowserTest,
 
   EXPECT_TRUE(search_controller->GetResultByTitleForTest(title));
 
+  app_list::SearchResultsChangedWaiter results_changed_waiter(
+      search_controller, {app_list::ResultType::kInstalledApp});
+
   // Uninstall the extension.
   UninstallExtension(extension->id());
 
-  // Allow async callbacks to run.
-  base::RunLoop().RunUntilIdle();
+  results_changed_waiter.Wait();
 
   // We cannot find the extension any more.
   EXPECT_FALSE(search_controller->GetResultByTitleForTest(title));
@@ -1041,7 +1113,7 @@ IN_PROC_BROWSER_TEST_F(AppListClientGuestModeBrowserTest, Incognito) {
   EXPECT_TRUE(client->GetCurrentAppListProfile());
 
   client->ShowAppList(ash::AppListShowSource::kSearchKey);
-  EXPECT_EQ(browser()->profile(), client->GetCurrentAppListProfile());
+  EXPECT_EQ(browser()->GetProfile(), client->GetCurrentAppListProfile());
 }
 
 class AppListAppLaunchTest : public extensions::ExtensionBrowserTest {
@@ -1263,7 +1335,6 @@ class AppListClientNewUserTest : public InProcessBrowserTest,
   AppListClientNewUserTest() = default;
   ~AppListClientNewUserTest() override = default;
 
- public:
   // Returns the event to signal when the first app list sync in the session has
   // been completed.
   base::OneShotEvent& on_first_sync() { return on_first_sync_; }
@@ -1273,73 +1344,32 @@ class AppListClientNewUserTest : public InProcessBrowserTest,
   // test parameterization.
   bool was_first_sync_ever() const { return GetParam(); }
 
-  // Returns the `AccountId` for the primary `profile()`.
-  const AccountId& account_id() const { return account_id_; }
+  // Returns the `AccountId` for the primary user.
+  const AccountId& account_id() const {
+    return session_manager::SessionManager::Get()
+        ->GetPrimarySession()
+        ->account_id();
+  }
 
  private:
   // InProcessBrowserTest:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    InProcessBrowserTest::SetUpCommandLine(command_line);
-    // Disable automatic login.
-    command_line->AppendSwitch(ash::switches::kLoginManager);
-  }
+  void SetUpBrowserContextKeyedServices(
+      content::BrowserContext* browser_context) override {
+    InProcessBrowserTest::SetUpBrowserContextKeyedServices(browser_context);
 
-  void SetUpOnMainThread() override {
-    SetUpEnvironment();
-    InProcessBrowserTest::SetUpOnMainThread();
-  }
-
-  // Sets up profile and user manager. Should be called only once on test setup.
-  void SetUpEnvironment() {
-    ash::ProfileHelper::SetProfileToUserForTestingEnabled(true);
-    account_id_ =
-        AccountId::FromUserEmailGaiaId("test@test-user", GaiaId("gaia-id"));
-    auto* user = user_manager::TestHelper(user_manager::UserManager::Get())
-                     .AddRegularUser(account_id_);
-    ASSERT_TRUE(user);
-    session_manager::SessionManager::Get()->CreateSession(
-        account_id_, user_manager::TestHelper::GetFakeUsernameHash(account_id_),
-        /*new_user=*/false,
-        /*has_active_session=*/false);
-
-    TestingProfile::Builder profile_builder;
-    profile_builder.AddTestingFactory(
-        app_list::AppListSyncableServiceFactory::GetInstance(),
+    app_list::AppListSyncableServiceFactory::GetInstance()->SetTestingFactory(
+        browser_context,
         base::BindLambdaForTesting([&](content::BrowserContext* browser_context)
                                        -> std::unique_ptr<KeyedService> {
           return std::make_unique<AppListSyncableServiceFake>(
               Profile::FromBrowserContext(browser_context),
               was_first_sync_ever(), &on_first_sync_);
         }));
-    profile_builder.SetProfileName("test@test-user");
-    profile_builder.SetPath(
-        ash::BrowserContextHelper::Get()->GetBrowserContextPathByUserIdHash(
-            user_manager::FakeUserManager::GetFakeUsernameHash(account_id_)));
-
-    std::unique_ptr<TestingProfile> testing_profile = profile_builder.Build();
-    profile_ = testing_profile.get();
-    g_browser_process->profile_manager()->RegisterTestingProfile(
-        std::move(testing_profile), true);
-
-    user_manager::UserManager::Get()->OnUserProfileCreated(
-        account_id_, profile_->GetPrefs());
-    ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(user,
-                                                                 profile_);
-  }
-
-  void TearDownOnMainThread() override {
-    user_manager::UserManager::Get()->OnUserProfileWillBeDestroyed(account_id_);
-    profile_ = nullptr;
-    base::RunLoop().RunUntilIdle();
-    InProcessBrowserTest::TearDownOnMainThread();
-    ash::ProfileHelper::SetProfileToUserForTestingEnabled(false);
   }
 
   // The event to signal when the first app list sync in the session has been
   // completed.
   base::OneShotEvent on_first_sync_;
-  raw_ptr<TestingProfile> profile_;
-  AccountId account_id_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All, AppListClientNewUserTest, testing::Bool());
@@ -1459,19 +1489,17 @@ class AppListSurveyTriggerTest
     }
   }
 
-  bool IsHatsNotificationActive() const {
+  bool IsHatsNotificationActive(const std::string& notification_id) const {
     return message_center::MessageCenter::Get()->FindVisibleNotificationById(
-               ash::HatsNotificationController::kNotificationId) != nullptr;
+               notification_id) != nullptr;
   }
 
-  void MaybeWaitForHatsNotification() {
+  void MaybeWaitForHatsNotification(const std::string& notification_id) {
     if (!ShouldShowHatsSurvey()) {
       return;
     }
 
-    message_center::MessageCenterWaiter(
-        ash::HatsNotificationController::kNotificationId)
-        .WaitUntilAdded();
+    message_center::MessageCenterWaiter(notification_id).WaitUntilAdded();
   }
 
   const ash::HatsNotificationController* GetHatsNotificationController() const {
@@ -1482,6 +1510,16 @@ class AppListSurveyTriggerTest
   // Returns the HATS Survey that is expected to trigger.
   AppListSurveyConfiguration GetHatsConfig() const {
     return std::get<1>(GetParam());
+  }
+
+  std::string GetHatsNotificationId(const user_manager::User& user) const {
+    return ash::HatsNotificationController::
+        GetMessageCenterNotificationIdForTesting(user);
+  }
+
+  const user_manager::User& GetUserForProfile(Profile* profile) const {
+    return CHECK_DEREF(
+        ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile));
   }
 
   // Returns the experimental arm that this test was set up for AppsCollections.
@@ -1514,7 +1552,9 @@ INSTANTIATE_TEST_SUITE_P(
                         AppListSurveyConfiguration::kNone)));
 
 IN_PROC_BROWSER_TEST_P(AppListSurveyTriggerTest, ShowSurveySuccess) {
-  EXPECT_FALSE(IsHatsNotificationActive());
+  const user_manager::User& user = GetUserForProfile(browser()->GetProfile());
+  const std::string notification_id = GetHatsNotificationId(user);
+  EXPECT_FALSE(IsHatsNotificationActive(notification_id));
 
   AppListClientImpl* client = AppListClientImpl::GetInstance();
 
@@ -1525,10 +1565,10 @@ IN_PROC_BROWSER_TEST_P(AppListSurveyTriggerTest, ShowSurveySuccess) {
       /*wait_for_opening_animation=*/false);
   EXPECT_TRUE(client->GetAppListWindow());
 
-  MaybeWaitForHatsNotification();
+  MaybeWaitForHatsNotification(notification_id);
 
   EXPECT_EQ(GetHatsNotificationController() != nullptr, ShouldShowHatsSurvey());
-  EXPECT_EQ(IsHatsNotificationActive(), ShouldShowHatsSurvey());
+  EXPECT_EQ(IsHatsNotificationActive(notification_id), ShouldShowHatsSurvey());
 }
 
 IN_PROC_BROWSER_TEST_P(AppListSurveyTriggerTest, ShowSurveyOnlyOnce) {
@@ -1536,7 +1576,9 @@ IN_PROC_BROWSER_TEST_P(AppListSurveyTriggerTest, ShowSurveyOnlyOnce) {
     return;
   }
 
-  EXPECT_FALSE(IsHatsNotificationActive());
+  const user_manager::User& user = GetUserForProfile(browser()->GetProfile());
+  const std::string notification_id = GetHatsNotificationId(user);
+  EXPECT_FALSE(IsHatsNotificationActive(notification_id));
 
   AppListClientImpl* client = AppListClientImpl::GetInstance();
 
@@ -1547,12 +1589,12 @@ IN_PROC_BROWSER_TEST_P(AppListSurveyTriggerTest, ShowSurveyOnlyOnce) {
       /*wait_for_opening_animation=*/false);
   EXPECT_TRUE(client->GetAppListWindow());
 
-  MaybeWaitForHatsNotification();
+  MaybeWaitForHatsNotification(notification_id);
 
   const ash::HatsNotificationController* hats_notification_controller =
       GetHatsNotificationController();
   EXPECT_NE(hats_notification_controller, nullptr);
-  EXPECT_TRUE(IsHatsNotificationActive());
+  EXPECT_TRUE(IsHatsNotificationActive(notification_id));
 
   // Bring up the app list again but the controller shouldn't be a new instance.
   client->DismissView();
@@ -1597,7 +1639,7 @@ class AppListModifiedDefaultAppOrderTest
 
     syncable_service->set_app_default_positioned_for_new_users_only_for_test(
         app_id);
-    auto new_item = std::make_unique<ChromeAppListItem>(browser()->profile(),
+    auto new_item = std::make_unique<ChromeAppListItem>(browser()->GetProfile(),
                                                         app_id, model_updater);
     new_item->SetChromeName(app_id);
     syncable_service->AddItem(std::move(new_item));

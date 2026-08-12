@@ -12,6 +12,7 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 
 class Section;
 using Groups = std::vector<Group>;
@@ -125,6 +126,11 @@ class AndroidComposeboxNonZPSSection : public Section {
  public:
   explicit AndroidComposeboxNonZPSSection(
       const omnibox::GroupConfigMap& group_configs);
+
+  // TODO(crbug.com/464014032): split by mode.
+  // Number of contextual attachments
+  static size_t num_attachments_;
+  static omnibox::ToolMode tool_mode_;
 };
 
 // Android prefix section for Hub search (ZPS).
@@ -133,10 +139,24 @@ class AndroidHubZPSSection : public Section {
   explicit AndroidHubZPSSection(const omnibox::GroupConfigMap& group_configs);
 };
 
+// Android prefix section for Tab Search overlay (ZPS).
+class AndroidTabSearchZPSSection : public Section {
+ public:
+  explicit AndroidTabSearchZPSSection(
+      const omnibox::GroupConfigMap& group_configs);
+};
+
 // Android prefix section for Hub search (non-ZPS).
 class AndroidHubNonZPSSection : public Section {
  public:
   explicit AndroidHubNonZPSSection(
+      const omnibox::GroupConfigMap& group_configs);
+};
+
+// Android prefix section for Tab Search overlay (non-ZPS).
+class AndroidTabSearchNonZPSSection : public Section {
+ public:
+  explicit AndroidTabSearchNonZPSSection(
       const omnibox::GroupConfigMap& group_configs);
 };
 
@@ -303,6 +323,9 @@ class AndroidComposeboxZpsSection : public ZpsSection {
       size_t max_suggestions,
       size_t max_aim_suggestions,
       size_t max_contextual_suggestions);
+
+  // Number of contextual attachments
+  static size_t num_attachments_;
 };
 
 class IOSComposeboxZpsSection : public ZpsSection {
@@ -313,7 +336,7 @@ class IOSComposeboxZpsSection : public ZpsSection {
                                    size_t max_contextual_suggestions);
 };
 
-class DesktopComposeboxZpsSection : public ZpsSection {
+class DesktopComposeboxZpsSection : public ZpsSectionWithLocalHistory {
  public:
   explicit DesktopComposeboxZpsSection(
       const omnibox::GroupConfigMap& group_configs,

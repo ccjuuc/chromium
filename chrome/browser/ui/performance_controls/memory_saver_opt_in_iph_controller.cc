@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/performance_controls/memory_saver_opt_in_iph_controller.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/system/sys_info.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
@@ -17,11 +17,20 @@
 
 // Devices with at least 16 GB of total memory should never be shown the memory
 // saver opt-in IPH.
-constexpr base::ByteCount kMemoryCap16GB = base::GiB(16);
+constexpr base::ByteSize kMemoryCap16GB = base::GiBU(16);
+
+DEFINE_USER_DATA(MemorySaverOptInIPHController);
+
+// static
+MemorySaverOptInIPHController* MemorySaverOptInIPHController::From(
+    BrowserWindowInterface* interface) {
+  return Get(interface->GetUnownedUserDataHost());
+}
 
 MemorySaverOptInIPHController::MemorySaverOptInIPHController(
     BrowserWindowInterface* interface)
-    : browser_window_interface_(interface) {
+    : browser_window_interface_(interface),
+      scoped_unowned_user_data_(interface->GetUnownedUserDataHost(), *this) {
   auto* manager = performance_manager::user_tuning::
       UserPerformanceTuningManager::GetInstance();
   memory_saver_observer_.Observe(manager);
@@ -46,9 +55,8 @@ void MemorySaverOptInIPHController::MaybeTriggerPromo() {
       UserPerformanceTuningManager::GetInstance();
   if (manager->IsMemorySaverModeDefault() &&
       !manager->IsMemorySaverModeActive() &&
-      base::SysInfo::AmountOfPhysicalMemory() <= kMemoryCap16GB) {
+      base::SysInfo::AmountOfTotalPhysicalMemory() <= kMemoryCap16GB) {
     BrowserUserEducationInterface::From(browser_window_interface_)
-        ->MaybeShowStartupFeaturePromo(
-            feature_engagement::kIPHMemorySaverModeFeature);
+        ->MaybeShowFeaturePromo(feature_engagement::kIPHMemorySaverModeFeature);
   }
 }

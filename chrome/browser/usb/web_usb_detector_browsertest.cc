@@ -18,7 +18,6 @@
 #include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -36,7 +35,7 @@
 
 // These tests are disabled because WebUsbDetector::Initialize is a noop on
 // Windows due to jank and hangs caused by enumerating devices.
-// https://crbug.com/656702
+// https://crbug.com/41281414
 #if !BUILDFLAG(IS_WIN)
 namespace {
 
@@ -62,7 +61,7 @@ class WebUsbDetectorTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    BrowserList::SetLastActive(browser());
+    ui_test_utils::DeprecatedFakeActivateBrowser(browser());
     display_service_ = std::make_unique<NotificationDisplayServiceTester>(
         /*profile=*/nullptr);
 

@@ -15,7 +15,6 @@
 #include "base/sequence_checker.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/model/data_type_sync_bridge.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/collaboration_group_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
@@ -49,11 +48,6 @@ CollaborationGroupSyncBridge::~CollaborationGroupSyncBridge() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-CollaborationGroupSyncBridge::CreateMetadataChangeList() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
-}
 
 std::optional<syncer::ModelError>
 CollaborationGroupSyncBridge::MergeFullSyncData(
@@ -85,7 +79,7 @@ CollaborationGroupSyncBridge::ApplyIncrementalSyncChanges(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
-      data_type_store_->CreateWriteBatch();
+      data_type_store_->CreateWriteBatch(std::move(metadata_change_list));
 
   std::vector<GroupId> added_ids;
   std::vector<GroupId> updated_ids;
@@ -127,7 +121,6 @@ CollaborationGroupSyncBridge::ApplyIncrementalSyncChanges(
     }
   }
 
-  batch->TakeMetadataChangesFrom(std::move(metadata_change_list));
   data_type_store_->CommitWriteBatch(
       std::move(batch),
       base::BindOnce(&CollaborationGroupSyncBridge::OnDataTypeStoreCommit,
@@ -178,7 +171,8 @@ void CollaborationGroupSyncBridge::ApplyDisableSyncChanges(
 
   const std::vector<GroupId> group_ids_to_delete = GetCollaborationGroupIds();
   ids_to_specifics_.clear();
-  data_type_store_->DeleteAllDataAndMetadata(base::DoNothing());
+  data_type_store_->DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list), base::DoNothing());
   weak_ptr_factory_.InvalidateWeakPtrs();
 
   for (auto& observer : observers_) {
@@ -190,6 +184,14 @@ void CollaborationGroupSyncBridge::ApplyDisableSyncChanges(
   for (auto& observer : observers_) {
     observer.OnSyncBridgeUpdateTypeChanged(SyncBridgeUpdateType::kDefaultState);
   }
+}
+
+sync_pb::EntitySpecifics
+CollaborationGroupSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool CollaborationGroupSyncBridge::IsEntityDataValid(

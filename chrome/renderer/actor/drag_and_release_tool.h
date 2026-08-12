@@ -10,8 +10,8 @@
 #include "base/memory/raw_ref.h"
 #include "base/types/expected.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 
@@ -42,6 +42,7 @@ class DragAndReleaseTool : public ToolBase {
   ~DragAndReleaseTool() override;
 
   // actor::ToolBase
+  ValidationResult Validate() override;
   void Execute(ToolFinishedCallback callback) override;
   std::string DebugString() const override;
 
@@ -50,8 +51,6 @@ class DragAndReleaseTool : public ToolBase {
     ResolvedTarget from;
     ResolvedTarget to;
   };
-  using ValidatedResult = base::expected<DragParams, mojom::ActionResultPtr>;
-  ValidatedResult Validate() const;
 
   void ProcessDrag(ResolvedTarget from,
                    ResolvedTarget to,
@@ -65,6 +64,7 @@ class DragAndReleaseTool : public ToolBase {
 
   mojom::DragAndReleaseActionPtr action_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
+  std::optional<DragParams> validated_drag_params_;
   base::WeakPtrFactory<DragAndReleaseTool> weak_ptr_factory_{this};
 };
 

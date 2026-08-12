@@ -189,7 +189,7 @@ public class TabMetadataFileManager {
      */
     public static void saveListToFile(File metadataFile, TabModelSelectorMetadata metadata) {
         synchronized (SAVE_LIST_LOCK) {
-            androidx.core.util.AtomicFile file = new AtomicFile(metadataFile);
+            AtomicFile file = new AtomicFile(metadataFile);
             FileOutputStream output = null;
             try {
                 output = file.startWrite();
@@ -228,6 +228,19 @@ public class TabMetadataFileManager {
             } catch (IOException e) {
                 if (output != null) file.failWrite(output);
             }
+        }
+    }
+
+    /**
+     * Deletes the given metadata file with thread safety.
+     *
+     * @param file File to be deleted.
+     */
+    public static void deleteMetadataFile(File file) {
+        if (!isMetadataFile(file.getName())) return;
+
+        synchronized (SAVE_LIST_LOCK) {
+            new AtomicFile(file).delete();
         }
     }
 

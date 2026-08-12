@@ -4,6 +4,10 @@
 
 package org.chromium.chrome.browser.omnibox;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -11,19 +15,17 @@ import static org.mockito.Mockito.verify;
 
 import static org.chromium.chrome.browser.omnibox.UrlBarProperties.HINT_TEXT;
 import static org.chromium.chrome.browser.omnibox.UrlBarProperties.HINT_TEXT_COLOR;
-import static org.chromium.chrome.browser.omnibox.UrlBarProperties.IS_IN_CCT;
-import static org.chromium.chrome.browser.omnibox.UrlBarProperties.SELECT_ALL_ON_FOCUS;
 import static org.chromium.chrome.browser.omnibox.UrlBarProperties.TEXT_COLOR;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.view.View;
 import android.view.View.OnLongClickListener;
 
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.constraintlayout.widget.ConstraintLayout.LayoutParams;
 import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -33,12 +35,14 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 
-import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.omnibox.UrlBar.ScrollType;
+import org.chromium.chrome.browser.omnibox.UrlBarProperties.UrlBarTextState;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.components.omnibox.OmniboxFeatureList;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
@@ -46,8 +50,9 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 @RunWith(BaseRobolectricTestRunner.class)
 public class UrlBarViewBinderUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock Callback<Boolean> mFocusChangeCallback;
-
+    @Mock private OnLongClickListener mOnLongClickListener;
+    @Mock private Runnable mRunnable;
+    @Mock private UrlBar mMockView;
     private Activity mActivity;
     PropertyModel mModel;
     UrlBarMediator mMediator;
@@ -64,7 +69,11 @@ public class UrlBarViewBinderUnitTest {
         mModel.set(UrlBarProperties.USE_SMALL_TEXT, false);
         mMediator =
                 new UrlBarMediator(
-                        ContextUtils.getApplicationContext(), mModel, mFocusChangeCallback);
+                        ContextUtils.getApplicationContext(),
+                        mModel,
+                        /* textChangeListener= */ null,
+                        /* richTextChangeListener= */ null,
+                        /* keyDownListener= */ null);
         mUrlBar = new UrlBarApi26(mActivity, null);
         mUrlBar.setLayoutParams(mUrlBarLayoutParams);
         PropertyModelChangeProcessor.create(mModel, mUrlBar, UrlBarViewBinder::bind);
@@ -75,78 +84,10 @@ public class UrlBarViewBinderUnitTest {
     public void testSetHintTextColor() {
         int expectColor = Color.RED;
         mModel.set(HINT_TEXT_COLOR, expectColor);
-        Assert.assertEquals(expectColor, mUrlBar.getHintTextColors().getDefaultColor());
+        assertEquals(expectColor, mUrlBar.getHintTextColors().getDefaultColor());
         int newExpectColor = Color.GREEN;
         mModel.set(HINT_TEXT_COLOR, newExpectColor);
-        Assert.assertEquals(newExpectColor, mUrlBar.getHintTextColors().getDefaultColor());
-    }
-
-    @Test
-    @SmallTest
-    @DisableFeatures(OmniboxFeatureList.MULTILINE_EDIT_FIELD)
-    public void testSetSelectAllOnFocus() {
-        testSetSelectAllOnFocus(
-                /* selectAllOnFocus= */ true,
-                /* whileFocused= */ false,
-                /* expectSelection= */ true);
-    }
-
-    @Test
-    @SmallTest
-    public void testSetSelectAllOnFocus_whileFocused() {
-        testSetSelectAllOnFocus(
-                /* selectAllOnFocus= */ true,
-                /* whileFocused= */ true,
-                /* expectSelection= */ false);
-    }
-
-    @Test
-    @SmallTest
-    public void testUnsetSelectAllOnFocus() {
-        testSetSelectAllOnFocus(
-                /* selectAllOnFocus= */ false,
-                /* whileFocused= */ false,
-                /* expectSelection= */ false);
-    }
-
-    @Test
-    @SmallTest
-    public void testUnsetSelectAllOnFocus_whileFocused() {
-        testSetSelectAllOnFocus(
-                /* selectAllOnFocus= */ false,
-                /* whileFocused= */ true,
-                /* expectSelection= */ false);
-    }
-
-    private void testSetSelectAllOnFocus(
-            boolean selectAllOnFocus, boolean whileFocused, boolean expectSelection) {
-        String text = "test";
-        mUrlBar.setText(text);
-        mUrlBar.setFocusable(true);
-        Assert.assertFalse(mUrlBar.isFocused());
-        Assert.assertFalse(mUrlBar.hasSelection());
-
-        // Prevent the {@link mMediator} from clearing {@link text} on focus.
-        mUrlBar.setOnFocusChangeListener(null);
-
-        if (whileFocused) {
-            mUrlBar.requestFocus();
-            Assert.assertTrue(mUrlBar.isFocused());
-        }
-
-        mModel.set(SELECT_ALL_ON_FOCUS, selectAllOnFocus);
-
-        if (!whileFocused) {
-            mUrlBar.requestFocus();
-            Assert.assertTrue(mUrlBar.isFocused());
-        }
-
-        Assert.assertEquals(expectSelection, mUrlBar.hasSelection());
-
-        if (expectSelection) {
-            Assert.assertEquals(0, mUrlBar.getSelectionStart());
-            Assert.assertEquals(text.length(), mUrlBar.getSelectionEnd());
-        }
+        assertEquals(newExpectColor, mUrlBar.getHintTextColors().getDefaultColor());
     }
 
     @Test
@@ -154,48 +95,39 @@ public class UrlBarViewBinderUnitTest {
     public void testSetTextColor() {
         int expectColor = Color.RED;
         mModel.set(TEXT_COLOR, expectColor);
-        Assert.assertEquals(expectColor, mUrlBar.getTextColors().getDefaultColor());
+        assertEquals(expectColor, mUrlBar.getTextColors().getDefaultColor());
         int newExpectColor = Color.GREEN;
         mModel.set(TEXT_COLOR, newExpectColor);
-        Assert.assertEquals(newExpectColor, mUrlBar.getTextColors().getDefaultColor());
+        assertEquals(newExpectColor, mUrlBar.getTextColors().getDefaultColor());
     }
 
     @Test
     @SmallTest
     public void testOnLongClick() {
-        OnLongClickListener longClickListener = mock(OnLongClickListener.class);
-        doReturn(true).when(longClickListener).onLongClick(any());
+        doReturn(true).when(mOnLongClickListener).onLongClick(any());
 
-        mModel.set(UrlBarProperties.LONG_CLICK_LISTENER, longClickListener);
+        mModel.set(UrlBarProperties.LONG_CLICK_LISTENER, mOnLongClickListener);
         mUrlBar.performLongClick();
-        verify(longClickListener).onLongClick(any());
+        verify(mOnLongClickListener).onLongClick(any());
     }
 
     @Test
     @SmallTest
     public void testSetHintText() {
         mModel.set(HINT_TEXT, "Hint Text");
-        Assert.assertEquals("Hint Text", mUrlBar.getHint());
+        assertEquals("Hint Text", mUrlBar.getHint());
         mModel.set(HINT_TEXT, "Different Hint Text");
-        Assert.assertEquals("Different Hint Text", mUrlBar.getHint());
+        assertEquals("Different Hint Text", mUrlBar.getHint());
 
         mModel.set(UrlBarProperties.USE_SMALL_TEXT, true);
-        Assert.assertNull(mUrlBar.getHint());
+        assertNull(mUrlBar.getHint());
         mModel.set(HINT_TEXT, "Hint Text");
-        Assert.assertNull(mUrlBar.getHint());
+        assertNull(mUrlBar.getHint());
         mModel.set(UrlBarProperties.USE_SMALL_TEXT, false);
-        Assert.assertEquals("Hint Text", mUrlBar.getHint());
+        assertEquals("Hint Text", mUrlBar.getHint());
 
         mModel.set(UrlBarProperties.SHOW_HINT_TEXT, false);
-        Assert.assertNull(mUrlBar.getHint());
-    }
-
-    @Test
-    @SmallTest
-    public void testSetIsInCct() {
-        Assert.assertFalse(mUrlBar.getIsInCctForTesting());
-        mModel.set(IS_IN_CCT, true);
-        Assert.assertTrue(mUrlBar.getIsInCctForTesting());
+        assertNull(mUrlBar.getHint());
     }
 
     @Test
@@ -207,17 +139,60 @@ public class UrlBarViewBinderUnitTest {
         int smallPadding = 0;
 
         mModel.set(UrlBarProperties.USE_SMALL_TEXT, true);
-        Assert.assertEquals(LayoutParams.WRAP_CONTENT, mUrlBarLayoutParams.width);
-        Assert.assertEquals(smallPadding, mUrlBar.getPaddingBottom());
-        Assert.assertEquals(smallPadding, mUrlBar.getPaddingTop());
-        Assert.assertEquals(13, mUrlBar.getPaddingStart());
-        Assert.assertEquals(17, mUrlBar.getPaddingEnd());
+        assertEquals(LayoutParams.WRAP_CONTENT, mUrlBarLayoutParams.width);
+        assertEquals(smallPadding, mUrlBar.getPaddingBottom());
+        assertEquals(smallPadding, mUrlBar.getPaddingTop());
+        assertEquals(13, mUrlBar.getPaddingStart());
+        assertEquals(17, mUrlBar.getPaddingEnd());
 
         mModel.set(UrlBarProperties.USE_SMALL_TEXT, false);
-        Assert.assertEquals(LayoutParams.MATCH_CONSTRAINT, mUrlBarLayoutParams.width);
-        Assert.assertEquals(normalPadding, mUrlBar.getPaddingBottom());
-        Assert.assertEquals(normalPadding, mUrlBar.getPaddingTop());
-        Assert.assertEquals(13, mUrlBar.getPaddingStart());
-        Assert.assertEquals(17, mUrlBar.getPaddingEnd());
+        assertEquals(LayoutParams.MATCH_CONSTRAINT, mUrlBarLayoutParams.width);
+        assertEquals(normalPadding, mUrlBar.getPaddingBottom());
+        assertEquals(normalPadding, mUrlBar.getPaddingTop());
+        assertEquals(13, mUrlBar.getPaddingStart());
+        assertEquals(17, mUrlBar.getPaddingEnd());
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(OmniboxFeatureList.MULTILINE_EDIT_FIELD)
+    public void testSetAllowMultilineInput() {
+        mModel.set(UrlBarProperties.ALLOW_MULTILINE_INPUT, true);
+        mUrlBar.onFocusChanged(true, View.FOCUS_DOWN, null);
+        mUrlBar.setInputIsMultilineEligible(true);
+        assertFalse(mUrlBar.isHorizontallyScrollable());
+
+        mModel.set(UrlBarProperties.ALLOW_MULTILINE_INPUT, false);
+        assertTrue(mUrlBar.isHorizontallyScrollable());
+    }
+
+    @Test
+    @SmallTest
+    public void testSetManageSearchEnginesCallback() {
+        mModel.set(UrlBarProperties.MANAGE_SEARCH_ENGINES_CALLBACK, mRunnable);
+        assertEquals(mRunnable, mUrlBar.getManageSearchEnginesCallback());
+    }
+
+    @Test
+    @SmallTest
+    public void testTextState_reverseSelection() {
+        android.text.Editable editable = mock(android.text.Editable.class);
+        doReturn(10).when(editable).length();
+        doReturn(editable).when(mMockView).getText();
+        doReturn(true).when(mMockView).hasFocus();
+
+        UrlBarTextState state =
+                new UrlBarTextState(
+                        "1234567890",
+                        "1234567890",
+                        ScrollType.NO_SCROLL,
+                        0,
+                        new TextSelection(10, 0),
+                        false);
+
+        mModel.set(UrlBarProperties.TEXT_STATE, state);
+        UrlBarViewBinder.bind(mModel, mMockView, UrlBarProperties.TEXT_STATE);
+
+        verify(mMockView).setSelection(10, 0);
     }
 }

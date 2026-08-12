@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -26,11 +27,10 @@
 #include "third_party/skia/include/core/SkColor.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/user_manager/fake_user_manager.h"
-#include "components/user_manager/scoped_user_manager.h"
-#include "components/user_manager/user_names.h"
+#include "components/user_manager/test_helper.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #endif
 
 using content::SiteInstance;
@@ -57,7 +57,15 @@ class BrowserUnitTest : public BrowserWithTestWindowTest {
   }
 };
 
-// Ensure crashed tabs are not reloaded when selected. crbug.com/232323
+class BrowserNoProfileUnitTest : public BrowserUnitTest {
+ public:
+  std::optional<std::string> GetDefaultProfileName() override {
+    // Disable creating Profile in the SetUp() of the parent fixture.
+    return std::nullopt;
+  }
+};
+
+// Ensure crashed tabs are not reloaded when selected. crbug.com/41007585
 TEST_F(BrowserUnitTest, ReloadCrashedTab) {
   TabStripModel* tab_strip_model = browser()->tab_strip_model();
 
@@ -95,7 +103,7 @@ TEST_F(BrowserUnitTest, ReloadCrashedTab) {
 }
 
 // This tests a workaround which is not necessary on Mac.
-// https://crbug.com/719230
+// https://crbug.com/41317454
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_SetBackgroundColorForNewTab DISABLED_SetBackgroundColorForNewTab
 #else
@@ -140,7 +148,8 @@ TEST_F(BrowserUnitTest, DisablePrintOnCrashedTab) {
   tab_strip_model->AppendWebContents(std::move(contents), true);
   WebContentsTester::For(raw_contents)->NavigateAndCommit(GURL("about:blank"));
 
-  CommandUpdater* command_updater = browser()->command_controller();
+  CommandUpdater* command_updater =
+      chrome::BrowserCommandController::From(browser());
 
   EXPECT_FALSE(raw_contents->IsCrashed());
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_PRINT));
@@ -168,7 +177,8 @@ TEST_F(BrowserUnitTest, DisableZoomOnCrashedTab) {
   EXPECT_TRUE(
       zoom_controller->SetZoomLevel(zoom_controller->GetDefaultZoomLevel()));
 
-  CommandUpdater* command_updater = browser()->command_controller();
+  CommandUpdater* command_updater =
+      chrome::BrowserCommandController::From(browser());
 
   EXPECT_TRUE(zoom_controller->IsAtDefaultZoom());
   EXPECT_FALSE(raw_contents->IsCrashed());
@@ -187,7 +197,8 @@ TEST_F(BrowserUnitTest, DisableZoomOnCrashedTab) {
   EXPECT_FALSE(chrome::CanZoomOut(raw_contents));
 }
 
-TEST_F(BrowserUnitTest, CreateBrowserFailsIfProfileDisallowsBrowserWindows) {
+TEST_F(BrowserNoProfileUnitTest,
+       CreateBrowserFailsIfProfileDisallowsBrowserWindows) {
   TestingProfile::Builder profile_builder;
   profile_builder.DisallowBrowserWindows();
   std::unique_ptr<TestingProfile> test_profile = profile_builder.Build();
@@ -198,10 +209,11 @@ TEST_F(BrowserUnitTest, CreateBrowserFailsIfProfileDisallowsBrowserWindows) {
   // Verify creating browser fails in both original and OTR version of the
   // profile.
   EXPECT_EQ(Browser::CreationStatus::kErrorProfileUnsuitable,
-            Browser::GetCreationStatusForProfile(test_profile.get()));
-  EXPECT_EQ(Browser::CreationStatus::kErrorProfileUnsuitable,
-            Browser::GetCreationStatusForProfile(
-                test_profile->GetPrimaryOTRProfile(/*create_if_needed=*/true)));
+            GetBrowserWindowCreationStatusForProfile(*test_profile.get()));
+  EXPECT_EQ(
+      Browser::CreationStatus::kErrorProfileUnsuitable,
+      GetBrowserWindowCreationStatusForProfile(
+          *test_profile->GetPrimaryOTRProfile(/*create_if_needed=*/true)));
 }
 
 // Tests BrowserCreate() when Incognito mode is disabled.
@@ -212,14 +224,15 @@ TEST_F(BrowserUnitTest, CreateBrowserWithIncognitoModeDisabled) {
   // Creating a browser window in OTR profile should fail if incognito is
   // disabled.
   EXPECT_EQ(Browser::CreationStatus::kErrorProfileUnsuitable,
-            Browser::GetCreationStatusForProfile(
-                profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)));
+            GetBrowserWindowCreationStatusForProfile(
+                *profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true)));
 
   // Verify creating a browser in the original profile succeeds.
-  Browser::CreateParams create_params(profile(), false);
+  BrowserWindowCreateParams create_params(profile(), false);
   std::unique_ptr<BrowserWindow> test_window(CreateBrowserWindow());
   create_params.window = test_window.release();
-  auto test_browser = Browser::DeprecatedCreateOwnedForTesting(create_params);
+  auto test_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(create_params));
   EXPECT_TRUE(test_browser);
 }
 
@@ -231,15 +244,15 @@ TEST_F(BrowserUnitTest, CreateBrowserWithIncognitoModeForced) {
   // Creating a browser window in the original profile should fail if incognito
   // is forced.
   EXPECT_EQ(Browser::CreationStatus::kErrorProfileUnsuitable,
-            Browser::GetCreationStatusForProfile(profile()));
+            GetBrowserWindowCreationStatusForProfile(*profile()));
 
   // Creating a browser in OTR test profile should succeed.
-  Browser::CreateParams off_the_record_create_params(
+  BrowserWindowCreateParams off_the_record_create_params(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true), false);
   std::unique_ptr<BrowserWindow> test_window(CreateBrowserWindow());
   off_the_record_create_params.window = test_window.release();
-  auto otr_browser =
-      Browser::DeprecatedCreateOwnedForTesting(off_the_record_create_params);
+  auto otr_browser = DeprecatedCreateOwnedBrowserWindowForTesting(
+      std::move(off_the_record_create_params));
   EXPECT_TRUE(otr_browser);
 }
 
@@ -249,46 +262,51 @@ TEST_F(BrowserUnitTest, CreateBrowserWithIncognitoModeEnabled) {
             IncognitoModePrefs::GetAvailability(profile()->GetPrefs()));
 
   // Creating a browser in the original test profile should succeed.
-  Browser::CreateParams create_params(profile(), false);
+  BrowserWindowCreateParams create_params(profile(), false);
   std::unique_ptr<BrowserWindow> test_window(CreateBrowserWindow());
   create_params.window = test_window.release();
-  auto test_browser = Browser::DeprecatedCreateOwnedForTesting(create_params);
+  auto test_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(create_params));
   EXPECT_TRUE(test_browser);
 
   // Creating a browser in OTR test profile should succeed.
-  Browser::CreateParams off_the_record_create_params(
+  BrowserWindowCreateParams off_the_record_create_params(
       profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true), false);
   std::unique_ptr<BrowserWindow> otr_test_window(CreateBrowserWindow());
   off_the_record_create_params.window = otr_test_window.release();
-  auto otr_browser =
-      Browser::DeprecatedCreateOwnedForTesting(off_the_record_create_params);
+  auto otr_browser = DeprecatedCreateOwnedBrowserWindowForTesting(
+      std::move(off_the_record_create_params));
   EXPECT_TRUE(otr_browser);
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-TEST_F(BrowserUnitTest, CreateBrowserDuringKioskSplashScreen) {
+TEST_F(BrowserNoProfileUnitTest, CreateBrowserDuringKioskSplashScreen) {
   // Setting up user manager state to be in kiosk mode:
   // Creating a new user manager.
-  auto* user_manager = new ash::FakeChromeUserManager();
-  user_manager::ScopedUserManager manager{
-      std::unique_ptr<user_manager::UserManager>(user_manager)};
-  const user_manager::User* user = user_manager->AddKioskChromeAppUser(
-      AccountId::FromUserEmail("fake_user@test"));
-  user_manager->LoginUser(user->GetAccountId());
-
-  TestingProfile profile;
+  constexpr char kAccountName[] = "fake_user@kiosk-apps.device-local.localhost";
+  const user_manager::User* user =
+      user_manager::TestHelper(user_manager::UserManager::Get())
+          .AddKioskChromeAppUser(kAccountName);
+  ASSERT_TRUE(user);
+  session_manager::SessionManager::Get()->CreateSession(
+      user->GetAccountId(),
+      /*username_hash*/ "fake_username_hash",
+      /*new_user=*/false,
+      /*has_active_session=*/false);
+  TestingProfile* profile = CreateProfile(kAccountName);
 
   session_manager::SessionManager::Get()->SetSessionState(
       SessionState::LOGIN_PRIMARY);
   // Browser should not be created during login session state.
   EXPECT_EQ(Browser::CreationStatus::kErrorLoadingKiosk,
-            Browser::GetCreationStatusForProfile(&profile));
+            GetBrowserWindowCreationStatusForProfile(*profile));
 
-  Browser::CreateParams create_params = Browser::CreateParams(&profile, false);
+  BrowserWindowCreateParams create_params(profile, false);
   std::unique_ptr<BrowserWindow> window = CreateBrowserWindow();
   create_params.window = window.release();
   session_manager::SessionManager::Get()->SetSessionState(SessionState::ACTIVE);
-  auto test_browser = Browser::DeprecatedCreateOwnedForTesting(create_params);
+  auto test_browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(create_params));
   // Normal flow, creation succeeds.
   EXPECT_TRUE(test_browser);
 }
@@ -305,15 +323,15 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
 
  protected:
   BookmarkBar::State window_bookmark_bar_state() const {
-    return static_cast<BookmarkBarStateTestBrowserWindow*>(browser()->window())
+    return static_cast<BookmarkBarStateTestBrowserWindow*>(window())
         ->bookmark_bar_state();
   }
 
   // BrowserWithTestWindowTest:
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    static_cast<BookmarkBarStateTestBrowserWindow*>(browser()->window())
-        ->set_browser(browser());
+    static_cast<BookmarkBarStateTestBrowserWindow*>(window())->set_browser(
+        browser());
   }
 
   std::unique_ptr<BrowserWindow> CreateBrowserWindow() override {
@@ -321,30 +339,43 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
   }
 
  private:
-  class BookmarkBarStateTestBrowserWindow : public TestBrowserWindow {
+  class BookmarkBarStateTestBrowserWindow
+      : public TestBrowserWindow,
+        public BookmarkBarController::Delegate {
    public:
-    BookmarkBarStateTestBrowserWindow() : browser_(nullptr) {}
+    BookmarkBarStateTestBrowserWindow() = default;
 
     BookmarkBarStateTestBrowserWindow(
         const BookmarkBarStateTestBrowserWindow&) = delete;
     BookmarkBarStateTestBrowserWindow& operator=(
         const BookmarkBarStateTestBrowserWindow&) = delete;
 
-    ~BookmarkBarStateTestBrowserWindow() override = default;
+    ~BookmarkBarStateTestBrowserWindow() override {
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(nullptr);
+      }
+    }
 
-    void set_browser(Browser* browser) { browser_ = browser; }
+    void set_browser(Browser* browser) {
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(nullptr);
+      }
+      browser_ = browser;
+      if (browser_) {
+        BookmarkBarController::From(browser_)->SetDelegate(this);
+      }
+    }
 
     BookmarkBar::State bookmark_bar_state() const {
       return bookmark_bar_state_;
     }
 
    private:
-    // TestBrowserWindow:
-    void BookmarkBarStateChanged(
+    // BookmarkBarController::Delegate:
+    void OnBookmarkBarStateChanged(
         BookmarkBar::AnimateChangeType change_type) override {
       bookmark_bar_state_ =
           BookmarkBarController::From(browser_)->bookmark_bar_state();
-      TestBrowserWindow::BookmarkBarStateChanged(change_type);
     }
 
     void OnActiveTabChanged(content::WebContents* old_contents,
@@ -357,7 +388,7 @@ class BrowserBookmarkBarTest : public BrowserWithTestWindowTest {
                                             reason);
     }
 
-    raw_ptr<Browser, DanglingUntriaged> browser_;  // Weak ptr.
+    raw_ptr<Browser> browser_ = nullptr;
     BookmarkBar::State bookmark_bar_state_ = BookmarkBar::HIDDEN;
   };
 };

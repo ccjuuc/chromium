@@ -12,6 +12,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial.h"
@@ -19,16 +20,17 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
+#include "chrome/browser/ash/dbus/service_util.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/chrome_features.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/user.h"
+#include "components/user_manager/user_manager.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -59,6 +61,8 @@ void SendResponse(dbus::MethodCall* method_call,
   std::move(response_sender).Run(std::move(response));
 }
 
+// TODO(crbug.com/479421366): We should use user_manager::User* for profile
+// prefs.
 Profile* GetSenderProfile(
     dbus::MethodCall* method_call,
     dbus::ExportedObject::ResponseSender* response_sender) {
@@ -74,18 +78,16 @@ Profile* GetSenderProfile(
     return nullptr;
   }
 
-  if (user_id_hash.empty())
-    return ProfileManager::GetActiveUserProfile();
-
-  return g_browser_process->profile_manager()->GetProfileByPath(
-      ProfileHelper::GetProfilePathByUserIdHash(user_id_hash));
+  return GetProfileFromUserIdHash(user_id_hash);
 }
 
 }  // namespace
 
 ChromeFeaturesServiceProvider::ChromeFeaturesServiceProvider(
+    const PrefService* local_state,
     std::unique_ptr<base::FeatureList::Accessor> feature_list_accessor)
-    : feature_list_accessor_(std::move(feature_list_accessor)) {}
+    : local_state_(CHECK_DEREF(local_state)),
+      feature_list_accessor_(std::move(feature_list_accessor)) {}
 
 ChromeFeaturesServiceProvider::~ChromeFeaturesServiceProvider() = default;
 
@@ -116,13 +118,6 @@ void ChromeFeaturesServiceProvider::Start(
       chromeos::kChromeFeaturesServiceInterface,
       chromeos::kChromeFeaturesServiceIsCrostiniEnabledMethod,
       base::BindRepeating(&ChromeFeaturesServiceProvider::IsCrostiniEnabled,
-                          weak_ptr_factory_.GetWeakPtr()),
-      base::BindOnce(&ChromeFeaturesServiceProvider::OnExported,
-                     weak_ptr_factory_.GetWeakPtr()));
-  exported_object->ExportMethod(
-      chromeos::kChromeFeaturesServiceInterface,
-      chromeos::kChromeFeaturesServiceIsPluginVmEnabledMethod,
-      base::BindRepeating(&ChromeFeaturesServiceProvider::IsPluginVmEnabled,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&ChromeFeaturesServiceProvider::OnExported,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -197,7 +192,6 @@ void ChromeFeaturesServiceProvider::IsFeatureEnabled(
     dbus::MethodCall* method_call,
     dbus::ExportedObject::ResponseSender response_sender) {
   static const base::Feature constexpr* kFeatureLookup[] = {
-      &arc::kBootCompletedBroadcastFeature,
       &arc::kNativeBridgeToggleFeature,
       &features::kSessionManagerLongKillTimeout,
       &features::kSessionManagerLivenessCheck,
@@ -399,7 +393,7 @@ void ChromeFeaturesServiceProvider::IsCryptohomeDistributedModelEnabled(
     dbus::ExportedObject::ResponseSender response_sender) {
   SendResponse(
       method_call, std::move(response_sender),
-      base::FeatureList::IsEnabled(::features::kCryptohomeDistributedModel));
+      base::FeatureList::IsEnabled(ash::features::kCryptohomeDistributedModel));
 }
 
 void ChromeFeaturesServiceProvider::IsCryptohomeUserDataAuthEnabled(
@@ -407,7 +401,7 @@ void ChromeFeaturesServiceProvider::IsCryptohomeUserDataAuthEnabled(
     dbus::ExportedObject::ResponseSender response_sender) {
   SendResponse(
       method_call, std::move(response_sender),
-      base::FeatureList::IsEnabled(::features::kCryptohomeUserDataAuth));
+      base::FeatureList::IsEnabled(ash::features::kCryptohomeUserDataAuth));
 }
 
 void ChromeFeaturesServiceProvider::IsCryptohomeUserDataAuthKillswitchEnabled(
@@ -415,19 +409,7 @@ void ChromeFeaturesServiceProvider::IsCryptohomeUserDataAuthKillswitchEnabled(
     dbus::ExportedObject::ResponseSender response_sender) {
   SendResponse(method_call, std::move(response_sender),
                base::FeatureList::IsEnabled(
-                   ::features::kCryptohomeUserDataAuthKillswitch));
-}
-
-void ChromeFeaturesServiceProvider::IsPluginVmEnabled(
-    dbus::MethodCall* method_call,
-    dbus::ExportedObject::ResponseSender response_sender) {
-  Profile* profile = GetSenderProfile(method_call, &response_sender);
-  if (!profile)
-    return;
-
-  std::string reason;
-  bool answer = plugin_vm::PluginVmFeatures::Get()->IsAllowed(profile, &reason);
-  SendResponse(method_call, std::move(response_sender), answer, reason);
+                   ash::features::kCryptohomeUserDataAuthKillswitch));
 }
 
 void ChromeFeaturesServiceProvider::IsVmManagementCliAllowed(
@@ -450,9 +432,8 @@ void ChromeFeaturesServiceProvider::IsPeripheralDataAccessEnabled(
   bool peripheral_data_access_enabled = false;
   // Enterprise managed devices use the local state pref.
   if (InstallAttributes::Get()->IsEnterpriseManaged()) {
-    peripheral_data_access_enabled =
-        g_browser_process->local_state()->GetBoolean(
-            prefs::kLocalStateDevicePeripheralDataAccessEnabled);
+    peripheral_data_access_enabled = local_state_->GetBoolean(
+        prefs::kLocalStateDevicePeripheralDataAccessEnabled);
   } else {
     // Consumer devices use the CrosSetting pref.
     CrosSettings::Get()->GetBoolean(kDevicePeripheralDataAccessEnabled,

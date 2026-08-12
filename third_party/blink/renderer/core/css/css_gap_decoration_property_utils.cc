@@ -11,8 +11,6 @@
 #include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
 #include "third_party/blink/renderer/core/css/style_color.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/core/style/computed_style_constants.h"
-#include "third_party/blink/renderer/core/style/gap_data_list.h"
 #include "third_party/blink/renderer/platform/text/writing_mode_utils.h"
 
 namespace blink {
@@ -33,22 +31,22 @@ CSSPropertyID CSSGapDecorationUtils::GetLonghandProperty(
       return direction == CSSGapDecorationPropertyDirection::kRow
                  ? CSSPropertyID::kRowRuleColor
                  : CSSPropertyID::kColumnRuleColor;
-    case CSSGapDecorationPropertyType::kEdgeInsetEnd:
+    case CSSGapDecorationPropertyType::kInsetCapEnd:
       return direction == CSSGapDecorationPropertyDirection::kRow
-                 ? CSSPropertyID::kRowRuleEdgeInsetEnd
-                 : CSSPropertyID::kColumnRuleEdgeInsetEnd;
-    case CSSGapDecorationPropertyType::kEdgeInsetStart:
+                 ? CSSPropertyID::kRowRuleInsetCapEnd
+                 : CSSPropertyID::kColumnRuleInsetCapEnd;
+    case CSSGapDecorationPropertyType::kInsetCapStart:
       return direction == CSSGapDecorationPropertyDirection::kRow
-                 ? CSSPropertyID::kRowRuleEdgeInsetStart
-                 : CSSPropertyID::kColumnRuleEdgeInsetStart;
-    case CSSGapDecorationPropertyType::kInteriorInsetStart:
+                 ? CSSPropertyID::kRowRuleInsetCapStart
+                 : CSSPropertyID::kColumnRuleInsetCapStart;
+    case CSSGapDecorationPropertyType::kInsetJunctionStart:
       return direction == CSSGapDecorationPropertyDirection::kRow
-                 ? CSSPropertyID::kRowRuleInteriorInsetStart
-                 : CSSPropertyID::kColumnRuleInteriorInsetStart;
-    case CSSGapDecorationPropertyType::kInteriorInsetEnd:
+                 ? CSSPropertyID::kRowRuleInsetJunctionStart
+                 : CSSPropertyID::kColumnRuleInsetJunctionStart;
+    case CSSGapDecorationPropertyType::kInsetJunctionEnd:
       return direction == CSSGapDecorationPropertyDirection::kRow
-                 ? CSSPropertyID::kRowRuleInteriorInsetEnd
-                 : CSSPropertyID::kColumnRuleInteriorInsetEnd;
+                 ? CSSPropertyID::kRowRuleInsetJunctionEnd
+                 : CSSPropertyID::kColumnRuleInsetJunctionEnd;
   }
 }
 
@@ -165,7 +163,7 @@ CSSGapDecorationUtils::GetExpandedGapDataList(
         // Integer repeater, add values `count` times.
         wtf_size_t count = repeater->RepeatCount();
 
-        for (size_t i = 0; i < count; ++i) {
+        for (wtf_size_t i = 0; i < count; ++i) {
           for (const auto& value : repeater->RepeatedValues()) {
             expanded_values.push_back(GapData<T>(value));
           }
@@ -177,30 +175,142 @@ CSSGapDecorationUtils::GetExpandedGapDataList(
   return expanded_values;
 }
 
+Vector<int> CSSGapDecorationUtils::GetExpandedWidths(
+    const GapDataList<int>& gap_data_list,
+    wtf_size_t gap_count) {
+  GapDataListIterator<int> iter(gap_data_list.GetGapDataList(), gap_count);
+  Vector<int> result;
+  result.ReserveInitialCapacity(gap_count);
+  while (iter.HasNext()) {
+    result.push_back(iter.Next());
+  }
+  return result;
+}
+
 RuleBreak CSSGapDecorationUtils::ResolveRuleBreakValue(
+    const ComputedStyle& style,
+    GridTrackSizingDirection direction,
+    GapGeometry::ContainerType container_type) {
+  RuleBreak rule_break =
+      direction == kForColumns ? style.ColumnRuleBreak() : style.RowRuleBreak();
+
+  // For multicol containers, `normal` resolves to `none` for row-rule-break
+  // and `intersection` for column-rule-break.
+  if (container_type == GapGeometry::ContainerType::kMultiColumn &&
+      rule_break == RuleBreak::kNormal) {
+    return direction == kForColumns ? RuleBreak::kIntersection
+                                    : RuleBreak::kNone;
+  }
+
+  return rule_break;
+}
+
+RuleVisibilityItems CSSGapDecorationUtils::ResolveRuleVisibilityItemsValue(
     const ComputedStyle& style,
     GapGeometry::ContainerType container_type,
     GridTrackSizingDirection direction) {
-  RuleBreak rule_break =
-      direction == kForColumns ? style.ColumnRuleBreak() : style.RowRuleBreak();
-  if (rule_break != RuleBreak::kAuto) {
-    return rule_break;
+  RuleVisibilityItems rule_visibility = direction == kForColumns
+                                            ? style.ColumnRuleVisibilityItems()
+                                            : style.RowRuleVisibilityItems();
+  if (rule_visibility != RuleVisibilityItems::kNormal) {
+    return rule_visibility;
   }
 
-  // Resolve `auto` value based on thecontainer type.
+  // Resolve `normal` value based on the container type.
   //
-  // TODO(javiercon): For now, `auto` will always resolve to `none` for flex and
-  // multicol. This may change in the future depending on the resolution to
-  // https://github.com/w3c/csswg-drafts/issues/13127
-  //
-  // https://drafts.csswg.org/css-gaps-1/#break
+  // https://drafts.csswg.org/css-gaps-1/#visibility-rules.
   switch (container_type) {
     case GapGeometry::ContainerType::kGrid:
-      return RuleBreak::kSpanningItem;
+    case GapGeometry::ContainerType::kGridLanes:
+      return RuleVisibilityItems::kAll;
     case GapGeometry::ContainerType::kFlex:
     case GapGeometry::ContainerType::kMultiColumn:
-      return RuleBreak::kNone;
+      return RuleVisibilityItems::kBetween;
   }
+}
+
+bool CSSGapDecorationUtils::IsRuleSegmentVisible(
+    GapSegmentState gap_state,
+    RuleVisibilityItems rule_visibility) {
+  if (rule_visibility == RuleVisibilityItems::kAll) {
+    return true;
+  }
+
+  switch (rule_visibility) {
+    case RuleVisibilityItems::kAround:
+      // Paint if either side of the segment is occupied (i.e. not empty on both
+      // sides).
+      return !gap_state.IsEmpty();
+    case RuleVisibilityItems::kBetween:
+      // Paint only when both sides of the segment are occupied (i.e. gap
+      // segment state has no empty status).
+      return !gap_state.HasEmptyStatus();
+    case RuleVisibilityItems::kAll:
+    case RuleVisibilityItems::kNormal:
+      // `kAll` should have been handled as an early return at the beginning of
+      // this function. `normal` should have been resolved before reaching this
+      // point.
+      NOTREACHED();
+  }
+
+  NOTREACHED();
+}
+
+bool CSSGapDecorationUtils::HasOverlapJoin(const ComputedStyle& style,
+                                           bool is_column_gap) {
+  return (is_column_gap ? style.ColumnRuleInsetCapStart()
+                        : style.RowRuleInsetCapStart())
+             .IsOverlapJoin() ||
+         (is_column_gap ? style.ColumnRuleInsetCapEnd()
+                        : style.RowRuleInsetCapEnd())
+             .IsOverlapJoin() ||
+         (is_column_gap ? style.ColumnRuleInsetJunctionStart()
+                        : style.RowRuleInsetJunctionStart())
+             .IsOverlapJoin() ||
+         (is_column_gap ? style.ColumnRuleInsetJunctionEnd()
+                        : style.RowRuleInsetJunctionEnd())
+             .IsOverlapJoin();
+}
+
+bool CSSGapDecorationUtils::HasCrossGapSegment(
+    GridTrackSizingDirection cross_direction,
+    wtf_size_t gap_index,
+    wtf_size_t intersection_index,
+    RuleVisibilityItems rule_visibility,
+    RuleVisibilityItems cross_rule_visibility,
+    const GapGeometry& gap_geometry,
+    const Vector<GapIntersection>& intersections) {
+  if ((gap_geometry.GetContainerType() != GapGeometry::ContainerType::kGrid &&
+       gap_geometry.GetContainerType() !=
+           GapGeometry::ContainerType::kMultiColumn) ||
+      rule_visibility != RuleVisibilityItems::kBetween) {
+    return true;
+  }
+
+  const wtf_size_t cross_gap_index = intersection_index - 1;
+  const wtf_size_t cross_intersection_index = gap_index + 1;
+
+  const bool is_cross_before_visible =
+      IsRuleSegmentVisible(gap_geometry.GetIntersectionGapSegmentState(
+                               cross_direction, cross_gap_index, gap_index),
+                           cross_rule_visibility);
+  const bool is_cross_after_visible = IsRuleSegmentVisible(
+      gap_geometry.GetIntersectionGapSegmentState(
+          cross_direction, cross_gap_index, cross_intersection_index),
+      cross_rule_visibility);
+
+  const BlockedStatus cross_blocked = gap_geometry.GetIntersectionBlockedStatus(
+      cross_direction, cross_gap_index, cross_intersection_index,
+      intersections);
+
+  const bool is_cross_before_present =
+      is_cross_before_visible &&
+      !cross_blocked.HasBlockedStatus(BlockedStatus::kBlockedBefore);
+  const bool is_cross_after_present =
+      is_cross_after_visible &&
+      !cross_blocked.HasBlockedStatus(BlockedStatus::kBlockedAfter);
+
+  return is_cross_before_present || is_cross_after_present;
 }
 
 // Explicit template instantiations

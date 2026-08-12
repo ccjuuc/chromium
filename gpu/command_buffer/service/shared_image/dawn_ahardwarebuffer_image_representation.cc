@@ -105,6 +105,7 @@ wgpu::Texture DawnAHardwareBufferImageRepresentation::BeginAccess(
 
     begin_access_desc.fenceCount = 1;
     begin_access_desc.fences = &shared_fence;
+    begin_access_desc.signaledValueCount = 1;
     begin_access_desc.signaledValues = &signaled_value;
   }
 
@@ -132,9 +133,8 @@ wgpu::Texture DawnAHardwareBufferImageRepresentation::BeginAccess(
       android_backing()->EndRead(this, std::move(sync_fd));
     }
 
-    // Set `texture_` to nullptr to signal failure to BeginScopedAccess(), which
-    // will itself then return nullptr to signal failure to the client.
     texture_ = nullptr;
+    return nullptr;
   }
 
   access_mode_ = access_mode;
@@ -187,6 +187,7 @@ void DawnAHardwareBufferImageRepresentation::EndAccess() {
   // the begin fences if the WGPUTexture was unused.
   if (end_access_desc.fenceCount) {
     DCHECK_EQ(end_access_desc.fenceCount, 1u);
+    DCHECK_EQ(end_access_desc.signaledValueCount, 1u);
     end_access_desc.fences[0].ExportInfo(&export_info);
     // Dawn will close its FD when `end_access_desc` falls out of scope, and
     // so it is necessary to dup() it to give AndroidImageBacking an FD that

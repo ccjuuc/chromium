@@ -44,11 +44,7 @@ const CGFloat kCountBorderWidth = 24;
     ]];
 
     [self registerViewForTraitChanges];
-    if (IsNTPBackgroundCustomizationEnabled()) {
-      [self applyBackgroundTheme];
-    } else {
-      self.imageBackgroundView.tintColor = [UIColor colorNamed:kBlueHaloColor];
-    }
+    [self applyBackgroundTheme];
   }
   return self;
 }
@@ -150,16 +146,12 @@ const CGFloat kCountBorderWidth = 24;
 // Registers a list of UITraits to observe and invokes the
 // `updateTitleLabelFontOnTraitChange` function whenever one of the observed
 // trait's values change.
-- (void)registerViewForTraitChanges API_AVAILABLE(ios(17.0)) {
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  [self registerForTraitChanges:traits
+- (void)registerViewForTraitChanges {
+  [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(updateTitleLabelFontOnTraitChange)];
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    [self registerForTraitChanges:
-              @[ NewTabPageTrait.class, NewTabPageImageBackgroundTrait.class ]
-                       withAction:@selector(applyBackgroundTheme)];
-  }
+  [self registerForTraitChanges:
+            @[ NewTabPageTrait.class, NewTabPageImageBackgroundTrait.class ]
+                     withAction:@selector(applyBackgroundTheme)];
 }
 
 // Update the `titleLabel` font when the device's content size changes.

@@ -7,7 +7,6 @@
 #include <ostream>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "content/public/test/browser_test_utils.h"
@@ -30,13 +29,23 @@ std::ostream& operator<<(std::ostream& out, DevToolsAgentHost* h) {
 DevToolsAgentCoverageObserver::DevToolsAgentCoverageObserver(
     base::FilePath devtools_code_coverage_dir)
     : DevToolsAgentCoverageObserver(devtools_code_coverage_dir,
-                                    base::NullCallback()) {}
+                                    base::NullCallback(),
+                                    "") {}
 
 DevToolsAgentCoverageObserver::DevToolsAgentCoverageObserver(
     base::FilePath devtools_code_coverage_dir,
     ShouldInspectDevToolsAgentHostCallback should_inspect_callback)
+    : DevToolsAgentCoverageObserver(devtools_code_coverage_dir,
+                                    should_inspect_callback,
+                                    "") {}
+
+DevToolsAgentCoverageObserver::DevToolsAgentCoverageObserver(
+    base::FilePath devtools_code_coverage_dir,
+    ShouldInspectDevToolsAgentHostCallback should_inspect_callback,
+    std::string collect_coverage_for_host)
     : devtools_code_coverage_dir_(devtools_code_coverage_dir),
-      should_inspect_callback_(std::move(should_inspect_callback)) {
+      should_inspect_callback_(std::move(should_inspect_callback)),
+      collect_coverage_for_host_(collect_coverage_for_host) {
   DevToolsAgentHost::AddObserver(this);
 }
 
@@ -62,7 +71,9 @@ void DevToolsAgentCoverageObserver::CollectCoverage(
   for (auto& agent : devtools_agents_) {
     DevToolsAgentHost* host = agent.first;
     DevToolsListener* listener = agent.second.second.get();
-    if (listener->HasCoverage(host)) {
+    if (listener->HasCoverage(host) &&
+        (collect_coverage_for_host_ == "" ||
+         host->GetURL().GetHost() == collect_coverage_for_host_)) {
       VLOG(1) << host << ": Collecting coverage";
       listener->GetCoverage(host, store, test_name);
     }
@@ -80,7 +91,7 @@ bool DevToolsAgentCoverageObserver::ShouldForceDevToolsAgentHostCreation() {
 void DevToolsAgentCoverageObserver::DevToolsAgentHostCreated(
     DevToolsAgentHost* host) {
   VLOG(1) << host << ": Created";
-  CHECK(!base::Contains(devtools_agents_, host));
+  CHECK(!devtools_agents_.contains(host));
 
   if (should_inspect_callback_ && !should_inspect_callback_.Run(host)) {
     VLOG(1) << host << ": Not attaching";
@@ -119,7 +130,7 @@ void DevToolsAgentCoverageObserver::DevToolsAgentHostCrashed(
     DevToolsAgentHost* host,
     base::TerminationStatus status) {
   VLOG(1) << host << ": Crashed";
-  CHECK(!base::Contains(devtools_agents_, host));
+  CHECK(!devtools_agents_.contains(host));
 }
 
 void DevToolsAgentCoverageObserver::DevToolsAgentHostDestroyed(

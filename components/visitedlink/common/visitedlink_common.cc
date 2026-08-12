@@ -11,7 +11,7 @@
 
 #include "base/bit_cast.h"
 #include "base/check.h"
-#include "base/compiler_specific.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/numerics/byte_conversions.h"
 #include "components/visitedlink/core/visited_link.h"
@@ -34,9 +34,6 @@ crypto::obsolete::Md5 MakeMd5HasherForVisitedLink() {
   return {};
 }
 
-const VisitedLinkCommon::Fingerprint VisitedLinkCommon::null_fingerprint_ = 0;
-const VisitedLinkCommon::Hash VisitedLinkCommon::null_hash_ = -1;
-
 VisitedLinkCommon::VisitedLinkCommon() = default;
 
 VisitedLinkCommon::~VisitedLinkCommon() = default;
@@ -49,6 +46,9 @@ bool VisitedLinkCommon::IsVisited(std::string_view canonical_url) const {
   }
   if (!hash_table_ || table_length_ == 0) {
     return false;
+  }
+  if (is_pseudo_partitioned_) {
+    return IsVisited(ComputePseudoPartitionedFingerprint(canonical_url));
   }
   return IsVisited(ComputeURLFingerprint(canonical_url));
 }
@@ -81,15 +81,24 @@ bool VisitedLinkCommon::IsVisited(Fingerprint fingerprint) const {
   // which should be enforced by AddFingerprint.
   Hash first_hash = HashFingerprint(fingerprint);
   Hash cur_hash = first_hash;
+  size_t collision_count = 0;
   while (true) {
     Fingerprint cur_fingerprint = FingerprintAt(cur_hash);
-    if (cur_fingerprint == null_fingerprint_)
-      return false;  // End of probe sequence found.
-    if (cur_fingerprint == fingerprint)
-      return true;  // Found a match.
+    // Search for fingerprint match.
+    if (cur_fingerprint == kNullFingerprint || cur_fingerprint == fingerprint) {
+      // Log the number of collisions encountered during the search for
+      // matches in the case of pseudo-partitioned usage.
+      if (is_pseudo_partitioned_) {
+        UMA_HISTOGRAM_COUNTS_100(
+            "History.VisitedLinks.WebView.LookupCollisionCount",
+            collision_count);
+      }
+      return cur_fingerprint == fingerprint;  // Match or end of sequence found.
+    }
 
     // This spot was taken, but not by the item we're looking for, search in
     // the next position.
+    collision_count++;
     cur_hash++;
     if (cur_hash == table_length_)
       cur_hash = 0;
@@ -107,15 +116,11 @@ bool VisitedLinkCommon::IsVisited(Fingerprint fingerprint) const {
 // static
 VisitedLinkCommon::Fingerprint VisitedLinkCommon::ComputeURLFingerprint(
     std::string_view canonical_url,
-    const uint8_t salt[LINK_SALT_LENGTH]) {
+    LinkSalt salt) {
   DCHECK(canonical_url.size() > 0) << "Canonical URLs should not be empty";
 
   auto md5 = MakeMd5HasherForVisitedLink();
-  UNSAFE_BUFFERS(
-      // SAFETY: salt is a reference to a local array which we know is the right
-      // size.
-      md5.Update(base::span<const uint8_t>(
-          salt, base::checked_cast<size_t>(LINK_SALT_LENGTH)));)
+  md5.Update(salt);
   md5.Update(canonical_url);
   return ConvertDigestToFingerprint(md5.Finish());
 }
@@ -156,6 +161,17 @@ VisitedLinkCommon::Fingerprint VisitedLinkCommon::ComputePartitionedFingerprint(
   // Add the serialized frame origin.
   md5.Update(frame_origin.Serialize());
   return ConvertDigestToFingerprint(md5.Finish());
+}
+
+// static
+VisitedLinkCommon::Fingerprint
+VisitedLinkCommon::ComputePseudoPartitionedFingerprint(
+    std::string_view canonical_url) {
+  VisitedLink link = CreatePseudoPartitionedLink(GURL(canonical_url));
+  if (!link.IsValid()) {
+    return kNullFingerprint;
+  }
+  return ComputePartitionedFingerprint(link, kPseudoPartitionedConstantSalt);
 }
 
 }  // namespace visitedlink

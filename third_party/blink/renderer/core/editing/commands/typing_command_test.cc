@@ -26,10 +26,10 @@ class TypingCommandTest : public EditingTestBase {};
 // Mock for ChromeClient.
 class MockChromeClient : public EmptyChromeClient {
  public:
-  unsigned int didUserChangeContentEditableContentCount = 0;
+  size_t did_user_change_content_editable_content_count = 0;
   // ChromeClient overrides:
   void DidUserChangeContentEditableContent(Element& element) override {
-    didUserChangeContentEditableContentCount++;
+    ++did_user_change_content_editable_content_count;
   }
 };
 
@@ -77,7 +77,7 @@ TEST_F(TypingCommandTest, insertLineBreakWithIllFormedHTML) {
   div->AppendChild(tr);
 
   LocalFrame* frame = GetDocument().GetFrame();
-  frame->Selection().SetSelection(SelectionInDOMTree::Builder()
+  frame->Selection().SetSelection(SelectionInDomTree::Builder()
                                       .Collapse(Position(form, 0))
                                       .Extend(Position(header, 0))
                                       .Build(),
@@ -96,7 +96,7 @@ TEST_F(TypingCommandTest,
 
   // This call shouldn't crash.
   TypingCommand::InsertText(
-      GetDocument(), " ", 0,
+      GetDocument(), " ", 0, EditCommand::PasswordEchoBehavior::kDoNotEcho,
       TypingCommand::TextCompositionType::kTextCompositionUpdate, true);
   EXPECT_EQ("<div contenteditable><h1>\xC2\xA0|</h1></div>",
             GetSelectionTextFromBody());
@@ -132,7 +132,7 @@ TEST_F(TypingCommandTest, ForwardDeleteAtTableEnd) {
   Element* table = QuerySelector("table");
   table->setTextContent("a");
   UpdateAllLifecyclePhasesForTest();
-  Selection().SetSelection(SelectionInDOMTree::Builder()
+  Selection().SetSelection(SelectionInDomTree::Builder()
                                .Collapse(Position(table->firstChild(), 1))
                                .Build(),
                            SetSelectionOptions());
@@ -151,18 +151,18 @@ TEST_F(TypingCommandTest, TypedCharactersInContentEditable) {
   MockChromeClient* chrome_client = MakeGarbageCollected<MockChromeClient>();
   table->GetDocument().GetPage()->SetChromeClientForTesting(chrome_client);
   UpdateAllLifecyclePhasesForTest();
-  Selection().SetSelection(SelectionInDOMTree::Builder()
+  Selection().SetSelection(SelectionInDomTree::Builder()
                                .Collapse(Position(table->firstChild(), 1))
                                .Build(),
                            SetSelectionOptions());
   TypingCommand::InsertText(
-      GetDocument(), "b", 0,
+      GetDocument(), "b", 0, EditCommand::PasswordEchoBehavior::kDoNotEcho,
       TypingCommand::TextCompositionType::kTextCompositionUpdate, true);
   TypingCommand::InsertText(
-      GetDocument(), "c", 0,
+      GetDocument(), "c", 0, EditCommand::PasswordEchoBehavior::kDoNotEcho,
       TypingCommand::TextCompositionType::kTextCompositionUpdate, true);
   EXPECT_EQ("<table contenteditable>abc|</table>", GetSelectionTextFromBody());
-  EXPECT_EQ(2u, chrome_client->didUserChangeContentEditableContentCount);
+  EXPECT_EQ(2u, chrome_client->did_user_change_content_editable_content_count);
 }
 
 TEST_F(TypingCommandTest, FirstTypedCharactersInContentEditable) {
@@ -172,16 +172,101 @@ TEST_F(TypingCommandTest, FirstTypedCharactersInContentEditable) {
   MockChromeClient* chrome_client = MakeGarbageCollected<MockChromeClient>();
   table->GetDocument().GetPage()->SetChromeClientForTesting(chrome_client);
   UpdateAllLifecyclePhasesForTest();
-  Selection().SetSelection(SelectionInDOMTree::Builder()
+  Selection().SetSelection(SelectionInDomTree::Builder()
                                .Collapse(Position(table->firstChild(), 1))
                                .Build(),
                            SetSelectionOptions());
-  EXPECT_EQ(0u, chrome_client->didUserChangeContentEditableContentCount);
+  EXPECT_EQ(0u, chrome_client->did_user_change_content_editable_content_count);
   TypingCommand::InsertText(
-      GetDocument(), "b", 0,
+      GetDocument(), "b", 0, EditCommand::PasswordEchoBehavior::kDoNotEcho,
       TypingCommand::TextCompositionType::kTextCompositionUpdate, true);
   EXPECT_EQ("<table contenteditable>ab|</table>", GetSelectionTextFromBody());
-  EXPECT_EQ(1u, chrome_client->didUserChangeContentEditableContentCount);
+  EXPECT_EQ(1u, chrome_client->did_user_change_content_editable_content_count);
+}
+
+// Tests that insertText with CRLF (\r\n) produces the same DOM
+// as with LF (\n).
+TEST_F(TypingCommandTest, InsertTextCrLfMatchesLf) {
+  // First: insert with LF to establish baseline.
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "foo\nbar",
+                            ASSERT_NO_EXCEPTION);
+  std::string lf_result = GetSelectionTextFromBody();
+
+  // Second: insert with CRLF — should produce identical result.
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "foo\r\nbar",
+                            ASSERT_NO_EXCEPTION);
+  std::string crlf_result = GetSelectionTextFromBody();
+
+  EXPECT_EQ(lf_result, crlf_result);
+}
+
+TEST_F(TypingCommandTest, InsertTextCrLfNoCarriageReturnInDom) {
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable style='white-space:pre-wrap'>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "foo\r\nbar",
+                            ASSERT_NO_EXCEPTION);
+
+  // The \r should not appear in the resulting DOM.
+  std::string result = GetSelectionTextFromBody();
+  EXPECT_EQ(result.find('\r'), std::string::npos);
+}
+
+TEST_F(TypingCommandTest, InsertTextStandaloneCrNoCarriageReturnInDom) {
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable style='white-space:pre-wrap'>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "foo\rbar",
+                            ASSERT_NO_EXCEPTION);
+
+  // Standalone \r should also be normalized; no \r in the DOM.
+  std::string result = GetSelectionTextFromBody();
+  EXPECT_EQ(result.find('\r'), std::string::npos);
+}
+
+TEST_F(TypingCommandTest, InsertTextMixedLineEndingsMatchLf) {
+  // Baseline with all LF.
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "a\nb\nc",
+                            ASSERT_NO_EXCEPTION);
+  std::string lf_result = GetSelectionTextFromBody();
+
+  // Mixed CRLF and LF — should produce identical result.
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>|</div>"),
+      SetSelectionOptions());
+  GetDocument().execCommand("insertText", false, "a\r\nb\nc",
+                            ASSERT_NO_EXCEPTION);
+  std::string mixed_result = GetSelectionTextFromBody();
+
+  EXPECT_EQ(lf_result, mixed_result);
+}
+
+// Ensure undo works correctly after CRLF normalization
+TEST_F(TypingCommandTest, InsertTextCrLfUndo) {
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>|</div>"),
+      SetSelectionOptions());
+
+  GetDocument().execCommand("insertText", false, "foo\r\nbar",
+                            ASSERT_NO_EXCEPTION);
+  // Verify text was inserted
+  EXPECT_NE(GetSelectionTextFromBody().find("foo"), std::string::npos);
+  EXPECT_NE(GetSelectionTextFromBody().find("bar"), std::string::npos);
+
+  // Undo should remove the inserted text
+  GetDocument().execCommand("undo", false, "", ASSERT_NO_EXCEPTION);
+  EXPECT_EQ("<div contenteditable>|</div>", GetSelectionTextFromBody());
 }
 
 }  // namespace blink

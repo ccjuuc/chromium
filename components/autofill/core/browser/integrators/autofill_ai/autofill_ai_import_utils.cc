@@ -4,46 +4,67 @@
 
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_utils.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <algorithm>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/check_op.h"
+#include "base/containers/flat_tree.h"
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/time_formatting.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/types/zip.h"
+#include "base/uuid.h"
 #include "components/autofill/core/browser/autofill_ai_form_rationalization.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
 #include "components/autofill/core/browser/data_model/data_model_utils.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/autofill_ai/select_date_matching.h"
 #include "components/autofill/core/browser/form_processing/autofill_ai/determine_attribute_types.h"
-#include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/permissions/autofill_ai/autofill_ai_permission_utils.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/dense_set.h"
-#include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill {
 
 namespace {
 
-bool EntitySatisfiesImportConstraints(const EntityInstance& entity) {
-  return AttributesMeetImportConstraints(
-      entity.type(), DenseSet(entity.attributes(), &AttributeInstance::type));
+bool IsEntityImportable(const AutofillClient& client,
+                        const EntityInstance& entity) {
+  return !entity.type().read_only() &&
+         !IsAutofillAiEntityTypeBlockedByPolicy(
+             client, client.GetLastCommittedPrimaryMainFrameURL(),
+             entity.type()) &&
+         AttributesMeetImportConstraints(
+             entity.type(),
+             DenseSet(entity.attributes(), &AttributeInstance::type));
 }
 
 }  // namespace
 
 bool AttributesMeetImportConstraints(EntityType entity_type,
                                      DenseSet<AttributeType> attributes) {
-  return std::ranges::any_of(entity_type.import_constraints(),
+  return entity_type.import_constraints().empty() ||
+         std::ranges::any_of(entity_type.import_constraints(),
                              [&](const DenseSet<AttributeType>& constraint) {
                                return attributes.contains_all(constraint);
                              });
@@ -59,9 +80,8 @@ ValueAndFormatString GetValueAndFormatString(const AutofillField& field,
                                              AttributeType attribute_type) {
   if (attribute_type.data_type() != AttributeType::DataType::kDate ||
       !field.IsSelectElement()) {
-    std::u16string value = field.value_for_import();
-    base::TrimWhitespace(value, base::TRIM_ALL, &value);
-    return {.value = std::move(value),
+    return {.value = std::u16string(
+                base::TrimWhitespace(field.value_for_import(), base::TRIM_ALL)),
             .format_string = field.format_string() ? *field.format_string()
                                                    : AutofillFormatString()};
   }
@@ -194,11 +214,13 @@ std::vector<EntityInstance> GetPossibleEntitiesFromSubmittedForm(
       // on whether the user is eligible (pref state and feature enabled)
       // and whether the entity type is "walletable". If the entity cannot be
       // stored on the Wallet servers, it is stored locally.
-      const EntityInstance::RecordType record_type =
+      const EntityInstance::RecordTypeData record_type_data =
           MayPerformAutofillAiAction(client, AutofillAiAction::kImportToWallet,
                                      entity_name)
-              ? EntityInstance::RecordType::kServerWallet
-              : EntityInstance::RecordType::kLocal;
+              ? EntityInstance::RecordTypeData(
+                    EntityInstance::WalletRecordTypePayload{})
+              : EntityInstance::RecordTypeData(
+                    EntityInstance::LocalRecordTypePayload{});
       EntityInstance entity = EntityInstance(
           entity_name,
           base::ToVector(
@@ -206,10 +228,10 @@ std::vector<EntityInstance> GetPossibleEntitiesFromSubmittedForm(
               &std::pair<const AttributeType, AttributeInstance>::second),
           EntityInstance::EntityId(base::Uuid::GenerateRandomV4()),
           /*nickname=*/std::string(""), base::Time::Now(), /*use_count=*/0,
-          /*use_date=*/base::Time::Now(), record_type,
+          /*use_date=*/base::Time::Now(), std::move(record_type_data),
           EntityInstance::AreAttributesReadOnly(false),
           /*frecency_override=*/"");
-      if (!EntitySatisfiesImportConstraints(entity)) {
+      if (!IsEntityImportable(client, entity)) {
         continue;
       }
       entities_found_in_form.push_back(std::move(entity));
@@ -221,8 +243,8 @@ std::vector<EntityInstance> GetPossibleEntitiesFromSubmittedForm(
 
 std::optional<std::u16string> MaybeGetLocalizedDate(
     const AttributeInstance& attribute) {
-  FieldType field_type = attribute.type().field_type();
-  if (!IsDateFieldType(field_type)) {
+  std::optional<FieldType> field_type = attribute.type().field_type();
+  if (!field_type || !IsDateFieldType(*field_type)) {
     return std::nullopt;
   }
   auto get_part = [&](std::u16string format) {
@@ -244,7 +266,8 @@ std::optional<std::u16string> MaybeGetLocalizedDate(
   if (!success) {
     return std::nullopt;
   }
-  return base::LocalizedTimeFormatWithPattern(time, "yMMMd");
+  return base::i18n::IcuBridge::GetInstance().date_time_formatter().Format(
+      time, base::i18n::datetime_options::YMD::Medium());
 }
 
 }  // namespace autofill

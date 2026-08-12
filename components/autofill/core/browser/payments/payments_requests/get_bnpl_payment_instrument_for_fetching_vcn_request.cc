@@ -4,15 +4,24 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_bnpl_payment_instrument_for_fetching_vcn_request.h"
 
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
 namespace {
-using Dict = base::Value::Dict;
+using Dict = base::DictValue;
 
 const char kGetBnplPaymentInstrumentForFetchingVcnRequestPath[] =
     "payments/apis-secure/chromepaymentsservice/"
@@ -49,7 +58,7 @@ std::string GetBnplPaymentInstrumentForFetchingVcnRequest::GetRequestContent() {
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
@@ -70,8 +79,7 @@ std::string GetBnplPaymentInstrumentForFetchingVcnRequest::GetRequestContent() {
   return base::StringPrintf(
       kGetBnplPaymentInstrumentForFetchingVcnRequestFormat,
       base::EscapeUrlEncodedData(base::WriteJson(request_dict).value(),
-                                 /*use_plus=*/true)
-          .c_str());
+                                 /*use_plus=*/true));
 }
 
 void GetBnplPaymentInstrumentForFetchingVcnRequest::ParseResponse(

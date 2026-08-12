@@ -7,6 +7,7 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_clients.h"
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
@@ -37,14 +38,12 @@ class TestObserver : public HotspotController::Observer {
   ~TestObserver() override = default;
 
   // HotspotStateHandler::Observer:
-  void OnHotspotTurnedOn() override { hotspot_turned_on_count_++; }
+  void OnHotspotTurnedOn() override {}
   void OnHotspotTurnedOff(
       hotspot_config::mojom::DisableReason disable_reason) override {
     last_disable_reason_ = disable_reason;
     hotspot_turned_off_count_++;
   }
-
-  size_t hotspot_turned_on_count() { return hotspot_turned_on_count_; }
 
   size_t hotspot_turned_off_count() { return hotspot_turned_off_count_; }
 
@@ -53,7 +52,6 @@ class TestObserver : public HotspotController::Observer {
   }
 
  private:
-  size_t hotspot_turned_on_count_ = 0u;
   size_t hotspot_turned_off_count_ = 0u;
   std::optional<hotspot_config::mojom::DisableReason> last_disable_reason_ =
       std::nullopt;
@@ -112,7 +110,7 @@ class HotspotControllerTest : public ::testing::Test {
 
   void SetHotspotStateInShill(const std::string& state) {
     auto status_dict =
-        base::Value::Dict().Set(shill::kTetheringStatusStateProperty, state);
+        base::DictValue().Set(shill::kTetheringStatusStateProperty, state);
     network_state_test_helper_.manager_test()->SetManagerProperty(
         shill::kTetheringStatusProperty, base::Value(std::move(status_dict)));
     base::RunLoop().RunUntilIdle();
@@ -439,6 +437,19 @@ TEST_F(HotspotControllerTest, SetPolicyAllowHotspot) {
   EXPECT_EQ(
       hotspot_config::mojom::HotspotAllowStatus::kAllowed,
       hotspot_capabilities_provider_->GetHotspotCapabilities().allow_status);
+}
+
+TEST_F(HotspotControllerTest, EnableHotspotBlockedByPolicy) {
+  SetPolicyAllowHotspot(false);
+
+  // Attempt to enable the hotspot
+  base::test::TestFuture<hotspot_config::mojom::HotspotControlResult>
+      enable_future;
+  hotspot_controller_->EnableHotspot(enable_future.GetCallback());
+
+  // The controller must explicitly block the request and return kNotAllowed
+  EXPECT_EQ(hotspot_config::mojom::HotspotControlResult::kNotAllowed,
+            enable_future.Get());
 }
 
 TEST_F(HotspotControllerTest, RestoreWiFiStatus) {

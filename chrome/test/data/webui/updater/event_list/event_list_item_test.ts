@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 import 'chrome://updater/event_list/event_list_item.js';
+import 'chrome://updater/enterprise_policy_table/enterprise_policy_table.js';
 
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import type {MergedHistoryEvent, MergedInstallEvent, MergedUpdaterProcessEvent, PersistedDataEvent} from 'chrome://updater/event_history.js';
+import type {MergedHistoryEvent, MergedInstallEvent, MergedUpdaterProcessEvent, PersistedDataEvent, PolicySet, Scope} from 'chrome://updater/event_history.js';
 import {localizeEventType, UpdaterProcessMap} from 'chrome://updater/event_history.js';
 import type {EventListItemElement} from 'chrome://updater/event_list/event_list_item.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertStringContains, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -262,7 +263,8 @@ suite('EventListItemElement', () => {
         processToken: '',
         bound: 'END',
         errors: [],
-        outcome: 'UPDATED',
+        updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+        result: 'SUCCESS',
         nextVersion: '2.0',
       },
     };
@@ -274,19 +276,20 @@ suite('EventListItemElement', () => {
         item.shadowRoot.textContent,
         loadTimeData.getStringF('updatedTo', '2.0'));
 
-    event.endEvent.outcome = 'NO_UPDATE';
+    event.endEvent.updateStates = [{deviceUptime: 1000, state: 'NO_UPDATE'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
         item.shadowRoot.textContent, loadTimeData.getString('noUpdate'));
 
-    event.endEvent.outcome = 'UPDATE_ERROR';
+    event.endEvent.updateStates = [{deviceUptime: 1000, state: 'UPDATE_ERROR'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
         item.shadowRoot.textContent, loadTimeData.getString('updateError'));
 
-    event.endEvent.outcome = 'UNKNOWN_OUTCOME';
+    event.endEvent.updateStates =
+        [{deviceUptime: 1000, state: 'UNKNOWN_OUTCOME'}];
     item.event = {...event};
     await microtasksFinished();
     assertStringContains(
@@ -433,7 +436,7 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    assertTrue(item.error);
+    assertEquals('error', item.status);
     assertNotEquals(
         null, item.shadowRoot.querySelector('.event-error-details'));
 
@@ -462,13 +465,7 @@ suite('EventListItemElement', () => {
     };
     item.event = mergedEvent;
     await microtasksFinished();
-    assertTrue(item.error);
-    assertStringContains(
-        item.shadowRoot.textContent,
-        loadTimeData.getStringF('errorDetails', 4, 5, 6));
-    assertStringContains(
-        item.shadowRoot.textContent,
-        loadTimeData.getStringF('errorDetails', 7, 8, 9));
+    assertEquals('error', item.status);
   });
 
   test('toggles details', async () => {
@@ -611,7 +608,7 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    assertStringContains(item.shadowRoot.textContent, '1h 1m 1ms 2μs');
+    assertStringContains(item.shadowRoot.textContent, '1h 1m');
   });
 
   test('displays app name for known app', async () => {
@@ -645,9 +642,9 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    const appSpan = item.shadowRoot.querySelector('.event-app');
-    assertTrue(!!appSpan);
-    assertEquals('Chrome', appSpan.textContent.trim());
+    const appColumn = item.shadowRoot.querySelector('.event-app-column');
+    assertTrue(!!appColumn);
+    assertEquals('Chrome', appColumn.textContent.trim());
   });
 
   test('displays app id for unknown app', async () => {
@@ -679,8 +676,398 @@ suite('EventListItemElement', () => {
     };
     item.event = event;
     await microtasksFinished();
-    const appSpan = item.shadowRoot.querySelector('.event-app');
-    assertTrue(!!appSpan);
-    assertEquals('{UNKNOWN-APP}', appSpan.textContent.trim());
+    const appColumn = item.shadowRoot.querySelector('.event-app-column');
+    assertTrue(!!appColumn);
+    assertEquals('{UNKNOWN-APP}', appColumn.textContent.trim());
+  });
+
+  test('displays scope icon', () => {
+    function makeUpdaterProcessEvent(scope: Scope): MergedUpdaterProcessEvent {
+      return {
+        eventType: 'UPDATER_PROCESS',
+        startEvent: {
+          eventType: 'UPDATER_PROCESS',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 1234,
+          processToken: 'token',
+          bound: 'START',
+          errors: [],
+          scope,
+        },
+        endEvent: {
+          eventType: 'UPDATER_PROCESS',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 1234,
+          processToken: 'token',
+          bound: 'END',
+          errors: [],
+        },
+      };
+    }
+
+    const event: MergedHistoryEvent = {
+      eventType: 'INSTALL',
+      startEvent: {
+        eventType: 'INSTALL',
+        eventId: '2',
+        deviceUptime: 500,
+        pid: 1234,
+        processToken: 'token',
+        bound: 'START',
+        errors: [],
+        appId: '{app1}',
+      },
+      endEvent: {
+        eventType: 'INSTALL',
+        eventId: '2',
+        deviceUptime: 600,
+        pid: 1234,
+        processToken: 'token',
+        bound: 'END',
+        errors: [],
+        version: '1.0',
+      },
+    };
+
+
+    test('per-user', async () => {
+      const updaterProcessEvent = makeUpdaterProcessEvent('USER');
+      const processMap = new UpdaterProcessMap([updaterProcessEvent]);
+
+      item.event = event;
+      item.processMap = processMap;
+      await microtasksFinished();
+
+      const iconElement = item.shadowRoot.querySelector('cr-icon');
+      assertTrue(!!iconElement);
+      assertEquals('cr:person-filled', iconElement.icon);
+      assertEquals(loadTimeData.getString('scopeUser'), iconElement.title);
+    });
+
+    test('per-system', async () => {
+      const updaterProcessEvent = makeUpdaterProcessEvent('SYSTEM');
+      const processMap = new UpdaterProcessMap([updaterProcessEvent]);
+
+      item.event = event;
+      item.processMap = processMap;
+      await microtasksFinished();
+
+      const iconElement = item.shadowRoot.querySelector('cr-icon');
+      assertTrue(!!iconElement);
+      assertEquals('cr:computer', iconElement.icon);
+      assertEquals(loadTimeData.getString('scopeSystem'), iconElement.title);
+    });
+  });
+
+  suite('summary icon', () => {
+    test('displays check circle for updated', async () => {
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      const icon = item.shadowRoot.querySelector(
+          '.event-description-icon-column cr-icon');
+      assertTrue(!!icon);
+      assertEquals('cr:check-circle', icon.getAttribute('icon'));
+    });
+
+    test('displays sync for no update', async () => {
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'NO_UPDATE'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      const icon = item.shadowRoot.querySelector(
+          '.event-description-icon-column cr-icon');
+      assertTrue(!!icon);
+      assertEquals('cr:sync', icon.getAttribute('icon'));
+    });
+
+    test('displays warning for update error', async () => {
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'UPDATE_ERROR'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      const icon = item.shadowRoot.querySelector(
+          '.event-description-icon-column cr-icon');
+      assertTrue(!!icon);
+      assertEquals('cr:warning-filled', icon.getAttribute('icon'));
+    });
+
+    test('does not display for other events', async () => {
+      item.event = {
+        eventType: 'INSTALL',
+        startEvent: {
+          eventType: 'INSTALL',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'INSTALL',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          version: '1.0',
+        },
+      };
+      await microtasksFinished();
+      const icon = item.shadowRoot.querySelector(
+          '.event-description-icon-column cr-icon');
+      assertFalse(!!icon);
+    });
+  });
+
+  suite('"status" attribute', () => {
+    test('is "error" when there are errors', async () => {
+      item.event = {
+        eventType: 'PERSISTED_DATA',
+        bound: 'INSTANT',
+        eventId: '1',
+        deviceUptime: 0,
+        pid: 0,
+        processToken: '',
+        errors: [{category: 1, code: 2, extracode1: 3}],
+        eulaRequired: false,
+        registeredApps: [],
+      };
+      await microtasksFinished();
+      assertEquals('error', item.getAttribute('status'));
+    });
+
+    test('is "success" when update is successful', async () => {
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'UPDATED'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      assertEquals('success', item.getAttribute('status'));
+    });
+
+    test('is "error" when update fails', async () => {
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'UPDATE_ERROR'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      assertEquals('error', item.getAttribute('status'));
+    });
+
+    test('is unset other events', async () => {
+      item.event = {
+        eventType: 'INSTALL',
+        startEvent: {
+          eventType: 'INSTALL',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'INSTALL',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          version: '1.0',
+        },
+      };
+      await microtasksFinished();
+      assertEquals('', item.getAttribute('status'));
+
+      item.event = {
+        eventType: 'UPDATE',
+        startEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 0,
+          pid: 0,
+          processToken: '',
+          bound: 'START',
+          errors: [],
+          appId: '{app1}',
+        },
+        endEvent: {
+          eventType: 'UPDATE',
+          eventId: '1',
+          deviceUptime: 1000,
+          pid: 0,
+          processToken: '',
+          bound: 'END',
+          errors: [],
+          updateStates: [{deviceUptime: 1000, state: 'NO_UPDATE'}],
+          result: 'SUCCESS',
+        },
+      };
+      await microtasksFinished();
+      assertEquals('', item.getAttribute('status'));
+    });
+  });
+
+  test('displays policies', async () => {
+    const event: MergedHistoryEvent = {
+      eventType: 'INSTALL',
+      startEvent: {
+        eventType: 'INSTALL',
+        eventId: '1',
+        deviceUptime: 0,
+        pid: 0,
+        processToken: '',
+        bound: 'START',
+        errors: [],
+        appId: '{app1}',
+      },
+      endEvent: {
+        eventType: 'INSTALL',
+        eventId: '1',
+        deviceUptime: 1000,
+        pid: 0,
+        processToken: '',
+        bound: 'END',
+        errors: [],
+        version: '1.0',
+      },
+    };
+    const policies: PolicySet = {
+      policiesByName: {
+        'UpdaterPolicy': {
+          valuesBySource: {'Default': 1},
+          prevailingSource: 'Default',
+        },
+      },
+      policiesByAppId: {
+        '{app1}': {
+          'AppPolicy': {
+            valuesBySource: {'Group Policy': 'foobar'},
+            prevailingSource: 'Group Policy',
+          },
+        },
+      },
+    };
+
+    item.event = event;
+    item.policies = policies;
+    await microtasksFinished();
+
+    const policyTable =
+        item.shadowRoot.querySelector('enterprise-policy-table');
+    assertTrue(!!policyTable);
+    assertEquals(policies, policyTable.policies);
   });
 });

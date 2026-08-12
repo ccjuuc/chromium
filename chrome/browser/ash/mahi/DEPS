@@ -18,29 +18,26 @@ include_rules = [
   "+chrome/browser/feedback/show_feedback_page.h",
   "+chrome/browser/history/history_service_factory.h",
   "+chrome/browser/manta",
-  "+chrome/browser/policy/profile_policy_connector.h",
   "+chrome/browser/profiles",
-  "+chrome/browser/ui/browser_finder.h",
-  "+chrome/browser/ui/settings_window_manager_chromeos.h",
+  "+chrome/browser/ui/browser_window/public/profile_browser_collection.h",
   "+chrome/test/base",
 ]
 
 specific_include_rules = {
-  "mahi_availability.cc": [
+  "mahi_availability\\.cc": [
     "+chrome/browser/browser_process.h",
   ],
-  "mahi_manager_impl.cc" : [
+  "mahi_ui_browsertest\\.cc": [
     "+chrome/browser/ui/browser.h",
-  ],
-  "mahi_ui_browsertest.cc": [
-    "+chrome/browser/ui/browser.h",
+    "+chrome/browser/ui/browser_window/public/browser_window_interface.h",
+    "+chrome/browser/ui/settings_window_manager_chromeos.h",
     "+chrome/browser/ui/views/mahi/mahi_menu_constants.h",
     "+chrome/browser/ui/views/mahi/mahi_menu_view.h",
   ],
-  "mahi_ui_browser_test_base.cc": [
+  "mahi_ui_browser_test_base\\.cc": [
     "+chrome/browser/ui/views/mahi/mahi_menu_constants.h",
   ],
-  "mahi_ui_browser_test_base.h": [
+  "mahi_ui_browser_test_base\\.h": [
     "+chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h",
   ],
 }

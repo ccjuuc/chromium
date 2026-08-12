@@ -30,6 +30,7 @@ import type {ButtonBarState} from './cellular_types.js';
 import {ButtonState} from './cellular_types.js';
 import {getTemplate} from './esim_flow_ui.html.js';
 import {getEuicc} from './esim_manager_utils.js';
+import {MetricsBrowserProxy} from './metrics_browser_proxy.js';
 import {getESimManagerRemote} from './mojo_interface_provider.js';
 import type {ProfileDiscoveryListPageElement} from './profile_discovery_list_page.js';
 import {SubflowMixin} from './subflow_mixin.js';
@@ -193,20 +194,20 @@ export class EsimFlowUiElement extends EsimFlowUiElementBase {
     };
   }
 
-  delegate: CellularSetupDelegate;
-  header: string;
-  forwardButtonLabel: string;
-  private state_: string;
-  private selectedEsimPageName_: string;
-  private hasConsentedForDiscovery_: boolean;
-  private shouldSkipDiscovery_: boolean;
-  private showError_: boolean;
-  private pendingProfileProperties_: ESimProfileProperties[];
-  private selectedProfileProperties_: ESimProfileProperties|null;
-  private activationCode_: string;
-  private confirmationCode_: string;
-  private hasHadActiveCellularNetwork_: boolean;
-  private isActivationCodeFromQrCode_: boolean;
+  declare delegate: CellularSetupDelegate;
+  declare header: string;
+  declare forwardButtonLabel: string;
+  declare private state_: string;
+  declare private selectedEsimPageName_: string;
+  declare private hasConsentedForDiscovery_: boolean;
+  declare private shouldSkipDiscovery_: boolean;
+  declare private showError_: boolean;
+  declare private pendingProfileProperties_: ESimProfileProperties[];
+  declare private selectedProfileProperties_: ESimProfileProperties|null;
+  declare private activationCode_: string;
+  declare private confirmationCode_: string;
+  declare private hasHadActiveCellularNetwork_: boolean;
+  declare private isActivationCodeFromQrCode_: boolean;
 
   /**
    * Provides an interface to the ESimManager Mojo service.
@@ -286,18 +287,18 @@ export class EsimFlowUiElement extends EsimFlowUiElementBase {
     }
 
     assert(resultCode !== null);
-    chrome.metricsPrivate.recordEnumerationValue(
+    MetricsBrowserProxy.getInstance().recordEnumerationValue(
         ESIM_SETUP_RESULT_METRIC_NAME, resultCode,
         Object.keys(EsimSetupFlowResult).length);
 
     const elapsedTimeMs = new Date().getTime() - this.timeOnAttached_!.getTime();
     if (resultCode === EsimSetupFlowResult.SUCCESS) {
-      chrome.metricsPrivate.recordLongTime(
+      MetricsBrowserProxy.getInstance().recordLongTime(
           SUCCESSFUL_ESIM_SETUP_DURATION_METRIC_NAME, elapsedTimeMs);
       return;
     }
 
-    chrome.metricsPrivate.recordLongTime(
+    MetricsBrowserProxy.getInstance().recordLongTime(
         FAILED_ESIM_SETUP_DURATION_METRIC_NAME, elapsedTimeMs);
   }
 

@@ -14,7 +14,6 @@
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/unsafe_shared_memory_region.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/task/common/task_annotator.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/unguessable_token.h"
@@ -149,8 +148,7 @@ bool MojoGpuVideoAcceleratorFactories::CheckContextLost() {
   if (context_provider_lost_on_media_thread_) {
     return true;
   }
-  if (context_provider_->ContextGL()->GetGraphicsResetStatusKHR() !=
-      GL_NO_ERROR) {
+  if (context_provider_->IsLost()) {
     OnContextLost();
     return true;
   }
@@ -255,8 +253,8 @@ MojoGpuVideoAcceleratorFactories::CreateVideoEncodeAccelerator() {
   return codec_factory_->CreateVideoEncodeAccelerator();
 }
 
-bool MojoGpuVideoAcceleratorFactories::ShouldUseGpuMemoryBuffersForVideoFrames(
-    bool for_media_stream) const {
+bool MojoGpuVideoAcceleratorFactories::
+    ShouldUseMappableSharedImagesForVideoFrames(bool for_media_stream) const {
   return for_media_stream ? enable_media_stream_gpu_memory_buffers_
                           : enable_video_gpu_memory_buffers_;
 }
@@ -285,7 +283,8 @@ MojoGpuVideoAcceleratorFactories::VideoFrameOutputFormat(
       context_provider_->SharedImageInterface()->GetCapabilities();
   const size_t bit_depth = media::BitDepth(pixel_format);
   if (bit_depth > 8) {
-    if (capabilities.image_ycbcr_p010 && bit_depth == 10) {
+    if (shared_image_capabilities.supports_ycbcr_p010_sampling &&
+        bit_depth == 10) {
       return OutputFormat::P010;
     }
 
@@ -327,13 +326,11 @@ MojoGpuVideoAcceleratorFactories::VideoFrameOutputFormat(
 #if BUILDFLAG(IS_FUCHSIA)
   // Hardware support for NV12 GMBs is expected to be present on all supported
   // Fuchsia devices.
-  CHECK(capabilities.image_ycbcr_420v);
-  CHECK(shared_image_capabilities.supports_native_nv12_mappable_shared_images);
+  CHECK(shared_image_capabilities.supports_ycbcr_nv12_sampling);
   return OutputFormat::NV12;
 #else
 
-  if (capabilities.image_ycbcr_420v &&
-      shared_image_capabilities.supports_native_nv12_mappable_shared_images) {
+  if (shared_image_capabilities.supports_ycbcr_nv12_sampling) {
     return OutputFormat::NV12;
   }
 

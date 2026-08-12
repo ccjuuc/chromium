@@ -27,8 +27,8 @@ GLTextureAndroidImageRepresentation::~GLTextureAndroidImageRepresentation() {
 }
 
 gles2::Texture* GLTextureAndroidImageRepresentation::GetTexture(
-    int plane_index) {
-  DCHECK_EQ(plane_index, 0);
+    size_t plane_index) {
+  DCHECK_EQ(plane_index, 0u);
   return texture_;
 }
 
@@ -65,7 +65,10 @@ void GLTextureAndroidImageRepresentation::EndAccess() {
   if (mode_ == RepresentationAccessMode::kNone)
     return;
 
-  base::ScopedFD sync_fd = gl::CreateEglFenceAndExportFd();
+  base::ScopedFD sync_fd;
+  if (has_context()) {
+    sync_fd = gl::CreateEglFenceAndExportFd();
+  }
 
   // Pass this fd to its backing.
   if (mode_ == RepresentationAccessMode::kRead) {

@@ -6,14 +6,18 @@
 
 #include <stddef.h>
 
+#include <optional>
 #include <string_view>
 #include <utility>
 
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "components/os_crypt/async/common/encryptor.h"
+#include "services/preferences/public/cpp/tracked/tracked_preference_histogram_names.h"
 #include "services/preferences/tracked/device_id.h"
 #include "services/preferences/tracked/hash_store_contents.h"
 
@@ -39,8 +43,9 @@ std::string GetEncryptedHashKey(const std::string& path) {
 // Returns a deterministic ID for this machine.
 std::string GenerateDeviceId() {
   static base::NoDestructor<std::string> cached_device_id;
-  if (!cached_device_id->empty())
+  if (!cached_device_id->empty()) {
     return *cached_device_id;
+  }
 
   std::string device_id;
   MachineIdStatus status = GetDeterministicMachineSpecificId(&device_id);
@@ -55,6 +60,30 @@ std::string GenerateDeviceId() {
   return std::string();
 }
 
+void MaybeReportWeakHash(ValidationResult validation_result,
+                         std::optional<size_t> reporting_id) {
+  if (!reporting_id.has_value()) {
+    return;
+  }
+  if (validation_result != ValidationResult::WEAK_HASH_ENCRYPTED) {
+    return;
+  }
+  base::UmaHistogramExactLinear("Settings.TrackedPreferences.WeakAlgorithm",
+                                reporting_id.value(), /*exclusive_max=*/101);
+}
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(SuperEncryptedHashResult)
+enum class SuperEncryptedHashResult {
+  kMatch = 0,
+  kMismatch = 1,
+  kMissing = 2,
+  kMaxValue = kMissing,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/settings/enums.xml:SuperEncryptedHashResult)
+
 }  // namespace
 
 class PrefHashStoreImpl::PrefHashStoreTransactionImpl
@@ -62,9 +91,10 @@ class PrefHashStoreImpl::PrefHashStoreTransactionImpl
  public:
   // Constructs a PrefHashStoreTransactionImpl which can use the private
   // members of its |outer| PrefHashStoreImpl.
-  PrefHashStoreTransactionImpl(PrefHashStoreImpl* outer,
-                               HashStoreContents* storage,
-                               const os_crypt_async::Encryptor* encryptor);
+  PrefHashStoreTransactionImpl(
+      PrefHashStoreImpl* outer,
+      HashStoreContents* storage,
+      scoped_refptr<const os_crypt_async::Encryptor> encryptor);
 
   PrefHashStoreTransactionImpl(const PrefHashStoreTransactionImpl&) = delete;
   PrefHashStoreTransactionImpl& operator=(const PrefHashStoreTransactionImpl&) =
@@ -75,14 +105,15 @@ class PrefHashStoreImpl::PrefHashStoreTransactionImpl
   // PrefHashStoreTransaction implementation.
   std::string_view GetStoreUMASuffix() const override;
   ValueState CheckValue(const std::string& path,
-                        const base::Value* value) const override;
+                        const base::Value* value,
+                        std::optional<size_t> reporting_id) const override;
   void StoreHash(const std::string& path, const base::Value* value) override;
-  ValueState CheckSplitValue(
-      const std::string& path,
-      const base::Value::Dict* initial_split_value,
-      std::vector<std::string>* invalid_keys) const override;
+  ValueState CheckSplitValue(const std::string& path,
+                             const base::DictValue* initial_split_value,
+                             std::vector<std::string>* invalid_keys,
+                             std::optional<size_t> reporting_id) const override;
   void StoreSplitHash(const std::string& path,
-                      const base::Value::Dict* split_value) override;
+                      const base::DictValue* split_value) override;
   bool HasHash(const std::string& path) const override;
   void ImportHash(const std::string& path, const base::Value* hash) override;
   void ClearHash(const std::string& path) override;
@@ -98,7 +129,7 @@ class PrefHashStoreImpl::PrefHashStoreTransactionImpl
 
   // Stores the new split Encrypted Hashes. Requires the encryptor.
   void StoreSplitEncryptedHash(const std::string& path,
-                               const base::Value::Dict* split_value) override;
+                               const base::DictValue* split_value) override;
 
   // Clears only the Encrypted Hash for the path.
   void ClearEncryptedHash(const std::string& path) override;
@@ -115,37 +146,44 @@ class PrefHashStoreImpl::PrefHashStoreTransactionImpl
       const std::string& path,
       const base::Value* value,
       const std::optional<std::string>& stored_encrypted_hash,
-      const std::optional<std::string>& stored_mac) const;
+      const std::optional<std::string>& stored_mac,
+      std::optional<size_t> reporting_id) const;
 
   // Helper for CheckSplitValue to handle validation logic.
   ValueState CheckSplitValueInternal(
       const std::string& path,
-      const base::Value::Dict* initial_split_value,
+      const base::DictValue* initial_split_value,
       bool has_encrypted_hashes,
       const std::map<std::string, std::string>& split_encrypted_hashes,
       bool has_mac_hashes,
       const std::map<std::string, std::string>& split_macs,
-      std::vector<std::string>* invalid_keys) const;
+      std::vector<std::string>* invalid_keys,
+      std::optional<size_t> reporting_id) const;
 
  private:
   raw_ptr<PrefHashStoreImpl> outer_;
   raw_ptr<HashStoreContents> contents_;
-  raw_ptr<const os_crypt_async::Encryptor> encryptor_;
+  scoped_refptr<const os_crypt_async::Encryptor> encryptor_;
 
   bool super_mac_valid_;
   bool super_mac_dirty_;
+  bool super_encrypted_hash_valid_;
+  bool super_encrypted_hash_dirty_;
+  bool super_encrypted_hash_mismatch_;
 };
 
 PrefHashStoreImpl::PrefHashStoreImpl(const std::string& seed,
-                                     bool use_super_mac)
+                                     bool use_super_mac,
+                                     bool use_super_encrypted_hash)
     : pref_hash_calculator_(seed, GenerateDeviceId()),
-      use_super_mac_(use_super_mac) {}
+      use_super_mac_(use_super_mac),
+      use_super_encrypted_hash_(use_super_encrypted_hash) {}
 
 PrefHashStoreImpl::~PrefHashStoreImpl() {}
 
 std::unique_ptr<PrefHashStoreTransaction> PrefHashStoreImpl::BeginTransaction(
     HashStoreContents* storage,
-    const os_crypt_async::Encryptor* encryptor) {
+    scoped_refptr<const os_crypt_async::Encryptor> encryptor) {
   return std::make_unique<PrefHashStoreTransactionImpl>(this, storage,
                                                         encryptor);
 }
@@ -158,22 +196,23 @@ std::string PrefHashStoreImpl::ComputeMac(const std::string& path,
 
 // Computes the legacy MAC for a dictionary.
 std::string PrefHashStoreImpl::ComputeMac(const std::string& path,
-                                          const base::Value::Dict* dict) {
+                                          const base::DictValue* dict) {
   return pref_hash_calculator_.Calculate(path, dict);
 }
 
 // Computes the split legacy MACs.
-base::Value::Dict PrefHashStoreImpl::ComputeSplitMacs(
+base::DictValue PrefHashStoreImpl::ComputeSplitMacs(
     const std::string& path,
-    const base::Value::Dict* split_values) {
-  if (!split_values)
-    return base::Value::Dict();
+    const base::DictValue* split_values) {
+  if (!split_values) {
+    return base::DictValue();
+  }
 
   std::string keyed_path(path);
   keyed_path.push_back('.');
   const size_t common_part_length = keyed_path.length();
 
-  base::Value::Dict split_macs;
+  base::DictValue split_macs;
 
   for (const auto item : *split_values) {
     // Keep the common part from the old |keyed_path| and replace the key to
@@ -201,7 +240,7 @@ std::string PrefHashStoreImpl::ComputeEncryptedHash(
 // Computes the encrypted hash for a dictionary.
 std::string PrefHashStoreImpl::ComputeEncryptedHash(
     const std::string& path,
-    const base::Value::Dict* dict,
+    const base::DictValue* dict,
     const os_crypt_async::Encryptor* encryptor) {
   DCHECK(encryptor);
   std::optional<std::string> result_opt =
@@ -211,22 +250,22 @@ std::string PrefHashStoreImpl::ComputeEncryptedHash(
 }
 
 // Computes split encrypted hashes.
-base::Value::Dict PrefHashStoreImpl::ComputeSplitEncryptedHashes(
+base::DictValue PrefHashStoreImpl::ComputeSplitEncryptedHashes(
     const std::string& path,
-    const base::Value::Dict* split_values,
+    const base::DictValue* split_values,
     const os_crypt_async::Encryptor* encryptor) {
   if (!encryptor) {
-    return base::Value::Dict();
+    return base::DictValue();
   }
   if (!split_values || split_values->empty()) {
-    return base::Value::Dict();
+    return base::DictValue();
   }
 
   std::string keyed_path(path);
   keyed_path.push_back('.');
   const size_t common_part_length = keyed_path.length();
 
-  base::Value::Dict split_encrypted_hashes;
+  base::DictValue split_encrypted_hashes;
   for (const auto item : *split_values) {
     keyed_path.replace(common_part_length, std::string::npos, item.first);
 
@@ -241,34 +280,117 @@ base::Value::Dict PrefHashStoreImpl::ComputeSplitEncryptedHashes(
   return split_encrypted_hashes;
 }
 
+// static
+void PrefHashStoreImpl::FilterEncryptedHashesRecursive(
+    const base::DictValue& src,
+    base::DictValue& dest) {
+  for (const auto item : src) {
+    bool is_encrypted_key = item.first.ends_with("_encrypted_hash");
+
+    if (is_encrypted_key) {
+      dest.Set(item.first, item.second.Clone());
+    } else if (item.second.is_dict()) {
+      base::DictValue sub_dest;
+      FilterEncryptedHashesRecursive(item.second.GetDict(), sub_dest);
+      if (!sub_dest.empty()) {
+        dest.Set(item.first, std::move(sub_dest));
+      }
+    }
+  }
+}
+
 PrefHashStoreImpl::PrefHashStoreTransactionImpl::PrefHashStoreTransactionImpl(
     PrefHashStoreImpl* outer,
     HashStoreContents* storage,
-    const os_crypt_async::Encryptor* encryptor_ptr)
+    scoped_refptr<const os_crypt_async::Encryptor> encryptor_ptr)
     : outer_(outer),
       contents_(storage),
-      encryptor_(encryptor_ptr),
+      encryptor_(std::move(encryptor_ptr)),
       super_mac_valid_(false),
-      super_mac_dirty_(false) {
-  if (!outer_->use_super_mac_)
-    return;
+      super_mac_dirty_(false),
+      super_encrypted_hash_valid_(false),
+      super_encrypted_hash_dirty_(false),
+      super_encrypted_hash_mismatch_(false) {
+  // Super MAC validation is skipped if the outer store does not use it or if
+  // the specific hash store contents implementation does not support it.
+  if (outer_->use_super_mac_ && contents_->SupportsSuperMac()) {
+    std::string super_mac = contents_->GetSuperMac();
+    if (!super_mac.empty()) {
+      super_mac_valid_ = outer_->pref_hash_calculator_.Validate(
+                             "", contents_->GetContents(), super_mac) ==
+                         PrefHashCalculator::VALID;
+    }
+  }
 
-  // The store must have a valid super MAC to be trusted.
-  std::string super_mac = contents_->GetSuperMac();
-  if (super_mac.empty())
-    return;
+  // Load and validate the new Super Encrypted Hash if enabled and the
+  // encryptor is available. The flag controls verification.
+  std::string super_encrypted_hash;
+  // `use_super_encrypted_hash_` controls the loading/verification of the
+  // Super Encrypted Hash here. It is disabled for the unprotected store.
+  if (outer_->use_super_encrypted_hash_ && contents_->SupportsSuperMac()) {
+    super_encrypted_hash = contents_->GetSuperEncryptedHash();
+  }
+  if (!super_encrypted_hash.empty() && encryptor_) {
+    const base::DictValue* contents = contents_->GetContents();
+    if (contents) {
+      base::DictValue filtered_dict;
+      // Filter out legacy MACs to compute the hash over encrypted hashes only.
+      FilterEncryptedHashesRecursive(*contents, filtered_dict);
+      std::string expected_hash =
+          outer_->ComputeEncryptedHash("", &filtered_dict, encryptor_.get());
+      if (super_encrypted_hash == expected_hash) {
+        super_encrypted_hash_valid_ = true;
+      } else {
+        super_encrypted_hash_mismatch_ = true;
+      }
+    }
+  }
 
-  super_mac_valid_ =
-      outer_->pref_hash_calculator_.Validate(
-          "", contents_->GetContents(), super_mac) == PrefHashCalculator::VALID;
+  if (encryptor_) {
+    if (super_encrypted_hash.empty()) {
+      base::UmaHistogramEnumeration(
+          "Settings.TrackedPreferenceSuperEncryptedHashResult",
+          SuperEncryptedHashResult::kMissing);
+    } else if (super_encrypted_hash_valid_) {
+      base::UmaHistogramEnumeration(
+          "Settings.TrackedPreferenceSuperEncryptedHashResult",
+          SuperEncryptedHashResult::kMatch);
+    } else {
+      base::UmaHistogramEnumeration(
+          "Settings.TrackedPreferenceSuperEncryptedHashResult",
+          SuperEncryptedHashResult::kMismatch);
+    }
+  }
 }
 
 PrefHashStoreImpl::PrefHashStoreTransactionImpl::
     ~PrefHashStoreTransactionImpl() {
-  if (super_mac_dirty_ && outer_->use_super_mac_) {
+  if (!contents_->SupportsSuperMac()) {
+    return;
+  }
+
+  bool need_super_mac = super_mac_dirty_ && outer_->use_super_mac_;
+  bool need_super_encrypted_hash = super_encrypted_hash_dirty_ && encryptor_;
+
+  if (need_super_mac || need_super_encrypted_hash) {
     // Get the dictionary of hashes (or NULL if it doesn't exist).
-    const base::Value::Dict* hashes_dict = contents_->GetContents();
-    contents_->SetSuperMac(outer_->ComputeMac("", hashes_dict));
+    const base::DictValue* hashes_dict = contents_->GetContents();
+
+    if (need_super_mac) {
+      contents_->SetSuperMac(outer_->ComputeMac("", hashes_dict));
+    }
+
+    if (need_super_encrypted_hash && hashes_dict) {
+      base::DictValue filtered_dict;
+      FilterEncryptedHashesRecursive(*hashes_dict, filtered_dict);
+      if (!filtered_dict.empty()) {
+        std::string super_encrypted_hash =
+            outer_->ComputeEncryptedHash("", &filtered_dict, encryptor_.get());
+        if (!super_encrypted_hash.empty()) {
+          contents_->SetSuperEncryptedHash(super_encrypted_hash);
+        }
+      }
+    }
   }
 }
 
@@ -312,15 +434,18 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValueInternal(
     const std::string& path,
     const base::Value* value,
     const std::optional<std::string>& stored_encrypted_hash,
-    const std::optional<std::string>& stored_mac) const {
+    const std::optional<std::string>& stored_mac,
+    std::optional<size_t> reporting_id) const {
   if (encryptor_) {
     // Priority 1: Check encrypted hash.
     if (stored_encrypted_hash.has_value()) {
-      ValidationResult result = outer_->pref_hash_calculator_.ValidateEncrypted(
-          path, value, *stored_encrypted_hash, encryptor_);
+      const ValidationResult result =
+          outer_->pref_hash_calculator_.ValidateEncrypted(
+              path, value, *stored_encrypted_hash, encryptor_.get());
       if (result == ValidationResult::VALID_ENCRYPTED) {
         return ValueState::UNCHANGED_ENCRYPTED;
       }
+      MaybeReportWeakHash(result, reporting_id);
       return value ? ValueState::CHANGED_ENCRYPTED
                    : ValueState::CLEARED_ENCRYPTED;
     }
@@ -365,9 +490,14 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValueInternal(
     return ValueState::UNTRUSTED_UNKNOWN_VALUE;
   }
 
-  // Otherwise (genuinely no hashes stored), base trust on the SuperMAC validity
-  // state *cached at the start of the transaction*.
-  if (super_mac_valid_) {
+  // Otherwise (genuinely no hashes stored), base trust on the validity
+  // state of either super hash *cached at the start of the transaction*.
+  // If the super encrypted hash was present but failed verification (mismatch),
+  // we do not trust the state even if the legacy super MAC was valid.
+  if (super_encrypted_hash_mismatch_) {
+    return ValueState::UNTRUSTED_UNKNOWN_VALUE;
+  }
+  if (super_mac_valid_ || super_encrypted_hash_valid_) {
     return ValueState::TRUSTED_UNKNOWN_VALUE;
   } else {
     return ValueState::UNTRUSTED_UNKNOWN_VALUE;
@@ -376,7 +506,8 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValueInternal(
 
 ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValue(
     const std::string& path,
-    const base::Value* initial_value) const {
+    const base::Value* initial_value,
+    std::optional<size_t> reporting_id) const {
   // Attempt to retrieve both types of hashes.
   std::optional<std::string> encrypted_hash = GetEncryptedHash(path);
   std::optional<std::string> mac;
@@ -386,7 +517,8 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValue(
   }
 
   // Delegate to the internal helper.
-  return CheckValueInternal(path, initial_value, encrypted_hash, mac);
+  return CheckValueInternal(path, initial_value, encrypted_hash, mac,
+                            reporting_id);
 }
 
 void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreHash(
@@ -395,6 +527,13 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreHash(
   const std::string mac = outer_->ComputeMac(path, new_value);
   contents_->SetMac(path, mac);
   super_mac_dirty_ = true;
+
+  // Maintain dual stamping behavior: if the store is being updated,
+  // the super encrypted hash should also be updated unconditionally if the
+  // encryptor is available.
+  if (encryptor_) {
+    super_encrypted_hash_dirty_ = true;
+  }
 }
 
 void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreEncryptedHash(
@@ -405,7 +544,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreEncryptedHash(
   }
 
   const std::string encrypted_hash_str =
-      outer_->ComputeEncryptedHash(path, value, encryptor_);
+      outer_->ComputeEncryptedHash(path, value, encryptor_.get());
 
   std::string enc_key = GetEncryptedHashKey(path);
 
@@ -414,10 +553,12 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreEncryptedHash(
     // Calculation and encryption were successful, store it.
     contents_->SetMac(enc_key, encrypted_hash_str);
     super_mac_dirty_ = true;
+    super_encrypted_hash_dirty_ = true;
   } else {
     // Computation failed, ensure no (potentially old or empty) hash is stored.
     if (contents_->RemoveEntry(enc_key)) {
       super_mac_dirty_ = true;
+      super_encrypted_hash_dirty_ = true;
     }
   }
 }
@@ -425,108 +566,114 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreEncryptedHash(
 ValueState
 PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckSplitValueInternal(
     const std::string& path,
-    const base::Value::Dict* initial_split_value,
+    const base::DictValue* initial_split_value,
     bool has_encrypted_hashes,
     const std::map<std::string, std::string>& split_encrypted_hashes,
     bool has_mac_hashes,
     const std::map<std::string, std::string>& split_macs,
-    std::vector<std::string>* invalid_keys) const {
+    std::vector<std::string>* invalid_keys,
+    std::optional<size_t> reporting_id) const {
   DCHECK(invalid_keys && invalid_keys->empty());
 
   const bool is_initial_value_empty =
       (!initial_split_value || initial_split_value->empty());
   bool only_unusable_encrypted_present = false;
 
-    if (encryptor_) {
-      // --- Encryptor is available ---
-      if (has_encrypted_hashes) {
-        // --- Priority 1: Check split encrypted hashes ---
-        std::map<std::string, std::string> current_encrypted =
-            split_encrypted_hashes;
-        if (initial_split_value) {
-          for (const auto item : *initial_split_value) {
+  if (encryptor_) {
+    // --- Encryptor is available ---
+    if (has_encrypted_hashes) {
+      // --- Priority 1: Check split encrypted hashes ---
+      std::map<std::string, std::string> current_encrypted =
+          split_encrypted_hashes;
+      if (initial_split_value) {
+        for (const auto item : *initial_split_value) {
+          auto it = current_encrypted.find(item.first);
+          if (it == current_encrypted.end()) {
+            invalid_keys->push_back(item.first);
+          } else {
             const std::string keyed_path = path + "." + item.first;
-            auto it = current_encrypted.find(item.first);
-            if (it == current_encrypted.end() ||
+            const auto validation_result =
                 outer_->pref_hash_calculator_.ValidateEncrypted(
-                    keyed_path, &item.second, it->second, encryptor_) !=
-                    ValidationResult::VALID_ENCRYPTED) {
+                    keyed_path, &item.second, it->second, encryptor_.get());
+            if (validation_result != ValidationResult::VALID_ENCRYPTED) {
+              MaybeReportWeakHash(validation_result, reporting_id);
               invalid_keys->push_back(item.first);
             }
-            if (it != current_encrypted.end()) {
-              current_encrypted.erase(it);
-            }
+            current_encrypted.erase(it);
           }
         }
-        for (const auto& pair : current_encrypted) {
-          invalid_keys->push_back(pair.first);
-        }
-
-        if (invalid_keys->empty()) {
-          return ValueState::UNCHANGED_ENCRYPTED;
-        }
-        return is_initial_value_empty ? ValueState::CLEARED_ENCRYPTED
-                                      : ValueState::CHANGED_ENCRYPTED;
+      }
+      for (const auto& pair : current_encrypted) {
+        invalid_keys->push_back(pair.first);
       }
 
-      // --- Priority 2: Fallback to legacy MACs for healing.
-      if (has_mac_hashes) {
-        std::map<std::string, std::string> current_macs = split_macs;
-        if (initial_split_value) {
-          for (const auto item : *initial_split_value) {
-            const std::string keyed_path = path + "." + item.first;
-            auto it = current_macs.find(item.first);
-            if (it == current_macs.end() ||
-                outer_->pref_hash_calculator_.Validate(keyed_path, &item.second,
-                                                       it->second) !=
-                    ValidationResult::VALID) {
-              invalid_keys->push_back(item.first);
-            }
-            if (it != current_macs.end()) {
-              current_macs.erase(it);
-            }
-          }
-        }
-        for (const auto& pair : current_macs) {
-          invalid_keys->push_back(pair.first);
-        }
-
-        if (invalid_keys->empty()) {
-          return ValueState::UNCHANGED_VIA_HMAC_FALLBACK;
-        }
-        return is_initial_value_empty ? ValueState::CLEARED_VIA_HMAC_FALLBACK
-                                      : ValueState::CHANGED_VIA_HMAC_FALLBACK;
+      if (invalid_keys->empty()) {
+        return ValueState::UNCHANGED_ENCRYPTED;
       }
-    } else {
-      // --- No encryptor, legacy-only path ---
-      if (has_mac_hashes) {
-        std::map<std::string, std::string> current_macs = split_macs;
-        if (initial_split_value) {
-          for (const auto item : *initial_split_value) {
-            const std::string keyed_path = path + "." + item.first;
-            auto it = current_macs.find(item.first);
-            if (it == current_macs.end() ||
-                outer_->pref_hash_calculator_.Validate(keyed_path, &item.second,
-                                                       it->second) !=
-                    ValidationResult::VALID) {
-              invalid_keys->push_back(item.first);
-            }
-            if (it != current_macs.end()) {
-              current_macs.erase(it);
-            }
-          }
-        }
-        for (const auto& pair : current_macs) {
-          invalid_keys->push_back(pair.first);
-        }
-
-        if (invalid_keys->empty()) {
-          return ValueState::UNCHANGED;
-        }
-        return is_initial_value_empty ? ValueState::CLEARED
-                                      : ValueState::CHANGED;
-      }
+      return is_initial_value_empty ? ValueState::CLEARED_ENCRYPTED
+                                    : ValueState::CHANGED_ENCRYPTED;
     }
+
+    // --- Priority 2: Fallback to legacy MACs for healing.
+    if (has_mac_hashes) {
+      std::map<std::string, std::string> current_macs = split_macs;
+      if (initial_split_value) {
+        for (const auto item : *initial_split_value) {
+          const std::string keyed_path = path + "." + item.first;
+          auto it = current_macs.find(item.first);
+          if (it == current_macs.end() ||
+              outer_->pref_hash_calculator_.Validate(keyed_path, &item.second,
+                                                     it->second) !=
+                  ValidationResult::VALID) {
+            invalid_keys->push_back(item.first);
+          }
+          if (it != current_macs.end()) {
+            current_macs.erase(it);
+          }
+        }
+      }
+      for (const auto& pair : current_macs) {
+        invalid_keys->push_back(pair.first);
+      }
+
+      if (invalid_keys->empty()) {
+        return ValueState::UNCHANGED_VIA_HMAC_FALLBACK;
+      }
+      return is_initial_value_empty ? ValueState::CLEARED_VIA_HMAC_FALLBACK
+                                    : ValueState::CHANGED_VIA_HMAC_FALLBACK;
+    }
+  } else {
+    // --- No encryptor, legacy-only path ---
+    if (has_mac_hashes) {
+      std::map<std::string, std::string> current_macs = split_macs;
+      if (initial_split_value) {
+        for (const auto item : *initial_split_value) {
+          const std::string keyed_path = path + "." + item.first;
+          auto it = current_macs.find(item.first);
+          if (it == current_macs.end() ||
+              outer_->pref_hash_calculator_.Validate(keyed_path, &item.second,
+                                                     it->second) !=
+                  ValidationResult::VALID) {
+            invalid_keys->push_back(item.first);
+          }
+          if (it != current_macs.end()) {
+            current_macs.erase(it);
+          }
+        }
+      }
+      for (const auto& pair : current_macs) {
+        invalid_keys->push_back(pair.first);
+      }
+
+      if (invalid_keys->empty()) {
+        return ValueState::UNCHANGED;
+      }
+      return is_initial_value_empty ? ValueState::CLEARED : ValueState::CHANGED;
+    }
+    if (has_encrypted_hashes && !has_mac_hashes) {
+      only_unusable_encrypted_present = true;
+    }
+  }
 
   // --- No Usable Hashes Found ---
   // Arrive here if:
@@ -541,8 +688,14 @@ PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckSplitValueInternal(
   }
 
   // Otherwise (genuinely no hashes at all, or MACs were checked and failed),
-  // base trust on SuperMAC validity *cached at the start of the transaction*.
-  if (super_mac_valid_) {
+  // base trust on the validity state of either super hash *cached at the start
+  // of the transaction*.
+  // If the super encrypted hash was present but failed verification (mismatch),
+  // we do not trust the state even if the legacy super MAC was valid.
+  if (super_encrypted_hash_mismatch_) {
+    return ValueState::UNTRUSTED_UNKNOWN_VALUE;
+  }
+  if (super_mac_valid_ || super_encrypted_hash_valid_) {
     return ValueState::TRUSTED_UNKNOWN_VALUE;
   } else {
     return ValueState::UNTRUSTED_UNKNOWN_VALUE;
@@ -551,8 +704,9 @@ PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckSplitValueInternal(
 
 ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckSplitValue(
     const std::string& path,
-    const base::Value::Dict* initial_split_value,
-    std::vector<std::string>* invalid_keys) const {
+    const base::DictValue* initial_split_value,
+    std::vector<std::string>* invalid_keys,
+    std::optional<size_t> reporting_id) const {
   // Attempt to retrieve both types of split hashes.
   std::map<std::string, std::string> split_encrypted_hashes;
   bool has_encrypted = GetSplitEncryptedHashes(path, &split_encrypted_hashes);
@@ -562,16 +716,16 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckSplitValue(
 
   return CheckSplitValueInternal(path, initial_split_value, has_encrypted,
                                  split_encrypted_hashes, has_macs, split_macs,
-                                 invalid_keys);
+                                 invalid_keys, reporting_id);
 }
 
 void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreSplitHash(
     const std::string& path,
-    const base::Value::Dict* split_value) {
+    const base::DictValue* split_value) {
   contents_->RemoveEntry(path);
 
   if (split_value) {
-    base::Value::Dict split_macs = outer_->ComputeSplitMacs(path, split_value);
+    base::DictValue split_macs = outer_->ComputeSplitMacs(path, split_value);
 
     for (const auto item : split_macs) {
       DCHECK(item.second.is_string());
@@ -584,7 +738,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreSplitHash(
 
 void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreSplitEncryptedHash(
     const std::string& path,
-    const base::Value::Dict* split_value) {
+    const base::DictValue* split_value) {
   // Encrypted hash requires the encryptor.
   if (!encryptor_) {
     return;
@@ -597,8 +751,9 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreSplitEncryptedHash(
   const std::string encrypted_hash_base_key = GetEncryptedHashKey(path);
 
   if (split_value) {
-    base::Value::Dict split_encrypted_hashes =
-        outer_->ComputeSplitEncryptedHashes(path, split_value, encryptor_);
+    base::DictValue split_encrypted_hashes =
+        outer_->ComputeSplitEncryptedHashes(path, split_value,
+                                            encryptor_.get());
 
     for (const auto item : split_encrypted_hashes) {
       DCHECK(item.second.is_string());
@@ -608,6 +763,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreSplitEncryptedHash(
     }
   }
   super_mac_dirty_ = true;
+  super_encrypted_hash_dirty_ = true;
 }
 
 bool PrefHashStoreImpl::PrefHashStoreTransactionImpl::HasHash(
@@ -640,6 +796,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::ImportHash(
     contents_->ImportEntry(path, hash);
     if (contents_->RemoveEntry(GetEncryptedHashKey(path))) {
       changed = true;
+      super_encrypted_hash_dirty_ = true;
     }
     // ImportEntry itself implies a change, so mark dirty regardless of
     // RemoveEntry result.
@@ -647,7 +804,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::ImportHash(
 
   } else if (hash->is_dict()) {
     // --- Case 2: Input is a dict ---
-    const base::Value::Dict& dict = hash->GetDict();
+    const base::DictValue& dict = hash->GetDict();
 
     // Handle MAC part
     const std::string* mac_str_ptr = dict.FindString(kImportMacKey);
@@ -673,11 +830,17 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::ImportHash(
       base::Value encrypted_hash_value(*encrypted_hash_str_ptr);
       contents_->ImportEntry(GetEncryptedHashKey(path), &encrypted_hash_value);
       changed = true;
+      if (outer_->use_super_encrypted_hash_) {
+        super_encrypted_hash_dirty_ = true;
+      }
     } else {
       // If "encrypted_hash" key is NOT in the dictionary, clear any existing
       // encrypted hash for this path (using the derived key).
       if (contents_->RemoveEntry(GetEncryptedHashKey(path))) {
         changed = true;
+        if (outer_->use_super_encrypted_hash_) {
+          super_encrypted_hash_dirty_ = true;
+        }
       }
     }
 
@@ -710,6 +873,7 @@ void PrefHashStoreImpl::PrefHashStoreTransactionImpl::ClearHash(
   // derived key
   if (contents_->RemoveEntry(enc_key)) {
     changed = true;
+    super_encrypted_hash_dirty_ = true;
   }
 
   // Mark SuperMAC dirty only if something was actually removed AND if the

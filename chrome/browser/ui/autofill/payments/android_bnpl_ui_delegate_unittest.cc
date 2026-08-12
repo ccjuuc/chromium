@@ -5,28 +5,38 @@
 #include "chrome/browser/ui/autofill/payments/android_bnpl_ui_delegate.h"
 
 #include <memory>
+#include <string>
+#include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
-#include "components/autofill/core/browser/autofill_progress_dialog_type.h"
+#include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/autofill/core/browser/payments/autofill_error_dialog_context.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
 #include "components/autofill/core/browser/payments/test_legal_message_line.h"
 #include "components/autofill/core/browser/payments/test_payments_autofill_client.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #include "components/autofill/core/common/autofill_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
+namespace {
 
-class MockPaymentsAutofillClient : public payments::TestPaymentsAutofillClient {
+using ::testing::_;
+using ::testing::ElementsAreArray;
+using ::testing::Eq;
+
+class MockPaymentsAutofillClient : public TestPaymentsAutofillClient {
  public:
   explicit MockPaymentsAutofillClient(AutofillClient* client)
-      : payments::TestPaymentsAutofillClient(client) {}
+      : TestPaymentsAutofillClient(client) {}
   ~MockPaymentsAutofillClient() override = default;
 
   MOCK_METHOD(bool,
@@ -42,6 +52,22 @@ class MockPaymentsAutofillClient : public payments::TestPaymentsAutofillClient {
   MOCK_METHOD(bool,
               ShowTouchToFillBnplTos,
               (BnplTosModel, base::OnceClosure, base::OnceClosure),
+              (override));
+  MOCK_METHOD(bool,
+              ShowTouchToFillBnplIssuers,
+              (base::span<const BnplIssuerContext>,
+               const std::string&,
+               base::OnceCallback<void(BnplIssuer)>,
+               base::OnceClosure),
+              (override));
+  MOCK_METHOD(bool,
+              OnPurchaseAmountExtracted,
+              (base::span<const BnplIssuerContext> bnpl_issuer_contexts,
+               std::optional<int64_t> extracted_amount,
+               bool is_amount_supported_by_any_issuer,
+               const std::optional<std::string>& app_locale,
+               base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
+               base::OnceClosure cancel_callback),
               (override));
 };
 
@@ -80,9 +106,8 @@ TEST_F(AndroidBnplUiDelegateTest, ShowProgressUi) {
   EXPECT_CALL(payments_autofill_client(),
               ShowTouchToFillProgress(testing::An<base::OnceClosure>()));
 
-  delegate_->ShowProgressUi(
-      AutofillProgressDialogType::kBnplFetchVcnProgressDialog,
-      /*cancel_callback=*/base::DoNothing());
+  delegate_->ShowProgressUi(AutofillProgressUiType::kBnplFetchVcnProgressUi,
+                            /*cancel_callback=*/base::DoNothing());
 }
 
 // Tests that CloseProgressUi calls the client's HideTouchToFillPaymentMethod
@@ -147,4 +172,43 @@ TEST_F(AndroidBnplUiDelegateTest, ShowBnplTosUi) {
                            /*cancel_callback=*/base::DoNothing());
 }
 
+// Tests that ShowSelectBnplIssuerUi calls the client's
+// ShowTouchToFillBnplIssuers.
+TEST_F(AndroidBnplUiDelegateTest, ShowSelectBnplIssuerUi) {
+  std::vector<BnplIssuerContext> issuer_context = {
+      BnplIssuerContext(test::GetTestLinkedBnplIssuer(),
+                        BnplIssuerEligibilityForPage::kIsEligible)};
+
+  EXPECT_CALL(payments_autofill_client(),
+              ShowTouchToFillBnplIssuers(ElementsAreArray(issuer_context),
+                                         /*app_locale=*/"en-US", _, _));
+
+  delegate_->ShowSelectBnplIssuerUi(
+      issuer_context, /*app_locale=*/"en-US",
+      /*selected_issuer_callback=*/base::DoNothing(),
+      /*cancel_callback=*/base::DoNothing(), /*has_seen_ai_terms=*/false);
+}
+
+// Tests that UpdateBnplIssuerUi calls the client's
+// OnPurchaseAmountExtracted.
+TEST_F(AndroidBnplUiDelegateTest, UpdateBnplIssuerUi) {
+  std::vector<BnplIssuerContext> issuer_context = {
+      BnplIssuerContext(test::GetTestLinkedBnplIssuer(),
+                        BnplIssuerEligibilityForPage::kIsEligible)};
+
+  EXPECT_CALL(
+      payments_autofill_client(),
+      OnPurchaseAmountExtracted(ElementsAreArray(issuer_context),
+                                /*extracted_amount=*/Eq(30'000'000),
+                                /*is_amount_supported_by_any_issuer=*/true,
+                                /*app_locale=*/Eq("en-US"), _, _));
+
+  delegate_->UpdateBnplIssuerUi(issuer_context, /*extracted_amount=*/30'000'000,
+                                /*is_amount_supported_by_any_issuer=*/true,
+                                /*app_locale=*/"en-US",
+                                /*selected_issuer_callback=*/base::DoNothing(),
+                                /*cancel_callback=*/base::DoNothing());
+}
+
+}  // namespace
 }  // namespace autofill::payments

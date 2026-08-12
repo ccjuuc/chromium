@@ -5,10 +5,15 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_COUNTRY_DATA_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_COUNTRY_DATA_H_
 
+#include <stddef.h>
+
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 
 namespace base {
@@ -59,7 +64,7 @@ enum RequiredFieldsForAddressImport {
 // Maps country codes to address import requirements.
 // This list is comprised of countries appearing in both
 // //third_party/icu/source/data/region/en.txt and
-// //third_party/libaddressinput/src/cpp/src/region_data_constants.cc.
+// //third_party/libaddressinput/src/cpp/src/region_metadata_constants.cc.
 inline constexpr auto kCountryAddressImportRequirementsData =
     base::MakeFixedFlatMap<std::string_view, RequiredFieldsForAddressImport>(
         {{"AC", ADDRESS_REQUIRES_LINE1_CITY},
@@ -314,6 +319,15 @@ inline constexpr auto kCountryAddressImportRequirementsData =
          {"ZA", ADDRESS_REQUIRES_LINE1_CITY_ZIP},
          {"ZM", ADDRESS_REQUIRES_LINE1_CITY},
          {"ZW", ADDRESS_REQUIRES_LINE1_CITY}});
+
+// Compute at compile-time a base::fixed_flat_set<std::string_view> containing
+// all the country codes used as keys in kCountryAddressImportRequirementsData
+constexpr base::fixed_flat_set<std::string_view, 252u> GetCountryCodes() {
+  return []<size_t... I>(std::index_sequence<I...>) {
+    return base::MakeFixedFlatSet<std::string_view>(
+        {kCountryAddressImportRequirementsData.begin()[I].first...});
+  }(std::make_index_sequence<kCountryAddressImportRequirementsData.size()>());
+}
 
 // A singleton class that encapsulates a map from country codes to country data.
 class CountryDataMap {

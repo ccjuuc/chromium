@@ -11,12 +11,13 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/password_manager/android/protos/list_passwords_result.pb.h"
-#include "chrome/browser/password_manager/android/protos/password_with_local_data.pb.h"
+#include "chrome/browser/password_manager/protos/list_passwords_result.pb.h"
+#include "chrome/browser/password_manager/protos/password_with_local_data.pb.h"
 #include "chrome/browser/password_manager/android/unified_password_manager_proto_utils.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/sync/password_proto_utils.h"
+#include "components/sync/protocol/deletion_origin.pb.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/password_manager/android/jni_headers/PasswordStoreAndroidBackendDispatcherBridgeImpl_jni.h"
@@ -114,11 +115,11 @@ void PasswordStoreAndroidBackendDispatcherBridgeImpl::
 
 void PasswordStoreAndroidBackendDispatcherBridgeImpl::AddLogin(
     JobId job_id,
-    const password_manager::PasswordForm& form,
+    const password_manager::StoredCredential& credential,
     std::string account) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   password_manager::PasswordWithLocalData data =
-      PasswordWithLocalDataFromPassword(form);
+      PasswordWithLocalDataFromStoredCredential(credential);
   Java_PasswordStoreAndroidBackendDispatcherBridgeImpl_addLogin(
       base::android::AttachCurrentThread(), java_object_, job_id.value(),
       base::android::ToJavaByteArray(base::android::AttachCurrentThread(),
@@ -128,11 +129,11 @@ void PasswordStoreAndroidBackendDispatcherBridgeImpl::AddLogin(
 
 void PasswordStoreAndroidBackendDispatcherBridgeImpl::UpdateLogin(
     JobId job_id,
-    const password_manager::PasswordForm& form,
+    const password_manager::StoredCredential& credential,
     std::string account) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   password_manager::PasswordWithLocalData data =
-      PasswordWithLocalDataFromPassword(form);
+      PasswordWithLocalDataFromStoredCredential(credential);
   Java_PasswordStoreAndroidBackendDispatcherBridgeImpl_updateLogin(
       base::android::AttachCurrentThread(), java_object_, job_id.value(),
       base::android::ToJavaByteArray(base::android::AttachCurrentThread(),
@@ -142,15 +143,32 @@ void PasswordStoreAndroidBackendDispatcherBridgeImpl::UpdateLogin(
 
 void PasswordStoreAndroidBackendDispatcherBridgeImpl::RemoveLogin(
     JobId job_id,
-    const password_manager::PasswordForm& form,
+    const password_manager::StoredCredential& credential,
     std::string account) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   sync_pb::PasswordSpecificsData data =
-      SpecificsDataFromPassword(form, /*base_password_data=*/{});
+      SpecificsDataFromStoredCredential(credential, /*base_password_data=*/{});
   Java_PasswordStoreAndroidBackendDispatcherBridgeImpl_removeLogin(
       base::android::AttachCurrentThread(), java_object_, job_id.value(),
       base::android::ToJavaByteArray(base::android::AttachCurrentThread(),
                                      data.SerializeAsString()),
+      GetJavaStringFromAccount(std::move(account)));
+}
+
+void PasswordStoreAndroidBackendDispatcherBridgeImpl::RemoveLogin(
+    JobId job_id,
+    const password_manager::StoredCredential& credential,
+    std::string account,
+    sync_pb::DeletionOrigin deletion_origin) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  sync_pb::PasswordSpecificsData data =
+      SpecificsDataFromStoredCredential(credential, /*base_password_data=*/{});
+  Java_PasswordStoreAndroidBackendDispatcherBridgeImpl_removeLogin(
+      base::android::AttachCurrentThread(), java_object_, job_id.value(),
+      base::android::ToJavaByteArray(base::android::AttachCurrentThread(),
+                                     data.SerializeAsString()),
+      base::android::ToJavaByteArray(base::android::AttachCurrentThread(),
+                                     deletion_origin.SerializeAsString()),
       GetJavaStringFromAccount(std::move(account)));
 }
 

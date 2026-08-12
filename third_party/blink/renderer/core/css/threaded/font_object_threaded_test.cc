@@ -37,7 +37,9 @@ TSAN_TEST(FontObjectThreadedTest, GetFontDefinition) {
         MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLStandardMode);
     CSSParser::ParseValue(style, CSSPropertyID::kFont, "15px Ahem", true);
 
-    FontDescription desc = FontStyleResolver::ComputeFont(*style, nullptr);
+    auto maybe = FontStyleResolver::ComputeFont(*style, nullptr);
+    ASSERT_TRUE(maybe.has_value());
+    FontDescription desc = maybe.value();
 
     EXPECT_EQ(desc.SpecifiedSize(), 15);
     EXPECT_EQ(desc.ComputedSize(), 15);
@@ -96,8 +98,9 @@ TSAN_TEST(FontObjectThreadedTest, TextIntercepts) {
     Vector<Font::TextIntercept> text_intercepts;
 
     // 4 intercept ranges for below baseline p glyphs in the test string
-    font->GetTextIntercepts(text_paint_info, default_paint,
-                            below_baseline_bounds, text_intercepts);
+    font->GetTextIntercepts(
+        text_paint_info, Font::InkSkipCJKHandling::kExcludeCJK, default_paint,
+        below_baseline_bounds, text_intercepts);
     EXPECT_EQ(text_intercepts.size(), 4u);
     for (auto text_intercept : text_intercepts) {
       EXPECT_GT(text_intercept.end_, text_intercept.begin_);
@@ -105,8 +108,9 @@ TSAN_TEST(FontObjectThreadedTest, TextIntercepts) {
 
     std::tuple<float, float> above_baseline_bounds = std::make_tuple(-4, -2);
     // 5 intercept ranges for the above baseline E ACUTE glyphs
-    font->GetTextIntercepts(text_paint_info, default_paint,
-                            above_baseline_bounds, text_intercepts);
+    font->GetTextIntercepts(
+        text_paint_info, Font::InkSkipCJKHandling::kExcludeCJK, default_paint,
+        above_baseline_bounds, text_intercepts);
     EXPECT_EQ(text_intercepts.size(), 5u);
     for (auto text_intercept : text_intercepts) {
       EXPECT_GT(text_intercept.end_, text_intercept.begin_);

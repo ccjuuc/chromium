@@ -13,6 +13,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.suggestions.mostvisited.SuggestTileType;
 import org.chromium.components.metrics.OmniboxEventProtos.OmniboxEventProto.PageClassification;
+import org.chromium.components.omnibox.AutocompleteInput.RefineActionUsage;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteRequestType;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
@@ -69,6 +70,14 @@ public class OmniboxMetrics {
     public static final String HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PROCESS_TIME =
             "Android.Omnibox.SearchPrefetch.TouchDownProcessTime.NavigationPrefetch";
 
+    /**
+     * The amount of time from touch down on an omnibox suggestion to when a prefetch may start.
+     * Specifically, this compares the event time of the first ACTION_DOWN event to when
+     * `AutocompleteMediator.onSuggestionTouchDown` is reached.
+     */
+    public static final String HISTOGRAM_SEARCH_PREFETCH_SUGGESTION_TOUCH_DOWN_DELAY =
+            "Android.Omnibox.SearchPrefetch.TouchDownDelay.NavigationPrefetch";
+
     /** The number of prefetches started in an omnibox session via the touch down trigger. */
     public static final String HISTOGRAM_SEARCH_PREFETCH_NUM_PREFETCHES_STARTED_IN_OMNIBOX_SESSION =
             "Android.Omnibox.SearchPrefetch.NumPrefetchesStartedInOmniboxSession.NavigationPrefetch";
@@ -76,22 +85,6 @@ public class OmniboxMetrics {
     /** The result of prefetches started by touch down events within an omnibox session */
     public static final String HISTOGRAM_SEARCH_PREFETCH_TOUCH_DOWN_PREFETCH_RESULT =
             "Android.Omnibox.SearchPrefetch.TouchDownPrefetchResult.NavigationPrefetch";
-
-    @IntDef({
-        RefineActionUsage.NOT_USED,
-        RefineActionUsage.SEARCH_WITH_ZERO_PREFIX,
-        RefineActionUsage.SEARCH_WITH_PREFIX,
-        RefineActionUsage.SEARCH_WITH_BOTH,
-        RefineActionUsage.COUNT
-    })
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface RefineActionUsage {
-        int NOT_USED = 0; // User did not interact with Refine button.
-        int SEARCH_WITH_ZERO_PREFIX = 1; // User interacted with Refine button in zero-prefix mode.
-        int SEARCH_WITH_PREFIX = 2; // User interacted with Refine button in non-zero-prefix mode.
-        int SEARCH_WITH_BOTH = 3; // User interacted with Refine button in both contexts.
-        int COUNT = 4;
-    }
 
     @IntDef({
         ActionInSuggestIntentResult.SUCCESS,
@@ -137,8 +130,8 @@ public class OmniboxMetrics {
     @interface FocusResultedInNavigationTypes {
         // LINT.IfChange(FocusResultedInNavigationTypes)
         int NO_NAV_NO_ATTACHMENT = 0;
-        int NO_NAV_WITH_ATTACHMENT = 1;
-        int NAV_NO_ATTACHMENT = 2;
+        int NAV_NO_ATTACHMENT = 1;
+        int NO_NAV_WITH_ATTACHMENT = 2;
         int NAV_WITH_ATTACHMENT = 3;
         int COUNT = 4;
         // LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:FocusResultedInNavigationTypes)
@@ -186,6 +179,85 @@ public class OmniboxMetrics {
         return TimingMetric.shortThreadTime("Android.Omnibox.SuggestionView.CreateTime3");
     }
 
+    /** Record thread time spent inflating the Suggestion dropdown. */
+    public static @Nullable TimingMetric recordSuggestionsDropdownInflationThreadTime() {
+        return TimingMetric.shortThreadTime("Android.Omnibox.SuggestionsDropdown.InflationTime2");
+    }
+
+    /** Record wall time spent inflating the Suggestion dropdown. */
+    public static @Nullable TimingMetric recordSuggestionsDropdownInflationWallTime() {
+        return TimingMetric.shortUptime("Android.Omnibox.SuggestionsDropdown.InflationTime3");
+    }
+
+    /** Record thread time spent inflating the suggestions container. */
+    public static TimingMetric recordSuggestionsContainerInflationThreadTime() {
+        return TimingMetric.shortThreadTime(
+                "Android.Omnibox.SuggestionsDropdown.ContainerInflationThreadTime");
+    }
+
+    /** Record wall time spent inflating the suggestions container. */
+    public static TimingMetric recordSuggestionsContainerInflationWallTime() {
+        return TimingMetric.shortUptime(
+                "Android.Omnibox.SuggestionsDropdown.ContainerInflationWallTime");
+    }
+
+    /**
+     * Record whether the background suggestion dropdown inflation completed before the UI thread
+     * required it.
+     */
+    public static void recordAsyncInflationDropdownAvailable(boolean dropdownAvailable) {
+        RecordHistogram.recordBooleanHistogram(
+                "Android.Omnibox.SuggestionsDropdown.AsyncInflationDropdownAvailable",
+                dropdownAvailable);
+    }
+
+    /** Record whether the SuggestionsDropdown inflation thread matches the expected thread. */
+    public static void recordSuggestionsDropdownInflationThreadMatchesExpectedThread(
+            boolean runsOnExpectedThread) {
+        RecordHistogram.recordBooleanHistogram(
+                "Android.Omnibox.SuggestionsDropdown.InflationThreadMatches", runsOnExpectedThread);
+    }
+
+    /** Record whether the prewarming thread matches the expected thread. */
+    public static void recordPreWarmingThreadMatchesExpectedThread(boolean runsOnExpectedThread) {
+        RecordHistogram.recordBooleanHistogram(
+                "Android.Omnibox.SuggestionsDropdown.PreWarmingThreadMatches",
+                runsOnExpectedThread);
+    }
+
+    /** Record whether forced synchronous inflation occurred for the suggestions container. */
+    public static void recordForcedSyncInflation(boolean isForced) {
+        RecordHistogram.recordBooleanHistogram(
+                "Android.Omnibox.SuggestionsDropdown.ForcedSyncInflation", isForced);
+    }
+
+    /**
+     * Record the total cumulative thread time spent creating all views in the PrewarmingRecycled
+     * View Pool when async view inflation is disabled.
+     */
+    public static void recordPreWarmingViewsThreadTime(long totalThreadTimeMs) {
+        RecordHistogram.recordMediumTimesHistogram(
+                "Android.Omnibox.SuggestionsDropdown.PreWarmingViewsThreadTime", totalThreadTimeMs);
+    }
+
+    /**
+     * Record the total cumulative wall time spent creating all views in the PrewarmingRecycled View
+     * Pool when async view inflation is disabled.
+     */
+    public static void recordPreWarmingViewsWallTime(long totalWallTimeMs) {
+        RecordHistogram.recordMediumTimesHistogram(
+                "Android.Omnibox.SuggestionsDropdown.PreWarmingViewsWallTime", totalWallTimeMs);
+    }
+
+    /**
+     * Record the number of views successfully pre-created in the PrewarmingRecycledViewPool when
+     * async view inflation is disabled.
+     */
+    public static void recordPreWarmedViewsCount(int count) {
+        RecordHistogram.recordExactLinearHistogram(
+                "Android.Omnibox.SuggestionsDropdown.PreWarmedViewsCount", count, 30);
+    }
+
     /**
      * Record whether suggestion view was successfully reused.
      *
@@ -228,7 +300,9 @@ public class OmniboxMetrics {
      * Record whether the interaction with the Omnibox resulted with a navigation (true) or user
      * leaving the omnibox and suggestions list.
      *
+     * @param requestType The request type at session end.
      * @param focusResultedInNavigation Whether the user completed interaction with navigation.
+     * @param withAttachments Whether there were any attachemnts at session end.
      */
     public static void recordOmniboxFocusResultedInNavigation(
             @AutocompleteRequestType int requestType,
@@ -238,6 +312,8 @@ public class OmniboxMetrics {
                 switch (requestType) {
                     case AutocompleteRequestType.AI_MODE -> ".AIMode";
                     case AutocompleteRequestType.IMAGE_GENERATION -> ".ImageGeneration";
+                    case AutocompleteRequestType.CANVAS -> ".Canvas";
+                    case AutocompleteRequestType.DEEP_SEARCH -> ".DeepSearch";
                     default -> ".Search";
                 };
 
@@ -404,6 +480,15 @@ public class OmniboxMetrics {
     }
 
     /**
+     * Records the delay from physical touch down on a suggestion in the suggestions dropdown to the
+     * start of prefetch processing on the Java main thread.
+     */
+    public static void recordSuggestionTouchDownDelay(long delayMs) {
+        RecordHistogram.recordMediumTimesHistogram(
+                HISTOGRAM_SEARCH_PREFETCH_SUGGESTION_TOUCH_DOWN_DELAY, delayMs);
+    }
+
+    /**
      * Records the number of prefetches started by touch down events in an omnibox session.
      *
      * @param numPrefetchesStarted the number of prefetches started wihin the omnibox session.
@@ -487,6 +572,7 @@ public class OmniboxMetrics {
                 break;
 
             case PageClassification.ANDROID_HUB_VALUE:
+            case PageClassification.ANDROID_TAB_SEARCH_OVERLAY_VALUE:
                 suffix = "HUB";
                 break;
 
@@ -501,6 +587,9 @@ public class OmniboxMetrics {
                 break;
 
             case PageClassification.NTP_COMPOSEBOX_VALUE:
+            case PageClassification.NTP_OMNIBOX_COMPOSEBOX_VALUE:
+            case PageClassification.OTHER_OMNIBOX_COMPOSEBOX_VALUE:
+            case PageClassification.SRP_OMNIBOX_COMPOSEBOX_VALUE:
                 suffix = "ComposeBox";
                 break;
 
@@ -511,15 +600,6 @@ public class OmniboxMetrics {
                 break;
 
             default:
-                // May trigger if nev PageClassifications were added to
-                // third_party/metrics_proto/omnibox_event.proto file,
-                // but have not been reflected here. If that's the case, file a bug for the
-                // author of the new PageClassification.
-                // Last supported value: OTHER_ON_CCT.
-                assert false
-                        : "b/40221519: Invalid page classification: "
-                                + pageClass
-                                + ". Please re-open bug, and attach captured stack trace.";
                 break;
         }
 

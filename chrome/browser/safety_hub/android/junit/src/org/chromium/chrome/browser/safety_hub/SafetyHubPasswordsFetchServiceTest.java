@@ -20,22 +20,22 @@ import org.junit.Test;
 import org.junit.experimental.runners.Enclosed;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameter;
 import org.robolectric.ParameterizedRobolectricTestRunner.Parameters;
 
-import org.chromium.base.Callback;
 import org.chromium.base.Promise;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.password_manager.FakePasswordCheckupClientHelper;
 import org.chromium.chrome.browser.password_manager.PasswordManagerHelper;
 import org.chromium.chrome.browser.preferences.Pref;
+import org.chromium.chrome.browser.safety_hub.SafetyHubPasswordsFetchService.FetchPasswordsCallback;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
@@ -47,10 +47,11 @@ import java.util.Collection;
 /** Unit tests for SafetyHubPasswordsFetchService. */
 @RunWith(Enclosed.class)
 public class SafetyHubPasswordsFetchServiceTest {
+
     @RunWith(ParameterizedRobolectricTestRunner.class)
-    @Batch(Batch.UNIT_TESTS)
     @Features.EnableFeatures({ChromeFeatureList.SAFETY_HUB_WEAK_AND_REUSED_PASSWORDS})
     public static class SafetyHubPasswordsFetchServiceParamTests {
+        @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
         private static final String TEST_EMAIL_ADDRESS = "test@email.com";
 
         /** Returns all possible combinations for test parameterization. */
@@ -64,7 +65,7 @@ public class SafetyHubPasswordsFetchServiceTest {
 
         @Rule public SafetyHubTestRule mSafetyHubTestRule = new SafetyHubTestRule();
 
-        @Mock private Callback<Boolean> mTaskFinishedCallback;
+        @Mock private FetchPasswordsCallback mTaskFinishedCallback;
 
         @Parameter(0)
         public boolean hasAccount;
@@ -76,7 +77,6 @@ public class SafetyHubPasswordsFetchServiceTest {
         @Before
         public void setUp() {
             // Needed because of BaseRobolectricTestRule.
-            MockitoAnnotations.openMocks(this);
 
             mPrefService = mSafetyHubTestRule.getPrefService();
             mPasswordCheckupClientHelper = mSafetyHubTestRule.getPasswordCheckupClientHelper();
@@ -122,7 +122,7 @@ public class SafetyHubPasswordsFetchServiceTest {
             verify(mPrefService, never()).setInteger(eq(getBreachedPreference()), anyInt());
             verify(mPrefService, never()).setInteger(eq(getWeakPreference()), anyInt());
             verify(mPrefService, never()).setInteger(eq(getReusedPreference()), anyInt());
-            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred */ true));
+            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred= */ true));
         }
 
         @Test
@@ -136,7 +136,7 @@ public class SafetyHubPasswordsFetchServiceTest {
             verify(mPrefService, never()).setInteger(eq(getBreachedPreference()), anyInt());
             verify(mPrefService, never()).setInteger(eq(getWeakPreference()), anyInt());
             verify(mPrefService, never()).setInteger(eq(getReusedPreference()), anyInt());
-            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred */ true));
+            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred= */ true));
         }
 
         @Test
@@ -156,7 +156,7 @@ public class SafetyHubPasswordsFetchServiceTest {
                     .setInteger(getBreachedPreference(), breachedCredentialsCount);
             verify(mPrefService, times(1))
                     .setInteger(getReusedPreference(), reusedCredentialsCount);
-            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred */ true));
+            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred= */ true));
         }
 
         @Test
@@ -177,7 +177,7 @@ public class SafetyHubPasswordsFetchServiceTest {
             verify(mPrefService, times(1)).setInteger(getWeakPreference(), weakCredentialsCount);
             verify(mPrefService, times(1))
                     .setInteger(getReusedPreference(), reusedCredentialsCount);
-            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred */ false));
+            verify(mTaskFinishedCallback, times(1)).onResult(eq(/* errorOccurred= */ false));
         }
 
         @Test
@@ -273,12 +273,12 @@ public class SafetyHubPasswordsFetchServiceTest {
     }
 
     @RunWith(BaseRobolectricTestRunner.class)
-    @Batch(Batch.UNIT_TESTS)
     @Features.EnableFeatures({ChromeFeatureList.SAFETY_HUB_WEAK_AND_REUSED_PASSWORDS})
     public static class SafetyHubPasswordsFetchServiceSingleTests {
+        @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
         @Rule public SafetyHubTestRule mSafetyHubTestRule = new SafetyHubTestRule();
 
-        @Mock private Callback<Boolean> mTaskFinishedCallback;
+        @Mock private FetchPasswordsCallback mTaskFinishedCallback;
         @Mock private AccountManagerFacade mMockFacade;
 
         private PrefService mPrefService;
@@ -287,7 +287,6 @@ public class SafetyHubPasswordsFetchServiceTest {
 
         @Before
         public void setUp() {
-            MockitoAnnotations.openMocks(this);
 
             mPrefService = mSafetyHubTestRule.getPrefService();
             mPasswordCheckupClientHelper = mSafetyHubTestRule.getPasswordCheckupClientHelper();

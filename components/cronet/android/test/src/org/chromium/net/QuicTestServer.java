@@ -67,11 +67,11 @@ public final class QuicTestServer {
         QuicTestServerJni.get().delayResponse(path, delayInSeconds);
     }
 
-    public static final String getServerCert() {
+    public static String getServerCert() {
         return CERT_USED;
     }
 
-    public static final String getServerCertKey() {
+    public static String getServerCertKey() {
         return KEY_USED;
     }
 
@@ -84,7 +84,7 @@ public final class QuicTestServer {
         return QuicTestServerJni.get().numSessions();
     }
 
-    @NativeMethods("cronet_tests")
+    @NativeMethods
     interface Natives {
         /*
          * Runs a quic test server synchronously.

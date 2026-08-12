@@ -265,7 +265,7 @@ void RTCRtpTransceiver::setCodecPreferences(
           DOMExceptionCode::kInvalidModificationError, "Invalid codec");
       return;
     }
-    auto type = codec->mimeType().Left(slash_position);
+    auto type = codec->mimeType().subview(0, slash_position);
     if (type == "video") {
       webrtc_codec.kind = webrtc::MediaType::VIDEO;
     } else if (type == "audio") {
@@ -275,19 +275,18 @@ void RTCRtpTransceiver::setCodecPreferences(
           DOMExceptionCode::kInvalidModificationError, "Invalid codec");
       return;
     }
-    webrtc_codec.name = codec->mimeType().Substring(slash_position + 1).Ascii();
+    webrtc_codec.name = codec->mimeType().substr(slash_position + 1).Ascii();
     webrtc_codec.clock_rate = codec->clockRate();
     if (codec->hasChannels()) {
       webrtc_codec.num_channels = codec->channels();
     }
     if (codec->hasSdpFmtpLine()) {
       auto sdpFmtpLine = codec->sdpFmtpLine();
-      if (sdpFmtpLine.find('=') == kNotFound) {
+      if (!sdpFmtpLine.contains('=')) {
         // Some parameters don't follow the key=value form.
         webrtc_codec.parameters.emplace("", sdpFmtpLine.Ascii());
       } else {
-        Vector<String> parameters;
-        sdpFmtpLine.Split(';', parameters);
+        Vector<String> parameters = sdpFmtpLine.SplitSkippingEmpty(';');
         for (const auto& parameter : parameters) {
           auto equal_position = parameter.find('=');
           if (equal_position == kNotFound) {
@@ -295,8 +294,8 @@ void RTCRtpTransceiver::setCodecPreferences(
                 DOMExceptionCode::kInvalidModificationError, "Invalid codec");
             return;
           }
-          auto parameter_name = parameter.Left(equal_position);
-          auto parameter_value = parameter.Substring(equal_position + 1);
+          auto parameter_name = parameter.substr(0, equal_position);
+          auto parameter_value = parameter.substr(equal_position + 1);
           webrtc_codec.parameters.emplace(parameter_name.Ascii(),
                                           parameter_value.Ascii());
         }
@@ -316,7 +315,6 @@ void RTCRtpTransceiver::setHeaderExtensionsToNegotiate(
   Vector<webrtc::RtpHeaderExtensionCapability> webrtc_hdr_exts;
   auto webrtc_offered_exts =
       platform_transceiver_->GetHeaderExtensionsToNegotiate();
-  int id = 1;
   for (const auto& hdr_ext : extensions) {
     // Handle invalid requests for mandatory extensions as per
     // https://w3c.github.io/webrtc-extensions/#rtcrtptransceiver-interface
@@ -333,9 +331,9 @@ void RTCRtpTransceiver::setHeaderExtensionsToNegotiate(
       exception_state.ThrowTypeError("Invalid RTCRtpTransceiverDirection.");
       return;
     }
-    const int id_to_store = direction ? id++ : 0;
-    webrtc_hdr_exts.emplace_back(hdr_ext->uri().Ascii(), id_to_store,
-                                 *direction);
+    // The preferred ID doesn't matter, so just pass in 1 all the time.
+    webrtc_hdr_exts.emplace_back(hdr_ext->uri().Ascii(),
+                                 webrtc::RtpHeaderExtensionId(1), *direction);
   }
   webrtc::RTCError status =
       platform_transceiver_->SetHeaderExtensionsToNegotiate(
@@ -359,7 +357,7 @@ RTCRtpTransceiver::getHeaderExtensionsToNegotiate() const {
   for (const auto& webrtc_ext : webrtc_exts) {
     auto* ext = MakeGarbageCollected<RTCRtpHeaderExtensionCapability>();
     ext->setDirection(TransceiverDirectionToEnum(webrtc_ext.direction));
-    ext->setUri(webrtc_ext.uri.c_str());
+    ext->setUri(String(webrtc_ext.uri));
     exts.push_back(ext);
   }
   return exts;
@@ -372,7 +370,7 @@ RTCRtpTransceiver::getNegotiatedHeaderExtensions() const {
   for (const auto& webrtc_ext : webrtc_exts) {
     auto* ext = MakeGarbageCollected<RTCRtpHeaderExtensionCapability>();
     ext->setDirection(TransceiverDirectionToEnum(webrtc_ext.direction));
-    ext->setUri(webrtc_ext.uri.c_str());
+    ext->setUri(String(webrtc_ext.uri));
     exts.push_back(ext);
   }
   return exts;

@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/style/filter_operations.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
 
 namespace blink {
@@ -85,10 +86,11 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
       const ComputedStyle* layout_parent_base_style,
       const StyleRecalcContext&);
 
-  // Return a reference to the initial style singleton.
+  // Return a reference to the cached initial style.
   const ComputedStyle& InitialStyle() const;
+  void InvalidateInitialStyle();
 
-  // Create a new ComputedStyleBuilder based on the initial style singleton.
+  // Create a new ComputedStyleBuilder based on the cached initial style.
   ComputedStyleBuilder CreateComputedStyleBuilder() const;
 
   // Create a new ComputedStyleBuilder inheriting from the given style.
@@ -177,7 +179,8 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   };
   FindKeyframesRuleResult FindKeyframesRule(const Element*,
                                             const Element* animating_element,
-                                            const AtomicString& animation_name);
+                                            const AtomicString& animation_name,
+                                            const TreeScope* name_tree_scope);
 
   // These methods will give back the set of rules that matched for a given
   // element (or a pseudo-element).
@@ -225,6 +228,11 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
   // Return a computed value for the passed-in property:value pair in the
   // context of the current ComputedStyle of the 'element'.
   // Returns nullptr for custom property values that are IACVT.
+  static const CSSValue* ComputeValue(Element*,
+                                      const CSSPropertyName&,
+                                      const CSSValue&,
+                                      CSSToLengthConversionData::Flags&,
+                                      bool& has_random);
   static const CSSValue* ComputeValue(Element*,
                                       const CSSPropertyName&,
                                       const CSSValue&,
@@ -351,13 +359,20 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
         : key(key), cached_matched_properties(cached_matched_properties) {}
 
     bool IsHit() const { return cached_matched_properties; }
+    bool IsStyleAdjusted() const {
+      return cached_matched_properties->element_type
+          .CacheEntryIsStyleAdjusted();
+    }
   };
 
   CacheSuccess ApplyMatchedCache(StyleResolverState&,
                                  const StyleRequest&,
-                                 const MatchResult&);
-  void MaybeAddToMatchedPropertiesCache(StyleResolverState&,
-                                        const MatchedPropertiesCache::Key&);
+                                 const MatchResult&,
+                                 StyleAdjuster::ElementTypeForCache&);
+  void MaybeAddToMatchedPropertiesCache(
+      StyleResolverState& state,
+      const MatchedPropertiesCache::Key& key,
+      StyleAdjuster::ElementTypeForCache element_type);
 
   void ApplyPropertiesFromCascade(StyleResolverState&, StyleCascade& cascade);
 
@@ -384,7 +399,6 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
     kSVGUASheet,
     kMathMLUASheet,
     kFullscreenUASheet,
-    kPrintUASheet,
     kQuirksUASheet,
     kViewSourceUASheet,
     kForcedColorsUASheet,
@@ -400,8 +414,11 @@ class CORE_EXPORT StyleResolver final : public GarbageCollected<StyleResolver> {
 
   MatchedPropertiesCache matched_properties_cache_;
 
+  static void SetZoomedInitialLineWidths(float zoom, ComputedStyleBuilder&);
+  const ComputedStyle* CreateInitialStyle() const;
+
   // This member is on a hot-path for creating ComputedStyle objects.
-  const subtle::UncompressedMember<const ComputedStyle> initial_style_;
+  mutable Member<const ComputedStyle> initial_style_;
   SelectorFilter selector_filter_;
 
   // Micro 1-element cache.

@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/to_string.h"
@@ -37,12 +36,13 @@ namespace {
 
 scoped_refptr<const Extension> CreateExtensionWithBookmarksPermission(
     bool include_bookmarks) {
-  base::Value::List permissions;
+  base::ListValue permissions;
   permissions.Append("declarativeContent");
-  if (include_bookmarks)
+  if (include_bookmarks) {
     permissions.Append("bookmarks");
+  }
   return ExtensionBuilder()
-      .SetManifest(base::Value::Dict()
+      .SetManifest(base::DictValue()
                        .Set("name", "Test extension")
                        .Set("version", "1.0")
                        .Set("manifest_version", 2)
@@ -93,7 +93,7 @@ class DeclarativeContentIsBookmarkedConditionTrackerTest
 
     // ContentPredicateEvaluator::Delegate:
     void NotifyPredicateStateUpdated(content::WebContents* contents) override {
-      EXPECT_FALSE(base::Contains(evaluation_requests_, contents));
+      EXPECT_FALSE(evaluation_requests_.contains(contents));
       evaluation_requests_.insert(contents);
     }
 
@@ -137,8 +137,10 @@ class DeclarativeContentIsBookmarkedConditionTrackerTest
         page_is_bookmarked !=
         tracker_->EvaluatePredicate(is_not_bookmarked_predicate_.get(), tab);
 
-    if (is_bookmarked_predicate_success && is_not_bookmarked_predicate_success)
+    if (is_bookmarked_predicate_success &&
+        is_not_bookmarked_predicate_success) {
       return testing::AssertionSuccess();
+    }
 
     testing::AssertionResult result = testing::AssertionFailure();
     if (!is_bookmarked_predicate_success) {
@@ -148,8 +150,9 @@ class DeclarativeContentIsBookmarkedConditionTrackerTest
     }
 
     if (!is_not_bookmarked_predicate_success) {
-      if (!is_bookmarked_predicate_success)
+      if (!is_bookmarked_predicate_success) {
         result << "; ";
+      }
       result << "IsBookmarkedPredicate(false): expected "
              << base::ToString(!page_is_bookmarked) << " got "
              << base::ToString(page_is_bookmarked);

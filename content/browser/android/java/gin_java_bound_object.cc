@@ -6,14 +6,10 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/containers/contains.h"
 #include "content/browser/android/java/jni_reflect.h"
-
-// Must come after all headers that specialize FromJniType() / ToJniType().
-#include "content/browser/reflection_jni_headers/Object_jni.h"
+#include "third_party/jni_zero/system_jni/Object_jni.h"
 
 using base::android::AttachCurrentThread;
-using base::android::JavaObjectArrayReader;
 using base::android::ScopedJavaLocalRef;
 
 namespace content {
@@ -70,7 +66,7 @@ std::set<std::string> GinJavaBoundObject::GetMethodNames() {
 
 bool GinJavaBoundObject::HasMethod(const std::string& method_name) {
   EnsureMethodsAreSetUp();
-  return base::Contains(methods_, method_name);
+  return methods_.contains(method_name);
 }
 
 const JavaMethod* GinJavaBoundObject::FindMethod(
@@ -138,9 +134,10 @@ void GinJavaBoundObject::EnsureMethodsAreSetUp() {
     return;
   }
 
-  JavaObjectArrayReader<jobject> methods(GetClassMethods(env, clazz));
+  ScopedJavaLocalRef<jobjectArray> class_methods = GetClassMethods(env, clazz);
+  jni_zero::JArrayView<jobject> methods = class_methods.CreateView(env);
   // Java objects always have public methods.
-  DCHECK_GT(methods.size(), 0);
+  DCHECK_GT(methods.length(), 0);
 
   for (auto java_method : methods) {
     if (!safe_annotation_clazz_.is_null()) {

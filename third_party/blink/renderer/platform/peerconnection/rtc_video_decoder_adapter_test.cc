@@ -21,6 +21,7 @@
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
@@ -386,9 +387,9 @@ class RTCVideoDecoderAdapterTest : public ::testing::Test {
     input_image.SetEncodedData(
         webrtc::EncodedImageBuffer::Create(data, sizeof(data)));
     if (timestamp == 0 || keyframe) {
-      input_image._frameType = webrtc::VideoFrameType::kVideoFrameKey;
+      input_image.set_frame_type(webrtc::VideoFrameType::kVideoFrameKey);
     } else {
-      input_image._frameType = webrtc::VideoFrameType::kVideoFrameDelta;
+      input_image.set_frame_type(webrtc::VideoFrameType::kVideoFrameDelta);
     }
     input_image.SetRtpTimestamp(timestamp);
     return adapter_wrapper_->Decode(input_image, false, 0);
@@ -414,9 +415,9 @@ class RTCVideoDecoderAdapterTest : public ::testing::Test {
     scoped_refptr<gpu::ClientSharedImage> shared_image =
         gpu::ClientSharedImage::CreateForTesting(metadata);
     scoped_refptr<media::VideoFrame> frame = media::VideoFrame::WrapSharedImage(
-        media::PIXEL_FORMAT_ARGB, shared_image, gpu::SyncToken(),
-        media::VideoFrame::ReleaseMailboxCB(), si_size, gfx::Rect(si_size),
-        si_size, base::Microseconds(timestamp));
+        media::PIXEL_FORMAT_ABGR, shared_image, gpu::SyncToken(),
+        media::VideoFrame::ReleaseMailboxCB(), gfx::Rect(si_size), si_size,
+        base::Microseconds(timestamp));
     output_cb_.Run(std::move(frame));
   }
 
@@ -427,7 +428,7 @@ class RTCVideoDecoderAdapterTest : public ::testing::Test {
     static const uint8_t data[1] = {0};
     input_image.SetEncodedData(
         webrtc::EncodedImageBuffer::Create(data, sizeof(data)));
-    input_image._frameType = webrtc::VideoFrameType::kVideoFrameKey;
+    input_image.set_frame_type(webrtc::VideoFrameType::kVideoFrameKey);
     input_image.SetRtpTimestamp(timestamp);
     webrtc::ColorSpace webrtc_color_space;
     webrtc_color_space.set_primaries_from_uint8(1);
@@ -445,7 +446,7 @@ class RTCVideoDecoderAdapterTest : public ::testing::Test {
     static const uint8_t data[1] = {0};
     input_image.SetEncodedData(
         webrtc::EncodedImageBuffer::Create(data, sizeof(data)));
-    input_image._frameType = webrtc::VideoFrameType::kVideoFrameKey;
+    input_image.set_frame_type(webrtc::VideoFrameType::kVideoFrameKey);
     input_image.SetRtpTimestamp(timestamp);
     // Input image only has 1 spatial layer, but non-zero spatial index.
     input_image.SetSpatialIndex(kSpatialIndex);
@@ -887,6 +888,34 @@ TEST_F(RTCVideoDecoderAdapterTest, CanReadSharedFrameBuffer) {
   });
   FinishDecode(0);
   media_thread_.FlushForTesting();
+}
+
+TEST_F(RTCVideoDecoderAdapterTest, InitializeSyncTimeoutRace) {
+  RTCVideoDecoderAdapter::SetInitializeSyncTimeoutForTesting(
+      base::Milliseconds(1));
+
+  base::WaitableEvent initialize_called;
+  media::VideoDecoder::InitCB saved_init_cb;
+
+  EXPECT_CALL(*video_decoder_, Initialize_)
+      .WillOnce(testing::WithArg<3>([&](media::VideoDecoder::InitCB& init_cb) {
+        saved_init_cb = std::move(init_cb);
+        initialize_called.Signal();
+      }));
+
+  ASSERT_FALSE(RTCVideoDecoderAdapterWrapper::Create(
+      &gpu_factories_,
+      webrtc::SdpVideoFormat(
+          webrtc::CodecTypeToPayloadString(webrtc::kVideoCodecVP9)),
+      true));
+
+  initialize_called.Wait();
+  media_thread_.task_runner()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(saved_init_cb),
+                                media::DecoderStatus::Codes::kOk));
+  media_thread_.FlushForTesting();
+
+  RTCVideoDecoderAdapter::SetInitializeSyncTimeoutForTesting(std::nullopt);
 }
 
 }  // namespace blink

@@ -98,13 +98,14 @@ enum CorsError {
   kRedirectContainsCredentials,
 
   // Request client is not secure and less private than the request target.
-  // See: https://wicg.github.io/private-network-access/#secure-context-restriction
-  kInsecurePrivateNetwork,
+  // See: https://wicg.github.io/local-network-access/#secure-context-restriction
+  kInsecureLocalNetwork,
 
   // The request carried a `target_ip_address_space` which turned out to
   // be different from the IP address space of the remote endpoint.
-  // See: https://wicg.github.io/private-network-access/#request-target-ip-address-space
-  kInvalidPrivateNetworkAccess,
+  // See: https://wicg.github.io/local-network-access/#fetch-api and
+  // https://wicg.github.io/local-network-access/#request-target-ip-address-space
+  kInvalidLocalNetworkAccess,
 
   // User did not grant permission to access the local network.
   // See: https://wicg.github.io/local-network-access/
@@ -125,14 +126,14 @@ struct CorsErrorStatus {
   // The address space of the requested resource.
   // This defaults to kUnknown, and is overridden iff `cors_error` is one of:
   //
-  // - `kInsecurePrivateNetwork`
-  // - `kInvalidPrivateNetworkAccess`
+  // - `kInsecureLocalNetwork`
+  // - `kInvalidLocalNetworkAccess`
   // - `kLocalNetworkAccessPermissionDenied`
   IPAddressSpace resource_address_space = IPAddressSpace.kUnknown;
 
   // The other IP address space set on the URL request.
   // This defaults to kUnknown, and is overridden iff `cors_error` is
-  // `kInvalidPrivateNetworkAccess`, which happens in 2 situations:
+  // `kInvalidLocalNetworkAccess`, which happens in 2 situations:
   //
   //   * The request had a `required_address_space` set but the
   //     `resource_address_space` did not match. In this case, this will be set
@@ -140,7 +141,7 @@ struct CorsErrorStatus {
   // or
   //
   //   * The request connects to two different IP address spaces. See the
-  //     comment in services/network/private_network_access_checker.cc.
+  //     comment in services/network/local_network_access_checker.cc.
   //     In this case, this will be set to the second IP address space.
   //
   // TODO(crbug.com/394636065): consider using 2 separate fields for the two

@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("tts") {
@@ -16,6 +14,7 @@ static_library("tts") {
 
   deps = [
     "//base",
+    "//chrome/browser/speech",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc/mojom",
     "//components/keyed_service/core",
@@ -32,6 +31,7 @@ source_set("unit_tests") {
     ":tts",
     "//base",
     "//chrome/browser",
+    "//chrome/browser/speech",
     "//chrome/test:test_support",
     "//chromeos/ash/experiences/arc",
     "//chromeos/ash/experiences/arc:arc_test_support",

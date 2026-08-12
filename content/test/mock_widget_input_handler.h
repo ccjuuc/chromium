@@ -8,12 +8,14 @@
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "build/build_config.h"
 #include "cc/input/browser_controls_offset_tag_modifications.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 
 namespace content {
@@ -88,7 +90,9 @@ class MockWidgetInputHandler : public blink::mojom::WidgetInputHandler {
                          const std::vector<ui::ImeTextSpan>& ime_text_spans,
                          const gfx::Range& range,
                          int32_t start,
-                         int32_t end);
+                         int32_t end,
+                         blink::mojom::ImeState ime_state,
+                         blink::DOMNodeIdType target_dom_node_id);
 
     DispatchedIMEMessage(const DispatchedIMEMessage&) = delete;
     DispatchedIMEMessage& operator=(const DispatchedIMEMessage&) = delete;
@@ -103,7 +107,9 @@ class MockWidgetInputHandler : public blink::mojom::WidgetInputHandler {
                  const std::vector<ui::ImeTextSpan>& ime_text_spans,
                  const gfx::Range& range,
                  int32_t start,
-                 int32_t end) const;
+                 int32_t end,
+                 blink::mojom::ImeState ime_state,
+                 blink::DOMNodeIdType target_dom_node_id) const;
 
    private:
     std::u16string text_;
@@ -111,6 +117,8 @@ class MockWidgetInputHandler : public blink::mojom::WidgetInputHandler {
     gfx::Range range_;
     int32_t start_;
     int32_t end_;
+    blink::mojom::ImeState ime_state_;
+    blink::DOMNodeIdType target_dom_node_id_;
   };
 
   // A DispatchedMessage that stores the IME compositing parameters
@@ -249,12 +257,17 @@ class MockWidgetInputHandler : public blink::mojom::WidgetInputHandler {
                          const gfx::Range& range,
                          int32_t start,
                          int32_t end,
+                         blink::mojom::ImeState ime_state,
+                         const blink::DOMNodeIdType& target_dom_node_id,
                          ImeSetCompositionCallback callback) override;
   void ImeCommitText(const std::u16string& text,
                      const std::vector<ui::ImeTextSpan>& ime_text_spans,
                      const gfx::Range& range,
                      int32_t relative_cursor_position,
+                     const blink::DOMNodeIdType& target_dom_node_id,
                      ImeCommitTextCallback callback) override;
+  void PasteIntoNode(const std::u16string& text,
+                     const blink::DOMNodeIdType& target_dom_node_id) override;
   void ImeFinishComposingText(bool keep_selection) override;
   void RequestTextInputStateUpdate() override;
   void RequestCompositionUpdates(bool immediate_request,

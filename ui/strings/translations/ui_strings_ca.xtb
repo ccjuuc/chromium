@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="ca">
-<translation id="1028699632127661925">S'està enviant a <ph name="DEVICE_NAME" />...</translation>
 <translation id="111910763555783249">Configuració de notificacions</translation>
 <translation id="1127811143501539442">{DAYS,plural, =1{fa 1 dia}other{fa # dies}}</translation>
 <translation id="1156623771253174079">{SECONDS,plural, =1{Fa 1 minut}other{Fa # minuts}}</translation>
@@ -12,7 +11,6 @@
 <translation id="1253734725326687145">L'objectiu tàctil s'ha mogut a la part superior dreta. Toca aquí.</translation>
 <translation id="1266864766717917324">No s'ha pogut compartir <ph name="CONTENT_TYPE" />.</translation>
 <translation id="1269641567813814718">Win</translation>
-<translation id="1291104554099683393">Prova de compartir el text en fragments més petits.</translation>
 <translation id="1293699935367580298">Esc</translation>
 <translation id="1368832886055348810">D'esquerra a dreta</translation>
 <translation id="1383876407941801731">Cerca</translation>
@@ -20,6 +18,7 @@
 <translation id="1432724887402139994">{SECONDS,plural, =1{Fa 1 minut}other{Fa # minuts}}</translation>
 <translation id="1450753235335490080">No es pot compartir <ph name="CONTENT_TYPE" /></translation>
 <translation id="1523230076022876491">{MONTHS,plural, =1{Fa 1 mes}other{Fa # mesos}}</translation>
+<translation id="1591017414891297549">PREVISUALITZA</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 minut i }other{# minuts i }}</translation>
 <translation id="1643823602425662293">Notificació</translation>
 <translation id="169515659049020177">Maj</translation>
@@ -44,7 +43,6 @@
 <translation id="2148716181193084225">Avui</translation>
 <translation id="2168039046890040389">Re Pàg</translation>
 <translation id="2190355936436201913">(buit)</translation>
-<translation id="2192232475740621500">Utilitza una densitat baixa</translation>
 <translation id="2267918077332197517">Bloqueja totes les notificacions d'aquest lloc web</translation>
 <translation id="2283117145434822734">F6</translation>
 <translation id="2289052229480071835">Toca els elements tàctils a la pantalla.</translation>
@@ -56,7 +54,6 @@
 <translation id="2388990488038464401">Vols trucar a aquest número des del telèfon?</translation>
 <translation id="2435457462613246316">Mostra la contrasenya</translation>
 <translation id="24452542372838207">Desplega la notificació</translation>
-<translation id="2445449901874883781">Utilitza una densitat alta</translation>
 <translation id="2448407890032181691">L'objectiu tàctil s'ha mogut a la part inferior dreta. Toca aquí.</translation>
 <translation id="2482878487686419369">Notificacions</translation>
 <translation id="2497284189126895209">Tots els fitxers</translation>
@@ -69,7 +66,6 @@
 <translation id="2586657967955657006">Porta-retalls</translation>
 <translation id="2653844658857826081">NOVETAT</translation>
 <translation id="2666092431469916601">Superior</translation>
-<translation id="2701330563083355633">S'ha compartit des del dispositiu <ph name="DEVICE_NAME" /></translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{Fa 1 any}other{Fa # anys}}</translation>
 <translation id="2878511608894704031">Suprimeix-ho tot</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{d'aquí a 1 d}other{d'aquí a # d}}</translation>
@@ -88,7 +84,6 @@
 <translation id="3306688585798492231">Pantalla integrada</translation>
 <translation id="335581015389089642">Veu</translation>
 <translation id="3372635229069101468">Fes clic a <ph name="BEGIN_BOLD" />Detalls<ph name="END_BOLD" /></translation>
-<translation id="3389286852084373014">El text és massa llarg</translation>
 <translation id="3406306243914553062">Contingut HTML</translation>
 <translation id="3600566671520689681">{DAYS,plural, =1{1 dia restant}other{# dies restants}}</translation>
 <translation id="3600969208114796418">Fitxer <ph name="SAVEAS_EXTENSION_TYPE" /></translation>
@@ -109,6 +104,7 @@
 <translation id="4031910098617850788">F5</translation>
 <translation id="40579289237549812">{UNREAD_NOTIFICATIONS,plural, =1{1 notificació no llegida}other{# notificacions no llegides}}</translation>
 <translation id="41501027364808384">{COUNT,plural, =1{Activa l'extensió següent en mode d'incògnit:}other{Activa les extensions següents en mode d'incògnit:}}</translation>
+<translation id="4230098358142093034">Inici</translation>
 <translation id="4266252015790371705">{MONTHS,plural, =1{Fa 1 mes}other{Fa # mesos}}</translation>
 <translation id="4277033906326892359">La columna <ph name="COLUMN_NAME" /> es mostra en ordre ascendent</translation>
 <translation id="4289300219472526559">Comença a parlar</translation>
@@ -190,7 +186,6 @@
 <translation id="6965382102122355670">D'acord</translation>
 <translation id="6974053822202609517">De dreta a esquerra</translation>
 <translation id="7052633198403197513">F1</translation>
-<translation id="7170202025028120564">La configuració de la pantalla de l'aplicació s'aplicarà la propera vegada que es reiniciï.</translation>
 <translation id="7222373446505536781">F11</translation>
 <translation id="7238427729722629793">{MINUTES,plural, =1{1 min restant}other{# min restants}}</translation>
 <translation id="7252604552361840748">Cerca l'extensió anterior</translation>
@@ -200,6 +195,7 @@
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 minut restant}other{# minuts restants}}</translation>
 <translation id="7437971918971306061">La columna <ph name="COLUMN_NAME" /> es mostra sense ordenar.</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7485236722522518129">F4</translation>
 <translation id="7507604095951736240">Emojis</translation>
 <translation id="7620655452534002301">S'ha suprimit.</translation>
 <translation id="7658239707568436148">Cancel·la</translation>
@@ -232,6 +228,7 @@
 <translation id="8677655579646609597"><ph name="QUANTITY" /> KB/s</translation>
 <translation id="8725488761726303204">i <ph name="NUMBER" /> més</translation>
 <translation id="8730621377337864115">Fet</translation>
+<translation id="8741385002816058621">Aquesta és una funció en previsualització</translation>
 <translation id="8772073294905169192">{HOURS,plural, =1{1 h}other{# h}}</translation>
 <translation id="8798099450830957504">Predeterminat</translation>
 <translation id="8841375032071747811">Botó Enrere</translation>
@@ -245,7 +242,6 @@
 <translation id="9170848237812810038">&amp;Desfés</translation>
 <translation id="9195990613383871904">Demà</translation>
 <translation id="928628199082367701">Super</translation>
-<translation id="932327136139879170">Inici</translation>
 <translation id="944069440740578670">Notificacions no llegides</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{Fa 1 segon}other{Fa # segons}}</translation>
 </translationbundle>

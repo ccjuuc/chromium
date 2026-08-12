@@ -107,8 +107,14 @@ void UnpositionedListMarker::AddToBox(
     // push the content down.
     //
     // TODO(layout-dev): Adjusting block-offset "silently" without re-laying out
-    // is bad for block fragmentation.
-    *block_offset -= baseline_adjust;
+    // is bad for block fragmentation. In that case (`container_builder` is
+    // `nullptr`), it may be more correct not to push the content down.
+    if (container_builder && container_builder->ShouldTextBoxTrimNodeStart() &&
+        RuntimeEnabledFeatures::TextBoxTrimForNestedListEnabled()) {
+      marker_offset.block_offset += baseline_adjust;
+    } else {
+      *block_offset -= baseline_adjust;
+    }
   }
   marker_offset.inline_offset += ComputeIntrudedFloatOffset(
       space, container_builder, border_scrollbar_padding,
@@ -177,11 +183,11 @@ LayoutUnit UnpositionedListMarker::ComputeIntrudedFloatOffset(
       *container_builder->BfcBlockOffset() + marker_block_offset};
   const LayoutUnit available_size =
       container_builder->ChildAvailableSize().inline_size;
-  LayoutOpportunity opportunity =
-      space.GetExclusionSpace().FindLayoutOpportunity(origin_offset,
-                                                      available_size);
   DCHECK(marker_layout_object_);
   const TextDirection direction = marker_layout_object_->StyleRef().Direction();
+  const LayoutOpportunity opportunity =
+      space.GetExclusionSpace().FindLayoutOpportunity(
+          origin_offset, available_size, direction);
   if (direction == TextDirection::kLtr) {
     // If Ltr, compare the left side.
     if (opportunity.rect.LineStartOffset() > origin_offset.line_offset)

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
@@ -25,14 +26,13 @@
 #include "chrome/browser/ash/app_list/test/chrome_app_list_test_support.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/test/base/interactive_test_utils.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/account_id/account_id.h"
 #include "components/app_constants/constants.h"
 #include "components/session_manager/core/session_manager.h"
@@ -52,7 +52,7 @@ std::vector<std::string> GetOrderedShelfItems(
     const std::set<std::string>& filter) {
   std::vector<std::string> result;
   for (const auto& item : ash::ShelfModel::Get()->items()) {
-    if (base::Contains(filter, item.id.app_id)) {
+    if (filter.contains(item.id.app_id)) {
       result.push_back(item.id.app_id);
     }
   }
@@ -78,7 +78,8 @@ class OemAppPositionTest : public ash::LoginManagerTest {
         user_manager::FakeUserManager::GetFakeUsernameHash(
             login_mixin_.users()[0].account_id);
     const base::FilePath user_profile_path = user_data_dir.Append(
-        ash::ProfileHelper::GetUserProfileDir(user_id_hash));
+        base::FilePath(ash::BrowserContextHelper::GetUserBrowserContextDirName(
+            user_id_hash)));
     base::CreateDirectory(user_profile_path);
 
     base::FilePath src_dir;
@@ -360,11 +361,11 @@ IN_PROC_BROWSER_TEST_F(ChromeAppListModelUpdaterTest,
   std::vector<std::string> top_level_id_list =
       app_list_test_api_.GetTopLevelViewIdList();
   ASSERT_GT(top_level_id_list.size(), 2u);
-  EXPECT_TRUE(base::Contains(top_level_id_list, folder_id));
+  EXPECT_TRUE(std::ranges::contains(top_level_id_list, folder_id));
   model->MoveItemToRootAt(app1_item, app2_item->position().CreateBefore());
 
   top_level_id_list = app_list_test_api_.GetTopLevelViewIdList();
-  EXPECT_FALSE(base::Contains(top_level_id_list, folder_id));
+  EXPECT_FALSE(std::ranges::contains(top_level_id_list, folder_id));
 
   std::vector<std::string> leading_items = {
       top_level_id_list[0],
@@ -460,7 +461,7 @@ IN_PROC_BROWSER_TEST_F(ChromeAppListModelUpdaterTest,
       app_list_test_api_.GetTopLevelViewIdList();
   std::vector<std::string> filtered_top_level_id_list;
   for (const auto& item : top_level_id_list) {
-    if (base::Contains(app_filter, item)) {
+    if (app_filter.contains(item)) {
       filtered_top_level_id_list.push_back(item);
     }
   }

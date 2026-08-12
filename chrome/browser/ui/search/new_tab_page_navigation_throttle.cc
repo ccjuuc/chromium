@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/common/url_constants.h"
@@ -34,7 +33,7 @@ void NewTabPageNavigationThrottle::MaybeCreateAndAdd(
   content::WebContents* web_contents = handle.GetWebContents();
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  if (web_contents->GetVisibleURL() != chrome::kChromeUINewTabURL ||
+  if (web_contents->GetVisibleURL() != chrome::ChromeUINewTabURLAsGURL() ||
       !search::IsInstantNTPURL(handle.GetURL(), profile)) {
     return;
   }

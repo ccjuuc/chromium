@@ -9,6 +9,10 @@
 #import "base/test/metrics/user_action_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
+#import "components/signin/public/base/consent_level.h"
+#import "components/signin/public/base/signin_pref_names.h"
+#import "components/subscription_eligibility/subscription_eligibility_prefs.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
 #import "components/sync/test/test_sync_service.h"
 #import "components/test/ios/test_utils.h"
 #import "ios/chrome/browser/authentication/account_menu/coordinator/account_menu_mediator_delegate.h"
@@ -18,16 +22,16 @@
 #import "ios/chrome/browser/authentication/ui_bundled/authentication_flow/authentication_flow.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/table_view_account_item.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
+#import "ios/chrome/browser/settings/manage_sync/public/sync_error_settings_command_handler.h"
 #import "ios/chrome/browser/settings/model/sync/utils/account_error_ui_info.h"
 #import "ios/chrome/browser/settings/model/sync/utils/identity_error_util.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/sync_error_settings_command_handler.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
-#import "ios/chrome/browser/signin/model/avatar_provider.h"
+#import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
@@ -35,7 +39,9 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gmock/include/gmock/gmock.h"
@@ -56,49 +62,25 @@ const FakeSystemIdentity* kSecondaryIdentity =
 const FakeSystemIdentity* kSecondaryIdentity2 =
     [FakeSystemIdentity fakeIdentity3];
 
-enum FeaturesState {
-  // With all accounts being assigned to the same single profile.
-  kWithoutSeparateProfiles,
-  // With managed accounts being assigned into their own separate profiles.
-  kWithSeparateProfiles
-};
 }  // namespace
 
-// The test param determines whether `kSeparateProfilesForManagedAccounts` is
-// enabled.
-class AccountMenuMediatorTest
-    : public PlatformTest,
-      public testing::WithParamInterface<FeaturesState> {
+class AccountMenuMediatorTest : public PlatformTest {
  public:
-  AccountMenuMediatorTest() {
-    base::flat_map<base::test::FeatureRef, bool> feature_states;
-    switch (GetParam()) {
-      case kWithoutSeparateProfiles:
-        feature_states[kSeparateProfilesForManagedAccounts] = false;
-        break;
-      case kWithSeparateProfiles:
-        feature_states[kSeparateProfilesForManagedAccounts] = true;
-        break;
-    }
-    feature_list_.InitWithFeatureStates(feature_states);
-  }
+  AccountMenuMediatorTest() = default;
 
   void SetUp() override {
     PlatformTest::SetUp();
 
     // Set the profile.
     TestProfileIOS::Builder builder;
-    builder.AddTestingFactory(
-        SyncServiceFactory::GetInstance(),
-        base::BindRepeating(
-            [](ProfileIOS* profile) -> std::unique_ptr<KeyedService> {
-              return std::make_unique<syncer::TestSyncService>();
-            }));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     profile_ = std::move(builder).Build();
+    avatar_provider_ = std::make_unique<signin::AvatarProvider>();
 
     // Set the manager and services variables.
     fake_system_identity_manager_ =
@@ -122,14 +104,17 @@ class AccountMenuMediatorTest
         OCMStrictProtocolMock(@protocol(SyncErrorSettingsCommandHandler));
     consumer_mock_ = OCMStrictProtocolMock(@protocol(AccountMenuConsumer));
     mediator_ = [[AccountMenuMediator alloc]
-          initWithSyncService:test_sync_service_
-        accountManagerService:account_manager_service_
-                  authService:authentication_service_
-              identityManager:identity_manager_
-                        prefs:profile_->GetPrefs()
-                  accessPoint:AccountMenuAccessPoint::kNewTabPage
-                          URL:GURL()
-         prepareChangeProfile:nil];
+                   initWithSyncService:test_sync_service_
+                 accountManagerService:account_manager_service_
+                           authService:authentication_service_
+                       identityManager:identity_manager_
+                                 prefs:profile_->GetPrefs()
+        subscriptionEligibilityService:SubscriptionEligibilityServiceFactory::
+                                           GetForProfile(profile_.get())
+                           accessPoint:AccountMenuAccessPoint::kNewTabPage
+                                   URL:GURL()
+                  prepareChangeProfile:nil
+                        avatarProvider:avatar_provider_.get()];
     mediator_.delegate = delegate_mock_;
     mediator_.syncErrorSettingsCommandHandler = sync_error_settings_mock_;
     mediator_.consumer = consumer_mock_;
@@ -145,6 +130,8 @@ class AccountMenuMediatorTest
     identity_manager_ = nullptr;
 
     [mediator_ disconnect];
+    mediator_ = nil;
+    avatar_provider_.reset();
     VerifyMock();
     PlatformTest::TearDown();
   }
@@ -198,8 +185,10 @@ class AccountMenuMediatorTest
     run_loop.Run();
   }
 
-  base::test::ScopedFeatureList feature_list_;
-
+ protected:
+  web::WebTaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   id<AccountMenuMediatorDelegate> delegate_mock_;
   id<SyncErrorSettingsCommandHandler> sync_error_settings_mock_;
   id<AccountMenuConsumer> consumer_mock_;
@@ -211,45 +200,33 @@ class AccountMenuMediatorTest
   raw_ptr<FakeSystemIdentityManager> fake_system_identity_manager_;
   raw_ptr<signin::IdentityManager> identity_manager_;
   base::UserActionTester user_actions_;
+  std::unique_ptr<signin::AvatarProvider> avatar_provider_;
+  std::unique_ptr<TestProfileIOS> profile_;
 
  private:
   // Signs in kPrimaryIdentity as primary identity.
   void AddPrimaryIdentity() {
     fake_system_identity_manager_->AddIdentity(kPrimaryIdentity);
     authentication_service_->SignIn(kPrimaryIdentity,
-                                    signin_metrics::AccessPoint::kUnknown);
+                                    signin_metrics::AccessPoint::kStartPage);
   }
 
   // Add kSecondaryIdentity as a secondary identity.
   void AddSecondaryIdentity() {
     fake_system_identity_manager_->AddIdentity(kSecondaryIdentity);
   }
-
-  web::WebTaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
 };
 
 #pragma mark - Test for ChromeAccountManagerServiceObserver
 
 // Checks that adding a secondary identity lead to updating the
 // consumer.
-TEST_P(AccountMenuMediatorTest, TestAddSecondaryIdentity) {
+TEST_F(AccountMenuMediatorTest, TestAddSecondaryIdentity) {
   FakeSystemIdentity* thirdIdentity = [FakeSystemIdentity fakeIdentity3];
   // Initially, the user's name isn't known.
   thirdIdentity.userFullName = nil;
   thirdIdentity.userGivenName = nil;
-  switch (GetParam()) {
-    case kWithSeparateProfiles:
-      break;
-    case kWithoutSeparateProfiles:
-      OCMExpect([consumer_mock_
-          updateAccountListWithGaiaIDsToAdd:@[]
-                            gaiaIDsToRemove:@[]
-                              gaiaIDsToKeep:[OCMArg any]]);
-      break;
-  }
+
   OCMExpect([consumer_mock_
       updateAccountListWithGaiaIDsToAdd:@[ thirdIdentity.gaiaId.ToNSString() ]
                         gaiaIDsToRemove:@[]
@@ -274,10 +251,8 @@ TEST_P(AccountMenuMediatorTest, TestAddSecondaryIdentity) {
 
 // Checks that removing a secondary identity lead to updating the
 // consumer.
-TEST_P(AccountMenuMediatorTest, TestRemoveSecondaryIdentity) {
+TEST_F(AccountMenuMediatorTest, TestRemoveSecondaryIdentity) {
   IgnoreAccountListUpdatesWithNoAdditionsOrRemovals();
-
-  OCMExpect([consumer_mock_ updatePrimaryAccount]);
 
   OCMExpect([consumer_mock_
       updateAccountListWithGaiaIDsToAdd:@[]
@@ -297,11 +272,11 @@ TEST_P(AccountMenuMediatorTest, TestRemoveSecondaryIdentity) {
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Checks that removing the primary identity lead to updating the
 // consumer.
-TEST_P(AccountMenuMediatorTest, TestRemovePrimaryIdentity) {
+TEST_F(AccountMenuMediatorTest, TestRemovePrimaryIdentity) {
   OCMExpect([delegate_mock_
       mediatorWantsToBeDismissed:mediator_
            withCancelationReason:signin_ui::CancelationReason::kFailed
@@ -315,7 +290,7 @@ TEST_P(AccountMenuMediatorTest, TestRemovePrimaryIdentity) {
 #pragma mark - AccountMenuDataSource
 
 // Tests the result of secondaryAccountsGaiaIDs.
-TEST_P(AccountMenuMediatorTest, TestSecondaryAccountsGaiaID) {
+TEST_F(AccountMenuMediatorTest, TestSecondaryAccountsGaiaID) {
   EXPECT_EQ([mediator_ secondaryAccountsGaiaIDs],
             std::vector<GaiaId> { kSecondaryIdentity.gaiaId });
 }
@@ -323,54 +298,121 @@ TEST_P(AccountMenuMediatorTest, TestSecondaryAccountsGaiaID) {
 #pragma mark - AccountMenuDataSource and SyncObserverModelBridge
 
 // Tests the result of nameForGaiaID.
-TEST_P(AccountMenuMediatorTest, nameForGaiaID) {
+TEST_F(AccountMenuMediatorTest, nameForGaiaID) {
   EXPECT_NSEQ([mediator_ nameForGaiaID:kSecondaryIdentity.gaiaId],
               kSecondaryIdentity.userFullName);
 }
 
 // Tests the result of emailForGaiaID.
-TEST_P(AccountMenuMediatorTest, emailForGaiaID) {
+TEST_F(AccountMenuMediatorTest, emailForGaiaID) {
   EXPECT_NSEQ([mediator_ emailForGaiaID:kSecondaryIdentity.gaiaId],
               kSecondaryIdentity.userEmail);
 }
 
 // Tests the result of imageForGaiaID.
-TEST_P(AccountMenuMediatorTest, imageForGaiaID) {
-  EXPECT_NSEQ(
-      [mediator_ imageForGaiaID:kSecondaryIdentity.gaiaId],
-      GetApplicationContext() -> GetIdentityAvatarProvider()
-                                  -> GetIdentityAvatar(
-                                      kSecondaryIdentity,
-                                      IdentityAvatarSize::TableViewIcon));
+TEST_F(AccountMenuMediatorTest, imageForGaiaID) {
+  EXPECT_NSEQ([mediator_ imageForGaiaID:kSecondaryIdentity.gaiaId],
+              avatar_provider_->GetIdentityAvatar(
+                  kSecondaryIdentity, IdentityAvatarSize::TableViewIcon));
 }
 
 // Tests the result of primaryAccountEmail.
-TEST_P(AccountMenuMediatorTest, TestPrimaryAccountEmail) {
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountEmail) {
   EXPECT_NSEQ([mediator_ primaryAccountEmail], kPrimaryIdentity.userEmail);
 }
 
 // Tests the result of primaryAccountUserFullName.
-TEST_P(AccountMenuMediatorTest, TestPrimaryAccountUserFullName) {
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountUserFullName) {
   EXPECT_NSEQ([mediator_ primaryAccountUserFullName],
               kPrimaryIdentity.userFullName);
 }
 
 // Tests the result of primaryAccountAvatar.
-TEST_P(AccountMenuMediatorTest, TestPrimaryAccountAvatar) {
-  EXPECT_NSEQ([mediator_ primaryAccountAvatar],
-              GetApplicationContext() -> GetIdentityAvatarProvider()
-                                          -> GetIdentityAvatar(
-                                              kPrimaryIdentity,
-                                              IdentityAvatarSize::Large));
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountAvatar) {
+  EXPECT_NE([mediator_ primaryAccountAvatar], nil);
+}
+
+// Tests the result of primaryAccountAvatarNeedsRing.
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountAvatarNeedsRing) {
+  OCMStub([consumer_mock_ updatePrimaryAccount]);
+
+  // Feature disabled, even if tier is not-negative.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 0);
+    EXPECT_FALSE([mediator_ primaryAccountAvatarNeedsRing]);
+  }
+
+  // Feature enabled, but tier is negative.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, -1);
+    EXPECT_FALSE([mediator_ primaryAccountAvatarNeedsRing]);
+  }
+
+  // Feature enabled, and tier is 0 (not positive).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 0);
+    EXPECT_FALSE([mediator_ primaryAccountAvatarNeedsRing]);
+  }
+
+  // Feature enabled, and tier is positive (1).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+    EXPECT_TRUE([mediator_ primaryAccountAvatarNeedsRing]);
+  }
+}
+
+// Tests the result of primaryAccountAITierFullName.
+TEST_F(AccountMenuMediatorTest, TestPrimaryAccountAITierFullName) {
+  OCMStub([consumer_mock_ updatePrimaryAccount]);
+
+  // Feature disabled, even if tier is positive.
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndDisableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+    EXPECT_NSEQ([mediator_ primaryAccountAITierFullName], nil);
+  }
+
+  // Feature enabled, but tier is non-positive (0).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 0);
+    EXPECT_NSEQ([mediator_ primaryAccountAITierFullName], nil);
+  }
+
+  // Feature enabled, and tier is positive (1).
+  {
+    base::test::ScopedFeatureList scoped_feature_list;
+    scoped_feature_list.InitAndEnableFeature(kAiSubscriptionAvatarRingIOS);
+    profile_->GetPrefs()->SetInteger(
+        subscription_eligibility::prefs::kAiSubscriptionTier, 1);
+    // Under test, GetAITierFullName for tier 1 returns "AI 1".
+    EXPECT_NSEQ([mediator_ primaryAccountAITierFullName], @"AI 1");
+  }
 }
 
 // Tests the result of TestError when there is no error.
-TEST_P(AccountMenuMediatorTest, TestNoError) {
+TEST_F(AccountMenuMediatorTest, TestNoError) {
   EXPECT_THAT([mediator_ accountErrorUIInfo], IsNull());
 }
 
 // Tests the result of TestError when passphrase is required.
-TEST_P(AccountMenuMediatorTest, TestError) {
+TEST_F(AccountMenuMediatorTest, TestError) {
   // In order to simulate requiring a passphrase, test sync service requires
   // us to explicitly set that the setup is not complete, and fire the state
   // change to its observer.
@@ -392,7 +434,7 @@ TEST_P(AccountMenuMediatorTest, TestError) {
 
 // Tests the result of accountTappedWithGaiaID:targetRect:
 // when sign-out fail.
-TEST_P(AccountMenuMediatorTest, TestAccountTapedSignoutFailed) {
+TEST_F(AccountMenuMediatorTest, TestAccountTapedSignoutFailed) {
   IgnoreAccountListUpdatesWithNoAdditionsOrRemovals();
   // Given that the method  `triggerSignoutWithTargetRect:completion` creates a
   // callback in a callback, this tests has three parts.  One part by callback,
@@ -425,14 +467,17 @@ TEST_P(AccountMenuMediatorTest, TestAccountTapedSignoutFailed) {
   OCMExpect([delegate_mock_ signinFinished]);
   // Simulate AuthenticationFlow failure.
   [authentication_flow_request_helper
-      authenticationFlowDidSignInInSameProfileWithCancelationReason:
-          signin_ui::CancelationReason::kUserCanceled
-                                                           identity:nil];
+      authenticationFlowDidSignInInSameProfileWithIdentity:nil
+                                         cancelationReason:
+                                             signin_ui::CancelationReason::
+                                                 kUserCanceled
+                                                completion:^{
+                                                }];
 }
 
 // Tests the result of accountTappedWithGaiaID:targetRect:
 // when sign-in fail.
-TEST_P(AccountMenuMediatorTest, TestAccountTapedSignInFailed) {
+TEST_F(AccountMenuMediatorTest, TestAccountTapedSignInFailed) {
   IgnoreAccountListUpdatesWithNoAdditionsOrRemovals();
   // Given that the method  `signOutFromTargetRect:completion` create
   // a callback in a callback, this tests has three parts.  One part by
@@ -467,18 +512,20 @@ TEST_P(AccountMenuMediatorTest, TestAccountTapedSignInFailed) {
   OCMExpect([consumer_mock_ setUserInteractionsEnabled:YES]);
   OCMExpect([delegate_mock_ signinFinished]);
   [authentication_flow_request_helper
-      authenticationFlowDidSignInInSameProfileWithCancelationReason:
-          signin_ui::CancelationReason::kFailed
-                                                           identity:nil];
+      authenticationFlowDidSignInInSameProfileWithIdentity:nil
+                                         cancelationReason:
+                                             signin_ui::CancelationReason::
+                                                 kFailed
+                                                completion:^{
+                                                }];
 
   // Checks the user is signed-back in.
-  ASSERT_EQ(kPrimaryIdentity, authentication_service_->GetPrimaryIdentity(
-                                  signin::ConsentLevel::kSignin));
+  ASSERT_EQ(kPrimaryIdentity, authentication_service_->GetPrimaryIdentity());
 }
 
 // Tests the result of accountTappedWithGaiaID:targetRect:
 // when switch is successful.
-TEST_P(AccountMenuMediatorTest, TestAccountTapedWithSuccessfulSwitch) {
+TEST_F(AccountMenuMediatorTest, TestAccountTapedWithSuccessfulSwitch) {
   // Given that the method  `signOutFromTargetRect:callback` create a
   // callback in a callback, this tests has three parts.  One part by callback,
   // and one part for the initial part of the run.
@@ -511,14 +558,16 @@ TEST_P(AccountMenuMediatorTest, TestAccountTapedWithSuccessfulSwitch) {
                  userTappedClose:NO]);
   OCMExpect([delegate_mock_ signinFinished]);
   [authentication_flow_request_helper
-      authenticationFlowDidSignInInSameProfileWithCancelationReason:
-          signin_ui::CancelationReason::kNotCanceled
-                                                           identity:
-                                                               kSecondaryIdentity];
+      authenticationFlowDidSignInInSameProfileWithIdentity:kSecondaryIdentity
+                                         cancelationReason:
+                                             signin_ui::CancelationReason::
+                                                 kNotCanceled
+                                                completion:^{
+                                                }];
 }
 
 // Tests the result of didTapErrorButton when a passphrase is required.
-TEST_P(AccountMenuMediatorTest, TestTapErrorButtonPassphrase) {
+TEST_F(AccountMenuMediatorTest, TestTapErrorButtonPassphrase) {
   // While many errors can be displayed by the account menu, this test suite
   // only consider the error where the passphrase is needed. This is because,
   // when the suite was written, `TestSyncService::GetUserActionableError` could
@@ -536,8 +585,22 @@ TEST_P(AccountMenuMediatorTest, TestTapErrorButtonPassphrase) {
                    "Signin_AccountMenu_ErrorButton_Passphrase"));
 }
 
+// Tests the result of didTapErrorButton when a bookmarks limit is exceeded.
+TEST_F(AccountMenuMediatorTest, TestTapErrorButtonBookmarksLimitExceeded) {
+  test_sync_service_->SetSignedIn(signin::ConsentLevel::kSignin);
+  test_sync_service_->SetBookmarksLimitExceeded(true);
+
+  OCMExpect([consumer_mock_ updateErrorSection:[OCMArg any]]);
+  test_sync_service_->FireStateChanged();
+
+  OCMExpect([sync_error_settings_mock_ openBookmarksLimitExceededHelp]);
+  [mediator_ didTapErrorButton];
+  EXPECT_EQ(1, user_actions_.GetActionCount(
+                   "Signin_AccountMenu_ErrorButton_BookmarksLimitExceeded"));
+}
+
 // Tests the effect of didTapManageYourGoogleAccount.
-TEST_P(AccountMenuMediatorTest, TestDidTapManageYourGoogleAccount) {
+TEST_F(AccountMenuMediatorTest, TestDidTapManageYourGoogleAccount) {
   OCMExpect([delegate_mock_ didTapManageYourGoogleAccount]);
   OCMExpect([consumer_mock_ setUserInteractionsEnabled:NO]);
   [mediator_ didTapManageYourGoogleAccount];
@@ -546,7 +609,7 @@ TEST_P(AccountMenuMediatorTest, TestDidTapManageYourGoogleAccount) {
 }
 
 // Tests the effect of didTapManageAccounts.
-TEST_P(AccountMenuMediatorTest, TestDidTapEditAccountList) {
+TEST_F(AccountMenuMediatorTest, TestDidTapEditAccountList) {
   OCMExpect([delegate_mock_ didTapManageAccounts]);
   OCMExpect([consumer_mock_ setUserInteractionsEnabled:NO]);
   [mediator_ didTapManageAccounts];
@@ -558,7 +621,7 @@ TEST_P(AccountMenuMediatorTest, TestDidTapEditAccountList) {
 // Tests the effect of didTapAddAccount on iOS26+.
 // The expected behavior depends on iOS version because of a UIKit but up to
 // iOS 18. See crbug.com/395959814.
-TEST_P(AccountMenuMediatorTest, TestDidTapAddAccountiOS26) {
+TEST_F(AccountMenuMediatorTest, TestDidTapAddAccountiOS26) {
   if (!@available(iOS 26, *)) {
     return;
   }
@@ -574,7 +637,7 @@ TEST_P(AccountMenuMediatorTest, TestDidTapAddAccountiOS26) {
 }
 
 // Tests the effect of didTapAddAccount on iOS 18 and less.
-TEST_P(AccountMenuMediatorTest, TestDidTapAddAccount) {
+TEST_F(AccountMenuMediatorTest, TestDidTapAddAccount) {
   if (@available(iOS 26, *)) {
     return;
   }
@@ -583,7 +646,7 @@ TEST_P(AccountMenuMediatorTest, TestDidTapAddAccount) {
   OCMExpect([delegate_mock_ didTapAddAccount]);
   [mediator_ didTapAddAccount];
   // Simulate a double tap. The second tap should be transmitted because the add
-  // account view may have disapperead.
+  // account view may have disappeared.
   [mediator_ didTapAddAccount];
   OCMExpect([consumer_mock_ switchingStopped]);
   OCMExpect([consumer_mock_ setUserInteractionsEnabled:YES]);
@@ -591,7 +654,7 @@ TEST_P(AccountMenuMediatorTest, TestDidTapAddAccount) {
 }
 
 // Tests the effect of signOutFromTargetRect.
-TEST_P(AccountMenuMediatorTest, TestSignoutFromTargetRect) {
+TEST_F(AccountMenuMediatorTest, TestSignoutFromTargetRect) {
   CGRect rect = CGRectMake(0, 0, 40, 24);
 
   __block signin_ui::SignoutCompletionCallback completion = nil;
@@ -612,7 +675,7 @@ TEST_P(AccountMenuMediatorTest, TestSignoutFromTargetRect) {
 
 // Tests tapping on the close button just after the sign-out button.
 // This is a regression test for crbug.com/371046656.
-TEST_P(AccountMenuMediatorTest, TestSignoutAndClose) {
+TEST_F(AccountMenuMediatorTest, TestSignoutAndClose) {
   CGRect rect = CGRectMake(0, 0, 40, 24);
   __block signin_ui::SignoutCompletionCallback completion = nil;
   OCMExpect([delegate_mock_
@@ -629,7 +692,7 @@ TEST_P(AccountMenuMediatorTest, TestSignoutAndClose) {
 
 // Tests tapping on the close button just after the sign-out button.
 // This is a regression test for crbug.com/371046656.
-TEST_P(AccountMenuMediatorTest, TestViewControllerWantToBeClosed) {
+TEST_F(AccountMenuMediatorTest, TestViewControllerWantToBeClosed) {
   OCMExpect([delegate_mock_
       mediatorWantsToBeDismissed:mediator_
            withCancelationReason:signin_ui::CancelationReason::kUserCanceled
@@ -642,7 +705,7 @@ TEST_P(AccountMenuMediatorTest, TestViewControllerWantToBeClosed) {
 
 // Tests that the consumer is not notified to update the error section multiple
 // times if the underlying error does not change.
-TEST_P(AccountMenuMediatorTest, TestErrorSectionUptadedOnceForSameError) {
+TEST_F(AccountMenuMediatorTest, TestErrorSectionUptadedOnceForSameError) {
   SignInAndSetPassphraseRequired();
 
   // The error has not changed. The consumer should not be notified again.
@@ -652,7 +715,7 @@ TEST_P(AccountMenuMediatorTest, TestErrorSectionUptadedOnceForSameError) {
 
 // Tests that the consumer is notified to update the error section if the
 // underlying error is resolved.
-TEST_P(AccountMenuMediatorTest, TestErrorSectionUpdatedWhenErrorCleared) {
+TEST_F(AccountMenuMediatorTest, TestErrorSectionUpdatedWhenErrorCleared) {
   test_sync_service_->SetSignedIn(signin::ConsentLevel::kSignin);
   constexpr char kSyncPassphrase[] = "passphrase";
   test_sync_service_->GetUserSettings()->SetPassphraseRequired(kSyncPassphrase);
@@ -670,15 +733,14 @@ TEST_P(AccountMenuMediatorTest, TestErrorSectionUpdatedWhenErrorCleared) {
   EXPECT_THAT([mediator_ accountErrorUIInfo], IsNull());
 }
 
-INSTANTIATE_TEST_SUITE_P(,
-                         AccountMenuMediatorTest,
-                         testing::ValuesIn({kWithoutSeparateProfiles,
-                                            kWithSeparateProfiles}),
-                         [](const testing::TestParamInfo<FeaturesState>& info) {
-                           switch (info.param) {
-                             case kWithoutSeparateProfiles:
-                               return "WithoutSeparateProfiles";
-                             case kWithSeparateProfiles:
-                               return "WithSeparateProfiles";
-                           }
-                         });
+// Tests that the mediator informs the delegate when sign-in becomes disabled.
+TEST_F(AccountMenuMediatorTest, TestSigninDisabled) {
+  OCMExpect([delegate_mock_
+      mediatorWantsToBeDismissed:mediator_
+           withCancelationReason:signin_ui::CancelationReason::kFailed
+                  signedIdentity:nil
+                 userTappedClose:NO]);
+  OCMExpect([consumer_mock_ setUserInteractionsEnabled:NO]);
+  GetApplicationContext()->GetLocalState()->SetBoolean(
+      prefs::kSigninAllowedOnDevice, false);
+}

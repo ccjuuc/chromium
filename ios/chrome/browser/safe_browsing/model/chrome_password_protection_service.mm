@@ -18,6 +18,7 @@
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/omnibox/common/omnibox_features.h"
 #import "components/password_manager/core/browser/insecure_credentials_helper.h"
+#import "components/password_manager/core/browser/password_store/password_store_interface.h"
 #import "components/password_manager/core/browser/ui/password_check_referrer.h"
 #import "components/prefs/pref_service.h"
 #import "components/safe_browsing/core/browser/safe_browsing_metrics_collector.h"
@@ -28,6 +29,7 @@
 #import "components/safe_browsing/core/common/safebrowsing_switches.h"
 #import "components/safe_browsing/core/common/utils.h"
 #import "components/safe_browsing/ios/browser/password_protection/password_protection_request_ios.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_managed_status_finder.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/signin_constants.h"
@@ -235,7 +237,8 @@ void ChromePasswordProtectionService::MaybeReportPasswordReuseDetected(
     const std::string& username,
     PasswordType password_type,
     bool is_phishing_url,
-    bool warning_shown) {
+    bool warning_shown,
+    const ReferrerChain& referrer_chain) {
   // Enterprise reporting extension not yet supported in iOS.
 }
 
@@ -486,8 +489,8 @@ bool ChromePasswordProtectionService::IsInExcludedCountry() {
   if (!variations_service) {
     return false;
   }
-  return base::Contains(safe_browsing::GetExcludedCountries(),
-                        variations_service->GetLatestCountry());
+  return std::ranges::contains(safe_browsing::GetExcludedCountries(),
+                               variations_service->GetLatestCountry());
 }
 
 void ChromePasswordProtectionService::MaybeStartProtectedPasswordEntryRequest(

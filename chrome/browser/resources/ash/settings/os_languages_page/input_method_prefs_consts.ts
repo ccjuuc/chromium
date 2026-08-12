@@ -22,7 +22,7 @@ export enum OptionType {
   VIRTUAL_KEYBOARD_AUTO_CORRECTION_LEVEL = 'virtualKeyboardAutoCorrectionLevel',
   VIRTUAL_KEYBOARD_ENABLE_CAPITALIZATION =
       'virtualKeyboardEnableCapitalization',
-  XKB_LAYOUT = 'xkbLayout',
+
   // Options for Japanese input method.
   // LINT.IfChange(JpOptionCategories)
   JAPANESE_AUTOMATICALLY_SWITCH_TO_HALFWIDTH = 'AutomaticallySwitchToHalfwidth',
@@ -40,10 +40,13 @@ export enum OptionType {
   JAPANESE_KEYMAP_STYLE = 'JapaneseKeymapStyle',
   JAPANESE_DISABLE_PERSONALIZED_SUGGESTIONS = 'JapaneseDisableSuggestions',
   // LINT.ThenChange(/chrome/browser/ash/input_method/input_method_settings_consts.h:JpOptionCategories)
+
   // Options for Korean input method.
   KOREAN_ENABLE_SYLLABLE_INPUT = 'koreanEnableSyllableInput',
   KOREAN_KEYBOARD_LAYOUT = 'koreanKeyboardLayout',
-  // Options for pinyin input method.
+
+  // Options for Pinyin input methods.
+  PINYIN_XKB_LAYOUT = 'xkbLayout',
   PINYIN_CHINESE_PUNCTUATION = 'pinyinChinesePunctuation',
   PINYIN_DEFAULT_CHINESE = 'pinyinDefaultChinese',
   PINYIN_ENABLE_FUZZY = 'pinyinEnableFuzzy',
@@ -62,11 +65,13 @@ export enum OptionType {
   PINYIN_L_N = 'l:n',
   PINYIN_S_SH = 's:sh',
   PINYIN_Z_ZH = 'z:zh',
-  // Options for zhuyin input method.
+
+  // Options for Zhuyin input method.
   ZHUYIN_KEYBOARD_LAYOUT = 'zhuyinKeyboardLayout',
   ZHUYIN_PAGE_SIZE = 'zhuyinPageSize',
   ZHUYIN_SELECT_KEYS = 'zhuyinSelectKeys',
-  // Options for Vietnamese VNI input method
+
+  // Options for Vietnamese input methods.
   VIETNAMESE_VNI_ALLOW_FLEXIBLE_DIACRITICS =
       'vietnameseVniAllowFlexibleDiacritics',
   VIETNAMESE_VNI_NEW_STYLE_TONE_MARK_PLACEMENT =
@@ -116,12 +121,21 @@ export enum KoreanKeyboardLayout {
 }
 
 /**
- * Values persisted in OptionType.XKB_LAYOUT CrOS-Prefs entry.
+ * Values persisted in OptionType.PINYIN_XKB_LAYOUT CrOS-Prefs entry.
  */
-export enum XkbKeyboardLayout {
+export enum PinyinXkbLayout {
   XKB_US = 'US',
   XKB_DVORAK = 'Dvorak',
   XKB_COLEMAK = 'Colemak',
+}
+
+/**
+ * Values persisted in OptionType.ZHUYIN_PAGE_SIZE CrOS-Prefs entry.
+ */
+export enum ZhuyinPageSize {
+  ZHUYIN_PAGE_SIZE_10 = '10',
+  ZHUYIN_PAGE_SIZE_9 = '9',
+  ZHUYIN_PAGE_SIZE_8 = '8',
 }
 
 /**
@@ -148,10 +162,22 @@ export enum JapaneseInputMode {
  * Values persisted in OptionType.JAPANESE_PUNCTUATION_STYLE CrOS-Prefs entry.
  */
 export enum JapanesePunctuationStyle {
-  KUTEN_TOUTEN = 'KutenTouten',
+  // "KutenTouten" string value is a misnomer originating from Japanese IME Mozc
+  // lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+  // storage so must NOT be adapted unless user data are migrated first.
+  TOUTEN_KUTEN = 'KutenTouten',
+
   COMMA_PERIOD = 'CommaPeriod',
-  KUTEN_PERIOD = 'KutenPeriod',
-  COMMA_TOUTEN = 'CommaTouten',
+
+  // "KutenPeriod" string value is a misnomer originating from Japanese IME Mozc
+  // lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+  // storage so must NOT be adapted unless user data are migrated first.
+  TOUTEN_PERIOD = 'KutenPeriod',
+
+  // "CommaTouten" string value is a misnomer originating from Japanese IME Mozc
+  // lib (where it's now been fixed), but this string is persisted in CrOS Prefs
+  // storage so must NOT be adapted unless user data are migrated first.
+  COMMA_KUTEN = 'CommaTouten',
 }
 
 /**

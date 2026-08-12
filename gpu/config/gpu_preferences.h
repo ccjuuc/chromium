@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include "base/containers/circular_deque.h"
 #include <string>
 #include <vector>
 
@@ -65,7 +66,6 @@ enum class GrContextType : uint32_t {
   kGL,      // Ganesh
   kVulkan,  // Ganesh
   kGraphiteDawn,
-  kGraphiteMetal,
 };
 
 GPU_CONFIG_EXPORT std::string GrContextTypeToString(GrContextType type);
@@ -73,6 +73,7 @@ GPU_CONFIG_EXPORT std::string GrContextTypeToString(GrContextType type);
 // Used to represent the Skia backend that the GPU process has initialized.
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(SkiaBackendType)
 enum class SkiaBackendType {
   kUnknown = 0,
   kNone = 1,
@@ -82,11 +83,11 @@ enum class SkiaBackendType {
   kGraphiteDawnMetal = 5,
   kGraphiteDawnD3D11 = 6,
   kGraphiteDawnD3D12 = 7,
-  kGraphiteMetal = 8,
-  // It's not clear what granularity of kGraphiteDawnGL* backend dawn will
-  // provided yet so those values are to be added later.
-  kMaxValue = kGraphiteMetal
+  //  kDeprecatedGraphiteMetal = 8,
+  kGraphiteDawnOpenGLES = 9,
+  kMaxValue = kGraphiteDawnOpenGLES
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/gpu/enums.xml:SkiaBackendType)
 
 GPU_CONFIG_EXPORT std::string SkiaBackendTypeToString(SkiaBackendType type);
 
@@ -221,11 +222,29 @@ struct GPU_CONFIG_EXPORT GpuPreferences {
   // tracking.
   bool use_passthrough_cmd_decoder = false;
 
+  // The Skia rendering backend to use. Set by the browser based on gpu_mode.
+  // The GPU process may downgrade this (e.g. from kGraphiteDawn to kGL) after
+  // consulting the blocklist.
+  GrContextType gr_context_type = GrContextType::kGL;
+
+  // Ordered fallback GrContextTypes for the GPU process to try if
+  // gr_context_type is unavailable. Stored in priority order
+  // (front() = next to try).
+  // TODO(crbug.com/511049071): Consider merging gr_context_type to this list,
+  // so that we have a list of gr_context_type to try starting from the default
+  // type. This would involve refactoring the consumers of this struct, which
+  // currently use gr_context_type in many places.
+  base::circular_deque<GrContextType> fallback_gr_context_types;
+
   // ===================================
   // Settings from //gpu/config/gpu_switches.h
 
-  // Ignores GPU blocklist.
+  // Ignores the entire GPU blocklist.
   bool ignore_gpu_blocklist = false;
+
+  // GPU blocklist entries to be ignored. If this is non-empty then
+  // ignore_gpu_blocklist will be false.
+  std::vector<uint32_t> ignored_gpu_blocklist_entries;
 
   // Start the watchdog suspended, as the app is already backgrounded and won't
   // send a background/suspend signal.
@@ -233,8 +252,6 @@ struct GPU_CONFIG_EXPORT GpuPreferences {
 
   // ===================================
   // Settings from //gpu/command_buffer/service/gpu_switches.h
-  // The type of the GrContext or Graphite Context.
-  GrContextType gr_context_type = GrContextType::kGL;
 
   // Use Vulkan for rasterization and display compositing.
   VulkanImplementationName use_vulkan = VulkanImplementationName::kNone;

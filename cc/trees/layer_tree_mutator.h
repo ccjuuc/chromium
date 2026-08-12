@@ -8,7 +8,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "base/check.h"
@@ -17,6 +16,7 @@
 #include "cc/cc_export.h"
 #include "cc/trees/animation_effect_timings.h"
 #include "cc/trees/animation_options.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace cc {
 
@@ -128,7 +128,7 @@ class CC_EXPORT MutatorInputState {
 
  private:
   using InputMap =
-      std::unordered_map<int, std::unique_ptr<AnimationWorkletInput>>;
+      absl::flat_hash_map<int, std::unique_ptr<AnimationWorkletInput>>;
 
   // Maps a scope id to its associated AnimationWorkletInput instance.
   // Only contains scope ids for which there is a non-empty input.
@@ -155,11 +155,11 @@ struct CC_EXPORT AnimationWorkletOutput {
   std::vector<AnimationState> animations;
 };
 
-// LayerTreeMutatorClient processes worklet outputs individually so we can
+// LayerTreeMutatorDelegate processes worklet outputs individually so we can
 // define mutator output to be the same as animation worklet output.
 using MutatorOutputState = AnimationWorkletOutput;
 
-class LayerTreeMutatorClient {
+class LayerTreeMutatorDelegate {
  public:
   // Called when mutator needs to update its output.
   //
@@ -172,7 +172,7 @@ class CC_EXPORT LayerTreeMutator {
  public:
   virtual ~LayerTreeMutator() {}
 
-  virtual void SetClient(LayerTreeMutatorClient* client) = 0;
+  virtual void SetDelegate(LayerTreeMutatorDelegate* delegate) = 0;
 
   using DoneCallback = base::OnceCallback<void(MutateStatus)>;
 

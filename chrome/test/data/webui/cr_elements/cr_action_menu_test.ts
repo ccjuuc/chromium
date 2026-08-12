@@ -73,12 +73,14 @@ suite('CrActionMenu', function() {
   }
 
   test('open-changed event fires', async function() {
-    let whenFired = eventToPromise('open-changed', menu);
+    let whenFired =
+        eventToPromise<CustomEvent<{value: boolean}>>('open-changed', menu);
     menu.showAt(dots);
     let event = await whenFired;
     assertTrue(event.detail.value);
 
-    whenFired = eventToPromise('open-changed', menu);
+    whenFired =
+        eventToPromise<CustomEvent<{value: boolean}>>('open-changed', menu);
     menu.close();
     event = await whenFired;
     assertFalse(event.detail.value);
@@ -244,6 +246,32 @@ suite('CrActionMenu', function() {
 
     window.dispatchEvent(new CustomEvent('popstate'));
     assertFalse(dialog.open);
+  });
+
+  test('auto-close on focusout', function() {
+    menu.autoCloseOnFocusout = true;
+    menu.showAt(dots);
+    assertTrue(menu.open);
+
+    // Focus out to an external element.
+    menu.dispatchEvent(new FocusEvent('focusout', {
+      relatedTarget: dots,
+      bubbles: true,
+      composed: true,
+    }));
+    assertFalse(menu.open);
+
+    // Reset and test with autoCloseOnFocusout = false.
+    menu.autoCloseOnFocusout = false;
+    menu.showAt(dots);
+    assertTrue(menu.open);
+
+    menu.dispatchEvent(new FocusEvent('focusout', {
+      relatedTarget: dots,
+      bubbles: true,
+      composed: true,
+    }));
+    assertTrue(menu.open);
   });
 
   /** @param key The key to use for closing. */
@@ -553,9 +581,9 @@ suite('CrActionMenu', function() {
     const containerTop = 10000;
     const containerWidth = 500;
 
-    class TestElement extends CrLitElement {
+    class TestDummyElement extends CrLitElement {
       static get is() {
-        return 'test-element';
+        return 'test-dummy';
       }
 
       static override get styles() {
@@ -594,22 +622,22 @@ suite('CrActionMenu', function() {
       }
     }
 
-    customElements.define(TestElement.is, TestElement);
+    customElements.define(TestDummyElement.is, TestDummyElement);
 
     setup(function() {
       document.body.scrollTop = 0;
       document.body.scrollLeft = 0;
       document.body.innerHTML = getTrustedHtml(`
         <style>
-          test-element {
+          test-dummy {
             height: ${bodyHeight}px;
             width: ${bodyWidth}px;
           }
         </style>
-        <test-element></test-element>`);
+        <test-dummy></test-dummy>`);
 
       const testElement =
-          document.body.querySelector<TestElement>('test-element')!;
+          document.body.querySelector<TestDummyElement>('test-dummy')!;
       menu = testElement.shadowRoot.querySelector('cr-action-menu')!;
       dialog = menu.getDialog();
       dots = testElement.shadowRoot.querySelector('#dots')!;

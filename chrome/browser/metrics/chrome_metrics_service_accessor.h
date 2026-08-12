@@ -12,14 +12,9 @@
 #include "base/gtest_prod_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
-#include "chrome/browser/supervised_user/metrics_service_accessor_delegate.h"
 #include "chrome/common/buildflags.h"
 #include "components/metrics/metrics_service_accessor.h"
 #include "components/variations/synthetic_trials.h"
-
-#if BUILDFLAG(ENABLE_GLIC) || BUILDFLAG(ENABLE_GLIC_ANDROID)
-#include "chrome/browser/glic/host/glic_synthetic_trial_manager.h"
-#endif
 
 class BrowserProcessImpl;
 class CampaignsManagerClientImpl;
@@ -42,24 +37,43 @@ namespace browser_sync {
 class ChromeSyncClient;
 }
 
+namespace subscription_eligibility {
+class SubscriptionEligibilityMetricsProvider;
+}  // namespace subscription_eligibility
+
+namespace supervised_user {
+class MetricsServiceAccessorDelegateImpl;
+}
+
+class ChromeDomainReliabilityDelegate;
 namespace domain_reliability {
-bool ShouldCreateService();
+class TestDomainReliabilityServiceDelegate;
 }
 
 namespace extensions {
 class ChromeGuestViewManagerDelegate;
 class ChromeMetricsPrivateDelegate;
+class GlicPrivateInvokeFunction;
 }  // namespace extensions
 
 namespace first_run {
 class FirstRunMasterPrefsVariationsSeedTest;
 }
 
+namespace glic {
+class GlicMetricsProvider;
+class GlicSyntheticTrialManager;
+}  // namespace glic
+
 namespace metrics {
 class ChromeOSPerUserMetricsBrowserTestBase;
 class UkmConsentParamBrowserTest;
-class CrOSPreConsentMetricsManagerTest;
+class CrOSPreChoiceMetricsManagerTest;
 }  // namespace metrics
+
+namespace multistep_filter {
+class MultistepFilterServiceFactory;
+}  // namespace multistep_filter
 
 namespace optimization_guide {
 class ChromeOnDeviceModelServiceController;
@@ -68,6 +82,7 @@ class ChromeOnDeviceModelServiceController;
 namespace safe_browsing {
 class ChromeSafeBrowsingUIManagerDelegate;
 class DownloadUrlSBClient;
+class ExtensionTelemetryService;
 class IncidentReportingService;
 class ServicesDelegateDesktop;
 
@@ -86,7 +101,6 @@ class FieldTrialRegisterImpl;
 
 namespace feed {
 class FeedServiceDelegateImpl;
-class WebFeedSubscriptionCoordinator;
 }  // namespace feed
 
 namespace browser_sync {
@@ -141,21 +155,23 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class ChromeBrowserMainParts;
   friend class ChromeContentBrowserClient;
   friend class ChromeMetricsServicesManagerClient;
-  friend class ChromeSigninClient;
   friend class browser_sync::ChromeSyncClient;
-  friend bool domain_reliability::ShouldCreateService();
+  friend class ChromeDomainReliabilityDelegate;
+  friend class domain_reliability::TestDomainReliabilityServiceDelegate;
   friend class extensions::ChromeGuestViewManagerDelegate;
   friend class extensions::ChromeMetricsPrivateDelegate;
-  friend void ChangeMetricsReportingStateWithReply(
+  friend class extensions::GlicPrivateInvokeFunction;
+  friend void metrics::ChangeMetricsReportingStateWithReply(
       bool,
-      OnMetricsReportingCallbackType,
-      ChangeMetricsReportingStateCalledFrom);
-  friend void ApplyMetricsReportingPolicy();
+      metrics::OnMetricsReportingCallbackType,
+      metrics::ChangeMetricsReportingStateCalledFrom);
+  friend void metrics::ApplyMetricsReportingPolicy();
   friend class ash::settings::PerSessionSettingsUserActionTracker;
   friend class settings::MetricsReportingHandler;
   friend class UmaSessionStats;
   friend class safe_browsing::ChromeSafeBrowsingUIManagerDelegate;
   friend class safe_browsing::DownloadUrlSBClient;
+  friend class safe_browsing::ExtensionTelemetryService;
   friend class safe_browsing::IncidentReportingService;
   friend class safe_browsing::ServicesDelegateDesktop;
   friend class safe_browsing::internal::ReporterRunner;
@@ -167,17 +183,17 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class Browser;
   friend class BrowserProcessImpl;
   friend class GlobalFeatures;
+  friend class subscription_eligibility::SubscriptionEligibilityMetricsProvider;
   friend class supervised_user::MetricsServiceAccessorDelegateImpl;
-#if BUILDFLAG(ENABLE_GLIC) || BUILDFLAG(ENABLE_GLIC_ANDROID)
+  friend class glic::GlicMetricsProvider;
   friend class glic::GlicSyntheticTrialManager;
-#endif
+  friend class multistep_filter::MultistepFilterServiceFactory;
   friend class OptimizationGuideKeyedService;
   friend class optimization_guide::ChromeOnDeviceModelServiceController;
   friend class WebUITabStripFieldTrial;
   friend class feed::FeedServiceDelegateImpl;
   friend class FirstRunService;
   friend class browser_sync::DeviceInfoSyncClientImpl;
-  friend class feed::WebFeedSubscriptionCoordinator;
   friend class HttpsFirstModeService;
   friend class ash::DemoSession;
   friend class DataSharingUI;
@@ -202,9 +218,15 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class metrics::ChromeOSPerUserMetricsBrowserTestBase;
   friend class SampledOutClientIdSavedBrowserTest;
   friend class MetricsInternalsUIBrowserTestWithLog;
-  friend class metrics::CrOSPreConsentMetricsManagerTest;
+  friend class metrics::CrOSPreChoiceMetricsManagerTest;
   FRIEND_TEST_ALL_PREFIXES(ChromeMetricsServiceAccessorTest,
                            MetricsReportingEnabled);
+  FRIEND_TEST_ALL_PREFIXES(
+      ChromeMetricsServiceAccessorTest,
+      MetricsReportingEnabled_RestructureMetricsConsentSettings_FeatureOff);
+  FRIEND_TEST_ALL_PREFIXES(
+      ChromeMetricsServiceAccessorTest,
+      MetricsReportingEnabled_RestructureMetricsConsentSettings);
   FRIEND_TEST_ALL_PREFIXES(ChromeMetricsServicesManagerClientTest,
                            ForceTrialsDisablesReporting);
 

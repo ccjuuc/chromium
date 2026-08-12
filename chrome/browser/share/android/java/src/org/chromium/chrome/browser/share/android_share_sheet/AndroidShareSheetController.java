@@ -20,6 +20,7 @@ import org.chromium.base.Callback;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
@@ -37,10 +38,14 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconUtils;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
 import org.chromium.components.browser_ui.share.ShareParams;
+import org.chromium.ui.base.ActivityResultTracker;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.url.GURL;
 
 import java.util.Set;
@@ -54,10 +59,14 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
     private static @Nullable Runnable sShowShareSheetHookForTesting;
     private final BottomSheetController mController;
     private final Supplier<@Nullable Tab> mTabProvider;
-    private final Supplier<TabModelSelector> mTabModelSelectorSupplier;
+    private final Supplier<@Nullable TabModelSelector> mTabModelSelectorSupplier;
     private final Profile mProfile;
     private final Callback<Tab> mPrintCallback;
     private final TabGroupSharingController mTabGroupSharingController;
+    private final SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    private final ActivityResultTracker mActivityResultTracker;
+    private final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final SnackbarManager mSnackbarManager;
     private long mShareStartTime;
 
     private @Nullable LinkToTextCoordinator mLinkToTextCoordinator;
@@ -76,17 +85,25 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
      * @param printCallback The callback used to trigger print action.
      * @param tabGroupSharingController Controller for handling tab group sharing action.
      * @param deviceLockActivityLauncher The launcher to start up the device lock page.
+     * @param signinAndHistorySyncActivityLauncher The launcher for sign-in and history sync.
+     * @param activityResultTracker The launcher to track activity results.
+     * @param mModalDialogManagerSupplier The manager supplier for modal dialogs.
+     * @param snackbarManager The manager for snackbars.
      */
     public static void showShareSheet(
             ShareParams params,
             ChromeShareExtras chromeShareExtras,
             BottomSheetController controller,
             Supplier<@Nullable Tab> tabProvider,
-            Supplier<TabModelSelector> tabModelSelectorSupplier,
+            Supplier<@Nullable TabModelSelector> tabModelSelectorSupplier,
             Profile profile,
             Callback<Tab> printCallback,
             TabGroupSharingController tabGroupSharingController,
-            DeviceLockActivityLauncher deviceLockActivityLauncher) {
+            DeviceLockActivityLauncher deviceLockActivityLauncher,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            ActivityResultTracker activityResultTracker,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            SnackbarManager snackbarManager) {
         if (sShowShareSheetHookForTesting != null) {
             sShowShareSheetHookForTesting.run();
             return;
@@ -99,7 +116,11 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
                         profile,
                         printCallback,
                         tabGroupSharingController,
-                        deviceLockActivityLauncher);
+                        deviceLockActivityLauncher,
+                        signinAndHistorySyncActivityLauncher,
+                        activityResultTracker,
+                        modalDialogManagerSupplier,
+                        snackbarManager);
         // If the current share is delegated to, once the link generation is complete, the call will
         // routes back to #showShareSheet eventually.
         if (!newController.processShareWithLinkToText(params, chromeShareExtras)) {
@@ -123,16 +144,24 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
      * @param printCallback The callback used to trigger print action.
      * @param tabGroupSharingController Controller for handling tab group sharing action.
      * @param deviceLockActivityLauncher The launcher to start up the device lock page.
+     * @param signinAndHistorySyncActivityLauncher The launcher for sign-in and history sync.
+     * @param activityResultTracker The launcher to track activity results.
+     * @param mModalDialogManagerSupplier The manager supplier for modal dialogs.
+     * @param snackbarManager The manager for snackbars.
      */
     @VisibleForTesting
     AndroidShareSheetController(
             BottomSheetController controller,
             Supplier<@Nullable Tab> tabProvider,
-            Supplier<TabModelSelector> tabModelSelectorSupplier,
+            Supplier<@Nullable TabModelSelector> tabModelSelectorSupplier,
             Profile profile,
             Callback<Tab> printCallback,
             TabGroupSharingController tabGroupSharingController,
-            DeviceLockActivityLauncher deviceLockActivityLauncher) {
+            DeviceLockActivityLauncher deviceLockActivityLauncher,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            ActivityResultTracker activityResultTracker,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            SnackbarManager snackbarManager) {
         mController = controller;
         mTabProvider = tabProvider;
         mTabModelSelectorSupplier = tabModelSelectorSupplier;
@@ -140,6 +169,10 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
         mPrintCallback = printCallback;
         mTabGroupSharingController = tabGroupSharingController;
         mDeviceLockActivityLauncher = deviceLockActivityLauncher;
+        mSigninAndHistorySyncActivityLauncher = signinAndHistorySyncActivityLauncher;
+        mActivityResultTracker = activityResultTracker;
+        mModalDialogManagerSupplier = modalDialogManagerSupplier;
+        mSnackbarManager = snackbarManager;
     }
 
     @Override
@@ -195,7 +228,11 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
                             isInMultiWindow,
                             mLinkToTextCoordinator,
                             mDeviceLockActivityLauncher,
-                            mShareStartTime);
+                            mShareStartTime,
+                            mSigninAndHistorySyncActivityLauncher,
+                            mActivityResultTracker,
+                            mModalDialogManagerSupplier,
+                            mSnackbarManager);
             if (actionProvider.getCustomActions().size() > 0) {
                 provider = actionProvider;
             }
@@ -283,6 +320,7 @@ public class AndroidShareSheetController implements ChromeOptionShareCallback {
                 profile,
                 new GURL(pageUrl),
                 size,
+                /* fallbackToHost= */ true,
                 (Bitmap icon, GURL iconUrl) -> {
                     onFaviconRetrieved(context, icon, size, onUriReady);
                     faviconHelper.destroy();

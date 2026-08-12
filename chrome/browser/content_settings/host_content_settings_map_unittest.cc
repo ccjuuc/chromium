@@ -26,6 +26,7 @@
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/content_settings/mock_settings_observer.h"
+#include "chrome/browser/content_settings/one_time_permission_provider.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/client_hints/common/client_hints.h"
@@ -45,6 +46,7 @@
 #include "components/content_settings/core/common/content_settings_constraints.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_types.mojom-shared.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/host_indexed_content_settings.h"
@@ -61,10 +63,22 @@
 #include "net/base/schemeful_site.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/cookies/static_cookie_policy.h"
+#include "services/device/public/cpp/device_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_builder.h"
+#include "extensions/common/mojom/api_permission_id.mojom.h"
+#include "extensions/common/permissions/api_permission_set.h"
+#include "extensions/common/permissions/manifest_permission.h"
+#include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/url_pattern_set.h"
+#endif
 
 using content_settings::SettingSource;
 using content_settings::mojom::SessionModel;
@@ -75,6 +89,7 @@ using ::testing::MockFunction;
 using ::testing::Property;
 using ::testing::ResultOf;
 using ::testing::Return;
+using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 
 namespace {
@@ -102,7 +117,7 @@ class MockUserModifiableProvider
                bool(const ContentSettingsPattern&,
                     const ContentSettingsPattern&,
                     ContentSettingsType,
-                    base::Value&&,
+                    const base::Value&,
                     const content_settings::ContentSettingConstraints&));
 
   MOCK_METHOD1(ClearAllContentSettingsRules, void(ContentSettingsType));
@@ -118,7 +133,7 @@ class MockUserModifiableProvider
                bool(const ContentSettingsPattern& primary_pattern,
                     const ContentSettingsPattern& secondary_pattern,
                     ContentSettingsType content_type));
-  MOCK_METHOD3(ResetLastVisitTime,
+  MOCK_METHOD3(SetAutorevocationBypassedByUser,
                bool(const ContentSettingsPattern& primary_pattern,
                     const ContentSettingsPattern& secondary_pattern,
                     ContentSettingsType content_type));
@@ -135,7 +150,10 @@ class MockUserModifiableProvider
 class HostContentSettingsMapTest : public testing::Test {
  public:
   HostContentSettingsMapTest()
-      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
+    feature_list_.InitAndEnableFeature(
+        ::features::kSensorsAllowAskBlockPermissionModel);
+  }
 
   void FastForwardTime(base::TimeDelta delta) {
     task_environment_.FastForwardBy(delta);
@@ -247,8 +265,8 @@ TEST_F(HostContentSettingsMapTest, DefaultValues) {
             host_content_settings_map->GetDefaultContentSetting(
                 ContentSettingsType::JAVASCRIPT));
   EXPECT_EQ(CONTENT_SETTING_ALLOW, host_content_settings_map->GetContentSetting(
-                                       GURL(chrome::kChromeUINewTabURL),
-                                       GURL(chrome::kChromeUINewTabURL),
+                                       chrome::ChromeUINewTabURLAsGURL(),
+                                       chrome::ChromeUINewTabURLAsGURL(),
                                        ContentSettingsType::JAVASCRIPT));
 
   host_content_settings_map->SetDefaultContentSetting(
@@ -331,7 +349,7 @@ TEST_F(HostContentSettingsMapTest, GetWebsiteSettingsForOneType) {
   // Add setting for hosts[0].
   base::Value client_hint_value(42);
 
-  base::Value::Dict client_hints_dictionary;
+  base::DictValue client_hints_dictionary;
   client_hints_dictionary.Set(client_hints::kClientHintsSettingKey,
                               {std::move(client_hint_value)});
   host_content_settings_map->SetWebsiteSettingDefaultScope(
@@ -1141,6 +1159,145 @@ TEST_F(HostContentSettingsMapTest, SetOneTimeGeolocationSetting) {
   EXPECT_EQ(info.secondary_pattern.ToString(), "*");
 }
 
+TEST_F(HostContentSettingsMapTest, SetOneTimeAndPersistentGeolocationSetting) {
+  TestingProfile profile;
+  auto* map = HostContentSettingsMapFactory::GetForProfile(&profile);
+  GURL url("https://example.com");
+
+  // Set persistent approximate grant.
+  map->SetPermissionSettingDefaultScope(
+      url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting(PermissionOption::kAllowed, PermissionOption::kAsk),
+      content_settings::ContentSettingConstraints());
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kAllowed, PermissionOption::kAsk),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::DURABLE);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+
+  // Set one-time precise grant on top.
+  content_settings::ContentSettingConstraints constraints;
+  constraints.set_session_model(SessionModel::ONE_TIME);
+  map->SetPermissionSettingDefaultScope(
+      url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting(PermissionOption::kAllowed,
+                         PermissionOption::kAllowed),
+      constraints);
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kAllowed,
+                           PermissionOption::kAllowed),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::ONE_TIME);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+  std::vector<ContentSettingPatternSource> settings =
+      map->GetSettingsForOneType(ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  EXPECT_THAT(settings, SizeIs(3));
+
+  // Simulate the one-time permission expiring.
+  static_cast<OneTimePermissionProvider*>(
+      map->content_settings_providers_
+          [content_settings::ProviderType::kOneTimePermissionProvider]
+              .get())
+      ->OnLastPageFromOriginClosed(
+          url::Origin::Create(GURL("https://example.com:443")));
+  EXPECT_THAT(
+      map->GetSettingsForOneType(ContentSettingsType::GEOLOCATION_WITH_OPTIONS),
+      SizeIs(2));
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kAllowed, PermissionOption::kAsk),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::DURABLE);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+}
+
+TEST_F(HostContentSettingsMapTest,
+       SetOneTimeGeolocationGrantWithPersistentPermissionBlocked) {
+  TestingProfile profile;
+  auto* map = HostContentSettingsMapFactory::GetForProfile(&profile);
+  GURL url("https://example.com");
+
+  // Set persistent blocked state.
+  map->SetPermissionSettingDefaultScope(
+      url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting(PermissionOption::kDenied, PermissionOption::kDenied),
+      content_settings::ContentSettingConstraints());
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kDenied,
+                           PermissionOption::kDenied),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::DURABLE);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+
+  // Set one-time approximate grant.
+  content_settings::ContentSettingConstraints constraints;
+  constraints.set_session_model(SessionModel::ONE_TIME);
+  map->SetPermissionSettingDefaultScope(
+      url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting(PermissionOption::kAllowed, PermissionOption::kDenied),
+      constraints);
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kAllowed,
+                           PermissionOption::kDenied),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::ONE_TIME);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+  std::vector<ContentSettingPatternSource> settings =
+      map->GetSettingsForOneType(ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  EXPECT_THAT(settings, SizeIs(3));
+
+  // Simulate the one-time permission expiring.
+  static_cast<OneTimePermissionProvider*>(
+      map->content_settings_providers_
+          [content_settings::ProviderType::kOneTimePermissionProvider]
+              .get())
+      ->OnLastPageFromOriginClosed(
+          url::Origin::Create(GURL("https://example.com:443")));
+  EXPECT_THAT(
+      map->GetSettingsForOneType(ContentSettingsType::GEOLOCATION_WITH_OPTIONS),
+      SizeIs(2));
+  {
+    content_settings::SettingInfo info;
+    EXPECT_EQ(
+        GeolocationSetting(PermissionOption::kAsk, PermissionOption::kDenied),
+        std::get<GeolocationSetting>(map->GetPermissionSetting(
+            url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS, &info)));
+    EXPECT_EQ(info.metadata.session_model(), SessionModel::DURABLE);
+    EXPECT_EQ(info.source, SettingSource::kUser);
+    EXPECT_EQ(info.primary_pattern.ToString(), "https://example.com:443");
+    EXPECT_EQ(info.secondary_pattern.ToString(), "*");
+  }
+}
+
 TEST_F(HostContentSettingsMapTest,
        IncognitoInheritGeolocationWithOptionPartialBlocks) {
   // The cookie setting has an initial value of ALLOW, so all changes should be
@@ -1340,7 +1497,7 @@ TEST_F(HostContentSettingsMapTest, IncognitoDontInheritWebsiteSetting) {
             otr_map->GetWebsiteSetting(host, host,
                                        ContentSettingsType::USB_CHOOSER_DATA));
 
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set("test", "value");
   host_content_settings_map->SetWebsiteSettingDefaultScope(
       host, host, ContentSettingsType::USB_CHOOSER_DATA,
@@ -1452,6 +1609,37 @@ TEST_F(HostContentSettingsMapTest, GetUserModifiableContentSetting) {
             map->GetContentSetting(url, url, ContentSettingsType::COOKIES));
 }
 
+TEST_F(HostContentSettingsMapTest, GetUserModifiablePermissionSetting) {
+  base::test::ScopedFeatureList enable_approximate_location(
+      content_settings::features::kApproximateGeolocationPermission);
+
+  GURL url("http://user_exception_allow.com");
+
+  TestingProfile profile;
+  // Arbitrarily using cookies as content type to test.
+  profile.GetTestingPrefService()->SetManagedPref(
+      prefs::kManagedDefaultGeolocationSetting,
+      std::make_unique<base::Value>(CONTENT_SETTING_BLOCK));
+
+  HostContentSettingsMap* map =
+      HostContentSettingsMapFactory::GetForProfile(&profile);
+  map->SetPermissionSettingDefaultScope(
+      url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
+      GeolocationSetting{PermissionOption::kAllowed,
+                         PermissionOption::kAllowed});
+
+  EXPECT_EQ(PermissionSetting(GeolocationSetting{PermissionOption::kAllowed,
+                                                 PermissionOption::kAllowed}),
+            map->GetUserModifiablePermissionSetting(
+                url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS));
+  EXPECT_TRUE(
+      content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(ContentSettingsType::GEOLOCATION_WITH_OPTIONS)
+          ->delegate()
+          .IsBlocked(map->GetPermissionSetting(
+              url, url, ContentSettingsType::GEOLOCATION_WITH_OPTIONS)));
+}
+
 /**
  * Test that HostContentSettingsMap::GetUserModifiableContentSetting() ignores
  * the relative int value of the providers when determining whether a provider
@@ -1530,9 +1718,9 @@ TEST_F(HostContentSettingsMapTest, CanonicalizeExceptionsUnicodeOnly) {
   {
     ScopedDictPrefUpdate update(prefs,
                                 GetPrefName(ContentSettingsType::COOKIES));
-    base::Value::Dict& all_settings_dictionary = update.Get();
+    base::DictValue& all_settings_dictionary = update.Get();
 
-    base::Value::Dict dummy_payload;
+    base::DictValue dummy_payload;
     dummy_payload.Set("setting", CONTENT_SETTING_ALLOW);
     all_settings_dictionary.Set("[*.]\xC4\x87ira.com,*",
                                 std::move(dummy_payload));
@@ -1540,7 +1728,7 @@ TEST_F(HostContentSettingsMapTest, CanonicalizeExceptionsUnicodeOnly) {
 
   HostContentSettingsMapFactory::GetForProfile(&profile);
 
-  const base::Value::Dict& all_settings_dictionary =
+  const base::DictValue& all_settings_dictionary =
       prefs->GetDict(GetPrefName(ContentSettingsType::COOKIES));
   EXPECT_FALSE(all_settings_dictionary.FindDict("[*.]\xC4\x87ira.com,*"));
   EXPECT_TRUE(all_settings_dictionary.FindDict("[*.]xn--ira-ppa.com,*"));
@@ -1812,7 +2000,7 @@ TEST_F(HostContentSettingsMapTest, GuestProfile) {
             host_content_settings_map->GetContentSetting(
                 host, host, ContentSettingsType::COOKIES));
 
-  const base::Value::Dict& all_settings_dictionary =
+  const base::DictValue& all_settings_dictionary =
       profile->GetPrefs()->GetDict(GetPrefName(ContentSettingsType::COOKIES));
   EXPECT_TRUE(all_settings_dictionary.empty());
 }
@@ -1843,14 +2031,14 @@ TEST_F(HostContentSettingsMapTest, GuestProfileDefaultSetting) {
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(HostContentSettingsMapTest, InvalidPattern) {
-  // This is a regression test for crbug.com/618529, which fixed a memory leak
+  // This is a regression test for crbug.com/40472343, which fixed a memory leak
   // when a website setting was set under a URL that mapped to an invalid
   // pattern.
   TestingProfile profile;
   HostContentSettingsMap* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(&profile);
   GURL unsupported_url = GURL("view-source:http://www.google.com");
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set("test", "value");
   host_content_settings_map->SetWebsiteSettingDefaultScope(
       unsupported_url, unsupported_url, ContentSettingsType::APP_BANNER,
@@ -2310,7 +2498,7 @@ TEST_F(HostContentSettingsMapTest, GetPatternsFromScopingType) {
   //   WebsiteSettingsInfo::REQUESTING_SCHEMEFUL_SITE_ONLY_SCOPE,
   host_content_settings_map->SetWebsiteSettingDefaultScope(
       primary_url, secondary_url, ContentSettingsType::COOKIE_CONTROLS_METADATA,
-      base::Value(base::Value::Dict()));
+      base::Value(base::DictValue()));
 
   settings = host_content_settings_map->GetSettingsForOneType(
       ContentSettingsType::COOKIE_CONTROLS_METADATA);
@@ -2858,7 +3046,7 @@ TEST_F(HostContentSettingsMapTest, Increments3pcSettingsMetrics) {
   t.ExpectUniqueSample(base_histogram + ".DomainWildcardAllowThirdParty", 1, 1);
 }
 
-// Regression test for https://crbug.com/1497777.
+// Regression test for https://crbug.com/40075934.
 TEST_F(HostContentSettingsMapTest, IncognitoInheritSaaAndRenew) {
   TestingProfile profile;
   GURL host("https://example.com/");
@@ -2904,31 +3092,6 @@ TEST_F(HostContentSettingsMapTest, ShutdownDuringExpirationAsanTest) {
 
   host_content_settings_map->ShutdownOnUIThread();
   FastForwardTime(ttl);
-}
-
-TEST_F(HostContentSettingsMapTest, TrackingProtectionMetrics) {
-  const ContentSettingsType type = ContentSettingsType::TRACKING_PROTECTION;
-  TestingProfile profile;
-  auto* map = HostContentSettingsMapFactory::GetForProfile(&profile);
-  map->SetContentSettingCustomScope(
-      ContentSettingsPattern::Wildcard(),
-      ContentSettingsPattern::FromString("https://example1.com"), type,
-      CONTENT_SETTING_ALLOW);
-  map->SetContentSettingCustomScope(
-      ContentSettingsPattern::Wildcard(),
-      ContentSettingsPattern::FromString("https://example2.com"), type,
-      CONTENT_SETTING_ALLOW);
-  map->SetContentSettingCustomScope(
-      ContentSettingsPattern::Wildcard(),
-      ContentSettingsPattern::FromString("https://example3.com"), type,
-      CONTENT_SETTING_ALLOW);
-
-  base::HistogramTester t;
-  auto map2 = base::MakeRefCounted<HostContentSettingsMap>(
-      profile.GetPrefs(), false, true, true, true);
-  map2->ShutdownOnUIThread();
-  t.ExpectUniqueSample(
-      "ContentSettings.RegularProfile.Exceptions.tracking-protection", 3, 1);
 }
 
 // File access is not implemented on Android. Luckily we don't need it for
@@ -2978,4 +3141,131 @@ TEST_F(HostContentSettingsMapTest, ExtensionContentSetting) {
             map->GetContentSetting(domain_url, domain_url,
                                    ContentSettingsType::SOUND));
 }
-#endif
+
+TEST_F(HostContentSettingsMapTest, ExtensionPermissionsProvider) {
+  TestingProfile profile;
+
+  scoped_refptr<const extensions::Extension> ext1 =
+      extensions::ExtensionBuilder("Test Extension 1").Build();
+  scoped_refptr<const extensions::Extension> ext2 =
+      extensions::ExtensionBuilder("Test Extension 2").Build();
+
+  // Add api permission geolocation for ext1.
+  extensions::APIPermissionSet apis;
+  apis.insert(extensions::mojom::APIPermissionID::kGeolocation);
+  ext1->permissions_data()->SetPermissions(
+      std::make_unique<extensions::PermissionSet>(
+          std::move(apis), extensions::ManifestPermissionSet(),
+          extensions::URLPatternSet(), extensions::URLPatternSet()),
+      std::make_unique<extensions::PermissionSet>());
+
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+  registry->AddEnabled(ext1);
+  registry->AddEnabled(ext2);
+  registry->TriggerOnLoaded(ext1.get());
+  registry->TriggerOnLoaded(ext2.get());
+
+  // Validate ext1 is allowed, ext2 is ask.
+  HostContentSettingsMap* map =
+      HostContentSettingsMapFactory::GetForProfile(&profile);
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            map->GetContentSetting(ext1->url(), ext1->url(),
+                                   ContentSettingsType::GEOLOCATION));
+  EXPECT_EQ(CONTENT_SETTING_ASK,
+            map->GetContentSetting(ext2->url(), ext2->url(),
+                                   ContentSettingsType::GEOLOCATION));
+
+  // Override ext1 to block, ext2 still ask.
+  map->SetContentSettingCustomScope(
+      ContentSettingsPattern::FromURL(ext1->url()),
+      ContentSettingsPattern::Wildcard(), ContentSettingsType::GEOLOCATION,
+      CONTENT_SETTING_BLOCK);
+  EXPECT_EQ(CONTENT_SETTING_BLOCK,
+            map->GetContentSetting(ext1->url(), ext1->url(),
+                                   ContentSettingsType::GEOLOCATION));
+  EXPECT_EQ(CONTENT_SETTING_ASK,
+            map->GetContentSetting(ext2->url(), ext2->url(),
+                                   ContentSettingsType::GEOLOCATION));
+}
+
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
+TEST_F(HostContentSettingsMapTest, RecordDefaultSensorsSetting) {
+  TestingProfile profile;
+  HostContentSettingsMap* host_content_settings_map =
+      HostContentSettingsMapFactory::GetForProfile(&profile);
+
+  constexpr ContentSetting kDefaultSettingsToTest[] = {
+      CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK};
+
+  for (ContentSetting setting : kDefaultSettingsToTest) {
+    base::HistogramTester histogram_tester;
+    host_content_settings_map->SetDefaultContentSetting(
+        ContentSettingsType::SENSORS, setting);
+    auto map = base::MakeRefCounted<HostContentSettingsMap>(
+        profile.GetPrefs(),
+        /*is_off_the_record=*/false,
+        /*store_last_modified=*/false,
+        /*restore_session=*/false,
+        /*should_record_metrics=*/true);
+
+    histogram_tester.ExpectUniqueSample(
+        "ContentSettings.RegularProfile.DefaultSensorsSetting", setting, 1);
+
+    map->ShutdownOnUIThread();
+  }
+}
+
+TEST_F(HostContentSettingsMapTest, DeleteStorageAccessRwsGrantsOnStartup) {
+  TestingProfile profile;
+
+  // 1. Enable the feature.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      content_settings::features::kStorageAccessAPIRelatedWebsiteSets);
+
+  // Create map and inject grant.
+  scoped_refptr<HostContentSettingsMap> map_with_feature_enabled =
+      base::MakeRefCounted<HostContentSettingsMap>(
+          profile.GetPrefs(), /*is_off_the_record=*/false,
+          /*store_last_modified=*/false, /*restore_session=*/false,
+          /*should_record_metrics=*/false);
+
+  GURL requesting_url("https://requester.com");
+  GURL embedding_url("https://embedder.com");
+
+  content_settings::ContentSettingConstraints constraints;
+  constraints.set_decided_by_related_website_sets(true);
+
+  map_with_feature_enabled->SetContentSettingDefaultScope(
+      requesting_url, embedding_url, ContentSettingsType::STORAGE_ACCESS,
+      CONTENT_SETTING_ALLOW, constraints);
+
+  // Verify it is there.
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, map_with_feature_enabled->GetContentSetting(
+                                       requesting_url, embedding_url,
+                                       ContentSettingsType::STORAGE_ACCESS));
+
+  // Shutdown map_with_feature_enabled to make sure it is not used anymore.
+  map_with_feature_enabled->ShutdownOnUIThread();
+  map_with_feature_enabled.reset();
+
+  // 2. Disable the feature.
+  feature_list.Reset();
+  feature_list.InitAndDisableFeature(
+      content_settings::features::kStorageAccessAPIRelatedWebsiteSets);
+
+  // Create a new map with the same prefs.
+  scoped_refptr<HostContentSettingsMap> map_after_feature_disabled =
+      base::MakeRefCounted<HostContentSettingsMap>(
+          profile.GetPrefs(), /*is_off_the_record=*/false,
+          /*store_last_modified=*/false, /*restore_session=*/false,
+          /*should_record_metrics=*/false);
+
+  // Verify the grant is gone (deleted on startup).
+  EXPECT_EQ(CONTENT_SETTING_ASK, map_after_feature_disabled->GetContentSetting(
+                                     requesting_url, embedding_url,
+                                     ContentSettingsType::STORAGE_ACCESS));
+
+  map_after_feature_disabled->ShutdownOnUIThread();
+}

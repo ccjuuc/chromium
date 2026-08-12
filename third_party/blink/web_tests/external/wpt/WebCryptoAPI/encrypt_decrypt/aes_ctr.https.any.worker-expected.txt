@@ -1,11 +1,24 @@
 This is a testharness.js-based test.
+Found 17 FAIL, 0 TIMEOUT, 0 NOTRUN.
 [FAIL] importKey step: AES-CTR 192-bit key
   assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
-[FAIL] importKey step: AES-CTR 192-bit key with altered plaintext
+[FAIL] importKey step: AES-CTR 192-bit key with altered plaintext during call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step: AES-CTR 192-bit key with altered plaintext after call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step: AES-CTR 192-bit key with transferred plaintext during call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step: AES-CTR 192-bit key with transferred plaintext after call
   assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
 [FAIL] importKey step for decryption: AES-CTR 192-bit key
   assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
-[FAIL] importKey step for decryption: AES-CTR 192-bit key with altered ciphertext
+[FAIL] importKey step for decryption: AES-CTR 192-bit key with altered ciphertext during call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step for decryption: AES-CTR 192-bit key with altered ciphertext after call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step for decryption: AES-CTR 192-bit key with transferred ciphertext during call
+  assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
+[FAIL] importKey step for decryption: AES-CTR 192-bit key with transferred ciphertext after call
   assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code
 [FAIL] importKey step: AES-CTR 192-bit key without encrypt usage
   assert_unreached: importKey failed for AES-CTR 192-bit key Reached unreachable code

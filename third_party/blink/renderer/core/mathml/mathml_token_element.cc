@@ -50,7 +50,7 @@ void MathMLTokenElement::CollectStyleForPresentationAttribute(
     const AtomicString& value,
     HeapVector<CSSPropertyValue, 8>& style) {
   if (name == mathml_names::kMathvariantAttr &&
-      EqualIgnoringASCIICase(value, "normal")) {
+      EqualIgnoringAsciiCase(value, "normal")) {
     AddPropertyToPresentationAttributeStyle(
         style, CSSPropertyID::kTextTransform, CSSValueID::kNone);
   } else {
@@ -91,10 +91,9 @@ void MathMLTokenElement::ChildrenChanged(
 
 LayoutObject* MathMLTokenElement::CreateLayoutObject(
     const ComputedStyle& style) {
-  if (!style.IsDisplayMathType()) {
-    return MathMLElement::CreateLayoutObject(style);
-  }
-  return MakeGarbageCollected<LayoutMathMLBlockFlow>(this);
+  return style.IsDisplayMath()
+             ? MakeGarbageCollected<LayoutMathMLBlockFlow>(this)
+             : MathMLElement::CreateLayoutObject(style);
 }
 
 }  // namespace blink

@@ -45,6 +45,9 @@
 
 using testing::_;
 using testing::AnyNumber;
+using testing::ElementsAre;
+using testing::InSequence;
+using testing::Optional;
 using testing::Return;
 using testing::StrictMock;
 
@@ -65,6 +68,10 @@ class MockVideoFrameProvider : public cc::VideoFrameProvider {
   MOCK_METHOD0(GetCurrentFrame, scoped_refptr<media::VideoFrame>());
   MOCK_METHOD0(PutCurrentFrame, void());
   MOCK_METHOD0(OnContextLost, void());
+  MOCK_METHOD3(OnFramePresented,
+               void(base::TimeTicks,
+                    std::optional<base::TimeTicks>,
+                    std::optional<uint32_t>));
 
   base::TimeDelta GetPreferredRenderInterval() override {
     return preferred_interval;
@@ -162,7 +169,7 @@ class TestClientSharedImageInterface : public gpu::ClientSharedImageInterface {
   TestClientSharedImageInterface()
       : gpu::ClientSharedImageInterface(
             nullptr,
-            base::MakeRefCounted<gpu::GpuChannelHost>(
+            gpu::GpuChannelHost::Create(
                 0 /* channel_id */,
                 gpu::GPUInfo(),
                 gpu::GpuFeatureInfo(),
@@ -180,7 +187,14 @@ class TestClientSharedImageInterface : public gpu::ClientSharedImageInterface {
 class VideoFrameSubmitterTest : public testing::Test {
  public:
   VideoFrameSubmitterTest()
-      : now_src_(new base::SimpleTestTickClock()),
+      : VideoFrameSubmitterTest(
+            base::test::TaskEnvironment::TimeSource::DEFAULT) {}
+
+ protected:
+  explicit VideoFrameSubmitterTest(
+      base::test::TaskEnvironment::TimeSource time_source)
+      : task_environment_(time_source),
+        now_src_(new base::SimpleTestTickClock()),
         begin_frame_source_(new viz::FakeExternalBeginFrameSource(0.f, false)),
         video_frame_provider_(new StrictMock<MockVideoFrameProvider>()),
         context_provider_(viz::TestContextProvider::CreateRaster()),
@@ -191,6 +205,7 @@ class VideoFrameSubmitterTest : public testing::Test {
     task_environment_.RunUntilIdle();
   }
 
+ public:
   void TearDown() override {
     // Make sure GpuChannelHost is completely destroyed to avoid ASAN memory
     // leak errors.
@@ -1165,6 +1180,7 @@ TEST_F(VideoFrameSubmitterTest, ProcessTimingDetails) {
   EXPECT_CALL(*video_frame_provider_, UpdateCurrentFrame)
       .WillRepeatedly(Return(true));
   EXPECT_CALL(*video_frame_provider_, PutCurrentFrame).Times(AnyNumber());
+  EXPECT_CALL(*video_frame_provider_, OnFramePresented).Times(AnyNumber());
   EXPECT_CALL(*sink_, DoSubmitCompositorFrame).WillRepeatedly(sink_submit);
   EXPECT_CALL(*resource_provider_, AppendQuads).Times(AnyNumber());
   EXPECT_CALL(*resource_provider_, PrepareSendToParent).Times(AnyNumber());
@@ -1188,6 +1204,92 @@ TEST_F(VideoFrameSubmitterTest, ProcessTimingDetails) {
   submitter_->StopRendering();
   EXPECT_EQ(reports, 1);
   task_environment_.RunUntilIdle();
+}
+
+TEST_F(VideoFrameSubmitterTest, CallsFramePresentedCallback) {
+  constexpr int kFps = 30;
+  constexpr base::TimeDelta kFrameDuration = base::Seconds(1.0 / kFps);
+  constexpr int kFramesToRun = 3;
+  HashMap<uint32_t, viz::FrameTimingDetails> timing_details;
+  HashMap<uint32_t, viz::FrameTimingDetails> all_timing_details;
+  struct Timestamps {
+    bool operator==(const Timestamps& other) const = default;
+    base::TimeTicks display_time;
+    std::optional<base::TimeTicks> capture_begin_time;
+    std::optional<uint32_t> rtp_timestamp;
+  };
+  Vector<Timestamps> timestamps;
+
+  MakeSubmitter(base::BindLambdaForTesting(
+      [&](const cc::VideoPlaybackRoughnessReporter::Measurement& measurement) {
+      }));
+  EXPECT_CALL(*sink_, SetNeedsBeginFrame(true));
+  submitter_->StartRendering();
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(IsRendering());
+
+  auto sink_submit = [&](const viz::LocalSurfaceId&,
+                         viz::CompositorFrame* frame) {
+    auto token = frame->metadata.frame_token;
+    viz::FrameTimingDetails details;
+    details.presentation_feedback.timestamp =
+        base::TimeTicks() + kFrameDuration * token;
+    details.presentation_feedback.flags =
+        gfx::PresentationFeedback::kHWCompletion;
+    timing_details.clear();
+    timing_details.Set(token, details);
+    all_timing_details.Set(token, details);
+  };
+
+  EXPECT_CALL(*video_frame_provider_, UpdateCurrentFrame)
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(*video_frame_provider_, PutCurrentFrame).Times(AnyNumber());
+  EXPECT_CALL(*video_frame_provider_, OnFramePresented)
+      .WillRepeatedly([&](base::TimeTicks display_time,
+                          std::optional<base::TimeTicks> capture_begin_time,
+                          std::optional<uint32_t> rtp_timestamp) {
+        timestamps.push_back(
+            Timestamps{display_time, capture_begin_time, rtp_timestamp});
+      });
+  EXPECT_CALL(*sink_, DoSubmitCompositorFrame).WillRepeatedly(sink_submit);
+  EXPECT_CALL(*resource_provider_, AppendQuads).Times(AnyNumber());
+  EXPECT_CALL(*resource_provider_, PrepareSendToParent).Times(AnyNumber());
+  EXPECT_CALL(*resource_provider_, ReleaseFrameResources).Times(AnyNumber());
+
+  for (int i = 0; i < kFramesToRun; i++) {
+    auto frame = media::VideoFrame::CreateFrame(
+        media::PIXEL_FORMAT_YV12, gfx::Size(8, 8), gfx::Rect(gfx::Size(8, 8)),
+        gfx::Size(8, 8), i * kFrameDuration);
+    frame->metadata().capture_begin_time =
+        base::TimeTicks() + i * kFrameDuration;
+    frame->metadata().rtp_timestamp = i * kFrameDuration.InMilliseconds() * 90;
+    EXPECT_CALL(*video_frame_provider_, GetCurrentFrame())
+        .WillRepeatedly(Return(frame));
+
+    auto args = begin_frame_source_->CreateBeginFrameArgs(BEGINFRAME_FROM_HERE,
+                                                          now_src_.get());
+    OnBeginFrame(args, timing_details, Vector<viz::ReturnedResource>());
+    task_environment_.RunUntilIdle();
+    AckSubmittedFrame();
+  }
+  EXPECT_CALL(*sink_, SetNeedsBeginFrame(false));
+  submitter_->StopRendering();
+  task_environment_.RunUntilIdle();
+
+  Vector<uint32_t> frame_tokens;
+  for (auto entry : all_timing_details.Keys()) {
+    frame_tokens.push_back(entry);
+  }
+  std::sort(frame_tokens.begin(), frame_tokens.end());
+  EXPECT_EQ(all_timing_details.size(), 3u);
+  EXPECT_THAT(timestamps,
+              ElementsAre(Timestamps{all_timing_details.at(frame_tokens[0])
+                                         .presentation_feedback.timestamp,
+                                     base::TimeTicks(), 0},
+                          Timestamps{all_timing_details.at(frame_tokens[1])
+                                         .presentation_feedback.timestamp,
+                                     base::TimeTicks() + kFrameDuration,
+                                     kFrameDuration.InMilliseconds() * 90}));
 }
 
 TEST_F(VideoFrameSubmitterTest, OpaqueFramesNotifyEmbedder) {
@@ -1231,6 +1333,166 @@ TEST_F(VideoFrameSubmitterTest, OpaqueFramesNotifyEmbedder) {
   EXPECT_CALL(*surface_embedder_, OnOpacityChanged(false)).Times(0);
   submitter_->DidReceiveFrame();
   DrainMainThread();
+}
+
+// Uses MOCK_TIME so base::TimeTicks::Now() is controlled for display-time and
+// vsync tests. Friendship with VideoFrameSubmitter is not inherited from the
+// base fixture, so this derived type remains a friend in
+// video_frame_submitter.h for SnapToNearestVsync / last_begin_frame_args_ test
+// hooks.
+class VideoFrameSubmitterMockTimeTest : public VideoFrameSubmitterTest {
+ public:
+  VideoFrameSubmitterMockTimeTest()
+      : VideoFrameSubmitterTest(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  base::TimeTicks SnapToNearestVsync(base::TimeTicks estimate) {
+    return submitter_->SnapToNearestVsync(estimate);
+  }
+  void SetLastBeginFrameArgs(const viz::BeginFrameArgs& args) {
+    submitter_->last_begin_frame_args_ = args;
+  }
+};
+
+// Before any frame has been presented, the EMEA is uninitialised and the
+// method must return nullopt rather than a bogus estimate.
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       GetExpectedDisplayTimeReturnsNulloptInitially) {
+  EXPECT_EQ(submitter_->GetExpectedDisplayTime(), std::nullopt);
+}
+
+// Validates that GetExpectedDisplayTime() returns a vsync-snapped estimate
+// based on the observed receive-to-present timing.
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       GetExpectedDisplayTimeReturnsAdaptiveEstimateAfterFeedback) {
+  EXPECT_CALL(*sink_, SetNeedsBeginFrame(true));
+  submitter_->StartRendering();
+  DrainMainThread();
+
+  uint32_t submitted_token = 0;
+  EXPECT_CALL(*video_frame_provider_, UpdateCurrentFrame(_, _))
+      .WillOnce(Return(true));
+  EXPECT_CALL(*video_frame_provider_, OnFramePresented).Times(1);
+
+  EXPECT_GET_PUT_FRAME();
+  EXPECT_CALL(*sink_, DoSubmitCompositorFrame(_, _))
+      .WillOnce([&submitted_token](const viz::LocalSurfaceId&,
+                                   viz::CompositorFrame* frame) {
+        submitted_token = frame->metadata.frame_token;
+      });
+  EXPECT_CALL(*resource_provider_, AppendQuads(_, _, _, _));
+  EXPECT_CALL(*resource_provider_, PrepareSendToParent(_));
+  EXPECT_CALL(*resource_provider_, ReleaseFrameResources());
+
+  auto args = begin_frame_source_->CreateBeginFrameArgs(BEGINFRAME_FROM_HERE,
+                                                        now_src_.get());
+  OnBeginFrame(args, HashMap<uint32_t, viz::FrameTimingDetails>(),
+               Vector<viz::ReturnedResource>());
+  DrainMainThread();
+
+  // Provide presentation feedback with a known receive-to-present delta.
+  constexpr base::TimeDelta kReceiveToPresent = base::Milliseconds(8);
+  const base::TimeTicks receive_time =
+      base::TimeTicks() + base::Milliseconds(100);
+  const base::TimeTicks present_time = receive_time + kReceiveToPresent;
+
+  HashMap<uint32_t, viz::FrameTimingDetails> timing_details;
+  viz::FrameTimingDetails details;
+  details.received_compositor_frame_timestamp = receive_time;
+  details.presentation_feedback.timestamp = present_time;
+  details.presentation_feedback.flags =
+      gfx::PresentationFeedback::kHWCompletion;
+  timing_details.Set(submitted_token, details);
+
+  EXPECT_CALL(*video_frame_provider_, UpdateCurrentFrame(_, _))
+      .WillOnce(Return(false));
+  EXPECT_CALL(*sink_, DidNotProduceFrame(_));
+
+  // Sync now_src_ to base::TimeTicks::Now() so that args2.frame_time equals
+  // Now(), making offset = kReceiveToPresent and the expected snap
+  // deterministic.
+  now_src_->SetNowTicks(base::TimeTicks::Now());
+  auto args2 = begin_frame_source_->CreateBeginFrameArgs(BEGINFRAME_FROM_HERE,
+                                                         now_src_.get());
+  OnBeginFrame(args2, timing_details, Vector<viz::ReturnedResource>());
+  DrainMainThread();
+
+  auto expected = submitter_->GetExpectedDisplayTime();
+  ASSERT_TRUE(expected.has_value());
+  // kReceiveToPresent (8ms) < half of DefaultInterval (~8.33ms), so the raw
+  // estimate rounds to the same BeginFrame boundary as args2.frame_time (snap
+  // to nearest on the vsync grid).
+  EXPECT_EQ(expected.value(), args2.frame_time);
+  // EMA comes only from (presentation_time - receive_time) in feedback, not
+  // from deadline_max. deadline_max is only the pre-EMA default for the trace
+  // field |frame_expected_display_time|; GetExpectedDisplayTime() is nullopt
+  // until EMA is initialized, then uses Now()+EMA (snapped)—so it must not
+  // coincide with deadline_max here.
+  const base::TimeTicks deadline_max_for_args2 =
+      args2.frame_time + 2 * args2.interval;
+  EXPECT_NE(expected.value(), deadline_max_for_args2);
+}
+
+// SnapToNearestVsync returns the estimate unchanged when no valid BeginFrame
+// has been received (default interval is -1µs, not positive).
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       SnapToNearestVsync_UnknownIntervalReturnsEstimateUnchanged) {
+  const base::TimeTicks estimate = base::TimeTicks() + base::Milliseconds(42);
+  EXPECT_EQ(SnapToNearestVsync(estimate), estimate);
+}
+
+// An estimate halfway between two boundaries rounds to the upper boundary
+// (std::llround half-away-from-zero).
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       SnapToNearestVsync_MidpointRoundsToUpperBoundary) {
+  const base::TimeDelta kInterval = base::Milliseconds(16);
+  const base::TimeTicks kPhase = base::TimeTicks() + base::Milliseconds(100);
+  SetLastBeginFrameArgs(viz::BeginFrameArgs::Create(
+      BEGINFRAME_FROM_HERE, 1u, 1u, kPhase, kPhase + kInterval, kInterval,
+      viz::BeginFrameArgs::NORMAL));
+
+  EXPECT_EQ(SnapToNearestVsync(kPhase + kInterval / 2), kPhase + kInterval);
+}
+
+// An estimate before the phase snaps to the nearest boundary (here, kPhase).
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       SnapToNearestVsync_EstimateBeforePhaseSnapsToNearestBoundary) {
+  const base::TimeDelta kInterval = base::Milliseconds(16);
+  const base::TimeTicks kPhase = base::TimeTicks() + base::Milliseconds(100);
+  SetLastBeginFrameArgs(viz::BeginFrameArgs::Create(
+      BEGINFRAME_FROM_HERE, 1u, 1u, kPhase, kPhase + kInterval, kInterval,
+      viz::BeginFrameArgs::NORMAL));
+
+  EXPECT_EQ(SnapToNearestVsync(kPhase - base::Milliseconds(1)), kPhase);
+}
+
+// An estimate that falls exactly on a vsync boundary is returned as-is.
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       SnapToNearestVsync_ExactBoundaryReturnedUnchanged) {
+  const base::TimeDelta kInterval = base::Milliseconds(16);
+  const base::TimeTicks kPhase = base::TimeTicks() + base::Milliseconds(100);
+  SetLastBeginFrameArgs(viz::BeginFrameArgs::Create(
+      BEGINFRAME_FROM_HERE, 1u, 1u, kPhase, kPhase + kInterval, kInterval,
+      viz::BeginFrameArgs::NORMAL));
+
+  const base::TimeTicks on_boundary = kPhase + 2 * kInterval;
+  EXPECT_EQ(SnapToNearestVsync(on_boundary), on_boundary);
+}
+
+// ε past an exact boundary still maps to that boundary under snap-to-nearest
+// (contrast with strict ceiling, which would add a full interval).
+TEST_F(VideoFrameSubmitterMockTimeTest,
+       SnapToNearestVsync_JustPastBoundaryStaysOnBoundary) {
+  const base::TimeDelta kInterval = base::Milliseconds(16);
+  const base::TimeTicks kPhase = base::TimeTicks() + base::Milliseconds(100);
+  SetLastBeginFrameArgs(viz::BeginFrameArgs::Create(
+      BEGINFRAME_FROM_HERE, 1u, 1u, kPhase, kPhase + kInterval, kInterval,
+      viz::BeginFrameArgs::NORMAL));
+
+  const base::TimeTicks kBoundary = kPhase + kInterval;
+  const base::TimeTicks estimate = kBoundary + base::Microseconds(1);
+
+  EXPECT_EQ(SnapToNearestVsync(estimate), kBoundary);
 }
 
 }  // namespace blink

@@ -6,6 +6,7 @@
 #define REMOTING_HOST_CHROMOTING_HOST_SERVICES_CLIENT_H_
 
 #include <memory>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "base/sequence_checker.h"
@@ -31,16 +32,12 @@ class ChromotingHostServicesClient final
   ChromotingHostServicesClient();
   explicit ChromotingHostServicesClient(
       const mojo::NamedPlatformChannel::ServerName& server_name);
+  explicit ChromotingHostServicesClient(
+      const std::vector<mojo::NamedPlatformChannel::ServerName>& server_names);
   ChromotingHostServicesClient(const ChromotingHostServicesClient&) = delete;
   ChromotingHostServicesClient& operator=(const ChromotingHostServicesClient&) =
       delete;
   ~ChromotingHostServicesClient() override;
-
-  // Configures the current process to allow it to communicate with the
-  // ChromotingHostServices server. Must be called once before using any
-  // instance of ChromotingHostServicesClient.
-  // Returns a boolean that indicates whether the initialization succeeded.
-  static bool Initialize();
 
   // Gets the ChromotingSessionServices. Always null-check before using it, as
   // nullptr will be returned if the connection could not be established.

@@ -38,6 +38,18 @@ interface ScreensFactory {
     pending_receiver<ash.screens_common.mojom.FjordStationSetupPageHandler>
       handler);
 
+  // Esablish a FjordTouchControllerScreen pipe for handling the communication
+  // for the FjordTouchControllerPageHandler component.
+  EstablishFjordTouchControllerScreenPipe(
+    pending_receiver<ash.screens_common.mojom.FjordTouchControllerPageHandler>
+      handler);
+
+  // Establish a FjordImageSelectionScreen pipe for handling the communication
+  // for the FjordImageSelectionPageHandler component.
+  EstablishFjordImageSelectionScreenPipe(
+    pending_receiver<ash.screens_common.mojom.FjordImageSelectionPageHandler>
+      handler);
+
   // Establish a GaiaInfoScreen pipe for handling the communication for the
   // GaiaInfoPageHandler and the GaiaInfoPage component.
   EstablishGaiaInfoScreenPipe(
@@ -70,15 +82,6 @@ interface ScreensFactory {
           handler);
 
   // ash.screens_login.mojom
-
-  // Establish a ArcVmDataMigrationScreen pipe for handling the communication
-  // for the ArcVmDataMigrationPageHandler and the ArcVmDataMigrationPage
-  // component.
-  EstablishArcVmDataMigrationScreenPipe(
-      pending_receiver<ash.screens_login.mojom.ArcVmDataMigrationPageHandler>
-          handler)
-      => (pending_receiver<ash.screens_login.mojom.ArcVmDataMigrationPage>
-              pending);
 
   // Establish a EncryptionMigrationScreen pipe for handling the communication
   // for the EncryptionMigrationPageHandler and the EncryptionMigrationPage component.

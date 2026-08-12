@@ -31,10 +31,11 @@ scoped_refptr<StaticBitmapImage> StaticBitmapImage::Create(
 scoped_refptr<StaticBitmapImage> StaticBitmapImage::Create(
     sk_sp<SkData> data,
     const SkImageInfo& info,
+    const gfx::HDRMetadata& hdr_metadata,
     ImageOrientation orientation) {
   return UnacceleratedStaticBitmapImage::Create(
       SkImages::RasterFromData(info, std::move(data), info.minRowBytes()),
-      orientation);
+      orientation, hdr_metadata);
 }
 
 gfx::Size StaticBitmapImage::SizeWithConfig(SizeConfig config) const {
@@ -54,8 +55,9 @@ Vector<uint8_t> StaticBitmapImage::CopyImageData(const SkImageInfo& info,
 
   wtf_size_t byte_length =
       base::checked_cast<wtf_size_t>(info.computeMinByteSize());
-  if (byte_length > partition_alloc::MaxDirectMapped())
+  if (byte_length > partition_alloc::MaxAllocationSize()) {
     return {};
+  }
   Vector<uint8_t> dst_buffer(byte_length);
 
   bool read_pixels_successful =

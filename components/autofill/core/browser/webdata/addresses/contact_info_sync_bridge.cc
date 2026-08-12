@@ -5,23 +5,43 @@
 #include "components/autofill/core/browser/webdata/addresses/contact_info_sync_bridge.h"
 
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "base/check.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/uuid.h"
+#include "base/sequence_checker.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_quality/addresses/profile_requirement_utils.h"
+#include "components/autofill/core/browser/data_quality/addresses/address_import_requirement_utils.h"
+#include "components/autofill/core/browser/webdata/addresses/address_autofill_table.h"
 #include "components/autofill/core/browser/webdata/addresses/contact_info_sync_util.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
+#include "components/autofill/core/browser/webdata/autofill_sync_metadata_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
-#include "components/sync/base/features.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
-#include "components/sync/model/in_memory_metadata_change_list.h"
+#include "components/sync/model/data_batch.h"
+#include "components/sync/model/data_type_local_change_processor.h"
+#include "components/sync/model/data_type_sync_bridge.h"
+#include "components/sync/model/entity_change.h"
+#include "components/sync/model/metadata_batch.h"
+#include "components/sync/model/metadata_change_list.h"
+#include "components/sync/model/model_error.h"
+#include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
+#include "components/sync/protocol/contact_info_specifics.pb.h"
+#include "components/sync/protocol/entity_data.h"
 #include "components/webdata/common/web_database.h"
 
 namespace autofill {
@@ -44,9 +64,7 @@ DenseSet<AutofillProfile::RecordType> kAccountRecordTypes = {
 // addresses that fail to meet the requirements after an update need to be
 // removed from local storage.
 bool IsIncompleteHomeAndWorkAddress(const AutofillProfile& profile) {
-  if (!profile.IsHomeAndWorkProfile() ||
-      !base::FeatureList::IsEnabled(
-          features::kAutofillEnableSupportForHomeAndWork)) {
+  if (!profile.IsHomeAndWorkProfile()) {
     return false;
   }
   const bool is_incomplete = !IsMinimumAddress(profile);
@@ -96,11 +114,6 @@ syncer::DataTypeSyncBridge* ContactInfoSyncBridge::FromWebDataService(
           &kContactInfoSyncBridgeUserDataKey));
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-ContactInfoSyncBridge::CreateMetadataChangeList() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
-}
 
 std::optional<syncer::ModelError> ContactInfoSyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
@@ -122,6 +135,13 @@ ContactInfoSyncBridge::ApplyIncrementalSyncChanges(
     syncer::EntityChangeList entity_changes) {
   auto transaction = web_data_backend_->GetDatabase()->AcquireTransaction();
 
+  std::unique_ptr<syncer::SyncMetadataStoreChangeList>
+      sync_metadata_store_change_list =
+          ApplyMetadataChanges(std::move(metadata_change_list));
+  if (change_processor()->GetError().has_value()) {
+    return change_processor()->GetError();
+  }
+
   for (const std::unique_ptr<syncer::EntityChange>& change : entity_changes) {
     switch (change->type()) {
       case syncer::EntityChange::ACTION_DELETE:
@@ -141,7 +161,7 @@ ContactInfoSyncBridge::ApplyIncrementalSyncChanges(
           // In case H/W was updated and doesn't meet the completeness
           // requirements anymore, remove it.
           // This change doesn't need to be synced back, since H/W is read-only.
-          metadata_change_list->ClearMetadata(remote.guid());
+          sync_metadata_store_change_list->ClearMetadata(remote.guid());
           if (!GetAutofillTable()->RemoveAutofillProfile(remote.guid())) {
             return syncer::ModelError(
                 FROM_HERE, syncer::ModelError::Type::
@@ -171,10 +191,6 @@ ContactInfoSyncBridge::ApplyIncrementalSyncChanges(
     }
   }
 
-  if (auto error = ApplyMetadataChanges(std::move(metadata_change_list))) {
-    return error;
-  }
-
   // Commits changes through CommitChanges(...) or through the scoped
   // sql::Transaction `transaction` depending on the
   // 'SqlScopedTransactionWebDatabase' Finch experiment.
@@ -186,8 +202,9 @@ ContactInfoSyncBridge::ApplyIncrementalSyncChanges(
   // False positives can occur here if an update doesn't change the profile.
   // Since such false positives are fine, and since AutofillTable's API
   // currently doesn't provide a way to detect such cases, we don't distinguish.
-  if (!entity_changes.empty())
+  if (!entity_changes.empty()) {
     web_data_backend_->NotifyOnAutofillChangedBySync(syncer::CONTACT_INFO);
+  }
 
   return std::nullopt;
 }
@@ -283,11 +300,11 @@ void ContactInfoSyncBridge::AutofillProfileChanged(
       break;
     case AutofillProfileChange::HIDE_IN_AUTOFILL:
       auto entity_data = CreateContactInfoEntityDataFromAutofillProfile(
-              change.data_model(),
-              GetPossiblyTrimmedContactInfoSpecificsDataFromProcessor(
-                  change.key()));
+          change.data_model(),
+          GetPossiblyTrimmedContactInfoSpecificsDataFromProcessor(
+              change.key()));
       entity_data->specifics.mutable_contact_info()->set_invisible_in_autofill(
-        true);
+          true);
       change_processor()->Put(change.key(), std::move(entity_data),
                               &metadata_change_list);
       break;
@@ -345,14 +362,18 @@ ContactInfoSyncBridge::GetPossiblyTrimmedContactInfoSpecificsDataFromProcessor(
       .contact_info();
 }
 
-std::optional<syncer::ModelError> ContactInfoSyncBridge::ApplyMetadataChanges(
+std::unique_ptr<syncer::SyncMetadataStoreChangeList>
+ContactInfoSyncBridge::ApplyMetadataChanges(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list) {
-  syncer::SyncMetadataStoreChangeList sync_metadata_store_change_list(
-      GetSyncMetadataStore(), syncer::CONTACT_INFO,
-      base::BindRepeating(&syncer::DataTypeLocalChangeProcessor::ReportError,
-                          change_processor()->GetWeakPtr()));
-  metadata_change_list->TransferChangesTo(&sync_metadata_store_change_list);
-  return change_processor()->GetError();
+  auto sync_metadata_store_change_list =
+      std::make_unique<syncer::SyncMetadataStoreChangeList>(
+          GetSyncMetadataStore(), syncer::CONTACT_INFO,
+          base::BindRepeating(
+              &syncer::DataTypeLocalChangeProcessor::ReportError,
+              change_processor()->GetWeakPtr()));
+  metadata_change_list->TransferChangesTo(
+      sync_metadata_store_change_list.get());
+  return sync_metadata_store_change_list;
 }
 
 // TODO(crbug.com/40253286): Consider moving this logic to processor.

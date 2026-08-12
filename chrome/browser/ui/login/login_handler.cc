@@ -45,12 +45,6 @@
 #include "ui/gfx/text_elider.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "components/guest_view/browser/guest_view_base.h"
-#include "extensions/browser/view_type_utils.h"  // nogncheck
-#include "extensions/common/mojom/view_type.mojom.h"
-#endif
-
 using content::BrowserThread;
 using content::NavigationController;
 using content::WebContents;
@@ -191,7 +185,7 @@ LoginHandler::LoginHandler(
 }
 
 void LoginHandler::NotifyAuthNeeded() {
-  // Only used by tests. This is being refactored. https://crbug.com/1371177.
+  // Only used by tests. This is being refactored. https://crbug.com/40870289.
 }
 
 void LoginHandler::NotifyAuthSupplied(std::u16string_view username,
@@ -336,8 +330,8 @@ PasswordForm LoginHandler::MakeInputForPasswordManager(
     dialog_form.scheme = PasswordForm::Scheme::kOther;
   }
   dialog_form.url = auth_info.challenger.GetURL();
-  DCHECK(auth_info.is_proxy ||
-         auth_info.challenger == url::SchemeHostPort(request_url));
+  CHECK(auth_info.is_proxy ||
+        auth_info.challenger == url::SchemeHostPort(request_url));
   dialog_form.signon_realm = GetSignonRealm(dialog_form.url, auth_info);
   return dialog_form;
 }
@@ -368,7 +362,7 @@ void LoginHandler::GetDialogStrings(const GURL& request_url,
 
   if (!network::IsUrlPotentiallyTrustworthy(authority_url)) {
     // TODO(asanka): The string should be different for proxies and servers.
-    // http://crbug.com/620756
+    // http://crbug.com/40473278
     *explanation = l10n_util::GetStringUTF16(IDS_LOGIN_DIALOG_NOT_PRIVATE);
   } else {
     explanation->clear();

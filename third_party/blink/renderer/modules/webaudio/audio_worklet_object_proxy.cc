@@ -38,7 +38,8 @@ void AudioWorkletObjectProxy::DidCreateWorkerGlobalScope(
   global_scope_->SetRenderQuantumSize(
       context_render_quantum_size_at_construction_);
   global_scope_->SetSampleRate(context_sample_rate_at_construction_);
-  global_scope_->SetCurrentFrame(context_sample_frame_at_construction_);
+  global_scope_->SetCurrentFrame(
+      base::checked_cast<size_t>(context_sample_frame_at_construction_));
   global_scope_->SetObjectProxy(*this);
 }
 
@@ -53,7 +54,7 @@ void AudioWorkletObjectProxy::SynchronizeProcessorInfoList() {
       processor_info_list =
           global_scope_->WorkletProcessorInfoListForSynchronization();
 
-  if (processor_info_list->size() == 0) {
+  if (processor_info_list->empty()) {
     return;
   }
 

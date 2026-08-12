@@ -12,14 +12,15 @@
 #include "gin/public/gin_embedders.h"
 #include "gin/v8_foreground_task_runner.h"
 #include "gin/v8_foreground_task_runner_with_locker.h"
+#include "v8/include/v8-external.h"
 #include "v8/include/v8-isolate.h"
 
 using v8::ArrayBuffer;
 using v8::Eternal;
+using v8::FunctionTemplate;
 using v8::Isolate;
 using v8::Local;
 using v8::Object;
-using v8::FunctionTemplate;
 using v8::ObjectTemplate;
 
 namespace {
@@ -38,6 +39,12 @@ std::shared_ptr<gin::V8ForegroundTaskRunnerBase> CreateV8ForegroundTaskRunner(
 }  // namespace
 
 namespace gin {
+
+// Ensure Gin's external pointer tags do not collide with V8's internal tags.
+static_assert(
+    static_cast<uint16_t>(kLastExternalPointerTypeTag) <
+        static_cast<uint16_t>(v8::kFirstInternalExternalPointerTypeTag),
+    "Gin embedder tags are colliding with V8 internal tags.");
 
 PerIsolateData::PerIsolateData(
     Isolate* isolate,
@@ -68,30 +75,10 @@ PerIsolateData* PerIsolateData::From(Isolate* isolate) {
   return static_cast<PerIsolateData*>(isolate->GetData(kEmbedderNativeGin));
 }
 
-void PerIsolateData::DeprecatedSetObjectTemplate(DeprecatedWrapperInfo* info,
-                                                 Local<ObjectTemplate> templ) {
-  deprecated_object_templates_[info] = Eternal<ObjectTemplate>(isolate_, templ);
-}
-
 void PerIsolateData::SetObjectTemplate(
     const WrapperInfo* info,
     Local<ObjectTemplate> templ) {
   object_templates_[info] = Eternal<ObjectTemplate>(isolate_, templ);
-}
-
-void PerIsolateData::SetFunctionTemplate(DeprecatedWrapperInfo* info,
-                                         Local<FunctionTemplate> templ) {
-  function_templates_[info] = Eternal<FunctionTemplate>(isolate_, templ);
-}
-
-v8::Local<v8::ObjectTemplate> PerIsolateData::DeprecatedGetObjectTemplate(
-    DeprecatedWrapperInfo* info) {
-  DeprecatedObjectTemplateMap::iterator it =
-      deprecated_object_templates_.find(info);
-  if (it == deprecated_object_templates_.end()) {
-    return v8::Local<v8::ObjectTemplate>();
-  }
-  return it->second.Get(isolate_);
 }
 
 v8::Local<v8::ObjectTemplate> PerIsolateData::GetObjectTemplate(
@@ -100,14 +87,6 @@ v8::Local<v8::ObjectTemplate> PerIsolateData::GetObjectTemplate(
   if (it == object_templates_.end()) {
     return v8::Local<v8::ObjectTemplate>();
   }
-  return it->second.Get(isolate_);
-}
-
-v8::Local<v8::FunctionTemplate> PerIsolateData::GetFunctionTemplate(
-    DeprecatedWrapperInfo* info) {
-  FunctionTemplateMap::iterator it = function_templates_.find(info);
-  if (it == function_templates_.end())
-    return v8::Local<v8::FunctionTemplate>();
   return it->second.Get(isolate_);
 }
 

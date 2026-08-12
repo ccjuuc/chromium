@@ -28,8 +28,7 @@ class SaveCardInfobarModalOverlayCoordinatorTest : public PlatformTest {
         browser_(std::make_unique<TestBrowser>(profile_.get())),
         root_view_controller_([[UIViewController alloc] init]) {
     autofill::CreditCard credit_card(
-        base::Uuid::GenerateRandomV4().AsLowercaseString(),
-        "https://www.example.com/");
+        base::Uuid::GenerateRandomV4().AsLowercaseString());
     std::unique_ptr<MockAutofillSaveCardInfoBarDelegateMobile> delegate =
         MockAutofillSaveCardInfoBarDelegateMobileFactory::
             CreateMockAutofillSaveCardInfoBarDelegateMobileFactory(
@@ -65,9 +64,9 @@ class SaveCardInfobarModalOverlayCoordinatorTest : public PlatformTest {
   std::unique_ptr<ProfileIOS> profile_;
   std::unique_ptr<TestBrowser> browser_;
   MockOverlayRequestCoordinatorDelegate delegate_;
-  raw_ptr<MockAutofillSaveCardInfoBarDelegateMobile, DanglingUntriaged>
-      save_card_infobar_delegate_ = nil;
   std::unique_ptr<InfoBarIOS> infobar_;
+  raw_ptr<MockAutofillSaveCardInfoBarDelegateMobile>
+      save_card_infobar_delegate_ = nullptr;
   std::unique_ptr<OverlayRequest> request_;
   UIViewController* root_view_controller_ = nil;
   id modalMediator_ = nil;

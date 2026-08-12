@@ -13,13 +13,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -203,7 +203,7 @@ class ProcessSingletonPosixTest : public testing::Test {
   void CheckNotified() {
     ASSERT_TRUE(process_singleton_on_thread_);
     ASSERT_EQ(1u, process_singleton_on_thread_->callback_command_lines_.size());
-    ASSERT_TRUE(base::Contains(
+    ASSERT_TRUE(std::ranges::contains(
         process_singleton_on_thread_->callback_command_lines_[0].argv(),
         "about:blank"));
     ASSERT_EQ(0, kill_callbacks_);
@@ -268,7 +268,7 @@ class ProcessSingletonPosixTest : public testing::Test {
 
 // Test if the socket file and symbol link created by ProcessSingletonPosix
 // are valid.
-// If this test flakes, use http://crbug.com/74554.
+// If this test flakes, use http://crbug.com/41333511.
 TEST_F(ProcessSingletonPosixTest, CheckSocketFile) {
   CreateProcessSingletonOnThread();
   VerifyFiles();

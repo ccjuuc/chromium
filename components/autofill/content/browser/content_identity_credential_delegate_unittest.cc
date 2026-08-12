@@ -16,7 +16,7 @@
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace autofill {
 
@@ -52,6 +52,7 @@ IdentityRequestAccountPtr CreateTestAccount() {
       base::MakeRefCounted<content::IdentityRequestAccount>(
           "id", "display_identifier", "display_name", "john@email.com", "John",
           "given_name", GURL(), "+1 (234) 567-8910", "username",
+          /*potentially_approved_origin_hashes=*/std::vector<std::string>(),
           /*login_hints=*/std::vector<std::string>(),
           /*domain_hints=*/std::vector<std::string>(),
           /*labels=*/std::vector<std::string>());

@@ -10,7 +10,6 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -167,39 +166,37 @@ gfx::ColorSpace GetColorSpaceFromEdid(const display::EdidParser& edid_parser) {
   EmitEdidColorSpaceChecksOutcomeUma(EdidColorSpaceChecksOutcome::kSuccess);
 
   auto transfer_id = gfx::ColorSpace::TransferID::INVALID;
-  if (base::Contains(
-          edid_parser.supported_color_primary_matrix_ids(),
+  if (edid_parser.supported_color_primary_matrix_ids().contains(
           EdidParser::PrimaryMatrixPair(gfx::ColorSpace::PrimaryID::BT2020,
                                         gfx::ColorSpace::MatrixID::RGB)) ||
-      base::Contains(edid_parser.supported_color_primary_matrix_ids(),
-                     EdidParser::PrimaryMatrixPair(
-                         gfx::ColorSpace::PrimaryID::BT2020,
-                         gfx::ColorSpace::MatrixID::BT2020_NCL))) {
-    if (base::Contains(edid_parser.supported_color_transfer_ids(),
-                       gfx::ColorSpace::TransferID::PQ)) {
+      edid_parser.supported_color_primary_matrix_ids().contains(
+          EdidParser::PrimaryMatrixPair(
+              gfx::ColorSpace::PrimaryID::BT2020,
+              gfx::ColorSpace::MatrixID::BT2020_NCL))) {
+    if (edid_parser.supported_color_transfer_ids().contains(
+            gfx::ColorSpace::TransferID::PQ)) {
       transfer_id = gfx::ColorSpace::TransferID::PQ;
 #if BUILDFLAG(IS_CHROMEOS)
       if (base::FeatureList::IsEnabled(
               display::features::kEnableExternalDisplayHDR10Mode) &&
           edid_parser.is_external_display() &&
-          base::Contains(
-              edid_parser.supported_color_primary_matrix_ids(),
+          edid_parser.supported_color_primary_matrix_ids().contains(
               EdidParser::PrimaryMatrixPair(gfx::ColorSpace::PrimaryID::BT2020,
                                             gfx::ColorSpace::MatrixID::RGB))) {
         return gfx::ColorSpace::CreateHDR10();
       }
 #endif
-    } else if (base::Contains(edid_parser.supported_color_transfer_ids(),
-                              gfx::ColorSpace::TransferID::HLG)) {
+    } else if (edid_parser.supported_color_transfer_ids().contains(
+                   gfx::ColorSpace::TransferID::HLG)) {
       transfer_id = gfx::ColorSpace::TransferID::HLG;
     }
     // If we reach here: CDB has {BT2020,RGB} or {BT2020,NCL},
     // but HDR Static Metadata Data Block does not contain PQ.
     // transfer == INVALID
-  } else if (base::Contains(edid_parser.supported_color_primary_matrix_ids(),
-                            EdidParser::PrimaryMatrixPair(
-                                gfx::ColorSpace::PrimaryID::P3,
-                                gfx::ColorSpace::MatrixID::RGB))) {
+  } else if (edid_parser.supported_color_primary_matrix_ids().contains(
+                 EdidParser::PrimaryMatrixPair(
+                     gfx::ColorSpace::PrimaryID::P3,
+                     gfx::ColorSpace::MatrixID::RGB))) {
     return gfx::ColorSpace::CreateDisplayP3D65();
   } else if (gamma == 2.2f) {
     transfer_id = gfx::ColorSpace::TransferID::GAMMA22;
@@ -226,22 +223,30 @@ gfx::ColorSpace GetColorSpaceFromEdid(const display::EdidParser& edid_parser) {
 bool CompareDisplayIds(int64_t id1, int64_t id2) {
   if (id1 == id2)
     return false;
-  // Output index is stored in the first 8 bits. See GetDisplayIdFromEDID
-  // in edid_parser.cc.
-  int index_1 = id1 & 0xFF;
-  int index_2 = id2 & 0xFF;
-  DCHECK_NE(index_1, index_2) << id1 << " and " << id2;
   bool first_is_internal = IsInternalDisplayId(id1);
   bool second_is_internal = IsInternalDisplayId(id2);
   if (first_is_internal && !second_is_internal)
     return true;
   if (!first_is_internal && second_is_internal)
     return false;
-  return index_1 < index_2;
+  int index_1 = id1 & 0xFF;
+  int index_2 = id2 & 0xFF;
+#if BUILDFLAG(IS_CHROMEOS)
+  // Output index is stored in the first 8 bits for ChromeOS EDID display IDs.
+  // See GetDisplayIdFromEDID in edid_parser.cc.
+  DCHECK_NE(index_1, index_2) << id1 << " and " << id2;
+#endif
+
+  if (index_1 != index_2) {
+    return index_1 < index_2;
+  }
+
+  // Fallback tie-breaker when low 8 bits collide.
+  return id1 < id2;
 }
 
 bool IsInternalDisplayId(int64_t display_id) {
-  return base::Contains(*internal_display_ids(), display_id);
+  return internal_display_ids()->contains(display_id);
 }
 
 const base::flat_set<int64_t>& GetInternalDisplayIds() {

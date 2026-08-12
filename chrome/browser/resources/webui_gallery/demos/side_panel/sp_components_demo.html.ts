@@ -19,16 +19,16 @@ export function getHtml(this: SpComponentsDemoElement) {
   <div class="row center">
     <label id="urlCountLabel">Number of url items</label>
     <cr-slider id="urlCountSlider" min="1" max="30" .value="${this.urlCount_}"
-        @cr-slider-value-changed="${this.onUrlCountChanged_}"
+        @cr-slider-value-changed="${this.onUrlCountCrSliderValueChanged_}"
         aria-labelledby="urlCountLabel">
     </cr-slider>
   </div>
   <cr-checkbox ?checked="${this.hideBackButton_}"
-      @checked-changed="${this.onHideBackButtonChanged_}">
+      @checked-changed="${this.onHideBackButtonCheckedChanged_}">
     Hide back button in heading
   </cr-checkbox>
   <cr-checkbox ?checked="${this.showBadges_}"
-      @checked-changed="${this.onShowBadgesChanged_}">
+      @checked-changed="${this.onShowBadgesCheckedChanged_}">
     Show item badges
   </cr-checkbox>
   <div class="row center">
@@ -36,7 +36,7 @@ export function getHtml(this: SpComponentsDemoElement) {
     <select id="itemSizeSelect" class="md-select"
         aria-labelledby="itemSizeLabel"
         .value="${this.itemSize_}"
-        @change="${this.onItemSizeChanged_}">
+        @change="${this.onItemSizeChange_}">
       ${this.itemSizeOptions_.map(item => html`
         <option .value="${item}">${item}</option>
       `)}
@@ -59,7 +59,7 @@ export function getHtml(this: SpComponentsDemoElement) {
           .size="${this.itemSize_}">
         ${this.showBadges_ ? html`
           <sp-list-item-badge slot="badges">
-            <cr-icon icon="cr:info-outline"></cr-icon>
+            <cr-icon icon="cr:info"></cr-icon>
             <span>2 Notes</span>
           </sp-list-item-badge>
         ` : ''}
@@ -84,7 +84,10 @@ export function getHtml(this: SpComponentsDemoElement) {
       body="Some more descriptive text explaining how to add content">
   </sp-empty-state>
   <cr-button class="floating-button">
-    <cr-icon slot="prefix-icon" icon="cr:add"></cr-icon>
+    <cr-icon slot="prefix-icon"
+        icon="${this.webuiRoundedIconsEnabled_
+            ? 'sp:add-circle'
+            : 'sp:add-circle-old'}"></cr-icon>
     Add content
   </cr-button>
 </div>
@@ -92,12 +95,12 @@ export function getHtml(this: SpComponentsDemoElement) {
 <h2>List item badges</h2>
 <div class="demos">
   <sp-list-item-badge>
-    <cr-icon icon="cr:info-outline"></cr-icon>
+    <cr-icon icon="cr:info"></cr-icon>
     <span>3 Notes</span>
   </sp-list-item-badge>
 
   <sp-list-item-badge was-updated>
-    <cr-icon icon="cr:info-outline"></cr-icon>
+    <cr-icon icon="cr:info"></cr-icon>
     <span>$100</span>
     <span slot="previous-badge">$200</span>
   </sp-list-item-badge>
@@ -107,7 +110,7 @@ export function getHtml(this: SpComponentsDemoElement) {
 <div class="demos">
   <div class="sp-icon-buttons-row">
     <cr-icon-button iron-icon="cr:add"></cr-icon-button>
-    <cr-icon-button iron-icon="cr:print"></cr-icon-button>
+    <cr-icon-button iron-icon="cr:print-filled"></cr-icon-button>
     <cr-icon-button iron-icon="cr:more-vert"></cr-icon-button>
   </div>
 </div>

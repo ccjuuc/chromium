@@ -4,6 +4,8 @@
 
 package org.chromium.components.browser_ui.bottomsheet;
 
+import androidx.annotation.Px;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
@@ -44,10 +46,37 @@ public interface BottomSheetObserver {
 
     /**
      * An event for when the sheet content changes.
+     *
      * @param newContent The new {@link BottomSheetContent}, or null if the sheet has no content.
      */
     void onSheetContentChanged(@Nullable BottomSheetContent newContent);
 
+    /**
+     * Called when the sheet layout changes.
+     *
+     * @param newWidth The new width of the sheet container in pixels.
+     * @param newHeight The new height of the sheet container in pixels.
+     */
+    default void onContainerSizeChanged(int newWidth, int newHeight) {}
+
+    /**
+     * Called when the bottom margin of the sheet container changes. This is the space at the bottom
+     * of the sheet covered by UI like the keyboard.
+     *
+     * @param bottomMargin The new bottom margin in pixels.
+     */
+    default void onContainerBottomMarginChanged(@Px int bottomMargin) {}
+
     /** Called when the sheet background color override is changed. */
     default void onSheetBackgroundColorOverrideChanged() {}
+
+    /**
+     * Called before the inset animation starts. This event is triggered before any layout changes
+     * occur.
+     */
+    default void beforeInsetAnimationStart() {}
+
+    /** Called when the inset animation ends. */
+    default void onInsetAnimationEnd() {}
 }
+

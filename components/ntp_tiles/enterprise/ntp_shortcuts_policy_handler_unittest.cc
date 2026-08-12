@@ -9,9 +9,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
 #include "components/ntp_tiles/enterprise/enterprise_shortcuts_store.h"
-#include "components/ntp_tiles/features.h"
 #include "components/ntp_tiles/pref_names.h"
 #include "components/policy/core/browser/policy_error_map.h"
 #include "components/policy/core/common/field_validation_test_utils.h"
@@ -95,8 +93,8 @@ TestShortcut kInvalidUrlTestShortcuts[] = {
     {.name = "invalid3 name", .url = "invalid/url"},
 };
 
-base::Value::Dict GenerateNTPShortcutPolicyEntry(TestShortcut test_case) {
-  base::Value::Dict entry;
+base::DictValue GenerateNTPShortcutPolicyEntry(TestShortcut test_case) {
+  base::DictValue entry;
   if (test_case.name.has_value()) {
     entry.Set(NTPShortcutsPolicyHandler::kName, test_case.name.value());
   }
@@ -161,12 +159,7 @@ class NTPShortcutsPolicyHandlerTest : public testing::Test {
  public:
   NTPShortcutsPolicyHandlerTest() = default;
 
-  void SetUp() override {
-    feature_list_.InitAndEnableFeature(ntp_tiles::kNtpEnterpriseShortcuts);
-  }
-
  protected:
-  base::test::ScopedFeatureList feature_list_;
   NTPShortcutsPolicyHandler handler_{
       Schema::Wrap(policy::GetChromeSchemaData())};
   policy::PolicyMap policies_;
@@ -183,29 +176,8 @@ TEST_F(NTPShortcutsPolicyHandlerTest, PolicyNotSet) {
                                nullptr));
 }
 
-TEST_F(NTPShortcutsPolicyHandlerTest, ValidNTPShortcuts_FeatureDisabled) {
-  feature_list_.Reset();
-  feature_list_.InitAndDisableFeature(ntp_tiles::kNtpEnterpriseShortcuts);
-
-  base::Value::List policy_value;
-  for (const auto& test_case : kValidTestShortcuts) {
-    policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
-  }
-
-  policies_.Set(key::kNTPShortcuts, policy::POLICY_LEVEL_MANDATORY,
-                policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-                base::Value(std::move(policy_value)), nullptr);
-
-  ASSERT_TRUE(handler_.CheckPolicySettings(policies_, &errors_));
-  EXPECT_TRUE(errors_.empty());
-
-  handler_.ApplyPolicySettings(policies_, &prefs_);
-  EXPECT_FALSE(prefs_.GetValue(ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
-                               nullptr));
-}
-
 TEST_F(NTPShortcutsPolicyHandlerTest, ValidNTPShortcuts) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kValidTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -240,7 +212,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, InvalidFormat) {
 
 TEST_F(NTPShortcutsPolicyHandlerTest, TooManyNTPShortcuts) {
   // Policy value has one list entry over the max allowed.
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (int i = 0; i <= NTPShortcutsPolicyHandler::kMaxNtpShortcuts; ++i) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(
         {.name = base::StringPrintf("name %d", i),
@@ -259,7 +231,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, TooManyNTPShortcuts) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, MissingRequiredFieldWithValidShortcuts) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kMissingRequiredFieldsTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -291,7 +263,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, MissingRequiredFieldWithValidShortcuts) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, MissingRequiredField) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kMissingRequiredFieldsTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -305,7 +277,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, MissingRequiredField) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, UrlNotUnique) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kUrlNotUniqueTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -330,7 +302,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, UrlNotUnique) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, NoUniqueUrl) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kNoUniqueUrlTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -348,7 +320,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, NoUniqueUrl) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, EmptyRequiredField) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kEmptyFieldTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -367,10 +339,10 @@ TEST_F(NTPShortcutsPolicyHandlerTest, EmptyRequiredField) {
 TEST_F(NTPShortcutsPolicyHandlerTest, UnknownField) {
   constexpr char kUnknownFieldName[] = "unknown_field";
 
-  base::Value::Dict entry =
+  base::DictValue entry =
       GenerateNTPShortcutPolicyEntry(kUnknownFieldTestShortcuts[0]);
   entry.Set(kUnknownFieldName, true);
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   policy_value.Append(std::move(entry));
 
   policies_.Set(key::kNTPShortcuts, policy::POLICY_LEVEL_MANDATORY,
@@ -393,7 +365,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, UnknownField) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, InvalidUrlError) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kInvalidUrlTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -410,7 +382,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, InvalidUrlError) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, InvalidUrlWarning) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kInvalidUrlTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -435,7 +407,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, InvalidUrlWarning) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, NoValidEntry) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   for (const auto& test_case : kInvalidUrlTestShortcuts) {
     policy_value.Append(GenerateNTPShortcutPolicyEntry(test_case));
   }
@@ -451,7 +423,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, NoValidEntry) {
 TEST_F(NTPShortcutsPolicyHandlerTest, EmptyList) {
   policies_.Set(key::kNTPShortcuts, policy::POLICY_LEVEL_MANDATORY,
                 policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
-                base::Value(base::Value::List()), nullptr);
+                base::Value(base::ListValue()), nullptr);
 
   ASSERT_FALSE(handler_.CheckPolicySettings(policies_, &errors_));
   EXPECT_THAT(&errors_, HasValidationError(l10n_util::GetStringUTF16(
@@ -459,7 +431,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, EmptyList) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, NameTooLong) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   policy_value.Append(GenerateNTPShortcutPolicyEntry(
       {.name = std::string(
            NTPShortcutsPolicyHandler::kMaxNtpShortcutTextLength + 1, 'a'),
@@ -478,7 +450,7 @@ TEST_F(NTPShortcutsPolicyHandlerTest, NameTooLong) {
 }
 
 TEST_F(NTPShortcutsPolicyHandlerTest, UrlTooLong) {
-  base::Value::List policy_value;
+  base::ListValue policy_value;
   policy_value.Append(GenerateNTPShortcutPolicyEntry(
       {.name = "work",
        .url = base::StringPrintf(

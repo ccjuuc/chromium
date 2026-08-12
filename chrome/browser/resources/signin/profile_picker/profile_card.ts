@@ -53,12 +53,15 @@ export class ProfileCardElement extends ProfileCardElementBase {
       profileState: {type: Object},
       pattern_: {type: String},
       disabled: {type: Boolean},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
   accessor profileState: ProfileState = createDummyProfileState();
   accessor disabled: boolean = false;
   protected accessor pattern_: string = '.*\\S.*';
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   private manageProfilesBrowserProxy_: ManageProfilesBrowserProxy =
       ManageProfilesBrowserProxyImpl.getInstance();
 
@@ -132,18 +135,18 @@ export class ProfileCardElement extends ProfileCardElementBase {
         this.profileState.profilePath);
   }
 
-  protected onNameInputPointerEnter_() {
+  protected onNameInputPointerenter_() {
     this.fire('toggle-drag', {toggle: false});
   }
 
-  protected onNameInputPointerLeave_() {
+  protected onNameInputPointerleave_() {
     this.fire('toggle-drag', {toggle: true});
   }
 
   /**
    * Handler for when the profile name field is changed, then blurred.
    */
-  protected onProfileNameChanged_(event: Event) {
+  protected onProfileNameChange_(event: Event) {
     const target = event.target as CrInputElement;
 
     if (target.invalid) {

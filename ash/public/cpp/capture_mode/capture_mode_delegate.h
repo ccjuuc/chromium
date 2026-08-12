@@ -13,8 +13,6 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/unguessable_token.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom-shared.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "components/search_engines/template_url.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -24,6 +22,9 @@ class SkBitmap;
 namespace ash {
 enum class CaptureModeImageSearchResult;
 enum class CaptureModeTextDetectionResult;
+struct VideoConferenceMediaUsageStatus;
+enum class VideoConferenceMediaDevice : int;
+class VideoConferenceManagerClient;
 }  // namespace ash
 
 namespace aura {
@@ -220,7 +221,7 @@ class ASH_PUBLIC_EXPORT CaptureModeDelegate {
   // Registers the given `client` as a video conference manager client with the
   // provided `client_id`.
   virtual void RegisterVideoConferenceManagerClient(
-      crosapi::mojom::VideoConferenceManagerClient* client,
+      VideoConferenceManagerClient* client,
       const base::UnguessableToken& client_id) = 0;
 
   // Unregisters the client whose ID is the given `client_id` from the video
@@ -231,13 +232,13 @@ class ASH_PUBLIC_EXPORT CaptureModeDelegate {
   // Updates the video conference manager with the given media usage `status`.
   // This will in-turn update the video conference panel on the shelf.
   virtual void UpdateVideoConferenceManager(
-      crosapi::mojom::VideoConferenceMediaUsageStatusPtr status) = 0;
+      VideoConferenceMediaUsageStatus status) = 0;
 
   // Requests that the video conference manager notifies the user that the given
   // `device` (e.g. a camera or microphone) is being used for a screen recording
   // while the device is disabled.
   virtual void NotifyDeviceUsedWhileDisabled(
-      crosapi::mojom::VideoConferenceMediaDevice device) = 0;
+      VideoConferenceMediaDevice device) = 0;
 
   // Requests to finalize the location for the saved file, e.g. move it to cloud
   // storage if it was saved to a temporary local location. `callback` will be

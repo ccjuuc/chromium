@@ -12,27 +12,107 @@
 #include "components/update_client/test_configurator.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/extension_host_delegate.h"
+#include "extensions/browser/kiosk/kiosk_delegate.h"
 #include "extensions/browser/safe_browsing_delegate.h"
 #include "extensions/browser/test_runtime_api_delegate.h"
 #include "extensions/browser/updater/null_extension_cache.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/switches.h"
+#include "extensions/common/url_pattern_set.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chromeos/ash/components/login/login_state/login_state.h"
-#endif
 
 using content::BrowserContext;
 
 namespace extensions {
+namespace {
+
+// An ExtensionManagementClient that returns safe/null defaults.
+class TestExtensionManagementClient : public ExtensionManagementClient {
+ public:
+  explicit TestExtensionManagementClient() = default;
+  TestExtensionManagementClient(const TestExtensionManagementClient&) = delete;
+  TestExtensionManagementClient& operator=(
+      const TestExtensionManagementClient&) = delete;
+  ~TestExtensionManagementClient() override = default;
+
+  // ExtensionManagementClient:
+  bool UpdatesFromWebstore(const Extension& extension) override { return true; }
+  bool IsInstallationExplicitlyAllowed(const ExtensionId& id) override {
+    return false;
+  }
+  bool IsForceInstalledInLowTrustEnvironment(
+      const Extension& extension) override {
+    return false;
+  }
+  const URLPatternSet& GetPolicyBlockedHosts(
+      const Extension* extension) override {
+    return URLPatternSet::Empty();
+  }
+  const URLPatternSet& GetPolicyAllowedHosts(
+      const Extension* extension) override {
+    return URLPatternSet::Empty();
+  }
+  bool UsesDefaultPolicyHostRestrictions(const Extension* extension) override {
+    return false;
+  }
+  bool BlocklistedByDefault() const override { return false; }
+  GURL GetEffectiveUpdateURL(const Extension& extension) override { return {}; }
+
+  bool IsAllowedManifestType(Manifest::Type manifest_type,
+                             const std::string& extension_id) const override {
+    return false;
+  }
+  ManagedInstallationMode GetInstallationMode(
+      const Extension* extension) override {
+    return ManagedInstallationMode::kBlocked;
+  }
+  ManagedInstallationMode GetInstallationMode(
+      const ExtensionId& extension_id,
+      const std::string& update_url) override {
+    return ManagedInstallationMode::kBlocked;
+  }
+  const std::string BlockedInstallMessage(const ExtensionId& id) override {
+    return std::string();
+  }
+  bool IsPermissionSetAllowed(const Extension* extension,
+                              const PermissionSet& perms) override {
+    return false;
+  }
+  bool IsPermissionSetAllowed(const ExtensionId& extension_id,
+                              const std::string& update_url,
+                              const PermissionSet& perms) override {
+    return false;
+  }
+  bool IsInstallationExplicitlyBlocked(const ExtensionId& id) override {
+    return false;
+  }
+};
+
+// A KioskDelegate that returns safe/null defaults.
+class TestKioskDelegate : public KioskDelegate {
+ public:
+  TestKioskDelegate() = default;
+  TestKioskDelegate(const TestKioskDelegate&) = delete;
+  TestKioskDelegate& operator=(const TestKioskDelegate&) = delete;
+  ~TestKioskDelegate() override = default;
+
+  // KioskDelegate:
+  bool IsAutoLaunchedKioskApp(const ExtensionId& id) const override {
+    return false;
+  }
+};
+
+}  // namespace
 
 TestExtensionsBrowserClient::TestExtensionsBrowserClient(
     BrowserContext* main_context)
     : extension_cache_(std::make_unique<NullExtensionCache>()),
-      safe_browsing_delegate_(std::make_unique<SafeBrowsingDelegate>()) {
+      safe_browsing_delegate_(std::make_unique<SafeBrowsingDelegate>()),
+      extension_management_client_(
+          std::make_unique<TestExtensionManagementClient>()),
+      kiosk_delegate_(std::make_unique<TestKioskDelegate>()) {
   if (main_context) {
     SetMainContext(main_context);
   }
@@ -108,6 +188,12 @@ TestExtensionsBrowserClient::GetContextRedirectedToOriginal(
   return GetOriginalContext(context);
 }
 
+content::BrowserContext*
+TestExtensionsBrowserClient::GetContextRedirectedToOriginalWithoutAshInternals(
+    content::BrowserContext* context) {
+  return GetOriginalContext(context);
+}
+
 content::BrowserContext* TestExtensionsBrowserClient::GetContextOwnInstance(
     content::BrowserContext* context) {
   return context;
@@ -130,14 +216,6 @@ bool TestExtensionsBrowserClient::IsActiveContext(
     content::BrowserContext* browser_context) const {
   return true;
 }
-
-std::string TestExtensionsBrowserClient::GetUserIdHashFromContext(
-    content::BrowserContext* context) {
-  if (context != main_context_ || !ash::LoginState::IsInitialized()) {
-    return "";
-  }
-  return ash::LoginState::Get()->primary_user_hash();
-}
 #endif
 
 bool TestExtensionsBrowserClient::IsGuestSession(
@@ -147,6 +225,12 @@ bool TestExtensionsBrowserClient::IsGuestSession(
 
 bool TestExtensionsBrowserClient::IsExtensionIncognitoEnabled(
     const ExtensionId& extension_id,
+    content::BrowserContext* context) const {
+  return false;
+}
+
+bool TestExtensionsBrowserClient::IsExtensionIncognitoEnabled(
+    const Extension* extension,
     content::BrowserContext* context) const {
   return false;
 }
@@ -171,7 +255,8 @@ void TestExtensionsBrowserClient::LoadResourceFromResourceBundle(
     const base::FilePath& resource_relative_path,
     int resource_id,
     scoped_refptr<net::HttpResponseHeaders> headers,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+    content::BrowserContext* browser_context) {
   // Should not be called because GetBundleResourcePath() returned empty path.
   NOTREACHED() << "Resource is not from a bundle.";
 }
@@ -180,19 +265,13 @@ bool TestExtensionsBrowserClient::AllowCrossRendererResourceLoad(
     const network::ResourceRequest& request,
     network::mojom::RequestDestination destination,
     ui::PageTransition page_transition,
-    int child_id,
+    content::ChildProcessId child_id,
     bool is_incognito,
     const Extension* extension,
     const ExtensionSet& extensions,
     const ProcessMap& process_map,
     const GURL& upstream_url) {
   return false;
-}
-
-PrefService* TestExtensionsBrowserClient::GetPrefServiceForContext(
-    BrowserContext* context) {
-  auto iter = set_pref_service_for_context_.find(context);
-  return iter != set_pref_service_for_context_.end() ? iter->second : nullptr;
 }
 
 void TestExtensionsBrowserClient::GetEarlyExtensionPrefsObservers(
@@ -269,7 +348,7 @@ TestExtensionsBrowserClient::GetComponentExtensionResourceManager() {
 void TestExtensionsBrowserClient::BroadcastEventToRenderers(
     events::HistogramValue histogram_value,
     const std::string& event_name,
-    base::Value::List args,
+    base::ListValue args,
     bool dispatch_to_off_the_record_profiles) {}
 
 ExtensionCache* TestExtensionsBrowserClient::GetExtensionCache() {
@@ -295,11 +374,15 @@ TestExtensionsBrowserClient::GetExtensionWebContentsObserver(
 }
 
 KioskDelegate* TestExtensionsBrowserClient::GetKioskDelegate() {
-  return nullptr;
+  return kiosk_delegate_.get();
 }
 
 SafeBrowsingDelegate* TestExtensionsBrowserClient::GetSafeBrowsingDelegate() {
   return safe_browsing_delegate_.get();
+}
+
+UserScriptListener* TestExtensionsBrowserClient::GetUserScriptListener() {
+  return user_script_listener_;
 }
 
 scoped_refptr<update_client::UpdateClient>
@@ -318,6 +401,21 @@ TestExtensionsBrowserClient::CreateUpdateClientConfigurator(
 
 std::string TestExtensionsBrowserClient::GetApplicationLocale() {
   return l10n_util::GetApplicationLocale(std::string());
+}
+
+ExtensionManagementClient*
+TestExtensionsBrowserClient::GetExtensionManagementClient(
+    content::BrowserContext* context) {
+  return extension_management_client_.get();
+}
+
+bool TestExtensionsBrowserClient::IsTelemetryLoggingEnabled(
+    content::BrowserContext* context) {
+  return telemetry_logging_enabled_;
+}
+
+void TestExtensionsBrowserClient::SetTelemetryLoggingEnabled(bool enabled) {
+  telemetry_logging_enabled_ = enabled;
 }
 
 }  // namespace extensions

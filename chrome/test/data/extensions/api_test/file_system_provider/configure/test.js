@@ -23,8 +23,8 @@ function runTests() {
   chrome.test.runTests([
     // Verify that the configuration flag is propagated properly.
     function configureConfigurable() {
-      var onConfigureRequested = chrome.test.callbackPass(
-          function(options, onSuccess, onError) {
+      const onConfigureRequested =
+          chrome.test.callbackPass(function(options, onSuccess, onError) {
             chrome.fileSystemProvider.onConfigureRequested.removeListener(
                 onConfigureRequested);
             onSuccess();
@@ -36,8 +36,8 @@ function runTests() {
           chrome.test.callbackPass(function(providers) {
             providers = providers.filter(function(provider) {
               // Filter out native providers.
-              return provider.providerId.length == 0 ||
-                     provider.providerId[0] != "@";
+              return provider.providerId.length === 0 ||
+                  provider.providerId[0] !== '@';
             });
             chrome.test.assertEq(providers.length, 1);
             // For extension based providers, provider id is the same as
@@ -50,16 +50,16 @@ function runTests() {
             chrome.test.assertEq('device', providers[0].source);
           }));
 
-      chrome.fileManagerPrivate.configureVolume(testUtil.volumeId,
-          chrome.test.callbackPass(function() {}));
+      chrome.fileManagerPrivate.configureVolume(
+          testUtil.volumeId, chrome.test.callbackPass(function() {}));
     },
 
     // Verify that chrome.fileManager.configureVolume is well wired
     // to onConfigureRequested().
     function configureSuccess() {
-      var configured = false;
-      var onConfigureRequested = chrome.test.callbackPass(
-          function(options, onSuccess, onError) {
+      let configured = false;
+      const onConfigureRequested =
+          chrome.test.callbackPass(function(options, onSuccess, onError) {
             chrome.fileSystemProvider.onConfigureRequested.removeListener(
                 onConfigureRequested);
             configured = true;
@@ -68,16 +68,16 @@ function runTests() {
       chrome.fileSystemProvider.onConfigureRequested.addListener(
           onConfigureRequested);
 
-      chrome.fileManagerPrivate.configureVolume(testUtil.volumeId,
-          chrome.test.callbackPass(function() {
+      chrome.fileManagerPrivate.configureVolume(
+          testUtil.volumeId, chrome.test.callbackPass(function() {
             chrome.test.assertTrue(configured);
           }));
     },
 
     // Verify that a failure is propagated properly.
     function configureFailure() {
-      var onConfigureRequested = chrome.test.callbackPass(
-          function(options, onSuccess, onError) {
+      const onConfigureRequested =
+          chrome.test.callbackPass(function(options, onSuccess, onError) {
             chrome.fileSystemProvider.onConfigureRequested.removeListener(
                 onConfigureRequested);
             onError('FAILED');
@@ -86,9 +86,10 @@ function runTests() {
       chrome.fileSystemProvider.onConfigureRequested.addListener(
           onConfigureRequested);
 
-      chrome.fileManagerPrivate.configureVolume(testUtil.volumeId,
+      chrome.fileManagerPrivate.configureVolume(
+          testUtil.volumeId,
           chrome.test.callbackFail('Failed to complete configuration.'));
-    }
+    },
 
   ]);
 }
@@ -97,7 +98,7 @@ function runTests() {
 // considered modules.
 (async () => {
   testUtil = await import(
-    '/_test_resources/api_test/file_system_provider/test_util.js');
+      '/_test_resources/api_test/file_system_provider/test_util.js');
 
   // Setup and run all of the test cases.
   setUp(runTests);

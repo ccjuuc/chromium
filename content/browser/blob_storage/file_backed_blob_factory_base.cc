@@ -4,15 +4,18 @@
 
 #include "content/browser/blob_storage/file_backed_blob_factory_base.h"
 
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/process/process_handle.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
+#include "components/file_access/scoped_file_access.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/common/child_process_id.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_impl.h"
 #include "storage/browser/blob/blob_registry_impl.h"
@@ -25,9 +28,20 @@ namespace {
 
 file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
 GetAccessCallback(const GURL& url_for_file_access_checks) {
-  if (!file_access::ScopedFileAccessDelegate::HasInstance() ||
-      !url_for_file_access_checks.is_valid()) {
+  if (!file_access::ScopedFileAccessDelegate::HasInstance()) {
     return base::NullCallback();
+  }
+
+  // When a delegate is installed, per-destination access checks are required.
+  // If the destination URL cannot be determined or is invalid, explicitly
+  // deny access rather than returning a null callback which would fall back
+  // to default access handling.
+  if (!url_for_file_access_checks.is_valid()) {
+    return base::BindRepeating(
+        [](const std::vector<base::FilePath>&,
+           base::OnceCallback<void(file_access::ScopedFileAccess)> callback) {
+          std::move(callback).Run(file_access::ScopedFileAccess::Denied());
+        });
   }
 
   file_access::ScopedFileAccessDelegate* file_access =
@@ -114,9 +128,10 @@ void FileBackedBlobFactoryBase::RegisterBlobSync(
     RegisterBlobSyncCallback finish_callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
   bool security_check_success =
-      ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(process_id_,
-                                                                 file->path);
+      ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
+          ChildProcessId::FromUnsafeValue(process_id_), file->path);
 
   GURL url_for_file_access_checks = GetCurrentUrl();
 

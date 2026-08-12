@@ -44,6 +44,9 @@ class ReaderModeMetricsHelperTest : public PlatformTest {
   void TearDown() override { test_ukm_recorder_.Purge(); }
 
   ReaderModeMetricsHelper* metrics_helper() { return metrics_helper_.get(); }
+  dom_distiller::DistilledPagePrefs* distilled_page_prefs() {
+    return distilled_page_prefs_;
+  }
 
   void ResetMetricsHelper() { metrics_helper_.reset(); }
 
@@ -58,9 +61,6 @@ class ReaderModeMetricsHelperTest : public PlatformTest {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::HistogramTester histogram_tester_;
   ukm::TestAutoSetUkmRecorder test_ukm_recorder_;
-  raw_ptr<dom_distiller::DistilledPagePrefs, DanglingUntriaged>
-      distilled_page_prefs_;
-
  private:
   // Starts and finishes a committed navigation in `web_state()`. This
   // is required to have a valid ID for UKM recording.
@@ -74,6 +74,7 @@ class ReaderModeMetricsHelperTest : public PlatformTest {
   web::FakeWebState web_state_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<ReaderModeMetricsHelper> metrics_helper_;
+  raw_ptr<dom_distiller::DistilledPagePrefs> distilled_page_prefs_;
 };
 
 // Tests that recording a heuristic trigger updates the recorded Reading mode
@@ -121,7 +122,7 @@ TEST_F(ReaderModeMetricsHelperTest,
 TEST_F(ReaderModeMetricsHelperTest, OnFontFamilyChanged) {
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
 
-  distilled_page_prefs_->SetFontFamily(
+  distilled_page_prefs()->SetFontFamily(
       dom_distiller::mojom::FontFamily::kMonospace);
 
   EXPECT_THAT(
@@ -137,7 +138,7 @@ TEST_F(ReaderModeMetricsHelperTest, OnFontFamilyChanged) {
 TEST_F(ReaderModeMetricsHelperTest, OnFontScaleChanged) {
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
 
-  distilled_page_prefs_->SetUserPrefFontScaling(2.0);
+  distilled_page_prefs()->SetUserPrefFontScaling(2.0);
 
   EXPECT_THAT(
       histogram_tester_.GetAllSamples(kReaderModeCustomizationHistogram),
@@ -152,7 +153,7 @@ TEST_F(ReaderModeMetricsHelperTest, OnFontScaleChanged) {
 TEST_F(ReaderModeMetricsHelperTest, OnThemeChanged) {
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
 
-  distilled_page_prefs_->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
+  distilled_page_prefs()->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
   task_environment_.RunUntilIdle();
 
   EXPECT_THAT(
@@ -163,14 +164,36 @@ TEST_F(ReaderModeMetricsHelperTest, OnThemeChanged) {
       BucketsAre(Bucket(ReaderModeTheme::kDark, 1)));
 }
 
+// Tests that metrics are recorded when the user changes the links enabled in
+// Reading Mode customization UI.
+TEST_F(ReaderModeMetricsHelperTest, OnLinksEnabledChanged) {
+  histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
+
+  distilled_page_prefs()->SetLinksEnabled(true);
+
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(kReaderModeCustomizationHistogram),
+      BucketsAre(Bucket(ReaderModeCustomizationType::kLinksEnabled, 1)));
+  EXPECT_THAT(histogram_tester_.GetAllSamples(kReaderModeLinksEnabledHistogram),
+              BucketsAre(Bucket(true, 1)));
+
+  distilled_page_prefs()->SetLinksEnabled(false);
+
+  EXPECT_THAT(
+      histogram_tester_.GetAllSamples(kReaderModeCustomizationHistogram),
+      BucketsAre(Bucket(ReaderModeCustomizationType::kLinksEnabled, 2)));
+  EXPECT_THAT(histogram_tester_.GetAllSamples(kReaderModeLinksEnabledHistogram),
+              BucketsAre(Bucket(true, 1), Bucket(false, 1)));
+}
+
 // Tests that changing the default theme multiple times does not impact
 // user preference customization metrics.
 TEST_F(ReaderModeMetricsHelperTest, OnDefaultThemeChangedMultipleTimes) {
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
 
-  distilled_page_prefs_->SetDefaultTheme(dom_distiller::mojom::Theme::kLight);
-  distilled_page_prefs_->SetDefaultTheme(dom_distiller::mojom::Theme::kDark);
-  distilled_page_prefs_->SetDefaultTheme(dom_distiller::mojom::Theme::kDark);
+  distilled_page_prefs()->SetDefaultTheme(dom_distiller::mojom::Theme::kLight);
+  distilled_page_prefs()->SetDefaultTheme(dom_distiller::mojom::Theme::kDark);
+  distilled_page_prefs()->SetDefaultTheme(dom_distiller::mojom::Theme::kDark);
   task_environment_.RunUntilIdle();
 
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
@@ -182,8 +205,8 @@ TEST_F(ReaderModeMetricsHelperTest, OnDefaultThemeChangedMultipleTimes) {
 TEST_F(ReaderModeMetricsHelperTest, OnUserPrefThemeChangedMultipleTimes) {
   histogram_tester_.ExpectTotalCount(kReaderModeCustomizationHistogram, 0);
 
-  distilled_page_prefs_->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
-  distilled_page_prefs_->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
+  distilled_page_prefs()->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
+  distilled_page_prefs()->SetUserPrefTheme(dom_distiller::mojom::Theme::kDark);
   task_environment_.RunUntilIdle();
 
   EXPECT_THAT(
@@ -375,6 +398,117 @@ TEST_F(ReaderModeMetricsHelperTest, ReaderModeShownAccessPointRecorded) {
       testing::ElementsAre(static_cast<int>(ReaderModeAccessPoint::kAIHub)));
 }
 
+// Tests that data load time is recorded when the data load completes.
+TEST_F(ReaderModeMetricsHelperTest, DataLoadTimeRecorded) {
+  metrics_helper()->RecordDataLoadTriggered();
+  task_environment_.AdvanceClock(base::Seconds(1));
+  metrics_helper()->RecordDataLoadCompleted();
+
+  histogram_tester_.ExpectUniqueTimeSample(kReaderModeDataLoadLatencyHistogram,
+                                           base::Seconds(1), 1);
+}
+
+// Tests that data load time is not recorded if the trigger is missing.
+TEST_F(ReaderModeMetricsHelperTest, DataLoadTimeNotRecordedWithoutTrigger) {
+  metrics_helper()->RecordDataLoadCompleted();
+
+  histogram_tester_.ExpectTotalCount(kReaderModeDataLoadLatencyHistogram, 0);
+}
+
+// Test fixture for testing translation state metrics.
+struct TranslationStateTestCase {
+  ReaderModeTranslationState original_page_state;
+  ReaderModeTranslationState reader_mode_page_state;
+  ReaderModeTranslationPageEventState expected_event;
+};
+
+class ReaderModeMetricsHelperTranslationStateTest
+    : public ReaderModeMetricsHelperTest,
+      public ::testing::WithParamInterface<TranslationStateTestCase> {};
+
+TEST_P(ReaderModeMetricsHelperTranslationStateTest, RecordTranslationState) {
+  TranslationStateTestCase param = GetParam();
+  metrics_helper()->RecordTranslationState(param.original_page_state,
+                                           param.reader_mode_page_state);
+
+  histogram_tester_.ExpectUniqueSample(kReaderModeTranslationStateHistogram,
+                                       param.expected_event, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    ReaderModeMetricsHelperTranslationStateTest,
+    ::testing::Values(
+        // Source not translated. Reader not translated.
+        TranslationStateTestCase{{/*source_code=*/"en", /*target_code=*/"en",
+                                  /*is_page_translated=*/false,
+                                  /*is_automated_translation=*/false},
+                                 {/*source_code=*/"en", /*target_code=*/"en",
+                                  /*is_page_translated=*/false},
+                                 ReaderModeTranslationPageEventState::
+                                     kSourceUntranslatedReaderModeUntranslated},
+        // Source not translated. Reader translated.
+        TranslationStateTestCase{{/*source_code=*/"en", /*target_code=*/"en",
+                                  /*is_page_translated=*/false,
+                                  /*is_automated_translation=*/false},
+                                 {/*source_code=*/"en", /*target_code=*/"es",
+                                  /*is_page_translated=*/true},
+                                 ReaderModeTranslationPageEventState::
+                                     kSourceUntranslatedReaderModeTranslated},
+        // Source manually translated. Reader translated to same language.
+        TranslationStateTestCase{
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true,
+             /*is_automated_translation=*/false},
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true},
+            ReaderModeTranslationPageEventState::
+                kSourceManuallyTranslatedReaderModeTranslated},
+        // Source manually translated. Reader translated to different language.
+        TranslationStateTestCase{
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true,
+             /*is_automated_translation=*/false},
+            {/*source_code=*/"en", /*target_code=*/"fr",
+             /*is_page_translated=*/true},
+            ReaderModeTranslationPageEventState::
+                kSourceManuallyTranslatedReaderModeTranslatedWithLanguageChange},
+        // Source manually translated. Reader not translated.
+        TranslationStateTestCase{
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true,
+             /*is_automated_translation=*/false},
+            {/*source_code=*/"en", /*target_code=*/"en",
+             /*is_page_translated=*/false},
+            ReaderModeTranslationPageEventState::
+                kSourceManuallyTranslatedReaderModeUntranslated},
+        // Source auto translated. Reader translated to same language.
+        TranslationStateTestCase{{/*source_code=*/"en", /*target_code=*/"es",
+                                  /*is_page_translated=*/true,
+                                  /*is_automated_translation=*/true},
+                                 {/*source_code=*/"en", /*target_code=*/"es",
+                                  /*is_page_translated=*/true},
+                                 ReaderModeTranslationPageEventState::
+                                     kSourceAutoTranslatedReaderModeTranslated},
+        // Source auto translated. Reader translated to different language.
+        TranslationStateTestCase{
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true,
+             /*is_automated_translation=*/true},
+            {/*source_code=*/"en", /*target_code=*/"fr",
+             /*is_page_translated=*/true},
+            ReaderModeTranslationPageEventState::
+                kSourceAutoTranslatedReaderModeTranslatedWithLanguageChange},
+        // Source auto translated. Reader not translated.
+        TranslationStateTestCase{
+            {/*source_code=*/"en", /*target_code=*/"es",
+             /*is_page_translated=*/true,
+             /*is_automated_translation=*/true},
+            {/*source_code=*/"en", /*target_code=*/"en",
+             /*is_page_translated=*/false},
+            ReaderModeTranslationPageEventState::
+                kSourceAutoTranslatedReaderModeUntranslated}));
+
 // Tests metrics functionality based on the heuristic result.
 class ReaderModeMetricsHelperWithEligibilityTest
     : public ReaderModeMetricsHelperTest,
@@ -422,7 +556,5 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         ReaderModeHeuristicResult::kMalformedResponse,
         ReaderModeHeuristicResult::kReaderModeEligible,
-        ReaderModeHeuristicResult::kReaderModeNotEligibleContentOnly,
-        ReaderModeHeuristicResult::kReaderModeNotEligibleContentLength,
         ReaderModeHeuristicResult::kReaderModeNotEligibleContentAndLength),
     ReaderModeTest::TestParametersReaderModeHeuristicResultToString);

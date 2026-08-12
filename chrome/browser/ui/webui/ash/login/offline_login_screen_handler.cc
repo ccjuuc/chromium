@@ -4,8 +4,7 @@
 
 #include "chrome/browser/ui/webui/ash/login/offline_login_screen_handler.h"
 
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "components/login/localized_values_builder.h"
 #include "components/user_manager/known_user.h"
 #include "google_apis/gaia/gaia_auth_util.h"
@@ -37,7 +36,7 @@ void OfflineLoginScreenHandler::DeclareLocalizedValues(
   builder->Add("offlineLoginOkBtn", IDS_OFFLINE_LOGIN_OK_BUTTON_TEXT);
 }
 
-void OfflineLoginScreenHandler::Show(base::Value::Dict params) {
+void OfflineLoginScreenHandler::Show(base::DictValue params) {
   ShowInWebUI(std::move(params));
 }
 

@@ -14,9 +14,9 @@
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/client/internal/mappable_buffer.h"
+#include "ui/gfx/client_native_pixmap.h"
 
 namespace gfx {
-class ClientNativePixmap;
 class ClientNativePixmapFactory;
 }  // namespace gfx
 
@@ -56,11 +56,12 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBufferNativePixmap
   bool Map() override;
   void MapAsync(base::OnceCallback<void(bool)> callback) override;
   bool AsyncMappingIsNonBlocking() const override;
-  void* memory(size_t plane) override;
+  base::span<uint8_t> memory(size_t plane) override;
   void Unmap() override;
   int stride(size_t plane) const override;
   gfx::GpuMemoryBufferType GetType() const override;
   gfx::GpuMemoryBufferHandle CloneHandle() const override;
+  bool SupportsZeroCopyWebGPUImport() const override;
 
  private:
   friend class ClientSharedImage;
@@ -75,13 +76,17 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT MappableBufferNativePixmap
   MappableBufferNativePixmap(
       const gfx::Size& size,
       viz::SharedImageFormat format,
-      std::unique_ptr<gfx::ClientNativePixmap> native_pixmap);
+      std::unique_ptr<gfx::ClientNativePixmap> native_pixmap,
+      bool supports_zero_copy_webgpu_import);
 
   void AssertMapped();
 
   const gfx::Size size_;
   const viz::SharedImageFormat format_;
   const std::unique_ptr<gfx::ClientNativePixmap> pixmap_;
+  // This can only ever be true on Linux / ChromeOS platforms, but is still
+  // unconditionally passed everywhere to simplify the plumbing.
+  const bool supports_zero_copy_webgpu_import_;
 
   // Note: This lock must be held throughout the entirety of the Map() and
   // Unmap() operations to avoid corrupt mutation across multiple threads.

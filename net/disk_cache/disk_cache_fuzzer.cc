@@ -23,6 +23,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/numerics/checked_math.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
@@ -258,7 +259,7 @@ std::string ToKey(uint64_t key_num) {
 
   // Otherwise, use a value based on the key id and fuzzy padding.
   std::string padding(key_num & 0xFFFF, 'A');
-  return "Key" + padding + base::NumberToString(key_num);
+  return base::StrCat({"Key", padding, base::NumberToString(key_num)});
 }
 
 net::RequestPriority GetRequestPriority(
@@ -1183,7 +1184,7 @@ void DiskCacheLPMFuzzer::CreateBackend(
       auto simple_backend = std::make_unique<disk_cache::SimpleBackendImpl>(
           /*file_operations=*/nullptr, cache_path_, std::move(cleanup_tracker),
           simple_file_tracker_.get(), ComputeMaxSize(maybe_max_size), type,
-          /*net_log=*/nullptr, /*cache_encryption_delegate=*/nullptr);
+          /*cache_entry_hasher=*/nullptr, /*net_log=*/nullptr);
       simple_backend->Init(cb.callback());
       CHECK_EQ(cb.WaitForResult(), net::OK);
       simple_cache_impl_ = simple_backend.get();
@@ -1237,7 +1238,8 @@ void DiskCacheLPMFuzzer::CreateBackend(
       MAYBE_PRINT << "Using SQL cache" << std::endl;
       std::unique_ptr<disk_cache::SqlBackendImpl> cache =
           std::make_unique<disk_cache::SqlBackendImpl>(
-              cache_path_, ComputeMaxSize(maybe_max_size), type);
+              cache_path_, ComputeMaxSize(maybe_max_size), type,
+              std::move(cleanup_tracker));
       sql_cache_impl_ = cache.get();
       cache_ = std::move(cache);
       net::TestCompletionCallback cb;

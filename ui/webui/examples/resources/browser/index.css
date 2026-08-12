@@ -2,7 +2,8 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file. */
 
-html, body {
+html,
+body {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -22,7 +23,8 @@ body {
   flex: 1;
 }
 
-webview {
+webview,
+surfaceembed {
   display: flex;
   flex-direction: column;
 

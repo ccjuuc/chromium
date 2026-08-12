@@ -24,11 +24,11 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/logging/logging_settings.h"
-#include "base/memory/memory_pressure_listener.h"
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/ptr_util.h"
 #include "base/message_loop/message_pump.h"
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
@@ -47,19 +47,18 @@
 #include "content/child/child_performance_coordinator.h"
 #include "content/child/child_process.h"
 #include "content/child/child_process_synthetic_trial_syncer.h"
-#include "content/child/memory_coordinator/child_memory_consumer_registry.h"
+#include "content/child/host_receiver_batcher.h"
+#include "content/child/memory_coordinator/child_memory_coordinator.h"
 #include "content/common/child_process.mojom.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/features.h"
 #include "content/common/field_trial_recorder.mojom.h"
 #include "content/common/in_process_child_thread_params.h"
-#include "content/common/pseudonymization_salt.h"
 #include "content/public/child/child_thread.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
-#include "ipc/ipc_channel_factory.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "mojo/core/embedder/scoped_ipc_support.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -102,6 +101,8 @@
 #endif
 #if BUILDFLAG(IS_WIN)
 #include <io.h>
+
+#include "base/time/time.h"
 #endif
 // Function provided by libclang_rt.profile-*.a, declared and documented at:
 // https://github.com/llvm/llvm-project/blob/master/compiler-rt/lib/profile/InstrProfiling.h
@@ -439,10 +440,6 @@ class ChildThreadImpl::IOThreadState
   }
 #endif
 
-  void SetPseudonymizationSalt(uint32_t salt) override {
-    content::SetPseudonymizationSalt(salt);
-  }
-
 #if BUILDFLAG(IS_CHROMEOS)
   void ReinitializeLogging(mojom::LoggingSettingsPtr settings) override {
     logging::LoggingSettings logging_settings;
@@ -458,14 +455,12 @@ class ChildThreadImpl::IOThreadState
   }
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
   void OnMemoryPressure(base::MemoryPressureLevel level) override {
     main_thread_task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&ChildThreadImpl::OnMemoryPressureFromBrowserReceived,
                        weak_main_thread_, level));
   }
-#endif
 
   void SetBatterySaverMode(bool battery_saver_mode_enabled) override {
     if (battery_saver_mode_enabled) {
@@ -609,11 +604,10 @@ void ChildThreadImpl::Init(const Options& options) {
   main_thread_runner_ = base::SingleThreadTaskRunner::GetCurrentDefault();
 
   if (options.with_legacy_ipc_channel) {
-    channel_ = IPC::SyncChannel::Create(
+    channel_ = std::make_unique<IPC::ChannelProxy>(
         this, ChildProcess::current()->io_task_runner(),
         ipc_task_runner_ ? ipc_task_runner_
-                         : base::SingleThreadTaskRunner::GetCurrentDefault(),
-        ChildProcess::current()->GetShutDownEvent());
+                         : base::SingleThreadTaskRunner::GetCurrentDefault());
     if (options.urgent_message_observer) {
       channel_->SetUrgentMessageObserver(options.urgent_message_observer);
     }
@@ -647,6 +641,11 @@ void ChildThreadImpl::Init(const Options& options) {
       legacy_ipc_bootstrap_pipe =
           invitation.ExtractMessagePipe(kLegacyIpcBootstrapAttachmentName);
     }
+
+    // TODO(crbug.com/496408117): Consider handling this for the in-process case
+    // below as well.
+    initial_gpu_channel_ =
+        invitation.ExtractMessagePipe(kGPUChannelAttachmentName);
   } else {
     child_process_pipe_for_receiver =
         options.mojo_invitation->ExtractMessagePipe(
@@ -667,6 +666,14 @@ void ChildThreadImpl::Init(const Options& options) {
   child_process_host_ = mojo::SharedRemote<mojom::ChildProcessHost>(
       std::move(remote_host), GetIOTaskRunner());
 
+  // Coalesces the burst of host-receiver binds issued below (and elsewhere
+  // during startup) into batched IPCs. Must exist before the first
+  // BindHostReceiverBatched() call.
+  host_receiver_batcher_ = std::make_unique<HostReceiverBatcher>(
+      base::BindRepeating(&ChildThreadImpl::SendHostReceivers,
+                          weak_factory_.GetWeakPtr()),
+      main_thread_runner_);
+
   // In single process mode, browser-side tracing and memory will cover the
   // whole process including renderers.
   if (!IsInBrowserProcess()) {
@@ -674,7 +681,7 @@ void ChildThreadImpl::Init(const Options& options) {
     mojo::PendingRemote<memory_instrumentation::mojom::ClientProcess> process;
     auto process_receiver = process.InitWithNewPipeAndPassReceiver();
     mojo::Remote<memory_instrumentation::mojom::CoordinatorConnector> connector;
-    BindHostReceiver(connector.BindNewPipeAndPassReceiver());
+    BindHostReceiverBatched(connector.BindNewPipeAndPassReceiver());
     connector->RegisterCoordinatorClient(
         coordinator.InitWithNewPipeAndPassReceiver(), std::move(process));
     memory_instrumentation::ClientProcessImpl::CreateInstance(
@@ -694,16 +701,18 @@ void ChildThreadImpl::Init(const Options& options) {
     // communication from the browser process (see https://crbug.com/821790 for
     // details)
     mojo::PendingRemote<device::mojom::PowerMonitor> remote_power_monitor;
-    BindHostReceiver(remote_power_monitor.InitWithNewPipeAndPassReceiver());
+    BindHostReceiverBatched(
+        remote_power_monitor.InitWithNewPipeAndPassReceiver());
     source_ptr->Init(std::move(remote_power_monitor));
   }
 
   performance_coordinator_ = std::make_unique<ChildPerformanceCoordinator>();
-  BindHostReceiver(performance_coordinator_->InitializeAndPassReceiver());
+  BindHostReceiverBatched(
+      performance_coordinator_->InitializeAndPassReceiver());
 
   if (!IsInBrowserProcess()) {
-    // Connect the global ChildMemoryConsumerRegistry with the browser registry.
-    BindHostReceiver(ChildMemoryConsumerRegistry::BindAndPassReceiver());
+    // Connect the global ChildMemoryCoordinator with the browser registry.
+    BindHostReceiverBatched(ChildMemoryCoordinator::BindAndPassReceiver());
   }
 
 #if BUILDFLAG(IS_POSIX)
@@ -720,12 +729,8 @@ void ChildThreadImpl::Init(const Options& options) {
   // Add filters passed here via options.
   if (options.with_legacy_ipc_channel) {
     DCHECK(legacy_ipc_bootstrap_pipe.is_valid());
-    channel_->Init(IPC::ChannelFactory::CreateClientFactory(
-                       std::move(legacy_ipc_bootstrap_pipe),
-                       ChildProcess::current()->io_task_runner(),
-                       ipc_task_runner_
-                           ? ipc_task_runner_
-                           : base::SingleThreadTaskRunner::GetCurrentDefault()),
+    channel_->Init(std::move(legacy_ipc_bootstrap_pipe),
+                   IPC::Channel::MODE_CLIENT,
                    /*create_pipe_now=*/true);
   }
 
@@ -763,7 +768,7 @@ void ChildThreadImpl::Init(const Options& options) {
   // browser process (because it's the same process).
   if (!IsInBrowserProcess()) {
     mojo::PendingRemote<mojom::FieldTrialRecorder> pending_remote;
-    BindHostReceiver(pending_remote.InitWithNewPipeAndPassReceiver());
+    BindHostReceiverBatched(pending_remote.InitWithNewPipeAndPassReceiver());
     mojo::SharedRemote<mojom::FieldTrialRecorder> shared_remote(
         std::move(pending_remote));
     field_trial_syncer_ =
@@ -849,6 +854,25 @@ void ChildThreadImpl::BindHostReceiver(mojo::GenericPendingReceiver receiver) {
     child_process_host_->BindHostReceiver(std::move(receiver));
 }
 
+void ChildThreadImpl::BindHostReceiverBatched(
+    mojo::GenericPendingReceiver receiver) {
+  // `host_receiver_batcher_` is created early in Init(); guard against any bind
+  // that races ahead of it by falling back to an immediate (correct) send.
+  if (host_receiver_batcher_) {
+    host_receiver_batcher_->AddReceiver(std::move(receiver));
+  } else {
+    BindHostReceiver(std::move(receiver));
+  }
+}
+
+void ChildThreadImpl::SendHostReceivers(
+    std::vector<mojo::GenericPendingReceiver> receivers) {
+  if (!child_process_host_ || receivers.empty()) {
+    return;
+  }
+  child_process_host_->BindHostReceivers(std::move(receivers));
+}
+
 void ChildThreadImpl::OnAssociatedInterfaceRequest(
     const std::string& interface_name,
     mojo::ScopedInterfaceEndpointHandle handle) {
@@ -882,6 +906,9 @@ void ChildThreadImpl::GetBackgroundTracingAgentProvider(
 
 void ChildThreadImpl::DisconnectChildProcessHost() {
   child_process_host_.reset();
+  if (host_receiver_batcher_) {
+    host_receiver_batcher_->Clear();
+  }
 }
 
 void ChildThreadImpl::BindServiceInterface(
@@ -915,18 +942,11 @@ bool ChildThreadImpl::IsInBrowserProcess() const {
   return static_cast<bool>(browser_process_io_runner_);
 }
 
-#if BUILDFLAG(IS_ANDROID)
 void ChildThreadImpl::OnMemoryPressureFromBrowserReceived(
     base::MemoryPressureLevel level) {
-  // Generate no memory pressure signals when --single-process is specified.
-  // Because we expect a signal for the browser process has been already
-  // generated.
-  if (IsInBrowserProcess()) {
-    return;
-  }
+  CHECK(!IsInBrowserProcess());
   // Forward the notification to the registry of MemoryPressureListeners.
-  base::MemoryPressureListener::NotifyMemoryPressure(level);
+  base::MemoryPressureListenerRegistry::NotifyMemoryPressure(level);
 }
-#endif
 
 }  // namespace content

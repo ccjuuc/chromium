@@ -39,8 +39,11 @@
 #include "gpu/config/gpu_switches.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
+#include "net/base/features.h"
+#include "net/base/switches.h"
 #include "sandbox/policy/switches.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "services/webnn/public/mojom/features.mojom.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -54,10 +57,12 @@
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/command_line_android.h"
+#include "base/android/jni_android.h"
 #include "chrome/browser/android/flags/bad_flags_snackbar_manager.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #else
-#include "chrome/browser/actor/actor_switches.h"
+#include "components/actor/core/actor_switches.h"
 #include "services/device/public/cpp/hid/hid_switches.h"
 #endif
 
@@ -77,7 +82,7 @@ const char* const kBadFlags[] = {
 
     // These flags, which can expose network data, are considered potentially
     // dangerous.
-    network::switches::kLogNetLog,
+    net::switches::kLogNetLog,
     network::switches::kNetLogCaptureMode,
 
     // These flags disable sandbox-related security.
@@ -85,6 +90,7 @@ const char* const kBadFlags[] = {
     sandbox::policy::switches::kDisableLandlockSandbox,
     sandbox::policy::switches::kDisableSeccompFilterSandbox,
     sandbox::policy::switches::kDisableSetuidSandbox,
+    sandbox::policy::switches::kDisableWebNNCompilerSandbox,
     sandbox::policy::switches::kNoSandbox,
 #if BUILDFLAG(IS_WIN)
     sandbox::policy::switches::kAllowThirdPartyModules,
@@ -109,11 +115,15 @@ const char* const kBadFlags[] = {
     // chrome-extension:// URLs.
     extensions::switches::kExtensionsOnChromeURLs,
     extensions::switches::kExtensionsOnExtensionURLs,
+
+    // This flag gives the specified extension(s) access to restricted extension
+    // APIs.
+    extensions::switches::kAllowlistedExtensionID,
 #endif
 
 #if BUILDFLAG(IS_LINUX)
     // Speech dispatcher is buggy, it can crash and it can make Chrome freeze.
-    // http://crbug.com/327295
+    // http://crbug.com/40078530
     switches::kEnableSpeechDispatcher,
 #endif
 
@@ -225,6 +235,13 @@ static const std::variant<const base::Feature*, const char*>
         // This flag disables security for the Page Embedded Permission Control,
         // for testing purposes. Can only be enabled via the command line.
         &blink::features::kBypassPepcSecurityForTesting,
+
+        // This feature is under development and has known security risks.
+        &webnn::mojom::features::kWebMachineLearningNeuralNetwork,
+
+        // This feature enables the test root store, which can contain roots
+        // that are not actually trusted.
+        &net::features::kTestRootStore,
 };
 
 void ShowBadFlagsInfoBarHelper(content::WebContents* web_contents,
@@ -253,6 +270,20 @@ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
       ShowBadFlagsInfoBar(web_contents, IDS_BAD_FLAGS_WARNING_MESSAGE, flag);
       return;
     }
+  }
+#endif
+
+#if BUILDFLAG(IS_ANDROID) && defined(OFFICIAL_BUILD)
+  JNIEnv* env = base::android::AttachCurrentThread();
+  base::CommandLine* commandLine = base::CommandLine::ForCurrentProcess();
+  bool isTestIntent = commandLine->HasSwitch("enable-test-intents");
+  if (base::android::WasFlagsLoadedFromFile(env) &&
+      !commandLine->HasSwitch(switches::kEnableAutomation) && !isTestIntent) {
+    // If the command line file was loaded, we show a snackbar warning about
+    // all the flags in the file.
+    ShowBadFlagsSnackbar(
+        web_contents,
+        l10n_util::GetStringUTF16(IDS_BAD_FLAGS_FROM_FILE_WARNING_MESSAGE));
   }
 #endif
 

@@ -13,6 +13,7 @@
 #include <string_view>
 
 #include "base/strings/cstring_view.h"
+#include "base/types/expected.h"
 #include "sql/database.h"
 
 // Collection of test-only convenience functions.
@@ -110,6 +111,9 @@ int GetPageCount(sql::Database* db);
 //
 // C++ wrapper around the out-params of sqlite3_table_column_metadata().
 struct ColumnInfo {
+  // TODO(b/491051120): Consolidate usages of "main" string constants.
+  static constexpr char kMainDbName[] = "main";
+
   // Retrieves schema information for a column in a table.
   //
   // Crashes on SQLite errors.
@@ -135,6 +139,11 @@ struct ColumnInfo {
   // True if the column is AUTOINCREMENT.
   bool is_auto_incremented;
 };
+
+// Returns the number of frames in `db`'s write-ahead log file that have not yet
+// been checkpointed into the main database file or an extended SQLite error
+// code on failure.
+base::expected<int, int> GetUncheckpointedFrameCount(const Database& db);
 
 }  // namespace sql::test
 

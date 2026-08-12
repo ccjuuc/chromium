@@ -14,12 +14,12 @@
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/application_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
-#import "ios/chrome/browser/shared/public/commands/load_query_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/qr_scanner_commands.h"
 #import "ios/chrome/browser/shared/public/commands/save_to_photos_commands.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -28,6 +28,7 @@
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
+#import "ios/web/public/ui/context_menu_params.h"
 #import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
@@ -37,6 +38,7 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "ui/base/test/ios/ui_image_test_utils.h"
 #import "url/gurl.h"
+#import "url/origin.h"
 
 namespace {
 const MenuScenarioHistogram kTestMenuScenario =
@@ -54,11 +56,10 @@ class BrowserActionFactoryTest : public PlatformTest {
 
     test_browser_ = std::make_unique<TestBrowser>(profile_.get());
 
-    mock_application_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(ApplicationCommands));
+    mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     [test_browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mock_application_commands_handler_
-                     forProtocol:@protocol(ApplicationCommands)];
+        startDispatchingToTarget:mock_scene_handler_
+                     forProtocol:@protocol(SceneCommands)];
 
     mock_settings_commands_handler_ =
         OCMStrictProtocolMock(@protocol(SettingsCommands));
@@ -78,17 +79,16 @@ class BrowserActionFactoryTest : public PlatformTest {
         startDispatchingToTarget:mock_qr_scanner_commands_handler_
                      forProtocol:@protocol(QRScannerCommands)];
 
-    mock_load_query_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(LoadQueryCommands));
-    [test_browser_->GetCommandDispatcher()
-        startDispatchingToTarget:mock_load_query_commands_handler_
-                     forProtocol:@protocol(LoadQueryCommands)];
-
     mock_save_to_photos_commands_handler_ =
         OCMStrictProtocolMock(@protocol(SaveToPhotosCommands));
     [test_browser_->GetCommandDispatcher()
         startDispatchingToTarget:mock_save_to_photos_commands_handler_
                      forProtocol:@protocol(SaveToPhotosCommands)];
+
+    mock_gemini_handler_ = OCMStrictProtocolMock(@protocol(GeminiCommands));
+    [test_browser_->GetCommandDispatcher()
+        startDispatchingToTarget:mock_gemini_handler_
+                     forProtocol:@protocol(GeminiCommands)];
   }
 
   base::test::ScopedFeatureList feature_list_;
@@ -97,12 +97,12 @@ class BrowserActionFactoryTest : public PlatformTest {
   NSString* test_title_;
   std::unique_ptr<TestProfileIOS> profile_;
   std::unique_ptr<TestBrowser> test_browser_;
-  id mock_application_commands_handler_;
+  id mock_scene_handler_;
   id mock_settings_commands_handler_;
   id mock_browser_coordinator_commands_handler_;
   id mock_qr_scanner_commands_handler_;
-  id mock_load_query_commands_handler_;
   id mock_save_to_photos_commands_handler_;
+  id mock_gemini_handler_;
 };
 
 // Tests that the Open in New Tab actions have the right titles and images.
@@ -115,7 +115,7 @@ TEST_F(BrowserActionFactoryTest, OpenInNewTabAction_URL) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      DefaultSymbolWithPointSize(kNewTabActionSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolNewTabAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWTAB);
 
@@ -140,7 +140,7 @@ TEST_F(BrowserActionFactoryTest, OpenInNewIncognitoTabAction_URL) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolIncognito, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_OPEN_IN_INCOGNITO_ACTION_TITLE);
 
@@ -164,8 +164,8 @@ TEST_F(BrowserActionFactoryTest, OpenInNewWindowAction) {
       [[BrowserActionFactory alloc] initWithBrowser:test_browser_.get()
                                            scenario:kTestMenuScenario];
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kNewWindowActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolNewWindowAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENINNEWWINDOW);
 
@@ -195,8 +195,8 @@ TEST_F(BrowserActionFactoryTest, OpenImageAction) {
 
   GURL testURL = GURL("https://example.com/logo.png");
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kOpenImageActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolOpenImageAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENIMAGE);
 
@@ -218,7 +218,7 @@ TEST_F(BrowserActionFactoryTest, OpenImageInNewTabAction) {
   UrlLoadParams testParams = UrlLoadParams::InNewTab(testURL);
 
   UIImage* expectedImage =
-      CustomSymbolWithPointSize(kPhotoBadgePlusSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolPhotoBadgePlus, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENIMAGENEWTAB);
 
@@ -238,7 +238,7 @@ TEST_F(BrowserActionFactoryTest, OpenNewTabAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      DefaultSymbolWithPointSize(kNewTabActionSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolNewTabAction, kSymbolActionPointSize);
   NSString* expectedTitle = l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_TAB);
 
   UIAction* action = [factory actionToOpenNewTab];
@@ -263,7 +263,7 @@ TEST_F(BrowserActionFactoryTest, OpenNewIncognitoTabAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolIncognito, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_INCOGNITO_TAB);
 
@@ -289,7 +289,7 @@ TEST_F(BrowserActionFactoryTest, CloseCurrentTabAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      DefaultSymbolWithPointSize(kXMarkSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolXMark, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_CLOSE_TAB);
 
@@ -306,8 +306,8 @@ TEST_F(BrowserActionFactoryTest, ShowQRScannerAction) {
       [[BrowserActionFactory alloc] initWithBrowser:test_browser_.get()
                                            scenario:kTestMenuScenario];
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kQRCodeFinderActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolQRCodeFinderAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_QR_SCANNER);
 
@@ -324,7 +324,7 @@ TEST_F(BrowserActionFactoryTest, StartVoiceSearchAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      DefaultSymbolWithPointSize(kMicrophoneSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolMicrophone, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_VOICE_SEARCH);
 
@@ -341,7 +341,7 @@ TEST_F(BrowserActionFactoryTest, StartNewSearchAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      DefaultSymbolWithPointSize(kSearchSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolSearch, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_SEARCH);
 
@@ -367,7 +367,7 @@ TEST_F(BrowserActionFactoryTest, NewIncognitoSearchAction) {
                                            scenario:kTestMenuScenario];
 
   UIImage* expectedImage =
-      CustomSymbolWithPointSize(kIncognitoSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolIncognito, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_NEW_INCOGNITO_SEARCH);
 
@@ -392,8 +392,8 @@ TEST_F(BrowserActionFactoryTest, SearchCopiedImageAction) {
       [[BrowserActionFactory alloc] initWithBrowser:test_browser_.get()
                                            scenario:kTestMenuScenario];
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolClipboardAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_SEARCH_COPIED_IMAGE);
 
@@ -409,8 +409,8 @@ TEST_F(BrowserActionFactoryTest, SearchCopiedURLAction) {
       [[BrowserActionFactory alloc] initWithBrowser:test_browser_.get()
                                            scenario:kTestMenuScenario];
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolClipboardAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_VISIT_COPIED_LINK);
 
@@ -426,8 +426,8 @@ TEST_F(BrowserActionFactoryTest, SearchCopiedTextAction) {
       [[BrowserActionFactory alloc] initWithBrowser:test_browser_.get()
                                            scenario:kTestMenuScenario];
 
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kClipboardActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolClipboardAction, kSymbolActionPointSize);
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_SEARCH_COPIED_TEXT);
 
@@ -445,10 +445,10 @@ TEST_F(BrowserActionFactoryTest, SaveImageInGooglePhotosAction) {
 
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
   UIImage* expectedImage =
-      CustomSymbolWithPointSize(kGooglePhotosSymbol, kSymbolActionPointSize);
+      SymbolWithPointSize(SymbolGooglePhotos, kSymbolActionPointSize);
 #else
-  UIImage* expectedImage = DefaultSymbolWithPointSize(kSaveImageActionSymbol,
-                                                      kSymbolActionPointSize);
+  UIImage* expectedImage =
+      SymbolWithPointSize(SymbolSaveImageAction, kSymbolActionPointSize);
 #endif
   NSString* expectedTitle =
       l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_SAVE_IMAGE_TO_PHOTOS);
@@ -457,10 +457,16 @@ TEST_F(BrowserActionFactoryTest, SaveImageInGooglePhotosAction) {
   web::Referrer fakeImageReferrer;
   std::unique_ptr<web::WebState> fakeWebState =
       std::make_unique<web::FakeWebState>();
+  web::ContextMenuParams fakeParams;
+  fakeParams.frame_id = "fake_frame_id";
+  fakeParams.frame_security_origin =
+      url::Origin::Create(GURL("http://chromium.test/"));
+
   UIAction* action =
       [factory actionToSaveToPhotosWithImageURL:fakeImageURL
                                        referrer:fakeImageReferrer
                                        webState:fakeWebState.get()
+                                         params:fakeParams
                                           block:nil];
 
   EXPECT_NSEQ(expectedTitle, action.title);

@@ -371,6 +371,12 @@ inline CSSIdentifierValue::CSSIdentifierValue(EFillBox e)
     case EFillBox::kText:
       value_id_ = CSSValueID::kText;
       break;
+    case EFillBox::kBorderArea:
+      value_id_ = CSSValueID::kBorderArea;
+      break;
+    case EFillBox::kBorderAreaText:
+      // Combined value is serialized as a list, not a single identifier.
+      NOTREACHED();
     case EFillBox::kFillBox:
       value_id_ = CSSValueID::kFillBox;
       break;
@@ -400,6 +406,8 @@ inline EFillBox CSSIdentifierValue::ConvertTo() const {
       return EFillBox::kContent;
     case CSSValueID::kText:
       return EFillBox::kText;
+    case CSSValueID::kBorderArea:
+      return EFillBox::kBorderArea;
     case CSSValueID::kFillBox:
       return EFillBox::kFillBox;
     case CSSValueID::kStrokeBox:
@@ -1223,38 +1231,35 @@ inline TouchAction CSSIdentifierValue::ConvertTo() const {
 }
 
 template <>
-inline CSSIdentifierValue::CSSIdentifierValue(CSSBoxType css_box)
+inline CSSIdentifierValue::CSSIdentifierValue(ShapeBox css_box)
     : CSSValue(kIdentifierClass) {
   switch (css_box) {
-    case CSSBoxType::kMargin:
+    case ShapeBox::kMarginBox:
       value_id_ = CSSValueID::kMarginBox;
       break;
-    case CSSBoxType::kBorder:
+    case ShapeBox::kBorderBox:
       value_id_ = CSSValueID::kBorderBox;
       break;
-    case CSSBoxType::kPadding:
+    case ShapeBox::kPaddingBox:
       value_id_ = CSSValueID::kPaddingBox;
       break;
-    case CSSBoxType::kContent:
+    case ShapeBox::kContentBox:
       value_id_ = CSSValueID::kContentBox;
       break;
-    case CSSBoxType::kMissing:
-      // The missing box should convert to a null value.
-      NOTREACHED();
   }
 }
 
 template <>
-inline CSSBoxType CSSIdentifierValue::ConvertTo() const {
+inline ShapeBox CSSIdentifierValue::ConvertTo() const {
   switch (GetValueID()) {
     case CSSValueID::kMarginBox:
-      return CSSBoxType::kMargin;
+      return ShapeBox::kMarginBox;
     case CSSValueID::kBorderBox:
-      return CSSBoxType::kBorder;
+      return ShapeBox::kBorderBox;
     case CSSValueID::kPaddingBox:
-      return CSSBoxType::kPadding;
+      return ShapeBox::kPaddingBox;
     case CSSValueID::kContentBox:
-      return CSSBoxType::kContent;
+      return ShapeBox::kContentBox;
     default:
       break;
   }
@@ -1547,6 +1552,9 @@ inline CSSIdentifierValue::CSSIdentifierValue(cc::SnapAxis axis)
     case cc::SnapAxis::kBoth:
       value_id_ = CSSValueID::kBoth;
       break;
+    case cc::SnapAxis::kPair:
+      value_id_ = CSSValueID::kPair;
+      break;
   }
 }
 
@@ -1563,6 +1571,8 @@ inline cc::SnapAxis CSSIdentifierValue::ConvertTo() const {
       return cc::SnapAxis::kInline;
     case CSSValueID::kBoth:
       return cc::SnapAxis::kBoth;
+    case CSSValueID::kPair:
+      return cc::SnapAxis::kPair;
     default:
       break;
   }
@@ -1650,8 +1660,6 @@ inline Containment CSSIdentifierValue::ConvertTo() const {
       return kContainsSize;
     case CSSValueID::kInlineSize:
       return kContainsInlineSize;
-    case CSSValueID::kViewTransition:
-      return kContainsViewTransition;
     default:
       break;
   }
@@ -1675,6 +1683,28 @@ inline EContainerType CSSIdentifierValue::ConvertTo() const {
       break;
   }
   NOTREACHED();
+}
+
+template <>
+inline EMarginTrim CSSIdentifierValue::ConvertTo() const {
+  switch (GetValueID()) {
+    case CSSValueID::kNone:
+      return kMarginTrimNone;
+    case CSSValueID::kBlock:
+      return kMarginTrimBlock;
+    case CSSValueID::kInline:
+      return kMarginTrimInline;
+    case CSSValueID::kBlockStart:
+      return kMarginTrimBlockStart;
+    case CSSValueID::kInlineStart:
+      return kMarginTrimInlineStart;
+    case CSSValueID::kBlockEnd:
+      return kMarginTrimBlockEnd;
+    case CSSValueID::kInlineEnd:
+      return kMarginTrimInlineEnd;
+    default:
+      NOTREACHED();
+  }
 }
 
 template <>

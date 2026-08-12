@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/platform_shared_memory_region.h"
@@ -170,6 +171,7 @@ GpuArcVideoEncodeAccelerator::InitializeTask(
   }
 
   visible_size_ = config.input_visible_size;
+  coded_size_ = gfx::Size();
   accelerator_.reset();
   auto accelerator_or_error =
       media::GpuVideoEncodeAcceleratorFactory::CreateVEA(
@@ -201,8 +203,24 @@ void GpuArcVideoEncodeAccelerator::Encode(
     return;
   }
 
+  // |coded_size_| is only set when the (asynchronous) RequireBitstreamBuffers()
+  // callback fires. Until then it is empty (reset in Initialize()) and cannot
+  // be used to validate the incoming dmabuf. Reject early instead.
+  if (coded_size_.IsEmpty()) {
+    DLOG(ERROR) << "Encode() called before RequireBitstreamBuffers().";
+    if (client_) {
+      client_->NotifyError(Error::kIllegalStateError);
+    }
+    return;
+  }
+
   if (planes.empty()) {  // EOS
     accelerator_->Encode(media::VideoFrame::CreateEOSFrame(), force_keyframe);
+    return;
+  }
+
+  if (!client_) {
+    DLOG(ERROR) << "No client is bound.";
     return;
   }
 
@@ -241,8 +259,9 @@ void GpuArcVideoEncodeAccelerator::Encode(
     return;
   }
   scoped_refptr<media::VideoFrame> frame;
+  const gfx::ColorSpace color_space = gfx::ColorSpace::CreateREC709();
   auto shared_image = sii_->CreateSharedImage(
-      {*si_format, visible_size_, gfx::ColorSpace(),
+      {*si_format, visible_size_, color_space,
        gpu::SHARED_IMAGE_USAGE_CPU_ONLY_READ_WRITE,
        "GpuArcVideoEncodeAccelerator"},
       gpu::kNullSurfaceHandle,
@@ -262,6 +281,8 @@ void GpuArcVideoEncodeAccelerator::Encode(
     client_->NotifyError(Error::kInvalidArgumentError);
     return;
   }
+
+  frame->set_color_space(color_space);
 
   // Make sure the Mojo callback is called on the same thread as where the Mojo
   // call is received (here).

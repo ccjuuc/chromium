@@ -24,6 +24,8 @@ FRAME_KEY = 'frame-075b-4da1-b6ba-e579c2d3230a'
 WINDOW_KEY = 'window-fcc6-11e5-b4f8-330a88ab9d7f'
 MAX_RETRY_COUNT = 5
 
+_UNSET = object()
+
 def _ExceptionForLegacyResponse(response):
   exception_class_map = {
     6: InvalidSessionId,
@@ -144,7 +146,7 @@ class ChromeDriver(object):
       chrome_switches = []
 
     if sys.platform.startswith('linux') and android_package is None:
-      # Workaround for crbug.com/611886.
+      # Workaround for crbug.com/40469290.
       chrome_switches.append('no-sandbox')
       # https://bugs.chromium.org/p/chromedriver/issues/detail?id=1695
       chrome_switches.append('disable-gpu')
@@ -634,7 +636,7 @@ class ChromeDriver(object):
 
   def SetNetworkConditions(self, latency, download_throughput,
                            upload_throughput, offline=False):
-    # Until http://crbug.com/456324 is resolved, we'll always set 'offline' to
+    # Until http://crbug.com/41156249 is resolved, we'll always set 'offline' to
     # False, as going "offline" will sever Chromedriver's connection to Chrome.
     params = {
         'network_conditions': {
@@ -721,7 +723,7 @@ class ChromeDriver(object):
 
   def AddCredential(self, authenticatorId=None, credentialId=None,
                     isResidentCredential=None, rpId=None, privateKey=None,
-                    userHandle=None, signCount=None, largeBlob=None,
+                    userHandle=None, signCount=_UNSET, largeBlob=None,
                     backupState=None, backupEligibility=None,userName=None,
                     userDisplayName=None):
     options = {}
@@ -737,7 +739,7 @@ class ChromeDriver(object):
       options['privateKey'] = privateKey
     if userHandle is not None:
       options['userHandle'] = userHandle
-    if signCount is not None:
+    if signCount is not _UNSET:
       options['signCount'] = signCount
     if largeBlob is not None:
       options['largeBlob'] = largeBlob
@@ -770,12 +772,15 @@ class ChromeDriver(object):
     return self.ExecuteCommand(Command.SET_USER_VERIFIED, params)
 
   def SetCredentialProperties(self, authenticatorId, credentialId,
-                              backupState=None, backupEligibility=None):
+                              backupState=None, backupEligibility=None,
+                              signCount=_UNSET):
     params = {'authenticatorId': authenticatorId, 'credentialId': credentialId}
     if backupState is not None:
       params['backupState'] = backupState
     if backupEligibility is not None:
       params['backupEligibility'] = backupEligibility
+    if signCount is not _UNSET:
+      params['signCount'] = signCount
     return self.ExecuteCommand(Command.SET_CREDENTIAL_PROPERTIES, params)
 
   def SetSPCTransactionMode(self, mode):
@@ -833,13 +838,9 @@ class ChromeDriver(object):
       params.update(metadata)
     return self.ExecuteCommand(Command.CREATE_VIRTUAL_PRESSURE_SOURCE, params)
 
-  def UpdateVirtualPressureSource(self, type, sample,
-                                  own_contribution_estimate):
-    params = {'type': type,
-              'sample': sample,
-              'own_contribution_estimate': own_contribution_estimate}
-    return self.ExecuteCommand(Command.UPDATE_VIRTUAL_PRESSURE_SOURCE,
-                               params)
+  def UpdateVirtualPressureSource(self, type, sample):
+    params = {'type': type, 'sample': sample}
+    return self.ExecuteCommand(Command.UPDATE_VIRTUAL_PRESSURE_SOURCE, params)
 
   def RemoveVirtualPressureSource(self, type):
     params = {'type': type}

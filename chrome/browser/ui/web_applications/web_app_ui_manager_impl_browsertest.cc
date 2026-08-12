@@ -9,10 +9,9 @@
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/fake_os_integration_manager.h"
@@ -26,6 +25,7 @@
 #include "components/webapps/browser/uninstall_result_code.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -45,7 +45,7 @@ class WebAppUiManagerImplBrowserTest : public InProcessBrowserTest {
         WebAppProvider::GetForTest(profile()));
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   webapps::AppId InstallWebApp(const GURL& start_url) {
     auto web_app_info =
@@ -87,9 +87,9 @@ IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
   LaunchWebApp(foo_app_id);
   EXPECT_EQ(1u, ui_manager().GetNumWindowsForApp(foo_app_id));
   // It has 2 browser window object.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   web_app::CloseAndWait(browser());
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   BrowserWindowInterface* const app_browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   BrowserWaiter waiter(app_browser->GetBrowserForMigrationOnly());
@@ -98,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
   test::UninstallWebApp(app_browser->GetProfile(), foo_app_id);
   waiter.AwaitRemoved();
 
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
@@ -185,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest, MigrateAppAttribute) {
   app_list::AppListSyncableService* app_list_service =
       app_list::AppListSyncableServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
 
   // Install an old app to be replaced.
   webapps::AppId old_app_id = test::InstallDummyWebApp(
@@ -207,5 +207,37 @@ IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest, MigrateAppAttribute) {
             "positionold");
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
+                       CloseAppWindows_BypassesBeforeUnload) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  const GURL app_url = embedded_test_server()->GetURL("/empty.html");
+  const webapps::AppId app_id = InstallWebApp(app_url);
+  Browser* const app_browser = LaunchWebApp(app_id);
+
+  EXPECT_TRUE(app_browser);
+  EXPECT_EQ(1u, ui_manager().GetNumWindowsForApp(app_id));
+
+  content::WebContents* const web_contents =
+      app_browser->tab_strip_model()->GetActiveWebContents();
+
+  // Inject beforeunload handler.
+  ASSERT_TRUE(
+      content::ExecJs(web_contents,
+                      "window.addEventListener('beforeunload', (event) => {\n"
+                      "  event.preventDefault();\n"
+                      "  event.returnValue = '';\n"
+                      "});"));
+
+  // Prep contents for beforeunload (triggers user activation).
+  content::PrepContentsForBeforeUnloadTest(web_contents);
+
+  BrowserWaiter waiter(app_browser);
+  ui_manager().CloseAppWindows(app_id);
+  waiter.AwaitRemoved();
+
+  EXPECT_EQ(0u, ui_manager().GetNumWindowsForApp(app_id));
+}
 
 }  // namespace web_app

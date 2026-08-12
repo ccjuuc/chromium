@@ -37,6 +37,7 @@
 #include "content/public/test/test_navigation_throttle.h"
 #include "content/public/test/test_navigation_throttle_inserter.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
+#include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/network/public/cpp/network_quality_tracker.h"
 
 namespace {
@@ -1378,6 +1379,8 @@ IN_PROC_BROWSER_TEST_P(
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
 
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+
   // 2. Navigate again, also to `url_srp()`.
   base::WeakPtr<content::NavigationHandle> nav_handle_for_url =
       web_contents()->GetController().LoadURL(url_srp(), content::Referrer(),
@@ -1412,6 +1415,13 @@ IN_PROC_BROWSER_TEST_P(
                           GetAbandonReasonAtMilestoneHistogramName(milestone))
                       .empty());
     }
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 1ul);
+    ukm_recorder.ExpectEntryMetric(
+        ukm_entries[0], "IgnoredDuplicateNavigationCount",
+        ukm::GetExponentialBucketMinForCounts1000(1));
   } else {
     // Check that the abandonment reason is set correctly.
     EXPECT_THAT(histogram_tester().GetTotalCountsForPrefix(
@@ -1424,6 +1434,10 @@ IN_PROC_BROWSER_TEST_P(
         GetAbandonReasonAtMilestoneHistogramName(
             NavigationMilestone::kNavigationStart),
         AbandonReason::kNewDuplicateNavigation, 1);
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 0ul);
   }
 }
 
@@ -1433,12 +1447,19 @@ IN_PROC_BROWSER_TEST_P(
   const bool ignore_duplicate_navs_enabled = IsIgnoreDuplicateNavsEnabled();
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url_non_srp()));
 
+  auto waiter = CreatePageLoadMetricsTestWaiter();
+  waiter->AddPageExpectation(
+      PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
+  waiter->AddCustomUserTimingMarkExpectation("SearchBodyEnd");
+
   // 1. Start renderer-initiated navigation to `url_srp()`
   content::TestNavigationManager nav_manager(web_contents(), url_srp());
   EXPECT_TRUE(ExecJs(web_contents(),
                      content::JsReplace("location.href = $1;", url_srp())));
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
+
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   // 2. Navigate again, also to `url_srp()`.
   EXPECT_TRUE(ExecJs(web_contents(),
@@ -1449,7 +1470,7 @@ IN_PROC_BROWSER_TEST_P(
   // Otherwise, it's cancelled by the second.
   EXPECT_EQ(nav_manager.was_committed(), ignore_duplicate_navs_enabled);
 
-  EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
+  waiter->Wait();
   EXPECT_EQ(url_srp(),
             web_contents()->GetPrimaryMainFrame()->GetLastCommittedURL());
 
@@ -1472,6 +1493,13 @@ IN_PROC_BROWSER_TEST_P(
                           GetAbandonReasonAtMilestoneHistogramName(milestone))
                       .empty());
     }
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 1ul);
+    ukm_recorder.ExpectEntryMetric(
+        ukm_entries[0], "IgnoredDuplicateNavigationCount",
+        ukm::GetExponentialBucketMinForCounts1000(1));
   } else {
     // Check that the abandonment reason is set correctly.
     EXPECT_THAT(histogram_tester().GetTotalCountsForPrefix(
@@ -1484,6 +1512,10 @@ IN_PROC_BROWSER_TEST_P(
         GetAbandonReasonAtMilestoneHistogramName(
             NavigationMilestone::kNavigationStart),
         AbandonReason::kNewDuplicateNavigation, 1);
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 0ul);
   }
 }
 
@@ -1538,7 +1570,7 @@ IN_PROC_BROWSER_TEST_F(GWSAbandonedPageLoadMetricsObserverBrowserTest,
   // Explicitly allow http access for the incognito mode. Otherwise the
   // incognito mode cannot reach to the SRP domain.
   ScopedAllowHttpForHostnamesForTesting allow_http(
-      {kSRPDomain}, browser()->profile()->GetPrefs());
+      {kSRPDomain}, browser()->GetProfile()->GetPrefs());
 
   // Navigate to SRP with incognito mode.
   Browser* incognito = CreateIncognitoBrowser();

@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -58,8 +58,8 @@ struct ExtraRequestCompleteInfo {
       const net::IPEndPoint& remote_endpoint,
       content::FrameTreeNodeId frame_tree_node_id,
       bool was_cached,
-      base::ByteCount raw_body_bytes,
-      base::ByteCount original_network_content_length,
+      base::ByteSize raw_body_bytes,
+      base::ByteSize original_network_content_length,
       network::mojom::RequestDestination request_destination,
       int net_error,
       std::unique_ptr<net::LoadTimingInfo> load_timing_info);
@@ -85,11 +85,11 @@ struct ExtraRequestCompleteInfo {
   const bool was_cached;
 
   // The number of body (not header) prefilter bytes.
-  const base::ByteCount raw_body_bytes;
+  const base::ByteSize raw_body_bytes;
 
   // The number of body (not header) bytes that the data reduction proxy saw
   // before it compressed the requests.
-  const base::ByteCount original_network_content_length;
+  const base::ByteSize original_network_content_length;
 
   // The type of the request as gleaned from the mime type.  This may
   // be more accurate than the type in the ExtraRequestStartInfo since we can
@@ -227,13 +227,6 @@ class PageLoadMetricsObserverInterface {
       content::NavigationHandle* navigation_handle,
       const GURL& currently_committed_url) = 0;
 
-  // For primary pages in the preview mode, OnPreviewStart is called instead of
-  // OnStart. The default implementation in PageLoadMetricsObserver returns
-  // STOP_OBSERVING. See b:291867362 to track the project progress.
-  virtual ObservePolicy OnPreviewStart(
-      content::NavigationHandle* navigation_handle,
-      const GURL& currently_committed_url) = 0;
-
   // Called when the NavigationHandleTiming associated with `navigation_handle`
   // has been updated. This is called only for main frame navigations. See the
   // comment at `WebContentsObserver::DidUpdateNavigationHandleTiming()` for
@@ -354,19 +347,26 @@ class PageLoadMetricsObserverInterface {
                               const mojom::PageLoadTiming& timing) = 0;
 
   // The callback is invoked when a soft navigation is detected.
-  // See https://bit.ly/soft-navigation for more details.
-  virtual void OnSoftNavigationUpdated(const mojom::SoftNavigationMetrics&) = 0;
+  // See https://github.com/WICG/soft-navigations for more details.
+  virtual void OnSoftNavigation() = 0;
+
+  // The callback is invoked when one or more soft largest contentful
+  // paint candidates arrive in the browser process.
+  virtual void OnSoftNavigationLargestContentfulPaint(
+      uint64_t num_soft_lcps) = 0;
 
   // OnInputTimingUpdate is triggered when an updated InputTiming is available
   // at the subframe level. This method may be called multiple times over the
   // course of the page load.
-  virtual void OnInputTimingUpdate(
+  virtual void OnEventTimingUpdate(
       content::RenderFrameHost* subframe_rfh,
-      const mojom::InputTiming& input_timing_delta) = 0;
+      const std::vector<mojom::EventTimingPtr>& event_timings) = 0;
 
-  // OnPageInputTimingUpdate is triggered when an updated InputTiming is
-  // available at the page level.
-  virtual void OnPageInputTimingUpdate(uint64_t num_interactions) = 0;
+  // OnPageEventTimingUpdate is triggered when an updated InputTiming is
+  // available at the page level. |num_interactions| is the number of NEW
+  // unique interactions since the last update. This value can be 0 if the
+  // update only contains duration changes for previously seen interactions.
+  virtual void OnPageEventTimingUpdate(uint64_t num_interactions) = 0;
 
   // OnPageRenderDataChanged is triggered when an updated PageRenderData is
   // available at the page level. This method may be called multiple times over
@@ -469,12 +469,6 @@ class PageLoadMetricsObserverInterface {
       content::RenderFrameHost* rfh,
       const std::vector<blink::UseCounterFeature>& features) = 0;
 
-  // The dropped frame count metrics are shared over shared-memory. The observer
-  // should create a mapping (by calling |shared_memory.Map()|) so that they are
-  // able to read from the shared memory.
-  virtual void SetUpSharedMemoryForDroppedFrames(
-      const base::ReadOnlySharedMemoryRegion& dropped_frames_memory) = 0;
-
   // Invoked when there is data use for loading a resource on the page
   // for a given RenderFrameHost. This only contains resources that have had
   // new data use since the last callback. Resources loaded from the cache only
@@ -489,31 +483,22 @@ class PageLoadMetricsObserverInterface {
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
       content::RenderFrameHost* render_frame_host) = 0;
 
-  // For the main frame, called when the main frame's dimensions have changed,
-  // e.g. resizing a tab causes the document width to change; loading additional
-  // content causes the document height to increase; explicitly changing the
-  // height of the body element.
-  //
-  // For a subframe, called when the intersection rect between the main frame
-  // and the subframe has changed, e.g. the subframe is initially added; the
-  // subframe's position is updated explicitly or inherently (e.g. sticky
-  // position while the page is being scrolled).
-  //
-  // TODO(crbug.com/40117157): Expose intersections to observers via shared
-  // delegate.
-  virtual void OnMainFrameIntersectionRectChanged(
-      content::RenderFrameHost* rfh,
-      const gfx::Rect& main_frame_intersection_rect) = 0;
+  // Called when the main frame's document rectangle changed, e.g. resizing a
+  // tab causes the document width to change, or loading additional content
+  // causes the document height to increase. Only invoked on the outermost main
+  // frame.
+  virtual void OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) = 0;
 
   // Called when the main frame's viewport rectangle (the viewport dimensions
   // and the scroll position) changed, e.g. the user scrolled the main frame or
-  // the viewport dimensions themselves changed. Only invoked on the main frame.
+  // the viewport dimensions themselves changed. Only invoked on the outermost
+  // main frame.
   virtual void OnMainFrameViewportRectChanged(
       const gfx::Rect& main_frame_viewport_rect) = 0;
 
   // Called when the geometry of ad elements changed. The key of
-  // `main_frame_ad_rects` is the element's node ID. Only invoked on the main
-  // frame.
+  // `main_frame_ad_rects` is the element's node ID. Only invoked on the
+  // outermost main frame.
   virtual void OnMainFrameAdRectsChanged(
       const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) = 0;
 
@@ -625,9 +610,6 @@ class PageLoadMetricsObserverInterface {
   virtual void DidActivatePrerenderedPage(
       content::NavigationHandle* navigation_handle) = 0;
 
-  // Called when the previewed page is activated for the tab promotion.
-  virtual void DidActivatePreviewedPage(base::TimeTicks activation_time) = 0;
-
   // Called when a `SharedStorageWorkletHost` is created.
   virtual void OnSharedStorageWorkletHostCreated() = 0;
 
@@ -641,11 +623,6 @@ class PageLoadMetricsObserverInterface {
   // separately and tracked in in a different timing.
   virtual void OnCustomUserTimingMarkObserved(
       const std::vector<mojom::CustomUserTimingMarkPtr>& timings) = 0;
-
-  // Called when a Fledge auction completes.
-  virtual void OnAdAuctionComplete(bool is_server_auction,
-                                   bool is_on_device_auction,
-                                   content::AuctionResult result) = 0;
 
   // Called when the renderer process for the primary main frame is gone.
   virtual void OnPrimaryPageRenderProcessGone() = 0;

@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
@@ -18,9 +17,9 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/shell/browser/shell.h"
+#include "content/shell/common/shell_switches.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_node_position.h"
 #include "ui/accessibility/ax_selection.h"
 #include "ui/accessibility/ax_tree_id.h"
@@ -89,6 +88,23 @@ namespace content {
         provider->GetText(-1, provider_content.Receive())); \
     EXPECT_STREQ(expected_content, provider_content.Get()); \
   }
+
+static void ExpectSingleIntSafeArray(SAFEARRAY* safe_array, LONG expected) {
+  ASSERT_NE(nullptr, safe_array);
+  ASSERT_EQ(sizeof(LONG), ::SafeArrayGetElemsize(safe_array));
+  ASSERT_EQ(1u, SafeArrayGetDim(safe_array));
+
+  LONG lower_bound;
+  ASSERT_HRESULT_SUCCEEDED(::SafeArrayGetLBound(safe_array, 1, &lower_bound));
+  LONG upper_bound;
+  ASSERT_HRESULT_SUCCEEDED(::SafeArrayGetUBound(safe_array, 1, &upper_bound));
+  ASSERT_EQ(lower_bound, upper_bound);
+
+  LONG actual;
+  ASSERT_HRESULT_SUCCEEDED(
+      ::SafeArrayGetElement(safe_array, &lower_bound, &actual));
+  EXPECT_EQ(expected, actual);
+}
 
 #define EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(text_range_provider, endpoint, unit,  \
                                          count, expected_text, expected_count) \
@@ -427,8 +443,6 @@ class AXPlatformNodeTextRangeProviderWinBrowserTest
     EXPECT_EQ(0u, index);
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
 };
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
@@ -870,6 +884,211 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   value.Reset();
 }
 
+// Fixture that exposes the window.internals test API so a test can inject
+// document markers (e.g. spelling markers) deterministically via
+// internals.setMarker().
+class AXPlatformNodeTextRangeProviderWinBrowserTestWithInternals
+    : public AXPlatformNodeTextRangeProviderWinBrowserTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    AXPlatformNodeTextRangeProviderWinBrowserTest::SetUpCommandLine(
+        command_line);
+    command_line->AppendSwitch(switches::kExposeInternalsForTesting);
+  }
+};
+
+// Returns true if `node` or any of its internal (unignored) descendants carries
+// document markers (e.g. spelling markers).
+static bool HasMarkerDescendant(ui::BrowserAccessibility& node) {
+  std::vector<ui::BrowserAccessibility*> stack = {&node};
+  while (!stack.empty()) {
+    ui::BrowserAccessibility* current = stack.back();
+    stack.pop_back();
+    if (current->GetData().HasIntListAttribute(
+            ax::mojom::IntListAttribute::kMarkerTypes)) {
+      return true;
+    }
+    for (size_t i = current->InternalChildCount(); i > 0; --i) {
+      stack.push_back(current->InternalGetChild(i - 1));
+    }
+  }
+  return false;
+}
+
+// A spelling marker inside an atomic text field (e.g. <input>) must be exposed
+// via the UIA AnnotationTypes attribute. The field's marker-bearing static-text
+// descendants are hidden from the platform tree because the field is exposed as
+// a leaf, so the annotation query must walk the internal accessibility tree to
+// find them. Regression test for crbug.com/503691211.
+IN_PROC_BROWSER_TEST_F(
+    AXPlatformNodeTextRangeProviderWinBrowserTestWithInternals,
+    GetAttributeValueSpellingAnnotationInAtomicTextField) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <input type="text" aria-label="input_text" value="pling">
+        </body>
+      </html>
+  )HTML");
+
+  ui::BrowserAccessibility* input_text_node =
+      FindNode(ax::mojom::Role::kTextField, "input_text");
+  ASSERT_NE(nullptr, input_text_node);
+  EXPECT_TRUE(input_text_node->IsLeaf());
+  EXPECT_EQ(0u, input_text_node->PlatformChildCount());
+
+  // Inject a spelling marker covering the whole value ("pling") onto the
+  // input's inner editor text.
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), R"JS(
+      const input = document.querySelector('input');
+      input.focus();
+      const innerEditor = internals.innerEditorElement(input);
+      const text = innerEditor.firstChild;
+      const misspelling = 'pling';
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, misspelling.length);
+      internals.setMarker(document, range, 'spelling');
+  )JS"));
+
+  // Wait until the spelling marker has been serialized onto a text descendant
+  // of the field. The marker is added to the internal accessibility tree
+  // regardless of the platform-layer fix under test, so this only synchronizes
+  // the marker's arrival before the UIA query below.
+  while (!HasMarkerDescendant(*input_text_node)) {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents());
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  ComPtr<ITextRangeProvider> text_range_provider;
+  GetTextRangeProviderFromTextNode(*input_text_node, &text_range_provider);
+  ASSERT_NE(nullptr, text_range_provider.Get());
+  EXPECT_UIA_TEXTRANGE_EQ(text_range_provider, L"pling");
+
+  base::win::ScopedVariant value;
+  EXPECT_HRESULT_SUCCEEDED(text_range_provider->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, value.Receive()));
+  ASSERT_EQ(value.type(), VT_ARRAY | VT_I4);
+  ExpectSingleIntSafeArray(V_ARRAY(value.ptr()), AnnotationType_SpellingError);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AXPlatformNodeTextRangeProviderWinBrowserTestWithInternals,
+    GetAttributeValueSpellingAnnotationInTextarea) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <textarea id="textarea" aria-label="textarea_text">mikjake</textarea>
+        </body>
+      </html>
+  )HTML");
+
+  ui::BrowserAccessibility* text_area_node =
+      FindNode(ax::mojom::Role::kTextField, "textarea_text");
+  ASSERT_NE(nullptr, text_area_node);
+  EXPECT_TRUE(text_area_node->IsLeaf());
+  EXPECT_EQ(0u, text_area_node->PlatformChildCount());
+
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), R"JS(
+      const textarea = document.getElementById('textarea');
+      textarea.focus();
+      const innerEditor = internals.innerEditorElement(textarea);
+      const text = innerEditor.firstChild;
+      const misspelling = 'mikjake';
+      const start = text.textContent.indexOf(misspelling);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + misspelling.length);
+      internals.setMarker(document, range, 'spelling');
+  )JS"));
+
+  while (!HasMarkerDescendant(*text_area_node)) {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents());
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  ComPtr<ITextRangeProvider> document_range;
+  GetTextRangeProviderFromTextNode(*text_area_node, &document_range);
+  ASSERT_NE(nullptr, document_range.Get());
+
+  base::win::ScopedBstr misspelling(L"mikjake");
+  ComPtr<ITextRangeProvider> misspelled_range;
+  ASSERT_HRESULT_SUCCEEDED(document_range->FindText(misspelling.Get(), false,
+                                                    false, &misspelled_range));
+  ASSERT_NE(nullptr, misspelled_range.Get());
+  EXPECT_UIA_TEXTRANGE_EQ(misspelled_range, L"mikjake");
+
+  base::win::ScopedVariant value;
+  EXPECT_HRESULT_SUCCEEDED(misspelled_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, value.Receive()));
+  ASSERT_EQ(value.type(), VT_ARRAY | VT_I4);
+  ExpectSingleIntSafeArray(V_ARRAY(value.ptr()), AnnotationType_SpellingError);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AXPlatformNodeTextRangeProviderWinBrowserTestWithInternals,
+    GetAttributeValueSpellingAnnotationInMultilineTextarea) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <textarea id="textarea"
+                    aria-label="textarea_text">correct&#10;mikjake</textarea>
+        </body>
+      </html>
+  )HTML");
+
+  ui::BrowserAccessibility* text_area_node =
+      FindNode(ax::mojom::Role::kTextField, "textarea_text");
+  ASSERT_NE(nullptr, text_area_node);
+  EXPECT_TRUE(text_area_node->IsLeaf());
+  EXPECT_EQ(0u, text_area_node->PlatformChildCount());
+
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), R"JS(
+      const textarea = document.getElementById('textarea');
+      textarea.focus();
+      const innerEditor = internals.innerEditorElement(textarea);
+      const misspelling = 'mikjake';
+      const walker =
+          document.createTreeWalker(innerEditor, NodeFilter.SHOW_TEXT);
+      let text;
+      while ((text = walker.nextNode())) {
+        if (text.textContent.includes(misspelling)) {
+          break;
+        }
+      }
+      const start = text.textContent.indexOf(misspelling);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + misspelling.length);
+      internals.setMarker(document, range, 'spelling');
+  )JS"));
+
+  while (!HasMarkerDescendant(*text_area_node)) {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents());
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  ComPtr<ITextRangeProvider> document_range;
+  GetTextRangeProviderFromTextNode(*text_area_node, &document_range);
+  ASSERT_NE(nullptr, document_range.Get());
+
+  base::win::ScopedBstr misspelling(L"mikjake");
+  ComPtr<ITextRangeProvider> misspelled_range;
+  ASSERT_HRESULT_SUCCEEDED(document_range->FindText(misspelling.Get(), false,
+                                                    false, &misspelled_range));
+  ASSERT_NE(nullptr, misspelled_range.Get());
+  EXPECT_UIA_TEXTRANGE_EQ(misspelled_range, L"mikjake");
+
+  base::win::ScopedVariant value;
+  EXPECT_HRESULT_SUCCEEDED(misspelled_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, value.Receive()));
+  ASSERT_EQ(value.type(), VT_ARRAY | VT_I4);
+  ExpectSingleIntSafeArray(V_ARRAY(value.ptr()), AnnotationType_SpellingError);
+}
+
 // With a non-atomic text field, the read-only attribute should be determined
 // based on the content editable root node's editable state.
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
@@ -1141,6 +1360,81 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   BOOL are_same;
   text_range_provider_1->Compare(text_range_provider_2.Get(), &are_same);
   EXPECT_FALSE(are_same);
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       CompareEndpointsAcrossHyperlinkBoundary) {
+  LoadInitialAccessibilityTreeFromHtml(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <div contenteditable="true" spellcheck="false">
+            I am <a href="https://example.com">ironman</a> two
+          </div>
+        </body>
+      </html>
+  )HTML");
+
+  ui::BrowserAccessibility* before_link_text_node =
+      FindNode(ax::mojom::Role::kStaticText, "I am ");
+  ASSERT_NE(nullptr, before_link_text_node);
+  ui::BrowserAccessibility* link_text_node =
+      FindNode(ax::mojom::Role::kStaticText, "ironman");
+  ASSERT_NE(nullptr, link_text_node);
+
+  ui::BrowserAccessibility::AXPosition before_link_position =
+      before_link_text_node->CreateTextPositionAt(0)
+          ->CreatePositionAtEndOfAnchor();
+  ui::BrowserAccessibility::AXPosition link_start_position =
+      link_text_node->CreateTextPositionAt(0);
+  ui::BrowserAccessibility::AXPosition link_after_first_character_position =
+      link_text_node->CreateTextPositionAt(1);
+  ui::BrowserAccessibility::AXPosition link_after_second_character_position =
+      link_text_node->CreateTextPositionAt(2);
+
+  ComPtr<ITextRangeProvider> before_link_range;
+  ui::AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      before_link_position->Clone(), before_link_position->Clone(),
+      &before_link_range);
+
+  ComPtr<ITextRangeProvider> link_start_range;
+  ui::AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      link_start_position->Clone(), link_start_position->Clone(),
+      &link_start_range);
+
+  ComPtr<ITextRangeProvider> link_after_first_character_range;
+  ui::AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      link_after_first_character_position->Clone(),
+      link_after_first_character_position->Clone(),
+      &link_after_first_character_range);
+
+  ComPtr<ITextRangeProvider> link_after_second_character_range;
+  ui::AXPlatformNodeTextRangeProviderWin::CreateTextRangeProvider(
+      link_after_second_character_position->Clone(),
+      link_after_second_character_position->Clone(),
+      &link_after_second_character_range);
+
+  auto compare_starts = [](ITextRangeProvider* left,
+                           ITextRangeProvider* right) {
+    int result = 0;
+    EXPECT_HRESULT_SUCCEEDED(
+        left->CompareEndpoints(TextPatternRangeEndpoint_Start, right,
+                               TextPatternRangeEndpoint_Start, &result));
+    return result;
+  };
+
+  // In UIA flat text: "I am ironman two"
+  //                    01234567...
+  // before_link (end of "I am ") and link_start (start of "ironman") are both
+  // at flat offset 5 — they represent the same insertion point.
+  EXPECT_EQ(0, compare_starts(before_link_range.Get(), link_start_range.Get()));
+
+  // link_after_first_character is at flat offset 6 (after 'i' in "ironman").
+  // This is the boundary that the original bug reported as comparing equal.
+  EXPECT_EQ(-1, compare_starts(before_link_range.Get(),
+                               link_after_first_character_range.Get()));
+  EXPECT_EQ(-1, compare_starts(link_after_first_character_range.Get(),
+                               link_after_second_character_range.Get()));
 }
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
@@ -2086,17 +2380,15 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_NE(nullptr, text_range_provider.Get());
   EXPECT_UIA_TEXTRANGE_EQ(text_range_provider, paragraphs[0].c_str());
 
-  // There is no trailing '\n' because the second paragraph already has merged
-  // trailing whitespace in it, and in such cases we made the design decision
-  // not to add an extra line break.
+  // The paragraph boundary newline between `paragraphs[0]` and `paragraphs[1]`
+  // is present because `paragraphs[1]` starts with non-whitespace content.
   EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(
       text_range_provider, TextPatternRangeEndpoint_End, TextUnit_Paragraph,
       /*count*/ 1,
       /*expected_text*/ (paragraphs[0] + L'\n' + paragraphs[1]).c_str(),
       /*expected_count*/ 1);
-  // There is no trailing '\n' because the second paragraph already has merged
-  // trailing whitespace in it, and in such cases we made the design decision
-  // not to add an extra line break.
+  // `paragraphs[1]` includes trailing whitespace from the <br> elements plus
+  // the paragraph boundary newline before "more text".
   EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(
       text_range_provider, TextPatternRangeEndpoint_Start, TextUnit_Paragraph,
       /*count*/ 1,
@@ -2166,15 +2458,15 @@ IN_PROC_BROWSER_TEST_F(
       /*count*/ -1,
       /*expected_text*/ (paragraphs[1] + paragraphs[2] + L'\n').c_str(),
       /*expected_count*/ -1);
-  // There is no trailing '\n' because the second paragraph already has merged
-  // trailing whitespace in it.
+  // `paragraphs[1]` includes trailing whitespace from the <br> elements plus
+  // the paragraph boundary newline before "more text".
   EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(
       text_range_provider, TextPatternRangeEndpoint_End, TextUnit_Paragraph,
       /*count*/ -1,
       /*expected_text*/ (paragraphs[1]).c_str(),
       /*expected_count*/ -1);
-  // There is no trailing '\n' because the second paragraph already has merged
-  // trailing whitespace in it.
+  // The paragraph boundary newline between `paragraphs[0]` and `paragraphs[1]`
+  // is present because `paragraphs[1]` starts with non-whitespace content.
   EXPECT_UIA_MOVE_ENDPOINT_BY_UNIT(
       text_range_provider, TextPatternRangeEndpoint_Start, TextUnit_Paragraph,
       /*count*/ -1,
@@ -3184,6 +3476,10 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
       TextUnit_Character, "Test ing.",
       {L"T", L"e", L"s", L"t", L" ", L"i", L"n", L"g", L"."});
 
+  AssertMoveByUnitForMarkup(TextUnit_Character,
+                            "<div>ab</div><br><div>cd</div>",
+                            {L"a", L"b", L"\n", L"\n", L"c", L"d"});
+
   // The text consists of an e acute, and two emoticons.
   const std::string html = R"HTML(<!DOCTYPE html>
       <html>
@@ -3354,6 +3650,32 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   // boundary (but not past the start of the line).
   text_range_provider->ExpandToEnclosingUnit(TextUnit_Line);
   EXPECT_UIA_TEXTRANGE_EQ(text_range_provider, L"next text on line two");
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       ExpandToEnclosingUnitDocument_RetainsLineBreaks) {
+  LoadInitialAccessibilityTreeFromHtml(
+      R"HTML(<!DOCTYPE html>
+      <html>
+        <body>
+          <div>This is line 1.</div>
+          <br>
+          <div>This is line 2. This is longer text.</div>
+        </body>
+      </html>)HTML");
+
+  ui::BrowserAccessibility* text_node =
+      FindNode(ax::mojom::Role::kStaticText, "This is line 1.");
+  ASSERT_NE(nullptr, text_node);
+
+  ComPtr<ITextRangeProvider> provider;
+  GetTextRangeProviderFromTextNode(*text_node, &provider);
+  ASSERT_NE(nullptr, provider.Get());
+
+  EXPECT_HRESULT_SUCCEEDED(provider->ExpandToEnclosingUnit(TextUnit_Document));
+  EXPECT_UIA_TEXTRANGE_EQ(provider,
+                          L"This is line 1.\n\nThis is line 2. This is longer "
+                          L"text.");
 }
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
@@ -4385,6 +4707,300 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
   EXPECT_GT(height, 0);
 
   ASSERT_HRESULT_SUCCEEDED(::SafeArrayUnaccessData(rectangles.Get()));
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests that character-by-character movement through paragraph boundaries
+// correctly includes the generated newline character in both forward and
+// backward directions.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterAcrossParagraphBoundary) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <p>First paragraph</p>
+      <p>Second paragraph</p>
+    </body>
+  </html>)HTML";
+
+  const std::vector<const wchar_t*> characters = {
+      L"F", L"i", L"r", L"s", L"t",  L" ", L"p", L"a", L"r", L"a", L"g",
+      L"r", L"a", L"p", L"h", L"\n", L"S", L"e", L"c", L"o", L"n", L"d",
+      L" ", L"p", L"a", L"r", L"a",  L"g", L"r", L"a", L"p", L"h"};
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup, characters);
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests character movement through multiple paragraph boundaries, including
+// cases with trailing and leading whitespace.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterAcrossMultipleParagraphs) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <p>AB</p>
+      <p>CD</p>
+      <p>EF</p>
+    </body>
+  </html>)HTML";
+
+  const std::vector<const wchar_t*> characters = {L"A", L"B",  L"\n", L"C",
+                                                  L"D", L"\n", L"E",  L"F"};
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup, characters);
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests character movement through div-based paragraph boundaries.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterAcrossDivParagraphs) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <div>First</div>
+      <div>Second</div>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"F", L"i", L"r", L"s", L"t", L"\n", L"S", L"e",
+                             L"c", L"o", L"n", L"d"});
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests character movement with empty paragraph between paragraphs.
+// An empty paragraph does not produce an additional newline in the text
+// representation.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterEmptyParagraph) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <p>AB</p>
+      <p></p>
+      <p>CD</p>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"C", L"D"});
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests character movement with content ending in newline (trailing newline).
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterTrailingBr) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <div>AB<br></div>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n"});
+}
+
+// Regression test for https://crbug.com/469120959.
+// Tests character movement with spans containing whitespace across paragraph
+// boundaries. HTML whitespace collapsing removes trailing/leading spaces at
+// block boundaries.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterSpansWithWhitespace) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <p><span>AB </span></p>
+      <p><span> CD</span></p>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"C", L"D"});
+}
+
+// Regression test for https://crbug.com/469120962.
+// Tests character movement inside a <textarea> with a line break. The textarea
+// is an atomic text field, so the <br> is an internal line break, not a
+// paragraph boundary. No generated paragraph-boundary newline should be
+// produced.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterTextarea) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <textarea>AB
+CD</textarea>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"C", L"D"});
+}
+
+// Regression test for https://crbug.com/469120962.
+// Tests character movement inside a <pre> element with a preserved newline.
+// The newline is part of the pre-formatted content, not a paragraph boundary.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterPre) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <pre>AB
+CD</pre>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"C", L"D"});
+}
+
+// Regression test for https://crbug.com/469120962.
+// Tests character movement with consecutive <br> elements inside a single
+// container. Both <br> elements produce their own newline characters, but no
+// generated paragraph-boundary newline should be produced because they are all
+// inside the same block container.
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterDoubleBr) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <div>AB<br><br>CD</div>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"\n", L"C", L"D"});
+}
+
+// Regression test for https://crbug.com/469120962.
+// Tests character movement with a <br> at the end of a paragraph followed by
+// another paragraph. The <br> inside the first <p> produces its own newline.
+// The paragraph boundary between the two <p> elements would normally produce
+// a generated newline, but since the <br> is inside the first <p> (not between
+// the two blocks), IsFollowedByGeneratedNewline() does not produce it.
+// TODO(crbug.com/469120962): Fix character navigation to produce both
+// newlines. The expected result should be:
+//   {L"A", L"B", L"\n", L"\n", L"C", L"D"}
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeTextRangeProviderWinBrowserTest,
+                       MoveByCharacterBrAtEndOfParagraph) {
+  const std::string html_markup = R"HTML(<!DOCTYPE html>
+  <html>
+    <body>
+      <p>AB<br></p>
+      <p>CD</p>
+    </body>
+  </html>)HTML";
+
+  AssertMoveByUnitForMarkup(TextUnit_Character, html_markup,
+                            {L"A", L"B", L"\n", L"C", L"D"});
+}
+
+// Regression test for crbug.com/503691212. A spelling marker on a soft-wrapped
+// word must be queried with offsets translated from the inline text box to its
+// platform static-text ancestor.
+IN_PROC_BROWSER_TEST_F(
+    AXPlatformNodeTextRangeProviderWinBrowserTestWithInternals,
+    AnnotationTypesSpellingOnWrappedLine) {
+  constexpr char kText[] =
+      "This is not a spelling mistake. This is not a spelling mistake. "
+      "This is not a spelling This is not a spelling mistake. This is not a "
+      "spelling mistake. This is not a spelling This is not a spelling "
+      "mistake. This is not a spelling mistake. This is not a spellin mikate.";
+
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(<!DOCTYPE html>
+          <html>
+          <body>
+            <div id="editor" contenteditable="true"
+                 style="width: 200px; font: 16px/20px monospace;">)HTML") +
+                                       kText + R"HTML(</div>
+          </body>
+          </html>)HTML");
+
+  ui::BrowserAccessibility* static_text =
+      FindNode(ax::mojom::Role::kStaticText, kText);
+  ASSERT_NE(nullptr, static_text);
+  ASSERT_GT(static_text->InternalChildCount(), 1u);
+  const std::string last_inline_text =
+      static_text->InternalGetChild(static_text->InternalChildCount() - 1)
+          ->GetData()
+          .GetStringAttribute(ax::mojom::StringAttribute::kName);
+  ASSERT_FALSE(last_inline_text.empty());
+
+  ASSERT_TRUE(ExecJs(shell()->web_contents(), JsReplace(R"JS(
+      const editor = document.getElementById('editor');
+      editor.focus();
+      const text = editor.firstChild;
+      const misspelling = 'mikate';
+      const start = text.textContent.indexOf(misspelling);
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + misspelling.length);
+      internals.setMarker(document, range, 'spelling');
+
+      const lastInlineText = $1;
+      const lastLineStart = text.textContent.lastIndexOf(lastInlineText);
+      const lastLineRange = document.createRange();
+      lastLineRange.setStart(text, lastLineStart);
+      lastLineRange.setEnd(text, lastLineStart + lastInlineText.length);
+      internals.setMarker(document, lastLineRange, 'spelling');
+  )JS",
+                                                        last_inline_text)));
+
+  while (!HasMarkerDescendant(*static_text)) {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents());
+    ASSERT_TRUE(waiter.WaitForNotification());
+  }
+
+  ComPtr<ITextRangeProvider> document_range;
+  GetTextRangeProviderFromTextNode(*GetRootAndAssertNonNull(), &document_range);
+  ASSERT_NE(nullptr, document_range.Get());
+
+  base::win::ScopedBstr misspelling(L"mikate");
+  ComPtr<ITextRangeProvider> misspelled_range;
+  ASSERT_HRESULT_SUCCEEDED(document_range->FindText(misspelling.Get(), false,
+                                                    false, &misspelled_range));
+  ASSERT_NE(nullptr, misspelled_range.Get());
+  EXPECT_UIA_TEXTRANGE_EQ(misspelled_range, L"mikate");
+
+  base::win::ScopedVariant annotation_result;
+  ASSERT_HRESULT_SUCCEEDED(misspelled_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, annotation_result.Receive()));
+  ASSERT_EQ(annotation_result.type(), VT_ARRAY | VT_I4);
+  ExpectSingleIntSafeArray(V_ARRAY(annotation_result.ptr()),
+                           AnnotationType_SpellingError);
+
+  base::win::ScopedBstr unmarked_text(
+      L"This is not a spelling mistake. This is not a spelling mistake.");
+  ComPtr<ITextRangeProvider> unmarked_range;
+  ASSERT_HRESULT_SUCCEEDED(document_range->FindText(unmarked_text.Get(), false,
+                                                    false, &unmarked_range));
+  ASSERT_NE(nullptr, unmarked_range.Get());
+  EXPECT_UIA_TEXTRANGE_EQ(
+      unmarked_range,
+      L"This is not a spelling mistake. This is not a spelling mistake.");
+
+  base::win::ScopedVariant unmarked_annotation_result;
+  ASSERT_HRESULT_SUCCEEDED(unmarked_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, unmarked_annotation_result.Receive()));
+  EXPECT_EQ(unmarked_annotation_result.type(), VT_EMPTY);
+
+  base::win::ScopedBstr mixed_text(base::ASCIIToWide(kText));
+  ComPtr<ITextRangeProvider> mixed_range;
+  ASSERT_HRESULT_SUCCEEDED(
+      document_range->FindText(mixed_text.Get(), false, false, &mixed_range));
+  ASSERT_NE(nullptr, mixed_range.Get());
+
+  base::win::ScopedVariant mixed_annotation_result;
+  ASSERT_HRESULT_SUCCEEDED(mixed_range->GetAttributeValue(
+      UIA_AnnotationTypesAttributeId, mixed_annotation_result.Receive()));
+  ASSERT_EQ(mixed_annotation_result.type(), VT_UNKNOWN);
+  ComPtr<IUnknown> expected_mixed_value;
+  ASSERT_HRESULT_SUCCEEDED(
+      UiaGetReservedMixedAttributeValue(&expected_mixed_value));
+  EXPECT_EQ(V_UNKNOWN(mixed_annotation_result.ptr()),
+            expected_mixed_value.Get());
 }
 
 }  // namespace content

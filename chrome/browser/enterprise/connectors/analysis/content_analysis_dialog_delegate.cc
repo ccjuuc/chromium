@@ -6,8 +6,15 @@
 
 #include <string>
 
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/logging.h"
+#include "base/notreached.h"
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/enterprise/connectors/analysis/content_analysis_dialog_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/constrained_window/constrained_window_views.h"
 #include "components/enterprise/connectors/core/common.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
@@ -19,6 +26,7 @@
 #include "ui/views/controls/textarea/textarea.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/layout/table_layout_view.h"
 
 namespace enterprise_connectors {
@@ -38,6 +46,19 @@ constexpr int kMessageAndIconRowTrailingPadding = 48;
 constexpr int kSideIconBetweenChildSpacing = 16;
 
 }  // namespace
+
+// static
+ContentAnalysisDialogController*
+ContentAnalysisDialogDelegate::ShowForCopyJustification(
+    content::WebContents* web_contents,
+    std::unique_ptr<ContentAnalysisDelegateBase> delegate) {
+  DCHECK(web_contents);
+  DCHECK(delegate);
+  return new ContentAnalysisDialogController(
+      std::move(delegate), /*is_cloud=*/true, web_contents,
+      DeepScanAccessPoint::COPY, /*files_count=*/0,
+      FinalContentAnalysisResult::WARNING);
+}
 
 ContentAnalysisDialogDelegate::ContentAnalysisDialogDelegate(
     ContentAnalysisDelegateBase* delegate,
@@ -253,8 +274,12 @@ void ContentAnalysisDialogDelegate::UpdateStateFromFinalResult(
     case FinalContentAnalysisResult::LARGE_FILES:
     case FinalContentAnalysisResult::FAIL_CLOSED:
     case FinalContentAnalysisResult::FAILURE:
+    case FinalContentAnalysisResult::CANCELLED:
       dialog_state_ = State::FAILURE;
       break;
+    // KEPT_IN_MANAGED_CHROME uses toasts and does not use dialogs.
+    // No dialogue is shown to the user.
+    case FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME:
     case FinalContentAnalysisResult::SUCCESS:
       dialog_state_ = State::SUCCESS;
       break;
@@ -415,6 +440,10 @@ std::u16string ContentAnalysisDialogDelegate::GetForceSaveToCloudMessage()
     const {
   DCHECK(is_force_save_to_cloud());
 
+  if (has_custom_message()) {
+    return GetCustomMessage();
+  }
+
   std::u16string filename =
       delegate_base_->GetFilename().has_value()
           ? delegate_base_->GetFilename().value()
@@ -491,7 +520,7 @@ std::u16string ContentAnalysisDialogDelegate::GetSuccessMessage() const {
 }
 
 std::u16string ContentAnalysisDialogDelegate::GetCustomMessage() const {
-  DCHECK(is_warning() || is_failure());
+  DCHECK(is_warning() || is_failure() || is_force_save_to_cloud());
   DCHECK(has_custom_message());
   return *(delegate_base_->GetCustomMessage());
 }
@@ -575,9 +604,10 @@ void ContentAnalysisDialogDelegate::UpdateViews() {
 
   // There isn't always a spinner, for instance when the dialog is started in a
   // state other than the "pending" state.
-  if (side_icon_spinner_) {
-    // Calling `Update` leads to the deletion of the spinner.
-    side_icon_spinner_.ExtractAsDangling()->Update();
+  if (side_icon_spinner_ && is_result()) {
+    auto spinner = side_icon_spinner_.ExtractAsDangling();
+    // unique_ptr to spinner is returned from RemoveChildViewT and deleted
+    spinner->parent()->RemoveChildViewT(spinner);
   }
 
   // Update the buttons.
@@ -670,7 +700,8 @@ void ContentAnalysisDialogDelegate::AddLinksToDialogMessage() {
 
 void ContentAnalysisDialogDelegate::UpdateDialogMessage(
     std::u16string new_message) {
-  if ((is_failure() || is_warning()) && has_custom_message()) {
+  if ((is_failure() || is_warning() || is_force_save_to_cloud()) &&
+      has_custom_message()) {
     message_->SetText(new_message);
     AddLinksToDialogMessage();
     message_->GetViewAccessibility().AnnounceText(std::move(new_message));
@@ -682,7 +713,8 @@ void ContentAnalysisDialogDelegate::UpdateDialogMessage(
     message_->GetViewAccessibility().AnnounceText(std::move(new_message));
 
     // Add a "Learn More" link for warnings/failures when one is provided.
-    if ((is_failure() || is_warning()) && has_learn_more_url()) {
+    if ((is_failure() || is_warning() || is_force_save_to_cloud()) &&
+        has_learn_more_url()) {
       AddLearnMoreLinkToDialog();
     }
   }
@@ -691,7 +723,7 @@ void ContentAnalysisDialogDelegate::UpdateDialogMessage(
 void ContentAnalysisDialogDelegate::AddLearnMoreLinkToDialog() {
   DCHECK(contents_view_);
   DCHECK(contents_layout_);
-  DCHECK(is_warning() || is_failure());
+  DCHECK(is_warning() || is_failure() || is_force_save_to_cloud());
 
   // There is only ever up to one link in the dialog, so return early instead of
   // adding another one.

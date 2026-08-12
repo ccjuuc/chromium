@@ -11,6 +11,7 @@ import androidx.annotation.MainThread;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.signin.services.AccountPreviewDataService;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninMetricsUtils;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
@@ -31,21 +32,26 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
  * only be displayed in cases of sign-in errors, or for management notices.
  */
 @NullMarked
-public class SeamlessSigninCoordinator {
+public class SeamlessSigninCoordinator implements SigninBottomSheetUiCoordinator {
 
     private final Activity mActivity;
     private final BottomSheetController mBottomSheetController;
+    private final AccountPickerDelegate mAccountPickerDelegate;
     private final @SigninAccessPoint int mSigninAccessPoint;
     private final AccountPickerDismissalLogger mDismissalLogger;
     private final AccountPickerBottomSheetMediator mAccountPickerBottomSheetMediator;
 
     private @Nullable AccountPickerBottomSheetView mView;
+    private boolean mIsDestroyed;
 
     private final BottomSheetObserver mBottomSheetObserver =
             new EmptyBottomSheetObserver() {
                 @Override
                 public void onSheetClosed(@StateChangeReason int reason) {
                     mDismissalLogger.logBottomSheetDismissal(reason);
+                    if (reason != StateChangeReason.INTERACTION_COMPLETE) {
+                        mAccountPickerDelegate.onSignInCancel();
+                    }
                     SeamlessSigninCoordinator.this.destroy();
                 }
             };
@@ -70,6 +76,7 @@ public class SeamlessSigninCoordinator {
             Activity activity,
             IdentityManager identityManager,
             SigninManager signinManager,
+            @Nullable AccountPreviewDataService accountPreviewDataService,
             BottomSheetController bottomSheetController,
             AccountPickerDelegate accountPickerDelegate,
             AccountPickerBottomSheetStrings accountPickerBottomSheetStrings,
@@ -78,6 +85,7 @@ public class SeamlessSigninCoordinator {
             CoreAccountId selectedAccountId) {
         mActivity = activity;
         mBottomSheetController = bottomSheetController;
+        mAccountPickerDelegate = accountPickerDelegate;
         mSigninAccessPoint = signinAccessPoint;
         mDismissalLogger =
                 new AccountPickerDismissalLogger(signinAccessPoint, /* isWebSignin= */ false);
@@ -86,9 +94,10 @@ public class SeamlessSigninCoordinator {
                         windowAndroid,
                         identityManager,
                         signinManager,
+                        accountPreviewDataService,
                         accountPickerDelegate,
                         this::requestDisplayBottomSheet,
-                        this::dismissBottomSheet,
+                        this::dismiss,
                         accountPickerBottomSheetStrings,
                         deviceLockActivityLauncher,
                         signinAccessPoint,
@@ -102,6 +111,11 @@ public class SeamlessSigninCoordinator {
 
     @MainThread
     void destroy() {
+        if (mIsDestroyed) {
+            return;
+        }
+
+        mIsDestroyed = true;
         mAccountPickerBottomSheetMediator.destroy();
         mBottomSheetController.removeObserver(mBottomSheetObserver);
     }
@@ -127,15 +141,24 @@ public class SeamlessSigninCoordinator {
         }
     }
 
-    /** Dismiss the bottom sheet, if shown. */
+    /** Implements {@link SigninBottomSheetUiCoordinator}. Dismiss the bottom sheet, if shown. */
+    @Override
     @MainThread
-    public void dismissBottomSheet() {
+    public void dismiss() {
         if (mView != null) {
             // The observer calls destroy() after the sheet is hidden.
-            mBottomSheetController.hideContent(mView, true, StateChangeReason.NONE);
+            mBottomSheetController.hideContent(mView, true, StateChangeReason.INTERACTION_COMPLETE);
         } else {
             destroy();
         }
+    }
+
+    /** Implements {@link SigninBottomSheetUiCoordinator}. */
+    @Override
+    public void onAccountAdded(String accountEmail) {
+        throw new IllegalStateException(
+                "The 'add account' flow is not supported from the seamless sign-in flow as it's"
+                        + " designed to be a non-interactive flow for a pre-selected account.");
     }
 
     @Nullable View getBottomSheetViewForTesting() {

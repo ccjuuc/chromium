@@ -103,7 +103,7 @@ struct FontCacheKey {
         palette_ ? palette_->GetHash() : 0,
         font_variant_alternates_ ? font_variant_alternates_->GetHash() : 0,
         is_unique_match_};
-    return StringHasher::HashMemory(base::as_byte_span(hash_codes));
+    return StringHasher::HashMemory32(base::as_byte_span(hash_codes));
   }
 
   bool operator==(const FontCacheKey& other) const {
@@ -134,7 +134,9 @@ struct FontCacheKey {
 #if BUILDFLAG(IS_ANDROID)
   // Set the locale if the font is locale-specific. This allows different
   // |FontPlatformData| instances for each locale.
-  void SetLocale(const AtomicString& locale) { locale_ = locale.LowerASCII(); }
+  void SetLocale(const AtomicString& locale) {
+    locale_ = locale.ToAsciiLower();
+  }
 #endif  // BUILDFLAG(IS_ANDROID)
 
  private:

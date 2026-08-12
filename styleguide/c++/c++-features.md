@@ -35,11 +35,16 @@ The current status of existing standards and Abseil features is:
 *   **C++17:** _Default allowed; see banned features below_
 *   **C++20:** _Initially supported November 13, 2023; see allowed/banned/TBD
     features below_
-*   **C++23:** _Not yet supported_
+*   **C++23:** _Initially supported January 2026; see allowed/banned/TBD
+    features below_
+*   **C++26:** _Not yet supported_
 *   **Abseil:** _Default allowed; see banned/TBD features below. The following
     dates represent the start of the two-year TBD periods for certain parts of
     Abseil:_
       * absl::linked_hash_set & map: Initially added to third_party Dec 30, 2025
+      * absl::optional_ref: Initially added to third_party Feb 25, 2026
+      * absl::SourceLocation: Initially added to third_party Mar 11, 2026
+      * absl::AnySpan: Initially added to third_party Apr 7, 2026
 
 ## Banned features and third-party code
 
@@ -714,6 +719,31 @@ declaring a template type for each such parameter.
 [Migration bug](https://crbug.com/1414526)
 ***
 
+### Aggregate initialization using parentheses <sup>[allowed]</sup>
+
+```c++
+struct B {
+  int a;
+  int&& r;
+} b2(1, 1);  // Warning: dangling reference
+```
+
+**Description:** Allows initialization of aggregates using parentheses, not just
+braces.
+
+**Documentation:**
+[Aggregate initialization](https://en.cppreference.com/w/cpp/language/aggregate_initialization),
+[Direct initialization](https://en.cppreference.com/w/cpp/language/direct_initialization)
+
+**Notes:**
+*** promo
+There are subtle but important differences between brace-init and paren-init of
+aggregates. The parenthesis style has some pitfalls, e.g. allowing narrowing
+conversions and not extending lifetimes of temporaries bound to references, but
+this matches the behavior of paren-init of non-aggregate types which is already
+allowed.
+***
+
 ### consteval <sup>[allowed]</sup>
 
 ```c++
@@ -1363,6 +1393,28 @@ character or string.
 [Migration bug](https://crbug.com/1414647)
 ***
 
+### std::views::reverse <sup>[allowed]</sup>
+
+```c++
+// Before:
+for (const auto& item : base::Reversed(container)) { ... }
+
+// After:
+for (const auto& item : std::views::reverse(container)) { ... }
+```
+
+**Description:** A view adapter that iterates over a bidirectional range in
+reverse order.
+
+**Documentation:**
+[`std::views::reverse`](https://en.cppreference.com/w/cpp/ranges/reverse_view)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/rfMV-DxJ4Cg).
+Note that other range factories/adaptors and `operator|` remain banned.
+***
+
 ## C++20 Banned Language Features {#core-blocklist-20}
 
 The following C++20 language features are not allowed in the Chromium codebase.
@@ -1388,6 +1440,28 @@ STL, and platform-specific APIs use), so using `u8` prefixes would obligate us
 to insert casts everywhere. If you want to declare at a type level that a block
 of data is string-like and not an arbitrary binary blob, prefer
 `std::string[_view]` over `char*`.
+***
+
+### Coroutines <sup>[banned]</sup>
+
+```c++
+co_return 1;
+```
+
+**Description:** Allows writing functions that logically block while physically
+returning control to a caller. This enables writing some kinds of async code in
+simple, straight-line ways without storing state in members or binding
+callbacks.
+
+**Documentation:**
+[Coroutines](https://en.cppreference.com/w/cpp/language/coroutines)
+
+**Notes:**
+*** promo
+Requires significant support code and planning around API and migration, see
+[discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ehMerLApxr8/m/5vzoHqCgCwAJ).
+Re-evaluate once supported on win32 and there is a plan for how to integrate
+with Chrome task scheduling.
 ***
 
 ### Modules <sup>[banned]</sup>
@@ -1510,6 +1584,41 @@ encoded using the current C locale.
 Chromium functionality should not vary with the C locale.
 ***
 
+### &lt;coroutine&gt; <sup>[banned]</sup>
+
+```c++
+#include <coroutine>
+```
+
+**Description:** Header which defines various core coroutine types.
+
+**Documentation:**
+[Coroutine support](https://en.cppreference.com/w/cpp/coroutine)
+
+**Notes:**
+*** promo
+See notes on "Coroutines" above.
+***
+
+### &lt;format&gt; <sup>[banned]</sup>
+
+```c++
+std::cout << std::format("Hello {}!\n", "world");
+```
+
+**Description:** Utilities for producing formatted strings.
+
+**Documentation:**
+[Formatting library](https://en.cppreference.com/w/cpp/utility/format)
+
+**Notes:**
+*** promo
+Has both pros and cons compared to `absl::StrFormat` (which we use internally in
+base::StringPrintf). Migration would be nontrivial due to string format
+specifiers being different. The external {fmt} library might be a better
+candidate to switch to.
+***
+
 ### Range factories and range adaptors <sup>[banned]</sup>
 
 ```c++
@@ -1533,9 +1642,43 @@ pipelines.
 **Notes:**
 *** promo
 Banned in Chrome due to questions about the design, impact on build time, and
-runtime performance.
+runtime performance. Note that `std::views::reverse`, `std::views::zip`, and
+`std::views::as_rvalue` (along with their `std::ranges::*_view` types) are
+explicitly allowed exceptions. Because `std::ranges::views` is an alias for
+`std::views`, the exact same exceptions apply when using the
+`std::ranges::views::` namespace.
 
-[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZnIbkfJ0Glw)
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZnIbkfJ0Glw),
+[allowed thread](https://groups.google.com/a/chromium.org/g/cxx/c/rfMV-DxJ4Cg)
+***
+
+### std::ranges::operator| <sup>[banned]</sup>
+
+```c++
+constexpr int kArr[] = {6, 2, 8, 4, 4, 2};
+constexpr auto plus_one = std::views::transform([](int n){ return n + 1; });
+static_assert(std::ranges::equal(kArr | plus_one, {7, 3, 9, 5, 5, 3}));
+```
+
+**Description:** The pipe operator for chaining range adaptor closure objects.
+
+**Documentation:**
+[`std::ranges::operator|`](https://en.cppreference.com/w/cpp/named_req/RangeAdaptorClosureObject.html)
+
+**Notes:**
+*** promo
+Banned in Chromium since range factories and adapters are banned. Explicitly
+enforced by the Chromium style clang-plugin. Note that `std::views::reverse`,
+`std::views::zip`, and `std::views::as_rvalue` (along with their
+`std::ranges::*_view` types) are explicitly allowed exceptions. However, pipe
+chaining remains banned even for allowed adaptors; because `std::ranges::views`
+is an alias for `std::views`, the exact same exceptions and pipe-chaining
+prohibitions apply when using the `std::ranges::views::` namespace
+(function call syntax must be used).
+
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZnIbkfJ0Glw),
+[allowed thread](https://groups.google.com/a/chromium.org/g/cxx/c/rfMV-DxJ4Cg),
+[operator| thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZzSLYf6-KwQ)
 ***
 
 ### std::ranges::view_interface <sup>[banned]</sup>
@@ -1555,6 +1698,24 @@ Banned in Chrome since range factories and adapters are banned, and this would
 primarily allow authors to create similar functionality.
 
 [Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZnIbkfJ0Glw)
+***
+
+### &lt;source_location&gt; <sup>[banned]</sup>
+
+```c++
+#include <source_location>
+```
+
+**Description:** Provides a class that can hold source code details such as
+filenames, function names, and line numbers.
+
+**Documentation:**
+[Standard library header `<source_location>`](https://en.cppreference.com/w/cpp/header/source_location)
+
+**Notes:**
+*** promo
+Regresses binary size vs. `base::Location`, see
+[discussion here](https://groups.google.com/a/chromium.org/g/cxx/c/2BsvGgWfNWo/m/2SO4F2b4AAAJ).
 ***
 
 ### &lt;span&gt; <sup>[banned]</sup>
@@ -1593,6 +1754,23 @@ Banned because it is not guaranteed to be SFINAE-compatible. Use
 base::to_address, which does guarantee this.
 ***
 
+### std::u8string <sup>[banned]</sup>
+
+```c++
+std::u8string str = u8"Foo";
+```
+
+**Description:** A string whose character type is `char8_t`, intended to hold
+UTF-8-encoded text.
+
+**Documentation:**
+[`std::basic_string`](https://en.cppreference.com/w/cpp/string/basic_string)
+
+**Notes:**
+*** promo
+See notes on `char8_t` above.
+***
+
 ### &lt;syncstream&gt; <sup>[banned]</sup>
 
 ```c++
@@ -1611,126 +1789,616 @@ Banned due to being unimplemented per
 Reevaluate usefulness once implemented.
 ***
 
-## C++20 TBD Language Features {#core-review-20}
+## C++23 Allowed Language Features {#core-allowlist-23}
 
-The following C++20 language features are not allowed in the Chromium codebase.
+The following C++23 language features are allowed in the Chromium codebase.
+
+### #elifdef, #elifndef <sup>[allowed]</sup>
+
+```c++
+#ifdef FOO
+...
+#elifdef BAR  // New.
+...
+#elifndef BAZ  // New.
+...
+#endif
+```
+
+**Description:** New conditional inclusion preprocessor directives.
+
+**Documentation:**
+[Conditional inclusion](https://en.cppreference.com/w/cpp/preprocessor/conditional.html)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/V6YD6hOjnE8)
+***
+
+### if consteval <sup>[allowed]</sup>
+
+```c++
+if consteval {
+  ...
+}
+```
+
+**Description:** consteval if statement. This removes some gotchas with
+[std::is_constant_evaluated()](https://en.cppreference.com/w/cpp/types/is_constant_evaluated.html#Notes),
+which needs to be used with a runtime if (rather than constexpr if) to be
+meaningful.
+
+**Documentation:**
+[if statement](https://en.cppreference.com/w/cpp/language/if)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/1e90vNHYVFc)
+***
+
+### Static operators () and [] <sup>[allowed]</sup>
+
+```
+struct FooHash {
+  // Does not take an implicit pointer to `this`, which would have been useless.
+  static size_t operator()(const Foo& foo) {
+    return ...;
+  }
+};
+```
+
+**Description:** Static operators () and []
+
+**Documentation:**
+[Operator overloading](https://en.cppreference.com/w/cpp/language/operators.html)
+
+**Notes:**
+*** promo
+Avoids unnecessary `this` argument for functors, improving performance.
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/_-d7yyX8EeU).
+***
+
+## C++23 Allowed Library Features {#library-allowlist-23}
+
+The following C++23 library features are allowed in the Chromium codebase.
+
+### std::basic_string::contains <sup>[allowed]</sup>
+
+```c++
+if (str.contains("foo")) ...
+```
+
+**Description:** More concise substring check.
+
+**Documentation:**
+[std::basic_string::contains](https://en.cppreference.com/w/cpp/string/basic_string/contains)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/2RuNgRdeeYg)
+***
+
+### std::byteswap <sup>[allowed]</sup>
+
+```c++
+auto x = std::byteswap(y);
+```
+
+**Description:** Reverses the bytes of an integer.
+
+**Documentation:**
+[std::byteswap](https://en.cppreference.com/w/cpp/numeric/byteswap)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/U2zUF-xOj6A/m/ZiRRZdr7AwAJ)
+***
+
+### Various new ranges algorithms <sup>[allowed]</sup>
+
+```c++
+std::ranges::contains, std::ranges::contains_subrange
+std::ranges::starts_with
+std::ranges::ends_with
+std::ranges::find_last, std::ranges::find_last_if, std::ranges::find_last_if_not
+std::ranges::iota
+std::ranges::fold_left
+std::ranges::fold_left_with_iter
+// The ones below are pending libc++ implementation as of 01/2026.
+std::ranges::shift_left, std::ranges::shift_right
+std::ranges::fold_left_first
+std::ranges::fold_right
+std::ranges::fold_right_last
+std::ranges::fold_left_first_with_iter
+```
+
+**Description:** Various new ranges algorithms
+
+**Documentation:**
+[`<algorithm>`](https://en.cppreference.com/w/cpp/header/algorithm.html)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/wZg3s5m6rOE).
+Migration of base::Contains() tracked [here](https://crbug.com/470391351).
+***
+
+### Constructing containers with std::from_range <sup>[allowed]</sup>
+
+```c++
+std::set<int> a_very_long_container_name = {1, 2, 3};
+std::vector<int> old_way(
+  a_very_long_container_name.begin(), a_very_long_container_name.end());
+std::vector<int> new_way(std::from_range, a_very_long_container_name);
+```
+
+**Description:** More concise conversion from one container type to another.
+
+**Documentation:**
+[std::from_range](https://en.cppreference.com/w/cpp/ranges/from_range.html)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZzSLYf6-KwQ).
+See also std::ranges::to which offers something similar.
+***
+
+### std::ranges::to <sup>[allowed]</sup>
+
+```c++
+std::set<int> s = {1, 2, 3};
+auto u = std::ranges::to<std::vector>(s);
+```
+
+**Description:** Converts a range to a container.
+
+**Documentation:**
+[std::ranges::to](https://en.cppreference.com/w/cpp/ranges/to)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/ZzSLYf6-KwQ).
+NOTE: `std::ranges::to` could also be used as a range adaptor, but those are
+banned in Chromium, see [here](#range-factories-and-range-adaptors-banned).
+Furthermore, `operator|` chaining is banned even when combining with allowed
+adaptors like `std::views::as_rvalue` (always use function call syntax:
+`std::ranges::to<std::vector>(std::views::as_rvalue(range))`).
+***
+
+### std::views::as_rvalue <sup>[allowed]</sup>
+
+```c++
+// Before:
+for (auto&& item : base::RangeAsRvalues(source)) { ... }
+
+// After:
+for (auto&& item : std::views::as_rvalue(source)) { ... }
+```
+
+**Description:** A view adapter that presents each element of a range as an
+rvalue reference, moving elements out of the underlying sequence.
+
+**Documentation:**
+[`std::views::as_rvalue`](https://en.cppreference.com/w/cpp/ranges/as_rvalue_view)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/rfMV-DxJ4Cg).
+***
+
+### std::views::zip <sup>[allowed]</sup>
+
+```c++
+// Before:
+for (auto [a, b] : base::zip(vec_a, vec_b)) { ... }
+// or:
+for (auto [a, b] : base::Zip(vec_a, vec_b)) { ... }
+
+// After:
+for (auto [a, b] : std::views::zip(vec_a, vec_b)) { ... }
+```
+
+**Description:** A view adapter that iterates over multiple ranges in parallel,
+producing a tuple of references to the elements of the underlying sequences.
+
+**Documentation:**
+[`std::views::zip`](https://en.cppreference.com/w/cpp/ranges/zip_view)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/rfMV-DxJ4Cg).
+***
+
+### std::to_underlying <sup>[allowed]</sup>
+
+```c++
+auto x = std::to_underlying(enum_val);
+```
+
+**Description:** Converts an enumeration to its underlying type.
+
+**Documentation:**
+[std::to_underlying](https://en.cppreference.com/w/cpp/utility/to_underlying)
+
+**Notes:**
+*** promo
+Migration from `base::to_underlying` is tracked in https://crbug.com/470039537.
+***
+
+### Monadic operations for std::optional <sup>[allowed]</sup>
+
+```c++
+opt.and_then(f).transform(g).or_else(h);
+```
+
+**Description:** `and_then`, `transform`, `or_else` member functions.
+
+**Documentation:**
+[std::optional](https://en.cppreference.com/w/cpp/utility/optional)
+
+**Notes:**
+*** promo
+[Discussion thread](https://groups.google.com/a/chromium.org/g/cxx/c/7V8Oe67I6WE).
+***
+
+## C++23 TBD Language Features {#core-review-23}
+
+The following C++23 language features are not allowed in the Chromium codebase.
 See the top of this page on how to propose moving a feature from this list into
 the allowed or banned sections.
 
-### Aggregate initialization using parentheses <sup>[tbd]</sup>
+### Explicit object parameter <sup>[tbd]</sup>
 
 ```c++
-struct B {
-  int a;
-  int&& r;
-} b2(1, 1);  // Warning: dangling reference
+struct S {
+  void f(this S& self);
+};
 ```
 
-**Description:** Allows initialization of aggregates using parentheses, not just
-braces.
+**Description:** Allows explicit specification of the object parameter (deducing `this`) in member functions.
 
 **Documentation:**
-[Aggregate initialization](https://en.cppreference.com/w/cpp/language/aggregate_initialization),
-[Direct initialization](https://en.cppreference.com/w/cpp/language/direct_initialization)
+[Explicit object parameter](https://en.cppreference.com/w/cpp/language/member_functions#Explicit_object_parameter)
 
 **Notes:**
 *** promo
-There are subtle but important differences between brace- and paren-init of
-aggregates. The parenthesis style appears to have more pitfalls (allowing
-narrowing conversions, not extending lifetimes of temporaries bound to
-references).
+None
 ***
 
-### Coroutines <sup>[tbd]</sup>
+### Multidimensional subscript operator <sup>[tbd]</sup>
 
 ```c++
-co_return 1;
+struct S {
+  int operator[](int i, int j);
+};
 ```
 
-**Description:** Allows writing functions that logically block while physically
-returning control to a caller. This enables writing some kinds of async code in
-simple, straight-line ways without storing state in members or binding
-callbacks.
+**Description:** Allows multiple arguments in the subscript operator.
 
 **Documentation:**
-[Coroutines](https://en.cppreference.com/w/cpp/language/coroutines)
+[Operator overloading](https://en.cppreference.com/w/cpp/language/operators#Array_subscript_operator)
 
 **Notes:**
 *** promo
-Requires significant support code and planning around API and migration.
+None
 ***
 
-## C++20 TBD Library Features {#library-review-20}
+### auto(x), auto{x} <sup>[tbd]</sup>
 
-The following C++20 library features are not allowed in the Chromium codebase.
+```c++
+void f(const int& i) {
+  auto copy = auto(i);
+}
+```
+
+**Description:** Prvalue copy (decay-copy).
+
+**Documentation:**
+[Functional cast](https://en.cppreference.com/w/cpp/language/explicit_cast)
+
+**Notes:**
+*** promo
+None
+***
+
+### [[assume]] <sup>[tbd]</sup>
+
+```c++
+[[assume(n > 0)]];
+```
+
+**Description:** Provides a hint to the optimizer.
+
+**Documentation:**
+[dcl.attr.assume](https://en.cppreference.com/w/cpp/language/attributes/assume)
+
+**Notes:**
+*** promo
+None
+***
+
+### #warning <sup>[tbd]</sup>
+
+```c++
+#warning "This is a warning"
+```
+
+**Description:** Standardized preprocessor warning directive.
+
+**Documentation:**
+[#warning](https://en.cppreference.com/w/cpp/preprocessor/warning)
+
+**Notes:**
+*** promo
+This was standardized in C++23, but was already supported by clang.
+From thakis@: #warning doesn't honor -Werror, and we want things to either be
+errors, or silent.
+***
+
+### Literal suffix for size_t <sup>[tbd]</sup>
+
+```c++
+auto s = 10uz;
+```
+
+**Description:** Literal suffix `z` or `uz` for `std::size_t`.
+
+**Documentation:**
+[Integer literal](https://en.cppreference.com/w/cpp/language/integer_literal)
+
+**Notes:**
+*** promo
+None
+***
+
+### Named character escapes <sup>[tbd]</sup>
+
+```c++
+auto c = "\N{LATIN CAPITAL LETTER A}";
+```
+
+**Description:** Universal character names using `\N{...}`.
+
+**Documentation:**
+[Escape sequences](https://en.cppreference.com/w/cpp/language/escape)
+
+**Notes:**
+*** promo
+None
+***
+
+## C++23 TBD Library Features {#library-review-23}
+
+The following C++23 library features are not allowed in the Chromium codebase.
 See the top of this page on how to propose moving a feature from this list into
 the allowed or banned sections.
 
-### &lt;coroutine&gt; <sup>[tbd]</sup>
+### std::expected <sup>[tbd]</sup>
 
 ```c++
-#include <coroutine>
+std::expected<int, std::string> e;
 ```
 
-**Description:** Header which defines various core coroutine types.
+**Description:** A vocabulary type that contains an expected value or an error.
 
 **Documentation:**
-[Coroutine support](https://en.cppreference.com/w/cpp/coroutine)
+[std::expected](https://en.cppreference.com/w/cpp/utility/expected)
 
 **Notes:**
 *** promo
-See notes on "Coroutines" above.
+Overlaps with `base::expected`.
 ***
 
-### &lt;format&gt; <sup>[tbd]</sup>
+### std::flat_map, std::flat_multimap, std::flat_set, std::flat_multiset <sup>[tbd]</sup>
 
 ```c++
-std::cout << std::format("Hello {}!\n", "world");
+std::flat_map<int, std::string> map;
 ```
 
-**Description:** Utilities for producing formatted strings.
+**Description:** Container adaptors that provide the functionality of associative containers using sorted vectors.
 
 **Documentation:**
-[Formatting library](https://en.cppreference.com/w/cpp/utility/format)
+[std::flat_map](https://en.cppreference.com/w/cpp/container/flat_map)
+[std::flat_multimap](https://en.cppreference.com/w/cpp/container/flat_multimap)
+[std::flat_set](https://en.cppreference.com/w/cpp/container/flat_set)
+[std::flat_multiset](https://en.cppreference.com/w/cpp/container/flat_multiset)
 
 **Notes:**
 *** promo
-Has both pros and cons compared to `absl::StrFormat` (which we don't yet use).
-Migration would be nontrivial.
+Overlaps with `base::flat_map` and `base::flat_set`.
 ***
 
-### &lt;source_location&gt; <sup>[tbd]</sup>
+### std::out_ptr, std::inout_ptr <sup>[tbd]</sup>
 
 ```c++
-#include <source_location>
+std::unique_ptr<T> p;
+void GetT(T** out);
+GetT(std::out_ptr(p));
 ```
 
-**Description:** Provides a class that can hold source code details such as
-filenames, function names, and line numbers.
+**Description:** Smart pointer adapters for functions that take raw pointers as
+out-parameters.
 
 **Documentation:**
-[Standard library header `<source_location>`](https://en.cppreference.com/w/cpp/header/source_location)
+[std::out_ptr](https://en.cppreference.com/w/cpp/memory/out_ptr_t/out_ptr),
+[std::inout_ptr](https://en.cppreference.com/w/cpp/memory/inout_ptr_t/inout_ptr)
 
 **Notes:**
 *** promo
-Seems to regress code size vs. `base::Location`.
+None
 ***
 
-### std::u8string <sup>[tbd]</sup>
+### std::mdspan <sup>[tbd]</sup>
 
 ```c++
-std::u8string str = u8"Foo";
+std::mdspan m(ptr, 10, 10);
 ```
 
-**Description:** A string whose character type is `char8_t`, intended to hold
-UTF-8-encoded text.
+**Description:** Multidimensional array view.
 
 **Documentation:**
-[`std::basic_string`](https://en.cppreference.com/w/cpp/string/basic_string)
+[std::mdspan](https://en.cppreference.com/w/cpp/container/mdspan)
 
 **Notes:**
 *** promo
-See notes on `char8_t` above.
+We ban std::span in favor of base::span, which has better safety guarantees.
+If we want to support this, maybe we should implement base::mdspan.
+***
+
+### Range Formatting <sup>[tbd]</sup>
+
+```c++
+LOG(INFO) << std::format("Values: {}", my_vector);
+```
+
+**Description:** Extends `<format>` to support printing containers and ranges.
+
+**Documentation:**
+[`<format>`](https://en.cppreference.com/w/cpp/utility/format/format.html)
+
+**Notes:**
+*** promo
+As of 01/2026, `<format>` is still a TBD feature from C++20.
+***
+
+### std::print <sup>[tbd]</sup>
+
+```c++
+std::print("Hello {}", "world");
+```
+
+**Description:** Formatted output.
+
+**Documentation:**
+[Print functions](https://en.cppreference.com/w/cpp/io/print)
+
+**Notes:**
+*** promo
+Overlaps with LOG() and friends.
+***
+
+### std::generator <sup>[tbd]</sup>
+
+```c++
+std::generator<int> gen() { co_yield 1; }
+```
+
+**Description:** Coroutine generator.
+
+**Documentation:**
+[std::generator](https://en.cppreference.com/w/cpp/coroutine/generator)
+
+**Notes:**
+*** promo
+As of 01/2026, coroutine support in Chromium is still TBD.
+***
+
+### std::stacktrace <sup>[tbd]</sup>
+
+```c++
+auto trace = std::stacktrace::current();
+```
+
+**Description:** Captures a stack trace.
+
+**Documentation:**
+[std::stacktrace](https://en.cppreference.com/w/cpp/utility/stacktrace)
+
+**Notes:**
+*** promo
+Overlaps with `base::debug::StackTrace`.
+***
+
+### std::move_only_function <sup>[tbd]</sup>
+
+```c++
+std::move_only_function<void()> f = [x = std::make_unique<int>(1)] {};
+```
+
+**Description:** Function wrapper for move-only objects.
+
+**Documentation:**
+[std::move_only_function](https://en.cppreference.com/w/cpp/utility/functional/move_only_function)
+
+**Notes:**
+*** promo
+Overlaps with `base::OnceCallback`.
+***
+
+### std::unreachable <sup>[tbd]</sup>
+
+```c++
+std::unreachable();
+```
+
+**Description:** Indicates a codepath that is unreachable and invokes undefined
+behavior if executed.
+
+**Documentation:**
+[std::unreachable](https://en.cppreference.com/w/cpp/utility/unreachable)
+
+**Notes:**
+*** promo
+Standard version of `__builtin_unreachable()`. Unlike `NOTREACHED()`, which
+cleanly aborts, this hints the compiler to optimize assuming this point is
+unreachable, with no bounds on how the program behaves if the annotation was
+wrong. This and `__builtin_unreachable()` should only be used in rare
+circumstances.
+***
+
+### std::spanstream <sup>[tbd]</sup>
+
+```c++
+std::spanstream s(buffer);
+```
+
+**Description:** Input/output stream using a span as buffer.
+
+**Documentation:**
+[std::spanstream](https://en.cppreference.com/w/cpp/header/spanstream.html)
+
+**Notes:**
+*** promo
+None
+***
+
+### Fixed width floating-point types <sup>[tbd]</sup>
+
+```c++
+#include <stdfloat>
+
+int main()
+{
+    std::float64_t f = 0.1f64;
+}
+```
+
+**Description:** Similar to int32_t and friends but for floats.
+
+**Documentation:**
+[<stdfloat>](https://en.cppreference.com/w/cpp/types/floating-point.html#Fixed_width_floating-point_types)
+
+**Notes:**
+*** promo
+None
+***
+
+### std::start_lifetime_as <sup>[tbd]</sup>
+
+```c++
+void* storage = std::malloc(sizeof(T));
+T* p = std::start_lifetime_as<T>(storage);
+```
+
+**Description:** Explicitly starts the lifetime of an object of type T in the
+given storage.
+
+**Documentation:**
+[std::start_lifetime_as](https://en.cppreference.com/w/cpp/memory/start_lifetime_as)
+
+**Notes:**
+*** promo
+None
 ***
 
 ## Abseil Banned Library Features {#absl-blocklist}
@@ -1817,16 +2485,18 @@ substantial code size increase. Until this problem can be resolved the use of
 these containers is banned. Use the standard library containers instead.
 ***
 
-### bind_front <sup>[banned]</sup>
+### bind_back and bind_front <sup>[banned]</sup>
 
 ```c++
+absl::bind_back
 absl::bind_front
 ```
 
-**Description:** Binds the first N arguments of an invocable object and stores
-them by value.
+**Description:** Binds the first (bind_front) or the last (bind_back) N arguments
+of an invocable object and stores them by value.
 
 **Documentation:**
+*   [bind_back.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/functional/bind_back.h)
 *   [bind_front.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/functional/bind_front.h)
 *   [Avoid std::bind](https://abseil.io/tips/108)
 
@@ -2205,6 +2875,28 @@ The following Abseil library features are not allowed in the Chromium codebase.
 See the top of this page on how to propose moving a feature from this list into
 the allowed or banned sections.
 
+### absl::AnySpan <sup>[tbd]</sup>
+
+```c++
+void MyFunction(AnySpan<const MyMessage> messages);
+
+// Invoke with container of smart pointers.
+std::deque<std::unique_ptr<MyMessage>> message_ptrs = ...;
+MyFunction(AnySpan<const MyMessage>(message_ptrs, any_span_transform::Deref()));
+
+// Invoke with a repeated proto field of type MyMessage.
+OtherMessage proto_message = ...;
+MyFunction(proto_message.repeated_field());
+```
+
+**Description:** Provides a view of a random access container, much like
+absl::Span, except it can handle more container types and perform a variety of
+useful transformations.
+
+**Documentation:**
+*  [any_span.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/types/any_span.h)
+
+
 ### absl::linked_hash_set, absl::linked_hash_map <sup>[tbd]</sup>
 
 ```c++
@@ -2223,3 +2915,51 @@ amortized insertions and lookups, as well as iteration in the insertion order.
 *   [linked_hash_map.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/container/linked_hash_map.h)
 
 
+### absl::optional_ref <sup>[tbd]</sup>
+
+```c++
+   void ProcessT(absl::optional_ref<const T> input) {
+     if (!input.has_value()) {
+       // Handle empty case.
+       return;
+     }
+     const T& val = *input;
+     // Do something with val.
+   }
+
+   ProcessT(std::nullopt);
+   ProcessT(BuildT());
+```
+
+**Description:** A `std::optional`-like interface around `T*`.
+It is similar to C++26's `std::optional<T&>`, but with slight enhancements.
+
+**Documentation:**
+*   [optional_ref.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/types/optional_ref.h)
+
+
+### absl::SourceLocation <sup>[tbd]</sup>
+
+```c++
+   void TracedAdd(int i, SourceLocation loc = SourceLocation::current()) {
+     std::cout << loc.file_name() << ":" << loc.line() << " added " << i;
+     ...
+   }
+
+   void UserCode() {
+     TracedAdd(1);
+     TracedAdd(2);
+   }
+```
+
+**Description:** provides source-code location info.
+It is similar to C++20's `std::source_location`. Unlike std::source_location,
+it is not permanently valid and must not outlive its source.
+
+**Documentation:**
+*   [source_location.h](https://source.chromium.org/chromium/chromium/src/+/main:third_party/abseil-cpp/absl/types/source_location.h)
+
+**Notes:**
+*** promo
+Overlaps with `base::Location`.
+***

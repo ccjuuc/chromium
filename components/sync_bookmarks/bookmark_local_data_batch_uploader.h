@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "components/sync/service/data_type_local_data_batch_uploader.h"
+#include "components/sync_bookmarks/constants.h"
 
 class GURL;
 
@@ -45,7 +46,27 @@ class BookmarkLocalDataBatchUploader
   void TriggerLocalDataMigrationForItems(
       std::vector<syncer::LocalDataItemModel::DataId> items) override;
 
+  void SetMaxBookmarksLimitForTesting(size_t limit);
+
  private:
+  // TODO(crbug.com/516993407): CanUploadResult and DetermineAbilityToUpload()
+  // exist solely to support correct metric recording
+  // (Sync.BatchUpload.BookmarksDisabledDueToLimitExceeded) in
+  // GetLocalDataDescription(). If this metric is removed, this should be
+  // simplified back to a simple boolean check.
+  enum class CanUploadResult {
+    kAllowed,
+    kNotAllowed,
+    kLimitExceeded,
+  };
+
+  // Determines the ability to upload local bookmarks.
+  // Note: The order of evaluation in this method is important. Specifically,
+  // the presence of local data to upload must be checked BEFORE checking if the
+  // limit is exceeded. This ensures that the limit-exceeded metric is only
+  // recorded when there is actually data to upload, avoiding skewing the
+  // metric.
+  CanUploadResult DetermineAbilityToUpload() const;
   bool CanUpload() const;
 
   // Returns the URLs of all the bookmarked items in the subtree (including
@@ -71,6 +92,7 @@ class BookmarkLocalDataBatchUploader
 
   const raw_ptr<bookmarks::BookmarkModel> bookmark_model_;
   const raw_ptr<PrefService> pref_service_;
+  size_t max_bookmarks_limit_ = kSyncBookmarksLimit;
 };
 
 }  // namespace sync_bookmarks

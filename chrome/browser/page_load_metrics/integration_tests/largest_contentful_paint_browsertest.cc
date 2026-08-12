@@ -15,7 +15,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_run_loop_timeout.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "build/build_config.h"
 #include "cc/base/switches.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
@@ -53,7 +53,7 @@ namespace {
 void ValidateTraceEventHasCorrectCandidateSize(int expected_size,
                                                const TraceEvent& event) {
   ASSERT_TRUE(event.HasDictArg("data"));
-  base::Value::Dict data = event.GetKnownArgAsDict("data");
+  base::DictValue data = event.GetKnownArgAsDict("data");
 
   const std::optional<int> traced_size = data.FindInt("size");
   ASSERT_TRUE(traced_size.has_value());
@@ -68,7 +68,7 @@ void ValidateTraceEventHasCorrectCandidateSize(int expected_size,
 void ValidateTraceEventBreakdownTimings(const TraceEvent& event,
                                         double lcp_time) {
   ASSERT_TRUE(event.HasDictArg("data"));
-  base::Value::Dict data = event.GetKnownArgAsDict("data");
+  base::DictValue data = event.GetKnownArgAsDict("data");
 
   const std::optional<double> load_start = data.FindDouble("imageLoadStart");
   ASSERT_TRUE(load_start.has_value());
@@ -89,7 +89,7 @@ void ValidateTraceEventBreakdownTimings(const TraceEvent& event,
 }
 
 int GetCandidateIndex(const TraceEvent& event) {
-  base::Value::Dict data = event.GetKnownArgAsDict("data");
+  base::DictValue data = event.GetKnownArgAsDict("data");
   std::optional<int> candidate_idx = data.FindInt("candidateIndex");
   DCHECK(candidate_idx.has_value()) << "couldn't find 'candidateIndex'";
 
@@ -303,7 +303,7 @@ IN_PROC_BROWSER_TEST_F(MetricIntegrationTest,
 
 class LCPLazyLoadingImageTest : public MetricIntegrationTest {
  public:
-  base::Value::Dict setUpTraceEvent(std::string test_url) {
+  base::DictValue setUpTraceEvent(std::string test_url) {
     auto waiter =
         std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
             web_contents());
@@ -331,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(LCPLazyLoadingImageTest,
   std::string test_url =
       "/lcp_breakdown_timings_native_lazy_loading_images.html";
 
-  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const base::DictValue data = setUpTraceEvent(test_url);
   const std::string* loading_attr = data.FindString("loadingAttr");
   ASSERT_TRUE(loading_attr);
   EXPECT_EQ(*loading_attr, "lazy");
@@ -341,7 +341,7 @@ IN_PROC_BROWSER_TEST_F(LCPLazyLoadingImageTest,
                        LargestContentfulPaint_EventLazyLoadingImage_Unset) {
   std::string test_url = "/iframe_with_image.html";
 
-  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const base::DictValue data = setUpTraceEvent(test_url);
   const std::string* loading_attr = data.FindString("loadingAttr");
   ASSERT_TRUE(loading_attr);
   EXPECT_EQ(*loading_attr, "");
@@ -353,24 +353,14 @@ IN_PROC_BROWSER_TEST_F(
     DISABLED_LargestContentfulPaint_EventLazyLoadingImage_Video) {
   std::string test_url = "/is_video.html";
 
-  const base::Value::Dict data = setUpTraceEvent(test_url);
+  const base::DictValue data = setUpTraceEvent(test_url);
   const std::string* loading_attr = data.FindString("loadingAttr");
   ASSERT_TRUE(loading_attr);
   EXPECT_EQ(*loading_attr, "");
 }
 
-class PageViewportInLCPTest : public MetricIntegrationTest {
- public:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    feature_list_.InitWithFeatures(
-        {blink::features::kUsePageViewportInLCP} /*enabled*/, {} /*disabled*/);
-  }
-
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // TODO(crbug.com/385580803): flaky on all platforms
-IN_PROC_BROWSER_TEST_F(PageViewportInLCPTest, DISABLED_FullSizeImageInIframe) {
+IN_PROC_BROWSER_TEST_F(MetricIntegrationTest, DISABLED_FullSizeImageInIframe) {
   auto waiter = std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
       web_contents());
   waiter->AddSubFrameExpectation(page_load_metrics::PageLoadMetricsTestWaiter::
@@ -456,7 +446,7 @@ IN_PROC_BROWSER_TEST_F(
                    /*expected=*/false);
 }
 
-// crbug.com/1373885: This test is unreliable on ChromeOS, Linux and Mac
+// crbug.com/40871999: This test is unreliable on ChromeOS, Linux and Mac
 IN_PROC_BROWSER_TEST_F(IsAnimatedLCPTest,
                        DISABLED_LargestContentfulPaint_IsVideo) {
   test_is_animated("/is_video.html", blink::LargestContentfulPaintType::kVideo,
@@ -709,7 +699,7 @@ IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest,
   TestTextAndImage(ElementOrder::kImageFirst, text, imgSrc, flag_set);
 }
 
-// (https://crbug.com/1385713): Flaky on mac12-arm64-rel M1 Mac CQ.
+// (https://crbug.com/40246907): Flaky on mac12-arm64-rel M1 Mac CQ.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_DataURIType DISABLED_DataURIType
 #else
@@ -726,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest, MAYBE_DataURIType) {
   TestImage(imgSrc, flag_set);
 }
 
-// (https://crbug.com/1385713): Flaky on mac12-arm64-rel M1 Mac CQ.
+// (https://crbug.com/40246907): Flaky on mac12-arm64-rel M1 Mac CQ.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_DataURIType_SVG DISABLED_DataURIType_SVG
 #else
@@ -751,8 +741,8 @@ IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest, MAYBE_DataURIType_SVG) {
   TestImage(imgSrc, flag_set);
 }
 
-// (https://crbug.com/1385713): Flaky on mac12-arm64-rel M1 Mac CQ.
-// (https://crbug.com/1405307): Flaky on ChromeOS, Linux, and Windows as well.
+// (https://crbug.com/40246907): Flaky on mac12-arm64-rel M1 Mac CQ.
+// (https://crbug.com/40886555): Flaky on ChromeOS, Linux, and Windows as well.
 IN_PROC_BROWSER_TEST_F(LargestContentfulPaintTypeTest,
                        DISABLED_DataURIType_Video) {
   auto flag_set = blink::LargestContentfulPaintType::kImage |

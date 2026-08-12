@@ -7,7 +7,6 @@
 #include "base/feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_urls/chrome_urls_handler.h"
-#include "chrome/common/chrome_features.h"
 #include "components/grit/chrome_urls_resources.h"
 #include "components/grit/chrome_urls_resources_map.h"
 #include "content/public/browser/web_contents.h"
@@ -47,11 +46,9 @@ void ChromeUrlsUI::BindInterface(
 }
 
 void ChromeUrlsUI::CreatePageHandler(
-    mojo::PendingRemote<chrome_urls::mojom::Page> page,
     mojo::PendingReceiver<chrome_urls::mojom::PageHandler> receiver) {
-  DCHECK(page);
-  page_handler_ = std::make_unique<ChromeUrlsHandler>(
-      std::move(receiver), std::move(page), profile_);
+  page_handler_ =
+      std::make_unique<ChromeUrlsHandler>(std::move(receiver), profile_);
 }
 
 ChromeUrlsUI::~ChromeUrlsUI() = default;

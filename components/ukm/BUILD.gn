@@ -46,6 +46,8 @@ static_library("ukm") {
     "app_source_url_recorder.h",
     "field_trials_provider_helper.cc",
     "field_trials_provider_helper.h",
+    "iwa_source_url_recorder.cc",
+    "iwa_source_url_recorder.h",
     "singular_ukm_entry.cc",
     "singular_ukm_entry.h",
     "ukm_pref_names.cc",
@@ -71,6 +73,7 @@ static_library("ukm") {
 
   deps = [
     "//base",
+    "//components/background_task_scheduler",
     "//components/crx_file",
     "//components/metrics",
     "//components/prefs",
@@ -96,6 +99,7 @@ static_library("observers") {
     "//base",
     "//components/history/core/browser",
     "//components/metrics",
+    "//components/signin/public/identity_manager",
     "//components/sync/base",
     "//components/sync/service",
     "//google_apis",
@@ -114,6 +118,8 @@ static_library("observers") {
 static_library("test_support") {
   testonly = true
   sources = [
+    "gmock_matchers.cc",
+    "gmock_matchers.h",
     "test_ukm_recorder.cc",
     "test_ukm_recorder.h",
   ]
@@ -126,6 +132,7 @@ static_library("test_support") {
     "//base",
     "//components/metrics:test_support",
     "//components/prefs:test_support",
+    "//testing/gmock",
     "//testing/gtest",
   ]
 }
@@ -135,6 +142,7 @@ source_set("unit_tests") {
   sources = [
     "app_source_url_recorder_test.cc",
     "bitset_unittest.cc",
+    "gmock_matchers_unittest.cc",
     "observers/ukm_consent_state_observer_unittest.cc",
     "singular_ukm_entry_unittest.cc",
     "ukm_recorder_impl_unittest.cc",
@@ -150,6 +158,7 @@ source_set("unit_tests") {
     "//components/metrics",
     "//components/metrics:test_support",
     "//components/prefs:test_support",
+    "//components/signin/public/identity_manager",
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations",

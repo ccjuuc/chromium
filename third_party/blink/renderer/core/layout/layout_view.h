@@ -49,6 +49,10 @@ struct VariableLengthTransformResult {
   TextOffsetMap offset_map;
 };
 
+using SVGTextDescendantsMap =
+    HeapHashMap<WeakMember<const LayoutBlock>,
+                Member<GCedHeapHashSet<Member<LayoutSVGText>>>>;
+
 // LayoutView is the root of the layout tree and the Document's LayoutObject.
 //
 // It corresponds to the CSS concept of 'initial containing block' (or ICB).
@@ -113,28 +117,15 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
 
   LayoutUnit ComputeMinimumWidth();
 
-  // Based on LocalFrameView::LayoutSize, but:
-  // - checks for null LocalFrameView
-  // - Accounts for printing layout
-  // - scrollbar exclusion is compatible with root layer scrolling
-  gfx::Size GetLayoutSize(IncludeScrollbarsInRect = kExcludeScrollbars) const;
+  // Based on `LocalFrameView::GetLayoutSize()`, but:
+  // - Checks for null `LocalFrameView`.
+  // - Accounts for printing layout.
+  // - Scrollbar exclusion is compatible with root layer scrolling.
+  gfx::Size GetLayoutSize(IncludeScrollbarsInRect) const;
 
   // Same as above, but ignore print settings.
   gfx::Size GetNonPrintingLayoutSize(IncludeScrollbarsInRect) const;
 
-  int ViewHeight(
-      IncludeScrollbarsInRect scrollbar_inclusion = kExcludeScrollbars) const {
-    NOT_DESTROYED();
-    return GetLayoutSize(scrollbar_inclusion).height();
-  }
-  int ViewWidth(
-      IncludeScrollbarsInRect scrollbar_inclusion = kExcludeScrollbars) const {
-    NOT_DESTROYED();
-    return GetLayoutSize(scrollbar_inclusion).width();
-  }
-
-  int ViewLogicalWidth(IncludeScrollbarsInRect = kExcludeScrollbars) const;
-  int ViewLogicalHeight(IncludeScrollbarsInRect = kExcludeScrollbars) const;
 
   LayoutUnit ViewLogicalHeightForPercentages() const;
 
@@ -151,7 +142,7 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
   bool MapToVisualRectInAncestorSpaceInternal(
       const LayoutBoxModelObject* ancestor,
       TransformState&,
-      VisualRectFlags = kDefaultVisualRectFlags) const override;
+      VisualRectFlags) const override;
 
   PhysicalOffset OffsetForFixedPosition() const;
 
@@ -159,14 +150,13 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
 
   void QuadsInAncestorInternal(Vector<gfx::QuadF>&,
                                const LayoutBoxModelObject* ancestor,
-                               MapCoordinatesFlags) const override;
+                               MapCoordinatesFlags,
+                               BoxQuadType) const override;
 
   PhysicalRect ViewRect() const override;
-  PhysicalRect OverflowClipRect(const PhysicalOffset& location,
-                                OverlayScrollbarClipBehavior =
-                                    kIgnoreOverlayScrollbarSize) const override;
-  PhysicalRect OverflowClipRectForScrollNode(
-      const PhysicalOffset& location) const override;
+  using LayoutBlockFlow::OverflowClipRect;
+  PhysicalRect OverflowClipRect(OverlayScrollbarClipBehavior) const override;
+  PhysicalRect OverflowClipRectForScrollNode() const override;
 
   // If either direction has a non-auto mode, the other must as well.
   void SetAutosizeScrollbarModes(mojom::blink::ScrollbarMode h_mode,
@@ -253,6 +243,21 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
     return layout_list_item_count_;
   }
 
+  // This should be called when the style of any LayoutObject changes to have
+  // ruby annotations or text-emphasis marks.
+  void SetContainsAnnotations();
+
+  // Called when the style of an SVG LayoutObject has
+  // 'vector-effect: non-scaling-stroke'.
+  void SetContainsNonScalingStroke() {
+    NOT_DESTROYED();
+    contains_non_scaling_stroke_ = true;
+  }
+  bool ContainsNonScalingStroke() {
+    NOT_DESTROYED();
+    return contains_non_scaling_stroke_;
+  }
+
   // Return true if re-laying out the specified node (as a cached layout result)
   // with a new initial containing block size. Subsequent calls for the same
   // node within the same lifecycle update will return false.
@@ -287,6 +292,11 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
 
   bool ShouldPlaceBlockDirectionScrollbarOnLogicalLeft() const override;
 
+  bool IsBeingAutoSized() const {
+    NOT_DESTROYED();
+    return GetFrameView()->IsBeingAutoSized();
+  }
+
   PhysicalRect DebugRect() const override;
 
   // Returns the coordinates of find-in-page scrollbar tickmarks.  These come
@@ -299,7 +309,7 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
   // attachment backgrounds.
   PhysicalRect BackgroundRect() const {
     NOT_DESTROYED();
-    return OverflowClipRect(PhysicalOffset());
+    return OverflowClipRect();
   }
 
   // The previous BackgroundRect after the previous paint invalidation.
@@ -330,9 +340,12 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
                           TransformState&,
                           MapCoordinatesFlags) const override;
 
-  LogicalSize InitialContainingBlockSize() const;
+  PhysicalSize InitialContainingBlockSize() const;
 
-  TrackedDescendantsMap& SvgTextDescendantsMap();
+  SVGTextDescendantsMap& SvgTextDescendantsMap() {
+    NOT_DESTROYED();
+    return svg_text_descendants_;
+  }
 
   // Manage rare data of LayoutText.
   void RegisterVariableLengthTransformResult(
@@ -350,15 +363,8 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
  private:
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
-  int ViewLogicalWidthForBoxSizing() const {
-    NOT_DESTROYED();
-    return ViewLogicalWidth(kIncludeScrollbars);
-  }
-  int ViewLogicalHeightForBoxSizing() const {
-    NOT_DESTROYED();
-    return ViewLogicalHeight(kIncludeScrollbars);
-  }
 
   // Set if laying out with a new initial containing block size, and populated
   // as we handle nodes that may have been affected by that.
@@ -376,8 +382,7 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
     return false;
   }
 
-  PhysicalRect OverflowClipRectInternal(const PhysicalOffset& location,
-                                        OverlayScrollbarClipBehavior,
+  PhysicalRect OverflowClipRectInternal(OverlayScrollbarClipBehavior,
                                         bool for_scroll_node) const;
 
   // The page area (content area) size of the first page, when printing. This
@@ -404,7 +409,7 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
   // LayoutSVGText needs to do re-layout on transform changes of any ancestor
   // because LayoutSVGText's layout result depends on scaling factors
   // computed with ancestor transforms.
-  Member<TrackedDescendantsMap> svg_text_descendants_;
+  SVGTextDescendantsMap svg_text_descendants_;
 
   HeapHashMap<WeakMember<const LayoutText>, VariableLengthTransformResult>
       text_to_variable_length_transform_result_;
@@ -434,6 +439,19 @@ class CORE_EXPORT LayoutView : public LayoutBlockFlow {
 
   int vertical_scrollbar_width_for_viewport_units_ = 0;
   int horizontal_scrollbar_height_for_viewport_units_ = 0;
+
+  // True if the document contains any ruby annotations or emphasis marks.
+  // The flag enables annotation space computation for all IFCs.
+  //
+  // TODO(layout-dev): We may want to make the flag precise.
+  // * The flag should become `false` if the document no longer contains
+  //   annotations.
+  // * The flag should be moved to flow-roots for better scoping.
+  bool contains_annotations_ = false;
+
+  // True if the document contains any (SVG) 'vector-effect:
+  // non-scaling-stroke' elements. Used to optimize invalidation for SVGImage.
+  bool contains_non_scaling_stroke_ = false;
 };
 
 template <>

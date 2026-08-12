@@ -48,6 +48,7 @@ public class ChannelsUpdaterTest {
 
     @Before
     public void setUp() {
+        ChannelsInitializer.resetForTesting();
         Context context = RuntimeEnvironment.getApplication();
         mNotificationManagerProxy = BaseNotificationManagerProxyFactory.create();
 
@@ -108,8 +109,7 @@ public class ChannelsUpdaterTest {
                         ChromeChannelDefinitions.ChannelId.BROWSER,
                         ChromeChannelDefinitions.ChannelId.DOWNLOADS,
                         ChromeChannelDefinitions.ChannelId.INCOGNITO,
-                        ChromeChannelDefinitions.ChannelId.MEDIA_PLAYBACK,
-                        ChromeChannelDefinitions.ChannelId.TIPS));
+                        ChromeChannelDefinitions.ChannelId.MEDIA_PLAYBACK));
         assertThat(
                 mSharedPreferences.readInt(ChromePreferenceKeys.NOTIFICATIONS_CHANNELS_VERSION, -1),
                 is(21));
@@ -144,8 +144,7 @@ public class ChannelsUpdaterTest {
                         ChromeChannelDefinitions.ChannelId.BROWSER,
                         ChromeChannelDefinitions.ChannelId.DOWNLOADS,
                         ChromeChannelDefinitions.ChannelId.INCOGNITO,
-                        ChromeChannelDefinitions.ChannelId.MEDIA_PLAYBACK,
-                        ChromeChannelDefinitions.ChannelId.TIPS));
+                        ChromeChannelDefinitions.ChannelId.MEDIA_PLAYBACK));
     }
 
     private static List<String> getChannelIds(List<NotificationChannel> channels) {

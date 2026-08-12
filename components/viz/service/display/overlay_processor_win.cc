@@ -18,7 +18,6 @@
 #include "base/types/expected.h"
 #include "components/viz/common/display/renderer_settings.h"
 #include "components/viz/common/features.h"
-#include "components/viz/common/overlay_state/win/overlay_state_service.h"
 #include "components/viz/common/quads/aggregated_render_pass_draw_quad.h"
 #include "components/viz/common/quads/debug_border_draw_quad.h"
 #include "components/viz/service/debugger/viz_debugger.h"
@@ -27,8 +26,8 @@
 #include "components/viz/service/display/overlay_candidate.h"
 #include "components/viz/service/display/overlay_candidate_factory.h"
 #include "components/viz/service/display/overlay_processor_delegated_support.h"
-#include "media/base/win/mf_feature_checks.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gl/gl_switches.h"
 
 namespace viz {
 namespace {
@@ -186,14 +185,10 @@ void OverlayProcessorWin::ProcessForOverlays(
     DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_passes,
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     SurfaceDamageRectList surface_damage_rect_list_in_root_space,
     const PrimaryPlaneParams& primary_plane_params,
     CandidateList* candidates,
-    gfx::Rect* root_damage_rect,
-    std::vector<gfx::Rect>* content_bounds) {
+    gfx::Rect* root_damage_rect) {
   TRACE_EVENT0("viz", "OverlayProcessorWin::ProcessForOverlays");
 
   DebugLogBeforeDelegation(*root_damage_rect,
@@ -201,7 +196,6 @@ void OverlayProcessorWin::ProcessForOverlays(
 
   DelegationStatus status = ProcessOverlaysForDelegation(
       resource_provider, render_passes, output_color_matrix,
-      render_pass_filters, render_pass_backdrop_filters,
       surface_damage_rect_list_in_root_space, candidates, root_damage_rect);
 
   std::optional<OverlayCandidate> primary_plane;
@@ -209,7 +203,6 @@ void OverlayProcessorWin::ProcessForOverlays(
     // Fall back to promoting overlays from the output surface plane.
     ProcessOverlaysFromOutputSurfacePlane(
         resource_provider, render_passes, output_color_matrix,
-        render_pass_filters, render_pass_backdrop_filters,
         surface_damage_rect_list_in_root_space, candidates, root_damage_rect);
 
     primary_plane = CreatePrimaryPlane(primary_plane_params);
@@ -222,9 +215,7 @@ void OverlayProcessorWin::ProcessForOverlays(
   // Sort back-to-front to make the subsequent operations easier.
   std::ranges::sort(*candidates, {}, &OverlayCandidate::plane_z_order);
 
-  if (is_page_fullscreen_mode_ &&
-      base::FeatureList::IsEnabled(
-          features::kEarlyFullScreenVideoOptimization)) {
+  if (is_page_fullscreen_mode_) {
     TryPromoteFullScreenVideo(*render_passes->back(), *candidates,
                               *root_damage_rect);
   }
@@ -251,9 +242,6 @@ DelegationStatus OverlayProcessorWin::ProcessOverlaysForDelegation(
     DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_passes,
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const SurfaceDamageRectList& surface_damage_rect_list_in_root_space,
     CandidateList* candidates,
     gfx::Rect* root_damage_rect) {
@@ -271,13 +259,13 @@ DelegationStatus OverlayProcessorWin::ProcessOverlaysForDelegation(
   OverlayCandidateFactory factory(
       render_passes->back().get(), resource_provider,
       &surface_damage_rect_list_in_root_space, &output_color_matrix,
-      gfx::RectF(render_passes->back()->output_rect), &render_pass_filters,
+      gfx::RectF(render_passes->back()->output_rect),
       WindowsDelegatedOverlayContext());
 
   base::expected<DelegatedCompositingResult, DelegationStatus>
-      delegation_result = TryDelegatedCompositing(
-          is_full_delegated_compositing, *render_passes, factory,
-          render_pass_backdrop_filters, resource_provider);
+      delegation_result =
+          TryDelegatedCompositing(is_full_delegated_compositing, *render_passes,
+                                  factory, resource_provider);
 
   if (delegation_result.has_value()) {
     OverlayCandidateList delegated_candidates =
@@ -292,9 +280,8 @@ DelegationStatus OverlayProcessorWin::ProcessOverlaysForDelegation(
                   *render_passes, promoted_render_passes_info);
 
       dc_layer_overlay_processor_->Process(
-          resource_provider, render_pass_filters, render_pass_backdrop_filters,
-          surface_damage_rect_list_in_root_space, is_page_fullscreen_mode_,
-          surface_content_render_passes);
+          resource_provider, surface_damage_rect_list_in_root_space,
+          is_page_fullscreen_mode_, surface_content_render_passes);
 
       // Remove entries that were not seen this frame. These counters are used
       // to avoid thrashing between swap chain and DComp surface allocations,
@@ -361,9 +348,6 @@ void OverlayProcessorWin::ProcessOverlaysFromOutputSurfacePlane(
     DisplayResourceProvider* resource_provider,
     AggregatedRenderPassList* render_passes,
     const SkM44& output_color_matrix,
-    const OverlayProcessorInterface::FilterOperationsMap& render_pass_filters,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const SurfaceDamageRectList& surface_damage_rect_list_in_root_space,
     CandidateList* candidates,
     gfx::Rect* root_damage_rect) {
@@ -379,9 +363,8 @@ void OverlayProcessorWin::ProcessOverlaysFromOutputSurfacePlane(
       root_render_pass_overlay_data = emplace_pair.first->second;
   root_render_pass_overlay_data.damage_rect = *root_damage_rect;
   dc_layer_overlay_processor_->Process(
-      resource_provider, render_pass_filters, render_pass_backdrop_filters,
-      surface_damage_rect_list_in_root_space, is_page_fullscreen_mode_,
-      render_pass_overlay_data_map);
+      resource_provider, surface_damage_rect_list_in_root_space,
+      is_page_fullscreen_mode_, render_pass_overlay_data_map);
   if (frames_since_using_dc_layers_map_.size() > 1 ||
       !frames_since_using_dc_layers_map_.contains(root_render_pass->id)) {
     // We're switching off of delegated compositing or the root render pass ID
@@ -525,8 +508,6 @@ OverlayProcessorWin::TryDelegatedCompositing(
     bool is_full_delegated_compositing,
     const AggregatedRenderPassList& render_passes,
     const OverlayCandidateFactory& factory,
-    const OverlayProcessorInterface::FilterOperationsMap&
-        render_pass_backdrop_filters,
     const DisplayResourceProvider* resource_provider) const {
   const AggregatedRenderPass* root_render_pass = render_passes.back().get();
 
@@ -547,9 +528,6 @@ OverlayProcessorWin::TryDelegatedCompositing(
   DelegatedCompositingResult result;
   result.candidates.reserve(root_render_pass->quad_list.size());
 
-  const bool allow_promotion_hinting =
-      media::SupportMediaFoundationClearPlayback();
-
   int draw_quad_rounded_corner_count = 0;
 
   // The quad that renders underneath the current quad in the following loop.
@@ -560,19 +538,6 @@ OverlayProcessorWin::TryDelegatedCompositing(
     std::optional<OverlayCandidate> dc_layer;
     {
       auto candidate_result = TryPromoteDrawQuadForDelegation(factory, quad);
-
-      if (allow_promotion_hinting && !quad->resource_id.is_null() &&
-          resource_provider->DoesResourceWantPromotionHint(quad->resource_id)) {
-        // The OverlayStateService should always be initialized by
-        // GpuServiceImpl at creation - CHECK here just to assert there aren't
-        // any corner cases where this isn't true.
-        auto* overlay_state_service = OverlayStateService::GetInstance();
-        CHECK(overlay_state_service->IsInitialized());
-        overlay_state_service->SetPromotionHint(
-            resource_provider->GetMailbox(quad->resource_id),
-            /*promoted=*/candidate_result.has_value());
-      }
-
       if (candidate_result.has_value()) {
         if (auto& candidate = candidate_result.value()) {
           dc_layer = std::move(candidate);
@@ -603,12 +568,6 @@ OverlayProcessorWin::TryDelegatedCompositing(
     // |UpdatePromotedRenderPassProperties| to support partially delegated
     // compositing.
     if (dc_layer->rpdq) {
-      if (render_pass_backdrop_filters.contains(
-              dc_layer->rpdq->render_pass_id)) {
-        // We don't delegate composting of backdrop filters to the OS.
-        return base::unexpected(DelegationStatus::kCompositedBackdropFilter);
-      }
-
       auto render_pass_it =
           std::ranges::find(render_passes, dc_layer->rpdq->render_pass_id,
                             &AggregatedRenderPass::id);
@@ -681,6 +640,18 @@ void OverlayProcessorWin::TryPromoteFullScreenVideo(
                 candidate.priority_hint == gfx::OverlayPriorityHint::kVideo);
       });
   if (frontmost_candidate_it == candidates.rend()) {
+    return;
+  }
+
+  CHECK(std::holds_alternative<gfx::Transform>(
+      frontmost_candidate_it->transform));
+  if (!std::get<gfx::Transform>(frontmost_candidate_it->transform)
+           .IsPositiveScaleOrTranslation()) {
+    // If the candidate has a buffer rotation or flip, skip the full screen
+    // optimization since `SwapChainPresenter` doesn't handle buffer transforms
+    // with the video processor.
+    // TODO(crbug.com/474398418): When `SwapChainPresenter` handles buffer
+    // rotations and flips, we can remove this early exit.
     return;
   }
 
@@ -785,12 +756,6 @@ DCLayerOverlayProcessor::RenderPassOverlayDataMap OverlayProcessorWin::
           return true;
         }
 
-        // Filters require an intermediate surface to be applied.
-        if (!render_pass.filters.IsEmpty() ||
-            !render_pass.backdrop_filters.IsEmpty()) {
-          return true;
-        }
-
         // Resolving mipmaps requires reading the backing.
         if (render_pass.generate_mipmap) {
           return true;
@@ -806,6 +771,12 @@ DCLayerOverlayProcessor::RenderPassOverlayDataMap OverlayProcessorWin::
               if (!embedder.rpdq->mask_resource_id().is_null() ||
                   embedder.rpdq->shared_quad_state->mask_filter_info
                       .HasGradientMask()) {
+                return true;
+              }
+
+              // Filters require an intermediate surface to be applied.
+              if (!embedder.rpdq->filters.IsEmpty() ||
+                  !embedder.rpdq->backdrop_filters.IsEmpty()) {
                 return true;
               }
 

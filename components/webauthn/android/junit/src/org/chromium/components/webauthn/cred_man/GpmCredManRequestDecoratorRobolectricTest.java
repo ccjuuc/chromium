@@ -15,17 +15,16 @@ import android.util.Base64;
 
 import androidx.test.filters.SmallTest;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadow.api.Shadow;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.components.webauthn.WebauthnFeatures;
 
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
@@ -36,8 +35,8 @@ import org.chromium.components.webauthn.WebauthnFeatures;
             ShadowCreateCredentialResponse.class,
             ShadowCreateCredentialException.class
         })
-@EnableFeatures({WebauthnFeatures.WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE})
 public class GpmCredManRequestDecoratorRobolectricTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final String ORIGIN = "www.coolwebsite.com";
     private static final byte[] USER_ID = new byte[] {3, 5, 8};
 
@@ -47,11 +46,6 @@ public class GpmCredManRequestDecoratorRobolectricTest {
     @Mock private CredManGetCredentialRequestHelper mGetHelper;
 
     private final GpmCredManRequestDecorator mDecorator = GpmCredManRequestDecorator.getInstance();
-
-    @Before
-    public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
-    }
 
     @Test
     @SmallTest

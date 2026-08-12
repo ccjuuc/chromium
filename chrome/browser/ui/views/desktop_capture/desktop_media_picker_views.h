@@ -10,6 +10,7 @@
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/types/expected.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker.h"
 #include "chrome/browser/ui/views/desktop_capture/audio_capture_permission_checker.h"
@@ -32,7 +33,6 @@ class MdTextButton;
 
 class DesktopMediaPickerImpl;
 
-BASE_DECLARE_FEATURE(kDesktopMediaPickerMultiLineTitle);
 
 const DesktopMediaSourceViewStyle& GetGenericScreenStyle();
 const DesktopMediaSourceViewStyle& GetSingleScreenStyle();
@@ -58,13 +58,6 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
 
   // Called by parent (DesktopMediaPickerImpl) when it's destroyed.
   void DetachParent();
-
-#if BUILDFLAG(IS_MAC)
-  void SetAudioCapturePermissionCheckerForTest(
-      std::unique_ptr<AudioCapturePermissionChecker> checker) {
-    audio_capture_permission_checker_ = std::move(checker);
-  }
-#endif
 
   // Called by DesktopMediaListController.
   void OnSelectionChanged();
@@ -120,6 +113,10 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
 
   // Whether audio-capture is supported for display surfaces of type `type`.
   bool AudioSupported(DesktopMediaList::Type type) const;
+
+  // Returns true if the GetDisplayMediaAudioSelection feature is enabled and
+  // the request source is getDisplayMedia.
+  bool IsAudioSelectionFeatureEnabled() const;
 
   // Whether audio-capture is requested for display surfaces of type `type`.
   //
@@ -189,11 +186,24 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
   // `content::DesktopMediaID::AudioType::AUDIO_TYPE_NONE`.
   bool IsWindowAudioOffered() const;
 
+  // Called when the user toggles the audio sharing checkbox in the active pane.
+  // Updates the OK button label and the audio recommendation visibility.
+  void OnAudioShareToggled();
+
+  // Updates the OK (Share) button label based on whether audio sharing is
+  // currently approved by the user (e.g. "Share" vs "Share with Audio").
+  // Only applies if GetDisplayMediaAudioSelection feature is enabled.
+  void UpdateOkButtonLabel();
+
 #if BUILDFLAG(IS_MAC)
   void OnPermissionUpdate(bool has_permission);
-  void RecordPermissionInteractionUma() const;
   void OnAudioSharingApprovedByUserUpdate();
   void OnAudioPermissionUpdate();
+  // Checks and updates the system audio permission warning banner state for the
+  // pane at the given `index`. Shows the warning if the user has approved
+  // sharing audio but system-level audio capture permission is denied.
+  // Otherwise, hides it.
+  void UpdateAudioPermissionsWarningState(int index);
   void RecordUserActionOnDeniedAudioPermissionUma(
       std::optional<content::DesktopMediaID> source) const;
 #endif
@@ -201,6 +211,7 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
   const raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged>
       web_contents_;
   const DesktopMediaPicker::Params::RequestSource request_source_;
+  const bool audio_selection_preferred_;
   const std::u16string app_name_;
   const bool audio_requested_;
   // JS-exposed as systemAudio.
@@ -231,11 +242,19 @@ class DesktopMediaPickerDialogView : public views::DialogDelegateView,
 
   std::optional<content::DesktopMediaID> accepted_source_;
 
+#if BUILDFLAG(IS_WIN)
+  // Track the session ID for excluding Picture-in-Picture windows from screen
+  // capture while this picker is open (Windows only).
+  std::optional<base::UnguessableToken> pip_exclusion_session_id_;
+
+  // Set to true when the user accepts/confirms the dialog, indicating that
+  // the actual screen capture session is about to start.
+  bool accepted_ = false;
+#endif
+
 #if BUILDFLAG(IS_MAC)
   std::unique_ptr<ScreenCapturePermissionChecker>
       screen_capture_permission_checker_;
-  std::optional<bool> initial_permission_state_;
-  bool permission_pane_was_shown_ = false;
   std::unique_ptr<AudioCapturePermissionChecker>
       audio_capture_permission_checker_;
 #endif

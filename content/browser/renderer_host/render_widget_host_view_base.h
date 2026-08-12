@@ -17,6 +17,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/process/kill.h"
 #include "base/time/time.h"
@@ -29,6 +30,7 @@
 #include "components/viz/common/surfaces/surface_id.h"
 #include "content/browser/renderer_host/display_feature.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_frame_metadata_provider.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -36,10 +38,11 @@
 #include "content/public/common/widget_type.h"
 #include "services/device/public/mojom/screen_orientation_lock_types.mojom.h"
 #include "services/viz/public/mojom/hit_test/hit_test_region_list.mojom.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "third_party/blink/public/mojom/frame/intrinsic_sizing_info.mojom-forward.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
-#include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom.h"
+#include "third_party/blink/public/mojom/unbounded_element/unbounded_element.mojom-forward.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/accessibility/ax_action_handler_registry.h"
 #include "ui/base/ime/mojom/text_input_state.mojom-forward.h"
@@ -70,11 +73,24 @@ class LatencyInfo;
 enum class DomCode : uint32_t;
 }  // namespace ui
 
+namespace mojo {
+template <typename T>
+class PendingReceiver;
+template <typename T>
+class PendingRemote;
+}  // namespace mojo
+
+namespace viz::mojom {
+class CompositorFrameSink;
+class CompositorFrameSinkClient;
+}  // namespace viz::mojom
+
 namespace content {
 
 class DevicePosturePlatformProvider;
 class MouseWheelPhaseHandler;
 class RenderWidgetHostImpl;
+class UnboundedSurfaceWindow;
 class ScopedViewTransitionResources;
 class TextInputManager;
 class TouchSelectionControllerClientManager;
@@ -110,9 +126,6 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // RenderWidgetHostView implementation.
   RenderWidgetHost* GetRenderWidgetHost() final;
   ui::TextInputClient* GetTextInputClient() override;
-  void Show() final;
-  void WasUnOccluded() override {}
-  void WasOccluded() override {}
   std::u16string GetSelectedText() override;
   bool GetIsPointerLockedUnadjustedMovementForTesting() override;
   bool CanBePointerLocked() override;
@@ -132,6 +145,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   void CopyFromSurface(
       const gfx::Rect& src_rect,
       const gfx::Size& output_size,
+      base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback)
       override;
   std::unique_ptr<viz::ClientFrameSinkVideoCapturer> CreateVideoCapturer()
@@ -139,6 +153,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   display::ScreenInfo GetScreenInfo() const override;
   display::ScreenInfos GetScreenInfos() const override;
   virtual void ResetGestureDetection();
+  void SetShouldUseDefaultDeadlineOnResize(bool enable) override;
 
   // RenderWidgetHostViewInput implementation
   base::WeakPtr<input::RenderWidgetHostViewInput> GetInputWeakPtr() override;
@@ -153,6 +168,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
                            const ui::LatencyInfo& latency) override;
   RenderWidgetHostViewBase* GetRootView() override;
   void OnAutoscrollStart() override;
+  void OnAutoscrollTargetResolved(bool success) override;
   const viz::DisplayHitTestQueryMap& GetDisplayHitTestQuery() const override;
 
   float GetDeviceScaleFactor() const final;
@@ -160,31 +176,10 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
 
   virtual void DidOverscroll(const ui::DidOverscrollParams& params) {}
 
-  // Identical to `CopyFromSurface()`, except that this method issues the
-  // `viz::CopyOutputRequest` against the exact `viz::Surface` currently
-  // embedded by this View, while `CopyFromSurface()` may return a copy of any
-  // Surface associated with this View, generated after the current Surface. The
-  // caller is responsible for making sure that the target Surface is embedded
-  // and available for copy when this API is called. This Surface can be removed
-  // from the UI after this call.
-  //
-  // TODO(crbug.com/40276723): merge this API into `CopyFromSurface()`,
-  // and enable it fully on Android.
-  virtual void CopyFromExactSurface(
-      const gfx::Rect& src_rect,
-      const gfx::Size& output_size,
-      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
-
   // For testing only.
   virtual ui::FilteredGestureProvider* GetFilteredGestureProviderForTesting();
 
 #if BUILDFLAG(IS_ANDROID)
-  virtual void CopyFromExactSurfaceWithIpcDelay(
-      const gfx::Rect& src_rect,
-      const gfx::Size& output_size,
-      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback,
-      base::TimeDelta ipc_delay);
-
   // Returns whethere there's a touch sequence active on Viz.
   //  false: There's definitely no active touch sequence on Viz.
   //  true: A touch sequence is likely active on Viz, but could be a false
@@ -192,8 +187,8 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual bool IsTouchSequencePotentiallyActiveOnViz() = 0;
 
   virtual void RequestInputBackForDragAndDrop(
+      WeakDocumentPtr source_document,
       blink::mojom::DragDataPtr drag_data,
-      const url::Origin& source_origin,
       blink::DragOperationsMask drag_operations_mask,
       SkBitmap bitmap,
       gfx::Vector2d cursor_offset_in_dip,
@@ -236,6 +231,15 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual void UpdateIntrinsicSizingInfo(
       blink::mojom::IntrinsicSizingInfoPtr sizing_info);
 
+  // Transforms point and/or rect from view's coordinate space to
+  // root_view's coordinate space. Returns false if no transform was found
+  // between the view and root_view.
+  static bool TransformPointAndRectToRootView(
+      RenderWidgetHostViewBase* view,
+      RenderWidgetHostViewBase* root_view,
+      gfx::Point* transformed_point,
+      gfx::Rect* transformed_rect);
+
   static void CopyMainAndPopupFromSurface(
       base::WeakPtr<RenderWidgetHostImpl> main_host,
       base::WeakPtr<DelegatedFrameHost> main_frame_host,
@@ -244,6 +248,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
       const gfx::Rect& src_subrect,
       const gfx::Size& dst_size,
       float scale_factor,
+      base::TimeDelta timeout,
       base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
 
   void SetWidgetType(WidgetType widget_type);
@@ -281,8 +286,6 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual gfx::Size GetRequestedRendererSize();
   virtual gfx::Size GetRequestedRendererSizeDevicePx();
 
-  // Returns the current capture sequence number.
-  virtual uint32_t GetCaptureSequenceNumber() const;
 
   // The size of the view's backing surface in non-DPI-adjusted pixels.
   virtual gfx::Size GetCompositorViewportPixelSize();
@@ -394,8 +397,41 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // screen captured.
   virtual void ShowWithVisibility(PageVisibilityState page_visibility) = 0;
 
+  // Hides the view.
+  virtual void Hide() = 0;
+
+  // Indicates that the view is currently occluded (e.g, not visible because
+  // it's covered up by other windows), and as a result the view's renderer may
+  // be suspended. Calling Show()/Hide() overrides the state set by this method.
+  virtual void WasOccluded() {}
+
   // Tells the View to destroy itself.
   virtual void Destroy();
+
+  // Unbounded element API methods.
+  virtual void CreateUnboundedSurface(
+      mojo::PendingAssociatedReceiver<blink::mojom::UnboundedSurfaceHost> host,
+      mojo::PendingAssociatedRemote<blink::mojom::UnboundedSurfaceClient>
+          client,
+      const gfx::Rect& bounds_in_dips,
+      base::WeakPtr<RenderWidgetHostViewBase> subframe_view);
+  virtual void UpdateUnboundedSurfaceBoundsInSubframeContext(
+      const gfx::Rect& bounds_in_dips,
+      RenderWidgetHostViewBase* subframe_view);
+  gfx::Rect ConvertSubframeBoundsToScreen(
+      const gfx::Rect& bounds_in_dips,
+      RenderWidgetHostViewBase* subframe_view);
+  virtual void UpdateUnboundedSurfaceBounds(const gfx::Rect& bounds_in_screen);
+  virtual void DismissUnboundedSurface();
+  virtual void DestroyUnboundedSurface(
+      base::WeakPtr<UnboundedSurfaceWindow> window);
+  virtual bool HasActiveUnboundedSurface() const;
+  virtual viz::FrameSinkId GetUnboundedSurfaceFrameSinkId() const;
+  virtual viz::LocalSurfaceId GetUnboundedSurfaceLocalSurfaceId() const;
+  virtual void GetUnboundedSurfaceCompositorFrameSink(
+      mojo::PendingReceiver<viz::mojom::CompositorFrameSink> sink,
+      mojo::PendingRemote<viz::mojom::CompositorFrameSinkClient> client);
+  virtual UnboundedSurfaceWindow* GetUnboundedSurfaceWindow() const;
 
   // Updates the tooltip text and its position and displays the requested
   // tooltip on the screen. The |bounds| parameter corresponds to the bounds of
@@ -409,7 +445,15 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   virtual void ClearKeyboardTriggeredTooltip() {}
 
   // Gets the bounds of the top-level window, in screen coordinates.
-  virtual gfx::Rect GetBoundsInRootWindow() = 0;
+  virtual gfx::Rect GetBoundsInScreen() = 0;
+
+  // Gets the bounds of the top-level window, in screen coordinates, ignoring
+  // any transforms that might be applied.
+  virtual gfx::Rect GetBoundsInScreenWithoutTransform();
+
+  // Gets the bounds of the View, in screen coordinates, ignoring any transforms
+  // that might be applied.
+  virtual gfx::Rect GetViewBoundsWithoutTransform();
 
   // Increments the LocalSurfaceId associated with this view when a commit IPC
   // is being sent to change the Document for the root RenderFrameHost rendering
@@ -461,6 +505,8 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // of context menu. The view can then perform platform specific tasks and
   // changes.
   virtual void SetShowingContextMenu(bool showing) {}
+
+  void SetSupportsAutoFill(bool supports) override {}
 
   // Gets the DisplayFeature whose offset and mask_length are expressed in DIPs
   // relative to the view. See display_feature.h for more details.
@@ -548,6 +594,17 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
 
   virtual viz::SurfaceId GetFallbackSurfaceIdForTesting() const;
 
+#if BUILDFLAG(IS_WIN)
+  using OnFocusHandwritingTargetCallback =
+      base::RepeatingCallback<void(const gfx::Rect& /*rect_in_screen*/,
+                                   const gfx::Size& /*distance_threshold*/)>;
+  // Called by a child host view to start a handwriting session on the root
+  // view on its behalf. Only implemented by the root (Aura) view.
+  virtual void StartStylusWritingFromChildHostView(
+      RenderWidgetHostViewBase* view,
+      OnFocusHandwritingTargetCallback callback) {}
+#endif  // BUILDFLAG(IS_WIN)
+
  protected:
   explicit RenderWidgetHostViewBase(RenderWidgetHost* host);
   ~RenderWidgetHostViewBase() override;
@@ -594,7 +651,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // DelegatedFrameHost::WasShown if there is a saved frame or
   // RenderWidgetHostImpl if not.
   virtual void NotifyHostAndDelegateOnWasShown(
-      blink::mojom::RecordContentToVisibleTimeRequestPtr
+      std::optional<blink::RecordContentToVisibleTimeRequest>
           visible_time_request) = 0;
 
   // Each platform should override this to pass `visible_time_request`, which
@@ -604,8 +661,7 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // RenderWidgetHostImpl::RequestSuccessfulPresentationTimeForNextFrame if not,
   // after doing and platform-specific bookkeeping needed.
   virtual void RequestSuccessfulPresentationTimeFromHostOrDelegate(
-      blink::mojom::RecordContentToVisibleTimeRequestPtr
-          visible_time_request) = 0;
+      blink::RecordContentToVisibleTimeRequest visible_time_request) = 0;
 
   // Each platform should override this to call
   // DelegatedFrameHost::CancelSuccessfulPresentationTimeRequest and
@@ -616,6 +672,8 @@ class CONTENT_EXPORT RenderWidgetHostViewBase
   // The model object. Access is protected to allow access to
   // RenderWidgetHostViewChildFrame.
   raw_ptr<RenderWidgetHostImpl, DanglingUntriaged> host_;
+
+  std::unique_ptr<UnboundedSurfaceWindow> unbounded_surface_window_;
 
   // Whether this view is a frame or a popup.
   WidgetType widget_type_ = WidgetType::kFrame;

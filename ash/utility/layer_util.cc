@@ -18,7 +18,7 @@ namespace {
 
 void CopyCopyOutputResultToLayer(
     std::unique_ptr<viz::CopyOutputResult> copy_result,
-    ui::Layer* target_layer) {
+    ui::LayerWithExternalTexture* target_layer) {
   DCHECK(!copy_result->IsEmpty());
   DCHECK_EQ(copy_result->format(), viz::CopyOutputResult::Format::RGBA);
   DCHECK_EQ(copy_result->destination(),
@@ -29,7 +29,7 @@ void CopyCopyOutputResultToLayer(
   viz::TransferableResource transferable_resource =
       viz::TransferableResource::Make(
           shared_image, viz::TransferableResource::ResourceSource::kUI,
-          gpu::SyncToken(), /*override=*/{.color_space = gfx::ColorSpace()});
+          gpu::SyncToken());
   viz::ReleaseCallback release_callback =
       copy_result->TakeSharedImageOwnership();
   DCHECK(release_callback);
@@ -62,7 +62,7 @@ void CopyToLayerOnCopyRequestFinished(
   if (!copy_result || copy_result->IsEmpty())
     return;
 
-  ui::Layer* layer = nullptr;
+  ui::LayerWithExternalTexture* layer = nullptr;
   std::move(get_target_layer_callback).Run(&layer);
   if (!layer)
     return;
@@ -75,7 +75,7 @@ void CopyToLayerOnCopyRequestFinished(
 std::unique_ptr<ui::Layer> CreateLayerFromCopyOutputResult(
     std::unique_ptr<viz::CopyOutputResult> copy_result,
     const gfx::Size& layer_size) {
-  auto copy_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+  auto copy_layer = std::make_unique<ui::LayerSolidColor>();
   copy_layer->SetBounds(gfx::Rect(layer_size));
   CopyCopyOutputResultToLayer(std::move(copy_result), copy_layer.get());
   return copy_layer;

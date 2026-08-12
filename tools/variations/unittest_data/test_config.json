@@ -71,17 +71,6 @@
       "experiments": [{"name": "TestGroup2"}]
     }
   ],
-  "TrialWithOverrideUIString": [
-    {
-      "platforms": ["windows"],
-      "experiments": [
-        {
-          "name": "TestGroup",
-          "override_ui_strings": {"IDS_NEW_TAB_TITLE": "test"}
-        }
-      ]
-    }
-  ],
   "TrialWithDisableBenchmarking": [
     {
       "platforms": ["windows"],
@@ -96,6 +85,18 @@
     {
       "platforms": ["windows"],
       "experiments": [{"name": "TestGroup3"}]
+    }
+  ],
+  "TrialWithHardwareManufacturers": [
+    {
+      "platforms": ["windows"],
+      "experiments": [
+        {
+          "name": "TestGroup1",
+          "hardware_manufacturers": ["Google", "Samsung"],
+          "exclude_hardware_manufacturers": ["OnePlus"]
+        }
+      ]
     }
   ]
 }

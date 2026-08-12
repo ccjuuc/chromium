@@ -19,6 +19,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/version.h"
 #include "components/webrtc/thread_wrapper.h"
 #include "remoting/base/directory_service_client.h"
 #include "remoting/base/oauth_token_info.h"
@@ -40,7 +41,6 @@
 #include "remoting/protocol/jingle_session_manager.h"
 #include "remoting/protocol/negotiating_client_authenticator.h"
 #include "remoting/protocol/network_settings.h"
-#include "remoting/protocol/session_config.h"
 #include "remoting/protocol/transport.h"
 #include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/webrtc_connection_to_host.h"
@@ -129,10 +129,19 @@ void RemotingClient::OnGetManagedChromeOsHostRetrieved(
     return;
   }
 
+  bool send_protobuf_in_initiate = false;
+  if (chrome_os_host_->has_host_version()) {
+    base::Version host_version(chrome_os_host_->host_version());
+    send_protobuf_in_initiate =
+        host_version.IsValid() && host_version >= base::Version("153");
+  }
+
   CLIENT_LOG << "Initializing signaling...";
-  signal_strategy_ = std::make_unique<FtlSignalStrategy>(
+  auto ftl_signal_strategy = std::make_unique<FtlSignalStrategy>(
       std::make_unique<PassthroughOAuthTokenGetter>(oauth_token_info_),
       url_loader_factory_, std::make_unique<FtlClientUuidDeviceIdProvider>());
+  ftl_signal_strategy->SetSendProtobufInInitiate(send_protobuf_in_initiate);
+  signal_strategy_ = std::move(ftl_signal_strategy);
   signal_strategy_->AddListener(this);
   signal_strategy_->Connect();
 }
@@ -152,14 +161,8 @@ void RemotingClient::StartConnection() {
       webrtc::SdpVideoFormat::AV1Profile0());
 
   CLIENT_LOG << "Creating session manager...";
-  auto protocol_config = protocol::CandidateSessionConfig::CreateDefault();
-  protocol_config->set_webrtc_supported(true);
-  if (!audio_stream_consumer_) {
-    protocol_config->DisableAudioChannel();
-  }
   session_manager_ =
       std::make_unique<protocol::JingleSessionManager>(signal_strategy_.get());
-  session_manager_->set_protocol_config(std::move(protocol_config));
 
   CLIENT_LOG << "Creating session...";
   auto host_signaling_id = NormalizeSignalingId(chrome_os_host_->ftl_id());
@@ -258,6 +261,17 @@ void RemotingClient::SetActiveDisplay(
   NOTIMPLEMENTED();
 }
 
+void RemotingClient::ControlMicrophone(
+    const protocol::MicrophoneControl& control) {
+  // This client implementation does not support microphone remoting.
+  NOTIMPLEMENTED();
+}
+
+void RemotingClient::DeliverTerminalControl(
+    const protocol::TerminalControl& terminal_control) {
+  NOTIMPLEMENTED();
+}
+
 void RemotingClient::InjectClipboardEvent(
     const protocol::ClipboardEvent& event) {
   NOTIMPLEMENTED();
@@ -306,7 +320,7 @@ void RemotingClient::OnRouteChanged(const std::string& channel_name,
              << " connection for " << channel_name << " channel";
 }
 
-void RemotingClient::OnSignalStrategyStateChange(SignalStrategy::State state) {
+void RemotingClient::OnSignalingStateChanged(SignalStrategy::State state) {
   switch (state) {
     case SignalStrategy::CONNECTING:
       CLIENT_LOG << "Signaling channel is being established.";
@@ -332,11 +346,6 @@ void RemotingClient::OnSignalStrategyStateChange(SignalStrategy::State state) {
       RunQuitClosure();
       break;
   }
-}
-
-bool RemotingClient::OnSignalStrategyIncomingStanza(
-    const jingle_xmpp::XmlElement* stanza) {
-  return false;
 }
 
 void RemotingClient::RunQuitClosure() {

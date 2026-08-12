@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "net/socket/transport_connect_job.h"
 
 #include <memory>
@@ -22,6 +21,7 @@
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/http/http_server_properties.h"
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log.h"
 #include "net/socket/connect_job_test_util.h"
@@ -31,6 +31,7 @@
 #include "net/socket/transport_client_socket_pool_test_util.h"
 #include "net/ssl/ssl_config_service.h"
 #include "net/ssl/test_ssl_config_service.h"
+#include "net/ssl/test_static_ech_mode_getter.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/url_request/static_http_user_agent_settings.h"
@@ -70,11 +71,13 @@ class TransportConnectJobTest : public WithTaskEnvironment,
             /*network_quality_estimator=*/nullptr,
             NetLog::Get(),
             /*websocket_endpoint_lock_manager=*/nullptr,
-            /*http_server_properties=*/nullptr,
+            &http_server_properties_,
             /*alpn_protos=*/nullptr,
             /*application_settings=*/nullptr,
             /*ignore_certificate_errors=*/nullptr,
-            /*early_data_enabled=*/nullptr) {}
+            /*enable_early_data=*/nullptr) {
+    scoped_feature_list_.InitAndDisableFeature(features::kHappyEyeballsV2);
+  }
 
   ~TransportConnectJobTest() override = default;
 
@@ -82,7 +85,7 @@ class TransportConnectJobTest : public WithTaskEnvironment,
     return base::MakeRefCounted<TransportSocketParams>(
         url::SchemeHostPort(url::kHttpScheme, kHostName, 80),
         NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-        OnHostResolutionCallback(),
+        handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
         /*supported_alpns=*/base::flat_set<std::string>());
   }
 
@@ -90,11 +93,13 @@ class TransportConnectJobTest : public WithTaskEnvironment,
     return base::MakeRefCounted<TransportSocketParams>(
         url::SchemeHostPort(url::kHttpsScheme, kHostName, 443),
         NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-        OnHostResolutionCallback(),
+        handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
         /*supported_alpns=*/base::flat_set<std::string>{"h2", "http/1.1"});
   }
 
  protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
   MockHostResolver host_resolver_{/*default_result=*/MockHostResolverBase::
                                       RuleResolver::GetLocalhostResult()};
   MockTransportClientSocketFactory client_socket_factory_;
@@ -107,6 +112,7 @@ class TransportConnectJobTest : public WithTaskEnvironment,
                                        &transport_security_state_,
                                        /*ssl_client_session_cache=*/nullptr,
                                        /*sct_auditing_delegate=*/nullptr};
+  HttpServerProperties http_server_properties_;
   const CommonConnectJobParams common_connect_job_params_;
 };
 
@@ -270,7 +276,7 @@ TEST_F(TransportConnectJobTest, HandlesHttpsEndpoint) {
       base::MakeRefCounted<TransportSocketParams>(
           url::SchemeHostPort(url::kHttpsScheme, kHostName, 80),
           NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-          OnHostResolutionCallback(),
+          handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
           /*supported_alpns=*/base::flat_set<std::string>{"h2", "http/1.1"}),
       &test_delegate, nullptr /* net_log */);
   test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -285,7 +291,8 @@ TEST_F(TransportConnectJobTest, HandlesNonStandardEndpoint) {
       DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
       base::MakeRefCounted<TransportSocketParams>(
           HostPortPair(kHostName, 80), NetworkAnonymizationKey(),
-          SecureDnsPolicy::kAllow, OnHostResolutionCallback(),
+          SecureDnsPolicy::kAllow, handles::kInvalidNetworkHandle,
+          OnHostResolutionCallback(),
           /*supported_alpns=*/base::flat_set<std::string>()),
       &test_delegate, nullptr /* net_log */);
   test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -301,7 +308,7 @@ TEST_F(TransportConnectJobTest, SecureDnsPolicy) {
         base::MakeRefCounted<TransportSocketParams>(
             url::SchemeHostPort(url::kHttpScheme, kHostName, 80),
             NetworkAnonymizationKey(), secure_dns_policy,
-            OnHostResolutionCallback(),
+            handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
             /*supported_alpns=*/base::flat_set<std::string>{}),
         &test_delegate, nullptr /* net_log */);
     test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -975,6 +982,47 @@ TEST_F(TransportConnectJobTest, SvcbOptionalIfEchDisabledConfig) {
                                         /*expect_sync_result=*/false);
 }
 
+// SVCB-reliant mode should be disabled for ECH servers when EchMode is
+// kDisabled for the specific host.
+TEST_F(TransportConnectJobTest, SvcbOptionalIfEchModeDisabledForHost) {
+  ssl_config_service_.SetEchModeGetter(
+      std::make_unique<TestStaticEchModeGetter>(EchMode::kDisabled, kHostName));
+
+  HostResolverEndpointResult endpoint1, endpoint2, endpoint3;
+  endpoint1.ip_endpoints = {IPEndPoint(ParseIP("1::"), 8441)};
+  endpoint1.metadata.supported_protocol_alpns = {"http/1.1"};
+  endpoint1.metadata.ech_config_list = {1, 2, 3, 4};
+  endpoint2.ip_endpoints = {IPEndPoint(ParseIP("2::"), 8442)};
+  endpoint2.metadata.supported_protocol_alpns = {"http/1.1"};
+  endpoint2.metadata.ech_config_list = {1, 2, 3, 4};
+  endpoint3.ip_endpoints = {IPEndPoint(ParseIP("3::"), 443)};
+  // `endpoint3` has no `supported_protocol_alpns` and is thus a fallback route.
+  host_resolver_.rules()->AddRule(
+      kHostName, MockHostResolverBase::RuleResolver::RuleResult(
+                     std::vector{endpoint1, endpoint2, endpoint3}));
+
+  // `TransportConnectJob` should try `endpoint3`.
+  MockTransportClientSocketFactory::Rule rules[] = {
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kFailing,
+          std::vector{IPEndPoint(ParseIP("1::"), 8441)}),
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kFailing,
+          std::vector{IPEndPoint(ParseIP("2::"), 8442)}),
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kSynchronous,
+          std::vector{IPEndPoint(ParseIP("3::"), 443)}),
+  };
+  client_socket_factory_.SetRules(rules);
+
+  TestConnectJobDelegate test_delegate;
+  TransportConnectJob transport_connect_job(
+      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
+      DefaultHttpsParams(), &test_delegate, /*net_log=*/nullptr);
+  test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
+                                        /*expect_sync_result=*/false);
+}
+
 // SVCB-reliant mode should be disabled if not all SVCB/HTTPS records include
 // ECH.
 TEST_F(TransportConnectJobTest, SvcbOptionalIfEchInconsistent) {
@@ -1132,140 +1180,58 @@ TEST_F(TransportConnectJobTest, DedupIPEndPoints) {
   EXPECT_EQ(attempts[4].endpoint, IPEndPoint(ParseIP("2.2.2.2"), 443));
 }
 
-TEST_F(TransportConnectJobTest,
-       OnDestinationDnsAliasesResolved_Skipped_IfNoAliases) {
-  host_resolver_.set_synchronous_mode(true);
-  client_socket_factory_.set_default_client_socket_type(
-      MockTransportClientSocketFactory::Type::kSynchronous);
-
-  std::vector<std::string> aliases;
-  host_resolver_.rules()->AddIPLiteralRuleWithDnsAliases(kHostName, "2.2.2.2",
-                                                         std::move(aliases));
-
-  TestConnectJobDelegate test_delegate;
-  TransportConnectJob transport_connect_job(
-      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
-      DefaultParams(), &test_delegate, /*net_log=*/nullptr);
-
-  test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
-                                        /*expect_sync_result=*/true);
-
-  // Ensure the delegate method is NOT invoked because no DNS aliases were
-  // resolved.
-  EXPECT_FALSE(test_delegate.on_dns_aliases_resolved_called());
-}
-
-TEST_F(TransportConnectJobTest,
-       OnDestinationDnsAliasesResolved_Skipped_IfOnlyDestinationEndpoint) {
-  std::vector<std::string> aliases({kHostName});
-
-  host_resolver_.set_synchronous_mode(true);
-  client_socket_factory_.set_default_client_socket_type(
-      MockTransportClientSocketFactory::Type::kSynchronous);
-
-  host_resolver_.rules()->AddIPLiteralRuleWithDnsAliases(kHostName, "2.2.2.2",
-                                                         std::move(aliases));
-
-  TestConnectJobDelegate test_delegate;
-  TransportConnectJob transport_connect_job(
-      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
-      DefaultParams(), &test_delegate, /*net_log=*/nullptr);
-
-  test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
-                                        /*expect_sync_result=*/true);
-
-  // Ensure the delegate method is NOT invoked because aliases only contain the
-  // destination endpoint.
-  EXPECT_FALSE(test_delegate.on_dns_aliases_resolved_called());
-}
-
-TEST_F(TransportConnectJobTest,
-       OnDestinationDnsAliasesResolved_Invoked_IfOneAlias) {
-  std::vector<std::string> aliases({"alias1"});
-  std::set<std::string> aliases_set(aliases.begin(), aliases.end());
-  host_resolver_.rules()->AddIPLiteralRuleWithDnsAliases(kHostName, "2.2.2.2",
-                                                         std::move(aliases));
-  host_resolver_.set_synchronous_mode(true);
-  client_socket_factory_.set_default_client_socket_type(
-      MockTransportClientSocketFactory::Type::kSynchronous);
-
-  TestConnectJobDelegate test_delegate;
-  TransportConnectJob transport_connect_job(
-      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
-      DefaultParams(), &test_delegate, /*net_log=*/nullptr);
-
-  test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
-                                        /*expect_sync_result=*/true);
-
-  // Verify that the delegate method was called when aliases are resolved.
-  EXPECT_TRUE(test_delegate.on_dns_aliases_resolved_called());
-  EXPECT_EQ(test_delegate.dns_aliases(), aliases_set);
-}
-
-TEST_F(TransportConnectJobTest, OnDestinationDnsAliasesResolved_Invoked_OK) {
-  std::vector<std::string> aliases({"alias1", "alias2", kHostName});
-  std::set<std::string> aliases_set(aliases.begin(), aliases.end());
-  host_resolver_.rules()->AddIPLiteralRuleWithDnsAliases(kHostName, "2.2.2.2",
-                                                         std::move(aliases));
-
-  for (bool host_resolution_synchronous : {false, true}) {
-    SCOPED_TRACE(host_resolution_synchronous);
-    for (bool connection_synchronous : {false, true}) {
-      SCOPED_TRACE(connection_synchronous);
-      host_resolver_.set_synchronous_mode(host_resolution_synchronous);
-      client_socket_factory_.set_default_client_socket_type(
-          connection_synchronous
-              ? MockTransportClientSocketFactory::Type::kSynchronous
-              : MockTransportClientSocketFactory::Type::kPending);
-
-      TestConnectJobDelegate test_delegate;
-      TransportConnectJob transport_connect_job(
-          DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
-          DefaultParams(), &test_delegate, /*net_log=*/nullptr);
-
-      test_delegate.StartJobExpectingResult(
-          &transport_connect_job, OK,
-          host_resolution_synchronous && connection_synchronous);
-
-      // Verify that the delegate method was called when aliases are resolved.
-      EXPECT_TRUE(test_delegate.on_dns_aliases_resolved_called());
-      EXPECT_EQ(test_delegate.dns_aliases(), aliases_set);
-    }
+class TransportConnectJobRTTFallbackTest : public TransportConnectJobTest {
+ public:
+  TransportConnectJobRTTFallbackTest() {
+    scoped_feature_list_.Reset();
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {{features::kIPv6FallbackBasedOnRTT,
+          {{"IPv6FallbackRTTMultiplier", "2.0"},
+           {"IPv6FallbackMin", "10ms"},
+           {"IPv6FallbackMax", "1s"}}}},
+        /*disabled_features=*/{features::kHappyEyeballsV2});
   }
-}
+};
 
-TEST_F(TransportConnectJobTest, OnDestinationDnsAliasesResolved_Invoked_Error) {
-  std::vector<std::string> aliases({"alias1", "alias2", kHostName});
-  std::set<std::string> aliases_set(aliases.begin(), aliases.end());
-  host_resolver_.rules()->AddIPLiteralRuleWithDnsAliases(kHostName, "2.2.2.2",
-                                                         std::move(aliases));
+TEST_F(TransportConnectJobRTTFallbackTest, UsesRTTForFallback) {
+  // Set up HttpServerProperties with a specific RTT.
+  url::SchemeHostPort server(url::kHttpScheme, kHostName, 80);
+  ServerNetworkStats stats;
+  stats.srtt = base::Milliseconds(50);
+  http_server_properties_.SetServerNetworkStats(
+      server, NetworkAnonymizationKey(), stats);
 
-  for (bool host_resolution_synchronous : {false, true}) {
-    SCOPED_TRACE(host_resolution_synchronous);
-    for (bool connection_synchronous : {false, true}) {
-      SCOPED_TRACE(connection_synchronous);
-      host_resolver_.set_synchronous_mode(host_resolution_synchronous);
-      client_socket_factory_.set_default_client_socket_type(
-          connection_synchronous
-              ? MockTransportClientSocketFactory::Type::kFailing
-              : MockTransportClientSocketFactory::Type::kPendingFailing);
+  MockTransportClientSocketFactory::Rule rules[] = {
+      // The IPv6 attempt stalls.
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kStalled,
+          std::vector{IPEndPoint(ParseIP("2:abcd::3:4:ff"), 80)}),
+      // The IPv4 attempt also stalls.
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kStalled,
+          std::vector{IPEndPoint(ParseIP("2.2.2.2"), 80)})};
+  client_socket_factory_.SetRules(rules);
 
-      TestConnectJobDelegate test_delegate;
-      TransportConnectJob transport_connect_job(
-          DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
-          DefaultParams(), &test_delegate, /*net_log=*/nullptr);
-      test_delegate.set_error_for_on_destination_dns_aliases_resolved(
-          ERR_PROXY_REQUIRED);
+  host_resolver_.set_synchronous_mode(true);
+  host_resolver_.rules()->AddIPLiteralRule(kHostName, "2:abcd::3:4:ff,2.2.2.2",
+                                           std::string());
 
-      test_delegate.StartJobExpectingResult(&transport_connect_job,
-                                            ERR_PROXY_REQUIRED,
-                                            host_resolution_synchronous);
+  TestConnectJobDelegate test_delegate;
+  TransportConnectJob transport_connect_job(
+      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
+      DefaultParams(), &test_delegate, /*net_log=*/nullptr);
 
-      // Verify that the delegate method was called when aliases are resolved.
-      EXPECT_TRUE(test_delegate.on_dns_aliases_resolved_called());
-      EXPECT_EQ(test_delegate.dns_aliases(), aliases_set);
-    }
-  }
+  EXPECT_THAT(transport_connect_job.Connect(), test::IsError(ERR_IO_PENDING));
+
+  // IPv6 job starts, but not IPv4 job.
+  EXPECT_EQ(1, client_socket_factory_.allocation_count());
+
+  // RTT is 50ms, multiplier is 2.0, so fallback should be 100ms.
+  FastForwardBy(base::Milliseconds(100));
+
+  // IPv4 job starts.
+  EXPECT_EQ(2, client_socket_factory_.allocation_count());
 }
 
 }  // namespace

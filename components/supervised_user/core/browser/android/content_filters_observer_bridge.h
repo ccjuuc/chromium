@@ -26,10 +26,7 @@ class ContentFiltersObserverBridge {
   // storage.
   class Observer {
    public:
-    virtual void OnContentFiltersObserverEnabled(
-        std::string_view setting_name) {}
-    virtual void OnContentFiltersObserverDisabled(
-        std::string_view setting_name) {}
+    virtual void OnContentFiltersObserverChanged() {}
     virtual ~Observer() = default;
   };
 

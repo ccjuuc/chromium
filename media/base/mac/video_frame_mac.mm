@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
 
 #include "media/base/mac/video_frame_mac.h"
 
@@ -13,13 +9,21 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <vector>
 
+#include "base/apple/bridging.h"
+#include "base/compiler_specific.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "media/base/mac/color_space_util_mac.h"
+#include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_util.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/gpu_memory_buffer_handle.h"
+#include "ui/gfx/hdr_metadata.h"
+#include "ui/gfx/hdr_metadata_mac.h"
 
 namespace media {
 
@@ -51,6 +55,10 @@ bool IsAcceptableCvPixelFormat(VideoPixelFormat format, OSType cv_format) {
   }
   if (format == PIXEL_FORMAT_NV12A) {
     return cv_format == kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar;
+  }
+  if (format == PIXEL_FORMAT_P010LE) {
+    return cv_format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ||
+           cv_format == kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
   }
   return false;
 }
@@ -87,47 +95,107 @@ void SetCvPixelBufferColorSpace(const gfx::ColorSpace& frame_cs,
   }
 }
 
+void SetCvPixelBufferHdrMetadata(const gfx::HDRMetadata& hdr_metadata,
+                                 CVPixelBufferRef pixel_buffer) {
+  if (!hdr_metadata.IsValid()) {
+    return;
+  }
+  if (hdr_metadata.HasMDCV()) {
+    CVBufferSetAttachment(
+        pixel_buffer, kCVImageBufferMasteringDisplayColorVolumeKey,
+        gfx::GenerateMasteringDisplayColorVolume(hdr_metadata).get(),
+        kCVAttachmentMode_ShouldPropagate);
+  }
+  // GenerateContentLightLevelInfo() returns null for a zeroed out CLLI.
+  if (auto clli = gfx::GenerateContentLightLevelInfo(hdr_metadata)) {
+    CVBufferSetAttachment(pixel_buffer, kCVImageBufferContentLightLevelInfoKey,
+                          clli.get(), kCVAttachmentMode_ShouldPropagate);
+  }
+}
+
+void SetCvPixelBufferAttachments(const VideoFrame& frame,
+                                 CVPixelBufferRef pixel_buffer) {
+  SetCvPixelBufferColorSpace(frame.ColorSpace(), pixel_buffer);
+  SetCvPixelBufferHdrMetadata(frame.hdr_metadata(), pixel_buffer);
+}
+
+void ApplyCvPixelBufferCleanApertureIfNeeded(const VideoFrame& frame,
+                                             CVPixelBufferRef pixel_buffer) {
+  const auto& coded_size = frame.coded_size();
+  const auto& visible_rect = frame.visible_rect();
+  if (visible_rect == gfx::Rect(coded_size)) {
+    return;
+  }
+
+  // Unlike our visible rect, the clean aperture offsets are relative to the
+  // center of image. There's not a lot of documentation on this calculation,
+  // but see crabby_avifCleanApertureBoxConvertCropRect() for another impl.
+  double horizontal_offset =
+      visible_rect.x() - (coded_size.width() - visible_rect.width()) / 2.0;
+  double vertical_offset =
+      visible_rect.y() - (coded_size.height() - visible_rect.height()) / 2.0;
+  NSDictionary* clean_aperture = @{
+    base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureWidthKey) :
+        @(visible_rect.width()),
+    base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureHeightKey) :
+        @(visible_rect.height()),
+    base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureHorizontalOffsetKey) :
+        @(horizontal_offset),
+    base::apple::CFToNSPtrCast(kCVImageBufferCleanApertureVerticalOffsetKey) :
+        @(vertical_offset)
+  };
+  CVBufferSetAttachment(pixel_buffer, kCVImageBufferCleanApertureKey,
+                        base::apple::NSToCFPtrCast(clean_aperture),
+                        kCVAttachmentMode_ShouldPropagate);
+}
+
 }  // namespace
 
-MEDIA_EXPORT base::apple::ScopedCFTypeRef<CVPixelBufferRef>
-WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
+base::apple::ScopedCFTypeRef<CVPixelBufferRef> WrapIOSurfaceInCVPixelBuffer(
+    const VideoFrame& frame,
+    IOSurfaceRef io_surface) {
+  base::apple::ScopedCFTypeRef<CVPixelBufferRef> pixel_buffer;
+  CVReturn cv_return = CVPixelBufferCreateWithIOSurface(
+      nullptr, io_surface, nullptr, pixel_buffer.InitializeInto());
+  if (cv_return != kCVReturnSuccess) {
+    DLOG(ERROR) << "CVPixelBufferCreateWithIOSurface failed: " << cv_return;
+    pixel_buffer.reset();
+  } else if (!IsAcceptableCvPixelFormat(
+                 frame.format(),
+                 CVPixelBufferGetPixelFormatType(pixel_buffer.get()))) {
+    DLOG(ERROR) << "Dropping CVPixelBuffer w/ incorrect format.";
+    pixel_buffer.reset();
+  } else {
+    SetCvPixelBufferAttachments(frame, pixel_buffer.get());
+    ApplyCvPixelBufferCleanApertureIfNeeded(frame, pixel_buffer.get());
+  }
+  return pixel_buffer;
+}
+
+base::apple::ScopedCFTypeRef<CVPixelBufferRef> WrapVideoFrameInCVPixelBuffer(
+    scoped_refptr<VideoFrame> frame) {
   base::apple::ScopedCFTypeRef<CVPixelBufferRef> pixel_buffer;
   if (!frame) {
     return pixel_buffer;
   }
 
-  const gfx::Rect& visible_rect = frame->visible_rect();
-  bool crop_needed = visible_rect != gfx::Rect(frame->coded_size());
-
-  if (!crop_needed) {
-    // If the frame has a GMB, yank out its IOSurface if possible.
+  const auto& coded_size = frame->coded_size();
+  const bool crop_needed = frame->visible_rect() != gfx::Rect(coded_size);
+  if (!crop_needed || base::FeatureList::IsEnabled(
+                          kVTVideoEncodeAcceleratorOpaqueSharedImageEncode)) {
+    // If the frame has a mappable SharedImage, yank out its IOSurface if it
+    // exists.
     if (frame->HasMappableSharedImage()) {
       auto handle = frame->GetGpuMemoryBufferHandle();
       if (handle.type == gfx::GpuMemoryBufferType::IO_SURFACE_BUFFER) {
         CHECK(handle.io_surface());
-        CVReturn cv_return = CVPixelBufferCreateWithIOSurface(
-            nullptr, handle.io_surface().get(), nullptr,
-            pixel_buffer.InitializeInto());
-        if (cv_return != kCVReturnSuccess) {
-          DLOG(ERROR) << "CVPixelBufferCreateWithIOSurface failed: "
-                      << cv_return;
-          pixel_buffer.reset();
-        }
-        if (!IsAcceptableCvPixelFormat(
-                frame->format(),
-                CVPixelBufferGetPixelFormatType(pixel_buffer.get()))) {
-          DLOG(ERROR) << "Dropping CVPixelBuffer w/ incorrect format.";
-          pixel_buffer.reset();
-        } else {
-          SetCvPixelBufferColorSpace(frame->ColorSpace(), pixel_buffer.get());
-        }
-        return pixel_buffer;
+        return WrapIOSurfaceInCVPixelBuffer(*frame, handle.io_surface().get());
       }
     }
   }
 
-  // If the frame is backed by a GPU buffer, but needs cropping, map it and
-  // and handle like a software frame. There is no memcpy here.
+  // If the mappable SharedImage could not be wrapped above, map it and handle
+  // it like a software frame. There is no memcpy here.
   if (frame->HasMappableSharedImage()) {
     frame = ConvertToMemoryMappedFrame(std::move(frame));
   }
@@ -137,9 +205,9 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
 
   // VideoFrame only supports YUV formats and most of them are 'YVU' ordered,
   // which CVPixelBuffer does not support. This means we effectively can only
-  // represent I420 and NV12 frames. In addition, VideoFrame does not carry
-  // colorimetric information, so this function assumes standard video range
-  // and ITU Rec 709 primaries.
+  // represent I420, NV12, NV12A, and P010 frames. In addition, VideoFrame does
+  // not carry colorimetric information, so this function assumes standard
+  // video range and ITU Rec 709 primaries.
   const VideoPixelFormat video_frame_format = frame->format();
   const bool is_full_range =
       frame->ColorSpace().GetRangeID() == gfx::ColorSpace::RangeID::FULL;
@@ -155,6 +223,10 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
       DVLOG(1) << "Full range NV12A is not supported by the OS.";
     }
     cv_format = kCVPixelFormatType_420YpCbCr8VideoRange_8A_TriPlanar;
+  } else if (video_frame_format == PIXEL_FORMAT_P010LE) {
+    cv_format = is_full_range
+                    ? kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+                    : kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange;
   } else {
     DLOG(ERROR) << "Unsupported frame format: " << video_frame_format;
     return pixel_buffer;
@@ -166,16 +238,14 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
   DCHECK_LE(num_planes, kMaxPlanes);
 
   // Build arrays for each plane's data pointer, dimensions and byte alignment.
-  void* plane_ptrs[kMaxPlanes];
-  size_t plane_widths[kMaxPlanes];
-  size_t plane_heights[kMaxPlanes];
-  size_t plane_bytes_per_row[kMaxPlanes];
+  std::vector<void*> plane_ptrs(num_planes);
+  std::vector<size_t> plane_widths(num_planes);
+  std::vector<size_t> plane_heights(num_planes);
+  std::vector<size_t> plane_bytes_per_row(num_planes);
   for (int plane_i = 0; plane_i < num_planes; ++plane_i) {
-    plane_ptrs[plane_i] = const_cast<uint8_t*>(frame->visible_data(plane_i));
-    gfx::Size plane_size =
-        VideoFrame::PlaneSize(video_frame_format, plane_i, visible_rect.size());
-    plane_widths[plane_i] = plane_size.width();
-    plane_heights[plane_i] = plane_size.height();
+    plane_ptrs[plane_i] = const_cast<uint8_t*>(frame->data(plane_i));
+    plane_widths[plane_i] = frame->columns(plane_i);
+    plane_heights[plane_i] = frame->rows(plane_i);
     plane_bytes_per_row[plane_i] = frame->stride(plane_i);
   }
 
@@ -189,38 +259,27 @@ WrapVideoFrameInCVPixelBuffer(scoped_refptr<VideoFrame> frame) {
   // give it a smart pointer to the frame, so instead pass a raw pointer and
   // increment the frame's reference count manually.
   CVReturn result = CVPixelBufferCreateWithPlanarBytes(
-      kCFAllocatorDefault, visible_rect.width(), visible_rect.height(),
-      cv_format, descriptor, 0, num_planes, plane_ptrs, plane_widths,
-      plane_heights, plane_bytes_per_row, &CvPixelBufferReleaseCallback,
-      frame.get(), nullptr, pixel_buffer.InitializeInto());
+      kCFAllocatorDefault, coded_size.width(), coded_size.height(), cv_format,
+      descriptor, 0, num_planes, plane_ptrs.data(), plane_widths.data(),
+      plane_heights.data(), plane_bytes_per_row.data(),
+      &CvPixelBufferReleaseCallback, frame.get(), nullptr,
+      pixel_buffer.InitializeInto());
   if (result != kCVReturnSuccess) {
     DLOG(ERROR) << " CVPixelBufferCreateWithPlanarBytes failed: " << result;
     return base::apple::ScopedCFTypeRef<CVPixelBufferRef>(nullptr);
   }
 
+  // We must guarantee that every row of the CVPixelBuffer has the full stride,
+  // so we can't directly pass visible_data() pointers in. We must instead pass
+  // the full coded data along with the crop rect.
+  ApplyCvPixelBufferCleanApertureIfNeeded(*frame, pixel_buffer.get());
+
   // The CVPixelBuffer now references the data of the frame, so increment its
   // reference count manually. The release callback set on the pixel buffer will
   // release the frame.
   frame->AddRef();
-  SetCvPixelBufferColorSpace(frame->ColorSpace(), pixel_buffer.get());
+  SetCvPixelBufferAttachments(*frame, pixel_buffer.get());
   return pixel_buffer;
-}
-
-MEDIA_EXPORT bool IOSurfaceIsWebGPUCompatible(IOSurfaceRef io_surface) {
-  switch (IOSurfaceGetPixelFormat(io_surface)) {
-    case kCVPixelFormatType_64RGBAHalf:
-    case kCVPixelFormatType_TwoComponent16Half:
-    case kCVPixelFormatType_OneComponent16Half:
-    case kCVPixelFormatType_ARGB2101010LEPacked:
-    case kCVPixelFormatType_32RGBA:
-    case kCVPixelFormatType_32BGRA:
-    case kCVPixelFormatType_TwoComponent8:
-    case kCVPixelFormatType_OneComponent8:
-    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
-      return true;
-    default:
-      return false;
-  }
 }
 
 }  // namespace media

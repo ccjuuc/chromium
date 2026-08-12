@@ -47,7 +47,7 @@ class RedirectTest : public InProcessBrowserTest {
   std::vector<GURL> GetRedirects(const GURL& url) {
     history::HistoryService* history_service =
         HistoryServiceFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
 
     // Schedule a history query for redirects. The response will be sent
     // asynchronously from the callback the history system uses to notify us
@@ -230,7 +230,7 @@ IN_PROC_BROWSER_TEST_F(RedirectTest, ServerReference) {
 // A) does not crash the browser or confuse the redirect chain, see bug 1080873
 // B) does not take place.
 //
-// Flaky on XP and Vista, http://crbug.com/69390.
+// Flaky on XP and Vista, http://crbug.com/41302864.
 IN_PROC_BROWSER_TEST_F(RedirectTest, NoHttpToFile) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL file_url = chrome_test_utils::GetTestUrl(
@@ -265,7 +265,7 @@ IN_PROC_BROWSER_TEST_F(RedirectTest, ClientFragments) {
 // alternatively load the second page from disk, but we would need to start
 // the browser for this testcase with --process-per-tab, and I don't think
 // we can do this at test-case-level granularity at the moment.
-// http://crbug.com/45056
+// http://crbug.com/41153080
 IN_PROC_BROWSER_TEST_F(RedirectTest,
        DISABLED_ClientCancelledByNewNavigationAfterProvisionalLoad) {
   // We want to initiate a second navigation after the provisional load for

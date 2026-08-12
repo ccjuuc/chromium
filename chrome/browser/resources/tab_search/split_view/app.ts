@@ -6,8 +6,11 @@ import '/strings.m.js';
 import '../tab_search_item.js';
 import '../selectable_lazy_list.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
+import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 
 import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
+import type {CrTooltipElement} from 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
@@ -25,7 +28,7 @@ import {getHtml} from './app.html.js';
 export interface SplitNewTabPageAppElement {
   $: {
     header: HTMLElement,
-    splitTabsList: SelectableLazyListElement,
+    splitTabsList: SelectableLazyListElement<TabData>,
   };
 }
 
@@ -46,12 +49,15 @@ export class SplitNewTabPageAppElement extends CrLitElement {
     return {
       allEligibleTabs_: {type: Array},
       minViewportHeight_: {type: Number},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
   protected accessor allEligibleTabs_: TabData[] = [];
   protected accessor minViewportHeight_: number = 0;
   protected title_: string = '';
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   private apiProxy_: TabSearchApiProxy = TabSearchApiProxyImpl.getInstance();
   private listenerIds_: number[] = [];
   private visibilityChangedListener_: () => void;
@@ -106,8 +112,22 @@ export class SplitNewTabPageAppElement extends CrLitElement {
         'visibilitychange', this.visibilityChangedListener_);
   }
 
-  protected onClose_() {
+  protected onCloseClick_() {
     this.apiProxy_.closeWebUiTab();
+  }
+
+  protected onCloseButtonFocus_() {
+    const tooltip =
+        this.shadowRoot.querySelector<CrTooltipElement>('cr-tooltip');
+    assert(tooltip);
+    tooltip.show();
+  }
+
+  protected onCloseButtonBlur_() {
+    const tooltip =
+        this.shadowRoot.querySelector<CrTooltipElement>('cr-tooltip');
+    assert(tooltip);
+    tooltip.hide();
   }
 
   protected onTabClick_(e: Event) {
@@ -123,13 +143,13 @@ export class SplitNewTabPageAppElement extends CrLitElement {
     this.$.splitTabsList.setSelected(index);
   }
 
-  protected onTabFocusOut_(_: Event) {
+  protected onTabFocusout_(_: Event) {
     // Ensure that when a TabSearchItem loses focus, it resets the selected
     // item.
     this.$.splitTabsList.resetSelected();
   }
 
-  protected onTabKeyDown_(e: KeyboardEvent) {
+  protected onTabKeydown_(e: KeyboardEvent) {
     if (e.key !== 'Enter' && e.key !== ' ') {
       return;
     }
@@ -208,8 +228,7 @@ export class SplitNewTabPageAppElement extends CrLitElement {
 
   private getTabData_(tab: Tab, inActiveWindow: boolean, type: TabItemType):
       TabData {
-    const displayUrl =
-        getDisplayHostnameForUrl(new URL(normalizeURL(tab.url.url)));
+    const displayUrl = getDisplayHostnameForUrl(new URL(normalizeURL(tab.url)));
     const tabData = new TabData(tab, type, displayUrl);
 
     if (type === TabItemType.OPEN_TAB) {

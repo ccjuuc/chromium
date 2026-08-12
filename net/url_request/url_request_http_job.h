@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
@@ -194,11 +195,13 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   void ContinueWithCertificate(
       scoped_refptr<X509Certificate> client_cert,
       scoped_refptr<SSLPrivateKey> client_private_key) override;
+  void SetPlatformLocalNetworkAccessGranted() override;
+  void CancelPlatformLocalNetworkAccessRequest() override;
   void ContinueDespiteLastError() override;
   int ReadRawData(IOBuffer* buf, int buf_size) override;
-  int64_t GetTotalReceivedBytes() const override;
-  int64_t GetTotalSentBytes() const override;
-  int64_t GetReceivedBodyBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
+  base::ByteSize GetReceivedBodyBytes() const override;
   void DoneReading() override;
   void DoneReadingRedirectResponse() override;
   void DoneReadingRetryResponse() override;
@@ -247,11 +250,6 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   // overridden by `override_response_headers_` or
   // `override_response_info_::headers`.
   HttpResponseHeaders* GetResponseHeaders() const;
-
-  // Called after getting the FirstPartySetMetadata during Start for this job.
-  void OnGotFirstPartySetMetadata(
-      FirstPartySetMetadata first_party_set_metadata,
-      FirstPartySetsCacheFilter::MatchInfo match_info);
 
   // Returns true iff this request leg should include the Cookie header. Note
   // that cookies may still be eventually blocked by the CookieAccessDelegate
@@ -323,10 +321,10 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
 
   // Keeps track of total received bytes over the network from transactions used
   // by this job that have already been destroyed.
-  int64_t total_received_bytes_from_previous_transactions_ = 0;
+  base::ByteSize total_received_bytes_from_previous_transactions_;
   // Keeps track of total sent bytes over the network from transactions used by
   // this job that have already been destroyed.
-  int64_t total_sent_bytes_from_previous_transactions_ = 0;
+  base::ByteSize total_sent_bytes_from_previous_transactions_;
 
   RequestHeadersCallback request_headers_callback_;
   ResponseHeadersCallback early_response_headers_callback_;

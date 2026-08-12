@@ -5,9 +5,13 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_PARSING_AUTOFILL_PARSING_UTILS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FORM_PARSING_AUTOFILL_PARSING_UTILS_H_
 
+#include <stdint.h>
+
+#include "base/check.h"
 #include "base/check_op.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/is_required.h"
 
 namespace autofill {
 
@@ -18,6 +22,24 @@ namespace autofill {
 // <label for="mobile">Cellphone number:</label> <input type="tel" id="mobile">
 // the kLabel is "Cellphone number" and the kName is "mobile".
 enum class MatchAttribute { kLabel, kName, kMaxValue = kName };
+
+struct MatchInfo {
+  // This is different from `autofill::MatchAttribute`, since it further
+  // distinguishes between high and low quality labels. Low quality label
+  // matches are deprioritized during scoring (`AddClassification()`), so a
+  // different parser can overwrite the label match with e.g. a name match.
+  // High quality labels are labels for which we have high confidence that the
+  // label value is visible to the user and associated with the form control.
+  // Low quality labels are heuristically determined labels which may be
+  // incorrectly attributed to the form control.
+  enum class MatchAttribute {
+    kName = 0,
+    kHighQualityLabel = 1,
+    kLowQualityLabel = 2
+  } matched_attribute = internal::IsRequired();
+  // TODO(crbug.com/320965828): Add other details such as the regex that
+  // matched or how well the regex matched to improve match prioritization.
+};
 
 // A pair of sets of MatchAttributes and FormControlTypes.
 struct MatchParams {
@@ -53,19 +75,18 @@ constexpr MatchParams kDefaultMatchParams = kDefaultMatchParamsWith<>;
 // separate enum to reduce the memory overhead. They are used to annotate
 // `MatchingPattern`s, so the parsing logic can check at runtime which patterns
 // to apply.
+// Renumbering existing items of this enum is safe because they are only used
+// for gating and not persisted across sessions or server-side.
 enum class RegexFeature : uint8_t {
   // This entry only exists to ensure that the enum never becomes empty as
   // features are added and removed.
   kUnusedDummyFeature = 0,
   kAutofillGreekRegexes = 1,
-  kAutofillSupportPhoneticNameForJP = 2,
-  kAutofillSupportLastNamePrefix = 3,
-  kAutofillEnableLoyaltyCardsFilling = 4,
-  kAutofillSupportSplitZipCode = 5,
-  kAutofillDisallowMoreHyphenLikeLabels = 6,
-  kAutofillFixStateCountryMisclassification = 7,
-  kAutofillFixCivilStateMisclassificationForESPT = 8,
-  kMaxValue = kAutofillFixCivilStateMisclassificationForESPT,
+  kAutofillSupportSplitZipCode = 2,
+  kAutofillDisallowMoreHyphenLikeLabels = 3,
+  kAutofillFixStateCountryMisclassification = 4,
+  kAutofillSupportCombinedZipAndCityFR = 5,
+  kMaxValue = kAutofillSupportCombinedZipAndCityFR,
 };
 
 // Returns a `DenseSet` containing all `RegexFeature`s whose corresponding

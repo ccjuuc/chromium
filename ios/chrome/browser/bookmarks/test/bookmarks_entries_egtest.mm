@@ -15,6 +15,7 @@
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey.h"
 #import "ios/chrome/browser/bookmarks/test/bookmark_earl_grey_ui.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
@@ -22,10 +23,11 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers_app_interface.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
-#import "ios/web/public/test/http_server/http_server.h"
-#import "ios/web/public/test/http_server/http_server_util.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/http_request.h"
+#import "net/test/embedded_test_server/http_response.h"
 #import "ui/base/l10n/l10n_util.h"
 
 using chrome_test_util::BookmarksContextMenuEditButton;
@@ -43,7 +45,7 @@ using chrome_test_util::TappableBookmarkNodeWithLabel;
 using chrome_test_util::WindowWithNumber;
 
 namespace {
-constexpr char kURL1[] = "http://firstURL";
+constexpr char kURL1[] = "/firstURL";
 constexpr char kTitle1[] = "Page 1";
 constexpr char kResponse1[] = "Test Page 1 content";
 constexpr char kPageFormat[] = "<head><title>%s</title></head><body>%s</body>";
@@ -52,13 +54,37 @@ constexpr char kPageFormat[] = "<head><title>%s</title></head><body>%s</body>";
 id<GREYMatcher> AddBookmarkButton() {
   return grey_accessibilityID(kToolsMenuAddToBookmarks);
 }
+
+// Helper function to create HTML responses.
+std::unique_ptr<net::test_server::HttpResponse> CreateHttpResponse(
+    const std::string& content) {
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content_type("text/html");
+  response->set_content(content);
+  return response;
+}
+
+// Request handler for the test server.
+std::unique_ptr<net::test_server::HttpResponse> HandleRequest(
+    const net::test_server::HttpRequest& request) {
+  if (request.relative_url == kURL1) {
+    return CreateHttpResponse(
+        base::StringPrintf(kPageFormat, kTitle1, kResponse1));
+  }
+  return nullptr;
+}
 }  // namespace
 
-// Bookmark entries integration tests for Chrome.
-@interface BookmarksEntriesTestCase : WebHttpServerChromeTestCase
+@interface BookmarksEntriesTestCase : ChromeTestCase
 @end
 
 @implementation BookmarksEntriesTestCase
+
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  return config;
+}
 
 - (void)setUp {
   [super setUp];
@@ -66,6 +92,8 @@ id<GREYMatcher> AddBookmarkButton() {
   [BookmarkEarlGrey waitForBookmarkModelLoaded];
   [BookmarkEarlGrey clearBookmarks];
   [BookmarkEarlGrey clearBookmarksPositionCache];
+
+  self.testServer->RegisterRequestHandler(base::BindRepeating(&HandleRequest));
 }
 
 // Tear down called once per test.
@@ -321,6 +349,7 @@ id<GREYMatcher> AddBookmarkButton() {
   [BookmarkEarlGreyUI closeContextBarEditMode];
 
   // Navigate to "Folder 1.1" and verify "Second URL" is under it.
+  [ChromeEarlGreyUI waitForAppToIdle];
   [[EarlGrey
       selectElementWithMatcher:TappableBookmarkNodeWithLabel(@"Folder 1.1")]
       performAction:grey_tap()];
@@ -1150,22 +1179,14 @@ id<GREYMatcher> AddBookmarkButton() {
   [ChromeEarlGrey verifyOpenInNewWindowActionWithContent:"pony jokes"];
 }
 
-- (void)testBookmarksSyncInMultiwindow {
+// TODO(crbug.com/40210654).
+- (void)DISABLED_testBookmarksSyncInMultiwindow {
   if (![ChromeEarlGrey areMultipleWindowsSupported]) {
     EARL_GREY_TEST_DISABLED(@"Multiple windows can't be opened.");
   }
 
-  // TODO(crbug.com/40210654).
-  if ([ChromeEarlGrey isNewOverflowMenuEnabled]) {
-    EARL_GREY_TEST_DISABLED(
-        @"Earl Grey doesn't work properly with SwiftUI and multiwindow");
-  }
-
-  GURL URL1 = web::test::HttpServer::MakeUrl(kURL1);
-
-  std::map<GURL, std::string> responses;
-  responses[URL1] = base::StringPrintf(kPageFormat, kTitle1, kResponse1);
-  web::test::SetUpSimpleHttpServer(responses);
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  GURL URL1 = self.testServer->GetURL(kURL1);
 
   [BookmarkEarlGrey clearBookmarksPositionCache];
   [BookmarkEarlGrey

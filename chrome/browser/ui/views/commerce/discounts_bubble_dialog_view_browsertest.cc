@@ -4,8 +4,6 @@
 
 #include "chrome/browser/ui/views/commerce/discounts_bubble_dialog_view.h"
 
-#include "base/build_time.h"
-#include "base/time/default_clock.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
@@ -50,8 +48,8 @@ class DiscountBubbleViewBrowserTest : public DialogBrowserTest {
     views::View* const anchor_view =
         BrowserView::GetBrowserViewForBrowser(browser())->top_container();
 
-    coordinator_.Show(anchor_view, web_contents(), discount_info,
-                      base::DoNothing());
+    coordinator_.Show(views::BubbleAnchor(anchor_view), web_contents(),
+                      discount_info, base::DoNothing());
   }
 
   void TearDownOnMainThread() override {

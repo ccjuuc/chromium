@@ -18,6 +18,7 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+#include "extensions/browser/mime_handler/stream_container.h"
 #include "extensions/common/constants.h"
 
 namespace save_to_drive {
@@ -93,7 +94,7 @@ void SaveToDriveEventDispatcher::Notify(
   CHECK_NE(progress.status, SaveToDriveStatus::kNone);
   recorder_->Record(progress);
   progress.file_metadata = GetFileMetadataString(progress);
-  base::Value::List args;
+  base::ListValue args;
   args.Append(stream_url_.spec());
   args.Append(progress.ToValue());
   auto event = std::make_unique<extensions::Event>(

@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "ash/webui/diagnostics_ui/diagnostics_ui.h"
 
 #include <memory>
@@ -94,8 +93,8 @@ std::u16string GetLinkLabel(int string_id, const char* url) {
   return l10n_util::GetStringFUTF16(string_id, replacements, nullptr);
 }
 
-base::Value::Dict GetDataSourceUpdate() {
-  base::Value::Dict update;
+base::DictValue GetDataSourceUpdate() {
+  base::DictValue update;
   update.Set("settingsLinkText",
              GetLinkLabel(IDS_DIAGNOSTICS_SETTINGS_LINK_TEXT,
                           "chrome://os-settings/"));
@@ -179,11 +178,16 @@ void AddDiagnosticsStrings(content::WebUIDataSource* html_source) {
       {"gatewayCanBePingedRoutineText",
        IDS_NETWORK_DIAGNOSTICS_GATEWAY_CAN_BE_PINGED},
       {"gatewayRoutineText", IDS_NETWORK_DIAGNOSTICS_GATEWAY_GROUP},
+      {"googleServicesConnectivityFailedText",
+       IDS_DIAGNOSTICS_GOOGLE_SERVICES_CONNECTIVITY_FAILED_TEXT},
+      {"googleServicesGroupLabel",
+       IDS_NETWORK_DIAGNOSTICS_GOOGLE_SERVICES_GROUP},
       {"hasSecureWiFiConnectionFailedText",
        IDS_DIAGNOSTICS_HAS_SECURE_WIFI_CONNECTION_FAILED_TEXT},
       {"hasSecureWiFiConnectionRoutineText",
        IDS_NETWORK_DIAGNOSTICS_HAS_SECURE_WIFI_CONNECTION},
       {"hideReportText", IDS_DIAGNOSTICS_HIDE_REPORT_TEXT},
+      {"hideTestDetailsText", IDS_DIAGNOSTICS_HIDE_TEST_DETAILS_TEXT},
       {"httpFirewallFailedText", IDS_DIAGNOSTICS_HTTP_FIREWALL_FAILED_TEXT},
       {"httpFirewallRoutineText", IDS_NETWORK_DIAGNOSTICS_HTTP_FIREWALL},
       {"httpsFirewallFailedText", IDS_DIAGNOSTICS_HTTPS_FIREWALL_FAILED_TEXT},
@@ -319,6 +323,7 @@ void AddDiagnosticsStrings(content::WebUIDataSource* html_source) {
       {"runCpuTestText", IDS_DIAGNOSTICS_CPU_RUN_TESTS_BUTTON_TEXT},
       {"runMemoryTestText", IDS_DIAGNOSTICS_MEMORY_RUN_TESTS_BUTTON_TEXT},
       {"seeReportText", IDS_DIAGNOSTICS_SEE_REPORT_TEXT},
+      {"seeTestDetailsText", IDS_DIAGNOSTICS_SEE_TEST_DETAILS_TEXT},
       {"sessionLog", IDS_DIAGNOSTICS_SESSION_LOG_LABEL},
       {"sessionLogToastTextFailure",
        IDS_DIAGNOSTICS_SESSION_LOG_TOAST_TEXT_FAILURE},
@@ -375,7 +380,7 @@ void SetUpWebUIDataSource(content::WebUIDataSource* source,
                           base::span<const webui::ResourcePath> resources,
                           int default_resource) {
   source->AddResourcePaths(resources);
-  source->AddResourcePath("", default_resource);
+  source->SetDefaultResource(default_resource);
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   source->AddResourcePath("test_loader.js", IDR_WEBUI_JS_TEST_LOADER_JS);
   source->AddResourcePath("test_loader_util.js",
@@ -383,8 +388,6 @@ void SetUpWebUIDataSource(content::WebUIDataSource* source,
   source->AddBoolean("isLoggedIn", LoginState::Get()->IsUserLoggedIn());
   source->AddBoolean("isTouchpadEnabled",
                      features::IsTouchpadInDiagnosticsAppEnabled());
-  source->AddBoolean("isTouchscreenEnabled",
-                     features::IsTouchscreenInDiagnosticsAppEnabled());
 }
 
 void SetUpPluralStringHandler(content::WebUI* web_ui) {
@@ -400,7 +403,8 @@ DiagnosticsDialogUI::DiagnosticsDialogUI(
     const diagnostics::SessionLogHandler::SelectFilePolicyCreator&
         select_file_policy_creator,
     HoldingSpaceClient* holding_space_client,
-    const base::FilePath& log_directory_path)
+    const base::FilePath& log_directory_path,
+    std::unique_ptr<diagnostics::SystemRoutineControllerDelegate> delegate)
     : ui::MojoWebDialogUI(web_ui) {
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
@@ -419,7 +423,7 @@ DiagnosticsDialogUI::DiagnosticsDialogUI(
   auto session_log_handler = std::make_unique<diagnostics::SessionLogHandler>(
       select_file_policy_creator, holding_space_client, log_directory_path);
   diagnostics_manager_ = std::make_unique<diagnostics::DiagnosticsManager>(
-      session_log_handler.get(), web_ui);
+      session_log_handler.get(), web_ui, std::move(delegate));
   web_ui->AddMessageHandler(std::move(session_log_handler));
 
   AddDiagnosticsStrings(html_source);

@@ -4,12 +4,24 @@
 
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
 
-#include "base/check.h"
+#include <stdint.h>
+
+#include <limits>
+#include <optional>
+
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/form_types.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
+#include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill::autofill_metrics {
 
@@ -72,9 +84,10 @@ bool IsPostalAddressForm(const FormStructure& form) {
 // types in `filter_by`.
 DenseSet<FormTypeNameForLogging> GetFormTypesForLogging(
     const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior,
     std::optional<DenseSet<FormType>> filter_by = std::nullopt) {
   DenseSet<FormTypeNameForLogging> form_types;
-  for (FormType form_type : form.GetFormTypes()) {
+  for (FormType form_type : form.GetFormTypes(ac_unrecognized_behavior)) {
     if (filter_by && !(*filter_by).contains(form_type)) {
       continue;
     }
@@ -118,7 +131,7 @@ AutofillProfileRecordTypeCategory GetCategoryOfProfile(
       return AutofillProfileRecordTypeCategory::kLocalOrSyncable;
     case AutofillProfile::RecordType::kAccount:
       return profile.initial_creator_id() ==
-                     AutofillProfile::kInitialCreatorOrModifierChrome
+                     AutofillProfile::kInitialCreatorChrome
                  ? AutofillProfileRecordTypeCategory::kAccountChrome
                  : AutofillProfileRecordTypeCategory::kAccountNonChrome;
     case AutofillProfile::RecordType::kAccountHome:
@@ -212,30 +225,37 @@ SettingsVisibleFieldTypeForMetrics ConvertSettingsVisibleFieldTypeForMetrics(
 }
 
 DenseSet<FormTypeNameForLogging> GetFormTypesForLogging(
-    const FormStructure& form) {
-  return internal::GetFormTypesForLogging(form);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  return internal::GetFormTypesForLogging(form, ac_unrecognized_behavior);
 }
 
 DenseSet<FormTypeNameForLogging> GetAddressFormTypesForLogging(
-    const FormStructure& form) {
-  return internal::GetFormTypesForLogging(form, internal::kAddressFormTypes);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  return internal::GetFormTypesForLogging(form, ac_unrecognized_behavior,
+                                          internal::kAddressFormTypes);
 }
 
 DenseSet<FormTypeNameForLogging> GetOneTimePasswordTypesForLogging(
-    const FormStructure& form) {
-  return internal::GetFormTypesForLogging(form,
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  return internal::GetFormTypesForLogging(form, ac_unrecognized_behavior,
                                           internal::kOneTimePasswordFormTypes);
 }
 
 DenseSet<FormTypeNameForLogging> GetLoyaltyFormTypesForLogging(
-    const FormStructure& form) {
-  return internal::GetFormTypesForLogging(form,
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  return internal::GetFormTypesForLogging(form, ac_unrecognized_behavior,
                                           internal::kLoyaltyCardFormTypes);
 }
 
 DenseSet<FormTypeNameForLogging> GetCreditCardFormTypesForLogging(
-    const FormStructure& form) {
-  return internal::GetFormTypesForLogging(form, internal::kCreditCardFormTypes);
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) {
+  return internal::GetFormTypesForLogging(form, ac_unrecognized_behavior,
+                                          internal::kCreditCardFormTypes);
 }
 
 bool IsPostalAddress(const AutofillProfile& profile) {
@@ -265,12 +285,17 @@ bool ShouldLogAutofillSuggestionShown(
     case AutofillSuggestionTriggerSource::kiOS:
     case AutofillSuggestionTriggerSource::kPasswordManagerProcessedFocusedField:
     case AutofillSuggestionTriggerSource::kManualFallbackPasswords:
-    case AutofillSuggestionTriggerSource::kManualFallbackPlusAddresses:
     case AutofillSuggestionTriggerSource::kProactivePasswordRecovery:
+    case AutofillSuggestionTriggerSource::kAtMemoryInactivityNudge:
       return true;
     case AutofillSuggestionTriggerSource::kTextFieldValueChanged:
     case AutofillSuggestionTriggerSource::kComposeDelayedProactiveNudge:
-    case AutofillSuggestionTriggerSource::kPlusAddressUpdatedInBrowserProcess:
+    case AutofillSuggestionTriggerSource::kGlic:
+    // Initial trigger of @memory shows a search bar rather than actual
+    // suggestions. Logging it would skew the standard Autofill funnel metrics.
+    case AutofillSuggestionTriggerSource::kAtMemoryContextMenu:
+    case AutofillSuggestionTriggerSource::kAtMemoryKeyboardShortcut:
+    case AutofillSuggestionTriggerSource::kAtMemoryTriggerString:
       return false;
   }
 }

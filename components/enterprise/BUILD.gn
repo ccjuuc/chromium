@@ -4,8 +4,17 @@
 
 import("//components/enterprise/buildflags/buildflags.gni")
 
+config("extra_warnings") {
+  cflags = [ "-Wshadow-field" ]
+}
+
 static_library("enterprise") {
+  configs += [ "//components/enterprise:extra_warnings" ]
+
   sources = [
+    "browser/reporting/browser_launch/browser_launch_event_controller.cc",
+    "browser/reporting/browser_launch/browser_launch_event_controller.h",
+    "browser/reporting/browser_launch/browser_launch_event_uploader.h",
     "browser/reporting/browser_report_generator.cc",
     "browser/reporting/browser_report_generator.h",
     "browser/reporting/chrome_profile_request_generator.cc",
@@ -22,6 +31,8 @@ static_library("enterprise") {
     "browser/reporting/os_report_generator.h",
     "browser/reporting/policy_info.cc",
     "browser/reporting/policy_info.h",
+    "browser/reporting/pref_url_list_matcher.cc",
+    "browser/reporting/pref_url_list_matcher.h",
     "browser/reporting/profile_report_generator.cc",
     "browser/reporting/profile_report_generator.h",
     "browser/reporting/real_time_report_controller.cc",
@@ -47,6 +58,18 @@ static_library("enterprise") {
     "browser/reporting/report_util.cc",
     "browser/reporting/report_util.h",
     "browser/reporting/reporting_delegate_factory.h",
+    "browser/reporting/reporting_features.cc",
+    "browser/reporting/reporting_features.h",
+    "browser/reporting/saas_usage/saas_usage_aggregation_utils.cc",
+    "browser/reporting/saas_usage/saas_usage_aggregation_utils.h",
+    "browser/reporting/saas_usage/saas_usage_report_factory.cc",
+    "browser/reporting/saas_usage/saas_usage_report_factory.h",
+    "browser/reporting/saas_usage/saas_usage_report_scheduler.cc",
+    "browser/reporting/saas_usage/saas_usage_report_scheduler.h",
+    "browser/reporting/saas_usage/saas_usage_report_uploader.h",
+    "browser/reporting/saas_usage/saas_usage_reporting_controller.cc",
+    "browser/reporting/saas_usage/saas_usage_reporting_controller.h",
+    "browser/reporting/saas_usage/saas_usage_reporting_delegate_factory.h",
     "browser/reporting/security_signals_service.h",
     "browser/reporting/user_security_signals_service.cc",
     "browser/reporting/user_security_signals_service.h",
@@ -70,6 +93,13 @@ static_library("enterprise") {
     ]
   }
 
+  if (!is_ios && !is_android && !is_chromeos) {
+    sources += [
+      "browser/reporting/startup_command_line_collector.cc",
+      "browser/reporting/startup_command_line_collector.h",
+    ]
+  }
+
   configs += [
     "//build/config/compiler:wexit_time_destructors",
     "//build/config/compiler:wglobal_constructors",
@@ -77,8 +107,10 @@ static_library("enterprise") {
 
   deps = [
     "//base",
+    "//components/certificate_matching",
     "//components/device_signals/core/browser",
     "//components/device_signals/core/common:features",
+    "//components/enterprise/common/proto:saas_usage_report_event",
     "//components/enterprise/connectors/core:constants",
     "//components/enterprise/device_attestation",
     "//components/enterprise/device_attestation:common",
@@ -88,6 +120,7 @@ static_library("enterprise") {
     "//components/prefs",
     "//components/reporting/client:report_queue_provider",
     "//components/strings",
+    "//components/url_matcher",
     "//components/version_info",
     "//crypto",
     "//google_apis",
@@ -98,6 +131,7 @@ static_library("enterprise") {
   # Include certain intermediate targets as public deps so consumers
   # can start using them as needed.
   public_deps = [
+    "//components/enterprise/common/proto:browser_events_proto",
     "//components/reporting/client:report_queue_configuration",
     "//components/reporting/util:status",
   ]
@@ -106,10 +140,13 @@ static_library("enterprise") {
     sources += [
       "browser/controller/chrome_browser_cloud_management_controller.cc",
       "browser/controller/chrome_browser_cloud_management_controller.h",
-      "browser/device_trust/device_trust_key_manager.h",
     ]
 
-    deps += [ "//third_party/abseil-cpp:absl" ]
+    deps += [
+      "//components/enterprise/browser/groups",
+      "//components/enterprise/device_trust/core",
+      "//third_party/abseil-cpp:absl",
+    ]
   }
 
   if (enterprise_client_certificates) {
@@ -130,6 +167,7 @@ static_library("enterprise") {
 
 static_library("test_support") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   if (!is_chromeos) {
     sources = [
@@ -145,6 +183,7 @@ static_library("test_support") {
 
 static_library("reporting_test_support") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   sources = [
     "browser/reporting/fake_browser_report_generator_delegate.cc",
@@ -162,11 +201,19 @@ static_library("reporting_test_support") {
 
 source_set("unit_tests") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   sources = [
     "browser/identifiers/profile_id_service_unittest.cc",
+    "browser/reporting/browser_launch/browser_launch_event_controller_unittest.cc",
     "browser/reporting/chrome_profile_request_generator_unittest.cc",
+    "browser/reporting/pref_url_list_matcher_unittest.cc",
     "browser/reporting/report_uploader_unittest.cc",
+    "browser/reporting/report_util_unittest.cc",
+    "browser/reporting/saas_usage/saas_usage_aggregation_utils_unittest.cc",
+    "browser/reporting/saas_usage/saas_usage_report_factory_unittest.cc",
+    "browser/reporting/saas_usage/saas_usage_report_scheduler_unittest.cc",
+    "browser/reporting/saas_usage/saas_usage_reporting_controller_unittest.cc",
     "browser/reporting/user_security_signals_service_unittest.cc",
     "common/proto/connectors_unittest.cc",
   ]
@@ -175,15 +222,23 @@ source_set("unit_tests") {
     sources += [ "browser/promotion/promotion_eligibility_checker_unittest.cc" ]
   }
 
+  if (!is_ios && !is_android && !is_chromeos) {
+    sources +=
+        [ "browser/reporting/startup_command_line_collector_unittest.cc" ]
+  }
+
   deps = [
     ":enterprise",
     ":reporting_test_support",
     "common/proto:connectors_proto",
     "//base/test:test_support",
+    "//components/certificate_matching",
     "//components/device_signals/core/browser:test_support",
     "//components/device_signals/core/common:features",
     "//components/enterprise/browser/identifiers",
     "//components/enterprise/browser/identifiers:test_support",
+    "//components/enterprise/common/proto:browser_events_proto",
+    "//components/enterprise/common/proto:saas_usage_report_event",
     "//components/enterprise/connectors/core:constants",
     "//components/enterprise/device_attestation:test_support",
     "//components/policy/core/common:test_support",
@@ -198,13 +253,17 @@ source_set("unit_tests") {
   if (!is_chromeos) {
     sources += [
       "browser/controller/browser_dm_token_storage_unittest.cc",
+      "browser/groups/enterprise_groups_handler_unittest.cc",
       "browser/reporting/cloud_reporting_policy_handler_unittest.cc",
     ]
 
     deps += [
       ":test_support",
       "//base",
+      "//components/enterprise/browser/groups",
+      "//components/enterprise/browser/groups:features",
       "//components/policy/core/browser:test_support",
+      "//components/policy/core/common:test_support",
     ]
   }
 
@@ -222,5 +281,26 @@ source_set("unit_tests") {
 
   if (enterprise_client_certificates) {
     deps += [ "//components/enterprise/client_certificates:unit_tests" ]
+  }
+
+  if (is_android) {
+    sources += [
+      "device_attestation/android/attestation_utils_unittest.cc",
+      "device_attestation/android/device_attestation_service_android_unittest.cc",
+    ]
+    deps += [
+      "//components/enterprise/device_attestation:test_support",
+      "//components/enterprise/device_attestation/android",
+      "//components/enterprise/device_attestation/android:jni_headers",
+    ]
+  }
+
+  if (is_win || is_linux || is_chromeos || is_mac) {
+    deps +=
+        [ "//components/enterprise/network_header_injection/core:unit_tests" ]
+  }
+
+  if (enterprise_proxy) {
+    deps += [ "//components/enterprise/net/core:unit_tests" ]
   }
 }

@@ -18,9 +18,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.components.tab_group_sync.TabGroupSyncService.Observer;
 
@@ -38,8 +38,8 @@ public class ArchivedTabCountTrackerUnitTest {
 
     @Captor ArgumentCaptor<Observer> mTabGroupSyncServiceObserverCaptor;
 
-    private final ObservableSupplierImpl<Integer> mArchivedTabModelTabCountSupplier =
-            new ObservableSupplierImpl<>(INITIAL_TAB_COUNT);
+    private final SettableNonNullObservableSupplier<Integer> mArchivedTabModelTabCountSupplier =
+            ObservableSuppliers.createNonNull(INITIAL_TAB_COUNT);
     private ArchivedTabCountTracker mArchivedTabCountTracker;
 
     @Before
@@ -55,12 +55,7 @@ public class ArchivedTabCountTrackerUnitTest {
 
     @Test
     public void testTabModelUpdate() {
-        SavedTabGroup savedTabGroup = new SavedTabGroup();
-        savedTabGroup.syncId = SYNC_GROUP_ID;
-        savedTabGroup.archivalTimeMs = System.currentTimeMillis();
-
-        when(mTabGroupSyncService.getGroup(SYNC_GROUP_ID)).thenReturn(savedTabGroup);
-        when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {SYNC_GROUP_ID});
+        when(mTabGroupSyncService.getArchivedGroupCount()).thenReturn(1);
         when(mTabModel.getCount()).thenReturn(TAB_MODEL_TAB_COUNT);
 
         mArchivedTabModelTabCountSupplier.set(TAB_MODEL_TAB_COUNT);
@@ -70,12 +65,7 @@ public class ArchivedTabCountTrackerUnitTest {
 
     @Test
     public void testTabGroupSyncUpdate() {
-        SavedTabGroup savedTabGroup = new SavedTabGroup();
-        savedTabGroup.syncId = SYNC_GROUP_ID;
-        savedTabGroup.archivalTimeMs = System.currentTimeMillis();
-
-        when(mTabGroupSyncService.getGroup(SYNC_GROUP_ID)).thenReturn(savedTabGroup);
-        when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {SYNC_GROUP_ID});
+        when(mTabGroupSyncService.getArchivedGroupCount()).thenReturn(1);
         when(mTabModel.getCount()).thenReturn(TAB_MODEL_TAB_COUNT);
 
         mTabGroupSyncServiceObserverCaptor.getValue().onInitialized();
@@ -85,12 +75,7 @@ public class ArchivedTabCountTrackerUnitTest {
 
     @Test
     public void testAllObserversUpdate() {
-        SavedTabGroup savedTabGroup = new SavedTabGroup();
-        savedTabGroup.syncId = SYNC_GROUP_ID;
-        savedTabGroup.archivalTimeMs = System.currentTimeMillis();
-
-        when(mTabGroupSyncService.getGroup(SYNC_GROUP_ID)).thenReturn(savedTabGroup);
-        when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {SYNC_GROUP_ID});
+        when(mTabGroupSyncService.getArchivedGroupCount()).thenReturn(1);
         when(mTabModel.getCount()).thenReturn(INITIAL_TAB_COUNT);
 
         mTabGroupSyncServiceObserverCaptor.getValue().onInitialized();

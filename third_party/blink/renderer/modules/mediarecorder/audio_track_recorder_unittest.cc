@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -578,15 +579,11 @@ class AudioTrackRecorderTest : public testing::TestWithParam<ATRTestParams> {
     // the PCM encoder, so we can verify the output data later. Do not save it
     // if the recorder is paused.
     if (codec_ == media::AudioCodec::kPCM && !paused_) {
-      std::unique_ptr<media::AudioBus> cache_bus(
-          media::AudioBus::Create(bus->channels(), bus->frames()));
-      bus->CopyTo(cache_bus.get());
-
-      int current_size = first_source_cache_.size();
+      wtf_size_t current_size = first_source_cache_.size();
       first_source_cache_.resize(current_size +
-                                 cache_bus->frames() * cache_bus->channels());
-      cache_bus->ToInterleaved<media::Float32SampleTypeTraits>(
-          cache_bus->frames(), &first_source_cache_[current_size]);
+                                 bus->frames() * bus->channels());
+      bus->ToInterleaved<media::Float32SampleTypeTraits>(
+          base::span(first_source_cache_).subspan(current_size));
     }
 
     return bus;
@@ -720,23 +717,24 @@ class AudioTrackRecorderTest : public testing::TestWithParam<ATRTestParams> {
   void InitializeAacDecoder(int channels, int sample_rate) {
     aac_decoder_ = std::make_unique<media::FFmpegAudioDecoder>(
         scheduler::GetSequencedTaskRunnerForTesting(), &media_log_);
-    media::ChannelLayout channel_layout = media::CHANNEL_LAYOUT_NONE;
+    media::ChannelLayoutConfig channel_layout_config;
     switch (channels) {
       case 1:
-        channel_layout = media::ChannelLayout::CHANNEL_LAYOUT_MONO;
+        channel_layout_config = media::ChannelLayoutConfig::Mono();
         break;
       case 2:
-        channel_layout = media::ChannelLayout::CHANNEL_LAYOUT_STEREO;
+        channel_layout_config = media::ChannelLayoutConfig::Stereo();
         break;
       case 6:
-        channel_layout = media::ChannelLayout::CHANNEL_LAYOUT_5_1_BACK;
+        channel_layout_config = media::ChannelLayoutConfig::FromLayout<
+            media::CHANNEL_LAYOUT_5_1_BACK>();
         break;
       default:
         NOTREACHED();
     }
     media::AudioDecoderConfig config(media::AudioCodec::kAAC,
                                      media::SampleFormat::kSampleFormatS16,
-                                     channel_layout, sample_rate,
+                                     channel_layout_config, sample_rate,
                                      /*extra_data=*/std::vector<uint8_t>(),
                                      media::EncryptionScheme::kUnencrypted);
     EXPECT_CALL(*this, InitCb);
@@ -828,11 +826,10 @@ class AudioTrackRecorderTest : public testing::TestWithParam<ATRTestParams> {
     auto audio_source = std::make_unique<MediaStreamAudioSource>(
         scheduler::GetSingleThreadTaskRunnerForTesting(), true);
     auto* source = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8("dummy_source_id"), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("dummy_source_name"), false /* remote */,
-        std::move(audio_source));
+        "dummy_source_id", MediaStreamSource::kTypeAudio, "dummy_source_name",
+        false /* remote */, std::move(audio_source));
     media_stream_component_ = MakeGarbageCollected<MediaStreamComponentImpl>(
-        String::FromUTF8("audio_track"), source,
+        "audio_track", source,
         std::make_unique<MediaStreamAudioTrack>(/*is_local=*/true));
     CHECK(MediaStreamAudioSource::From(source)->ConnectToInitializedTrack(
         media_stream_component_));

@@ -20,15 +20,17 @@
 #include "base/test/task_environment.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "components/persistent_cache/backend.h"
+#include "components/persistent_cache/client.h"
 #include "components/persistent_cache/mock/mock_backend.h"
 #include "components/persistent_cache/mock/mock_backend_storage_delegate.h"
 #include "components/persistent_cache/pending_backend.h"
 #include "components/persistent_cache/persistent_cache.h"
-#include "components/persistent_cache/sqlite/constants.h"
 #include "components/persistent_cache/sqlite/sqlite_backend_impl.h"
-#include "components/persistent_cache/sqlite/vfs/sqlite_database_vfs_file_set.h"
 #include "components/persistent_cache/test_utils.h"
+#include "components/sqlite_vfs/constants.h"
+#include "components/sqlite_vfs/sqlite_database_vfs_file_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -47,21 +49,21 @@ std::vector<base::FilePath> GetPathsInDir(const base::FilePath& directory) {
 
 namespace persistent_cache {
 
-using base::test::ErrorIs;
-using base::test::HasValue;
-using base::test::ValueIs;
-using testing::_;
-using testing::AnyNumber;
-using testing::Eq;
-using testing::IsEmpty;
-using testing::IsTrue;
-using testing::Ne;
-using testing::Optional;
-using testing::Property;
-using testing::ResultOf;
-using testing::Return;
-using testing::StrEq;
-using testing::UnorderedElementsAre;
+using ::base::test::ErrorIs;
+using ::base::test::HasValue;
+using ::base::test::ValueIs;
+using ::testing::_;
+using ::testing::AnyNumber;
+using ::testing::Eq;
+using ::testing::IsEmpty;
+using ::testing::IsTrue;
+using ::testing::Ne;
+using ::testing::Optional;
+using ::testing::Property;
+using ::testing::ResultOf;
+using ::testing::Return;
+using ::testing::StrEq;
+using ::testing::UnorderedElementsAre;
 
 class PersistentCacheCollectionTest : public testing::Test {
  protected:
@@ -74,23 +76,23 @@ class PersistentCacheCollectionTest : public testing::Test {
 
 // Two operations with the same cache_id operate on the same database.
 TEST_F(PersistentCacheCollectionTest, CreateAndUse) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kTargetFootprint);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kTargetFootprint,
+                                       Client::kTest);
 
   std::string cache_id("cache_id");
-  std::string key("key");
-  EXPECT_THAT(collection.Insert(cache_id, key, base::as_byte_span(key)),
-              HasValue());
+  auto key = base::byte_span_from_cstring("key");
+  EXPECT_THAT(collection.Insert(cache_id, key, key), HasValue());
   ASSERT_THAT(FindEntry(collection, cache_id, key),
-              ValueIs(Optional(ContentEq(base::as_byte_span(key)))));
+              ValueIs(Optional(ContentEq(key))));
 }
 
 TEST_F(PersistentCacheCollectionTest, DeleteAllFiles) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kTargetFootprint);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kTargetFootprint,
+                                       Client::kTest);
 
   std::string cache_id("cache_id");
-  std::string key("key");
-  EXPECT_THAT(collection.Insert(cache_id, key, base::as_byte_span(key)),
-              HasValue());
+  auto key = base::byte_span_from_cstring("key");
+  EXPECT_THAT(collection.Insert(cache_id, key, key), HasValue());
 
   // Inserting an entry should have created at least one file.
   EXPECT_FALSE(base::IsDirectoryEmpty(temp_dir_.GetPath()));
@@ -102,15 +104,16 @@ TEST_F(PersistentCacheCollectionTest, DeleteAllFiles) {
 static constexpr int64_t kOneHundredMiB = 100 * 1024 * 1024;
 
 TEST_F(PersistentCacheCollectionTest, Retrieval) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   constexpr char first_cache_id[] = "first_cache_id";
   constexpr char second_cache_id[] = "second_cache_id";
 
-  constexpr char first_key[] = "first_key";
-  constexpr char second_key[] = "second_key";
+  const auto first_key = base::byte_span_from_cstring("first_key");
+  const auto second_key = base::byte_span_from_cstring("second_key");
 
-  constexpr const char first_content[] = "first_content";
+  const auto first_content = base::byte_span_from_cstring("first_content");
 
   // At first there is nothing in the collection.
   EXPECT_THAT(FindEntry(collection, first_cache_id, first_key),
@@ -124,30 +127,28 @@ TEST_F(PersistentCacheCollectionTest, Retrieval) {
 
   // Inserting for a certain cache id allows retrieval for this id and this id
   // only.
-  EXPECT_THAT(collection.Insert(first_cache_id, first_key,
-                                base::byte_span_from_cstring(first_content)),
+  EXPECT_THAT(collection.Insert(first_cache_id, first_key, first_content),
               HasValue());
   ASSERT_THAT(FindEntry(collection, first_cache_id, first_key),
-              ValueIs(Optional(
-                  ContentEq(base::byte_span_from_cstring(first_content)))));
+              ValueIs(Optional(ContentEq(first_content))));
 
   EXPECT_THAT(FindEntry(collection, second_cache_id, first_key),
               ValueIs(Eq(std::nullopt)));
 }
 
 TEST_F(PersistentCacheCollectionTest, RetrievalAfterClear) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   std::string first_cache_id = "first_cache_id";
-  std::string first_key = "first_key";
-  constexpr const char first_content[] = "first_content";
+  const auto first_key = base::byte_span_from_cstring("first_key");
+  const auto first_content = base::byte_span_from_cstring("first_content");
 
   // Test basic retrieval.
   EXPECT_THAT(FindEntry(collection, first_cache_id, first_key),
               ValueIs(Eq(std::nullopt)));
 
-  EXPECT_THAT(collection.Insert(first_cache_id, first_key,
-                                base::byte_span_from_cstring(first_content)),
+  EXPECT_THAT(collection.Insert(first_cache_id, first_key, first_content),
               HasValue());
 
   EXPECT_THAT(FindEntry(collection, first_cache_id, first_key),
@@ -164,7 +165,8 @@ TEST_F(PersistentCacheCollectionTest, RetrievalAfterClear) {
 TEST_F(PersistentCacheCollectionTest, ContinuousFootPrintReduction) {
   constexpr int64_t kSmallFootprint = 128;
 
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kSmallFootprint);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kSmallFootprint,
+                                       Client::kTest);
 
   int i = 0;
   int64_t added_footprint = 0;
@@ -180,7 +182,8 @@ TEST_F(PersistentCacheCollectionTest, ContinuousFootPrintReduction) {
       int64_t directory_size_before =
           base::ComputeDirectorySize(temp_dir_.GetPath());
 
-      EXPECT_THAT(collection.Insert(number, number, base::as_byte_span(number)),
+      EXPECT_THAT(collection.Insert(number, base::as_byte_span(number),
+                                    base::as_byte_span(number)),
                   HasValue());
 
       int64_t directory_size_after =
@@ -206,13 +209,14 @@ TEST_F(PersistentCacheCollectionTest, ContinuousFootPrintReduction) {
   // should still be available.
   for (int j = 0; j < i - 1; ++j) {
     std::string number = base::NumberToString(j);
-    EXPECT_THAT(FindEntry(collection, number, number),
+    EXPECT_THAT(FindEntry(collection, number, base::as_byte_span(number)),
                 ValueIs(Ne(std::nullopt)));
   }
 
   // Add one more item which should bring things over the limit.
   std::string number = base::NumberToString(i + 1);
-  EXPECT_THAT(collection.Insert(number, number, base::as_byte_span(number)),
+  EXPECT_THAT(collection.Insert(number, base::as_byte_span(number),
+                                base::as_byte_span(number)),
               HasValue());
 
   int64_t directory_size_after =
@@ -226,10 +230,26 @@ TEST_F(PersistentCacheCollectionTest, ContinuousFootPrintReduction) {
 
 TEST_F(PersistentCacheCollectionTest, BaseNameFromCacheId) {
   // Invalid tokens results in empty string and not a crash.
+  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("\x01"),
+            base::FilePath());
+  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("\x80"),
+            base::FilePath());
+
+  // Verify '%' is mapped to '`p'.
+  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("%"),
+            base::FilePath::FromASCII("`p"));
+
+  // Verify '{' is mapped to '`l'.
+  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("{"),
+            base::FilePath::FromASCII("`l"));
+
+  // Verify '}' is mapped to '`r'.
+  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("}"),
+            base::FilePath::FromASCII("`r"));
+
+  // Verify '`' is mapped to '`g'.
   EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("`"),
-            base::FilePath());
-  EXPECT_EQ(PersistentCacheCollection::BaseNameFromCacheId("``"),
-            base::FilePath());
+            base::FilePath::FromASCII("`g"));
 
   // Verify file name is obfuscated.
   std::string cache_id("devs_first_db");
@@ -244,23 +264,24 @@ TEST_F(PersistentCacheCollectionTest, BaseNameFromCacheId) {
 }
 
 TEST_F(PersistentCacheCollectionTest, FullAllowedCharacterSetHandled) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   std::string all_chars_key =
       PersistentCacheCollection::GetAllAllowedCharactersInCacheIds();
-  std::string number("number");
-  EXPECT_THAT(
-      collection.Insert(all_chars_key, number, base::as_byte_span(number)),
-      HasValue());
+  const auto number = base::byte_span_from_cstring("number");
+
+  EXPECT_THAT(collection.Insert(all_chars_key, number, number), HasValue());
   EXPECT_THAT(FindEntry(collection, all_chars_key, number),
               ValueIs(Ne(std::nullopt)));
 }
 
 TEST_F(PersistentCacheCollectionTest, InstancesAbandonnedOnLRUEviction) {
-  static constexpr char kKey[] = "KEY";
+  const auto key = base::byte_span_from_cstring("key");
+
   static constexpr size_t kLruCacheCapacity = 5;
   PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
-                                       kLruCacheCapacity);
+                                       Client::kTest, kLruCacheCapacity);
 
   std::vector<std::unique_ptr<PersistentCache>> caches;
   size_t cache_id = 0;
@@ -273,57 +294,68 @@ TEST_F(PersistentCacheCollectionTest, InstancesAbandonnedOnLRUEviction) {
     ASSERT_OK_AND_ASSIGN(
         auto pending_backend,
         collection.ShareReadWriteConnection(get_increasing_cache_id()));
-    caches.push_back(PersistentCache::Bind(std::move(pending_backend)));
+    ASSERT_OK_AND_ASSIGN(
+        auto cache,
+        PersistentCache::Bind(Client::kTest, std::move(pending_backend)));
+    caches.push_back(std::move(cache));
   }
   ASSERT_NE(caches.front(), nullptr);
 
   // Find succeeds since the instance is not evicted yet.
-  EXPECT_THAT(FindEntry(*caches.front(), kKey), HasValue());
+  EXPECT_THAT(FindEntry(*caches.front(), key), HasValue());
 
   // Create one more cache which goes over the limit.
   ASSERT_OK_AND_ASSIGN(
       auto pending_backend,
       collection.ShareReadWriteConnection(get_increasing_cache_id()));
-  caches.emplace_back(PersistentCache::Bind(std::move(pending_backend)));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache,
+      PersistentCache::Bind(Client::kTest, std::move(pending_backend)));
+  caches.emplace_back(std::move(cache));
 
   // The first cache has now been evicted and is abandoned.
-  EXPECT_THAT(FindEntry(*caches.front(), kKey),
+  EXPECT_THAT(FindEntry(*caches.front(), key),
               ErrorIs(TransactionError::kConnectionError));
 }
 
 TEST_F(PersistentCacheCollectionTest, InstancesAbandonnedOnClear) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   std::string key("key");
   ASSERT_OK_AND_ASSIGN(auto pending_backend,
                        collection.ShareReadWriteConnection(key));
-  auto cache = PersistentCache::Bind(std::move(pending_backend));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache,
+      PersistentCache::Bind(Client::kTest, std::move(pending_backend)));
 
   collection.Clear();
-  EXPECT_THAT(FindEntry(*cache, key),
+  EXPECT_THAT(FindEntry(*cache, base::as_byte_span(key)),
               ErrorIs(TransactionError::kConnectionError));
 }
 
 TEST_F(PersistentCacheCollectionTest, AbandonnedErrorsDoNotCauseDeletions) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   std::string first_cache_id = "first_cache_id";
-  std::string first_key = "first_key";
-  constexpr const char first_content[] = "first_content";
+  const auto first_key = base::byte_span_from_cstring("first_key");
+  const auto first_content = base::byte_span_from_cstring("first_content");
 
-  EXPECT_THAT(collection.Insert(first_cache_id, first_key,
-                                base::byte_span_from_cstring(first_content)),
+  EXPECT_THAT(collection.Insert(first_cache_id, first_key, first_content),
               HasValue());
   EXPECT_THAT(
       GetPathsInDir(temp_dir_.GetPath()),
-      UnorderedElementsAre(
-          Property(&base::FilePath::Extension, StrEq(sqlite::kDbFileExtension)),
-          Property(&base::FilePath::Extension,
-                   StrEq(sqlite::kJournalFileExtension))));
+      UnorderedElementsAre(Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kDbFileExtension)),
+                           Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kJournalFileExtension))));
 
   ASSERT_OK_AND_ASSIGN(auto pending_backend,
                        collection.ShareReadWriteConnection(first_cache_id));
-  auto cache = PersistentCache::Bind(std::move(pending_backend));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache,
+      PersistentCache::Bind(Client::kTest, std::move(pending_backend)));
   EXPECT_EQ(cache->Abandon(), LockState::kNotHeld);
 
   EXPECT_THAT(FindEntry(*cache, first_key),
@@ -334,10 +366,10 @@ TEST_F(PersistentCacheCollectionTest, AbandonnedErrorsDoNotCauseDeletions) {
   // Files are still there.
   EXPECT_THAT(
       GetPathsInDir(temp_dir_.GetPath()),
-      UnorderedElementsAre(
-          Property(&base::FilePath::Extension, StrEq(sqlite::kDbFileExtension)),
-          Property(&base::FilePath::Extension,
-                   StrEq(sqlite::kJournalFileExtension))));
+      UnorderedElementsAre(Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kDbFileExtension)),
+                           Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kJournalFileExtension))));
 }
 
 TEST_F(PersistentCacheCollectionTest, EvictWhileLockedDeletesFiles) {
@@ -354,19 +386,20 @@ TEST_F(PersistentCacheCollectionTest, EvictWhileLockedDeletesFiles) {
   // Return the mock backend from the BackendStorage::Delegate when requested,
   // and remember the cache base name.
   base::FilePath saved_base_name;
-  EXPECT_CALL(*mock_delegate, MakeBackend(temp_dir_.GetPath(), _, false, false))
-      .WillOnce([&](const base::FilePath& directory,
+  EXPECT_CALL(*mock_delegate,
+              MakeBackend(Client::kTest, temp_dir_.GetPath(), _, false, false))
+      .WillOnce([&](Client client, const base::FilePath& directory,
                     const base::FilePath& base_name, bool single_connection,
                     bool journal_mode_wal) {
         saved_base_name = base_name;
-        return (std::move(backend));
+        return base::ok(std::move(backend));
       });
 
   // This call only takes place as a reaction to the reader being left over
   // after abandonment.
   EXPECT_CALL(
       *mock_delegate,
-      DeleteFiles(temp_dir_.GetPath(),
+      DeleteFiles(Client::kTest, temp_dir_.GetPath(),
                   ResultOf(
                       [&saved_base_name](const base::FilePath& base_name) {
                         return base_name == saved_base_name;
@@ -374,7 +407,7 @@ TEST_F(PersistentCacheCollectionTest, EvictWhileLockedDeletesFiles) {
                       IsTrue())));
 
   PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
-                                       std::move(mock_delegate));
+                                       std::move(mock_delegate), Client::kTest);
   std::string first_cache_id = "first_cache_id";
   // `ExportReadWriteBackendParams` called to force the collection to create a
   // `PersistentCache`.
@@ -384,7 +417,8 @@ TEST_F(PersistentCacheCollectionTest, EvictWhileLockedDeletesFiles) {
 
 TEST_F(PersistentCacheCollectionTest,
        BackendStorageCreationAfterDeleteSucceedsWithHeldFiles) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
   std::string first_cache_id = "first_cache_id";
 
   // Files exists after creating a params since `ExportReadWriteBackendParams`
@@ -393,10 +427,10 @@ TEST_F(PersistentCacheCollectionTest,
               Ne(std::nullopt));
   EXPECT_THAT(
       GetPathsInDir(temp_dir_.GetPath()),
-      UnorderedElementsAre(
-          Property(&base::FilePath::Extension, StrEq(sqlite::kDbFileExtension)),
-          Property(&base::FilePath::Extension,
-                   StrEq(sqlite::kJournalFileExtension))));
+      UnorderedElementsAre(Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kDbFileExtension)),
+                           Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kJournalFileExtension))));
 
   // No more files after delete.
   collection.DeleteAllFiles();
@@ -407,28 +441,28 @@ TEST_F(PersistentCacheCollectionTest,
                        collection.ShareReadWriteConnection(first_cache_id));
   EXPECT_THAT(
       GetPathsInDir(temp_dir_.GetPath()),
-      UnorderedElementsAre(
-          Property(&base::FilePath::Extension, StrEq(sqlite::kDbFileExtension)),
-          Property(&base::FilePath::Extension,
-                   StrEq(sqlite::kJournalFileExtension))));
+      UnorderedElementsAre(Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kDbFileExtension)),
+                           Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kJournalFileExtension))));
 }
 
 TEST_F(PersistentCacheCollectionTest, PermanentErrorCausesDeletion) {
-  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB);
+  PersistentCacheCollection collection(temp_dir_.GetPath(), kOneHundredMiB,
+                                       Client::kTest);
 
   std::string first_cache_id = "first_cache_id";
-  std::string first_key = "first_key";
-  static constexpr char first_content[] = "first_content";
+  const auto first_key = base::byte_span_from_cstring("first_key");
+  const auto first_content = base::byte_span_from_cstring("first_content");
 
-  EXPECT_THAT(collection.Insert(first_cache_id, first_key,
-                                base::byte_span_from_cstring(first_content)),
+  EXPECT_THAT(collection.Insert(first_cache_id, first_key, first_content),
               HasValue());
   EXPECT_THAT(
       GetPathsInDir(temp_dir_.GetPath()),
-      UnorderedElementsAre(
-          Property(&base::FilePath::Extension, StrEq(sqlite::kDbFileExtension)),
-          Property(&base::FilePath::Extension,
-                   StrEq(sqlite::kJournalFileExtension))));
+      UnorderedElementsAre(Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kDbFileExtension)),
+                           Property(&base::FilePath::Extension,
+                                    StrEq(sqlite_vfs::kJournalFileExtension))));
 
   // TODO(https://crbug.com/377475540): Instead of triggering an error in a
   // backend specific way PersistentCacheCollection should have a way to inject
@@ -459,18 +493,15 @@ TEST_F(PersistentCacheCollectionTest, PermanentErrorCausesDeletion) {
   EXPECT_THAT(GetPathsInDir(temp_dir_.GetPath()), IsEmpty());
 }
 
-using PersistentCacheCollectionDeathTest = PersistentCacheCollectionTest;
-
-// Tests that trying to operate on a cache in a collection crashes if an
+// Tests that trying to operate on a cache in a collection does not crash if an
 // invalid cache_id is used.
-TEST_F(PersistentCacheCollectionDeathTest, BadKeysCrash) {
-  EXPECT_CHECK_DEATH({
-    // There is no expectation for the return value we can test since death is
-    // expected
-    std::ignore = PersistentCacheCollection(temp_dir_.GetPath(), kOneHundredMiB)
-                      .Insert(std::string("BADKEY"), "key",
-                              base::byte_span_from_cstring("value"));
-  });
+TEST_F(PersistentCacheCollectionTest, BadKeysAreIgnored) {
+  EXPECT_THAT(
+      PersistentCacheCollection(temp_dir_.GetPath(), kOneHundredMiB,
+                                Client::kTest)
+          .Insert(std::string("BADKEY"), base::byte_span_from_cstring("key"),
+                  base::byte_span_from_cstring("value")),
+      ErrorIs(TransactionError::kPermanent));
 }
 
 }  // namespace persistent_cache

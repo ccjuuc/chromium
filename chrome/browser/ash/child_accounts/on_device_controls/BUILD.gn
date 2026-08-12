@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("on_device_controls") {
@@ -41,9 +39,11 @@ static_library("on_device_controls") {
     "//ash/strings:strings_grit",
     "//ash/webui/settings/public/constants:mojom",
     "//base/version_info",
-    "//chrome/browser/notifications",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/system",
+    "//chromeos/ash/experiences/settings_ui",
     "//components/pref_registry",
+    "//components/user_manager",
     "//ui/chromeos",
     "//ui/message_center",
     "//ui/message_center/public/cpp",
@@ -78,11 +78,13 @@ source_set("unit_tests") {
     "//chrome/browser/ash/app_list/arc:test_support",
     "//chrome/browser/ash/child_accounts/apps",
     "//chrome/browser/ui",
+    "//chrome/browser/ui/views/apps/app_dialog",
     "//chrome/test:test_support",
     "//chromeos/ash/components/system",
     "//chromeos/ash/experiences/arc:arc_test_support",
     "//content/test:test_support",
     "//testing/gtest",
     "//ui/aura",
+    "//ui/message_center",
   ]
 }

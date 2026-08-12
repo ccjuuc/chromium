@@ -49,8 +49,6 @@
 namespace {
 
 CreateShortcutConfirmationView* g_dialog_for_testing = nullptr;
-bool g_auto_accept_web_app_for_testing = false;
-bool g_auto_check_open_in_window_for_testing = false;
 const char* g_title_to_use_for_app = nullptr;
 
 bool ShowRadioButtons() {
@@ -195,7 +193,8 @@ CreateShortcutConfirmationView::CreateShortcutConfirmationView(
 
   std::move(builder).BuildChildren();
 
-  if (g_auto_check_open_in_window_for_testing) {
+  if (web_app::GetCreateShortcutDialogCheckStateForTesting() ==  // IN-TEST
+      web_app::CreateShortcutDialogCheckState::kChecked) {
     if (ShowRadioButtons()) {
       open_as_window_radio_->SetChecked(true);
     } else {
@@ -252,10 +251,8 @@ void CreateShortcutConfirmationView::OnAccept() {
             : web_app::mojom::UserDisplayMode::kBrowser;
   }
 
-  if (base::FeatureList::IsEnabled(features::kDisableShortcutsEnableDiy)) {
-    web_app_info_->is_diy_app = true;
-  }
-
+  // Shortcut apps are currently installed as DIY apps as of M133.
+  web_app_info_->is_diy_app = true;
   install_tracker_->ReportResult(webapps::MlInstallUserResponse::kAccepted);
   // Some tests repeatedly create this class, and it's not guaranteed this class
   // is destroyed for subsequent calls. So reset the tracker manually here.
@@ -309,15 +306,15 @@ void ShowCreateShortcutDialog(
 
   g_dialog_for_testing = dialog;
 
-  if (g_auto_accept_web_app_for_testing) {
-    g_dialog_for_testing->Accept();
+  InstallDialogTestResponse auto_response =
+      GetPwaInstallationDialogAutoResponseForTesting();  // IN-TEST
+  if (auto_response != InstallDialogTestResponse::kNone) {
+    if (auto_response == InstallDialogTestResponse::kDeny) {
+      g_dialog_for_testing->Cancel();
+    } else {
+      g_dialog_for_testing->Accept();
+    }
   }
-}
-
-void SetAutoAcceptWebAppDialogForTesting(bool auto_accept,  // IN-TEST
-                                         bool auto_open_in_window) {
-  g_auto_accept_web_app_for_testing = auto_accept;
-  g_auto_check_open_in_window_for_testing = auto_open_in_window;
 }
 
 void SetOverrideTitleForTesting(const char* title_to_use) {

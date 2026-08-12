@@ -20,20 +20,59 @@ namespace internal {
 
 extern const char kHistogramGWSNavigationStartToFinalRequestStart[];
 extern const char kHistogramGWSNavigationStartToFinalResponseStart[];
+extern const char kHistogramGWSFinalRequestStartToFinalResponseStart[];
 extern const char kHistogramGWSNavigationStartToFinalLoaderCallback[];
 extern const char kHistogramGWSNavigationStartToFirstRequestStart[];
 extern const char kHistogramGWSNavigationStartToFirstResponseStart[];
+extern const char kHistogramGWSFirstRequestStartToFirstResponseStart[];
+extern const char kHistogramGWSFirstRequestStartToFinalResponseStart[];
 extern const char kHistogramGWSNavigationStartToFirstLoaderCallback[];
 extern const char kHistogramGWSNavigationStartToOnComplete[];
+extern const char kHistogramGWSAcceptCHFrameReceived[];
+extern const char kHistogramGWSOnConnectedCalled[];
+extern const char kHistogramGWSMaxStreamLimitPendingDelay[];
+extern const char kHistogramGWSFastFetchOpportunityTimeLoaderStart[];
+extern const char kHistogramGWSFastFetchOpportunityTimeFetchStart[];
 
 extern const char kHistogramGWSConnectTimingFirstRequestDomainLookupDelay[];
+extern const char
+    kHistogramGWSConnectTimingFirstRequestDomainLookupDelaySecureDns[];
+extern const char
+    kHistogramGWSConnectTimingFirstRequestDomainLookupDelayInsecureDns[];
+extern const char
+    kHistogramGWSConnectTimingFirstRequestResolutionDetailsTaskCompletionDelay
+        [];
+extern const char
+    kHistogramGWSConnectTimingFirstRequestDohDetailsSessionSource[];
+extern const char
+    kHistogramGWSConnectTimingFirstRequestDohDetailsConnectionInfo[];
 extern const char kHistogramGWSConnectTimingFirstRequestConnectDelay[];
 extern const char kHistogramGWSConnectTimingFirstRequestSslDelay[];
 extern const char kHistogramGWSConnectTimingFinalRequestDomainLookupDelay[];
 extern const char kHistogramGWSConnectTimingFinalRequestConnectDelay[];
 extern const char kHistogramGWSConnectTimingFinalRequestSslDelay[];
 
+extern const char kHistogramGWSInteractionToActualNavigationStart[];
+extern const char kHistogramGWSInteractionToNavigationStart[];
+extern const char kHistogramGWSInteractionToAFTEnd[];
+extern const char kHistogramGWSNavigationStartToNavigationCommitSent[];
+extern const char kHistogramGWSNavigationCommitSentToParseStart[];
+extern const char kHistogramGWSParseStartToFirstContentfulPaint[];
+extern const char kHistogramGWSParseStartToDOMContentLoaded[];
+extern const char kHistogramGWSParseStartToLargestContentfulPaint[];
+
+extern const char kHistogramGWSActualNavigationStartToNavigationStart[];
+extern const char kHistogramGWSActualNavigationStartToNavigationCommitSent[];
+extern const char kHistogramGWSActualNavigationStartToParseStart[];
+extern const char kHistogramGWSActualNavigationStartToFirstContentfulPaint[];
+extern const char kHistogramGWSActualNavigationStartToDOMContentLoaded[];
+extern const char kHistogramGWSActualNavigationStartToLargestContentfulPaint[];
+extern const char kHistogramGWSActualNavigationStartToAFTEnd[];
+extern const char
+    kHistogramGWSActualNavigationStartToAFTEndWithPreNavigationLatency[];
+
 extern const char kHistogramGWSAFTEnd[];
+extern const char kHistogramGWSAFTEndWithPreNavigationLatency[];
 extern const char kHistogramGWSAFTStart[];
 
 extern const char kHistogramGWSFirstContentfulPaint[];
@@ -42,6 +81,7 @@ extern const char kHistogramGWSParseStart[];
 extern const char kHistogramGWSConnectStart[];
 extern const char kHistogramGWSDomainLookupStart[];
 extern const char kHistogramGWSDomainLookupEnd[];
+extern const char kHistogramGWSBeforeUnloadExecutionMode[];
 
 extern const char kHistogramServiceWorkerParseStartSearch[];
 extern const char kHistogramServiceWorkerFirstContentfulPaintSearch[];
@@ -55,14 +95,22 @@ extern const char
 extern const char kHistogramNoServiceWorkerDomContentLoadedSearch[];
 extern const char kHistogramNoServiceWorkerLoadSearch[];
 
+extern const char kTraverseNavigation[];
+extern const char kRestoreNavigation[];
+extern const char kNonRestoreNavigation[];
+extern const char kStartedFromContextMenu[];
+
 extern const char kHistogramPrerenderHostReused[];
-extern const char kHistogramPrerenderPrewarmNavigationStatus[];
+extern const char kHistogramPrerenderPrewarmNavigationStatus2[];
 extern const char kHistogramGWSPrerenderNavigationToActivation[];
 extern const char kHistogramGWSActivationToFirstContentfulPaint[];
 extern const char kHistogramGWSActivationToLargestContentfulPaint[];
+extern const char kHistogramGWSHadPriorPrewarmCommitStatus2[];
+extern const char kHistogramSiteInstanceProcessAssignment2[];
 
 extern const char kHistogramPrerenderSuffix[];
 extern const char kHistogramNonPrerenderSuffix[];
+extern const char kHistogramDuplicateIgnoredSuffix[];
 
 }  // namespace internal
 
@@ -114,6 +162,8 @@ class GWSPageLoadMetricsObserver
   ObservePolicy OnStart(content::NavigationHandle* navigation_handle,
                         const GURL& currently_committed_url,
                         bool started_in_foreground) override;
+  ObservePolicy OnRedirect(
+      content::NavigationHandle* navigation_handle) override;
   ObservePolicy OnCommit(content::NavigationHandle* navigation_handle) override;
 
   ObservePolicy OnPrerenderStart(content::NavigationHandle* navigation_handle,
@@ -158,7 +208,20 @@ class GWSPageLoadMetricsObserver
   }
 
  private:
-  void LogMetricsOnComplete();
+  struct PerformanceMarkTimingHistogramInfo {
+    const char* histogram_name;
+    // We may not have a corresponding field in the class for each
+    // PerformanceMark (i.e. will not need to preserve the mark timing, since we
+    // do not need them for succeeding histograms), hence the `timing_member`
+    // may be std::nullopt.
+    std::optional<std::optional<base::TimeDelta> GWSPageLoadMetricsObserver::*>
+        timing_member;
+  };
+
+  void LogMetricsOnComplete(
+      const page_load_metrics::mojom::PageLoadTiming& main_frame_timing);
+  void LogFontMetrics();
+  void LogFontMetricsAtAFTEnd();
   void RecordNavigationTimingHistograms();
   void RecordLatencyHistograms(base::TimeTicks response_start_time);
   void RecordSessionDetails(
@@ -173,6 +236,13 @@ class GWSPageLoadMetricsObserver
   void RecordConnectionReuseHistograms();
 
   void RecordGWSSessionStateHistograms();
+
+  void RecordAIOHistograms();
+
+  std::optional<PerformanceMarkTimingHistogramInfo> GetMarkNameToTimingInfo(
+      std::string_view mark_name) const;
+  base::TimeDelta AdjustPerformanceMarkTiming(
+      const page_load_metrics::mojom::CustomUserTimingMarkPtr& mark);
 
   virtual bool IsFromNewTabPage(
       content::NavigationHandle* navigation_handle) = 0;
@@ -190,6 +260,20 @@ class GWSPageLoadMetricsObserver
   bool is_prerendered_ = false;
   bool is_header_from_synthetic_response_ = false;
 
+  // NavigationActivation.navigationType is traverse.
+  bool is_traverse_navigation_ = false;
+  // Indicates if it is session restore navigation, a subset of traverse
+  // navigation. Restore navigation might be slower than a regular navigation.
+  bool is_restore_navigation_ = false;
+
+  // Indicates if the navigation was started from the context menu, for checking
+  // the percentage of context menu triggered navigations.
+  bool was_started_from_context_menu_ = false;
+
+  // Indicates if this navigation caused a subsequent duplicate request to be
+  // ignored.
+  bool did_ignore_duplicate_navigation_ = false;
+
   NavigationSourceType source_type_ = kUnknown;
   net::HttpConnectionInfoCoarse http_connection_info_ =
       net::HttpConnectionInfoCoarse::kOTHER;
@@ -200,6 +284,10 @@ class GWSPageLoadMetricsObserver
   std::optional<base::TimeDelta> head_chunk_start_time_;
   std::optional<base::TimeDelta> head_chunk_end_time_;
   std::optional<base::TimeDelta> sgl_time_;
+
+  std::optional<base::TimeDelta> aio_async_start_time_;
+  std::optional<base::TimeDelta> aio_initial_content_time_;
+  std::optional<base::TimeDelta> aio_viewport_end_time_;
 
   int64_t navigation_id_;
 };

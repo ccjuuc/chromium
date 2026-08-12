@@ -36,8 +36,10 @@
 #include "third_party/blink/renderer/core/svg/svg_rect_tear_off.h"
 #include "third_party/blink/renderer/core/svg/svg_svg_element.h"
 #include "third_party/blink/renderer/core/svg/svg_symbol_element.h"
+#include "third_party/blink/renderer/core/svg/svg_zoom_migration.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 
 namespace blink {
@@ -70,14 +72,13 @@ bool HasValidBoundingBoxForContainer(const LayoutObject* object) {
 SVGGraphicsElement::SVGGraphicsElement(const QualifiedName& tag_name,
                                        Document& document,
                                        ConstructionType construction_type)
-    : SVGTransformableElement(tag_name, document, construction_type),
-      SVGTests(this) {}
+    : SVGTransformableElement(tag_name, document, construction_type) {}
 
 SVGGraphicsElement::~SVGGraphicsElement() = default;
 
 void SVGGraphicsElement::Trace(Visitor* visitor) const {
+  visitor->Trace(tests_);
   SVGTransformableElement::Trace(visitor);
-  SVGTests::Trace(visitor);
 }
 
 // TODO : This function performs an upward traversal of the layout tree to check
@@ -118,7 +119,42 @@ AffineTransform SVGGraphicsElement::ComputeCTM(
     if (!svg_element)
       break;
 
-    ctm = svg_element->LocalCoordinateSpaceTransform(mode).PreConcat(ctm);
+    AffineTransform local = svg_element->LocalCoordinateSpaceTransform(mode);
+    if (RuntimeEnabledFeatures::SvgNewZoomEnabled() && mode == kScreenScope) {
+      // TODO(crbug.com/530378493): This per-element un-zoom (and the outermost
+      // SVG special-case below) exists because
+      // SVGSVGElement::LocalCoordinateSpaceTransform() still adjusts for zoom.
+      // It goes away once getScreenCTM() applies the un-zoom in the caller and
+      // that helper returns an unadjusted matrix.
+      // Under SvgNewZoom, descendant LocalCoordinateSpaceTransform()s
+      // contribute translations in zoomed CSS pixels (because
+      // `SVGLength.Value(context)` and transform_helper.cc::ComputeTransform
+      // both fold in EffectiveZoom), while getScreenCTM must return the matrix
+      // in SVG user-space units. We can't just un-zoom the final composed
+      // matrix here because the outermost SVG element contributes a transform
+      // already in absolute screen-pixel coordinates (it combines
+      // LocalToAbsoluteTransform with LocalToBorderBoxTransform) that must not
+      // be un-zoomed, whereas the inner elements must be. So inverse-scale the
+      // inner elements per-element and leave the outermost SVG alone.
+      //
+      // (kNearestViewportScope has no such screen-pixel element, so getCTM()
+      // un-zooms the composed matrix once in the caller. kAncestorScope is used
+      // internally to map zoomed-CSS-pixel layout rects, e.g.
+      // VisualRectInLocalSVGCoordinates, so it keeps the zoom factor baked in.)
+      const auto* outer_svg = DynamicTo<SVGSVGElement>(svg_element);
+      const bool is_outer_svg =
+          outer_svg && outer_svg->IsOutermostSVGSVGElement();
+      if (!is_outer_svg) {
+        if (const ComputedStyle* style = svg_element->GetComputedStyle()) {
+          const float zoom = style->EffectiveZoom();
+          if (zoom != 1.0f) {
+            local.SetE(local.E() / zoom);
+            local.SetF(local.F() / zoom);
+          }
+        }
+      }
+    }
+    ctm = local.PreConcat(ctm);
 
     switch (mode) {
       case kNearestViewportScope:
@@ -141,8 +177,18 @@ SVGMatrixTearOff* SVGGraphicsElement::getCTM() {
   GetDocument().UpdateStyleAndLayoutForNode(this,
                                             DocumentUpdateReason::kJavaScript);
 
-  return MakeGarbageCollected<SVGMatrixTearOff>(
-      ComputeCTM(kNearestViewportScope));
+  AffineTransform ctm = ComputeCTM(kNearestViewportScope);
+  if (RuntimeEnabledFeatures::SvgNewZoomEnabled()) {
+    // ComputeCTM(kNearestViewportScope) composes per-element transforms whose
+    // translations are in zoomed CSS pixels; getCTM must return SVG user-space
+    // units. Every element shares the page zoom and translation composition is
+    // linear in the per-element translations, so un-zooming the composed
+    // translation once is equivalent to un-zooming each element.
+    if (const ComputedStyle* style = GetComputedStyle()) {
+      ctm.Zoom(1 / style->EffectiveZoom());
+    }
+  }
+  return MakeGarbageCollected<SVGMatrixTearOff>(ctm);
 }
 
 SVGMatrixTearOff* SVGGraphicsElement::getScreenCTM() {
@@ -211,7 +257,8 @@ gfx::RectF SVGGraphicsElement::GetBBox() {
     }
   }
 
-  return bbox;
+  return NoopWillBeInvScaleRect(bbox,
+                                layout_object->StyleRef().EffectiveZoom());
 }
 
 SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
@@ -232,17 +279,32 @@ SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
 
 SVGAnimatedPropertyBase* SVGGraphicsElement::PropertyFromAttribute(
     const QualifiedName& attribute_name) const {
-  SVGAnimatedPropertyBase* ret =
-      SVGTests::PropertyFromAttribute(attribute_name);
-  if (ret) {
-    return ret;
+  if (SVGTests::IsKnownAttribute(attribute_name)) {
+    return EnsureSvgTests().PropertyFromAttribute(this, attribute_name);
   }
   return SVGTransformableElement::PropertyFromAttribute(attribute_name);
 }
 
 void SVGGraphicsElement::SynchronizeAllSVGAttributes() const {
-  SVGTests::SynchronizeAllSVGAttributes();
+  if (tests_) {
+    tests_->SynchronizeAllSVGAttributes();
+  }
   SVGTransformableElement::SynchronizeAllSVGAttributes();
+}
+
+SVGStringListTearOff* SVGGraphicsElement::requiredExtensions() {
+  return EnsureSvgTests().requiredExtensions(this);
+}
+
+SVGStringListTearOff* SVGGraphicsElement::systemLanguage() {
+  return EnsureSvgTests().systemLanguage(this);
+}
+
+SVGTests& SVGGraphicsElement::EnsureSvgTests() const {
+  if (!tests_) {
+    tests_ = MakeGarbageCollected<SVGTests>();
+  }
+  return *tests_;
 }
 
 }  // namespace blink

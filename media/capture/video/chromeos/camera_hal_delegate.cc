@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/chromeos/camera_hal_delegate.h"
 
 #include <fcntl.h>
@@ -16,6 +11,8 @@
 #include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -28,6 +25,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
@@ -51,7 +49,7 @@ namespace {
 constexpr int32_t kDefaultFps = 30;
 constexpr char kVirtualPrefix[] = "VIRTUAL_";
 
-const absl::flat_hash_set<int32_t> module_id_set = {
+constexpr auto module_id_set = base::MakeFixedFlatSet<int32_t>({
     static_cast<int32_t>(
         CameraHalDelegate::PopularCamPeriphModuleID::kLifeCamHD3000_Microsoft),
     static_cast<int32_t>(
@@ -85,7 +83,7 @@ const absl::flat_hash_set<int32_t> module_id_set = {
         CameraHalDelegate::PopularCamPeriphModuleID::k808Camera9_Generalplus),
     static_cast<int32_t>(
         CameraHalDelegate::PopularCamPeriphModuleID::kNexiGoN60FHD_2MUVC),
-};
+});
 
 constexpr base::TimeDelta kEventWaitTimeoutSecs = base::Seconds(1);
 
@@ -498,32 +496,31 @@ void CameraHalDelegate::GetSupportedFormats(
   base::flat_set<int32_t> candidate_fps_set =
       GetAvailableFramerates(camera_info);
 
-  const cros::mojom::CameraMetadataEntryPtr* min_frame_durations =
-      GetMetadataEntry(camera_info->static_camera_characteristics,
-                       cros::mojom::CameraMetadataTag::
-                           ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS);
-  if (!min_frame_durations) {
+  auto min_frame_durations = GetMetadataEntryAsSpan<const int64_t>(
+      camera_info->static_camera_characteristics,
+      cros::mojom::CameraMetadataTag::
+          ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS);
+  if (min_frame_durations.empty()) {
     LOG(ERROR)
         << "Failed to get available min frame durations from camera info";
     return;
   }
   // The min frame durations are stored as tuples of four int64s:
   // (hal_pixel_format, width, height, ns) x n
-  const size_t kStreamFormatOffset = 0;
-  const size_t kStreamWidthOffset = 1;
-  const size_t kStreamHeightOffset = 2;
-  const size_t kStreamDurationOffset = 3;
-  const size_t kStreamDurationSize = 4;
-  int64_t* iter =
-      reinterpret_cast<int64_t*>((*min_frame_durations)->data.data());
-  for (size_t i = 0; i < (*min_frame_durations)->count;
-       i += kStreamDurationSize) {
-    auto hal_format =
-        static_cast<cros::mojom::HalPixelFormat>(iter[kStreamFormatOffset]);
-    int32_t width = base::checked_cast<int32_t>(iter[kStreamWidthOffset]);
-    int32_t height = base::checked_cast<int32_t>(iter[kStreamHeightOffset]);
-    int64_t duration = iter[kStreamDurationOffset];
-    iter += kStreamDurationSize;
+  constexpr size_t kStreamFormatOffset = 0;
+  constexpr size_t kStreamWidthOffset = 1;
+  constexpr size_t kStreamHeightOffset = 2;
+  constexpr size_t kStreamDurationOffset = 3;
+  constexpr size_t kStreamDurationSize = 4;
+  while (!min_frame_durations.empty()) {
+    auto frame_duration = min_frame_durations.take_first<kStreamDurationSize>();
+    auto hal_format = static_cast<cros::mojom::HalPixelFormat>(
+        frame_duration[kStreamFormatOffset]);
+    int32_t width = base::checked_cast<int32_t>(
+        frame_duration[kStreamWidthOffset]);
+    int32_t height = base::checked_cast<int32_t>(
+        frame_duration[kStreamHeightOffset]);
+    int64_t duration = frame_duration[kStreamDurationOffset];
 
     if (hal_format == cros::mojom::HalPixelFormat::HAL_PIXEL_FORMAT_BLOB) {
       // Skip BLOB formats and use it only for TakePicture() since it's
@@ -592,15 +589,22 @@ void CameraHalDelegate::GetDevicesInfo(
         continue;
       }
 
-      auto get_vendor_string = [&](const std::string& key) -> const char* {
+      auto get_vendor_string = [&](const std::string& key) -> std::string_view {
         const VendorTagInfo* info =
             vendor_tag_ops_delegate_->GetInfoByName(key);
         if (info == nullptr) {
-          return nullptr;
+          return {};
         }
         auto val = GetMetadataEntryAsSpan<char>(
             camera_info->static_camera_characteristics, info->tag);
-        return val.empty() ? nullptr : val.data();
+        if (val.empty()) {
+          return {};
+        }
+        std::string_view view = base::as_string_view(val);
+        if (view.back() == '\0') {
+          view.remove_suffix(1);
+        }
+        return view;
       };
 
       VideoCaptureDeviceDescriptor desc;
@@ -622,12 +626,13 @@ void CameraHalDelegate::GetDevicesInfo(
 
           // The webcam_private api expects that |device_id| to be set as the
           // corresponding device path for external cameras used in GVC system.
-          auto* path = get_vendor_string("com.google.usb.devicePath");
-          desc.device_id =
-              path != nullptr ? path : base::NumberToString(camera_id);
+          auto path = get_vendor_string("com.google.usb.devicePath");
+          desc.device_id = !path.empty() ? std::string(path)
+                                         : base::NumberToString(camera_id);
 
-          auto* name = get_vendor_string("com.google.usb.modelName");
-          desc.set_display_name(name != nullptr ? name : "External Camera");
+          auto name = get_vendor_string("com.google.usb.modelName");
+          desc.set_display_name(!name.empty() ? std::string(name)
+                                              : "External Camera");
 
           break;
           // Mojo validates the input parameters for us so we don't need to
@@ -640,9 +645,9 @@ void CameraHalDelegate::GetDevicesInfo(
           LOG(ERROR) << "Invalid facing type: " << camera_info->facing;
           break;
       }
-      auto* vid = get_vendor_string("com.google.usb.vendorId");
-      auto* pid = get_vendor_string("com.google.usb.productId");
-      if (vid != nullptr && pid != nullptr) {
+      auto vid = get_vendor_string("com.google.usb.vendorId");
+      auto pid = get_vendor_string("com.google.usb.productId");
+      if (!vid.empty() && !pid.empty()) {
         desc.model_id = base::StrCat({vid, ":", pid});
       }
       desc.set_control_support(GetControlSupport(camera_info));
@@ -986,11 +991,13 @@ void CameraHalDelegate::OnGotCameraInfoOnIpcThread(
 
 int32_t CameraHalDelegate::GetMaskedModuleID(const std::string& module_id) {
   if (module_id.size() == 9) {
-    int vid = strtol(module_id.substr(0, 4).c_str(), nullptr, 16);
-    int pid = strtol(module_id.substr(5, 8).c_str(), nullptr, 16);
-    int decimal_module_id = (vid << 16) + pid;
-    if (base::Contains(module_id_set, decimal_module_id)) {
-      return decimal_module_id;
+    uint32_t vid, pid;
+    if (base::HexStringToUInt(module_id.substr(0, 4), &vid) &&
+        base::HexStringToUInt(module_id.substr(5, 4), &pid)) {
+      int32_t decimal_module_id = static_cast<int32_t>((vid << 16) + pid);
+      if (module_id_set.contains(decimal_module_id)) {
+        return decimal_module_id;
+      }
     }
   }
   return static_cast<int32_t>(PopularCamPeriphModuleID::kOthers);

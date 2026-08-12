@@ -27,8 +27,8 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
 }  // namespace
 
 // Implements BubbleViewDelegate to handle BubbleView's close button tap.
-@interface BubbleViewControllerPresenter () <UIGestureRecognizerDelegate,
-                                             BubbleViewDelegate>
+@interface BubbleViewControllerPresenter () <BubbleViewDelegate,
+                                             UIGestureRecognizerDelegate>
 
 // The underlying BubbleViewController managed by this object.
 // `bubbleViewController` manages the BubbleView instance.
@@ -101,6 +101,9 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
 @synthesize alignment = _alignment;
 @synthesize dismissalCallback = _dismissalCallback;
 @synthesize voiceOverAnnouncement = _voiceOverAnnouncement;
+@synthesize dismissalTimerDisabled = _dismissalTimerDisabled;
+@synthesize totalPageControlPages = _totalPageControlPages;
+@synthesize customNextButtonTitle = _customNextButtonTitle;
 
 - (instancetype)initWithText:(NSString*)text
                        title:(NSString*)titleString
@@ -110,8 +113,52 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
              pageControlPage:(BubblePageControlPage)page
            dismissalCallback:
                (CallbackWithIPHDismissalReasonType)dismissalCallback {
+  return [self initWithText:text
+                      title:titleString
+             arrowDirection:arrowDirection
+                  alignment:alignment
+                 bubbleType:type
+            pageControlPage:page
+      totalPageControlPages:BubblePageControlPageFourth
+      customNextButtonTitle:nil
+          dismissalCallback:dismissalCallback];
+}
+
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)arrowDirection
+                   alignment:(BubbleAlignment)alignment
+                  bubbleType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+           dismissalCallback:
+               (CallbackWithIPHDismissalReasonType)dismissalCallback {
+  return [self initWithText:text
+                      title:titleString
+             arrowDirection:arrowDirection
+                  alignment:alignment
+                 bubbleType:type
+            pageControlPage:page
+      totalPageControlPages:BubblePageControlPageFourth
+      customNextButtonTitle:customNextButtonTitle
+          dismissalCallback:dismissalCallback];
+}
+
+- (instancetype)initWithText:(NSString*)text
+                       title:(NSString*)titleString
+              arrowDirection:(BubbleArrowDirection)arrowDirection
+                   alignment:(BubbleAlignment)alignment
+                  bubbleType:(BubbleViewType)type
+             pageControlPage:(BubblePageControlPage)page
+       totalPageControlPages:(NSInteger)totalPageControlPages
+       customNextButtonTitle:(NSString*)customNextButtonTitle
+           dismissalCallback:
+               (CallbackWithIPHDismissalReasonType)dismissalCallback {
   self = [super init];
   if (self) {
+    BOOL hasCustomPages = totalPageControlPages > 0;
+    _totalPageControlPages =
+        hasCustomPages ? totalPageControlPages : BubblePageControlPageFourth;
     _bubbleViewController =
         [[BubbleViewController alloc] initWithText:text
                                              title:titleString
@@ -119,7 +166,10 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
                                          alignment:alignment
                                     bubbleViewType:type
                                    pageControlPage:page
+                             totalPageControlPages:_totalPageControlPages
+                             customNextButtonTitle:customNextButtonTitle
                                           delegate:self];
+    _customNextButtonTitle = [customNextButtonTitle copy];
     _userEngaged = NO;
     _triggerFollowUpAction = NO;
     _ignoreWebContentAreaInteractions = NO;
@@ -133,6 +183,18 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
     // appears on screen.
   }
   return self;
+}
+
+- (void)setTotalPageControlPages:(NSInteger)totalPageControlPages {
+  BOOL hasCustomPages = totalPageControlPages > 0;
+  _totalPageControlPages =
+      hasCustomPages ? totalPageControlPages : BubblePageControlPageFourth;
+  _bubbleViewController.totalPageControlPages = totalPageControlPages;
+}
+
+- (void)setCustomNextButtonTitle:(NSString*)customNextButtonTitle {
+  _customNextButtonTitle = customNextButtonTitle;
+  _bubbleViewController.customNextButtonTitle = customNextButtonTitle;
 }
 
 - (instancetype)initDefaultBubbleWithText:(NSString*)text
@@ -228,6 +290,16 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
   }
 
   [self.bubbleViewController setArrowHidden:hidden animated:animated];
+}
+
+- (void)setMaximumContentSizeCategory:
+    (UIContentSizeCategory)maximumContentSizeCategory {
+  self.bubbleViewController.maximumContentSizeCategory =
+      maximumContentSizeCategory;
+}
+
+- (UIContentSizeCategory)maximumContentSizeCategory {
+  return self.bubbleViewController.maximumContentSizeCategory;
 }
 
 - (void)dismissAnimated:(BOOL)animated reason:(IPHDismissalReasonType)reason {
@@ -334,16 +406,22 @@ const CGFloat kVoiceOverAnnouncementDelay = 1;
   [self dismissAnimated:YES reason:IPHDismissalReasonType::kTappedClose];
 }
 
+- (void)didTapNextButton {
+  [self dismissAnimated:YES reason:IPHDismissalReasonType::kTappedNext];
+}
+
 #pragma mark - Private
 
 // Set up a timer that dismisses the bubble view.
 - (void)setUpDismissalTimer {
-  self.bubbleDismissalTimer = [NSTimer
-      scheduledTimerWithTimeInterval:[self bubbleVisibilityDuration]
-                              target:self
-                            selector:@selector(bubbleDismissalTimerFired:)
-                            userInfo:nil
-                             repeats:NO];
+  if (!self.dismissalTimerDisabled) {
+    self.bubbleDismissalTimer = [NSTimer
+        scheduledTimerWithTimeInterval:[self bubbleVisibilityDuration]
+                                target:self
+                              selector:@selector(bubbleDismissalTimerFired:)
+                              userInfo:nil
+                               repeats:NO];
+  }
 
   self.userEngaged = YES;
   self.triggerFollowUpAction = YES;

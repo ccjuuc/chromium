@@ -4,6 +4,7 @@
 
 #include "ash/quick_insert/views/quick_insert_view.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,7 +45,7 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -266,10 +267,10 @@ ui::ImageModel GetNoResultsFoundIllustration() {
 
 bool IsEditorAvailable(
     base::span<const QuickInsertCategory> available_categories) {
-  return base::Contains(available_categories,
-                        QuickInsertCategory::kEditorWrite) ||
-         base::Contains(available_categories,
-                        QuickInsertCategory::kEditorRewrite);
+  return std::ranges::contains(available_categories,
+                               QuickInsertCategory::kEditorWrite) ||
+         std::ranges::contains(available_categories,
+                               QuickInsertCategory::kEditorRewrite);
 }
 
 }  // namespace
@@ -299,10 +300,10 @@ QuickInsertView::QuickInsertView(QuickInsertViewDelegate* delegate,
       /*between_child_spacing=*/kVerticalPaddingBetweenQuickInsertContainers));
 
   AddMainContainerView(layout_type);
-  if (base::Contains(delegate_->GetAvailableCategories(),
-                     QuickInsertCategory::kEmojisGifs) ||
-      base::Contains(delegate_->GetAvailableCategories(),
-                     QuickInsertCategory::kEmojis)) {
+  if (std::ranges::contains(delegate_->GetAvailableCategories(),
+                            QuickInsertCategory::kEmojisGifs) ||
+      std::ranges::contains(delegate_->GetAvailableCategories(),
+                            QuickInsertCategory::kEmojis)) {
     AddEmojiBarView();
   }
 

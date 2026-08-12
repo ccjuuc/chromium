@@ -6,16 +6,19 @@
 
 #include <utility>
 
+#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_service.h"
 #include "chrome/browser/apps/app_service/metrics/website_metrics.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
@@ -49,7 +52,10 @@ void WebsiteMetricsBrowserTestMixin::SetUpOnMainThread() {
   app_platform_metrics_service_ =
       app_service_proxy->AppPlatformMetricsService();
   if (!app_platform_metrics_service_) {
-    auto metrics_service = std::make_unique<AppPlatformMetricsService>(profile);
+    auto metrics_service = std::make_unique<AppPlatformMetricsService>(
+        profile, base::DefaultClock::GetInstance(),
+        base::DefaultTickClock::GetInstance(),
+        base::SequencedTaskRunner::GetCurrentDefault());
     app_platform_metrics_service_ = metrics_service.get();
     app_service_proxy->SetAppPlatformMetricsServiceForTesting(
         std::move(metrics_service));
@@ -64,13 +70,14 @@ Browser* WebsiteMetricsBrowserTestMixin::CreateBrowser() {
   DCHECK_CURRENTLY_ON(::content::BrowserThread::UI);
   auto* const profile = ProfileManager::GetPrimaryUserProfile();
   CHECK(profile);
-  Browser::CreateParams params(profile, /*user_gesture=*/true);
+  BrowserWindowCreateParams params(profile, /*from_user_gesture=*/true);
 
   // Create a new browser instance. The subsequent `BrowserWindow` that was
   // created as part of this instantiation will own the browser instance.
-  Browser* const browser = Browser::Create(params);
-  browser->window()->Show();
-  auto* const window = browser->window()->GetNativeWindow();
+  Browser* const browser =
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly();
+  browser->GetWindow()->Show();
+  auto* const window = browser->GetWindow()->GetNativeWindow();
   wm::GetActivationClient(window->GetRootWindow())->ActivateWindow(window);
   return browser;
 }
@@ -84,7 +91,8 @@ Browser* WebsiteMetricsBrowserTestMixin::CreateBrowser() {
   params.disposition = disposition;
   Navigate(&params);
   auto* const contents = params.navigated_or_inserted_contents.get();
-  CHECK_EQ(::chrome::FindBrowserWithTab(params.navigated_or_inserted_contents),
+  CHECK_EQ(GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+               params.navigated_or_inserted_contents),
            browser);
   ::content::TestNavigationObserver observer(contents);
   observer.Wait();

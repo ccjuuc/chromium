@@ -13,15 +13,17 @@ import org.junit.runner.RunWith;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppSpeed;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.components.payments.Event2;
 import org.chromium.components.payments.PaymentFeatureList;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.concurrent.TimeoutException;
 
@@ -36,6 +38,7 @@ import java.util.concurrent.TimeoutException;
     // Speed up the test by not looking up actual apps installed on the device.
     "disable-features=" + PaymentFeatureList.SERVICE_WORKER_PAYMENT_APPS,
 })
+@DisableIf.Device(DeviceFormFactor.DESKTOP) // https://crbug.com/376100658
 public class PaymentRequestPaymentAppUiSkipPreloadTest {
     @Rule
     public PaymentRequestTestRule mPaymentRequestTestRule =

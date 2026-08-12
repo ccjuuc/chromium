@@ -13,15 +13,14 @@
 #include "chrome/browser/sharing/sms/sms_remote_fetcher_metrics.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/sharing_message/sharing_constants.h"
 #include "components/sharing_message/sharing_dialog.h"
 #include "components/sharing_message/sharing_target_device_info.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/sms_fetcher.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/sms/webotp_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/strings/grit/ui_strings.h"
 
@@ -43,9 +42,9 @@ SmsRemoteFetcherUiController::SmsRemoteFetcherUiController(
 
 SmsRemoteFetcherUiController::~SmsRemoteFetcherUiController() = default;
 
-sync_pb::SharingSpecificFields::EnabledFeatures
+syncer::DeviceInfo::SharingFeature
 SmsRemoteFetcherUiController::GetRequiredFeature() const {
-  return sync_pb::SharingSpecificFields::SMS_FETCHER;
+  return syncer::DeviceInfo::SharingFeature::kSmsFetcher;
 }
 
 void SmsRemoteFetcherUiController::DoUpdateApps(UpdateAppsCallback callback) {
@@ -62,7 +61,8 @@ std::u16string SmsRemoteFetcherUiController::GetContentType() const {
 }
 
 const gfx::VectorIcon& SmsRemoteFetcherUiController::GetVectorIcon() const {
-  return kSmartphoneRefreshIcon;
+  return features::IsRoundedIconsEnabled() ? kMobileIcon
+                                           : kSmartphoneRefreshOldIcon;
 }
 
 bool SmsRemoteFetcherUiController::ShouldShowLoadingIcon() const {

@@ -36,19 +36,18 @@ class AnnotationsTextManagerImpl : public AnnotationsTextManager,
                            int seq_id) override;
   void RemoveDecorations() override;
   void RemoveDecorationsWithType(const std::string& type) override;
-  void RemoveHighlight() override;
   void SetSupportedTypes(NSTextCheckingType supported_types) override;
 
   // JS callback methods.
   void OnTextExtracted(WebState* web_state,
                        const std::string& text,
                        int seq_id,
-                       const base::Value::Dict& metadata);
+                       const base::DictValue& metadata);
   void OnDecorated(WebState* web_state,
                    int annotations,
                    int successes,
                    int failures,
-                   const base::Value::List& cancelled);
+                   const base::ListValue& cancelled);
   void OnClick(WebState* web_state,
                const std::string& text,
                CGRect rect,

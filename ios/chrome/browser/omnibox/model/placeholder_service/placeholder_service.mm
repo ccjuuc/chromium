@@ -8,10 +8,12 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/omnibox/common/omnibox_features.h"
+#import "components/search/search.h"
 #import "components/search_engines/template_url.h"
 #import "components/search_engines/template_url_service.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -55,7 +57,7 @@ void PlaceholderService::FetchDefaultSearchEngineIcon(
 
   // Return the placeholder icon if there is no default search provider.
   UIImage* placeholder_icon =
-      DefaultSymbolWithPointSize(kSearchSymbol, icon_point_size);
+      SymbolWithPointSize(SymbolSearch, icon_point_size);
   const TemplateURL* default_provider =
       template_url_service_ ? template_url_service_->GetDefaultSearchProvider()
                             : nullptr;
@@ -97,7 +99,7 @@ UIImage* PlaceholderService::GetDefaultSearchEngineIcon(
 
   // Return the placeholder icon if there is no default search provider.
   UIImage* placeholder_icon =
-      DefaultSymbolWithPointSize(kSearchSymbol, icon_point_size);
+      SymbolWithPointSize(SymbolSearch, icon_point_size);
   const TemplateURL* default_provider =
       template_url_service_ ? template_url_service_->GetDefaultSearchProvider()
                             : nullptr;
@@ -113,16 +115,18 @@ UIImage* PlaceholderService::GetDefaultSearchEngineIcon(
 }
 
 NSString* PlaceholderService::GetCurrentPlaceholderText() {
-  if (!base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdate)) {
-    return l10n_util::GetNSString(IDS_OMNIBOX_EMPTY_HINT);
-  }
-
   CHECK(template_url_service_);
 
   std::u16string provider_name = u"";
   if (const TemplateURL* search_provider =
           template_url_service_->GetDefaultSearchProvider()) {
-    provider_name = search_provider->short_name();
+    provider_name = search_provider->AdjustedShortNameForLocaleDirection();
+  }
+
+  if (IsAIOmniboxAskPlaceholderEnabled() &&
+      search::DefaultSearchProviderIsGoogle(template_url_service_)) {
+    return l10n_util::GetNSStringF(IDS_OMNIBOX_EMPTY_ASK_HINT_WITH_DSE_NAME,
+                                   provider_name);
   }
 
   return l10n_util::GetNSStringF(IDS_OMNIBOX_EMPTY_HINT_WITH_DSE_NAME,
@@ -184,7 +188,7 @@ UIImage* PlaceholderService::GetBundledIconForTemplateURL(
       SEARCH_ENGINE_GOOGLE) {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     return MakeSymbolMulticolor(
-        CustomSymbolWithPointSize(kGoogleIconSymbol, icon_point_size));
+        SymbolWithPointSize(SymbolGoogleIcon, icon_point_size));
 #endif
   }
   return nil;

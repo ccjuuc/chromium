@@ -6,8 +6,10 @@
 
 #include "base/files/file_path.h"
 #include "base/json/json_writer.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "crypto/sha2.h"
 
@@ -25,9 +27,9 @@ std::string SettingValueToString(
   }
 }
 
-base::Value::List RepeatedFieldptrToList(
+base::ListValue RepeatedFieldptrToList(
     const google::protobuf::RepeatedPtrField<std::string>& field_values) {
-  base::Value::List string_list;
+  base::ListValue string_list;
   for (auto field_value : field_values) {
     string_list.Append(field_value);
   }
@@ -36,9 +38,9 @@ base::Value::List RepeatedFieldptrToList(
 }
 
 #if BUILDFLAG(IS_WIN)
-base::Value::Dict AvProductToDict(
+base::DictValue AvProductToDict(
     enterprise_management::AntiVirusProduct av_product) {
-  base::Value::Dict antivirus_dict;
+  base::DictValue antivirus_dict;
   switch (av_product.state()) {
     case enterprise_management::AntiVirusProduct::ON:
       antivirus_dict.Set("state", "On");
@@ -62,6 +64,18 @@ base::Value::Dict AvProductToDict(
 }  // namespace
 
 namespace enterprise_reporting {
+
+// Retry starts with 2 minute delay and is doubled with every failure.
+const net::BackoffEntry::Policy kDefaultReportUploadBackoffPolicy = {
+    0,  // Number of initial errors to ignore before applying
+        // exponential back-off rules.
+    base::Minutes(2).InMilliseconds(),  // Initial delay
+    2,     // Factor by which the waiting time will be multiplied.
+    0.1,   // Fuzzing percentage.
+    -1,    // No maximum delay.
+    -1,    // It's up to the caller to reset the backoff time.
+    false  // Do not always use initial delay.
+};
 
 namespace em = enterprise_management;
 
@@ -151,7 +165,7 @@ std::unique_ptr<em::AntiVirusProduct> TranslateAvProduct(
 
 std::string GetSecuritySignalsInReport(
     const em::ChromeProfileReportRequest& chrome_profile_report_request) {
-  base::Value::Dict signals_dict;
+  base::DictValue signals_dict;
   std::string signals_json;
   signals_dict.Set("Error", "No error found in report");
 
@@ -191,7 +205,7 @@ std::string GetSecuritySignalsInReport(
                      os_report.windows_machine_domain());
     signals_dict.Set("windows_user_domain", os_report.windows_user_domain());
 
-    base::Value::List anti_virus_list;
+    base::ListValue anti_virus_list;
     for (auto antivirus_info : os_report.antivirus_info()) {
       anti_virus_list.Append(AvProductToDict(antivirus_info));
     }
@@ -215,8 +229,8 @@ std::string GetSecuritySignalsInReport(
   }
 
   if (!chrome_profile_report_request.has_browser_report()) {
-    base::JSONWriter::WriteWithOptions(
-        signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
+    base::JSONWriter::WriteWithOptions(signals_dict, /*options=*/0,
+                                       &signals_json);
     return signals_json;
   }
 
@@ -224,8 +238,8 @@ std::string GetSecuritySignalsInReport(
   signals_dict.Set("browser_version", browser_report.browser_version());
 
   if (browser_report.chrome_user_profile_infos_size() != 1) {
-    base::JSONWriter::WriteWithOptions(
-        signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
+    base::JSONWriter::WriteWithOptions(signals_dict, /*options=*/0,
+                                       &signals_json);
     return signals_json;
   }
 
@@ -273,6 +287,11 @@ std::string GetSecuritySignalsInReport(
                      RepeatedFieldptrToList(
                          profile_signals_report.security_event_providers()));
 
+    signals_dict.Set("certificates_count",
+                     chrome_user_profile_info.certificates_size());
+    signals_dict.Set("certificates_were_truncated",
+                     chrome_user_profile_info.certificates_were_truncated());
+
     if (chrome_profile_report_request.has_attestation_payload()) {
       auto attestation_payload =
           chrome_profile_report_request.attestation_payload();
@@ -290,6 +309,17 @@ std::string GetSecuritySignalsInReport(
       signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
 
   return signals_json;
+}
+
+
+int GetCurrentContentBindingsVersion() {
+  return 1;
+}
+
+void RecordReportGenerationErrorMetric(ReportGenerationError error) {
+  static constexpr char kReportGenerationErrorMetricsName[] =
+      "Enterprise.CloudReportingReportGenerationError";
+  base::UmaHistogramEnumeration(kReportGenerationErrorMetricsName, error);
 }
 
 }  // namespace enterprise_reporting

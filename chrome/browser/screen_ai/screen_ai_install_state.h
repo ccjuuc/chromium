@@ -34,6 +34,7 @@ class ScreenAIInstallState {
    public:
     virtual void StateChanged(State state) {}
     virtual void DownloadProgressChanged(double progress) {}
+    virtual void OnScreenAIInstallStateDestroying() {}
   };
 
   ScreenAIInstallState();
@@ -52,6 +53,9 @@ class ScreenAIInstallState {
   // version. Will be used to avoid accepting the library if a newer version is
   // expected.
   static bool VerifyLibraryVersion(const base::Version& version);
+
+  // Returns true if the device is compatible with ScreenAI requirements.
+  static bool IsDeviceCompatible();
 
   // Returns true if the library is used recently and we need to keep it on
   // device and updated.

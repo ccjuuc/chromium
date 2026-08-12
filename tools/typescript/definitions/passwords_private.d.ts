@@ -48,6 +48,16 @@ declare global {
         OTHER_ERROR = 'OTHER_ERROR',
       }
 
+      export enum PasswordManagerActionableError {
+        NO_ERROR = 'NO_ERROR',
+        INACTIONABLE = 'INACTIONABLE',
+        INACTIONABLE_TEMPORARY_ERROR = 'INACTIONABLE_TEMPORARY_ERROR',
+        SIGN_IN_NEEDED = 'SIGN_IN_NEEDED',
+        KEYCHAIN_ERROR = 'KEYCHAIN_ERROR',
+        TRUSTED_VAULT_KEY_NEEDED = 'TRUSTED_VAULT_KEY_NEEDED',
+        NEEDS_PASSPHRASE = 'NEEDS_PASSPHRASE',
+      }
+
       export enum ImportResultsStatus {
         UNKNOWN_ERROR = 'UNKNOWN_ERROR',
         SUCCESS = 'SUCCESS',
@@ -152,6 +162,7 @@ declare global {
         storedIn: PasswordStoreSet;
         note?: string;
         changePasswordUrl?: string;
+        isAutomaticPasswordChangeSupported?: boolean;
         compromisedInfo?: CompromisedInfo;
         creationTime?: number;
         hidden: boolean;
@@ -220,9 +231,6 @@ declare global {
       export function exportPasswords(): Promise<void>;
       export function requestExportProgressStatus():
           Promise<ExportProgressStatus>;
-      export function isAccountStorageEnabled(): Promise<boolean>;
-      export function setAccountStorageEnabled(enabled: boolean): void;
-      export function shouldShowAccountStorageSettingToggle(): Promise<boolean>;
       export function getInsecureCredentials(): Promise<PasswordUiEntry[]>;
       export function getCredentialsWithReusedPassword():
           Promise<PasswordUiEntryList[]>;
@@ -235,15 +243,9 @@ declare global {
       export function getUrlCollection(url: string):
           Promise<UrlCollection|null>;
       export function addPassword(options: AddPasswordOptions): Promise<void>;
-      export function extendAuthValidity(): Promise<void>;
-      export function switchBiometricAuthBeforeFillingState(): Promise<boolean>;
-      export function showAddShortcutDialog(): void;
       export function showExportedFileInShell(filePath: string): void;
-      export function changePasswordManagerPin(): Promise<boolean>;
-      export function isPasswordManagerPinAvailable(): Promise<boolean>;
       export function disconnectCloudAuthenticator(): Promise<boolean>;
       export function isConnectedToCloudAuthenticator(): Promise<boolean>;
-      export function deleteAllPasswordManagerData(): Promise<boolean>;
 
       export const onSavedPasswordsListChanged:
           ChromeEvent<(entries: PasswordUiEntry[]) => void>;
@@ -251,8 +253,8 @@ declare global {
           ChromeEvent<(entries: ExceptionEntry[]) => void>;
       export const onPasswordsFileExportProgress:
           ChromeEvent<(progress: PasswordExportProgress) => void>;
-      export const onAccountStorageEnabledStateChanged:
-          ChromeEvent<(enabledState: boolean) => void>;
+      export const onAccountStorageActiveStateChanged:
+          ChromeEvent<(activeState: boolean) => void>;
       export const onShouldShowAccountStorageSettingToggleChanged:
           ChromeEvent<(show: boolean) => void>;
       export const onInsecureCredentialsChanged:
@@ -261,6 +263,8 @@ declare global {
           ChromeEvent<(status: PasswordCheckStatus) => void>;
       export const onPasswordManagerAuthTimeout:
           ChromeEvent<() => void>;
+      export const onPasswordManagerActionableErrorChanged:
+          ChromeEvent<(error: PasswordManagerActionableError) => void>;
     }
   }
 }

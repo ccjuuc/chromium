@@ -10,6 +10,7 @@
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
@@ -27,6 +28,7 @@
 #include "third_party/skia/include/core/SkSurfaceProps.h"
 #include "third_party/skia/include/core/SkTextureCompressionType.h"
 #include "third_party/skia/include/gpu/GpuTypes.h"
+#include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
 
@@ -117,25 +119,14 @@ class WrappedSkImageBacking::SkiaImageRepresentationImpl
 WrappedSkImageBacking::WrappedSkImageBacking(
     base::PassKey<WrappedSkImageBackingFactory>,
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    gpu::SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     scoped_refptr<SharedContextState> context_state,
     const bool thread_safe)
-    : ClearTrackingSharedImageBacking(mailbox,
-                                      format,
-                                      size,
-                                      color_space,
-                                      surface_origin,
-                                      alpha_type,
-                                      usage,
-                                      std::move(debug_label),
-                                      format.EstimatedSizeInBytes(size),
-                                      thread_safe),
+    : ClearTrackingSharedImageBacking(
+          mailbox,
+          si_info,
+          si_info.format.EstimatedSizeInBytes(si_info.size),
+          thread_safe),
       context_state_(std::move(context_state)) {
   DCHECK(!!context_state_);
 
@@ -356,6 +347,35 @@ bool WrappedSkImageBacking::UploadFromMemory(
   }
 
   return updated;
+}
+
+bool WrappedSkImageBacking::ReadbackToMemory(
+    const std::vector<SkPixmap>& pixmaps) {
+  DCHECK_EQ(pixmaps.size(), textures_.size());
+
+  if (context_state_->context_lost()) {
+    return false;
+  }
+
+  DCHECK(context_state_->IsCurrent(nullptr));
+
+  bool read = true;
+  for (size_t i = 0; i < textures_.size(); ++i) {
+    auto sk_image = SkImages::BorrowTextureFrom(
+        context_state_->gr_context(), textures_[i].backend_texture,
+        surface_origin(), GetSkColorType(i), alpha_type(),
+        color_space().ToSkColorSpace());
+    if (!sk_image) {
+      read = false;
+      break;
+    }
+    if (!sk_image->readPixels(context_state_->gr_context(), pixmaps[i], 0, 0)) {
+      read = false;
+      break;
+    }
+  }
+
+  return read;
 }
 
 std::vector<sk_sp<GrPromiseImageTexture>>

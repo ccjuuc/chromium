@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {KeepAlive} from '/common/keep_alive.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
+import {ExtensionUtil} from '/common/extension_util.js';
 
 import {OffscreenCommand, ServiceWorkerCommand} from './commands.js';
 
@@ -41,6 +43,7 @@ export class EnhancedNetworkTts {
   private offscreenReadyPromise_: Promise<void>|null = null;
 
   constructor() {
+    KeepAlive.init();
     this.processingQueue_ = [];
     this.api_ = null;
 
@@ -91,13 +94,17 @@ export class EnhancedNetworkTts {
         readyResolver = resolve;
       });
 
-      chrome.runtime.onMessage.addListener((message: any) => {
-        if (message.command === ServiceWorkerCommand.READY) {
-          readyResolver();
-        }
-        // Returns false because no callbacks need to be kept alive.
-        return false;
-      });
+      chrome.runtime.onMessage.addListener(
+          (message: any, sender: chrome.runtime.MessageSender) => {
+            if (!ExtensionUtil.isValidSender(sender)) {
+              return false;
+            }
+            if (message.command === ServiceWorkerCommand.READY) {
+              readyResolver();
+            }
+            // Returns false because no callbacks need to be kept alive.
+            return false;
+          });
 
       await chrome.offscreen.createDocument({
         url: offscreenUrl,

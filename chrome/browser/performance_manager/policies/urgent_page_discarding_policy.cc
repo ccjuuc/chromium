@@ -7,9 +7,12 @@
 #include <memory>
 
 #include "base/feature_list.h"
+#include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/time/time.h"
 #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
 #include "chrome/browser/performance_manager/policies/policy_features.h"
+#include "components/performance_manager/public/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
@@ -26,7 +29,7 @@ bool g_disabled_for_testing = false;
 
 #if BUILDFLAG(IS_CHROMEOS)
 std::optional<memory_pressure::ReclaimTarget> GetReclaimTarget() {
-  std::optional<memory_pressure::ReclaimTarget> reclaim_target = std::nullopt;
+  std::optional<memory_pressure::ReclaimTarget> reclaim_target;
   auto* evaluator = ash::memory::SystemMemoryPressureEvaluator::Get();
   if (evaluator) {
     reclaim_target = evaluator->GetCachedReclaimTarget();
@@ -34,6 +37,18 @@ std::optional<memory_pressure::ReclaimTarget> GetReclaimTarget() {
   return reclaim_target;
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+constexpr base::MemoryConsumerTraits kUrgentPageDiscardingPolicyTraits(
+    // Discarding a tab's process typically frees hundreds of MBs to GBs.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kLarge,
+    // Freeing is done at the OS level, requiring no browser-side traversal.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kFreesPagesWithoutTraversal,
+    // Discarding a tab results in the loss of user-visible state.
+    base::MemoryConsumerTraits::InformationRetention::kLossy,
+    // Teardown involves asynchronous IPCs and OS-level process termination.
+    base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
+    // Does not maintain a lasting limit; discards on-demand when notified.
+    base::MemoryConsumerTraits::IsStateful::kNo);
 
 }  // namespace
 
@@ -44,17 +59,31 @@ UrgentPageDiscardingPolicy::UrgentPageDiscardingPolicy()
           base::BindRepeating(
               &UrgentPageDiscardingPolicy::HandleMemoryPressureEvent,
               base::Unretained(this))) {
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(
+          performance_manager::features::kDiscardOnCommitLimit)) {
+    monitor_ = base::AvailableMemoryMonitor::Get();
+  }
+#endif
+
   if (base::FeatureList::IsEnabled(features::kSustainedPMUrgentDiscarding)) {
     sustained_memory_pressure_evaluator_.emplace(base::BindRepeating(
         &UrgentPageDiscardingPolicy::OnSustainedMemoryPressure,
         base::Unretained(this)));
   } else {
-    memory_pressure_listener_registration_.emplace(
-        FROM_HERE, base::MemoryPressureListenerTag::kUrgentPageDiscardingPolicy,
-        this);
+    memory_consumer_registration_.emplace(
+        "UrgentPageDiscardingPolicy", kUrgentPageDiscardingPolicyTraits, this);
+  }
+
+  if (monitor_) {
+    monitor_->AddObserver(this);
   }
 }
-UrgentPageDiscardingPolicy::~UrgentPageDiscardingPolicy() = default;
+UrgentPageDiscardingPolicy::~UrgentPageDiscardingPolicy() {
+  if (monitor_) {
+    monitor_->RemoveObserver(this);
+  }
+}
 
 void UrgentPageDiscardingPolicy::OnPassedToGraph(Graph* graph) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -72,7 +101,7 @@ void UrgentPageDiscardingPolicy::OnReclaimTarget(
     base::TimeTicks on_memory_pressure_at,
     std::optional<memory_pressure::ReclaimTarget> reclaim_target) {
   bool discard_protected_pages = true;
-  std::optional<base::TimeTicks> origin_time = std::nullopt;
+  std::optional<base::TimeTicks> origin_time;
   if (reclaim_target) {
     discard_protected_pages = reclaim_target->discard_protected;
     origin_time = reclaim_target->origin_time;
@@ -100,15 +129,41 @@ void UrgentPageDiscardingPolicy::DisableForTesting() {
   g_disabled_for_testing = true;
 }
 
-void UrgentPageDiscardingPolicy::OnMemoryPressure(
-    base::MemoryPressureLevel new_level) {
+void UrgentPageDiscardingPolicy::OnReleaseMemory() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (new_level != base::MEMORY_PRESSURE_LEVEL_CRITICAL) {
+  if (memory_limit() > base::kCriticalMemoryPressureThreshold) {
+    return;
+  }
+
+  if (monitor_) {
+    // When kDiscardOnCommitLimit is enabled on Windows, this policy discards
+    // pages based on the available commit space instead of memory pressure
+    // signals.
     return;
   }
 
   HandleMemoryPressureEvent();
+}
+
+void UrgentPageDiscardingPolicy::OnAvailableMemoryUpdated(
+    const base::AvailableMemoryMonitor::MemorySample& sample) {
+#if BUILDFLAG(IS_WIN)
+  if (sample.total_commit_bytes.is_zero()) {
+    return;
+  }
+
+  double available_percent = (sample.available_commit_bytes.InBytesF() /
+                              sample.total_commit_bytes.InBytesF()) *
+                             100.0;
+  double threshold =
+      performance_manager::features::kDiscardOnCommitLimit_MinAvailablePercent
+          .Get();
+
+  if (available_percent < threshold) {
+    HandleMemoryPressureEvent();
+  }
+#endif
 }
 
 void UrgentPageDiscardingPolicy::OnSustainedMemoryPressure(

@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_ASH_BOREALIS_BOREALIS_SERVICE_FAKE_H_
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/ash/borealis/borealis_install_url_handler.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
 
 namespace content {
@@ -27,10 +26,8 @@ class BorealisServiceFake : public BorealisService {
 
   BorealisAppLauncher& AppLauncher() override;
   BorealisAppUninstaller& AppUninstaller() override;
-  BorealisContextManager& ContextManager() override;
   BorealisFeatures& Features() override;
   BorealisInstaller& Installer() override;
-  BorealisInstallUrlHandler& InstallUrlHandler() override;
   BorealisLaunchOptions& LaunchOptions() override;
   BorealisShutdownMonitor& ShutdownMonitor() override;
   BorealisWindowManager& WindowManager() override;
@@ -38,11 +35,8 @@ class BorealisServiceFake : public BorealisService {
 
   void SetAppLauncherForTesting(BorealisAppLauncher* app_launcher);
   void SetAppUninstallerForTesting(BorealisAppUninstaller* app_uninstaller);
-  void SetContextManagerForTesting(BorealisContextManager* context_manager);
   void SetFeaturesForTesting(BorealisFeatures* features);
   void SetInstallerForTesting(BorealisInstaller* installer);
-  void SetInstallUrlHandlerForTesting(
-      BorealisInstallUrlHandler* install_url_handler);
   void SetLaunchOptionsForTesting(BorealisLaunchOptions* launch_options);
   void SetShutdownMonitorForTesting(BorealisShutdownMonitor* shutdown_monitor);
   void SetWindowManagerForTesting(BorealisWindowManager* window_manager);
@@ -51,10 +45,8 @@ class BorealisServiceFake : public BorealisService {
  private:
   raw_ptr<BorealisAppLauncher> app_launcher_ = nullptr;
   raw_ptr<BorealisAppUninstaller> app_uninstaller_ = nullptr;
-  raw_ptr<BorealisContextManager> context_manager_ = nullptr;
   raw_ptr<BorealisFeatures, DanglingUntriaged> features_ = nullptr;
   raw_ptr<BorealisInstaller> installer_ = nullptr;
-  raw_ptr<BorealisInstallUrlHandler> install_url_handler_ = nullptr;
   raw_ptr<BorealisLaunchOptions> launch_options_ = nullptr;
   raw_ptr<BorealisShutdownMonitor, DanglingUntriaged> shutdown_monitor_ =
       nullptr;

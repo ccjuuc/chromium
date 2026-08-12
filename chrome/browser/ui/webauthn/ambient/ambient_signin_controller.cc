@@ -15,21 +15,28 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/page_action/action_ids.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/webauthn/ambient/ambient_signin_bubble_view.h"
 #include "chrome/browser/ui/webauthn/webauthn_ui_helpers.h"
-#include "components/password_manager/core/browser/passkey_credential.h"
-#include "components/password_manager/core/browser/password_form.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
+#include "device/fido/public/features.h"
 #include "third_party/blink/public/mojom/credentialmanagement/credential_type_flags.mojom.h"
-#include "ui/views/layout/layout_provider.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
 
@@ -45,20 +52,12 @@ AmbientSigninController::~AmbientSigninController() {
     model_ = nullptr;
   }
   if (ambient_signin_bubble_view_) {
-    ambient_signin_bubble_view_->NotifyWidgetDestroyed();
+    ambient_signin_bubble_view_->DisconnectController();
     ambient_signin_bubble_view_ = nullptr;
   }
 }
 
-void AmbientSigninController::AddAndShowWebAuthnMethods(
-    AuthenticatorRequestDialogModel* model,
-    const std::vector<password_manager::PasskeyCredential>& credentials,
-    int expected_credential_type_flags,
-    PasskeyCredentialSelectionCallback callback) {
-  CHECK(expected_credential_type_flags &
-            static_cast<int>(CredentialTypeFlags::kPassword) ||
-        expected_credential_type_flags &
-            static_cast<int>(CredentialTypeFlags::kPublicKey));
+void AmbientSigninController::Show(AuthenticatorRequestDialogModel* model) {
   if (!model_) {
     model_ = model;
     model_->observers.AddObserver(this);
@@ -66,87 +65,93 @@ void AmbientSigninController::AddAndShowWebAuthnMethods(
     CHECK(model == model_);
   }
 
-  passkey_selection_callback_ = std::move(callback);
-  passkey_credentials_ = credentials;
+  credential_indices_.clear();
+  for (size_t i = 0; i < model_->mechanisms.size(); ++i) {
+    const auto& type = model_->mechanisms[i].type;
+    if (std::holds_alternative<
+            AuthenticatorRequestDialogModel::Mechanism::Credential>(type) ||
+        std::holds_alternative<
+            AuthenticatorRequestDialogModel::Mechanism::Password>(type)) {
+      credential_indices_.push_back(i);
+    }
+  }
 
-  // TODO(358119268): There isn't a strong guarantee that passwords will ever
-  // arrive here, since errors can be encountered on the credential manager
-  // path. This needs to be addressed, and in general we need to better ensure
-  // that state in both credential manager and webauthn code is adequately
-  // cleaned up.
-  if (credentials_received_state_ == CredentialsReceived::kPasskeys ||
-      credentials_received_state_ ==
-          CredentialsReceived::kPasswordsAndPasskeys) {
+  CHECK(!credential_indices_.empty());
+
+  // It is TBD how multiple credentials will work with Page Actions.
+  // For now, show the page action if there is only one mechanism, and the
+  // bubble otherwise.
+  if (credential_indices_.size() != 1) {
+    ui_type_ = UiType::kBubble;
+    ShowBubbleView();
     return;
   }
 
-  if (credentials_received_state_ == CredentialsReceived::kNone) {
-    credentials_received_state_ = CredentialsReceived::kPasskeys;
-    if (expected_credential_type_flags &
-        static_cast<int>(CredentialTypeFlags::kPassword)) {
-      // Wait for passwords.
-      return;
-    }
-  } else {
-    credentials_received_state_ = CredentialsReceived::kPasswordsAndPasskeys;
-  }
-
-  ShowBubble();
+  ui_type_ = UiType::kPageAction;
+  ShowPageAction();
 }
 
-void AmbientSigninController::AddAndShowPasswordMethods(
-    std::vector<std::unique_ptr<password_manager::PasswordForm>> forms,
-    int expected_credential_type_flags,
-    PasswordCredentialSelectionCallback callback) {
-  CHECK(expected_credential_type_flags &
-            static_cast<int>(CredentialTypeFlags::kPassword) ||
-        expected_credential_type_flags &
-            static_cast<int>(CredentialTypeFlags::kPublicKey));
-  password_selection_callback_ = std::move(callback);
-
-  password_forms_.swap(forms);
-
-  if (credentials_received_state_ == CredentialsReceived::kPasswords ||
-      credentials_received_state_ ==
-          CredentialsReceived::kPasswordsAndPasskeys) {
+void AmbientSigninController::ShowPageAction() {
+  auto* controller = GetPageActionController();
+  if (!controller) {
     return;
   }
 
-  if (credentials_received_state_ == CredentialsReceived::kNone) {
-    credentials_received_state_ = CredentialsReceived::kPasswords;
-    if (expected_credential_type_flags &
-        static_cast<int>(CredentialTypeFlags::kPublicKey)) {
-      // Wait for passkeys.
-      return;
-    }
-  } else {
-    credentials_received_state_ = CredentialsReceived::kPasswordsAndPasskeys;
-  }
+  CHECK_EQ(credential_indices_.size(), 1u);
+  const auto& mechanism = model_->mechanisms.at(credential_indices_.at(0));
+  controller->OverrideImage(
+      kActionWebAuthnAmbientSignin,
+      ui::ImageModel::FromVectorIcon(*mechanism.icon, ui::kColorIcon));
 
-  ShowBubble();
+  if (device::kWebAuthnAmbientSigninDisplayParam.Get() ==
+      device::WebAuthnAmbientSigninDisplay::kAnchoredMessage) {
+    // TODO(https://crbug.com/358119268): This would need a new string if this
+    // text is going to remain as is. There is a trailing space without a
+    // username being added. Right now it is this way so "Sign in as"
+    // appears before the button in the anchor, and the username is inside the
+    // button.
+    controller->SetAnchoredMessageText(
+        kActionWebAuthnAmbientSignin,
+        l10n_util::GetStringFUTF16(IDS_WEBAUTHN_SIGN_IN_AS_PROMPT,
+                                   std::u16string()));
+    controller->OverrideText(kActionWebAuthnAmbientSignin, mechanism.name);
+    controller->SetAnchoredMessageIcon(
+        kActionWebAuthnAmbientSignin,
+        ui::ImageModel::FromVectorIcon(*mechanism.icon, ui::kColorIcon));
+    controller->ShowAnchoredMessage(kActionWebAuthnAmbientSignin,
+                                    page_actions::AnchoredMessageConfig());
+  } else {
+    controller->OverrideText(
+        kActionWebAuthnAmbientSignin,
+        l10n_util::GetStringFUTF16(IDS_WEBAUTHN_SIGN_IN_AS_PROMPT,
+                                   mechanism.name));
+    controller->ShowSuggestionChip(kActionWebAuthnAmbientSignin);
+  }
+  controller->Show(kActionWebAuthnAmbientSignin);
 }
 
-void AmbientSigninController::ShowBubble() {
-  if (password_forms_.empty() && passkey_credentials_.empty()) {
-    return;
-  }
+void AmbientSigninController::TriggerPageActionSignIn() {
+  Close();
+  OnMechanismSelected(0);
+}
 
+void AmbientSigninController::ShowBubbleView() {
   auto* web_contents =
       content::WebContents::FromRenderFrameHost(&render_frame_host());
   if (!web_contents ||
       web_contents->GetVisibility() == content::Visibility::HIDDEN) {
     return;
   }
-  auto* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   ToolbarButtonProvider* button_provider =
       BrowserView::GetBrowserViewForBrowser(browser)->toolbar_button_provider();
-  auto* anchor_view = button_provider->GetAnchorView(std::nullopt);
+  auto anchor = button_provider->GetBubbleAnchor(std::nullopt);
 
   if (!ambient_signin_bubble_view_) {
-    ambient_signin_bubble_view_ =
-        new AmbientSigninBubbleView(anchor_view, this);
-    ambient_signin_bubble_view_->ShowCredentials(passkey_credentials_,
-                                                 password_forms_);
+    ambient_signin_bubble_view_ = new AmbientSigninBubbleView(anchor, this);
+    ambient_signin_bubble_view_->ShowCredentials(model_->mechanisms,
+                                                 credential_indices_);
   }
 }
 
@@ -165,15 +170,9 @@ AmbientSigninController::AmbientSigninController(
           &AmbientSigninController::TabDidEnterForeground, GetWeakPtr())));
 }
 
-void AmbientSigninController::OnPasskeySelected(
-    const std::vector<uint8_t>& account_id) {
-  std::move(passkey_selection_callback_).Run(account_id);
-}
-
-void AmbientSigninController::OnPasswordSelected(
-    const password_manager::PasswordForm* form) {
-  std::move(password_selection_callback_)
-      .Run(std::make_pair(form->username_value, form->password_value));
+void AmbientSigninController::OnMechanismSelected(size_t index) {
+  ui_type_ = UiType::kNone;
+  model_->mechanisms.at(credential_indices_.at(index)).callback.Run();
 }
 
 std::u16string AmbientSigninController::GetRpIdForDisplay() const {
@@ -191,26 +190,33 @@ std::u16string AmbientSigninController::GetRpIdForDisplay() const {
 }
 
 base::OnceClosure AmbientSigninController::GetSignInCallback() {
-  CHECK(password_forms_.size() + passkey_credentials_.size() == 1);
-  if (password_forms_.size()) {
-    return base::BindOnce(&AmbientSigninController::OnPasswordSelected,
-                          GetWeakPtr(), password_forms_.begin()->get());
-  }
-  return base::BindOnce(&AmbientSigninController::OnPasskeySelected,
-                        GetWeakPtr(),
-                        passkey_credentials_.begin()->credential_id());
+  CHECK_EQ(credential_indices_.size(), 1u);
+  return base::BindOnce(&AmbientSigninController::OnMechanismSelected,
+                        GetWeakPtr(), 0);
 }
 
-void AmbientSigninController::OnWidgetDestroying(views::Widget* widget) {
-  ambient_signin_bubble_view_->NotifyWidgetDestroyed();
+void AmbientSigninController::Close() {
+  if (ambient_signin_bubble_view_) {
+    ambient_signin_bubble_view_->DisconnectController();
+    ambient_signin_bubble_view_ = nullptr;
+  }
+  if (auto* controller = GetPageActionController()) {
+    controller->Hide(kActionWebAuthnAmbientSignin);
+    if (device::kWebAuthnAmbientSigninDisplayParam.Get() ==
+        device::WebAuthnAmbientSigninDisplay::kAnchoredMessage) {
+      controller->HideAnchoredMessage(kActionWebAuthnAmbientSignin);
+    } else {
+      controller->HideSuggestionChip(kActionWebAuthnAmbientSignin);
+    }
+  }
+}
+
+void AmbientSigninController::OnBubbleViewDestroyed() {
   ambient_signin_bubble_view_ = nullptr;
 }
 
 void AmbientSigninController::OnRequestComplete() {
-  if (!ambient_signin_bubble_view_) {
-    return;
-  }
-  ambient_signin_bubble_view_->Close();
+  Close();
 }
 
 void AmbientSigninController::OnModelDestroyed(
@@ -218,6 +224,7 @@ void AmbientSigninController::OnModelDestroyed(
   CHECK(model == model_);
   model_->observers.RemoveObserver(this);
   model_ = nullptr;
+  Close();
 }
 
 void AmbientSigninController::TabWillEnterBackground(
@@ -230,11 +237,37 @@ void AmbientSigninController::TabWillEnterBackground(
 
 void AmbientSigninController::TabDidEnterForeground(
     tabs::TabInterface* tab_interface) {
-  if (!ambient_signin_bubble_view_) {
-    ShowBubble();
-    return;
+  if (ui_type_ == UiType::kBubble) {
+    ShowBubbleView();
   }
-  ambient_signin_bubble_view_->Show();
+}
+
+void AmbientSigninController::SetPageActionControllerForTesting(
+    page_actions::PageActionController* controller) {
+  page_action_controller_test_override_ = controller;
+}
+
+page_actions::PageActionController*
+AmbientSigninController::GetPageActionController() {
+  if (page_action_controller_test_override_) {
+    return page_action_controller_test_override_;
+  }
+
+  auto* web_contents =
+      content::WebContents::FromRenderFrameHost(&render_frame_host());
+  if (!web_contents || web_contents->IsBeingDestroyed()) {
+    return nullptr;
+  }
+
+  tabs::TabInterface* tab_interface =
+      tabs::TabInterface::GetFromContents(web_contents);
+
+  tabs::TabFeatures* tab_features = tab_interface->GetTabFeatures();
+  if (!tab_features) {
+    return nullptr;
+  }
+
+  return tab_features->page_action_controller();
 }
 
 base::WeakPtr<AmbientSigninController> AmbientSigninController::GetWeakPtr() {

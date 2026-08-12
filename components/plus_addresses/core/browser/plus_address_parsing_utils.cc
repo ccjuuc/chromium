@@ -16,7 +16,6 @@
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/plus_addresses/core/browser/plus_address_types.h"
 #include "components/plus_addresses/core/common/features.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 
 namespace plus_addresses {
 
@@ -32,7 +31,7 @@ namespace {
 //   }
 // }
 // Returns nullopt if none of the values are parsed.
-std::optional<PlusProfile> ParsePlusProfileFromV1Dict(base::Value::Dict dict) {
+std::optional<PlusProfile> ParsePlusProfileFromV1Dict(base::DictValue dict) {
   std::string profile_id;
   std::string facet_str;
   PlusAddress plus_address;
@@ -94,9 +93,9 @@ std::optional<base::TimeDelta> ParseLifetime(std::string* str) {
   return base::Seconds(seconds);
 }
 
-// Attempts to parse a `base::Value::Dict` into to a `PreallocatedPlusAddress`.
+// Attempts to parse a `base::DictValue` into to a `PreallocatedPlusAddress`.
 std::optional<PreallocatedPlusAddress> ParsePreallocatedPlusAddress(
-    base::Value::Dict dict) {
+    base::DictValue dict) {
   static constexpr std::string_view kAddressKey = "emailAddress";
   static constexpr std::string_view kLifetimeKey = "reservationLifetime";
 
@@ -122,13 +121,13 @@ std::optional<PreallocatedPlusAddress> ParsePreallocatedPlusAddress(
 }  // namespace
 
 std::optional<PlusProfile> ParsePlusProfileFromV1Create(
-    data_decoder::DataDecoder::ValueOrError response) {
+    std::optional<base::Value> response) {
   if (!response.has_value() || !response->is_dict()) {
     return std::nullopt;
   }
 
   // Use iterators to avoid looking up by JSON keys.
-  base::Value::List* existing_profiles = nullptr;
+  base::ListValue* existing_profiles = nullptr;
   for (std::pair<const std::string&, base::Value&> first_level_entry :
        response->GetDict()) {
     auto [first_key, first_val] = first_level_entry;
@@ -156,21 +155,19 @@ std::optional<PlusProfile> ParsePlusProfileFromV1Create(
   // At a later point, we may choose to add logic that picks one out of multiple
   // profiles further downstream - in that case, we would need to change the
   // signature of this function.
-  base::Value::Dict* first_existing_profile =
-      (*existing_profiles)[0].GetIfDict();
+  base::DictValue* first_existing_profile = (*existing_profiles)[0].GetIfDict();
   return first_existing_profile
              ? ParsePlusProfileFromV1Dict(std::move(*first_existing_profile))
              : std::nullopt;
 }
 
 std::optional<std::vector<PreallocatedPlusAddress>>
-ParsePreallocatedPlusAddresses(
-    data_decoder::DataDecoder::ValueOrError response) {
+ParsePreallocatedPlusAddresses(std::optional<base::Value> response) {
   static constexpr std::string_view kAddressesKey = "emailAddresses";
   if (!response.has_value() || !response->is_dict()) {
     return std::nullopt;
   }
-  base::Value::List* addresses = response->GetDict().FindList(kAddressesKey);
+  base::ListValue* addresses = response->GetDict().FindList(kAddressesKey);
   if (!addresses) {
     return std::nullopt;
   }

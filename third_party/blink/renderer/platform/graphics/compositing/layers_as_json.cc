@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/content_layer_client_impl.h"
 #include "third_party/blink/renderer/platform/graphics/paint/transform_paint_property_node.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace blink {
@@ -16,7 +17,7 @@ namespace blink {
 namespace {
 
 String PointerAsString(const void* ptr) {
-  return String::Format("%p", ptr);
+  return Format("{}", ptr);
 }
 
 double RoundCloseToZero(double number) {
@@ -74,7 +75,7 @@ std::unique_ptr<JSONObject> CCLayerAsJSON(const cc::Layer& layer,
        // Omit backgroundColor for these layers because it's not interesting
        // and we want to avoid platform differences and changes with CLs
        // affecting backgroundColor in web tests that dump layer trees.
-       (debug_name != "Caret" && !debug_name.Contains("Scroll corner of")))) {
+       (debug_name != "Caret" && !debug_name.contains("Scroll corner of")))) {
     json->SetString("backgroundColor",
                     Color::FromSkColor4f(layer.background_color())
                         .NameForLayoutTreeAsText());

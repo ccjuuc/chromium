@@ -6,13 +6,13 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
@@ -38,16 +38,18 @@
 #include "chrome/browser/sessions/session_service_utils.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/session_crashed_bubble.h"
+#include "chrome/browser/ui/startup/profile_launch_observer.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
@@ -122,8 +124,9 @@ SessionService::SessionService(Profile* profile)
           SessionServiceBase::SessionServiceType::kSessionRestore),
       is_first_session_service_(
           InstanceTracker::RegisterNewSessionService(profile)) {
-  if (is_first_session_service_)
+  if (is_first_session_service_) {
     LogSessionServiceStartEvent(profile, HasPendingUncleanExit(profile));
+  }
   closing_all_browsers_subscription_ = chrome::AddClosingAllBrowsersCallback(
       base::BindRepeating(&SessionService::OnClosingAllBrowsersChanged,
                           base::Unretained(this)));
@@ -149,8 +152,9 @@ SessionService::~SessionService() {
 
   // Certain code paths explicitly destroy the SessionService as part of
   // shutdown.
-  if (!did_log_exit_)
+  if (!did_log_exit_) {
     LogExitEvent();
+  }
 }
 
 // static
@@ -179,7 +183,8 @@ bool SessionService::ShouldRestore(Browser* browser) {
   // not be restored.
   if (SessionRestore::IsRestoring(profile()) || has_open_trackable_browsers_ ||
       HasPendingUncleanExit(profile()) ||
-      (browser && !browser->should_trigger_session_restore())) {
+      (browser &&
+       !BrowserInitState::From(browser)->should_trigger_session_restore())) {
     return false;
   }
 
@@ -191,18 +196,20 @@ bool SessionService::ShouldRestore(Browser* browser) {
     return false;
   }
 
-  if (!browser)
+  if (!browser) {
     return true;
+  }
 
   // App windows should not be restored.
-  auto window_type = WindowTypeForBrowserType(browser->type());
+  auto window_type = WindowTypeForBrowserType(browser->GetType());
   if (window_type == sessions::SessionWindow::TYPE_APP ||
       window_type == sessions::SessionWindow::TYPE_APP_POPUP) {
     return false;
   }
 
   // If the browser does not have a `restore_id`, then we restore the session.
-  return browser->create_params().restore_id == Browser::kDefaultRestoreId;
+  return BrowserInitState::From(browser)->create_params().restore_id ==
+         Browser::kDefaultRestoreId;
 #else
   if (!has_open_trackable_browsers_ &&
       !StartupBrowserCreator::InSynchronousProfileLaunch() &&
@@ -248,8 +255,8 @@ void SessionService::SetSplitTab(SessionID window_id,
 
   // Tabs get unsplit as they close. However, if the whole window is closing
   // tabs should stay in their split. So, ignore this call in that case.
-  if (base::Contains(pending_window_close_ids_, window_id) ||
-      base::Contains(window_closing_ids_, window_id)) {
+  if (pending_window_close_ids_.contains(window_id) ||
+      window_closing_ids_.contains(window_id)) {
     return;
   }
 
@@ -265,8 +272,8 @@ void SessionService::SetSplitTabData(
   }
 
   // Any split metadata changes happening in a closing window can be ignored.
-  if (base::Contains(pending_window_close_ids_, window_id) ||
-      base::Contains(window_closing_ids_, window_id)) {
+  if (pending_window_close_ids_.contains(window_id) ||
+      window_closing_ids_.contains(window_id)) {
     return;
   }
 
@@ -277,13 +284,14 @@ void SessionService::SetSplitTabData(
 void SessionService::SetTabGroup(SessionID window_id,
                                  SessionID tab_id,
                                  std::optional<tab_groups::TabGroupId> group) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   // Tabs get ungrouped as they close. However, if the whole window is closing
   // tabs should stay in their groups. So, ignore this call in that case.
-  if (base::Contains(pending_window_close_ids_, window_id) ||
-      base::Contains(window_closing_ids_, window_id)) {
+  if (pending_window_close_ids_.contains(window_id) ||
+      window_closing_ids_.contains(window_id)) {
     return;
   }
 
@@ -320,8 +328,8 @@ void SessionService::SetTabGroupMetadata(
   }
 
   // Any group metadata changes happening in a closing window can be ignored.
-  if (base::Contains(pending_window_close_ids_, window_id) ||
-      base::Contains(window_closing_ids_, window_id)) {
+  if (pending_window_close_ids_.contains(window_id) ||
+      window_closing_ids_.contains(window_id)) {
     return;
   }
 
@@ -342,8 +350,9 @@ void SessionService::AddTabExtraData(SessionID window_id,
                                      SessionID tab_id,
                                      const char* key,
                                      const std::string& data) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   ScheduleCommand(sessions::CreateAddTabExtraDataCommand(tab_id, key, data));
 }
@@ -351,26 +360,29 @@ void SessionService::AddTabExtraData(SessionID window_id,
 void SessionService::AddWindowExtraData(SessionID window_id,
                                         const char* key,
                                         const std::string& data) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   ScheduleCommand(
       sessions::CreateAddWindowExtraDataCommand(window_id, key, data));
 }
 
 void SessionService::TabClosed(SessionID window_id, SessionID tab_id) {
-  if (!tab_id.id())
+  if (!tab_id.id()) {
     return;  // Happens when the tab is replaced.
+  }
 
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   auto i = tab_to_available_range()->find(tab_id);
-  if (i != tab_to_available_range()->end())
+  if (i != tab_to_available_range()->end()) {
     tab_to_available_range()->erase(i);
+  }
 
-  if (find(pending_window_close_ids_.begin(), pending_window_close_ids_.end(),
-           window_id) != pending_window_close_ids_.end()) {
+  if (pending_window_close_ids_.contains(window_id)) {
     // Tab is in last window and the window is being closed. Don't commit it
     // immediately, instead add it to the list of tabs to close. If the user
     // creates another window, the close is committed.
@@ -381,9 +393,7 @@ void SessionService::TabClosed(SessionID window_id, SessionID tab_id) {
     // If an individual tab is being closed or a secondary window is being
     // closed, just mark the tab as closed now.
     ScheduleCommand(sessions::CreateTabClosedCommand(tab_id));
-    if ((find(window_closing_ids_.begin(), window_closing_ids_.end(),
-              window_id) == window_closing_ids_.end()) &&
-        IsOnlyOneTabLeft()) {
+    if (!window_closing_ids_.contains(window_id) && IsOnlyOneTabLeft()) {
       // This is the last tab in the last tabbed browser.
       has_open_trackable_browsers_ = false;
     }
@@ -391,25 +401,31 @@ void SessionService::TabClosed(SessionID window_id, SessionID tab_id) {
 }
 
 void SessionService::WindowOpened(Browser* browser) {
-  if (!ShouldTrackBrowser(browser))
+  if (!ShouldTrackBrowser(browser)) {
     return;
+  }
 
   RestoreIfNecessary(StartupTabs(), browser, /* restore_apps */ false);
-  SetWindowType(browser->session_id(), browser->type());
-  SetWindowAppName(browser->session_id(), browser->app_name());
-  SetWindowUserTitle(browser->session_id(), browser->user_title());
+  SetWindowType(browser->GetSessionID(), browser->GetType());
+  SetWindowAppName(browser->GetSessionID(),
+                   BrowserInitState::From(browser)->create_params().app_name);
+  SetWindowUserTitle(browser->GetSessionID(),
+                     WindowMetadataController::From(browser)->user_title());
 
   // Save a browser workspace after window is created in `Browser()`.
   // Bento desks restore feature in ash requires this line to restore correctly
   // after creating a new browser window in a particular desk.
-  SetWindowWorkspace(browser->session_id(), browser->window()->GetWorkspace());
+  SetWindowWorkspace(browser->GetSessionID(),
+                     BrowserWindow::FromBrowser(browser)->GetWorkspace());
   SetWindowVisibleOnAllWorkspaces(
-      browser->session_id(), browser->window()->IsVisibleOnAllWorkspaces());
+      browser->GetSessionID(),
+      BrowserWindow::FromBrowser(browser)->IsVisibleOnAllWorkspaces());
 }
 
 void SessionService::WindowClosing(SessionID window_id) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   // If Chrome is closed immediately after a history deletion, we have to
   // rebuild commands before this window is closed, otherwise these tabs would
@@ -433,7 +449,7 @@ void SessionService::WindowClosing(SessionID window_id) {
     // browser windows in turn but want them all to be restored when the user
     // unlocks.  To accomplish this, we do a "pending close" on all windows
     // instead of just the last one (which has no open_trackable_browsers).
-    // http://crbug.com/356818
+    // http://crbug.com/41097527
     //
     // Some editions (like iOS) don't have a profile_manager and some tests
     // don't supply one so be lenient.
@@ -459,11 +475,10 @@ void SessionService::WindowClosed(SessionID window_id) {
   windows_tracking()->erase(window_id);
   last_selected_tab_in_window()->erase(window_id);
 
-  if (window_closing_ids_.find(window_id) != window_closing_ids_.end()) {
+  if (window_closing_ids_.contains(window_id)) {
     window_closing_ids_.erase(window_id);
     ScheduleCommand(sessions::CreateWindowClosedCommand(window_id));
-  } else if (pending_window_close_ids_.find(window_id) ==
-             pending_window_close_ids_.end()) {
+  } else if (!pending_window_close_ids_.contains(window_id)) {
     // We'll hit this if user closed the last tab in a window.
     has_open_trackable_browsers_ = HasOpenTrackableBrowsers(window_id);
     if (!has_open_trackable_browsers_) {
@@ -478,8 +493,9 @@ void SessionService::WindowClosed(SessionID window_id) {
 void SessionService::SetWindowType(SessionID window_id, Browser::Type type) {
   sessions::SessionWindow::WindowType window_type =
       WindowTypeForBrowserType(type);
-  if (!ShouldRestoreWindowOfType(window_type))
+  if (!ShouldRestoreWindowOfType(window_type)) {
     return;
+  }
 
   windows_tracking()->insert(window_id);
 
@@ -495,8 +511,9 @@ void SessionService::SetWindowType(SessionID window_id, Browser::Type type) {
 
 void SessionService::SetWindowUserTitle(SessionID window_id,
                                         const std::string& user_title) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   ScheduleCommand(
       sessions::CreateSetWindowUserTitleCommand(window_id, user_title));
@@ -511,8 +528,9 @@ void SessionService::OnErrorWritingSessionCommands() {
   // necessitate some amount of snapshotting in memory when a window is closing.
   // The histogram should give us an idea of how often this happens in practice.
   const bool unrecoverable_write_error = !pending_window_close_ids_.empty();
-  if (unrecoverable_write_error)
+  if (unrecoverable_write_error) {
     ++unrecoverable_write_error_count_;
+  }
   LogSessionServiceWriteErrorEvent(profile(), unrecoverable_write_error);
   set_rebuild_on_next_save(true);
   RebuildCommandsIfRequired();
@@ -522,8 +540,9 @@ void SessionService::SetTabUserAgentOverride(
     SessionID window_id,
     SessionID tab_id,
     const sessions::SerializedUserAgentOverride& user_agent_override) {
-  if (!ShouldTrackChangesToWindow(window_id))
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   ScheduleCommand(sessions::CreateSetTabUserAgentOverrideCommand(
       tab_id, user_agent_override));
@@ -534,11 +553,13 @@ Browser::Type SessionService::GetDesiredBrowserTypeForWebContents() {
 }
 
 void SessionService::DidScheduleCommand() {
-  if (did_schedule_command_)
+  if (did_schedule_command_) {
     return;
+  }
   did_schedule_command_ = true;
-  if (is_first_session_service_)
+  if (is_first_session_service_) {
     return;
+  }
 
   // TODO(crbug.com/40196304): A command has been scheduled for a SessionService
   // other than the first. Recreating the SessionService happens if shutdown is
@@ -594,7 +615,7 @@ bool SessionService::RestoreIfNecessary(const StartupTabs& startup_tabs,
       // instance.
       SessionCrashedBubble::ShowIfNotOffTheRecordProfile(
           browser, /*skip_tab_checking=*/true);
-      AddLaunchedProfile(profile());
+      ProfileLaunchObserver::AddLaunched(profile());
     }
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
@@ -661,15 +682,13 @@ void SessionService::ScheduleResetCommands() {
 }
 
 void SessionService::CommitPendingCloses() {
-  for (auto i = pending_tab_close_ids_.begin();
-       i != pending_tab_close_ids_.end(); ++i) {
-    ScheduleCommand(sessions::CreateTabClosedCommand(*i));
+  for (auto id : pending_tab_close_ids_) {
+    ScheduleCommand(sessions::CreateTabClosedCommand(id));
   }
   pending_tab_close_ids_.clear();
 
-  for (auto i = pending_window_close_ids_.begin();
-       i != pending_window_close_ids_.end(); ++i) {
-    ScheduleCommand(sessions::CreateWindowClosedCommand(*i));
+  for (auto id : pending_window_close_ids_) {
+    ScheduleCommand(sessions::CreateWindowClosedCommand(id));
   }
   pending_window_close_ids_.clear();
 
@@ -688,7 +707,7 @@ bool SessionService::IsOnlyOneTabLeft() const {
        &window_count](BrowserWindowInterface* browser) {
         const SessionID window_id = browser->GetSessionID();
         if (ShouldTrackBrowser(browser->GetBrowserForMigrationOnly()) &&
-            window_closing_ids_.find(window_id) == window_closing_ids_.end()) {
+            !window_closing_ids_.contains(window_id)) {
           if (++window_count > 1) {
             is_only_one_tab_left = false;
           }
@@ -706,15 +725,16 @@ bool SessionService::IsOnlyOneTabLeft() const {
 }
 
 bool SessionService::HasOpenTrackableBrowsers(SessionID window_id) const {
-  if (profile()->AsTestingProfile())
+  if (profile()->AsTestingProfile()) {
     return has_open_trackable_browser_for_test_;
+  }
 
   bool has_open_trackable = false;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [this, window_id, &has_open_trackable](BrowserWindowInterface* browser) {
         const SessionID browser_id = browser->GetSessionID();
         if (browser_id != window_id &&
-            window_closing_ids_.find(browser_id) == window_closing_ids_.end()) {
+            !window_closing_ids_.contains(browser_id)) {
           if (ShouldTrackBrowser(browser->GetBrowserForMigrationOnly())) {
             has_open_trackable = true;
           }
@@ -732,14 +752,16 @@ void SessionService::RebuildCommandsIfRequired() {
 }
 
 void SessionService::OnClosingAllBrowsersChanged(bool closing) {
-  if (closing)
+  if (closing) {
     LogExitEvent();
+  }
 }
 
 void SessionService::LogExitEvent() {
   // If there are pending closes, then we have already logged the exit.
-  if (!pending_window_close_ids_.empty())
+  if (!pending_window_close_ids_.empty()) {
     return;
+  }
 
   RemoveExitEvent();
   int browser_count = 0;
@@ -758,8 +780,9 @@ void SessionService::LogExitEvent() {
 }
 
 void SessionService::RemoveExitEvent() {
-  if (!did_log_exit_)
+  if (!did_log_exit_) {
     return;
+  }
 
   RemoveLastSessionServiceEventOfType(profile(),
                                       SessionServiceEventLogType::kExit);

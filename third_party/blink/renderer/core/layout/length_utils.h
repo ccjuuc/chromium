@@ -439,17 +439,23 @@ std::optional<LayoutUnit> ResolveRowGapLength(const ComputedStyle&,
 LayoutUnit ResolveRowGapForMulticol(const ComputedStyle&,
                                     LayoutUnit available_size);
 
-// Return the used value of `item-tolerance` if it is a `<length-percentage>`.
+// Return the used value of `flow-tolerance` if it is a `<length-percentage>`.
 // Otherwise, if it's `normal`, whose resolution is algorithm-specific,
 // `std::nullopt` is returned.
-std::optional<LayoutUnit> ResolveItemToleranceLength(const ComputedStyle&,
+std::optional<LayoutUnit> ResolveFlowToleranceLength(const ComputedStyle&,
                                                      LayoutUnit available_size);
 
-LayoutUnit ResolveItemToleranceForGridLanes(const ComputedStyle&,
+LayoutUnit ResolveFlowToleranceForGridLanes(const ComputedStyle&,
                                             const LogicalSize& available_size);
 
 CORE_EXPORT LayoutUnit ColumnInlineProgression(const ComputedStyle&,
                                                LayoutUnit available_size);
+
+// Only for printing: Adjust `margins` to honor the `page-margin-safety`
+// property.
+void AdjustMarginsForPaperEdge(const ConstraintSpace&,
+                               const ComputedStyle&,
+                               BoxStrut* margins);
 
 // Compute physical margins.
 CORE_EXPORT PhysicalBoxStrut
@@ -522,8 +528,13 @@ inline BoxStrut ComputeMarginsForSelf(const ConstraintSpace& constraint_space,
     return BoxStrut();
   LogicalSize percentage_resolution_size =
       constraint_space.MarginPaddingPercentageResolutionSize();
-  return ComputePhysicalMargins(style, percentage_resolution_size)
-      .ConvertToLogical(style.GetWritingDirection());
+  BoxStrut margins = ComputePhysicalMargins(style, percentage_resolution_size)
+                         .ConvertToLogical(style.GetWritingDirection());
+
+  if (style.GetPageMarginSafety() != EPageMarginSafety::kNone) {
+    AdjustMarginsForPaperEdge(constraint_space, style, &margins);
+  }
+  return margins;
 }
 
 // Compute line logical margins for the style owner.
@@ -622,12 +633,6 @@ void ResolveAutoMargins(Length inline_start_length,
 CORE_EXPORT LayoutUnit LineOffsetForTextAlign(ETextAlign,
                                               TextDirection,
                                               LayoutUnit space_left);
-
-inline LayoutUnit ConstrainByMinMax(LayoutUnit length,
-                                    LayoutUnit min,
-                                    LayoutUnit max) {
-  return std::max(min, std::min(length, max));
-}
 
 CORE_EXPORT FragmentGeometry
 CalculateInitialFragmentGeometry(const ConstraintSpace& space,
@@ -758,6 +763,15 @@ void AddScrollbarFreeze(const BoxStrut& scrollbars_before,
                         WritingDirectionMode,
                         bool* freeze_horizontal,
                         bool* freeze_vertical);
+
+// Returns the offset that reflects a fragment across its container in one axis.
+LayoutUnit CalculateReverseChildOffset(
+    LayoutUnit offset,
+    LayoutUnit fragment_size,
+    LayoutUnit container_size,
+    LayoutUnit border_scrollbar_padding_start,
+    LayoutUnit margin_start,
+    LayoutUnit margin_end);
 
 }  // namespace blink
 

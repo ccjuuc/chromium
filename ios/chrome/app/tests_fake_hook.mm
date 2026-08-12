@@ -7,10 +7,15 @@
 // clang-format on
 
 #import "base/time/time.h"
+#import "build/branding_buildflags.h"
 #import "components/commerce/core/shopping_service.h"
 #import "components/feature_engagement/public/feature_activation.h"
 #import "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_constants.h"
+
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+#import "ios/chrome/app/tests_hook_helper.h"  // nogncheck
+#endif
 
 namespace tests_hook {
 
@@ -61,9 +66,11 @@ bool NeverPurgeDiscardedSessionsData() {
   return false;
 }
 
-bool LoadMinimalAppUI() {
+bool ShouldLoadMinimalAppUI() {
   return false;
 }
+
+void LoadMinimalAppUI(UIWindow* window) {}
 
 policy::ConfigurationPolicyProvider* GetOverriddenPlatformPolicyProvider() {
   return nullptr;
@@ -96,10 +103,6 @@ std::unique_ptr<ShareKitService> CreateShareKitService(
 }
 std::unique_ptr<password_manager::BulkLeakCheckServiceInterface>
 GetOverriddenBulkLeakCheckService() {
-  return nullptr;
-}
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService() {
   return nullptr;
 }
 std::unique_ptr<password_manager::RecipientsFetcher>
@@ -146,6 +149,34 @@ UIImage* GetPHPickerViewControllerImage() {
 std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
     ProfileIOS* profile) {
   return nullptr;
+}
+
+std::unique_ptr<contextual_search::ContextualSearchService>
+CreateContextualSearchService(ProfileIOS* profile) {
+  return nullptr;
+}
+
+void InjectFakeTabsInBrowser(Browser* browser) {
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  NSString* const kAddLotsOfTabs = @"AddLotsOfTabs";
+
+  int tabCountToAdd =
+      [[NSUserDefaults standardUserDefaults] integerForKey:kAddLotsOfTabs];
+  // Also check an environment variable for some other test environments which
+  // expect a minimum number of tabs.
+  if (tabCountToAdd == 0) {
+    tabCountToAdd = [[NSProcessInfo.processInfo.environment
+        objectForKey:@"MINIMUM_TAB_COUNT"] intValue];
+  }
+  if (tabCountToAdd > 0) {
+    [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:kAddLotsOfTabs];
+    InjectUnrealizedWebStatesUntilListHasSizeItems(browser, tabCountToAdd);
+  }
+#endif
+}
+
+id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
+  return nil;
 }
 
 }  // namespace tests_hook

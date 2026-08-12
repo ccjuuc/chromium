@@ -17,14 +17,15 @@
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/lens/lens_features.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/insets.h"
@@ -51,23 +52,36 @@ const int kPreselectionBubbleMinY = 8;
 
 }  // namespace
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(LensPreselectionBubble,
+                                      kExitButtonElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(LensPreselectionBubble,
+                                      kCancelButtonElementId);
+
 LensPreselectionBubble::LensPreselectionBubble(
-    base::WeakPtr<LensOverlayController> lens_overlay_controller,
+    tabs::TabHandle tab_handle,
     views::View* anchor_view,
     bool offline,
+    ui::ColorId bubble_background_color,
+    const gfx::VectorIcon* icon,
+    std::optional<OverlayBaseController::CancelButtonConfig>
+        cancel_button_config,
     ExitClickedCallback exit_clicked_callback,
     base::OnceClosure on_cancel_callback)
     : BubbleDialogDelegateView(anchor_view,
                                views::BubbleBorder::NONE,
                                views::BubbleBorder::NO_SHADOW),
-      lens_overlay_controller_(lens_overlay_controller),
+      tab_handle_(tab_handle),
       offline_(offline),
+      bubble_background_color_(bubble_background_color),
+      icon_(icon),
+      cancel_button_config_(cancel_button_config),
       exit_clicked_callback_(std::move(exit_clicked_callback)) {
+  CHECK(icon_);
   SetShowCloseButton(false);
   set_close_on_deactivate(false);
   DialogDelegate::SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   set_corner_radius(48);
-  SetBackgroundColor(kColorLensOverlayToastBackground);
+  SetBackgroundColor(bubble_background_color_);
   SetProperty(views::kElementIdentifierKey, kLensPreselectionBubbleElementId);
   SetAccessibleWindowRole(ax::mojom::Role::kAlertDialog);
   SetCancelCallback(std::move(on_cancel_callback));
@@ -79,8 +93,12 @@ void LensPreselectionBubble::Init() {
   views::BoxLayout* layout =
       SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, gfx::Insets()));
-  offline_ ? set_margins(gfx::Insets::TLBR(6, 16, 6, 6))
-           : set_margins(gfx::Insets::TLBR(12, 16, 12, 16));
+  if (cancel_button_config_.has_value()) {
+    set_margins(cancel_button_config_->bubble_margins);
+  } else {
+    offline_ ? set_margins(gfx::Insets::TLBR(6, 16, 6, 6))
+             : set_margins(gfx::Insets::TLBR(12, 16, 12, 16));
+  }
 
   // Set bubble icon and text
   const std::u16string online_toast_text = l10n_util::GetStringUTF16(
@@ -91,32 +109,48 @@ void LensPreselectionBubble::Init() {
                : online_toast_text;
   SetAccessibleTitle(toast_text);
   icon_view_ = AddChildView(std::make_unique<views::ImageView>());
+  const gfx::VectorIcon* icon;
+  if (offline_) {
+    icon = &(::features::IsRoundedIconsEnabled()
+                 ? vector_icons::kErrorIcon
+                 : vector_icons::kErrorOutlineOldIcon);
+  } else {
+    icon = icon_;
+  }
+  icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+      *icon, kColorLensOverlayToastForeground, 24));
+
   label_ = AddChildView(std::make_unique<views::Label>(toast_text));
   label_->SetMultiLine(false);
   label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label_->SetAllowCharacterBreak(false);
-  if (lens::IsLensOverlayContextualSearchboxEnabled()) {
+  if (lens::IsLensOverlayContextualSearchboxEnabled(
+          tab_handle_.Get()->GetBrowserWindowInterface()->GetProfile())) {
     auto button = views::CreateVectorImageButtonWithNativeTheme(
-        base::RepeatingClosure(), kHelpMenuIcon, 20,
-        kColorLensOverlayToastForeground, kColorLensOverlayToastForeground);
+        base::RepeatingClosure(),
+        ::features::IsRoundedIconsEnabled() ? kHelpCustomIcon
+                                            : kHelpMenuOldIcon,
+        20, kColorLensOverlayToastForeground, kColorLensOverlayToastForeground,
+        kColorLensOverlayToastForeground);
     views::HighlightPathGenerator::Install(
         button.get(),
         std::make_unique<views::CircleHighlightPathGenerator>(gfx::Insets()));
     button->SetTooltipText(
         l10n_util::GetStringUTF16(IDS_LENS_OVERLAY_MORE_OPTIONS_BUTTON_LABEL));
-    more_info_button_ = AddChildView(std::move(button));
-    more_info_button_->SetButtonController(
-        std::make_unique<views::MenuButtonController>(
-            more_info_button_,
-            base::BindRepeating(&LensPreselectionBubble::OpenMoreInfoMenu,
-                                base::Unretained(this)),
-            std::make_unique<views::Button::DefaultButtonControllerDelegate>(
-                more_info_button_)));
+    if (!cancel_button_config_.has_value()) {
+      more_info_button_ = AddChildView(std::move(button));
+      more_info_button_->SetButtonController(
+          std::make_unique<views::MenuButtonController>(
+              more_info_button_,
+              base::BindRepeating(&LensPreselectionBubble::OpenMoreInfoMenu,
+                                  base::Unretained(this)),
+              std::make_unique<views::Button::DefaultButtonControllerDelegate>(
+                  more_info_button_)));
+    }
   }
   layout->set_between_child_spacing(8);
   // Need to set this false so label color token doesn't get changed by
-  // changed by SetEnabledColor() color mapper. Color tokens provided
-  // have enough contrast.
+  // SetEnabledColor() color mapper. Color tokens provided have enough contrast.
   label_->SetAutoColorReadabilityEnabled(false);
   if (offline_) {
     exit_button_ = AddChildView(std::make_unique<views::MdTextButton>(
@@ -128,7 +162,20 @@ void LensPreselectionBubble::Init() {
     exit_button_->SetPreferredSize(gfx::Size(55, 36));
     exit_button_->SetStyle(ui::ButtonStyle::kProminent);
     exit_button_->SetProperty(views::kElementIdentifierKey,
-                              kLensPreselectionBubbleExitButtonElementId);
+                              kExitButtonElementId);
+  }
+  if (cancel_button_config_.has_value()) {
+    cancel_button_ = AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&LensPreselectionBubble::CancelDialog,
+                            // Safe to unretain since this class (and its
+                            // underlying Widget) is self-owned.
+                            base::Unretained(this)),
+        l10n_util::GetStringUTF16(IDS_CANCEL)));
+    cancel_button_->SetProperty(views::kMarginsKey,
+                                gfx::Insets::TLBR(0, 8, 0, 0));
+    cancel_button_->SetStyle(ui::ButtonStyle::kProminent);
+    cancel_button_->SetProperty(views::kElementIdentifierKey,
+                                kCancelButtonElementId);
   }
   NotifyAccessibilityEventDeprecated(ax::mojom::Event::kAlert, true);
 }
@@ -145,15 +192,19 @@ void LensPreselectionBubble::SetLabelText(int string_id) {
   SizeToContents();
 }
 
+void LensPreselectionBubble::SetIcon(const gfx::VectorIcon& icon) {
+  icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+      icon, kColorLensOverlayToastForeground, 24));
+}
+
 gfx::Rect LensPreselectionBubble::GetBubbleBounds() {
   views::View* anchor_view = GetAnchorView();
   if (!anchor_view) {
     return gfx::Rect();
   }
 
-  const bool is_tab_strip_visible = lens_overlay_controller_->GetTabInterface()
-                                        ->GetBrowserWindowInterface()
-                                        ->IsTabStripVisible();
+  const bool is_tab_strip_visible =
+      tab_handle_.Get()->GetBrowserWindowInterface()->IsTabStripVisible();
   const gfx::Size bubble_size =
       GetWidget()->GetContentsView()->GetPreferredSize();
   const gfx::Rect anchor_bounds = anchor_view->GetBoundsInScreen();
@@ -175,16 +226,6 @@ gfx::Rect LensPreselectionBubble::GetBubbleBounds() {
 void LensPreselectionBubble::OnThemeChanged() {
   BubbleDialogDelegateView::OnThemeChanged();
   const auto* color_provider = GetColorProvider();
-  icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-      offline_ ? vector_icons::kErrorOutlineIcon
-               : vector_icons::kGoogleLensMonochromeLogoIcon,
-#else
-      offline_ ? vector_icons::kErrorOutlineIcon
-               : vector_icons::kSearchChromeRefreshIcon,
-#endif
-      color_provider->GetColor(kColorLensOverlayToastForeground),
-      /*icon_size=*/24));
   label_->SetEnabledColor(
       color_provider->GetColor(kColorLensOverlayToastForeground));
 
@@ -194,7 +235,18 @@ void LensPreselectionBubble::OnThemeChanged() {
         color_provider->GetColor(kColorLensOverlayToastForeground));
     exit_button_->SetBorder(views::CreateRoundedRectBorder(
         1, 48, color_provider->GetColor(kColorLensOverlayToastButtonBorder)));
-    exit_button_->SetBgColorIdOverride(kColorLensOverlayToastBackground);
+    exit_button_->SetBgColorIdOverride(bubble_background_color_);
+  }
+
+  if (cancel_button_config_.has_value()) {
+    CHECK(cancel_button_);
+    ui::ColorId color_id = cancel_button_config_->color;
+    cancel_button_->SetEnabledTextColors(color_provider->GetColor(color_id));
+    cancel_button_->SetBorder(views::CreatePaddedBorder(
+        views::CreateRoundedRectBorder(1, 48,
+                                       color_provider->GetColor(color_id)),
+        cancel_button_config_->padding));
+    cancel_button_->SetBgColorIdOverride(bubble_background_color_);
   }
 }
 
@@ -218,21 +270,18 @@ void LensPreselectionBubble::OpenMoreInfoMenu() {
 }
 
 void LensPreselectionBubble::ExecuteCommand(int command_id, int event_flags) {
-  CHECK(lens_overlay_controller_);
+  CHECK(tab_handle_.Get());
   switch (command_id) {
     case COMMAND_MY_ACTIVITY: {
-      ActivityRequestedByEvent(lens_overlay_controller_->GetTabInterface(),
-                               event_flags);
+      ActivityRequestedByEvent(tab_handle_.Get(), event_flags);
       break;
     }
     case COMMAND_LEARN_MORE: {
-      InfoRequestedByEvent(lens_overlay_controller_->GetTabInterface(),
-                           event_flags);
+      InfoRequestedByEvent(tab_handle_.Get(), event_flags);
       break;
     }
     case COMMAND_SEND_FEEDBACK: {
-      FeedbackRequestedByEvent(lens_overlay_controller_->GetTabInterface(),
-                               event_flags);
+      FeedbackRequestedByEvent(tab_handle_.Get(), event_flags);
       break;
     }
     default: {

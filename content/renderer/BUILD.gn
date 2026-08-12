@@ -3,10 +3,11 @@
 # found in the LICENSE file.
 
 import("//build/config/cast.gni")
-import("//build/config/chromeos/ui_mode.gni")
 import("//build/config/ui.gni")
+import("//components/vrp_flags/features.gni")
 import("//content/common/features.gni")
 import("//media/media_options.gni")
+import("//printing/buildflags/buildflags.gni")
 import("//sandbox/features.gni")
 import("//services/screen_ai/buildflags/features.gni")
 import("//testing/libfuzzer/fuzzer_test.gni")
@@ -27,7 +28,6 @@ target(link_target_type, "renderer") {
     "//chromecast/media/audio:*",
     "//content/app:*",
     "//content/public/renderer:renderer_sources",
-    "//media/mojo/clients:unit_tests",
   ]
 
   sources = [
@@ -60,8 +60,6 @@ target(link_target_type, "renderer") {
     "client_navigation_throttler.h",
     "content_security_policy_util.cc",
     "content_security_policy_util.h",
-    "discardable_memory_utils.cc",
-    "discardable_memory_utils.h",
     "document_state.cc",
     "document_state.h",
     "dom_automation_controller.cc",
@@ -96,8 +94,8 @@ target(link_target_type, "renderer") {
     "media/renderer_web_media_player_delegate.h",
     "media/renderer_webaudiodevice_impl.cc",
     "media/renderer_webaudiodevice_impl.h",
-    "memory_coordinator/renderer_memory_coordinator_policy.cc",
-    "memory_coordinator/renderer_memory_coordinator_policy.h",
+    "memory_coordinator/last_resort_gc_policy.cc",
+    "memory_coordinator/last_resort_gc_policy.h",
     "memory_reclaimer_pressure_listener.cc",
     "memory_reclaimer_pressure_listener.h",
     "mhtml_handle_writer.cc",
@@ -156,6 +154,8 @@ target(link_target_type, "renderer") {
     "web_ui_extension.h",
     "web_ui_extension_data.cc",
     "web_ui_extension_data.h",
+    "web_ui_histograms_extension.cc",
+    "web_ui_histograms_extension.h",
     "webgraphicscontext3d_provider_impl.cc",
     "webgraphicscontext3d_provider_impl.h",
     "worker/dedicated_worker_host_factory_client.cc",
@@ -248,6 +248,7 @@ target(link_target_type, "renderer") {
     "//components/variations/net",
     "//components/viz/client",
     "//components/viz/common",
+    "//components/vrp_flags:buildflags",
     "//content:content_resources",
     "//content/child",
     "//content/common",
@@ -257,7 +258,6 @@ target(link_target_type, "renderer") {
     "//content/gpu:gpu_sources",
     "//content/public/child:child_sources",
     "//content/public/common:buildflags",
-    "//content/services/auction_worklet",
     "//crypto",
     "//device/base/synchronization",
     "//device/gamepad/public/cpp:shared_with_blink",
@@ -279,7 +279,6 @@ target(link_target_type, "renderer") {
     "//media/webrtc",
     "//mojo/public/cpp/bindings",
     "//net",
-    "//printing/buildflags",
     "//sandbox",
     "//services/audio/public/mojom",
     "//services/device/public/cpp/generic_sensor",
@@ -343,6 +342,8 @@ target(link_target_type, "renderer") {
 
   if (enable_screen_ai_service) {
     sources += [
+      "accessibility/annotations/ax_canvas_annotator.cc",
+      "accessibility/annotations/ax_canvas_annotator.h",
       "accessibility/annotations/ax_main_node_annotator.cc",
       "accessibility/annotations/ax_main_node_annotator.h",
     ]
@@ -380,15 +381,6 @@ target(link_target_type, "renderer") {
     }
 
     if (is_castos || is_cast_android) {
-      if (enable_cast_audio_renderer) {
-        sources += [
-          "media/cast_renderer_factory.cc",
-          "media/cast_renderer_factory.h",
-        ]
-
-        deps += [ "//chromecast/media/audio:audio_renderer" ]
-      }
-
       deps += [ "//media/remoting:remoting_renderer" ]
     }
   }
@@ -401,10 +393,6 @@ target(link_target_type, "renderer") {
       "media/win/dcomp_texture_host.h",
       "media/win/dcomp_texture_wrapper_impl.cc",
       "media/win/dcomp_texture_wrapper_impl.h",
-      "media/win/overlay_state_observer_impl.cc",
-      "media/win/overlay_state_observer_impl.h",
-      "media/win/overlay_state_service_provider.cc",
-      "media/win/overlay_state_service_provider.h",
     ]
   }
 
@@ -417,43 +405,36 @@ target(link_target_type, "renderer") {
       "//chromeos:chromeos_export",
       "//chromeos/system",
     ]
-    if (target_cpu == "x64") {
-      deps += [ "//chromeos/ash/components/memory/userspace_swap" ]
-    }
   }
 
   if (use_ozone) {
     deps += [ "//ui/ozone" ]
   }
 
+  if (enable_printing) {
+    deps += [
+      "//printing:metafile",
+      "//printing:settings",
+    ]
+    defines += [ "ENABLE_PRINTING" ]
+  }
+
   if (enable_ipc_fuzzer) {
     configs += [ "//tools/ipc_fuzzer:ipc_fuzzer_config" ]
+  }
+
+  if (enable_vrp_flags) {
+    deps += [
+      "//components/vrp_flags",
+      "//components/vrp_flags:mojom",
+    ]
   }
 }
 
 # See comment at the top of //content/BUILD.gn for how this works.
 group("for_content_tests") {
   visibility = [
-    ":audio_decoder_fuzzer",
-    ":audio_decoder_fuzzer__apk__compile_java",
-    ":audio_decoder_fuzzer__apk__compile_resources",
-    ":audio_decoder_fuzzer__apk__create",
-    ":audio_decoder_fuzzer__apk__java",
-    ":audio_decoder_fuzzer__apk__java__dex",
-    ":audio_decoder_fuzzer__apk__java__header",
-    ":audio_decoder_fuzzer__apk__java__validate",
-    ":audio_decoder_fuzzer__library",
-    ":audio_decoder_fuzzer__library__jni_registration__native_sources",
-    ":content_security_policy_util_fuzzer",
-    ":content_security_policy_util_fuzzer__apk__compile_java",
-    ":content_security_policy_util_fuzzer__apk__compile_resources",
-    ":content_security_policy_util_fuzzer__apk__create",
-    ":content_security_policy_util_fuzzer__apk__java",
-    ":content_security_policy_util_fuzzer__apk__java__dex",
-    ":content_security_policy_util_fuzzer__apk__java__header",
-    ":content_security_policy_util_fuzzer__apk__java__validate",
-    ":content_security_policy_util_fuzzer__library",
-    ":content_security_policy_util_fuzzer__library__jni_registration__native_sources",
+    ":*",
     "//content/test/*",
     "//content/web_test:web_test_renderer_public_deps",
   ]
@@ -475,6 +456,16 @@ fuzzer_test("audio_decoder_fuzzer") {
     ":for_content_tests",
     "//content/test:test_support",
   ]
+  if (is_android) {
+    deps += [
+      # content::BlinkTestEnvironment from //content/test:test_support
+      # transitively requires org.chromium.ui.base.ResourceBundle for its
+      # execution on Android. //content/test:test_support is a static_library
+      # which wouldn't pass a java dependency to this target, thus the need of
+      # this here directly.
+      "//ui/android:ui_no_recycler_view_java",
+    ]
+  }
   seed_corpus = "//media/test/data"
 }
 
@@ -494,6 +485,16 @@ fuzzer_test("content_security_policy_util_fuzzer") {
     "//services/network/public/cpp",
     "//services/network/public/mojom",
   ]
+  if (is_android) {
+    deps += [
+      # content::BlinkTestEnvironment from //content/test:test_support
+      # transitively requires org.chromium.ui.base.ResourceBundle for its
+      # execution on Android. //content/test:test_support is a static_library
+      # which wouldn't pass a java dependency to this target, thus the need of
+      # adding this here directly.
+      "//ui/android:ui_no_recycler_view_java",
+    ]
+  }
   dict = "//testing/libfuzzer/fuzzers/dicts/content_security_policy.dict"
   seed_corpus = "//testing/libfuzzer/fuzzers/content_security_policy_corpus"
 }

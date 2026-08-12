@@ -9,12 +9,18 @@
 #include <memory>
 #include <optional>
 
+#include "android_webview/browser/aw_browser_context.h"
+#include "base/metrics/histogram_functions.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/preconnect_manager.h"
 #include "content/public/browser/preconnect_request.h"
+#include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/network_anonymization_key.h"
+#include "net/socket/next_proto.h"
+#include "services/network/public/cpp/constants.h"
 #include "url/android/gurl_android.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
@@ -23,6 +29,26 @@
 #include "android_webview/browser_jni_headers/AwPreconnector_jni.h"
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(AndroidWebViewPreconnectEvent)
+enum class AwPreconnectEvent {
+  kPreconnectCalled = 0,
+  kSessionClosed = 1,
+  kConnectionEstablishedQuic = 2,
+  kConnectionEstablishedHttp2 = 3,
+  kConnectionEstablishedOther = 4,
+  kConnectionClosedWasUsedQuic = 5,
+  kConnectionClosedWasUsedHttp2 = 6,
+  kConnectionClosedWasUsedOther = 7,
+  kConnectionClosedWasNotUsedQuic = 8,
+  kConnectionClosedWasNotUsedHttp2 = 9,
+  kConnectionClosedWasNotUsedOther = 10,
+  kMaxValue = kConnectionClosedWasNotUsedOther,
+};
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:AndroidWebViewPreconnectEvent)
 
 inline constexpr net::NetworkTrafficAnnotationTag
     kWebViewPreconnectTrafficAnnotation =
@@ -90,11 +116,34 @@ bool AwPreconnector::Preconnect(JNIEnv* env, const GURL& url) {
     return false;
   }
 
-  std::vector<content::PreconnectRequest> requests = {
-      content::PreconnectRequest(origin, /* num_sockets= */ 1, key)};
-  GetPreconnectManager().Start(url, requests,
-                               kWebViewPreconnectTrafficAnnotation);
+  mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient> observer;
+  PreconnectContext context{base::TimeTicks::Now(), url};
+  receivers_.Add(this, observer.InitWithNewPipeAndPassReceiver(),
+                 std::move(context));
+
+  std::optional<net::ConnectionKeepAliveConfig> keepalive_config;
+
+  bool was_blocked = !browser_context_->GetDefaultStoragePartition()
+                          ->IsNetworkContextInitialized();
+  base::ElapsedTimer timer;
+
+  // Preconnection initiated at the Profile level is out of scope of connection
+  // allowlists, so there is no associated frame/document context to restrict.
+  // See https://wicg.github.io/connection-allowlists/#threat-model. Hence
+  // pass a No-op network_restrictions_id.
+  GetPreconnectManager().StartPreconnectUrl(
+      url, /*allow_credentials=*/true, key, kWebViewPreconnectTrafficAnnotation,
+      /*storage_partition_config=*/nullptr,
+      network::GetNoOpNetworkRestrictionsId(), std::move(keepalive_config),
+      std::move(observer));
+
+  AwBrowserContext::RecordNetworkContextInitializationBlocking(
+      "Preconnect", timer.Elapsed(), was_blocked);
+
   TRACE_EVENT1("android_webview", "Preconnect::Begin", "url", url);
+
+  base::UmaHistogramEnumeration("Android.WebView.Preconnect.Event",
+                                AwPreconnectEvent::kPreconnectCalled);
 
   return true;
 }
@@ -130,6 +179,76 @@ content::PreconnectManager& AwPreconnector::GetPreconnectManager() {
 
   return *preconnect_manager_.get();
 }
+
+void AwPreconnector::OnConnectionEstablished(
+    const net::ConnectionChangeNotifier::EstablishedConnectionInfo& info) {
+  PreconnectContext& context = receivers_.current_context();
+  context.connection_info = info.connection_info;
+
+  if (info.connection_info == net::NextProto::kProtoQUIC) {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.SessionCreationTime.QUIC",
+        info.connection_setup_time);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        AwPreconnectEvent::kConnectionEstablishedQuic);
+  } else if (info.connection_info == net::NextProto::kProtoHTTP2) {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.SessionCreationTime.HTTP2",
+        info.connection_setup_time);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        AwPreconnectEvent::kConnectionEstablishedHttp2);
+  } else {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.SessionCreationTime.Other",
+        info.connection_setup_time);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        AwPreconnectEvent::kConnectionEstablishedOther);
+  }
+}
+
+void AwPreconnector::OnSessionClosed(bool was_ever_used_to_create_streams) {
+  const PreconnectContext& context = receivers_.current_context();
+  base::TimeDelta duration = base::TimeTicks::Now() - context.start_time;
+
+  base::UmaHistogramMediumTimes("Android.WebView.Preconnect.ConnectionDuration",
+                                duration);
+
+  if (context.connection_info == net::NextProto::kProtoQUIC) {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.ConnectionDuration.QUIC", duration);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        was_ever_used_to_create_streams
+            ? AwPreconnectEvent::kConnectionClosedWasUsedQuic
+            : AwPreconnectEvent::kConnectionClosedWasNotUsedQuic);
+  } else if (context.connection_info == net::NextProto::kProtoHTTP2) {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.ConnectionDuration.HTTP2", duration);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        was_ever_used_to_create_streams
+            ? AwPreconnectEvent::kConnectionClosedWasUsedHttp2
+            : AwPreconnectEvent::kConnectionClosedWasNotUsedHttp2);
+  } else {
+    base::UmaHistogramMediumTimes(
+        "Android.WebView.Preconnect.ConnectionDuration.Other", duration);
+    base::UmaHistogramEnumeration(
+        "Android.WebView.Preconnect.Event",
+        was_ever_used_to_create_streams
+            ? AwPreconnectEvent::kConnectionClosedWasUsedOther
+            : AwPreconnectEvent::kConnectionClosedWasNotUsedOther);
+  }
+
+  TRACE_EVENT2("android_webview", "Preconnect::OnSessionClosed", "url",
+               context.url, "duration", duration);
+}
+
+void AwPreconnector::OnNetworkEvent(net::NetworkChangeEvent event) {}
+
+void AwPreconnector::OnConnectionFailed() {}
 
 }  // namespace android_webview
 

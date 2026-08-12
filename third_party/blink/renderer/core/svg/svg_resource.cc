@@ -19,7 +19,9 @@
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
+#include "third_party/blink/renderer/platform/loader/fetch/integrity_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
+#include "third_party/blink/renderer/platform/loader/subresource_integrity.h"
 
 namespace blink {
 
@@ -120,10 +122,17 @@ void SVGResource::NotifyContentChanged() {
     client->ResourceContentChanged(this);
 }
 
+Element* SVGResource::Target() const {
+  UpdateContentLifecycleForUse();
+  return target_.Get();
+}
+
 LayoutSVGResourceContainer* SVGResource::ResourceContainerNoCycleCheck() const {
-  if (!target_)
+  Element* target = Target();
+  if (!target) {
     return nullptr;
-  return DynamicTo<LayoutSVGResourceContainer>(target_->GetLayoutObject());
+  }
+  return DynamicTo<LayoutSVGResourceContainer>(target->GetLayoutObject());
 }
 
 LayoutSVGResourceContainer* SVGResource::ResourceContainer(
@@ -225,8 +234,9 @@ void LocalSVGResource::Trace(Visitor* visitor) const {
 }
 
 ExternalSVGResourceDocumentContent::ExternalSVGResourceDocumentContent(
-    const KURL& url)
-    : url_(url) {}
+    const KURL& url,
+    const CSSUrlRequestModifiers& modifiers)
+    : url_(url), modifiers_(modifiers) {}
 
 void ExternalSVGResourceDocumentContent::Load(
     Document& document,
@@ -241,13 +251,33 @@ void ExternalSVGResourceDocumentContent::Load(
   ResourceLoaderOptions options(execution_context->GetCurrentWorld());
   options.initiator_info.name = fetch_initiator_type_names::kCSS;
   FetchParameters params(ResourceRequest(url_), options);
-  if (cross_origin == kCrossOriginAttributeNotSet) {
+
+  if (modifiers_.referrer_policy) {
+    params.MutableResourceRequest().SetReferrerPolicy(
+        *modifiers_.referrer_policy);
+  }
+
+  CrossOriginAttributeValue effective_cross_origin =
+      modifiers_.cross_origin != kCrossOriginAttributeNotSet
+          ? modifiers_.cross_origin
+          : cross_origin;
+  if (effective_cross_origin == kCrossOriginAttributeNotSet) {
     params.MutableResourceRequest().SetMode(
         network::mojom::blink::RequestMode::kSameOrigin);
   } else {
     params.SetCrossOriginAccessControl(execution_context->GetSecurityOrigin(),
-                                       cross_origin);
+                                       effective_cross_origin);
   }
+
+  if (!modifiers_.integrity.IsNull()) {
+    IntegrityMetadataSet metadata_set;
+    SubresourceIntegrity::ParseIntegrityAttribute(
+        modifiers_.integrity, metadata_set, execution_context);
+    params.SetIntegrityMetadata(metadata_set);
+    params.MutableResourceRequest().SetFetchIntegrity(modifiers_.integrity,
+                                                      execution_context);
+  }
+
   document_content_ = SVGResourceDocumentContent::Fetch(params, document);
   if (!document_content_) {
     return;
@@ -314,9 +344,16 @@ Element* ExternalSVGResourceDocumentContent::ResolveTarget() {
   Document* external_document = document_content_->GetDocument();
   if (!external_document)
     return nullptr;
-  AtomicString decoded_fragment(DecodeURLEscapeSequences(
-      url_.FragmentIdentifier(), DecodeURLMode::kUTF8OrIsomorphic));
+  AtomicString decoded_fragment(DecodeUrlEscapeSequences(
+      url_.FragmentIdentifier(), DecodeUrlMode::kUtf8OrIsomorphic));
   return external_document->getElementById(decoded_fragment);
+}
+
+void ExternalSVGResourceDocumentContent::UpdateContentLifecycleForUse() const {
+  if (!document_content_) {
+    return;
+  }
+  document_content_->UpdateLifecycleForUse();
 }
 
 void ExternalSVGResourceDocumentContent::Trace(Visitor* visitor) const {
@@ -352,8 +389,18 @@ Element* ExternalSVGResourceImageContent::ResolveTarget() {
     return nullptr;
   }
   AtomicString decoded_fragment(
-      DecodeURLEscapeSequences(fragment_, DecodeURLMode::kUTF8OrIsomorphic));
-  return svg_image->GetResourceElement(decoded_fragment);
+      DecodeUrlEscapeSequences(fragment_, DecodeUrlMode::kUtf8OrIsomorphic));
+  return svg_image->GetResourceElement(
+      base::PassKey<ExternalSVGResourceImageContent>(), decoded_fragment);
+}
+
+void ExternalSVGResourceImageContent::UpdateContentLifecycleForUse() const {
+  auto* svg_image = DynamicTo<SVGImage>(image_content_->GetImage());
+  if (!svg_image) {
+    return;
+  }
+  svg_image->UpdateLifecycleForUse(
+      base::PassKey<ExternalSVGResourceImageContent>());
 }
 
 void ExternalSVGResourceImageContent::ImageNotifyFinished(

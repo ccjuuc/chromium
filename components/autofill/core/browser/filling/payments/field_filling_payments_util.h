@@ -5,21 +5,24 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_PAYMENTS_FIELD_FILLING_PAYMENTS_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FILLING_PAYMENTS_FIELD_FILLING_PAYMENTS_UTIL_H_
 
+#include <memory>
 #include <string>
-#include <vector>
 
+#include "base/containers/span.h"
+#include "components/autofill/core/browser/autofill_trigger_source.h"
+#include "components/autofill/core/browser/filling/field_filling_util.h"
+#include "components/autofill/core/browser/suggestions/suggestion_util.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 
 namespace autofill {
 
 class AutofillField;
 class CreditCard;
-class FormFieldData;
 
 // Returns the appropriate `credit_card` value based on `field_type` to fill
 // into `field`, and an empty string if no value could be found for the given
 // `field`.
-std::u16string GetFillingValueForCreditCard(
+FillingValueAndType GetFillingValueAndTypeForCreditCard(
     const CreditCard& credit_card,
     const std::string& app_locale,
     mojom::ActionPersistence action_persistence,
@@ -27,21 +30,14 @@ std::u16string GetFillingValueForCreditCard(
     bool is_cvc_filling_supported,
     std::string* failure_to_fill = nullptr);
 
-// Determines whether the `autofill_fields` or `trigger_autofill_field` is
-// either a credit card number or a CVC field. If either, is the
-// `trigger_autofill_field`, then return true otherwise check if the field is
-// empty and haven't been autofilled before, to return true.
-// `fields` represents the fields obtained from the renderer. They are the most
-// up to date version of the form and can be different from the
-// `autofill_fields`. `fields` are used to check if the cached field is still
-// present in the form on the renderer side. When `card_has_cvc` is false,
-// ignore the CVC field.
-// TODO(crbug.com/40227496): Remove FormFieldData parameter.
+// Determines whether a CC filling operation triggered on `trigger_field` will
+// fill any of `fields` with a CCN or CVC.
 bool WillFillCreditCardNumberOrCvc(
-    base::span<const FormFieldData> fields,
-    base::span<const std::unique_ptr<AutofillField>> autofill_fields,
-    const AutofillField& trigger_autofill_field,
-    bool card_has_cvc);
+    base::span<const std::unique_ptr<AutofillField>> fields,
+    const AutofillField& trigger_field,
+    AutofillTriggerSource trigger_source,
+    bool card_has_cvc,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior);
 
 }  // namespace autofill
 

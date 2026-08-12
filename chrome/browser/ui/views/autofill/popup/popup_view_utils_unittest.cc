@@ -4,13 +4,22 @@
 
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 
+#include <memory>
 #include <vector>
 
 #include "chrome/browser/ui/views/autofill/popup/popup_base_view.h"
+#include "chrome/browser/ui/views/autofill/popup/popup_view_views.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/views/view.h"
 
 namespace autofill {
+
+namespace {
+
+BASE_FEATURE(kTestFeature, base::FEATURE_DISABLED_BY_DEFAULT);
 
 std::vector<views::BubbleArrowSide> GetDefaultPopupSides() {
   return {PopupBaseView::kDefaultPreferredPopupSides.begin(),
@@ -474,6 +483,22 @@ TEST(PopupViewsUtilsTest, GetOptimalPopupPlacement) {
        {5, 300, 200, 300},
        PopupAnchorType::kField,
        views::BubbleBorder::Arrow::LEFT_TOP},
+      // The element is partially off-screen at the top.
+      // And the side is kLeft or kRight (due to narrow element).
+      // The popup y coordinate should be clamped to the content area top.
+      {false,
+       {100, -10, 1, 20},
+       {101, 0, 200, 300},
+       PopupAnchorType::kField,
+       views::BubbleBorder::Arrow::LEFT_TOP},
+      // The element is partially off-screen at the bottom.
+      // And the side is kLeft or kRight (due to narrow element).
+      // The popup y coordinate should be clamped to the content area bottom.
+      {false,
+       {100, 790, 1, 20},
+       {101, 500, 200, 300},
+       PopupAnchorType::kField,
+       views::BubbleBorder::Arrow::LEFT_TOP},
   };
 
   for (TestCase& test_case : test_cases) {
@@ -490,5 +515,108 @@ TEST(PopupViewsUtilsTest, GetOptimalPopupPlacement) {
     EXPECT_EQ(popup_bounds, test_case.expected_popup_bounds);
   }
 }
+
+TEST(PopupViewUtilsTest, HtmlPopupOverlapsWithAutofillPopup) {
+  const internal::PopupWidgetProperties kBasePopup = {
+      .is_showing = true,
+      .is_html_form_popup = true,
+      .bounds = gfx::Rect(10, 10, 100, 100)};
+
+  // Empty list.
+  EXPECT_FALSE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(50, 50, 100, 100), {}));
+
+  // Bounds overlap.
+  EXPECT_TRUE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(50, 50, 100, 100), {kBasePopup}));
+
+  // Bounds do not overlap.
+  EXPECT_FALSE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(200, 200, 100, 100), {kBasePopup}));
+
+  // View is not showing.
+  internal::PopupWidgetProperties hidden_popup = kBasePopup;
+  hidden_popup.is_showing = false;
+  EXPECT_FALSE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(50, 50, 100, 100), {hidden_popup}));
+
+  // View is not an HTML form popup.
+  internal::PopupWidgetProperties non_html_popup = kBasePopup;
+  non_html_popup.is_html_form_popup = false;
+  EXPECT_FALSE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(50, 50, 100, 100), {non_html_popup}));
+
+  // Multiple widgets: one non-overlapping, one overlapping.
+  internal::PopupWidgetProperties non_overlapping_popup = kBasePopup;
+  non_overlapping_popup.bounds = gfx::Rect(200, 200, 10, 10);
+  EXPECT_TRUE(internal::BoundsOverlapWithHtmlFormPopup(
+      gfx::Rect(50, 50, 100, 100), {non_overlapping_popup, kBasePopup}));
+}
+
+TEST(PopupViewsUtilsTest, TrackAndRun_Basic) {
+  auto view = std::make_unique<views::View>();
+  bool cb2_called = false;
+
+  bool survived = TrackAndRun(
+      view.get(), [&view]() { view.reset(); },
+      [&cb2_called]() { cb2_called = true; });
+
+  EXPECT_FALSE(survived);
+  EXPECT_FALSE(cb2_called);
+}
+
+// Tests that only AtMemorySearchAffordance suggestions are autoselected.
+TEST(PopupViewUtilsTest, IsSuggestionTypeAutoselected) {
+  EXPECT_TRUE(
+      IsSuggestionTypeAutoselected(SuggestionType::kAtMemorySearchAffordance));
+  EXPECT_FALSE(IsSuggestionTypeAutoselected(SuggestionType::kAddressEntry));
+  EXPECT_FALSE(IsSuggestionTypeAutoselected(SuggestionType::kCreditCardEntry));
+}
+
+// Tests that the first suggestion is autoselected based on the trigger source
+// and suggestion type.
+TEST(PopupViewUtilsTest, ShouldAutoselectFirstSuggestion) {
+  // 1. Trigger source requests auto-selection:
+  EXPECT_TRUE(ShouldAutoselectFirstSuggestion(AutoselectFirstSuggestion(true),
+                                              std::nullopt));
+  EXPECT_TRUE(ShouldAutoselectFirstSuggestion(AutoselectFirstSuggestion(true),
+                                              SuggestionType::kAddressEntry));
+  EXPECT_TRUE(ShouldAutoselectFirstSuggestion(
+      AutoselectFirstSuggestion(true),
+      SuggestionType::kAtMemorySearchAffordance));
+
+  // 2. Trigger source does NOT request auto-selection, but suggestion type
+  // overrides:
+  EXPECT_TRUE(ShouldAutoselectFirstSuggestion(
+      AutoselectFirstSuggestion(false),
+      SuggestionType::kAtMemorySearchAffordance));
+
+  // 3. Neither requests:
+  EXPECT_FALSE(ShouldAutoselectFirstSuggestion(AutoselectFirstSuggestion(false),
+                                               std::nullopt));
+  EXPECT_FALSE(ShouldAutoselectFirstSuggestion(AutoselectFirstSuggestion(false),
+                                               SuggestionType::kAddressEntry));
+}
+
+TEST(PopupViewUtilsTest, GetAutofillPopupCellElementIdentifier) {
+  // Null feature maps to invalid element identifier.
+  EXPECT_FALSE(GetAutofillPopupCellElementIdentifier(nullptr));
+
+  // Unknown feature maps to invalid element identifier.
+  EXPECT_FALSE(GetAutofillPopupCellElementIdentifier(&kTestFeature));
+
+  // Virtual card feature maps to kAutofillCreditCardSuggestionEntryElementId.
+  EXPECT_EQ(GetAutofillPopupCellElementIdentifier(
+                &feature_engagement::kIPHAutofillVirtualCardSuggestionFeature),
+            PopupViewViews::kAutofillCreditCardSuggestionEntryElementId);
+
+  // Standalone CVC feature maps to kAutofillStandaloneCvcSuggestionElementId.
+  EXPECT_EQ(
+      GetAutofillPopupCellElementIdentifier(
+          &feature_engagement::kIPHAutofillVirtualCardCVCSuggestionFeature),
+      PopupViewViews::kAutofillStandaloneCvcSuggestionElementId);
+}
+
+}  // namespace
 
 }  // namespace autofill

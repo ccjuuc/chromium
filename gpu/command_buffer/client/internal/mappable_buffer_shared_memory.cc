@@ -4,11 +4,13 @@
 
 #include "gpu/command_buffer/client/internal/mappable_buffer_shared_memory.h"
 
+#include <errno.h>
 #include <stdint.h>
 
 #include <utility>
 
 #include "base/compiler_specific.h"
+#include "base/debug/crash_logging.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -56,7 +58,6 @@ MappableBufferSharedMemory::CreateFromHandle(gfx::GpuMemoryBufferHandle handle,
                                              const gfx::Size& size,
                                              viz::SharedImageFormat format) {
   DCHECK(handle.region().IsValid());
-  CHECK(viz::HasEquivalentBufferFormat(format));
 
   std::optional<size_t> minimum_stride =
       viz::SharedMemoryRowSizeForSharedImageFormat(format, 0, size.width());
@@ -172,11 +173,11 @@ bool MappableBufferSharedMemory::Map() {
   return true;
 }
 
-void* MappableBufferSharedMemory::memory(size_t plane) {
+base::span<uint8_t> MappableBufferSharedMemory::memory(size_t plane) {
   AssertMapped();
   DCHECK_LT(static_cast<int>(plane), format_.NumberOfPlanes());
-  return UNSAFE_TODO(
-      static_cast<uint8_t*>(shared_memory_mapping_.memory()) + offset_ +
+  return shared_memory_mapping_.GetMemoryAsSpan<uint8_t>().subspan(
+      offset_ +
       viz::SharedMemoryOffsetForSharedImageFormat(format_, plane, size_));
 }
 
@@ -199,7 +200,24 @@ gfx::GpuMemoryBufferType MappableBufferSharedMemory::GetType() const {
 }
 
 gfx::GpuMemoryBufferHandle MappableBufferSharedMemory::CloneHandle() const {
-  gfx::GpuMemoryBufferHandle handle(shared_memory_region_.Duplicate());
+  SCOPED_CRASH_KEY_BOOL("MappableBufferShmem", "region_valid",
+                        shared_memory_region_.IsValid());
+  SCOPED_CRASH_KEY_NUMBER("MappableBufferShmem", "width", size_.width());
+  SCOPED_CRASH_KEY_NUMBER("MappableBufferShmem", "height", size_.height());
+
+  base::UnsafeSharedMemoryRegion duped_region =
+      shared_memory_region_.Duplicate();
+  if (!duped_region.IsValid()) {
+    SCOPED_CRASH_KEY_NUMBER("MappableBufferShmem", "dup_errno", errno);
+    // This constructor call triggers a crash report since `duped_region` is
+    // invalid.
+    gfx::GpuMemoryBufferHandle handle(std::move(duped_region));
+    handle.offset = offset_;
+    handle.stride = stride_;
+    return handle;
+  }
+
+  gfx::GpuMemoryBufferHandle handle(std::move(duped_region));
   handle.offset = offset_;
   handle.stride = stride_;
   return handle;
@@ -211,6 +229,10 @@ void MappableBufferSharedMemory::MapAsync(
 }
 
 bool MappableBufferSharedMemory::AsyncMappingIsNonBlocking() const {
+  return false;
+}
+
+bool MappableBufferSharedMemory::SupportsZeroCopyWebGPUImport() const {
   return false;
 }
 

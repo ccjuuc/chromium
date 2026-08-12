@@ -49,6 +49,7 @@ public class EmbeddedPermissionDialogMediator extends PermissionDialogMediator
 
     public void showDialogInternal(View view) {
         assert mState == State.NOT_SHOWING || mState == State.SHOW_SYSTEM_PROMPT;
+        setupLocationPrecisionChooser(view);
         mDialogModel = createModalDialogModel(view);
         assumeNonNull(mModalDialogManager)
                 .showDialog(mDialogModel, ModalDialogManager.ModalDialogType.TAB);
@@ -86,6 +87,7 @@ public class EmbeddedPermissionDialogMediator extends PermissionDialogMediator
                         ModalDialogProperties.NEGATIVE_BUTTON_TEXT,
                         mDialogDelegate.getNegativeButtonText());
             }
+            setupLocationPrecisionChooser(customView);
             mDialogModel.set(ModalDialogProperties.CUSTOM_VIEW, customView);
         }
     }
@@ -99,12 +101,12 @@ public class EmbeddedPermissionDialogMediator extends PermissionDialogMediator
 
     @Override
     public void onAndroidPermissionAccepted() {
-        handleSystemPermission(/*accepted*/ true);
+        handleSystemPermission(/* accepted= */ true);
     }
 
     @Override
     public void onAndroidPermissionCanceled() {
-        handleSystemPermission(/*accepted*/ false);
+        handleSystemPermission(/* accepted= */ false);
     }
 
     private void acknowledgeDelegate() {

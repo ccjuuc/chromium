@@ -14,7 +14,6 @@
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
@@ -34,6 +33,7 @@
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_sink.h"
 #include "ui/gfx/animation/slide_animation.h"
@@ -48,6 +48,8 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/vector_icons.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/caption_button_types.h"
@@ -57,6 +59,8 @@
 namespace chromeos {
 
 namespace {
+
+constexpr int kRoundedCaptionButtonSize = 16;
 
 // Duration of the animation of the position of buttons to the left of
 // |size_button_|.
@@ -212,12 +216,16 @@ class DefaultCaptionButtonModel : public CaptionButtonModel {
 
 }  // namespace
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(FrameCaptionButtonContainerView,
+                                      kElementId);
+
 FrameCaptionButtonContainerView::FrameCaptionButtonContainerView(
     views::Widget* widget,
     bool is_close_button_enabled,
     std::unique_ptr<views::FrameCaptionButton> custom_button)
     : views::AnimationDelegateViews(widget->GetRootView()), widget_(widget) {
-  SetID(ViewID::VIEW_ID_CAPTION_BUTTON_CONTAINER);
+  SetProperty(views::kElementIdentifierKey,
+              chromeos::FrameCaptionButtonContainerView::kElementId);
 
   auto default_caption_button_model =
       std::make_unique<DefaultCaptionButtonModel>(widget,
@@ -286,13 +294,19 @@ FrameCaptionButtonContainerView::FrameCaptionButtonContainerView(
   AddChildViewRaw(close_button_.get());
 
   SetButtonImage(views::CAPTION_BUTTON_ICON_FLOAT,
-                 chromeos::kWindowControlFloatIcon);
+                 ::features::IsRoundedIconsEnabled()
+                     ? chromeos::kFloatLandscapeIcon
+                     : chromeos::kWindowControlFloatOldIcon);
   // TODO(hewer): Resolve this so two float icons are no longer needed.
   SetButtonImage(views::CAPTION_BUTTON_ICON_MENU, chromeos::kFloatWindowIcon);
   SetButtonImage(views::CAPTION_BUTTON_ICON_MINIMIZE,
-                 views::kWindowControlMinimizeIcon);
+                 ::features::IsRoundedIconsEnabled()
+                     ? views::kChromeMinimizeIcon
+                     : views::kWindowControlMinimizeOldIcon);
   SetButtonImage(views::CAPTION_BUTTON_ICON_CLOSE,
-                 views::kWindowControlCloseIcon);
+                 ::features::IsRoundedIconsEnabled()
+                     ? views::kCloseIcon
+                     : views::kWindowControlCloseOldIcon);
 
   // The float button relies on minimum size to know if it can be floated, which
   // can only be checked after the widget has been initialized.
@@ -339,7 +353,10 @@ void FrameCaptionButtonContainerView::SetButtonImage(
   for (views::FrameCaptionButton* button : buttons) {
     if (button && button->GetIcon() == icon) {
       button->SetImage(icon, views::FrameCaptionButton::Animate::kNo,
-                       icon_definition);
+                       icon_definition,
+                       ::features::IsRoundedIconsEnabled()
+                           ? std::make_optional<int>(kRoundedCaptionButtonSize)
+                           : std::nullopt);
     }
   }
 }
@@ -391,16 +408,15 @@ void FrameCaptionButtonContainerView::OnWindowControlsOverlayEnabledChanged(
   }
 }
 
-void FrameCaptionButtonContainerView::UpdateBorderlessModeEnabled(
-    bool enabled) {
-  if (is_borderless_mode_enabled_ == enabled) {
+void FrameCaptionButtonContainerView::UpdateUnframedModeEnabled(bool enabled) {
+  if (is_unframed_mode_enabled_ == enabled) {
     return;
   }
 
-  // In borderless mode, the windowing controls will be drawn in web content,
+  // In unframed mode, the windowing controls will be drawn in web content,
   // so similarly to hiding the title bar, also the caption button container
   // containing them will be hidden.
-  is_borderless_mode_enabled_ = enabled;
+  is_unframed_mode_enabled_ = enabled;
   SetVisible(!enabled);
 }
 
@@ -615,7 +631,10 @@ void FrameCaptionButtonContainerView::SetButtonIcon(
                                  : views::FrameCaptionButton::Animate::kNo;
   auto it = button_icon_map_.find(icon);
   if (it != button_icon_map_.end()) {
-    button->SetImage(icon, fcb_animate, *it->second);
+    button->SetImage(icon, fcb_animate, *it->second,
+                     ::features::IsRoundedIconsEnabled()
+                         ? std::make_optional<int>(kRoundedCaptionButtonSize)
+                         : std::nullopt);
   }
 }
 
@@ -624,13 +643,17 @@ void FrameCaptionButtonContainerView::UpdateSizeButton() {
   const bool floated = widget_->GetNativeWindow()->GetProperty(
                            kWindowStateTypeKey) == WindowStateType::kFloated;
 
-  const gfx::VectorIcon& restore_icon = use_zoom_icons
-                                            ? chromeos::kWindowControlDezoomIcon
-                                            : views::kWindowControlRestoreIcon;
+  const gfx::VectorIcon& restore_icon =
+      use_zoom_icons ? chromeos::kWindowControlDezoomIcon
+      : ::features::IsRoundedIconsEnabled()
+          ? views::kChromeRestoreIcon
+          : views::kWindowControlRestoreOldIcon;
   const gfx::VectorIcon& maximize_icon =
       use_zoom_icons ? chromeos::kWindowControlZoomIcon
                      : (floated ? chromeos::kUnfloatButtonIcon
-                                : views::kWindowControlMaximizeIcon);
+                        : ::features::IsRoundedIconsEnabled()
+                            ? views::kChromeMaximizeIcon
+                            : views::kWindowControlMaximizeOldIcon);
 
   const bool use_restore_frame = chromeos::ShouldUseRestoreFrame(widget_);
   SetButtonImage(views::CAPTION_BUTTON_ICON_MAXIMIZE_RESTORE,
@@ -676,8 +699,12 @@ void FrameCaptionButtonContainerView::UpdateFloatButton() {
   const bool floated = widget_->GetNativeWindow()->GetProperty(
                            kWindowStateTypeKey) == WindowStateType::kFloated;
   SetButtonImage(views::CAPTION_BUTTON_ICON_FLOAT,
-                 floated ? chromeos::kWindowControlUnfloatIcon
-                         : chromeos::kWindowControlFloatIcon);
+                 floated ? ::features::IsRoundedIconsEnabled()
+                               ? chromeos::kUnfloatLandscapeIcon
+                               : chromeos::kWindowControlUnfloatOldIcon
+                 : ::features::IsRoundedIconsEnabled()
+                     ? chromeos::kFloatLandscapeIcon
+                     : chromeos::kWindowControlFloatOldIcon);
   float_button_->SetTooltipText(l10n_util::GetStringUTF16(
       floated ? IDS_MULTITASK_MENU_EXIT_FLOAT_BUTTON_NAME
               : IDS_MULTITASK_MENU_FLOAT_BUTTON_NAME));

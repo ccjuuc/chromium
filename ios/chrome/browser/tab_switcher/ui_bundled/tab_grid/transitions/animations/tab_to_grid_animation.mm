@@ -6,6 +6,7 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/ui/elements/top_aligned_image_view.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_constants.h"
@@ -68,13 +69,6 @@
       0, topToolbarHeight, originFrame.size.width, contentSnapshot.size.height);
   contentImageView.frame = imageViewOriginFrame;
 
-  // Create the content snapshot's destination frame.
-  CGFloat destinationFrameAspectRatio =
-      destinationFrame.size.width / destinationFrame.size.height;
-  CGRect imageViewDestinationFrame =
-      CGRectMake(0, topToolbarHeight, originFrame.size.width,
-                 originFrame.size.width / destinationFrameAspectRatio);
-
   // Needed so that the contentImageView's innerImageView frame is not
   // CGRectZero when the animation starts.
   [contentImageView setNeedsLayout];
@@ -116,12 +110,15 @@
   [animatedView.layer.mask addAnimation:animation forKey:@"maskAnimation"];
 
   // Active tab grid blur animation setup.
-  UIVisualEffectView* activeGridBlurView = [[UIVisualEffectView alloc]
-      initWithEffect:[UIBlurEffect effectWithStyle:kTabGridBlurStyle]];
-  activeGridBlurView.translatesAutoresizingMaskIntoConstraints = NO;
-  [animatedView.superview insertSubview:activeGridBlurView
-                           belowSubview:animatedView];
-  AddSameConstraints(activeGridBlurView.superview, activeGridBlurView);
+  UIVisualEffectView* activeGridBlurView = nil;
+  if (!UIAccessibilityIsReduceTransparencyEnabled()) {
+    activeGridBlurView = [[UIVisualEffectView alloc]
+        initWithEffect:[UIBlurEffect effectWithStyle:kTabGridBlurStyle]];
+    activeGridBlurView.translatesAutoresizingMaskIntoConstraints = NO;
+    [animatedView.superview insertSubview:activeGridBlurView
+                             belowSubview:animatedView];
+    AddSameConstraints(activeGridBlurView.superview, activeGridBlurView);
+  }
 
   [animatedView.superview setNeedsLayout];
   [animatedView.superview layoutIfNeeded];
@@ -148,12 +145,6 @@
     activeGridView.transform = CGAffineTransformIdentity;
     pinnedTabsView.transform = CGAffineTransformIdentity;
 
-    // Needed so that the contentImageView's innerImageView frame is
-    // animated.
-    contentImageView.frame = imageViewDestinationFrame;
-    [contentImageView setNeedsLayout];
-    [contentImageView layoutIfNeeded];
-
     // Scale animated view to destination frame.
     animatedView.transform = CGAffineTransformMakeScale(
         destinationOverCurrentFrameRatio, destinationOverCurrentFrameRatio);
@@ -167,6 +158,8 @@
   };
 
   // The main animation's completion block.
+  __weak __typeof(id<TabGridCommands>) weakHandler =
+      _animationParameters.handler;
   void (^mainCompletion)(BOOL) = ^(BOOL finished) {
     // Reset the active grid view.
     CGRect oldAnimationFrame = activeGridView.frame;
@@ -185,6 +178,8 @@
     [topToolbarBackground removeFromSuperview];
     [bottomToolbarBackground removeFromSuperview];
     [contentImageView removeFromSuperview];
+
+    [weakHandler activateGridContainerConstraints];
 
     if (completion) {
       completion();
@@ -233,6 +228,7 @@
                             completion:nil];
 
   // Perform the main animation.
+  [weakHandler deactivateGridContainerConstraints];
   [UIView animateWithDuration:kTabToGridAnimationDuration
                         delay:0
        usingSpringWithDamping:kTabToGridAnimationDamping

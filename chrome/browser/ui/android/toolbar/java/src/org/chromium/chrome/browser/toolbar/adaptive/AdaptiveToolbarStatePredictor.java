@@ -15,6 +15,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionUtil;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
 import org.chromium.components.segmentation_platform.proto.SegmentationProto.SegmentId;
 import org.chromium.ui.permissions.AndroidPermissionDelegate;
 
@@ -36,6 +37,7 @@ public class AdaptiveToolbarStatePredictor {
     private static @Nullable List<Integer> sSegmentationResultsForTesting;
 
     private static @Nullable Integer sToolbarStateForTesting;
+    private final Context mContext;
     private final Profile mProfile;
     private final AdaptiveToolbarBehavior mBehavior;
 
@@ -81,6 +83,7 @@ public class AdaptiveToolbarStatePredictor {
             Profile profile,
             @Nullable AndroidPermissionDelegate androidPermissionDelegate,
             @Nullable AdaptiveToolbarBehavior behavior) {
+        mContext = context;
         mProfile = profile;
         mAndroidPermissionDelegate = androidPermissionDelegate;
         mBehavior =
@@ -123,7 +126,7 @@ public class AdaptiveToolbarStatePredictor {
         boolean toolbarToggle = readToolbarToggleStateFromPrefs();
         readFromSegmentationPlatform(
                 segmentSelectionResults -> {
-                    int defaultSegment = mBehavior.getSegmentationDefault();
+                    int defaultSegment = mBehavior.getSegmentationDefault(mProfile);
                     UiState uiState =
                             new UiState(
                                     AdaptiveToolbarFeatures.isCustomizationEnabled(),
@@ -161,7 +164,9 @@ public class AdaptiveToolbarStatePredictor {
             return filteredResults;
         }
 
-        if (mBehavior.canShowManualOverride(manualOverride) && isValidSegment(manualOverride)) {
+        if (mBehavior.canShowManualOverride(manualOverride)
+                && isValidSegment(manualOverride)
+                && isVariantEnabled(manualOverride)) {
             filteredResults.add(manualOverride);
             return filteredResults;
         }
@@ -177,7 +182,9 @@ public class AdaptiveToolbarStatePredictor {
 
     private @AdaptiveToolbarButtonVariant int getToolbarPreferenceSelection(
             @AdaptiveToolbarButtonVariant int manualOverride) {
-        if (isValidSegment(manualOverride)) return manualOverride;
+        if (isValidSegment(manualOverride) && isVariantEnabled(manualOverride)) {
+            return manualOverride;
+        }
         return AdaptiveToolbarButtonVariant.AUTO;
     }
 
@@ -198,8 +205,8 @@ public class AdaptiveToolbarStatePredictor {
             case AdaptiveToolbarButtonVariant.TRANSLATE:
             case AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS:
             case AdaptiveToolbarButtonVariant.READ_ALOUD:
-            case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
             case AdaptiveToolbarButtonVariant.OPEN_IN_BROWSER:
+            case AdaptiveToolbarButtonVariant.GLIC:
                 return true;
             case AdaptiveToolbarButtonVariant.UNKNOWN:
             case AdaptiveToolbarButtonVariant.NONE:
@@ -250,7 +257,7 @@ public class AdaptiveToolbarStatePredictor {
     private @AdaptiveToolbarButtonVariant int replaceVariantIfDisabled(
             @AdaptiveToolbarButtonVariant int variant) {
         if (isVariantEnabled(variant)) return variant;
-        variant = mBehavior.getSegmentationDefault();
+        variant = mBehavior.getSegmentationDefault(mProfile);
         if (isVariantEnabled(variant)) return variant;
         // Fallback in the unlikely situation the default is disabled.
         return AdaptiveToolbarButtonVariant.UNKNOWN;
@@ -258,16 +265,24 @@ public class AdaptiveToolbarStatePredictor {
 
     private boolean isVariantEnabled(@AdaptiveToolbarButtonVariant int variant) {
         switch (variant) {
+            case AdaptiveToolbarButtonVariant.NEW_TAB:
+                return !isBottomBarEnabled();
             case AdaptiveToolbarButtonVariant.VOICE:
                 if (mAndroidPermissionDelegate == null) return true;
                 return VoiceRecognitionUtil.isVoiceSearchEnabled(mAndroidPermissionDelegate);
             case AdaptiveToolbarButtonVariant.READ_ALOUD:
                 return AdaptiveToolbarFeatures.isAdaptiveToolbarReadAloudEnabled(mProfile);
-            case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
-                return AdaptiveToolbarFeatures.isAdaptiveToolbarPageSummaryEnabled();
+            case AdaptiveToolbarButtonVariant.TRANSLATE:
+                return AdaptiveToolbarFeatures.isTranslateEnabled(mProfile);
+            case AdaptiveToolbarButtonVariant.GLIC:
+                return AdaptiveToolbarFeatures.isGlicEnabledForAdaptiveToolbar(mContext, mProfile);
             default:
                 return true;
         }
+    }
+
+    private boolean isBottomBarEnabled() {
+        return BottomBarConfigUtils.isBottomBarEnabled(mContext);
     }
 
     /**

@@ -12,10 +12,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
-#include "chrome/browser/ui/views/page_action/page_action_observer.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_observer.h"
+#include "chrome/browser/ui/read_anything/read_anything_omnibox_controller.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_observer.h"
+#include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -64,8 +66,7 @@ class ReadAnythingSidePanelControllerGlue
 // A per-tab class that facilitates the showing of the Read Anything side panel.
 class ReadAnythingSidePanelController
     : public SidePanelEntryObserver,
-      public content::WebContentsObserver,
-      public page_actions::PageActionObserver {
+      public tabs::ContentsObservingTabFeature {
  public:
   using Observer = ReadAnythingLifecycleObserver;
   ReadAnythingSidePanelController(tabs::TabInterface* tab,
@@ -76,16 +77,8 @@ class ReadAnythingSidePanelController
       const ReadAnythingSidePanelController&) = delete;
   ~ReadAnythingSidePanelController() override;
 
-  // Delay before showing the ominbox entrypoint to ensure the user is actually
-  // attempting to read the page.
-  static const int kShowPageActionDelayMs = 3000;
-  // Delay before logging whether the user opened RM after seeing the IPH for
-  // the omnibox entrypoint. If they don't open RM within this time, log that
-  // they didn't open it, as it's unlikely the IPH convinced them to open RM.
-  static const int kOmniboxIPHResponseTimeoutSecs = 20;
-
-  // TODO(https://crbug.com/347770670): remove this.
-  void ResetForTabDiscard();
+  // Removes the ReadAnythingControllerGlue from the web contents.
+  void RemoveReadAnythingControllerGlue();
 
   void AddPageHandlerAsObserver(
       base::WeakPtr<ReadAnythingUntrustedPageHandler> page_handler);
@@ -102,10 +95,12 @@ class ReadAnythingSidePanelController
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  void SetDwellTimeForTesting(base::TimeTicks test_time);
+
   tabs::TabInterface* tab() { return tab_.get(); }
 
  private:
-   void ReturnWebUIToController();
+  void ReturnWebUIToController();
 
   // Creates the container view and all its child views for side panel entry.
   std::unique_ptr<views::View> CreateContainerView(SidePanelEntryScope& scope);
@@ -119,9 +114,6 @@ class ReadAnythingSidePanelController
   // Called when the associated tab enters the foreground.
   void TabForegrounded(tabs::TabInterface* tab);
 
-  // Called when the associated tab enters the background.
-  void TabBackgrounded(tabs::TabInterface* tab);
-
   // Called when the tab will detach.
   void TabWillDetach(tabs::TabInterface* tab,
                      tabs::TabInterface::DetachReason reason);
@@ -134,47 +126,16 @@ class ReadAnythingSidePanelController
   // visibility and background tabs do nothing.
   void UpdateIphVisibility();
 
-  // Runs a heuristic to check if the current tab's contents are a good
-  // candidate for distillation in Reading mode. The result is returned in the
-  // OnReadabilityResult call below, and is used to determine whether or not to
-  // show the omnibox entrypoint for RM.
-  void CheckIfGoodCandidateForReadingMode();
-
-  // Called with the results of CheckIfGoodCandidateForReadingMode.
-  void OnReadabilityResult(bool should_show);
-
-  // Show or hide the omnibox entry point.
-  void UpdateOmniboxEntryPoint(bool should_show);
-
-  // Checks if the omnibox entry point was ignored and informs the entry point
-  // controller if it was.
-  // TODO(crbug.com/447418049): Check this with IRM too - possibly by moving
-  // this to the ReadAnythingController.
-  void UpdateOmniboxEntryPointIgnored(bool is_showing);
-
-  // Called when the IPH for the omnibox entry is either shown or not shown.
-  void OnShowPromoResult(user_education::FeaturePromoResult result);
-
-  // Log whether the user opened RM after seeing the omnibox IPH.
-  // TODO(crbug.com/447418049): Log this with IRM too.
-  void RecordOpenedAfterPromo();
-
   std::string default_language_code_;
 
-  // The time when CheckIfGoodCandidateForReadingMode was triggered.
-  base::TimeTicks candidate_check_triggered_time_ms_;
+  std::unique_ptr<ReadAnythingOmniboxController> omnibox_controller_;
 
-  // The cached result of CheckIfGoodCandidateForReadingMode.
-  bool was_last_checked_page_distillable_ = false;
-
-  // A timer for delaying showing the ominbox entrypoint to ensure the user is
-  // actually attempting to read the page.
-  std::unique_ptr<base::RetainingOneShotTimer> page_dwell_timer_;
-  // A timer for logging whether the user opened RM after seeing the omnibox
-  // IPH.
-  std::unique_ptr<base::OneShotTimer> iph_response_timer_;
-
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   const raw_ptr<tabs::TabInterface> tab_;
   raw_ptr<SidePanelRegistry> side_panel_registry_;
@@ -194,6 +155,9 @@ class ReadAnythingSidePanelController
 
   // Holds the most recently created WebView for the side panel, if one exists.
   base::WeakPtr<ReadAnythingSidePanelWebView> web_view_;
+
+  // Flag to indicate that the cached view should be cleared when hidden.
+  bool should_clear_cached_view_on_hidden_ = false;
 
   // Must be the last member.
   base::WeakPtrFactory<ReadAnythingSidePanelController> weak_factory_{this};

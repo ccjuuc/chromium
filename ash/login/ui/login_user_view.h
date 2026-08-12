@@ -12,6 +12,7 @@
 #include "ash/login/ui/login_display_style.h"
 #include "ash/login/ui/login_remove_account_dialog.h"
 #include "ash/public/cpp/login_types.h"
+#include "ash/shell_observer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -26,7 +27,8 @@ class LoginButton;
 // Display the user's profile icon, name, and a remove_account_dialog icon in
 // various layout styles.
 class ASH_EXPORT LoginUserView : public views::View,
-                                 public display::DisplayConfigurator::Observer {
+                                 public display::DisplayConfigurator::Observer,
+                                 public ShellObserver {
   METADATA_HEADER(LoginUserView, views::View)
 
  public:
@@ -84,6 +86,9 @@ class ASH_EXPORT LoginUserView : public views::View,
 
   // DisplayConfigurator::Observer
   void OnPowerStateChanged(chromeos::DisplayPowerState power_state) override;
+
+  // ShellObserver:
+  void OnShellDestroying() override;
 
   const LoginUserInfo& current_user() const { return current_user_; }
 

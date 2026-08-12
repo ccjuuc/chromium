@@ -148,6 +148,21 @@ interface AutofillDriver {
   JavaScriptChangedAutofilledValue(FormData form,
                                    FieldRendererId field_id,
                                    mojo_base.mojom.String16 old_value);
+
+  // Sent when a form with an email verification token is submitted.
+  //
+  // `field_id` must identify a field of `form`. This is enforced by
+  // ContentAutofillDriver.
+  FormWithEmailVerificationTokenSubmitted(FormData form,
+                                          FieldRendererId field_id);
+
+  // Sent when the renderer suspects a custom JavaScript autofill event has
+  // occurred, filling all fields in `field_ids`, and suspecting that
+  // `trigger_field_id` is the field that triggered this.
+  DidDetectJavaScriptAutofill(
+    FormData form,
+    FieldRendererId trigger_field_id,
+    array<JavaScriptFieldModification> field_modifications);
 };
 
 // There is one instance of this interface per web contents in the browser
@@ -196,16 +211,6 @@ interface PasswordManagerDriver {
     mojo_base.mojom.String16 value,
     bool autocomplete_attribute_has_username,
     bool is_likely_otp);
-
-  // Instructs the browser to show a popup or accessory with password
-  // suggestions. The popup will use `request.text_direction` for displaying
-  // text. The accessory uses the `request.form` and the indices of username and
-  // password elements in the form (`request.username_field_index` and
-  // `request.password_field_index` respectively) to calculate submission
-  // readiness for the `request.form`. If the username field is not found,
-  // `request.username_field_index` is set to `request.form.fields.size()`.
-  // Similar for the password field.
-  ShowPasswordSuggestions(PasswordSuggestionRequest request);
 
   // Checks the safe browsing reputation of the website where the focused
   // username/password field is on.

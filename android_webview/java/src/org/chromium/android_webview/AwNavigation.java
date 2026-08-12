@@ -7,6 +7,9 @@ package org.chromium.android_webview;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.NavigationHandle;
+import org.chromium.net.NetError;
+
+import java.util.Map;
 
 /** Represents a navigation and is exposed to embedders. See also AwNavigationListener */
 @NullMarked
@@ -15,6 +18,7 @@ public class AwNavigation extends AwSupportLibIsomorphic {
     // The Page that the navigation commits into. Set to null if the navigation doesn't commit or
     // result in a Page (e.g. 204/download)
     private @Nullable AwPage mPage;
+    private @Nullable Map<String, String> mResponseHeaders;
 
     public AwNavigation(NavigationHandle navigationHandle, @Nullable AwPage page) {
         mNavigationHandle = navigationHandle;
@@ -77,5 +81,18 @@ public class AwNavigation extends AwSupportLibIsomorphic {
 
     public int getStatusCode() {
         return mNavigationHandle.httpStatusCode();
+    }
+
+    public @Nullable AwWebResourceError getWebResourceError() {
+        if (mNavigationHandle.errorCode() == NetError.OK) return null;
+        return AwWebResourceError.createFromNetError(
+                mNavigationHandle.errorCode(), mNavigationHandle.errorDescription());
+    }
+
+    public @Nullable Map<String, String> getResponseHeaders() {
+        if (mResponseHeaders == null) {
+            mResponseHeaders = mNavigationHandle.getResponseHeaders();
+        }
+        return mResponseHeaders;
     }
 }

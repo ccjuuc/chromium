@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 
 import androidx.test.filters.SmallTest;
 
@@ -19,6 +20,7 @@ import org.junit.runner.RunWith;
 import org.chromium.base.shared_preferences.KeyPrefix;
 import org.chromium.base.shared_preferences.PreferenceKeyRegistry;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.build.BuildConfig;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -46,6 +48,7 @@ public class ChromePreferenceKeysTest {
     @Test
     @SmallTest
     public void testKeysAreNotReused() {
+        assumeTrue(BuildConfig.ENABLE_ASSERTS);
         // Build sets of all keys combined between registries and check for any intersections
         // between registries.
         Set<String> allKeysInUse = new HashSet<>();
@@ -153,11 +156,11 @@ public class ChromePreferenceKeysTest {
     @SmallTest
     public void testReuseCheck_emptyLists() {
         doTestKeysAreNotReused(
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
@@ -165,32 +168,32 @@ public class ChromePreferenceKeysTest {
     public void testReuseCheck_duplicateKey_used() {
         doTestKeysAreNotReused(
                 Arrays.asList("UsedKey1", "UsedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
     @SmallTest
     public void testReuseCheck_duplicateKey_legacy() {
         doTestKeysAreNotReused(
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
                 Arrays.asList("LegacyKey1", "LegacyKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
     @SmallTest
     public void testReuseCheck_duplicateKey_deprecated() {
         doTestKeysAreNotReused(
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
+                Collections.emptyList(),
                 Arrays.asList("DeprecatedKey1", "DeprecatedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test
@@ -212,9 +215,9 @@ public class ChromePreferenceKeysTest {
         doTestKeysAreNotReused(
                 Arrays.asList("ReusedKey", "UsedKey1"),
                 Arrays.asList("LegacyKey1", "ReusedKey"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
@@ -222,21 +225,21 @@ public class ChromePreferenceKeysTest {
     public void testReuseCheck_intersectionUsedAndDeprecated() {
         doTestKeysAreNotReused(
                 Arrays.asList("UsedKey1", "ReusedKey"),
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
                 Arrays.asList("ReusedKey", "DeprecatedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
     @SmallTest
     public void testReuseCheck_intersectionLegacyAndDeprecated() {
         doTestKeysAreNotReused(
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
                 Arrays.asList("LegacyKey1", "ReusedKey"),
                 Arrays.asList("ReusedKey", "DeprecatedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST);
+                Collections.emptyList(),
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
@@ -244,10 +247,10 @@ public class ChromePreferenceKeysTest {
     public void testReuseCheck_intersectionUsedLegacyFormat_prefix() {
         doTestKeysAreNotReused(
                 Arrays.asList("UsedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
+                Collections.emptyList(),
                 Arrays.asList(new KeyPrefix("UsedKey*")),
-                Collections.EMPTY_LIST);
+                Collections.emptyList());
     }
 
     @Test(expected = AssertionError.class)
@@ -255,9 +258,9 @@ public class ChromePreferenceKeysTest {
     public void testReuseCheck_intersectionDeprecatedLegacyFormat_prefix() {
         doTestKeysAreNotReused(
                 Arrays.asList("UsedKey1"),
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
-                Collections.EMPTY_LIST,
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList(),
                 Arrays.asList(new KeyPrefix("Used*")));
     }
 

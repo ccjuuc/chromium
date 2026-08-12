@@ -5,6 +5,8 @@
 package org.chromium.chrome.browser.omnibox;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 
 /** Data class defining UI overrides for the {@link LocationBar}. */
 @NullMarked
@@ -12,10 +14,34 @@ public class LocationBarEmbedderUiOverrides {
     private boolean mForcedPhoneStyleOmnibox;
     private boolean mLensEntrypointAllowed;
     private boolean mVoiceEntrypointAllowed;
+    private boolean mIsEmbedderControlledHint;
+    private boolean mIsMainBrowserOmnibox;
+    private @Nullable SideUiStateProvider mSideUiStateProvider;
 
     public LocationBarEmbedderUiOverrides() {
         mLensEntrypointAllowed = true;
         mVoiceEntrypointAllowed = true;
+        mIsEmbedderControlledHint = false;
+    }
+
+    /**
+     * Whether the omnibox embedder represents the main browser URL bar. This refers to whether the
+     * omnibox instance was created through the toolbar or through search activity.
+     */
+    public boolean isMainBrowserOmnibox() {
+        return mIsMainBrowserOmnibox;
+    }
+
+    /**
+     * Specify that this omnibox embedder represents the main browser URL bar. This should only be
+     * set when instantiated via the {@link ToolbarManager} and not in other cases such as {@link
+     * SearchUiCoordinator}.
+     *
+     * @return {@code this} for call chaining
+     */
+    public LocationBarEmbedderUiOverrides setIsMainBrowserOmnibox() {
+        mIsMainBrowserOmnibox = true;
+        return this;
     }
 
     /**
@@ -67,5 +93,36 @@ public class LocationBarEmbedderUiOverrides {
     public LocationBarEmbedderUiOverrides setVoiceEntrypointAllowed(boolean isAllowed) {
         mVoiceEntrypointAllowed = isAllowed;
         return this;
+    }
+
+    /** Whether the hint text is explicitly controlled by the embedder. */
+    public boolean isEmbedderControlledHint() {
+        return mIsEmbedderControlledHint;
+    }
+
+    /**
+     * Specify whether the hint text is completely controlled by the embedder. Set this to true for
+     * contexts with specific hint text.
+     *
+     * @param isControlled whether embedder controls the hint.
+     * @return {@code this} for call chaining.
+     */
+    public LocationBarEmbedderUiOverrides setEmbedderControlledHint(boolean isControlled) {
+        mIsEmbedderControlledHint = isControlled;
+        return this;
+    }
+
+    /** Returns the {@link SideUiStateProvider}. */
+    public @Nullable SideUiStateProvider getSideUiStateProvider() {
+        return mSideUiStateProvider;
+    }
+
+    /**
+     * Specify the {@link SideUiStateProvider}.
+     *
+     * @param sideUiStateProvider The {@link SideUiStateProvider} object.
+     */
+    public void setSideUiStateProvider(SideUiStateProvider sideUiStateProvider) {
+        mSideUiStateProvider = sideUiStateProvider;
     }
 }

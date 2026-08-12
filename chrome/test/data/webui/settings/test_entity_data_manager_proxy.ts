@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import {assert} from 'chrome://resources/js/assert.js';
+import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 import type {EntityDataManagerProxy, EntityInstancesChangedListener} from 'chrome://settings/lazy_load.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
@@ -15,6 +16,7 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
     EntityDataManagerProxy {
   private entityInstancesWithLabels_: EntityInstanceWithLabels[] = [];
   private attributeTypes_: AttributeType[] = [];
+  private requiredAttributeTypes_: AttributeType[] = [];
   private entityInstance_: EntityInstance|null = null;
   private entityTypes_: EntityType[] = [];
   private entityInstancesChangedListener_: EntityInstancesChangedListener|null =
@@ -23,27 +25,37 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
   private setOptInStatusResponse_: boolean = true;
   private walletOptInStatus_: boolean = false;
   private setWalletablePassDetectionOptInStatusResponse_: boolean = true;
+  private authenticateUserBeforeViewingEntityDataResponse_: boolean = true;
+  private saveResolver_: PromiseResolver<void>|null = null;
+  private autoResolveSave_: boolean = true;
 
   constructor() {
     super([
       'addEntityInstancesChangedListener',
       'addOrUpdateEntityInstance',
+      'authenticateUserBeforeViewingEntityData',
       'getAllAttributeTypesForEntityTypeName',
-      'getWritableEntityTypes',
+      'getRequiredAttributeTypesForEntityTypeName',
       'getEntityInstanceByGuid',
+      'getOptInStatus',
+      'getWalletablePassDetectionOptInStatus',
+      'getWritableEntityTypes',
       'loadEntityInstances',
       'removeEntityInstance',
       'removeEntityInstancesChangedListener',
       'setOptInStatus',
-      'getOptInStatus',
-      'getWalletablePassDetectionOptInStatus',
       'setWalletablePassDetectionOptInStatus',
+      'toggleAutofillAiReauthRequirement',
     ]);
   }
 
   setLoadEntityInstancesResponse(
       entityInstancesWithLabels: EntityInstanceWithLabels[]): void {
     this.entityInstancesWithLabels_ = entityInstancesWithLabels;
+  }
+
+  setAuthenticateUserBeforeViewingEntityDataResponse(success: boolean): void {
+    this.authenticateUserBeforeViewingEntityDataResponse_ = success;
   }
 
   setGetEntityInstanceByGuidResponse(entityInstance: EntityInstance): void {
@@ -57,6 +69,11 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
   setGetAllAttributeTypesForEntityTypeNameResponse(
       attributeTypes: AttributeType[]): void {
     this.attributeTypes_ = attributeTypes;
+  }
+
+  setGetRequiredAttributeTypesForEntityTypeNameResponse(
+      types: chrome.autofillPrivate.AttributeType[]) {
+    this.requiredAttributeTypes_ = types;
   }
 
   setGetOptInStatusResponse(optInStatus: boolean): void {
@@ -77,9 +94,32 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
     this.entityInstancesChangedListener_(entityInstancesWithLabels);
   }
 
-  addOrUpdateEntityInstance(entityInstance: EntityInstance): void {
+  /**
+   * Helper resolve the pending save operation.
+   */
+  resolveSave(): void {
+    if (this.saveResolver_) {
+      this.saveResolver_.resolve();
+      this.saveResolver_ = null;
+    }
+  }
+
+  /**
+   * Configures whether the save operation should resolve immediately.
+   */
+  setAutoResolveSave(autoResolve: boolean) {
+    this.autoResolveSave_ = autoResolve;
+  }
+
+  addOrUpdateEntityInstance(entityInstance: EntityInstance): Promise<void> {
     this.methodCalled(
         'addOrUpdateEntityInstance', structuredClone(entityInstance));
+    if (this.autoResolveSave_) {
+      return Promise.resolve();
+    }
+
+    this.saveResolver_ = new PromiseResolver();
+    return this.saveResolver_.promise;
   }
 
   removeEntityInstance(guid: string): void {
@@ -106,6 +146,13 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
       Promise<AttributeType[]> {
     this.methodCalled('getAllAttributeTypesForEntityTypeName', entityTypeName);
     return Promise.resolve(structuredClone(this.attributeTypes_));
+  }
+
+  getRequiredAttributeTypesForEntityTypeName(entityTypeName: number):
+      Promise<chrome.autofillPrivate.AttributeType[]> {
+    this.methodCalled(
+        'getRequiredAttributeTypesForEntityTypeName', entityTypeName);
+    return Promise.resolve(this.requiredAttributeTypes_);
   }
 
   addEntityInstancesChangedListener(listener: EntityInstancesChangedListener):
@@ -138,5 +185,15 @@ export class TestEntityDataManagerProxy extends TestBrowserProxy implements
   setWalletablePassDetectionOptInStatus(optedIn: boolean): Promise<boolean> {
     this.methodCalled('setWalletablePassDetectionOptInStatus', optedIn);
     return Promise.resolve(this.setWalletablePassDetectionOptInStatusResponse_);
+  }
+
+  authenticateUserBeforeViewingEntityData(): Promise<boolean> {
+    this.methodCalled('authenticateUserBeforeViewingEntityData');
+    return Promise.resolve(
+        this.authenticateUserBeforeViewingEntityDataResponse_);
+  }
+
+  toggleAutofillAiReauthRequirement(): void {
+    this.methodCalled('toggleAutofillAiReauthRequirement');
   }
 }

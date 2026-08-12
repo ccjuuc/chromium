@@ -23,7 +23,6 @@ namespace media {
 // iOS implementation of the AudioManager singleton. This class is internal
 // to the audio output and only internal users can call methods not exposed by
 // the AudioManager class.
-// TODO(crbug.com/40255660): Fill this implementation out.
 class MEDIA_EXPORT AudioManagerIOS : public AudioManagerApple {
  public:
   AudioManagerIOS(std::unique_ptr<AudioThread> audio_thread,
@@ -37,8 +36,8 @@ class MEDIA_EXPORT AudioManagerIOS : public AudioManagerApple {
   // Implementation of AudioManager.
   bool HasAudioOutputDevices() override;
   bool HasAudioInputDevices() override;
-  void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
-  void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
   AudioParameters GetInputStreamParameters(
       const std::string& input_device_id) override;
   std::string GetAssociatedOutputDeviceID(

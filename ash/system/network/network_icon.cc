@@ -26,6 +26,7 @@
 #include "components/onc/onc_constants.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/color_palette.h"
@@ -294,7 +295,9 @@ gfx::ImageSkia GetIcon(const ui::ColorProvider* color_provider,
     // The system tray uses a smaller icon.
     return gfx::CreateVectorIcon(
         IsTrayIcon(icon_type) ? kNetworkEthernetIcon
-                              : vector_icons::kEthernetIcon,
+        : ::features::IsRoundedIconsEnabled()
+            ? vector_icons::kSettingsEthernetIcon
+            : vector_icons::kEthernetOldIcon,
         GetDefaultColorForIconType(color_provider, icon_type));
   }
   if (network->type == NetworkType::kVPN) {
@@ -505,7 +508,12 @@ SkColor GetDefaultColorForIconType(const ui::ColorProvider* color_provider,
                        cros_tokens::kCrosSysSystemOnPrimaryContainer)
                  : ash_color_provider->GetColor(cros_tokens::kColorPrimary);
     case ICON_TYPE_FEATURE_POD_DISABLED:
-      return color_provider->GetColor(cros_tokens::kCrosSysDisabled);
+      return use_color_provider
+                 ? color_provider->GetColor(cros_tokens::kCrosSysDisabled)
+                 : color_utils::GetResultingPaintColor(
+                       ColorUtil::GetDisabledColor(GetDefaultColorForIconType(
+                           color_provider, ICON_TYPE_FEATURE_POD)),
+                       ash_color_provider->GetBackgroundColor());
     default:
       return use_color_provider
                  ? color_provider->GetColor(cros_tokens::kCrosSysPrimary)

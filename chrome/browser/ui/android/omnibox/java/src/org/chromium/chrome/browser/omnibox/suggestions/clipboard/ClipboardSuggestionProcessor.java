@@ -6,7 +6,9 @@ package org.chromium.chrome.browser.omnibox.suggestions.clipboard;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.metrics.RecordUserAction;
@@ -62,10 +64,11 @@ public class ClipboardSuggestionProcessor extends BaseSuggestionViewProcessor {
             int position) {
         super.populateModel(input, suggestion, model, position);
 
+        OmniboxResourceProvider resourceProvider = mUiContext.resourceProvider;
         model.set(SuggestionViewProperties.IS_SEARCH_SUGGESTION, suggestion.isSearchSuggestion());
-        model.set(
-                SuggestionViewProperties.TEXT_LINE_1_TEXT,
-                new SuggestionSpannable(suggestion.getDescription()));
+        SuggestionSpannable textLine1 = new SuggestionSpannable(suggestion.getDescription());
+        applyTextColor(textLine1, resourceProvider.getSuggestionPrimaryTextColor());
+        model.set(SuggestionViewProperties.TEXT_LINE_1_TEXT, textLine1);
 
         setupContentField(suggestion, model, /* showContent= */ false);
     }
@@ -84,8 +87,18 @@ public class ClipboardSuggestionProcessor extends BaseSuggestionViewProcessor {
      */
     private void setupContentField(
             AutocompleteMatch suggestion, PropertyModel model, boolean showContent) {
+        OmniboxResourceProvider resourceProvider = mUiContext.resourceProvider;
         String displayText = showContent ? suggestion.getDisplayText() : "";
-        model.set(SuggestionViewProperties.TEXT_LINE_2_TEXT, new SuggestionSpannable(displayText));
+        SuggestionSpannable textLine2 = new SuggestionSpannable(displayText);
+        if (showContent) {
+            @ColorInt
+            int color2 =
+                    suggestion.isSearchSuggestion()
+                            ? resourceProvider.getSuggestionSecondaryTextColor()
+                            : resourceProvider.getSuggestionUrlTextColor();
+            applyTextColor(textLine2, color2);
+        }
+        model.set(SuggestionViewProperties.TEXT_LINE_2_TEXT, textLine2);
 
         updateSuggestionIcon(suggestion, model, showContent);
         updateActionButton(suggestion, model, showContent);
@@ -136,7 +149,10 @@ public class ClipboardSuggestionProcessor extends BaseSuggestionViewProcessor {
                                         (int) Math.round(scale * height),
                                         true);
                     }
-                    setOmniboxDrawableState(model, OmniboxDrawableState.forImage(mContext, bitmap));
+                    setOmniboxDrawableState(
+                            model,
+                            OmniboxDrawableState.forImage(
+                                    new BitmapDrawable(mContext.getResources(), bitmap)));
                 }
             }
         } else if (!suggestion.isSearchSuggestion()) {
@@ -156,14 +172,12 @@ public class ClipboardSuggestionProcessor extends BaseSuggestionViewProcessor {
         int icon =
                 showContent ? R.drawable.ic_visibility_off_black : R.drawable.ic_visibility_black;
         String iconString =
-                OmniboxResourceProvider.getString(
-                        mContext,
+                mUiContext.resourceProvider.getString(
                         showContent
                                 ? R.string.accessibility_omnibox_conceal_clipboard_contents
                                 : R.string.accessibility_omnibox_reveal_clipboard_contents);
         String announcementString =
-                OmniboxResourceProvider.getString(
-                        mContext,
+                mUiContext.resourceProvider.getString(
                         showContent
                                 ? R.string.accessibility_omnibox_conceal_button_announcement
                                 : R.string.accessibility_omnibox_reveal_button_announcement);
@@ -175,23 +189,24 @@ public class ClipboardSuggestionProcessor extends BaseSuggestionViewProcessor {
                 model,
                 Arrays.asList(
                         new Action(
-                                OmniboxDrawableState.forSmallIcon(mContext, icon, true),
+                                OmniboxDrawableState.forSmallIcon(
+                                        mUiContext.resourceProvider, icon, true),
                                 iconString,
                                 announcementString,
                                 action)));
     }
 
     @Override
-    protected void onSuggestionClicked(AutocompleteMatch suggestion, int position) {
+    protected void onSuggestionClicked(AutocompleteMatch suggestion, int position, int modifiers) {
         if (!suggestion.getUrl().isEmpty()) {
-            super.onSuggestionClicked(suggestion, position);
+            super.onSuggestionClicked(suggestion, position, modifiers);
             return;
         }
 
         // Retrieve suggestion content before propagating the Click event.
         suggestion.updateWithClipboardContent(
                 () -> {
-                    super.onSuggestionClicked(suggestion, position);
+                    super.onSuggestionClicked(suggestion, position, modifiers);
                 });
     }
 

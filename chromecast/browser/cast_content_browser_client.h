@@ -71,8 +71,6 @@ class CastWebService;
 class CastWindowManager;
 class CastFeatureListCreator;
 class DisplaySettingsManager;
-class GeneralAudienceBrowsingService;
-class MemoryPressureControllerImpl;
 class ServiceConnector;
 
 namespace media {
@@ -243,8 +241,6 @@ class CastContentBrowserClient
   std::unique_ptr<content::NavigationUIData> GetNavigationUIData(
       content::NavigationHandle* navigation_handle) override;
   bool ShouldEnableStrictSiteIsolation() override;
-  void CreateThrottlesForNavigation(
-      content::NavigationThrottleRegistry& registry) override;
   void RegisterNonNetworkSubresourceURLLoaderFactories(
       int render_process_id,
       int render_frame_id,
@@ -263,15 +259,14 @@ class CastContentBrowserClient
   bool DoesSiteRequireDedicatedProcess(content::BrowserContext* browser_context,
                                        const GURL& effective_site_url) override;
   bool IsWebUIAllowedToMakeNetworkRequests(const url::Origin& origin) override;
-  PrivateNetworkRequestPolicyOverride ShouldOverridePrivateNetworkRequestPolicy(
+  LocalNetworkAccessRequestPolicyOverride
+  ShouldOverrideLocalNetworkAccessRequestPolicy(
       content::BrowserContext* browser_context,
       const url::Origin& origin) override;
 
   CastFeatureListCreator* GetCastFeatureListCreator() {
     return cast_feature_list_creator_;
   }
-
-  void CreateGeneralAudienceBrowsingService();
 
   virtual std::unique_ptr<::media::CdmFactory> CreateCdmFactory(
       ::media::mojom::FrameInterfaceFactory* frame_interfaces);
@@ -332,10 +327,6 @@ class CastContentBrowserClient
 
   // A static cache to hold crash_handlers for each process_type
   std::map<std::string, breakpad::CrashHandlerHostLinux*> crash_handlers_;
-
-  // Notify renderers of memory pressure (Android renderers register directly
-  // with OS for this).
-  std::unique_ptr<MemoryPressureControllerImpl> memory_pressure_controller_;
 #endif  // !BUILDFLAG(IS_ANDROID)
 #endif  // !BUILDFLAG(IS_FUCHSIA)
 
@@ -364,8 +355,6 @@ class CastContentBrowserClient
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
   std::unique_ptr<CastNetworkContexts> cast_network_contexts_;
   std::unique_ptr<media::CmaBackendFactory> cma_backend_factory_;
-  std::unique_ptr<GeneralAudienceBrowsingService>
-      general_audience_browsing_service_;
 
   CastFeatureListCreator* cast_feature_list_creator_;
 };

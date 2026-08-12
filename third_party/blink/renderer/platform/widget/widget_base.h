@@ -11,6 +11,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "cc/animation/animation_timeline.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
 #include "cc/paint/element_id.h"
 #include "cc/trees/browser_controls_params.h"
@@ -18,11 +19,12 @@
 #include "components/viz/common/surfaces/local_surface_id.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
+#include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom-blink.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
+#include "third_party/blink/public/common/page/content_to_visible_time_request.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/mojom/widget/platform_widget.mojom-blink.h"
-#include "third_party/blink/public/mojom/widget/record_content_to_visible_time_request.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/renderer/platform/graphics/lcd_text_preference.h"
@@ -107,6 +109,17 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
           frame_widget_input_handler,
       WidgetBase* previous_widget);
 
+  void SetInitialFrameSink(
+      CrossVariantMojoRemote<
+          viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+          initial_frame_sink,
+      CrossVariantMojoReceiver<
+          viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+          initial_frame_sink_client,
+      CrossVariantMojoReceiver<
+          mojom::blink::RenderInputRouterClientInterfaceBase>
+          initial_viz_rir_client);
+
   // Similar to `InitializeCompositing()` but for non-compositing widgets.
   // Exactly one of either `InitializeCompositing()` or this method must
   // be called before using the widget.
@@ -117,7 +130,7 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
   // function won't block on doing the release in the compositor thread.
   void Shutdown(bool delay_release);
 
-  void OnFirstContentfulPaint(const base::TimeTicks& first_paint_time);
+  void OnFirstContentfulPaint();
 
   // Set the compositor as visible. If |visible| is true, then the compositor
   // will request a new layer frame sink, begin producing frames from the
@@ -156,11 +169,10 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
                          UpdateScreenRectsCallback callback) override;
   void WasHidden() override;
   void WasShown(bool was_evicted,
-                mojom::blink::RecordContentToVisibleTimeRequestPtr
+                const std::optional<RecordContentToVisibleTimeRequest>&
                     record_tab_switch_time_request) override;
   void RequestSuccessfulPresentationTimeForNextFrame(
-      mojom::blink::RecordContentToVisibleTimeRequestPtr visible_time_request)
-      override;
+      const RecordContentToVisibleTimeRequest& visible_time_request) override;
   void CancelSuccessfulPresentationTimeRequest() override;
   void SetupBrowserRenderInputRouterConnections(
       mojo::PendingReceiver<mojom::blink::RenderInputRouterClient>
@@ -172,12 +184,12 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
   void ApplyViewportChanges(const cc::ApplyViewportChangesArgs& args) override;
   void UpdateCompositorScrollState(
       const cc::CompositorCommitData& commit_data) override;
+  void UpdateAnimatedImageState(
+      const cc::CompositorCommitData& commit_data) override;
   void BeginMainFrame(const viz::BeginFrameArgs& args) override;
   void OnDeferMainFrameUpdatesChanged(bool) override;
-  void OnDeferCommitsChanged(
-      bool defer_status,
-      cc::PaintHoldingReason reason,
-      std::optional<cc::PaintHoldingCommitTrigger> trigger) override;
+  void OnDeferCommitsChanged(bool defer_status,
+                             cc::PaintHoldingReason reason) override;
   void OnCommitRequested() override;
   void DidBeginMainFrame() override;
   void RequestNewLayerTreeFrameSink(
@@ -205,6 +217,14 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
   void ScheduleAnimationForWebTests() override;
   std::unique_ptr<cc::RenderFrameMetadataObserver> CreateRenderFrameObserver()
       override;
+
+  std::unique_ptr<cc::LayerTreeFrameSink> CreateUnboundedFrameSink(
+      CrossVariantMojoRemote<
+          viz::mojom::blink::CompositorFrameSinkInterfaceBase>
+          unbounded_sink_remote,
+      CrossVariantMojoReceiver<
+          viz::mojom::blink::CompositorFrameSinkClientInterfaceBase>
+          unbounded_client_receiver);
 
   // scheduler::WidgetScheduler::Delegate overrides:
   void RequestBeginMainFrameNotExpected(bool) override;
@@ -249,8 +269,14 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
 
   // Posts a task with the given delay, then calls ScheduleAnimation() on the
   // WidgetBaseClient.
-  void RequestAnimationAfterDelay(const base::TimeDelta& delay,
+  void RequestAnimationAfterDelay(cc::BeginMainFrameReason,
+                                  const base::TimeDelta& delay,
                                   bool urgent = false);
+
+  void RequestAnimationAfterDelay(const base::TimeDelta& delay,
+                                  bool urgent = false) {
+    RequestAnimationAfterDelay(cc::BeginMainFrameReason::kOther, delay, urgent);
+  }
 
   void ShowVirtualKeyboard();
   void UpdateSelectionBounds();
@@ -271,11 +297,15 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
                          const Vector<ui::ImeTextSpan>& ime_text_spans,
                          const gfx::Range& replacement_range,
                          int selection_start,
-                         int selection_end);
+                         int selection_end,
+                         mojom::blink::ImeState ime_state,
+                         DOMNodeIdType target_dom_node_id);
   void ImeCommitText(const String& text,
                      const Vector<ui::ImeTextSpan>& ime_text_spans,
                      const gfx::Range& replacement_range,
-                     int relative_cursor_pos);
+                     int relative_cursor_pos,
+                     DOMNodeIdType target_dom_node_id);
+  void PasteIntoNode(const String& text, DOMNodeIdType target_dom_node_id);
   void ImeFinishComposingText(bool keep_selection);
   bool IsForProvisionalFrame();
   void FlushInputProcessedCallback();
@@ -609,6 +639,11 @@ class PLATFORM_EXPORT WidgetBase : public mojom::blink::Widget,
   // side `WidgetInputHandler` call is received.
   std::optional<mojo::PendingReceiver<mojom::blink::WidgetInputHandler>>
       pending_viz_widget_input_handler_ = std::nullopt;
+
+  std::optional<mojom::blink::InitialFrameSinkParams> initial_frame_sink_pipes_;
+  base::TimeTicks frame_sink_bind_time_;
+  bool waiting_for_first_begin_frame_ = false;
+  bool is_using_early_frame_sink_ = false;
 
   base::WeakPtrFactory<WidgetBase> weak_ptr_factory_{this};
 };

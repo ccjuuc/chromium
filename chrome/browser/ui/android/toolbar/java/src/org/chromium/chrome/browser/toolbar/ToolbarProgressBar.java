@@ -70,6 +70,7 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
     private static final long ANIMATION_START_THRESHOLD = 5000;
 
     private static final long HIDE_DELAY_MS = 100;
+    private static final long HIDE_DELAY_MS_WITH_JUMP_TO_END = 300;
 
     // Android progress bar animation constants
     private static final float THEMED_BACKGROUND_WHITE_FRACTION = 0.2f;
@@ -115,16 +116,13 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
             new Runnable() {
                 @Override
                 public void run() {
-                    if (!mIsStarted
-                            || ChromeFeatureList.isEnabled(
-                                    ChromeFeatureList.ANDROID_PB_DISABLE_PULSE_ANIMATION)) {
+                    if (!mIsStarted || !isAttachedToWindow()) {
                         return;
                     }
                     mAnimationLogic.reset(getProgress());
 
-                    if (!ChromeFeatureList.isEnabled(
-                                    ChromeFeatureList.ANDROID_PB_DISABLE_SMOOTH_ANIMATION)
-                            && !shouldAnimateCompositedLayer()) {
+                    if (!shouldAnimateCompositedLayer()
+                            || !ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
                         mSmoothProgressAnimator.start();
                     }
 
@@ -134,11 +132,28 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
                                         getDrawable().getBounds().right
                                                 - getDrawable().getBounds().left);
                         mAnimatingView.update(getProgress() * width);
-                        if (shouldAnimateCompositedLayer()) {
+
+                        if (shouldAnimateCompositedLayer()
+                                && ChromeFeatureList.sAndroidApb144Patch1.isEnabled()
+                                && getDesiredAndroidVisibility() == VISIBLE) {
                             mAnimatingView.setVisibility(VISIBLE);
                         }
                         mAnimatingView.startAnimation();
                     }
+                }
+            };
+
+    private final Runnable mHideProgressBarRunnable =
+            () -> {
+                if (isAttachedToWindow()) {
+                    hideProgressBar(true);
+                }
+            };
+
+    private final Runnable mHideProgressBarRunnableWithoutFade =
+            () -> {
+                if (isAttachedToWindow()) {
+                    hideProgressBar(false);
                 }
             };
 
@@ -237,10 +252,17 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
             };
 
     {
-        // manually selected to look like bc25 mocks
-        mProgressBarAnimationBc25.setInterpolator(
-                PathInterpolatorCompat.create(0.57f, 0f, 0.12f, 1.0f));
-        mProgressBarAnimationBc25.setDuration(FINISH_ANIMATION_DURATION_MS);
+        if (ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+            // manually selected to look like bc25 mocks
+            mProgressBarAnimationBc25.setInterpolator(
+                    PathInterpolatorCompat.create(0.57f, 0f, 0.12f, 1.0f));
+            mProgressBarAnimationBc25.setDuration(FINISH_ANIMATION_DURATION_MS);
+        } else {
+            // When path9 flag is enabled, these time listeners are set in onAttachToWindow()
+            mSmoothProgressAnimator.setTimeListener(mSmoothProgressAnimatorListener);
+            mCompositedProgressBarAnimation.setTimeListener(
+                    mCompositedProgressBarAnimationListener);
+        }
     }
 
     /**
@@ -273,7 +295,7 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
 
         // TODO(peilinwang): after AndroidAnimatedCompositedProgressBar launches, make the xml
         // property for this view default invisible and remove this.
-        if (shouldAnimateCompositedLayer()) {
+        if (shouldAnimateCompositedLayer() && ChromeFeatureList.sAndroidApb144Patch1.isEnabled()) {
             mAnimatingView.setVisibility(INVISIBLE);
         }
 
@@ -300,12 +322,14 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
 
-        mSmoothProgressAnimator.setTimeListener(mSmoothProgressAnimatorListener);
+        if (ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+            mSmoothProgressAnimator.setTimeListener(mSmoothProgressAnimatorListener);
 
-        if (shouldAnimateCompositedLayer()) {
-            mCompositedProgressBarAnimation.setTimeListener(
-                    mCompositedProgressBarAnimationListener);
-            mProgressBarAnimationBc25.addUpdateListener(mProgressBarAnimationBc25Listener);
+            if (shouldAnimateCompositedLayer()) {
+                mCompositedProgressBarAnimation.setTimeListener(
+                        mCompositedProgressBarAnimationListener);
+                mProgressBarAnimationBc25.addUpdateListener(mProgressBarAnimationBc25Listener);
+            }
         }
     }
 
@@ -313,14 +337,27 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
     public void onDetachedFromWindow() {
         super.onDetachedFromWindow();
 
+        removeCallbacks(mHideProgressBarRunnable);
+        removeCallbacks(mHideProgressBarRunnableWithoutFade);
+        removeCallbacks(mStartSmoothIndeterminate);
+
         mSmoothProgressAnimator.setTimeListener(null);
         mSmoothProgressAnimator.cancel();
 
+        if (mAnimatingView != null) {
+            mAnimatingView.cancelAnimation();
+        }
+
         if (shouldAnimateCompositedLayer()) {
-            mCompositedProgressBarAnimation.setTimeListener(null);
-            mCompositedProgressBarAnimation.cancel();
-            mProgressBarAnimationBc25.removeAllUpdateListeners();
-            mProgressBarAnimationBc25.cancel();
+            if (ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
+                mCompositedProgressBarAnimation.setTimeListener(null);
+                mCompositedProgressBarAnimation.cancel();
+            }
+
+            if (ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+                mProgressBarAnimationBc25.removeAllUpdateListeners();
+                mProgressBarAnimationBc25.cancel();
+            }
         }
     }
 
@@ -347,13 +384,15 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
         removeCallbacks(mStartSmoothIndeterminate);
         postDelayed(mStartSmoothIndeterminate, ANIMATION_START_THRESHOLD);
 
-        if (shouldAnimateCompositedLayer()) {
+        if (shouldAnimateCompositedLayer() && ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
             mProgressBarAnimationBc25.cancel();
             mCompositedProgressBarAnimation.cancel();
         }
 
         super.setProgress(0.0f);
-        mAnimatedProgress = 0.0f;
+        if (ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
+            mAnimatedProgress = 0.0f;
+        }
         mAnimationLogic.reset(0.0f);
         animateAlphaTo(1.0f);
     }
@@ -377,23 +416,41 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
     public void finish(boolean fadeOut) {
         ThreadUtils.assertOnUiThread();
 
+        // If apb is enabled and we're jumping to the end, whether or not the progress bar fades out
+        // also depends on the feature param, not only the value of fadeOut. When fadeOut is false,
+        // the progress bar should disappear immediately. When fadeOut is true, we will fade if the
+        // feature param with fade is enabled.
+        // Here, we update the progress to 1.0 regardless of the value of fadeOut, so that it jumps
+        // to the end immediately. Afterwards, we check fadeOut and the feature param to fade.
+        boolean apbJumpToCompletionWithFade =
+                ChromeFeatureList.sAndroidApbJumpToCompletionWithFade.getValue();
+        boolean apbJumpToCompletionNoFade =
+                ChromeFeatureList.sAndroidApbJumpToCompletionNoFade.getValue();
         if (!MathUtils.areFloatsEqual(getProgress(), 1.0f)) {
-            // If any of the animators are running while this method is called, set the internal
-            // progress and wait for the animation to end.
-            setProgress(1.0f);
-            if (fadeOut
-                    && shouldAnimateCompositedLayer()
-                    && !mProgressBarAnimationBc25.isRunning()) {
-                mCompositedProgressBarAnimation.cancel();
-                mLastUpdateTimeMs = 0;
-                mProgressBarAnimationBc25.setFloatValues(mAnimatedProgress, 1.0f);
-                mProgressBarAnimationBc25.start();
+            if (apbJumpToCompletionWithFade || apbJumpToCompletionNoFade) {
+                super.setProgress(1.0f);
+            } else {
+                setProgress(1.0f);
+
+                // If any of the animators are running while this method is called, set the internal
+                // progress and wait for the animation to end.
+                if (fadeOut
+                        && shouldAnimateCompositedLayer()
+                        && !mProgressBarAnimationBc25.isRunning()
+                        && ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+                    mCompositedProgressBarAnimation.cancel();
+                    mLastUpdateTimeMs = 0;
+                    mProgressBarAnimationBc25.setFloatValues(mAnimatedProgress, 1.0f);
+                    mProgressBarAnimationBc25.start();
+                }
+                if (areProgressAnimatorsRunning() && fadeOut) return;
             }
-            if (areProgressAnimatorsRunning() && fadeOut) return;
         }
 
-        if (shouldAnimateCompositedLayer()) {
-            mCompositedProgressBarAnimation.cancel();
+        if (shouldAnimateCompositedLayer() && ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+            if (ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
+                mCompositedProgressBarAnimation.cancel();
+            }
             mProgressBarAnimationBc25.cancel();
         }
 
@@ -406,8 +463,23 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
         }
         mSmoothProgressAnimator.cancel();
 
+        if (!ChromeFeatureList.sAndroidApb144Patch9.isEnabled()
+                && shouldAnimateCompositedLayer()
+                && ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
+            mCompositedProgressBarAnimation.cancel();
+        }
+
         if (fadeOut) {
-            postDelayed(() -> hideProgressBar(true), HIDE_DELAY_MS);
+            if (apbJumpToCompletionNoFade) {
+                postDelayed(mHideProgressBarRunnableWithoutFade, HIDE_DELAY_MS_WITH_JUMP_TO_END);
+            } else {
+                long hideDelay = HIDE_DELAY_MS;
+                if (apbJumpToCompletionWithFade) {
+                    hideDelay = HIDE_DELAY_MS_WITH_JUMP_TO_END;
+                }
+                removeCallbacks(mHideProgressBarRunnable);
+                postDelayed(mHideProgressBarRunnable, hideDelay);
+            }
         } else {
             hideProgressBar(false);
         }
@@ -422,7 +494,9 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
 
         if (mIsStarted) return;
         if (!animate) animate().cancel();
-        if (shouldAnimateCompositedLayer() && mAnimatingView != null) {
+        if (shouldAnimateCompositedLayer()
+                && mAnimatingView != null
+                && ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
             mAnimatingView.setVisibility(INVISIBLE);
         }
 
@@ -438,11 +512,15 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
      * @return Whether any animator that delays the showing of progress is running.
      */
     private boolean areProgressAnimatorsRunning() {
-        boolean areCompositedAnimationsRunning =
-                shouldAnimateCompositedLayer()
-                        ? mCompositedProgressBarAnimation.isRunning()
-                                || mProgressBarAnimationBc25.isRunning()
-                        : false;
+        boolean areCompositedAnimationsRunning = false;
+        if (shouldAnimateCompositedLayer()) {
+            if (ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
+                areCompositedAnimationsRunning = mCompositedProgressBarAnimation.isRunning();
+            }
+            if (ChromeFeatureList.sAndroidApb144Patch9.isEnabled()) {
+                areCompositedAnimationsRunning |= mProgressBarAnimationBc25.isRunning();
+            }
+        }
         return mSmoothProgressAnimator.isRunning() || areCompositedAnimationsRunning;
     }
 
@@ -483,10 +561,17 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
 
     // ClipDrawableProgressBar implementation.
 
+    /**
+     * Sets the target progress of animations. This will change the final position the progress bar
+     * will animate to, but will not immediately update the location of the progress bar. If an
+     * immediate update is needed, call super.setProgress.
+     *
+     * @param targetProgress The new progress the progress bar should animate to.
+     */
     @Override
-    public void setProgress(float progress) {
+    public void setProgress(float targetProgress) {
         ThreadUtils.assertOnUiThread();
-        setProgressInternal(progress);
+        setProgressInternal(targetProgress);
     }
 
     /**
@@ -501,7 +586,7 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
         // smooth-indeterminate animation.
         removeCallbacks(mStartSmoothIndeterminate);
 
-        if (shouldAnimateCompositedLayer()) {
+        if (shouldAnimateCompositedLayer() && ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
             if (mAnimatingView != null && !mAnimatingView.isRunning()) {
                 postDelayed(mStartSmoothIndeterminate, ANIMATION_START_THRESHOLD);
             }
@@ -512,7 +597,9 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
             }
         }
 
-        if (shouldAnimateCompositedLayer() && !mCompositedProgressBarAnimation.isRunning()) {
+        if (shouldAnimateCompositedLayer()
+                && !mCompositedProgressBarAnimation.isRunning()
+                && ChromeFeatureList.sAndroidApb144Patch6.isEnabled()) {
             mCompositedProgressBarAnimation.start();
         }
 
@@ -544,7 +631,8 @@ public class ToolbarProgressBar extends ClipDrawableProgressBar
             boolean shouldUpdateAnimatingView = true;
             if (shouldAnimateCompositedLayer()
                     && visibility == VISIBLE
-                    && !mAnimatingView.isRunning()) {
+                    && !mAnimatingView.isRunning()
+                    && ChromeFeatureList.sAndroidApb144Patch8.isEnabled()) {
                 shouldUpdateAnimatingView = false;
             }
 

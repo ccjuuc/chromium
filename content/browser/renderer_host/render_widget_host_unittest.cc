@@ -35,17 +35,21 @@
 #include "content/browser/renderer_host/frame_token_message_queue.h"
 #include "content/browser/renderer_host/input/touch_emulator_impl.h"
 #include "content/browser/renderer_host/mock_render_widget_host.h"
+#include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_delegate_view.h"
+#include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/browser/renderer_host/visible_time_request_trigger.h"
 #include "content/browser/site_instance_group.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/content_constants_internal.h"
+#include "content/public/browser/global_dom_node_id.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/drop_data.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
@@ -55,12 +59,14 @@
 #include "content/test/stub_render_widget_host_owner_delegate.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_render_widget_host.h"
+#include "content/test/test_web_contents.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "skia/ext/skia_utils_base.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/synthetic_web_input_event_builders.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -68,6 +74,7 @@
 #include "third_party/blink/public/mojom/drag/drag.mojom.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-shared.h"
 #include "third_party/blink/public/mojom/input/touch_event.mojom.h"
+#include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/display/display_util.h"
 #include "ui/display/screen.h"
@@ -284,21 +291,24 @@ class MockRenderViewHostDelegateView : public RenderViewHostDelegateView {
   ~MockRenderViewHostDelegateView() override = default;
 
   int start_dragging_count() const { return start_dragging_count_; }
+  const DropData& drop_data() const { return drop_data_; }
 
   // RenderViewHostDelegateView:
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask allowed_ops,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override {
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask allowed_ops,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override {
     ++start_dragging_count_;
+    drop_data_ = drop_data;
   }
 
  private:
   int start_dragging_count_ = 0;
+  DropData drop_data_;
 };
 
 // FakeRenderFrameMetadataObserver -----------------------------------------
@@ -549,6 +559,8 @@ class MockRenderWidgetHostOwnerDelegate
  public:
   MOCK_METHOD1(SetBackgroundOpaque, void(bool opaque));
   MOCK_METHOD0(IsMainFrameActive, bool());
+  MOCK_METHOD1(ZoomToFindInPageRect, void(const gfx::Rect&));
+  MOCK_METHOD2(AnimateDoubleTapZoom, void(const gfx::Point&, const gfx::Rect&));
 };
 
 // RenderWidgetHostTest --------------------------------------------------------
@@ -2264,38 +2276,211 @@ TEST_F(RenderWidgetHostTest, VisualProperties) {
             visual_properties.compositor_viewport_pixel_rect);
 }
 
-// Make sure no dragging occurs after renderer exited. See crbug.com/704832.
-TEST_F(RenderWidgetHostTest, RendererExitedNoDrag) {
-  host_->SetView(new TestView(host_.get()));
+class DragTestContentBrowserClient : public ContentBrowserClient {
+ public:
+  // The default implementation returns `false`, but this means that
+  // `CanRequestURL()` for a URL with a file scheme ends up returning true,
+  // since `ChildProcessSecurityPolicy` assumes that unhandled schemes are
+  // external protocols.
+  bool IsHandledURL(const GURL& url) override {
+    return url.SchemeIs(url::kFileScheme);
+  }
+};
 
-  EXPECT_EQ(delegate_->mock_delegate_view()->start_dragging_count(), 0);
+class RenderWidgetHostDragTest : public RenderViewHostImplTestHarness {
+ public:
+  RenderWidgetHostDragTest() {
+    old_browser_client_ = SetBrowserClientForTesting(&drag_browser_client_);
+  }
+
+  ~RenderWidgetHostDragTest() override {
+    SetBrowserClientForTesting(old_browser_client_);
+  }
+
+  void SetUp() override {
+    RenderViewHostImplTestHarness::SetUp();
+    contents()->set_delegate_view(&mock_delegate_view_);
+    main_test_rfh()->InitializeRenderFrameIfNeeded();
+  }
+
+  void StartDragWithDropData(const DropData& drop_data) {
+    StartDragWithDragData(
+        DropDataToDragData(drop_data, GetFileSystemAccessManager(),
+                           main_test_rfh()->GetProcess()->GetDeprecatedID(),
+                           GetChromeBlobStorageContext()));
+  }
+
+  void StartDragWithDragData(blink::mojom::DragDataPtr drag_data) {
+    GetRenderWidgetHost()->StartDragging(
+        *main_test_rfh(), std::move(drag_data), blink::kDragOperationEvery,
+        SkBitmap(), gfx::Vector2d(), gfx::Rect(),
+        blink::mojom::DragEventSourceInfo::New());
+  }
+
+  RenderWidgetHostImpl* GetRenderWidgetHost() {
+    return static_cast<RenderWidgetHostImpl*>(
+        main_test_rfh()->GetRenderWidgetHost());
+  }
+
+  FileSystemAccessManagerImpl* GetFileSystemAccessManager() {
+    return static_cast<StoragePartitionImpl*>(
+               contents()->GetBrowserContext()->GetDefaultStoragePartition())
+        ->GetFileSystemAccessManager();
+  }
+
+  scoped_refptr<ChromeBlobStorageContext> GetChromeBlobStorageContext() {
+    return ChromeBlobStorageContext::GetFor(contents()->GetBrowserContext());
+  }
+
+  int start_dragging_count() const {
+    return mock_delegate_view_.start_dragging_count();
+  }
+
+  const DropData& drop_data() const { return mock_delegate_view_.drop_data(); }
+
+ private:
+  DragTestContentBrowserClient drag_browser_client_;
+  raw_ptr<ContentBrowserClient> old_browser_client_;
+  MockRenderViewHostDelegateView mock_delegate_view_;
+};
+
+// Make sure no dragging occurs after renderer exited. See crbug.com/704832.
+TEST_F(RenderWidgetHostDragTest, RendererExitedNoDrag) {
+  EXPECT_EQ(start_dragging_count(), 0);
 
   GURL http_url = GURL("http://www.domain.com/index.html");
   DropData drop_data;
   drop_data.url_infos = {ui::ClipboardUrlInfo{http_url, u""}};
   drop_data.html_base_url = http_url;
-  FileSystemAccessManagerImpl* file_system_manager =
-      static_cast<StoragePartitionImpl*>(process_->GetStoragePartition())
-          ->GetFileSystemAccessManager();
-  blink::DragOperationsMask drag_operation = blink::kDragOperationEvery;
-  host_->StartDragging(
-      DropDataToDragData(
-          drop_data, file_system_manager, process_->GetDeprecatedID(),
-          ChromeBlobStorageContext::GetFor(process_->GetBrowserContext())),
-      url::Origin(), drag_operation, SkBitmap(), gfx::Vector2d(), gfx::Rect(),
-      blink::mojom::DragEventSourceInfo::New());
-  EXPECT_EQ(delegate_->mock_delegate_view()->start_dragging_count(), 1);
+
+  StartDragWithDropData(drop_data);
+  EXPECT_EQ(start_dragging_count(), 1);
 
   // Simulate that renderer exited due navigation to the next page.
-  host_->RendererExited();
-  EXPECT_FALSE(host_->GetView());
-  host_->StartDragging(
-      DropDataToDragData(
-          drop_data, file_system_manager, process_->GetDeprecatedID(),
-          ChromeBlobStorageContext::GetFor(process_->GetBrowserContext())),
-      url::Origin(), drag_operation, SkBitmap(), gfx::Vector2d(), gfx::Rect(),
-      blink::mojom::DragEventSourceInfo::New());
-  EXPECT_EQ(delegate_->mock_delegate_view()->start_dragging_count(), 1);
+  GetRenderWidgetHost()->RendererExited();
+  EXPECT_FALSE(GetRenderWidgetHost()->GetView());
+
+  StartDragWithDropData(drop_data);
+  EXPECT_EQ(start_dragging_count(), 1);
+}
+
+TEST_F(RenderWidgetHostDragTest, NonFileUrlSpecifiesDownloadUrlWithFileUrl) {
+  NavigateAndCommit(GURL("https://example.com"));
+  EXPECT_EQ(start_dragging_count(), 0);
+
+  // This test uses `blink::mojom::DragData` directly; the
+  // `DropDataToDragData()` helper is primarily intended for drags into Blink,
+  // and `download_metadata` is not handled since it is not currently consumed
+  // in Blink.
+  auto drag_data = blink::mojom::DragData::New();
+  blink::mojom::DragItemStringPtr item = blink::mojom::DragItemString::New();
+  item->string_type = ui::kMimeTypeDownloadUrl;
+  item->string_data = u"text/plain:test.txt:file:///test.txt";
+  drag_data->items.push_back(
+      blink::mojom::DragItem::NewString(std::move(item)));
+
+  // A regular HTTP page cannot request file:// URLs so this should be filtered
+  // out.
+  StartDragWithDragData(std::move(drag_data));
+
+  EXPECT_EQ(start_dragging_count(), 1);
+  EXPECT_FALSE(drop_data().download_metadata.has_value());
+}
+
+// TODO(crbug.com/497882858): Add more tests that other fields in
+// `content::DropData` are filtered.
+
+TEST_F(RenderWidgetHostDragTest, FileUrlSpecifiesDownloadUrlWithFileUrl) {
+  NavigateAndCommit(GURL("file:///test.html"));
+  EXPECT_EQ(start_dragging_count(), 0);
+
+  // This test uses `blink::mojom::DragData` directly; the
+  // `DropDataToDragData()` helper is primarily intended for drags into Blink,
+  // and `download_metadata` is not handled since it is not currently consumed
+  // in Blink.
+  auto drag_data = blink::mojom::DragData::New();
+  blink::mojom::DragItemStringPtr item = blink::mojom::DragItemString::New();
+  item->string_type = ui::kMimeTypeDownloadUrl;
+  item->string_data = u"text/plain:test.txt:file:///test.txt";
+  drag_data->items.push_back(
+      blink::mojom::DragItem::NewString(std::move(item)));
+
+  // A file:// page should be able to set a DownloadURL pointing to a file://
+  // though.
+  StartDragWithDragData(std::move(drag_data));
+
+  EXPECT_EQ(start_dragging_count(), 1);
+  EXPECT_TRUE(drop_data().download_metadata.has_value());
+}
+
+TEST_F(RenderWidgetHostDragTest, SanitizeFilenameExtensionOnDrag) {
+  NavigateAndCommit(GURL("https://example.com"));
+  EXPECT_EQ(start_dragging_count(), 0);
+
+  auto drag_data = blink::mojom::DragData::New();
+  blink::mojom::DragItemBinaryPtr item = blink::mojom::DragItemBinary::New();
+  item->data = mojo_base::BigBuffer(std::vector<uint8_t>{1, 2, 3});
+  item->is_image_accessible = true;
+  item->source_url = GURL("http://example.com/image.png");
+  item->filename_extension =
+      base::FilePath(FILE_PATH_LITERAL("png/../../payload.so"));
+  drag_data->items.push_back(
+      blink::mojom::DragItem::NewBinary(std::move(item)));
+
+  StartDragWithDragData(std::move(drag_data));
+
+  EXPECT_EQ(start_dragging_count(), 1);
+  // BaseName() should strip the path traversal components.
+  EXPECT_EQ(drop_data().file_contents_filename_extension,
+            FILE_PATH_LITERAL("payload.so"));
+}
+
+// A plain <img> drag on macOS populates `file_contents` but supplies neither a
+// source URL nor a Content-Disposition, so it must not surface as a File in the
+// renderer's DataTransfer.files. See crbug.com/522179938.
+TEST_F(RenderWidgetHostDragTest,
+       ImageDragWithoutSourceUrlProducesNoBinaryItem) {
+  DropData drop_data;
+  drop_data.file_contents = {1, 2, 3};
+  drop_data.file_contents_image_accessible = true;
+
+  blink::mojom::DragDataPtr drag_data =
+      DropDataToDragData(drop_data, GetFileSystemAccessManager(),
+                         main_test_rfh()->GetProcess()->GetDeprecatedID(),
+                         GetChromeBlobStorageContext());
+
+  int binary_items = 0;
+  for (const auto& item : drag_data->items) {
+    if (item->is_binary()) {
+      ++binary_items;
+    }
+  }
+  EXPECT_EQ(binary_items, 0);
+}
+
+// A JS-constructed File round-trip carries a source URL, so the binary item
+// must still be emitted and stay image-accessible.
+TEST_F(RenderWidgetHostDragTest, JsFileDragWithSourceUrlProducesBinaryItem) {
+  DropData drop_data;
+  drop_data.file_contents = {1, 2, 3};
+  drop_data.file_contents_image_accessible = true;
+  drop_data.file_contents_source_url = GURL("https://local/image.png");
+
+  blink::mojom::DragDataPtr drag_data =
+      DropDataToDragData(drop_data, GetFileSystemAccessManager(),
+                         main_test_rfh()->GetProcess()->GetDeprecatedID(),
+                         GetChromeBlobStorageContext());
+
+  int binary_items = 0;
+  bool image_accessible = false;
+  for (const auto& item : drag_data->items) {
+    if (item->is_binary()) {
+      ++binary_items;
+      image_accessible = item->get_binary()->is_image_accessible;
+    }
+  }
+  EXPECT_EQ(binary_items, 1);
+  EXPECT_TRUE(image_accessible);
 }
 
 // Hiding the RenderWidgetHostImpl instance via a call to WasHidden should
@@ -2535,6 +2720,61 @@ TEST_F(RenderWidgetHostTest, AddAndRemoveImeInputEventObserver) {
 }
 #endif
 
+TEST_F(RenderWidgetHostTest, SetAndCommitExternallySourcedComposition) {
+  std::u16string text = u"hello";
+  int length = text.length();
+  GlobalDOMNodeId node_id;
+  node_id.target_element_dom_id = blink::DOMNodeIdType(123);
+
+  ui::ImeTextSpan ime_text_span;
+  ime_text_span.end_offset = length;
+  ime_text_span.underline_style = ui::ImeTextSpan::UnderlineStyle::kDot;
+  host_->SetExternallySourcedComposition(text, {ime_text_span}, node_id);
+
+  {
+    MockWidgetInputHandler::MessageVector dispatched_messages =
+        host_->mock_render_input_router()->GetAndResetDispatchedMessages();
+    ASSERT_EQ(1u, dispatched_messages.size());
+    MockWidgetInputHandler::DispatchedIMEMessage* ime_message =
+        dispatched_messages[0]->ToIME();
+    ASSERT_TRUE(ime_message);
+    EXPECT_EQ("SetComposition", ime_message->name());
+    EXPECT_TRUE(ime_message->Matches(
+        text, {ime_text_span}, gfx::Range::InvalidRange(), length, length,
+        blink::mojom::ImeState::kNone, node_id.target_element_dom_id));
+  }
+
+  host_->CommitExternallySourcedComposition(text, node_id);
+
+  {
+    MockWidgetInputHandler::MessageVector dispatched_messages =
+        host_->mock_render_input_router()->GetAndResetDispatchedMessages();
+    ASSERT_EQ(1u, dispatched_messages.size());
+    MockWidgetInputHandler::DispatchedIMEMessage* ime_message =
+        dispatched_messages[0]->ToIME();
+    ASSERT_TRUE(ime_message);
+    EXPECT_EQ("CommitText", ime_message->name());
+    EXPECT_TRUE(ime_message->Matches(
+        text, std::vector<ui::ImeTextSpan>(), gfx::Range::InvalidRange(), 0, 0,
+        blink::mojom::ImeState::kNone, node_id.target_element_dom_id));
+  }
+}
+
+TEST_F(RenderWidgetHostTest, PasteIntoNode) {
+  std::u16string text = u"hello";
+  GlobalDOMNodeId node_id;
+  node_id.target_element_dom_id = blink::DOMNodeIdType(123);
+
+  host_->PasteIntoNode(text, node_id);
+
+  {
+    MockWidgetInputHandler::MessageVector dispatched_messages =
+        host_->mock_render_input_router()->GetAndResetDispatchedMessages();
+    ASSERT_EQ(1u, dispatched_messages.size());
+    EXPECT_EQ("PasteIntoNode", dispatched_messages[0]->name());
+  }
+}
+
 // Tests that vertical scroll direction changes are propagated to the delegate.
 TEST_F(RenderWidgetHostTest, OnVerticalScrollDirectionChanged) {
   const auto NotifyVerticalScrollDirectionChanged =
@@ -2584,6 +2824,149 @@ TEST_F(RenderWidgetHostTest, SetCursorWithBitmap) {
       ui::Cursor::NewCustom(std::move(bitmap), gfx::Point());
   host_->SetCursor(cursor);
   EXPECT_EQ(cursor, view_->last_cursor());
+}
+
+TEST_F(RenderWidgetHostTest, SetHungRendererDelayUpdatesTimeout) {
+  // Default is input::kHungRendererDelay.
+  EXPECT_EQ(host_->GetHungRendererDelayForTesting(), input::kHungRendererDelay);
+
+  // Set custom delay. Make sure it's lower than the default which is 5 seconds
+  // for Android and 15 seconds for others.
+  host_->SetHungRendererDelay(base::Seconds(3));
+  EXPECT_EQ(host_->GetHungRendererDelayForTesting(), base::Seconds(3));
+}
+
+TEST_F(RenderWidgetHostTest, ZoomToFindInPageRectBoundsCheck) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect outside the view's bounds.
+  gfx::Rect out_of_bounds_rect(-10, -10, 5, 5);
+
+  // With the fix, it should return early because of bounds check.
+  // EXPECT_CALL ensures that ZoomToFindInPageRect is NOT called.
+  EXPECT_CALL(mock_owner_delegate_, ZoomToFindInPageRect(_)).Times(0);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->ZoomToFindInPageRectInMainFrame(out_of_bounds_rect);
+}
+
+TEST_F(RenderWidgetHostTest, ZoomToFindInPageRectValidBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect inside the view's bounds.
+  gfx::Rect valid_rect(10, 10, 5, 5);
+
+  // This should proceed past the bounds check and call ZoomToFindInPageRect.
+  // The coordinates are relative to the view. Since this is the root view,
+  // they should not be transformed.
+  EXPECT_CALL(mock_owner_delegate_,
+              ZoomToFindInPageRect(gfx::Rect(10, 10, 5, 5)))
+      .Times(1);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->ZoomToFindInPageRectInMainFrame(valid_rect);
+}
+
+TEST_F(RenderWidgetHostTest, ZoomToFindInPageRectClippedToViewBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect that overlaps the view bounds but extends well beyond them. The
+  // forwarded rect must be clipped so that no part of it (including its
+  // center) lies outside the sender's view.
+  gfx::Rect overlapping_rect(-1800, -10, 3900, 3900);
+
+  EXPECT_CALL(mock_owner_delegate_,
+              ZoomToFindInPageRect(gfx::Rect(0, 0, 200, 200)))
+      .Times(1);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->ZoomToFindInPageRectInMainFrame(overlapping_rect);
+}
+
+TEST_F(RenderWidgetHostTest, ZoomToFindInPageRectPartiallyClipped) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect that partially overlaps the view bounds; the forwarded rect should
+  // be the intersection with the view bounds.
+  gfx::Rect partial_rect(150, 150, 100, 100);
+
+  EXPECT_CALL(mock_owner_delegate_,
+              ZoomToFindInPageRect(gfx::Rect(150, 150, 50, 50)))
+      .Times(1);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->ZoomToFindInPageRectInMainFrame(partial_rect);
+}
+
+TEST_F(RenderWidgetHostTest, ZoomToFindInPageRectEmptyBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 0, 0));
+
+  gfx::Rect valid_rect(10, 10, 5, 5);
+
+  EXPECT_CALL(mock_owner_delegate_, ZoomToFindInPageRect(_)).Times(0);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->ZoomToFindInPageRectInMainFrame(valid_rect);
+}
+
+TEST_F(RenderWidgetHostTest, AnimateDoubleTapZoomBoundsCheck) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect outside the view's bounds.
+  gfx::Rect out_of_bounds_rect(-10, -10, 5, 5);
+  gfx::Point tap_point(10, 10);
+
+  // With the fix, it should return early because of bounds check.
+  // EXPECT_CALL ensures that AnimateDoubleTapZoom is NOT called.
+  EXPECT_CALL(mock_owner_delegate_, AnimateDoubleTapZoom(_, _)).Times(0);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->AnimateDoubleTapZoomInMainFrame(tap_point, out_of_bounds_rect);
+}
+
+TEST_F(RenderWidgetHostTest, AnimateDoubleTapZoomValidBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect inside the view's bounds.
+  gfx::Rect valid_rect(10, 10, 5, 5);
+  gfx::Point tap_point(12, 12);
+
+  // This should proceed past the bounds check and call AnimateDoubleTapZoom.
+  EXPECT_CALL(mock_owner_delegate_,
+              AnimateDoubleTapZoom(gfx::Point(12, 12), gfx::Rect(10, 10, 5, 5)))
+      .Times(1);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->AnimateDoubleTapZoomInMainFrame(tap_point, valid_rect);
+}
+
+TEST_F(RenderWidgetHostTest, AnimateDoubleTapZoomRectClippedToViewBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 200, 200));
+
+  // Rect that overlaps the view bounds but extends beyond them. The forwarded
+  // rect must be clipped to the sender's view bounds.
+  gfx::Rect overlapping_rect(150, 150, 100, 100);
+  gfx::Point tap_point(160, 160);
+
+  EXPECT_CALL(
+      mock_owner_delegate_,
+      AnimateDoubleTapZoom(gfx::Point(160, 160), gfx::Rect(150, 150, 50, 50)))
+      .Times(1);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->AnimateDoubleTapZoomInMainFrame(tap_point, overlapping_rect);
+}
+
+TEST_F(RenderWidgetHostTest, AnimateDoubleTapZoomEmptyBounds) {
+  view_->SetBounds(gfx::Rect(0, 0, 0, 0));
+
+  gfx::Rect valid_rect(10, 10, 5, 5);
+  gfx::Point tap_point(12, 12);
+
+  EXPECT_CALL(mock_owner_delegate_, AnimateDoubleTapZoom(_, _)).Times(0);
+
+  static_cast<blink::mojom::FrameWidgetHost*>(host_.get())
+      ->AnimateDoubleTapZoomInMainFrame(tap_point, valid_rect);
 }
 
 }  // namespace content

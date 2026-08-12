@@ -57,19 +57,17 @@ bool MaybeDecryptBuffer(base::span<uint8_t> buffer) {
                              CRYPTPROTECTMEMORY_SAME_PROCESS)) {
     return true;
   }
-  if (::GetLastError() == ERROR_WORKING_SET_QUOTA) {
-    base::TerminateBecauseOutOfMemory(0);
+  static constexpr DWORD kOomErrors[] = {
+      ERROR_WORKING_SET_QUOTA,
+      ERROR_NO_SYSTEM_RESOURCES,
+  };
+  for (const auto error = ::GetLastError(); const auto oom_error : kOomErrors) {
+    if (error == oom_error) {
+      base::TerminateBecauseOutOfMemory(/*size=*/0);
+    }
   }
 #endif  // BUILDFLAG(IS_WIN)
   return false;
-}
-
-void SecureZeroBuffer(base::span<uint8_t> buffer) {
-#if BUILDFLAG(IS_WIN)
-  ::SecureZeroMemory(buffer.data(), buffer.size());
-#else
-  OPENSSL_cleanse(buffer.data(), buffer.size());
-#endif  // BUILDFLAG(IS_WIN)
 }
 
 }  // namespace crypto::internal

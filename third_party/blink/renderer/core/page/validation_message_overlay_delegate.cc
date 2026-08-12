@@ -46,12 +46,13 @@ class ValidationMessageChromeClient : public EmptyChromeClient {
   }
 
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason reason,
                          base::TimeDelta delay,
                          bool urgent) override {
     // Need to pass LocalFrameView for the anchor element because the Frame for
     // this overlay doesn't have an associated WebFrameWidget, which schedules
     // animation.
-    main_chrome_client_->ScheduleAnimation(anchor_view_, delay, urgent);
+    main_chrome_client_->ScheduleAnimation(anchor_view_, reason, delay, urgent);
     anchor_view_->SetVisualViewportOrOverlayNeedsRepaint();
   }
 
@@ -160,7 +161,7 @@ void ValidationMessageOverlayDelegate::CreatePage(const FrameOverlay& overlay) {
   frame->SetView(MakeGarbageCollected<LocalFrameView>(*frame, view_size));
   frame->Init(/*opener=*/nullptr, DocumentToken(), /*policy_container=*/nullptr,
               StorageKey(), /*document_ukm_source_id=*/ukm::kInvalidSourceId,
-              /*creator_base_url=*/KURL());
+              /*creator_base_url=*/NullUrl());
   frame->View()->SetCanHaveScrollbars(false);
   frame->View()->SetBaseBackgroundColor(Color::kTransparent);
   page_->GetVisualViewport().SetSize(view_size);
@@ -212,16 +213,16 @@ void ValidationMessageOverlayDelegate::CreatePage(const FrameOverlay& overlay) {
 }
 
 void ValidationMessageOverlayDelegate::WriteDocument(SegmentedBuffer& data) {
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(
       "<!DOCTYPE html><head><meta charset='UTF-8'><meta name='color-scheme' "
       "content='light dark'><style>",
       data);
   data.Append(UncompressResourceAsBinary(IDR_VALIDATION_BUBBLE_CSS));
-  PagePopupClient::AddString("</style></head>", data);
-  PagePopupClient::AddString(
-      Locale::DefaultLocale().IsRTL() ? "<body dir=rtl>" : "<body dir=ltr>",
+  PagePopupClient::AddLiteral("</style></head>", data);
+  PagePopupClient::AddLiteral(
+      Locale::DefaultLocale().IsRtl() ? "<body dir=rtl>" : "<body dir=ltr>",
       data);
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(
       "<div id=container>"
       "<div id=outer-arrow-top></div>"
       "<div id=inner-arrow-top></div>"
@@ -229,15 +230,15 @@ void ValidationMessageOverlayDelegate::WriteDocument(SegmentedBuffer& data) {
       "<main id=bubble-body>",
       data);
   data.Append(UncompressResourceAsBinary(IDR_VALIDATION_BUBBLE_ICON));
-  PagePopupClient::AddString(message_dir_ == TextDirection::kLtr
-                                 ? "<div dir=ltr id=main-message></div>"
-                                 : "<div dir=rtl id=main-message></div>",
-                             data);
-  PagePopupClient::AddString(sub_message_dir_ == TextDirection::kLtr
-                                 ? "<div dir=ltr id=sub-message></div>"
-                                 : "<div dir=rtl id=sub-message></div>",
-                             data);
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(message_dir_ == TextDirection::kLtr
+                                  ? "<div dir=ltr id=main-message></div>"
+                                  : "<div dir=rtl id=main-message></div>",
+                              data);
+  PagePopupClient::AddLiteral(sub_message_dir_ == TextDirection::kLtr
+                                  ? "<div dir=ltr id=sub-message></div>"
+                                  : "<div dir=rtl id=sub-message></div>",
+                              data);
+  PagePopupClient::AddLiteral(
       "</main>"
       "<div id=outer-arrow-bottom></div>"
       "<div id=inner-arrow-bottom></div>"
@@ -314,7 +315,7 @@ void ValidationMessageOverlayDelegate::AdjustBubblePosition(
   double arrow_anchor_x;
   const int kOffsetToAnchorRect = 8;
   double anchor_rect_center = anchor_rect.x() + anchor_rect.width() / 2;
-  if (!Locale::DefaultLocale().IsRTL()) {
+  if (!Locale::DefaultLocale().IsRtl()) {
     double anchor_rect_left =
         anchor_rect.x() + kOffsetToAnchorRect * zoom_factor;
     if (anchor_rect_left > anchor_rect_center)

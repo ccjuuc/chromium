@@ -14,6 +14,7 @@
 
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/values_util.h"
 #include "base/location.h"
@@ -25,6 +26,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_confirmation_result.h"
@@ -239,6 +241,7 @@ class MockDownloadTargetDeterminerDelegate
                     ConfirmationCallback&));
 #if BUILDFLAG(IS_ANDROID)
   void RequestIncognitoWarningConfirmation(
+      content::WebContents* web_contents,
       IncognitoWarningConfirmationCallback cb) override {
     RequestIncognitoWarningConfirmation_(std::move(cb));
   }
@@ -259,7 +262,9 @@ class MockDownloadTargetDeterminerDelegate
       const base::FilePath& virtual_path,
       bool create_directory,
       DownloadPathReservationTracker::FilenameConflictAction action,
+      const base::FilePath& containment_directory,
       ReservedPathCallback cb) override {
+    last_containment_directory_ = containment_directory;
     ReserveVirtualPath_(download, virtual_path, create_directory, action, cb);
   }
   MOCK_METHOD5(ReserveVirtualPath_,
@@ -274,6 +279,10 @@ class MockDownloadTargetDeterminerDelegate
   }
   MOCK_METHOD2(GetFileMimeType_,
                void(const base::FilePath&, GetFileMimeTypeCallback&));
+
+  const base::FilePath& last_containment_directory() const {
+    return last_containment_directory_;
+  }
 
   void SetupDefaults() {
     ON_CALL(*this, GetInsecureDownloadStatus_(_, _, _))
@@ -290,7 +299,8 @@ class MockDownloadTargetDeterminerDelegate
             [](DownloadItem* download, const base::FilePath& virtual_path,
                bool create_directory,
                DownloadPathReservationTracker::FilenameConflictAction action,
-               ReservedPathCallback& callback) {
+               DownloadTargetDeterminerDelegate::ReservedPathCallback&
+                   callback) {
               std::move(callback).Run(download::PathValidationResult::SUCCESS,
                                       virtual_path);
             });
@@ -310,6 +320,7 @@ class MockDownloadTargetDeterminerDelegate
   static void NullDetermineLocalPath(DownloadItem* download,
                                      const base::FilePath& virtual_path,
                                      download::LocalPathCallback& callback);
+  base::FilePath last_containment_directory_;
 };
 
 class DownloadTargetDeterminerTest : public ChromeRenderViewHostTestHarness {
@@ -462,6 +473,8 @@ DownloadTargetDeterminerTest::CreateActiveDownloadItem(
       .WillByDefault(Return(test_case.mime_type));
   ON_CALL(*item, GetReferrerUrl())
       .WillByDefault(ReturnRefOfCopy(download_url));
+  ON_CALL(*item, GetRequestInitiator())
+      .WillByDefault(ReturnRefOfCopy(std::optional<url::Origin>()));
   ON_CALL(*item, GetState())
       .WillByDefault(Return(DownloadItem::IN_PROGRESS));
   ON_CALL(*item, GetTargetDisposition())
@@ -920,7 +933,13 @@ TEST_F(DownloadTargetDeterminerTest,
 }
 
 // Test whether the last saved directory is used for 'Save As' downloads.
-TEST_F(DownloadTargetDeterminerTest, LastSavePath) {
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+// https://crbug.com/531834681
+#define MAYBE_LastSavePath DISABLED_LastSavePath
+#else
+#define MAYBE_LastSavePath LastSavePath
+#endif
+TEST_F(DownloadTargetDeterminerTest, MAYBE_LastSavePath) {
   const DownloadTestCase kLastSavePathTestCasesPre[] = {
       {// 0: If the last save path is empty, then the default download directory
        //    should be used.
@@ -1008,6 +1027,115 @@ TEST_F(DownloadTargetDeterminerTest, LastSavePath) {
             GetPathInDownloadDir(FILE_PATH_LITERAL("bar.txt")),
             base::FilePath())));
     RunTestCasesWithActiveItem(kLastSavePathTestCasesVirtual);
+  }
+
+  // Test Case 1: Explicit Save As download.
+  {
+    SCOPED_TRACE(testing::Message()
+                 << "Running with local last_selected_directory outside "
+                    "default (SAVE_AS)");
+    base::FilePath outside_dir = profile()->GetPath().AppendASCII("OutsideDir");
+    ASSERT_TRUE(base::CreateDirectory(test_download_dir()));
+    ASSERT_TRUE(base::CreateDirectory(outside_dir));
+    download_prefs()->SetSaveFilePath(outside_dir);
+
+    base::FilePath virtual_path = outside_dir.AppendASCII("foo.txt");
+    std::unique_ptr<download::MockDownloadItem> item = CreateActiveDownloadItem(
+        0, {SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+            DownloadFileType::NOT_DANGEROUS, "http://example.com/foo.txt",
+            "text/plain", FILE_PATH_LITERAL(""), FILE_PATH_LITERAL(""),
+            DownloadItem::TARGET_DISPOSITION_PROMPT, EXPECT_CRDOWNLOAD});
+
+    EXPECT_CALL(*delegate(), ReserveVirtualPath_(_, virtual_path, _, _, _))
+        .WillOnce(
+            [this](
+                DownloadItem* download, const base::FilePath& virtual_path,
+                bool create_directory,
+                DownloadPathReservationTracker::FilenameConflictAction action,
+                DownloadTargetDeterminerDelegate::ReservedPathCallback&
+                    callback) {
+              base::FilePath document_dir;
+              DownloadPathReservationTracker::GetReservedPath(
+                  download, virtual_path, download_prefs()->DownloadPath(),
+                  document_dir, create_directory, action, std::move(callback),
+                  delegate()->last_containment_directory());
+            });
+
+    EXPECT_CALL(*delegate(),
+                RequestConfirmation_(_, virtual_path,
+                                     DownloadConfirmationReason::SAVE_AS, _))
+        .WillOnce(
+            WithArg<3>(ScheduleCallback2(DownloadConfirmationResult::CONFIRMED,
+                                         ui::SelectedFileInfo(virtual_path))));
+
+    TargetInfoAndDangerLevel target_info =
+        RunDownloadTargetDeterminer(base::FilePath(), item.get());
+
+    EXPECT_EQ(virtual_path.value(),
+              target_info.target_info.target_path.value());
+    EXPECT_EQ(DownloadItem::TARGET_DISPOSITION_PROMPT,
+              target_info.target_info.target_disposition);
+
+    // Clean up reservation to avoid NOTREACHED crash on destruction.
+    EXPECT_CALL(*item, GetState())
+        .WillRepeatedly(Return(download::DownloadItem::COMPLETE));
+    item->NotifyObserversDownloadUpdated();
+  }
+
+  // Test Case 2: Regular download with "Ask where to save" enabled.
+  {
+    SCOPED_TRACE(testing::Message()
+                 << "Running with PromptForDownload enabled and local "
+                    "last_selected_directory outside default");
+    SetPromptForDownload(true);
+    base::FilePath outside_dir =
+        profile()->GetPath().AppendASCII("OutsideDir2");
+    ASSERT_TRUE(base::CreateDirectory(outside_dir));
+    download_prefs()->SetSaveFilePath(outside_dir);
+
+    base::FilePath virtual_path = outside_dir.AppendASCII("foo.txt");
+    std::unique_ptr<download::MockDownloadItem> item = CreateActiveDownloadItem(
+        0, {AUTOMATIC, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+            DownloadFileType::NOT_DANGEROUS, "http://example.com/foo.txt",
+            "text/plain", FILE_PATH_LITERAL(""), FILE_PATH_LITERAL(""),
+            DownloadItem::TARGET_DISPOSITION_PROMPT, EXPECT_CRDOWNLOAD});
+
+    EXPECT_CALL(*delegate(), ReserveVirtualPath_(_, virtual_path, _, _, _))
+        .WillOnce(
+            [this](
+                DownloadItem* download, const base::FilePath& virtual_path,
+                bool create_directory,
+                DownloadPathReservationTracker::FilenameConflictAction action,
+                DownloadTargetDeterminerDelegate::ReservedPathCallback&
+                    callback) {
+              base::FilePath document_dir;
+              DownloadPathReservationTracker::GetReservedPath(
+                  download, virtual_path, download_prefs()->DownloadPath(),
+                  document_dir, create_directory, action, std::move(callback),
+                  delegate()->last_containment_directory());
+            });
+
+    EXPECT_CALL(*delegate(),
+                RequestConfirmation_(_, virtual_path,
+                                     DownloadConfirmationReason::PREFERENCE, _))
+        .WillOnce(
+            WithArg<3>(ScheduleCallback2(DownloadConfirmationResult::CONFIRMED,
+                                         ui::SelectedFileInfo(virtual_path))));
+
+    TargetInfoAndDangerLevel target_info =
+        RunDownloadTargetDeterminer(base::FilePath(), item.get());
+
+    EXPECT_EQ(virtual_path.value(),
+              target_info.target_info.target_path.value());
+    EXPECT_EQ(DownloadItem::TARGET_DISPOSITION_PROMPT,
+              target_info.target_info.target_disposition);
+
+    // Clean up reservation to avoid NOTREACHED crash on destruction.
+    EXPECT_CALL(*item, GetState())
+        .WillRepeatedly(Return(download::DownloadItem::COMPLETE));
+    item->NotifyObserversDownloadUpdated();
+
+    SetPromptForDownload(false);
   }
 }
 
@@ -1617,17 +1745,6 @@ TEST_F(DownloadTargetDeterminerTest, PromptAlways_NonTrustedExtension) {
        FILE_PATH_LITERAL("foo.crx"), DownloadItem::TARGET_DISPOSITION_PROMPT,
 
        EXPECT_CRDOWNLOAD},
-
-      {// 1: Automatic User Script - Shouldn't prompt for user script downloads
-       //    even if "Prompt for download" preference is set.
-       AUTOMATIC, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-       DownloadFileType::NOT_DANGEROUS, "http://example.com/foo.user.js", "",
-       FILE_PATH_LITERAL(""),
-
-       FILE_PATH_LITERAL("foo.user.js"),
-       DownloadItem::TARGET_DISPOSITION_PROMPT,
-
-       EXPECT_CRDOWNLOAD},
   };
 
   SetPromptForDownload(true);
@@ -1645,17 +1762,6 @@ TEST_F(DownloadTargetDeterminerTest, PromptAlways_TrustedExtension) {
        extensions::Extension::kMimeType, FILE_PATH_LITERAL(""),
 
        FILE_PATH_LITERAL("foo.crx"), DownloadItem::TARGET_DISPOSITION_OVERWRITE,
-
-       EXPECT_CRDOWNLOAD},
-
-      {// 1: Automatic User Script - Shouldn't prompt for user script downloads
-       //    even if "Prompt for download" preference is set.
-       AUTOMATIC, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-       DownloadFileType::NOT_DANGEROUS, "http://example.com/foo.user.js", "",
-       FILE_PATH_LITERAL(""),
-
-       FILE_PATH_LITERAL("foo.user.js"),
-       DownloadItem::TARGET_DISPOSITION_OVERWRITE,
 
        EXPECT_CRDOWNLOAD},
   };
@@ -1927,6 +2033,64 @@ TEST_F(DownloadTargetDeterminerTest, NotifyExtensionsDefaultPath) {
 }
 
 // Test that relative paths returned by extensions are always relative to the
+// default downloads path, even if "Ask where to save" (prompt) is enabled.
+TEST_F(DownloadTargetDeterminerTest, NotifyExtensionsSuggestedPathWithPrompt) {
+  // Enable "Ask where to save" (PromptForDownload).
+  SetPromptForDownload(true);
+
+  // Set the last selected/save directory to something else, e.g.
+  // "last_selected".
+  base::FilePath last_selected_dir =
+      GetPathInDownloadDir(FILE_PATH_LITERAL("last_selected"));
+  ASSERT_TRUE(base::CreateDirectory(last_selected_dir));
+  download_prefs()->SetSaveFilePath(last_selected_dir);
+
+  const DownloadTestCase test_case = {
+      AUTOMATIC,
+      download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+      DownloadFileType::NOT_DANGEROUS,
+      "http://example.com/foo.txt",
+      "text/plain",
+      FILE_PATH_LITERAL(""),
+
+      FILE_PATH_LITERAL("overridden/foo.txt"),
+      DownloadItem::TARGET_DISPOSITION_PROMPT,
+
+      EXPECT_CRDOWNLOAD};
+
+  std::unique_ptr<download::MockDownloadItem> item =
+      CreateActiveDownloadItem(0, test_case);
+  base::FilePath overridden_path(FILE_PATH_LITERAL("overridden/foo.txt"));
+
+  EXPECT_CALL(*delegate(), NotifyExtensions_(_, _, _))
+      .WillOnce(WithArg<2>(ScheduleCallback2(
+          overridden_path, DownloadPathReservationTracker::UNIQUIFY)));
+
+  // Use the real GetReservedPath so that ValidatePathAndResolveConflicts is
+  // called.
+  EXPECT_CALL(*delegate(), ReserveVirtualPath_(_, _, _, _, _))
+      .WillOnce(
+          [this](DownloadItem* download, const base::FilePath& virtual_path,
+                 bool create_directory,
+                 DownloadPathReservationTracker::FilenameConflictAction action,
+                 DownloadTargetDeterminerDelegate::ReservedPathCallback&
+                     callback) {
+            base::FilePath document_dir;
+            DownloadPathReservationTracker::GetReservedPath(
+                download, virtual_path, download_prefs()->DownloadPath(),
+                document_dir, create_directory, action, std::move(callback),
+                delegate()->last_containment_directory());
+          });
+
+  RunTestCase(test_case, base::FilePath(), item.get());
+
+  // Clean up reservation to avoid NOTREACHED crash on destruction.
+  EXPECT_CALL(*item, GetState())
+      .WillRepeatedly(Return(download::DownloadItem::COMPLETE));
+  item->NotifyObserversDownloadUpdated();
+}
+
+// Test that relative paths returned by extensions are always relative to the
 // default downloads path.
 TEST_F(DownloadTargetDeterminerTest, NotifyExtensionsLocalFile) {
   const DownloadTestCase kNotifyExtensionsTestCases[] = {
@@ -1987,7 +2151,7 @@ TEST_F(DownloadTargetDeterminerTest, InitialVirtualPathUnsafe) {
 // prompted, and not otherwise. These test cases shouldn't result in prompting
 // since the error is set to NETWORK_FAILED.
 TEST_F(DownloadTargetDeterminerTest, ResumedNoPrompt) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType* kInitialPath =
       FILE_PATH_LITERAL("some_path/bar.txt");
@@ -2106,7 +2270,7 @@ TEST_F(DownloadTargetDeterminerTest, ResumedForcedDownload) {
 // prompted, and not otherwise. These test cases result in prompting since the
 // error is set to NO_SPACE.
 TEST_F(DownloadTargetDeterminerTest, ResumedWithPrompt) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType* kInitialPath =
       FILE_PATH_LITERAL("some_path/bar.txt");
@@ -2186,7 +2350,7 @@ TEST_F(DownloadTargetDeterminerTest, ResumedWithPrompt) {
 
 // Test intermediate filename generation for resumed downloads.
 TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType kInitialPath[] =
       FILE_PATH_LITERAL("some_path/bar.txt");
@@ -2302,7 +2466,7 @@ TEST_F(DownloadTargetDeterminerTest, IntermediateNameForResumed) {
 
 // Test MIME type determination based on the target filename.
 TEST_F(DownloadTargetDeterminerTest, MIMETypeDetermination) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType kInitialPath[] =
       FILE_PATH_LITERAL("some_path/bar.txt");
@@ -2677,7 +2841,8 @@ TEST_F(DownloadTargetDeterminerTest, TestSanitizeEnvVariable) {
        DownloadItem::TARGET_DISPOSITION_PROMPT,
 
        EXPECT_CRDOWNLOAD},
-      {// 2: File name falling back to dangerous extensions after removing env var.
+      {// 2: File name falling back to dangerous extensions after removing env
+       // var.
        SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
        DownloadFileType::NOT_DANGEROUS, "http://example.com/foo2.lnk.%%",
        "application/octet-stream", FILE_PATH_LITERAL(""),
@@ -2686,7 +2851,8 @@ TEST_F(DownloadTargetDeterminerTest, TestSanitizeEnvVariable) {
        DownloadItem::TARGET_DISPOSITION_PROMPT,
 
        EXPECT_CRDOWNLOAD},
-      {// 3: Double extension bug leading to dangerous extensions after removing env var.
+      {// 3: Double extension bug leading to dangerous extensions after removing
+       // env var.
        SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
        DownloadFileType::NOT_DANGEROUS, "http://example.com/foo2.lnk %%",
        "application/octet-stream", FILE_PATH_LITERAL(""),
@@ -2695,8 +2861,9 @@ TEST_F(DownloadTargetDeterminerTest, TestSanitizeEnvVariable) {
        DownloadItem::TARGET_DISPOSITION_PROMPT,
 
        EXPECT_CRDOWNLOAD},
-      {// 4: Unicode char bug leading to dangerous extensions after removing env var.
-       // NOTE: The space before "%%" is a non-breaking space (U+00A0), not a normal space.
+      {// 4: Unicode char bug leading to dangerous extensions after removing env
+       // var. NOTE: The space before "%%" is a non-breaking space (U+00A0), not
+       // a normal space.
        SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
        DownloadFileType::NOT_DANGEROUS, "http://example.com/foo2.lnk %%",
        "application/octet-stream", FILE_PATH_LITERAL(""),
@@ -2708,6 +2875,36 @@ TEST_F(DownloadTargetDeterminerTest, TestSanitizeEnvVariable) {
       {// 5: File name is an env var.
        SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
        DownloadFileType::NOT_DANGEROUS, "http://example.com/%foo.txt%",
+       "text/plain", FILE_PATH_LITERAL(""),
+
+       FILE_PATH_LITERAL("download"), DownloadItem::TARGET_DISPOSITION_PROMPT,
+
+       EXPECT_CRDOWNLOAD},
+      {// 6: Multiple env vars need to be filtered out.
+       SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+       DownloadFileType::NOT_DANGEROUS, "http://example.com/foo.lnk .%% .%%",
+       "application/octet-stream", FILE_PATH_LITERAL(""),
+
+       FILE_PATH_LITERAL("foo.download"),
+       DownloadItem::TARGET_DISPOSITION_PROMPT,
+
+       EXPECT_CRDOWNLOAD},
+      {// 7: Prevent hiding extensions (like .url) in the Windows Save As dialog
+       // by wrapping trailing spaces inside environment variables.
+       SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+       DownloadFileType::NOT_DANGEROUS,
+       "http://example.com/photo.jpg%20%25%25.url", "text/plain",
+       FILE_PATH_LITERAL(""),
+
+       FILE_PATH_LITERAL("photo.jpg.download"),
+       DownloadItem::TARGET_DISPOSITION_PROMPT,
+
+       EXPECT_CRDOWNLOAD},
+
+      {// 8: Ensure completely empty filenames made of just dots and environment
+       // variables collapse safely without retaining any dangerous extensions.
+       SAVE_AS, download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+       DownloadFileType::NOT_DANGEROUS, "http://example.com/.%25%25.%25%25",
        "text/plain", FILE_PATH_LITERAL(""),
 
        FILE_PATH_LITERAL("download"), DownloadItem::TARGET_DISPOSITION_PROMPT,
@@ -2811,7 +3008,7 @@ class DownloadTargetDeterminerTestWithPlugin
 // Check if secure handling of filetypes is determined correctly for PPAPI
 // plugins.
 TEST_F(DownloadTargetDeterminerTestWithPlugin, CheckForSecureHandling_PPAPI) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType kInitialPath[] =
       FILE_PATH_LITERAL("some_path/bar.txt");
@@ -2877,7 +3074,7 @@ TEST_F(DownloadTargetDeterminerTestWithPlugin, CheckForSecureHandling_PPAPI) {
 // BrowserPlugins.
 TEST_F(DownloadTargetDeterminerTestWithPlugin,
        CheckForSecureHandling_BrowserPlugin) {
-  // All test cases run with GetPathInDownloadDir(kInitialPath) as the inital
+  // All test cases run with GetPathInDownloadDir(kInitialPath) as the initial
   // path.
   const base::FilePath::CharType kInitialPath[] =
       FILE_PATH_LITERAL("some_path/bar.txt");

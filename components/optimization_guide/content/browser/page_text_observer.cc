@@ -7,17 +7,15 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <string_view>
 #include <vector>
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/time/time.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "content/public/browser/browser_task_traits.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
@@ -26,8 +24,6 @@
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 namespace optimization_guide {
@@ -41,7 +37,7 @@ const char kTimeUntilCompleteHistogram[] =
 const char kFrameDumpLengthHistogram[] =
     "OptimizationGuide.PageTextDump.FrameDumpLength.";
 
-std::string TextDumpEventToString(mojom::TextDumpEvent event) {
+std::string_view TextDumpEventToString(mojom::TextDumpEvent event) {
   switch (event) {
     case mojom::TextDumpEvent::kFirstLayout:
       return "FirstLayout";
@@ -277,22 +273,24 @@ class RequestMediator : public base::RefCounted<RequestMediator> {
                           const std::optional<std::u16string>& page_text) {
     DCHECK(on_frame_text_dump_complete_);
 
-    std::string event_suffix =
+    std::string_view event_suffix =
         TextDumpEventToString(preliminary_result.event());
 
     if (!page_text) {
       base::UmaHistogramMediumTimes(
-          kTimeUntilDisconnectHistogram + event_suffix,
+          base::StrCat({kTimeUntilDisconnectHistogram, event_suffix}),
           base::TimeTicks::Now() - requests_sent_time_);
       on_frame_text_dump_complete_.Run(std::nullopt);
       return;
     }
 
-    base::UmaHistogramMediumTimes(kTimeUntilCompleteHistogram + event_suffix,
-                                  base::TimeTicks::Now() - requests_sent_time_);
+    base::UmaHistogramMediumTimes(
+        base::StrCat({kTimeUntilCompleteHistogram, event_suffix}),
+        base::TimeTicks::Now() - requests_sent_time_);
 
-    base::UmaHistogramCounts10000(kFrameDumpLengthHistogram + event_suffix,
-                                  page_text->size());
+    base::UmaHistogramCounts10000(
+        base::StrCat({kFrameDumpLengthHistogram, event_suffix}),
+        page_text->size());
 
     on_frame_text_dump_complete_.Run(
         preliminary_result.CompleteWithContents(*page_text));

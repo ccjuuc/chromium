@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+import {dedupingMixin as litDedupingMixin} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import type {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {dedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {dedupingMixin as polymerDedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {loadTimeData} from './i18n_setup.js';
 
@@ -17,22 +19,26 @@ export interface SettingsRoutes {
   ADDRESSES: Route;
   ADVANCED: Route;
   AI: Route;
-  AI_TAB_ORGANIZATION: Route;
+  AI_MODE_SEARCH: Route;
+  AI_SUGGESTIONS: Route;
   APPEARANCE: Route;
   AUTOFILL: Route;
-  AUTOFILL_AI: Route;
   BASIC: Route;
   CAPTIONS: Route;
   CLEAR_BROWSER_DATA: Route;
   COMPARE: Route;
+  CONTACT_INFO: Route;
   COOKIES: Route;
   DEFAULT_BROWSER: Route;
   DOWNLOADS: Route;
   EDIT_DICTIONARY: Route;
   FONTS: Route;
   GEMINI: Route;
+  GEMINI_LOGIN: Route;
   GLIC_SECTION: Route;
   HISTORY_SEARCH: Route;
+  IDENTITY_DOCS: Route;
+  INLINE_CUE_MENU: Route;
   LANGUAGES: Route;
   MANAGE_PROFILE: Route;
   OFFER_WRITING_HELP: Route;
@@ -44,11 +50,6 @@ export interface SettingsRoutes {
   PRELOADING: Route;
   PRIVACY: Route;
   PRIVACY_GUIDE: Route;
-  PRIVACY_SANDBOX: Route;
-  PRIVACY_SANDBOX_AD_MEASUREMENT: Route;
-  PRIVACY_SANDBOX_FLEDGE: Route;
-  PRIVACY_SANDBOX_TOPICS: Route;
-  PRIVACY_SANDBOX_MANAGE_TOPICS: Route;
   RESET: Route;
   RESET_DIALOG: Route;
   SAFETY_HUB: Route;
@@ -56,6 +57,7 @@ export interface SettingsRoutes {
   SEARCH_ENGINES: Route;
   SECURITY: Route;
   SECURITY_KEYS: Route;
+  SHOPPING: Route;
   SITE_SETTINGS: Route;
   SITE_SETTINGS_ADS: Route;
   SITE_SETTINGS_ALL: Route;
@@ -109,19 +111,18 @@ export interface SettingsRoutes {
   SITE_SETTINGS_WINDOW_MANAGEMENT: Route;
   SITE_SETTINGS_ZOOM_LEVELS: Route;
   SITE_SETTINGS_WEB_PRINTING: Route;
+  SKILLS: Route;
   SPELL_CHECK: Route;
+  SUGGESTIONS_FROM_GEMINI: Route;
   SYNC: Route;
   SYNC_ADVANCED: Route;
   SYSTEM: Route;
+  TRAVEL: Route;
   TRIGGERED_RESET_DIALOG: Route;
-  YOUR_SAVED_INFO: Route;
-  YOUR_SAVED_INFO_CONTACT_INFO: Route;
-  YOUR_SAVED_INFO_IDENTITY_DOCS: Route;
-  YOUR_SAVED_INFO_TRAVEL: Route;
-
-  // <if expr="not is_chromeos">
   ACCOUNT: Route;
   GOOGLE_SERVICES: Route;
+
+  // <if expr="not is_chromeos">
   IMPORT_DATA: Route;
   SIGN_OUT: Route;
   // </if>
@@ -236,6 +237,8 @@ export class Router {
 
   private wasLastRouteChangePopstate_: boolean = false;
 
+  private previousRoute_: Route|null = null;
+
   private initializeRouteFromUrlCalled_: boolean = false;
 
   private routeObservers_: Set<RouteObserverMixinInterface> = new Set();
@@ -288,6 +291,7 @@ export class Router {
     this.recordMetrics(route.path);
 
     const oldRoute = this.currentRoute;
+    this.previousRoute_ = oldRoute;
     this.currentRoute = route;
     this.currentQueryParameters_ = queryParameters;
     this.wasLastRouteChangePopstate_ = isPopstate;
@@ -319,6 +323,10 @@ export class Router {
 
   getCurrentRoute(): Route {
     return this.currentRoute;
+  }
+
+  getPreviousRoute(): Route|null {
+    return this.previousRoute_;
   }
 
   getQueryParameters(): URLSearchParams {
@@ -471,6 +479,7 @@ export class Router {
   resetRouteForTesting() {
     this.initializeRouteFromUrlCalled_ = false;
     this.wasLastRouteChangePopstate_ = false;
+    this.previousRoute_ = null;
     this.currentRoute = this.routes_.BASIC;
     this.currentQueryParameters_ = new URLSearchParams();
   }
@@ -478,7 +487,7 @@ export class Router {
 
 type Constructor<T> = new (...args: any[]) => T;
 
-export const RouteObserverMixin = dedupingMixin(
+export const RouteObserverMixin = polymerDedupingMixin(
     <T extends Constructor<PolymerElement>>(superClass: T): T&
     Constructor<RouteObserverMixinInterface> => {
       class RouteObserverMixin extends superClass implements
@@ -506,6 +515,36 @@ export const RouteObserverMixin = dedupingMixin(
         }
       }
       return RouteObserverMixin;
+    });
+
+export const RouteObserverMixinLit = litDedupingMixin(
+    <T extends Constructor<CrLitElement>>(superClass: T): T&
+    Constructor<RouteObserverMixinInterface> => {
+      class RouteObserverMixinLit extends superClass implements
+          RouteObserverMixinInterface {
+        override connectedCallback() {
+          super.connectedCallback();
+
+          assert(routerInstance);
+          routerInstance.addObserver(this);
+
+          // Emulating Polymer data bindings, the observer is called when the
+          // element starts observing the route.
+          this.currentRouteChanged(routerInstance.currentRoute, undefined);
+        }
+
+        override disconnectedCallback() {
+          super.disconnectedCallback();
+
+          assert(routerInstance);
+          routerInstance.removeObserver(this);
+        }
+
+        currentRouteChanged(_newRoute: Route, _oldRoute?: Route) {
+          assertNotReached();
+        }
+      }
+      return RouteObserverMixinLit;
     });
 
 export interface RouteObserverMixinInterface {

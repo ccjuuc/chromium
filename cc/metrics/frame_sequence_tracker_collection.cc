@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "cc/metrics/compositor_frame_reporting_controller.h"
@@ -244,7 +243,7 @@ void FrameSequenceTrackerCollection::StopSequence(
 }
 
 void FrameSequenceTrackerCollection::StartCustomSequence(int sequence_id) {
-  DCHECK(!base::Contains(custom_frame_trackers_, sequence_id));
+  DCHECK(!custom_frame_trackers_.contains(sequence_id));
 
   // base::Unretained() is safe here because |this| owns FrameSequenceTracker
   // and FrameSequenceMetrics.
@@ -332,15 +331,7 @@ void FrameSequenceTrackerCollection::DestroyTrackers() {
       }
 
       if (metrics->HasEnoughDataForReporting()) {
-        // This value is guaranteed to be positive by the
-        // previous HasEnoughDataForReporting check.
-        int percent_dropped_frames4 = metrics->ReportMetrics();
-        CHECK_GE(percent_dropped_frames4, 0);
-        if (ukm_dropped_frames_data_) {
-          UkmDroppedFramesData dropped_frames_data;
-          dropped_frames_data.percent_dropped_frames = percent_dropped_frames4;
-          ukm_dropped_frames_data_->Write(dropped_frames_data);
-        }
+        metrics->ReportMetrics();
       }
       if (metrics->HasDataLeftForReporting()) {
         accumulated_metrics_.emplace(key, std::move(metrics));
@@ -431,11 +422,6 @@ void FrameSequenceTrackerCollection::AddSortedFrame(
   }
 
   DestroyTrackers();
-}
-
-void FrameSequenceTrackerCollection::SetUkmDroppedFramesDestination(
-    UkmDroppedFramesDataShared* dropped_frames_data) {
-  ukm_dropped_frames_data_ = dropped_frames_data;
 }
 
 }  // namespace cc

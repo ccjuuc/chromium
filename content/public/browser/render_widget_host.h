@@ -18,6 +18,7 @@
 #include "components/input/input_event_source.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/tracked_element_observer.h"
 #include "content/public/common/drop_data.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -48,6 +49,7 @@ class Point;
 namespace ui {
 class Cursor;
 class LatencyInfo;
+struct ImeTextSpan;
 }
 
 namespace viz {
@@ -55,10 +57,13 @@ class FrameSinkId;
 }
 
 namespace content {
+struct GlobalDOMNodeId;
+struct GlobalRenderFrameHostId;
 class RenderProcessHost;
 class RenderWidgetHostIterator;
 class RenderWidgetHostObserver;
 class RenderWidgetHostView;
+class TrackedElementObserver;
 
 // A RenderWidgetHost acts as the abstraction for compositing and input
 // functionality. It can exist in 3 different scenarios:
@@ -110,12 +115,11 @@ class CONTENT_EXPORT RenderWidgetHost {
 
   virtual ~RenderWidgetHost() {}
 
-  // This is a method to manually notify `InputEventObserver`s that an input
-  // event is about to be sent to the renderer. This is useful for mechanisms
-  // that do not use the normal input stack and thus would not normally send
-  // notifications to observers (e.g. tools in `actor::`).
-  virtual void WillSendInputEventToRenderer(
-      const blink::WebInputEvent& event) = 0;
+  // This is a method to manually trigger user interaction notifications. This
+  // is useful for mechanisms that do not use the normal input stack and thus
+  // would not normally send notifications to observers (e.g. tools in
+  // `actor::`).
+  virtual void SimulateUserInteraction(const blink::WebInputEvent& event) = 0;
 
   // Returns the viz::FrameSinkId that this object uses to put things on screen.
   // This value is constant throughout the lifetime of this object. Note that
@@ -188,7 +192,7 @@ class CONTENT_EXPORT RenderWidgetHost {
   virtual void ForwardGestureEvent(
       const blink::WebGestureEvent& gesture_event) = 0;
 
-  virtual RenderProcessHost* GetProcess() = 0;
+  virtual RenderProcessHost* GetProcess() const = 0;
 
   virtual int GetRoutingID() = 0;
 
@@ -198,6 +202,10 @@ class CONTENT_EXPORT RenderWidgetHost {
   // crashes, instead you should always ask for it using the accessor.
   virtual RenderWidgetHostView* GetView() = 0;
   virtual const RenderWidgetHostView* GetView() const = 0;
+
+  virtual void AddTrackedElementObserver(TrackedElementObserver* observer) = 0;
+  virtual void RemoveTrackedElementObserver(
+      TrackedElementObserver* observer) = 0;
 
   // Returns true if the renderer is considered unresponsive.
   virtual bool IsCurrentlyUnresponsive() = 0;
@@ -346,14 +354,48 @@ class CONTENT_EXPORT RenderWidgetHost {
       const gfx::Point& point,
       const ui::mojom::MenuSourceType source_type) {}
 
+  // Sets composition text. This does so as an IME would, but is used by callers
+  // that want to programmatically insert text without simulating an actual IME.
+  // `text` is the composition text.
+  // `ime_text_spans` sets the styling of the composition marker(s).
+  // `target_dom_node_id`, if not a null value, sets the composition on the
+  // identified node. This adjusts focus if necessary, then restores it, in
+  // order to target the node. For comparison, a regular IME would simply
+  // compose in whatever node is focused.
+  virtual void SetExternallySourcedComposition(
+      const std::u16string& text,
+      const std::vector<ui::ImeTextSpan>& ime_text_spans,
+      const GlobalDOMNodeId& target_dom_node_id) = 0;
+
+  // Commits composition text. See `SetExternallySourcedComposition`.
+  virtual void CommitExternallySourcedComposition(
+      const std::u16string& text,
+      const GlobalDOMNodeId& target_dom_node_id) = 0;
+
+  // Pastes text into the target node.
+  // Unlike the `*ExternallySourcedComposition` methods above, this does not
+  // temporarily change focus and does not use IME code paths.
+  virtual void PasteIntoNode(const std::u16string& text,
+                             const GlobalDOMNodeId& target_dom_node_id) = 0;
+
   // Roundtrips through the renderer and compositor pipeline to ensure that any
   // changes to the contents resulting from operations executed prior to this
-  // call are visible on screen. The call completes asynchronously (if it
-  // succeeds) by running the supplied |callback| with a value of true upon
-  // successful completion and false otherwise when the widget is destroyed.
-  // This can run synchronously on failure.
+  // call are included in a frame submitted to the display compositor. The call
+  // completes asynchronously (if it succeeds) after the frame is submitted.
+  // Note that frame submission does not guarantee that the changes are already
+  // visible on screen (e.g., Viz might not have activated or drawn the frame
+  // yet). The supplied |callback| runs with a value of true upon successful
+  // completion and false otherwise when the widget is destroyed.
   using VisualStateCallback = base::OnceCallback<void(bool)>;
   virtual void InsertVisualStateCallback(VisualStateCallback callback) {}
+
+  // Sets the timeout for the hung renderer detection.
+  virtual void SetHungRendererDelay(const base::TimeDelta& delay) = 0;
+
+  // Returns the creator/opener frame's ID if this widget is a popup widget.
+  // Otherwise, returns std::nullopt.
+  virtual std::optional<GlobalRenderFrameHostId> GetPopupCreatorFrameId()
+      const = 0;
 };
 
 }  // namespace content

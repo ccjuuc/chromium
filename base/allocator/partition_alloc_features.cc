@@ -7,6 +7,7 @@
 #include "base/base_export.h"
 #include "base/feature_list.h"
 #include "base/features.h"
+#include "build/android_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "partition_alloc/buildflags.h"
@@ -88,61 +89,42 @@ BASE_FEATURE(kPartitionAllocLargeEmptySlotSpanRing,
 #else
              FEATURE_DISABLED_BY_DEFAULT);
 #endif
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocLargeEmptySlotSpanRingSize,
+                   &kPartitionAllocLargeEmptySlotSpanRing,
+                   "ring-size",
+                   partition_alloc::internal::SlotSpanRingMaxSize::kMedium);
 
-BASE_FEATURE(kPartitionAllocWithAdvancedChecks, FEATURE_DISABLED_BY_DEFAULT);
-constexpr FeatureParam<PartitionAllocWithAdvancedChecksEnabledProcesses>::Option
-    kPartitionAllocWithAdvancedChecksEnabledProcessesOptions[] = {
-        {PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserOnly,
-         kBrowserOnlyStr},
-        {PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserAndRenderer,
-         kBrowserAndRendererStr},
-        {PartitionAllocWithAdvancedChecksEnabledProcesses::kNonRenderer,
-         kNonRendererStr},
-        {PartitionAllocWithAdvancedChecksEnabledProcesses::kAllProcesses,
-         kAllProcessesStr}};
-// Note: Do not use the prepared macro as of no need for a local cache.
-constinit const FeatureParam<PartitionAllocWithAdvancedChecksEnabledProcesses>
-    kPartitionAllocWithAdvancedChecksEnabledProcessesParam{
-        &kPartitionAllocWithAdvancedChecks, kPAFeatureEnabledProcessesStr,
-        PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserOnly,
-        &kPartitionAllocWithAdvancedChecksEnabledProcessesOptions};
 
+// Enabled-by-default. Without proper
+// `PartitionAllocSchedulerLoopQuarantineConfig` configuration, the feature
+// remains effectively disabled.
 BASE_FEATURE(kPartitionAllocSchedulerLoopQuarantine,
-             FEATURE_DISABLED_BY_DEFAULT);
+             FEATURE_ENABLED_BY_DEFAULT);
 // Scheduler Loop Quarantine's config.
 // Note: Do not use the prepared macro as of no need for a local cache.
 constinit const FeatureParam<std::string>
     kPartitionAllocSchedulerLoopQuarantineConfig{
         &kPartitionAllocSchedulerLoopQuarantine,
-        "PartitionAllocSchedulerLoopQuarantineConfig", "{}"};
-
-BASE_FEATURE(kPartitionAllocSchedulerLoopQuarantineTaskControlledPurge,
-             FEATURE_DISABLED_BY_DEFAULT);
-constexpr FeatureParam<
-    PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses>::Option
-    kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesOptions[] =
-        {{PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
-              kBrowserOnly,
-          kBrowserOnlyStr},
-         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
-              kBrowserAndRenderer,
-          kBrowserAndRendererStr},
-         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
-              kNonRenderer,
-          kNonRendererStr},
-         {PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
-              kAllProcesses,
-          kAllProcessesStr}};
-// Note: Do not use the prepared macro as of no need for a local cache.
-constinit const FeatureParam<
-    PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses>
-    kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesParam{
-        &kPartitionAllocSchedulerLoopQuarantineTaskControlledPurge,
-        "PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcess"
-        "es",
-        PartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcesses::
-            kBrowserOnly,
-        &kPartitionAllocSchedulerLoopQuarantineTaskControlledPurgeEnabledProcessesOptions};
+        "PartitionAllocSchedulerLoopQuarantineConfig",
+        R"({
+          "browser":{
+            "main":{
+              "branch-capacity-in-bytes":524288,
+              "enable-quarantine":true,
+              "enable-zapping":true,
+              "leak-on-destruction":false
+            }
+          },
+          "*":{
+            "amsc":{
+              "branch-capacity-in-bytes":524288,
+              "enable-quarantine":true,
+              "enable-zapping":true,
+              "leak-on-destruction":false
+            }
+          }
+        })"};
 
 BASE_FEATURE(kPartitionAllocEventuallyZeroFreedMemory,
              FEATURE_DISABLED_BY_DEFAULT);
@@ -169,7 +151,8 @@ BASE_FEATURE_ENUM_PARAM(BackupRefPtrEnabledProcesses,
                         kBackupRefPtrEnabledProcessesParam,
                         &kPartitionAllocBackupRefPtr,
                         kPAFeatureEnabledProcessesStr,
-#if PA_BUILDFLAG(IS_ANDROID)
+// Exception for IS_DESKTOP_ANDROID approved in crbug.com/482155132.
+#if BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_DESKTOP_ANDROID)
                         BackupRefPtrEnabledProcesses::kNonRenderer,
 #else
                         BackupRefPtrEnabledProcesses::kAllProcesses,
@@ -304,6 +287,38 @@ BASE_FEATURE_PARAM(TimeDelta,
                    TimeDelta()  // Defaults to zero.
 );
 
+// Whether the periodic memory reclaim interval adapts to how much memory is
+// actually reclaimable, instead of running at a fixed cadence: back off while
+// there is little to decommit, so that idle processes wake up less often, and
+// ramp back up once there is a lot. Only consulted when
+// `kPartitionAllocMemoryReclaimerInterval` does not pin the interval.
+BASE_FEATURE(kPartitionAllocAdaptiveMemoryReclaimInterval,
+             FEATURE_DISABLED_BY_DEFAULT);
+// Bounds of the back-off. The interval starts at `default_interval` and stays
+// within [`min_interval`, `max_interval`]. Defaults match
+// partition_alloc::MemoryReclaimer::AdaptiveIntervalConfig.
+BASE_FEATURE_PARAM(TimeDelta,
+                   kPartitionAllocAdaptiveMemoryReclaimMinInterval,
+                   &kPartitionAllocAdaptiveMemoryReclaimInterval,
+                   Seconds(4));
+BASE_FEATURE_PARAM(TimeDelta,
+                   kPartitionAllocAdaptiveMemoryReclaimMaxInterval,
+                   &kPartitionAllocAdaptiveMemoryReclaimInterval,
+                   Minutes(1));
+BASE_FEATURE_PARAM(TimeDelta,
+                   kPartitionAllocAdaptiveMemoryReclaimDefaultInterval,
+                   &kPartitionAllocAdaptiveMemoryReclaimInterval,
+                   Seconds(8));
+// Low watermark of decommittable bytes, at or below which the interval grows.
+// The default of 100 KiB was picked from live browser measurements as the
+// least aggressive back-off that still reduces reclaim wake-ups meaningfully
+// while keeping the per-reclaim decommit batch, and therefore the
+// committed-memory headroom, close to the non-adaptive baseline.
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocAdaptiveMemoryReclaimMinDecommittableBytes,
+                   &kPartitionAllocAdaptiveMemoryReclaimInterval,
+                   100 * 1024);
+
 // Configures whether we set a lower limit for renderers that do not have a main
 // frame, similar to the limit that is already done for backgrounded renderers.
 BASE_FEATURE(kLowerPAMemoryLimitForNonMainRenderers,
@@ -341,7 +356,7 @@ BASE_FEATURE(kPartitionAllocSortActiveSlotSpans, FEATURE_DISABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_WIN)
 // Whether to retry allocations when commit fails.
-BASE_FEATURE(kPageAllocatorRetryOnCommitFailure, FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPageAllocatorRetryOnCommitFailure, FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
@@ -375,29 +390,30 @@ BASE_FEATURE(kPartitionAllocAdjustSizeWhenInForeground,
 #else
              FEATURE_DISABLED_BY_DEFAULT);
 #endif
+BASE_FEATURE_PARAM(
+    int,
+    kPartitionAllocForegroundEmptySlotSpanRingSize,
+    &kPartitionAllocAdjustSizeWhenInForeground,
+    "foreground-ring-size",
+    static_cast<int>(partition_alloc::internal::kMaxEmptySlotSpanRingSize));
+BASE_FEATURE_PARAM(int,
+                   kPartitionAllocBackgroundEmptySlotSpanRingSize,
+                   &kPartitionAllocAdjustSizeWhenInForeground,
+                   "background-ring-size",
+                   partition_alloc::internal::SlotSpanRingMaxSize::kMedium);
 
 #if PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
 BASE_FEATURE(kPartitionAllocUsePriorityInheritanceLocks,
              FEATURE_DISABLED_BY_DEFAULT);
 #endif  // PA_BUILDFLAG(ENABLE_PARTITION_LOCK_PRIORITY_INHERITANCE)
 
-BASE_FEATURE(kPartitionAllocFreeWithSize, FEATURE_DISABLED_BY_DEFAULT);
+// Note: There are two ChromeOS platforms (OVIS & REX) that are disabled for
+// this feature because of https://crbug.com/495493036.
+BASE_FEATURE(kPartitionAllocFreeWithSize, FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(bool,
                    kPartitionAllocStrictFreeSizeCheck,
                    &kPartitionAllocFreeWithSize,
                    "strict-free-size-check",
                    true);
-
-#if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
-BASE_FEATURE(kPartitionAllocLockTuneSpin, FEATURE_DISABLED_BY_DEFAULT);
-
-// On ARM64, 2048 cycles results in spinning for 500-1500 nanoseconds on most
-// Android devices which overlaps with the time spent on a futex syscall.
-BASE_FEATURE_PARAM(int,
-                   kPartitionAllocLockSpinCount,
-                   &kPartitionAllocLockTuneSpin,
-                   "spin_count",
-                   2048);
-#endif  // BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARM64)
 
 }  // namespace base::features

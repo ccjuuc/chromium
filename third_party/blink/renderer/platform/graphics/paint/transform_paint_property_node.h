@@ -112,7 +112,7 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
    public:
     TransformAndOrigin transform_and_origin;
     Member<const ScrollPaintPropertyNode> scroll;
-    Member<const TransformPaintPropertyNode> scroll_translation_for_fixed;
+    Member<const TransformPaintPropertyNode> scroll_parent_scroll_translation;
 
     bool flattens_inherited_transform : 1 = false;
     bool in_subtree_of_page_scale : 1 = true;
@@ -123,7 +123,7 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
 
     BackfaceVisibility backface_visibility = BackfaceVisibility::kInherited;
     unsigned rendering_context_id = 0;
-    CompositingReasons direct_compositing_reasons = CompositingReason::kNone;
+    CompositingReasons direct_compositing_reasons;
     CompositorElementId compositor_element_id;
     std::unique_ptr<CompositorStickyConstraint> sticky_constraint;
     std::unique_ptr<cc::AnchorPositionScrollData> anchor_position_scroll_data;
@@ -139,11 +139,12 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
         const AnimationState& animation_state) const;
 
     bool UsesCompositedScrolling() const {
-      return direct_compositing_reasons & CompositingReason::kOverflowScrolling;
+      return direct_compositing_reasons.Has(
+          CompositingReason::kOverflowScrolling);
     }
     bool RequiresCullRectExpansion() const {
-      return direct_compositing_reasons &
-             CompositingReason::kRequiresCullRectExpansion;
+      return direct_compositing_reasons.HasAny(
+          CompositingReasonCombos::kRequiresCullRectExpansion);
     }
 
     void Trace(Visitor*) const;
@@ -217,21 +218,21 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
     return state_.scroll.Get();
   }
 
-  const TransformPaintPropertyNode* ScrollTranslationForFixed() const {
-    return state_.scroll_translation_for_fixed.Get();
+  const TransformPaintPropertyNode* ScrollParentScrollTranslation() const {
+    return state_.scroll_parent_scroll_translation.Get();
   }
 
   // If true, this node is translated by the viewport bounds delta, which is
   // used to keep bottom-fixed elements appear fixed to the bottom of the
   // screen in the presence of URL bar movement.
   bool IsAffectedByOuterViewportBoundsDelta() const {
-    return DirectCompositingReasons() &
-           CompositingReason::kAffectedByOuterViewportBoundsDelta;
+    return DirectCompositingReasons().Has(
+        CompositingReason::kAffectedByOuterViewportBoundsDelta);
   }
 
   bool IsAffectedBySafeAreaBottom() const {
-    return DirectCompositingReasons() &
-           CompositingReason::kAffectedBySafeAreaBottom;
+    return DirectCompositingReasons().Has(
+        CompositingReason::kAffectedBySafeAreaBottom);
   }
 
   // If true, this node is a descendant of the page scale transform. This is
@@ -260,11 +261,22 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
     return parent ? &parent->NearestScrollTranslationNode() : nullptr;
   }
 
+  // The root of the 2d translation subtree containing this node.
+  const TransformPaintPropertyNode* RootOf2dTranslation() const {
+    return GetTransformCache().root_of_2d_translation();
+  }
+
+  // Returns true if this node and |other| share the same plane root.
+  bool IsCoplanarWith(const TransformPaintPropertyNode& other) const {
+    return GetTransformCache().plane_root() ==
+           other.GetTransformCache().plane_root();
+  }
+
   // This is different from NearestScrollTranslationNode in that for a
-  // fixed-position paint offset translation, this returns
-  // ScrollTranslationForFixed() instead of the ancestor scroll translation
-  // because a scroll gesture on a fixed-position element should scroll the
-  // containing view.
+  // fixed-position or overscroll-backdrop paint offset translation, this
+  // returns ScrollParentScrollTranslation() instead of the ancestor scroll
+  // translation because a scroll gesture on such elements should scroll their
+  // scroll parent.
   const TransformPaintPropertyNode& ScrollTranslationState() const {
     return GetTransformCache().scroll_translation_state();
   }
@@ -316,38 +328,53 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
   }
 
   bool HasDirectCompositingReasons() const {
-    return DirectCompositingReasons() != CompositingReason::kNone;
+    return !DirectCompositingReasons().empty();
   }
 
   bool HasDirectCompositingReasonsOtherThan3dTransform() const {
-    return DirectCompositingReasons() &
-           ~(CompositingReason::k3DTransform | CompositingReason::k3DScale |
-             CompositingReason::k3DRotate | CompositingReason::k3DTranslate |
-             CompositingReason::kTrivial3DTransform);
+    return !base::Difference(
+                DirectCompositingReasons(),
+                {CompositingReason::k3DTransform, CompositingReason::k3DScale,
+                 CompositingReason::k3DRotate, CompositingReason::k3DTranslate,
+                 CompositingReason::kTrivial3DTransform})
+                .empty();
   }
 
   bool HasActiveTransformAnimation() const {
-    return state_.direct_compositing_reasons &
-           (CompositingReason::kActiveTransformAnimation |
-            CompositingReason::kActiveScaleAnimation |
-            CompositingReason::kActiveRotateAnimation |
-            CompositingReason::kActiveTranslateAnimation);
+    return DirectCompositingReasons().HasAny(
+        {CompositingReason::kActiveTransformAnimation,
+         CompositingReason::kActiveScaleAnimation,
+         CompositingReason::kActiveRotateAnimation,
+         CompositingReason::kActiveTranslateAnimation});
   }
 
   bool RequiresCompositingForFixedPosition() const {
-    return DirectCompositingReasons() & CompositingReason::kFixedPosition;
+    return DirectCompositingReasons().Has(CompositingReason::kFixedPosition);
   }
+  bool RequiresCompositingForFixedPositionOnly() const {
+    return RequiresCompositingForFixedPosition() &&
+           base::Difference(DirectCompositingReasons(),
+                            CompositingReasonCombos::kFixedPositionReasons)
+               .empty();
+  }
+  bool CanMergeForFixedPosition(const TransformPaintPropertyNode& other) const;
 
   bool RequiresCompositingForFixedToViewport() const {
-    return DirectCompositingReasons() & CompositingReason::kUndoOverscroll;
+    return DirectCompositingReasons().Has(CompositingReason::kUndoOverscroll);
   }
 
   bool RequiresCompositingForStickyPosition() const {
-    return DirectCompositingReasons() & CompositingReason::kStickyPosition;
+    return DirectCompositingReasons().Has(CompositingReason::kStickyPosition);
   }
+  bool RequiresCompositingForStickyPositionOnly() const {
+    return DirectCompositingReasons() ==
+           CompositingReasons{CompositingReason::kStickyPosition};
+  }
+  cc::StickyPositionConstraint::CanMergeResult CanMergeForStickyPosition(
+      const TransformPaintPropertyNode& other) const;
 
   bool RequiresCompositingForAnchorPosition() const {
-    return DirectCompositingReasons() & CompositingReason::kAnchorPosition;
+    return DirectCompositingReasons().Has(CompositingReason::kAnchorPosition);
   }
 
   CompositingReasons DirectCompositingReasonsForDebugging() const {
@@ -359,15 +386,15 @@ class PLATFORM_EXPORT TransformPaintPropertyNode final
   }
 
   bool RequiresCompositingForRootScroller() const {
-    return state_.direct_compositing_reasons & CompositingReason::kRootScroller;
+    return DirectCompositingReasons().Has(CompositingReason::kRootScroller);
   }
 
   bool RequiresCompositingForWillChangeTransform() const {
-    return state_.direct_compositing_reasons &
-           (CompositingReason::kWillChangeTransform |
-            CompositingReason::kWillChangeScale |
-            CompositingReason::kWillChangeRotate |
-            CompositingReason::kWillChangeTranslate);
+    return DirectCompositingReasons().HasAny(
+        {CompositingReason::kWillChangeTransform,
+         CompositingReason::kWillChangeScale,
+         CompositingReason::kWillChangeRotate,
+         CompositingReason::kWillChangeTranslate});
   }
 
   // Cull rect expansion is required if the compositing reasons hint requirement

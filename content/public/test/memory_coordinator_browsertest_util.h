@@ -5,18 +5,38 @@
 #ifndef CONTENT_PUBLIC_TEST_MEMORY_COORDINATOR_BROWSERTEST_UTIL_H_
 #define CONTENT_PUBLIC_TEST_MEMORY_COORDINATOR_BROWSERTEST_UTIL_H_
 
+#include <stdint.h>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "content/common/content_export.h"
+
 namespace content::test {
 
-// Note: For both of these functions, all MemoryConsumers, including those
-// registered in child processes, will be invoked. The call will be synchronous
-// iff the MemoryConsumer is registered on the main thread of the browser
-// process. In other cases, the call will be asynchronous.
+// A scoped object to override the memory limit of a specific consumer for
+// tests. This can be used by tests outside of content/ (e.g., in chrome/).
+// Note: This class does not support nested overrides for the same consumer
+// name.
+class ScopedMemoryLimitOverride {
+ public:
+  explicit ScopedMemoryLimitOverride(std::string_view consumer_name);
+  ~ScopedMemoryLimitOverride();
 
-// Calls `ReleaseMemory()` on all registered MemoryConsumers.
-void NotifyReleaseMemory();
+  void SetLimit(int percentage);
+  void ClearLimit();
+  void NotifyReleaseMemory();
 
-// Calls `UpdateMemoryLimit(percentage) on all registered MemoryConsumers.
-void NotifyUpdateMemoryLimit(int percentage);
+  ScopedMemoryLimitOverride(const ScopedMemoryLimitOverride&) = delete;
+  ScopedMemoryLimitOverride& operator=(const ScopedMemoryLimitOverride&) =
+      delete;
+
+ private:
+  const uint32_t consumer_id_;
+  std::optional<int> limit_;
+};
 
 }  // namespace content::test
 

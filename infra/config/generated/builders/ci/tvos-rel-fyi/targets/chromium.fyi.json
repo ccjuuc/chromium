@@ -11,8 +11,6 @@
     "isolated_scripts": [
       {
         "args": [
-          "--test-launcher-bot-mode",
-          "--test-launcher-filter-file=testing/buildbot/filters/ios.base_unittests.filter",
           "--platform",
           "Apple TV 4K (3rd generation)",
           "--version",
@@ -20,7 +18,7 @@
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "17a400",
+          "17f42",
           "--xctest"
         ],
         "merge": {
@@ -38,12 +36,12 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15"
+            "os": "Mac-26"
           },
           "named_caches": [
             {
@@ -51,7 +49,7 @@
               "path": "Runtime-tvos-26.0"
             },
             {
-              "name": "xcode_ios_17a400",
+              "name": "xcode_ios_17f42",
               "path": "Xcode.app"
             }
           ],
@@ -72,7 +70,7 @@
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "17a400",
+          "17f42",
           "--xctest"
         ],
         "merge": {
@@ -90,12 +88,12 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15"
+            "os": "Mac-26"
           },
           "named_caches": [
             {
@@ -103,7 +101,7 @@
               "path": "Runtime-tvos-26.0"
             },
             {
-              "name": "xcode_ios_17a400",
+              "name": "xcode_ios_17f42",
               "path": "Xcode.app"
             }
           ],
@@ -124,7 +122,7 @@
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "17a400",
+          "17f42",
           "--xctest"
         ],
         "merge": {
@@ -142,12 +140,12 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15"
+            "os": "Mac-26"
           },
           "named_caches": [
             {
@@ -155,7 +153,7 @@
               "path": "Runtime-tvos-26.0"
             },
             {
-              "name": "xcode_ios_17a400",
+              "name": "xcode_ios_17f42",
               "path": "Xcode.app"
             }
           ],
@@ -176,7 +174,7 @@
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "17a400",
+          "17f42",
           "--xctest"
         ],
         "merge": {
@@ -194,12 +192,12 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15"
+            "os": "Mac-26"
           },
           "named_caches": [
             {
@@ -207,7 +205,7 @@
               "path": "Runtime-tvos-26.0"
             },
             {
-              "name": "xcode_ios_17a400",
+              "name": "xcode_ios_17f42",
               "path": "Xcode.app"
             }
           ],
@@ -228,7 +226,7 @@
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "17a400",
+          "17f42",
           "--xctest"
         ],
         "merge": {
@@ -246,12 +244,12 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "dimensions": {
             "cpu": "arm64",
-            "os": "Mac-15"
+            "os": "Mac-26"
           },
           "named_caches": [
             {
@@ -259,7 +257,7 @@
               "path": "Runtime-tvos-26.0"
             },
             {
-              "name": "xcode_ios_17a400",
+              "name": "xcode_ios_17f42",
               "path": "Xcode.app"
             }
           ],

@@ -40,7 +40,7 @@ class CrostiniUpdateFilesystemViewBrowserTest
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     PrepareShowCrostiniUpdateFilesystemView(
-        browser()->profile(), crostini::CrostiniUISurface::kAppList);
+        browser()->GetProfile(), crostini::CrostiniUISurface::kAppList);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -113,31 +113,7 @@ IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest,
   reply.set_status(vm_tools::cicerone::StartLxdContainerResponse::STARTING);
   GetFakeCiceroneClient()->set_start_lxd_container_response(reply);
 
-  crostini::CrostiniManager::GetForProfile(browser()->profile())
+  crostini::CrostiniManager::GetForProfile(browser()->GetProfile())
       ->StartLxdContainer(kGuestId, base::DoNothing());
   ExpectNoView();
-}
-
-IN_PROC_BROWSER_TEST_F(CrostiniUpdateFilesystemViewBrowserTest,
-                       StartLxdContainerUpgradeNeeded) {
-  base::HistogramTester histogram_tester;
-  crostini::SetCrostiniUpdateFilesystemSkipDelayForTesting(true);
-
-  vm_tools::cicerone::StartLxdContainerResponse reply;
-  reply.set_status(vm_tools::cicerone::StartLxdContainerResponse::REMAPPING);
-  GetFakeCiceroneClient()->set_start_lxd_container_response(reply);
-
-  crostini::CrostiniManager::GetForProfile(browser()->profile())
-      ->StartLxdContainer(kGuestId, base::DoNothing());
-  ExpectView();
-
-  ActiveView()->AcceptDialog();
-  EXPECT_TRUE(ActiveView()->GetWidget()->IsClosed());
-  ExpectNoView();
-
-  histogram_tester.ExpectUniqueSample(
-      "Crostini.UpgradeContainerSource",
-      static_cast<base::HistogramBase::Sample32>(
-          crostini::CrostiniUISurface::kAppList),
-      1);
 }

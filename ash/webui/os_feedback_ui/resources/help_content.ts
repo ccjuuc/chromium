@@ -53,11 +53,12 @@ export class HelpContentElement extends HelpContentElementBase {
     };
   }
 
-  searchResult: SearchResult;
-  private isOnline = navigator.onLine;
+  declare searchResult: SearchResult;
+  declare private isOnline: boolean;
 
   constructor() {
     super();
+    this.isOnline = navigator.onLine;
     this.searchResult = {
       contentList: [],
       isQueryEmpty: true,
@@ -134,7 +135,7 @@ export class HelpContentElement extends HelpContentElementBase {
 
   /** Extract the url string from help content. */
   private getUrl(helpContent: HelpContent): string {
-    return helpContent.url.url;
+    return helpContent.url;
   }
 
   /** Extract the title as JS string from help content. */

@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
+#include "base/numerics/ranges.h"
 #include "base/observer_list.h"
 #include "build/buildflag.h"
 #include "ui/display/display.h"
@@ -35,7 +35,7 @@ void DisplayChangeNotifier::NotifyDisplaysChanged(
   // Display present in old_displays but not in new_displays has been removed.
   for (auto old_it = old_displays.begin(); old_it != old_displays.end();
        ++old_it) {
-    if (!base::Contains(new_displays, old_it->id(), &Display::id)) {
+    if (!std::ranges::contains(new_displays, old_it->id(), &Display::id)) {
       removed_displays.push_back(*old_it);
     }
   }
@@ -77,6 +77,14 @@ void DisplayChangeNotifier::NotifyDisplaysChanged(
     if (new_it->GetColorSpaces() != old_it->GetColorSpaces()) {
       metrics |= DisplayObserver::DISPLAY_METRIC_COLOR_SPACE;
     }
+
+#if BUILDFLAG(IS_MAC)
+    if (!base::IsApproximatelyEqual(new_it->display_frequency(),
+                                    old_it->display_frequency(),
+                                    Display::kRefreshRateEpsilon)) {
+      metrics |= DisplayObserver::DISPLAY_METRIC_REFRESH_RATE;
+    }
+#endif
 
     if (metrics != DisplayObserver::DISPLAY_METRIC_NONE) {
       observer_list_.Notify(&DisplayObserver::OnDisplayMetricsChanged, *new_it,

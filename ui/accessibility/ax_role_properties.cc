@@ -287,6 +287,17 @@ bool IsContainerOnAndroid(const ax::mojom::Role role) {
     case ax::mojom::Role::kNavigation:
     case ax::mojom::Role::kRegion:
     case ax::mojom::Role::kSearch:
+    case ax::mojom::Role::kComboBoxGrouping:
+    case ax::mojom::Role::kGrid:
+    case ax::mojom::Role::kListBox:
+    case ax::mojom::Role::kList:
+    case ax::mojom::Role::kMenu:
+    case ax::mojom::Role::kMenuBar:
+    case ax::mojom::Role::kRadioGroup:
+    case ax::mojom::Role::kTabList:
+    case ax::mojom::Role::kTree:
+    case ax::mojom::Role::kTreeGrid:
+    case ax::mojom::Role::kGroup:
       return true;
     default:
       return false;
@@ -391,6 +402,19 @@ bool IsImage(const ax::mojom::Role role) {
   }
 }
 
+bool IsLiveRegion(const ax::mojom::Role role) {
+  // Keep in sync with Blink's GetImplicitAriaLive(): alert is assertive; log
+  // and status (and roles mapping to them) are polite.
+  switch (role) {
+    case ax::mojom::Role::kAlert:
+    case ax::mojom::Role::kLog:
+    case ax::mojom::Role::kStatus:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool IsItemLike(const ax::mojom::Role role) {
   switch (role) {
     case ax::mojom::Role::kArticle:
@@ -488,6 +512,37 @@ bool IsListItem(const ax::mojom::Role role) {
     case ax::mojom::Role::kListBoxOption:
     case ax::mojom::Role::kListItem:
     case ax::mojom::Role::kTerm:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsMath(const ax::mojom::Role role) {
+  switch (role) {
+    case ax::mojom::Role::kMath:
+    case ax::mojom::Role::kMathMLMath:
+    case ax::mojom::Role::kMathMLFraction:
+    case ax::mojom::Role::kMathMLIdentifier:
+    case ax::mojom::Role::kMathMLMultiscripts:
+    case ax::mojom::Role::kMathMLNoneScript:
+    case ax::mojom::Role::kMathMLNumber:
+    case ax::mojom::Role::kMathMLOperator:
+    case ax::mojom::Role::kMathMLOver:
+    case ax::mojom::Role::kMathMLPrescriptDelimiter:
+    case ax::mojom::Role::kMathMLRoot:
+    case ax::mojom::Role::kMathMLRow:
+    case ax::mojom::Role::kMathMLSquareRoot:
+    case ax::mojom::Role::kMathMLStringLiteral:
+    case ax::mojom::Role::kMathMLSub:
+    case ax::mojom::Role::kMathMLSubSup:
+    case ax::mojom::Role::kMathMLSup:
+    case ax::mojom::Role::kMathMLTable:
+    case ax::mojom::Role::kMathMLTableCell:
+    case ax::mojom::Role::kMathMLTableRow:
+    case ax::mojom::Role::kMathMLText:
+    case ax::mojom::Role::kMathMLUnder:
+    case ax::mojom::Role::kMathMLUnderOver:
       return true;
     default:
       return false;

@@ -38,7 +38,7 @@ class InstantExtendedTest : public InProcessBrowserTest,
     GURL base_url = https_test_server().GetURL("/instant_extended.html?");
     GURL ntp_url = https_test_server().GetURL("/instant_extended_ntp.html?");
     ASSERT_NO_FATAL_FAILURE(
-        SetupInstant(browser()->profile(), base_url, ntp_url));
+        SetupInstant(browser()->GetProfile(), base_url, ntp_url));
   }
 
   void UpdateSearchState(content::WebContents* contents) {
@@ -47,12 +47,15 @@ class InstantExtendedTest : public InProcessBrowserTest,
   }
 
   OmniboxView* omnibox() {
-    return browser()->window()->GetLocationBar()->GetOmniboxView();
+    return BrowserWindow::FromBrowser(browser())
+        ->GetLocationBar()
+        ->GetOmniboxView();
   }
 
   void FocusOmnibox() {
     // If the omnibox already has focus, just notify OmniboxTabHelper.
-    LocationBar* location_bar = browser()->window()->GetLocationBar();
+    LocationBar* location_bar =
+        BrowserWindow::FromBrowser(browser())->GetLocationBar();
     if (location_bar->GetOmniboxController()->edit_model()->has_focus()) {
       content::WebContents* active_tab =
           browser()->tab_strip_model()->GetActiveWebContents();
@@ -60,7 +63,8 @@ class InstantExtendedTest : public InProcessBrowserTest,
           ->OnFocusChanged(OMNIBOX_FOCUS_VISIBLE,
                            OMNIBOX_FOCUS_CHANGE_EXPLICIT);
     } else {
-      location_bar->FocusLocation(false);
+      location_bar->FocusLocation(/*is_user_initiated=*/false,
+                                  /*clear_focus_if_failed=*/false);
     }
   }
 
@@ -72,12 +76,11 @@ class InstantExtendedTest : public InProcessBrowserTest,
   void PressEnterAndWaitForLoadStop() {
     content::TestNavigationObserver observer(
         browser()->tab_strip_model()->GetActiveWebContents());
-    browser()
-        ->window()
+    BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->edit_model()
-        ->OpenSelectionForTesting();
+        ->OpenCurrentSelection();
     observer.Wait();
   }
 
@@ -89,7 +92,7 @@ class InstantExtendedTest : public InProcessBrowserTest,
 IN_PROC_BROWSER_TEST_F(InstantExtendedTest, NoMostVisitedChangedOnTabSwitch) {
   // Open new tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
@@ -124,7 +127,7 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedTest, MAYBE_NavigateBackToNTP) {
 
   // Open a new tab page.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
@@ -159,7 +162,7 @@ IN_PROC_BROWSER_TEST_F(InstantExtendedTest,
 
   // Open new tab.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabURL),
+      browser(), chrome::ChromeUINewTabURLAsGURL(),
       WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
           ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);

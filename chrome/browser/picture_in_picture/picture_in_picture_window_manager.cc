@@ -7,7 +7,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_bounds_cache.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "content/public/browser/document_picture_in_picture_window_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/picture_in_picture_window_controller.h"
@@ -18,14 +18,17 @@
 #include "content/public/common/url_constants.h"
 #include "extensions/buildflags/buildflags.h"
 #include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/geometry/resize_utils.h"
 #include "ui/gfx/geometry/size.h"
+
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
 #include "components/webapps/isolated_web_apps/scheme.h"
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
 #if !BUILDFLAG(IS_ANDROID)
+#include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/checked_math.h"
 #include "base/task/sequenced_task_runner.h"
@@ -35,6 +38,7 @@
 #include "chrome/browser/picture_in_picture/auto_pip_setting_overlay_view.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window.h"
+#include "chrome/browser/ui/views/picture_in_picture/document_pip_host.h"
 #include "media/base/media_switches.h"
 #include "net/base/url_util.h"
 #include "ui/views/view.h"
@@ -541,6 +545,13 @@ void PictureInPictureWindowManager::UpdateCachedBounds(
     return;
   }
 
+  // `UpdateCachedBounds()` is currently only used by Document PiP. If the
+  // window manager has switched to Video PiP (where `GetChildWebContents()`
+  // returns null), return early and ignore bound updates.
+  if (!GetChildWebContents()) {
+    return;
+  }
+
   auto* const web_contents = pip_window_controller_->GetWebContents();
   if (!web_contents) {
     return;
@@ -589,7 +600,7 @@ bool PictureInPictureWindowManager::IsSupportedForDocumentPictureInPicture(
     BUILDFLAG(IS_CHROMEOS)
   // Only allow document PiP to be opened if the URL is of a type that we know
   // how to display in the title bar.  Otherwise, the title bar might be
-  // misleading in certain scenarios.  See https://crbug.com/1460025 .
+  // misleading in certain scenarios.  See https://crbug.com/40066780 .
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   if (url.SchemeIs(extensions::kExtensionScheme)) {
     return true;
@@ -633,11 +644,22 @@ void PictureInPictureWindowManager::CreateWindowInternal(
 void PictureInPictureWindowManager::CloseWindowInternal() {
   video_web_contents_observer_.reset();
 
+#if !BUILDFLAG(IS_ANDROID)
+  // Close the standalone Document PiP window, if one is open. The host itself
+  // stays attached to the opener WebContents.
+  if (document_pip_host_) {
+    document_pip_host_->Close();
+    document_pip_host_ = nullptr;
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
   // Close and reset the picture-in-picture window controller, if it exists.
   if (pip_window_controller_) {
     pip_window_controller_->Close(false /* should_pause_video */);
     pip_window_controller_ = nullptr;
   }
+
+  NotifyObserversOnExitPictureInPicture();
 
   opener_display_.reset();
 
@@ -654,6 +676,14 @@ bool PictureInPictureWindowManager::IsPictureInPictureDisabled() const {
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
 
+#if BUILDFLAG(IS_MAC)
+void PictureInPictureWindowManager::OnAnyBrowserEnteredFullscreen() {
+  if (picture_in_picture_window_) {
+    picture_in_picture_window_->OnAnyBrowserEnteredFullscreen();
+  }
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 void PictureInPictureWindowManager::DocumentWebContentsDestroyed() {
   // Document PiP window controller also observes the parent and child web
   // contents, so we only need to forget the controller here when user closes
@@ -664,6 +694,48 @@ void PictureInPictureWindowManager::DocumentWebContentsDestroyed() {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
+void PictureInPictureWindowManager::EnterStandaloneDocumentPictureInPicture(
+    content::WebContents* parent_web_contents,
+    std::unique_ptr<content::WebContents> child_web_contents,
+    blink::mojom::PictureInPictureWindowOptions pip_options) {
+  CHECK(child_web_contents);
+
+  // Reuse the shared document picture-in-picture setup: it closes any existing
+  // window (including a previous standalone host, via CloseWindowInternal),
+  // starts observing the opener, registers the content-layer controller bound
+  // to the child, shows the controller, and notifies observers. The controller
+  // stores only a raw pointer to the child, so we keep ownership here and hand
+  // it to the host's widget below.
+  //
+  // Order does not matter: this mirrors the Browser-backed path, where
+  // EnterDocumentPictureInPicture() also runs (from browser_navigator.cc's
+  // Navigate()) before the actual PiP window is created. So notifying observers
+  // and computing bounds with `pip_window_controller_` already set matches the
+  // established ordering.
+  EnterDocumentPictureInPicture(parent_web_contents, child_web_contents.get());
+
+  // Compute the initial outer window bounds on the opener's display so the
+  // window opens on the same monitor as the opener, positioned inside that
+  // display's work area. The Browser-backed path does this in
+  // browser_navigator.cc; the standalone path returns early before that code
+  // runs, so it must resolve the opener display here.
+  const display::Screen* const screen = display::Screen::Get();
+  const gfx::NativeView opener_native_view =
+      parent_web_contents->GetContentNativeView();
+  const display::Display opener_display =
+      opener_native_view ? screen->GetDisplayNearestView(opener_native_view)
+                         : screen->GetDisplayForNewWindows();
+  const gfx::Rect initial_bounds =
+      CalculateInitialPictureInPictureWindowBounds(pip_options, opener_display);
+
+  // Create the standalone host on the opener and hand it the child WebContents.
+  DocumentPipHost::CreateForWebContents(parent_web_contents);
+  auto* host = DocumentPipHost::FromWebContents(parent_web_contents);
+  host->CreateAndShowPipWindow(std::move(child_web_contents),
+                               std::move(pip_options), initial_bounds);
+  document_pip_host_ = host->GetWeakPtr();
+}
+
 std::unique_ptr<AutoPipSettingOverlayView>
 PictureInPictureWindowManager::GetOverlayView(
     views::View* anchor_view,
@@ -888,6 +960,12 @@ void PictureInPictureWindowManager::MaybeRecordPictureInPictureChanged(
 void PictureInPictureWindowManager::NotifyObserversOnEnterPictureInPicture() {
   for (Observer& observer : observers_) {
     observer.OnEnterPictureInPicture();
+  }
+}
+
+void PictureInPictureWindowManager::NotifyObserversOnExitPictureInPicture() {
+  for (Observer& observer : observers_) {
+    observer.OnExitPictureInPicture();
   }
 }
 

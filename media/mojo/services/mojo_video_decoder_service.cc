@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
@@ -50,6 +49,13 @@ static int32_t g_num_active_mvd_instances = 0;
 const char kInitializeTraceName[] = "MojoVideoDecoderService::Initialize";
 const char kDecodeTraceName[] = "MojoVideoDecoderService::Decode";
 const char kResetTraceName[] = "MojoVideoDecoderService::Reset";
+const char kMojoVideoDecoderServiceTrackName[] =
+    "media::MojoVideoDecoderService";
+
+perfetto::NamedTrack GetTracingTrack(const MojoVideoDecoderService* service) {
+  return perfetto::NamedTrack::FromPointer(
+      perfetto::StaticString(kMojoVideoDecoderServiceTrackName), service);
+}
 
 base::debug::CrashKeyString* GetNumVideoDecodersCrashKeyString() {
   static base::debug::CrashKeyString* codec_count_crash_key =
@@ -87,32 +93,36 @@ class VideoFrameHandleReleaserImpl final
   // mojom::MojoVideoFrameHandleReleaser implementation
   void ReleaseVideoFrame(
       const base::UnguessableToken& release_token,
-      const std::optional<gpu::SyncToken>& release_sync_token) final {
+      std::optional<gpu::SharedImageExportResult> release_export_result) final {
     DVLOG(3) << __func__ << "(" << release_token.ToString() << ")";
-    TRACE_EVENT2("media", "VideoFrameHandleReleaserImpl::ReleaseVideoFrame",
-                 "release_token", release_token.ToString(),
-                 "release_sync_token",
-                 release_sync_token
-                     ? (release_sync_token->ToDebugString() + ", has_data: " +
-                        (release_sync_token->HasData() ? "true" : "false"))
-                     : "null");
+    TRACE_EVENT2(
+        "media", "VideoFrameHandleReleaserImpl::ReleaseVideoFrame",
+        "release_token", release_token.ToString(), "release_export_result",
+        release_export_result
+            ? (release_export_result->ToDebugString() + ", has_data: " +
+               (release_export_result->HasData() ? "true" : "false"))
+            : "null");
     auto it = video_frames_.find(release_token);
     if (it == video_frames_.end()) {
+      CHECK(mojo::IsInMessageDispatch());
       mojo::ReportBadMessage("Unknown |release_token|.");
       return;
     }
     if (it->second->HasReleaseMailboxCB()) {
-      if (!release_sync_token) {
+      if (!release_export_result) {
+        CHECK(mojo::IsInMessageDispatch());
         mojo::ReportBadMessage(
             "A SyncToken is required to release frames that have a callback "
             "for releasing mailboxes.");
         return;
       }
-      // An empty *|release_sync_token| can be taken as a signal that the
+      // An empty |release_sync_token| can be taken as a signal that the
       // about-to-be-released VideoFrame was never used by the client.
       // Therefore, we should let that frame retain whatever SyncToken it has.
-      if (release_sync_token->HasData()) {
-        SimpleSyncTokenClient client(*release_sync_token);
+      gpu::SyncToken release_sync_token = it->second->shared_image()->EndExport(
+          std::move(*release_export_result));
+      if (release_sync_token.HasData()) {
+        SimpleSyncTokenClient client(release_sync_token);
         it->second->UpdateReleaseSyncToken(&client);
       }
     }
@@ -158,7 +168,7 @@ MojoVideoDecoderService::~MojoVideoDecoderService() {
 
   // Destruct the VideoDecoder here so its destruction duration is included by
   // the histogram timer below.
-  weak_factory_.InvalidateWeakPtrs();
+  weak_factory_.InvalidateWeakPtrsAndDoom();
   decoder_.reset();
 
   mojo_media_client_ = nullptr;
@@ -190,6 +200,7 @@ void MojoVideoDecoderService::Construct(
   TRACE_EVENT0("media", "MojoVideoDecoderService::Construct");
 
   if (media_log_) {
+    CHECK(mojo::IsInMessageDispatch());
     mojo::ReportBadMessage("Construct() already called");
     return;
   }
@@ -251,9 +262,14 @@ void MojoVideoDecoderService::Initialize(const VideoDecoderConfig& config,
   DCHECK(!init_cb_);
   DCHECK(callback);
 
-  TRACE_EVENT_BEGIN("media", kInitializeTraceName,
-                    perfetto::Track::FromPointer(this), "config",
-                    config.AsHumanReadableString(), "cdm_id",
+  if (!config.IsValidConfig()) {
+    CHECK(mojo::IsInMessageDispatch());
+    mojo::ReportBadMessage("Invalid VideoDecoderConfig");
+    return;
+  }
+
+  TRACE_EVENT_BEGIN("media", kInitializeTraceName, GetTracingTrack(this),
+                    "config", config.AsHumanReadableString(), "cdm_id",
                     CdmContext::CdmIdToString(base::OptionalToPtr(cdm_id)));
 
   init_cb_ = std::move(callback);
@@ -262,6 +278,9 @@ void MojoVideoDecoderService::Initialize(const VideoDecoderConfig& config,
   // to system instability. Note: This will break decoding entirely for codecs
   // which don't have software fallback, so we use a conservative limit. Most
   // platforms will self-limit and never reach this limit.
+  //
+  // UMA data as of Feb 2026 shows 99% of users have <= 24 active decoders
+  // across all platforms, so if needed this limit could be reduced.
   if (!config.is_encrypted() && g_num_active_mvd_instances >= 128) {
     OnDecoderInitialized(DecoderStatus::Codes::kTooManyDecoders);
     return;
@@ -282,8 +301,9 @@ void MojoVideoDecoderService::Initialize(const VideoDecoderConfig& config,
       cdm_context_ref_ =
           mojo_cdm_service_context_->GetCdmContextRef(cdm_id.value());
     } else if (cdm_id != cdm_id_) {
-      // TODO(xhwang): Replace with mojo::ReportBadMessage().
-      NOTREACHED() << "The caller should not switch CDM";
+      CHECK(mojo::IsInMessageDispatch());
+      mojo::ReportBadMessage("The caller should not switch CDM");
+      return;
     }
   }
 
@@ -324,6 +344,19 @@ void MojoVideoDecoderService::Decode(mojom::DecoderBufferPtr buffer,
 
   if (buffer->is_eos()) {
     DVLOG(3) << __func__ << " EOS";
+    if (auto& config = buffer->get_eos()->next_config) {
+      if (!config->is_next_video_config()) {
+        CHECK(mojo::IsInMessageDispatch());
+        mojo::ReportBadMessage("Invalid AudioConfig in VideoBuffer");
+        return;
+      }
+      const auto& video_config = config->get_next_video_config();
+      if (!video_config.IsValidConfig()) {
+        CHECK(mojo::IsInMessageDispatch());
+        mojo::ReportBadMessage("Invalid VideoDecoderConfig");
+        return;
+      }
+    }
   } else {
     DVLOG(3) << __func__
              << " pts=" << buffer->get_data()->timestamp.InMilliseconds();
@@ -353,8 +386,6 @@ void MojoVideoDecoderService::Decode(mojom::DecoderBufferPtr buffer,
   if (!is_active_instance_) {
     is_active_instance_ = true;
     g_num_active_mvd_instances++;
-    base::UmaHistogramExactLinear("Media.MojoVideoDecoder.ActiveInstances",
-                                  g_num_active_mvd_instances, 64);
     base::debug::SetCrashKeyString(
         GetNumVideoDecodersCrashKeyString(),
         base::NumberToString(g_num_active_mvd_instances));
@@ -374,8 +405,7 @@ void MojoVideoDecoderService::Decode(mojom::DecoderBufferPtr buffer,
 
 void MojoVideoDecoderService::Reset(ResetCallback callback) {
   DVLOG(2) << __func__;
-  TRACE_EVENT_BEGIN("media", kResetTraceName,
-                    perfetto::Track::FromPointer(this));
+  TRACE_EVENT_BEGIN("media", kResetTraceName, GetTracingTrack(this));
   DCHECK(callback);
   DCHECK(!reset_cb_);
 
@@ -395,8 +425,7 @@ void MojoVideoDecoderService::OnDecoderInitialized(DecoderStatus status) {
   DVLOG(1) << __func__;
   DCHECK(!status.is_ok() || decoder_);
   DCHECK(init_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "success",
-                  status.code());
+  TRACE_EVENT_END("media", GetTracingTrack(this), "success", status.code());
 
   if (!status.is_ok()) {
     std::move(init_cb_).Run(
@@ -418,8 +447,7 @@ void MojoVideoDecoderService::OnReaderRead(
     scoped_refptr<DecoderBuffer> buffer) {
   DVLOG(3) << __func__;
   if (trace_event) {
-    TRACE_EVENT_INSTANT("media", "ReadDecoderBuffer",
-                        perfetto::Track::FromPointer(trace_event.get()),
+    TRACE_EVENT_INSTANT("media", "ReadDecoderBuffer", trace_event->track(),
                         "decoder_buffer",
                         buffer ? buffer->AsHumanReadableString() : "null");
   }
@@ -434,6 +462,26 @@ void MojoVideoDecoderService::OnReaderRead(
       !std::holds_alternative<VideoDecoderConfig>(*buffer->next_config())) {
     std::move(bad_message_callback)
         .Run("Invalid DecoderBuffer::next_config() for video.");
+    return;
+  }
+
+  if (!DecoderBuffer::DoSubsamplesMatch(*buffer)) {
+    std::move(bad_message_callback)
+        .Run("Invalid DecoderBuffer::subsamples for video.");
+    return;
+  }
+
+  // The renderer must never set secure_handle. Legitimate secure handles are
+  // always attached on the GPU side by V4L2VideoDecoder::AttachSecureBuffer
+  // (via the V4L2_CID_MPEG_MTK_GET_SECURE_HANDLE ioctl) AFTER the buffer has
+  // crossed the Mojo boundary. A non-zero handle arriving from the renderer is
+  // a forgery: it would cause DecoderBufferTranscryptor::DecryptPendingBuffer
+  // to skip AttachSecureBuffer and propagate an attacker-chosen value through
+  // the browser process to the cdm-oemcrypto daemon and the TrustZone TA.
+  if (!buffer->end_of_stream() && buffer->side_data() &&
+      buffer->side_data()->secure_handle) {
+    std::move(bad_message_callback)
+        .Run("Renderer sent non-zero DecoderBufferSideData.secure_handle.");
     return;
   }
 
@@ -454,8 +502,7 @@ void MojoVideoDecoderService::OnDecoderDecoded(
     media::DecoderStatus status) {
   DVLOG(3) << __func__;
   if (trace_event) {
-    TRACE_EVENT_INSTANT("media", "Decode",
-                        perfetto::Track::FromPointer(trace_event.get()));
+    TRACE_EVENT_INSTANT("media", "Decode", trace_event->track());
     trace_event->EndTrace(status);
   }
 
@@ -465,7 +512,7 @@ void MojoVideoDecoderService::OnDecoderDecoded(
 void MojoVideoDecoderService::OnDecoderReset() {
   DVLOG(2) << __func__;
   DCHECK(reset_cb_);
-  TRACE_EVENT_END("media", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("media", GetTracingTrack(this));
   std::move(reset_cb_).Run();
 }
 

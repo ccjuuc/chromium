@@ -2,10 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+assert(!is_android, "Password import/export file selection are desktop-only.")
+
 source_set("settings") {
   sources = [
-    "password_manager_porter.h",
-    "password_manager_porter_interface.h",
+    "password_export_controller.h",
+    "password_export_controller_interface.h",
+    "password_import_controller.h",
+    "password_import_controller_interface.h",
   ]
 
   public_deps = [
@@ -19,11 +23,15 @@ source_set("settings") {
 }
 
 source_set("impl") {
-  sources = [ "password_manager_porter.cc" ]
+  sources = [
+    "password_export_controller.cc",
+    "password_import_controller.cc",
+  ]
   deps = [
     ":settings",
-    "//chrome/app:generated_resources",
+    "//chrome/browser:primitives",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/common:constants",
     "//components/password_manager/core/browser/export",
     "//components/password_manager/core/browser/import:csv",
@@ -36,13 +44,17 @@ source_set("impl") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "password_manager_porter_unittest.cc" ]
+  sources = [
+    "password_export_controller_unittest.cc",
+    "password_import_controller_unittest.cc",
+  ]
   deps = [
     ":settings",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser/password_manager/factories:password_factory_headers",
+    "//chrome/browser/password_manager/factories",
     "//chrome/browser/ui",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/test:test_support",
     "//components/affiliations/core/browser:test_support",
     "//components/password_manager/core/browser:test_support",
@@ -59,5 +71,23 @@ source_set("unit_tests") {
     "//testing/gtest",
     "//ui/shell_dialogs",
     "//url",
+  ]
+}
+
+source_set("test_support") {
+  testonly = true
+  sources = [
+    "fake_password_import_controller.cc",
+    "fake_password_import_controller.h",
+    "mock_password_import_controller.cc",
+    "mock_password_import_controller.h",
+  ]
+  public_deps = [
+    ":settings",
+    "//testing/gmock",
+  ]
+  deps = [
+    "//base",
+    "//content/public/browser",
   ]
 }

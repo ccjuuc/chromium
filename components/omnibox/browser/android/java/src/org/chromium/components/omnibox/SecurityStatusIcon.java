@@ -28,7 +28,8 @@ public class SecurityStatusIcon {
             Supplier<@ConnectionMaliciousContentStatus Integer> maliciousContentStatus,
             boolean isSmallDevice,
             boolean skipIconForNeutralState,
-            boolean useLockIconForSecureState) {
+            boolean useLockIconForSecureState,
+            boolean isShowingHttpsFirstWarning) {
         switch (securityLevel) {
             case ConnectionSecurityLevel.NONE:
                 if (isSmallDevice && skipIconForNeutralState) return 0;
@@ -38,7 +39,9 @@ public class SecurityStatusIcon {
                         ? R.drawable.omnibox_https_valid_lock
                         : R.drawable.omnibox_https_valid_page_info;
             case ConnectionSecurityLevel.WARNING:
-                return R.drawable.omnibox_not_secure_warning;
+                return isShowingHttpsFirstWarning
+                        ? R.drawable.omnibox_no_encryption
+                        : R.drawable.omnibox_not_secure_warning;
             case ConnectionSecurityLevel.DANGEROUS:
                 return switch (maliciousContentStatus.get()) {
                     case ConnectionMaliciousContentStatus.MANAGED_POLICY_WARN,
@@ -46,6 +49,8 @@ public class SecurityStatusIcon {
                             R.drawable.enterprise_management;
                     case ConnectionMaliciousContentStatus.BILLING ->
                             R.drawable.omnibox_not_secure_warning;
+                    case ConnectionMaliciousContentStatus.WARNABLE_SUSPICIOUS_SITE ->
+                            R.drawable.shield_question;
                     default -> R.drawable.omnibox_dangerous;
                 };
             default:
@@ -54,9 +59,10 @@ public class SecurityStatusIcon {
         return 0;
     }
 
-    /** @return The resource ID of the content description for the security icon. */
-    @StringRes
-    public static int getSecurityIconContentDescriptionResourceId(
+    /**
+     * @return The resource ID of the content description for the security icon.
+     */
+    public static @StringRes int getSecurityIconContentDescriptionResourceId(
             @ConnectionSecurityLevel int securityLevel) {
         switch (securityLevel) {
             case ConnectionSecurityLevel.NONE:

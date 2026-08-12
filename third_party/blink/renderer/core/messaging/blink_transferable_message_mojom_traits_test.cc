@@ -94,7 +94,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ArrayBufferContents& deserialized_contents =
       out.message->GetArrayBufferContentsArray()[0];
   Vector<uint8_t> deserialized_data;
-  deserialized_data.AppendSpan(deserialized_contents.ByteSpan().first(8u));
+  deserialized_data.append_range(deserialized_contents.ByteSpan().first(8u));
   ASSERT_EQ(deserialized_data.size(), 8U);
   for (wtf_size_t i = 0; i < deserialized_data.size(); i++) {
     ASSERT_TRUE(deserialized_data[i] == i);
@@ -228,7 +228,7 @@ class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
  public:
   void SetUp() override {
     context_provider_ = viz::TestContextProvider::CreateRaster();
-    InitializeSharedGpuContextRaster(context_provider_.get());
+    InitializeSharedGpuContext(context_provider_.get());
   }
 
   void TearDown() override {
@@ -247,10 +247,12 @@ class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
     auto client_si = gpu::ClientSharedImage::CreateForTesting(
         gpu::SHARED_IMAGE_USAGE_RASTER_READ);
 
+    // TODO(https://crbug.com/515698973): Test a non-trivial HDR metadata
+    // parameter.
     return MakeGarbageCollected<ImageBitmap>(
         AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
             std::move(client_si), GenTestSyncToken(100), kPremul_SkAlphaType,
-            SharedGpuContext::ContextProviderWrapper(),
+            gfx::HDRMetadata(), SharedGpuContext::ContextProviderWrapper(),
             base::PlatformThread::CurrentRef(),
             base::MakeRefCounted<base::NullTaskRunner>(),
             BindOnce(&BlinkTransferableMessageStructTraitsWithFakeGpuTest::

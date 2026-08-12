@@ -43,7 +43,7 @@ class AnnotationAgentContainerImplTest : public SimTest {
   }
 
   AnnotationAgentImpl* GetAgentAt(AnnotationAgentContainerImpl& container,
-                                  size_t index) {
+                                  wtf_size_t index) {
     return container.agents_[index];
   }
 
@@ -262,7 +262,7 @@ TEST_F(AnnotationAgentContainerImplTest, DeferAttachmentUntilFinishedParsing) {
   container->CreateAgent(
       std::move(remote_receiver_pair.first),
       std::move(remote_receiver_pair.second),
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       mojom::blink::Selector::NewSerializedSelector("MockAnnotationSelector"));
 
   // The agent should be created and bound.
@@ -393,7 +393,7 @@ TEST_F(AnnotationAgentContainerImplTest,
 
   bool did_reply = false;
   container->CreateAgentFromSelection(
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       base::BindLambdaForTesting(
           [&did_reply](
               mojom::blink::SelectorCreationResultPtr selector_creation_result,
@@ -434,14 +434,14 @@ TEST_F(AnnotationAgentContainerImplTest,
   FrameSelection& frame_selection = GetDocument().GetFrame()->Selection();
 
   Element* body = GetDocument().body();
-  frame_selection.SetSelection(SelectionInDOMTree::Builder()
+  frame_selection.SetSelection(SelectionInDomTree::Builder()
                                    .Collapse(Position(body->firstChild(), 0))
                                    .Build(),
                                SetSelectionOptions());
 
   bool did_reply = false;
   container->CreateAgentFromSelection(
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       base::BindLambdaForTesting(
           [&did_reply](
               mojom::blink::SelectorCreationResultPtr selector_creation_result,
@@ -484,7 +484,7 @@ TEST_F(AnnotationAgentContainerImplTest,
   ASSERT_EQ("TEST ", PlainText(range));
 
   frame_selection.SetSelection(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build(),
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build(),
       SetSelectionOptions());
 
   // Right click on the selected text
@@ -499,7 +499,7 @@ TEST_F(AnnotationAgentContainerImplTest,
 
   bool did_reply = false;
   container->CreateAgentFromSelection(
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       base::BindLambdaForTesting(
           [&did_reply, &host](
               mojom::blink::SelectorCreationResultPtr selector_creation_result,
@@ -559,7 +559,7 @@ TEST_F(AnnotationAgentContainerImplTest, CreateAgentFromSelection) {
   ASSERT_EQ("TEST ", PlainText(range));
 
   frame_selection.SetSelection(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build(),
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build(),
       SetSelectionOptions());
 
   const auto& selection_rect = CreateRange(range)->BoundingBox();
@@ -569,7 +569,7 @@ TEST_F(AnnotationAgentContainerImplTest, CreateAgentFromSelection) {
 
   base::RunLoop run_loop;
   container->CreateAgentFromSelection(
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       base::BindLambdaForTesting(
           [&run_loop, &host](
               mojom::blink::SelectorCreationResultPtr selector_creation_result,
@@ -640,7 +640,7 @@ TEST_F(AnnotationAgentContainerImplTest, ShutdownDocumentWhileGenerating) {
   ASSERT_EQ("TARGET", PlainText(range));
 
   frame_selection.SetSelection(
-      SelectionInDOMTree::Builder().SetBaseAndExtent(range).Build(),
+      SelectionInDomTree::Builder().SetBaseAndExtent(range).Build(),
       SetSelectionOptions());
 
   // Right click on the selected text
@@ -651,7 +651,7 @@ TEST_F(AnnotationAgentContainerImplTest, ShutdownDocumentWhileGenerating) {
   bool did_finish = false;
 
   container->CreateAgentFromSelection(
-      mojom::blink::AnnotationType::kUserNote,
+      mojom::blink::AnnotationType::kSharedHighlight,
       base::BindLambdaForTesting(
           [&did_finish](
               mojom::blink::SelectorCreationResultPtr selector_creation_result,

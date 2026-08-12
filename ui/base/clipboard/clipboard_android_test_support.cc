@@ -13,13 +13,14 @@
 #include "ui/base/clipboard/clipboard_monitor.h"
 #include "ui/base/clipboard/clipboard_observer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/android/ui_javatest_jni_headers/ClipboardAndroidTestSupport_jni.h"
 
 namespace ui {
 
-static jboolean JNI_ClipboardAndroidTestSupport_NativeWriteHtml(
+static bool JNI_ClipboardAndroidTestSupport_NativeWriteHtml(
     JNIEnv* env,
     const base::android::JavaRef<jstring>& j_html_text) {
   {
@@ -33,31 +34,35 @@ static jboolean JNI_ClipboardAndroidTestSupport_NativeWriteHtml(
     clipboard_writer.WriteText(html_text);
   }
   auto* clipboard = Clipboard::GetForCurrentThread();
-  return clipboard->IsFormatAvailable(ClipboardFormatType::HtmlType(),
-                                      ClipboardBuffer::kCopyPaste,
-                                      /* data_dst = */ nullptr) &&
-         clipboard->IsFormatAvailable(ClipboardFormatType::PlainTextType(),
-                                      ClipboardBuffer::kCopyPaste,
-                                      /* data_dst = */ nullptr);
+  return clipboard_test_util::IsFormatAvailable(clipboard,
+                                                ClipboardFormatType::HtmlType(),
+                                                ClipboardBuffer::kCopyPaste,
+                                                /* data_dst = */ nullptr) &&
+         clipboard_test_util::IsFormatAvailable(
+             clipboard, ClipboardFormatType::PlainTextType(),
+             ClipboardBuffer::kCopyPaste,
+             /* data_dst = */ nullptr);
 }
 
-static jboolean JNI_ClipboardAndroidTestSupport_NativeClipboardContains(
+static bool JNI_ClipboardAndroidTestSupport_NativeClipboardContains(
     JNIEnv* env,
     const base::android::JavaRef<jstring>& j_text) {
   // The Java side of the test pretended to be another app using
   // ClipboardManager. This should update the native side of the clipboard as
   // well as the Android side.
   auto* clipboard = Clipboard::GetForCurrentThread();
-  if (clipboard->IsFormatAvailable(ClipboardFormatType::HtmlType(),
-                                   ClipboardBuffer::kCopyPaste,
-                                   /* data_dst = */ nullptr)) {
+  if (clipboard_test_util::IsFormatAvailable(clipboard,
+                                             ClipboardFormatType::HtmlType(),
+                                             ClipboardBuffer::kCopyPaste,
+                                             /* data_dst = */ nullptr)) {
     LOG(ERROR) << "HTML still in clipboard.";
     return false;
   }
 
-  if (!clipboard->IsFormatAvailable(ClipboardFormatType::PlainTextType(),
-                                    ClipboardBuffer::kCopyPaste,
-                                    /* data_dst = */ nullptr)) {
+  if (!clipboard_test_util::IsFormatAvailable(
+          clipboard, ClipboardFormatType::PlainTextType(),
+          ClipboardBuffer::kCopyPaste,
+          /* data_dst = */ nullptr)) {
     LOG(ERROR) << "Plain text not in clipboard.";
     return false;
   }
@@ -65,9 +70,8 @@ static jboolean JNI_ClipboardAndroidTestSupport_NativeClipboardContains(
   std::string expected_text =
       base::android::ConvertJavaStringToUTF8(env, j_text);
 
-  std::string contents;
-  clipboard->ReadAsciiText(ClipboardBuffer::kCopyPaste,
-                           /* data_dst = */ nullptr, &contents);
+  std::string contents = ui::clipboard_test_util::ReadAsciiText(
+      clipboard, ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr);
   if (expected_text != contents) {
     LOG(ERROR) << "Clipboard contents do not match. Expected: " << expected_text
                << " Actual: " << contents;
@@ -107,8 +111,8 @@ int WriteTextAndCountNotifications(const std::u16string& text) {
 }  // anonymous namespace
 
 // Test method to verify native clipboard monitoring works
-static jboolean
-JNI_ClipboardAndroidTestSupport_NativeTestClipboardNotifications(JNIEnv* env) {
+static bool JNI_ClipboardAndroidTestSupport_NativeTestClipboardNotifications(
+    JNIEnv* env) {
   int notification_count = WriteTextAndCountNotifications(u"test notification");
   return notification_count == 1;
 }

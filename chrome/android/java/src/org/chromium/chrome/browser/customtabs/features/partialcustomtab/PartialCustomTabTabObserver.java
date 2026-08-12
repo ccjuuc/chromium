@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.customtabs.features.partialcustomtab;
 
+import static org.chromium.build.NullUtil.assertNonNull;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
@@ -52,8 +53,14 @@ public class PartialCustomTabTabObserver extends EmptyTabObserver {
     @SuppressWarnings("NullAway")
     private void updateImmWrapper(Tab tab) {
         WebContents webContents = tab.getWebContents();
-        assert webContents != null;
-        ImeAdapter imeAdapter = ImeAdapter.fromWebContents(webContents);
+        // WebContents can be null or already destroyed when this is invoked.
+        if (webContents == null || webContents.isDestroyed()) return;
+
+        ImeAdapter imeAdapter = assertNonNull(ImeAdapter.fromWebContents(webContents));
+
+        // Gracefully handle a null adapter in non-debug builds.
+        if (imeAdapter == null) return;
+
         imeAdapter.setInputMethodManagerWrapper(mImmWrapper);
     }
 }

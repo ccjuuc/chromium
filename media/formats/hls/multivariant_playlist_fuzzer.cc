@@ -12,6 +12,7 @@
 #include "base/at_exit.h"
 #include "base/check.h"
 #include "base/i18n/icu_util.h"
+#include "base/no_destructor.h"
 #include "media/formats/hls/playlist.h"
 #include "url/gurl.h"
 
@@ -21,7 +22,6 @@ struct IcuEnvironment {
   base::AtExitManager at_exit_manager;
 };
 
-IcuEnvironment* env = new IcuEnvironment();
 
 // Attempts to determine playlist version from the given source (exercising
 // `Playlist::IdentifyPlaylist`). Since we don't necessarily want to exit early
@@ -36,15 +36,17 @@ media::hls::types::DecimalInteger GetPlaylistVersion(std::string_view source) {
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const base::NoDestructor<IcuEnvironment> env;
   // Create a string_view from the given input
   const std::string_view source(reinterpret_cast<const char*>(data), size);
 
   // Determine playlist version (ignoring type mismatch)
   const auto version = GetPlaylistVersion(source);
+  const auto playlist_uri = GURL("http://localhost/playlist.m3u8");
 
   // Try to parse it as a multivariant playlist
   media::hls::MultivariantPlaylist::Parse(
-      source, GURL("http://localhost/playlist.m3u8"), version);
+      source, playlist_uri, url::Origin::Create(playlist_uri), version);
 
   return 0;
 }

@@ -1,5 +1,5 @@
-features:
-- name: base
-  files:
-  - stylesheet-empty-href.html
-  - stylesheet-with-base.html
+rules:
+- stylesheet-empty-href.html: [base, link]
+- stylesheet-with-base.html: [base, link]
+- attr-link-fetchpriority.html: [fetch-priority, link]
+- "**": [link]

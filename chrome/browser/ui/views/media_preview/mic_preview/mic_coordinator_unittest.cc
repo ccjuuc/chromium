@@ -13,17 +13,20 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/media/prefs/capture_device_ranking.h"
-#include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/media_preview/media_preview_metrics.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "components/media_effects/test/fake_audio_service.h"
 #include "components/media_effects/test/fake_video_capture_service.h"
 #include "components/media_effects/test/scoped_media_device_info.h"
+#include "components/prefs/testing_pref_service.h"
 #include "content/public/browser/audio_service.h"
 #include "media/audio/audio_device_description.h"
+#include "media/base/localized_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/models/simple_combobox_model.h"
 
 using testing::_;
 using testing::ElementsAre;
@@ -48,35 +51,36 @@ media_preview_metrics::Context GetMetricsContext() {
 
 }  // namespace
 
-class MicCoordinatorTest : public TestWithBrowserView {
+class MicCoordinatorTest : public ChromeViewsTestBase {
  protected:
   void SetUp() override {
-    TestWithBrowserView::SetUp();
+    ChromeViewsTestBase::SetUp();
+    media_prefs::RegisterUserPrefs(prefs_.registry());
     fake_audio_service_.SetOnGetInputStreamParametersCallback(
         on_input_stream_id_future_.GetRepeatingCallback());
     fake_audio_service_.SetBindStreamFactoryCallback(
         on_bind_stream_factory_future_.GetRepeatingCallback());
     histogram_tester_.emplace();
 
-    parent_view_.emplace();
     InitializeCoordinator({});
   }
 
   void TearDown() override {
     coordinator_.reset();
-    TestWithBrowserView::TearDown();
+    parent_view_.reset();
+    ChromeViewsTestBase::TearDown();
   }
 
   void InitializeCoordinator(std::vector<std::string> eligible_mic_ids) {
-    CHECK(profile()->GetPrefs());
+    coordinator_.reset();
+    parent_view_.emplace();
 
     if (!media_device_info_) {
       media_device_info_.emplace();
     }
 
     coordinator_.emplace(*parent_view_,
-                         /*needs_borders=*/true, eligible_mic_ids,
-                         *profile()->GetPrefs(),
+                         /*needs_borders=*/true, eligible_mic_ids, prefs_,
                          /*allow_device_selection=*/true, GetMetricsContext());
   }
 
@@ -124,6 +128,7 @@ class MicCoordinatorTest : public TestWithBrowserView {
   base::test::TestFuture<void> on_bind_stream_factory_future_;
 
   std::optional<base::HistogramTester> histogram_tester_;
+  TestingPrefServiceSimple prefs_;
   std::optional<views::View> parent_view_;
   std::optional<MicCoordinator> coordinator_;
 };
@@ -288,6 +293,7 @@ TEST_F(MicCoordinatorTest, DefaultMicHandling) {
   ExpectHistogramTotalDevices(/*expected_bucket_min_value=*/2);
 }
 
+#if BUILDFLAG(IS_WIN)
 TEST_F(MicCoordinatorTest, CommunicationsMicHandling) {
   EXPECT_EQ(GetComboboxModel().GetItemCount(), 0u);
 
@@ -301,8 +307,12 @@ TEST_F(MicCoordinatorTest, CommunicationsMicHandling) {
   ASSERT_TRUE(AddFakeInputDevice({kDeviceName, kDeviceId, kGroupId}));
   // The virtual communication device should be included because there's no
   // mapping for the real system default device.
+  const std::string kLocalizedCommunicationDeviceName = base::StringPrintf(
+      "%s - %s",
+      GetLocalizedStringUTF8(media::COMMUNICATIONS_AUDIO_DEVICE_NAME),
+      kCommunicationsDeviceName);
   EXPECT_THAT(GetComboboxItems(),
-              ElementsAre(kCommunicationsDeviceName, kDeviceName));
+              ElementsAre(kLocalizedCommunicationDeviceName, kDeviceName));
   EXPECT_THAT(GetComboboxSecondaryTexts(),
               ElementsAre(std::string{}, std::string{}));
   on_input_stream_id_future_.Clear();
@@ -317,6 +327,24 @@ TEST_F(MicCoordinatorTest, CommunicationsMicHandling) {
 
   coordinator_.reset();
   ExpectHistogramTotalDevices(/*expected_bucket_min_value=*/2);
+}
+#endif
+
+TEST_F(MicCoordinatorTest, SanitizeAirPodsDeviceName) {
+  EXPECT_EQ(GetComboboxModel().GetItemCount(), 0u);
+
+  constexpr char kAirPods[] = "AirPods (Bluetooth)";
+  constexpr char kSanitizedAirPods[] = "AirPods (Bluetooth)";
+
+  // Add airPods mic.
+  ASSERT_TRUE(AddFakeInputDevice({kAirPods, kDeviceId, kGroupId}));
+
+  // AirPods device name should be sanitized.
+  EXPECT_THAT(GetComboboxItems(), ElementsAre(kSanitizedAirPods));
+  on_input_stream_id_future_.Clear();
+
+  coordinator_.reset();
+  ExpectHistogramTotalDevices(/*expected_bucket_min_value=*/1);
 }
 
 TEST_F(MicCoordinatorTest, UpdateDevicePreferenceRanking) {
@@ -342,14 +370,12 @@ TEST_F(MicCoordinatorTest, UpdateDevicePreferenceRanking) {
 
   // Preference ranking defaults to noop.
   std::vector device_infos{kDevice1, kDevice2};
-  media_prefs::PreferenceRankAudioDeviceInfos(*profile()->GetPrefs(),
-                                              device_infos);
+  media_prefs::PreferenceRankAudioDeviceInfos(prefs_, device_infos);
   EXPECT_THAT(device_infos, ElementsAre(kDevice1, kDevice2));
 
   // Ranking is updated to make the currently selected device most preferred.
   coordinator_->UpdateDevicePreferenceRanking();
-  media_prefs::PreferenceRankAudioDeviceInfos(*profile()->GetPrefs(),
-                                              device_infos);
+  media_prefs::PreferenceRankAudioDeviceInfos(prefs_, device_infos);
   EXPECT_THAT(device_infos, ElementsAre(kDevice2, kDevice1));
 
   coordinator_.reset();

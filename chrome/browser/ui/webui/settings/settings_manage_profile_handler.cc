@@ -23,12 +23,10 @@
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_thread.h"
@@ -129,7 +127,7 @@ void ManageProfileHandler::OnProfileThemeColorsChanged(
 }
 
 void ManageProfileHandler::HandleGetAvailableIcons(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   profiles::UpdateGaiaProfileInfoIfNeeded(profile_);
@@ -143,7 +141,7 @@ void ManageProfileHandler::HandleGetAvailableIcons(
 }
 
 void ManageProfileHandler::HandleSetProfileIconToGaiaAvatar(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   PrefService* pref_service = profile_->GetPrefs();
@@ -161,16 +159,16 @@ void ManageProfileHandler::HandleSetProfileIconToGaiaAvatar(
 }
 
 void ManageProfileHandler::HandleSetProfileIconToDefaultAvatar(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK_EQ(1u, args.size());
   CHECK(args[0].is_int());
 
-  size_t avatar_icon_index = args[0].GetInt();
-  profiles::SetDefaultProfileAvatarIndex(profile_, avatar_icon_index);
+  profiles::SetDefaultProfileAvatarIndex(
+      profile_, profiles::GetSanitizedAvatarIndex(args[0].GetInt()));
 }
 
-void ManageProfileHandler::HandleSetProfileName(const base::Value::List& args) {
+void ManageProfileHandler::HandleSetProfileName(const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK_EQ(1u, args.size());
 
@@ -182,7 +180,7 @@ void ManageProfileHandler::HandleSetProfileName(const base::Value::List& args) {
 }
 
 void ManageProfileHandler::HandleRequestProfileShortcutStatus(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
@@ -218,7 +216,7 @@ void ManageProfileHandler::OnHasProfileShortcuts(const std::string& callback_id,
 }
 
 void ManageProfileHandler::HandleAddProfileShortcut(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
   ProfileShortcutManager* shortcut_manager =
       g_browser_process->profile_manager()->profile_shortcut_manager();
@@ -228,7 +226,7 @@ void ManageProfileHandler::HandleAddProfileShortcut(
 }
 
 void ManageProfileHandler::HandleRemoveProfileShortcut(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
   ProfileShortcutManager* shortcut_manager =
       g_browser_process->profile_manager()->profile_shortcut_manager();

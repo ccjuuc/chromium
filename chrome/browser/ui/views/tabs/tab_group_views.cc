@@ -9,7 +9,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/frame/browser_frame_view.h"
 #include "chrome/browser/ui/views/tabs/tab_group_header.h"
 #include "chrome/browser/ui/views/tabs/tab_group_highlight.h"
 #include "chrome/browser/ui/views/tabs/tab_group_style.h"
@@ -17,8 +16,6 @@
 #include "chrome/browser/ui/views/tabs/tab_slot_controller.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/tabs/tab_strip_controller.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
-#include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
@@ -137,10 +134,6 @@ SkColor TabGroupViews::GetGroupColor() const {
       tab_slot_controller_->GetGroupColorId(group_));
 }
 
-bool TabGroupViews::InTearDown() const {
-  return !header_ || !header_->GetWidget() || !drag_underline_->GetWidget();
-}
-
 std::tuple<const views::View*, const views::View*>
 TabGroupViews::GetLeadingTrailingGroupViews() const {
   std::vector<raw_ptr<views::View, VectorExperimental>> children =
@@ -150,6 +143,10 @@ TabGroupViews::GetLeadingTrailingGroupViews() const {
   children.insert(children.end(), dragged_children.begin(),
                   dragged_children.end());
   return GetLeadingTrailingGroupViews(children);
+}
+
+bool TabGroupViews::InTearDown() const {
+  return !header_ || !header_->GetWidget() || !drag_underline_->GetWidget();
 }
 
 std::tuple<views::View*, views::View*>

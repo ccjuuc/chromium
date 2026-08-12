@@ -43,6 +43,7 @@ android_library("java") {
     "//third_party/androidx:androidx_swiperefreshlayout_swiperefreshlayout_java",
     "//third_party/androidx:androidx_vectordrawable_vectordrawable_animated_java",
     "//third_party/jni_zero:jni_zero_java",
+    "//ui/accessibility:ax_base_java",
     "//ui/android:ui_java",
   ]
 
@@ -98,12 +99,12 @@ android_library("test_support_java") {
     "//ui/android:ui_no_recycler_view_java",
   ]
 
-  resources_package = "org.chromium.components.browser_ui.modaldialog.test"
+  resources_package = "org.chromium.components.browser_ui.modaldialog"
 }
 
 android_library("unit_device_javatests") {
   testonly = true
-  resources_package = "org.chromium.components.browser_ui.modaldialog.test"
+  resources_package = "org.chromium.components.browser_ui.modaldialog"
 
   sources = [
     "java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenterTest.java",
@@ -137,7 +138,7 @@ android_library("unit_device_javatests") {
 
 robolectric_library("junit") {
   testonly = true
-  resources_package = "org.chromium.components.browser_ui.modaldialog.test"
+  resources_package = "org.chromium.components.browser_ui.modaldialog"
   sources = [
     "java/src/org/chromium/components/browser_ui/modaldialog/AppModalPresenterUnitTest.java",
     "java/src/org/chromium/components/browser_ui/modaldialog/ModalDialogViewUnitTest.java",

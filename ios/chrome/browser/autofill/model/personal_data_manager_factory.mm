@@ -15,7 +15,7 @@
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/strike_database/strike_database.h"
 #import "components/sync/base/command_line_switches.h"
-#import "components/variations/service/variations_service.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/autofill/model/autofill_image_fetcher_factory.h"
 #import "ios/chrome/browser/autofill/model/autofill_image_fetcher_impl.h"
 #import "ios/chrome/browser/autofill/model/strike_database_factory.h"
@@ -27,20 +27,6 @@
 #import "ios/chrome/browser/webdata_services/model/web_data_service_factory.h"
 
 namespace autofill {
-
-namespace {
-
-// Return the latest country code from the chrome variation service.
-// If the varaition service is not available, an empty string is returned.
-const std::string GetCountryCodeFromVariations() {
-  variations::VariationsService* variation_service =
-      GetApplicationContext()->GetVariationsService();
-
-  return variation_service
-             ? base::ToUpperASCII(variation_service->GetLatestCountry())
-             : std::string();
-}
-}  // namespace
 
 // static
 PersonalDataManager* PersonalDataManagerFactory::GetForProfile(
@@ -60,6 +46,8 @@ PersonalDataManagerFactory::PersonalDataManagerFactory()
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(ios::HistoryServiceFactory::GetInstance());
   DependsOn(ios::WebDataServiceFactory::GetInstance());
+  DependsOn(StrikeDatabaseFactory::GetInstance());
+  DependsOn(AutofillImageFetcherFactory::GetInstance());
   DependsOn(SyncServiceFactory::GetInstance());
 }
 
@@ -67,10 +55,10 @@ PersonalDataManagerFactory::~PersonalDataManagerFactory() = default;
 
 std::unique_ptr<KeyedService>
 PersonalDataManagerFactory::BuildServiceInstanceFor(ProfileIOS* profile) const {
-  scoped_refptr<autofill::AutofillWebDataService> local_storage =
+  scoped_refptr<AutofillWebDataService> local_storage =
       ios::WebDataServiceFactory::GetAutofillWebDataForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS);
-  scoped_refptr<autofill::AutofillWebDataService> account_storage =
+  scoped_refptr<AutofillWebDataService> account_storage =
       ios::WebDataServiceFactory::GetAutofillWebDataForAccount(
           profile, ServiceAccessType::EXPLICIT_ACCESS);
   history::HistoryService* history_service =
@@ -87,7 +75,6 @@ PersonalDataManagerFactory::BuildServiceInstanceFor(ProfileIOS* profile) const {
       IdentityManagerFactory::GetForProfile(profile), history_service,
       sync_service, StrikeDatabaseFactory::GetForProfile(profile),
       autofill_image_fetcher,
-      /*shared_storage_handler=*/nullptr,
       GetApplicationContext()->GetApplicationLocaleStorage()->Get(),
       GetCountryCodeFromVariations(), /*autofill_optimization_guide=*/nullptr);
 }

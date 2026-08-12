@@ -46,6 +46,7 @@
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/network/public/cpp/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -175,14 +176,14 @@ TEST_F(PrefProviderTest, DiscardObsoletePreferences) {
 
   // Set some pref data. Each content setting type has the following value:
   // {"[*.]example.com": {"setting": 1}}
-  base::Value::Dict plugins_data_pref;
+  base::DictValue plugins_data_pref;
   constexpr char kFlagKey[] = "flashPreviouslyChanged";
-  plugins_data_pref.Set(kFlagKey, base::Value::Dict());
+  plugins_data_pref.Set(kFlagKey, base::DictValue());
 
-  base::Value::Dict data_for_pattern;
+  base::DictValue data_for_pattern;
   data_for_pattern.Set("setting", static_cast<int>(CONTENT_SETTING_ALLOW));
-  base::Value::Dict pref_data;
-  base::Value::List pref_list;
+  base::DictValue pref_data;
+  base::ListValue pref_list;
   pref_data.Set(kPattern, std::move(data_for_pattern));
 #if !BUILDFLAG(IS_ANDROID)
   prefs->SetDict(kObsoleteInstalledWebAppMetadataExceptionsPref,
@@ -224,7 +225,7 @@ TEST_F(PrefProviderTest, DiscardObsoletePreferences) {
 }
 
 // Test for regression in which the PrefProvider modified the user pref store
-// of the OTR unintentionally: http://crbug.com/74466.
+// of the OTR unintentionally: http://crbug.com/41332768.
 TEST_F(PrefProviderTest, Incognito) {
   PersistentPrefStore* user_prefs = new TestingPrefStore();
   OverlayUserPrefStore* otr_user_prefs = new OverlayUserPrefStore(user_prefs);
@@ -404,7 +405,7 @@ TEST_F(PrefProviderTest, Deadlock) {
   DeadlockCheckerObserver observer(&prefs, &provider);
   {
     ScopedDictPrefUpdate update(&prefs, info->pref_name());
-    base::Value::Dict& mutable_settings = update.Get();
+    base::DictValue& mutable_settings = update.Get();
     mutable_settings.Set("www.example.com,*",
                          base::Value(base::Value::Type::DICT));
   }
@@ -560,7 +561,7 @@ TEST_F(PrefProviderTest, ClearAllContentSettingsRules) {
 
   // Expect the prefs are not empty before we trigger clearing them.
   for (const char* pref : cleared_prefs) {
-    const base::Value::Dict& dictionary = prefs.GetDict(pref);
+    const base::DictValue& dictionary = prefs.GetDict(pref);
     ASSERT_FALSE(dictionary.empty());
   }
 
@@ -569,7 +570,7 @@ TEST_F(PrefProviderTest, ClearAllContentSettingsRules) {
 
   // Ensure they become empty afterwards.
   for (const char* pref : cleared_prefs) {
-    const base::Value::Dict& dictionary = prefs.GetDict(pref);
+    const base::DictValue& dictionary = prefs.GetDict(pref);
     EXPECT_TRUE(dictionary.empty());
   }
 
@@ -580,7 +581,7 @@ TEST_F(PrefProviderTest, ClearAllContentSettingsRules) {
   };
 
   for (const char* pref : nonempty_prefs) {
-    const base::Value::Dict& dictionary = prefs.GetDict(pref);
+    const base::DictValue& dictionary = prefs.GetDict(pref);
     EXPECT_EQ(1u, dictionary.size());
   }
 
@@ -1113,7 +1114,7 @@ TEST_F(PrefProviderTest, LastVisitedTimeStoredOnDisk) {
 
   RuleMetaData metadata_from_disk;
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
-            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+            TestUtils::GetContentSetting(&provider2, primary_url, primary_url,
                                          ContentSettingsType::GEOLOCATION,
                                          false, &metadata_from_disk));
   EXPECT_EQ(metadata.last_visited(), metadata_from_disk.last_visited());
@@ -1157,18 +1158,83 @@ TEST_F(PrefProviderTest, LastVisitedTimeUpdating) {
   EXPECT_GE(metadata.last_visited(), clock.Now() - base::Days(7));
   EXPECT_LE(metadata.last_visited(), clock.Now());
 
-  // Test resetting the last_visited time.
-  provider.ResetLastVisitTime(primary_pattern, primary_pattern,
-                              ContentSettingsType::GEOLOCATION);
+  provider.ShutdownOnUIThread();
+}
+
+TEST_F(PrefProviderTest, AutorevocationBypassedByUserStoredOnDisk) {
+  TestingProfile testing_profile;
+  PrefProvider provider(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                        /*store_last_modified=*/true,
+                        /*restore_session=*/false);
+  GURL primary_url("http://example.com/");
+  ContentSettingsPattern primary_pattern =
+      ContentSettingsPattern::FromString("[*.]example.com");
+  ContentSettingConstraints constraints;
+
+  provider.SetWebsiteSetting(primary_pattern, primary_pattern,
+                             ContentSettingsType::GEOLOCATION,
+                             base::Value(CONTENT_SETTING_ALLOW), constraints);
+  provider.SetAutorevocationBypassedByUser(primary_pattern, primary_pattern,
+                                           ContentSettingsType::GEOLOCATION);
+  RuleMetaData metadata;
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             TestUtils::GetContentSetting(&provider, primary_url, primary_url,
                                          ContentSettingsType::GEOLOCATION,
                                          false, &metadata));
-  EXPECT_EQ(metadata.last_visited(), base::Time());
+  EXPECT_TRUE(metadata.autorevocation_bypassed_by_user());
+
+  // Shutdown our provider and we should still have a setting present.
+  provider.ShutdownOnUIThread();
+  PrefProvider provider2(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                         /*store_last_modified=*/true,
+                         /*restore_session=*/false);
+
+  RuleMetaData metadata_from_disk;
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider2, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata_from_disk));
+  EXPECT_TRUE(metadata_from_disk.autorevocation_bypassed_by_user());
+
+  provider2.ShutdownOnUIThread();
+}
+
+TEST_F(PrefProviderTest, AutorevocationBypassedByUserUpdated) {
+  TestingProfile testing_profile;
+  PrefProvider provider(testing_profile.GetPrefs(), /*off_the_record=*/false,
+                        /*store_last_modified=*/true,
+                        /*restore_session=*/false);
+  base::SimpleTestClock clock;
+  clock.SetNow(base::Time::Now());
+  provider.SetClockForTesting(&clock);
+
+  GURL primary_url("http://example.com/");
+  ContentSettingsPattern primary_pattern =
+      ContentSettingsPattern::FromString("[*.]example.com");
+  ContentSettingConstraints constraints;
+
+  provider.SetWebsiteSetting(primary_pattern, primary_pattern,
+                             ContentSettingsType::GEOLOCATION,
+                             base::Value(CONTENT_SETTING_ALLOW), constraints);
+  RuleMetaData metadata;
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata));
+  EXPECT_FALSE(metadata.autorevocation_bypassed_by_user());
+
+  provider.SetAutorevocationBypassedByUser(primary_pattern, primary_pattern,
+                                           ContentSettingsType::GEOLOCATION);
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            TestUtils::GetContentSetting(&provider, primary_url, primary_url,
+                                         ContentSettingsType::GEOLOCATION,
+                                         false, &metadata));
+  EXPECT_TRUE(metadata.autorevocation_bypassed_by_user());
+
   provider.ShutdownOnUIThread();
 }
 
-TEST_F(PrefProviderTest, MigrateOnFeatureEnabled) {
+TEST_F(PrefProviderTest, MigrateGeolocationOnFeatureEnabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(
       features::kApproximateGeolocationPermission);
@@ -1213,7 +1279,7 @@ TEST_F(PrefProviderTest, MigrateOnFeatureEnabled) {
   }
 }
 
-TEST_F(PrefProviderTest, MigrateBackOnFeatureDisabled) {
+TEST_F(PrefProviderTest, MigrateGeolocationBackOnFeatureDisabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
       features::kApproximateGeolocationPermission);
@@ -1258,6 +1324,69 @@ TEST_F(PrefProviderTest, MigrateBackOnFeatureDisabled) {
                      ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
                      /*include_incognito=*/false)
                      .has_value());
+    new_provider.ShutdownOnUIThread();
+  }
+}
+
+TEST_F(PrefProviderTest, MigrateLocalNetworkAccessOnFeatureEnabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures(
+      /*enabled_features=*/{network::features::kLocalNetworkAccessChecks},
+      /*disabled_features=*/{});
+
+  TestingProfile profile;
+  PrefService* prefs = profile.GetPrefs();
+
+  ContentSettingsPattern allow_pattern =
+      ContentSettingsPattern::FromString("[*.]example.com");
+  ContentSettingsPattern block_pattern =
+      ContentSettingsPattern::FromString("[*.]evil.com");
+  GURL allow_url("http://example.com");
+  GURL block_url("http://evil.com");
+
+  {
+    PrefProvider provider(prefs, /*off_the_record=*/false,
+                          /*store_last_modified=*/true,
+                          /*restore_session=*/false);
+    provider.SetWebsiteSetting(allow_pattern, allow_pattern,
+                               ContentSettingsType::LOCAL_NETWORK_ACCESS,
+                               base::Value(CONTENT_SETTING_ALLOW), {});
+    provider.SetWebsiteSetting(block_pattern, block_pattern,
+                               ContentSettingsType::LOCAL_NETWORK_ACCESS,
+                               base::Value(CONTENT_SETTING_BLOCK), {});
+    provider.ShutdownOnUIThread();
+  }
+
+  // Clear the migration pref to force the migration
+  static char kLocalNetworkAccessMigrateExceptionsPref[] =
+      "profile.content_settings.exceptions.has_migrated_local_network_access";
+  prefs->SetBoolean(kLocalNetworkAccessMigrateExceptionsPref, false);
+
+  // Test migration forward.
+  {
+    PrefProvider new_provider(prefs, /*off_the_record=*/false,
+                              /*store_last_modified=*/true,
+                              /*restore_session=*/false);
+    // CONTENT_SETTING_ALLOW is migrated to both LOCAL_NETWORK and
+    // LOOPBACK_NETWORK
+    EXPECT_EQ(CONTENT_SETTING_ALLOW,
+              TestUtils::GetContentSetting(&new_provider, allow_url, allow_url,
+                                           ContentSettingsType::LOCAL_NETWORK,
+                                           /*include_incognito=*/false));
+    EXPECT_EQ(CONTENT_SETTING_ALLOW, TestUtils::GetContentSetting(
+                                         &new_provider, allow_url, allow_url,
+                                         ContentSettingsType::LOOPBACK_NETWORK,
+                                         /*include_incognito=*/false));
+    // CONTENT_SETTING_BLOCK is only migrated to LOCAL_NETWORK
+    EXPECT_EQ(CONTENT_SETTING_BLOCK,
+              TestUtils::GetContentSetting(&new_provider, block_url, block_url,
+                                           ContentSettingsType::LOCAL_NETWORK,
+                                           /*include_incognito=*/false));
+    EXPECT_EQ(
+        CONTENT_SETTING_DEFAULT,
+        TestUtils::GetContentSetting(&new_provider, block_url, block_url,
+                                     ContentSettingsType::LOOPBACK_NETWORK,
+                                     /*include_incognito=*/false));
     new_provider.ShutdownOnUIThread();
   }
 }

@@ -13,21 +13,20 @@ import androidx.test.uiautomator.UiDevice;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.PasswordEchoSettingDelegate;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.embedder_support.util.PasswordEchoSettingState;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutionException;
@@ -35,29 +34,53 @@ import java.util.concurrent.ExecutionException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 public class PasswordEchoSettingHandlerTest {
-    @Rule public final ChromeBrowserTestRule mChromeBrowserTestRule = new ChromeBrowserTestRule();
+    private static class TestLegacyPasswordEchoSettingDelegate
+            implements PasswordEchoSettingDelegate {
+        private Runnable mCallback;
+
+        @Override
+        public void registerCallback(Runnable callback) {
+            mCallback = callback;
+        }
+
+        @Override
+        public boolean isPhysicalSettingEnabled() {
+            return isLegacySettingEnabled();
+        }
+
+        @Override
+        public boolean isTouchSettingEnabled() {
+            return isLegacySettingEnabled();
+        }
+
+        private boolean isLegacySettingEnabled() {
+            return Settings.System.getInt(
+                            ContextUtils.getApplicationContext().getContentResolver(),
+                            Settings.System.TEXT_SHOW_PASSWORD,
+                            1)
+                    == 1;
+        }
+
+        public void runCallback() {
+            if (mCallback != null) mCallback.run();
+        }
+    }
 
     private Profile mProfile;
     private PasswordEchoSettingHandler mPasswordEchoSettingHandler;
     private UiDevice mDevice;
     private String mInitialShowPasswordValue;
-
-    @BeforeClass
-    public static void setUpClass() {
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    // Disable setting split feature.
-                    PasswordEchoSettingState.setInstanceForTests(false);
-                });
-    }
+    private TestLegacyPasswordEchoSettingDelegate mTestDelegate;
 
     @Before
     public void setUp() throws ExecutionException, IOException {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
+                    mTestDelegate = new TestLegacyPasswordEchoSettingDelegate();
+                    PasswordEchoSettingState.setInstanceForTests(mTestDelegate);
                     mProfile = ProfileManager.getLastUsedRegularProfile();
-                    mPasswordEchoSettingHandler =
-                            PasswordEchoSettingHandlerFactory.getForProfile(mProfile);
+                    mPasswordEchoSettingHandler = new PasswordEchoSettingHandler(mProfile);
                 });
         mDevice = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
         mInitialShowPasswordValue =
@@ -66,6 +89,7 @@ public class PasswordEchoSettingHandlerTest {
 
     @After
     public void tearDown() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(() -> mPasswordEchoSettingHandler.destroy());
         if (mInitialShowPasswordValue.equals("null")) {
             mDevice.executeShellCommand("settings delete system show_password");
         } else {
@@ -89,12 +113,7 @@ public class PasswordEchoSettingHandlerTest {
     private void setSystemPasswordEchoState(boolean enabled)
             throws ExecutionException, IOException {
         mDevice.executeShellCommand("settings put system show_password " + (enabled ? "1" : "0"));
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    PasswordEchoSettingState.getInstance()
-                            .getSettingObserver()
-                            .onChange(true, Settings.System.getUriFor("show_password"));
-                });
+        ThreadUtils.runOnUiThreadBlocking(() -> mTestDelegate.runCallback());
     }
 
     // The physical and touch preference must hold the same value when setting split is disabled.
@@ -114,21 +133,14 @@ public class PasswordEchoSettingHandlerTest {
     }
 
     private boolean isPasswordEchoEnabledInSystemSettings() {
-        return Settings.System.getInt(
-                        ContextUtils.getApplicationContext().getContentResolver(),
-                        Settings.System.TEXT_SHOW_PASSWORD,
-                        0)
-                == 1;
+        return mTestDelegate.isLegacySettingEnabled();
     }
 
     @Test
     @SmallTest
     public void testInvokingUpdateMethodSyncsInitialState() throws ExecutionException {
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    PasswordEchoSettingHandlerFactory.getForProfile(mProfile)
-                            .updatePasswordEchoState();
-                });
+                () -> mPasswordEchoSettingHandler.updatePasswordEchoState());
         Assert.assertEquals(
                 isPasswordEchoPhysicalEnabledInPrefService(),
                 isPasswordEchoEnabledInSystemSettings());
@@ -147,5 +159,21 @@ public class PasswordEchoSettingHandlerTest {
                     isPasswordEchoPhysicalEnabledInPrefService(),
                     isPasswordEchoEnabledInSystemSettings());
         }
+    }
+
+    // If the setting was never set by the user, the system should consider the setting as enabled.
+    @Test
+    @SmallTest
+    public void testSettingConsideredEnabledIfNeverSet() throws ExecutionException, IOException {
+        // Clear the setting from the device to test default behavior.
+        if (!mInitialShowPasswordValue.equals("null")) {
+            mDevice.executeShellCommand("settings delete system show_password");
+        }
+
+        ThreadUtils.runOnUiThreadBlocking(() -> mTestDelegate.runCallback());
+
+        Assert.assertTrue(isPasswordEchoEnabledInSystemSettings());
+        Assert.assertTrue(isPasswordEchoPhysicalEnabledInPrefService());
+        Assert.assertTrue(isPasswordEchoTouchEnabledInPrefService());
     }
 }

@@ -4,6 +4,7 @@
 
 #include "components/page_info/page_info.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <set>
@@ -23,6 +24,7 @@
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/ssl/stateful_ssl_host_state_delegate_factory.h"
 #include "chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h"
@@ -34,15 +36,24 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/browser/permission_settings_info.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_constraints.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
 #include "components/page_info/core/features.h"
 #include "components/page_info/page_info_ui.h"
 #include "components/permissions/features.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_recovery_success_rate_tracker.h"
+#include "components/permissions/permission_request_manager.h"
+#include "components/permissions/test/mock_permission_prompt_factory.h"
+#include "components/permissions/test/mock_permission_request.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/browser/safe_browsing_metrics_collector.h"
@@ -66,19 +77,21 @@
 #include "services/device/public/cpp/test/fake_usb_device_manager.h"
 #include "services/device/public/mojom/usb_device.mojom.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
+#include "services/network/public/cpp/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/android/android_theme_resources.h"
-#include "media/base/media_switches.h"
-#else
-#include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "media/base/media_switches.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/android_theme_resources.h"
+#else
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -122,9 +135,6 @@ class MockPageInfoUI : public PageInfoUI {
   MOCK_METHOD(void, SetPermissionInfoStub, ());
   MOCK_METHOD(void, SetIdentityInfo, (const IdentityInfo& identity_info));
   MOCK_METHOD(void, SetPageFeatureInfo, (const PageFeatureInfo& info));
-  MOCK_METHOD(void,
-              SetAdPersonalizationInfo,
-              (const AdPersonalizationInfo& info));
 
   void SetPermissionInfo(
       const PermissionInfoList& permission_info_list,
@@ -151,11 +161,13 @@ class PageInfoTest : public ChromeRenderViewHostTestHarness {
     // TODO(crbug.com/40231917): Fix tests and enable the feature.
     scoped_feature_list_.InitWithFeatures(
         {
+    // Enabled features
 #if !BUILDFLAG(IS_ANDROID)
             features::kFileSystemAccessPersistentPermissions,
 #endif
         },
-        {});
+        {// Disabled features
+         privacy_sandbox::kPrivacySandboxAdPrivacyUxDeprecation});
 
     ChromeRenderViewHostTestHarness::SetUp();
 
@@ -400,17 +412,23 @@ TEST_F(PageInfoTest, NonFactoryDefaultAndRecentlyChangedPermissionsShown) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
 
   // Change some default-ask settings away from the default.
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(),
+      content_settings::PermissionSettingsRegistry::GetInstance()
+          ->Get(content_settings::GeolocationContentSettingsType())
+          ->delegate()
+          .ToPermissionSetting(CONTENT_SETTING_ALLOW),
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
   page_info()->OnSitePermissionChanged(ContentSettingsType::NOTIFICATIONS,
                                        CONTENT_SETTING_ALLOW,
                                        /*requesting_origin=*/std::nullopt,
@@ -551,11 +569,18 @@ class PageInfoUnusedPermissionRevocationForAllSurfacesTest
 
 TEST_F(PageInfoUnusedPermissionRevocationForAllSurfacesTest,
        OnSitePermissionChanged_LastVisited_EligibleType) {
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting allow_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+  PermissionSetting block_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_BLOCK);
   {
     // Simulate the user switching toggle to "Allow".
-    page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                         CONTENT_SETTING_ALLOW, std::nullopt,
-                                         false);
+    page_info()->OnSitePermissionChanged(
+        content_settings::GeolocationContentSettingsType(), allow_setting,
+        std::nullopt, false);
 
     // Verify that `last_visited` was recorded and lies within the past 7 days.
     //
@@ -565,21 +590,23 @@ TEST_F(PageInfoUnusedPermissionRevocationForAllSurfacesTest,
     // components/content_settings/core/browser/content_settings_utils.cc
     content_settings::SettingInfo info;
     base::Time now = base::Time::Now();
-    map_->GetWebsiteSetting(url(), url(), ContentSettingsType::GEOLOCATION,
-                            &info);
+    map_->GetPermissionSetting(
+        url(), url(), content_settings::GeolocationContentSettingsType(),
+        &info);
     EXPECT_GE(info.metadata.last_visited(), now - base::Days(7));
     EXPECT_LE(info.metadata.last_visited(), now);
   }
   {
     // Simulate the user switching toggle to "Block".
-    page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                         CONTENT_SETTING_BLOCK, std::nullopt,
-                                         false);
+    page_info()->OnSitePermissionChanged(
+        content_settings::GeolocationContentSettingsType(), block_setting,
+        std::nullopt, false);
 
     // Verify that 'last_visited` is not recorded unless the value is ALLOW.
     content_settings::SettingInfo info;
-    map_->GetContentSetting(url(), url(), ContentSettingsType::GEOLOCATION,
-                            &info);
+    map_->GetPermissionSetting(
+        url(), url(), content_settings::GeolocationContentSettingsType(),
+        &info);
     EXPECT_EQ(base::Time(), info.metadata.last_visited());
   }
 }
@@ -606,15 +633,21 @@ TEST_F(PageInfoUnusedPermissionRevocationForAllSurfacesTest,
       permissions::features::
           kSafetyHubUnusedPermissionRevocationForAllSurfaces);
 
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting allow_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+
   // Simulate the user switching toggle to "Allow".
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW, std::nullopt,
-                                       false);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), allow_setting,
+      std::nullopt, false);
 
   // Verify that `last_visited` is not recorded when the feature is off.
   content_settings::SettingInfo info;
-  map_->GetContentSetting(url(), url(), ContentSettingsType::GEOLOCATION,
-                          &info);
+  map_->GetPermissionSetting(
+      url(), url(), content_settings::GeolocationContentSettingsType(), &info);
   EXPECT_EQ(base::Time(), info.metadata.last_visited());
 }
 
@@ -640,7 +673,8 @@ TEST_F(PageInfoTest, StorageAccessGrantsAreFiltered) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
@@ -668,7 +702,8 @@ TEST_F(PageInfoTest, StorageAccessGrantsDisplayedWhenDefaultBlocked) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
@@ -719,7 +754,8 @@ TEST_F(PageInfoRelatedWebsiteSetsTest, ShowAutograntedRWSPermissions) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
@@ -745,7 +781,8 @@ TEST_F(PageInfoRelatedWebsiteSetsTest, HideAutograntedRWSPermissions) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
@@ -787,6 +824,35 @@ TEST_F(PageInfoTest, AutoPictureInPicturePermissionShownOnChange) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+// Test that Local Network Access permissions are correctly displayed in Page
+// Info.
+TEST_F(PageInfoTest, LocalNetworkAccessPermissions) {
+  std::set<ContentSettingsType> expected_visible_permissions;
+#if BUILDFLAG(IS_ANDROID)
+  // Geolocation is always allowed to pass through to Android-specific logic to
+  // check for DSE settings (so expect 1 item), but isn't actually shown later
+  // on because this test isn't testing with a default search engine origin.
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
+#endif
+  // Set permissions for both Local Network Access types
+  page_info()->OnSitePermissionChanged(ContentSettingsType::LOCAL_NETWORK,
+                                       CONTENT_SETTING_ALLOW,
+                                       /*requesting_origin=*/std::nullopt,
+                                       /*is_one_time=*/false);
+  page_info()->OnSitePermissionChanged(ContentSettingsType::LOOPBACK_NETWORK,
+                                       CONTENT_SETTING_ALLOW,
+                                       /*requesting_origin=*/std::nullopt,
+                                       /*is_one_time=*/false);
+
+  // LOCAL_NETWORK and LOOPBACK_NETWORK should be visible.
+  expected_visible_permissions.insert(ContentSettingsType::LOCAL_NETWORK);
+  expected_visible_permissions.insert(ContentSettingsType::LOOPBACK_NETWORK);
+
+  ExpectPermissionInfoList(expected_visible_permissions,
+                           last_permission_info_list());
+}
+
 TEST_F(PageInfoTest, IncognitoPermissionsEmptyByDefault) {
   incognito_page_info()->PresentSitePermissionsForTesting();
   EXPECT_EQ(0u, last_permission_info_list().size());
@@ -800,15 +866,24 @@ TEST_F(PageInfoTest, IncognitoPermissionsDontShowAsk) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_permissions, last_permission_info_list());
 
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting allow_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+  PermissionSetting block_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_BLOCK);
+
   // Add some permissions to regular page info.
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), allow_setting,
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
 
   page_info()->OnSitePermissionChanged(ContentSettingsType::MEDIASTREAM_MIC,
                                        CONTENT_SETTING_BLOCK,
@@ -828,16 +903,18 @@ TEST_F(PageInfoTest, IncognitoPermissionsDontShowAsk) {
 
   // Changing the permission to BLOCK should show it.
   incognito_page_info()->OnSitePermissionChanged(
-      ContentSettingsType::GEOLOCATION, CONTENT_SETTING_BLOCK,
+      content_settings::GeolocationContentSettingsType(), block_setting,
       /*requesting_origin=*/std::nullopt,
       /*is_one_time=*/false);
-  expected_incognito_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_incognito_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
   ExpectPermissionInfoList(expected_incognito_permissions,
                            last_permission_info_list());
 
   // Switching a permission back to default should not hide the permission.
   incognito_page_info()->OnSitePermissionChanged(
-      ContentSettingsType::GEOLOCATION, /*value=*/std::nullopt,
+      content_settings::GeolocationContentSettingsType(),
+      /*value=*/std::nullopt,
       /*requesting_origin=*/std::nullopt,
       /*is_one_time=*/false);
   ExpectPermissionInfoList(expected_incognito_permissions,
@@ -854,9 +931,13 @@ TEST_F(PageInfoTest, OnPermissionsChanged) {
   ContentSetting setting = content_settings->GetContentSetting(
       url(), url(), ContentSettingsType::POPUPS);
   EXPECT_EQ(setting, CONTENT_SETTING_BLOCK);
-  setting = content_settings->GetContentSetting(
-      url(), url(), ContentSettingsType::GEOLOCATION);
-  EXPECT_EQ(setting, CONTENT_SETTING_ASK);
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  EXPECT_EQ(
+      content_settings->GetPermissionSetting(
+          url(), url(), content_settings::GeolocationContentSettingsType()),
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ASK));
   setting = content_settings->GetContentSetting(
       url(), url(), ContentSettingsType::NOTIFICATIONS);
   EXPECT_EQ(setting, CONTENT_SETTING_ASK);
@@ -891,10 +972,11 @@ TEST_F(PageInfoTest, OnPermissionsChanged) {
                                        CONTENT_SETTING_ALLOW,
                                        /*requesting_origin=*/std::nullopt,
                                        /*is_one_time=*/false);
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(),
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW),
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
   page_info()->OnSitePermissionChanged(ContentSettingsType::NOTIFICATIONS,
                                        CONTENT_SETTING_ALLOW,
                                        /*requesting_origin=*/std::nullopt,
@@ -922,9 +1004,10 @@ TEST_F(PageInfoTest, OnPermissionsChanged) {
   setting = content_settings->GetContentSetting(url(), url(),
                                                 ContentSettingsType::POPUPS);
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
-  setting = content_settings->GetContentSetting(
-      url(), url(), ContentSettingsType::GEOLOCATION);
-  EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
+  EXPECT_EQ(
+      content_settings->GetPermissionSetting(
+          url(), url(), content_settings::GeolocationContentSettingsType()),
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW));
   setting = content_settings->GetContentSetting(
       url(), url(), ContentSettingsType::NOTIFICATIONS);
   EXPECT_EQ(setting, CONTENT_SETTING_ALLOW);
@@ -1412,10 +1495,15 @@ TEST_F(PageInfoTest, ShowInfoBar) {
   EXPECT_CALL(*mock_ui(), SetPermissionInfoStub()).Times(2);
 
   EXPECT_EQ(0u, infobar_manager()->infobars().size());
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting allow_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), allow_setting,
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
   bool unused;
   page_info()->OnUIClosing(&unused);
   ASSERT_EQ(1u, infobar_manager()->infobars().size());
@@ -1607,17 +1695,27 @@ TEST_F(PageInfoTest, ShowInfobarWhenGeolocationChangedToAllow) {
   ASSERT_EQ(0u, infobar_manager()->infobars().size());
   HostContentSettingsMap* map =
       HostContentSettingsMapFactory::GetForProfile(profile());
-  map->SetContentSettingDefaultScope(
-      url(), url(), ContentSettingsType::GEOLOCATION, CONTENT_SETTING_BLOCK);
+
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting allow_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_ALLOW);
+  PermissionSetting block_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_BLOCK);
+
+  map->SetPermissionSettingDefaultScope(
+      url(), url(), content_settings::GeolocationContentSettingsType(),
+      block_setting);
 
   // The infobar can be suppressed only if an origin subscribed to permission
   // status change.
   page_info()->SetSubscribedToPermissionChangeForTesting();
 
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_ALLOW,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), allow_setting,
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
 
   page_info()->OnUIClosing(nullptr);
   EXPECT_EQ(1u, infobar_manager()->infobars().size());
@@ -1637,10 +1735,16 @@ TEST_F(PageInfoTest, NotSuppressedInfobarWhenGeolocationChangedToBlock) {
   // status change.
   page_info()->SetSubscribedToPermissionChangeForTesting();
 
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_BLOCK,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+  PermissionSetting block_setting =
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_BLOCK);
+
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), block_setting,
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
 
   page_info()->OnUIClosing(nullptr);
   EXPECT_EQ(1u, infobar_manager()->infobars().size());
@@ -1658,10 +1762,11 @@ TEST_F(PageInfoTest, ShowInfobarWhenGeolocationChangedToDefault) {
   // status change.
   page_info()->SetSubscribedToPermissionChangeForTesting();
 
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       /*value=*/std::nullopt,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(),
+      /*value=*/std::nullopt,
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
 
   page_info()->OnUIClosing(nullptr);
   EXPECT_EQ(1u, infobar_manager()->infobars().size());
@@ -1689,10 +1794,15 @@ TEST_F(PageInfoTest, ShowInfobarWhenGeolocationAndMediaChangedToBlock) {
   // status change.
   page_info()->SetSubscribedToPermissionChangeForTesting();
 
-  page_info()->OnSitePermissionChanged(ContentSettingsType::GEOLOCATION,
-                                       CONTENT_SETTING_BLOCK,
-                                       /*requesting_origin=*/std::nullopt,
-                                       /*is_one_time=*/false);
+  const content_settings::PermissionSettingsInfo* geolocation_info =
+      content_settings::PermissionSettingsRegistry::GetInstance()->Get(
+          content_settings::GeolocationContentSettingsType());
+
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(),
+      geolocation_info->delegate().ToPermissionSetting(CONTENT_SETTING_BLOCK),
+      /*requesting_origin=*/std::nullopt,
+      /*is_one_time=*/false);
   page_info()->OnSitePermissionChanged(ContentSettingsType::MEDIASTREAM_CAMERA,
                                        CONTENT_SETTING_ALLOW,
                                        /*requesting_origin=*/std::nullopt,
@@ -1855,6 +1965,44 @@ TEST_F(PageInfoTest, ReEnableWarnings) {
   page_info();
 }
 
+// Tests that "Re-Enable Warnings" button on PageInfo is shown when HTTPS-First
+// Balanced Mode is bypassed, and that clicking it revokes the bypass decision.
+TEST_F(PageInfoTest, ReEnableWarningsHttpsFirstBalancedMode) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kHttpsFirstBalancedMode);
+
+  profile()->GetPrefs()->SetBoolean(prefs::kHttpsFirstBalancedMode, true);
+
+  StatefulSSLHostStateDelegate* ssl_state =
+      StatefulSSLHostStateDelegateFactory::GetForProfile(profile());
+  auto* storage_partition =
+      web_contents()->GetPrimaryMainFrame()->GetStoragePartition();
+
+  std::string host = "example.test";
+  ssl_state->AllowHttpForHost(host, storage_partition);
+
+  ResetMockUI();
+  SetURL("http://" + host);
+
+  security_level_ = security_state::WARNING;
+  visible_security_state_.url = GURL("http://" + host);
+  visible_security_state_.connection_info_initialized = false;
+
+  PageInfoUI::IdentityInfo identity_info;
+  EXPECT_CALL(*mock_ui(), SetIdentityInfo(_))
+      .WillOnce(::testing::SaveArg<0>(&identity_info));
+
+  // Instantiating page_info() triggers UI initialization and calls SetIdentityInfo.
+  page_info();
+  EXPECT_TRUE(identity_info.show_ssl_decision_revoke_button);
+
+  // Click the button
+  page_info()->OnRevokeSSLErrorBypassButtonPressed();
+
+  // Verify exception is removed
+  EXPECT_FALSE(ssl_state->HasAllowException(host, storage_partition));
+}
+
 // Tests that the duration of time the PageInfo is open is recorded for pages
 // with various security levels.
 TEST_F(PageInfoTest, TimeOpenMetrics) {
@@ -1916,38 +2064,9 @@ TEST_F(PageInfoTest, TimeOpenMetrics) {
   page_info();
 }
 
-TEST_F(PageInfoTest, AdPersonalization) {
-  constexpr int kTaxonomyVersion = 1;
-  privacy_sandbox::CanonicalTopic kFirstTopic(
-      browsing_topics::Topic(24),  // "Blues"
-      kTaxonomyVersion);
-  privacy_sandbox::CanonicalTopic kSecondTopic(
-      browsing_topics::Topic(23),  // "Music & audio"
-      kTaxonomyVersion);
-
-  std::vector<privacy_sandbox::CanonicalTopic> accessed_topics = {kFirstTopic,
-                                                                  kSecondTopic};
-  EXPECT_CALL(*mock_ui(),
-              SetAdPersonalizationInfo(::testing::Field(
-                  &PageInfoUI::AdPersonalizationInfo::accessed_topics,
-                  accessed_topics)));
-
-  content_settings::PageSpecificContentSettings* pscs =
-      content_settings::PageSpecificContentSettings::GetForFrame(
-          web_contents()->GetPrimaryMainFrame());
-  EXPECT_FALSE(pscs->HasAccessedTopics());
-  EXPECT_THAT(pscs->GetAccessedTopics(), testing::IsEmpty());
-
-  pscs->OnTopicAccessed(url::Origin::Create(GURL("https://foo.com")), false,
-                        kSecondTopic);
-  pscs->OnTopicAccessed(url::Origin::Create(GURL("https://foo.com")), false,
-                        kFirstTopic);
-  page_info();
-}
-
 // Tests that metrics are recorded on a PageInfo for pages with
 // various Safety Tip statuses.
-// See https://crbug.com/1114659 for why the test is disabled on Android.
+// See https://crbug.com/40710931 for why the test is disabled on Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_SafetyTipMetrics DISABLED_SafetyTipMetrics
 #else
@@ -2050,7 +2169,7 @@ TEST_F(PageInfoTest, SafetyTipTimeOpenMetrics) {
 // Tests that the SubresourceFilter setting is omitted correctly.
 TEST_F(PageInfoTest, SubresourceFilterSetting_MatchesActivation) {
   auto showing_setting = [](const PermissionInfoList& permissions) {
-    return base::Contains(
+    return std::ranges::contains(
         permissions, ContentSettingsType::ADS,
         [](const auto& permission) { return permission.type; });
   };
@@ -2470,6 +2589,10 @@ TEST_F(PageInfoToggleStatesUnitTest,
 // allow once and default setting ask.
 TEST_F(PageInfoToggleStatesUnitTest,
        TogglePermissionWithAllowOnceDefaultAskTest) {
+  base::test::ScopedFeatureList disable_approx_location;
+  disable_approx_location.InitAndDisableFeature(
+      content_settings::features::kApproximateGeolocationPermission);
+
   PageInfo::PermissionInfo location_permission;
   location_permission.type = ContentSettingsType::GEOLOCATION;
   location_permission.setting = CONTENT_SETTING_ALLOW;
@@ -2500,6 +2623,10 @@ TEST_F(PageInfoToggleStatesUnitTest,
 // allow once and default setting block.
 TEST_F(PageInfoToggleStatesUnitTest,
        TogglePermissionWithAllowOnceDefaultBlockTest) {
+  base::test::ScopedFeatureList disable_approx_location;
+  disable_approx_location.InitAndDisableFeature(
+      content_settings::features::kApproximateGeolocationPermission);
+
   PageInfo::PermissionInfo location_permission;
   location_permission.type = ContentSettingsType::GEOLOCATION;
   location_permission.setting = std::nullopt;
@@ -2652,7 +2779,8 @@ TEST_F(PageInfoTest, MidiGrantsAreFilteredWhenAllowSysex) {
   // Geolocation is always allowed to pass through to Android-specific logic to
   // check for DSE settings (so expect 1 item), but isn't actually shown later
   // on because this test isn't testing with a default search engine origin.
-  expected_visible_permissions.insert(ContentSettingsType::GEOLOCATION);
+  expected_visible_permissions.insert(
+      content_settings::GeolocationContentSettingsType());
 #endif
   ExpectPermissionInfoList(expected_visible_permissions,
                            last_permission_info_list());
@@ -2782,3 +2910,100 @@ TEST_F(PageInfoTest, SiteExceptionScopeTypeMetrics) {
                            ContentSettingsPattern::Scope::kCustomScope,
                            1 /* expected_count */);
 }
+
+TEST_F(PageInfoTest, ResetPermissionClearsEmbargo) {
+  auto* autoblocker =
+      PermissionDecisionAutoBlockerFactory::GetForProfile(profile());
+  GURL target_url = url();
+
+  // Record 3 dismissals to trigger embargo.
+  autoblocker->RecordDismissAndEmbargo(
+      target_url, content_settings::GeolocationContentSettingsType(),
+      /*dismissed_prompt_was_quiet=*/false);
+  autoblocker->RecordDismissAndEmbargo(
+      target_url, content_settings::GeolocationContentSettingsType(),
+      /*dismissed_prompt_was_quiet=*/false);
+  autoblocker->RecordDismissAndEmbargo(
+      target_url, content_settings::GeolocationContentSettingsType(),
+      /*dismissed_prompt_was_quiet=*/false);
+
+  EXPECT_TRUE(autoblocker->IsEmbargoed(
+      target_url, content_settings::GeolocationContentSettingsType()));
+
+  // Reset the permission
+  page_info()->OnSitePermissionChanged(
+      content_settings::GeolocationContentSettingsType(), std::nullopt,
+      std::nullopt, false);
+
+  EXPECT_FALSE(autoblocker->IsEmbargoed(
+      target_url, content_settings::GeolocationContentSettingsType()));
+}
+
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(PageInfoTest, PermanentNotificationSubscribeShowPermission) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      permissions::features::kPermanentNotificationSubscribeInPageInfo);
+
+  // By default, notification permission should not be shown.
+  page_info()->PresentSitePermissionsForTesting();
+  {
+    std::set<ContentSettingsType> expected_visible_permissions;
+    expected_visible_permissions.insert(
+        content_settings::GeolocationContentSettingsType());
+    ExpectPermissionInfoList(expected_visible_permissions,
+                             last_permission_info_list());
+  }
+
+  // Initialize PermissionRequestManager.
+  permissions::PermissionRequestManager::CreateForWebContents(web_contents());
+  permissions::PermissionRequestManager* manager =
+      permissions::PermissionRequestManager::FromWebContents(web_contents());
+  ASSERT_TRUE(manager);
+
+  auto prompt_factory =
+      std::make_unique<permissions::MockPermissionPromptFactory>(manager);
+
+  // Simulate notification request.
+  auto request = std::make_unique<permissions::MockPermissionRequest>(
+      permissions::RequestType::kNotifications);
+  base::RunLoop run_loop;
+  request->RegisterOnPermissionDecidedCallback(run_loop.QuitClosure());
+  prompt_factory->set_response_type(
+      permissions::PermissionRequestManager::AutoResponseType::DISMISS);
+  manager->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                      std::move(request));
+
+  run_loop.Run();
+
+  // Even if the permission request has been dismissed, the notification entry
+  // should be shown in Page Info.
+  page_info()->PresentSitePermissionsForTesting();
+  {
+    std::set<ContentSettingsType> expected_visible_permissions;
+    expected_visible_permissions.insert(
+        content_settings::GeolocationContentSettingsType());
+    expected_visible_permissions.insert(ContentSettingsType::NOTIFICATIONS);
+    ExpectPermissionInfoList(expected_visible_permissions,
+                             last_permission_info_list());
+  }
+
+  // Simulate navigation to reset the state.
+  ClearPageInfo();
+  SetURL("http://www.example.com/new_page");
+  NavigateAndCommit(url());
+
+  // Recreate PageInfo and present permissions.
+  page_info()->PresentSitePermissionsForTesting();
+
+  // Notification permission should not be shown anymore.
+  {
+    std::set<ContentSettingsType> expected_visible_permissions;
+    expected_visible_permissions.insert(
+        content_settings::GeolocationContentSettingsType());
+    ExpectPermissionInfoList(expected_visible_permissions,
+                             last_permission_info_list());
+  }
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+

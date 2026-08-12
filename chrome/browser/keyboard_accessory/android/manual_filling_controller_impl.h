@@ -17,7 +17,6 @@
 #include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/autofill/core/common/unique_ids.h"
-#include "components/plus_addresses/core/browser/plus_address_types.h"
 #include "content/public/browser/web_contents_user_data.h"
 
 namespace autofill {
@@ -25,7 +24,7 @@ class AddressAccessoryController;
 class PaymentMethodAccessoryController;
 }  // namespace autofill
 
-class AffiliatedPlusProfilesCache;
+class AtMemoryAccessoryController;
 class PasswordAccessoryController;
 
 // Use ManualFillingController::GetOrCreate to obtain instances of this class.
@@ -66,6 +65,7 @@ class ManualFillingControllerImpl
       base::OnceCallback<void(autofill::AccessorySheetData)> callback) override;
 
   gfx::NativeView container_view() const override;
+  bool IsLargeFormFactor() const override;
 
   // Returns a weak pointer for this object.
   base::WeakPtr<ManualFillingController> AsWeakPtr();
@@ -79,16 +79,13 @@ class ManualFillingControllerImpl
       base::WeakPtr<autofill::AddressAccessoryController> address_controller,
       base::WeakPtr<autofill::PaymentMethodAccessoryController>
           payment_method_controller,
+      base::WeakPtr<AtMemoryAccessoryController> at_memory_controller,
       std::unique_ptr<ManualFillingViewInterface> test_view);
 
 #if defined(UNIT_TEST)
   // Returns the held view for testing.
   ManualFillingViewInterface* view() const { return view_.get(); }
 
-  // Returns the plus profiles cache for testing.
-  AffiliatedPlusProfilesCache* plus_profiles_cache() const {
-    return plus_profiles_cache_.get();
-  }
 #endif  // defined(UNIT_TEST)
 
  protected:
@@ -113,11 +110,8 @@ class ManualFillingControllerImpl
       base::WeakPtr<autofill::AddressAccessoryController> address_controller,
       base::WeakPtr<autofill::PaymentMethodAccessoryController>
           payment_method_controller,
+      base::WeakPtr<AtMemoryAccessoryController> at_memory_controller,
       std::unique_ptr<ManualFillingViewInterface> view);
-
-  // Creates the plus profiles cache if the feature flag is enabled and all its
-  // dependencies are not `nullptr`.
-  void InitializePlusProfilesCache();
 
   // Returns true if the keyboard accessory needs to be shown for last focused
   // field type..
@@ -165,15 +159,7 @@ class ManualFillingControllerImpl
   base::WeakPtr<autofill::AddressAccessoryController> address_controller_;
   base::WeakPtr<autofill::PaymentMethodAccessoryController>
       payment_method_controller_;
-
-  // This cache is initialized if the manual fallback feature flag is enabled
-  // and its dependencies are not null. The cached plus providers are accessed
-  // by individual accessory controllers.
-  // The cache is populated when the manual filling component is shown and
-  // cleared when the component is hidden. The cache is cleared for memory
-  // efficiency to avoid caching the list of plus addresses for every open
-  // browser tab.
-  std::unique_ptr<AffiliatedPlusProfilesCache> plus_profiles_cache_;
+  base::WeakPtr<AtMemoryAccessoryController> at_memory_controller_;
 
   // Hold the native instance of the view. Must be last declared and initialized
   // member so the view can be created in the constructor with a fully set up

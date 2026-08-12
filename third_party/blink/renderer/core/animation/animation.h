@@ -35,6 +35,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/time/time.h"
+#include "cc/animation/animation.h"
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
@@ -42,6 +43,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_replace_state.h"
 #include "third_party/blink/renderer/core/animation/animation_effect.h"
 #include "third_party/blink/renderer/core/animation/animation_effect_owner.h"
+#include "third_party/blink/renderer/core/animation/compositing/specific_compositing_decision.h"
 #include "third_party/blink/renderer/core/animation/compositor_animations.h"
 #include "third_party/blink/renderer/core/animation/timeline_offset.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -77,6 +79,20 @@ enum class BlinkAnimationType : int {
   kAnimationTypeEnumMax = 6
 };
 
+struct CORE_EXPORT AnimationCompositingDecisionState {
+  DISALLOW_NEW();
+
+  void Trace(Visitor* visitor) const { visitor->Trace(specific_reasons); }
+
+  void Reset(bool force_enable_tracing_for_test = false);
+  void ReportHistogramsAndTracing(const Animation&);
+
+  // TODO(crbug.com/521921832): gradually replace with a more granular enum
+  CompositorAnimations::FailureReasons disposition =
+      CompositorAnimations::kUnchecked;
+  Member<CompositingDecisionDetailsMap> specific_reasons;
+};
+
 class CORE_EXPORT Animation : public EventTarget,
                               public ActiveScriptWrappable<Animation>,
                               public ExecutionContextLifecycleObserver,
@@ -87,6 +103,8 @@ class CORE_EXPORT Animation : public EventTarget,
   USING_PRE_FINALIZER(Animation, Dispose);
 
  public:
+  using CompositingDecisionState = AnimationCompositingDecisionState;
+  using AutoRewind = cc::Animation::AutoRewind;
   // Priority for sorting getAnimation by Animation class, arranged from lowest
   // priority to highest priority as per spec:
   // https://w3.org/TR/web-animations-1/#dom-document-getanimations
@@ -209,7 +227,7 @@ class CORE_EXPORT Animation : public EventTarget,
   void OnActivePhaseStateChange(bool in_active_phase);
 
   bool Limited() const { return Limited(CurrentTimeInternal()); }
-  bool FinishedInternal() const { return finished_; }
+  bool Inactive() const { return inactive_; }
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(finish, kFinish)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(cancel, kCancel)
@@ -259,8 +277,8 @@ class CORE_EXPORT Animation : public EventTarget,
   const std::optional<TimelineOffset>& GetRangeEndInternal() const {
     return range_end_;
   }
-  void SetRangeStartInternal(const std::optional<TimelineOffset>& range_start);
-  void SetRangeEndInternal(const std::optional<TimelineOffset>& range_end);
+  void SetRangeStartInternal(std::optional<TimelineOffset> range_start);
+  void SetRangeEndInternal(std::optional<TimelineOffset> range_end);
 
   // This method is only called during style update of a CSS animation.
   // Preventing an endpoint from stomping a value set via the rangeStart or
@@ -272,9 +290,13 @@ class CORE_EXPORT Animation : public EventTarget,
 
   // Called during validation of a scroll timeline to determine if a second
   // style and layout pass is required. During this validation step, we have an
-  // up to date snapshot of the timeline and can initialize the start time if
-  // required. If the start time or intrinsic iteration duration changes, we
-  // need a second style+layout pass even if the timeline snapshot is valid.
+  // up to date snapshot of the timeline and can do either of the following:
+  // - initialize the start time if required. If the start time or intrinsic
+  //   iteration duration changes, we need a second style+layout pass even if
+  //   the timeline snapshot is valid.
+  // - trigger the animation based on the state of a TimelineTrigger associated
+  //   with the scroll timeline being validated. If triggered, we require a
+  //   second style+layout pass.
   bool OnValidateSnapshot(bool snapshot_changed);
 
   void OnRangeUpdate();
@@ -300,7 +322,7 @@ class CORE_EXPORT Animation : public EventTarget,
   // Pausing via this method is not reflected in the value returned by
   // paused() and must never overlap with pausing via pause().
   // Deprecated: Do not use in new tests.
-  void PauseForTesting(AnimationTimeDelta pause_time);
+  void PauseForTesting(AnimationTimeDelta hold_time);
   void DisableCompositedAnimationForTesting();
 
   // This should only be used for CSS
@@ -333,8 +355,14 @@ class CORE_EXPORT Animation : public EventTarget,
 
   CompositorAnimations::FailureReasons CheckCanStartAnimationOnCompositor(
       const PaintArtifactCompositor* paint_artifact_compositor,
-      PropertyHandleSet* unsupported_properties_for_tracing = nullptr) const;
+      StartOnCompositorReason check_reason);
   void StartAnimationOnCompositor(
+      const PaintArtifactCompositor* paint_artifact_compositor,
+      StartOnCompositorReason check_reason);
+  // Returns true if the cc::Animation related to this animation will be under
+  // the influence of the compositor animation trigger attempting to push the
+  // animation to the compositor. Returns false otherwise.
+  bool StartTriggeredAnimationOnCompositor(
       const PaintArtifactCompositor* paint_artifact_compositor);
   void CancelAnimationOnCompositor();
   void RestartAnimationOnCompositor(
@@ -342,6 +370,23 @@ class CORE_EXPORT Animation : public EventTarget,
           CompositorPendingReason::kPendingRestart);
   void CancelIncompatibleAnimationsOnCompositor();
   bool HasActiveAnimationsOnCompositor() const;
+  // Returns the *current* compositing decision for this animation, which may be
+  // unchecked (not yet evaluated) or partially checked. Currently this is reset
+  // when the animation is set pending, and fully checked after PreCommit. This
+  // will change as crbug.com/521921835 gets checked in.
+  CompositingDecisionState& GetCompositingDecisionState() {
+    return compositing_decision_;
+  }
+
+  // The compositor started playing this animation on the impl thread.
+  // Synchronize to the impl thread start time. This is only called for
+  // triggered[1] animations.
+  // [1] https://drafts.csswg.org/animation-triggers-1/
+  void NotifyAnimationStartedAsync(base::TimeDelta monotonic_time,
+                                   AutoRewind auto_rewind);
+  // The compositor paused this animation on the impl thread.
+  // This is only called for triggered animations.
+  void NotifyAnimationPausedAsync(base::TimeDelta monotonic_time);
 
   void NotifyReady(AnimationTimeDelta ready_time);
   void CommitPendingPlay(AnimationTimeDelta ready_time);
@@ -410,9 +455,9 @@ class CORE_EXPORT Animation : public EventTarget,
 
   bool IsInDisplayLockedSubtree();
 
-  base::TimeDelta ComputeCompositorTimeOffset() const;
+  std::optional<base::TimeDelta> ComputeCompositorHoldTime() const;
 
-  // Updates |compositor_property_animations_have_no_effect_| and marks the
+  // Updates |animation_missing_compositor_elements_| and marks the
   // animation as pending if it changes.
   void MarkPendingIfCompositorPropertyAnimationChanges(
       const PaintArtifactCompositor*);
@@ -479,14 +524,13 @@ class CORE_EXPORT Animation : public EventTarget,
   // Plays an animation. When auto_rewind is enabled, the current time can be
   // adjusted to accommodate reversal of an animation or snapping to an
   // endpoint.
-  enum class AutoRewind { kDisabled, kEnabled };
   void PlayInternal(AutoRewind auto_rewind, ExceptionState& exception_state);
   void PauseInternal(ExceptionState& exception_state);
-  void ReverseInternal(ExceptionState& exception_state);
+  void ReverseInternal(AutoRewind auto_rewind, ExceptionState& exception_state);
 
   void AddTrigger(AnimationTrigger* trigger);
   void RemoveTrigger(AnimationTrigger* trigger);
-  const HeapHashSet<WeakMember<AnimationTrigger>>& GetTriggersForTest();
+  const HeapHashSet<WeakMember<AnimationTrigger>>& GetTriggers();
 
   // Playback rate that will take effect once any pending tasks are resolved.
   // If there are no pending tasks, then the effective playback rate equals the
@@ -527,8 +571,7 @@ class CORE_EXPORT Animation : public EventTarget,
   void BeginUpdatingState();
   void EndUpdatingState();
 
-  CompositorAnimations::FailureReasons
-  CheckCanStartAnimationOnCompositorInternal() const;
+  void CheckCanStartAnimationOnCompositorInternal();
   void CreateCompositorAnimation(std::optional<int> replaced_cc_animation_id);
   void DestroyCompositorAnimation();
   void AttachCompositorTimeline();
@@ -569,14 +612,11 @@ class CORE_EXPORT Animation : public EventTarget,
   // Tracking the state of animations in dev tools.
   void NotifyProbe();
 
-  // Reset the cached value for the status of a possible background color
-  // animation if required. Any time an animation affecting background color
-  // changes we need to reset the flag so that Paint can make a fresh
-  // compositing decision and create a fresh paint worklet image from the
-  // keyframes.
-  // TODO(crbug.com/1310961): Investigate if we need a similar fix for
-  // non-native paint worklets.
-  void UpdateCompositedPaintStatus();
+  // Update the cached value for the status of native paint worklets. Any
+  // time an animation becomes compositor pending that affects one or more
+  // properties animated via native paint worklets, a fresh decision is required
+  // in PrePaint or Paint to determine eligibility to run on the compositor.
+  void UpdateCompositedPaintStatus(CompositorPendingReason reason);
 
   // Updates the start time for a running animation that is linked to a scroll
   // timeline. As the animation is linked to a timeline range, we don't
@@ -600,6 +640,8 @@ class CORE_EXPORT Animation : public EventTarget,
   // Returns the effective zoom for the keyframe effect's target, or 1.f if
   // there is no keyframe effect or no target with computed style.
   float GetKeyframeEffectTargetZoom() const;
+  float RangeOffsetZoom(const std::optional<TimelineOffset>& offset) const;
+  void ApplyZoomToTimelineOffset(std::optional<TimelineOffset>& offset);
 
   String id_;
 
@@ -664,9 +706,11 @@ class CORE_EXPORT Animation : public EventTarget,
   // has changed by means other than the ordinary progression of time
   bool outdated_;
 
-  // Indicates the animation is no longer active. Cancelled animation is marked
-  // as finished_.
-  bool finished_;
+  // Indicates the animation is no longer active. An animation in the idle state
+  // or a finished animation with a monotonic timeline, does not require
+  // animation updates.
+  bool inactive_;
+
   // Indicates finish notification has been handled.
   bool committed_finish_notification_;
   // Holds a 'finished' event queued for asynchronous dispatch via the
@@ -743,6 +787,10 @@ class CORE_EXPORT Animation : public EventTarget,
     Member<Animation> animation_;
   };
 
+  // The most recent/in progress compositing decision. Used to determine
+  // how/whether an animation can be optimized.
+  CompositingDecisionState compositing_decision_;
+
   // This mirrors the known compositor state. It is created when a compositor
   // animation is started. Updated once the start time is known and each time
   // modifications are pushed to the compositor.
@@ -784,6 +832,8 @@ class CORE_EXPORT Animation : public EventTarget,
   FRIEND_TEST_ALL_PREFIXES(CSSAnimationsTriggerTest, ChangeTriggerAttachments);
   FRIEND_TEST_ALL_PREFIXES(CSSAnimationsTriggerTest,
                            SameTriggerNameDifferentSource);
+  FRIEND_TEST_ALL_PREFIXES(ScriptedTimelineTriggerTest,
+                           ForbidScriptDuringActivation);
 };
 
 }  // namespace blink

@@ -6,9 +6,9 @@
 
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 
 ImmersiveModeTester::ImmersiveModeTester(Browser* browser) : browser_(browser) {
   scoped_observation_.Observe(GetController());
@@ -26,7 +26,7 @@ BrowserView* ImmersiveModeTester::GetBrowserView() {
 
 void ImmersiveModeTester::RunCommand(int command, int expected_index) {
   reveal_started_ = reveal_ended_ = false;
-  browser_->command_controller()->ExecuteCommand(command);
+  chrome::BrowserCommandController::From(browser_)->ExecuteCommand(command);
   VerifyTabIndexAfterReveal(expected_index);
 }
 

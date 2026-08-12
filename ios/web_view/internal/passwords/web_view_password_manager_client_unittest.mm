@@ -17,6 +17,7 @@
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/testing_pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/sync/base/user_selectable_type.h"
 #import "components/sync/service/sync_service.h"
@@ -24,6 +25,7 @@
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/scoped_testing_web_client.h"
 #import "ios/web_view/internal/web_view_browser_state.h"
+#import "services/network/public/cpp/shared_url_loader_factory.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
@@ -44,9 +46,10 @@ class WebViewPasswordManagerClientTest : public PlatformTest {
                 password_manager::IsAccountStore(true))) {
     pref_service_.registry()->RegisterBooleanPref(
         password_manager::prefs::kCredentialsEnableService, true);
+    RegisterWebViewPasswordManagerPrefs(pref_service_.registry());
 
-    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
-    account_store_->Init(/*affiliated_match_helper=*/nullptr);
+    profile_store_->Init();
+    account_store_->Init();
 
     password_manager_client_ = std::make_unique<WebViewPasswordManagerClient>(
         &web_state_, &sync_service_, &pref_service_,
@@ -123,6 +126,43 @@ TEST_F(WebViewPasswordManagerClientTest, PromptIfAllConditionsPass) {
 
   EXPECT_TRUE(password_manager_client_->PromptUserToSaveOrUpdatePassword(
       std::move(password_manager_for_ui), /*update_password=*/false));
+}
+
+TEST_F(WebViewPasswordManagerClientTest, WebStateDestroyed) {
+  pref_service_.SetBoolean(kPasswordManagerSafeLifecycleEnabled, true);
+
+  auto web_state = std::make_unique<web::FakeWebState>();
+  auto password_manager_client = std::make_unique<WebViewPasswordManagerClient>(
+      web_state.get(), &sync_service_, &pref_service_,
+      /*identity_manager=*/nullptr, /*log_router=*/nullptr,
+      profile_store_.get(), account_store_.get(), /*reuse_manager=*/nullptr,
+      /*requirements_service=*/nullptr);
+
+  // Destroy the web state.
+  web_state.reset();
+
+  // Verify that methods don't crash and return safe values.
+  EXPECT_TRUE(password_manager_client->IsOffTheRecord());
+  EXPECT_EQ(nullptr, password_manager_client->GetProfileMetricsService());
+  EXPECT_FALSE(password_manager_client->IsCommittedMainFrameSecure());
+  EXPECT_EQ(nullptr, password_manager_client->GetURLLoaderFactory());
+}
+
+TEST_F(WebViewPasswordManagerClientTest, WebStateDestroyed_FlagDisabled) {
+  pref_service_.SetBoolean(kPasswordManagerSafeLifecycleEnabled, false);
+
+  auto web_state = std::make_unique<web::FakeWebState>();
+  auto password_manager_client = std::make_unique<WebViewPasswordManagerClient>(
+      web_state.get(), &sync_service_, &pref_service_,
+      /*identity_manager=*/nullptr, /*log_router=*/nullptr,
+      profile_store_.get(), account_store_.get(), /*reuse_manager=*/nullptr,
+      /*requirements_service=*/nullptr);
+
+  // Destroy the web state first.
+  // When the flag is disabled, the client's destructor must not attempt to
+  // access this dangling pointer.
+  web_state.reset();
+  password_manager_client.reset();
 }
 
 }  // namespace ios_web_view

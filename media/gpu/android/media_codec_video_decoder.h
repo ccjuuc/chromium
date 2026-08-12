@@ -20,6 +20,7 @@
 #include "media/base/callback_registry.h"
 #include "media/base/cdm_context.h"
 #include "media/base/decoder_status.h"
+#include "media/base/hdr_metadata_reordering_map.h"
 #include "media/base/overlay_info.h"
 #include "media/base/scoped_async_trace.h"
 #include "media/base/video_decoder.h"
@@ -225,9 +226,6 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final
   // Notify us about a promotion hint.
   void NotifyPromotionHint(PromotionHintAggregator::Hint hint);
 
-  // Update |cached_frame_information_|.
-  void CacheFrameInformation();
-
   // Creates an overlay factory cb based on the value of overlay_info_.
   AndroidOverlayFactoryCB CreateOverlayFactoryCb();
 
@@ -237,7 +235,12 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final
 
   // Returns true if the MediaCodec must be reallocated due to an increase in
   // resolution.
-  bool CodecNeedsReallocation(int new_width);
+  bool CodecNeedsReallocation(const gfx::Size& new_size);
+
+  // Compute the color space and HDR metadata for a video frame.
+  void GetColorSpaceAndHdrMetadata(const CodecOutputBuffer* buffer,
+                                   gfx::ColorSpace& color_space,
+                                   gfx::HDRMetadata& hdr_metadata);
 
   std::vector<SupportedVideoDecoderConfig> GetSupportedConfigsInternal();
 
@@ -312,11 +315,6 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final
   raw_ptr<DeviceInfo> device_info_;
   bool enable_threaded_texture_mailboxes_;
 
-  // Most recently cached frame information, so that we can dispatch it without
-  // recomputing it on every frame.  It changes very rarely.
-  SurfaceChooserHelper::FrameInformation cached_frame_information_ =
-      SurfaceChooserHelper::FrameInformation::NON_OVERLAY_INSECURE;
-
   // CDM related stuff.
 
   // Owned by CDM which is external to this decoder.
@@ -345,6 +343,10 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final
   // KEY_MAX_INPUT_SIZE configured for the current codec.
   size_t max_input_size_ = 0;
 
+  // Whether or not the current codec has exceeded the configured max input
+  // size.
+  bool video_input_exceeds_max_capacity_ = false;
+
   // Optional crypto object from the Cdm.
   base::android::ScopedJavaGlobalRef<jobject> media_crypto_;
 
@@ -357,6 +359,8 @@ class MEDIA_GPU_EXPORT MediaCodecVideoDecoder final
 
   // Enables Block Model (LinearBlock).
   const bool use_block_model_;
+
+  HdrMetadataReorderingMap hdr_metadata_reordering_map_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

@@ -2,9 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "base/check_deref.h"
 #include "base/test/scoped_chromeos_version_info.h"
 #include "build/build_config.h"
+#include "chrome/browser/ash/login/screens/update_screen.h"
 #include "chrome/browser/ash/login/test/enrollment_helper_mixin.h"
 #include "chrome/browser/ash/login/test/enrollment_ui_mixin.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
@@ -91,7 +95,7 @@ class OobeConfigurationTest : public OobeBaseTest {
   void SetUpOnMainThread() override {
     // Set up fake networks.
     // TODO(pmarko): Find a way for FakeShillManagerClient to be initialized
-    // automatically (https://crbug.com/847422).
+    // automatically (https://crbug.com/40578322).
     ShillManagerClient::Get()->GetTestInterface()->SetupDefaultEnvironment();
 
     OobeBaseTest::SetUpOnMainThread();
@@ -187,8 +191,85 @@ IN_PROC_BROWSER_TEST_F(OobeConfigurationTest, TestDeviceRequisition) {
   LoadConfiguration();
   OobeScreenWaiter(UpdateView::kScreenId).Wait();
 
-  EXPECT_EQ(policy::EnrollmentRequisitionManager::GetDeviceRequisition(),
+  EXPECT_EQ(policy::EnrollmentRequisitionManager::GetDeviceRequisition(
+                CHECK_DEREF(g_browser_process->local_state())),
             "some_requisition");
+}
+
+class OobeConfigurationDeviceMoveTest : public OobeConfigurationTest {
+ public:
+  OobeConfigurationDeviceMoveTest() {
+    feature_list_.InitAndEnableFeature(ash::features::kDeviceMoveConfigSave);
+  }
+
+  ~OobeConfigurationDeviceMoveTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Check that when welcome, network and update screen opt out notice are
+// skipped, and there are no critical updates, we get to user creation screen
+// even if in the EU zone.
+IN_PROC_BROWSER_TEST_F(OobeConfigurationDeviceMoveTest, TestSilentUpdateSkip) {
+  g_browser_process->local_state()->SetString(ash::prefs::kSigninScreenTimezone,
+                                              "Europe/Berlin");
+
+  LoadConfiguration();
+  OobeScreenWaiter(UpdateView::kScreenId).Wait();
+
+  update_engine::StatusResult status;
+  status.set_current_operation(update_engine::Operation::CHECKING_FOR_UPDATE);
+  update_engine_client()->set_default_status(status);
+  update_engine_client()->NotifyObserversThatStatusChanged(status);
+
+  status.set_current_operation(update_engine::Operation::IDLE);
+  update_engine_client()->set_default_status(status);
+  update_engine_client()->NotifyObserversThatStatusChanged(status);
+
+  OobeScreenWaiter(UserCreationView::kScreenId).Wait();
+}
+
+// Check that when welcome, network and update screen opt out notice are
+// skipped, but there is a critical update, it is still applied.
+IN_PROC_BROWSER_TEST_F(OobeConfigurationDeviceMoveTest,
+                       TestSkipOptOutCriticalUpdate) {
+  g_browser_process->local_state()->SetString(ash::prefs::kSigninScreenTimezone,
+                                              "Europe/Berlin");
+
+  LoadConfiguration();
+  OobeScreenWaiter(UpdateView::kScreenId).Wait();
+
+  update_engine::StatusResult status;
+  status.set_update_urgency(::update_engine::UpdateUrgency::CRITICAL);
+  status.set_current_operation(update_engine::Operation::UPDATE_AVAILABLE);
+  update_engine_client()->set_default_status(status);
+
+  EXPECT_EQ(
+      WizardController::default_controller()->current_screen()->screen_id(),
+      UpdateView::kScreenId);
+}
+
+// Check that when welcome, network and skip HID screen options are passed via
+// OOBE configuration on a Chromebox, the HID detection screen is skipped and
+// we proceed to the update screen.
+IN_PROC_BROWSER_TEST_F(OobeConfigurationDeviceMoveTest, TestSkipHID) {
+  base::test::ScopedChromeOSVersionInfo version{"DEVICETYPE=CHROMEBOX",
+                                                base::Time::Now()};
+
+  LoadConfiguration();
+  OobeScreenWaiter(UpdateView::kScreenId).Wait();
+}
+
+// Check that when skip HID screen option is passed via OOBE configuration on a
+// Chromebox, the HID detection screen is skipped and we proceed to the welcome
+// screen.
+IN_PROC_BROWSER_TEST_F(OobeConfigurationDeviceMoveTest, TestSkipHIDScreen) {
+  base::test::ScopedChromeOSVersionInfo version{"DEVICETYPE=CHROMEBOX",
+                                                base::Time::Now()};
+
+  LoadConfiguration();
+  OobeScreenWaiter(WelcomeView::kScreenId).Wait();
 }
 
 }  // namespace ash

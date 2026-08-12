@@ -12,6 +12,7 @@
 #include "base/auto_reset.h"
 #include "base/check_op.h"
 #include "base/containers/adapters.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/notreached.h"
@@ -52,7 +53,12 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/focus/focus_manager_factory.h"
 #include "ui/views/focus/native_view_focus_manager.h"
+#include "ui/views/input_protection/default_input_protection_policy.h"
+#include "ui/views/input_protection/occluded_widget_input_protector.h"
+#include "ui/views/input_protection/occlusion_aware_input_protection_policy.h"
+#include "ui/views/input_protection/window_activation_input_protection_policy.h"
 #include "ui/views/views_delegate.h"
+#include "ui/views/views_features.h"
 #include "ui/views/widget/any_widget_observer_singleton.h"
 #include "ui/views/widget/native_widget_private.h"
 #include "ui/views/widget/root_view.h"
@@ -63,7 +69,9 @@
 #include "ui/views/widget/widget_enumerator.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/widget/widget_removals_observer.h"
+#include "ui/views/widget/widget_utils.h"
 #include "ui/views/window/dialog_delegate.h"
+#include "ui/wm/core/window_properties.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "ui/linux/linux_ui.h"
@@ -134,6 +142,20 @@ ui::mojom::WindowShowState GetShowState(views::Widget* widget) {
 #endif
 
 }  // namespace
+
+class Widget::ScopedCallStackLock {
+ public:
+  explicit ScopedCallStackLock(Widget* widget)
+      : reset_(&widget->on_call_stack_, true) {}
+
+  ScopedCallStackLock(const ScopedCallStackLock&) = delete;
+  ScopedCallStackLock& operator=(const ScopedCallStackLock&) = delete;
+
+  ~ScopedCallStackLock() = default;
+
+ private:
+  base::AutoReset<bool> reset_;
+};
 
 // static
 Widget::DisableActivationChangeHandlingType
@@ -241,6 +263,13 @@ Widget::Widget(InitParams params) {
 }
 
 Widget::~Widget() {
+  CHECK(!on_call_stack_);
+
+  // It's illegal for any of the body of this destructor to re-enter this
+  // destructor, because if that happened the outer destructor would
+  // use-after-free once it returns.
+  ScopedCallStackLock on_stack(this);
+
   // DestroyRootView() will cause InvalidateLayout() to ScheduleLayout() which
   // is unnecessary.
   is_destroying_ = true;
@@ -256,6 +285,8 @@ Widget::~Widget() {
   // CLIENT_OWNS_WIDGET, all events are emitted in ~Widget.
 
   if (widget_delegate_ && ownership_ != InitParams::CLIENT_OWNS_WIDGET) {
+    // It's illegal for WidgetDestroying() to re-enter the Widget destructor,
+    // because then the other destructor will use-after-free.
     widget_delegate_->WidgetDestroying();
   }
   if (ownership_ == InitParams::WIDGET_OWNS_NATIVE_WIDGET) {
@@ -276,16 +307,23 @@ Widget::~Widget() {
       native_widget_->ClientDestroyedWidget();
     }
 
-    HandleWidgetDestroying();
+    if (!widget_destroying_handled_) {
+      HandleWidgetDestroying();
+    }
     if (native_widget_) {
       native_widget_->Close();
     }
 
-    HandleWidgetDestroyed();
+    if (!native_widget_destroyed_) {
+      HandleWidgetDestroyed();
+    }
     if (widget_delegate_) {
       widget_delegate_->WidgetDestroying();
     }
   }
+
+  CHECK(widget_destroying_handled_);
+  CHECK(native_widget_destroyed_);
 
   RemoveObserver(&root_view_->GetViewAccessibility());
   // Destroy RootView after the native widget, so in case the WidgetDelegate is
@@ -537,11 +575,6 @@ void Widget::Init(InitParams params) {
   // set based on the display.
   should_set_initial_bounds = !params.display_id.has_value();
 #endif
-#if BUILDFLAG(IS_WIN)
-  // force_system_menu_for_frameless only applies to frameless windows.
-  CHECK(!params.force_system_menu_for_frameless ||
-        params.type == Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-#endif  // BUILDFLAG(IS_WIN)
   background_color_ = params.background_color;
   native_widget_->InitNativeWidget(std::move(params));
   if (type == InitParams::TYPE_MENU) {
@@ -609,6 +642,9 @@ void Widget::Init(InitParams params) {
   if (delegate) {
     delegate->WidgetInitialized();
   }
+
+  OccludedWidgetInputProtector::GetInstance()->UpdateTracking(
+      base::PassKey<Widget>(), this);
 
   internal::AnyWidgetObserverSingleton::GetInstance()->OnAnyWidgetInitialized(
       this);
@@ -818,6 +854,15 @@ gfx::Rect Widget::GetClientAreaBoundsInScreen() const {
                         : gfx::Rect();
 }
 
+gfx::Rect Widget::GetNonDecoratedClientAreaBoundsInScreen() const {
+  if (non_client_view_ && non_client_view_->frame_view()) {
+    return non_client_view_->frame_view()
+        ->GetNonDecoratedClientAreaBoundsInScreen();
+  }
+
+  return GetClientAreaBoundsInScreen();
+}
+
 gfx::Rect Widget::GetRestoredBounds() const {
   return native_widget_ ? native_widget_->GetRestoredBounds() : gfx::Rect();
 }
@@ -878,6 +923,10 @@ void Widget::SetVisibilityAnimationTransition(VisibilityTransition transition) {
 
 bool Widget::IsMoveLoopSupported() const {
   return native_widget_ ? native_widget_->IsMoveLoopSupported() : false;
+}
+
+bool Widget::IsMouseButtonDown() const {
+  return native_widget_ ? native_widget_->IsMouseButtonDown() : false;
 }
 
 Widget::MoveLoopResult Widget::RunMoveLoop(
@@ -974,6 +1023,7 @@ void Widget::CloseWithReason(ClosedReason closed_reason) {
 
   ax_mode_observation_.Reset();
 
+  ScopedCallStackLock on_stack(this);
   observers_.Notify(&WidgetObserver::OnWidgetClosing, this);
 
   internal::AnyWidgetObserverSingleton::GetInstance()->OnAnyWidgetClosing(this);
@@ -1003,12 +1053,17 @@ void Widget::CloseNow() {
 
   ax_mode_observation_.Reset();
 
-  observers_.Notify(&WidgetObserver::OnWidgetClosing, this);
-  internal::AnyWidgetObserverSingleton::GetInstance()->OnAnyWidgetClosing(this);
+  {
+    ScopedCallStackLock on_stack(this);
+    observers_.Notify(&WidgetObserver::OnWidgetClosing, this);
+    internal::AnyWidgetObserverSingleton::GetInstance()->OnAnyWidgetClosing(
+        this);
+  }
 
   DCHECK(native_widget_initialized_) << "Native widget is never initialized.";
-
   if (native_widget_) {
+    // The Widget may be destroyed inside CloseNow(), so *DO NOT* use this after
+    // this point.
     native_widget_->CloseNow();
   }
 }
@@ -1098,6 +1153,9 @@ bool Widget::ShouldViewsStyleFollowWidgetActivation() const {
 void Widget::SetZOrderLevel(ui::ZOrderLevel order) {
   if (native_widget_) {
     native_widget_->SetZOrderLevel(order);
+
+    OccludedWidgetInputProtector::GetInstance()->UpdateTracking(
+        base::PassKey<Widget>(), this);
   }
 }
 
@@ -1138,6 +1196,14 @@ void Widget::SetVisibleOnAllWorkspaces(bool always_visible) {
 bool Widget::IsVisibleOnAllWorkspaces() const {
   return native_widget_ ? native_widget_->IsVisibleOnAllWorkspaces() : false;
 }
+
+#if BUILDFLAG(IS_MAC)
+void Widget::MoveToActiveFullscreenSpace() {
+  if (native_widget_) {
+    native_widget_->MoveToActiveFullscreenSpace();
+  }
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 void Widget::Maximize() {
   if (native_widget_) {
@@ -1261,6 +1327,44 @@ bool Widget::IsVisibleOnScreen() const {
   return native_widget_ ? native_widget_->IsVisibleOnScreen() : false;
 }
 
+void Widget::EnableInputEventActivationProtection(
+    std::unique_ptr<InputEventActivationProtector> custom_protector) {
+  if (!base::FeatureList::IsEnabled(features::kEnableInputProtection)) {
+    return;
+  }
+
+  if (input_event_activation_protection_enabled_) {
+    return;
+  }
+
+  input_event_activation_protection_enabled_ = true;
+  if (custom_protector) {
+    input_protector_ = std::move(custom_protector);
+    return;
+  }
+
+  input_protector_ = std::make_unique<InputEventActivationProtector>(
+      std::make_unique<DefaultInputProtectionPolicy>(GetRootView()));
+  input_protector_->AddPolicy(
+      std::make_unique<OcclusionAwareInputProtectionPolicy>());
+  input_protector_->AddPolicy(
+      std::make_unique<WindowActivationInputProtectionPolicy>(this));
+}
+
+bool Widget::IsInputEventActivationProtectionEnabled() const {
+  return input_event_activation_protection_enabled_;
+}
+
+bool Widget::IsPossiblyUnintendedInteraction(const ui::Event& event,
+                                             const View* target) {
+  if (!IsInputEventActivationProtectionEnabled()) {
+    return false;
+  }
+
+  return input_protector_->IsPossiblyUnintendedInteraction(
+      event, /*allow_key_events=*/false, target);
+}
+
 const ui::ThemeProvider* Widget::GetThemeProvider() const {
   // The theme provider is provided by the very top widget in the ownership
   // chain, which may include parenting, anchoring, etc. Use
@@ -1305,11 +1409,11 @@ SublevelManager* Widget::GetSublevelManager() {
   return sublevel_manager_.get();
 }
 
-void Widget::RunShellDrag(View* view,
-                          std::unique_ptr<ui::OSExchangeData> data,
-                          const gfx::Point& location,
-                          int operation,
-                          ui::mojom::DragEventSource source) {
+void Widget::RunDragDropLoop(View* view,
+                             std::unique_ptr<ui::OSExchangeData> data,
+                             const gfx::Point& location,
+                             int operation,
+                             ui::mojom::DragEventSource source) {
   if (view) {
     CHECK_EQ(view->GetWidget(), this);
   }
@@ -1318,9 +1422,9 @@ void Widget::RunShellDrag(View* view,
     return;
   }
   dragged_view_ = view;
-  OnDragWillStart();
+  OnDragDropWillStart();
 
-  observers_.Notify(&WidgetObserver::OnWidgetDragWillStart, this);
+  observers_.Notify(&WidgetObserver::OnWidgetDragDropWillStart, this);
 
   if (view && view->drag_controller()) {
     view->drag_controller()->OnWillStartDragForView(view);
@@ -1333,7 +1437,8 @@ void Widget::RunShellDrag(View* view,
     // tasks need to run. Only views:: and ui::EventDispatcher stacks are
     // present, which expect this re-entrancy.
     base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
-    native_widget_->RunShellDrag(std::move(data), location, operation, source);
+    native_widget_->RunDragDropLoop(std::move(data), location, operation,
+                                    source);
   }
 
   // The widget may be destroyed during the drag operation.
@@ -1343,7 +1448,7 @@ void Widget::RunShellDrag(View* view,
 
   // TODO(crbug.com/375959961): On X11, the native widget's mouse button state
   // is not updated when the mouse button is released to end a drag.
-#if !BUILDFLAG(IS_OZONE_X11)
+#if !BUILDFLAG(SUPPORTS_OZONE_X11)
   is_mouse_button_pressed_ = native_widget_->IsMouseButtonDown();
 #endif
 
@@ -1353,17 +1458,17 @@ void Widget::RunShellDrag(View* view,
     dragged_view_ = nullptr;
     view->OnDragDone();
   }
-  OnDragComplete();
+  OnDragDropCompleted();
 
-  observers_.Notify(&WidgetObserver::OnWidgetDragComplete, this);
+  observers_.Notify(&WidgetObserver::OnWidgetDragDropCompleted, this);
 }
 
-void Widget::CancelShellDrag(View* view) {
+void Widget::CancelDragDropLoop(View* view) {
   if (!native_widget_) {
     return;
   }
 
-  native_widget_->CancelShellDrag(view);
+  native_widget_->CancelDragDropLoop(view);
 }
 
 void Widget::SchedulePaintInRect(const gfx::Rect& rect) {
@@ -1566,10 +1671,13 @@ void Widget::SetCapture(View* view) {
   }
 
   if (!native_widget_->HasCapture()) {
+    WidgetDeletionObserver widget_deletion_observer(this);
     native_widget_->SetCapture();
 
-    // Early return if setting capture was unsuccessful.
-    if (!native_widget_->HasCapture()) {
+    // Early return if this widget was destroyed, the native widget was torn
+    // down, or setting capture was unsuccessful.
+    if (!widget_deletion_observer.IsWidgetAlive() || !native_widget_ ||
+        !native_widget_->HasCapture()) {
       return;
     }
   }
@@ -1644,8 +1752,6 @@ void Widget::OnWindowModalVisibilityChanged(bool visible) {
   //   NativeWidgetMacNSWindowHost::OnSheetModalShown/Closed.
   // - Others: initiated by child Widget, i.e.,
   //   Widget::OnNativeWidgetVisibilityChanged.
-  // - all platforms: initiated by a CLIENT_OWNS_WIDGET child Widget when the
-  //   client destroys it.
   // TODO(crbug.com/450705434): on Windows and Linux the file select dialog is
   // also non-views dialog. Send the notification on showing and closing such
   // dialogs too.
@@ -1930,6 +2036,7 @@ void Widget::OnNativeWidgetVisibilityChanged(bool visible) {
   if (root) {
     root->PropagateVisibilityNotifications(nullptr, visible);
   }
+  ScopedCallStackLock on_stack(this);
   observers_.Notify(&WidgetObserver::OnWidgetVisibilityChanged, this, visible);
   if (GetCompositor() && root && root->layer()) {
     root->layer()->SetVisible(visible);
@@ -2007,6 +2114,7 @@ void Widget::OnNativeWidgetMove() {
   }
   NotifyCaretBoundsChanged(GetInputMethod());
 
+  ScopedCallStackLock on_stack(this);
   observers_.Notify(&WidgetObserver::OnWidgetBoundsChanged, this,
                     GetWindowBoundsInScreen());
 }
@@ -2024,6 +2132,7 @@ void Widget::OnNativeWidgetSizeChanged(const gfx::Size& new_size) {
 
   base::AutoReset auto_reset(&save_window_placement_allowed_, false);
 
+  ScopedCallStackLock on_stack(this);
   observers_.Notify(&WidgetObserver::OnWidgetBoundsChanged, this,
                     GetWindowBoundsInScreen());
 
@@ -2037,11 +2146,21 @@ void Widget::OnNativeWidgetSizeChanged(const gfx::Size& new_size) {
 }
 
 void Widget::OnNativeWidgetUserResizeStarted() {
-  observers_.Notify(&WidgetObserver::OnWidgetUserResizeStarted);
+  observers_.Notify(&WidgetObserver::OnWidgetUserResizeStarted, this);
 }
 
 void Widget::OnNativeWidgetUserResizeEnded() {
-  observers_.Notify(&WidgetObserver::OnWidgetUserResizeEnded);
+  observers_.Notify(&WidgetObserver::OnWidgetUserResizeEnded, this);
+}
+
+void Widget::OnNativeWidgetUserDragStarted() {
+  is_dragging_ = true;
+  observers_.Notify(&WidgetObserver::OnWidgetUserDragStarted, this);
+}
+
+void Widget::OnNativeWidgetUserDragEnded() {
+  is_dragging_ = false;
+  observers_.Notify(&WidgetObserver::OnWidgetUserDragEnded, this);
 }
 
 void Widget::OnNativeWidgetWorkspaceChanged() {}
@@ -2219,7 +2338,12 @@ void Widget::OnMouseCaptureLost() {
 
   View* root_view = GetRootView();
   if (root_view) {
+    auto weak_this = GetWeakPtr();
     root_view->OnMouseCaptureLost();
+    // Widget may be deleted upon the capture lost event.
+    if (!weak_this) {
+      return;
+    }
   }
   is_mouse_button_pressed_ = false;
 }
@@ -2315,6 +2439,66 @@ bool Widget::ShouldDescendIntoChildForEventHandling(
     return false;
   }
 
+  if (!base::FeatureList::IsEnabled(
+          views::features::kNativeViewHostManagesLayers)) {
+    return ShouldDescendIntoChildForEventHandlingDeprecated(
+        root_layer, child, child_layer, location);
+  }
+
+  if (!child_layer) {
+    return true;
+  }
+
+  ui::Layer* target_layer = nullptr;
+  View* target_view = GetRootView()->GetEventHandlerForPoint(location);
+  while (target_view && !target_layer) {
+    target_layer = target_view->layer();
+    if (!target_layer) {
+      target_view = target_view->parent();
+    }
+  }
+
+  if (target_layer == root_layer) {
+    return true;
+  }
+
+  CHECK_NE(child_layer, target_layer);
+
+  LayerRelation relation = GetLayerRelation(target_layer, child_layer);
+
+  switch (relation.type) {
+    case LayerRelation::Type::kFirstIsChildOfSecond:
+      // target_layer is child of child_layer (inclusive).
+      // Views are inside child window. Views are on top.
+      return false;
+
+    case LayerRelation::Type::kSecondIsChildOfFirst:
+      // child_layer is child of target_layer (exclusive).
+      // Child window is inside views container. Child is on top.
+      return true;
+
+    case LayerRelation::Type::kSiblings: {
+      for (const auto& sibling_layer : relation.common_parent->children()) {
+        if (sibling_layer == relation.ancestor_of_first) {
+          return true;
+        }
+        if (sibling_layer == relation.ancestor_of_second) {
+          return false;
+        }
+      }
+      NOTREACHED();
+    }
+
+    case LayerRelation::Type::kDisjoint:
+      return true;
+  }
+}
+
+bool Widget::ShouldDescendIntoChildForEventHandlingDeprecated(
+    ui::Layer* root_layer,
+    gfx::NativeView child,
+    ui::Layer* child_layer,
+    const gfx::Point& location) {
   const View::Views& views_with_layers = GetViewsWithLayersInZOrder();
   if (views_with_layers.empty()) {
     return true;
@@ -2511,6 +2695,20 @@ bool Widget::AreScreenshotsAllowed() {
   return native_widget_ ? native_widget_->AreScreenshotsAllowed() : true;
 }
 
+#if BUILDFLAG(IS_WIN)
+void Widget::SetExcludeFromScreenCapture(bool exclude) {
+  if (native_widget_) {
+    native_widget_->SetExcludeFromScreenCapture(exclude);
+  }
+
+  // Propagate the exclusion property to children to ensure that context menus,
+  // etc. are also updated.
+  ForEachOwnedWidget(GetNativeView(), [exclude](Widget* child) {
+    child->SetExcludeFromScreenCapture(exclude);
+  });
+}
+#endif
+
 void Widget::UpdateAccessibleNameForRootView() {
   if (root_view_) {
     root_view_->UpdateAccessibleName();
@@ -2546,9 +2744,9 @@ void Widget::DestroyRootView() {
   root_view_.reset();
 }
 
-void Widget::OnDragWillStart() {}
+void Widget::OnDragDropWillStart() {}
 
-void Widget::OnDragComplete() {}
+void Widget::OnDragDropCompleted() {}
 
 const ui::NativeTheme* Widget::GetNativeTheme() const {
   if (native_theme_) {
@@ -2755,9 +2953,9 @@ void Widget::HandleShowRequested() {
 }
 
 void Widget::HandleWidgetDestroying() {
-  if (native_widget_destroyed_) {
-    return;
-  }
+  CHECK(!native_widget_destroyed_);
+  CHECK(!widget_destroying_handled_);
+  widget_destroying_handled_ = true;
   ClearFocusManagerFromWidget();
   if (parent_) {
     parent_->OnChildRemoved(this);
@@ -2772,15 +2970,16 @@ void Widget::HandleWidgetDestroying() {
 }
 
 void Widget::HandleWidgetDestroyed() {
+  // This check may fail if Automation Framework manipulates the window hierarchy
+  // on Windows. Specifically, if Chrome's hwnd is re-parented to a hwnd created
+  // by a different thread and then the parent hwnd is closed, Chrome will
+  // receive WM_NCDESTROY (which calls OnNativeWidgetDestroying) without a
+  // preceding WM_DESTROY (which calls OnNativeWidgetDestroyed).
+  // We intentionally leave this failure. Please see crbug.com/540755275 for the
+  // discussion.
+  CHECK(widget_destroying_handled_);
   if (native_widget_destroyed_) {
     return;
-  }
-
-  // The widget can still be visible. This happens on macOS when
-  // the client destroys a CLIENT_OWNS_WIDGET widget. The OS has no
-  // chance to send us a visibility change event.
-  if (IsVisible()) {
-    MaybeNotifyParentAboutWindowModalVisibilityChanged(false);
   }
 
   ax_mode_observation_.Reset();

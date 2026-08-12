@@ -18,7 +18,6 @@
 #import "components/gcm_driver/instance_id/instance_id_driver.h"
 #import "components/optimization_guide/core/optimization_guide_features.h"
 #import "components/prefs/pref_service.h"
-#import "components/sharing_message/buildflags.h"
 #import "components/sharing_message/pref_names.h"
 #import "components/sharing_message/sharing_constants.h"
 #import "components/sharing_message/sharing_device_registration_result.h"
@@ -29,7 +28,6 @@
 #import "components/sync_device_info/device_info.h"
 
 using instance_id::InstanceID;
-using sync_pb::SharingSpecificFields;
 
 IOSSharingDeviceRegistrationImpl::IOSSharingDeviceRegistrationImpl(
     PrefService* pref_service,
@@ -128,7 +126,7 @@ void IOSSharingDeviceRegistrationImpl::OnSharingTargetInfoRetrieved(
     return;
   }
 
-  std::set<SharingSpecificFields::EnabledFeatures> enabled_features =
+  std::set<syncer::DeviceInfo::SharingFeature> enabled_features =
       GetEnabledFeatures();
   syncer::DeviceInfo::SharingInfo sharing_info(
       sharing_target_info ? std::move(*sharing_target_info)
@@ -191,30 +189,23 @@ void IOSSharingDeviceRegistrationImpl::OnFCMTokenDeleted(
   NOTREACHED();
 }
 
-std::set<SharingSpecificFields::EnabledFeatures>
+std::set<syncer::DeviceInfo::SharingFeature>
 IOSSharingDeviceRegistrationImpl::GetEnabledFeatures() const {
   // Used in tests
   if (enabled_features_testing_value_) {
     return enabled_features_testing_value_.value();
   }
 
-  std::set<SharingSpecificFields::EnabledFeatures> enabled_features;
+  std::set<syncer::DeviceInfo::SharingFeature> enabled_features;
 
   if (IsOptimizationGuidePushNotificationSupported()) {
     enabled_features.insert(
-        SharingSpecificFields::OPTIMIZATION_GUIDE_PUSH_NOTIFICATION);
+        syncer::DeviceInfo::SharingFeature::kOptimizationGuidePushNotification);
   }
 
   return enabled_features;
 }
 
-bool IOSSharingDeviceRegistrationImpl::IsClickToCallSupported() const {
-  return false;
-}
-
-bool IOSSharingDeviceRegistrationImpl::IsSharedClipboardSupported() const {
-  return false;
-}
 
 bool IOSSharingDeviceRegistrationImpl::IsSmsFetcherSupported() const {
   return false;
@@ -224,13 +215,23 @@ bool IOSSharingDeviceRegistrationImpl::IsRemoteCopySupported() const {
   return false;
 }
 
+bool IOSSharingDeviceRegistrationImpl::IsOneTimeTokenBackendNotificationSupported()
+    const {
+  return false;
+}
+
 bool IOSSharingDeviceRegistrationImpl::
     IsOptimizationGuidePushNotificationSupported() const {
   return optimization_guide::features::IsOptimizationHintsEnabled() &&
          optimization_guide::features::IsPushNotificationsEnabled();
 }
 
+bool IOSSharingDeviceRegistrationImpl::IsGlicExperimentalTriggeringSupported()
+    const {
+  return false;
+}
+
 void IOSSharingDeviceRegistrationImpl::SetEnabledFeaturesForTesting(
-    std::set<SharingSpecificFields::EnabledFeatures> enabled_features) {
+    std::set<syncer::DeviceInfo::SharingFeature> enabled_features) {
   enabled_features_testing_value_ = std::move(enabled_features);
 }

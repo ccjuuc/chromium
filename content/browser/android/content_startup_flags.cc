@@ -7,6 +7,7 @@
 #include "base/android/android_info.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/scoped_add_feature_flags.h"
 #include "base/system/sys_info.h"
 #include "cc/base/switches.h"
 #include "components/input/switches.h"
@@ -18,7 +19,9 @@
 #include "device/vr/public/cpp/features.h"
 #endif
 #include "gpu/command_buffer/service/gpu_switches.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/pointer/pointer_device.h"
 #include "ui/base/ui_base_switches.h"
 
 namespace content {
@@ -41,6 +44,10 @@ void SetContentCommandLineFlags(bool single_process) {
   }
 
   parsed_command_line->AppendSwitch(switches::kEnableViewport);
+  if (base::FeatureList::IsEnabled(features::kAndroidDesktopStyleScrollbars)) {
+    parsed_command_line->AppendSwitch(
+        blink::switches::kEnableDesktopAndroidScrollbars);
+  }
   parsed_command_line->AppendSwitch(input::switches::kValidateInputEventStream);
 
   if (base::android::android_info::sdk_int() >=
@@ -63,8 +70,8 @@ void SetContentCommandLineFlags(bool single_process) {
 
 #if BUILDFLAG(IS_ANDROID) && BUILDFLAG(ENABLE_VR)
   if (device::features::IsXrDevice()) {
-    parsed_command_line->AppendSwitchASCII(switches::kEnableFeatures,
-                                           "XrDevice");
+    base::ScopedAddFeatureFlags scoped_add_features(parsed_command_line);
+    scoped_add_features.EnableIfNotSet(blink::features::kXrDevice);
   }
 #endif
 }

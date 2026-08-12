@@ -21,7 +21,10 @@ enum class ContentSuggestionsModuleType;
 
 // Base object for all Magic Stack modules configs. Subclass this class when
 // creating a new module config.
-@interface MagicStackModule : NSObject
+@interface MagicStackModule : NSObject <NSCopying>
+
+// The updates to properties must be reflected in the copy method.
+// LINT.IfChange(Copy)
 
 // The type of the module config.
 @property(nonatomic, assign, readonly) ContentSuggestionsModuleType type;
@@ -36,6 +39,14 @@ enum class ContentSuggestionsModuleType;
 
 // The delegate of the module.
 @property(nonatomic, weak) id<MagicStackModuleDelegate> delegate;
+
+// LINT.ThenChange(magic_stack_module.mm:Copy)
+
+// Returns YES if this class instance has different contents from `config`.
+// Each subclass should implement this to differentiate when updating a card
+// (e.g. Tab Resumption has new URL).
+- (BOOL)hasDifferentContentsFromConfig:(MagicStackModule*)config
+    NS_REQUIRES_SUPER;
 
 @end
 

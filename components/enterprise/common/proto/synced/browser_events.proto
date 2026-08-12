@@ -24,6 +24,7 @@ enum EventResult {
   EVENT_RESULT_DATA_MASKED = 6;
   EVENT_RESULT_DATA_UNMASKED = 7;
   EVENT_RESULT_FORCED_SAVE_TO_CLOUD = 8;
+  EVENT_RESULT_CANCELLED_BY_USER = 9;
 }
 
 // The reporting target of the events.
@@ -40,6 +41,7 @@ enum ContentTransferMethod {
   CONTENT_TRANSFER_METHOD_FILE_PICKER = 1;
   CONTENT_TRANSFER_METHOD_DRAG_AND_DROP = 2;
   CONTENT_TRANSFER_METHOD_FILE_PASTE = 3;
+  CONTENT_TRANSFER_METHOD_CLIPBOARD_COPY = 4;
 }
 
 message CrowdstrikeAgent {
@@ -208,6 +210,7 @@ message TriggeredRuleInfo {
     WARN = 2;
     BLOCK = 3;
     FORCE_SAVE_TO_CLOUD = 4;
+    KEEP_IN_MANAGED_CHROME = 5;
   }
 
   Action action = 5;
@@ -362,7 +365,7 @@ message UrlInfo {
 }
 
 // A message for reporting password reuse events.
-// Next ID: 16.
+// Next ID: 18.
 message SafeBrowsingPasswordReuseEvent {
   reserved 5, 6, 7, 8, 9, 10;
 
@@ -402,6 +405,13 @@ message SafeBrowsingPasswordReuseEvent {
 
   // Security agent installed on the device
   repeated SecurityAgent security_agents = 15;
+
+  // URL info of the URL that triggered the event.
+  UrlInfo url_info = 16;
+
+  // The referrers of the webpage that sent the user to the url that triggered
+  // the event.
+  repeated UrlInfo referrers = 17;
 }
 
 // A message for reporting password change events.
@@ -589,6 +599,7 @@ enum DataTransferEventTrigger {
   PAGE_PRINT = 4;
   URL_VISITED = 6;
   CLIPBOARD_COPY = 7;
+  NETWORK_REQUEST = 11;
 
   // Trigger for file transfers on ChromeOS.
   FILE_TRANSFER = 5;
@@ -671,7 +682,7 @@ message SafeBrowsingInterstitialEvent {
 }
 
 // A DLP (Data Loss Prevention) event where sensitive data may have leaked.
-// Next ID: 37.
+// Next ID: 40.
 message DlpSensitiveDataEvent {
   reserved 6, 9, 10, 11, 12, 13, 15, 25;
 
@@ -772,6 +783,9 @@ message DlpSensitiveDataEvent {
   // the event.
   repeated UrlInfo referrers = 33;
 
+  // URL info of the URL of the tab.
+  UrlInfo tab_url_info = 37;
+
   // URLs in the iframes.
   repeated string iframe_urls = 34
       // copybara:datapol_begin
@@ -799,11 +813,32 @@ message DlpSensitiveDataEvent {
       // ]
       // copybara:datapol_end
       ;
+
+  // The Microsoft sensitivity (MIP) label for the file associated with the URL
+  // in the request. Only present for Microsoft M365 sites.
+  string microsoft_sensitivity_label_name = 38
+      // copybara:datapol_begin
+      // [
+      //   (datapol.semantic_type) = ST_UNSTRUCTURED_ADMIN_SETTING
+      // ]
+      // copybara:datapol_end
+      ;
+
+  // The Microsoft sensitivity (MIP) label for the file associated with the URL
+  // of the copied text in the request for paste event only. Only present for
+  // Microsoft M365 sites.
+  string source_microsoft_sensitivity_label_name = 39
+      // copybara:datapol_begin
+      // [
+      //   (datapol.semantic_type) = ST_UNSTRUCTURED_ADMIN_SETTING
+      // ]
+      // copybara:datapol_end
+      ;
 }
 
 // Event where a large file could not be scanned for analysis e.g. malware or
 // DLP.
-// Next ID: 25.
+// Next ID: 29.
 message UnscannedFileEvent {
   reserved 6, 9, 10, 11, 12, 14;
 
@@ -818,6 +853,10 @@ message UnscannedFileEvent {
 
   // SHA256 hash of large unscanned file.
   string download_digest_sha_256 = 4;
+
+  // The id of the scan. This will be shared by all events that are triggered
+  // from a single scan, and may be empty unless a metadata scan was performed.
+  string scan_id = 25;
 
   // Trigger category that generated this event.
   DataTransferEventTrigger trigger = 5;
@@ -858,6 +897,7 @@ message UnscannedFileEvent {
     SERVICE_UNAVAILABLE = 7;
     TOO_MANY_REQUESTS = 8;
     TIMEOUT = 9;
+    USER_CANCELLED = 10;
   }
 
   UnscannedReason unscanned_reason = 18;
@@ -888,6 +928,16 @@ message UnscannedFileEvent {
 
   // The user action led to a content transfer event.
   ContentTransferMethod content_transfer_method = 24;
+
+  // URL info of the URL that triggered the event.
+  UrlInfo url_info = 26;
+
+  // The referrers of the webpage that sent the user to the url that triggered
+  // the event.
+  repeated UrlInfo referrers = 27;
+
+  // URL info of the URL of the tab.
+  UrlInfo tab_url_info = 28;
 }
 
 // Event that indicates that content was transferred.
@@ -1026,7 +1076,7 @@ message ContentTransferEvent {
 // Event sent when a user successfully logs in to a website, as determined by
 // Chrome's password manager.
 //
-// Next ID: 8.
+// Next ID: 10.
 message LoginEvent {
   // The URL on which the login took place.
   string url = 1;
@@ -1058,6 +1108,13 @@ message LoginEvent {
 
   // Security agent installed on the device
   repeated SecurityAgent security_agents = 7;
+
+  // URL info of the URL that triggered the event.
+  UrlInfo url_info = 8;
+
+  // The referrers of the webpage that sent the user to the url that triggered
+  // the event.
+  repeated UrlInfo referrers = 9;
 }
 
 // Event sent when the Chrome Password Manager detects that a user's password
@@ -1223,7 +1280,7 @@ message BrowserCrashEvent {
   repeated SecurityAgent security_agents = 7;
 }
 
-// Next ID: 14
+// Next ID: 15.
 message UrlFilteringInterstitialEvent {
   // Top level URL that triggers this interstitial.
   string url = 1;
@@ -1290,6 +1347,10 @@ message UrlFilteringInterstitialEvent {
       // ]
       // copybara:datapol_end
       ;
+
+  // The total scan time in milliseconds on the server side before reporting
+  // this event.
+  int64 server_scan_latency_millis = 14;
 }
 
 // Next ID: 5
@@ -1325,6 +1386,8 @@ message ExtensionTelemetryEvent {
 // Event sent when a user navigates to a URL.
 // Next ID: 7
 message UrlNavigationEvent {
+  reserved 5;
+
   // Tab URL of the navigation.
   UrlInfo url_info = 1;
 
@@ -1351,13 +1414,12 @@ message UrlNavigationEvent {
       // ]
       // copybara:datapol_end
       ;
-
-  // Security agent installed on the device
-  repeated SecurityAgent security_agents = 5;
 }
 
 // Event for suspicious site visits.
 message SuspiciousURLEvent {
+  reserved 5;
+
   // Tab URL of the navigation.
   UrlInfo url_info = 1;
 
@@ -1378,9 +1440,6 @@ message SuspiciousURLEvent {
       // ]
       // copybara:datapol_end
       ;
-
-  // Security agent installed on the device
-  repeated SecurityAgent security_agents = 5;
 }
 
 message TelomereEvent {
@@ -1398,4 +1457,14 @@ message TelomereEvent {
 
   // List of telomere events.
   repeated TelomereLog logs = 1;
+}
+
+// Event sent when a browser is launched.
+// Next ID: 3.
+message BrowserLaunchEvent {
+  // Timestamp of the browser launch in milliseconds since Unix epoch.
+  int64 launch_time_millis = 1;
+
+  // List of CLI switch keys used to launch the browser.
+  repeated string command_line_switch_keys = 2;
 }

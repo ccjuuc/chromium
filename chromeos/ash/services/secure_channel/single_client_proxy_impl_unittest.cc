@@ -6,9 +6,7 @@
 
 #include <memory>
 #include <string>
-#include <unordered_set>
 
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -28,6 +26,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace ash::secure_channel {
 
@@ -161,7 +160,7 @@ class SecureChannelSingleClientProxyImplTest : public testing::Test {
   }
 
   bool WasMessageSent(int message_counter) {
-    return base::Contains(sent_message_counters_, message_counter);
+    return sent_message_counters_.contains(message_counter);
   }
 
   void DisconnectFromClientSide() {
@@ -283,7 +282,7 @@ class SecureChannelSingleClientProxyImplTest : public testing::Test {
       fake_nearby_connection_state_listener_;
 
   int next_message_counter_ = 0;
-  std::unordered_set<int> sent_message_counters_;
+  absl::flat_hash_set<int> sent_message_counters_;
 
   mojom::ConnectionMetadataPtr last_metadata_from_channel_;
 

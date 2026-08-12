@@ -65,6 +65,8 @@ namespace {{namespace}} {
   (property.is_visited_highlight_colors and 'kVisitedHighlightColors' or ''),
   (property.valid_for_highlight and 'kValidForHighlight' or ''),
   (property.logical_property_group and 'kInLogicalPropertyGroup' or ''),
+  (property.percentages_depend_on_used_value and 'kPercentagesDependOnUsedValue' or ''),
+  (property.percentages_depend_on_used_value == False and 'kPercentagesDoNotDependOnUsedValue' or ''),
 ] | reject('==', '') | join(' | ') %}
 {% set ctor_args = (not is_alias and [property_id, flags, separator] or []) %}
 // {{property.name}}
@@ -99,6 +101,9 @@ class CORE_EXPORT {{class_name}} final : public {{property.superclass}} {
   {% for property_method in property.property_methods %}
   {{property_method.return_type}} {{property_method.name}}{{property_method.parameters}} const override;
   {% endfor %}
+  {% if property.parse_helper %}
+  const CSSValue* ParseSingleValue(CSSParserTokenStream&, const CSSParserContext&, CSSParserLocalContext&) const override;
+  {% endif %}
   {% if property.logical_property_group %}
   bool IsInSameLogicalPropertyGroupWithDifferentMappingLogic(CSSPropertyID) const override;
     {% if property.logical_property_group.is_logical %}
@@ -121,7 +126,7 @@ class CORE_EXPORT {{class_name}} final : public {{property.superclass}} {
   {% if property.style_builder_declare %}
   void ApplyInitial(StyleResolverState&) const override;
   void ApplyInherit(StyleResolverState&) const override;
-  void ApplyValue(StyleResolverState&, const CSSValue&, ValueMode) const override;
+  void ApplyValue(StyleResolverState&, const CSSValue&, ValueModeFlags) const override;
   {% endif %}
   {% if property.includes_currentcolor %}
   [[nodiscard]] bool IsAffectedByCurrentColor(const ComputedStyle& style) const override;

@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import("//components/guest_view/buildflags/buildflags.gni")
+import("//extensions/buildflags/buildflags.gni")
 
 source_set("serial") {
   sources = [
@@ -51,6 +52,7 @@ source_set("impl") {
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
+    "//chrome/browser/ui/dialogs",
     "//chrome/browser/ui/serial",
     "//chrome/common:constants",
     "//components/content_settings/core/common",
@@ -66,7 +68,7 @@ source_set("impl") {
     "//url",
   ]
 
-  if (enable_guest_view) {
+  if (enable_guest_view && enable_extensions_core) {
     deps += [ "//extensions/browser" ]
   }
 
@@ -84,7 +86,10 @@ source_set("impl") {
       "android/serial_bridge.cc",
       "android/web_serial_chooser_android.cc",
     ]
-    deps += [ "//chrome/browser/serial/android:jni_headers" ]
+    deps += [
+      "//chrome/browser/serial/android:jni_headers",
+      "//chrome/browser/ui/android/device_dialog",
+    ]
   }
 
   public_deps = [ "//chrome/browser:browser_public_dependencies" ]
@@ -93,6 +98,7 @@ source_set("impl") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "chrome_serial_delegate_unittest.cc",
     "serial_blocklist_unittest.cc",
     "serial_chooser_context_unittest.cc",
     "serial_policy_allowed_ports_unittest.cc",

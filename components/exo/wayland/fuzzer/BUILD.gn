@@ -81,6 +81,7 @@ if (use_fuzzing_engine_with_lpm) {
 
     deps = [
       ":actions",
+      ":actions_fuzzable",
       ":harness",
       ":server_environment",
       "//base",

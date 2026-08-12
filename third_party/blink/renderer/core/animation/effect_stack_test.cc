@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_cssnumericvalue_double.h"
 #include "third_party/blink/renderer/core/animation/animation_clock.h"
 #include "third_party/blink/renderer/core/animation/animation_test_helpers.h"
+#include "third_party/blink/renderer/core/animation/document_animations.h"
 #include "third_party/blink/renderer/core/animation/document_timeline.h"
 #include "third_party/blink/renderer/core/animation/element_animations.h"
 #include "third_party/blink/renderer/core/animation/interpolable_length.h"
@@ -20,6 +21,7 @@
 #include "third_party/blink/renderer/core/css/css_numeric_literal_value.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
@@ -51,7 +53,12 @@ class AnimationEffectStackTest : public PageTestBase {
   void UpdateTimeline(base::TimeDelta time) {
     GetDocument().GetAnimationClock().UpdateTime(
         GetDocument().Timeline().CalculateZeroTime() + time);
-    timeline->ServiceAnimations(kTimingUpdateForAnimationFrame);
+    // Run full animation timing update, which includes removing replaced
+    // animations.
+    GetDocument()
+        .GetDocumentAnimations()
+        .UpdateAnimationTimingForAnimationFrame();
+    SimulateMicrotask();
   }
 
   size_t SampledEffectCount() {
@@ -119,6 +126,10 @@ class AnimationEffectStackTest : public PageTestBase {
     EXPECT_TRUE(typed_value->GetInterpolableValue().IsNumber());
     return To<InterpolableNumber>(&typed_value->GetInterpolableValue())
         ->Value(CSSToLengthConversionData(/*element=*/nullptr));
+  }
+
+  void SimulateMicrotask() {
+    GetDocument().GetAgent().event_loop()->PerformMicrotaskCheckpoint();
   }
 
   Persistent<DocumentTimeline> timeline;

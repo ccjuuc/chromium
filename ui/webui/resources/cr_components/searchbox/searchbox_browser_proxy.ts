@@ -6,13 +6,18 @@
  * @fileoverview This file provides a singleton class that exposes the Mojo
  * handler interface used for bidirectional communication between the
  * <cr-searchbox> or the <cr-searchbox-dropdown> and the browser.
+ *
+ * Testing helpers are located here to prevent duplication across various
+ * WebUI test suites (e.g., New Tab Page, Omnibox Popup, Lens) that share
+ * these Mojo-based searchbox types.
  */
 
-import type {AutocompleteMatch, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
-import {PageCallbackRouter, PageHandler} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import type {AutocompleteMatch, AutocompleteResult, MatchKeywordModel, PageHandlerInterface} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {KeywordType, PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
-export function createAutocompleteMatch(): AutocompleteMatch {
-  return {
+export function createAutocompleteMatch(
+    modifiers: Partial<AutocompleteMatch> = {}): AutocompleteMatch {
+  const base: AutocompleteMatch = {
     isHidden: false,
     a11yLabel: '',
     actions: [],
@@ -26,13 +31,14 @@ export function createAutocompleteMatch(): AutocompleteMatch {
     contentsClass: [{offset: 0, style: 0}],
     description: '',
     descriptionClass: [{offset: 0, style: 0}],
-    destinationUrl: {url: ''},
+    destinationUrl: '',
     inlineAutocompletion: '',
     fillIntoEdit: '',
     iconPath: '',
-    iconUrl: {url: ''},
+    iconUrl: '',
     imageDominantColor: '',
     imageUrl: '',
+    isContextualSuggestion: false,
     isNoncannedAimSuggestion: false,
     removeButtonA11yLabel: '',
     type: '',
@@ -40,10 +46,53 @@ export function createAutocompleteMatch(): AutocompleteMatch {
     isWeatherAnswerSuggestion: null,
     answer: null,
     tailSuggestCommonPrefix: null,
-    hasInstantKeyword: false,
-    keywordChipHint: '',
-    keywordChipA11y: '',
+    keywordModel: null,
   };
+
+  return Object.assign(base, modifiers);
+}
+
+export function createAutocompleteResultForTesting(
+    modifiers: Partial<AutocompleteResult> = {}): AutocompleteResult {
+  const base: AutocompleteResult = {
+    queryId: 0,
+    input: '',
+    matches: [],
+    suggestionGroupsMap: {},
+    smartComposeInlineHint: null,
+    sequenceId: 0,
+  };
+
+  return Object.assign(base, modifiers);
+}
+
+export function createSearchMatchForTesting(
+    modifiers: Partial<AutocompleteMatch> = {}): AutocompleteMatch {
+  const base = createAutocompleteMatch({
+    isSearchType: true,
+    contents: 'hello world',
+    contentsClass: [{offset: 0, style: 0}],
+    description: 'Google search',
+    descriptionClass: [{offset: 0, style: 4}],
+    destinationUrl: 'https://www.google.com/search?q=hello+world',
+    fillIntoEdit: 'hello world',
+    type: 'search-what-you-typed',
+  });
+
+  return Object.assign(base, modifiers);
+}
+
+export function createMatchKeywordModelForTesting(
+    modifiers: Partial<MatchKeywordModel> = {}): MatchKeywordModel {
+  const base = {
+    type: KeywordType.kChip,
+    chipHint: '',
+    chipA11y: '',
+    placeholder: '',
+    keyword: '',
+  };
+
+  return Object.assign(base, modifiers);
 }
 
 export class SearchboxBrowserProxy {
@@ -59,10 +108,13 @@ export class SearchboxBrowserProxy {
   callbackRouter: PageCallbackRouter;
 
   constructor() {
-    this.handler = PageHandler.getRemote();
+    const handler = new PageHandlerRemote();
+    this.handler = handler;
     this.callbackRouter = new PageCallbackRouter();
 
-    this.handler.setPage(this.callbackRouter.$.bindNewPipeAndPassRemote());
+    PageHandlerFactory.getRemote().createPageHandler(
+        this.callbackRouter.$.bindNewPipeAndPassRemote(),
+        handler.$.bindNewPipeAndPassReceiver());
   }
 }
 

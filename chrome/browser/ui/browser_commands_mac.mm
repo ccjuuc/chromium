@@ -29,14 +29,15 @@ void ToggleAlwaysShowToolbarInFullscreen(Browser* browser) {
   DCHECK(browser);
 
   // If this browser belongs to an app, toggle the value for that app.
-  web_app::AppBrowserController* app_controller = browser->app_controller();
+  web_app::AppBrowserController* app_controller =
+      web_app::AppBrowserController::From(browser);
   if (app_controller) {
     app_controller->ToggleAlwaysShowToolbarInFullscreen();
     return;
   }
 
   // Otherwise toggle the value of the preference.
-  PrefService* prefs = browser->profile()->GetPrefs();
+  PrefService* prefs = browser->GetProfile()->GetPrefs();
   bool show_toolbar = prefs->GetBoolean(prefs::kShowFullscreenToolbar);
   prefs->SetBoolean(prefs::kShowFullscreenToolbar, !show_toolbar);
 }
@@ -76,13 +77,14 @@ void ToggleJavaScriptFromAppleEventsAllowed(Browser* browser) {
     return;
   }
 
-  PrefService* prefs = browser->profile()->GetPrefs();
+  PrefService* prefs = browser->GetProfile()->GetPrefs();
   prefs->SetBoolean(prefs::kAllowJavascriptAppleEvents,
                     !prefs->GetBoolean(prefs::kAllowJavascriptAppleEvents));
 }
 
 void RevealToolbarForTesting(Browser* browser) {
-  NSWindow* window = browser->window()->GetNativeWindow().GetNativeNSWindow();
+  NSWindow* window =
+      browser->GetWindow()->GetNativeWindow().GetNativeNSWindow();
   NSThemeFrame* theme_frame =
       base::apple::ObjCCastStrict<NSThemeFrame>(window.contentView.superview);
   [theme_frame setButtonRevealAmount:1.0];

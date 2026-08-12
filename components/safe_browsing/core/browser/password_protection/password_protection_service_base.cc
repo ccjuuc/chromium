@@ -11,12 +11,12 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_reuse_detector.h"
@@ -38,7 +38,7 @@ using PasswordReuseEvent = LoginReputationClientRequest::PasswordReuseEvent;
 
 namespace {
 
-// Keys for storing password protection verdict into a base::Value::Dict.
+// Keys for storing password protection verdict into a base::DictValue.
 const int kRequestTimeoutMs = 10000;
 const char kPasswordProtectionRequestUrl[] =
     "https://sb-ssl.google.com/safebrowsing/clientreport/login";
@@ -206,10 +206,17 @@ void PasswordProtectionServiceBase::RequestFinished(
     // If verdict declares a security sensitive event, log accordingly.
     MaybeRecordSecuritySensitiveEvent(metrics_collector_, verdict);
 
+    ReferrerChain referrer_chain;
+    if (request->request_proto() &&
+        request->request_proto()->frames_size() > 0) {
+      referrer_chain = request->request_proto()->frames(0).referrer_chain();
+    }
+
     MaybeReportPasswordReuseDetected(
         request->main_frame_url(), request->username(),
         request->password_type(),
-        verdict == LoginReputationClientResponse::PHISHING, warning_shown);
+        verdict == LoginReputationClientResponse::PHISHING, warning_shown,
+        referrer_chain);
 
     // Persist a bit in CompromisedCredentials table when saved password is
     // reused on a phishing or low reputation site.

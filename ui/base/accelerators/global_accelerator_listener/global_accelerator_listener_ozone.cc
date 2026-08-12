@@ -4,15 +4,16 @@
 
 #include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener_ozone.h"
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "build/config/linux/dbus/buildflags.h"
-#include "content/public/browser/browser_thread.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/ozone/public/ozone_platform.h"
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener_chromeos.h"
+#elif BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
 #include "base/environment.h"
 #include "base/feature_list.h"
 #include "base/nix/xdg_util.h"
@@ -20,8 +21,6 @@
 #include "build/branding_buildflags.h"
 #include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener_linux.h"
 #endif
-
-using content::BrowserThread;
 
 namespace {
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
@@ -42,29 +41,35 @@ namespace ui {
 
 // static
 GlobalAcceleratorListener* GlobalAcceleratorListener::GetInstance() {
-  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   static const base::NoDestructor<std::unique_ptr<GlobalAcceleratorListener>>
       instance(GlobalAcceleratorListenerOzone::Create());
   if (instance->get()) {
     return instance->get();
   }
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+#if BUILDFLAG(IS_CHROMEOS)
+  static const base::NoDestructor<std::unique_ptr<GlobalAcceleratorListener>>
+      chromeos_instance(GlobalAcceleratorListenerChromeOS::Create());
+  return chromeos_instance->get();
+#elif BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
   // ListShortcuts on GNOME will return an empty list when the session is
   // created, making this class incorrectly believe it must rebind all
   // shortcuts, leading to a dialog shown on every browser start.
   // https://gitlab.gnome.org/GNOME/xdg-desktop-portal-gnome/-/issues/185
   auto env = base::Environment::Create();
-  if (base::nix::GetDesktopEnvironment(env.get()) !=
-          base::nix::DESKTOP_ENVIRONMENT_GNOME &&
-      base::FeatureList::IsEnabled(kGlobalShortcutsPortal)) {
+  const bool is_gnome = base::nix::GetDesktopEnvironment(env.get()) ==
+                        base::nix::DESKTOP_ENVIRONMENT_GNOME;
+  const bool should_create_listener =
+      base::FeatureList::IsEnabled(kGlobalShortcutsPortal) &&
+      (!is_gnome || base::FeatureList::IsEnabled(
+                        features::kGlobalShortcutsPortalPreferredTrigger));
+  if (should_create_listener) {
     static GlobalAcceleratorListenerLinux* const linux_instance =
         new GlobalAcceleratorListenerLinux(nullptr, GetSessionName());
     return linux_instance;
   }
-#endif
-
   return nullptr;
+#endif
 }
 
 // static
@@ -80,8 +85,6 @@ GlobalAcceleratorListenerOzone::Create() {
 
 GlobalAcceleratorListenerOzone::GlobalAcceleratorListenerOzone(
     base::PassKey<GlobalAcceleratorListenerOzone>) {
-  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-
   platform_global_shortcut_listener_ =
       ui::OzonePlatform::GetInstance()->GetPlatformGlobalShortcutListener(this);
 }
@@ -120,7 +123,7 @@ void GlobalAcceleratorListenerOzone::StopListening() {
 
 bool GlobalAcceleratorListenerOzone::StartListeningForAccelerator(
     const ui::Accelerator& accelerator) {
-  DCHECK(!base::Contains(registered_hot_keys_, accelerator));
+  DCHECK(!registered_hot_keys_.contains(accelerator));
 
   if (!platform_global_shortcut_listener_) {
     return false;
@@ -138,7 +141,7 @@ bool GlobalAcceleratorListenerOzone::StartListeningForAccelerator(
 
 void GlobalAcceleratorListenerOzone::StopListeningForAccelerator(
     const ui::Accelerator& accelerator) {
-  DCHECK(base::Contains(registered_hot_keys_, accelerator));
+  DCHECK(registered_hot_keys_.contains(accelerator));
   // Otherwise how could the accelerator be registered?
   DCHECK(platform_global_shortcut_listener_);
 

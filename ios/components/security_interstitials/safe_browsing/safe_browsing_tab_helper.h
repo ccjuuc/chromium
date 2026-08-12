@@ -62,6 +62,12 @@ class SafeBrowsingTabHelper
   // Tells delegate to show enhanced safe browsing promo.
   void ShowEnhancedSafeBrowsingInfobar();
 
+  // Reports a security interstitial shown event to the enterprise reporting
+  // service.
+  static void ReportSecurityInterstitialShown(
+      web::WebState* web_state,
+      const security_interstitials::UnsafeResource& resource);
+
  private:
   friend class web::WebStateUserData<SafeBrowsingTabHelper>;
 
@@ -126,18 +132,22 @@ class SafeBrowsingTabHelper
     // a server redirect of the previous main frame query.
     void UpdateForMainFrameServerRedirect();
 
+    SafeBrowsingClient* client() const { return client_; }
+
    private:
     // Represents a single Safe Browsing query URL, along with the corresponding
     // decision once it's received, the callback to invoke once the decision
     // is known, and tracks if the async or sync check for the respective query
     // is complete.
     struct MainFrameUrlQuery {
-      explicit MainFrameUrlQuery(const GURL& url);
+      explicit MainFrameUrlQuery(const GURL& url,
+                                 const std::string& http_method);
       MainFrameUrlQuery(MainFrameUrlQuery&& query);
       MainFrameUrlQuery& operator=(MainFrameUrlQuery&& other);
       ~MainFrameUrlQuery();
 
       GURL url;
+      std::string http_method;
       std::optional<web::WebStatePolicyDecider::PolicyDecision> decision;
       web::WebStatePolicyDecider::PolicyDecisionCallback response_callback;
       bool sync_check_complete = false;

@@ -215,6 +215,13 @@ void MenuHost::ShowMenuHost(bool do_capture) {
   base::AutoReset<bool> reseter(&ignore_capture_lost_, true);
   ShowInactive();
 
+  // ShowInactive() can trigger events that cause the menu to be destroyed
+  // (e.g., focus changes on macOS). If that happened, bail out early to avoid
+  // accessing the now-dangling parent_menu_item_ pointer in submenu_.
+  if (destroying_ || !submenu_) {
+    return;
+  }
+
   if (do_capture) {
     MenuController* menu_controller =
         submenu_->GetMenuItem()->GetMenuController();
@@ -332,14 +339,13 @@ void MenuHost::OnOwnerClosing() {
   }
 }
 
-void MenuHost::OnDragWillStart() {
+void MenuHost::OnDragDropWillStart() {
   MenuController* menu_controller =
       submenu_->GetMenuItem()->GetMenuController();
   DCHECK(menu_controller);
-  menu_controller->OnDragWillStart();
+  menu_controller->OnDragDropWillStart();
 }
-
-void MenuHost::OnDragComplete() {
+void MenuHost::OnDragDropCompleted() {
   // If we are being destroyed there is no guarantee that the menu items are
   // available.
   if (destroying_) {
@@ -354,10 +360,10 @@ void MenuHost::OnDragComplete() {
   bool should_close =
       menu_controller->exit_type() != MenuController::ExitType::kNone;
   if (auto* const delegate = submenu_->GetMenuItem()->GetDelegate()) {
-    should_close |= delegate->ShouldCloseOnDragComplete();
+    should_close |= delegate->ShouldCloseOnDragDropCompleted();
   }
 
-  menu_controller->OnDragComplete(should_close);
+  menu_controller->OnDragDropCompleted(should_close);
 }
 
 Widget* MenuHost::GetPrimaryWindowWidget() {

@@ -64,9 +64,9 @@ class BrowserCommandHandler : public CommandUpdaterDelegate,
                       ExecuteCommandCallback callback) override;
 
   // CommandUpdaterDelegate:
-  void ExecuteCommandWithDisposition(
-      int command_id,
-      WindowOpenDisposition disposition) override;
+  void HandleCommandWithDisposition(int command_id,
+                                    WindowOpenDisposition disposition,
+                                    base::TimeTicks time_stamp) override;
 
   void ConfigureFeedbackCommand(FeedbackCommandSettings settings);
 
@@ -98,8 +98,8 @@ class BrowserCommandHandler : public CommandUpdaterDelegate,
   virtual void OpenAISettings();
   virtual void OpenGlic();
   virtual void OpenGlicSettings();
-  virtual void PrewarmGlicFre();
   virtual void OpenSplitView();
+  virtual void EnableVerticalTabs();
   void StartTabGroupTutorial();
   void OpenNTPAndStartCustomizeChromeTutorial();
   void StartPasswordManagerTutorial();

@@ -564,7 +564,6 @@ class TestWebFrameClient : public WebLocalFrameClient {
       network::mojom::blink::WebSandboxFlags,
       const SessionStorageNamespaceId&,
       bool& consumed_user_gesture,
-      const std::optional<Impression>&,
       const std::optional<WebPictureInPictureWindowOptions>&,
       const WebURL& base_url) override;
 
@@ -579,6 +578,14 @@ class TestWebFrameClient : public WebLocalFrameClient {
   }
   network::mojom::WebSandboxFlags sandbox_flags() const {
     return sandbox_flags_;
+  }
+
+  // Subclasses that override CreateChildFrame() to gave the child frame a
+  // custom TestWebFrameClient subclass lose the propagation of sandbox flags
+  // that is performed in TestWebFrameClient::CreateChildFrame(). This allows
+  // such cases to set the flags manually.
+  void set_sandbox_flags(network::mojom::WebSandboxFlags flags) {
+    sandbox_flags_ = flags;
   }
 
   void DestroyChildViews();

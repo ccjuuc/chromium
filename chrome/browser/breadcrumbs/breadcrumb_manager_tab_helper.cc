@@ -17,10 +17,10 @@
 namespace {
 
 bool IsNtpUrl(const GURL& url) {
-  const std::string origin = url.DeprecatedGetOriginAsURL().spec();
-  return origin == chrome::kChromeUINewTabURL ||
-         origin == chrome::kChromeUINewTabPageURL ||
-         origin == chrome::kChromeUINewTabPageThirdPartyURL;
+  const GURL origin = url.DeprecatedGetOriginAsURL();
+  return origin == chrome::ChromeUINewTabURLAsGURL() ||
+         origin == chrome::ChromeUINewTabPageURLAsGURL() ||
+         origin.spec() == chrome::kChromeUINewTabPageThirdPartyURL;
 }
 
 }  // namespace
@@ -36,8 +36,14 @@ BreadcrumbManagerTabHelper::BreadcrumbManagerTabHelper(
 BreadcrumbManagerTabHelper::~BreadcrumbManagerTabHelper() = default;
 
 void BreadcrumbManagerTabHelper::PlatformLogEvent(const std::string& event) {
+  // web_contents() securely returns nullptr if the WebContents is tearing down.
+  // Events emitted by other UserData objects during destruction are ignored.
+  if (!web_contents()) {
+    return;
+  }
+
   BreadcrumbManagerKeyedServiceFactory::GetForBrowserContext(
-      GetWebContents().GetBrowserContext())
+      web_contents()->GetBrowserContext())
       ->AddEvent(event);
 }
 

@@ -8,7 +8,7 @@
 #include "base/check_op.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_field.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data_field.h"
 #include "third_party/blink/renderer/core/html/closewatcher/close_watcher.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html_element_type_helpers.h"
@@ -22,7 +22,7 @@ namespace blink {
 //   - elements with the popovertarget attribute
 //   - elements with the interestfor attribute
 class InvokerData final : public GarbageCollected<InvokerData>,
-                          public ElementRareDataField {
+                          public NodeRareDataField {
  public:
   InvokerData() = default;
   InvokerData(const InvokerData&) = delete;
@@ -52,7 +52,6 @@ class InvokerData final : public GarbageCollected<InvokerData>,
   }
   void CancelInterestGainedTask() { interest_gained_task_.Cancel(); }
   void SetInterestGainedTask(TaskHandle&& task) {
-    DCHECK(RuntimeEnabledFeatures::HTMLInterestForAttributeEnabled());
     DCHECK(!interest_gained_task_.IsActive());
     interest_gained_task_ = std::move(task);
   }
@@ -60,15 +59,21 @@ class InvokerData final : public GarbageCollected<InvokerData>,
   bool HasInterestLostTask() const { return interest_lost_task_.IsActive(); }
   void CancelInterestLostTask() { interest_lost_task_.Cancel(); }
   void SetInterestLostTask(TaskHandle&& task) {
-    DCHECK(RuntimeEnabledFeatures::HTMLInterestForAttributeEnabled());
     DCHECK(!interest_lost_task_.IsActive());
     interest_lost_task_ = std::move(task);
+  }
+
+  bool SuppressNextFocusInterest() const {
+    return suppress_next_focus_interest_;
+  }
+  void SetSuppressNextFocusInterest(bool suppress) {
+    suppress_next_focus_interest_ = suppress;
   }
 
   void Trace(Visitor* visitor) const override {
     visitor->Trace(invoked_popover_);
     visitor->Trace(active_interest_target_);
-    ElementRareDataField::Trace(visitor);
+    NodeRareDataField::Trace(visitor);
   }
 
  private:
@@ -77,6 +82,7 @@ class InvokerData final : public GarbageCollected<InvokerData>,
   Element::InterestState interest_state_{Element::InterestState::kNoInterest};
   Member<HTMLElement> invoked_popover_;
   Member<Element> active_interest_target_;
+  bool suppress_next_focus_interest_{false};
 };
 
 }  // namespace blink

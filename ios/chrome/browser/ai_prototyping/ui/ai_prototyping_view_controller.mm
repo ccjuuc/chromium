@@ -4,11 +4,15 @@
 
 #import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_view_controller.h"
 
+#import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_actor_view_controller.h"
+#import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_apc_view_controller.h"
 #import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_calendar_view_controller.h"
 #import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_consumer.h"
 #import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_freeform_view_controller.h"
 #import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_tab_organization_view_controller.h"
+#import "ios/chrome/browser/ai_prototyping/ui/ai_prototyping_ui_catalog_view_controller.h"
 #import "ios/chrome/browser/ai_prototyping/utils/ai_prototyping_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
@@ -20,6 +24,9 @@
 
   // The controller allowing for navigation between the menu sheets.
   UIPageViewController* _pageController;
+
+  // The view controller for the actor tools page.
+  AIPrototypingActorViewController* _actorViewController;
 }
 
 @end
@@ -29,15 +36,21 @@
 - (instancetype)init {
   self = [super init];
   if (self) {
+    _actorViewController = [[AIPrototypingActorViewController alloc]
+        initForFeature:AIPrototypingFeature::kActorTools];
     _menuPages = [NSArray
         arrayWithObjects:
             [[AIPrototypingFreeformViewController alloc]
                 initForFeature:AIPrototypingFeature::kFreeform],
+            [[AIPrototypingUICatalogNavigationController alloc]
+                initForFeature:AIPrototypingFeature::kUICatalog],
             [[AIPrototypingTabOrganizationViewController alloc]
                 initForFeature:AIPrototypingFeature::kSmartTabGrouping],
             [[AIPrototypingCalendarViewController alloc]
                 initForFeature:AIPrototypingFeature::kEnhancedCalendar],
-            nil];
+            [[AIPrototypingAPCViewController alloc]
+                initForFeature:AIPrototypingFeature::kAPC],
+            _actorViewController, nil];
   }
   return self;
 }
@@ -79,6 +92,35 @@
       break;
     }
   }
+}
+
+- (void)updateRawBytes:(NSString*)rawBytes
+            forFeature:(AIPrototypingFeature)feature {
+  for (UIViewController<AIPrototypingViewControllerProtocol>* viewController in
+           _menuPages) {
+    if (viewController.feature == feature) {
+      if ([viewController respondsToSelector:@selector(updateRawBytes:)]) {
+        [viewController updateRawBytes:rawBytes];
+      }
+      break;
+    }
+  }
+}
+
+- (void)updateWindowId:(NSString*)windowId {
+  [_actorViewController updateWindowId:windowId];
+}
+
+- (void)updateTabList:(NSArray<NSDictionary*>*)tabs {
+  [_actorViewController updateTabList:tabs];
+}
+
+- (void)updateFrameList:(NSArray<NSDictionary*>*)frames {
+  [_actorViewController updateFrameList:frames];
+}
+
+- (void)updateFramesAndContentNodesDebugString:(NSString*)debugString {
+  [_actorViewController updateFramesAndContentNodesDebugString:debugString];
 }
 
 #pragma mark - UIPageViewControllerDataSource

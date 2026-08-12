@@ -22,7 +22,7 @@
 
 namespace {
 
-// In this file, we uses classes that implements the tow following traits.
+// In this file, we use classes that implement the following two traits.
 // Predicate to decide which identity to filter.
 // class Filter {
 // public:
@@ -36,7 +36,7 @@ namespace {
 // class Collector {
 //   // Returns whether iteration should continue or stop.
 //   virtual IteratorResult ForEach(id<SystemIdentity> identity);
-//   // Returns the result gathered thorugh the iteration.
+//   // Returns the result gathered through the iteration.
 //   virtual ResultType Result() const;
 // }
 
@@ -70,6 +70,19 @@ class KeepGaiaID {
 
  private:
   GaiaId gaia_id_;
+};
+
+// Filter class skipping identities that do not have the given email.
+class KeepEmail {
+ public:
+  explicit KeepEmail(NSString* email) : email_(email) { CHECK(email_); }
+
+  bool ShouldFilter(id<SystemIdentity> identity) const {
+    return ![email_ isEqualToString:identity.userEmail];
+  }
+
+ private:
+  NSString* email_;
 };
 
 // Filter skipping identities if either sub-filter match.
@@ -206,7 +219,7 @@ ChromeAccountManagerService::ChromeAccountManagerService(
         base::BindRepeating(&ChromeAccountManagerService::UpdateRestriction,
                             base::Unretained(this)));
 
-    // Force initialisation of `restriction_`.
+    // Force initialization of `restriction_`.
     UpdateRestriction();
   }
   GetApplicationContext()->GetAccountProfileMapper()->AddObserver(
@@ -228,9 +241,8 @@ bool ChromeAccountManagerService::HasIdentities() const {
                                profile_name_) != nil;
 }
 
-bool ChromeAccountManagerService::IsValidIdentity(
-    id<SystemIdentity> identity) const {
-  return GetIdentityWithGaiaID(identity.gaiaId) != nil;
+bool ChromeAccountManagerService::IsValidIdentity(const GaiaId& gaia_id) const {
+  return GetIdentityWithGaiaID(gaia_id) != nil;
 }
 
 bool ChromeAccountManagerService::IsEmailRestricted(
@@ -312,6 +324,16 @@ ChromeAccountManagerService::GetIdentitiesOnDeviceWithGaiaIDs(
   return identities;
 }
 
+id<SystemIdentity> ChromeAccountManagerService::GetIdentityOnDeviceWithEmail(
+    NSString* email) const {
+  if (!email.length) {
+    return nil;
+  }
+  return IterateOverAllIdentitiesOnDevice(
+      FindFirstIdentity{},
+      CombineOr{SkipRestricted{restriction_}, KeepEmail{email}});
+}
+
 NSArray<id<SystemIdentity>>*
 ChromeAccountManagerService::GetAllIdentitiesOnDevice(
     base::PassKey<DeviceAccountsProviderImpl>) const {
@@ -333,7 +355,7 @@ void ChromeAccountManagerService::OnIdentitiesOnDeviceChanged() {
 
 void ChromeAccountManagerService::OnIdentityInProfileUpdated(
     id<SystemIdentity> identity) {
-  if (!this->IsValidIdentity(identity)) {
+  if (!this->IsValidIdentity(identity.gaiaId)) {
     return;
   }
   for (auto& observer : observer_list_) {
@@ -350,7 +372,7 @@ void ChromeAccountManagerService::OnIdentityOnDeviceUpdated(
 
 void ChromeAccountManagerService::OnIdentityRefreshTokenUpdated(
     id<SystemIdentity> identity) {
-  if (!this->IsValidIdentity(identity)) {
+  if (!this->IsValidIdentity(identity.gaiaId)) {
     return;
   }
   for (auto& observer : observer_list_) {
@@ -362,7 +384,7 @@ void ChromeAccountManagerService::OnIdentityAccessTokenRefreshFailed(
     id<SystemIdentity> identity,
     id<RefreshAccessTokenError> error,
     const std::set<std::string>& scopes) {
-  if (!this->IsValidIdentity(identity)) {
+  if (!this->IsValidIdentity(identity.gaiaId)) {
     return;
   }
   for (auto& observer : observer_list_) {

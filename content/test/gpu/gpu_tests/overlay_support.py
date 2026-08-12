@@ -446,6 +446,15 @@ OVERLAY_CONFIGS = {
         BasicDirectCompositionConfig(),
         0x699f:
         BasicDirectCompositionConfig(),
+        0x7550: BasicDirectCompositionConfig()\
+                .WithHardwareNV12Support(supported_rotations=[
+                    VideoRotation.ROT90,
+                    VideoRotation.ROT180,
+                    VideoRotation.ROT270])\
+                .WithZeroCopyConfig(ZeroCopyConfig(
+                    supports_scaled_video=True,
+                    supported_codecs=[
+                        ZeroCopyCodec.H264])),
     },
     constants.GpuVendor.INTEL: {
         # Hardware overlays are disabled in 26.20.100.8141 per
@@ -497,13 +506,16 @@ OVERLAY_CONFIGS = {
                     supports_scaled_video=True,
                     supported_codecs=[
                         ZeroCopyCodec.H264])),
+        0x2c02: BasicDirectCompositionConfig()\
+                .WithHardwareNV12Support()\
+                .WithHardwareYUY2Support()\
+                .WithHardwareBGRA8Support()\
+                .WithZeroCopyConfig(ZeroCopyConfig(
+                    supports_scaled_video=True,
+                    supported_codecs=[
+                        ZeroCopyCodec.H264])),
     },
     constants.GpuVendor.QUALCOMM: {
-        0x41333430: BasicDirectCompositionConfig()\
-                    .WithHardwareNV12Support(supported_rotations=[
-                        VideoRotation.ROT180])\
-                    .WithZeroCopyConfig(ZeroCopyConfig(
-                        supports_scaled_video=True)),
         0x36333630: BasicDirectCompositionConfig()\
                     .WithHardwareNV12Support(supported_rotations=[
                         VideoRotation.ROT180])\

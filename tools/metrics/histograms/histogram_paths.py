@@ -10,11 +10,10 @@ histograms.xml and enums.xml files that exist.
 """
 
 import os
-import sys
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
-import path_util
+import setup_modules  # pylint: disable=unused-import
 
+import chromium_src.tools.metrics.common.path_util as path_util
 
 _HISTOGRAM_XML_FILE_NAMES = ['histograms.xml', 'histogram_suffixes_list.xml']
 _ENUMS_XML_FILE_NAMES = ['enums.xml']
@@ -41,8 +40,12 @@ PATH_TO_METADATA_DIR = path_util.GetInputFile(
 _ENUMS_XML_RELATIVE = ([
     'tools/metrics/histograms/enums.xml',
 ] + _FindXmlFiles(_ENUMS_XML_FILE_NAMES))
+_VARIANTS_XML_RELATIVE = [
+    'tools/metrics/histograms/variants.xml',
+]
 _HISTOGRAMS_XMLS_RELATIVE = _FindXmlFiles(_HISTOGRAM_XML_FILE_NAMES)
-ALL_XMLS_RELATIVE = _ENUMS_XML_RELATIVE + _HISTOGRAMS_XMLS_RELATIVE
+ALL_XMLS_RELATIVE = (_ENUMS_XML_RELATIVE + _VARIANTS_XML_RELATIVE +
+                     _HISTOGRAMS_XMLS_RELATIVE)
 
 HISTOGRAMS_PREFIX_LIST = [
     os.path.basename(os.path.dirname(f)) for f in _HISTOGRAMS_XMLS_RELATIVE
@@ -51,7 +54,6 @@ HISTOGRAMS_PREFIX_LIST = [
 ENUMS_XMLS = [path_util.GetInputFile(f) for f in _ENUMS_XML_RELATIVE]
 UKM_XML = path_util.GetInputFile('tools/metrics/ukm/ukm.xml')
 DWA_XML = path_util.GetInputFile('tools/metrics/private_metrics/dwa.xml')
-DKM_XML = path_util.GetInputFile('tools/metrics/private_metrics/dkm.xml')
 HISTOGRAMS_XMLS = [path_util.GetInputFile(f) for f in _HISTOGRAMS_XMLS_RELATIVE]
 ALL_XMLS = [path_util.GetInputFile(f) for f in ALL_XMLS_RELATIVE]
 

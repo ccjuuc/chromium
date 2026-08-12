@@ -6,12 +6,12 @@
 
 #import "base/barrier_closure.h"
 #import "base/functional/bind.h"
+#import "base/logging.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "components/optimization_guide/proto/features/common_quality_data.pb.h"
-#import "components/optimization_guide/proto/features/tab_organization.pb.h"
 #import "ios/chrome/browser/intelligence/persist_tab_context/model/persist_tab_context_browser_agent.h"
 #import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"

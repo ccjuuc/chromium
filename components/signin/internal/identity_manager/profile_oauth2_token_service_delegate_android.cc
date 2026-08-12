@@ -4,18 +4,20 @@
 
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate_android.h"
 
+#include <algorithm>
+
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "base/containers/contains.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/not_fatal_until.h"
 #include "base/notreached.h"
+#include "base/time/time.h"
 #include "components/signin/public/base/account_consistency_method.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -179,7 +181,7 @@ bool ProfileOAuth2TokenServiceDelegateAndroid::RefreshTokenIsAvailable(
       << "ProfileOAuth2TokenServiceDelegateAndroid::RefreshTokenIsAvailable"
       << " account= " << account_id;
   std::vector<CoreAccountId> accounts = GetValidAccounts();
-  return base::Contains(accounts, account_id);
+  return std::ranges::contains(accounts, account_id);
 }
 
 std::vector<CoreAccountId>
@@ -243,6 +245,14 @@ void ProfileOAuth2TokenServiceDelegateAndroid::
     SeedAccountsThenReloadAllAccountsWithPrimaryAccount(
         const std::vector<AccountInfo>& accounts,
         const std::optional<CoreAccountId>& primary_account_id) {
+  // `LoadCredentials` should be invoked before SigninManagerImpl is created.
+  // Otherwise, it might create a weird situation when a sign-out needs to be
+  // triggered before `LoadCredentials` is invoked. In reality, this invariant
+  // should always be true, as `SigninManagerImpl depends on IdentityManager,
+  // which in turn triggers loading tokens in its creation process. This check
+  // ensures that this invariant doesn't change in the future.
+  CHECK_NE(fire_refresh_token_loaded_, RT_LOAD_NOT_START);
+
   // Seeds the accounts but doesn't remove the stale accounts from the
   // AccountTrackerService yet. We first need to send OnRefreshTokenRevoked
   // notifications for accounts being removed. Therefore we keep the accounts
@@ -300,17 +310,6 @@ void ProfileOAuth2TokenServiceDelegateAndroid::UpdateAccountList(
   if (fire_refresh_token_loaded_ == RT_WAIT_FOR_VALIDATION) {
     fire_refresh_token_loaded_ = RT_LOADED;
     FireRefreshTokensLoaded();
-  } else if (fire_refresh_token_loaded_ == RT_LOAD_NOT_START) {
-    // `LoadCredentials` should be invoked before SigninManagerImpl is created.
-    // Otherwise, it might create a weird situation when a sign-out needs to be
-    // triggered before `LoadCredentials` is invoked. In reality, this invariant
-    // should always be true, as `SigninManagerImpl depends on IdentityManager,
-    // which in turn triggers loading tokens in its creation process. This check
-    // ensures that this invariant doesn't change in the future.
-    //
-    // TODO(crbug.com/455610913): Remove `RT_HAS_BEEN_VALIDATED` after M147.
-    NOTREACHED(base::NotFatalUntil::M147);
-    fire_refresh_token_loaded_ = RT_HAS_BEEN_VALIDATED;
   }
 }
 
@@ -325,7 +324,7 @@ void ProfileOAuth2TokenServiceDelegateAndroid::UpdateAccountList(
     if (signed_in_id.has_value() && prev_id == *signed_in_id) {
       continue;
     }
-    if (!base::Contains(curr_ids, prev_id)) {
+    if (!std::ranges::contains(curr_ids, prev_id)) {
       DVLOG(1) << "ProfileOAuth2TokenServiceDelegateAndroid::UpdateAccountList:"
                << "revoked=" << prev_id;
       revoked_ids->push_back(prev_id);
@@ -348,14 +347,6 @@ void ProfileOAuth2TokenServiceDelegateAndroid::UpdateAccountList(
   }
 }
 
-void ProfileOAuth2TokenServiceDelegateAndroid::UpdateAuthErrorFromJava(
-    JNIEnv* env,
-    CoreAccountId& core_account_id,
-    GoogleServiceAuthError& auth_error,
-    jboolean fire_auth_error_changed) {
-  UpdateAuthError(core_account_id, auth_error, fire_auth_error_changed);
-}
-
 void ProfileOAuth2TokenServiceDelegateAndroid::FireRefreshTokensLoaded() {
   DVLOG(1)
       << "ProfileOAuth2TokenServiceDelegateAndroid::FireRefreshTokensLoaded";
@@ -368,6 +359,10 @@ void ProfileOAuth2TokenServiceDelegateAndroid::FireRefreshTokensLoaded() {
 
 void ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentialsInternal(
     signin_metrics::SourceForRefreshTokenOperation source) {
+  // Revoking credentials on Android is not allowed.
+  NOTREACHED(base::NotFatalUntil::M153);
+
+  // TODO(crbug.com/512831931): Cleanup after M153 is rolled out.
   DVLOG(1) << "ProfileOAuth2TokenServiceDelegateAndroid::RevokeAllCredentials";
   ScopedBatchChange batch(this);
   std::vector<CoreAccountId> accounts_to_revoke = GetAccounts();
@@ -396,10 +391,7 @@ void ProfileOAuth2TokenServiceDelegateAndroid::LoadCredentialsInternal(
             load_credentials_state());
   set_load_credentials_state(
       signin::LoadCredentialsState::LOAD_CREDENTIALS_IN_PROGRESS);
-  if (fire_refresh_token_loaded_ == RT_HAS_BEEN_VALIDATED) {
-    fire_refresh_token_loaded_ = RT_LOADED;
-    FireRefreshTokensLoaded();
-  } else if (fire_refresh_token_loaded_ == RT_LOAD_NOT_START) {
+  if (fire_refresh_token_loaded_ == RT_LOAD_NOT_START) {
     fire_refresh_token_loaded_ = RT_WAIT_FOR_VALIDATION;
   }
 }
@@ -414,9 +406,9 @@ namespace signin {
 static void JNI_ProfileOAuth2TokenServiceDelegate_OnOAuth2TokenFetched(
     JNIEnv* env,
     const JavaRef<jstring>& authToken,
-    const jlong expiration_time_secs,
-    GoogleServiceAuthError& authError,
-    jlong nativeCallback) {
+    const int64_t expiration_time_secs,
+    const GoogleServiceAuthError& authError,
+    int64_t nativeCallback) {
   std::string token;
   if (authToken) {
     token = ConvertJavaStringToUTF8(env, authToken);

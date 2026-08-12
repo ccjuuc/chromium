@@ -20,10 +20,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browsing_data.TimePeriod;
 import org.chromium.ui.base.TestActivity;
@@ -34,8 +32,6 @@ import org.chromium.ui.widget.TextViewWithClickableSpans;
 /** Robolectric tests for {@link QuickDeleteViewBinder}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.PAUSED)
-@Batch(Batch.UNIT_TESTS)
 public class QuickDeleteViewBinderTest {
     private Activity mActivity;
     private View mQuickDeleteView;
@@ -50,6 +46,7 @@ public class QuickDeleteViewBinderTest {
         mPropertyModel =
                 new PropertyModel.Builder(QuickDeleteProperties.ALL_KEYS)
                         .with(QuickDeleteProperties.CONTEXT, mActivity)
+                        .with(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, true)
                         .build();
         mPropertyModelChangeProcessor =
                 PropertyModelChangeProcessor.create(
@@ -181,6 +178,90 @@ public class QuickDeleteViewBinderTest {
                 mActivity.getString(R.string.quick_delete_dialog_data_pending),
                 quickDeleteBrowsingHistoryRowTitle.getText().toString());
         assertEquals(View.GONE, quickDeleteBrowsingHistoryRowSubtitle.getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    public void testBrowsingHistory_DeletionDisabled() {
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, false);
+
+        TextView quickDeleteBrowsingHistoryRowTitle =
+                mQuickDeleteView.findViewById(R.id.quick_delete_history_row_title);
+        TextView quickDeleteBrowsingHistoryRowSubtitle =
+                mQuickDeleteView.findViewById(R.id.quick_delete_history_row_subtitle);
+        View managedDisclaimer =
+                mQuickDeleteView.findViewById(R.id.quick_delete_managed_disclaimer_text);
+
+        assertEquals(
+                mActivity.getString(R.string.clear_history_title),
+                quickDeleteBrowsingHistoryRowTitle.getText().toString());
+        assertEquals(View.GONE, quickDeleteBrowsingHistoryRowSubtitle.getVisibility());
+        assertEquals(View.VISIBLE, managedDisclaimer.getVisibility());
+        assertEquals(false, quickDeleteBrowsingHistoryRowTitle.isEnabled());
+    }
+
+    @Test
+    @SmallTest
+    public void testBrowsingHistory_Pending_WhenDisabled() {
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, false);
+        mPropertyModel.set(QuickDeleteProperties.IS_DOMAIN_VISITED_DATA_PENDING, true);
+
+        TextView quickDeleteBrowsingHistoryRowTitle =
+                mQuickDeleteView.findViewById(R.id.quick_delete_history_row_title);
+        View managedDisclaimer =
+                mQuickDeleteView.findViewById(R.id.quick_delete_managed_disclaimer_text);
+
+        // Should still show the "disabled" state, not the "pending" state.
+        assertEquals(
+                mActivity.getString(R.string.clear_history_title),
+                quickDeleteBrowsingHistoryRowTitle.getText().toString());
+        assertEquals(View.VISIBLE, managedDisclaimer.getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    public void testBrowsingHistory_ToggleAllowed() {
+        // Start disabled
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, false);
+
+        TextView quickDeleteBrowsingHistoryRowTitle =
+                mQuickDeleteView.findViewById(R.id.quick_delete_history_row_title);
+        View managedDisclaimer =
+                mQuickDeleteView.findViewById(R.id.quick_delete_managed_disclaimer_text);
+        assertEquals(View.VISIBLE, managedDisclaimer.getVisibility());
+
+        // Enable
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, true);
+
+        // Set some data to verify it updates
+        var data = new QuickDeleteDelegate.DomainVisitsData("example.com", 1);
+        mPropertyModel.set(QuickDeleteProperties.DOMAIN_VISITED_DATA, data);
+
+        assertEquals("example.com", quickDeleteBrowsingHistoryRowTitle.getText().toString());
+        assertEquals(View.GONE, managedDisclaimer.getVisibility());
+        assertEquals(true, quickDeleteBrowsingHistoryRowTitle.isEnabled());
+    }
+
+    @Test
+    @SmallTest
+    public void testBrowsingHistory_ToggleAllowed_WhilePending() {
+        // Start disabled
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, false);
+        mPropertyModel.set(QuickDeleteProperties.IS_DOMAIN_VISITED_DATA_PENDING, true);
+
+        TextView quickDeleteBrowsingHistoryRowTitle =
+                mQuickDeleteView.findViewById(R.id.quick_delete_history_row_title);
+        View managedDisclaimer =
+                mQuickDeleteView.findViewById(R.id.quick_delete_managed_disclaimer_text);
+        assertEquals(View.VISIBLE, managedDisclaimer.getVisibility());
+
+        // Enable - should now show pending
+        mPropertyModel.set(QuickDeleteProperties.IS_HISTORY_DELETION_ALLOWED, true);
+
+        assertEquals(
+                mActivity.getString(R.string.quick_delete_dialog_data_pending),
+                quickDeleteBrowsingHistoryRowTitle.getText().toString());
+        assertEquals(View.GONE, managedDisclaimer.getVisibility());
     }
 
     @Test

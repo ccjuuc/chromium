@@ -9,7 +9,6 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/containers/enum_set.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/cryptohome/auth_factor.h"
 #include "chromeos/ash/components/login/auth/public/auth_factors_configuration.h"
@@ -275,6 +274,13 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH_PUBLIC) UserContext {
   void ClearAuthorizedIntents();
   void AddAuthorizedIntent(AuthSessionIntent auth_intent);
 
+  std::vector<std::string> GetScrapedSamlPasswords() const;
+  void SetScrapedSamlPasswords(
+      const std::vector<std::string> scraped_saml_passwords);
+
+  bool GetRequiresPasswordConfirmation() const;
+  void SetRequiresPasswordConfirmation(bool is_requried);
+
   void ClearSecrets();
 
  private:
@@ -302,9 +308,12 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH_PUBLIC) UserContext {
   bool is_under_advanced_protection_ = false;
   bool can_lock_managed_guest_session_ = false;
   bool generate_fresh_recovery_id_ = false;
+  bool requires_password_confirmation_ = false;
   // |login_input_method_id_used_| is non-empty if login password/code was used,
   // i.e. user used some input method to log in.
   std::string login_input_method_id_used_;
+  // Used for the SAMLConfirmPassword flow.
+  std::vector<std::string> scraped_saml_passwords_;
 
   CryptohomeContext cryptohome_;
 

@@ -35,7 +35,7 @@ class LocalCaretRectTest : public EditingTestBase {
   }
 };
 
-TEST_F(LocalCaretRectTest, DOMAndFlatTrees) {
+TEST_F(LocalCaretRectTest, DomAndFlatTrees) {
   const char* body_content =
       "<p id='host'><b slot='#one' id='one'>1</b></p><b id='two'>22</b>";
   const char* shadow_content =
@@ -2907,13 +2907,8 @@ TEST_F(LocalCaretRectTest, AfterLineBreakTextArea) {
 
   // Test the second line.
   const Node* br_in_2nd_line = inner_text->nextSibling()->nextSibling();
-  Position position4 = RuntimeEnabledFeatures::TextareaLineEndingsAsBrEnabled()
-                           ? Position(br_in_2nd_line, 0)
-                           : Position(inner_text, 4);
-  PhysicalRect local_rect4 =
-      RuntimeEnabledFeatures::TextareaMultipleIfcsEnabled()
-          ? PhysicalRect(0, 0, 1, 10)
-          : PhysicalRect(0, 10, 1, 10);
+  Position position4(br_in_2nd_line, 0);
+  PhysicalRect local_rect4(0, 0, 1, 10);
   EXPECT_EQ(
       LocalCaretRect(position4.AnchorNode()->GetLayoutObject(), local_rect4),
       LocalCaretRectOfPosition(
@@ -2921,13 +2916,8 @@ TEST_F(LocalCaretRectTest, AfterLineBreakTextArea) {
 
   // Test the third line.
   const Node* placeholder_br = textarea->InnerEditorElement()->lastChild();
-  Position position5 = RuntimeEnabledFeatures::TextareaLineEndingsAsBrEnabled()
-                           ? Position(placeholder_br, 0)
-                           : Position(inner_text, 5);
-  PhysicalRect local_rect5 =
-      RuntimeEnabledFeatures::TextareaMultipleIfcsEnabled()
-          ? PhysicalRect(0, 0, 1, 10)
-          : PhysicalRect(0, 20, 1, 10);
+  Position position5(placeholder_br, 0);
+  PhysicalRect local_rect5(0, 0, 1, 10);
   EXPECT_EQ(LocalCaretRect(placeholder_br->GetLayoutObject(), local_rect5),
             LocalCaretRectOfPosition(
                 PositionWithAffinity(position5, TextAffinity::kDownstream)));
@@ -2965,7 +2955,7 @@ TEST_F(LocalCaretRectTest, CollapsedSpace) {
                 Position(white_spaces, 2), TextAffinity::kDownstream)));
 }
 
-TEST_F(LocalCaretRectTest, AbsoluteCaretBoundsOfWithShadowDOM) {
+TEST_F(LocalCaretRectTest, AbsoluteCaretBoundsOfWithShadowDom) {
   const char* body_content =
       "<p id='host'><b slot='#one' id='one'>11</b><b name='#two' "
       "id='two'>22</b></p>";

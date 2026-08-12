@@ -28,7 +28,7 @@ using crdtp::cbor::EncodeTrue;
 InspectorSessionState::InspectorSessionState(
     mojom::blink::DevToolsSessionStatePtr reattach)
     : reattach_state_(std::move(reattach)),
-      updates_(mojom::blink::DevToolsSessionState::New()) {}
+      updates_(mojom::blink::RendererOriginatingSessionState::New()) {}
 
 const mojom::blink::DevToolsSessionState* InspectorSessionState::ReattachState()
     const {
@@ -39,16 +39,17 @@ void InspectorSessionState::EnqueueUpdate(const String& key,
                                           const std::vector<uint8_t>* value) {
   std::optional<Vector<uint8_t>> updated_value;
   if (value) {
-    Vector<uint8_t> payload;
-    payload.AppendRange(value->begin(), value->end());
+    Vector<uint8_t> payload(*value);
     updated_value = std::move(payload);
   }
+  CHECK(updates_);
   updates_->entries.Set(key, std::move(updated_value));
 }
 
-mojom::blink::DevToolsSessionStatePtr InspectorSessionState::TakeUpdates() {
+mojom::blink::RendererOriginatingSessionStatePtr
+InspectorSessionState::TakeUpdates() {
   auto updates = std::move(updates_);
-  updates_ = mojom::blink::DevToolsSessionState::New();
+  updates_ = mojom::blink::RendererOriginatingSessionState::New();
   return updates;
 }
 
@@ -123,14 +124,15 @@ void InspectorAgentState::Serialize(const blink::String& v,
 bool InspectorAgentState::Deserialize(span<uint8_t> in, blink::String* v) {
   CBORTokenizer tokenizer(in);
   if (tokenizer.TokenTag() == CBORTokenTag::STRING8) {
-    *v = blink::String::FromUTF8(tokenizer.GetString8());
+    *v = blink::String::FromUtf8(tokenizer.GetString8());
     return true;
   }
   if (tokenizer.TokenTag() == CBORTokenTag::STRING16) {
     const crdtp::span<uint8_t> data = tokenizer.GetString16WireRep();
     // SAFETY: GetString16WireRep guarantees `data` is safe.
-    *v = blink::String(UNSAFE_BUFFERS(base::span(
-        reinterpret_cast<const UChar*>(data.data()), data.size() / 2)));
+    *v = blink::String(UNSAFE_BUFFERS(
+        base::span(base::unchecked, reinterpret_cast<const UChar*>(data.data()),
+                   data.size() / 2)));
     return true;
   }
   return false;

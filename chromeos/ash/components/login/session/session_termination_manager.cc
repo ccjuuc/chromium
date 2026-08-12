@@ -15,16 +15,13 @@ namespace ash {
 
 namespace {
 
-const char kLockedToSingleUserRebootDescription[] = "Reboot forced by policy";
-const char kRemoteCommandSignoutRebootDescription[] =
+constexpr char kLockedToSingleUserRebootDescription[] =
+    "Reboot forced by policy";
+constexpr char kRemoteCommandSignoutRebootDescription[] =
     "Reboot remote command (sign out)";
+bool g_send_stop_request_to_session_manager = false;
 
 SessionTerminationManager* g_instance = nullptr;
-
-void Reboot(power_manager::RequestRestartReason reason,
-            const std::string& description) {
-  chromeos::PowerManagerClient::Get()->RequestRestart(reason, description);
-}
 
 }  // namespace
 
@@ -79,6 +76,12 @@ void SessionTerminationManager::RebootIfNecessary() {
                      weak_factory_.GetWeakPtr()));
 }
 
+void SessionTerminationManager::Reboot(
+    power_manager::RequestRestartReason reason,
+    const std::string& description) {
+  chromeos::PowerManagerClient::Get()->RequestRestart(reason, description);
+}
+
 void SessionTerminationManager::SetDeviceLockedToSingleUser() {
   is_locked_to_single_user_ = true;
 }
@@ -91,6 +94,23 @@ void SessionTerminationManager::SetDeviceRebootOnSignoutForRemoteCommand(
 
 bool SessionTerminationManager::IsLockedToSingleUser() {
   return is_locked_to_single_user_;
+}
+
+base::OnceClosure
+SessionTerminationManager::GetClosureNotifyingAppTerminating() {
+  return base::BindOnce(&SessionTerminationManager::OnAppTerminating,
+                        weak_factory_.GetWeakPtr());
+}
+
+// static
+bool SessionTerminationManager::IsSendingStopRequestToSessionManager() {
+  return g_send_stop_request_to_session_manager;
+}
+
+// static
+void SessionTerminationManager::SetSendStopRequestToSessionManager(
+    bool should_send_request) {
+  g_send_stop_request_to_session_manager = should_send_request;
 }
 
 void SessionTerminationManager::DidWaitForServiceToBeAvailable(
@@ -126,6 +146,10 @@ void SessionTerminationManager::RebootIfNecessaryProcessReply(
     Reboot(power_manager::REQUEST_RESTART_OTHER,
            kLockedToSingleUserRebootDescription);
   }
+}
+
+void SessionTerminationManager::OnAppTerminating() {
+  observers_.Notify(&Observer::OnAppTerminating);
 }
 
 }  // namespace ash

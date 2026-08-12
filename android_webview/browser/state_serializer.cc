@@ -8,9 +8,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "android_webview/common/aw_features.h"
 #include "base/containers/span.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/pickle.h"
 #include "base/strings/string_view_util.h"
 #include "base/time/time.h"
@@ -38,8 +41,6 @@ using std::string;
 namespace android_webview {
 
 namespace {
-
-const uint32_t AW_STATE_VERSION = internal::AW_STATE_VERSION_MOST_RECENT_FIRST;
 
 // The production implementation of NavigationHistory and NavigationHistorySink,
 // backed by a NavigationController.
@@ -105,7 +106,7 @@ bool RestoreFromPickleLegacy_VersionDataUrl(
   for (int i = 0; i < entry_count; ++i) {
     entries.push_back(content::NavigationEntry::Create());
     if (!internal::RestoreNavigationEntryFromPickle(
-            state_version, iterator, entries[i].get(), context.get())) {
+            iterator, entries[i].get(), context.get(), state_version)) {
       return false;
     }
   }
@@ -123,7 +124,8 @@ std::optional<base::Pickle> WriteToPickle(content::WebContents& web_contents,
                                           size_t max_size,
                                           bool include_forward_state) {
   NavigationControllerWrapper wrapper(&web_contents.GetController());
-  return internal::WriteToPickle(wrapper, max_size, include_forward_state);
+  return internal::WriteToPickle(wrapper, internal::AW_STATE_VERSION, max_size,
+                                 include_forward_state);
 }
 
 bool RestoreFromPickle(base::PickleIterator* iterator,
@@ -136,11 +138,12 @@ bool RestoreFromPickle(base::PickleIterator* iterator,
 namespace internal {
 
 std::optional<base::Pickle> WriteToPickle(NavigationHistory& history,
+                                          uint32_t state_version,
                                           size_t max_size,
                                           bool save_forward_history) {
   base::Pickle pickle;
 
-  internal::WriteHeaderToPickle(AW_STATE_VERSION, &pickle);
+  internal::WriteHeaderToPickle(&pickle, state_version);
 
   const int entry_count = history.GetEntryCount();
   const int selected_entry = history.GetCurrentEntry();
@@ -167,8 +170,8 @@ std::optional<base::Pickle> WriteToPickle(NavigationHistory& history,
     size_t payload_size_before_adding_entry = pickle.payload_size();
 
     pickle.WriteBool(i == selected_entry);
-    internal::WriteNavigationEntryToPickle(*history.GetEntryAtIndex(i),
-                                           &pickle);
+    internal::WriteNavigationEntryToPickle(*history.GetEntryAtIndex(i), &pickle,
+                                           state_version);
 
     if (pickle.size() > max_size) {
       if (i == start_entry) {
@@ -181,7 +184,7 @@ std::optional<base::Pickle> WriteToPickle(NavigationHistory& history,
       // with save_forward_history = false, ensuring that the current entry is
       // the first one written.
       if (!selected_entry_was_saved) {
-        return WriteToPickle(history, max_size,
+        return WriteToPickle(history, state_version, max_size,
                              /* save_forward_history= */ false);
       }
 
@@ -204,11 +207,7 @@ std::optional<base::Pickle> WriteToPickle(NavigationHistory& history,
   return pickle;
 }
 
-void WriteHeaderToPickle(base::Pickle* pickle) {
-  WriteHeaderToPickle(AW_STATE_VERSION, pickle);
-}
-
-void WriteHeaderToPickle(uint32_t state_version, base::Pickle* pickle) {
+void WriteHeaderToPickle(base::Pickle* pickle, uint32_t state_version) {
   pickle->WriteUInt32(state_version);
 }
 
@@ -226,19 +225,12 @@ uint32_t RestoreHeaderFromPickle(base::PickleIterator* iterator) {
 }
 
 bool IsSupportedVersion(uint32_t state_version) {
-  return state_version == internal::AW_STATE_VERSION_INITIAL ||
-         state_version == internal::AW_STATE_VERSION_DATA_URL ||
-         state_version == internal::AW_STATE_VERSION_MOST_RECENT_FIRST;
+  return AW_STATE_SUPPORTED_VERSIONS.contains(state_version);
 }
 
 void WriteNavigationEntryToPickle(content::NavigationEntry& entry,
-                                  base::Pickle* pickle) {
-  WriteNavigationEntryToPickle(AW_STATE_VERSION, entry, pickle);
-}
-
-void WriteNavigationEntryToPickle(uint32_t state_version,
-                                  content::NavigationEntry& entry,
-                                  base::Pickle* pickle) {
+                                  base::Pickle* pickle,
+                                  uint32_t state_version) {
   DCHECK(IsSupportedVersion(state_version));
   pickle->WriteString(entry.GetURL().spec());
   pickle->WriteString(entry.GetVirtualURL().spec());
@@ -262,17 +254,26 @@ void WriteNavigationEntryToPickle(uint32_t state_version,
     }
     // Even when |entry.GetDataForDataURL()| is null we still need to write a
     // zero-length entry to ensure the fields all line up when read back in.
-    pickle->WriteData(view.data(), view.size());
+    pickle->WriteData(view);
   }
 
   pickle->WriteBool(static_cast<int>(entry.GetIsOverridingUserAgent()));
   pickle->WriteInt64(entry.GetTimestamp().ToInternalValue());
   pickle->WriteInt(entry.GetHttpStatusCode());
 
-  // Please update AW_STATE_VERSION and IsSupportedVersion() if serialization
-  // format is changed.
-  // Make sure the serialization format is updated in a backwards compatible
-  // way.
+  if (state_version >= internal::AW_STATE_VERSION_INCLUDE_HEADERS) {
+    std::string headers = entry.GetExtraHeaders();
+    UMA_HISTOGRAM_BOOLEAN("Android.WebView.SaveState.ExtraHeadersAttached",
+                          !headers.empty());
+    pickle->WriteString(
+        base::FeatureList::IsEnabled(features::kWebViewSaveStateIncludeHeaders)
+            ? headers
+            : "");
+  }
+
+  // Please update AW_STATE_VERSION and AW_STATE_SUPPORTED_VERSIONS if
+  // serialization format is changed. Make sure the serialization format is
+  // updated in a backwards compatible way.
 }
 
 bool RestoreFromPickle(base::PickleIterator* iterator,
@@ -304,7 +305,7 @@ bool RestoreFromPickle(base::PickleIterator* iterator,
     entries.push_back(content::NavigationEntry::Create());
 
     if (!internal::RestoreNavigationEntryFromPickle(
-            state_version, iterator, entries.back().get(), context.get())) {
+            iterator, entries.back().get(), context.get(), state_version)) {
       return false;
     }
 
@@ -329,16 +330,8 @@ bool RestoreFromPickle(base::PickleIterator* iterator,
 bool RestoreNavigationEntryFromPickle(
     base::PickleIterator* iterator,
     content::NavigationEntry* entry,
-    content::NavigationEntryRestoreContext* context) {
-  return RestoreNavigationEntryFromPickle(AW_STATE_VERSION, iterator, entry,
-                                          context);
-}
-
-bool RestoreNavigationEntryFromPickle(
-    uint32_t state_version,
-    base::PickleIterator* iterator,
-    content::NavigationEntry* entry,
-    content::NavigationEntryRestoreContext* context) {
+    content::NavigationEntryRestoreContext* context,
+    uint32_t state_version) {
   DCHECK(IsSupportedVersion(state_version));
   DCHECK(iterator);
   DCHECK(entry);
@@ -420,7 +413,8 @@ bool RestoreNavigationEntryFromPickle(
       // Note that PageState covers and will clobber some of the values covered
       // by data within |iterator| (e.g. URL and referrer).
       entry->SetPageState(
-          blink::PageState::CreateFromEncodedData(content_state), context);
+          blink::PageState::CreateFromEncodedData(std::move(content_state)),
+          context);
 
       // |deserialized_url| and |deserialized_referrer| are redundant wrt
       // PageState, but they should be consistent / in-sync.
@@ -481,6 +475,19 @@ bool RestoreNavigationEntryFromPickle(
     if (!iterator->ReadInt(&http_status_code))
       return false;
     entry->SetHttpStatusCode(http_status_code);
+  }
+
+  if (state_version >= internal::AW_STATE_VERSION_INCLUDE_HEADERS) {
+    string extra_headers;
+    if (!iterator->ReadString(&extra_headers)) {
+      return false;
+    }
+    if (!extra_headers.empty() &&
+        base::FeatureList::IsEnabled(
+            features::kWebViewSaveStateIncludeHeaders)) {
+      entry->AddExtraHeaders(extra_headers);
+      entry->SetRemoveExtraHeadersOnCrossOriginRedirect(true);
+    }
   }
 
   return true;

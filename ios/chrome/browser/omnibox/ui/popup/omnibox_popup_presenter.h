@@ -16,7 +16,7 @@
 @class OmniboxPopupPresenter;
 @class OmniboxPopupViewController;
 
-@protocol OmniboxPopupPresenterDelegate
+@protocol OmniboxPopupPresenterDelegate <NSObject>
 
 /// View to which the popup view should be added as subview.
 - (UIView*)popupParentViewForPresenter:(OmniboxPopupPresenter*)presenter;
@@ -39,6 +39,11 @@
 
 /// Alert the delegate that the popup closed.
 - (void)popupDidCloseForPresenter:(OmniboxPopupPresenter*)presenter;
+
+@optional
+
+/// Alert the delegate that the `presenter` has been initialized.
+- (void)popupDidInitializePresenter:(OmniboxPopupPresenter*)presenter;
 
 @end
 

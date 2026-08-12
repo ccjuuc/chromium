@@ -12,5 +12,15 @@ namespace features {
 // --enable-cast-streaming-with-hidpi.
 BASE_FEATURE(kCastEnableStreamingWithHiDPI, base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Enables 60FPS support for Cast Mirroring sessions.
+BASE_FEATURE(kCastStreaming60fps, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kCastStreamingOfferHardwareFirst,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// If enabled, NV12 video frames will be sent to the encoder without being
+// converted to I420.
+BASE_FEATURE(kCastMirroringNativeNV12, base::FEATURE_DISABLED_BY_DEFAULT);
+
 }  // namespace features
 }  // namespace mirroring

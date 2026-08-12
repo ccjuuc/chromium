@@ -22,7 +22,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
@@ -33,7 +34,7 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.components.browser_ui.widget.test.R;
+import org.chromium.components.webapps.R;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.NightModeTestUtils;
@@ -47,6 +48,7 @@ import java.util.List;
 @UseRunnerDelegate(BaseJUnit4RunnerDelegate.class)
 @Batch(Batch.UNIT_TESTS)
 public class PwaRestoreBottomSheetViewRenderTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static Activity sActivity;
 
     @ClassParameter
@@ -73,7 +75,6 @@ public class PwaRestoreBottomSheetViewRenderTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         PwaRestoreBottomSheetMediatorJni.setInstanceForTesting(mNativeMock);
         Mockito.when(mNativeMock.initialize(Mockito.any())).thenReturn(0L);
     }

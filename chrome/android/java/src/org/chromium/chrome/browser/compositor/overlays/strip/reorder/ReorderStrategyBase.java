@@ -35,7 +35,6 @@ import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDele
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.layouts.animation.CompositorAnimator;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.ui.base.LocalizationUtils;
@@ -60,7 +59,6 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
 
     // Dependencies
     protected final TabModel mModel;
-    protected final TabGroupModelFilter mTabGroupModelFilter;
     protected final View mContainerView;
     protected final SettableNullableObservableSupplier<Token> mGroupIdToHideSupplier;
     protected final Supplier<Float> mTabWidthSupplier;
@@ -72,14 +70,12 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
             AnimationHost animationHost,
             ScrollDelegate scrollDelegate,
             TabModel model,
-            TabGroupModelFilter tabGroupModelFilter,
             View containerView,
             SettableNullableObservableSupplier<Token> groupIdToHideSupplier,
             Supplier<Float> tabWidthSupplier,
             Supplier<Long> lastReorderScrollTimeSupplier) {
         // TODO(crbug.com/409392603): Investigate splitting this class even further.
         mModel = model;
-        mTabGroupModelFilter = tabGroupModelFilter;
         mContainerView = containerView;
         mAnimationHost = animationHost;
         mScrollDelegate = scrollDelegate;
@@ -130,7 +126,9 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
             @ActionType int actionType) {
         // Exit reorder mode if the dialog will show. Tab drag and drop is cancelled elsewhere.
         Runnable beforeSyncDialogRunnable =
-                () -> mReorderDelegate.stopReorderMode(stripViews, groupTitles);
+                () ->
+                        mReorderDelegate.stopReorderMode(
+                                stripViews, groupTitles, /* isDragCancelled= */ false);
         String userAction =
                 interactingTabs.size() > 1
                         ? "MobileToolbarReorderTab.TabsRemovedFromGroup"
@@ -156,9 +154,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
                         mContainerView,
                         beforeSyncDialogRunnable,
                         onSuccess);
-        mTabGroupModelFilter
-                .getTabUngrouper()
-                .ungroupTabs(tabs, towardEnd, /* allowDialog= */ true, listener);
+        mModel.getTabUngrouper().ungroupTabs(tabs, towardEnd, /* allowDialog= */ true, listener);
 
         // Run indicator animations. Find the group title after handling the removal, since the
         // group may have been deleted.
@@ -174,7 +170,6 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
      * group. Animate iff a list of animators is provided.
      *
      * @param animationHandler The {@link CompositorAnimationHandler}.
-     * @param modelFilter The {@link TabGroupModelFilter}.
      * @param groupTitle The {@link StripLayoutGroupTitle} of the interacting group.
      * @param isMovingOutOfGroup Whether the action is merging/removing a tab to/from a group.
      * @param throughGroupTitle True if the tab is passing the {@link StripLayoutGroupTitle}.
@@ -183,7 +178,6 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
      */
     protected void updateBottomIndicatorWidthForTabReorder(
             CompositorAnimationHandler animationHandler,
-            TabGroupModelFilter modelFilter,
             StripLayoutGroupTitle groupTitle,
             boolean isMovingOutOfGroup,
             boolean throughGroupTitle,
@@ -193,7 +187,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
         float endWidth =
                 StripLayoutUtils.calculateBottomIndicatorWidth(
                         groupTitle,
-                        StripLayoutUtils.getNumOfTabsInGroup(modelFilter, groupTitle),
+                        StripLayoutUtils.getNumOfTabsInGroup(mModel, groupTitle),
                         effectiveTabWidth);
         float startWidth = endWidth + MathUtils.flipSignIf(effectiveTabWidth, !isMovingOutOfGroup);
 
@@ -261,8 +255,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
             float endWidth =
                     StripLayoutUtils.calculateBottomIndicatorWidth(
                                     groupTitle,
-                                    StripLayoutUtils.getNumOfTabsInGroup(
-                                            mTabGroupModelFilter, groupTitle),
+                                    StripLayoutUtils.getNumOfTabsInGroup(mModel, groupTitle),
                                     StripLayoutUtils.getEffectiveTabWidth(
                                             mTabWidthSupplier, /* isPinned= */ false))
                             + trailingMargin;
@@ -318,13 +311,13 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
         // 1. Set the start margin. Update the scroll offset to prevent any apparent movement.
         StripLayoutTab firstTab = stripTabs[0];
         boolean firstTabIsInGroup =
-                mTabGroupModelFilter.isTabInTabGroup(mModel.getTabByIdChecked(firstTab.getTabId()));
+                mModel.isTabInTabGroup(mModel.getTabByIdChecked(firstTab.getTabId()));
         if (firstTabIsInGroup) mScrollDelegate.setReorderStartMargin(marginWidth);
 
         // 2. Set the trailing margin.
         StripLayoutTab lastTab = stripTabs[stripTabs.length - 1];
         boolean lastTabIsInGroup =
-                mTabGroupModelFilter.isTabInTabGroup(mModel.getTabByIdChecked(lastTab.getTabId()));
+                mModel.isTabInTabGroup(mModel.getTabByIdChecked(lastTab.getTabId()));
         lastTab.setTrailingMargin((lastTabIsInGroup && !lastTab.isCollapsed()) ? marginWidth : 0.f);
 
         // 3. Clear the "previous last" tab's trailing margin after reorder. For MultiTabs reorder,
@@ -541,7 +534,7 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
 
     /**
      * Animates a group indicator after a tab has been dragged out of or into its group and the
-     * {@link TabGroupModelFilter} has been updated.
+     * {@link TabModel} has been updated.
      *
      * @param groupTitle the group title that is sliding for tab reorder.
      * @param isMovingOutOfGroup Whether the action is merging/removing a tab to/from a group.
@@ -558,7 +551,6 @@ abstract class ReorderStrategyBase implements ReorderStrategy {
         // Update bottom indicator width.
         updateBottomIndicatorWidthForTabReorder(
                 mAnimationHost.getAnimationHandler(),
-                mTabGroupModelFilter,
                 groupTitle,
                 isMovingOutOfGroup,
                 throughGroupTitle,

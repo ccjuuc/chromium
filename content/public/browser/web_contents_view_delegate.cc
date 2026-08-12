@@ -37,6 +37,10 @@ void WebContentsViewDelegate::ExecuteCommandForTesting(int command_id,
   NOTREACHED();
 }
 
+bool WebContentsViewDelegate::IsContextMenuShowingForTesting() {
+  return false;
+}
+
 void WebContentsViewDelegate::StoreFocus() {
 }
 
@@ -67,5 +71,12 @@ void WebContentsViewDelegate::OnPerformingDrop(
 }
 
 void WebContentsViewDelegate::WebContentsDragEnded() {}
+
+#if BUILDFLAG(IS_ANDROID)
+bool WebContentsViewDelegate::ShouldShowBlurTransitionAnimation(
+    NavigationHandle* navigation_handle) {
+  return false;
+}
+#endif
 
 }  // namespace content

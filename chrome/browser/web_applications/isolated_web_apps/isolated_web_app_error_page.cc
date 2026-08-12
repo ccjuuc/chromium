@@ -10,9 +10,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/expected_macros.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_features.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
@@ -34,11 +34,9 @@ bool IsIwaAppInstalledInIwaDevModeWhichHasBeenDisabled(
   if (!provider) {
     return false;
   }
-  const web_app::WebAppRegistrar& registrar = provider->registrar_unsafe();
-  ASSIGN_OR_RETURN(const web_app::WebApp& iwa,
-                   web_app::GetIsolatedWebAppById(registrar, url_info.app_id()),
-                   [](auto) { return false; });
-  return iwa.isolation_data()->location().dev_mode() &&
+  return provider->registrar_unsafe().AppMatches(
+             url_info.app_id(),
+             web_app::WebAppFilter::IsDevModeIsolatedApp()) &&
          !web_app::IsIwaDevModeEnabled(&profile);
 }
 

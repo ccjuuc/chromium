@@ -79,24 +79,6 @@ void CookieControlsBridge::OnStatusChanged(
       expiration.InMillisecondsSinceUnixEpoch());
 }
 
-void CookieControlsBridge::OnCookieControlsIconStatusChanged(
-    bool icon_visible,
-    CookieControlsState controls_state,
-    bool should_highlight) {
-  // This function's main use is for web's User Bypass icon, which
-  // does not observe `OnStatusChanged`. Since the Clank icon does
-  // observe `OnStatusChanged`, the only variable we need to pass
-  // on from this function is `should_highlight`.
-  JNIEnv* env = base::android::AttachCurrentThread();
-  Java_CookieControlsBridge_onHighlightCookieControl(
-      env, jobject_, static_cast<bool>(should_highlight));
-}
-
-void CookieControlsBridge::OnReloadThresholdExceeded() {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  Java_CookieControlsBridge_onHighlightPwaCookieControl(env, jobject_);
-}
-
 void CookieControlsBridge::SetThirdPartyCookieBlockingEnabledForSite(
     JNIEnv* env,
     bool block_cookies) {
@@ -107,17 +89,13 @@ void CookieControlsBridge::OnUiClosing(JNIEnv* env) {
   controller_->OnUiClosing();
 }
 
-void CookieControlsBridge::OnEntryPointAnimated(JNIEnv* env) {
-  controller_->OnEntryPointAnimated();
-}
-
 CookieControlsBridge::~CookieControlsBridge() = default;
 
 void CookieControlsBridge::Destroy(JNIEnv* env) {
   delete this;
 }
 
-static jboolean JNI_CookieControlsBridge_IsCookieControlsEnabled(
+static bool JNI_CookieControlsBridge_IsCookieControlsEnabled(
     JNIEnv* env,
     const JavaRef<jobject>& jbrowser_context_handle) {
   content::BrowserContext* context =
@@ -127,12 +105,12 @@ static jboolean JNI_CookieControlsBridge_IsCookieControlsEnabled(
       ->ShouldBlockThirdPartyCookies();
 }
 
-static jlong JNI_CookieControlsBridge_Init(
+static int64_t JNI_CookieControlsBridge_Init(
     JNIEnv* env,
     const JavaRef<jobject>& obj,
     const JavaRef<jobject>& jweb_contents_android,
     const JavaRef<jobject>& joriginal_browser_context_handle,
-    jboolean is_incognito_branded) {
+    bool is_incognito_branded) {
   return reinterpret_cast<intptr_t>(new CookieControlsBridge(
       env, obj, jweb_contents_android, joriginal_browser_context_handle,
       is_incognito_branded));

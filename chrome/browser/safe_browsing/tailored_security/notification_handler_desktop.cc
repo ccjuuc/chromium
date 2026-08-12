@@ -5,14 +5,13 @@
 #include "chrome/browser/safe_browsing/tailored_security/notification_handler_desktop.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
@@ -24,10 +23,10 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/common/referrer.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
@@ -103,7 +102,8 @@ void TailoredSecurityNotificationHandler::OnClick(
   if (*action_index == 0) {
     LogUnconsentedOutcome(TailoredSecurityOutcome::kAccepted);
     chrome::ShowSafeBrowsingEnhancedProtection(
-        chrome::ScopedTabbedBrowserDisplayer(profile).browser());
+        chrome::ScopedTabbedBrowserDisplayer(profile)
+            .browser_window_interface());
   } else {
     LogUnconsentedOutcome(TailoredSecurityOutcome::kRejected);
   }
@@ -116,8 +116,10 @@ ui::ImageModel GetNotificationIcon() {
   return ui::ImageModel::FromResourceId(
       IDR_TAILORED_SECURITY_UNCONSENTED_NOTIFICATION);
 #else
-  return ui::ImageModel::FromVectorIcon(kSafetyCheckIcon, ui::kColorAccent,
-                                        message_center::kNotificationIconSize);
+  return ui::ImageModel::FromVectorIcon(
+      features::IsRoundedIconsEnabled() ? kAndroidSecurityPrivacySafeFilledIcon
+                                        : kSafetyCheckOldIcon,
+      ui::kColorAccent, message_center::kNotificationIconSize);
 #endif
 }
 

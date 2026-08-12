@@ -5,7 +5,6 @@
 #ifndef CC_LAYERS_TILE_DISPLAY_LAYER_IMPL_H_
 #define CC_LAYERS_TILE_DISPLAY_LAYER_IMPL_H_
 
-#include <map>
 #include <memory>
 #include <utility>
 #include <variant>
@@ -23,6 +22,7 @@
 #include "cc/tiles/tiling_set_coverage_iterator.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/common/resources/transferable_resource.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "ui/gfx/geometry/axis_transform2d.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -58,9 +58,9 @@ class CC_EXPORT TileDisplayLayerTile {
 
   TileDrawInfo::Mode draw_mode() {
     CHECK(IsReadyToDraw());
-    if (solid_color()) {
+    if (GetSolidColor()) {
       return TileDrawInfo::SOLID_COLOR_MODE;
-    } else if (is_oom()) {
+    } else if (IsOOM()) {
       return TileDrawInfo::OOM_MODE;
     } else {
       CHECK(resource());
@@ -70,7 +70,7 @@ class CC_EXPORT TileDisplayLayerTile {
 
   const TileDisplayLayerTileContents& contents() const { return contents_; }
 
-  std::optional<SkColor4f> solid_color() const {
+  std::optional<SkColor4f> GetSolidColor() const {
     if (std::holds_alternative<SkColor4f>(contents_)) {
       return std::get<SkColor4f>(contents_);
     }
@@ -84,7 +84,7 @@ class CC_EXPORT TileDisplayLayerTile {
     return std::nullopt;
   }
 
-  bool is_oom() const {
+  bool IsOOM() const {
     if (std::holds_alternative<TileDisplayLayerNoContents>(contents_)) {
       return std::get<TileDisplayLayerNoContents>(contents_).reason ==
              mojom::MissingTileReason::kOutOfMemory;
@@ -94,7 +94,21 @@ class CC_EXPORT TileDisplayLayerTile {
 
   bool IsReadyToDraw() const {
     return !std::holds_alternative<TileDisplayLayerNoContents>(contents_) ||
-           is_oom();
+           IsOOM();
+  }
+
+  std::optional<viz::ResourceId> GetResourceId() const {
+    if (auto res = resource()) {
+      return res->resource_id;
+    }
+    return std::nullopt;
+  }
+
+  std::optional<gfx::Size> GetResourceSize() const {
+    if (auto res = resource()) {
+      return res->resource_size;
+    }
+    return std::nullopt;
   }
 
  private:
@@ -105,7 +119,7 @@ class CC_EXPORT TileDisplayLayerTile {
 class CC_EXPORT TileDisplayLayerTiling {
  public:
   using Tile = TileDisplayLayerTile;
-  using TileMap = std::map<TileIndex, std::unique_ptr<Tile>>;
+  using TileMap = absl::flat_hash_map<TileIndex, std::unique_ptr<Tile>>;
   using CoverageIterator = DisplayTilingCoverageIterator;
 
   explicit TileDisplayLayerTiling(TileDisplayLayerImpl& layer, float scale_key);
@@ -167,10 +181,12 @@ class CC_EXPORT TileDisplayLayerImpl
     is_directly_composited_image_ = is_directly_composited_image;
   }
   void SetNearestNeighbor(bool nearest_neighbor) {
-    nearest_neighbor_ = nearest_neighbor;
+    TileBasedLayerImpl<TileDisplayLayerTiling>::SetNearestNeighbor(
+        nearest_neighbor);
   }
   void SetRecordedBounds(const gfx::Rect& bounds) { recorded_bounds_ = bounds; }
   bool IsDirectlyCompositedImage() const override;
+  gfx::Rect RecordedBounds() const override;
   void SetProposedTilingScalesForDeletion(
       std::vector<float> proposed_tiling_scales) {
     proposed_tiling_scales_for_deletion_ = std::move(proposed_tiling_scales);
@@ -182,23 +198,26 @@ class CC_EXPORT TileDisplayLayerImpl
       const {
     return proposed_tiling_scales_for_deletion_;
   }
-  bool nearest_neighbor() const { return nearest_neighbor_; }
 
   // LayerImpl overrides:
   mojom::LayerType GetLayerType() const override;
   std::unique_ptr<LayerImpl> CreateLayerImpl(
       LayerTreeImpl* tree_impl) const override;
-  void PushPropertiesTo(LayerImpl* layer) override;
-  void GetContentsResourceId(viz::ResourceId* resource_id,
-                             gfx::Size* resource_size,
-                             gfx::SizeF* resource_uv_size) const override;
-  gfx::Rect GetDamageRect() const override;
-  void ResetChangeTracking() override;
+  void CopyPropertiesTo(LayerImpl* layer) const override;
   gfx::ContentColorUsage GetContentColorUsage() const override;
+  DamageReasonSet GetDamageReasons() const override;
 
   void SetContentColorUsage(gfx::ContentColorUsage content_color_usage) {
     content_color_usage_ = content_color_usage;
   }
+
+  void set_has_animated_image_update_rect() {
+    has_animated_image_update_rect_ = true;
+  }
+  void set_has_non_animated_image_update_rect() {
+    has_non_animated_image_update_rect_ = true;
+  }
+  void ResetChangeTracking() override;
 
   void RecordDamage(const gfx::Rect& damage_rect);
 
@@ -217,15 +236,9 @@ class CC_EXPORT TileDisplayLayerImpl
 
  private:
   // TileBasedLayerImpl:
-  void AppendQuadsSpecialization(const AppendQuadsContext& context,
-                                 viz::CompositorRenderPass* render_pass,
-                                 AppendQuadsData* append_quads_data,
-                                 viz::SharedQuadState* shared_quad_state,
-                                 const Occlusion& scaled_occlusion,
-                                 const gfx::Vector2d& quad_offset,
-                                 float max_contents_scale) override;
-  float GetMaximumContentsScaleForUseInAppendQuads() override;
+  float GetMaximumContentsScaleForUseInAppendQuads() const override;
   float GetIdealContentsScaleKey() const override;
+  bool ValidateTilingSetForContentsResourceId() const override;
   void AppendQuadsForResourcelessSoftwareDraw(
       const AppendQuadsContext& context,
       viz::CompositorRenderPass* render_pass,
@@ -235,18 +248,17 @@ class CC_EXPORT TileDisplayLayerImpl
   TilingSetCoverageIterator<TileDisplayLayerTiling> Cover(
       const gfx::Rect& coverage_rect,
       float coverage_scale,
-      float ideal_contents_scale) override;
+      float ideal_contents_scale) const override;
   TilingResolution GetTilingResolutionForDebugBorders(
       const TileDisplayLayerTiling* tiling) const override;
+  bool ComputeCheckerboardedNeedsRecord() override;
 
   bool is_directly_composited_image_ = false;
-  bool nearest_neighbor_ = false;
+  bool has_animated_image_update_rect_ = false;
+  bool has_non_animated_image_update_rect_ = false;
   gfx::ContentColorUsage content_color_usage_ = gfx::ContentColorUsage::kSRGB;
   gfx::Rect recorded_bounds_;
 
-  // Denotes an area that is damaged and needs redraw. This is in the layer's
-  // space.
-  gfx::Rect damage_rect_;
   std::vector<std::unique_ptr<TileDisplayLayerTiling>> tilings_;
 
   // A list of tiling scale keys that the client has nominated for deletion.

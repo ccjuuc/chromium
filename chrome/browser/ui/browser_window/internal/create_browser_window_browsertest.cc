@@ -19,18 +19,18 @@ using CreateBrowserWindowBrowserTest = InProcessBrowserTest;
 IN_PROC_BROWSER_TEST_F(CreateBrowserWindowBrowserTest, CreateNewBrowserWindow) {
   BrowserWindowInterface* new_browser =
       CreateBrowserWindow(BrowserWindowCreateParams(
-          *browser()->profile(), /*from_user_gesture=*/false));
+          *browser()->GetProfile(), /*from_user_gesture=*/false));
 
   ASSERT_TRUE(new_browser);
   ASSERT_NE(new_browser, browser());
-  EXPECT_EQ(new_browser->GetProfile(), browser()->profile());
+  EXPECT_EQ(new_browser->GetProfile(), browser()->GetProfile());
   EXPECT_EQ(BrowserWindowInterface::TYPE_NORMAL, new_browser->GetType());
 }
 
 // Smoke test for the asynchronous version of CreateBrowserWindow().
 IN_PROC_BROWSER_TEST_F(CreateBrowserWindowBrowserTest,
                        CreateNewBrowserWindowWithCallback) {
-  BrowserWindowCreateParams create_params(*browser()->profile(),
+  BrowserWindowCreateParams create_params(*browser()->GetProfile(),
                                           /*from_user_gesture=*/false);
 
   base::test::TestFuture<BrowserWindowInterface*> future;
@@ -39,6 +39,38 @@ IN_PROC_BROWSER_TEST_F(CreateBrowserWindowBrowserTest,
 
   ASSERT_TRUE(new_browser);
   ASSERT_NE(new_browser, browser());
-  EXPECT_EQ(new_browser->GetProfile(), browser()->profile());
+  EXPECT_EQ(new_browser->GetProfile(), browser()->GetProfile());
   EXPECT_EQ(BrowserWindowInterface::TYPE_NORMAL, new_browser->GetType());
+}
+
+IN_PROC_BROWSER_TEST_F(CreateBrowserWindowBrowserTest,
+                       CreateAppBrowserWindowAndClone) {
+  BrowserWindowCreateParams create_params =
+      BrowserWindowCreateParams::CreateForApp(
+          "TestApp", /*trusted_source=*/true, gfx::Rect(0, 0, 800, 600),
+          browser()->GetProfile(), /*user_gesture=*/true);
+  create_params.omit_from_session_restore = true;
+
+  BrowserWindowCreateParams cloned_params = create_params.Clone();
+  EXPECT_EQ(create_params.app_name, cloned_params.app_name);
+  EXPECT_EQ(create_params.is_trusted_source, cloned_params.is_trusted_source);
+  EXPECT_EQ(create_params.initial_bounds, cloned_params.initial_bounds);
+  EXPECT_EQ(create_params.omit_from_session_restore,
+            cloned_params.omit_from_session_restore);
+
+  BrowserWindowInterface* app_browser =
+      CreateBrowserWindow(std::move(create_params));
+  ASSERT_TRUE(app_browser);
+  EXPECT_EQ(BrowserWindowInterface::TYPE_APP, app_browser->GetType());
+}
+
+IN_PROC_BROWSER_TEST_F(CreateBrowserWindowBrowserTest,
+                       CreateDevToolsBrowserWindow) {
+  BrowserWindowCreateParams create_params =
+      BrowserWindowCreateParams::CreateForDevTools(browser()->GetProfile());
+
+  BrowserWindowInterface* devtools_browser =
+      CreateBrowserWindow(std::move(create_params));
+  ASSERT_TRUE(devtools_browser);
+  EXPECT_EQ(BrowserWindowInterface::TYPE_DEVTOOLS, devtools_browser->GetType());
 }

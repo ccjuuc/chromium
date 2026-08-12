@@ -4,10 +4,10 @@
 
 #include "third_party/blink/renderer/modules/webcodecs/audio_encoder.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <limits>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/to_string.h"
 #include "base/trace_event/common/trace_event_common.h"
@@ -57,7 +57,7 @@ bool VerifyParameterValues(const T& value,
                            String error_message_base_base,
                            Vector<T> supported_values,
                            String* js_error_message) {
-  if (base::Contains(supported_values, value)) {
+  if (std::ranges::contains(supported_values, value)) {
     return true;
   }
 
@@ -331,6 +331,7 @@ bool VerifyCodecSupportStatic(AudioEncoderTraits::ParsedConfig* config,
                                    js_error_message)) {
           return false;
         }
+#if BUILDFLAG(IS_WIN)
         if (config->options.bitrate.has_value()) {
           if (!VerifyParameterValues(
                   config->options.bitrate.value(), "Unsupported bitrate.",
@@ -338,6 +339,10 @@ bool VerifyCodecSupportStatic(AudioEncoderTraits::ParsedConfig* config,
             return false;
           }
         }
+#else
+        // Other platforms vary in their bitrate support, so we can't provide
+        // an accurate answer here.
+#endif
         if (!VerifyParameterValues(config->options.sample_rate,
                                    "Unsupported sample rate.", {44100, 48000},
                                    js_error_message)) {
@@ -667,13 +672,12 @@ void AudioEncoder::CallOutputCallback(
     metadata->setDecoderConfig(decoder_config);
   }
 
-  TRACE_EVENT_BEGIN1(kCategory, GetTraceNames()->output.c_str(), "timestamp",
-                     chunk->timestamp());
+  TRACE_EVENT(kCategory,
+              perfetto::StaticString(GetTraceNames()->output.c_str()),
+              "timestamp", chunk->timestamp());
 
   ScriptState::Scope scope(script_state_);
   output_callback_->InvokeAndReportException(nullptr, chunk, metadata);
-
-  TRACE_EVENT_END0(kCategory, GetTraceNames()->output.c_str());
 }
 
 // static

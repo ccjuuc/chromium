@@ -18,9 +18,10 @@ example_value:
 - hosting.com/bad_path
 - https://server:8080/path
 - .exact.hostname.com
-future_on:
-- chrome.*
-- chrome_os
+supported_on:
+- android:150-
+- chrome.*:146-
+- chrome_os:146-
 features:
   dynamic_refresh: true
   per_profile: true

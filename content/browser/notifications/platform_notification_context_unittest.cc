@@ -614,8 +614,13 @@ TEST_F(PlatformNotificationContextTest, ServiceWorkerUnregistered) {
   // Register a Service Worker to get a valid registration id.
   blink::mojom::ServiceWorkerRegistrationOptions options;
   options.scope = origin;
+  auto fetch_client_settings_object =
+      blink::mojom::FetchClientSettingsObject::New();
+  fetch_client_settings_object->policy_container_policies =
+      blink::mojom::PolicyContainerPolicies::New();
   embedded_worker_test_helper->context()->RegisterServiceWorker(
-      script_url, key, options, blink::mojom::FetchClientSettingsObject::New(),
+      script_url, key, options, std::move(fetch_client_settings_object),
+
       base::BindOnce(&PlatformNotificationContextTest::DidRegisterServiceWorker,
                      base::Unretained(this), &service_worker_registration_id),
       /*requesting_frame_id=*/GlobalRenderFrameHostId(),
@@ -890,7 +895,8 @@ TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
   WriteNotificationDataSync(context.get(), origin, data);
 
   // Let some time pass but not enough to delete the notification yet.
-  task_environment_.FastForwardBy(base::Days(5));
+  task_environment_.AdvanceClock(base::Days(5));
+  base::RunLoop().RunUntilIdle();
   context->TriggerNotifications();
   // Allow for closing notifications on the UI thread.
   base::RunLoop().RunUntilIdle();
@@ -907,7 +913,8 @@ TEST_F(PlatformNotificationContextTest, DeleteOldNotifications) {
 
   // Let some more time pass so the first notification is not considered new
   // anymore and should get closed while the second one should stay.
-  task_environment_.FastForwardBy(base::Days(2));
+  task_environment_.AdvanceClock(base::Days(2));
+  base::RunLoop().RunUntilIdle();
   context->TriggerNotifications();
   // Allow for closing notifications on the UI thread.
   base::RunLoop().RunUntilIdle();

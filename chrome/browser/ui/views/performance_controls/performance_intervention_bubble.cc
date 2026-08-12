@@ -9,12 +9,8 @@
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
-#include "base/notreached.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/ui/performance_controls/performance_intervention_bubble_delegate.h"
-#include "chrome/browser/ui/performance_controls/performance_intervention_bubble_observer.h"
 #include "chrome/browser/ui/performance_controls/performance_intervention_button_controller.h"
 #include "chrome/browser/ui/performance_controls/tab_list_model.h"
 #include "chrome/browser/ui/views/performance_controls/performance_intervention_button.h"
@@ -22,11 +18,11 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/performance_manager/public/features.h"
-#include "components/strings/grit/components_strings.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/dialog_model_field.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
@@ -48,8 +44,7 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PerformanceInterventionBubble,
 
 // static
 views::BubbleDialogModelHost* PerformanceInterventionBubble::CreateBubble(
-    Browser* browser,
-    PerformanceInterventionButton* anchor_view,
+    views::BubbleAnchor anchor,
     PerformanceInterventionButtonController* button_controller) {
   auto tab_list_model_unique =
       std::make_unique<TabListModel>(button_controller->actionable_cpu_tabs());
@@ -58,7 +53,7 @@ views::BubbleDialogModelHost* PerformanceInterventionBubble::CreateBubble(
   RecordSuggestedTabShownCount(tab_list_model->count());
   auto bubble_delegate =
       std::make_unique<PerformanceInterventionBubbleDelegate>(
-          browser, std::move(tab_list_model_unique), button_controller);
+          std::move(tab_list_model_unique), button_controller);
 
   const DialogStrings strings = GetStrings(tab_list_model->count());
   PerformanceInterventionBubbleDelegate* const delegate = bubble_delegate.get();
@@ -97,11 +92,12 @@ views::BubbleDialogModelHost* PerformanceInterventionBubble::CreateBubble(
           .Build();
 
   auto bubble_unique = std::make_unique<views::BubbleDialogModelHost>(
-      std::move(dialog_model), anchor_view, views::BubbleBorder::TOP_RIGHT);
+      std::move(dialog_model), anchor, views::BubbleBorder::TOP_RIGHT);
   auto* const bubble = bubble_unique.get();
 
-  views::Widget* widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(bubble_unique));
+  views::Widget* widget = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(bubble_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   widget->widget_delegate()->SetEnableArrowKeyTraversal(true);
   widget->Show();
   button_controller->OnBubbleShown();
@@ -113,7 +109,39 @@ views::BubbleDialogModelHost* PerformanceInterventionBubble::CreateBubble(
 void PerformanceInterventionBubble::CloseBubble(
     views::BubbleDialogModelHost* bubble_dialog) {
   CHECK(bubble_dialog);
-  bubble_dialog->Close();
+  if (bubble_dialog->GetWidget() && !bubble_dialog->GetWidget()->IsClosed()) {
+    bubble_dialog->Close();
+  }
+}
+
+// static
+void PerformanceInterventionBubble::RecordCloseReason(
+    views::Widget::ClosedReason closed_reason) {
+  InterventionBubbleActionType action_type =
+      InterventionBubbleActionType::kUnknown;
+  switch (closed_reason) {
+    case views::Widget::ClosedReason::kUnspecified:
+      action_type = InterventionBubbleActionType::kUnknown;
+      break;
+    case views::Widget::ClosedReason::kEscKeyPressed:
+    case views::Widget::ClosedReason::kCloseButtonClicked:
+      action_type = InterventionBubbleActionType::kClose;
+      break;
+    case views::Widget::ClosedReason::kLostFocus:
+      action_type = InterventionBubbleActionType::kIgnore;
+      break;
+    case views::Widget::ClosedReason::kCancelButtonClicked:
+      action_type = InterventionBubbleActionType::kDismiss;
+      break;
+    case views::Widget::ClosedReason::kAcceptButtonClicked:
+      action_type = InterventionBubbleActionType::kAccept;
+      break;
+  }
+
+  RecordInterventionBubbleClosedReason(
+      performance_manager::user_tuning::PerformanceDetectionManager::
+          ResourceType::kCpu,
+      action_type);
 }
 
 DialogStrings PerformanceInterventionBubble::GetStrings(int count) {

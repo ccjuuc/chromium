@@ -18,7 +18,6 @@
 #include "device/vr/openxr/openxr_spatial_plane_manager.h"
 #include "device/vr/openxr/openxr_spatial_utils.h"
 #include "device/vr/openxr/openxr_util.h"
-#include "device/vr/public/cpp/features.h"
 #include "device/vr/public/mojom/xr_session.mojom-shared.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/openxr/dev/xr_android.h"
@@ -42,11 +41,14 @@ OpenXrSpatialFrameworkManager::OpenXrSpatialFrameworkManager(
   absl::flat_hash_map<XrSpatialCapabilityEXT,
                       absl::flat_hash_set<XrSpatialComponentTypeEXT>>
       capability_configuration;
+  bool mesh_detection_enabled = supported_features.contains(
+      device::mojom::XRSessionFeature::MESH_DETECTION);
   if (supported_features.contains(
-          device::mojom::XRSessionFeature::PLANE_DETECTION)) {
+          device::mojom::XRSessionFeature::PLANE_DETECTION) ||
+      mesh_detection_enabled) {
     plane_manager_ = std::make_unique<OpenXrSpatialPlaneManager>(
         base_space_, extension_helper_.get(), *this, openxr_->instance(),
-        openxr_->system());
+        openxr_->system(), mesh_detection_enabled);
     plane_manager_->PopulateCapabilityConfiguration(capability_configuration);
   }
 
@@ -71,12 +73,15 @@ OpenXrSpatialFrameworkManager::OpenXrSpatialFrameworkManager(
   // to help abstract some of the details of creating the child structs, even
   // though at present we only have a configuration base.
   std::vector<OpenXrSpatialCapabilityConfigurationBase> capability_configs;
-  std::vector<XrSpatialCapabilityConfigurationBaseHeaderEXT*>
-      capability_config_ptrs;
+  capability_configs.reserve(capability_configuration.size());
   for (auto& [capability, components] : capability_configuration) {
     capability_configs.emplace_back(capability, components);
-    capability_config_ptrs.push_back(
-        capability_configs.back().GetAsBaseHeader());
+  }
+
+  std::vector<XrSpatialCapabilityConfigurationBaseHeaderEXT*>
+      capability_config_ptrs;
+  for (auto& config : capability_configs) {
+    capability_config_ptrs.push_back(config.GetAsBaseHeader());
   }
 
   XrSpatialContextCreateInfoEXT create_info = {
@@ -120,6 +125,13 @@ OpenXrSceneUnderstandingManagerType OpenXrSpatialFrameworkManager::GetType()
 
 OpenXrPlaneManager* OpenXrSpatialFrameworkManager::GetPlaneManager() {
   return plane_manager_.get();
+}
+
+OpenXrMeshManager* OpenXrSpatialFrameworkManager::GetMeshManager() {
+  if (plane_manager_ && plane_manager_->mesh_detection_enabled()) {
+    return plane_manager_.get();
+  }
+  return nullptr;
 }
 
 OpenXrHitTestManager* OpenXrSpatialFrameworkManager::GetHitTestManager() {
@@ -245,11 +257,6 @@ OpenXrSpatialFrameworkManagerFactory::~OpenXrSpatialFrameworkManagerFactory() =
 
 const base::flat_set<std::string_view>&
 OpenXrSpatialFrameworkManagerFactory::GetRequestedExtensions() const {
-  if (!base::FeatureList::IsEnabled(features::kOpenXrSpatialEntities)) {
-    static base::NoDestructor<base::flat_set<std::string_view>> kEmptySet({});
-    return *kEmptySet;
-  }
-
   static base::NoDestructor<base::flat_set<std::string_view>> kExtensions({
       XR_EXT_FUTURE_EXTENSION_NAME,
       XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
@@ -269,10 +276,6 @@ void OpenXrSpatialFrameworkManagerFactory::CheckAndUpdateEnabledState(
   supported_features_.clear();
   SetEnabled(false);
 
-  if (!base::FeatureList::IsEnabled(features::kOpenXrSpatialEntities)) {
-    return;
-  }
-
   if (!extension_enum->ExtensionSupported(
           XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME)) {
     return;
@@ -288,11 +291,15 @@ void OpenXrSpatialFrameworkManagerFactory::CheckAndUpdateEnabledState(
 
   std::vector<XrSpatialCapabilityEXT> capabilities =
       GetCapabilities(xrEnumerateSpatialCapabilitiesEXT, instance, system_id);
+  // Mesh detection is also supported when plane tracking is available, since
+  // meshes are synthesized from plane bounding box data.
   if (extension_enum->ExtensionSupported(
           XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME) &&
       OpenXrSpatialPlaneManager::IsSupported(capabilities)) {
     supported_features_.insert(
         device::mojom::XRSessionFeature::PLANE_DETECTION);
+    supported_features_.insert(
+        device::mojom::XRSessionFeature::MESH_DETECTION);
   }
 
   if (extension_enum->ExtensionSupported(

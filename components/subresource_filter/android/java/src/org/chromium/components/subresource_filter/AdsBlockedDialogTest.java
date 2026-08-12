@@ -80,9 +80,6 @@ public class AdsBlockedDialogTest {
         Assert.assertTrue(
                 "Dialog should be dismissed on touch outside.",
                 mModalDialogModel.get(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE));
-        Assert.assertTrue(
-                "Dialog should gain focus for accessibility.",
-                mModalDialogModel.get(ModalDialogProperties.FOCUS_DIALOG));
 
         Mockito.verify(mModalDialogManagerMock)
                 .showDialog(mModalDialogModel, ModalDialogManager.ModalDialogType.TAB);
@@ -134,6 +131,49 @@ public class AdsBlockedDialogTest {
         createAndShowDialog(false);
         mClickableSpan.onClick(null);
         Mockito.verify(mNativeMock).onLearnMoreClicked(anyLong());
+    }
+
+    /**
+     * Tests that dismissing a pending dialog (not yet shown by ModalDialogManager) correctly runs
+     * the cleanup path manually.
+     */
+    @Test
+    public void testDismissPendingDialogCleansUp() {
+        createAndShowDialog(true);
+        mDialog.dismiss();
+        Mockito.verify(mDialogHandler).removeCallbacksAndMessages(null);
+        Mockito.verify(mNativeMock, never()).onDismissed(anyLong());
+    }
+
+    /**
+     * Tests that dismissing a showing dialog delegates dismissal to ModalDialogManager and does not
+     * perform manual cleanup twice.
+     */
+    @Test
+    public void testDismissShowingDialogDelegatesToManager() {
+        createAndShowDialog(false);
+        // Stub dismissDialog to simulate the manager calling onDismiss synchronously
+        Mockito.doAnswer(
+                        invocation -> {
+                            ModalDialogProperties.Controller dialogController =
+                                    mModalDialogModel.get(ModalDialogProperties.CONTROLLER);
+                            dialogController.onDismiss(
+                                    mModalDialogModel, DialogDismissalCause.DISMISSED_BY_NATIVE);
+                            return null;
+                        })
+                .when(mModalDialogManagerMock)
+                .dismissDialog(Mockito.any(), Mockito.anyInt());
+
+        mDialog.dismiss();
+
+        // Verify that the manager's dismissDialog was called
+        Mockito.verify(mModalDialogManagerMock)
+                .dismissDialog(mModalDialogModel, DialogDismissalCause.DISMISSED_BY_NATIVE);
+
+        // Verify that Java doesn't call back to native's onDismissed when handling a native
+        // dismissal.
+        Mockito.verify(mNativeMock, never()).onDismissed(anyLong());
+        Mockito.verify(mDialogHandler, Mockito.times(1)).removeCallbacksAndMessages(null);
     }
 
     /** Tests that the dialog is shown using Handler#post when shouldPostDialog is true. */

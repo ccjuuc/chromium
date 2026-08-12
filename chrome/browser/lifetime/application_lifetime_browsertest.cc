@@ -80,7 +80,7 @@ INSTANTIATE_TEST_SUITE_P(,
                                          switches::kGuest));
 
 IN_PROC_BROWSER_TEST_P(AttemptRestartTest, AttemptRestartWithOTRProfiles) {
-  // We will now attempt restart, prior to (crbug.com/999085)
+  // We will now attempt restart, prior to (crbug.com/41478995)
   // the new session after restart defaulted to the browser type
   // of the last session. Now, we will restart always to regular mode.
   chrome::AttemptRestart();
@@ -115,9 +115,10 @@ IN_PROC_BROWSER_TEST_F(RelaunchIgnoreUnloadHandlersTest, Do) {
                       "window.addEventListener('beforeunload',"
                       "function(event) { event.returnValue = 'Foo'; });"));
   content::PrepContentsForBeforeUnloadTest(tab);
+  ui_test_utils::BrowserDestroyedObserver observer(browser());
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&chrome::RelaunchIgnoreUnloadHandlers));
-  ui_test_utils::WaitForBrowserToClose(browser());
+  observer.Wait();
 }
 
 using ApplicationLifetimeTest = InProcessBrowserTest;

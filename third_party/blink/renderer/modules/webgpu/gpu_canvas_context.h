@@ -6,11 +6,13 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBGPU_GPU_CANVAS_CONTEXT_H_
 
 #include "base/containers/heap_array.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_tone_mapping_mode.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_tone_mapping_mode.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_canvas_alpha_mode.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context_factory.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/bindings/union_base.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_cpp.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_swap_buffer_provider.h"
 #include "third_party/blink/renderer/platform/graphics/predefined_color_space.h"
@@ -18,6 +20,7 @@
 
 namespace blink {
 
+class CanvasNon2DResourceProvider;
 class ExceptionState;
 class ExecutionContext;
 class GPUDevice;
@@ -64,9 +67,8 @@ class GPUCanvasContext : public ScriptWrappable,
   // CanvasRenderingContext implementation
   V8RenderingContext* AsV8RenderingContext() final;
   V8OffscreenRenderingContext* AsV8OffscreenRenderingContext() final;
-  SkAlphaType GetAlphaType() const override;
-  viz::SharedImageFormat GetSharedImageFormat() const override;
-  gfx::ColorSpace GetColorSpace() const override;
+  bool IsOpaque() const override;
+  base::ByteSize AllocatedBufferSize() const override;
   // Produces a snapshot of the current contents of the swap chain if possible
   // or else a snapshot of the most-recently presented contents.
   scoped_refptr<StaticBitmapImage> GetImage() final;
@@ -88,7 +90,8 @@ class GPUCanvasContext : public ScriptWrappable,
   void Dispose() override;
 
   // OffscreenCanvas-specific methods
-  bool PushFrame() final;
+  scoped_refptr<CanvasResource> GetResourceForPushFrame(
+      bool& should_call_push_frame) final;
   // Returns a StaticBitmapImage backed by a texture containing the current
   // contents of the front buffer. This is done without any pixel copies. The
   // texture in the ImageBitmap is from the active ContextProvider on the
@@ -102,7 +105,8 @@ class GPUCanvasContext : public ScriptWrappable,
   }
 
   // gpu_canvas_context.idl {{{
-  V8UnionHTMLCanvasElementOrOffscreenCanvas* getHTMLOrOffscreenCanvas() const;
+  bindings::OptimizedReturnProxy<V8UnionHTMLCanvasElementOrOffscreenCanvas>
+  getHTMLOrOffscreenCanvas(ScriptState*) const;
   void configure(const GPUCanvasConfiguration* descriptor, ExceptionState&);
   void unconfigure();
   GPUCanvasConfiguration* getConfiguration();
@@ -116,9 +120,7 @@ class GPUCanvasContext : public ScriptWrappable,
   bool IsGPUDeviceDestroyed() override;
 
  private:
-  CanvasResourceProviderSharedImage* GetOrCreateCanvasResourceProvider();
-  CanvasResourceProviderSharedImage* PaintRenderingResultsToCanvas(
-      SourceDrawingBuffer);
+  CanvasNon2DResourceProvider* GetOrCreateCanvasNon2DResourceProvider();
   scoped_refptr<WebGPUMailboxTexture> GetFrontBufferMailboxTexture();
   void DetachSwapBuffers();
   void ReplaceDrawingBuffer(bool destroy_swap_buffers);
@@ -131,9 +133,13 @@ class GPUCanvasContext : public ScriptWrappable,
 
   bool CopyTextureToResourceProvider(
       const wgpu::Texture& texture,
-      CanvasResourceProviderSharedImage* resource_provider) const;
+      CanvasNon2DResourceProvider* resource_provider) const;
 
   void CopyToSwapTexture();
+
+  viz::SharedImageFormat GetSharedImageFormat() const;
+  gfx::ColorSpace GetColorSpace() const;
+  SkAlphaType GetAlphaType() const;
 
   base::WeakPtr<WebGraphicsContext3DProviderWrapper> GetContextProviderWeakPtr()
       const;
@@ -143,7 +149,7 @@ class GPUCanvasContext : public ScriptWrappable,
 
   Member<GPUDevice> device_;
 
-  std::unique_ptr<CanvasResourceProviderSharedImage> resource_provider_;
+  std::unique_ptr<CanvasNon2DResourceProvider> resource_provider_;
 
   // `did_fail_to_create_resource_provider_` prevents repeated attempts in
   // allocating resources after the first attempt failed.
@@ -174,6 +180,7 @@ class GPUCanvasContext : public ScriptWrappable,
   // Matches [[texture_descriptor]] in the WebGPU specification except that it
   // never becomes null.
   wgpu::TextureDescriptor texture_descriptor_;
+
   // The texture descriptor for the swap_texture is tracked separately, since
   // it may have different usage in the case that a copy is required.
   wgpu::TextureDescriptor swap_texture_descriptor_;

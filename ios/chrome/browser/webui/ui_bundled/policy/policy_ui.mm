@@ -8,10 +8,13 @@
 #import <optional>
 #import <string>
 
+#import "base/feature_list.h"
+#import "base/functional/bind.h"
 #import "base/json/json_writer.h"
 #import "components/grit/policy_resources.h"
 #import "components/grit/policy_resources_map.h"
 #import "components/policy/core/browser/policy_conversions.h"
+#import "components/policy/core/common/features.h"
 #import "components/policy/core/common/policy_loader_common.h"
 #import "components/policy/core/common/policy_logger.h"
 #import "components/policy/core/common/policy_utils.h"
@@ -29,6 +32,7 @@
 #import "ios/chrome/browser/webui/ui_bundled/policy/policy_ui_handler.h"
 #import "ios/chrome/common/channel_info.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
+#import "ios/web/public/web_state.h"
 #import "ios/web/public/webui/web_ui_ios.h"
 #import "ios/web/public/webui/web_ui_ios_data_source.h"
 #import "ios/web/public/webui/web_ui_ios_message_handler.h"
@@ -36,13 +40,13 @@
 
 namespace {
 
-base::Value::List GetChromePolicyNames(ProfileIOS* profile) {
+base::ListValue GetChromePolicyNames(ProfileIOS* profile) {
   policy::SchemaRegistry* registry =
       profile->GetPolicyConnector()->GetSchemaRegistry();
   scoped_refptr<policy::SchemaMap> schema_map = registry->schema_map();
 
   // Add Chrome policy names.
-  base::Value::List chrome_policy_names;
+  base::ListValue chrome_policy_names;
   policy::PolicyNamespace chrome_namespace(policy::POLICY_DOMAIN_CHROME, "");
   const policy::Schema* chrome_schema = schema_map->GetSchema(chrome_namespace);
   for (auto it = chrome_schema->GetPropertiesIterator(); !it.IsAtEnd();
@@ -58,8 +62,8 @@ base::Value::List GetChromePolicyNames(ProfileIOS* profile) {
 
 // Returns the version information to be displayed on the chrome://policy/logs
 // page.
-base::Value::Dict GetVersionInfo() {
-  base::Value::Dict version_info;
+base::DictValue GetVersionInfo() {
+  base::DictValue version_info;
 
   version_info.Set("revision", version_info::GetLastChange());
   version_info.Set("version", version_info::GetVersionNumber());
@@ -76,6 +80,7 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
 
   static constexpr webui::LocalizedString kStrings[] = {
       // Localized strings (alphabetical order).
+      {"clearSearch", IDS_CLEAR},
       {"copyPoliciesJSON", IDS_COPY_POLICIES_JSON},
       {"exportPoliciesJSON", IDS_EXPORT_POLICIES_JSON},
       {"filterPlaceholder", IDS_POLICY_FILTER_PLACEHOLDER},
@@ -106,6 +111,9 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
       {"labelProfileId", IDS_POLICY_LABEL_PROFILE_ID},
       {"labelRefreshInterval", IDS_POLICY_LABEL_REFRESH_INTERVAL},
       {"labelStatus", IDS_POLICY_LABEL_STATUS},
+      {"labelPolicyFetch", IDS_POLICY_LABEL_POLICY_FETCH},
+      {"labelExtensionInstallPolicyFetch",
+       IDS_POLICY_LABEL_EXTENSION_INSTALL_POLICY_FETCH},
       {"labelTimeSinceLastFetchAttempt",
        IDS_POLICY_LABEL_TIME_SINCE_LAST_FETCH_ATTEMPT},
       {"labelTimeSinceLastRefresh", IDS_POLICY_LABEL_TIME_SINCE_LAST_REFRESH},
@@ -176,7 +184,7 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
     // input types.
     policy::Schema chrome_schema =
         policy::Schema::Wrap(policy::GetChromeSchemaData());
-    base::Value::List policy_names = GetChromePolicyNames(profile);
+    base::ListValue policy_names = GetChromePolicyNames(profile);
 
     std::optional<std::string> schema =
         base::WriteJson(PolicyUI::GetSchema(profile));
@@ -208,6 +216,7 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
   static constexpr webui::LocalizedString kPolicyLogsStrings[] = {
       {"browserName", IDS_IOS_PRODUCT_NAME},
       {"exportLogsJSON", IDS_EXPORT_POLICY_LOGS_JSON},
+      {"filterLogs", IDS_POLICY_LOGS_FILTER_PLACEHOLDER},
       {"logsTitle", IDS_POLICY_LOGS_TITLE},
       {"os", IDS_VERSION_UI_OS},
       {"refreshLogs", IDS_REFRESH_POLICY_LOGS},
@@ -233,6 +242,11 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
 
   source->SetDefaultResource(IDR_POLICY_POLICY_HTML);
   source->EnableReplaceI18nInJS();
+
+  source->AddBoolean(
+      "policyPageMojoMigrationEnabled",
+      base::FeatureList::IsEnabled(policy::features::kPolicyPageMojoMigration));
+
   return source;
 }
 
@@ -240,9 +254,16 @@ web::WebUIIOSDataSource* CreatePolicyUIHtmlSource(ProfileIOS* profile) {
 
 PolicyUI::PolicyUI(web::WebUIIOS* web_ui, const std::string& host)
     : web::WebUIIOSController(web_ui, host) {
-  web_ui->AddMessageHandler(std::make_unique<PolicyUIHandler>());
   ProfileIOS* profile = ProfileIOS::FromWebUIIOS(web_ui);
+  web_ui->AddMessageHandler(std::make_unique<PolicyUIHandler>(profile));
   web::WebUIIOSDataSource::Add(profile, CreatePolicyUIHtmlSource(profile));
+
+  if (base::FeatureList::IsEnabled(
+          policy::features::kPolicyPageMojoMigration)) {
+    web_ui->GetWebState()->GetInterfaceBinderForMainFrame()->AddInterface(
+        base::BindRepeating(&PolicyUI::BindInterface,
+                            weak_ptr_factory_.GetWeakPtr()));
+  }
 }
 
 // static
@@ -254,8 +275,7 @@ bool PolicyUI::ShouldLoadTestPage(ProfileIOS* profile) {
   // managed.
   return policy::utils::IsPolicyTestingEnabled(profile->GetPrefs(),
                                                GetChannel()) &&
-         !auth_service->HasPrimaryIdentityManaged(
-             signin::ConsentLevel::kSignin);
+         !auth_service->HasPrimaryIdentityManaged();
 }
 
 // static
@@ -270,13 +290,13 @@ base::Value PolicyUI::GetSchema(ProfileIOS* profile) {
   // }
   // A dictionary is used to be consistent with other platforms sharing the
   // policy test page frontend implementation.
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   // Create a string policy_names_to_types mapping policy names to their
   // input types.
   policy::Schema chrome_schema =
       policy::Schema::Wrap(policy::GetChromeSchemaData());
-  base::Value::List policy_names = GetChromePolicyNames(profile);
+  base::ListValue policy_names = GetChromePolicyNames(profile);
 
   // "chrome" is the only namespace on iOS.
   dict.Set("chrome", policy::utils::GetPolicyNameToTypeMapping(policy_names,
@@ -285,4 +305,25 @@ base::Value PolicyUI::GetSchema(ProfileIOS* profile) {
   return base::Value(std::move(dict));
 }
 
-PolicyUI::~PolicyUI() {}
+void PolicyUI::BindInterface(
+    mojo::PendingReceiver<policy::mojom::PolicyPageHandlerFactory> receiver) {
+  if (receiver_.is_bound()) {
+    receiver_.reset();
+  }
+  receiver_.Bind(std::move(receiver));
+}
+
+void PolicyUI::CreateHandler(
+    mojo::PendingReceiver<policy::mojom::PolicyPageHandler> handler,
+    mojo::PendingRemote<policy::mojom::PolicyPageClient> client) {
+  handler_ =
+      std::make_unique<PolicyUIHandler>(std::move(handler), std::move(client),
+                                        ProfileIOS::FromWebUIIOS(web_ui()));
+}
+
+PolicyUI::~PolicyUI() {
+  if (receiver_.is_bound()) {
+    web_ui()->GetWebState()->GetInterfaceBinderForMainFrame()->RemoveInterface(
+        policy::mojom::PolicyPageHandlerFactory::Name_);
+  }
+}

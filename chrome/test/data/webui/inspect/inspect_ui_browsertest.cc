@@ -9,6 +9,7 @@
 #include "chrome/browser/devtools/device/adb/mock_adb_server.h"
 #include "chrome/browser/devtools/device/devtools_android_bridge.h"
 #include "chrome/browser/devtools/features.h"
+#include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
@@ -20,6 +21,7 @@
 #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/scoped_privacy_sandbox_attestations.h"
 #include "components/privacy_sandbox/privacy_sandbox_features.h"
+#include "components/privacy_sandbox/privacy_sandbox_settings.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
@@ -61,7 +63,7 @@ class InspectUITest : public WebUIMochaBrowserTest {
 
     // Fake clicking the "Inspect Native UI" button.
     web_ui->ProcessWebUIMessage(GURL(), "launch-ui-devtools",
-                                base::Value::List());
+                                base::ListValue());
 
     new_tab_observer.Wait();
     EXPECT_EQ(2, browser()->tab_strip_model()->count());
@@ -89,10 +91,10 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, SharedWorker) {
   ASSERT_TRUE(RunTestCase("SharedWorker"));
 }
 
-// Flaky due to failure to bind a hardcoded port. crbug.com/566057
+// Flaky due to failure to bind a hardcoded port. crbug.com/41226327
 IN_PROC_BROWSER_TEST_F(InspectUITest, DISABLED_AndroidTargets) {
   DevToolsAndroidBridge* android_bridge =
-      DevToolsAndroidBridge::Factory::GetForProfile(browser()->profile());
+      DevToolsAndroidBridge::Factory::GetForProfile(browser()->GetProfile());
   AndroidDeviceManager::DeviceProviders providers;
   providers.push_back(new AdbDeviceProvider());
   android_bridge->set_device_providers_for_test(providers);
@@ -115,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, ReloadCrash) {
                                            GURL(chrome::kChromeUIInspectURL)));
 }
 
-// Disabled due to excessive flakiness. http://crbug.com/1304812
+// Disabled due to excessive flakiness. http://crbug.com/40826687
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_LaunchUIDevtools DISABLED_LaunchUIDevtools
 #else
@@ -149,60 +151,6 @@ IN_PROC_BROWSER_TEST_F(InspectUITest, MAYBE_LaunchUIDevtools) {
   // Ensure that "Inspect Native UI" button is enabled.
   ASSERT_TRUE(ExecJs(inspect_ui_contents->GetPrimaryMainFrame(),
                      "assertNativeUIButtonDisabled(false);"));
-}
-
-class InspectUISharedStorageTest : public InspectUITest {
- public:
-  InspectUISharedStorageTest() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{network::features::kSharedStorageAPI,
-                              features::kPrivacySandboxAdsAPIsOverride,
-                              privacy_sandbox::
-                                  kOverridePrivacySandboxSettingsLocalTesting},
-        /*disabled_features=*/{});
-  }
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("*", "127.0.0.1");
-    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
-    https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_TEST_NAMES);
-    content::SetupCrossSiteRedirector(&https_server_);
-
-    ASSERT_TRUE(https_server_.Start());
-
-    InspectUITest::SetUpOnMainThread();
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
-};
-
-IN_PROC_BROWSER_TEST_F(InspectUISharedStorageTest, SharedStorageWorklet) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  GURL main_frame_url = https_server_.GetURL("a.test", "/empty.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), main_frame_url));
-
-  const char kModuleScriptFile[] = "/shared_storage/simple_module.js";
-
-  GURL module_script_url = https_server_.GetURL("a.test", kModuleScriptFile);
-  EXPECT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
-                      content::JsReplace("sharedStorage.worklet.addModule($1)",
-                                         module_script_url)));
-
-  ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUIInspectURL),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-
-  ASSERT_TRUE(RunTestCase("SharedStorageWorklet"));
 }
 
 class InspectUIFencedFrameTest : public InspectUITest {

@@ -4,12 +4,12 @@
 
 #include "content/browser/file_system_access/file_system_access_file_writer_impl.h"
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -30,7 +30,9 @@
 #include "content/browser/file_system_access/fixed_file_system_access_permission_grant.h"
 #include "content/browser/file_system_access/mock_file_system_access_permission_context.h"
 #include "content/browser/file_system_access/mock_file_system_access_permission_grant.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_browser_context.h"
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/string_data_source.h"
 #include "net/base/io_buffer.h"
@@ -119,7 +121,8 @@ class TestFileSystemBackend : public storage::TestFileSystemBackend {
 class FileSystemAccessFileWriterImplTestBase : public testing::Test {
  public:
   FileSystemAccessFileWriterImplTestBase()
-      : task_environment_(base::test::TaskEnvironment::MainThreadType::IO) {}
+      : task_environment_(base::test::TaskEnvironment::TimeSource::MOCK_TIME,
+                          base::test::TaskEnvironment::MainThreadType::IO) {}
 
   virtual FileSystemAccessPermissionContext* permission_context() {
     return nullptr;
@@ -131,6 +134,9 @@ class FileSystemAccessFileWriterImplTestBase : public testing::Test {
 
   void TearDown() override {
     manager_.reset();
+
+    ChildProcessSecurityPolicyImpl::GetInstance()->Remove(
+        ChildProcessId::FromUnsafeValue(kProcessId));
 
     task_environment_.RunUntilIdle();
     // TODO(crbug.com/40266589): Figure out what code is leaking open
@@ -293,6 +299,10 @@ class FileSystemAccessFileWriterImplTestBase : public testing::Test {
         file_system_context_, chrome_blob_context_,
         /*permission_context=*/permission_context(),
         /*off_the_record=*/false);
+    ChildProcessSecurityPolicyImpl::GetInstance()->AddForTesting(
+        ChildProcessId::FromUnsafeValue(kProcessId), &browser_context_);
+    ChildProcessSecurityPolicyImpl::GetInstance()->AddCommittedOrigin(
+        kProcessId, url::Origin::Create(kTestURL));
     manager_->BindReceiver(kBindingContext,
                            manager_remote_.BindNewPipeAndPassReceiver());
 
@@ -388,6 +398,7 @@ class FileSystemAccessFileWriterImplTestBase : public testing::Test {
   raw_ptr<storage::BlobStorageContext> blob_context_ = nullptr;
   scoped_refptr<FileSystemAccessManagerImpl> manager_;
   mojo::Remote<blink::mojom::FileSystemAccessManager> manager_remote_;
+  TestBrowserContext browser_context_;
 
   FileSystemURL test_file_url_;
   FileSystemURL test_swap_url_;
@@ -431,7 +442,7 @@ TEST_F(FileSystemAccessFileWriterImplTest, WriteValidEmptyString) {
 
   result = CloseSync();
   EXPECT_EQ(result, FileSystemAccessStatus::kOk);
-  EXPECT_TRUE(base::Contains(quarantine_.paths, test_file_url_.path()));
+  EXPECT_TRUE(std::ranges::contains(quarantine_.paths, test_file_url_.path()));
 
   EXPECT_EQ("", ReadFile(test_file_url_));
 }
@@ -445,7 +456,7 @@ TEST_F(FileSystemAccessFileWriterImplTest, WriteValidNonEmpty) {
 
   result = CloseSync();
   EXPECT_EQ(result, FileSystemAccessStatus::kOk);
-  EXPECT_TRUE(base::Contains(quarantine_.paths, test_file_url_.path()));
+  EXPECT_TRUE(std::ranges::contains(quarantine_.paths, test_file_url_.path()));
 
   EXPECT_EQ(test_data, ReadFile(test_file_url_));
 }
@@ -464,7 +475,7 @@ TEST_F(FileSystemAccessFileWriterImplTest, WriteWithOffsetInFile) {
 
   result = CloseSync();
   EXPECT_EQ(result, FileSystemAccessStatus::kOk);
-  EXPECT_TRUE(base::Contains(quarantine_.paths, test_file_url_.path()));
+  EXPECT_TRUE(std::ranges::contains(quarantine_.paths, test_file_url_.path()));
 
   EXPECT_EQ("1234abc890", ReadFile(test_file_url_));
 }
@@ -477,7 +488,7 @@ TEST_F(FileSystemAccessFileWriterImplTest, WriteWithOffsetPastFile) {
 
   result = CloseSync();
   EXPECT_EQ(result, FileSystemAccessStatus::kOk);
-  EXPECT_TRUE(base::Contains(quarantine_.paths, test_file_url_.path()));
+  EXPECT_TRUE(std::ranges::contains(quarantine_.paths, test_file_url_.path()));
 
   using std::string_literals::operator""s;
   EXPECT_EQ("\0\0\0\0abc"s, ReadFile(test_file_url_));
@@ -646,6 +657,8 @@ TEST_F(FileSystemAccessFileWriterAfterWriteChecksTest, Allow) {
               Field(&FileSystemAccessWriteItem::sha256_hash, Eq(expected_hash)),
               Field(&FileSystemAccessWriteItem::size, Eq(3)),
               Field(&FileSystemAccessWriteItem::frame_url, Eq(kTestURL)),
+              Field(&FileSystemAccessWriteItem::initiating_frame_id,
+                    Eq(kFrameId)),
               Field(&FileSystemAccessWriteItem::has_user_gesture, Eq(false))),
           kFrameId, _))
       .WillOnce(base::test::RunOnceCallback<2>(
@@ -833,7 +846,67 @@ TEST_F(FileSystemAccessFileWriterAfterWriteChecksTest,
       file_system_context_.get(), test_file_url_, 3));
 
   // Destination file should also have been quarantined.
-  EXPECT_TRUE(base::Contains(quarantine_.paths, test_file_url_.path()));
+  EXPECT_TRUE(std::ranges::contains(quarantine_.paths, test_file_url_.path()));
+}
+
+TEST_F(FileSystemAccessFileWriterAfterWriteChecksTest,
+       CloseWaitsForPendingWrite) {
+  mojo::ScopedDataPipeProducerHandle producer_handle;
+  mojo::ScopedDataPipeConsumerHandle consumer_handle;
+  EXPECT_EQ(mojo::CreateDataPipe(nullptr, producer_handle, consumer_handle),
+            MOJO_RESULT_OK);
+
+  std::string expected_hash;
+  EXPECT_TRUE(base::HexStringToString(
+      "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+      &expected_hash));
+
+  EXPECT_CALL(
+      permission_context_,
+      PerformAfterWriteChecks_(
+          AllOf(
+              Field(&FileSystemAccessWriteItem::target_file_path,
+                    Eq(test_file_url_.path())),
+              Field(&FileSystemAccessWriteItem::full_path,
+                    Eq(test_swap_url_.path())),
+              Field(&FileSystemAccessWriteItem::sha256_hash, Eq(expected_hash)),
+              Field(&FileSystemAccessWriteItem::size, Eq(3)),
+              Field(&FileSystemAccessWriteItem::frame_url, Eq(kTestURL)),
+              Field(&FileSystemAccessWriteItem::initiating_frame_id,
+                    Eq(kFrameId)),
+              Field(&FileSystemAccessWriteItem::has_user_gesture, Eq(false))),
+          kFrameId, _))
+      .WillOnce(base::test::RunOnceCallback<2>(
+          FileSystemAccessPermissionContext::AfterWriteCheckResult::kAllow));
+  EXPECT_CALL(permission_context_, NotifyEntryModified(_, _)).Times(1);
+
+  base::test::TestFuture<blink::mojom::FileSystemAccessErrorPtr, uint64_t>
+      write_future;
+  handle_->Write(0, std::move(consumer_handle), write_future.GetCallback());
+
+  base::test::TestFuture<blink::mojom::FileSystemAccessErrorPtr> close_future;
+  handle_->Close(close_future.GetCallback());
+
+  // Ensure that Close defers after-write checks and swap file replacement
+  // until all pending write operations have completed.
+  task_environment_.FastForwardBy(base::Seconds(1));
+  EXPECT_FALSE(write_future.IsReady());
+  EXPECT_FALSE(close_future.IsReady());
+
+  EXPECT_EQ(producer_handle->WriteAllData(base::byte_span_from_cstring("abc")),
+            MOJO_RESULT_OK);
+  producer_handle.reset();
+
+  EXPECT_EQ(write_future.Get<0>()->status, FileSystemAccessStatus::kOk);
+  EXPECT_EQ(write_future.Get<1>(), 3u);
+  EXPECT_EQ(close_future.Get()->status, FileSystemAccessStatus::kOk);
+
+  EXPECT_FALSE(storage::AsyncFileTestHelper::FileExists(
+      file_system_context_.get(), test_swap_url_,
+      storage::AsyncFileTestHelper::kDontCheckSize));
+  EXPECT_TRUE(storage::AsyncFileTestHelper::FileExists(
+      file_system_context_.get(), test_file_url_, 3));
+  EXPECT_EQ(ReadFile(test_file_url_), "abc");
 }
 
 struct WriteModeTestParams {

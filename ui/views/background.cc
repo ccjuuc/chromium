@@ -16,6 +16,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRRect.h"
+#include "ui/base/interaction/safe_castable.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_variant.h"
@@ -35,6 +36,8 @@
 
 namespace views {
 
+DEFINE_SAFE_CAST_TARGET(Background)
+
 // SolidBackground is a trivial Background implementation that fills the
 // background in a solid color.
 class SolidBackground : public Background {
@@ -51,7 +54,7 @@ class SolidBackground : public Background {
   }
 
   void OnViewThemeChanged(View* view) override {
-    if (color().IsSemantic()) {
+    if (color().IsLogical()) {
       view->SchedulePaint();
     }
   }
@@ -92,7 +95,7 @@ class RoundedRectBackground : public Background {
   }
 
   void OnViewThemeChanged(View* view) override {
-    if (color().IsSemantic()) {
+    if (color().IsLogical()) {
       view->SchedulePaint();
     }
   }
@@ -123,7 +126,7 @@ class LayerBasedSolidBackground : public Background {
       view->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
     }
 
-    auto* layer = view->layer();
+    auto* layer = view->layer()->AsSolidColor();
     const auto radii = GetRoundedCornerRadii();
     if (radii && radii != layer->rounded_corner_radii()) {
       layer->SetRoundedCornerRadius(*radii);
@@ -134,8 +137,8 @@ class LayerBasedSolidBackground : public Background {
       layer->SetName(*internal_name_);
     }
 
-    const SkColor resolved_color =
-        color().ResolveToSkColor(view->GetColorProvider());
+    const SkColor4f resolved_color = SkColor4f::FromColor(
+        color().ResolveToSkColor(view->GetColorProvider()));
     if (resolved_color != layer->background_color()) {
       layer->SetColor(resolved_color);
     }

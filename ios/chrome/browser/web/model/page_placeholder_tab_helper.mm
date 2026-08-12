@@ -10,7 +10,6 @@
 #import "base/task/single_thread_task_runner.h"
 #import "base/time/time.h"
 #import "ios/chrome/browser/shared/ui/util/named_guide.h"
-#import "ios/chrome/browser/snapshots/model/features.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_tab_helper.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/web/public/ui/crw_web_view_proxy.h"
@@ -37,9 +36,7 @@ void PagePlaceholderTabHelper::AddPlaceholderForNextNavigation() {
     ++placeholder_request_id_;
     cached_placeholder_image_ = nil;
     add_placeholder_for_next_navigation_ = true;
-    if (web_state_->IsRealized()) {
-      FetchPlaceholderIfNecessary();
-    }
+    FetchPlaceholderIfNecessary();
   }
 }
 
@@ -74,7 +71,7 @@ void PagePlaceholderTabHelper::DidStartNavigation(
 void PagePlaceholderTabHelper::PageLoaded(web::WebState* web_state,
                                           web::PageLoadCompletionStatus) {
   DCHECK_EQ(web_state_, web_state);
-  RemovePlaceholder();
+  CancelPlaceholderForNextNavigation();
 }
 
 void PagePlaceholderTabHelper::WebStateDestroyed(web::WebState* web_state) {
@@ -181,15 +178,7 @@ void PagePlaceholderTabHelper::FetchPlaceholderIfNecessary() {
   }
 
   placeholder_fetch_in_progress_ = true;
-  if (!web_state_->IsRealized() || web_state_->IsLoading()) {
-    if (!base::FeatureList::IsEnabled(kRemoveGreySnapshot)) {
-      snapshot_tab_helper->RetrieveGreySnapshot(base::CallbackToBlock(
-          base::BindOnce(&PagePlaceholderTabHelper::OnImageRetrieved,
-                         weak_factory_.GetWeakPtr(), placeholder_request_id_)));
-    }
-  } else {
-    snapshot_tab_helper->RetrieveColorSnapshot(base::CallbackToBlock(
-        base::BindOnce(&PagePlaceholderTabHelper::OnImageRetrieved,
-                       weak_factory_.GetWeakPtr(), placeholder_request_id_)));
-  }
+  snapshot_tab_helper->RetrieveGreySnapshot(base::CallbackToBlock(
+      base::BindOnce(&PagePlaceholderTabHelper::OnImageRetrieved,
+                     weak_factory_.GetWeakPtr(), placeholder_request_id_)));
 }

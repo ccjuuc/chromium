@@ -14,6 +14,7 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/time/time.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/aura/window.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/cursor_size.h"
@@ -60,6 +61,7 @@ class ASH_EXPORT CursorWindowController : public aura::WindowObserver {
 
   void SetLargeCursorSizeInDip(int large_cursor_size_in_dip);
   void SetCursorColor(SkColor cursor_color);
+  void SetCursorInverted(bool inverted);
 
   // If at least one of the features that use cursor compositing is enabled, it
   // should not be disabled. Future features that require cursor compositing
@@ -103,6 +105,7 @@ class ASH_EXPORT CursorWindowController : public aura::WindowObserver {
   // Gets the cursor container for testing purposes.
   const aura::Window* GetContainerForTest() const;
   SkColor GetCursorColorForTest() const;
+  bool IsCursorInvertedForTest() const;
   gfx::Rect GetCursorBoundsInScreenForTest() const;
   const aura::Window* GetCursorHostWindowForTest() const;
 
@@ -141,6 +144,10 @@ class ASH_EXPORT CursorWindowController : public aura::WindowObserver {
   // create `cursor_window_`.
   void UpdateCursorMode();
 
+  void SeparateCursorBitmapForTest(const SkBitmap& original,
+                                   SkBitmap* mask,
+                                   SkBitmap* overlay) const;
+
   base::ObserverList<Observer> observers_;
 
   raw_ptr<aura::Window, DanglingUntriaged> container_ = nullptr;
@@ -165,6 +172,7 @@ class ASH_EXPORT CursorWindowController : public aura::WindowObserver {
 
   int large_cursor_size_in_dip_ = kDefaultLargeCursorSize;
   SkColor cursor_color_ = ui::kDefaultCursorColor;
+  bool is_inverted_ = false;
 
   // The display on which the cursor is drawn.
   // For mirroring mode, the display is always the primary display.

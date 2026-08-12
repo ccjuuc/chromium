@@ -48,6 +48,7 @@ class PaymentRequestTestObserver {
   virtual void OnConnectionTerminated() {}
   virtual void OnAbortCalled() {}
   virtual void OnCompleteCalled() {}
+  virtual void OnInternalError() {}
   virtual void OnUIDisplayed() {}
 
  protected:
@@ -75,6 +76,13 @@ class PaymentRequestTestController {
   void SetHasAuthenticator(bool has_authenticator);
   void SetTwaPaymentApp(const std::string& method_name,
                         const std::string& response);
+
+  void SetBypassUserInteractionForTesting() {
+    bypass_user_interaction_for_testing_ = true;
+  }
+  bool bypass_user_interaction_for_testing() const {
+    return bypass_user_interaction_for_testing_;
+  }
 
   // Gets the WebContents of the Payment Handler for testing purpose, or null if
   // nonexistent. To guarantee a non-null return, this function should be called
@@ -144,6 +152,7 @@ class PaymentRequestTestController {
   void OnConnectionTerminated();
   void OnAbortCalled();
   void OnCompleteCalled();
+  void OnInternalError();
   void OnUIDisplayed();
 
   raw_ptr<PaymentRequestTestObserver> observer_ = nullptr;
@@ -158,6 +167,7 @@ class PaymentRequestTestController {
   std::vector<AppDescription> app_descriptions_;
   std::optional<bool> is_shipping_section_visible_;
   std::optional<bool> is_contact_section_visible_;
+  bool bypass_user_interaction_for_testing_ = false;
 
 #if !BUILDFLAG(IS_ANDROID)
   void UpdateDelegateFactory();

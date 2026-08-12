@@ -36,7 +36,6 @@ class AXSelection;
 class AXTableInfo;
 class AXTreeManager;
 
-struct AXLanguageInfo;
 class AXTree;
 
 // This class is used to represent a node in an accessibility tree (`AXTree`).
@@ -92,9 +91,9 @@ class AX_EXPORT AXNode final {
 
    protected:
     raw_ptr<const NodeType> parent_;
-    raw_ptr<NodeType, DanglingUntriaged> child_;
-    raw_ptr<NodeType, DanglingUntriaged> first_child_{nullptr};
-    raw_ptr<NodeType, DanglingUntriaged> last_child_{nullptr};
+    raw_ptr<NodeType> child_;
+    raw_ptr<NodeType> first_child_{nullptr};
+    raw_ptr<NodeType> last_child_{nullptr};
   };
 
   // The constructor requires a parent, id, and index in parent, but
@@ -147,6 +146,7 @@ class AX_EXPORT AXNode final {
   base::stack<AXNode*> GetAncestorsCrossingTreeBoundaryAsStack() const;
   size_t GetIndexInParent() const;
   size_t GetUnignoredIndexInParent() const;
+  size_t GetUnignoredIndexInParentCrossingTreeBoundary() const;
   AXNode* GetFirstChild() const;
   AXNode* GetFirstChildCrossingTreeBoundary() const;
   AXNode* GetFirstUnignoredChild() const;
@@ -167,8 +167,10 @@ class AX_EXPORT AXNode final {
 
   AXNode* GetNextSibling() const;
   AXNode* GetNextUnignoredSibling() const;
+  AXNode* GetNextUnignoredSiblingCrossingTreeBoundary() const;
   AXNode* GetPreviousSibling() const;
   AXNode* GetPreviousUnignoredSibling() const;
+  AXNode* GetPreviousUnignoredSiblingCrossingTreeBoundary() const;
 
   // Traverse the tree in depth-first pre-order.
   AXNode* GetNextUnignoredInTreeOrder() const;
@@ -211,12 +213,12 @@ class AX_EXPORT AXNode final {
   UnignoredChildIterator UnignoredChildrenBegin() const;
   UnignoredChildIterator UnignoredChildrenEnd() const;
 
-  using UnignoredChildCrossingTreeBoundaryIterator =
-      ChildIteratorBase<AXNode,
-                        &AXNode::GetNextUnignoredSibling,
-                        &AXNode::GetPreviousUnignoredSibling,
-                        &AXNode::GetFirstUnignoredChildCrossingTreeBoundary,
-                        &AXNode::GetLastUnignoredChildCrossingTreeBoundary>;
+  using UnignoredChildCrossingTreeBoundaryIterator = ChildIteratorBase<
+      AXNode,
+      &AXNode::GetNextUnignoredSiblingCrossingTreeBoundary,
+      &AXNode::GetPreviousUnignoredSiblingCrossingTreeBoundary,
+      &AXNode::GetFirstUnignoredChildCrossingTreeBoundary,
+      &AXNode::GetLastUnignoredChildCrossingTreeBoundary>;
   UnignoredChildCrossingTreeBoundaryIterator
   UnignoredChildrenCrossingTreeBoundaryBegin() const;
   UnignoredChildCrossingTreeBoundaryIterator
@@ -309,6 +311,10 @@ class AX_EXPORT AXNode final {
   // this node.
   bool HasVisibleCaretOrSelection() const;
 
+  // Returns true if the focus of the current selection is this node or one of
+  // its descendants, regardless of whether that selection is visible.
+  bool HasSelectionFocusInSubtree() const;
+
   // Gets the current selection from the accessibility tree.
   AXSelection GetSelection() const;
 
@@ -352,6 +358,10 @@ class AX_EXPORT AXNode final {
   // computed value in this case.
   //
   ax::mojom::Role GetRole() const { return data().role; }
+
+  // Returns kAriaValueText if present/non-empty, otherwise falls back to
+  // kValue. Returns std::nullopt if both attributes are empty
+  std::optional<std::string> GetAriaValueTextOrValue() const;
 
   bool HasBoolAttribute(ax::mojom::BoolAttribute attribute) const {
     return data().HasBoolAttribute(attribute);
@@ -474,8 +484,6 @@ class AX_EXPORT AXNode final {
   //
   // This is how displayed text and embedded objects are represented in
   // ATK and IAccessible2 APIs.
-  //
-  // TODO(nektar): Consider changing the return value to std::string.
   const std::u16string& GetHypertext() const;
 
   // Temporary accessor methods until hypertext is fully migrated to this class.
@@ -622,21 +630,6 @@ class AX_EXPORT AXNode final {
   // or treegrid.
   bool IsCellOrHeaderOfAriaGrid() const;
 
-  // Return an object containing information about the languages detected on
-  // this node.
-  // Callers should not retain this pointer, instead they should request it
-  // every time it is needed.
-  //
-  // Returns nullptr if the node has no language info.
-  AXLanguageInfo* GetLanguageInfo() const;
-
-  // This should only be called by LabelLanguageForSubtree and is used as part
-  // of the language detection feature.
-  void SetLanguageInfo(std::unique_ptr<AXLanguageInfo> lang_info);
-
-  // Destroy the language info for this node.
-  void ClearLanguageInfo();
-
   // Get a reference to the cached information stored for this node.
   const AXComputedNodeData& GetComputedNodeData() const;
 
@@ -651,6 +644,14 @@ class AX_EXPORT AXNode final {
   // Returns true if this node has the ignored state or a presentational ARIA
   // role. Focused nodes are, by design, not ignored.
   bool IsIgnored() const;
+
+  // Returns true if this node is ignored and hosts a connected child tree.
+  //
+  // Such a node is transparent, like every other ignored node. The accessors
+  // that cross the tree boundary put the root of the hosted tree in its place
+  // among the unignored children of its parent. The accessors that stay in
+  // this tree do not see the host or the tree that it hosts.
+  bool IsIgnoredChildTreeHost() const;
 
   // Some nodes are not ignored but should be skipped during text navigation.
   // For example, on some platforms screen readers should not stop when
@@ -733,6 +734,12 @@ class AX_EXPORT AXNode final {
   // contenteditable without the role, (see `AXNodeData::IsTextField()`).
   AXNode* GetTextFieldAncestor() const;
 
+  // Returns the nearest ancestor (or self) that is a block-level container
+  // (has `kIsLineBreakingObject` attribute), excluding `<br>` elements and
+  // their inline text box children. Returns nullptr if no such ancestor
+  // exists.
+  AXNode* GetParagraphContainerAncestor() const;
+
   // Get the native text field's deepest container; the lowest descendant that
   // contains all its text. Returns nullptr if the text field is empty, or if it
   // is not an atomic text field, (e.g., <input> or <textarea>).
@@ -772,8 +779,34 @@ class AX_EXPORT AXNode final {
                             std::vector<AXNode*>* nodes) const;
 
   int UpdateUnignoredCachedValuesRecursive(int start_index);
-  AXNode* ComputeLastUnignoredChildRecursive() const;
-  AXNode* ComputeFirstUnignoredChildRecursive() const;
+  // `crossing` makes a walk give the root of a hosted tree when it meets the
+  // ignored node that hosts it. Without `crossing` such a host is transparent,
+  // like every other ignored node.
+  //
+  // The root of a child tree is never ignored, thus a walk that gives such a
+  // root has found an unignored node and can stop.
+  AXNode* ComputeLastUnignoredChildRecursive(bool crossing) const;
+  AXNode* ComputeFirstUnignoredChildRecursive(bool crossing) const;
+  AXNode* ComputeNextUnignoredSibling(bool crossing) const;
+  AXNode* ComputePreviousUnignoredSibling(bool crossing) const;
+
+  // Returns the manager of the tree that this node hosts, or nullptr.
+  AXTreeManager* GetHostedChildTreeManager() const;
+
+  // Returns the root of the tree that this node hosts, or nullptr. That root
+  // is never ignored.
+  AXNode* GetHostedChildTreeRoot() const;
+
+  // Returns the ignored host whose place this node takes, or nullptr.
+  AXNode* GetIgnoredChildTreeHost() const;
+
+  // Returns the number of hosted trees that stand among the unignored children
+  // of this node. Each one takes the place of the ignored node that hosts it.
+  size_t GetConnectedIgnoredChildTreeHostCount() const;
+
+  // Returns the position of this node among the unignored children of its
+  // parent, counting the hosted trees.
+  size_t ComputeUnignoredIndexInParentCrossingTreeBoundary() const;
 
   // Returns the value of a range control such as a slider or a scroll bar in
   // text format.
@@ -805,9 +838,6 @@ class AX_EXPORT AXNode final {
   // Stores information about this node that can be computed on demand and
   // cached.
   mutable std::unique_ptr<AXComputedNodeData> computed_node_data_;
-
-  // Stores the detected language computed from the node's text.
-  std::unique_ptr<AXLanguageInfo> language_info_;
 };
 
 AX_EXPORT std::ostream& operator<<(std::ostream& stream, const AXNode& node);

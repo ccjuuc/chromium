@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/functional/callback.h"
 #include "base/memory/unsafe_shared_memory_region.h"
@@ -75,6 +76,11 @@ struct CAPTURE_EXPORT CapturedExternalVideoBuffer {
                               VideoCaptureFormat format,
                               gfx::ColorSpace color_space);
 
+  CapturedExternalVideoBuffer(
+      scoped_refptr<gpu::ClientSharedImage> shared_image,
+      VideoCaptureFormat format,
+      gfx::ColorSpace color_space);
+
 #if BUILDFLAG(IS_WIN)
   CapturedExternalVideoBuffer(Microsoft::WRL::ComPtr<IMFMediaBuffer> imf_buffer,
                               gfx::GpuMemoryBufferHandle handle,
@@ -95,6 +101,7 @@ struct CAPTURE_EXPORT CapturedExternalVideoBuffer {
   Microsoft::WRL::ComPtr<IMFMediaBuffer> imf_buffer;
 #endif
   gfx::GpuMemoryBufferHandle handle;
+  scoped_refptr<gpu::ClientSharedImage> client_shared_image;
   VideoCaptureFormat format;
   gfx::ColorSpace color_space;
 };
@@ -189,8 +196,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
     // frames are consumed asynchronously and multiple frames can be "in flight"
     // at the same time.
     virtual void OnIncomingCapturedData(
-        const uint8_t* data,
-        int length,
+        base::span<const uint8_t> data,
         const VideoCaptureFormat& frame_format,
         const gfx::ColorSpace& color_space,
         int clockwise_rotation,
@@ -202,8 +208,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
         int frame_feedback_id) = 0;
     // Convenience wrapper that passes in 0 as |frame_feedback_id|.
     void OnIncomingCapturedData(
-        const uint8_t* data,
-        int length,
+        base::span<const uint8_t> data,
         const VideoCaptureFormat& frame_format,
         const gfx::ColorSpace& color_space,
         int clockwise_rotation,
@@ -212,6 +217,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
         base::TimeDelta timestamp,
         std::optional<base::TimeTicks> capture_begin_timestamp,
         const std::optional<VideoFrameMetadata>& metadata);
+
 
     // Captured a new video frame, data for which is stored in the
     // shared image pointed to by |shared_image|.  The format of the frame is
@@ -228,6 +234,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
         base::TimeTicks reference_time,
         base::TimeDelta timestamp,
         std::optional<base::TimeTicks> capture_begin_timestamp,
+        const gfx::Size& natural_size,
         const std::optional<VideoFrameMetadata>& metadata,
         int frame_feedback_id) = 0;
     // Convenience wrapper that passes in 0 as |frame_feedback_id|.
@@ -238,6 +245,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
         base::TimeTicks reference_time,
         base::TimeDelta timestamp,
         std::optional<base::TimeTicks> capture_begin_timestamp,
+        const gfx::Size& natural_size,
         const std::optional<VideoFrameMetadata>& metadata);
 
     // Captured a new video frame. The data for this frame is in
@@ -257,6 +265,7 @@ class CAPTURE_EXPORT VideoCaptureDevice
         base::TimeDelta timestamp,
         std::optional<base::TimeTicks> capture_begin_timestamp,
         const gfx::Rect& visible_rect,
+        const gfx::Size& natural_size,
         const std::optional<VideoFrameMetadata>& metadata) = 0;
 
     // Reserve an output buffer into which contents can be captured directly.

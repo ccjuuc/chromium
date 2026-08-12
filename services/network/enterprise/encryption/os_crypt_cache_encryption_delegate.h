@@ -6,20 +6,23 @@
 #define SERVICES_NETWORK_ENTERPRISE_ENCRYPTION_OS_CRYPT_CACHE_ENCRYPTION_DELEGATE_H_
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
 #include "components/os_crypt/async/common/encryptor.h"
+#include "crypto/process_bound_string.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/cache_encryption_delegate.h"
+#include "services/network/enterprise/encryption/chunked_encryptor.h"
+#include "services/network/enterprise/encryption/encrypted_backend_file_operations_factory.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
 #include "services/network/public/mojom/cache_encryption_provider.mojom.h"
 
@@ -47,21 +50,21 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) OSCryptCacheEncryptionDelegate
   // net::CacheEncryptionDelegate implementation:
   void Init(base::OnceCallback<void(net::Error)> callback) override;
 
-  // Encrypts the given `plaintext` using OSCrypt. The resulting `ciphertext`
-  // contains all necessary information for decryption, including the
-  // initialization vector (IV), which is handled automatically by the
-  // underlying cryptographic library.
-  bool EncryptData(base::span<const uint8_t> plaintext,
-                   std::vector<uint8_t>* ciphertext) override;
+  // Returns a factory for creating encrypted backend file operations.
+  // Returns nullptr on failure.
+  disk_cache::BackendFileOperationsFactory* GetEncryptionFileOperationsFactory(
+      scoped_refptr<disk_cache::BackendFileOperationsFactory>
+          file_operations_factory) override;
 
-  // Decrypts the given `ciphertext` using OSCrypt. The implementation expects
-  // the `ciphertext` to contain the initialization vector (IV) and uses it to
-  // correctly decrypt the data.
-  bool DecryptData(base::span<const uint8_t> ciphertext,
-                   std::vector<uint8_t>* plaintext) override;
+  // Returns a cache entry hasher that uses the primary cache key for salting.
+  // Returns nullptr on failure.
+  std::unique_ptr<disk_cache::CacheEntryHasher> GetCacheEntryHasher() override;
 
  private:
-  void InitCallback(os_crypt_async::Encryptor encryptor);
+  // Callbacks for initialization
+  void OnKeyAndEncryptorReceived(
+      const std::vector<uint8_t>& key,
+      scoped_refptr<os_crypt_async::Encryptor> encryptor);
 
   void OnDisconnect();
 
@@ -71,7 +74,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) OSCryptCacheEncryptionDelegate
     kInitialized,
   };
 
-  std::optional<os_crypt_async::Encryptor> instance_;
+  scoped_refptr<os_crypt_async::Encryptor> instance_;
+  std::vector<uint8_t> encrypted_primary_key_;
   mojo::PendingRemote<network::mojom::CacheEncryptionProvider> provider_
       GUARDED_BY_CONTEXT(sequence_checker_);
   mojo::Remote<network::mojom::CacheEncryptionProvider> remote_
@@ -79,6 +83,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) OSCryptCacheEncryptionDelegate
   base::OnceCallbackList<void(net::Error)> callbacks_
       GUARDED_BY_CONTEXT(sequence_checker_);
   State state_ GUARDED_BY_CONTEXT(sequence_checker_) = State::kUninitialized;
+
+  scoped_refptr<EncryptedBackendFileOperationsFactory>
+      encrypted_file_operations_factory_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/common/url_constants.h"
 #include "components/enterprise/browser/promotion/promotion_eligibility_checker.h"
 #include "components/policy/core/common/policy_service.h"
@@ -17,13 +18,17 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
-#include "extensions/browser/extension_registry_observer.h"
 #include "extensions/buildflags/buildflags.h"
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
+#endif
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 namespace extensions {
 class Extension;
 }  // namespace extensions
+#endif
 
 namespace policy {
 class PolicyService;
@@ -51,7 +56,9 @@ class Profile;
 
 // The JavaScript message handler for the chrome://management page.
 class ManagementUIHandler : public content::WebUIMessageHandler,
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
                             public extensions::ExtensionRegistryObserver,
+#endif
                             public policy::PolicyService::Observer {
  public:
   explicit ManagementUIHandler(Profile* profile);
@@ -83,16 +90,17 @@ class ManagementUIHandler : public content::WebUIMessageHandler,
   }
 
  protected:
-  void AddReportingInfo(base::Value::List* report_sources, bool is_browser);
+  void AddBrowserReportingInfo(base::ListValue* report_sources);
+  void AddProfileReportingInfo(base::ListValue* report_sources);
 
-  virtual base::Value::Dict GetContextualManagedData(Profile* profile);
-  base::Value::Dict GetThreatProtectionInfo(Profile* profile);
-  base::Value::List GetManagedWebsitesInfo(Profile* profile) const;
-  base::Value::List GetApplicationsInfo(Profile* profile) const;
+  virtual base::DictValue GetContextualManagedData(Profile* profile);
+  base::DictValue GetThreatProtectionInfo(Profile* profile);
+  base::ListValue GetManagedWebsitesInfo(Profile* profile) const;
+  base::ListValue GetApplicationsInfo(Profile* profile) const;
   virtual policy::PolicyService* GetPolicyService();
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   virtual device_signals::UserPermissionService* GetUserPermissionService();
-  base::Value::Dict GetDeviceSignalGrantedMessage();
+  base::DictValue GetDeviceSignalGrantedMessage();
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
   bool account_managed() const { return account_managed_; }
@@ -113,16 +121,16 @@ class ManagementUIHandler : public content::WebUIMessageHandler,
   void NotifyThreatProtectionInfoUpdated();
 
  private:
-  void HandleGetExtensions(const base::Value::List& args);
-  void HandleGetContextualManagedData(const base::Value::List& args);
-  void HandleGetThreatProtectionInfo(const base::Value::List& args);
-  void HandleGetManagedWebsites(const base::Value::List& args);
-  void HandleGetApplications(const base::Value::List& args);
-  void HandleInitBrowserReportingInfo(const base::Value::List& args);
-  void HandleInitProfileReportingInfo(const base::Value::List& args);
-  void HandleShouldShowPromotion(const base::Value::List& args);
-  void HandleSetBannerDismissed(const base::Value::List& args);
-  void HandleRecordBannerRedirected(const base::Value::List& args);
+  void HandleGetExtensions(const base::ListValue& args);
+  void HandleGetContextualManagedData(const base::ListValue& args);
+  void HandleGetThreatProtectionInfo(const base::ListValue& args);
+  void HandleGetManagedWebsites(const base::ListValue& args);
+  void HandleGetApplications(const base::ListValue& args);
+  void HandleInitBrowserReportingInfo(const base::ListValue& args);
+  void HandleInitProfileReportingInfo(const base::ListValue& args);
+  void HandleShouldShowPromotion(const base::ListValue& args);
+  void HandleSetBannerDismissed(const base::ListValue& args);
+  void HandleRecordBannerRedirected(const base::ListValue& args);
   void OnPromotionEligibilityFetched(
       const std::string& callback_id,
       enterprise_management::GetUserEligiblePromotionsResponse response);
@@ -134,12 +142,14 @@ class ManagementUIHandler : public content::WebUIMessageHandler,
   void NotifyBrowserReportingInfoUpdated();
   void NotifyProfileReportingInfoUpdated();
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // extensions::ExtensionRegistryObserver implementation.
   void OnExtensionLoaded(content::BrowserContext* browser_context,
                          const extensions::Extension* extension) override;
   void OnExtensionUnloaded(content::BrowserContext* browser_context,
                            const extensions::Extension* extension,
                            extensions::UnloadedExtensionReason reason) override;
+#endif
 
   // policy::PolicyService::Observer
   void OnPolicyUpdated(const policy::PolicyNamespace& ns,
@@ -158,7 +168,9 @@ class ManagementUIHandler : public content::WebUIMessageHandler,
 
   PrefChangeRegistrar pref_registrar_;
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   std::set<extensions::ExtensionId> reporting_extension_ids_;
+#endif
 
   // List of observers for promotion eligibility.
   base::ObserverList<ManagementPromotionObserver>

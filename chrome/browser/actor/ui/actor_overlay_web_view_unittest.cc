@@ -38,6 +38,7 @@ class MockActorOverlayUI : public ActorOverlayUI {
               MoveCursorTo,
               (const gfx::Point&, base::OnceClosure),
               (override));
+  MOCK_METHOD(void, TriggerClickAnimation, (base::OnceClosure), (override));
 };
 
 class TestActorOverlayWebView : public ActorOverlayWebView {
@@ -127,8 +128,7 @@ class ActorOverlayWebViewMagicCursorEnabledTest
     : public ActorOverlayWebViewTestBase {
  public:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        features::kGlicActorUiOverlayMagicCursor);
+    feature_list_.InitAndEnableFeature(features::kGlicActorUiMagicCursor);
     ActorOverlayWebViewTestBase::SetUp();
   }
 };
@@ -154,12 +154,31 @@ TEST_F(ActorOverlayWebViewMagicCursorEnabledTest, MoveCursorHandlesNullWebUi) {
   EXPECT_TRUE(future.Wait());
 }
 
+TEST_F(ActorOverlayWebViewMagicCursorEnabledTest, TriggerClickForwardsToWebUI) {
+  web_view_->set_web_ui(mock_web_ui_.get());
+
+  EXPECT_CALL(*mock_web_ui_, TriggerClickAnimation(_))
+      .WillOnce([](base::OnceClosure cb) { std::move(cb).Run(); });
+
+  base::test::TestFuture<void> future;
+  web_view_->TriggerClickAnimation(future.GetCallback());
+  EXPECT_TRUE(future.Wait());
+}
+
+TEST_F(ActorOverlayWebViewMagicCursorEnabledTest,
+       TriggerClickHandlesNullWebUi) {
+  web_view_->set_web_ui(nullptr);
+
+  base::test::TestFuture<void> future;
+  web_view_->TriggerClickAnimation(future.GetCallback());
+  EXPECT_TRUE(future.Wait());
+}
+
 class ActorOverlayWebViewMagicCursorDisabledTest
     : public ActorOverlayWebViewTestBase {
  public:
   void SetUp() override {
-    feature_list_.InitAndDisableFeature(
-        features::kGlicActorUiOverlayMagicCursor);
+    feature_list_.InitAndDisableFeature(features::kGlicActorUiMagicCursor);
     ActorOverlayWebViewTestBase::SetUp();
   }
 };
@@ -170,6 +189,15 @@ TEST_F(ActorOverlayWebViewMagicCursorDisabledTest, MoveCursorIgnored) {
 
   base::test::TestFuture<void> future;
   web_view_->MoveCursorTo(gfx::Point(10, 10), future.GetCallback());
+  EXPECT_TRUE(future.Wait());
+}
+
+TEST_F(ActorOverlayWebViewMagicCursorDisabledTest, TriggerClickIgnored) {
+  web_view_->set_web_ui(mock_web_ui_.get());
+  EXPECT_CALL(*mock_web_ui_, TriggerClickAnimation(_)).Times(0);
+
+  base::test::TestFuture<void> future;
+  web_view_->TriggerClickAnimation(future.GetCallback());
   EXPECT_TRUE(future.Wait());
 }
 

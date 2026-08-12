@@ -7,11 +7,11 @@
 #include <array>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/url_constants.h"
 #include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
@@ -19,8 +19,8 @@
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_handler.h"
 #include "chrome/browser/ui/webui/ash/smb_shares/smb_shares_localized_strings_provider.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/user_manager/user.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -258,16 +258,18 @@ void FilesSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
 
   smb_dialog::AddLocalizedStrings(html_source);
 
-  html_source->AddString("smbSharesLearnMoreURL",
-                         GetHelpUrlWithBoard(chrome::kSmbSharesLearnMoreURL));
+  html_source->AddString(
+      "smbSharesLearnMoreURL",
+      GetHelpUrlWithBoard(ash::external_urls::kSmbSharesLearnMoreURL));
 
   html_source->AddString(
       "googleDriveCleanUpStorageLearnMoreLink",
-      GetHelpUrlWithBoard(chrome::kGoogleDriveCleanUpStorageLearnMoreURL));
+      GetHelpUrlWithBoard(
+          ash::external_urls::kGoogleDriveCleanUpStorageLearnMoreURL));
 
   html_source->AddString(
       "googleDriveFileSyncLearnMoreLink",
-      GetHelpUrlWithBoard(chrome::kGoogleDriveOfflineLearnMoreURL));
+      GetHelpUrlWithBoard(ash::external_urls::kGoogleDriveOfflineLearnMoreURL));
 
   html_source->AddBoolean(
       "showOneDriveSettings",
@@ -280,7 +282,7 @@ void FilesSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
       chromeos::cloud_upload::IsMicrosoftOfficeCloudUploadAllowed(profile()));
 
   const user_manager::User* user =
-      ProfileHelper::Get()->GetUserByProfile(profile());
+      BrowserContextHelper::Get()->GetUserByBrowserContext(profile());
   if (user && user->GetAccountId().is_valid()) {
     html_source->AddString(
         "googleDriveSignedInAs",
@@ -299,7 +301,7 @@ void FilesSection::AddLoadTimeData(content::WebUIDataSource* html_source) {
   html_source->AddBoolean(
       "enableSkyVault",
       base::FeatureList::IsEnabled(::features::kSkyVault) &&
-          base::FeatureList::IsEnabled(::features::kSkyVaultV2));
+          base::FeatureList::IsEnabled(ash::features::kSkyVaultV2));
 
   html_source->AddBoolean("enableDriveFsMirrorSync",
                           drive::util::IsDriveFsMirrorSyncAvailable(profile()));

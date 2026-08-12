@@ -9,7 +9,6 @@ import "mojo/public/mojom/base/file_path.mojom";
 import "mojo/public/mojom/base/time.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "services/network/public/mojom/accept_ch_frame_observer.mojom";
-import "services/network/public/mojom/attribution.mojom";
 import "services/network/public/mojom/chunked_data_pipe_getter.mojom";
 import "services/network/public/mojom/client_security_state.mojom";
 import "services/network/public/mojom/cookie_access_observer.mojom";
@@ -22,6 +21,7 @@ import "services/network/public/mojom/fetch_api.mojom";
 import "services/network/public/mojom/fetch_retry_options.mojom";
 import "services/network/public/mojom/http_raw_headers.mojom";
 import "services/network/public/mojom/http_request_headers.mojom";
+import "services/network/public/mojom/http_response_headers.mojom";
 import "services/network/public/mojom/ip_address_space.mojom";
 import "services/network/public/mojom/isolation_info.mojom";
 import "services/network/public/mojom/network_param.mojom";
@@ -156,6 +156,37 @@ struct TrustedUrlRequestParams {
   // dictionary. If this is set to non-null, the observer passed to
   // URLLoaderFactory will be ignored.
   pending_remote<SharedDictionaryAccessObserver>? shared_dictionary_observer;
+
+  // A data pipe producer handle that the URLLoader will use to write the
+  // response body.
+  //
+  // This allows clients to prepare data pipes in advance, and pass consumer
+  // handles over IPC before waiting for OnReceiveResponse(). This is beneficial
+  // for clients that want to send Mojo messages which require consumer handles
+  // (e.g., navigation commit) as soon as possible, because the receiver side
+  // can initiate some tasks while waiting for the response from the network. By
+  // having this, the response body can be streamed directly from the network
+  // service to the target (e.g., renderer process) without an extra hop through
+  // the client even before receiving the response.
+  //
+  // Note that if this is set, the URLLoaderClient will not create a data pipe
+  // in its own, and the client will not receive a data pipe consumer handle in
+  // OnReceiveResponse(). This handle remains unused until the response body is
+  // ready to be written.
+  handle<data_pipe_producer>? response_body_stream;
+
+  // The expected response headers for the request. If provided, the URLLoader
+  // will check if the received response headers are consistent with this. If
+  // not matched, the URLLoader will return a fallback response.
+  // TODO(crbug.com/447039330): This is temporary for the SyntheticResponse
+  // experiment and will be removed after standardization.
+  HttpResponseHeaders? expected_response_headers_for_synthetic_response;
+
+  // If true, `Content-Type: message/ad-auction-trusted-signals-request` will
+  // be treated as a CORS-safelisted Content-Type, so it will not trigger a CORS
+  // preflight. No new consumers should use this. It will be removed once the
+  // deprecated Protected Audiences code is deleted.
+  bool is_ad_auction_trusted_signals_request = false;
 };
 
 // Options that may only be set on URLRequests which are related to WebBundle.
@@ -370,21 +401,6 @@ struct URLRequest {
   // https://fetch.spec.whatwg.org/#request-keepalive-flag
   bool keepalive;
 
-  // True if the request should try to calculate and send the
-  // `Sec-Browsing-Topics` headers.
-  // https://github.com/patcg-individual-drafts/topics
-  bool browsing_topics;
-
-  // True if this is an ad auction request eligible for attaching the
-  // `Sec-Ad-Auction-Fetch` request header and processing the
-  // `X-Ad-Auction-Result` response header.
-  // https://github.com/WICG/turtledove/blob/main/FLEDGE_browser_bidding_and_auction_API.md#step-3-get-response-blobs-to-browser
-  bool ad_auction_headers;
-
-  // True if the request should send the `Sec-Shared-Storage-Writable` request
-  // header.
-  bool shared_storage_writable_eligible;
-
   // True if the request was user initiated.
   bool has_user_gesture;
 
@@ -408,6 +424,10 @@ struct URLRequest {
   // about this.
   int32 transition_type;
 
+  // Whether this navigation is a reload (e.g., location.reload(), F5).
+  // Used to populate Request.isReloadNavigation for Service Workers.
+  bool is_reload_navigation;
+
   // Whether or not to request a Preview version of the resource or let the
   // browser decide.
   // Note: this is an enum of type PreviewsState.
@@ -423,6 +443,10 @@ struct URLRequest {
   // Some users, notably blink, has its own cache. This flag is set to exempt
   // some CORS logic for a revalidating request.
   bool is_revalidating;
+
+  // Metadata passed for safe revalidation handling in Network Service.
+  string? revalidation_etag;
+  string? revalidation_last_modified;
 
   // The profile ID of network conditions to throttle the network request.
   mojo_base.mojom.UnguessableToken? throttling_profile_id;
@@ -545,7 +569,7 @@ struct URLRequest {
 
   // The target address space to which a given fetch operation is expected to
   // connect. See more:
-  // https://wicg.github.io/private-network-access/#permission-prompt.
+  // https://wicg.github.io/local-network-access/#permission-prompt.
   // If the actual address space and the expected address space don't match, a
   // network error will be returned.
   network.mojom.IPAddressSpace required_ip_address_space;
@@ -559,19 +583,6 @@ struct URLRequest {
   // assumption, the browser process has already determined that this access is
   // ok.
   StorageAccessApiStatus storage_access_api_status;
-
-  // Indicates whether web or OS-level Attribution Reporting is supported.
-  AttributionSupport attribution_reporting_support;
-
-  // Indicates the value of the request's `Attribution-Reporting-Eligible`
-  // header; how this header is interpreted depends on the context in which
-  // the request is made.
-  AttributionReportingEligibility attribution_reporting_eligibility =
-      AttributionReportingEligibility.kUnset;
-
-  // When applicable, indicates the token of an Attribution Reporting API
-  // eligible navigation request to which the current request is associated.
-  mojo_base.mojom.UnguessableToken? attribution_reporting_src_token;
 
   // When applicable, i.e. `keepalive` is true, indicates a fetch keepalive
   // request.
@@ -599,10 +610,10 @@ struct URLRequest {
   // embedder.
   SocketTag socket_tag;
 
-  // Whether this request is allowed to register new device bound
-  // sessions or process challenges for existing device bound sessions
-  // (e.g. due to an Origin Trial).
-  bool allows_device_bound_session_registration;
+  // Whether this request is allowed to belong to a device bound session. This
+  // includes registering a new session, accepting challenges, or deferring the
+  // request until a session is refreshed.
+  bool allows_device_bound_sessions = true;
 
   // Permissions Policy of the request.
   // If it's nullopt then the request's initiator didn't set the permissions

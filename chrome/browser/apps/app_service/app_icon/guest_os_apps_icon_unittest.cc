@@ -25,7 +25,6 @@
 #include "components/account_id/account_id.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/services/app_service/public/cpp/features.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/user_manager/fake_user_manager_delegate.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -174,35 +173,6 @@ TEST_F(AppServiceGuestOSIconTest, GetStandardCrostiniIconFromVM) {
 
   IconValuePtr expected = GenerateIcon(app_id, SK_ColorRED, kTestIconSize,
                                        IconEffects::kCrOsStandardIcon);
-  VerifyIcon(iv->uncompressed, expected->uncompressed);
-}
-
-TEST_F(AppServiceGuestOSIconTest, GetStandardCrostiniMultiContainerIconFromVM) {
-  crostini::FakeCrostiniFeatures crostini_features;
-  crostini_features.set_multi_container_allowed(true);
-
-  constexpr char kDesktopFileId[] = "desktop_file_id";
-  std::string app_id = AddApp(kDesktopFileId);
-
-  constexpr int kVmIconSizePx = 150;
-  SkBitmap red_bitmap = gfx::test::CreateBitmap(kVmIconSizePx, SK_ColorRED);
-  std::optional<std::vector<uint8_t>> png_bytes =
-      gfx::PNGCodec::EncodeBGRASkBitmap(red_bitmap, false);
-
-  vm_tools::cicerone::ContainerAppIconResponse response;
-  auto* icon_response = response.add_icons();
-  icon_response->set_icon(png_bytes->data(), png_bytes->size());
-  icon_response->set_desktop_file_id(kDesktopFileId);
-  icon_response->set_format(vm_tools::cicerone::DesktopIcon::PNG);
-  fake_cicerone_client()->set_container_app_icon_response(response);
-
-  IconValuePtr iv = LoadIcon(app_id, kTestIconSize, IconType::kStandard);
-  ASSERT_EQ(iv->icon_type, IconType::kStandard);
-
-  IconValuePtr expected =
-      GenerateIcon(app_id, SK_ColorRED, kTestIconSize,
-                   IconEffects::kCrOsStandardIcon | IconEffects::kGuestOsBadge);
-
   VerifyIcon(iv->uncompressed, expected->uncompressed);
 }
 

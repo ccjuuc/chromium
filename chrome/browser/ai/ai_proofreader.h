@@ -5,8 +5,13 @@
 #ifndef CHROME_BROWSER_AI_AI_PROOFREADER_H_
 #define CHROME_BROWSER_AI_AI_PROOFREADER_H_
 
+#include <optional>
+#include <string_view>
+
+#include "base/containers/flat_set.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ai/ai_context_bound_object.h"
+#include "chrome/browser/ai/ai_on_device_session.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
 #include "components/optimization_guide/proto/features/proofreader_api.pb.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -28,10 +33,8 @@ class AIProofreader : public AIContextBoundObject,
   void Proofread(const std::string& input,
                  mojo::PendingRemote<blink::mojom::ModelStreamingResponder>
                      pending_responder) override;
-  void GetCorrectionType(
-      const std::string& input,
-      const std::string& corrected_input,
-      const std::string& correction_instruction,
+  void GetCorrectionsTypes(
+      const std::string& correction_instructions,
       mojo::PendingRemote<blink::mojom::ModelStreamingResponder>
           pending_responder) override;
 
@@ -43,18 +46,28 @@ class AIProofreader : public AIContextBoundObject,
   static std::unique_ptr<optimization_guide::proto::ProofreadOptions>
   ToProtoOptions(const blink::mojom::AIProofreaderCreateOptionsPtr& options);
 
+  static uint32_t GetInputContextLimit(
+      const blink::mojom::AIProofreaderCreateOptionsPtr& options);
+
+  // Returns a set of BCP 47 base language codes that are supported and enabled,
+  // or nullopt if all languages are enabled (e.g. via local flags).
+  static std::optional<base::flat_set<std::string>>
+  GetEnabledLanguageBaseCodes();
+  static base::flat_set<std::string> GetDefaultSupportedLanguageBaseCodes();
+
  private:
   friend class AITestUtils;
 
   void StartExecution(const std::string& input,
-                      const std::string& corrected_input,
-                      const std::string& correction_instruction,
+                      const std::string& serialized_corrections,
+                      bool is_label_mode,
                       mojo::PendingRemote<blink::mojom::ModelStreamingResponder>
                           pending_responder);
 
   void DidGetExecutionInputSizeForProofread(
       mojo::RemoteSetElementId responder_id,
       optimization_guide::proto::ProofreaderApiRequest request,
+      bool is_label_mode,
       std::optional<uint32_t> result);
 
   void ModelExecutionCallback(
@@ -64,20 +77,19 @@ class AIProofreader : public AIContextBoundObject,
 
   // Builds a request for the model with two primary modes:
   //
-  // - To explain a correction: When `corrected_input` and
-  //   `correction_instruction` are provided, the request asks the model to
-  //   return the type of the correction.
+  // - To explain a list of corrections: When
+  //   `serialized_corrections` are provided in the format
+  //   "["Correcting `error_0` to `correction_0`", ...]", the request asks the
+  //   model to return the types of the list of corrections.
   //
   // - To proofread text: Otherwise, the request asks the model to return the
   //   fully corrected text of the input.
   optimization_guide::proto::ProofreaderApiRequest BuildRequest(
       const std::string& input,
-      const std::string& corrected_input,
-      const std::string& correction_instruction);
+      const std::string& serialized_corrections);
 
   // The underlying session provided by optimization guide component.
-  std::unique_ptr<optimization_guide::OnDeviceSession> session_;
-  mojo::Remote<blink::mojom::AIProofreader> remote_;
+  AIOnDeviceSession session_wrapper_;
   // The `RemoteSet` storing all the responders, each of them corresponds to one
   // `Proofread()` call.
   mojo::RemoteSet<blink::mojom::ModelStreamingResponder> responder_set_;

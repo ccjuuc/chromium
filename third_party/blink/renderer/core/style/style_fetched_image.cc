@@ -28,8 +28,8 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
-#include "third_party/blink/renderer/core/paint/timing/image_element_timing.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/graphics/svg_image_for_container.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
@@ -38,8 +38,7 @@ namespace blink {
 
 StyleFetchedImage::StyleFetchedImage(ImageResourceContent* image,
                                      const CSSUrlData& url_data,
-                                     const Document& document,
-                                     bool is_lazyload_possibly_deferred,
+                                     Document& document,
                                      const KURL& url,
                                      const float override_image_resolution)
     : url_data_(url_data),
@@ -47,7 +46,6 @@ StyleFetchedImage::StyleFetchedImage(ImageResourceContent* image,
       url_(url),
       override_image_resolution_(override_image_resolution) {
   is_image_resource_ = true;
-  is_lazyload_possibly_deferred_ = is_lazyload_possibly_deferred;
 
   image_ = image;
   image_->AddObserver(this);
@@ -122,13 +120,12 @@ bool StyleFetchedImage::ErrorOccurred() const {
   return image_->ErrorOccurred();
 }
 
-bool StyleFetchedImage::IsAccessAllowed(String& failing_url) const {
-  DCHECK(image_->IsLoaded());
-  if (image_->IsAccessAllowed()) {
-    return true;
+bool StyleFetchedImage::IsCorsSameOrigin() const {
+  if (!image_->IsLoaded() && image_->GetImage() &&
+      image_->GetImage()->IsSVGImage()) {
+    return false;
   }
-  failing_url = image_->Url().ElidedString();
-  return false;
+  return image_->IsCorsSameOrigin();
 }
 
 float StyleFetchedImage::ApplyImageResolution(float multiplier) const {
@@ -223,8 +220,8 @@ void StyleFetchedImage::ImageNotifyFinished(ImageResourceContent*) {
     image_->RecordDecodedImageType(document_->GetExecutionContext());
   }
 
-  if (LocalDOMWindow* window = document_->domWindow()) {
-    ImageElementTiming::From(*window).NotifyBackgroundImageFinished(this);
+  if (document_->domWindow()) {
+    PaintTimingDetector::From(*document_).NotifyBackgroundImageFinished(this);
   }
 
   // Oilpan: do not prolong the Document's lifetime.
@@ -252,28 +249,6 @@ scoped_refptr<Image> StyleFetchedImage::GetImage(
 bool StyleFetchedImage::KnownToBeOpaque(const Document&,
                                         const ComputedStyle&) const {
   return image_->GetImage()->IsOpaque();
-}
-
-void StyleFetchedImage::LoadDeferredImage(const Document& document) {
-  DCHECK(is_lazyload_possibly_deferred_);
-  is_lazyload_possibly_deferred_ = false;
-  document_ = &document;
-  image_->LoadDeferredImage(document_->Fetcher());
-}
-
-RespectImageOrientationEnum StyleFetchedImage::ForceOrientationIfNecessary(
-    RespectImageOrientationEnum default_orientation) const {
-  // SVG Images don't have orientation and assert on loading when
-  // IsAccessAllowed is called.
-  if (image_->GetImage()->IsSVGImage()) {
-    return default_orientation;
-  }
-  // Cross-origin images must always respect orientation to prevent
-  // potentially private data leakage.
-  if (!image_->IsAccessAllowed()) {
-    return kRespectImageOrientation;
-  }
-  return default_orientation;
 }
 
 bool StyleFetchedImage::GetImageAnimationPolicy(

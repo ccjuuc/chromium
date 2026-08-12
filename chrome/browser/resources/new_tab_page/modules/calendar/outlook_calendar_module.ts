@@ -15,14 +15,12 @@ import {ParentTrustedDocumentProxy} from '../microsoft_auth_frame_connector.js';
 import {ModuleDescriptor} from '../module_descriptor.js';
 import type {MenuItem, ModuleHeaderElement} from '../module_header.js';
 
-import type {CalendarElement} from './calendar.js';
 import {getHtml} from './outlook_calendar_module.html.js';
 import {OutlookCalendarProxyImpl} from './outlook_calendar_proxy.js';
 
 export interface OutlookCalendarModuleElement {
   $: {
-    calendar: CalendarElement,
-    moduleHeaderElementV2: ModuleHeaderElement,
+    moduleHeader: ModuleHeaderElement,
   };
 }
 
@@ -44,7 +42,7 @@ export class OutlookCalendarModuleElement extends
 
   static override get properties() {
     return {
-      events_: {type: Object},
+      events_: {type: Array},
       showInfoDialog_: {type: Boolean},
     };
   }
@@ -64,24 +62,32 @@ export class OutlookCalendarModuleElement extends
     return [
       {
         action: 'dismiss',
-        icon: 'modules:visibility_off',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:visibility-off' :
+            'modules:visibility_off-old',
         text: this.i18nRecursive(
             '', 'modulesDismissForHoursButtonText',
             'calendarModuleDismissHours'),
       },
       {
         action: 'disable',
-        icon: 'modules:block',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:block' :
+            'modules:block-old',
         text: this.i18n('modulesOutlookCalendarDisableButtonText'),
       },
       {
         action: 'signout',
-        icon: 'modules:logout',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:logout' :
+            'modules:logout-old',
         text: this.i18n('modulesMicrosoftSignOutButtonText'),
       },
       {
         action: 'info',
-        icon: 'modules:info',
+        icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'modules:info' :
+            'modules:info-old',
         text: this.i18n('moduleInfoButtonTitle'),
       },
     ];
@@ -110,18 +116,20 @@ export class OutlookCalendarModuleElement extends
 
   protected onDismissButtonClick_() {
     this.handler_.dismissModule();
-    this.dispatchEvent(new CustomEvent('dismiss-module-instance', {
-      bubbles: true,
-      composed: true,
-      detail: {
-        message: this.i18n('modulesOutlookCalendarDismissToastMessage'),
-        restoreCallback: () => this.handler_.restoreModule(),
-      },
-    }));
+    this.fire('dismiss-module-instance', {
+      message: this.i18n('modulesOutlookCalendarDismissToastMessage'),
+      restoreCallback: () => this.handler_.restoreModule(),
+    });
   }
 
-  protected onSignOutButtonClick_() {
+  protected onSignoutButtonClick_() {
     ParentTrustedDocumentProxy.getInstance()?.getChildDocument().signOut();
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'ntp-outlook-calendar-module': OutlookCalendarModuleElement;
   }
 }
 

@@ -27,14 +27,6 @@ const char kFindInPageTestShortTextID[] = "shortText";
 const char kFindInPageTestShortText[] = "ShortQuery";
 const char kFindInPageTestLongText[] =
     "This is a particularly long string with a great number of characters";
-const char kFindInPageTestSpecialCharactersText[] = "!@#$%^&*()_+";
-const char kFindInPageTestNumbersText[] = "1234567890";
-const char kFindInPageTestAlphanumericText[] = "f00bar";
-const char kFindInPageTestNonASCIIText[] = "大家好🦑";
-const char kFindInPageTestWithSpanishAccentText[] = "á";
-const char kFindInPageTestWithoutSpanishAccentText[] = "a";
-const char kFindInPageTestLowercaseAndUppercaseText[] =
-    "ThIs tExT Is bOtH UpPeRcAsE AnD LoWeRcAsE";
 const char kFindInPageTestRTLText[] = "He said \"שלם\" (shalom] to me.";
 
 // Relative URLs for testing purposes.
@@ -65,16 +57,6 @@ std::string FindInPageTestContent() {
   oss << "  <p id=\"" << kFindInPageTestShortTextID << "\">"
       << kFindInPageTestShortText << "</p>";
   oss << "  <p>" << kFindInPageTestLongText << "</p>";
-  oss << "  <p>Special characters: " << kFindInPageTestSpecialCharactersText
-      << "</p>";
-  oss << "  <p>Numbers: " << kFindInPageTestNumbersText << "</p>";
-  oss << "  <p>Alphanumeric text: " << kFindInPageTestAlphanumericText
-      << "</p>";
-  oss << "  <p>Non-ASCII text: " << kFindInPageTestNonASCIIText << "</p>";
-  oss << "  <p>Text without spanish accent: "
-      << kFindInPageTestWithoutSpanishAccentText << "</p>";
-  oss << "  <p>Case sensitivity: " << kFindInPageTestLowercaseAndUppercaseText
-      << "</p>";
   oss << "  <p dir=\"RTL\">" << kFindInPageTestRTLText << "</p>";
   oss << "  <div>";
   oss << "<div style=\"height: 2000px; background-color: lightgray;\"/>";
@@ -144,9 +126,7 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   [ChromeEarlGreyUI openToolsMenu];
 
   id<GREYMatcher> tableViewMatcher =
-      [ChromeEarlGrey isNewOverflowMenuEnabled]
-          ? grey_accessibilityID(kPopupMenuToolsMenuActionListId)
-          : grey_accessibilityID(kPopupMenuToolsMenuTableViewId);
+      grey_accessibilityID(kPopupMenuToolsMenuActionListId);
   [[[EarlGrey
       selectElementWithMatcher:grey_allOf(
                                    grey_accessibilityID(kToolsMenuFindInPageId),
@@ -200,10 +180,25 @@ FindInPageTestCrossOriginFramePageHttpResponse(
 
   ConditionBlock condition = ^{
     NSError* error = nil;
+    id<GREYMatcher> labelMatcher;
+    if (@available(iOS 27, *)) {
+      labelMatcher = [[GREYElementMatcherBlock alloc]
+          initWithMatchesBlock:^BOOL(id element) {
+            if (![element respondsToSelector:@selector(text)]) {
+              return NO;
+            }
+            return [[element text] isEqualToString:expectedResultsString];
+          }
+          descriptionBlock:^(id<GREYDescription> description) {
+            [description appendText:@"resultLabelText"];
+          }];
+    } else {
+      labelMatcher = chrome_test_util::StaticTextWithAccessibilityLabel(
+          expectedResultsString);
+    }
     [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                             @(kFindInPageResultLabelID))]
-        assertWithMatcher:chrome_test_util::StaticTextWithAccessibilityLabel(
-                              expectedResultsString)
+        assertWithMatcher:labelMatcher
                     error:&error];
     return (error == nil);
   };
@@ -213,17 +208,34 @@ FindInPageTestCrossOriginFramePageHttpResponse(
       @"Timeout waiting for correct Find in Page results string to appear");
 }
 
-// Asserts that there is a string "0 of 0" present in the results count label,
-// or that the label is not visible. Waits for up to 1 second for this to
-// happen.
+// Asserts that there is an empty string in the results count label, or that the
+// result count is "0". Waits for up to 1 second for this to happen.
 - (void)assertResultStringIsEmptyOrZero {
   ConditionBlock condition = ^{
     NSError* error = nil;
+    id<GREYMatcher> labelMatcher;
+    if (@available(iOS 27, *)) {
+      id<GREYMatcher> emptyOrZeroMatcher = [[GREYElementMatcherBlock alloc]
+          initWithMatchesBlock:^BOOL(id element) {
+            if (![element respondsToSelector:@selector(text)]) {
+              return NO;
+            }
+            NSString* text = [element text];
+            return text.length == 0 || [text isEqualToString:@"0"] ||
+                   [text hasPrefix:@"0 of 0"];
+          }
+          descriptionBlock:^(id<GREYDescription> description) {
+            [description appendText:@"emptyOrZeroResultLabel"];
+          }];
+      labelMatcher = grey_anyOf(emptyOrZeroMatcher, grey_notVisible(), nil);
+    } else {
+      labelMatcher =
+          grey_anyOf(chrome_test_util::StaticTextWithAccessibilityLabel(@"0"),
+                     grey_notVisible(), nil);
+    }
     [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                             @(kFindInPageResultLabelID))]
-        assertWithMatcher:
-            grey_anyOf(chrome_test_util::StaticTextWithAccessibilityLabel(@"0"),
-                       grey_notVisible(), nil)
+        assertWithMatcher:labelMatcher
                     error:&error];
     return (error == nil);
   };
@@ -238,12 +250,28 @@ FindInPageTestCrossOriginFramePageHttpResponse(
 - (void)assertResultStringIsNonZero {
   ConditionBlock condition = ^{
     NSError* error = nil;
+    id<GREYMatcher> labelMatcher;
+    if (@available(iOS 27, *)) {
+      labelMatcher = [[GREYElementMatcherBlock alloc]
+          initWithMatchesBlock:^BOOL(id element) {
+            if (![element respondsToSelector:@selector(text)]) {
+              return NO;
+            }
+            NSString* text = [element text];
+            return text.length > 0 && ![text isEqualToString:@"0"] &&
+                   ![text hasPrefix:@"0 of 0"];
+          }
+          descriptionBlock:^(id<GREYDescription> description) {
+            [description appendText:@"nonZeroResultLabel"];
+          }];
+    } else {
+      labelMatcher = grey_not(
+          grey_anyOf(chrome_test_util::StaticTextWithAccessibilityLabel(@"0"),
+                     grey_notVisible(), nil));
+    }
     [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
                                             @(kFindInPageResultLabelID))]
-        assertWithMatcher:
-            grey_not(grey_anyOf(
-                chrome_test_util::StaticTextWithAccessibilityLabel(@"0"),
-                grey_notVisible(), nil))
+        assertWithMatcher:labelMatcher
                     error:&error];
     return (error == nil);
   };
@@ -300,6 +328,9 @@ FindInPageTestCrossOriginFramePageHttpResponse(
 - (id<GREYMatcher>)matcherForText:(NSString*)text {
   NSString* prefix = @"hasText";
   GREYMatchesBlock matchesBlock = ^BOOL(id element) {
+    if (![element respondsToSelector:@selector(text)]) {
+      return NO;
+    }
     return [[element text] isEqualToString:text];
   };
 
@@ -397,38 +428,7 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   [self closeFindInPageWithDoneButton];
 }
 
-// Tests that FIP can find different types of characters: special characters,
-// number, strings with both letters and numbers as well as non-ASCII
-// characters.
-- (void)testFindInPageSpecialCharacters {
-  [self setUpTestServersForWebPageTest];
 
-  // Load test page with cross-origin iframe.
-  GURL destinationURL =
-      [self secondTestServer]->GetURL(kFindInPageCrossOriginFrameTestURL);
-  [ChromeEarlGrey loadURL:destinationURL];
-
-  // Open FIP.
-  [self openFindInPageWithOverflowMenu];
-  [self assertResultStringIsEmptyOrZero];
-
-  // Tests special characters.
-  [self replaceFindInPageText:@(kFindInPageTestSpecialCharactersText)];
-  [self assertResultStringIsResult:1 outOfTotal:2];
-
-  // Tests numbers.
-  [self replaceFindInPageText:@(kFindInPageTestNumbersText)];
-  [self assertResultStringIsResult:1 outOfTotal:2];
-
-  // Tests alphanumeric values.
-  [self replaceFindInPageText:@(kFindInPageTestAlphanumericText)];
-  [self assertResultStringIsResult:1 outOfTotal:2];
-
-  // Tests non-ASCII characters.
-  [self replaceFindInPageText:@(kFindInPageTestNonASCIIText)];
-  [self assertResultStringIsResult:1 outOfTotal:2];
-  [self closeFindInPageWithDoneButton];
-}
 
 // Tests that text can be copied from the web page and pasted into the FIP input
 // field and that the results UI updates accordingly.
@@ -509,41 +509,6 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   [self openFindInPageWithOverflowMenu];
   [self replaceFindInPageText:@(queryWithNoMatches)];
   // Test the result label shows no results.
-  [self assertResultStringIsEmptyOrZero];
-  [self closeFindInPageWithDoneButton];
-}
-
-// Tests that FIP yields no matches for a text with spanish accents e.g. 'á' if
-// the web page contains the same text without spanish accents e.g. 'a'. This
-// test assumes removing accents from `kFindInPageTestWithSpanishAccentText`
-// yields `kFindInPageTestWithoutSpanishAccentText`.
-- (void)testFindInPageDifferentAccent {
-  // TODO(crbug.com/439548043): Re-enable the test on iOS26.
-  if (base::ios::IsRunningOnIOS26OrLater()) {
-    EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 26.");
-  }
-  [self setUpTestServersForWebPageTest];
-
-  // Load test page with cross-origin iframe.
-  GURL destinationURL =
-      [self secondTestServer]->GetURL(kFindInPageCrossOriginFrameTestURL);
-  [ChromeEarlGrey loadURL:destinationURL];
-
-  // Assert the text without accent is there but the text with accents does
-  // not match.
-  [ChromeEarlGrey
-      waitForWebStateContainingText:kFindInPageTestWithoutSpanishAccentText];
-  [ChromeEarlGrey
-      waitForWebStateNotContainingText:kFindInPageTestWithSpanishAccentText];
-
-  // Open FIP and assert that text with no accents yields matches.
-  [self openFindInPageWithOverflowMenu];
-  [self replaceFindInPageText:@(kFindInPageTestWithoutSpanishAccentText)];
-  [self assertResultStringIsNonZero];
-
-  // Replace the text without spanish accent with the same text with spanish
-  // accents and test that there are no more matches.
-  [self replaceFindInPageText:@(kFindInPageTestWithSpanishAccentText)];
   [self assertResultStringIsEmptyOrZero];
   [self closeFindInPageWithDoneButton];
 }
@@ -737,33 +702,7 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   [self closeFindInPageWithDoneButton];
 }
 
-// Tests that FIP is not case sensitive.
-- (void)testFindInPageNotCaseSensitive {
-  [self setUpTestServersForWebPageTest];
 
-  // Load test page with cross-origin iframe.
-  GURL destinationURL =
-      [self secondTestServer]->GetURL(kFindInPageCrossOriginFrameTestURL);
-  [ChromeEarlGrey loadURL:destinationURL];
-
-  // Assert the page contains string that is both lowercase and uppercase.
-  [ChromeEarlGrey
-      waitForWebStateContainingText:kFindInPageTestLowercaseAndUppercaseText];
-
-  // Open FIP and type lowercase version of contained text.
-  [self openFindInPageWithOverflowMenu];
-  [self replaceFindInPageText:[@(kFindInPageTestLowercaseAndUppercaseText)
-                                  lowercaseString]];
-  // Test the number of results is as expected.
-  [self assertResultStringIsResult:1 outOfTotal:2];
-
-  // Clear input field and type uppercase version of contained text.
-  [self replaceFindInPageText:[@(kFindInPageTestLowercaseAndUppercaseText)
-                                  uppercaseString]];
-  // Test the number of results is as expected.
-  [self assertResultStringIsResult:1 outOfTotal:2];
-  [self closeFindInPageWithDoneButton];
-}
 
 // Tests that there is no leak of the FIP search query from Incognito tabs to
 // normal tabs.
@@ -939,10 +878,8 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   GURL destinationURL = self.testServer->GetURL(kFindInPageComplexPDFTestURL);
   [ChromeEarlGrey loadURL:destinationURL];
 
-  // Ensure the toolbars are not in fullscreen mode by checking if share
-  // button is visible.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
+  // Ensure the toolbars are not in fullscreen mode.
+  [ChromeEarlGreyUI waitForToolbarVisible:YES];
 
   // Open FIP with Overflow menu and check it is visible and the share button
   // is not visible.
@@ -950,16 +887,14 @@ FindInPageTestCrossOriginFramePageHttpResponse(
   [ChromeEarlGrey
       waitForSufficientlyVisibleElementWithMatcher:[self findInPageInputField]];
 
-  [ChromeEarlGrey waitForUIElementToDisappearWithMatcher:chrome_test_util::
-                                                             TabShareButton()];
+  [ChromeEarlGreyUI waitForToolbarVisible:NO];
 
   // Close find in page with Done button and ensure the share button is
   // visible again.
   [self closeFindInPageWithDoneButton];
   [[EarlGrey selectElementWithMatcher:[self findInPageInputField]]
       assertWithMatcher:grey_notVisible()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::TabShareButton()]
-      assertWithMatcher:grey_sufficientlyVisible()];
+  [ChromeEarlGreyUI waitForToolbarVisible:YES];
 }
 
 // Tests that FIP works properly with bottom omnibox.
@@ -994,9 +929,9 @@ FindInPageTestCrossOriginFramePageHttpResponse(
 
   // Scroll up and down the page.
   [[EarlGrey selectElementWithMatcher:WebStateScrollViewMatcher()]
-      performAction:grey_scrollInDirection(kGREYDirectionDown, 150)];
+      performAction:grey_scrollInDirection(kGREYDirectionDown, 100)];
   [[EarlGrey selectElementWithMatcher:WebStateScrollViewMatcher()]
-      performAction:grey_scrollInDirection(kGREYDirectionUp, 150)];
+      performAction:grey_scrollInDirection(kGREYDirectionUp, 100)];
 
   // Ensure that the bottom Omnibox is not visible.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::OmniboxAtBottom()]

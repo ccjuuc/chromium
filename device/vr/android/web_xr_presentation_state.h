@@ -17,7 +17,6 @@
 #include "components/viz/common/resources/resource_id.h"
 #include "device/vr/android/local_texture.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
-#include "gpu/command_buffer/common/mailbox_holder.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/transform.h"
@@ -106,6 +105,9 @@ struct WebXrSharedBuffer {
   // alive when the mailbox texture backed by this image is used.
   gl::ScopedEGLImage local_eglimage;
 
+  // SyncToken to wait on before reclaiming the resource.
+  gpu::SyncToken reclaimed_sync_token;
+
   // The ResourceId that was used to pass this buffer to the Viz Compositor.
   // Id should be set to kInvalidResourceId when it is not in use by the viz
   // compositor (either because the buffer was not passed to it, or because the
@@ -146,8 +148,6 @@ struct WebXrFrame {
   std::unique_ptr<gl::GLFence> render_completion_fence;
 
   std::unique_ptr<viz::BeginFrameArgs> begin_frame_args;
-
-  std::vector<gpu::SyncToken> reclaimed_sync_tokens;
   // End of elements that need to be reset on Recycle
 
   base::TimeTicks time_pose;

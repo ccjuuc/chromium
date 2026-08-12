@@ -51,8 +51,8 @@ class MODULES_EXPORT PictureInPictureControllerImpl
   static PictureInPictureControllerImpl& From(Document&);
 
   // Returns whether the document associated with the controller is allowed to
-  // request Picture-in-Picture.
-  Status IsDocumentAllowed(bool report_failure) const;
+  // request Picture-in-Picture or an immersive Picture-in-Picture session.
+  Status IsDocumentAllowed(bool is_immersive, bool report_failure) const;
 
   // Returns the Picture-in-Picture window if there is any. This is for
   // video-only PiP.
@@ -73,6 +73,7 @@ class MODULES_EXPORT PictureInPictureControllerImpl
       ScriptPromiseResolver<PictureInPictureWindow>*) override;
   void ExitPictureInPicture(HTMLVideoElement*,
                             ScriptPromiseResolver<IDLUndefined>*) override;
+  void EnterPictureInPictureImmersive(HTMLVideoElement& video_element) override;
   bool IsPictureInPictureElement(const Element*) const override;
   void OnPictureInPictureStateChange() override;
   void OnMediaPositionStateChanged(
@@ -99,8 +100,16 @@ class MODULES_EXPORT PictureInPictureControllerImpl
   }
 
  private:
+  Status IsElementAllowedInternal(const HTMLVideoElement&,
+                                  bool is_immersive,
+                                  bool report_failure) const;
+  void EnterPictureInPictureInternal(
+      HTMLVideoElement*,
+      bool request_immersive,
+      ScriptPromiseResolver<PictureInPictureWindow>*);
   void OnEnteredPictureInPicture(
       HTMLVideoElement*,
+      bool is_immersive,
       ScriptPromiseResolver<PictureInPictureWindow>*,
       mojo::PendingRemote<mojom::blink::PictureInPictureSession>,
       const gfx::Size&);

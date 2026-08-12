@@ -54,7 +54,10 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
   // TODO(crbug.com/445840788): In CL #3, map CONTEXTUAL_TASK to an existing
   // selectable type or to a new one. The first option should be trivial, the
   // second requires touching UI code across platforms.
-  static_assert(59 == syncer::GetNumDataTypes(),
+  // TODO(crbug.com/476335087): In CL #3, map GEMINI_THREAD to an existing
+  // selectable type or to a new one. The first option should be trivial, the
+  // second requires touching UI code across platforms.
+  static_assert(67 == syncer::GetNumDataTypes(),
                 "Almost always when adding a new Data, you must tie it to "
                 "a UserSelectableType below (new or existing) so the user can "
                 "disable syncing of that data. Today you must also update the "
@@ -67,17 +70,7 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
       return {kBookmarksTypeName, BOOKMARKS, {BOOKMARKS}};
     case UserSelectableType::kPreferences: {
       DataTypeSet types = {PREFERENCES, DICTIONARY, SEARCH_ENGINES};
-      // `skip_feature_checks_if_early` is used to avoid checking the feature
-      // state during early startup phase, which can happen when setting
-      // policies during pref service initialization. It is only set to true
-      // when called from `GetUserSelectableTypeName()` and thus, is not
-      // affected by the feature flag anyway.
-      // See crbug.com/415305009 for more context.
-      if ((!skip_feature_checks_if_early || base::FeatureList::GetInstance()) &&
-          !base::FeatureList::IsEnabled(
-              kSyncSupportAlwaysSyncingPriorityPreferences)) {
-        types.Put(PRIORITY_PREFERENCES);
-      }
+
       if ((!skip_feature_checks_if_early || base::FeatureList::GetInstance()) &&
           base::FeatureList::IsEnabled(
               kSpellcheckSeparateLocalAndAccountDictionaries)) {
@@ -96,9 +89,10 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
               AUTOFILL,
               {AUTOFILL, AUTOFILL_PROFILE, CONTACT_INFO}};
     case UserSelectableType::kThemes:
-      return {kThemesTypeName, THEMES, {THEMES}};
+      return {kThemesTypeName, THEMES, {THEMES, THEMES_IOS, THEMES_ANDROID}};
     case UserSelectableType::kHistory: {
-      DataTypeSet types = {HISTORY, HISTORY_DELETE_DIRECTIVES, USER_EVENTS};
+      DataTypeSet types = {HISTORY, HISTORY_DELETE_DIRECTIVES, USER_EVENTS,
+                           JOURNEY};
       // With `kSpellcheckSeparateLocalAndAccountDictionaries` enabled,
       // `DICTIONARY` is controlled by the History opt-in.
       if ((!skip_feature_checks_if_early || base::FeatureList::GetInstance()) &&
@@ -122,13 +116,17 @@ UserSelectableTypeInfo GetUserSelectableTypeInfo(
       return {kReadingListTypeName, READING_LIST, {READING_LIST}};
     case UserSelectableType::kTabs:
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-      return {
-          kTabsTypeName,
-          SESSIONS,
-          {SESSIONS, SAVED_TAB_GROUP, SHARED_COMMENT, SHARED_TAB_GROUP_DATA,
-           COLLABORATION_GROUP, SHARED_TAB_GROUP_ACCOUNT_DATA, WORKSPACE_DESK}};
+      return {kTabsTypeName,
+              SESSIONS,
+              {SESSIONS, SAVED_TAB_GROUP, SHARED_COMMENT, SHARED_TAB_GROUP_DATA,
+               COLLABORATION_GROUP, SHARED_TAB_GROUP_ACCOUNT_DATA,
+               WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER,
+               ENCRYPTED_TAB_CONTEXT_ITEM, NOTEBOOK}};
 #else
-      return {kTabsTypeName, SESSIONS, {SESSIONS, WORKSPACE_DESK}};
+      return {kTabsTypeName,
+              SESSIONS,
+              {SESSIONS, WORKSPACE_DESK, ENCRYPTED_TAB_CONTEXT_CONTAINER,
+               ENCRYPTED_TAB_CONTEXT_ITEM, NOTEBOOK}};
 #endif
     case UserSelectableType::kSavedTabGroups:
       // Note: Tab groups is presented as a separate type only on desktop.
@@ -226,9 +224,9 @@ DataTypeSet UserSelectableTypeToAllDataTypes(UserSelectableType type) {
   return GetUserSelectableTypeInfo(type).data_type_group;
 }
 
-base::Value::List UserSelectableTypeSetToValueList(
+base::ListValue UserSelectableTypeSetToValueList(
     syncer::UserSelectableTypeSet user_selected_types) {
-  base::Value::List value_list;
+  base::ListValue value_list;
   for (syncer::UserSelectableType type : user_selected_types) {
     if (const char* name = syncer::GetUserSelectableTypeName(type)) {
       value_list.Append(name);
@@ -238,7 +236,7 @@ base::Value::List UserSelectableTypeSetToValueList(
 }
 
 syncer::UserSelectableTypeSet ValueListToUserSelectableTypeSet(
-    const base::Value::List& value_list) {
+    const base::ListValue& value_list) {
   syncer::UserSelectableTypeSet user_selected_types;
   for (const base::Value& value : value_list) {
     if (!value.is_string()) {
@@ -317,6 +315,32 @@ DataTypeSet UserSelectableOsTypeToAllDataTypes(UserSelectableOsType type) {
 
 DataType UserSelectableOsTypeToCanonicalDataType(UserSelectableOsType type) {
   return GetUserSelectableOsTypeInfo(type).canonical_data_type;
+}
+
+base::ListValue UserSelectableOsTypeSetToValueList(
+    syncer::UserSelectableOsTypeSet user_selected_types) {
+  base::ListValue value_list;
+  for (syncer::UserSelectableOsType type : user_selected_types) {
+    if (const char* name = syncer::GetUserSelectableOsTypeName(type)) {
+      value_list.Append(name);
+    }
+  }
+  return value_list;
+}
+
+syncer::UserSelectableOsTypeSet ValueListToUserSelectableOsTypeSet(
+    const base::ListValue& value_list) {
+  syncer::UserSelectableOsTypeSet user_selected_os_types;
+  for (const base::Value& value : value_list) {
+    if (!value.is_string()) {
+      continue;
+    }
+    if (std::optional<syncer::UserSelectableOsType> type =
+            syncer::GetUserSelectableOsTypeFromString(value.GetString())) {
+      user_selected_os_types.Put(type.value());
+    }
+  }
+  return user_selected_os_types;
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 

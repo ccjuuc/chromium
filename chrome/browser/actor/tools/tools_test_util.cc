@@ -10,9 +10,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/test_timeouts.h"
-#include "chrome/browser/actor/actor_features.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
-#include "chrome/browser/actor/actor_policy_checker.h"
+#include "chrome/browser/actor/actor_metrics.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/execution_engine.h"
@@ -20,6 +19,7 @@
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
+#include "chrome/browser/password_manager/actor_login/chrome_actor_login_delegate_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
@@ -27,11 +27,14 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/chrome_test_utils.h"
-#include "chrome/test/base/test_browser_window.h"
+#include "chrome/test/base/platform_browser_test.h"
+#include "components/actor/core/actor_features.h"
 #include "components/optimization_guide/core/filters/optimization_hints_component_update_listener.h"
+#include "components/password_manager/core/browser/actor_login/internal/actor_login_delegate_client.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/webid/federated_embedder_login_request.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
@@ -59,25 +62,93 @@ actor_login::Credential MakeTestCredential(
   return credential;
 }
 
+actor_login::Credential MakeTestCredentialFederated(
+    const std::u16string& username,
+    const GURL& url) {
+  actor_login::Credential credential = MakeTestCredential(
+      username, url, /*immediately_available_to_login=*/true);
+  credential.type = actor_login::CredentialType::kFederated;
+
+  actor_login::FederationDetail& federation_detail =
+      credential.federation_detail.emplace();
+  federation_detail.idp_origin = url::Origin::Create(url);
+  federation_detail.account_id = base::ToString(username);
+
+  // In the federated case, the URL is formatted for display. Just using the
+  // host here is close enough for testing.
+  credential.source_site_or_app = base::UTF8ToUTF16(url.host());
+  return credential;
+}
+
 MockActorLoginService::MockActorLoginService() = default;
 
 MockActorLoginService::~MockActorLoginService() = default;
 
 void MockActorLoginService::GetCredentials(
-    tabs::TabInterface* tab,
+    actor_login::ActorLoginDelegateClient* client,
+    bool has_sign_in_with_google_button,
     base::WeakPtr<actor_login::ActorLoginQualityLoggerInterface> mqls_logger,
     actor_login::CredentialsOrErrorReply callback) {
   std::move(callback).Run(credentials_);
 }
 
 void MockActorLoginService::AttemptLogin(
-    tabs::TabInterface* tab,
+    actor_login::ActorLoginDelegateClient* client,
     const actor_login::Credential& credential,
     bool should_store_permission,
     base::WeakPtr<actor_login::ActorLoginQualityLoggerInterface> mqls_logger,
-    actor_login::LoginStatusResultOrErrorReply callback) {
+    base::TimeTicks attempt_login_tool_start_time,
+    actor_login::FrameFillingStartedCallback frame_filling_started_cb,
+    actor_login::LoginStatusResultOrErrorReply callback,
+    base::WeakPtr<actor_login::ActionSequenceDelegate>
+        action_sequence_delegate) {
+  action_sequence_delegate_ = action_sequence_delegate;
+  action_sequence_subscription_ = {};
+  if (action_sequence_delegate_) {
+    action_sequence_subscription_ =
+        action_sequence_delegate_->RegisterActionSequenceEnded(
+            base::BindOnce(&MockActorLoginService::OnActionSequenceEnded,
+                           base::Unretained(this)));
+  }
+
   last_credential_used_ = credential;
   last_permission_was_permanent_ = should_store_permission;
+  last_frame_filling_started_cb_ = std::move(frame_filling_started_cb);
+
+  if (credential.type == actor_login::CredentialType::kFederated &&
+      on_federated_login_delay_) {
+    auto* chrome_client =
+        static_cast<actor_login::ChromeActorLoginDelegateClient*>(client);
+    content::WebContents* web_contents = &chrome_client->GetWebContents();
+    // A minimal enum translation for testing purposes.
+    auto to_login_status = [](content::webid::FederatedLoginResult result) {
+      switch (result) {
+        case content::webid::FederatedLoginResult::kSuccess:
+          return actor_login::LoginStatusResult::kSuccessFederated;
+        case content::webid::FederatedLoginResult::kIdpReturnedError:
+          return actor_login::LoginStatusResult::
+              kErrorFederatedIdpReturnedError;
+        case content::webid::FederatedLoginResult::kTimeout:
+        case content::webid::FederatedLoginResult::kTimeoutByEmbedder:
+          return actor_login::LoginStatusResult::kErrorFederatedTimeout;
+        default:
+          ADD_FAILURE() << "Missing enum conversion for test: "
+                        << std::to_underlying(result);
+          return actor_login::LoginStatusResult::kSuccessFederated;
+      }
+    };
+    content::webid::FederatedEmbedderLoginRequest::Set(
+        web_contents, credential.federation_detail->idp_origin,
+        credential.federation_detail->account_id,
+        base::BindOnce(to_login_status)
+            .Then(base::BindOnce(
+                &actor_login::ActionSequenceDelegate::OnFederatedLoginOutcome,
+                action_sequence_delegate_)));
+    std::move(on_federated_login_delay_)
+        .Run(base::BindOnce(&MockActorLoginService::OnFederatedLoginResume,
+                            web_contents));
+  }
+
   std::move(callback).Run(login_status_);
 }
 
@@ -96,38 +167,72 @@ void MockActorLoginService::SetLoginStatus(
   login_status_ = login_status;
 }
 
+void MockActorLoginService::SetFederatedLoginDelay(
+    FederatedLoginDelayCallback on_federated_login_delay) {
+  on_federated_login_delay_ = std::move(on_federated_login_delay);
+}
+
+// static
+void MockActorLoginService::OnFederatedLoginResume(
+    content::WebContents* web_contents,
+    content::webid::FederatedLoginResult result) {
+  content::webid::FederatedEmbedderLoginRequest::Get(web_contents)
+      ->OnFederatedResultReceived(result);
+}
+
 const std::optional<actor_login::Credential>&
 MockActorLoginService::last_credential_used() const {
   return last_credential_used_;
 }
+
 bool MockActorLoginService::last_permission_was_permanent() const {
   return last_permission_was_permanent_;
 }
 
+bool MockActorLoginService::last_sequence_succeeded() const {
+  EXPECT_TRUE(last_sequence_succeeded_.has_value());
+  return last_sequence_succeeded_.value_or(false);
+}
+
+actor_login::FrameFillingStartedCallback
+MockActorLoginService::last_frame_filling_started_cb() {
+  return std::move(last_frame_filling_started_cb_);
+}
+
+void MockActorLoginService::OnActionSequenceEnded(bool success) {
+  last_sequence_succeeded_ = success;
+}
+
 ActorToolsTest::ActorToolsTest() {
-  scoped_feature_list_.InitWithFeatures(
-      /*enabled_features=*/{features::kGlic, features::kTabstripComboButton,
-                            features::kGlicActor},
+  scoped_feature_list_.InitWithFeaturesAndParameters(
+      /*enabled_features=*/
+      {{features::kGlic, {}}},
       /*disabled_features=*/{features::kGlicWarming, kGlicActionAllowlist});
 }
 
 ActorToolsTest::~ActorToolsTest() = default;
 
 void ActorToolsTest::SetUpOnMainThread() {
-  InProcessBrowserTest::SetUpOnMainThread();
+  PlatformBrowserTest::SetUpOnMainThread();
   host_resolver()->AddRule("*", "127.0.0.1");
+  embedded_test_server()->ServeFilesFromSourceDirectory("components/test/data");
+  embedded_https_test_server().ServeFilesFromSourceDirectory(
+      "components/test/data");
 
-  auto* actor_service = ActorKeyedService::Get(browser()->profile());
-  actor_service->GetPolicyChecker().set_act_on_web_for_testing(
-      ShouldForceActOnWeb());
-  task_id_ = CreateNewTask();
+  task_id_ =
+      ActorKeyedService::Get(GetProfile())
+          ->CreateTask(TestTaskSourceInfo(), NoEnterprisePolicyChecker());
 
   // Optimization guide uses this histogram to signal initialization in tests.
-  optimization_guide::RetryForHistogramUntilCountReached(
-      &histogram_tester_for_init_,
-      "OptimizationGuide.HintsManager.HintCacheInitialized", 1);
+  auto* optimization_guide_init_histogram =
+      "OptimizationGuide.HintsManager.HintCacheInitialized";
+  if (histogram_tester_for_init_.GetTotalSum(
+          optimization_guide_init_histogram) == 0) {
+    optimization_guide::RetryForHistogramUntilCountReached(
+        &histogram_tester_for_init_, optimization_guide_init_histogram, 1);
+  }
 
-  InitActionBlocklist(browser()->profile());
+  InitActionBlocklist(GetProfile());
 
   // Simulate the component loading, as the implementation checks it, but the
   // actual list is set via the command line.
@@ -139,7 +244,7 @@ void ActorToolsTest::SetUpOnMainThread() {
 }
 
 void ActorToolsTest::SetUpCommandLine(base::CommandLine* command_line) {
-  InProcessBrowserTest::SetUpCommandLine(command_line);
+  PlatformBrowserTest::SetUpCommandLine(command_line);
   SetUpBlocklist(command_line, "blocked.example.com");
   command_line->AppendSwitchASCII(switches::kForceDeviceScaleFactor, "1");
 }
@@ -148,7 +253,7 @@ void ActorToolsTest::TearDownOnMainThread() {
   // The ActorTask owned ExecutionEngine has a pointer to the profile, which
   // must be released before the browser is torn down to avoid a dangling
   // pointer.
-  ActorKeyedService::Get(browser()->profile())->ResetForTesting();
+  ActorKeyedService::Get(GetProfile())->ResetForTesting();
 }
 
 void ActorToolsTest::GoBack() {
@@ -177,32 +282,16 @@ content::RenderFrameHost* ActorToolsTest::main_frame() {
 }
 
 ExecutionEngine& ActorToolsTest::execution_engine() {
-  return *actor_task().GetExecutionEngine();
+  return actor_task().GetExecutionEngine();
+}
+
+ActorKeyedService& ActorToolsTest::actor_keyed_service() const {
+  return *ActorKeyedService::Get(GetProfile());
 }
 
 ActorTask& ActorToolsTest::actor_task() const {
   CHECK(task_id_);
-  return *ActorKeyedService::Get(browser()->profile())->GetTask(task_id_);
-}
-
-std::unique_ptr<ExecutionEngine> ActorToolsTest::CreateExecutionEngine(
-    Profile* profile) {
-  return std::make_unique<ExecutionEngine>(profile);
-}
-
-bool ActorToolsTest::ShouldForceActOnWeb() {
-  return true;
-}
-
-TaskId ActorToolsTest::CreateNewTask() {
-  auto execution_engine = CreateExecutionEngine(browser()->profile());
-  auto event_dispatcher = ui::NewUiEventDispatcher(
-      ActorKeyedService::Get(browser()->profile())->GetActorUiStateManager());
-  auto actor_task = std::make_unique<ActorTask>(browser()->profile(),
-                                                std::move(execution_engine),
-                                                std::move(event_dispatcher));
-  return ActorKeyedService::Get(browser()->profile())
-      ->AddActiveTask(std::move(actor_task));
+  return *ActorKeyedService::Get(GetProfile())->GetTask(task_id_);
 }
 
 void ActorToolsTest::SetPageContent(
@@ -210,7 +299,7 @@ void ActorToolsTest::SetPageContent(
     optimization_guide::AIPageContentResultOrError page_content) {
   auto apc = std::move(page_content->proto);
   auto* tab_data = ActorTabData::From(active_tab());
-  tab_data->DidObserveContent(apc);
+  tab_data->DidObserveContent(apc, ApcSource::kActor);
   std::move(quit_closure).Run();
 }
 
@@ -229,6 +318,14 @@ void ActorToolsTest::GetPageApc() {
 
 gfx::RectF GetBoundingClientRect(content::RenderFrameHost& rfh,
                                  std::string_view query) {
+  // getBoundingClientRect() returns CSS pixel coordinates.
+  //
+  // CSS pixels are numerically equal to DIPs only when page zoom is 1.0. If a
+  // caller needs DIP-space values, convert from CSS pixels appropriately first.
+  // Callers that compare this geometry to APC (which uses visual-viewport-
+  // relative device pixels / BlinkSpace) must then convert into APC geometry
+  // coordinates.
+  // See optimization_guide::FindNodeAtPoint() for details.
   double width =
       content::EvalJs(
           &rfh, content::JsReplace(

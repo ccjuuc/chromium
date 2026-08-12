@@ -136,7 +136,9 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
   friend class DevToolsAgentHost;
   friend class RenderFrameDevToolsAgentHostFencedFrameBrowserTest;
 
-  static void UpdateRawHeadersAccess(RenderFrameHostImpl* rfh);
+  static void UpdateRawHeadersAccess(
+      RenderFrameHostImpl* rfh,
+      RenderFrameDevToolsAgentHost* force_include_host);
 
   RenderFrameDevToolsAgentHost(FrameTreeNode*, RenderFrameHostImpl*);
   ~RenderFrameDevToolsAgentHost() override;
@@ -190,6 +192,7 @@ class CONTENT_EXPORT RenderFrameDevToolsAgentHost
       navigation_requests_;
   bool render_frame_alive_ = false;
   bool render_frame_crashed_ = false;
+  bool did_try_to_initialize_prerender_primary_main_frame_ = false;
 
   // TODO(crbug.com/40269649): Remove these fields once we collect enough
   // data.

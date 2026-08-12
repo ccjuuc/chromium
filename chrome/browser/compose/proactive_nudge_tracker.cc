@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
@@ -249,8 +250,7 @@ void ProactiveNudgeTracker::OnAfterFocusOnFormField(
 void ProactiveNudgeTracker::OnAfterTextFieldValueChanged(
     autofill::AutofillManager& manager,
     autofill::FormGlobalId form,
-    autofill::FieldGlobalId field,
-    const std::u16string& text_value) {
+    autofill::FieldGlobalId field) {
   if (!MatchesCurrentField(form, field)) {
     return;
   }

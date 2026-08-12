@@ -3,19 +3,19 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/public/cpp/keyboard/keyboard_controller.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/about_flags.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -26,6 +26,7 @@
 #include "chrome/browser/ui/webui/ash/login/signin_fatal_error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -133,7 +134,9 @@ IN_PROC_BROWSER_TEST_F(GuestLoginTest, Login) {
   user_manager::User* user = user_manager->GetActiveUser();
   ASSERT_TRUE(user);
   EXPECT_EQ(user_manager::UserType::kGuest, user->GetType());
-  EXPECT_EQ(ProfileHelper::Get()->GetProfileByUser(user)->GetPrefs(),
+  EXPECT_EQ(Profile::FromBrowserContext(
+                BrowserContextHelper::Get()->GetBrowserContextByUser(user))
+                ->GetPrefs(),
             user->GetProfilePrefs());
 }
 
@@ -165,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(GuestLoginTest, UserCreationGuestButtonVisibility) {
 // The test verifies that clicking the Guest button multiple times doesn't
 // trigger extra userdataauth requests. A regression test for b/213835042.
 IN_PROC_BROWSER_TEST_F(GuestLoginTest, PRE_MultipleClicks) {
-  StartupUtils::MarkEulaAccepted();
+  StartupUtils::MarkEulaAccepted(CHECK_DEREF(g_browser_process->local_state()));
   base::RunLoop restart_job_waiter;
   FakeSessionManagerClient::Get()->set_restart_job_callback(
       restart_job_waiter.QuitClosure());
@@ -211,7 +214,7 @@ IN_PROC_BROWSER_TEST_F(GuestLoginTest, PRE_ExitFullscreenOnSuspend) {
 
 IN_PROC_BROWSER_TEST_F(GuestLoginTest, ExitFullscreenOnSuspend) {
   login_manager_.WaitForActiveSession();
-  BrowserWindow* browser_window = browser()->window();
+  BrowserWindow* browser_window = BrowserWindow::FromBrowser(browser());
   browser()
       ->GetFeatures()
       .exclusive_access_manager()
@@ -255,7 +258,7 @@ IN_PROC_BROWSER_TEST_F(GuestLoginTest,
 // Every Guest session displays the ToS.
 IN_PROC_BROWSER_TEST_F(GuestLoginTest, PRE_ShowGuestToS) {
   // Assume device owner accepts Eula ToS.
-  StartupUtils::MarkEulaAccepted();
+  StartupUtils::MarkEulaAccepted(CHECK_DEREF(g_browser_process->local_state()));
 
   base::RunLoop restart_job_waiter;
   FakeSessionManagerClient::Get()->set_restart_job_callback(

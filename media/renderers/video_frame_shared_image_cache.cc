@@ -15,13 +15,20 @@
 
 namespace media {
 
-VideoFrameSharedImageCache::VideoFrameSharedImageCache() = default;
+VideoFrameSharedImageCache::VideoFrameSharedImageCache()
+    : cache_deleting_timer_(
+          FROM_HERE,
+          kTemporaryResourceDeletionDelay,
+          base::BindRepeating(&VideoFrameSharedImageCache::ReleaseCachedData,
+                              base::Unretained(this))) {}
 
 VideoFrameSharedImageCache::~VideoFrameSharedImageCache() {
   ReleaseCachedData();
 }
 
 void VideoFrameSharedImageCache::ReleaseCachedData() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  cache_deleting_timer_.Stop();
   // Don't destroy shared image we don't own.
   if (!shared_image_) {
     return;
@@ -30,7 +37,8 @@ void VideoFrameSharedImageCache::ReleaseCachedData() {
   auto* sii = provider_->SharedImageInterface();
   DCHECK(sii);
   if (shared_image_) {
-    sii->DestroySharedImage(sync_token_, std::move(shared_image_));
+    shared_image_->UpdateDestructionSyncToken(sync_token_);
+    shared_image_.reset();
   }
 }
 
@@ -55,6 +63,9 @@ VideoFrameSharedImageCache::GetOrCreateSharedImage(
     const viz::SharedImageFormat& format,
     SkAlphaType alpha_type,
     const gfx::ColorSpace& color_space) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  cache_deleting_timer_.Reset();
+
   if (shared_image_ && provider_ == raster_context_provider) {
     // Return the cached shared image if it is the same video frame.
     if (video_frame_id_ == video_frame->unique_id()) {
@@ -84,14 +95,16 @@ VideoFrameSharedImageCache::GetOrCreateSharedImage(
       gpu::kNullSurfaceHandle);
   CHECK(shared_image_);
   video_frame_id_ = video_frame->unique_id();
-  sync_token_ = sii->GenUnverifiedSyncToken();
+  sync_token_ = shared_image_->creation_sync_token();
 
   return {shared_image_, sync_token_, Status::kCreatedNewSharedImage};
 }
 
 void VideoFrameSharedImageCache::UpdateSyncToken(
     const gpu::SyncToken& sync_token) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   sync_token_ = sync_token;
+  cache_deleting_timer_.Reset();
 }
 
 VideoFrameSharedImageCache::CachedData::CachedData(

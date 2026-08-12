@@ -8,6 +8,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -49,6 +50,8 @@ class SodaInstallerImplChromeOSTest : public testing::Test {
         ash::prefs::kAccessibilityDictationEnabled, true);
     pref_service_->registry()->RegisterBooleanPref(prefs::kLiveCaptionEnabled,
                                                    true);
+    pref_service_->registry()->RegisterBooleanPref(
+        prefs::kHeadlessCaptionEnabled, true);
     pref_service_->registry()->RegisterBooleanPref(
         ash::prefs::kProjectorCreationFlowEnabled, true);
     pref_service_->registry()->RegisterStringPref(
@@ -122,6 +125,11 @@ class SodaInstallerImplChromeOSTest : public testing::Test {
 
   void SetLiveCaptionEnabled(bool enabled) {
     pref_service_->SetManagedPref(prefs::kLiveCaptionEnabled,
+                                  std::make_unique<base::Value>(enabled));
+  }
+
+  void SetHeadlessCaptionEnabled(bool enabled) {
+    pref_service_->SetManagedPref(prefs::kHeadlessCaptionEnabled,
                                   std::make_unique<base::Value>(enabled));
   }
 
@@ -223,16 +231,16 @@ TEST_F(SodaInstallerImplChromeOSTest, ConchInLiveCaptionFullList) {
   soda_installer_impl_.reset();
   soda_installer_impl_ = std::make_unique<SodaInstallerImplChromeOS>();
   std::vector<std::string> enabled_and_available_languages;
-  std::vector<base::Value::Dict> available_language_packs;
   {
-    auto enabled_languages = GetInstance()->GetLiveCaptionEnabledLanguages();
-    auto available_languages = GetInstance()->GetAvailableLanguages();
-    auto available_languages_set = std::unordered_set<std::string>(
-        available_languages.begin(), available_languages.end());
-    for (const auto& enabled_language : enabled_languages) {
-      if (available_languages_set.find(enabled_language) !=
-          available_languages_set.end()) {
-        enabled_and_available_languages.push_back(enabled_language);
+    std::vector<std::string> enabled_languages =
+        GetInstance()->GetLiveCaptionEnabledLanguages();
+    std::vector<std::string> available_languages =
+        GetInstance()->GetAvailableLanguages();
+    base::flat_set<std::string> available_languages_set(
+        std::move(available_languages));
+    for (auto& enabled_language : enabled_languages) {
+      if (available_languages_set.contains(enabled_language)) {
+        enabled_and_available_languages.push_back(std::move(enabled_language));
       }
     }
   }
@@ -392,6 +400,7 @@ TEST_F(SodaInstallerImplChromeOSTest, UninstallSodaAfterThirtyDays) {
   // Turn off features that use SODA so that the uninstall timer can be set.
   SetDictationEnabled(false);
   SetLiveCaptionEnabled(false);
+  SetHeadlessCaptionEnabled(false);
   SetProjectorCreationFlowEnabled(false);
   SetUninstallTimer();
   ASSERT_TRUE(IsSodaInstalled());
@@ -414,6 +423,7 @@ TEST_F(SodaInstallerImplChromeOSTest, ReinstallSoda) {
   // Turn off features that use SODA so that the uninstall timer can be set.
   SetDictationEnabled(false);
   SetLiveCaptionEnabled(false);
+  SetHeadlessCaptionEnabled(false);
   SetProjectorCreationFlowEnabled(false);
   SetUninstallTimer();
   ASSERT_TRUE(IsSodaInstalled());

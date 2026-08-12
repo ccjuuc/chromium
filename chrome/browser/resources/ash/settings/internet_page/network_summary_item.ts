@@ -6,7 +6,7 @@
  * @fileoverview Polymer element for displaying the network state for a specific
  * type and a list of networks for that type. NOTE: It both Cellular and Tether
  * technologies are available, they are combined into a single 'Mobile data'
- * section. See crbug.com/726380.
+ * section. See crbug.com/40522596.
  */
 
 import 'chrome://resources/ash/common/network/network_icon.js';
@@ -103,14 +103,14 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     };
   }
 
-  activeNetworkState: OncMojo.NetworkStateProperties|undefined;
-  deviceState: OncMojo.DeviceStateProperties|undefined;
-  globalPolicy: GlobalPolicy|undefined;
-  networkStateList: OncMojo.NetworkStateProperties[];
-  networkTitleText: string|undefined;
-  tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
+  declare activeNetworkState: OncMojo.NetworkStateProperties|undefined;
+  declare deviceState: OncMojo.DeviceStateProperties|undefined;
+  declare globalPolicy: GlobalPolicy|undefined;
+  declare networkStateList: OncMojo.NetworkStateProperties[];
+  declare networkTitleText: string|undefined;
+  declare tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
   private browserProxy_: InternetPageBrowserProxy;
-  private showTechnologyBadge_: boolean;
+  declare private showTechnologyBadge_: boolean;
 
   constructor() {
     super();
@@ -177,7 +177,7 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     if (OncMojo.connectionStateIsConnected(connectionState)) {
       // Ethernet networks always have the display name 'Ethernet' so we use the
       // state text 'Connected' to avoid repeating the label in the sublabel.
-      // See http://crbug.com/989907 for details.
+      // See http://crbug.com/41474069 for details.
       return networkState.type === NetworkType.kEthernet ?
           this.i18n('networkListItemConnected') :
           name;
@@ -236,10 +236,6 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
       return false;
     }
 
-    if (this.isInstantHotspotRebrandEnabled_() &&
-        deviceState.type === NetworkType.kTether) {
-      return true;
-    }
     if (deviceState.type === NetworkType.kVPN) {
       return true;
     }
@@ -278,7 +274,7 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
       case NetworkType.kVPN:
         return false;
       case NetworkType.kTether:
-        return !this.isInstantHotspotRebrandEnabled_();
+        return true;
       case NetworkType.kWiFi:
       case NetworkType.kCellular:
         return deviceState.deviceState !== DeviceStateType.kUninitialized;
@@ -327,13 +323,6 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     return '';
   }
 
-  /**
-   * @return True if instant hotspot rebrand feature flag is enabled.
-   */
-  private isInstantHotspotRebrandEnabled_(): boolean {
-    return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-        loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-  }
 
   /**
    * @return True if VPNs are disabled by policy and the current device is VPN.
@@ -605,9 +594,7 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     // The shared Cellular/Tether subpage is referred to as "Mobile".
     // TODO(khorimoto): Remove once Cellular/Tether are split into their own
     // sections.
-    if (type === NetworkType.kCellular ||
-        (type === NetworkType.kTether &&
-         !this.isInstantHotspotRebrandEnabled_())) {
+    if (type === NetworkType.kCellular || (type === NetworkType.kTether)) {
       type = NetworkType.kMobile;
     }
     return this.i18n('OncType' + OncMojo.getNetworkTypeString(type));

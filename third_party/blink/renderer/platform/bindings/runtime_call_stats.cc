@@ -126,8 +126,9 @@ String RuntimeCallStats::ToString() const {
       "Name                                                    Count     Time "
       "(ms)\n\n");
   for (const auto& counter : counters_) {
-    builder.AppendFormat(row_format, counter.GetName(), counter.GetCount(),
-                         counter.GetTime().InMillisecondsF());
+    UNSAFE_TODO(builder.AppendFormat(row_format, counter.GetName(),
+                                     counter.GetCount(),
+                                     counter.GetTime().InMillisecondsF()));
   }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -197,10 +198,7 @@ constexpr const char* RuntimeCallStatsScopedTracer::s_name_ =
 
 void RuntimeCallStatsScopedTracer::AddBeginTraceEventIfEnabled(
     v8::Isolate* isolate) {
-  bool category_group_enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(s_category_group_,
-                                     &category_group_enabled);
-  if (!category_group_enabled) [[likely]] {
+  if (!TRACE_EVENT_CATEGORY_ENABLED(s_category_group_)) [[likely]] {
     return;
   }
 
@@ -210,15 +208,14 @@ void RuntimeCallStatsScopedTracer::AddBeginTraceEventIfEnabled(
   stats_ = stats;
   stats_->Reset();
   stats_->SetInUse(true);
-  TRACE_EVENT_BEGIN0(s_category_group_, s_name_);
+  TRACE_EVENT_BEGIN(s_category_group_, perfetto::StaticString(s_name_));
 }
 
 void RuntimeCallStatsScopedTracer::AddEndTraceEvent() {
   auto value = std::make_unique<TracedValue>();
   stats_->Dump(*value);
   stats_->SetInUse(false);
-  TRACE_EVENT_END1(s_category_group_, s_name_, "runtime-call-stats",
-                   std::move(value));
+  TRACE_EVENT_END(s_category_group_, "runtime-call-stats", std::move(value));
 }
 
 }  // namespace blink

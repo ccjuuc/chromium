@@ -16,8 +16,10 @@ import org.chromium.chrome.browser.language.R;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.ParentOverrideSlot;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarController;
-import org.chromium.ui.util.TokenHolder;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modaldialog.ModalDialogManagerHolder;
 
 /**
  * Helper class to manage the preferences UI when selecting an app language from LanguageSettings.
@@ -32,7 +34,7 @@ public class AppLanguagePreferenceDelegate {
         void restart();
     }
 
-    private int mSnackbarToken = TokenHolder.INVALID_TOKEN;
+    private boolean mHasSnackbarOverride;
     private SnackbarManager mSnackbarManager;
     private @Nullable Snackbar mSnackbar;
     private SnackbarController mSnackbarController;
@@ -66,20 +68,38 @@ public class AppLanguagePreferenceDelegate {
             LanguageSettings fragment, LanguageItemPickerPreference preference, Profile profile) {
         mActivity = fragment.getActivity();
         mPreference = preference;
+        @Nullable ModalDialogManager modalDialogManager = null;
+        if (mActivity instanceof ModalDialogManagerHolder holder) {
+            modalDialogManager = holder.getModalDialogManager();
+        }
         mSnackbarManager =
-                new SnackbarManager(mActivity, mActivity.findViewById(android.R.id.content), null);
+                new SnackbarManager(
+                        mActivity,
+                        mActivity.findViewById(android.R.id.content),
+                        null,
+                        null,
+                        modalDialogManager);
         mProfile = profile;
+    }
+
+    /** Destroy the {@link SnackbarManager} managed by this delegate. */
+    public void destroy() {
+        if (mSnackbarManager != null) {
+            mSnackbarManager.destroy();
+        }
     }
 
     /** Show the {@link Snackbar} if one can be shown and there is a saved Snackbar to show. */
     public void maybeShowSnackbar() {
         if (mSnackbar != null && mSnackbarManager.canShowSnackbar()) {
-            if (mSnackbarToken == TokenHolder.INVALID_TOKEN) {
+            if (!mHasSnackbarOverride) {
                 // SnackbarManager is created/owned by this class, so the override doesn't need to
                 // be popped.
-                mSnackbarToken =
-                        mSnackbarManager.pushParentViewToOverrideStack(
-                                mActivity.findViewById(android.R.id.content));
+                mHasSnackbarOverride = true;
+                mSnackbarManager.pushParentViewOverride(
+                        ParentOverrideSlot.ONE_OFF,
+                        mActivity.findViewById(android.R.id.content),
+                        /* additionalBottomMarginPxSupplier= */ null);
             }
             mSnackbarManager.showSnackbar(mSnackbar);
             mSnackbar = null;
@@ -152,11 +172,11 @@ public class AppLanguagePreferenceDelegate {
         Resources resources = mActivity.getResources();
         Snackbar snackbar =
                 Snackbar.make(
-                                resources.getString(R.string.languages_infobar_ready, displayName),
+                                resources.getString(R.string.languages_snackbar_ready, displayName),
                                 mSnackbarController,
                                 Snackbar.TYPE_PERSISTENT,
                                 Snackbar.UMA_LANGUAGE_SPLIT_RESTART)
-                        .setAction(resources.getString(R.string.languages_infobar_restart), null);
+                        .setAction(resources.getString(R.string.languages_snackbar_restart), null);
         snackbar.setDefaultLines(false);
         if (mSnackbarManager.canShowSnackbar()) {
             mSnackbarManager.showSnackbar(snackbar);

@@ -18,6 +18,7 @@
 #include "base/base64.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
@@ -35,7 +36,6 @@
 #include "content/browser/browser_context_impl.h"
 #include "content/browser/browsing_data/browsing_data_remover_impl.h"
 #include "content/browser/child_process_host_impl.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/in_memory_federated_permission_context.h"
 #include "content/browser/preloading/prefetch/prefetch_request.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
@@ -49,6 +49,7 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/permission_controller.h"
+#include "content/public/browser/pre_prefetch_handle.h"
 #include "content/public/browser/prefetch_service_delegate.h"
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/render_process_host.h"
@@ -132,9 +133,10 @@ StoragePartition* BrowserContext::GetStoragePartition(
   if (site_instance)
     DCHECK_EQ(this, site_instance->GetBrowserContext());
 
-  auto partition_config = site_instance
-                              ? site_instance->GetStoragePartitionConfig()
-                              : StoragePartitionConfig::CreateDefault(this);
+  auto partition_config =
+      site_instance
+          ? site_instance->GetSecurityPrincipal().GetStoragePartitionConfig()
+          : StoragePartitionConfig::CreateDefault(this);
   return GetStoragePartition(partition_config, can_create);
 }
 
@@ -192,6 +194,11 @@ StoragePartition* BrowserContext::GetDefaultStoragePartition() {
   return GetStoragePartition(StoragePartitionConfig::CreateDefault(this));
 }
 
+scoped_refptr<network::SharedURLLoaderFactory>
+BrowserContext::GetURLLoaderFactory() {
+  return GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
+}
+
 std::unique_ptr<content::PrefetchHandle>
 BrowserContext::StartBrowserPrefetchRequest(
     const GURL& url,
@@ -199,6 +206,7 @@ BrowserContext::StartBrowserPrefetchRequest(
     bool javascript_enabled,
     std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
     std::optional<PrefetchPriority> priority,
+    scoped_refptr<PreloadPipelineInfo> preload_pipeline_info,
     const net::HttpRequestHeaders& additional_headers,
     std::unique_ptr<PrefetchRequestStatusListener> request_status_listener,
     base::TimeDelta ttl,
@@ -212,7 +220,16 @@ BrowserContext::StartBrowserPrefetchRequest(
       BrowserContextImpl::From(this)->GetPrefetchService();
   if (!prefetch_service) {
     if (request_status_listener) {
-      request_status_listener->OnPrefetchStartFailedGeneric();
+      if (base::FeatureList::IsEnabled(
+              features::kPrefetchRequestStatusListenerAsync)) {
+        base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(
+                &PrefetchRequestStatusListener::OnPrefetchStartFailedGeneric,
+                std::move(request_status_listener)));
+      } else {
+        request_status_listener->OnPrefetchStartFailedGeneric();
+      }
     }
     return nullptr;
   }
@@ -223,11 +240,30 @@ BrowserContext::StartBrowserPrefetchRequest(
       this, url, prefetch_type, embedder_histogram_suffix,
       blink::mojom::Referrer(), javascript_enabled,
       /*referring_origin=*/std::nullopt, std::move(no_vary_search_hint),
-      std::move(priority),
+      std::move(priority), std::move(preload_pipeline_info),
       /*attempt=*/nullptr, additional_headers,
       std::move(request_status_listener), ttl, should_append_variations_header,
       should_disable_block_until_head_timeout, should_bypass_http_cache);
   return prefetch_service->AddPrefetchRequestWithHandle(std::move(request));
+}
+
+std::unique_ptr<content::PrefetchHandle>
+BrowserContext::StartPrefetchFromPrePrefetch(
+    std::unique_ptr<content::PrePrefetchHandle> pre_prefetch_handle) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  TRACE_EVENT0("loading", "BrowserContext::StartPrefetchFromPrePrefetch");
+
+  PrefetchService* prefetch_service =
+      BrowserContextImpl::From(this)->GetPrefetchService();
+  if (!prefetch_service) {
+    // TODO(crbug.com/452406598): Call `PrefetchRequestStatusListener`'s
+    // `OnPrefetchStartFailedGeneric()`, like `StartBrowserPrefetchRequest()`
+    // does.
+    return nullptr;
+  }
+
+  return prefetch_service->AddPrefetchRequestFromPrePrefetch(
+      std::move(pre_prefetch_handle));
 }
 
 void BrowserContext::UpdatePrefetchServiceDelegateAcceptLanguageHeader(
@@ -242,8 +278,8 @@ void BrowserContext::UpdatePrefetchServiceDelegateAcceptLanguageHeader(
 }
 
 bool BrowserContext::IsPrefetchDuplicate(
-    GURL& url,
-    std::optional<net::HttpNoVarySearchData> no_vary_search_hint) {
+    const GURL& url,
+    const std::optional<net::HttpNoVarySearchData>& no_vary_search_hint) {
   PrefetchService* prefetch_service =
       BrowserContextImpl::From(this)->GetPrefetchService();
   // `CHECK` is used here because this method should not be called unless there
@@ -360,8 +396,12 @@ bool BrowserContext::ShutdownStarted() {
   return impl()->ShutdownStarted();
 }
 
-const std::string& BrowserContext::UniqueId() {
+const std::string& BrowserContext::UniqueId() const {
   return impl()->UniqueId();
+}
+
+const base::UnguessableToken& BrowserContext::UniqueToken() const {
+  return impl()->UniqueToken();
 }
 
 media::VideoDecodePerfHistory* BrowserContext::GetVideoDecodePerfHistory() {
@@ -408,6 +448,10 @@ bool BrowserContext::CanUseDiskWhenOffTheRecord() {
   return false;
 }
 
+bool BrowserContext::ShouldClearSessionStorageOnStartup() {
+  return false;
+}
+
 variations::VariationsClient* BrowserContext::GetVariationsClient() {
   return nullptr;
 }
@@ -449,10 +493,6 @@ BrowserContext::GetFederatedIdentityAutoReauthnPermissionContext() {
 FederatedIdentityPermissionContextDelegate*
 BrowserContext::GetFederatedIdentityPermissionContext() {
   return impl()->GetFederatedPermissionContext();
-}
-
-KAnonymityServiceDelegate* BrowserContext::GetKAnonymityServiceDelegate() {
-  return nullptr;
 }
 
 OriginTrialsControllerDelegate*

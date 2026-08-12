@@ -6,8 +6,9 @@ var CHECK = requireNative('logging').CHECK;
 var idGeneratorNatives = requireNative('id_generator');
 var utils = require('utils');
 var webRequestInternal = getInternalApi('webRequestInternal');
+var webRequestNatives = requireNative('web_request_natives');
 const allowAsyncResponsesForAllEvents =
-    requireNative('web_request_natives').AllowAsyncResponsesForAllEvents();
+    webRequestNatives.AllowAsyncResponsesForAllEvents();
 const isServiceWorkerContext =
     requireNative('service_worker_natives').IsServiceWorkerContext();
 
@@ -89,11 +90,8 @@ WebRequestEventImpl.prototype.addListener =
   // subEvent listener.
   bindingUtil.validateCustomSignature(this.eventName,
                                       $Array.slice(arguments, 1));
-  webRequestInternal.addEventListener(
-      cb, opt_filter, opt_extraInfo, this.eventName, subEventName,
-      this.webViewInstanceId);
 
-  var supportsFilters = false;
+  var supportsFilters = true;
   var supportsLazyListeners = true;
   var subEvent =
       bindingUtil.createCustomEvent(subEventName, supportsFilters,
@@ -150,7 +148,9 @@ WebRequestEventImpl.prototype.addListener =
   }
   $Array.push(this.subEvents,
       {subEvent: subEvent, callback: cb, subEventCallback: subEventCallback});
-  subEvent.addListener(subEventCallback);
+
+  subEvent.addListener(subEventCallback, opt_filter,
+    { extraInfo: opt_extraInfo, webViewInstanceId: this.webViewInstanceId });
 };
 
 // Unregisters a callback.

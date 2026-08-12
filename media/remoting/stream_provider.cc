@@ -546,6 +546,11 @@ void StreamProvider::OnAcquireDemuxer(
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(message->has_acquire_demuxer_rpc());
 
+  if (audio_stream_ || video_stream_) {
+    VLOG(1) << __func__ << " Demuxer streams already acquired, ignoring.";
+    return;
+  }
+
   int32_t audio_demuxer_handle =
       message->acquire_demuxer_rpc().audio_demuxer_handle();
   int32_t video_demuxer_handle =
@@ -630,8 +635,8 @@ void StreamProvider::CompleteInitialize() {
   std::move(init_done_callback_).Run(PIPELINE_OK);
 }
 
-std::vector<DemuxerStream*> StreamProvider::GetAllStreams() {
-  std::vector<DemuxerStream*> streams;
+std::vector<raw_ptr<DemuxerStream>> StreamProvider::GetAllStreams() {
+  std::vector<raw_ptr<DemuxerStream>> streams;
   if (audio_stream_) {
     streams.push_back(audio_stream_.get());
   }

@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
-#pragma allow_unsafe_libc_calls
-#endif
 
 // The entry point for all Mac Chromium processes, including the outer app
 // bundle (browser) and helper app (renderer, plugin, and friends).
@@ -25,6 +21,7 @@
 #include <memory>
 
 #include "base/allocator/early_zone_registration_apple.h"
+#include "base/compiler_specific.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_version.h"
@@ -43,12 +40,10 @@ void abort_report_np(const char* fmt, ...);
 
 namespace {
 
-typedef int (*ChromeMainPtr)(int, char**);
-
 #if !defined(HELPER_EXECUTABLE) && defined(OFFICIAL_BUILD) && \
     BUILDFLAG(GOOGLE_CHROME_BRANDING) && defined(ARCH_CPU_X86_64)
-// This is for https://crbug.com/1300598, and more generally,
-// https://crbug.com/1297588 (and all of the associated bugs). It's horrible!
+// This is for https://crbug.com/40216333, and more generally,
+// https://crbug.com/40215211 (and all of the associated bugs). It's horrible!
 //
 // When the main executable is updated on disk while the application is running,
 // and the offset of the Mach-O image at the main executable's path changes from
@@ -136,8 +131,8 @@ __attribute__((used)) const char kGrossPaddingForCrbug1300598[216 * 1024] = {};
   va_list valist;
   va_start(valist, format);
   char message[4096];
-  if (vsnprintf(message, sizeof(message), format, valist) >= 0) {
-    fputs(message, stderr);
+  if (UNSAFE_TODO(vsnprintf(message, sizeof(message), format, valist)) >= 0) {
+    UNSAFE_TODO(fputs(message, stderr));
     abort_report_np("%s", message);
   }
   va_end(valist);
@@ -173,6 +168,7 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
       FatalError("Failed to initialize sandbox.");
     }
   }
+#endif
 
 #if defined(CUSTOM_CHROME_DLL_NAME)
 #define MAC_FRAMEWORK_NAME CUSTOM_CHROME_DLL_NAME
@@ -186,15 +182,21 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
 #define MAC_FRAMEWORK_VERSION CHROME_VERSION_STRING
 #endif
 
-#if defined(HELPER_EXECUTABLE)
+#if defined(RENDERER_HELPER_EXECUTABLE)
+  static constexpr char entry_symbol[] = "ChromeRendererMain";
+  static constexpr char rel_path[] = "../../../../Libraries/librenderer.dylib";
+#elif defined(HELPER_EXECUTABLE)
   // The helper lives within the versioned framework directory, so simply
   // go up to find the main dylib.
-  const char rel_path[] = "../../../../" MAC_FRAMEWORK_NAME " Framework";
+  static constexpr char entry_symbol[] = "ChromeMain";
+  static constexpr char rel_path[] =
+      "../../../../" MAC_FRAMEWORK_NAME " Framework";
 #else
-  const char rel_path[] = "../Frameworks/" MAC_FRAMEWORK_NAME
-                          " Framework.framework/Versions/" MAC_FRAMEWORK_VERSION
-                          "/" MAC_FRAMEWORK_NAME " Framework";
-#endif  // defined(HELPER_EXECUTABLE)
+  static constexpr char entry_symbol[] = "ChromeMain";
+  static constexpr char rel_path[] =
+      "../Frameworks/" MAC_FRAMEWORK_NAME " Framework.framework/Versions/"
+      MAC_FRAMEWORK_VERSION "/" MAC_FRAMEWORK_NAME " Framework";
+#endif  // defined(RENDERER_HELPER_EXECUTABLE)
 
   // Slice off the last part of the main executable path, and append the
   // version framework information.
@@ -208,8 +210,8 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
   // 2 accounts for a trailing NUL byte and the '/' in the middle of the paths.
   const size_t framework_path_size = parent_dir_len + rel_path_len + 2;
   std::unique_ptr<char[]> framework_path(new char[framework_path_size]);
-  snprintf(framework_path.get(), framework_path_size, "%s/%s", parent_dir,
-           rel_path);
+  UNSAFE_TODO(snprintf(framework_path.get(), framework_path_size, "%s/%s",
+                       parent_dir, rel_path));
 
   void* library =
       dlopen(framework_path.get(), RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
@@ -217,12 +219,13 @@ __attribute__((visibility("default"))) int main(int argc, char* argv[]) {
     FatalError("dlopen %s: %s.", framework_path.get(), dlerror());
   }
 
+  using ChromeMainPtr = int (*)(int, const char**);
   const ChromeMainPtr chrome_main =
-      reinterpret_cast<ChromeMainPtr>(dlsym(library, "ChromeMain"));
+      reinterpret_cast<ChromeMainPtr>(dlsym(library, entry_symbol));
   if (!chrome_main) {
-    FatalError("dlsym ChromeMain: %s.", dlerror());
+    FatalError("dlsym %s: %s.", entry_symbol, dlerror());
   }
-  rv = chrome_main(argc, argv);
+  rv = chrome_main(argc, const_cast<const char**>(argv));
 
   // exit, don't return from main, to avoid the apparent removal of main from
   // stack backtraces under tail call optimization.

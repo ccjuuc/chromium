@@ -18,7 +18,6 @@
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/session/chrome_session_manager.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_feature_usage_metrics.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_notification_controller.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_service_factory.h"
@@ -418,7 +417,7 @@ TEST_F(
     GetRemoteDevices_InitiallyNoSyncedDevices_MultiDeviceSetupDialogVisible) {
   SetDisplaySize(gfx::Size(1920, 1200));
 
-  ChromeSessionManager manager{
+  session_manager::SessionManager manager{
       std::make_unique<session_manager::FakeSessionManagerDelegate>()};
   manager.OnUserManagerCreated(fake_user_manager_.Get());
 
@@ -527,7 +526,7 @@ TEST_F(SmartLockServiceTest, AuthenticateWithSmartLock) {
       feature_usage::FeatureUsageMetrics::Event::kUsedWithSuccess, 1);
 }
 
-// Regression test for crbug.com/974410.
+// Regression test for crbug.com/207066378.
 // The "SmartLock.AuthResult" Failure bucket is incorrectly emitted to during
 // this test. See crbug.com/1255964 for more info.
 TEST_F(SmartLockServiceTest, AuthenticateWithSmartLockMultipleTimes) {

@@ -12,6 +12,7 @@
 #include "base/check_op.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
 #include "base/types/expected.h"
@@ -59,20 +60,11 @@ OSCryptAsync::OSCryptAsync(
     : providers_(SortProviders(std::move(providers))) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (providers_.empty()) {
-    SetEncryptorInstance(Encryptor());
+    SetEncryptorInstance(base::WrapRefCounted(new Encryptor()));
   }
 }
 
 OSCryptAsync::~OSCryptAsync() = default;
-
-// CallbackHelper is needed so the sequence checker member can be accessed in
-// the callback, which it can't from a lambda without breaking the
-// sequence_checker abstraction.
-void OSCryptAsync::CallbackHelper(InitCallback callback,
-                                  Encryptor::Option option) const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(encryptor_instance_->Clone(option));
-}
 
 void OSCryptAsync::HandleKey(
     ProviderIterator current,
@@ -97,9 +89,6 @@ void OSCryptAsync::HandleKey(
     key_ring_.emplace(tag, std::move(*key));
     if ((*current)->UseForEncryption()) {
       provider_for_encryption_ = tag;
-      if ((*current)->IsCompatibleWithOsCryptSync()) {
-        provider_for_os_crypt_sync_compatible_encryption_ = tag;
-      }
     }
   } else {
     switch (key.error()) {
@@ -114,9 +103,8 @@ void OSCryptAsync::HandleKey(
   }
 
   if (++current == providers_.end()) {
-    SetEncryptorInstance(
-        Encryptor(std::move(key_ring_), provider_for_encryption_,
-                  provider_for_os_crypt_sync_compatible_encryption_));
+    SetEncryptorInstance(base::WrapRefCounted(
+        new Encryptor(std::move(key_ring_), provider_for_encryption_)));
     for (auto& callback : callbacks_) {
       std::move(callback).Run();
     }
@@ -128,11 +116,11 @@ void OSCryptAsync::HandleKey(
                                     weak_factory_.GetWeakPtr(), current));
 }
 
-void OSCryptAsync::SetEncryptorInstance(Encryptor encryptor) {
+void OSCryptAsync::SetEncryptorInstance(scoped_refptr<Encryptor> encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!is_initialized_);
   is_initialized_ = true;
-  encryptor_instance_ = std::make_unique<Encryptor>(std::move(encryptor));
+  encryptor_instance_ = std::move(encryptor);
   size_t available_keys = 0;
   size_t unavailable_keys = 0;
   for (const auto& key : encryptor_instance_->keys_) {
@@ -155,22 +143,22 @@ void OSCryptAsync::SetEncryptorInstance(Encryptor encryptor) {
 }
 
 void OSCryptAsync::GetInstance(InitCallback callback) {
-  GetInstance(std::move(callback), Encryptor::Option::kNone);
-}
-
-void OSCryptAsync::GetInstance(InitCallback callback,
-                               Encryptor::Option option) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (is_initialized_) {
     CHECK(!is_initializing_);
-    std::move(callback).Run(encryptor_instance_->Clone(option));
+    std::move(callback).Run(encryptor_instance_);
     return;
   }
 
-  callbacks_.emplace_back(base::BindOnce(&OSCryptAsync::CallbackHelper,
-                                         weak_factory_.GetWeakPtr(),
-                                         std::move(callback), option));
+  callbacks_.emplace_back(base::BindOnce(
+      [](base::WeakPtr<OSCryptAsync> self, InitCallback callback) {
+        if (self) {
+          DCHECK_CALLED_ON_VALID_SEQUENCE(self->sequence_checker_);
+          std::move(callback).Run(self->encryptor_instance_);
+        }
+      },
+      weak_factory_.GetWeakPtr(), std::move(callback)));
 
   if (is_initializing_) {
     return;

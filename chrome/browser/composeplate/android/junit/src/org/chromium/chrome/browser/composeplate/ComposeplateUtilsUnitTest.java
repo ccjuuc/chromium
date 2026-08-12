@@ -33,17 +33,15 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.theme.ThemeUtils;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 
 /** Unit tests for {@link ComposeplateUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
-@Features.EnableFeatures({
-    ChromeFeatureList.ANDROID_COMPOSEPLATE,
-})
 public class ComposeplateUtilsUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -61,68 +59,103 @@ public class ComposeplateUtilsUnitTest {
                         ApplicationProvider.getApplicationContext(),
                         R.style.Theme_BrowserUI_DayNight);
         ComposeplateUtilsJni.setInstanceForTesting(mMockComposeplateUtilsJni);
+        when(mView.getContext()).thenReturn(mContext);
         when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(true);
-        when(mMockComposeplateUtilsJni.isAimEntrypointLFFEligible(eq(mProfile))).thenReturn(true);
     }
 
     @Test
-    @Features.DisableFeatures({ChromeFeatureList.ANDROID_COMPOSEPLATE_LFF})
-    public void testIsComposeplateEnabled_LFFFlagDisabled() {
-        assertTrue(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
-
-        // Verifies that the function returns false on tablets.
-        assertFalse(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ true, mProfile));
+    public void testIsComposeplateEnabled() {
+        testIsComposeplateEnabledImpl();
     }
 
     @Test
-    @Features.DisableFeatures({ChromeFeatureList.ANDROID_COMPOSEPLATE_LFF})
-    public void testIsComposeplateEnabled_DisabledByServerEligibility() {
-        assertTrue(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
-
-        when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(false);
-        // Verifies that the composeplate is disabled by policy.
-        assertFalse(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
-    }
-
-    @Test
-    @Features.EnableFeatures({ChromeFeatureList.ANDROID_COMPOSEPLATE_LFF})
+    @Config(qualifiers = "sw600dp")
     public void testIsComposeplateEnabled_LFF() {
-        assertTrue(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
-        assertTrue(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ true, mProfile));
+        testIsComposeplateEnabledImpl();
+    }
+
+    private void testIsComposeplateEnabledImpl() {
+        assertTrue(ComposeplateUtils.isComposeplateEnabled(mProfile));
 
         when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(false);
         // Verifies that the composeplate is disabled by policy on all devices.
-        assertFalse(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
-        assertFalse(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ true, mProfile));
+        assertFalse(ComposeplateUtils.isComposeplateEnabled(mProfile));
 
         when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(true);
-        when(mMockComposeplateUtilsJni.isAimEntrypointLFFEligible(eq(mProfile))).thenReturn(false);
 
-        // Verifies that the composeplate is disabled by policy on tablets.
-        assertFalse(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ true, mProfile));
-        // Verifies that the composeplate is still enabled by policy on phones.
-        assertTrue(ComposeplateUtils.isComposeplateEnabled(/* isTablet= */ false, mProfile));
+        // Verifies that the composeplate is disabled by policy on all devices.
+        assertTrue(ComposeplateUtils.isComposeplateEnabled(mProfile));
+    }
+
+    @Test
+    public void testCanShowComposeplateButtonOnNtp() {
+        // Case 1: mobile, feature Composeplate is enabled, and the composeplate button should be
+        // shown.
+        DeviceInfo.setIsDesktopForTesting(false);
+        when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(true);
+        assertFalse(DeviceInfo.isDesktop());
+        assertTrue(ComposeplateUtils.canShowComposeplateButtonOnNtp(mProfile));
+
+        // Case 2: mobile, feature Composeplate is disabled, and the composeplate button should not
+        // be shown.
+        when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(false);
+        assertFalse(ComposeplateUtils.canShowComposeplateButtonOnNtp(mProfile));
+
+        // Case 3: Desktop, feature Composeplate is enabled, but the composeplate button should not
+        // be shown.
+        DeviceInfo.setIsDesktopForTesting(true);
+        when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(true);
+        assertTrue(DeviceInfo.isDesktop());
+        assertFalse(ComposeplateUtils.canShowComposeplateButtonOnNtp(mProfile));
+
+        // Case 4: Desktop, feature Composeplate is disabled, and the composeplate button should not
+        // be shown.
+        when(mMockComposeplateUtilsJni.isAimEntrypointEligible(eq(mProfile))).thenReturn(false);
+        assertFalse(ComposeplateUtils.canShowComposeplateButtonOnNtp(mProfile));
     }
 
     @Test
     public void testApplyWhiteBackgroundAndShadow() {
-        float elevation =
-                mContext.getResources().getDimensionPixelSize(R.dimen.ntp_search_box_elevation);
-
         // Verifies the apply case.
-        ComposeplateUtils.applyWhiteBackgroundAndShadow(mContext, mView, /* apply= */ true);
-        verify(mView).setClipToOutline(eq(true));
+        ComposeplateUtils.applyWhiteBackground(mContext, mView, /* apply= */ true);
         verify(mView).setBackground(mBackgroundDrawableCaptor.capture());
         assertEquals(
                 Color.WHITE, mBackgroundDrawableCaptor.getValue().getColor().getDefaultColor());
-        verify(mView).setElevation(eq(elevation));
 
         clearInvocations(mView);
 
         // Verifies the reset case.
-        ComposeplateUtils.applyWhiteBackgroundAndShadow(mContext, mView, /* apply= */ false);
-        verify(mView).setClipToOutline(eq(false));
+        ComposeplateUtils.applyWhiteBackground(mContext, mView, /* apply= */ false);
         verify(mView).setBackground(any(Drawable.class));
-        verify(mView).setElevation(eq(0f));
+    }
+
+    @Test
+    public void testGetSearchBoxTextStyleResId() {
+        // Verifies the text style for customized background images.
+        assertEquals(
+                R.style.TextAppearance_ComposeplateTextMediumDark,
+                ComposeplateUtils.getSearchBoxTextStyleResId(
+                        /* shouldApplyWhiteBackgroundOnSearchBox= */ true));
+
+        // Verifies the text style for the default theme.
+        assertEquals(
+                R.style.TextAppearance_ComposeplateTextMedium,
+                ComposeplateUtils.getSearchBoxTextStyleResId(
+                        /* shouldApplyWhiteBackgroundOnSearchBox= */ false));
+    }
+
+    @Test
+    public void testGetSearchBoxIconColorTint() {
+        // Verifies the color tint for customized background images.
+        assertEquals(
+                mContext.getColorStateList(R.color.default_icon_color_dark),
+                ComposeplateUtils.getSearchBoxIconColorTint(
+                        mContext, /* shouldApplyWhiteBackgroundOnSearchBox= */ true));
+
+        // Verifies the color tint for the default theme.
+        assertEquals(
+                ThemeUtils.getThemedToolbarIconTint(mContext, BrandedColorScheme.APP_DEFAULT),
+                ComposeplateUtils.getSearchBoxIconColorTint(
+                        mContext, /* shouldApplyWhiteBackgroundOnSearchBox= */ false));
     }
 }

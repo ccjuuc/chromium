@@ -18,21 +18,22 @@
 #include "base/strings/string_util.h"
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/browser_delegate/browser_delegate.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/services/assistant/public/cpp/assistant_browser_delegate.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 
@@ -44,7 +45,8 @@ Profile* GetActiveUserProfile() {
   user_manager::User* active_user =
       user_manager::UserManager::Get()->GetActiveUser();
   CHECK(active_user);
-  return ash::ProfileHelper::Get()->GetProfileByUser(active_user);
+  return Profile::FromBrowserContext(
+      ash::BrowserContextHelper::Get()->GetBrowserContextByUser(active_user));
 }
 
 // These values are persisted to logs. Entries should not be renumbered and
@@ -248,7 +250,7 @@ void AssistantBrowserDelegateImpl::OpenNewEntryPoint() {
       ash::BrowserController::BrowserOrder::kAscendingActivationTime,
       [&](ash::BrowserDelegate& browser) {
         if (browser.IsWebApp() && browser.GetAppId() == web_app->app_id() &&
-            browser.GetBrowser().profile() == profile_for_new_entry_point_) {
+            browser.GetBrowser().GetProfile() == profile_for_new_entry_point_) {
           browser.Show();
           app_running = true;
           return ash::BrowserController::kBreakIteration;

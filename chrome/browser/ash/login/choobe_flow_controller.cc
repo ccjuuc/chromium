@@ -6,11 +6,11 @@
 
 #include <vector>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/containers/flat_set.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -19,7 +19,6 @@
 #include "chrome/browser/ui/webui/ash/login/drive_pinning_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/theme_selection_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/touchpad_scroll_screen_handler.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 
 namespace ash {
@@ -151,7 +150,7 @@ bool ChoobeFlowController::ShouldScreenBeSkipped(OobeScreenId screen_id) {
 }
 
 void ChoobeFlowController::OnScreensSelected(PrefService& prefs,
-                                             base::Value::List screens_ids) {
+                                             base::ListValue screens_ids) {
   if (screens_ids.empty()) {
     NOTREACHED() << "screen_ids list should not be empty";
   }
@@ -181,7 +180,7 @@ void ChoobeFlowController::OnScreenCompleted(PrefService& prefs,
   completed_screens_ids_.insert(completed_screen_id);
 
   // Update `kChoobeCompletedScreens` pref.
-  base::Value::List screens_ids;
+  base::ListValue screens_ids;
   for (const auto& screen_id : completed_screens_ids_) {
     screens_ids.Append(screen_id.name);
   }

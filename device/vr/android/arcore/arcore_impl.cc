@@ -5,17 +5,21 @@
 #include "device/vr/android/arcore/arcore_impl.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 
 #include "base/android/jni_android.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
+#include "base/dcheck_is_on.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/logging.h"
 #include "base/numerics/checked_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/pass_key.h"
 #include "device/vr/android/arcore/arcore_math_utils.h"
@@ -82,10 +86,9 @@ std::set<ArTrackableType> GetArCoreEntityTypes(
 // Helper, computes mojo_from_input_source transform based on mojo_from_viever
 // pose and input source state (containing input_from_pointer transform, which
 // in case of input sources is equivalent to viewer_from_pointer).
-// TODO(crbug.com/40669002): this currently assumes that the input source
-// ray mode is "tapping", which is OK for input sources available for AR on
-// Android, but is not true in the general case. This method should duplicate
-// the logic found in XRTargetRaySpace::MojoFromNative().
+// This currently assumes that the input source ray mode is "tapping", which
+// is OK for input sources available for AR on Android, but is not true in
+// the general case.
 std::optional<gfx::Transform> GetMojoFromInputSource(
     const device::mojom::XRInputSourceStatePtr& input_source_state,
     const gfx::Transform& mojo_from_viewer) {
@@ -552,8 +555,6 @@ std::optional<ArCore::InitializeResult> ArCoreImpl::Initialize(
   DCHECK(IsOnGlThread());
   DCHECK(!arcore_session_.is_valid());
 
-  // TODO(crbug.com/41386064): Notify error earlier if this will fail.
-
   JNIEnv* env = base::android::AttachCurrentThread();
   if (!env) {
     DLOG(ERROR) << "Unable to get JNIEnv for ArCore";
@@ -608,8 +609,8 @@ std::optional<ArCore::InitializeResult> ArCoreImpl::Initialize(
     return std::nullopt;
   }
 
-  if (base::Contains(enabled_features,
-                     device::mojom::XRSessionFeature::LIGHT_ESTIMATION)) {
+  if (enabled_features.contains(
+          device::mojom::XRSessionFeature::LIGHT_ESTIMATION)) {
     internal::ScopedArCoreObject<ArLightEstimate*> light_estimate;
     ArLightEstimate_create(
         session.get(),
@@ -626,13 +627,12 @@ std::optional<ArCore::InitializeResult> ArCoreImpl::Initialize(
   arcore_frame_ = std::move(frame);
   arcore_session_ = std::move(session);
 
-  if (base::Contains(enabled_features,
-                     device::mojom::XRSessionFeature::ANCHORS)) {
+  if (enabled_features.contains(device::mojom::XRSessionFeature::ANCHORS)) {
     anchor_manager_ = std::make_unique<ArCoreAnchorManager>(
         base::PassKey<ArCoreImpl>(), arcore_session_.get());
   }
-  if (base::Contains(enabled_features,
-                     device::mojom::XRSessionFeature::PLANE_DETECTION)) {
+  if (enabled_features.contains(
+          device::mojom::XRSessionFeature::PLANE_DETECTION)) {
     plane_manager_ = std::make_unique<ArCorePlaneManager>(
         base::PassKey<ArCoreImpl>(), arcore_session_.get());
   }
@@ -660,10 +660,10 @@ bool ArCoreImpl::ConfigureFeatures(
   }
 
   const bool light_estimation_requested =
-      base::Contains(required_features,
-                     device::mojom::XRSessionFeature::LIGHT_ESTIMATION) ||
-      base::Contains(optional_features,
-                     device::mojom::XRSessionFeature::LIGHT_ESTIMATION);
+      required_features.contains(
+          device::mojom::XRSessionFeature::LIGHT_ESTIMATION) ||
+      optional_features.contains(
+          device::mojom::XRSessionFeature::LIGHT_ESTIMATION);
 
   if (light_estimation_requested) {
     // Enable lighting estimation with spherical harmonics
@@ -672,10 +672,10 @@ bool ArCoreImpl::ConfigureFeatures(
   }
 
   const bool image_tracking_requested =
-      base::Contains(required_features,
-                     device::mojom::XRSessionFeature::IMAGE_TRACKING) ||
-      base::Contains(optional_features,
-                     device::mojom::XRSessionFeature::IMAGE_TRACKING);
+      required_features.contains(
+          device::mojom::XRSessionFeature::IMAGE_TRACKING) ||
+      optional_features.contains(
+          device::mojom::XRSessionFeature::IMAGE_TRACKING);
 
   if (image_tracking_requested) {
     internal::ScopedArCoreObject<ArAugmentedImageDatabase*> image_db;
@@ -708,9 +708,9 @@ bool ArCoreImpl::ConfigureFeatures(
   }
 
   const bool depth_api_optional =
-      base::Contains(optional_features, device::mojom::XRSessionFeature::DEPTH);
+      optional_features.contains(device::mojom::XRSessionFeature::DEPTH);
   const bool depth_api_required =
-      base::Contains(required_features, device::mojom::XRSessionFeature::DEPTH);
+      required_features.contains(device::mojom::XRSessionFeature::DEPTH);
   const bool depth_api_requested = depth_api_required || depth_api_optional;
 
   const bool depth_api_configuration_successful =
@@ -773,8 +773,8 @@ bool ArCoreImpl::ConfigureDepthSensing(
   // are allowed to return any supported depth usage.
   const auto& usage_preference = depth_sensing_config->depth_usage_preference;
   if (!usage_preference.empty() &&
-      !base::Contains(usage_preference,
-                      device::mojom::XRDepthUsage::kCPUOptimized)) {
+      !std::ranges::contains(usage_preference,
+                             device::mojom::XRDepthUsage::kCPUOptimized)) {
     return false;
   }
 
@@ -789,7 +789,7 @@ bool ArCoreImpl::ConfigureDepthSensing(
     const auto format_it = std::ranges::find_if(
         format_preference.begin(), format_preference.end(),
         [](const device::mojom::XRDepthDataFormat& format) {
-          return base::Contains(kSupportedDepthFormats, format);
+          return std::ranges::contains(kSupportedDepthFormats, format);
         });
 
     if (format_it != format_preference.end()) {
@@ -806,8 +806,8 @@ bool ArCoreImpl::ConfigureDepthSensing(
   // not a reason to reject the session, but only expose it as a part of the
   // configuration if it matches what the site has asked for.
   std::optional<mojom::XRDepthType> depth_type;
-  if (base::Contains(depth_sensing_config->depth_type_request,
-                     mojom::XRDepthType::kSmooth)) {
+  if (std::ranges::contains(depth_sensing_config->depth_type_request,
+                            mojom::XRDepthType::kSmooth)) {
     depth_type = mojom::XRDepthType::kSmooth;
   }
 
@@ -828,10 +828,10 @@ bool ArCoreImpl::ConfigureCamera(
     const std::unordered_set<device::mojom::XRSessionFeature>&
         optional_features,
     std::unordered_set<device::mojom::XRSessionFeature>& enabled_features) {
-  const bool front_facing_camera_required = base::Contains(
-      required_features, device::mojom::XRSessionFeature::FRONT_FACING);
-  const bool front_facing_camera_optional = base::Contains(
-      optional_features, device::mojom::XRSessionFeature::FRONT_FACING);
+  const bool front_facing_camera_required =
+      required_features.contains(device::mojom::XRSessionFeature::FRONT_FACING);
+  const bool front_facing_camera_optional =
+      optional_features.contains(device::mojom::XRSessionFeature::FRONT_FACING);
   const bool front_facing_camera_requested =
       front_facing_camera_required || front_facing_camera_optional;
 
@@ -986,10 +986,11 @@ mojom::VRPosePtr ArCoreImpl::Update(bool* camera_updated) {
   DCHECK(arcore_frame_.is_valid());
   DCHECK(camera_updated);
 
-  TRACE_EVENT_BEGIN0("gpu", "ArCore Update");
-  ArStatus status =
-      ArSession_update(arcore_session_.get(), arcore_frame_.get());
-  TRACE_EVENT_END0("gpu", "ArCore Update");
+  ArStatus status;
+  {
+    TRACE_EVENT("gpu", "ArCore Update");
+    status = ArSession_update(arcore_session_.get(), arcore_frame_.get());
+  }
 
   if (status != AR_SUCCESS) {
     DLOG(ERROR) << "ArSession_update failed: " << status;
@@ -1286,8 +1287,6 @@ std::optional<HitTestSubscriptionId> ArCoreImpl::SubscribeToHitTest(
       // Unsupported by ARCore:
       return std::nullopt;
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(crbug.com/40728355): Add hit test support for tracked
-      // images.
       return std::nullopt;
     case mojom::XRNativeOriginInformation::Tag::kAnchorId:
       // Validate that we know which anchor's space the hit test is interested
@@ -1297,6 +1296,8 @@ std::optional<HitTestSubscriptionId> ArCoreImpl::SubscribeToHitTest(
         return std::nullopt;
       }
       break;
+    case mojom::XRNativeOriginInformation::Tag::kMeshId:
+      return std::nullopt;
   }
 
   auto subscription_id = CreateHitTestSubscriptionId();
@@ -1446,8 +1447,8 @@ ArCoreImpl::GetMojoFromInputSources(
 
   for (const auto& input_source_state : input_state) {
     if (input_source_state && input_source_state->description) {
-      if (base::Contains(input_source_state->description->profiles,
-                         profile_name)) {
+      if (std::ranges::contains(input_source_state->description->profiles,
+                                profile_name)) {
         // Input source represented by input_state matches the profile, find
         // the transform and grab input source id.
         std::optional<gfx::Transform> maybe_mojo_from_input_source =
@@ -1529,8 +1530,8 @@ bool ArCoreImpl::NativeOriginExists(
     case mojom::XRNativeOriginInformation::Tag::kHandJointSpaceInfo:
       return false;
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(crbug.com/40728355): Needed for anchor creation relaitve to
-      // tracked images.
+      return false;
+    case mojom::XRNativeOriginInformation::Tag::kMeshId:
       return false;
   }
 }
@@ -1579,8 +1580,8 @@ std::optional<gfx::Transform> ArCoreImpl::GetMojoFromNativeOrigin(
       return std::nullopt;
 
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
-      // TODO(crbug.com/40728355): Needed for hit test and anchors
-      // support for tracked images.
+      return std::nullopt;
+    case mojom::XRNativeOriginInformation::Tag::kMeshId:
       return std::nullopt;
   }
 }
@@ -1689,7 +1690,7 @@ bool ArCoreImpl::RequestHitTest(
                         &ar_trackable_type);
 
     // Only consider trackables listed in arcore_entity_types.
-    if (!base::Contains(arcore_entity_types, ar_trackable_type)) {
+    if (!arcore_entity_types.contains(ar_trackable_type)) {
       DVLOG(2) << __func__
                << ": hit a trackable that is not in entity types set, ignoring "
                   "it. ar_trackable_type="

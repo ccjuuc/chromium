@@ -16,13 +16,14 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/simple_test_clock.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/test_signin_client_builder.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate_mock.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/mock_password_feature_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -31,11 +32,13 @@
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/interactions_stats.h"
 #include "components/password_manager/core/browser/password_store/mock_smart_bubble_stats_store.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "components/url_formatter/elide_url.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
@@ -97,7 +100,7 @@ std::unique_ptr<KeyedService> BuildTestSyncService(
 void SetupAccountPasswordStore(syncer::TestSyncService* sync_service) {
   sync_service->SetSignedIn(signin::ConsentLevel::kSignin);
   ASSERT_TRUE(
-      password_manager::features_util::IsAccountStorageEnabled(sync_service));
+      password_manager::features_util::IsAccountStorageActive(sync_service));
 }
 
 }  // namespace
@@ -311,8 +314,30 @@ TEST_F(SaveUpdateBubbleControllerTest, CloseWithoutInteraction) {
       password_manager::metrics_util::NO_DIRECT_INTERACTION);
 }
 
+TEST_F(SaveUpdateBubbleControllerTest, GetDomainForSubhead_SameDomain) {
+  const url::Origin origin = url::Origin::Create(GURL(kSiteOrigin));
+  content::WebContentsTester::For(web_contents())
+      ->NavigateAndCommit(GURL(kSiteOrigin));
+  PretendPasswordWaiting();
+  EXPECT_CALL(*delegate(), GetOrigin()).WillRepeatedly(Return(origin));
+
+  EXPECT_EQ(std::nullopt, controller()->GetDomainForSubhead());
+  DestroyModelAndVerifyControllerExpectations();
+}
+
+TEST_F(SaveUpdateBubbleControllerTest, GetDomainForSubhead_DifferentDomain) {
+  const url::Origin origin = url::Origin::Create(GURL(kSiteOrigin));
+  content::WebContentsTester::For(web_contents())
+      ->NavigateAndCommit(GURL("http://different.com/login"));
+  PretendPasswordWaiting();
+  EXPECT_CALL(*delegate(), GetOrigin()).WillRepeatedly(Return(origin));
+
+  EXPECT_EQ(u"example.com", controller()->GetDomainForSubhead());
+  DestroyModelAndVerifyControllerExpectations();
+}
+
 TEST_F(SaveUpdateBubbleControllerTest, ClickSaveWithAccountStorageDisabled) {
-  ON_CALL(*password_feature_manager(), IsAccountStorageEnabled)
+  ON_CALL(*password_feature_manager(), IsAccountStorageActive)
       .WillByDefault(Return(false));
   PretendPasswordWaiting();
 
@@ -330,7 +355,7 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickSaveWithAccountStorageDisabled) {
 }
 
 TEST_F(SaveUpdateBubbleControllerTest, ClickSaveWithAccountStorageEnabled) {
-  ON_CALL(*password_feature_manager(), IsAccountStorageEnabled)
+  ON_CALL(*password_feature_manager(), IsAccountStorageActive)
       .WillByDefault(Return(true));
   PretendPasswordWaiting();
 
@@ -348,7 +373,7 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickSaveWithAccountStorageEnabled) {
 }
 
 TEST_F(SaveUpdateBubbleControllerTest, ClickUpdateWhileAccountStorageDisabled) {
-  ON_CALL(*password_feature_manager(), IsAccountStorageEnabled)
+  ON_CALL(*password_feature_manager(), IsAccountStorageActive)
       .WillByDefault(Return(false));
   PretendUpdatePasswordWaiting();
 
@@ -463,7 +488,7 @@ TEST_F(SaveUpdateBubbleControllerTest, ClickSaveWhenCredentialsExisted) {
   form.password_value = u"password";
   form.signon_realm = "https://google.com";
   form.url = GURL(form.signon_realm);
-  GetStore()->AddLogin(form);
+  GetStore()->AddLogin(password_manager::FromPasswordForm(form));
   add_waiter.WaitOrReturn();
 
   base::HistogramTester histogram_tester;
@@ -503,12 +528,13 @@ TEST_P(SaveUpdateBubbleControllerUKMTest, RecordUKMs) {
                << ", interaction = " << static_cast<int64_t>(interaction)
                << ", credential management api =" << credential_management_api);
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
+  metrics::ProfileMetricsService profile_metrics_service;
   {
     // Setup metrics recorder
     auto recorder =
         base::MakeRefCounted<password_manager::PasswordFormMetricsRecorder>(
             true /*is_main_frame_secure*/, kTestSourceId,
-            /*pref_service=*/nullptr);
+            /*pref_service=*/nullptr, &profile_metrics_service);
 
     // Exercise bubble.
     ON_CALL(*delegate(), GetPasswordFormMetricsRecorder())
@@ -751,7 +777,7 @@ TEST_F(SaveUpdateBubbleControllerTest, UpdateBothStoresAffectsTheAccountStore) {
 TEST_F(SaveUpdateBubbleControllerTest,
        SaveInAccountStoreAffectsTheAccountStore) {
   SetupAccountPasswordStore(sync_service());
-  ON_CALL(*password_feature_manager(), IsAccountStorageEnabled)
+  ON_CALL(*password_feature_manager(), IsAccountStorageActive)
       .WillByDefault(Return(true));
   PretendPasswordWaiting();
   EXPECT_TRUE(
@@ -761,7 +787,7 @@ TEST_F(SaveUpdateBubbleControllerTest,
 TEST_F(SaveUpdateBubbleControllerTest,
        SaveInProfileStoreDoesntAffectTheAccountStore) {
   SetupAccountPasswordStore(sync_service());
-  ON_CALL(*password_feature_manager(), IsAccountStorageEnabled)
+  ON_CALL(*password_feature_manager(), IsAccountStorageActive)
       .WillByDefault(Return(false));
   PretendPasswordWaiting();
   EXPECT_FALSE(
@@ -804,4 +830,22 @@ TEST_F(SaveUpdateBubbleControllerTest, ShowsUpdateEvenIfNoExistingCredential) {
                  PasswordBubbleControllerBase::DisplayReason::kAutomatic);
 
   EXPECT_TRUE(controller()->IsCurrentStateUpdate());
+}
+
+TEST_F(SaveUpdateBubbleControllerTest, IsSavingBlockedByTrustedVaultError) {
+  PretendPasswordWaiting();
+  EXPECT_CALL(*delegate(), IsSavingBlockedByTrustedVaultError())
+      .WillOnce(Return(true));
+  EXPECT_TRUE(controller()->IsSavingBlockedByTrustedVaultError());
+
+  EXPECT_CALL(*delegate(), IsSavingBlockedByTrustedVaultError())
+      .WillOnce(Return(false));
+  EXPECT_FALSE(controller()->IsSavingBlockedByTrustedVaultError());
+}
+
+TEST_F(SaveUpdateBubbleControllerTest, OnTrustedVaultUnlockClicked) {
+  PretendPasswordWaiting();
+  EXPECT_CALL(*delegate(), StartTrustedVaultErrorResolutionFlow());
+  EXPECT_CALL(*delegate(), SavePasswordAfterTrustedVaultErrorResolution());
+  controller()->OnTrustedVaultUnlockClicked();
 }

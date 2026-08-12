@@ -5,6 +5,7 @@
 #include "components/optimization_guide/core/model_execution/on_device_execution.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
@@ -35,7 +36,7 @@ void LogRequest(OptimizationGuideLogger* logger,
                 : base::StringPrintf(
                       "with input context of %d tokens:\n%s\n",
                       logged_request.input_context_num_tokens_processed(),
-                      logged_request.input_context_string().c_str()))
+                      logged_request.input_context_string()))
         << "with string:\n"
         << logged_request.execution_string();
   }
@@ -73,37 +74,6 @@ void LogResponseHasRepeats(mojom::OnDeviceFeature feature, bool has_repeats) {
       has_repeats);
 }
 
-void LogResponseCompleteTime(mojom::OnDeviceFeature feature,
-                             base::TimeDelta time_to_completion) {
-  base::UmaHistogramMediumTimes(
-      base::StrCat(
-          {"OptimizationGuide.ModelExecution.OnDeviceResponseCompleteTime.",
-           GetVariantName(feature)}),
-      time_to_completion);
-}
-
-void LogResponseCompleteTokens(mojom::OnDeviceFeature feature,
-                               uint32_t tokens) {
-  base::UmaHistogramCounts10000(
-      base::StrCat(
-          {"OptimizationGuide.ModelExecution.OnDeviceResponseCompleteTokens.",
-           GetVariantName(feature)}),
-      tokens);
-}
-
-void LogResponseTimeToNextToken(mojom::OnDeviceFeature feature,
-                                uint32_t tokens,
-                                base::TimeDelta token_time) {
-  if (tokens == 0) {
-    return;
-  }
-  base::UmaHistogramTimes(
-      base::StrCat({"OptimizationGuide.ModelExecution."
-                    "OnDeviceResponseTokensTimeToNextToken.",
-                    GetVariantName(feature)}),
-      token_time / tokens);
-}
-
 std::string GenerateExecutionId() {
   return "on-device:" + base::Uuid::GenerateRandomV4().AsLowercaseString();
 }
@@ -114,6 +84,18 @@ bool GetOnDeviceModelWithholdNewlines() {
       "on_device_model_withhold_newlines", true};
   return kOnDeviceModelWitholdNewlines.Get();
 }
+
+// Returns whether the feature tracks repetition.
+// TODO(crbug.com/512149280): Move repetition checker to manifest config.
+bool IsRepetitionTrackedFeature(mojom::OnDeviceFeature feature) {
+  switch (feature) {
+    case mojom::OnDeviceFeature::kProofreaderApi:
+      return false;
+    default:
+      return true;
+  }
+}
+
 }  // namespace
 
 OnDeviceExecution::OnDeviceExecution(
@@ -123,17 +105,17 @@ OnDeviceExecution::OnDeviceExecution(
     on_device_model::mojom::ResponseConstraintPtr constraint,
     std::unique_ptr<ResultLogger> logger,
     OptimizationGuideModelExecutionResultStreamingCallback callback,
-    base::OnceCallback<void(bool)> cleanup_callback)
+    base::OnceClosure cleanup_callback)
     : feature_(feature),
       opts_(std::move(opts)),
       last_message_(std::move(message)),
       constraint_(std::move(constraint)),
+      telemetry_logger_(feature),
       histogram_logger_(std::move(logger)),
       callback_(std::move(callback)),
       cleanup_callback_(std::move(cleanup_callback)) {
   exec_log_.set_execution_id(GenerateExecutionId());
   exec_log_.mutable_on_device_model_execution_info()->add_execution_infos();
-  start_ = base::TimeTicks::Now();
   *(exec_log_.mutable_on_device_model_execution_info()
         ->mutable_model_versions()) = opts_.model_versions;
   // Note: if on-device fails for some reason, the result will be changed.
@@ -145,11 +127,7 @@ OnDeviceExecution::~OnDeviceExecution() {
     if (histogram_logger_) {
       histogram_logger_->set_result(Result::kDestroyedWhileWaitingForResponse);
     }
-    base::UmaHistogramMediumTimes(
-        base::StrCat({"OptimizationGuide.ModelExecution."
-                      "OnDeviceDestroyedWhileWaitingForResponseTime.",
-                      GetVariantName(feature_)}),
-        base::TimeTicks::Now() - start_);
+    telemetry_logger_.RecordDestroyedWhileWaiting();
   }
 }
 
@@ -203,6 +181,17 @@ void OnDeviceExecution::BeginExecution(OnDeviceContext& context) {
   logged_request->set_execution_string(input->ToString());
   LogRequest(opts_.logger.get(), *logged_request);
 
+  auto options = on_device_model::mojom::GenerateOptions::New();
+  options->max_output_tokens = opts_.token_limits.max_output_tokens;
+  options->constraint = constraint_ ? std::move(constraint_)
+                                    : opts_.adapter->GetResponseConstraint();
+
+  if (!options->constraint.is_null()) {
+    auto hint_options = on_device_model::mojom::HintOptions::New();
+    hint_options->constrained_decoding_hint = true;
+    session_->Hint(std::move(hint_options));
+  }
+
   if (input->input->pieces.size() > 0) {
     auto append_options = on_device_model::mojom::AppendOptions::New();
     append_options->input = std::move(input->input);
@@ -210,11 +199,6 @@ void OnDeviceExecution::BeginExecution(OnDeviceContext& context) {
     session_->Append(std::move(append_options),
                      context_receiver_.BindNewPipeAndPassRemote());
   }
-
-  auto options = on_device_model::mojom::GenerateOptions::New();
-  options->max_output_tokens = opts_.token_limits.max_output_tokens;
-  options->constraint = constraint_ ? std::move(constraint_)
-                                    : opts_.adapter->GetResponseConstraint();
 
   opts_.safety_checker->RunRequestChecks(
       last_message_,
@@ -228,7 +212,8 @@ void OnDeviceExecution::OnRequestSafetyResult(
   TRACE_EVENT("optimization_guide", "OnDeviceExecution::OnRequestSafetyResult",
               "feature", base::ToString(feature_));
   if (safety_result.failed_to_run) {
-    CancelPendingResponse(Result::kFailedConstructingMessage);
+    CancelPendingResponse(Result::kFailedConstructingMessage,
+                          OnDeviceError::kFailedToRunSafety);
     return;
   }
   // Log the check executions.
@@ -236,16 +221,11 @@ void OnDeviceExecution::OnRequestSafetyResult(
 
   // Handle the result.
   if (safety_result.is_unsafe || safety_result.is_unsupported_language) {
-    if (histogram_logger_) {
-      histogram_logger_->set_result(Result::kRequestUnsafe);
-    }
-    if (features::GetOnDeviceModelRetractUnsafeContent()) {
-      CancelPendingResponse(Result::kRequestUnsafe,
-                            safety_result.is_unsupported_language
-                                ? OnDeviceError::kUnsupportedLanguage
-                                : OnDeviceError::kFiltered);
-      return;
-    }
+    CancelPendingResponse(Result::kRequestUnsafe,
+                          safety_result.is_unsupported_language
+                              ? OnDeviceError::kUnsupportedLanguage
+                              : OnDeviceError::kFiltered);
+    return;
   }
   BeginRequestExecution(std::move(options));
 }
@@ -253,7 +233,7 @@ void OnDeviceExecution::OnRequestSafetyResult(
 void OnDeviceExecution::BeginRequestExecution(
     on_device_model::mojom::GenerateOptionsPtr options) {
   session_->Generate(std::move(options), receiver_.BindNewPipeAndPassRemote());
-  receiver_.set_disconnect_handler(base::BindOnce(
+  receiver_.set_disconnect_with_reason_handler(base::BindOnce(
       &OnDeviceExecution::OnResponderDisconnect, base::Unretained(this)));
 }
 
@@ -266,15 +246,9 @@ void OnDeviceExecution::OnResponse(
       MutableLoggedResponse();
 
   if (current_response_.empty()) {
-    first_response_time_ = base::TimeTicks::Now();
-    base::TimeDelta time_to_first_response = first_response_time_ - start_;
-    base::UmaHistogramMediumTimes(
-        base::StrCat(
-            {"OptimizationGuide.ModelExecution.OnDeviceFirstResponseTime.",
-             GetVariantName(feature_)}),
-        time_to_first_response);
+    telemetry_logger_.RecordFirstResponse();
     logged_response->set_time_to_first_response_millis(
-        time_to_first_response.InMilliseconds());
+        telemetry_logger_.GetTimeToFirstResponse().InMilliseconds());
   }
 
   if (GetOnDeviceModelWithholdNewlines()) {
@@ -291,7 +265,8 @@ void OnDeviceExecution::OnResponse(
     num_response_tokens_++;
   }
 
-  if (HasRepeatingSuffix(current_response_)) {
+  if (IsRepetitionTrackedFeature(feature_) &&
+      HasRepeatingSuffix(current_response_)) {
     // If a repeat is detected, halt the response, and cancel/finish early.
     receiver_.reset();
     logged_response->set_has_repeats(true);
@@ -323,25 +298,30 @@ void OnDeviceExecution::OnComplete(
     on_device_model::mojom::ResponseSummaryPtr summary) {
   TRACE_EVENT("optimization_guide", "OnDeviceExecution::OnComplete", "feature",
               base::ToString(feature_));
-  base::TimeTicks completion_time = base::TimeTicks::Now();
-  base::TimeDelta time_to_completion = completion_time - start_;
   receiver_.reset();  // Suppress expected disconnect
 
   bool has_repeats = MutableLoggedResponse()->has_repeats();
 
   LogResponseHasRepeats(feature_, has_repeats);
-  LogResponseCompleteTokens(feature_, num_response_tokens_);
-  LogResponseCompleteTime(feature_, time_to_completion);
-  LogResponseTimeToNextToken(feature_, num_response_tokens_,
-                             completion_time - first_response_time_);
+  telemetry_logger_.RecordCompletion(num_response_tokens_);
   MutableLoggedResponse()->set_time_to_completion_millis(
-      time_to_completion.InMilliseconds());
+      telemetry_logger_.GetTimeToCompletion().InMilliseconds());
 
   output_token_count_ = summary->output_token_count;
 
   opts_.model_client->OnResponseCompleted();
 
   RunRawOutputSafetyCheck(ResponseCompleteness::kComplete);
+}
+
+void OnDeviceExecution::OnToolCalls(
+    std::vector<on_device_model::mojom::ToolCallPtr> tool_calls) {
+  // Tool calls are unexpected in the optimization guide execution path since
+  // it never declares tools. Report as a bad message from the backend.
+  receiver_.ReportBadMessage(
+      "Unexpected tool calls in optimization guide execution path.");
+  CancelPendingResponse(Result::kDisconnectAndCancel,
+                        OnDeviceError::kGenericFailure);
 }
 
 void OnDeviceExecution::OnComplete(uint32_t tokens_processed) {
@@ -352,13 +332,22 @@ void OnDeviceExecution::OnComplete(uint32_t tokens_processed) {
   MutableLoggedRequest()->set_execution_num_tokens_processed(tokens_processed);
 }
 
-void OnDeviceExecution::OnResponderDisconnect() {
+void OnDeviceExecution::OnResponderDisconnect(uint32_t custom_reason,
+                                              const std::string& description) {
   TRACE_EVENT("optimization_guide", "OnDeviceExecution::OnResponse", "feature",
               base::ToString(feature_));
   // OnComplete resets the receiver, so this implies that the response is
-  // incomplete and there was either a service crash or model eviction.
+  // incomplete and there was either a service crash, error, or model eviction.
   receiver_.reset();
-  CancelPendingResponse(Result::kDisconnectAndCancel);
+  switch (static_cast<on_device_model::mojom::GenerateError>(custom_reason)) {
+    case on_device_model::mojom::GenerateError::kUnknown:
+      CancelPendingResponse(Result::kDisconnectAndCancel);
+      break;
+    case on_device_model::mojom::GenerateError::kInvalidConstraint:
+      CancelPendingResponse(Result::kFailedConstructingMessage,
+                            OnDeviceError::kInvalidRequest);
+      break;
+  }
 }
 
 void OnDeviceExecution::RunRawOutputSafetyCheck(
@@ -378,7 +367,8 @@ void OnDeviceExecution::OnRawOutputSafetyResult(
               "OnDeviceExecution::OnRawOutputSafetyResult", "feature",
               base::ToString(feature_));
   if (safety_result.failed_to_run) {
-    CancelPendingResponse(Result::kFailedConstructingMessage);
+    CancelPendingResponse(Result::kFailedConstructingMessage,
+                          OnDeviceError::kFailedToRunSafety);
     return;
   }
   if (safety_result.is_unsafe || safety_result.is_unsupported_language) {
@@ -387,18 +377,12 @@ void OnDeviceExecution::OnRawOutputSafetyResult(
         completeness != ResponseCompleteness::kComplete) {
       return;
     }
-    if (histogram_logger_) {
-      histogram_logger_->set_result(Result::kUsedOnDeviceOutputUnsafe);
-    }
     AddModelExecutionLogs(std::move(safety_result.logs));
-    if (features::GetOnDeviceModelRetractUnsafeContent()) {
-      CancelPendingResponse(Result::kUsedOnDeviceOutputUnsafe,
-                            safety_result.is_unsupported_language
-                                ? OnDeviceError::kUnsupportedLanguage
-                                : OnDeviceError::kFiltered);
-
-      return;
-    }
+    CancelPendingResponse(Result::kUsedOnDeviceOutputUnsafe,
+                          safety_result.is_unsupported_language
+                              ? OnDeviceError::kUnsupportedLanguage
+                              : OnDeviceError::kFiltered);
+    return;
   }
   if (completeness == ResponseCompleteness::kComplete) {
     AddModelExecutionLogs(std::move(safety_result.logs));
@@ -439,7 +423,7 @@ void OnDeviceExecution::OnParsedResponse(
       case ResponseParsingError::kInvalidConfiguration:
       case ResponseParsingError::kFailed:
         CancelPendingResponse(Result::kFailedConstructingResponseMessage,
-                              OnDeviceError::kGenericFailure);
+                              OnDeviceError::kResponseParsingFailed);
         return;
     }
   }
@@ -457,7 +441,8 @@ void OnDeviceExecution::OnResponseSafetyResult(
               "OnDeviceExecution::OnResponseSafetyResult", "feature",
               base::ToString(feature_));
   if (safety_result.failed_to_run) {
-    CancelPendingResponse(Result::kFailedConstructingMessage);
+    CancelPendingResponse(Result::kFailedConstructingMessage,
+                          OnDeviceError::kFailedToRunSafety);
     return;
   }
   if (completeness == ResponseCompleteness::kComplete ||
@@ -470,17 +455,11 @@ void OnDeviceExecution::OnResponseSafetyResult(
         completeness != ResponseCompleteness::kComplete) {
       return;
     }
-    if (histogram_logger_) {
-      histogram_logger_->set_result(Result::kUsedOnDeviceOutputUnsafe);
-    }
-    if (features::GetOnDeviceModelRetractUnsafeContent()) {
-      CancelPendingResponse(Result::kUsedOnDeviceOutputUnsafe,
-                            safety_result.is_unsupported_language
-                                ? OnDeviceError::kUnsupportedLanguage
-                                : OnDeviceError::kFiltered);
-
-      return;
-    }
+    CancelPendingResponse(Result::kUsedOnDeviceOutputUnsafe,
+                          safety_result.is_unsupported_language
+                              ? OnDeviceError::kUnsupportedLanguage
+                              : OnDeviceError::kFiltered);
+    return;
   }
   if (completeness == ResponseCompleteness::kPartial) {
     SendPartialResponseCallback(output);
@@ -506,7 +485,7 @@ void OnDeviceExecution::CancelPendingResponse(Result result,
       base::unexpected(error), /*provided_by_on_device=*/true,
       std::make_unique<proto::ModelExecutionInfo>(std::move(exec_log_))));
   if (self) {
-    self->Cleanup(/*healthy=*/true);
+    self->Cleanup();
   }
 }
 
@@ -539,11 +518,11 @@ void OnDeviceExecution::SendSuccessCompletionCallback(
       /*provided_by_on_device=*/true,
       std::make_unique<proto::ModelExecutionInfo>(std::move(exec_log_))));
   if (self) {
-    self->Cleanup(/*healthy=*/true);
+    self->Cleanup();
   }
 }
 
-void OnDeviceExecution::Cleanup(bool healthy) {
+void OnDeviceExecution::Cleanup() {
   weak_ptr_factory_.InvalidateWeakPtrs();
   session_.reset();
   receiver_.reset();
@@ -552,7 +531,7 @@ void OnDeviceExecution::Cleanup(bool healthy) {
   exec_log_.Clear();
   current_response_.clear();
   histogram_logger_.reset();
-  std::move(cleanup_callback_).Run(healthy);
+  std::move(cleanup_callback_).Run();
 }
 
 OnDeviceExecution::SafeRawOutput::SafeRawOutput() = default;

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_video_frame_pool.h"
 
+#include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -23,8 +24,9 @@
 #include "media/base/video_frame.h"
 #include "media/renderers/video_frame_rgba_to_yuva_converter.h"
 #include "media/video/gpu_video_accelerator_factories.h"
-#include "media/video/renderable_gpu_memory_buffer_video_frame_pool.h"
+#include "media/video/renderable_mappable_shared_image_video_frame_pool.h"
 #include "perfetto/tracing/track_event_args.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
@@ -36,7 +38,8 @@ namespace blink {
 
 namespace {
 
-class Context : public media::RenderableGpuMemoryBufferVideoFramePool::Context {
+class Context
+    : public media::RenderableMappableSharedImageVideoFramePool::Context {
  public:
   explicit Context(base::WeakPtr<blink::WebGraphicsContext3DProviderWrapper>
                        context_provider)
@@ -60,7 +63,9 @@ class Context : public media::RenderableGpuMemoryBufferVideoFramePool::Context {
     if (!client_shared_image) {
       return nullptr;
     }
-    sync_token = sii->GenVerifiedSyncToken();
+    sync_token = client_shared_image->creation_sync_token();
+    sii->VerifySyncToken(sync_token);
+
     return client_shared_image;
   }
 
@@ -92,7 +97,7 @@ WebGraphicsContext3DVideoFramePool::WebGraphicsContext3DVideoFramePool(
     base::WeakPtr<blink::WebGraphicsContext3DProviderWrapper>
         weak_context_provider)
     : weak_context_provider_(weak_context_provider),
-      pool_(media::RenderableGpuMemoryBufferVideoFramePool::Create(
+      pool_(media::RenderableMappableSharedImageVideoFramePool::Create(
           std::make_unique<Context>(weak_context_provider))) {}
 
 WebGraphicsContext3DVideoFramePool::~WebGraphicsContext3DVideoFramePool() =
@@ -152,8 +157,7 @@ void CopyToGpuMemoryBuffer(
     const gpu::SyncToken& blit_done_sync_token,
     base::OnceClosure callback) {
   CHECK(dst_frame->HasMappableSharedImage());
-  CHECK(!dst_frame->HasNativeGpuMemoryBuffer());
-  CHECK(dst_frame->HasSharedImage());
+  CHECK(!dst_frame->HasNativeMappableSharedImage());
 
   DCHECK(ctx_wrapper);
   auto& context_provider = ctx_wrapper->ContextProvider();
@@ -196,8 +200,7 @@ void CopyToGpuMemoryBuffer(
   // since we'll set the empty sync token on the video frame on GPU completion.
   // But if we ever refactor this code to have a "don't wait for GMB" mode, the
   // correct sync token on the video frame will be needed.
-  gpu::SyncToken completion_sync_token;
-  ri->GenUnverifiedSyncTokenCHROMIUM(completion_sync_token.GetData());
+  gpu::SyncToken completion_sync_token = copy_to_gmb_done_sync_token;
   media::SimpleSyncTokenClient simple_client(completion_sync_token);
   dst_frame->UpdateAcquireSyncToken(completion_sync_token);
   dst_frame->UpdateReleaseSyncToken(&simple_client);
@@ -289,7 +292,7 @@ WebGraphicsContext3DVideoFramePool::CopyRGBATextureToVideoFrame(
           },
           std::move(dst_frame), std::move(callback), flow_id));
 
-  if (!dst_frame_ptr->HasNativeGpuMemoryBuffer()) {
+  if (!dst_frame_ptr->HasNativeMappableSharedImage()) {
     // For shared memory GMBs we needed to explicitly request a copy
     // from the shared image GPU texture to the GMB.
     CopyToGpuMemoryBuffer(weak_context_provider_, dst_frame_ptr,
@@ -337,14 +340,6 @@ void ApplyMetadataAndRunCallback(
   std::move(orig_callback).Run(std::move(wrapped));
 }
 
-BASE_FEATURE(kGpuMemoryBufferReadbackFromTexture,
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
-    BUILDFLAG(IS_LINUX)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
 }  // namespace
 
 bool WebGraphicsContext3DVideoFramePool::ConvertVideoFrame(
@@ -369,7 +364,13 @@ bool WebGraphicsContext3DVideoFramePool::ConvertVideoFrame(
 // static
 bool WebGraphicsContext3DVideoFramePool::
     IsGpuMemoryBufferReadbackFromTextureEnabled() {
-  return base::FeatureList::IsEnabled(kGpuMemoryBufferReadbackFromTexture);
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || \
+    BUILDFLAG(IS_LINUX)
+  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kGpuMemoryBufferReadbackFromTextureForceDisabledForDebugging);
+#else
+  return false;
+#endif
 }
 
 }  // namespace blink

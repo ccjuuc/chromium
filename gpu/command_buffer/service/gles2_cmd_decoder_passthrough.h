@@ -66,6 +66,7 @@ struct PassthroughResources {
   PassthroughResources();
   ~PassthroughResources();
 
+  void MarkContextLost();
   // api is null if we don't have a context (e.g. lost).
   void Destroy(gl::GLApi* api, gl::ProgressReporter* progress_reporter);
 
@@ -130,10 +131,6 @@ struct PassthroughResources {
   // TODO(ericrk): Remove this once TexturePassthrough holds a reference to
   // the GLTexturePassthroughImageRepresentation itself.
   base::flat_map<GLuint, SharedImageData> texture_shared_image_map;
-
-  // Mapping of client buffer IDs that are mapped to the shared memory used to
-  // back the mapping so that it can be flushed when the buffer is unmapped
-  base::flat_map<GLuint, MappedBuffer> mapped_buffer_map;
 };
 
 // Impose an upper bound on the number ANGLE_shader_pixel_local_storage planes
@@ -315,6 +312,8 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
 
   ErrorState* GetErrorState() override;
 
+  void BindFramebuffer(unsigned target, uint32_t service_id) const override;
+
   void WaitForReadPixels(base::OnceClosure callback) override;
 
   // Returns true if the context was lost either by GL_ARB_robustness, forced
@@ -411,18 +410,17 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
                                                       GLsizei length,
                                                       GLint* params);
 
-  template <typename T>
-  error::Error PatchGetBufferResults(GLenum target,
-                                     GLenum pname,
-                                     GLsizei bufsize,
-                                     GLsizei* length,
-                                     T* params);
-
   error::Error PatchGetFramebufferPixelLocalStorageParameterivANGLE(
       GLint plane,
       GLenum pname,
       GLsizei length,
       GLint* params);
+
+  error::Error PatchGetFramebufferPixelLocalStorageParameteruivANGLE(
+      GLint plane,
+      GLenum pname,
+      GLsizei length,
+      GLuint* params);
 
   void InsertError(GLenum error, const std::string& message);
   GLenum PopError();
@@ -440,6 +438,19 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   void ReadBackBuffersIntoShadowCopies(const BufferShadowUpdateMap& updates);
 
   error::Error ProcessReadPixels(bool did_finish);
+
+  // Validates the use of shm_offset as either an offset in a shmem, or in the
+  // unpack buffer. When using unpack buffers, data will be a zero-length span
+  // with the address corresponding to the offset in the unpack buffer. (so its
+  // .data() and .size() are the arguments to pass to the TexImage family of
+  // functions, without additional changes needed).
+  // image_size is the corresponding argument passed to CompressedTex[Sub]Image
+  // functions so it can be validated against the shmem size when there is no
+  // unpack buffer.
+  error::Error ValidateAndGetTexImageData(base::span<const uint8_t>* data,
+                                          uint32_t shm_id,
+                                          uint32_t shm_offset,
+                                          uint32_t image_size = 0);
 
   // Checks to see if the inserted fence has completed.
   void ProcessDescheduleUntilFinished();
@@ -468,6 +479,8 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   void ExitCommandProcessingEarly() override;
 
   bool OnlyHasPendingProgramCompletionQueries();
+
+  void BuildRequestableExtensionString();
 
   PassthroughProgramCache* get_passthrough_program_cache() const;
 
@@ -512,6 +525,11 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   // By default, all requestable extensions should be loaded at initialization
   // time. Can be disabled for testing with only specific extensions enabled.
   bool request_optional_extensions_ = true;
+
+  // Set of extension strings that are valid to request by a client. Other
+  // extension requests are ignored.
+  gfx::ExtensionSet requestable_extensions_;
+  std::string requestable_extension_string_;
 
   // Mappings from client side IDs to service side IDs for shared objects
   raw_ptr<PassthroughResources> resources_ = nullptr;

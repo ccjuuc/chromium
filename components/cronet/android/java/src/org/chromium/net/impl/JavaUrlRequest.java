@@ -10,12 +10,12 @@ import android.net.Network;
 import android.net.TrafficStats;
 import android.os.Build;
 import android.os.Process;
-import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.Log;
 import org.chromium.base.metrics.ScopedSysTraceEvent;
 import org.chromium.net.ConnectionCloseSource;
 import org.chromium.net.CronetException;
@@ -561,7 +561,8 @@ final class JavaUrlRequest extends ExperimentalUrlRequest {
                                             false,
                                             selectedTransport,
                                             "",
-                                            0);
+                                            0,
+                                            /* isProxied= */ false);
                             // TODO(clm) actual redirect handling? post -> get and whatnot?
                             if (responseCode >= 300 && responseCode < 400) {
                                 List<String> locationFields =
@@ -1038,18 +1039,20 @@ final class JavaUrlRequest extends ExperimentalUrlRequest {
                     /* isBidiStream= */ false,
                     mFinalUserCallbackThrew,
                     Process.myUid(),
-                    /* networkInternalErrorCode */ 0,
-                    /* quicErrorCode */ 0,
-                    /* connectionCloseSource */ ConnectionCloseSource.UNKNOWN,
-                    /* failureReason */ CronetTrafficInfo.RequestFailureReason.UNKNOWN,
-                    /* socketReused */ false,
+                    /* networkInternalErrorCode= */ 0,
+                    /* quicErrorCode= */ 0,
+                    /* connectionCloseSource= */ ConnectionCloseSource.UNKNOWN,
+                    /* failureReason= */ CronetTrafficInfo.RequestFailureReason.UNKNOWN,
+                    /* socketReused= */ false,
                     ImplVersion.getCronetVersion(),
                     CronetSource.CRONET_SOURCE_FALLBACK,
                     /* timeToEstablishDnsMicros= */ -1,
                     /* timeToEstablishSSLMicros= */ -1,
                     /* timeToConnectMicros= */ -1,
                     /* timeToSendFirstByteMicros= */ -1,
-                    /* timeToReceiveHeaderLastByteMicros= */ -1);
+                    /* timeToReceiveHeaderLastByteMicros= */ -1,
+                    /* isProxied= */ null,
+                    /* isAdaptiveNetworkStream= */ false);
         }
 
         // Maybe report metrics. This method should only be called on Callback's executor thread and

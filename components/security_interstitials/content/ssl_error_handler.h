@@ -5,7 +5,9 @@
 #ifndef COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_SSL_ERROR_HANDLER_H_
 #define COMPONENTS_SECURITY_INTERSTITIALS_CONTENT_SSL_ERROR_HANDLER_H_
 
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "base/feature_list.h"
 #include "base/functional/callback_forward.h"
@@ -67,18 +69,16 @@ BASE_DECLARE_FEATURE(kMITMSoftwareInterstitial);
 class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
                         public content::WebContentsObserver {
  public:
-  typedef base::RepeatingCallback<void(content::WebContents*)>
-      TimerStartedCallback;
-  typedef base::OnceCallback<void(
-      std::unique_ptr<security_interstitials::SecurityInterstitialPage>)>
-      BlockingPageReadyCallback;
+  using TimerStartedCallback =
+      base::RepeatingCallback<void(content::WebContents*)>;
+  using BlockingPageReadyCallback = base::OnceCallback<void(
+      std::unique_ptr<security_interstitials::SecurityInterstitialPage>)>;
 
   // Callback that is optionally used to inform the client that a blocking page
   // has been shown in the specified WebContents for the specified URL with the
   // given error string and network error code.
-  typedef base::RepeatingCallback<
-      void(content::WebContents*, const GURL&, const std::string&, int)>
-      OnBlockingPageShownCallback;
+  using OnBlockingPageShownCallback = base::RepeatingCallback<
+      void(content::WebContents*, const GURL&, const std::string&, int)>;
 
   SSLErrorHandler(const SSLErrorHandler&) = delete;
   SSLErrorHandler& operator=(const SSLErrorHandler&) = delete;
@@ -104,6 +104,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
     OS_REPORTS_CAPTIVE_PORTAL = 12,
     SHOW_BLOCKED_INTERCEPTION_INTERSTITIAL = 13,
     SHOW_LEGACY_TLS_INTERSTITIAL = 14,  // Deprecated in M98.
+    SHOW_LOCAL_SELF_SIGNED_INTERSTITIAL = 15,
     SSL_ERROR_HANDLER_EVENT_COUNT
   };
 
@@ -129,6 +130,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
         const base::Time& now,
         ssl_errors::ClockState clock_state) = 0;
     virtual void ShowBlockedInterceptionInterstitial() = 0;
+    virtual void ShowLocalSelfSignedInterstitial() = 0;
     virtual void ReportNetworkConnectivity(base::OnceClosure callback) = 0;
     virtual bool HasBlockedInterception() const = 0;
   };
@@ -149,7 +151,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
   // shown.
   static void HandleSSLError(
       content::WebContents* web_contents,
-      int cert_error,
+      net::Error cert_error,
       const net::SSLInfo& ssl_info,
       const GURL& request_url,
       BlockingPageReadyCallback blocking_page_ready_callback,
@@ -191,7 +193,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
  protected:
   SSLErrorHandler(std::unique_ptr<Delegate> delegate,
                   content::WebContents* web_contents,
-                  int cert_error,
+                  net::Error cert_error,
                   const net::SSLInfo& ssl_info,
                   network_time::NetworkTimeTracker* network_time_tracker,
                   captive_portal::CaptivePortalService* captive_portal_service,
@@ -219,6 +221,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
                                 ssl_errors::ClockState clock_state);
   void ShowDynamicInterstitial(const DynamicInterstitialInfo interstitial);
   void ShowBlockedInterceptionInterstitial();
+  void ShowLocalSelfSignedInterstitial();
 
   // Gets the result of whether the suggested URL is valid. Displays
   // common name mismatch interstitial or ssl interstitial accordingly.
@@ -246,7 +249,7 @@ class SSLErrorHandler : public content::WebContentsUserData<SSLErrorHandler>,
   bool IsOnlyCertError(net::CertStatus only_cert_error_expected) const;
 
   std::unique_ptr<Delegate> delegate_;
-  const int cert_error_;
+  const net::Error cert_error_;
   const net::SSLInfo ssl_info_;
   const GURL request_url_;
   raw_ptr<network_time::NetworkTimeTracker> network_time_tracker_;

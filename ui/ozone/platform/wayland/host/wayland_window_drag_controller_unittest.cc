@@ -1221,14 +1221,18 @@ TEST_P(WaylandWindowDragControllerTest, CursorPositionIsUpdatedOnMotion) {
       const uint32_t surface_id = window->root_surface()->get_surface_id();
       const uint32_t output_id = wl_proxy_get_id(
           reinterpret_cast<wl_proxy*>(output.second->get_output()));
-      self->PostToServerAndWait([surface_id, output_id](
-                                    wl::TestWaylandServerThread* server) {
+      const float scale = output.second->scale_factor();
+      self->PostToServerAndWait([surface_id, output_id,
+                                 scale](wl::TestWaylandServerThread* server) {
         wl::MockSurface* surface =
             server->GetObject<wl::MockSurface>(surface_id);
         ASSERT_TRUE(surface);
         wl::TestOutput* output = server->GetObject<wl::TestOutput>(output_id);
         ASSERT_TRUE(output);
         wl_surface_send_enter(surface->resource(), output->resource());
+        if (surface->fractional_scale()) {
+          surface->fractional_scale()->SendPreferredScale(scale);
+        }
       });
       EXPECT_EQ(output.second->scale_factor(),
                 window->applied_state().window_scale);
@@ -1835,6 +1839,95 @@ TEST_P(WaylandWindowDragControllerTest, OutgoingSessionWithoutDndFinished) {
 
   // End the drag.
   SendDndDropAndFinished();
+  EXPECT_EQ(State::kIdle, drag_controller_state());
+}
+
+// Regression test for crbug.com/498008192. Ensures that if the drag session is
+// finished/cancelled while the controller is in State::kAttaching (e.g., after
+// EndMoveLoop() during tab snapping or window destruction), HandleDragEnd()
+// processes the cleanup properly and resets state to kIdle rather than getting
+// stuck in a zombie attaching/attached state.
+TEST_P(WaylandWindowDragControllerTest, CancelDuringAttaching) {
+  SendPointerEnter(window_.get(), &delegate_);
+  SendPointerPress(window_.get(), &delegate_, BTN_LEFT);
+  SendPointerMotion(window_.get(), &delegate_, {10, 10});
+
+  auto* wayland_extension = GetWaylandToplevelExtension(*window_);
+  wayland_extension->StartWindowDraggingSessionIfNeeded(
+      DragEventSource::kMouse,
+      /*allow_system_drag=*/false);
+  EXPECT_EQ(State::kAttached, drag_controller_state());
+
+  auto* move_loop_handler = GetWmMoveLoopHandler(*window_);
+  ASSERT_TRUE(move_loop_handler);
+  ScheduleTestTask(base::BindLambdaForTesting([&]() {
+    move_loop_handler->EndMoveLoop();
+    EXPECT_EQ(State::kAttaching, drag_controller_state());
+    SendDndCancelled();
+  }));
+
+  EXPECT_FALSE(move_loop_handler->RunMoveLoop({}));
+  EXPECT_EQ(State::kIdle, drag_controller_state());
+  EXPECT_FALSE(
+      connection_->data_device_manager()->GetDevice()->IsDragInProgress());
+
+  // Verify that subsequent window dragging sessions can start cleanly.
+  SendPointerPress(window_.get(), &delegate_, BTN_LEFT);
+  EXPECT_TRUE(drag_controller()->StartDragSession(
+      window_->AsWaylandToplevelWindow(), DragEventSource::kMouse));
+  EXPECT_EQ(State::kAttached, drag_controller_state());
+  SendDndDropAndFinished();
+  EXPECT_EQ(State::kIdle, drag_controller_state());
+}
+
+// Regression test for crbug.com/532860184. Ensures that when dragging with a
+// tablet pen, lifting the pen (which causes proximity_out) and hovering it
+// back (proximity_in) does not cancel/destroy the active drag session and cause
+// subsequent CHECK failure in RunLoop.
+TEST_P(WaylandWindowDragControllerTest, TabletPenDragProximityInAndOut) {
+  auto* event_source = connection_->event_source();
+  base::TimeTicks time = base::TimeTicks::Now();
+
+  // 1. Enter pointer and press mouse button to set up pointer focus.
+  SendPointerEnter(window_.get(), &delegate_);
+  SendPointerPress(window_.get(), &delegate_, BTN_LEFT);
+
+  // 2. Hover/proximity-in and press pen tip to start the drag.
+  event_source->OnTabletToolProximityIn(window_.get(), {10, 10}, {}, time);
+  event_source->OnTabletToolButton(EF_LEFT_MOUSE_BUTTON, true, {}, time);
+  event_source->OnTabletToolMotion({10, 10}, {}, time);
+
+  // 3. Start the window drag session.
+  auto* wayland_extension = GetWaylandToplevelExtension(*window_);
+  wayland_extension->StartWindowDraggingSessionIfNeeded(
+      DragEventSource::kMouse,
+      /*allow_system_drag=*/false);
+  EXPECT_EQ(State::kAttached, drag_controller_state());
+
+  // 4. While dragging, lift the pen (proximity-out).
+  // Note: tablet_tool_buttons_ remains treated as pressed during drag.
+  event_source->OnTabletToolProximityOut({}, time);
+
+  // 5. Hover the pen back in (proximity-in).
+  // Under the bug, this unilaterally released the buttons and cancelled the
+  // drag session because IsDragInProgress() wasn't checked.
+  // With the fix, we check IsDragInProgress() and do NOT release/cancel.
+  event_source->OnTabletToolProximityIn(window_.get(), {15, 15}, {}, time);
+
+  // The drag session must still be active.
+  EXPECT_EQ(State::kAttached, drag_controller_state());
+
+  // 6. Drag the tab to detach it.
+  auto* move_loop_handler = GetWmMoveLoopHandler(*window_);
+  ASSERT_TRUE(move_loop_handler);
+  ScheduleTestTask(base::BindLambdaForTesting([&]() {
+    // End the drag cleanly.
+    SendDndDropAndFinished();
+  }));
+
+  // This runs the nested run loop. It should NOT crash because
+  // nested_dispatcher_ is still valid and has not been reset!
+  EXPECT_TRUE(move_loop_handler->RunMoveLoop({}));
   EXPECT_EQ(State::kIdle, drag_controller_state());
 }
 

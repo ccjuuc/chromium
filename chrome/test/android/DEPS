@@ -9,6 +9,7 @@ include_rules = [
   "+components/favicon/android/java",
   "+components/infobars/android/java",
   "+components/payments/content/android",
+  "+components/safe_browsing/android",
   # This test code needs to depend on sync related classes and test tools.
   "+components/sync/android/java/src/org/chromium/components/sync",
   "+components/sync/test",
@@ -19,7 +20,7 @@ include_rules = [
 
 specific_include_rules = {
     # Allow OverrideContextWrapperTestRule to depend on platform-only PackageManagerWrapper
-    "OverrideContextWrapperTestRule\.java": [
+    "OverrideContextWrapperTestRule\\.java": [
         "+components/cronet/android/platform-only/org/chromium/base/test/util/PackageManagerWrapper.java",
     ],
 }

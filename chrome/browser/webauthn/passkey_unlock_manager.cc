@@ -11,15 +11,20 @@
 #include "base/notimplemented.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/webauthn/enclave_manager.h"
 #include "chrome/browser/webauthn/enclave_manager_interface.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
+#include "components/trusted_vault/trusted_vault_histograms.h"
+#include "content/public/browser/navigation_handle.h"
 #include "device/fido/public/features.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -28,6 +33,9 @@ namespace webauthn {
 
 static constexpr const char kPasskeyReadinessHistogram[] =
     "WebAuthentication.PasskeyReadiness";
+
+static constexpr const char kPasswordReadinessHistogram[] =
+    "PasswordManager.TrustedVaultPasswordReadiness";
 
 PasskeyUnlockManager::PasskeyUnlockManager(
     EnclaveManagerInterface* enclave_manager,
@@ -51,6 +59,7 @@ PasskeyUnlockManager::PasskeyUnlockManager(
   UpdateSyncState();
   AsynchronouslyCheckSystemUVAvailability();
   AsynchronouslyCheckGpmPinAvailability();
+  MaybeRecordDelayedPasswordReadinessHistogram();
 }
 
 PasskeyUnlockManager::~PasskeyUnlockManager() = default;
@@ -91,16 +100,40 @@ void PasskeyUnlockManager::ComputeShouldDisplayErrorUiAndNotifyObservers() {
 
 void PasskeyUnlockManager::NotifyObservers() {
   for (Observer& observer : observer_list_) {
-    observer.OnPasskeyUnlockManagerStateChanged();
+    observer.OnPasskeyErrorUiStateChanged();
   }
 }
 
-void PasskeyUnlockManager::OpenTabWithPasskeyUnlockChallenge(Browser* browser) {
+void PasskeyUnlockManager::OpenTabWithPasskeyUnlockChallenge(
+    Browser* browser,
+    trusted_vault::TrustedVaultUserActionTriggerForUMA trigger) {
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(browser->GetProfile());
+  // Default to the first account if the account is not present in the cookie
+  // jar. This can happen in tests, or if account state changed right before
+  // this code.
+  size_t account_index =
+      identity_manager->GetSessionIndexForPrimaryAccount().value_or(0u);
+
+  trusted_vault::RecordTrustedVaultRecoveryFlowTriggeredEndpoint(
+      trusted_vault::TrustedVaultRecoveryFlowEndpoint::kDesktop);
   NavigateParams params(GetSingletonTabNavigateParams(
-      browser, GaiaUrls::GetInstance()->signin_chrome_passkey_unlock_url()));
+      browser,
+      GaiaUrls::GetInstance()->SigninChromePasskeyUnlockUrl(account_index)));
   // Allow the window to close itself.
   params.opened_by_another_window = true;
-  Navigate(&params);
+
+  base::WeakPtr<content::NavigationHandle> navigation_handle =
+      Navigate(&params);
+
+  if (navigation_handle) {
+    TrustedVaultEncryptionKeysTabHelper* encryption_keys_tab_helper =
+        TrustedVaultEncryptionKeysTabHelper::FromWebContents(
+            navigation_handle->GetWebContents());
+    if (encryption_keys_tab_helper) {
+      encryption_keys_tab_helper->SetUserActionTrigger(trigger);
+    }
+  }
 }
 
 std::u16string PasskeyUnlockManager::GetPasskeyErrorProfilePillTitle() const {
@@ -146,7 +179,6 @@ std::u16string PasskeyUnlockManager::GetPasskeyErrorProfileMenuButtonLabel()
 // static
 bool PasskeyUnlockManager::IsPasskeyUnlockErrorUiEnabled() {
   return base::FeatureList::IsEnabled(device::kPasskeyUnlockErrorUi) &&
-         base::FeatureList::IsEnabled(device::kPasskeyUnlockManager) &&
          base::FeatureList::IsEnabled(device::kWebAuthnOpportunisticRetrieval);
 }
 
@@ -188,7 +220,7 @@ void PasskeyUnlockManager::UpdateSyncState() {
 }
 
 void PasskeyUnlockManager::AsynchronouslyCheckGpmPinAvailability() {
-  enclave_manager()->CheckGpmPinAvailability(
+  download_account_state_request_ = enclave_manager()->CheckGpmPinAvailability(
       base::BindOnce(&PasskeyUnlockManager::OnHaveGpmPinAvailability,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -263,6 +295,7 @@ void PasskeyUnlockManager::OnPasskeyModelIsReady(bool is_ready) {
 void PasskeyUnlockManager::OnStateChanged(syncer::SyncService* sync) {
   UpdateSyncState();
   ComputeShouldDisplayErrorUiAndNotifyObservers();
+  MaybeRecordDelayedPasswordReadinessHistogram();
 }
 
 void PasskeyUnlockManager::OnSyncShutdown(syncer::SyncService* sync) {
@@ -293,6 +326,8 @@ void PasskeyUnlockManager::RecordPasskeyCountHistogram() {
 }
 
 void PasskeyUnlockManager::MaybeRecordDelayedPasskeyReadinessHistogram() {
+  // TODO(crbug.com/540854648): Check if we would like to reconsider the
+  // condition for recording the passkey readiness metric.
   if (passkey_readiness_recorded_on_startup_ ||
       !enclave_manager()->IsLoaded()) {
     return;
@@ -327,6 +362,58 @@ void PasskeyUnlockManager::RecordGpmPinStatusHistogram(
     EnclaveManager::GpmPinAvailability gpm_pin_availability) {
   base::UmaHistogramEnumeration("WebAuthentication.GpmPinStatus",
                                 gpm_pin_availability);
+}
+
+void PasskeyUnlockManager::MaybeRecordDelayedPasswordReadinessHistogram() {
+  if (!base::FeatureList::IsEnabled(
+          password_manager::features::kRecordPasswordReadiness)) {
+    return;
+  }
+  if (password_readiness_recorded_on_startup_ || !sync_service() ||
+      !sync_service()->IsEngineInitialized()) {
+    return;
+  }
+  syncer::SyncUserSettings* user_settings = sync_service()->GetUserSettings();
+  if (!user_settings) {
+    return;
+  }
+  if (!user_settings->GetSelectedTypes().Has(
+          syncer::UserSelectableType::kPasswords)) {
+    return;
+  }
+  // The metric should only be recorded for users with the trusted vault
+  // passphrase. For users with a different passphrase type on startup we don't
+  // record this metric.
+  // TODO(crbug.com/540854648): Check if we would like to reconsider the
+  // condition for recording the password readiness metric.
+  if (user_settings->GetPassphraseType() !=
+      syncer::PassphraseType::kTrustedVaultPassphrase) {
+    return;
+  }
+  if (!user_settings->IsTrustedVaultKeyRequiredForPreferredDataTypes() &&
+      !sync_service()->GetActiveDataTypes().Has(syncer::PASSWORDS)) {
+    // When Sync starts up, it asynchronously checks whether trusted vault keys
+    // are available locally. While this check is in flight,
+    // `IsTrustedVaultKeyRequiredForPreferredDataTypes()` temporarily returns
+    // false and `syncer::PASSWORDS` is not active yet. In this case we should
+    // not publish the password readiness metric yet.
+    return;
+  }
+  // Ensure that we will not try to record the metric again.
+  password_readiness_recorded_on_startup_ = true;
+
+  bool password_readiness =
+      !user_settings->IsTrustedVaultKeyRequiredForPreferredDataTypes();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&PasskeyUnlockManager::RecordPasswordReadinessHistogram,
+                     weak_ptr_factory_.GetWeakPtr(), password_readiness),
+      base::Seconds(30));
+}
+
+void PasskeyUnlockManager::RecordPasswordReadinessHistogram(
+    bool password_readiness) {
+  base::UmaHistogramBoolean(kPasswordReadinessHistogram, password_readiness);
 }
 
 }  // namespace webauthn

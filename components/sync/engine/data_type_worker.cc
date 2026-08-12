@@ -54,8 +54,6 @@ namespace {
 
 const char kPasswordNotesStateHistogramName[] =
     "Sync.PasswordNotesStateInUpdate";
-constexpr char kEntityEncryptionResultHistogramName[] =
-    "Sync.EntityEncryptionSucceeded";
 
 // Sync ignores updates encrypted with keys that have been missing for too long
 // from this client and will proceed normally as if those updates didn't exist.
@@ -78,14 +76,6 @@ enum class CrossUserSharingDecryptionResult {
 
 void LogPasswordNotesState(PasswordNotesStateForUMA state) {
   base::UmaHistogramEnumeration(kPasswordNotesStateHistogramName, state);
-}
-
-void LogEncryptionResult(DataType type, bool success) {
-  base::UmaHistogramBoolean(kEntityEncryptionResultHistogramName, success);
-  base::UmaHistogramBoolean(
-      base::StrCat({kEntityEncryptionResultHistogramName, ".",
-                    DataTypeToHistogramSuffix(type)}),
-      success);
 }
 
 void LogNudgedUpdateLatency(DataType type, base::TimeDelta latency) {
@@ -343,7 +333,7 @@ DataTypeWorker::DataTypeWorker(DataType type,
                   "invalidations overflow.";
       data_type_state_.clear_invalidations();
     }
-    // TODO(crbug.com/40239360): Persisted invaldiations are loaded in
+    // TODO(crbug.com/40239360): Persisted invalidations are loaded in
     // DataTypeWorker::ctor(), but sync cycle is not scheduled. New sync
     // cycle has to be triggered right after we loaded persisted
     // invalidations.
@@ -511,7 +501,8 @@ void DataTypeWorker::ProcessGetUpdatesResponse(
   *data_type_state_.mutable_type_context() = mutated_context;
 
   if (progress_marker.has_gc_directive()) {
-    if (progress_marker.gc_directive().has_version_watermark()) {
+    if (progress_marker.gc_directive().has_version_watermark() ||
+        progress_marker.gc_directive().clear_metadata()) {
       // Clean up all the pending updates because a new GC directive has been
       // received which means that all existing data should be cleaned up.
       pending_updates_.clear();
@@ -561,6 +552,16 @@ void DataTypeWorker::ProcessGetUpdatesResponse(
         RecordEntityChangeMetrics(type_, DataTypeEntityChange::kRemoteDeletion);
       }
     }
+
+    // Negative versions are disallowed in the protocol.
+    if (update_entity->version() < 0) {
+      DLOG(ERROR) << "Received update with negative version from server";
+      continue;
+    }
+
+    static_assert(kUncommittedVersion < 0,
+                  "kUncommittedVersion must be negative");
+    CHECK_NE(update_entity->version(), kUncommittedVersion);
 
     UpdateResponseData response_data;
     switch (PopulateUpdateResponseData(*cryptographer_, type_, *update_entity,
@@ -684,9 +685,37 @@ DataTypeWorker::DecryptionStatus DataTypeWorker::PopulateUpdateResponseData(
       return FAILED_TO_DECRYPT;
     }
     specifics_were_encrypted = true;
+  } else if (specifics.has_send_tab_to_self()) {
+    // Special case: For SendTabToSelf, the `page_context` field is encrypted
+    // if full encryption is not enabled.
+    data.specifics = specifics;
+    // The (non-encrypted) `page_context` field should not be set in this case.
+    // If it is, ignore it.
+    data.specifics.mutable_send_tab_to_self()->clear_page_context();
+
+    // Try to decrypt the `encrypted_page_context` field. In case of failure,
+    // just carry on - better to receive the tab without the extra context than
+    // not at all.
+    if (data.specifics.send_tab_to_self().has_encrypted_page_context()) {
+      if (!cryptographer.Decrypt(
+              data.specifics.send_tab_to_self().encrypted_page_context(),
+              data.specifics.mutable_send_tab_to_self()
+                  ->mutable_page_context())) {
+        // If the decryption failed, make sure the `page_context` field is
+        // unset (`mutable_page_context()` above would have created an empty
+        // one).
+        data.specifics.mutable_send_tab_to_self()->clear_page_context();
+      }
+      data.specifics.mutable_send_tab_to_self()->clear_encrypted_page_context();
+    }
   } else {
     // No encryption.
     data.specifics = specifics;
+    // `client_only_encrypted_data` must never be set on the wire; it contains
+    // unencrypted material. Clear it in case the server provided it.
+    if (data.specifics.password().has_client_only_encrypted_data()) {
+      data.specifics.mutable_password()->clear_client_only_encrypted_data();
+    }
   }
 
   response_data->response_version = update_entity.version();
@@ -928,6 +957,10 @@ std::unique_ptr<CommitContribution> DataTypeWorker::GetContribution(
     EncryptPasswordSpecificsData(&response);
   } else if (encryption_enabled_) {
     EncryptSpecifics(&response);
+  } else if (type_ == SEND_TAB_TO_SELF) {
+    // For SendTabToSelf, the page_context field is encrypted even if
+    // `encryption_enabled_` is false).
+    EncryptSendTabToSelfPageContext(&response);
   }
 
   DCHECK(!AlwaysEncryptedUserTypes().Has(type_) || encryption_enabled_);
@@ -1030,6 +1063,8 @@ void DataTypeWorker::DecryptStoredEntities() {
   for (auto it = entries_pending_decryption_.begin();
        it != entries_pending_decryption_.end();) {
     const sync_pb::SyncEntity& encrypted_update = it->second;
+
+    CHECK_NE(encrypted_update.version(), kUncommittedVersion);
 
     UpdateResponseData response_data;
     switch (PopulateUpdateResponseData(*cryptographer_, type_, encrypted_update,
@@ -1404,7 +1439,6 @@ void DataTypeWorker::EncryptPasswordSpecificsData(
     bool result = cryptographer_->Encrypt(
         password_data,
         encrypted_password.mutable_password()->mutable_encrypted());
-    LogEncryptionResult(type_, result);
 
     // `encrypted_notes_backup` field needs to be populated regardless of
     // whether or not there are any notes.
@@ -1450,7 +1484,6 @@ void DataTypeWorker::EncryptOutgoingPasswordSharingInvitations(
     // There should not be encryption failure but DCHECK is not used because
     // it's not guaranteed. In the worst case, the entity will be committed with
     // empty specifics (no unencrypted data will be committed to the server).
-    LogEncryptionResult(type_, encrypted_data.has_value());
     if (encrypted_data) {
       specifics->set_encrypted_password_sharing_invitation_data(
           encrypted_data->data(), encrypted_data->size());
@@ -1462,8 +1495,34 @@ void DataTypeWorker::EncryptOutgoingPasswordSharingInvitations(
   }
 }
 
+void DataTypeWorker::EncryptSendTabToSelfPageContext(
+    CommitRequestDataList* request_data_list) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(cryptographer_);
+  CHECK_EQ(type_, SEND_TAB_TO_SELF);
+  CHECK(!encryption_enabled_);
+
+  for (std::unique_ptr<CommitRequestData>& request_data : *request_data_list) {
+    EntityData* entity_data = request_data->entity.get();
+    if (entity_data->is_deleted()) {
+      continue;
+    }
+
+    sync_pb::SendTabToSelfSpecifics* specifics =
+        entity_data->specifics.mutable_send_tab_to_self();
+    if (!specifics->has_page_context()) {
+      continue;
+    }
+
+    cryptographer_->Encrypt(specifics->page_context(),
+                            specifics->mutable_encrypted_page_context());
+    specifics->clear_page_context();
+  }
+}
+
 void DataTypeWorker::EncryptSpecifics(
     CommitRequestDataList* request_data_list) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(cryptographer_);
   CHECK(encryption_enabled_);
   CHECK_NE(type_, PASSWORDS);
@@ -1478,9 +1537,8 @@ void DataTypeWorker::EncryptSpecifics(
       continue;
     }
     sync_pb::EntitySpecifics encrypted_specifics;
-    bool success = cryptographer_->Encrypt(
-        entity_data->specifics, encrypted_specifics.mutable_encrypted());
-    LogEncryptionResult(type_, success);
+    cryptographer_->Encrypt(entity_data->specifics,
+                            encrypted_specifics.mutable_encrypted());
     entity_data->specifics.CopyFrom(encrypted_specifics);
   }
 }

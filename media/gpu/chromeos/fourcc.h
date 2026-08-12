@@ -100,6 +100,9 @@ class MEDIA_GPU_EXPORT Fourcc {
 
     // Single plane 8-bit little-endian ARGB (bytes in reverse B-G-R-A order).
     AR24 = ComposeFourcc('A', 'R', '2', '4'),
+    // Single plane 8-bit little-endian XRGB (bytes in reverse B-G-R-X order).
+    BGR4 = ComposeFourcc('B', 'G', 'R', '4'),
+
     // V4L2 proprietary format.
     // https://linuxtv.org/downloads/v4l-dvb-apis-new/userspace-api/v4l/pixfmt-reserved.html
     // Opaque format that can only be scanned out as an overlay or composited by
@@ -135,7 +138,9 @@ class MEDIA_GPU_EXPORT Fourcc {
   // Converts a V4L2PixFmt to Fourcc.
   // Returns nullopt for invalid input.
   static std::optional<Fourcc> FromV4L2PixFmt(uint32_t v4l2_pix_fmt);
-#elif BUILDFLAG(USE_VAAPI)
+#endif  // BUILDFLAG(USE_V4L2_CODEC)
+
+#if BUILDFLAG(USE_VAAPI)
   // Converts a VAFourCC to Fourcc.
   // Returns nullopt for invalid input.
   static std::optional<Fourcc> FromVAFourCC(uint32_t va_fourcc);
@@ -149,7 +154,9 @@ class MEDIA_GPU_EXPORT Fourcc {
   // Returns the V4L2PixFmt counterpart of the value.
   // Returns 0 if no mapping is found.
   uint32_t ToV4L2PixFmt() const;
-#elif BUILDFLAG(USE_VAAPI)
+#endif  // BUILDFLAG(USE_V4L2_CODEC)
+
+#if BUILDFLAG(USE_VAAPI)
   // Returns the VAFourCC counterpart of the value.
   // Returns nullopt if no mapping is found.
   std::optional<uint32_t> ToVAFourCC() const;

@@ -11,6 +11,7 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.provider.Browser;
 
+import androidx.annotation.StringRes;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.preference.Preference;
 
@@ -33,13 +34,13 @@ import org.chromium.chrome.browser.browserservices.permissiondelegation.Installe
 import org.chromium.chrome.browser.browsing_data.BrowsingDataBridge;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncher;
 import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.notifications.channels.SiteChannelsManager;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxBridge;
-import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSnackbarController;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
 import org.chromium.chrome.browser.settings.FaviconLoader;
@@ -57,7 +58,6 @@ import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.favicon.LargeIconBridge;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.permissions.PermissionUtil;
-import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureList;
@@ -80,7 +80,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     private @Nullable BrowsingDataModel mBrowsingDataModel;
     private @Nullable ManagedPreferenceDelegate mManagedPreferenceDelegate;
     private @Nullable SnackbarManager mSnackbarManager;
-    private @Nullable PrivacySandboxSnackbarController mPrivacySandboxController;
     private @Nullable LargeIconBridge mLargeIconBridge;
 
     public ChromeSiteSettingsDelegate(Context context, Profile profile) {
@@ -108,8 +107,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
         snackbarManagerSupplier.onAvailable(
                 (snackbarManager) -> {
                     mSnackbarManager = snackbarManager;
-                    mPrivacySandboxController =
-                            new PrivacySandboxSnackbarController(mContext, snackbarManager);
                 });
     }
 
@@ -170,19 +167,9 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
             case SiteSettingsCategory.Type.REQUEST_DESKTOP_SITE:
                 // Desktop Android always requests desktop sites, so hide the category.
                 return !DeviceInfo.isDesktop();
-            case SiteSettingsCategory.Type.LOCAL_NETWORK_ACCESS:
-                // Use LOCAL_NETWORK_ACCESS if LNA is enabled, but LNA Split permissions is not
-                // enabled.
-                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS)
-                        && !ChromeFeatureList.isEnabled(
-                                ChromeFeatureList.LOCAL_NETWORK_ACCESS_SPLIT_PERMISSIONS);
             case SiteSettingsCategory.Type.LOCAL_NETWORK:
             case SiteSettingsCategory.Type.LOOPBACK_NETWORK:
-                // Use LOCAL_NETWORK and LOOPBACK_NETWORK if LNA is enabled and LNA Split
-                // permissions are enabled.
-                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS)
-                        && ChromeFeatureList.isEnabled(
-                                ChromeFeatureList.LOCAL_NETWORK_ACCESS_SPLIT_PERMISSIONS);
+                return ChromeFeatureList.isEnabled(ChromeFeatureList.LOCAL_NETWORK_ACCESS);
             case SiteSettingsCategory.Type.WINDOW_MANAGEMENT:
                 return ChromeFeatureList.sAndroidWindowManagementWebApi.isEnabled()
                         && DisplayAndroidManager.isDisplayTopologyAvailable();
@@ -210,11 +197,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     public boolean isPermissionDedicatedCpssSettingAndroidFeatureEnabled() {
         return ChromeFeatureList.isEnabled(
                 ChromeFeatureList.PERMISSION_DEDICATED_CPSS_SETTING_ANDROID);
-    }
-
-    @Override
-    public boolean isPermissionSiteSettingsRadioButtonFeatureEnabled() {
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.PERMISSION_SITE_SETTING_RADIO_BUTTON);
     }
 
     @Override
@@ -250,6 +232,11 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
     @Override
     public boolean isHelpAndFeedbackEnabled() {
         return true;
+    }
+
+    @Override
+    public @StringRes int getHelpMenuStringRes() {
+        return HelpAndFeedbackLauncher.getHelpMenuStringRes();
     }
 
     @Override
@@ -322,32 +309,6 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
                             Snackbar.TYPE_NOTIFICATION,
                             Snackbar.UMA_REVOKE_FILE_EDIT_GRANT);
             mSnackbarManager.showSnackbar(snackbar);
-        }
-    }
-
-    @Override
-    public void maybeDisplayPrivacySandboxSnackbar() {
-        if (mPrivacySandboxController == null) return;
-
-        // Only show the snackbar when Privacy Sandbox APIs are enabled.
-        if (!isAnyPrivacySandboxApiEnabledV4()) return;
-
-        if (mPrivacySandboxBridge.isPrivacySandboxRestricted()) return;
-
-        mPrivacySandboxController.showSnackbar();
-    }
-
-    private boolean isAnyPrivacySandboxApiEnabledV4() {
-        PrefService prefs = UserPrefs.get(mProfile);
-        return prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_TOPICS_ENABLED)
-                || prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_AD_MEASUREMENT_ENABLED)
-                || prefs.getBoolean(Pref.PRIVACY_SANDBOX_M1_FLEDGE_ENABLED);
-    }
-
-    @Override
-    public void dismissPrivacySandboxSnackbar() {
-        if (mPrivacySandboxController != null) {
-            mPrivacySandboxController.dismissSnackbar();
         }
     }
 

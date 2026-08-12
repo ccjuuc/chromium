@@ -20,6 +20,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/timer/mock_timer.h"
@@ -110,54 +111,6 @@ void TestVisitedLinkDelegate::AddURLForRebuild(const GURL& url) {
 void TestVisitedLinkDelegate::AddVisitedLinkForRebuild(
     const VisitedLink& link) {
   rebuild_links_.push_back(link);
-}
-
-class TestURLIterator : public VisitedLinkWriter::URLIterator {
- public:
-  explicit TestURLIterator(const URLs& urls);
-
-  const GURL& NextURL() override;
-  bool HasNextURL() const override;
-
- private:
-  URLs::const_iterator iterator_;
-  URLs::const_iterator end_;
-};
-
-TestURLIterator::TestURLIterator(const URLs& urls)
-    : iterator_(urls.begin()), end_(urls.end()) {}
-
-const GURL& TestURLIterator::NextURL() {
-  return *(iterator_++);
-}
-
-bool TestURLIterator::HasNextURL() const {
-  return iterator_ != end_;
-}
-
-class TestVisitedLinkIterator
-    : public PartitionedVisitedLinkWriter::VisitedLinkIterator {
- public:
-  explicit TestVisitedLinkIterator(const std::vector<VisitedLink>& links);
-
-  const VisitedLink& NextVisitedLink() override;
-  bool HasNextVisitedLink() const override;
-
- private:
-  std::vector<VisitedLink>::const_iterator iterator_;
-  std::vector<VisitedLink>::const_iterator end_;
-};
-
-TestVisitedLinkIterator::TestVisitedLinkIterator(
-    const std::vector<VisitedLink>& links)
-    : iterator_(links.begin()), end_(links.end()) {}
-
-const VisitedLink& TestVisitedLinkIterator::NextVisitedLink() {
-  return *(iterator_++);
-}
-
-bool TestVisitedLinkIterator::HasNextVisitedLink() const {
-  return iterator_ != end_;
 }
 
 }  // namespace
@@ -410,8 +363,7 @@ TEST_F(VisitedLinkTest, BigDelete) {
     urls_to_delete.push_back(url);
   }
 
-  TestURLIterator iterator(urls_to_delete);
-  writer_->DeleteURLs(&iterator);
+  writer_->DeleteURLs(urls_to_delete);
   writer_->DebugValidate();
 
   Reload();
@@ -532,8 +484,7 @@ TEST_F(VisitedLinkTest, Rebuild) {
   writer_->AddURL(TestURL(kTestCount));
   URLs urls_to_delete;
   urls_to_delete.push_back(TestURL(kTestCount));
-  TestURLIterator iterator(urls_to_delete);
-  writer_->DeleteURLs(&iterator);
+  writer_->DeleteURLs(urls_to_delete);
 
   // Wait for the rebuild to complete. The task will terminate the message
   // loop when the rebuild is done. There's no chance that the rebuild will
@@ -589,8 +540,7 @@ TEST_F(VisitedLinkTest, Listener) {
   // Delete an URL.
   URLs urls_to_delete;
   urls_to_delete.push_back(TestURL(0));
-  TestURLIterator iterator(urls_to_delete);
-  writer_->DeleteURLs(&iterator);
+  writer_->DeleteURLs(urls_to_delete);
 
   // ... and all of the remaining ones.
   writer_->DeleteAllURLs();
@@ -643,6 +593,30 @@ TEST_F(VisitedLinkTest, HashRangeWraparound) {
   ASSERT_EQ(writer_->GetUsedCount(), 2);
   ASSERT_TRUE(writer_->IsVisited(kFingerprint0));
   ASSERT_TRUE(writer_->IsVisited(kFingerprint1));
+}
+
+TEST_F(VisitedLinkTest, IntegerOverflow) {
+  // 1. Test extremely large num_entries (2^29).
+  // 2^29 * sizeof(Fingerprint) (8) = 2^32.
+  // 2^32 + sizeof(SharedHeader) (16) overflows uint32_t to 16.
+  const int32_t kOverflowSize = 536870912;
+
+  // We want to suppress rebuild to avoid history complications, just testing
+  // creation. InitVisited calls Init().
+  if (!InitVisited(kOverflowSize, true, false)) {
+    return;
+  }
+  // If initialization succeeded, check the allocated size.
+  size_t actual_size = writer_->mapped_table_memory().region.GetSize();
+  EXPECT_GT(actual_size, 1000000u)
+      << "Allocated region is suspiciously small, indicating integer "
+         "truncation.";
+}
+
+TEST_F(VisitedLinkTest, IntegerOverflowNegative) {
+  const int32_t kNegativeSize = -1;
+  EXPECT_FALSE(InitVisited(kNegativeSize, true, false))
+      << "Initialization should fail for negative num_entries.";
 }
 
 TEST_F(VisitedLinkTest, ResizeErrorHandling) {
@@ -916,8 +890,7 @@ TEST_F(PartitionedVisitedLinkTest, AddAndDelete) {
 
   // Delete that link and ensure it isn't in the hashtable.
   std::vector<VisitedLink> links_to_delete = {link_0};
-  TestVisitedLinkIterator iterator(links_to_delete);
-  partitioned_writer_->DeleteVisitedLinks(&iterator);
+  partitioned_writer_->DeleteVisitedLinks(links_to_delete);
   EXPECT_FALSE(partitioned_writer_->IsVisited(link_0, salt_0.value()));
 }
 
@@ -948,8 +921,7 @@ TEST_F(PartitionedVisitedLinkTest, AddAndDeleteSelfLink) {
   // self-links are not enabled, requesting to delete a link which has never
   // been added to the hashtable in the first place is a no-op).
   std::vector<VisitedLink> links_to_delete = {link, self_link};
-  TestVisitedLinkIterator iterator(links_to_delete);
-  partitioned_writer_->DeleteVisitedLinks(&iterator);
+  partitioned_writer_->DeleteVisitedLinks(links_to_delete);
   EXPECT_FALSE(partitioned_writer_->IsVisited(link, salt.value()));
   EXPECT_FALSE(
       partitioned_writer_->IsVisited(self_link, self_link_salt.value()));
@@ -1133,6 +1105,24 @@ TEST_F(PartitionedVisitedLinkTest, HashRangeWraparound) {
   EXPECT_EQ(hash1, 0);
 }
 
+TEST_F(PartitionedVisitedLinkTest, IntegerOverflowLarge) {
+  const int32_t kOverflowSize = 536870912;
+  if (!InitVisited(true, kOverflowSize)) {
+    return;
+  }
+  size_t actual_size =
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.GetSize();
+  EXPECT_GT(actual_size, 1000000u)
+      << "Allocated region is suspiciously small, indicating integer "
+         "truncation.";
+}
+
+TEST_F(PartitionedVisitedLinkTest, IntegerOverflowNegative) {
+  const int32_t kNegativeSize = -1;
+  EXPECT_FALSE(InitVisited(true, kNegativeSize))
+      << "Initialization should fail for negative num_entries.";
+}
+
 TEST_F(PartitionedVisitedLinkTest, Listener) {
   // Create an initialized but empty hashtable.
   ASSERT_TRUE(InitVisited(false, 0));
@@ -1164,8 +1154,7 @@ TEST_F(PartitionedVisitedLinkTest, Listener) {
   VisitedLink link_0 = {TestURL(0), net::SchemefulSite(TestURL(0)),
                         url::Origin::Create(TestURL(0))};
   std::vector<VisitedLink> links_to_delete = {link_0};
-  TestVisitedLinkIterator iterator(links_to_delete);
-  partitioned_writer_->DeleteVisitedLinks(&iterator);
+  partitioned_writer_->DeleteVisitedLinks(links_to_delete);
   // Verify that PartitionedVisitedLinkWriter::Listener::Reset(false) was called
   // when the single link was deleted.
   EXPECT_EQ(2, listener->reset_count());
@@ -1175,6 +1164,224 @@ TEST_F(PartitionedVisitedLinkTest, Listener) {
   // Verify that PartitionedVisitedLinkWriter::Listener::Reset(false) was called
   // when all the links were deleted.
   EXPECT_EQ(3, listener->reset_count());
+}
+
+class PseudoPartitionedVisitedLinkTest : public testing::Test {
+ public:
+  PseudoPartitionedVisitedLinkTest() {
+    // Ensure the Blink flag is disabled, as it is in Android WebView.
+    scoped_feature_list_.InitAndDisableFeature(
+        blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks);
+  }
+
+ protected:
+  bool InitVisited(bool suppress_build, int initial_size) {
+    partitioned_writer_ = std::make_unique<PartitionedVisitedLinkWriter>(
+        std::make_unique<TrackingVisitedLinkEventListener>(), &delegate_,
+        suppress_build, initial_size, /*use_constant_salt=*/true);
+    bool result = partitioned_writer_->Init();
+    if (!suppress_build && result) {
+      base::RunLoop run_loop;
+      partitioned_writer_->set_build_complete_task(run_loop.QuitClosure());
+      run_loop.Run();
+    }
+    return result;
+  }
+
+  void TearDown() override { g_readers.clear(); }
+
+  base::test::ScopedFeatureList scoped_feature_list_;
+  std::unique_ptr<PartitionedVisitedLinkWriter> partitioned_writer_;
+  TestVisitedLinkDelegate delegate_;
+  content::BrowserTaskEnvironment task_environment_;
+};
+
+TEST_F(PseudoPartitionedVisitedLinkTest, NotVisitedEmptyDB) {
+  ASSERT_TRUE(InitVisited(true, 0));
+  ASSERT_EQ(partitioned_writer_->GetUsedCount(), 0);
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  GURL url("https://example.com");
+  EXPECT_FALSE(partitioned_writer_->IsVisited(
+      VisitedLinkCommon::ComputePseudoPartitionedFingerprint(url.spec())));
+  // Query visitedness using canonical_url
+  EXPECT_FALSE(reader.IsVisited(url.spec()));
+  // Query visitedness using GURL
+  EXPECT_FALSE(reader.IsVisited(url));
+}
+
+TEST_F(PseudoPartitionedVisitedLinkTest, AddAndDelete) {
+  ASSERT_TRUE(InitVisited(true, 0));
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  GURL url1("https://example.com");
+  GURL url2("https://example2.com");
+  GURL url3("https://example3.com");
+
+  // Add url1 to partitioned visited link hashtable
+  partitioned_writer_->AddPseudoPartitionedVisitedLink(url1);
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 1);
+
+  EXPECT_TRUE(partitioned_writer_->IsVisited(url1.spec()));
+
+  auto fp1 =
+      VisitedLinkCommon::ComputePseudoPartitionedFingerprint(url1.spec());
+  // Query visitedness in writer using fingerprint
+  EXPECT_TRUE(partitioned_writer_->IsVisited(fp1));
+  // Query visitedness in reader using fingerprint
+  EXPECT_TRUE(reader.IsVisited(fp1));
+  // Query visitedness using canonical_url
+  EXPECT_TRUE(reader.IsVisited(url1.spec()));
+  // Query visitedness using GURL
+  EXPECT_TRUE(reader.IsVisited(url1));
+
+  EXPECT_FALSE(reader.IsVisited(url2));
+
+  // Add url2 and url3 to partitioned visited link hashtable
+  partitioned_writer_->AddPseudoPartitionedVisitedLinks({url2, url3});
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 3);
+
+  // Query visitedness using (link, salt)
+  VisitedLink link = CreatePseudoPartitionedLink(url2);
+  EXPECT_TRUE(partitioned_writer_->IsVisited(
+      link, VisitedLinkCommon::kPseudoPartitionedConstantSalt));
+  // Query visitedness using GURL
+  EXPECT_TRUE(reader.IsVisited(url2));
+  EXPECT_TRUE(reader.IsVisited(url3));
+
+  // Delete url1 from partitioned hashtable
+  partitioned_writer_->DeletePseudoPartitionedVisitedLinks({url1});
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 2);
+  EXPECT_FALSE(partitioned_writer_->IsVisited(fp1));
+  EXPECT_FALSE(reader.IsVisited(url1));
+  EXPECT_TRUE(reader.IsVisited(url2));
+  EXPECT_TRUE(reader.IsVisited(url3));
+}
+
+TEST_F(PseudoPartitionedVisitedLinkTest, DeleteAll) {
+  ASSERT_TRUE(InitVisited(true, 0));
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  std::vector<GURL> urls;
+  for (int i = 0; i < 10; ++i) {
+    urls.emplace_back(base::StringPrintf("https://example%d.com", i));
+  }
+  partitioned_writer_->AddPseudoPartitionedVisitedLinks(urls);
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 10);
+
+  for (const auto& url : urls) {
+    EXPECT_TRUE(reader.IsVisited(url));
+  }
+
+  partitioned_writer_->DeleteAllVisitedLinks();
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 0);
+
+  for (const auto& url : urls) {
+    EXPECT_FALSE(reader.IsVisited(url));
+  }
+}
+
+TEST_F(PseudoPartitionedVisitedLinkTest, Resizing) {
+  ASSERT_TRUE(InitVisited(true, 17));
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  std::vector<GURL> urls;
+  for (int i = 0; i < 15; ++i) {
+    urls.emplace_back(base::StringPrintf("https://example%d.com", i));
+  }
+
+  partitioned_writer_->AddPseudoPartitionedVisitedLinks(urls);
+
+  for (const auto& url : urls) {
+    EXPECT_TRUE(partitioned_writer_->IsVisited(
+        VisitedLinkCommon::ComputePseudoPartitionedFingerprint(url.spec())));
+    EXPECT_TRUE(reader.IsVisited(url));
+  }
+}
+
+TEST_F(PseudoPartitionedVisitedLinkTest, Listener) {
+  ASSERT_TRUE(InitVisited(false, 0));
+
+  TrackingVisitedLinkEventListener* listener =
+      static_cast<TrackingVisitedLinkEventListener*>(
+          partitioned_writer_->GetListener());
+
+  EXPECT_EQ(1, listener->reset_count());
+  // TODO(crbug.com/524174788): Gate listener on is_pseudo_partitioned and
+  // expect update count to be 0.
+  EXPECT_EQ(1, listener->salts_update_count());
+
+  for (int i = 0; i < 10; i++) {
+    partitioned_writer_->AddPseudoPartitionedVisitedLink(TestURL(i));
+    ASSERT_EQ(i + 1, partitioned_writer_->GetUsedCount());
+  }
+  EXPECT_EQ(10, listener->add_count());
+
+  partitioned_writer_->DeletePseudoPartitionedVisitedLinks({TestURL(0)});
+  EXPECT_EQ(2, listener->reset_count());
+
+  partitioned_writer_->DeleteAllVisitedLinks();
+  EXPECT_EQ(3, listener->reset_count());
+}
+
+TEST_F(PseudoPartitionedVisitedLinkTest, HistogramLogging) {
+  ASSERT_TRUE(InitVisited(true, 0));
+
+  VisitedLinkReader reader;
+  reader.SetIsPseudoPartitioned(true);
+  reader.UpdateVisitedLinks(
+      partitioned_writer_->GetMappedTableMemoryForTesting().region.Duplicate());
+  g_readers.push_back(&reader);
+
+  base::HistogramTester histogram_tester;
+
+  GURL url("https://example.com");
+
+  // Before lookup, histogram should be empty.
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount", 0);
+
+  // Lookup in reader (which is pseudo-partitioned).
+  // Since DB is empty, this should be a fail lookup.
+  // It should log 0 collisions because the slot it checks will be empty.
+  EXPECT_FALSE(reader.IsVisited(url));
+
+  histogram_tester.ExpectUniqueSample(
+      "History.VisitedLinks.WebView.LookupCollisionCount", 0, 1);
+
+  // Add the link.
+  partitioned_writer_->AddPseudoPartitionedVisitedLink(url);
+  EXPECT_EQ(partitioned_writer_->GetUsedCount(), 1);
+
+  // Lookup again. This should be a success lookup.
+  // It should log 0 collisions because it should find it on the first try.
+  EXPECT_TRUE(reader.IsVisited(url));
+
+  // We expect two samples now, both should be 0.
+  histogram_tester.ExpectBucketCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount", 0, 2);
+  histogram_tester.ExpectTotalCount(
+      "History.VisitedLinks.WebView.LookupCollisionCount", 2);
 }
 
 class VisitCountingContext : public mojom::VisitedLinkNotificationSink {
@@ -1607,6 +1814,26 @@ class PartitionedVisitedLinkEventsTest
   std::unique_ptr<base::MockOneShotTimer> timer_;
   std::unique_ptr<PartitionedVisitedLinkWriter> partitioned_writer_;
 };
+
+TEST_F(PartitionedVisitedLinkEventsTest, IsPseudoPartitionedState) {
+  content::TestBrowserContext context;
+
+  // Test when use_constant_salt is false (truly partitioned).
+  auto writer_partitioned = std::make_unique<PartitionedVisitedLinkWriter>(
+      &context, &delegate_, /*use_constant_salt=*/false);
+  auto* listener_partitioned =
+      static_cast<VisitedLinkEventListener*>(writer_partitioned->GetListener());
+  ASSERT_TRUE(listener_partitioned);
+  EXPECT_FALSE(listener_partitioned->is_pseudo_partitioned());
+
+  // Test when use_constant_salt is true (pseudo-partitioned).
+  auto writer_pseudo = std::make_unique<PartitionedVisitedLinkWriter>(
+      &context, &delegate_, /*use_constant_salt=*/true);
+  auto* listener_pseudo =
+      static_cast<VisitedLinkEventListener*>(writer_pseudo->GetListener());
+  ASSERT_TRUE(listener_pseudo);
+  EXPECT_TRUE(listener_pseudo->is_pseudo_partitioned());
+}
 
 TEST_F(PartitionedVisitedLinkEventsTest, Coalescence) {
   // Waiting for notifications that the table build is complete.

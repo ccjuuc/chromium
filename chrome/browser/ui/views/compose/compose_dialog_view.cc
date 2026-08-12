@@ -163,7 +163,7 @@ void ComposeDialogView::OnBeforeBubbleWidgetInit(
 #if BUILDFLAG(IS_LINUX)
   // In linux, windows may be clipped to their anchors' bounds,
   // resulting in visual errors, unless they use accelerated rendering. See
-  // crbug.com/1445770 for details.
+  // crbug.com/40912626 for details.
   params->use_accelerated_widget_override = true;
 #endif
 }
@@ -191,17 +191,30 @@ bool ComposeDialogView::HandleContextMenu(
       content::WebContents::FromRenderFrameHost(&render_frame_host));
   DCHECK(menu_delegate);
 
-  std::unique_ptr<RenderViewContextMenuBase> menu =
-      menu_delegate->BuildMenu(render_frame_host, params);
+  menu_delegate->BuildMenuAsync(
+      render_frame_host, params,
+      base::BindOnce(&ComposeDialogView::OnBuildMenuComplete,
+                     weak_ptr_factory_.GetWeakPtr()));
+  return true;
+}
+
+void ComposeDialogView::OnBuildMenuComplete(
+    std::unique_ptr<RenderViewContextMenuBase> menu) {
+  if (!menu) {
+    return;
+  }
   // Remove everything that is not copy, paste, or cut or spellcheck
   // suggestions.
+  constexpr int kMaxSpellingSuggestionsLimit = 5;
+  constexpr int kSpellcheckSuggestionLast =
+      IDC_SPELLCHECK_SUGGESTION_0 + kMaxSpellingSuggestionsLimit - 1;
   std::vector<int> command_ids;
   for (size_t index = 0; index < menu->menu_model().GetItemCount(); index++) {
     int command_id = menu->menu_model().GetCommandIdAt(index);
     if ((command_id < IDC_CONTENT_CONTEXT_COPY ||
          command_id > IDC_CONTENT_CONTEXT_PASTE_AND_MATCH_STYLE) &&
         (command_id < IDC_SPELLCHECK_SUGGESTION_0 ||
-         command_id > IDC_SPELLCHECK_SUGGESTION_LAST) &&
+         command_id > kSpellcheckSuggestionLast) &&
         command_id != IDC_CONTENT_CONTEXT_INSPECTELEMENT && command_id > 0) {
       command_ids.push_back(command_id);
     }
@@ -219,9 +232,12 @@ bool ComposeDialogView::HandleContextMenu(
 
   // Only show the menu if there are items in it.
   if (menu->menu_model().GetItemCount() > 0) {
+    context_menu_model_for_testing_ = &menu->menu_model();
+    ContextMenuDelegate* menu_delegate =
+        ContextMenuDelegate::FromWebContents(bubble_wrapper_->web_contents());
+    DCHECK(menu_delegate);
     menu_delegate->ShowMenu(std::move(menu));
   }
-  return true;
 }
 
 base::WeakPtr<ComposeDialogView> ComposeDialogView::GetWeakPtr() {

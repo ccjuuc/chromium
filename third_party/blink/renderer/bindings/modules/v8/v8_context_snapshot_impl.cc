@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_context_snapshot_impl.h"
 
 #include <array>
+#include <tuple>
 
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.h"
@@ -214,7 +215,7 @@ v8::StartupData SerializeAPIWrapperCallback(v8::Local<v8::Object> holder,
   const WrapperTypeInfo* wrapper_type_info = ToWrapperTypeInfo(wrappable);
   CHECK_EQ(wrappable, ToAnyScriptWrappable(v8::Isolate::GetCurrent(), holder));
   constexpr size_t kSize = 1;
-  static_assert(sizeof (InternalFieldSerializedValue) == kSize);
+  static_assert(sizeof(InternalFieldSerializedValue) == kSize);
   auto* serialized_value = new InternalFieldSerializedValue();
   if (wrapper_type_info == V8HTMLDocument::GetWrapperTypeInfo()) {
     *serialized_value = InternalFieldSerializedValue::kSwHTMLDocument;
@@ -237,11 +238,13 @@ void DeserializeAPIWrapperCallback(v8::Local<v8::Object> holder,
   CHECK(deserializer_data->world.IsMainWorld());
   V8DOMWrapper::SetNativeInfo(deserializer_data->isolate, holder,
                               deserializer_data->html_document);
-  const bool result =
+  // The return value is discarded because whether SetWrapperInInlineStorage
+  // associates a new wrapper (true) or retains an existing wrapper (false),
+  // the Document is guaranteed to hold a valid wrapper in inline storage.
+  std::ignore =
       DOMDataStore::SetWrapperInInlineStorage</*entered_context=*/false>(
           deserializer_data->isolate, deserializer_data->html_document,
           V8HTMLDocument::GetWrapperTypeInfo(), holder);
-  CHECK(result);
 }
 
 // We only care for WrapperTypeInfo and do not supply an actual instance of
@@ -310,12 +313,12 @@ void TakeSnapshotForWorld(v8::SnapshotCreator* snapshot_creator,
 v8::Local<v8::Context> V8ContextSnapshotImpl::CreateContext(
     v8::Isolate* isolate,
     const DOMWrapperWorld& world,
-    v8::ExtensionConfiguration* extension_config,
     v8::Local<v8::Object> global_proxy,
     Document* document) {
   DCHECK(document);
-  if (!IsUsingContextSnapshot())
+  if (!IsUsingContextSnapshot()) {
     return v8::Local<v8::Context>();
+  }
 
   V8PerIsolateData* per_isolate_data = V8PerIsolateData::From(isolate);
   if (per_isolate_data->GetV8ContextSnapshotMode() !=
@@ -327,8 +330,9 @@ v8::Local<v8::Context> V8ContextSnapshotImpl::CreateContext(
   CHECK(!html_document || html_document->GetWrapperTypeInfo() ==
                               V8HTMLDocument::GetWrapperTypeInfo());
   if (world.IsMainWorld()) {
-    if (!html_document)
+    if (!html_document) {
       return v8::Local<v8::Context>();
+    }
   } else {
     // Prevent an accidental misuse in a non-main world.
     html_document = nullptr;
@@ -340,17 +344,17 @@ v8::Local<v8::Context> V8ContextSnapshotImpl::CreateContext(
   v8::DeserializeAPIWrapperCallback api_wrappers_deserializer(
       DeserializeAPIWrapperCallback, &deserializer_data);
   return v8::Context::FromSnapshot(
-             isolate, WorldToIndex(world), internal_field_desrializer,
-             extension_config, global_proxy,
-             document->GetExecutionContext()->GetMicrotaskQueue(),
+             isolate, WorldToIndex(world), internal_field_desrializer, nullptr,
+             global_proxy, document->GetExecutionContext()->GetMicrotaskQueue(),
              v8::DeserializeContextDataCallback(), api_wrappers_deserializer)
       .ToLocalChecked();
 }
 
 void V8ContextSnapshotImpl::InstallContextIndependentProps(
     ScriptState* script_state) {
-  if (!IsUsingContextSnapshot())
+  if (!IsUsingContextSnapshot()) {
     return;
+  }
 
   v8::Isolate* isolate = script_state->GetIsolate();
   v8::Local<v8::Context> context = script_state->GetContext();
@@ -360,8 +364,9 @@ void V8ContextSnapshotImpl::InstallContextIndependentProps(
   v8::Local<v8::String> prototype_string = V8AtomicString(isolate, "prototype");
 
   for (const auto& type_info : type_info_table) {
-    if (!type_info.needs_per_context_install[world_index])
+    if (!type_info.needs_per_context_install[world_index]) {
       continue;
+    }
 
     const auto* wrapper_type_info = type_info.wrapper_type_info;
     v8::Local<v8::Template> interface_template =
@@ -380,8 +385,9 @@ void V8ContextSnapshotImpl::InstallContextIndependentProps(
 }
 
 void V8ContextSnapshotImpl::InstallInterfaceTemplates(v8::Isolate* isolate) {
-  if (!IsUsingContextSnapshot())
+  if (!IsUsingContextSnapshot()) {
     return;
+  }
 
   V8PerIsolateData* per_isolate_data = V8PerIsolateData::From(isolate);
   if (per_isolate_data->GetV8ContextSnapshotMode() !=
@@ -448,12 +454,14 @@ v8::StartupData V8ContextSnapshotImpl::TakeSnapshot(v8::Isolate* isolate) {
 const intptr_t* V8ContextSnapshotImpl::GetReferenceTable() {
   DCHECK(IsMainThread());
 
-  if (!IsUsingContextSnapshot())
+  if (!IsUsingContextSnapshot()) {
     return nullptr;
+  }
 
   DEFINE_STATIC_LOCAL(const intptr_t*, reference_table, (nullptr));
-  if (reference_table)
+  if (reference_table) {
     return reference_table;
+  }
 
   intptr_t last_table[] = {
       reinterpret_cast<intptr_t>(V8ObjectConstructor::IsValidConstructorMode),
@@ -471,14 +479,17 @@ const intptr_t* V8ContextSnapshotImpl::GetReferenceTable() {
   DCHECK_EQ(std::size(tables), std::size(type_info_table) + 1);
 
   size_t size_bytes = 0;
-  for (const auto& table : tables)
+  for (const auto& table : tables) {
     size_bytes += table.size_bytes();
+  }
   intptr_t* unified_table = static_cast<intptr_t*>(Partitions::FastMalloc(
       size_bytes, "V8ContextSnapshotImpl::GetReferenceTable"));
   // SAFETY: `Partitions::FastMalloc` ensures `unified_table` points to
-  // `size_bytes` bytes.
-  auto unified_table_span =
-      UNSAFE_BUFFERS(base::span(unified_table, size_bytes));
+  // `size_bytes` bytes. We divide by the sizeof `intptr_t` to get the
+  // number of elements.
+  DCHECK(!(size_bytes % sizeof(intptr_t)));
+  auto unified_table_span = UNSAFE_BUFFERS(base::span(
+      base::unchecked, unified_table, size_bytes / sizeof(intptr_t)));
   size_t offset_count = 0;
   for (const auto& table : tables) {
     unified_table_span.subspan(offset_count, table.size())

@@ -91,7 +91,8 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   void LoadTestPage(const std::string& page) {
-    NavigateParams params(browser()->profile(), http_server_.GetURL("/" + page),
+    NavigateParams params(browser()->GetProfile(),
+                          http_server_.GetURL("/" + page),
                           ui::PageTransition::PAGE_TRANSITION_LINK);
     params.user_gesture = false;
     params.is_renderer_initiated = false;
@@ -99,7 +100,7 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   void LoadTestPageSecondaryOrigin(const std::string& page) {
-    NavigateParams params(browser()->profile(),
+    NavigateParams params(browser()->GetProfile(),
                           http_server_origin2_.GetURL("/" + page),
                           ui::PageTransition::PAGE_TRANSITION_LINK);
     params.user_gesture = false;
@@ -152,7 +153,7 @@ class MediaEngagementAutoplayBrowserTest
     EXPECT_TRUE(base::CreateTemporaryFile(&output_path));
 
     // Write JSON file with the server origin in it.
-    base::Value::List list;
+    base::ListValue list;
     list.Append(origin.Serialize());
     EXPECT_TRUE(
         base::WriteFile(input_path, base::WriteJson(list).value_or("")));
@@ -201,7 +202,7 @@ class MediaEngagementAutoplayBrowserTest
   }
 
   MediaEngagementService* GetService() {
-    return MediaEngagementService::Get(browser()->profile());
+    return MediaEngagementService::Get(browser()->GetProfile());
   }
 
   content::WebContents* GetWebContents() {
@@ -299,7 +300,7 @@ IN_PROC_BROWSER_TEST_P(MediaEngagementAutoplayBrowserTest,
   ExpectAutoplayAllowedIfEnabled();
 }
 
-// Disabled due to being flaky. crbug.com/1212507
+// Disabled due to being flaky. crbug.com/40768252
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_UsePreloadedData_Allowed DISABLED_UsePreloadedData_Allowed
 #else

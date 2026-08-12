@@ -5,6 +5,8 @@
 #include "content/browser/guest_page_holder_impl.h"
 
 #include "base/notimplemented.h"
+#include "base/notreached.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/browser/renderer_host/cross_process_frame_connector.h"
 #include "content/browser/renderer_host/frame_tree.h"
 #include "content/browser/site_instance_impl.h"
@@ -18,8 +20,8 @@ std::unique_ptr<GuestPageHolder> GuestPageHolder::Create(
     scoped_refptr<SiteInstance> site_instance,
     base::WeakPtr<GuestPageHolder::Delegate> delegate) {
   CHECK(owner_web_contents);
-  // Note that `site_instance->IsGuest()` would only be true for <webview>, not
-  // other guest types.
+  // Note that `site_instance->GetSecurityPrincipal().IsGuest()` would only be
+  // true for <webview>, not other guest types.
   CHECK(site_instance);
   CHECK(delegate);
 
@@ -37,8 +39,8 @@ std::unique_ptr<GuestPageHolder> GuestPageHolder::CreateWithOpener(
     scoped_refptr<SiteInstance> site_instance,
     base::WeakPtr<GuestPageHolder::Delegate> delegate) {
   CHECK(owner_web_contents);
-  // Note that `site_instance->IsGuest()` would only be true for <webview>, not
-  // other guest types.
+  // Note that `site_instance->GetSecurityPrincipal().IsGuest()` would only be
+  // true for <webview>, not other guest types.
   CHECK(site_instance);
   CHECK(delegate);
 
@@ -192,6 +194,10 @@ FrameTree* GuestPageHolderImpl::GetDocumentPictureInPictureOpenerFrameTree() {
 void GuestPageHolderImpl::NotifyNavigationStateChangedFromController(
     InvalidateTypes changed_flags) {}
 
+BackForwardCacheImpl& GuestPageHolderImpl::GetBackForwardCache() {
+  NOTREACHED();
+}
+
 void GuestPageHolderImpl::NotifyBeforeFormRepostWarningShow() {}
 
 void GuestPageHolderImpl::NotifyNavigationEntryCommitted(
@@ -336,6 +342,10 @@ bool GuestPageHolderImpl::OnRenderFrameProxyVisibilityChanged(
                                  : blink::mojom::PageVisibilityState::kVisible);
   });
   return false;
+}
+
+PrerenderHostId GuestPageHolderImpl::GetPrerenderHostId() {
+  return PrerenderHostId();
 }
 
 }  // namespace content

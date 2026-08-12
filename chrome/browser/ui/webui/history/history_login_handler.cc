@@ -13,7 +13,6 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/webui/history/history_identity_state_watcher.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -72,7 +71,7 @@ void HistoryLoginHandler::OnJavascriptDisallowed() {
 }
 
 void HistoryLoginHandler::HandleOtherDevicesInitialized(
-    const base::Value::List& /*args*/) {
+    const base::ListValue& /*args*/) {
   AllowJavascript();
 }
 
@@ -86,7 +85,7 @@ void HistoryLoginHandler::IdentityStateChanged() {
 }
 
 void HistoryLoginHandler::HandleTurnOnSyncFlow(
-    const base::Value::List& /*args*/) {
+    const base::ListValue& /*args*/) {
   Profile* profile = Profile::FromWebUI(web_ui());
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
@@ -102,21 +101,21 @@ void HistoryLoginHandler::HandleTurnOnSyncFlow(
 }
 
 void HistoryLoginHandler::HandleRecordSigninPendingOffered(
-    const base::Value::List& /*args*/) {
+    const base::ListValue& /*args*/) {
   signin_metrics::LogSigninPendingOffered(
       signin_metrics::AccessPoint::kRecentTabs);
 }
 
 void HistoryLoginHandler::HandleGetInitialIdentityState(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, GetHistoryIdentityStateDict());
 }
 
 // LINT.IfChange(GetHistoryIdentityStateDict)
-base::Value::Dict HistoryLoginHandler::GetHistoryIdentityStateDict() {
-  base::Value::Dict dict;
+base::DictValue HistoryLoginHandler::GetHistoryIdentityStateDict() {
+  base::DictValue dict;
   HistoryIdentityState history_identity_state =
       history_identity_state_watcher_->GetHistoryIdentityState();
   dict.Set("signIn", static_cast<int>(history_identity_state.sign_in));

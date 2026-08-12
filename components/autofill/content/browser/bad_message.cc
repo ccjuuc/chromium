@@ -4,7 +4,8 @@
 
 #include "components/autofill/content/browser/bad_message.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "components/autofill/core/common/aliases.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -14,20 +15,9 @@ namespace autofill::bad_message {
 
 namespace internal {
 
-bool CheckSingleValidTriggerSource(
-    AutofillSuggestionTriggerSource trigger_source) {
-  if (trigger_source ==
-      AutofillSuggestionTriggerSource::kPlusAddressUpdatedInBrowserProcess) {
-    mojo::ReportBadMessage(
-        "PlusAddressUpdatedInBrowserProcess is not a permitted trigger source "
-        "in the renderer");
-    return false;
-  }
-  return true;
-}
-
 bool CheckFieldInForm(const FormData& form, FieldRendererId field_id) {
-  if (!base::Contains(form.fields(), field_id, &FormFieldData::renderer_id)) {
+  if (!std::ranges::contains(form.fields(), field_id,
+                             &FormFieldData::renderer_id)) {
     mojo::ReportBadMessage("Unexpected FormData/FieldRendererId pair received");
     return false;
   }

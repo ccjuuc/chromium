@@ -32,6 +32,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_tester.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_configuration.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_key_system_track_configuration.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_capabilities_decoding_info.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_capabilities_info.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_configuration.h"
@@ -43,6 +44,7 @@
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_video_encoder_factory.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
@@ -155,6 +157,7 @@ class FakeMediaMetricsProvider
   void SetTimeToMetadata(base::TimeDelta elapsed) override {}
   void SetTimeToFirstFrame(base::TimeDelta elapsed) override {}
   void SetTimeToPlayReady(base::TimeDelta elapsed) override {}
+  void SetVisibilityRatioAtPlaybackStart(double ratio) override {}
   void SetContainerName(
       media::container_names::MediaContainerName container_name) override {}
   void SetRendererType(media::RendererType renderer_type) override {}
@@ -481,6 +484,26 @@ MediaCapabilitiesInfo* EncodingInfo(
       v8::Isolate::GetCurrent(), tester.Value().V8Value(),
       context->GetExceptionState());
 }
+
+// Mock Mojo struct and conversion helper for testing
+// KeySystemTrackConfiguration.
+struct MockMojoKeySystemTrackConfiguration {
+  String robustness;
+  std::optional<String> encryption_scheme;
+};
+
+std::unique_ptr<MockMojoKeySystemTrackConfiguration> ConvertToMojo(
+    const KeySystemTrackConfiguration* idl_config) {
+  auto mojo_config = std::make_unique<MockMojoKeySystemTrackConfiguration>();
+  if (idl_config->hasRobustness()) {
+    mojo_config->robustness = idl_config->robustness();
+  }
+  if (idl_config->hasEncryptionScheme()) {
+    mojo_config->encryption_scheme = idl_config->encryptionScheme();
+  }
+  return mojo_config;
+}
+
 }  // namespace
 
 TEST(MediaCapabilitiesTests, BasicAudio) {
@@ -516,7 +539,7 @@ TEST(MediaCapabilitiesTests, ConfigMatchesFeatures) {
   const MediaDecodingConfiguration* kDecodingConfig = CreateDecodingConfig();
   const media::mojom::blink::PredictionFeatures kFeatures = CreateFeatures();
 
-  EXPECT_TRUE(kDecodingConfig->video()->contentType().Contains("vp09.00"));
+  EXPECT_TRUE(kDecodingConfig->video()->contentType().contains("vp09.00"));
   EXPECT_EQ(static_cast<media::VideoCodecProfile>(kFeatures.profile),
             media::VP9PROFILE_PROFILE0);
   EXPECT_EQ(kCodecProfile, media::VP9PROFILE_PROFILE0);
@@ -817,8 +840,8 @@ TEST(MediaCapabilitiesTests, WebrtcConfigMatchesFeatures) {
   EXPECT_TRUE(kDecodeFeatures.is_decode_stats);
   EXPECT_FALSE(kEncodeFeatures.is_decode_stats);
 
-  EXPECT_TRUE(kDecodingConfig->video()->contentType().Contains("video/VP9"));
-  EXPECT_TRUE(kEncodingConfig->video()->contentType().Contains("video/VP9"));
+  EXPECT_TRUE(kDecodingConfig->video()->contentType().contains("video/VP9"));
+  EXPECT_TRUE(kEncodingConfig->video()->contentType().contains("video/VP9"));
   EXPECT_EQ(static_cast<media::VideoCodecProfile>(kDecodeFeatures.profile),
             media::VP9PROFILE_PROFILE0);
   EXPECT_EQ(static_cast<media::VideoCodecProfile>(kEncodeFeatures.profile),
@@ -1193,6 +1216,23 @@ TEST(MediaCapabilitiesTests, WebrtcEncodeOverridePowerEfficientIsSmooth) {
   // task runner of GpuVideoAcceleratorFactories.
   EXPECT_CALL(mock_gpu_factories, GetTaskRunner())
       .WillOnce(Return(base::SequencedTaskRunner::GetCurrentDefault()));
+}
+
+TEST(MediaCapabilitiesTests, KeySystemTrackConfiguration_EncryptionScheme) {
+  ScopedKeySystemTrackConfigurationEncryptionSchemeForTest
+      scoped_encryption_scheme_for_test(true);
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+
+  auto* idl_config = KeySystemTrackConfiguration::Create(scope.GetIsolate());
+  idl_config->setRobustness("SW_SECURE_CRYPTO");
+  idl_config->setEncryptionScheme("cbcs");  // Test the new field
+
+  auto mojo_config = ConvertToMojo(idl_config);
+
+  EXPECT_EQ(mojo_config->robustness, "SW_SECURE_CRYPTO");
+  ASSERT_TRUE(mojo_config->encryption_scheme.has_value());
+  EXPECT_EQ(mojo_config->encryption_scheme.value(), "cbcs");
 }
 
 }  // namespace blink

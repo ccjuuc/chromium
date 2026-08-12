@@ -338,6 +338,11 @@ declare global {
         wasm: ArrayBuffer;
       }
 
+      export interface TenjiData {
+        wasm: ArrayBuffer;
+        wrapperJs: ArrayBuffer;
+      }
+
       export enum ScrollDirection {
         UP = 'up',
         DOWN = 'down',
@@ -379,6 +384,8 @@ declare global {
       export function installPumpkinForDictation(): Promise<PumpkinData>;
 
       export function installFaceGazeAssets(): Promise<FaceGazeAssets>;
+
+      export function installTenji(): Promise<TenjiData>;
 
       export function setNativeAccessibilityEnabled(enabled: boolean): void;
 
@@ -479,9 +486,10 @@ declare global {
       export function enableDragEventRewriter(enabled: boolean): void;
 
       export function processPendingSpokenFeedbackEvent(
-          id: number, propagate: boolean): void;
+          id: number, propagate: boolean, sessionId: number): void;
 
-      export function enableSpokenFeedbackMv3KeyHandling(): void;
+      export function enableSpokenFeedbackMv3KeyHandling(sessionId: number):
+          void;
 
       export const onIntroduceChromeVox: ChromeEvent<() => void>;
 

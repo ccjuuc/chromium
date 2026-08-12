@@ -51,6 +51,7 @@
 #include "ash/public/cpp/pagination/pagination_model.h"
 #include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_model.h"
+#include "ash/public/cpp/test/app_list_test_api.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/public/cpp/test/test_shelf_item_delegate.h"
 #include "ash/root_window_controller.h"
@@ -211,11 +212,12 @@ class WindowDeletionWaiter : aura::WindowObserver {
   // WindowObserver:
   void OnWindowDestroying(aura::Window* window) override {
     window->RemoveObserver(this);
+    window_ = nullptr;
     run_loop_.QuitWhenIdle();
   }
 
   base::RunLoop run_loop_;
-  raw_ptr<aura::Window, DanglingUntriaged> window_;
+  raw_ptr<aura::Window> window_;
 };
 
 // Find the window with type WINDOW_TYPE_MENU and returns the firstly found one.
@@ -338,7 +340,8 @@ class AppsGridViewTest : public AshTestBase, views::WidgetObserver {
       helper->ShowAppList();
     }
     // Wait for any show animations to complete.
-    base::RunLoop().RunUntilIdle();
+    AppListTestApi().WaitForAppListShowAnimation(
+        /*is_bubble_window=*/!create_as_tablet_mode_);
 
     // Cache view pointers to make tests more concise.
     if (!create_as_tablet_mode_) {
@@ -362,6 +365,8 @@ class AppsGridViewTest : public AshTestBase, views::WidgetObserver {
       page_flip_waiter_ =
           std::make_unique<PageFlipWaiter>(GetPaginationModel());
     }
+    ASSERT_TRUE(base::test::RunUntil(
+        [this] { return search_box_view_->search_box()->HasFocus(); }));
 
     test_api_ = std::make_unique<AppsGridViewTestApi>(apps_grid_view_);
     ui::PresentationTimeRecorder::SetReportPresentationTimeImmediatelyForTest(
@@ -382,6 +387,11 @@ class AppsGridViewTest : public AshTestBase, views::WidgetObserver {
     ui::PresentationTimeRecorder::SetReportPresentationTimeImmediatelyForTest(
         false);
     haptics_tracker_.reset();
+    apps_grid_view_ = nullptr;
+    paged_apps_grid_view_ = nullptr;
+    search_box_view_ = nullptr;
+    app_list_folder_view_ = nullptr;
+    app_list_view_ = nullptr;
     AshTestBase::TearDown();
   }
 
@@ -750,16 +760,15 @@ class AppsGridViewTest : public AshTestBase, views::WidgetObserver {
 
   // May be a PagedAppsGridView in tablet mode or a ScrollableAppsGridView in
   // clamshell mode.
-  raw_ptr<AppsGridView, DanglingUntriaged> apps_grid_view_ = nullptr;
+  raw_ptr<AppsGridView> apps_grid_view_ = nullptr;
 
   // May be owned by different parent views depending on tablet mode.
-  raw_ptr<AppListFolderView, DanglingUntriaged> app_list_folder_view_ = nullptr;
-  raw_ptr<SearchBoxView, DanglingUntriaged> search_box_view_ = nullptr;
+  raw_ptr<AppListFolderView> app_list_folder_view_ = nullptr;
+  raw_ptr<SearchBoxView> search_box_view_ = nullptr;
 
   // These views exist in tablet mode.
-  raw_ptr<PagedAppsGridView, DanglingUntriaged> paged_apps_grid_view_ = nullptr;
-  raw_ptr<AppListView, DanglingUntriaged> app_list_view_ =
-      nullptr;  // Owned by native widget.
+  raw_ptr<PagedAppsGridView> paged_apps_grid_view_ = nullptr;
+  raw_ptr<AppListView> app_list_view_ = nullptr;  // Owned by native widget.
 
   std::unique_ptr<AppsGridViewTestApi> test_api_;
 
@@ -6254,7 +6263,7 @@ TEST_P(AppsGridViewTabletTest,
 
   // Cache the current context menu view.
   views::MenuItemView* reorder_submenu =
-      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(2);
+      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(3);
   ASSERT_EQ(reorder_submenu->title(), u"Sort by");
 
   // Open the Sort by submenu.
@@ -6283,7 +6292,7 @@ TEST_P(AppsGridViewTabletTest,
   EXPECT_TRUE(context_menu->IsShowingMenu());
 
   reorder_submenu =
-      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(2);
+      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(3);
   ASSERT_EQ(reorder_submenu->title(), u"Sort by");
 
   // Open the Sort by submenu.
@@ -6318,7 +6327,7 @@ TEST_P(AppsGridViewTabletTest, NoSortOptionsWhenSearchPageIsShownInTabletMode) {
 
   // Cache the current context menu view.
   views::MenuItemView* reorder_submenu =
-      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(2);
+      context_menu->root_for_testing()->GetSubmenu()->GetMenuItemAt(3);
   ASSERT_EQ(reorder_submenu->title(), u"Sort by");
 
   // Open the Sort by submenu.
@@ -6351,11 +6360,11 @@ TEST_P(AppsGridViewTabletTest, NoSortOptionsWhenSearchPageIsShownInTabletMode) {
       Shell::GetPrimaryRootWindowController()->menu_model_adapter_for_testing();
   EXPECT_TRUE(context_menu->IsShowingMenu());
 
-  // Verify that the sort option is removed and there are only 2 options in the
+  // Verify that the sort option is removed and there are only 3 options in the
   // menu.
   int context_menu_size =
       context_menu->root_for_testing()->GetSubmenu()->GetMenuItems().size();
-  EXPECT_LT(context_menu_size, 3);
+  EXPECT_LT(context_menu_size, 4);
 }
 
 TEST_P(AppsGridViewClamshellAndTabletTest, ContextMenuOnFolderItemSortAllApps) {

@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("policy") {
@@ -25,6 +23,8 @@ static_library("policy") {
   deps = [
     "//ash/constants",
     "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser/ash/app_list/arc",
     "//chrome/browser/ash/arc/auth",
     "//chrome/browser/ash/arc/enterprise/cert_store",
@@ -53,7 +53,6 @@ static_library("policy") {
     "//components/signin/public/identity_manager",
     "//components/strings:components_strings_grit",
     "//components/user_manager",
-    "//services/data_decoder/public/cpp",
     "//third_party/re2",
   ]
 

@@ -22,7 +22,6 @@
 #include "chrome/browser/sharesheet/sharesheet_controller.h"
 #include "chrome/browser/sharesheet/sharesheet_service_delegator.h"
 #include "chrome/browser/sharesheet/sharesheet_types.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/drive/drive_api_util.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -365,7 +364,7 @@ void SharesheetService::OnAppIconsLoaded(
     std::vector<TargetInfo> targets) {
   gfx::NativeWindow native_window = std::move(get_native_window_callback).Run();
   // Note that checking |native_window| is not sufficient: |widget| can be null
-  // even when |native_window| is 'true': https://crbug.com/1375887#c11
+  // even when |native_window| is 'true': https://crbug.com/40873333#comment12
   views::Widget* const widget =
       views::Widget::GetWidgetForNativeWindow(native_window);
   if (!widget) {

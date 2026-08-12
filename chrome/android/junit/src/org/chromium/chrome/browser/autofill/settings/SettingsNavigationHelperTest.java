@@ -4,8 +4,11 @@
 
 package org.chromium.chrome.browser.autofill.settings;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -28,7 +31,13 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsReferrer;
+import org.chromium.chrome.browser.autofill.settings.personal_context.AutofillPersonalContextFragment;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
@@ -58,10 +67,36 @@ public class SettingsNavigationHelperTest {
 
     @Test
     @SmallTest
+    @EnableFeatures(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)
+    public void testRecordsActionThenLaunchesHomeOfTransactionsSettings() {
+        assertTrue(SettingsNavigationHelper.showAutofillAndPasswordsSettings(mMockContext));
+        assertTrue(mActionTester.getActions().contains("AutofillYourSavedInfoViewed"));
+        verify(mMockLauncher)
+                .startSettings(
+                        eq(mMockContext),
+                        eq(AutofillAndPasswordsFragment.class),
+                        mBundleCaptor.capture());
+        assertEquals(
+                AutofillAndPasswordsFragment.AutofillSettingsReferrer.SETTINGS_MENU,
+                mBundleCaptor.getValue().getInt(AutofillAndPasswordsFragment.EXTRA_REFERRER));
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)
+    public void testDoesntLaunchOrRecordHomeOfTransactionsSettingsWithoutFlag() {
+        assertFalse(SettingsNavigationHelper.showAutofillAndPasswordsSettings(mMockContext));
+        assertFalse(mActionTester.getActions().contains("AutofillYourSavedInfoViewed"));
+        verifyNoInteractions(mMockLauncher);
+    }
+
+    @Test
+    @SmallTest
     public void testRecordsActionThenLaunchesPaymentsSettings() {
         assertTrue(SettingsNavigationHelper.showAutofillCreditCardSettings(mMockContext));
         assertTrue(mActionTester.getActions().contains("AutofillCreditCardsViewed"));
-        verify(mMockLauncher).startSettings(mMockContext, AutofillPaymentMethodsFragment.class);
+        verify(mMockLauncher)
+                .startSettings(mMockContext, AutofillPaymentMethodsFragment.class, null, false);
     }
 
     @Test
@@ -69,7 +104,17 @@ public class SettingsNavigationHelperTest {
     public void testRecordsActionThenLaunchesAddressesSettings() {
         assertTrue(SettingsNavigationHelper.showAutofillProfileSettings(mMockContext));
         assertTrue(mActionTester.getActions().contains("AutofillAddressesViewed"));
-        verify(mMockLauncher).startSettings(mMockContext, AutofillProfilesFragment.class);
+        verify(mMockLauncher)
+                .startSettings(mMockContext, AutofillProfilesFragment.class, null, false);
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)
+    public void testDoesntLaunchOrRecordHomeOfTransactionsSettingsWithoutContext() {
+        assertFalse(SettingsNavigationHelper.showAutofillAndPasswordsSettings(null));
+        assertFalse(mActionTester.getActions().contains("AutofillYourSavedInfoViewed"));
+        verifyNoInteractions(mMockLauncher);
     }
 
     @Test
@@ -83,8 +128,41 @@ public class SettingsNavigationHelperTest {
     @Test
     @SmallTest
     public void testDoesntLaunchOrRecordAddressesSettingsWithoutContext() {
-        assertFalse(SettingsNavigationHelper.showAutofillCreditCardSettings(null));
+        assertFalse(SettingsNavigationHelper.showAutofillProfileSettings(null));
         assertFalse(mActionTester.getActions().contains("AutofillAddressesViewed"));
         verifyNoInteractions(mMockLauncher);
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)
+    public void testShowAutofillPersonalContextSettingsLaunchesPersonalContextWhenHoTOn() {
+        assertTrue(
+                SettingsNavigationHelper.showAutofillPersonalContextSettings(
+                        mMockContext, AutofillOptionsReferrer.PRIVATE_INFERENCE_NOTICE));
+        verify(mMockLauncher)
+                .startSettings(
+                        eq(mMockContext),
+                        eq(AutofillPersonalContextFragment.class),
+                        isNull(),
+                        eq(true));
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures(ChromeFeatureList.YOUR_SAVED_INFO_SETTINGS_PAGE_ANDROID)
+    public void testShowAutofillPersonalContextSettingsLaunchesAutofillSettingsWhenHoTOff() {
+        assertTrue(
+                SettingsNavigationHelper.showAutofillPersonalContextSettings(
+                        mMockContext, AutofillOptionsReferrer.PRIVATE_INFERENCE_NOTICE));
+        verify(mMockLauncher)
+                .startSettings(
+                        eq(mMockContext),
+                        eq(AutofillOptionsFragment.class),
+                        mBundleCaptor.capture(),
+                        eq(true));
+        assertEquals(
+                AutofillOptionsReferrer.PRIVATE_INFERENCE_NOTICE,
+                mBundleCaptor.getValue().getInt(AutofillOptionsFragment.AUTOFILL_OPTIONS_REFERRER));
     }
 }

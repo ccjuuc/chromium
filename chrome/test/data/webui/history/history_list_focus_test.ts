@@ -3,20 +3,20 @@
 // found in the LICENSE file.
 
 import type {HistoryAppElement, HistoryEntry, HistoryListElement} from 'chrome://history/history.js';
-import {BrowserServiceImpl} from 'chrome://history/history.js';
+import {BrowserProxyImpl} from 'chrome://history/history.js';
 import {isMac} from 'chrome://resources/js/platform.js';
 import {getDeepActiveElement} from 'chrome://resources/js/util.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {pressAndReleaseKeyOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
-import {TestBrowserService} from './test_browser_service.js';
+import {TestHistoryBrowserProxy} from './test_browser_proxy.js';
 import {createHistoryEntry, createHistoryInfo} from './test_util.js';
 
 suite('<history-list>', function() {
   let app: HistoryAppElement;
   let element: HistoryListElement;
-  let testService: TestBrowserService;
+  let testProxy: TestHistoryBrowserProxy;
   const TEST_HISTORY_RESULTS = [
     createHistoryEntry('2016-03-15', 'https://www.google.com'),
     createHistoryEntry('2016-03-14 10:00', 'https://www.example.com'),
@@ -30,9 +30,9 @@ suite('<history-list>', function() {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
     // Make viewport tall enough to render all items.
     document.body.style.height = '1000px';
-    testService = new TestBrowserService();
-    BrowserServiceImpl.setInstance(testService);
-    testService.handler.setResultFor('queryHistory', Promise.resolve({
+    testProxy = new TestHistoryBrowserProxy();
+    BrowserProxyImpl.setInstance(testProxy);
+    testProxy.handler.setResultFor('queryHistory', Promise.resolve({
       results: {
         info: createHistoryInfo(),
         value: TEST_HISTORY_RESULTS,
@@ -43,14 +43,14 @@ suite('<history-list>', function() {
     document.body.appendChild(app);
     element = app.$.history;
     return Promise.all([
-      testService.handler.whenCalled('queryHistory'),
+      testProxy.handler.whenCalled('queryHistory'),
       microtasksFinished(),
       eventToPromise('viewport-filled', element.$.infiniteList),
     ]);
   });
 
   function getHistoryData(): HistoryEntry[] {
-    return (element.$.infiniteList.items || []) as HistoryEntry[];
+    return (element.$.infiniteList.items || []);
   }
 
   test('list focus and keyboard nav', async () => {
@@ -76,14 +76,14 @@ suite('<history-list>', function() {
 
     pressAndReleaseKeyOn(focused, 39, [], 'ArrowRight');
     await microtasksFinished();
-    focused = items[3]!.$['menu-button'];
+    focused = items[3]!.$.menuButton;
     assertEquals(focused, getDeepActiveElement());
     assertFalse(items[2]!.getFocusRow().isActive());
     assertTrue(items[3]!.getFocusRow().isActive());
 
     pressAndReleaseKeyOn(focused, 38, [], 'ArrowUp');
     await microtasksFinished();
-    focused = items[2]!.$['menu-button'];
+    focused = items[2]!.$.menuButton;
     assertEquals(focused, getDeepActiveElement());
     assertTrue(items[2]!.getFocusRow().isActive());
     assertFalse(items[3]!.getFocusRow().isActive());
@@ -142,19 +142,19 @@ suite('<history-list>', function() {
   });
 
   test('deleting last item will focus on new last item', async () => {
-    testService.handler.setResultFor(
+    testProxy.handler.setResultFor(
         'removeVisits', Promise.resolve([getHistoryData()[3]]));
     const items = element.shadowRoot.querySelectorAll('history-item');
     assertEquals(4, getHistoryData().length);
     assertEquals(4, items.length);
-    items[3]!.$['menu-button'].click();
+    items[3]!.$.menuButton.click();
     await microtasksFinished();
     element.shadowRoot.querySelector<HTMLElement>('#menuRemoveButton')!.click();
     await microtasksFinished();
-    assertNotEquals(items[2]!.$['menu-button'], getDeepActiveElement());
-    await testService.handler.whenCalled('removeVisits');
+    assertNotEquals(items[2]!.$.menuButton, getDeepActiveElement());
+    await testProxy.handler.whenCalled('removeVisits');
     await microtasksFinished();
     assertEquals(3, getHistoryData().length);
-    assertEquals(items[2]!.$['menu-button'], getDeepActiveElement());
+    assertEquals(items[2]!.$.menuButton, getDeepActiveElement());
   });
 });

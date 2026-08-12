@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -24,6 +23,7 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/ash/shelf/arc_app_shelf_id.h"
 #include "chrome/grit/component_extension_resources.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/grit/extensions_browser_resources.h"
 #include "ipc/constants.mojom.h"
@@ -356,7 +356,7 @@ bool ArcAppIcon::EverySupportedScaleFactorIsLoaded() {
       for (auto it = is_adaptive_icons_.begin(); it != is_adaptive_icons_.end();
            it++) {
         if (it->second &&
-            !base::Contains(foreground_incomplete_scale_factors_, it->first)) {
+            !foreground_incomplete_scale_factors_.contains(it->first)) {
           it->second = false;
           float scale = ui::GetScaleForResourceScaleFactor(it->first);
           image_skia_.RemoveRepresentation(scale);

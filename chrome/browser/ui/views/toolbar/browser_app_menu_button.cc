@@ -9,42 +9,31 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/rand_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "cc/paint/paint_flags.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/themes/theme_properties.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_otr_state.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/toolbar/app_menu_icon_controller.h"
-#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/app_menu/action_app_menu.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/user_education/tutorial_identifiers.h"
-#include "chrome/browser/user_education/user_education_service.h"
-#include "chrome/browser/user_education/user_education_service_factory.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
+#include "chrome/grit/browser_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_action_data.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/throb_animation.h"
+#include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/animation/ink_drop.h"
@@ -62,8 +51,8 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
-constexpr int kChromeRefreshImageLabelPadding = 2;
-}
+constexpr int kHideTextForFlexPadding = 4;
+}  // namespace
 
 // static
 bool BrowserAppMenuButton::g_open_app_immediately_for_testing = false;
@@ -73,7 +62,8 @@ BrowserAppMenuButton::BrowserAppMenuButton(ToolbarView* toolbar_view)
                                         base::Unretained(this))),
       toolbar_view_(toolbar_view) {
   SetHorizontalAlignment(gfx::ALIGN_RIGHT);
-  SetImageLabelSpacing(kChromeRefreshImageLabelPadding);
+  SetImageLabelSpacing(
+      GetLayoutConstant(LayoutConstant::kAppMenuButtonImageLabelPadding));
   label()->SetPaintToLayer();
   label()->SetSkipSubpixelRenderingOpacityCheck(true);
   label()->layer()->SetFillsBoundsOpaquely(false);
@@ -85,6 +75,8 @@ BrowserAppMenuButton::~BrowserAppMenuButton() = default;
 void BrowserAppMenuButton::SetTypeAndSeverity(
     AppMenuIconController::TypeAndSeverity type_and_severity) {
   type_and_severity_ = type_and_severity;
+  GetViewAccessibility().SetName(
+      AppMenuIconController::GetIconAccessibleName(type_and_severity_.type));
   UpdateThemeBasedState();
 }
 
@@ -104,9 +96,15 @@ void BrowserAppMenuButton::ShowMenu(int run_types) {
 
   Browser* browser = toolbar_view_->browser();
 
+  if (base::FeatureList::IsEnabled(features::kAppMenuGlowUp)) {
+    RunActionMenu(browser, run_types);
+    return;
+  }
+
   // Allow highlighting menu items when the menu was opened while
   // certain tutorials are running.
-  AlertMenuItem alert_item = GetAlertItemForRunningTutorial();
+  AlertMenuItem alert_item =
+      AppMenuModel::GetAlertItemForRunningTutorial(browser);
 
   RunMenu(std::make_unique<AppMenuModel>(
               toolbar_view_, browser, toolbar_view_->app_menu_icon_controller(),
@@ -114,22 +112,24 @@ void BrowserAppMenuButton::ShowMenu(int run_types) {
           browser, run_types);
 }
 
-AlertMenuItem BrowserAppMenuButton::GetAlertItemForRunningTutorial() {
-  Browser* browser = toolbar_view_->browser();
-  BrowserWindow* browser_window = browser->window();
+void BrowserAppMenuButton::OnMenuClosed() {
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  if (features::IsToolbarGlowUpEnabled()) {
+    views::SingleAnimatedImageContainer::AnimationConfig config{
+        .boundary =
+            views::SingleAnimatedImageContainer::AnimationBoundary{
+                .start_offset = 0.5f, .end_offset = 0.75f},
+        .tween = gfx::Tween::FAST_OUT_SLOW_IN_3,
+        .duration = base::Milliseconds(250)};
 
-  if (browser_window == nullptr) {
-    return AlertMenuItem::kNone;
+    animated_image_container().PlayAnimation(
+        {IDR_APP_MENU_LOTTIE, GetForegroundColor(GetState()),
+         views::SingleAnimatedImageContainer::AnimationDirection::kForward,
+         views::SingleAnimatedImageContainer::AnimationEndBehavior::kReset},
+        config);
   }
-
-  auto* const service =
-      UserEducationServiceFactory::GetForBrowserContext(browser->profile());
-  if (service && service->tutorial_service().IsRunningTutorial(
-                     kPasswordManagerTutorialId)) {
-    return AlertMenuItem::kPasswordManager;
-  }
-
-  return AlertMenuItem::kNone;
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  AppMenuButton::OnMenuClosed();
 }
 
 void BrowserAppMenuButton::OnThemeChanged() {
@@ -151,13 +151,25 @@ void BrowserAppMenuButton::UpdateThemeBasedState() {
 }
 
 void BrowserAppMenuButton::UpdateIcon() {
-  const gfx::VectorIcon& icon = ui::TouchUiController::Get()->touch_ui()
-                                    ? kBrowserToolsTouchIcon
-                                    : kBrowserToolsChromeRefreshIcon;
+  const gfx::VectorIcon& icon =
+      ui::TouchUiController::Get()->touch_ui()
+          ? features::IsRoundedIconsEnabled() ? kMoreVertIcon
+                                              : kBrowserToolsTouchOldIcon
+      : features::IsRoundedIconsEnabled() ? kMoreVertIcon
+                                          : kBrowserToolsChromeRefreshOldIcon;
+  const int icon_size = GetIconSize();
+
   for (auto state : kButtonStates) {
     SkColor icon_color = GetForegroundColor(state);
-    SetImageModel(state, ui::ImageModel::FromVectorIcon(icon, icon_color));
+    ui::ImageModel model =
+        ui::ImageModel::FromVectorIcon(icon, icon_color, icon_size);
+    SetImageModel(state, model);
   }
+}
+
+void BrowserAppMenuButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  ToolbarButton::OnBoundsChanged(previous_bounds);
+  UpdateLayoutInsets();
 }
 
 void BrowserAppMenuButton::UpdateInkdrop() {
@@ -171,10 +183,18 @@ void BrowserAppMenuButton::UpdateInkdrop() {
 }
 
 bool BrowserAppMenuButton::IsLabelPresentAndVisible() const {
-  if (!label()) {
+  if (!label() || !label()->GetVisible() || label()->GetText().empty()) {
     return false;
   }
-  return label()->GetVisible() && !label()->GetText().empty();
+  if (!base::FeatureList::IsEnabled(features::kToolbarAppMenuLabelResizing)) {
+    return true;
+  }
+  // If the chip is narrow enough that text doesn't fit, return false. The min
+  // width is the height of the button but add padding because at slightly
+  // larger widths, text isn't visible due to eliding and this simplifies
+  // ToolbarView layout.
+  const int icon_width = GetTargetSize().height() + kHideTextForFlexPadding;
+  return GetLocalBounds().width() > icon_width;
 }
 
 SkColor BrowserAppMenuButton::GetForegroundColor(ButtonState state) const {
@@ -190,40 +210,10 @@ SkColor BrowserAppMenuButton::GetForegroundColor(ButtonState state) const {
 }
 
 void BrowserAppMenuButton::UpdateTextAndHighlightColor() {
-  int tooltip_message_id;
-  std::u16string text;
-  if (type_and_severity_.severity == AppMenuIconController::Severity::kNone) {
-    tooltip_message_id = IDS_APPMENU_TOOLTIP;
-  } else if (type_and_severity_.type ==
-             AppMenuIconController::IconType::kUpgradeNotification) {
-    tooltip_message_id = IDS_APPMENU_TOOLTIP_UPDATE_AVAILABLE;
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
-    (BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX))
-    int message_id = IDS_APP_MENU_BUTTON_UPDATE;
-    // Select an update text option randomly. Show this text in all browser
-    // windows.
-    static const int update_text_option = base::RandInt(1, 3);
-    if (update_text_option == 1) {
-      message_id = IDS_APP_MENU_BUTTON_UPDATE_ALT1;
-    } else if (update_text_option == 2) {
-      message_id = IDS_APP_MENU_BUTTON_UPDATE_ALT2;
-    } else {
-      message_id = IDS_APP_MENU_BUTTON_UPDATE_ALT3;
-    }
-    text = l10n_util::GetStringUTF16(message_id);
-#else
-    text = l10n_util::GetStringUTF16(IDS_APP_MENU_BUTTON_UPDATE);
-#endif
-  } else {
-    tooltip_message_id = IDS_APPMENU_TOOLTIP_ALERT;
-    const int text_id =
-        type_and_severity_.severity == AppMenuIconController::Severity::kLow
-            ? IDS_APP_MENU_BUTTON_ACTION_REQUIRED
-            : IDS_APP_MENU_BUTTON_ERROR;
-    text = l10n_util::GetStringUTF16(text_id);
-  }
-
-  SetTooltipText(l10n_util::GetStringUTF16(tooltip_message_id));
+  const std::u16string text = AppMenuIconController::GetIconLabel(
+      type_and_severity_.type, type_and_severity_.severity);
+  SetTooltipText(AppMenuIconController::GetIconTooltip(
+      type_and_severity_.type, type_and_severity_.severity));
   SetHighlight(text, GetHighlightColor());
 }
 
@@ -234,8 +224,10 @@ bool BrowserAppMenuButton::ShouldPaintBorder() const {
 void BrowserAppMenuButton::UpdateLayoutInsets() {
   if (IsLabelPresentAndVisible()) {
     SetLayoutInsets(::GetLayoutInsets(BROWSER_APP_MENU_CHIP_PADDING));
+    SetHorizontalAlignment(gfx::ALIGN_RIGHT);
   } else {
     SetLayoutInsets(::GetLayoutInsets(TOOLBAR_BUTTON));
+    SetHorizontalAlignment(gfx::ALIGN_CENTER);
   }
 }
 
@@ -278,6 +270,23 @@ void BrowserAppMenuButton::ButtonPressed(const ui::Event& event) {
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  if (features::IsToolbarGlowUpEnabled() && !IsMenuShowing()) {
+    views::SingleAnimatedImageContainer::AnimationConfig config{
+        .boundary =
+            views::SingleAnimatedImageContainer::AnimationBoundary{
+                .start_offset = 0.0f, .end_offset = 0.25f},
+        .tween = gfx::Tween::FAST_OUT_SLOW_IN_3,
+        .duration = base::Milliseconds(250)};
+
+    animated_image_container().PlayAnimation(
+        {IDR_APP_MENU_LOTTIE, GetForegroundColor(GetState()),
+         views::SingleAnimatedImageContainer::AnimationDirection::kForward,
+         views::SingleAnimatedImageContainer::AnimationEndBehavior::kPause},
+        config);
+  }
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
   ShowMenu(event.IsKeyEvent() ? (views::MenuRunner::SHOULD_SHOW_MNEMONICS |
                                  views::MenuRunner::INVOKED_FROM_KEYBOARD)
                               : views::MenuRunner::NO_FLAGS);
@@ -296,6 +305,11 @@ bool BrowserAppMenuButton::HandleAccessibleAction(
     return true;
   }
   return AppMenuButton::HandleAccessibleAction(action_data);
+}
+
+gfx::Size BrowserAppMenuButton::GetMinimumSize() const {
+  const int size = GetTargetSize().height();
+  return gfx::Size(size, size);
 }
 
 BEGIN_METADATA(BrowserAppMenuButton)

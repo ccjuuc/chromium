@@ -124,6 +124,8 @@
 }
 
 - (void)focusOmniboxAnimated:(BOOL)animated {
+  BOOL swapIcon = ![self isTriggerNTP];
+
   // Cleans up after the animation.
   void (^cleanup)() = ^{
     [self.locationBarAnimatee setEditViewHidden:NO];
@@ -139,18 +141,21 @@
     // Prepare for animation.
     BOOL shouldCrossfadeEditAndSteadyViews = ![self isTriggerUnpinnedFakebox];
     if (shouldCrossfadeEditAndSteadyViews) {
-      [self.locationBarAnimatee offsetTextFieldToMatchSteadyView];
+      //      [self.locationBarAnimatee offsetTextFieldToMatchSteadyView];
       [self.locationBarAnimatee setEditViewFaded:YES];
     }
 
-    // Hide badge and entrypoint views before the transform regardless of
-    // current displayed state to prevent them from being visible outside of the
-    // location bar as the steadView moves outside to the leading side of the
-    // location bar.
-    [self.locationBarAnimatee hideSteadyViewBadgeAndEntrypointViews];
+    if (swapIcon) {
+      // Hide badge and entrypoint views before the transform regardless of
+      // current displayed state to prevent them from being visible outside of
+      // the location bar as the steadView moves outside to the leading side of
+      // the location bar.
+      [self.locationBarAnimatee hideSteadyViewBadgeAndEntrypointViews];
+      [self.editViewAnimatee setLeadingIconScale:0];
+    }
     // Make edit view transparent, but not hidden.
     [self.locationBarAnimatee setEditViewHidden:NO];
-    [self.editViewAnimatee setLeadingIconScale:0];
+
     [self.editViewAnimatee setClearButtonFaded:YES];
 
     self.inProgressAnimationCount += 1;
@@ -197,7 +202,8 @@
                                   relativeDuration:0.75
                                         animations:^{
                                           [self.editViewAnimatee
-                                              setLeadingIconScale:1.3];
+                                              setLeadingIconScale:swapIcon ? 1.3
+                                                                           : 1];
                                         }];
           [UIView addKeyframeWithRelativeStartTime:0.75
                                   relativeDuration:0.25
@@ -223,6 +229,8 @@
 }
 
 - (void)defocusOmniboxAnimated:(BOOL)animated {
+  BOOL swapIcon = ![self isTriggerNTP];
+
   // Cleans up after the animation.
   void (^cleanup)() = ^{
     [self.locationBarAnimatee setEditViewHidden:YES];
@@ -263,7 +271,7 @@
     self.inProgressAnimationCount += 1;
     [UIView animateWithDuration:0.2 * duration
         animations:^{
-          [self.editViewAnimatee setLeadingIconScale:0];
+          [self.editViewAnimatee setLeadingIconScale:swapIcon ? 0 : 1];
           [self.editViewAnimatee setClearButtonFaded:YES];
         }
         completion:^(BOOL finished) {
@@ -309,14 +317,14 @@
     // Use UIView animateWithDuration instead of UIViewPropertyAnimator to
     // avoid UIKit bug. See https://crbug.com/856155.
     self.inProgressAnimationCount += 1;
-    if (ShouldEnlargeNTPFakeboxForMIA()) {
+    if (IsAimEnabledInNtp()) {
       // Set the location bar height to the default.
       [self.toolbarAnimatee setLocationBarHeightExpanded];
     }
     [self.toolbarAnimatee setToolbarFaded:NO];
     switch (_trigger) {
       case OmniboxFocusTrigger::kPinnedFakebox:
-        if (ShouldEnlargeNTPFakeboxForMIA()) {
+        if (IsAimEnabledInNtp()) {
           [self.toolbarAnimatee setLocationBarHeightToMatchFakeOmnibox];
         }
         break;
@@ -438,7 +446,7 @@
   } else if (_completion) {
     _completion();
     _completion = nil;
-    if (ShouldEnlargeNTPFakeboxForMIA()) {
+    if (IsAimEnabledInNtp()) {
       // Reset the location bar height back to the default.
       [self.toolbarAnimatee setLocationBarHeightExpanded];
     }
@@ -455,7 +463,7 @@
   [self.toolbarAnimatee showCancelButton];
   switch (_trigger) {
     case OmniboxFocusTrigger::kPinnedFakebox:
-      if (ShouldEnlargeNTPFakeboxForMIA()) {
+      if (IsAimEnabledInNtp()) {
         [self.toolbarAnimatee setLocationBarHeightExpanded];
       }
       break;
@@ -470,8 +478,7 @@
 // Visually contracts the location bar for defocus.
 - (void)contraction {
   [self.toolbarAnimatee contractLocationBar];
-  if (_trigger == OmniboxFocusTrigger::kPinnedFakebox &&
-      ShouldEnlargeNTPFakeboxForMIA()) {
+  if (_trigger == OmniboxFocusTrigger::kPinnedFakebox && IsAimEnabledInNtp()) {
     [self.toolbarAnimatee setLocationBarHeightToMatchFakeOmnibox];
   }
 }
@@ -487,4 +494,17 @@
 - (BOOL)isTriggerPinnedFakebox {
   return _trigger == OmniboxFocusTrigger::kPinnedFakebox;
 }
+
+// Returns YES if the focus event is triggered from an NTP.
+- (BOOL)isTriggerNTP {
+  switch (_trigger) {
+    case OmniboxFocusTrigger::kPinnedFakebox:
+    case OmniboxFocusTrigger::kUnpinnedFakebox:
+    case OmniboxFocusTrigger::kNTPOmnibox:
+      return YES;
+    case OmniboxFocusTrigger::kOther:
+      return NO;
+  }
+}
+
 @end

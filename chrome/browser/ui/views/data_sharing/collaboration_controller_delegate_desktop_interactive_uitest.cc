@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/signin/promos/signin_promo_tab_helper.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/data_sharing/collaboration_controller_delegate_desktop.h"
 #include "chrome/browser/ui/views/data_sharing/data_sharing_bubble_controller.h"
 #include "chrome/browser/ui/views/data_sharing/data_sharing_utils.h"
@@ -25,14 +24,8 @@
 #include "components/collaboration/public/service_status.h"
 #include "components/data_sharing/public/features.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/prefs/pref_service.h"
-#include "components/saved_tab_groups/public/collaboration_finder.h"
-#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "components/signin/public/base/signin_pref_names.h"
-#include "components/signin/public/base/signin_switches.h"
-#include "components/signin/public/identity_manager/accounts_mutator.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/collaboration_id.h"
@@ -46,7 +39,6 @@
 #include "third_party/abseil-cpp/absl/status/status.h"
 #include "ui/base/interaction/interactive_test.h"
 #include "ui/gfx/image/image_unittest_util.h"
-#include "ui/views/interaction/interactive_views_test.h"
 #include "ui/views/test/dialog_test.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_client_view.h"
@@ -349,7 +341,7 @@ IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
 
 IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
                        OnBrowserClose) {
-  Browser* browser2 = CreateBrowser(browser()->profile());
+  Browser* browser2 = CreateBrowser(browser()->GetProfile());
   TestCollaborationControllerDelegateDesktop delegate(browser2);
   base::MockCallback<base::OnceCallback<void()>> exit_callback;
   base::MockCallback<
@@ -361,12 +353,12 @@ IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
 
   // Make sure closing a browser will invoke the exit callback.
   EXPECT_CALL(exit_callback, Run).Times(1);
-  browser2->window()->Close();
+  browser2->GetWindow()->Close();
 }
 
 IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
                        OnBrowserCloseWithOpenDialog) {
-  Browser* browser2 = CreateBrowser(browser()->profile());
+  Browser* browser2 = CreateBrowser(browser()->GetProfile());
 
   // Show a prompt dialog.
   collaboration::ServiceStatus status;
@@ -385,7 +377,7 @@ IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
 
   // Closing the browser should not crash and should invoke the exit callback.
   EXPECT_CALL(exit_callback, Run).Times(1);
-  browser2->window()->Close();
+  browser2->GetWindow()->Close();
 }
 
 IN_PROC_BROWSER_TEST_F(CollaborationControllerDelegateDesktopInteractiveUITest,
@@ -628,7 +620,9 @@ IN_PROC_BROWSER_TEST_F(
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Offered",
       signin_metrics::AccessPoint::kCollaborationJoinTabGroup, 1);
-  histogram_tester.ExpectTotalCount("Signin.SignIn.Started", 0);
+  histogram_tester.ExpectBucketCount(
+      "Signin.SignIn.Started",
+      signin_metrics::AccessPoint::kCollaborationJoinTabGroup, 1);
   histogram_tester.ExpectBucketCount(
       "Signin.SignIn.Completed",
       signin_metrics::AccessPoint::kCollaborationJoinTabGroup, 1);

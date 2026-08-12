@@ -22,15 +22,16 @@
 static std::string JNI_DictPrefBackupSerializer_GetSerializedDict(
     JNIEnv* env,
     PrefService* pref_service,
-    std::string& pref_name) {
+    const std::string& pref_name) {
   return dict_pref_backup_serializer::GetSerializedDict(pref_service,
                                                         pref_name);
 }
 
-static void JNI_DictPrefBackupSerializer_SetDict(JNIEnv* env,
-                                                 PrefService* pref_service,
-                                                 std::string& pref_name,
-                                                 std::string& serialized_dict) {
+static void JNI_DictPrefBackupSerializer_SetDict(
+    JNIEnv* env,
+    PrefService* pref_service,
+    const std::string& pref_name,
+    const std::string& serialized_dict) {
   dict_pref_backup_serializer::SetDict(pref_service, pref_name,
                                        serialized_dict);
 }
@@ -48,7 +49,7 @@ std::string GetSerializedDict(PrefService* pref_service,
 void SetDict(PrefService* pref_service,
              const std::string& pref_name,
              const std::string& serialized_dict) {
-  std::optional<base::Value::Dict> dict = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> dict = base::JSONReader::ReadDict(
       serialized_dict, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!dict) {
     // This should only happen if there was a bug when backing up the data, or

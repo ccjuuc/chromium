@@ -190,7 +190,8 @@ void Animation::RemoveFromTicking() {
   animation_host()->RemoveFromTicking(this);
 }
 
-void Animation::DispatchAndDelegateAnimationEvent(const AnimationEvent& event) {
+void Animation::DispatchAndDelegateAnimationEvent(
+    const AnimationPlaybackEvent& event) {
   if (event.ShouldDispatchToKeyframeEffectAndModel()) {
     if (!keyframe_effect() ||
         !keyframe_effect()->DispatchAnimationEventToKeyframeModel(event)) {
@@ -204,25 +205,25 @@ void Animation::DispatchAndDelegateAnimationEvent(const AnimationEvent& event) {
   DelegateAnimationEvent(event);
 }
 
-void Animation::DelegateAnimationEvent(const AnimationEvent& event) {
+void Animation::DelegateAnimationEvent(const AnimationPlaybackEvent& event) {
   if (animation_delegate_) {
     switch (event.type) {
-      case AnimationEvent::Type::kStarted:
+      case AnimationPlaybackEvent::Type::kStarted:
         animation_delegate_->NotifyAnimationStarted(
             event.monotonic_time, event.target_property, event.group_id);
         break;
 
-      case AnimationEvent::Type::kFinished:
+      case AnimationPlaybackEvent::Type::kFinished:
         animation_delegate_->NotifyAnimationFinished(
             event.monotonic_time, event.target_property, event.group_id);
         break;
 
-      case AnimationEvent::Type::kAborted:
+      case AnimationPlaybackEvent::Type::kAborted:
         animation_delegate_->NotifyAnimationAborted(
             event.monotonic_time, event.target_property, event.group_id);
         break;
 
-      case AnimationEvent::Type::kTakeOver:
+      case AnimationPlaybackEvent::Type::kTakeOver:
         // TODO(crbug.com/40655283): Routing TAKEOVER events is broken.
         DCHECK(!event.is_impl_only);
         DCHECK(event.target_property == TargetProperty::SCROLL_OFFSET);
@@ -232,7 +233,7 @@ void Animation::DelegateAnimationEvent(const AnimationEvent& event) {
             event.animation_start_time, event.curve->Clone());
         break;
 
-      case AnimationEvent::Type::kTimeUpdated:
+      case AnimationPlaybackEvent::Type::kTimeUpdated:
         DCHECK(!event.is_impl_only);
         animation_delegate_->NotifyLocalTimeUpdated(event.local_time);
         break;
@@ -271,6 +272,124 @@ std::optional<base::TimeTicks> Animation::GetStartTime() const {
   return km.start_time();
 }
 
+void Animation::SetStartTime(base::TimeTicks start_time) {
+  for (auto& km : keyframe_effect()->keyframe_models()) {
+    km->set_start_time(start_time);
+    KeyframeModel::ToCcKeyframeModel(km.get())
+        ->set_needs_synchronized_start_time(false);
+  }
+}
+
+void Animation::SetHoldTime(std::optional<base::TimeDelta> hold_time) {
+  for (auto& km : keyframe_effect()->keyframe_models()) {
+    km->set_hold_time(hold_time);
+  }
+}
+
+double Animation::GetPlaybackRate() const {
+  const gfx::KeyframeModel* km =
+      keyframe_effect()->keyframe_models().front().get();
+  return km->playback_rate();
+}
+
+void Animation::SetPlaybackRate(double playback_rate) {
+  for (auto& km : keyframe_effect()->keyframe_models()) {
+    km->set_playback_rate(playback_rate);
+  }
+}
+
+base::TimeDelta Animation::CalculateCurrentTime(
+    base::TimeTicks monotonic_time) const {
+  const gfx::KeyframeModel* km =
+      keyframe_effect()->keyframe_models().front().get();
+  return km->CalculateCurrentTime(monotonic_time, km->playback_rate());
+}
+
+gfx::KeyframeModel::RunState Animation::GetRunState() const {
+  return keyframe_effect()->keyframe_models().front()->run_state();
+}
+
+void Animation::SetRunState(KeyframeModel::RunState run_state) {
+  for (auto& km : keyframe_effect()->keyframe_models()) {
+    km->SetRunState(run_state);
+  }
+}
+
+bool Animation::IsPaused() const {
+  const gfx::KeyframeModel& km = *keyframe_effect()->keyframe_models().front();
+  return km.IsPaused(km.run_state());
+}
+
+bool Animation::IsFinished() const {
+  const gfx::KeyframeModel& km = *keyframe_effect()->keyframe_models().front();
+  return keyframe_effect()->last_tick_time().has_value() &&
+         (km.is_finished() ||
+          km.IsFinishedAtMonotonicTime(*keyframe_effect()->last_tick_time()));
+}
+
+void Animation::Play(base::TimeTicks monotonic_time,
+                     Animation::AutoRewind auto_rewind) {
+  PlayInternal(monotonic_time, auto_rewind, GetPlaybackRate());
+}
+
+void Animation::Reverse(base::TimeTicks monotonic_time,
+                        AutoRewind auto_rewind) {
+  PlayInternal(monotonic_time, auto_rewind, -GetPlaybackRate());
+}
+
+void Animation::PlayInternal(base::TimeTicks monotonic_time,
+                             AutoRewind auto_rewind,
+                             double new_playback_rate) {
+  // If not rewinding, we want to continue playing from whatever our current
+  // time was.
+  base::TimeDelta old_current_time = CalculateCurrentTime(monotonic_time);
+  double old_playback_rate = GetPlaybackRate();
+
+  SetPlaybackRate(new_playback_rate);
+
+  bool is_running = (GetRunState() == KeyframeModel::RunState::RUNNING ||
+                     GetRunState() == KeyframeModel::RunState::STARTING);
+
+  KeyframeModel* first_km = KeyframeModel::ToCcKeyframeModel(
+      keyframe_effect()->keyframe_models().front().get());
+
+  // When in AutoRewind::kEnabled mode, we only rewind if finished in the *new*
+  // playback rate direction.
+  bool is_finished = new_playback_rate < 0
+                         ? old_current_time <= base::TimeDelta()
+                         : old_current_time >= first_km->CalculateEndTime();
+
+  bool should_rewind = (auto_rewind == AutoRewind::kForced ||
+                        (auto_rewind == AutoRewind::kEnabled && is_finished));
+
+  // If we are not rewinding, are already running or finished and are not
+  // changing playback rate, then we are maintaining the current time in the
+  // current direction. Thus, the start time isn't changing and we should exit
+  // early.
+  if (!should_rewind &&
+      ((is_running || is_finished) && old_playback_rate == new_playback_rate)) {
+    return;
+  }
+
+  base::TimeDelta new_current_time =
+      should_rewind ? first_km->CalculateInitialHoldTime(new_playback_rate)
+                    : old_current_time;
+
+  base::TimeTicks start_time =
+      monotonic_time - new_current_time / new_playback_rate;
+
+  for (auto& km : keyframe_effect()->keyframe_models()) {
+    KeyframeModel* cc_km = KeyframeModel::ToCcKeyframeModel(km.get());
+    km->SetRunState(KeyframeModel::RunState::RUNNING);
+    // TODO(crbug.com/451238244): For scroll-driven animations, we will likely
+    // want to compute the start time from the animation's scroll timeline's
+    // start offset.
+    cc_km->set_start_time(start_time);
+    cc_km->set_hold_time(std::nullopt);
+    cc_km->set_needs_synchronized_start_time(false);
+  }
+}
+
 void Animation::SetNeedsPushProperties() {
   if (!animation_timeline())
     return;
@@ -304,9 +423,14 @@ void Animation::AddKeyframeModel(
   keyframe_effect()->AddKeyframeModel(std::move(keyframe_model));
 }
 
-void Animation::PauseKeyframeModel(int keyframe_model_id,
-                                   base::TimeDelta time_offset) {
-  keyframe_effect()->PauseKeyframeModel(keyframe_model_id, time_offset);
+void Animation::PauseKeyframeModelForTesting(int keyframe_model_id,
+                                             base::TimeDelta hold_time) {
+  keyframe_effect()->PauseKeyframeModelForTesting(keyframe_model_id, hold_time);
+}
+
+void Animation::Pause(base::TimeDelta hold_time,
+                      KeyframeModel::RunState run_state) {
+  keyframe_effect()->Pause(hold_time, run_state);
 }
 
 void Animation::RemoveKeyframeModel(int keyframe_model_id) {
@@ -329,9 +453,9 @@ void Animation::NotifyKeyframeModelFinishedForTesting(
     int keyframe_model_id,
     TargetProperty::Type target_property,
     int group_id) {
-  AnimationEvent event(AnimationEvent::Type::kFinished,
-                       {timeline_id, id(), keyframe_model_id}, group_id,
-                       target_property, base::TimeTicks());
+  AnimationPlaybackEvent event(AnimationPlaybackEvent::Type::kFinished,
+                               {timeline_id, id(), keyframe_model_id}, group_id,
+                               target_property, base::TimeTicks());
   DispatchAndDelegateAnimationEvent(event);
 }
 

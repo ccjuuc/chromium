@@ -9,14 +9,13 @@ import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dial
 import {PromiseResolver} from 'chrome://resources/ash/common/promise_resolver.js';
 import {strictQuery} from 'chrome://resources/ash/common/typescript_utils/strict_query.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {IronIconElement} from 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
 import {CLICK_EXIT_BUTTON, TRANSITION_STATE} from 'chrome://shimless-rma/events.js';
 import {FakeShimlessRmaService} from 'chrome://shimless-rma/fake_shimless_rma_service.js';
 import {setShimlessRmaServiceForTesting} from 'chrome://shimless-rma/mojo_interface_provider.js';
 import {OnboardingLandingPage} from 'chrome://shimless-rma/onboarding_landing_page.js';
 import type {StateResult} from 'chrome://shimless-rma/shimless_rma.mojom-webui.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chromeos/chai_assert.js';
+import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
 import {eventToPromise, isVisible} from 'chrome://webui-test/test_util.js';
 
@@ -75,7 +74,7 @@ suite('onboardingLandingPageTest', function() {
       await component.onNextButtonClick();
     } catch (error: unknown) {
       assertTrue(error instanceof Error);
-      savedError = error as Error;
+      savedError = error;
     }
 
     const expectedCallCount = 0;
@@ -128,10 +127,6 @@ suite('onboardingLandingPageTest', function() {
   // warning icon shows.
   test('ValidationSkippedWarningShows', async () => {
     await initializeLandingPage();
-
-    loadTimeData.overrideValues({
-      hardwareValidationSkipEnabled: true,
-    });
 
     assert(component);
     const busyIcon =

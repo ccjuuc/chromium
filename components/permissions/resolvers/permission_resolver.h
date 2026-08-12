@@ -11,11 +11,16 @@
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_decision.h"
+#include "components/permissions/permission_prompt_decision.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-forward.h"
 
 namespace permissions {
+
+struct PermissionPromptDecision;
+
+enum class GeolocationPromptType;
 
 // Interface that allows implementing a permission resolver. Subclasses should
 // implement logic for one or more permission types. Each object of subclasses
@@ -44,10 +49,15 @@ class PermissionResolver {
 
   // Determines the user's new permission state given a user decision for the
   // request.
-  virtual PermissionSetting ComputePermissionDecisionResult(
+  PermissionSetting ComputePermissionDecisionResult(
       const PermissionSetting& previous_setting,
-      PermissionDecision decision,
-      PromptOptions prompt_options) const = 0;
+      const PermissionPromptDecision& decision,
+      std::optional<GeolocationPromptType> prompt_type = std::nullopt) const {
+    return decision.overall_decision == PermissionDecision::kNone
+               ? previous_setting
+               : ComputePermissionDecisionResultInternal(previous_setting,
+                                                         decision, prompt_type);
+  }
 
   // Determines the `PromptParameters` for the current request given the
   // `current_setting_state` which is the fully coalesced current settings
@@ -71,6 +81,11 @@ class PermissionResolver {
  protected:
   explicit PermissionResolver(ContentSettingsType content_settings_type);
   explicit PermissionResolver(RequestType request_type);
+
+  virtual PermissionSetting ComputePermissionDecisionResultInternal(
+      const PermissionSetting& previous_setting,
+      const PermissionPromptDecision& decision,
+      std::optional<GeolocationPromptType> prompt_type) const = 0;
 
  private:
   std::optional<ContentSettingsType> content_settings_type_;

@@ -16,6 +16,7 @@ import android.os.Message;
 import android.os.Parcel;
 import android.os.ParcelUuid;
 import android.os.Parcelable;
+import android.util.LongSparseArray;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.ViewStructure;
@@ -24,6 +25,7 @@ import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
@@ -94,6 +96,11 @@ public class WebContentsImpl
                 RenderFrameHostDelegate,
                 WindowEventObserver {
     private static final String TAG = "WebContentsImpl";
+
+    // Map from native web contents pointer to WebContentsImpl to allow scaling of unlimited web
+    // contents objects.
+    // ScopedGlobalRef tables are finite.
+    private static final LongSparseArray<WebContentsImpl> sWebContentsMap = new LongSparseArray<>();
 
     private static final String PARCEL_VERSION_KEY = "version";
     private static final String PARCEL_WEBCONTENTS_KEY = "webcontents";
@@ -210,6 +217,8 @@ public class WebContentsImpl
         assert nativeWebContentsAndroid != 0;
         mNativeWebContentsAndroid = nativeWebContentsAndroid;
         mNavigationController = navigationController;
+        assert sWebContentsMap.get(mNativeWebContentsAndroid) == null;
+        sWebContentsMap.put(mNativeWebContentsAndroid, this);
     }
 
     @CalledByNative
@@ -217,6 +226,11 @@ public class WebContentsImpl
     public static WebContentsImpl create(
             long nativeWebContentsAndroid, NavigationController navigationController) {
         return new WebContentsImpl(nativeWebContentsAndroid, navigationController);
+    }
+
+    @CalledByNative
+    public static @Nullable WebContentsImpl getJavaObject(long nativeWebContents) {
+        return sWebContentsMap.get(nativeWebContents);
     }
 
     @Override
@@ -287,11 +301,18 @@ public class WebContentsImpl
     @VisibleForTesting
     void clearNativePtr() {
         mNativeDestroyThrowable = new RuntimeException("clearNativePtr");
+        long nativeWebContentsAndroid = mNativeWebContentsAndroid;
+        assert nativeWebContentsAndroid != 0;
         mNativeWebContentsAndroid = 0;
-        if (mObserverProxy != null) {
-            mObserverProxy.webContentsDestroyed();
-            mObserverProxy = null;
+        clearJavaWebContentsObservers();
+        UserDataHost userDataHost = getUserDataHost();
+        if (userDataHost != null) {
+            userDataHost.destroy();
+            mInternalsHolder.set(null);
         }
+        var removedValue = sWebContentsMap.get(nativeWebContentsAndroid);
+        sWebContentsMap.remove(nativeWebContentsAndroid);
+        assert removedValue != null;
     }
 
     // =================== RenderFrameHostDelegate overrides ===================
@@ -379,7 +400,20 @@ public class WebContentsImpl
 
         if (mNativeWebContentsAndroid != 0) {
             WebContentsImplJni.get().destroyWebContents(mNativeWebContentsAndroid);
+
+            if (mNativeWebContentsAndroid != 0) {
+                // Normally the native object would have been destroyed by clearNativePtr() being
+                // called from destroyWebContents(). However, if JNI is mocked it will not have been
+                // invoked so invoke it explicitly here.
+                clearNativePtr();
+            }
         }
+    }
+
+    @Override
+    public boolean isBeingCaptured() {
+        return mNativeWebContentsAndroid != 0
+                && WebContentsImplJni.get().isBeingCaptured(mNativeWebContentsAndroid);
     }
 
     @Override
@@ -920,7 +954,7 @@ public class WebContentsImpl
     }
 
     @Override
-    public void setOverscrollRefreshHandler(OverscrollRefreshHandler handler) {
+    public void setOverscrollRefreshHandler(@Nullable OverscrollRefreshHandler handler) {
         checkNotDestroyed();
         WebContentsImplJni.get().setOverscrollRefreshHandler(mNativeWebContentsAndroid, handler);
     }
@@ -1294,6 +1328,10 @@ public class WebContentsImpl
                 .getDocumentPictureInPictureOpener(mNativeWebContentsAndroid);
     }
 
+    /*package*/ @Nullable WebContentsObserverProxy getWebContentsObserverProxy() {
+        return mObserverProxy;
+    }
+
     @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     @NativeMethods
     public interface Natives {
@@ -1338,7 +1376,8 @@ public class WebContentsImpl
 
         String getEncoding(long nativeWebContentsAndroid);
 
-        void discard(long nativeWebContentsAndroid, Runnable onDiscarded);
+        void discard(
+                long nativeWebContentsAndroid, @JniType("base::OnceClosure") Runnable onDiscarded);
 
         boolean isLoading(long nativeWebContentsAndroid);
 
@@ -1443,11 +1482,11 @@ public class WebContentsImpl
                 long nativeWebContentsAndroid,
                 ViewStructure viewStructureRoot,
                 ViewStructureBuilder viewStructureBuilder,
-                Runnable doneCallback);
+                @JniType("base::OnceClosure") Runnable doneCallback);
 
         void setOverscrollRefreshHandler(
                 long nativeWebContentsAndroid,
-                OverscrollRefreshHandler nativeOverscrollRefreshHandler);
+                @Nullable OverscrollRefreshHandler nativeOverscrollRefreshHandler);
 
         void setSpatialNavigationDisabled(long nativeWebContentsAndroid, boolean disabled);
 
@@ -1474,6 +1513,8 @@ public class WebContentsImpl
         int getWidth(long nativeWebContentsAndroid);
 
         int getHeight(long nativeWebContentsAndroid);
+
+        boolean isBeingCaptured(long nativeWebContentsAndroid);
 
         EventForwarder getOrCreateEventForwarder(long nativeWebContentsAndroid);
 

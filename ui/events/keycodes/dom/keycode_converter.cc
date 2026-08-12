@@ -4,6 +4,7 @@
 
 #include "ui/events/keycodes/dom/keycode_converter.h"
 
+#include <array>
 #include <string_view>
 
 #include "base/compiler_specific.h"
@@ -54,11 +55,11 @@ struct DomKeyMapEntry {
 };
 
 #define DOM_KEY_MAP_DECLARATION_START \
-  constexpr DomKeyMapEntry kDomKeyMappings[] = {
+  constexpr auto kDomKeyMappings = std::to_array<DomKeyMapEntry>({
 #define DOM_KEY_UNI(key, id, value) {DomKey::id, key},
 #define DOM_KEY_MAP(key, id, value) {DomKey::id, key},
 #define DOM_KEY_MAP_DECLARATION_END \
-  }                                 \
+  })                                 \
   ;
 #include "ui/events/keycodes/dom/dom_key_data.inc"
 #undef DOM_KEY_MAP_DECLARATION_START
@@ -162,7 +163,7 @@ const KeycodeMapEntry* KeycodeConverter::GetKeycodeMapForTest() {
 const char* KeycodeConverter::DomKeyStringForTest(size_t index) {
   if (index >= std::size(kDomKeyMappings))
     return nullptr;
-  return UNSAFE_TODO(kDomKeyMappings[index]).string;
+  return kDomKeyMappings[index].string;
 }
 
 // static
@@ -417,8 +418,7 @@ DomKey KeycodeConverter::KeyStringToDomKey(std::string_view key) {
   const size_t key_length = key.length();
   size_t char_index = 0;
   base_icu::UChar32 character;
-  if (base::ReadUnicodeCharacter(key.data(), key_length, &char_index,
-                                 &character) &&
+  if (base::ReadUnicodeCharacter(key, &char_index, &character) &&
       ++char_index == key_length) {
     return DomKey::FromCharacter(character);
   }
@@ -536,6 +536,10 @@ uint32_t KeycodeConverter::DomCodeToUsbKeycode(DomCode dom_code) {
       return mapping.usb_keycode;
   }
   return InvalidUsbKeycode();
+}
+
+std::ostream& operator<<(std::ostream& os, const DomKey& dom_key) {
+  return os << KeycodeConverter::DomKeyToKeyString(dom_key);
 }
 
 }  // namespace ui

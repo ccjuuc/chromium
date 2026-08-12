@@ -16,5 +16,10 @@ include_rules = [
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
   "+chrome/browser/ash/policy/core",
   "+chrome/browser/net",
-  "+chrome/common/pref_names.h",
 ]
+
+specific_include_rules = {
+  "templates_uri_resolver_impl_unittest\\.cc": [
+    "+chrome/test/base/testing_browser_process.h",
+  ],
+}

@@ -4,23 +4,21 @@
 
 #include "chrome/browser/ui/views/file_system_access/file_system_access_page_action_controller.h"
 
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/views/file_system_access/file_system_access_usage_bubble_view.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 
 FileSystemAccessPageActionController::FileSystemAccessPageActionController(
     tabs::TabInterface& tab_interface)
-    : tab_interface_(tab_interface) {
-  CHECK(IsPageActionMigrated(PageActionIconType::kFileSystemAccess));
-}
+    : tab_interface_(tab_interface) {}
 
 void FileSystemAccessPageActionController::UpdateVisibility() {
   bool has_write_access = false;
@@ -45,7 +43,9 @@ void FileSystemAccessPageActionController::UpdateVisibility() {
       page_action_controller->OverrideImage(
           kActionShowFileSystemAccess,
           ui::ImageModel::FromVectorIcon(
-              vector_icons::kInsertDriveFileOutlineIcon));
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kDraftIcon
+                  : vector_icons::kInsertDriveFileOutlineOldIcon));
       page_action_controller->OverrideText(
           kActionShowFileSystemAccess,
           l10n_util::GetStringUTF16(

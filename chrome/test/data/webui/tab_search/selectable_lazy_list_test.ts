@@ -3,38 +3,34 @@
 // found in the LICENSE file.
 
 import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
-import {SelectableLazyListElement, TabData, TabItemType, TabSearchItemElement, TitleItem} from 'chrome://tab-search.top-chrome/tab_search.js';
+import {TabData, TabItemType, TitleItem} from 'chrome://tab-search.top-chrome/tab_search.js';
+import type {SelectableLazyListElement, TabSearchItemElement} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {assertEquals, assertFalse, assertGT, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {eventToPromise, isVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {generateSampleTabsFromSiteNames, sampleSiteNames} from './tab_search_test_data.js';
-import {assertTabItemAndNeighborsInViewBounds, disableAnimationBehavior} from './tab_search_test_helper.js';
+import {assertTabItemAndNeighborsInViewBounds} from './tab_search_test_helper.js';
 
 const SAMPLE_AVAIL_HEIGHT = 336;
 const SAMPLE_HEIGHT_VIEWPORT_ITEM_COUNT = 6;
 const SAMPLE_SECTION_CLASS = 'section-title';
 
-class TestApp extends CrLitElement {
+class TestAppElement extends CrLitElement {
   static get is() {
     return 'test-app';
   }
 
-  static override get properties() {
-    return {
-      maxHeight_: {type: Number},
-    };
-  }
-
   override render() {
+    // clang-format off
     return html`
     <selectable-lazy-list max-height="${this.maxHeight_}" item-size="48"
-        .isSelectable=${(item: any) => item.constructor.name === 'TabData'}
-        .template=${(item: any) => {
+        .isSelectable=${(item: TitleItem|TabData) => item.constructor.name === 'TabData'}
+        .template=${(item: TitleItem|TabData) => {
       switch (item.constructor.name) {
         case 'TitleItem':
-          return html`<div class="section-title">${item.title}</div>`;
+          return html`<div class="section-title">${(item as TitleItem).title}</div>`;
         case 'TabData':
-          return html`<tab-search-item id="${item.tab.tabId}"
+          return html`<tab-search-item id="${(item as TabData).tab.tabId}"
                 class="selectable"
                 style="display: flex;height: 48px" .data="${item}" tabindex="0"
                 role="option">
@@ -44,18 +40,22 @@ class TestApp extends CrLitElement {
       }
     }}
     </selectable-lazy-list>`;
+    // clang-format on
+  }
+
+  static override get properties() {
+    return {
+      maxHeight_: {type: Number},
+    };
   }
 
   private accessor maxHeight_: number = SAMPLE_AVAIL_HEIGHT;
 }
 
-customElements.define('test-app', TestApp);
+customElements.define(TestAppElement.is, TestAppElement);
 
 suite('SelectableLazyListTest', () => {
   let selectableList: SelectableLazyListElement;
-
-  disableAnimationBehavior(SelectableLazyListElement, 'scrollTo');
-  disableAnimationBehavior(TabSearchItemElement, 'scrollIntoView');
 
   async function setupTest(sampleData: Array<TabData|TitleItem>) {
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
@@ -64,6 +64,8 @@ suite('SelectableLazyListTest', () => {
 
     selectableList =
         testApp.shadowRoot!.querySelector('selectable-lazy-list')!;
+    // Avoid scroll animations that delay the scrollTop property updates.
+    selectableList.scrollBehavior = 'instant';
     selectableList.items = sampleData;
     await eventToPromise('viewport-filled', selectableList);
   }
@@ -78,8 +80,7 @@ suite('SelectableLazyListTest', () => {
 
   function sampleTabItems(siteNames: string[]): TabData[] {
     return generateSampleTabsFromSiteNames(siteNames).map(tab => {
-      return new TabData(
-          tab, TabItemType.OPEN_TAB, new URL(tab.url.url).hostname);
+      return new TabData(tab, TabItemType.OPEN_TAB, new URL(tab.url).hostname);
     });
   }
 

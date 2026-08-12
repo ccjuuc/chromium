@@ -45,7 +45,8 @@ enum class SignalName {
   kAgent,
   kOsSignals,
   kBrowserContextSignals,
-  kMaxValue = kBrowserContextSignals
+  kCertificates,
+  kMaxValue = kCertificates
 };
 
 // Superset of all signal collection errors that can occur, including top-level
@@ -239,6 +240,7 @@ struct OsSignalsResponse : BaseSignalResponse {
   // - Linux: utsname.release, e.g 6.12.35-1rodete1-amd64
   // - Mac: <major>.<minor>.<bugfix>, e.g 15.7.0
   // - Android: The major version number, e.g 13
+  // - iOS: <major>.<minor>[.<patch>], e.g 18.2.1
   std::string os_version{};
   device_signals::SettingValue screen_lock_secured =
       device_signals::SettingValue::UNKNOWN;
@@ -260,6 +262,9 @@ struct OsSignalsResponse : BaseSignalResponse {
   // The date when the device most recently applied a security patch, in ms
   // since epoch.
   std::optional<int64_t> security_patch_ms;
+
+  // iOS specific
+  std::optional<std::string> vendor_id = std::nullopt;
 };
 
 struct ProfileSignalsResponse : BaseSignalResponse {
@@ -317,6 +322,16 @@ struct AgentSignalsResponse : BaseSignalResponse {
   std::vector<Agents> detected_agents{};
 };
 
+struct CertificateSignalsResponse : BaseSignalResponse {
+  CertificateSignalsResponse();
+  CertificateSignalsResponse(const CertificateSignalsResponse&);
+  CertificateSignalsResponse& operator=(const CertificateSignalsResponse&);
+  bool operator==(const CertificateSignalsResponse&) const;
+  ~CertificateSignalsResponse() override;
+  std::vector<std::string> serialized_caa_responses;
+  bool truncated_certificates = false;
+};
+
 // Request struct containing properties that will be used by the
 // SignalAggregator to validate signals access permissions while delegating
 // the collection to the right Collectors. Signals that require parameters (e.g.
@@ -342,6 +357,9 @@ struct SignalsAggregationRequest {
 
   // Parameters required when requesting the collection of agent signals.
   std::unordered_set<AgentSignalCollectionType> agent_signal_parameters;
+
+  // Parameters required when requesting the collection of client certificates.
+  std::vector<GetCertificateOptions> certificate_signal_parameters;
 
   std::vector<GetSettingsOptions> settings_signal_parameters;
 
@@ -381,6 +399,8 @@ struct SignalsAggregationResponse {
       std::nullopt;
 
   std::optional<AgentSignalsResponse> agent_signals_response = std::nullopt;
+  std::optional<CertificateSignalsResponse> certificate_signals_response =
+      std::nullopt;
 };
 
 }  // namespace device_signals

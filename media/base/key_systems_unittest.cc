@@ -46,11 +46,11 @@ const char kRobustnessNotSupported[] = "not-supported";
 // long as they are not in conflict with the real ones (static_asserted below).
 // TODO(crbug.com/40521627): Remove container type (FOO) from codec enums.
 enum TestCodec : uint32_t {
-  TEST_CODEC_FOO_AUDIO = 1 << 25,
+  TEST_CODEC_FOO_AUDIO = 1 << 26,
   TEST_CODEC_FOO_AUDIO_ALL = TEST_CODEC_FOO_AUDIO,
-  TEST_CODEC_FOO_VIDEO = 1 << 26,
+  TEST_CODEC_FOO_VIDEO = 1 << 27,
   // Only supported by hardware secure codec in kExternal key system.
-  TEST_CODEC_FOO_SECURE_VIDEO = 1 << 27,
+  TEST_CODEC_FOO_SECURE_VIDEO = 1 << 28,
   TEST_CODEC_FOO_VIDEO_ALL = TEST_CODEC_FOO_VIDEO | TEST_CODEC_FOO_SECURE_VIDEO,
   TEST_CODEC_FOO_ALL = TEST_CODEC_FOO_AUDIO_ALL | TEST_CODEC_FOO_VIDEO_ALL
 };
@@ -833,6 +833,20 @@ TEST_F(KeySystemsTest, KeySystemNameForUMA) {
             GetKeySystemNameForUMA(kExternalClearKeyKeySystem, false));
   EXPECT_EQ("Unknown",
             GetKeySystemNameForUMA(kExternalClearKeyKeySystem, true));
+
+#if BUILDFLAG(IS_WIN)
+  EXPECT_EQ("PlayReady",
+            GetKeySystemNameForUMA("com.microsoft.playready.recommendation"));
+  EXPECT_EQ("PlayReady", GetKeySystemNameForUMA(
+                             "com.microsoft.playready.recommendation.3000"));
+  EXPECT_EQ("PlayReady.HardwareSecure",
+            GetKeySystemNameForUMA("com.microsoft.playready.recommendation",
+                                   /*use_hw_secure_codecs=*/true));
+  EXPECT_EQ(
+      "PlayReady.HardwareSecure",
+      GetKeySystemNameForUMA("com.microsoft.playready.recommendation.3000",
+                             /*use_hw_secure_codecs=*/true));
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 TEST_F(KeySystemsTest, KeySystemsUpdate) {

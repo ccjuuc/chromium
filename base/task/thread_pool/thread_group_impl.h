@@ -16,6 +16,7 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/task/thread_pool/task_source.h"
 #include "base/task/thread_pool/thread_group.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/task/thread_pool/tracked_ref.h"
 #include "base/task/thread_pool/worker_thread.h"
 #include "base/task/thread_pool/worker_thread_set.h"
@@ -47,13 +48,16 @@ class BASE_EXPORT ThreadGroupImpl : public ThreadGroup {
   // thread type; the actual thread type depends on shutdown state and platform
   // capabilities. |thread_group_type| is used for thread group profiler to tag
   // the profiles collected on this group. |task_tracker| keeps track of tasks.
-  ThreadGroupImpl(std::string_view histogram_label,
-                  std::string_view thread_group_label,
-                  ThreadType thread_type_hint,
-                  int64_t thread_group_type,
-                  TrackedRef<TaskTracker> task_tracker,
-                  TrackedRef<Delegate> delegate,
-                  bool monitor_worker_thread_priorities = false);
+  ThreadGroupImpl(
+      std::string_view histogram_label,
+      std::string_view thread_group_label,
+      ThreadType thread_type_hint,
+      int64_t thread_group_type,
+      TrackedRef<TaskTracker> task_tracker,
+      TrackedRef<Delegate> delegate,
+      bool monitor_worker_thread_priorities = false,
+      ThreadPoolInstance::RecordLockContention record_lock_contention =
+          ThreadPoolInstance::RecordLockContention::kDisabled);
 
   ThreadGroupImpl(const ThreadGroupImpl&) = delete;
   ThreadGroupImpl& operator=(const ThreadGroupImpl&) = delete;
@@ -70,7 +74,7 @@ class BASE_EXPORT ThreadGroupImpl : public ThreadGroup {
              WorkerThreadObserver* worker_thread_observer,
              WorkerEnvironment worker_environment,
              bool synchronous_thread_start_for_testing,
-             std::optional<TimeDelta> may_block_threshold) override;
+             std::optional<TimeDelta> may_block_threshold_for_testing) override;
   void Start(size_t max_tasks,
              size_t max_best_effort_tasks,
              TimeDelta suggested_reclaim_time,
@@ -85,6 +89,7 @@ class BASE_EXPORT ThreadGroupImpl : public ThreadGroup {
   void JoinForTesting() override;
   void DidUpdateCanRunPolicy() override;
   void OnShutdownStarted() override;
+  void CleanUpFailedWorker(const WorkerThread* worker) override;
   // Returns the number of workers that are idle (i.e. not running tasks).
   size_t NumberOfIdleWorkersLockRequiredForTesting() const
       EXCLUSIVE_LOCKS_REQUIRED(lock_) override;
@@ -160,6 +165,14 @@ class BASE_EXPORT ThreadGroupImpl : public ThreadGroup {
   // This is used by worker threads to decide if they should be reporting thread
   // priorities to UMA.
   const bool monitor_worker_thread_priorities_;
+
+  // This is used by worker threads to decide if they should be reporting lock
+  // contention metrics to UMA.
+  const ThreadPoolInstance::RecordLockContention record_lock_contention_;
+
+  // This is used to label the thread group's histograms with
+  // {ProcessName}.{ThreadGroup} for lock contention monitoring.
+  const std::string histogram_label_;
 };
 
 }  // namespace internal

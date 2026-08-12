@@ -4,6 +4,7 @@
 
 import("//build/config/features.gni")
 import("//build/config/ui.gni")
+import("//services/on_device_model/on_device_model.gni")
 import("//services/screen_ai/buildflags/features.gni")
 import("//testing/test.gni")
 
@@ -34,13 +35,51 @@ test("services_unittests") {
     "//services/network:tests",
     "//services/network/public/cpp:tests",
     "//services/test:run_all_unittests",
+    "//services/tracing:tests",
   ]
 
   fuzztests = [
-    "GetAttributionSupportHeader.IsSupportValid",
-    "SerializeAttributionReportingEligibleHeader.IsEligibleValid",
+    "UsbIdsTest.NameLookupsReturnValidStrings",
     "TrustTokenKeyCommitmentFuzzer.ParsesOneIssuerCorrectly",
     "TrustTokenKeyCommitmentFuzzer.ParsesMultipleIssuersCorrectly",
+    "HitTestStructTraitsFuzzTest.AggregatedHitTestRegionFuzz",
+    "HitTestStructTraitsFuzzTest.HitTestRegionListFuzz",
+    "RendererSettingsStructTraitsFuzzTest.DebugRendererSettingsFuzz",
+    "RendererSettingsStructTraitsFuzzTest.RendererSettingsFuzz",
+    "CompositingStructTraitsFuzzTest.BeginFrameArgsFuzz",
+    "CompositingStructTraitsFuzzTest.BeginFrameAckFuzz",
+    "CompositingStructTraitsFuzzTest.BeginFrameAckAsValueFuzz",
+    "CompositingStructTraitsFuzzTest.SurfaceIdFuzz",
+    "CompositingStructTraitsFuzzTest.FilterOperationFuzz",
+    "CompositingStructTraitsFuzzTest.FilterOperationsFuzz",
+    "CompositingStructTraitsFuzzTest.SharedQuadStateFuzz",
+    "CompositingStructTraitsFuzzTest.CompositorFrameTransitionDirectiveFuzz",
+    "CompositingStructTraitsFuzzTest.CompositorFrameFuzz",
+    "CompositingStructTraitsFuzzTest.FrameSinkIdFuzz",
+    "CompositingStructTraitsFuzzTest.LocalSurfaceIdFuzz",
+    "CompositingStructTraitsFuzzTest.SurfaceRangeFuzz",
+    "CompositingStructTraitsFuzzTest.SelectionFuzz",
+    "CompositingStructTraitsFuzzTest.ViewTransitionElementResourceIdFuzz",
+    "CompositingStructTraitsFuzzTest.SurfaceInfoFuzz",
+    "CompositingStructTraitsFuzzTest.ReturnedResourceFuzz",
+    "CompositingStructTraitsFuzzTest.CompositorFrameMetadataFuzz",
+    "CompositingStructTraitsFuzzTest.CompositorRenderPassFuzz",
+    "CompositingStructTraitsFuzzTest.OffsetTagFuzz",
+    "CompositingStructTraitsFuzzTest.OffsetTagValueFuzz",
+    "CompositingStructTraitsFuzzTest.OffsetTagDefinitionFuzz",
+    "CompositingStructTraitsFuzzTest.TransferableResourceFuzz",
+    "CompositingStructTraitsFuzzTest.SharedImageFormatFuzz",
+    "CompositingStructTraitsFuzzTest.CopyOutputResultFuzz",
+    "CompositingStructTraitsFuzzTest.TreesInVizTimingFuzz",
+    "CompositingStructTraitsFuzzTest.RegionCaptureBoundsFuzz",
+    "CompositingStructTraitsFuzzTest.VerticalScrollDirectionFuzz",
+    "CompositingStructTraitsFuzzTest.FrameTimingDetailsFuzz",
+    "CompositingStructTraitsFuzzTest.TrackedElementRectsFuzz",
+    "CompositingStructTraitsFuzzTest.BlitRequestFuzz",
+    "CompositingStructTraitsFuzzTest.FrameIntervalInputsFuzz",
+    "CompositingStructTraitsFuzzTest.ThreadFuzz",
+    "CompositingStructTraitsFuzzTest.FrameSinkBundleIdFuzz",
+    "ConnectionAllowlistFuzz.FuzzConnectionAllowlistParser",
   ]
 
   data_deps = [ "//testing/buildbot/filters:services_unittests_filters" ]
@@ -59,7 +98,6 @@ test("services_unittests") {
       "//services/proxy_resolver:tests",
       "//services/resource_coordinator:tests",
       "//services/shape_detection:tests",
-      "//services/tracing:tests",
       "//services/viz/privileged/mojom:unit_tests",
       "//services/viz/public/cpp/compositing:tests",
       "//services/viz/public/cpp/gpu:tests",
@@ -68,16 +106,13 @@ test("services_unittests") {
       "//services/webnn/public/cpp:tests",
       "//services/webnn/public/mojom:tests",
     ]
-    if (is_ios) {
-      bundle_deps =
-          [ "//services/tracing:services_tracing_perfetto_bundle_data" ]
-    }
     if (is_android) {
       deps += [
         # The java target is added explicitly because the unit tests below
         # require connection to the Java classes. Without a direct dependency,
         # the unit tests will encounter a ClassNotFoundException error at
         # runtime.
+        "//services/device/serial:native_unittests_java",
         "//services/on_device_model/android:java",
         "//services/on_device_model/android:native_java_unittests_java",
         "//services/on_device_model/android:unit_tests",
@@ -87,6 +122,10 @@ test("services_unittests") {
 
   if (is_android && (current_cpu == "arm" || current_cpu == "arm64")) {
     deps += [ "//base:base_profiler_test_support_library" ]
+  }
+
+  if (is_ios) {
+    bundle_deps = [ "//services/tracing:services_tracing_perfetto_bundle_data" ]
   }
 
   if (is_linux) {
@@ -155,11 +194,13 @@ if (!is_ios) {
 
 if (is_android) {
   robolectric_binary("services_junit_tests") {
+    enable_android_resources = false
     sources = [
       "device/generic_sensor/android/junit/src/org/chromium/device/sensors/PlatformSensorAndProviderTest.java",
       "device/geolocation/android/junit/src/org/chromium/device/geolocation/LocationProviderTest.java",
       "device/nfc/android/junit/src/org/chromium/device/nfc/NFCTest.java",
       "device/nfc/android/junit/src/org/chromium/device/nfc/NfcBlocklistTest.java",
+      "device/serial/android/javatests/src/org/chromium/device/serial/ChromeSerialManagerTest.java",
       "shape_detection/android/junit/src/org/chromium/shape_detection/BitmapUtilsTest.java",
     ]
     deps = [
@@ -172,6 +213,7 @@ if (is_android) {
       "//base:base_java",
       "//base:base_java_test_support",
       "//base:base_junit_test_support",
+      "//base:flagged_apis_java",
       "//mojo/public/java:base_java",
       "//mojo/public/java:bindings_java",
       "//mojo/public/java:system_java",
@@ -185,10 +227,17 @@ if (is_android) {
       "//services/device/public/java:nfc_java",
       "//services/device/public/mojom:generic_sensor_java",
       "//services/device/public/mojom:mojom_java",
+      "//services/device/serial:java",
       "//services/shape_detection:shape_detection_java",
       "//skia/public/mojom:mojom_java",
+      "//third_party/androidx:androidx_annotation_annotation_java",
       "//third_party/google-truth:google_truth_java",
     ]
+
+    # Enable tests for MLKit-based implementations for AICore.
+    if (use_mlkit_for_aicore) {
+      deps += [ "//services/on_device_model/android:junit" ]
+    }
   }
 
   android_library("services_javatests") {

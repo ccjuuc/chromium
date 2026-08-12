@@ -9,6 +9,7 @@
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_scroll_into_view_options.h"
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/layout/geometry/axis.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/scroll/scroll_alignment.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
@@ -25,6 +26,7 @@ class LayoutView;
 class LayoutBox;
 struct PhysicalRect;
 class ScrollableArea;
+class ScrollPromiseResolver;
 class ComputedStyle;
 class ScrollIntoViewOptions;
 
@@ -42,7 +44,8 @@ bool CORE_EXPORT ScrollRectToVisible(const LayoutObject& target,
                                      mojom::blink::ScrollIntoViewParamsPtr,
                                      const LayoutObject* container = nullptr,
                                      bool from_remote_frame = false,
-                                     bool include_self = true);
+                                     bool include_self = true,
+                                     ScrollPromiseResolver* = nullptr);
 
 // ScrollFocusedEditableIntoView uses the caret rect for ScrollIntoView but
 // stores enough information in `params` so that the editable element's bounds
@@ -77,7 +80,7 @@ ScrollableArea* GetScrollableAreaForLayoutBox(
 mojom::blink::ScrollAlignment ResolveToPhysicalAlignment(
     V8ScrollLogicalPosition::Enum inline_alignment,
     V8ScrollLogicalPosition::Enum block_alignment,
-    ScrollOrientation axis,
+    PhysicalAxis axis,
     const ComputedStyle& computed_style);
 
 V8ScrollLogicalPosition::Enum SnapAlignmentToV8ScrollLogicalPosition(
@@ -105,7 +108,7 @@ mojom::blink::ScrollIntoViewParamsPtr CreateScrollIntoViewParams(
 
 mojom::blink::ScrollAlignment PhysicalAlignmentFromSnapAlignStyle(
     const LayoutObject&,
-    ScrollOrientation axis);
+    PhysicalAxis axis);
 
 }  // namespace scroll_into_view_util
 

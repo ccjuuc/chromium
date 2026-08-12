@@ -14,8 +14,8 @@
 #include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/safe_ref.h"
 #include "base/supports_user_data.h"
+#include "base/unguessable_token.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/child_process_id.h"
 #include "content/public/browser/error_navigation_trigger.h"
 #include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/frame_type.h"
@@ -23,8 +23,10 @@
 #include "content/public/browser/navigation_handle_timing.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/preloading_trigger_type.h"
+#include "content/public/browser/prerender_host_id.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/restore_type.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/referrer.h"
 #include "net/base/auth.h"
 #include "net/base/ip_endpoint.h"
@@ -32,14 +34,13 @@
 #include "net/dns/public/resolve_error_info.h"
 #include "net/http/http_connection_info.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "services/network/public/mojom/declarative_performance_observer.mojom-forward.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-forward.h"
-#include "third_party/blink/public/common/navigation/impression.h"
 #include "third_party/blink/public/common/runtime_feature_state/runtime_feature_state_context.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/transferrable_url_loader.mojom-forward.h"
-#include "third_party/blink/public/mojom/navigation/navigation_initiator_activation_and_ad_status.mojom.h"
 #include "third_party/blink/public/mojom/navigation/renderer_content_settings.mojom-forward.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/base/page_transition_types.h"
@@ -67,6 +68,7 @@ struct GlobalRenderFrameHostId;
 struct GlobalRequestID;
 class NavigationEntry;
 class NavigationThrottle;
+class InitiatorNavigationState;
 class NavigationUIData;
 class ProcessSelectionUserData;
 class RenderFrameHost;
@@ -85,6 +87,56 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   ADVANCED_MEMORY_SAFETY_CHECKS();
 
  public:
+  // Execution mode for the beforeunload handling.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class BeforeUnloadExecutionMode {
+    // Navigation was not blocked by beforeunload handlers (e.g., no handlers
+    // registered, or navigation skipped running beforeunload handlers). Unlike
+    // `kForLegacy`, the navigation start time is NOT updated.
+    kNotBlocked = 0,
+    // Used for navigations when no beforeunload handlers are present. The
+    // primary difference from `kNotBlocked` is that the navigation start time
+    // is updated in this mode (see
+    // `NavigationRequest::UpdateNavigationStartTime()`).
+    //
+    // This mode was previously managed as a `for_legacy` boolean, which is
+    // still used in some parts of the codebase.
+    //
+    // Depending on the state, this mode can lead to either synchronous
+    // execution (proceeding immediately via `std::move(closure).Run()`) or
+    // asynchronous execution (using a `PostTask` to avoid re-entrancy issues).
+    // In particular, if the frame is eligible, it proceeds synchronously (fast
+    // path); otherwise, it falls back to the legacy `PostTask` behavior (which
+    // is always used for WebView).
+    //
+    // `PostTask()` is used because proceeding synchronously could lead to
+    // reentrancy problems. In particular, some tests and Android WebView assume
+    // they can synchronously navigate from `WillStartRequest()`. If
+    // `PostTask()` is not used for a frame that is not eligible,
+    // `NavigationController` would trigger a CHECK in
+    // `ScopedPendingEntryReentrancyGuard` to prevent unsafe re-entrant
+    // navigations (see
+    // `NavigationControllerImpl::in_navigate_to_pending_entry_`). See
+    // https://crbug.com/40353566 for more details.
+    kForLegacy = 1,
+    // Normal (synchronous) beforeunload execution mode. The browser process
+    // waits for the renderer's response before proceeding with the navigation.
+    // This mode is used when there are beforeunload handlers that have sticky
+    // user activation, potentially allowing them to show a confirmation dialog
+    // or cancel the navigation.
+    kSync = 2,
+    // Asynchronous beforeunload optimization (AsyncBeforeUnload). The browser
+    // process runs beforeunload handlers in the background without blocking the
+    // navigation. This is only used when no handlers in the affected subtree
+    // have sticky user activation, meaning they are guaranteed not to show a
+    // dialog or cancel the navigation. The navigation commit will still be
+    // deferred by AsyncBeforeUnloadCommitDeferringCondition until these
+    // handlers complete or timeout.
+    kAsync = 3,
+    kMaxValue = kAsync,
+  };
+
   ~NavigationHandle() override = default;
 
   // Parameters available at navigation start time -----------------------------
@@ -141,12 +193,21 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // See docs/frame_trees.md for more details.
   virtual bool IsInPrimaryMainFrame() const = 0;
 
+  // If the navigation was triggered by a script tool, this contains the
+  // ID of the tool invocation.
+  virtual const std::optional<base::UnguessableToken>&
+  GetScriptToolInvocationId() const = 0;
+
   // Whether the navigation is taking place in a main frame which does not have
   // an outer document. For example, this will return true for the primary main
   // frame and for a prerendered main frame, but false for a <fencedframe>. See
   // documentation for `RenderFrameHost::GetParentOrOuterDocument()` for more
   // details.
   virtual bool IsInOutermostMainFrame() const = 0;
+
+  // Returns the execution mode for the beforeunload handling of this
+  // navigation.
+  virtual BeforeUnloadExecutionMode GetBeforeUnloadExecutionMode() const = 0;
 
   // Prerender2:
   // Whether the navigation is taking place in the main frame of the
@@ -162,6 +223,12 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Returns true if this navigation will activate a prerendered page. It is
   // only meaningful to call this after BeginNavigation().
   virtual bool IsPrerenderedPageActivation() const = 0;
+
+  // Prerender2:
+  // Returns the PrerenderHostId driving the navigation. If the navigation
+  // is not derived from a prerendered page, the default-constructed null
+  // value will be returned.
+  virtual PrerenderHostId GetPrerenderHostId() const = 0;
 
   // FencedFrame:
   // Returns true if the navigation is taking place in a frame in a fenced frame
@@ -188,10 +255,6 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   //  * navigations via browser UI: Ctrl-R, refresh/forward/back/home buttons
   //  * any other "explicit" URL navigations, e.g. bookmarks
   virtual bool IsRendererInitiated() = 0;
-
-  // The navigation initiator's user activation and ad status.
-  virtual blink::mojom::NavigationInitiatorActivationAndAdStatus
-  GetNavigationInitiatorActivationAndAdStatus() = 0;
 
   // Whether the previous document in this frame was same-origin with the new
   // one created by this navigation.
@@ -280,10 +343,24 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // redirects, then this must be called during DidRedirectNavigation().
   virtual void SetReferrer(blink::mojom::ReferrerPtr referrer) = 0;
 
-  // Whether the navigation was initiated by a user gesture. Note that this
-  // will return false for browser-initiated navigations.
-  // TODO(clamy): This should return true for browser-initiated navigations.
+  // Whether the navigation was initiated by a user gesture.
+  //
+  // Differences from `StartedWithTransientActivation()`:
+  // 1. This returns `true` for browser-initiated navigations.
+  // 2. For renderer-initiated navigations, this is filtered out during proxy
+  //    navigations, to prevent it from being exposed to the committed document.
   virtual bool HasUserGesture() = 0;
+
+  // Whether the navigation started with a transient user activation.
+  //
+  // Differences from `HasUserGesture()`:
+  // 1. This returns `false` for browser-initiated navigations.
+  // 2. For renderer-initiated navigations, this provides the raw, unfiltered
+  //    initiator state.
+  virtual bool StartedWithTransientActivation() = 0;
+
+  // Whether the (renderer initiated) navigation was started by an ad.
+  virtual bool StartedByAd() = 0;
 
   // Returns the page transition type.
   virtual ui::PageTransition GetPageTransition() = 0;
@@ -301,6 +378,20 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Whether this navigation is activating an existing page (e.g. served from
   // the BackForwardCache or Prerender).
   virtual bool IsPageActivation() const = 0;
+
+  // Whether this navigation is originating from either the initial empty
+  // document, or a synchronously committed about:blank document at frame
+  // creation. See |is_on_initial_empty_document_| in FrameTreeNode for details.
+  virtual bool IsNavigatingFromInitialEmptyDocument() const = 0;
+
+  // Whether this navigation has been blocked because the initiator document's
+  // Connection-Allowlist policy disallows the destination URL. This is used to
+  // suppress speculative network activity (e.g. preconnect/preresolve/resource
+  // prewarming) for a navigation that is going to be blocked; such activity
+  // would otherwise leak the destination host (e.g. via its DNS resolution)
+  // even though the navigation itself never reaches the network.
+  // See https://github.com/WICG/connection-allowlists.
+  virtual bool IsBlockedByConnectionAllowlist() const = 0;
 
   // Navigation control flow --------------------------------------------------
 
@@ -419,6 +510,10 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // initiated redirect causes such replacement.
   virtual bool DidReplaceEntry() = 0;
 
+  // Returns the number of subsequent duplicate navigations that were ignored in
+  // favor of this navigation. This will be used for metrics.
+  virtual size_t GetIgnoredDuplicateNavigationCount() const = 0;
+
   // Returns true if the browser history should be updated. Otherwise only
   // the session history will be updated. E.g., on unreachable urls or other
   // navigations that the users may not think of as navigations (such as
@@ -457,7 +552,7 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Set LCP Critical Path Predictor hint data to be passed along to the
   // renderer process on the navigation commit.
   virtual void SetLCPPNavigationHint(
-      const blink::mojom::LCPCriticalPathPredictorNavigationTimeHint& hint) = 0;
+      blink::mojom::LCPCriticalPathPredictorNavigationTimeHintPtr hint) = 0;
 
   // Peek into LCP Critical Path Predictor hint data attached to the navigation.
   virtual const blink::mojom::LCPCriticalPathPredictorNavigationTimeHintPtr&
@@ -469,6 +564,11 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // redirect). The headers returned should not be modified, as modifications
   // will not be reflected in the network stack.
   virtual const net::HttpResponseHeaders* GetResponseHeaders() = 0;
+
+  // Returns the parsed Declarative Performance Observer policy for the request,
+  // or nullptr if it hasn't been received yet.
+  virtual const network::mojom::DeclarativePerformanceObserverPolicy*
+  GetDeclarativePerformanceObserverPolicy() = 0;
 
   // Returns the connection info for the request, the default value is
   // HttpConnectionInfo::kUNKNOWN if there hasn't been a response (or redirect)
@@ -532,11 +632,6 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // initiated from a link that had that attribute set.
   virtual const std::string& GetHrefTranslate() = 0;
 
-  // Returns, if available, the impression associated with the link clicked to
-  // initiate this navigation. The impression is available for the entire
-  // lifetime of the navigation.
-  virtual const std::optional<blink::Impression>& GetImpression() = 0;
-
   // Returns the frame token associated with the frame that initiated the
   // navigation. This can be nullptr if the navigation was not associated with a
   // frame, or may return a valid frame token to a frame that no longer exists
@@ -548,7 +643,7 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Return the ID of the renderer process of the frame host that initiated the
   // navigation. This is defined if and only if GetInitiatorFrameToken above is,
   // and it is only valid in conjunction with it.
-  virtual int GetInitiatorProcessId() = 0;
+  virtual ChildProcessId GetInitiatorProcessId() = 0;
 
   // Returns, if available, the origin of the document that has initiated the
   // navigation for this NavigationHandle.
@@ -564,6 +659,11 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // the base url of the document that has initiated the navigation for this
   // NavigationHandle. The same caveats apply here as for GetInitiatorOrigin().
   virtual const std::optional<GURL>& GetInitiatorBaseUrl() = 0;
+
+  // Returns, if available, a record of the state of the document that initiated
+  // the navigation for this NavigationHandle.
+  virtual scoped_refptr<InitiatorNavigationState>
+  GetInitiatorNavigationState() = 0;
 
   // Retrieves any DNS aliases for the requested URL. Includes all known
   // aliases, e.g. from A, AAAA, or HTTPS, not just from the address used for
@@ -713,7 +813,7 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Prerender2:
   // Used for metrics.
   virtual PreloadingTriggerType GetPrerenderTriggerType() = 0;
-  virtual std::string GetPrerenderEmbedderHistogramSuffix() = 0;
+  virtual std::string GetPrerenderHistogramSuffix() = 0;
   virtual bool IsPrerenderHostReused() = 0;
 
   // Returns a SafeRef to this handle.
@@ -793,9 +893,8 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
 
   // Allows the embedder to mark whether this navigation handle is being used
   // for advertising purposes. This is expected to be best-effort, and may be
-  // inaccurate. Notably, this defers from the status from
-  // `GetNavigationInitiatorActivationAndAdStatus()` as it can include other
-  // signals outside of the initiator.
+  // inaccurate. Notably, this defers from the status from `StartedByAd()` as it
+  // can include other signals outside of the initiator.
   virtual void SetIsAdTagged() = 0;
 
   // If the navigation is discarded without committing, returns the reason for
@@ -838,7 +937,7 @@ class CONTENT_EXPORT NavigationHandle : public base::SupportsUserData {
   // Note: This is exposed in NavigationHandle because it needs to be present on
   // both NavigationRequest and MockNavigationHandle. It's not actually needed
   // outside of //content.
-  virtual bool IsInitialWebUISyncNavigation() = 0;
+  virtual bool IsInitialWebUINavigation() = 0;
 };
 
 }  // namespace content

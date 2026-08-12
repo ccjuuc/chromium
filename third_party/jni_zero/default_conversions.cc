@@ -2,10 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#pragma allow_unsafe_buffers
-#endif
-
 #include "third_party/jni_zero/jni_zero.h"
 
 #ifdef JNI_ZERO_ENABLE_TYPE_CONVERSIONS
@@ -36,7 +32,7 @@ namespace jni_zero {
     CheckException(env);                                                  \
     env->Set##J##ArrayRegion(arr, 0, array_jsize,                         \
                              reinterpret_cast<const JTYPE*>(vec.data())); \
-    return ScopedJavaLocalRef<jarray>::Adopt(env, arr);                   \
+    return jni_zero::AdoptRef(env, arr);                                  \
   }
 
 PRIMITIVE_ARRAY_CONVERSIONS(int64_t, jlong, Long)
@@ -56,8 +52,8 @@ std::vector<bool> FromJniArray<std::vector<bool>>(
   jbooleanArray j_array = static_cast<jbooleanArray>(j_object.obj());
   jsize array_jsize = env->GetArrayLength(j_array);
   size_t array_size = static_cast<size_t>(array_jsize);
-  auto arr = std::make_unique<jboolean[]>(array_size);
-  env->GetBooleanArrayRegion(j_array, 0, array_jsize, arr.get());
+  std::vector<jboolean> arr(array_size);
+  env->GetBooleanArrayRegion(j_array, 0, array_jsize, arr.data());
 
   std::vector<bool> ret;
   ret.resize(array_size);
@@ -74,15 +70,15 @@ ScopedJavaLocalRef<jarray> ToJniArray<std::vector<bool>>(
   jsize array_jsize = static_cast<jsize>(vec.size());
   size_t array_size = static_cast<size_t>(array_jsize);
 
-  auto arr = std::make_unique<jboolean[]>(array_size);
+  std::vector<jboolean> arr(array_size);
   for (size_t i = 0; i < array_size; ++i) {
     arr[i] = vec[i];
   }
 
   jbooleanArray j_array = env->NewBooleanArray(array_jsize);
   CheckException(env);
-  env->SetBooleanArrayRegion(j_array, 0, array_jsize, arr.get());
-  return ScopedJavaLocalRef<jarray>::Adopt(env, j_array);
+  env->SetBooleanArrayRegion(j_array, 0, array_jsize, arr.data());
+  return jni_zero::AdoptRef(env, j_array);
 }
 }  // namespace jni_zero
 #endif  // JNI_ZERO_ENABLE_TYPE_CONVERSIONS

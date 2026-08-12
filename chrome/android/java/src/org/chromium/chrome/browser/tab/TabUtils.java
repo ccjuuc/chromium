@@ -21,6 +21,7 @@ import android.view.Display;
 import android.widget.ImageView;
 import android.widget.ImageView.ScaleType;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 
@@ -32,7 +33,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.media.MediaCaptureDevicesDispatcherAndroid;
-import org.chromium.chrome.browser.tab.Tab.MediaState;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiThemeProvider;
 import org.chromium.components.browser_ui.util.AutomotiveUtils;
 import org.chromium.components.browser_ui.util.DimensionCompat;
@@ -311,8 +311,28 @@ public class TabUtils {
             case MediaState.MUTED -> R.drawable.volume_off_24dp;
             case MediaState.RECORDING -> R.drawable.radio_button_checked_24dp;
             case MediaState.SHARING -> R.drawable.capture_24dp;
+            case MediaState.PICTURE_IN_PICTURE -> R.drawable.picture_in_picture_24px;
             default -> Resources.ID_NULL;
         };
+    }
+
+    /**
+     * Returns the tint color for a given media state.
+     *
+     * @param context The {@link Context} used to retrieve color.
+     * @param mediaState The {@link MediaState} for which to get the tint.
+     * @param defaultTint The default tint to use.
+     */
+    public static @ColorInt int getMediaIndicatorTintColor(
+            Context context, @MediaState int mediaState, @ColorInt int defaultTint) {
+        if (mediaState == MediaState.RECORDING) {
+            return context.getColor(R.color.tab_recording_media_color);
+        } else if (mediaState == MediaState.SHARING) {
+            return context.getColor(R.color.tab_sharing_media_color);
+        } else if (mediaState == MediaState.PICTURE_IN_PICTURE) {
+            return context.getColor(R.color.tab_pip_media_color);
+        }
+        return defaultTint;
     }
 
     private static int getThumbnailHeightDiff(Context context) {

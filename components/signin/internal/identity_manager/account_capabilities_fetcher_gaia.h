@@ -42,7 +42,10 @@ class AccountCapabilitiesFetcherGaia
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const CoreAccountInfo& account_info,
       AccountCapabilitiesFetcher::FetchPriority fetch_priority,
-      AccountCapabilitiesFetcher::OnCompleteCallback on_complete_callback);
+      AccountCapabilitiesFetcher::OnSomeCapabilitiesFetchedCallback
+          on_some_capabilities_fetched_callback,
+      AccountCapabilitiesFetcher::OnAllFetchesCompleteCallback
+          on_all_fetches_complete_callback);
   ~AccountCapabilitiesFetcherGaia() override;
 
   AccountCapabilitiesFetcherGaia(const AccountCapabilitiesFetcherGaia&) =
@@ -59,7 +62,7 @@ class AccountCapabilitiesFetcherGaia
 
   // gaia::GaiaOAuthClient::Delegate:
   void OnGetAccountCapabilitiesResponse(
-      const base::Value::Dict& account_capabilities) override;
+      const base::DictValue& account_capabilities) override;
   void OnOAuthError() override;
   void OnNetworkError(int response_code) override;
 

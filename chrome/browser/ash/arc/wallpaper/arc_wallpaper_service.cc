@@ -10,15 +10,18 @@
 #include <utility>
 
 #include "ash/public/cpp/wallpaper/wallpaper_controller.h"
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -55,11 +58,12 @@ class ArcWallpaperServiceFactory
   static constexpr const char* kName = "ArcWallpaperServiceFactory";
 
   static ArcWallpaperServiceFactory* GetInstance() {
-    return base::Singleton<ArcWallpaperServiceFactory>::get();
+    static base::NoDestructor<ArcWallpaperServiceFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcWallpaperServiceFactory>;
+  friend base::NoDestructor<ArcWallpaperServiceFactory>;
   ArcWallpaperServiceFactory() = default;
   ~ArcWallpaperServiceFactory() override = default;
 };
@@ -128,8 +132,12 @@ void ArcWallpaperService::SetDefaultWallpaper() {
   // Cancel pending decoding request if any.
   weak_ptr_factory_for_decode_.InvalidateWeakPtrs();
 
+  const auto* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
   const user_manager::User* const primary_user =
-      UserManager::Get()->GetPrimaryUser();
+      UserManager::Get()->FindUser(primary_session->account_id());
+  CHECK(primary_user);
   ash::WallpaperController::Get()->SetDefaultWallpaper(
       primary_user->GetAccountId(),
       primary_user->is_active() /*show_wallpaper=*/, base::DoNothing());
@@ -175,8 +183,10 @@ void ArcWallpaperService::OnImageDecoded(int wallpaper_id,
 
 void ArcWallpaperService::OnWallpaperDecoded(int32_t wallpaper_id,
                                              const gfx::ImageSkia& image) {
-  const AccountId account_id =
-      UserManager::Get()->GetPrimaryUser()->GetAccountId();
+  const auto* primary_session =
+      session_manager::SessionManager::Get()->GetPrimarySession();
+  CHECK(primary_session);
+  const AccountId account_id = primary_session->account_id();
 
   const bool result =
       WallpaperControllerClientImpl::Get()->SetThirdPartyWallpaper(

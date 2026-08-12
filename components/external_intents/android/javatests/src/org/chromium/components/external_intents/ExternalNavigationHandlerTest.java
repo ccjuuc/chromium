@@ -49,15 +49,16 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features;
 import org.chromium.base.test.util.MaxAndroidSdkLevel;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
-import org.chromium.components.external_intents.ExternalNavigationHandler.IncognitoDialogDelegate;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.external_intents.ExternalNavigationHandler.IncognitoDialogDelegateWithFallback;
 import org.chromium.components.external_intents.ExternalNavigationHandler.OverrideUrlLoadingResult;
 import org.chromium.components.external_intents.ExternalNavigationHandler.OverrideUrlLoadingResultType;
-import org.chromium.components.external_intents.ExternalNavigationHandler.QueryIntentActivitiesSupplier;
-import org.chromium.components.external_intents.ExternalNavigationHandler.ResolveActivitySupplier;
 import org.chromium.components.external_intents.ExternalNavigationParams.AsyncActionTakenParams;
 import org.chromium.components.external_intents.ExternalNavigationParams.AsyncActionTakenParams.AsyncActionTakenType;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
+import org.chromium.content_public.common.Referrer;
+import org.chromium.network.mojom.ReferrerPolicy;
 import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
@@ -66,6 +67,7 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -179,11 +181,15 @@ public class ExternalNavigationHandlerTest {
 
     private static final String SELF_SCHEME = "selfscheme";
     private static final String DIGITAL_CREDENTIALS_URL = "openid4vp-v1-unsigned://authorize";
+    private static final String HAIP_VP_URL = "haip-vp://authorize";
+    private static final String HAIP_VCI_URL = "haip-vci://authorize";
+    private static final String MDOC_URL = "mdoc://authorize";
+    private static final String OPENID4VCI_URL = "openid-credential-offer://authorize";
     private static final String DIGITAL_CREDENTIALS_PACKAGE_NAME = "pkg.dcc";
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    @Mock private IncognitoDialogDelegate mIncognitoDialogDelegateMock;
+    @Mock private IncognitoDialogDelegateWithFallback mIncognitoDialogDelegateMock;
     @Mock private WindowAndroid mWindowAndroidMock;
 
     private Context mContext;
@@ -1136,6 +1142,24 @@ public class ExternalNavigationHandlerTest {
 
     @Test
     @SmallTest
+    public void testFallbackUrl_WithReferrerPolicy() {
+        mDelegate.setCanResolveActivityForExternalSchemes(false);
+
+        // Use a non-default referrer policy.
+        int policy = ReferrerPolicy.ORIGIN;
+        checkUrl(INTENT_URL_WITH_FALLBACK_URL, redirectHandlerForLinkClick())
+                .withReferrer(SEARCH_RESULT_URL_FOR_TOM_HANKS, policy)
+                .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
+
+        Assert.assertNull(mUrlHandler.mStartActivityIntent);
+        Assert.assertEquals(IMDB_WEBPAGE_FOR_TOM_HANKS, mUrlHandler.mNewUrlAfterClobbering);
+        Assert.assertEquals(SEARCH_RESULT_URL_FOR_TOM_HANKS, mUrlHandler.mReferrerUrlForClobbering);
+        Assert.assertNotNull(mUrlHandler.mReferrerForClobbering);
+        Assert.assertEquals(policy, mUrlHandler.mReferrerForClobbering.getPolicy());
+    }
+
+    @Test
+    @SmallTest
     public void testFallbackUrl_FallbackToMarketApp() {
         mDelegate.setCanResolveActivityForExternalSchemes(false);
 
@@ -1217,10 +1241,10 @@ public class ExternalNavigationHandlerTest {
                                 filter,
                                 new Instrumentation.ActivityResult(Activity.RESULT_OK, null),
                                 true);
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         try {
@@ -1285,10 +1309,10 @@ public class ExternalNavigationHandlerTest {
 
     private void doTestFallbackUrl_ChromeCanHandle_Incognito(final boolean clearRedirectHandler) {
         mDelegate.add(new IntentActivity("https", "package"));
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         try {
@@ -1373,10 +1397,10 @@ public class ExternalNavigationHandlerTest {
                                 filter,
                                 new Instrumentation.ActivityResult(Activity.RESULT_OK, null),
                                 true);
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         mDelegate.setShouldPresentLeavingIncognitoDialog(true);
@@ -1454,10 +1478,10 @@ public class ExternalNavigationHandlerTest {
     @MediumTest
     public void testFallbackUrl_ChromeCanHandle_Incognito_DelegateHandleDialogPresentation() {
         mDelegate.add(new IntentActivity("https", "package"));
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         mDelegate.setShouldPresentLeavingIncognitoDialog(true);
@@ -1552,10 +1576,10 @@ public class ExternalNavigationHandlerTest {
     public void runIncognitoAlertDialogDismissedTest(
             long navId, Runnable testCallback, boolean shouldDismiss) {
         mDelegate.add(new IntentActivity("imdb:", INTENT_APP_PACKAGE_NAME));
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         try {
@@ -1576,7 +1600,8 @@ public class ExternalNavigationHandlerTest {
                         Assert.assertNull(mUrlHandler.mStartActivityIntent);
                         Assert.assertNull(mUrlHandler.mNewUrlAfterClobbering);
                     });
-            IncognitoDialogDelegate delegateSpy = mUrlHandler.spyIncognitoDialogDelegate();
+            IncognitoDialogDelegateWithFallback delegateSpy =
+                    mUrlHandler.spyIncognitoDialogDelegate();
             Mockito.doReturn(true).when(delegateSpy).isShowing();
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
@@ -1645,10 +1670,10 @@ public class ExternalNavigationHandlerTest {
                                 filter,
                                 new Instrumentation.ActivityResult(Activity.RESULT_OK, null),
                                 true);
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
 
@@ -1683,6 +1708,65 @@ public class ExternalNavigationHandlerTest {
         }
     }
 
+    private void checkDigitalCredentialsWarningDialogShow(String scheme, String url) {
+        mDelegate.add(new IntentActivity(scheme, DIGITAL_CREDENTIALS_PACKAGE_NAME));
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    checkUrl(url, redirectHandlerForLinkClick())
+                            .withHasUserGesture(true)
+                            .expecting(
+                                    OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION,
+                                    IGNORE);
+                    mUrlHandler.mDigitalCredentialsWarningDialogDelegate.onClick(
+                            null, ModalDialogProperties.ButtonType.NEGATIVE);
+                });
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_HaipVp() {
+        checkDigitalCredentialsWarningDialogShow("haip-vp", HAIP_VP_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_HaipVci() {
+        checkDigitalCredentialsWarningDialogShow("haip-vci", HAIP_VCI_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_Mdoc() {
+        checkDigitalCredentialsWarningDialogShow("mdoc", MDOC_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_OpenId4Vci() {
+        checkDigitalCredentialsWarningDialogShow("openid-credential-offer", OPENID4VCI_URL);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_WrappedMdoc() {
+        String wrappedUrl = "intent://#Intent;scheme=mdoc;action=android.intent.action.VIEW;end";
+        checkDigitalCredentialsWarningDialogShow("mdoc", wrappedUrl);
+    }
+
+    @Test
+    @MediumTest
+    public void testDigitalCredentialsWarningDialog_OpaqueOrigin() {
+        mDelegate.add(
+                new IntentActivity("openid4vp-v1-unsigned", DIGITAL_CREDENTIALS_PACKAGE_NAME));
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    checkUrl(DIGITAL_CREDENTIALS_URL, redirectHandlerForLinkClick())
+                            .withHasUserGesture(true)
+                            .withInitiatorOrigin(Origin.createOpaqueOrigin())
+                            .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
+                });
+    }
+
     @Test
     @MediumTest
     public void testDigitalCredentialsWarningDialog_NegativeClick() {
@@ -1696,10 +1780,10 @@ public class ExternalNavigationHandlerTest {
                                 filter,
                                 new Instrumentation.ActivityResult(Activity.RESULT_OK, null),
                                 true);
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
 
@@ -1745,10 +1829,10 @@ public class ExternalNavigationHandlerTest {
                                 filter,
                                 new Instrumentation.ActivityResult(Activity.RESULT_OK, null),
                                 true);
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
 
@@ -1785,10 +1869,10 @@ public class ExternalNavigationHandlerTest {
             long navId, Runnable testCallback, boolean shouldDismiss) {
         mDelegate.add(
                 new IntentActivity("openid4vp-v1-unsigned", DIGITAL_CREDENTIALS_PACKAGE_NAME));
-        Intent dummyIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
-        dummyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent testIntent = new Intent(mRealApplicationContext, BlankUiTestActivity.class);
+        testIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Activity activity =
-                InstrumentationRegistry.getInstrumentation().startActivitySync(dummyIntent);
+                InstrumentationRegistry.getInstrumentation().startActivitySync(testIntent);
         mDelegate.setContext(activity);
         mDelegate.setCanLoadUrlInTab(true);
         try {
@@ -2057,7 +2141,7 @@ public class ExternalNavigationHandlerTest {
                 .expecting(OverrideUrlLoadingResultType.OVERRIDE_WITH_NAVIGATE_TAB, IGNORE);
 
         mDelegate.setCanResolveActivityForExternalSchemes(true);
-        // As a result of intent resolution fallback, we have clobberred the current tab and the
+        // As a result of intent resolution fallback, we have clobbered the current tab and the
         // sending site has learned that an app is not installed. In order to prevent chaining this
         // and learning about more not-installed apps, even URLs that would otherwise successfully
         // launch an app will use the fallback URL.
@@ -2471,7 +2555,7 @@ public class ExternalNavigationHandlerTest {
 
     @Test
     @SmallTest
-    @MinAndroidSdkLevel(33) // TODO(twellington): Replace with version code when available.
+    @MinAndroidSdkLevel(Build.VERSION_CODES.TIRAMISU)
     public void testFileAccessHtml_AndroidT() {
         String fileUrl = "file:///sdcard/Downloads/test.html";
 
@@ -3268,6 +3352,24 @@ public class ExternalNavigationHandlerTest {
                 "tel:012345678", mDelegate.intentReportedToSafeBrowsing().getDataString());
     }
 
+    @Test
+    @SmallTest
+    public void testHttpBlockBypassedByMarketCategory() {
+        mDelegate.setAllowExternalNavigationForHttpProtocols(false);
+
+        // 1. Resolve to a specialized app (not market). It should be blocked.
+        mDelegate.add(new IntentActivity("https://example.com", "com.example.app"));
+        checkUrl("https://example.com", redirectHandlerForLinkClick())
+                .expecting(OverrideUrlLoadingResultType.NO_OVERRIDE, IGNORE);
+
+        // 2. Resolve to a market app. It should NOT be blocked.
+        mDelegate.setResolvesToMarketApp(true);
+        checkUrl("https://example.com", redirectHandlerForLinkClick())
+                .expecting(
+                        OverrideUrlLoadingResultType.OVERRIDE_WITH_EXTERNAL_INTENT,
+                        START_OTHER_ACTIVITY);
+    }
+
     private static List<ResolveInfo> makeResolveInfos(ResolveInfo... infos) {
         return Arrays.asList(infos);
     }
@@ -3280,6 +3382,13 @@ public class ExternalNavigationHandlerTest {
         ResolveInfo ri = new ResolveInfo();
         ri.activityInfo = ai;
         return ri;
+    }
+
+    private static ResolveInfo newMarketResolveInfo(String packageName) {
+        ResolveInfo info = newResolveInfo(packageName);
+        info.filter = new IntentFilter(Intent.ACTION_VIEW);
+        info.filter.addCategory(Intent.CATEGORY_APP_MARKET);
+        return info;
     }
 
     private static ResolveInfo newSpecializedResolveInfo(
@@ -3331,6 +3440,7 @@ public class ExternalNavigationHandlerTest {
         public boolean mShouldRequestFileAccess;
         public String mNewUrlAfterClobbering;
         public String mReferrerUrlForClobbering;
+        public @Nullable Referrer mReferrerForClobbering;
         public boolean mRequestFilePermissionsCalled;
         public Intent mStartActivityInIncognitoIntent;
         public boolean mStartIncognitoIntentCalled;
@@ -3456,9 +3566,10 @@ public class ExternalNavigationHandlerTest {
             return OverrideUrlLoadingResult.forAsyncAction();
         }
 
-        public IncognitoDialogDelegate spyIncognitoDialogDelegate() {
-            mIncognitoDialogDelegate = Mockito.spy(mIncognitoDialogDelegate);
-            return mIncognitoDialogDelegate;
+        public IncognitoDialogDelegateWithFallback spyIncognitoDialogDelegate() {
+            mIncognitoDialogDelegate =
+                    Mockito.spy((IncognitoDialogDelegateWithFallback) mIncognitoDialogDelegate);
+            return (IncognitoDialogDelegateWithFallback) mIncognitoDialogDelegate;
         }
 
         public ExternalNavigationHandler.DigitalCredentialsWarningDialogDelegate
@@ -3471,6 +3582,7 @@ public class ExternalNavigationHandlerTest {
 
     private static class TestExternalNavigationDelegate implements ExternalNavigationDelegate {
         private WindowAndroid mWindowAndroid;
+        private boolean mAllowExternalNavigationForHttpProtocols = true;
 
         public List<ResolveInfo> queryIntentActivities(Intent intent) {
             List<ResolveInfo> list = new ArrayList<>();
@@ -3505,6 +3617,9 @@ public class ExternalNavigationHandlerTest {
             if (mResolvesToOtherBrowser) {
                 list.add(newResolveInfo(OTHER_BROWSER_PACKAGE));
             }
+            if (mResolvesToMarketApp) {
+                list.add(newMarketResolveInfo("com.example.market"));
+            }
             return list;
         }
 
@@ -3514,6 +3629,9 @@ public class ExternalNavigationHandlerTest {
             }
             if (mResolvesToOtherBrowser) {
                 return newResolveInfo(OTHER_BROWSER_PACKAGE);
+            }
+            if (mResolvesToMarketApp) {
+                return newMarketResolveInfo("com.example.market");
             }
 
             List<ResolveInfo> list = queryIntentActivities(intent);
@@ -3649,9 +3767,6 @@ public class ExternalNavigationHandlerTest {
         public void returnAsActivityResult(GURL url) {}
 
         @Override
-        public void maybeRecordExternalNavigationSchemeHistogram(GURL url) {}
-
-        @Override
         public void notifyCctPasswordSavingRecorderOfExternalNavigation() {}
 
         @Override
@@ -3682,6 +3797,18 @@ public class ExternalNavigationHandlerTest {
         @Override
         public boolean shouldSelfNavigationLaunchAsMultipleTask(ExternalNavigationParams params) {
             return false;
+        }
+
+        @Override
+        public void setExternalNavigationHelper(ExternalNavigationHelper helper) {}
+
+        public void setAllowExternalNavigationForHttpProtocols(boolean value) {
+            mAllowExternalNavigationForHttpProtocols = value;
+        }
+
+        @Override
+        public boolean allowExternalNavigationForHttpProtocols(GURL url) {
+            return mAllowExternalNavigationForHttpProtocols;
         }
 
         public void reset() {
@@ -3752,6 +3879,10 @@ public class ExternalNavigationHandlerTest {
             mResolvesToOtherBrowser = value;
         }
 
+        public void setResolvesToMarketApp(boolean value) {
+            mResolvesToMarketApp = value;
+        }
+
         public void setWindowAndroid(WindowAndroid windowAndroid) {
             mWindowAndroid = windowAndroid;
         }
@@ -3788,12 +3919,13 @@ public class ExternalNavigationHandlerTest {
         private boolean mWillResolveToDisambiguationDialog;
         private Context mContext;
         private boolean mResolvesToOtherBrowser;
+        private boolean mResolvesToMarketApp;
         private boolean mShouldDisableAllExternalIntents;
         private boolean mShouldReturnAsActivityResult;
         private Intent mSafeBrowsingIntent;
     }
 
-    private void checkIntentSanity(Intent intent, String name) {
+    private void checkIntentValidity(Intent intent, String name) {
         Assert.assertTrue(
                 "The invoked " + name + " doesn't have the BROWSABLE category set\n",
                 intent.hasCategory(Intent.CATEGORY_BROWSABLE));
@@ -3810,6 +3942,7 @@ public class ExternalNavigationHandlerTest {
         private final String mUrl;
 
         private String mReferrerUrl;
+        private int mReferrerPolicy = ReferrerPolicy.DEFAULT;
         private boolean mIsIncognito;
         private int mPageTransition = PageTransition.LINK;
         private boolean mIsRedirect;
@@ -3821,6 +3954,7 @@ public class ExternalNavigationHandlerTest {
         private boolean mIsInitialNavigationInFrame;
         private boolean mIsHiddenCrossFrame;
         private long mNavigationId;
+        private Origin mInitiatorOrigin;
 
         private ExternalNavigationTestParams(String url, RedirectHandler handler) {
             mUrl = url;
@@ -3829,6 +3963,12 @@ public class ExternalNavigationHandlerTest {
 
         public ExternalNavigationTestParams withReferrer(String referrerUrl) {
             mReferrerUrl = referrerUrl;
+            return this;
+        }
+
+        public ExternalNavigationTestParams withReferrer(String referrerUrl, int policy) {
+            mReferrerUrl = referrerUrl;
+            mReferrerPolicy = policy;
             return this;
         }
 
@@ -3884,6 +4024,11 @@ public class ExternalNavigationHandlerTest {
             return this;
         }
 
+        public ExternalNavigationTestParams withInitiatorOrigin(Origin initiatorOrigin) {
+            mInitiatorOrigin = initiatorOrigin;
+            return this;
+        }
+
         public void expecting(
                 @OverrideUrlLoadingResultType int expectedOverrideResult, int otherExpectation) {
             boolean expectStartIncognito = (otherExpectation & START_INCOGNITO) != 0;
@@ -3907,6 +4052,8 @@ public class ExternalNavigationHandlerTest {
                                 mUrlHandler.mNewUrlAfterClobbering = params.targetUrl.getSpec();
                                 mUrlHandler.mReferrerUrlForClobbering =
                                         params.externalNavigationParams.getReferrerUrl().getSpec();
+                                mUrlHandler.mReferrerForClobbering =
+                                        params.externalNavigationParams.getReferrer();
                             }
                         }
                     };
@@ -3914,7 +4061,9 @@ public class ExternalNavigationHandlerTest {
                     new ExternalNavigationParams.Builder(
                                     new GURL(mUrl),
                                     mIsIncognito,
-                                    new GURL(mReferrerUrl),
+                                    mReferrerUrl == null
+                                            ? null
+                                            : new Referrer(mReferrerUrl, mReferrerPolicy),
                                     mPageTransition,
                                     mIsRedirect)
                             .setRedirectHandler(mRedirectHandler)
@@ -3927,6 +4076,7 @@ public class ExternalNavigationHandlerTest {
                             .setIsInitialNavigationInFrame(mIsInitialNavigationInFrame)
                             .setIsHiddenCrossFrameNavigation(mIsHiddenCrossFrame)
                             .setNavigationId(mNavigationId)
+                            .setInitiatorOrigin(mInitiatorOrigin)
                             .build();
             OverrideUrlLoadingResult result = mUrlHandler.shouldOverrideUrlLoading(params);
 
@@ -3934,6 +4084,7 @@ public class ExternalNavigationHandlerTest {
                 mUrlHandler.mNewUrlAfterClobbering = result.mTargetUrl.getSpec();
                 mUrlHandler.mReferrerUrlForClobbering =
                         result.mExternalNavigationParams.getReferrerUrl().getSpec();
+                mUrlHandler.mReferrerForClobbering = result.mExternalNavigationParams.getReferrer();
             }
             if (result.getResultType() == OverrideUrlLoadingResultType.OVERRIDE_WITH_ASYNC_ACTION) {
                 mUrlHandler.mAsyncActionCallback = params.getRequiredAsyncActionTakenCallback();
@@ -3959,9 +4110,9 @@ public class ExternalNavigationHandlerTest {
             Assert.assertEquals(expectStartFile, mUrlHandler.mRequestFilePermissionsCalled);
 
             if (startActivityCalled && expectSaneIntent) {
-                checkIntentSanity(startActivityIntent, "Intent");
+                checkIntentValidity(startActivityIntent, "Intent");
                 if (startActivityIntent.getSelector() != null) {
-                    checkIntentSanity(startActivityIntent.getSelector(), "Intent's selector");
+                    checkIntentValidity(startActivityIntent.getSelector(), "Intent's selector");
                 }
             }
         }

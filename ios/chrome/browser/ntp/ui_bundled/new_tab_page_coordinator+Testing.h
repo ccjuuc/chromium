@@ -13,7 +13,7 @@
 @class ContentSuggestionsCoordinator;
 @class FeedHeaderViewController;
 @class FeedTopSectionCoordinator;
-@class NewTabPageHeaderViewController;
+@class NewTabPageHeaderView;
 @class NewTabPageMetricsRecorder;
 @class NewTabPageMediator;
 @class NewTabPageViewController;
@@ -21,11 +21,10 @@
 // Testing category that is intended to only be imported in
 // new_tab_page_coordinator.mm and tests.
 @interface NewTabPageCoordinator (Testing) <FeedWrapperViewControllerDelegate,
-                                            NewTabPageHeaderCommands,
-                                            NewTabPageActionsDelegate>
+                                            NewTabPageActionsDelegate,
+                                            NewTabPageHeaderCommands>
 
-@property(nonatomic, strong, readonly)
-    NewTabPageHeaderViewController* headerViewController;
+@property(nonatomic, strong, readonly) NewTabPageHeaderView* headerView;
 
 @property(nonatomic, strong)
     ContentSuggestionsCoordinator* contentSuggestionsCoordinator;

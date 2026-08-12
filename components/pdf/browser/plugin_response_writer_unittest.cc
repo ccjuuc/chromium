@@ -200,15 +200,18 @@ TEST_F(PluginResponseWriterTest, StartWithUnescapedUrls) {
 
 TEST_F(PluginResponseWriterTest, StartForPrintPreview) {
   PdfStreamDelegate::StreamInfo stream;
-  stream.stream_url = GURL("chrome-untrusted://print/1/0/print.pdf");
-  stream.original_url = GURL("chrome-untrusted://print/1/0/print.pdf");
+  stream.stream_url = GURL(
+      "chrome-untrusted://print/1234567890abcdef1234567890abcdef/0/print.pdf");
+  stream.original_url = GURL(
+      "chrome-untrusted://print/1234567890abcdef1234567890abcdef/0/print.pdf");
   std::string response = GenerateResponse(stream);
 
   EXPECT_THAT(response,
-              HasSubstr("src=\"chrome-untrusted://print/1/0/print.pdf\""));
-  EXPECT_THAT(
-      response,
-      HasSubstr("original-url=\"chrome-untrusted://print/1/0/print.pdf\""));
+              HasSubstr("src=\"chrome-untrusted://print/"
+                        "1234567890abcdef1234567890abcdef/0/print.pdf\""));
+  EXPECT_THAT(response,
+              HasSubstr("original-url=\"chrome-untrusted://print/"
+                        "1234567890abcdef1234567890abcdef/0/print.pdf\""));
 }
 
 TEST_F(PluginResponseWriterTest, StartWithoutInjectedScript) {
@@ -241,6 +244,18 @@ TEST_F(PluginResponseWriterTest, StartWithJavaScriptDisabled) {
   std::string response = GenerateResponse(stream);
 
   EXPECT_THAT(response, HasSubstr("javascript=\"block\""));
+}
+
+TEST_F(PluginResponseWriterTest, EscapesOriginalUrl) {
+  PdfStreamDelegate::StreamInfo stream;
+  stream.stream_url = GURL("chrome-extension://id/stream-url");
+  stream.original_url = GURL("http://example.com/foo&quot;bar.pdf");
+  std::string response = GenerateResponse(stream);
+
+  EXPECT_THAT(response, HasSubstr("src=\"chrome-extension://id/stream-url\""));
+  EXPECT_THAT(
+      response,
+      HasSubstr("original-url=\"http://example.com/foo&amp;quot;bar.pdf\""));
 }
 
 }  // namespace pdf

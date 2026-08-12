@@ -18,6 +18,7 @@
 #include "third_party/openscreen/src/cast/streaming/rtp_time.h"
 #include "third_party/openscreen/src/cast/streaming/sender_message.h"
 #include "third_party/openscreen/src/platform/api/time.h"
+#include "third_party/openscreen/src/platform/base/ip_address.h"
 #include "ui/gfx/geometry/size.h"
 
 // Conversion methods for common Open Screen media cast types. Note that many
@@ -52,7 +53,6 @@ openscreen::cast::AudioCaptureConfig ToOpenscreenAudioConfig(
     const FrameSenderConfig& config);
 openscreen::cast::VideoCaptureConfig ToOpenscreenVideoConfig(
     const FrameSenderConfig& config);
-
 media::mojom::RemotingSinkAudioCapability ToRemotingAudioCapability(
     openscreen::cast::AudioCapability capability);
 media::mojom::RemotingSinkVideoCapability ToRemotingVideoCapability(

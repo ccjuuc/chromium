@@ -11,8 +11,9 @@ import android.util.SparseArray;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
-import org.chromium.components.omnibox.R;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.components.omnibox.SuggestTemplateInfoProto.SuggestTemplateInfo;
+import org.chromium.components.omnibox.action.ActionPresentationMode;
 import org.chromium.components.omnibox.action.OmniboxAction;
 import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.omnibox.action.OmniboxActionId;
@@ -41,7 +42,7 @@ public class OmniboxActionInSuggest extends OmniboxAction {
             /* SuggestTemplateInfo.TemplateAction.ActionType */ int actionType,
             String actionUri,
             int tabId,
-            boolean showAsActionButton) {
+            @ActionPresentationMode int presentationMode) {
         super(
                 OmniboxActionId.ACTION_IN_SUGGEST,
                 nativeInstance,
@@ -49,7 +50,7 @@ public class OmniboxActionInSuggest extends OmniboxAction {
                 accessibilityHint,
                 ICON_MAP.get(actionType, DEFAULT_ICON),
                 R.style.TextAppearance_ChipText,
-                showAsActionButton,
+                presentationMode,
                 actionType == SuggestTemplateInfo.TemplateAction.ActionType.CHROME_TAB_SWITCH_VALUE
                         ? WindowOpenDisposition.SWITCH_TO_TAB
                         : WindowOpenDisposition.CURRENT_TAB);
@@ -84,24 +85,20 @@ public class OmniboxActionInSuggest extends OmniboxAction {
         map.put(
                 SuggestTemplateInfo.TemplateAction.ActionType.CHROME_AIM_VALUE,
                 new ActionIcon(
-                        org.chromium.chrome.browser.omnibox.R.drawable.search_spark_rainbow,
-                        org.chromium.chrome.browser.omnibox.R.drawable.search_spark_rainbow,
-                        org.chromium.chrome.browser.omnibox.R.drawable
-                                .search_spark_rainbow_incognito,
+                        R.drawable.search_spark_rainbow,
+                        R.drawable.search_spark_rainbow,
+                        R.drawable.search_spark_rainbow_incognito,
                         false));
         map.put(
                 SuggestTemplateInfo.TemplateAction.ActionType.CHROME_TAB_SWITCH_VALUE,
                 new ActionIcon(
-                        org.chromium.chrome.browser.omnibox.R.drawable.tab,
-                        org.chromium.chrome.browser.omnibox.R.drawable.switch_to_tab,
-                        org.chromium.chrome.browser.omnibox.R.drawable.switch_to_tab,
-                        true));
+                        R.drawable.tab, R.drawable.switch_to_tab, R.drawable.switch_to_tab, true));
         return map;
     }
 
     /** Execute an Intent associated with OmniboxActionInSuggest. */
     @Override
-    public void execute(OmniboxActionDelegate delegate) {
+    public boolean execute(OmniboxActionDelegate delegate) {
         boolean actionStarted = false;
         boolean isIncognito = delegate.isIncognito();
         Intent intent = null;
@@ -110,7 +107,7 @@ public class OmniboxActionInSuggest extends OmniboxAction {
             intent = Intent.parseUri(mActionUri, Intent.URI_INTENT_SCHEME);
         } catch (URISyntaxException e) {
             // Never happens. http://b/279756377.
-            return;
+            return true;
         }
 
         switch (actionType) {
@@ -165,5 +162,7 @@ public class OmniboxActionInSuggest extends OmniboxAction {
                 delegate.loadPageInCurrentTab(assumeNonNull(intent.getDataString()));
             }
         }
+
+        return true;
     }
 }

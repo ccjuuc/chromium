@@ -21,10 +21,12 @@
     "paint",
     "resource",
     "script",
+    "scroll",
     "soft-navigation",
     "taskattribution",
     "unknown",
     "visibility-state",
     "window",
+    "mark-conditional",
   ],
 }

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "apps/test/app_window_waiter.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/auto_reset.h"
 #include "base/callback_list.h"
 #include "base/check_deref.h"
@@ -24,7 +25,6 @@
 #include "chrome/browser/ash/app_mode/kiosk_test_helper.h"
 #include "chrome/browser/ash/login/app_mode/test/kiosk_apps_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
@@ -35,7 +35,6 @@
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/reset_screen_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
@@ -283,19 +282,16 @@ IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskTest, CrashRestore) {
   ASSERT_TRUE(CloseAppWindow(KioskAppsMixin::kTestChromeAppId));
 }
 
-class AutoLaunchedKioskPowerWashRequestedTest
-    : public OobeBaseTest,
-      public LocalStateMixin::Delegate {
+class AutoLaunchedKioskPowerWashRequestedTest : public OobeBaseTest {
  public:
   AutoLaunchedKioskPowerWashRequestedTest() = default;
   ~AutoLaunchedKioskPowerWashRequestedTest() override = default;
 
-  void SetUpLocalState() override {
-    g_browser_process->local_state()->SetBoolean(prefs::kFactoryResetRequested,
-                                                 true);
-  }
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    OobeBaseTest::SetUpLocalStatePrefService(local_state);
 
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(AutoLaunchedKioskPowerWashRequestedTest, DoesNotLaunch) {
@@ -393,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(ManagementApiKioskTest, ManagementApi) {
   // TODO(https://crbug.com/40804030): Remove this when updated to use MV3.
   extensions::ScopedTestMV2Enabler mv2_enabler;
 
-  // The tests expects to recieve two test result messages:
+  // The tests expects to receive two test result messages:
   //  * result for tests run by the secondary kiosk app.
   //  * result for tests run by the primary kiosk app.
   extensions::ResultCatcher catcher;

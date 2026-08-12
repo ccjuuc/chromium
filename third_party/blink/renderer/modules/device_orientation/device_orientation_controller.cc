@@ -194,23 +194,12 @@ ScriptPromise<V8PermissionState> DeviceOrientationController::RequestPermission(
           script_state);
   auto promise = resolver->Promise();
 
-  permission_service_->HasPermission(
+  permission_service_->RequestPermission(
       CreatePermissionDescriptor(mojom::blink::PermissionName::SENSORS),
       resolver->WrapCallbackInScriptScope(
           BindOnce([](ScriptPromiseResolver<V8PermissionState>* resolver,
-                      mojom::blink::PermissionStatus status) {
-            switch (status) {
-              case mojom::blink::PermissionStatus::GRANTED:
-              case mojom::blink::PermissionStatus::DENIED:
-                resolver->Resolve(ToV8PermissionState(status));
-                break;
-              case mojom::blink::PermissionStatus::ASK:
-                // At the moment, this state is not reachable because there
-                // is no "ask" or "prompt" state in the Chromium
-                // permissions UI for sensors, so HasPermissionStatus() will
-                // always return GRANTED or DENIED.
-                NOTREACHED();
-            }
+                      mojom::blink::PermissionStatusWithDetailsPtr status) {
+            resolver->Resolve(ToV8PermissionState(status->status));
           })));
 
   return promise;
@@ -220,12 +209,11 @@ ScriptPromise<V8PermissionState> DeviceOrientationController::RequestPermission(
 void DeviceOrientationController::LogToConsolePolicyFeaturesDisabled(
     LocalFrame& frame,
     const AtomicString& event_name) {
-  const String& message = String::Format(
-      "The %s events are blocked by permissions policy. "
-      "See "
-      "https://github.com/w3c/webappsec-permissions-policy/blob/master/"
-      "features.md#sensor-features",
-      event_name.Ascii().c_str());
+  const String& message =
+      StrCat({"The ", event_name,
+              " events are blocked by permissions policy. See "
+              "https://github.com/w3c/webappsec-permissions-policy/blob/master/"
+              "features.md#sensor-features"});
   auto* console_message = MakeGarbageCollected<ConsoleMessage>(
       mojom::ConsoleMessageSource::kJavaScript,
       mojom::ConsoleMessageLevel::kWarning, std::move(message));

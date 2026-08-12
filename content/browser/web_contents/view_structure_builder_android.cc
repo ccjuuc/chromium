@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CONTENT_BROWSER_WEB_CONTENTS_VIEW_STRUCTURE_BUILDER_ANDROID_H_
-#define CONTENT_BROWSER_WEB_CONTENTS_VIEW_STRUCTURE_BUILDER_ANDROID_H_
-
 #include "content/browser/web_contents/view_structure_builder_android.h"
 #include "content/public/android/content_jni_headers/ViewStructureBuilder_jni.h"
 
@@ -15,16 +12,16 @@ void ViewStructureBuilder_populateViewStructureNode(
     const jni_zero::JavaRef<jobject>& obj,
     const jni_zero::JavaRef<jobject>& node,
     const jni_zero::JavaRef<jstring>& text,
-    jboolean has_selection,
+    bool has_selection,
     JniIntWrapper sel_start,
     JniIntWrapper sel_end,
     JniIntWrapper color,
     JniIntWrapper bgcolor,
-    jfloat size,
-    jboolean bold,
-    jboolean italic,
-    jboolean underline,
-    jboolean line_through,
+    float size,
+    bool bold,
+    bool italic,
+    bool underline,
+    bool line_through,
     const jni_zero::JavaRef<jstring>& class_name,
     JniIntWrapper child_count) {
   Java_ViewStructureBuilder_populateViewStructureNode(
@@ -36,7 +33,7 @@ void ViewStructureBuilder_setViewStructureNodeBounds(
     JNIEnv* env,
     const jni_zero::JavaRef<jobject>& obj,
     const jni_zero::JavaRef<jobject>& node,
-    jboolean is_root_node,
+    bool is_root_node,
     JniIntWrapper parent_relative_left,
     JniIntWrapper parent_relative_top,
     JniIntWrapper width,
@@ -94,7 +91,5 @@ ViewStructureBuilder_addViewStructureNodeChild(
 }
 
 }  // namespace content
-
-#endif  // CONTENT_BROWSER_WEB_CONTENTS_VIEW_STRUCTURE_BUILDER_ANDROID_H_
 
 DEFINE_JNI(ViewStructureBuilder)

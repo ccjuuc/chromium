@@ -32,7 +32,12 @@ FakeSafeBrowsingClient::GetRealTimeUrlLookupService() {
 
 safe_browsing::HashRealTimeService*
 FakeSafeBrowsingClient::GetHashRealTimeService() {
-  return nullptr;
+  return hash_real_time_service_;
+}
+
+safe_browsing::V5GetHashProtocolManager*
+FakeSafeBrowsingClient::GetV5GetHashProtocolManager() {
+  return v5_get_hash_protocol_manager_;
 }
 
 variations::VariationsService* FakeSafeBrowsingClient::GetVariationsService() {
@@ -53,4 +58,10 @@ bool FakeSafeBrowsingClient::OnMainFrameUrlQueryCancellationDecided(
 
 bool FakeSafeBrowsingClient::ShouldForceSyncRealTimeUrlChecks() const {
   return should_force_sync_real_time_url_checks_;
+}
+
+void FakeSafeBrowsingClient::OnSecurityInterstitialShown(
+    web::WebState* web_state,
+    const security_interstitials::UnsafeResource& resource) {
+  on_security_interstitial_shown_called_ = true;
 }

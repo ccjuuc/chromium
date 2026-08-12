@@ -4,6 +4,8 @@
 
 #include "components/update_client/op_puffin.h"
 
+#include <utility>
+
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -25,7 +27,10 @@
 
 namespace update_client {
 
-class PuffOperationTest : public testing::Test {
+class PuffOperationTest : public ::testing::TestWithParam<bool> {
+ public:
+  bool IsForeground() const { return GetParam(); }
+
  private:
   // env_ must be constructed before sequence_checker_.
   base::test::TaskEnvironment env_;
@@ -40,13 +45,13 @@ class PuffOperationTest : public testing::Test {
   base::FilePath CopyToTemp(const std::string& src) {
     base::FilePath dest =
         TempPath(base::FilePath().AppendUTF8(src).BaseName().AsUTF8Unsafe());
-    EXPECT_TRUE(base::CopyFile(GetTestFilePath(src.c_str()), dest));
+    EXPECT_TRUE(base::CopyFile(GetTestFilePath(src), dest));
     return dest;
   }
 
-  base::RepeatingCallback<void(base::Value::Dict)> MakePingCallback() {
+  base::RepeatingCallback<void(base::DictValue)> MakePingCallback() {
     return base::BindLambdaForTesting(
-        [&](base::Value::Dict ping) { pings_.push_back(std::move(ping)); });
+        [&](base::DictValue ping) { pings_.push_back(std::move(ping)); });
   }
 
   base::RepeatingCallback<void(update_client::ComponentState)>
@@ -58,13 +63,17 @@ class PuffOperationTest : public testing::Test {
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::RunLoop loop_;
-  std::vector<base::Value::Dict> pings_;
+  std::vector<base::DictValue> pings_;
 
  private:
   base::ScopedTempDir temp_dir_;
 };
 
-TEST_F(PuffOperationTest, Success) {
+INSTANTIATE_TEST_SUITE_P(ForegroundAndBackground,
+                         PuffOperationTest,
+                         ::testing::Bool());
+
+TEST_P(PuffOperationTest, Success) {
   auto cache = base::MakeRefCounted<CrxCache>(TempPath("cache"));
 
   // PuffOperation deletes the patch file, so copying it to the temp dir.
@@ -86,7 +95,7 @@ TEST_F(PuffOperationTest, Success) {
                 ->Create(),
             MakePingCallback(), MakeStateCallback(), "hash1",
             "c7f9a9230b82c8b3670e539d8034e5386f17bfa1bdcd4a2cc385844f9252052f",
-            patch_file,
+            IsForeground(), patch_file,
             base::BindLambdaForTesting(
                 [&](base::expected<base::FilePath, CategorizedError> result) {
                   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -108,7 +117,7 @@ TEST_F(PuffOperationTest, Success) {
   EXPECT_EQ(pings_[0].Find("extracode1"), nullptr);
 }
 
-TEST_F(PuffOperationTest, BadPatch) {
+TEST_P(PuffOperationTest, BadPatch) {
   auto cache = base::MakeRefCounted<CrxCache>(TempPath("cache"));
 
   // Since PuffOperation deletes the patch file, make a copy in the temp dir.
@@ -132,15 +141,15 @@ TEST_F(PuffOperationTest, BadPatch) {
                 ->Create(),
             MakePingCallback(), MakeStateCallback(), "hash1",
             "c7f9a9230b82c8b3670e539d8034e5386f17bfa1bdcd4a2cc385844f9252052f",
-            patch_file,
+            IsForeground(), patch_file,
             base::BindLambdaForTesting(
                 [&](base::expected<base::FilePath, CategorizedError> result) {
                   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
                   loop_.Quit();
                   ASSERT_FALSE(result.has_value());
-                  EXPECT_EQ(
-                      result.error().code,
-                      static_cast<int>(UnpackerError::kDeltaOperationFailure));
+                  EXPECT_EQ(result.error().code,
+                            std::to_underlying(
+                                UnpackerError::kDeltaOperationFailure));
                 }));
       }));
   loop_.Run();
@@ -150,14 +159,14 @@ TEST_F(PuffOperationTest, BadPatch) {
   EXPECT_EQ(pings_[0].FindInt("eventresult"),
             protocol_request::kEventResultError);
   EXPECT_EQ(pings_[0].FindInt("errorcat"),
-            static_cast<int>(ErrorCategory::kUnpack));
+            std::to_underlying(ErrorCategory::kUnpack));
   EXPECT_EQ(pings_[0].FindInt("errorcode"),
-            static_cast<int>(UnpackerError::kDeltaOperationFailure));
+            std::to_underlying(UnpackerError::kDeltaOperationFailure));
   EXPECT_EQ(pings_[0].FindInt("extracode1"),
-            static_cast<int>(Error::INVALID_ARGUMENT));
+            std::to_underlying(Error::INVALID_ARGUMENT));
 }
 
-TEST_F(PuffOperationTest, NotInCache) {
+TEST_P(PuffOperationTest, NotInCache) {
   auto cache = base::MakeRefCounted<CrxCache>(TempPath("cache"));
 
   // PuffOperation deletes the patch file, so copying it to the temp dir.
@@ -171,14 +180,15 @@ TEST_F(PuffOperationTest, NotInCache) {
           ->Create(),
       MakePingCallback(), MakeStateCallback(), "prev_fp",
       "c7f9a9230b82c8b3670e539d8034e5386f17bfa1bdcd4a2cc385844f9252052f",
-      patch_file,
+      IsForeground(), patch_file,
       base::BindLambdaForTesting(
           [&](base::expected<base::FilePath, CategorizedError> result) {
             DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
             loop_.Quit();
             ASSERT_FALSE(result.has_value());
-            EXPECT_EQ(result.error().code,
-                      static_cast<int>(UnpackerError::kCrxCacheFileNotCached));
+            EXPECT_EQ(
+                result.error().code,
+                std::to_underlying(UnpackerError::kCrxCacheFileNotCached));
           }));
   loop_.Run();
   EXPECT_FALSE(base::PathExists(patch_file));
@@ -187,13 +197,13 @@ TEST_F(PuffOperationTest, NotInCache) {
   EXPECT_EQ(pings_[0].FindInt("eventresult"),
             protocol_request::kEventResultError);
   EXPECT_EQ(pings_[0].FindInt("errorcat"),
-            static_cast<int>(ErrorCategory::kUnpack));
+            std::to_underlying(ErrorCategory::kUnpack));
   EXPECT_EQ(pings_[0].FindInt("errorcode"),
-            static_cast<int>(UnpackerError::kCrxCacheFileNotCached));
+            std::to_underlying(UnpackerError::kCrxCacheFileNotCached));
   EXPECT_EQ(pings_[0].Find("extracode1"), nullptr);
 }
 
-TEST_F(PuffOperationTest, NoCache) {
+TEST_P(PuffOperationTest, NoCache) {
   // PuffOperation deletes the patch file, so copying it to the temp dir.
   base::FilePath patch_file =
       CopyToTemp("puffin_patch_test/puffin_app_v1_to_v2.puff");
@@ -205,14 +215,14 @@ TEST_F(PuffOperationTest, NoCache) {
           ->Create(),
       MakePingCallback(), MakeStateCallback(), "prev_fp",
       "c7f9a9230b82c8b3670e539d8034e5386f17bfa1bdcd4a2cc385844f9252052f",
-      patch_file,
+      IsForeground(), patch_file,
       base::BindLambdaForTesting(
           [&](base::expected<base::FilePath, CategorizedError> result) {
             DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
             loop_.Quit();
             ASSERT_FALSE(result.has_value());
             EXPECT_EQ(result.error().code,
-                      static_cast<int>(UnpackerError::kCrxCacheNotProvided));
+                      std::to_underlying(UnpackerError::kCrxCacheNotProvided));
           }));
   loop_.Run();
   EXPECT_FALSE(base::PathExists(patch_file));
@@ -221,13 +231,13 @@ TEST_F(PuffOperationTest, NoCache) {
   EXPECT_EQ(pings_[0].FindInt("eventresult"),
             protocol_request::kEventResultError);
   EXPECT_EQ(pings_[0].FindInt("errorcat"),
-            static_cast<int>(ErrorCategory::kUnpack));
+            std::to_underlying(ErrorCategory::kUnpack));
   EXPECT_EQ(pings_[0].FindInt("errorcode"),
-            static_cast<int>(UnpackerError::kCrxCacheNotProvided));
+            std::to_underlying(UnpackerError::kCrxCacheNotProvided));
   EXPECT_EQ(pings_[0].Find("extracode1"), nullptr);
 }
 
-TEST_F(PuffOperationTest, OutHashMismatch) {
+TEST_P(PuffOperationTest, OutHashMismatch) {
   auto cache = base::MakeRefCounted<CrxCache>(TempPath("cache"));
 
   // PuffOperation deletes the patch file, so copying it to the temp dir.
@@ -248,7 +258,7 @@ TEST_F(PuffOperationTest, OutHashMismatch) {
                 base::BindRepeating(&patch::LaunchInProcessFilePatcher))
                 ->Create(),
             MakePingCallback(), MakeStateCallback(), "hash1", "incorrecthash",
-            patch_file,
+            IsForeground(), patch_file,
             base::BindLambdaForTesting(
                 [&](base::expected<base::FilePath, CategorizedError> result) {
                   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -256,7 +266,7 @@ TEST_F(PuffOperationTest, OutHashMismatch) {
                   ASSERT_FALSE(result.has_value());
                   EXPECT_EQ(
                       result.error().code,
-                      static_cast<int>(UnpackerError::kPatchOutHashMismatch));
+                      std::to_underlying(UnpackerError::kPatchOutHashMismatch));
                 }));
       }));
   loop_.Run();
@@ -266,9 +276,9 @@ TEST_F(PuffOperationTest, OutHashMismatch) {
   EXPECT_EQ(pings_[0].FindInt("eventresult"),
             protocol_request::kEventResultError);
   EXPECT_EQ(pings_[0].FindInt("errorcat"),
-            static_cast<int>(ErrorCategory::kUnpack));
+            std::to_underlying(ErrorCategory::kUnpack));
   EXPECT_EQ(pings_[0].FindInt("errorcode"),
-            static_cast<int>(UnpackerError::kPatchOutHashMismatch));
+            std::to_underlying(UnpackerError::kPatchOutHashMismatch));
   EXPECT_EQ(pings_[0].Find("extracode1"), nullptr);
 }
 

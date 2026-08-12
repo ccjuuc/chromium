@@ -9,13 +9,15 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.provider.Browser;
 
-import androidx.annotation.Nullable;
-
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.Log;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.app.tabmodel.AsyncTabParamsManagerSingleton;
+import org.chromium.chrome.browser.crash.ChromePureJavaExceptionReporter;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.MultiTabMetadata;
@@ -26,7 +28,11 @@ import java.util.List;
 /** Takes care of reparenting a list of Tab objects from one Activity to another. */
 @NullMarked
 public class ReparentingTabsTask {
+    private static final String TAG = "ReparentingTabsTask";
+
     private final List<Tab> mTabs;
+
+    private static @Nullable ReparentingTabsTask sReparentingTaskForTesting;
 
     /**
      * Creates a new task to reparent a list of tabs.
@@ -35,6 +41,9 @@ public class ReparentingTabsTask {
      * @return A new {@link ReparentingTabsTask} object.
      */
     public static ReparentingTabsTask from(List<Tab> tabs) {
+        if (sReparentingTaskForTesting != null) {
+            return sReparentingTaskForTesting;
+        }
         return new ReparentingTabsTask(tabs);
     }
 
@@ -54,14 +63,26 @@ public class ReparentingTabsTask {
      * @param finalizeCallback A callback that will be called after the tab is attached to the new
      *     host activity in {@link #attachAndFinishReparenting}.
      */
-    public void begin(
+    public boolean begin(
             @Nullable Context context,
             Intent intent,
             @Nullable Bundle startActivityOptions,
             @Nullable Runnable finalizeCallback) {
-        if (context == null) return;
+        if (context == null) return false;
         setupIntent(intent, finalizeCallback);
-        context.startActivity(intent, startActivityOptions);
+        try {
+            context.startActivity(intent, startActivityOptions);
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "startActivity() call failed and threw an exception.", e);
+            Throwable throwable =
+                    new Throwable(
+                            "This is not a crash. Android OS rejected a request to startActivity()"
+                                    + "in ReparentingTabsTask#begin().",
+                            e);
+            ChromePureJavaExceptionReporter.reportJavaException(throwable);
+            return false;
+        }
     }
 
     /**
@@ -104,5 +125,10 @@ public class ReparentingTabsTask {
 
         IntentHandler.setMultiTabMetadata(intent, MultiTabMetadata.create(mTabs));
         IntentUtils.addTrustedIntentExtras(intent);
+    }
+
+    public static void setReparentingTabsTaskForTesting(ReparentingTabsTask task) {
+        sReparentingTaskForTesting = task;
+        ResettersForTesting.register(() -> sReparentingTaskForTesting = null);
     }
 }

@@ -6,10 +6,10 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
@@ -185,12 +185,6 @@ bool IsConstraintPersistent(const ContentSettingConstraints& constraints) {
 bool CanTrackLastVisit(ContentSettingsType type) {
   DCHECK(WebsiteSettingsRegistry::GetInstance()->Get(type)) << type;
 
-  // Chooser based content settings will not be tracked by default.
-  // Only allowlisted ones should be tracked.
-  if (IsChooserPermissionEligibleForAutoRevocation(type)) {
-    return true;
-  }
-
   auto* info = PermissionSettingsRegistry::GetInstance()->Get(type);
   return info && info->delegate().CanTrackLastVisit();
 }
@@ -214,12 +208,11 @@ bool IsPermissionEligibleForAutoRevocation(ContentSettingsType type) {
 
   auto* permission_settings_info =
       PermissionSettingsRegistry::GetInstance()->Get(type);
-  return (permission_settings_info && CanTrackLastVisit(type)) ||
-         IsChooserPermissionEligibleForAutoRevocation(type);
+  return permission_settings_info && CanTrackLastVisit(type);
 }
 
 bool CanBeAutoRevokedAsUnusedPermission(ContentSettingsType type,
-                                        const base::Value& value,
+                                        const PermissionSetting& setting,
                                         bool is_one_time) {
   DCHECK(WebsiteSettingsRegistry::GetInstance()->Get(type)) << type;
 
@@ -244,35 +237,12 @@ bool CanBeAutoRevokedAsUnusedPermission(ContentSettingsType type,
   auto* permission_settings_info =
       PermissionSettingsRegistry::GetInstance()->Get(type);
   if (permission_settings_info) {
-    auto setting = permission_settings_info->delegate().FromValue(value);
-    // If the setting is already DEFAULT or the value is corrupt, no need to
-    // revoke the permission.
-    if (!setting.has_value()) {
-      return false;
-    }
-
-    // Currently Safety Check does not store the actual value of a permission
-    // and restores all permissions as ALLOW.
-    // TODO(crbug.com/441689815): Store PermissionSettings in Safety Check and
-    // remove this check.
-    if (setting != PermissionSetting{CONTENT_SETTING_ALLOW}) {
-      return false;
-    }
-
     return permission_settings_info->delegate().IsAnyPermissionAllowed(
-               setting.value()) &&
+               setting) &&
            CanTrackLastVisit(type);
   } else {
-    // If the value is already empty, no need to revoke the permission.
-    return IsChooserPermissionEligibleForAutoRevocation(type) &&
-           !value.is_none();
+    return false;
   }
-}
-
-bool IsChooserPermissionEligibleForAutoRevocation(ContentSettingsType type) {
-  // Currently, only File System Access is allowlisted for auto-revoking unused
-  // site permissions among chooser-based permissions.
-  return type == ContentSettingsType::FILE_SYSTEM_ACCESS_CHOOSER_DATA;
 }
 
 const std::vector<ContentSettingsType>& GetTypesWithTemporaryGrants() {
@@ -286,6 +256,7 @@ const std::vector<ContentSettingsType>& GetTypesWithTemporaryGrants() {
       ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
       ContentSettingsType::MEDIASTREAM_MIC,
       ContentSettingsType::MEDIASTREAM_CAMERA,
+      ContentSettingsType::SENSORS,
       ContentSettingsType::HAND_TRACKING,
       ContentSettingsType::SMART_CARD_DATA,
       ContentSettingsType::AR,
@@ -305,6 +276,7 @@ const std::vector<ContentSettingsType>& GetTypesWithTemporaryGrantsInHcsm() {
       ContentSettingsType::GEOLOCATION_WITH_OPTIONS,
       ContentSettingsType::MEDIASTREAM_MIC,
       ContentSettingsType::MEDIASTREAM_CAMERA,
+      ContentSettingsType::SENSORS,
       ContentSettingsType::HAND_TRACKING,
       ContentSettingsType::AR,
       ContentSettingsType::VR,
@@ -314,7 +286,7 @@ const std::vector<ContentSettingsType>& GetTypesWithTemporaryGrantsInHcsm() {
 
 bool ShouldTypeExpireActively(ContentSettingsType type) {
   return base::FeatureList::IsEnabled(features::kActiveContentSettingExpiry) &&
-         base::Contains(GetTypesWithTemporaryGrantsInHcsm(), type);
+         std::ranges::contains(GetTypesWithTemporaryGrantsInHcsm(), type);
 }
 
 PermissionSetting ValueToPermissionSetting(const PermissionSettingsInfo* info,

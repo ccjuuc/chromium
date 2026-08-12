@@ -13,7 +13,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -38,6 +37,7 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.commerce.PriceTrackingUtils;
 import org.chromium.chrome.browser.commerce.PriceTrackingUtilsJni;
@@ -48,7 +48,6 @@ import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.sync.SyncTestRule;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.BookmarkTestUtil;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.components.bookmarks.BookmarkId;
@@ -58,9 +57,8 @@ import org.chromium.components.commerce.core.CommerceSubscription;
 import org.chromium.components.commerce.core.ShoppingService;
 import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
 import org.chromium.components.power_bookmarks.ShoppingSpecifics;
-import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
-import org.chromium.google_apis.gaia.GaiaId;
+import org.chromium.components.signin.test.util.TestAccounts;
 import org.chromium.url.GURL;
 
 import java.io.IOException;
@@ -78,7 +76,7 @@ public class BookmarkSaveFlowTest {
     public final ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_BOOKMARKS)
-                    .setRevision(2)
+                    .setRevision(3)
                     .build();
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -94,8 +92,6 @@ public class BookmarkSaveFlowTest {
     private BottomSheetController mBottomSheetController;
     private BottomSheetTestSupport mBottomSheetTestSupport;
     private BookmarkModel mBookmarkModel;
-    private final CoreAccountInfo mAccountInfo =
-            CoreAccountInfo.createFromEmailAndGaiaId("test@gmail.com", new GaiaId("testGaiaId"));
 
     @Before
     public void setUp() throws ExecutionException {
@@ -104,7 +100,7 @@ public class BookmarkSaveFlowTest {
 
         // Setup mocks.
         PriceTrackingUtilsJni.setInstanceForTesting(mMockPriceTrackingUtilsJni);
-        doReturn(mAccountInfo).when(mIdentityManager).getPrimaryAccountInfo(anyInt());
+        doReturn(TestAccounts.ACCOUNT1).when(mIdentityManager).getPrimaryAccountInfo();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -127,7 +123,8 @@ public class BookmarkSaveFlowTest {
         loadBookmarkModel();
         doAnswer(
                         (invocation) -> {
-                            ((Callback<Boolean>) invocation.getArgument(3)).onResult(true);
+                            Callback<Boolean> callback = invocation.getArgument(3);
+                            callback.onResult(true);
                             return null;
                         })
                 .when(mMockPriceTrackingUtilsJni)
@@ -135,14 +132,16 @@ public class BookmarkSaveFlowTest {
                         any(Profile.class), anyLong(), anyBoolean(), any(), anyBoolean());
         doAnswer(
                         (invocation) -> {
-                            ((Callback<Boolean>) invocation.getArgument(1)).onResult(true);
+                            Callback<Boolean> callback = invocation.getArgument(1);
+                            callback.onResult(true);
                             return null;
                         })
                 .when(mShoppingService)
                 .subscribe(any(CommerceSubscription.class), any());
         doAnswer(
                         (invocation) -> {
-                            ((Callback<Boolean>) invocation.getArgument(1)).onResult(true);
+                            Callback<Boolean> callback = invocation.getArgument(1);
+                            callback.onResult(true);
                             return null;
                         })
                 .when(mShoppingService)
@@ -259,7 +258,8 @@ public class BookmarkSaveFlowTest {
 
                     doAnswer(
                                     args -> {
-                                        ((Callback<Boolean>) args.getArgument(2)).onResult(true);
+                                        Callback<Boolean> callback = args.getArgument(2);
+                                        callback.onResult(true);
                                         return null;
                                     })
                             .when(mMockPriceTrackingUtilsJni)
@@ -306,7 +306,8 @@ public class BookmarkSaveFlowTest {
 
                     doAnswer(
                                     args -> {
-                                        ((Callback<Boolean>) args.getArgument(2)).onResult(false);
+                                        Callback<Boolean> callback = args.getArgument(2);
+                                        callback.onResult(false);
                                         return null;
                                     })
                             .when(mMockPriceTrackingUtilsJni)
@@ -323,7 +324,8 @@ public class BookmarkSaveFlowTest {
 
         doAnswer(
                         (invocation) -> {
-                            ((Callback<Boolean>) invocation.getArgument(3)).onResult(false);
+                            Callback<Boolean> callback = invocation.getArgument(3);
+                            callback.onResult(false);
                             return null;
                         })
                 .when(mMockPriceTrackingUtilsJni)
@@ -331,7 +333,8 @@ public class BookmarkSaveFlowTest {
                         any(Profile.class), anyLong(), anyBoolean(), any(), anyBoolean());
         doAnswer(
                         (invocation) -> {
-                            ((Callback<Boolean>) invocation.getArgument(1)).onResult(false);
+                            Callback<Boolean> callback = invocation.getArgument(1);
+                            callback.onResult(false);
                             return null;
                         })
                 .when(mShoppingService)

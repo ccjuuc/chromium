@@ -17,9 +17,9 @@
 #include <list>
 
 #include "base/containers/flat_map.h"
-#include "components/optimization_guide/core/model_execution/model_broker_client.h"
-#include "components/optimization_guide/core/model_execution/remote_model_executor.h"
-#include "components/soda/soda_installer.h"
+#include "components/optimization_guide/core/model_execution/model_broker_client.h"  // nogncheck crbug.com/40147906
+#include "components/optimization_guide/core/model_execution/remote_model_executor.h"  // nogncheck crbug.com/40147906
+#include "components/soda/soda_installer.h"  // nogncheck crbug.com/40147906
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 namespace content {
@@ -51,9 +51,11 @@ class OnDeviceSpeechRecognitionImpl
   // speech::mojom::OnDeviceSpeechRecognition methods:
   void Available(
       const std::vector<std::string>& languages,
+      media::mojom::SpeechRecognitionQuality quality,
       OnDeviceSpeechRecognitionImpl::AvailableCallback callback) override;
   void Install(
       const std::vector<std::string>& languages,
+      media::mojom::SpeechRecognitionQuality quality,
       OnDeviceSpeechRecognitionImpl::InstallCallback callback) override;
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -80,16 +82,24 @@ class OnDeviceSpeechRecognitionImpl
   base::Value GetOnDeviceLanguagesDownloadedValue();
   void SetOnDeviceLanguagesDownloadedContentSetting(
       base::Value on_device_languages_downloaded);
-  bool HasOnDeviceLanguageDownloaded(std::string_view language);
+  bool IsLanguageAvailabilityMaskedForOrigin(std::string_view language,
+                                             bool has_mic_and_accept_lang,
+                                             PrefService* profile_prefs);
   void SetOnDeviceLanguageDownloaded(std::string_view);
 
   // Mask on-device speech recognition availability by requiring a call to
   // installOnDevice() for a language before the language is available to the
   // origin.
-  media::mojom::AvailabilityStatus GetMaskedAvailabilityStatus(
-      std::string_view language);
+  void GetMaskedAvailabilityStatusAsync(
+      std::string_view language,
+      media::mojom::SpeechRecognitionQuality quality,
+      const std::vector<std::string_view>& accept_languages_list,
+      bool has_mic_permission,
+      PrefService* profile_prefs,
+      base::OnceCallback<void(media::mojom::AvailabilityStatus)> callback);
 
   void OnModelClientAvailable(
+      std::set<std::string> languages,
       base::WeakPtr<optimization_guide::ModelClient> client);
 
   // A set of languages that have been downloaded for the current document. This

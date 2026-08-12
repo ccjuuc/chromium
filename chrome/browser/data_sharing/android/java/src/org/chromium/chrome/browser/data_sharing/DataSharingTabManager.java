@@ -19,7 +19,7 @@ import android.text.TextUtils;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
@@ -37,8 +37,8 @@ import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncUtils;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabGroupTitleUtils;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabwindow.WindowId;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
@@ -98,10 +98,10 @@ public class DataSharingTabManager {
     // Separator for description and link in share sheet.
     private static final String SHARED_TEXT_SEPARATOR = "";
 
-    private final ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
+    private final MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
     private final DataSharingTabGroupsDelegate mDataSharingTabGroupsDelegate;
-    private final Supplier<BottomSheetController> mBottomSheetControllerSupplier;
-    private ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
+    private final Supplier<@Nullable BottomSheetController> mBottomSheetControllerSupplier;
+    private MonotonicObservableSupplier<ShareDelegate> mShareDelegateSupplier;
     private final WindowAndroid mWindowAndroid;
     private final Resources mResources;
     private final OneshotSupplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
@@ -129,10 +129,10 @@ public class DataSharingTabManager {
      *     CollaborationControllerDelegate}
      */
     public DataSharingTabManager(
-            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
+            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
             DataSharingTabGroupsDelegate tabGroupsDelegate,
-            Supplier<BottomSheetController> bottomSheetControllerSupplier,
-            ObservableSupplier<ShareDelegate> shareDelegateSupplier,
+            Supplier<@Nullable BottomSheetController> bottomSheetControllerSupplier,
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
             WindowAndroid windowAndroid,
             Resources resources,
             OneshotSupplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
@@ -460,9 +460,8 @@ public class DataSharingTabManager {
         return preview;
     }
 
-    private TabGroupModelFilter getTabGroupModelFilter() {
-        return assumeNonNull(
-                mTabModelSelectorSupplier.get().getTabGroupModelFilter(/* isIncognito= */ false));
+    private TabModel getTabModel() {
+        return assumeNonNull(mTabModelSelectorSupplier.get()).getModel(/* incognito= */ false);
     }
 
     /**
@@ -491,10 +490,10 @@ public class DataSharingTabManager {
         assumeNonNull(syncGroup);
         assumeNonNull(syncGroup.syncId);
 
-        TabGroupModelFilter filter = getTabGroupModelFilter();
+        TabModel tabModel = getTabModel();
         if (syncGroup.localId == null) {
             openTabGroupInLocalAndShow(syncGroup);
-        } else if (TabGroupSyncUtils.isInCurrentWindow(filter, syncGroup.localId)) {
+        } else if (TabGroupSyncUtils.isInCurrentWindow(tabModel, syncGroup.localId)) {
             if (isFromInviteFlow) {
                 DataSharingMetrics.recordJoinActionFlowState(
                         DataSharingMetrics.JoinActionStateAndroid.LOCAL_TAB_GROUP_EXISTS);
@@ -552,7 +551,7 @@ public class DataSharingTabManager {
             @CollaborationServiceShareOrManageEntryPoint int entryPoint,
             Callback<Boolean> createGroupFinishedCallback) {
         if (tab.getTabGroupId() == null) {
-            getTabGroupModelFilter().createSingleTabGroup(tab);
+            getTabModel().createSingleTabGroup(tab);
         }
         createOrManageFlow(
                 EitherGroupId.createLocalId(
@@ -680,7 +679,7 @@ public class DataSharingTabManager {
             String collaborationId,
             @Nullable String sessionId,
             GURL url,
-            Bitmap preview,
+            @Nullable Bitmap preview,
             @Nullable Callback<Boolean> onShareSheetShown) {
         DataSharingMetrics.recordShareActionFlowState(
                 DataSharingMetrics.ShareActionStateAndroid.SHARE_SHEET_SHOWN);
@@ -744,8 +743,7 @@ public class DataSharingTabManager {
         if (preview != null) {
             shareParamsBuilder.setPreviewImageBitmap(preview);
         }
-        mShareDelegateSupplier
-                .get()
+        assumeNonNull(mShareDelegateSupplier.get())
                 .share(
                         shareParamsBuilder.build(),
                         chromeShareExtras,
@@ -908,7 +906,7 @@ public class DataSharingTabManager {
         RecentActivityActionHandler recentActivityActionHandler =
                 new RecentActivityActionHandlerImpl(
                         tabGroupSyncService,
-                        mTabModelSelectorSupplier.get(),
+                        assertNonNull(mTabModelSelectorSupplier.get()),
                         mDataSharingTabGroupsDelegate,
                         collaborationId,
                         existingGroup.syncId,
@@ -919,11 +917,13 @@ public class DataSharingTabManager {
                     mDataSharingTabGroupsDelegate.openUrlInChromeCustomTab(
                             activity, new GURL(ACTIVITY_LOGS_URL));
                 };
+        var bottomSheetController = mBottomSheetControllerSupplier.get();
+        assert bottomSheetController != null;
         RecentActivityListCoordinator recentActivityListCoordinator =
                 new RecentActivityListCoordinator(
                         collaborationId,
                         activity,
-                        mBottomSheetControllerSupplier.get(),
+                        bottomSheetController,
                         mMessagingBackendService,
                         tabGroupSyncService,
                         new DataSharingFaviconProvider(activity, mProfile, mBulkFaviconUtil),
@@ -963,7 +963,7 @@ public class DataSharingTabManager {
 
     /** Override ShareDelegateSupplier for testing. */
     public void setShareDelegateSupplierForTesting(
-            ObservableSupplier<ShareDelegate> shareDelegateSupplier) {
+            MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier) {
         mShareDelegateSupplier = shareDelegateSupplier;
     }
 }

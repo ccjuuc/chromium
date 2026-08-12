@@ -17,7 +17,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/byte_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/trace_event/trace_event.h"
@@ -98,25 +97,6 @@ static int32_t ReleaseVP9FrameBuffer(void* user_priv,
   FrameBufferPool* pool = static_cast<FrameBufferPool*>(user_priv);
   pool->ReleaseFrameBuffer(fb->priv);
   return 0;
-}
-
-// static
-SupportedVideoDecoderConfigs VpxVideoDecoder::SupportedConfigs() {
-  SupportedVideoDecoderConfigs supported_configs;
-  supported_configs.emplace_back(/*profile_min=*/VP8PROFILE_ANY,
-                                 /*profile_max=*/VP8PROFILE_ANY,
-                                 /*coded_size_min=*/kDefaultSwDecodeSizeMin,
-                                 /*coded_size_max=*/kDefaultSwDecodeSizeMax,
-                                 /*allow_encrypted=*/false,
-                                 /*require_encrypted=*/false);
-
-  supported_configs.emplace_back(/*profile_min=*/VP9PROFILE_PROFILE0,
-                                 /*profile_max=*/VP9PROFILE_PROFILE2,
-                                 /*coded_size_min=*/kDefaultSwDecodeSizeMin,
-                                 /*coded_size_max=*/kDefaultSwDecodeSizeMax,
-                                 /*allow_encrypted=*/false,
-                                 /*require_encrypted=*/false);
-  return supported_configs;
 }
 
 VpxVideoDecoder::VpxVideoDecoder(OffloadState offload_state)
@@ -245,7 +225,8 @@ bool VpxVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config) {
            VPX_CODEC_CAP_EXTERNAL_FRAME_BUFFER);
 
     DCHECK(!memory_pool_);
-    memory_pool_ = base::MakeRefCounted<FrameBufferPool>();
+    memory_pool_ =
+        base::MakeRefCounted<FrameBufferPool>(/*zero_initialize_memory=*/true);
 
     if (vpx_codec_set_frame_buffer_functions(
             vpx_codec_.get(), &GetVP9FrameBuffer, &ReleaseVP9FrameBuffer,
@@ -269,7 +250,21 @@ bool VpxVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config) {
 
   DCHECK(!vpx_codec_alpha_);
   vpx_codec_alpha_ = InitializeVpxContext(config);
-  return !!vpx_codec_alpha_;
+  if (!vpx_codec_alpha_) {
+    return false;
+  }
+
+  if (config.codec() == VideoCodec::kVP9) {
+    if (vpx_codec_set_frame_buffer_functions(
+            vpx_codec_alpha_.get(), &GetVP9FrameBuffer, &ReleaseVP9FrameBuffer,
+            memory_pool_.get())) {
+      DLOG(ERROR) << "Failed to configure external buffers for alpha. "
+                  << vpx_codec_error(vpx_codec_alpha_.get());
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void VpxVideoDecoder::CloseDecoder() {
@@ -332,20 +327,9 @@ bool VpxVideoDecoder::VpxDecode(const DecoderBuffer* buffer,
     return true;
   }
 
-  static constexpr size_t kItut35HeaderSize = 7;
-  if (buffer->side_data() &&
-      buffer->side_data()->itu_t35_data.size() >= kItut35HeaderSize) {
-    auto side_data = buffer->side_data()->itu_t35_data.as_span();
-    static constexpr uint8_t kItut35CountryCodeExtensionMarker = 0xFF;
-    if (side_data.data()[0] == kItut35CountryCodeExtensionMarker) {
-      side_data = side_data.subspan(1u);
-    }
-    auto [country_code, payload] = side_data.split_at<1u>();
-    if (auto agtm = GetSerializedAgtmItutT35(country_code.data()[0], payload)) {
-      gfx::HDRMetadata hdr_metadata = config_.hdr_metadata();
-      hdr_metadata.setSerializedAgtm(agtm);
-      config_.set_hdr_metadata(hdr_metadata);
-    }
+  gfx::HDRMetadata hdr_metadata = config_.hdr_metadata();
+  if (buffer->side_data()) {
+    hdr_metadata.MergeMetadataFrom(buffer->side_data()->hdr_metadata);
   }
 
   const vpx_image_t* vpx_image_alpha = nullptr;
@@ -372,7 +356,7 @@ bool VpxVideoDecoder::VpxDecode(const DecoderBuffer* buffer,
   }
 
   (*video_frame)->set_timestamp(buffer->timestamp());
-  (*video_frame)->set_hdr_metadata(config_.hdr_metadata());
+  (*video_frame)->set_hdr_metadata(hdr_metadata);
 
   // Prefer the color space from the config if available. It generally comes
   // from the color tag which is more expressive than the vp8 and vp9 bitstream.
@@ -490,11 +474,11 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
       break;
 
     case VPX_IMG_FMT_I422:
-      codec_format = PIXEL_FORMAT_I422;
+      codec_format = vpx_image_alpha ? PIXEL_FORMAT_I422A : PIXEL_FORMAT_I422;
       break;
 
     case VPX_IMG_FMT_I444:
-      codec_format = PIXEL_FORMAT_I444;
+      codec_format = vpx_image_alpha ? PIXEL_FORMAT_I444A : PIXEL_FORMAT_I444;
       break;
 
     case VPX_IMG_FMT_I42016:
@@ -544,11 +528,14 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
       return false;
   }
 
-  // The mixed |w|/|d_h| in |coded_size| is intentional. Setting the correct
-  // coded width is necessary to allow coalesced memory access, which may avoid
-  // frame copies. Setting the correct coded height however does not have any
-  // benefit, and only risk copying too much data.
-  const gfx::Size coded_size(vpx_image->w, vpx_image->d_h);
+  // The mixed |full_width|/|d_h| in |coded_size| is intentional. Setting the
+  // correct buffer width is necessary to allow coalesced memory access, which
+  // may avoid frame copies. Setting the correct coded height however does not
+  // have any benefit, and only risks copying too much data.
+  const unsigned int full_width = (vpx_image->fmt & VPX_IMG_FMT_HIGHBITDEPTH)
+                                      ? vpx_image->stride[VPX_PLANE_Y] / 2
+                                      : vpx_image->stride[VPX_PLANE_Y];
+  const gfx::Size coded_size(full_width, vpx_image->d_h);
   const gfx::Size visible_size(vpx_image->d_w, vpx_image->d_h);
   // Compute natural size by scaling visible size by *pixel* aspect ratio. Note
   // that we could instead use vpx_image r_w and r_h, but doing so would allow
@@ -576,20 +563,13 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
   if (memory_pool_) {
     DCHECK_EQ(VideoCodec::kVP9, config_.codec());
     if (vpx_image_alpha) {
+      CHECK_GT(vpx_image_alpha->stride[VPX_PLANE_Y], 0);
       size_t alpha_plane_size =
           vpx_image_alpha->stride[VPX_PLANE_Y] * vpx_image_alpha->d_h;
-      auto alpha_plane = memory_pool_->AllocateAlphaPlaneForFrameBuffer(
-          alpha_plane_size, vpx_image->fb_priv);
-      if (alpha_plane.empty()) {
-        error_status_ = DecoderStatus::Codes::kOutOfMemory;
-        // In case of OOM, abort copy.
-        return false;
-      }
-      libyuv::CopyPlane(vpx_image_alpha->planes[VPX_PLANE_Y],
-                        vpx_image_alpha->stride[VPX_PLANE_Y],
-                        alpha_plane.data(),
-                        vpx_image_alpha->stride[VPX_PLANE_Y],
-                        vpx_image_alpha->d_w, vpx_image_alpha->d_h);
+      // SAFETY: libvpx guarantees that the Y plane has at least `stride * d_h`
+      // bytes available.
+      auto alpha_plane = UNSAFE_BUFFERS(base::span<uint8_t>(
+          vpx_image_alpha->planes[VPX_PLANE_Y], alpha_plane_size));
       *video_frame = VideoFrame::WrapExternalYuvaData(
           codec_format, coded_size, gfx::Rect(visible_size), natural_size,
           vpx_image->stride[VPX_PLANE_Y], vpx_image->stride[VPX_PLANE_U],
@@ -605,8 +585,14 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
     if (!(*video_frame))
       return false;
 
-    video_frame->get()->AddDestructionObserver(
-        memory_pool_->CreateFrameCallback(vpx_image->fb_priv));
+    (*video_frame)
+        ->AddDestructionObserver(
+            memory_pool_->CreateFrameCallback(vpx_image->fb_priv));
+    if (vpx_image_alpha) {
+      (*video_frame)
+          ->AddDestructionObserver(
+              memory_pool_->CreateFrameCallback(vpx_image_alpha->fb_priv));
+    }
     return true;
   }
 

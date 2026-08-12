@@ -61,28 +61,6 @@ base::TimeDelta GetDelayFromPref(PrefService* prefs, const char* pref_name);
 // (6) Its hostname is less than 4 characters.
 bool CanGetReputationOfUrl(const GURL& url);
 
-// List of callers of
-// `SetAccessToken`. This is used for
-// logging the histogram SafeBrowsing.AuthenticatedCookieResetEndpoint.
-//
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class SafeBrowsingAuthenticatedEndpoint {
-  kDeepScanning = 0,
-  kDownloadProtection = 1,
-  kExtensionTelemetry = 2,
-  kClientSideDetection = 3,
-  kPasswordProtection = 4,
-  kThreatDetails = 5,
-  kRealtimeUrlLookup = 6,
-  kMaxValue = kRealtimeUrlLookup,
-};
-
-// When cookies are changed on this request, log the
-// SafeBrowsing.AuthenticatedCookieResetEndpoint histogram.
-void LogAuthenticatedCookieResets(network::ResourceRequest& resource_request,
-                                  SafeBrowsingAuthenticatedEndpoint endpoint);
-
 // Set |access_token| in |resource_request|.
 void SetAccessToken(network::ResourceRequest* resource_request,
                     const std::string& access_token);
@@ -105,16 +83,19 @@ void RecordHttpResponseOrErrorCode(const char* metric_name,
 bool ErrorIsRetriable(int net_error, int http_error);
 
 // We populate a parallel set of metrics to differentiate some threat sources.
-std::string GetExtraMetricsSuffix(
+std::string_view GetExtraMetricsSuffix(
     security_interstitials::UnsafeResource unsafe_resource);
 
 // We populate a parallel set of metrics to differentiate some threat subtypes.
-std::string GetExtraExtraMetricsSuffix(
+std::string_view GetExtraExtraMetricsSuffix(
     security_interstitials::UnsafeResource unsafe_resource);
 
 // Return the threat_type string for unsafe site visits.
 std::string GetThreatTypeStringForInterstitial(
     safe_browsing::SBThreatType threat_type);
+
+// Returns the tier value for the given ClientSideDetectionType.
+int GetClientSideDetectionTypeTier(ClientSideDetectionType type);
 
 }  // namespace safe_browsing
 

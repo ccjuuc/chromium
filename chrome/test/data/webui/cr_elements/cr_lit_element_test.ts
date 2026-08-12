@@ -2,14 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Disabled because otherwise it is incorrectly also applied to Lit properties,
-// since Lit and Polymer coexist in this file.
-/* eslint-disable @webui-eslint/polymer-property-class-member */
-
-// Disabled because otherwise it is incorrectly also applied to Polymer
-// properties, since Lit and Polymer coexist in this file.
-/* eslint-disable @webui-eslint/lit-property-accessor */
-
 import {getTrustedHTML} from 'chrome://resources/js/static_types.js';
 import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
@@ -446,14 +438,16 @@ suite('CrLitElement', function() {
     }
 
     // Case2: An event should be fired whenever the property changes.
-    let whenFired2 = eventToPromise('prop1-changed', element);
+    let whenFired2 =
+        eventToPromise<CustomEvent<{value: boolean}>>('prop1-changed', element);
     element.prop1 = true;
     let event = await whenFired2;
     assertFalse(event.bubbles);
     assertFalse(event.composed);
     assertDeepEquals({value: true}, event.detail);
 
-    whenFired2 = eventToPromise('prop-four-changed', element);
+    whenFired2 = eventToPromise<CustomEvent<{value: boolean}>>(
+        'prop-four-changed', element);
     element.propFour = true;
     event = await whenFired2;
     assertFalse(event.bubbles);
@@ -522,8 +516,9 @@ suite('CrLitElement', function() {
     const dummyEventName = 'dummy-event';
     const dummyPayload = 'hello dummy';
 
-    const whenFired = eventToPromise(dummyEventName, element);
-    element.fire(dummyEventName, dummyPayload);
+    const whenFired =
+        eventToPromise<CustomEvent<string>>(dummyEventName, element);
+    element.fire<string>(dummyEventName, dummyPayload);
 
     const event = await whenFired;
     assertTrue(event.bubbles);

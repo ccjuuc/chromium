@@ -11,7 +11,6 @@
 
 #include "base/base64url.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
@@ -132,7 +131,7 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       })");
 
 // LINT.IfChange(ClientSafeBrowsingReportTypeString)
-std::string GetReportTypeSuffix(
+std::string_view GetReportTypeSuffix(
     safe_browsing::ClientSafeBrowsingReportRequest::ReportType report_type) {
   switch (report_type) {
     case safe_browsing::ClientSafeBrowsingReportRequest_ReportType_UNKNOWN:
@@ -350,7 +349,8 @@ void PingManager::OnThreatDetailsReportURLLoaderComplete(
   std::string metric = "SafeBrowsing.ClientSafeBrowsingReport.NetworkResult";
   std::string access_token_suffix =
       (has_access_token ? ".YesAccessToken" : ".NoAccessToken");
-  std::string report_type_token_suffix = "." + GetReportTypeSuffix(report_type);
+  std::string report_type_token_suffix =
+      base::StrCat({".", GetReportTypeSuffix(report_type)});
   RecordHttpResponseOrErrorCode(metric.c_str(), source->NetError(),
                                 response_code);
   RecordHttpResponseOrErrorCode((metric + access_token_suffix).c_str(),
@@ -465,7 +465,7 @@ void PingManager::AttachThreatDetailsAndLaunchSurvey(
            ClientSafeBrowsingReportRequest::URL_PHISHING,
            ClientSafeBrowsingReportRequest::URL_UNWANTED,
            ClientSafeBrowsingReportRequest::URL_MALWARE});
-  CHECK(base::Contains(valid_report_types, report->type()));
+  CHECK(valid_report_types.contains(report->type()));
 
   std::string serialized_report;
   if (FinalizeAndSerializeReport(report.get(), &serialized_report) !=
@@ -497,8 +497,6 @@ void PingManager::ReportThreatDetailsOnGotAccessToken(
   resource_request->site_for_cookies = net::SiteForCookies::FromUrl(report_url);
 
   if (!access_token.empty()) {
-    LogAuthenticatedCookieResets(
-        *resource_request, SafeBrowsingAuthenticatedEndpoint::kThreatDetails);
     SetAccessToken(resource_request.get(), access_token);
   }
   base::UmaHistogramBoolean(

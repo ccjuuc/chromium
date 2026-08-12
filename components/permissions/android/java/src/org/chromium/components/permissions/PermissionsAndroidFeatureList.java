@@ -6,7 +6,6 @@ package org.chromium.components.permissions;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.cached_flags.CachedFeatureParam;
-import org.chromium.components.cached_flags.IntCachedFeatureParam;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,10 +33,14 @@ public abstract class PermissionsAndroidFeatureList {
 
     public static final String ANDROID_CANCEL_PERMISSION_PROMPT_ON_TOUCH_OUTSIDE =
             "AndroidCancelPermissionPromptOnTouchOutside";
+    public static final String ANDROID_ITEM_CHOOSER_CANCEL_BUTTON =
+            "AndroidItemChooserCancelButton";
     public static final String PERMISSIONS_ANDROID_CLAPPER_LOUD = "PermissionsAndroidClapperLoud";
-    public static final String PERMISSIONS_ANDROID_CLAPPER_QUIET = "PermissionsAndroidClapperQuiet";
+    public static final String PERMISSION_PROMISE_LIFETIME_MODULATION_ANDROID =
+            "PermissionPromiseLifetimeModulationAndroid";
+    public static final String PERMISSIONS_GESTURE_GATED_PROMPTS = "PermissionsGestureGatedPrompts";
 
-    public static final String PERMISSION_ELEMENT = "PermissionElement";
+    public static final String USER_MEDIA_ELEMENT = "UserMediaElement";
     public static final String GEOLOCATION_ELEMENT = "GeolocationElement";
     public static final String BYPASS_PEPC_SECURITY_FOR_TESTING = "BypassPepcSecurityForTesting";
     public static final String PERMISSION_HEURISTIC_AUTO_GRANT = "PermissionHeuristicAutoGrant";
@@ -46,10 +49,4 @@ public abstract class PermissionsAndroidFeatureList {
             "ApproximateGeolocationPermission";
 
     public static final String AUTO_PICTURE_IN_PICTURE_ANDROID = "AutoPictureInPictureAndroid";
-
-    public static final IntCachedFeatureParam APPROXIMATE_GEOLOCATION_PROMPT_ARM =
-            PermissionsAndroidFeatureMap.newIntCachedFeatureParam(
-                    APPROXIMATE_GEOLOCATION_PERMISSION,
-                    "prompt_arm",
-                    ApproximateGeolocationPromptArm.NO_ARM_SELECTED);
 }

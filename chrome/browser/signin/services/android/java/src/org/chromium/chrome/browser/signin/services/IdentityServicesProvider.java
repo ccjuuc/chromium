@@ -23,6 +23,9 @@ import org.chromium.components.signin.identitymanager.IdentityManager;
 @NullMarked
 public class IdentityServicesProvider {
     private static @Nullable IdentityServicesProvider sIdentityServicesProvider;
+    private static @Nullable IdentityManager sIdentityManager;
+    private static @Nullable SigninManager sSigninManager;
+    private static @Nullable AccountPreviewDataService sAccountPreviewDataServiceForTesting;
 
     private IdentityServicesProvider() {}
 
@@ -33,20 +36,49 @@ public class IdentityServicesProvider {
         return sIdentityServicesProvider;
     }
 
+    /**
+     * @deprecated Use {@link #setIdentityManagerForTesting(IdentityManager)} and {@link
+     *     #setSigninManagerForTesting(SigninManager)} instead.
+     *     <p>TODO(crbug.com/476991282): Remove this method.
+     */
+    @Deprecated
     public static void setInstanceForTests(IdentityServicesProvider provider) {
         var oldValue = sIdentityServicesProvider;
         sIdentityServicesProvider = provider;
         ResettersForTesting.register(() -> sIdentityServicesProvider = oldValue);
     }
 
+    public static void setIdentityManagerForTesting(IdentityManager identityManager) {
+        var oldValue = sIdentityManager;
+        sIdentityManager = identityManager;
+        ResettersForTesting.register(() -> sIdentityManager = oldValue);
+    }
+
+    public static void setSigninManagerForTesting(SigninManager signinManager) {
+        var oldValue = sSigninManager;
+        sSigninManager = signinManager;
+        ResettersForTesting.register(() -> sSigninManager = oldValue);
+    }
+
+    public static void setAccountPreviewDataServiceForTesting(
+            @Nullable AccountPreviewDataService accountPreviewDataService) {
+        var oldValue = sAccountPreviewDataServiceForTesting;
+        sAccountPreviewDataServiceForTesting = accountPreviewDataService;
+        ResettersForTesting.register(() -> sAccountPreviewDataServiceForTesting = oldValue);
+    }
+
     /**
      * Getter for {@link IdentityManager} instance for given profile.
+     *
      * @param profile The profile to get regarding identity manager.
      * @return a {@link IdentityManager} instance, or null if the incognito Profile is supplied.
      */
     @MainThread
     public @Nullable IdentityManager getIdentityManager(Profile profile) {
         ThreadUtils.assertOnUiThread();
+        if (sIdentityManager != null) {
+            return sIdentityManager;
+        }
         IdentityManager result = IdentityServicesProviderJni.get().getIdentityManager(profile);
         return result;
     }
@@ -60,8 +92,28 @@ public class IdentityServicesProvider {
     @MainThread
     public @Nullable SigninManager getSigninManager(Profile profile) {
         ThreadUtils.assertOnUiThread();
+        if (sSigninManager != null) {
+            return sSigninManager;
+        }
         SigninManager result = IdentityServicesProviderJni.get().getSigninManager(profile);
         return result;
+    }
+
+    /**
+     * Getter for {@link AccountPreviewDataService} instance for given profile.
+     *
+     * @param profile The profile to get regarding account preview data service.
+     * @return a {@link AccountPreviewDataService} instance, or null if the incognito Profile is
+     *     supplied.
+     */
+    @MainThread
+    public @Nullable AccountPreviewDataService getAccountPreviewDataService(Profile profile) {
+        ThreadUtils.assertOnUiThread();
+        if (sAccountPreviewDataServiceForTesting != null) {
+            return sAccountPreviewDataServiceForTesting;
+        }
+
+        return IdentityServicesProviderJni.get().getAccountPreviewDataService(profile);
     }
 
     @NativeMethods
@@ -70,5 +122,9 @@ public class IdentityServicesProvider {
         IdentityManager getIdentityManager(@JniType("Profile*") Profile profile);
 
         SigninManager getSigninManager(@JniType("Profile*") Profile profile);
+
+        @JniType("signin::AccountPreviewDataService*")
+        @Nullable AccountPreviewDataService getAccountPreviewDataService(
+                @JniType("Profile*") Profile profile);
     }
 }

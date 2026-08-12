@@ -33,13 +33,15 @@ class CredentialManagerDialogControllerImpl
   ~CredentialManagerDialogControllerImpl() override;
 
   // Pop up the account chooser dialog.
-  void ShowAccountChooser(AccountChooserPrompt* dialog, FormsVector locals);
+  void ShowAccountChooser(std::unique_ptr<AccountChooserPrompt> dialog,
+                          FormsVector locals);
 
   // Pop up the autosignin first run dialog.
-  void ShowAutosigninPrompt(AutoSigninFirstRunPrompt* dialog);
+  void ShowAutosigninPrompt(std::unique_ptr<AutoSigninFirstRunPrompt> dialog);
 
   // CredentialManagerDialogController:
   const FormsVector& GetLocalForms() const override;
+  url::Origin GetOrigin() const override;
   std::u16string GetAccountChooserTitle() const override;
   bool IsShowingAccountChooser() const override;
   bool ShouldShowSignInButton() const override;
@@ -54,6 +56,13 @@ class CredentialManagerDialogControllerImpl
   void OnAutoSigninTurnOff() override;
   void OnCloseDialog() override;
 
+  // PasswordCombinedSelectorController:
+  DisplayType GetDisplayType() const override;
+  bool ShouldShowTopIllustration() const override;
+  std::u16string GetTitle() const override;
+  std::u16string GetSubtitle() const override;
+  std::u16string GetOkButtonLabel() const override;
+
  private:
   // Release |current_dialog_| and close the open dialog.
   void ResetDialog();
@@ -64,8 +73,8 @@ class CredentialManagerDialogControllerImpl
 
   const raw_ptr<Profile> profile_;
   const raw_ptr<PasswordsModelDelegate> delegate_;
-  raw_ptr<AccountChooserPrompt> account_chooser_dialog_;
-  raw_ptr<AutoSigninFirstRunPrompt> autosignin_dialog_;
+  std::unique_ptr<AccountChooserPrompt> account_chooser_dialog_;
+  std::unique_ptr<AutoSigninFirstRunPrompt> autosignin_dialog_;
   std::vector<std::unique_ptr<password_manager::PasswordForm>>
       local_credentials_;
   base::WeakPtrFactory<CredentialManagerDialogControllerImpl> weak_ptr_factory_{

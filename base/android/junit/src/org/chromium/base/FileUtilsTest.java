@@ -18,6 +18,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
 
 import org.junit.Before;
 import org.junit.Ignore;
@@ -72,33 +73,30 @@ public class FileUtilsTest {
      *
      * @param rootDir The directory {@link Path}.
      * @return A "; "-deliminated string of relative paths of all files stirctly under |rootDir|,
-     *         lexicographically by path segments. Directories have "/" as suffix.
+     *     lexicographically by path segments. Directories have "/" as suffix.
      */
-    private String listAllPaths(Path rootDir) {
+    private String listAllPaths(Path rootDir) throws IOException {
         ArrayList<String> pathList = new ArrayList<String>();
-        try {
-            Files.walkFileTree(
-                    rootDir,
-                    new SimpleFileVisitor<Path>() {
-                        @Override
-                        public FileVisitResult preVisitDirectory(
-                                Path path, BasicFileAttributes attrs) throws IOException {
-                            String relPathString = rootDir.relativize(path).toString();
-                            if (!relPathString.isEmpty()) { // Exclude |rootDir|.
-                                pathList.add(relPathString + "/");
-                            }
-                            return FileVisitResult.CONTINUE;
+        Files.walkFileTree(
+                rootDir,
+                new SimpleFileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attrs)
+                            throws IOException {
+                        String relPathString = rootDir.relativize(path).toString();
+                        if (!relPathString.isEmpty()) { // Exclude |rootDir|.
+                            pathList.add(relPathString + "/");
                         }
+                        return FileVisitResult.CONTINUE;
+                    }
 
-                        @Override
-                        public FileVisitResult visitFile(Path path, BasicFileAttributes attrs)
-                                throws IOException {
-                            pathList.add(rootDir.relativize(path).toString());
-                            return FileVisitResult.CONTINUE;
-                        }
-                    });
-        } catch (IOException e) {
-        }
+                    @Override
+                    public FileVisitResult visitFile(Path path, BasicFileAttributes attrs)
+                            throws IOException {
+                        pathList.add(rootDir.relativize(path).toString());
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
 
         // Sort paths lexicographically by path segments. For example, "foo.bar/file" and "foo/sub"
         // are treated as ["foo.bar", "file"] and ["foo", "sub"], then compared lexicographically
@@ -121,9 +119,9 @@ public class FileUtilsTest {
      * Helper to check the current list of temp files and directories matches expectation.
      *
      * @param expectedFileList A string representation of the expected list of temp files and
-     *        directories. See listAllPaths() for format.
+     *     directories. See listAllPaths() for format.
      */
-    private void assertFileList(String expectedFileList) {
+    private void assertFileList(String expectedFileList) throws IOException {
         Path rootDir = temporaryFolder.getRoot().toPath();
         assertEquals(expectedFileList, listAllPaths(rootDir));
     }
@@ -283,7 +281,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testCopyStream() {
+    public void testCopyStream() throws IOException {
         Function<byte[], Boolean> runCase =
                 (byte[] inputBytes) -> {
                     ByteArrayInputStream inputStream = new ByteArrayInputStream(inputBytes);
@@ -305,7 +303,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testCopyStreamToFile() {
+    public void testCopyStreamToFile() throws IOException {
         Function<byte[], Boolean> runCase =
                 (byte[] inputBytes) -> {
                     ByteArrayInputStream inputStream = new ByteArrayInputStream(inputBytes);
@@ -335,7 +333,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testReadStream() {
+    public void testReadStream() throws IOException {
         Function<byte[], Boolean> runCase =
                 (byte[] inputBytes) -> {
                     ByteArrayInputStream inputStream = new ByteArrayInputStream(inputBytes);
@@ -356,7 +354,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testGetUriForFileWithContentUri() {
+    public void testGetUriForFileWithContentUri() throws IOException {
         // FileProviderUtils needs to be initialized for "content://" URL to work. Use a fake
         // version to avoid dealing with Android innards, and to provide consistent results.
         FileProviderUtils.setFileProviderUtil(
@@ -390,7 +388,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testGetUriForFileWithoutContentUri() {
+    public void testGetUriForFileWithoutContentUri() throws IOException {
         // Assumes FileProviderUtils.setFileProviderUtil() is not called yet.
         // Only test using absolute path. Otherwise cwd would be included into results.
         assertEquals("file:///", FileUtils.getUriForFile(new File("/")).toString());
@@ -402,7 +400,7 @@ public class FileUtilsTest {
     }
 
     @Test
-    public void testGetExtension() {
+    public void testGetExtension() throws IOException {
         assertEquals("txt", FileUtils.getExtension("foo.txt"));
         assertEquals("txt", FileUtils.getExtension("fOo.TxT"));
         assertEquals("", FileUtils.getExtension(""));
@@ -430,9 +428,10 @@ public class FileUtilsTest {
     public static class FakeShadowBitmapFactory {
         @Implementation
         public static Bitmap decodeFileDescriptor(FileDescriptor fd) throws IOException {
-            FileInputStream inStream = new FileInputStream(fd);
-            if (inStream.read() == -1) {
-                return null;
+            try (FileInputStream inStream = new FileInputStream(fd)) {
+                if (inStream.read() == -1) {
+                    return null;
+                }
             }
             return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
         }
@@ -440,9 +439,19 @@ public class FileUtilsTest {
 
     private static class TestContentProvider extends ContentProvider {
         private final HashMap<String, String> mUriToFilename;
+        private File mInsertedFile;
+        private ContentValues mInsertedValues;
 
         public TestContentProvider() {
             mUriToFilename = new HashMap<String, String>();
+        }
+
+        public void setInsertedFileForTest(File file) {
+            mInsertedFile = file;
+        }
+
+        public ContentValues getInsertedValues() {
+            return mInsertedValues;
         }
 
         public void insertForTest(String uriString, String filename) {
@@ -454,9 +463,14 @@ public class FileUtilsTest {
             String uriString = uri.toString();
             if (mUriToFilename.containsKey(uriString)) {
                 String filename = mUriToFilename.get(uriString);
-                // Throws FileNotFoundException if |filename| is bogus.
-                return ParcelFileDescriptor.open(
-                        new File(filename), ParcelFileDescriptor.MODE_READ_ONLY);
+                int fileMode = ParcelFileDescriptor.MODE_READ_ONLY;
+                if (mode.contains("w")) {
+                    fileMode =
+                            ParcelFileDescriptor.MODE_WRITE_ONLY
+                                    | ParcelFileDescriptor.MODE_CREATE
+                                    | ParcelFileDescriptor.MODE_TRUNCATE;
+                }
+                return ParcelFileDescriptor.open(new File(filename), fileMode);
             }
             return null;
         }
@@ -481,28 +495,44 @@ public class FileUtilsTest {
             return null;
         }
 
+        // This function is currently only used for copyFileToDownloadsCollection, hence the
+        // Downloads restriction.
         @Override
         public Uri insert(Uri uri, ContentValues values) {
+            if (uri.equals(MediaStore.Downloads.EXTERNAL_CONTENT_URI) && mInsertedFile != null) {
+                mInsertedValues = values;
+                Uri itemUri = Uri.parse("content://media/external/downloads/12345");
+                mUriToFilename.put(itemUri.toString(), mInsertedFile.getAbsolutePath());
+                return itemUri;
+            }
             return null;
         }
 
         @Override
         public int delete(Uri uri, String selection, String[] selectionArgs) {
+            if (mUriToFilename.remove(uri.toString()) != null) {
+                return 1;
+            }
             return 0;
         }
 
         @Override
         public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+            if (mUriToFilename.containsKey(uri.toString())) {
+                return 1;
+            }
             return 0;
         }
     }
 
     public void markFileAsValidImage(File outFile) throws IOException {
-        FileOutputStream outStream = new FileOutputStream(outFile);
-        outStream.write("Non-empty file is assumed to be valid image.".getBytes());
-        outStream.close();
+        try (FileOutputStream outStream = new FileOutputStream(outFile)) {
+            outStream.write("Non-empty file is assumed to be valid image.".getBytes());
+        }
     }
 
+    // This test fails on SDK 36 due to a CloseGuard warning in Robolectric.
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
     @Test
     public void testQueryBitmapFromContentProvider() throws IOException {
         // Set up "org.chromium.test" provider.
@@ -535,5 +565,36 @@ public class FileUtilsTest {
             assertNull(FileUtils.queryBitmapFromContentProvider(mContext, bogusFileUri));
             assertNull(FileUtils.queryBitmapFromContentProvider(mContext, nonExistentUri));
         }
+    }
+
+    @Test
+    public void testCopyFileToDownloadsCollection() throws IOException {
+        ProviderInfo info = new ProviderInfo();
+        info.authority = MediaStore.AUTHORITY;
+        TestContentProvider contentProvider =
+                Robolectric.buildContentProvider(TestContentProvider.class).create(info).get();
+
+        File sourceFile = temporaryFolder.newFile("source.log");
+        byte[] testData = "{\"data\": \"test net log content\"}".getBytes();
+        FileUtils.copyStreamToFile(new ByteArrayInputStream(testData), sourceFile);
+
+        File destFile = temporaryFolder.newFile("dest.log");
+        contentProvider.setInsertedFileForTest(destFile);
+
+        String resultUri =
+                FileUtils.copyFileToDownloadsCollection(
+                        sourceFile.getAbsolutePath(), "application/json");
+        assertEquals("content://media/external/downloads/12345", resultUri);
+        assertEquals(
+                "application/json",
+                contentProvider.getInsertedValues().getAsString(MediaStore.MediaColumns.MIME_TYPE));
+        assertEquals(
+                "source.log",
+                contentProvider
+                        .getInsertedValues()
+                        .getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
+
+        byte[] copiedData = FileUtils.readStream(new FileInputStream(destFile));
+        assertTrue(Arrays.equals(testData, copiedData));
     }
 }

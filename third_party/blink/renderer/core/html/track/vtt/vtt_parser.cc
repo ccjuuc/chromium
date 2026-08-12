@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/segmented_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -218,8 +219,9 @@ bool VTTParser::HasRequiredFileIdentifier(const String& line) {
   // do not exactly equal "WEBVTT", or the seventh character is not a U+0020
   // SPACE character, a U+0009 CHARACTER TABULATION (tab) character, or a
   // U+000A LINE FEED (LF) character, then abort these steps.
-  if (!line.StartsWith("WEBVTT"))
+  if (!line.starts_with("WEBVTT")) {
     return false;
+  }
   if (line.length() > kFileIdentifierLength) {
     UChar maybe_separator = line[kFileIdentifierLength];
     // The line reader handles the line break characters, so we don't need
@@ -241,9 +243,9 @@ VTTParser::ParseState VTTParser::CollectRegionSettings(const String& line) {
 }
 
 VTTParser::ParseState VTTParser::CollectStyleSheet(const String& line) {
-  if (line.empty() || line.Contains("-->")) {
+  if (line.empty() || line.contains("-->")) {
     auto* parser_context = MakeGarbageCollected<CSSParserContext>(
-        *document_, NullURL(), true /* origin_clean */, Referrer(),
+        *document_, NullUrl(), true /* origin_clean */, Referrer(),
         Utf8Encoding(), ResourceFetchRestriction::kOnlyDataUrls);
     auto* style_sheet_contents =
         MakeGarbageCollected<StyleSheetContents>(parser_context);
@@ -269,7 +271,7 @@ VTTParser::ParseState VTTParser::CollectStyleSheet(const String& line) {
 VTTParser::ParseState VTTParser::CollectWebVTTBlock(const String& line) {
   // collect a WebVTT block parsing. (WebVTT parser algorithm step 14)
 
-  if (!previous_line_.Contains("-->")) {
+  if (!previous_line_.contains("-->")) {
     // If Region support is enabled.
     if (RuntimeEnabledFeatures::WebVTTRegionsEnabled() &&
         CheckAndCreateRegion(line))
@@ -278,8 +280,8 @@ VTTParser::ParseState VTTParser::CollectWebVTTBlock(const String& line) {
     // line starts with the substring "STYLE" and remaining characters
     // zero or more U+0020 SPACE characters or U+0009 CHARACTER TABULATION
     // (tab) characters expected other than these characters it is invalid.
-    if (line.StartsWith("STYLE") && StringView(line, kStyleIdentifierLength)
-                                        .IsAllSpecialCharacters<IsASpace>()) {
+    if (line.starts_with("STYLE") && StringView(line, kStyleIdentifierLength)
+                                         .IsAllSpecialCharacters<IsASpace>()) {
       contains_style_block_ = true;
       current_content_.Clear();
       return kStyle;
@@ -289,8 +291,9 @@ VTTParser::ParseState VTTParser::CollectWebVTTBlock(const String& line) {
   // Handle cue block.
   ParseState state = CheckAndRecoverCue(line);
   if (state != kHeader) {
-    if (!previous_line_.empty() && !previous_line_.Contains("-->"))
+    if (!previous_line_.empty() && !previous_line_.contains("-->")) {
       current_id_ = AtomicString(previous_line_);
+    }
 
     return state;
   }
@@ -306,7 +309,7 @@ VTTParser::ParseState VTTParser::CollectWebVTTBlock(const String& line) {
 
 VTTParser::ParseState VTTParser::CheckAndRecoverCue(const String& line) {
   // parse cue timings and settings
-  if (line.Contains("-->")) {
+  if (line.contains("-->")) {
     ParseState state = RecoverCue(line);
     if (state != kBadCue) {
       return state;
@@ -319,8 +322,8 @@ bool VTTParser::CheckAndCreateRegion(const String& line) {
   // line starts with the substring "REGION" and remaining characters
   // zero or more U+0020 SPACE characters or U+0009 CHARACTER TABULATION
   // (tab) characters expected other than these characters it is invalid.
-  if (line.StartsWith("REGION") && StringView(line, kRegionIdentifierLength)
-                                       .IsAllSpecialCharacters<IsASpace>()) {
+  if (line.starts_with("REGION") && StringView(line, kRegionIdentifierLength)
+                                        .IsAllSpecialCharacters<IsASpace>()) {
     current_region_ = VTTRegion::Create(*document_);
     return true;
   }
@@ -328,8 +331,9 @@ bool VTTParser::CheckAndCreateRegion(const String& line) {
 }
 
 bool VTTParser::CheckAndStoreRegion(const String& line) {
-  if (!line.empty() && !line.Contains("-->"))
+  if (!line.empty() && !line.contains("-->")) {
     return false;
+  }
 
   if (!current_region_->id().empty())
     region_map_.Set(current_region_->id(), current_region_);
@@ -338,8 +342,9 @@ bool VTTParser::CheckAndStoreRegion(const String& line) {
 }
 
 VTTParser::ParseState VTTParser::CollectCueId(const String& line) {
-  if (line.Contains("-->"))
+  if (line.contains("-->")) {
     return CollectTimingsAndSettings(line);
+  }
   current_id_ = AtomicString(line);
   return kTimingsAndSettings;
 }
@@ -386,7 +391,7 @@ VTTParser::ParseState VTTParser::CollectCueText(const String& line) {
     return kId;
   }
   // Step 35.
-  if (line.Contains("-->")) {
+  if (line.contains("-->")) {
     // Step 39-40.
     CreateNewCue();
 
@@ -411,8 +416,9 @@ VTTParser::ParseState VTTParser::RecoverCue(const String& line) {
 VTTParser::ParseState VTTParser::IgnoreBadCue(const String& line) {
   if (line.empty())
     return kId;
-  if (line.Contains("-->"))
+  if (line.contains("-->")) {
     return RecoverCue(line);
+  }
   return kBadCue;
 }
 
@@ -500,8 +506,8 @@ static String SerializeTimeStamp(double time_stamp) {
   value /= 60;
   unsigned minutes = value % 60;
   unsigned hours = static_cast<unsigned>(value / 60);
-  return String::Format("%02u:%02u:%02u.%03u", hours, minutes, seconds,
-                        milliseconds);
+  return Format("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds,
+                milliseconds);
 }
 
 bool VTTParser::CollectTimeStamp(VTTScanner& input, double& time_stamp) {

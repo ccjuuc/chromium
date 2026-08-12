@@ -5,11 +5,13 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_I18N_API_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_ADDRESSES_AUTOFILL_I18N_API_H_
 
+#include <string>
+#include <string_view>
+
 #include "components/autofill/core/browser/country_type.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_hierarchies.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_parsing_expression_components.h"
-#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_store.h"
+#include "components/autofill/core/browser/field_types.h"
 
 namespace autofill::i18n_model_definition {
 
@@ -39,8 +41,8 @@ bool IsSynthesizedType(FieldType field_type, AddressCountryCode country_code);
 // Returns the formatting expression corresponding to the provided parameters.
 // If the expression can't be found or the country is empty, it attempts to look
 // for a legacy expression. Returns an empty string if none can be found.
-std::u16string GetFormattingExpression(FieldType field_type,
-                                       AddressCountryCode country_code);
+std::u16string_view GetFormattingExpression(FieldType field_type,
+                                            AddressCountryCode country_code);
 
 // Parses the given `value` using a custom parsing process (if available) for
 // the corresponding `field_type` and `country_code`. If the country is empty or

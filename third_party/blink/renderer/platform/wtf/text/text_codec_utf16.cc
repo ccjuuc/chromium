@@ -27,9 +27,11 @@
 
 #include <unicode/utf16.h>
 
+#include <bit>
 #include <memory>
 
 #include "base/numerics/byte_conversions.h"
+#include "base/numerics/safe_conversions.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
@@ -39,8 +41,8 @@
 namespace blink {
 
 bool TextCodecUtf16::IsSupported(StringView canonical_name) {
-  return EqualIgnoringASCIICase(canonical_name, "UTF-16LE") ||
-         EqualIgnoringASCIICase(canonical_name, "UTF-16BE");
+  return EqualIgnoringAsciiCase(canonical_name, "UTF-16LE") ||
+         EqualIgnoringAsciiCase(canonical_name, "UTF-16BE");
 }
 
 void TextCodecUtf16::RegisterEncodingNames(EncodingNameRegistrar registrar) {
@@ -80,8 +82,8 @@ String TextCodecUtf16::Decode(base::span<const uint8_t> bytes,
                               bool,
                               bool& saw_error) {
   // For compatibility reasons, ignore flush from fetch EOF.
-  const bool really_flush = flush != FlushBehavior::kDoNotFlush &&
-                            flush != FlushBehavior::kFetchEOF;
+  const bool really_flush =
+      flush != FlushBehavior::kDoNotFlush && flush != FlushBehavior::kFetchEof;
 
   if (bytes.empty()) {
     if (really_flush && (have_lead_byte_ || have_lead_surrogate_)) {
@@ -92,7 +94,8 @@ String TextCodecUtf16::Decode(base::span<const uint8_t> bytes,
     return String();
   }
 
-  const wtf_size_t num_bytes = bytes.size() + have_lead_byte_;
+  const wtf_size_t num_bytes =
+      base::checked_cast<wtf_size_t>(bytes.size()) + have_lead_byte_;
   const bool will_have_extra_byte = num_bytes & 1;
   wtf_size_t num_chars_in = num_bytes / 2;
   const wtf_size_t max_chars_out =
@@ -132,7 +135,7 @@ String TextCodecUtf16::Decode(base::span<const uint8_t> bytes,
     UChar c = lead_byte_ | (in_span.take_first_elem() << 8);
 
     if (!little_endian_) {
-      c = base::ByteSwap(c);
+      c = std::byteswap(c);
     }
 
     have_lead_byte_ = false;
@@ -143,7 +146,7 @@ String TextCodecUtf16::Decode(base::span<const uint8_t> bytes,
   for (wtf_size_t i = 0; i < num_chars_in; ++i) {
     UChar c = base::U16FromLittleEndian(in_span.take_first<2ul>());
     if (!little_endian_) {
-      c = base::ByteSwap(c);
+      c = std::byteswap(c);
     }
     decode(c);
   }

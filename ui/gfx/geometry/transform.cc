@@ -502,7 +502,7 @@ bool Transform::GetInverse(Transform* transform) const {
 Transform Transform::GetCheckedInverse() const {
   Transform inverse;
   if (!GetInverse(&inverse))
-    DUMP_WILL_BE_NOTREACHED() << ToString() << " is not invertible";
+    DCHECK(false) << ToString() << " is not invertible";
   return inverse;
 }
 
@@ -734,7 +734,7 @@ void Transform::TransformVector4(base::span<float, 4> vector) const {
       vector[i] = ClampFloatGeometry(vector[i]);
   } else {
     std::array<double, 4> v = {vector[0], vector[1], vector[2], vector[3]};
-    matrix_.MapVector4(v.data());
+    matrix_.MapVector4(v);
     for (int i = 0; i < 4; i++)
       vector[i] = ClampFloatGeometry(v[i]);
   }
@@ -780,6 +780,22 @@ RectF Transform::MapRect(const RectF& rect) const {
     if (axis_2d_.scale().x() >= 0 && axis_2d_.scale().y() >= 0) {
       return axis_2d_.MapRect(rect);
     }
+  } else if (matrix_.IsScaleOrTranslation() && matrix_.rc(0, 0) >= 0 &&
+             matrix_.rc(1, 1) >= 0) {
+    // A full matrix that is only scale+translation (no rotation, skew or
+    // perspective) maps an axis-aligned rect to another axis-aligned rect, so
+    // mapping the min and max corners is enough. The general path below would
+    // map all four corners through MapPoint() and take their bounding box.
+    // Use the same double-precision arithmetic as MapPointInternal() so the
+    // result is bit-identical to the general path.
+    double sx = matrix_.rc(0, 0);
+    double sy = matrix_.rc(1, 1);
+    double tx = matrix_.rc(0, 3);
+    double ty = matrix_.rc(1, 3);
+    float x = ClampFloatGeometry(rect.x() * sx + tx);
+    float y = ClampFloatGeometry(rect.y() * sy + ty);
+    return RectF(x, y, ClampFloatGeometry(rect.right() * sx + tx) - x,
+                 ClampFloatGeometry(rect.bottom() * sy + ty) - y);
   }
 
   return MapQuad(QuadF(rect)).BoundingBox();
@@ -807,7 +823,12 @@ std::optional<RectF> Transform::InverseMapRect(const RectF& rect) const {
   if (!GetInverse(&inverse))
     return std::nullopt;
 
-  return inverse.MapQuad(QuadF(rect)).BoundingBox();
+  // Delegate to MapRect() rather than mapping the four corners directly: when
+  // the inverse is a scale+translation (the common case) this reuses
+  // MapRect()'s fast path. The result is identical because MapRect()'s fast
+  // path is bit-identical to its general MapQuad(QuadF(rect)).BoundingBox()
+  // path.
+  return inverse.MapRect(rect);
 }
 
 std::optional<Rect> Transform::InverseMapRect(const Rect& rect) const {

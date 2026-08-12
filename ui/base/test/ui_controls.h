@@ -14,8 +14,6 @@
 
 namespace ui_controls {
 
-enum KeyEventType { kKeyPress = 1 << 0, kKeyRelease = 1 << 1 };
-
 // A set of utility functions to generate native events in platform
 // independent way. Note that since the implementations depend on a window being
 // top level, these can only be called from test suites that are not sharded.
@@ -43,16 +41,19 @@ enum KeyEventType { kKeyPress = 1 << 0, kKeyRelease = 1 << 1 };
 // tests.
 void EnableUIControls();
 
+#if !BUILDFLAG(IS_ANDROID)
 // Reset the state in ui controls logic that are updated by the test to the
 // initial state.
 void ResetUIControlsIfEnabled();
 
-#if BUILDFLAG(IS_APPLE)
-bool IsUIControlsEnabled();
-#endif
-
 // Generates keyboard accelerator state in bitmap from each key boolean.
 int GenerateAcceleratorState(bool control, bool shift, bool alt, bool command);
+
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+bool IsUIControlsEnabled();
+
+enum KeyEventType { kKeyPress = 1 << 0, kKeyRelease = 1 << 1 };
 
 // Send a key press with/without modifier keys. This will trigger a key release
 // event after the key press.
@@ -101,6 +102,8 @@ bool SendKeyEventsNotifyWhenDone(gfx::NativeWindow window,
                                  int accelerator_state = kNoAccelerator);
 #endif  // !BUILDFLAG(IS_WIN)
 
+#if !BUILDFLAG(IS_ANDROID)
+
 // A default value for a window hint specifies that no window hint is given and
 // an appropriate target window should be deduced from the target or current
 // mouse position.
@@ -135,10 +138,7 @@ enum MouseButton {
 };
 
 // Used to indicate the state of the button when generating events.
-enum MouseButtonState {
-  UP = 1,
-  DOWN = 2
-};
+enum MouseButtonState { UP = 1 << 0, DOWN = 1 << 1 };
 
 enum TouchType {
   kTouchPress = 1 << 0,
@@ -211,6 +211,8 @@ void InstallUIControlsAura(UIControlsAura* instance);
 // traverse more elements for accessibility reasons.
 bool IsFullKeyboardAccessEnabled();
 #endif
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace ui_controls
 

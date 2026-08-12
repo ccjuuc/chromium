@@ -13,7 +13,7 @@ public class CallbackUtils {
     /**
      * @see #emptyCallback() to avoid unchecked generic checks.
      */
-    private static final Callback DO_NOTHING_CALLBACK = (unused) -> {};
+    private static final Callback DO_NOTHING_CALLBACK = _ -> {};
 
     /** Use for runnables where you need no action to be taken. */
     private static final Runnable DO_NOTHING_RUNNABLE = () -> {};
@@ -27,5 +27,10 @@ public class CallbackUtils {
     /** Returns a Singleton {@link Runnable} to be used where you need no action to be taken. */
     public static Runnable emptyRunnable() {
         return DO_NOTHING_RUNNABLE;
+    }
+
+    /** Returns a Callback that calls the given Runnable. */
+    public static <T> Callback<T> fromRunnable(Runnable r) {
+        return _ -> r.run();
     }
 }

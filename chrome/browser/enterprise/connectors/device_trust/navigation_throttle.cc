@@ -10,8 +10,6 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/device_trust_constants.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_service_factory.h"
@@ -20,8 +18,9 @@
 #include "chrome/browser/ui/views/device_signals_consent/consent_dialog_coordinator.h"
 #include "components/device_signals/core/browser/pref_names.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
-#include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/connectors/core/connectors_prefs.h"
+#include "components/enterprise/device_trust/core/common_types.h"
+#include "components/enterprise/device_trust/core/device_trust_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
@@ -32,6 +31,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace enterprise_connectors {
@@ -46,7 +46,7 @@ constexpr char kSpecificErrorCodePropertyName[] = "code";
 const std::string CreateErrorJsonString(
     const DeviceTrustResponse& dt_response) {
   DCHECK(dt_response.error);
-  base::Value::Dict error_response;
+  base::DictValue error_response;
   error_response.Set(kErrorPropertyName,
                      DeviceTrustErrorToString(dt_response.error.value()));
 
@@ -149,9 +149,6 @@ const char* DeviceTrustNavigationThrottle::GetNameForLogging() {
 
 content::NavigationThrottle::ThrottleCheckResult
 DeviceTrustNavigationThrottle::MayTriggerConsentDialog() {
-  if (!enterprise_signals::features::IsConsentDialogEnabled()) {
-    return PROCEED;
-  }
   const GURL& url = navigation_handle()->GetURL();
   if (!user_permission_service_ ||
       !user_permission_service_->ShouldCollectConsent() || !VerifyURL(url) ||
@@ -202,7 +199,7 @@ DeviceTrustNavigationThrottle::AddHeadersIfNeeded() {
 #if BUILDFLAG(IS_CHROMEOS)
     LogOrigin(GetAttestationFlowOrigin(
         navigation_handle()->GetWebContents()->GetBrowserContext()));
-    LogEnrollmentStatus();
+    LogEnrollmentStatus(ash::InstallAttributes::Get()->IsEnterpriseManaged());
 #endif  // BUILDFLAG(IS_CHROMEOS)
     LogAttestationFunnelStep(DTAttestationFunnelStep::kAttestationFlowStarted);
     navigation_handle()->SetRequestHeader(kDeviceTrustHeader,

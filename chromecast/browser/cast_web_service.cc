@@ -4,11 +4,11 @@
 
 #include "chromecast/browser/cast_web_service.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -19,12 +19,14 @@
 #include "chromecast/browser/cast_web_view_factory.h"
 #include "chromecast/browser/lru_renderer_cache.h"
 #include "chromecast/browser/webui/cast_webui_controller_factory.h"
+#include "chromecast/browser/webui/constants.h"
 #include "chromecast/chromecast_buildflags.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_controller_factory.h"
+#include "content/public/common/url_constants.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 
 namespace chromecast {
@@ -109,7 +111,6 @@ void CastWebService::ClearLocalStorage(ClearLocalStorageCallback callback) {
             network::mojom::CookieDeletionSessionControl::IGNORE_CONTROL;
         partition->ClearData(
             remove_data_mask,
-            content::StoragePartition::QUOTA_MANAGED_STORAGE_MASK_ALL,
             /*filter_builder=*/nullptr,
             content::StoragePartition::StorageKeyPolicyMatcherFunction(),
             std::move(cookie_delete_filter), /*perform_cleanup=*/true,
@@ -118,15 +119,27 @@ void CastWebService::ClearLocalStorage(ClearLocalStorageCallback callback) {
 }
 
 bool CastWebService::IsCastWebUIOrigin(const url::Origin& origin) {
-  return base::Contains(cast_webui_hosts_, origin.host());
+  return origin.scheme() == content::kChromeUIScheme &&
+         std::ranges::contains(cast_webui_hosts_, origin.host());
 }
 
 void CastWebService::RegisterWebUiClient(
     mojo::PendingRemote<mojom::WebUiClient> client,
     const std::vector<std::string>& hosts) {
-  cast_webui_hosts_ = hosts;
+  cast_webui_hosts_.clear();
+  for (const auto& host : hosts) {
+    if (IsKnownCastWebUiHost(host)) {
+      cast_webui_hosts_.push_back(host);
+    }
+  }
+
+  if (webui_factory_registered_) {
+    return;
+  }
+
+  webui_factory_registered_ = true;
   content::WebUIControllerFactory::RegisterFactory(
-      new CastWebUiControllerFactory(std::move(client), hosts));
+      new CastWebUiControllerFactory(std::move(client), cast_webui_hosts_));
 }
 
 void CastWebService::DeleteOwnedWebViews() {
@@ -148,7 +161,8 @@ void CastWebService::OwnerDestroyed(CastWebView* web_view) {
     content::MediaSession::Get(web_contents)
         ->Suspend(content::MediaSession::SuspendType::kSystem);
   }
-  if (!base::Contains(web_views_, web_view, &std::unique_ptr<CastWebView>::get))
+  if (!std::ranges::contains(web_views_, web_view,
+                             &std::unique_ptr<CastWebView>::get))
     web_views_.emplace(web_view);
   auto delay = web_view->shutdown_delay();
   if (delay <= base::TimeDelta() || immediately_delete_webviews_) {

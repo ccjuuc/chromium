@@ -9,13 +9,15 @@
 #include <ostream>
 #include <string_view>
 
+#include "base/callback_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
-#include "chrome/browser/actor/aggregated_journal.h"
-#include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
+#include "components/actor/core/aggregated_journal.h"
+#include "components/actor/core/task_id.h"
+#include "components/page_content_annotations/content/browser/page_settled_monitor.h"
+#include "components/page_content_annotations/content/mojom/page_stability.mojom.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -28,13 +30,14 @@ class RenderFrameHost;
 namespace actor {
 
 class ObservationDelayMetrics;
+class PageSettledMonitorDelegate;
 
 // Observes a page during tool-use and determines when the page has settled
-// after an action and is ready for for an observation.
+// after an action and is ready for an observation.
 //
-// This class will watch for any document loads in the web contents. When the
-// tool completes, this class delays until the load also finishes and then a new
-// frame is generated and presented.
+// This class uses PageSettledMonitor to wait for general page stability,
+// loading, and visual updates, while injecting Actor-specific waits, e.g.
+// federated login and autofill predictions, at the appropriate milestones.
 class ObservationDelayController : public content::WebContentsObserver {
  public:
   enum class Result {
@@ -46,14 +49,8 @@ class ObservationDelayController : public content::WebContentsObserver {
 
   using ReadyCallback = base::OnceCallback<void(Result)>;
 
-  // Configuration for general page stability if enabled.
-  struct PageStabilityConfig {
-    // Whether to include paint stability in page stability heuristics.
-    bool supports_paint_stability = false;
-    // The amount of time to wait when observing tool execution before starting
-    // to wait for page stability.
-    base::TimeDelta start_delay;
-  };
+  using PageStabilityConfig =
+      page_content_annotations::PageSettledMonitor::PageStabilityConfig;
 
   // This will create a PageStabilityMonitor in the renderer and wait for page
   // stability.
@@ -76,10 +73,9 @@ class ObservationDelayController : public content::WebContentsObserver {
   // WebContents.
   void Wait(tabs::TabInterface& target_tab, ReadyCallback callback);
 
-  // content::WebContentsObserver
+  // content::WebContentsObserver:
   void DidStartNavigation(
       content::NavigationHandle* navigation_handle) override;
-  void DidStopLoading() override;
 
   // The navigation count is the number of subsequent navigations that have
   // happend in a series and kPageNavigated being returned. Once the number
@@ -87,41 +83,58 @@ class ObservationDelayController : public content::WebContentsObserver {
   size_t NavigationCount() const;
   void SetNavigationCount(size_t);
 
-  // Public for tests
+  // Internal states of the controller, including both generic page settling
+  // states and Actor-specific wait states.
+  // LINT.IfChange(State)
   enum class State {
     kInitial,
     kWaitForPageStability,
     kPageStabilityMonitorDisconnected,
+    kWaitForFederatedLogin,
     kWaitForLoadCompletion,
+    kWaitForPdfLoadCompletion,
     kWaitForVisualStateUpdate,
     kMaybeDelayForLcp,
     kDelayForLcp,
+    kWaitForAutofillPredictions,
     kDidTimeout,
     kPageNavigated,
     kDone
   };
+  // LINT.ThenChange(//components/page_content_annotations/content/browser/page_settled_monitor.h:State)
+
   static std::string_view StateToString(State state);
 
  protected:
   // Protected so tests can hook into state changes and some internal state.
   virtual void SetState(State state);
   State state_ = State::kInitial;
-  mojo::Remote<mojom::PageStabilityMonitor> page_stability_monitor_remote_;
+  std::unique_ptr<page_content_annotations::PageSettledMonitor>
+      page_settled_monitor_;
 
  private:
   friend std::ostream& operator<<(
       std::ostream& o,
       const ObservationDelayController::State& state);
 
-  void OnPageStable();
-  void OnVisualStateUpdated(bool);
-  void OnMonitorDisconnected();
+  friend class PageSettledMonitorDelegate;
+
+  void OnFederatedLoginRequestComplete(base::OnceClosure resume_callback);
+  void OnAutofillPredictionsFinished(base::OnceClosure resume_callback);
   void DCheckStateTransition(State old_state, State new_state);
   void MoveToState(State state);
   base::OnceClosure MoveToStateClosure(State new_state);
   base::OnceClosure PostMoveToStateClosure(
       State new_state,
       base::TimeDelta delay = base::TimeDelta());
+
+  void OnPageSettled();
+  void WillMoveToState(
+      page_content_annotations::PageSettledMonitor::State state);
+  void OnMilestoneReached(
+      page_content_annotations::PageSettledMonitor::Milestone milestone,
+      base::OnceClosure resume_callback);
+  void OnEvent(page_content_annotations::PageSettledMonitor::Event event);
 
   ReadyCallback ready_callback_;
   Result result_ = Result::kOk;
@@ -136,7 +149,12 @@ class ObservationDelayController : public content::WebContentsObserver {
   // states after PageStability to avoid nesting issues - PageStabilityMonitor
   // provides its own async entries.
   std::unique_ptr<AggregatedJournal::PendingAsyncEntry> inner_journal_entry_;
-  base::TimeDelta page_stability_start_delay_;
+
+  base::CallbackListSubscription federated_login_subscription_;
+
+  // A callback provided by PageSettledMonitor when a milestone is reached. It
+  // must be run to allow the monitor to proceed to the next state.
+  base::OnceClosure resume_callback_;
 
   std::unique_ptr<ObservationDelayMetrics> metrics_;
 

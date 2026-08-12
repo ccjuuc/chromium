@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
@@ -411,8 +412,10 @@ void NavigationBodyLoader::OnUploadProgress(int64_t current_position,
 void NavigationBodyLoader::OnTransferSizeUpdated(int32_t transfer_size_diff) {
   network::RecordOnTransferSizeUpdatedUMA(
       network::OnTransferSizeUpdatedFrom::kNavigationBodyLoader);
+  // This cast is safe because url_loader.mojom documents that
+  // `transfer_size_diff` must be positive.
   resource_load_info_notifier_wrapper_->NotifyResourceTransferSizeUpdated(
-      transfer_size_diff);
+      base::ByteSize(base::checked_cast<uint32_t>(transfer_size_diff)));
 }
 
 void NavigationBodyLoader::OnComplete(
@@ -567,9 +570,10 @@ void NavigationBodyLoader::NotifyCompletionIfAppropriate() {
   // |this| may be deleted after calling into client_, so clear it in advance.
   WebNavigationBodyLoader::Client* client = client_;
   client_ = nullptr;
-  client->BodyLoadingFinished(
-      status_.completion_time, status_.encoded_data_length,
-      status_.encoded_body_length, status_.decoded_body_length, error);
+  client->BodyLoadingFinished(status_.completion_time,
+                              status_.encoded_data_length.InBytes(),
+                              status_.encoded_body_length.InBytes(),
+                              status_.decoded_body_length.InBytes(), error);
 }
 
 void NavigationBodyLoader::
@@ -620,9 +624,18 @@ void WebNavigationBodyLoader::FillNavigationParamsResponseAndBodyLoader(
     bool is_main_frame,
     WebNavigationParams* navigation_params,
     bool is_ad_frame) {
-  // Use the original navigation url to start with. We'll replay the
-  // redirects afterwards and will eventually arrive to the final url.
-  const KURL original_url = !commit_params->original_url.is_empty()
+  // Use the original navigation URL to start with. Note that when the browser
+  // enables redirect sanitization (via
+  // `features::kSanitizeOriginalUrlDuringNavigation`), it populates
+  // `commit_params->original_url` with only the sanitized origin of the
+  // original URL instead of the full URL by calling DeprecatedGetOriginAsURL().
+  // We'll replay the redirects afterwards and will eventually arrive at the
+  // final URL. For non-redirecting navigations, use the final URL to be
+  // committed (as that is the same as the original URL).
+  const bool should_use_original_url =
+      !commit_params->redirect_params.empty() &&
+      !commit_params->original_url.is_empty();
+  const KURL original_url = should_use_original_url
                                 ? KURL(commit_params->original_url)
                                 : KURL(common_params->url);
   KURL url = original_url;
@@ -632,7 +645,7 @@ void WebNavigationBodyLoader::FillNavigationParamsResponseAndBodyLoader(
                                               : common_params->method,
       common_params->referrer->url, common_params->request_destination,
       is_main_frame ? net::HIGHEST : net::LOWEST, is_ad_frame);
-  size_t redirect_count = commit_params->redirect_response.size();
+  size_t redirect_count = commit_params->redirect_params.size();
 
   if (!base::FeatureList::IsEnabled(
           blink::features::kRemoveCommitRedirectUrlsArray)) {
@@ -654,8 +667,9 @@ void WebNavigationBodyLoader::FillNavigationParamsResponseAndBodyLoader(
   for (size_t i = 0; i < redirect_count; ++i) {
     WebNavigationParams::RedirectInfo& redirect =
         navigation_params->redirects[i];
-    auto& redirect_info = commit_params->redirect_infos[i];
-    auto& redirect_response = commit_params->redirect_response[i];
+    const auto& redirect_params = commit_params->redirect_params[i];
+    auto& redirect_info = redirect_params->redirect_info;
+    auto& redirect_response = redirect_params->response_head;
     redirect.redirect_response =
         WebURLResponse::Create(url, *redirect_response,
                                response_head->ssl_info.has_value(), request_id);
@@ -668,7 +682,7 @@ void WebNavigationBodyLoader::FillNavigationParamsResponseAndBodyLoader(
     // WebString treats default and empty strings differently while std::string
     // does not. A default value is expected for new_referrer rather than empty.
     if (!redirect_info.new_referrer.empty())
-      redirect.new_referrer = WebString::FromUTF8(redirect_info.new_referrer);
+      redirect.new_referrer = WebString::FromUtf8(redirect_info.new_referrer);
     redirect.new_referrer_policy = ReferrerUtils::NetToMojoReferrerPolicy(
         redirect_info.new_referrer_policy);
     redirect.new_http_method = WebString::FromLatin1(redirect_info.new_method);

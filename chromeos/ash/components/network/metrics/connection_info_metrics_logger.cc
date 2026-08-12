@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/components/network/metrics/connection_info_metrics_logger.h"
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "chromeos/ash/components/network/metrics/connection_results.h"
 #include "chromeos/ash/components/network/metrics/network_metrics_helper.h"
@@ -45,17 +44,13 @@ bool ConnectionInfoMetricsLogger::ConnectionInfo::operator==(
 
 ConnectionInfoMetricsLogger::ConnectionInfoMetricsLogger() = default;
 
-ConnectionInfoMetricsLogger::~ConnectionInfoMetricsLogger() {
-  if (network_connection_handler_)
-    network_connection_handler_->RemoveObserver(this);
-}
+ConnectionInfoMetricsLogger::~ConnectionInfoMetricsLogger() = default;
 
 void ConnectionInfoMetricsLogger::Init(
     NetworkStateHandler* network_state_handler,
     NetworkConnectionHandler* network_connection_handler) {
   if (network_connection_handler) {
-    network_connection_handler_ = network_connection_handler;
-    network_connection_handler_->AddObserver(this);
+    network_connection_handler_observer_.Observe(network_connection_handler);
   }
 
   if (network_state_handler) {
@@ -89,7 +84,7 @@ void ConnectionInfoMetricsLogger::NetworkListChanged() {
   // Only store visible network ConnectionInfo in |guid_to_connection_info_|.
   for (const auto& connection_info : old_guid_to_connection_info) {
     const std::string& guid = connection_info.first;
-    if (!base::Contains(visible_guids, guid))
+    if (!visible_guids.contains(guid))
       continue;
     guid_to_connection_info_.insert_or_assign(
         guid, old_guid_to_connection_info.find(guid)->second);

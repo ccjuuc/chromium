@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <concepts>
 #include <memory>
 #include <optional>
@@ -19,13 +20,13 @@
 #include "base/auto_reset.h"
 #include "base/callback_list.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkPath.h"
@@ -55,17 +56,16 @@
 #include "ui/gfx/geometry/vector2d_conversions.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/actions/action_view_interface.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/layout_manager.h"
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/paint_info.h"
 #include "ui/views/view_targeter.h"
 #include "ui/views/views_export.h"
 
-class BrowserView;
 class InfoBarView;
 class OmniboxPopupPresenter;
 class OmniboxPopupViewViews;
-class SadTabView;
 class StatusIconButtonLinux;
 
 namespace arc {
@@ -74,7 +74,6 @@ class CustomTab;
 
 namespace ash {
 class ArcNotificationContentView;
-class WideFrameView;
 }  // namespace ash
 
 namespace exo {
@@ -120,7 +119,6 @@ class FocusTraversable;
 class LayoutProvider;
 class ScrollView;
 class SizeBounds;
-class SubmenuView;
 class ViewAccessibility;
 class ViewMaskLayer;
 class ViewObserver;
@@ -233,7 +231,7 @@ enum class ViewLayer {
 //   base::CallbackListSubscription AddFrobbleChangedCallback(
 //       PropertyChangedCallback callback);
 //
-//   Each callback uses the the existing base::Bind mechanisms which allow for
+//   Each callback uses the existing base::Bind mechanisms which allow for
 //   various kinds of callbacks; object methods, normal functions and lambdas.
 //
 //   Example:
@@ -311,18 +309,14 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
     // DO NOT ADD TO THIS LIST!
     // These existing cases are "grandfathered in", but there shouldn't be more.
     // See comments atop class.
-    friend class ::BrowserView;
     friend class ::InfoBarView;
     friend class ::OmniboxPopupPresenter;
     friend class ::OmniboxPopupViewViews;
-    friend class ::SadTabView;
     friend class ::StatusIconButtonLinux;
     friend class ::arc::CustomTab;
     friend class ::ash::ArcNotificationContentView;
-    friend class ::ash::WideFrameView;
     friend class ::exo::ShellSurfaceBase;
     friend class ::eye_dropper::EyeDropperView;
-    friend class SubmenuView;
     FRIEND_TEST_ALL_PREFIXES(WebViewUnitTest, CrashedOverlayView);
 
     OwnedByClientPassKey() = default;
@@ -531,7 +525,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
     CHECK(!view->owned_by_client())
         << "This should only be called if the client doesn't already have "
            "ownership of |view|.";
-    DCHECK(base::Contains(children_, view));
+    DCHECK(std::ranges::contains(children_, view));
     RemoveChildView(view);
     return base::WrapUnique(view);
   }
@@ -1066,6 +1060,11 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Converts a rect from a View's coordinate system to that of the screen.
   static void ConvertRectToScreen(const View* src, gfx::Rect* rect);
 
+  // Converts a rect from the screen coordinate system to that View's
+  // coordinate system.
+  [[nodiscard]] static gfx::Rect ConvertRectFromScreen(const View* dst,
+                                                       const gfx::Rect& rect);
+
   // Applies transformation on the rectangle, which is in the view's coordinate
   // system, to convert it into the parent's coordinate system.
   [[nodiscard]] gfx::Rect ConvertRectToParent(const gfx::Rect& rect) const;
@@ -1308,7 +1307,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // will be given a chance.
   virtual bool OnMouseWheel(const ui::MouseWheelEvent& event);
 
-  // See field for description.
+  // See `notify_enter_exit_on_child_` field for description.
   void SetNotifyEnterExitOnChild(bool notify);
   bool GetNotifyEnterExitOnChild() const;
 
@@ -1441,6 +1440,9 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
 
   // Request keyboard focus. The receiving view will become the focused view.
   virtual void RequestFocus();
+
+  // Request focus on this View with a reason.
+  void RequestFocusWithReason(FocusManager::FocusChangeReason reason);
 
   // Invoked when a view is about to be requested for focus due to the focus
   // traversal. Reverse is this request was generated going backward
@@ -1759,9 +1761,27 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // this function calls ScrollRectToVisible(GetLocalBounds()).
   void ScrollViewToVisible();
 
+  // Observer -----------------------------------------------------------------
+
   void AddObserver(ViewObserver* observer);
   void RemoveObserver(ViewObserver* observer);
   bool HasObserver(const ViewObserver* observer) const;
+
+  // Enables notifications on visible bounds changed for the provided view. Note
+  // that this has performance impacts, so use it sparingly.
+  class VIEWS_EXPORT ScopedNotifyObserversOnVisibleBoundsChanged {
+   public:
+    explicit ScopedNotifyObserversOnVisibleBoundsChanged(View& view);
+    ScopedNotifyObserversOnVisibleBoundsChanged(
+        const ScopedNotifyObserversOnVisibleBoundsChanged&) = delete;
+    ScopedNotifyObserversOnVisibleBoundsChanged& operator=(
+        const ScopedNotifyObserversOnVisibleBoundsChanged&) = delete;
+    ~ScopedNotifyObserversOnVisibleBoundsChanged();
+
+   private:
+    const raw_ref<View> view_;
+    std::optional<base::AutoReset<bool>> reset_;
+  };
 
   // Called when the accessible name of the View changed.
   virtual void OnAccessibleNameChanged(const std::u16string& new_name) {}
@@ -2064,6 +2084,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   std::u16string cached_tooltip_text_;
 
  private:
+  friend class ScopedPaintLock;
   friend class internal::PreEventDispatchHandler;
   friend class internal::PostEventDispatchHandler;
   friend class internal::RootView;
@@ -2079,6 +2100,22 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   FRIEND_TEST_ALL_PREFIXES(ViewTest, PaintWithUnknownInvalidation);
 
   // Painting  -----------------------------------------------------------------
+
+  // Increments the number of paint locks on this view.
+  void AddPaintLock();
+
+  // Decrements the number of paint locks on this view. If the number of locks
+  // reaches zero, this calls UnlockPaint().
+  void RemovePaintLock();
+
+  // Returns true if this view or any of its ancestors has a paint lock active.
+  bool IsPaintLocked() const;
+
+  // Called when the paint lock is removed. This will check if there were any
+  // pending paints while locked, and if so, schedules a paint. Then it iterates
+  // through all children and calls UnlockPaint() on them if they are not
+  // individually locked.
+  void UnlockPaint();
 
   // Responsible for propagating SchedulePaint() to the view's layer. If there
   // is no associated layer, the requested paint rect is propagated up the
@@ -2394,6 +2431,7 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   void SetWidth(int width);
   void SetHeight(int height);
   bool GetIsDrawn() const;
+  bool GetIsPaintLocked() const;
 
   // Special property accessor used by metadata to get the ToolTip text.
   std::u16string GetTooltip() const;
@@ -2402,7 +2440,11 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
 
   // Observers -----------------------------------------------------------------
 
-  base::ObserverList<ViewObserver>::Unchecked observers_;
+  // A ViewObserver handles an event that invokes other events, therefore is
+  // inherently reentrant.
+  base::ReentrantObserverList<ViewObserver>::Unchecked observers_;
+
+  bool notify_observers_on_visible_bounds_change_ = false;
 
   // Creation and lifetime -----------------------------------------------------
 
@@ -2465,19 +2507,19 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
   // Whether this view is enabled in views subtree.
   bool enabled_in_views_subtree_ = true;
 
-  // When this flag is on, a View receives a mouse-enter and mouse-leave event
-  // even if a descendant View is the event-recipient for the real mouse
-  // events. When this flag is turned on, and mouse moves from outside of the
-  // view into a child view, both the child view and this view receives
-  // mouse-enter event. Similarly, if the mouse moves from inside a child view
-  // and out of this view, then both views receive a mouse-leave event.
-  // When this flag is turned off, if the mouse moves from inside this view into
-  // a child view, then this view receives a mouse-leave event. When this flag
-  // is turned on, it does not receive the mouse-leave event in this case.
-  // When the mouse moves from inside the child view out of the child view but
-  // still into this view, this view receives a mouse-enter event if this flag
-  // is turned off, but doesn't if this flag is turned on.
-  // This flag is initialized to false.
+  // Whether the parent should be notified when the mouse enters/exits a child.
+  //
+  // If true, this View is considered "entered" if the mouse is over it or ANY
+  // descendant.
+  //   - Mouse moves Parent -> Child: No OnMouseExited on Parent.
+  //   - Mouse moves Child -> Parent: No OnMouseEntered on Parent.
+  //   - Mouse moves Outside -> Child: OnMouseEntered on Parent AND Child.
+  //   - Mouse moves Child -> Outside: OnMouseExited on Parent AND Child.
+  //
+  // If false (default), this View is considered "entered" only if the mouse is
+  // over it and NOT over a descendant.
+  //   - Mouse moves Parent -> Child: OnMouseExited on Parent.
+  //   - Mouse moves Child -> Parent: OnMouseEntered on Parent.
   bool notify_enter_exit_on_child_ = false;
 
   // Whether or not RegisterViewForVisibleBoundsNotification on the RootView
@@ -2567,6 +2609,12 @@ class VIEWS_EXPORT View : public ui::LayerDelegate,
 
   // Whether SchedulePaintInRect() was invoked on this View.
   bool needs_paint_ = false;
+
+  // The number of active paint locks on this view.
+  int paint_lock_count_ = 0;
+
+  // Whether a paint was requested while this view or an ancestor was locked.
+  bool paint_pending_while_locked_ = false;
 
   // RTL painting --------------------------------------------------------------
 
@@ -2691,6 +2739,9 @@ class VIEWS_EXPORT BaseActionViewInterface : public ActionViewInterface {
   explicit BaseActionViewInterface(View* action_view);
   ~BaseActionViewInterface() override = default;
   void ActionItemChangedImpl(actions::ActionItem* action_item) override;
+
+ protected:
+  View* action_view() const { return action_view_; }
 
  private:
   raw_ptr<View> action_view_;

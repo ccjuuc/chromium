@@ -10,6 +10,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/feature_list.h"
@@ -31,11 +32,9 @@
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_uma_logger.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/public/crd_session_result_codes.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/start_crd_session_job_delegate.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service.h"
 #include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/pref_names.h"
 #include "components/crash/core/common/crash_key.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
@@ -102,7 +101,7 @@ const bool kAllowRemoteInput = true;
 // session.
 const bool kAllowClipboardSync = true;
 
-std::optional<std::string> FindString(const base::Value::Dict& dict,
+std::optional<std::string> FindString(const base::DictValue& dict,
                                       std::string_view key) {
   if (!dict.contains(key)) {
     return std::nullopt;
@@ -122,7 +121,7 @@ void SendResultCodeToUma(CrdSessionType crd_session_type,
 
 std::string CreateSuccessPayload(const std::string& access_code) {
   return base::WriteJson(
-             base::Value::Dict()
+             base::DictValue()
                  .Set(kResultCodeFieldName,
                       static_cast<int>(
                           StartCrdSessionResultCode::START_CRD_SESSION_SUCCESS))
@@ -132,7 +131,7 @@ std::string CreateSuccessPayload(const std::string& access_code) {
 
 std::string CreateNonIdlePayload(const base::TimeDelta& time_delta) {
   return base::WriteJson(
-             base::Value::Dict()
+             base::DictValue()
                  .Set(kResultCodeFieldName,
                       static_cast<int>(
                           StartCrdSessionResultCode::FAILURE_NOT_IDLE))
@@ -146,7 +145,7 @@ std::string CreateErrorPayload(StartCrdSessionResultCode result_code,
   CHECK_NE(result_code, StartCrdSessionResultCode::START_CRD_SESSION_SUCCESS);
   CHECK_NE(result_code, StartCrdSessionResultCode::FAILURE_NOT_IDLE);
 
-  auto payload = base::Value::Dict()  //
+  auto payload = base::DictValue()  //
                      .Set(kResultCodeFieldName, static_cast<int>(result_code));
   if (!error_message.empty()) {
     payload.Set(kResultMessageFieldName, error_message);
@@ -197,14 +196,19 @@ std::unique_ptr<crash_reporter::ScopedCrashKeyString> CreateCrdCrashKey(
 ////////////////////////////////////////////////////////////////////////////////
 
 DeviceCommandStartCrdSessionJob::DeviceCommandStartCrdSessionJob(
+    PrefService* local_state,
     Delegate& delegate)
-    : delegate_(delegate),
+    : local_state_(CHECK_DEREF(local_state)),
+      delegate_(delegate),
       robot_account_id_(GetRobotAccountUserName(GetOAuthService())) {}
 
 DeviceCommandStartCrdSessionJob::DeviceCommandStartCrdSessionJob(
+    PrefService* local_state,
     Delegate& delegate,
     std::string_view robot_account_id)
-    : delegate_(delegate), robot_account_id_(robot_account_id) {
+    : local_state_(CHECK_DEREF(local_state)),
+      delegate_(delegate),
+      robot_account_id_(robot_account_id) {
   CHECK_IS_TEST();
 }
 
@@ -217,7 +221,7 @@ DeviceCommandStartCrdSessionJob::GetType() const {
 
 bool DeviceCommandStartCrdSessionJob::ParseCommandPayload(
     const std::string& command_payload) {
-  std::optional<base::Value::Dict> root = base::JSONReader::ReadDict(
+  std::optional<base::DictValue> root = base::JSONReader::ReadDict(
       command_payload, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!root) {
     LOG(WARNING) << "Rejecting remote command with invalid payload: "
@@ -264,8 +268,8 @@ void DeviceCommandStartCrdSessionJob::RunImpl(
         ExtendedStartCrdSessionResultCode::kFailureUnsupportedUserType, "");
   }
 
-  if (IsRemoteAccessSession() && !IsRemoteAccessAllowedByPolicy(CHECK_DEREF(
-                                     g_browser_process->local_state()))) {
+  if (IsRemoteAccessSession() &&
+      !IsRemoteAccessAllowedByPolicy(local_state_.get())) {
     LOG(ERROR) << "Rejecting CRD session type as CRD remote access is disabled "
                   "by device policy.";
     return FinishWithError(
@@ -486,7 +490,7 @@ bool DeviceCommandStartCrdSessionJob::ShouldShowTroubleshootingTools() const {
 bool DeviceCommandStartCrdSessionJob::ShouldAllowTroubleshootingTools() const {
   return IsKioskSession(GetCurrentUserSessionType()) &&
          CHECK_DEREF(ProfileManager::GetActiveUserProfile()->GetPrefs())
-             .GetBoolean(prefs::kKioskTroubleshootingToolsEnabled);
+             .GetBoolean(ash::prefs::kKioskTroubleshootingToolsEnabled);
 }
 
 bool DeviceCommandStartCrdSessionJob::ShouldAllowFileTransfer() const {

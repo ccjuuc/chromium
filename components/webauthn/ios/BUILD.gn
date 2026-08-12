@@ -8,6 +8,7 @@ source_set("ios") {
   sources = [
     "ios_passkey_client.h",
     "ios_passkey_client.mm",
+    "ios_passkey_client_commands.h",
     "ios_webauthn_credentials_delegate.h",
     "ios_webauthn_credentials_delegate.mm",
     "ios_webauthn_credentials_delegate_factory.h",
@@ -28,14 +29,39 @@ source_set("ios") {
     ":passkey_types",
     "//base",
     "//components/autofill/ios/browser",
+    "//components/autofill/ios/browser:util",
+    "//components/autofill/ios/form_util:child_frame_registrar",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:passkey_credential",
-    "//components/password_manager/ios",
+    "//components/webauthn/core/browser",
     "//components/webauthn/core/browser:client_data",
+    "//components/webauthn/core/browser:common_utils",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
     "//device/fido",
     "//ios/web/public",
     "//ios/web/public/js_messaging",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+  ]
+}
+
+static_library("test_support") {
+  testonly = true
+  sources = [
+    "fake_ios_passkey_client.h",
+    "fake_ios_passkey_client.mm",
+    "passkey_test_util.h",
+    "passkey_test_util.mm",
+  ]
+  deps = [
+    ":ios",
+    "//base",
+    "//components/sync/protocol",
+    "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
+    "//components/webauthn/ios",
+    "//ios/web/public/test/fakes",
   ]
 }
 
@@ -53,6 +79,7 @@ optimize_ts("passkey_controller_js") {
   sources = [ "resources/passkey_controller.ts" ]
 
   deps = [
+    "//components/autofill/ios/form_util:fill_js_dependencies",
     "//ios/web/public/js_messaging:gcrweb",
     "//ios/web/public/js_messaging:util_scripts",
   ]
@@ -75,6 +102,8 @@ source_set("utils") {
     "//base",
     "//components/autofill/ios/browser",
     "//components/password_manager/core/browser:passkey_credential",
+    "//components/strings",
+    "//ui/base",
   ]
 }
 
@@ -82,19 +111,27 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "ios_webauthn_credentials_delegate_factory_unittest.mm",
+    "passkey_request_parser_unittest.mm",
     "passkey_suggestion_utils_unittest.mm",
     "passkey_tab_helper_unittest.mm",
   ]
   deps = [
     ":ios",
     ":js_tests",
+    ":test_support",
     ":utils",
     "//base/test:test_support",
     "//components/autofill/ios/browser",
+    "//components/autofill/ios/browser:util",
+    "//components/autofill/ios/form_util:child_frame_registrar",
     "//components/password_manager/core/browser:test_support",
     "//components/password_manager/ios",
+    "//components/strings",
+    "//components/webauthn/core/browser",
     "//components/webauthn/core/browser:passkey_model",
+    "//components/webauthn/core/browser:signal_api_utils",
     "//components/webauthn/core/browser:test_support",
+    "//device/fido/public",
     "//ios/web/public/test",
     "//testing/gtest",
     "//third_party/ocmock",
@@ -108,6 +145,7 @@ source_set("js_tests") {
     ":features",
     ":ios",
     ":passkey_controller_js",
+    ":passkey_types",
     "//ios/web/public/test:javascript_test",
     "//ios/web/public/test:util",
     "//net:test_support",

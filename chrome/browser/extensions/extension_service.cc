@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -15,14 +16,12 @@
 #include "base/auto_reset.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/alias.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/one_shot_event.h"
 #include "base/stl_util.h"
@@ -35,33 +34,32 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/chrome_extension_registrar_delegate.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
+#include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/extensions/extension_action_storage_manager.h"
-#include "chrome/browser/extensions/extension_allowlist.h"
+#include "chrome/browser/extensions/extension_allowlist_factory.h"
 #include "chrome/browser/extensions/extension_disabled_ui.h"
 #include "chrome/browser/extensions/extension_error_controller.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
 #include "chrome/browser/extensions/external_install_manager.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
 #include "chrome/browser/extensions/install_verifier_factory.h"
 #include "chrome/browser/extensions/installed_loader.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
-#include "chrome/browser/extensions/mv2_experiment_stage.h"
 #include "chrome/browser/extensions/omaha_attributes_handler.h"
 #include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/extensions/sync/extension_sync_service.h"
-#include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/extensions/updater/chrome_extension_downloader_factory.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/lifetime/termination_notification.h"
+#include "chrome/browser/policy/cloud/extension_install_policy_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
@@ -77,11 +75,14 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
 #include "extensions/browser/blocklist_state.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_allowlist.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_registrar.h"
@@ -90,9 +91,11 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/external_install_info.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/install_flag.h"
 #include "extensions/browser/install_verifier.h"
 #include "extensions/browser/management_policy.h"
+#include "extensions/browser/manifest_v2_handler.h"
 #include "extensions/browser/pending_extension_manager.h"
 #include "extensions/browser/permissions/permissions_updater.h"
 #include "extensions/browser/pref_names.h"
@@ -100,6 +103,7 @@
 #include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/browser/unloaded_extension_reason.h"
+#include "extensions/browser/unpacked_installer.h"
 #include "extensions/browser/updater/extension_cache.h"
 #include "extensions/browser/updater/extension_downloader.h"
 #include "extensions/browser/updater/manifest_fetch_data.h"
@@ -109,11 +113,15 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/common/features/feature_developer_mode_only.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/shared_module_info.h"
-#include "extensions/common/manifest_url_handlers.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/switches.h"
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#include "chrome/browser/extensions/policy_dse_ntp_override_metrics_reporter.h"
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "base/system/sys_info.h"
@@ -155,7 +163,7 @@ constexpr int kAllowUnpublishedExtensions = 0;
 const char kBlockLoadCommandline[] = "command_line";
 
 bool ShouldBlockCommandLineExtension(Profile& profile) {
-  const base::Value::List& list =
+  const base::ListValue& list =
       profile.GetPrefs()->GetList(pref_names::kExtensionInstallTypeBlocklist);
   for (const auto& val : list) {
     if (val.is_string() && val.GetString() == kBlockLoadCommandline) {
@@ -200,7 +208,7 @@ ExtensionService::ExtensionService(
       system_(ExtensionSystem::Get(profile)),
       extension_prefs_(extension_prefs),
       blocklist_(blocklist),
-      allowlist_(ExtensionAllowlist::Get(profile)),
+      allowlist_(ExtensionAllowlistFactory::GetForBrowserContext(profile)),
       registry_(ExtensionRegistry::Get(profile)),
       pending_extension_manager_(PendingExtensionManager::Get(profile)),
       external_provider_manager_(ExternalProviderManager::Get(profile)),
@@ -247,9 +255,17 @@ ExtensionService::ExtensionService(
   UpgradeDetector::GetInstance()->AddObserver(this);
 #endif
 
-  cws_info_service_observation_.Observe(CWSInfoService::Get(profile_));
+  cws_info_service_observation_.Observe(
+      CWSInfoServiceFactory::GetForProfile(profile_));
 
   ExtensionManagementFactory::GetForBrowserContext(profile_)->AddObserver(this);
+
+  if (auto* extension_install_policy_service =
+          policy::ExtensionInstallPolicyServiceFactory::GetForBrowserContext(
+              profile_)) {
+    extension_install_policy_observation_.Observe(
+        extension_install_policy_service);
+  }
 
   if (autoupdate_enabled) {
     // Initialize and enable the ExtensionUpdater.
@@ -298,6 +314,7 @@ ExtensionService::~ExtensionService() {
 void ExtensionService::Shutdown() {
   delayed_install_manager_ = nullptr;
   cws_info_service_observation_.Reset();
+  extension_install_policy_observation_.Reset();
   ExtensionManagementFactory::GetForBrowserContext(profile())->RemoveObserver(
       this);
   external_install_manager_->Shutdown();
@@ -469,7 +486,7 @@ void ExtensionService::LoadSigninProfileTestExtension(const std::string& path) {
 
 void ExtensionService::PerformActionBasedOnOmahaAttributes(
     const std::string& extension_id,
-    const base::Value::Dict& attributes) {
+    const base::DictValue& attributes) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   omaha_attributes_handler_.PerformActionBasedOnOmahaAttributes(extension_id,
                                                                 attributes);
@@ -512,7 +529,7 @@ void ExtensionService::DisableUserExtensionsExcept(
       continue;
     }
     const std::string& id = extension->id();
-    if (!base::Contains(except_ids, id)) {
+    if (!std::ranges::contains(except_ids, id)) {
       extension_registrar_->DisableExtension(
           id, {disable_reason::DISABLE_USER_ACTION});
     }
@@ -550,8 +567,7 @@ void ExtensionService::CheckManagementPolicy() {
     PermissionsUpdater(profile()).ApplyPolicyHostRestrictions(*extension);
   }
 
-  ManifestV2ExperimentManager* mv2_experiment_manager =
-      ManifestV2ExperimentManager::Get(profile_);
+  ManifestV2Handler* mv2_handler = ManifestV2Handler::Get(profile_);
 
   // Loop through the disabled extension list, find extensions to re-enable
   // automatically. These extensions are exclusive from the |to_disable| list
@@ -604,16 +620,13 @@ void ExtensionService::CheckManagementPolicy() {
       to_remove.insert(disable_reason::DISABLE_BLOCKED_BY_POLICY);
     }
 
-    // Note: `mv2_experiment_manager` may be null for certain types of profiles
+    // Note: `mv2_handler` may be null for certain types of profiles
     // (such as the sign-in profile). We can ignore this check in this case,
     // since users can't install extensions in these profiles.
     // TODO(https://crbug.com/362756477): As above, this is effectively
     // fragmenting logic between the policy provider and here to ensure that
     // the extension gets properly re-enabled when appropriate.
-    if (mv2_experiment_manager &&
-        mv2_experiment_manager->GetCurrentExperimentStage() ==
-            MV2ExperimentStage::kUnsupported &&
-        !mv2_experiment_manager->ShouldBlockExtensionEnable(*extension)) {
+    if (mv2_handler && !mv2_handler->ShouldBlockExtensionEnable(*extension)) {
       to_remove.insert(disable_reason::DISABLE_UNSUPPORTED_MANIFEST_VERSION);
     }
 
@@ -766,8 +779,12 @@ void ExtensionService::OnExtensionManagementSettingsChanged() {
   if (profile_->GetPrefs()->GetInteger(
           pref_names::kExtensionUnpublishedAvailability) !=
       kAllowUnpublishedExtensions) {
-    CWSInfoService::Get(profile_)->CheckAndMaybeFetchInfo();
+    CWSInfoServiceFactory::GetForProfile(profile_)->CheckAndMaybeFetchInfo();
   }
+}
+
+void ExtensionService::OnExtensionInstallPolicyUpdated() {
+  CheckManagementPolicy();
 }
 
 bool ExtensionService::FinishDelayedInstallationIfReady(
@@ -825,7 +842,7 @@ void ExtensionService::RenderProcessHostDestroyed(
   // An extension process was terminated, this might have resulted in an
   // app or extension becoming idle.
   if (std::optional<std::string> extension_id =
-          process_map->GetExtensionIdForProcess(host->GetDeprecatedID())) {
+          process_map->GetExtensionIdForProcess(host->GetID())) {
     // The extension running in this process might also be referencing a shared
     // module which is waiting for idle to update. Check all imports of this
     // extension too.
@@ -853,7 +870,7 @@ void ExtensionService::RenderProcessHostDestroyed(
       }
     }
   }
-  process_map->Remove(host->GetDeprecatedID());
+  process_map->Remove(host->GetID());
 }
 
 void ExtensionService::OnBlocklistUpdated() {
@@ -950,6 +967,10 @@ void ExtensionService::OnInstalledExtensionsLoaded() {
         service->OnBlocklistUpdated();
       },
       AsExtensionServiceWeakPtr()));
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  PolicyDseNtpOverrideMetricsReporter::ReportMetrics(profile_);
+#endif
 }
 
 void ExtensionService::OnDeveloperModePrefChanged() {

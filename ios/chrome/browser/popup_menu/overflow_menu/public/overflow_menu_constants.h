@@ -23,8 +23,13 @@ enum class Destination {
   WhatsNew = 8,
   SpotlightDebugger = 9,
   PriceNotifications = 10,
+  Cobalt = 11,
+  LevelUp = 12,
 };
-// LINT.ThenChange(overflow_menu_metrics.h:destination)
+// LINT.ThenChange(
+// /ios/chrome/browser/popup_menu/overflow_menu/ui/overflow_menu_metrics.h:destination,
+// /tools/metrics/histograms/metadata/ios/enums.xml:IOSOverflowMenuDestination
+// )
 
 // Represents a type of action (i.e. a row). For example, both the Stop and
 // Reload actions have an `actionType` of `Reload` as they would both take
@@ -53,9 +58,13 @@ enum class ActionType {
   // TODO(crbug.com/416002705): Rename reference to BWG.
   AskBWG,
   HideToolbars,
-  TabGroup,
+  TabGroupDeprecated,  // This enum is deprecated due to feature cleanup.
+  ShareThisPage,
+  SigninDeprecated,
+  Identity,
+  CustomizeHomePage,
 };
-// LINT.ThenChange(overflow_menu_metrics.h:actionType)
+// LINT.ThenChange(/ios/chrome/browser/popup_menu/overflow_menu/ui/overflow_menu_metrics.h:actionType)
 
 // Ingests `destination` string representation and returns corresponding
 // overflow_menu::Destination enum.
@@ -74,8 +83,8 @@ std::optional<ActionType> ActionTypeForStringName(std::string action);
 std::string StringNameForActionType(ActionType action);
 
 // Ingests overflow_menu::Destination `destination` and records the
-// corresponding UMA action.
-void RecordUmaActionForDestination(Destination destination);
+// corresponding UMA action based on whether it is the NTP or not.
+void RecordUmaActionForDestination(Destination destination, bool on_ntp);
 
 // `kNewDestinationsInsertionIndex` represents the index new destinations are
 // inserted into the current ranking.

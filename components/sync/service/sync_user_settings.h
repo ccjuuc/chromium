@@ -19,21 +19,6 @@ namespace syncer {
 
 class Nigori;
 
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-#if !BUILDFLAG(IS_CHROMEOS)
-enum class SyncFirstSetupCompleteSource {
-  BASIC_FLOW = 0,
-  ADVANCED_FLOW_CONFIRM = 1,
-  ADVANCED_FLOW_INTERRUPTED_TURN_SYNC_ON = 2,
-  ADVANCED_FLOW_INTERRUPTED_LEAVE_SYNC_OFF = 3,
-  // Deprecated: ENGINE_INITIALIZED_WITH_AUTO_START = 4,
-  ANDROID_BACKUP_RESTORE = 5,
-  kMaxValue = ANDROID_BACKUP_RESTORE,
-};
-#endif  // !BUILDFLAG(IS_CHROMEOS)
-
 // This class encapsulates all the user-configurable bits of Sync.
 class SyncUserSettings {
  public:
@@ -56,8 +41,7 @@ class SyncUserSettings {
   virtual bool IsInitialSyncFeatureSetupComplete() const = 0;
 
 #if !BUILDFLAG(IS_CHROMEOS)
-  virtual void SetInitialSyncFeatureSetupComplete(
-      SyncFirstSetupCompleteSource source) = 0;
+  virtual void SetInitialSyncFeatureSetupComplete() = 0;
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // Getting selected types, for both Sync-the-feature and Sync-the-transport
@@ -161,6 +145,8 @@ class SyncUserSettings {
   // that Sync might still be working fine if the user has disabled all
   // encrypted data types.
   virtual bool IsTrustedVaultKeyRequired() const = 0;
+  // Whether keystore keys are required for encryption or decryption to proceed.
+  virtual bool IsKeystoreKeyRequiredForTesting() const = 0;
   // Whether trusted vault keys are required for encryption or decryption to
   // proceed for currently enabled data types.
   virtual bool IsTrustedVaultKeyRequiredForPreferredDataTypes() const = 0;

@@ -53,6 +53,7 @@ void CaretDisplayItemClient::Trace(Visitor* visitor) const {
   visitor->Trace(layout_block_);
   visitor->Trace(previous_layout_block_);
   visitor->Trace(box_fragment_);
+  visitor->Trace(block_caret_anchor_);
   DisplayItemClient::Trace(visitor);
 }
 
@@ -129,7 +130,7 @@ CaretDisplayItemClient::ComputeCaretRectAndPainterBlock(
     // (i.e. display: inline-block). In those cases, the layout object should be
     // either the caret rect's layout block, or its containing block.
     if (!(caret_rect.layout_object->IsLayoutBlock() &&
-          caret_rect.layout_object->IsAtomicInlineLevel())) {
+          caret_rect.layout_object->IsAtomicInline())) {
       DCHECK_EQ(caret_block, CaretLayoutBlock(caret_position.AnchorNode(),
                                               caret_rect.layout_object));
     } else if (caret_block != caret_rect.layout_object) {
@@ -173,16 +174,13 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
   if (!previous_layout_block_)
     previous_layout_block_ = layout_block_.Get();
 
-  CaretShape caret_shape = CaretShape::kBar;
-  bool is_caret_color_auto = false;
-  if (caret_position.AnchorNode() && IsEditable(*caret_position.AnchorNode())) {
-    const ComputedStyle* style =
-        GetComputedStyleForElementOrLayoutObject(*caret_position.AnchorNode());
-    if (style) {
-      is_caret_color_auto = style->IsCaretColorAuto();
-      caret_shape = GetCaretShapeFromComputedStyle(*style);
-    }
-  }
+  const ComputedStyle* style =
+      (caret_position.AnchorNode() && IsEditable(*caret_position.AnchorNode()))
+          ? GetComputedStyleForElementOrLayoutObject(
+                *caret_position.AnchorNode())
+          : nullptr;
+  CaretShape caret_shape =
+      style ? GetCaretShapeFromComputedStyle(*style) : CaretShape::kBar;
 
   CaretRectAndPainterBlock rect_and_block =
       ComputeCaretRectAndPainterBlock(caret_position, caret_shape);
@@ -202,6 +200,7 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
   if (!new_layout_block) {
     color_ = Color();
     local_rect_ = PhysicalRect();
+    is_in_canvas_subtree_ = false;
     return;
   }
 
@@ -226,20 +225,77 @@ void CaretDisplayItemClient::UpdateStyleAndLayoutIfNeeded(
     color_ = new_color;
   }
 
-  // TODO(https://crbug.com/353713061):
+  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled(
+          layout_block_->GetDocument().GetExecutionContext())) {
+    bool was_in_canvas_subtree = is_in_canvas_subtree_;
+
+    is_in_canvas_subtree_ = false;
+    if (Node* anchor_node = caret_position.AnchorNode()) {
+      Element* element = DynamicTo<Element>(anchor_node);
+      if (!element) {
+        element = anchor_node->parentElement();
+      }
+      if (element) {
+        is_in_canvas_subtree_ = element->IsInCanvasSubtree();
+      }
+    }
+    if (was_in_canvas_subtree != is_in_canvas_subtree_) {
+      needs_paint_invalidation_ = true;
+      if (layout_block_) {
+        // The caret property tree space may have changed.
+        layout_block_->GetFrameView()->SetPaintArtifactCompositorNeedsUpdate();
+      }
+    }
+  }
+
   // https://drafts.csswg.org/css-ui/#caret-color When caret-shape is block,
   // ensuring good visibility and contrast is best achieved with a
   // UA-determined color other than currentColor.
-  if (is_caret_color_auto && caret_shape == CaretShape::kBlock) {
+  // The good visibility can be done via setting the text color (the second
+  // value of caret-color). However, when no value is set, we temporarily set
+  // opacity to 0.5 here to achieve certain visibility.
+  if (caret_shape == CaretShape::kBlock && style &&
+      style->IsCaretTextColorAuto() && style->IsCaretColorAuto()) {
     // Temporarily set opacity to 0.5.
     color_.SetAlpha(0.5);
   }
 
+  const PhysicalRect old_local_rect = local_rect_;
   auto new_local_rect = rect_and_block.caret_rect;
   // TODO(crbug.com/1123630): Avoid paint invalidation on caret movement.
   if (new_local_rect != local_rect_) {
     needs_paint_invalidation_ = true;
     local_rect_ = new_local_rect;
+  }
+
+  // For block caret shape: invalidate the text LayoutObject at both the old
+  // and new caret positions so the character under the caret is repainted
+  // with the second value of caret-color when it's non-auto. Otherwise,
+  // DrawingRecorder reuses the cached text drawing when the caret moves, and
+  // the color override never runs.
+  Node* new_anchor =
+      (caret_shape == CaretShape::kBlock && style &&
+       !style->IsCaretTextColorAuto() &&
+       caret_position.AnchorNode()->IsTextNode() &&
+       RuntimeEnabledFeatures::CSSCaretColorWithOptionalSecondValueEnabled(
+           caret_position.AnchorNode()->GetExecutionContext()))
+          ? caret_position.AnchorNode()
+          : nullptr;
+  if (new_anchor != block_caret_anchor_ || new_local_rect != old_local_rect) {
+    if (block_caret_anchor_) {
+      if (LayoutObject* layout_object =
+              block_caret_anchor_->GetLayoutObject()) {
+        layout_object->SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+            PaintInvalidationReason::kCaret);
+      }
+    }
+    if (new_anchor && new_anchor != block_caret_anchor_) {
+      if (LayoutObject* layout_object = new_anchor->GetLayoutObject()) {
+        layout_object->SetShouldDoFullPaintInvalidationWithoutLayoutChange(
+            PaintInvalidationReason::kCaret);
+      }
+    }
+    block_caret_anchor_ = new_anchor;
   }
 
   if (needs_paint_invalidation_)
@@ -313,9 +369,7 @@ void CaretDisplayItemClient::SetNeedsNonCompositedPaintInvalidation() {
   }
   // Elements under canvas can only be rendered with `drawElementImage` and do
   // not support compositing.
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled() &&
-      IsA<Element>(layout_block_->GetNode()) &&
-      To<Element>(layout_block_->GetNode())->IsInCanvasSubtree()) {
+  if (is_in_canvas_subtree_) {
     needs_paint_invalidation_ = true;
   }
 }

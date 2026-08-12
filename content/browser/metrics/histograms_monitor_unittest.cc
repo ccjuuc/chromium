@@ -4,7 +4,8 @@
 
 #include "content/browser/metrics/histograms_monitor.h"
 
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_base.h"
 #include "base/metrics/statistics_recorder.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -35,7 +36,7 @@ TEST_F(HistogramsMonitorTest, StartMonitoringThenGetDiff) {
   monitor.StartMonitoring();
 
   // Get diff immediately should return nothing.
-  base::Value::List diff = monitor.GetDiff(kEmptyFilter);
+  base::ListValue diff = monitor.GetDiff(kEmptyFilter);
   ASSERT_EQ(diff.size(), 0ull);
 
   // Add more data to histogram.
@@ -71,7 +72,7 @@ TEST_F(HistogramsMonitorTest, StartMonitoringWithQueryThenGetDiff) {
   base::HistogramBase* histogram2 = base::Histogram::FactoryGet(
       "MonitorHistogram2", 1, 1000, 10, base::HistogramBase::kNoFlags);
   histogram2->Add(50);
-  base::Value::List diff = monitor.GetDiff("MonitorHistogram1");
+  base::ListValue diff = monitor.GetDiff("MonitorHistogram1");
   ASSERT_EQ(diff.size(), 0ull);
 }
 
@@ -91,7 +92,7 @@ TEST_F(HistogramsMonitorTest, CaseInsensitiveQuery) {
   histogram2->Add(50);
 
   // The query shouldn't match "MonitorHistogram2".
-  base::Value::List diff = monitor.GetDiff("histogram1");
+  base::ListValue diff = monitor.GetDiff("histogram1");
   ASSERT_EQ(diff.size(), 0ull);
 
   histogram1->Add(10);
@@ -119,7 +120,7 @@ TEST_F(HistogramsMonitorTest, MonitoringBaselineDoesntChangeWithFilter) {
   monitor.StartMonitoring();
 
   // Get diff immediately should return nothing.
-  base::Value::List diff = monitor.GetDiff(kEmptyFilter);
+  base::ListValue diff = monitor.GetDiff(kEmptyFilter);
   ASSERT_EQ(diff.size(), 0ull);
 
   // Add more data to histogram.

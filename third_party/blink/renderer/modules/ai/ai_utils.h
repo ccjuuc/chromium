@@ -7,6 +7,7 @@
 
 #include "base/check_op.h"
 #include "base/types/expected.h"
+#include "base/values.h"
 #include "third_party/blink/public/mojom/ai/ai_common.mojom-blink.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom-blink.h"
 #include "third_party/blink/public/mojom/ai/ai_proofreader.mojom-blink.h"
@@ -14,7 +15,9 @@
 #include "third_party/blink/public/mojom/ai/ai_summarizer.mojom-blink.h"
 #include "third_party/blink/public/mojom/ai/ai_writer.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_expected.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_sampling_mode.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_proofreader_create_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rewriter_create_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_summarizer_create_options.h"
@@ -27,10 +30,26 @@
 
 namespace blink {
 
+class ExecutionContext;
 class LanguageModelCreateCoreOptions;
+class LanguageModelMessageContent;
 class LocalDOMWindow;
+class ScriptState;
 
 static constexpr uint64_t kNormalizedDownloadProgressMax = 0x10000;
+
+// Checks if a base::Value contains any Type::NONE values.
+// V8ValueConverter returns Type::NONE for circular references and unsupported
+// types embedded within dictionaries/lists.
+MODULES_EXPORT bool ContainsNoneType(const base::Value& value);
+
+// Converts IDL sampling mode to Mojo enum.
+MODULES_EXPORT mojom::blink::AILanguageModelSamplingMode
+ConvertSamplingModeToMojo(V8LanguageModelSamplingMode sampling_mode);
+
+MODULES_EXPORT std::optional<V8LanguageModelSamplingMode>
+ConvertSamplingModeToV8(
+    std::optional<mojom::blink::AILanguageModelSamplingMode> sampling_mode);
 
 // Converts string language codes to AILanguageCode mojo struct.
 Vector<mojom::blink::AILanguageCodePtr> ToMojoLanguageCodes(
@@ -46,7 +65,8 @@ enum class SamplingParamsOptionError {
 // otherwise.
 MODULES_EXPORT base::expected<mojom::blink::AILanguageModelSamplingParamsPtr,
                               SamplingParamsOptionError>
-ResolveSamplingParamsOption(const LanguageModelCreateCoreOptions* options);
+ResolveSamplingParamsOption(const LanguageModelCreateCoreOptions* options,
+                            ExecutionContext* execution_context);
 
 mojom::blink::AISummarizerCreateOptionsPtr ToMojoSummarizerCreateOptions(
     const SummarizerCreateOptions* options);
@@ -69,6 +89,14 @@ mojom::blink::AIProofreaderCreateOptionsPtr ToMojoProofreaderCreateOptions(
 Vector<mojom::blink::AILanguageModelExpectedPtr> ToMojoExpectations(
     const HeapVector<Member<LanguageModelExpected>>& expected);
 
+// Converts a vector of ToolCall mojo structs to a vector of
+// LanguageModelMessageContent with type "tool-call".
+// Exceptions are reported via exception_state if tool call creation fails.
+HeapVector<Member<LanguageModelMessageContent>> ConvertMojoToolCallsToMessages(
+    ScriptState* script_state,
+    const Vector<mojom::blink::ToolCallPtr>& tool_calls,
+    ExceptionState& exception_state);
+
 // Implementation of LookupMatchingLocaleByBestFit
 // (https://tc39.es/ecma402/#sec-lookupmatchinglocalebybestfit) as
 // LookupMatchingLocaleByPrefix
@@ -83,11 +111,11 @@ std::optional<String> LookupMatchingLocaleByBestFit(
     if (available_languages.contains(prefix.Ascii())) {
       return prefix;
     }
-    int pos = prefix.ReverseFind('-');
+    int pos = prefix.rfind('-');
     if (pos == -1) {
       pos = 0;
     }
-    prefix = prefix.Substring(0, pos);
+    prefix = prefix.substr(0, pos);
   }
   return std::nullopt;
 }

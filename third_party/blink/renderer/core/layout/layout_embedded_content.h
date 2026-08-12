@@ -95,6 +95,7 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) final;
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
@@ -109,6 +110,8 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
     NOT_DESTROYED();
     return To<HTMLFrameOwnerElement>(GetNode());
   }
+
+  void CountSvgFilterPaint() const;
 
  private:
   void WillBeDestroyed() final;

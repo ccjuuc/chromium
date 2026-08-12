@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/compiler_specific.h"
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_name.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
@@ -125,6 +126,13 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
     return false;
   }
 
+  bool PercentagesDependOnUsedValue() const {
+    return flags_ & kPercentagesDependOnUsedValue;
+  }
+  bool PercentagesDoNotDependOnUsedValue() const {
+    return flags_ & kPercentagesDoNotDependOnUsedValue;
+  }
+
   virtual const CSSValue* CSSValueFromComputedStyleInternal(
       const ComputedStyle&,
       const LayoutObject*,
@@ -173,17 +181,20 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
     return false;
   }
   const CSSProperty* GetVisitedProperty() const {
-    CSSPropertyID visited_id = static_cast<CSSPropertyID>(
-        UNSAFE_TODO(kPropertyVisitedIDs[static_cast<unsigned>(property_id_)]));
+    CSSPropertyID visited_id = static_cast<CSSPropertyID>(UNSAFE_BUFFERS(
+        kPropertyVisitedIDs[static_cast<unsigned>(property_id_)]));
     if (visited_id == CSSPropertyID::kInvalid) {
       return nullptr;
     } else {
       return To<CSSProperty>(GetPropertyInternal(visited_id));
     }
   }
+  static CSSPropertyID UnvisitedID(unsigned id) {
+    return static_cast<CSSPropertyID>(
+        UNSAFE_BUFFERS(kPropertyUnvisitedIDs[id]));
+  }
   const CSSProperty* GetUnvisitedProperty() const {
-    CSSPropertyID unvisited_id = static_cast<CSSPropertyID>(UNSAFE_TODO(
-        kPropertyUnvisitedIDs[static_cast<unsigned>(property_id_)]));
+    CSSPropertyID unvisited_id = UnvisitedID(property_id_);
     if (unvisited_id == CSSPropertyID::kInvalid) {
       return nullptr;
     } else {
@@ -279,6 +290,12 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
     kValidForVisited = 1ull << 36,
     // See valid_for_permission_icon in css_properties.json5
     kValidForPermissionIcon = 1ull << 37,
+    // When percentages_depend_on_used_value is explicitly set to true.
+    // See percentages_depend_on_used_value in css_properties.json5
+    kPercentagesDependOnUsedValue = 1ull << 38,
+    // When percentages_depend_on_used_value is explicitly set to false.
+    // See percentages_depend_on_used_value in css_properties.json5
+    kPercentagesDoNotDependOnUsedValue = 1ull << 39,
   };
 
   constexpr CSSProperty(CSSPropertyID property_id,
@@ -293,17 +310,20 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
     DCHECK_NE(flags_ & kLegacyOverlapping, flags & kNotLegacyOverlapping);
   }
 
-  enum class ValueMode {
-    kNormal,
+  enum class ValueMode : uint8_t {
+    kNormal = 0,
     // https://drafts.csswg.org/css-variables/#animation-tainted
-    kAnimated,
+    kAnimated = 1 << 0,
+    // https://drafts.csswg.org/css-values-5/#attr-taint
+    kAttrTainted = 1 << 1,
   };
+  using ValueModeFlags = uint8_t;
 
  private:
   static constexpr size_t kPropertyIdBits = 16;
-  uint64_t property_id_ : kPropertyIdBits;  // NOLINT(runtime/bitfields)
-  uint64_t repetition_separator_ : 8;       // NOLINT(runtime/bitfields)
-  uint64_t flags_ : 40;                     // NOLINT(runtime/bitfields)
+  uint64_t property_id_ : kPropertyIdBits;
+  uint64_t repetition_separator_ : 8;
+  uint64_t flags_ : 40;
 
   // Make sure we have room for all valid CSSPropertyIDs.
   // (Using bit fields here reduces CSSProperty size from 24 to 16

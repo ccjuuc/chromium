@@ -10,6 +10,7 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/feature_engagement/test/scoped_iph_feature_list.h"
 #import "components/feature_engagement/test/test_tracker.h"
+#import "ios/chrome/browser/contextual_panel/entrypoint/coordinator/contextual_panel_entrypoint_constants.h"
 #import "ios/chrome/browser/contextual_panel/entrypoint/coordinator/contextual_panel_entrypoint_mediator_delegate.h"
 #import "ios/chrome/browser/contextual_panel/entrypoint/ui/contextual_panel_entrypoint_consumer.h"
 #import "ios/chrome/browser/contextual_panel/model/contextual_panel_item_type.h"
@@ -134,13 +135,13 @@ class FakeContextualPanelTabHelper : public ContextualPanelTabHelper {
   explicit FakeContextualPanelTabHelper(
       web::WebState* web_state,
       std::map<ContextualPanelItemType,
-               raw_ptr<ContextualPanelModel, DanglingUntriaged>> models)
+               raw_ptr<ContextualPanelModel>> models)
       : ContextualPanelTabHelper(web_state, models) {}
 
   static void CreateForWebState(
       web::WebState* web_state,
       std::map<ContextualPanelItemType,
-               raw_ptr<ContextualPanelModel, DanglingUntriaged>> models) {
+               raw_ptr<ContextualPanelModel>> models) {
     web_state->SetUserData(
         UserDataKey(),
         std::make_unique<FakeContextualPanelTabHelper>(web_state, models));
@@ -192,11 +193,11 @@ class ContextualPanelEntrypointMediatorTest : public PlatformTest {
       : web_state_list_(&web_state_list_delegate_) {
     auto web_state = std::make_unique<web::FakeWebState>();
     std::map<ContextualPanelItemType,
-             raw_ptr<ContextualPanelModel, DanglingUntriaged>>
+             raw_ptr<ContextualPanelModel>>
         models;
     FakeContextualPanelTabHelper::CreateForWebState(web_state.get(), models);
     InfoBarManagerImpl::CreateForWebState(web_state.get());
-    InfobarBadgeTabHelper::GetOrCreateForWebState(web_state.get());
+    InfobarBadgeTabHelper::CreateForWebState(web_state.get());
     web_state_list_.InsertWebState(
         std::move(web_state),
         WebStateList::InsertionParams::Automatic().Activate(true));
@@ -396,13 +397,13 @@ TEST_F(ContextualPanelEntrypointMediatorTest, TestLargeEntrypointAppears) {
 
   // Advance time so that the large entrypoint is displayed.
   task_environment_.FastForwardBy(
-      base::Seconds(LargeContextualPanelEntrypointDelayInSeconds()));
+      kLargeContextualPanelEntrypointAppearanceDelay);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsShown);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsLarge);
 
   // Advance time until the large entrypoint transitions back to small.
   task_environment_.FastForwardBy(
-      base::Seconds(LargeContextualPanelEntrypointDisplayedInSeconds()));
+      kLargeContextualPanelEntrypointDisplayDuration);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsShown);
   EXPECT_FALSE(entrypoint_consumer_.entrypointIsLarge);
 
@@ -469,7 +470,7 @@ TEST_F(ContextualPanelEntrypointMediatorTest, TestIPHEntrypointAppears) {
 
   // Advance time so that the IPH entrypoint is displayed.
   task_environment_.FastForwardBy(
-      base::Seconds(LargeContextualPanelEntrypointDelayInSeconds()));
+      kLargeContextualPanelEntrypointAppearanceDelay);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsShown);
   EXPECT_FALSE(entrypoint_consumer_.entrypointIsLarge);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsColored);
@@ -479,7 +480,7 @@ TEST_F(ContextualPanelEntrypointMediatorTest, TestIPHEntrypointAppears) {
 
   // Advance time until the IPH is dismissed.
   task_environment_.FastForwardBy(
-      base::Seconds(LargeContextualPanelEntrypointDisplayedInSeconds()));
+      kLargeContextualPanelEntrypointDisplayDuration);
   EXPECT_TRUE(entrypoint_consumer_.entrypointIsShown);
   EXPECT_FALSE(entrypoint_consumer_.entrypointIsLarge);
   EXPECT_FALSE(entrypoint_consumer_.entrypointIsColored);
@@ -512,11 +513,11 @@ TEST_F(ContextualPanelEntrypointMediatorTest, TestWebStateListChanged) {
 
   auto web_state = std::make_unique<web::FakeWebState>();
   std::map<ContextualPanelItemType,
-           raw_ptr<ContextualPanelModel, DanglingUntriaged>>
+           raw_ptr<ContextualPanelModel>>
       models;
   FakeContextualPanelTabHelper::CreateForWebState(web_state.get(), models);
   InfoBarManagerImpl::CreateForWebState(web_state.get());
-  InfobarBadgeTabHelper::GetOrCreateForWebState(web_state.get());
+  InfobarBadgeTabHelper::CreateForWebState(web_state.get());
 
   web_state_list_.InsertWebState(
       std::move(web_state),

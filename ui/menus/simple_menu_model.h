@@ -5,6 +5,7 @@
 #ifndef UI_MENUS_SIMPLE_MENU_MODEL_H_
 #define UI_MENUS_SIMPLE_MENU_MODEL_H_
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -215,6 +216,9 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
   // Sets the icon for the item at |index|.
   void SetIcon(size_t index, const ui::ImageModel& icon);
 
+  // Sets the icon for the item with the given |command_id|.
+  void SetIconForCommandId(int command_id, const ui::ImageModel& icon);
+
   // Sets the label for the item at |index|.
   void SetLabel(size_t index, const std::u16string& label);
 
@@ -224,11 +228,23 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
   // former is set).
   void SetAcceleratorAt(size_t index, const ui::Accelerator& accelerator);
 
+  // Sets the secondary label for the item at |index|.
+  void SetSecondaryLabel(size_t index, const std::u16string& secondary_label);
+
   // Sets the minor text for the item at |index|.
   void SetMinorText(size_t index, const std::u16string& minor_text);
 
+  // Sets whether the minor text at |index| should be rendered as a URL.
+  void SetMinorTextIsUrlAt(size_t index, bool is_url);
+
   // Sets the minor icon for the item at |index|.
   void SetMinorIcon(size_t index, const ui::ImageModel& minor_icon);
+
+  // Sets whether the minor icon is displayed to the right of the minor text, if
+  // present. Only certain "client" code is allowed to use this API. See the
+  // MinorIconOnRightPasskey above.
+  void SetMinorIconOnRight(MenuModel::MinorIconOnRightPasskey passkey,
+                           bool minor_icon_on_right);
 
   // Sets whether the item at |index| is enabled.
   void SetEnabledAt(size_t index, bool enabled);
@@ -236,8 +252,10 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
   // Sets whether the item at |index| is visible.
   void SetVisibleAt(size_t index, bool visible);
 
-  // Sets whether the item at |index| is new.
-  void SetIsNewFeatureAt(size_t index, IsNewFeatureAtValue is_new_feature);
+  // Sets whether the item at |index| should have a new badge.
+  void SetIsNewFeatureAt(size_t index,
+                         IsNewFeatureAtValue is_new_feature,
+                         NewBadgeType new_badge_type = NewBadgeType::kNew);
 
   // Sets whether the item at |index| is may have mnemonics.
   void SetMayHaveMnemonicsAt(size_t index, bool may_have_mnemonics);
@@ -274,8 +292,12 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
   ui::MenuSeparatorType GetSeparatorTypeAt(size_t index) const override;
   int GetCommandIdAt(size_t index) const override;
   std::u16string GetLabelAt(size_t index) const override;
+  std::u16string GetSecondaryLabelAt(size_t index) const override;
   std::u16string GetMinorTextAt(size_t index) const override;
+  bool GetMinorTextIsUrlAt(size_t index) const override;
   ImageModel GetMinorIconAt(size_t index) const override;
+  bool GetMinorIconOnRight(
+      MenuModel::MinorIconOnRightPasskey passkey) const override;
   bool IsItemDynamicAt(size_t index) const override;
   // First defers to the delegate's GetAcceleratorForCommandId() method to
   // retrieve the accelerator for the command associated with the item at
@@ -293,6 +315,7 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
   bool IsVisibleAt(size_t index) const override;
   bool IsAlertedAt(size_t index) const override;
   bool IsNewFeatureAt(size_t index) const override;
+  std::optional<NewBadgeType> GetNewBadgeTypeAt(size_t index) const override;
   bool MayHaveMnemonicsAt(size_t index) const override;
   std::u16string GetAccessibleNameAt(size_t index) const override;
   ElementIdentifier GetElementIdentifierAt(size_t index) const override;
@@ -321,16 +344,19 @@ class COMPONENT_EXPORT(UI_MENUS) SimpleMenuModel : public MenuModel {
     ItemType type = TYPE_COMMAND;
     std::u16string label;
     ui::Accelerator accelerator;
+    std::u16string secondary_label;
     std::u16string minor_text;
+    bool minor_text_is_url = false;
     ImageModel minor_icon;
     ImageModel icon;
+    bool minor_icon_on_right = false;
     int group_id = -1;
     raw_ptr<MenuModel, DanglingUntriaged> submenu = nullptr;
     raw_ptr<ButtonMenuItemModel, DanglingUntriaged> button_model = nullptr;
     MenuSeparatorType separator_type = NORMAL_SEPARATOR;
     bool enabled = true;
     bool visible = true;
-    bool is_new_feature = false;
+    std::optional<NewBadgeType> new_badge_type = std::nullopt;
     bool may_have_mnemonics = true;
     bool force_show_accelerator_for_item = false;
     std::u16string accessible_name;

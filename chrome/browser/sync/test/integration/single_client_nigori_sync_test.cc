@@ -35,8 +35,10 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/metrics/metrics_service.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -45,10 +47,10 @@
 #include "components/sync/base/time.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/engine/loopback_server/loopback_server_entity.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/nigori/cross_user_sharing_keys.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "components/sync/protocol/nigori_local_data.pb.h"
 #include "components/sync/service/sync_service.h"
@@ -57,6 +59,7 @@
 #include "components/sync/test/fake_server_nigori_helper.h"
 #include "components/sync/test/nigori_test_utils.h"
 #include "components/trusted_vault/command_line_switches.h"
+#include "components/trusted_vault/features.h"
 #include "components/trusted_vault/securebox.h"
 #include "components/trusted_vault/standalone_trusted_vault_client.h"
 #include "components/trusted_vault/standalone_trusted_vault_server_constants.h"
@@ -83,9 +86,8 @@
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/ash/sync/sync_error_notifier.h"
 #include "chrome/browser/ash/sync/sync_error_notifier_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "components/trusted_vault/features.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 #include "ui/views/widget/widget.h"
@@ -120,15 +122,11 @@ constexpr GaiaId::Literal kDefaultGaiaId("gaia_id_for_user1_gmail.com");
 MATCHER_P(IsDataEncryptedWith, key_params, "") {
   const sync_pb::EncryptedData& encrypted_data = arg;
   std::unique_ptr<syncer::Nigori> nigori = syncer::Nigori::CreateByDerivation(
-      key_params.derivation_params, key_params.password);
+      syncer::NigoriPassKey::ForTesting(), key_params.derivation_params,
+      key_params.password);
   return encrypted_data.key_name() == nigori->GetKeyName();
 }
 
-std::string ComputeKeyName(const KeyParamsForTesting& key_params) {
-  return syncer::Nigori::CreateByDerivation(key_params.derivation_params,
-                                            key_params.password)
-      ->GetKeyName();
-}
 
 syncer::CrossUserSharingKeys GenerateNewKeyPair() {
   syncer::CrossUserSharingKeys cross_user_sharing_keys =
@@ -258,6 +256,11 @@ class SingleClientNigoriSyncTest
     if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly) {
       scoped_feature_list_.InitAndEnableFeature(
           syncer::kReplaceSyncPromosWithSignInPromos);
+    } else {
+      // Skip sync-to-signin migration for sync-the-feature tests. This is to
+      // avoid the sync state changing between the PRE_ tests.
+      scoped_feature_list_.InitAndDisableFeature(
+          switches::kMigrateSyncingUserToSignedIn);
     }
   }
 
@@ -461,8 +464,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest,
   std::unique_ptr<syncer::CryptographerImpl> cryptographer =
       syncer::CryptographerImpl::FromSingleKeyForTesting(
           kKeyParams.password, kKeyParams.derivation_params);
-  ASSERT_TRUE(cryptographer->Encrypt(cryptographer->ToProto().key_bag(),
-                                     specifics.mutable_encryption_keybag()));
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
   SetNigoriInFakeServer(specifics, GetFakeServer());
 
   const password_manager::PasswordForm password_form =
@@ -570,57 +573,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest,
   EXPECT_TRUE(WaitForPasswordForms({password_form}));
 }
 
-IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest, ShouldRotateKeystoreKey) {
-  ASSERT_TRUE(SetupSync());
-
-  GetFakeServer()->TriggerKeystoreKeyRotation();
-  const std::vector<std::vector<uint8_t>>& keystore_keys =
-      GetFakeServer()->GetKeystoreKeys();
-  ASSERT_THAT(keystore_keys, SizeIs(2));
-  const KeyParamsForTesting new_keystore_key_params =
-      KeystoreKeyParamsForTesting(keystore_keys[1]);
-  const std::string expected_key_bag_key_name =
-      ComputeKeyName(new_keystore_key_params);
-  EXPECT_TRUE(ServerNigoriKeyNameChecker(expected_key_bag_key_name).Wait());
-}
-
-// Performs initial sync with backward compatible keystore Nigori.
-IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest,
-                       PRE_ShouldCompleteKeystoreMigrationAfterRestart) {
-  const std::vector<std::vector<uint8_t>>& keystore_keys =
-      GetFakeServer()->GetKeystoreKeys();
-  ASSERT_THAT(keystore_keys, SizeIs(1));
-  const KeyParamsForTesting kKeystoreKeyParams =
-      KeystoreKeyParamsForTesting(keystore_keys.back());
-  const KeyParamsForTesting kDefaultKeyParams =
-      Pbkdf2PassphraseKeyParamsForTesting("password");
-  SetNigoriInFakeServer(
-      BuildKeystoreNigoriSpecifics(
-          /*keybag_keys_params=*/{kDefaultKeyParams, kKeystoreKeyParams},
-          /*keystore_decryptor_params*/ {kDefaultKeyParams},
-          /*keystore_key_params=*/kKeystoreKeyParams),
-      GetFakeServer());
-
-  ASSERT_TRUE(SetupSync());
-  const std::string expected_key_bag_key_name =
-      ComputeKeyName(kKeystoreKeyParams);
-}
-
-// After browser restart the client should commit full keystore Nigori (e.g. it
-// should use keystore key as encryption key).
-IN_PROC_BROWSER_TEST_P(SingleClientNigoriSyncTest,
-                       ShouldCompleteKeystoreMigrationAfterRestart) {
-  ASSERT_TRUE(SetupClients());
-  const std::string expected_key_bag_key_name =
-      ComputeKeyName(KeystoreKeyParamsForTesting(
-          /*raw_key=*/GetFakeServer()->GetKeystoreKeys().back()));
-  EXPECT_TRUE(ServerNigoriKeyNameChecker(expected_key_bag_key_name).Wait());
-}
-
 // Tests that client can decrypt |pending_keys| with implicit passphrase in
 // backward-compatible keystore mode, when |keystore_decryptor_token| is
 // non-decryptable (corrupted). Additionally verifies that there is no
-// regression causing crbug.com/1042203.
+// regression causing crbug.com/40668359.
 IN_PROC_BROWSER_TEST_P(
     SingleClientNigoriSyncTest,
     ShouldDecryptWithImplicitPassphraseInBackwardCompatibleKeystoreMode) {
@@ -667,8 +623,8 @@ IN_PROC_BROWSER_TEST_P(
       syncer::CryptographerImpl::FromSingleKeyForTesting(
           kPassphraseKeyParams.password,
           kPassphraseKeyParams.derivation_params);
-  ASSERT_TRUE(cryptographer->Encrypt(cryptographer->ToProto().key_bag(),
-                                     specifics.mutable_encryption_keybag()));
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
   SetNigoriInFakeServer(specifics, GetFakeServer());
 
   // Mimic passwords encrypted with implicit passphrase stored by the server.
@@ -684,7 +640,8 @@ IN_PROC_BROWSER_TEST_P(
   // Add local passwords.
   const password_manager::PasswordForm password_form2 =
       passwords_helper::CreateTestPasswordForm(2, GetPasswordStoreType());
-  GetPasswordStore()->AddLogin(password_form2);
+  GetPasswordStore()->AddLogin(
+      password_manager::FromPasswordForm(password_form2));
 
   // Mimic server-side keystore migration:
   // 1. Issue CLIENT_DATA_OBSOLETE.
@@ -732,8 +689,8 @@ IN_PROC_BROWSER_TEST_P(
       syncer::CryptographerImpl::FromSingleKeyForTesting(
           kPassphraseKeyParams.password,
           kPassphraseKeyParams.derivation_params);
-  ASSERT_TRUE(cryptographer->Encrypt(cryptographer->ToProto().key_bag(),
-                                     specifics.mutable_encryption_keybag()));
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
   SetNigoriInFakeServer(specifics, GetFakeServer());
 
   // Mimic passwords encrypted with implicit passphrase stored by the server.
@@ -755,7 +712,8 @@ IN_PROC_BROWSER_TEST_P(
   // Add local passwords.
   const password_manager::PasswordForm password_form2 =
       passwords_helper::CreateTestPasswordForm(2, GetPasswordStoreType());
-  GetPasswordStore()->AddLogin(password_form2);
+  GetPasswordStore()->AddLogin(
+      password_manager::FromPasswordForm(password_form2));
 
   // Mimic server-side keystore migration:
   // 1. Issue CLIENT_DATA_OBSOLETE.
@@ -789,7 +747,8 @@ IN_PROC_BROWSER_TEST_P(
     // newly-created passwords should be uploaded using the keystore key.
     const password_manager::PasswordForm password_form3 =
         passwords_helper::CreateTestPasswordForm(3, GetPasswordStoreType());
-    GetPasswordStore()->AddLogin(password_form3);
+    GetPasswordStore()->AddLogin(
+        password_manager::FromPasswordForm(password_form3));
     EXPECT_TRUE(ServerPasswordsEqualityChecker(
                     {password_form3}, kKeystoreKeyParams.password,
                     kKeystoreKeyParams.derivation_params)
@@ -863,8 +822,8 @@ IN_PROC_BROWSER_TEST_P(
   std::unique_ptr<syncer::CryptographerImpl> cryptographer =
       syncer::CryptographerImpl::FromSingleKeyForTesting(
           kKeyParams.password, kKeyParams.derivation_params);
-  ASSERT_TRUE(cryptographer->Encrypt(cryptographer->ToProto().key_bag(),
-                                     specifics.mutable_encryption_keybag()));
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
   SetNigoriInFakeServer(specifics, GetFakeServer());
 
   const password_manager::PasswordForm password_form =
@@ -915,8 +874,8 @@ IN_PROC_BROWSER_TEST_P(
   std::unique_ptr<syncer::CryptographerImpl> cryptographer =
       syncer::CryptographerImpl::FromSingleKeyForTesting(
           kKeyParams.password, kKeyParams.derivation_params);
-  ASSERT_TRUE(cryptographer->Encrypt(cryptographer->ToProto().key_bag(),
-                                     specifics.mutable_encryption_keybag()));
+  *specifics.mutable_encryption_keybag() =
+      cryptographer->ExportEncryptedKeyBag();
   SetNigoriInFakeServer(specifics, GetFakeServer());
 
   ASSERT_TRUE(SetupSync());
@@ -944,7 +903,8 @@ IN_PROC_BROWSER_TEST_P(
   // Verify that newly saved passwords are encrypted with keystore passphrase.
   const password_manager::PasswordForm password_form =
       passwords_helper::CreateTestPasswordForm(0, GetPasswordStoreType());
-  GetPasswordStore()->AddLogin(password_form);
+  GetPasswordStore()->AddLogin(
+      password_manager::FromPasswordForm(password_form));
   EXPECT_TRUE(ServerPasswordsEqualityChecker(
                   {password_form}, kKeystoreKeyParams.password,
                   kKeystoreKeyParams.derivation_params)
@@ -1048,14 +1008,11 @@ IN_PROC_BROWSER_TEST_P(
   ASSERT_THAT(keystore_keys, SizeIs(1));
   const KeyParamsForTesting kKeystoreKeyParams =
       KeystoreKeyParamsForTesting(keystore_keys.back());
-  const KeyParamsForTesting kDefaultKeyParams =
-      Pbkdf2PassphraseKeyParamsForTesting("password");
-  SetNigoriInFakeServer(
-      BuildKeystoreNigoriSpecifics(
-          /*keybag_keys_params=*/{kDefaultKeyParams, kKeystoreKeyParams},
-          /*keystore_decryptor_params*/ {kDefaultKeyParams},
-          /*keystore_key_params=*/kKeystoreKeyParams),
-      GetFakeServer());
+  SetNigoriInFakeServer(BuildKeystoreNigoriSpecifics(
+                            /*keybag_keys_params=*/{kKeystoreKeyParams},
+                            /*keystore_decryptor_params=*/kKeystoreKeyParams,
+                            /*keystore_key_params=*/kKeystoreKeyParams),
+                        GetFakeServer());
 
   ASSERT_TRUE(SetupSync());
 }
@@ -1337,6 +1294,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
 
   ASSERT_EQ(GetSyncService(0)->GetAccountInfo().gaia, kDefaultGaiaId);
 
+  base::HistogramTester histogram_tester;
+
   // Mimic opening a web page where the user can interact with the retrieval
   // flow.
   OpenTabForSyncKeyRetrieval(
@@ -1355,6 +1314,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
                    ->GetUserSettings()
                    ->IsTrustedVaultKeyRequiredForPreferredDataTypes());
 
+  histogram_tester.ExpectUniqueSample(
+      "TrustedVault.RecoveryFlowTriggeredEndpoint",
+      trusted_vault::TrustedVaultRecoveryFlowEndpoint::kDesktop, 1);
+
 #if !BUILDFLAG(IS_CHROMEOS)
   // Verify the profile-menu error string is empty.
   EXPECT_EQ(GetSyncService(0)->GetUserActionableError(),
@@ -1362,7 +1325,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
-// Regression test for crbug.com/1479879: test verifies that client is able to
+// Regression test for crbug.com/40930088: test verifies that client is able to
 // fix degraded recoverability if trusted vault keys were obtained by key
 // retrieval. In particular, this requires plumbing correct key version
 // (verified by FakeSecurityDomainsServer).
@@ -1436,8 +1399,10 @@ class SingleClientNigoriWithWebApiAndDialogUIParamTest
   ~SingleClientNigoriWithWebApiAndDialogUIParamTest() override = default;
 
   bool WaitForTrustedVaultReauthCompletion() {
-    auto* browser = chrome::FindTabbedBrowser(GetProfile(0), false);
-    return TabClosedChecker(browser->tab_strip_model()->GetActiveWebContents())
+    BrowserWindowInterface* browser =
+        ProfileBrowserCollection::GetForProfile(GetProfile(0))
+            ->FindTabbedBrowser();
+    return TabClosedChecker(browser->GetTabStripModel()->GetActiveWebContents())
         .Wait();
   }
 };
@@ -1582,7 +1547,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
           "foo.com", base::StringPrintf(
                          "/sync/encryption_keys_retrieval_with_iframe.html?%s",
                          GaiaUrls::GetInstance()
-                             ->signin_chrome_sync_keys_retrieval_url()
+                             ->SigninChromeSyncKeysRetrievalUrl(
+                                 /*account_index=*/0)
                              .spec()
                              .c_str())),
       /*index=*/0,
@@ -1858,14 +1824,8 @@ IN_PROC_BROWSER_TEST_P(
 
   base::HistogramTester histogram_tester;
 
-  // The manual sequence below, instead of invoking SetupSync() manually,
-  // reproduces a more realistic case of the first-time turn-sync-on experience,
-  // with a temporary stage where the user is signed in without sync-the-feature
-  // being enabled. Except on Ash where the two steps happen at once.
 #if !BUILDFLAG(IS_CHROMEOS)
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
 #endif  // !BUILDFLAG(IS_CHROMEOS)
   // TODO(crbug.com/40914333): SetupSync(WAIT_FOR_COMMITS_TO_COMPLETE) (e.g.
   // with default argument) causes test flakiness here due to unrelated issue in
@@ -2269,7 +2229,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
       /*expected_bucket_count=*/1);
 }
 
-// Regression test for crbug.com/1267391: after following key rotation the
+// Regression test for crbug.com/40802753: after following key rotation the
 // client should still send all trusted vault keys (including keys that predate
 // key rotation) to the server when adding recovery method.
 IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
@@ -2407,6 +2367,49 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
   EXPECT_FALSE(GetSecurityDomainsServer()->ReceivedInvalidRequest());
 }
 
+IN_PROC_BROWSER_TEST_P(
+    SingleClientNigoriSyncTest,
+    ShouldPauseSyncForEncryptedTypesWhenKeystoreKeysRequired) {
+  const std::vector<std::vector<uint8_t>>& server_keystore_keys =
+      GetFakeServer()->GetKeystoreKeys();
+  ASSERT_THAT(server_keystore_keys, SizeIs(1));
+
+  std::vector<uint8_t> wrong_keystore_key = server_keystore_keys[0];
+  wrong_keystore_key[0] ^= 0xFF;
+
+  const KeyParamsForTesting kWrongKeystoreKeyParams =
+      KeystoreKeyParamsForTesting(wrong_keystore_key);
+
+  SetNigoriInFakeServer(
+      BuildKeystoreNigoriSpecifics(
+          /*keybag_keys_params=*/{kWrongKeystoreKeyParams},
+          /*keystore_decryptor_params=*/kWrongKeystoreKeyParams,
+          /*keystore_key_params=*/kWrongKeystoreKeyParams),
+      GetFakeServer());
+
+  const std::u16string kBookmarkTitle = u"Bookmark title";
+  const GURL kBookmarkUrl = GURL("https://example.com");
+  GetFakeServer()->InjectEntity(bookmarks_helper::CreateBookmarkServerEntity(
+      kBookmarkTitle, kBookmarkUrl));
+
+  ASSERT_TRUE(SetupSync(NO_WAITING));
+
+  EXPECT_TRUE(KeystoreKeysRequiredChecker(GetSyncService(0)).Wait());
+
+  // Bookmarks are unencrypted and should continue to sync.
+  EXPECT_TRUE(
+      bookmarks_helper::BookmarksTitleChecker(0, kBookmarkTitle, 1).Wait());
+
+  // Passwords are encrypted and should be paused.
+  EXPECT_FALSE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));
+
+  // The user-facing error should NOT indicate that a passphrase is required,
+  // nor should it show any user-actionable errors.
+  EXPECT_FALSE(GetSyncService(0)->GetUserSettings()->IsPassphraseRequired());
+  EXPECT_EQ(GetSyncService(0)->GetUserActionableError(),
+            syncer::SyncService::UserActionableError::kNone);
+}
+
 // ChromeOS doesn't have unconsented primary accounts.
 #if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
@@ -2415,9 +2418,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientNigoriWithWebApiTest,
   SetNigoriInFakeServer(BuildTrustedVaultNigoriSpecifics({kTestEncryptionKey}),
                         GetFakeServer());
 
-  ASSERT_TRUE(SetupClients());
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
   // The error is now shown, because PASSWORDS is trying to sync. The data
@@ -2473,8 +2474,7 @@ IN_PROC_BROWSER_TEST_P(
       /*last_key_version=*/GetSecurityDomainsServer()->GetCurrentEpoch(),
       /*trigger=*/std::nullopt);
 
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+  ASSERT_TRUE(SignIn());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
   ASSERT_TRUE(TrustedVaultRecoverabilityDegradedStateChecker(GetSyncService(0),

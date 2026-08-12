@@ -529,8 +529,8 @@ IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
       0);
 }
 
-// Regression test for crbug.com/942326, where foreground duration was not being
-// updated unless the tab was hidden.
+// Regression test for crbug.com/41447085, where foreground duration was not
+// being updated unless the tab was hidden.
 IN_PROC_BROWSER_TEST_F(SecurityStatePageLoadMetricsBrowserTest,
                        NonZeroForegroundTime) {
   StartHttpServer();
@@ -606,7 +606,7 @@ IN_PROC_BROWSER_TEST_F(
 
   // Loads a page in the prerender.
   GURL prerender_url = https_test_server()->GetURL("/title2.html");
-  const content::FrameTreeNodeId host_id =
+  const content::PrerenderHostId host_id =
       prerender_helper()->AddPrerender(prerender_url);
   content::test::PrerenderHostObserver host_observer(*GetWebContents(),
                                                      host_id);

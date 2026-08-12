@@ -4,12 +4,9 @@
 
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_source_view.h"
 
-#include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_list_view.h"
-#include "chrome/browser/ui/views/desktop_capture/desktop_media_picker_views.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
@@ -21,6 +18,7 @@
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/property_effects.h"
 #include "ui/views/view_utils.h"
 
@@ -114,11 +112,13 @@ void DesktopMediaSourceView::SetSelected(bool selected) {
     SetBackground(views::CreateRoundedRectBackground(
         GetColorProvider()->GetColor(ui::kColorSysTonalContainer),
         kCornerRadius));
+    label_->SetEnabledColor(ui::kColorSysOnTonalContainer);
     label_->SetFontList(label_->font_list().Derive(0, gfx::Font::NORMAL,
                                                    gfx::Font::Weight::BOLD));
     parent_->OnSelectionChanged();
   } else {
     SetBackground(nullptr);
+    label_->SetEnabledColor(ui::kColorLabelForeground);
     label_->SetFontList(label_->font_list().Derive(0, gfx::Font::NORMAL,
                                                    gfx::Font::Weight::NORMAL));
   }

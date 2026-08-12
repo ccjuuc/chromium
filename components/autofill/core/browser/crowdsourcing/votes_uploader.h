@@ -7,18 +7,30 @@
 
 #include <list>
 #include <memory>
+#include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/form_structure.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/foundations/autofill_driver_factory.h"
+#include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/language_code.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+
+namespace one_time_tokens {
+class OneTimeToken;
+}
 
 namespace autofill {
 
@@ -43,19 +55,26 @@ class BrowserAutofillManager;
 //
 //   MaybeStartVoteUploadProcess()◄─────────BrowserAutofillManager
 //       │
-//       │async
+//       │ sync or async via OTP retrieval:
+//       │ 1. Fetch synchronous data (profiles, cards, etc.)
+//       │ 2. Potentially fetch async OTPs
+//       │
+//       ▼
+//   StartVoteUploadProcess()
+//       │
+//       │ async
 //       │
 //       ▼
 //   DeterminePossibleFieldTypesForUpload()
 //       │
-//       │async
+//       │ async
 //       │
 //       ▼
 //   OnFieldTypesDetermined()
 //       │
 //       │       if submission
 //       ├──────►────────────────────────────────┐
-//       │else                                   │
+//       │ else                                   │
 //       │                                       │
 //       ▼                                       │
 //   Store PendingVote, which is uploaded when   │
@@ -86,6 +105,9 @@ class VotesUploader : public AutofillDriverFactory::Observer {
   // Will send an upload based on the |form| data and the local Autofill profile
   // data. |observed_submission| is specified if the upload follows an observed
   // submission event. Returns false if the upload couldn't start.
+  //
+  // If the form contains a potential OTP field this function may initiate an
+  // asynchronous OTP retrieval before proceeding with the vote upload.
   virtual bool MaybeStartVoteUploadProcess(
       std::unique_ptr<FormStructure> form,
       bool observed_submission,
@@ -114,6 +136,21 @@ class VotesUploader : public AutofillDriverFactory::Observer {
 
  private:
   friend class VotesUploaderTestApi;
+
+  // Data used for field type determination.
+  struct VoteData;
+
+  // Determines field types and upload votes.
+  void StartVoteUploadProcess(
+      std::unique_ptr<FormStructure> form,
+      bool observed_submission,
+      LanguageCode current_page_language,
+      base::TimeTicks initial_interaction_timestamp,
+      const std::u16string& last_unlocked_credit_card_cvc,
+      ukm::SourceId ukm_source_id,
+      VoteData vote_data,
+      FormStructure::FormAssociations form_associations,
+      std::set<FieldGlobalId> fields_that_match_state);
 
   struct PendingVote;
 

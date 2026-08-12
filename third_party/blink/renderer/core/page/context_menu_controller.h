@@ -26,12 +26,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_CONTEXT_MENU_CONTROLLER_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_PAGE_CONTEXT_MENU_CONTROLLER_H_
 
-#include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/mojom/context_menu/context_menu.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_associated_receiver.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink-forward.h"
 
 namespace blink {
 
@@ -41,7 +41,6 @@ class LocalFrame;
 class MouseEvent;
 class Page;
 struct ContextMenuData;
-struct Impression;
 
 // This class is not final to allow customization by embedders
 class CORE_EXPORT ContextMenuController
@@ -71,8 +70,7 @@ class CORE_EXPORT ContextMenuController
 
   // mojom::blink::ContextMenuClient methods.
   void CustomContextMenuAction(uint32_t action) override;
-  void ContextMenuClosed(const KURL& link_followed,
-                         const std::optional<Impression>&) override;
+  void ContextMenuClosed(const KURL& link_followed) override;
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.  Keep in sync with enum in
@@ -123,10 +121,12 @@ class CORE_EXPORT ContextMenuController
 
   // Returns whether a Context Menu was actually shown. Changing this is not
   // recommended.
-  bool ShowContextMenu(LocalFrame*, const PhysicalOffset&, WebMenuSourceType);
+  bool ShowContextMenu(LocalFrame*,
+                       const PhysicalOffset&,
+                       ui::mojom::blink::MenuSourceType);
   virtual bool ShowContextMenu(LocalFrame*,
                                const PhysicalOffset&,
-                               WebMenuSourceType,
+                               ui::mojom::blink::MenuSourceType,
                                const MouseEvent* mouse_event);
 
   bool ShouldShowContextMenuFromTouch(const ContextMenuData&);

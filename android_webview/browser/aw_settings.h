@@ -55,17 +55,6 @@ class AwSettings : public content::WebContentsObserver {
     COUNT,
   };
 
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.android_webview.settings
-  enum AttributionBehavior {
-    DISABLED = 0,
-    APP_SOURCE_AND_WEB_TRIGGER = 1,
-    WEB_SOURCE_AND_WEB_TRIGGER = 2,
-    APP_SOURCE_AND_APP_TRIGGER = 3,
-    kMaxValue = APP_SOURCE_AND_APP_TRIGGER,
-  };
-
   static AwSettings* FromWebContents(content::WebContents* web_contents);
   static bool GetAllowSniffingFileUrls();
 
@@ -76,10 +65,10 @@ class AwSettings : public content::WebContentsObserver {
 
   bool GetAllowFileAccessFromFileURLs();
   bool GetJavaScriptEnabled();
+  bool GetShouldDownloadFavicons();
   bool GetJavaScriptCanOpenWindowsAutomatically();
   bool GetAllowThirdPartyCookies();
   MixedContentMode GetMixedContentMode();
-  AttributionBehavior GetAttributionBehavior();
   bool IsPrerender2Allowed();
   bool IsBackForwardCacheEnabled();
   bool initial_page_scale_is_non_default() {
@@ -91,7 +80,7 @@ class AwSettings : public content::WebContentsObserver {
   void Destroy(JNIEnv* env, const base::android::JavaRef<jobject>& obj);
   void PopulateWebPreferencesLocked(JNIEnv* env,
                                     const base::android::JavaRef<jobject>& obj,
-                                    jlong web_prefs);
+                                    int64_t web_prefs);
   void ResetScrollAndScaleState(JNIEnv* env,
                                 const base::android::JavaRef<jobject>& obj);
   void UpdateEverythingLocked(JNIEnv* env,
@@ -118,11 +107,11 @@ class AwSettings : public content::WebContentsObserver {
       const base::android::JavaRef<jobject>& obj);
   void UpdateAllowFileAccessLocked(JNIEnv* env,
                                    const base::android::JavaRef<jobject>& obj);
-  void UpdateMixedContentModeLocked(JNIEnv* env,
-                                    const base::android::JavaRef<jobject>& obj);
-  void UpdateAttributionBehaviorLocked(
+  void UpdateDownloadFaviconsEnabledLocked(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj);
+  void UpdateMixedContentModeLocked(JNIEnv* env,
+                                    const base::android::JavaRef<jobject>& obj);
   void UpdateSpeculativeLoadingAllowedLocked(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj);
@@ -133,6 +122,9 @@ class AwSettings : public content::WebContentsObserver {
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj);
   void UpdateBackForwardCacheSettingsMaxPagesInCacheLocked(
+      JNIEnv* env,
+      const base::android::JavaRef<jobject>& obj);
+  void UpdateBackForwardCacheSettingsKeepForwardEntriesLocked(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj);
   void UpdateGeolocationEnabledLocked(
@@ -150,13 +142,20 @@ class AwSettings : public content::WebContentsObserver {
   void SetEnterpriseAuthenticationAppLinkPolicyEnabled(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj,
-      jboolean enabled);
+      bool enabled);
   bool GetEnterpriseAuthenticationAppLinkPolicyEnabled(
       JNIEnv* env,
       const base::android::JavaRef<jobject>& obj);
+
   inline bool enterprise_authentication_app_link_policy_enabled() {
     return enterprise_authentication_app_link_policy_enabled_;
   }
+
+  // called from Java for the value of the public getDownloadFaviconsEnabled()
+  // API returns the value of AwSettings::ShouldDownloadFavicons()
+  bool GetShouldDownloadFaviconsOnNavigation(JNIEnv* env);
+
+  bool ShouldDownloadFavicon();
 
   base::android::ScopedJavaLocalRef<jobjectArray>
   UpdateXRequestedWithAllowListOriginMatcher(
@@ -178,16 +177,17 @@ class AwSettings : public content::WebContentsObserver {
   bool javascript_enabled_{false};
   bool javascript_can_open_windows_automatically_{false};
   bool allow_third_party_cookies_{false};
+  bool download_favicons_{true};
   bool allow_file_access_{false};
   bool allow_file_access_from_file_urls_{false};
   bool enterprise_authentication_app_link_policy_enabled_{true};
   MixedContentMode mixed_content_mode_;
-  AttributionBehavior attribution_behavior_;
   SpeculativeLoadingAllowedFlags speculative_loading_allowed_flags_{
       SpeculativeLoadingAllowedFlags::SPECULATIVE_LOADING_DISABLED};
   bool bfcache_enabled_in_java_settings_{false};
   int back_forward_cache_timeout_in_seconds_{0};
   int back_forward_cache_max_pages_in_cache_{0};
+  bool back_forward_cache_keep_forward_entries_{true};
   bool geolocation_enabled_{false};
 
   // Whether the settings that would affect the initial page scale is set to a

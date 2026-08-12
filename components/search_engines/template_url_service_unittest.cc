@@ -14,22 +14,77 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/test/with_feature_override.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
+#include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_service_client.h"
 #include "components/search_engines/template_url_service_observer.h"
 #include "components/search_engines/template_url_service_test_util.h"
+#include "components/search_engines/template_url_starter_pack_data.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/search_engines_data/resources/definitions/prepopulated_engines.h"
 #include "url/origin.h"
 
-class TemplateURLServiceUnitTest : public TemplateURLServiceUnitTestBase {};
+namespace {
+
+// Matcher to check TemplateURL by short_name.
+MATCHER_P(HasShortName, name, "") {
+  return base::UTF16ToASCII(arg->short_name()) == name;
+}
+
+}  // namespace
+
+class TemplateURLServiceUnitTest : public TemplateURLServiceUnitTestBase {
+ public:
+  TemplateURL* AddTemplateURL(
+      const std::u16string_view& short_name,
+      const std::u16string_view& keyword,
+      int prepopulate_id = 0,
+      bool created_by_policy = false,
+      TemplateURLData::ActiveStatus active_status =
+          TemplateURLData::ActiveStatus::kTrue,
+      template_url_starter_pack_data::StarterPackId starter_pack_id =
+          template_url_starter_pack_data::StarterPackId::kNone) {
+    TemplateURLData data;
+
+    data.SetShortName(short_name);
+    data.SetKeyword(keyword);
+    data.SetURL("http://google.com/search?q={searchTerms}");
+    data.prepopulate_id = prepopulate_id;
+    data.policy_origin = created_by_policy
+                             ? TemplateURLData::PolicyOrigin::kSiteSearch
+                             : TemplateURLData::PolicyOrigin::kNoPolicy;
+    data.featured_by_policy = created_by_policy;
+    data.is_active = active_status;
+    data.starter_pack_id = static_cast<int>(starter_pack_id);
+    data.last_visited = base::Time::Now();
+
+    return template_url_service().Add(std::make_unique<TemplateURL>(data));
+  }
+
+  TemplateURL* AddExtension(const std::u16string_view& short_name,
+                            const std::u16string_view& keyword,
+                            TemplateURLData::ActiveStatus active_status) {
+    TemplateURLData data;
+
+    data.SetShortName(short_name);
+    data.SetKeyword(keyword);
+    data.is_active = active_status;
+
+    return template_url_service().Add(std::make_unique<TemplateURL>(
+        data, TemplateURL::OMNIBOX_API_EXTENSION, base::UTF16ToASCII(keyword),
+        base::Time::Now(), false));
+  }
+};
 
 TEST_F(TemplateURLServiceUnitTest, SessionToken) {
   // Subsequent calls always get the same token.
@@ -70,6 +125,116 @@ TEST_F(TemplateURLServiceUnitTest, SessionToken) {
   EXPECT_GT(expiration_time_2, expiration_time_1);
   EXPECT_GE(expiration_time_2, expiration_time_1 + kSmallDelta);
 }
+
+TEST_F(TemplateURLServiceUnitTest, UpdateUserSelectedDefaultSearchEnginePref) {
+  template_url_service().Load();
+  TemplateURLServiceLoadWaiter().WaitForLoadComplete(template_url_service());
+
+  // Add a new search engine.
+  TemplateURLData data;
+  data.SetShortName(u"custom");
+  data.SetKeyword(u"custom");
+  data.SetURL("https://custom.com/search?q={searchTerms}");
+  data.sync_guid = "custom-guid";
+
+  TemplateURL* turl =
+      template_url_service().Add(std::make_unique<TemplateURL>(data));
+
+  // Make it the default search provider.
+  template_url_service().SetUserSelectedDefaultSearchProvider(
+      turl, search_engines::ChoiceMadeLocation::kOther);
+
+  EXPECT_EQ("https://custom.com/search?q={searchTerms}",
+            template_url_service().GetDefaultSearchProvider()->url());
+
+  // Update the search engine URL.
+  template_url_service().ResetTemplateURL(
+      turl, u"custom2", u"custom2",
+      "https://custom2.com/search2?q={searchTerms}");
+
+  // Verify the updated URL in the TemplateURLService.
+  EXPECT_EQ("https://custom2.com/search2?q={searchTerms}",
+            template_url_service().GetDefaultSearchProvider()->url());
+
+  // Verify the updated URL in the preferences.
+  const auto& dict = pref_service().GetDict(
+      DefaultSearchManager::kDefaultSearchProviderDataPrefName);
+  const std::string* pref_url = dict.FindString(DefaultSearchManager::kURL);
+  ASSERT_TRUE(pref_url);
+  EXPECT_EQ("https://custom2.com/search2?q={searchTerms}", *pref_url);
+}
+
+class TemplateURLServiceUpdateLastVisitedTest
+    : public base::test::WithFeatureOverride,
+      public TemplateURLServiceUnitTest {
+ public:
+  TemplateURLServiceUpdateLastVisitedTest()
+      : base::test::WithFeatureOverride(
+            switches::kVisitCustomSearchOnUndefaulting) {}
+};
+
+TEST_P(TemplateURLServiceUpdateLastVisitedTest,
+       UpdateLastVisitedOnDefaultSearchProviderChange) {
+  template_url_service().Load();
+  TemplateURLServiceLoadWaiter().WaitForLoadComplete(template_url_service());
+
+  // Let's first ensure the default search provider is a prepopulated engine.
+  const TemplateURL* initial_dse =
+      template_url_service().GetDefaultSearchProvider();
+  ASSERT_TRUE(initial_dse);
+  ASSERT_TRUE(template_url_service().IsPrepopulatedOrDefaultProviderByPolicy(
+      initial_dse));
+
+  base::Time initial_dse_last_visited = initial_dse->last_visited();
+
+  const base::Time kOldTime = base::Time::FromTimeT(100);
+
+  // Add a custom search engine.
+  TemplateURLData data1;
+  data1.SetShortName(u"custom1");
+  data1.SetKeyword(u"custom1");
+  data1.SetURL("https://custom1.com/search?q={searchTerms}");
+  data1.sync_guid = "custom-guid1";
+  data1.last_visited = kOldTime;
+
+  TemplateURL* custom_turl1 =
+      template_url_service().Add(std::make_unique<TemplateURL>(data1));
+
+  // Make custom_turl1 the default search provider.
+  template_url_service().SetUserSelectedDefaultSearchProvider(
+      custom_turl1, search_engines::ChoiceMadeLocation::kOther);
+
+  // The initial DSE (prepopulated) should NOT have its last_visited updated.
+  EXPECT_EQ(initial_dse->last_visited(), initial_dse_last_visited);
+
+  // custom_turl1 should not have been updated yet.
+  EXPECT_EQ(custom_turl1->last_visited(), kOldTime);
+
+  // Add another custom search engine.
+  TemplateURLData data2;
+  data2.SetShortName(u"custom2");
+  data2.SetKeyword(u"custom2");
+  data2.SetURL("https://custom2.com/search?q={searchTerms}");
+  data2.sync_guid = "custom-guid2";
+
+  TemplateURL* custom_turl2 =
+      template_url_service().Add(std::make_unique<TemplateURL>(data2));
+
+  // Replace custom_turl1 with custom_turl2
+  template_url_service().SetUserSelectedDefaultSearchProvider(
+      custom_turl2, search_engines::ChoiceMadeLocation::kOther);
+
+  // custom_turl1 was replaced. If the feature is enabled, since it's a custom
+  // engine, its last_visited should have been updated.
+  if (IsParamFeatureEnabled()) {
+    EXPECT_NE(custom_turl1->last_visited(), kOldTime);
+  } else {
+    EXPECT_EQ(custom_turl1->last_visited(), kOldTime);
+  }
+}
+
+INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
+    TemplateURLServiceUpdateLastVisitedTest);
 
 TEST_F(TemplateURLServiceUnitTest, GenerateSearchURL) {
   // Set the default search provider to a custom one.
@@ -225,8 +390,8 @@ TEST_F(TemplateURLServiceUnitTest, HiddenFromLists) {
     ASSERT_FALSE(
         template_url_service().HiddenFromLists(turl_search_aggregator));
   }
-  // User-defined engine and a nonfeatured policy engine exists with the same
-  // keyword. User-defined engine should be hidden. Policy engine should not be
+  // User-defined engine and a non-featured policy engine exists with the same
+  // keyword. User-defined engine should not be hidden. Policy engine should be
   // hidden.
   {
     TemplateURL* turl = template_url_service().Add(
@@ -256,6 +421,362 @@ TEST_F(TemplateURLServiceUnitTest, HiddenFromLists) {
     ASSERT_TRUE(template_url_service().HiddenFromLists(turl));
     ASSERT_FALSE(template_url_service().HiddenFromLists(turl_featured_policy));
   }
+}
+
+TEST_F(TemplateURLServiceUnitTest, GetCategorizedTemplateURLs_Empty) {
+  TemplateURLService::CategorizedTemplateUrls data =
+      template_url_service().GetCategorizedTemplateURLs();
+
+  EXPECT_THAT(data.active_site_shortcuts, testing::IsEmpty());
+  EXPECT_THAT(data.inactive_site_shortcuts, testing::IsEmpty());
+  EXPECT_THAT(data.active_feature_shortcuts, testing::IsEmpty());
+  EXPECT_THAT(data.inactive_feature_shortcuts, testing::IsEmpty());
+}
+
+TEST_F(TemplateURLServiceUnitTest, GetCategorizedTemplateURLs_HiddenSkipped) {
+  // User-defined engine and a featured policy engine exist with the same
+  // keyword. User-defined engine should be hidden. Policy engine should not be
+  // hidden.
+  TemplateURL* custom_url = AddTemplateURL(u"Custom Engine", u"@conflict");
+  TemplateURL* policy_url =
+      AddTemplateURL(u"Policy Engine", u"@conflict", /*prepopulate_id=*/0,
+                     /*created_by_policy=*/true);
+
+  ASSERT_TRUE(template_url_service().HiddenFromLists(custom_url));
+  ASSERT_FALSE(template_url_service().HiddenFromLists(policy_url));
+
+  TemplateURLService::CategorizedTemplateUrls result =
+      template_url_service().GetCategorizedTemplateURLs();
+
+  // Only the not hidden TemplateURL should be added to the active site
+  // shortcuts.
+  EXPECT_THAT(result.active_site_shortcuts,
+              testing::ElementsAre(HasShortName("Policy Engine")));
+  EXPECT_THAT(result.inactive_site_shortcuts, testing::IsEmpty());
+  EXPECT_THAT(result.active_feature_shortcuts, testing::IsEmpty());
+  EXPECT_THAT(result.inactive_feature_shortcuts, testing::IsEmpty());
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetCategorizedTemplateURLs_DisabledStarterPackIdsSkipped) {
+  AddTemplateURL(u"AI Search", u"ai", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kTrue,
+                 template_url_starter_pack_data::StarterPackId::kAiMode);
+
+  template_url_starter_pack_data::StarterPackIdSet disabled_starter_pack_ids{
+      template_url_starter_pack_data::StarterPackId::kAiMode};
+
+  TemplateURLService::CategorizedTemplateUrls data_no_ai =
+      template_url_service().GetCategorizedTemplateURLs(
+          disabled_starter_pack_ids);
+  EXPECT_THAT(data_no_ai.active_feature_shortcuts, testing::IsEmpty());
+
+  TemplateURLService::CategorizedTemplateUrls data_ai =
+      template_url_service().GetCategorizedTemplateURLs();
+  EXPECT_THAT(data_ai.active_feature_shortcuts,
+              testing::ElementsAre(HasShortName("AI Search")));
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetCategorizedTemplateURLs_PrepopulatedPrioritizedAndOrdered) {
+  // Add custom site shortcuts.
+  AddTemplateURL(u"Custom Search", u"custom");
+  AddTemplateURL(u"Custom Beta", u"cbeta");
+
+  // Add the prepopulated engines in reverse order.
+  auto prepop_engines = prepopulate_data_resolver().GetPrepopulatedEngines();
+  ASSERT_EQ(3u, prepop_engines.size());
+
+  for (int i = prepop_engines.size() - 1; i >= 0; --i) {
+    AddTemplateURL(prepop_engines.at(i)->short_name(),
+                   prepop_engines.at(i)->keyword(),
+                   prepop_engines.at(i)->prepopulate_id);
+  }
+
+  TemplateURLService::CategorizedTemplateUrls data =
+      template_url_service().GetCategorizedTemplateURLs();
+
+  // Expected order: First the prepopulated engines in the order of
+  // `GetPrepopulatedEngines()`, then alphabetically sorted custom shortcuts.
+  EXPECT_THAT(data.active_site_shortcuts,
+              testing::ElementsAre(
+                  HasShortName(
+                      base::UTF16ToASCII((prepop_engines.at(0)->short_name()))),
+                  HasShortName(
+                      base::UTF16ToASCII((prepop_engines.at(1)->short_name()))),
+                  HasShortName(
+                      base::UTF16ToASCII((prepop_engines.at(2)->short_name()))),
+                  HasShortName("Custom Beta"), HasShortName("Custom Search")));
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetCategorizedTemplateURLs_CategorizationLogic) {
+  // Active Site Shortcuts
+  AddTemplateURL(u"Custom Active Site", u"cas");
+  AddTemplateURL(u"Prepop Active Site", u"pas",
+                 /*prepopulate_id=*/1);
+
+  // Inactive Site Shortcuts
+  AddTemplateURL(u"Custom Inactive Site", u"cis", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse);
+
+  // Active Feature Shortcuts
+  AddTemplateURL(u"Lens Active", u"lensa", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kTrue,
+                 template_url_starter_pack_data::StarterPackId::kTabs);
+  AddExtension(u"Ext Active", u"exa", TemplateURLData::ActiveStatus::kTrue);
+
+  // Inactive Feature Shortcuts
+  AddTemplateURL(u"Lens Inactive", u"lensi", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse,
+                 template_url_starter_pack_data::StarterPackId::kTabs);
+  AddExtension(u"Ext Inactive", u"exi", TemplateURLData::ActiveStatus::kFalse);
+
+  TemplateURLService::CategorizedTemplateUrls data =
+      template_url_service().GetCategorizedTemplateURLs();
+
+  EXPECT_THAT(
+      data.active_site_shortcuts,
+      testing::UnorderedElementsAre(HasShortName("Custom Active Site"),
+                                    HasShortName("Prepop Active Site")));
+  EXPECT_THAT(
+      data.inactive_site_shortcuts,
+      testing::UnorderedElementsAre(HasShortName("Custom Inactive Site")));
+  EXPECT_THAT(data.active_feature_shortcuts,
+              testing::UnorderedElementsAre(HasShortName("Lens Active"),
+                                            HasShortName("Ext Active")));
+  EXPECT_THAT(data.inactive_feature_shortcuts,
+              testing::UnorderedElementsAre(HasShortName("Lens Inactive"),
+                                            HasShortName("Ext Inactive")));
+}
+
+TEST_F(TemplateURLServiceUnitTest, GetCategorizedTemplateURLs_Sorting) {
+  // Custom Active Site Shortcuts: Sorted by managed (policy) status then
+  // alphabetically.
+  AddTemplateURL(u"B Unmanaged", u"bu", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false);
+  AddTemplateURL(u"A Unmanaged", u"au", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false);
+  AddTemplateURL(u"C Managed", u"cu", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/true);
+  AddTemplateURL(u"D Managed", u"dm", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/true);
+
+  // Inactive Site Shortcuts: Sorted by managed (policy) status then
+  // alphabetically.
+  AddTemplateURL(u"Y Unmanaged", u"yu", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse);
+  AddTemplateURL(u"X Unmanaged", u"xu", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse);
+  AddTemplateURL(u"W Managed", u"wm", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/true,
+                 TemplateURLData::ActiveStatus::kFalse);
+  AddTemplateURL(u"V Managed", u"vm", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/true,
+                 TemplateURLData::ActiveStatus::kFalse);
+
+  TemplateURLService::CategorizedTemplateUrls data =
+      template_url_service().GetCategorizedTemplateURLs();
+
+  // Managed URLs come first, then alphabetical within managed/unmanaged groups.
+  EXPECT_THAT(data.active_site_shortcuts,
+              testing::ElementsAre(
+                  HasShortName("C Managed"), HasShortName("D Managed"),
+                  HasShortName("A Unmanaged"), HasShortName("B Unmanaged")));
+
+  EXPECT_THAT(data.inactive_site_shortcuts,
+              testing::ElementsAre(
+                  HasShortName("V Managed"), HasShortName("W Managed"),
+                  HasShortName("X Unmanaged"), HasShortName("Y Unmanaged")));
+}
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+TEST_F(TemplateURLServiceUnitTest,
+       GetPrepopulatedAndRecentlyVisitedTemplateURLs_Empty) {
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  EXPECT_THAT(data.prepopulated_urls, testing::IsEmpty());
+  EXPECT_THAT(data.recently_visited_urls, testing::IsEmpty());
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetPrepopulatedAndRecentlyVisitedTemplateURLs_HiddenSkipped) {
+  // Fetch a valid prepopulated engine ID from the test's resolver environment.
+  auto prepop_engines = prepopulate_data_resolver().GetPrepopulatedEngines();
+  ASSERT_FALSE(prepop_engines.empty());
+  int valid_prepopulate_id = prepop_engines.at(0)->prepopulate_id;
+
+  // Add a user-defined engine and the real prepopulated engine with matching
+  // keywords.
+  TemplateURL* custom_url = AddTemplateURL(u"Custom Engine", u"@conflict");
+  TemplateURL* prepop_url = AddTemplateURL(u"Prepopulated Engine", u"@conflict",
+                                           valid_prepopulate_id);
+
+  ASSERT_TRUE(template_url_service().HiddenFromLists(custom_url));
+  ASSERT_FALSE(template_url_service().HiddenFromLists(prepop_url));
+
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  EXPECT_THAT(data.prepopulated_urls,
+              testing::ElementsAre(HasShortName("Prepopulated Engine")));
+  EXPECT_THAT(data.recently_visited_urls, testing::IsEmpty());
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetPrepopulatedAndRecentlyVisitedTemplateURLs_ActiveStatusIgnored) {
+  // Add some prepopulated Template URLs.
+  AddTemplateURL(u"Active Prepop Engine", u"ape", /*prepopulate_id=*/1);
+  AddTemplateURL(u"Inactive Prepop Engine", u"ipe", /*prepopulate_id=*/2,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse);
+
+  // Add recently Visited Template URLs.
+  AddTemplateURL(u"Active Recent Site Search", u"arss");
+  AddTemplateURL(u"Inactive Recent Site Search", u"irss", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kFalse);
+
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  EXPECT_THAT(
+      data.prepopulated_urls,
+      testing::UnorderedElementsAre(HasShortName("Active Prepop Engine"),
+                                    HasShortName("Inactive Prepop Engine")));
+  EXPECT_THAT(data.recently_visited_urls,
+              testing::UnorderedElementsAre(
+                  HasShortName("Active Recent Site Search"),
+                  HasShortName("Inactive Recent Site Search")));
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetPrepopulatedAndRecentlyVisitedTemplateURLs_CategorizationLogic) {
+  // Prepopulated Template URL.
+  AddTemplateURL(u"Prepop Engine", u"pe", /*prepopulate_id=*/1);
+
+  // Recently Visited Template URL (Not default, not starter pack, not
+  // extension).
+  AddTemplateURL(u"Recent Site Search", u"rss");
+
+  // Feature items (Starter Pack / Extensions) should not be included.
+  AddTemplateURL(u"Lens Starter Pack", u"lens", /*prepopulate_id=*/0,
+                 /*created_by_policy=*/false,
+                 TemplateURLData::ActiveStatus::kTrue,
+                 template_url_starter_pack_data::StarterPackId::kTabs);
+  AddExtension(u"Ext Feature", u"ext", TemplateURLData::ActiveStatus::kTrue);
+
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  EXPECT_THAT(data.prepopulated_urls,
+              testing::UnorderedElementsAre(HasShortName("Prepop Engine")));
+  EXPECT_THAT(
+      data.recently_visited_urls,
+      testing::UnorderedElementsAre(HasShortName("Recent Site Search")));
+}
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetPrepopulatedAndRecentlyVisitedTemplateURLs_PrepopulatedSorting) {
+  // Add the prepopulated engines in reverse order.
+  auto prepop_engines = prepopulate_data_resolver().GetPrepopulatedEngines();
+  ASSERT_EQ(3u, prepop_engines.size());
+
+  for (int i = prepop_engines.size() - 1; i >= 0; --i) {
+    AddTemplateURL(prepop_engines.at(i)->short_name(),
+                   prepop_engines.at(i)->keyword(),
+                   prepop_engines.at(i)->prepopulate_id);
+  }
+
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  // Prepopulated engine list matches
+  // `internal::OrderTemplateUrlsByPrepopulatedAndManagedAndAlphabetically`.
+  EXPECT_THAT(data.prepopulated_urls,
+              testing::ElementsAre(HasShortName(base::UTF16ToASCII(
+                                       (prepop_engines.at(0)->short_name()))),
+                                   HasShortName(base::UTF16ToASCII(
+                                       (prepop_engines.at(1)->short_name()))),
+                                   HasShortName(base::UTF16ToASCII(
+                                       (prepop_engines.at(2)->short_name())))));
+}
+
+TEST_F(
+    TemplateURLServiceUnitTest,
+    GetPrepopulatedAndRecentlyVisitedTemplateURLs_RecentlyVisitedSortingAndFiltering) {
+  // Add some recently visited engines.
+  AddTemplateURL(u"Recent Site Search 1", u"rss1");
+  AddTemplateURL(u"Recent Site Search 2", u"rss2");
+  AddTemplateURL(u"Recent Site Search 3", u"rss3");
+  AddTemplateURL(u"Recent Site Search 4", u"rss4");
+
+  TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls data =
+      template_url_service().GetPrepopulatedAndRecentlyVisitedTemplateURLs();
+
+  // Recently visited list matches
+  // `internal::SortAndFilterRecentlyVisitedURLs()`.
+  EXPECT_THAT(
+      data.recently_visited_urls,
+      testing::UnorderedElementsAre(HasShortName("Recent Site Search 4"),
+                                    HasShortName("Recent Site Search 3"),
+                                    HasShortName("Recent Site Search 2")));
+}
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
+TEST_F(TemplateURLServiceUnitTest,
+       GetDefaultSearchProviderIgnoringExtensionsFallbackMatch) {
+  // Verify that if the default search provider doesn't strictly match any
+  // fields in the search provider database, that we still locate the right
+  // entry.  See http://crbug.com/494210871.  This can happen because
+  // not all properties are stored in the database, so when a search provider
+  // is reloaded, it may fail to match.
+
+  // Add a standard search engine to the service.
+  TemplateURLData data;
+  data.SetShortName(u"Google");
+  data.SetKeyword(u"google.com");
+  data.SetURL("https://www.google.com/search?q={searchTerms}");
+  data.image_translate_url = "https://www.google.com/image_translate";
+  data.sync_guid = "deterministic-guid-123";
+
+  TemplateURL* turl =
+      template_url_service().Add(std::make_unique<TemplateURL>(data));
+  ASSERT_TRUE(turl);
+
+  // Set it as the user-selected default.
+  template_url_service().SetUserSelectedDefaultSearchProvider(turl);
+
+  // Confirm strict match works initially.
+  EXPECT_EQ(
+      turl,
+      template_url_service().GetDefaultSearchProviderIgnoringExtensions());
+
+  // Simulate metadata drift in the "fresh" data from DefaultSearchManager.
+  // We'll create data that has the SAME GUID but DIFFERENT image_translate_url.
+  TemplateURLData drifted_data = data;
+  drifted_data.image_translate_url =
+      "https://www.google.com/new_image_translate";
+
+  // Bypass TemplateURLService and inject this into DefaultSearchManager
+  // so that GetDefaultSearchProviderIgnoringExtensions() sees the "drifted"
+  // version.
+  template_url_service().ApplyDefaultSearchChangeForTesting(
+      &drifted_data, DefaultSearchManager::FROM_USER);
+
+  // Verify that matching still finds the original TemplateURL via
+  // GUID even though TemplateURL::MatchesData would now fail due to
+  // image_translate_url mismatch.
+  const TemplateURL* matched_turl =
+      template_url_service().GetDefaultSearchProviderIgnoringExtensions();
+  EXPECT_EQ(turl, matched_turl);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -321,6 +842,46 @@ TEST_F(TemplateURLServiceWithDatabaseUnitTest, ResetPlayAPISearchEngine) {
       template_url_service().GetTemplateURLForKeyword(kOldPlayEngineKeyword));
 
   // The new engine is added, flagged as coming from Play, and set as default.
+  EXPECT_EQ(template_url_service().GetDefaultSearchProvider()->keyword(),
+            kNewPlayEngineKeyword);
+}
+
+TEST_F(TemplateURLServiceWithDatabaseUnitTest,
+       ResetPlayAPISearchEngine_RemoveMultipleOldEngines) {
+  const size_t initial_turl_count =
+      template_url_service().GetTemplateURLs().size();
+
+  // Create multiple search engines declared as coming from Play.
+  const std::u16string kOldPlayKeyword1 = u"old_play_1";
+  const std::u16string kOldPlayKeyword2 = u"old_play_2";
+
+  AddPlayApiEngineLegacy(kOldPlayKeyword1, /*set_as_default=*/false);
+  AddPlayApiEngineLegacy(kOldPlayKeyword2, /*set_as_default=*/false);
+
+  // Both legacy play engines are added.
+  EXPECT_EQ(template_url_service().GetTemplateURLs().size(),
+            initial_turl_count + 2);
+
+  base::HistogramTester histogram_tester;
+
+  const auto new_play_engine_data =
+      CreatePlayAPITemplateURLData(kNewPlayEngineKeyword);
+  EXPECT_TRUE(
+      template_url_service().ResetPlayAPISearchEngine(new_play_engine_data));
+
+  // Both old regulatory engines are removed from the service and database.
+  EXPECT_FALSE(
+      template_url_service().GetTemplateURLForKeyword(kOldPlayKeyword1));
+  EXPECT_FALSE(
+      template_url_service().GetTemplateURLForKeyword(kOldPlayKeyword2));
+
+  // Verify that the Removal Count histogram recorded exactly 2 removals.
+  histogram_tester.ExpectUniqueSample(
+      "Search.ChoiceDebug.PreexistingProgramTaggedEntries", 2, 1);
+
+  // The new engine is added and set as default.
+  EXPECT_EQ(template_url_service().GetDefaultSearchProvider()->keyword(),
+            kNewPlayEngineKeyword);
   auto* new_play_engine =
       template_url_service().GetTemplateURLForKeyword(kNewPlayEngineKeyword);
   EXPECT_TRUE(new_play_engine);
@@ -536,3 +1097,22 @@ TEST_F(TemplateURLServiceWithDatabaseUnitTest,
 }
 
 #endif
+
+TEST_F(LoadedTemplateURLServiceUnitTestBase, RemoveUserAddedTemplateURLs) {
+  // Add a custom search engine.
+  TemplateURLData custom_engine_data;
+  custom_engine_data.SetShortName(u"Custom Engine");
+  custom_engine_data.SetKeyword(u"custom");
+  custom_engine_data.SetURL("https://custom.search.com?q={searchTerms}");
+  TemplateURL* custom_engine = template_url_service().Add(
+      std::make_unique<TemplateURL>(custom_engine_data));
+  ASSERT_TRUE(custom_engine);
+  EXPECT_EQ(custom_engine,
+            template_url_service().GetTemplateURLForKeyword(u"custom"));
+
+  // Call RemoveUserAddedTemplateURLs.
+  template_url_service().RemoveUserAddedTemplateURLs();
+
+  // Custom engine should be removed.
+  EXPECT_FALSE(template_url_service().GetTemplateURLForKeyword(u"custom"));
+}

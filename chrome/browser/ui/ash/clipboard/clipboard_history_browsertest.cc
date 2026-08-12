@@ -22,7 +22,6 @@
 #include "ash/test/ash_test_util.h"
 #include "ash/test/view_drawn_waiter.h"
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/strings/strcat.h"
@@ -32,9 +31,9 @@
 #include "base/test/repeating_test_future.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
-#include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
@@ -43,8 +42,8 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
-#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/experiences/clipboard/clipboard_history_test_util.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents.h"
@@ -810,7 +809,7 @@ class ClipboardHistoryPasteTypeBrowserTest
 
  private:
   // Returns all valid data formats for the last paste.
-  base::Value::List GetLastPaste() {
+  base::ListValue GetLastPaste() {
     return content::EvalJs(web_contents_.get(),
                            "(function() { return window.getLastPaste(); })();")
         .TakeValue()
@@ -1167,7 +1166,7 @@ class ClipboardHistoryTextfieldBrowserTest
 
     // Create a widget containing a single, focusable textfield.
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     textfield_ = widget_->SetContentsView(std::make_unique<views::Textfield>());
     textfield_->GetViewAccessibility().SetName(u"Textfield");
     textfield_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
@@ -1195,7 +1194,7 @@ class ClipboardHistoryTextfieldBrowserTest
 };
 
 // Verifies that the clipboard history menu responses to the gesture tap
-// correctly (https://crbug.com/1142088).
+// correctly (https://crbug.com/40727504).
 IN_PROC_BROWSER_TEST_F(ClipboardHistoryTextfieldBrowserTest,
                        VerifyResponseToGestures) {
   base::HistogramTester histogram_tester;
@@ -1365,8 +1364,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryTextfieldBrowserTest,
   EXPECT_FALSE(GetClipboardHistoryController()->IsMenuShowing());
 
   // Lock the screen.
-  ash::SessionManagerClient::Get()->RequestLockScreen();
-  ash::SessionStateWaiter(session_manager::SessionState::LOCKED).Wait();
+  ash::ScreenLockerTester().Lock();
 
   // Verify that the item was not pasted.
   WaitForOperationConfirmed(/*success_expected=*/false);
@@ -1662,7 +1660,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
   GetEventGenerator()->ClickRightButton();
 
   // Expect the menu item that hosts the clipboard history submenu exists.
-  const views::MenuItemView* const submenu_item = ash::WaitForMenuItemWithLabel(
+  views::MenuItemView* const submenu_item = ash::WaitForMenuItemWithLabel(
       l10n_util::GetStringUTF16(IDS_CONTEXT_MENU_PASTE_FROM_CLIPBOARD));
   ASSERT_TRUE(submenu_item);
 
@@ -1677,9 +1675,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
   // `submenu_view` shows.
   submenu_histogram_tester.ExpectUniqueSample(
       "Ash.ClipboardHistory.ContextMenu.ShowMenu",
-      crosapi::mojom::ClipboardHistoryControllerShowSource::
-          kRenderViewContextSubmenu,
-      1);
+      chromeos::clipboard_history::ShowSource::kRenderViewContextSubmenu, 1);
 
   // Expect that the menu option to launch the clipboard history menu exists.
   const views::View* const menu_item = ash::WaitForMenuItemWithLabel(
@@ -1697,9 +1693,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
   // The source of the standalone clipboard history menu should be recorded.
   histogram_tester.ExpectUniqueSample(
       "Ash.ClipboardHistory.ContextMenu.ShowMenu",
-      crosapi::mojom::ClipboardHistoryControllerShowSource::
-          kRenderViewContextMenu,
-      1);
+      chromeos::clipboard_history::ShowSource::kRenderViewContextMenu, 1);
 }
 
 // Verifies the clipboard history menu response to mouse and arrow key inputs.
@@ -1716,7 +1710,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
   ASSERT_EQ(3u, GetContextMenu()->GetMenuItemsCount());
   histogram_tester.ExpectUniqueSample(
       "Ash.ClipboardHistory.ContextMenu.ShowMenu",
-      crosapi::mojom::ClipboardHistoryControllerShowSource::kAccelerator, 1);
+      chromeos::clipboard_history::ShowSource::kAccelerator, 1);
 
   // The history menu's first item should be selected as default after the menu
   // shows. Its delete button should not show, so the contents should not be
@@ -1829,7 +1823,7 @@ IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
 }
 
 // Verifies that the delete button should show after its host item view is under
-// gesture press for enough long time (https://crbug.com/1147584).
+// gesture press for enough long time (https://crbug.com/40156682).
 IN_PROC_BROWSER_TEST_F(ClipboardHistoryRefreshAshBrowserTest,
                        DeleteButtonShowAfterLongPress) {
   SetClipboardText("A");

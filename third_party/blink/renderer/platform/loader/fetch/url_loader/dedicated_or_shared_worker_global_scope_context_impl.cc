@@ -15,6 +15,7 @@
 #include "base/task/thread_pool.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_fetch_handler_bypass_option.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
@@ -375,7 +376,13 @@ DedicatedOrSharedWorkerGlobalScopeContextImpl::WillSendRequest(
 void DedicatedOrSharedWorkerGlobalScopeContextImpl::FinalizeRequest(
     WebURLRequest& request) {
   if (renderer_preferences_.enable_do_not_track) {
-    request.SetHttpHeaderField(WebString::FromUTF8(kDoNotTrackHeader), "1");
+    request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+  }
+  if (IsGlobalPrivacyControlEnabled()) {
+    request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                               "1");
+    blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+        blink::GPCSignalSourceType::kWorkerSubresourceFetch);
   }
 
   auto url_request_extra_data = base::MakeRefCounted<WebURLRequestExtraData>();
@@ -472,7 +479,7 @@ void DedicatedOrSharedWorkerGlobalScopeContextImpl::set_client_id(
 
 WebString DedicatedOrSharedWorkerGlobalScopeContextImpl::GetAcceptLanguages()
     const {
-  return WebString::FromUTF8(renderer_preferences_.accept_languages);
+  return WebString::FromUtf8(renderer_preferences_.accept_languages);
 }
 
 std::unique_ptr<ResourceLoadInfoNotifierWrapper>

@@ -54,10 +54,10 @@ function createActorLoginPermission(
     domainInfo: {
       humanReadableName: domainName,
       signonRealm: `https://${domainName}`,
-      url: {url: `https://${domainName}`},
+      url: `https://${domainName}`,
     },
     username,
-    faviconUrl: {url: `https://${domainName}/favicon.ico`},
+    faviconUrl: `https://${domainName}/favicon.ico`,
   };
 }
 
@@ -87,7 +87,8 @@ suite('SettingsSectionTest', function() {
   test('pref value displayed in the UI', async function() {
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
-    settings.prefs.credentials_enable_service.value = false;
+    const prefObject = settings.getPref<boolean>('credentials_enable_service');
+    prefObject.value = false;
     document.body.appendChild(settings);
     await flushTasks();
 
@@ -101,34 +102,34 @@ suite('SettingsSectionTest', function() {
     document.body.appendChild(settings);
     await flushTasks();
 
-    assertTrue(settings.getPref('credentials_enable_service').value);
+    assertTrue(settings.getPref<boolean>('credentials_enable_service').value);
     assertTrue(settings.$.passwordToggle.checked);
 
     settings.$.passwordToggle.click();
-    assertFalse(settings.getPref('credentials_enable_service').value);
+    assertFalse(settings.getPref<boolean>('credentials_enable_service').value);
     assertFalse(settings.$.passwordToggle.checked);
   });
 
   test('enforcement disables toggle', async function() {
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
-    settings.prefs.credentials_enable_service.enforcement =
-        chrome.settingsPrivate.Enforcement.ENFORCED;
+    const prefObject = settings.getPref<boolean>('credentials_enable_service');
+    prefObject.enforcement = chrome.settingsPrivate.Enforcement.ENFORCED;
     document.body.appendChild(settings);
     await flushTasks();
 
-    assertTrue(settings.getPref('credentials_enable_service').value);
+    assertTrue(settings.getPref<boolean>('credentials_enable_service').value);
     assertTrue(settings.$.passwordToggle.checked);
     settings.$.passwordToggle.click();
-    assertTrue(settings.getPref('credentials_enable_service').value);
+    assertTrue(settings.getPref<boolean>('credentials_enable_service').value);
   });
 
   test('extension control includes icon', async function() {
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
-    settings.prefs.credentials_enable_service.extensionId = 'test';
-    settings.prefs.credentials_enable_service.controlledByName =
-        'test extension';
+    const prefObject = settings.getPref<boolean>('credentials_enable_service');
+    prefObject.extensionId = 'test';
+    prefObject.controlledByName = 'test extension';
     document.body.appendChild(settings);
     await flushTasks();
 
@@ -170,8 +171,8 @@ suite('SettingsSectionTest', function() {
 
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
-    settings.prefs.password_manager.biometric_authentication_filling.value =
-        false;
+    settings.getPref('password_manager.biometric_authentication_filling')
+        .value = false;
     document.body.appendChild(settings);
     await flushTasks();
 
@@ -180,18 +181,20 @@ suite('SettingsSectionTest', function() {
             '#biometricAuthenticationToggle');
     assertTrue(!!biometricAuthenticationToggle);
     assertFalse(biometricAuthenticationToggle.checked);
-    assertFalse(
-        settings.getPref('password_manager.biometric_authentication_filling')
-            .value);
+    assertFalse(settings
+                    .getPref<boolean>(
+                        'password_manager.biometric_authentication_filling')
+                    .value);
 
     biometricAuthenticationToggle.click();
 
     // Pref settings should not change until authentication succeeds.
     await passwordManager.whenCalled('switchBiometricAuthBeforeFillingState');
     assertFalse(biometricAuthenticationToggle.checked);
-    assertFalse(
-        settings.getPref('password_manager.biometric_authentication_filling')
-            .value);
+    assertFalse(settings
+                    .getPref<boolean>(
+                        'password_manager.biometric_authentication_filling')
+                    .value);
   });
 
   // Tests that biometric auth pref is not shown, if biometric auth is
@@ -301,11 +304,11 @@ suite('SettingsSectionTest', function() {
       async function() {
         const settings = document.createElement('settings-section');
         settings.prefs = makePasswordManagerPrefs();
-        settings.prefs.credentials_enable_service.value = false;
-        settings.prefs.credentials_enable_service.enforcement =
-            chrome.settingsPrivate.Enforcement.ENFORCED;
-        settings.prefs.credentials_enable_service.controlledBy =
-            chrome.settingsPrivate.ControlledBy.EXTENSION;
+        const prefObject =
+            settings.getPref<boolean>('credentials_enable_service');
+        prefObject.value = false;
+        prefObject.enforcement = chrome.settingsPrivate.Enforcement.ENFORCED;
+        prefObject.controlledBy = chrome.settingsPrivate.ControlledBy.EXTENSION;
         document.body.appendChild(settings);
         await flushTasks();
 
@@ -317,10 +320,11 @@ suite('SettingsSectionTest', function() {
       async function() {
         const settings = document.createElement('settings-section');
         settings.prefs = makePasswordManagerPrefs();
-        settings.prefs.credentials_enable_service.value = false;
-        settings.prefs.credentials_enable_service.enforcement =
-            chrome.settingsPrivate.Enforcement.ENFORCED;
-        settings.prefs.credentials_enable_service.controlledBy =
+        const prefObject =
+            settings.getPref<boolean>('credentials_enable_service');
+        prefObject.value = false;
+        prefObject.enforcement = chrome.settingsPrivate.Enforcement.ENFORCED;
+        prefObject.controlledBy =
             chrome.settingsPrivate.ControlledBy.DEVICE_POLICY;
         document.body.appendChild(settings);
         await flushTasks();
@@ -331,7 +335,8 @@ suite('SettingsSectionTest', function() {
   test('import visible when policy enabled', async function() {
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
-    settings.prefs.credentials_enable_service.value = true;
+    const prefObject = settings.getPref<boolean>('credentials_enable_service');
+    prefObject.value = true;
     document.body.appendChild(settings);
     await flushTasks();
 
@@ -409,6 +414,48 @@ suite('SettingsSectionTest', function() {
     assertEquals(url, loadTimeData.getString('trustedVaultLearnMoreUrl'));
   });
 
+  test(
+      'Shows trusted vault banner when Trusted Vault Key is needed',
+      async function() {
+        const section = document.createElement('settings-section');
+        document.body.appendChild(section);
+        await flushTasks();
+
+        const trustedVaultBanner = section.$.trustedVaultBanner;
+
+        // 1. Initially, there is no error, so the banner should be hidden
+        // (assuming the default SyncBrowserProxy state is NOT_SHOWN).
+        assertFalse(isVisible(trustedVaultBanner));
+
+        // 2. Simulate the backend reporting that a Trusted Vault Key is needed.
+        passwordManager.listeners.passwordManagerActionableErrorChangedListener!
+            (chrome.passwordsPrivate.PasswordManagerActionableError
+                 .TRUSTED_VAULT_KEY_NEEDED);
+        await flushTasks();
+
+        // The banner should now be visible, as the state internally
+        // transitioned to OPTED_IN.
+        assertTrue(isVisible(trustedVaultBanner));
+
+        // Reset the mock's call history so we can accurately verify the
+        // re-fetch.
+        syncProxy.resetResolver('getTrustedVaultBannerState');
+
+        // 3. Simulate resolving the error (e.g., the user successfully
+        // authenticated).
+        passwordManager.listeners.passwordManagerActionableErrorChangedListener!
+            (chrome.passwordsPrivate.PasswordManagerActionableError.NO_ERROR);
+        await flushTasks();
+
+        // The observer should re-fetch the Trusted Vault state from the browser
+        // to determine if it should stay visible or be hidden.
+        await syncProxy.whenCalled('getTrustedVaultBannerState');
+
+        // Assuming the proxy still resolves to NOT_SHOWN, the banner should
+        // hide again.
+        assertFalse(isVisible(trustedVaultBanner));
+      });
+
   test('account storage toggle visibility - starts showing', async function() {
     passwordManager.data.shouldShowAccountStorageSettingToggle = true;
     const settings = document.createElement('settings-section');
@@ -449,38 +496,38 @@ suite('SettingsSectionTest', function() {
 
   test('account storage toggle state - starts enabled', async function() {
     passwordManager.data.shouldShowAccountStorageSettingToggle = true;
-    passwordManager.data.isAccountStorageEnabled = true;
+    passwordManager.data.isAccountStorageActive = true;
     const settings = document.createElement('settings-section');
     document.body.appendChild(settings);
-    await passwordManager.whenCalled('isAccountStorageEnabled');
+    await passwordManager.whenCalled('isAccountStorageActive');
 
     assertTrue(settings.$.accountStorageToggle.hasAttribute('checked'));
-    assertTrue(!!passwordManager.listeners.accountStorageEnabledStateListener);
+    assertTrue(!!passwordManager.listeners.accountStorageActiveStateListener);
 
-    passwordManager.listeners.accountStorageEnabledStateListener(false);
+    passwordManager.listeners.accountStorageActiveStateListener(false);
 
     assertFalse(settings.$.accountStorageToggle.hasAttribute('checked'));
 
-    passwordManager.listeners.accountStorageEnabledStateListener(true);
+    passwordManager.listeners.accountStorageActiveStateListener(true);
 
     assertTrue(settings.$.accountStorageToggle.hasAttribute('checked'));
   });
 
   test('account storage toggle state - starts disabled', async function() {
     passwordManager.data.shouldShowAccountStorageSettingToggle = true;
-    passwordManager.data.isAccountStorageEnabled = false;
+    passwordManager.data.isAccountStorageActive = false;
     const settings = document.createElement('settings-section');
     document.body.appendChild(settings);
-    await passwordManager.whenCalled('isAccountStorageEnabled');
+    await passwordManager.whenCalled('isAccountStorageActive');
 
     assertFalse(settings.$.accountStorageToggle.hasAttribute('checked'));
-    assertTrue(!!passwordManager.listeners.accountStorageEnabledStateListener);
+    assertTrue(!!passwordManager.listeners.accountStorageActiveStateListener);
 
-    passwordManager.listeners.accountStorageEnabledStateListener(true);
+    passwordManager.listeners.accountStorageActiveStateListener(true);
 
     assertTrue(settings.$.accountStorageToggle.hasAttribute('checked'));
 
-    passwordManager.listeners.accountStorageEnabledStateListener(false);
+    passwordManager.listeners.accountStorageActiveStateListener(false);
 
     assertFalse(settings.$.accountStorageToggle.hasAttribute('checked'));
   });
@@ -534,8 +581,27 @@ suite('SettingsSectionTest', function() {
       });
 
   test(
+      'actor login permissions section hidden if fedcm support is enabled',
+      async function() {
+        loadTimeData.overrideValues({
+          enableActorLoginPermissions: true,
+          fedCmEmbedderInitiatedLoginEnabled: true,
+        });
+        const settings = document.createElement('settings-section');
+        document.body.appendChild(settings);
+        await flushTasks();
+
+        assertFalse(
+            !!settings.shadowRoot!.querySelector('#actorLoginPermissions'));
+      });
+
+
+  test(
       'actor login permissions section hidden when no sites', async function() {
-        loadTimeData.overrideValues({enableActorLoginPermissions: true});
+        loadTimeData.overrideValues({
+          enableActorLoginPermissions: true,
+          fedCmEmbedderInitiatedLoginEnabled: false,
+        });
         passwordManager.data.actorLoginPermissions = [];
         const settings = document.createElement('settings-section');
         document.body.appendChild(settings);
@@ -547,7 +613,10 @@ suite('SettingsSectionTest', function() {
       });
 
   test('settings section shows actor login permissions', async function() {
-    loadTimeData.overrideValues({enableActorLoginPermissions: true});
+    loadTimeData.overrideValues({
+      enableActorLoginPermissions: true,
+      fedCmEmbedderInitiatedLoginEnabled: false,
+    });
     passwordManager.data.actorLoginPermissions =
         [createActorLoginPermission('test.com', 'testuser')];
     const settings = document.createElement('settings-section');
@@ -561,7 +630,10 @@ suite('SettingsSectionTest', function() {
   test(
       'settings section shows multiple actor login permissions',
       async function() {
-        loadTimeData.overrideValues({enableActorLoginPermissions: true});
+        loadTimeData.overrideValues({
+          enableActorLoginPermissions: true,
+          fedCmEmbedderInitiatedLoginEnabled: false,
+        });
         const sites = [
           createActorLoginPermission('test.com', 'testuser'),
           createActorLoginPermission('test2.com', 'testuser2'),
@@ -599,7 +671,10 @@ suite('SettingsSectionTest', function() {
       });
 
   test('actor login permissions remove dialog', async function() {
-    loadTimeData.overrideValues({enableActorLoginPermissions: true});
+    loadTimeData.overrideValues({
+      enableActorLoginPermissions: true,
+      fedCmEmbedderInitiatedLoginEnabled: false,
+    });
     passwordManager.data.actorLoginPermissions =
         [createActorLoginPermission('test.com', 'testuser')];
     const settings = document.createElement('settings-section');
@@ -621,7 +696,10 @@ suite('SettingsSectionTest', function() {
   });
 
   test('actor login permission can be deleted', async function() {
-    loadTimeData.overrideValues({enableActorLoginPermissions: true});
+    loadTimeData.overrideValues({
+      enableActorLoginPermissions: true,
+      fedCmEmbedderInitiatedLoginEnabled: false,
+    });
     const site = createActorLoginPermission('test.com', 'testuser');
     passwordManager.data.actorLoginPermissions = [site];
     const settings = document.createElement('settings-section');
@@ -647,7 +725,10 @@ suite('SettingsSectionTest', function() {
   });
 
   test('actor login permissions updated on password change', async function() {
-    loadTimeData.overrideValues({enableActorLoginPermissions: true});
+    loadTimeData.overrideValues({
+      enableActorLoginPermissions: true,
+      fedCmEmbedderInitiatedLoginEnabled: false,
+    });
     const sites = [
       createActorLoginPermission('test.com', 'testuser'),
       createActorLoginPermission('test2.com', 'testuser2'),
@@ -674,7 +755,7 @@ suite('SettingsSectionTest', function() {
   });
 
   test('Move passwords to account button is visible', async function() {
-    passwordManager.data.isAccountStorageEnabled = true;
+    passwordManager.data.isAccountStorageActive = true;
     syncProxy.syncInfo = {
       isSyncingPasswords: false,
     };
@@ -702,7 +783,7 @@ suite('SettingsSectionTest', function() {
   });
 
   test('Move passwords to account button is not visible', async function() {
-    passwordManager.data.isAccountStorageEnabled = true;
+    passwordManager.data.isAccountStorageActive = true;
     syncProxy.syncInfo = {
       isSyncingPasswords: false,
     };
@@ -731,7 +812,7 @@ suite('SettingsSectionTest', function() {
   test(
       'clicking save passwords in account opens batch upload dialog',
       async function() {
-        passwordManager.data.isAccountStorageEnabled = true;
+        passwordManager.data.isAccountStorageActive = true;
         syncProxy.syncInfo = {
           isSyncingPasswords: false,
         };
@@ -773,7 +854,7 @@ suite('SettingsSectionTest', function() {
 
   test('Account storage iph', async function() {
     loadTimeData.overrideValues({canAddShortcut: false});
-    passwordManager.data.isAccountStorageEnabled = false;
+    passwordManager.data.isAccountStorageActive = false;
     syncProxy.accountInfo = {
       email: 'testemail@gmail.com',
     };
@@ -807,7 +888,7 @@ suite('SettingsSectionTest', function() {
         syncProxy.syncInfo = {
           isSyncingPasswords: false,
         };
-        passwordManager.data.isAccountStorageEnabled = true;
+        passwordManager.data.isAccountStorageActive = true;
         passwordManager.data.isPasswordManagerPinAvailable = true;
 
         const section = document.createElement('settings-section');
@@ -871,13 +952,13 @@ suite('SettingsSectionTest', function() {
     await passwordManager.whenCalled('changePasswordManagerPin');
     assertFalse(section.$.toast.open);
 
-    passwordManager.data.changePasswordManagerPinSuccesful = false;
+    passwordManager.data.changePasswordManagerPinSuccessful = false;
     changePasswordManagerPinRow.click();
 
     await passwordManager.whenCalled('changePasswordManagerPin');
     assertFalse(section.$.toast.open);
 
-    passwordManager.data.changePasswordManagerPinSuccesful = true;
+    passwordManager.data.changePasswordManagerPinSuccessful = true;
     changePasswordManagerPinRow.click();
 
     await passwordManager.whenCalled('changePasswordManagerPin');
@@ -932,20 +1013,7 @@ suite('SettingsSectionTest', function() {
     assertTrue(isVisible($$(section, 'full-data-reset')));
   });
 
-  test('passkey upgrade toggle not shown with feature disabled', async () => {
-    loadTimeData.overrideValues({passkeyUpgradeSettingsToggleVisible: false});
-    const settings = document.createElement('settings-section');
-    settings.prefs = makePasswordManagerPrefs();
-    document.body.appendChild(settings);
-    await flushTasks();
-
-    const passkeyUpgradeToggle =
-        settings.shadowRoot!.querySelector('#passkeyUpgradeToggle');
-    assertFalse(!!passkeyUpgradeToggle);
-  });
-
   test('passkey upgrade toggle changes pref value', async () => {
-    loadTimeData.overrideValues({passkeyUpgradeSettingsToggleVisible: true});
     const settings = document.createElement('settings-section');
     settings.prefs = makePasswordManagerPrefs();
     document.body.appendChild(settings);
@@ -956,13 +1024,16 @@ suite('SettingsSectionTest', function() {
             '#passkeyUpgradeToggle');
     assertTrue(!!passkeyUpgradeToggle);
 
-    assertTrue(settings.getPref('credentials_enable_automatic_passkey_upgrades')
-                   .value);
+    assertTrue(
+        settings
+            .getPref<boolean>('credentials_enable_automatic_passkey_upgrades')
+            .value);
     assertTrue(passkeyUpgradeToggle.checked);
 
     passkeyUpgradeToggle.click();
     assertFalse(
-        settings.getPref('credentials_enable_automatic_passkey_upgrades')
+        settings
+            .getPref<boolean>('credentials_enable_automatic_passkey_upgrades')
             .value);
     assertFalse(passkeyUpgradeToggle.checked);
   });
@@ -970,8 +1041,6 @@ suite('SettingsSectionTest', function() {
   test(
       'passkey upgrade toggle hides with password toggle unchecked',
       async () => {
-        loadTimeData.overrideValues(
-            {passkeyUpgradeSettingsToggleVisible: true});
         const settings = document.createElement('settings-section');
         settings.prefs = makePasswordManagerPrefs();
         document.body.appendChild(settings);

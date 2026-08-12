@@ -5,6 +5,7 @@
 #ifndef UI_VIEWS_CONTROLS_MENU_MENU_ITEM_VIEW_H_
 #define UI_VIEWS_CONTROLS_MENU_MENU_ITEM_VIEW_H_
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +37,10 @@
 namespace gfx {
 class FontList;
 }  // namespace gfx
+
+namespace ui {
+enum class NewBadgeType;
+}  // namespace ui
 
 namespace views {
 
@@ -118,11 +123,20 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
 
   // The data structure which is used to paint a background on the menu item.
   struct MenuItemBackground {
-    MenuItemBackground(ui::ColorId background_color_id, int corner_radius)
+    MenuItemBackground(ui::ColorId background_color_id,
+                       int top_radius,
+                       int bottom_radius)
         : background_color_id(background_color_id),
-          corner_radius(corner_radius) {}
+          top_radius(top_radius),
+          bottom_radius(bottom_radius) {}
+    MenuItemBackground(ui::ColorId background_color_id, int corner_radius)
+        : MenuItemBackground(background_color_id,
+                             corner_radius,
+                             corner_radius) {}
+
     ui::ColorId background_color_id;
-    int corner_radius = 0;
+    int top_radius = 0;
+    int bottom_radius = 0;
   };
 
   // Constructor for use with the top level menu item. This menu is never
@@ -138,6 +152,7 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   std::u16string GetRenderedTooltipText(const gfx::Point& p) const override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   FocusBehavior GetFocusBehavior() const override;
+  std::unique_ptr<ActionViewInterface> GetActionViewInterface() override;
 
   // To update the custom tooltip, call this method with the new text.
   void UpdateTooltipText(std::optional<std::u16string> new_text = std::nullopt);
@@ -150,7 +165,7 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   static std::u16string GetAccessibleNameForMenuItem(
       const std::u16string& item_text,
       const std::u16string& accelerator_text,
-      bool is_new_feature);
+      std::optional<ui::NewBadgeType> badge_type);
 
   // Hides and cancels the menu. This does nothing if the menu is not open.
   void Cancel();
@@ -174,6 +189,25 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   void SetMenuItemBackground(
       std::optional<MenuItemBackground> menu_item_background) {
     menu_item_background_ = menu_item_background;
+  }
+
+  void SetContainerStyle(ui::ColorId background_color_id,
+                         int top_radius = 0,
+                         int bottom_radius = 0,
+                         int top_margin = 8,
+                         int bottom_margin = 8) {
+    SetMenuItemBackground(
+        MenuItemBackground(background_color_id, top_radius, bottom_radius));
+    set_top_margin(top_margin);
+    set_bottom_margin(bottom_margin);
+  }
+
+  void set_top_margin(int top_margin) { top_margin_ = top_margin; }
+  int GetTopMargin() const { return top_margin_.value_or(GetVerticalMargin()); }
+
+  void set_bottom_margin(int bottom_margin) { bottom_margin_ = bottom_margin; }
+  int GetBottomMargin() const {
+    return bottom_margin_.value_or(GetVerticalMargin());
   }
 
   std::optional<MenuItemBackground> GetMenuItemBackground() {
@@ -241,7 +275,8 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   bool HasSubmenu() const;
 
   // Returns the view containing child menu items.
-  SubmenuView* GetSubmenu() const;
+  SubmenuView* GetSubmenu();
+  const SubmenuView* GetSubmenu() const;
 
   // Returns true if this menu item has a submenu and it is showing
   bool SubmenuIsShowing() const;
@@ -265,6 +300,9 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
 
   // Sets the minor text.
   void SetMinorText(const std::u16string& minor_text);
+
+  // Sets whether the minor text should be rendered as a URL.
+  void SetMinorTextIsUrl(bool is_url);
 
   // Sets the minor icon.
   void SetMinorIcon(const ui::ImageModel& minor_icon);
@@ -300,6 +338,9 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   void SetIcon(const ui::ImageModel& icon);
   const ui::ImageModel GetIcon() const;
 
+  // Sets the color of the icon.
+  void SetIconColor(std::optional<ui::ColorVariant> icon_color);
+
   // Sets the view used to render the icon. This clobbers any icon set via
   // SetIcon(). MenuItemView takes ownership of |icon_view|.
   void SetIconView(std::unique_ptr<ImageView> icon_view);
@@ -315,8 +356,12 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   // Returns the command id of this item.
   int GetCommand() const { return command_; }
 
-  void set_is_new(bool is_new) { is_new_ = is_new; }
-  bool is_new() const { return is_new_; }
+  void set_new_badge_type(std::optional<ui::NewBadgeType> new_badge_type) {
+    new_badge_type_ = new_badge_type;
+  }
+  std::optional<ui::NewBadgeType> new_badge_type() const {
+    return new_badge_type_;
+  }
 
   void set_may_have_mnemonics(bool may_have_mnemonics) {
     may_have_mnemonics_ = may_have_mnemonics;
@@ -411,9 +456,6 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   void SetAlerted();
   bool is_alerted() const { return is_alerted_; }
 
-  // Returns whether or not a "new" badge should be shown on this menu item.
-  bool ShouldShowNewBadge() const;
-
   // Returns whether keyboard navigation through the menu should stop on this
   // item.
   bool IsTraversableByKeyboard() const;
@@ -422,6 +464,9 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   int GetItemHorizontalBorder() const;
 
   virtual void UpdateAccessibleCheckedState();
+
+  // Updates both the visual checkmark icon and accessibility checked state.
+  void RefreshCheckmarkState();
 
   void SetTriggerActionWithNonIconChildViews(
       bool trigger_action_with_non_icon_child_views) {
@@ -437,8 +482,6 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
     return last_paint_as_selected_;
   }
 
-  static std::u16string GetNewBadgeAccessibleDescription();
-
  protected:
   // Creates a MenuItemView. This is used by the various AddXXX methods.
   MenuItemView(MenuItemView* parent, int command, Type type);
@@ -452,15 +495,12 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   // Returns the preferred size (and padding) of any children.
   virtual gfx::Size GetChildPreferredSize() const;
 
-  // Returns the various margins.
-  int GetTopMargin() const;
-  int GetBottomMargin() const;
-
  private:
   friend class MenuController;
   friend class internal::MenuRunnerImpl;
   friend class MenuControllerTest;
   friend class TestMenuItemView;
+  friend class MenuModelAdapter;
   FRIEND_TEST_ALL_PREFIXES(MenuControllerTest, RepostEventToEmptyMenuItem);
 
   enum class PaintMode { kNormal, kForDrag };
@@ -480,6 +520,11 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   const SubmenuView* GetContainingSubmenu() const {
     return parent_menu_item_->GetSubmenu();
   }
+
+  // Sets if the minor icon is displayed to the right of the minor text if
+  // present. This is only available via the SimpleMenuModel. This is exclusive
+  // to having a sub-menu.
+  void SetMinorIconOnRight(bool minor_icon_on_right);
 
   // The RunXXX methods call into this to set up the necessary state before
   // running.
@@ -522,6 +567,9 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   // Returns the text that should be displayed on the end (right) of the menu
   // item. This will be the accelerator (if one exists).
   std::u16string GetMinorText() const;
+
+  // Returns true if the minor text should be rendered as a URL.
+  bool GetMinorTextIsUrl() const;
 
   // Returns the icon that should be displayed to the left of the minor text.
   ui::ImageModel GetMinorIcon() const;
@@ -645,6 +693,8 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   // feature for users.
   bool is_new_ = false;
 
+  std::optional<ui::NewBadgeType> new_badge_type_ = std::nullopt;
+
   // Whether the menu item contains user-created text.
   bool may_have_mnemonics_ = true;
 
@@ -657,7 +707,9 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   std::u16string title_;
   std::u16string secondary_title_;
   std::u16string minor_text_;
+  bool minor_text_is_url_ = false;
   ui::ImageModel minor_icon_;
+  bool minor_icon_on_right_ = false;
 
   // Does the title have a mnemonic? Only useful on the root menu item.
   bool has_mnemonics_ = false;
@@ -737,15 +789,24 @@ class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   // and SetIconView() explicitly calls UpdateSelectionBasedStateIfChanged().
   bool update_selection_based_state_in_view_herarchy_changed_ = true;
 
-  const std::u16string new_badge_text_ =
-      l10n_util::GetStringUTF16(IDS_NEW_BADGE);
-
   std::optional<ui::ColorId> foreground_color_id_;
   std::optional<MenuItemBackground> menu_item_background_;
   std::optional<ui::ColorId> selected_color_id_;
+  std::optional<int> top_margin_;
+  std::optional<int> bottom_margin_;
 
   base::CallbackListSubscription visible_changed_callback_;
   base::CallbackListSubscription enabled_changed_callback_;
+};
+
+class VIEWS_EXPORT MenuItemActionViewInterface
+    : public BaseActionViewInterface {
+ public:
+  explicit MenuItemActionViewInterface(MenuItemView* action_view);
+  ~MenuItemActionViewInterface() override = default;
+
+  // BaseActionViewInterface:
+  void ActionItemChangedImpl(actions::ActionItem* action_item) override;
 };
 
 // EmptyMenuMenuItem ----------------------------------------------------------

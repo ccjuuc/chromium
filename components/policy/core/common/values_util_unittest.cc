@@ -11,7 +11,7 @@
 namespace policy {
 
 TEST(PolicyValuesToStringSetTest, Convert) {
-  base::Value::List items;
+  base::ListValue items;
   items.Append("1");
   items.Append("2");
   items.Append("3");
@@ -21,14 +21,14 @@ TEST(PolicyValuesToStringSetTest, Convert) {
 }
 
 TEST(PolicyValuesToStringSetTest, SkipInvalidItem) {
-  base::Value::List items;
+  base::ListValue items;
   items.Append("1");
   items.Append(base::Value());
   items.Append(0);
   items.Append(true);
   items.Append(base::Value(base::Value::Type::BINARY));
-  items.Append(base::Value::List());
-  items.Append(base::Value::Dict());
+  items.Append(base::ListValue());
+  items.Append(base::DictValue());
   items.Append("2");
   items.Append("3");
   items.Append("");
@@ -75,15 +75,15 @@ TEST(PolicyValueHashTest, Hash) {
             PolicyValueHash(base::Value("foo")));
 
   // Test lists.
-  base::Value::List list1;
+  base::ListValue list1;
   list1.Append(1);
   list1.Append("foo");
 
-  base::Value::List list2;
+  base::ListValue list2;
   list2.Append(1);
   list2.Append("foo");
 
-  base::Value::List list3;
+  base::ListValue list3;
   list3.Append(1);
   list3.Append("bar");
 
@@ -92,11 +92,11 @@ TEST(PolicyValueHashTest, Hash) {
   EXPECT_NE(PolicyValueHash(base::Value(std::move(list2))),
             PolicyValueHash(base::Value(std::move(list3))));
 
-  base::Value::List list4;
+  base::ListValue list4;
   list4.Append(1);
   list4.Append("foo");
 
-  base::Value::List list5;
+  base::ListValue list5;
   list5.Append("foo");
   list5.Append(1);
 
@@ -104,22 +104,22 @@ TEST(PolicyValueHashTest, Hash) {
             PolicyValueHash(base::Value(std::move(list5))));
 
   // Test dictionaries.
-  base::Value::Dict dict1;
+  base::DictValue dict1;
   dict1.Set("foo", 1);
   dict1.Set("bar", "baz");
 
-  base::Value::Dict dict2;
+  base::DictValue dict2;
   dict2.Set("foo", 1);
   dict2.Set("bar", "baz");
 
-  base::Value::Dict dict3;
+  base::DictValue dict3;
   dict3.Set("foo", 1);
   dict3.Set("bar", "qux");
 
-  base::Value::Dict dict4;
+  base::DictValue dict4;
   dict4.Set("foo", 1);
 
-  base::Value::Dict dict5;
+  base::DictValue dict5;
   dict5.Set("bar", 1);
 
   EXPECT_EQ(PolicyValueHash(base::Value(std::move(dict1))),
@@ -130,18 +130,18 @@ TEST(PolicyValueHashTest, Hash) {
             PolicyValueHash(base::Value(std::move(dict5))));
 
   // Test nested values.
-  base::Value::List nested_list1;
-  base::Value::Dict nested_dict1;
+  base::ListValue nested_list1;
+  base::DictValue nested_dict1;
   nested_dict1.Set("key", "value");
   nested_list1.Append(std::move(nested_dict1));
 
-  base::Value::List nested_list2;
-  base::Value::Dict nested_dict2;
+  base::ListValue nested_list2;
+  base::DictValue nested_dict2;
   nested_dict2.Set("key", "value");
   nested_list2.Append(std::move(nested_dict2));
 
-  base::Value::List nested_list3;
-  base::Value::Dict nested_dict3;
+  base::ListValue nested_list3;
+  base::DictValue nested_dict3;
   nested_dict3.Set("key", "other_value");
   nested_list3.Append(std::move(nested_dict3));
 
@@ -151,7 +151,7 @@ TEST(PolicyValueHashTest, Hash) {
             PolicyValueHash(base::Value(std::move(nested_list3))));
 
   // Test distinct hashes for different empty/zero values.
-  base::Value::List distinct_values;
+  base::ListValue distinct_values;
   distinct_values.Append(0);
   distinct_values.Append(0.0);
   distinct_values.Append(base::Value());

@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/slot_assignment_engine.h"
@@ -51,10 +52,18 @@ class AncestorTraversal {
       return other.current_node_ == current_node_;
     }
     Iterator& operator++() {
-      if (auto* element = DynamicTo<Element>(current_node_);
-          element && element->IsScrollMarkerPseudoElement()) {
+      auto* element = DynamicTo<Element>(current_node_);
+      if (element && element->IsScrollMarkerPseudoElement()) {
         current_node_ = static_cast<ScrollMarkerPseudoElement*>(element)
                             ->ScrollMarkerGroup();
+      } else if (element && (element->IsScrollMarkerGroupPseudoElement() ||
+                             element->IsScrollButtonPseudoElement())) {
+        // ::scroll-marker-group and ::scroll-button are laid out as siblings
+        // of their originating element rather than as descendants, so the
+        // originating element's display lock does not affect them. Skip
+        // past the originating element when traversing ancestors.
+        Element* originating = element->parentElement();
+        current_node_ = originating ? Traversal::Parent(*originating) : nullptr;
       } else {
         current_node_ = Traversal::Parent(*current_node_);
       }
@@ -96,7 +105,15 @@ Element* NearestLockedExclusiveAncestor(const Node& node) {
   }
   // TODO(crbug.com/924550): Once we figure out a more efficient way to
   // determine whether we're inside a locked subtree or not, change this.
-  for (Node& ancestor : AncestorTraversal(&node)) {
+  const Node* start_node = &node;
+  if (node.IsPseudoElement() &&
+      To<PseudoElement>(node).GetPseudoId() == kPseudoIdBackdrop) {
+    // ::backdrop is rendered outside of its originating element's layout
+    // hierarchy. Therefore, it is not affected by the originating element's
+    // display lock.
+    start_node = node.parentElement();
+  }
+  for (Node& ancestor : AncestorTraversal(start_node)) {
     auto* ancestor_element = DynamicTo<Element>(ancestor);
     if (!ancestor_element)
       continue;
@@ -860,87 +877,9 @@ bool DisplayLockUtilities::IsAutoWithoutLayout(const LayoutObject& object) {
          !context->HadLifecycleUpdateSinceLastUnlock();
 }
 
-namespace {
-
-// This method follows the old spec and will be removed, hence the "Legacy"
-// name.
-bool LegacyExpandDetailsAncestors(const Node& node) {
-  // Since setting the open attribute could fire synchronous events (e.g.
-  // `blur`), which could mess with the FlatTreeTraversal iterator, we should
-  // first iterate details elements and then open them all.
-  HeapVector<Member<HTMLDetailsElement>> details_to_open;
-
-  for (Node& parent : FlatTreeTraversal::AncestorsOf(node)) {
-    if (HTMLDetailsElement* details = DynamicTo<HTMLDetailsElement>(parent)) {
-      // If the active match is inside the <summary> of a <details>, then we
-      // shouldn't expand the <details> because the active match is already
-      // visible.
-      bool inside_summary = false;
-      Element& summary = details->MainSummary();
-      for (Node& ancestor : FlatTreeTraversal::AncestorsOf(node)) {
-        if (&ancestor == &summary) {
-          inside_summary = true;
-          break;
-        }
-      }
-
-      if (!inside_summary &&
-          !details->FastHasAttribute(html_names::kOpenAttr)) {
-        details_to_open.push_back(details);
-      }
-    }
-  }
-
-  for (HTMLDetailsElement* details : details_to_open) {
-    details->SetBooleanAttribute(html_names::kOpenAttr, true);
-  }
-
-  return details_to_open.size();
-}
-
-// This method follows the old spec and will be removed, hence the "Legacy"
-// name.
-bool LegacyRevealHiddenUntilFoundAncestors(const Node& node) {
-  // Since setting the open attribute could fire synchronous events (e.g.
-  // `blur`), which could mess with the FlatTreeTraversal iterator, we should
-  // first iterate details elements and then open them all.
-  HeapVector<Member<HTMLElement>> elements_to_reveal;
-
-  for (Node& parent : AncestorTraversal<FlatTreeTraversal>(&node, true)) {
-    if (HTMLElement* element = DynamicTo<HTMLElement>(parent)) {
-      if (EqualIgnoringASCIICase(
-              element->FastGetAttribute(html_names::kHiddenAttr),
-              keywords::kUntilFound)) {
-        elements_to_reveal.push_back(element);
-      }
-    }
-  }
-
-  for (HTMLElement* element : elements_to_reveal) {
-    element->DispatchEvent(
-        *Event::CreateBubble(event_type_names::kBeforematch));
-  }
-
-  for (HTMLElement* element : elements_to_reveal) {
-    element->removeAttribute(html_names::kHiddenAttr);
-  }
-
-  return elements_to_reveal.size();
-}
-
-}  // namespace
-
 // static
 DisplayLockUtilities::RevealResult
 DisplayLockUtilities::RevealAutoExpandableAncestors(const Node& target) {
-  if (!RuntimeEnabledFeatures::AncestorRevealingNewSpecEnabled()) {
-    RevealResult reveal_result;
-    reveal_result.revealed_details = LegacyExpandDetailsAncestors(target);
-    reveal_result.revealed_hidden_until_found =
-        LegacyRevealHiddenUntilFoundAncestors(target);
-    return reveal_result;
-  }
-
   // https://html.spec.whatwg.org/#ancestor-revealing-algorithm
   enum class AncestorType {
     kDetails = 0,
@@ -950,7 +889,7 @@ DisplayLockUtilities::RevealAutoExpandableAncestors(const Node& target) {
 
   for (Node& ancestor : AncestorTraversal<FlatTreeTraversal>(&target, true)) {
     if (HTMLElement* element = DynamicTo<HTMLElement>(ancestor)) {
-      if (EqualIgnoringASCIICase(
+      if (EqualIgnoringAsciiCase(
               element->FastGetAttribute(html_names::kHiddenAttr),
               keywords::kUntilFound)) {
         ancestors_to_reveal.push_back(
@@ -974,7 +913,7 @@ DisplayLockUtilities::RevealAutoExpandableAncestors(const Node& target) {
       return reveal_result;
     }
     if (reveal_pair.second == AncestorType::kHiddenUntilFound) {
-      if (!EqualIgnoringASCIICase(
+      if (!EqualIgnoringAsciiCase(
               reveal_pair.first->FastGetAttribute(html_names::kHiddenAttr),
               keywords::kUntilFound)) {
         return reveal_result;
@@ -983,7 +922,7 @@ DisplayLockUtilities::RevealAutoExpandableAncestors(const Node& target) {
       reveal_pair.first->DispatchEvent(
           *Event::CreateBubble(event_type_names::kBeforematch));
       if (!reveal_pair.first->isConnected() ||
-          !EqualIgnoringASCIICase(
+          !EqualIgnoringAsciiCase(
               reveal_pair.first->FastGetAttribute(html_names::kHiddenAttr),
               keywords::kUntilFound)) {
         return reveal_result;

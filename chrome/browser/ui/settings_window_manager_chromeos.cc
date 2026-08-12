@@ -10,26 +10,29 @@
 #include "ash/public/cpp/resources/grit/ash_public_unscaled_resources.h"
 #include "ash/public/cpp/shelf_item.h"
 #include "ash/public/cpp/window_properties.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "ash/wm/window_properties.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
@@ -102,6 +105,11 @@ bool SettingsWindowManager::UseDeprecatedSettingsWindow(Profile* profile) {
 
 void SettingsWindowManager::Open(const user_manager::User& user,
                                  OpenParams params) {
+  if (params.entry_point.has_value()) {
+    base::UmaHistogramEnumeration("AppManagement.EntryPoints",
+                                  params.entry_point.value());
+  }
+
   Profile* profile = Profile::FromBrowserContext(
       ash::BrowserContextHelper::Get()->GetBrowserContextByUser(&user));
 
@@ -129,12 +137,12 @@ void SettingsWindowManager::ShowChromePageForProfile(
   // If this profile isn't allowed to create browser windows (e.g. the login
   // screen profile) then bail out. Neither the new SWA code path nor the legacy
   // code path can successfully open the window for these profiles.
-  if (Browser::GetCreationStatusForProfile(profile) !=
+  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
       Browser::CreationStatus::kOk) {
     LOG(ERROR) << "Unable to open settings for this profile, url "
                << gurl.spec();
     if (callback) {
-      std::move(callback).Run(apps::LaunchResult(apps::State::kFailed));
+      std::move(callback).Run(apps::LaunchResult::kFailed);
     }
     return;
   }
@@ -153,15 +161,15 @@ void SettingsWindowManager::ShowChromePageForProfile(
   }
 
   // Look for an existing browser window.
-  Browser* browser = FindBrowserForProfile(profile);
+  BrowserWindowInterface* browser = FindBrowserForProfile(profile);
   if (browser) {
-    DCHECK(browser->profile() == profile);
+    DCHECK(browser->GetProfile() == profile);
     content::WebContents* web_contents =
-        browser->tab_strip_model()->GetWebContentsAt(0);
+        browser->GetTabStripModel()->GetWebContentsAt(0);
     if (web_contents && web_contents->GetURL() == gurl) {
-      browser->window()->Show();
+      browser->GetWindow()->Show();
       if (callback) {
-        std::move(callback).Run(apps::LaunchResult(apps::State::kSuccess));
+        std::move(callback).Run(apps::LaunchResult::kSuccess);
       }
       return;
     }
@@ -171,7 +179,7 @@ void SettingsWindowManager::ShowChromePageForProfile(
     params.user_gesture = true;
     Navigate(&params);
     if (callback) {
-      std::move(callback).Run(apps::LaunchResult(apps::State::kSuccess));
+      std::move(callback).Run(apps::LaunchResult::kSuccess);
     }
     return;
   }
@@ -184,16 +192,16 @@ void SettingsWindowManager::ShowChromePageForProfile(
   params.user_gesture = true;
   params.path_behavior = NavigateParams::IGNORE_AND_NAVIGATE;
   Navigate(&params);
-  CHECK(params.browser);  // See https://crbug.com/1174525
-  browser = params.browser->GetBrowserForMigrationOnly();
+  CHECK(params.browser);  // See https://crbug.com/40746844
+  browser = params.browser;
 
   // operator[] not used because SessionID has no default constructor.
   settings_session_map_.emplace(profile, SessionID::InvalidValue())
-      .first->second = browser->session_id();
-  DCHECK(browser->is_trusted_source());
+      .first->second = browser->GetSessionID();
+  DCHECK(WindowFeatureController::From(browser)->IsTrustedSource());
 
   // Configure the created window property.
-  auto* window = browser->window()->GetNativeWindow();
+  auto* window = browser->GetWindow()->GetNativeWindow();
   window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
   window->SetProperty(ash::kOverrideWindowIconResourceIdKey,
                       IDR_SETTINGS_LOGO_192);
@@ -205,7 +213,7 @@ void SettingsWindowManager::ShowChromePageForProfile(
   legacy_settings_title_updater_->Add(window);
 
   if (callback) {
-    std::move(callback).Run(apps::LaunchResult(apps::State::kSuccess));
+    std::move(callback).Run(apps::LaunchResult::kSuccess);
   }
 }
 
@@ -217,7 +225,8 @@ void SettingsWindowManager::ShowOSSettings(Profile* profile,
 void SettingsWindowManager::ShowOSSettings(Profile* profile,
                                            std::string_view sub_page,
                                            int64_t display_id) {
-  ShowChromePageForProfile(profile, chrome::GetOSSettingsUrl(sub_page),
+  ShowChromePageForProfile(profile,
+                           chromeos::settings::GetOSSettingsUrl(sub_page),
                            display_id, /*callback=*/{});
 }
 
@@ -233,15 +242,18 @@ void SettingsWindowManager::ShowOSSettings(
   ShowOSSettings(profile, path_with_setting_id, display_id);
 }
 
-Browser* SettingsWindowManager::FindBrowserForProfile(Profile* profile) {
+BrowserWindowInterface* SettingsWindowManager::FindBrowserForProfile(
+    Profile* profile) {
   if (!UseDeprecatedSettingsWindow(profile)) {
-    return ash::FindSystemWebAppBrowser(profile,
-                                        ash::SystemWebAppType::SETTINGS);
+    ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
+        profile, ash::SystemWebAppType::SETTINGS, ash::BrowserType::kApp);
+    return delegate ? &delegate->GetBrowser() : nullptr;
   }
 
   auto iter = settings_session_map_.find(profile);
   if (iter != settings_session_map_.end()) {
-    return chrome::FindBrowserWithID(iter->second);
+    return GlobalBrowserCollection::GetInstance()->FindBrowserWithID(
+        iter->second);
   }
 
   return nullptr;

@@ -13,16 +13,15 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/logging.h"
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
-#include "base/one_shot_event.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/first_run/first_run_features.h"
 #include "chrome/browser/first_run/first_run_internal.h"
 #include "chrome/browser/google/google_brand.h"
@@ -36,12 +35,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/global_error/global_error_service.h"
-#include "chrome/browser/ui/global_error/global_error_service_factory.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -52,13 +45,10 @@
 #include "components/prefs/pref_service.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "extensions/buildflags/buildflags.h"
-#include "google_apis/gaia/gaia_auth_util.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/browser_features.h"
-#include "components/crx_file/id_util.h"
-#include "extensions/browser/pref_names.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 namespace content {
@@ -296,7 +286,7 @@ void SetupInitialPrefsFromInstallPrefs(
       &out_prefs->suppress_default_browser_prompt_for_version);
 
   if (base::FeatureList::IsEnabled(features::kBookmarksImportOnFirstRun)) {
-    const base::Value::Dict* bookmarks_dict = install_prefs.GetBookmarksBlock();
+    const base::DictValue* bookmarks_dict = install_prefs.GetBookmarksBlock();
     if (bookmarks_dict) {
       out_prefs->import_bookmarks_dict = bookmarks_dict->Clone();
     }
@@ -307,7 +297,7 @@ void SetupInitialPrefsFromInstallPrefs(
     out_prefs->initial_extensions_provider_name =
         install_prefs.GetInitialExtensionsProviderName();
 
-    if (const base::Value::List* initial_extensions =
+    if (const base::ListValue* initial_extensions =
             install_prefs.GetInitialExtensionsList()) {
       out_prefs->initial_extensions = initial_extensions->Clone();
     }
@@ -318,6 +308,11 @@ void SetupInitialPrefsFromInstallPrefs(
   if (install_prefs.GetBool(prefs::kConfirmToQuitEnabled, &value) && value)
     out_prefs->confirm_to_quit = true;
 #endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_LINUX)
+  install_prefs.GetBool(installer::initial_preferences::kRequireEula,
+                        &out_prefs->eula_required);
+#endif  // BUILDFLAG(IS_LINUX)
 }
 
 // -- Platform-specific functions --
@@ -426,12 +421,14 @@ ProcessInitialPreferencesResult ProcessInitialPreferences(
   if (initial_prefs.get()) {
     // Don't show EULA when running in headless mode since this would
     // effectively block the UI because there is no one to accept it.
+    // On Linux, the EULA dialog is shown in ShowEulaDialog after
+    // UI is initialized.
     if (!headless::IsHeadlessMode() &&
         !internal::ShowPostInstallEULAIfNeeded(initial_prefs.get())) {
       return EULA_EXIT_NOW;
     }
 
-    base::Value::Dict initial_dictionary =
+    base::DictValue initial_dictionary =
         initial_prefs->initial_dictionary().Clone();
     // The distribution dictionary (and any prefs below it) are never registered
     // for use in Chrome's PrefService. Strip them from the initial dictionary
@@ -460,6 +457,12 @@ ProcessInitialPreferencesResult ProcessInitialPreferences(
 
   return FIRST_RUN_PROCEED;
 }
+
+#if BUILDFLAG(IS_LINUX)
+bool ShowEulaDialog() {
+  return internal::ShowEulaDialog();
+}
+#endif
 
 void AutoImport(
     Profile* profile,
@@ -494,7 +497,7 @@ void AutoImport(
 
   if (items_to_import) {
     // It may be possible to do the if block below asynchronously. In which
-    // case, get rid of this RunLoop. http://crbug.com/366116.
+    // case, get rid of this RunLoop. http://crbug.com/41103081.
     base::RunLoop run_loop;
     auto importer_list = std::make_unique<ImporterList>();
     importer_list->DetectSourceProfiles(

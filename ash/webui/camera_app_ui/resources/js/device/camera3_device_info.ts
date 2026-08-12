@@ -3,14 +3,8 @@
 // found in the LICENSE file.
 
 import {DeviceOperator} from '../mojo/device_operator.js';
-import {
-  Facing,
-  FpsRangeList,
-  MaxFpsInfo,
-  Resolution,
-  ResolutionList,
-  VideoConfig,
-} from '../type.js';
+import type {Facing, FpsRangeList, MaxFpsInfo, ResolutionList, VideoConfig} from '../type.js';
+import {Resolution} from '../type.js';
 
 /**
  * Groups resolutions with same ratio into same list.

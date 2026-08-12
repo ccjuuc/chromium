@@ -2,32 +2,38 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/browser/accessibility/browser_accessibility_state_impl.h"
+#include "content/browser/accessibility/browser_accessibility_state_impl_win.h"
 
 #include <windows.h>  // Must be in front of other Windows header files.
 
 #include <stddef.h>
 
 #include <memory>
+#include <optional>
+#include <string_view>
 
 #include "base/callback_list.h"
 #include "base/check_deref.h"
+#include "base/containers/flat_set.h"
 #include "base/containers/heap_array.h"
 #include "base/debug/crash_logging.h"
-#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/hash/hash.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/thread_pool.h"
 #include "base/win/registry.h"
+#include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/scoped_accessibility_mode.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/ax_platform_node_win.h"
+#include "ui/accessibility/platform/uia_client_info_source_win.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/win/singleton_hwnd.h"
 
@@ -35,16 +41,18 @@ namespace content {
 
 namespace {
 
-// Killswitch to turn off this feature remotely in case it affects ATs in a way
-// we didn't expect. This is temporary.
-// TODO(crbug.com/407891291): Remove this feature flag in Chrome 139.
-BASE_FEATURE(kDisableUiaProviderWhenJawsIsRunning,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 const wchar_t kNarratorRegistryKey[] = L"Software\\Microsoft\\Narrator\\NoRoam";
 const wchar_t kWinMagnifierRegistryKey[] =
     L"Software\\Microsoft\\ScreenMagnifier";
 const wchar_t kWinATRunningStateValueName[] = L"RunningState";
+constexpr std::string_view kUiaClientProcessNativeApisHistogram =
+    "Accessibility.WinUIA.ClientProcess.NativeAPIs";
+constexpr std::string_view kUiaClientProcessWebContentsHistogram =
+    "Accessibility.WinUIA.ClientProcess.WebContents";
+constexpr std::string_view kUiaClientDisconnectedHistogram =
+    "Accessibility.WinUIA.ClientDisconnected";
+constexpr ui::AXMode kTrackedUiaClientProcessModes(ui::AXMode::kNativeAPIs |
+                                                   ui::AXMode::kWebContents);
 
 enum class AccessibilityTarget {
   kStickyKeys,
@@ -57,6 +65,111 @@ enum class AccessibilityTarget {
   kZoomText,
   kZdsr,
 };
+
+void RecordUiaClientProcesses(
+    std::string_view histogram_name,
+    const base::flat_set<std::string>& process_names) {
+  for (const std::string& process_name : process_names) {
+    base::UmaHistogramSparse(histogram_name,
+                             internal::HashUiaClientProcessName(process_name));
+  }
+}
+
+bool ShouldRecordUiaClientProcessHistogramsForModeChange(ui::AXMode old_mode,
+                                                         ui::AXMode new_mode) {
+  return !(
+      ((new_mode & ~old_mode) & kTrackedUiaClientProcessModes).is_mode_off());
+}
+
+void QueryAndRecordUiaClientProcessHistogramsForModeChange(
+    ui::AXMode old_mode,
+    ui::AXMode new_mode) {
+  if (!ShouldRecordUiaClientProcessHistogramsForModeChange(old_mode,
+                                                           new_mode)) {
+    return;
+  }
+
+  std::optional<ui::UiaClientInfoSource> client_info_source =
+      ui::UiaClientInfoSource::Create();
+  if (!client_info_source) {
+    return;
+  }
+
+  internal::RecordUiaClientProcessHistogramsForModeChange(
+      old_mode, new_mode, client_info_source->GetConnectedClientProcessNames());
+}
+
+void RecordUiaClientConnection(
+    const std::string& process_name,
+    ui::UiaClientInfoSource::ConnectionState connection_state) {
+  // The UiaClientInfoSource that registers this callback is created lazily,
+  // only once kNativeAPIs or kWebContents is enabled, to avoid loading
+  // UIAutomationCore.dll at startup. Disconnects before then aren't recorded.
+  if (connection_state ==
+      ui::UiaClientInfoSource::ConnectionState::kDisconnected) {
+    internal::RecordUiaClientDisconnectedHistogram(process_name);
+  }
+}
+
+}  // namespace
+
+namespace internal {
+
+int HashUiaClientProcessName(std::string_view process_name) {
+  return static_cast<int>(base::PersistentHash(process_name));
+}
+
+void RecordUiaClientDisconnectedHistogram(std::string_view process_name) {
+  base::UmaHistogramSparse(kUiaClientDisconnectedHistogram,
+                           HashUiaClientProcessName(process_name));
+}
+
+void RecordUiaClientProcessHistogramsForModeChange(
+    ui::AXMode old_mode,
+    ui::AXMode new_mode,
+    std::vector<std::string> process_names) {
+  if (!ShouldRecordUiaClientProcessHistogramsForModeChange(old_mode,
+                                                           new_mode)) {
+    return;
+  }
+
+  ui::AXMode newly_enabled_mode = new_mode & ~old_mode;
+  base::flat_set<std::string> unique_process_names(std::move(process_names));
+  if (unique_process_names.empty()) {
+    return;
+  }
+
+  if (newly_enabled_mode.has_mode(ui::AXMode::kNativeAPIs)) {
+    RecordUiaClientProcesses(kUiaClientProcessNativeApisHistogram,
+                             unique_process_names);
+  }
+  if (newly_enabled_mode.has_mode(ui::AXMode::kWebContents)) {
+    RecordUiaClientProcesses(kUiaClientProcessWebContentsHistogram,
+                             unique_process_names);
+  }
+}
+
+bool DoesJawsVersionNeedTabSelectionEvent(uint16_t major,
+                                          uint16_t minor,
+                                          uint16_t build) {
+  // The first JAWS version that reliably detects the active tab on window
+  // activation without Chromium's synthetic kSelection event is 2026.2606.132.
+  // Older versions still require the event. See https://crbug.com/505781387.
+  constexpr uint16_t kFixedMajor = 2026;
+  constexpr uint16_t kFixedMinor = 2606;
+  constexpr uint16_t kFixedBuild = 132;
+  if (major != kFixedMajor) {
+    return major < kFixedMajor;
+  }
+  if (minor != kFixedMinor) {
+    return minor < kFixedMinor;
+  }
+  return build < kFixedBuild;
+}
+
+}  // namespace internal
+
+namespace {
 
 struct ModuleVersion {
   uint16_t major = 0, minor = 0, build = 0, revision = 0;
@@ -321,6 +434,8 @@ class BrowserAccessibilityStateImplWin : public BrowserAccessibilityStateImpl {
   BrowserAccessibilityStateImplWin();
 
  protected:
+  void RecordPlatformClientHistograms(ui::AXMode old_mode,
+                                      ui::AXMode new_mode) override;
   void RefreshAssistiveTech() override;
   void RefreshAssistiveTechIfNecessary(ui::AXMode new_mode) override;
   ui::AXPlatform::ProductStrings GetProductStrings() override;
@@ -328,6 +443,8 @@ class BrowserAccessibilityStateImplWin : public BrowserAccessibilityStateImpl {
  private:
   void OnDiscoveredAssistiveTech(
       const std::vector<AssistiveTechInfo>& discovered_ats);
+  // Starts or stops monitoring for client disconnections.
+  void SynchronizeUiaClientInfoSource(ui::AXMode new_mode);
 
   base::CallbackListSubscription hwnd_subscription_;
 
@@ -338,6 +455,8 @@ class BrowserAccessibilityStateImplWin : public BrowserAccessibilityStateImpl {
   // The presence of an AssistiveTech is currently being recomputed.
   // Will be updated via DiscoverAssistiveTech().
   bool awaiting_known_assistive_tech_computation_ = false;
+
+  std::optional<ui::UiaClientInfoSource> uia_client_info_source_;
 };
 
 BrowserAccessibilityStateImplWin::BrowserAccessibilityStateImplWin() {
@@ -345,6 +464,35 @@ BrowserAccessibilityStateImplWin::BrowserAccessibilityStateImplWin() {
     hwnd_subscription_ = gfx::SingletonHwnd::GetInstance()->RegisterCallback(
         base::BindRepeating(&OnWndProc));
   }
+}
+
+void BrowserAccessibilityStateImplWin::SynchronizeUiaClientInfoSource(
+    ui::AXMode new_mode) {
+  if ((new_mode & kTrackedUiaClientProcessModes).is_mode_off()) {
+    uia_client_info_source_.reset();
+    return;
+  }
+
+  if (uia_client_info_source_) {
+    return;
+  }
+
+  if (!base::SingleThreadTaskRunner::HasCurrentDefault()) {
+    return;
+  }
+
+  uia_client_info_source_ = ui::UiaClientInfoSource::Create(
+      base::BindRepeating(&RecordUiaClientConnection));
+}
+
+void BrowserAccessibilityStateImplWin::RecordPlatformClientHistograms(
+    ui::AXMode old_mode,
+    ui::AXMode new_mode) {
+  SynchronizeUiaClientInfoSource(new_mode);
+  base::ThreadPool::PostTask(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(&QueryAndRecordUiaClientProcessHistogramsForModeChange,
+                     old_mode, new_mode));
 }
 
 void BrowserAccessibilityStateImplWin::RefreshAssistiveTech() {
@@ -404,8 +552,7 @@ void BrowserAccessibilityStateImplWin::OnDiscoveredAssistiveTech(
   //   * 2023.2402.1+
   //   * 2024.2312.99+
   //   * 2025+
-  if (base::FeatureList::IsEnabled(kDisableUiaProviderWhenJawsIsRunning) &&
-      ui::AXPlatform::GetInstance().IsUiaProviderEnabled()) {
+  if (ui::AXPlatform::GetInstance().IsUiaProviderEnabled()) {
     for (const auto& info : at_infos) {
       if (info.tech == AccessibilityTarget::kJaws && info.version.has_value()) {
         if (!IsJawsCompatibleWithUIA(*info.version)) {
@@ -539,6 +686,25 @@ void BrowserAccessibilityStateImplWin::OnDiscoveredAssistiveTech(
     }
   }
 
+  // Determine whether the detected JAWS (if any) still relies on the synthetic
+  // tab selection event that is fired on window activation. If the version
+  // can't be determined, conservatively assume it does. See
+  // https://crbug.com/505781387.
+  bool jaws_needs_tab_selection_event = false;
+  for (const auto& info : at_infos) {
+    if (info.tech != AccessibilityTarget::kJaws) {
+      continue;
+    }
+    if (!info.version.has_value() ||
+        internal::DoesJawsVersionNeedTabSelectionEvent(
+            info.version->major, info.version->minor, info.version->build)) {
+      jaws_needs_tab_selection_event = true;
+      break;
+    }
+  }
+  ui::AXPlatform::GetInstance().SetJawsNeedsTabSelectionEvent(
+      jaws_needs_tab_selection_event);
+
   // Save the current assistive tech before toggling AXModes, so
   // that RefreshAssistiveTechIfNecessary() is a noop.
   OnAssistiveTechFound(most_important_assistive_tech);
@@ -549,7 +715,8 @@ void BrowserAccessibilityStateImplWin::OnDiscoveredAssistiveTech(
   if (ui::IsScreenReader(most_important_assistive_tech)) {
     if (!screen_reader_mode_) {
       screen_reader_mode_ = CreateScopedModeForProcess(
-          ui::kAXModeComplete | ui::AXMode::kScreenReader);
+          ui::kAXModeComplete | ui::AXMode::kScreenReader |
+          ui::AXMode::kFromPlatform);
     }
   } else {
     screen_reader_mode_.reset();

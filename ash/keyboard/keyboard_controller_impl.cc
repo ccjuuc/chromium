@@ -35,6 +35,7 @@
 #include "ui/aura/env.h"
 #include "ui/aura/window_delegate.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/gestures/gesture_recognizer.h"
 #include "ui/gfx/geometry/rect.h"
@@ -64,7 +65,10 @@ const char kSpellCheckEnabledKey[] = "spell_check_enabled";
 const char kVoiceInputEnabledKey[] = "voice_input_enabled";
 
 std::optional<display::Display> GetFirstTouchDisplay() {
-  for (const auto& display : display::Screen::Get()->GetAllDisplays()) {
+  // Use `active_only_display_list()` because this function could be called
+  // during display update transition. See crbug.com/494034448.
+  for (const auto& display :
+       Shell::Get()->display_manager()->active_only_display_list()) {
     if (display.touch_support() == display::Display::TouchSupport::AVAILABLE)
       return display;
   }
@@ -74,7 +78,7 @@ std::optional<display::Display> GetFirstTouchDisplay() {
 bool GetVirtualKeyboardFeatureValue(PrefService* prefs,
                                     const std::string& feature_path) {
   DCHECK(prefs);
-  const base::Value::Dict& features =
+  const base::DictValue& features =
       prefs->GetDict(prefs::kAccessibilityVirtualKeyboardFeatures);
 
   return features.FindBool(feature_path).value_or(false);
@@ -456,9 +460,12 @@ void KeyboardControllerImpl::TransferGestureEventToShelf(
       ash::Shelf::ForWindow(keyboard_ui_controller_->GetKeyboardWindow());
   if (shelf) {
     shelf->ProcessGestureEvent(e);
-    aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
-        keyboard_ui_controller_->GetGestureConsumer(), shelf->GetWindow(),
-        ui::TransferTouchesBehavior::kCancel);
+    auto* current_consumer = keyboard_ui_controller_->GetGestureConsumer();
+    if (current_consumer) {
+      aura::Env::GetInstance()->gesture_recognizer()->TransferEventsTo(
+          current_consumer, shelf->GetWindow(),
+          ui::TransferTouchesBehavior::kCancel);
+    }
     HideKeyboard(HideReason::kUser);
   }
 }

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include <stddef.h>
 #include <stdint.h>
 
@@ -14,12 +9,14 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "media/base/eme_constants.h"
 #include "media/base/media.h"
@@ -29,6 +26,7 @@
 #include "media/media_buildflags.h"
 #include "media/test/pipeline_integration_test_base.h"
 #include "media/test/test_media_source.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
 #include "third_party/googletest/src/googletest/src/gtest-internal-inl.h"
 
 namespace {
@@ -43,6 +41,9 @@ enum FuzzerVariant {
   WEBM_OPUS_VP9,
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   MP4_AV1,
+#endif
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+  MP4_IAMF_OPUS,
 #endif
   MP4_FLAC,
   MP4_OPUS,
@@ -79,6 +80,10 @@ std::string MseFuzzerVariantEnumToMimeTypeString(FuzzerVariant variant) {
     case MP4_AV1:
       return "video/mp4; codecs=\"av01.0.04M.08\"";
 #endif  // BUILDFLAG(ENABLE_AV1_DECODER)
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+    case MP4_IAMF_OPUS:
+      return "audio/mp4; codecs=\"iamf.001.001.Opus\"";
+#endif  // BUILDFLAG(ENABLE_IAMF_TOOLS)
     case MP4_FLAC:
       return "audio/mp4; codecs=\"flac\"";
     case MP4_OPUS:
@@ -236,6 +241,11 @@ struct Environment {
   Environment() {
     base::CommandLine::Init(0, nullptr);
 
+    // Initialize the feature list to defaults to avoid crashes when feature
+    // checks are performed. Fuzzers do not go through the normal browser
+    // initialization that typically sets this up.
+    feature_list.Init();
+
     // |test| instances uses TaskEnvironment, which needs TestTimeouts.
     TestTimeouts::Initialize();
 
@@ -245,17 +255,18 @@ struct Environment {
     // logging::LOGGING_VERBOSE here to assist local debugging.
     logging::SetMinLogLevel(logging::LOGGING_FATAL);
   }
-};
 
-Environment* env = new Environment();
-
-// Entry point for LibFuzzer.
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Media pipeline starts new threads, which needs AtExitManager.
   base::AtExitManager at_exit;
 
+  base::test::ScopedFeatureList feature_list;
+};
+
+
+// Entry point for LibFuzzer.
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(const base::span<const uint8_t> bytes) {
+  static const base::NoDestructor<Environment> env;
   FuzzerVariant variant = PIPELINE_FUZZER_VARIANT;
-  base::span<const uint8_t> bytes(data, size);
 
   // These tests use GoogleTest assertions without using the GoogleTest
   // framework. While this is the case, tell GoogleTest's stack trace getter

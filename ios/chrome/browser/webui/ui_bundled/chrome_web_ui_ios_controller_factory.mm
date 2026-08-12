@@ -16,18 +16,23 @@
 #import "components/optimization_guide/optimization_guide_buildflags.h"
 #import "components/optimization_guide/optimization_guide_internals/webui/url_constants.h"
 #import "components/prefs/pref_service.h"
+#import "components/private_ai/private_ai_internals/webui/url_constants.h"
+#import "components/safe_browsing/ios/browser/web_ui/safe_browsing_ui.h"
 #import "components/version_info/channel.h"
 #import "components/webui/chrome_urls/pref_names.h"
 #import "components/webui/regional_capabilities_internals/constants.h"
 #import "ios/chrome/browser/commerce/model/shopping_service_factory.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/webui/ui_bundled/about/about_ui.h"
+#import "ios/chrome/browser/webui/ui_bundled/actor_internals/actor_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/autofill_and_password_manager_internals/autofill_internals_ui_ios.h"
 #import "ios/chrome/browser/webui/ui_bundled/autofill_and_password_manager_internals/password_manager_internals_ui_ios.h"
 #import "ios/chrome/browser/webui/ui_bundled/chrome_urls/chrome_urls_ui.h"
+#import "ios/chrome/browser/webui/ui_bundled/connectors_internals/connectors_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/crashes_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/data_sharing_internals/data_sharing_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/download_internals_ui.h"
@@ -38,6 +43,7 @@
 #import "ios/chrome/browser/webui/ui_bundled/interstitials/interstitial_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/local_state/local_state_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/management/management_ui.h"
+#import "ios/chrome/browser/webui/ui_bundled/metrics_internals/metrics_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/net_export/net_export_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/ntp_tiles_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/omaha_ui.h"
@@ -45,10 +51,12 @@
 #import "ios/chrome/browser/webui/ui_bundled/optimization_guide_internals/optimization_guide_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/policy/policy_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/prefs_internals_ui.h"
+#import "ios/chrome/browser/webui/ui_bundled/private_ai_internals/private_ai_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/profile_internals/profile_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/regional_capabilities_internals/regional_capabilities_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/signin_internals_ui_ios.h"
 #import "ios/chrome/browser/webui/ui_bundled/terms_ui.h"
+#import "ios/chrome/browser/webui/ui_bundled/tracing/tracing_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/translate_internals/translate_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/ukm_internals_ui.h"
 #import "ios/chrome/browser/webui/ui_bundled/user_actions_ui.h"
@@ -118,6 +126,9 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
   if (url_host == kChromeUIChromeURLsHost) {
     return &NewWebUIIOS<chrome_urls::ChromeUrlsUI>;
   }
+  if (url_host == kChromeUIConnectorsInternalsHost) {
+    return &NewWebUIIOS<ConnectorsInternalsUI>;
+  }
   if (url_host == kChromeUICrashesHost) {
     return &NewWebUIIOS<CrashesUI>;
   }
@@ -154,6 +165,9 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
   if (url_host == kChromeUIManagementHost) {
     return &NewWebUIIOS<ManagementUI>;
   }
+  if (url_host == kChromeUIMetricsInternalsHost) {
+    return &NewWebUIIOS<MetricsInternalsUI>;
+  }
   if (url_host == kChromeUINTPTilesInternalsHost) {
     return &NewWebUIIOS<NTPTilesInternalsUI>;
   }
@@ -177,6 +191,9 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
                ? &NewWebUIIOS<ProfileInternalsUI>
                : &NewWebUIIOS<InternalDebugPagesDisabledUI>;
   }
+  if (url_host == kChromeUISafeBrowsingHost) {
+    return &NewWebUIIOS<safe_browsing::SafeBrowsingUI>;
+  }
   if (url_host == kChromeUISignInInternalsHost) {
     return &NewWebUIIOS<SignInInternalsUIIOS>;
   }
@@ -185,6 +202,9 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
   }
   if (url_host == kChromeUITermsHost) {
     return &NewWebUIIOS<TermsUI>;
+  }
+  if (url_host == kChromeUITracingHost) {
+    return &NewWebUIIOS<TracingUI>;
   }
   if (url_host == kChromeUITranslateInternalsHost) {
     return &NewWebUIIOS<TranslateInternalsUI>;
@@ -201,6 +221,11 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
   }
   if (url_host == kChromeUIVersionHost) {
     return &NewWebUIIOS<VersionUI>;
+  }
+  if (url_host == private_ai_internals::kChromeUIPrivateAiInternalsHost) {
+    return InternalDebugPagesEnabled()
+               ? &NewWebUIIOS<PrivateAiInternalsUI>
+               : &NewWebUIIOS<InternalDebugPagesDisabledUI>;
   }
   if (url_host ==
       optimization_guide_internals::kChromeUIOptimizationGuideInternalsHost) {
@@ -220,6 +245,15 @@ WebUIIOSFactoryFunction GetWebUIIOSFactoryFunction(const GURL& url) {
     return &NewWebUIIOS<OnDeviceLlmInternalsUI>;
   }
 #endif  // BUILDFLAG(BUILD_WITH_INTERNAL_OPTIMIZATION_GUIDE)
+
+  if (url_host == kChromeUIActorInternalsHost) {
+    if (!IsActorEnabled()) {
+      return nullptr;
+    }
+    return InternalDebugPagesEnabled()
+               ? &NewWebUIIOS<ActorInternalsUI>
+               : &NewWebUIIOS<InternalDebugPagesDisabledUI>;
+  }
 
   return nullptr;
 }

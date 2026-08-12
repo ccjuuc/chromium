@@ -42,7 +42,8 @@ import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.UserDataHost;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
 import org.chromium.cc.input.BrowserControlsState;
@@ -54,6 +55,7 @@ import org.chromium.chrome.browser.tab.TabBrowserControlsConstraintsHelper;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 import java.util.HashMap;
 
@@ -63,7 +65,8 @@ import java.util.HashMap;
  */
 @Features.EnableFeatures({
     ChromeFeatureList.DISPLAY_EDGE_TO_EDGE_FULLSCREEN,
-    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID
+    ChromeFeatureList.ENABLE_FULLSCREEN_TO_ANY_SCREEN_ANDROID,
+    UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION
 })
 @Features.DisableFeatures({ChromeFeatureList.ENABLE_EXCLUSIVE_ACCESS_MANAGER})
 @RunWith(BaseRobolectricTestRunner.class)
@@ -82,7 +85,7 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
     private final ActivityTabProvider mActivityTabProvider = new ActivityTabProvider();
     private MultiWindowModeStateDispatcherImpl mMultiWindowModeStateDispatcher;
     private FullscreenHtmlApiHandlerCompat mFullscreenHtmlApiHandlerCompat;
-    private ObservableSupplierImpl<Boolean> mAreControlsHidden;
+    private SettableNonNullObservableSupplier<Boolean> mAreControlsHidden;
     private UserDataHost mHost;
 
     @SuppressLint("NewApi")
@@ -96,6 +99,9 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
                     .setInsets(WindowInsetsCompat.Type.navigationBars(), NAVIGATION_BAR_INSETS)
                     .setInsets(WindowInsetsCompat.Type.statusBars(), STATUS_BAR_INSETS)
                     .setInsets(WindowInsetsCompat.Type.systemBars(), SYSTEM_BAR_INSETS)
+                    .setVisible(WindowInsetsCompat.Type.navigationBars(), true)
+                    .setVisible(WindowInsetsCompat.Type.statusBars(), true)
+                    .setVisible(WindowInsetsCompat.Type.systemBars(), true)
                     .build();
 
     @Implements(Activity.class)
@@ -141,8 +147,11 @@ public class FullscreenHtmlApiHandlerCompatUnitTest {
 
         mHost = new UserDataHost();
         doReturn(mHost).when(mTab).getUserDataHost();
+        doReturn(ObservableSuppliers.createMonotonic())
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
 
-        mAreControlsHidden = new ObservableSupplierImpl<>();
+        mAreControlsHidden = ObservableSuppliers.createNonNull(false);
         mMultiWindowModeStateDispatcher = new MultiWindowModeStateDispatcherImpl(mActivity);
         mFullscreenHtmlApiHandlerCompat =
                 new FullscreenHtmlApiHandlerCompat(

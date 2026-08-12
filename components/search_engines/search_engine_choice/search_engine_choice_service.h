@@ -18,7 +18,7 @@
 namespace policy {
 class ManagementService;
 class PolicyService;
-}
+}  // namespace policy
 namespace signin {
 class IdentityManager;
 }
@@ -28,10 +28,15 @@ class VariationsService;
 namespace regional_capabilities {
 class RegionalCapabilitiesService;
 struct ChoiceScreenEligibilityConfig;
+enum class SearchEngineChoiceScreenConditions;
 }  // namespace regional_capabilities
 namespace TemplateURLPrepopulateData {
 class Resolver;
 }
+
+namespace metrics {
+class ProfileMetricsService;
+}  // namespace metrics
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -48,7 +53,6 @@ namespace search_engines {
 class ChoiceScreenData;
 class SearchEngineChoiceService;
 enum class ChoiceMadeLocation;
-enum class SearchEngineChoiceScreenConditions;
 enum class SearchEngineChoiceScreenEvents;
 enum class SearchEngineChoiceWipeReason;
 struct ChoiceCompletionMetadata;
@@ -109,7 +113,8 @@ class SearchEngineChoiceService : public KeyedService {
       regional_capabilities::RegionalCapabilitiesService& regional_capabilities,
       TemplateURLPrepopulateData::Resolver& prepopulate_data_resolver,
       signin::IdentityManager& identity_manager,
-      policy::ManagementService& platform_management_service);
+      policy::ManagementService& platform_management_service,
+      metrics::ProfileMetricsService& profile_metrics_service);
   ~SearchEngineChoiceService() override;
 
   // Runs the initialisation step for this service, checking consistency in the
@@ -117,32 +122,43 @@ class SearchEngineChoiceService : public KeyedService {
   // changes.
   void Init();
 
+  // Additional call context for evaluating dynamic choice screen conditions.
+  struct DynamicConditionsCheckContext {
+    // Whether an unknown or invalid current location (variations latest
+    // country) should cause the evaluation to emit an ineligible
+    // condition, for cases where location filtering is enabled.
+    bool allow_unknown_current_location;
+  };
+
   // Returns the choice screen eligibility condition most relevant for the
   // profile associated with `profile_prefs` and `template_url_service`. Only
   // checks dynamic conditions, that can change from one call to the other
   // during a profile's lifetime. Should be checked right before showing a
   // choice screen.
-  SearchEngineChoiceScreenConditions GetDynamicChoiceScreenConditions(
-      const TemplateURLService& template_url_service) const;
+  regional_capabilities::SearchEngineChoiceScreenConditions
+  GetDynamicChoiceScreenConditions(
+      const TemplateURLService& template_url_service,
+      DynamicConditionsCheckContext context) const;
 
   // Returns the choice screen eligibility condition most relevant for the
   // profile described by `profile_properties`. Only checks static conditions,
   // such that if a non-eligible condition is returned, it would take at least a
   // restart for the state to change. So this state can be checked and cached
   // ahead of showing a choice screen.
-  SearchEngineChoiceScreenConditions GetStaticChoiceScreenConditions(
+  regional_capabilities::SearchEngineChoiceScreenConditions
+  GetStaticChoiceScreenConditions(
       const policy::PolicyService& policy_service,
       const TemplateURLService& template_url_service) const;
 
   // Records the specified choice screen condition at profile initialization.
   void RecordProfileLoadEligibility(
-      SearchEngineChoiceScreenConditions condition);
+      regional_capabilities::SearchEngineChoiceScreenConditions condition);
 
 #if BUILDFLAG(IS_IOS)
   // Records only the legacy static eligibility histograms. Note that on iOS,
   // the legacy histograms are not recorded by `RecordProfileLoadEligibility()`
   void RecordLegacyStaticEligibility(
-      SearchEngineChoiceScreenConditions condition);
+      regional_capabilities::SearchEngineChoiceScreenConditions condition);
 
   // Indicates whether the choice screen can be shown on a surface with a
   // particular "first run experience" status.
@@ -151,7 +167,7 @@ class SearchEngineChoiceService : public KeyedService {
 
   // Records the specified choice screen condition for relevant navigations.
   void RecordTriggeringEligibility(
-      SearchEngineChoiceScreenConditions condition);
+      regional_capabilities::SearchEngineChoiceScreenConditions condition);
 
   // Records the specified choice screen event.
   void RecordChoiceScreenEvent(SearchEngineChoiceScreenEvents event);
@@ -223,8 +239,11 @@ class SearchEngineChoiceService : public KeyedService {
     // The device is not eligible for the choice screen based on its management
     // status.
     kManaged = 11,
+    // The current default search engine is not in the list of engines to be
+    // offered on the choice screen, so it cannot be highlighted.
+    kCurrentCannotBeHighlighted = 12,
 
-    kMaxValue = kManaged
+    kMaxValue = kCurrentCannotBeHighlighted
   };
   // LINT.ThenChange(/tools/metrics/histograms/metadata/search/enums.xml:SearchEngineChoiceStatus)
 
@@ -249,7 +268,7 @@ class SearchEngineChoiceService : public KeyedService {
 
   void RemoveObserver(Observer* obs) { observers_.RemoveObserver(obs); }
 
-  std::optional<SearchEngineChoiceScreenConditions>
+  std::optional<regional_capabilities::SearchEngineChoiceScreenConditions>
   recorded_profile_load_choice_screen_eligibility() const {
     return recorded_profile_load_choice_screen_eligibility_;
   }
@@ -298,9 +317,10 @@ class SearchEngineChoiceService : public KeyedService {
       prepopulate_data_resolver_;
   const raw_ref<signin::IdentityManager> identity_manager_;
   const raw_ref<policy::ManagementService> platform_management_service_;
+  const raw_ref<metrics::ProfileMetricsService> profile_metrics_service_;
   base::ObserverList<Observer> observers_;
 
-  std::optional<SearchEngineChoiceScreenConditions>
+  std::optional<regional_capabilities::SearchEngineChoiceScreenConditions>
       recorded_profile_load_choice_screen_eligibility_;
 
   // Used to track whether `MaybeRecordChoiceScreenDisplayState()` has already

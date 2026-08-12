@@ -64,12 +64,15 @@ import org.chromium.base.Callback;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.DiscardableReferencePool;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.back_press.BackPressHelper;
@@ -99,6 +102,7 @@ import org.chromium.components.offline_items_collection.RenameResult;
 import org.chromium.components.url_formatter.SchemeDisplay;
 import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.components.url_formatter.UrlFormatterJni;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.test.util.BlankUiTestActivity;
@@ -135,7 +139,7 @@ public class DownloadActivityV2Test {
     public OverrideContextWrapperTestRule mOverrideContextWrapperTestRule =
             new OverrideContextWrapperTestRule();
 
-    private ObservableSupplierImpl<EdgeToEdgeController> mEdgeToEdgeSupplier;
+    private SettableMonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier;
 
     private ModalDialogManager.Presenter mAppModalPresenter;
 
@@ -224,7 +228,7 @@ public class DownloadActivityV2Test {
             boolean showDangerousItems, boolean inlineSearchBar, boolean autoFocusSearchBox) {
         // Initialize this here to avoid "wrong thread" assertion.
         ThreadUtils.runOnUiThreadBlocking(
-                () -> mEdgeToEdgeSupplier = new ObservableSupplierImpl<>());
+                () -> mEdgeToEdgeSupplier = ObservableSuppliers.createMonotonic());
 
         DownloadManagerUiConfig config =
                 DownloadManagerUiConfigHelper.fromFlags(sActivity)
@@ -254,8 +258,8 @@ public class DownloadActivityV2Test {
                             final String url, int faviconSizePx, Callback<Bitmap> callback) {}
                 };
         Callback<Context> settingsNavigation = context -> {};
-        ObservableSupplierImpl<Boolean> isPrefetchEnabledSupplier = new ObservableSupplierImpl<>();
-        isPrefetchEnabledSupplier.set(true);
+        NonNullObservableSupplier<Boolean> isPrefetchEnabledSupplier =
+                ObservableSuppliers.alwaysTrue();
 
         mDownloadCoordinator =
                 new DownloadManagerCoordinatorImpl(
@@ -269,6 +273,7 @@ public class DownloadActivityV2Test {
                         mTracker,
                         faviconProvider,
                         mStubbedOfflineContentProvider,
+                        /* openWithHandler= */ null,
                         mDiscardableReferencePool);
         sActivity.setContentView(mDownloadCoordinator.getView());
         BackPressHelper.create(
@@ -334,8 +339,8 @@ public class DownloadActivityV2Test {
                 });
         checkItemsDisplayed(true, true, true, true);
 
-        Matcher filesTabMatcher = withText(equalToIgnoringCase("My Files"));
-        Matcher prefetchTabMatcher = withText(equalToIgnoringCase("Explore Offline"));
+        Matcher<View> filesTabMatcher = withText(equalToIgnoringCase("My Files"));
+        Matcher<View> prefetchTabMatcher = withText(equalToIgnoringCase("Explore Offline"));
         onView(filesTabMatcher).check(matches(isDisplayed()));
         onView(prefetchTabMatcher).check(matches(isDisplayed()));
 
@@ -359,15 +364,15 @@ public class DownloadActivityV2Test {
         // Two PAGES and two OTHER files. Should show All, Pages, and Other chips.
         checkItemsDisplayed(true, true, true, true);
 
-        Matcher allChipMatcher =
+        Matcher<View> allChipMatcher =
                 allOf(
                         withText(equalToIgnoringCase("All")),
                         isDescendantOfA(withId(R.id.content_container)));
-        Matcher pagesChipMatcher =
+        Matcher<View> pagesChipMatcher =
                 allOf(
                         withText(equalToIgnoringCase("Pages")),
                         isDescendantOfA(withId(R.id.content_container)));
-        Matcher otherChipMatcher =
+        Matcher<View> otherChipMatcher =
                 allOf(
                         withText(equalToIgnoringCase("Other")),
                         isDescendantOfA(withId(R.id.content_container)));
@@ -421,7 +426,7 @@ public class DownloadActivityV2Test {
                     setUpUi();
                 });
 
-        String storageHeaderText = "Using 1.10 KB of";
+        String storageHeaderText = "Using 1.12 KB of";
         onView(withText(containsString(storageHeaderText))).check(matches(isDisplayed()));
 
         // Add an item. The new item should be visible and the storage text should be updated.
@@ -439,13 +444,13 @@ public class DownloadActivityV2Test {
 
         ThreadUtils.runOnUiThreadBlocking(() -> mStubbedOfflineContentProvider.addItem(item5));
         onView(withText("page 5")).check(matches(isDisplayed()));
-        onView(withText(containsString("Using 2.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 2.15 KB of"))).check(matches(isDisplayed()));
 
         // Delete an item. The item should be gone and the storage text should be updated.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mStubbedOfflineContentProvider.removeItem(item5.id));
         onView(withText("page 5")).check(doesNotExist());
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
     }
 
     @Test
@@ -459,14 +464,14 @@ public class DownloadActivityV2Test {
                             /* autoFocusSearchBox= */ false);
                 });
 
-        String storageHeaderText = "Using 1.10 KB of";
+        String storageHeaderText = "Using 1.12 KB of";
         onView(withText(containsString(storageHeaderText))).check(matches(isDisplayed()));
 
         // Add a dangerous item. The new item should be visible and the storage text should not
         // include the size of the dangerous item.
         ContentId dangerousItemId = setUpDangerousItem();
         onView(withText("dangerous")).check(matches(isDisplayed()));
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
         onView(withText(containsString("Dangerous download blocked")))
                 .check(matches(isDisplayed()));
 
@@ -484,7 +489,7 @@ public class DownloadActivityV2Test {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mStubbedOfflineContentProvider.removeItem(dangerousItemId));
         onView(withText("dangerous")).check(doesNotExist());
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
         onView(withText(containsString("Dangerous download blocked"))).check(doesNotExist());
     }
 
@@ -499,27 +504,28 @@ public class DownloadActivityV2Test {
                             /* autoFocusSearchBox= */ false);
                 });
 
-        String storageHeaderText = "Using 1.10 KB of";
+        String storageHeaderText = "Using 1.12 KB of";
         onView(withText(containsString(storageHeaderText))).check(matches(isDisplayed()));
 
         // Attempt to add a dangerous item. The new item should not be visible because the config
         // does not specify showDangerousItems.
         ContentId dangerousItemId = setUpDangerousItem();
         onView(withText("dangerous")).check(doesNotExist());
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
         onView(withText(containsString("Dangerous download blocked"))).check(doesNotExist());
 
         // Delete the item. Nothing should change because it was never displayed.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mStubbedOfflineContentProvider.removeItem(dangerousItemId));
         onView(withText("dangerous")).check(doesNotExist());
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
         onView(withText(containsString("Dangerous download blocked"))).check(doesNotExist());
     }
 
     @Test
     @MediumTest
     @DisabledTest(message = "crbug.com/427410747")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/479879586
     public void testDeleteDangerousUsingMenu() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -549,6 +555,7 @@ public class DownloadActivityV2Test {
     @Test
     @MediumTest
     @DisabledTest(message = "crbug.com/427410747")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/479879586
     public void testDeleteDangerousUsingSelection() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -591,13 +598,13 @@ public class DownloadActivityV2Test {
                             /* autoFocusSearchBox= */ false);
                 });
 
-        String storageHeaderText = "Using 1.10 KB of";
+        String storageHeaderText = "Using 1.12 KB of";
         onView(withText(containsString(storageHeaderText))).check(matches(isDisplayed()));
 
         // Add a dangerous item.
         setUpDangerousItem();
         onView(withText("dangerous")).check(matches(isDisplayed()));
-        onView(withText(containsString("Using 1.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 1.12 KB of"))).check(matches(isDisplayed()));
         // Open bypass dialog by clicking on the item.
         onView(withText(containsString("Dangerous download blocked")))
                 .check(matches(isDisplayed()))
@@ -619,7 +626,7 @@ public class DownloadActivityV2Test {
                     onView(withText(containsString("Dangerous download blocked")))
                             .check(doesNotExist());
                 });
-        onView(withText(containsString("Using 2.10 KB of"))).check(matches(isDisplayed()));
+        onView(withText(containsString("Using 2.15 KB of"))).check(matches(isDisplayed()));
     }
 
     @Test
@@ -653,6 +660,7 @@ public class DownloadActivityV2Test {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/479879586
     public void testShowListItemMenuWithRename() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -757,6 +765,7 @@ public class DownloadActivityV2Test {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/479879586
     public void testDeleteItem() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -796,7 +805,7 @@ public class DownloadActivityV2Test {
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1338140")
+    @DisabledTest(message = "https://crbug.com/40848881")
     public void testRenameItem() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

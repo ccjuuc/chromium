@@ -58,6 +58,19 @@ class ToolbarActionsModel
 
   ~ToolbarActionsModel() override;
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class ExtensionPinReason {
+    kPinnedByDefault = 0,
+    kNotPinnedToggleOff = 1,
+    kNotPinnedFeatureDisabled = 2,
+    kOverriddenByPolicy = 3,
+    kNotPinnedNoAction = 4,
+    kNotPinnedEnterpriseExtension = 5,
+    kNotPinnedInstalledFromSync = 6,
+    kMaxValue = kNotPinnedInstalledFromSync,
+  };
+
   // A class which is informed of changes to the model; represents the view of
   // MVC. Also used for signaling view changes such as showing extension popups.
   // TODO(devlin): Should this really be an observer? It acts more like a
@@ -85,6 +98,9 @@ class ToolbarActionsModel
 
     // Called whenever the pinned actions change.
     virtual void OnToolbarPinnedActionsChanged() = 0;
+
+    // Called when the ToolbarActionsModel is shutting down.
+    virtual void OnToolbarActionsModelShutdown() {}
 
    protected:
     virtual ~Observer() = default;
@@ -134,6 +150,9 @@ class ToolbarActionsModel
   const std::vector<ActionId>& pinned_action_ids() const {
     return pinned_action_ids_;
   }
+
+  // Re-initializes the action list and re-emits startup histograms for testing.
+  void ReinitializeForTesting();
 
  private:
   // Callback when actions are ready.
@@ -198,16 +217,22 @@ class ToolbarActionsModel
   // enabled extensions.
   const extensions::Extension* GetExtensionById(const ActionId& id) const;
 
-  // Updates |pinned_action_ids_| per GetFilteredPinnedActionIds() and notifies
-  // observers if they have changed.
-  void UpdatePinnedActionIds();
-
   // Gets a list of pinned action ids that only contains that only contains IDs
   // with a corresponding action in the model.
   std::vector<ActionId> GetFilteredPinnedActionIds() const;
 
   // Notifies `observers_` that `action_id` has been updated.
   void NotifyToolbarActionUpdated(const ActionId& action_id);
+
+  // Updates `pinned_action_ids_` per `GetFilteredPinnedActionIds()` and
+  // notifies observers if they have changed.
+  void UpdateAndNotifyPinnedActionIdsChanged();
+
+  // Updates `pinned_action_ids_` per `GetFilteredPinnedActionIds()`.
+  void UpdatePinnedActionIds();
+
+  // Notify the observers that the pinned actions have changed.
+  void NotifyPinnedActionIdsChanged();
 
   // Our observers.
   base::ObserverList<Observer>::Unchecked observers_;

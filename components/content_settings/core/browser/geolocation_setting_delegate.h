@@ -33,9 +33,15 @@ class GeolocationSettingDelegate
   PermissionSetting ApplyPermissionEmbargo(
       const PermissionSetting& setting) const override;
 
+  PermissionSetting RemoveBlockedPermissionsForEphemeralGrant(
+      const PermissionSetting& setting,
+      const PermissionSetting& new_ephemeral_setting) const override;
+
   base::Value ToValue(const PermissionSetting& setting) const override;
   std::optional<PermissionSetting> FromValue(
       const base::Value& value) const override;
+
+  PermissionSetting ToPermissionSetting(ContentSetting setting) const override;
 };
 
 }  // namespace content_settings

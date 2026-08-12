@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
@@ -18,10 +19,11 @@
 #include "base/task/task_traits.h"
 #include "base/types/expected.h"
 #include "components/unexportable_keys/background_long_task_scheduler.h"
+#include "components/unexportable_keys/background_task_origin.h"
 #include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/background_task_type.h"
 #include "components/unexportable_keys/features.h"
-#include "components/unexportable_keys/ref_counted_unexportable_signing_key.h"
+#include "components/unexportable_keys/ref_counted_unexportable_key.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_tasks.h"
@@ -37,10 +39,28 @@ constexpr std::string_view kBaseTaskResultHistogramName =
 constexpr std::string_view kBaseTaskRetriesHistogramName =
     "Crypto.UnexportableKeys.BackgroundTaskRetries";
 constexpr size_t kSignTaskMaxRetries = 3;
+constexpr size_t kCertifyTaskMaxRetries = 3;
+
+std::string_view GetBackgroundTaskOriginSuffixForHistograms(
+    BackgroundTaskOrigin origin) {
+  // LINT.IfChange(BackgroundTaskOriginSuffixForHistograms)
+  switch (origin) {
+    case BackgroundTaskOrigin::kRefreshTokenBinding:
+      return ".RefreshTokenBinding";
+    case BackgroundTaskOrigin::kDeviceBoundSessionCredentials:
+      return ".DeviceBoundSessions";
+    case BackgroundTaskOrigin::kDeviceBoundSessionCredentialsPrototype:
+      return ".BoundSessionCredentials";
+    case BackgroundTaskOrigin::kOrphanedKeyGarbageCollection:
+      return ".OrphanedKeyGarbageCollection";
+  }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/net/histograms.xml:UnexportableKeysBackgroundTaskOrigin)
+}
 
 template <class CallbackReturnType>
 ServiceErrorOr<CallbackReturnType> ReportResultMetrics(
     BackgroundTaskType task_type,
+    BackgroundTaskOrigin task_origin,
     ServiceErrorOr<CallbackReturnType> result,
     size_t retry_count) {
   ServiceError error_for_metrics =
@@ -52,6 +72,11 @@ ServiceErrorOr<CallbackReturnType> ReportResultMetrics(
 
   base::UmaHistogramEnumeration(
       base::StrCat({kBaseTaskResultHistogramName, task_type_suffix}),
+      error_for_metrics);
+  base::UmaHistogramEnumeration(
+      base::StrCat({kBaseTaskResultHistogramName,
+                    GetBackgroundTaskOriginSuffixForHistograms(task_origin),
+                    task_type_suffix}),
       error_for_metrics);
   base::UmaHistogramExactLinear(
       base::StrCat(
@@ -67,8 +92,10 @@ template <class CallbackReturnType>
 base::OnceCallback<void(ServiceErrorOr<CallbackReturnType>, size_t)>
 WrapCallbackWithMetrics(
     BackgroundTaskType task_type,
+    BackgroundTaskOrigin task_origin,
     base::OnceCallback<void(ServiceErrorOr<CallbackReturnType>)> callback) {
-  return base::BindOnce(&ReportResultMetrics<CallbackReturnType>, task_type)
+  return base::BindOnce(&ReportResultMetrics<CallbackReturnType>, task_type,
+                        task_origin)
       .Then(std::move(callback));
 }
 
@@ -90,16 +117,16 @@ UnexportableKeyTaskManager::GetUnexportableKeyProvider(
   return crypto::GetUnexportableKeyProvider(std::move(config));
 }
 
-void UnexportableKeyTaskManager::
-    GetAllSigningKeysForGarbageCollectionSlowlyAsync(
-        crypto::UnexportableKeyProvider::Config config,
-        BackgroundTaskPriority priority,
-        base::OnceCallback<
-            void(ServiceErrorOr<
-                 std::vector<scoped_refptr<RefCountedUnexportableSigningKey>>>)>
-            callback) {
+void UnexportableKeyTaskManager::GetAllKeysForGarbageCollectionSlowlyAsync(
+    BackgroundTaskOrigin origin,
+    crypto::UnexportableKeyProvider::Config config,
+    BackgroundTaskPriority priority,
+    base::OnceCallback<
+        void(ServiceErrorOr<
+             std::vector<scoped_refptr<RefCountedUnexportableSigningKey>>>)>
+        callback) {
   auto callback_wrapper = WrapCallbackWithMetrics(
-      BackgroundTaskType::kGetAllKeys, std::move(callback));
+      BackgroundTaskType::kGetAllKeys, origin, std::move(callback));
 
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
       GetUnexportableKeyProvider(std::move(config));
@@ -124,6 +151,7 @@ void UnexportableKeyTaskManager::
 }
 
 void UnexportableKeyTaskManager::GenerateSigningKeySlowlyAsync(
+    BackgroundTaskOrigin origin,
     crypto::UnexportableKeyProvider::Config config,
     base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
         acceptable_algorithms,
@@ -132,7 +160,7 @@ void UnexportableKeyTaskManager::GenerateSigningKeySlowlyAsync(
         void(ServiceErrorOr<scoped_refptr<RefCountedUnexportableSigningKey>>)>
         callback) {
   auto callback_wrapper = WrapCallbackWithMetrics(
-      BackgroundTaskType::kGenerateKey, std::move(callback));
+      BackgroundTaskType::kGenerateKey, origin, std::move(callback));
 
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
       GetUnexportableKeyProvider(std::move(config));
@@ -143,13 +171,6 @@ void UnexportableKeyTaskManager::GenerateSigningKeySlowlyAsync(
     return;
   }
 
-  if (!key_provider->SelectAlgorithm(acceptable_algorithms).has_value()) {
-    std::move(callback_wrapper)
-        .Run(base::unexpected(ServiceError::kAlgorithmNotSupported),
-             /*retry_count=*/0);
-    return;
-  }
-
   auto task = std::make_unique<GenerateKeyTask>(std::move(key_provider),
                                                 acceptable_algorithms, priority,
                                                 std::move(callback_wrapper));
@@ -157,6 +178,7 @@ void UnexportableKeyTaskManager::GenerateSigningKeySlowlyAsync(
 }
 
 void UnexportableKeyTaskManager::FromWrappedSigningKeySlowlyAsync(
+    BackgroundTaskOrigin origin,
     crypto::UnexportableKeyProvider::Config config,
     base::span<const uint8_t> wrapped_key,
     BackgroundTaskPriority priority,
@@ -164,7 +186,7 @@ void UnexportableKeyTaskManager::FromWrappedSigningKeySlowlyAsync(
         void(ServiceErrorOr<scoped_refptr<RefCountedUnexportableSigningKey>>)>
         callback) {
   auto callback_wrapper = WrapCallbackWithMetrics(
-      BackgroundTaskType::kFromWrappedKey, std::move(callback));
+      BackgroundTaskType::kFromWrappedKey, origin, std::move(callback));
 
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
       GetUnexportableKeyProvider(std::move(config));
@@ -182,12 +204,13 @@ void UnexportableKeyTaskManager::FromWrappedSigningKeySlowlyAsync(
 }
 
 void UnexportableKeyTaskManager::SignSlowlyAsync(
+    BackgroundTaskOrigin origin,
     scoped_refptr<RefCountedUnexportableSigningKey> signing_key,
     base::span<const uint8_t> data,
     BackgroundTaskPriority priority,
     base::OnceCallback<void(ServiceErrorOr<std::vector<uint8_t>>)> callback) {
-  auto callback_wrapper =
-      WrapCallbackWithMetrics(BackgroundTaskType::kSign, std::move(callback));
+  auto callback_wrapper = WrapCallbackWithMetrics(BackgroundTaskType::kSign,
+                                                  origin, std::move(callback));
 
   // TODO(alexilin): convert this to a CHECK().
   if (!signing_key) {
@@ -204,13 +227,14 @@ void UnexportableKeyTaskManager::SignSlowlyAsync(
   task_scheduler_.PostTask(std::move(task));
 }
 
-void UnexportableKeyTaskManager::DeleteSigningKeySlowlyAsync(
+void UnexportableKeyTaskManager::DeleteKeysSlowlyAsync(
+    BackgroundTaskOrigin origin,
     crypto::UnexportableKeyProvider::Config config,
-    std::vector<uint8_t> wrapped_key,
+    std::vector<scoped_refptr<RefCountedUnexportableSigningKey>> keys,
     BackgroundTaskPriority priority,
-    base::OnceCallback<void(ServiceErrorOr<void>)> callback) {
+    base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) {
   auto callback_wrapper = WrapCallbackWithMetrics(
-      BackgroundTaskType::kDeleteKey, std::move(callback));
+      BackgroundTaskType::kDeleteKeys, origin, std::move(callback));
 
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
       GetUnexportableKeyProvider(std::move(config));
@@ -228,18 +252,19 @@ void UnexportableKeyTaskManager::DeleteSigningKeySlowlyAsync(
     return;
   }
 
-  auto task = std::make_unique<DeleteKeyTask>(std::move(key_provider),
-                                              std::move(wrapped_key), priority,
-                                              std::move(callback_wrapper));
+  auto task =
+      std::make_unique<DeleteKeysTask>(std::move(key_provider), std::move(keys),
+                                       priority, std::move(callback_wrapper));
   task_scheduler_.PostTask(std::move(task));
 }
 
-void UnexportableKeyTaskManager::DeleteAllSigningKeysSlowlyAsync(
+void UnexportableKeyTaskManager::DeleteAllKeysSlowlyAsync(
+    BackgroundTaskOrigin origin,
     crypto::UnexportableKeyProvider::Config config,
     BackgroundTaskPriority priority,
     base::OnceCallback<void(ServiceErrorOr<size_t>)> callback) {
   auto callback_wrapper = WrapCallbackWithMetrics(
-      BackgroundTaskType::kDeleteAllKeys, std::move(callback));
+      BackgroundTaskType::kDeleteAllKeys, origin, std::move(callback));
 
   std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
       GetUnexportableKeyProvider(std::move(config));
@@ -259,6 +284,83 @@ void UnexportableKeyTaskManager::DeleteAllSigningKeysSlowlyAsync(
 
   auto task = std::make_unique<DeleteAllKeysTask>(
       std::move(key_provider), priority, std::move(callback_wrapper));
+  task_scheduler_.PostTask(std::move(task));
+}
+
+void UnexportableKeyTaskManager::GenerateAttestationKeySlowlyAsync(
+    BackgroundTaskOrigin origin,
+    crypto::UnexportableKeyProvider::Config config,
+    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
+        acceptable_algorithms,
+    BackgroundTaskPriority priority,
+    base::OnceCallback<void(
+        ServiceErrorOr<scoped_refptr<RefCountedUnexportableAttestationKey>>)>
+        callback) {
+  auto callback_wrapper = WrapCallbackWithMetrics(
+      BackgroundTaskType::kGenerateAttestationKey, origin, std::move(callback));
+
+  std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
+      GetUnexportableKeyProvider(std::move(config));
+
+  if (!key_provider) {
+    std::move(callback_wrapper)
+        .Run(base::unexpected(ServiceError::kNoKeyProvider), /*retry_count=*/0);
+    return;
+  }
+
+  auto task = std::make_unique<GenerateAttestationKeyTask>(
+      std::move(key_provider), acceptable_algorithms, priority,
+      std::move(callback_wrapper));
+  task_scheduler_.PostTask(std::move(task));
+}
+
+void UnexportableKeyTaskManager::FromWrappedAttestationKeySlowlyAsync(
+    BackgroundTaskOrigin origin,
+    crypto::UnexportableKeyProvider::Config config,
+    base::span<const uint8_t> wrapped_key,
+    BackgroundTaskPriority priority,
+    base::OnceCallback<void(
+        ServiceErrorOr<scoped_refptr<RefCountedUnexportableAttestationKey>>)>
+        callback) {
+  auto callback_wrapper =
+      WrapCallbackWithMetrics(BackgroundTaskType::kFromWrappedAttestationKey,
+                              origin, std::move(callback));
+
+  std::unique_ptr<crypto::UnexportableKeyProvider> key_provider =
+      GetUnexportableKeyProvider(std::move(config));
+
+  if (!key_provider) {
+    std::move(callback_wrapper)
+        .Run(base::unexpected(ServiceError::kNoKeyProvider), /*retry_count=*/0);
+    return;
+  }
+
+  auto task = std::make_unique<FromWrappedAttestationKeyTask>(
+      std::move(key_provider), wrapped_key, priority,
+      std::move(callback_wrapper));
+  task_scheduler_.PostTask(std::move(task));
+}
+
+void UnexportableKeyTaskManager::CertifySlowlyAsync(
+    BackgroundTaskOrigin origin,
+    scoped_refptr<RefCountedUnexportableAttestationKey> attestation_key,
+    scoped_refptr<RefCountedUnexportableSigningKey> signing_key,
+    base::span<const uint8_t> challenge,
+    BackgroundTaskPriority priority,
+    base::OnceCallback<void(ServiceErrorOr<crypto::AttestationStatement>)>
+        callback) {
+  auto callback_wrapper = WrapCallbackWithMetrics(BackgroundTaskType::kCertify,
+                                                  origin, std::move(callback));
+
+  if (!attestation_key || !signing_key) {
+    std::move(callback_wrapper)
+        .Run(base::unexpected(ServiceError::kKeyNotFound), /*retry_count=*/0);
+    return;
+  }
+
+  auto task = std::make_unique<CertifyTask>(
+      std::move(attestation_key), std::move(signing_key), challenge, priority,
+      kCertifyTaskMaxRetries, std::move(callback_wrapper));
   task_scheduler_.PostTask(std::move(task));
 }
 

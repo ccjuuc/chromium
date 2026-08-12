@@ -19,12 +19,10 @@ export function getHtml(this: PagesSettingsElement) {
       <option value="${PagesValue.ALL}" selected>
         $i18n{optionAllPages}
       </option>
-      <option value="${PagesValue.ODDS}"
-          ?hidden="${this.isSinglePage_()}">
+      <option value="${PagesValue.ODDS}" ?hidden="${this.isSinglePage_()}">
         $i18n{optionOddPages}
       </option>
-      <option value="${PagesValue.EVENS}"
-          ?hidden="${this.isSinglePage_()}">
+      <option value="${PagesValue.EVENS}" ?hidden="${this.isSinglePage_()}">
         $i18n{optionEvenPages}
       </option>
       <option value="${PagesValue.CUSTOM}">
@@ -34,14 +32,14 @@ export function getHtml(this: PagesSettingsElement) {
   </div>
 </print-preview-settings-section>
 <cr-collapse ?opened="${this.shouldShowInput_()}"
-    @transitionend="${this.onCollapseChanged_}">
+    @transitionend="${this.onTransitionend_}">
   <print-preview-settings-section id="customInputWrapper">
     <div slot="title"></div>
     <div slot="controls">
       <cr-input id="pageSettingsCustomInput" class="stroked" type="text"
           data-timeout-delay="500" ?invalid="${this.hasError_}"
-          ?disabled="${this.inputDisabled_()}"
-          spellcheck="false" placeholder="$i18n{examplePageRangeText}"
+          ?disabled="${this.inputDisabled_()}" spellcheck="false"
+          placeholder="$i18n{examplePageRangeText}"
           error-message="${this.getHintMessage_()}"
           @blur="${this.onCustomInputBlur_}">
       </cr-input>

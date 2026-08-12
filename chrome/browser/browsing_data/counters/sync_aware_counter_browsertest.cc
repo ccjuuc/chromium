@@ -12,8 +12,8 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/web_history_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
@@ -118,7 +118,6 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, AutofillCounter) {
       sync_service);
 
   counter.Init(profile->GetPrefs(),
-               browsing_data::ClearBrowsingDataTab::ADVANCED,
                base::BindRepeating(&SyncAwareCounterTest::OnCounterResult,
                                    base::Unretained(this)));
 
@@ -187,7 +186,6 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, PasswordCounter) {
       profile->GetPrefs(), sync_service);
 
   counter.Init(profile->GetPrefs(),
-               browsing_data::ClearBrowsingDataTab::ADVANCED,
                base::BindRepeating(&SyncAwareCounterTest::OnCounterResult,
                                    base::Unretained(this)));
 
@@ -256,13 +254,13 @@ IN_PROC_BROWSER_TEST_F(SyncAwareCounterTest, HistoryCounter) {
   // Set up the fake web history service and the counter.
 
   browsing_data::HistoryCounter counter(
-      HistoryServiceFactory::GetForProfileWithoutCreating(browser()->profile()),
+      HistoryServiceFactory::GetForProfileWithoutCreating(
+          browser()->GetProfile()),
       base::BindRepeating(&SyncAwareCounterTest::GetFakeWebHistoryService,
                           base::Unretained(this), base::Unretained(profile)),
       sync_service);
 
   counter.Init(profile->GetPrefs(),
-               browsing_data::ClearBrowsingDataTab::ADVANCED,
                base::BindRepeating(&SyncAwareCounterTest::OnCounterResult,
                                    base::Unretained(this)));
 

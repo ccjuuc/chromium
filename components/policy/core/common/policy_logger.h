@@ -15,6 +15,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/policy/policy_export.h"
+#include "components/policy/resources/webui/mojom/policy.mojom-forward.h"
 
 // Note: the DLOG_POLICY macro has no "#if DCHECK_IS_ON()" check because some
 // messages logged with DLOG are still important to be seen on the
@@ -30,27 +31,27 @@
   ::policy::PolicyLogger::LogHelper(                                  \
       ::policy::PolicyLogger::LogHelper::LogType::kVLog,              \
       ::policy::PolicyLogger::Log::Severity::kVerbose, log_verbosity, \
-      log_source, std::string_view(__FILE__, std::size(__FILE__)), __LINE__)
+      log_source, std::string_view(__FILE__), __LINE__)
 #define DVLOG_POLICY(log_verbosity, log_source)                       \
   ::policy::PolicyLogger::LogHelper(                                  \
       ::policy::PolicyLogger::LogHelper::LogType::kDLog,              \
       ::policy::PolicyLogger::Log::Severity::kVerbose, log_verbosity, \
-      log_source, std::string_view(__FILE__, std::size(__FILE__)), __LINE__)
+      log_source, std::string_view(__FILE__), __LINE__)
 #define LOG_POLICY_INFO(log_type, log_source)                       \
   ::policy::PolicyLogger::LogHelper(                                \
       log_type, ::policy::PolicyLogger::Log::Severity::kInfo,       \
       ::policy::PolicyLogger::LogHelper::kNoVerboseLog, log_source, \
-      std::string_view(__FILE__, std::size(__FILE__)), __LINE__)
+      std::string_view(__FILE__), __LINE__)
 #define LOG_POLICY_WARNING(log_type, log_source)                    \
   ::policy::PolicyLogger::LogHelper(                                \
       log_type, ::policy::PolicyLogger::Log::Severity::kWarning,    \
       ::policy::PolicyLogger::LogHelper::kNoVerboseLog, log_source, \
-      std::string_view(__FILE__, std::size(__FILE__)), __LINE__)
+      std::string_view(__FILE__), __LINE__)
 #define LOG_POLICY_ERROR(log_type, log_source)                      \
   ::policy::PolicyLogger::LogHelper(                                \
       log_type, ::policy::PolicyLogger::Log::Severity::kError,      \
       ::policy::PolicyLogger::LogHelper::kNoVerboseLog, log_source, \
-      std::string_view(__FILE__, std::size(__FILE__)), __LINE__)
+      std::string_view(__FILE__), __LINE__)
 
 #define POLICY_AUTH ::policy::PolicyLogger::Log::Source::kAuthentication
 #define POLICY_PROCESSING ::policy::PolicyLogger::Log::Source::kPolicyProcessing
@@ -103,7 +104,9 @@ class POLICY_EXPORT PolicyLogger {
     int line() const { return line_; }
     base::Time timestamp() const { return timestamp_; }
 
-    base::Value::Dict GetAsDict() const;
+    base::DictValue GetAsDict() const;
+
+    policy::mojom::LogPtr GetAsMojoLog() const;
 
    private:
     Severity log_severity_;
@@ -161,16 +164,18 @@ class POLICY_EXPORT PolicyLogger {
 
   static PolicyLogger* GetInstance();
 
+  static bool IsPolicyLoggingEnabled();
+
   PolicyLogger();
   PolicyLogger(const PolicyLogger&) = delete;
   PolicyLogger& operator=(const PolicyLogger&) = delete;
   ~PolicyLogger();
 
-  // Returns the logs list as base::Value::List to send to UI.
-  base::Value::List GetAsList();
+  // Returns the logs list as base::ListValue to send to UI.
+  base::ListValue GetAsList();
 
-  // Checks if browser is running on Android.
-  bool IsPolicyLoggingEnabled() const;
+  // Returns the logs in the mojo format.
+  std::vector<policy::mojom::LogPtr> GetAsMojoList();
 
   // Sets `is_log_deletion_enabled_` to allow scheduling old log deletion.
   void EnableLogDeletion();
@@ -181,6 +186,9 @@ class POLICY_EXPORT PolicyLogger {
   // Clears `logs_` and sets `is_log_deletion_scheduled_` as cleanup after every
   // test.
   void ResetLoggerForTesting();
+
+  // Deletes old logs for testing purposes.
+  void ScheduleOldLogsDeletionForTesting();
 
  private:
   // Adds a new log to the logs_ list and calls `ScheduleOldLogsDeletion` if
@@ -207,8 +215,6 @@ class POLICY_EXPORT PolicyLogger {
   base::Lock lock_;
 
   std::deque<Log> logs_ GUARDED_BY(lock_);
-
-  base::WeakPtrFactory<PolicyLogger> weak_factory_{this};
 };
 
 }  // namespace policy

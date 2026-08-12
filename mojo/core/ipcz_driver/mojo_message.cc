@@ -11,7 +11,9 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/numerics/safe_conversions.h"
+#include "mojo/core/embedder/features.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/ipcz_driver/data_pipe.h"
 #include "mojo/core/scoped_ipcz_handle.h"
@@ -24,6 +26,12 @@ namespace {
 
 // Growth factor for reallocations.
 constexpr int kGrowthFactor = 2;
+
+bool FixGeometricBufferGrowthIsEnabled() {
+  static const bool kIsEnabled =
+      base::FeatureList::IsEnabled(kMojoFixGeometricBufferGrowth);
+  return kIsEnabled;
+}
 
 // Data pipe attachments come in two parts within a message's handle list: the
 // DataPipe object wherever it was placed by the sender, and its control portal
@@ -135,7 +143,7 @@ void MojoMessage::SetParcel(ScopedIpczHandle parcel) {
   } else {
     data_storage_.reset();
   }
-  data_ = UNSAFE_TODO({data_storage_.get(), num_bytes});
+  data_ = UNSAFE_TODO({base::unchecked, data_storage_.get(), num_bytes});
   data_storage_size_ = num_bytes;
 
   result = GetIpczAPI().EndGet(parcel_.get(), transaction, IPCZ_NO_FLAGS,
@@ -164,7 +172,7 @@ MojoResult MojoMessage::ReserveCapacity(uint32_t payload_buffer_size,
   data_storage_size_ = std::max(payload_buffer_size, uint32_t{kMinBufferSize});
   DataPtr new_storage(new uint8_t[data_storage_size_]);
   data_storage_ = std::move(new_storage);
-  data_ = UNSAFE_TODO(base::span(data_storage_.get(), 0u));
+  data_ = UNSAFE_TODO(base::span(base::unchecked, data_storage_.get(), 0u));
 
   if (buffer_size) {
     *buffer_size = base::checked_cast<uint32_t>(data_storage_size_);
@@ -188,17 +196,26 @@ MojoResult MojoMessage::AppendData(uint32_t additional_num_bytes,
   const size_t required_storage_size = std::max(new_data_size, kMinBufferSize);
   if (required_storage_size > data_storage_size_) {
     const size_t copy_size = std::min(new_data_size, data_storage_size_);
-    data_storage_size_ =
-        std::max(data_size * kGrowthFactor, required_storage_size);
+    size_t new_size;
+    if (FixGeometricBufferGrowthIsEnabled()) {
+      new_size =
+          std::max(data_storage_size_ * kGrowthFactor, required_storage_size);
+    } else {
+      new_size = std::max(data_size * kGrowthFactor, required_storage_size);
+    }
+    data_storage_size_ = new_size;
     DataPtr new_storage(new uint8_t[data_storage_size_]);
-    std::ranges::copy(UNSAFE_TODO(base::span(data_storage_.get(), copy_size)),
+    std::ranges::copy(UNSAFE_TODO(base::span(base::unchecked,
+                                             data_storage_.get(), copy_size)),
                       new_storage.get());
     data_storage_ = std::move(new_storage);
   }
-  data_ = UNSAFE_TODO(base::span(data_storage_.get(), new_data_size));
+  data_ = UNSAFE_TODO(
+      base::span(base::unchecked, data_storage_.get(), new_data_size));
 
   handles_.reserve(handles_.size() + num_handles);
-  for (MojoHandle handle : UNSAFE_TODO(base::span(handles, num_handles))) {
+  for (MojoHandle handle :
+       UNSAFE_TODO(base::span(base::unchecked, handles, num_handles))) {
     handles_.push_back(handle);
   }
   if (buffer) {

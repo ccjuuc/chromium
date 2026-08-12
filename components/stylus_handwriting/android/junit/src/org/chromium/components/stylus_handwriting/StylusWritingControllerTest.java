@@ -13,7 +13,6 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.MockitoAnnotations.openMocks;
 
 import android.content.Context;
 import android.os.Build;
@@ -23,12 +22,15 @@ import androidx.annotation.RequiresApi;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.ViewAndroidDelegate;
@@ -37,10 +39,11 @@ import org.chromium.ui.base.ViewAndroidDelegate;
  * Tests for StylusWritingController. Specifically how it handles whether to show a stylus hover
  * icon or not.
  */
-@Batch(Batch.PER_CLASS)
 @RunWith(BaseRobolectricTestRunner.class)
 @RequiresApi(api = Build.VERSION_CODES.TIRAMISU)
 public class StylusWritingControllerTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     private final Context mContext =
             InstrumentationRegistry.getInstrumentation().getTargetContext();
     private StylusWritingController mStylusWritingController;
@@ -50,7 +53,6 @@ public class StylusWritingControllerTest {
 
     @Before
     public void setUp() {
-        openMocks(this);
         // Use a pointer type different to the default and different to what's used in production.
         mPointerIcon = PointerIcon.getSystemIcon(mContext, PointerIcon.TYPE_GRAB);
         mStylusWritingController =
@@ -63,6 +65,9 @@ public class StylusWritingControllerTest {
 
         doReturn(mViewAndroidDelegate).when(mWebContents).getViewAndroidDelegate();
         mStylusWritingController.onWebContentsChanged(mWebContents);
+        // onWebContentsChanged causes this to be posted. Use RobolectricUtil to wait until it has
+        // been run.
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mViewAndroidDelegate).setShouldShowStylusHoverIconCallback(any());
     }
 
@@ -79,6 +84,7 @@ public class StylusWritingControllerTest {
     @Feature({"Stylus Handwriting"})
     public void testWindowFocusChangeUpdatesCallback() {
         mStylusWritingController.onWindowFocusChanged(true);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mViewAndroidDelegate, times(2)).setShouldShowStylusHoverIconCallback(any());
     }
 }

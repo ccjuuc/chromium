@@ -20,7 +20,9 @@
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/service_worker/service_worker_task_queue.h"
 #include "extensions/common/extension_id.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -34,6 +36,14 @@ namespace service_worker_test_utils {
 // Get the ServiceWorkerContext for the `browser_context`.
 content::ServiceWorkerContext* GetServiceWorkerContext(
     content::BrowserContext* browser_context);
+
+// Stops the service worker running for the given `sw_scope` and
+// `sw_storage_key`. Wait until it actually stops. Returns an assertion
+// result indicating success or failure.
+testing::AssertionResult StopServiceWorkerForScope(
+    content::ServiceWorkerContext* sw_context,
+    const GURL& sw_scope,
+    const blink::StorageKey& sw_storage_key);
 
 // A class for ServiceWorkerContextObserver events.
 // Note: This class only works well when there is a *single* service worker
@@ -68,6 +78,10 @@ class TestServiceWorkerContextObserver
   // captures the running service worker version ID. Returns the version ID.
   int64_t WaitForWorkerStarted();
 
+  // Wait for OnStoppingSync event is triggered, so that the observer
+  // captures the stopping service worker version ID. Returns the version ID.
+  int64_t WaitForWorkerStopping();
+
   // Wait for OnVersionStoppedRunning event is triggered, so that the observer
   // captures the stopped service worker version ID. Returns the version ID.
   int64_t WaitForWorkerStopped();
@@ -100,6 +114,10 @@ class TestServiceWorkerContextObserver
   // ServiceWorkerContextObserverSynchronous:
   void OnStartWorkerMessageSentSync(int64_t version_id,
                                     const GURL& scope) override;
+  void OnStoppingSync(
+      int64_t version_id,
+      const GURL& scope,
+      const blink::ServiceWorkerToken& service_worker_token) override;
 
   using RegistrationsMap = std::map<GURL, int>;
 
@@ -111,6 +129,7 @@ class TestServiceWorkerContextObserver
   base::OnceClosure start_message_sent_quit_closure_;
   base::OnceClosure started_quit_closure_;
   base::OnceClosure stored_quit_closure_;
+  base::OnceClosure stopping_quit_closure_;
   base::OnceClosure stopped_quit_closure_;
 
   const std::optional<GURL> extension_scope_;
@@ -119,6 +138,7 @@ class TestServiceWorkerContextObserver
   std::optional<int64_t> activated_version_id_;
   std::optional<int64_t> start_message_sent_version_id_;
   std::optional<int64_t> running_version_id_;
+  std::optional<int64_t> stopping_version_id_;
   std::optional<int64_t> stopped_version_id_;
 
   raw_ptr<content::ServiceWorkerContext> context_ = nullptr;
@@ -144,6 +164,7 @@ class UnregisterWorkerObserver : public ProcessManagerObserver {
 
   // ProcessManagerObserver:
   void OnStoppedTrackingServiceWorkerInstance(
+      content::BrowserContext& browser_context,
       const WorkerId& worker_id) override;
 
   // Waits for ProcessManager::UnregisterServiceWorker for `extension_id_`.

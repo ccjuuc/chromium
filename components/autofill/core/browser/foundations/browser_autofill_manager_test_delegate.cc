@@ -4,6 +4,8 @@
 
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_delegate.h"
 
+#include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+
 namespace autofill {
 
 BrowserAutofillManagerTestDelegate::BrowserAutofillManagerTestDelegate() =
@@ -35,9 +37,11 @@ void BrowserAutofillManagerTestDelegate::OnAutofillManagerStateChanged(
 void BrowserAutofillManagerTestDelegate::OnFillOrPreviewForm(
     AutofillManager& manager,
     FormGlobalId form_id,
+    FieldGlobalId trigger_field_id,
     mojom::ActionPersistence action_persistence,
     const base::flat_set<FieldGlobalId>& filled_field_ids,
-    const FillingPayload& filling_payload) {
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&,
+    const FillingPayload&) {
   switch (action_persistence) {
     case mojom::ActionPersistence::kFill:
       DidFillFormData();
@@ -55,7 +59,8 @@ void BrowserAutofillManagerTestDelegate::OnSuggestionsShown(
 }
 
 void BrowserAutofillManagerTestDelegate::OnSuggestionsHidden(
-    AutofillManager& manager) {
+    AutofillManager& manager,
+    SuggestionHidingReason reason) {
   DidHideSuggestions();
 }
 

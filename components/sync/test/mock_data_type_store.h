@@ -36,6 +36,10 @@ class MockDataTypeStore : public DataTypeStore {
                CallbackWithResult completion_on_frontend_sequence_callback),
               (override));
   MOCK_METHOD(std::unique_ptr<WriteBatch>, CreateWriteBatch, (), (override));
+  MOCK_METHOD(std::unique_ptr<WriteBatch>,
+              CreateWriteBatch,
+              (std::unique_ptr<MetadataChangeList> metadata_change_list),
+              (override));
   MOCK_METHOD(void,
               CommitWriteBatch,
               (std::unique_ptr<WriteBatch> write_batch,
@@ -43,7 +47,8 @@ class MockDataTypeStore : public DataTypeStore {
               (override));
   MOCK_METHOD(void,
               DeleteAllDataAndMetadata,
-              (CallbackWithResult callback),
+              (std::unique_ptr<MetadataChangeList> metadata_change_list,
+               CallbackWithResult callback),
               (override));
 };
 

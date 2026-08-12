@@ -11,6 +11,7 @@ import org.chromium.base.ContextUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.notifications.NotificationConstants;
+import org.chromium.chrome.browser.notifications.NotificationIntentInterceptor;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.notifications.NotificationWrapperBuilderFactory;
 import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
@@ -34,22 +35,26 @@ public class IncognitoNotificationManager {
         // as app name.
         String title = context.getString(R.string.close_all_incognito_notification_title);
 
+        NotificationMetadata metadata =
+                new NotificationMetadata(
+                        NotificationUmaTracker.SystemNotificationType.CLOSE_INCOGNITO,
+                        INCOGNITO_TABS_OPEN_TAG,
+                        INCOGNITO_TABS_OPEN_ID);
         NotificationWrapperBuilder builder =
                 NotificationWrapperBuilderFactory.createNotificationWrapperBuilder(
-                                ChromeChannelDefinitions.ChannelId.INCOGNITO,
-                                new NotificationMetadata(
-                                        NotificationUmaTracker.SystemNotificationType
-                                                .CLOSE_INCOGNITO,
-                                        INCOGNITO_TABS_OPEN_TAG,
-                                        INCOGNITO_TABS_OPEN_ID))
+                                ChromeChannelDefinitions.ChannelId.INCOGNITO, metadata)
                         .setContentTitle(title)
                         .setContentIntent(
-                                IncognitoNotificationServiceImpl.getRemoveAllIncognitoTabsIntent(
-                                        context))
+                                NotificationIntentInterceptor.createInterceptPendingIntent(
+                                        NotificationIntentInterceptor.IntentType.CONTENT_INTENT,
+                                        NotificationUmaTracker.ActionType.UNKNOWN,
+                                        metadata,
+                                        IncognitoNotificationServiceImpl
+                                                .getRemoveAllIncognitoTabsIntent(context)))
                         .setContentText(actionMessage)
                         .setOngoing(true)
                         .setVisibility(Notification.VISIBILITY_SECRET)
-                        .setSmallIcon(R.drawable.ic_incognito_fill_24dp)
+                        .setSmallIcon(R.drawable.ic_incognito)
                         .setShowWhen(false)
                         .setLocalOnly(true)
                         .setGroup(NotificationConstants.GROUP_INCOGNITO);

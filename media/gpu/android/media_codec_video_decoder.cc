@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "base/android/android_info.h"
+#include "base/android/device_info.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -15,6 +16,7 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -36,10 +38,12 @@
 #include "media/base/video_codecs.h"
 #include "media/base/video_decoder_config.h"
 #include "media/base/video_frame.h"
+#include "media/base/video_transformation.h"
 #include "media/gpu/android/android_video_surface_chooser.h"
 #include "media/gpu/android/codec_allocator.h"
 #include "media/gpu/android/video_accelerator_util.h"
 #include "media/media_buildflags.h"
+#include "ui/gfx/geometry/size.h"
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 #include "media/base/android/extract_sps_and_pps.h"
@@ -319,7 +323,7 @@ void MediaCodecVideoDecoder::DestroyAsync(
   // WARNING: This will lose the callback we've given to MediaCodecBridge for
   // asynchronous notifications; so we must not leave this function with any
   // work necessary from PumpCodec().
-  self->weak_factory_.InvalidateWeakPtrs();
+  self->weak_factory_.InvalidateWeakPtrsAndDoom();
 
   if (self->media_crypto_context_) {
     // Cancel previously registered callback (if any).
@@ -333,7 +337,7 @@ void MediaCodecVideoDecoder::DestroyAsync(
     std::move(self->reset_cb_).Run();
 
   // Cancel callbacks we no longer want.
-  self->codec_allocator_weak_factory_.InvalidateWeakPtrs();
+  self->codec_allocator_weak_factory_.InvalidateWeakPtrsAndDoom();
   self->CancelPendingDecodes(DecoderStatus::Codes::kAborted);
   self->StartDrainingCodec(DrainType::kForDestroy);
 
@@ -428,7 +432,7 @@ void MediaCodecVideoDecoder::Initialize(const VideoDecoderConfig& config,
   // Restrict this behavior to Q, where the behavior changed.
   if (first_init) {
     last_width_ = width;
-  } else if (CodecNeedsReallocation(width)) {
+  } else if (CodecNeedsReallocation(decoder_config_.coded_size())) {
     MEDIA_LOG(INFO, media_log_)
         << "Queuing deferred codec reallocation for resolution change from "
         << old_size.ToString() << " to "
@@ -480,7 +484,8 @@ void MediaCodecVideoDecoder::OnMediaCryptoReady(
     bool requires_secure_video_codec) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(1) << __func__
-           << ": requires_secure_video_codec = " << requires_secure_video_codec;
+           << ": requires_secure_video_codec = " << requires_secure_video_codec
+           << " for codec " << GetCodecName(decoder_config_.codec());
 
   DCHECK(state_ == State::kInitializing);
 
@@ -504,12 +509,18 @@ void MediaCodecVideoDecoder::OnMediaCryptoReady(
   }
 
   media_crypto_ = std::move(media_crypto);
-  requires_secure_codec_ = requires_secure_video_codec;
+  requires_secure_codec_ =
+      base::FeatureList::IsEnabled(
+          kUseMediaCryptoRequiresSecureDecoderComponent)
+          ? MediaCodecUtil::RequiresSecureDecoderComponent(
+                media_crypto_,
+                MediaCodecUtil::CodecToAndroidMimeType(decoder_config_.codec()))
+          : requires_secure_video_codec;
 
   // Request a secure surface in all cases.  For L3, it's okay if we fall back
   // to TextureOwner rather than fail composition.  For L1, it's required.
   surface_chooser_helper_.SetSecureSurfaceMode(
-      requires_secure_video_codec
+      requires_secure_codec_
           ? SurfaceChooserHelper::SecureSurfaceMode::kRequired
           : SurfaceChooserHelper::SecureSurfaceMode::kRequested);
 
@@ -672,7 +683,6 @@ void MediaCodecVideoDecoder::TransitionToTargetSurface() {
   }
 
   video_frame_factory_->SetSurfaceBundle(target_surface_bundle_);
-  CacheFrameInformation();
 }
 
 void MediaCodecVideoDecoder::CreateCodec() {
@@ -690,8 +700,15 @@ void MediaCodecVideoDecoder::CreateCodec() {
   config->surface = target_surface_bundle_->GetJavaSurface();
   config->media_crypto = media_crypto_;
   config->initial_expected_coded_size = decoder_config_.coded_size();
-  config->container_color_space = decoder_config_.color_space_info();
-  config->hdr_metadata = decoder_config_.hdr_metadata();
+  if (base::FeatureList::IsEnabled(media::kMediaCodecColorSpaceCleanup) ||
+      !decoder_config_.hdr_metadata().IsEmpty()) {
+    // TODO(https://crbug.com/395659818): Historically, we would not communicate
+    // the container level color space unless there was also HDR metadata
+    // attached. Preserve this behavior behind a kill switch.
+    config->container_color_space =
+        MediaFormatColorSpace(decoder_config_.color_space_info());
+    config->hdr_metadata = decoder_config_.hdr_metadata();
+  }
   config->use_block_model = use_block_model_;
   config->profile = decoder_config_.profile();
 
@@ -763,8 +780,8 @@ void MediaCodecVideoDecoder::OnCodecConfigured(
   if (!codec && should_retry_codec_allocation &&
       device_info_->SdkVersion() >=
           base::android::android_info::SDK_VERSION_R &&
-      device_info_->SdkVersion() <= 32 /* SDK_VERSION_S_V2 */
-  ) {
+      device_info_->SdkVersion() <=
+          base::android::android_info::SDK_VERSION_Sv2) {
     // We might want to post this with a short delay, but there is already quite
     // a lot of overhead in codec allocation.
     CreateCodec();
@@ -800,15 +817,14 @@ void MediaCodecVideoDecoder::OnCodecConfigured(
   }
 
   max_input_size_ = codec->GetMaxInputSize();
+  video_input_exceeds_max_capacity_ = false;
   codec_ = std::make_unique<CodecWrapper>(
       CodecSurfacePair(std::move(codec), std::move(surface_bundle)),
       base::BindRepeating(
           &OutputBufferReleased,
           base::BindPostTaskToCurrentDefault(base::BindRepeating(
               &MediaCodecVideoDecoder::PumpCodec, weak_factory_.GetWeakPtr()))),
-      decoder_config_.coded_size(),
-      decoder_config_.color_space_info().ToGfxColorSpace(),
-      coded_size_alignment);
+      decoder_config_.coded_size(), coded_size_alignment);
 
   // If the target surface changed while codec creation was in progress,
   // transition to it immediately.
@@ -817,9 +833,6 @@ void MediaCodecVideoDecoder::OnCodecConfigured(
   // |surface_chooser_| doesn't change the target surface.
   if (SurfaceTransitionPending())
     TransitionToTargetSurface();
-
-  // Cache the frame information that goes with this codec.
-  CacheFrameInformation();
 
   PumpCodec();
 }
@@ -837,6 +850,8 @@ void MediaCodecVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
     std::move(decode_cb).Run(DecoderStatus::Codes::kFailed);
     return;
   }
+
+  hdr_metadata_reordering_map_.Insert(*buffer);
 
   pending_decodes_.emplace_back(std::move(buffer), std::move(decode_cb));
 
@@ -919,6 +934,7 @@ bool MediaCodecVideoDecoder::QueueInput() {
       FlushCodec();
       return true;
     }
+    DVLOG(2) << "Deferring flush for unreleased codec outputs.";
     return false;
   }
 
@@ -931,34 +947,37 @@ bool MediaCodecVideoDecoder::QueueInput() {
   auto pending_buffer = pending_decodes_.front().buffer;
 
   if (!use_block_model_ && !pending_buffer->end_of_stream() &&
-      pending_buffer->is_key_frame() &&
       pending_buffer->size() > max_input_size_) {
-    // If we we're already using the provided resolution, try to guess something
-    // larger based on the actual input size.
-    if (decoder_config_.coded_size().width() == last_width_) {
-      // See MediaFormatBuilder::addInputSizeInfoToFormat() for details.
-      const size_t compression_ratio =
-          (decoder_config_.codec() == VideoCodec::kH264 ||
-           decoder_config_.codec() == VideoCodec::kVP8)
-              ? 2
-              : 4;
-      const size_t max_pixels =
-          (pending_buffer->size() * compression_ratio * 2) / 3;
-      if (max_pixels > 8294400)  // 4K
-        decoder_config_.set_coded_size(gfx::Size(7680, 4320));
-      else if (max_pixels > 2088960)  // 1080p
-        decoder_config_.set_coded_size(gfx::Size(3840, 2160));
-      else
-        decoder_config_.set_coded_size(gfx::Size(1920, 1080));
-    }
+    video_input_exceeds_max_capacity_ = true;
+    if (pending_buffer->is_key_frame()) {
+      // If we we're already using the provided resolution, try to guess
+      // something larger based on the actual input size.
+      if (decoder_config_.coded_size().width() == last_width_) {
+        // See MediaFormatBuilder::addInputSizeInfoToFormat() for details.
+        const size_t compression_ratio =
+            (decoder_config_.codec() == VideoCodec::kH264 ||
+             decoder_config_.codec() == VideoCodec::kVP8)
+                ? 2
+                : 4;
+        const size_t max_pixels =
+            (pending_buffer->size() * compression_ratio * 2) / 3;
+        if (max_pixels > 8294400) {  // 4K
+          decoder_config_.set_coded_size(gfx::Size(7680, 4320));
+        } else if (max_pixels > 2088960) {  // 1080p
+          decoder_config_.set_coded_size(gfx::Size(3840, 2160));
+        } else {
+          decoder_config_.set_coded_size(gfx::Size(1920, 1080));
+        }
+      }
 
-    // Flush and reallocate on the next call to QueueInput() if we changed size;
-    // otherwise just try queuing the buffer and hoping for the best.
-    if (decoder_config_.coded_size().width() != last_width_) {
-      deferred_flush_pending_ = true;
-      deferred_reallocation_pending_ = true;
-      last_width_ = decoder_config_.coded_size().width();
-      return true;
+      // Flush and reallocate on the next call to QueueInput() if we changed
+      // size; otherwise just try queuing the buffer and hoping for the best.
+      if (decoder_config_.coded_size().width() != last_width_) {
+        deferred_flush_pending_ = true;
+        deferred_reallocation_pending_ = true;
+        last_width_ = decoder_config_.coded_size().width();
+        return true;
+      }
     }
   }
 
@@ -982,7 +1001,7 @@ bool MediaCodecVideoDecoder::QueueInput() {
       SelectMediaCodec(new_config, requires_secure_codec_, low_delay_,
                        &codec_name);
       return !codec_name_.empty() && codec_name == codec_name_ &&
-             !CodecNeedsReallocation(new_config.coded_size().width());
+             !CodecNeedsReallocation(new_config.coded_size());
     }();
 
     if (can_reuse_codec) {
@@ -1010,7 +1029,7 @@ bool MediaCodecVideoDecoder::QueueInput() {
              ? 3
              : 2))
       << "QueueInput(" << pending_buffer->AsHumanReadableString()
-      << ") status=" << status.message();
+      << ") status=" << static_cast<int>(status.code());
 
   switch (status.code()) {
     case CodecWrapper::QueueStatus::Codes::kOk:
@@ -1106,10 +1125,44 @@ bool MediaCodecVideoDecoder::DequeueOutput() {
   // If we're getting outputs larger than our configured size, we run the risk
   // of exceeding MediaCodec's allowed input buffer size. Update the coded size
   // as we go to ensure we can correctly reconfigure if needed later.
-  if (output_buffer->size().GetArea() > decoder_config_.coded_size().GetArea())
-    decoder_config_.set_coded_size(output_buffer->size());
+  // Note, that we use visible size here because there is no better alternative,
+  // coded size is not known at this point yet.
+  if (output_buffer->visible_size().GetArea() >
+      decoder_config_.coded_size().GetArea()) {
+    decoder_config_.set_coded_size(output_buffer->visible_size());
+  }
 
-  gfx::Rect visible_rect(output_buffer->size());
+  // TODO(https://crbug.com/395659818): Idiosyncratic historical behavior is
+  // being preserved behind a kill switch. Remove it as soon as it is safe.
+  gfx::ColorSpace color_space;
+  gfx::HDRMetadata hdr_metadata;
+  if (base::FeatureList::IsEnabled(media::kMediaCodecColorSpaceCleanup)) {
+    GetColorSpaceAndHdrMetadata(output_buffer.get(), color_space, hdr_metadata);
+  } else {
+    // If the codec specified a color space for `output_buffer`, then update the
+    // output color space.
+    color_space = output_buffer->color_space().ToGfxColorSpace();
+    if (!color_space.IsValid()) {
+      color_space = decoder_config_.color_space_info().ToGfxColorSpace();
+      if (!color_space.IsValid()) {
+        // If we get back an unsupported color space, then just default to
+        // sRGB for < 720p, or 709 otherwise.  It's better than nothing.
+        color_space = output_buffer->visible_size().width() >= 1280
+                          ? gfx::ColorSpace::CreateREC709()
+                          : gfx::ColorSpace::CreateSRGB();
+      }
+    }
+
+    // Attach the HDR metadata if the color space got this far and is still an
+    // HDR color space.  Note that it might be converted to something else along
+    // the way, often sRGB.  In that case, don't confuse things with HDR
+    // metadata.
+    if (color_space.IsHDR() && !decoder_config_.hdr_metadata().IsEmpty()) {
+      hdr_metadata = decoder_config_.hdr_metadata();
+    }
+  }
+
+  gfx::Rect visible_rect(output_buffer->visible_size());
   std::unique_ptr<ScopedAsyncTrace> async_trace =
       ScopedAsyncTrace::CreateIfEnabled(
           "MediaCodecVideoDecoder::CreateVideoFrame");
@@ -1125,12 +1178,65 @@ bool MediaCodecVideoDecoder::DequeueOutput() {
   }
   video_frame_factory_->CreateVideoFrame(
       std::move(output_buffer), presentation_time,
-      decoder_config_.aspect_ratio().GetNaturalSize(visible_rect),
-      CreatePromotionHintCB(),
+      decoder_config_.aspect_ratio().GetNaturalSize(visible_rect), color_space,
+      hdr_metadata, CreatePromotionHintCB(),
       base::BindOnce(&MediaCodecVideoDecoder::ForwardVideoFrame,
                      weak_factory_.GetWeakPtr(), reset_generation_,
                      std::move(async_trace), base::TimeTicks::Now()));
   return true;
+}
+
+void MediaCodecVideoDecoder::GetColorSpaceAndHdrMetadata(
+    const CodecOutputBuffer* buffer,
+    gfx::ColorSpace& color_space,
+    gfx::HDRMetadata& hdr_metadata) {
+  // Retrieve the MediaFormatColorSpace and gfx::ColorSpace of `buffer` and
+  // `decoder_config_`.
+  const auto& buffer_mf_cs = buffer->color_space();
+  const auto buffer_gfx_cs = buffer_mf_cs.ToGfxColorSpace();
+  const auto config_mf_cs =
+      MediaFormatColorSpace(decoder_config_.color_space_info());
+  const auto config_gfx_cs =
+      decoder_config_.color_space_info().ToGfxColorSpace();
+
+  // If the buffer has the same MediaFormatColorSpace as the decoder config
+  // did, then use the decoder config's color space directly (rather than
+  // round-tripping it through MediaFormatColorSpace, because the round-trip
+  // will conflate several spaces).
+  if (config_mf_cs == buffer_mf_cs && config_gfx_cs.IsValid()) {
+    color_space = config_gfx_cs;
+    hdr_metadata = decoder_config_.hdr_metadata();
+    return;
+  }
+
+  // If `buffer` has a valid color space that does not match the decoder config,
+  // then use the color space specified by the buffer.
+  if (buffer_gfx_cs.IsValid()) {
+    color_space = buffer_gfx_cs;
+    // If the decoder config specified a valid transfer function, but `buffer`
+    // indicates a different transfer function, then don't trust that the HDR
+    // metadata (it was intended for a different color space than what is coming
+    // out of the decoder in `buffer`).
+    if (config_mf_cs.transfer != MediaFormatColorSpace::kUnknown &&
+        config_mf_cs.transfer != buffer_mf_cs.transfer) {
+      hdr_metadata = gfx::HDRMetadata();
+    } else {
+      hdr_metadata = decoder_config_.hdr_metadata();
+    }
+    return;
+  }
+
+  // The buffer didn't have a valid color space, so use the decoder config
+  // color space, if it is valid.
+  if (config_gfx_cs.IsValid()) {
+    color_space = config_gfx_cs;
+    hdr_metadata = decoder_config_.hdr_metadata();
+    return;
+  }
+
+  // No color space was valid. Just treat it as Rec709.
+  color_space = gfx::ColorSpace::CreateREC709();
+  hdr_metadata = decoder_config_.hdr_metadata();
 }
 
 void MediaCodecVideoDecoder::RunEosDecodeCb(int reset_generation) {
@@ -1161,18 +1267,28 @@ void MediaCodecVideoDecoder::ForwardVideoFrame(
     return;
   }
 
-  // Attach the HDR metadata if the color space got this far and is still an HDR
-  // color space.  Note that it might be converted to something else along the
-  // way, often sRGB.  In that case, don't confuse things with HDR metadata.
-  if (frame->ColorSpace().IsHDR() &&
-      !decoder_config_.hdr_metadata().IsEmpty()) {
-    frame->set_hdr_metadata(decoder_config_.hdr_metadata());
-  }
+  gfx::HDRMetadata hdr_metadata = decoder_config_.hdr_metadata();
+  hdr_metadata_reordering_map_.MergeAndEraseMetadataForTimestamp(
+      frame->timestamp(), hdr_metadata);
+  frame->set_hdr_metadata(hdr_metadata);
 
   if (media_crypto_context_) {
     frame->metadata().protected_video = true;
     if (requires_secure_codec_) {
       frame->metadata().hw_protected = true;
+    }
+  }
+
+  // Detect if the hardware decoder physically pre-rotated the video frame.
+  // If the frame's visible dimensions are perfectly swapped compared to the
+  // config's visible rect, and the rotation is 90 or 270, the decoder has
+  // already applied the rotation. We clear the transformation metadata to
+  // prevent double-rotation in the compositor (e.g., squashing portrait
+  // videos).
+  if (decoder_config_.video_transformation().IsOrthogonal()) {
+    if (frame->visible_rect().size() ==
+        gfx::TransposeSize(decoder_config_.visible_rect().size())) {
+      frame->metadata().transformation = kNoTransformation;
     }
   }
 
@@ -1193,6 +1309,7 @@ void MediaCodecVideoDecoder::Reset(base::OnceClosure closure) {
   DVLOG(2) << __func__;
   DCHECK(!reset_cb_);
   reset_generation_++;
+  hdr_metadata_reordering_map_.Clear();
   reset_cb_ = std::move(closure);
   CancelPendingDecodes(DecoderStatus::Codes::kAborted);
   StartDrainingCodec(DrainType::kForReset);
@@ -1294,6 +1411,9 @@ void MediaCodecVideoDecoder::ReleaseCodec() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!codec_)
     return;
+  base::UmaHistogramBoolean(
+      "Media.Android.MediaCodec.VideoInputExceedsMaxCapacity",
+      video_input_exceeds_max_capacity_);
   auto pair = codec_->TakeCodecSurfacePair();
   codec_ = nullptr;
   codec_allocator_->ReleaseMediaCodec(
@@ -1380,18 +1500,45 @@ void MediaCodecVideoDecoder::NotifyPromotionHint(
                                                               IsUsingOverlay());
 }
 
-void MediaCodecVideoDecoder::CacheFrameInformation() {
+bool MediaCodecVideoDecoder::CodecNeedsReallocation(const gfx::Size& new_size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  cached_frame_information_ =
-      surface_chooser_helper_.ComputeFrameInformation(IsUsingOverlay());
-}
 
-bool MediaCodecVideoDecoder::CodecNeedsReallocation(int new_width) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return !use_block_model_ && new_width > last_width_ * kReallocateThreshold &&
-         device_info_ &&
-         device_info_->SdkVersion() >
-             base::android::android_info::SDK_VERSION_P;
+  // There are two reasons we might force a Codec reallocation:
+  // (1) The required input buffer size is likely to be exceeded at the new
+  // resolution. (2) The required dimensions exceed the codec's configured
+  // KEY_MAX_WIDTH and KEY_MAX_HEIGHT, triggering different memory allocation
+  // behaviors at larger resolutions.
+  //
+  // Android TV is a special case which uses MaxAnticipatedResolutionEstimator
+  // to set KEY_MAX_WIDTH and KEY_MAX_HEIGHT. This matches the physical screen
+  // resolution and does not use the video content dimensions unlike other
+  // platforms.
+  //
+  // As the hardware codec is allocated for maximum screen bounds on TV, it
+  // usually exceeds Chromium's requested KEY_MAX_INPUT_SIZE and instead
+  // allocates a much larger one to match the maximum screen bounds.
+  //
+  // Therefore, on Android TV (and other feature-enabled platforms), we can
+  // safely skip tearing down the pipeline, provided our heuristic determines
+  // the codec's existing returned `max_input_size_` is sufficient for the new
+  // frames.
+
+  bool hit_threshold = !use_block_model_ &&
+                       new_size.width() > last_width_ * kReallocateThreshold;
+
+  if (!hit_threshold) {
+    return false;
+  }
+
+  if (base::FeatureList::IsEnabled(kSkipMediaCodecReallocation)) {
+    size_t required_size = MediaCodecUtil::EstimateVideoBufferSize(
+        decoder_config_.codec(), new_size.width(), new_size.height());
+    if (required_size > 0 && max_input_size_ >= required_size) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 std::vector<SupportedVideoDecoderConfig>

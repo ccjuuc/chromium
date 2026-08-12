@@ -20,10 +20,14 @@
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window_state.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
+#include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_sync_service_initialized_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -32,6 +36,9 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/common/bookmark_bar_visibility_state.h"
+#include "components/bookmarks/common/bookmark_pref_names.h"
+#include "components/bookmarks/test/bookmark_test_helpers.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/performance_manager/public/features.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -51,73 +58,100 @@
 #endif  // ((BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)) &&
         // BUILDFLAG(ENABLE_EXTENSIONS))
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/common/chrome_features.h"
-#endif
-
 class BrowserCommandControllerTest : public BrowserWithTestWindowTest {
  public:
   BrowserCommandControllerTest() = default;
+
+  void WaitForTabGroupSyncServiceInitialized() {
+    auto observer =
+        std::make_unique<tab_groups::TabGroupSyncServiceInitializedObserver>(
+            tab_groups::TabGroupSyncServiceFactory::GetForProfile(
+                browser()->GetProfile()));
+    observer->Wait();
+  }
 };
 
 TEST_F(BrowserCommandControllerTest, IsReservedCommandOrKey) {
 #if BUILDFLAG(IS_CHROMEOS)
   // F1-3 keys are reserved Chrome accelerators on Chrome OS.
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_BACK, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                    ui::EventType::kKeyPressed, ui::VKEY_BROWSER_BACK,
-                    ui::DomCode::BROWSER_BACK, 0))));
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_FORWARD, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                       ui::EventType::kKeyPressed, ui::VKEY_BROWSER_FORWARD,
-                       ui::DomCode::BROWSER_FORWARD, 0))));
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_RELOAD, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                      ui::EventType::kKeyPressed, ui::VKEY_BROWSER_REFRESH,
-                      ui::DomCode::BROWSER_REFRESH, 0))));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_BACK, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                        ui::EventType::kKeyPressed, ui::VKEY_BROWSER_BACK,
+                        ui::DomCode::BROWSER_BACK, 0))));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_FORWARD, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                           ui::EventType::kKeyPressed, ui::VKEY_BROWSER_FORWARD,
+                           ui::DomCode::BROWSER_FORWARD, 0))));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_RELOAD, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                          ui::EventType::kKeyPressed, ui::VKEY_BROWSER_REFRESH,
+                          ui::DomCode::BROWSER_REFRESH, 0))));
 
   // When there are modifier keys pressed, don't reserve.
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_RELOAD_BYPASSING_CACHE, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                                      ui::EventType::kKeyPressed, ui::VKEY_F3,
-                                      ui::DomCode::F3, ui::EF_SHIFT_DOWN))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_RELOAD_BYPASSING_CACHE, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                                      ui::EventType::kKeyPressed, ui::VKEY_F3,
-                                      ui::DomCode::F3, ui::EF_CONTROL_DOWN))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_FULLSCREEN, input::NativeWebKeyboardEvent(
-                          ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F4,
-                                       ui::DomCode::F4, ui::EF_SHIFT_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_RELOAD_BYPASSING_CACHE,
+          input::NativeWebKeyboardEvent(
+              ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F3,
+                           ui::DomCode::F3, ui::EF_SHIFT_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_RELOAD_BYPASSING_CACHE,
+          input::NativeWebKeyboardEvent(
+              ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F3,
+                           ui::DomCode::F3, ui::EF_CONTROL_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_FULLSCREEN, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                              ui::EventType::kKeyPressed, ui::VKEY_F4,
+                              ui::DomCode::F4, ui::EF_SHIFT_DOWN))));
 
   // F4-10 keys are not reserved since they are Ash accelerators.
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F4, ui::DomCode::F4, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F5, ui::DomCode::F5, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F6, ui::DomCode::F6, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F7, ui::DomCode::F7, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F8, ui::DomCode::F8, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F9, ui::DomCode::F9, 0))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1,
+          input::NativeWebKeyboardEvent(ui::KeyEvent(
               ui::EventType::kKeyPressed, ui::VKEY_F10, ui::DomCode::F10, 0))));
 
   // Shift+Control+Alt+F3 is also an Ash accelerator. Don't reserve it.
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
-              ui::EventType::kKeyPressed, ui::VKEY_F3, ui::DomCode::F3,
-              ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                  ui::EventType::kKeyPressed, ui::VKEY_F3, ui::DomCode::F3,
+                  ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN))));
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if defined(USE_AURA)
@@ -125,66 +159,81 @@ TEST_F(BrowserCommandControllerTest, IsReservedCommandOrKey) {
 
   // The input::NativeWebKeyboardEvent constructor is available only when
   // USE_AURA is #defined.
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_NEW_WINDOW, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                          ui::EventType::kKeyPressed, ui::VKEY_N,
-                          ui::DomCode::US_N, ui::EF_CONTROL_DOWN))));
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_CLOSE_TAB, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                         ui::EventType::kKeyPressed, ui::VKEY_W,
-                         ui::DomCode::US_W, ui::EF_CONTROL_DOWN))));
-  EXPECT_FALSE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_FIND, input::NativeWebKeyboardEvent(
-                    ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F,
-                                 ui::DomCode::US_F, ui::EF_CONTROL_DOWN))));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_NEW_WINDOW, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                              ui::EventType::kKeyPressed, ui::VKEY_N,
+                              ui::DomCode::US_N, ui::EF_CONTROL_DOWN))));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_CLOSE_TAB, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                             ui::EventType::kKeyPressed, ui::VKEY_W,
+                             ui::DomCode::US_W, ui::EF_CONTROL_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_FIND, input::NativeWebKeyboardEvent(
+                        ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F,
+                                     ui::DomCode::US_F, ui::EF_CONTROL_DOWN))));
 #endif  // USE_AURA
 }
 
 TEST_F(BrowserCommandControllerTest, IsReservedCommandOrKeyIsApp) {
   auto browser_window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params = Browser::CreateParams::CreateForApp(
+  BrowserWindowCreateParams params = BrowserWindowCreateParams::CreateForApp(
       "app",
       /*trusted_source=*/true, browser_window->GetBounds(), profile(),
       /*user_gesture=*/true);
   params.window = browser_window.release();
-  auto browser = Browser::DeprecatedCreateOwnedForTesting(params);
+  auto browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
 
-  ASSERT_TRUE(browser->is_type_app());
+  ASSERT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
-  // When is_type_app(), no keys are reserved.
+  // When GetType() == BrowserWindowInterface::Type::TYPE_APP, no keys are
+  // reserved.
 #if BUILDFLAG(IS_CHROMEOS)
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_BACK,
-      input::NativeWebKeyboardEvent(ui::KeyEvent(
-          ui::EventType::kKeyPressed, ui::VKEY_F1, ui::DomCode::F1, 0))));
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_FORWARD,
-      input::NativeWebKeyboardEvent(ui::KeyEvent(
-          ui::EventType::kKeyPressed, ui::VKEY_F2, ui::DomCode::F2, 0))));
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_RELOAD,
-      input::NativeWebKeyboardEvent(ui::KeyEvent(
-          ui::EventType::kKeyPressed, ui::VKEY_F3, ui::DomCode::F3, 0))));
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      -1, input::NativeWebKeyboardEvent(ui::KeyEvent(
-              ui::EventType::kKeyPressed, ui::VKEY_F4, ui::DomCode::F4, 0))));
+  EXPECT_FALSE(chrome::BrowserCommandController::From(browser.get())
+                   ->IsReservedCommandOrKey(
+                       IDC_BACK, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                     ui::EventType::kKeyPressed, ui::VKEY_F1,
+                                     ui::DomCode::F1, 0))));
+  EXPECT_FALSE(chrome::BrowserCommandController::From(browser.get())
+                   ->IsReservedCommandOrKey(
+                       IDC_FORWARD, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                        ui::EventType::kKeyPressed, ui::VKEY_F2,
+                                        ui::DomCode::F2, 0))));
+  EXPECT_FALSE(chrome::BrowserCommandController::From(browser.get())
+                   ->IsReservedCommandOrKey(
+                       IDC_RELOAD, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                       ui::EventType::kKeyPressed, ui::VKEY_F3,
+                                       ui::DomCode::F3, 0))));
+  EXPECT_FALSE(chrome::BrowserCommandController::From(browser.get())
+                   ->IsReservedCommandOrKey(
+                       -1, input::NativeWebKeyboardEvent(
+                               ui::KeyEvent(ui::EventType::kKeyPressed,
+                                            ui::VKEY_F4, ui::DomCode::F4, 0))));
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if defined(USE_AURA)
   // The input::NativeWebKeyboardEvent constructor is available only when
   // USE_AURA is #defined.
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_NEW_WINDOW, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                          ui::EventType::kKeyPressed, ui::VKEY_N,
-                          ui::DomCode::US_N, ui::EF_CONTROL_DOWN))));
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_CLOSE_TAB, input::NativeWebKeyboardEvent(ui::KeyEvent(
-                         ui::EventType::kKeyPressed, ui::VKEY_W,
-                         ui::DomCode::US_W, ui::EF_CONTROL_DOWN))));
-  EXPECT_FALSE(browser->command_controller()->IsReservedCommandOrKey(
-      IDC_FIND, input::NativeWebKeyboardEvent(
-                    ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_F,
-                                 ui::DomCode::US_F, ui::EF_CONTROL_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser.get())
+          ->IsReservedCommandOrKey(
+              IDC_NEW_WINDOW, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                  ui::EventType::kKeyPressed, ui::VKEY_N,
+                                  ui::DomCode::US_N, ui::EF_CONTROL_DOWN))));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser.get())
+          ->IsReservedCommandOrKey(
+              IDC_CLOSE_TAB, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                 ui::EventType::kKeyPressed, ui::VKEY_W,
+                                 ui::DomCode::US_W, ui::EF_CONTROL_DOWN))));
+  EXPECT_FALSE(chrome::BrowserCommandController::From(browser.get())
+                   ->IsReservedCommandOrKey(
+                       IDC_FIND, input::NativeWebKeyboardEvent(ui::KeyEvent(
+                                     ui::EventType::kKeyPressed, ui::VKEY_F,
+                                     ui::DomCode::US_F, ui::EF_CONTROL_DOWN))));
 #endif  // USE_AURA
 }
 
@@ -193,23 +242,23 @@ TEST_F(BrowserWithTestWindowTest, IncognitoCommands) {
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_IMPORT_SETTINGS));
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_PERFORMANCE));
 
-  TestingProfile* testprofile = browser()->profile()->AsTestingProfile();
+  TestingProfile* testprofile = browser()->GetProfile()->AsTestingProfile();
   EXPECT_TRUE(testprofile);
   testprofile->SetGuestSession(true);
-  chrome::BrowserCommandController ::
+  chrome::BrowserCommandController::
       UpdateSharedCommandsForIncognitoAvailability(
-          browser()->command_controller(), testprofile);
+          chrome::BrowserCommandController::From(browser()), testprofile);
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_IMPORT_SETTINGS));
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_PERFORMANCE));
 
   testprofile->SetGuestSession(false);
   IncognitoModePrefs::SetAvailability(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       policy::IncognitoModeAvailability::kForced);
-  chrome::BrowserCommandController ::
+  chrome::BrowserCommandController::
       UpdateSharedCommandsForIncognitoAvailability(
-          browser()->command_controller(), testprofile);
+          chrome::BrowserCommandController::From(browser()), testprofile);
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_IMPORT_SETTINGS));
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_PERFORMANCE));
@@ -221,14 +270,16 @@ TEST_F(BrowserCommandControllerTest, AppFullScreen) {
 
   // Enabled for app windows.
   auto browser_window = std::make_unique<TestBrowserWindow>();
-  Browser::CreateParams params = Browser::CreateParams::CreateForApp(
+  BrowserWindowCreateParams params = BrowserWindowCreateParams::CreateForApp(
       "app",
       /*trusted_source=*/true, browser_window->GetBounds(), profile(),
       /*user_gesture=*/true);
   params.window = browser_window.release();
-  auto browser = Browser::DeprecatedCreateOwnedForTesting(params);
-  ASSERT_TRUE(browser->is_type_app());
-  browser->command_controller()->FullscreenStateChanged();
+  auto browser =
+      DeprecatedCreateOwnedBrowserWindowForTesting(std::move(params));
+  ASSERT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+  chrome::BrowserCommandController::From(browser.get())
+      ->FullscreenStateChanged();
   EXPECT_TRUE(chrome::IsCommandEnabled(browser.get(), IDC_FULLSCREEN));
 }
 
@@ -239,8 +290,8 @@ TEST_F(BrowserCommandControllerTest, AvatarAcceleratorEnabledOnDesktop) {
 
   TestingProfileManager* testing_profile_manager = profile_manager();
   ProfileManager* profile_manager = testing_profile_manager->profile_manager();
-  chrome::BrowserCommandController command_controller(browser());
-  const CommandUpdater* command_updater = &command_controller;
+  const CommandUpdater* command_updater =
+      chrome::BrowserCommandController::From(browser());
 
   // Chrome OS uses system tray menu to handle multi-profiles.
   bool enabled = !BUILDFLAG(IS_CHROMEOS);
@@ -266,10 +317,10 @@ TEST_F(BrowserCommandControllerTest, AvatarMenuAlwaysEnabledInIncognitoMode) {
   Browser::CreateParams profile_params(
       original_profile->GetPrimaryOTRProfile(/*create_if_needed=*/true), true);
   std::unique_ptr<Browser> otr_browser(
-      CreateBrowserWithTestWindowForParams(profile_params));
+      CreateBrowserWithTestWindowForParams(std::move(profile_params)));
 
-  chrome::BrowserCommandController command_controller(otr_browser.get());
-  const CommandUpdater* command_updater = &command_controller;
+  const CommandUpdater* command_updater =
+      chrome::BrowserCommandController::From(otr_browser.get());
 
   // The avatar menu should be enabled.
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SHOW_AVATAR_MENU));
@@ -294,14 +345,11 @@ class FullscreenTestBrowserWindow : public TestBrowserWindow,
   ~FullscreenTestBrowserWindow() override = default;
 
   // TestBrowserWindow overrides:
-  bool ShouldHideUIForFullscreen() const override { return fullscreen_; }
   bool IsFullscreen() const override { return fullscreen_; }
   void EnterFullscreen(const url::Origin& origin,
                        ExclusiveAccessBubbleType type,
-                       FullscreenTabParams fullscreen_tab_params) override {
-    fullscreen_ = true;
-  }
-  void ExitFullscreen() override { fullscreen_ = false; }
+                       FullscreenTabParams fullscreen_tab_params) override;
+  void ExitFullscreen() override;
   bool IsToolbarShowing() const override { return toolbar_showing_; }
   bool IsLocationBarVisible() const override { return true; }
 
@@ -347,8 +395,23 @@ class BrowserCommandControllerFullscreenTest
   }
 };
 
+void FullscreenTestBrowserWindow::EnterFullscreen(
+    const url::Origin& origin,
+    ExclusiveAccessBubbleType type,
+    FullscreenTabParams fullscreen_tab_params) {
+  BrowserWindowFullscreenController::From(test_browser_->GetBrowser())
+      ->set_should_hide_ui_for_fullscreen_for_testing(true);
+  fullscreen_ = true;
+}
+
+void FullscreenTestBrowserWindow::ExitFullscreen() {
+  BrowserWindowFullscreenController::From(test_browser_->GetBrowser())
+      ->set_should_hide_ui_for_fullscreen_for_testing(false);
+  fullscreen_ = false;
+}
+
 Profile* FullscreenTestBrowserWindow::GetProfile() {
-  return test_browser_->GetBrowser()->profile();
+  return test_browser_->GetBrowser()->GetProfile();
 }
 
 content::WebContents*
@@ -373,7 +436,7 @@ TEST_F(BrowserCommandControllerFullscreenTest,
       // 1. Most commands are disabled in fullscreen.
       // 2. In fullscreen, only the exit fullscreen commands are reserved. All
       // other shortcuts should be delivered to the web page. See
-      // http://crbug.com/680809.
+      // http://crbug.com/40501396.
 
       //         Command ID        |      tab mode      |      fullscreen     |
       //                           | enabled | reserved | enabled  | reserved |
@@ -386,9 +449,10 @@ TEST_F(BrowserCommandControllerFullscreenTest,
     { IDC_FOCUS_NEXT_PANE,         true,     false,     false,     false    },
     { IDC_FOCUS_PREVIOUS_PANE,     true,     false,     false,     false    },
     { IDC_FOCUS_BOOKMARKS,         true,     false,     false,     false    },
-    { IDC_DEVELOPER_MENU,          true,     false,     false,     false    },
+    { kDeveloperMenuId,            true,     false,     false,     false    },
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     { IDC_FEEDBACK,                true,     false,     false,     false    },
+    { IDC_REPORT_UNSAFE_SITE,      true,     false,     false,     false    },
 #endif
     { IDC_OPTIONS,                 true,     false,     false,     false    },
     { IDC_IMPORT_SETTINGS,         true,     false,     false,     false    },
@@ -404,6 +468,8 @@ TEST_F(BrowserCommandControllerFullscreenTest,
     { IDC_NEW_WINDOW,              true,     true,      true,      false    },
     { IDC_SELECT_NEXT_TAB,         true,     true,      true,      false    },
     { IDC_SELECT_PREVIOUS_TAB,     true,     true,      true,      false    },
+    { IDC_CYCLE_TO_NEXT_TAB,       true,     true,      true,      false    },
+    { IDC_CYCLE_TO_PREV_TAB,       true,     true,      true,      false    },
     { IDC_EXIT,                    true,     true,      true,      true     },
     { IDC_SHOW_AS_TAB,             false,    false,     false,     false    },
       // clang-format on
@@ -416,15 +482,15 @@ TEST_F(BrowserCommandControllerFullscreenTest,
     SCOPED_TRACE(command.command_id);
     EXPECT_EQ(chrome::IsCommandEnabled(browser(), command.command_id),
               command.enabled_in_tab);
-    EXPECT_EQ(browser()->command_controller()->IsReservedCommandOrKey(
-                  command.command_id, key_event),
+    EXPECT_EQ(chrome::BrowserCommandController::From(browser())
+                  ->IsReservedCommandOrKey(command.command_id, key_event),
               command.reserved_in_tab);
   }
 
   // Simulate going fullscreen.
   chrome::ToggleFullscreenMode(browser());
-  ASSERT_TRUE(browser()->window()->IsFullscreen());
-  browser()->command_controller()->FullscreenStateChanged();
+  ASSERT_TRUE(browser()->GetWindow()->IsFullscreen());
+  chrome::BrowserCommandController::From(browser())->FullscreenStateChanged();
 
   // By default, in fullscreen mode, the toolbar should be hidden; and all
   // platforms behave similarly.
@@ -433,8 +499,8 @@ TEST_F(BrowserCommandControllerFullscreenTest,
     SCOPED_TRACE(command.command_id);
     EXPECT_EQ(chrome::IsCommandEnabled(browser(), command.command_id),
               command.enabled_in_fullscreen);
-    EXPECT_EQ(browser()->command_controller()->IsReservedCommandOrKey(
-                  command.command_id, key_event),
+    EXPECT_EQ(chrome::BrowserCommandController::From(browser())
+                  ->IsReservedCommandOrKey(command.command_id, key_event),
               command.reserved_in_fullscreen);
   }
 
@@ -443,13 +509,14 @@ TEST_F(BrowserCommandControllerFullscreenTest,
   // were in a tab; IDC_FULLSCREEN should also be reserved.
   static_cast<FullscreenTestBrowserWindow*>(window())->set_toolbar_showing(
       true);
-  EXPECT_TRUE(browser()->command_controller()->IsReservedCommandOrKey(
-      IDC_FULLSCREEN, key_event));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsReservedCommandOrKey(
+          IDC_FULLSCREEN, key_event));
   for (size_t i = 0; i < std::size(commands); i++) {
     if (commands[i].command_id != IDC_FULLSCREEN) {
       SCOPED_TRACE(commands[i].command_id);
-      EXPECT_EQ(browser()->command_controller()->IsReservedCommandOrKey(
-                    commands[i].command_id, key_event),
+      EXPECT_EQ(chrome::BrowserCommandController::From(browser())
+                    ->IsReservedCommandOrKey(commands[i].command_id, key_event),
                 commands[i].reserved_in_tab);
     }
   }
@@ -460,61 +527,62 @@ TEST_F(BrowserCommandControllerFullscreenTest,
 
   // Exit fullscreen.
   chrome::ToggleFullscreenMode(browser());
-  ASSERT_FALSE(browser()->window()->IsFullscreen());
-  browser()->command_controller()->FullscreenStateChanged();
+  ASSERT_FALSE(browser()->GetWindow()->IsFullscreen());
+  chrome::BrowserCommandController::From(browser())->FullscreenStateChanged();
 
   for (auto& command : commands) {
     SCOPED_TRACE(command.command_id);
     EXPECT_EQ(chrome::IsCommandEnabled(browser(), command.command_id),
               command.enabled_in_tab);
-    EXPECT_EQ(browser()->command_controller()->IsReservedCommandOrKey(
-                  command.command_id, key_event),
+    EXPECT_EQ(chrome::BrowserCommandController::From(browser())
+                  ->IsReservedCommandOrKey(command.command_id, key_event),
               command.reserved_in_tab);
   }
 
   // Guest Profiles disallow some options.
-  TestingProfile* testprofile = browser()->profile()->AsTestingProfile();
+  TestingProfile* testprofile = browser()->GetProfile()->AsTestingProfile();
   EXPECT_TRUE(testprofile);
   testprofile->SetGuestSession(true);
 
-  browser()->command_controller()->FullscreenStateChanged();
+  chrome::BrowserCommandController::From(browser())->FullscreenStateChanged();
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_IMPORT_SETTINGS));
 }
 
 // Ensure that the logic for enabling IDC_OPTIONS is consistent, regardless of
 // the order of entering fullscreen and forced incognito modes. See
-// http://crbug.com/694331.
+// http://crbug.com/40507396.
 TEST_F(BrowserWithTestWindowTest, OptionsConsistency) {
-  TestingProfile* profile = browser()->profile()->AsTestingProfile();
+  TestingProfile* profile = browser()->GetProfile()->AsTestingProfile();
   // Setup guest session.
   profile->SetGuestSession(true);
   // Setup forced incognito mode.
   IncognitoModePrefs::SetAvailability(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       policy::IncognitoModeAvailability::kForced);
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   // Enter fullscreen.
-  browser()->command_controller()->FullscreenStateChanged();
+  chrome::BrowserCommandController::From(browser())->FullscreenStateChanged();
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   // Exit fullscreen
-  browser()->command_controller()->FullscreenStateChanged();
+  chrome::BrowserCommandController::From(browser())->FullscreenStateChanged();
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
   // Reenter incognito mode, this should trigger
   // UpdateSharedCommandsForIncognitoAvailability() again.
   IncognitoModePrefs::SetAvailability(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       policy::IncognitoModeAvailability::kDisabled);
   IncognitoModePrefs::SetAvailability(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       policy::IncognitoModeAvailability::kForced);
   EXPECT_TRUE(chrome::IsCommandEnabled(browser(), IDC_OPTIONS));
 }
 
 TEST_F(BrowserCommandControllerTest,
        SavePageDisabledByDownloadRestrictionsPolicy) {
-  chrome::BrowserCommandController command_controller(browser());
-  const CommandUpdater* command_updater = &command_controller;
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  const CommandUpdater* command_updater = command_controller;
 
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));
   profile()->GetPrefs()->SetInteger(policy::policy_prefs::kDownloadRestrictions,
@@ -524,8 +592,9 @@ TEST_F(BrowserCommandControllerTest,
 
 TEST_F(BrowserCommandControllerTest,
        SavePageDisabledByAllowFileSelectionDialogsPolicy) {
-  chrome::BrowserCommandController command_controller(browser());
-  const CommandUpdater* command_updater = &command_controller;
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  const CommandUpdater* command_updater = command_controller;
 
   EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));
   g_browser_process->local_state()->SetBoolean(
@@ -543,10 +612,12 @@ TEST_F(BrowserWithTestWindowTest, ClearBrowsingDataIsEnabledInIncognito) {
   // Create a new browser based on the off the record profile.
   Browser::CreateParams profile_params(incognito_profile, true);
   std::unique_ptr<Browser> incognito_browser =
-      CreateBrowserWithTestWindowForParams(profile_params);
+      CreateBrowserWithTestWindowForParams(std::move(profile_params));
 
-  chrome::BrowserCommandController command_controller(incognito_browser.get());
-  EXPECT_EQ(true, command_controller.IsCommandEnabled(IDC_CLEAR_BROWSING_DATA));
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(incognito_browser.get());
+  EXPECT_EQ(true,
+            command_controller->IsCommandEnabled(IDC_CLEAR_BROWSING_DATA));
 }
 
 class BrowserCommandControllerWithBookmarksTest
@@ -573,42 +644,157 @@ class BrowserCommandControllerWithBookmarksTest
 // command.
 TEST_F(BrowserCommandControllerWithBookmarksTest,
        BookmarkAllTabsUpdatesOnTabStripChanges) {
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    return BookmarkModelFactory::GetForBrowserContext(profile())->loaded();
-  })) << "Timeout waiting for bookmarks to load";
+  bookmarks::test::WaitForBookmarkModelToLoad(
+      BookmarkModelFactory::GetForBrowserContext(profile()));
 
-  chrome::BrowserCommandController command_controller(browser());
-  EXPECT_FALSE(command_controller.IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
 
   AddTab();
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
   browser()->tab_strip_model()->ActivateTabAt(/*index=*/0);
-  EXPECT_FALSE(command_controller.IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
 
   AddTab();
   ASSERT_EQ(2, browser()->tab_strip_model()->count());
-  EXPECT_TRUE(command_controller.IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
 
   browser()->tab_strip_model()->CloseWebContentsAt(/*index=*/1,
                                                    TabCloseTypes::CLOSE_NONE);
-  EXPECT_FALSE(command_controller.IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_BOOKMARK_ALL_TABS));
+}
+
+TEST_F(BrowserCommandControllerWithBookmarksTest,
+       BookmarkTabEnabledWhenBookmarkModelIsAlreadyLoaded) {
+  bookmarks::test::WaitForBookmarkModelToLoad(
+      BookmarkModelFactory::GetForBrowserContext(profile()));
+
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_BOOKMARK_THIS_TAB));
+}
+
+TEST_F(BrowserCommandControllerWithBookmarksTest,
+       BookmarkTabUpdateWhenBookmarkLoadingCompletes) {
+  // Create a command controller before the bookmark model is loaded.
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_BOOKMARK_THIS_TAB));
+
+  bookmarks::test::WaitForBookmarkModelToLoad(
+      BookmarkModelFactory::GetForBrowserContext(profile()));
+  // Command should be enabled after the bookmark model is loaded.
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_BOOKMARK_THIS_TAB));
+}
+
+TEST_F(BrowserCommandControllerWithBookmarksTest,
+       BookmarkBarSubmenuCommandsExecuteCorrectly) {
+  bookmarks::test::WaitForBookmarkModelToLoad(
+      BookmarkModelFactory::GetForBrowserContext(profile()));
+  AddTab();
+  browser()->tab_strip_model()->ActivateTabAt(/*index=*/0);
+
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_BOOKMARK_BAR_SUBMENU));
+  EXPECT_TRUE(command_controller->IsCommandEnabled(
+      IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW));
+  EXPECT_TRUE(command_controller->IsCommandEnabled(
+      IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE));
+  EXPECT_TRUE(command_controller->IsCommandEnabled(
+      IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP));
+
+  base::UserActionTester user_action_tester;
+
+  // Test executing visibility commands updates the pref correctly.
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_AlwaysShowBookmarkBar"));
+  command_controller->ExecuteCommand(
+      IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_SHOW,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  EXPECT_EQ(
+      profile()->GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysShow));
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_AlwaysShowBookmarkBar"));
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_AlwaysHideBookmarkBar"));
+  command_controller->ExecuteCommand(
+      IDC_BOOKMARK_BAR_SUBMENU_ALWAYS_HIDE,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  EXPECT_EQ(
+      profile()->GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kAlwaysHide));
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_AlwaysHideBookmarkBar"));
+
+  EXPECT_EQ(0, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_OnlyShowBookmarkBarOnNtp"));
+  command_controller->ExecuteCommand(
+      IDC_BOOKMARK_BAR_SUBMENU_ONLY_ON_NTP,
+      blink::WebInputEvent::GetStaticTimeStampForTests());
+  EXPECT_EQ(
+      profile()->GetPrefs()->GetInteger(
+          bookmarks::prefs::kBookmarkBarVisibilityState),
+      static_cast<int>(bookmarks::BookmarkBarVisibilityState::kOnlyShowOnNtp));
+  EXPECT_EQ(1, user_action_tester.GetActionCount(
+                   "WrenchMenu_Bookmarks_OnlyShowBookmarkBarOnNtp"));
 }
 
 TEST_F(BrowserCommandControllerTest,
        GroupAllUngroupedTabsUserMetricActionEmitted) {
   base::UserActionTester user_action_tester;
-  chrome::BrowserCommandController command_controller(browser());
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
   // We need at least one active tab before we can group all ungrouped tabs.
   AddTab(browser(), GURL("https://google.com"));
 
-  ASSERT_TRUE(command_controller.IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+  ASSERT_TRUE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
 
-  command_controller.ExecuteCommand(
+  command_controller->ExecuteCommand(
       IDC_GROUP_UNGROUPED_TABS,
       blink::WebInputEvent::GetStaticTimeStampForTests());
 
   EXPECT_EQ(
       1, user_action_tester.GetActionCount("TabGroups_GroupAllUngroupedTabs"));
+}
+
+TEST_F(BrowserCommandControllerTest,
+       GroupAllUngroupedTabsDisabledWhenNoUngroupedTabs) {
+  chrome::BrowserCommandController* command_controller =
+      chrome::BrowserCommandController::From(browser());
+  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  ASSERT_TRUE(tab_strip_model->SupportsTabGroups());
+  const GURL url("https://google.com");
+
+  // Ensure the service is initialized before making any changes to tab groups.
+  WaitForTabGroupSyncServiceInitialized();
+
+  AddTab(browser(), url);
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  tab_strip_model->SetTabPinned(0, true);
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  tab_strip_model->SetTabPinned(0, false);
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  tab_strip_model->AddToNewGroup({0});
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  AddTab(browser(), url);
+  tab_strip_model->SetTabPinned(0, true);
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  AddTab(browser(), url);
+  EXPECT_TRUE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
+
+  tab_strip_model->SetTabPinned(1, true);
+  EXPECT_FALSE(command_controller->IsCommandEnabled(IDC_GROUP_UNGROUPED_TABS));
 }
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
@@ -626,11 +812,11 @@ class CreateShortcutBrowserCommandControllerTest
     // Simulate installing the extension.
     extensions::TestExtensionSystem* extension_system =
         static_cast<extensions::TestExtensionSystem*>(
-            extensions::ExtensionSystem::Get(browser()->profile()));
+            extensions::ExtensionSystem::Get(browser()->GetProfile()));
     extension_system->CreateExtensionService(
         base::CommandLine::ForCurrentProcess(),
         /*install_directory=*/base::FilePath(), /*autoupdate_enabled=*/false);
-    extensions::ExtensionRegistrar::Get(browser()->profile())
+    extensions::ExtensionRegistrar::Get(browser()->GetProfile())
         ->AddExtension(extension);
 
     return extension;
@@ -652,14 +838,14 @@ TEST_F(CreateShortcutBrowserCommandControllerTest, DisabledForOTRProfile) {
   // Create a new browser based on the off the record profile.
   Browser::CreateParams profile_params(incognito_profile, true);
   std::unique_ptr<Browser> incognito_browser =
-      CreateBrowserWithTestWindowForParams(profile_params);
+      CreateBrowserWithTestWindowForParams(std::move(profile_params));
 
   EXPECT_FALSE(
       chrome::IsCommandEnabled(incognito_browser.get(), IDC_CREATE_SHORTCUT));
 }
 
 TEST_F(CreateShortcutBrowserCommandControllerTest, DisabledForGuestProfile) {
-  TestingProfile* test_profile = browser()->profile()->AsTestingProfile();
+  TestingProfile* test_profile = browser()->GetProfile()->AsTestingProfile();
   EXPECT_TRUE(test_profile);
   test_profile->SetGuestSession(true);
 
@@ -667,7 +853,7 @@ TEST_F(CreateShortcutBrowserCommandControllerTest, DisabledForGuestProfile) {
 }
 
 TEST_F(CreateShortcutBrowserCommandControllerTest, DisabledForSystemProfile) {
-  TestingProfile* test_profile = browser()->profile()->AsTestingProfile();
+  TestingProfile* test_profile = browser()->GetProfile()->AsTestingProfile();
   EXPECT_TRUE(test_profile);
 
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_CREATE_SHORTCUT));

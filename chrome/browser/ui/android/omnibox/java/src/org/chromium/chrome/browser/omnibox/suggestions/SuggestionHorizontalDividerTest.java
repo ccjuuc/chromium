@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
@@ -15,7 +17,6 @@ import android.view.View;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.SmallTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -35,7 +36,7 @@ import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
 public class SuggestionHorizontalDividerTest {
-    public @Rule MockitoRule mockitoRule = MockitoJUnit.rule();
+    @Rule public final MockitoRule mockitoRule = MockitoJUnit.rule();
     @Mock private RecyclerView mRecyclerView;
     @Mock private View mChildViewWithDivider;
     @Mock private View mChildViewWithNoDivider;
@@ -45,12 +46,12 @@ public class SuggestionHorizontalDividerTest {
     @Mock private Canvas mCanvas;
 
     private final PropertyModel mShowDividerModel =
-            new PropertyModel.Builder(DropdownCommonProperties.ALL_KEYS)
-                    .with(DropdownCommonProperties.SHOW_DIVIDER, true)
+            new PropertyModel.Builder(SuggestionCommonProperties.ALL_KEYS)
+                    .with(SuggestionCommonProperties.SHOW_DIVIDER, true)
                     .build();
     private final PropertyModel mNoDividerModel =
-            new PropertyModel.Builder(DropdownCommonProperties.ALL_KEYS)
-                    .with(DropdownCommonProperties.SHOW_DIVIDER, false)
+            new PropertyModel.Builder(SuggestionCommonProperties.ALL_KEYS)
+                    .with(SuggestionCommonProperties.SHOW_DIVIDER, false)
                     .build();
 
     private Activity mActivity;
@@ -78,8 +79,8 @@ public class SuggestionHorizontalDividerTest {
     @Test
     @SmallTest
     public void testShouldDraw() {
-        Assert.assertTrue(mDecoration.shouldDrawDivider(mChildViewWithDivider, mRecyclerView));
-        Assert.assertFalse(mDecoration.shouldDrawDivider(mChildViewWithNoDivider, mRecyclerView));
+        assertTrue(mDecoration.shouldDrawDivider(mChildViewWithDivider, mRecyclerView));
+        assertFalse(mDecoration.shouldDrawDivider(mChildViewWithNoDivider, mRecyclerView));
     }
 
     @Test

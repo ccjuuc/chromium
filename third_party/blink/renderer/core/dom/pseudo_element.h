@@ -69,6 +69,7 @@ class CORE_EXPORT PseudoElement : public Element {
   // unresolved = alias, kPseudoScrollMarkerGroup is resolved.
   // For styling and selector matching, return resolved version.
   PseudoId GetPseudoIdForStyling() const override;
+  void DefaultEventHandler(Event&) override;
   const AtomicString& GetPseudoArgument() const { return pseudo_argument_; }
 
   // Return the adjusted style needed by layout. In some cases computed style
@@ -76,16 +77,29 @@ class CORE_EXPORT PseudoElement : public Element {
   // display:inline. Scroll marker pseudo-elements may need to blockify the
   // display type (depending on the parent). Returns nullptr if no adjustment is
   // necessary.
-  const ComputedStyle* AdjustedLayoutStyle(
+  virtual const ComputedStyle* AdjustedLayoutStyle(
       const ComputedStyle& style,
       const ComputedStyle& layout_parent_style);
 
   static AtomicString PseudoElementNameForEvents(Element*);
   static bool IsWebExposed(PseudoId, const Node*);
 
-  // Pseudo-elements are not allowed to be the inner node for hit testing.
-  // Find the closest ancestor which is a real dom node.
+  // Returns the node to store as |inner_node_| in HitTestResult.
+  //
+  // Always resolves to the originating DOM element, for every pseudo-element
+  // including those with activation behavior (::scroll-marker, ::scroll-button,
+  // ::interest-button). This enforces the invariant that |inner_node_| is
+  // always a real (non-pseudo) Element, which is required for:
+  //   - SelectionController: IsEditable / CanStartSelection / GetPosition
+  //
+  // Dispatch targets the pseudo via InnerPossiblyPseudoElement() instead:
+  //   - DispatchMousePointerEvent uses InnerPossiblyPseudoElement() so
+  //     EventDispatcher::node_ = the pseudo, keeping HasActivationBehavior()
+  //     checks, DefaultEventHandler dispatch, and event.pseudoTarget working.
   virtual Node* InnerNodeForHitTesting();
+
+  bool SupportsHitTesting() const;
+  static bool SupportsHitTesting(PseudoId pseudo_id);
 
   void AccessKeyAction(SimulatedClickCreationScope creation_scope) override;
 
@@ -107,6 +121,8 @@ class CORE_EXPORT PseudoElement : public Element {
   bool IsLayoutSiblingOfOriginatingElement() const;
 
   bool IsInertRoot() const override;
+
+  void RetargetAnimations();
 
  protected:
   void SetIsGeneratedName(bool generated) { is_generated_name_ = generated; }

@@ -16,13 +16,12 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/memory/singleton.h"
+#include "base/no_destructor.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "chromeos/ash/components/dbus/patchpanel/patchpanel_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/client_cert_util.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/managed_network_configuration_handler.h"
@@ -43,7 +42,10 @@
 #include "chromeos/ash/experiences/arc/net/passpoint_dialog_view.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/device_event_log/device_event_log.h"
+#include "components/onc/onc_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "dbus/object_path.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
@@ -52,6 +54,14 @@
 namespace {
 
 constexpr int kGetNetworksListLimit = 100;
+
+std::string GetPrimaryUserHash() {
+  const AccountId& account_id =
+      session_manager::SessionManager::Get()->GetPrimarySession()->account_id();
+  return user_manager::UserManager::Get()
+      ->FindUser(account_id)
+      ->username_hash();
+}
 
 ash::NetworkStateHandler* GetStateHandler() {
   return ash::NetworkHandler::Get()->network_state_handler();
@@ -75,7 +85,7 @@ ash::NetworkProfileHandler* GetNetworkProfileHandler() {
 
 const ash::NetworkProfile* GetNetworkProfile() {
   return GetNetworkProfileHandler()->GetProfileForUserhash(
-      ash::LoginState::Get()->primary_user_hash());
+      GetPrimaryUserHash());
 }
 
 std::vector<const ash::NetworkState*> GetHostActiveNetworks() {
@@ -244,11 +254,12 @@ class ArcNetHostImplFactory
   static constexpr const char* kName = "ArcNetHostImplFactory";
 
   static ArcNetHostImplFactory* GetInstance() {
-    return base::Singleton<ArcNetHostImplFactory>::get();
+    static base::NoDestructor<ArcNetHostImplFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcNetHostImplFactory>;
+  friend base::NoDestructor<ArcNetHostImplFactory>;
   ArcNetHostImplFactory() = default;
   ~ArcNetHostImplFactory() override = default;
 };
@@ -419,11 +430,20 @@ void ArcNetHostImpl::CreateNetworkFailureCallback(
 
 void ArcNetHostImpl::CreateNetwork(mojom::WifiConfigurationPtr cfg,
                                    CreateNetworkCallback callback) {
-  // TODO(b/276035404): Add unit tests to improve test coverage.
   if (!cfg->eap) {
-    base::Value::Dict empty_eap;
+    base::DictValue empty_eap;
     CreateNetworkWithEapTranslated(std::move(cfg), std::move(callback),
                                    std::move(empty_eap));
+    return;
+  }
+  // b/511757251
+  if (cfg->eap->password.has_value() &&
+      cfg->eap->password.value() ==
+          onc::substitutes::kPasswordPlaceholderVerbatim) {
+    NET_LOG(ERROR) << __func__ << ": \""
+                   << onc::substitutes::kPasswordPlaceholderVerbatim
+                   << "\" password literal is forbidden";
+    std::move(callback).Run(std::string());
     return;
   }
   mojom::EapCredentialsPtr eap = cfg->eap.Clone();
@@ -438,7 +458,7 @@ void ArcNetHostImpl::CreateNetwork(mojom::WifiConfigurationPtr cfg,
 void ArcNetHostImpl::CreateNetworkWithEapTranslated(
     mojom::WifiConfigurationPtr cfg,
     CreateNetworkCallback callback,
-    base::Value::Dict eap_dict) {
+    base::DictValue eap_dict) {
   if (!cfg->hexssid.has_value() || !cfg->details) {
     NET_LOG(ERROR) << __func__ << ": Cannot create WiFi network without hex"
                    << " ssid or WiFi properties";
@@ -455,9 +475,9 @@ void ArcNetHostImpl::CreateNetworkWithEapTranslated(
     return;
   }
 
-  base::Value::Dict properties;
-  base::Value::Dict wifi_dict;
-  base::Value::Dict ipconfig_dict;
+  base::DictValue properties;
+  base::DictValue wifi_dict;
+  base::DictValue ipconfig_dict;
 
   properties.Set(onc::network_config::kType, onc::network_config::kWiFi);
   // StaticIPConfig dictionary
@@ -529,12 +549,11 @@ void ArcNetHostImpl::CreateNetworkWithEapTranslated(
                    std::move(ipconfig_dict));
   }
 
-  std::string user_id_hash = ash::LoginState::Get()->primary_user_hash();
   // TODO(crbug.com/40524549): Remove SplitOnceCallback() by updating
   // the callee interface.
   auto split_callback = base::SplitOnceCallback(std::move(callback));
   GetManagedConfigurationHandler()->CreateConfiguration(
-      user_id_hash, properties,
+      GetPrimaryUserHash(), properties,
       base::BindOnce(&ArcNetHostImpl::CreateNetworkSuccessCallback,
                      weak_factory_.GetWeakPtr(),
                      std::move(split_callback.first)),
@@ -594,8 +613,8 @@ void ArcNetHostImpl::UpdateWifiNetwork(const std::string& guid,
   }
 
   // TODO(b/270089579): Add support for more properties to be updatable.
-  base::Value::Dict properties;
-  base::Value::Dict wifi_dict;
+  base::DictValue properties;
+  base::DictValue wifi_dict;
 
   if (cfg->bssid_allowlist.has_value()) {
     wifi_dict.Set(onc::wifi::kBSSIDAllowlist,
@@ -739,18 +758,18 @@ void ArcNetHostImpl::ConnectArcVpn(const std::string& service_path,
       false /* check_error_state */, ash::ConnectCallbackMode::ON_COMPLETED);
 }
 
-base::Value::List ArcNetHostImpl::TranslateStringListToValue(
+base::ListValue ArcNetHostImpl::TranslateStringListToValue(
     const std::vector<std::string>& string_list) {
-  base::Value::List result;
+  base::ListValue result;
   for (const auto& item : string_list) {
     result.Append(item);
   }
   return result;
 }
 
-base::Value::List ArcNetHostImpl::TranslateLongListToStringValue(
+base::ListValue ArcNetHostImpl::TranslateLongListToStringValue(
     const std::vector<uint64_t>& long_list) {
-  base::Value::List result;
+  base::ListValue result;
   for (const auto& item : long_list) {
     result.Append(base::NumberToString(item));
   }
@@ -758,9 +777,9 @@ base::Value::List ArcNetHostImpl::TranslateLongListToStringValue(
   return result;
 }
 
-base::Value::Dict ArcNetHostImpl::TranslateVpnConfigurationToOnc(
+base::DictValue ArcNetHostImpl::TranslateVpnConfigurationToOnc(
     const mojom::AndroidVpnConfiguration& cfg) {
-  base::Value::Dict top_dict;
+  base::DictValue top_dict;
 
   // Name, Type
   top_dict.Set(onc::network_config::kName,
@@ -772,7 +791,7 @@ base::Value::Dict ArcNetHostImpl::TranslateVpnConfigurationToOnc(
   top_dict.Set(onc::network_config::kNameServersConfigType,
                onc::network_config::kIPConfigTypeStatic);
 
-  base::Value::Dict ip_dict;
+  base::DictValue ip_dict;
   ip_dict.Set(onc::ipconfig::kType, onc::ipconfig::kIPv4);
   ip_dict.Set(onc::ipconfig::kIPAddress, cfg.ipv4_gateway);
   ip_dict.Set(onc::ipconfig::kRoutingPrefix, 32);
@@ -790,12 +809,12 @@ base::Value::Dict ArcNetHostImpl::TranslateVpnConfigurationToOnc(
   top_dict.Set(onc::network_config::kStaticIPConfig, std::move(ip_dict));
 
   // VPN dictionary
-  base::Value::Dict vpn_dict;
+  base::DictValue vpn_dict;
   vpn_dict.Set(onc::vpn::kHost, cfg.app_name);
   vpn_dict.Set(onc::vpn::kType, onc::vpn::kArcVpn);
 
   // ARCVPN dictionary
-  base::Value::Dict arcvpn_dict;
+  base::DictValue arcvpn_dict;
   vpn_dict.Set(onc::vpn::kArcVpn, std::move(arcvpn_dict));
 
   top_dict.Set(onc::network_config::kVPN, std::move(vpn_dict));
@@ -808,11 +827,9 @@ base::Value::Dict ArcNetHostImpl::TranslateVpnConfigurationToOnc(
 
 void ArcNetHostImpl::AndroidVpnConnected(
     mojom::AndroidVpnConfigurationPtr cfg) {
-  std::string user_id_hash = ash::LoginState::Get()->primary_user_hash();
-
   // TODO(b/333809009): Skip ONC translation step.
   GetManagedConfigurationHandler()->CreateConfiguration(
-      user_id_hash, TranslateVpnConfigurationToOnc(*cfg),
+      GetPrimaryUserHash(), TranslateVpnConfigurationToOnc(*cfg),
       base::BindOnce(&ArcNetHostImpl::ConnectArcVpn,
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&ArcVpnErrorCallback, "connecting new ARC VPN"));
@@ -857,7 +874,7 @@ void ArcNetHostImpl::AndroidVpnDisconnected() {
 void ArcNetHostImpl::TranslateEapCredentialsToDict(
     mojom::EapCredentialsPtr cred,
     bool is_onc,
-    base::OnceCallback<void(base::Value::Dict)> callback) {
+    base::OnceCallback<void(base::DictValue)> callback) {
   if (!cred) {
     NET_LOG(ERROR) << __func__ << ": Empty EAP credentials";
     return;
@@ -907,10 +924,10 @@ void ArcNetHostImpl::TranslateEapCredentialsToDict(
 
 void ArcNetHostImpl::TranslateEapCredentialsToOncDictWithCertID(
     const mojom::EapCredentialsPtr& eap,
-    base::OnceCallback<void(base::Value::Dict)> callback,
+    base::OnceCallback<void(base::DictValue)> callback,
     const std::optional<std::string>& cert_id,
     const std::optional<int>& slot_id) {
-  base::Value::Dict eap_dict;
+  base::DictValue eap_dict;
 
   if (cert_id.has_value() && slot_id.has_value()) {
     // The ID of imported user certificate and private key is the same, use one
@@ -966,7 +983,7 @@ void ArcNetHostImpl::TranslateEapCredentialsToOncDictWithCertID(
 
 void ArcNetHostImpl::TranslateEapCredentialsToShillDictWithCertID(
     mojom::EapCredentialsPtr cred,
-    base::OnceCallback<void(base::Value::Dict)> callback,
+    base::OnceCallback<void(base::DictValue)> callback,
     const std::optional<std::string>& cert_id,
     const std::optional<int>& slot_id) {
   if (!cred) {
@@ -974,7 +991,7 @@ void ArcNetHostImpl::TranslateEapCredentialsToShillDictWithCertID(
     return;
   }
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(shill::kEapMethodProperty,
            net_utils::TranslateEapMethod(cred->method));
   dict.Set(shill::kEapPhase2AuthProperty,
@@ -1036,7 +1053,7 @@ void ArcNetHostImpl::TranslateEapCredentialsToShillDictWithCertID(
 
 void ArcNetHostImpl::TranslatePasspointCredentialsToDict(
     mojom::PasspointCredentialsPtr cred,
-    base::OnceCallback<void(base::Value::Dict)> callback) {
+    base::OnceCallback<void(base::DictValue)> callback) {
   if (!cred) {
     NET_LOG(ERROR) << __func__ << ": Empty passpoint credentials";
     return;
@@ -1046,7 +1063,15 @@ void ArcNetHostImpl::TranslatePasspointCredentialsToDict(
                    << ": mojom::PasspointCredentials has no EAP properties";
     return;
   }
-
+  // b/511757251
+  if (cred->eap->password.has_value() &&
+      cred->eap->password.value() ==
+          onc::substitutes::kPasswordPlaceholderVerbatim) {
+    NET_LOG(ERROR) << __func__ << ": \""
+                   << onc::substitutes::kPasswordPlaceholderVerbatim
+                   << "\" password literal is forbidden";
+    return;
+  }
   mojom::EapCredentialsPtr eap = cred->eap.Clone();
   TranslateEapCredentialsToDict(
       std::move(eap),
@@ -1058,8 +1083,8 @@ void ArcNetHostImpl::TranslatePasspointCredentialsToDict(
 
 void ArcNetHostImpl::TranslatePasspointCredentialsToDictWithEapTranslated(
     mojom::PasspointCredentialsPtr cred,
-    base::OnceCallback<void(base::Value::Dict)> callback,
-    base::Value::Dict dict) {
+    base::OnceCallback<void(base::DictValue)> callback,
+    base::DictValue dict) {
   if (!cred) {
     NET_LOG(ERROR) << __func__ << ": Empty passpoint credentials";
     return;
@@ -1095,18 +1120,18 @@ void ArcNetHostImpl::TranslatePasspointCredentialsToDictWithEapTranslated(
 // Set up proxy configuration. If proxy auto discovery pac url is available,
 // we set up proxy auto discovery pac url, otherwise we set up
 // host, port and exclusion list.
-base::Value::Dict ArcNetHostImpl::TranslateProxyConfiguration(
+base::DictValue ArcNetHostImpl::TranslateProxyConfiguration(
     const arc::mojom::ArcProxyInfoPtr& http_proxy) {
-  base::Value::Dict proxy_dict;
+  base::DictValue proxy_dict;
   if (http_proxy->is_pac_url_proxy()) {
     proxy_dict.Set(onc::proxy::kType, onc::proxy::kPAC);
     proxy_dict.Set(onc::proxy::kPAC,
                    http_proxy->get_pac_url_proxy()->pac_url.spec());
   } else {
-    base::Value::Dict location_dict;
+    base::DictValue location_dict;
     location_dict.Set(onc::proxy::kHost, http_proxy->get_manual_proxy()->host);
     location_dict.Set(onc::proxy::kPort, http_proxy->get_manual_proxy()->port);
-    base::Value::Dict manual;
+    base::DictValue manual;
     manual.Set(onc::proxy::kHttp, std::move(location_dict));
 
     proxy_dict.Set(onc::proxy::kType, onc::proxy::kManual);
@@ -1171,7 +1196,7 @@ void ArcNetHostImpl::RequestPasspointAppApproval(
 }
 
 void ArcNetHostImpl::AddPasspointCredentialsWithProperties(
-    base::Value::Dict properties) {
+    base::DictValue properties) {
   if (properties.empty()) {
     NET_LOG(ERROR) << __func__
                    << ": Failed to translate PasspointCredentials properties";
@@ -1203,7 +1228,7 @@ void ArcNetHostImpl::RemovePasspointCredentials(
     return;
   }
 
-  base::Value::Dict shill_properties;
+  base::DictValue shill_properties;
   if (properties->fqdn.has_value()) {
     shill_properties.Set(shill::kPasspointCredentialsFQDNProperty,
                          properties->fqdn.value());
@@ -1299,7 +1324,7 @@ void ArcNetHostImpl::NetworkPropertiesUpdated(
 
 void ArcNetHostImpl::ReceiveShillProperties(
     const std::string& service_path,
-    std::optional<base::Value::Dict> shill_properties) {
+    std::optional<base::DictValue> shill_properties) {
   if (!shill_properties) {
     NET_LOG(ERROR) << __func__
                    << ": Failed to get shill Service properties for "
@@ -1372,7 +1397,7 @@ void ArcNetHostImpl::NetworkListChanged() {
 void ArcNetHostImpl::StartLohs(mojom::LohsConfigPtr config,
                                StartLohsCallback callback) {
   NET_LOG(USER) << __func__ << ": Starting LOHS";
-  base::Value::Dict dict;
+  base::DictValue dict;
 
   if (config->hexssid.empty()) {
     NET_LOG(ERROR) << __func__

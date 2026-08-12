@@ -10,10 +10,11 @@
 #include <vector>
 
 #include "base/functional/callback_forward.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/common/buildflags.h"
 #include "components/sessions/core/session_id.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
-#include "components/tabs/public/split_tab_id.h"
 #include "components/tabs/public/tab_interface.h"
 
 class Browser;
@@ -37,6 +38,7 @@ class TabGroupId;
 }
 
 namespace split_tabs {
+enum class SplitTabLayout;
 enum class SplitTabCreatedSource;
 }
 
@@ -140,16 +142,30 @@ class TabStripModelDelegate {
   // |group|.
   virtual void CreateHistoricalGroup(const tab_groups::TabGroupId& group) = 0;
 
+  // Creates an entry in the historical split database for the specified
+  // |split_id|.
+  virtual void CreateHistoricalSplit(
+      const split_tabs::SplitTabId& split_id) = 0;
+
   // Called on group creation after the group has been added to the tabstrip and
   // all tabs have been added.
   virtual void GroupAdded(const tab_groups::TabGroupId& group) = 0;
 
   // Notifies the delegate that a group is about to be closed, and allows it
-  // to perform any preparation neccessary.
+  // to perform any preparation necessary.
   virtual void WillCloseGroup(const tab_groups::TabGroupId& group) = 0;
+
+  // Called before a full split view (both tabs) is closed.
+  virtual void WillCloseSplit(const split_tabs::SplitTabId& split_id) = 0;
 
   // Notifies the tab restore service that the group is no longer closing.
   virtual void GroupCloseStopped(const tab_groups::TabGroupId& group) = 0;
+
+  // Notifies the tab restore service that the split view is done closing.
+  virtual void SplitClosed(const split_tabs::SplitTabId& split_id) = 0;
+
+  // Notifies the tab restore service that the split view is no longer closing.
+  virtual void SplitCloseStopped(const split_tabs::SplitTabId& split_id) = 0;
 
   // Runs any unload listeners associated with the specified WebContents
   // before it is closed. If there are unload listeners that need to be run,
@@ -196,6 +212,7 @@ class TabStripModelDelegate {
   // `indices` is empty, a new tab navigated to the split tab empty state page
   // will be used for the split view instead.
   virtual void NewSplitTab(std::vector<int> indices,
+                           split_tabs::SplitTabLayout layout,
                            split_tabs::SplitTabCreatedSource source) = 0;
 
   // When performing actions to groups, some features may need to show
@@ -214,22 +231,25 @@ class TabStripModelDelegate {
       const std::vector<tab_groups::TabGroupId>& group_ids,
       base::OnceCallback<void()> callback) = 0;
 
-#if BUILDFLAG(ENABLE_GLIC)
   // Glic related delegation (see GlicKeyedService and GlicSharingManager).
   // Note: 'Pinning' in Glic is a distinct notion.
 
-  // Returns true if the tab is Glic-pinned.
-  virtual bool IsTabGlicPinned(tabs::TabHandle tab_handle) = 0;
+  // Unpins the specified tabs from all Glic conversations.
+  virtual void GlicUnpinTabsFromAllConversations(
+      base::span<const tabs::TabHandle> tab_handles);
 
-  // Glic-pins the tab and returns true if successful.
-  virtual bool GlicPinTabs(base::span<const tabs::TabHandle> tab_handles) = 0;
+  // Requests closing the specified tab, performing all closability checks,
+  // user prompts (e.g. UnloadController, group deletion dialogs), and fallback
+  // tab creation. If `on_approved` is provided, it is executed once all checks
+  // and prompts pass, before performing default tab destruction.
+  virtual void CloseTab(
+      const tabs::TabInterface* tab,
+      CloseTabSource source,
+      base::OnceCallback<void(CloseTabSource)> on_approved) = 0;
 
-  // Glic-unpins the tab and returns true if successful.
-  virtual bool GlicUnpinTabs(base::span<const tabs::TabHandle> tab_handles) = 0;
-
-  // Opens the Glic window if not already open.
-  virtual void OpenGlicWindowFromSharedTab() = 0;
-#endif
+  void CloseTab(const tabs::TabInterface* tab, CloseTabSource source) {
+    CloseTab(tab, source, base::OnceCallback<void(CloseTabSource)>());
+  }
 };
 
 #endif  // CHROME_BROWSER_UI_TABS_TAB_STRIP_MODEL_DELEGATE_H_

@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/i18n/time_formatting.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.h"
@@ -25,7 +25,6 @@
 #include "chrome/browser/support_tool/signin_data_collector.h"
 #include "chrome/browser/support_tool/support_tool_handler.h"
 #include "chrome/browser/support_tool/system_log_source_data_collector_adaptor.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "build/chromeos_buildflags.h"
@@ -53,6 +52,10 @@
 #include "chrome/browser/ash/system_logs/reven_log_source.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_WITH_HW_DETAILS)
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#include "chrome/browser/support_tool/updater_data_collector.h"
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 
 namespace {
 
@@ -89,6 +92,11 @@ constexpr support_tool::DataCollectorType kDataCollectorsChromeosAsh[] = {
 // Chrome OS Flex devices.
 constexpr support_tool::DataCollectorType kDataCollectorsChromeosHwDetails[] = {
     support_tool::CHROMEOS_REVEN};
+
+// Data collector types that can only work on Linux, macOS, and Windows.
+constexpr support_tool::DataCollectorType kDataCollectorsLinuxMacWin[] = {
+    support_tool::CHROME_UPDATER,
+};
 
 }  // namespace
 
@@ -291,6 +299,11 @@ std::unique_ptr<SupportToolHandler> GetSupportToolHandler(
 #endif  // BUILDFLAG(IS_CHROMEOS_WITH_HW_DETAILS)
         break;
 #endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+      case support_tool::CHROME_UPDATER:
+        handler->AddDataCollector(std::make_unique<UpdaterDataCollector>());
+        break;
+#endif
       default:
         break;
     }
@@ -307,6 +320,9 @@ std::vector<support_tool::DataCollectorType> GetAllDataCollectors() {
     data_collectors.push_back(type);
   }
   for (const auto& type : kDataCollectorsChromeosHwDetails) {
+    data_collectors.push_back(type);
+  }
+  for (const auto& type : kDataCollectorsLinuxMacWin) {
     data_collectors.push_back(type);
   }
   return data_collectors;
@@ -328,6 +344,11 @@ GetAllAvailableDataCollectorsOnDevice() {
   }
 #endif  // BUILDFLAG(IS_CHROMEOS_WITH_HW_DETAILS)
 #endif  // BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  for (const auto& type : kDataCollectorsLinuxMacWin) {
+    data_collectors.push_back(type);
+  }
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   return data_collectors;
 }
 
@@ -339,9 +360,12 @@ base::FilePath GetFilepathToExport(base::FilePath target_directory,
   if (!case_id.empty()) {
     filename += case_id + "_";
   }
-  return target_directory.AppendASCII(
-      filename + base::UnlocalizedTimeFormatWithPattern(
-                     timestamp, "'UTC'yyyyMMdd_HHmm", icu::TimeZone::getGMT()));
+  base::Time::Exploded exploded;
+  timestamp.UTCExplode(&exploded);
+  std::string timestamp_str = base::StringPrintf(
+      "UTC%04d%02d%02d_%02d%02d", exploded.year, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute);
+  return target_directory.AppendASCII(filename + timestamp_str);
 }
 
 std::string SupportToolErrorsToString(

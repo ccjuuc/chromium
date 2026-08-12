@@ -10,7 +10,6 @@
 #include "ash/wm/window_positioning_utils.h"
 #include "ash/wm/window_util.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
 #include "chromeos/ui/frame/caption_buttons/frame_caption_button_container_view.h"
@@ -94,7 +93,9 @@ WindowResizer::WindowResizer(WindowState* window_state)
   DCHECK(window_state_->drag_details());
 }
 
-WindowResizer::~WindowResizer() = default;
+WindowResizer::~WindowResizer() {
+  CHECK_EQ(delete_block_count_, 0u);
+}
 
 // static
 int WindowResizer::GetBoundsChangeForWindowComponent(int component) {
@@ -261,6 +262,8 @@ gfx::Rect WindowResizer::CalculateBoundsForDrag(
 void WindowResizer::SetBoundsDuringResize(const gfx::Rect& bounds) {
   aura::Window* window = GetTarget();
   DCHECK(window);
+
+  aura::Window::ScopedDeleteBlocker blocker(window);
 
   auto ptr = weak_ptr_factory_.GetWeakPtr();
   const gfx::Size original_size = window->bounds().size();

@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/component_export.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
@@ -68,7 +68,8 @@ bool IsAllowlistedSourceId(SourceId source_id) {
     case ukm::SourceIdObj::Type::CHROMEOS_WEBSITE_ID:
     case ukm::SourceIdObj::Type::NOTIFICATION_ID:
     case ukm::SourceIdObj::Type::EXTENSION_ID:
-    case ukm::SourceIdObj::Type::CDM_ID: {
+    case ukm::SourceIdObj::Type::CDM_ID:
+    case ukm::SourceIdObj::Type::IWA_BUNDLE_ID: {
       return true;
     }
     case ukm::SourceIdObj::Type::DEFAULT:
@@ -83,7 +84,7 @@ bool IsAllowlistedSourceId(SourceId source_id) {
 bool HasSupportedScheme(const GURL& url) {
   return url.SchemeIsHTTPOrHTTPS() || url.SchemeIs(url::kAboutScheme) ||
          url.SchemeIs(kChromeUIScheme) || url.SchemeIs(kExtensionScheme) ||
-         url.SchemeIs(kAppScheme);
+         url.SchemeIs(kAppScheme) || url.SchemeIs(kIsolatedAppScheme);
 }
 
 void RecordDroppedSource(DroppedDataReason reason) {
@@ -232,6 +233,10 @@ void UkmRecorderImpl::DisableRecording() {
   OnRecorderParametersChanged();
 }
 
+const builders::DecodeMap& UkmRecorderImpl::GetDecodeMap() const {
+  return builders::GetDecodeMap();
+}
+
 void UkmRecorderImpl::SetSamplingForTesting(int rate) {
   sampling_forced_for_testing_ = true;
   default_sampling_rate_ = rate;
@@ -247,9 +252,36 @@ bool UkmRecorderImpl::ShouldDropEntryForTesting(mojom::UkmEntry* entry) {
   return ShouldDropEntry(entry);
 }
 
+absl::flat_hash_map<SourceId, std::vector<GURL>>
+UkmRecorderImpl::GetDocumentToNavigationUrlsMap(
+    const std::vector<mojom::UkmEntry*>& document_created_entries) const {
+  absl::flat_hash_map<SourceId, std::vector<GURL>> result;
+  for (const auto* entry : document_created_entries) {
+    auto nav_source_id_it = entry->metrics.find(
+        builders::DocumentCreated::kNavigationSourceIdNameHash);
+    if (nav_source_id_it != entry->metrics.end()) {
+      auto it = sources().find(nav_source_id_it->second);
+      if (it != sources().end()) {
+        DCHECK(!result.contains(entry->source_id));
+        result[entry->source_id] = it->second->urls();
+      }
+    }
+  }
+  return result;
+}
+
 bool UkmRecorderImpl::IsSamplingConfigured() const {
   return sampling_forced_for_testing_ ||
          base::FeatureList::IsEnabled(kUkmSamplingRateFeature);
+}
+
+bool UkmRecorderImpl::recording_enabled(ukm::UkmConsentType type) const {
+  if (ShouldUseMetricsConsentRestructure()) {
+    // TODO(heychirag): In the new model, we don't filter metrics out based on
+    // UkmConsentState. During cleanup, this method should be removed completely.
+    return recording_enabled();
+  }
+  return recording_state_.Has(type);
 }
 
 void UkmRecorderImpl::Purge() {
@@ -378,15 +410,57 @@ void UkmRecorderImpl::RemoveUkmRecorderObserver(UkmRecorderObserver* observer) {
 }
 
 void UkmRecorderImpl::OnUkmAllowedStateChanged(UkmConsentState state) {
-  NotifyAllObservers(&UkmRecorderObserver::OnUkmAllowedStateChanged, state);
+  NotifyAllObservers(
+      static_cast<void (UkmRecorderObserver::*)(UkmConsentState)>(
+          &UkmRecorderObserver::OnUkmAllowedStateChanged),
+      state);
 }
 
-void UkmRecorderImpl::StoreWebDXFeaturesDownsamplingParameter(Report* report) {
-  Report::DownsamplingRate* rate = report->add_downsampling_rates();
-  // TODO(crbug.com/381251064): Consider populating all the other applied
-  // downsampling rates too.
-  rate->set_event_hash(base::HashMetricName(kWebFeatureSamplingKeyword));
-  rate->set_standard_rate(webdx_features_sampling_);
+void UkmRecorderImpl::OnUkmAllowedStateChanged(bool ukm_allowed) {
+  NotifyAllObservers(static_cast<void (UkmRecorderObserver::*)(bool)>(
+                         &UkmRecorderObserver::OnUkmAllowedStateChanged),
+                     ukm_allowed);
+}
+
+void UkmRecorderImpl::StoreDownsamplingParameters(Report* report) {
+  // Store the default downsampling rate.
+  if (default_sampling_rate_ >= 0) {
+    Report::DownsamplingRate* rate = report->add_downsampling_rates();
+    rate->set_event_hash(base::HashMetricName("_default_sampling"));
+    rate->set_standard_rate(default_sampling_rate_);
+  }
+
+  // Store WebDX features downsampling rate.
+  if (webdx_features_sampling_ >= 0) {
+    Report::DownsamplingRate* rate = report->add_downsampling_rates();
+    rate->set_event_hash(base::HashMetricName(kWebFeatureSamplingKeyword));
+    rate->set_standard_rate(webdx_features_sampling_);
+  }
+
+  // For events present in the report, store their downsampling rates.
+  std::set<uint64_t> present_event_hashes;
+  for (const auto& entry : report->entries()) {
+    present_event_hashes.insert(entry.event_hash());
+  }
+  for (const auto& [event_hash, sampling_rate] : event_sampling_rates_) {
+    if (present_event_hashes.contains(event_hash)) {
+      Report::DownsamplingRate* rate = report->add_downsampling_rates();
+      rate->set_event_hash(event_hash);
+      rate->set_standard_rate(sampling_rate);
+    }
+  }
+  // Downsampling grouped events to be at the same rate is controlled via a
+  // master event. For these event types, get the master event's sampling rate.
+  for (const auto& [event_hash, master_hash] : event_sampling_master_) {
+    if (present_event_hashes.contains(event_hash)) {
+      auto it = event_sampling_rates_.find(master_hash);
+      if (it != event_sampling_rates_.end()) {
+        Report::DownsamplingRate* rate = report->add_downsampling_rates();
+        rate->set_event_hash(event_hash);
+        rate->set_standard_rate(it->second);
+      }
+    }
+  }
 }
 
 void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
@@ -395,7 +469,17 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
 
   // Set of source ids seen by entries in recordings_.
   std::set<SourceId> source_ids_seen;
+  std::vector<mojom::UkmEntry*> document_created_entries;
   for (const auto& entry : recordings_.entries) {
+    // DocumentCreated events are only needed to map navigation source IDs
+    // to document source IDs on the client-side (which helps populate
+    // `resolved_urls`), so there is no need to send them to the server.
+    // TODO(crbug.com/502906724): Remove DocumentCreated.
+    if (entry->event_hash == builders::DocumentCreated::kEntryNameHash) {
+      document_created_entries.push_back(entry.get());
+      continue;
+    }
+
     Entry* proto_entry = report->add_entries();
     StoreEntryProto(*entry, proto_entry);
     source_ids_seen.insert(entry->source_id);
@@ -423,7 +507,17 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
 
   std::unordered_map<SourceIdType, int> serialized_source_type_counts;
 
+  absl::flat_hash_map<SourceId, std::vector<GURL>>
+      document_source_id_to_resolved_urls =
+          GetDocumentToNavigationUrlsMap(document_created_entries);
+
   for (const auto& kv : recordings_.sources) {
+    auto it = document_source_id_to_resolved_urls.find(kv.first);
+    if (it != document_source_id_to_resolved_urls.end()) {
+      kv.second->set_resolved_urls(it->second);
+      document_source_id_to_resolved_urls.erase(it);
+    }
+
     MaybeMarkForDeletion(kv.first);
     // If the source id is not allowlisted, don't send it unless it has
     // associated entries and the URL matches that of an allowlisted source.
@@ -437,7 +531,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
         continue;
       }
       // Omit entryless sources from the report.
-      if (!base::Contains(source_ids_seen, kv.first)) {
+      if (!source_ids_seen.contains(kv.first)) {
         continue;
       }
 
@@ -458,6 +552,26 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
     serialized_source_type_counts[GetSourceIdType(kv.first)]++;
   }
 
+  for (const auto& [source_id, resolved_urls] :
+       document_source_id_to_resolved_urls) {
+    // Only add if this blink Document source contains at least one entry.
+    if (!source_ids_seen.contains(source_id)) {
+      continue;
+    }
+
+    // Create a synthetic source. We use an empty GURL as the source's own URL
+    // since we don't have the real subframe URL and using the main frame
+    // URL would be misleading. The main frame URLs are stored in
+    // |resolved_urls|.
+    auto source = std::make_unique<UkmSource>(source_id, GURL());
+    source->set_resolved_urls(resolved_urls);
+
+    Source* proto_source = report->add_sources();
+    source->PopulateProto(proto_source);
+
+    serialized_source_type_counts[GetSourceIdType(source_id)]++;
+  }
+
   for (const auto& event_and_aggregate : recordings_.event_aggregations) {
     Aggregate* proto_aggregate = report->add_aggregates();
     proto_aggregate->set_event_hash(event_and_aggregate.first);
@@ -470,7 +584,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
     num_serialized_sources += source_type_and_count.second;
   }
 
-  int num_serialized_entries = recordings_.entries.size();
+  int num_serialized_entries = report->entries_size();
   UMA_HISTOGRAM_COUNTS_1000("UKM.Sources.SerializedCount2",
                             num_serialized_sources);
   UMA_HISTOGRAM_COUNTS_100000("UKM.Entries.SerializedCount2",
@@ -559,7 +673,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
   // having any events in this reporting cycle.
   int num_sources_entryless = 0;
   for (const auto& kv : recordings_.sources) {
-    if (!base::Contains(source_ids_seen, kv.first)) {
+    if (!source_ids_seen.contains(kv.first)) {
       num_sources_entryless++;
     }
   }
@@ -569,7 +683,7 @@ void UkmRecorderImpl::StoreRecordingsInReport(Report* report) {
       << "StoreRecordingsInReport done [num_serialized_entries="
       << num_serialized_entries << "]";
 
-  StoreWebDXFeaturesDownsamplingParameter(report);
+  StoreDownsamplingParameters(report);
   DVLOG(DebuggingLogLevel::Rare) << "# of downsampling parameters stored: "
                                  << report->downsampling_rates().size();
 }
@@ -581,7 +695,7 @@ int UkmRecorderImpl::PruneData(std::set<SourceId>& source_ids_seen) {
   // existing sources that were seen in this report.
   auto it = source_ids_seen.begin();
   while (it != source_ids_seen.end()) {
-    if (!base::Contains(recordings_.sources, *it)) {
+    if (!recordings_.sources.contains(*it)) {
       it = source_ids_seen.erase(it);
     } else {
       it++;
@@ -687,12 +801,12 @@ void UkmRecorderImpl::UpdateSourceURL(SourceId source_id,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(GetSourceIdType(source_id) != SourceIdType::NO_URL_ID);
 
-  if (base::Contains(recordings_.sources, source_id))
+  if (recordings_.sources.contains(source_id))
     return;
 
   const GURL sanitized_url = SanitizeURL(unsanitized_url);
 
-  // If UKM recording is disabled due to |recording_enabled|,
+  // Even if UKM recording is disabled due to |recording_enabled|,
   // still notify observers as they might be interested in it.
   NotifyAllObservers(&UkmRecorderObserver::OnUpdateSourceURL, source_id,
                      std::vector<GURL>{sanitized_url});
@@ -712,7 +826,7 @@ void UkmRecorderImpl::UpdateAppURL(SourceId source_id,
   if (app_type != AppType::kPWA && !recording_enabled(ukm::EXTENSIONS)) {
     RecordDroppedSource(DroppedDataReason::EXTENSION_URLS_DISABLED);
 
-    // If UKM recording is disabled due to |recording_enabled|,
+    // Even if UKM recording is disabled due to |recording_enabled|,
     // still notify observers as they might be interested in it.
     NotifyAllObservers(&UkmRecorderObserver::OnUpdateSourceURL, source_id,
                        std::vector<GURL>{SanitizeURL(url)});
@@ -725,7 +839,7 @@ void UkmRecorderImpl::RecordNavigation(
     SourceId source_id,
     const UkmSource::NavigationData& unsanitized_navigation_data) {
   DCHECK(GetSourceIdType(source_id) == SourceIdType::NAVIGATION_ID);
-  DCHECK(!base::Contains(recordings_.sources, source_id));
+  DCHECK(!recordings_.sources.contains(source_id));
   // TODO(csharrison): Consider changing this behavior so the Source isn't even
   // recorded at all if the final URL in |unsanitized_navigation_data| should
   // not be recorded.
@@ -761,6 +875,7 @@ void UkmRecorderImpl::RecordNavigation(
 UkmConsentType UkmRecorderImpl::GetConsentType(SourceIdType type) {
   switch (type) {
     case SourceIdType::APP_ID:
+    case SourceIdType::IWA_BUNDLE_ID:
       return UkmConsentType::APPS;
     case SourceIdType::DEFAULT:
     case SourceIdType::NAVIGATION_ID:
@@ -841,6 +956,7 @@ void UkmRecorderImpl::MaybeMarkForDeletion(SourceId source_id) {
     case ukm::SourceIdObj::Type::NAVIGATION_ID:
     case ukm::SourceIdObj::Type::WORKER_ID:
     case ukm::SourceIdObj::Type::REDIRECT_ID:
+    case ukm::SourceIdObj::Type::IWA_BUNDLE_ID:
       break;
   }
 }
@@ -968,7 +1084,7 @@ void UkmRecorderImpl::AddEntry(mojom::UkmEntryPtr entry) {
 
   // This should not happen in practice, but possible if an event name
   // coming from Android implementation in UkmRecorder.java is misspelled.
-  if (HasUnknownMetrics(decode_map_, *entry)) {
+  if (HasUnknownMetrics(GetDecodeMap(), *entry)) {
     return;
   }
 
@@ -1031,7 +1147,7 @@ void UkmRecorderImpl::AddEntry(mojom::UkmEntryPtr entry) {
   DVLOG(DebuggingLogLevel::Medium)
       << "AddEntry recorded: [source_id=" << entry->source_id
       << " event_hash=" << entry->event_hash
-      << " event_name=" << decode_map_.find(entry->event_hash)->second.name
+      << " event_name=" << GetDecodeMap().find(entry->event_hash)->second.name
       << "]";
 
   recordings_.entries.push_back(std::move(entry));
@@ -1212,11 +1328,6 @@ bool UkmRecorderImpl::IsSampledIn(int64_t source_id,
   sampled_num = base::Crc32(sampled_num, base::byte_span_from_ref(event_id));
 
   return sampled_num % sampling_rate == 0;
-}
-
-void UkmRecorderImpl::InitDecodeMap() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  decode_map_ = builders::CreateDecodeMap();
 }
 
 void UkmRecorderImpl::NotifyObserversWithNewEntry(

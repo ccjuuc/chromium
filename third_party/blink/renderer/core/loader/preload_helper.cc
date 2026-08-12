@@ -353,7 +353,7 @@ void PreloadHelper::PreconnectIfNeeded(
     return;
   }
   if (params.rel.IsPreconnect() && params.href.IsValid() &&
-      params.href.ProtocolIsInHTTPFamily()) {
+      params.href.ProtocolIsInHttpFamily()) {
     UseCounter::Count(document, WebFeature::kLinkRelPreconnect);
     if (caller == kLinkCalledFromHeader)
       UseCounter::Count(document, WebFeature::kLinkHeaderPreconnect);
@@ -383,6 +383,10 @@ void PreloadHelper::PreconnectIfNeeded(
       web_prescient_networking->Preconnect(
           params.href, params.cross_origin != kCrossOriginAttributeAnonymous);
     }
+    if (document && document->Fetcher()) {
+      document->Fetcher()->RecordPreconnect(params.href, params.cross_origin,
+                                            /*early_hints=*/false);
+    }
   }
 }
 
@@ -393,7 +397,7 @@ void PreloadHelper::PreconnectIfNeeded(
 // to disable these preloads.
 std::optional<ResourceType> PreloadHelper::GetResourceTypeFromAsAttribute(
     const String& as) {
-  DCHECK_EQ(as.DeprecatedLower(), as);
+  DCHECK(as.ContainsNoAsciiUpper());
   if (as == "image")
     return ResourceType::kImage;
   if (as == "script")
@@ -582,7 +586,7 @@ void PreloadHelper::PreloadIfNeeded(
   if (pending_preload) {
     if (RenderBlockingResourceManager* manager =
             document.GetRenderBlockingResourceManager()) {
-      if (EqualIgnoringASCIICase(params.as, "font")) {
+      if (EqualIgnoringAsciiCase(params.as, "font")) {
         manager->AddPendingFontPreload(*pending_preload);
       }
     }
@@ -628,11 +632,23 @@ void PreloadHelper::ModulePreloadIfNeeded(
 
   // Step 2. "Let destination be the current state of the as attribute (a
   // destination), or "script" if it is in no state." [spec text]
-  // Step 3. "If destination is not script-like, then queue a task on the
-  // networking task source to fire an event named error at the link element,
-  // and return." [spec text]
-  // Currently we only support as="script".
-  if (!params.as.empty() && params.as != "script") {
+  // Step 3. "If destination is not "style", "json", or script-like, then queue
+  // a task on the networking task source to fire an event named error at the
+  // link element, and return." [spec text] Currently we only support
+  // as="script". The `ModulePreloadStyleJson` feature flag enables as="style"
+  // and as="json". More module types such as "text" and "image" may be
+  // supported in the future.
+  const bool allow_style_and_json =
+      RuntimeEnabledFeatures::ModulePreloadStyleJsonEnabled();
+  ModuleType module_type = ModuleType::kInvalid;
+  if (params.as.empty() || params.as == "script") {
+    module_type = ModuleType::kJavaScriptOrWasm;
+  } else if (allow_style_and_json && params.as == "style") {
+    UseCounter::Count(document, WebFeature::kLinkRelModulePreloadStyle);
+    module_type = ModuleType::kCSS;
+  } else if (allow_style_and_json && params.as == "json") {
+    module_type = ModuleType::kJSON;
+  } else {
     document.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kOther,
         mojom::blink::ConsoleMessageLevel::kWarning,
@@ -648,10 +664,33 @@ void PreloadHelper::ModulePreloadIfNeeded(
     }
     return;
   }
+  CHECK_NE(module_type, ModuleType::kInvalid);
   mojom::blink::RequestContextType context_type =
-      mojom::blink::RequestContextType::SCRIPT;
+      mojom::blink::RequestContextType::UNSPECIFIED;
   network::mojom::RequestDestination destination =
-      network::mojom::RequestDestination::kScript;
+      network::mojom::RequestDestination::kEmpty;
+
+  switch (module_type) {
+    case ModuleType::kJavaScriptOrWasm:
+      context_type = mojom::blink::RequestContextType::SCRIPT;
+      destination = network::mojom::RequestDestination::kScript;
+      break;
+    case ModuleType::kCSS:
+      CHECK(allow_style_and_json);
+      context_type = mojom::blink::RequestContextType::STYLE;
+      destination = network::mojom::RequestDestination::kStyle;
+      break;
+    case ModuleType::kJSON:
+      CHECK(allow_style_and_json);
+      context_type = mojom::blink::RequestContextType::JSON;
+      destination = network::mojom::RequestDestination::kJson;
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  CHECK_NE(context_type, mojom::blink::RequestContextType::UNSPECIFIED);
+  CHECK_NE(destination, network::mojom::RequestDestination::kEmpty);
 
   // Step 4. "Parse the URL given by the href attribute, relative to the
   // element's node document. If that fails, then return. Otherwise, let url be
@@ -707,23 +746,29 @@ void PreloadHelper::ModulePreloadIfNeeded(
   // referrerpolicy attribute." [spec text]
   // |referrer_policy| parameter is the value of the referrerpolicy attribute.
 
-  // Step 12. "Let options be a script fetch options whose cryptographic nonce
+  // Step 12. "Let fetch priority be the current state of the element's
+  // fetchpriority attribute." [spec text]
+  // |fetch_priority_hint| parameter is the value of the fetchpriority
+  // attribute.
+
+  // Step 13. "Let options be a script fetch options whose cryptographic nonce
   // is cryptographic nonce, integrity metadata is integrity metadata, parser
   // metadata is "not-parser-inserted", credentials mode is credentials mode,
-  // and referrer policy is referrer policy." [spec text]
+  // referrer policy is referrer policy, and fetch priority is fetch priority."
+  // [spec text]
   ModuleScriptFetchRequest request(
-      params.href, ModuleType::kJavaScriptOrWasm, context_type, destination,
-      ScriptFetchOptions(params.nonce, integrity_metadata, integrity_value,
-                         kNotParserInserted, credentials_mode,
-                         params.referrer_policy,
-                         mojom::blink::FetchPriorityHint::kAuto,
-                         RenderBlockingBehavior::kNonBlocking),
+      params.href, module_type, context_type, destination,
+      ScriptFetchOptions(
+          params.nonce, integrity_metadata, integrity_value, kNotParserInserted,
+          credentials_mode, params.referrer_policy,
+          GetFetchPriorityAttributeValue(params.fetch_priority_hint),
+          RenderBlockingBehavior::kNonBlocking),
       RuntimeEnabledFeatures::ModulePreloadReferrerEnabled()
           ? Referrer::ClientReferrerString()
           : Referrer::NoReferrer(),
       TextPosition::MinimumPosition(), ModuleImportPhase::kEvaluation);
 
-  // Step 13. "Fetch a modulepreload module script graph given url, destination,
+  // Step 14. "Fetch a modulepreload module script graph given url, destination,
   // settings object, and options. Wait until the algorithm asynchronously
   // completes with result." [spec text]
   //
@@ -760,7 +805,7 @@ void PreloadHelper::PrefetchIfNeeded(const LinkLoadParameters& params,
 
   ResourceRequest resource_request(params.href);
 
-  bool as_document = EqualIgnoringASCIICase(params.as, "document");
+  bool as_document = EqualIgnoringAsciiCase(params.as, "document");
 
   // If this corresponds to a preload that we promoted to a prefetch, and the
   // preload had `as="document"`, don't proceed because the original preload
@@ -1005,18 +1050,35 @@ void PreloadHelper::FetchCompressionDictionaryIfNeeded(
            << params.href.GetString().Utf8();
   ResourceRequest resource_request(params.href);
 
-  resource_request.SetReferrerString(Referrer::NoReferrer());
-  resource_request.SetCredentialsMode(network::mojom::CredentialsMode::kOmit);
-  resource_request.SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever);
-  resource_request.SetMode(network::mojom::RequestMode::kCors);
+  if (!RuntimeEnabledFeatures::CDTNewCrossOriginHandlingEnabled()) {
+    resource_request.SetMode(network::mojom::RequestMode::kCors);
+    resource_request.SetCredentialsMode(network::mojom::CredentialsMode::kOmit);
+  }
+  if (RuntimeEnabledFeatures::
+          CDTNewReferrerAndReferrerPolicyHandlingEnabled()) {
+    resource_request.SetReferrerPolicy(params.referrer_policy);
+  } else {
+    resource_request.SetReferrerString(Referrer::NoReferrer());
+    resource_request.SetReferrerPolicy(network::mojom::ReferrerPolicy::kNever);
+  }
   resource_request.SetRequestDestination(
-      network::mojom::RequestDestination::kDictionary);
+      network::mojom::RequestDestination::kCompressionDictionary);
 
   ResourceLoaderOptions options(
       document.GetExecutionContext()->GetCurrentWorld());
   options.initiator_info.name = fetch_initiator_type_names::kLink;
 
   FetchParameters link_fetch_params(std::move(resource_request), options);
+  if (RuntimeEnabledFeatures::CDTNewCrossOriginHandlingEnabled()) {
+    CrossOriginAttributeValue cross_origin = params.cross_origin;
+    // Default to anonymous.
+    // https://github.com/whatwg/html/pull/11620
+    if (cross_origin == kCrossOriginAttributeNotSet) {
+      cross_origin = kCrossOriginAttributeAnonymous;
+    }
+    link_fetch_params.SetCrossOriginAccessControl(
+        document.GetExecutionContext()->GetSecurityOrigin(), cross_origin);
+  }
   IdleRequestOptions* idle_options = IdleRequestOptions::Create();
   ScriptedIdleTaskController::From(*document.GetExecutionContext())
       .RegisterCallback(MakeGarbageCollected<LoadDictionaryWhenIdleTask>(

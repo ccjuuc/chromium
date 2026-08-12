@@ -97,8 +97,6 @@ TEST_P(FormEventLoggerBaseFunnelTest, LogFunnelMetrics) {
     SubmitForm(form);
   }
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).address_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   // Phase 2: Validate Funnel expectations.
@@ -145,11 +143,19 @@ TEST_P(FormEventLoggerBaseFunnelTest, LogFunnelMetrics) {
     histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingReadiness.Address", 1, 1);
     histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 1, 1);
+    histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingAcceptance.Address", 1, 1);
+    histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 1, 1);
     histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingCorrectness.Address", 1, 1);
     histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 1, 1);
+    histogram_tester.ExpectBucketCount(
         "Autofill.KeyMetrics.FillingAssistance.Address", 1, 1);
+    histogram_tester.ExpectBucketCount(
+        "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 1, 1);
     histogram_tester.ExpectBucketCount(
         "Autofill.Autocomplete.NotOff.FillingAcceptance.Address", 1, 1);
     histogram_tester.ExpectTotalCount(
@@ -170,7 +176,6 @@ TEST_P(FormEventLoggerBaseFunnelTest, LogFunnelMetrics) {
               {UkmAutofillKeyMetricsType::kFillingAssistanceName, 1},
               {UkmAutofillKeyMetricsType::kAutofillFillsName, 1},
               {UkmAutofillKeyMetricsType::kFormElementUserModificationsName, 0},
-              {UkmAutofillKeyMetricsType::kFlowIdName, flow_id.value()},
               {UkmAutofillKeyMetricsType::kFormTypesName,
                AutofillMetrics::FormTypesToBitVector(
                    {FormTypeNameForLogging::kAddressForm,
@@ -182,11 +187,19 @@ TEST_P(FormEventLoggerBaseFunnelTest, LogFunnelMetrics) {
     histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingReadiness.Address", 0);
     histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 0);
+    histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingAcceptance.Address", 0);
+    histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 0);
     histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingCorrectness.Address", 0);
     histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0);
+    histogram_tester.ExpectTotalCount(
         "Autofill.KeyMetrics.FillingAssistance.Address", 0);
+    histogram_tester.ExpectTotalCount(
+        "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 0);
     histogram_tester.ExpectTotalCount(
         "Autofill.Autocomplete.NotOff.FillingAcceptance.Address", 0);
     histogram_tester.ExpectTotalCount(
@@ -277,18 +290,11 @@ class FormEventLoggerBaseKeyMetricsTest : public AutofillMetricsBaseTest,
 
 void FormEventLoggerBaseKeyMetricsTest::SetUp() {
   SetUpHelper();
-
   RecreateProfile();
-
-  // Load a fillable form.
-  form_ = CreateEmptyForm();
-  form_.set_fields(
-      {CreateTestFormField("State", "state", "", FormControlType::kInputText),
-       CreateTestFormField("City", "city", "", FormControlType::kInputText),
-       CreateTestFormField("Street", "street", "",
-                           FormControlType::kInputText)});
+  form_ = test::GetFormData({.fields = {{.role = ADDRESS_HOME_STATE},
+                                        {.role = ADDRESS_HOME_CITY},
+                                        {.role = ADDRESS_HOME_LINE1}}});
   field_types_ = {ADDRESS_HOME_STATE, ADDRESS_HOME_CITY, ADDRESS_HOME_LINE1};
-
   autofill_manager().AddSeenForm(form_, field_types_, field_types_);
 }
 
@@ -305,18 +311,24 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogEmptyForm) {
 
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).address_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.Address", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 1, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAcceptance.Address", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.Address", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.Address", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 0, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FormSubmission.NotAutofilled.Address", 0);
   histogram_tester.ExpectTotalCount(
@@ -329,7 +341,6 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogEmptyForm) {
             {UkmAutofillKeyMetricsType::kFillingAssistanceName, 0},
             {UkmAutofillKeyMetricsType::kAutofillFillsName, 0},
             {UkmAutofillKeyMetricsType::kFormElementUserModificationsName, 0},
-            {UkmAutofillKeyMetricsType::kFlowIdName, flow_id.value()},
             {UkmAutofillKeyMetricsType::kFormTypesName,
              AutofillMetrics::FormTypesToBitVector(
                  {FormTypeNameForLogging::kAddressForm,
@@ -354,18 +365,24 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogNoProfile) {
   SimulateUserChangedField(form_, form_.fields()[1]);
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).address_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.Address", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 0, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAcceptance.Address", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.Address", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.Address", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 0, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.NotAutofilled.Address", 1, 1);
   histogram_tester.ExpectTotalCount(
@@ -378,7 +395,6 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogNoProfile) {
             {UkmAutofillKeyMetricsType::kFillingAssistanceName, 0},
             {UkmAutofillKeyMetricsType::kAutofillFillsName, 0},
             {UkmAutofillKeyMetricsType::kFormElementUserModificationsName, 2},
-            {UkmAutofillKeyMetricsType::kFlowIdName, flow_id.value()},
             {UkmAutofillKeyMetricsType::kFormTypesName,
              AutofillMetrics::FormTypesToBitVector(
                  {FormTypeNameForLogging::kAddressForm,
@@ -402,18 +418,24 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogUserDoesNotAcceptSuggestion) {
   SimulateUserChangedField(form_, form_.fields()[1]);
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).address_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.Address", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAcceptance.Address", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 0, 1);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.Address", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.Address", 0, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 0, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.NotAutofilled.Address", 1, 1);
   histogram_tester.ExpectUniqueSample(
@@ -430,7 +452,6 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogUserDoesNotAcceptSuggestion) {
             {UkmAutofillKeyMetricsType::kFillingAssistanceName, 0},
             {UkmAutofillKeyMetricsType::kAutofillFillsName, 0},
             {UkmAutofillKeyMetricsType::kFormElementUserModificationsName, 2},
-            {UkmAutofillKeyMetricsType::kFlowIdName, flow_id.value()},
             {UkmAutofillKeyMetricsType::kFormTypesName,
              AutofillMetrics::FormTypesToBitVector(
                  {FormTypeNameForLogging::kAddressForm,
@@ -455,18 +476,24 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogUserFixesFilledData) {
   SimulateUserChangedField(form_, form_.fields()[1]);
   SubmitForm(form_);
 
-  FormInteractionsFlowId flow_id =
-      test_api(autofill_manager()).address_form_interactions_flow_id();
   DeleteDriverToCommitMetrics();
 
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingReadiness.Address", 1, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 1, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAcceptance.Address", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingCorrectness.Address", 0, 1);
   histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0, 1);
+  histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FillingAssistance.Address", 1, 1);
+  histogram_tester.ExpectBucketCount(
+      "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 1, 1);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.Autofilled.Address", 1, 1);
   histogram_tester.ExpectUniqueSample(
@@ -484,7 +511,6 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest, LogUserFixesFilledData) {
             {UkmAutofillKeyMetricsType::kFillingAssistanceName, 1},
             {UkmAutofillKeyMetricsType::kAutofillFillsName, 1},
             {UkmAutofillKeyMetricsType::kFormElementUserModificationsName, 1},
-            {UkmAutofillKeyMetricsType::kFlowIdName, flow_id.value()},
             {UkmAutofillKeyMetricsType::kFormTypesName,
              AutofillMetrics::FormTypesToBitVector(
                  {FormTypeNameForLogging::kAddressForm,
@@ -517,11 +543,19 @@ TEST_F(FormEventLoggerBaseKeyMetricsTest,
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingReadiness.Address", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingReadiness.Address.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAcceptance.Address", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAcceptance.Address.Profile1", 0);
   histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingCorrectness.Address", 0);
   histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingCorrectness.Address.Profile1", 0);
+  histogram_tester.ExpectTotalCount(
       "Autofill.KeyMetrics.FillingAssistance.Address", 0);
+  histogram_tester.ExpectTotalCount(
+      "Autofill.KeyMetrics.FillingAssistance.Address.Profile1", 0);
   histogram_tester.ExpectBucketCount(
       "Autofill.KeyMetrics.FormSubmission.Autofilled.Address", 0, 1);
   histogram_tester.ExpectTotalCount(

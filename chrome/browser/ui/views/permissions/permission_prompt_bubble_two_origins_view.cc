@@ -7,6 +7,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -18,6 +19,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/layout_provider.h"
 
@@ -60,12 +62,10 @@ bool HasExtraText(permissions::PermissionPrompt::Delegate& delegate) {
 }  // namespace
 
 PermissionPromptBubbleTwoOriginsView::PermissionPromptBubbleTwoOriginsView(
-    Browser* browser,
+    content::WebContents* web_contents,
     base::WeakPtr<permissions::PermissionPrompt::Delegate> delegate,
     PermissionPromptStyle prompt_style)
-    : PermissionPromptBubbleBaseView(browser,
-                                     delegate,
-                                     prompt_style) {
+    : PermissionPromptBubbleBaseView(web_contents, delegate, prompt_style) {
   SetTitle(CreateWindowTitle());
 
   auto extra_text = GetExtraTextTwoOrigin(*delegate);
@@ -88,12 +88,13 @@ PermissionPromptBubbleTwoOriginsView::PermissionPromptBubbleTwoOriginsView(
   CreateFaviconRow();
   MaybeAddLink();
 
-  CHECK(browser);
+  CHECK(GetNativeWindow());
 
   // Initializing favicon service.
   favicon::FaviconService* const favicon_service =
-      FaviconServiceFactory::GetForProfile(browser->profile(),
-                                           ServiceAccessType::EXPLICIT_ACCESS);
+      FaviconServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()),
+          ServiceAccessType::EXPLICIT_ACCESS);
   favicon_tracker_ = std::make_unique<base::CancelableTaskTracker>();
 
   // Fetching requesting origin favicon.
@@ -200,7 +201,8 @@ std::u16string PermissionPromptBubbleTwoOriginsView::CreateWindowTitle() {
 void PermissionPromptBubbleTwoOriginsView::CreateFaviconRow() {
   // Getting default favicon.
   ui::ImageModel default_favicon_ = ui::ImageModel::FromVectorIcon(
-      kGlobeIcon, ui::kColorIcon, kDesiredFaviconSizeInPixel);
+      features::IsRoundedIconsEnabled() ? kGlobeIcon : kGlobeOldIcon,
+      ui::kColorIcon, kDesiredFaviconSizeInPixel);
 
   const int favicon_margin = views::LayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_VECTOR_ICON_PADDING);

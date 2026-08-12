@@ -8,9 +8,12 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_amount_of_physical_memory_override.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
@@ -25,13 +28,14 @@
 #include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/dlc_installer/arc_dlc_installer.h"
 #include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
-#include "chromeos/ash/experiences/arc/session/adb_sideloading_availability_delegate.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
@@ -57,24 +61,6 @@ namespace {
 constexpr char kPackageName[] = "com.example.third_party_app";
 constexpr char kUserEmail[] = "user@test";
 
-class FakeAdbSideloadingAvailabilityDelegate
-    : public AdbSideloadingAvailabilityDelegate {
- public:
-  FakeAdbSideloadingAvailabilityDelegate() = default;
-  ~FakeAdbSideloadingAvailabilityDelegate() override = default;
-
-  void set_result(bool result) { result_ = result; }
-
-  void CanChangeAdbSideloading(
-      base::OnceCallback<void(bool can_change_adb_sideloading)> callback)
-      override {
-    std::move(callback).Run(result_);
-  }
-
- private:
-  bool result_ = false;
-};
-
 class ArcActivationNecessityCheckerTest : public testing::Test {
  public:
   ArcActivationNecessityCheckerTest() = default;
@@ -90,6 +76,7 @@ class ArcActivationNecessityCheckerTest : public testing::Test {
 
     ash::ConciergeClient::InitializeFake();
     ash::DlcserviceClient::InitializeFake();
+    ash::SessionManagerClient::InitializeFakeInMemory();
 
     arc_service_manager_ = std::make_unique<ArcServiceManager>();
     arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
@@ -126,8 +113,7 @@ class ArcActivationNecessityCheckerTest : public testing::Test {
 
     arc_session_manager_->SetProfile(profile_.get());
 
-    checker_ = std::make_unique<ArcActivationNecessityChecker>(
-        profile_.get(), &adb_sideloading_availability_delegate_);
+    checker_ = std::make_unique<ArcActivationNecessityChecker>(profile_.get());
 
     // Pre-installed apps shouldn't cause ARC activation.
     auto package_info = mojom::ArcPackageInfo::New();
@@ -144,6 +130,7 @@ class ArcActivationNecessityCheckerTest : public testing::Test {
     arc_service_manager_.reset();
     profile_ = nullptr;
     testing_profile_manager_.DeleteAllTestingProfiles();
+    ash::SessionManagerClient::Shutdown();
     ash::DlcserviceClient::Shutdown();
     ash::ConciergeClient::Shutdown();
   }
@@ -164,7 +151,6 @@ class ArcActivationNecessityCheckerTest : public testing::Test {
 
   raw_ptr<TestingProfile> profile_ = nullptr;
   std::unique_ptr<arc::FakeAppInstance> app_instance_;
-  FakeAdbSideloadingAvailabilityDelegate adb_sideloading_availability_delegate_;
   std::unique_ptr<ArcActivationNecessityChecker> checker_;
 };
 
@@ -205,7 +191,7 @@ TEST_F(ArcActivationNecessityCheckerTest, UnmanagedUserDisabled) {
 
 TEST_F(ArcActivationNecessityCheckerTest, AdbSideloadingIsAvailable) {
   base::HistogramTester histogram_tester;
-  adb_sideloading_availability_delegate_.set_result(true);
+  ash::FakeSessionManagerClient::Get()->set_adb_sideload_enabled(true);
   base::test::TestFuture<bool> future;
   checker_->Check(future.GetCallback());
   EXPECT_TRUE(future.Get());
@@ -409,6 +395,117 @@ TEST_F(ArcActivationNecessityCheckerTest, CoralFeatureEnabled) {
       /* enabled_features */ {ash::features::kCoralFeature,
                               ash::features::kCoralFeatureAllowed},
       /* disabled_features */ {});
+  base::test::TestFuture<bool> future;
+  checker_->Check(future.GetCallback());
+  EXPECT_TRUE(future.Get());
+}
+
+TEST_F(ArcActivationNecessityCheckerTest, InactiveDays4GbDeviceDefaultV2) {
+  base::HistogramTester histogram_tester;
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(4));
+
+  base::test::ScopedFeatureList feature_list;
+  base::FieldTrialParams params;
+  params["activate_on_app_launch"] = "false";
+  feature_list.InitAndEnableFeatureWithParameters(kArcOnDemandV2, params);
+
+  auto package_info = mojom::ArcPackageInfo::New();
+  package_info->package_name = kPackageName;
+  app_instance_->SendPackageAdded(std::move(package_info));
+
+  auto* prefs_ = ArcAppListPrefs::Get(profile_.get());
+  std::vector<mojom::AppInfoPtr> fake_apps_;
+  mojom::AppInfoPtr app_info = mojom::AppInfo::New(
+      base::StringPrintf("Fake App"), base::StringPrintf(kPackageName),
+      base::StringPrintf("fake.app.activity"), false /* sticky */);
+  fake_apps_.emplace_back(std::move(app_info));
+  app_instance_->SendRefreshAppList(fake_apps_);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !prefs_->GetAppIdByPackageName(kPackageName).empty(); }));
+  const std::string app_id = prefs_->GetAppIdByPackageName(kPackageName);
+  base::Time timestamp = (base::Time::Now() - base::Minutes(1));
+  prefs_->SetLastLaunchTimeForTesting(app_id, timestamp);
+
+  base::test::TestFuture<bool> future;
+  checker_->Check(future.GetCallback());
+  EXPECT_FALSE(future.Get());
+  histogram_tester.ExpectUniqueSample(
+      "Arc.ArcOnDemandV2.ActivationShouldBeDelayed", true, 1);
+}
+
+TEST_F(ArcActivationNecessityCheckerTest, InactiveDays4GbDeviceCustomParamV2) {
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(4));
+
+  base::test::ScopedFeatureList feature_list;
+  base::FieldTrialParams params;
+  params["activate_on_app_launch"] = "false";
+  params["inactive_interval_4gib"] = "2d";
+  params["inactive_interval"] = "7d";
+  feature_list.InitAndEnableFeatureWithParameters(kArcOnDemandV2, params);
+
+  auto package_info = mojom::ArcPackageInfo::New();
+  package_info->package_name = kPackageName;
+  app_instance_->SendPackageAdded(std::move(package_info));
+
+  auto* prefs_ = ArcAppListPrefs::Get(profile_.get());
+  std::vector<mojom::AppInfoPtr> fake_apps_;
+  mojom::AppInfoPtr app_info = mojom::AppInfo::New(
+      base::StringPrintf("Fake App"), base::StringPrintf(kPackageName),
+      base::StringPrintf("fake.app.activity"), false /* sticky */);
+  fake_apps_.emplace_back(std::move(app_info));
+  app_instance_->SendRefreshAppList(fake_apps_);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !prefs_->GetAppIdByPackageName(kPackageName).empty(); }));
+  const std::string app_id = prefs_->GetAppIdByPackageName(kPackageName);
+
+  prefs_->SetLastLaunchTimeForTesting(app_id,
+                                      base::Time::Now() - base::Days(1));
+  {
+    base::test::TestFuture<bool> future;
+    checker_->Check(future.GetCallback());
+    EXPECT_TRUE(future.Get());
+  }
+
+  prefs_->SetLastLaunchTimeForTesting(app_id,
+                                      base::Time::Now() - base::Days(3));
+  {
+    base::test::TestFuture<bool> future;
+    checker_->Check(future.GetCallback());
+    EXPECT_FALSE(future.Get());
+  }
+}
+
+TEST_F(ArcActivationNecessityCheckerTest,
+       InactiveDays8GbDeviceUsesExistingParamV2) {
+  base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
+      base::GiBU(8));
+
+  base::test::ScopedFeatureList feature_list;
+  base::FieldTrialParams params;
+  params["activate_on_app_launch"] = "false";
+  params["inactive_interval"] = "5d";
+  params["inactive_interval_4gib"] = "0d";
+  feature_list.InitAndEnableFeatureWithParameters(kArcOnDemandV2, params);
+
+  auto package_info = mojom::ArcPackageInfo::New();
+  package_info->package_name = kPackageName;
+  app_instance_->SendPackageAdded(std::move(package_info));
+
+  auto* prefs_ = ArcAppListPrefs::Get(profile_.get());
+  std::vector<mojom::AppInfoPtr> fake_apps_;
+  mojom::AppInfoPtr app_info = mojom::AppInfo::New(
+      base::StringPrintf("Fake App"), base::StringPrintf(kPackageName),
+      base::StringPrintf("fake.app.activity"), false /* sticky */);
+  fake_apps_.emplace_back(std::move(app_info));
+  app_instance_->SendRefreshAppList(fake_apps_);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !prefs_->GetAppIdByPackageName(kPackageName).empty(); }));
+  const std::string app_id = prefs_->GetAppIdByPackageName(kPackageName);
+
+  prefs_->SetLastLaunchTimeForTesting(app_id,
+                                      base::Time::Now() - base::Days(4));
   base::test::TestFuture<bool> future;
   checker_->Check(future.GetCallback());
   EXPECT_TRUE(future.Get());

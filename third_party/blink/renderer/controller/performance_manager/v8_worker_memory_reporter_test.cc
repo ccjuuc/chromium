@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/controller/performance_manager/v8_worker_memory_reporter.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/time/time.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -28,14 +28,19 @@ class V8WorkerMemoryReporterTest : public ::testing::Test {
 class V8WorkerMemoryReporterTestWithDedicatedWorker
     : public DedicatedWorkerTest {
  public:
-  V8WorkerMemoryReporterTestWithDedicatedWorker()
-      : DedicatedWorkerTest(
-            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+  explicit V8WorkerMemoryReporterTestWithDedicatedWorker(
+      base::test::TaskEnvironment::TimeSource time_source =
+          base::test::TaskEnvironment::TimeSource::SYSTEM_TIME)
+      : DedicatedWorkerTest(time_source) {}
 };
 
 class V8WorkerMemoryReporterTestWithMockPlatform
     : public V8WorkerMemoryReporterTestWithDedicatedWorker {
  public:
+  V8WorkerMemoryReporterTestWithMockPlatform()
+      : V8WorkerMemoryReporterTestWithDedicatedWorker(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
   void SetUp() override {
     EnablePlatform();
     V8WorkerMemoryReporterTestWithDedicatedWorker::SetUp();

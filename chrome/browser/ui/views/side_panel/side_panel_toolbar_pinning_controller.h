@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_TOOLBAR_PINNING_CONTROLLER_H_
 #define CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_TOOLBAR_PINNING_CONTROLLER_H_
 
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 
-class BrowserView;
+class SidePanelEntry;
 class SidePanelEntryKey;
 
 // The SidePanelToolbarPinningController is responsible for updating the pin
@@ -21,7 +21,7 @@ class SidePanelToolbarPinningController
     : public PinnedToolbarActionsModel::Observer,
       public ToolbarActionsModel::Observer {
  public:
-  explicit SidePanelToolbarPinningController(BrowserView* browser_view);
+  explicit SidePanelToolbarPinningController(BrowserWindowInterface* browser);
   ~SidePanelToolbarPinningController() override;
 
   class Observer : public base::CheckedObserver {
@@ -50,9 +50,13 @@ class SidePanelToolbarPinningController
   // Toggles the pin state for `entry_key` when invoked.
   void UpdatePinState(SidePanelEntryKey entry_key);
 
+  bool ShouldShowActiveInToolbar(const SidePanelEntry* entry);
+
   void UpdateActiveState(SidePanelEntryKey key, bool show_active_in_toolbar);
 
  private:
+  void ReevaluateActiveState();
+
   base::ScopedObservation<ToolbarActionsModel, ToolbarActionsModel::Observer>
       extensions_model_observation_{this};
 
@@ -60,8 +64,13 @@ class SidePanelToolbarPinningController
                           PinnedToolbarActionsModel::Observer>
       pinned_model_observation_{this};
 
-  base::ObserverList<Observer> pin_state_change_observers_;
-  raw_ptr<BrowserView> browser_view_ = nullptr;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      pin_state_change_observers_;
+  const raw_ref<BrowserWindowInterface> browser_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_TOOLBAR_PINNING_CONTROLLER_H_

@@ -16,7 +16,7 @@
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 
 namespace autofill {
 namespace {
@@ -65,6 +65,7 @@ class IdentityCredentialSuggestionGeneratorTest : public testing::Test {
         base::MakeRefCounted<content::IdentityRequestAccount>(
             "id", "display_identifier", "display_name", "john@email.com",
             "John", "given_name", GURL(), "+1 (234) 567-8910", "username",
+            /*potentially_approved_origin_hashes=*/std::vector<std::string>(),
             /*login_hints=*/std::vector<std::string>(),
             /*domain_hints=*/std::vector<std::string>(),
             /*labels=*/std::vector<std::string>());
@@ -98,10 +99,6 @@ class IdentityCredentialSuggestionGeneratorTest : public testing::Test {
 
 // Checks that identity credential suggestion is generated.
 TEST_F(IdentityCredentialSuggestionGeneratorTest, GeneratesSuggestion) {
-  base::MockCallback<base::OnceCallback<void(
-      std::pair<SuggestionGenerator::SuggestionDataSource,
-                std::vector<SuggestionGenerator::SuggestionData>>)>>
-      suggestion_data_callback;
   base::MockCallback<
       base::OnceCallback<void(SuggestionGenerator::ReturnedSuggestions)>>
       suggestions_generated_callback;
@@ -117,26 +114,15 @@ TEST_F(IdentityCredentialSuggestionGeneratorTest, GeneratesSuggestion) {
           Return(std::vector<scoped_refptr<content::IdentityRequestAccount>>{
               account}));
 
-  std::pair<SuggestionGenerator::SuggestionDataSource,
-            std::vector<SuggestionGenerator::SuggestionData>>
-      saved_suggestion_data;
+  SuggestionGenerator::ReturnedSuggestions generated_suggestions;
   EXPECT_CALL(
-      suggestion_data_callback,
+      suggestions_generated_callback,
       Run(testing::Pair(
           SuggestionGenerator::SuggestionDataSource::kIdentityCredential,
           testing::SizeIs(1))))
-      .WillOnce(testing::SaveArg<0>(&saved_suggestion_data));
-  generator.FetchSuggestionData(form().ToFormData(), field(), &form(), &field(),
-                                client(), suggestion_data_callback.Get());
-
-  SuggestionGenerator::ReturnedSuggestions generated_suggestions;
-  EXPECT_CALL(suggestions_generated_callback,
-              Run(testing::Pair(FillingProduct::kIdentityCredential,
-                                testing::SizeIs(1))))
       .WillOnce(testing::SaveArg<0>(&generated_suggestions));
   generator.GenerateSuggestions(form().ToFormData(), field(), &form(), &field(),
-                                client(), {saved_suggestion_data},
-                                suggestions_generated_callback.Get());
+                                client(), suggestions_generated_callback.Get());
 
   const Suggestion& suggestion = generated_suggestions.second[0];
   EXPECT_EQ(suggestion.main_text.value, u"john@email.com");

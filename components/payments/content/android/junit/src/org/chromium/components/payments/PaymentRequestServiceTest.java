@@ -24,7 +24,6 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.blink_public.common.BlinkFeatures;
 import org.chromium.components.payments.test_support.DefaultPaymentFeatureConfig;
 import org.chromium.components.payments.test_support.PaymentRequestServiceBuilder;
 import org.chromium.content.browser.webcontents.WebContentsImpl;
@@ -41,6 +40,7 @@ import org.chromium.payments.mojom.PaymentMethodData;
 import org.chromium.payments.mojom.PaymentOptions;
 import org.chromium.payments.mojom.PaymentRequestClient;
 import org.chromium.payments.mojom.PaymentResponse;
+import org.chromium.url.GURL;
 import org.chromium.url.mojom.Url;
 
 import java.util.ArrayList;
@@ -51,6 +51,7 @@ import java.util.Set;
 /** A test for PaymentRequestService. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
+@EnableFeatures({PaymentFeatureList.SECURE_PAYMENT_CONFIRMATION})
 @DisableFeatures({
     PaymentFeatureList.WEB_PAYMENTS_EXPERIMENTAL_FEATURES,
     PaymentFeatureList.ANDROID_PAYMENT_INTENTS_OMIT_DEPRECATED_PARAMETERS
@@ -86,20 +87,21 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
     private boolean mWaitForUpdatedDetailsDefaultValue;
     private boolean mIsUserGestureShow;
     private PaymentAppService mPaymentAppService;
-    private PaymentAppFactoryDelegate mPaymentAppFactoryDelegate;
+    private PaymentAppServiceDelegate mPaymentAppServiceDelegate;
     private JourneyLogger mJourneyLogger;
     private PaymentRequestWebContentsData mPaymentRequestWebContentsData;
+    private WebContentsImpl mWebContentsImpl;
 
     @Before
     public void setUp() {
         WebContentsImplJni.setInstanceForTesting(mWebContentsJniMock);
-        WebContentsImpl webContentsImpl =
+        mWebContentsImpl =
                 Mockito.spy(
                         WebContentsImpl.create(NATIVE_WEB_CONTENTS_ANDROID, mNavigationController));
         // We don't mock the WebContentsObserverProxy, so mock the observer behaviour.
-        Mockito.doNothing().when(webContentsImpl).addObserver(Mockito.any());
-        webContentsImpl.initializeForTesting();
-        mPaymentRequestWebContentsData = new PaymentRequestWebContentsData(webContentsImpl);
+        Mockito.doNothing().when(mWebContentsImpl).addObserver(Mockito.any());
+        mWebContentsImpl.initializeForTesting();
+        mPaymentRequestWebContentsData = new PaymentRequestWebContentsData(mWebContentsImpl);
         PaymentRequestWebContentsData.setInstanceForTesting(mPaymentRequestWebContentsData);
 
         PaymentRequestWebContentsDataJni.setInstanceForTesting(mWebContentsDataJniMock);
@@ -109,11 +111,11 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
         mPaymentAppService = Mockito.mock(PaymentAppService.class);
         Mockito.doAnswer(
                         (args) -> {
-                            mPaymentAppFactoryDelegate = args.getArgument(0);
+                            mPaymentAppServiceDelegate = args.getArgument(0);
                             return null;
                         })
                 .when(mPaymentAppService)
-                .create(Mockito.any());
+                .createPaymentApps(Mockito.any());
 
         mBrowserPaymentRequest = Mockito.mock(BrowserPaymentRequest.class);
         Mockito.doAnswer(
@@ -135,19 +137,9 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
                 .when(mBrowserPaymentRequest)
                 .maybeOverrideHasEnrolledInstrumentResponse(Mockito.anyBoolean(), Mockito.any());
         Mockito.doReturn(true).when(mBrowserPaymentRequest).hasAvailableApps();
-        Mockito.doReturn(false)
-                .when(mBrowserPaymentRequest)
-                .disconnectIfExtraValidationFails(
-                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any());
-        Mockito.doReturn(true)
-                .when(mBrowserPaymentRequest)
-                .patchPaymentResponseIfNeeded(Mockito.any());
         Mockito.doReturn(null)
                 .when(mBrowserPaymentRequest)
                 .showOrSkipAppSelector(Mockito.anyBoolean(), Mockito.any(), Mockito.anyBoolean());
-        Mockito.doReturn(true)
-                .when(mBrowserPaymentRequest)
-                .parseAndValidateDetailsFurtherIfNeeded(Mockito.any());
         Mockito.doAnswer(
                         (args) -> {
                             List<PaymentApp> pendingApps = args.getArgument(0);
@@ -170,7 +162,7 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
                     public void dismissInstrument() {}
                 };
         Mockito.doReturn(app).when(mBrowserPaymentRequest).getSelectedPaymentApp();
-        List<PaymentApp> apps = new ArrayList();
+        List<PaymentApp> apps = new ArrayList<>();
         apps.add(app);
         Mockito.doReturn(apps).when(mBrowserPaymentRequest).getPaymentApps();
 
@@ -182,6 +174,7 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @After
     public void tearDown() {
+        mWebContentsImpl.destroy();
         PaymentRequestService.resetShowingPaymentRequestForTest();
     }
 
@@ -299,9 +292,8 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
     }
 
     private void queryPaymentApps() {
-        mPaymentAppFactoryDelegate.onCanMakePaymentCalculated(true);
-        mPaymentAppFactoryDelegate.onPaymentAppCreated(createDefaultPaymentApp());
-        mPaymentAppFactoryDelegate.onDoneCreatingPaymentApps(null);
+        mPaymentAppServiceDelegate.onCanMakePaymentCalculated(true);
+        mPaymentAppServiceDelegate.onDoneCreatingPaymentApps(List.of(createDefaultPaymentApp()));
     }
 
     private PaymentDetails getDefaultPaymentDetailsUpdate() {
@@ -632,12 +624,12 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
     @Test
     @Feature({"Payments"})
     public void testDefaultParamsMakeCreationSuccess() {
-        Assert.assertNull(mPaymentAppFactoryDelegate);
+        Assert.assertNull(mPaymentAppServiceDelegate);
         PaymentRequestService service = defaultBuilder().build();
         Assert.assertNotNull(service);
         Mockito.verify(mBrowserPaymentRequest, Mockito.times(1)).onSpecValidated(Mockito.notNull());
         assertNoError();
-        Assert.assertNotNull(mPaymentAppFactoryDelegate);
+        Assert.assertNotNull(mPaymentAppServiceDelegate);
     }
 
     @Test
@@ -645,9 +637,8 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
     public void testCanNotMakePaymentFailsPayment() {
         PaymentRequestService service = defaultBuilder().build();
         show(service);
-        mPaymentAppFactoryDelegate.onCanMakePaymentCalculated(false);
-        mPaymentAppFactoryDelegate.onPaymentAppCreated(createDefaultPaymentApp());
-        mPaymentAppFactoryDelegate.onDoneCreatingPaymentApps(null);
+        mPaymentAppServiceDelegate.onCanMakePaymentCalculated(false);
+        mPaymentAppServiceDelegate.onDoneCreatingPaymentApps(List.of(createDefaultPaymentApp()));
         assertErrorAndReason(ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
         assertClosed(true);
     }
@@ -657,7 +648,7 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
     public void testNoPaymentAppFailsPayment() {
         PaymentRequestService service = defaultBuilder().build();
         show(service);
-        mPaymentAppFactoryDelegate.onDoneCreatingPaymentApps(null);
+        mPaymentAppServiceDelegate.onDoneCreatingPaymentApps(List.of());
         assertErrorAndReason(ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
         assertClosed(true);
     }
@@ -784,20 +775,6 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @Test
     @Feature({"Payments"})
-    public void testSpcCanOnlyBeRequestedAlone_failedForNullPayeeNameAndOrigin() {
-        Assert.assertNull(
-                defaultBuilder()
-                        .setPayeeName(null)
-                        .setPayeeOrigin(null)
-                        .setOnlySpcMethodWithoutPaymentOptions()
-                        .build());
-        assertErrorAndReason(
-                ErrorStrings.INVALID_PAYMENT_METHODS_OR_DATA,
-                PaymentErrorReason.INVALID_DATA_FROM_RENDERER);
-    }
-
-    @Test
-    @Feature({"Payments"})
     public void testSpcCanOnlyBeRequestedAlone_allowsNullPayeeOrigin() {
         // If a valid payeeName is passed, then payeeOrigin is not needed.
         Assert.assertNotNull(
@@ -810,9 +787,12 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @Test
     @Feature({"Payments"})
-    public void testSpcCanOnlyBeRequestedAlone_failedForEmptyPayeeName() {
+    public void testSpcCanOnlyBeRequestedAlone_failedForJniValidationError() {
         Assert.assertNull(
-                defaultBuilder().setPayeeName("").setOnlySpcMethodWithoutPaymentOptions().build());
+                defaultBuilder()
+                        .setOnlySpcMethodWithoutPaymentOptions()
+                        .setSecurePaymentConfirmationRequestValid(false)
+                        .build());
         assertErrorAndReason(
                 ErrorStrings.INVALID_PAYMENT_METHODS_OR_DATA,
                 PaymentErrorReason.INVALID_DATA_FROM_RENDERER);
@@ -820,20 +800,25 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @Test
     @Feature({"Payments"})
-    public void testSpcCanOnlyBeRequestedAlone_failedForHttpPayeeOrigin() {
-        org.chromium.url.internal.mojom.Origin payeeOrigin =
-                new org.chromium.url.internal.mojom.Origin();
-        payeeOrigin.scheme = "http";
-        payeeOrigin.host = "www.example.test";
-        payeeOrigin.port = 443;
-        Assert.assertNull(
-                defaultBuilder()
-                        .setPayeeOrigin(payeeOrigin)
-                        .setOnlySpcMethodWithoutPaymentOptions()
-                        .build());
-        assertErrorAndReason(
-                ErrorStrings.INVALID_PAYMENT_METHODS_OR_DATA,
-                PaymentErrorReason.INVALID_DATA_FROM_RENDERER);
+    @DisableFeatures({PaymentFeatureList.SECURE_PAYMENT_CONFIRMATION})
+    public void testSpcConstraintsBypassedWhenDisabled() {
+        // When SPC is disabled, it should be successfully initialized even if:
+        // 1. It is not the only payment method.
+        // 2. Payment options (like shipping) are requested.
+        // Note: securePaymentConfirmation must be null when the feature is disabled.
+        PaymentOptions options = new PaymentOptions();
+        options.requestShipping = true;
+
+        PaymentMethodData[] methodData = new PaymentMethodData[2];
+        methodData[0] = new PaymentMethodData();
+        methodData[0].supportedMethod = "https://www.chromium.org";
+        methodData[1] = new PaymentMethodData();
+        methodData[1].supportedMethod = MethodStrings.SECURE_PAYMENT_CONFIRMATION;
+        methodData[1].securePaymentConfirmation = null;
+
+        Assert.assertNotNull(
+                defaultBuilder().setMethodData(methodData).setOptions(options).build());
+        assertNoError();
     }
 
     @Test
@@ -877,10 +862,7 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @Test
     @Feature({"Payments"})
-    @EnableFeatures({PaymentFeatureList.SECURE_PAYMENT_CONFIRMATION_FALLBACK})
-    @DisableFeatures({BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_UX_REFRESH})
-    public void
-            disconnectFromClientWithDebugMessage_userCancelPaymentErrorReason_whenSpcFallbackEnabled() {
+    public void disconnectFromClientWithDebugMessage_userCancelPaymentErrorReason() {
         PaymentRequestService service =
                 defaultBuilder().setOnlySpcMethodWithoutPaymentOptions().build();
 
@@ -888,40 +870,6 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
                 ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
 
         assertErrorAndReason(ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
-    }
-
-    @Test
-    @Feature({"Payments"})
-    @EnableFeatures({BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_UX_REFRESH})
-    @DisableFeatures({PaymentFeatureList.SECURE_PAYMENT_CONFIRMATION_FALLBACK})
-    public void
-            disconnectFromClientWithDebugMessage_userCancelPaymentErrorReason_whenUxRefreshEnabled() {
-        PaymentRequestService service =
-                defaultBuilder().setOnlySpcMethodWithoutPaymentOptions().build();
-
-        service.disconnectFromClientWithDebugMessage(
-                ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
-
-        assertErrorAndReason(ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
-    }
-
-    @Test
-    @Feature({"Payments"})
-    @DisableFeatures({
-        BlinkFeatures.SECURE_PAYMENT_CONFIRMATION_UX_REFRESH,
-        PaymentFeatureList.SECURE_PAYMENT_CONFIRMATION_FALLBACK
-    })
-    public void
-            disconnectFromClientWithDebugMessage_userCancelPaymentErrorReason_whenSpcFallbackAndUxRefreshDisabled() {
-        PaymentRequestService service =
-                defaultBuilder().setOnlySpcMethodWithoutPaymentOptions().build();
-
-        service.disconnectFromClientWithDebugMessage(
-                ErrorStrings.USER_CANCELLED, PaymentErrorReason.USER_CANCEL);
-
-        assertErrorAndReason(
-                ErrorStrings.WEB_AUTHN_OPERATION_TIMED_OUT_OR_NOT_ALLOWED,
-                PaymentErrorReason.NOT_ALLOWED_ERROR);
     }
 
     @Test
@@ -936,31 +884,153 @@ public class PaymentRequestServiceTest implements PaymentRequestClient {
 
     @Test
     @Feature({"Payments"})
-    @EnableFeatures({PaymentFeatureList.CAN_MAKE_PAYMENT_TRUE_WHEN_PRIVATE})
-    public void testCanMakePayment_WithTrueWhenPrivateFeature() {
+    public void testCanMakePayment_whenPrefIsDisabled() {
         PaymentRequestService service = defaultBuilder().setPrefsCanMakePayment(false).build();
         service.canMakePayment();
-        mPaymentAppFactoryDelegate.onCanMakePaymentCalculated(true);
-        mPaymentAppFactoryDelegate.onPaymentAppCreated(createDefaultPaymentApp());
-        mPaymentAppFactoryDelegate.onDoneCreatingPaymentApps(null);
+        // The pref is disabled, so the response should be true even if the app factory reports
+        // false for canMakePayment and returns no apps.
+        mPaymentAppServiceDelegate.onCanMakePaymentCalculated(false);
+        mPaymentAppServiceDelegate.onDoneCreatingPaymentApps(List.of());
         Assert.assertEquals(
-                "PaymentRequest.canMakePayment() should return true when the feature is enabled.",
+                "PaymentRequest.canMakePayment() should return true when the pref is disabled.",
                 CanMakePaymentQueryResult.CAN_MAKE_PAYMENT,
                 mSentCanMakePayment);
     }
 
     @Test
     @Feature({"Payments"})
-    @DisableFeatures({PaymentFeatureList.CAN_MAKE_PAYMENT_TRUE_WHEN_PRIVATE})
-    public void testCanMakePayment_WithTrueWhenPrivateFeatureDisabled() {
-        PaymentRequestService service = defaultBuilder().setPrefsCanMakePayment(false).build();
-        service.canMakePayment();
-        mPaymentAppFactoryDelegate.onCanMakePaymentCalculated(true);
-        mPaymentAppFactoryDelegate.onPaymentAppCreated(createDefaultPaymentApp());
-        mPaymentAppFactoryDelegate.onDoneCreatingPaymentApps(null);
+    public void testOnInstrumentDetailsError_userCancel() {
+        int[] userCancelResponses = {
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_EVENT_REJECT,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_HANDLER_WINDOW_CLOSING
+        };
+        for (int error : userCancelResponses) {
+            PaymentRequestService service = defaultBuilder().build();
+            Mockito.doReturn(true).when(mBrowserPaymentRequest).hasSkippedAppSelector();
+            service.onInstrumentDetailsError(error, "User cancel");
+            assertErrorAndReason("User cancel", PaymentErrorReason.USER_CANCEL);
+            resetErrorMessageAndCloseState();
+        }
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOnInstrumentDetailsError_appError() {
+        int[] appErrorResponses = {
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_EVENT_BROWSER_ERROR,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_EVENT_NO_RESPONSE,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_EVENT_SERVICE_WORKER_ERROR,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_EVENT_TIMEOUT,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_HANDLER_ACTIVITY_DIED,
+            org.chromium.payments.mojom.PaymentEventResponseType
+                    .PAYMENT_HANDLER_FAIL_TO_LOAD_MAIN_FRAME,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_HANDLER_INSTALL_FAILED,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYER_NAME_EMPTY,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYER_EMAIL_EMPTY,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYER_PHONE_EMPTY,
+            org.chromium.payments.mojom.PaymentEventResponseType.SHIPPING_ADDRESS_INVALID,
+            org.chromium.payments.mojom.PaymentEventResponseType.SHIPPING_OPTION_EMPTY,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_DETAILS_ABSENT,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_DETAILS_NOT_OBJECT,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_DETAILS_STRINGIFY_ERROR,
+            org.chromium.payments.mojom.PaymentEventResponseType.PAYMENT_METHOD_NAME_EMPTY
+        };
+        for (int error : appErrorResponses) {
+            PaymentRequestService service = defaultBuilder().build();
+            Mockito.doReturn(true).when(mBrowserPaymentRequest).hasSkippedAppSelector();
+            service.onInstrumentDetailsError(error, "App error");
+            assertErrorAndReason("App error", PaymentErrorReason.PAYMENT_APP_ERROR);
+            resetErrorMessageAndCloseState();
+        }
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOnInstrumentDetailsError_notAllowed() {
+        PaymentRequestService service = defaultBuilder().build();
+        Mockito.doReturn(true).when(mBrowserPaymentRequest).hasSkippedAppSelector();
+
+        service.onInstrumentDetailsError(
+                org.chromium.payments.mojom.PaymentEventResponseType
+                        .PAYMENT_HANDLER_INSECURE_NAVIGATION,
+                "Insecure");
+        assertErrorAndReason("Insecure", PaymentErrorReason.NOT_ALLOWED_ERROR);
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOpenPaymentHandlerWindow_noPaymentFlow() {
+        GURL targetUrl = new GURL("https://alice.example/pay");
+        Assert.assertNull(PaymentRequestService.openPaymentHandlerWindow(targetUrl));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOpenPaymentHandlerWindow_noAppInvoked() {
+        GURL targetUrl = new GURL("https://alice.example/pay");
+        PaymentRequestService service = defaultBuilder().build();
+        show(service);
+        Assert.assertNull(PaymentRequestService.openPaymentHandlerWindow(targetUrl));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOpenPaymentHandlerWindow_nativeAppInvoked() {
+        GURL targetUrl = new GURL("https://alice.example/pay");
+        PaymentRequestService service = defaultBuilder().build();
+        show(service);
+
+        AndroidPaymentApp nativeApp = Mockito.mock(AndroidPaymentApp.class);
+        Mockito.doReturn(PaymentAppType.NATIVE_MOBILE_APP).when(nativeApp).getPaymentAppType();
+        Mockito.doReturn("alice.example.app").when(nativeApp).packageName();
+        service.invokePaymentApp(nativeApp, Mockito.mock(PaymentResponseHelperInterface.class));
+
+        // A request to open the payment handler window should be denied because the invoked app
+        // is not a service worker app.
+        Assert.assertNull(PaymentRequestService.openPaymentHandlerWindow(targetUrl));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOpenPaymentHandlerWindow_sameOrigin() {
+        GURL targetUrl = new GURL("https://alice.example/pay");
+        PaymentRequestService service = defaultBuilder().build();
+        show(service);
+
+        PaymentApp swAppSameOrigin = Mockito.mock(PaymentApp.class);
+        Mockito.doReturn(PaymentAppType.SERVICE_WORKER_APP)
+                .when(swAppSameOrigin)
+                .getPaymentAppType();
+        Mockito.doReturn("https://alice.example/scope").when(swAppSameOrigin).getIdentifier();
+        service.invokePaymentApp(
+                swAppSameOrigin, Mockito.mock(PaymentResponseHelperInterface.class));
+
+        WebContents mockWebContents = Mockito.mock(WebContents.class);
+        Mockito.doReturn(mockWebContents)
+                .when(mBrowserPaymentRequest)
+                .openPaymentHandlerWindow(Mockito.any(), Mockito.anyLong());
+
         Assert.assertEquals(
-                "PaymentRequest.canMakePayment() should return false when the feature is disabled.",
-                CanMakePaymentQueryResult.CANNOT_MAKE_PAYMENT,
-                mSentCanMakePayment);
+                mockWebContents, PaymentRequestService.openPaymentHandlerWindow(targetUrl));
+    }
+
+    @Test
+    @Feature({"Payments"})
+    public void testOpenPaymentHandlerWindow_crossOrigin() {
+        GURL targetUrl = new GURL("https://alice.example/pay");
+        PaymentRequestService service = defaultBuilder().build();
+        show(service);
+
+        PaymentApp swAppCrossOrigin = Mockito.mock(PaymentApp.class);
+        Mockito.doReturn(PaymentAppType.SERVICE_WORKER_APP)
+                .when(swAppCrossOrigin)
+                .getPaymentAppType();
+        Mockito.doReturn("https://bob.example/scope").when(swAppCrossOrigin).getIdentifier();
+        service.invokePaymentApp(
+                swAppCrossOrigin, Mockito.mock(PaymentResponseHelperInterface.class));
+
+        // A request to open the payment handler window should be denied because the invoked app
+        // has a different origin scope than the target URL.
+        Assert.assertNull(PaymentRequestService.openPaymentHandlerWindow(targetUrl));
     }
 }

@@ -10,6 +10,7 @@
 #include "components/enterprise/browser/reporting/common_pref_names.h"
 #include "components/enterprise/browser/reporting/report_scheduler.h"
 #include "components/enterprise/browser/reporting/report_util.h"
+#include "components/enterprise/browser/reporting/reporting_features.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
@@ -53,7 +54,7 @@ void UserSecuritySignalsService::Start() {
       kUserSecuritySignalsReporting,
       base::BindRepeating(
           &UserSecuritySignalsService::OnStatePolicyValueChanged,
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), /*is_initialization=*/false));
   pref_change_registrar_.Add(
       kUserSecurityAuthenticatedReporting,
       base::BindRepeating(
@@ -61,7 +62,7 @@ void UserSecuritySignalsService::Start() {
           weak_factory_.GetWeakPtr()));
 
   // Manually trigger a policy update to initialize things.
-  OnStatePolicyValueChanged();
+  OnStatePolicyValueChanged(/*is_initialization=*/true);
 }
 
 bool UserSecuritySignalsService::IsSecuritySignalsReportingEnabled() {
@@ -127,9 +128,11 @@ void UserSecuritySignalsService::OnPolicyUpdated(
   TriggerReport(SecurityReportTrigger::kPolicyChange);
 }
 
-void UserSecuritySignalsService::OnStatePolicyValueChanged() {
+void UserSecuritySignalsService::OnStatePolicyValueChanged(
+    bool is_initialization) {
   if (!IsSecuritySignalsReportingEnabled()) {
     timer_.Stop();
+    StopPolicyObservation();
     return;
   }
 
@@ -143,8 +146,13 @@ void UserSecuritySignalsService::OnStatePolicyValueChanged() {
   // Make sure that cookie observation is properly set-up, as needed.
   OnCookiePolicyValueChanged();
 
-  // The policy is enabled and the timed loop isn't running. Send an upload
-  // immediately.
+  if (base::FeatureList::IsEnabled(kUploadReportOnProfileOpen) &&
+      is_initialization) {
+    // Skip sending a report at start-up.
+    OnReportUploaded();
+    return;
+  }
+
   TriggerReport(SecurityReportTrigger::kTimer);
 }
 
@@ -168,15 +176,19 @@ void UserSecuritySignalsService::TriggerReport(SecurityReportTrigger trigger) {
 }
 
 void UserSecuritySignalsService::StartPolicyObservation() {
-  if (enterprise_signals::features::IsPolicyDataCollectionEnabled()) {
+  if (enterprise_signals::features::IsPolicyDataCollectionEnabled() &&
+      !is_observing_policy_service_) {
     policy_service_->AddObserver(policy::POLICY_DOMAIN_CHROME, this);
+    is_observing_policy_service_ = true;
   }
 }
 
 void UserSecuritySignalsService::StopPolicyObservation() {
   if (policy_service_ &&
-      enterprise_signals::features::IsPolicyDataCollectionEnabled()) {
+      enterprise_signals::features::IsPolicyDataCollectionEnabled() &&
+      is_observing_policy_service_) {
     policy_service_->RemoveObserver(policy::POLICY_DOMAIN_CHROME, this);
+    is_observing_policy_service_ = false;
   }
 }
 

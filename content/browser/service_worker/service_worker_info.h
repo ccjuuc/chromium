@@ -10,9 +10,11 @@
 #include <map>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/time/time.h"
 #include "content/browser/service_worker/service_worker_version.h"
 #include "content/common/content_export.h"
+#include "content/common/service_worker/service_worker_router_evaluator.h"
 #include "content/public/browser/service_worker_client_info.h"
 #include "content/public/browser/service_worker_version_base_info.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
@@ -35,17 +37,19 @@ struct CONTENT_EXPORT ServiceWorkerVersionInfo
       blink::EmbeddedWorkerStatus running_status,
       ServiceWorkerVersion::Status status,
       std::optional<ServiceWorkerVersion::FetchHandlerType> fetch_handler_type,
+      blink::mojom::NavigationPreloadState navigation_preload_state,
       const GURL& script_url,
       const GURL& scope,
       const blink::StorageKey& storage_key,
       int64_t registration_id,
       int64_t version_id,
-      int process_id,
+      ChildProcessId process_id,
       int thread_id,
       int devtools_agent_route_id,
       ukm::SourceId ukm_source_id,
       blink::mojom::AncestorFrameType ancestor_frame_type,
-      std::optional<std::string> router_rules);
+      std::optional<std::string> router_rules,
+      std::vector<ServiceWorkerRouterRule> typed_router_rules);
   ServiceWorkerVersionInfo(const ServiceWorkerVersionInfo& other);
   ~ServiceWorkerVersionInfo() override;
 
@@ -56,7 +60,13 @@ struct CONTENT_EXPORT ServiceWorkerVersionInfo
   int thread_id;
   int devtools_agent_route_id;
   ukm::SourceId ukm_source_id = ukm::kInvalidSourceId;
+  // TODO(crbug.com/540469610): Replace this field with `typed_router_rules`
+  // after `kServiceWorkerStaticRouterTypedRulesForDevTools` is launched, and
+  // chrome://serviceworker-internals/ migration is also completed.
   std::optional<std::string> router_rules;
+  // Non-empty only if `kServiceWorkerStaticRouterTypedRulesForDevTools` is
+  // enabled.
+  std::vector<ServiceWorkerRouterRule> typed_router_rules;
   base::Time script_response_time;
   base::Time script_last_modified;
   std::map<std::string, ServiceWorkerClientInfo> clients;
@@ -79,7 +89,7 @@ struct CONTENT_EXPORT ServiceWorkerRegistrationInfo {
       const ServiceWorkerVersionInfo& active_version,
       const ServiceWorkerVersionInfo& waiting_version,
       const ServiceWorkerVersionInfo& installing_version,
-      int64_t stored_version_size_bytes,
+      base::ByteSize stored_version_size,
       bool navigation_preload_enabled,
       size_t navigation_preload_header_length);
   ServiceWorkerRegistrationInfo(const ServiceWorkerRegistrationInfo& other);
@@ -88,15 +98,15 @@ struct CONTENT_EXPORT ServiceWorkerRegistrationInfo {
   GURL scope;
   blink::StorageKey key;
   blink::mojom::ServiceWorkerUpdateViaCache update_via_cache;
-  int64_t registration_id;
-  DeleteFlag delete_flag;
+  int64_t registration_id = blink::mojom::kInvalidServiceWorkerRegistrationId;
+  DeleteFlag delete_flag = IS_NOT_DELETED;
   ServiceWorkerVersionInfo active_version;
   ServiceWorkerVersionInfo waiting_version;
   ServiceWorkerVersionInfo installing_version;
 
-  int64_t stored_version_size_bytes;
-  bool navigation_preload_enabled;
-  size_t navigation_preload_header_length;
+  base::ByteSize stored_version_size;
+  bool navigation_preload_enabled = false;
+  size_t navigation_preload_header_length = 0;
 };
 
 }  // namespace content

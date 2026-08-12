@@ -8,9 +8,9 @@
 #include <memory>
 #include <vector>
 
+#include "base/i18n/language_tag.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/lens/core/mojom/translate.mojom.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 
 class Profile;
@@ -20,6 +20,10 @@ using SupportedLanguagesRetrievedCallback =
     base::OnceCallback<void(const std::string&,
                             std::vector<lens::mojom::LanguagePtr>,
                             std::vector<lens::mojom::LanguagePtr>)>;
+
+namespace base {
+class ListValue;
+}  // namespace base
 
 namespace lens {
 
@@ -39,10 +43,8 @@ class LensOverlayLanguagesController {
   void OnGetSupportedLanguagesResponse(
       std::optional<std::string> response_body);
 
-  void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
-
   std::vector<lens::mojom::LanguagePtr> RetrieveLanguagesFromResults(
-      const base::Value::List* result_list);
+      const base::ListValue* result_list);
 
   // Callback for when the get supported languages response is decoded.
   SupportedLanguagesRetrievedCallback callback_;
@@ -52,7 +54,7 @@ class LensOverlayLanguagesController {
 
   // The locale used in the language request. Stored since technically, the
   // locale can change before a response was received.
-  std::string locale_;
+  base::i18n::LanguageTag locale_ = base::i18n::GetKnownLanguageTag("und");
 
   // A url loader to load the request to get supported languages.
   std::unique_ptr<network::SimpleURLLoader> url_loader_;

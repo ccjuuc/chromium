@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_SEARCH_ENGINE_CHOICE_SEARCH_ENGINE_CHOICE_DIALOG_SERVICE_H_
 #define CHROME_BROWSER_SEARCH_ENGINE_CHOICE_SEARCH_ENGINE_CHOICE_DIALOG_SERVICE_H_
 
+#include <optional>
 #include <string>
 
 #include "base/containers/flat_map.h"
@@ -12,8 +13,9 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
@@ -23,10 +25,13 @@
 class Browser;
 class TemplateURLService;
 
+namespace regional_capabilities {
+enum class SearchEngineChoiceScreenConditions;
+}
+
 namespace search_engines {
 
 class ChoiceScreenData;
-enum class SearchEngineChoiceScreenConditions;
 
 // Profile specific data related to the search engine choice.
 // `timestamp` is the search engine choice timestamp that's saved in the
@@ -94,13 +99,23 @@ class SearchEngineChoiceDialogService : public KeyedService {
   void RecordChoiceScreenEvent(
       search_engines::SearchEngineChoiceScreenEvents event);
 
+  // Helper, forwards to
+  // `SearchEngineChoiceService::RecordTriggeringEligibility`.
+  void RecordTriggeringEligibility(
+      regional_capabilities::SearchEngineChoiceScreenConditions conditions);
+
   // Returns the eligibility status for newly triggering a choice screen dialog.
   //
   // If calling this ahead of requesting to show the dialog, prefer to call
   // `SearchEngineChoiceTabHelper::MaybeShowDialog()` instead. It will check a
   // few more things and ensure we log the event correctly.
-  search_engines::SearchEngineChoiceScreenConditions ComputeDialogConditions(
-      Browser& browser) const;
+  regional_capabilities::SearchEngineChoiceScreenConditions
+  ComputeDialogConditions(Browser& browser) const;
+
+  // Returns the eligibility status for triggering the choice screen step in the
+  // first run experience or profile creation flow.
+  regional_capabilities::SearchEngineChoiceScreenConditions
+  ComputeProfileManagementFlowConditions() const;
 
   // Returns whether the dialog should be displayed over the passed URL.
   bool IsUrlSuitableForDialog(GURL url);
@@ -138,12 +153,28 @@ class SearchEngineChoiceDialogService : public KeyedService {
   static void SetDialogDisabledForTests(bool dialog_disabled);
 
   // Returns a copy of the `ChoiceData` specific to `profile`.
-  static search_engines::ChoiceData GetChoiceDataFromProfile(Profile& profile);
+  // LINT.IfChange(CurrentDefaultPropagationOutcome)
+  enum class CurrentDefaultPropagationOutcome {
+    kPropagatedCurrentDefault = 0,
+    kSkippedDueToPolicies = 1,
+    kSkippedIsFallback = 2,
+    kSkippedIsExtension = 3,
+    kMaxValue = kSkippedIsExtension,
+  };
+  // LINT.ThenChange(/tools/metrics/histograms/metadata/search/enums.xml:CurrentDefaultPropagationOutcome)
+
+  // Returns a copy of the `ChoiceData` specific to `profile`, or `std::nullopt`
+  // if there is no default search engine to propagate. This function ignores
+  // any extension-provided default search engine to capture the underlying user
+  // choice (or system default), and skips propagation entirely if the default
+  // search is managed by an enterprise policy.
+  static std::optional<search_engines::ChoiceData> GetChoiceDataFromProfile(
+      Profile& profile);
 
   // Updates `profile` with the values from `choice_data`.
   static void UpdateProfileFromChoiceData(
       Profile& profile,
-      const search_engines::ChoiceData& choice_data);
+      const std::optional<search_engines::ChoiceData>& choice_data);
 
  private:
   friend class SearchEngineChoiceDialogServiceFactory;
@@ -151,7 +182,7 @@ class SearchEngineChoiceDialogService : public KeyedService {
   // Keeps track of browsers that are known to be showing the choice dialog
   // to make sure that we can keep new browsers blocked until a choice is made
   // and unblock all of them when it is done.
-  class BrowserRegistry : public BrowserListObserver {
+  class BrowserRegistry : public BrowserCollectionObserver {
    public:
     explicit BrowserRegistry(SearchEngineChoiceDialogService& service);
     ~BrowserRegistry() override;
@@ -164,6 +195,10 @@ class SearchEngineChoiceDialogService : public KeyedService {
     // open dialog.
     bool HasOpenDialog(Browser& browser) const;
 
+    // Returns whether there is any browser currently marked as having an open
+    // dialog, in the registry associated with the current profile.
+    bool HasOpenDialog() const;
+
     // Registers that the browser wants to show a dialog. Returns whether the
     // registration is accepted. If `false` is returned, the browser should
     // abandon showing the dialog.
@@ -171,8 +206,8 @@ class SearchEngineChoiceDialogService : public KeyedService {
                          base::OnceClosure close_dialog_callback);
     void CloseAllDialogs();
 
-    // BrowserListObserver implementation:
-    void OnBrowserRemoved(Browser* browser) override;
+    // BrowserCollectionObserver implementation:
+    void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
    private:
     raw_ref<SearchEngineChoiceDialogService>
@@ -185,8 +220,8 @@ class SearchEngineChoiceDialogService : public KeyedService {
     // in the past, but that is has since been closed.
     base::flat_map<raw_ref<Browser>, base::OnceClosure> registered_browsers_;
 
-    base::ScopedObservation<BrowserList, BrowserListObserver> observation_{
-        this};
+    base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+        observation_{this};
   };
 
   // To know whether the choice was made during the Profile Picker or not.

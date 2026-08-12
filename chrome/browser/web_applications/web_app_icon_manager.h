@@ -24,8 +24,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/types/pass_key.h"
-#include "chrome/browser/web_applications/web_app_icon_generator.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_install_manager_observer.h"
 #include "components/webapps/common/web_app_id.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -44,6 +43,8 @@ class WebAppInstallManager;
 class WebAppProvider;
 class ApplyPendingManifestUpdateCommand;
 class ManifestSilentUpdateCommand;
+class ManifestUpdateJob;
+class ApplyManifestMigrationCommand;
 
 using HomeTabIconBitmaps = std::vector<SkBitmap>;
 using SquareSizeDip = int;
@@ -55,7 +56,7 @@ struct IconMetadataFromDisk {
   IconMetadataFromDisk(IconMetadataFromDisk&& icon_metadata);
   IconMetadataFromDisk& operator=(IconMetadataFromDisk&& icon_metadata);
 
-  SizeToBitmap icons_map;
+  OrderedSizeToBitmap icons_map;
   IconPurpose purpose = IconPurpose::ANY;
 };
 
@@ -100,7 +101,7 @@ class WebAppIconManager : public WebAppInstallManagerObserver {
   // ReadTrustedIconsWithFallbackToManifestIcons() if the purpose information is
   // not required for the use-case.
   static ReadIconMetadataCallback BitmapsFromIconMetadataExtractor(
-      base::OnceCallback<void(std::map<int, SkBitmap>)> icon_metadata_callback);
+      base::OnceCallback<void(OrderedSizeToBitmap)> icon_metadata_callback);
 
   // Writes all data (icons) for an app.
   void WriteData(webapps::AppId app_id,
@@ -214,10 +215,10 @@ class WebAppIconManager : public WebAppInstallManagerObserver {
 
   using ReadShortcutsMenuIconsCallback = base::OnceCallback<void(
       ShortcutsMenuIconBitmaps shortcuts_menu_icon_bitmaps)>;
-  // Reads bitmaps for all shortcuts menu icons for an app. Returns a vector of
-  // map<SquareSizePx, SkBitmap>. The index of a map in the vector is the same
-  // as that of its corresponding shortcut in the manifest's shortcuts vector.
-  // Returns empty vector in |callback| if we hit any error.
+  // Reads bitmaps for all shortcuts menu icons for an app. Returns one
+  // |IconBitmaps| entry per shortcut in the manifest's |shortcuts| list, with
+  // each vector index matching its corresponding shortcut. Returns empty vector
+  // in |callback| if we hit any error.
   void ReadAllShortcutsMenuIcons(const webapps::AppId& app_id,
                                  ReadShortcutsMenuIconsCallback callback);
 
@@ -255,13 +256,26 @@ class WebAppIconManager : public WebAppInstallManagerObserver {
 
   class DeletePendingPassKey {
     friend class ApplyPendingManifestUpdateCommand;
-    friend class ManifestSilentUpdateCommand;
+    friend class ManifestUpdateJob;
     DeletePendingPassKey() = default;
   };
   using DeletePendingIconDataCallback = base::OnceCallback<void(bool success)>;
   void DeletePendingIconData(const webapps::AppId& app_id,
                              DeletePendingPassKey,
                              DeletePendingIconDataCallback callback);
+
+  using AppIconsCopySuccessCallback = base::OnceCallback<void(bool success)>;
+  // Set up the icon data stored on disk such that to_app_id's directory
+  // structure mimics from_app_id, essentially causing to_app_id's icons to
+  // become the same as from_app_id's icons.
+  // This is potentially destructive because it "updates" the app's identity
+  // under the hood, which is why this has been PassKeyed to only be used for
+  // migration purposes.
+  void CopyIconsFromOneAppToAnother(
+      const webapps::AppId& from_app_id,
+      const webapps::AppId& to_app_id,
+      base::PassKey<ApplyManifestMigrationCommand>,
+      AppIconsCopySuccessCallback callback);
 
   // Returns a square icon of gfx::kFaviconSize px, or an empty bitmap if not
   // found.
@@ -274,7 +288,8 @@ class WebAppIconManager : public WebAppInstallManagerObserver {
   void OnWebAppInstalled(const webapps::AppId& app_id) override;
   void OnWebAppInstallManagerDestroyed() override;
 
-  using ReadIconsCallback = base::OnceCallback<void(SizeToBitmap icon_bitmaps)>;
+  using ReadIconsCallback =
+      base::OnceCallback<void(OrderedSizeToBitmap icon_bitmaps)>;
 
   // Calls back with an icon of the |desired_icon_size| and |purpose|, resizing
   // an icon of a different size if necessary. If no icons were available, calls

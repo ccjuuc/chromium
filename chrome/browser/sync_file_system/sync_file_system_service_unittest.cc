@@ -52,7 +52,7 @@ namespace sync_file_system {
 
 namespace {
 
-const char kOrigin[] = "http://example.com";
+const char kOrigin[] = "chrome-extension://example";
 
 template <typename R> struct AssignTrait {
   typedef const R& ArgumentType;
@@ -262,7 +262,7 @@ TEST_F(SyncFileSystemServiceTest, InitializeForAppWithNetworkFailure) {
       SYNC_STATUS_NETWORK_ERROR);
 }
 
-// Disabled due to flakiness: crbug.com/1222929
+// Disabled due to flakiness: crbug.com/40774357
 TEST_F(SyncFileSystemServiceTest, DISABLED_InitializeForAppWithError) {
   // Notify REMOTE_SERVICE_DISABLED and callback with
   // SYNC_STATUS_FAILED.  This should let the InitializeApp fail.
@@ -272,7 +272,7 @@ TEST_F(SyncFileSystemServiceTest, DISABLED_InitializeForAppWithError) {
       SYNC_STATUS_FAILED);
 }
 
-// Disabled due to flakiness: crbug.com/1345010
+// Disabled due to flakiness: crbug.com/40853276
 TEST_F(SyncFileSystemServiceTest, DISABLED_SimpleLocalSyncFlow) {
   InitializeApp();
 
@@ -400,7 +400,7 @@ TEST_F(SyncFileSystemServiceTest, SimpleSyncFlowWithFileBusy) {
 
 #if defined(THREAD_SANITIZER)
 // SyncFileSystemServiceTest.GetFileSyncStatus fails under ThreadSanitizer,
-// see http://crbug.com/294904.
+// see http://crbug.com/40333617.
 #define MAYBE_GetFileSyncStatus DISABLED_GetFileSyncStatus
 #else
 #define MAYBE_GetFileSyncStatus GetFileSyncStatus

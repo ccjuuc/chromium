@@ -4,9 +4,6 @@
 
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
@@ -19,20 +16,18 @@
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "components/omnibox/browser/test_location_bar_model.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/permissions_client.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_ui_selector.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -44,12 +39,12 @@
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
 const char kLocationBarView[] = "LocationBarView";
-const auto QuietChipElementId = PermissionChipView::kElementIdForTesting;
+const auto QuietChipElementId =
+    PermissionChipView::kPermissionRequestChipElementId;
 const auto QuietBubbleAllowElementId =
     views::DialogClientView::kOkButtonElementId;
 const auto QuietBubbleElementId = ContentSettingBubbleContents::kMainElementId;
 const auto InfobarElementId = ConfirmInfoBar::kInfoBarElementId;
-using ::base::test::ScopedFeatureList;
 using ::testing::ValuesIn;
 
 class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
@@ -97,7 +92,7 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
   LocationBarView* GetLocationBarView() {
     return BrowserView::GetBrowserViewForBrowser(browser())
         ->toolbar()
-        ->location_bar();
+        ->location_bar_view();
   }
 
   void OverrideVisibleUrlInLocationBar(const std::u16string& text) {
@@ -111,7 +106,7 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
     test_location_bar_model_->set_formatted_full_url(text);
 
     // Normally the URL for display has portions elided. We aren't doing that in
-    // this case, because that is irrevelant for these tests.
+    // this case, because that is irrelevant for these tests.
     test_location_bar_model_->set_url_for_display(text);
 
     omnibox_view->Update();
@@ -361,19 +356,7 @@ struct QuietPromptInfoBarTestCase {
 
 class QuietPromptInteractiveParamUITest
     : public QuietPromptInteractiveUITest,
-      public testing::WithParamInterface<QuietPromptInfoBarTestCase> {
- public:
-  void SetUp() override {
-    feature_list_->InitWithFeatures(
-        {permissions::features::kPermissionPromiseLifetimeModulation},
-        /*disabled_features=*/{});
-    QuietPromptInteractiveUITest::SetUp();
-  }
-
- private:
-  std::unique_ptr<ScopedFeatureList> feature_list_ =
-      std::make_unique<ScopedFeatureList>();
-};
+      public testing::WithParamInterface<QuietPromptInfoBarTestCase> {};
 
 INSTANTIATE_TEST_SUITE_P(
     PermissionChangeListenerTests,

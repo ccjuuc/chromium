@@ -38,6 +38,7 @@ void MediaSessionController::SetMetadata(
   has_audio_ = has_audio;
   has_video_ = has_video;
   media_content_type_ = media_content_type;
+
   AddOrRemovePlayer();
 }
 
@@ -47,20 +48,18 @@ bool MediaSessionController::OnPlaybackStarted() {
   return AddOrRemovePlayer();
 }
 
-void MediaSessionController::OnSuspend(int player_id) {
+void MediaSessionController::OnSuspend(int player_id, bool triggered_by_user) {
   DCHECK_EQ(player_id_, player_id);
-  // TODO(crbug.com/40623496): Set triggered_by_user to true ONLY if that action
-  // was actually triggered by user as this will activate the frame.
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestPause(/*triggered_by_user=*/true);
+      ->RequestPause(triggered_by_user);
 }
 
-void MediaSessionController::OnResume(int player_id) {
+void MediaSessionController::OnResume(int player_id, bool triggered_by_user) {
   DCHECK_EQ(player_id_, player_id);
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestPlay();
+      ->RequestPlay(triggered_by_user);
 }
 
 void MediaSessionController::OnSeekForward(int player_id,
@@ -98,12 +97,22 @@ void MediaSessionController::OnSetVolumeMultiplier(int player_id,
   observer->GetMediaPlayerRemote(id_)->SetVolumeMultiplier(volume_multiplier);
 }
 
-void MediaSessionController::OnEnterPictureInPicture(int player_id) {
+void MediaSessionController::OnEnterPictureInPicture(
+    int player_id,
+    const std::optional<gfx::Size>& min_size) {
   DCHECK_EQ(player_id_, player_id);
 
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
-      ->RequestEnterPictureInPicture();
+      ->RequestEnterPictureInPicture(min_size);
+}
+
+void MediaSessionController::OnSaveVideoFrame(int player_id) {
+  DCHECK_EQ(player_id_, player_id);
+
+  web_contents_->media_web_contents_observer()
+      ->GetMediaPlayerRemote(id_)
+      ->RequestSaveVideoFrame();
 }
 
 void MediaSessionController::OnSetAudioSinkId(
@@ -153,7 +162,7 @@ void MediaSessionController::OnRequestMediaRemoting(int player_id) {
   if (is_paused_) {
     web_contents_->media_web_contents_observer()
         ->GetMediaPlayerRemote(id_)
-        ->RequestPlay();
+        ->RequestPlay(/*triggered_by_user=*/true);
   }
   web_contents_->media_web_contents_observer()
       ->GetMediaPlayerRemote(id_)
@@ -182,6 +191,11 @@ std::optional<media_session::MediaPosition> MediaSessionController::GetPosition(
 bool MediaSessionController::IsPictureInPictureAvailable(int player_id) const {
   DCHECK_EQ(player_id_, player_id);
   return is_picture_in_picture_available_;
+}
+
+bool MediaSessionController::IsVideoFrameAvailable(int player_id) const {
+  DCHECK_EQ(player_id_, player_id);
+  return is_video_frame_available_;
 }
 
 bool MediaSessionController::HasSufficientlyVisibleVideo(int player_id) const {
@@ -251,6 +265,11 @@ void MediaSessionController::OnVideoVisibilityChanged(
   media_session_->OnVideoVisibilityChanged();
 }
 
+void MediaSessionController::OnVideoFrameAvailabilityChanged(bool available) {
+  is_video_frame_available_ = available;
+  media_session_->OnVideoFrameAvailabilityChanged();
+}
+
 bool MediaSessionController::IsMediaSessionNeeded() const {
   if (web_contents_->HasPictureInPictureVideo())
     return true;
@@ -281,7 +300,7 @@ bool MediaSessionController::AddOrRemovePlayer() {
     // the session.
     if (!media_session_->AddPlayer(this, player_id_)) {
       // If a session can't be created, force a pause immediately.
-      OnSuspend(player_id_);
+      OnSuspend(player_id_, /*triggered_by_user=*/false);
       return false;
     }
 

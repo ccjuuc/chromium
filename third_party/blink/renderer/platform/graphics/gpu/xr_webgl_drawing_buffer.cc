@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/platform/graphics/gpu/xr_webgl_drawing_buffer.h"
 
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
@@ -56,12 +57,10 @@ namespace blink {
 
 XRWebGLDrawingBuffer::ColorBuffer::ColorBuffer(
     base::WeakPtr<XRWebGLDrawingBuffer> drawing_buffer,
-    const gfx::Size& size,
     scoped_refptr<gpu::ClientSharedImage> shared_image,
     std::unique_ptr<gpu::SharedImageTexture> texture)
     : owning_thread_ref(base::PlatformThread::CurrentRef()),
       drawing_buffer(std::move(drawing_buffer)),
-      size(size),
       shared_image(std::move(shared_image)),
       texture_(std::move(texture)) {}
 
@@ -276,6 +275,7 @@ void XRWebGLDrawingBuffer::UseSharedBuffer(
   shared_buffer_scoped_access_ =
       shared_buffer_texture_->BeginAccess(buffer_sync_token,
                                           /*readonly=*/false);
+  buffer_shared_image_ = buffer_shared_image;
 
   if (WantExplicitResolve()) {
     // Bind the shared texture to the destination framebuffer of
@@ -319,7 +319,8 @@ void XRWebGLDrawingBuffer::UseSharedBuffer(
   client->DrawingBufferClientRestoreFramebufferBinding();
 }
 
-void XRWebGLDrawingBuffer::DoneWithSharedBuffer() {
+std::unique_ptr<SharedImageHolder>
+XRWebGLDrawingBuffer::DoneWithSharedBuffer() {
   DVLOG(3) << __func__;
 
   ScopedPixelLocalStorageInterrupt scoped_pls_interrupt(
@@ -344,14 +345,17 @@ void XRWebGLDrawingBuffer::DoneWithSharedBuffer() {
   // Done with the texture created by CreateAndTexStorage2DSharedImageCHROMIUM
   // finish accessing and delete it.
   DCHECK(shared_buffer_texture_);
-  gpu::SharedImageTexture::ScopedAccess::EndAccess(
+  gpu::SyncToken sync_token = gpu::SharedImageTexture::ScopedAccess::EndAccess(
       std::move(shared_buffer_scoped_access_));
   shared_buffer_texture_.reset();
 
   DrawingBuffer::Client* client = drawing_buffer_->client();
-  if (!client)
-    return;
-  client->DrawingBufferClientRestoreFramebufferBinding();
+  if (client) {
+    client->DrawingBufferClientRestoreFramebufferBinding();
+  }
+
+  return std::make_unique<SharedImageHolder>(std::move(buffer_shared_image_),
+                                             sync_token, base::DoNothing());
 }
 
 GLuint XRWebGLDrawingBuffer::GetCurrentColorBufferTextureId() {
@@ -380,6 +384,9 @@ void XRWebGLDrawingBuffer::ClearBoundFramebuffer() {
   }
 
   gl->Disable(GL_SCISSOR_TEST);
+  if (drawing_buffer_->IsWebGL2()) {
+    gl->Disable(GL_RASTERIZER_DISCARD);
+  }
 
   gl->Clear(clear_bits);
 
@@ -388,6 +395,7 @@ void XRWebGLDrawingBuffer::ClearBoundFramebuffer() {
     return;
 
   client->DrawingBufferClientRestoreScissorTest();
+  client->DrawingBufferClientRestoreRasterizerDiscard();
   client->DrawingBufferClientRestoreMaskAndClearValues();
 }
 
@@ -522,7 +530,7 @@ XRWebGLDrawingBuffer::CreateColorBuffer() {
   DrawingBuffer::Client* client = drawing_buffer_->client();
   client->DrawingBufferClientRestoreTexture2DBinding();
 
-  return base::MakeRefCounted<ColorBuffer>(weak_factory_.GetWeakPtr(), size_,
+  return base::MakeRefCounted<ColorBuffer>(weak_factory_.GetWeakPtr(),
                                            std::move(client_shared_image),
                                            std::move(texture));
 }
@@ -532,7 +540,7 @@ XRWebGLDrawingBuffer::CreateOrRecycleColorBuffer() {
   if (!recycled_color_buffer_queue_.empty()) {
     scoped_refptr<ColorBuffer> recycled =
         recycled_color_buffer_queue_.TakeLast();
-    DCHECK(recycled->size == size_);
+    DCHECK(recycled->shared_image->size() == size_);
     return recycled;
   }
   return CreateColorBuffer();
@@ -623,8 +631,8 @@ void XRWebGLDrawingBuffer::SwapColorBuffers() {
   client->DrawingBufferClientRestoreFramebufferBinding();
 }
 
-scoped_refptr<StaticBitmapImage>
-XRWebGLDrawingBuffer::TransferToStaticBitmapImage() {
+std::unique_ptr<SharedImageHolder>
+XRWebGLDrawingBuffer::TransferToSharedImageHolder() {
   scoped_refptr<ColorBuffer> buffer;
   bool success = false;
 
@@ -641,16 +649,14 @@ XRWebGLDrawingBuffer::TransferToStaticBitmapImage() {
     }
   }
 
-  if (!success) {
-    // If we can't get a mailbox, return an transparent black ImageBitmap.
-    // The only situation in which this could happen is when two or more calls
-    // to transferToImageBitmap are made back-to-back, if the framebuffer is
-    // incomplete (likely due to a failed buffer allocation), or when the
-    // context gets lost.
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(
-        SkImageInfo::MakeN32Premul(size_.width(), size_.height()));
-    return UnacceleratedStaticBitmapImage::Create(surface->makeImageSnapshot());
-  }
+  // If we can't get a mailbox, simply crash here since the image returned
+  // by the current function will be used in XRFrameProvider::SubmitLayer()
+  // later, where an UnacceleratedStaticBitmapImage will cause a crash anyway.
+  // The only situation in which this could happen is when two or more calls
+  // to transferToImageBitmap are made back-to-back, if the framebuffer is
+  // incomplete (likely due to a failed buffer allocation), or when the
+  // context gets lost.
+  CHECK(success) << "WebXR requires hardware-accelerated rendering to texture";
 
   // This holds a ref on the XRWebGLDrawingBuffer that will keep it alive
   // until the mailbox is released (and while the callback is running).
@@ -658,13 +664,9 @@ XRWebGLDrawingBuffer::TransferToStaticBitmapImage() {
       base::BindOnce(&XRWebGLDrawingBuffer::NotifyMailboxReleased, buffer);
   exported_color_buffers_.insert(buffer);
 
-  return AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
-      buffer->shared_image, buffer->produce_sync_token,
-      buffer->shared_image->alpha_type(),
-      drawing_buffer_->ContextProviderWeakPtr(),
-      base::PlatformThread::CurrentRef(),
-      ThreadScheduler::Current()->CleanupTaskRunner(),
-      std::move(release_callback));
+  return std::make_unique<SharedImageHolder>(buffer->shared_image,
+                                             buffer->produce_sync_token,
+                                             std::move(release_callback));
 }
 
 // static
@@ -691,8 +693,8 @@ void XRWebGLDrawingBuffer::MailboxReleased(
   if (color_buffer == front_color_buffer_)
     front_color_buffer_ = nullptr;
 
-  if (drawing_buffer_->destroyed() || color_buffer->size != size_ ||
-      lost_resource) {
+  if (drawing_buffer_->destroyed() ||
+      color_buffer->shared_image->size() != size_ || lost_resource) {
     return;
   }
 
@@ -701,6 +703,20 @@ void XRWebGLDrawingBuffer::MailboxReleased(
     recycled_color_buffer_queue_.TakeLast();
 
   recycled_color_buffer_queue_.push_front(color_buffer);
+}
+
+SharedImageHolder::SharedImageHolder(
+    scoped_refptr<gpu::ClientSharedImage> shared_image,
+    const gpu::SyncToken& sync_token,
+    viz::ReleaseCallback release_callback)
+    : shared_image(std::move(shared_image)),
+      sync_token(sync_token),
+      release_callback(std::move(release_callback)) {}
+
+SharedImageHolder::~SharedImageHolder() {
+  if (release_callback) {
+    std::move(release_callback).Run(sync_token, /*is_lost=*/false);
+  }
 }
 
 }  // namespace blink

@@ -3,10 +3,10 @@
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <string_view>
 
-#include "base/containers/adapters.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/path_service.h"
@@ -18,6 +18,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor.h"
 #include "chrome/browser/predictors/autocomplete_action_predictor_factory.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
@@ -44,6 +45,8 @@
 #include "chrome/test/base/search_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/omnibox/browser/base_search_provider.h"
+#include "components/page_load_metrics/browser/navigation_handle_user_data.h"
+#include "components/performance_manager/public/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_service.h"
@@ -104,6 +107,27 @@ class AutocompleteActionPredictorObserverImpl
       observation_{this};
 
   base::OnceClosure waiting_;
+};
+
+class TestOmniboxNavigationObserver : public content::WebContentsObserver {
+ public:
+  explicit TestOmniboxNavigationObserver(content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents) {}
+
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override {
+    if (navigation_handle->HasCommitted()) {
+      auto* user_data =
+          page_load_metrics::NavigationHandleUserData::GetForNavigationHandle(
+              *navigation_handle);
+      if (user_data) {
+        navigation_type_ =
+            GetChromeInitiatorLocation(user_data->navigation_type());
+      }
+    }
+  }
+
+  std::optional<ChromeInitiatorLocation> navigation_type_;
 };
 
 // This is a browser test for Omnibox triggered prerendering. This is
@@ -177,11 +201,10 @@ class PrerenderOmniboxUIBrowserTest : public InProcessBrowserTest,
 
   void SelectAutocompleteMatchAndWaitForActivation(
       OmniboxPopupSelection selection,
-      content::FrameTreeNodeId host_id) {
+      content::PrerenderHostId host_id) {
     content::test::PrerenderHostObserver prerender_observer(
         *GetActiveWebContents(), host_id);
-    browser()
-        ->window()
+    BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->edit_model()
@@ -191,7 +214,7 @@ class PrerenderOmniboxUIBrowserTest : public InProcessBrowserTest,
 
   predictors::AutocompleteActionPredictor* GetAutocompleteActionPredictor() {
     return predictors::AutocompleteActionPredictorFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void WaitForAutocompleteActionPredictorInitialization() {
@@ -205,14 +228,15 @@ class PrerenderOmniboxUIBrowserTest : public InProcessBrowserTest,
   }
 
   OmniboxView* omnibox() {
-    return browser()->window()->GetLocationBar()->GetOmniboxView();
+    return BrowserWindow::FromBrowser(browser())
+        ->GetLocationBar()
+        ->GetOmniboxView();
   }
 
  private:
   void FocusOmnibox() {
     // If the omnibox already has focus, just notify OmniboxTabHelper.
-    if (browser()
-            ->window()
+    if (BrowserWindow::FromBrowser(browser())
             ->GetLocationBar()
             ->GetOmniboxController()
             ->edit_model()
@@ -221,15 +245,15 @@ class PrerenderOmniboxUIBrowserTest : public InProcessBrowserTest,
           ->OnFocusChanged(OMNIBOX_FOCUS_VISIBLE,
                            OMNIBOX_FOCUS_CHANGE_EXPLICIT);
     } else {
-      browser()->window()->GetLocationBar()->FocusLocation(false);
+      BrowserWindow::FromBrowser(browser())->GetLocationBar()->FocusLocation(
+          /*is_user_initiated=*/false, /*clear_focus_if_failed=*/false);
     }
   }
 
   void SetOmniboxText(const std::string& text) {
     FocusOmnibox();
     // Enter user input mode to prevent spurious unelision.
-    browser()
-        ->window()
+    BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->edit_model()
@@ -296,6 +320,9 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxUIBrowserTest,
   WaitForAutocompleteActionPredictorInitialization();
   const GURL kPrerenderingUrl =
       embedded_test_server()->GetURL("/empty.html?prerender");
+
+  TestOmniboxNavigationObserver omnibox_observer(GetActiveWebContents());
+
   GetAutocompleteActionPredictor()->StartPrerendering(kPrerenderingUrl,
                                                       *GetActiveWebContents());
   StartOmniboxNavigationAndWaitForActivation(kPrerenderingUrl);
@@ -304,6 +331,10 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxUIBrowserTest,
                              ui::PAGE_TRANSITION_FROM_ADDRESS_BAR));
   EXPECT_TRUE(IsPrerenderingNavigation());
   EXPECT_EQ(GetActiveWebContents()->GetLastCommittedURL(), kPrerenderingUrl);
+
+  EXPECT_TRUE(omnibox_observer.navigation_type_.has_value());
+  EXPECT_EQ(omnibox_observer.navigation_type_.value(),
+            ChromeInitiatorLocation::kOmniboxDirectUrlInput);
 
   histogram_tester.ExpectUniqueSample(
       internal::kHistogramPrerenderPredictionStatusDirectUrlInput,
@@ -711,7 +742,7 @@ class PrerenderOmniboxSearchSuggestionUIBrowserTest
         }
       }])";
     for (const auto& suggestion_rule :
-         base::Reversed(search_suggestion_rules_)) {
+         std::views::reverse(search_suggestion_rules_)) {
       // Origin query matches a predefined rule.
       if (request.GetURL().spec().find(suggestion_rule.origin_query) !=
           std::string::npos) {
@@ -767,8 +798,7 @@ class PrerenderOmniboxSearchSuggestionUIBrowserTest
   }
 
   AutocompleteController* GetAutocompleteController() {
-    return browser()
-        ->window()
+    return BrowserWindow::FromBrowser(browser())
         ->GetLocationBar()
         ->GetOmniboxController()
         ->autocomplete_controller();
@@ -798,7 +828,7 @@ class PrerenderOmniboxSearchSuggestionUIBrowserTest
     EXPECT_TRUE(autocomplete_controller->done());
   }
 
-  content::FrameTreeNodeId InputSearchQueryAndWaitForTrigger(
+  content::PrerenderHostId InputSearchQueryAndWaitForTrigger(
       std::string_view search_query,
       const GURL& expected_url) {
     content::test::PrerenderHostRegistryObserver registry_observer(
@@ -807,7 +837,7 @@ class PrerenderOmniboxSearchSuggestionUIBrowserTest
     // The suggestion service should hint a search term which is be displayed in
     // the page with `expected_url`.
     registry_observer.WaitForTrigger(expected_url);
-    content::FrameTreeNodeId host_id =
+    content::PrerenderHostId host_id =
         prerender_helper().GetHostForUrl(expected_url);
     return host_id;
   }
@@ -876,7 +906,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxSearchSuggestionUIBrowserTest,
   AddNewSuggestionRule("prerender22", {"prerender222", "prerender223"});
   std::string search_query_1 = "prerender22";
   GURL prerender_url = GetSearchUrl(search_query_1, "prerender222");
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       InputSearchQueryAndWaitForTrigger(search_query_1, prerender_url);
   ASSERT_TRUE(host_id);
 
@@ -884,7 +914,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxSearchSuggestionUIBrowserTest,
   AddNewSuggestionRule("prerender33", {"prerender333", "prerender334"});
   std::string search_query_2 = "prerender33";
   GURL prerender_url2 = GetSearchUrl(search_query_2, "prerender333");
-  content::FrameTreeNodeId host_id2 =
+  content::PrerenderHostId host_id2 =
       InputSearchQueryAndWaitForTrigger(search_query_2, prerender_url2);
   ASSERT_NE(host_id, host_id2);
   prerender_helper().WaitForPrerenderLoadCompletion(*GetActiveWebContents(),
@@ -944,8 +974,8 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxSearchSuggestionUIBrowserTest,
       });
 
   // The displayed url shouldn't contain the parameter of pf=cs.
-  EXPECT_FALSE(base::Contains(
-      GetActiveWebContents()->GetLastCommittedURL().spec(), "pf=cs"));
+  EXPECT_FALSE(
+      GetActiveWebContents()->GetLastCommittedURL().spec().contains("pf=cs"));
 
   histogram_tester.ExpectBucketCount(
       internal::kHistogramPrerenderPredictionStatusDefaultSearchEngine,
@@ -962,8 +992,8 @@ class PrerenderOmniboxReferrerChainUIBrowserTest
     // Disable Safe Browsing service so we can directly control when
     // SafeBrowsingNavigationObserverManager and SafeBrowsingNavigationObserver
     // are instantiated.
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
     PrerenderOmniboxUIBrowserTest::SetUpOnMainThread();
     observer_manager_ = std::make_unique<
         safe_browsing::TestSafeBrowsingNavigationObserverManager>(browser());
@@ -1013,7 +1043,7 @@ IN_PROC_BROWSER_TEST_F(PrerenderOmniboxReferrerChainUIBrowserTest,
                                                       *GetActiveWebContents());
 
   registry_observer.WaitForTrigger(kPrerenderingUrl);
-  content::FrameTreeNodeId host_id =
+  content::PrerenderHostId host_id =
       prerender_helper().GetHostForUrl(kPrerenderingUrl);
   ASSERT_TRUE(host_id);
   prerender_helper().WaitForPrerenderLoadCompletion(host_id);
@@ -1035,7 +1065,14 @@ class PrewarmOmniboxUIBrowserTest
       public ::testing::WithParamInterface<
           test::ScopedPrewarmFeatureList::PrewarmState> {
  public:
-  PrewarmOmniboxUIBrowserTest() : scoped_prewarm_feature_list_(GetParam()) {}
+  PrewarmOmniboxUIBrowserTest() : scoped_prewarm_feature_list_(GetParam()) {
+    // Disable kTransientKeepAlivePolicy so that closing the WebContents
+    // immediately terminates the renderer process, which is necessary for
+    // the test to correctly assert the kPrimaryMainFrameRendererProcessKilled
+    // final status metric for the prewarmed page.
+    scoped_feature_list_.InitAndDisableFeature(
+        performance_manager::features::kTransientKeepAlivePolicy);
+  }
 
   void StopPrewarm() {
     auto* manager = PrerenderManager::FromWebContents(GetActiveWebContents());
@@ -1046,14 +1083,18 @@ class PrewarmOmniboxUIBrowserTest
 
   void TriggerZeroSuggestionPrewarm() {
     OmniboxController* omnibox_controller =
-        browser()->window()->GetLocationBar()->GetOmniboxController();
+        BrowserWindow::FromBrowser(browser())
+            ->GetLocationBar()
+            ->GetOmniboxController();
     ASSERT_TRUE(omnibox_controller);
     omnibox_controller->StartZeroSuggestPrefetch();
   }
 
   void TriggerUserInteractionPrewarm() {
     OmniboxController* omnibox_controller =
-        browser()->window()->GetLocationBar()->GetOmniboxController();
+        BrowserWindow::FromBrowser(browser())
+            ->GetLocationBar()
+            ->GetOmniboxController();
     ASSERT_TRUE(omnibox_controller);
     omnibox_controller->OnResultChanged(
         omnibox_controller->autocomplete_controller(), true);
@@ -1066,6 +1107,7 @@ class PrewarmOmniboxUIBrowserTest
 
  private:
   test::ScopedPrewarmFeatureList scoped_prewarm_feature_list_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Basic scenario for the interactive_ui_tests to trigger the prewarm feature

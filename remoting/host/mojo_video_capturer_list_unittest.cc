@@ -7,6 +7,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/test/task_environment.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/host/host_mock_objects.h"
 #include "remoting/protocol/fake_desktop_capturer.h"
@@ -33,6 +35,7 @@ class MockCapturerEventHandler : public mojom::VideoCapturerEventHandler {
                uint32_t size),
               (override));
   MOCK_METHOD(void, OnSharedMemoryRegionReleased, (int32_t id), (override));
+  MOCK_METHOD(void, OnFrameCaptureStart, (base::TimeTicks), (override));
   MOCK_METHOD(void, OnCaptureResult, (mojom::CaptureResultPtr), (override));
 };
 
@@ -71,9 +74,11 @@ MojoVideoCapturerListTest::CreateVideoCapturer(webrtc::ScreenId id) {
 
 TEST_F(MojoVideoCapturerListTest, ExerciseOneCapturer) {
   auto capturer = std::make_unique<FakeDesktopCapturer>();
+  FakeDesktopCapturer* unowned_capturer = capturer.get();
 
   EXPECT_CALL(desktop_environment_, CreateVideoCapturer(1))
       .WillOnce(Return(std::move(capturer)));
+  EXPECT_CALL(mock_event_handler_, OnFrameCaptureStart(_));
   EXPECT_CALL(mock_event_handler_, OnCaptureResult(_));
 
   auto result = CreateVideoCapturer(1);
@@ -82,7 +87,9 @@ TEST_F(MojoVideoCapturerListTest, ExerciseOneCapturer) {
   mojo::Receiver<mojom::VideoCapturerEventHandler> mojo_event_handler(
       &mock_event_handler_, std::move(result->video_capturer_event_handler));
 
-  mojo_capturer->CaptureFrame();
+  mojo_capturer->Start();
+  task_environment_.RunUntilIdle();
+  unowned_capturer->CaptureFrame();
   task_environment_.RunUntilIdle();
 }
 

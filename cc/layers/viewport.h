@@ -58,7 +58,8 @@ class CC_EXPORT Viewport {
                         const gfx::Point& viewport_point,
                         bool is_direct_manipulation,
                         bool affect_browser_controls,
-                        bool scroll_outer_viewport);
+                        bool scroll_outer_viewport,
+                        bool is_inertial);
 
   // TODO(bokan): Callers can now be replaced by ScrollBy.
   void ScrollByInnerFirst(const gfx::Vector2dF& delta);
@@ -70,6 +71,7 @@ class CC_EXPORT Viewport {
                               base::TimeDelta delayed_by);
 
   gfx::PointF TotalScrollOffset() const;
+  float MaxUserReachableTotalScrollOffsetY() const;
 
   void PinchUpdate(float magnify_delta, const gfx::Point& anchor);
   void PinchEnd(const gfx::Point& anchor, bool snap_to_min);
@@ -115,9 +117,8 @@ class CC_EXPORT Viewport {
   gfx::Vector2dF AdjustOverscroll(const gfx::Vector2dF& delta) const;
 
   // Sends the delta to the browser controls, returns the amount applied.
-  gfx::Vector2dF ScrollBrowserControls(const gfx::Vector2dF& delta);
-
-  float MaxUserReachableTotalScrollOffsetY() const;
+  gfx::Vector2dF ScrollBrowserControls(const gfx::Vector2dF& delta,
+                                       bool is_inertial);
 
   ScrollNode* InnerScrollNode() const;
   ScrollNode* OuterScrollNode() const;

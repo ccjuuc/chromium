@@ -6,12 +6,17 @@
 
 #import "base/apple/foundation_util.h"
 #import "ios/chrome/browser/alert_view/ui_bundled/alert_view_controller.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/overlays/model/public/web_content_area/alert_overlay.h"
 #import "ios/chrome/browser/overlays/ui_bundled/overlay_request_coordinator+subclassing.h"
 #import "ios/chrome/browser/overlays/ui_bundled/overlay_request_coordinator_delegate.h"
 #import "ios/chrome/browser/overlays/ui_bundled/web_content_area/alerts/alert_overlay_mediator.h"
 #import "ios/chrome/browser/presenters/ui_bundled/contained_presenter_delegate.h"
 #import "ios/chrome/browser/presenters/ui_bundled/non_modal_view_controller_presenter.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 
 using alert_overlays::AlertRequest;
 
@@ -22,7 +27,10 @@ using alert_overlays::AlertRequest;
 @property(nonatomic) NonModalViewControllerPresenter* presenter;
 @end
 
-@implementation AlertOverlayCoordinator
+@implementation AlertOverlayCoordinator {
+  // Handler for Gemini commands.
+  __weak id<GeminiCommands> _geminiHandler;
+}
 
 #pragma mark - Accessors
 
@@ -50,6 +58,14 @@ using alert_overlays::AlertRequest;
 
 #pragma mark - ContainedPresenterDelegate
 
+- (void)containedPresenterWillPresent:(id<ContainedPresenter>)presenter {
+  if (IsPageActionMenuEnabled()) {
+    [_geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::Alert];
+  }
+}
+
 - (void)containedPresenterDidPresent:(id<ContainedPresenter>)presenter {
   self.delegate->OverlayUIDidFinishPresentation(self.request);
 }
@@ -57,7 +73,17 @@ using alert_overlays::AlertRequest;
 - (void)containedPresenterDidDismiss:(id<ContainedPresenter>)presenter {
   self.alertViewController = nil;
   self.presenter = nil;
-  self.delegate->OverlayUIDidFinishDismissal(self.request);
+  if (IsPageActionMenuEnabled() &&
+      [_geminiHandler
+          respondsToSelector:@selector(updateFloatyVisibilityIfEligibleAnimated:
+                                       fromSource:)]) {
+    [_geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     Alert];
+  }
+  _geminiHandler = nil;
+  self.delegate->OverlayUIDidFinishDismissal(self.requestId);
 }
 
 #pragma mark - OverlayRequestCoordinator
@@ -77,6 +103,10 @@ using alert_overlays::AlertRequest;
 - (void)startAnimated:(BOOL)animated {
   if (self.started) {
     return;
+  }
+  if (IsPageActionMenuEnabled()) {
+    _geminiHandler = HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                                        GeminiCommands);
   }
   self.alertViewController = [[AlertViewController alloc] init];
   self.alertViewController.modalPresentationStyle =
@@ -102,6 +132,8 @@ using alert_overlays::AlertRequest;
   }
 
   self.started = NO;
+  // Leads to `containedPresenterDidDismiss`. Either reference self in
+  // `containedPresenterDidDismiss` or before this line.
   [self.presenter dismissAnimated:animated];
 }
 

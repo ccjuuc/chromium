@@ -94,7 +94,7 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
             CreateWebRtcReceiver(remote_track_id, remote_stream_id),
             std::nullopt, false, webrtc::RtpTransceiverDirection::kSendRecv,
             std::nullopt));
-    if (transport.get()) {
+    if (transport) {
       transceiver->SetTransport(transport);
     }
     return transceiver;
@@ -232,8 +232,8 @@ class TransceiverStateSurfacerTest : public ::testing::Test {
         scheduler::GetSingleThreadTaskRunnerForTesting(), true);
     auto* audio_source_ptr = audio_source.get();
     auto* source = MakeGarbageCollected<MediaStreamSource>(
-        String::FromUTF8(id), MediaStreamSource::kTypeAudio,
-        String::FromUTF8("local_audio_track"), false, std::move(audio_source));
+        String::FromUtf8(id), MediaStreamSource::kTypeAudio,
+        "local_audio_track", false, std::move(audio_source));
 
     auto* component = MakeGarbageCollected<MediaStreamComponentImpl>(
         source->Id(), source,

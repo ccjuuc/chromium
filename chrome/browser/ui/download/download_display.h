@@ -21,6 +21,7 @@ class DownloadDisplay {
     kProgress,
     kComplete,
     kDeepScanning,
+    kContentCheckPending,
   };
 
   // Whether the icon should be displayed in the active color (usually blue).
@@ -47,9 +48,9 @@ class DownloadDisplay {
   // Describes updates to be made to the icon.
   struct IconUpdateInfo {
     // Nullopt indicates no change.
-    std::optional<IconState> new_state = std::nullopt;
-    std::optional<IconActive> new_active = std::nullopt;
-    std::optional<ProgressInfo> new_progress = std::nullopt;
+    std::optional<IconState> new_state;
+    std::optional<IconActive> new_active;
+    std::optional<ProgressInfo> new_progress;
 
     // Whether an animated icon will be shown.
     bool show_animation = false;
@@ -84,6 +85,9 @@ class DownloadDisplay {
 
   // Returns whether the details are visible.
   virtual bool IsShowingDetails() const = 0;
+
+  // Called when offline items (history) initialization completes.
+  virtual void OnOfflineItemsInitialized() = 0;
 
   // Announces an accessible alert immediately.
   virtual void AnnounceAccessibleAlertNow(const std::u16string& alert_text) = 0;

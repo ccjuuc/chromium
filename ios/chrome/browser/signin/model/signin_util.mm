@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/signin/model/signin_util.h"
 
+#import "base/check.h"
 #import "base/check_is_test.h"
 #import "base/containers/to_vector.h"
 #import "base/functional/callback_helpers.h"
@@ -20,10 +21,15 @@
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
+#import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/signin/model/constants.h"
 #import "ios/chrome/browser/signin/model/signin_util_internal.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/browser/signin/model/system_identity_manager.h"
+#import "ios/chrome/browser/subscription_eligibility/model/subscription_eligibility_service_factory.h"
 #import "ios/public/provider/chrome/browser/signin/signin_error_api.h"
 #import "ios/public/provider/chrome/browser/signin/signin_identity_api.h"
 
@@ -45,7 +51,7 @@ static_assert(
 
 // Returns a non-empty string found in `dict` by `key` or nullptr if a string is
 // not found or `key` contains an empty string.
-const std::string* FindStringIfNonEmpty(const base::Value::Dict& dict,
+const std::string* FindStringIfNonEmpty(const base::DictValue& dict,
                                         std::string_view key) {
   const std::string* value = dict.FindString(key);
   if (!value) {
@@ -55,7 +61,7 @@ const std::string* FindStringIfNonEmpty(const base::Value::Dict& dict,
 }
 
 // Returns an AccountInfo from the values in a dictionary.
-AccountInfo DictToAccountInfo(const base::Value::Dict& dict) {
+AccountInfo DictToAccountInfo(const base::DictValue& dict) {
   const std::string* gaia_id = FindStringIfNonEmpty(dict, kAccountInfoKeyGaia);
   const std::string* email = FindStringIfNonEmpty(dict, kAccountInfoKeyEmail);
   if (!gaia_id || !email) {
@@ -110,7 +116,8 @@ bool ShouldHandleSigninError(NSError* error) {
          ios::provider::SigninErrorCategory::kUserCancellationError;
 }
 
-CGSize GetSizeForIdentityAvatarSize(IdentityAvatarSize avatar_size) {
+CGSize GetSizeForIdentityAvatarSize(IdentityAvatarSize avatar_size,
+                                    AITierRingSize ring_size) {
   CGFloat size = 0;
   switch (avatar_size) {
     case IdentityAvatarSize::TableViewIcon:
@@ -127,6 +134,15 @@ CGSize GetSizeForIdentityAvatarSize(IdentityAvatarSize avatar_size) {
       break;
   }
   DCHECK_NE(size, 0);
+  if (IsAiSubscriptionAvatarRingIOSEnabled()) {
+    switch (ring_size) {
+      case AITierRingSize::kNoRing:
+      case AITierRingSize::kImageSize:
+        break;
+      case AITierRingSize::kViewSize:
+        size -= (2 * (kAiTierRingWidth + kAiTierAndAvatarDistance));
+    }
+  }
   return CGSizeMake(size, size);
 }
 
@@ -164,7 +180,7 @@ void ClearPreRestoreIdentity(PrefService* profile_pref) {
 }
 
 std::optional<AccountInfo> GetPreRestoreIdentity(PrefService* profile_pref) {
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       profile_pref->GetDict(prefs::kIosPreRestoreAccountInfo);
   if (dict.empty()) {
     return std::optional<AccountInfo>();
@@ -173,7 +189,7 @@ std::optional<AccountInfo> GetPreRestoreIdentity(PrefService* profile_pref) {
 }
 
 bool GetPreRestoreHistorySyncEnabled(PrefService* profile_pref) {
-  const base::Value::Dict& dict =
+  const base::DictValue& dict =
       profile_pref->GetDict(prefs::kIosPreRestoreAccountInfo);
   if (dict.empty()) {
     return false;
@@ -201,4 +217,20 @@ void RunSystemCapabilitiesPrefetch(NSArray<id<SystemIdentity>>* identities) {
 void ResetDeviceRestoreDataForTesting() {
   CHECK_IS_TEST();
   g_restore_data.reset();
+}
+
+NSString* UserGivenNameFullNameOrEmail(id<SystemIdentity> identity) {
+  NSString* name = identity.userGivenName;
+  if (name) {
+    return name;
+  }
+  return UserFullNameOrEmail(identity);
+}
+
+NSString* UserFullNameOrEmail(id<SystemIdentity> identity) {
+  NSString* name = identity.userFullName;
+  if (name) {
+    return name;
+  }
+  return identity.userEmail;
 }

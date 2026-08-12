@@ -12,11 +12,8 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/android/preferences/autofill/settings_navigation_helper.h"
-#include "chrome/browser/keyboard_accessory/android/manual_filling_controller.h"
-#include "chrome/browser/keyboard_accessory/android/manual_filling_controller_impl.h"
 #include "chrome/browser/ui/autofill/autofill_snackbar_type.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
-#include "components/plus_addresses/core/browser/grit/plus_addresses_strings.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -102,16 +99,20 @@ std::u16string AutofillSnackbarControllerImpl::GetMessageText() const {
           IDS_AUTOFILL_MANDATORY_REAUTH_SNACKBAR_MESSAGE_TEXT);
     case AutofillSnackbarType::kSaveCardSuccess:
       return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT);
+          base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
+              ? (base::FeatureList::IsEnabled(
+                     features::kAutofillEnableWalletBrandingV2)
+                     ? IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT_V2
+                     : IDS_AUTOFILL_SAVE_CARD_TO_WALLET_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT)
+              : IDS_AUTOFILL_SAVE_CARD_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT);
     case AutofillSnackbarType::kVirtualCardEnrollSuccess:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_VIRTUAL_CARD_ENROLL_CONFIRMATION_SUCCESS_DESCRIPTION_TEXT);
     case AutofillSnackbarType::kSaveServerIbanSuccess:
       return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_SERVER_IBAN_SUCCESS_SNACKBAR_MESSAGE_TEXT);
-    case AutofillSnackbarType::kPlusAddressEmailOverride:
-      return l10n_util::GetStringUTF16(
-          IDS_PLUS_ADDRESS_SNACKBAR_UNDO_EMAIL_SWAP_DESCRIPTION_TEXT_ANDROID);
+          base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
+              ? IDS_AUTOFILL_SAVE_SERVER_IBAN_TO_WALLET_SUCCESS_SNACKBAR_MESSAGE_TEXT
+              : IDS_AUTOFILL_SAVE_SERVER_IBAN_SUCCESS_SNACKBAR_MESSAGE_TEXT);
     case AutofillSnackbarType::kCardInfoRetrieval:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_CARD_INFO_RETRIEVAL_SNACKBAR_MESSAGE_TEXT);
@@ -120,6 +121,12 @@ std::u16string AutofillSnackbarControllerImpl::GetMessageText() const {
       return l10n_util::GetStringFUTF16(
           IDS_AUTOFILL_BNPL_FILLED_CARD_SNACKBAR_MESSAGE_TEXT,
           filled_card_->CardNameForAutofillDisplay());
+    case AutofillSnackbarType::kAutofillAiSaveToWalletFailure:
+      return l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_WALLET_UPDATE_OR_MIGRATE_FAILURE_NOTIFICATION);
+    case AutofillSnackbarType::kAutofillAiFetchEntityFailure:
+      return l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_FETCH_ENTITY_FAILURE_NOTIFICATION);
     case AutofillSnackbarType::kUnspecified:
       NOTREACHED();
   }
@@ -142,9 +149,12 @@ std::u16string AutofillSnackbarControllerImpl::GetActionButtonText() const {
     case AutofillSnackbarType::kSaveServerIbanSuccess:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_SAVE_SERVER_IBAN_SUCCESS_SNACKBAR_BUTTON_TEXT);
-    case AutofillSnackbarType::kPlusAddressEmailOverride:
+    case AutofillSnackbarType::kAutofillAiSaveToWalletFailure:
       return l10n_util::GetStringUTF16(
-          IDS_PLUS_ADDRESS_SNACKBAR_UNDO_EMAIL_SWAP_ACTION_TEXT_ANDROID);
+          IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL);
+    case AutofillSnackbarType::kAutofillAiFetchEntityFailure:
+      return l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL);
     case AutofillSnackbarType::kUnspecified:
       NOTREACHED();
   }
@@ -178,12 +188,14 @@ std::string AutofillSnackbarControllerImpl::GetSnackbarTypeForLogging() {
       return "VirtualCardEnrollSuccess";
     case AutofillSnackbarType::kSaveServerIbanSuccess:
       return "SaveServerIbanSuccess";
-    case AutofillSnackbarType::kPlusAddressEmailOverride:
-      return "PlusAddressEmailOverride";
     case AutofillSnackbarType::kCardInfoRetrieval:
       return "CardInfoRetrievalEnrolled";
     case AutofillSnackbarType::kBnpl:
       return "BnplVirtualCard";
+    case AutofillSnackbarType::kAutofillAiSaveToWalletFailure:
+      return "AutofillAiSaveToWalletFailure";
+    case AutofillSnackbarType::kAutofillAiFetchEntityFailure:
+      return "AutofillAiFetchFromWalletFailure";
     case AutofillSnackbarType::kUnspecified:
       return "Unspecified";
   }

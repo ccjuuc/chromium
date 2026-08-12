@@ -19,7 +19,8 @@ import org.chromium.base.CallbackUtils;
 import org.chromium.base.MathUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
-import org.chromium.base.supplier.ObservableSupplier;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -43,8 +44,9 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiUtils;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarOverlayCoordinator;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.ScrollDirection;
 import org.chromium.components.embedder_support.util.UrlUtilities;
@@ -93,6 +95,8 @@ public class ToolbarSwipeLayout extends Layout {
     // Whether or not to show the toolbar.
     private final boolean mMoveToolbar;
 
+    private final Runnable mForceLayoutUpdateAndCaptureRunnable;
+
     // Offsets are in pixels [0, width].
     private float mOffsetStart;
     private float mOffset;
@@ -107,7 +111,7 @@ public class ToolbarSwipeLayout extends Layout {
 
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
 
-    // This is a work around for crbug.com/1348624. We need to call switch to tab after
+    // This is a work around for crbug.com/40233431. We need to call switch to tab after
     // ToolbarSwipeLayout is shown when it's switching to a tab.
     private boolean mIsSwitchToStaticTab;
     private int mToTabId;
@@ -129,9 +133,10 @@ public class ToolbarSwipeLayout extends Layout {
             LayoutRenderHost renderHost,
             BrowserControlsStateProvider browserControlsStateProvider,
             LayoutManager layoutManager,
-            TopUiThemeColorProvider topUiColorProvider,
-            ObservableSupplier<Integer> bottomControlsOffsetSupplier,
-            ViewGroup contentContainer) {
+            ToolbarThemeColorProvider toolbarColorProvider,
+            NonNullObservableSupplier<Integer> bottomControlsOffsetSupplier,
+            ViewGroup contentContainer,
+            Runnable forceLayoutUpdateAndCaptureRunnable) {
         super(context, updateHost, renderHost);
         mBlackHoleEventFilter = new BlackHoleEventFilter(context);
         mBrowserControlsStateProvider = browserControlsStateProvider;
@@ -140,11 +145,13 @@ public class ToolbarSwipeLayout extends Layout {
         mCommitDistanceFromEdge = res.getDimension(R.dimen.toolbar_swipe_commit_distance) * pxToDp;
         mSpaceBetweenTabs = res.getDimension(R.dimen.toolbar_swipe_space_between_tabs) * pxToDp;
         mContentContainer = contentContainer;
+        mForceLayoutUpdateAndCaptureRunnable = forceLayoutUpdateAndCaptureRunnable;
 
         mMoveToolbar = !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
 
         // No new captures should be taken mid swipe, so this shouldn't matter.
-        ObservableSupplier<Long> captureResourceIdSupplier = ObservableSuppliers.alwaysNull();
+        MonotonicObservableSupplier<Long> captureResourceIdSupplier =
+                ObservableSuppliers.alwaysNull();
 
         if (mMoveToolbar) {
             mLeftToolbarOverlay =
@@ -155,7 +162,7 @@ public class ToolbarSwipeLayout extends Layout {
                             mLeftTabSupplier,
                             mBrowserControlsStateProvider,
                             () -> mRenderHost.getResourceManager(),
-                            topUiColorProvider,
+                            toolbarColorProvider,
                             bottomControlsOffsetSupplier,
                             ObservableSuppliers.alwaysFalse(),
                             LayoutType.TOOLBAR_SWIPE,
@@ -173,7 +180,7 @@ public class ToolbarSwipeLayout extends Layout {
                             mRightTabSupplier,
                             mBrowserControlsStateProvider,
                             () -> mRenderHost.getResourceManager(),
-                            topUiColorProvider,
+                            toolbarColorProvider,
                             bottomControlsOffsetSupplier,
                             ObservableSuppliers.alwaysFalse(),
                             LayoutType.TOOLBAR_SWIPE,
@@ -295,6 +302,12 @@ public class ToolbarSwipeLayout extends Layout {
                 (LocalizationUtils.isLayoutRtl() ^ dragFromLeftEdge)
                         ? fromIndex - 1
                         : fromIndex + 1;
+
+        Tab currentTab = mTabModelSelector.getCurrentTab();
+        NativePage nativePage = (currentTab != null) ? currentTab.getNativePage() : null;
+        if (nativePage != null && nativePage.supportsEdgeToEdgeOnTop()) {
+            mForceLayoutUpdateAndCaptureRunnable.run();
+        }
 
         prepareSwipeTabAnimation(direction, fromIndex, toIndex);
     }

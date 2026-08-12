@@ -10,7 +10,6 @@
 #include "ash/constants/web_app_id_constants.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/chromeos/enterprise/cloud_storage/policy_utils.h"
-#include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/automated_mount_error_notification.h"
@@ -54,7 +53,7 @@ OdfsConfigPrivateGetAccountRestrictionsFunction::
 
 ExtensionFunction::ResponseAction
 OdfsConfigPrivateGetAccountRestrictionsFunction::Run() {
-  base::Value::List restrictions =
+  base::ListValue restrictions =
       chromeos::cloud_storage::GetMicrosoftOneDriveAccountRestrictions(
           Profile::FromBrowserContext(browser_context()));
   std::vector<std::string> restrictions_vector;

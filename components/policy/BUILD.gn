@@ -4,6 +4,7 @@
 
 import("//build/apple/convert_plist.gni")
 import("//build/config/chrome_build.gni")
+import("//build/config/python.gni")
 import("//build/timestamp.gni")
 import("//build/toolchain/toolchain.gni")
 import("//components/policy/resources/policy_templates.gni")
@@ -75,6 +76,10 @@ chrome_settings_proto_path = "$target_gen_dir/proto/chrome_settings.proto"
 
 constants_header_path = "$target_gen_dir/policy_constants.h"
 constants_source_path = "$target_gen_dir/policy_constants.cc"
+if (is_chromeos || is_linux) {
+  constants_mutable_header_path = "$target_gen_dir/policy_constants_mutable.h"
+  constants_mutable_source_path = "$target_gen_dir/policy_constants_mutable.cc"
+}
 risk_tag_header_path = "$target_gen_dir/risk_tag.h"
 
 policy_templates_deps_file = "$policy_templates_base_dir/policy_templates.d"
@@ -107,7 +112,45 @@ action("generate_policy_templates") {
 grit("translate_policy_templates") {
   deps = [ ":generate_policy_templates" ]
   source = policy_templates_grd_file
-  inputs = [ policy_templates_generated_json_path ]
+  inputs = [
+             "//third_party/pyyaml/__init__.py",
+             "//third_party/pyyaml/composer.py",
+             "//third_party/pyyaml/constructor.py",
+             "//third_party/pyyaml/cyaml.py",
+             "//third_party/pyyaml/dumper.py",
+             "//third_party/pyyaml/emitter.py",
+             "//third_party/pyyaml/error.py",
+             "//third_party/pyyaml/events.py",
+             "//third_party/pyyaml/loader.py",
+             "//third_party/pyyaml/nodes.py",
+             "//third_party/pyyaml/parser.py",
+             "//third_party/pyyaml/reader.py",
+             "//third_party/pyyaml/representer.py",
+             "//third_party/pyyaml/resolver.py",
+             "//third_party/pyyaml/scanner.py",
+             "//third_party/pyyaml/serializer.py",
+             "//third_party/pyyaml/tokens.py",
+             "resources/policy_templates_de.xtb",
+             "resources/policy_templates_es-419.xtb",
+             "resources/policy_templates_es.xtb",
+             "resources/policy_templates_fr.xtb",
+             "resources/policy_templates_id.xtb",
+             "resources/policy_templates_it.xtb",
+             "resources/policy_templates_ja.xtb",
+             "resources/policy_templates_ko.xtb",
+             "resources/policy_templates_nl.xtb",
+             "resources/policy_templates_pt-BR.xtb",
+             "resources/policy_templates_ru.xtb",
+             "resources/policy_templates_th.xtb",
+             "resources/policy_templates_tr.xtb",
+             "resources/policy_templates_uk.xtb",
+             "resources/policy_templates_vi.xtb",
+             "resources/policy_templates_zh-CN.xtb",
+             "resources/policy_templates_zh-TW.xtb",
+             "resources/policy_templates.py",
+             "tools/template_writers/policy_template_generator.py",
+           ] + expand_directory("resources/templates", true)
+
   output_dir = "$root_gen_dir/chrome"
   outputs = policy_templates_translation_outputs
   grit_flags = [
@@ -119,7 +162,7 @@ grit("translate_policy_templates") {
 }
 
 # Generate the various templates and docs (admx, doc, json, etc.)
-action("policy_templates") {
+action_with_pydeps("policy_templates") {
   script = "tools/template_writers/template_formatter.py"
   chrome_version_abspath = "//chrome/VERSION"
   chrome_version_path = rebase_path(chrome_version_abspath, root_build_dir)
@@ -267,6 +310,28 @@ static_library("generated") {
     "//third_party/protobuf:protobuf_lite",
   ]
   deps = [ "//build:branding_buildflags" ]
+}
+
+if (is_chromeos || is_linux) {
+  static_library("generated_testonly") {
+    testonly = true
+    sources = [
+      constants_mutable_header_path,
+      constants_mutable_source_path,
+      risk_tag_header_path,
+    ]
+
+    defines = [ "POLICY_COMPONENT_IMPLEMENTATION" ]
+    public_deps = [
+      ":cloud_policy_proto_generated_compile",
+      ":policy_code_generate",
+      "//base",
+      "//components/policy/core/common:common_constants",
+      "//components/policy/proto:policy_common_definitions_compile_proto",
+      "//third_party/protobuf:protobuf_lite",
+    ]
+    deps = [ "//build:branding_buildflags" ]
+  }
 }
 
 if (gen_policy_templates_android && is_android) {

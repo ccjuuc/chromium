@@ -9,7 +9,8 @@
  * duplicated code among the row components.
  */
 
-import {dedupingMixin, type PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {dedupingMixin} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {Constructor} from '../../common/types.js';
 
@@ -68,8 +69,8 @@ export const BaseRowMixin = dedupingMixin(
           };
         }
 
-        override ariaDescription: string;
-        override ariaLabel: string;
+        declare ariaDescription: string;
+        declare ariaLabel: string;
         label?: string;
         sublabel?: string;
         icon?: string;

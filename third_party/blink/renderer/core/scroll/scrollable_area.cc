@@ -33,6 +33,7 @@
 
 #include <limits>
 
+#include "base/compiler_specific.h"
 #include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
@@ -43,6 +44,7 @@
 #include "cc/input/snap_selection_strategy.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink-forward.h"
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_scroll_result.h"
 #include "third_party/blink/renderer/core/animation/scroll_timeline.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/dom/scroll_marker_group_pseudo_element.h"
@@ -63,6 +65,7 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
+#include "third_party/blink/renderer/core/paint/text_overflow_post_layout_snapshot.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 #include "third_party/blink/renderer/core/scroll/mac_scrollbar_animator.h"
 #include "third_party/blink/renderer/core/scroll/programmatic_scroll_animator.h"
@@ -74,6 +77,8 @@
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
@@ -122,8 +127,9 @@ ScrollableArea::ScrollableArea(
 ScrollableArea::~ScrollableArea() = default;
 
 void ScrollableArea::Dispose() {
-  if (HasBeenDisposed())
+  if (HasBeenDisposed()) {
     return;
+  }
   DisposeImpl();
   fade_overlay_scrollbars_timer_ = nullptr;
   has_been_disposed_ = true;
@@ -165,6 +171,12 @@ bool ScrollableArea::FadeInScrollbarIfExists(bool horizontal, bool vertical) {
                                                               vertical);
   }
   return false;
+}
+
+void ScrollableArea::FadeOutScrollbarIfNeeded() {
+  if (GetMacScrollbarAnimator()) {
+    GetMacScrollbarAnimator()->FadeOutScrollbarIfNeeded();
+  }
 }
 
 ScrollAnimatorBase& ScrollableArea::GetScrollAnimator() const {
@@ -219,30 +231,12 @@ ScrollOffset ScrollableArea::ResolveScrollDelta(
   return gfx::ScaleVector2d(delta, step.width(), step.height());
 }
 
-ScrollResult ScrollableArea::UserScroll(ui::ScrollGranularity granularity,
-                                        const ScrollOffset& delta,
-                                        cc::ScrollSourceType source_type,
-                                        ScrollCallback on_finish) {
+ScrollConsumption ScrollableArea::UserScroll(ui::ScrollGranularity granularity,
+                                             const ScrollOffset& delta,
+                                             cc::ScrollSourceType source_type,
+                                             ScrollCallback on_finish) {
   TRACE_EVENT2("input", "ScrollableArea::UserScroll", "x", delta.x(), "y",
                delta.y());
-
-  // This callback runs ScrollableArea::RunScrollCompleteCallbacks which
-  // will run all the callbacks in the Vector pending_scroll_complete_callbacks_
-  // and ScrollAnimator::UserScroll may run this callback for a previous scroll
-  // animation. Delay queuing up this |on_finish| so that it is run when the
-  // callback for this scroll animation is run and not when the callback
-  // for a previous scroll animation is run.
-  ScrollCallback run_scroll_complete_callbacks(blink::BindOnce(
-      [](WeakPersistent<ScrollableArea> area, ScrollCallback callback,
-         ScrollCompletionMode mode) {
-        if (area) {
-          if (callback) {
-            area->RegisterScrollCompleteCallback(std::move(callback));
-          }
-          area->RunScrollCompleteCallbacks(mode);
-        }
-      },
-      WrapWeakPersistent(this), std::move(on_finish)));
 
   ScrollOffset pixel_delta = ResolveScrollDelta(granularity, delta);
 
@@ -253,16 +247,16 @@ ScrollResult ScrollableArea::UserScroll(ui::ScrollGranularity granularity,
       GetScrollAnimator().ComputeDeltaToConsume(scrollable_axis_delta);
 
   if (delta_to_consume.IsZero()) {
-    std::move(run_scroll_complete_callbacks)
-        .Run(ScrollCompletionMode::kZeroDelta);
-    return ScrollResult(false, false, pixel_delta.x(), pixel_delta.y());
+    if (on_finish) {
+      std::move(on_finish).Run(ScrollCompletionMode::kZeroDelta);
+    }
+    return ScrollConsumption(false, false, pixel_delta.x(), pixel_delta.y());
   }
 
   CancelProgrammaticScrollAnimation();
 
-  ScrollResult result = GetScrollAnimator().UserScroll(
-      granularity, scrollable_axis_delta, source_type,
-      std::move(run_scroll_complete_callbacks));
+  ScrollConsumption result = GetScrollAnimator().UserScroll(
+      granularity, scrollable_axis_delta, source_type, std::move(on_finish));
   if (result.DidScroll()) {
     if (ScrollMarkerGroupPseudoElement* group = GetScrollMarkerGroup()) {
       group->UnPinSelectedMarker();
@@ -291,28 +285,36 @@ bool ScrollableArea::SetScrollOffset(const ScrollOffset& offset,
                                      mojom::blink::ScrollType scroll_type,
                                      cc::ScrollSourceType source_type,
                                      mojom::blink::ScrollBehavior behavior,
-                                     ScrollCallback on_finish,
                                      bool targeted_scroll) {
-  if (on_finish)
-    RegisterScrollCompleteCallback(std::move(on_finish));
+  return SetScrollOffsetInternal(offset, scroll_type, source_type, behavior,
+                                 targeted_scroll, /*scroll_tracker=*/nullptr);
+}
 
-  ScrollableArea::ScrollCallback run_scroll_complete_callbacks(BindOnce(
-      [](WeakPersistent<ScrollableArea> area, ScrollCompletionMode mode) {
-        if (area) {
-          area->RunScrollCompleteCallbacks(mode);
-        }
-      },
-      WrapWeakPersistent(this)));
+bool ScrollableArea::SetScrollOffsetInternal(
+    const ScrollOffset& offset,
+    mojom::blink::ScrollType scroll_type,
+    cc::ScrollSourceType source_type,
+    mojom::blink::ScrollBehavior behavior,
+    bool targeted_scroll,
+    std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>
+        scroll_tracker) {
   bool filter_scroll = false;
   if (active_smooth_scroll_type_.has_value()) {
     filter_scroll = ShouldFilterIncomingScroll(scroll_type);
   }
 
   if (filter_scroll) {
-    std::move(run_scroll_complete_callbacks)
-        .Run(ScrollCompletionMode::kFinished);
     return false;
   }
+
+  // TODO(https://crbug.com/40712058): We should interrupt `scroll_tracker`
+  // here for user scroll. We know that we will need to skip this call for
+  // ScrollType::kNone (because in this case we don't have a latched scroller,
+  // implying this is not the direct result of a user scroll). The main
+  // challenge is that a single programmatic scroll request results in multiple
+  // calls to that method (apparently one per frame) with
+  // ScrollType::kCompositor, and we currently have no way to isolate those
+  // calls!
 
   // If this was not a targeted scroll, the associated scroll-marker-group
   // should stop pinning its selected scroll-marker.
@@ -327,25 +329,22 @@ bool ScrollableArea::SetScrollOffset(const ScrollOffset& offset,
   ScrollOffset clamped_offset = ClampScrollOffset(offset);
   if (ScrollOffsetIsNoop(clamped_offset) &&
       scroll_type != mojom::blink::ScrollType::kProgrammatic) {
-    std::move(run_scroll_complete_callbacks)
-        .Run(ScrollCompletionMode::kZeroDelta);
     return false;
   }
 
   TRACE_EVENT("blink", "ScrollableArea::SetScrollOffset", "offset",
               offset.ToString());
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
-                       "SetScrollOffset", TRACE_EVENT_SCOPE_THREAD,
-                       "current_offset", GetScrollOffset().ToString());
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
-                       "SetScrollOffset", TRACE_EVENT_SCOPE_THREAD, "type",
-                       scroll_type);
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
-                       "SetScrollOffset", TRACE_EVENT_SCOPE_THREAD, "behavior",
-                       behavior);
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
+                      "SetScrollOffset", "current_offset",
+                      GetScrollOffset().ToString());
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
+                      "SetScrollOffset", "type", scroll_type);
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("blink.debug"),
+                      "SetScrollOffset", "behavior", behavior);
 
-  if (behavior == mojom::blink::ScrollBehavior::kAuto)
+  if (behavior == mojom::blink::ScrollBehavior::kAuto) {
     behavior = ScrollBehaviorStyle();
+  }
 
   gfx::Vector2d animation_adjustment = gfx::ToRoundedVector2d(clamped_offset) -
                                        gfx::ToRoundedVector2d(previous_offset);
@@ -356,65 +355,72 @@ bool ScrollableArea::SetScrollOffset(const ScrollOffset& offset,
     StopApplyingScrollStart();
   }
 
+  // A non-null `promise_reolver` can be passed to this method only from JS
+  // scroll requests (using Window and Element scroll methods).
+  CHECK(!scroll_tracker ||
+        scroll_type == mojom::blink::ScrollType::kProgrammatic);
+
   switch (scroll_type) {
     case mojom::blink::ScrollType::kCompositor:
       ScrollOffsetChanged(clamped_offset, scroll_type, source_type);
       break;
+
     case mojom::blink::ScrollType::kClamping:
       DCHECK_EQ(source_type, cc::ScrollSourceType::kStationaryScroll);
       ScrollOffsetChanged(clamped_offset, scroll_type,
                           cc::ScrollSourceType::kNone);
       GetScrollAnimator().AdjustAnimation(animation_adjustment);
       break;
+
     case mojom::blink::ScrollType::kAnchoring:
       DCHECK_EQ(source_type, cc::ScrollSourceType::kStationaryScroll);
       ScrollOffsetChanged(clamped_offset, scroll_type, source_type);
       GetScrollAnimator().AdjustAnimation(animation_adjustment);
       pending_scroll_anchor_adjustment_ += clamped_offset - previous_offset;
       break;
+
     case mojom::blink::ScrollType::kScrollStart:
       DCHECK_EQ(source_type, cc::ScrollSourceType::kAbsoluteScroll);
       ScrollOffsetChanged(clamped_offset, scroll_type, source_type);
       GetScrollAnimator().AdjustAnimation(animation_adjustment);
       break;
+
     case mojom::blink::ScrollType::kProgrammatic:
-      if (ProgrammaticScrollHelper(
-              clamped_offset, behavior, animation_adjustment,
-              std::move(run_scroll_complete_callbacks), source_type)) {
-        if (behavior == mojom::blink::ScrollBehavior::kSmooth) {
-          active_smooth_scroll_type_ = scroll_type;
-        }
-        return true;
-      }
-      return false;
+      return InitiateScrollAnimation(clamped_offset, scroll_type, behavior,
+                                     animation_adjustment, source_type,
+                                     std::move(scroll_tracker));
+
     case mojom::blink::ScrollType::kUser:
       if (behavior == mojom::blink::ScrollBehavior::kSmooth) {
-        if (ProgrammaticScrollHelper(
-                clamped_offset, behavior, animation_adjustment,
-                std::move(run_scroll_complete_callbacks), source_type)) {
-          active_smooth_scroll_type_ = scroll_type;
-          return true;
-        }
-        return false;
-      } else {
-        UserScrollHelper(clamped_offset, behavior, source_type);
-        break;
+        return InitiateScrollAnimation(clamped_offset, scroll_type, behavior,
+                                       animation_adjustment, source_type,
+                                       nullptr);
       }
+      UserScrollHelper(clamped_offset, behavior, source_type);
+      break;
+
     default:
       NOTREACHED();
   }
 
   UpdateScrollMarkers();
 
-  std::move(run_scroll_complete_callbacks).Run(ScrollCompletionMode::kFinished);
   return true;
 }
 
-bool ScrollableArea::SetScrollOffset(const ScrollOffset& offset,
-                                     mojom::blink::ScrollType type,
-                                     cc::ScrollSourceType source_type,
-                                     mojom::blink::ScrollBehavior behavior) {
-  return SetScrollOffset(offset, type, source_type, behavior, ScrollCallback());
+bool ScrollableArea::SetProgrammaticScrollOffset(
+    const ScrollOffset& offset,
+    cc::ScrollSourceType source_type,
+    mojom::blink::ScrollBehavior behavior,
+    std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>
+        scroll_tracker) {
+  // The last `scroll_tracker` for this `ScrollableArea` could still be in a
+  // pending state while being owner by `ProgrammaticScrollAnimator`. The
+  // `SetScrollOffsetInternal` call below "interrupts" the animator which
+  // resolves the pending state.
+  return SetScrollOffsetInternal(
+      offset, mojom::blink::ScrollType::kProgrammatic, source_type, behavior,
+      false, std::move(scroll_tracker));
 }
 
 const LayoutObject* ScrollableArea::GetScrollInitialTarget() const {
@@ -438,7 +444,7 @@ void ScrollableArea::ScrollToScrollInitialTarget(
     return;
   }
   cc::ScrollSnapAlign snap_alignment =
-      scroll_initial_target->Style()->GetScrollSnapAlign();
+      scroll_initial_target->StyleRef().GetScrollSnapAlign();
   switch (snap_alignment.alignment_block) {
     case cc::SnapAlignment::kStart:
       align_y = ScrollAlignment::TopAlways();
@@ -474,7 +480,7 @@ void ScrollableArea::ScrollToScrollInitialTarget(
   params->behavior = mojom::blink::ScrollBehavior::kInstant;
   params->type = mojom::blink::ScrollType::kScrollStart;
   ScrollIntoView(target_box->AbsoluteBoundingBoxRectForScrollIntoView(),
-                 PhysicalBoxStrut(), params);
+                 PhysicalBoxStrut(), params, nullptr);
 }
 
 void ScrollableArea::ApplyScrollStart() {
@@ -499,12 +505,14 @@ void ScrollableArea::ScrollBy(const ScrollOffset& delta,
                   cc::ScrollSourceType::kRelativeScroll, behavior);
 }
 
-bool ScrollableArea::ProgrammaticScrollHelper(
+bool ScrollableArea::InitiateScrollAnimation(
     const ScrollOffset& offset,
+    mojom::blink::ScrollType scroll_type,
     mojom::blink::ScrollBehavior scroll_behavior,
     gfx::Vector2d animation_adjustment,
-    ScrollCallback on_finish,
-    cc::ScrollSourceType source_type) {
+    cc::ScrollSourceType source_type,
+    std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>
+        scroll_tracker) {
   bool should_use_animation =
       scroll_behavior == mojom::blink::ScrollBehavior::kSmooth &&
       ScrollAnimatorEnabled();
@@ -516,24 +524,30 @@ bool ScrollableArea::ProgrammaticScrollHelper(
   }
 
   if (ScrollOffsetIsNoop(offset)) {
+    // TODO(https://crbug.com/40712058): Why is this cancellation only for no-op
+    // scrolls, instead of all scrolls with `scroll_type` programmatic?
     CancelProgrammaticScrollAnimation();
-    if (on_finish)
-      std::move(on_finish).Run(ScrollCompletionMode::kZeroDelta);
     return false;
   }
 
-  ScrollCallback callback = std::move(on_finish);
-  callback = ScrollCallback(blink::BindOnce(
-      [](ScrollCallback original_callback, WeakPersistent<ScrollableArea> area,
+  ScrollCallback callback = ScrollCallback(blink::BindOnce(
+      [](WeakPersistent<ScrollableArea> area,
+         std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>
+             scroll_tracker_in_callback,
          ScrollCompletionMode mode) {
         if (area) {
           area->OnScrollFinished(/*enqueue_scrollend=*/mode ==
                                  ScrollCompletionMode::kFinished);
         }
-        if (original_callback)
-          std::move(original_callback).Run(mode);
+        // When this callback is done or destroyed, `scroll_tracker_in_callback`
+        // gets released, signaling `ScrollPromiseResolver` to resolve the
+        // promise if needed.
+        if (scroll_tracker_in_callback &&
+            mode == ScrollCompletionMode::kInterruptedByScroll) {
+          scroll_tracker_in_callback->MarkInterrupted();
+        }
       },
-      std::move(callback), WrapWeakPersistent(this)));
+      WrapWeakPersistent(this), std::move(scroll_tracker)));
 
   // Enqueue scrollsnapchanging if necessary.
   if (auto* snap_container = GetSnapContainerData()) {
@@ -552,10 +566,17 @@ bool ScrollableArea::ProgrammaticScrollHelper(
     // cancel) a user scroll animation already in progress (crbug.com/1264266).
     GetScrollAnimator().AdjustAnimation(animation_adjustment);
 
-    if (callback)
+    if (callback) {
       std::move(callback).Run(ScrollCompletionMode::kFinished);
+    }
   }
   UpdateScrollMarkers();
+
+  // TODO(mustaq@chromium.org): It is not clear why the `if` condition below
+  // does not rely on `should_use_animation` instead.
+  if (scroll_behavior == mojom::blink::ScrollBehavior::kSmooth) {
+    active_smooth_scroll_type_ = scroll_type;
+  }
   return true;
 }
 
@@ -585,7 +606,9 @@ void ScrollableArea::UserScrollHelper(
 PhysicalRect ScrollableArea::ScrollIntoView(
     const PhysicalRect& rect_in_absolute,
     const PhysicalBoxStrut& scroll_margin,
-    const mojom::blink::ScrollIntoViewParamsPtr& params) {
+    const mojom::blink::ScrollIntoViewParamsPtr& params,
+    std::unique_ptr<ScrollPromiseResolver::ActiveScrollTracker>
+        scroll_tracker) {
   // TODO(bokan): This should really be implemented here but ScrollAlignment is
   // in Core which is a dependency violation.
   NOTREACHED();
@@ -596,8 +619,7 @@ void ScrollableArea::ScrollOffsetChanged(const ScrollOffset& offset,
                                          cc::ScrollSourceType source_type) {
   TRACE_EVENT2("input", "ScrollableArea::scrollOffsetChanged", "x", offset.x(),
                "y", offset.y());
-  TRACE_EVENT_INSTANT1("input", "Type", TRACE_EVENT_SCOPE_THREAD, "type",
-                       scroll_type);
+  TRACE_EVENT_INSTANT("input", "Type", "type", scroll_type);
 
   ScrollOffset old_offset = GetScrollOffset();
   ScrollOffset truncated_offset =
@@ -631,14 +653,9 @@ void ScrollableArea::ScrollOffsetChanged(const ScrollOffset& offset,
     GetMacScrollbarAnimator()->DidChangeUserVisibleScrollOffset(delta);
   }
 
-  if (GetLayoutBox()) {
-    if (offset_changed && GetLayoutBox()->GetFrameView()) {
-      GetLayoutBox()->GetFrameView()->GetPaintTimingDetector().NotifyScroll(
-          scroll_type);
-    }
-  }
-
   if (offset_changed && GetLayoutBox() && GetLayoutBox()->GetFrameView()) {
+    PaintTimingDetector::From(GetLayoutBox()->GetDocument())
+        .NotifyScroll(scroll_type);
     GetLayoutBox()->GetFrameView()->GetLayoutShiftTracker().NotifyScroll(
         scroll_type, delta);
     // FrameSelection caches visual selection information which needs to be
@@ -660,19 +677,6 @@ mojom::blink::ScrollBehavior ScrollableArea::V8EnumToScrollBehavior(
       return mojom::blink::ScrollBehavior::kSmooth;
   }
   NOTREACHED();
-}
-
-void ScrollableArea::RegisterScrollCompleteCallback(ScrollCallback callback) {
-  DCHECK(!HasBeenDisposed());
-  pending_scroll_complete_callbacks_.push_back(std::move(callback));
-}
-
-void ScrollableArea::RunScrollCompleteCallbacks(ScrollCompletionMode mode) {
-  Vector<ScrollCallback> callbacks(
-      std::move(pending_scroll_complete_callbacks_));
-  for (auto& callback : callbacks) {
-    std::move(callback).Run(mode);
-  }
 }
 
 void ScrollableArea::MouseEnteredScrollbar(Scrollbar& scrollbar) {
@@ -927,11 +931,31 @@ void ScrollableArea::SetScrollbarsHiddenIfOverlayInternal(bool hidden) {
   ScrollbarVisibilityChanged();
 }
 
+bool ScrollableArea::UsesCompositedOverlayScrollbars() const {
+  if (!GetPageScrollbarTheme().UsesOverlayScrollbars()) {
+    return false;
+  }
+  if (!RuntimeEnabledFeatures::RasterInducingScrollEnabled() &&
+      !UsesCompositedScrolling()) {
+    return false;
+  }
+  if (const auto* scrollbar = HorizontalScrollbar()) {
+    if (MayCompositeScrollbar(*scrollbar)) {
+      return true;
+    }
+  }
+  if (const auto* scrollbar = VerticalScrollbar()) {
+    if (MayCompositeScrollbar(*scrollbar)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void ScrollableArea::FadeOverlayScrollbarsTimerFired(TimerBase*) {
   // Scrollbars can become composited in the time it takes the timer set in
   // ShowNonMacOverlayScrollbars to be fired.
-  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled() ||
-      UsesCompositedScrolling()) {
+  if (UsesCompositedOverlayScrollbars()) {
     return;
   }
   SetScrollbarsHiddenIfOverlay(true);
@@ -944,11 +968,7 @@ void ScrollableArea::ShowNonMacOverlayScrollbars() {
 
   // Don't do this for composited scrollbars. These scrollbars are handled
   // by separate code in cc::ScrollbarAnimationController.
-  // TODO(crbug.com/1229864): We may want to always composite overlay
-  // scrollbars to avoid the bug and the duplicated code for composited and
-  // non-composited overlay scrollbars.
-  if (RuntimeEnabledFeatures::RasterInducingScrollEnabled() ||
-      UsesCompositedScrolling()) {
+  if (UsesCompositedOverlayScrollbars()) {
     return;
   }
 
@@ -1068,9 +1088,10 @@ int ScrollableArea::HorizontalScrollbarHeight(
   return 0;
 }
 
-gfx::QuadF ScrollableArea::LocalToVisibleContentQuad(const gfx::QuadF& quad,
-                                                     const LayoutObject*,
-                                                     unsigned) const {
+gfx::QuadF ScrollableArea::LocalToVisibleContentQuad(
+    const gfx::QuadF& quad,
+    const LayoutObject*,
+    MapCoordinatesFlags) const {
   return quad - GetScrollOffset();
 }
 
@@ -1117,7 +1138,7 @@ void ScrollableArea::DidCompositorScroll(const gfx::PointF& position,
 
   SetScrollOffset(new_offset, mojom::blink::ScrollType::kCompositor,
                   source_type, mojom::blink::ScrollBehavior::kInstant,
-                  ScrollCallback(), targeted_scroll);
+                  targeted_scroll);
 }
 
 Scrollbar* ScrollableArea::GetScrollbar(
@@ -1138,62 +1159,60 @@ CompositorElementId ScrollableArea::GetScrollbarElementId(
                                           element_id_namespace);
 }
 
-void ScrollableArea::OnScrollFinished(bool scroll_did_end) {
-  if (GetLayoutBox()) {
-    if (scroll_did_end) {
-      active_smooth_scroll_type_.reset();
-      UpdateSnappedTargetsAndEnqueueScrollSnapChange();
-      if (Node* node = EventTargetNode()) {
-        if (auto* viewport_position_tracker =
-                AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(
-                    node->GetDocument())) {
-          viewport_position_tracker->OnScrollEnd();
-        }
-        // TODO(https://crbug.com/41406914): This is temporary. Remove once we
-        // start to migrate to scroll-promises.
-        node->GetDocument().Markers().StartGlicMarkerAnimationIfNeeded();
-        node->GetDocument().EnqueueScrollEndEventForNode(node);
-      }
-    }
-    GetLayoutBox()
-        ->GetFrame()
-        ->LocalFrameRoot()
-        .GetEventHandler()
-        .MarkHoverStateDirty();
+void ScrollableArea::OnScrollFinished(bool enqueue_scrollend) {
+  if (!GetLayoutBox()) {
+    return;
   }
+
+  if (enqueue_scrollend) {
+    active_smooth_scroll_type_.reset();
+    UpdateSnappedTargetsAndEnqueueScrollSnapChange();
+    if (Node* node = EventTargetNode()) {
+      if (auto* viewport_position_tracker =
+              AnchorElementViewportPositionTracker::MaybeGetOrCreateFor(
+                  node->GetDocument())) {
+        viewport_position_tracker->OnScrollEnd();
+      }
+      // TODO(https://crbug.com/41406914): This is temporary. Remove once we
+      // start to migrate to scroll-promises.
+      node->GetDocument().Markers().StartGlicMarkerAnimationIfNeeded();
+      node->GetDocument().EnqueueScrollEndEventForNode(node);
+    }
+  }
+
+  GetLayoutBox()
+      ->GetFrame()
+      ->LocalFrameRoot()
+      .GetEventHandler()
+      .MarkHoverStateDirty();
 }
 
 void ScrollableArea::SnapAfterScrollbarScrolling(
     ScrollbarOrientation orientation,
     cc::ScrollSourceType source_type) {
   SnapAtCurrentPosition(orientation == kHorizontalScrollbar,
-                        orientation == kVerticalScrollbar, source_type,
-                        base::ScopedClosureRunner());
+                        orientation == kVerticalScrollbar, source_type);
 }
 
-bool ScrollableArea::SnapAtCurrentPosition(
-    bool scrolled_x,
-    bool scrolled_y,
-    cc::ScrollSourceType source_type,
-    base::ScopedClosureRunner on_finish) {
+bool ScrollableArea::SnapAtCurrentPosition(bool scrolled_x,
+                                           bool scrolled_y,
+                                           cc::ScrollSourceType source_type) {
   DCHECK(IsRootFrameViewport() || !GetLayoutBox()->IsGlobalRootScroller());
   gfx::PointF current_position = ScrollPosition();
   return SnapForEndPosition(current_position, scrolled_x, scrolled_y,
-                            source_type, std::move(on_finish));
+                            source_type);
 }
 
 bool ScrollableArea::SnapForEndPosition(const gfx::PointF& end_position,
                                         bool scrolled_x,
                                         bool scrolled_y,
-                                        cc::ScrollSourceType source_type,
-                                        base::ScopedClosureRunner on_finish) {
+                                        cc::ScrollSourceType source_type) {
   DCHECK(IsRootFrameViewport() || !GetLayoutBox()->IsGlobalRootScroller());
   std::unique_ptr<cc::SnapSelectionStrategy> strategy =
       cc::SnapSelectionStrategy::CreateForEndPosition(end_position, scrolled_x,
                                                       scrolled_y);
-  return PerformSnapping(
-      *strategy, source_type, mojom::blink::ScrollBehavior::kSmooth,
-      std::move(on_finish), /*preserve_pinned_marker=*/false);
+  return PerformSnapping(*strategy, source_type, PerformSnapReason::kScroll,
+                         /*preserve_pinned_marker=*/false);
 }
 
 bool ScrollableArea::SnapForDirection(ScrollDirectionPhysical direction) {
@@ -1209,8 +1228,7 @@ bool ScrollableArea::SnapForDirection(ScrollDirectionPhysical direction) {
   // Only called for arrow key press scrolls, which are relative scrolls.
   // https://drafts.csswg.org/css-scroll-snap-1/#scroll-types
   return PerformSnapping(*strategy, cc::ScrollSourceType::kRelativeScroll,
-                         mojom::blink::ScrollBehavior::kSmooth,
-                         base::ScopedClosureRunner(),
+                         PerformSnapReason::kScroll,
                          /*preserve_pinned_marker=*/false);
 }
 
@@ -1221,8 +1239,7 @@ bool ScrollableArea::SnapForPageScroll(ScrollDirectionPhysical direction) {
   // Only called for PgUp/PgDn key press scrolls, which are relative scrolls.
   // https://drafts.csswg.org/css-scroll-snap-1/#scroll-types
   return PerformSnapping(*strategy, cc::ScrollSourceType::kRelativeScroll,
-                         mojom::blink::ScrollBehavior::kSmooth,
-                         base::ScopedClosureRunner(),
+                         PerformSnapReason::kScroll,
                          /*preserve_pinned_marker=*/false);
 }
 
@@ -1236,8 +1253,7 @@ bool ScrollableArea::SnapForDocumentScroll(ScrollDirectionPhysical direction) {
   // Only called for Home/End key press scrolls, which are absolute scrolls.
   // https://drafts.csswg.org/css-scroll-snap-1/#scroll-types
   return SnapForEndPosition(end_position, scrolled_x, scrolled_y,
-                            cc::ScrollSourceType::kAbsoluteScroll,
-                            base::ScopedClosureRunner());
+                            cc::ScrollSourceType::kAbsoluteScroll);
 }
 
 std::unique_ptr<cc::SnapSelectionStrategy>
@@ -1259,20 +1275,64 @@ void ScrollableArea::SnapAfterLayout() {
   std::unique_ptr<cc::SnapSelectionStrategy> strategy =
       cc::SnapSelectionStrategy::CreateForTargetElement(current_position);
   PerformSnapping(*strategy, cc::ScrollSourceType::kStationaryScroll,
-                  mojom::blink::ScrollBehavior::kInstant,
-                  base::ScopedClosureRunner(), /*preserve_pinned_marker=*/true);
+                  PerformSnapReason::kLayout,
+                  /*preserve_pinned_marker=*/true);
 }
 
-bool ScrollableArea::PerformSnapping(
-    const cc::SnapSelectionStrategy& strategy,
-    cc::ScrollSourceType source_type,
-    mojom::blink::ScrollBehavior scroll_behavior,
-    base::ScopedClosureRunner on_finish,
-    bool preserve_pinned_marker) {
+mojom::blink::ScrollBehavior ScrollableArea::SelectScrollBehaviorForSnapReason(
+    PerformSnapReason reason,
+    std::optional<cc::TargetSnapAreaElementIds> previous_snap_targets,
+    const cc::TargetSnapAreaElementIds& current_snap_targets) {
+  switch (reason) {
+    case PerformSnapReason::kScroll:
+      return mojom::blink::ScrollBehavior::kSmooth;
+    case PerformSnapReason::kLayout:
+      if (RuntimeEnabledFeatures::
+              AuthorSpecifiedLayoutScrollSnapBehaviorEnabled()) {
+        // If simply tracking previously snapped targets due to a layout change,
+        // do it instantaneously. Otherwise, use author-specified scroll
+        // behavior.
+        return current_snap_targets == previous_snap_targets
+                   ? mojom::blink::ScrollBehavior::kInstant
+                   : ScrollBehaviorStyle();
+      } else {
+        return mojom::blink::ScrollBehavior::kInstant;
+      }
+  }
+  NOTREACHED();
+}
+
+bool ScrollableArea::PerformSnapping(const cc::SnapSelectionStrategy& strategy,
+                                     cc::ScrollSourceType source_type,
+                                     PerformSnapReason reason,
+                                     bool preserve_pinned_marker) {
+  std::optional<cc::TargetSnapAreaElementIds> previous_snap_targets;
+  if (const cc::SnapContainerData* container_data = GetSnapContainerData()) {
+    previous_snap_targets = container_data->GetTargetSnapAreaElementIds();
+  }
+
   std::optional<gfx::PointF> snap_point = GetSnapPositionAndSetTarget(strategy);
   if (!snap_point) {
     UpdateSnappedTargetsAndEnqueueScrollSnapChange();
     return false;
+  }
+
+  mojom::blink::ScrollBehavior scroll_behavior =
+      SelectScrollBehaviorForSnapReason(
+          reason, previous_snap_targets,
+          GetSnapContainerData()->GetTargetSnapAreaElementIds());
+
+  ScrollOffset target_offset = ScrollPositionToOffset(snap_point.value());
+
+  // If we're targeting the same offset in an existing animation, then we
+  // should just continue running that animation. Otherwise, we will cancel the
+  // animation but not set the scroll offset (due to a same-target early out in
+  // ProgrammaticScrollAnimator).
+  if (scroll_behavior == mojom::blink::ScrollBehavior::kSmooth &&
+      ExistingProgrammaticScrollAnimator() &&
+      ExistingProgrammaticScrollAnimator()->HasRunningAnimation() &&
+      ExistingProgrammaticScrollAnimator()->TargetOffset() == target_offset) {
+    return true;
   }
 
   // We should set the scrollsnapchanging targets of a snap container the first
@@ -1292,11 +1352,9 @@ bool ScrollableArea::PerformSnapping(
       targeted_scroll = group->SelectedMarkerIsPinned();
     }
   }
-  if (!SetScrollOffset(
-          ScrollPositionToOffset(snap_point.value()),
-          mojom::blink::ScrollType::kProgrammatic, source_type, scroll_behavior,
-          IgnoreArgs<ScrollableArea::ScrollCompletionMode>(on_finish.Release()),
-          targeted_scroll)) {
+  if (!SetScrollOffset(ScrollPositionToOffset(snap_point.value()),
+                       mojom::blink::ScrollType::kProgrammatic, source_type,
+                       scroll_behavior, targeted_scroll)) {
     // If no scroll happens, e.g. we got here because of a layout change, we
     // need to re-compute snapped targets and fire scrollsnapchange if
     // necessary.
@@ -1310,6 +1368,7 @@ void ScrollableArea::Trace(Visitor* visitor) const {
   visitor->Trace(mac_scrollbar_animator_);
   visitor->Trace(programmatic_scroll_animator_);
   visitor->Trace(fade_overlay_scrollbars_timer_);
+  visitor->Trace(text_overflow_snapshot_);
 }
 
 void ScrollableArea::InjectScrollbarGestureScroll(
@@ -1444,11 +1503,15 @@ ScrollableArea* GetNearestScrollableArea(LayoutBox* current_box) {
   // RootScroller node. The RootScroller node will have a custom applyScroll
   // callback that performs scrolling as well as associated "root" actions like
   // browser control movement and overscroll glow.
+  // TODO(crbug.com/485240464): Make sure the iteration is correct for
+  // overscroll areas.
   do {
     if (next_box->IsGlobalRootScroller() ||
         (next_box->IsScrollContainer() &&
          (next_box->GetScrollableArea()->ScrollsOverflow() ||
-          !next_box->GetScrollableArea()->CanPropagateScroll()))) {
+          !next_box->GetScrollableArea()->CanPropagateScroll())) ||
+        next_box->IsOverscrollContainer()) {
+      CHECK(next_box->GetScrollableArea());
       return next_box->GetScrollableArea();
     }
 

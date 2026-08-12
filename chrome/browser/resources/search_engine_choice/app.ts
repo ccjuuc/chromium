@@ -19,10 +19,9 @@ import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import type {SearchEngineChoice} from './browser_proxy.js';
-import {SearchEngineChoiceBrowserProxy} from './browser_proxy.js';
-import {PageHandler_ScrollState} from './search_engine_choice.mojom-webui.js';
-import type {PageHandlerRemote} from './search_engine_choice.mojom-webui.js';
+import type {SearchEngineChoice} from './search_engine_choice.js';
+import {browserProxyFactory, PageHandler_ScrollState} from './search_engine_choice.mojom-webui.js';
+import type {PageHandlerInterface} from './search_engine_choice.mojom-webui.js';
 
 export interface AppElement {
   $: {
@@ -30,6 +29,7 @@ export interface AppElement {
     infoLink: HTMLElement,
     choiceList: HTMLElement,
     buttonContainer: HTMLElement,
+    guestCheckbox: HTMLElement,
   };
 }
 
@@ -65,6 +65,8 @@ export class AppElement extends AppElementBase {
       actionButtonText_: {type: String},
       hasUserScrolledToTheBottom_: {type: Boolean},
       showInfoDialog_: {type: Boolean},
+      saveGuestModeSearchEngineChoice_: {type: Boolean},
+      showGuestCheckbox_: {type: Boolean},
     };
   }
 
@@ -75,13 +77,13 @@ export class AppElement extends AppElementBase {
   protected accessor hasUserScrolledToTheBottom_: boolean = false;
   protected accessor showInfoDialog_: boolean = false;
   protected accessor actionButtonText_: string = '';
-  protected showGuestCheckbox_: boolean =
+  protected accessor showGuestCheckbox_: boolean =
       loadTimeData.getBoolean('showGuestCheckbox');
-  protected saveGuestModeSearchEngineChoice_: boolean = false;
+  protected accessor saveGuestModeSearchEngineChoice_: boolean = false;
 
   private resizeObserver_: ResizeObserver|null = null;
-  private pageHandler_: PageHandlerRemote =
-      SearchEngineChoiceBrowserProxy.getInstance().handler;
+  private pageHandler_: PageHandlerInterface =
+      browserProxyFactory.getInstance().handler;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -156,12 +158,14 @@ export class AppElement extends AppElementBase {
   }
 
   private addResizeObserver_() {
-    function buttonAndListOverlap(
-        buttonRect: DOMRect, listRect: DOMRect, offset: number): boolean {
+    function doElementsOverlap(
+        firstElement: DOMRect, secondElement: DOMRect,
+        offset: number): boolean {
       return !(
-          buttonRect.right + offset < listRect.left ||
-          buttonRect.left - offset > listRect.right ||
-          buttonRect.bottom < listRect.top || buttonRect.top > listRect.bottom);
+          firstElement.right + offset < secondElement.left ||
+          firstElement.left - offset > secondElement.right ||
+          firstElement.bottom < secondElement.top ||
+          firstElement.top > secondElement.bottom);
     }
 
     this.resizeObserver_ = new ResizeObserver(() => {
@@ -178,31 +182,36 @@ export class AppElement extends AppElementBase {
         offset = 30;
       }
 
+      // Check if the list overlaps with guest checkbox.
+      let isOverlapping = doElementsOverlap(buttonRect, listRect, offset);
+      if (this.$.guestCheckbox && !this.$.guestCheckbox.hidden) {
+        const checkboxRect = this.$.guestCheckbox.getBoundingClientRect();
+        isOverlapping =
+            isOverlapping || doElementsOverlap(checkboxRect, listRect, offset);
+      }
+
       // Defer style changes to after the browser repaints to avoid triggering a
       // resize loop. See crbug.com/409406185.
       requestAnimationFrame(() => {
-        this.$.choiceList.classList.toggle(
-            'overlap-mitigation',
-            buttonAndListOverlap(buttonRect, listRect, offset));
+        this.$.choiceList.classList.toggle('overlap-mitigation', isOverlapping);
         this.$.buttonContainer.classList.toggle(
-            'overlap-mitigation',
-            buttonAndListOverlap(buttonRect, listRect, offset));
+            'overlap-mitigation', isOverlapping);
       });
     });
     this.resizeObserver_.observe(document.body);
   }
 
-  protected onLinkClicked_(e: Event) {
+  protected onInfoLinkClick_(e: Event) {
     e.preventDefault();
     this.showInfoDialog_ = true;
     this.pageHandler_.handleLearnMoreLinkClicked();
   }
 
-  protected onCheckboxStateChange_(e: CustomEvent<{value: boolean}>) {
+  protected onGuestCheckboxCheckedChanged_(e: CustomEvent<{value: boolean}>) {
     this.saveGuestModeSearchEngineChoice_ = e.detail.value;
   }
 
-  protected onActionButtonClicked_() {
+  protected onActionButtonClick_() {
     if (this.hasUserScrolledToTheBottom_) {
       this.pageHandler_.handleSearchEngineChoiceSelected(
           this.selectedChoice_,
@@ -233,7 +242,7 @@ export class AppElement extends AppElementBase {
     return item.showMarketingSnippet ? '' : 'truncate-text';
   }
 
-  protected onInfoDialogButtonClicked_() {
+  protected onInfoDialogButtonClick_() {
     this.showInfoDialog_ = false;
   }
 
@@ -262,7 +271,7 @@ export class AppElement extends AppElementBase {
     this.requestUpdate();
   }
 
-  protected onSelectedChoiceChangedByUser_(e: CustomEvent<{value: string}>) {
+  protected onChoiceListSelectedChanged_(e: CustomEvent<{value: string}>) {
     this.selectedChoice_ = Number.parseInt(e.detail.value);
   }
 

@@ -6,15 +6,15 @@
 
 #import "base/check.h"
 #import "base/i18n/rtl.h"
-#import "ios/chrome/browser/content_suggestions/ui/cells/standalone_module_view_configuration.h"
+#import "ios/chrome/browser/content_suggestions/ui/cells/standalone_module_view_config.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_updating.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/elements/gradient/gradient_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/elements/gradient_view.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 
@@ -65,7 +65,7 @@ const CGFloat kSeparatorHeight = 0.5;
 
 @implementation StandaloneModuleView {
   ContentSuggestionsModuleType _moduleType;
-  StandaloneModuleViewConfiguration* _config;
+  StandaloneModuleViewConfig* _config;
   UILabel* _titleLabel;
   UILabel* _descriptionLabel;
   UIButton* _button;
@@ -76,11 +76,12 @@ const CGFloat kSeparatorHeight = 0.5;
   UIImageView* _faviconImageView;
   UIView* _faviconImageContainer;
   UIView* _gradientOverlay;
+  UIView* _iconContainerView;
 }
 
 #pragma mark - Public
 
-- (void)configureView:(StandaloneModuleViewConfiguration*)config {
+- (void)configureView:(StandaloneModuleViewConfig*)config {
   CHECK(config);
   CHECK(self.subviews.count == 0);
   _moduleType = config.type;
@@ -107,7 +108,7 @@ const CGFloat kSeparatorHeight = 0.5;
 
   [NSLayoutConstraint activateConstraints:@[
     [separator.heightAnchor
-        constraintEqualToConstant:AlignValueToPixel(kSeparatorHeight)],
+        constraintEqualToConstant:AlignValueToLowerPixel(kSeparatorHeight)],
     [separator.leadingAnchor constraintEqualToAnchor:textStack.leadingAnchor],
     [separator.trailingAnchor constraintEqualToAnchor:textStack.trailingAnchor],
   ]];
@@ -119,22 +120,11 @@ const CGFloat kSeparatorHeight = 0.5;
   contentStack.alignment = UIStackViewAlignmentTop;
   [self addSubview:contentStack];
   AddSameConstraints(contentStack, self);
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(hideDescriptionOnTraitChange)];
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    [self registerForTraitChanges:@[ NewTabPageTrait.class ]
-                       withAction:@selector(applyBackgroundColors)];
-  }
+  [self registerForTraitChanges:@[ NewTabPageTrait.class ]
+                     withAction:@selector(applyBackgroundColors)];
   [self applyBackgroundColors];
-}
-
-- (void)updateProductImageViewWithFavicon:(UIImage*)faviconImage {
-  [self populateProductImageFaviconContainerAndView:faviconImage];
-  [self addFaviconToProductImage];
-  [self addConstraintsForProductImage];
-  [self addConstraintsForProductImageFavicon];
 }
 
 #pragma mark - NewTabPageColorUpdating
@@ -145,9 +135,11 @@ const CGFloat kSeparatorHeight = 0.5;
   if (colorPalette) {
     [_button setTitleColor:colorPalette.tintColor
                   forState:UIControlStateNormal];
+    _iconContainerView.backgroundColor = colorPalette.tertiaryColor;
   } else {
     [_button setTitleColor:[UIColor colorNamed:kBlueColor]
                   forState:UIControlStateNormal];
+    _iconContainerView.backgroundColor = [UIColor colorNamed:kGrey100Color];
   }
 }
 
@@ -257,19 +249,19 @@ const CGFloat kSeparatorHeight = 0.5;
   faviconImageView.layer.cornerRadius = kMediumCornerRadius;
   faviconImageView.translatesAutoresizingMaskIntoConstraints = NO;
 
-  UIView* iconContainerView = [[UIView alloc] init];
-  iconContainerView.backgroundColor = [UIColor colorNamed:kGrey100Color];
-  iconContainerView.layer.cornerRadius = kLargeCornerRadius;
-  iconContainerView.layer.masksToBounds = NO;
-  iconContainerView.clipsToBounds = YES;
-  [iconContainerView addSubview:faviconImageView];
-  AddSameCenterConstraints(faviconImageView, iconContainerView);
+  _iconContainerView = [[UIView alloc] init];
+  _iconContainerView.layer.cornerRadius = kLargeCornerRadius;
+  _iconContainerView.layer.masksToBounds = NO;
+  _iconContainerView.clipsToBounds = YES;
+  [_iconContainerView addSubview:faviconImageView];
+  AddSameCenterConstraints(faviconImageView, _iconContainerView);
   [NSLayoutConstraint activateConstraints:@[
-    [iconContainerView.widthAnchor constraintEqualToConstant:kImageWidthHeight],
-    [iconContainerView.widthAnchor
-        constraintEqualToAnchor:iconContainerView.heightAnchor],
+    [_iconContainerView.widthAnchor
+        constraintEqualToConstant:kImageWidthHeight],
+    [_iconContainerView.widthAnchor
+        constraintEqualToAnchor:_iconContainerView.heightAnchor],
   ]];
-  return iconContainerView;
+  return _iconContainerView;
 }
 
 // Creates the icon view using the `fallbackSymbolImage` from the config.

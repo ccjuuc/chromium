@@ -40,6 +40,10 @@ mojom_component("vr_service") {
         cpp = "::device::PlaneId"
       },
       {
+        mojom = "device.mojom.MeshId"
+        cpp = "::device::MeshId"
+      },
+      {
         mojom = "device.mojom.AnchorId"
         cpp = "::device::AnchorId"
       },
@@ -66,7 +70,8 @@ mojom_component("vr_service") {
 
 # Separating the public mojom interface into vr_service and isolated_xr_service
 # components allows us to add dependencies to isolated_xr_service without having
-# a blink variant. The blink variant tends to cause problematic, unresolved externals.
+# a blink variant. The blink variant tends to cause problematic, unresolved
+# externals.
 mojom_component("isolated_xr_service") {
   output_prefix = "device_vr_isolated_xr_service_mojo_bindings"
   macro_prefix = "DEVICE_VR_ISOLATED_XR_SERVICE_MOJO_BINDINGS"
@@ -82,11 +87,11 @@ mojom_component("isolated_xr_service") {
     "//gpu/ipc/common:interfaces",
     "//mojo/public/mojom/base",
     "//sandbox/policy/mojom",
+    "//services/network/public/mojom",
+    "//services/viz/public/mojom",
     "//skia/public/mojom",
     "//ui/gfx/geometry/mojom",
   ]
-
-  deps = [ "//services/viz/public/mojom" ]
 }
 
 component("vr_public_typemaps") {
@@ -98,6 +103,7 @@ component("vr_public_typemaps") {
     "anchor_id.h",
     "hit_test_subscription_id.h",
     "layer_id.h",
+    "mesh_id.h",
     "plane_id.h",
     "pose.cc",
     "pose.h",

@@ -59,8 +59,9 @@ void BaseButtonInputType::CreateShadowSubtree() {
       GetElement().GetDocument(), GetElement().ValueOrDefaultLabel()));
 }
 
-PopoverTriggerSupport BaseButtonInputType::SupportsPopoverTriggering() const {
-  return PopoverTriggerSupport::kSupported;
+HTMLFormControlElement::PopoverTriggerSupport
+BaseButtonInputType::SupportsPopoverTriggering() const {
+  return HTMLFormControlElement::PopoverTriggerSupport::kSupported;
 }
 
 void BaseButtonInputType::ValueAttributeChanged() {
@@ -104,6 +105,12 @@ bool BaseButtonInputType::MatchesDefaultPseudoClass() {
   // canBeSuccessfulSubmitButton() first for early return.
   return CanBeSuccessfulSubmitButton() && GetElement().Form() &&
          GetElement().Form()->FindDefaultButton() == &GetElement();
+}
+
+bool BaseButtonInputType::SupportsBaseAppearance(
+    Element::BaseAppearanceValue value) const {
+  return RuntimeEnabledFeatures::AppearanceBaseEnabled() &&
+         value == Element::BaseAppearanceValue::kBase;
 }
 
 }  // namespace blink

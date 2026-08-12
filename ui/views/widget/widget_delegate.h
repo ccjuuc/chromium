@@ -49,9 +49,11 @@ class ScreenCaptureNotificationUIViews;
 class SearchEngineChoiceDialog;
 class ShareThisTabDialogView;
 class SigninViewControllerDelegateViews;
+class SimpleWebViewDialog;
 class TabModalConfirmDialogViews;
 class TestBaseWidgetDelegate;
 class UpdateRecommendedMessageBox;
+class ViewTracker;
 class WebDialogBrowserTest;
 FORWARD_DECLARE_TEST(AcceleratorCommandsFullscreenBrowserTest,
                      ToggleFullscreen);
@@ -116,7 +118,6 @@ class RootWindowControllerTest;
 class ShelfNavigationWidgetDelegate;
 class ShelfWidgetDelegateView;
 class ShellTest;
-class SimpleWebViewDialog;
 class StatusAreaWidgetDelegate;
 class StuckWidgetDelegate;
 class SystemDialogDelegateView;
@@ -228,14 +229,6 @@ FORWARD_DECLARE_TEST(NativeWidgetAuraTest, TransientChildModalWindowVisibility);
 FORWARD_DECLARE_TEST(NativeViewHostAuraTest,
                      FocusManagerUpdatedDuringDestruction);
 
-namespace borealis {
-class BorealisDisallowedDialog;
-class BorealisLaunchErrorDialog;
-}  // namespace borealis
-
-namespace examples {
-class ExamplesWindowContents;
-}
 
 namespace test {
 FORWARD_DECLARE_TEST(DesktopWidgetTest, LockPaintAsActiveAndCloseParent);
@@ -326,7 +319,7 @@ class VIEWS_EXPORT WidgetDelegate {
 
     // The widget's initially focused view, if any. This can only be set before
     // this WidgetDelegate is used to initialize a Widget.
-    std::optional<View*> initially_focused_view;
+    std::unique_ptr<ViewTracker> initially_focused_view;
 
     // This is used by modal dialogs to override and constrain desired bounds
     // calculations.
@@ -340,7 +333,7 @@ class VIEWS_EXPORT WidgetDelegate {
     // contexts. Never displayed to the user, and not translated.
     std::string internal_name;
 
-    // The widget's modality type. Note that MODAL_TYPE_SYSTEM does not work at
+    // The widget's modality type. Note that ModalType::kSystem does not work at
     // all on Mac.
     ui::mojom::ModalType modal_type = ui::mojom::ModalType::kNone;
 
@@ -424,7 +417,7 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class ::ash::ShelfNavigationWidgetDelegate;
     friend class ::ash::ShelfWidgetDelegateView;
     friend class ::ash::ShellTest;
-    friend class ::ash::SimpleWebViewDialog;
+    friend class ::SimpleWebViewDialog;
     friend class ::ash::StatusAreaWidgetDelegate;
     friend class ::ash::StuckWidgetDelegate;
     friend class ::ash::SystemUIComponentsStyleViewerView;
@@ -440,8 +433,6 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class BubbleDialogModelHost;
     friend class FocusTraversalTest;
     FRIEND_TEST_ALL_PREFIXES(BubbleUmaLoggerTest, LogMetricFromDelegate);
-    friend class borealis::BorealisDisallowedDialog;
-    friend class borealis::BorealisLaunchErrorDialog;
     friend class ::web_app::IsolatedWebAppInstallerViewController;
     friend class ::web_app::SubAppsInstallDialogController;
 
@@ -974,7 +965,6 @@ class VIEWS_EXPORT WidgetDelegateView : public WidgetDelegate, public View {
   friend class ShapedWidgetDelegate;
   FRIEND_TEST_ALL_PREFIXES(NativeViewHostAuraTest,
                            FocusManagerUpdatedDuringDestruction);
-  friend class examples::ExamplesWindowContents;
   friend class test::GetNativeThemeFromDestructorView;
   friend class test::TestingWidgetDelegateView;
   friend class webid::TestAccountSelectionView;

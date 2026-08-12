@@ -160,7 +160,11 @@ size_t Archive::ReadHeader15()
       UnexpEndArcMsg();
       return 0;
     }
-    HeadersCrypt.SetCryptKeys(false,CRYPT_RAR30,&Cmd->Password,Salt,NULL,0,NULL,NULL);
+    if (!HeadersCrypt.SetCryptKeys(false,CRYPT_RAR30,&Cmd->Password,Salt,NULL,0,NULL,NULL))
+    {
+      FailedHeaderDecryption=true;
+      return 0;
+    }
     Raw.SetCrypt(&HeadersCrypt);
 #endif
   }
@@ -1505,7 +1509,7 @@ bool Archive::ReadSubData(std::vector<byte> *UnpData,File *DestFile,bool TestMod
 
   if (DestFile==NULL)
   {
-    if (SubHead.UnpSize>0x1000000)
+    if (SubHead.UnpSize<0 || SubHead.UnpSize>0x1000000)
     {
       // Prevent the excessive allocation. When reading to memory, normally
       // this function operates with reasonably small blocks, such as

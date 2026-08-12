@@ -254,8 +254,8 @@ SandboxedUnpacker::SandboxedUnpacker(
       format_verifier_override_(g_verifier_format_override_for_test),
       unpacker_io_task_runner_(unpacker_io_task_runner),
       io_thread_state_(std::make_unique<IOThreadState>()) {
-  // Tracking for crbug.com/692069. The location must be valid. If it's invalid,
-  // the utility process kills itself for a bad IPC.
+  // Tracking for crbug.com/41301792. The location must be valid. If it's
+  // invalid, the utility process kills itself for a bad IPC.
   CHECK_GT(location, mojom::ManifestLocation::kInvalidLocation);
   CHECK_LE(location, mojom::ManifestLocation::kMaxValue);
 }
@@ -287,7 +287,6 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
   // We assume that we are started on the thread that the client wants us
   // to do file IO on.
   DCHECK(unpacker_io_task_runner_->RunsTasksInCurrentSequence());
-  client_->OnStageChanged(InstallationStage::kVerification);
   std::string expected_hash;
   if (!crx_info.expected_hash.empty() &&
       base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -302,15 +301,15 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
   // Initialize the path that will eventually contain the unpacked extension.
   extension_root_ = temp_dir_.GetPath().AppendASCII(kTempExtensionName);
 
-  // Extract the public key and validate the package.
-  if (!ValidateSignature(
-          crx_info.path, expected_hash,
-          format_verifier_override_.value_or(crx_info.required_format))) {
-    return;  // ValidateSignature() already reported the error.
-  }
-
   client_->OnStageChanged(InstallationStage::kCopying);
-  // Copy the crx file into our working directory.
+  // Copy the crx file into our working directory before validating its
+  // signature so that the bytes that are validated are the same bytes that
+  // are subsequently unzipped, even if the source path is modified
+  // concurrently.
+  // Note: Copying prior to signature validation incurs a file copy for invalid
+  // or corrupt CRX files, but guarantees that validation operates on the
+  // isolated working copy. Since verification failing is an uncommon case,
+  // this isn't a major performance concern.
   base::FilePath temp_crx_path =
       temp_dir_.GetPath().Append(crx_info.path.BaseName());
 
@@ -322,6 +321,14 @@ void SandboxedUnpacker::StartWithCrx(const CRXFileInfo& crx_info) {
                       IDS_EXTENSION_PACKAGE_INSTALL_ERROR,
                       u"FAILED_TO_COPY_EXTENSION_FILE_TO_TEMP_DIRECTORY"));
     return;
+  }
+
+  client_->OnStageChanged(InstallationStage::kVerification);
+  // Extract the public key and validate the package.
+  if (!ValidateSignature(
+          temp_crx_path, expected_hash,
+          format_verifier_override_.value_or(crx_info.required_format))) {
+    return;  // ValidateSignature() already reported the error.
   }
 
   base::FilePath normalized_crx_path = NormalizeFilePath(temp_crx_path);
@@ -496,7 +503,7 @@ void SandboxedUnpacker::ReadManifestDone(
     ReportUnpackExtensionFailed(result.error());
     return;
   }
-  const base::Value::Dict* dict = result->GetIfDict();
+  const base::DictValue* dict = result->GetIfDict();
   if (!dict) {
     ReportUnpackExtensionFailed(manifest_errors::kInvalidManifest);
     return;
@@ -521,11 +528,10 @@ void SandboxedUnpacker::ReadManifestDone(
   UnpackExtensionSucceeded(std::move(result).value().TakeDict());
 }
 
-void SandboxedUnpacker::UnpackExtensionSucceeded(base::Value::Dict manifest) {
+void SandboxedUnpacker::UnpackExtensionSucceeded(base::DictValue manifest) {
   DCHECK(unpacker_io_task_runner_->RunsTasksInCurrentSequence());
 
-  std::optional<base::Value::Dict> final_manifest(
-      RewriteManifestFile(manifest));
+  std::optional<base::DictValue> final_manifest(RewriteManifestFile(manifest));
   if (!final_manifest) {
     return;
   }
@@ -978,7 +984,7 @@ void SandboxedUnpacker::ReportSuccess() {
   // Client takes ownership of temporary directory, manifest, and extension.
   client_->OnUnpackSuccess(
       temp_dir_.Take(), extension_root_,
-      std::make_unique<base::Value::Dict>(std::move(manifest_.value())),
+      std::make_unique<base::DictValue>(std::move(manifest_.value())),
       extension_.get(), install_icon_, std::move(ruleset_install_prefs_));
 
   // Interestingly, the C++ standard doesn't guarantee that a moved-from vector
@@ -990,15 +996,15 @@ void SandboxedUnpacker::ReportSuccess() {
   Cleanup();
 }
 
-std::optional<base::Value::Dict> SandboxedUnpacker::RewriteManifestFile(
-    const base::Value::Dict& manifest) {
+std::optional<base::DictValue> SandboxedUnpacker::RewriteManifestFile(
+    const base::DictValue& manifest) {
   constexpr int64_t kMaxFingerprintSize = 1024;
 
   // Add the public key extracted earlier to the parsed manifest and overwrite
   // the original manifest. We do this to ensure the manifest doesn't contain an
   // exploitable bug that could be used to compromise the browser.
   DCHECK(!public_key_.empty());
-  base::Value::Dict final_manifest = manifest.Clone();
+  base::DictValue final_manifest = manifest.Clone();
   final_manifest.Set(manifest_keys::kPublicKey, public_key_);
 
   {

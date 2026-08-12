@@ -475,7 +475,7 @@ TEST_F(FormCacheBrowserTest, DoNotStoreEmptyForms) {
   EXPECT_TRUE(forms.updated_forms.empty());
   EXPECT_TRUE(forms.removed_forms.empty());
 
-  EXPECT_EQ(1u, GetDocument().GetTopLevelForms().size());
+  EXPECT_EQ(1u, GetDocument().GetOutermostForms().size());
   EXPECT_EQ(0u, num_extracted_forms());
 }
 
@@ -488,14 +488,15 @@ TEST_F(FormCacheBrowserTest, FormCacheSizeUpperBound) {
   for (unsigned int i = 0; i < kMaxExtractableFields + 1; ++i) {
     html += "<form><input></form>";
   }
-  LoadHTML(html.c_str());
+  LoadHTML(html);
 
   FormCache::UpdateFormCacheResult forms = UpdateFormCache();
 
   EXPECT_EQ(forms.updated_forms.size(), kMaxExtractableFields);
   EXPECT_TRUE(forms.removed_forms.empty());
 
-  EXPECT_EQ(kMaxExtractableFields + 1, GetDocument().GetTopLevelForms().size());
+  EXPECT_EQ(kMaxExtractableFields + 1,
+            GetDocument().GetOutermostForms().size());
   EXPECT_EQ(kMaxExtractableFields, num_extracted_forms());
 }
 
@@ -506,9 +507,10 @@ TEST_F(FormCacheBrowserTest, FieldLimit) {
   for (unsigned int i = 0; i < kMaxExtractableFields + 1; ++i) {
     html += "<form><input></form>";
   }
-  LoadHTML(html.c_str());
+  LoadHTML(html);
 
-  ASSERT_EQ(kMaxExtractableFields + 1, GetDocument().GetTopLevelForms().size());
+  ASSERT_EQ(kMaxExtractableFields + 1,
+            GetDocument().GetOutermostForms().size());
 
   FormCache::UpdateFormCacheResult forms = UpdateFormCache();
 
@@ -523,10 +525,10 @@ TEST_F(FormCacheBrowserTest, FrameLimit) {
   for (unsigned int i = 0; i < kMaxExtractableChildFrames + 1; ++i) {
     html += "<form><iframe></iframe></form>";
   }
-  LoadHTML(html.c_str());
+  LoadHTML(html);
 
   ASSERT_EQ(kMaxExtractableChildFrames + 1,
-            GetDocument().GetTopLevelForms().size());
+            GetDocument().GetOutermostForms().size());
 
   FormCache::UpdateFormCacheResult forms = UpdateFormCache();
 
@@ -557,7 +559,7 @@ TEST_F(FormCacheBrowserTest, FieldAndFrameLimit) {
   for (size_t i = 0; i < kNumFormsWithoutFrame; ++i) {
     html += "<form><input></form>";
   }
-  LoadHTML(html.c_str());
+  LoadHTML(html);
 
   ASSERT_EQ(kMaxExtractableFields + 1,
             GetDocument().GetElementsByHTMLTagName("form").length());

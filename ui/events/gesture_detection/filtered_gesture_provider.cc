@@ -27,6 +27,11 @@ FilteredGestureProvider::FilteredGestureProvider(
 
 FilteredGestureProvider::~FilteredGestureProvider() = default;
 
+void FilteredGestureProvider::Shutdown() {
+  client_ = nullptr;
+  gesture_filter_.Shutdown();
+}
+
 void FilteredGestureProvider::UpdateConfig(
     const GestureProvider::Config& config) {
   gesture_provider_ = std::make_unique<ui::GestureProvider>(config, this);
@@ -109,13 +114,8 @@ void FilteredGestureProvider::OnUnconfirmedTapConvertedToTap() {
   gesture_provider_->OnUnconfirmedTapConvertedToTap();
 }
 
-bool FilteredGestureProvider::HasPendingTapTimeoutForTesting() const {
-  if (!gesture_provider_->GetGestureDetectorForTesting()) {  // IN-TEST
-    return false;
-  }
-  return gesture_provider_
-      ->GetGestureDetectorForTesting()     // IN-TEST
-      ->HasPendingTapTimeoutForTesting();  // IN-TEST
+GestureDetector* FilteredGestureProvider::GetGestureDetectorForTesting() {
+  return gesture_provider_->GetGestureDetectorForTesting();  // IN-TEST
 }
 
 void FilteredGestureProvider::OnGestureEvent(const GestureEventData& event) {
@@ -133,12 +133,14 @@ void FilteredGestureProvider::OnGestureEvent(const GestureEventData& event) {
 }
 
 bool FilteredGestureProvider::RequiresDoubleTapGestureEvents() const {
-  return client_->RequiresDoubleTapGestureEvents();
+  return client_ ? client_->RequiresDoubleTapGestureEvents() : false;
 }
 
 void FilteredGestureProvider::ForwardGestureEvent(
     const GestureEventData& event) {
-  client_->OnGestureEvent(event);
+  if (client_) {
+    client_->OnGestureEvent(event);
+  }
 }
 
 }  // namespace ui

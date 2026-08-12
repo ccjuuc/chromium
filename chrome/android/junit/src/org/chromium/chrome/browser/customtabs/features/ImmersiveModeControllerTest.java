@@ -10,10 +10,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.os.Build;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 
 import org.junit.Before;
@@ -23,13 +27,15 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.annotation.Config;
 
 import org.chromium.base.UnownedUserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
 
 /** Tests for {@link ImmersiveModeController}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -45,7 +51,9 @@ public class ImmersiveModeControllerTest {
     @Mock public CustomTabActivity mActivity;
     @Mock public ActivityWindowAndroid mWindowAndroid;
     @Mock public Window mWindow;
+    @Mock public WindowInsetsController mInsetsController;
     @Mock public View mDecorView;
+    @Mock public EdgeToEdgeStateProvider mEdgeToEdgeStateProvider;
     private final WindowManager.LayoutParams mLayoutParams = new WindowManager.LayoutParams();
     public UnownedUserDataHost mWindowUserDataHost = new UnownedUserDataHost();
 
@@ -62,6 +70,11 @@ public class ImmersiveModeControllerTest {
         when(mDecorView.getRootView()).thenReturn(mDecorView);
         when(mDecorView.getLayoutParams()).thenReturn(mLayoutParams);
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            when(mWindow.getInsetsController()).thenReturn(mInsetsController);
+            when(mDecorView.getWindowInsetsController()).thenReturn(mInsetsController);
+        }
+
         // Reflect mSystemUiVisibility in the DecorView.
         when(mDecorView.getSystemUiVisibility()).thenAnswer(invocation -> mSystemUiVisibility);
         doAnswer(
@@ -73,25 +86,58 @@ public class ImmersiveModeControllerTest {
                 .setSystemUiVisibility(anyInt());
 
         when(mWindowAndroid.getUnownedUserDataHost()).thenReturn(mWindowUserDataHost);
-        mController = new ImmersiveModeController(mActivity, mWindowAndroid, mLifecycleDispatcher);
+        mController =
+                new ImmersiveModeController(
+                        mActivity, mWindowAndroid, mEdgeToEdgeStateProvider, mLifecycleDispatcher);
     }
 
     @Test
     public void enterImmersiveMode() {
         mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_IMMERSIVE);
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController).hide(anyInt());
+            verify(mInsetsController)
+                    .setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_BARS_BY_SWIPE);
+        } else {
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_IMMERSIVE);
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        }
     }
 
     @Test
     public void enterImmersiveMode_sticky() {
         mController.enterImmersiveMode(LAYOUT, STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
-        assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController).hide(anyInt());
+            verify(mInsetsController)
+                    .setSystemBarsBehavior(
+                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        } else {
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
+            assertNotEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        }
+    }
+
+    @Test
+    // Pin to a single recent SDK: Android 11 (R) has WindowInsetsController quirks, and one SDK
+    // is enough to exercise the re-apply path here.
+    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    public void reApplyImmersiveMode_onResume() {
+        mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        mController.onResumeWithNative();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        // Verifying hide() is called twice is enough to prove the re-apply happened on resume.
+        // We deliberately do not also assert setSystemBarsBehavior() because Robolectric's
+        // WindowInsetsControllerCompat$Impl30 does not forward that call to the underlying mock
+        // on SDK 31-34, even though production code does invoke it.
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController, times(2)).hide(anyInt());
+        }
     }
 
     @Test
@@ -103,18 +149,35 @@ public class ImmersiveModeControllerTest {
     @Test
     public void exitImmersiveMode() {
         mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         mController.exitImmersiveMode();
-        assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
-        assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController).show(anyInt());
+        } else {
+            assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
+            assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        }
     }
 
     @Test
     public void exitImmersiveMode_sticky() {
         mController.enterImmersiveMode(LAYOUT, STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         mController.exitImmersiveMode();
-        assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
-        assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController).show(anyInt());
+        } else {
+            assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_FULLSCREEN);
+            assertEquals(0, mSystemUiVisibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
+        }
+    }
+
+    private boolean isUsingWindowInsetsController() {
+        // ImmersiveModeController uses updateImmersiveFlagsOnAndroid11 for API 30,
+        // which uses the legacy setSystemUiVisibility.
+        // For other APIs, it uses WindowInsetsControllerCompat, which uses
+        // WindowInsetsController on API 30+.
+        // So on API 30 it actually doesn't use it, but on API 31+ it does.
+        return Build.VERSION.SDK_INT > Build.VERSION_CODES.R;
     }
 }

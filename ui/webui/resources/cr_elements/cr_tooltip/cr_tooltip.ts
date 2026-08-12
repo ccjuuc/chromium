@@ -106,15 +106,12 @@ export class CrTooltipElement extends CrLitElement {
   }
 
   override disconnectedCallback() {
+    super.disconnectedCallback();
+
     if (!this.manualMode) {
       this.removeListeners_();
     }
     this.resetHideTimeout_();
-  }
-
-  override firstUpdated(changedProperties: PropertyValues<this>) {
-    super.firstUpdated(changedProperties);
-    this.addEventListener('animationend', () => this.onAnimationEnd_());
   }
 
   override willUpdate(changedProperties: PropertyValues<this>) {
@@ -124,6 +121,11 @@ export class CrTooltipElement extends CrLitElement {
       this.style.setProperty(
           '--paper-tooltip-delay-in', `${this.animationDelay}ms`);
     }
+  }
+
+  override firstUpdated(changedProperties: PropertyValues<this>) {
+    super.firstUpdated(changedProperties);
+    this.addEventListener('animationend', () => this.onAnimationEnd_());
   }
 
   override updated(changedProperties: PropertyValues<this>) {

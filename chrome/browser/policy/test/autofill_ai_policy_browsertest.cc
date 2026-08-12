@@ -44,34 +44,20 @@ static_assert(std::to_underlying(kDisable) == 2);
 
 // This test has two parameters:
 //  * Policy value.
-//  * kYourSavedInfoSettingsPage feature flag value. When this flag is on, the
-//  `/autofill` page is replaced with the '/identityDocs' and '/travel' pages.
 class AutofillAiPolicyTest
     : public PolicyTest,
-      public testing::WithParamInterface<
-          std::tuple<ModelExecutionEnterprisePolicyValue, bool>> {
+      public testing::WithParamInterface<ModelExecutionEnterprisePolicyValue> {
  public:
   AutofillAiPolicyTest() {
-    std::vector<base::test::FeatureRef> enabled_features{
-        autofill::features::kAutofillAiWithDataSchema,
-        autofill::features::kAutofillAiIgnoreGeoIp};
-    std::vector<base::test::FeatureRef> disabled_features;
-
-    if (is_your_saved_info_settings_page_enabled()) {
-      enabled_features.push_back(
-          autofill::features::kYourSavedInfoSettingsPage);
-    } else {
-      disabled_features.push_back(
-          autofill::features::kYourSavedInfoSettingsPage);
-    }
-    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+    scoped_feature_list_.InitWithFeatures(
+        {autofill::features::kAutofillAiWithDataSchema,
+         autofill::features::kAutofillAiIgnoreGeoIp,
+         autofill::features::kAutofillAmbientAutofill},
+        {});
   }
 
   ModelExecutionEnterprisePolicyValue policy_value() const {
-    return std::get<0>(GetParam());
-  }
-  bool is_your_saved_info_settings_page_enabled() const {
-    return std::get<1>(GetParam());
+    return GetParam();
   }
   bool disabled_by_policy() const { return policy_value() == kDisable; }
 
@@ -80,7 +66,7 @@ class AutofillAiPolicyTest
 
     identity_test_env_adaptor_ =
         std::make_unique<IdentityTestEnvironmentProfileAdaptor>(
-            browser()->profile());
+            browser()->GetProfile());
 
     EnableSignin();
 
@@ -123,7 +109,7 @@ class AutofillAiPolicyTest
         identity_test_env_adaptor_->identity_test_env()
             ->MakePrimaryAccountAvailable("user@gmail.com",
                                           signin::ConsentLevel::kSignin);
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_use_model_execution_features(true);
     identity_test_env_adaptor_->identity_test_env()
         ->UpdateAccountInfoForAccount(account_info);
@@ -144,21 +130,18 @@ class AutofillAiPolicyTest
   base::CallbackListSubscription create_services_subscription_;
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    AutofillAiPolicyTest,
-    testing::Combine(testing::Values(kAllow, kAllowWithoutLogging, kDisable),
-                     testing::Bool()));
+INSTANTIATE_TEST_SUITE_P(,
+                         AutofillAiPolicyTest,
+                         testing::Values(kAllow,
+                                         kAllowWithoutLogging,
+                                         kDisable));
 
 // Tests that the chrome://settings entry for Autofill AI is always reachable
 // even if the policy is disabled.
 IN_PROC_BROWSER_TEST_P(AutofillAiPolicyTest, SettingsNotDisabledByPolicy) {
-  if (is_your_saved_info_settings_page_enabled()) {
-    VerifySettingsUrlIsReachable(chrome::kIdentityDocsSubPage);
-    VerifySettingsUrlIsReachable(chrome::kTravelSubPage);
-  } else {
-    VerifySettingsUrlIsReachable(chrome::kAutofillAiSubPage);
-  }
+  VerifySettingsUrlIsReachable(chrome::kIdentityDocsSubPage);
+  VerifySettingsUrlIsReachable(chrome::kTravelSubPage);
+  VerifySettingsUrlIsReachable(chrome::kShoppingSubPage);
 }
 
 }  // namespace

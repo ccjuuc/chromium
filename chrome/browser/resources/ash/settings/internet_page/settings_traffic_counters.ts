@@ -121,12 +121,12 @@ export class SettingsTrafficCountersElement extends
     };
   }
 
-  managedProperties: ManagedProperties|undefined;
-  guid: string;
-  private date_: string;
-  private resetDay_: number;
+  declare managedProperties: ManagedProperties|undefined;
+  declare guid: string;
+  declare private date_: string;
+  declare private resetDay_: number;
   private trafficCountersAdapter_: TrafficCountersAdapter;
-  private value_: string;
+  declare private value_: string;
 
   constructor() {
     super();
@@ -210,7 +210,7 @@ export class SettingsTrafficCountersElement extends
     }
     let totalBytes = BigInt(0);
     for (const sourceDict of network.counters) {
-      totalBytes += BigInt(sourceDict.rxBytes) + BigInt(sourceDict.txBytes);
+      totalBytes += sourceDict.rxBytes + sourceDict.txBytes;
     }
     return getDataInfoString(totalBytes);
   }

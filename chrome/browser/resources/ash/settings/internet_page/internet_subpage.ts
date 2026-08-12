@@ -146,17 +146,6 @@ export class SettingsInternetSubpageElement extends
         },
       },
 
-      /**
-       * Return true if instant hotspot rebrand feature flag is enabled.
-       */
-      isInstantHotspotRebrandEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-              loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-        },
-      },
-
       isShowingVpn_: {
         type: Boolean,
         computed: 'computeIsShowingVpn_(deviceState)',
@@ -244,15 +233,15 @@ export class SettingsInternetSubpageElement extends
     ];
   }
 
-  defaultNetwork: OncMojo.NetworkStateProperties|null|undefined;
-  deviceState: OncMojo.DeviceStateProperties|undefined;
-  globalPolicy: GlobalPolicy|undefined;
-  isBuiltInVpnManagementBlocked: boolean;
-  isCellularSetupActive: boolean;
-  isConnectedToNonCellularNetwork: boolean;
-  showSpinner: boolean;
-  tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
-  vpnProviders: VpnProvider[];
+  declare defaultNetwork: OncMojo.NetworkStateProperties|null|undefined;
+  declare deviceState: OncMojo.DeviceStateProperties|undefined;
+  declare globalPolicy: GlobalPolicy|undefined;
+  declare isBuiltInVpnManagementBlocked: boolean;
+  declare isCellularSetupActive: boolean;
+  declare isConnectedToNonCellularNetwork: boolean;
+  declare showSpinner: boolean;
+  declare tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
+  declare vpnProviders: VpnProvider[];
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -263,22 +252,22 @@ export class SettingsInternetSubpageElement extends
     Setting.kAddESimNetwork,
   ]);
 
-  private alwaysOnVpnMode_: AlwaysOnVpnMode|undefined;
-  private alwaysOnVpnService_: string|undefined;
+  declare private alwaysOnVpnMode_: AlwaysOnVpnMode|undefined;
+  declare private alwaysOnVpnService_: string|undefined;
   private browserProxy_: InternetPageBrowserProxy;
-  private hasCompletedScanSinceLastEnabled_: boolean;
-  private isInstantHotspotRebrandEnabled_: boolean;
-  private isManaged_: boolean;
-  private isShowingTether_: boolean;
-  private isShowingVpn_: boolean;
+  declare private hasCompletedScanSinceLastEnabled_: boolean;
+  declare private isManaged_: boolean;
+  declare private isShowingTether_: boolean;
+  declare private isShowingVpn_: boolean;
   private networkConfig_: CrosNetworkConfigInterface;
-  private networkStateList_: OncMojo.NetworkStateProperties[];
-  private notificationsDisabledDeviceNames_: string[];
-  private pendingSettingId_: Setting|null;
+  declare private networkStateList_: OncMojo.NetworkStateProperties[];
+  declare private notificationsDisabledDeviceNames_: string[];
+  declare private pendingSettingId_: Setting|null;
   private scanIntervalId_: number|null;
-  private showTechnologyBadge_: boolean;
-  private thirdPartyVpns_: Record<string, OncMojo.NetworkStateProperties[]>;
-  private vpnIsEnabled_: boolean;
+  declare private showTechnologyBadge_: boolean;
+  declare private thirdPartyVpns_:
+      Record<string, OncMojo.NetworkStateProperties[]>;
+  declare private vpnIsEnabled_: boolean;
 
   constructor() {
     super();
@@ -431,7 +420,7 @@ export class SettingsInternetSubpageElement extends
       if (this.shouldShowCellularNetworkList_() && this.isDeviceInhibited_()) {
         this.showSpinner = false;
       } else {
-        this.showSpinner = !!this.deviceState.scanning;
+        this.showSpinner = this.deviceState.scanning;
       }
     }
 
@@ -463,10 +452,11 @@ export class SettingsInternetSubpageElement extends
       return true;
     }
 
-    // Scans should be kicked off from the new Instant Hotspot page.
+    // Scans should be kicked off from the Mobile data subpage, as long as it
+    // includes Tether networks.
     return this.deviceState.type === NetworkType.kTether ||
         (this.deviceState.type === NetworkType.kCellular &&
-         !!this.tetherDeviceState && !this.isInstantHotspotRebrandEnabled_);
+         !!this.tetherDeviceState);
   }
 
   private startScanning_(): void {
@@ -475,8 +465,7 @@ export class SettingsInternetSubpageElement extends
     }
     const INTERVAL_MS = 10 * 1000;
     let type = this.deviceState!.type;
-    if (!this.isInstantHotspotRebrandEnabled_ &&
-        type === NetworkType.kCellular && this.tetherDeviceState) {
+    if (type === NetworkType.kCellular && this.tetherDeviceState) {
       // Only request tether scan. Cellular scan is disruptive and should
       // only be triggered by explicit user action.
       type = NetworkType.kTether;
@@ -526,8 +515,7 @@ export class SettingsInternetSubpageElement extends
     }
 
     // For the Cellular/Mobile subpage, also request Tether networks.
-    if (!this.isInstantHotspotRebrandEnabled_ &&
-        this.deviceState.type === NetworkType.kCellular &&
+    if (this.deviceState.type === NetworkType.kCellular &&
         this.tetherDeviceState) {
       const filter = {
         filter: FilterType.kVisible,
@@ -642,9 +630,7 @@ export class SettingsInternetSubpageElement extends
   private enableToggleIsVisible_(deviceState: OncMojo.DeviceStateProperties|
                                  undefined): boolean {
     return !!deviceState && deviceState.type !== NetworkType.kEthernet &&
-        deviceState.type !== NetworkType.kVPN &&
-        (!this.isInstantHotspotRebrandEnabled_ ||
-         deviceState.type !== NetworkType.kTether);
+        deviceState.type !== NetworkType.kVPN;
   }
 
   private enableToggleIsEnabled_(deviceState: OncMojo.DeviceStateProperties|
@@ -826,12 +812,12 @@ export class SettingsInternetSubpageElement extends
     }
 
     if (state.type === NetworkType.kCellular) {
-      return !!this.globalPolicy.allowOnlyPolicyCellularNetworks;
+      return this.globalPolicy.allowOnlyPolicyCellularNetworks;
     }
 
-    return !!this.globalPolicy.allowOnlyPolicyWifiNetworksToConnect ||
-        (!!this.globalPolicy.allowOnlyPolicyWifiNetworksToConnectIfAvailable &&
-         !!this.deviceState && !!this.deviceState.managedNetworkAvailable) ||
+    return this.globalPolicy.allowOnlyPolicyWifiNetworksToConnect ||
+        (this.globalPolicy.allowOnlyPolicyWifiNetworksToConnectIfAvailable &&
+         !!this.deviceState && this.deviceState.managedNetworkAvailable) ||
         (!!this.globalPolicy.blockedHexSsids &&
          this.globalPolicy.blockedHexSsids.includes(
              state.typeState.wifi!.hexSsid));
@@ -902,13 +888,6 @@ export class SettingsInternetSubpageElement extends
         this.deviceState.type === NetworkType.kCellular;
   }
 
-  private shouldShowBluetoothDisabledTetherErrorMessage_(
-      deviceState: OncMojo.DeviceStateProperties|undefined): boolean {
-    return this.isInstantHotspotRebrandEnabled_ && !!deviceState &&
-        deviceState.type === NetworkType.kTether &&
-        deviceState.deviceState === DeviceStateType.kUninitialized;
-  }
-
   private hideNoNetworksMessage_(
       networkStateList: OncMojo.NetworkStateProperties[]): boolean {
     return this.shouldShowCellularNetworkList_() ||
@@ -919,13 +898,8 @@ export class SettingsInternetSubpageElement extends
       deviceState: OncMojo.DeviceStateProperties,
       _tetherDeviceState: OncMojo.DeviceStateProperties|undefined): string {
     const type = deviceState.type;
-    if (type === NetworkType.kTether && this.isInstantHotspotRebrandEnabled_) {
-      return this.i18n('internetNoTetherHosts');
-    }
-
-    if (!this.isInstantHotspotRebrandEnabled_ &&
-        (type === NetworkType.kCellular && this.tetherDeviceState ||
-         type === NetworkType.kTether)) {
+    if (type === NetworkType.kCellular && this.tetherDeviceState ||
+        type === NetworkType.kTether) {
       return this.i18nAdvanced('internetNoNetworksMobileData').toString();
     }
 
@@ -938,15 +912,11 @@ export class SettingsInternetSubpageElement extends
     // display a message stating that scanning is in progress. If a scan has
     // already completed and there are still no networks present, this implies
     // that there has been sufficient time to find a network, so display a
-    // messages stating that there are no networks. See https://crbug.com/974169
-    // for more details.
+    // messages stating that there are no networks. See
+    // https://crbug.com/41464934 for more details.
     return this.hasCompletedScanSinceLastEnabled_ ?
         this.i18n('internetNoNetworks') :
         this.i18n('networkScanningLabel');
-  }
-
-  private getBluetoothDisabledErrorMessageForTether_(): string {
-    return this.i18n('tetherEnableBluetooth');
   }
 
   private showGmsCoreNotificationsSection_(notificationsDisabledDeviceNames:
@@ -999,28 +969,6 @@ export class SettingsInternetSubpageElement extends
     // displayed on managed devices while the legacy always-on VPN based on ARC
     // is not replaced/extended by the new implementation.
     return !this.isManaged_ && this.isShowingVpn_;
-  }
-
-  /**
-   * Tells whether the Tether notification control should be displayed. It is
-   * displayed when instant-hotspot-rebrand is enabled and there are Tether
-   * networks.
-   */
-  private shouldShowTetherNotificationControl_(
-      deviceState: OncMojo.DeviceStateProperties|undefined): boolean {
-    return !!deviceState && deviceState.type === NetworkType.kTether &&
-        this.isInstantHotspotRebrandEnabled_;
-  }
-
-  /*
-   * Says whether header for the Tether network list should be displayed.
-   * Returns true if the rebrand is enabled and the device state is Tether
-   */
-  private shouldShowTetherDeviceListHeader_(deviceState:
-                                                OncMojo.DeviceStateProperties|
-                                            undefined): boolean {
-    return !!deviceState && deviceState.type === NetworkType.kTether &&
-        this.isInstantHotspotRebrandEnabled_;
   }
 
   /**

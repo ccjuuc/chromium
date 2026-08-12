@@ -12,6 +12,10 @@
 
 class BrowserWindowInterface;
 
+namespace views {
+class BubbleDialogDelegate;
+}
+
 // SessionCrashedBubbleView shows a bubble allowing the user to restore the
 // previous session. If metrics reporting is not enabled a checkbox is presented
 // allowing the user to turn it on.
@@ -37,6 +41,7 @@ class SessionCrashedBubbleView : public SessionCrashedBubble {
   // TODO(pbos): Mock conditions in test instead.
   static views::BubbleDialogDelegate* ShowBubble(
       BrowserWindowInterface* browser,
+      bool uma_opted_in_already,
       bool offer_uma_optin);
 };
 

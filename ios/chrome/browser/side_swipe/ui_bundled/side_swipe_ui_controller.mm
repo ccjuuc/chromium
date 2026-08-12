@@ -6,7 +6,9 @@
 
 #import "base/ios/block_types.h"
 #import "base/notreached.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/animated_scoped_fullscreen_disabler.h"
+#import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -23,6 +25,7 @@
 #import "ios/chrome/browser/side_swipe/ui_bundled/side_swipe_ui_controller_delegate.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/side_swipe_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/side_swipe_toolbar_interacting.h"
+#import "ios/chrome/browser/toolbar/ui/toolbar_constants.h"
 #import "ios/web/public/web_state.h"
 #import "ui/base/device_form_factor.h"
 
@@ -68,10 +71,11 @@ const CGFloat kIpadTabSwipeDistance = 100;
   // The disabler that prevents the toolbar from being scrolled away when the
   // side swipe gesture is being recognized.
   std::unique_ptr<ScopedFullscreenDisabler> _fullscreenDisabler;
+  std::unique_ptr<AnimatedScopedFullscreenDisabler>
+      _legacyAnimatedFullscreenDisabler;
 
-  // The animated disabler displays the toolbar when a side swipe navigation
-  // gesture is being recognized.
-  std::unique_ptr<AnimatedScopedFullscreenDisabler> _animatedFullscreenDisabler;
+  // The fullscreen browser agent.
+  raw_ptr<FullscreenBrowserAgent> _fullscreenBrowserAgent;
 
   // The webStateList owned by the current browser.
   raw_ptr<WebStateList> _webStateList;
@@ -82,11 +86,13 @@ const CGFloat kIpadTabSwipeDistance = 100;
 
 - (instancetype)
     initWithFullscreenController:(FullscreenController*)fullscreenController
+          fullscreenBrowserAgent:(FullscreenBrowserAgent*)fullscreenBrowserAgent
                     webStateList:(WebStateList*)webStateList
             snapshotBrowserAgent:(SnapshotBrowserAgent*)snapshotBrowserAgent {
   self = [super init];
   if (self) {
     _fullscreenController = fullscreenController;
+    _fullscreenBrowserAgent = fullscreenBrowserAgent;
     _snapshotBrowserAgent = snapshotBrowserAgent;
     _webStateList = webStateList;
   }
@@ -98,6 +104,7 @@ const CGFloat kIpadTabSwipeDistance = 100;
   [self removeHorizontalGestureRecognizers];
   _snapshotBrowserAgent = nullptr;
   _fullscreenController = nullptr;
+  _fullscreenBrowserAgent = nullptr;
   _webStateList = nullptr;
 }
 
@@ -234,24 +241,22 @@ const CGFloat kIpadTabSwipeDistance = 100;
     return NO;
   }
 
-  if (IsContextualPanelEnabled()) {
-    // Don't handle gesture if it's meant for the Contextual Panel Entrypoint
-    // (gesture began in its frame) and that entrypoint is currently large.
-    // `contextualPanelEntrypointView` is nil if the entrypoint is not currently
-    // large, which means the gesture won't be blocked here.
-    UIView* contextualPanelEntrypointView = [self.layoutGuideCenter
-        referencedViewUnderName:kContextualPanelLargeEntrypointGuide];
-    CGPoint touchLocationInEntrypointViewCoordinates =
-        [contextualPanelEntrypointView convertPoint:[gesture locationInView:nil]
-                                           fromView:nil];
-    BOOL tapInsideContextualPanelEntrypointContainer =
-        [contextualPanelEntrypointView
-            pointInside:touchLocationInEntrypointViewCoordinates
-              withEvent:nil];
+  // Don't handle gesture if it's meant for the Contextual Panel Entrypoint
+  // (gesture began in its frame) and that entrypoint is currently large.
+  // `contextualPanelEntrypointView` is nil if the entrypoint is not currently
+  // large, which means the gesture won't be blocked here.
+  UIView* contextualPanelEntrypointView = [self.layoutGuideCenter
+      referencedViewUnderName:kContextualPanelLargeEntrypointGuide];
+  CGPoint touchLocationInEntrypointViewCoordinates =
+      [contextualPanelEntrypointView convertPoint:[gesture locationInView:nil]
+                                         fromView:nil];
+  BOOL tapInsideContextualPanelEntrypointContainer =
+      [contextualPanelEntrypointView
+          pointInside:touchLocationInEntrypointViewCoordinates
+            withEvent:nil];
 
-    if (tapInsideContextualPanelEntrypointContainer) {
-      return NO;
-    }
+  if (tapInsideContextualPanelEntrypointContainer) {
+    return NO;
   }
 
   CGPoint location = [gesture locationInView:gesture.view];
@@ -504,10 +509,15 @@ const CGFloat kIpadTabSwipeDistance = 100;
 - (void)handleSwipeToNavigate:(SideSwipeGestureRecognizer*)gesture {
   if (gesture.state == UIGestureRecognizerStateBegan) {
     // Make sure the Toolbar is visible by disabling Fullscreen.
-    _animatedFullscreenDisabler =
-        std::make_unique<AnimatedScopedFullscreenDisabler>(
-            self.fullscreenController);
-    _animatedFullscreenDisabler->StartAnimation();
+    if (IsFullscreenRefactoringEnabled()) {
+      _fullscreenDisabler =
+          std::make_unique<ScopedFullscreenDisabler>(self.fullscreenHandler);
+    } else {
+      _legacyAnimatedFullscreenDisabler =
+          std::make_unique<AnimatedScopedFullscreenDisabler>(
+              self.fullscreenController);
+      _legacyAnimatedFullscreenDisabler->StartAnimation();
+    }
 
     _inSwipe = YES;
     [_sideSwipeUIControllerDelegate
@@ -555,7 +565,8 @@ const CGFloat kIpadTabSwipeDistance = 100;
              gesture.state == UIGestureRecognizerStateFailed) {
     // Enable fullscreen functionality after the Toolbar has been shown, and
     // the gesture is over.
-    _animatedFullscreenDisabler = nullptr;
+    _fullscreenDisabler = nullptr;
+    _legacyAnimatedFullscreenDisabler = nullptr;
   }
 
   __weak SideSwipeUIController* weakSelf = self;
@@ -589,15 +600,27 @@ const CGFloat kIpadTabSwipeDistance = 100;
 
     // Add horizontal stack view controller.
     CGFloat headerHeight =
-        self.fullscreenController->GetMaxViewportInsets().top;
+        IsFullscreenRefactoringEnabled()
+            ? _fullscreenBrowserAgent->insets().top
+            : self.fullscreenController->GetCurrentViewportInsets().top;
+
+    CGFloat bottomMargin = 0;
+    if (IsFullscreenRefactoringEnabled()) {
+      bottomMargin = _fullscreenBrowserAgent->insets().bottom;
+    } else {
+      bottomMargin =
+          self.fullscreenController->GetCurrentViewportInsets().bottom;
+    }
 
     if (_tabSideSwipeView) {
       [_tabSideSwipeView setFrame:frame];
       [_tabSideSwipeView setTopMargin:headerHeight];
+      [_tabSideSwipeView setBottomMargin:bottomMargin];
     } else {
       _tabSideSwipeView =
           [[CardSideSwipeView alloc] initWithFrame:frame
                                          topMargin:headerHeight
+                                      bottomMargin:bottomMargin
                                       webStateList:_webStateList
                               snapshotBrowserAgent:_snapshotBrowserAgent];
       _tabSideSwipeView.toolbarSnapshotProvider = self.toolbarSnapshotProvider;
@@ -637,8 +660,13 @@ const CGFloat kIpadTabSwipeDistance = 100;
 
   if (gesture.state == UIGestureRecognizerStateBegan) {
     // Disable fullscreen while the side swipe gesture is occurring.
-    _fullscreenDisabler =
-        std::make_unique<ScopedFullscreenDisabler>(self.fullscreenController);
+    if (IsFullscreenRefactoringEnabled()) {
+      _fullscreenDisabler = std::make_unique<ScopedFullscreenDisabler>(
+          self.fullscreenHandler, /*animated=*/false);
+    } else {
+      _fullscreenDisabler =
+          std::make_unique<ScopedFullscreenDisabler>(self.fullscreenController);
+    }
     __weak SideSwipeUIController* weakSelf = self;
     [self.tabsDelegate updateActiveTabSnapshot:^() {
       [weakSelf handleiPadSnapshotOnTabSwipe];

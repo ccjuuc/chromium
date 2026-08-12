@@ -109,7 +109,7 @@ Position LeadingCollapsibleWhitespacePosition(
     TextAffinity,
     WhitespacePositionOption = kNotConsiderNonCollapsibleWhitespace);
 
-unsigned NumEnclosingMailBlockquotes(const Position&);
+wtf_size_t NumEnclosingMailBlockquotes(const Position&);
 
 // -------------------------------------------------------------------------
 // VisiblePosition
@@ -139,15 +139,27 @@ bool CanMergeLists(const Element& first_list, const Element& second_list);
 
 // Functions returning VisibleSelection
 VisibleSelection SelectionForParagraphIteration(const VisibleSelection&);
+CORE_EXPORT SelectionInDomTree
+SelectionForParagraphIteration(const SelectionInDomTree&);
+
+// Moves a position anchored directly on table-internal structure
+// (<tbody>/<thead>/<tfoot>/<tr>) into the table cell its offset points at, so
+// callers can iterate paragraphs per-cell. |edge| selects the child after the
+// position (and the first cell within it) for kStart, or the child before the
+// position (and the last cell within it) for kEnd. Positions anchored on the
+// <table> element itself, or not on table structure at all, are returned
+// unchanged.
+enum class TableCellEdge { kStart, kEnd };
+CORE_EXPORT Position SnapIntoTableCell(const Position&, TableCellEdge edge);
 
 const String& NonBreakingSpaceString();
 
-CORE_EXPORT void TidyUpHTMLStructure(Document&);
+CORE_EXPORT void TidyUpHtmlStructure(Document&);
 
-SelectionInDOMTree CorrectedSelectionAfterCommand(const SelectionForUndoStep&,
+SelectionInDomTree CorrectedSelectionAfterCommand(const SelectionForUndoStep&,
                                                   Document*);
 void ChangeSelectionAfterCommand(LocalFrame*,
-                                 const SelectionInDOMTree&,
+                                 const SelectionInDomTree&,
                                  const SetSelectionOptions&);
 
 // -------------------------------------------------------------------------
@@ -181,6 +193,16 @@ VisiblePosition EndOfBlock(
     EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
 bool IsStartOfBlock(const VisiblePosition&);
 bool IsEndOfBlock(const VisiblePosition&);
+
+// Position-based block overloads (no VisiblePosition dependency).
+CORE_EXPORT Position StartOfBlock(
+    const Position&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+CORE_EXPORT Position EndOfBlock(
+    const Position&,
+    EditingBoundaryCrossingRule = kCannotCrossEditingBoundary);
+CORE_EXPORT bool IsStartOfBlock(const Position&);
+CORE_EXPORT bool IsEndOfBlock(const Position&);
 
 }  // namespace blink
 

@@ -4,16 +4,18 @@
 
 #include "components/optimization_guide/content/browser/page_content_metadata_observer.h"
 
-#include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
+#include "components/optimization_guide/content/browser/mock_media_transcript_provider.h"
+#include "components/optimization_guide/content/browser/page_content_proto_util.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
+#include "media/base/media_switches.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -72,6 +74,7 @@ class PageContentMetadataObserverBrowserTest
   }
 
   void OnMetaTagsChanged(blink::mojom::PageMetadataPtr page_metadata) {
+    received_metadata_null_history_.push_back(!page_metadata);
     page_metadata_ = std::move(page_metadata);
     // This may be called multiple times in some tests. Only signal the waiter
     // if it is not already ready to avoid crashing the TestFuture. The test
@@ -102,6 +105,9 @@ class PageContentMetadataObserverBrowserTest
 
   net::EmbeddedTestServer* https_server() { return https_server_.get(); }
   blink::mojom::PageMetadataPtr& page_metadata() { return page_metadata_; }
+  std::vector<bool>& received_metadata_null_history() {
+    return received_metadata_null_history_;
+  }
 
   std::unique_ptr<PageContentMetadataObserver> observer_;
   base::test::TestFuture<bool> callback_waiter_;
@@ -110,6 +116,7 @@ class PageContentMetadataObserverBrowserTest
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
 
   blink::mojom::PageMetadataPtr page_metadata_;
+  std::vector<bool> received_metadata_null_history_;
 };
 
 IN_PROC_BROWSER_TEST_F(PageContentMetadataObserverBrowserTest,
@@ -127,9 +134,63 @@ IN_PROC_BROWSER_TEST_F(PageContentMetadataObserverBrowserTest,
   observer_.reset();
 }
 
-// TODO(https://crbug.com/455915204): Test is flaky on android-arm64-tests.
-// TODO(https://crbug.com/455816130): Test is flaky on linux tests.
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+IN_PROC_BROWSER_TEST_F(PageContentMetadataObserverBrowserTest,
+                       GetCurrentMetadata) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("/meta_tags.html")));
+  CreateObserver();
+
+  // Wait until initial metadata is received from the primary main frame.
+  ASSERT_TRUE(callback_waiter_.Wait());
+
+  blink::mojom::PageMetadataPtr current_metadata =
+      observer_->GetCurrentMetadata();
+  ASSERT_TRUE(current_metadata);
+  EXPECT_EQ(current_metadata->frame_metadata.size(), 1u);
+  EXPECT_EQ(current_metadata->frame_metadata[0]->meta_tags.size(), 1u);
+  EXPECT_EQ(current_metadata->frame_metadata[0]->meta_tags[0]->name, "author");
+  EXPECT_EQ(current_metadata->frame_metadata[0]->meta_tags[0]->content, "Gary");
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(PageContentMetadataObserverBrowserTest,
+                       NullptrDispatchedOnPrimaryPageChanged) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("/meta_tags.html")));
+  CreateObserver();
+  ASSERT_TRUE(callback_waiter_.Wait());
+  EXPECT_TRUE(page_metadata());
+
+  received_metadata_null_history().clear();
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("/simple.html")));
+
+  // Upon navigation (PrimaryPageChanged), the first callback must be nullptr
+  // indicating the unknown metadata state.
+  ASSERT_GE(received_metadata_null_history().size(), 1u);
+  EXPECT_TRUE(received_metadata_null_history().front());
+
+  // Depending on IPC scheduling during `NavigateToURL`, the initial metadata
+  // update for `/simple.html` may or may not have arrived yet. If it hasn't,
+  // wait for it now.
+  if (received_metadata_null_history().size() < 2u) {
+    callback_waiter_.Clear();
+    ASSERT_TRUE(callback_waiter_.Wait());
+  }
+
+  // Verify that after the initial nullptr dispatch, the second callback
+  // delivered the new page's non-null metadata once its IPC arrived.
+  ASSERT_EQ(received_metadata_null_history().size(), 2u);
+  EXPECT_FALSE(received_metadata_null_history().back());
+
+  observer_.reset();
+}
+
+// TODO(https://crbug.com/455816130): Test is flaky on component browser tests.
+// TODO(https://crbug.com/460575998): Test is flaky on fuchsia-fyi-x64-asan.
+// TODO(https://crbug.com/460575998): Test is flaky on linux, android-arm-64 and
+// chromeos tests.
+// TODO(crbug.com/542608093): Test is flaky on linux-win-cross-rel and windows.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA) || \
+    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_NoMetaTags DISABLED_NoMetaTags
 #else
 #define MAYBE_NoMetaTags NoMetaTags
@@ -385,6 +446,206 @@ IN_PROC_BROWSER_TEST_F(PageContentMetadataObserverBrowserTest,
     }
   }
   EXPECT_TRUE(found_iframe_metadata);
+  observer_.reset();
+}
+
+class PageContentMetadataObserverBrowserWithMediaTranscriptionTest
+    : public PageContentMetadataObserverBrowserTest {
+ public:
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeatures(
+        {media::kMediaTrasncriptsFlagInPageMetadata}, {});
+    PageContentMetadataObserverBrowserTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionObserved) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("/simple.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  std::vector<std::string> names = {kHasMediaTranscripts};
+  observer_ = std::make_unique<PageContentMetadataObserver>(
+      GetWebContents(), names,
+      base::BindRepeating(
+          &PageContentMetadataObserverBrowserTest::OnMetaTagsChanged,
+          base::Unretained(this)));
+
+  ASSERT_TRUE(callback_waiter_.Wait());
+  callback_waiter_.Clear();
+
+  content::RenderFrameHost* rfh = GetWebContents()->GetPrimaryMainFrame();
+  auto* frame_observer = MediaTranscriptObserver::GetForCurrentDocument(rfh);
+  ASSERT_TRUE(frame_observer);
+  frame_observer->OnTranscriptionBegin(rfh);
+
+  ASSERT_TRUE(callback_waiter_.Wait());
+
+  blink::mojom::PageMetadataPtr& metadata = page_metadata();
+  ASSERT_TRUE(metadata);
+  ASSERT_EQ(metadata->frame_metadata.size(), 1u);
+  EXPECT_TRUE(metadata->frame_metadata.back()->has_media_transcripts);
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionObservedPerFrame) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("a.com", "/iframe.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  std::vector<std::string> names = {kHasMediaTranscripts};
+  observer_ = std::make_unique<PageContentMetadataObserver>(
+      GetWebContents(), names,
+      base::BindRepeating(
+          &PageContentMetadataObserverBrowserTest::OnMetaTagsChanged,
+          base::Unretained(this)));
+
+  ASSERT_TRUE(callback_waiter_.Wait());
+  callback_waiter_.Clear();
+
+  content::RenderFrameHost* rfh = GetWebContents()->GetPrimaryMainFrame();
+  auto* frame_observer = MediaTranscriptObserver::GetForCurrentDocument(rfh);
+  ASSERT_TRUE(frame_observer);
+  frame_observer->OnTranscriptionBegin(rfh);
+
+  ASSERT_TRUE(callback_waiter_.Wait());
+
+  blink::mojom::PageMetadataPtr& metadata = page_metadata();
+  ASSERT_TRUE(metadata);
+  ASSERT_EQ(metadata->frame_metadata.size(), 2u);
+
+  GURL main_url = https_server()->GetURL("a.com", "/iframe.html");
+
+  for (const auto& frame_metadata : metadata->frame_metadata) {
+    if (frame_metadata->url == main_url) {
+      EXPECT_TRUE(frame_metadata->has_media_transcripts);
+    } else {
+      EXPECT_FALSE(frame_metadata->has_media_transcripts);
+    }
+  }
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionNotObservedIfNotRequested) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("/simple.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  // names_ does not contain kHasMediaTranscripts by default in the test
+  // fixture.
+  CreateObserver();
+  ProcessPendingIPC();
+
+  content::RenderFrameHost* rfh = GetWebContents()->GetPrimaryMainFrame();
+  EXPECT_EQ(MediaTranscriptObserver::GetForCurrentDocument(rfh), nullptr);
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionRemovedOnPrimaryPageChanged) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("a.com", "/simple.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  std::vector<std::string> names = {kHasMediaTranscripts};
+  observer_ = std::make_unique<PageContentMetadataObserver>(
+      GetWebContents(), names,
+      base::BindRepeating(
+          &PageContentMetadataObserverBrowserTest::OnMetaTagsChanged,
+          base::Unretained(this)));
+
+  content::RenderFrameHost* rfh = GetWebContents()->GetPrimaryMainFrame();
+  EXPECT_NE(MediaTranscriptObserver::GetForCurrentDocument(rfh), nullptr);
+
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("b.com", "/simple.html")));
+
+  // Old frame might be gone or have no observer.
+  // New frame should have observer.
+  content::RenderFrameHost* new_rfh = GetWebContents()->GetPrimaryMainFrame();
+  EXPECT_NE(MediaTranscriptObserver::GetForCurrentDocument(new_rfh), nullptr);
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionRemovedOnSubframeNavigation) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("a.com", "/iframe.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  std::vector<std::string> names = {kHasMediaTranscripts};
+  observer_ = std::make_unique<PageContentMetadataObserver>(
+      GetWebContents(), names,
+      base::BindRepeating(
+          &PageContentMetadataObserverBrowserTest::OnMetaTagsChanged,
+          base::Unretained(this)));
+
+  GURL iframe_url = https_server()->GetURL("a.com", "/simple.html");
+
+  ASSERT_TRUE(content::ExecJs(
+      GetWebContents(),
+      content::JsReplace("document.querySelector('#test_iframe').src = $1",
+                         iframe_url)));
+  WaitForPageLoadedAndIPCs();
+
+  // Find subframe.
+  bool found_subframe = false;
+  GetWebContents()->GetPrimaryMainFrame()->ForEachRenderFrameHost(
+      [&](content::RenderFrameHost* rfh) {
+        if (rfh->GetParent()) {
+          found_subframe = true;
+          // Verify observer attached to new subframe Document.
+          EXPECT_NE(MediaTranscriptObserver::GetForCurrentDocument(rfh),
+                    nullptr);
+        }
+      });
+  ASSERT_TRUE(found_subframe);
+
+  observer_.reset();
+}
+
+IN_PROC_BROWSER_TEST_F(
+    PageContentMetadataObserverBrowserWithMediaTranscriptionTest,
+    MediaTranscriptionRemovedOnRenderFrameDeleted) {
+  ASSERT_TRUE(LoadPage(https_server()->GetURL("a.com", "/iframe.html")));
+
+  auto mock_provider = std::make_unique<MockMediaTranscriptProvider>();
+  MediaTranscriptProvider::SetFor(GetWebContents(), std::move(mock_provider));
+
+  std::vector<std::string> names = {kHasMediaTranscripts};
+  observer_ = std::make_unique<PageContentMetadataObserver>(
+      GetWebContents(), names,
+      base::BindRepeating(
+          &PageContentMetadataObserverBrowserTest::OnMetaTagsChanged,
+          base::Unretained(this)));
+
+  ASSERT_TRUE(content::ExecJs(
+      GetWebContents(), "document.querySelector('#test_iframe').remove();"));
+  ProcessPendingIPC();
+
+  // We can't easily verify "removed" because RFH is gone.
+  // But we verified logic in code.
+  // The important part is no crash.
+
   observer_.reset();
 }
 

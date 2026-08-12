@@ -5,8 +5,8 @@
 import {sendWithPromise} from 'chrome://resources/js/cr.js';
 
 /**
- * @fileoverview A helper object used by the both the Crostini and Plugin VM
- * sections to manage the file sharing and USB sharing.
+ * @fileoverview A helper used by guest OS settings pages to manage file and
+ * USB sharing.
  */
 
 /**
@@ -32,16 +32,14 @@ export const ARC_VM_TYPE = 'arcvm';
 export const BAGUETTE_VM_TYPE = 'baguette';
 export const BRUSCHETTA_TYPE = 'bruschetta';
 export const CROSTINI_TYPE = 'crostini';
-export const PLUGIN_VM_TYPE = 'pluginVm';
 export const TERMINA_VM_TYPE = 'termina';
 
-export type GuestOsType = typeof CROSTINI_TYPE|typeof PLUGIN_VM_TYPE|
-    typeof ARC_VM_TYPE|typeof BRUSCHETTA_TYPE|typeof BAGUETTE_VM_TYPE;
+export type GuestOsType = typeof CROSTINI_TYPE|typeof ARC_VM_TYPE|
+    typeof BRUSCHETTA_TYPE|typeof BAGUETTE_VM_TYPE;
 
 export function getVMNameForGuestOsType(guestOs: GuestOsType): string {
   return {
     [CROSTINI_TYPE]: TERMINA_VM_TYPE,
-    [PLUGIN_VM_TYPE]: 'PvmDefault',
     [ARC_VM_TYPE]: ARC_VM_TYPE,
     [BRUSCHETTA_TYPE]: 'bru',
     [BAGUETTE_VM_TYPE]: TERMINA_VM_TYPE,

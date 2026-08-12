@@ -22,6 +22,7 @@ class MockGpuChannel : public mojom::GpuChannel {
   MOCK_METHOD0(CrashForTesting, void());
   MOCK_METHOD0(TerminateForTesting, void());
   MOCK_METHOD1(GetChannelToken, void(GetChannelTokenCallback));
+  MOCK_METHOD1(GetGPUInfo, void(GetGPUInfoCallback));
   MOCK_METHOD0(Flush, bool());
 
   MOCK_METHOD1(GetSharedMemoryForFlushId,
@@ -61,10 +62,6 @@ class MockGpuChannel : public mojom::GpuChannel {
                void(int32_t,
                     mojo::PendingAssociatedReceiver<mojom::DCOMPTexture>,
                     CreateDCOMPTextureCallback));
-  MOCK_METHOD3(RegisterOverlayStateObserver,
-               void(mojo::PendingRemote<gpu::mojom::OverlayStateObserver>,
-                    const gpu::Mailbox&,
-                    RegisterOverlayStateObserverCallback));
   MOCK_METHOD4(CopyToGpuMemoryBufferAsync,
                void(const Mailbox&,
                     const std::vector<SyncToken>&,

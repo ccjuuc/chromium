@@ -46,6 +46,7 @@
 #include "media/ffmpeg/scoped_av_packet.h"
 #include "media/filters/blocking_url_protocol.h"
 #include "media/media_buildflags.h"
+#include "third_party/ffmpeg/libavutil/rational.h"
 
 // FFmpeg forward declarations.
 struct AVFormatContext;
@@ -127,6 +128,7 @@ class MEDIA_EXPORT FFmpegDemuxerStream : public DemuxerStream {
 
   AVStream* av_stream() const { return stream_; }
 
+  const AVRational& stream_time_base() const { return stream_time_base_; }
   base::TimeDelta stream_start_time() const { return stream_start_time_; }
 
  private:
@@ -154,11 +156,12 @@ class MEDIA_EXPORT FFmpegDemuxerStream : public DemuxerStream {
   raw_ptr<FFmpegDemuxer> demuxer_;
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   raw_ptr<AVStream> stream_;
+  AVRational stream_time_base_{0, 1};
   base::TimeDelta stream_start_time_ = kNoTimestamp;
   std::optional<base::TimeDelta> initial_start_padding_;
   std::unique_ptr<AudioDecoderConfig> audio_config_;
   std::unique_ptr<VideoDecoderConfig> video_config_;
-  raw_ptr<MediaLog> media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
   Type type_ = UNKNOWN;
   StreamLiveness liveness_ = StreamLiveness::kUnknown;
   base::TimeDelta duration_;
@@ -213,7 +216,7 @@ class MEDIA_EXPORT FFmpegDemuxer : public Demuxer {
   void Seek(base::TimeDelta time, PipelineStatusCallback cb) override;
   bool IsSeekable() const override;
   base::Time GetTimelineOffset() const override;
-  std::vector<DemuxerStream*> GetAllStreams() override;
+  std::vector<raw_ptr<DemuxerStream>> GetAllStreams() override;
   base::TimeDelta GetStartTime() const override;
   int64_t GetMemoryUsage() const override;
   std::optional<container_names::MediaContainerName> GetContainerForMetrics()
@@ -350,7 +353,7 @@ class MEDIA_EXPORT FFmpegDemuxer : public Demuxer {
   // integrate with libavformat.
   raw_ptr<DataSource> data_source_;
 
-  raw_ptr<MediaLog> media_log_;
+  const std::unique_ptr<MediaLog> media_log_;
 
   // Derived bitrate after initialization has completed.
   int bitrate_ = 0;

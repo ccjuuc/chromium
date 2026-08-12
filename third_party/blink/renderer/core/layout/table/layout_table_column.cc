@@ -59,33 +59,36 @@ void LayoutTableColumn::Trace(Visitor* visitor) const {
 void LayoutTableColumn::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   if (diff.HasDifference()) {
     if (LayoutTable* table = Table()) {
       if (old_style && diff.NeedsNormalPaintInvalidation()) {
         // Regenerate table borders if needed
-        if (!old_style->BorderVisuallyEqual(StyleRef()))
+        if (!old_style->BorderVisuallyEqual(new_style)) {
           table->GridBordersChanged();
+        }
         // Table paints column background. Tell table to repaint.
-        if (StyleRef().HasBackground() || old_style->HasBackground())
+        if (new_style.HasBackground() || old_style->HasBackground()) {
           table->SetBackgroundNeedsFullPaintInvalidation();
+        }
       }
-      if (diff.NeedsLayout()) {
+      if (diff.NeedsFullLayout()) {
         table->SetIntrinsicLogicalWidthsDirty();
         if (old_style &&
             TableTypes::CreateColumn(*old_style,
                                      /* default_inline_size */ std::nullopt,
                                      table->StyleRef().IsFixedTableLayout()) !=
                 TableTypes::CreateColumn(
-                    StyleRef(), /* default_inline_size */ std::nullopt,
+                    new_style, /* default_inline_size */ std::nullopt,
                     table->StyleRef().IsFixedTableLayout())) {
           table->GridBordersChanged();
         }
       }
     }
   }
-  LayoutBox::StyleDidChange(diff, old_style, style_change_context);
+  LayoutBox::StyleDidChange(diff, old_style, new_style, style_change_context);
 }
 
 void LayoutTableColumn::ImageChanged(WrappedImagePtr, CanDeferInvalidation) {
@@ -162,7 +165,7 @@ void LayoutTableColumn::UpdateFromElement() {
         layout_invalidation_reason::kAttributeChanged);
     if (LayoutTable* table = Table()) {
       table->GridBordersChanged();
-      if (Style()->HasBackground() || TableHasColumnsWithBackground(table)) {
+      if (StyleRef().HasBackground() || TableHasColumnsWithBackground(table)) {
         table->SetBackgroundNeedsFullPaintInvalidation();
       }
     }
@@ -270,7 +273,8 @@ PhysicalRect LayoutTableColumn::BoundingBoxRelativeToFirstFragment() const {
 void LayoutTableColumn::QuadsInAncestorInternal(
     Vector<gfx::QuadF>& quads,
     const LayoutBoxModelObject* ancestor,
-    MapCoordinatesFlags mode) const {
+    MapCoordinatesFlags mode,
+    BoxQuadType) const {
   NOT_DESTROYED();
   // Offset from the root fragmentation context to the first synthesized table
   // column fragment. When mapping to ancestors, it's all about the offsets from

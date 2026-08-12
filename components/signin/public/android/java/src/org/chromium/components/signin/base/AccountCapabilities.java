@@ -7,6 +7,7 @@ package org.chromium.components.signin.base;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.signin.AccountCapabilitiesConstants;
@@ -21,6 +22,7 @@ import java.util.Map;
  * counterpart.
  */
 @NullMarked
+@JNINamespace("signin")
 public class AccountCapabilities {
     private final Map<String, Boolean> mAccountCapabilities;
 
@@ -100,20 +102,6 @@ public class AccountCapabilities {
     }
 
     /**
-     * @return canUseChromeOSGenerativeAi capability value.
-     */
-    public @Tribool int canUseChromeOSGenerativeAi() {
-        return getCapabilityByName(AccountCapabilitiesConstants.CAN_USE_CHROMEOS_GENERATIVE_AI);
-    }
-
-    /**
-     * @return canUseCopyeditorFeature capability value.
-     */
-    public @Tribool int canUseCopyeditorFeature() {
-        return getCapabilityByName(AccountCapabilitiesConstants.CAN_USE_COPYEDITOR_FEATURE_NAME);
-    }
-
-    /**
      * @return canUseDevToolsGenerativeAiFeatures capability value.
      */
     public @Tribool int canUseDevToolsGenerativeAiFeatures() {
@@ -131,19 +119,11 @@ public class AccountCapabilities {
     }
 
     /**
-     * @return canUseGenerativeAiInRecorderApp capability value.
+     * @return canUseGeminiInChromeCapability capability value.
      */
-    public @Tribool int canUseGenerativeAiInRecorderApp() {
+    public @Tribool int canUseGeminiInChromeCapability() {
         return getCapabilityByName(
-                AccountCapabilitiesConstants.CAN_USE_GENERATIVE_AI_IN_RECORDER_APP);
-    }
-
-    /**
-     * @return canUseGenerativeAiPhotoEditing capability value.
-     */
-    public @Tribool int canUseGenerativeAiPhotoEditing() {
-        return getCapabilityByName(
-                AccountCapabilitiesConstants.CAN_USE_GENERATIVE_AI_PHOTO_EDITING);
+                AccountCapabilitiesConstants.CAN_USE_GEMINI_IN_CHROME_CAPABILITY_NAME);
     }
 
     /**
@@ -186,6 +166,15 @@ public class AccountCapabilities {
     }
 
     /**
+     * @return isSubjectToAccountLevelEnterprisePolicies capability value.
+     */
+    public @Tribool int isSubjectToAccountLevelEnterprisePolicies() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_ACCOUNT_LEVEL_ENTERPRISE_POLICIES_CAPABILITY_NAME);
+    }
+
+    /**
      * @return isSubjectToChromePrivacySandboxRestrictedMeasurementNotice capability value.
      */
     public @Tribool int isSubjectToChromePrivacySandboxRestrictedMeasurementNotice() {
@@ -208,6 +197,23 @@ public class AccountCapabilities {
     public @Tribool int isSubjectToParentalControls() {
         return getCapabilityByName(
                 AccountCapabilitiesConstants.IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return isSubjectToUniversalOptOut capability value.
+     */
+    public @Tribool int isSubjectToUniversalOptOut() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return supportsWalletPrivatePassesInAutofill capability value.
+     */
+    public @Tribool int supportsWalletPrivatePassesInAutofill() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants.SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME);
     }
 
     /** keep-sorted end */

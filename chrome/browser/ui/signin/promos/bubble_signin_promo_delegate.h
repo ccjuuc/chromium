@@ -5,11 +5,13 @@
 #ifndef CHROME_BROWSER_UI_SIGNIN_PROMOS_BUBBLE_SIGNIN_PROMO_DELEGATE_H_
 #define CHROME_BROWSER_UI_SIGNIN_PROMOS_BUBBLE_SIGNIN_PROMO_DELEGATE_H_
 
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/sync/service/local_data_description.h"
 
 struct AccountInfo;
+class Profile;
 
 namespace signin_metrics {
 enum class AccessPoint;
@@ -23,8 +25,7 @@ class WebContents;
 class BubbleSignInPromoDelegate {
  public:
   BubbleSignInPromoDelegate(content::WebContents& web_contents,
-                            signin_metrics::AccessPoint access_point,
-                            syncer::LocalDataItemModel::DataId data_id);
+                            signin_metrics::AccessPoint access_point);
 
   BubbleSignInPromoDelegate(BubbleSignInPromoDelegate&) = delete;
   BubbleSignInPromoDelegate& operator=(const BubbleSignInPromoDelegate&) =
@@ -38,12 +39,48 @@ class BubbleSignInPromoDelegate {
 
   content::WebContents* GetWebContents() { return web_contents_.get(); }
 
+ protected:
+  base::WeakPtr<content::WebContents> web_contents_;
+  signin_metrics::AccessPoint access_point_;
+
+  // Subclasses must override this to register their specific callback.
+  virtual void OnSignInPromoAccepted(Profile* profile) = 0;
+
+  void RegisterPostSignInCallback(Profile* profile, base::OnceClosure callback);
+};
+
+class BubbleSignInPromoForSyncableDataTypeDelegate
+    : public BubbleSignInPromoDelegate {
+ public:
+  BubbleSignInPromoForSyncableDataTypeDelegate(
+      content::WebContents& web_contents,
+      signin_metrics::AccessPoint access_point,
+      syncer::LocalDataItemModel::DataId data_id);
+  ~BubbleSignInPromoForSyncableDataTypeDelegate() override;
+
  private:
+  void OnSignInPromoAccepted(Profile* profile) override;
+
+  // Helper to handle syncable data type after sign-in.
+  void MaybeHandleSyncableDataTypeAfterSignIn(Profile* profile);
+
   // Used to move the local data item to the account storage once the sign in
   // has been completed.
   const syncer::LocalDataItemModel::DataId data_id_;
-  base::WeakPtr<content::WebContents> web_contents_;
-  signin_metrics::AccessPoint access_point_;
+};
+
+class DefaultBubbleSignInPromoDelegate : public BubbleSignInPromoDelegate {
+ public:
+  DefaultBubbleSignInPromoDelegate(
+      content::WebContents& web_contents,
+      signin_metrics::AccessPoint access_point,
+      base::OnceClosure post_signin_callback = base::OnceClosure());
+  ~DefaultBubbleSignInPromoDelegate() override;
+
+ private:
+  void OnSignInPromoAccepted(Profile* profile) override;
+
+  base::OnceClosure post_signin_callback_;
 };
 
 #endif  // CHROME_BROWSER_UI_SIGNIN_PROMOS_BUBBLE_SIGNIN_PROMO_DELEGATE_H_

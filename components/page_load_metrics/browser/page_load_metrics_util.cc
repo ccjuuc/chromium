@@ -184,7 +184,6 @@ std::optional<base::TimeDelta> GetNonPrerenderingBackgroundStartTiming(
     const PageLoadMetricsObserverDelegate& delegate) {
   switch (delegate.GetPrerenderingState()) {
     case PrerenderingState::kNoPrerendering:
-    case PrerenderingState::kInPreview:
       if (delegate.StartedInForeground()) {
         return delegate.GetTimeToFirstBackground();
       } else {
@@ -213,16 +212,6 @@ bool EventOccurredBeforeNonPrerenderingBackgroundStart(
   return event < bg_start;
 }
 
-// Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
-// We'll left the old version for a while.
-// TODO(crbug.com/40222513): Use the above version and delete this.
-bool EventOccurredBeforeNonPrerenderingBackgroundStart(
-    const PageLoadMetricsObserverDelegate& delegate,
-    const page_load_metrics::mojom::PageLoadTiming& timing,
-    const base::TimeDelta& event) {
-  return EventOccurredBeforeNonPrerenderingBackgroundStart(delegate, event);
-}
-
 base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
     const PageLoadMetricsObserverDelegate& delegate,
     const base::TimeDelta& event) {
@@ -230,7 +219,6 @@ base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
 
   switch (delegate.GetPrerenderingState()) {
     case PrerenderingState::kNoPrerendering:
-    case PrerenderingState::kInPreview:
       return event;
     case PrerenderingState::kInPrerendering:
     case PrerenderingState::kActivatedNoActivationStart:
@@ -241,16 +229,6 @@ base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
       return std::max(corrected, zero);
     }
   }
-}
-
-// Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
-// We'll left the old version for a while.
-// TODO(crbug.com/40222513): Use the above version and delete this.
-base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
-    const PageLoadMetricsObserverDelegate& delegate,
-    const page_load_metrics::mojom::PageLoadTiming& timing,
-    const base::TimeDelta& event) {
-  return CorrectEventAsNavigationOrActivationOrigined(delegate, event);
 }
 
 PageAbortInfo GetPageAbortInfo(
@@ -388,4 +366,21 @@ bool IsServiceWorkerControlledOrSyntheticResponseEnabled(
          IsServiceWorkerSyntheticResponseEnabled(delegate);
 }
 
+namespace {
+// These are the high bounds of each bucket, in enum order. The index into this
+// array is cast to an enum value when recording UKM. These should correspond to
+// the upper bounds of the BitsPerPixelExponential enum in
+// //tools/metrics/histograms/enums.xml.
+static constexpr double kLCPEntropyBucketThresholds[] = {
+    0.0,  0.00001, 0.0001, 0.001, 0.01, 0.02, 0.03, 0.04,  0.05,   0.06,   0.07,
+    0.08, 0.09,    0.1,    0.2,   0.3,  0.4,  0.5,  0.6,   0.7,    0.8,    0.9,
+    1.0,  2.0,     3.0,    4.0,   5.0,  6.0,  7.0,  8.0,   9.0,    10.0,   20.0,
+    30.0, 40.0,    50.0,   60.0,  70.0, 80.0, 90.0, 100.0, 1000.0, 10000.0};
+}  // namespace
+
+int64_t CalculateLCPEntropyBucket(double bpp) {
+  return std::lower_bound(std::begin(kLCPEntropyBucketThresholds),
+                          std::end(kLCPEntropyBucketThresholds), bpp) -
+         std::begin(kLCPEntropyBucketThresholds);
+}
 }  // namespace page_load_metrics

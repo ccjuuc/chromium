@@ -63,7 +63,9 @@
 #include "third_party/blink/renderer/core/css/css_selector_watch.h"
 #include "third_party/blink/renderer/core/css/css_style_declaration.h"
 #include "third_party/blink/renderer/core/css/css_style_rule.h"
+#include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
+#include "third_party/blink/renderer/core/css/css_variable_data.h"
 #include "third_party/blink/renderer/core/css/element_rule_collector.h"
 #include "third_party/blink/renderer/core/css/font_face.h"
 #include "third_party/blink/renderer/core/css/out_of_flow_data.h"
@@ -92,6 +94,7 @@
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 #include "third_party/blink/renderer/core/dom/layout_tree_builder_traversal.h"
+#include "third_party/blink/renderer/core/dom/node-inl.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/space_split_string.h"
 #include "third_party/blink/renderer/core/dom/text.h"
@@ -107,6 +110,7 @@
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
+#include "third_party/blink/renderer/core/html/shadow/shadow_element_utils.h"
 #include "third_party/blink/renderer/core/html/track/text_track.h"
 #include "third_party/blink/renderer/core/html/track/text_track_cue.h"
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_cue.h"
@@ -128,8 +132,7 @@
 #include "third_party/blink/renderer/core/style/style_initial_data.h"
 #include "third_party/blink/renderer/core/style_property_shorthand.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
-#include "third_party/blink/renderer/core/svg/svg_svg_element.h"
-#include "third_party/blink/renderer/core/view_transition/view_transition_pseudo_element_base.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition_transition_element.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -157,6 +160,13 @@ bool IsPseudoElementWithUAStyle(PseudoId pseudo_id) {
     case kPseudoIdScrollButtonBlockEnd:
     case kPseudoIdScrollMarker:
     case kPseudoIdOverscrollAreaParent:
+    case kPseudoIdViewTransition:
+    case kPseudoIdViewTransitionGroup:
+    case kPseudoIdViewTransitionGroupChildren:
+    case kPseudoIdViewTransitionImagePair:
+    case kPseudoIdViewTransitionOld:
+    case kPseudoIdViewTransitionNew:
+    case kPseudoIdSkeleton:
       return true;
     default:
       return false;
@@ -256,13 +266,13 @@ bool HasAnimationsOrTransitions(const StyleResolverState& state) {
 }
 
 bool HasTimelines(const StyleResolverState& state) {
-  if (state.StyleBuilder().ScrollTimelineName()) {
+  if (!state.StyleBuilder().ScrollTimelineName().empty()) {
     return true;
   }
-  if (state.StyleBuilder().ViewTimelineName()) {
+  if (!state.StyleBuilder().ViewTimelineName().empty()) {
     return true;
   }
-  if (state.StyleBuilder().TimelineScope()) {
+  if (!state.StyleBuilder().TimelineScope().IsNone()) {
     return true;
   }
   if (ElementAnimations* element_animations = GetElementAnimations(state)) {
@@ -388,15 +398,6 @@ void MaybeResetCascade(StyleCascade& cascade) {
 #endif  // DCHECK_IS_ON()
 }
 
-bool TextAutosizingMultiplierChanged(const StyleResolverState& state,
-                                     const ComputedStyle& base_computed_style) {
-  // Note that |old_style| can be a style replaced by
-  // TextAutosizer::ApplyMultiplier.
-  const ComputedStyle* old_style = state.GetElement().GetComputedStyle();
-  return old_style && (old_style->TextAutosizingMultiplier() !=
-                       base_computed_style.TextAutosizingMultiplier());
-}
-
 PseudoId GetPseudoId(const Element& element, ElementRuleCollector* collector) {
   if (element.IsPseudoElement()) {
     return element.GetPseudoIdForStyling();
@@ -440,7 +441,7 @@ void ApplyLengthConversionFlags(StyleResolverState& state) {
     builder.SetHasEmUnits();
   }
   if (flags & static_cast<Flags>(Flag::kRootFontRelative)) {
-    builder.SetHasRootFontRelativeUnits();
+    builder.SetHasRootRelativeUnits();
   }
   if (flags & static_cast<Flags>(Flag::kGlyphRelative)) {
     builder.SetHasGlyphRelativeUnits();
@@ -488,6 +489,7 @@ void ApplyLengthConversionFlags(StyleResolverState& state) {
   }
   if (flags & static_cast<Flags>(Flag::kRlhRelative)) {
     builder.SetHasLineHeightRelativeUnits();
+    builder.SetHasRootRelativeUnits();
     UseCounter::Count(state.GetDocument(), WebFeature::kHasRlhUnits);
   }
   if (flags & static_cast<Flags>(Flag::kChRelative)) {
@@ -509,13 +511,17 @@ void ApplyInertness(StyleResolverState& state) {
   std::optional<bool> css_inert;
 
   if (state.StyleBuilder().Interactivity() == EInteractivity::kInert &&
-      !state.StyleBuilder().InteractivityIsInherited() &&
-      !state.StyleBuilder().IsCSSInert()) {
-    // If the computed value of 'interactivity' is 'inert', set the internal
-    // CSS inertness flag to true. With this flag set, it is not possible to
-    // escape CSS inertness in the subtree with 'interactivity' set to 'auto'
-    // in a descendant.
+      !state.StyleBuilder().InteractivityIsInherited()) {
+    // If we applied interactivity:inert to this element, we also need to
+    // set IsCSSInert to true. With this flag set, it is not possible to escape
+    // CSS inertness in the subtree with 'interactivity' set to 'auto' in a
+    // descendant.
+    //
     // TODO(crbug.com/413291835): This is not in line with the current spec.
+    //
+    // We explicitly set css_inert even if the inherited IsCSSInert is already
+    // true because we need independent property inheritance from an ancestor
+    // to stop by setting IsCSSInertIsInherited to false.
     css_inert = true;
   }
 
@@ -636,9 +642,7 @@ static void CollectScopedResolversForHostedShadowTrees(
   }
 }
 
-StyleResolver::StyleResolver(Document& document)
-    : initial_style_(ComputedStyle::GetInitialStyleSingleton()),
-      document_(document) {
+StyleResolver::StyleResolver(Document& document) : document_(document) {
   UpdateMediaType();
 }
 
@@ -656,11 +660,9 @@ namespace {
 
 inline ScopedStyleResolver* ScopedResolverFor(const Element& element) {
   TreeScope* tree_scope = &element.GetTreeScope();
-  if (RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-    if (const auto* svg_element = DynamicTo<SVGElement>(element)) {
-      if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
-        tree_scope = &corresponding->GetTreeScope();
-      }
+  if (const auto* svg_element = DynamicTo<SVGElement>(element)) {
+    if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
+      tree_scope = &corresponding->GetTreeScope();
     }
   }
   if (ScopedStyleResolver* resolver = tree_scope->GetScopedStyleResolver()) {
@@ -702,12 +704,12 @@ inline UAShadowPseudoResult UAShadowPseudoCascading(const Element& element) {
   // this (developer-expected) behavior to those existing
   // pseudo-elements.  (It's possible that we could, but it would
   // require a good bit of compatibility analysis.)
-  DCHECK(shadow_pseudo_id.empty() || !shadow_pseudo_id.StartsWith("-") ||
-         shadow_pseudo_id.StartsWith("-webkit-") ||
-         shadow_pseudo_id.StartsWith("-internal-"))
+  DCHECK(shadow_pseudo_id.empty() || !shadow_pseudo_id.starts_with("-") ||
+         shadow_pseudo_id.starts_with("-webkit-") ||
+         shadow_pseudo_id.starts_with("-internal-"))
       << "shadow pseudo IDs should either begin with -webkit- or -internal- "
          "or not begin with a -";
-  return {true, shadow_pseudo_id.StartsWith("-")};
+  return {true, shadow_pseudo_id.starts_with("-")};
 }
 
 // Matches :host and :host-context rules if the element is a shadow host.
@@ -735,15 +737,16 @@ void MatchSlottedRules(const Element&,
 void MatchSlottedRulesForUAHost(const Element& element,
                                 ElementRuleCollector& collector,
                                 StyleRuleUsageTracker* tracker) {
-  if (element.ShadowPseudoId() !=
-      shadow_element_names::kPseudoInputPlaceholder) {
+  if (shadow_element_utils::PseudoIdForShadowElementName(
+          element.ShadowPseudoId()) == kPseudoIdNone) {
     return;
   }
 
-  // We allow ::placeholder pseudo-element after ::slotted(). Since we are
-  // matching such pseudo-elements starting from inside the UA shadow DOM of
-  // the element having the placeholder, we need to match ::slotted rules from
-  // the scopes to which the placeholder's host element may be slotted.
+  // We allow UA shadow pseudo-elements such as ::placeholder after ::slotted().
+  // Since we are matching such pseudo-elements starting from inside the UA
+  // shadow DOM of the element having the placeholder, we need to match
+  // ::slotted rules from the scopes to which the placeholder's host element may
+  // be slotted.
   //
   // Example:
   //
@@ -1072,26 +1075,45 @@ bool IsInMediaUAShadow(const Element& element) {
 
 }  // namespace
 
+void StyleResolver::SetZoomedInitialLineWidths(float zoom,
+                                               ComputedStyleBuilder& builder) {
+  builder.SetBorderTopWidth(StyleBuilderConverter::ClampLineWidth(
+      ComputedStyleInitialValues::InitialBorderTopWidth() * zoom));
+  builder.SetBorderRightWidth(StyleBuilderConverter::ClampLineWidth(
+      ComputedStyleInitialValues::InitialBorderRightWidth() * zoom));
+  builder.SetBorderBottomWidth(StyleBuilderConverter::ClampLineWidth(
+      ComputedStyleInitialValues::InitialBorderBottomWidth() * zoom));
+  builder.SetBorderLeftWidth(StyleBuilderConverter::ClampLineWidth(
+      ComputedStyleInitialValues::InitialBorderLeftWidth() * zoom));
+  builder.SetOutlineWidth(StyleBuilderConverter::ClampLineWidth(
+      ComputedStyleInitialValues::InitialOutlineWidth() * zoom));
+  builder.SetColumnRuleWidthInternal(
+      GapDataList<int>(StyleBuilderConverter::ClampLineWidth(
+          ComputedStyleInitialValues::InitialColumnRuleWidth()
+              .GetLegacyValue() *
+          zoom)));
+  builder.SetRowRuleWidthInternal(
+      GapDataList<int>(StyleBuilderConverter::ClampLineWidth(
+          ComputedStyleInitialValues::InitialRowRuleWidth().GetLegacyValue() *
+          zoom)));
+}
+
 template <typename Functor>
 void StyleResolver::ForEachUARulesForElement(const Element& element,
                                              ElementRuleCollector* collector,
                                              Functor& func) const {
   CSSDefaultStyleSheets& default_style_sheets =
       CSSDefaultStyleSheets::Instance();
-  if (!print_media_type_) {
-    if (element.IsHTMLElement() || element.IsPseudoElement() ||
-        element.IsVTTElement()) [[likely]] {
-      func(default_style_sheets.DefaultHtmlStyle(), kHTMLUASheet);
-    } else if (element.IsSVGElement()) {
-      func(default_style_sheets.DefaultSVGStyle(), kSVGUASheet);
-    } else if (element.namespaceURI() == mathml_names::kNamespaceURI) {
-      func(default_style_sheets.DefaultMathMLStyle(), kMathMLUASheet);
-    }
-    if (Fullscreen::HasFullscreenElements()) {
-      func(default_style_sheets.DefaultFullscreenStyle(), kFullscreenUASheet);
-    }
-  } else {
-    func(default_style_sheets.DefaultPrintStyle(), kPrintUASheet);
+  if (element.IsHTMLElement() || element.IsPseudoElement() ||
+      element.IsVTTElement()) [[likely]] {
+    func(default_style_sheets.DefaultHtmlStyle(), kHTMLUASheet);
+  } else if (element.IsSVGElement()) {
+    func(default_style_sheets.DefaultSVGStyle(), kSVGUASheet);
+  } else if (element.namespaceURI() == mathml_names::kNamespaceURI) {
+    func(default_style_sheets.DefaultMathMLStyle(), kMathMLUASheet);
+  }
+  if (Fullscreen::HasFullscreenElements()) {
+    func(default_style_sheets.DefaultFullscreenStyle(), kFullscreenUASheet);
   }
 
   // In quirks mode, we match rules from the quirks user agent sheet.
@@ -1124,10 +1146,10 @@ void StyleResolver::ForEachUARulesForElement(const Element& element,
       default_style_sheets.DefaultPseudoElementStyleOrNull()) {
     func(default_style_sheets.DefaultPseudoElementStyleOrNull(),
          kPseudoElementUASheet);
-  } else if (IsTransitionPseudoElement(pseudo_id)) {
+  }
+  if (IsTransitionPseudoElement(pseudo_id)) {
     if (auto* rule_set =
-            GetDocument().GetStyleEngine().DefaultViewTransitionStyle(
-                element)) {
+            GetDocument().GetStyleEngine().ActiveViewTransitionStyle(element)) {
       func(rule_set, kViewTransitionUASheet);
     }
   }
@@ -1233,21 +1255,6 @@ void StyleResolver::MatchPresentationalHints(StyleResolverState& state,
         element.PresentationAttributeStyle(),
         CascadeOrigin::kAuthorPresentationalHint);
 
-    if (RuntimeEnabledFeatures::
-            CollectWidthAndHeightAsStylesForNestedSvgEnabled() &&
-        state.GetStyledElement() != &element) {
-      auto* svg_svg_element =
-          DynamicTo<SVGSVGElement>(state.GetStyledElement());
-
-      if (svg_svg_element) {
-        collector.AddElementStyleProperties(
-            svg_svg_element
-                ->CreateWidthAndHeightPresentationAttributeStyleIfNeeded(
-                    element),
-            CascadeOrigin::kAuthorPresentationalHint);
-      }
-    }
-
     // Now we check additional mapped declarations.
     // Tables and table cells share an additional mapped rule that must be
     // applied after all attributes, since their mapped style depends on the
@@ -1287,18 +1294,16 @@ void StyleResolver::MatchAllRules(StyleResolverState& state,
     // Now check SMIL animation override style.
     auto* svg_element = DynamicTo<SVGElement>(element);
     if (include_smil_properties && svg_element) {
-      if (RuntimeEnabledFeatures::Svg2CascadeEnabled()) {
-        if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
-          // According to the spec[1], animations that are cloned into the <use>
-          // shadow tree, should run in that tree, while animations applied to
-          // the referenced element which are not cloned should have an instance
-          // in the <use> tree as if it was cloned.
-          //
-          // We apply the animations from the referenced subtree for now.
-          //
-          // [1] https://svgwg.org/svg2-draft/struct.html#UseAnimations
-          svg_element = corresponding;
-        }
+      if (SVGElement* corresponding = svg_element->CorrespondingElement()) {
+        // According to the spec[1], animations that are cloned into the <use>
+        // shadow tree, should run in that tree, while animations applied to
+        // the referenced element which are not cloned should have an instance
+        // in the <use> tree as if it was cloned.
+        //
+        // We apply the animations from the referenced subtree for now.
+        //
+        // [1] https://svgwg.org/svg2-draft/struct.html#UseAnimations
+        svg_element = corresponding;
       }
       collector.AddElementStyleProperties(
           svg_element->AnimatedSMILStyleProperties(), CascadeOrigin::kAuthor,
@@ -1413,11 +1418,15 @@ const ComputedStyle* StyleResolver::ResolveStyle(
                                   styles_animated, 1);
     StyleAdjuster::AdjustComputedStyle(
         state, IsForPseudoElement(*element, style_request) ? nullptr : element);
+    StyleAdjuster::RunUncacheableStyleAdjustment(
+        state.StyleBuilder(), *element,
+        IsForPseudoElement(*element, style_request) ? state.GetPseudoElement()
+                                                    : element,
+        state.GetStyledElement());
   }
 
   ApplyAnchorData(state);
   ApplyInertness(state);
-  ApplyTriggerData(state);
 
   IncrementResolvedStyleCounters(style_request, GetDocument());
   if (InvalidationTracingFlag::IsEnabled()) [[unlikely]] {
@@ -1465,8 +1474,8 @@ const ComputedStyle* StyleResolver::ResolveStyle(
 
   GetDocument().AddViewportUnitFlags(state.StyleBuilder().ViewportUnitFlags());
 
-  if (state.StyleBuilder().HasRootFontRelativeUnits()) {
-    GetDocument().GetStyleEngine().SetUsesRootFontRelativeUnits(true);
+  if (state.StyleBuilder().HasRootRelativeUnits()) {
+    GetDocument().GetStyleEngine().SetUsesRootRelativeUnits(true);
   }
 
   if (state.StyleBuilder().HasGlyphRelativeUnits()) {
@@ -1511,6 +1520,15 @@ const ComputedStyle& StyleResolver::ResolveBaseStyle(
   return *state.TakeStyle();
 }
 
+static PseudoId FindStyleType(const Element& element,
+                              const StyleRequest& style_request) {
+  if (element.IsPseudoElement()) {
+    return element.GetPseudoIdForStyling();
+  } else {
+    return style_request.pseudo_id;
+  }
+}
+
 void StyleResolver::InitStyle(Element& element,
                               const StyleRequest& style_request,
                               const ComputedStyle& source_for_noninherited,
@@ -1538,25 +1556,10 @@ void StyleResolver::InitStyle(Element& element,
                              ? ComputedStyleBuilder::kAtShadowBoundary
                              : ComputedStyleBuilder::kNotAtShadowBoundary);
   }
-  if (element.IsPseudoElement()) {
-    state.StyleBuilder().SetStyleType(element.GetPseudoIdForStyling());
-  } else {
-    state.StyleBuilder().SetStyleType(style_request.pseudo_id);
-  }
+  state.StyleBuilder().SetStyleType(FindStyleType(element, style_request));
 
   if (!style_request.IsPseudoStyleRequest() && element.IsLink()) {
     state.StyleBuilder().SetIsLink();
-  }
-
-  if (!IsForPseudoElement(element, style_request)) {
-    // Preserve the text autosizing multiplier on style recalc. Autosizer will
-    // update it during layout if needed.
-    // NOTE: This must occur before CascadeAndApplyMatchedProperties for correct
-    // computation of font-relative lengths.
-    // NOTE: This can never be overwritten by a MPC hit, since we don't use the
-    // MPC if TextAutosizingMultiplier() is different from 1.
-    state.StyleBuilder().SetTextAutosizingMultiplier(
-        state.TextAutosizingMultiplier());
   }
 }
 
@@ -1682,8 +1685,7 @@ bool CanApplyInlineStyleIncrementally(Element* element,
       // in this path; thus, we cannot support them.
       if (property.Value().IsUnparsedDeclaration() ||
           property.Value().IsPendingSubstitutionValue() ||
-          property.Value().IsRevertValue() ||
-          property.Value().IsRevertLayerValue()) {
+          property.Value().IsCascadeDependentKeyword()) {
         return false;
       }
       // Even though they are not substitution functions (and therefore not
@@ -1749,7 +1751,8 @@ void StyleResolver::ApplyBaseStyleNoCache(
           {.origin = CascadeOrigin::kUserAgent});
     }
 
-    if (RuntimeEnabledFeatures::OverlayPropertyEnabled()) {
+    if (RuntimeEnabledFeatures::OverlayPropertyEnabled() &&
+        !RuntimeEnabledFeatures::OverlayGlobalRuleRemovalEnabled()) {
       // UA rule: * { overlay: none !important }
       // Implemented here because DCHECKs ensures we don't add universal rules
       // to the UA sheets. Note that this is a universal rule in any namespace.
@@ -1818,20 +1821,17 @@ void StyleResolver::ApplyBaseStyleNoCache(
         style_request.matching_behavior != kMatchAllRulesExcludingSMIL);
   }
 
-  const MatchResult& match_result = collector.MatchedResult();
+  const MatchResult& match_result = cascade.GetMatchResult();
 
   if (IsForPseudoElement(*element, style_request)) {
     if (!match_result.HasMatchedProperties()) {
-      InitStyle(*element, style_request, *initial_style_, state.ParentStyle(),
-                state.OriginatingElementStyle(), state);
-      StyleAdjuster::AdjustComputedStyle(state, nullptr /* element */);
       state.SetHadNoMatchedProperties();
-      return;
     }
   }
 
-  const MatchResult& result = cascade.GetMatchResult();
-  CacheSuccess cache_success = ApplyMatchedCache(state, style_request, result);
+  StyleAdjuster::ElementTypeForCache element_type_for_cache;
+  CacheSuccess cache_success = ApplyMatchedCache(
+      state, style_request, match_result, element_type_for_cache);
   ComputedStyleBuilder& builder = state.StyleBuilder();
 
   if (style_recalc_context.is_ensuring_style &&
@@ -1839,10 +1839,42 @@ void StyleResolver::ApplyBaseStyleNoCache(
     builder.SetIsEnsuredOutsideFlatTree();
   }
 
-  if (!cache_success.IsHit()) {
+  Element* element_if_not_pseudo =
+      IsForPseudoElement(*element, style_request) ? nullptr : element;
+  if (cache_success.IsHit()) {
+    if (!cache_success.IsStyleAdjusted()) {
+      StyleAdjuster::AdjustComputedStyle(state, element_if_not_pseudo);
+    }
+  } else {
     ApplyPropertiesFromCascade(state, cascade);
-    MaybeAddToMatchedPropertiesCache(state, cache_success.key);
+
+    // Cache whether our original display is inline. (This needs to be done
+    // after the properties have been applied, and before the StyleAdjuster
+    // modifies Display(). On a cache hit, we'll just copy this value
+    // from the cached element.)
+    builder.SetIsOriginalDisplayInlineType(
+        ComputedStyle::IsDisplayInlineType(builder.Display()));
+
+    if (element_type_for_cache.CacheEntryIsStyleAdjusted()) {
+      StyleAdjuster::AdjustComputedStyle(state, element_if_not_pseudo);
+      MaybeAddToMatchedPropertiesCache(state, cache_success.key,
+                                       element_type_for_cache);
+    } else {
+      MaybeAddToMatchedPropertiesCache(state, cache_success.key,
+                                       /*element_type=*/{});
+      StyleAdjuster::AdjustComputedStyle(state, element_if_not_pseudo);
+    }
   }
+
+  StyleAdjuster::RunUncacheableStyleAdjustment(
+      builder, *element,
+      state.IsForPseudoElement() ? state.GetPseudoElement() : element,
+      state.GetStyledElement());
+
+  // Everything below here depends on the MatchResult flags
+  // (e.g., what selectors were used to find the matched properties),
+  // not the matched properties themselves. Thus, we should not cache them
+  // in the MPC, which is primarily keyed by which properties matched.
 
   // TODO(crbug.com/1024156): do this for CustomHighlightNames too, so we
   // can remove the cache-busting for ::highlight() in IsStyleCacheable
@@ -1889,8 +1921,8 @@ void StyleResolver::ApplyBaseStyleNoCache(
   if (match_result.DependsOnDynamicViewportUnits()) {
     builder.SetHasDynamicViewportUnits();
   }
-  if (match_result.DependsOnRootFontContainerQueries()) {
-    builder.SetHasRootFontRelativeUnits();
+  if (match_result.DependsOnRootUnitContainerQueries()) {
+    builder.SetHasRootRelativeUnits();
   }
   if (match_result.ConditionallyAffectsAnimations()) {
     state.SetConditionallyAffectsAnimations();
@@ -1900,26 +1932,18 @@ void StyleResolver::ApplyBaseStyleNoCache(
   }
   builder.SetPseudoElementStyles(match_result.PseudoElementStyles().Bits());
 
-  if (element->IsPseudoElement()) {
-    state.StyleBuilder().SetStyleType(element->GetPseudoIdForStyling());
-  }
-
   // Now we're done with all operations that may overwrite InsideLink,
   // so we can set it once and for all.
   builder.SetInsideLink(state.InsideLink());
+
+  // Finally, some random stuff not related to neither MatchResult nor
+  // the matched properties.
 
   ApplyCallbackSelectors(state);
   if (element->IsLink() && (element->HasTagName(html_names::kATag) ||
                             element->HasTagName(html_names::kAreaTag))) {
     ApplyDocumentRulesSelectors(state, To<ContainerNode>(&element->TreeRoot()));
   }
-
-  // Cache our if our original display is inline.
-  builder.SetIsOriginalDisplayInlineType(
-      ComputedStyle::IsDisplayInlineType(builder.Display()));
-
-  StyleAdjuster::AdjustComputedStyle(
-      state, IsForPseudoElement(*element, style_request) ? nullptr : element);
 
   ApplyAnchorData(state);
 }
@@ -2023,6 +2047,11 @@ void StyleResolver::ApplyBaseStyle(
 
     StyleAdjuster::AdjustComputedStyle(
         state, IsForPseudoElement(*element, style_request) ? nullptr : element);
+    StyleAdjuster::RunUncacheableStyleAdjustment(
+        state.StyleBuilder(), *element,
+        IsForPseudoElement(*element, style_request) ? state.GetPseudoElement()
+                                                    : element,
+        state.GetStyledElement());
 
     // Normally done by StyleResolver::MaybeAddToMatchedPropertiesCache(),
     // when applying the cascade. Note that this is probably redundant
@@ -2191,10 +2220,9 @@ const ComputedStyle* StyleResolver::StyleForPage(uint32_t page_index,
                               page_index, page_name,
                               cascade.MutableMatchResult());
 
-  collector.MatchPageRules(
-      CSSDefaultStyleSheets::Instance().DefaultPrintStyle(),
-      CascadeOrigin::kUserAgent, nullptr /* tree_scope */,
-      nullptr /* layer_map */);
+  collector.MatchPageRules(CSSDefaultStyleSheets::Instance().DefaultHtmlStyle(),
+                           CascadeOrigin::kUserAgent, nullptr /* tree_scope */,
+                           nullptr /* layer_map */);
 
   // Calling this function without being in print mode is unusual and special,
   // but it happens from unit tests, if nothing else.
@@ -2296,7 +2324,7 @@ void StyleResolver::StyleForPageMargins(const ComputedStyle& page_style,
         &page_style, entry.at_rule_id, page_index, page_name,
         margin_cascade.MutableMatchResult());
     margin_rule_collector.MatchPageRules(
-        CSSDefaultStyleSheets::Instance().DefaultPrintStyle(),
+        CSSDefaultStyleSheets::Instance().DefaultHtmlStyle(),
         CascadeOrigin::kUserAgent, /*tree_scope=*/nullptr,
         /*layer_map=*/nullptr);
 
@@ -2327,19 +2355,23 @@ void StyleResolver::LoadPaginationResources() {
 }
 
 const ComputedStyle& StyleResolver::InitialStyle() const {
-  DCHECK(initial_style_);
+  if (!initial_style_) {
+    initial_style_ = CreateInitialStyle();
+  }
   return *initial_style_;
 }
 
+void StyleResolver::InvalidateInitialStyle() {
+  initial_style_ = nullptr;
+}
+
 ComputedStyleBuilder StyleResolver::CreateComputedStyleBuilder() const {
-  DCHECK(initial_style_);
-  return ComputedStyleBuilder(*initial_style_);
+  return ComputedStyleBuilder(InitialStyle());
 }
 
 ComputedStyleBuilder StyleResolver::CreateComputedStyleBuilderInheritingFrom(
     const ComputedStyle& parent_style) const {
-  DCHECK(initial_style_);
-  return ComputedStyleBuilder(*initial_style_, parent_style);
+  return ComputedStyleBuilder(InitialStyle(), parent_style);
 }
 
 float StyleResolver::InitialZoom() const {
@@ -2348,6 +2380,12 @@ float StyleResolver::InitialZoom() const {
     return !document.Printing() ? frame->LayoutZoomFactor() : 1;
   }
   return 1;
+}
+
+const ComputedStyle* StyleResolver::CreateInitialStyle() const {
+  ComputedStyleBuilder builder(*ComputedStyle::GetInitialStyleSingleton());
+  SetZoomedInitialLineWidths(InitialZoom(), builder);
+  return builder.TakeStyle();
 }
 
 ComputedStyleBuilder StyleResolver::InitialStyleBuilderForElement() const {
@@ -2449,7 +2487,8 @@ Element* StyleResolver::FindContainerForElement(
   Element* start_candidate = FlatTreeTraversal::ParentElement(*element);
   if (PseudoElement* pseudo_element = DynamicTo<PseudoElement>(element)) {
     if (pseudo_element->IsLayoutSiblingOfOriginatingElement() &&
-        container_selector.SelectsSizeContainers()) {
+        (container_selector.SelectsSizeContainers() ||
+         pseudo_element->GetPseudoId() == kPseudoIdSkeleton)) {
       start_candidate = FlatTreeTraversal::ParentElement(*start_candidate);
     }
   }
@@ -2510,8 +2549,8 @@ void StyleResolver::CollectPseudoRulesForElement(
         element.GetPseudoElement(kPseudoIdViewTransition);
     if (view_transition_element) {
       auto* view_transition_group_element =
-          view_transition_element->GetPseudoElement(
-              kPseudoIdViewTransitionGroup, pseudo_argument);
+          To<ViewTransitionTransitionElement>(*view_transition_element)
+              .FindViewTransitionGroupPseudoElement(pseudo_argument);
       if (view_transition_group_element) {
         style_request.pseudo_ident_list =
             To<ViewTransitionPseudoElementBase>(*view_transition_group_element)
@@ -2572,7 +2611,7 @@ bool StyleResolver::ApplyAnimatedStyle(
   if (!IsAnimationStyleChange(*animating_element) ||
       !state.StyleBuilder().BaseData()) {
     state.StyleBuilder().SetBaseData(StyleBaseData::Create(
-        state.StyleBuilder().CloneStyle(), cascade.GetImportantSet()));
+        state.StyleBuilder().CloneStyle(), cascade.ReleaseImportantSet()));
   }
 
   CSSAnimations::CalculateAnimationUpdate(
@@ -2583,7 +2622,7 @@ bool StyleResolver::ApplyAnimatedStyle(
       state.AnimationUpdate(), *animating_element, state.StyleBuilder(),
       state.OldStyle(), style_recalc_context, state.CanTriggerAnimations());
 
-  bool apply = !state.AnimationUpdate().IsEmpty();
+  bool apply = state.AnimationUpdate().HasActiveInterpolations();
   if (apply) {
     const ActiveInterpolationsMap& animations =
         state.AnimationUpdate().ActiveInterpolationsForAnimations();
@@ -2618,6 +2657,15 @@ bool StyleResolver::ApplyAnimatedStyle(
     DCHECK(!state.GetFontBuilder().FontDirty());
   }
 
+  if (ElementAnimations* animations =
+          animating_element->GetElementAnimations()) {
+    if (StyleBaseData* base_data = state.StyleBuilder().BaseData()) {
+      if (const CSSBitset* important_set = base_data->GetBaseImportantSet()) {
+        animations->CancelCompositedAnimationsAffectingProperties(
+            *important_set);
+      }
+    }
+  }
   CSSAnimations::CalculateCompositorAnimationUpdate(
       state.AnimationUpdate(), *animating_element, element,
       *state.StyleBuilder().GetBaseComputedStyle(), state.ParentStyle(),
@@ -2651,11 +2699,23 @@ void StyleResolver::ApplyAnchorData(StyleResolverState& state) {
 StyleResolver::FindKeyframesRuleResult StyleResolver::FindKeyframesRule(
     const Element* element,
     const Element* animating_element,
-    const AtomicString& animation_name) {
+    const AtomicString& animation_name,
+    const TreeScope* name_tree_scope) {
   HeapVector<Member<ScopedStyleResolver>, 8> resolvers;
-  CollectScopedResolversForHostedShadowTrees(*element, resolvers);
-  if (ScopedStyleResolver* scoped_resolver = ScopedResolverFor(*element)) {
-    resolvers.push_back(scoped_resolver);
+
+  if (name_tree_scope) {
+    // When a specific tree scope is provided (e.g. from a ::part() rule),
+    // look up @keyframes in that scope rather than the element's.
+    if (ScopedStyleResolver* resolver =
+            name_tree_scope->GetScopedStyleResolver()) {
+      resolvers.push_back(resolver);
+    }
+  }
+  if (resolvers.empty()) {
+    CollectScopedResolversForHostedShadowTrees(*element, resolvers);
+    if (ScopedStyleResolver* scoped_resolver = ScopedResolverFor(*element)) {
+      resolvers.push_back(scoped_resolver);
+    }
   }
 
   for (auto& resolver : resolvers) {
@@ -2716,7 +2776,8 @@ void StyleResolver::ClearResizedForViewportUnits() {
 StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
     StyleResolverState& state,
     const StyleRequest& style_request,
-    const MatchResult& match_result) {
+    const MatchResult& match_result,
+    StyleAdjuster::ElementTypeForCache& element_type_for_style_adjuster) {
   Element& element = state.GetElement();
 
   // Add in a couple of fields from the parent to the hash; this reduces the
@@ -2731,6 +2792,8 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
   inherited_hash ^= state.ParentStyle()->HashInheritedBitFields();
   inherited_hash ^= HashFloat(
       state.ParentStyle()->GetFont()->GetFontDescription().ComputedSize());
+  // Used by the StyleAdjuster.
+  inherited_hash ^= HashInt(state.LayoutParentStyle()->Display());
   MatchedPropertiesCache::Key key(
       match_result,
       MatchedPropertiesCache::Key::AdditionalHash(inherited_hash));
@@ -2745,8 +2808,15 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
     can_use_cache = false;
   }
 
+  element_type_for_style_adjuster = StyleAdjuster::GetElementTypeCacheKey(
+      *state.LayoutParentStyle(), element);
+
+  PseudoId style_type = FindStyleType(element, style_request);
   const CachedMatchedProperties::Entry* cached_matched_properties =
-      can_use_cache ? matched_properties_cache_.Find(key, state) : nullptr;
+      can_use_cache
+          ? matched_properties_cache_.Find(key, element_type_for_style_adjuster,
+                                           style_type, state)
+          : nullptr;
 
   if (cached_matched_properties) {
     INCREMENT_STYLE_STATS_COUNTER(GetDocument().GetStyleEngine(),
@@ -2758,13 +2828,21 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
     InitStyle(element, style_request, *style_to_clone, style_to_clone,
               style_to_clone, state);
 
+    ComputedStyleBuilder& builder = state.StyleBuilder();
+
     if (cached_matched_properties->computed_style->CanAffectAnimations()) {
       // Need to set this flag from the cached ComputedStyle to make
       // ShouldStoreOldStyle() correctly return true. We do not collect matching
       // rules when the cache is hit, and the flag is set as part of that
       // process for the full style resolution.
-      state.StyleBuilder().SetCanAffectAnimations();
+      builder.SetCanAffectAnimations();
     }
+
+    // See the non-MPC-hit case in ApplyBaseStyleNoCache for comments.
+    // (It is possible that we should just copy almost all extra_fields
+    // on an MPC hit?)
+    builder.SetIsOriginalDisplayInlineType(
+        style_to_clone->IsOriginalDisplayInlineType());
 
     // If the cache item parent style has identical inherited properties to
     // the current parent style then the resulting style will be identical
@@ -2775,7 +2853,7 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
     // ApplyProperty, hence we'll never set the flag on the parent.
     // (We do the same thing for independently inherited properties in
     // Element::RecalcOwnStyle().)
-    if (state.StyleBuilder().HasExplicitInheritance()) {
+    if (builder.HasExplicitInheritance()) {
       state.ParentStyle()->SetChildHasExplicitInheritance();
     }
     state.UpdateFont();
@@ -2784,15 +2862,18 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
     // style and inheritance accounted for. We'll return a cache
     // miss, which will cause the caller to apply all the matched
     // properties on top of it.
-    //
-    // We use a different initial_style for <img> elements to match the
-    // overrides in html.css. This avoids allocation overhead from copy-on-write
-    // when these properties are set only via UA styles. The overhead shows up
-    // on MotionMark, which stress-tests this code. See crbug.com/1369454 for
-    // details.
-    const ComputedStyle& initial_style = *initial_style_;
-    InitStyle(element, style_request, initial_style, state.ParentStyle(),
+    InitStyle(element, style_request, InitialStyle(), state.ParentStyle(),
               state.OriginatingElementStyle(), state);
+
+    // Initial <line-width>s come from `InitialStyle()` zoomed by
+    // `InitialZoom()`. Re-zoom them for an inherited effective zoom (e.g. from
+    // an ancestor's CSS zoom). Highlights clone the parent style instead, and
+    // the element's own zoom is handled later in the cascade.
+    if (!state.IsForHighlight() &&
+        state.ParentStyle()->EffectiveZoom() != InitialZoom()) {
+      SetZoomedInitialLineWidths(state.ParentStyle()->EffectiveZoom(),
+                                 state.StyleBuilder());
+    }
 
     ExpandInheritedVisitedProperties(state);
 
@@ -2821,14 +2902,16 @@ StyleResolver::CacheSuccess StyleResolver::ApplyMatchedCache(
 
 void StyleResolver::MaybeAddToMatchedPropertiesCache(
     StyleResolverState& state,
-    const MatchedPropertiesCache::Key& key) {
+    const MatchedPropertiesCache::Key& key,
+    StyleAdjuster::ElementTypeForCache element_type) {
   state.LoadPendingResources();
 
   if (key.IsCacheable() && MatchedPropertiesCache::IsCacheable(state)) {
     INCREMENT_STYLE_STATS_COUNTER(GetDocument().GetStyleEngine(),
                                   matched_property_cache_added, 1);
     matched_properties_cache_.Add(
-        key, state.StyleBuilder().CloneStyle(), state.ParentStyle(),
+        key, element_type, state.StyleBuilder().CloneStyle(),
+        state.ParentStyle(), state.LayoutParentStyle(),
         state.IsForHighlight() ? state.OriginatingElementStyle() : nullptr);
   }
 }
@@ -2876,6 +2959,14 @@ bool StyleResolver::CanReuseBaseComputedStyle(const StyleResolverState& state) {
     }
   }
 
+  // Zoom scales every length resolved against the base style (unlike the
+  // narrower font / line-height cases above), so any interpolated zoom value
+  // makes the cached lengths stale.
+  if (RuntimeEnabledFeatures::CSSZoomAnimationEnabled() &&
+      CSSAnimations::IsAnimatingZoomProperty(element_animations)) {
+    return false;
+  }
+
   // Normally, we apply all active animation effects on top of the style created
   // by regular CSS declarations. However, !important declarations have a
   // higher priority than animation effects [1]. If we're currently animating
@@ -2885,10 +2976,6 @@ bool StyleResolver::CanReuseBaseComputedStyle(const StyleResolverState& state) {
   if (CSSAnimations::IsAnimatingStandardProperties(
           element_animations, base_data->GetBaseImportantSet(),
           KeyframeEffect::kDefaultPriority)) {
-    return false;
-  }
-
-  if (TextAutosizingMultiplierChanged(state, *base_style)) {
     return false;
   }
 
@@ -2903,6 +2990,16 @@ bool StyleResolver::CanReuseBaseComputedStyle(const StyleResolverState& state) {
     // TODO(crbug.com/41483417): Enable this optimization for styles with
     // anchor queries.
     return false;
+  }
+
+  // If the base style was generated for 'display: none', resources (StyleImage
+  // etc) may still be pending. Animating the 'display' property in such a case
+  // can produce a computed style with pending resources. See also comment in
+  // `StyleResolverState::LoadPendingResources`.
+  if (base_style->Display() == EDisplay::kNone) {
+    if (CSSAnimations::IsAnimatingDisplayProperty(element_animations)) {
+      return false;
+    }
   }
 
   return true;
@@ -2921,6 +3018,16 @@ const CSSValue* StyleResolver::ComputeValue(
     const CSSPropertyName& property_name,
     const CSSValue& value,
     CSSToLengthConversionData::Flags& flags) {
+  bool has_random = false;
+  return ComputeValue(element, property_name, value, flags, has_random);
+}
+
+const CSSValue* StyleResolver::ComputeValue(
+    Element* element,
+    const CSSPropertyName& property_name,
+    const CSSValue& value,
+    CSSToLengthConversionData::Flags& flags,
+    bool& has_random) {
   Document& document = element->GetDocument();
   document.GetStyleEngine().UpdateViewportSize();
   const ComputedStyle* base_style = element->GetComputedStyle();
@@ -2934,9 +3041,34 @@ const CSSValue* StyleResolver::ComputeValue(
   // read out computed <image> values. Work around that DCHECK by saying this
   // style is not for a rendered element.
   state.StyleBuilder().SetIsEnsuredInDisplayNone();
+
+  // Pre-resolve any var() references in the value against the element's
+  // already-computed style. This avoids a false cycle detection that would
+  // occur when the value references the same custom property it's being set on
+  // (e.g. evaluating style(--foo: var(--foo)) in a container query).
+  const CSSValue* resolved_value = &value;
+  if (property_name.IsCustomProperty()) {
+    if (const auto* unparsed = DynamicTo<CSSUnparsedDeclarationValue>(value)) {
+      CHECK(unparsed->VariableDataValue());
+      if (unparsed->VariableDataValue()->NeedsVariableResolution()) {
+        const CSSUnparsedDeclarationValue* substituted =
+            StyleCascade::ResolveSubstitutions(
+                state, *unparsed, &element->GetTreeScope(),
+                /*mixin_parameter_bindings=*/nullptr);
+        if (substituted) {
+          resolved_value = substituted;
+        }
+      }
+    }
+  }
+
+  if (resolved_value && resolved_value->HasRandomFunctions()) {
+    has_random = true;
+  }
+
   auto* set =
       MakeGarbageCollected<MutableCSSPropertyValueSet>(state.GetParserMode());
-  set->SetProperty(property_name, value);
+  set->SetProperty(property_name, *resolved_value);
   cascade.MutableMatchResult().BeginAddingAuthorRulesForTreeScope(
       element->GetTreeScope());
   cascade.MutableMatchResult().AddMatchedProperties(
@@ -2947,11 +3079,15 @@ const CSSValue* StyleResolver::ComputeValue(
   if (state.HasUnsupportedGuaranteedInvalid()) {
     return nullptr;
   }
-  CSSPropertyRef property_ref(property_name, document);
+  CSSPropertyRef property_ref(&property_name, document);
   flags = state.TakeLengthConversionFlags();
   const ComputedStyle* style = state.TakeStyle();
-  return ComputedStyleUtils::ComputedPropertyValue(property_ref.GetProperty(),
-                                                   *style);
+  const CSSValue* computed_value = ComputedStyleUtils::ComputedPropertyValue(
+      property_ref.GetProperty(), *style);
+  if (computed_value && computed_value->HasRandomFunctions()) {
+    has_random = true;
+  }
+  return computed_value;
 }
 
 const CSSValue* StyleResolver::ResolveValue(
@@ -3004,7 +3140,7 @@ const ComputedStyle* StyleResolver::StyleForInterpolations(
 
   ApplyBaseStyle(&element, style_recalc_context, style_request, state, cascade);
   state.StyleBuilder().SetBaseData(StyleBaseData::Create(
-      state.StyleBuilder().CloneStyle(), cascade.GetImportantSet()));
+      state.StyleBuilder().CloneStyle(), cascade.ReleaseImportantSet()));
 
   ApplyInterpolations(state, cascade, interpolations);
   return state.TakeStyle();
@@ -3185,7 +3321,7 @@ void StyleResolver::UpdateMediaType() {
   if (LocalFrameView* view = GetDocument().View()) {
     bool was_print = print_media_type_;
     print_media_type_ =
-        EqualIgnoringASCIICase(view->MediaType(), media_type_names::kPrint);
+        EqualIgnoringAsciiCase(view->MediaType(), media_type_names::kPrint);
     if (was_print != print_media_type_) {
       matched_properties_cache_.ClearViewportDependent();
     }
@@ -3238,8 +3374,9 @@ void StyleResolver::ExpandInheritedVisitedProperties(
 ComputedStyleBuilder StyleResolver::CreateAnonymousStyleBuilderWithDisplay(
     const ComputedStyle& parent_style,
     EDisplay display) {
-  ComputedStyleBuilder builder(*initial_style_, parent_style);
+  ComputedStyleBuilder builder(InitialStyle(), parent_style);
   builder.SetUnicodeBidi(parent_style.GetUnicodeBidi());
+  builder.SetBaseTextDecorationData(parent_style.AppliedTextDecorationData());
   builder.SetDisplay(display);
   return builder;
 }
@@ -3361,8 +3498,15 @@ void StyleResolver::PropagateStyleToViewport() {
     Color background_color = Color::kTransparent;
     FillLayer background_layers(EFillLayerType::kBackground, true);
     EImageRendering image_rendering = EImageRendering::kAuto;
-
     if (background_style) {
+      // CSS Image Animation intentionally not support propagation from body
+      // https://drafts.csswg.org/css-image-animation-1/#image-animation
+      if (document_element_style && document_element_style->ImageAnimation() !=
+                                        ImageAnimationEnum::kNormal) {
+        new_viewport_style_builder.SetImageAnimation(
+            document_element_style->ImageAnimation());
+        changed = true;
+      }
       background_color = background_style->VisitedDependentColor(
           GetCSSPropertyBackgroundColor());
       background_layers = background_style->BackgroundLayers();
@@ -3626,6 +3770,8 @@ const ComputedStyle* StyleResolver::StyleForInitialLetterText(
       ComputeInitialLetterFont(initial_letter_box_style, paragraph_style));
   builder.SetLineHeight(Length::Fixed(builder.FontHeight()));
   builder.SetVerticalAlign(EVerticalAlign::kBaseline);
+  builder.SetBaseTextDecorationData(
+      initial_letter_box_style.AppliedTextDecorationData());
   return builder.TakeStyle();
 }
 
@@ -3660,21 +3806,6 @@ StyleRulePositionTry* StyleResolver::ResolvePositionTryRule(
   }
 
   return position_try_rule;
-}
-
-void StyleResolver::ApplyTriggerData(StyleResolverState& state) {
-  if (state.GetPseudoId() != PseudoId::kPseudoIdNone) {
-    // TODO(crbug.com/451477493): Applying trigger data here would clobber the
-    // style of the pseudo's originating element. We should investigate a
-    // cleaner solution to this than making an exception here.
-    return;
-  }
-
-  // TODO(crbug.com/467727342): Move this to a safer location. This function
-  // is called during ResolveStyle which might not correspond to an actual
-  // change in the affected element's style.
-  CSSAnimations::UpdateNamedTriggers(
-      state.StyleBuilder(), state.AnimationUpdate(), state.GetElement());
 }
 
 }  // namespace blink

@@ -9,10 +9,12 @@
 
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/immersive_playback_options.h"
 #include "content/public/browser/media_player_id.h"
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "media/base/video_spatial_format.h"
 #include "media/mojo/mojom/media_player.mojom.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -62,6 +64,7 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   VideoOverlayWindow* GetWindowForTesting() override;
   void UpdateLayerBounds() override;
   bool IsPlayerActive() override;
+  bool IsImmersive() const override;
   WebContents* GetWebContents() override;
   WebContents* GetChildWebContents() override;
   bool TogglePlayPause() override;
@@ -73,6 +76,8 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   void ToggleMicrophone() override;
   void ToggleCamera() override;
   void HangUp() override;
+  void RequestMute(bool mute) override;
+  bool GetMuteStatus() override;
   void PreviousSlide() override;
   void NextSlide() override;
   void SeekTo(base::TimeDelta time) override;
@@ -88,7 +93,6 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   std::optional<gfx::Rect> GetWindowBoundsInScreen() override;
 
   std::optional<url::Origin> GetOrigin() override;
-  void SetOrigin(std::optional<url::Origin> origin);
 
   // Called by the MediaSessionImpl when the MediaSessionInfo changes.
   void MediaSessionInfoChanged(
@@ -115,6 +119,7 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   void MediaStoppedPlaying(const MediaPlayerInfo&,
                            const MediaPlayerId&,
                            WebContentsObserver::MediaStoppedReason) override;
+  void MediaMutedStatusChanged(const MediaPlayerId& id, bool muted) override;
   void WebContentsDestroyed() override;
 
   // Embeds a surface in the Picture-in-Picture window.
@@ -124,6 +129,9 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   void SetShowPlayPauseButton(bool show_play_pause_button);
 
   void SetMediaPosition(const media_session::MediaPosition& media_position);
+
+  // Called to show or hide the playback controls.
+  void SetPlaybackControlsVisibility(bool is_visible);
 
   // Called by PictureInPictureServiceImpl when a session request is received.
   // The call should return the |session_remote| and |window_size| as out
@@ -139,9 +147,18 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
       bool show_play_pause_button,
       mojo::PendingRemote<blink::mojom::PictureInPictureSessionObserver>,
       const gfx::Rect& source_bounds,
+      std::optional<content::ImmersiveOptions> immersive_options,
       mojo::PendingRemote<blink::mojom::PictureInPictureSession>*
           session_remote,
       gfx::Size* window_size);
+
+  using RequestImmersivePlaybackConfirmationCallback =
+      base::OnceCallback<void(content::ImmersivePlaybackConfirmationResult)>;
+
+  // Requests user confirmation to enter immersive Picture-in-Picture session.
+  void RequestImmersivePlaybackConfirmation(
+      const content::ImmersiveOptions& default_options,
+      RequestImmersivePlaybackConfirmationCallback callback);
 
   // Called by PictureInPictureServiceImpl when the service is about to be
   // destroyed. It allows |this| to close the |active_session_| if it is
@@ -251,8 +268,8 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   // Coordinates of the video element in WebContents coordinates.
   gfx::Rect source_bounds_;
 
-  // The origin of the initiator.
-  std::optional<url::Origin> origin_;
+  // Whether the current Picture-in-Picture session is in immersive mode.
+  bool is_immersive_ = false;
 
   // Callback to notify the observers about the video PiP window creation event.
   base::OnceClosure on_window_created_notify_observers_callback_;

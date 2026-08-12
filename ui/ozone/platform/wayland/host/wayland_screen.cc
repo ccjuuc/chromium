@@ -7,7 +7,6 @@
 #include <set>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/notimplemented.h"
 #include "base/observer_list.h"
@@ -26,7 +25,6 @@
 #include "ui/display/display_list.h"
 #include "ui/display/util/display_util.h"
 #include "ui/display/util/gpu_info_util.h"
-#include "ui/gfx/buffer_types.h"
 #include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/font_render_params.h"
 #include "ui/gfx/geometry/point.h"
@@ -84,23 +82,25 @@ WaylandScreen::WaylandScreen(WaylandConnection* connection)
   // which one is supported and use that. If RGBX_8888 is not supported, the
   // format that |have_format_alpha| uses will be used by default (RGBA_8888 or
   // BGRA_8888).
-  auto buffer_formats =
-      connection_->buffer_manager_host()->GetSupportedBufferFormats();
-  for (const auto& buffer_format : buffer_formats) {
-    auto format = buffer_format.first;
-
+  auto format_modifiers_map =
+      connection_->buffer_manager_host()->GetSupportedSharedImageFormats();
+  for (const auto& [format, modifiers] : format_modifiers_map) {
     // RGBA_8888 is the preferred format.
-    if (format == gfx::BufferFormat::RGBA_8888)
+    if (format == viz::SinglePlaneFormat::kRGBA_8888) {
       image_format_alpha_ = viz::SinglePlaneFormat::kRGBA_8888;
+    }
 
-    if (format == gfx::BufferFormat::RGBA_F16)
+    if (format == viz::SinglePlaneFormat::kRGBA_F16) {
       image_format_hdr_ = viz::SinglePlaneFormat::kRGBA_F16;
+    }
 
-    if (!image_format_hdr_ && format == gfx::BufferFormat::RGBA_1010102)
+    if (!image_format_hdr_ && format == viz::SinglePlaneFormat::kRGBA_1010102) {
       image_format_hdr_ = viz::SinglePlaneFormat::kRGBA_1010102;
+    }
 
-    if (!image_format_alpha_ && format == gfx::BufferFormat::BGRA_8888)
+    if (!image_format_alpha_ && format == viz::SinglePlaneFormat::kBGRA_8888) {
       image_format_alpha_ = viz::SinglePlaneFormat::kBGRA_8888;
+    }
 
     if (image_format_alpha_ && image_format_hdr_) {
       break;
@@ -241,6 +241,18 @@ void WaylandScreen::AddOrUpdateDisplay(const WaylandOutput::Metrics& metrics) {
   }
   color_spaces.SetOutputFormats(image_format_no_alpha_.value(),
                                 image_format_alpha_.value());
+  if (color_spaces.SupportsHDR() && image_format_hdr_) {
+    color_spaces.SetOutputColorSpaceAndFormat(
+        gfx::ContentColorUsage::kHDR, /*needs_alpha=*/false,
+        color_spaces.GetOutputColorSpace(gfx::ContentColorUsage::kHDR,
+                                         /*needs_alpha=*/false),
+        image_format_hdr_.value());
+    color_spaces.SetOutputColorSpaceAndFormat(
+        gfx::ContentColorUsage::kHDR, /*needs_alpha=*/true,
+        color_spaces.GetOutputColorSpace(gfx::ContentColorUsage::kHDR,
+                                         /*needs_alpha=*/true),
+        image_format_hdr_.value());
+  }
   changed_display.SetColorSpaces(std::move(color_spaces));
 
   // There are 2 cases where |changed_display| must be set as primary:
@@ -292,6 +304,11 @@ WaylandOutput* WaylandScreen::GetWaylandOutputForDisplayId(int64_t display_id) {
 
   auto* output_manager = connection_->wayland_output_manager();
   return output_manager->GetOutput(GetOutputIdForDisplayId(display_id));
+}
+
+viz::SharedImageFormat WaylandScreen::GetHDRImageFormat() const {
+  CHECK(image_format_hdr_);
+  return image_format_hdr_.value();
 }
 
 WaylandOutput::Id WaylandScreen::GetOutputIdMatching(const gfx::Rect& bounds) {
@@ -388,8 +405,8 @@ gfx::AcceleratedWidget WaylandScreen::GetLocalProcessWidgetAtPoint(
     const gfx::Point& point,
     const std::set<gfx::AcceleratedWidget>& ignore) const {
   auto widget = GetAcceleratedWidgetAtScreenPoint(point);
-  return !widget || base::Contains(ignore, widget) ? gfx::kNullAcceleratedWidget
-                                                   : widget;
+  return !widget || ignore.contains(widget) ? gfx::kNullAcceleratedWidget
+                                            : widget;
 }
 
 display::Display WaylandScreen::GetDisplayNearestPoint(
@@ -494,7 +511,7 @@ void WaylandScreen::RemoveObserver(display::DisplayObserver* observer) {
   display_list_.RemoveObserver(observer);
 }
 
-base::Value::List WaylandScreen::GetGpuExtraInfo(
+base::ListValue WaylandScreen::GetGpuExtraInfo(
     const gfx::GpuExtraInfo& gpu_extra_info) {
   auto values = GetDesktopEnvironmentInfo();
   std::vector<std::string> protocols;

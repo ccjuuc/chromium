@@ -36,10 +36,10 @@
 #include "chrome/browser/chromeos/app_mode/kiosk_web_app_install_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/ash/login/app_launch_splash_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
@@ -99,8 +99,9 @@ class SessionInitializedWaiter : public KioskAppManagerObserver {
 class TestBrowserHiddenWaiter : public views::WidgetObserver {
  public:
   explicit TestBrowserHiddenWaiter(Browser* browser) {
-    EXPECT_TRUE(browser->window()->IsVisible());
-    widget_observation_.Observe(browser->GetBrowserView().GetWidget());
+    EXPECT_TRUE(browser->GetWindow()->IsVisible());
+    widget_observation_.Observe(
+        BrowserView::GetBrowserViewForBrowser(browser)->GetWidget());
   }
 
   ~TestBrowserHiddenWaiter() override { widget_observation_.Reset(); }
@@ -344,7 +345,7 @@ void CloseAppWindow(const KioskApp& app) {
     }
     case KioskAppType::kWebApp:
     case KioskAppType::kIsolatedWebApp: {
-      EXPECT_GE(chrome::GetTotalBrowserCount(), 1u);
+      EXPECT_GE(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
       BrowserWindowInterface* web_app_browser = nullptr;
       // TODO(crbug.com/444072535): Picking a Browser from the global browser
       // list is flaky and very test dependent. This should be updated to
@@ -394,9 +395,10 @@ AccountId CreateDeviceLocalAccountId(std::string_view account_id,
 }
 
 Browser& CreateRegularBrowser(Profile& profile, const GURL& url) {
-  Browser::CreateParams params(&profile, /*user_gesture=*/true);
-  Browser& browser = CHECK_DEREF(Browser::Create(params));
-  browser.window()->Show();
+  BrowserWindowCreateParams params(&profile, /*from_user_gesture=*/true);
+  Browser& browser = CHECK_DEREF(
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly());
+  browser.GetWindow()->Show();
 
   AddWebContentsToBrowser(browser, profile);
   TriggerNavigationToUrl(GetActiveWebContents(browser), url);
@@ -407,13 +409,15 @@ Browser& CreateRegularBrowser(Profile& profile, const GURL& url) {
 Browser& CreatePopupBrowser(Profile& profile,
                             const std::string& app_name,
                             const GURL& url) {
-  Browser::CreateParams params = Browser::CreateParams::CreateForAppPopup(
-      app_name,
-      /*trusted_source=*/true,
-      /*window_bounds=*/gfx::Rect(), &profile,
-      /*user_gesture=*/true);
-  Browser& browser = CHECK_DEREF(Browser::Create(params));
-  browser.window()->Show();
+  BrowserWindowCreateParams params =
+      BrowserWindowCreateParams::CreateForAppPopup(
+          app_name,
+          /*trusted_source=*/true,
+          /*window_bounds=*/gfx::Rect(), &profile,
+          /*user_gesture=*/true);
+  Browser& browser = CHECK_DEREF(
+      CreateBrowserWindow(std::move(params))->GetBrowserForMigrationOnly());
+  browser.GetWindow()->Show();
 
   AddWebContentsToBrowser(browser, profile);
   TriggerNavigationToUrl(GetActiveWebContents(browser), url);

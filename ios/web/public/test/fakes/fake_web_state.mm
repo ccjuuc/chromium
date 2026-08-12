@@ -11,7 +11,6 @@
 #import "base/functional/callback.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/sessions/core/session_id.h"
-#import "ios/web/common/crw_content_view.h"
 #import "ios/web/js_messaging/web_frames_manager_impl.h"
 #import "ios/web/public/download/crw_web_view_download.h"
 #import "ios/web/public/js_messaging/web_frame.h"
@@ -19,6 +18,8 @@
 #import "ios/web/public/test/fakes/crw_fake_find_interaction.h"
 #import "ios/web/session/session_certificate_policy_cache_impl.h"
 #import "ios/web/web_state/policy_decision_state_tracker.h"
+#import "ios/web/web_state/ui/crw_content_view.h"
+#import "net/http/http_util.h"
 
 namespace web {
 
@@ -99,6 +100,10 @@ void FakeWebState::LoadSimulatedRequest(const GURL& url,
       [response_html_string dataUsingEncoding:NSUTF8StringEncoding];
   // LoadSimulatedRequest is always a success. Send the event accordingly.
   OnPageLoaded(web::PageLoadCompletionStatus::SUCCESS);
+}
+
+void FakeWebState::Stop() {
+  was_stopped_ = true;
 }
 
 void FakeWebState::LoadSimulatedRequest(const GURL& url,
@@ -485,6 +490,21 @@ CRWWebViewProxyType FakeWebState::GetWebViewProxy() const {
   return web_view_proxy_;
 }
 
+std::optional<std::string> FakeWebState::GetUserAgentOverride() const {
+  return user_agent_override_;
+}
+
+void FakeWebState::SetUserAgentOverride(
+    std::optional<std::string> ua_override) {
+  if (ua_override && !net::HttpUtil::IsValidHeaderValue(*ua_override)) {
+    return;
+  }
+  if (ua_override && ua_override->empty()) {
+    ua_override = std::nullopt;
+  }
+  user_agent_override_ = std::move(ua_override);
+}
+
 void FakeWebState::AddPolicyDecider(WebStatePolicyDecider* decider) {
   policy_deciders_.AddObserver(decider);
 }
@@ -598,6 +618,14 @@ id<CRWFindInteraction> FakeWebState::GetFindInteraction()
 
 id FakeWebState::GetActivityItem() API_AVAILABLE(ios(16.4)) {
   return nil;
+}
+
+bool FakeWebState::IsCustomOpenPanelSupported() const {
+  return supports_custom_open_panel_;
+}
+
+void FakeWebState::SetCustomOpenPanelSupported(bool supports) {
+  supports_custom_open_panel_ = supports;
 }
 
 UIColor* FakeWebState::GetThemeColor() {

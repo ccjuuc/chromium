@@ -22,11 +22,12 @@
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/omnibox_proto/entity_info.pb.h"
 
-class AutocompleteProviderClient;
-
 namespace base {
 class TimeDelta;
 }  // namespace base
+
+class AiModeButtonService;
+class TemplateURLService;
 
 // The set of parameters customizing the HUP scoring.
 struct HUPScoringParams {
@@ -148,8 +149,6 @@ void GetActiveSuggestFieldTrialHashes(std::vector<uint32_t>* field_trial_hash);
 // If the user is in an experiment group that specifies the max results for a
 // particular provider, returns the limit. Otherwise returns the default limit.
 size_t GetProviderMaxMatches(AutocompleteProvider::Type provider);
-
-
 
 // ---------------------------------------------------------
 // For the HistoryURL provider new scoring experiment that is part of the
@@ -275,7 +274,6 @@ bool IsOnDeviceHeadSuggestEnabledForAnyMode();
 bool IsOnDeviceHeadSuggestEnabledForLocale(const std::string& locale);
 bool IsOnDeviceTailSuggestEnabled(const std::string& locale);
 bool ShouldEncodeLeadingSpaceForOnDeviceTailSuggest();
-bool ShouldApplyOnDeviceHeadModelSelectionFix();
 // Functions can be used in both non-incognito and incognito.
 std::string OnDeviceHeadModelLocaleConstraint(bool is_incognito);
 
@@ -331,7 +329,6 @@ extern const char kMaxNumHQPUrlsIndexedAtStartupOnLowEndDevicesParam[];
 extern const char kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam[];
 
 // Parameter names used by num suggestion experiments.
-extern const char kMaxZeroSuggestMatchesParam[];
 extern const char kUIMaxAutocompleteMatchesByProviderParam[];
 extern const char kUIMaxAutocompleteMatchesParam[];
 // The URL cutoff and increased limit for dynamic max autocompletion.
@@ -348,7 +345,6 @@ extern const char kDynamicMaxAutocompleteIncreasedLimitParam[];
 
 // Parameter names used by on device head model.
 extern const char kOnDeviceHeadModelLocaleConstraint[];
-extern const char kOnDeviceHeadModelSelectionFix[];
 
 // The amount of time to wait before sending a new suggest request after the
 // previous one unless overridden by a field trial parameter.
@@ -398,14 +394,13 @@ bool IsOnFocusZeroSuggestEnabledInContext(
 bool IsHideSuggestionGroupHeadersEnabledInContext(
     metrics::OmniboxEventProto::PageClassification page_classification);
 
-// Returns whether the deterministic AIM shortcut action in typed state is
-// enabled.
-bool IsDeterministicAimActionInTypedStateEnabled(
-    AutocompleteProviderClient* client);
-
-// Returns whether AIM page action in Omnibox is enabled.
+// Returns whether AIM page action in Omnibox is enabled. This is a
+// runtime/dynamic check. I.e. its value can change without restarting the
+// browser.
 bool IsAimOmniboxEntrypointEnabled(
-    const AimEligibilityService* aim_eligibility_service);
+    const AimEligibilityService* aim_eligibility_service,
+    const AiModeButtonService* ai_mode_button_service,
+    const TemplateURLService* template_url_service);
 
 // Returns whether AIM starter pack is enabled.
 bool IsAimStarterPackEnabled(
@@ -696,42 +691,14 @@ inline constexpr base::FeatureParam<bool> kAndroidDiagInputConnection{
 // <- Diagnostics
 // ---------------------------------------------------------
 // Mobile Parity update -->
-inline constexpr base::FeatureParam<bool> kMobileParityRetrieveBuiltinFavicon{
-    &omnibox::kOmniboxMobileParityUpdateV2, "retrieve_builtin_favicon", true};
-
 inline constexpr base::FeatureParam<bool> kMobileParityEnableFeedForGoogleOnly{
     &omnibox::kOmniboxMobileParityUpdate, "enable_feed_for_google_only", true};
 // <-- Mobile Parity update
 
-// Aim shortcut for typed state ->
-
-constexpr base::FeatureParam<int> kMinimumTypedCharactersToInvokeAimShortcut(
-    &omnibox::kOmniboxAimShortcutTypedState,
-    "MinimumTypedCharactersToInvokeAimShortcut",
-    1);
-
-// <- Aim shortcut for typed state
-
 #if BUILDFLAG(IS_ANDROID)
-// Omnibox Improvement for Large Form Factors -->
-
-inline constexpr base::FeatureParam<bool>
-    kOmniboxImprovementForLFFSwitchToTabChip{
-        &omnibox::kOmniboxImprovementForLFF, "switch_to_tab_chip", false};
-
-inline constexpr base::FeatureParam<bool>
-    kOmniboxImprovementForLFFRemoveSuggestionViaButton{
-        &omnibox::kOmniboxImprovementForLFF, "remove_suggestion_via_button",
-        false};
-
-inline constexpr base::FeatureParam<bool>
-    kOmniboxImprovementForLFFPersistEditingState{
-        &omnibox::kOmniboxImprovementForLFF, "persist_editing_state", false};
-
-// <-- Omnibox Improvement for Large Form Factors
 // Fusebox -->
-inline constexpr base::FeatureParam<bool> kOmniboxMultimodalInputMultiContext{
-    &omnibox::kOmniboxMultimodalInput, "multi_context", false};
+inline constexpr base::FeatureParam<bool> kOmniboxShowModelPicker{
+    &omnibox::kOmniboxMultimodalInput, "show_model_picker", false};
 
 inline constexpr base::FeatureParam<bool>
     kOmniboxMultimodalPrioritizeSuggestionsForFirstDocument{

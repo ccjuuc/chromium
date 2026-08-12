@@ -7,15 +7,16 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <algorithm>
 #include <atomic>
 #include <ostream>
 #include <string_view>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "url/url_canon_internal.h"
 #include "url/url_constants.h"
 #include "url/url_features.h"
@@ -272,8 +273,7 @@ bool DoCanonicalize(std::basic_string_view<CHAR> spec,
   // has no meaning as an absolute path name. This is because browsers on Mac
   // & Unix don't generally do this, so there is no compatibility reason for
   // doing so.
-  if (DoesBeginUNCPath(spec.data(), 0, spec.length(), false) ||
-      DoesBeginWindowsDriveSpec(spec.data(), 0, spec.length())) {
+  if (DoesBeginUncPath(spec, 0, false) || DoesBeginWindowsDriveSpec(spec, 0)) {
     return CanonicalizeFileUrl(spec, ParseFileUrl(spec), charset_converter,
                                output, output_parsed);
   }
@@ -421,8 +421,7 @@ bool DoReplaceComponents(std::string_view spec,
     size_t spec_after_colon =
         parsed.scheme.is_valid() ? parsed.scheme.end() + 1 : 1;
     if (spec.length() > spec_after_colon) {
-      scheme_replaced.Append(&spec[spec_after_colon],
-                             spec.length() - spec_after_colon);
+      scheme_replaced.Append(spec.substr(spec_after_colon));
     }
 
     // We now need to completely re-parse the resulting string since its meaning
@@ -518,7 +517,8 @@ void DoAddSchemeWithHandler(std::string_view new_scheme,
   DCHECK(!new_scheme.empty());
   DCHECK(!handler.empty());
   DCHECK_EQ(base::ToLowerASCII(new_scheme), new_scheme);
-  DCHECK(!base::Contains(*schemes, new_scheme, &SchemeWithHandler::scheme));
+  DCHECK(
+      !std::ranges::contains(*schemes, new_scheme, &SchemeWithHandler::scheme));
   schemes->push_back({std::string(new_scheme), std::string(handler)});
 }
 
@@ -528,7 +528,7 @@ void DoAddScheme(std::string_view new_scheme,
   DCHECK(schemes);
   DCHECK(!new_scheme.empty());
   DCHECK_EQ(base::ToLowerASCII(new_scheme), new_scheme);
-  DCHECK(!base::Contains(*schemes, new_scheme));
+  DCHECK(!std::ranges::contains(*schemes, new_scheme));
   schemes->push_back(std::string(new_scheme));
 }
 
@@ -539,7 +539,7 @@ void DoAddSchemeWithType(std::string_view new_scheme,
   DCHECK(schemes);
   DCHECK(!new_scheme.empty());
   DCHECK_EQ(base::ToLowerASCII(new_scheme), new_scheme);
-  DCHECK(!base::Contains(*schemes, new_scheme, &SchemeWithType::scheme));
+  DCHECK(!std::ranges::contains(*schemes, new_scheme, &SchemeWithType::scheme));
   schemes->push_back({std::string(new_scheme), type});
 }
 
@@ -688,14 +688,6 @@ void LockSchemeRegistries() {
   scheme_registries_locked = true;
 }
 
-// TODO(crbug.com/351564777): Delete this after //third_party/openscreen
-// transition is complete.
-bool IsStandard(const char* spec, const Component& scheme) {
-  SchemeType unused_scheme_type;
-  return DoIsStandard(UNSAFE_TODO(scheme.maybe_as_string_view_on(spec)),
-                      &unused_scheme_type);
-}
-
 bool IsStandard(std::optional<std::string_view> scheme) {
   SchemeType unused_scheme_type;
   return DoIsStandard(scheme, &unused_scheme_type);
@@ -754,10 +746,9 @@ bool DomainIs(std::string_view canonical_host,
 
   // |host_first_pos| is the start of the compared part of the host name, not
   // start of the whole host name.
-  const char* host_first_pos =
-      UNSAFE_TODO(canonical_host.data() + host_len - canonical_domain.length());
+  size_t host_first_pos = host_len - canonical_domain.length();
 
-  if (std::string_view(host_first_pos, canonical_domain.length()) !=
+  if (canonical_host.substr(host_first_pos, canonical_domain.length()) !=
       canonical_domain) {
     return false;
   }
@@ -767,7 +758,7 @@ bool DomainIs(std::string_view canonical_host,
   // immediately before the compared part should be a dot. For example,
   // www.google.com has domain "google.com", but www.iamnotgoogle.com does not.
   if (canonical_domain[0] != '.' && host_len > canonical_domain.length() &&
-      *(UNSAFE_TODO(host_first_pos - 1)) != '.') {
+      canonical_host[host_first_pos - 1] != '.') {
     return false;
   }
 
@@ -839,8 +830,8 @@ bool ReplaceComponents(std::string_view spec,
                              output, out_parsed);
 }
 
-void DecodeURLEscapeSequences(std::string_view input,
-                              DecodeURLMode mode,
+void DecodeUrlEscapeSequences(std::string_view input,
+                              DecodeUrlMode mode,
                               CanonOutputW* output) {
   if (input.empty()) {
     return;
@@ -879,11 +870,11 @@ void DecodeURLEscapeSequences(std::string_view input,
       if (ReadUtfCharLossy(unescaped_chars.view(), &next_character,
                            &code_point)) {
         // Valid UTF-8 character, convert to UTF-16.
-        AppendUTF16Value(code_point, output);
+        AppendUtf16Value(code_point, output);
         i = next_character;
-      } else if (mode == DecodeURLMode::kUTF8) {
+      } else if (mode == DecodeUrlMode::kUtf8) {
         DCHECK_EQ(code_point, 0xFFFD);
-        AppendUTF16Value(code_point, output);
+        AppendUtf16Value(code_point, output);
         i = next_character;
       } else {
         // If there are any sequences that are not valid UTF-8, we
@@ -899,7 +890,21 @@ void DecodeURLEscapeSequences(std::string_view input,
   }
 }
 
-void EncodeURIComponent(std::string_view input, CanonOutput* output) {
+std::string DecodeUrlEscapeSequences(std::string_view input,
+                                     DecodeUrlMode mode) {
+  RawCanonOutputW<1024> output;
+  DecodeUrlEscapeSequences(input, mode, &output);
+  return base::UTF16ToUTF8(output.view());
+}
+
+void EncodeUriComponent(std::string_view input, CanonOutput* output) {
+  if (output->capacity() - output->length() < input.length() * 3) {
+    size_t required_size = 0;
+    for (unsigned char c : input) {
+      required_size += IsComponentChar(c) ? 1 : 3;
+    }
+    output->ReserveSizeIfNeeded(output->length() + required_size);
+  }
   for (unsigned char c : input) {
     if (IsComponentChar(c)) {
       output->push_back(c);
@@ -909,7 +914,11 @@ void EncodeURIComponent(std::string_view input, CanonOutput* output) {
   }
 }
 
-bool IsURIComponentChar(char c) {
+std::string EncodeUriComponent(std::string_view input) {
+  return std::string(UriComponentEncoder(input).view());
+}
+
+bool IsUriComponentChar(char c) {
   return IsComponentChar(c);
 }
 
@@ -925,7 +934,7 @@ bool CompareSchemeComponent(std::u16string_view spec,
   return DoCompareSchemeComponent(spec, component, compare_to);
 }
 
-bool HasInvalidURLEscapeSequences(std::string_view input) {
+bool HasInvalidUrlEscapeSequences(std::string_view input) {
   for (size_t i = 0; i < input.size(); i++) {
     if (input[i] == '%') {
       unsigned char ch;

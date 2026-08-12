@@ -23,8 +23,8 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_otr_state.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/upgrade_detector/version_history_client.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -87,7 +87,7 @@ base::Time ComputeRelaunchWindowStartForDay(
     // The adjusted time could still fail `Time::FromLocalExploded`. This
     // happens on ARM devices in ChromeOS. Once it happens, it could be sticky
     // and creates a crash loop. Return the unadjusted time in this case.
-    // See http://crbug/1307913
+    // See http://crbug.com/40828727
     if (!base::Time::FromLocalExploded(window_start_exploded, &window_start)) {
       LOG(ERROR) << "FromLocalExploded failed with time=" << time
                  << ", now=" << base::Time::Now()
@@ -322,8 +322,7 @@ UpgradeDetector::GetRelaunchWindowPolicyValue() {
   const base::Value* policy_value = preference->GetValue();
   DCHECK(policy_value->is_dict());
 
-  const base::Value::List* entries =
-      policy_value->GetDict().FindList("entries");
+  const base::ListValue* entries = policy_value->GetDict().FindList("entries");
   if (!entries || entries->empty()) {
     return std::nullopt;
   }
@@ -483,7 +482,8 @@ void UpgradeDetector::CheckIdle() {
   // Don't proceed while an off-the-record or Guest window is open. The timer
   // will still keep firing, so this function will get a chance to re-evaluate
   // this.
-  if (IsOffTheRecordSessionActive() || chrome::GetGuestBrowserCount()) {
+  if (IsOffTheRecordSessionActive() ||
+      GlobalBrowserCollection::GetInstance()->GetGuestBrowserCount()) {
     return;
   }
 

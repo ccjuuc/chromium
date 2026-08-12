@@ -11,6 +11,8 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "services/preferences/tracked/features.h"
 #include "services/preferences/tracked/pref_hash_filter.h"
 #include "services/preferences/tracked/tracked_preference.h"
@@ -47,7 +49,7 @@ class TrackedAtomicPreference : public TrackedPreference {
                   const os_crypt_async::Encryptor* encryptor) const override;
 
   bool EnforceAndReport(
-      base::Value::Dict& pref_store_contents,
+      base::DictValue& pref_store_contents,
       PrefHashStoreTransaction* transaction,
       PrefHashStoreTransaction* external_validation_transaction,
       const os_crypt_async::Encryptor* encryptor) const override;

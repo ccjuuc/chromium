@@ -11,6 +11,7 @@ import org.jni_zero.CalledByNative;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -110,12 +111,13 @@ public class DataSharingUiDelegateAndroid implements DataSharingUIDelegate {
     @CalledByNative
     public void handleShareURLIntercepted(GURL url) {
         Context context = ContextUtils.getApplicationContext();
-        Intent invitation_intent = DataSharingIntentUtils.createInvitationIntent(context, url);
-        IntentUtils.safeStartActivity(context, invitation_intent);
+        Intent invitationIntent = DataSharingIntentUtils.createInvitationIntent(context, url);
+        IntentUtils.safeStartActivity(context, invitationIntent);
     }
 
     /* Sets UI delegate for testing, to be used when native needs a new delegate. */
     public static void setForTesting(DataSharingUIDelegate delegate) {
         sDelegateForTesting = delegate;
+        ResettersForTesting.register(() -> sDelegateForTesting = null);
     }
 }

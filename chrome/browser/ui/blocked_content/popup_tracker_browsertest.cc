@@ -12,12 +12,14 @@
 #include "base/supports_user_data.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_database_helper.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
@@ -188,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
 
 // OpenURLFromTab goes through a different code path than traditional popups
 // that use window.open(). Make sure the tracker is created in those cases.
-// Disabled due to flakiness. See crbug.com/1186441.
+// Disabled due to flakiness. See crbug.com/40753743.
 IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
                        DISABLED_ControlClick_HasTracker) {
   base::HistogramTester tester;
@@ -211,7 +213,8 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
                    is_mac /* command */);
   navigation_observer.Wait();
 
-  EXPECT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   content::WebContents* new_contents =
       browser()->tab_strip_model()->GetWebContentsAt(1);
   EXPECT_TRUE(blocked_content::PopupTracker::FromWebContents(new_contents));
@@ -232,7 +235,7 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
       entry, kUkmNumGestureScrollBeginInteractions, 0u);
 }
 
-// Disabled due to flakiness. See crbug.com/1186441.
+// Disabled due to flakiness. See crbug.com/40753743.
 IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
                        DISABLED_ShiftClick_HasTracker) {
   base::HistogramTester tester;
@@ -249,7 +252,8 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
                    false /* command */);
   navigation_observer.Wait();
 
-  EXPECT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   content::WebContents* new_contents =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile()
           ->GetTabStripModel()
@@ -548,19 +552,20 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
       "window.open('/title1.html', 'new_window', "
       "'location=yes,height=570,width=520,scrollbars=yes,status=yes')"));
   navigation_observer.Wait();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* created_browser = chrome::FindLastActive();
+  BrowserWindowInterface* created_browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 
-  EXPECT_EQ(1, created_browser->tab_strip_model()->count());
+  EXPECT_EQ(1, created_browser->GetTabStripModel()->count());
   content::WebContents* popup =
-      created_browser->tab_strip_model()->GetActiveWebContents();
+      created_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(blocked_content::PopupTracker::FromWebContents(popup));
 
   // Close the popup and check metric.
-  int active_index = created_browser->tab_strip_model()->active_index();
+  int active_index = created_browser->GetTabStripModel()->active_index();
   content::WebContentsDestroyedWatcher destroyed_watcher(popup);
-  created_browser->tab_strip_model()->CloseWebContentsAt(
+  created_browser->GetTabStripModel()->CloseWebContentsAt(
       active_index, TabCloseTypes::CLOSE_USER_GESTURE);
   destroyed_watcher.Wait();
 
@@ -590,19 +595,20 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
       "window.open('/title1.html', 'new_window', "
       "'location=yes,height=570,width=520,scrollbars=yes,status=yes')"));
   navigation_observer.Wait();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* created_browser = chrome::FindLastActive();
+  BrowserWindowInterface* created_browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 
-  EXPECT_EQ(1, created_browser->tab_strip_model()->count());
+  EXPECT_EQ(1, created_browser->GetTabStripModel()->count());
   content::WebContents* popup =
-      created_browser->tab_strip_model()->GetActiveWebContents();
+      created_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(blocked_content::PopupTracker::FromWebContents(popup));
 
   // Close the popup and check that the pop up did not redirect.
-  int active_index = created_browser->tab_strip_model()->active_index();
+  int active_index = created_browser->GetTabStripModel()->active_index();
   content::WebContentsDestroyedWatcher destroyed_watcher(popup);
-  created_browser->tab_strip_model()->CloseWebContentsAt(
+  created_browser->GetTabStripModel()->CloseWebContentsAt(
       active_index, TabCloseTypes::CLOSE_USER_GESTURE);
   destroyed_watcher.Wait();
 
@@ -637,19 +643,20 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
       "'new_window', 'location=yes,height=570,width=520,scrollbars=yes,"
       "status=yes')"));
   navigation_observer.Wait();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* created_browser = chrome::FindLastActive();
+  BrowserWindowInterface* created_browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 
-  EXPECT_EQ(1, created_browser->tab_strip_model()->count());
+  EXPECT_EQ(1, created_browser->GetTabStripModel()->count());
   content::WebContents* popup =
-      created_browser->tab_strip_model()->GetActiveWebContents();
+      created_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(blocked_content::PopupTracker::FromWebContents(popup));
 
   // Close the popup and check metric.
-  int active_index = created_browser->tab_strip_model()->active_index();
+  int active_index = created_browser->GetTabStripModel()->active_index();
   content::WebContentsDestroyedWatcher destroyed_watcher(popup);
-  created_browser->tab_strip_model()->CloseWebContentsAt(
+  created_browser->GetTabStripModel()->CloseWebContentsAt(
       active_index, TabCloseTypes::CLOSE_USER_GESTURE);
   destroyed_watcher.Wait();
 
@@ -681,19 +688,20 @@ IN_PROC_BROWSER_TEST_F(PopupTrackerBrowserTest,
       "status=yes'); "
       "w.location = '/title1.html'"));
   navigation_observer.Wait();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* created_browser = chrome::FindLastActive();
+  BrowserWindowInterface* created_browser =
+      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 
-  EXPECT_EQ(1, created_browser->tab_strip_model()->count());
+  EXPECT_EQ(1, created_browser->GetTabStripModel()->count());
   content::WebContents* popup =
-      created_browser->tab_strip_model()->GetActiveWebContents();
+      created_browser->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(blocked_content::PopupTracker::FromWebContents(popup));
 
   // Close the popup and check metric.
-  int active_index = created_browser->tab_strip_model()->active_index();
+  int active_index = created_browser->GetTabStripModel()->active_index();
   content::WebContentsDestroyedWatcher destroyed_watcher(popup);
-  created_browser->tab_strip_model()->CloseWebContentsAt(
+  created_browser->GetTabStripModel()->CloseWebContentsAt(
       active_index, TabCloseTypes::CLOSE_USER_GESTURE);
   destroyed_watcher.Wait();
 

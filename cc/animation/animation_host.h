@@ -16,14 +16,16 @@
 #include "cc/animation/animation_export.h"
 #include "cc/animation/keyframe_model.h"
 #include "cc/base/protected_sequence_synchronizer.h"
+#include "cc/trees/layer_tree_mutator.h"
 #include "cc/trees/mutator_host.h"
-#include "cc/trees/mutator_host_client.h"
+#include "cc/trees/mutator_host_delegate.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
 
 namespace cc {
 
 class Animation;
+class AnimationEvents;
 class AnimationTrigger;
 class AnimationTimeline;
 class ElementAnimations;
@@ -41,9 +43,9 @@ enum class ThreadInstance { kMain, kImpl };
 // We synchronize them during the commit process in a one-way data flow process
 // (PushPropertiesTo).
 // An AnimationHost talks to its correspondent LayerTreeHost via
-// MutatorHostClient interface.
+// MutatorHostDelegate interface.
 class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
-                                          public LayerTreeMutatorClient,
+                                          public LayerTreeMutatorDelegate,
                                           public ProtectedSequenceSynchronizer {
  public:
   using ElementToAnimationsMap =
@@ -88,6 +90,7 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
 
   scoped_refptr<AnimationTimeline> GetScopedRefTimelineById(int timeline_id);
   const AnimationTrigger* GetTriggerById(int id) const;
+  AnimationTrigger* GetTriggerById(int id);
 
   void RegisterAnimationForElement(ElementId element_id, Animation* animation);
   void UnregisterAnimationForElement(ElementId element_id,
@@ -99,13 +102,13 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
   GetElementAnimationsForElementIdForTesting(ElementId element_id) const;
 
   // Parent LayerTreeHost or LayerTreeHostImpl.
-  MutatorHostClient* mutator_host_client() {
+  MutatorHostDelegate* mutator_host_delegate() {
     DCHECK(IsOwnerThread() || InProtectedSequence());
-    return mutator_host_client_;
+    return mutator_host_delegate_;
   }
-  const MutatorHostClient* mutator_host_client() const {
+  const MutatorHostDelegate* mutator_host_delegate() const {
     DCHECK(IsOwnerThread() || InProtectedSequence());
-    return mutator_host_client_;
+    return mutator_host_delegate_;
   }
 
   // ProtectedSequenceSynchronizer implementation
@@ -129,7 +132,7 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
 
   void RemoveElementId(ElementId element_id) override;
 
-  void SetMutatorHostClient(MutatorHostClient* client) override;
+  void SetMutatorHostDelegate(MutatorHostDelegate* delegate) override;
 
   void SetLayerTreeMutator(std::unique_ptr<LayerTreeMutator> mutator) override;
 
@@ -143,9 +146,10 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
   bool NeedsTickAnimations() const override;
 
   bool ActivateAnimations(MutatorEvents* events) override;
-  bool TickAnimations(base::TimeTicks monotonic_time,
-                      const ScrollTree& scroll_tree,
-                      bool is_active_tree) override;
+  AnimationTickResult TickAnimations(base::TimeTicks monotonic_time,
+                                     const ScrollTree& scroll_tree,
+                                     bool is_active_tree,
+                                     MutatorEvents* events) override;
   void TickScrollAnimations(base::TimeTicks monotonic_time,
                             const ScrollTree& scroll_tree) override;
   void TickWorkletAnimations() override;
@@ -225,7 +229,7 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
   const AnimationsList& ticking_animations_for_testing() const;
   const ElementToAnimationsMap& element_animations_for_testing() const;
 
-  // LayerTreeMutatorClient.
+  // LayerTreeMutatorDelegate.
   void SetMutationUpdate(
       std::unique_ptr<MutatorOutputState> output_state) override;
 
@@ -279,11 +283,18 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
   void PushPropertiesToImplThread(AnimationHost* host_impl);
 
   void EraseTimeline(scoped_refptr<AnimationTimeline> timeline);
+  void EraseTrigger(scoped_refptr<AnimationTrigger> trigger);
 
   // Return true if there are any animations that get mutated.
   void TickMutator(base::TimeTicks monotonic_time,
                    const ScrollTree& scroll_tree,
                    bool is_active_tree);
+
+  // Update animation triggers[1].
+  // [1] https://drafts.csswg.org/web-animations/#animation-triggers
+  void UpdateTriggers(const ScrollTree& scroll_tree,
+                      AnimationEvents* events,
+                      base::TimeTicks monotonic_time) const;
 
   // Return the state representing all ticking worklet animations.
   std::unique_ptr<MutatorInputState> CollectWorkletAnimationsState(
@@ -316,7 +327,7 @@ class CC_ANIMATION_EXPORT AnimationHost : public MutatorHost,
   // AnimationHosts's ProtectedSequenceSynchronizer implementation is
   // implemented using this member. As such the various helpers can not be used
   // to protect access (otherwise we would get infinite recursion).
-  raw_ptr<MutatorHostClient> mutator_host_client_ = nullptr;
+  raw_ptr<MutatorHostDelegate> mutator_host_delegate_ = nullptr;
 
   // This is only non-null within the call scope of PushPropertiesTo().
   raw_ptr<const PropertyTrees> property_trees_ = nullptr;

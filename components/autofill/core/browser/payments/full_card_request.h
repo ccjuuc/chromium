@@ -6,11 +6,13 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_FULL_CARD_REQUEST_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/payments/card_unmask_delegate.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
@@ -157,7 +159,7 @@ class FullCardRequest final : public CardUnmaskDelegate {
       CreditCard card,
       PaymentsAutofillClient::UnmaskCardReason reason,
       base::WeakPtr<ResultDelegate> result_delegate,
-      base::Value::Dict fido_assertion_info,
+      base::DictValue fido_assertion_info,
       std::optional<GURL> last_committed_primary_main_frame_origin =
           std::nullopt,
       std::optional<std::string> context_token = std::nullopt);
@@ -211,7 +213,7 @@ class FullCardRequest final : public CardUnmaskDelegate {
       PaymentsAutofillClient::UnmaskCardReason reason,
       base::WeakPtr<ResultDelegate> result_delegate,
       base::WeakPtr<UIDelegate> ui_delegate,
-      std::optional<base::Value::Dict> fido_assertion_info,
+      std::optional<base::DictValue> fido_assertion_info,
       std::optional<GURL> last_committed_primary_main_frame_origin,
       std::optional<std::string> context_token,
       std::optional<CardUnmaskChallengeOption> selected_challenge_option);

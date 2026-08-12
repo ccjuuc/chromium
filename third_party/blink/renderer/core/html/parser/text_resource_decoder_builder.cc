@@ -75,8 +75,7 @@ static const auto kEncodings = std::to_array<LegacyEncoding>(
      {"xb", "windows-1257"}});
 
 static const TextEncoding GetEncodingFromDomain(const KURL& url) {
-  Vector<String> tokens;
-  url.Host().ToString().Split(".", tokens);
+  Vector<StringView> tokens = url.Host().SplitSkippingEmpty('.');
   if (!tokens.empty()) {
     auto tld = tokens.back();
     for (const auto& encoding : kEncodings) {
@@ -90,10 +89,12 @@ static const TextEncoding GetEncodingFromDomain(const KURL& url) {
 
 TextResourceDecoderOptions::ContentType DetermineContentType(
     const String& mime_type) {
-  if (EqualIgnoringASCIICase(mime_type, "text/css"))
+  if (EqualIgnoringAsciiCase(mime_type, "text/css")) {
     return TextResourceDecoderOptions::kCSSContent;
-  if (EqualIgnoringASCIICase(mime_type, "text/html"))
+  }
+  if (EqualIgnoringAsciiCase(mime_type, "text/html")) {
     return TextResourceDecoderOptions::kHTMLContent;
+  }
   if (MIMETypeRegistry::IsXMLMIMEType(mime_type))
     return TextResourceDecoderOptions::kXMLContent;
   return TextResourceDecoderOptions::kPlainTextContent;

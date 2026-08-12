@@ -14,6 +14,7 @@
 #include "net/cookies/site_for_cookies.h"
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "third_party/blink/public/common/global_privacy_control/global_privacy_control_util.h"
 #include "third_party/blink/public/common/loader/loader_constants.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/platform/url_loader_throttle_provider.h"
@@ -148,7 +149,13 @@ URLLoaderFactory* WebServiceWorkerFetchContextImpl::GetScriptLoaderFactory() {
 
 void WebServiceWorkerFetchContextImpl::FinalizeRequest(WebURLRequest& request) {
   if (renderer_preferences_.enable_do_not_track) {
-    request.SetHttpHeaderField(WebString::FromUTF8(kDoNotTrackHeader), "1");
+    request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+  }
+  if (IsGlobalPrivacyControlEnabled()) {
+    request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                               "1");
+    blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+        blink::GPCSignalSourceType::kWorkerSubresourceFetch);
   }
   auto url_request_extra_data = base::MakeRefCounted<WebURLRequestExtraData>();
   url_request_extra_data->set_originated_from_service_worker(true);
@@ -232,7 +239,7 @@ void WebServiceWorkerFetchContextImpl::NotifyUpdate(
 }
 
 WebString WebServiceWorkerFetchContextImpl::GetAcceptLanguages() const {
-  return WebString::FromUTF8(renderer_preferences_.accept_languages);
+  return WebString::FromUtf8(renderer_preferences_.accept_languages);
 }
 
 }  // namespace blink

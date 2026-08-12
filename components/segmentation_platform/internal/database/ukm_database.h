@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -59,10 +60,10 @@ class UkmDatabase {
                               const std::string& profile_id) = 0;
 
   // Removes all the URLs from URL table and all the associated metrics in
-  // metrics table, on best effort. Any new metrics added with the URL will
-  // still be stored in metrics table (without URLs). If `all_urls` is true,
-  // then clears all the URLs without using `urls` list. It is an optimization
-  // to clear all the URLs quickly.
+  // metrics table, ensuring that no data related to `urls` remains on disk. Any
+  // new metrics added with the URL will still be stored in metrics table
+  // (without URLs). If `all_urls` is true, then clears all the URLs without
+  // using `urls` list. It is an optimization to clear all the URLs quickly.
   virtual void RemoveUrls(const std::vector<GURL>& urls, bool all_urls) = 0;
 
   // Called once when a new UMA metric is to be recorded in the database.
@@ -87,8 +88,9 @@ class UkmDatabase {
   };
 
   using QueryList = base::flat_map<processing::FeatureIndex, CustomSqlQuery>;
+  // Passes std::nullopt to indicate failure.
   using QueryCallback =
-      base::OnceCallback<void(bool success, processing::IndexedTensors)>;
+      base::OnceCallback<void(std::optional<processing::IndexedTensors>)>;
 
   // Called to query data from the ukm database. The result is returned in the
   // |callback| as a mapping of indexed vectors of processing::ProcessedValue.

@@ -27,13 +27,17 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
+#include "ui/gfx/font_list.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/layout/layout_types.h"
+#include "ui/views/style/typography.h"
 #include "ui/views/view.h"
 
 namespace ambient_signin {
@@ -49,7 +53,9 @@ std::unique_ptr<views::ImageView> GetSecondaryIconForRow(
              ? nullptr
              : std::make_unique<views::ImageView>(
                    ui::ImageModel::FromVectorIcon(
-                       vector_icons::kSubmenuArrowChromeRefreshIcon,
+                       features::IsRoundedIconsEnabled()
+                           ? vector_icons::kKeyboardArrowRightFlippableIcon
+                           : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
                        ui::kColorIcon, kIconSize));
 }
 
@@ -59,10 +65,9 @@ BEGIN_METADATA(AmbientSigninBubbleView)
 END_METADATA
 
 AmbientSigninBubbleView::AmbientSigninBubbleView(
-    View* anchor_view,
+    views::BubbleAnchor anchor,
     AmbientSigninController* controller)
-    : BubbleDialogDelegateView(anchor_view,
-                               views::BubbleBorder::Arrow::TOP_RIGHT),
+    : BubbleDialogDelegateView(anchor, views::BubbleBorder::Arrow::TOP_RIGHT),
       controller_(controller) {
   SetShowCloseButton(true);
   UseCompactMargins();
@@ -80,23 +85,19 @@ AmbientSigninBubbleView::AmbientSigninBubbleView(
   SetLayoutManager(std::move(layout));
 }
 
-AmbientSigninBubbleView::~AmbientSigninBubbleView() = default;
+AmbientSigninBubbleView::~AmbientSigninBubbleView() {
+  if (controller_) {
+    controller_->OnBubbleViewDestroyed();
+    controller_ = nullptr;
+  }
+}
 
 void AmbientSigninBubbleView::ShowCredentials(
-    const std::vector<password_manager::PasskeyCredential>& credentials,
-    const std::vector<std::unique_ptr<password_manager::PasswordForm>>& forms) {
-  SetModeByCredentialCount(credentials.size() + forms.size());
-  for (const auto& passkey : credentials) {
-    AddChildView(CreatePasskeyRow(passkey));
-  }
-
-  for (const auto& form : forms) {
-    // TODO(ambient): For now we ignore federated credentials, but these will
-    // likely need to be displayed in the future.
-    if (form->IsFederatedCredential()) {
-      continue;
-    }
-    AddChildView(CreatePasswordRow(form.get()));
+    const std::vector<AuthenticatorRequestDialogModel::Mechanism>& mechanisms,
+    const std::vector<size_t>& indices) {
+  SetModeByCredentialCount(indices.size());
+  for (size_t i = 0; i < indices.size(); ++i) {
+    AddChildView(CreateRow(mechanisms.at(indices.at(i)), indices.at(i)));
   }
   SetButtonArea();
 
@@ -105,8 +106,9 @@ void AmbientSigninBubbleView::ShowCredentials(
 
 void AmbientSigninBubbleView::Show() {
   if (!widget_) {
-    widget_ = BubbleDialogDelegateView::CreateBubble(this)->GetWeakPtr();
-    widget_->AddObserver(controller_);
+    widget_ = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+                  this, views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET)
+                  ->GetWeakPtr();
   }
   widget_->Show();
 }
@@ -119,32 +121,22 @@ void AmbientSigninBubbleView::Hide() {
 }
 
 void AmbientSigninBubbleView::Close() {
-  widget_->Close();
+  if (widget_) {
+    widget_->Close();
+  }
 }
 
-void AmbientSigninBubbleView::NotifyWidgetDestroyed() {
-  widget_->RemoveObserver(controller_);
+void AmbientSigninBubbleView::DisconnectController() {
   controller_ = nullptr;
-  BubbleDialogDelegateView::OnWidgetDestroying(widget_.get());
+  Close();
 }
 
-void AmbientSigninBubbleView::OnPasskeySelected(
-    const std::vector<uint8_t>& account_id,
-    const ui::Event& event) {
+void AmbientSigninBubbleView::OnMechanismSelected(size_t index,
+                                                  const ui::Event& event) {
   if (!controller_) {
     return;
   }
-  controller_->OnPasskeySelected(account_id);
-  Hide();
-}
-
-void AmbientSigninBubbleView::OnPasswordSelected(
-    const password_manager::PasswordForm* form,
-    const ui::Event& event) {
-  if (!controller_) {
-    return;
-  }
-  controller_->OnPasswordSelected(form);
+  controller_->OnMechanismSelected(index);
   Hide();
 }
 
@@ -177,34 +169,15 @@ void AmbientSigninBubbleView::SetButtonArea() {
   set_fixed_width(kBubbleWidth);
 }
 
-std::unique_ptr<views::View> AmbientSigninBubbleView::CreatePasskeyRow(
-    const password_manager::PasskeyCredential& passkey) {
+std::unique_ptr<views::View> AmbientSigninBubbleView::CreateRow(
+    const AuthenticatorRequestDialogModel::Mechanism& mechanism,
+    size_t index) {
   auto row = std::make_unique<HoverButton>(
-      base::BindRepeating(&AmbientSigninBubbleView::OnPasskeySelected,
-                          weak_ptr_factory_.GetWeakPtr(),
-                          passkey.credential_id()),
-      /*icon_view=*/
+      base::BindRepeating(&AmbientSigninBubbleView::OnMechanismSelected,
+                          weak_ptr_factory_.GetWeakPtr(), index),
       std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          vector_icons::kPasskeyIcon, ui::kColorIcon, kIconSize)),
-      /*title=*/base::UTF8ToUTF16(passkey.username()),
-      /*subtitle=*/passkey.GetAuthenticatorLabel(),
-      /*secondary_view=*/GetSecondaryIconForRow(mode_));
-  return row;
-}
-
-std::unique_ptr<views::View> AmbientSigninBubbleView::CreatePasswordRow(
-    const password_manager::PasswordForm* form) {
-  auto row = std::make_unique<HoverButton>(
-      base::BindRepeating(&AmbientSigninBubbleView::OnPasswordSelected,
-                          weak_ptr_factory_.GetWeakPtr(), form),
-      /*icon_view=*/
-      std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-          kPasswordFieldIcon, ui::kColorIcon, kIconSize)),
-      /*title=*/form->username_value,
-      /*subtitle=*/
-      std::u16string(form->password_value.length(),
-                     password_manager::constants::kPasswordReplacementChar),
-      /*secondary_view=*/GetSecondaryIconForRow(mode_));
+          *mechanism.icon, ui::kColorIcon, kIconSize)),
+      mechanism.name, mechanism.description, GetSecondaryIconForRow(mode_));
   return row;
 }
 

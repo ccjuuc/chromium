@@ -7,6 +7,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/strings/string_number_conversions.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
@@ -21,14 +22,19 @@ constexpr char16_t kCapitalizedIbanRegex[] =
 class GetIbanUploadDetailsRequestTest : public testing::Test {
  public:
   void SetUp() override {
+    std::vector<ClientBehaviorConstants> client_behavior_signals;
+#if BUILDFLAG(IS_ANDROID)
+    client_behavior_signals.push_back(
+        ClientBehaviorConstants::kShowAccountEmailInLegalMessage);
+#endif
     request_ = std::make_unique<GetIbanUploadDetailsRequest>(
-        /*full_sync_enabled=*/true, kAppLocale, kBillingCustomerNumber,
-        kCountryCode, base::DoNothing());
+        /*full_sync_enabled=*/true, kAppLocale, client_behavior_signals,
+        kBillingCustomerNumber, kCountryCode, base::DoNothing());
   }
 
   GetIbanUploadDetailsRequest* GetRequest() { return request_.get(); }
 
-  void ParseResponse(const base::Value::Dict& response) {
+  void ParseResponse(const base::DictValue& response) {
     request_->ParseResponse(response);
   }
 
@@ -37,8 +43,12 @@ class GetIbanUploadDetailsRequestTest : public testing::Test {
   std::u16string context_token() const {
     return request_->context_token_for_testing();
   }
-  base::Value::Dict* legal_message() const {
+  base::DictValue* legal_message() const {
     return request_->legal_message_for_testing();
+  }
+
+  std::vector<ClientBehaviorConstants> client_behavior_signals() const {
+    return request_->client_behavior_signals_for_testing();
   }
 
  private:
@@ -71,16 +81,23 @@ TEST_F(GetIbanUploadDetailsRequestTest,
             std::string::npos);
   EXPECT_NE(GetRequest()->GetRequestContent().find("iban_region_code"),
             std::string::npos);
+#if BUILDFLAG(IS_ANDROID)
+  EXPECT_THAT(client_behavior_signals(),
+              testing::ElementsAre(
+                  ClientBehaviorConstants::kShowAccountEmailInLegalMessage));
+#else
+  EXPECT_TRUE(client_behavior_signals().empty());
+#endif
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_ResponseIsComplete) {
-  base::Value::Dict response =
-      base::Value::Dict()
-          .Set("iban_details", base::Value::Dict().Set("validation_regex",
-                                                       kCapitalizedIbanRegex))
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
           .Set("context_token", base::Value(u"some token"))
           .Set("legal_message",
-               base::Value::Dict().Set("terms_of_service", "Terms of Service"));
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
 
   ParseResponse(response);
 
@@ -90,12 +107,12 @@ TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_ResponseIsComplete) {
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingContextToken) {
-  base::Value::Dict response =
-      base::Value::Dict()
-          .Set("iban_details", base::Value::Dict().Set("validation_regex",
-                                                       kCapitalizedIbanRegex))
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
           .Set("legal_message",
-               base::Value::Dict().Set("terms_of_service", "Terms of Service"));
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
 
   ParseResponse(response);
 
@@ -103,10 +120,10 @@ TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingContextToken) {
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingLegalMessage) {
-  base::Value::Dict response =
-      base::Value::Dict()
-          .Set("iban_details", base::Value::Dict().Set("validation_regex",
-                                                       kCapitalizedIbanRegex))
+  base::DictValue response =
+      base::DictValue()
+          .Set("iban_details",
+               base::DictValue().Set("validation_regex", kCapitalizedIbanRegex))
           .Set("context_token", base::Value(u"some token"));
 
   ParseResponse(response);
@@ -115,11 +132,11 @@ TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingLegalMessage) {
 }
 
 TEST_F(GetIbanUploadDetailsRequestTest, ParseResponse_MissingValidationRegex) {
-  base::Value::Dict response =
-      base::Value::Dict()
+  base::DictValue response =
+      base::DictValue()
           .Set("context_token", base::Value(u"some token"))
           .Set("legal_message",
-               base::Value::Dict().Set("terms_of_service", "Terms of Service"));
+               base::DictValue().Set("terms_of_service", "Terms of Service"));
 
   ParseResponse(response);
 

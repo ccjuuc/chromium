@@ -5,16 +5,20 @@
 #ifndef CHROME_BROWSER_ACTOR_ACTOR_TASK_DELEGATE_H_
 #define CHROME_BROWSER_ACTOR_ACTOR_TASK_DELEGATE_H_
 
+#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
-#include "chrome/common/actor/task_id.h"
-#include "chrome/common/actor_webui.mojom.h"
-#include "components/autofill/core/browser/integrators/glic/actor_form_filling_types.h"
+#include "base/memory/weak_ptr.h"
+#include "chrome/common/actor_webui.mojom-forward.h"
+#include "components/actor/core/task_id.h"
+#include "components/autofill/core/browser/integrators/actor/actor_form_filling_types.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/gfx/image/image.h"
 #include "url/origin.h"
 
 namespace actor {
+
+class AutofillSelectionDialogEventHandler;
 
 // Delegate interface for ActorTask to communicate with other classes.
 class ActorTaskDelegate {
@@ -25,6 +29,10 @@ class ActorTaskDelegate {
   virtual void OnTabAddedToTask(
       TaskId task_id,
       const tabs::TabInterface::Handle& tab_handle) = 0;
+
+  // Called when the visibility of the controlled tabs changes.
+  virtual void OnTaskTabsVisibilityChanged(TaskId task_id,
+                                           bool has_visible_tab) = 0;
 
   using CredentialSelectedCallback =
       base::OnceCallback<void(webui::mojom::SelectCredentialDialogResponsePtr)>;
@@ -54,7 +62,21 @@ class ActorTaskDelegate {
   virtual void RequestToShowAutofillSuggestionsDialog(
       actor::TaskId task_id,
       std::vector<autofill::ActorFormFillingRequest> requests,
+      base::WeakPtr<AutofillSelectionDialogEventHandler> event_handler,
       AutofillSuggestionSelectedCallback callback) = 0;
+
+  using GmailOtpOptInCallback = base::OnceCallback<void(
+      webui::mojom::GmailOtpOptInResultPtr)>;
+  virtual void RequestToShowGmailOtpOptInDialog(
+      TaskId task_id,
+      GmailOtpOptInCallback callback) = 0;
+
+  using GmailOtpConfirmationCallback =
+      base::OnceCallback<void(webui::mojom::GmailOtpConfirmationResultPtr)>;
+  virtual void RequestToShowGmailOtpConfirmationDialog(
+      TaskId task_id,
+      const std::string& verification_code,
+      GmailOtpConfirmationCallback callback) = 0;
 };
 
 }  // namespace actor

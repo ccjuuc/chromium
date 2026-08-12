@@ -18,8 +18,6 @@
 
 #pragma mark - Public
 
-@synthesize inactiveBrowser = _inactiveBrowser;
-
 - (instancetype)initWithCoordinator:(BrowserCoordinator*)coordinator {
   if ((self = [super init])) {
     DCHECK(coordinator.browser);
@@ -32,8 +30,16 @@
   return self.coordinator.viewController;
 }
 
+- (UIViewController*)viewController:(BrowserProviderPassKey)key {
+  return self.coordinator.viewController;
+}
+
 - (BrowserViewController*)bvc {
   return self.coordinator.viewController;
+}
+
+- (BrowserLayoutViewController*)browserLayoutViewController {
+  return self.coordinator.browserLayoutViewController;
 }
 
 - (Browser*)browser {
@@ -46,16 +52,6 @@
 
 - (BOOL)incognito {
   return self.profile->IsOffTheRecord();
-}
-
-- (BOOL)playingTTS {
-  return self.coordinator.playingTTS;
-}
-
-- (void)clearPresentedStateWithCompletion:(ProceduralBlock)completion
-                           dismissOmnibox:(BOOL)dismissOmnibox {
-  [self.coordinator clearPresentedStateWithCompletion:completion
-                                       dismissOmnibox:dismissOmnibox];
 }
 
 @end

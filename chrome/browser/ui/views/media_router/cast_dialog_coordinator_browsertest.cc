@@ -6,23 +6,16 @@
 
 #include <memory>
 
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/media_router/cast_dialog_controller.h"
 #include "chrome/browser/ui/media_router/media_cast_mode.h"
 #include "chrome/browser/ui/media_router/media_route_starter.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/media_router/cast_dialog_view.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/test/widget_test.h"
-#include "ui/views/widget/widget.h"
 
 using testing::_;
 using testing::Mock;
@@ -62,7 +55,7 @@ IN_PROC_BROWSER_TEST_F(CastDialogCoordinatorTest, ShowAndHideDialog) {
   EXPECT_CALL(controller_, AddObserver(_));
   cast_dialog_coordinator_.ShowDialogCenteredForBrowserWindow(
       &controller_, browser(), base::Time::Now(),
-      MediaRouterDialogActivationLocation::PAGE);
+      MediaRouterDialogActivationLocation::PAGE, base::DoNothing());
   EXPECT_TRUE(cast_dialog_coordinator_.IsShowing());
   EXPECT_NE(nullptr, cast_dialog_coordinator_.GetCastDialogWidget());
   views::test::WidgetDestroyedWaiter waiter(

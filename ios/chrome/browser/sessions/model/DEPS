@@ -1,7 +1,10 @@
 include_rules = [
+  # keep-sorted start
+  "+components/split_tabs",
   "+ios/chrome/browser/start_surface/ui_bundled",
   "+ios/chrome/browser/tabs/model",
   "+third_party/protobuf",
+  # keep-sorted end
 ]
 
 specific_include_rules = {

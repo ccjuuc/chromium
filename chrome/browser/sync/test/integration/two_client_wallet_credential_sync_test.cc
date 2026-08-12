@@ -12,7 +12,6 @@
 #include "components/sync/engine/loopback_server/persistent_tombstone_entity.h"
 #include "content/public/test/browser_test.h"
 
-using syncer::kSyncAutofillWalletCredentialData;
 using wallet_helper::CreateDefaultSyncWalletCard;
 using wallet_helper::CreateDefaultSyncWalletCredential;
 using wallet_helper::ExpectDefaultWalletCredentialValues;
@@ -28,9 +27,7 @@ class TwoClientWalletCredentialSyncTest
       public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
   TwoClientWalletCredentialSyncTest() : SyncTest(TWO_CLIENT) {
-    std::vector<base::test::FeatureRef> enabled_features = {
-        kSyncAutofillWalletCredentialData,
-        autofill::features::kAutofillEnableCvcStorageAndFilling};
+    std::vector<base::test::FeatureRef> enabled_features;
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
       enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
     }
@@ -91,7 +88,8 @@ INSTANTIATE_TEST_SUITE_P(,
                        testing::PrintToStringParamName());
 
 IN_PROC_BROWSER_TEST_P(TwoClientWalletCredentialSyncTest, AddCvcToCreditCard) {
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetUpSyncAndInitialize());
 
   // Grab the current card on the first client.
@@ -120,7 +118,8 @@ IN_PROC_BROWSER_TEST_P(TwoClientWalletCredentialSyncTest, AddCvcToCreditCard) {
 IN_PROC_BROWSER_TEST_P(TwoClientWalletCredentialSyncTest,
                        UpdateCvcForCreditCard) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetUpSyncAndInitialize());
 
   // Grab the server cards from both the clients. Verify that CVC is not empty
@@ -152,7 +151,8 @@ IN_PROC_BROWSER_TEST_P(TwoClientWalletCredentialSyncTest,
 IN_PROC_BROWSER_TEST_P(TwoClientWalletCredentialSyncTest,
                        RemoveCvcForCreditCard) {
   SetDefaultWalletCredentialOnFakeServer();
-  GetFakeServer()->SetWalletData({CreateDefaultSyncWalletCard()});
+  wallet_helper::SetWalletData(GetFakeServer(),
+                               {CreateDefaultSyncWalletCard()});
   ASSERT_TRUE(SetUpSyncAndInitialize());
 
   // Grab the server cards from both the clients. Verify that CVC is not empty

@@ -4,10 +4,7 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
 
-#include <string>
-
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
-#include "components/page_info/page_info_ui.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/buildflags.h"
@@ -63,7 +60,7 @@ PageInfoBubbleViewBase::PageInfoBubbleViewBase(
   SetShowCloseButton(true);
 
   set_parent_window(parent_window);
-  if (std::holds_alternative<std::nullptr_t>(anchor)) {
+  if (anchor.IsNull()) {
     SetAnchorRect(anchor_rect);
   }
   SetProperty(views::kElementIdentifierKey, kPageInfoBubbleElementIdentifier);

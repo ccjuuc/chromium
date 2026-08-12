@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/containers/flat_map.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
@@ -11,6 +12,7 @@
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/proto/web_app.equal.h"
 #include "chrome/browser/web_applications/proto/web_app.to_value.h"
+#include "chrome/browser/web_applications/scheduler/generated_icon_fix_result.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
@@ -144,8 +146,8 @@ class TwoClientGeneratedIconFixSyncTest
         ->icon_manager()
         .ReadTrustedIconsWithFallbackToManifestIcons(
             app_id, {kIconSize}, IconPurpose::ANY, icons_future.GetCallback());
-    SizeToBitmap icons_bitmap = std::move(icons_future.Take().icons_map);
-    CHECK(base::Contains(icons_bitmap, kIconSize));
+    OrderedSizeToBitmap icons_bitmap = std::move(icons_future.Take().icons_map);
+    CHECK(icons_bitmap.contains(kIconSize));
 
     return {
         .is_generated = fake_providers_[profile]

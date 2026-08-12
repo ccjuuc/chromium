@@ -8,14 +8,12 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "chromeos/ash/services/device_sync/public/cpp/device_sync_client.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/ash/services/secure_channel/public/cpp/client/secure_channel_client.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel_types.mojom.h"
 
@@ -72,11 +70,7 @@ ConnectionManagerImpl::ConnectionManagerImpl(
   DCHECK(metrics_recorder_);
 }
 
-ConnectionManagerImpl::~ConnectionManagerImpl() {
-  metrics_recorder_.reset();
-  if (channel_)
-    channel_->RemoveObserver(this);
-}
+ConnectionManagerImpl::~ConnectionManagerImpl() = default;
 
 ConnectionManager::Status ConnectionManagerImpl::GetStatus() const {
   // Connection attempt was successful and with an active channel between
@@ -194,7 +188,7 @@ void ConnectionManagerImpl::OnConnection(
                   << "connection between local and remote device.";
   timer_->Stop();
   channel_ = std::move(channel);
-  channel_->AddObserver(this);
+  client_channel_observation_.Observe(channel_.get());
   if (last_status_ == Status::kConnecting) {
     metrics_recorder_->RecordConnectionSuccess(clock_->Now() -
                                                status_change_timestamp_);
@@ -211,7 +205,7 @@ void ConnectionManagerImpl::OnMessageReceived(const std::string& payload) {
   NotifyMessageReceived(payload);
 }
 
-void ConnectionManagerImpl::OnNearbyConnectionStateChagned(
+void ConnectionManagerImpl::OnNearbyConnectionStateChanged(
     mojom::NearbyConnectionStep step,
     mojom::NearbyConnectionStepResult result) {
   if (secure_channel_structured_metrics_logger_) {
@@ -239,8 +233,7 @@ void ConnectionManagerImpl::TearDownConnection() {
   if (secure_channel_structured_metrics_logger_) {
     secure_channel_structured_metrics_logger_->UnbindReceiver();
   }
-  if (channel_)
-    channel_->RemoveObserver(this);
+  client_channel_observation_.Reset();
   channel_.reset();
   if (last_status_ == Status::kConnected) {
     metrics_recorder_->RecordConnectionDuration(clock_->Now() -

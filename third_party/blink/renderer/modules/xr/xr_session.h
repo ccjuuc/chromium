@@ -62,6 +62,8 @@ class XRHitTestOptionsInit;
 class XRHitTestSource;
 class XRImageTrackingResult;
 class XRLightProbe;
+class XRMeshSet;
+class XRMeshManager;
 class XRPlaneSet;
 class XRPlaneManager;
 class XRReferenceSpace;
@@ -95,6 +97,8 @@ class XRSession final : public EventTarget,
   static constexpr char kNoSpaceSpecified[] = "No XRSpace specified.";
   static constexpr char kAnchorsFeatureNotSupported[] =
       "Anchors feature is not supported by the session.";
+  static constexpr char kMeshesFeatureNotSupported[] =
+      "Mesh detection feature is not supported by the session.";
   static constexpr char kPlanesFeatureNotSupported[] =
       "Plane detection feature is not supported by the session.";
   static constexpr char kDepthSensingFeatureNotSupported[] =
@@ -169,7 +173,9 @@ class XRSession final : public EventTarget,
 
   const FrozenArray<IDLString>& enabledFeatures() const;
 
-  bool isSystemKeyboardSupported() const { return false; }
+  bool isSystemKeyboardSupported() const;
+
+  uint16_t maxRenderLayers() const { return device_config_->max_render_layers; }
 
   XRSpace* viewerSpace() const;
 
@@ -192,6 +198,9 @@ class XRSession final : public EventTarget,
 
   void updateRenderState(XRRenderStateInit* render_state_init,
                          ExceptionState& exception_state);
+
+  void AddGraphicsBinding(XRGraphicsBinding* binding);
+  void RemoveGraphicsBinding(XRGraphicsBinding* binding);
 
   std::optional<V8XRDepthUsage> depthUsage(ExceptionState& exception_state);
   std::optional<V8XRDepthDataFormat> depthDataFormat(
@@ -244,8 +253,8 @@ class XRSession final : public EventTarget,
   // available, the method returns nullopt.
   std::optional<ReferenceSpaceInformation> GetStationaryReferenceSpace() const;
 
-  int requestAnimationFrame(V8XRFrameRequestCallback* callback);
-  void cancelAnimationFrame(int id);
+  uint32_t requestAnimationFrame(V8XRFrameRequestCallback* callback);
+  void cancelAnimationFrame(uint32_t id);
 
   XRInputSourceArray* inputSources(ScriptState*) const;
 
@@ -386,6 +395,8 @@ class XRSession final : public EventTarget,
 
   XRPlaneSet* GetDetectedPlanes() const;
 
+  XRMeshSet* GetDetectedMeshes() const;
+
   // Creates presentation frame based on current state of the session.
   // The created XRFrame will store a reference to this XRSession and use it to
   // get the latest information out of it.
@@ -441,6 +452,8 @@ class XRSession final : public EventTarget,
   // events. Called by |XrSystem| after the session query has resolved.
   void DispatchInitialEvents();
 
+  void OnTransferComplete(const Vector<device::LayerId>& layer_ids);
+
  private:
   class XRSessionResizeObserverDelegate;
 
@@ -468,6 +481,7 @@ class XRSession final : public EventTarget,
   // Processes world understanding state for current frame:
   // - updates state of hit test sources & fills them out with results
   // - updates state of detected planes
+  // - updates state of detected meshes
   // - updates state of anchors
   // In order to correctly set the state of hit test sources, this *must* be
   // called after updating XRInputSourceArray (performed by
@@ -616,6 +630,7 @@ class XRSession final : public EventTarget,
   HashSet<device::HitTestSubscriptionId> hit_test_source_ids_;
   HashSet<device::HitTestSubscriptionId>
       hit_test_source_for_transient_input_ids_;
+  Member<XRMeshManager> mesh_manager_;
   Member<XRPlaneManager> plane_manager_;
 
   // Populated iff the raw camera feature has been enabled and the session
@@ -637,6 +652,7 @@ class XRSession final : public EventTarget,
   // requestHitTestSourceForTransientInput that are still in-flight.
   HeapHashSet<Member<ScriptPromiseResolverBase>>
       request_hit_test_source_promises_;
+  HeapHashSet<WeakMember<XRGraphicsBinding>> graphics_bindings_;
   HeapVector<Member<XRReferenceSpace>> reference_spaces_;
 
   uint32_t stage_parameters_id_ = 0;

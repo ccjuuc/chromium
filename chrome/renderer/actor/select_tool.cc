@@ -8,13 +8,14 @@
 #include <optional>
 
 #include "base/check.h"
+#include "base/memory/weak_ptr.h"
 #include "base/notimplemented.h"
 #include "base/strings/to_string.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/actor_logging.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/renderer/actor/tool_utils.h"
+#include "components/actor/core/actor_logging.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "third_party/blink/public/platform/web_string.h"
@@ -48,15 +49,23 @@ SelectTool::SelectTool(content::RenderFrame& frame,
 SelectTool::~SelectTool() = default;
 
 void SelectTool::Execute(ToolFinishedCallback callback) {
-  ValidatedResult validated_result = Validate();
-  if (!validated_result.has_value()) {
-    std::move(callback).Run(std::move(validated_result.error()));
+  CHECK(validated_target_and_value_.has_value())
+      << "Execute tool was called before validation";
+  WebSelectElement select = validated_target_and_value_.value().select;
+  WebString value = validated_target_and_value_.value().option_value;
+
+  // Use a weak pointer to check if `this` is still valid after SetValue()
+  // returns, as it synchronously dispatches DOM events that might destroy the
+  // owning frame and this tool.
+  base::WeakPtr<SelectTool> weak_this = weak_ptr_factory_.GetWeakPtr();
+  select.SetValue(value, /*send_events=*/true);
+
+  if (!weak_this) {
+    // If the tool was destroyed, its owner (ToolExecutor) is also likely being
+    // destroyed (e.g. due to frame detachment). Since the callback is bound to
+    // a weak pointer of the ToolExecutor, running it would be a no-op.
     return;
   }
-
-  WebSelectElement select = validated_result.value().select;
-  WebString value = validated_result.value().option_value;
-  select.SetValue(value, /*send_events=*/true);
 
   frame_->GetWebFrame()->View()->CancelPagePopup();
 
@@ -68,7 +77,7 @@ std::string SelectTool::DebugString() const {
                          action_->value);
 }
 
-SelectTool::ValidatedResult SelectTool::Validate() const {
+ValidationResult SelectTool::Validate() {
   CHECK(frame_->GetWebFrame());
   CHECK(frame_->GetWebFrame()->FrameWidget());
 
@@ -76,49 +85,49 @@ SelectTool::ValidatedResult SelectTool::Validate() const {
     static constexpr std::string_view kErrorMessage =
         "Coordinate-based target is not yet supported.";
     NOTIMPLEMENTED() << kErrorMessage;
-    return base::unexpected(MakeResult(mojom::ActionResultCode::kNotImplemented,
+    return ValidationResult(MakeResult(mojom::ActionResultCode::kNotImplemented,
                                        /*requires_page_stabilization=*/false,
                                        kErrorMessage));
   }
 
   auto resolved_target = ValidateAndResolveTarget();
   if (!resolved_target.has_value()) {
-    return base::unexpected(std::move(resolved_target.error()));
+    return ValidationResult(std::move(resolved_target.error()));
   }
 
   // Perform select validation on the resolved node.
   const WebNode& node = resolved_target->node;
   WebSelectElement select = node.DynamicTo<WebSelectElement>();
   if (!select) {
-    return base::unexpected(
+    return ValidationResult(
         MakeResult(mojom::ActionResultCode::kSelectInvalidElement,
                    /*requires_page_stabilization=*/false,
                    absl::StrFormat("Element [%s]", base::ToString(node))));
   }
 
   if (!select.IsEnabled()) {
-    return base::unexpected(
+    return ValidationResult(
         MakeResult(mojom::ActionResultCode::kElementDisabled,
                    /*requires_page_stabilization=*/false,
                    absl::StrFormat("Element [%s]", base::ToString(select))));
   }
 
-  WebString value(WebString::FromUTF8(action_->value));
+  WebString value(WebString::FromUtf8(action_->value));
   for (const auto& e : select.GetListItems()) {
     auto option = e.DynamicTo<WebOptionElement>();
     if (option && option.Value() == value) {
       if (!option.IsEnabled()) {
-        return base::unexpected(MakeResult(
+        return ValidationResult(MakeResult(
             mojom::ActionResultCode::kSelectOptionDisabled,
             /*requires_page_stabilization=*/false,
             absl::StrFormat("SelectElement[%s] OptionElement [%s]",
                             base::ToString(select), base::ToString(option))));
       }
-      return TargetAndValue{select, value};
+      validated_target_and_value_.emplace(TargetAndValue{select, value});
+      return ValidationResult(MakeOkResult());
     }
   }
-
-  return base::unexpected(
+  return ValidationResult(
       MakeResult(mojom::ActionResultCode::kSelectNoSuchOption,
                  /*requires_page_stabilization=*/false,
                  absl::StrFormat("SelectElement[%s]", base::ToString(select))));

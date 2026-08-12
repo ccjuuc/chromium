@@ -6,6 +6,7 @@
 #define COMPONENTS_OPTIMIZATION_GUIDE_CORE_OPTIMIZATION_GUIDE_LOGGER_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/circular_deque.h"
@@ -42,6 +43,9 @@ class OptimizationGuideLogger {
         int source_line,
         const std::string& message) = 0;
   };
+  // Capacity limit for |recent_log_messages_|.
+  static constexpr size_t kMaxRecentLogMessages = 700;
+
   static OptimizationGuideLogger* GetInstance();
   OptimizationGuideLogger();
   ~OptimizationGuideLogger();
@@ -76,6 +80,7 @@ class OptimizationGuideLogger {
 
     LogMessageBuilder& operator<<(const char* message);
     LogMessageBuilder& operator<<(const std::string& message);
+    LogMessageBuilder& operator<<(std::string_view message);
     LogMessageBuilder& operator<<(const GURL& url);
     LogMessageBuilder& operator<<(
         optimization_guide::proto::RequestContext request_context);
@@ -107,10 +112,19 @@ class OptimizationGuideLogger {
     const std::string message;
   };
 
+  // Emits a warning message to the newly added observer if any startup log
+  // messages were dropped due to buffer capacity limit.
+  void MaybeEmitBufferOverflowWarning(
+      OptimizationGuideLogger::Observer* observer);
+
   // Contains the most recent log messages. Messages are queued up only when
   // |kDebugLoggingEnabled| command-line switch is specified. This allows the
   // messages at startup to be saved and shown in the internals page later.
   base::circular_deque<LogMessage> recent_log_messages_;
+
+  // Total number of messages dropped from |recent_log_messages_| when the
+  // buffer capacity is exceeded before observers are attached.
+  size_t recent_log_messages_dropped_count_ = 0;
 
   base::ObserverList<OptimizationGuideLogger::Observer> observers_;
 

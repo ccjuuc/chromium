@@ -14,6 +14,7 @@
 #include "base/check.h"
 #include "base/containers/buffer_iterator.h"
 #include "base/containers/heap_array.h"
+#include "base/containers/span.h"
 #include "base/containers/span_writer.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/functional/bind.h"
@@ -25,9 +26,9 @@
 #include "third_party/abseil-cpp/absl/types/optional.h"
 
 extern "C" {
-#include "third_party/lzma_sdk/C/7z.h"
-#include "third_party/lzma_sdk/C/7zAlloc.h"
-#include "third_party/lzma_sdk/C/7zCrc.h"
+#include "third_party/lzma_sdk/src/C/7z.h"
+#include "third_party/lzma_sdk/src/C/7zAlloc.h"
+#include "third_party/lzma_sdk/src/C/7zCrc.h"
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -91,10 +92,8 @@ class SevenZipReaderImpl {
   Result Initialize(base::File archive_file);
   size_t num_entries() const { return db_.NumFiles; }
   base::span<uint8_t> mapped_span() {
-    if (!temp_file_mapped_)
-      return base::span<uint8_t>();
-    return base::span<uint8_t>(temp_file_mapped_->data(),
-                               temp_file_mapped_->length());
+    return temp_file_mapped_ ? temp_file_mapped_->mutable_bytes()
+                             : base::span<uint8_t>();
   }
   EntryInfo GetEntryInfo(size_t entry_index) const;
   bool IsDirectory(size_t entry_index) const;
@@ -153,10 +152,12 @@ SRes FileSeekInStream::DoRead(const ISeekInStream* p, void* buf, size_t* size) {
   // so we cast away the const to do this.
   auto* stream =
       const_cast<FileSeekInStream*>(static_cast<const FileSeekInStream*>(p));
-  int res = stream->file_.ReadAtCurrentPos(static_cast<char*>(buf), *size);
-  if (res < 0)
+  std::optional<size_t> res = stream->file_.ReadAtCurrentPos(
+      base::span(static_cast<uint8_t*>(buf), *size));
+  if (!res.has_value()) {
     return SZ_ERROR_READ;
-  *size = res;
+  }
+  *size = *res;
   return SZ_OK;
 }
 
@@ -320,8 +321,8 @@ Result SevenZipReaderImpl::ExtractFile(size_t entry_index,
 
     // Copy the range of extracted folder corresponding to `entry_index` into
     // `output`.
-    memcpy(output.data(), temp_file_mapped_->data() + file_offset_in_folder,
-           output.size());
+    output.copy_from_nonoverlapping(temp_file_mapped_->bytes().subspan(
+        file_offset_in_folder, output.size()));
   } else {
     // Extract directly into `output`.
     SRes sz_res =
@@ -520,9 +521,10 @@ Result SevenZipReaderImpl::ExtractIntoTempFile(size_t folder_index) {
     return Result::kMemoryMappingFailed;
   }
 
-  SRes sz_res = SzAr_DecodeFolder(&db_.db, folder_index, &look_stream_.vt,
-                                  db_.dataPos, temp_file_mapped_->data(),
-                                  folder_unpack_size, &alloc_temp_);
+  const base::span<uint8_t> temp_file_span = temp_file_mapped_->mutable_bytes();
+  SRes sz_res = SzAr_DecodeFolder(
+      &db_.db, folder_index, &look_stream_.vt, db_.dataPos,
+      temp_file_span.data(), temp_file_span.size(), &alloc_temp_);
 
   if (sz_res != SZ_OK) {
     temp_file_mapped_.reset();

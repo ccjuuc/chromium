@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.h"
 
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -21,14 +20,16 @@
 #include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/cr_components/customize_color_scheme_mode/customize_color_scheme_mode_handler.h"
 #include "chrome/browser/ui/webui/cr_components/theme_color_picker/theme_color_picker_handler.h"
+#include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
-#include "chrome/browser/ui/webui/sanitized_image_source.h"
+#include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_section.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_handler.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_string_map.h"
 #include "chrome/browser/ui/webui/theme_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -36,18 +37,20 @@
 #include "chrome/grit/side_panel_customize_chrome_resources_map.h"
 #include "chrome/grit/side_panel_shared_resources.h"
 #include "chrome/grit/side_panel_shared_resources_map.h"
-#include "components/contextual_search/contextual_search_service.h"
 #include "components/ntp_tiles/features.h"
 #include "components/omnibox/browser/aim_eligibility_service.h"
 #include "components/search/ntp_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/webui/color_change_listener/color_change_handler.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
 namespace {
@@ -141,7 +144,7 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
       {"newTabPageManagedByA11yLabel",
        IDS_NTP_CUSTOMIZE_CHROME_MANAGED_NEW_TAB_PAGE_ACCESSIBILITY},
       // Tools strings.
-      {"showChipsToggleTitle", IDS_NTP_CUSTOMIZE_SHOW_CHIPS_LABEL},
+      {"showChipsToggleTitle", IDS_NTP_CUSTOMIZE_SHOW_SUGGESTIONS_CHIPS_LABEL},
       // Shortcut strings.
       {"topSites", IDS_NTP_CUSTOMIZE_MOST_VISITED_LABEL},
       {"myShortcuts", IDS_NTP_CUSTOMIZE_MY_SHORTCUTS_LABEL},
@@ -161,7 +164,7 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
       {"showFooterToggleTitle", IDS_NTP_CUSTOMIZE_SHOW_FOOTER_LABEL},
       // Required by <managed-dialog>.
       {"controlledSettingPolicy", IDS_CONTROLLED_SETTING_POLICY},
-      {"close", IDS_NEW_TAB_VOICE_CLOSE_TOOLTIP},
+      {"close", IDS_NTP_CLOSE},
       {"ok", IDS_OK},
       // CustomizeColorSchemeMode strings.
       {"colorSchemeModeLabel",
@@ -284,9 +287,12 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
       base::FeatureList::IsEnabled(
           ntp_features::kCustomizeChromeSidePanelExtensionsCard));
 
-  source->AddBoolean(
-      "ntpNextFeaturesEnabled",
-      base::FeatureList::IsEnabled(ntp_features::kNtpNextFeatures));
+  bool ntp_next_features_enabled =
+      ntp_realbox::IsNtpRealboxNextEnabled(profile_) &&
+      base::FeatureList::IsEnabled(ntp_features::kNtpNextFeatures);
+  source->AddBoolean("ntpNextFeaturesEnabled", ntp_next_features_enabled);
+  source->AddBoolean("ntpNextDisablementEnabled",
+                     ntp_features::kNtpNextDisablementParam.Get());
   source->AddBoolean("wallpaperSearchEnabled", wallpaper_search_enabled);
   source->AddBoolean(
       "wallpaperSearchInspirationCardEnabled",
@@ -304,26 +310,32 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
 
   const auto* aim_eligibility_service =
       AimEligibilityServiceFactory::GetForProfile(profile_);
+  int num_tools_eligible = 0;
+  if (aim_eligibility_service) {
+    if (aim_eligibility_service->IsDeepSearchEligible()) {
+      num_tools_eligible++;
+    }
+    if (aim_eligibility_service->IsCreateImagesEligible()) {
+      num_tools_eligible++;
+      if (base::FeatureList::IsEnabled(ntp_features::kNtpStarterChip)) {
+        num_tools_eligible++;
+      }
+    }
+    if (base::FeatureList::IsEnabled(ntp_features::kNtpNextCanvasChip) &&
+        aim_eligibility_service->IsCanvasEligible()) {
+      num_tools_eligible++;
+    }
+  }
   bool action_chips_eligible =
-      ntp_features::kNtpNextShowSimplificationUIParam.Get()
-          ? aim_eligibility_service &&
-                (aim_eligibility_service->IsDeepSearchEligible() ||
-                 aim_eligibility_service->IsCreateImagesEligible())
-          : aim_eligibility_service &&
-                aim_eligibility_service->IsDeepSearchEligible() &&
-                aim_eligibility_service->IsCreateImagesEligible();
-  bool show_tools =
-      action_chips_eligible &&
-      contextual_search::ContextualSearchService::IsContextSharingEnabled(
-          profile_->GetPrefs());
-  source->AddBoolean("aimPolicyEnabled", show_tools);
+      base::FeatureList::IsEnabled(ntp_features::kNtpScaledActionChips)
+          ? ntp_next_features_enabled
+          : (aim_eligibility_service &&
+             aim_eligibility_service->IsAimEligible() &&
+             num_tools_eligible >= 2);
+  source->AddBoolean("aimPolicyEnabled", action_chips_eligible);
 
   source->AddBoolean("footerEnabled",
                      base::FeatureList::IsEnabled(ntp_features::kNtpFooter));
-  source->AddBoolean(
-      "ntpEnterpriseShortcutsMixingAllowed",
-      base::FeatureList::IsEnabled(ntp_tiles::kNtpEnterpriseShortcuts) &&
-          ntp_tiles::kNtpEnterpriseShortcutsAllowMixingParam.Get());
 
   webui::SetupWebUIDataSource(
       source, kSidePanelCustomizeChromeResources,
@@ -332,6 +344,16 @@ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
 
   content::URLDataSource::Add(profile_,
                               std::make_unique<SanitizedImageSource>(profile_));
+  content::URLDataSource::Add(profile_,
+                              std::make_unique<ThemeSource>(profile_));
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this, std::vector<ui::ElementIdentifier>{
+                CustomizeChromeUI::kChangeChromeThemeButtonElementId,
+                CustomizeChromeUI::kChangeChromeThemeClassicElementId,
+                CustomizeChromeUI::kChromeThemeCollectionElementId,
+                CustomizeChromeUI::kChromeThemeElementId,
+                CustomizeChromeUI::kChromeThemeBackElementId});
 }
 
 CustomizeChromeUI::~CustomizeChromeUI() = default;
@@ -453,13 +475,9 @@ void CustomizeChromeUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{
-          CustomizeChromeUI::kChangeChromeThemeButtonElementId,
-          CustomizeChromeUI::kChangeChromeThemeClassicElementId,
-          CustomizeChromeUI::kChromeThemeCollectionElementId,
-          CustomizeChromeUI::kChromeThemeElementId,
-          CustomizeChromeUI::kChromeThemeBackElementId});
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 void CustomizeChromeUI::CreateCustomizeColorSchemeModeHandler(
@@ -475,10 +493,10 @@ void CustomizeChromeUI::CreateCustomizeColorSchemeModeHandler(
 }
 
 void CustomizeChromeUI::CreateThemeColorPickerHandler(
-    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
-        handler,
     mojo::PendingRemote<theme_color_picker::mojom::ThemeColorPickerClient>
-        client) {
+        client,
+    mojo::PendingReceiver<theme_color_picker::mojom::ThemeColorPickerHandler>
+        handler) {
   theme_color_picker_handler_ = std::make_unique<ThemeColorPickerHandler>(
       std::move(handler), std::move(client),
       NtpCustomBackgroundServiceFactory::GetForProfile(profile_),

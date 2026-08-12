@@ -27,6 +27,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
@@ -51,6 +52,7 @@ import java.util.concurrent.TimeoutException;
 /** Integration tests for credit card accessory views. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@Batch(Batch.PER_CLASS)
 public class CreditCardAccessoryIntegrationTest {
     @Rule
     public final FreshCtaTransitTestRule mActivityTestRule =
@@ -97,7 +99,7 @@ public class CreditCardAccessoryIntegrationTest {
 
     @Test
     @SmallTest
-    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/1182626
+    @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/40751565
     @DisableIf.Build(supported_abis_includes = "x86", message = "https://crbug.com/420290639")
     @DisableIf.Build(supported_abis_includes = "x86_64", message = "https://crbug.com/420290639")
     public void testDisplaysEmptyStateMessageWithoutSavedCards() throws TimeoutException {
@@ -117,13 +119,13 @@ public class CreditCardAccessoryIntegrationTest {
                                         R.string.credit_card_accessory_sheet_toggle)));
 
         mHelper.waitForKeyboardToDisappear();
-        whenDisplayed(withId(R.id.credit_card_sheet), /* atLeast= */ 51);
+        whenDisplayed(withId(R.id.credit_card_sheet));
         onView(withText(containsString("No saved payment methods"))).check(matches(isDisplayed()));
     }
 
     @Test
     @MediumTest
-    @DisabledTest(message = "https://crbug.com/1392789, https://crbug.com/1182626")
+    @DisabledTest(message = "https://crbug.com/40247909, https://crbug.com/40751565")
     public void testFillsSuggestionOnClick() throws TimeoutException {
         startAtTestPage(FakeKeyboard::new);
         mHelper.clickNodeAndShowKeyboard("CREDIT_CARD_NAME_FULL", 1);
@@ -140,7 +142,7 @@ public class CreditCardAccessoryIntegrationTest {
                                         R.string.credit_card_accessory_sheet_toggle)));
 
         // Wait for the sheet to come up and be stable.
-        whenDisplayed(withId(R.id.credit_card_sheet), /* atLeast= */ 51);
+        whenDisplayed(withId(R.id.credit_card_sheet));
 
         // Click a suggestion.
         whenDisplayed(withId(R.id.cc_number)).perform(click());

@@ -7,8 +7,11 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/process/process_handle.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -17,16 +20,15 @@
 #include "base/tracing/perfetto_platform.h"
 #include "base/tracing/perfetto_task_runner.h"
 #include "build/build_config.h"
+#include "services/tracing/public/cpp/perfetto/common_data_sources.h"
 #include "services/tracing/public/cpp/perfetto/custom_event_recorder.h"
-#include "services/tracing/public/cpp/perfetto/histogram_samples_data_source.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_tracing_backend.h"
 #include "services/tracing/public/cpp/perfetto/track_name_recorder.h"
-#include "services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.h"
-#include "services/tracing/public/cpp/system_metrics_sampler.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "services/tracing/public/cpp/traced_process_impl.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "services/tracing/public/mojom/tracing_service.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/platform.h"
 #include "third_party/perfetto/include/perfetto/tracing/tracing.h"
 
 #if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
@@ -214,15 +216,23 @@ PerfettoTracedProcess& PerfettoTracedProcess::Get() {
 }
 
 PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
-    : trace_process_thread_(std::make_unique<base::Thread>("PerfettoTrace")),
+    : trace_process_thread_(
+          std::make_unique<base::Thread>("PerfettoTrace",
+                                         base::Thread::Restartable{})),
       task_runner_(trace_process_thread_->StartWithOptions(
                        base::Thread::Options(base::MessagePumpType::IO, 0))
                        ? trace_process_thread_->task_runner()
                        : nullptr),
       will_trace_thread_restart_(will_trace_thread_restart),
       tracing_backend_(std::make_unique<PerfettoTracingBackend>()) {
+  base::ProcessId real_pid = base::GetUniqueIdForProcess().GetUnsafeValue();
+  if (real_pid != base::GetCurrentProcId()) {
+    perfetto::Platform::SetCurrentProcessId(real_pid);
+  }
+
   base::tracing::PerfettoPlatform::Options options{
-      .defer_delayed_tasks = will_trace_thread_restart_};
+      .defer_delayed_tasks = will_trace_thread_restart_,
+      .real_process_id = real_pid};
   platform_ =
       std::make_unique<base::tracing::PerfettoPlatform>(task_runner_, options);
   DETACH_FROM_SEQUENCE(sequence_checker_);
@@ -235,9 +245,15 @@ PerfettoTracedProcess::PerfettoTracedProcess(bool will_trace_thread_restart)
 PerfettoTracedProcess::PerfettoTracedProcess(
     scoped_refptr<base::SequencedTaskRunner> task_runner)
     : task_runner_(task_runner),
-      platform_(
-          std::make_unique<base::tracing::PerfettoPlatform>(task_runner_)),
       tracing_backend_(std::make_unique<PerfettoTracingBackend>()) {
+  base::ProcessId real_pid = base::GetUniqueIdForProcess().GetUnsafeValue();
+  if (real_pid != base::GetCurrentProcId()) {
+    perfetto::Platform::SetCurrentProcessId(real_pid);
+  }
+
+  base::tracing::PerfettoPlatform::Options options{.real_process_id = real_pid};
+  platform_ =
+      std::make_unique<base::tracing::PerfettoPlatform>(task_runner_, options);
   DETACH_FROM_SEQUENCE(sequence_checker_);
   CHECK_EQ(g_instance, nullptr);
   g_instance = this;
@@ -278,9 +294,12 @@ void PerfettoTracedProcess::SetupForTesting(
   SetupClientLibrary(/*enable_consumer=*/true, ShouldSetupSystemTracing());
   // Disassociate the PerfettoTracedProcess from any prior task runner.
   DETACH_FROM_SEQUENCE(sequence_checker_);
+
+  TrackNameRecorder::GetInstance()->StartRecording();
 }
 
 void PerfettoTracedProcess::ResetForTesting() {
+  TrackNameRecorder::GetInstance()->StopRecording();
   base::WaitableEvent on_reset_done;
   // The tracing backend is used internally in Perfetto on the |task_runner_|
   // sequence. Reset and destroy the backend on the task runner to avoid racing
@@ -330,7 +349,8 @@ void PerfettoTracedProcess::SetupClientLibrary(
   init_args.custom_backend = tracing_backend_.get();
   init_args.backends |= perfetto::kCustomBackend;
   init_args.shmem_batch_commits_duration_ms = 1000;
-  init_args.shmem_size_hint_kb = 4 * 1024;
+  init_args.shmem_size_hint_kb =
+      features::kPerfettoSharedMemorySizeBytes.Get() / 1024;
   init_args.shmem_direct_patching_enabled = true;
   init_args.use_monotonic_clock = true;
   init_args.disallow_merging_with_system_tracks = true;
@@ -353,16 +373,13 @@ void PerfettoTracedProcess::SetupClientLibrary(
   // platforms. In particular, on Windows, Perfetto's stderr log messages are
   // not reliable.
   init_args.log_message_callback = &OnPerfettoLogMessage;
-  perfetto::Tracing::Initialize(init_args);
 
-  base::TrackEvent::Register();
-  tracing::TracingSamplerProfiler::RegisterDataSource();
-  tracing::HistogramSamplesDataSource::Register();
-  // SystemMetricsSampler will be started when enabling
-  // kSystemMetricsSourceName.
-  tracing::SystemMetricsSampler::Register(/*system_wide=*/enable_consumer);
-  TrackNameRecorder::GetInstance();
-  CustomEventRecorder::GetInstance();
+  base::TimeTicks initialize_start = base::TimeTicks::Now();
+  perfetto::Tracing::Initialize(init_args);
+  base::UmaHistogramTimes("Tracing.Init.Perfetto.Initialize",
+                          base::TimeTicks::Now() - initialize_start);
+
+  RegisterCommonPerfettoDataSources(enable_consumer);
 }
 
 void PerfettoTracedProcess::SetAllowSystemTracingConsumerCallback(

@@ -6,20 +6,6 @@
 
 namespace glic {
 
-bool GlicSharingManager::PinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return PinTabs(tab_handles, GlicPinTrigger::kUnknown);
-}
-
-bool GlicSharingManager::UnpinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return UnpinTabs(tab_handles, GlicUnpinTrigger::kUnknown);
-}
-
-void GlicSharingManager::UnpinAllTabs() {
-  UnpinAllTabs(GlicUnpinTrigger::kUnknown);
-}
-
 GlicPinEvent::GlicPinEvent(GlicPinTrigger trigger, base::TimeTicks timestamp)
     : trigger(trigger), timestamp(timestamp) {}
 
@@ -54,12 +40,14 @@ bool GlicPinnedTabUsage::IsExplicitlyPinnedByUser() const {
     case GlicPinTrigger::kNewTabDaisyChain:
     case GlicPinTrigger::kConversationChange:
     case GlicPinTrigger::kRestore:
+    case GlicPinTrigger::kContextualCue:
       return false;
     case GlicPinTrigger::kContextMenu:
     case GlicPinTrigger::kCandidatesToggle:
     case GlicPinTrigger::kAtMention:
     case GlicPinTrigger::kActuation:
     case GlicPinTrigger::kWebClientUnknown:
+    case GlicPinTrigger::kTabGroupIntegration:
       return true;
   }
 }

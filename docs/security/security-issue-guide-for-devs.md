@@ -10,37 +10,53 @@ cycle.
 
 Chromium has [public commitments](severity-guidelines.md) to fix security issues
 within certain timeframes. Please treat security issues as high-priority
-interrupts to your work, especially if they are **High Severity (S1)** or
-**Critical Severity (S0)**. However, the expectation is that you handle security
-issues within your normal working hours, not after-hours, weeknights, or on
-vacation. Everyone shares the responsibility of keeping our users safe!
+interrupts to your work, especially if they are **High Severity (S1)** (P1) or
+**Critical Severity (S0)** (P0). However, the expectation is that you handle
+security issues within your normal working hours, not after-hours, weeknights,
+or on vacation. Everyone shares the responsibility of keeping our users safe!
 
-## 1. Understand why you were Assigned
+## Why was I assigned? Can I send to it someone else?
 
-All incoming security bugs are analyzed and triaged by the current [security
-shepherd](shepherd.md). If you have been assigned a security bug, it is because
-the shepherd thinks you are the responsible owner for the code in question. The
-shepherd assigned you the bug because either:
+Incoming security bugs are analyzed and triaged by a robot (the Chrome Security
+Sheepdog) based on OWNERS, recent commits and OOO status when available. Your
+first responsibility is to ensure you are the right assignee, or if the issue
+should properly be handled by someone else. Please quickly take a look at the
+issue and make this determination. If you are the wrong person, please CC folks
+that should be involved, and assign to one of them if the code and stacks on the
+bug point towards a better owner.
 
-1. They have verified the bug is valid and the shepherd expects you to fix it
-2. There is a technical question that needs to be answered before the bug can be
-   fully triaged
+Try not to simply unassign yourself as this will produce work for another human,
+but if you have no idea (or are leaving the project) you can unassign yourself
+and the bug will enter the shepherd’s queue. Remember that people cannot see
+security issues unless they are CC'd in. (Feel free to CC people in!)
 
-In either case, if you are not the correct owner, please suggest a more
-appropriate person and re-assign it to that person. Or, if you do not know the
-correct owner, remove yourself from the Assignee field so that the bug
-re-enters the shepherd’s queue. Setting a component alone will not grant view
-access or alert the component owners, so the shepherd's queue is the best
-way to ensure the bug is properly triaged.
+Critical, High and Medium severity security issues must be assigned to someone,
+this is Chromium policy, so if you feel you are the wrong assignee try not to
+simply remove yourself, instead work to find an alternative assignee.
 
-In the case where the shepherd is asking you technical questions, they will
-further triage the bug after considering your responses.
+## My team has a triage rotation or oncall can we assign NEW security issues ourselves?
 
-Security bugs are also view-restricted until after the fix is released to users.
-It is okay to CC additional people (including yourself if you re-assign the
-issue) that can help diagnose and fix the bug.
+In general: no. Chromium is too complex to have different security processes for
+every component or directory. Managing security SLOs requires issues have owners
+and we cannot relax that for every team.
 
-## 2. Participate in the discussion
+The robots can use an oncall or rotation tool to preferentially assign new
+security issues in a component to the current oncaller. Googlers can contact the
+product security team (go/sheepdog-feedback) to set this up for your component.
+
+Large teams with a proven record of quickly fixing security issues may implement
+a [delegated triage](delegated-triage.md) process with the agreement of the
+Chrome security team.
+
+## We cannot work on the issue immediately, can we mark it as NEW to mark it as available?
+
+Security issues must be owned by a person who is responsible for fixing or
+tracking updates to the issue, and Chrome's processes for enforcing SLOs are
+based on issues being assigned to people. For example, the issue reporter might
+provide new information and this could be missed if the issue is not assigned.
+Security issues with Low (S3) severity do not have SLOs and may be unassigned.
+
+## Participate in the discussion on the issue
 
 Some bugs involve discussion with the reporter and/or members of the security
 team. For example, the issue may be in a feature or system that the shepherd is
@@ -58,7 +74,7 @@ bug is not a security issue or its severity should be downgraded, discuss it wit
 the security team and let them adjust the metadata. However, you can adjust the
 **Found In** field if you know the versions a bug affects.
 
-## 3. Fix the bug
+## Fix the bug
 
 This is the normal part of the job! Write a fix and a regression test, upload
 the CL, and get it reviewed by the appropriate code owner. The shepherd who
@@ -76,17 +92,14 @@ assumption that led to the bug. As an example, [this
 CL](https://chromium-review.googlesource.com/c/chromium/src/+/2167426) fixes a
 use-after-free and describes the lifetime issue and change.
 
-## 4. Merge the fix
+## Merge the fix
 
 After the bug has been marked **Fixed**, automation (or a member of the security
-team) will request merge to the applicable release branches. Once the merge
-questionnaire is posted to the bug, please respond to the questions.
+team) will request merge to the applicable release branches using child bugs of
+the initial issue. Please respond to these quickly and merge to release branches
+to ensure that fixes reach people using Chrome as fast as possible.
 
-If the merge is approved, it is your responsibility to merge the CL to the
-approved branches. The merge approval will show up as the 'Merge' custom field as
-"Approved-&lt;Milestone&gt;".
-
-## 5. Think about patterns
+## Think about patterns
 
 After the reported bug has been fixed and possibly merged, consider if the same
 bug may exist in other places. For example:

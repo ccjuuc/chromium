@@ -134,24 +134,26 @@ void AwRenderViewHostExt::OnPageScaleFactorChanged(float page_scale_factor) {
 
 void AwRenderViewHostExt::UpdateHitTestData(
     mojom::HitTestDataPtr hit_test_data) {
-  content::RenderFrameHost* render_frame_host =
-      frame_host_receivers_.GetCurrentTargetFrame();
+  content::RenderFrameHost& render_frame_host =
+      frame_host_receivers_.CurrentTargetFrame();
   // Make sense from any frame of the active frame tree, because a focused
   // node could be in either the mainframe or a subframe.
-  if (!render_frame_host->IsActive())
+  if (!render_frame_host.IsActive()) {
     return;
+  }
 
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   last_hit_test_data_ = std::move(hit_test_data);
 }
 
 void AwRenderViewHostExt::ContentsSizeChanged(const gfx::Size& contents_size) {
-  content::RenderFrameHost* render_frame_host =
-      frame_host_receivers_.GetCurrentTargetFrame();
+  content::RenderFrameHost& render_frame_host =
+      frame_host_receivers_.CurrentTargetFrame();
 
   // Only makes sense coming from the main frame of the current frame tree.
-  if (!render_frame_host->IsInPrimaryMainFrame())
+  if (!render_frame_host.IsInPrimaryMainFrame()) {
     return;
+  }
 
   client_->OnWebLayoutContentsSizeChanged(contents_size);
 }
@@ -159,18 +161,20 @@ void AwRenderViewHostExt::ContentsSizeChanged(const gfx::Size& contents_size) {
 void AwRenderViewHostExt::ShouldOverrideUrlLoading(
     const std::u16string& url,
     bool has_user_gesture,
-    bool is_redirect,
-    bool is_main_frame,
     ShouldOverrideUrlLoadingCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  content::RenderFrameHost& render_frame_host =
+      frame_host_receivers_.CurrentTargetFrame();
 
   bool ignore_navigation = false;
   AwContentsClientBridge* client =
       AwContentsClientBridge::FromWebContents(web_contents());
   if (client) {
     if (!client->ShouldOverrideUrlLoading(
-            url, has_user_gesture, is_redirect, is_main_frame,
-            net::HttpRequestHeaders(), &ignore_navigation)) {
+            url, has_user_gesture, /*is_redirect=*/false,
+            render_frame_host.IsInPrimaryMainFrame(), net::HttpRequestHeaders(),
+            &ignore_navigation)) {
       // If the shouldOverrideUrlLoading call caused a java exception we should
       // always return immediately here!
       return;

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/policy/reporting/metrics_reporting/metric_reporting_manager.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -12,9 +13,8 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/containers/contains.h"
-#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -53,7 +53,6 @@
 #include "chrome/browser/ash/policy/status_collector/managed_session_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/reporting/metric_default_utils.h"
 #include "chrome/browser/chromeos/reporting/metric_reporting_prefs.h"
 #include "chrome/browser/chromeos/reporting/network/network_bandwidth_sampler.h"
@@ -66,7 +65,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-data-view.h"
+#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-shared.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/reporting/client/report_queue_configuration.h"
@@ -104,7 +103,6 @@ constexpr char kWebsiteTelemetry[] = "website_telemetry";
 
 // static
 BASE_FEATURE(kEnableFatalCrashEventsObserver,
-             "EnableFatalCrashEventsObserver",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kEnableChromeFatalCrashEventsObserver,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -141,9 +139,10 @@ bool MetricReportingManager::Delegate::IsAppServiceAvailableForProfile(
 
 // static
 std::unique_ptr<MetricReportingManager> MetricReportingManager::Create(
+    ::network::NetworkQualityTracker* network_quality_tracker,
     policy::ManagedSessionService* managed_session_service) {
-  auto manager = base::WrapUnique(
-      new MetricReportingManager(std::make_unique<Delegate>()));
+  auto manager = base::WrapUnique(new MetricReportingManager(
+      network_quality_tracker, std::make_unique<Delegate>()));
   manager->DelayedInit(managed_session_service);
   return manager;
 }
@@ -189,16 +188,12 @@ void MetricReportingManager::OnLogin(Profile* profile) {
   website_event_report_queue_ = delegate_->CreateMetricReportQueue(
       EventType::kUser, Destination::EVENT_METRIC, Priority::SLOW_BATCH,
       std::move(website_event_rate_limiter), source_info);
-  if (base::FeatureList::IsEnabled(
-          chromeos::features::kKioskHeartbeatsViaERP)) {
-    kiosk_heartbeat_telemetry_report_queue_ =
-        delegate_->CreatePeriodicUploadReportQueue(
-            EventType::kUser, Destination::KIOSK_HEARTBEAT_EVENTS,
-            Priority::IMMEDIATE, &reporting_settings_,
-            ::ash::kHeartbeatFrequency,
-            metrics::GetDefaultKioskHeartbeatUploadFrequency(),
-            /*rate_unit_to_ms=*/1, source_info);
-  }
+  kiosk_heartbeat_telemetry_report_queue_ =
+      delegate_->CreatePeriodicUploadReportQueue(
+          EventType::kUser, Destination::KIOSK_HEARTBEAT_EVENTS,
+          Priority::IMMEDIATE, &reporting_settings_, ::ash::kHeartbeatFrequency,
+          metrics::GetDefaultKioskHeartbeatUploadFrequency(),
+          /*rate_unit_to_ms=*/1, source_info);
   user_peripheral_events_and_telemetry_report_queue_ =
       delegate_->CreateMetricReportQueue(
           EventType::kUser, Destination::PERIPHERAL_EVENTS, Priority::SECURITY,
@@ -228,7 +223,7 @@ MetricReportingManager::GetTelemetryCollectors(MetricEventType event_type) {
           ::ash::kReportDeviceSignalStrengthEventDrivenTelemetry);
     case USB_ADDED:
     case USB_REMOVED:
-      if (base::Contains(telemetry_collectors_, kDelayedPeripheralTelemetry)) {
+      if (telemetry_collectors_.contains(kDelayedPeripheralTelemetry)) {
         return {telemetry_collectors_.at(kDelayedPeripheralTelemetry).get()};
       }
       // Return statement or `ABSL_FALLTHROUGH_INTENDED` is necessary to silence
@@ -240,8 +235,10 @@ MetricReportingManager::GetTelemetryCollectors(MetricEventType event_type) {
 }
 
 MetricReportingManager::MetricReportingManager(
+    ::network::NetworkQualityTracker* network_quality_tracker,
     std::unique_ptr<Delegate> delegate)
-    : delegate_(std::move(delegate)) {}
+    : network_quality_tracker_(CHECK_DEREF(network_quality_tracker)),
+      delegate_(std::move(delegate)) {}
 
 void MetricReportingManager::Shutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -433,7 +430,7 @@ void MetricReportingManager::InitOneShotTelemetryCollector(
     bool enable_default_value,
     base::TimeDelta init_delay) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(!base::Contains(telemetry_collectors_, collector_name));
+  CHECK(!telemetry_collectors_.contains(collector_name));
   if (!metric_report_queue) {
     return;
   }
@@ -451,7 +448,7 @@ void MetricReportingManager::InitManualTelemetryCollector(
     const std::string& enable_setting_path,
     bool enable_default_value) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(!base::Contains(telemetry_collectors_, collector_name));
+  CHECK(!telemetry_collectors_.contains(collector_name));
   if (!metric_report_queue) {
     return;
   }
@@ -473,7 +470,7 @@ void MetricReportingManager::InitPeriodicTelemetryCollector(
     int rate_unit_to_ms,
     base::TimeDelta init_delay) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  CHECK(!base::Contains(telemetry_collectors_, collector_name));
+  CHECK(!telemetry_collectors_.contains(collector_name));
   if (!metric_report_queue) {
     return;
   }
@@ -567,7 +564,7 @@ void MetricReportingManager::InitNetworkCollectors(Profile* profile) {
 
   // Network bandwidth telemetry.
   auto network_bandwidth_sampler = std::make_unique<NetworkBandwidthSampler>(
-      g_browser_process->network_quality_tracker(), profile->GetWeakPtr());
+      &network_quality_tracker_.get(), profile->GetWeakPtr());
   network_bandwidth_collector_ = delegate_->CreatePeriodicCollector(
       network_bandwidth_sampler.get(), user_telemetry_report_queue_.get(),
       &reporting_settings_,
@@ -598,7 +595,7 @@ void MetricReportingManager::InitNetworkPeriodicCollector(
 
 void MetricReportingManager::InitAppCollectors(Profile* profile) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (base::Contains(telemetry_collectors_, kAppTelemetry) ||
+  if (telemetry_collectors_.contains(kAppTelemetry) ||
       !user_event_report_queue_ || !user_reporting_settings_ ||
       !user_telemetry_report_queue_) {
     return;
@@ -847,7 +844,7 @@ MetricReportingManager::GetTelemetryCollectorsFromSetting(
     std::string_view setting_name) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const base::Value::List* telemetry_list = nullptr;
+  const base::ListValue* telemetry_list = nullptr;
   const bool valid = ::ash::CrosSettings::Get()->GetList(
       std::string(setting_name), &telemetry_list);
   if (!valid || !telemetry_list) {
@@ -863,10 +860,9 @@ MetricReportingManager::GetTelemetryCollectorsFromSetting(
     }
 
     const std::string* telemetry_name = telemetry.GetIfString();
-    if (telemetry_name &&
-        base::Contains(telemetry_collectors_, *telemetry_name) &&
-        !base::Contains(samplers,
-                        telemetry_collectors_.at(*telemetry_name).get())) {
+    if (telemetry_name && telemetry_collectors_.contains(*telemetry_name) &&
+        !std::ranges::contains(
+            samplers, telemetry_collectors_.at(*telemetry_name).get())) {
       samplers.push_back(telemetry_collectors_.at(*telemetry_name).get());
     }
   }

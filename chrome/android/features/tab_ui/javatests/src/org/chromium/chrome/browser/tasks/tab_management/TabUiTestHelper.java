@@ -74,7 +74,6 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab_ui.TabCardThemeUtil;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.tab_ui.R;
@@ -134,22 +133,23 @@ public class TabUiTestHelper {
      * @param cta The current running activity.
      */
     public static void enterTabSwitcher(ChromeTabbedActivity cta) {
-        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
         // TODO(crbug.com/40155797): Replace this with clicking tab switcher button via espresso.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     cta.findViewById(R.id.tab_switcher_button).performClick();
                 });
-        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.TAB_SWITCHER);
+        LayoutTestUtils.waitForLayout(cta.getLayoutManager(), LayoutType.HUB);
     }
 
     /**
      * Leave tab switcher by tapping "back".
-     * @param cta  The current running activity.
+     *
+     * @param cta The current running activity.
      */
     public static void leaveTabSwitcher(ChromeTabbedActivity cta) {
         LayoutManagerChrome layoutManager = cta.getLayoutManager();
-        LayoutTestUtils.waitForLayout(layoutManager, LayoutType.TAB_SWITCHER);
+        LayoutTestUtils.waitForLayout(layoutManager, LayoutType.HUB);
         // Back press may resolve differently during the show/hide animations. Don't call this until
         // we are certain the layout is visible.
         CallbackHelper finishedHidingCallbackHelper = new CallbackHelper();
@@ -157,7 +157,7 @@ public class TabUiTestHelper {
                 new LayoutStateObserver() {
                     @Override
                     public void onFinishedHiding(int layoutType) {
-                        if (layoutType != LayoutType.TAB_SWITCHER) return;
+                        if (layoutType != LayoutType.HUB) return;
 
                         finishedHidingCallbackHelper.notifyCalled();
                     }
@@ -171,7 +171,7 @@ public class TabUiTestHelper {
         try {
             finishedHidingCallbackHelper.waitForOnly();
         } catch (TimeoutException e) {
-            throw new AssertionError("LayoutType.TAB_SWITCHER never finished hiding.", e);
+            throw new AssertionError("LayoutType.HUB never finished hiding.", e);
         }
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
@@ -200,7 +200,7 @@ public class TabUiTestHelper {
 
     private static void clickTabSwitcherCardWithParent(
             ChromeTabbedActivity cta, int index, int parentId) {
-        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
         onView(allOf(isDescendantOfA(withId(parentId)), withId(R.id.tab_list_recycler_view)))
                 .perform(RecyclerViewActions.actionOnItemAtPosition(index, click()));
     }
@@ -428,10 +428,8 @@ public class TabUiTestHelper {
                         tabGroup.add(tab);
                     }
                     createTabGroup(cta, isIncognito, tabGroup);
-                    TabGroupModelFilter filter =
-                            cta.getTabModelSelector().getTabGroupModelFilter(isIncognito);
-                    assertEquals(1, filter.getTabGroupCount());
-                    assertEquals(1, filter.getIndividualTabAndGroupCount());
+                    assertEquals(1, tabModel.getTabGroupCount());
+                    assertEquals(1, tabModel.getIndividualTabAndGroupCount());
                 });
     }
 
@@ -457,11 +455,12 @@ public class TabUiTestHelper {
 
     /**
      * Verify there are correct number of cards in tab switcher.
-     * @param cta       The current running activity.
-     * @param count     The correct number of cards in tab switcher.
+     *
+     * @param cta The current running activity.
+     * @param count The correct number of cards in tab switcher.
      */
     public static void verifyTabSwitcherCardCount(ChromeTabbedActivity cta, int count) {
-        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
         int viewHolder = getTabSwitcherAncestorId(cta);
         onView(allOf(isDescendantOfA(withId(viewHolder)), withId(R.id.tab_list_recycler_view)))
                 .check(ChildrenCountAssertion.havingTabCount(count));
@@ -475,7 +474,7 @@ public class TabUiTestHelper {
      * @return View ID of the a nearby ancestor view.
      */
     public static int getTabSwitcherAncestorId(Context context) {
-        return org.chromium.chrome.browser.hub.R.id.hub_pane_host;
+        return R.id.hub_pane_host;
     }
 
     /**
@@ -485,7 +484,7 @@ public class TabUiTestHelper {
      * @param count The correct number of favicons in tab strip.
      */
     static void verifyTabStripFaviconCount(ChromeTabbedActivity cta, int count) {
-        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertFalse(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
         onView(
                         allOf(
                                 withParent(withId(R.id.toolbar_container_view)),
@@ -503,13 +502,13 @@ public class TabUiTestHelper {
     public static void createTabGroup(
             ChromeTabbedActivity cta, boolean isIncognito, List<Tab> tabs) {
         if (tabs.size() == 0) return;
-        TabGroupModelFilter filter = cta.getTabModelSelector().getTabGroupModelFilter(isIncognito);
+        TabModel tabModel = cta.getTabModelSelector().getModel(isIncognito);
         Tab rootTab = tabs.get(0);
         for (int i = 1; i < tabs.size(); i++) {
             Tab tab = tabs.get(i);
             assertEquals(isIncognito, tab.isIncognito());
             ThreadUtils.runOnUiThreadBlocking(
-                    () -> filter.mergeTabsToGroup(tab.getId(), rootTab.getId()));
+                    () -> tabModel.mergeTabsToGroup(tab.getId(), rootTab.getId()));
         }
     }
 
@@ -758,13 +757,14 @@ public class TabUiTestHelper {
     /**
      * Click on the incognito toggle within grid tab switcher top toolbar to switch between normal
      * and incognito tab model.
-     * @param cta          The current running activity.
-     * @param isIncognito  indicates whether the incognito or normal tab model is selected after
-     *         switch.
+     *
+     * @param cta The current running activity.
+     * @param isIncognito indicates whether the incognito or normal tab model is selected after
+     *     switch.
      */
     public static void switchTabModel(ChromeTabbedActivity cta, boolean isIncognito) {
         assertTrue(isIncognito != cta.getTabModelSelector().isIncognitoSelected());
-        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.TAB_SWITCHER));
+        assertTrue(cta.getLayoutManager().isLayoutVisible(LayoutType.HUB));
 
         // The non-incognito contentDescription is a substring found in the following string:
         // R.string.accessibility_tab_switcher_standard_stack.
@@ -774,8 +774,7 @@ public class TabUiTestHelper {
                         : "standard tab";
         onView(
                         allOf(
-                                isDescendantOfA(
-                                        withId(org.chromium.chrome.browser.hub.R.id.hub_toolbar)),
+                                isDescendantOfA(withId(R.id.hub_toolbar)),
                                 withContentDescription(containsString(contentDescription))))
                 .perform(click());
 
@@ -806,7 +805,7 @@ public class TabUiTestHelper {
                         holder.getContext(),
                         /* isIncognito= */ false,
                         /* isSelected= */ true,
-                        /* colorId */ null);
+                        /* colorId= */ null);
         return actualColor == selectedColor;
     }
 

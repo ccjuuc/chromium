@@ -8,6 +8,7 @@
 
 #include <array>
 
+#include "audio_parameters.h"
 #include "base/strings/string_number_conversions.h"
 #include "media/base/channel_layout.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -150,7 +151,7 @@ TEST(AudioParameters, Compare) {
 }
 
 TEST(AudioParameters, Constructor_ValidChannelCounts) {
-  int expected_channels = 8;
+  constexpr int expected_channels = 8;
   ChannelLayout expected_layout = CHANNEL_LAYOUT_DISCRETE;
   ChannelLayoutConfig channel_layout_config(CHANNEL_LAYOUT_DISCRETE,
                                             expected_channels);
@@ -163,7 +164,7 @@ TEST(AudioParameters, Constructor_ValidChannelCounts) {
 }
 
 TEST(AudioParameters, Constructor_ValidChannelCountsFor514Downmix) {
-  int expected_channels = 7;
+  constexpr int expected_channels = 6;
   constexpr ChannelLayout expected_layout = CHANNEL_LAYOUT_5_1_4_DOWNMIX;
   ChannelLayoutConfig channel_layout_config(expected_layout, expected_channels);
 
@@ -173,7 +174,6 @@ TEST(AudioParameters, Constructor_ValidChannelCountsFor514Downmix) {
   EXPECT_EQ(expected_layout, params.channel_layout());
   EXPECT_TRUE(params.IsValid());
 
-  // We do not have to explicitly set the channels for this layout.
   params.Reset(AudioParameters::AUDIO_PCM_LOW_LATENCY,
                ChannelLayoutConfig::FromLayout<expected_layout>(), 44100, 880);
   EXPECT_EQ(6, params.channels());
@@ -197,32 +197,57 @@ TEST(AudioParameters, Constructor_CopyChannelLayoutConfig) {
   EXPECT_TRUE(params2.IsValid());
 }
 
-TEST(AudioParameters, ShouldCheckDiscreteWithNoChannels) {
-  ASSERT_DEATH_IF_SUPPORTED(
-      {
-        ChannelLayoutConfig channel_layout_config(CHANNEL_LAYOUT_DISCRETE, 0);
-      },
-      "");
+TEST(AudioParameters, EffectsMaskToStringFuchsiaUsage) {
+  // Fuchsia effects values are represented by an integer encoded in a small
+  // range of bits, so verify that the to-string helper correctly decodes the
+  // integer to a single item, given that bit values overlap.
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION),
+            "FUCHSIA_RENDER_USAGE_COMMUNICATION");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION),
+            "FUCHSIA_RENDER_USAGE_INTERRUPTION");
 }
 
-TEST(AudioParameters, ChannelLayoutConfig_Guess) {
-  ChannelLayoutConfig channel_layout_config = ChannelLayoutConfig::Guess(2);
-  EXPECT_EQ(CHANNEL_LAYOUT_STEREO, channel_layout_config.channel_layout());
-  EXPECT_EQ(2, channel_layout_config.channels());
-}
+TEST(AudioOutputBufferParametersHelperTest, LoadAndWriteGlitchInfo) {
+  AudioOutputBufferParameters params = {};
+  AudioOutputBufferParametersHelper helper;
 
-TEST(AudioParameters, ChannelLayoutConfig_GuessUnsupported) {
-  ChannelLayoutConfig channel_layout_config = ChannelLayoutConfig::Guess(100);
-  EXPECT_EQ(CHANNEL_LAYOUT_UNSUPPORTED, channel_layout_config.channel_layout());
-  EXPECT_EQ(0, channel_layout_config.channels());
-}
+  // Check initial state.
+  AudioGlitchInfo glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
 
-TEST(AudioParameters, ChannelLayoutConfig_GuessDiscrete) {
-  constexpr int kNumChannels = 12;
-  ChannelLayoutConfig channel_layout_config =
-      ChannelLayoutConfig::Guess(kNumChannels);
-  EXPECT_EQ(CHANNEL_LAYOUT_DISCRETE, channel_layout_config.channel_layout());
-  EXPECT_EQ(kNumChannels, channel_layout_config.channels());
+  // Write a glitch.
+  AudioGlitchInfo glitch1{.duration = base::Milliseconds(100), .count = 1};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch1);
+
+  // Check that the glitch is read.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count, glitch_info.count);
+
+  // Check that the internal state is updated, so we don't read it again.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
+
+  // Write another glitch.
+  AudioGlitchInfo glitch2{.duration = base::Milliseconds(200), .count = 2};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch2);
+
+  // Check that we read the new glitch.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch2.count, glitch_info.count);
+
+  // Check that a new helper reads the cumulative glitch info.
+  AudioOutputBufferParametersHelper helper2;
+  glitch_info = helper2.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration + glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count + glitch2.count, glitch_info.count);
 }
 
 }  // namespace media

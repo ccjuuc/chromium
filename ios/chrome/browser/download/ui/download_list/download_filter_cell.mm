@@ -45,23 +45,23 @@ NSString* GetFilterTypeDisplayText(DownloadFilterType filterType) {
   }
 }
 
-// Returns the corresponding SF Symbol name for the given filter type.
-NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
+// Returns the corresponding SF Symbol for the given filter type.
+Symbol GetFilterTypeSymbol(DownloadFilterType filterType) {
   switch (filterType) {
     case DownloadFilterType::kAll:
-      return kCheckmarkSymbol;
+      return SymbolCheckmark;
     case DownloadFilterType::kDocument:
-      return kTextJustifyLeftSymbol;
+      return SymbolTextJustifyLeft;
     case DownloadFilterType::kImage:
-      return kPhotoSymbol;
+      return SymbolPhoto;
     case DownloadFilterType::kVideo:
-      return kVideoSymbol;
+      return SymbolVideo;
     case DownloadFilterType::kAudio:
-      return kWaveformSymbol;
+      return SymbolWaveform;
     case DownloadFilterType::kPDF:
-      return kTextDocument;
+      return SymbolTextDocument;
     case DownloadFilterType::kOther:
-      return kDocSymbol;
+      return SymbolDoc;
   }
 }
 
@@ -78,13 +78,78 @@ NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
   DownloadFilterType _filterType;
 }
 
+#pragma mark - UICollectionViewCell
+
 - (instancetype)initWithFrame:(CGRect)frame {
   self = [super initWithFrame:frame];
   if (self) {
     [self setupViews];
+    [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
+                       withAction:@selector(updateBorderColor)];
+    self.isAccessibilityElement = YES;
+    self.accessibilityTraits = UIAccessibilityTraitButton;
   }
   return self;
 }
+
+- (void)setSelected:(BOOL)selected {
+  [super setSelected:selected];
+  if (selected) {
+    self.backgroundColor = [UIColor colorNamed:kBlueColor];
+    _titleLabel.textColor = [UIColor colorNamed:kInvertedTextPrimaryColor];
+    _iconImageView.tintColor = [UIColor colorNamed:kInvertedTextPrimaryColor];
+    self.layer.borderWidth = 0.0;
+    self.layer.borderColor = [UIColor clearColor].CGColor;
+    self.accessibilityTraits |= UIAccessibilityTraitSelected;
+  } else {
+    self.backgroundColor = UIColor.clearColor;
+    _titleLabel.textColor = [UIColor colorNamed:kTextPrimaryColor];
+    _iconImageView.tintColor = [UIColor colorNamed:kTextPrimaryColor];
+    self.layer.borderWidth = 1.0;
+    [self updateBorderColor];
+    self.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+  }
+}
+
+#pragma mark - Public
+
+- (void)configureWithFilterType:(DownloadFilterType)filterType {
+  _filterType = filterType;
+  NSString* text = GetFilterTypeDisplayText(filterType);
+  _titleLabel.text = text;
+  _iconImageView.image = SymbolWithPointSize(GetFilterTypeSymbol(filterType),
+                                             kDownloadFilterIconSize);
+  self.accessibilityLabel = text;
+}
+
++ (CGFloat)cellSizeForFilterType:(DownloadFilterType)filterType {
+  NSString* text = GetFilterTypeDisplayText(filterType);
+
+  UIFont* font =
+      [UIFont preferredFontForTextStyle:GetDownloadFilterCellTitleFontStyle()];
+
+  // Calculate the actual text size using the cell's font to ensure proper fit.
+  CGSize textSize =
+      [text boundingRectWithSize:CGSizeMake(CGFLOAT_MAX,
+                                            kDownloadFilterCellHeight)
+                         options:NSStringDrawingUsesLineFragmentOrigin
+                      attributes:@{NSFontAttributeName : font}
+                         context:nil]
+          .size;
+
+  // Calculate total width including icon, spacing, and padding on both sides.
+  CGFloat horizontalPadding = kDownloadFilterCellHorizontalPadding * 2;
+  CGFloat cellWidth = ceil(textSize.width) + kDownloadFilterIconSize +
+                      kDownloadFilterIconTitleSpacing + horizontalPadding;
+
+  return cellWidth;
+}
+
++ (CGFloat)cellHeight {
+  return kDownloadFilterCellHeight;
+}
+
+#pragma mark - Private
 
 - (void)setupViews {
   self.layer.cornerRadius = kDownloadFilterCellHeight / 2;
@@ -128,55 +193,10 @@ NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
   ]];
 }
 
-- (void)configureWithFilterType:(DownloadFilterType)filterType {
-  _filterType = filterType;
-  _titleLabel.text = GetFilterTypeDisplayText(filterType);
-  _iconImageView.image = DefaultSymbolWithPointSize(
-      GetFilterTypeSymbolName(filterType), kDownloadFilterIconSize);
-}
-
-- (void)setSelected:(BOOL)selected {
-  [super setSelected:selected];
-  if (selected) {
-    self.backgroundColor = [UIColor colorNamed:kBlueColor];
-    _titleLabel.textColor = [UIColor colorNamed:kInvertedTextPrimaryColor];
-    _iconImageView.tintColor = [UIColor colorNamed:kInvertedTextPrimaryColor];
-    self.layer.borderWidth = 0.0;
-    self.layer.borderColor = [UIColor clearColor].CGColor;
-  } else {
-    self.backgroundColor = UIColor.clearColor;
-    _titleLabel.textColor = [UIColor colorNamed:kTextPrimaryColor];
-    _iconImageView.tintColor = [UIColor colorNamed:kTextPrimaryColor];
-    self.layer.borderWidth = 1.0;
-    self.layer.borderColor = [UIColor colorNamed:kTextQuaternaryColor].CGColor;
-  }
-}
-
-+ (CGFloat)cellSizeForFilterType:(DownloadFilterType)filterType {
-  NSString* text = GetFilterTypeDisplayText(filterType);
-
-  UIFont* font =
-      [UIFont preferredFontForTextStyle:GetDownloadFilterCellTitleFontStyle()];
-
-  // Calculate the actual text size using the cell's font to ensure proper fit.
-  CGSize textSize =
-      [text boundingRectWithSize:CGSizeMake(CGFLOAT_MAX,
-                                            kDownloadFilterCellHeight)
-                         options:NSStringDrawingUsesLineFragmentOrigin
-                      attributes:@{NSFontAttributeName : font}
-                         context:nil]
-          .size;
-
-  // Calculate total width including icon, spacing, and padding on both sides.
-  CGFloat horizontalPadding = kDownloadFilterCellHorizontalPadding * 2;
-  CGFloat cellWidth = ceil(textSize.width) + kDownloadFilterIconSize +
-                      kDownloadFilterIconTitleSpacing + horizontalPadding;
-
-  return cellWidth;
-}
-
-+ (CGFloat)cellHeight {
-  return kDownloadFilterCellHeight;
+// Re-resolves the border CGColor from the dynamic UIColor to adapt to the
+// current user interface style (Light/Dark Mode).
+- (void)updateBorderColor {
+  self.layer.borderColor = [UIColor colorNamed:kTextQuaternaryColor].CGColor;
 }
 
 @end

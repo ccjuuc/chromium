@@ -7,15 +7,17 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_header_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_row_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "components/omnibox/browser/test_omnibox_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/omnibox_proto/types.pb.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/display/test/test_screen.h"
@@ -23,7 +25,6 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/types/event_type.h"
-#include "ui/gfx/image/image.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget.h"
 
@@ -72,7 +73,7 @@ class OmniboxResultViewTest : public ChromeViewsTestBase {
 
     // Create a widget and assign bounds to support calls to HitTestPoint.
     widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
 
     omnibox_controller_ = std::make_unique<OmniboxController>(
         std::make_unique<TestOmniboxClient>());
@@ -316,4 +317,41 @@ TEST_F(OmniboxResultViewTest, FeaturedEnterpriseSearchMatch) {
   result_view()->SetMatch(match);
   // No assertions necessary; just exercising code paths for featured Enterprise
   // search match.
+}
+
+TEST_F(OmniboxResultViewTest, ContextualSecondaryText) {
+  OmniboxMatchCellView* suggestion_view = result_view()->suggestion_view_;
+  OmniboxTextView* description_view = suggestion_view->description();
+
+  // 1. Test subtype-based identification.
+  {
+    AutocompleteMatch match;
+    match.subtypes.insert(omnibox::SuggestSubtype::SUBTYPE_CONTEXTUAL_SEARCH);
+    match.description = u"secondary text";
+    result_view()->SetMatch(match);
+
+    // Initially not hovered or selected, so description should be hidden.
+    EXPECT_FALSE(description_view->GetVisible());
+
+    // Hovering should show the description.
+    result_view()->OnMouseEntered(
+        FakeMouseEvent(ui::EventType::kMouseEntered, 0));
+    EXPECT_TRUE(description_view->GetVisible());
+
+    // Un-hovering should hide it again.
+    result_view()->OnMouseExited(
+        FakeMouseEvent(ui::EventType::kMouseMoved, 0, 200, 200));
+    EXPECT_FALSE(description_view->GetVisible());
+  }
+
+  // 2. Test reusability (contextual -> normal).
+  {
+    AutocompleteMatch normal_match;
+    normal_match.description = u"normal description";
+    // Reuse the view that was previously contextual.
+    result_view()->SetMatch(normal_match);
+
+    // Normal suggestions should always show their description.
+    EXPECT_TRUE(description_view->GetVisible());
+  }
 }

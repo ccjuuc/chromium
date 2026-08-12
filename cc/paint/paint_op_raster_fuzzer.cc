@@ -2,18 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include <stddef.h>
 #include <stdint.h>
 
 #include <cstdint>
+#include <optional>
 
 #include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/memory/aligned_memory.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/process/memory.h"
 #include "base/test/test_discardable_memory_allocator.h"
 #include "cc/paint/paint_cache.h"
@@ -21,23 +21,31 @@
 #include "cc/paint/paint_op_reader.h"
 #include "cc/paint/paint_op_writer.h"
 #include "cc/test/transfer_cache_test_helper.h"
-#include "components/viz/test/test_context_provider.h"
-#include "components/viz/test/test_gles2_interface.h"
 #include "gpu/command_buffer/common/buffer.h"
 #include "gpu/command_buffer/service/service_font_manager.h"
-#include "gpu/skia_bindings/gl_bindings_skia_cmd_buffer.h"
+#include "testing/libfuzzer/libfuzzer_base_wrappers.h"
+#include "testing/libfuzzer/libfuzzer_exports.h"
+#include "third_party/skia/include/core/SkPictureRecorder.h"
+#include "third_party/skia/include/core/SkStream.h"
 #include "third_party/skia/include/core/SkSurface.h"
 #include "third_party/skia/include/gpu/GpuTypes.h"
 #include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/gl/GrGLDirectContext.h"
 #include "third_party/skia/include/gpu/ganesh/gl/GrGLInterface.h"
+#include "third_party/skia/include/gpu/ganesh/mock/GrMockTypes.h"
 
 struct Environment {
   Environment() {
-    // Disable noisy logging as per "libFuzzer in Chrome" documentation:
-    // testing/libfuzzer/getting_started.md#Disable-noisy-error-message-logging.
-    logging::SetMinLogLevel(logging::LOGGING_FATAL);
+    static constexpr char kDumpSKPSwitch[] = "dump-skp";
+    base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
+    if (cl->HasSwitch(kDumpSKPSwitch)) {
+      dump_skp = cl->GetSwitchValuePath(kDumpSKPSwitch);
+    } else {
+      // Disable noisy logging as per "libFuzzer in Chrome" documentation:
+      // testing/libfuzzer/getting_started.md#Disable-noisy-error-message-logging.
+      logging::SetMinLogLevel(logging::LOGGING_FATAL);
+    }
 
     base::EnableTerminationOnOutOfMemory();
     base::DiscardableMemoryAllocator::SetInstance(
@@ -46,8 +54,11 @@ struct Environment {
 
   ~Environment() { base::DiscardableMemoryAllocator::SetInstance(nullptr); }
 
+  const std::optional<base::FilePath>& DumpSKP() const { return dump_skp; }
+
  private:
   base::TestDiscardableMemoryAllocator discardable_memory_allocator;
+  std::optional<base::FilePath> dump_skp;
 };
 
 class FontSupport : public gpu::ServiceFontManager::Client {
@@ -80,19 +91,10 @@ class FontSupport : public gpu::ServiceFontManager::Client {
   base::flat_map<uint32_t, scoped_refptr<gpu::Buffer>> buffers_;
 };
 
-void Raster(GrDirectContext* gr_context,
+void Raster(SkCanvas* canvas,
             SkStrikeClient* strike_client,
             cc::ServicePaintCache* paint_cache,
-            const uint8_t* data,
-            size_t size) {
-  const size_t kRasterDimension = 32;
-
-  SkImageInfo image_info = SkImageInfo::MakeN32(
-      kRasterDimension, kRasterDimension, kOpaque_SkAlphaType);
-  sk_sp<SkSurface> surface =
-      SkSurfaces::RenderTarget(gr_context, skgpu::Budgeted::kYes, image_info);
-  SkCanvas* canvas = surface->getCanvas();
-
+            base::span<const uint8_t> input) {
   cc::PlaybackParams params(nullptr, canvas->getLocalToDevice());
   cc::TransferCacheTestHelper transfer_cache_helper;
   std::vector<uint8_t> scratch_buffer;
@@ -104,14 +106,12 @@ void Raster(GrDirectContext* gr_context,
       .is_privileged = true};
 
   // Need kHeaderBytes bytes to be able to read the header.
-  while (size >= cc::PaintOpWriter::kHeaderBytes) {
-    std::unique_ptr<char, base::AlignedFreeDeleter> deserialized(
-        static_cast<char*>(base::AlignedAlloc(
-            sizeof(cc::LargestPaintOp), cc::PaintOpBuffer::kPaintOpAlign)));
+  while (input.size() >= cc::PaintOpWriter::kHeaderBytes) {
+    auto deserialized = base::AlignedUninit<uint8_t>(
+        sizeof(cc::LargestPaintOp), cc::PaintOpBuffer::kPaintOpAlign);
     size_t bytes_read = 0;
     cc::PaintOp* deserialized_op = cc::PaintOp::Deserialize(
-        data, size, deserialized.get(), sizeof(cc::LargestPaintOp), &bytes_read,
-        deserialize_options);
+        input, deserialized.as_span(), &bytes_read, deserialize_options);
 
     if (!deserialized_op) {
       break;
@@ -121,36 +121,83 @@ void Raster(GrDirectContext* gr_context,
 
     deserialized_op->DestroyThis();
 
-    size -= bytes_read;
-    data += bytes_read;
+    input = input.subspan(bytes_read);
   }
+}
+
+void Raster(GrDirectContext* gr_context,
+            SkStrikeClient* strike_client,
+            cc::ServicePaintCache* paint_cache,
+            base::span<const uint8_t> input) {
+  const size_t kRasterDimension = 32;
+
+  SkImageInfo image_info = SkImageInfo::MakeN32(
+      kRasterDimension, kRasterDimension, kOpaque_SkAlphaType);
+  sk_sp<SkSurface> surface =
+      SkSurfaces::RenderTarget(gr_context, skgpu::Budgeted::kYes, image_info);
+
+  Raster(surface->getCanvas(), strike_client, paint_cache, input);
+}
+
+bool DumpSKP(SkStrikeClient* strike_client,
+             cc::ServicePaintCache* paint_cache,
+             base::span<const uint8_t> input,
+             const Environment& env) {
+  if (!env.DumpSKP()) {
+    return false;
+  }
+
+  SkFILEWStream wstream(env.DumpSKP()->AsUTF8Unsafe().c_str());
+  if (!wstream.isValid()) {
+    LOG(ERROR) << "Invalid --dump-skp output path.";
+    return true;
+  }
+
+  SkPictureRecorder recorder;
+  SkCanvas* canvas = recorder.beginRecording(32, 32);
+  Raster(canvas, strike_client, paint_cache, input);
+  recorder.finishRecordingAsPicture()->serialize(&wstream);
+
+  return true;
+}
+
+struct FontsAndRasterData {
+  // These spans have the same lifetime as the input from libFuzzer.
+  // There's no need to make them `base::raw_span`.
+  RAW_PTR_EXCLUSION base::span<const uint8_t> fonts;
+  RAW_PTR_EXCLUSION base::span<const uint8_t> raster_data;
+};
+
+std::optional<FontsAndRasterData> PartitionInputData(
+    base::span<const uint8_t> data) {
+  if (data.size() <= sizeof(size_t)) {
+    return std::nullopt;
+  }
+
+  size_t bytes_for_fonts = data[0];
+  if (bytes_for_fonts > data.size()) {
+    bytes_for_fonts = data.size() / 2;
+  }
+
+  // This can result in 0 bytes being partitioned for fonts.
+  const size_t raster_data_offset =
+      base::bits::AlignDown(bytes_for_fonts, cc::PaintOpWriter::kMaxAlignment);
+  const auto [fonts, raster_data] = data.split_at(raster_data_offset);
+  return FontsAndRasterData{
+      .fonts = fonts,
+      .raster_data = raster_data,
+  };
 }
 
 // Deserialize an arbitrary number of cc::PaintOps and raster them
 // using gpu raster into an SkCanvas.
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  if (size <= sizeof(size_t)) {
+DEFINE_LLVM_FUZZER_TEST_ONE_INPUT_SPAN(base::span<const uint8_t> data) {
+  std::optional<FontsAndRasterData> partitioned = PartitionInputData(data);
+  if (!partitioned.has_value()) {
     return 0;
   }
 
-  [[maybe_unused]] static Environment* env = new Environment();
-  base::CommandLine::Init(0, nullptr);
-
-  // SAFETY: required from fuzzer.
-  base::span<const uint8_t> data_span = UNSAFE_BUFFERS(base::span(data, size));
-
-  // Partition the data to use some bytes for populating the font cache.
-  uint32_t bytes_for_fonts = data[0];
-  if (bytes_for_fonts > size) {
-    bytes_for_fonts = size / 2;
-  }
-  const uint8_t* raster_data = base::bits::AlignDown(
-      data + bytes_for_fonts, cc::PaintOpWriter::kMaxAlignment);
-  if (raster_data < data) {
-    return 0;
-  }
-  bytes_for_fonts = raster_data - data;
-  size_t raster_size = size - bytes_for_fonts;
+  static Environment env;
 
   FontSupport font_support;
   scoped_refptr<gpu::ServiceFontManager> font_manager(
@@ -158,35 +205,40 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                                   false /* disable_oopr_debug_crash_dump */));
   cc::ServicePaintCache paint_cache;
   std::vector<SkDiscardableHandleId> locked_handles;
-  if (bytes_for_fonts > 0u) {
-    font_manager->Deserialize(data_span.first(bytes_for_fonts),
-                              &locked_handles);
+  if (partitioned->fonts.size() > 0u) {
+    font_manager->Deserialize(partitioned->fonts, &locked_handles);
   }
 
-  auto context_provider_no_support = viz::TestContextProvider::CreateGLES();
-  context_provider_no_support->BindToCurrentSequence();
-  auto gr_context_no_support =
-      GrDirectContexts::MakeGL(skia_bindings::CreateGLES2InterfaceBindings(
-          context_provider_no_support->ContextGL(),
-          context_provider_no_support->ContextSupport()));
+  if (DumpSKP(font_manager->strike_client(), &paint_cache,
+              partitioned->raster_data, env)) {
+    return 0;
+  }
+
+  GrMockOptions options_no_support;
+  options_no_support.fShaderDerivativeSupport = false;
+  auto gr_context_no_support = GrDirectContext::MakeMock(&options_no_support);
+
   CHECK(!!gr_context_no_support);
   CHECK(!gr_context_no_support->supportsDistanceFieldText());
   Raster(gr_context_no_support.get(), font_manager->strike_client(),
-         &paint_cache, raster_data, raster_size);
+         &paint_cache, partitioned->raster_data);
 
-  auto context_provider_with_support = viz::TestContextProvider::CreateGLES(
-      std::string("GL_OES_standard_derivatives"));
-  context_provider_with_support->BindToCurrentSequence();
+  GrMockOptions options_with_support;
+  options_with_support.fShaderDerivativeSupport = true;
   auto gr_context_with_support =
-      GrDirectContexts::MakeGL(skia_bindings::CreateGLES2InterfaceBindings(
-          context_provider_with_support->ContextGL(),
-          context_provider_with_support->ContextSupport()));
+      GrDirectContext::MakeMock(&options_with_support);
+
   CHECK(!!gr_context_with_support);
   CHECK(gr_context_with_support->supportsDistanceFieldText());
   Raster(gr_context_with_support.get(), font_manager->strike_client(),
-         &paint_cache, raster_data, raster_size);
+         &paint_cache, partitioned->raster_data);
 
   font_manager->Unlock(locked_handles);
   font_manager->Destroy();
+  return 0;
+}
+
+extern "C" int LLVMFuzzerInitialize(int* argc, char*** argv) {
+  base::CommandLine::Init(*argc, *argv);
   return 0;
 }

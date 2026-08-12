@@ -13,9 +13,8 @@
 #import "ios/chrome/browser/omnibox/ui/omnibox_mutator.h"
 
 class FaviconLoader;
+@protocol BrowserCoordinatorCommands;
 @protocol LensCommands;
-@protocol LoadQueryCommands;
-@protocol OmniboxCommands;
 @protocol OmniboxConsumer;
 @protocol OmniboxMediatorDelegate;
 @class OmniboxTextController;
@@ -29,9 +28,9 @@ class Tracker;
 }
 
 /// A mediator object that updates the omnibox according to the model changes.
-@interface OmniboxMediator : NSObject <OmniboxMutator,
-                                       OmniboxTextControllerDelegate,
-                                       OmniboxLensDelegate>
+@interface OmniboxMediator : NSObject <OmniboxLensDelegate,
+                                       OmniboxMutator,
+                                       OmniboxTextControllerDelegate>
 
 /// Delegate for events in this class.
 @property(nonatomic, weak) id<OmniboxMediatorDelegate> delegate;
@@ -53,9 +52,9 @@ class Tracker;
 /// object and may be nil.
 @property(nonatomic, weak) id<OmniboxConsumer> consumer;
 
-@property(nonatomic, weak) id<LoadQueryCommands> loadQueryCommandsHandler;
 @property(nonatomic, weak) id<LensCommands> lensCommandsHandler;
-@property(nonatomic, weak) id<OmniboxCommands> omniboxCommandsHandler;
+@property(nonatomic, weak) id<BrowserCoordinatorCommands>
+    browserCoordinatorCommandsHandler;
 
 /// The favicon loader.
 @property(nonatomic, assign) FaviconLoader* faviconLoader;
@@ -73,6 +72,9 @@ class Tracker;
 
 /// Sets the image used in image search.
 - (void)setThumbnailImage:(UIImage*)image;
+
+/// Disconnects the mediator.
+- (void)disconnect;
 
 @end
 

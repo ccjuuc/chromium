@@ -23,6 +23,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -103,7 +104,7 @@ TEST_F(CalendarClientImplTest, IsDisabledByAdmin_DisabledCalendarPref) {
 TEST_F(CalendarClientImplTest,
        IsDisabledByAdmin_NoCalendarInContextualGoogleIntegrationsPref) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List enabled_integrations;
+  base::ListValue enabled_integrations;
   enabled_integrations.Append(prefs::kGoogleClassroomIntegrationName);
   enabled_integrations.Append(prefs::kGoogleTasksIntegrationName);
   prefs->SetList(prefs::kContextualGoogleIntegrationsConfiguration,
@@ -141,7 +142,7 @@ TEST_F(CalendarClientImplTest, IsDisabledByAdmin_DisabledCalendarApp) {
 
 TEST_F(CalendarClientImplTest, IsDisabledByAdmin_BlockedCalendarUrl) {
   auto prefs = GetDefaultPrefs();
-  base::Value::List blocklist;
+  base::ListValue blocklist;
   blocklist.Append("calendar.google.com");
   prefs->SetManagedPref(policy::policy_prefs::kUrlBlocklist,
                         std::move(blocklist));

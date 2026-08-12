@@ -102,21 +102,22 @@ class PartitionAllocator : public Allocator {
   ~PartitionAllocator() override { alloc_.DestructForTesting(); }
 
   void* Alloc(size_t size) override {
-    return alloc_.AllocInline<AllocFlags::kNoHooks>(size);
+    return alloc_.Alloc<AllocFlags::kNoHooks>(size);
   }
   void Free(void* data) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data);
+    PartitionRoot::FreeInUnknownRoot<partition_alloc::FreeFlags::kNoHooks>(
+        data);
   }
   void FreeWithSize(void* data, size_t size) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeWithSizeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data, size);
+    PartitionRoot::FreeInUnknownRoot<partition_alloc::FreeFlags::kNoHooks |
+                                     partition_alloc::FreeFlags::kWithSizeHint>(
+        data, {.size = size});
   }
 
  private:
@@ -127,7 +128,7 @@ class PartitionAllocatorWithThreadCache : public Allocator {
  public:
   explicit PartitionAllocatorWithThreadCache(bool use_denser_bucket_dist)
       : scope_(allocator_.root()) {
-    ThreadCacheRegistry::Instance().PurgeAll();
+    partition_alloc::ThreadCache::PurgeAllThread();
     if (use_denser_bucket_dist) {
       allocator_.root()->SwitchToDenserBucketDistribution();
     } else {
@@ -137,21 +138,22 @@ class PartitionAllocatorWithThreadCache : public Allocator {
   ~PartitionAllocatorWithThreadCache() override = default;
 
   void* Alloc(size_t size) override {
-    return allocator_.root()->AllocInline<AllocFlags::kNoHooks>(size);
+    return allocator_.root()->Alloc<AllocFlags::kNoHooks>(size);
   }
   void Free(void* data) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data);
+    PartitionRoot::FreeInUnknownRoot<partition_alloc::FreeFlags::kNoHooks>(
+        data);
   }
   void FreeWithSize(void* data, size_t size) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeWithSizeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data, size);
+    PartitionRoot::FreeInUnknownRoot<partition_alloc::FreeFlags::kNoHooks |
+                                     FreeFlags::kWithSizeHint>(data,
+                                                               {.size = size});
   }
 
  private:
@@ -183,21 +185,22 @@ class PartitionAllocatorWithAllocationStackTraceRecorder : public Allocator {
     }
   }
 
-  void* Alloc(size_t size) override { return alloc_.AllocInline(size); }
+  void* Alloc(size_t size) override { return alloc_.Alloc(size); }
 
   void Free(void* data) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data);
+    PartitionRoot::FreeInUnknownRoot<partition_alloc::FreeFlags::kNoHooks>(
+        data);
   }
   void FreeWithSize(void* data, size_t size) override {
     // Even though it's easy to invoke the fast path with
     // alloc_.Free<kNoHooks>(), we chose to use the slower path, because it's
     // more common with PA-E.
-    PartitionRoot::FreeWithSizeInlineInUnknownRoot<
-        partition_alloc::FreeFlags::kNoHooks>(data, size);
+    PartitionRoot::FreeInUnknownRoot<FreeFlags::kNoHooks |
+                                     FreeFlags::kWithSizeHint>(data,
+                                                               {.size = size});
   }
 
  private:
@@ -447,7 +450,7 @@ void LogResults(int thread_count,
 }
 
 std::string MakeTestName(int thread_count, AllocatorType alloc_type) {
-  char const* alloc_type_str;
+  std::string alloc_type_str;
   switch (alloc_type) {
     case AllocatorType::kSystem:
       alloc_type_str = "System";
@@ -468,7 +471,8 @@ std::string MakeTestName(int thread_count, AllocatorType alloc_type) {
 #endif
   }
 
-  return base::TruncatingStringPrintf("%s_%d", alloc_type_str, thread_count);
+  return base::TruncatingStringPrintf("%s_%d", alloc_type_str.c_str(),
+                                      thread_count);
 }
 
 void RunTest(int thread_count,
@@ -502,9 +506,9 @@ void RunTest(int thread_count,
   }
 
   std::string test_name = MakeTestName(thread_count, alloc_type);
-  std::string name =
+  std::string name = PA_UNSAFE_TODO(
       base::TruncatingStringPrintf("%s%s_%s", kMetricPrefixMemoryAllocation,
-                                   story_base_name, test_name.c_str());
+                                   story_base_name, test_name.c_str()));
 
   DisplayResults(name + "_total", total_laps_per_second);
   DisplayResults(name + "_worst", min_laps_per_second);

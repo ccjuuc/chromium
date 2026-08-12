@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.toolbar.menu_button;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
@@ -21,7 +22,6 @@ import android.view.View.MeasureSpec;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -36,6 +36,7 @@ import org.robolectric.shadows.ShadowDrawable;
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.toolbar.R;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.ui.base.TestActivity;
 
@@ -148,13 +149,13 @@ public class MenuButtonTest {
         Drawable background = new ColorDrawable();
         mMenuButton.setOriginalBackgroundForTesting(background);
 
-        Assert.assertNotNull("Background shouldn't be null.", mMenuButton.getBackground());
+        assertNotNull("Background shouldn't be null.", mMenuButton.getBackground());
 
         mMenuButton.setMenuButtonHighlight(true);
-        Assert.assertNotEquals(
+        assertNotEquals(
                 "Background should have been updated.", background, mMenuButton.getBackground());
 
         mMenuButton.setMenuButtonHighlight(false);
-        Assert.assertEquals("Background should be reset.", background, mMenuButton.getBackground());
+        assertEquals("Background should be reset.", background, mMenuButton.getBackground());
     }
 }

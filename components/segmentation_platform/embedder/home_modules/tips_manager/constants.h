@@ -68,6 +68,10 @@ enum class TipPresentationContext {
 // Returns the string representation of `context`.
 std::string NameForTipPresentationContext(TipPresentationContext context);
 
+// The maximum number of times an ephemeral tips card can be visible to the
+// user.
+inline constexpr int kTipsEphemeralCardModuleMaxImpressionCount = 3;
+
 // Key for the timestamp representing the first time a signal was observed
 // (`base::Value`).
 extern const char kFirstObservedTime[];
@@ -93,28 +97,6 @@ extern const char kTotalOccurrences[];
 //    - total_occurrences: The total number of times this signal has been
 //                         observed (`int`).
 extern const char kTipsSignalHistory[];
-
-// Pref names
-
-// Whether or not the Address Bar Position ephemeral module has been
-// interacted with.
-extern const char kAddressBarPositionEphemeralModuleInteractedPref[];
-// Whether or not the Autofill Passwords ephemeral module has been interacted
-// with.
-extern const char kAutofillPasswordsEphemeralModuleInteractedPref[];
-// Whether or not the Enhanced Safe Browsing ephemeral module has been
-// interacted with.
-extern const char kEnhancedSafeBrowsingEphemeralModuleInteractedPref[];
-// Whether or not the Save Passwords ephemeral module has been interacted with.
-extern const char kSavePasswordsEphemeralModuleInteractedPref[];
-// Whether or not the Lens ephemeral module has been interacted with.
-extern const char kLensEphemeralModuleInteractedPref[];
-// Whether or not the Lens Search variation has been interacted with.
-extern const char kLensEphemeralModuleSearchVariationInteractedPref[];
-// Whether or not the Lens Shop variation has been interacted with.
-extern const char kLensEphemeralModuleShopVariationInteractedPref[];
-// Whether or not the Lens Translate variation has been interacted with.
-extern const char kLensEphemeralModuleTranslateVariationInteractedPref[];
 
 }  // namespace segmentation_platform
 

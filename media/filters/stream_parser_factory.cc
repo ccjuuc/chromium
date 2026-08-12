@@ -200,6 +200,8 @@ static const CodecInfo kDolbyVisionHEVCCodecInfo1 = {
 static const CodecInfo kDolbyVisionHEVCCodecInfo2 = {
     "dvhe.*", CodecInfo::VIDEO, nullptr, CodecInfo::HISTOGRAM_DOLBYVISION};
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
+static const CodecInfo kDolbyVisionAV1CodecInfo = {
+    "dav1.*", CodecInfo::VIDEO, nullptr, CodecInfo::HISTOGRAM_DOLBYVISION};
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 static const CodecInfo kMPEG4AACCodecInfo = {"mp4a.40.*", CodecInfo::AUDIO,
                                              &ValidateMP4ACodecID,
@@ -301,12 +303,12 @@ static const CodecInfo kMPEG4FLACCodecInfo = {"flac", CodecInfo::AUDIO, nullptr,
                                               CodecInfo::HISTOGRAM_FLAC};
 static const CodecInfo kMPEG4FLACCodecInfo2 = {
     "fLaC", CodecInfo::AUDIO, nullptr, CodecInfo::HISTOGRAM_FLAC};
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
 static const CodecInfo kIAMFCodecInfo1 = {"iamf", CodecInfo::AUDIO, nullptr,
                                           CodecInfo::HISTOGRAM_IAMF};
 static const CodecInfo kIAMFCodecInfo2 = {"iamf.*", CodecInfo::AUDIO, nullptr,
                                           CodecInfo::HISTOGRAM_IAMF};
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 
 static const auto kVideoMP4Codecs = std::to_array<const CodecInfo* const>({
     &kMPEG4FLACCodecInfo,
@@ -328,6 +330,7 @@ static const auto kVideoMP4Codecs = std::to_array<const CodecInfo* const>({
     &kDolbyVisionHEVCCodecInfo1,
     &kDolbyVisionHEVCCodecInfo2,
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
+    &kDolbyVisionAV1CodecInfo,
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
     &kMPEG4AACCodecInfo,
     &kMPEG2AACLCCodecInfo,
@@ -366,10 +369,10 @@ static const auto kVideoMP4Codecs = std::to_array<const CodecInfo* const>({
 #if BUILDFLAG(ENABLE_AV1_DECODER)
     &kAV1CodecInfo,
 #endif  // BUILDFLAG(ENABLE_AV1_DECODER)
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
     &kIAMFCodecInfo1,
     &kIAMFCodecInfo2,
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 });
 
 // clang-format off
@@ -413,10 +416,10 @@ static const auto kAudioMP4Codecs = std::to_array<const CodecInfo* const>({
     &kDTSECodecInfo3,
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
     &kIAMFCodecInfo1,
     &kIAMFCodecInfo2,
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
 });
 // clang-format on
 
@@ -466,7 +469,8 @@ static StreamParser* BuildMP4Parser(base::span<const std::string> codecs,
                                      kDolbyVisionHEVCCodecInfo1.pattern) ||
                base::MatchPattern(codec_id, kDolbyVisionHEVCCodecInfo2.pattern)
 #endif  // BUILDFLAG(ENABLE_PLATFORM_HEVC)
-    ) {
+               ||
+               base::MatchPattern(codec_id, kDolbyVisionAV1CodecInfo.pattern)) {
       has_dv = true;
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #if BUILDFLAG(ENABLE_PLATFORM_AC3_EAC3_AUDIO)
@@ -503,11 +507,11 @@ static StreamParser* BuildMP4Parser(base::span<const std::string> codecs,
       audio_object_types.insert(mp4::kDTSE);
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO)
 #endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || BUILDFLAG(ENABLE_IAMF_TOOLS)
     } else if (base::MatchPattern(codec_id, kIAMFCodecInfo1.pattern) ||
                base::MatchPattern(codec_id, kIAMFCodecInfo2.pattern)) {
       has_iamf = true;
-#endif  //  BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
+#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO) || ...
     }
   }
 

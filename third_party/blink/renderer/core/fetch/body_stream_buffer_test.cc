@@ -12,6 +12,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_microtasks_scope.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_readable_stream.h"
 #include "third_party/blink/renderer/core/dom/abort_controller.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -57,9 +58,7 @@ class BodyStreamBufferTest : public testing::Test {
   ScriptValue Eval(ScriptState* script_state, const char* s) {
     v8::Local<v8::String> source;
     v8::Local<v8::Script> script;
-    v8::MicrotasksScope microtasks(script_state->GetIsolate(),
-                                   ToMicrotaskQueue(script_state),
-                                   v8::MicrotasksScope::kDoNotRunMicrotasks);
+    V8DoNotRunMicrotasksScope microtasks(script_state);
     if (!v8::String::NewFromUtf8(script_state->GetIsolate(), s,
                                  v8::NewStringType::kNormal)
              .ToLocal(&source)) {
@@ -709,7 +708,7 @@ TEST_F(BodyStreamBufferTest,
   EXPECT_CALL(*src, Cancel());
 
   EXPECT_CALL(checkpoint, Call(2));
-  EXPECT_CALL(*client, Abort());
+  EXPECT_CALL(*client, Abort(_));
 
   EXPECT_CALL(checkpoint, Call(3));
 
@@ -744,7 +743,7 @@ TEST_F(BodyStreamBufferTest, AbortAfterStartLoadingCallsDataLoaderClientAbort) {
   EXPECT_CALL(*loader, Start(_, _));
 
   EXPECT_CALL(checkpoint, Call(2));
-  EXPECT_CALL(*client, Abort());
+  EXPECT_CALL(*client, Abort(_));
 
   EXPECT_CALL(checkpoint, Call(3));
 
@@ -780,7 +779,7 @@ TEST_F(BodyStreamBufferTest,
   EXPECT_CALL(*loader, Start(_, _));
 
   EXPECT_CALL(checkpoint, Call(2));
-  EXPECT_CALL(*client, Abort());
+  EXPECT_CALL(*client, Abort(_));
 
   EXPECT_CALL(checkpoint, Call(3));
 

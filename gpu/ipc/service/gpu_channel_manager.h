@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -36,6 +35,7 @@
 #include "gpu/command_buffer/service/shared_context_state.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/config/gpu_feature_info.h"
+#include "gpu/config/gpu_info.h"
 #include "gpu/config/gpu_preferences.h"
 #include "gpu/ipc/common/gpu_disk_cache_type.h"
 #include "gpu/ipc/common/gpu_peak_memory.h"
@@ -84,7 +84,7 @@ class DawnCachingInterfaceFactory;
 // browser process to them based on the corresponding renderer ID.
 class GPU_IPC_SERVICE_EXPORT GpuChannelManager
     : public raster::GrShaderCache::Client,
-      public base::MemoryPressureListener {
+      public base::MemoryConsumer {
  public:
   GpuChannelManager(
       const GpuPreferences& gpu_preferences,
@@ -99,7 +99,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
       GpuProcessShmCount* use_shader_cache_shm_count,
       scoped_refptr<gl::GLSurface> default_offscreen_surface,
       viz::VulkanContextProvider* vulkan_context_provider = nullptr,
-      viz::MetalContextProvider* metal_context_provider = nullptr,
       DawnContextProvider* dawn_context_provider = nullptr,
       webgpu::DawnCachingInterfaceFactory* dawn_caching_interface_factory =
           nullptr,
@@ -120,7 +119,9 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
                                uint64_t client_tracing_id,
                                bool is_gpu_host,
                                bool enable_extra_handles_validation,
-                               const gfx::GpuExtraInfo& gpu_extra_info);
+                               const gfx::GpuExtraInfo& gpu_extra_info,
+                               const gpu::GPUInfo& gpu_info,
+                               const gpu::GpuFeatureInfo& gpu_feature_info);
 
   void SetChannelClientPid(int client_id, base::ProcessId client_pid);
   void SetChannelDiskCacheHandle(int client_id,
@@ -301,8 +302,9 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   void DoWakeUpGpu();
 #endif
 
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
+  // base::MemoryConsumer:
+  void OnUpdateMemoryLimit() override;
+  void OnReleaseMemory() override;
 
   // These objects manage channels to individual renderer processes. There is
   // one channel for each renderer process that has connected to this GPU
@@ -341,8 +343,7 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   // shaders. Read by the browser process on GPU process crash.
   const raw_ptr<GpuProcessShmCount> use_shader_cache_shm_count_;
 
-  base::AsyncMemoryPressureListenerRegistration
-      memory_pressure_listener_registration_;
+  base::AsyncMemoryConsumerRegistration memory_consumer_registration_;
 
   // The SharedContextState is shared across all RasterDecoders. Note
   // that this class needs to be ref-counted to conveniently manage the lifetime
@@ -363,10 +364,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   // viz::GpuServiceImpl. The raster decoders will use it for rasterization if
   // features::Vulkan is used.
   raw_ptr<viz::VulkanContextProvider> vulkan_context_provider_ = nullptr;
-
-  // If features::SkiaGraphite, |metal_context_provider_| will be set from
-  // viz::GpuServiceImpl. The raster decoders may use it for rasterization.
-  raw_ptr<viz::MetalContextProvider> metal_context_provider_ = nullptr;
 
   // With features::SkiaGraphite, |dawn_context_provider_| will be set from
   // viz::GpuServiceImpl. The raster decoders may use it for rasterization.

@@ -13,14 +13,16 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -147,7 +149,14 @@ namespace web_app {
 
 class WebAppEngagementBrowserTest : public WebAppBrowserTestBase {
  public:
-  WebAppEngagementBrowserTest() = default;
+  WebAppEngagementBrowserTest() {
+    // TODO(crbug.com/452061489): Fix tests for when WebUI Omnibox is enabled
+    // and then remove this.
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{omnibox::internal::kWebUIOmniboxPopup,
+                               omnibox::internal::kWebUIOmniboxAimPopup});
+  }
   WebAppEngagementBrowserTest(const WebAppEngagementBrowserTest&) = delete;
   WebAppEngagementBrowserTest& operator=(const WebAppEngagementBrowserTest&) =
       delete;
@@ -162,7 +171,7 @@ class WebAppEngagementBrowserTest : public WebAppBrowserTestBase {
     content::WebContents* web_contents =
         browser->tab_strip_model()->GetActiveWebContents();
     auto* site_engagement_service =
-        site_engagement::SiteEngagementService::Get(browser->profile());
+        site_engagement::SiteEngagementService::Get(browser->GetProfile());
 
     // Simulate 4 events of various types.
     site_engagement_service->HandleMediaPlaying(web_contents, false);
@@ -200,13 +209,14 @@ class WebAppEngagementBrowserTest : public WebAppBrowserTestBase {
 
   void InstallDefaultAppAndCountApps(ExternalInstallOptions install_options) {
     ExternallyManagedAppManager::InstallResult result =
-        ExternallyManagedAppManagerInstall(browser()->profile(),
+        ExternallyManagedAppManagerInstall(browser()->GetProfile(),
                                            std::move(install_options));
     result_code_ = result.code;
     CountUserInstalledApps();
   }
 
   std::optional<webapps::InstallResultCode> result_code_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInWindow) {
@@ -224,7 +234,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInWindow) {
   Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
   NavigateViaLinkClickToURLAndWait(app_browser, example_url);
 
-  EXPECT_EQ(GetAppIdFromApplicationName(app_browser->app_name()), app_id);
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser)->create_params().app_name),
+            app_id);
 
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
@@ -247,7 +259,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInWindow) {
   base::HistogramTester tester;
 
   GURL example_url(
-      embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
+      embedded_test_server()->GetURL("/banners/no_manifest_test_page.html"));
   auto web_app_info =
       WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
   web_app_info->scope = example_url;
@@ -258,7 +270,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInWindow) {
   Browser* app_browser = LaunchWebAppBrowserAndWait(app_id);
   NavigateViaLinkClickToURLAndWait(app_browser, example_url);
 
-  EXPECT_EQ(GetAppIdFromApplicationName(app_browser->app_name()), app_id);
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser)->create_params().app_name),
+            app_id);
 
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
@@ -290,7 +304,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppInTab) {
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
 
   Browser* browser = LaunchBrowserForWebAppInTab(app_id);
-  EXPECT_FALSE(browser->app_controller());
+  EXPECT_FALSE(web_app::AppBrowserController::From(browser));
   NavigateViaLinkClickToURLAndWait(browser, example_url);
 
   Histograms histograms;
@@ -316,7 +330,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInTab) {
   base::HistogramTester tester;
 
   GURL example_url(
-      embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
+      embedded_test_server()->GetURL("/banners/no_manifest_test_page.html"));
 
   auto web_app_info =
       WebAppInstallInfo::CreateWithStartUrlForTesting(example_url);
@@ -326,7 +340,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DiyAppInTab) {
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
 
   Browser* browser = LaunchBrowserForWebAppInTab(app_id);
-  EXPECT_FALSE(browser->app_controller());
+  EXPECT_FALSE(web_app::AppBrowserController::From(browser));
   NavigateViaLinkClickToURLAndWait(browser, example_url);
 
   Histograms histograms;
@@ -364,8 +378,10 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, AppWithoutScope) {
 
   Browser* browser = LaunchWebAppBrowserAndWait(app_id);
 
-  EXPECT_EQ(GetAppIdFromApplicationName(browser->app_name()), app_id);
-  EXPECT_TRUE(browser->app_controller());
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(browser)->create_params().app_name),
+            app_id);
+  EXPECT_TRUE(web_app::AppBrowserController::From(browser));
   NavigateViaLinkClickToURLAndWait(browser, example_url);
 
   Histograms histograms;
@@ -415,9 +431,15 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, TwoApps) {
   Browser* app_browser2 = LaunchWebAppBrowserAndWait(app_id1);
   Browser* app_browser3 = LaunchWebAppBrowserAndWait(app_id2);
 
-  EXPECT_EQ(GetAppIdFromApplicationName(app_browser1->app_name()), app_id1);
-  EXPECT_EQ(GetAppIdFromApplicationName(app_browser2->app_name()), app_id1);
-  EXPECT_EQ(GetAppIdFromApplicationName(app_browser3->app_name()), app_id2);
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser1)->create_params().app_name),
+            app_id1);
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser2)->create_params().app_name),
+            app_id1);
+  EXPECT_EQ(GetAppIdFromApplicationName(
+                BrowserInitState::From(app_browser3)->create_params().app_name),
+            app_id2);
 
   Histograms histograms;
   histograms[kHistogramInWindow] = true;
@@ -496,8 +518,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, DISABLED_DefaultApp) {
 
   std::optional<webapps::AppId> app_id = FindAppWithUrlInScope(example_url);
   ASSERT_TRUE(app_id);
-  EXPECT_TRUE(provider().registrar_unsafe().IsInstalledByDefaultManagement(
-      app_id.value()));
+  EXPECT_TRUE(provider().registrar_unsafe().AppMatches(
+      app_id.value(), WebAppFilter::InstalledByDefaultManagement()));
 
   Browser* browser = LaunchWebAppBrowserAndWait(*app_id);
   NavigateViaLinkClickToURLAndWait(browser, example_url);
@@ -533,7 +555,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, NavigateAwayFromAppTab) {
   webapps::AppId app_id = InstallWebAppAndCountApps(std::move(web_app_info));
 
   Browser* browser = LaunchBrowserForWebAppInTab(app_id);
-  EXPECT_FALSE(browser->app_controller());
+  EXPECT_FALSE(web_app::AppBrowserController::From(browser));
 
   NavigateViaLinkClickToURLAndWait(browser, start_url);
   {
@@ -593,14 +615,16 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // There should be one browser to start with.
   unsigned int expected_browsers = 1;
   const int expected_tabs = 1;
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
 
   const GURL example_url(
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
 
   auto result = ExternallyManagedAppManagerInstall(
-      browser()->profile(), CreateInstallOptions(example_url));
+      browser()->GetProfile(), CreateInstallOptions(example_url));
   ASSERT_EQ(webapps::InstallResultCode::kSuccessNewInstall, result.code);
   std::optional<webapps::AppId> app_id = FindAppWithUrlInScope(example_url);
   ASSERT_TRUE(app_id);
@@ -612,7 +636,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // The app should open as a window.
   EXPECT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
   app_loaded_observer.Wait();
 
   BrowserWindowInterface* const app_browser =
@@ -632,7 +656,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // Check that the number of browsers and tabs is correct.
   expected_browsers++;
 
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
   EXPECT_EQ(expected_tabs, app_browser->GetTabStripModel()->count());
 }
@@ -652,14 +678,16 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // There should be one browser to start with.
   unsigned int expected_browsers = 1;
   const int expected_tabs = 1;
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
 
   const GURL example_url(
       embedded_test_server()->GetURL("/banners/manifest_test_page.html"));
 
   auto result = ExternallyManagedAppManagerInstall(
-      browser()->profile(), CreateInstallOptions(example_url));
+      browser()->GetProfile(), CreateInstallOptions(example_url));
   ASSERT_EQ(webapps::InstallResultCode::kSuccessNewInstall, result.code);
   std::optional<webapps::AppId> app_id = FindAppWithUrlInScope(example_url);
   ASSERT_TRUE(app_id);
@@ -671,7 +699,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // The app should open as a window.
   EXPECT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
   app_loaded_observer.Wait();
 
   BrowserWindowInterface* const app_browser =
@@ -693,7 +721,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest,
   // Check that the number of browsers and tabs is correct.
   expected_browsers++;
 
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
   EXPECT_EQ(expected_tabs, app_browser->GetTabStripModel()->count());
 }
@@ -711,7 +741,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, MAYBE_CommandLineTab) {
   // There should be one browser to start with.
   const unsigned int expected_browsers = 1;
   int expected_tabs = 1;
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
 
   const GURL example_url(
@@ -719,8 +751,8 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, MAYBE_CommandLineTab) {
 
   ExternalInstallOptions install_options = CreateInstallOptions(example_url);
   install_options.user_display_mode = mojom::UserDisplayMode::kBrowser;
-  auto result =
-      ExternallyManagedAppManagerInstall(browser()->profile(), install_options);
+  auto result = ExternallyManagedAppManagerInstall(browser()->GetProfile(),
+                                                   install_options);
   ASSERT_EQ(webapps::InstallResultCode::kSuccessNewInstall, result.code);
   std::optional<webapps::AppId> app_id = FindAppWithUrlInScope(example_url);
   ASSERT_TRUE(app_id);
@@ -732,7 +764,7 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, MAYBE_CommandLineTab) {
   // The app should open as a tab.
   EXPECT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
   app_loaded_observer.Wait();
 
 #if BUILDFLAG(IS_WIN)
@@ -748,7 +780,9 @@ IN_PROC_BROWSER_TEST_F(WebAppEngagementBrowserTest, MAYBE_CommandLineTab) {
   // Check that the number of browsers and tabs is correct.
   expected_tabs++;
 
-  EXPECT_EQ(expected_browsers, chrome::GetBrowserCount(browser()->profile()));
+  EXPECT_EQ(expected_browsers,
+            ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                ->GetSize());
   EXPECT_EQ(expected_tabs, browser()->tab_strip_model()->count());
 }
 #endif

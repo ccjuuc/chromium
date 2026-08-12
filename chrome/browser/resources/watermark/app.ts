@@ -6,9 +6,11 @@ import '/strings.m.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
 import 'chrome://resources/cr_elements/cr_slider/cr_slider.js';
+import 'chrome://resources/cr_elements/cr_textarea/cr_textarea.js';
 
 import type {CrInputElement} from '//resources/cr_elements/cr_input/cr_input.js';
 import type {CrSliderElement, SliderTick} from '//resources/cr_elements/cr_slider/cr_slider.js';
+import type {CrTextareaElement} from '//resources/cr_elements/cr_textarea/cr_textarea.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
@@ -24,6 +26,7 @@ export interface WatermarkAppElement {
     fontSizeInputError: HTMLDivElement,
     fillOpacitySlider: CrSliderElement,
     outlineOpacitySlider: CrSliderElement,
+    watermarkTextInput: CrTextareaElement,
   };
 }
 
@@ -46,6 +49,8 @@ export class WatermarkAppElement extends CrLitElement {
       fillOpacity_: {type: Number},
       outlineOpacity_: {type: Number},
       opacityTicks_: {type: Array},
+      watermarkText_: {type: String},
+      isFontSizeInvalid_: {type: Boolean},
     };
   }
 
@@ -53,6 +58,8 @@ export class WatermarkAppElement extends CrLitElement {
   protected accessor fillOpacity_: number = 4;
   protected accessor outlineOpacity_: number = 6;
   protected accessor opacityTicks_: SliderTick[] = [];
+  protected accessor watermarkText_: string = 'Watermark Test Page';
+  protected accessor isFontSizeInvalid_: boolean = false;
   private pageHandler_: PageHandlerRemote;
 
   constructor() {
@@ -81,20 +88,20 @@ export class WatermarkAppElement extends CrLitElement {
    */
   private handleVisibilityChange_() {
     if (document.visibilityState === 'visible') {
-      this.sendStyleToBackend_();
+      this.sendWatermarkToBackend_();
     }
   }
 
   override firstUpdated() {
-    this.$.fontSizeInput.value = this.fontSize_.toString();
-    this.sendStyleToBackend_();
+    this.sendWatermarkToBackend_();
   }
 
-  protected sendStyleToBackend_() {
-    this.pageHandler_.setWatermarkStyle({
+  protected sendWatermarkToBackend_() {
+    this.pageHandler_.setWatermarkSettings({
       fillOpacity: this.fillOpacity_,
       outlineOpacity: this.outlineOpacity_,
       fontSize: this.fontSize_,
+      watermarkText: this.watermarkText_,
     });
   }
 
@@ -111,7 +118,7 @@ export class WatermarkAppElement extends CrLitElement {
     this.pageHandler_.showNotificationToast();
   }
 
-  protected onFontSizeInputMouseDown_(event: Event) {
+  protected onFontSizeInputMousedown_(event: Event) {
     // To prevent focus loss on the input when the button is clicked.
     event.preventDefault();
   }
@@ -121,37 +128,33 @@ export class WatermarkAppElement extends CrLitElement {
       return;
     }
     this.fontSize_ = newValue;
-    this.$.fontSizeInput.value = newValue.toString();
-    this.sendStyleToBackend_();
+    this.sendWatermarkToBackend_();
   }
 
-  protected onIncrementFontSize_(_event: Event) {
+  protected onIncrementFontSizeClick_(_event: Event) {
     this.$.fontSizeInput.focus();
 
-    const parsedValue = parseInt(this.$.fontSizeInput.value, 10);
-    const newValue = Math.max(FONT_SIZE_MIN, parsedValue + 1);
-    this.updateFontSizeValue_(parsedValue, newValue);
+    const newValue = Math.min(FONT_SIZE_MAX, this.fontSize_ + 1);
+    this.updateFontSizeValue_(this.fontSize_, newValue);
   }
 
-  protected onDecrementFontSize_(_event: Event) {
+  protected onDecrementFontSizeClick_(_event: Event) {
     this.$.fontSizeInput.focus();
 
-    const parsedValue = parseInt(this.$.fontSizeInput.value, 10);
-    const newValue = Math.min(FONT_SIZE_MAX, parsedValue - 1);
-    this.updateFontSizeValue_(parsedValue, newValue);
+    const newValue = Math.max(FONT_SIZE_MIN, this.fontSize_ - 1);
+    this.updateFontSizeValue_(this.fontSize_, newValue);
   }
 
-  protected onFontSizeChanged_() {
-    const parsedValue = parseInt(this.$.fontSizeInput.value, 10);
+  protected onFontSizeValueChanged_(e: CustomEvent<{value: string}>) {
+    const parsedValue = parseInt(e.detail.value, 10);
 
-    if (isNaN(parsedValue)) {
-      this.$.fontSizeInputError.style.visibility = 'visible';
+    if (isNaN(parsedValue) || parsedValue < FONT_SIZE_MIN ||
+        parsedValue > FONT_SIZE_MAX) {
+      this.isFontSizeInvalid_ = true;
       return;
-    } else if (parsedValue < FONT_SIZE_MIN || parsedValue > FONT_SIZE_MAX) {
-      this.$.fontSizeInputError.style.visibility = 'visible';
-    } else {
-      this.$.fontSizeInputError.style.visibility = 'hidden';
     }
+
+    this.isFontSizeInvalid_ = false;
 
     // Mapping value to range (FONT_SIZE_MIN, FONT_SIZE_MAX)
     const valueWithinRange =
@@ -160,12 +163,17 @@ export class WatermarkAppElement extends CrLitElement {
     // Ensures that font size is the closest to the enterd value
     if (this.fontSize_ !== valueWithinRange) {
       this.fontSize_ = valueWithinRange;
-      this.sendStyleToBackend_();
+      this.sendWatermarkToBackend_();
     }
   }
 
+  protected onWatermarkTextValueChanged_(e: CustomEvent<{value: string}>) {
+    this.watermarkText_ = e.detail.value;
+    this.sendWatermarkToBackend_();
+  }
+
   // To prevent special floating point chars such as e or '.'
-  protected onFontSizeInputKeyDown_(event: KeyboardEvent) {
+  protected onFontSizeInputKeydown_(event: KeyboardEvent) {
     const allowedNumericKeys =
         ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
     const allowedControlKeys = [
@@ -178,20 +186,22 @@ export class WatermarkAppElement extends CrLitElement {
         event.metaKey) {
       return;
     }
-    if (!allowedNumericKeys.includes(event.key) ||
-      this.$.fontSizeInput.value.length === 3) {
+    const input = event.target as CrInputElement;
+    if (!allowedNumericKeys.includes(event.key) || input.value.length === 3) {
       event.preventDefault();
     }
   }
 
-  protected onFillOpacityChanged_() {
-    this.fillOpacity_ = Math.round(this.$.fillOpacitySlider.value);
-    this.sendStyleToBackend_();
+  protected onFillOpacityCrSliderValueChanged_(e: Event) {
+    const slider = e.target as CrSliderElement;
+    this.fillOpacity_ = Math.round(slider.value);
+    this.sendWatermarkToBackend_();
   }
 
-  protected onOutlineOpacityChanged_() {
-    this.outlineOpacity_ = Math.round(this.$.outlineOpacitySlider.value);
-    this.sendStyleToBackend_();
+  protected onOutlineOpacityCrSliderValueChanged_(e: Event) {
+    const slider = e.target as CrSliderElement;
+    this.outlineOpacity_ = Math.round(slider.value);
+    this.sendWatermarkToBackend_();
   }
 }
 

@@ -34,10 +34,12 @@ class CryptohomeWebUIHandler : public content::WebUIMessageHandler {
 
   // WebUIMessageHandler override.
   void RegisterMessages() override;
+  void OnJavascriptAllowed() override;
+  void OnJavascriptDisallowed() override;
 
  private:
   // This method is called from JavaScript.
-  void OnPageLoaded(const base::Value::List& args);
+  void OnPageLoaded(const base::ListValue& args);
 
   void GotIsTPMTokenEnabledOnUIThread(bool is_tpm_token_enabled);
 

@@ -24,7 +24,7 @@ TEST(ManifestUtilTest, DisplayModeConversions) {
       {blink::mojom::DisplayMode::kWindowControlsOverlay,
        "window-controls-overlay"},
       {blink::mojom::DisplayMode::kTabbed, "tabbed"},
-      {blink::mojom::DisplayMode::kBorderless, "unframed"},
+      {blink::mojom::DisplayMode::kUnframed, "unframed"},
   };
 
   for (const ReversibleConversion& conversion : reversible_conversions) {
@@ -37,10 +37,6 @@ TEST(ManifestUtilTest, DisplayModeConversions) {
   // DisplayModeFromString() should work with non-lowercase strings.
   EXPECT_EQ(blink::mojom::DisplayMode::kFullscreen,
             DisplayModeFromString("Fullscreen"));
-
-  // TODO(crbug.com/466441366): Stop accepting "borderless".
-  EXPECT_EQ(blink::mojom::DisplayMode::kBorderless,
-            DisplayModeFromString("borderless"));
 
   // DisplayModeFromString() should return
   // DisplayMode::kUndefined if the string isn't known.

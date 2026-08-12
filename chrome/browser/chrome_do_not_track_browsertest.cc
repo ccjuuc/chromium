@@ -22,7 +22,7 @@ namespace {
 class ChromeDoNotTrackTest : public InProcessBrowserTest {
  protected:
   void SetEnableDoNotTrack(bool enabled) {
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kEnableDoNotTrack, enabled);
   }
 
@@ -97,15 +97,7 @@ IN_PROC_BROWSER_TEST_F(ChromeDoNotTrackTest, FetchFromNestedWorker) {
 }
 
 // Checks that the DNT header is preserved when fetching from a shared worker.
-//
-// Disabled on Android since a shared worker is not available on Android:
-// crbug.com/869745.
-#if BUILDFLAG(IS_ANDROID)
-#define MAYBE_FetchFromSharedWorker DISABLED_FetchFromSharedWorker
-#else
-#define MAYBE_FetchFromSharedWorker FetchFromSharedWorker
-#endif
-IN_PROC_BROWSER_TEST_F(ChromeDoNotTrackTest, MAYBE_FetchFromSharedWorker) {
+IN_PROC_BROWSER_TEST_F(ChromeDoNotTrackTest, FetchFromSharedWorker) {
   ASSERT_TRUE(embedded_test_server()->Start());
   SetEnableDoNotTrack(true /* enabled */);
 

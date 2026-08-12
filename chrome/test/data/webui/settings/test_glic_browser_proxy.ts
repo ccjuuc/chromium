@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {GlicBrowserProxy} from 'chrome://settings/settings.js';
+import type {GlicBrowserProxy, LoginPermission} from 'chrome://settings/settings.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 export enum Shortcut {
@@ -15,9 +15,18 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
   private glicShortcutResponse_: string = '';
   private glicFocusToggleShortcutResponse_: string = '';
   private glicDisallowedByAdmin_: boolean = false;
+  private webActuationToggleVisibilityResponse_: boolean = false;
+  private webActuationEnabledResponse_: boolean = false;
+  private experimentalTriggeringEnabledResponse_: boolean = true;
+  private actorLoginPermissions_: LoginPermission[] = [];
+  private revokeActorLoginPermissionResponse_: boolean = true;
 
   constructor() {
     super([
+      'getActorLoginPermissions',
+      'startObservingActorLoginPermissions',
+      'stopObservingActorLoginPermissions',
+      'revokeActorLoginPermission',
       'setGlicOsLauncherEnabled',
       'getGlicShortcut',
       'setGlicShortcut',
@@ -25,6 +34,13 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
       'setGlicFocusToggleShortcut',
       'setShortcutSuspensionState',
       'getDisallowedByAdmin',
+      'getWebActuationToggleVisibility',
+      'getGlicSelectionShortcut',
+      'setGlicSelectionShortcut',
+      'getWebActuationEnabled',
+      'setWebActuationEnabled',
+      'getExperimentalTriggeringEnabled',
+      'setExperimentalTriggeringEnabled',
     ]);
   }
 
@@ -32,6 +48,9 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
     super.reset();
     this.glicShortcutResponse_ = '';
     this.glicFocusToggleShortcutResponse_ = '';
+    this.webActuationToggleVisibilityResponse_ = false;
+    this.actorLoginPermissions_ = [];
+    this.revokeActorLoginPermissionResponse_ = true;
   }
 
   setGlicOsLauncherEnabled(enabled: boolean) {
@@ -90,5 +109,76 @@ export class TestGlicBrowserProxy extends TestBrowserProxy implements
 
   setDisallowedByAdmin(disallowed: boolean) {
     this.glicDisallowedByAdmin_ = disallowed;
+  }
+
+  getWebActuationToggleVisibility() {
+    this.methodCalled('getWebActuationToggleVisibility');
+    return Promise.resolve(this.webActuationToggleVisibilityResponse_);
+  }
+
+  setWebActuationToggleVisibilityResponse(visible: boolean) {
+    this.webActuationToggleVisibilityResponse_ = visible;
+  }
+
+  getWebActuationEnabled() {
+    this.methodCalled('getWebActuationEnabled');
+    return Promise.resolve(this.webActuationEnabledResponse_);
+  }
+
+  setWebActuationEnabled(enabled: boolean) {
+    this.methodCalled('setWebActuationEnabled', enabled);
+  }
+
+  setWebActuationEnabledResponse(enabled: boolean) {
+    this.webActuationEnabledResponse_ = enabled;
+  }
+
+  getExperimentalTriggeringEnabled() {
+    this.methodCalled('getExperimentalTriggeringEnabled');
+    return Promise.resolve(this.experimentalTriggeringEnabledResponse_);
+  }
+
+  setExperimentalTriggeringEnabled(enabled: boolean) {
+    this.methodCalled('setExperimentalTriggeringEnabled', enabled);
+  }
+
+  setExperimentalTriggeringEnabledResponse(enabled: boolean) {
+    this.experimentalTriggeringEnabledResponse_ = enabled;
+  }
+
+  getActorLoginPermissions() {
+    this.methodCalled('getActorLoginPermissions');
+    return Promise.resolve(this.actorLoginPermissions_);
+  }
+
+  startObservingActorLoginPermissions() {
+    this.methodCalled('startObservingActorLoginPermissions');
+  }
+
+  stopObservingActorLoginPermissions() {
+    this.methodCalled('stopObservingActorLoginPermissions');
+  }
+
+  setActorLoginPermissions(permissions: LoginPermission[]) {
+    this.actorLoginPermissions_ = permissions;
+  }
+
+  setRevokeActorLoginPermissionResponse(success: boolean) {
+    this.revokeActorLoginPermissionResponse_ = success;
+  }
+
+  revokeActorLoginPermission(signonRealm: string) {
+    this.methodCalled('revokeActorLoginPermission', signonRealm);
+    return Promise.resolve(this.revokeActorLoginPermissionResponse_);
+  }
+
+  getGlicSelectionShortcut() {
+    this.methodCalled('getGlicSelectionShortcut');
+    return Promise.resolve(this.glicShortcutResponse_);
+  }
+
+  setGlicSelectionShortcut(shortcut: string) {
+    this.methodCalled('setGlicSelectionShortcut', shortcut);
+    return Promise.resolve();
   }
 }

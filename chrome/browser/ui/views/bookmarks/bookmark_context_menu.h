@@ -7,12 +7,13 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/bookmarks/bookmark_context_menu_controller.h"
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/controls/menu/menu_delegate.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace views {
 class MenuRunner;
@@ -43,12 +44,13 @@ class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
   // |browser| is used to open bookmarks as well as the bookmark manager, and
   // is NULL in tests.
   BookmarkContextMenu(views::Widget* parent_widget,
-                      Browser* browser,
+                      BrowserWindowInterface* browser,
                       Profile* profile,
                       BookmarkLaunchLocation opened_from,
                       const std::vector<raw_ptr<const bookmarks::BookmarkNode,
                                                 VectorExperimental>>& selection,
-                      bool close_on_remove);
+                      bool close_on_remove,
+                      bool can_paste);
 
   BookmarkContextMenu(const BookmarkContextMenu&) = delete;
   BookmarkContextMenu& operator=(const BookmarkContextMenu&) = delete;
@@ -75,6 +77,8 @@ class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
   bool IsCommandEnabled(int command_id) const override;
   bool IsCommandVisible(int command_id) const override;
   bool ShouldCloseAllMenusOnExecute(int id) override;
+  bool ShouldExecuteCommandWithoutClosingMenu(int id,
+                                              const ui::Event& e) override;
   void OnMenuClosed(views::MenuItemView* menu) override;
 
   // Overridden from BookmarkContextMenuControllerDelegate:
@@ -85,11 +89,16 @@ class BookmarkContextMenu : public BookmarkContextMenuControllerDelegate,
                                 VectorExperimental>>& bookmarks) override;
   void DidExecuteCommand(int command_id) override;
 
+  void UpdateSubMenuState();
+
  private:
   std::unique_ptr<BookmarkContextMenuController> controller_;
 
-  // The parent of dialog boxes opened from the context menu.
-  const raw_ptr<views::Widget> parent_widget_;
+  // The parent of dialog boxes opened from the context menu. Uses a WeakPtr
+  // because on macOS immersive fullscreen, the parent widget may be an
+  // OverlayWidgetMac that is destroyed before this menu during browser
+  // shutdown.
+  base::WeakPtr<views::Widget> parent_widget_;
 
   // Responsible for running the menu.
   std::unique_ptr<views::MenuRunner> menu_runner_;

@@ -29,8 +29,8 @@
 #include "components/omnibox/browser/url_index_private_data.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
-#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
 #include "components/search/search.h"
+#include "components/search_engines/ai_mode_button_service.h"
 #include "components/variations/active_field_trials.h"
 #include "components/variations/hashing.h"
 #include "components/variations/variations_associated_data.h"
@@ -110,11 +110,11 @@ bool IsKoreanLocale(const std::string& locale) {
   return locale == "ko" || locale == "ko-KR";
 }
 
-#if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 bool IsEnglishLocale(const std::string& locale) {
   return base::StartsWith(locale, "en", base::CompareCase::SENSITIVE);
 }
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
 }  // namespace
 
@@ -210,8 +210,6 @@ size_t OmniboxFieldTrial::GetProviderMaxMatches(
 
   return default_max_matches_per_provider;
 }
-
-
 
 void OmniboxFieldTrial::GetDefaultHUPScoringParams(
     HUPScoringParams* scoring_params) {
@@ -330,11 +328,27 @@ int OmniboxFieldTrial::MaxNumHQPUrlsIndexedAtStartup() {
   constexpr int kDefaultOnNonLowEndDevices = 20000;
 #endif
 
-  if (base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled()) {
-    return kDefaultOnLowEndDevices;
-  } else {
-    return kDefaultOnNonLowEndDevices;
+  const bool is_low_end =
+      base::SysInfo::IsLowEndDeviceOrPartialLowEndModeEnabled();
+  const int default_value =
+      is_low_end ? kDefaultOnLowEndDevices : kDefaultOnNonLowEndDevices;
+
+  // Allow the startup cap to be overridden via the bundled omnibox field trial,
+  // honoring the kMaxNumHQPUrlsIndexedAtStartupOn{Low,NonLow}EndDevicesParam
+  // parameters (previously declared but never read). Falls back to the
+  // constants above when no valid, positive value is configured, so default
+  // behavior is unchanged. Mirrors the HQPMaxVisitsToScore() pattern below.
+  const char* param_name =
+      is_low_end ? kMaxNumHQPUrlsIndexedAtStartupOnLowEndDevicesParam
+                 : kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam;
+  const std::string param_value = base::GetFieldTrialParamValue(
+      kBundledExperimentFieldTrialName, param_name);
+  int parsed_value = 0;
+  if (!param_value.empty() && base::StringToInt(param_value, &parsed_value) &&
+      parsed_value > 0) {
+    return parsed_value;
   }
+  return default_value;
 }
 
 size_t OmniboxFieldTrial::HQPMaxVisitsToScore() {
@@ -441,15 +455,13 @@ bool OmniboxFieldTrial::IsOnDeviceTailSuggestEnabled(
     return false;
   }
 
-  // Currently only launch for English locales. Remove this flag once i18n is
-  // also launched.
-  // Do not launch for iOS since the feature is not supported in iOS yet.
-#if !BUILDFLAG(IS_IOS)
+// On Desktop the model is only launched for English locales.
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   if (IsEnglishLocale(locale)) {
     return base::FeatureList::IsEnabled(
         omnibox::kOnDeviceTailEnableEnglishModel);
   }
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
   return base::FeatureList::IsEnabled(omnibox::kOnDeviceTailModel);
 }
@@ -458,17 +470,6 @@ bool OmniboxFieldTrial::ShouldEncodeLeadingSpaceForOnDeviceTailSuggest() {
   return base::GetFieldTrialParamByFeatureAsBool(omnibox::kOnDeviceTailModel,
                                                  "ShouldEncodeLeadingSpace",
                                                  /*default_value=*/false);
-}
-
-bool OmniboxFieldTrial::ShouldApplyOnDeviceHeadModelSelectionFix() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-             omnibox::kOnDeviceHeadProviderNonIncognito,
-             OmniboxFieldTrial::kOnDeviceHeadModelSelectionFix,
-             /*default_value=*/true) ||
-         base::GetFieldTrialParamByFeatureAsBool(
-             omnibox::kOnDeviceHeadProviderIncognito,
-             OmniboxFieldTrial::kOnDeviceHeadModelSelectionFix,
-             /*default_value=*/true);
 }
 
 bool OmniboxFieldTrial::IsOnDeviceHeadSuggestEnabledForLocale(
@@ -543,8 +544,6 @@ const char
     OmniboxFieldTrial::kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam[] =
         "MaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevices";
 
-const char OmniboxFieldTrial::kMaxZeroSuggestMatchesParam[] =
-    "MaxZeroSuggestMatches";
 const char OmniboxFieldTrial::kUIMaxAutocompleteMatchesByProviderParam[] =
     "UIMaxAutocompleteMatchesByProvider";
 const char OmniboxFieldTrial::kUIMaxAutocompleteMatchesParam[] =
@@ -558,7 +557,6 @@ const char OmniboxFieldTrial::kSuppressPsuggestBackfillWithMIAParam[] =
 
 const char OmniboxFieldTrial::kOnDeviceHeadModelLocaleConstraint[] =
     "ForceModelLocaleConstraint";
-const char OmniboxFieldTrial::kOnDeviceHeadModelSelectionFix[] = "SelectionFix";
 
 int OmniboxFieldTrial::kDefaultMinimumTimeBetweenSuggestQueriesMs = 100;
 
@@ -636,24 +634,32 @@ bool IsHideSuggestionGroupHeadersEnabledInContext(
   }
 }
 
-bool IsDeterministicAimActionInTypedStateEnabled(
-    AutocompleteProviderClient* client) {
-  ui::DeviceFormFactor factor = ui::GetDeviceFormFactor();
-  if (!(factor == ui::DEVICE_FORM_FACTOR_PHONE ||
-        factor == ui::DEVICE_FORM_FACTOR_FOLDABLE)) {
+bool IsAimOmniboxEntrypointEnabled(
+    const AimEligibilityService* aim_eligibility_service,
+    const AiModeButtonService* ai_mode_button_service,
+    const TemplateURLService* template_url_service) {
+  // `aim_eligibility_service` can be null in tests.
+  if (!aim_eligibility_service) {
     return false;
   }
 
-  return AimEligibilityService::GenericKillSwitchFeatureCheck(
-      client->GetAimEligibilityService(),
-      omnibox::kOmniboxAimShortcutTypedState);
-}
+  // Entrypoint can't be shown if it can't be configured.
+  if (!ai_mode_button_service || !ai_mode_button_service->GetCurrentConfig()) {
+    return false;
+  }
 
-bool IsAimOmniboxEntrypointEnabled(
-    const AimEligibilityService* aim_eligibility_service) {
-  return AimEligibilityService::GenericKillSwitchFeatureCheck(
-      aim_eligibility_service, omnibox::kAiModeOmniboxEntryPoint,
-      omnibox::kAiModeOmniboxEntryPointEnUs);
+  // If the DSE is Google, the entrypoint should respect Google server
+  // eligibility regardless of the 3p feature state.
+  if (search::DefaultSearchProviderIsGoogle(template_url_service)) {
+    return aim_eligibility_service->IsAimEligible();
+  }
+
+  // If DSE is not Google, then entrypoint should ignore Google server
+  // eligibility. Instead, it requires the 3p flag and local checks excluding
+  // DSE.
+  return base::FeatureList::IsEnabled(omnibox::kAim3pEntrypoint) &&
+         aim_eligibility_service->IsAimAllowedByFeatureAndPolicy() &&
+         aim_eligibility_service->IsAimAllowedByThirdPartyPolicy();
 }
 
 bool IsAimStarterPackEnabled(
@@ -856,11 +862,7 @@ bool AreScoringSignalsAnnotatorsEnabled() {
   return GetMLConfig().enable_scoring_signals_annotators;
 }
 bool IsMlUrlScoringEnabled() {
-#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
   return IsUrlScoringModelEnabled() && GetMLConfig().ml_url_scoring;
-#else
-  return false;
-#endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
 }
 bool IsMlUrlScoringCounterfactual() {
   return IsMlUrlScoringEnabled() && GetMLConfig().ml_url_scoring_counterfactual;

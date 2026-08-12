@@ -34,18 +34,15 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_area_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
-#include "third_party/blink/renderer/core/html/media/html_video_element.h"
-#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/identifiers_factory.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
-#include "third_party/blink/renderer/core/layout/layout_video.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/loader/resource/image_resource_content.h"
 #include "third_party/blink/renderer/core/paint/image_painter.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
-#include "third_party/blink/renderer/core/paint/timing/image_element_timing.h"
+#include "third_party/blink/renderer/core/paint/timing/paint_timing_detector.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "ui/gfx/geometry/size_conversions.h"
@@ -56,7 +53,7 @@ LayoutImage::LayoutImage(Element* element) : LayoutReplaced(element) {}
 
 LayoutImage* LayoutImage::CreateAnonymous(Document& document) {
   LayoutImage* image = MakeGarbageCollected<LayoutImage>(nullptr);
-  image->SetDocumentForAnonymous(&document);
+  image->SetDocumentForAnonymous(document);
   return image;
 }
 
@@ -75,6 +72,25 @@ void LayoutImage::WillBeDestroyed() {
   LayoutReplaced::WillBeDestroyed();
 }
 
+void LayoutImage::InsertedIntoTree() {
+  NOT_DESTROYED();
+  ImageResourceContent* image_content = image_resource_->CachedImage();
+
+  // If the image content was ready before attaching to the layout image, and
+  // and it did not have a node, it would not be possible to know if the node
+  // would be required for timing. Notify at this point now it is attached to
+  // its parent.
+  //
+  // TODO(crbug.com/535432431): This may no longer be necessary once
+  // ImageElementTiming is a PaintTiming client.
+  if (!GetNode() && GetDocument().domWindow() && image_content &&
+      image_content->IsLoaded()) {
+    PaintTimingDetector::From(GetDocument())
+        .NotifyImageFinished(*this, image_content);
+  }
+  LayoutReplaced::InsertedIntoTree();
+}
+
 void GetImageSizeChangeTracingData(perfetto::TracedValue context,
                                    Node* node,
                                    LocalFrame* frame) {
@@ -86,28 +102,27 @@ void GetImageSizeChangeTracingData(perfetto::TracedValue context,
 void LayoutImage::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutReplaced::StyleDidChange(diff, old_style, style_change_context);
+  LayoutReplaced::StyleDidChange(diff, old_style, new_style,
+                                 style_change_context);
 
   RespectImageOrientationEnum old_orientation =
       old_style ? old_style->ImageOrientation()
                 : ComputedStyleInitialValues::InitialImageOrientation();
-  if (StyleRef().ImageOrientation() != old_orientation) {
+  if (new_style.ImageOrientation() != old_orientation) {
     NaturalSizeChanged();
   }
 
-  bool tracing_enabled;
-  TRACE_EVENT_CATEGORY_GROUP_ENABLED(
-      TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), &tracing_enabled);
-
-  if (tracing_enabled) {
+  if (TRACE_EVENT_CATEGORY_ENABLED(
+          TRACE_DISABLED_BY_DEFAULT("devtools.timeline"))) {
     bool is_unsized = this->IsUnsizedImage();
     if (is_unsized) {
       Node* node = GetNode();
-      TRACE_EVENT_INSTANT_WITH_TIMESTAMP1(
-          "devtools.timeline", "LayoutImageUnsized", TRACE_EVENT_SCOPE_THREAD,
-          base::TimeTicks::Now(), "data", [&](perfetto::TracedValue ctx) {
+      TRACE_EVENT_INSTANT(
+          "devtools.timeline", "LayoutImageUnsized", base::TimeTicks::Now(),
+          "data", [&](perfetto::TracedValue ctx) {
             GetImageSizeChangeTracingData(std::move(ctx), node, GetFrame());
           });
     }
@@ -126,8 +141,6 @@ void LayoutImage::ImageChanged(WrappedImagePtr new_image,
   NOT_DESTROYED();
   DCHECK(View());
   DCHECK(View()->GetFrameView());
-  if (DocumentBeingDestroyed())
-    return;
 
   if (HasBoxDecorationBackground() || HasMask() || HasShapeOutside() ||
       HasReflection())
@@ -140,10 +153,14 @@ void LayoutImage::ImageChanged(WrappedImagePtr new_image,
     return;
 
   auto* html_image_element = DynamicTo<HTMLImageElement>(GetNode());
-  if (IsGeneratedContent() && html_image_element &&
-      image_resource_->ErrorOccurred()) {
-    html_image_element->EnsureFallbackForGeneratedContent();
-    return;
+  if (html_image_element) {
+    if (RuntimeEnabledFeatures::CSSImageAnimationEnabled()) {
+      html_image_element->PseudoStateChanged(CSSSelector::kPseudoAnimatedImage);
+    }
+    if (IsGeneratedContent() && image_resource_->ErrorOccurred()) {
+      html_image_element->EnsureFallbackForGeneratedContent();
+      return;
+    }
   }
 
   // If error occurred, image marker should be replaced by a LayoutText.
@@ -188,24 +205,12 @@ void LayoutImage::ImageChanged(WrappedImagePtr new_image,
   }
 }
 
-namespace {
-
-bool CanQueryNaturalSize(const LayoutImageResource& image_resource) {
-  if (RuntimeEnabledFeatures::
-          LayoutImageEmptyNaturalSizeBeforeSizeAvailableEnabled()) {
-    return image_resource.IsSizeAvailable();
-  }
-  return image_resource.HasImage();
-}
-
-}  // namespace
-
 bool LayoutImage::UpdateNaturalSizeIfNeeded() {
   NOT_DESTROYED();
   PhysicalNaturalSizingInfo new_natural_dimensions;
-  // If the image resource is not associated with an image then we set natural
+  // If the image resource has no image or image dimensions then we set natural
   // dimensions of 0x0 ("represents nothing" per HTML spec).
-  if (CanQueryNaturalSize(*image_resource_)) {
+  if (image_resource_->IsSizeAvailable()) {
     new_natural_dimensions = PhysicalNaturalSizingInfo::FromSizingInfo(
         image_resource_->GetNaturalDimensions(StyleRef().EffectiveZoom()));
   }
@@ -367,14 +372,6 @@ bool LayoutImage::ComputeBackgroundIsKnownToBeObscured() const {
     return false;
 
   return ForegroundIsKnownToBeOpaqueInRect(BackgroundPaintedExtent(), 0);
-}
-
-HTMLMapElement* LayoutImage::ImageMap() const {
-  NOT_DESTROYED();
-  auto* i = DynamicTo<HTMLImageElement>(GetNode());
-  return i ? i->GetTreeScope().GetImageMap(
-                 i->FastGetAttribute(html_names::kUsemapAttr))
-           : nullptr;
 }
 
 bool LayoutImage::NodeAtPoint(HitTestResult& result,

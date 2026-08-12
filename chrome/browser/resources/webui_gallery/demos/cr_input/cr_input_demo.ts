@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import '//resources/cr_elements/cr_button/cr_button.js';
+import '//resources/cr_elements/cr_checkbox/cr_checkbox.js';
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_input/cr_input.js';
 import '//resources/cr_elements/cr_textarea/cr_textarea.js';
@@ -34,6 +35,7 @@ export class CrInputDemoElement extends CrLitElement {
 
   static override get properties() {
     return {
+      autogrowTextarea_: {type: Boolean},
       emailValue_: {type: String},
       numberValue_: {type: String},
       pinValue_: {type: String},
@@ -43,12 +45,13 @@ export class CrInputDemoElement extends CrLitElement {
     };
   }
 
-  protected accessor emailValue_: string|undefined;
-  protected accessor numberValue_: string|undefined;
-  protected accessor pinValue_: string|undefined;
-  protected accessor searchValue_: string|undefined;
-  protected accessor textValue_: string|undefined;
-  protected accessor textareaValue_: string|undefined;
+  protected accessor autogrowTextarea_ = false;
+  protected accessor emailValue_: string = '';
+  protected accessor numberValue_: string = '';
+  protected accessor pinValue_: string = '';
+  protected accessor searchValue_: string = '';
+  protected accessor textValue_: string = '';
+  protected accessor textareaValue_: string = '';
 
   protected onClearSearchClick_() {
     this.searchValue_ = '';
@@ -80,6 +83,17 @@ export class CrInputDemoElement extends CrLitElement {
 
   protected onTextareaValueChanged_(e: CustomEvent<{value: string}>) {
     this.textareaValue_ = e.detail.value;
+  }
+
+  protected onAutogrowTextareaCheckedChanged_(
+      e: CustomEvent<{value: boolean}>) {
+    this.autogrowTextarea_ = e.detail.value;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'cr-input-demo': CrInputDemoElement;
   }
 }
 

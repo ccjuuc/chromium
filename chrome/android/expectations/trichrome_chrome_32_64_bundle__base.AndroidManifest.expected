@@ -2,8 +2,8 @@
 <manifest
     xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.chromium.chrome.stable"
-    platformBuildVersionCode="36"
-    platformBuildVersionName="16"
+    platformBuildVersionCode="37"
+    platformBuildVersionName="17"
     android:isolatedSplits="true"
     android:versionCode="OFFSET=31"
     android:versionName="#.#.#.#">
@@ -32,6 +32,7 @@
   <uses-permission android:name="$PACKAGE.permission.READ_WRITE_BOOKMARK_FOLDERS"/>
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.CAMERA"/>
   <uses-permission android:name="android.permission.CAPTURE_KEYBOARD"/>
@@ -40,15 +41,18 @@
   <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN"/>
   <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
   <uses-permission android:name="android.permission.GET_ACCOUNTS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.MANAGE_ACCOUNTS"/>
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
   <uses-permission android:name="android.permission.NFC"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE"/>
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -56,6 +60,8 @@
   <uses-permission android:name="android.permission.REPOSITION_SELF_WINDOWS"/>
   <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS"/>
   <uses-permission android:name="android.permission.USE_CREDENTIALS"/>
+  <uses-permission android:name="android.permission.USE_LOOPBACK_INTERFACE"/>
+  <uses-permission android:name="android.permission.USE_PINNED_WINDOWING_LAYER"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
@@ -71,10 +77,7 @@
   <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_CONNECT"/>
   <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>
   <uses-permission-sdk-23 android:name="android.permission.HAND_TRACKING"/>
-  <uses-permission-sdk-23 android:name="android.permission.READ_CONTACTS"/>
-  <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_AUDIO"/>
-  <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_IMAGES"/>
-  <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_VIDEO"/>
+  <uses-permission-sdk-23 android:name="android.permission.READ_CONTACTS" android:maxSdkVersion="36"/>
   <uses-permission-sdk-23 android:name="android.permission.REORDER_TASKS"/>
   <uses-permission-sdk-23 android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
   <uses-permission-sdk-23 android:name="android.permission.SCENE_UNDERSTANDING_FINE"/>
@@ -83,7 +86,6 @@
   <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="36"/>
   <application
       android:name="org.chromium.chrome.browser.base.SplitChromeApplication"
-      android:allowAudioPlaybackCapture="false"
       android:allowBackup="false"
       android:appComponentFactory="org.chromium.chrome.browser.base.SplitCompatAppComponentFactory"
       android:enableOnBackInvokedCallback="true"
@@ -96,7 +98,8 @@
       android:networkSecurityConfig="@xml/network_security_config"
       android:roundIcon="@drawable/ic_launcher_round"
       android:supportsRtl="true"
-      android:zygotePreloadName="org.chromium.chrome.app.TrichromeZygotePreload">
+      android:zygotePreloadName="org.chromium.chrome.app.TrichromeZygotePreload"
+      android:zygotePreloadNativeLib="libmonochrome.so">
     <activity  # DIFF-ANCHOR: ea1a94af
         android:name="com.google.android.gms.common.api.GoogleApiActivity"
         android:exported="false"
@@ -150,6 +153,12 @@
         android:exported="false"
         android:grantUriPermissions="true">
     </provider>  # DIFF-ANCHOR: 6e040436
+    <provider  # DIFF-ANCHOR: ace92cb0
+        android:name="org.chromium.chrome.browser.screenshotprovider.ScreenshotContentProvider"
+        android:authorities="$PACKAGE.ScreenshotContentProvider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+    </provider>  # DIFF-ANCHOR: ace92cb0
     <provider  # DIFF-ANCHOR: 67014fab
         android:name="org.chromium.chrome.browser.util.ChromeFileProvider"
         android:authorities="$PACKAGE.FileProvider"
@@ -209,11 +218,38 @@
         <action android:name="com.google.firebase.MESSAGING_EVENT"/>
       </intent-filter>  # DIFF-ANCHOR: 69e70070
     </service>  # DIFF-ANCHOR: 2295960c
+    <service  # DIFF-ANCHOR: 85869b23
+        android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
+        android:directBootAware="true"
+        android:exported="false">
+      <meta-data android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar" android:value="com.google.firebase.components.ComponentRegistrar"/>
+    </service>  # DIFF-ANCHOR: 85869b23
     <service  # DIFF-ANCHOR: a550decc
         android:name="org.chromium.components.background_task_scheduler.internal.BackgroundTaskJobService"
         android:exported="false"
         android:permission="android.permission.BIND_JOB_SERVICE">
     </service>  # DIFF-ANCHOR: a550decc
+    <service  # DIFF-ANCHOR: 55f101d6
+        android:name="org.chromium.content.app.NativeOnlySandboxedProcessService0"
+        android:exported="false"
+        android:isolatedProcess="true"
+        android:nativeService="true"
+        android:permission="$PACKAGE.permission.CHILD_SERVICE"
+        android:process=":sandboxed_process0"
+        android:useAppZygote="true">
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_FUNCTION_NAME" android:value="NativeChildProcessService_onCreate"/>
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_LIBRARY_NAME" android:value="libmonochrome.so"/>
+    </service>  # DIFF-ANCHOR: 55f101d6
+    <service  # DIFF-ANCHOR: bb0c45b7
+        android:name="org.chromium.content.app.NativeOnlySandboxedProcessService1"
+        android:exported="false"
+        android:isolatedProcess="true"
+        android:nativeService="true"
+        android:permission="$PACKAGE.permission.CHILD_SERVICE"
+        android:process=":sandboxed_process1">
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_FUNCTION_NAME" android:value="NativeChildProcessService_onCreate"/>
+      <property android:name="android.app.PROPERTY_NATIVE_SERVICE_LIBRARY_NAME" android:value="libmonochrome.so"/>
+    </service>  # DIFF-ANCHOR: bb0c45b7
     <service  # DIFF-ANCHOR: 0c6c4fd9
         android:name="org.chromium.content.app.PrivilegedProcessService0"
         android:exported="false"
@@ -286,7 +322,7 @@
     </service>  # DIFF-ANCHOR: 40feb0a4
     <service  # DIFF-ANCHOR: b1e3e8bd
         android:name="org.chromium.content.app.SandboxedProcessService0"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process0"
@@ -294,273 +330,273 @@
     </service>  # DIFF-ANCHOR: b1e3e8bd
     <service  # DIFF-ANCHOR: 76d1ccf8
         android:name="org.chromium.content.app.SandboxedProcessService1"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process1">
     </service>  # DIFF-ANCHOR: 76d1ccf8
     <service  # DIFF-ANCHOR: 38b95266
         android:name="org.chromium.content.app.SandboxedProcessService10"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process10">
     </service>  # DIFF-ANCHOR: 38b95266
     <service  # DIFF-ANCHOR: e4a2e4a2
         android:name="org.chromium.content.app.SandboxedProcessService11"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process11">
     </service>  # DIFF-ANCHOR: e4a2e4a2
     <service  # DIFF-ANCHOR: d9b2ffba
         android:name="org.chromium.content.app.SandboxedProcessService12"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process12">
     </service>  # DIFF-ANCHOR: d9b2ffba
     <service  # DIFF-ANCHOR: b41bb17d
         android:name="org.chromium.content.app.SandboxedProcessService13"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process13">
     </service>  # DIFF-ANCHOR: b41bb17d
     <service  # DIFF-ANCHOR: aec0ea21
         android:name="org.chromium.content.app.SandboxedProcessService14"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process14">
     </service>  # DIFF-ANCHOR: aec0ea21
     <service  # DIFF-ANCHOR: cf88a5e5
         android:name="org.chromium.content.app.SandboxedProcessService15"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process15">
     </service>  # DIFF-ANCHOR: cf88a5e5
     <service  # DIFF-ANCHOR: 7d85889d
         android:name="org.chromium.content.app.SandboxedProcessService16"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process16">
     </service>  # DIFF-ANCHOR: 7d85889d
     <service  # DIFF-ANCHOR: dae26ed4
         android:name="org.chromium.content.app.SandboxedProcessService17"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process17">
     </service>  # DIFF-ANCHOR: dae26ed4
     <service  # DIFF-ANCHOR: 2c6cf029
         android:name="org.chromium.content.app.SandboxedProcessService18"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process18">
     </service>  # DIFF-ANCHOR: 2c6cf029
     <service  # DIFF-ANCHOR: 1d2f0988
         android:name="org.chromium.content.app.SandboxedProcessService19"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process19">
     </service>  # DIFF-ANCHOR: 1d2f0988
     <service  # DIFF-ANCHOR: 4a39041b
         android:name="org.chromium.content.app.SandboxedProcessService2"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process2">
     </service>  # DIFF-ANCHOR: 4a39041b
     <service  # DIFF-ANCHOR: 073533bf
         android:name="org.chromium.content.app.SandboxedProcessService20"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process20">
     </service>  # DIFF-ANCHOR: 073533bf
     <service  # DIFF-ANCHOR: d24da41d
         android:name="org.chromium.content.app.SandboxedProcessService21"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process21">
     </service>  # DIFF-ANCHOR: d24da41d
     <service  # DIFF-ANCHOR: 594d8b32
         android:name="org.chromium.content.app.SandboxedProcessService22"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process22">
     </service>  # DIFF-ANCHOR: 594d8b32
     <service  # DIFF-ANCHOR: 5528c0c3
         android:name="org.chromium.content.app.SandboxedProcessService23"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process23">
     </service>  # DIFF-ANCHOR: 5528c0c3
     <service  # DIFF-ANCHOR: b7ab2ba3
         android:name="org.chromium.content.app.SandboxedProcessService24"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process24">
     </service>  # DIFF-ANCHOR: b7ab2ba3
     <service  # DIFF-ANCHOR: cec6cb64
         android:name="org.chromium.content.app.SandboxedProcessService25"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process25">
     </service>  # DIFF-ANCHOR: cec6cb64
     <service  # DIFF-ANCHOR: 5b4a00fe
         android:name="org.chromium.content.app.SandboxedProcessService26"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process26">
     </service>  # DIFF-ANCHOR: 5b4a00fe
     <service  # DIFF-ANCHOR: ad49d203
         android:name="org.chromium.content.app.SandboxedProcessService27"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process27">
     </service>  # DIFF-ANCHOR: ad49d203
     <service  # DIFF-ANCHOR: 573298e9
         android:name="org.chromium.content.app.SandboxedProcessService28"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process28">
     </service>  # DIFF-ANCHOR: 573298e9
     <service  # DIFF-ANCHOR: 79897b32
         android:name="org.chromium.content.app.SandboxedProcessService29"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process29">
     </service>  # DIFF-ANCHOR: 79897b32
     <service  # DIFF-ANCHOR: 84335864
         android:name="org.chromium.content.app.SandboxedProcessService3"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process3">
     </service>  # DIFF-ANCHOR: 84335864
     <service  # DIFF-ANCHOR: c4bd371e
         android:name="org.chromium.content.app.SandboxedProcessService30"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process30">
     </service>  # DIFF-ANCHOR: c4bd371e
     <service  # DIFF-ANCHOR: 394a9fd0
         android:name="org.chromium.content.app.SandboxedProcessService31"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process31">
     </service>  # DIFF-ANCHOR: 394a9fd0
     <service  # DIFF-ANCHOR: b811afb8
         android:name="org.chromium.content.app.SandboxedProcessService32"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process32">
     </service>  # DIFF-ANCHOR: b811afb8
     <service  # DIFF-ANCHOR: 2811ddd3
         android:name="org.chromium.content.app.SandboxedProcessService33"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process33">
     </service>  # DIFF-ANCHOR: 2811ddd3
     <service  # DIFF-ANCHOR: 73ae1688
         android:name="org.chromium.content.app.SandboxedProcessService34"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process34">
     </service>  # DIFF-ANCHOR: 73ae1688
     <service  # DIFF-ANCHOR: c476f324
         android:name="org.chromium.content.app.SandboxedProcessService35"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process35">
     </service>  # DIFF-ANCHOR: c476f324
     <service  # DIFF-ANCHOR: 75d5304b
         android:name="org.chromium.content.app.SandboxedProcessService36"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process36">
     </service>  # DIFF-ANCHOR: 75d5304b
     <service  # DIFF-ANCHOR: dc6d0617
         android:name="org.chromium.content.app.SandboxedProcessService37"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process37">
     </service>  # DIFF-ANCHOR: dc6d0617
     <service  # DIFF-ANCHOR: e31efe49
         android:name="org.chromium.content.app.SandboxedProcessService38"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process38">
     </service>  # DIFF-ANCHOR: e31efe49
     <service  # DIFF-ANCHOR: 5736507e
         android:name="org.chromium.content.app.SandboxedProcessService39"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process39">
     </service>  # DIFF-ANCHOR: 5736507e
     <service  # DIFF-ANCHOR: a161be24
         android:name="org.chromium.content.app.SandboxedProcessService4"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process4">
     </service>  # DIFF-ANCHOR: a161be24
     <service  # DIFF-ANCHOR: 8e591688
         android:name="org.chromium.content.app.SandboxedProcessService5"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process5">
     </service>  # DIFF-ANCHOR: 8e591688
     <service  # DIFF-ANCHOR: 705141d0
         android:name="org.chromium.content.app.SandboxedProcessService6"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process6">
     </service>  # DIFF-ANCHOR: 705141d0
     <service  # DIFF-ANCHOR: 38ed2189
         android:name="org.chromium.content.app.SandboxedProcessService7"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process7">
     </service>  # DIFF-ANCHOR: 38ed2189
     <service  # DIFF-ANCHOR: aa417956
         android:name="org.chromium.content.app.SandboxedProcessService8"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process8">
     </service>  # DIFF-ANCHOR: aa417956
     <service  # DIFF-ANCHOR: e2f3bbbd
         android:name="org.chromium.content.app.SandboxedProcessService9"
-        android:exported="False"
+        android:exported="false"
         android:isolatedProcess="true"
         android:permission="$PACKAGE.permission.CHILD_SERVICE"
         android:process=":sandboxed_process9">

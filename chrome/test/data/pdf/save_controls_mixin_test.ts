@@ -8,19 +8,20 @@ import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {eventToPromise} from 'chrome://webui-test/test_util.js';
 
 const SaveRequestType = chrome.pdfViewerPrivate.SaveRequestType;
-const TestElementBase = ViewerSaveControlsMixin(CrLitElement);
 type SaveRequestType = chrome.pdfViewerPrivate.SaveRequestType;
 
-interface TestElement {
+interface TestDummyElement {
   $: {
     save: CrIconButtonElement,
     menu: CrActionMenuElement,
   };
 }
 
-class TestElement extends TestElementBase {
+const TestDummyElementBase = ViewerSaveControlsMixin(CrLitElement);
+
+class TestDummyElement extends TestDummyElementBase {
   static get is() {
-    return 'test-element';
+    return 'test-dummy';
   }
 
   override render() {
@@ -42,14 +43,16 @@ class TestElement extends TestElementBase {
   }
 }
 
+customElements.define(TestDummyElement.is, TestDummyElement);
+
 const tests = [
   /**
    * Test that the toolbar shows an option to download the edited PDF if
    * available.
    */
   async function testEditedPdfOption() {
-    customElements.define(TestElement.is, TestElement);
-    const testElement = document.createElement('test-element') as TestElement;
+    const testElement =
+        document.createElement('test-dummy') as TestDummyElement;
     document.body.appendChild(testElement);
     const actionMenu = testElement.getMenu();
 
@@ -58,7 +61,8 @@ const tests = [
     chrome.test.assertFalse(actionMenu.open);
 
     // Call `onSaveClick` without any edits.
-    let onSave = eventToPromise('save', testElement);
+    let onSave =
+        eventToPromise<CustomEvent<SaveRequestType>>('save', testElement);
     testElement.onSaveClick();
     let e: CustomEvent<SaveRequestType> = await onSave;
     chrome.test.assertFalse(actionMenu.open);
@@ -67,7 +71,7 @@ const tests = [
 
     // Set form field focused.
     testElement.isFormFieldFocused = true;
-    onSave = eventToPromise('save', testElement);
+    onSave = eventToPromise<CustomEvent<SaveRequestType>>('save', testElement);
     testElement.onSaveClick();
 
     // Unfocus, without making any edits. Saves the original document.
@@ -90,7 +94,7 @@ const tests = [
     chrome.test.assertEq(2, numRequests);
 
     // Save "Edited".
-    onSave = eventToPromise('save', testElement);
+    onSave = eventToPromise<CustomEvent<SaveRequestType>>('save', testElement);
     testElement.onSaveEditedClick();
     e = await onSave;
     chrome.test.assertFalse(actionMenu.open);
@@ -98,7 +102,7 @@ const tests = [
     chrome.test.assertEq(3, numRequests);
 
     // Save "Original".
-    onSave = eventToPromise('save', testElement);
+    onSave = eventToPromise<CustomEvent<SaveRequestType>>('save', testElement);
     testElement.onSaveOriginalClick();
     e = await onSave;
     chrome.test.assertFalse(actionMenu.open);

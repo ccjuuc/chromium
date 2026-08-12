@@ -43,7 +43,7 @@ namespace {
 
 // Hides the tab switcher by tapping the switcher button.  Works on both phone
 // and tablet.
-void ShowTabViewController() {
+void HideTabGrid() {
   id<GREYMatcher> matcher = TabGridDoneButton();
   [[EarlGrey selectElementWithMatcher:matcher] performAction:grey_tap()];
 }
@@ -91,6 +91,13 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
 // to fail.
 @implementation TabSwitcherTransitionTestCase
 
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  config.features_enabled.push_back(kChromeNextIa);
+  config.features_enabled.push_back(kFullscreenRefactoring);
+  return config;
+}
+
 - (void)setUp {
   [super setUp];
 
@@ -108,6 +115,7 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
   // Release the histogram tester.
   chrome_test_util::GREYAssertErrorNil(
       [MetricsAppInterface releaseHistogramTester]);
+  [ChromeEarlGrey removeUserDefaultsObjectForKey:@"InactiveTabsTestMode"];
   [super tearDownHelper];
 }
 
@@ -182,7 +190,7 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
 
   // Enter and leave the switcher.
   [ChromeEarlGrey showTabSwitcher];
-  ShowTabViewController();
+  HideTabGrid();
 
   ExpectIdleHistogramCount(kUMATabSwitcherIdleTabGroupsHistogram, 0);
   ExpectIdleHistogramCount(kUMATabSwitcherIdleIncognitoTabGridPageHistogram, 0);
@@ -613,7 +621,7 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
   [[EarlGrey selectElementWithMatcher:TabGridSearchCancelButton()]
       performAction:grey_tap()];
   // Leave switcher by tap "Done" button.
-  ShowTabViewController();
+  HideTabGrid();
 
   ExpectIdleHistogramCount(kUMATabSwitcherIdleTabGroupsHistogram, 0);
   ExpectIdleHistogramCount(kUMATabSwitcherIdleIncognitoTabGridPageHistogram, 0);
@@ -641,7 +649,7 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
       performAction:grey_tap()];
   [ChromeEarlGrey
       waitForSufficientlyVisibleElementWithMatcher:TabGridDoneButton()];
-  ShowTabViewController();
+  HideTabGrid();
 
   ExpectIdleHistogramCount(kUMATabSwitcherIdleTabGroupsHistogram, 0);
   ExpectIdleHistogramCount(kUMATabSwitcherIdleIncognitoTabGridPageHistogram, 0);
@@ -679,13 +687,15 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
       performAction:grey_tap()];
   [[EarlGrey selectElementWithMatcher:testing::NavigationBarBackButton()]
       performAction:grey_tap()];
-  ShowTabViewController();
+  HideTabGrid();
 
   ExpectIdleHistogramCount(kUMATabSwitcherIdleTabGroupsHistogram, 0);
   ExpectIdleHistogramCount(kUMATabSwitcherIdleIncognitoTabGridPageHistogram, 0);
   ExpectIdleHistogramCount(kUMATabSwitcherIdleRegularTabGridPageHistogram, 1);
   ExpectIdleHistogramBucketCount(kUMATabSwitcherIdleRegularTabGridPageHistogram,
                                  1, NO);
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:kInactiveTabsUserEducationShownOnceKey];
 }
 
 // Tests switching back and forth between the normal and incognito BVCs.

@@ -11,7 +11,7 @@
 #include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
 #include "cc/paint/element_id.h"
-#include "cc/trees/layer_tree_host_client.h"
+#include "cc/trees/layer_tree_host_delegate.h"
 #include "services/viz/public/mojom/hit_test/input_target_client.mojom-blink.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
@@ -101,6 +101,9 @@ class WidgetBaseClient {
   virtual void UpdateCompositorScrollState(
       const cc::CompositorCommitData& commit_data) {}
 
+  virtual void UpdateAnimatedImageState(
+      const cc::CompositorCommitData& commit_data) {}
+
   // Notifies that the layer tree host has completed a call to
   // RequestMainFrameUpdate in response to a BeginMainFrame.
   virtual void DidBeginMainFrame() {}
@@ -111,6 +114,7 @@ class WidgetBaseClient {
       base::TimeTicks first_scroll_timestamp) {}
 
   virtual void WillBeginMainFrame() {}
+  // Called immediately before the commit task is posted to the impl thread.
   virtual void DidCompletePageScaleAnimation() {}
 
   // Allocates a LayerTreeFrameSink to submit CompositorFrames to. Only
@@ -151,7 +155,11 @@ class WidgetBaseClient {
   virtual void FocusChanged(mojom::blink::FocusState focus_state) {}
 
   // Call to request an animation frame from the compositor.
-  virtual void ScheduleAnimation(bool urgent) {}
+  virtual void ScheduleAnimation(cc::BeginMainFrameReason reason, bool urgent) {
+  }
+  void ScheduleAnimation(bool urgent) {
+    ScheduleAnimation(cc::BeginMainFrameReason::kOther, urgent);
+  }
 
   // TODO(bokan): Temporary to unblock synthetic gesture events running under
   // VR. https://crbug.com/940063

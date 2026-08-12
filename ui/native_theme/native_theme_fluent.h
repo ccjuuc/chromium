@@ -11,7 +11,6 @@
 #include "base/no_destructor.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/native_theme/native_theme_base.h"
 
 class SkTypeface;
@@ -64,6 +63,12 @@ class COMPONENT_EXPORT(NATIVE_THEME) NativeThemeFluent
       State state,
       const ScrollbarThumbExtraParams& extra_params) const override;
   float GetScrollbarPartContrastRatioForState(State state) const override;
+  SkColor GetScrollbarArrowBackgroundColor(
+      const ScrollbarArrowExtraParams& extra_params,
+      State state,
+      bool dark_mode,
+      PreferredContrast contrast,
+      const ColorProvider* color_provider) const override;
   void PaintArrowButton(
       cc::PaintCanvas* canvas,
       const ColorProvider* color_provider,

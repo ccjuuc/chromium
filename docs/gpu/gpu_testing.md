@@ -23,7 +23,7 @@ execute tests, rather than smaller test harnesses, has yielded several
 advantages: testing what is shipped, improved reliability, and improved
 performance.
 
-[Telemetry framework]: https://github.com/catapult-project/catapult/tree/master/telemetry
+[Telemetry framework]: https://chromium.googlesource.com/catapult/+/refs/heads/main/telemetry/
 
 A subset of the tests, called "pixel tests", grab screen snapshots of the web
 page in order to validate Chromium's rendering architecture end-to-end. Where
@@ -337,7 +337,6 @@ of all suites and resulting step names as of April 15th 2021:
   * `webgl2_conformance_tests`
   * `webgl2_conformance_validating_tests`
   * `webgl_conformance_d3d11_passthrough_tests`
-  * `webgl_conformance_d3d9_passthrough_tests`
   * `webgl_conformance_fast_call_tests`
   * `webgl_conformance_gl_passthrough_tests`
   * `webgl_conformance_gles_passthrough_tests`

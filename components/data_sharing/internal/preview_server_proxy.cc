@@ -26,6 +26,7 @@
 #include "components/sync/protocol/entity_specifics.pb.h"
 #include "components/sync/protocol/shared_tab_group_data_specifics.pb.h"
 #include "google_apis/common/base_requests.h"
+#include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -127,7 +128,7 @@ constexpr net::NetworkTrafficAnnotationTag
 
 // Find a a value for a field from a child dictionary in json.
 std::optional<std::string> GetFieldValueFromChildDict(
-    const base::Value::Dict& parent_dict,
+    const base::DictValue& parent_dict,
     const std::string& child_dict_name,
     const std::string& field_name) {
   auto* child_dict = parent_dict.FindDict(child_dict_name);
@@ -142,8 +143,7 @@ std::optional<std::string> GetFieldValueFromChildDict(
 }
 
 // Parse the shared tab from the dict.
-std::optional<sync_pb::SharedTab> ParseSharedTab(
-    const base::Value::Dict& dict) {
+std::optional<sync_pb::SharedTab> ParseSharedTab(const base::DictValue& dict) {
   auto* url = dict.FindString(kUrlKey);
   if (!url) {
     return std::nullopt;
@@ -176,7 +176,7 @@ std::optional<sync_pb::SharedTab> ParseSharedTab(
 
 // Parse the entity specifics from the dict.
 std::optional<sync_pb::EntitySpecifics> ParseEntitySpecifics(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   auto* shared_tab_group_dict = dict.FindDict(kSharedGroupDataKey);
   if (!shared_tab_group_dict) {
     return std::nullopt;
@@ -237,7 +237,7 @@ std::optional<sync_pb::EntitySpecifics> Deserialize(const base::Value& value) {
     return std::nullopt;
   }
 
-  const base::Value::Dict& value_dict = value.GetDict();
+  const base::DictValue& value_dict = value.GetDict();
   // Check if entry is deleted.
   auto deleted = value_dict.FindBool(kDeletedKey);
   if (deleted.has_value() && deleted.value()) {
@@ -311,20 +311,10 @@ void PreviewServerProxy::GetSharedDataPreview(
   std::string url_str = GetPreviewServerURLString();
   url_str.append("/").append(shared_entities_preview_path);
   GURL url = GURL(url_str);
-
-  // Query string in the URL to get shared entnties preview. {token} needs to
-  // be replaced by the caller. {pageSize} can be configured through finch.
-  const std::string kQueryString =
-      "accessToken={token}&pageToken=&pageSize={pageSize}";
-  std::string query_str = kQueryString;
-  base::ReplaceFirstSubstringAfterOffset(&query_str, 0, "{token}",
-                                         group_token.access_token);
-  base::ReplaceFirstSubstringAfterOffset(
-      &query_str, 0, "{pageSize}",
-      base::NumberToString(kPreviewDataSize.Get()));
-  GURL::Replacements replacements;
-  replacements.SetQueryStr(query_str);
-  url = url.ReplaceComponents(replacements);
+  url = net::AppendQueryParameter(url, "accessToken", group_token.access_token);
+  url = net::AppendQueryParameter(url, "pageToken", "");
+  url = net::AppendQueryParameter(url, "pageSize",
+                                  base::NumberToString(kPreviewDataSize.Get()));
   auto fetcher = CreateEndpointFetcher(url);
   auto* const fetcher_ptr = fetcher.get();
 
@@ -374,7 +364,7 @@ void PreviewServerProxy::HandleServerResponse(
     return;
   }
 
-  std::optional<base::Value::Dict> parsed_response =
+  std::optional<base::DictValue> parsed_response =
       base::JSONReader::ReadDict(response->response, base::JSON_PARSE_RFC);
   OnResponseJsonParsed(std::move(callback), std::move(parsed_response));
 }
@@ -382,7 +372,7 @@ void PreviewServerProxy::HandleServerResponse(
 void PreviewServerProxy::OnResponseJsonParsed(
     base::OnceCallback<void(
         const DataSharingService::SharedDataPreviewOrFailureOutcome&)> callback,
-    std::optional<base::Value::Dict> result) {
+    std::optional<base::DictValue> result) {
   SharedDataPreview preview;
   if (result.has_value()) {
     if (auto* response_json = result->FindList(kSharedEntitiesKey)) {

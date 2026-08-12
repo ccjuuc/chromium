@@ -73,6 +73,9 @@ import tempfile
 PATCHES = [
     'xslt-locale.patch',
     '0004-Use-a-dedicated-node-type-to-maintain-the-list-of-ca.patch',
+    '0005-Verify-dictionary-ownership-before-aliasing-attribut.patch',
+    '0006-Fix-type-confusion-in-xsltParseTemplateContent.patch',
+    '0007-Return-an-empty-node-set-from-document-function-with-invalid-uri.patch',
 ]
 
 

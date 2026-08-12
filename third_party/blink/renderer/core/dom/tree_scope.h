@@ -29,6 +29,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/tree_ordered_map.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/forms/radio_button_group_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
@@ -41,7 +42,7 @@ class Animation;
 class CSSStyleSheet;
 class ContainerNode;
 class CustomElementRegistry;
-class DOMSelection;
+class DomSelection;
 class Document;
 class Element;
 class HTMLMapElement;
@@ -75,7 +76,7 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   V8ObservableArrayCSSStyleSheet* adoptedStyleSheets() {
     return &EnsureAdoptedStyleSheets();
   }
-  DOMSelection* getSelection() { return GetSelection(); }
+  DomSelection* getSelection() { return GetSelection(); }
   HeapVector<Member<Animation>> getAnimations();
   Element* elementFromPoint(double x, double y) {
     return ElementFromPoint(x, y);
@@ -117,7 +118,9 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   Node* AncestorInThisScope(Node*) const;
 
   void AddImageMap(HTMLMapElement&);
-  void RemoveImageMap(HTMLMapElement&);
+  void RemoveImageMap(HTMLMapElement&,
+                      const AtomicString& name,
+                      const AtomicString& id);
   HTMLMapElement* GetImageMap(const String& url) const;
 
   Element* ElementFromPoint(double x, double y) const;
@@ -125,8 +128,9 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   HeapVector<Member<Element>> ElementsFromPoint(double x, double y) const;
   HeapVector<Member<Element>> ElementsFromHitTestResult(HitTestResult&) const;
 
-  DOMSelection* GetSelection() const;
+  DomSelection* GetSelection() const;
 
+  Node& Retarget(const Node& target) const;
   Element& Retarget(const Element& target) const;
 
   Element* AdjustedFocusedElementInternal(const Element& target) const;
@@ -180,15 +184,34 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
   }
   V8ObservableArrayCSSStyleSheet& EnsureAdoptedStyleSheets();
   bool HasAdoptedStyleSheets() const;
+  void ReplaceAdoptedStyleSheet(CSSStyleSheet& old_sheet,
+                                CSSStyleSheet& new_sheet);
   void AppendAdoptedStyleSheets(HeapVector<Member<CSSStyleSheet>>&&);
   void SetAdoptedStyleSheetsForTesting(HeapVector<Member<CSSStyleSheet>>);
   void ClearAdoptedStyleSheets();
 
 
-  CustomElementRegistry* customElementRegistry() const;
-  // Return true when custom element registry was set successfully, return false
-  // otherwise.
-  bool SetCustomElementRegistry(CustomElementRegistry*);
+  // Returns the custom element registry associated with this tree scope.
+  //
+  // DOMWrapperWorld rule: any caller that will hand the returned registry
+  // to script must pass the caller's ScriptState. Without it, an isolated
+  // world (e.g., an extension content script) can reach a registry created
+  // in a different world (typically the main world) and leak raw cross-
+  // world v8 objects -- e.g., custom-element constructors handed out via
+  // the shared `when_defined_promise_map_`. When ScriptState is supplied,
+  // this method returns nullptr if the registry's creation world differs
+  // from the caller's world (or, for the global registry, if the caller is
+  // not in the main world).
+  //
+  // Callers that only use the registry for blink-internal work (creating
+  // elements, managing element<->registry associations, serialization,
+  // etc.) may omit `script_state` (or pass nullptr) to bypass the world
+  // check.
+  CustomElementRegistry* customElementRegistry(
+      ScriptState* script_state = nullptr) const;
+  // Sets how this tree scope resolves its custom element registry
+  // Return true when it was set successfully, return false otherwise.
+  bool SetCustomElementRegistry(CustomElementRegistryAssignment);
 
   bool IsWaitingForScopedRegistry() const;
 
@@ -231,7 +254,7 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
 
   Member<ScopedStyleResolver> scoped_style_resolver_;
 
-  mutable Member<DOMSelection> selection_;
+  mutable Member<DomSelection> selection_;
 
   RadioButtonGroupScope radio_button_group_scope_;
 
@@ -241,6 +264,9 @@ class CORE_EXPORT TreeScope : public GarbageCollectedMixin {
 
   Member<V8ObservableArrayCSSStyleSheet> adopted_style_sheets_;
 
+  // `CustomElementRegistryAssignment` is stack-allocated for transient
+  // assignment operations. TreeScope stores the equivalent persistent state as
+  // a traced registry pointer plus a waiting flag.
   Member<CustomElementRegistry> custom_element_registry_;
   // By default, TreeScope attempts to retrieve the global custom element
   // registry before it has been explicitly set. In cases where TreeScope is

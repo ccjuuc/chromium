@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "base/containers/fixed_flat_set.h"
@@ -31,6 +30,7 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/url_formatter/url_formatter.h"
 #include "content/public/common/url_constants.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/omnibox_proto/types.pb.h"
 #include "ui/base/device_form_factor.h"
@@ -112,12 +112,14 @@ AutocompleteMatch BuildMatch(AutocompleteProvider* provider,
   auto format_types = AutocompleteMatch::GetFormatTypes(false, false);
   match.contents = url_formatter::FormatUrl(
       url, format_types, base::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
-  match.contents_class = ClassifyTermMatches({}, match.contents.length(), 0,
+  match.contents_class = ClassifyTermMatches({}, match.contents.length(),
+                                             ACMatchClassification::NONE,
                                              ACMatchClassification::URL);
 
   match.description = AutocompleteMatch::SanitizeString(description);
   match.description_class = ClassifyTermMatches({}, match.description.length(),
-                                                0, ACMatchClassification::NONE);
+                                                ACMatchClassification::NONE,
+                                                ACMatchClassification::NONE);
 
   match.suggestion_group_id = omnibox::GROUP_MOBILE_MOST_VISITED;
   return match;
@@ -134,8 +136,8 @@ bool BuildAutocompleteMatches(AutocompleteProvider* provider,
   }
 
   // Sets to ensure uniqueness of titles and urls for returned suggestions.
-  std::unordered_set<std::u16string> match_titles;
-  std::unordered_set<std::string> match_urls;
+  absl::flat_hash_set<std::u16string> match_titles;
+  absl::flat_hash_set<std::string> match_urls;
 
   const TabMatcher& tab_matcher = client->GetTabMatcher();
   // Explicitly clear the query since this isn't done in the
@@ -149,8 +151,8 @@ bool BuildAutocompleteMatches(AutocompleteProvider* provider,
           ? omnibox::kMostVisitedTilesZeroSuggestLowRelevance
           : omnibox::kMostVisitedTilesZeroSuggestHighRelevance;
   // Store open tab titles and stripped urls to compare to history results.
-  std::unordered_set<std::u16string> tab_titles;
-  std::unordered_set<std::string> tab_stripped_urls;
+  absl::flat_hash_set<std::u16string> tab_titles;
+  absl::flat_hash_set<std::string> tab_stripped_urls;
   std::vector<TabMatcher::TabWrapper> open_tabs =
       tab_matcher.GetOpenTabs(&input, /*exclude_active_tab=*/false);
   // Deduplication is not guaranteed when the number of open tabs is
@@ -445,6 +447,14 @@ void MostVisitedSitesProvider::OnMostVisitedUrlsFromHistoryServiceAvailable(
 bool MostVisitedSitesProvider::AllowMostVisitedSitesSuggestions(
     const AutocompleteProviderClient* client,
     const AutocompleteInput& input) {
+#if BUILDFLAG(IS_ANDROID)
+  static const bool is_desktop =
+      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_DESKTOP;
+  if (is_desktop) {
+    return false;
+  }
+#endif
+
   const auto& page_url = input.current_url();
   const auto page_class = input.current_page_classification();
   const auto input_type = input.type();
@@ -474,16 +484,16 @@ bool MostVisitedSitesProvider::AllowMostVisitedSitesSuggestions(
   // suggest for them).
   if (input_type != metrics::OmniboxInputType::EMPTY &&
       !(page_url.is_valid() &&
-        ((page_url.GetScheme() == url::kHttpScheme) ||
-         (page_url.GetScheme() == url::kHttpsScheme) ||
-         (page_url.GetScheme() == url::kAboutScheme) ||
-         (page_url.GetScheme() ==
+        ((page_url.scheme() == url::kHttpScheme) ||
+         (page_url.scheme() == url::kHttpsScheme) ||
+         (page_url.scheme() == url::kAboutScheme) ||
+         (page_url.scheme() ==
           client->GetEmbedderRepresentationOfAboutScheme())))) {
     return false;
   }
 
   if (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get().enabled &&
-      page_url.GetScheme() == content::kChromeUIScheme) {
+      page_url.scheme() == content::kChromeUIScheme) {
     return false;
   }
 

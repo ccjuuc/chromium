@@ -4,9 +4,12 @@
 
 #include "content/browser/preloading/prefetch/prefetch_response_reader.h"
 
+#include "base/byte_size.h"
 #include "base/debug/alias.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/state_transitions.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "content/browser/preloading/prefetch/prefetch_data_pipe_tee.h"
@@ -30,8 +33,6 @@ GetStatusForRecordingFromErrorOnResponseReceived(
   switch (status) {
     case PrefetchErrorOnResponseReceived::kPrefetchWasDecoy:
       return PrefetchStreamingURLLoaderStatus::kPrefetchWasDecoy;
-    case PrefetchErrorOnResponseReceived::kFailedInvalidHead:
-      return PrefetchStreamingURLLoaderStatus::kFailedInvalidHead;
     case PrefetchErrorOnResponseReceived::kFailedInvalidHeaders:
       return PrefetchStreamingURLLoaderStatus::kFailedInvalidHeaders;
     case PrefetchErrorOnResponseReceived::kFailedNon2XX:
@@ -218,6 +219,8 @@ void PrefetchResponseReader::BindAndStart(
 
   switch (load_state()) {
     case LoadState::kResponseReceived:
+    case LoadState::kCompleted:
+    case LoadState::kFailed:
       // In these cases, `ForwardResponse()` is expected to be called always
       // inside `RunEventQueue()` below, because `CreateRequestHandler()` was
       // called after response headers are received. Both the head and body
@@ -231,17 +234,6 @@ void PrefetchResponseReader::BindAndStart(
       // reach here.
       //
       // TODO(crbug.com/40064891): we might want to revisit this behavior.
-
-      // TODO(crbug.com/40072532): The code below is duplicated to investigate
-      // the `load_state()` value on CHECK failure. Remove the duplicated code.
-      CHECK(GetHead());
-      CHECK(forward_body_);
-      break;
-    case LoadState::kCompleted:
-      CHECK(GetHead());
-      CHECK(forward_body_);
-      break;
-    case LoadState::kFailed:
       CHECK(GetHead());
       CHECK(forward_body_);
       break;
@@ -384,7 +376,7 @@ void PrefetchResponseReader::RecordOnPrefetchContainerDestroyed(
 
   if (completion_status_) {
     builder.SetDataLength(ukm::GetExponentialBucketMinForBytes(
-        completion_status_->encoded_data_length));
+        completion_status_->encoded_data_length.InBytes()));
 
     base::TimeDelta fetch_duration =
         completion_status_->completion_time - head_->load_timing.request_start;
@@ -539,9 +531,7 @@ void PrefetchResponseReader::ForwardResponse(
 }
 
 void PrefetchResponseReader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   // If a URL loader provided to |NavigationURLLoaderImpl| to intercept triggers
   // a redirect, then it will be interrupted before |FollowRedirect| is called,
@@ -641,25 +631,21 @@ void PrefetchResponseReader::SetLoadStateAndAddEventToQueue(
 
   // First, set the `LoadState`.
   auto old_load_state = load_state();
-  switch (old_load_state) {
-    case LoadState::kStarted:
-      CHECK_NE(new_load_state, LoadState::kCompleted);
-      break;
-    case LoadState::kResponseReceived:
-      CHECK(new_load_state == LoadState::kCompleted ||
-            new_load_state == LoadState::kFailed);
-      break;
-    case LoadState::kFailedResponseReceived:
-      CHECK_EQ(new_load_state, LoadState::kFailed);
-      break;
-    case LoadState::kRedirectHandled:
-      NOTREACHED();
-    case LoadState::kCompleted:
-      NOTREACHED();
-    case LoadState::kFailed:
-      NOTREACHED();
-    case LoadState::kFailedRedirect:
-      NOTREACHED();
+  {
+    using T = LoadState;
+    static const base::NoDestructor<base::StateTransitions<T>> transitions(
+        base::StateTransitions<T>({
+            {T::kStarted,
+             {T::kRedirectHandled, T::kResponseReceived,
+              T::kFailedResponseReceived, T::kFailed, T::kFailedRedirect}},
+            {T::kRedirectHandled, {}},
+            {T::kResponseReceived, {T::kCompleted, T::kFailed}},
+            {T::kFailedResponseReceived, {T::kFailed}},
+            {T::kCompleted, {}},
+            {T::kFailed, {}},
+            {T::kFailedRedirect, {}},
+        }));
+    CHECK_STATE_TRANSITION(transitions, old_load_state, new_load_state);
   }
   load_state_ = new_load_state;
 
@@ -670,7 +656,7 @@ void PrefetchResponseReader::SetLoadStateAndAddEventToQueue(
   }
 
   // Notify PrefetchContainer of the state change, which can eventually trigger
-  // `PrefetchContainer::Observer` calls. This should be done after every state
+  // `PrefetchContainerObserver` calls. This should be done after every state
   // changes are done, including `load_state_` changes and `AddEventToQueue()`
   // above.
 
@@ -724,6 +710,26 @@ void PrefetchResponseReader::SetLoadStateAndAddEventToQueue(
           .Run(/*is_success=*/load_state() == LoadState::kCompleted,
                *completion_status_);
       break;
+  }
+}
+
+std::ostream& operator<<(std::ostream& ostream,
+                         PrefetchResponseReader::LoadState load_state) {
+  switch (load_state) {
+    case PrefetchResponseReader::LoadState::kStarted:
+      return ostream << "kStarted";
+    case PrefetchResponseReader::LoadState::kRedirectHandled:
+      return ostream << "kRedirectHandled";
+    case PrefetchResponseReader::LoadState::kResponseReceived:
+      return ostream << "kResponseReceived";
+    case PrefetchResponseReader::LoadState::kFailedResponseReceived:
+      return ostream << "kFailedResponseReceived";
+    case PrefetchResponseReader::LoadState::kCompleted:
+      return ostream << "kCompleted";
+    case PrefetchResponseReader::LoadState::kFailed:
+      return ostream << "kFailed";
+    case PrefetchResponseReader::LoadState::kFailedRedirect:
+      return ostream << "kFailedRedirect";
   }
 }
 

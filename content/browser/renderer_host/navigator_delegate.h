@@ -101,6 +101,8 @@ class NavigatorDelegate {
   virtual void DidNavigateMainFramePreCommit(
       NavigationHandle* navigation_handle,
       bool navigation_is_within_page) = 0;
+  virtual void DidNavigateAnyFramePreCommit(NavigationHandle* navigation_handle,
+                                            bool navigation_is_within_page) = 0;
 
   // Handles post-navigation tasks in navigation AFTER the entry has been
   // committed to the NavigationController. Note that the NavigationEntry is
@@ -133,6 +135,7 @@ class NavigatorDelegate {
   // Returns whether to continue a navigation that needs to transfer to a
   // different process between the load start and commit.
   virtual bool ShouldAllowRendererInitiatedCrossProcessNavigation(
+      RenderFrameHostImpl* render_frame_host,
       bool is_outermost_main_frame_navigation) = 0;
 
   // Returns the overridden user agent string if it's set.
@@ -147,6 +150,11 @@ class NavigatorDelegate {
   // are defined by the content/ embedder, except in the case of interstitials
   // where no NavigationThrottles are added to the navigation.
   virtual void CreateThrottlesForNavigation(
+      NavigationThrottleRegistry& registry) = 0;
+
+  // Like CreateThrottlesForNavigation(), but for a navigation that commits
+  // without a URL loader (e.g. about:blank and same-document navigations).
+  virtual void CreateThrottlesForCommitWithoutUrlLoader(
       NavigationThrottleRegistry& registry) = 0;
 
   // Returns commit deferring conditions to add to this navigation.

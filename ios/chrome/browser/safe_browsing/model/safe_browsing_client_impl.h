@@ -20,8 +20,9 @@ class SafeBrowsingClientImpl : public SafeBrowsingClient {
       base::RepeatingCallback<safe_browsing::RealTimeUrlLookupServiceBase*()>;
 
   SafeBrowsingClientImpl(
-      PrefService* pref_Service,
+      PrefService* pref_service,
       safe_browsing::HashRealTimeService* hash_real_time_service,
+      safe_browsing::V5GetHashProtocolManager* v5_get_hash_protocol_manager,
       UrlLookupServiceFactory url_lookup_service_factory,
       enterprise_connectors::ConnectorsService* connectors_service);
 
@@ -34,23 +35,32 @@ class SafeBrowsingClientImpl : public SafeBrowsingClient {
   safe_browsing::RealTimeUrlLookupServiceBase* GetRealTimeUrlLookupService()
       override;
   safe_browsing::HashRealTimeService* GetHashRealTimeService() override;
+  safe_browsing::V5GetHashProtocolManager* GetV5GetHashProtocolManager()
+      override;
   variations::VariationsService* GetVariationsService() override;
   bool ShouldBlockUnsafeResource(
       const security_interstitials::UnsafeResource& resource) const override;
   bool OnMainFrameUrlQueryCancellationDecided(web::WebState* web_state,
                                               const GURL& url) override;
   bool ShouldForceSyncRealTimeUrlChecks() const override;
+  void OnSecurityInterstitialShown(
+      web::WebState* web_state,
+      const security_interstitials::UnsafeResource& resource) override;
 
  private:
-  raw_ptr<PrefService, DanglingUntriaged> pref_service_;
-  raw_ptr<safe_browsing::HashRealTimeService> hash_real_time_service_;
+  raw_ptr<PrefService> pref_service_ = nullptr;
+  raw_ptr<safe_browsing::HashRealTimeService> hash_real_time_service_ =
+      nullptr;
+  // The V5 get hash protocol manager.
+  raw_ptr<safe_browsing::V5GetHashProtocolManager>
+      v5_get_hash_protocol_manager_ = nullptr;
   // When enterprise Url filtering is enabled, this factory returns the
   // enterprise Url lookup service. Otherwise, it returns the consumer service.
   UrlLookupServiceFactory url_lookup_service_factory_;
   // Unowned pointer used for determining if real time url checks should be done
   // synchronously due to Enteprise Url Filtering enabled. Must not be null.
-  raw_ptr<enterprise_connectors::ConnectorsService, DanglingUntriaged>
-      connectors_service_;
+  raw_ptr<enterprise_connectors::ConnectorsService> connectors_service_ =
+      nullptr;
 
   // Must be last.
   base::WeakPtrFactory<SafeBrowsingClientImpl> weak_factory_{this};

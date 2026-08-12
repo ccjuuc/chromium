@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//printing/buildflags/buildflags.gni")
 
 import("//ui/webui/resources/tools/build_webui.gni")
@@ -55,9 +54,9 @@ build_webui("build") {
     "ui/destination_dialog.html.ts",
     "ui/destination_dialog.ts",
     "ui/destination_list.html.ts",
+    "ui/destination_list.ts",
     "ui/destination_list_item.html.ts",
     "ui/destination_list_item.ts",
-    "ui/destination_list.ts",
     "ui/destination_select.html.ts",
     "ui/destination_select.ts",
     "ui/destination_settings.html.ts",
@@ -74,10 +73,10 @@ build_webui("build") {
     "ui/layout_settings.ts",
     "ui/link_container.html.ts",
     "ui/link_container.ts",
-    "ui/margin_control_container.html.ts",
-    "ui/margin_control_container.ts",
     "ui/margin_control.html.ts",
     "ui/margin_control.ts",
+    "ui/margin_control_container.html.ts",
+    "ui/margin_control_container.ts",
     "ui/margins_settings.html.ts",
     "ui/margins_settings.ts",
     "ui/media_size_settings.html.ts",

@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/containers/span.h"
 #include "base/run_loop.h"
@@ -41,14 +42,10 @@ TestURLLoaderFactory::TestURLLoader::TestURLLoader(
 TestURLLoaderFactory::TestURLLoader::~TestURLLoader() = default;
 
 void TestURLLoaderFactory::TestURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   FollowRedirectParams params;
-  params.removed_headers = removed_headers;
-  params.modified_headers = modified_headers;
-  params.modified_cors_exempt_headers = modified_cors_exempt_headers;
+  params.headers_update_params = std::move(headers_update_params);
   params.new_url = new_url;
 
   follow_redirect_params_.emplace_back(std::move(params));
@@ -90,7 +87,7 @@ void TestURLLoaderFactory::AddResponse(const GURL& url,
   response.head = std::move(head);
   response.content = content;
   response.status = status;
-  response.status.decoded_body_length = content.size();
+  response.status.decoded_body_length = base::ByteSize(content.size());
   response.flags = flags;
   responses_[url] = std::move(response);
 
@@ -282,7 +279,7 @@ bool TestURLLoaderFactory::SimulateResponseForPendingRequest(
   // |decoded_body_length| must be set to the right size or the SimpleURLLoader
   // will fail.
   network::URLLoaderCompletionStatus status(completion_status);
-  status.decoded_body_length = content.size();
+  status.decoded_body_length = base::ByteSize(content.size());
 
   SimulateResponse(request->client.get(), TestURLLoaderFactory::Redirects(),
                    std::move(response_head), content, status, kResponseDefault);
@@ -302,7 +299,7 @@ bool TestURLLoaderFactory::SimulateResponseForPendingRequest(
   mojom::URLResponseHeadPtr head = CreateURLResponseHead(http_status);
   head->mime_type = "text/html";
   URLLoaderCompletionStatus status;
-  status.decoded_body_length = content.size();
+  status.decoded_body_length = base::ByteSize(content.size());
   return SimulateResponseForPendingRequest(GURL(url), status, std::move(head),
                                            content, flags);
 }
@@ -313,7 +310,7 @@ void TestURLLoaderFactory::SimulateResponseWithoutRemovingFromPendingList(
     std::string_view content,
     const URLLoaderCompletionStatus& completion_status) {
   URLLoaderCompletionStatus status(completion_status);
-  status.decoded_body_length = content.size();
+  status.decoded_body_length = base::ByteSize(content.size());
   SimulateResponse(request->client.get(), TestURLLoaderFactory::Redirects(),
                    std::move(head), content, status, kResponseDefault);
   // Attempt to wait for the response to be handled. If any part of the handling

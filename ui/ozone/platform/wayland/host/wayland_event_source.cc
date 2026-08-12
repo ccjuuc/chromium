@@ -17,6 +17,7 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_utils.h"
@@ -333,16 +334,17 @@ void WaylandEventSource::OnPointerFocusChanged(
     base::TimeTicks timestamp,
     wl::EventDispatchPolicy dispatch_policy) {
   bool focused = !!window;
+  // Only wl_pointer.enter/leave reach here, so this tracks where the mouse
+  // really is even while a tablet tool has borrowed pointer focus.
+  wl_pointer_focused_window_ = focused ? window->AsWeakPtr() : nullptr;
   if (focused) {
     // Save new pointer location.
     pointer_location_ = location;
     window_manager_->SetPointerFocusedWindow(window);
+    pending_focus_loss_release_ = false;
   } else {
-    // The compositor may swallow the release event for any buttons that are
-    // pressed when the window loses focus, e.g. when right-clicking the
-    // titlebar to open the system menu on GNOME.
-    if (!connection_->IsDragInProgress()) {
-      ReleasePressedPointerButtons(window, ui::EventTimeForNow());
+    if (!connection_->IsDragInProgress() && pointer_flags_) {
+      pending_focus_loss_release_ = true;
     }
   }
 
@@ -392,8 +394,11 @@ void WaylandEventSource::OnPointerButtonEvent(
     return;
   }
 
-  WaylandWindow* prev_focused_window =
-      window_manager_->GetCurrentPointerFocusedWindow();
+  // Dispatching the event may delete the previously focused window.
+  base::WeakPtr<WaylandWindow> prev_focused_window =
+      window_manager_->GetCurrentPointerFocusedWindow()
+          ? window_manager_->GetCurrentPointerFocusedWindow()->AsWeakPtr()
+          : nullptr;
   if (window) {
     window_manager_->SetPointerFocusedWindow(window);
   }
@@ -431,10 +436,11 @@ void WaylandEventSource::OnPointerButtonEvent(
   }
 }
 
-void WaylandEventSource::OnPointerButtonEventInternal(WaylandWindow* window,
-                                                      EventType type) {
+void WaylandEventSource::OnPointerButtonEventInternal(
+    base::WeakPtr<WaylandWindow> window,
+    EventType type) {
   if (window) {
-    window_manager_->SetPointerFocusedWindow(window);
+    window_manager_->SetPointerFocusedWindow(window.get());
   }
 }
 
@@ -445,7 +451,12 @@ void WaylandEventSource::OnPointerMotionEvent(
     bool is_synthesized) {
   pointer_location_ = location;
 
-  int flags = pointer_flags_ | keyboard_modifiers_ | tablet_tool_buttons_;
+  // Deliberately excludes `tablet_tool_buttons_`. Some compositors warp the
+  // seat cursor to follow a tablet tool, emitting a wl_pointer.motion alongside
+  // the tool's own events; folding the tool's buttons in here would report a
+  // mouse move with a button held that the mouse does not have held. The tool's
+  // own button state reaches Aura through OnTabletToolMotion().
+  int flags = pointer_flags_ | keyboard_modifiers_;
   if (is_synthesized) {
     flags |= EF_IS_SYNTHESIZED;
   }
@@ -531,6 +542,17 @@ const gfx::PointF& WaylandEventSource::GetPointerLocation() const {
 
 void WaylandEventSource::OnPointerFrameEvent() {
   base::TimeTicks now = EventTimeForNow();
+
+  // Some compositors don't send a release when a window loses pointer focus
+  // (e.g. right-clicking the titlebar buttons on GNOME to open the window
+  // menu) Synthesize one if none of our windows is capturing the pointer.
+  if (pending_focus_loss_release_) {
+    pending_focus_loss_release_ = false;
+    if (!window_manager_->located_events_grabber()) {
+      ReleasePressedPointerButtons(nullptr, now);
+    }
+  }
+
   if (pointer_scroll_data_) {
     pointer_scroll_data_->dt = now - last_pointer_frame_time_;
     ProcessPointerScrollData();
@@ -538,17 +560,22 @@ void WaylandEventSource::OnPointerFrameEvent() {
 
   last_pointer_frame_time_ = now;
 
-  auto* target = window_manager_->GetCurrentPointerFocusedWindow();
-  if (!target) {
+  auto* target_window = window_manager_->GetCurrentPointerFocusedWindow();
+  if (!target_window) {
     return;
   }
+  // Dispatching an event may synchronously destroy the focused window (e.g. a
+  // popup closing on click), so hold a WeakPtr and re-check on each iteration.
+  base::WeakPtr<WaylandWindow> target = target_window->AsWeakPtr();
 
   while (!pointer_frames_.empty()) {
     // It is safe to pop the first queued event for processing.
     auto pointer_frame = std::move(pointer_frames_.front());
     pointer_frames_.pop_front();
 
-    SetTargetAndDispatchEvent(pointer_frame->event.get(), target);
+    if (target) {
+      SetTargetAndDispatchEvent(pointer_frame->event.get(), target.get());
+    }
     if (!pointer_frame->completion_cb.is_null()) {
       std::move(pointer_frame->completion_cb).Run();
     }
@@ -576,31 +603,54 @@ void WaylandEventSource::OnTabletToolProximityIn(WaylandWindow* window,
                                                  const PointerDetails& details,
                                                  base::TimeTicks time) {
   WaylandWindow* old_focus = tablet_tool_focused_window_.get();
+  base::WeakPtr<WaylandWindow> window_weak = window->AsWeakPtr();
   if (old_focus && old_focus != window) {
-    OnTabletToolProximityOut(time);
+    OnTabletToolProximityOut(details, time);
   }
+
+  if (!window_weak) {
+    return;
+  }
+
   tablet_tool_focused_window_ = window->AsWeakPtr();
   tablet_tool_location_ = location;
+
+  // Stylus tab dragging resolves its drag origin through the pointer focused
+  // window (WaylandWindowDragController::GetSerial), so the tool has to hold
+  // pointer focus while it is in proximity. OnTabletToolProximityOut() hands it
+  // back to `wl_pointer_focused_window_`.
+  window_manager_->SetPointerFocusedWindow(window);
 
   MouseEvent event(EventType::kMouseEntered, tablet_tool_location_,
                    tablet_tool_location_, time, keyboard_modifiers_, 0,
                    details);
   SetTargetAndDispatchEvent(&event, window);
-  if (tablet_tool_buttons_) {
+  if (tablet_tool_buttons_ && !connection_->IsDragInProgress()) {
     // Release any buttons that were pressed during a DnD session.
     OnTabletToolButton(tablet_tool_buttons_, /*pressed=*/false, details, time);
   }
 }
 
-void WaylandEventSource::OnTabletToolProximityOut(base::TimeTicks time) {
+void WaylandEventSource::OnTabletToolProximityOut(const PointerDetails& details,
+                                                  base::TimeTicks time) {
   if (!tablet_tool_focused_window_) {
     return;
   }
 
+  // `details` carries the tool's pointer type. Without it the event defaults to
+  // a mouse, which surfaces in Blink as a `pointerType:"mouse"` sample with the
+  // spec-default `pressure:0.5` injected into the tail of a pen stroke.
   MouseEvent event(EventType::kMouseExited, tablet_tool_location_,
-                   tablet_tool_location_, time, keyboard_modifiers_, 0);
+                   tablet_tool_location_, time, keyboard_modifiers_, 0,
+                   details);
   SetTargetAndDispatchEvent(&event, tablet_tool_focused_window_.get());
   tablet_tool_focused_window_ = nullptr;
+
+  // Give pointer focus back to the mouse. Clearing it instead would strand it:
+  // the mouse never left the surface, so no wl_pointer.enter follows to restore
+  // focus and every subsequent mouse event is dropped for lack of a target.
+  window_manager_->SetPointerFocusedWindow(wl_pointer_focused_window_.get());
+
   // Intentionally not resetting `tablet_tool_buttons_` since the button state
   // should still be treated as pressed during a DnD.
 }
@@ -721,6 +771,7 @@ void WaylandEventSource::OnTouchReleaseInternal(PointerId id) {
 
 void WaylandEventSource::SetTargetAndDispatchEvent(Event* event,
                                                    EventTarget* target) {
+  CHECK(target);
   Event::DispatcherApi(event).set_target(target);
   if (event->IsLocatedEvent()) {
     auto* located_event = event->AsLocatedEvent();
@@ -899,6 +950,9 @@ void WaylandEventSource::OnHoldEvent(EventType event_type,
                     finger_count);
 
   auto* target = window_manager_->GetCurrentPointerFocusedWindow();
+  if (!target) {
+    return;
+  }
 
   if (dispatch_policy == wl::EventDispatchPolicy::kImmediate) {
     SetTargetAndDispatchEvent(&event, target);
@@ -940,10 +994,16 @@ void WaylandEventSource::ReleasePressedPointerButtons(
     return;
   }
 
+  // Dispatching the event may delete the window.
+  base::WeakPtr<WaylandWindow> window_weak =
+      window ? window->AsWeakPtr() : nullptr;
   for (const auto& [button, name] : kMouseButtonToStringMap) {
     if (button & pointer_flags_) {
       VLOG(1) << "Synthesizing pointer release for: " << name;
-      OnPointerButtonEvent(EventType::kMouseReleased, button, timestamp, window,
+      TRACE_EVENT_INSTANT("wayland.debug", "SynthesizePointerRelease", "button",
+                          name);
+      OnPointerButtonEvent(EventType::kMouseReleased, button, timestamp,
+                           window_weak.get(),
                            wl::EventDispatchPolicy::kImmediate,
                            /*allow_release_of_unpressed_button=*/false,
                            /*is_synthesized=*/true);

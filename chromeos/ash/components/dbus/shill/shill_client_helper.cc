@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -167,9 +168,9 @@ void OnValueMethod(ShillClientHelper::RefHolder* ref_holder,
   std::move(callback).Run(std::move(value));
 }
 
-// Handles responses for methods with base::Value::Dict results.
+// Handles responses for methods with base::DictValue results.
 void OnDictValueMethod(ShillClientHelper::RefHolder* ref_holder,
-                       chromeos::DBusMethodCallback<base::Value::Dict> callback,
+                       chromeos::DBusMethodCallback<base::DictValue> callback,
                        dbus::Response* response,
                        dbus::ErrorResponse* error_response) {
   if (!response) {
@@ -209,11 +210,11 @@ void OnVoidMethodWithErrorResponse(
   }
 }
 
-// Handles responses for methods with base::Value::Dict results.
+// Handles responses for methods with base::DictValue results.
 // Used by CallDictValueMethodWithErrorResponse().
 void OnDictValueMethodWithErrorResponse(
     ShillClientHelper::RefHolder* ref_holder,
-    base::OnceCallback<void(base::Value::Dict result)> callback,
+    base::OnceCallback<void(base::DictValue result)> callback,
     ShillClientHelper::ErrorCallback error_callback,
     dbus::Response* response,
     dbus::ErrorResponse* error_response) {
@@ -250,6 +251,27 @@ void OnListValueMethodWithErrorResponse(
     return;
   }
   std::move(callback).Run(value.GetList());
+}
+
+// Handles responses for methods with byte array (`ay`) results.
+void OnBytesMethodWithErrorResponse(
+    ShillClientHelper::RefHolder* ref_holder,
+    ShillClientHelper::BytesCallback callback,
+    ShillClientHelper::ErrorCallback error_callback,
+    dbus::Response* response,
+    dbus::ErrorResponse* error_response) {
+  if (!response) {
+    OnError(std::move(error_callback), error_response);
+    return;
+  }
+  dbus::MessageReader reader(response);
+  base::span<const uint8_t> bytes;
+  if (!reader.PopArrayOfBytes(&bytes)) {
+    std::move(error_callback)
+        .Run(kInvalidResponseErrorName, kInvalidResponseErrorMessage);
+    return;
+  }
+  std::move(callback).Run(base::ToVector(bytes));
 }
 
 }  // namespace
@@ -349,7 +371,7 @@ void ShillClientHelper::CallValueMethod(
 
 void ShillClientHelper::CallDictValueMethod(
     dbus::MethodCall* method_call,
-    chromeos::DBusMethodCallback<base::Value::Dict> callback) {
+    chromeos::DBusMethodCallback<base::DictValue> callback) {
   DCHECK(!callback.is_null());
   proxy_->CallMethodWithErrorResponse(
       method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -399,7 +421,7 @@ void ShillClientHelper::CallStringMethodWithErrorCallback(
 
 void ShillClientHelper::CallDictValueMethodWithErrorCallback(
     dbus::MethodCall* method_call,
-    base::OnceCallback<void(base::Value::Dict result)> callback,
+    base::OnceCallback<void(base::DictValue result)> callback,
     ErrorCallback error_callback) {
   DCHECK(!callback.is_null());
   DCHECK(!error_callback.is_null());
@@ -423,13 +445,27 @@ void ShillClientHelper::CallListValueMethodWithErrorCallback(
                      std::move(callback), std::move(error_callback)));
 }
 
+void ShillClientHelper::CallBytesMethodWithErrorCallback(
+    dbus::MethodCall* method_call,
+    BytesCallback callback,
+    ErrorCallback error_callback,
+    std::optional<int> timeout_ms) {
+  DCHECK(!callback.is_null());
+  DCHECK(!error_callback.is_null());
+  proxy_->CallMethodWithErrorResponse(
+      method_call, timeout_ms.value_or(dbus::ObjectProxy::TIMEOUT_USE_DEFAULT),
+      base::BindOnce(&OnBytesMethodWithErrorResponse,
+                     base::Owned(new RefHolder(weak_ptr_factory_.GetWeakPtr())),
+                     std::move(callback), std::move(error_callback)));
+}
+
 namespace {
 
 enum DictionaryType { DICTIONARY_TYPE_VARIANT, DICTIONARY_TYPE_STRING };
 
 // Appends an a{ss} dictionary to |writer|. |dictionary| must only contain
 // strings.
-void AppendStringDictionary(const base::Value::Dict& dictionary,
+void AppendStringDictionary(const base::DictValue& dictionary,
                             dbus::MessageWriter* writer) {
   dbus::MessageWriter array_writer(nullptr);
   writer->OpenArray("{ss}", &array_writer);
@@ -533,7 +569,7 @@ void ShillClientHelper::AppendValueDataAsVariant(dbus::MessageWriter* writer,
 // static
 void ShillClientHelper::AppendServiceProperties(
     dbus::MessageWriter* writer,
-    const base::Value::Dict& dictionary) {
+    const base::DictValue& dictionary) {
   dbus::MessageWriter array_writer(nullptr);
   writer->OpenArray("{sv}", &array_writer);
   for (auto it : dictionary) {

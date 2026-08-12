@@ -126,7 +126,8 @@ PermissionsData::PageAccess ProgrammaticScriptInjector::CanExecuteOnFrame(
 std::vector<blink::WebScriptSource> ProgrammaticScriptInjector::GetJsSources(
     mojom::RunLocation run_location,
     std::set<std::string>* executing_scripts,
-    size_t* num_injected_js_scripts) const {
+    size_t* num_injected_js_scripts,
+    ExtensionFrameHelper* frame_helper) const {
   DCHECK_EQ(params_->run_at, run_location);
   DCHECK(params_->injection->is_js());
 
@@ -134,7 +135,7 @@ std::vector<blink::WebScriptSource> ProgrammaticScriptInjector::GetJsSources(
   std::vector<blink::WebScriptSource> sources;
   sources.reserve(js_injection->sources.size());
   for (const auto& source : js_injection->sources) {
-    sources.emplace_back(blink::WebString::FromUTF8(source->code),
+    sources.emplace_back(blink::WebString::FromUtf8(source->code),
                          source->script_url);
   }
 
@@ -155,9 +156,9 @@ ProgrammaticScriptInjector::GetCssSources(
   for (const auto& source : css_injection->sources) {
     blink::WebStyleSheetKey style_sheet_key;
     if (source->key)
-      style_sheet_key = blink::WebString::FromASCII(*source->key);
+      style_sheet_key = blink::WebString::FromAscii(*source->key);
     sources.push_back(
-        CSSSource{blink::WebString::FromUTF8(source->code), style_sheet_key});
+        CSSSource{blink::WebString::FromUtf8(source->code), style_sheet_key});
   }
 
   return sources;

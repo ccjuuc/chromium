@@ -7,9 +7,10 @@
 
 #include <optional>
 
+#include "base/feature_list.h"
 #include "base/gtest_prod_util.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -69,11 +70,15 @@ enum class NoSpareRendererReason {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/browser/enums.xml:NoSpareRendererReason)
 
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kKillSpareRenderOnMemoryPressure);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kSpareRPHKeepOneAliveOnMemoryPressure);
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kSpareRPHUseCriticalMemoryPressure);
+
 class CONTENT_EXPORT SpareRenderProcessHostManagerImpl
     : public SpareRenderProcessHostManager,
       public RenderProcessHostObserver,
       public performance_scenarios::PerformanceScenarioObserver,
-      public base::MemoryPressureListener {
+      public base::MemoryConsumer {
  public:
   SpareRenderProcessHostManagerImpl();
   ~SpareRenderProcessHostManagerImpl() override;
@@ -89,7 +94,7 @@ class CONTENT_EXPORT SpareRenderProcessHostManagerImpl
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
   RenderProcessHost* WarmupSpare(BrowserContext* browser_context) override;
-  const std::vector<RenderProcessHost*>& GetSpares() override;
+  const std::vector<raw_ptr<RenderProcessHost>>& GetSpares() override;
   std::vector<ChildProcessId> GetSpareIds() override;
   void CleanupSparesForTesting() override;
   const std::optional<LastSpareRendererCreationInfo>&
@@ -191,12 +196,9 @@ class CONTENT_EXPORT SpareRenderProcessHostManagerImpl
 
   bool DestroyTimerWillFireBefore(base::TimeDelta timeout);
 
-  void OnMemoryPressure(
-      base::MemoryPressureLevel memory_pressure_level) override;
-
-  // When the system is under memory pressure, this function is called every 5
-  // minutes to determine when it ends.
-  void CheckIfMemoryPressureEnded();
+  // base::MemoryConsumer:
+  void OnUpdateMemoryLimit() override;
+  void OnReleaseMemory() override;
 
   // Returns true if an extra spare should be created.
   bool ShouldCreateExtraSpare() const;
@@ -225,19 +227,14 @@ class CONTENT_EXPORT SpareRenderProcessHostManagerImpl
   DoesEmbedderAllowSpareUsage(BrowserContext* browser_context,
                               SiteInstanceImpl* site_instance);
 
-  base::MemoryPressureListenerRegistration
-      memory_pressure_listener_registration_;
-
-  // If this timer is running, then the system is under memory pressure.
-  // TODO(380805024): Remove the polling timer when possible.
-  base::RepeatingTimer check_memory_pressure_timer_;
+  base::MemoryConsumerRegistration memory_consumer_registration_;
 
   // The clients who want to know when the spare render process host has
   // changed.
   base::ObserverList<Observer> observer_list_;
 
   // All spare RPHs. RPH instances are self-owned, hence the raw pointers.
-  std::vector<RenderProcessHost*> spare_rphs_;
+  std::vector<raw_ptr<RenderProcessHost>> spare_rphs_;
 
   // The timer used to track the startup time of the spare renderer process.
   // The elapsed time will be tracked even if the spare renderer is destroyed

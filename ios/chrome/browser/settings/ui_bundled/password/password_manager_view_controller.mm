@@ -45,6 +45,7 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_items.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_presentation_delegate.h"
+#import "ios/chrome/browser/settings/ui_bundled/password/password_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_consumer.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_settings_commands.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_table_view_constants.h"
@@ -52,7 +53,6 @@
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_view_controller+toolbar_add.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_view_controller+toolbar_settings.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_root_table_view_controller.h"
-#import "ios/chrome/browser/settings/ui_bundled/utils/password_utils.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/ui/elements/home_waiting_view.h"
@@ -192,7 +192,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 }  // namespace
 
 @interface PasswordManagerViewController () <
-    IdentityManagerObserverBridgeDelegate,
+    IdentityManagerObserving,
     PopoverLabelViewControllerDelegate,
     TableViewIllustratedEmptyViewDelegate>
 
@@ -428,6 +428,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   [super viewDidAppear:animated];
   _hasViewAppeared = YES;
   [self maybeFocusSearchBar];
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -439,6 +440,11 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
     [self logPercentageMetricForFavicons];
     _faviconMetricLogged = YES;
   }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self updateUIForEditState];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -500,6 +506,20 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   if ([self.scrimView isDescendantOfView:self.view]) {
     [self.view bringSubviewToFront:self.scrimView];
   }
+}
+
+- (void)deleteItemAtIndexPathsForTesting:(NSArray<NSIndexPath*>*)indexPaths {
+  [self deleteItemAtIndexPaths:indexPaths];
+}
+
+- (NSIndexPath*)indexPathForLevelUpWalkthrough {
+  if ([self.tableViewModel hasItemForItemType:ItemTypePasswordCheckStatus
+                            sectionIdentifier:SectionIdentifierPasswordCheck]) {
+    return [self.tableViewModel
+        indexPathForItemType:ItemTypePasswordCheckStatus
+           sectionIdentifier:SectionIdentifierPasswordCheck];
+  }
+  return nil;
 }
 
 #pragma mark - SettingsRootTableViewController
@@ -923,6 +943,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   [self reconfigurePasswordCheckSectionCellsWithState:state];
 
   _passwordCheckState = state;
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)setSavingPasswordsToAccount:(BOOL)savingPasswordsToAccount {
@@ -1044,22 +1065,21 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   // Reload items in sections.
   if (sectionsToUpdate.count > 0) {
     [self filterItems:self.searchTerm];
-    __weak __typeof(self) weakSelf = self;
-    [self.tableView
-        performBatchUpdates:^{
-          [weakSelf.tableView reloadSections:sectionsToUpdate
-                            withRowAnimation:UITableViewRowAnimationAutomatic];
-        }
-        completion:^(BOOL) {
-          [weakSelf scrollToLastUpdatedItem];
-        }];
+    [self.tableView reloadSections:sectionsToUpdate
+                  withRowAnimation:UITableViewRowAnimationAutomatic];
+    [self scrollToLastUpdatedItem];
   } else if (_affiliatedGroups.empty() && _blockedSites.empty()) {
     [self setEditing:NO animated:YES];
   }
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 - (void)setShouldShowPasswordManagerWidgetPromo:
     (BOOL)shouldShowPasswordManagerWidgetPromo {
+  if (_shouldShowPasswordManagerWidgetPromo ==
+      shouldShowPasswordManagerWidgetPromo) {
+    return;
+  }
   _shouldShowPasswordManagerWidgetPromo = shouldShowPasswordManagerWidgetPromo;
 
   // Reload data to display the promo. No need to reload before the view is
@@ -1075,6 +1095,9 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 
 - (void)setShouldShowTrustedVaultWidgetPromo:
     (BOOL)shouldShowTrustedVaultWidgetPromo {
+  if (_shouldShowTrustedVaultWidgetPromo == shouldShowTrustedVaultWidgetPromo) {
+    return;
+  }
   _shouldShowTrustedVaultWidgetPromo = shouldShowTrustedVaultWidgetPromo;
 
   // Reload data to display the promo. No need to reload before the view is
@@ -1087,12 +1110,6 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 #pragma mark - UISearchControllerDelegate
 
 - (void)willPresentSearchController:(UISearchController*)searchController {
-  // This is needed to remove the transparency of the navigation bar at scroll
-  // edge in iOS 15+ to prevent the following UITableViewRowAnimationTop
-  // animations from being visible through the navigation bar.
-  self.navigationController.navigationBar.backgroundColor =
-      [UIColor colorNamed:kGroupedPrimaryBackgroundColor];
-
   [self showScrim];
   // Remove save passwords switch section, password check section and
   // on device encryption.
@@ -1102,30 +1119,26 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
       performBatchTableViewUpdates:^{
         // Sections must be removed from bottom to top, otherwise it crashes
         [self clearSectionWithIdentifier:SectionIdentifierAddPasswordButton
-                        withRowAnimation:UITableViewRowAnimationTop];
+                        withRowAnimation:UITableViewRowAnimationFade];
 
         [self clearSectionWithIdentifier:SectionIdentifierPasswordCheck
-                        withRowAnimation:UITableViewRowAnimationTop];
+                        withRowAnimation:UITableViewRowAnimationFade];
 
         [self clearSectionWithIdentifier:SectionIdentifierWidgetPromo
-                        withRowAnimation:UITableViewRowAnimationTop];
+                        withRowAnimation:UITableViewRowAnimationFade];
 
         [self
             clearSectionWithIdentifier:SectionIdentifierTrustedVaultWidgetPromo
-                      withRowAnimation:UITableViewRowAnimationTop];
+                      withRowAnimation:UITableViewRowAnimationFade];
 
         [self clearSectionWithIdentifier:SectionIdentifierManageAccountHeader
-                        withRowAnimation:UITableViewRowAnimationTop];
+                        withRowAnimation:UITableViewRowAnimationFade];
       }
                         completion:nil];
 }
 
 - (void)willDismissSearchController:(UISearchController*)searchController {
   _searchPasswordsUserActionWasRecorded = false;
-
-  // This is needed to restore the transparency of the navigation bar at
-  // scroll edge in iOS 15+.
-  self.navigationController.navigationBar.backgroundColor = nil;
 
   // No need to restore UI if the Password Manager is being dismissed or if a
   // previous call to `willDismissSearchController` already restored the UI.
@@ -1150,7 +1163,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
             forSectionWithIdentifier:SectionIdentifierManageAccountHeader];
         [self.tableView
               insertSections:[NSIndexSet indexSetWithIndex:sectionIndex]
-            withRowAnimation:UITableViewRowAnimationTop];
+            withRowAnimation:UITableViewRowAnimationFade];
 
         sectionIndex++;
         // Add the trusted vault promo section.
@@ -1160,7 +1173,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
                                      atIndex:sectionIndex];
           [self.tableView
                 insertSections:[NSIndexSet indexSetWithIndex:sectionIndex]
-              withRowAnimation:UITableViewRowAnimationTop];
+              withRowAnimation:UITableViewRowAnimationFade];
           [model addItem:self.trustedVaultWidgetPromoItem
               toSectionWithIdentifier:SectionIdentifierTrustedVaultWidgetPromo];
 
@@ -1173,7 +1186,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
                                      atIndex:sectionIndex];
           [self.tableView
                 insertSections:[NSIndexSet indexSetWithIndex:sectionIndex]
-              withRowAnimation:UITableViewRowAnimationTop];
+              withRowAnimation:UITableViewRowAnimationFade];
           [model addItem:self.widgetPromoItem
               toSectionWithIdentifier:SectionIdentifierWidgetPromo];
 
@@ -1188,7 +1201,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 
         [self.tableView
               insertSections:[NSIndexSet indexSetWithIndex:sectionIndex]
-            withRowAnimation:UITableViewRowAnimationTop];
+            withRowAnimation:UITableViewRowAnimationFade];
         [model addItem:self.passwordProblemsItem
             toSectionWithIdentifier:SectionIdentifierPasswordCheck];
         [rowsIndexPaths addObject:[NSIndexPath indexPathForRow:0
@@ -1210,7 +1223,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
                                      atIndex:sectionIndex];
           [self.tableView
                 insertSections:[NSIndexSet indexSetWithIndex:sectionIndex]
-              withRowAnimation:UITableViewRowAnimationTop];
+              withRowAnimation:UITableViewRowAnimationFade];
           [model addItem:self.addPasswordItem
               toSectionWithIdentifier:SectionIdentifierAddPasswordButton];
           [rowsIndexPaths
@@ -1225,7 +1238,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
         }
 
         [self.tableView insertRowsAtIndexPaths:rowsIndexPaths
-                              withRowAnimation:UITableViewRowAnimationTop];
+                              withRowAnimation:UITableViewRowAnimationFade];
 
         _tableIsInSearchMode = NO;
       }
@@ -1252,6 +1265,14 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 }
 
 #pragma mark - Private methods
+
+// Attempts to show the Level Up Password Checkup IPH bubble.
+- (void)maybeShowLevelUpWalkthroughIPH {
+  if (_hasViewAppeared && _didReceivePasswords) {
+    [self.view layoutIfNeeded];
+    [self.presentationDelegate showLevelUpWalkthroughIPH];
+  }
+}
 
 // Records the Trusted Vault Widget Promo impression (if it hasn't been recorded
 // yet).
@@ -1324,6 +1345,7 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   _didReceivePasswords = YES;
   [self updateUIForEditState];
   [self reloadData];
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 // Dismisses the search controller when there's a touch event on the scrim.
@@ -1336,12 +1358,24 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
 // Shows scrim overlay and hide toolbar.
 - (void)showScrim {
   UIView* scrimView = self.scrimView;
-  if (scrimView.alpha < 1.0f) {
-    scrimView.alpha = 0.0f;
-    [self.tableView addSubview:scrimView];
+  if (scrimView.alpha >= 1.0f) {
+    return;
+  }
+  scrimView.alpha = 0.0f;
+  [self.tableView addSubview:scrimView];
 
-    UIView* superview = self.tableView.superview;
+  UIView* superview = self.tableView.superview;
 
+  // We attach our constraints to the superview because the tableView is
+  // a scrollView and it seems that we get an empty frame when attaching to
+  // it.
+  if (@available(iOS 26, *)) {
+    // On iOS 26+, the search bar won't be obscured by the scrim view even when
+    // the scrim view's top constraint is aligned with the superview's top,
+    // likely due to changes in UIKit's layout system or view hierarchy
+    // handling.
+    AddSameConstraints(scrimView, superview);
+  } else {
     [NSLayoutConstraint activateConstraints:@[
       [scrimView.leadingAnchor constraintEqualToAnchor:superview.leadingAnchor],
       [scrimView.trailingAnchor
@@ -1350,16 +1384,16 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
       [scrimView.topAnchor
           constraintEqualToAnchor:self.navigationController.navigationBar
                                       .bottomAnchor],
-
     ]];
-    self.tableView.accessibilityElementsHidden = YES;
-    self.tableView.scrollEnabled = NO;
-    [UIView animateWithDuration:kTableViewNavigationScrimFadeDuration
-                     animations:^{
-                       scrimView.alpha = 1.0f;
-                       [self.view layoutIfNeeded];
-                     }];
   }
+
+  self.tableView.accessibilityElementsHidden = YES;
+  self.tableView.scrollEnabled = NO;
+  [UIView animateWithDuration:kTableViewNavigationScrimFadeDuration
+                   animations:^{
+                     scrimView.alpha = 1.0f;
+                     [self.view layoutIfNeeded];
+                   }];
 }
 
 // Hides scrim and restore toolbar.
@@ -2007,10 +2041,6 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   return ![self hasPasswords] && _blockedSites.empty();
 }
 
-- (void)deleteItemAtIndexPathsForTesting:(NSArray<NSIndexPath*>*)indexPaths {
-  [self deleteItemAtIndexPaths:indexPaths];
-}
-
 // Reconfigures the cells of the Password Check section. Adds or removes the
 // check button from the table view if needed.
 - (void)reconfigurePasswordCheckSectionCellsWithState:
@@ -2364,9 +2394,9 @@ bool AreIssuesEqual(const std::vector<password_manager::AffiliatedGroup>& lhs,
   }
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   [self reloadData];
 }

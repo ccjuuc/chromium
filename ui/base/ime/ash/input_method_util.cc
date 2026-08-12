@@ -2,32 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/base/ime/ash/input_method_util.h"
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>  // For SetHardwareKeyboardLayoutForTesting.
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/ime/ash/component_extension_ime_manager.h"
 #include "ui/base/ime/ash/extension_ime_util.h"
-// For SetHardwareKeyboardLayoutForTesting.
-#include <optional>
-
 #include "ui/base/ime/ash/fake_input_method_delegate.h"
 #include "ui/base/ime/ash/input_method_delegate.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -210,7 +204,7 @@ const struct InputMethodNameMap {
   const char* message_name;
   int resource_id;
   bool operator<(const InputMethodNameMap& other) const {
-    return strcmp(message_name, other.message_name) < 0;
+    return UNSAFE_TODO(strcmp(message_name, other.message_name)) < 0;
   }
 } kInputMethodNameMap[] = {
     {"__MSG_INPUTMETHOD_ARRAY__", IDS_IME_NAME_INPUTMETHOD_ARRAY},
@@ -547,8 +541,8 @@ std::string InputMethodUtil::GetLocalizedDisplayName(
     std::string name = base::ToUpperASCII(disp);
     const InputMethodNameMap map_key = {name.c_str(), 0};
     const InputMethodNameMap* p =
-        std::lower_bound(map, map + map_size, map_key);
-    if (p != map + map_size && name == p->message_name) {
+        std::lower_bound(map, UNSAFE_TODO(map + map_size), map_key);
+    if (p != UNSAFE_TODO(map + map_size) && name == p->message_name) {
       return l10n_util::GetStringUTF8(p->resource_id);
     }
   }
@@ -739,7 +733,7 @@ void InputMethodUtil::GetLanguageCodesFromInputMethodIds(
     DCHECK(!input_method->language_codes().empty());
     const std::string language_code = input_method->language_codes().at(0);
     // Add it if it's not already present.
-    if (!base::Contains(*out_language_codes, language_code)) {
+    if (!std::ranges::contains(*out_language_codes, language_code)) {
       out_language_codes->push_back(language_code);
     }
   }
@@ -794,12 +788,11 @@ bool InputMethodUtil::GetMigratedInputMethodIDs(
   if (rewritten) {
     // Removes the duplicates.
     std::vector<std::string> new_ids;
-    std::unordered_set<std::string> ids_set;
+    absl::flat_hash_set<std::string> ids_set;
     for (const auto& id : ids) {
-      if (ids_set.find(id) == ids_set.end()) {
+      if (ids_set.insert(id).second) {
         new_ids.push_back(id);
       }
-      ids_set.insert(id);
     }
     ids.swap(new_ids);
   }

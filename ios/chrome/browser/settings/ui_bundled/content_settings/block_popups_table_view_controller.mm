@@ -54,10 +54,10 @@ typedef NS_ENUM(NSInteger, ItemType) {
   raw_ptr<PrefService> _prefService;  // weak
 
   // List of url patterns that are allowed to display popups.
-  base::Value::List _exceptions;
+  base::ListValue _exceptions;
 
   // List of url patterns set by policy that are allowed to display popups.
-  base::Value::List _allowPopupsByPolicy;
+  base::ListValue _allowPopupsByPolicy;
 
   // The observable boolean that binds to the "Disable Popups" setting state.
   ContentSettingBackedBoolean* _disablePopupsSetting;
@@ -229,6 +229,9 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
   // Update the item.
   _blockPopupsItem.on = [_disablePopupsSetting value];
+
+  // Update the cell.
+  [self reconfigureCellsForItems:@[ _blockPopupsItem ]];
 
   // Update the rest of the UI.
   [self setEditing:NO animated:YES];

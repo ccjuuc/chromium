@@ -15,7 +15,7 @@ namespace {
 using ::ash::ime::mojom::JapaneseSettings;
 
 TEST(JapaneseSettingsTest, OnSetPrefsSetsSettingsFromPrefs) {
-  base::Value::Dict prefs;
+  base::DictValue prefs;
   prefs.Set("AutomaticallySwitchToHalfwidth", false);
   prefs.Set("JapaneseDisableSuggestions", true);
   prefs.Set("JapaneseInputMode", "Kana");
@@ -54,7 +54,7 @@ TEST(JapaneseSettingsTest, OnSetPrefsSetsSettingsFromPrefs) {
 }
 
 TEST(JapaneseSettingsTest, OnUnsetPrefsSetsDefault) {
-  base::Value::Dict prefs;
+  base::DictValue prefs;
 
   ash::ime::mojom::JapaneseSettingsPtr response =
       ToMojomInputMethodSettings(prefs);
@@ -69,7 +69,7 @@ TEST(JapaneseSettingsTest, OnUnsetPrefsSetsDefault) {
   expected->number_of_suggestions = 3;
   expected->input_mode = JapaneseSettings::InputMode::kRomaji;
   expected->punctuation_style =
-      JapaneseSettings::PunctuationStyle::kKutenTouten;
+      JapaneseSettings::PunctuationStyle::kToutenKuten;
   expected->symbol_style =
       JapaneseSettings::SymbolStyle::kCornerBracketMiddleDot;
   expected->space_input_style = JapaneseSettings::SpaceInputStyle::kInputMode;
@@ -90,7 +90,7 @@ TEST(JapaneseSettingsTest, RecordJapaneseSettingsMetrics) {
   settings->keymap_style = JapaneseSettings::KeymapStyle::kCustom;
   settings->number_of_suggestions = 3;
   settings->punctuation_style =
-      JapaneseSettings::PunctuationStyle::kKutenTouten;
+      JapaneseSettings::PunctuationStyle::kToutenKuten;
   settings->selection_shortcut =
       JapaneseSettings::SelectionShortcut::kDigits123456789;
   settings->shift_key_mode_style =

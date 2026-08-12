@@ -20,9 +20,11 @@
 #include "base/check.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
+#include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
@@ -74,9 +76,14 @@ bool IsPastLeftOrRightEdge(const gfx::Rect& bounds, const gfx::Rect& area) {
 
 }  // namespace
 
-PipWindowResizer::PipWindowResizer(WindowState* window_state)
+PipWindowResizer::PipWindowResizer(WindowState* window_state, bool for_pinch)
     : WindowResizer(window_state) {
-  window_state->OnDragStarted(details().window_component);
+  // The window component should be valid component for drag/resize operation,
+  // but pinch zoom can happen with any component, such as HTCLIENT.
+  // Use HTCAPTION as a value default value for pinch-zoom. It will not
+  // affect the actual behavior.
+  window_state->OnDragStarted(for_pinch ? HTCAPTION
+                                        : details().window_component);
 
   // TODO(b/301232629): `DragDetails::bounds_change` should be
   // `kBoundsChange_Resizes` during pinch resizing.
@@ -106,7 +113,6 @@ PipWindowResizer::~PipWindowResizer() {
     window_state()->DeleteDragDetails();
 }
 
-// TODO(edcourtney): Implement swipe-to-dismiss on fling.
 void PipWindowResizer::Drag(const gfx::PointF& location_in_parent,
                             int event_flags) {
   last_location_in_screen_ = location_in_parent;
@@ -128,7 +134,11 @@ void PipWindowResizer::Drag(const gfx::PointF& location_in_parent,
   // We do everything in Screen coordinates, so convert here.
   ::wm::ConvertRectToScreen(GetTarget()->parent(), &new_bounds);
 
-  display::Display display = window_state()->GetDisplay();
+  display::Display display =
+      (details().source == wm::WINDOW_MOVE_SOURCE_MOUSE)
+          ? display::Screen::Get()->GetDisplayNearestPoint(
+                gfx::ToRoundedPoint(last_location_in_screen_.value()))
+          : window_state()->GetDisplay();
   gfx::Rect area = CollisionDetectionUtils::GetMovementArea(display);
 
   // If the PIP window is at a corner, lock swipe to dismiss to the axis
@@ -338,9 +348,21 @@ void PipWindowResizer::CompleteDrag() {
     }
 
     // Compute resting position even if it was a fling to avoid obstacles.
+    display::Display target_display =
+        (details().source == wm::WINDOW_MOVE_SOURCE_MOUSE)
+            ? display::Screen::Get()->GetDisplayMatching(intended_bounds)
+            : window_state()->GetDisplay();
     gfx::Rect resting_bounds = CollisionDetectionUtils::GetRestingPosition(
-        window_state()->GetDisplay(), intended_bounds,
+        target_display, intended_bounds,
         CollisionDetectionUtils::RelativePriority::kPictureInPicture);
+
+    // It is possible the drag left the window on a different display than
+    // intended, if so move the window.
+    if (details().source == wm::WINDOW_MOVE_SOURCE_MOUSE &&
+        target_display.id() != window_state()->GetDisplay().id()) {
+      GetTarget()->SetBoundsInScreen(intended_bounds, target_display);
+    }
+
     ::wm::ConvertRectFromScreen(GetTarget()->parent(), &resting_bounds);
 
     base::TimeDelta duration =

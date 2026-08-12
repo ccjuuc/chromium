@@ -31,10 +31,11 @@ struct CategorizedError;
 base::OnceClosure ZucchiniOperation(
     scoped_refptr<CrxCache> crx_cache,
     scoped_refptr<Patcher> patcher,
-    base::RepeatingCallback<void(base::Value::Dict)> event_adder,
+    base::RepeatingCallback<void(base::DictValue)> event_adder,
     base::RepeatingCallback<void(ComponentState)> state_tracker,
     const std::string& previous_hash,
     const std::string& output_hash,
+    bool is_foreground,
     const base::FilePath& patch_file,
     base::OnceCallback<void(base::expected<base::FilePath, CategorizedError>)>
         callback);

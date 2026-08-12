@@ -59,14 +59,14 @@ SystemMediaControlsNotifier::SystemMediaControlsNotifier(
       controller_manager_remote.BindNewPipeAndPassReceiver());
 
   if (request_id == base::UnguessableToken::Null()) {
-    // Null ID for all scenarios where kWebAppSystemMediaControls is not
-    // supported. ie. Linux always, and Mac/Windows when the feature flag off.
+    // Null ID for all platforms where instanced system media controls are not
+    // supported. (Linux, CrOS, and mobile.)
     // Create a media controller that follows the active session for this case.
     controller_manager_remote->CreateActiveMediaController(
         media_controller_remote_.BindNewPipeAndPassReceiver());
   } else {
     // Create a media controller tied to |request_id| when
-    // kWebAppSystemMediaControls is enabled (on Windows or macOS).
+    // instanced system media controls are enabled (on Windows or macOS).
     controller_manager_remote->CreateMediaControllerForSession(
         media_controller_remote_.BindNewPipeAndPassReceiver(), request_id);
   }
@@ -175,7 +175,16 @@ void SystemMediaControlsNotifier::MediaSessionPositionChanged(
   if (position) {
     DebouncePositionUpdate(*position);
   } else {
-    ClearAllMetadata();
+    delayed_position_update_ = std::nullopt;
+
+    // Do not cancel metadata or playback state updates just because position
+    // is unavailable. A Media Session can retain both while explicitly
+    // clearing its position state.
+    if (!delayed_metadata_update_ && !delayed_playback_status_) {
+      metadata_update_timer_.Stop();
+    }
+
+    system_media_controls_->ClearPosition();
   }
 }
 

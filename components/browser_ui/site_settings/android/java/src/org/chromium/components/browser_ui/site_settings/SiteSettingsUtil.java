@@ -54,7 +54,6 @@ public class SiteSettingsUtil {
         ContentSettingsType.AUTO_DARK_WEB_CONTENT,
         ContentSettingsType.REQUEST_DESKTOP_SITE,
         ContentSettingsType.JAVASCRIPT_OPTIMIZER,
-        ContentSettingsType.LOCAL_NETWORK_ACCESS,
         ContentSettingsType.LOCAL_NETWORK,
         ContentSettingsType.LOOPBACK_NETWORK,
     };
@@ -125,14 +124,14 @@ public class SiteSettingsUtil {
                             Formatter.formatShortFileSize(context, storage));
         }
         if (cookies > 0) {
-            String cookie_str =
+            String cookieStr =
                     context.getResources()
                             .getQuantityString(R.plurals.cookies_count, cookies, cookies);
             result =
                     result.isEmpty()
-                            ? cookie_str
+                            ? cookieStr
                             : context.getString(
-                                    R.string.summary_with_one_bullet, result, cookie_str);
+                                    R.string.summary_with_one_bullet, result, cookieStr);
         }
         return result;
     }

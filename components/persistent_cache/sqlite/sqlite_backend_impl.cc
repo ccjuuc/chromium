@@ -4,6 +4,9 @@
 
 #include "components/persistent_cache/sqlite/sqlite_backend_impl.h"
 
+#include <stdint.h>
+
+#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -11,191 +14,231 @@
 
 #include "base/check_op.h"
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/ref_counted_memory.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_view_util.h"
+#include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/expected.h"
 #include "base/types/expected_macros.h"
 #include "components/persistent_cache/backend_type.h"
-#include "components/persistent_cache/pending_backend.h"
-#include "components/persistent_cache/sqlite/vfs/sandboxed_file.h"
-#include "components/persistent_cache/sqlite/vfs/sqlite_sandboxed_vfs.h"
+#include "components/persistent_cache/client.h"
+#include "components/persistent_cache/metrics_util.h"
+#include "components/persistent_cache/sqlite/vfs_util.h"
 #include "components/persistent_cache/transaction_error.h"
+#include "components/sqlite_vfs/client.h"
+#include "components/sqlite_vfs/lock_state.h"
+#include "components/sqlite_vfs/pending_file_set.h"
+#include "components/sqlite_vfs/sandboxed_file.h"
+#include "components/sqlite_vfs/sqlite_sandboxed_vfs.h"
+#include "components/sqlite_vfs/vfs_utils.h"
 #include "sql/database.h"
 #include "sql/statement.h"
+#include "sql/streaming_blob_handle.h"
 #include "sql/transaction.h"
+
+namespace persistent_cache {
 
 namespace {
 
-std::string GetFullHistogramName(std::string_view name, bool read_write) {
-  return base::StrCat({"PersistentCache.", name, ".SQLite",
-                       (read_write ? ".ReadWrite" : ".ReadOnly")});
+sql::Database::Tag TagFromClient(Client client) {
+  switch (client) {
+    case Client::kCodeCache:
+      return sql::Database::Tag("CodeCache");
+    case Client::kShaderCache:
+      return sql::Database::Tag("ShaderCache");
+    case Client::kTest:
+      return sql::Database::Tag("Test");
+  }
 }
 
 }  // namespace
 
-namespace persistent_cache {
-
 // static
-std::optional<SqliteVfsFileSet> SqliteBackendImpl::BindToFileSet(
-    PendingBackend pending_backend) {
-  // Write-ahead logging requires single connection.
-  CHECK(!pending_backend.sqlite_data.wal_file.IsValid() ||
-        !pending_backend.sqlite_data.shared_lock.IsValid());
-  // Write-ahead logging requires read-write access.
-  CHECK(!pending_backend.sqlite_data.wal_file.IsValid() ||
-        pending_backend.read_write);
+base::expected<std::unique_ptr<Backend>, TransactionError>
+SqliteBackendImpl::Bind(PendingBackend pending_backend, Client client) {
+  const auto access_rights =
+      pending_backend.pending_file_set.read_write
+          ? sqlite_vfs::SandboxedFile::AccessRights::kReadWrite
+          : sqlite_vfs::SandboxedFile::AccessRights::kReadOnly;
 
-  base::WritableSharedMemoryMapping mapped_shared_lock;
-  if (pending_backend.sqlite_data.shared_lock.IsValid()) {
-    mapped_shared_lock = pending_backend.sqlite_data.shared_lock.Map();
-    if (!mapped_shared_lock.IsValid()) {
-      return std::nullopt;  // Failed to map the shared lock.
-    }
-  }
-
-  const auto access_rights = pending_backend.read_write
-                                 ? SandboxedFile::AccessRights::kReadWrite
-                                 : SandboxedFile::AccessRights::kReadOnly;
-
-  auto db_file = std::make_unique<SandboxedFile>(
-      std::move(pending_backend.sqlite_data.db_file), access_rights,
-      std::move(mapped_shared_lock));
-  auto journal_file = std::make_unique<SandboxedFile>(
-      std::move(pending_backend.sqlite_data.journal_file), access_rights);
-  std::unique_ptr<SandboxedFile> wal_file;
-  if (pending_backend.sqlite_data.wal_file.IsValid()) {
-    wal_file = std::make_unique<SandboxedFile>(
-        std::move(pending_backend.sqlite_data.wal_file), access_rights);
-  }
-
-  return SqliteVfsFileSet(std::move(db_file), std::move(journal_file),
-                          std::move(wal_file),
-                          std::move(pending_backend.sqlite_data.shared_lock));
-}
-
-// static
-std::unique_ptr<Backend> SqliteBackendImpl::Bind(
-    PendingBackend pending_backend) {
-  const auto access_rights = pending_backend.read_write
-                                 ? SandboxedFile::AccessRights::kReadWrite
-                                 : SandboxedFile::AccessRights::kReadOnly;
-
-  auto file_set = BindToFileSet(std::move(pending_backend));
+  auto file_set = sqlite_vfs::SqliteVfsFileSet::Bind(
+      VfsClientFromClient(client), std::move(pending_backend.pending_file_set));
   if (!file_set.has_value()) {
-    return nullptr;
+    // `pending_backend.pending_file_set` was consumed, but failed to produce a
+    // SqliteVfsFileSet. This is typically a failure to map the shared locks
+    // into this process's address space. There is no need to delete the files.
+    return base::unexpected(TransactionError::kConnectionError);
   }
-
-  auto instance = base::WrapUnique(new SqliteBackendImpl(*std::move(file_set)));
+  auto instance =
+      base::WrapUnique(new SqliteBackendImpl(*std::move(file_set), client));
 
   base::ElapsedTimer timer;
-  if (!instance->Initialize()) {
-    return nullptr;
-  }
+  RETURN_IF_ERROR(instance->Initialize());
 
   base::UmaHistogramMicrosecondsTimes(
-      GetFullHistogramName(
-          "BackendInitialize",
-          access_rights == SandboxedFile::AccessRights::kReadWrite),
+      GetHistogramName(
+          client, "BackendInitialize",
+          access_rights == sqlite_vfs::SandboxedFile::AccessRights::kReadWrite),
       timer.Elapsed());
   return instance;
 }
 
-SqliteBackendImpl::SqliteBackendImpl(SqliteVfsFileSet vfs_file_set)
+SqliteBackendImpl::SqliteBackendImpl(sqlite_vfs::SqliteVfsFileSet vfs_file_set,
+                                     Client client)
     : database_path_(vfs_file_set.GetDbVirtualFilePath()),
       vfs_file_set_(std::move(vfs_file_set)),
-      unregister_runner_(
-          SqliteSandboxedVfsDelegate::GetInstance()->RegisterSandboxedFiles(
-              vfs_file_set_)),
+      unregister_runner_(sqlite_vfs::SqliteSandboxedVfsDelegate::GetInstance()
+                             ->RegisterSandboxedFiles(vfs_file_set_)),
       db_(std::in_place,
           sql::DatabaseOptions()
               .set_read_only(vfs_file_set_.read_only())
               // Set the database's locking_mode to EXCLUSIVE if the file set
               // supports only a single connection to the database.
               .set_exclusive_locking(vfs_file_set_.is_single_connection())
-              // Enable write-ahead logging if such a file is provided.
-              .set_wal_mode(vfs_file_set_.wal_journal_mode())
+              // Enable write-ahead logging as indicated.
+              .set_wal_mode(vfs_file_set_.wal_mode())
               .set_vfs_name_discouraged(
-                  SqliteSandboxedVfsDelegate::kSqliteVfsName)
+                  sqlite_vfs::SqliteSandboxedVfsDelegate::kSqliteVfsName)
               // Prevent SQLite from trying to use mmap, as SandboxedVfs does
               // not currently support this.
               .set_mmap_enabled(false),
-          sql::Database::Tag("PersistentCache")) {}
+          TagFromClient(client)) {}
 
 SqliteBackendImpl::~SqliteBackendImpl() {
   base::AutoLock lock(lock_, base::subtle::LockTracking::kEnabled);
   db_.reset();
 }
 
-bool SqliteBackendImpl::Initialize() {
-  TRACE_EVENT0("persistent_cache", "initialize");
+base::expected<void, TransactionError> SqliteBackendImpl::Initialize() {
+  TRACE_EVENT("persistent_cache", "Initialize");
 
   // Open  `db_` under `lock_` with lock tracking enabled. This allows this
   // class to be usable from multiple threads even though `sql::Database` is
   // sequence bound.
   base::AutoLock lock(lock_, base::subtle::LockTracking::kEnabled);
 
-  if (!db_->Open(database_path_)) {
-    TRACE_EVENT_INSTANT1("persistent_cache", "open_failed",
-                         TRACE_EVENT_SCOPE_THREAD, "error_code",
-                         db_->GetErrorCode());
-    return false;
+  RETURN_IF_ERROR(InitializeImpl(),
+                  [](int error_code) { return TranslateError(error_code); });
+
+  return base::ok();
+}
+
+base::expected<void, int> SqliteBackendImpl::InitializeImpl() {
+  // Install an error callback to capture the first error, if any, encountered
+  // while opening a database. Database::GetErrorCode() returns a generic error
+  // after a failed Open(), so it is of no use in this case.
+  std::optional<int> error_code;
+  db_->set_error_callback(base::BindRepeating(
+      [](std::optional<int>& error_code_out, int error,
+         sql::Statement* statement) {
+        if (!error_code_out.has_value()) {
+          error_code_out = error;
+        }
+      },
+      std::ref(error_code)));
+
+  const bool open_success = db_->Open(database_path_);
+  db_->reset_error_callback();
+
+  if (!open_success) {
+    return base::unexpected(error_code.value_or(SQLITE_CANTOPEN));
+  }
+
+  // Check the user-version (https://sqlite.org/pragma.html#pragma_user_version)
+  // to see if there has been a schema change since the last time this database
+  // was modified.
+  int detected_user_version;
+  if (sql::Statement get_user_version_stm(
+          db_->GetUniqueStatement("PRAGMA user_version"));
+      get_user_version_stm.is_valid() && get_user_version_stm.Step()) {
+    detected_user_version = get_user_version_stm.ColumnInt(0);
+  } else {
+    return base::unexpected(db_->GetErrorCode());
+  }
+
+  if (detected_user_version == kCurrentUserVersion) {
+    return base::ok();
+  }
+
+  // A read only connection cannot do anything to recover from a mismatched
+  // user version.
+  if (IsReadOnly()) {
+    return base::unexpected(SQLITE_READONLY);
+  }
+
+  // This is either a new database (user-version has never been set) or was last
+  // written with an old schema. Recreate the table with the current schema and
+  // update the user-version.
+
+  // Begin an explicit transaction so that creating the table and
+  // setting the associated user version is done atomically.
+  sql::Transaction transaction(&*db_);
+  if (!transaction.Begin()) {
+    return base::unexpected(db_->GetErrorCode());
+  }
+
+  if (!db_->Execute("DROP TABLE IF EXISTS entries")) {
+    return base::unexpected(db_->GetErrorCode());
+  }
+
+  // IMPORTANT: Revise the DROP TABLE statement above if more than the one
+  // "entries" table is created here.
+  if (!db_->Execute("CREATE TABLE entries(key BLOB PRIMARY KEY "
+                    "UNIQUE NOT NULL, content BLOB NOT NULL,"
+                    " input_signature INTEGER, write_timestamp INTEGER)")) {
+    return base::unexpected(db_->GetErrorCode());
   }
 
   if (!db_->Execute(
-          "CREATE TABLE IF NOT EXISTS entries(key TEXT PRIMARY KEY UNIQUE NOT "
-          "NULL, content BLOB NOT NULL, input_signature INTEGER, "
-          "write_timestamp INTEGER)")) {
-    TRACE_EVENT_INSTANT1("persistent_cache", "create_failed",
-                         TRACE_EVENT_SCOPE_THREAD, "error_code",
-                         db_->GetErrorCode());
-    return false;
+          base::StrCat({"PRAGMA user_version=",
+                        base::NumberToString(kCurrentUserVersion)}))) {
+    return base::unexpected(db_->GetErrorCode());
   }
 
-  return true;
+  if (!transaction.Commit()) {
+    return base::unexpected(db_->GetErrorCode());
+  }
+
+  return base::ok();
 }
 
 base::expected<std::optional<EntryMetadata>, TransactionError>
-SqliteBackendImpl::Find(std::string_view key, BufferProvider buffer_provider) {
+SqliteBackendImpl::Find(base::span<const uint8_t> key,
+                        BufferProvider buffer_provider) {
   base::AutoLock lock(lock_, base::subtle::LockTracking::kEnabled);
-  CHECK_GT(key.length(), 0ull);
-  TRACE_EVENT0("persistent_cache", "Find");
+  CHECK_GT(key.size(), 0ull);
+  TRACE_EVENT("persistent_cache", "Find");
 
   ASSIGN_OR_RETURN(auto metadata, FindImpl(key, buffer_provider),
                    [](int error_code) {
-                     TRACE_EVENT_INSTANT1("persistent_cache", "find_failed",
-                                          TRACE_EVENT_SCOPE_THREAD,
-                                          "error_code", error_code);
                      return TranslateError(error_code);
                    });
   return metadata;
 }
 
 base::expected<void, TransactionError> SqliteBackendImpl::Insert(
-    std::string_view key,
+    base::span<const uint8_t> key,
     base::span<const uint8_t> content,
     EntryMetadata metadata) {
   base::AutoLock lock(lock_, base::subtle::LockTracking::kEnabled);
 
-  CHECK_GT(key.length(), 0ull);
-  TRACE_EVENT0("persistent_cache", "insert");
+  CHECK_GT(key.size(), 0ull);
+  TRACE_EVENT("persistent_cache", "Insert");
 
-  CHECK_EQ(metadata.write_timestamp, 0)
-      << "Write timestamp is generated by SQLite so it should not be specified "
-         "manually";
+  // The caller should not specify a write timestamp.
+  CHECK_EQ(metadata.write_timestamp, 0);
 
-  RETURN_IF_ERROR(InsertImpl(key, content, std::move(metadata)),
-                  [](int error_code) {
-                    TRACE_EVENT_INSTANT1("persistent_cache", "insert_failed",
-                                         TRACE_EVENT_SCOPE_THREAD, "error_code",
-                                         error_code);
-                    return TranslateError(error_code);
-                  });
+  RETURN_IF_ERROR(InsertImpl(key, content, metadata.input_signature),
+                  [](int error_code) { return TranslateError(error_code); });
 
   return base::ok();
 }
@@ -212,7 +255,7 @@ base::expected<void, int> SqliteBackendImpl::ExecuteStatementForTesting(
 }
 
 base::expected<std::optional<EntryMetadata>, int> SqliteBackendImpl::FindImpl(
-    std::string_view key,
+    base::span<const uint8_t> key,
     BufferProvider buffer_provider) {
   // Begin an explicit read transaction under which multiple statements will be
   // used to read from the database if the database may have multiple
@@ -226,13 +269,15 @@ base::expected<std::optional<EntryMetadata>, int> SqliteBackendImpl::FindImpl(
   }
 
   // Read the rowid and metadata.
-  sql::Statement stm = sql::Statement(
+  sql::Statement stm(
       db_->GetCachedStatement(SQL_FROM_HERE,
                               "SELECT rowid, input_signature, write_timestamp "
                               "FROM entries WHERE key = ?"));
-  DCHECK(stm.is_valid());
+  if (!stm.is_valid()) {
+    return base::unexpected(db_->GetErrorCode());
+  }
 
-  stm.BindString(0, key);
+  stm.BindBlob(0, key);
 
   if (!stm.Step()) {
     if (stm.Succeeded()) {
@@ -258,8 +303,10 @@ base::expected<std::optional<EntryMetadata>, int> SqliteBackendImpl::FindImpl(
       succeeded = blob->Read(/*offset=*/0, content_buffer);
     }
     if (succeeded) {
-      return EntryMetadata{.input_signature = stm.ColumnInt64(1),
-                           .write_timestamp = stm.ColumnInt64(2)};
+      return EntryMetadata{
+          .input_signature = stm.ColumnInt64(1),
+          .write_timestamp =
+              stm.ColumnTime(2).ToDeltaSinceWindowsEpoch().InMicroseconds()};
     }
   }
 
@@ -267,71 +314,65 @@ base::expected<std::optional<EntryMetadata>, int> SqliteBackendImpl::FindImpl(
 }
 
 base::expected<void, int> SqliteBackendImpl::InsertImpl(
-    std::string_view key,
+    base::span<const uint8_t> key,
     base::span<const uint8_t> content,
-    EntryMetadata metadata) {
-  // Use a transaction for insertions if the database may have multiple
-  // connections so that the creation of the row and the writing of the data are
-  // a single atomic operation. A transaction is not necessary if the database
-  // is opened for a single connection, as it is not possible for another
-  // connection to access or modify the database between the statements below.
-  std::optional<sql::Transaction> transaction;
-  if (!vfs_file_set_.is_single_connection() &&
-      !transaction.emplace(&*db_).Begin()) {
-    return base::unexpected(db_->GetErrorCode());
+    int64_t input_signature) {
+  if (sql::Statement stm(db_->GetCachedStatement(
+          SQL_FROM_HERE,
+          "REPLACE INTO entries (key, content, input_signature, "
+          "write_timestamp) VALUES (?, ?, ?, ?)"));
+      stm.is_valid()) {
+    stm.BindBlob(0, key);
+    // SAFETY: SQLite reads from `content` while in scope. Internally,
+    // sql::Statement clears its bindings upon destruction, guaranteeing it
+    // cannot hold a dangling reference once this block ends.
+    stm.BindBlob(1,
+                 base::MakeRefCounted<base::RefCountedStaticMemory>(content));
+    stm.BindInt64(2, input_signature);
+    stm.BindTime(3, base::Time::Now());
+    if (stm.Run()) {
+      return base::ok();
+    }
   }
-
-  sql::Statement stm(db_->GetCachedStatement(
-      SQL_FROM_HERE,
-      "REPLACE INTO entries (key, content, input_signature, write_timestamp) "
-      "VALUES (?, ?, ?, strftime(\'%s\', \'now\'))"));
-
-  stm.BindString(0, key);
-  stm.BindBlobForStreaming(1, content.size());
-  stm.BindInt64(2, metadata.input_signature);
-
-  DCHECK(stm.is_valid());
-  if (!stm.Run()) {
-    return base::unexpected(db_->GetErrorCode());
-  }
-
-  const auto row_id = db_->GetLastInsertRowId();
-  if (auto blob_handle = db_->GetStreamingBlob("entries", "content", row_id,
-                                               /*readonly=*/false);
-      !blob_handle.has_value() || !blob_handle->Write(0, content)) {
-    return base::unexpected(db_->GetErrorCode());
-  }
-
-  if (transaction && !transaction->Commit()) {
-    return base::unexpected(db_->GetErrorCode());
-  }
-
-  return base::ok();
+  return base::unexpected(db_->GetErrorCode());
 }
 
 // static
 TransactionError SqliteBackendImpl::TranslateError(int error_code) {
-  switch (error_code) {
+  // Handle extended result codes directly.
+  if (error_code == SQLITE_IOERR_LOCK) {
+    // Lock abandonment.
+    return TransactionError::kConnectionError;
+  }
+
+  // Narrow the error down to its primary result code.
+  switch (error_code & 0xFF) {
     case SQLITE_BUSY:
+    case SQLITE_FULL:
+    case SQLITE_INTERRUPT:
     case SQLITE_NOMEM:
       return TransactionError::kTransient;
+
     case SQLITE_CANTOPEN:
-    case SQLITE_IOERR_LOCK:  // Lock abandonment.
+    case SQLITE_READONLY:  // Cannot modify a read-only database.
+      // This also includes SQLITE_READONLY_ROLLBACK, which can happen if a
+      // read-only connection is the first to discover that a hot journal needs
+      // to be rolled back.
       return TransactionError::kConnectionError;
+
     case SQLITE_ERROR:
     case SQLITE_CORRUPT:
-    case SQLITE_FULL:
-    case SQLITE_IOERR_FSTAT:
-    case SQLITE_IOERR_FSYNC:
-    case SQLITE_IOERR_READ:
-    case SQLITE_IOERR_WRITE:
+    case SQLITE_IOERR:
+    case SQLITE_NOTADB:
+      // The underlying file cannot be trusted. The best course of action is for
+      // the owner to close the connection and delete the underlying files.
       return TransactionError::kPermanent;
   }
 
-  // Remaining errors are treasted as transient.
-  // `Sql.Database.Statement.Error.PersistentCache` should be monitored to
-  // ensure that there are no surprising permanent errors wrongly handled here
-  // as this will mean unusable databases that keep being used.
+  // Remaining errors are considered transient. The Sql.Database.Statement.Error
+  // metrics should be monitored to ensure that there are no surprising
+  // permanent errors wrongly handled here as this will mean unusable databases
+  // that keep being used.
   return TransactionError::kTransient;
 }
 
@@ -346,7 +387,14 @@ bool SqliteBackendImpl::IsReadOnly() const {
 LockState SqliteBackendImpl::Abandon() {
   // Read only instances do not have the privilege of abandoning an instance.
   CHECK(!IsReadOnly());
-  return vfs_file_set_.Abandon();
+  switch (vfs_file_set_.Abandon()) {
+    case sqlite_vfs::LockState::kNotHeld:
+      return LockState::kNotHeld;
+    case sqlite_vfs::LockState::kReading:
+      return LockState::kReading;
+    case sqlite_vfs::LockState::kWriting:
+      return LockState::kWriting;
+  }
 }
 
 }  // namespace persistent_cache

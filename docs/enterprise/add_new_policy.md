@@ -24,6 +24,17 @@ please read [this article](https://www.chromium.org/developers/enterprise-change
 
 ## Adding a new policy
 
+> ℹ️️ An AI agent (e.g., Gemini CLI) can help you write your policy YAML, map it to
+> a pref, and write tests. Add the
+> [policy-creation](https://source.chromium.org/chromium/chromium/src/+/main:agents/skills/policy-creation/)
+> skill, then ask your agent to create a policy.
+>
+> Example for Gemini CLI:
+>
+> ```sh
+> gemini skills link agents/skills/policy-creation
+> ```
+
 1.  Design the policy, decide policy name, type, function, etc.
     - Please read [policy_design.md](./policy_design.md) for more information.
     - If you are adding support for a GenAI policy, please also read the
@@ -97,9 +108,12 @@ please read [this article](https://www.chromium.org/developers/enterprise-change
     -   We strongly encourage developers to make their policies support this
         attribute. It means the admin can change the policy value and Chrome
         will honor the change at run-time without requiring a restart of the
-        browser. ChromeOS does not always support non-dynamic profile policies.
-        Please verify with a ChromeOS policy owner if your profile policy does
-        not support dynamic refresh on ChromeOS.
+        browser.
+        -  If your policy is not dynamic in the sense that its value is only
+           evaluated at browser process startup time, it will require special
+           care to support ChomeOS and should be avoid in general. Reach out to
+           someone from `chromeos/ash/components/policy/OWNERS` early to discuss
+           this.
     -   Most of the time, this requires a
         [PrefChangeRegistrar](https://cs.chromium.org/chromium/src/components/prefs/pref_change_registrar.h)
         to listen to the preference change notification and update UI or
@@ -182,7 +196,7 @@ everything listed below.
 
 * [Policy templates](https://dl.google.com/dl/edgedl/chrome/policy/policy_templates.zip)
   will be updated automatically.
-* [Policy documentation](https://cloud.google.com/docs/chrome-enterprise/policies/)
+* [Policy documentation](https://chromeenterprise.google/policies/)
   will be updated automatically.
 
 ------

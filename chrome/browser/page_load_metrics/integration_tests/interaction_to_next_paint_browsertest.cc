@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "base/strings/string_number_conversions.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "build/build_config.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
 #include "chrome/browser/profiles/profile.h"
@@ -24,7 +24,6 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 
 using base::Bucket;
-using base::Value;
 using std::optional;
 using trace_analyzer::Query;
 using trace_analyzer::TraceAnalyzer;
@@ -33,12 +32,6 @@ using ukm::builders::PageLoad;
 
 class InteractionToNextPaintTest : public MetricIntegrationTest {
  protected:
-  // This function will extract the target UKM value from ukm_recorder
-  // by the given metric_name in PageLoad.
-  bool ExtractUKMPageLoadMetric(const ukm::TestUkmRecorder& ukm_recorder,
-                                std::string_view metric_name,
-                                int64_t* extracted_value);
-
   // This function extract the maximum duration for EventTiming from
   // trace data.
   int ExtractMaxInteractionDurationFromTrace(TraceEventVector events);
@@ -56,21 +49,6 @@ class InteractionToNextPaintTest : public MetricIntegrationTest {
   void WaitForFrameReady();
 };
 
-bool InteractionToNextPaintTest::ExtractUKMPageLoadMetric(
-    const ukm::TestUkmRecorder& ukm_recorder,
-    std::string_view metric_name,
-    int64_t* extracted_value) {
-  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
-      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
-  const auto& kv = merged_entries.begin();
-  auto* metric_value =
-      ukm::TestUkmRecorder::GetEntryMetric(kv->second.get(), metric_name);
-  if (!metric_value)
-    return false;
-  *extracted_value = *metric_value;
-  return true;
-}
-
 int InteractionToNextPaintTest::ExtractMaxInteractionDurationFromTrace(
     TraceEventVector events) {
   int max_duration = 0;
@@ -81,7 +59,7 @@ int InteractionToNextPaintTest::ExtractMaxInteractionDurationFromTrace(
     // If the traceEvent doesn't contain args data, it is not
     // one of pointerdown, pointerup and click.
     if (traceEvent->HasDictArg("data")) {
-      Value::Dict data = traceEvent->GetKnownArgAsDict("data");
+      base::DictValue data = traceEvent->GetKnownArgAsDict("data");
 
       // INP only consider the events with interactionID greater than 0.
       std::string* event_name = data.FindString("type");
@@ -116,16 +94,13 @@ bool InteractionToNextPaintTest::VerifyUKMAndTraceData(
   int64_t INP_98th_value;
 
   bool extract_num_of_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::kInteractiveTiming_NumInteractionsName,
       &INP_numOfInteraction_value);
   bool extract_worst_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::
           kInteractiveTiming_WorstUserInteractionLatency_MaxEventDurationName,
       &INP_worst_value);
   bool extract_98th_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::
           kInteractiveTiming_UserInteractionLatency_HighPercentile2_MaxEventDurationName,
       &INP_98th_value);
@@ -408,7 +383,7 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
   // Add a new tab and switch to it.
   std::unique_ptr<content::WebContents> web_contents_to_add =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
 
   web_contents_to_add->GetController().LoadURL(
       embedded_test_server()->GetURL("/resources/empty.html"),
@@ -462,7 +437,7 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
   // Add a new tab and switch to it.
   std::unique_ptr<content::WebContents> web_contents_to_add =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
 
   web_contents_to_add->GetController().LoadURL(
       embedded_test_server()->GetURL("/resources/empty.html"),

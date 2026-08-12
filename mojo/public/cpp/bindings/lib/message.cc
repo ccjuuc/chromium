@@ -7,18 +7,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <array>
+#include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/stack_allocated.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_math.h"
 #include "base/rand_util.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
@@ -49,8 +58,6 @@ GetSmallSLSMessageDispatchContext() {
   return sls;
 }
 
-thread_local base::MetricsSubSampler g_sub_sampler;
-
 void SetMessageDispatchContext(internal::MessageDispatchContext* context) {
   if (base::FeatureList::IsEnabled(kMojoBindingsInlineSLS)) {
     GetSmallSLSMessageDispatchContext().emplace(context);
@@ -66,6 +73,46 @@ internal::MessageDispatchContext* GetMessageDispatchContext() {
     return GetSLSMessageDispatchContext().GetOrCreateValue();
   }
 }
+
+base::Lock& GetBadMessageCrashKeyLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+class BadMessageCrashKeyScope {
+  STACK_ALLOCATED();
+
+ public:
+  explicit BadMessageCrashKeyScope(const Message* message) {
+    auto* context = internal::MessageDispatchContext::current();
+    if (!context || context->message() != message) {
+      return;
+    }
+    lock_.emplace(GetBadMessageCrashKeyLock());
+    static const auto keys = std::to_array({
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-1",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-2",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-3",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-4",
+                                            base::debug::CrashKeySize::Size256),
+    });
+    base::span<const DeserializationError> error_trace = context->error_trace();
+    const size_t num_keys = std::min(error_trace.size(), scoped_keys_.size());
+    for (size_t i = 0; i < num_keys; ++i) {
+      scoped_keys_[i].emplace(keys[i], error_trace[i].ToString());
+    }
+  }
+
+ private:
+  std::optional<base::AutoLock> lock_;
+  // Crash keys are globals, but deserialization happens on the receiving
+  // sequence.
+  std::array<std::optional<base::debug::ScopedCrashKeyString>, 4> scoped_keys_
+      GUARDED_BY(lock_);
+};
 
 void DoNotifyBadMessage(Message message, std::string_view error) {
   message.NotifyBadMessage(error);
@@ -250,7 +297,7 @@ Message::Message(uint32_t name,
   int64_t creation_timeticks_us = 0;
   // Sub-sample end to end time histogram on the sender side to reduce overhead.
   if (base::TimeTicks::IsConsistentAcrossProcesses() &&
-      g_sub_sampler.ShouldSample(0.001)) {
+      base::ShouldRecordSubsampledMetric(0.001)) {
     creation_timeticks_us =
         (base::TimeTicks::Now() - base::TimeTicks()).InMicroseconds();
   }
@@ -502,6 +549,7 @@ ScopedMessageHandle Message::TakeMojoMessage() {
 
 void Message::NotifyBadMessage(std::string_view error) {
   DCHECK(handle_.is_valid());
+  BadMessageCrashKeyScope scope(this);
   mojo::NotifyBadMessage(handle_.get(), error);
 }
 
@@ -731,6 +779,12 @@ MessageDispatchContext* MessageDispatchContext::current() {
 ReportBadMessageCallback MessageDispatchContext::GetBadMessageCallback() {
   DCHECK(!message_->IsNull());
   return base::BindOnce(&DoNotifyBadMessage, std::move(*message_));
+}
+
+void AddDeserializationError(const DeserializationError& error) {
+  if (auto* context = MessageDispatchContext::current()) {
+    context->AddError(error);
+  }
 }
 
 }  // namespace internal

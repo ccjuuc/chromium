@@ -10,15 +10,19 @@
 
 #include "base/check.h"
 #include "base/check_deref.h"
-#include "base/containers/contains.h"
+#include "base/containers/to_vector.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/browser/integrators/password_manager/password_manager_delegate.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
+#include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/aliases.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/form_fetcher_impl.h"
 #include "components/password_manager/core/browser/form_parsing/form_data_parser.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
@@ -29,6 +33,7 @@
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/password_manual_fallback_metrics_recorder.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_ui_utils.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #include "url/gurl.h"
@@ -63,17 +68,17 @@ std::optional<password_manager::PasswordForm> GetCorrespondingPasswordForm(
       credential_ui_entries, [&payload](const CredentialUIEntry& ui_entry) {
         return ui_entry.username == payload.username &&
                ui_entry.password == payload.password &&
-               base::Contains(ui_entry.GetAffiliatedDomains(),
-                              payload.signon_realm,
-                              &CredentialUIEntry::DomainInfo::signon_realm);
+               std::ranges::contains(
+                   ui_entry.GetAffiliatedDomains(), payload.signon_realm,
+                   &CredentialUIEntry::DomainInfo::signon_realm);
       });
 
   if (found_credential_it == credential_ui_entries.end()) {
     return std::nullopt;
   }
 
-  const std::vector<PasswordForm> forms =
-      presenter.GetCorrespondingPasswordForms(*found_credential_it);
+  const std::vector<PasswordForm> forms = ToPasswordForms(
+      presenter.GetCorrespondingStoredCredentials(*found_credential_it));
   const std::vector<PasswordForm>::const_iterator& found_form_it =
       std::ranges::find_if(forms, [&payload](const PasswordForm& form) {
         return form.signon_realm == payload.signon_realm;
@@ -132,6 +137,7 @@ bool PasswordManualFallbackFlow::SupportsSuggestionType(
     case autofill::SuggestionType::kFillPassword:
     case autofill::SuggestionType::kViewPasswordDetails:
     case autofill::SuggestionType::kAllSavedPasswordsEntry:
+    case autofill::SuggestionType::kWebauthnSignInWithAnotherDevice:
       return true;
     default:
       return false;
@@ -145,7 +151,6 @@ void PasswordManualFallbackFlow::OnFetchCompleted() {
     flow_state_ = FlowState::kFlowInitialized;
     // The flow state transition to `FlowState::kFlowInitialized` can happen
     // only once.
-    manual_fallback_metrics_recorder_->RecordDataFetchingLatency();
     if (on_all_password_data_ready_) {
       std::move(on_all_password_data_ready_).Run();
     }
@@ -160,7 +165,6 @@ void PasswordManualFallbackFlow::OnSavedPasswordsChanged(
     flow_state_ = FlowState::kFlowInitialized;
     // The flow state transition to `FlowState::kFlowInitialized` can happen
     // only once.
-    manual_fallback_metrics_recorder_->RecordDataFetchingLatency();
     if (on_all_password_data_ready_) {
       std::move(on_all_password_data_ready_).Run();
     }
@@ -168,7 +172,7 @@ void PasswordManualFallbackFlow::OnSavedPasswordsChanged(
 }
 
 void PasswordManualFallbackFlow::RunFlow(
-    autofill::FieldRendererId field_id,
+    const autofill::FieldGlobalId& field_id,
     const gfx::RectF& bounds,
     base::i18n::TextDirection text_direction) {
   field_id_ = field_id;
@@ -185,19 +189,34 @@ void PasswordManualFallbackFlow::RunFlow(
 }
 
 std::variant<autofill::AutofillDriver*, PasswordManagerDriver*>
-PasswordManualFallbackFlow::GetDriver() {
+PasswordManualFallbackFlow::GetDriver_DoNotUse() {
   return password_manager_driver_.get();
 }
 
 void PasswordManualFallbackFlow::OnSuggestionsShown(
-    base::span<const Suggestion> suggestions) {
+    base::span<const Suggestion> suggestions,
+    base::optional_ref<const SuggestionMetadata> parent_suggestion_metadata) {
+  if (parent_suggestion_metadata.has_value()) {
+    // This event corresponds to a sub-popup - we can ignore it.
+    return;
+  }
   const PasswordForm* const form = password_form_cache_->GetPasswordForm(
-      password_manager_driver_, field_id_);
+      password_manager_driver_, field_id_.renderer_id);
   manual_fallback_metrics_recorder_->OnDidShowSuggestions(
       IsTriggerFieldRelevantInPasswordForm(form));
 }
 
-void PasswordManualFallbackFlow::OnSuggestionsHidden() {}
+void PasswordManualFallbackFlow::OnSuggestionsHidden(
+    autofill::SuggestionHidingReason reason) {}
+
+bool PasswordManualFallbackFlow::OnFilterChanged(const std::u16string& filter) {
+  return false;
+}
+
+bool PasswordManualFallbackFlow::OnSearchSubmitted(
+    const std::u16string& filter) {
+  return false;
+}
 
 void PasswordManualFallbackFlow::DidSelectSuggestion(
     const Suggestion& suggestion) {
@@ -207,8 +226,18 @@ void PasswordManualFallbackFlow::DidSelectSuggestion(
   }
   switch (suggestion.type) {
     case autofill::SuggestionType::kPasswordEntry: {
+      const auto entry_payload =
+          suggestion.GetPayload<Suggestion::PasswordSuggestionDetails>();
+      if (base::FeatureList::IsEnabled(
+              password_manager::features::
+                  kFallbackNoPreviewForCrossDomainCredentials) &&
+          entry_payload.is_cross_domain) {
+        // Do not preview cross-domain credentials to avoid leaking sensitive
+        // data without a consent.
+        return;
+      }
       const PasswordForm* form = password_form_cache_->GetPasswordForm(
-          password_manager_driver_, field_id_);
+          password_manager_driver_, field_id_.renderer_id);
       if (!form) {
         return;
       }
@@ -216,13 +245,28 @@ void PasswordManualFallbackFlow::DidSelectSuggestion(
           form->username_element_renderer_id,
           form->password_element_renderer_id,
           GetUsernameFromLabel(suggestion.labels[0][0].value),
-          suggestion.GetPayload<Suggestion::PasswordSuggestionDetails>()
-              .password);
+          std::u16string(entry_payload.password.length(), '*'));
       break;
     }
-    case autofill::SuggestionType::kPasswordFieldByFieldFilling:
-      password_manager_driver_->PreviewField(field_id_,
+    case autofill::SuggestionType::kPasswordFieldByFieldFilling: {
+      if (base::FeatureList::IsEnabled(
+              password_manager::features::
+                  kFallbackNoPreviewForCrossDomainCredentials) &&
+          suggestion.GetPayload<Suggestion::PasswordSuggestionDetails>()
+              .is_cross_domain) {
+        // Do not preview cross-domain credentials to avoid leaking sensitive
+        // data without a consent.
+        return;
+      }
+      password_manager_driver_->PreviewField(field_id_.renderer_id,
                                              suggestion.main_text.value);
+      break;
+    }
+    case autofill::SuggestionType::kWebauthnSignInWithAnotherDevice:
+      if (auto* password_manager_delegate =
+              password_manager_driver_->GetPasswordManagerDelegate()) {
+        password_manager_delegate->SelectSuggestion(suggestion);
+      }
       break;
     case autofill::SuggestionType::kFillPassword:
     case autofill::SuggestionType::kViewPasswordDetails:
@@ -243,7 +287,7 @@ void PasswordManualFallbackFlow::DidAcceptSuggestion(
     return;
   }
   const PasswordForm* const form = password_form_cache_->GetPasswordForm(
-      password_manager_driver_, field_id_);
+      password_manager_driver_, field_id_.renderer_id);
   manual_fallback_metrics_recorder_->OnDidFillSuggestion(
       IsTriggerFieldRelevantInPasswordForm(form));
   base::UmaHistogramEnumeration("Autofill.Suggestions.AcceptedType",
@@ -253,7 +297,7 @@ void PasswordManualFallbackFlow::DidAcceptSuggestion(
       metadata.from_search_result);
   base::UmaHistogramBoolean(
       "PasswordManager.ManualFallback.AcceptedSuggestion.FromRootPopup",
-      metadata.sub_popup_level == 0);
+      metadata.sub_popup_level() == 0);
 
   switch (suggestion.type) {
     case autofill::SuggestionType::kPasswordEntry: {
@@ -280,7 +324,7 @@ void PasswordManualFallbackFlow::DidAcceptSuggestion(
     }
     case autofill::SuggestionType::kPasswordFieldByFieldFilling:
       password_manager_driver_->FillField(
-          field_id_, suggestion.main_text.value,
+          field_id_.renderer_id, suggestion.main_text.value,
           autofill::FieldPropertiesFlags::
               kAutofilledPasswordFormFilledViaManualFallback,
           base::DoNothing());
@@ -294,13 +338,14 @@ void PasswordManualFallbackFlow::DidAcceptSuggestion(
               weak_ptr_factory_.GetWeakPtr(),
               base::BindOnce(&PasswordManagerDriver::FillField,
                              base::Unretained(password_manager_driver_),
-                             field_id_, payload.password,
+                             field_id_.renderer_id, payload.password,
                              autofill::FieldPropertiesFlags::
                                  kAutofilledPasswordFormFilledViaManualFallback,
                              base::DoNothing()),
 
               // Request reauth if filling the password on a non password field.
-              form ? field_id_ != form->password_element_renderer_id : true));
+              form ? field_id_.renderer_id != form->password_element_renderer_id
+                   : true));
       break;
     }
     case autofill::SuggestionType::kViewPasswordDetails: {
@@ -324,19 +369,19 @@ void PasswordManualFallbackFlow::DidAcceptSuggestion(
           metrics_util::PasswordDropdownSelectedOption::kShowAll,
           password_client_->IsOffTheRecord());
       break;
+    case autofill::SuggestionType::kWebauthnSignInWithAnotherDevice:
+      if (auto* password_manager_delegate =
+              password_manager_driver_->GetPasswordManagerDelegate()) {
+        password_manager_delegate->AcceptSuggestion(suggestion, metadata);
+      }
+      break;
     default:
       // Other suggestion types are not supported.
       NOTREACHED();
   }
-  autofill_client_->HideAutofillSuggestions(
-      autofill::SuggestionHidingReason::kAcceptSuggestion);
-}
-
-void PasswordManualFallbackFlow::DidPerformButtonActionForSuggestion(
-    const Suggestion&,
-    const autofill::SuggestionButtonAction&) {
-  // Button actions do currently not exist for password entries.
-  NOTREACHED();
+  autofill_client_->HideSuggestions(
+      autofill::SuggestionHidingReason::kAcceptSuggestion,
+      GetMainFillingProduct());
 }
 
 bool PasswordManualFallbackFlow::RemoveSuggestion(
@@ -355,18 +400,29 @@ autofill::FillingProduct PasswordManualFallbackFlow::GetMainFillingProduct()
   return autofill::FillingProduct::kPassword;
 }
 
+void PasswordManualFallbackFlow::OnTabSelected(
+    autofill::TabbedPaneTabType tab_type) {
+  // Tabbed panes do not currently exist for passwords.
+  NOTREACHED();
+}
+
+bool PasswordManualFallbackFlow::IsSearching() const {
+  return false;
+}
+
 void PasswordManualFallbackFlow::RunFlowImpl(
     const gfx::RectF& bounds,
     base::i18n::TextDirection text_direction) {
   const PasswordForm* const password_form =
       password_form_cache_->GetPasswordForm(password_manager_driver_,
-                                            field_id_);
+                                            field_id_.renderer_id);
   // Generate suggestions for the given context. IsTriggeredOnPasswordForm is
   // targeting contexts where the focused field is a relevant field in the
   // parsed password form and the form contains at most one password field.
   std::vector<Suggestion> suggestions =
       suggestion_generator_.GetManualFallbackSuggestions(
-          form_fetcher_->GetBestMatches(),
+          base::ToVector(form_fetcher_->GetBestMatches(),
+                         [](const auto& cred) { return ToPasswordForm(cred); }),
           passwords_presenter_->GetSavedPasswords(),
           IsTriggeredOnPasswordForm(
               password_form &&
@@ -374,7 +430,7 @@ void PasswordManualFallbackFlow::RunFlowImpl(
               !password_form->HasNewPasswordElement()));
   // TODO(crbug.com/41474723): Set the right `form_control_ax_id`.
   autofill::AutofillClient::PopupOpenArgs open_args(
-      bounds, text_direction, std::move(suggestions),
+      field_id_.frame_token, bounds, text_direction, std::move(suggestions),
       autofill::AutofillSuggestionTriggerSource::kManualFallbackPasswords,
       /*form_control_ax_id=*/0, autofill::PopupAnchorType::kField);
   autofill_client_->ShowAutofillSuggestions(open_args,
@@ -461,8 +517,9 @@ void PasswordManualFallbackFlow::EnsureCrossDomainPasswordUsageGetsConsent(
 bool PasswordManualFallbackFlow::IsTriggerFieldRelevantInPasswordForm(
     const PasswordForm* password_form) const {
   return password_form &&
-         (password_form->username_element_renderer_id == field_id_ ||
-          password_form->password_element_renderer_id == field_id_);
+         (password_form->username_element_renderer_id ==
+              field_id_.renderer_id ||
+          password_form->password_element_renderer_id == field_id_.renderer_id);
 }
 
 }  // namespace password_manager

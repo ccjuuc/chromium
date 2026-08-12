@@ -18,6 +18,7 @@
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -241,7 +242,7 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
   }
 
   void VerifyPolicyList(const char* policy_key,
-                        const base::Value::List& expected_value) {
+                        const base::ListValue& expected_value) {
     const base::Value* value = provider_->Get(policy_key);
     // This prevents tests from crashing if provider returns nullptr.
     ASSERT_TRUE(value);
@@ -304,13 +305,6 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     em::DeviceScheduledUpdateCheckProto* proto =
         device_policy_->payload().mutable_device_scheduled_update_check();
     proto->set_device_scheduled_update_check_settings(json_string);
-    BuildAndInstallDevicePolicy();
-  }
-
-  void SetPluginVmAllowedSetting(bool plugin_vm_allowed) {
-    em::PluginVmAllowedProto* proto =
-        device_policy_->payload().mutable_plugin_vm_allowed();
-    proto->set_plugin_vm_allowed(plugin_vm_allowed);
     BuildAndInstallDevicePolicy();
   }
 
@@ -400,7 +394,7 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
 
   void VerifyDevicePrinterList(const char* policy_key,
                                std::vector<std::string>& values) {
-    base::Value::List list;
+    base::ListValue list;
     for (auto const& value : values) {
       list.Append(value);
     }
@@ -517,7 +511,7 @@ TEST_F(DeviceSettingsProviderTest, InitializationTestUnowned) {
 
 TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
   // Missing policy should default to reporting enabled for enterprise-enrolled
-  // devices, see crbug/456186.
+  // devices, see crbug.com/41156165.
   SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
@@ -527,7 +521,7 @@ TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
 
 TEST_F(DeviceSettingsProviderTest, NoPolicyDefaultsOff) {
   // Missing policy should default to reporting enabled for non-enterprise-
-  // enrolled devices, see crbug/456186.
+  // enrolled devices, see crbug.com/41156165.
   SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
@@ -732,8 +726,8 @@ TEST_F(DeviceSettingsProviderTest, LegacyDeviceLocalAccounts) {
   BuildAndInstallDevicePolicy();
 
   // On load, the deprecated spec should have been converted to the new format.
-  base::Value::List expected_accounts;
-  base::Value::Dict entry_dict;
+  base::ListValue expected_accounts;
+  base::DictValue entry_dict;
   entry_dict.Set(kAccountsPrefDeviceLocalAccountsKeyId,
                  policy::PolicyBuilder::kFakeUsername);
   entry_dict.Set(
@@ -754,8 +748,8 @@ TEST_F(DeviceSettingsProviderTest,
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_accounts = base::Value::List().Append(
-      base::Value::Dict()
+  base::ListValue expected_accounts = base::ListValue().Append(
+      base::DictValue()
           .Set(kAccountsPrefDeviceLocalAccountsKeyId,
                kDeviceLocalAccountKioskAccountId)
           .Set(kAccountsPrefDeviceLocalAccountsKeyType,
@@ -780,8 +774,8 @@ TEST_F(DeviceSettingsProviderTest, DeviceLocalAccountsWithEphemeralModeField) {
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_accounts = base::Value::List().Append(
-      base::Value::Dict()
+  base::ListValue expected_accounts = base::ListValue().Append(
+      base::DictValue()
           .Set(kAccountsPrefDeviceLocalAccountsKeyId,
                kDeviceLocalAccountKioskAccountId)
           .Set(kAccountsPrefDeviceLocalAccountsKeyType,
@@ -802,13 +796,40 @@ TEST_F(DeviceSettingsProviderTest, DecodeDeviceState) {
       .mutable_device_state()
       ->mutable_disabled_state()
       ->set_message(kDisabledMessage);
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->set_location_tracking_enabled(true);
   BuildAndInstallDevicePolicy();
 
   // Verify that the device state has been decoded correctly.
-  EXPECT_TRUE(provider_->Get(kDeviceDisabled));
+  const base::Value* value = provider_->Get(kDeviceDisabled);
+  ASSERT_TRUE(value);
+  EXPECT_TRUE(value->GetBool());
   const base::Value expected_disabled_message_value(kDisabledMessage);
   EXPECT_EQ(expected_disabled_message_value,
             *provider_->Get(kDeviceDisabledMessage));
+  value = provider_->Get(kDeviceDisabledLocationTrackingEnabled);
+  ASSERT_TRUE(value);
+  EXPECT_TRUE(value->GetBool());
+
+  // Verify that location tracking can be disabled.
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->set_location_tracking_enabled(false);
+  BuildAndInstallDevicePolicy();
+  value = provider_->Get(kDeviceDisabledLocationTrackingEnabled);
+  ASSERT_TRUE(value);
+  EXPECT_FALSE(value->GetBool());
+
+  // Verify that clearing the field works.
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->clear_location_tracking_enabled();
+  BuildAndInstallDevicePolicy();
+  EXPECT_FALSE(provider_->Get(kDeviceDisabledLocationTrackingEnabled));
 
   // Verify that a change to the device state triggers a notification.
   device_policy_->policy_data().mutable_device_state()->clear_device_mode();
@@ -816,6 +837,7 @@ TEST_F(DeviceSettingsProviderTest, DecodeDeviceState) {
 
   // Verify that the updated state has been decoded correctly.
   EXPECT_FALSE(provider_->Get(kDeviceDisabled));
+  EXPECT_FALSE(provider_->Get(kDeviceDisabledLocationTrackingEnabled));
 }
 
 TEST_F(DeviceSettingsProviderTest, DecodeReportingSettings) {
@@ -842,7 +864,7 @@ TEST_F(DeviceSettingsProviderTest,
 
   BuildAndInstallDevicePolicy();
 
-  base::Value::List signal_strength_telemetry_list;
+  base::ListValue signal_strength_telemetry_list;
   signal_strength_telemetry_list.Append("https_latency");
   signal_strength_telemetry_list.Append("network_telemetry");
   base::Value signal_strength_telemetry_list_value =
@@ -893,7 +915,7 @@ TEST_F(DeviceSettingsProviderTest, EmptyAllowedConnectionTypesForUpdate) {
       {em::AutoUpdateSettingsProto::CONNECTION_TYPE_ETHERNET};
   // Check some meaningful value. Policy should be set.
   SetAutoUpdateConnectionTypes(single_value);
-  base::Value::List allowed_connections;
+  base::ListValue allowed_connections;
   allowed_connections.Append(0);
   VerifyPolicyList(kAllowedConnectionTypesForUpdate, allowed_connections);
 }
@@ -950,8 +972,8 @@ TEST_F(DeviceSettingsProviderTest, DeviceAutoUpdateTimeRestrictionsExtra) {
       "[{\"start\": {\"day_of_week\": \"Monday\", \"hours\": 10, \"minutes\": "
       "50}, \"end\": {\"day_of_week\": \"Wednesday\", \"hours\": 1, "
       "\"minutes\": 20, \"extra\": 50}}]";
-  base::Value::List test_list;
-  base::Value::Dict interval;
+  base::ListValue test_list;
+  base::DictValue interval;
   interval.SetByDottedPath("start.day_of_week", "Monday");
   interval.SetByDottedPath("start.hours", 10);
   interval.SetByDottedPath("start.minutes", 50);
@@ -969,7 +991,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledUpdateCheckTests) {
       "{\"update_check_time\": {\"hour\": 23, \"minute\": 35}, "
       "\"frequency\": \"DAILY\", \"day_of_week\": \"MONDAY\",  "
       "\"day_of_month\": 15}";
-  base::Value::Dict expected_dict;
+  base::DictValue expected_dict;
   expected_dict.SetByDottedPath("update_check_time.hour", 23);
   expected_dict.SetByDottedPath("update_check_time.minute", 35);
   expected_dict.Set("frequency", "DAILY");
@@ -978,14 +1000,6 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledUpdateCheckTests) {
   base::Value expected_value(std::move(expected_dict));
   SetDeviceScheduledUpdateCheck(json_string);
   VerifyPolicyValue(kDeviceScheduledUpdateCheck, &expected_value);
-}
-
-TEST_F(DeviceSettingsProviderTest, DecodePluginVmAllowedSetting) {
-  SetPluginVmAllowedSetting(true);
-  EXPECT_EQ(base::Value(true), *provider_->Get(kPluginVmAllowed));
-
-  SetPluginVmAllowedSetting(false);
-  EXPECT_EQ(base::Value(false), *provider_->Get(kPluginVmAllowed));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceRebootAfterUserSignout) {
@@ -1194,7 +1208,7 @@ TEST_F(DeviceSettingsProviderTest, FeatureFlags) {
   device_policy_->payload().mutable_feature_flags()->add_feature_flags("foo");
   BuildAndInstallDevicePolicy();
 
-  base::Value::List expected_feature_flags;
+  base::ListValue expected_feature_flags;
   expected_feature_flags.Append("foo");
   EXPECT_EQ(expected_feature_flags, provider_->Get(kFeatureFlags)->GetList());
 }
@@ -1204,7 +1218,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceAllowedBluetoothServices) {
       device_policy_->payload().mutable_device_allowed_bluetooth_services();
   proto->add_allowlist("0x1124");
   BuildAndInstallDevicePolicy();
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append("0x1124");
   EXPECT_EQ(allowlist,
             provider_->Get(kDeviceAllowedBluetoothServices)->GetList());
@@ -1226,7 +1240,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledReboot) {
       "{\"reboot_time\": {\"hour\": 22, \"minute\": 30}, "
       "\"frequency\": \"MONTHLY\", \"day_of_week\": \"MONDAY\", "
       "\"day_of_month\": 15}";
-  base::Value::Dict expected_dict;
+  base::DictValue expected_dict;
   expected_dict.SetByDottedPath("reboot_time.hour", 22);
   expected_dict.SetByDottedPath("reboot_time.minute", 30);
   expected_dict.Set("frequency", "MONTHLY");
@@ -1405,7 +1419,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListNonempty) {
   BuildAndInstallDevicePolicy();
 
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-pfu"));
+                   base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListInvalidDlc) {
@@ -1422,7 +1436,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListInvalidDlc) {
 
   // Device setting must contain only the valid DLCs that can be pre downloaded.
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-pfu"));
+                   base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListDuplicateDlc) {
@@ -1439,7 +1453,7 @@ TEST_F(DeviceSettingsProviderTest, DeviceDlcPredownloadListDuplicateDlc) {
 
   // Device setting must not contain any duplicate values.
   VerifyPolicyList(kDeviceDlcPredownloadList,
-                   base::Value::List().Append("sane-backends-pfu"));
+                   base::ListValue().Append("sane-backends-pfu"));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceExtendedAutoUpdateEnabledValueSet) {

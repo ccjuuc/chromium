@@ -67,10 +67,6 @@ PermissionPromptNotificationsMac::GetViewBoundsInScreen() const {
   return std::nullopt;
 }
 
-bool PermissionPromptNotificationsMac::ShouldFinalizeRequestAfterDecided()
-    const {
-  return true;
-}
 
 std::vector<permissions::ElementAnchoredBubbleVariant>
 PermissionPromptNotificationsMac::GetPromptVariants() const {
@@ -95,7 +91,7 @@ void PermissionPromptNotificationsMac::OnPermissionResult(
       mac_notifications::mojom::RequestPermissionResult;
   switch (result) {
     case RequestPermissionResult::kPermissionGranted:
-      delegate_->Accept();
+      delegate_->Accept(/*prompt_options=*/std::monostate());
       return;
     case RequestPermissionResult::kPermissionPreviouslyDenied: {
       content::RenderFrameHost* rfh =
@@ -104,11 +100,11 @@ void PermissionPromptNotificationsMac::OnPermissionResult(
           ->SetNotificationsWasDeniedBecauseOfSystemPermission();
       // TODO(https://crbug.com/328105508): Consider adding a new result type
       // for this rather than re-using ignore.
-      delegate_->Ignore();
+      delegate_->Ignore(/*prompt_options=*/std::monostate());
       break;
     }
     case RequestPermissionResult::kPermissionDenied:
-      delegate_->Deny();
+      delegate_->Deny(/*prompt_options=*/std::monostate());
       return;
     case RequestPermissionResult::kPermissionPreviouslyGranted:
     case RequestPermissionResult::kRequestFailed:

@@ -28,7 +28,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/sequence_checker.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
@@ -133,11 +132,14 @@ bool SetActionBehavior(const NsswitchReader::ServiceAction& action,
       }
     }
   } else {
-    if (in_out_parsed_behavior.count(action.status) >= 1 &&
-        in_out_parsed_behavior[action.status] != action.action) {
-      return false;
+    if (auto it = in_out_parsed_behavior.find(action.status);
+        it != in_out_parsed_behavior.end()) {
+      if (it->second != action.action) {
+        return false;
+      }
+    } else {
+      in_out_parsed_behavior.emplace(action.status, action.action);
     }
-    in_out_parsed_behavior[action.status] = action.action;
   }
 
   return true;

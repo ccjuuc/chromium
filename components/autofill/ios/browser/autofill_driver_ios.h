@@ -8,7 +8,6 @@
 #import <set>
 #import <string>
 
-#import "base/containers/flat_map.h"
 #import "base/containers/flat_set.h"
 #import "base/containers/span.h"
 #import "base/memory/raw_ptr.h"
@@ -18,6 +17,7 @@
 #import "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #import "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #import "components/autofill/ios/browser/form_fetch_batcher.h"
+#import "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #import "url/origin.h"
 
 namespace web {
@@ -27,7 +27,16 @@ class WebState;
 
 @protocol AutofillDriverIOSBridge;
 
+namespace mojo {
+template <typename Interface>
+class PendingRemote;
+}  // namespace mojo
+
 namespace autofill {
+
+namespace mojom {
+class AutofillVisibilityObserver;
+}  // namespace mojom
 
 // Histogram for recording the renderer event used to infer a form submission.
 inline constexpr char kAutofillSubmissionDetectionSourceHistogram[] =
@@ -103,8 +112,8 @@ class AutofillDriverIOS final : public AutofillDriver,
       const FillId& fill_id,
       bool supports_refill,
       const url::Origin& triggered_origin,
-      const base::flat_map<FieldGlobalId, FieldType>& field_type_map,
-      const Section& section_for_clear_form_on_ios) override;
+      const absl::flat_hash_map<FieldGlobalId, FieldType>& field_type_map)
+      override;
   void ApplyFieldAction(mojom::FieldActionType action_type,
                         mojom::ActionPersistence action_persistence,
                         const FieldGlobalId& field_id,
@@ -127,6 +136,9 @@ class AutofillDriverIOS final : public AutofillDriver,
   void TriggerFormExtractionInAllFrames(
       base::OnceCallback<void(bool)> form_extraction_finished_callback)
       override;
+  void ObserveFieldVisibility(
+      const FieldGlobalId& field_id,
+      mojo::PendingRemote<mojom::AutofillVisibilityObserver> observer) override;
   void GetFourDigitCombinationsFromDom(
       base::OnceCallback<void(const std::vector<std::string>&)>
           potential_matches) override;
@@ -136,14 +148,24 @@ class AutofillDriverIOS final : public AutofillDriver,
       uint32_t number_of_ancestor_levels_to_search,
       base::OnceCallback<void(const std::string& amount)> response_callback)
       override;
-  void DispatchEmailVerifiedEvent(
-      FieldGlobalId field_id,
+  void SendEmailVerificationToken(
+      FieldGlobalId email_field_id,
+      const std::string& email,
+      FieldGlobalId token_field_id,
       const std::string& presentation_token) override;
+  void UpdateEmailVerificationState(
+      const FieldGlobalId& email_field_id,
+      mojom::EmailVerificationState state) override;
+  bool IsSafeToFill(const FormFieldData& field,
+                    FieldType filled_type,
+                    const url::Origin& main_origin,
+                    const url::Origin& trigger_origin) const override;
 
   void RendererShouldSetSuggestionAvailability(
       const FieldGlobalId& field_id,
       mojom::AutofillSuggestionAvailability suggestion_availability) override;
   std::optional<net::IsolationInfo> GetIsolationInfo() override;
+  void ScrollFieldIntoView(FieldGlobalId field_id) override;
 
   bool is_processed() const { return processed_; }
   void set_processed(bool processed) { processed_ = processed; }
@@ -158,9 +180,11 @@ class AutofillDriverIOS final : public AutofillDriver,
   // irrelevant args omitted). See
   // components/autofill/content/common/mojom/autofill_driver.mojom
   // for further documentation of each method.
+  // TODO(crbug.com/514243241): Make these functions take FormData by value to
+  // avoid copying (as done for FormsSeen).
   void AskForValuesToFill(const FormData& form, const FieldGlobalId& field_id);
   void DidAutofillForm(const FormData& form);
-  void FormsSeen(const std::vector<FormData>& updated_forms,
+  void FormsSeen(std::vector<FormData> updated_forms,
                  const std::vector<FormGlobalId>& removed_forms);
   void FormSubmitted(const FormData& form,
                      mojom::SubmissionSource submission_source);
@@ -219,7 +243,7 @@ class AutofillDriverIOS final : public AutofillDriver,
 
   // Sets `this` as the parent of the frame identified by `token` and with
   // `form` as parent.
-  void SetSelfAsParent(const autofill::FormData& form, LocalFrameToken token);
+  void SetSelfAsParent(const FormData& form, LocalFrameToken token);
 
   // Updates the saved information about the last interacted form or formless
   // field.
@@ -236,8 +260,8 @@ class AutofillDriverIOS final : public AutofillDriver,
   void ClearLastInteractedForm();
 
   // Updates the snapshot of the last interacted form or formless form with
-  // field data in `autofill::FieldDataManager`. Called before sending a
-  // submitted form to `autofill::AutofillManager`.
+  // field data in `FieldDataManager`. Called before sending a submitted form to
+  // `AutofillManager`.
   void UpdateLastInteractedFormFromFieldDataManager();
 
   // Whether a form submission can be inferred after a form removal event.

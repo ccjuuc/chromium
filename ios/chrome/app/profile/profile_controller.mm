@@ -37,9 +37,9 @@
 #import "ios/chrome/app/application_delegate/metrics_mediator.h"
 #import "ios/chrome/app/deferred_initialization_runner.h"
 #import "ios/chrome/app/deferred_initialization_task_names.h"
+#import "ios/chrome/app/profile/app_icon_launched_profile_agent.h"
 #import "ios/chrome/app/profile/application_storage_metrics.h"
 #import "ios/chrome/app/profile/certificate_policy_profile_agent.h"
-#import "ios/chrome/app/profile/docking_promo_profile_agent.h"
 #import "ios/chrome/app/profile/features.h"
 #import "ios/chrome/app/profile/first_run_profile_agent.h"
 #import "ios/chrome/app/profile/identity_confirmation_profile_agent.h"
@@ -54,6 +54,7 @@
 #import "ios/chrome/app/profile/welcome_back_screen_profile_agent.h"
 #import "ios/chrome/app/spotlight/spotlight_manager.h"
 #import "ios/chrome/app/tests_hook.h"
+#import "ios/chrome/browser/backend_promo/model/backend_promo_profile_agent.h"
 #import "ios/chrome/browser/content_settings/model/host_content_settings_map_factory.h"
 #import "ios/chrome/browser/credential_provider/model/credential_provider_buildflags.h"
 #import "ios/chrome/browser/cross_platform_promos/model/cross_platform_promos_service.h"
@@ -65,16 +66,15 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/first_run/public/features.h"
 #import "ios/chrome/browser/mailto_handler/model/mailto_handler_service_factory.h"
+#import "ios/chrome/browser/ntp/model/home_background_customization_promo_profile_agent.h"
 #import "ios/chrome/browser/profile_metrics/model/profile_activity_profile_agent.h"
-#import "ios/chrome/browser/reading_list/model/reading_list_download_service.h"
-#import "ios/chrome/browser/reading_list/model/reading_list_download_service_factory.h"
 #import "ios/chrome/browser/search_engines/model/extension_search_engine_data_updater.h"
-#import "ios/chrome/browser/search_engines/model/search_engines_util.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/sessions/model/session_constants.h"
 #import "ios/chrome/browser/sessions/model/session_restoration_service.h"
 #import "ios/chrome/browser/sessions/model/session_restoration_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state_animator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state_observer.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list.h"
@@ -123,9 +123,9 @@ NSString* const kStartupPurgeUnassociatedData = @"StartupPurgeUnassociatedData";
 NSString* const kStartupCreateMailtoHandlerService =
     @"StartupCreateMailtoHandlerService";
 
-// Name of the block initializing the ReadingListDownloadService instance.
-NSString* const kStartupInitReadingListDownloadService =
-    @"StartupInitReadingListDownloadService";
+// Name of the block cleaning up the offline reading list directory.
+NSString* const kStartupCleanupReadingListOfflineData =
+    @"StartupCleanupReadingListOfflineData";
 
 // Name of the block that resynchronize the Spotlight index.
 NSString* const kStartResyncSpotlightIndex = @"StartResyncSpotlightIndex";
@@ -191,6 +191,9 @@ void RemoveSessionsFromSessionsToDiscard(const SessionIds& session_ids,
   std::ranges::set_difference(
       attrs.GetDiscardedSessions(), session_ids,
       std::inserter(discarded_sessions, discarded_sessions.end()));
+  for (const std::string& session_id : session_ids) {
+    attrs.ClearSessionScopedPrefs(session_id);
+  }
   attrs.SetDiscardedSessions(discarded_sessions);
 }
 
@@ -483,7 +486,9 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
 
   // Save the cookies unless there is already a save in progress. This avoid
   // posting multiple tasks if the user switch rapidly between multiple apps.
-  if (!_savingCookies) {
+  if (!base::FeatureList::IsEnabled(
+          kDisableCookieStoreIOSFlushOnBackgrounding) &&
+      !_savingCookies) {
     _savingCookies = YES;
 
     // Save the cookie while ensuring the application will be given time for
@@ -617,7 +622,6 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
   translate::TranslateMetricsLoggerImpl::LogApplicationStartMetrics(
       ChromeIOSTranslateClient::CreateTranslatePrefs(prefs));
 
-  search_engines::UpdateSearchEngineCountryCodeIfNeeded(prefs);
 
   // Force desktop mode when racoon is enabled.
   if (ios::provider::IsRaccoonEnabled()) {
@@ -629,7 +633,7 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
     }
   }
 
-  if (!tests_hook::LoadMinimalAppUI()) {
+  if (!tests_hook::ShouldLoadMinimalAppUI()) {
     [self attachProfileAgents];
   }
 }
@@ -645,24 +649,21 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
   [_state addAgent:[[SearchEngineChoiceProfileAgent alloc] init]];
   [_state addAgent:[[SessionMetricsProfileAgent alloc] init]];
 
-  if (IsDockingPromoEnabled()) {
-    switch (DockingPromoExperimentTypeEnabled()) {
-      case DockingPromoDisplayTriggerArm::kDuringFRE:
-        break;
-      case DockingPromoDisplayTriggerArm::kAfterFRE:
-      case DockingPromoDisplayTriggerArm::kAppLaunch:
-        [_state addAgent:[[DockingPromoProfileAgent alloc] init]];
-        break;
-    }
+  if (IsDockingPromoV2Enabled()) {
+    [_state addAgent:[[AppIconLaunchedProfileAgent alloc] init]];
   }
 
   if (IsWelcomeBackEnabled()) {
     [_state addAgent:[[WelcomeBackScreenProfileAgent alloc] init]];
   }
 
-  if (IsSyncedSetUpEnabled()) {
-    [_state addAgent:[[SyncedSetUpProfileAgent alloc] init]];
+  [_state addAgent:[[SyncedSetUpProfileAgent alloc] init]];
+
+  if (IsIOSBackendPromoServiceIntegrationEnabled()) {
+    [_state addAgent:[[BackendPromoProfileAgent alloc] init]];
   }
+
+  [_state addAgent:[[HomeBackgroundCustomizationPromoProfileAgent alloc] init]];
 }
 
 - (void)maybeContinueForegroundInitialization {
@@ -742,7 +743,7 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
   [self scheduleClearingSessionCookies];
   [self scheduleCleanupSessionStateCache];
   [self scheduleCreateMailtoHandlerService];
-  [self scheduleInitializeReadingListDownloadService];
+  [self scheduleCleanupReadingListOfflineData];
   [self scheduleResyncSpotlightIndex];
   [self scheduleCleanupFavicons];
   [self scheduleLogStorageMetrics];
@@ -830,15 +831,15 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
                                      }];
 }
 
-// Schedules initialization of the ReadingList download service.
-- (void)scheduleInitializeReadingListDownloadService {
+// Schedules cleanup of the ReadingList offline data directory.
+// TODO(crbug.com/522229299): Remove after Jun 2027.
+- (void)scheduleCleanupReadingListOfflineData {
   DCHECK(_state.deferredRunner);
   __weak ProfileController* weakSelf = self;
-  [_state.deferredRunner
-      enqueueBlockNamed:kStartupInitReadingListDownloadService
-                  block:^{
-                    [weakSelf initializeReadingListDownloadService];
-                  }];
+  [_state.deferredRunner enqueueBlockNamed:kStartupCleanupReadingListOfflineData
+                                     block:^{
+                                       [weakSelf cleanupReadingListOfflineData];
+                                     }];
 }
 
 // Schedules resynchronisation of the Spotlight index.
@@ -901,11 +902,18 @@ void RecordDiscardedSceneConnectedAfterBeingPurged(
   std::ignore = MailtoHandlerServiceFactory::GetForProfile(_state.profile);
 }
 
-// Initializes the ReadingListDownloadService.
-- (void)initializeReadingListDownloadService {
+// Cleans up the ReadingList offline data directory.
+- (void)cleanupReadingListOfflineData {
   DCHECK(_state.profile);
-  ReadingListDownloadServiceFactory::GetForProfile(_state.profile)
-      ->Initialize();
+  ProfileIOS* profile = _state.profile;
+  base::FilePath offline_directory =
+      profile->GetStatePath().Append(FILE_PATH_LITERAL("Offline"));
+  base::ThreadPool::PostTask(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+       base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+      base::BindOnce(base::IgnoreResult(&base::DeletePathRecursively),
+                     offline_directory));
 }
 
 // Resynchronizes the spotlight index.

@@ -13,12 +13,12 @@
 #include "ios/chrome/browser/favicon/model/favicon_service_factory.h"
 #include "ios/chrome/browser/favicon/model/ios_chrome_large_icon_service_factory.h"
 #include "ios/chrome/browser/history/model/top_sites_factory.h"
-#include "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #include "ios/chrome/browser/ntp_tiles/model/ios_custom_links_manager_factory.h"
 #include "ios/chrome/browser/ntp_tiles/model/ios_popular_sites_factory.h"
 #include "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #include "ios/chrome/browser/supervised_user/model/supervised_user_service_factory.h"
+#include "ios/chrome/browser/supervised_user/model/supervised_user_url_filtering_service_factory.h"
 #include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
@@ -26,12 +26,12 @@ std::unique_ptr<ntp_tiles::MostVisitedSites>
 IOSMostVisitedSitesFactory::NewForBrowserState(ProfileIOS* profile) {
   return std::make_unique<ntp_tiles::MostVisitedSites>(
       profile->GetPrefs(), IdentityManagerFactory::GetForProfile(profile),
-      SupervisedUserServiceFactory::GetForProfile(profile),
+      supervised_user::SupervisedUserServiceFactory::GetForProfile(profile),
+      supervised_user::SupervisedUserUrlFilteringServiceFactory::GetForProfile(
+          profile),
       ios::TopSitesFactory::GetForProfile(profile),
       IOSPopularSitesFactory::NewForBrowserState(profile),
-      IsContentSuggestionsCustomizable()
-          ? IOSCustomLinksManagerFactory::NewForProfile(profile)
-          : nullptr,
+      IOSCustomLinksManagerFactory::NewForProfile(profile),
       /*enterprise_shortcuts=*/nullptr,
       std::make_unique<ntp_tiles::IconCacherImpl>(
           ios::FaviconServiceFactory::GetForProfile(

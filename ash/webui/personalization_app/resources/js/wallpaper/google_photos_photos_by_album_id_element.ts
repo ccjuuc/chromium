@@ -20,7 +20,6 @@ import {afterNextRender} from 'chrome://resources/polymer/v3_0/polymer/polymer_b
 
 import type {CurrentWallpaper, GooglePhotosAlbum, GooglePhotosPhoto, WallpaperProviderInterface} from '../../personalization_app.mojom-webui.js';
 import {WallpaperType} from '../../personalization_app.mojom-webui.js';
-import {isGooglePhotosSharedAlbumsEnabled} from '../load_time_booleans.js';
 import {dismissErrorAction, setErrorAction} from '../personalization_actions.js';
 import type {PersonalizationStateError} from '../personalization_state.js';
 import {WithPersonalizationStore} from '../personalization_store.js';
@@ -42,7 +41,7 @@ function getPlaceholders(): GooglePhotosPhoto[] {
       id: PLACEHOLDER_ID,
       name: '',
       date: '',
-      url: {url: ''},
+      url: '',
       dedupKey: null,
       location: null,
     };
@@ -87,13 +86,6 @@ export class GooglePhotosPhotosByAlbumIdElement extends
       photosByAlbumIdLoading_: Object,
       photosByAlbumIdResumeTokens_: Object,
 
-      isSharedAlbumsEnabled_: {
-        type: Boolean,
-        value() {
-          return isGooglePhotosSharedAlbumsEnabled();
-        },
-      },
-
       error_: {
         type: Object,
         value: null,
@@ -109,41 +101,39 @@ export class GooglePhotosPhotosByAlbumIdElement extends
   }
 
   /** The currently selected album id. */
-  albumId: string|undefined;
+  declare albumId: string|undefined;
 
   /** Whether or not this element is currently hidden. */
-  override hidden: boolean;
+  declare hidden: boolean;
 
   /** The list of photos for the currently selected album id. */
-  private album_: GooglePhotosPhoto[];
+  declare private album_: GooglePhotosPhoto[];
 
   /** The list of Google Photos albums. */
-  private albums_: GooglePhotosAlbum[]|null|undefined;
+  declare private albums_: GooglePhotosAlbum[]|null|undefined;
 
   /** The list of shared Google Photos albums. */
-  private albumsShared_: GooglePhotosAlbum[]|null|undefined;
+  declare private albumsShared_: GooglePhotosAlbum[]|null|undefined;
 
   /** The currently selected wallpaper. */
-  private currentSelected_: CurrentWallpaper|null;
+  declare private currentSelected_: CurrentWallpaper|null;
 
   /** The pending selected wallpaper. */
-  private pendingSelected_: DisplayableImage|null;
+  declare private pendingSelected_: DisplayableImage|null;
 
   /** The list of photos by album id. */
-  private photosByAlbumId_: Record<string, GooglePhotosPhoto[]|null|undefined>|
-      undefined;
+  declare private photosByAlbumId_:
+      Record<string, GooglePhotosPhoto[]|null|undefined>|undefined;
 
   /** Whether the list of photos by album id is currently loading. */
-  private photosByAlbumIdLoading_: Record<string, boolean>|undefined;
+  declare private photosByAlbumIdLoading_: Record<string, boolean>|undefined;
 
   /** The resume tokens needed to fetch the next page of photos by album id. */
-  private photosByAlbumIdResumeTokens_: Record<string, string|null>|undefined;
-
-  /** Whether feature flag |kGooglePhotosSharedAlbums| is enabled. */
-  private isSharedAlbumsEnabled_: boolean;
+  declare private photosByAlbumIdResumeTokens_: Record<string, string|null>|
+      undefined;
 
   /** The current personalization error state. */
-  private error_: PersonalizationStateError|null;
+  declare private error_: PersonalizationStateError|null;
 
   /** The singleton wallpaper provider interface. */
   private wallpaperProvider_: WallpaperProviderInterface =
@@ -312,20 +302,13 @@ export class GooglePhotosPhotosByAlbumIdElement extends
     assert(e.model.photo, 'google photos album photo selected event has photo');
     if (!this.isPhotoPlaceholder_(e.model.photo)) {
       selectWallpaper(e.model.photo, this.wallpaperProvider_, this.getStore());
-      // Depends on whether shared albums feature is enabled, records Google
-      // Photos source metric for all albums, owned albums or shared albums
-      // accordingly.
-      if (!this.isSharedAlbumsEnabled_) {
+
+      const isAlbumShared =
+          this.isAlbumShared_(this.albumId, this.albums_, this.albumsShared_);
+      if (isAlbumShared !== null) {
         recordWallpaperGooglePhotosSourceUMA(
-            WallpaperGooglePhotosSource.ALBUMS);
-      } else {
-        const isAlbumShared =
-            this.isAlbumShared_(this.albumId, this.albums_, this.albumsShared_);
-        if (isAlbumShared !== null) {
-          recordWallpaperGooglePhotosSourceUMA(
-              isAlbumShared ? WallpaperGooglePhotosSource.SHARED_ALBUMS :
-                              WallpaperGooglePhotosSource.OWNED_ALBUMS);
-        }
+            isAlbumShared ? WallpaperGooglePhotosSource.SHARED_ALBUMS :
+                            WallpaperGooglePhotosSource.OWNED_ALBUMS);
       }
     }
   }

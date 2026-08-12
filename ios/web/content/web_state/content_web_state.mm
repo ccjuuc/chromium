@@ -6,6 +6,7 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/functional/callback_helpers.h"
+#import "base/notimplemented.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "components/embedder_support/ios/delegate/color_chooser/color_chooser_ios.h"
@@ -21,6 +22,7 @@
 #import "ios/web/content/web_state/content_web_state_builder.h"
 #import "ios/web/content/web_state/crc_web_view_proxy_impl.h"
 #import "ios/web/content/web_state/crc_web_viewport_container_view.h"
+#import "ios/web/public/content_type_util.h"
 #import "ios/web/public/favicon/favicon_url.h"
 #import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/navigation/navigation_util.h"
@@ -30,11 +32,11 @@
 #import "ios/web/public/session/proto/storage.pb.h"
 #import "ios/web/public/web_state_delegate.h"
 #import "ios/web/public/web_state_observer.h"
-#import "ios/web/util/content_type_util.h"
 #import "net/cert/x509_util.h"
 #import "net/cert/x509_util_apple.h"
 #import "services/network/public/mojom/referrer_policy.mojom-shared.h"
 #import "skia/ext/skia_utils_ios.h"
+#import "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #import "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
 #import "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
 #import "ui/display/display.h"
@@ -212,6 +214,17 @@ ContentWebState::~ContentWebState() {
   NSNotificationCenter* default_center = [NSNotificationCenter defaultCenter];
   [default_center removeObserver:keyboard_showing_observer_];
   [default_center removeObserver:keyboard_hiding_observer_];
+
+  // Destroy all attached UserData before invalidating the vtable. As most of
+  // them have a pointer back to the WebState, this ensures they are destroyed
+  // while the pointer is still valid (i.e. they can use the pointer in their
+  // destructor, even if they don't observe WebStateDestroyed).
+  //
+  // This also aligns with the implementation of WebStateImpl of destroying
+  // the attached UserData before the ObserverList<...> and thus giving them
+  // an opportunity to remove themselves from the list before their destructor
+  // checks if the list are empty on destruction.
+  ClearAllUserData();
 }
 
 content::WebContents* ContentWebState::GetWebContents() {
@@ -352,6 +365,24 @@ void ContentWebState::LoadSimulatedRequest(const GURL& url,
 void ContentWebState::Stop() {
   DCHECK(web_contents_);
   web_contents_->Stop();
+}
+
+std::optional<std::string> ContentWebState::GetUserAgentOverride() const {
+  DCHECK(web_contents_);
+  const std::string& ua_override =
+      web_contents_->GetUserAgentOverride().ua_string_override;
+  // `web_contents_` uses empty string to indicate "no override". The
+  // distinction between `std::nullopt` and `std::optional("")` is lost.
+  return ua_override.empty() ? std::nullopt : std::make_optional(ua_override);
+}
+
+void ContentWebState::SetUserAgentOverride(
+    std::optional<std::string> ua_override) {
+  DCHECK(web_contents_);
+  // `web_contents_` expects an empty string when there is no override.
+  web_contents_->SetUserAgentOverride(
+      blink::UserAgentOverride::UserAgentOnly(ua_override.value_or("")),
+      /*override_in_new_tabs=*/false);
 }
 
 const NavigationManager* ContentWebState::GetNavigationManager() const {
@@ -539,6 +570,15 @@ id ContentWebState::GetActivityItem() {
   return nil;
 }
 
+bool ContentWebState::IsCustomOpenPanelSupported() const {
+  NOTIMPLEMENTED();
+  return false;
+}
+
+void ContentWebState::SetCustomOpenPanelSupported(bool supports) {
+  NOTIMPLEMENTED();
+}
+
 UIColor* ContentWebState::GetThemeColor() {
   auto color = web_contents_->GetThemeColor();
   if (color) {
@@ -684,7 +724,8 @@ void ContentWebState::TitleWasSet(content::NavigationEntry* entry) {
 
 void ContentWebState::DidUpdateFaviconURL(
     content::RenderFrameHost* render_frame_host,
-    const std::vector<blink::mojom::FaviconURLPtr>& candidates) {
+    const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+    blink::mojom::FaviconUpdateReason reason) {
   if (!render_frame_host->IsInPrimaryMainFrame()) {
     return;
   }
@@ -743,6 +784,10 @@ content::WebContents* ContentWebState::AddNewContents(
                                user_gesture);
   DCHECK(!child_web_contents_);
   return nullptr;
+}
+
+void ContentWebState::CloseContents(content::WebContents* source) {
+  CloseWebState();
 }
 
 int ContentWebState::GetTopControlsHeight() {

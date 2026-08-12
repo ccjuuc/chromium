@@ -14,8 +14,6 @@
 
 namespace media {
 
-class CrossOriginDataSource;
-
 // Abstracting informational methods into DataSourceInfo allows
 // "meta-datasource" objects like HlsDataSourceProvider to query it's entire
 // set of dependent data sources when calculating the data here.
@@ -28,16 +26,33 @@ class MEDIA_EXPORT DataSourceInfo {
 
   // DataSource implementations that might make requests must ensure the value
   // is accurate for cross origin resources.
-  virtual bool WouldTaintOrigin() = 0;
+  virtual bool WouldTaintOrigin() const = 0;
 
   // Returns true if we are performing streaming. In this case seeking is
   // not possible.
-  virtual bool IsStreaming() = 0;
+  virtual bool IsStreaming() const = 0;
 };
 
 class MEDIA_EXPORT DataSource : public DataSourceInfo {
  public:
   using ReadCB = base::OnceCallback<void(int)>;
+  using DataSourceCb = base::OnceCallback<void(std::unique_ptr<DataSource>)>;
+  using EventCb = base::RepeatingCallback<void(const DataSource*)>;
+
+  enum class RangeMode {
+    kRangeRequest,
+    kFullRequest,
+  };
+
+  enum class CacheMode {
+    kBypassCache,
+    kHitCache,
+  };
+
+  enum class EncodingMode {
+    kIdentity,
+    kAllowGzip,
+  };
 
   enum { kReadError = -1, kAborted = -2 };
 
@@ -100,6 +115,11 @@ class MEDIA_EXPORT DataSource : public DataSourceInfo {
   // preload value.
   virtual void SetPreload(media::DataSource::Preload preload);
 
+  // Returns whether this data source was involved in a web-based redirection.
+  // The default implementation is always false, as most data source objects
+  // (like MemoryDataSource and FileDataSource) cannot do redirection at all.
+  virtual bool DidRedirect() const;
+
   // Gets the url for this data source, if it exists. By default this returns
   // an empty GURL.
   virtual GURL GetUrlAfterRedirects() const;
@@ -113,9 +133,6 @@ class MEDIA_EXPORT DataSource : public DataSourceInfo {
   // sources won't care too much about these events though.
   virtual void OnMediaPlaybackRateChanged(double playback_rate);
   virtual void OnMediaIsPlaying();
-
-  // Gets a CrossOriginDataSource version of |this|, or nullptr if it isn't one.
-  virtual CrossOriginDataSource* GetAsCrossOriginDataSource();
 };
 
 }  // namespace media

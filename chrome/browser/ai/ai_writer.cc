@@ -9,8 +9,8 @@
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ai/ai_context_bound_object.h"
-#include "chrome/browser/ai/ai_utils.h"
 #include "components/language/core/common/locale_util.h"
+#include "components/on_device_ai/ai_utils.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/common_types.pb.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -77,7 +77,7 @@ AIWriter::AIWriter(AIContextBoundObjectSet& context_bound_object_set,
 
 AIWriter::~AIWriter() {
   for (auto& responder : responder_set_) {
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorSessionDestroyed);
   }
@@ -102,16 +102,23 @@ AIWriter::ToProtoOptions(
 }
 
 // static
-base::flat_set<std::string_view> AIWriter::GetSupportedLanguageBaseCodes() {
+std::optional<base::flat_set<std::string>>
+AIWriter::GetEnabledLanguageBaseCodes() {
   // Comma-separated language codes to enable; or "*" enables all supported.
   const base::FeatureParam<std::string> kAIWriterAPILanguagesEnabled{
-      &blink::features::kAIWriterAPI, "langs", /*default=*/"en,es,ja"};
+      &blink::features::kAIWriterAPI, "langs",
+      /*default_value=*/"en,es,ja,de,fr"};
+  return on_device_ai::GetEnabledLanguagesForFeature(
+      GetDefaultSupportedLanguageBaseCodes(), kAIWriterAPILanguagesEnabled);
+}
+
+// static
+base::flat_set<std::string> AIWriter::GetDefaultSupportedLanguageBaseCodes() {
   // TODO(crbug.com/394841624): Get supported languages from the model config.
   auto kSupportedBaseLanguages =
-      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es"});
-  return AIUtils::RestrictSupportedLanguagesForFeature(
-      base::MakeFlatSet<std::string_view>(kSupportedBaseLanguages),
-      kAIWriterAPILanguagesEnabled);
+      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es", "de", "fr"});
+  return base::flat_set<std::string>(kSupportedBaseLanguages.begin(),
+                                     kSupportedBaseLanguages.end());
 }
 
 void AIWriter::Write(const std::string& input,
@@ -140,23 +147,24 @@ void AIWriter::DidGetExecutionInputSizeForWrite(
     return;
   }
 
+  // TODO(crbug.com/494980521): Catch real crash disconnects to surface errors.
   if (!session_wrapper_.session()) {
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorSessionDestroyed);
     return;
   }
 
   if (!result.has_value()) {
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
-        blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+        blink::mojom::ModelStreamingResponseStatus::kErrorFailedToCountTokens);
     return;
   }
 
   uint32_t quota = blink::mojom::kWritingAssistanceMaxInputTokenSize;
   if (result.value() > quota) {
-    AIUtils::SendStreamingStatus(
+    on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorInputTooLarge,
         blink::mojom::QuotaErrorInfo::New(result.value(), quota));
@@ -178,8 +186,8 @@ void AIWriter::ModelExecutionCallback(
     return;
   }
   if (!result.response.has_value()) {
-    AIUtils::SendStreamingStatus(
-        responder, AIUtils::ConvertOnDeviceError(result.response.error()));
+    on_device_ai::SendStreamingStatus(
+        responder, on_device_ai::ConvertOnDeviceError(result.response.error()));
     return;
   }
 

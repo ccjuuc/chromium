@@ -7,6 +7,12 @@
  */
 let instance: WindowProxy|null = null;
 
+declare global {
+  interface Window {
+    webkitSpeechRecognition: typeof SpeechRecognition;
+  }
+}
+
 export class WindowProxy {
   static getInstance(): WindowProxy {
     return instance || (instance = new WindowProxy());
@@ -22,5 +28,21 @@ export class WindowProxy {
 
   clearTimeout(id: number|null) {
     window.clearTimeout(id !== null ? id : undefined);
+  }
+
+  navigate(url: string) {
+    window.location.href = url;
+  }
+
+  matchMedia(query: string): MediaQueryList {
+    return window.matchMedia(query);
+  }
+
+  hasWebkitSpeechRecognition(): boolean {
+    return 'webkitSpeechRecognition' in window;
+  }
+
+  createSpeechRecognition(): SpeechRecognition {
+    return new window.webkitSpeechRecognition();
   }
 }

@@ -14,12 +14,15 @@
 #include "base/time/clock.h"
 #include "chrome/browser/ash/login/saml/in_session_password_sync_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/components/login/auth/auth_factor_editor.h"
 #include "chromeos/ash/components/login/auth/auth_status_consumer.h"
 #include "chromeos/ash/components/login/auth/public/authentication_error.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/proximity_auth/screenlock_bridge.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/session_manager/core/session_manager_observer.h"
+
+class PrefService;
 
 namespace user_manager {
 class User;
@@ -32,6 +35,7 @@ class AuthenticationError;
 class PasswordUpdateFlow;
 
 using PasswordChangedCallback = ::base::RepeatingClosure;
+using OnGetAuthFactorsConfigurationExitCallback = ::base::RepeatingClosure;
 
 // Manages online re-auth requests triggered by online signin policy or by
 // checking validity of SAML_PASSWORD sync token and sends user through online
@@ -42,7 +46,8 @@ class LockScreenReauthManager : public KeyedService,
                                 public session_manager::SessionManagerObserver,
                                 public AuthStatusConsumer {
  public:
-  explicit LockScreenReauthManager(Profile* primary_profile);
+  // `local_state` must be non-null and must outlive `this`.
+  LockScreenReauthManager(PrefService* local_state, Profile* primary_profile);
   ~LockScreenReauthManager() override;
 
   LockScreenReauthManager(const LockScreenReauthManager&) = delete;
@@ -89,6 +94,11 @@ class LockScreenReauthManager : public KeyedService,
   // Resets `is_reauth_required_by_saml_token_mismatch_` flag.
   void ResetReauthRequiredBySamlTokenDismatch();
 
+  // Sets the exit callback that is run when the `OnGetAuthFactorsConfiguration`
+  // is executed, used for tests.
+  void SetGetAuthfactorsConfigurationCallbackForTesting(
+      OnGetAuthFactorsConfigurationExitCallback callback);
+
  private:
   // Triggered when cookies are transferred to the user profile
   void OnCookiesTransferred();
@@ -103,10 +113,17 @@ class LockScreenReauthManager : public KeyedService,
   void OnPasswordUpdateFailure(std::unique_ptr<UserContext> user_context,
                                AuthenticationError error);
 
+  void OnGetAuthFactorsConfiguration(ReauthReason reauth_reason,
+                                     std::unique_ptr<UserContext> user_context,
+                                     std::optional<AuthenticationError> error);
+
+  void MaybeForceReauthOnLockScreenInternal(ReauthReason reauth_reason);
+
   // Send the reason(s) why a user is required to reauthenticate online in the
   // lock screen to UMA.
   void SendLockscreenReauthReason();
 
+  const raw_ref<PrefService> local_state_;
   const raw_ptr<Profile> primary_profile_;
   const raw_ptr<const user_manager::User, DanglingUntriaged> primary_user_;
   UserContext user_context_;
@@ -116,10 +133,14 @@ class LockScreenReauthManager : public KeyedService,
   // Used to authenticate the user.
   scoped_refptr<AuthSessionAuthenticator> auth_session_authenticator_;
   std::unique_ptr<PasswordUpdateFlow> password_update_flow_;
+  std::unique_ptr<AuthFactorEditor> auth_factor_editor_;
 
   InSessionPasswordSyncManager in_session_password_sync_manager_;
 
   PasswordChangedCallback password_changed_callback_;
+
+  OnGetAuthFactorsConfigurationExitCallback
+      auth_factors_configuration_exit_callback_for_testing_;
 
   friend class LockScreenReauthManagerTest;
   friend class InSessionPasswordSyncManagerTest;

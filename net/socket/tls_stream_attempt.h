@@ -73,6 +73,7 @@ class NET_EXPORT_PRIVATE TlsStreamAttempt final : public StreamAttempt {
   // ServiceEndpoint) is applied within TlsStreamAttempt.
   TlsStreamAttempt(const StreamAttemptParams* params,
                    IPEndPoint ip_endpoint,
+                   handles::NetworkHandle target_network,
                    perfetto::Track track,
                    HostPortPair host_port_pair,
                    SSLConfig base_ssl_config,
@@ -85,7 +86,7 @@ class NET_EXPORT_PRIVATE TlsStreamAttempt final : public StreamAttempt {
 
   // StreamAttempt implementations:
   LoadState GetLoadState() const override;
-  base::Value::Dict GetInfoAsValue() const override;
+  base::DictValue GetInfoAsValue() const override;
   scoped_refptr<SSLCertRequestInfo> GetCertRequestInfo() override;
 
   bool IsTcpHandshakeCompleted() { return tcp_handshake_completed_; }
@@ -105,7 +106,7 @@ class NET_EXPORT_PRIVATE TlsStreamAttempt final : public StreamAttempt {
 
   // StreamAttempt methods:
   int StartInternal() override;
-  base::Value::Dict GetNetLogStartParams() override;
+  base::DictValue GetNetLogStartParams() override;
 
   void OnIOComplete(int rv);
 
@@ -136,14 +137,6 @@ class NET_EXPORT_PRIVATE TlsStreamAttempt final : public StreamAttempt {
 
   std::optional<SSLConfig> ssl_config_;
   std::optional<std::vector<uint8_t>> ech_retry_configs_;
-  // Set to true when the TlsStreamAttempt retries itself after receiving a
-  // certificate error when sending TLS Trust Anchor IDs. Used to ensure that we
-  // only retry once per connection attempt.
-  bool retried_for_trust_anchor_ids_ = false;
-  // Used for metrics. Set to true when the initial connection attempt used a
-  // service endpoint that advertised trust anchor IDs and ECH, respectively,
-  // whether or not sufficient features were enabled to use them.
-  bool trust_anchor_ids_from_dns_ = false;
   bool is_ech_capable_ = false;
 
   base::WeakPtrFactory<TlsStreamAttempt> weak_ptr_factory_{this};

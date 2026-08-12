@@ -4,13 +4,14 @@
 
 package org.chromium.chrome.browser.suggestions.tile;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -21,7 +22,12 @@ import static org.chromium.chrome.browser.suggestions.tile.MostVisitedTilesPrope
 import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.Resources;
-import android.util.DisplayMetrics;
+import android.view.ContextThemeWrapper;
+import android.view.ViewGroup;
+import android.view.ViewGroup.LayoutParams;
+import android.view.ViewGroup.MarginLayoutParams;
+
+import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -37,13 +43,10 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.suggestions.SiteSuggestion;
@@ -65,11 +68,8 @@ import java.util.ArrayList;
 @Config(manifest = Config.NONE)
 public class MostVisitedMediatorUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Mock private Context mContext;
-    @Mock Resources mResources;
-    @Mock Configuration mConfiguration;
     @Mock UiConfig mUiConfig;
-    @Mock DisplayMetrics mDisplayMetrics;
+    @Mock ViewGroup mMvTilesContainerLayout;
     @Mock MostVisitedTilesLayout mMvTilesLayout;
     @Mock Tile mTile;
     @Mock SuggestionsTileView mTileView;
@@ -89,20 +89,29 @@ public class MostVisitedMediatorUnitTest {
     private ArgumentCaptor<NtpCustomizationConfigManager.HomepageStateListener>
             mHomepageStateListenerCaptor;
 
+    private Context mContext;
+    private Resources mResources;
     private FakeMostVisitedSites mMostVisitedSites;
     private PropertyModel mModel;
     private MostVisitedTilesMediator mMediator;
 
+    private int mTileViewPaddingEdgePortrait;
+    private int mTileViewPaddingLandscape;
+
     @Before
     public void setUp() {
+        mContext =
+                new ContextThemeWrapper(
+                        ApplicationProvider.getApplicationContext(),
+                        R.style.Theme_BrowserUI_DayNight);
+        mResources = mContext.getResources();
+        mResources.getDisplayMetrics().widthPixels = 1000;
         mModel = new PropertyModel(MostVisitedTilesProperties.ALL_KEYS);
-        when(mResources.getConfiguration()).thenReturn(mConfiguration);
-        mDisplayMetrics.widthPixels = 1000;
-        when(mResources.getDisplayMetrics()).thenReturn(mDisplayMetrics);
-        when(mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_portrait))
-                .thenReturn(12);
-        when(mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape)).thenReturn(16);
-        when(mResources.getDimensionPixelOffset(R.dimen.tile_view_width)).thenReturn(80);
+
+        mTileViewPaddingEdgePortrait =
+                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_portrait);
+        mTileViewPaddingLandscape =
+                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape);
 
         when(mUiConfig.getCurrentDisplayStyle())
                 .thenReturn(
@@ -135,23 +144,15 @@ public class MostVisitedMediatorUnitTest {
         verify(mSnapshotTileGridChangedRunnable, atLeastOnce()).run();
     }
 
-    /**
-     * Verifies the container visibility logic when both feature flags are enabled. Visibility
-     * should only depend on the toggle state.
-     */
+    /** Verifies the container visibility should only depend on the toggle state. */
     @Test
-    @Features.EnableFeatures({
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT,
-        ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION
-    })
-    public void testOnMvtToggleChanged_MvtCustomizationEnabled() {
+    public void testOnMvtToggleChanged() {
         createMediator();
         verify(mNtpCustomizationConfigManager)
                 .addListener(mHomepageStateListenerCaptor.capture(), eq(mContext), eq(false));
         NtpCustomizationConfigManager.HomepageStateListener listener =
                 mHomepageStateListenerCaptor.getValue();
 
-        // Logic: isMvtVisible = isMvtToggleOn && (true || hasTiles) => isMvtToggleOn
         verifyMvtSectionVisibility(
                 listener,
                 /* toggleIsOn= */ true,
@@ -167,43 +168,6 @@ public class MostVisitedMediatorUnitTest {
                 /* toggleIsOn= */ true,
                 /* hasTiles= */ false,
                 /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                listener,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
-    }
-
-    /**
-     * Verifies the container visibility logic when MVT customization is disabled. Visibility should
-     * depend on both the toggle state and whether there are tiles.
-     */
-    @Test
-    @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT)
-    @Features.DisableFeatures(ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION)
-    public void testOnMvtToggleChanged_MvtCustomizationDisabled() {
-        createMediator();
-        verify(mNtpCustomizationConfigManager)
-                .addListener(mHomepageStateListenerCaptor.capture(), eq(mContext), eq(false));
-        NtpCustomizationConfigManager.HomepageStateListener listener =
-                mHomepageStateListenerCaptor.getValue();
-
-        // Logic: isMvtVisible = isMvtToggleOn && (false || hasTiles) => isMvtToggleOn && hasTiles
-        verifyMvtSectionVisibility(
-                listener,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                listener,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ false);
-        verifyMvtSectionVisibility(
-                listener,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
         verifyMvtSectionVisibility(
                 listener,
                 /* toggleIsOn= */ false,
@@ -232,17 +196,20 @@ public class MostVisitedMediatorUnitTest {
     @Test
     @SuppressWarnings("DirectInvocationOnMock")
     public void testSetPortraitPaddings_NotSmallDevice() {
-        mConfiguration.orientation = Configuration.ORIENTATION_PORTRAIT;
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_PORTRAIT;
         createMediator();
         mMediator.onTileDataChanged();
 
         Assert.assertEquals(
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_portrait),
-                (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
+                mTileViewPaddingEdgePortrait, (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
+
         int tileViewWidth = mResources.getDimensionPixelOffset(R.dimen.tile_view_width);
+        int lateralMarginSum =
+                mResources.getDimensionPixelSize(R.dimen.mvt_container_lateral_margin) * 2;
         Assert.assertEquals(
                 (int)
-                        ((mDisplayMetrics.widthPixels
+                        ((mResources.getDisplayMetrics().widthPixels
+                                        - lateralMarginSum
                                         - mModel.get(HORIZONTAL_EDGE_PADDINGS)
                                         - tileViewWidth * 4.5)
                                 / 4),
@@ -252,7 +219,7 @@ public class MostVisitedMediatorUnitTest {
     @Test
     @SuppressWarnings("DirectInvocationOnMock")
     public void testSetPortraitPaddings_SmallDevice() {
-        mConfiguration.orientation = Configuration.ORIENTATION_PORTRAIT;
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_PORTRAIT;
         when(mUiConfig.getCurrentDisplayStyle())
                 .thenReturn(
                         new DisplayStyle(HorizontalDisplayStyle.NARROW, VerticalDisplayStyle.FLAT));
@@ -260,14 +227,16 @@ public class MostVisitedMediatorUnitTest {
         mMediator.onTileDataChanged();
 
         Assert.assertEquals(
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_portrait),
-                (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
+                mTileViewPaddingEdgePortrait, (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
         int tileViewWidth = mResources.getDimensionPixelOffset(R.dimen.tile_view_width_condensed);
+        int lateralMarginSum =
+                mResources.getDimensionPixelSize(R.dimen.mvt_container_lateral_margin) * 2;
         Assert.assertEquals(
                 Integer.max(
                         0,
                         (int)
-                                ((mDisplayMetrics.widthPixels
+                                ((mResources.getDisplayMetrics().widthPixels
+                                                - lateralMarginSum
                                                 - mModel.get(HORIZONTAL_EDGE_PADDINGS)
                                                 - tileViewWidth * 4.5)
                                         / 4)),
@@ -277,16 +246,13 @@ public class MostVisitedMediatorUnitTest {
     @Test
     @SuppressWarnings("DirectInvocationOnMock")
     public void testSetLandscapePaddings() {
-        mConfiguration.orientation = Configuration.ORIENTATION_LANDSCAPE;
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_LANDSCAPE;
         createMediator();
         mMediator.onTileDataChanged();
 
+        Assert.assertEquals(mTileViewPaddingLandscape, (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
         Assert.assertEquals(
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape),
-                (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
-        Assert.assertEquals(
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape),
-                (int) mModel.get(HORIZONTAL_INTERVAL_PADDINGS));
+                mTileViewPaddingLandscape, (int) mModel.get(HORIZONTAL_INTERVAL_PADDINGS));
     }
 
     @Test
@@ -305,8 +271,8 @@ public class MostVisitedMediatorUnitTest {
                 mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_tablet);
         int expectedTileViewIntervalPadding =
                 mResources.getDimensionPixelSize(R.dimen.tile_view_padding_interval_tablet);
-        mConfiguration.orientation = Configuration.ORIENTATION_PORTRAIT;
-        createMediator(/* isTablet= */ true);
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_PORTRAIT;
+        createMediator(/* isLff= */ true);
         mMediator.onTileDataChanged();
         Assert.assertEquals(
                 "The horizontal edge padding passed to the model is wrong",
@@ -317,8 +283,8 @@ public class MostVisitedMediatorUnitTest {
                 expectedTileViewIntervalPadding,
                 (int) mModel.get(HORIZONTAL_INTERVAL_PADDINGS));
 
-        mConfiguration.orientation = Configuration.ORIENTATION_LANDSCAPE;
-        createMediator(/* isTablet= */ true);
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_LANDSCAPE;
+        createMediator(/* isLff= */ true);
         mMediator.onTileDataChanged();
         Assert.assertEquals(
                 "The horizontal edge padding passed to the model is wrong",
@@ -333,143 +299,30 @@ public class MostVisitedMediatorUnitTest {
     @Test
     @SuppressWarnings("DirectInvocationOnMock")
     public void testUpdateTilesView_Phone() {
-        mConfiguration.orientation = Configuration.ORIENTATION_PORTRAIT;
-        createMediator(/* isTablet= */ false);
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_PORTRAIT;
+        createMediator(/* isLff= */ false);
         mMediator.onTileDataChanged();
         // tile_view_padding_edge_portrait
         Assert.assertEquals(
                 "The horizontal edge padding passed to the model is wrong",
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_edge_portrait),
+                mTileViewPaddingEdgePortrait,
                 (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
 
-        mConfiguration.orientation = Configuration.ORIENTATION_LANDSCAPE;
-        createMediator(/* isTablet= */ false);
+        mResources.getConfiguration().orientation = Configuration.ORIENTATION_LANDSCAPE;
+        createMediator(/* isLff= */ false);
         mMediator.onTileDataChanged();
         Assert.assertEquals(
                 "The horizontal edge padding passed to the model is wrong",
-                mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape),
+                mTileViewPaddingLandscape,
                 (int) mModel.get(HORIZONTAL_EDGE_PADDINGS));
     }
 
     /**
-     * Verifies that the container is visible if and only if there are tiles, when both NTP and MVT
-     * customization features are disabled. The MVT toggle state should have no effect.
+     * Verifies that the container is visible if and only if the MVT toggle is on. The presence of
+     * tiles should have no effect.
      */
     @Test
-    @DisableFeatures({
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT,
-        ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION
-    })
-    public void testMvtContainerOnTileCountChanged_AllDisabled() {
-        // Logic: isMvtVisible = false || hasTiles => hasTiles
-        createMediator();
-
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
-
-        // Testing those two cases for completeness, even though it's an impossible case.
-        // The toggle is inaccessible and defaults to true when the MVT customization feature is
-        // off.
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
-    }
-
-    /**
-     * Verifies that the container is always visible when only the MVT customization feature is
-     * enabled, regardless of the MVT toggle state or whether there are tiles. This is because the
-     * "Add shortcut" button should be visible.
-     */
-    @Test
-    @DisableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT})
-    @EnableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testMvtContainerOnTileCountChanged_MvtCustomizationEnabled() {
-        // Logic: isMvtVisible = true || hasTiles => true
-        createMediator();
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ true);
-
-        // Testing those two cases for completeness, even though it's an impossible case.
-        // The toggle is inaccessible and defaults to true when the MVT customization feature is
-        // off.
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-    }
-
-    /**
-     * Verifies that the container is visible if and only if the MVT toggle is on and there are
-     * tiles, when only the NTP customization for MVT feature is enabled.
-     */
-    @Test
-    @EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT})
-    @DisableFeatures({ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION})
-    public void testMvtContainerOnTileCountChanged_NtpCustomizationEnabled() {
-        // Logic: isMvtVisible = isMvtToggleOn && (false || hasTiles) => isMvtToggleOn && hasTiles
-        createMediator();
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ true);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ true,
-                /* expectedVisibility= */ false);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ true,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
-        verifyMvtSectionVisibility(
-                /* listener= */ null,
-                /* toggleIsOn= */ false,
-                /* hasTiles= */ false,
-                /* expectedVisibility= */ false);
-    }
-
-    /**
-     * Verifies that the container is visible if and only if the MVT toggle is on, when both NTP and
-     * MVT customization features are enabled. The presence of tiles should have no effect.
-     */
-    @Test
-    @EnableFeatures({
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT,
-        ChromeFeatureList.MOST_VISITED_TILES_CUSTOMIZATION
-    })
-    public void testMvtContainerOnTileCountChanged_AllEnabled() {
-        // Logic: isMvtVisible = isMvtToggleOn && (true || hasTiles) => isMvtToggleOn
+    public void testMvtContainerOnTileCountChanged() {
         createMediator();
         verifyMvtSectionVisibility(
                 /* listener= */ null,
@@ -516,8 +369,7 @@ public class MostVisitedMediatorUnitTest {
     }
 
     @Test
-    @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT)
-    public void testAddAndRemoveListener_FeatureEnabled() {
+    public void testAddAndRemoveListener() {
         createMediator();
         verify(mNtpCustomizationConfigManager).addListener(any(), eq(mContext), eq(false));
 
@@ -526,37 +378,87 @@ public class MostVisitedMediatorUnitTest {
     }
 
     @Test
-    @Features.DisableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT)
-    public void testAddAndRemoveListener_FeatureDisabled() {
-        createMediator();
-        verify(mNtpCustomizationConfigManager, never()).addListener(any(), eq(mContext), eq(false));
+    public void testUpdateMvtWidth_Tablet() {
+        createMediator(/* isLff= */ true);
+        int totalWidth = 1000;
+        ViewGroup.MarginLayoutParams marginLayoutParams =
+                new ViewGroup.MarginLayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        when(mMvTilesContainerLayout.getLayoutParams()).thenReturn(marginLayoutParams);
+        when(mMvTilesLayout.contentFitsOnLff(totalWidth)).thenReturn(true);
 
-        mMediator.destroy();
-        verify(mNtpCustomizationConfigManager, never()).removeListener(any());
+        // Test case of regular LFF devices.
+        UiConfig.DisplayStyle displayStyleWide =
+                new DisplayStyle(HorizontalDisplayStyle.WIDE, VerticalDisplayStyle.REGULAR);
+        when(mUiConfig.getCurrentDisplayStyle()).thenReturn(displayStyleWide);
+        assertFalse(NtpCustomizationUtils.isInNarrowWindowOnLff(/* isLff= */ true, mUiConfig));
+
+        int lateralMargin = mResources.getDimensionPixelSize(R.dimen.mvt_container_lateral_margin);
+        mMediator.updateMvtWidth(totalWidth);
+        verifyLayoutParams(marginLayoutParams, LayoutParams.WRAP_CONTENT, lateralMargin);
+
+        // Test case of narrow window on LFF devices.
+        when(mMvTilesLayout.contentFitsOnLff(totalWidth)).thenReturn(false);
+        UiConfig.DisplayStyle displayStyleRegular =
+                new DisplayStyle(HorizontalDisplayStyle.REGULAR, VerticalDisplayStyle.REGULAR);
+        when(mUiConfig.getCurrentDisplayStyle()).thenReturn(displayStyleRegular);
+        assertTrue(NtpCustomizationUtils.isInNarrowWindowOnLff(true, mUiConfig));
+
+        int lateralMarginNarrowWindowTablet =
+                mResources.getDimensionPixelSize(
+                        R.dimen.ntp_search_box_lateral_margin_narrow_window_tablet);
+        mMediator.updateMvtWidth(totalWidth);
+        verifyLayoutParams(marginLayoutParams, totalWidth, lateralMarginNarrowWindowTablet);
+    }
+
+    @Test
+    public void testUpdateMvtWidth_Phone() {
+        createMediator(/* isLff= */ false);
+        int totalWidth = 1000;
+        ViewGroup.MarginLayoutParams marginLayoutParams =
+                new ViewGroup.MarginLayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        when(mMvTilesContainerLayout.getLayoutParams()).thenReturn(marginLayoutParams);
+
+        // On phones, the display style shouldn't trigger narrow window LFF logic.
+        UiConfig.DisplayStyle displayStyleRegular =
+                new DisplayStyle(HorizontalDisplayStyle.REGULAR, VerticalDisplayStyle.REGULAR);
+        when(mUiConfig.getCurrentDisplayStyle()).thenReturn(displayStyleRegular);
+        assertFalse(NtpCustomizationUtils.isInNarrowWindowOnLff(/* isLff= */ false, mUiConfig));
+
+        int lateralMargin = mResources.getDimensionPixelSize(R.dimen.mvt_container_lateral_margin);
+
+        // When width is provided, it should be applied directly.
+        mMediator.updateMvtWidth(totalWidth);
+        verifyLayoutParams(marginLayoutParams, totalWidth, lateralMargin);
+
+        // When width is null, it should fall back to MATCH_PARENT.
+        mMediator.updateMvtWidth(null);
+        verifyLayoutParams(marginLayoutParams, LayoutParams.MATCH_PARENT, lateralMargin);
     }
 
     private void createMediator() {
-        createMediator(/* isTablet= */ false);
+        createMediator(/* isLff= */ false);
     }
 
-    private void createMediator(boolean isTablet) {
+    private void createMediator(boolean isLff) {
         mMvTilesLayout = Mockito.mock(MostVisitedTilesLayout.class);
+        when(mMvTilesContainerLayout.findViewById(R.id.mv_tiles_layout)).thenReturn(mMvTilesLayout);
 
         when(mMvTilesLayout.getResources()).thenReturn(mResources);
         when(mMvTilesLayout.getChildCount()).thenReturn(1);
         when(mMvTilesLayout.getChildAt(0)).thenReturn(mTileView);
         when(mMvTilesLayout.getTileCount()).thenReturn(1);
         when(mMvTilesLayout.getTileAt(0)).thenReturn(mTileView);
-        when(mContext.getResources()).thenReturn(mResources);
 
         mMediator =
                 new MostVisitedTilesMediator(
                         mContext,
                         mUiConfig,
-                        mMvTilesLayout,
+                        mMvTilesContainerLayout,
                         mTileRenderer,
                         mModel,
-                        isTablet,
+                        isLff,
                         mSnapshotTileGridChangedRunnable,
                         mTileCountChangedRunnable);
         mMediator.initWithNative(
@@ -567,5 +469,12 @@ public class MostVisitedMediatorUnitTest {
                 mTileGroupDelegate,
                 mOfflinePageBridge,
                 mTileRenderer);
+    }
+
+    private void verifyLayoutParams(
+            MarginLayoutParams marginLayoutParams, int expectedWidth, int expectedLateralMargin) {
+        Assert.assertEquals(expectedWidth, marginLayoutParams.width);
+        Assert.assertEquals(expectedLateralMargin, marginLayoutParams.leftMargin);
+        Assert.assertEquals(expectedLateralMargin, marginLayoutParams.rightMargin);
     }
 }

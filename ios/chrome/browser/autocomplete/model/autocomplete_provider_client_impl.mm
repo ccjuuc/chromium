@@ -21,6 +21,7 @@
 #import "components/omnibox/common/omnibox_features.h"
 #import "components/prefs/pref_service.h"
 #import "components/saved_tab_groups/public/tab_group_sync_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/service/sync_service.h"
 #import "components/unified_consent/url_keyed_data_collection_consent_helper.h"
@@ -48,6 +49,7 @@
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/session_sync_service_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/components/webui/web_ui_url_constants.h"
 #import "services/network/public/cpp/shared_url_loader_factory.h"
@@ -206,6 +208,11 @@ AutocompleteProviderClientImpl::GetTabGroupSyncService() const {
   return nullptr;
 }
 
+sync_sessions::SessionSyncService*
+AutocompleteProviderClientImpl::GetSessionSyncService() const {
+  return SessionSyncServiceFactory::GetForProfile(profile_);
+}
+
 AimEligibilityService*
 AutocompleteProviderClientImpl::GetAimEligibilityService() const {
   return IOSChromeAimEligibilityServiceFactory::GetForProfile(profile_);
@@ -278,20 +285,15 @@ bool AutocompleteProviderClientImpl::IsAuthenticated() const {
          identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin);
 }
 
-bool AutocompleteProviderClientImpl::IsSyncActive() const {
-  // Sync-the-feature is gone on iOS.
-  return false;
-}
-
 void AutocompleteProviderClientImpl::Classify(
     const std::u16string& text,
-    bool prefer_keyword,
+    bool in_keyword_mode,
     bool allow_exact_keyword_match,
     metrics::OmniboxEventProto::PageClassification page_classification,
     AutocompleteMatch* match,
     GURL* alternate_nav_url) {
   AutocompleteClassifier* classifier = GetAutocompleteClassifier();
-  classifier->Classify(text, prefer_keyword, allow_exact_keyword_match,
+  classifier->Classify(text, in_keyword_mode, allow_exact_keyword_match,
                        page_classification, match, alternate_nav_url);
 }
 

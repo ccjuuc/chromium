@@ -23,6 +23,7 @@
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_type_checker.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_state_fetcher.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chromeos/ash/components/dbus/device_management/fake_install_attributes_client.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
@@ -171,14 +172,14 @@ class AutoEnrollmentControllerTest : public testing::Test {
  protected:
   AutoEnrollmentControllerForTesting CreateController() {
     return AutoEnrollmentControllerForTesting(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        test_url_loader_factory_.GetSafeWeakWrapper(),
         &mock_device_settings_service_, &fake_dm_service_,
         &mock_state_keys_broker_, testing_network_.network_state_handler(),
         AutoEnrollmentController::RlweClientFactory(),
         // The factory will stay alive until the test is destroyed.
         base::BindRepeating(&MockEnrollmentStateFetcherFactory::Create,
-                            base::Unretained(&state_fetcher_factory_)),
-        base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-            &test_url_loader_factory_));
+                            base::Unretained(&state_fetcher_factory_)));
   }
 
   void RunAndWaitForStateUpdate(AutoEnrollmentController& controller,
@@ -285,10 +286,12 @@ TEST_F(AutoEnrollmentControllerTest, ReportsDeviceAlreadyOwned) {
   auto controller = CreateController();
 
   // Register progress callback to record reported state.
-  AutoEnrollmentState result;
+  int progress_callback_count = 0;
   auto subscription =
       controller.RegisterProgressCallback(base::BindLambdaForTesting(
-          [&result](AutoEnrollmentState state) { result = state; }));
+          [&progress_callback_count](AutoEnrollmentState state) {
+            ++progress_callback_count;
+          }));
 
   // Create mock state fetcher to allow reporting results.
   controller.Start();
@@ -297,7 +300,7 @@ TEST_F(AutoEnrollmentControllerTest, ReportsDeviceAlreadyOwned) {
       AutoEnrollmentResult::kDeviceAlreadyOwned);
   task_environment_.FastForwardBy(base::TimeDelta());
 
-  // Expect no changes to block-devmode
+  // Expect no changes to block-devmode.
   EXPECT_EQ(ash::FakeInstallAttributesClient::Get()
                 ->remove_firmware_management_parameters_from_tpm_call_count(),
             0);
@@ -305,8 +308,23 @@ TEST_F(AutoEnrollmentControllerTest, ReportsDeviceAlreadyOwned) {
                 ->clear_block_devmode_vpd_call_count(),
             0);
 
-  // Expect result being passed to progress callbacks unchanged.
-  EXPECT_EQ(result, AutoEnrollmentResult::kDeviceAlreadyOwned);
+  // Expect no state and no progress report callbacks.
+  EXPECT_EQ(controller.state(), AutoEnrollmentResult::kDeviceAlreadyOwned);
+  EXPECT_EQ(progress_callback_count, 0);
+
+  // Expect powerwash to be triggered.
+  EXPECT_EQ(
+      ash::FakeSessionManagerClient::Get()->start_device_wipe_call_count(), 1);
+
+  EXPECT_TRUE(controller.SafeguardTimerForTesting().IsRunning());
+
+  RunAndWaitForStateUpdate(controller, base::BindLambdaForTesting([this]() {
+                             task_environment_.FastForwardBy(kSafeguardTimeout);
+                           }));
+
+  EXPECT_FALSE(controller.SafeguardTimerForTesting().IsRunning());
+  EXPECT_EQ(controller.state(), base::unexpected(AutoEnrollmentError(
+                                    AutoEnrollmentSafeguardTimeoutError{})));
 }
 
 // Tests that the controller forwards

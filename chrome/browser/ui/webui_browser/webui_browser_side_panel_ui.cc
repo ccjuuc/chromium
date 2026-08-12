@@ -7,10 +7,11 @@
 #include <optional>
 
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_waiter.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_waiter.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_helper.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "content/public/browser/web_contents.h"
@@ -35,20 +36,19 @@ WebUIBrowserSidePanelUI::WebUIBrowserSidePanelUI(Browser* browser)
   // coordinators are constructed prior to this call. For the remaining
   // global entries, we should either move construction to
   // BrowserWindowFeatures::Init() or else explicitly disable support.
-  SidePanelUtil::PopulateGlobalEntries(browser,
-                                       SidePanelRegistry::From(browser));
+  SidePanelHelper::PopulateGlobalEntries(browser,
+                                         SidePanelRegistry::From(browser));
 }
 
 WebUIBrowserSidePanelUI::~WebUIBrowserSidePanelUI() = default;
 
-void WebUIBrowserSidePanelUI::Close(SidePanelEntry::PanelType panel_type,
-                                    SidePanelEntryHideReason reason,
+void WebUIBrowserSidePanelUI::Close(SidePanelEntryHideReason reason,
                                     bool supress_animations) {
-  if (!IsSidePanelShowing(panel_type)) {
+  if (!IsSidePanelShowing()) {
     return;
   }
 
-  if (SidePanelEntry* entry = GetEntryForUniqueKey(*current_key(panel_type))) {
+  if (SidePanelEntry* entry = GetEntryForUniqueKey(*current_key())) {
     entry->OnEntryWillHide(reason);
   }
   // Asynchronously close the side panel in webshell.
@@ -91,17 +91,16 @@ content::WebContents* WebUIBrowserSidePanelUI::GetWebContentsForId(
 
 void WebUIBrowserSidePanelUI::Show(
     const UniqueKey& input,
-    std::optional<SidePanelUtil::SidePanelOpenTrigger> open_trigger,
+    std::optional<SidePanelOpenTrigger> open_trigger,
     bool suppress_animations) {
   // Side panel is not supported for non-normal browsers.
-  if (!browser()->is_type_normal()) {
+  if (browser()->GetType() != Browser::Type::TYPE_NORMAL) {
     return;
   }
 
   SidePanelEntry* entry = GetEntryForUniqueKey(input);
-  if (IsSidePanelShowing(entry->type()) &&
-      *current_key(entry->type()) == input) {
-    waiter(entry->type())->ResetLoadingEntryIfNecessary();
+  if (IsSidePanelShowing() && *current_key() == input) {
+    waiter()->ResetLoadingEntryIfNecessary();
 
     // TODO(webium): Implement the following:
     // If the side panel is in the process of closing, show it instead.
@@ -113,23 +112,20 @@ void WebUIBrowserSidePanelUI::Show(
     return;
   }
 
-  waiter(entry->type())
-      ->WaitForEntry(
-          entry,
-          base::BindOnce(&WebUIBrowserSidePanelUI::PopulateSidePanel,
-                         base::Unretained(this), suppress_animations, input,
-                         /*open_trigger=*/std::nullopt));
+  waiter()->WaitForEntry(
+      entry, base::BindOnce(&WebUIBrowserSidePanelUI::PopulateSidePanel,
+                            base::Unretained(this), suppress_animations, input,
+                            /*open_trigger=*/std::nullopt));
 }
 
 void WebUIBrowserSidePanelUI::PopulateSidePanel(
     bool suppress_animations,
     const UniqueKey& unique_key,
-    std::optional<SidePanelUtil::SidePanelOpenTrigger> open_trigger,
+    std::optional<SidePanelOpenTrigger> open_trigger,
     SidePanelEntry* entry,
     std::optional<std::unique_ptr<views::View>> content_view) {
-  if (IsSidePanelShowing(entry->type())) {
-    SidePanelEntry* previous_entry =
-        GetEntryForUniqueKey(*current_key(entry->type()));
+  if (IsSidePanelShowing()) {
+    SidePanelEntry* previous_entry = GetEntryForUniqueKey(*current_key());
     if (previous_entry) {
       previous_entry->OnEntryWillHide(SidePanelEntryHideReason::kReplaced);
 
@@ -149,12 +145,11 @@ void WebUIBrowserSidePanelUI::PopulateSidePanel(
   current_side_panel_view_->SetProperty(
       views::kDetachedViewFocusManagerKey,
       GetWebUIBrowserWindow()->widget()->GetFocusManager());
-  SetCurrentKey(entry->type(), unique_key);
+  SetCurrentKey(unique_key);
   GetWebUIBrowserWindow()->ShowSidePanel(entry->key());
 
   if (auto* contextual_registry = GetActiveContextualRegistry()) {
-    contextual_registry->ResetActiveEntryFor(
-        SidePanelEntry::PanelType::kContent);
+    contextual_registry->ResetActiveEntry();
   }
 
   entry->OnEntryShown();
@@ -171,48 +166,43 @@ void WebUIBrowserSidePanelUI::MaybeShowEntryOnTabStripModelChanged(
     SidePanelRegistry* new_contextual_registry) {
   // Show an entry in the following fallback order: new contextual registry's
   // active entry > active global entry > none (close the side panel).
-  SidePanelEntry::PanelType panel_type = SidePanelEntry::PanelType::kContent;
   std::optional<UniqueKey> unique_key =
-      IsSidePanelShowing(panel_type) ? GetNewActiveKeyOnTabChanged(panel_type)
-                                     : std::nullopt;
+      IsSidePanelShowing() ? GetNewActiveKeyOnTabChanged() : std::nullopt;
   if (!unique_key.has_value() && new_contextual_registry &&
-      new_contextual_registry->GetActiveEntryFor(panel_type).has_value()) {
-    unique_key = UniqueKey{
-        browser()->GetActiveTabInterface()->GetHandle(),
-        (*new_contextual_registry->GetActiveEntryFor(panel_type))->key()};
+      new_contextual_registry->GetActiveEntry().has_value()) {
+    unique_key = UniqueKey{browser()->GetActiveTabInterface()->GetHandle(),
+                           (*new_contextual_registry->GetActiveEntry())->key()};
   }
 
   if (unique_key.has_value()) {
-    Show(*unique_key, SidePanelUtil::SidePanelOpenTrigger::kTabChanged,
+    Show(*unique_key, SidePanelOpenTrigger::kTabChanged,
          /*suppress_animations=*/true);
     return;
   }
 
   // Store the old side panel, if there is one.
   if (old_contextual_registry &&
-      old_contextual_registry->GetActiveEntryFor(panel_type).has_value() &&
-      IsSidePanelShowing(panel_type) &&
-      (*old_contextual_registry->GetActiveEntryFor(panel_type))->key() ==
-          current_key(panel_type)->key &&
-      current_key(panel_type)->tab_handle) {
-    auto* active_entry =
-        old_contextual_registry->GetActiveEntryFor(panel_type).value();
-    active_entry->CacheView(std::move(std::move(current_side_panel_view_)));
+      old_contextual_registry->GetActiveEntry().has_value() &&
+      IsSidePanelShowing() &&
+      (*old_contextual_registry->GetActiveEntry())->key() ==
+          current_key()->key &&
+      current_key()->tab_handle) {
+    auto* active_entry = old_contextual_registry->GetActiveEntry().value();
+    active_entry->CacheView(std::move(current_side_panel_view_));
     current_side_panel_view_.reset();
   }
 
-  Close(panel_type, SidePanelEntryHideReason::kSidePanelClosed,
+  Close(SidePanelEntryHideReason::kSidePanelClosed,
         /*suppress_animations=*/true);
 }
 
-void WebUIBrowserSidePanelUI::OnSidePanelClosed(
-    SidePanelEntry::PanelType type) {
-  if (!IsSidePanelShowing(type)) {
+void WebUIBrowserSidePanelUI::OnSidePanelClosed() {
+  if (!IsSidePanelShowing()) {
     return;
   }
 
-  SidePanelEntry* previous_entry = GetEntryForUniqueKey(*current_key(type));
-  SetCurrentKey(type, std::nullopt);
+  SidePanelEntry* previous_entry = GetEntryForUniqueKey(*current_key());
+  SetCurrentKey(std::nullopt);
   if (previous_entry) {
     previous_entry->OnEntryHidden();
   }
@@ -221,12 +211,10 @@ void WebUIBrowserSidePanelUI::OnSidePanelClosed(
   // everything except remaining active entries (i.e. if another tab has an
   // active contextual entry).
   if (auto* contextual_registry = GetActiveContextualRegistry()) {
-    contextual_registry->ResetActiveEntryFor(
-        SidePanelEntry::PanelType::kContent);
+    contextual_registry->ResetActiveEntry();
   }
 
-  SidePanelRegistry::From(browser())->ResetActiveEntryFor(
-      SidePanelEntry::PanelType::kContent);
+  SidePanelRegistry::From(browser())->ResetActiveEntry();
 
   current_side_panel_view_.reset();
   // TODO(webium): Clear cached views for registry entries for global and
@@ -234,5 +222,5 @@ void WebUIBrowserSidePanelUI::OnSidePanelClosed(
 }
 
 WebUIBrowserWindow* WebUIBrowserSidePanelUI::GetWebUIBrowserWindow() {
-  return static_cast<WebUIBrowserWindow*>(browser()->window());
+  return WebUIBrowserWindow::FromBrowser(browser());
 }

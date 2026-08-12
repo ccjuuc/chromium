@@ -33,12 +33,9 @@ void ResolveUnderlyingPropertyValues(Element& element,
   AnimationUtils::ForEachInterpolatedPropertyValue(
       &element, properties, empty_interpolations_map,
       [&map](PropertyHandle property, const CSSValue* value) {
-        if (property.IsCSSProperty()) {
-          String property_name =
-              AnimationInputHelpers::PropertyHandleToKeyframeAttribute(
-                  property);
-          map.Set(property_name, value->CssText());
-        }
+        String property_name =
+            AnimationInputHelpers::PropertyHandleToKeyframeAttribute(property);
+        map.Set(property_name, value->CssText());
       });
 }
 
@@ -57,8 +54,9 @@ void AddMissingProperties(const MissingPropertyValueMap& property_map,
 
     String property_name =
         AnimationInputHelpers::PropertyHandleToKeyframeAttribute(property);
-    if (property_map.Contains(property_name)) {
-      const String& value = property_map.at(property_name);
+    if (auto it = property_map.find(property_name);
+        it != property_map.end()) {
+      const String& value = it->value;
       keyframe->SetCSSPropertyValue(property.GetCSSProperty().PropertyID(),
                                     value, SecureContextMode::kInsecureContext,
                                     nullptr);
@@ -86,7 +84,7 @@ void ResolveComputedValues(Element* element, StringKeyframe* keyframe) {
       // included since they can be animated in Blink. Pruning unregistered
       // variables seems justifiable.
       keyframe->RemoveCustomCSSProperty(property);
-    } else if (property.IsCSSProperty()) {
+    } else {
       const CSSValue& value = keyframe->CssPropertyValue(property);
       const CSSPropertyName property_name = property.GetCSSPropertyName();
       const CSSValue* computed_value =

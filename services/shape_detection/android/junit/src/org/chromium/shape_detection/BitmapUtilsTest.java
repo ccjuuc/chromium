@@ -6,12 +6,12 @@ package org.chromium.shape_detection;
 
 import static org.junit.Assert.assertNull;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -31,11 +31,7 @@ public class BitmapUtilsTest {
 
     public BitmapUtilsTest() {}
 
-    @Before
-    public void setUp() {
-        ShadowLog.stream = System.out;
-        MockitoAnnotations.initMocks(this);
-    }
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     /** Verify conversion fails if the Bitmap is invalid. */
     @Test

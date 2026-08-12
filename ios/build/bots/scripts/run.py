@@ -156,6 +156,8 @@ class Runner():
             env_vars=env_vars,
             record_video_option=self.args.record_video,
             output_disabled_tests=self.args.output_disabled_tests,
+            use_simulator_cache=self.args.use_simulator_cache,
+            skip_enumerate_tests=self.args.skip_enumerate_tests,
         )
       elif self.args.variations_seed_path != 'NO_PATH':
         tr = variations_runner.VariationsSimulatorParallelTestRunner(
@@ -170,7 +172,10 @@ class Runner():
             release=self.args.release,
             test_cases=self.args.test_cases,
             test_args=self.test_args,
-            env_vars=env_vars)
+            env_vars=env_vars,
+            use_simulator_cache=self.args.use_simulator_cache,
+            skip_enumerate_tests=self.args.skip_enumerate_tests,
+        )
       elif self.args.iossim and self.args.platform and self.args.version:
         tr = test_runner.SimulatorTestRunner(
             self.args.app,
@@ -188,6 +193,7 @@ class Runner():
             use_clang_coverage=self.args.use_clang_coverage,
             xctest=self.args.xctest,
             output_disabled_tests=self.args.output_disabled_tests,
+            use_simulator_cache=self.args.use_simulator_cache,
         )
       elif self.args.xcodebuild_device_runner and self.args.xctest:
         tr = xcodebuild_runner.DeviceXcodeTestRunner(
@@ -203,6 +209,7 @@ class Runner():
             env_vars=env_vars,
             record_video_option=self.args.record_video,
             output_disabled_tests=self.args.output_disabled_tests,
+            skip_enumerate_tests=self.args.skip_enumerate_tests,
         )
       else:
         tr = test_runner.DeviceTestRunner(
@@ -506,6 +513,16 @@ class Runner():
         action='store_true',
         help='Whether or not disabled test should be included in test output.',
     )
+    parser.add_argument(
+        '--use-simulator-cache',
+        action='store_true',
+        help='Whether to use a cache of prelaunched simulators for this run.',
+    )
+    parser.add_argument(
+        '--skip-enumerate-tests',
+        action='store_true',
+        help='Whether to skip enumerating tests in the EG test bundle.',
+    )
 
     def load_from_json(args):
       """Loads and sets arguments from args_json.
@@ -523,6 +540,8 @@ class Runner():
       args.xcodebuild_device_runner = (
           args_json.get('xcodebuild_device_runner',
                         args.xcodebuild_device_runner))
+      args.skip_enumerate_tests = args_json.get('skip_enumerate_tests',
+                                                args.skip_enumerate_tests)
       args.clones = args_json.get('clones', args.clones)
       test_args.extend(args_json.get('test_args', []))
 

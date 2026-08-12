@@ -19,7 +19,6 @@
 #import "ios/chrome/browser/passwords/model/password_check_observer_bridge.h"
 #import "ios/chrome/browser/passwords/model/password_checkup_utils.h"
 #import "ios/chrome/browser/passwords/model/password_manager_util_ios.h"
-#import "ios/chrome/browser/passwords/model/save_passwords_consumer.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/account_storage_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_ui_features.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/passwords_consumer.h"
@@ -88,12 +87,6 @@ struct PasswordManagerActiveWidgetPromoData
 
   // Sync observer.
   std::unique_ptr<SyncObserverBridge> _syncObserver;
-
-  // Object storing the time of the previous successful re-authentication.
-  // This is meant to be used by the `ReauthenticationModule` for keeping
-  // re-authentications valid for a certain time interval within the scope
-  // of the Passwords Screen.
-  __strong NSDate* _successfulReauthTime;
 
   // FaviconLoader is a keyed service that uses LargeIconService to retrieve
   // favicon images.
@@ -357,7 +350,7 @@ struct PasswordManagerActiveWidgetPromoData
 
 // Compute whether user is capable to run password check in Google Account.
 - (BOOL)canUseAccountPasswordCheckup {
-  return password_manager::features_util::IsAccountStorageEnabled(
+  return password_manager::features_util::IsAccountStorageActive(
              _syncService) &&
          !_syncService->GetUserSettings()->IsEncryptEverythingEnabled();
 }
@@ -433,16 +426,6 @@ struct PasswordManagerActiveWidgetPromoData
 
 - (void)savedPasswordsDidChange {
   [self providePasswordsToConsumer];
-}
-
-#pragma mark SuccessfulReauthTimeAccessor
-
-- (void)updateSuccessfulReauthTime {
-  _successfulReauthTime = [[NSDate alloc] init];
-}
-
-- (NSDate*)lastSuccessfulReauthTime {
-  return _successfulReauthTime;
 }
 
 #pragma mark - TableViewFaviconDataSource

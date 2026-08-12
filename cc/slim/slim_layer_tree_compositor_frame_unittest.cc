@@ -46,6 +46,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/test/geometry_util.h"
 #include "ui/gfx/geometry/transform.h"
@@ -266,7 +267,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, OneSolidColorQuad) {
                         viz::HasTransform(gfx::Transform()),
                         viz::HasOpacity(1.0f), viz::AreContentsOpaque(true))));
   auto* quad = pass->quad_list.back();
-  auto* shared_quad_state = quad->shared_quad_state;
+  const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
 
   EXPECT_EQ(shared_quad_state->quad_layer_rect, viewport_);
   EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, viewport_);
@@ -295,7 +296,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, LayerTransform) {
                                   viz::HasVisibleRect(viewport_))));
 
     auto* quad = pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
 
     EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(10, 20));
     EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, gfx::Rect(10, 20));
@@ -854,8 +855,8 @@ TEST_F(SlimLayerTreeCompositorFrameTest, NinePatchLayerAppendQuads) {
         gfx::BoundingRect(expected_uv_top_left[i], expected_uv_bottom_right[i]);
     const gfx::Size image_size =
         gfx::Size(image_info.width(), image_info.height());
-    EXPECT_EQ(expected_tex_coords,
-              texture_quad->GetNormalizedTexCoords(image_size));
+    EXPECT_RECTF_NEAR(expected_tex_coords,
+                      texture_quad->GetNormalizedTexCoords(image_size), 1e-5f);
 
     EXPECT_EQ(frame.resource_list[0].id, texture_quad->resource_id);
     EXPECT_EQ(frame_sink_->uploaded_resources().begin()->second.viz_resource_id,
@@ -1044,6 +1045,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, TextureLayerAppendQuads) {
 
   // The hold on the image is released when context is lost.
   frame_sink_->OnContextLost();
+  frame_sink_->ReclaimResources(std::move(resources_to_return));
   EXPECT_EQ(shared_image_texture_layer_client.shared_image_refs(), 0);
 }
 
@@ -1069,7 +1071,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, SimpleHitTestRegionList) {
     ASSERT_EQ(hit_test_region_list->regions.size(), 1u);
     auto& hit_test_region = hit_test_region_list->regions.front();
     EXPECT_EQ(hit_test_region.frame_sink_id, viz::FrameSinkId(1u, 2u));
-    EXPECT_EQ(hit_test_region.rect, viewport_);
+    EXPECT_EQ(hit_test_region.rect, gfx::RRectF(viewport_));
     EXPECT_EQ(hit_test_region.transform, gfx::Transform());
   }
 
@@ -1099,12 +1101,12 @@ TEST_F(SlimLayerTreeCompositorFrameTest, SimpleHitTestRegionList) {
     ASSERT_EQ(hit_test_region_list->regions.size(), 2u);
     auto& root_region = hit_test_region_list->regions.back();
     EXPECT_EQ(root_region.frame_sink_id, viz::FrameSinkId(1u, 2u));
-    EXPECT_EQ(root_region.rect, viewport_);
+    EXPECT_EQ(root_region.rect, gfx::RRectF(viewport_));
     EXPECT_EQ(root_region.transform, gfx::Transform());
 
     auto& child_region = hit_test_region_list->regions.front();
     EXPECT_EQ(child_region.frame_sink_id, viz::FrameSinkId(2u, 3u));
-    EXPECT_EQ(child_region.rect, gfx::Rect(10, 10));
+    EXPECT_EQ(child_region.rect, gfx::RRectF(gfx::RectF(10, 10)));
 
     gfx::Transform expected_transform =
         gfx::Transform::MakeTranslation(5.0f, 5.0f);
@@ -1152,7 +1154,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, HitTestRegionInNonRootPass) {
     ASSERT_EQ(hit_test_region_list->regions.size(), 1u);
     auto& hit_test_region = hit_test_region_list->regions.front();
     EXPECT_EQ(hit_test_region.frame_sink_id, viz::FrameSinkId(1u, 2u));
-    EXPECT_EQ(hit_test_region.rect, gfx::Rect(100, 100));
+    EXPECT_EQ(hit_test_region.rect, gfx::RRectF(gfx::RectF(100, 100)));
     EXPECT_EQ(hit_test_region.transform,
               gfx::Transform::MakeScale(2.0f) *
                   gfx::Transform::MakeTranslation(-10.0f, -10.0f));
@@ -1284,7 +1286,8 @@ TEST_F(SlimLayerTreeCompositorFrameTest, NonAxisAlignedClip) {
                         viz::HasTransform(gfx::Transform()))));
   auto* render_pass_quad = viz::CompositorRenderPassDrawQuad::MaterialCast(
       root_pass->quad_list.ElementAt(0));
-  auto* shared_quad_state = render_pass_quad->shared_quad_state;
+  const viz::SharedQuadState* shared_quad_state =
+      render_pass_quad->shared_quad_state;
   EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(50, 50));
   EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, gfx::Rect(50, 50));
   EXPECT_EQ(shared_quad_state->clip_rect, std::nullopt);
@@ -1333,7 +1336,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, ChildPassOutputRect) {
           viz::HasTransform(gfx::Transform::MakeTranslation(20.0f, 20.0f)))));
   {
     // SharedQuadState should match the quad.
-    auto* shared_quad_state =
+    const viz::SharedQuadState* shared_quad_state =
         child_pass->quad_list.ElementAt(0)->shared_quad_state;
     EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(80, 80));
     EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, gfx::Rect(30, 30));
@@ -1352,7 +1355,8 @@ TEST_F(SlimLayerTreeCompositorFrameTest, ChildPassOutputRect) {
   {
     auto* render_pass_quad = viz::CompositorRenderPassDrawQuad::MaterialCast(
         root_pass->quad_list.ElementAt(0));
-    auto* shared_quad_state = render_pass_quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state =
+        render_pass_quad->shared_quad_state;
     EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(20, 20, 30, 30));
     EXPECT_EQ(shared_quad_state->visible_quad_layer_rect,
               gfx::Rect(20, 20, 30, 30));
@@ -1394,7 +1398,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, Filters) {
                   viz::HasTransform(gfx::Transform::MakeScale(0.5f, 0.5f)))));
   {
     // SharedQuadState should match the quad.
-    auto* shared_quad_state =
+    const viz::SharedQuadState* shared_quad_state =
         child_pass->quad_list.ElementAt(0)->shared_quad_state;
     EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(80, 80));
     EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, gfx::Rect(80, 80));
@@ -1418,7 +1422,8 @@ TEST_F(SlimLayerTreeCompositorFrameTest, Filters) {
   {
     auto* render_pass_quad = viz::CompositorRenderPassDrawQuad::MaterialCast(
         root_pass->quad_list.ElementAt(0));
-    auto* shared_quad_state = render_pass_quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state =
+        render_pass_quad->shared_quad_state;
     EXPECT_EQ(shared_quad_state->quad_layer_rect, gfx::Rect(40, 40));
     EXPECT_EQ(shared_quad_state->visible_quad_layer_rect, gfx::Rect(40, 40));
     EXPECT_EQ(shared_quad_state->clip_rect, std::nullopt);
@@ -2119,7 +2124,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, SimpleRoundedCorner) {
                         viz::HasRect(viewport_), viz::HasVisibleRect(viewport_),
                         viz::HasTransform(gfx::Transform()))));
   auto* quad = pass->quad_list.front();
-  auto* shared_quad_state = quad->shared_quad_state;
+  const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
   EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
   EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
   EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2163,7 +2168,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, RoundedCornerWithChild) {
                                                       50.0f, 20.0f);
   {
     auto* quad = pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2172,7 +2177,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, RoundedCornerWithChild) {
 
   {
     auto* quad = pass->quad_list.ElementAt(1u);
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2204,7 +2209,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, NonAxisAlignedRoundedCorner) {
                                 viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = child_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2227,7 +2232,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, NonAxisAlignedRoundedCorner) {
                         viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = root_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_FALSE(shared_quad_state->mask_filter_info.HasRoundedCorners());
   }
 }
@@ -2257,7 +2262,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, RoundedCornerOnParentAndChild) {
                                 viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = child_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2285,7 +2290,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, RoundedCornerOnParentAndChild) {
                                                       50.0f, 20.0f);
   {
     auto* quad = root_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2294,7 +2299,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, RoundedCornerOnParentAndChild) {
 
   {
     auto* quad = root_pass->quad_list.ElementAt(1u);
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasRoundedCorners());
     EXPECT_TRUE(shared_quad_state->is_fast_rounded_corner);
     EXPECT_EQ(shared_quad_state->mask_filter_info.rounded_corner_bounds(),
@@ -2340,14 +2345,14 @@ TEST_F(SlimLayerTreeCompositorFrameTest, GradientMaskWithChild) {
                 viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasGradientMask());
     EXPECT_EQ(shared_quad_state->mask_filter_info.gradient_mask(), gradient);
   }
 
   {
     auto* quad = pass->quad_list.ElementAt(1u);
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasGradientMask());
     EXPECT_EQ(shared_quad_state->mask_filter_info.gradient_mask(), gradient);
   }
@@ -2384,7 +2389,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, GradientMaskOnParentAndChild) {
                                 viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = child_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasGradientMask());
     EXPECT_EQ(shared_quad_state->mask_filter_info.gradient_mask(),
               child_gradient);
@@ -2408,7 +2413,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, GradientMaskOnParentAndChild) {
                 viz::HasTransform(gfx::Transform()))));
   {
     auto* quad = root_pass->quad_list.front();
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasGradientMask());
     EXPECT_EQ(shared_quad_state->mask_filter_info.gradient_mask(),
               parent_gradient);
@@ -2416,7 +2421,7 @@ TEST_F(SlimLayerTreeCompositorFrameTest, GradientMaskOnParentAndChild) {
 
   {
     auto* quad = root_pass->quad_list.ElementAt(1u);
-    auto* shared_quad_state = quad->shared_quad_state;
+    const viz::SharedQuadState* shared_quad_state = quad->shared_quad_state;
     EXPECT_TRUE(shared_quad_state->mask_filter_info.HasGradientMask());
     EXPECT_EQ(shared_quad_state->mask_filter_info.gradient_mask(),
               parent_gradient);

@@ -19,6 +19,7 @@
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
 #include "components/offline_items_collection/core/offline_content_provider.h"
 
+class BrowserWindowInterface;
 class Profile;
 
 namespace offline_items_collection {
@@ -37,10 +38,10 @@ class DownloadBubbleUIController {
   static DownloadBubbleUIController* GetForDownload(
       download::DownloadItem* download);
 
-  explicit DownloadBubbleUIController(Browser* browser);
+  explicit DownloadBubbleUIController(BrowserWindowInterface* browser);
   // Used to inject a custom DownloadBubbleUpdateService for testing. Prefer
   // the constructor above which uses that of the profile.
-  DownloadBubbleUIController(Browser* browser,
+  DownloadBubbleUIController(BrowserWindowInterface* browser,
                              DownloadBubbleUpdateService* update_service);
 
   DownloadBubbleUIController(const DownloadBubbleUIController&) = delete;
@@ -64,6 +65,7 @@ class DownloadBubbleUIController {
       const OfflineContentProvider::OfflineItemList& items);
   void OnOfflineItemUpdated(const OfflineItem& item);
   void OnOfflineItemRemoved(const ContentId& id);
+  void OnOfflineItemsInitialized();
 
   // Get the entries for the main view of the Download Bubble. The main view
   // contains all the recent downloads (finished within the last 24 hours).
@@ -76,6 +78,8 @@ class DownloadBubbleUIController {
   // new downloads, and user action only creates a main view.
   // Virtual for testing.
   virtual std::vector<DownloadUIModel::DownloadUIModelPtr> GetPartialView();
+
+  void SetLastPartialViewShownTimeForTesting(std::optional<base::Time> time);
 
   // Process button press on the bubble.
   // May launch a HaTS survey if the action applies to a download warning.
@@ -145,7 +149,7 @@ class DownloadBubbleUIController {
   // Callback for `browser_activity_observer_`.
   void OnBrowserActivity();
 
-  raw_ptr<Browser, DanglingUntriaged> browser_;
+  raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser_;
   raw_ptr<Profile, DanglingUntriaged> profile_;
   raw_ptr<DownloadBubbleUpdateService, DanglingUntriaged> update_service_;
   raw_ptr<OfflineItemModelManager, DanglingUntriaged> offline_manager_;
@@ -156,7 +160,7 @@ class DownloadBubbleUIController {
   raw_ptr<DownloadDisplayController, AcrossTasksDanglingUntriaged>
       display_controller_;
 
-  std::optional<base::Time> last_partial_view_shown_time_ = std::nullopt;
+  std::optional<base::Time> last_partial_view_shown_time_;
 
   // Tracks whether the last time we provided models was for a partial view
   // (true) or a main view (false). This is an approximation for whether the

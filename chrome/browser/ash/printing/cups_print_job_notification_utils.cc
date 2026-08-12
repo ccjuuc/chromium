@@ -4,17 +4,17 @@
 
 #include "chrome/browser/ash/printing/cups_print_job_notification_utils.h"
 
+#include "ash/constants/ash_pref_names.h"
+#include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/printing/cups_print_job.h"
 #include "chrome/browser/chromeos/printing/printer_error_codes.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
@@ -101,7 +101,7 @@ std::u16string GetNotificationBodyMessageForUnauthorizedClient(
       base::UTF8ToUTF16(job.printer().display_name());
   bool send_username_and_filename_policy_enabled =
       profile.GetPrefs()->GetBoolean(
-          prefs::kPrintingSendUsernameAndFilenameEnabled);
+          ash::prefs::kPrintingSendUsernameAndFilenameEnabled);
   if (send_username_and_filename_policy_enabled) {
     return l10n_util::GetStringFUTF16(
         IDS_PRINT_JOB_NOTIFICATION_CLIENT_UNAUTHORIZED_MESSAGE,
@@ -193,16 +193,17 @@ void UpdateNotificationIcon(message_center::Notification* notification,
     case CupsPrintJob::State::STATE_SUSPENDED:
     case CupsPrintJob::State::STATE_RESUMED:
       notification->set_accent_color_id(cros_tokens::kCrosSysPrimary);
-      notification->set_vector_small_image(kNotificationPrintingIcon);
+      notification->set_vector_small_image(ash::kNotificationPrintingIcon);
       break;
     case CupsPrintJob::State::STATE_DOCUMENT_DONE:
       notification->set_accent_color_id(cros_tokens::kCrosSysPrimary);
-      notification->set_vector_small_image(kNotificationPrintingDoneIcon);
+      notification->set_vector_small_image(ash::kNotificationPrintingDoneIcon);
       break;
     case CupsPrintJob::State::STATE_FAILED:
     case CupsPrintJob::State::STATE_ERROR:
       notification->set_accent_color_id(cros_tokens::kCrosSysError);
-      notification->set_vector_small_image(kNotificationPrintingWarningIcon);
+      notification->set_vector_small_image(
+          ash::kNotificationPrintingWarningIcon);
       break;
     case CupsPrintJob::State::STATE_CANCELLED:
       NOTREACHED();

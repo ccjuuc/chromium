@@ -4,6 +4,8 @@
 
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
 
+#include <algorithm>
+
 #include "base/containers/fixed_flat_set.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
@@ -111,7 +113,8 @@ std::u16string AXPlatformNodeDelegate::GetValueForControl() const {
     return std::u16string();
 
   std::u16string value =
-      GetString16Attribute(ax::mojom::StringAttribute::kValue);
+      base::UTF8ToUTF16(GetAriaValueTextOrValue().value_or(std::string()));
+
   if (GetData().IsRangeValueSupported() && value.empty()) {
     float numeric_value =
         GetData().GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange);
@@ -121,6 +124,28 @@ std::u16string AXPlatformNodeDelegate::GetValueForControl() const {
     }
   }
   return value;
+}
+
+std::optional<std::string> AXPlatformNodeDelegate::GetAriaValueTextOrValue()
+    const {
+  if (node_) {
+    return node_->GetAriaValueTextOrValue();
+  }
+
+  if (IsSelectElement(GetRole()) || GetData().IsAtomicTextField()) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kValue);
+  }
+
+  if (GetData().IsRangeValueSupported() &&
+      HasStringAttribute(ax::mojom::StringAttribute::kAriaValueText)) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kAriaValueText);
+  }
+
+  if (HasStringAttribute(ax::mojom::StringAttribute::kValue)) {
+    return GetStringAttribute(ax::mojom::StringAttribute::kValue);
+  }
+
+  return std::nullopt;
 }
 
 AXNodePosition::AXPositionInstance AXPlatformNodeDelegate::CreatePositionAt(
@@ -168,6 +193,12 @@ std::optional<size_t> AXPlatformNodeDelegate::GetIndexInParent() const {
   AXPlatformNodeDelegate* parent = GetParentDelegate();
   if (!parent)
     return std::nullopt;
+
+  // An ignored node is left out of the children its parent exposes, so it has
+  // no index there.
+  if (IsIgnored()) {
+    return std::nullopt;
+  }
 
   for (size_t i = 0; i < parent->GetChildCount(); i++) {
     AXPlatformNode* child_node =
@@ -538,7 +569,8 @@ std::vector<AXPlatformNode*> AXPlatformNodeDelegate::GetTargetNodesForRelation(
 
   for (int32_t target_id : target_ids) {
     AXPlatformNode* target = GetFromNodeID(target_id);
-    if (IsValidRelationTarget(target) && !base::Contains(nodes, target)) {
+    if (IsValidRelationTarget(target) &&
+        !std::ranges::contains(nodes, target)) {
       nodes.push_back(target);
     }
   }
@@ -593,9 +625,7 @@ bool AXPlatformNodeDelegate::IsValidRelationTarget(
 }
 
 std::u16string AXPlatformNodeDelegate::GetAuthorUniqueId() const {
-  if (node_)
-    return node_->GetString16Attribute(ax::mojom::StringAttribute::kHtmlId);
-  return std::u16string();
+  return GetString16Attribute(ax::mojom::StringAttribute::kHtmlId);
 }
 
 AXPlatformNodeId AXPlatformNodeDelegate::GetUniqueId() const {
@@ -1328,6 +1358,10 @@ std::string AXPlatformNodeDelegate::SubtreeToStringHelper(size_t level) {
   }
 
   return result;
+}
+
+BrowserAccessibility* AXPlatformNodeDelegate::ToBrowserAccessibility() {
+  return nullptr;
 }
 
 }  // namespace ui

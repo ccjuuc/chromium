@@ -5,13 +5,16 @@
 #include "gpu/command_buffer/service/scheduler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/strcat.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -24,13 +27,17 @@
 
 namespace gpu {
 namespace {
-uint64_t GetTaskFlowId(uint32_t sequence_id, uint32_t order_num) {
-  // Xor with a mask to reduce likelihood of flow id collision with non-surface
-  // tasks. First 64-bits of SHA256 hash of "SurfaceControl::Transaction",
+uint64_t GetTaskFlowId(uint32_t sequence_id, uint64_t order_num) {
+  // Xor with a mask to reduce likelihood of flow id collision with
+  // non-scheduler tasks. First 64-bits of SHA256 hash of "gpu::Scheduler",
   // interpreted as a big-endian integer. Python snippet:
   // hashlib.sha256(b'gpu::Scheduler').hexdigest()[:16]
   static constexpr uint64_t kMask = 0x03af62470b040902;
-  return kMask ^ (sequence_id) ^ (uint64_t{order_num} << 32);
+  return kMask ^ (static_cast<uint64_t>(sequence_id) << 32) ^ order_num;
+}
+
+perfetto::NamedTrack GetSchedulerTraceTrack(const Scheduler* ptr) {
+  return perfetto::NamedTrack::FromPointer("gpu::Scheduler", ptr);
 }
 }  // namespace
 
@@ -146,13 +153,13 @@ void Scheduler::Sequence::SetEnabled(bool enabled) {
   if (enabled_ == enabled)
     return;
   enabled_ = enabled;
+  auto track =
+      perfetto::NamedTrack::FromPointer("gpu::Scheduler::Sequence", this);
   if (enabled) {
-    TRACE_EVENT_BEGIN("gpu", "SequenceEnabled",
-                      perfetto::Track::FromPointer(this), "sequence_id",
+    TRACE_EVENT_BEGIN("gpu", "SequenceEnabled", track, "sequence_id",
                       sequence_id_.GetUnsafeValue());
   } else {
-    TRACE_EVENT_END("gpu", perfetto::Track::FromPointer(this), "sequence_id",
-                    sequence_id_.GetUnsafeValue());
+    TRACE_EVENT_END("gpu", track, "sequence_id", sequence_id_.GetUnsafeValue());
   }
   scheduler_->TryScheduleSequence(this);
 }
@@ -183,7 +190,7 @@ void Scheduler::Sequence::ContinueTask(base::OnceClosure task_closure) {
   TaskGraph::Sequence::ContinueTask(std::move(task_closure));
 }
 
-uint32_t Scheduler::Sequence::BeginTask(base::OnceClosure* task_closure) {
+uint64_t Scheduler::Sequence::BeginTask(base::OnceClosure* task_closure) {
   DCHECK_EQ(running_state_, SCHEDULED);
   running_state_ = RUNNING;
   return TaskGraph::Sequence::BeginTask(task_closure);
@@ -195,7 +202,7 @@ void Scheduler::Sequence::FinishTask() {
   TaskGraph::Sequence::FinishTask();
 }
 
-void Scheduler::Sequence::OnFrontTaskUnblocked(uint32_t order_num) {
+void Scheduler::Sequence::OnFrontTaskUnblocked(uint64_t order_num) {
   TRACE_EVENT(
       "gpu,toplevel.flow", "Scheduler::SequenceUnblocked",
       perfetto::Flow::Global(GetTaskFlowId(sequence_id_.value(), order_num)));
@@ -240,6 +247,8 @@ SequenceId Scheduler::CreateSequence(
     base::AutoLock auto_lock(lock());
     CHECK_EQ(task_graph_.GetSequence(id), sequence_ptr);
     scheduler_sequence_map_.emplace(id, sequence_ptr);
+
+    per_thread_state_map_[sequence_ptr->task_runner()].num_sequences++;
   }
   return id;
 }
@@ -247,7 +256,19 @@ SequenceId Scheduler::CreateSequence(
 void Scheduler::DestroySequence(SequenceId sequence_id) {
   {
     base::AutoLock auto_lock(lock());
-    scheduler_sequence_map_.erase(sequence_id);
+    auto sequence_it = scheduler_sequence_map_.find(sequence_id);
+    CHECK(sequence_it != scheduler_sequence_map_.end());
+    Sequence* sequence = sequence_it->second;
+
+    auto per_thread_it = per_thread_state_map_.find(sequence->task_runner());
+    CHECK(per_thread_it != per_thread_state_map_.end());
+    auto& thread_state = per_thread_it->second;
+    thread_state.num_sequences--;
+    if (thread_state.num_sequences == 0) {
+      per_thread_state_map_.erase(per_thread_it);
+    }
+
+    scheduler_sequence_map_.erase(sequence_it);
   }
 
   task_graph_.DestroySequence(sequence_id);
@@ -267,6 +288,13 @@ Scheduler::Sequence* Scheduler::GetSequence(SequenceId sequence_id) {
     return it->second;
   }
   return nullptr;
+}
+
+Scheduler::PerThreadState& Scheduler::GetThreadState(
+    base::SingleThreadTaskRunner* task_runner) {
+  auto it = per_thread_state_map_.find(task_runner);
+  CHECK(it != per_thread_state_map_.end());
+  return it->second;
 }
 
 void Scheduler::EnableSequence(SequenceId sequence_id) {
@@ -318,7 +346,7 @@ void Scheduler::ScheduleTaskHelper(Task task) {
   Sequence* sequence = GetSequence(sequence_id);
   DCHECK(sequence);
 
-  uint32_t order_num;
+  uint64_t order_num;
   if (task.task_callback) {
     order_num = sequence->AddTask(
         std::move(task.task_callback), std::move(task.sync_token_fences),
@@ -384,7 +412,7 @@ base::SingleThreadTaskRunner* Scheduler::GetTaskRunnerForTesting(
 
 void Scheduler::TryScheduleSequence(Sequence* sequence) {
   auto* task_runner = sequence->task_runner();
-  auto& thread_state = per_thread_state_map_[task_runner];
+  auto& thread_state = GetThreadState(task_runner);
 
   DVLOG(10) << "Trying to schedule or wake up sequence "
             << sequence->sequence_id().value()
@@ -404,7 +432,7 @@ void Scheduler::TryScheduleSequence(Sequence* sequence) {
     // waiting for work to be done on another thread).
     if (!thread_state.running && HasAnyUnblockedTasksOnRunner(task_runner)) {
       TRACE_EVENT_BEGIN("gpu", "Scheduler::Running",
-                        perfetto::Track::FromPointer(this));
+                        GetSchedulerTraceTrack(this));
       DVLOG(10) << "Waking up thread because there is work to do.";
       thread_state.running = true;
       thread_state.run_next_task_scheduled = base::TimeTicks::Now();
@@ -415,9 +443,7 @@ void Scheduler::TryScheduleSequence(Sequence* sequence) {
 }
 
 const std::vector<Scheduler::SchedulingState>&
-Scheduler::GetSortedRunnableSequences(
-    base::SingleThreadTaskRunner* task_runner) {
-  auto& thread_state = per_thread_state_map_[task_runner];
+Scheduler::GetSortedRunnableSequences(PerThreadState& thread_state) {
   std::vector<SchedulingState>& sorted_sequences =
       thread_state.sorted_sequences;
 
@@ -476,7 +502,7 @@ Scheduler::Sequence* Scheduler::FindNextTaskFromRoot(Sequence* root_sequence) {
   // First, recurse into any dependency that needs to run before the first
   // task in |root_sequence|. The dependencies are sorted by their order num
   // (because of WaitFence ordering).
-  const uint32_t first_task_order_num = root_sequence->tasks_.front().order_num;
+  const uint64_t first_task_order_num = root_sequence->tasks_.front().order_num;
   DVLOG(10) << "Sequence " << root_sequence->sequence_id()
             << " (order_num: " << first_task_order_num << ") has "
             << root_sequence->wait_fences_.size() << " waits.";
@@ -526,7 +552,9 @@ Scheduler::Sequence* Scheduler::FindNextTaskFromRoot(Sequence* root_sequence) {
 
 Scheduler::Sequence* Scheduler::FindNextTask() {
   auto* task_runner = base::SingleThreadTaskRunner::GetCurrentDefault().get();
-  auto& sorted_sequences = GetSortedRunnableSequences(task_runner);
+  auto& thread_state = GetThreadState(task_runner);
+  auto& sorted_sequences = GetSortedRunnableSequences(thread_state);
+
   // Walk the scheduling queue starting with the highest priority sequence and
   // find the first sequence that can be run. The loop will iterate more than
   // once only if DrDC is enabled and the first sequence contains a single
@@ -552,8 +580,17 @@ void Scheduler::RunNextTask() {
   {
     base::AutoLock auto_lock(lock());
     auto* task_runner = base::SingleThreadTaskRunner::GetCurrentDefault().get();
-    auto* thread_state = &per_thread_state_map_[task_runner];
+
     DVLOG(10) << "RunNextTask: Task runner is " << (uint64_t)task_runner;
+
+    auto it = per_thread_state_map_.find(task_runner);
+    if (it == per_thread_state_map_.end()) {
+      TRACE_EVENT_END("gpu", /*"Scheduler::Running"*/
+                      GetSchedulerTraceTrack(this));
+
+      DVLOG(10) << "Thread has no sequences. Sleeping.";
+      return;
+    }
 
     // Walk the job graph starting from the highest priority roots to find a
     // task to run.
@@ -566,20 +603,22 @@ void Scheduler::RunNextTask() {
       // runnable sequences. Change logic to check for that too (that changes
       // old behavior - so leaving for now).
 
+      auto& thread_state = it->second;
+
       // TODO(crbug.com/40278526): this assert is firing frequently on
       // Release builds with dcheck_always_on on Intel Macs. It looks
       // like it happens when the browser drops frames.
       /*
-      DCHECK(GetSortedRunnableSequences(task_runner).empty())
+      DCHECK(GetSortedRunnableSequences(thread_state).empty())
           << "RunNextTask should not have been called "
              "if it did not have any unblocked tasks.";
       */
 
       TRACE_EVENT_END("gpu", /*"Scheduler::Running"*/
-                      perfetto::Track::FromPointer(this));
+                      GetSchedulerTraceTrack(this));
 
       DVLOG(10) << "Empty scheduling queue. Sleeping.";
-      thread_state->running = false;
+      thread_state.running = false;
       return;
     }
 
@@ -596,16 +635,22 @@ void Scheduler::RunNextTask() {
   {
     base::AutoLock auto_lock(lock());
     auto* task_runner = base::SingleThreadTaskRunner::GetCurrentDefault().get();
-    auto* thread_state = &per_thread_state_map_[task_runner];
+
+    auto it = per_thread_state_map_.find(task_runner);
+    if (it == per_thread_state_map_.end()) {
+      DVLOG(10) << "Thread has no sequences. Sleeping.";
+      return;
+    }
+    auto& thread_state = it->second;
 
     if (!HasAnyUnblockedTasksOnRunner(task_runner)) {
       TRACE_EVENT_END("gpu", /*"Scheduler::Running"*/
-                      perfetto::Track::FromPointer(this));
+                      GetSchedulerTraceTrack(this));
       DVLOG(10) << "Thread has no runnable sequences. Sleeping.";
-      thread_state->running = false;
+      thread_state.running = false;
       return;
     }
-    thread_state->run_next_task_scheduled = base::TimeTicks::Now();
+    thread_state.run_next_task_scheduled = base::TimeTicks::Now();
     task_runner->PostTask(FROM_HERE, base::BindOnce(&Scheduler::RunNextTask,
                                                     base::Unretained(this)));
   }
@@ -614,39 +659,68 @@ void Scheduler::RunNextTask() {
 void Scheduler::ExecuteSequence(const SequenceId sequence_id) {
   base::AutoLock auto_lock(lock());
   auto* task_runner = base::SingleThreadTaskRunner::GetCurrentDefault().get();
-  auto* thread_state = &per_thread_state_map_[task_runner];
+  auto& thread_state = GetThreadState(task_runner);
 
-  // Subsampling these metrics reduced CPU utilization (crbug.com/1295441).
-  const bool log_histograms = metrics_subsampler_.ShouldSample(0.001);
-
-  if (log_histograms) {
-    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-        "GPU.SchedulerDfs.ThreadSuspendedTime",
-        base::TimeTicks::Now() - thread_state->run_next_task_scheduled,
-        base::Microseconds(10), base::Seconds(30), 100);
-  }
-
+  DVLOG(10) << "Executing sequence " << sequence_id.value() << ".";
   Sequence* sequence = GetSequence(sequence_id);
   DCHECK(sequence);
   DCHECK(sequence->HasTasksAndEnabled());
   DCHECK_EQ(sequence->task_runner(), task_runner);
 
-  DVLOG(10) << "Executing sequence " << sequence_id.value() << ".";
+  // Subsampling these metrics reduced CPU utilization (crbug.com/1295441).
+  const bool log_histograms = base::ShouldRecordSubsampledMetric(0.001);
+  const std::string_view priority_str =
+      SchedulingPriorityToString(sequence->default_priority_);
 
   if (log_histograms) {
+    base::TimeTicks now = base::TimeTicks::Now();
+
     UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-        "GPU.SchedulerDfs.TaskDependencyTime",
-        sequence->FrontTaskWaitingDependencyDelta(), base::Microseconds(10),
+        "GPU.Scheduler.ThreadSuspendedTime",
+        now - thread_state.run_next_task_scheduled, base::Microseconds(10),
+        base::Seconds(30), 100);
+    base::UmaHistogramCustomMicrosecondsTimes(
+        base::StrCat(
+            {"GPU.Scheduler.ThreadSuspendedTime.", priority_str, "Priority"}),
+        now - thread_state.run_next_task_scheduled, base::Microseconds(10),
         base::Seconds(30), 100);
 
     UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
-        "GPU.SchedulerDfs.TaskSchedulingDelayTime",
-        sequence->FrontTaskSchedulingDelay(), base::Microseconds(10),
+        "GPU.Scheduler.TaskDependencyTime",
+        sequence->FrontTaskWaitingDependencyDelta(), base::Microseconds(10),
+        base::Seconds(30), 100);
+    base::UmaHistogramCustomMicrosecondsTimes(
+        base::StrCat(
+            {"GPU.Scheduler.TaskDependencyTime.", priority_str, "Priority"}),
+        sequence->FrontTaskWaitingDependencyDelta(), base::Microseconds(10),
+        base::Seconds(30), 100);
+
+    // The delay between when the front task was ready to run (no more
+    // dependencies) and now.
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "GPU.Scheduler.TaskSchedulingDelayTime",
+        now - sequence->tasks_.front().running_ready, base::Microseconds(10),
+        base::Seconds(30), 100);
+    base::UmaHistogramCustomMicrosecondsTimes(
+        base::StrCat({"GPU.Scheduler.TaskSchedulingDelayTime.", priority_str,
+                      "Priority"}),
+        now - sequence->tasks_.front().running_ready, base::Microseconds(10),
+        base::Seconds(30), 100);
+
+    // The delay between when the front task was registered and now.
+    UMA_HISTOGRAM_CUSTOM_MICROSECONDS_TIMES(
+        "GPU.Scheduler.TaskTotalDelayTime",
+        now - sequence->tasks_.front().registration, base::Microseconds(10),
+        base::Seconds(30), 100);
+    base::UmaHistogramCustomMicrosecondsTimes(
+        base::StrCat(
+            {"GPU.Scheduler.TaskTotalDelayTime.", priority_str, "Priority"}),
+        now - sequence->tasks_.front().registration, base::Microseconds(10),
         base::Seconds(30), 100);
   }
 
   base::OnceClosure task_closure;
-  const uint32_t order_num = sequence->BeginTask(&task_closure);
+  const uint64_t order_num = sequence->BeginTask(&task_closure);
   const SyncToken release = sequence->current_task_release();
   const uint64_t task_flow_id = GetTaskFlowId(sequence_id.value(), order_num);
 
@@ -655,7 +729,6 @@ void Scheduler::ExecuteSequence(const SequenceId sequence_id) {
   scoped_refptr<SyncPointOrderData> order_data = sequence->order_data();
 
   // Unset pointers before releasing the lock to prevent accidental data race.
-  thread_state = nullptr;
   sequence = nullptr;
 
   base::TimeDelta blocked_time;
@@ -681,13 +754,22 @@ void Scheduler::ExecuteSequence(const SequenceId sequence_id) {
                   perfetto::TerminatingFlow::Global(task_flow_id));
     }
   }
-
   total_blocked_time_ += blocked_time;
 
   // Reset pointers after reacquiring the lock.
   sequence = GetSequence(sequence_id);
   if (sequence) {
     sequence->FinishTask();
+    if (log_histograms) {
+      int percent_concurrent =
+          std::round(sequence->last_task_concurrency_ratio_ * 100);
+      UMA_HISTOGRAM_PERCENTAGE("GPU.Scheduler.PercentConcurrentTaskExecution",
+                               percent_concurrent);
+      base::UmaHistogramPercentage(
+          base::StrCat({"GPU.Scheduler.PercentConcurrentTaskExecution.",
+                        priority_str, "Priority"}),
+          percent_concurrent);
+    }
   }
 }
 

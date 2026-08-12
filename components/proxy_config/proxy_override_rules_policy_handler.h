@@ -17,7 +17,7 @@ class PROXY_CONFIG_EXPORT ProxyOverrideRulesPolicyHandler
   explicit ProxyOverrideRulesPolicyHandler(policy::Schema schema);
   ~ProxyOverrideRulesPolicyHandler() override;
 
-  // policy::CloudOnlyPolicyHandler:
+  // policy::SchemaValidatingPolicyHandler:
   bool CheckPolicySettings(const policy::PolicyMap& policies,
                            policy::PolicyErrorMap* errors) override;
   void ApplyPolicySettings(const policy::PolicyMap& policies,
@@ -28,7 +28,7 @@ class PROXY_CONFIG_EXPORT ProxyOverrideRulesPolicyHandler
   // with the policy's expected formats. These functions are called after the
   // basic schema validation done in `CheckPolicySettings`. Returns false if the
   // passed `value` should result in its rule not being valid overall.
-  bool CheckRule(const base::Value::Dict& value,
+  bool CheckRule(const base::DictValue& value,
                  policy::PolicyErrorPath error_path,
                  policy::PolicyErrorMap* errors);
   bool CheckDestinations(const base::Value& value,
@@ -52,6 +52,10 @@ class PROXY_CONFIG_EXPORT ProxyOverrideRulesPolicyHandler
                 const std::string& parameter,
                 policy::PolicyErrorPath error_path,
                 policy::PolicyErrorMap* errors);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  policy::IntRangePolicyHandler enabled_for_all_users_handler_;
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 };
 
 }  // namespace proxy_config

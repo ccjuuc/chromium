@@ -19,13 +19,15 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.chromium.base.supplier.ObservableSupplier;
-import org.chromium.base.supplier.ObservableSupplierImpl;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel;
 import org.chromium.chrome.browser.tasks.tab_management.TabListRecyclerView;
@@ -45,7 +47,7 @@ import org.chromium.ui.recyclerview.widget.ItemTouchHelper2;
 public class PinnedTabStripCoordinator {
     private final PinnedTabStripMediator mMediator;
     private final TabListRecyclerView mPinnedTabsRecyclerView;
-    private final ObservableSupplierImpl<Boolean> mIsVisibilityAnimationRunningSupplier;
+    private final SettableNonNullObservableSupplier<Boolean> mIsVisibilityAnimationRunningSupplier;
     private final PinnedTabStripAnimationManager mAnimationManager;
 
     /**
@@ -54,14 +56,14 @@ public class PinnedTabStripCoordinator {
      * @param activity The current activity.
      * @param parentView The parent view to attach the pinned tabs strip to.
      * @param tabListCoordinator The coordinator for the main tab grid.
-     * @param tabGroupModelFilterSupplier The supplier of the current {@link TabGroupModelFilter}.
+     * @param tabModelSupplier The supplier of the current {@link TabModel}.
      */
     public PinnedTabStripCoordinator(
             Activity activity,
             ViewGroup parentView,
             TabListCoordinator tabListCoordinator,
-            ObservableSupplier<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier,
-            ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            MonotonicObservableSupplier<TabModel> tabModelSupplier,
+            MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
             @Nullable Runnable onTabGroupCreation) {
@@ -73,7 +75,7 @@ public class PinnedTabStripCoordinator {
                                         parentView,
                                         /* attachToParent= */ false);
         TabListModel pinnedTabsModelList = new TabListModel();
-        mIsVisibilityAnimationRunningSupplier = new ObservableSupplierImpl<>(false);
+        mIsVisibilityAnimationRunningSupplier = ObservableSuppliers.createNonNull(false);
         mAnimationManager = new PinnedTabStripAnimationManager(mPinnedTabsRecyclerView);
         PropertyModel pinnedTabStripPropertyModel =
                 new PropertyModel.Builder(PinnedTabStripProperties.ALL_KEYS)
@@ -112,7 +114,7 @@ public class PinnedTabStripCoordinator {
                         tabListModel,
                         pinnedTabsModelList,
                         pinnedTabStripPropertyModel,
-                        tabGroupModelFilterSupplier,
+                        tabModelSupplier,
                         tabBookmarkerSupplier,
                         bottomSheetController,
                         modalDialogManager,
@@ -121,7 +123,7 @@ public class PinnedTabStripCoordinator {
         PinnedTabStripItemTouchHelperCallback callback =
                 new PinnedTabStripItemTouchHelperCallback(
                         activity,
-                        tabGroupModelFilterSupplier,
+                        tabModelSupplier,
                         pinnedTabsModelList,
                         () -> mPinnedTabsRecyclerView,
                         mMediator::onLongPress);
@@ -141,7 +143,7 @@ public class PinnedTabStripCoordinator {
     }
 
     /** Returns a supplier that indicates whether the pinned tab strip is animating. */
-    public ObservableSupplier<Boolean> getIsVisibilityAnimationRunningSupplier() {
+    public NonNullObservableSupplier<Boolean> getIsVisibilityAnimationRunningSupplier() {
         return mIsVisibilityAnimationRunningSupplier;
     }
 
@@ -162,8 +164,8 @@ public class PinnedTabStripCoordinator {
             TabListModel tabListModel,
             TabListModel pinnedTabsModelList,
             PropertyModel stripPropertyModel,
-            ObservableSupplier<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier,
-            ObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
+            MonotonicObservableSupplier<TabModel> tabModelSupplier,
+            MonotonicObservableSupplier<TabBookmarker> tabBookmarkerSupplier,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
             @Nullable Runnable onTabGroupCreation) {
@@ -177,7 +179,7 @@ public class PinnedTabStripCoordinator {
                 tabListModel,
                 pinnedTabsModelList,
                 stripPropertyModel,
-                tabGroupModelFilterSupplier,
+                tabModelSupplier,
                 tabBookmarkerSupplier,
                 bottomSheetController,
                 modalDialogManager,

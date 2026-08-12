@@ -20,14 +20,18 @@ import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
+import java.util.concurrent.CompletableFuture;
+
 /** This implementation always creates tabs as frozen/pending, never with web contents. */
 @NullMarked
 public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
     private final Profile mProfile;
+    private final boolean mIsIncognito;
     private TabModel mTabModel;
 
-    public HeadlessTabCreator(Profile profile) {
+    public HeadlessTabCreator(Profile profile, boolean isIncognito) {
         mProfile = profile;
+        mIsIncognito = isIncognito;
     }
 
     @Initializer
@@ -40,6 +44,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
     @Override
     public @Nullable Tab createNewTab(
             LoadUrlParams loadUrlParams, @TabLaunchType int type, @Nullable Tab parent) {
+        checkNotIncognito();
         return createNewTab(loadUrlParams, /* title= */ "", type, parent, mTabModel.getCount());
     }
 
@@ -59,6 +64,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
             @TabLaunchType int type,
             @Nullable Tab parent,
             int position) {
+        checkNotIncognito();
         Tab tab =
                 TabBuilder.createForLazyLoad(mProfile, loadUrlParams, title)
                         .setLaunchType(type)
@@ -71,6 +77,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
 
     @Override
     public @Nullable Tab createFrozenTab(TabState state, int id, int index) {
+        checkNotIncognito();
         Tab tab =
                 TabBuilder.createFromFrozenState(mProfile)
                         .setId(id)
@@ -84,6 +91,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
 
     @Override
     public @Nullable Tab launchUrl(String url, @TabLaunchType int type) {
+        checkNotIncognito();
         return createNewTab(
                 new LoadUrlParams(url),
                 /* title= */ "",
@@ -100,7 +108,7 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
             @TabLaunchType int type,
             GURL url,
             int index,
-            boolean addTabToModel) {
+            CompletableFuture<Boolean> addTabToModel) {
         throw new RuntimeException("Headless does not support live web contents.");
     }
 
@@ -111,6 +119,14 @@ public class HeadlessTabCreator implements TabCreator, NeedsTabModel {
 
     @Override
     public void launchNtp(@TabLaunchType int type) {
+        checkNotIncognito();
         TabCreatorUtil.launchNtp(this, mProfile, type);
+    }
+
+    private void checkNotIncognito() {
+        if (mIsIncognito) {
+            throw new UnsupportedOperationException(
+                    "Incognito tab creation is not supported in Headless.");
+        }
     }
 }

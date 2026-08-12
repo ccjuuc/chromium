@@ -23,10 +23,12 @@
 #include "base/test/with_feature_override.h"
 #include "build/branding_buildflags.h"
 #include "components/google/core/common/google_util.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/search_engines/regulatory_extension_type.h"
 #include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/search_terms_data.h"
+#include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_data_util.h"
 #include "components/search_engines/testing_search_terms_data.h"
@@ -407,6 +409,7 @@ TEST_F(TemplateURLTest, ParsePlayStoreDefinitions) {
       "{google:processedImageDimensions}",
       "{google:searchClient}",
       "{google:searchFieldtrialParameter}",
+      "{google:searchSource}",
       "{google:searchVersion}",
       "{google:sessionToken}",
       "{google:sourceId}",
@@ -547,6 +550,27 @@ TEST_F(TemplateURLTest, URLRefTestEncoding2) {
       TemplateURLRef::SearchTermsArgs(u"X"), search_terms_data_));
   ASSERT_TRUE(result.is_valid());
   EXPECT_EQ("http://fooxxutf-8yutf-8a/", result.spec());
+}
+
+TEST_F(TemplateURLTest, URLRefTestSearchSource) {
+  TemplateURLData data;
+  data.SetURL("http://foo/?q={searchTerms}&{google:searchSource}");
+  TemplateURL url(data);
+  EXPECT_TRUE(url.url_ref().IsValid(search_terms_data_));
+  ASSERT_TRUE(url.url_ref().SupportsReplacement(search_terms_data_));
+
+  TemplateURLRef::SearchTermsArgs args(u"X");
+  args.page_classification = metrics::OmniboxEventProto::NTP;
+  GURL result_ntp(url.url_ref().ReplaceSearchTerms(args, search_terms_data_));
+  EXPECT_EQ("http://foo/?q=X&source=chrome.ob&", result_ntp.spec());
+
+  args.page_classification = metrics::OmniboxEventProto::NTP_REALBOX;
+  GURL result_rb(url.url_ref().ReplaceSearchTerms(args, search_terms_data_));
+  EXPECT_EQ("http://foo/?q=X&source=chrome.rb&", result_rb.spec());
+
+  args.page_classification = metrics::OmniboxEventProto::ANDROID_HUB;
+  GURL result_other(url.url_ref().ReplaceSearchTerms(args, search_terms_data_));
+  EXPECT_EQ("http://foo/?q=X&", result_other.spec());
 }
 
 TEST_F(TemplateURLTest, URLRefTestSearchTermsUsingTermsData) {
@@ -1537,12 +1561,39 @@ TEST_F(TemplateURLTest, ComposeboxSuggestClient) {
   ASSERT_FALSE(url.url_ref().SupportsReplacement(search_terms_data_));
   TemplateURLRef::SearchTermsArgs search_terms_args;
 
-  search_terms_args.request_source = RequestSource::NTP_COMPOSEBOX;
-  // Check that the URL is correct for `RequestSource::NTP_COMPOSEBOX`.
+  search_terms_args.request_source = RequestSource::COMPOSEBOX;
+  // Check that the URL is correct for `RequestSource::COMPOSEBOX`.
   features.InitAndEnableFeature(omnibox::kComposeboxUsesChromeComposeClient);
   GURL result(
       url.url_ref().ReplaceSearchTerms(search_terms_args, search_terms_data_));
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  EXPECT_EQ("http://google.com/?client=chrome-mobile-aim", result.spec());
+#else
   EXPECT_EQ("http://google.com/?client=chrome-compose", result.spec());
+#endif
+}
+
+TEST_F(TemplateURLTest, CoBrowseComposeboxSuggestClient) {
+  base::test::ScopedFeatureList features;
+  const std::string base_url_str("http://google.com/?");
+  const std::string query_params_str("client={google:suggestClient}");
+  const std::string full_url_str = base_url_str + query_params_str;
+  search_terms_data_.set_google_base_url(base_url_str);
+
+  TemplateURLData data;
+  data.SetURL(full_url_str);
+  TemplateURL url(data);
+  EXPECT_TRUE(url.url_ref().IsValid(search_terms_data_));
+  ASSERT_FALSE(url.url_ref().SupportsReplacement(search_terms_data_));
+  TemplateURLRef::SearchTermsArgs search_terms_args;
+
+  search_terms_args.request_source = RequestSource::COMPOSEBOX;
+  search_terms_args.page_classification =
+      metrics::OmniboxEventProto::CO_BROWSING_COMPOSEBOX;
+  // Check that the URL is correct for `RequestSource::COMPOSEBOX`.
+  GURL result(
+      url.url_ref().ReplaceSearchTerms(search_terms_args, search_terms_data_));
+  EXPECT_EQ("http://google.com/?client=chrome-cobrowse-compose", result.spec());
 }
 
 TEST_F(TemplateURLTest, SuggestRequestIdentifier) {
@@ -1572,8 +1623,8 @@ TEST_F(TemplateURLTest, SuggestRequestIdentifier) {
   EXPECT_EQ("http://google.com/?gs_ri=chrome-ext-ansg", result.spec());
 #endif
 
-  search_terms_args.request_source = RequestSource::NTP_COMPOSEBOX;
-  // Check that the URL is correct for `RequestSource::NTP_COMPOSEBOX`.
+  search_terms_args.request_source = RequestSource::COMPOSEBOX;
+  // Check that the URL is correct for `RequestSource::COMPOSEBOX`.
   result = GURL(
       url.url_ref().ReplaceSearchTerms(search_terms_args, search_terms_data_));
   ASSERT_TRUE(result.is_valid());
@@ -2534,6 +2585,182 @@ TEST_F(TemplateURLTest, GenerateSearchURL) {
   }
 }
 
+TEST_F(TemplateURLTest, GenerateURL_WithSuggestPath) {
+  TemplateURLData data;
+  data.suggestions_url = "https://foo/{google:suggestPath}?q={searchTerms}";
+
+  SearchTermsData search_terms_data;
+  TemplateURLRef::SearchTermsArgs search_terms_args(u"user query");
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndDisableFeature(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1);
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ("https://foo/search?q=user+query", result_url);
+  }
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndEnableFeature(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1);
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ("https://foo/s?q=user+query", result_url);
+  }
+}
+
+// Regression test for crbug.com/509932193.
+// Verifies that structural placeholders can be parsed even when FeatureList is
+// not yet initialized.
+TEST_F(TemplateURLTest, SupportsReplacement_NoFeatureList) {
+  // Use ScopedFeatureList to ensure we restore the original state.
+  base::test::ScopedFeatureList scoped_feature_list;
+
+  // Clear the global FeatureList and FieldTrialList.
+  scoped_feature_list.InitWithNullFeatureAndFieldTrialLists();
+
+  // Reset the early feature access tracker to ensure a clean state.
+  base::FeatureList::ResetEarlyFeatureAccessTrackerForTesting();
+
+  // This is what happens in the browser process to prevent early access.
+  base::FeatureList::FailOnFeatureAccessWithoutFeatureList();
+
+  TemplateURLData data;
+  data.suggestions_url = "https://foo/{google:suggestPath}?q={searchTerms}";
+  TemplateURL turl(data);
+
+  // This should NOT crash.
+  EXPECT_TRUE(
+      turl.suggestions_url_ref().SupportsReplacement(search_terms_data_));
+
+  // Cleanup: Reset EarlyFeatureAccessTracker. ScopedFeatureList will restore
+  // the previous FeatureList instance in its destructor.
+  base::FeatureList::ResetEarlyFeatureAccessTrackerForTesting();
+}
+
+TEST_F(TemplateURLTest, GenerateURL_WithSuggestPathAndClientParam) {
+  TemplateURLData data;
+  data.suggestions_url =
+      "https://foo/"
+      "{google:suggestPath}?q={searchTerms}&client={google:suggestClient}";
+
+  SearchTermsData search_terms_data;
+  TemplateURLRef::SearchTermsArgs search_terms_args(u"user query");
+  search_terms_args.request_source = SearchTermsData::RequestSource::SEARCHBOX;
+  const std::string expected_client =
+      TemplateURL::GetSuggestionClient(search_terms_args);
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndEnableFeature(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1);
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ(base::StringPrintf("https://foo/s?q=user+query&client=%s",
+                                 expected_client),
+              result_url);
+  }
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndEnableFeatureWithParameters(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1,
+        {{"OmniboxSuggestPathClient",
+          base::StringPrintf("test-client,%s", expected_client)}});
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ(base::StringPrintf("https://foo/s?q=user+query&client=%s",
+                                 expected_client),
+              result_url);
+  }
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndEnableFeatureWithParameters(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1,
+        {{"OmniboxSuggestPathClient", "test-client"}});
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ(base::StringPrintf("https://foo/search?q=user+query&client=%s",
+                                 expected_client),
+              result_url);
+  }
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndEnableFeatureWithParameters(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1,
+        {{"OmniboxSuggestPathClient", ""}});
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ(base::StringPrintf("https://foo/s?q=user+query&client=%s",
+                                 expected_client),
+              result_url);
+  }
+
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::SuggestPathClientConfig>
+        scoped_config;
+    base::test::ScopedFeatureList features;
+    features.InitAndDisableFeature(
+        omnibox_feature_configs::SuggestPathClientConfig::
+            kUseShortSuggestPathV1);
+    scoped_config.Reset();
+
+    TemplateURL turl(data);
+    std::string result_url = turl.suggestions_url_ref().ReplaceSearchTerms(
+        search_terms_args, search_terms_data);
+    EXPECT_EQ(base::StringPrintf("https://foo/search?q=user+query&client=%s",
+                                 expected_client),
+              result_url);
+  }
+}
+
 TEST_F(TemplateURLTest, GenerateURL_NoRegulatoryExtensions) {
   TemplateURLData data;
   data.SetURL("https://search?q={searchTerms}");
@@ -3354,4 +3581,40 @@ TEST_P(TemplateURLIsBetterThanEngineTest, Compare) {
   TemplateURL worse = CreateEngineFromTestEngine(GetParam().worse_engine);
   EXPECT_TRUE(better.IsBetterThanConflictingEngine(&worse));
   EXPECT_FALSE(worse.IsBetterThanConflictingEngine(&better));
+}
+
+TEST_F(TemplateURLTest, RequiresRemovalConfirmation) {
+  {
+    TemplateURLData data;
+    data.prepopulate_id = 1;
+    TemplateURL url(data);
+    EXPECT_TRUE(url.RequiresRemovalConfirmation());
+  }
+  {
+    TemplateURLData data;
+    data.prepopulate_id = 0;
+    TemplateURL url(data);
+    EXPECT_FALSE(url.RequiresRemovalConfirmation());
+  }
+  {
+    TemplateURLData data;
+    data.prepopulate_id = 0;
+    data.policy_origin = TemplateURLData::PolicyOrigin::kSiteSearch;
+    TemplateURL url(data);
+    EXPECT_TRUE(url.RequiresRemovalConfirmation());
+  }
+  {
+    TemplateURLData data;
+    data.prepopulate_id = 0;
+    data.policy_origin = TemplateURLData::PolicyOrigin::kDefaultSearchProvider;
+    TemplateURL url(data);
+    EXPECT_FALSE(url.RequiresRemovalConfirmation());
+  }
+  {
+    TemplateURLData data;
+    data.prepopulate_id = 0;
+    data.policy_origin = TemplateURLData::PolicyOrigin::kSearchAggregator;
+    TemplateURL url(data);
+    EXPECT_TRUE(url.RequiresRemovalConfirmation());
+  }
 }

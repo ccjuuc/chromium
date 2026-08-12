@@ -101,14 +101,16 @@ base::span<const PageInfoUI::PermissionUIInfo> GetContentSettingsUIInfo() {
       {
           ContentSettingsType::SENSORS,
           base::FeatureList::IsEnabled(features::kGenericSensorExtraClasses)
-              ? IDS_SITE_SETTINGS_TYPE_SENSORS
+              ? IDS_SITE_SETTINGS_TYPE_MOTION_AND_LIGHT_SENSORS
               : IDS_SITE_SETTINGS_TYPE_MOTION_SENSORS,
           base::FeatureList::IsEnabled(features::kGenericSensorExtraClasses)
-              ? IDS_SITE_SETTINGS_TYPE_SENSORS_MID_SENTENCE
+              ? IDS_SITE_SETTINGS_TYPE_MOTION_AND_LIGHT_SENSORS_MID_SENTENCE
               : IDS_SITE_SETTINGS_TYPE_MOTION_SENSORS_MID_SENTENCE,
       },
       {ContentSettingsType::USB_GUARD, IDS_SITE_SETTINGS_TYPE_USB_DEVICES,
        IDS_SITE_SETTINGS_TYPE_USB_DEVICES_MID_SENTENCE},
+      {ContentSettingsType::SERIAL_GUARD, IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS,
+       IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS_MID_SENTENCE},
       {ContentSettingsType::BLUETOOTH_GUARD,
        IDS_SITE_SETTINGS_TYPE_BLUETOOTH_DEVICES,
        IDS_SITE_SETTINGS_TYPE_BLUETOOTH_DEVICES_MID_SENTENCE},
@@ -141,9 +143,6 @@ base::span<const PageInfoUI::PermissionUIInfo> GetContentSettingsUIInfo() {
       {ContentSettingsType::FILE_SYSTEM_WRITE_GUARD,
        IDS_SITE_SETTINGS_TYPE_FILE_SYSTEM_ACCESS_WRITE,
        IDS_SITE_SETTINGS_TYPE_FILE_SYSTEM_ACCESS_WRITE_MID_SENTENCE},
-      {ContentSettingsType::LOCAL_NETWORK_ACCESS,
-       IDS_SITE_SETTINGS_TYPE_LOCAL_NETWORK_ACCESS,
-       IDS_SITE_SETTINGS_TYPE_LOCAL_NETWORK_ACCESS_MID_SENTENCE},
       {ContentSettingsType::LOCAL_NETWORK, IDS_SITE_SETTINGS_TYPE_LOCAL_NETWORK,
        IDS_SITE_SETTINGS_TYPE_LOCAL_NETWORK_MID_SENTENCE},
       {ContentSettingsType::LOOPBACK_NETWORK,
@@ -170,13 +169,13 @@ base::span<const PageInfoUI::PermissionUIInfo> GetContentSettingsUIInfo() {
        IDS_SITE_SETTINGS_TYPE_IMAGES_MID_SENTENCE},
       {ContentSettingsType::POINTER_LOCK, IDS_SITE_SETTINGS_TYPE_POINTER_LOCK,
        IDS_SITE_SETTINGS_TYPE_POINTER_LOCK_MID_SENTENCE},
-      {ContentSettingsType::SERIAL_GUARD, IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS,
-       IDS_SITE_SETTINGS_TYPE_SERIAL_PORTS_MID_SENTENCE},
-      {ContentSettingsType::WEB_PRINTING, IDS_SITE_SETTINGS_TYPE_WEB_PRINTING,
-       IDS_SITE_SETTINGS_TYPE_WEB_PRINTING_MID_SENTENCE},
       {ContentSettingsType::WEB_APP_INSTALLATION,
        IDS_SITE_SETTINGS_TYPE_WEB_APP_INSTALLATION,
        IDS_SITE_SETTINGS_TYPE_WEB_APP_INSTALLATION_MID_SENTENCE},
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+      {ContentSettingsType::WEB_PRINTING, IDS_SITE_SETTINGS_TYPE_WEB_PRINTING,
+       IDS_SITE_SETTINGS_TYPE_WEB_PRINTING_MID_SENTENCE},
 #endif
   };
   return kPermissionUIInfo;
@@ -263,6 +262,12 @@ std::u16string GetPermissionAskStateString(ContentSettingsType type) {
     case ContentSettingsType::NOTIFICATIONS:
       message_id = IDS_PAGE_INFO_STATE_TEXT_NOTIFICATIONS_ASK;
       break;
+    case ContentSettingsType::SENSORS:
+      message_id =
+          base::FeatureList::IsEnabled(features::kGenericSensorExtraClasses)
+              ? IDS_PAGE_INFO_STATE_TEXT_MOTION_AND_LIGHT_SENSORS_ASK
+              : IDS_PAGE_INFO_STATE_TEXT_MOTION_SENSORS_ASK;
+      break;
     case ContentSettingsType::MIDI_SYSEX:
       message_id = IDS_PAGE_INFO_STATE_TEXT_MIDI_SYSEX_ASK;
       break;
@@ -301,9 +306,6 @@ std::u16string GetPermissionAskStateString(ContentSettingsType type) {
       break;
     case ContentSettingsType::IDLE_DETECTION:
       message_id = IDS_PAGE_INFO_STATE_TEXT_IDLE_DETECTION_ASK;
-      break;
-    case ContentSettingsType::LOCAL_NETWORK_ACCESS:
-      message_id = IDS_PAGE_INFO_STATE_TEXT_LOCAL_NETWORK_ACCESS_ASK;
       break;
     case ContentSettingsType::LOCAL_NETWORK:
       message_id = IDS_PAGE_INFO_STATE_TEXT_LOCAL_NETWORK_ASK;
@@ -391,13 +393,6 @@ PageInfoUI::IdentityInfo::~IdentityInfo() = default;
 PageInfoUI::PageFeatureInfo::PageFeatureInfo()
     : is_vr_presentation_in_headset(false) {}
 
-bool PageInfoUI::AdPersonalizationInfo::is_empty() const {
-  return !has_joined_user_to_interest_group && accessed_topics.empty();
-}
-
-PageInfoUI::AdPersonalizationInfo::AdPersonalizationInfo() = default;
-PageInfoUI::AdPersonalizationInfo::~AdPersonalizationInfo() = default;
-
 std::unique_ptr<PageInfoUI::SecurityDescription>
 PageInfoUI::GetSecurityDescription(const IdentityInfo& identity_info) const {
   switch (identity_info.safe_browsing_status) {
@@ -457,6 +452,11 @@ PageInfoUI::GetSecurityDescription(const IdentityInfo& identity_info) const {
       return CreateSecurityDescription(SecuritySummaryColor::ENTERPRISE,
                                        IDS_PAGE_INFO_ENTERPRISE_BLOCK_SUMMARY,
                                        IDS_PAGE_INFO_ENTERPRISE_BLOCK_DETAILS,
+                                       SecurityDescriptionType::SAFE_BROWSING);
+    case PageInfo::SAFE_BROWSING_STATUS_WARNABLE_SUSPICIOUS_SITE:
+      return CreateSecurityDescription(SecuritySummaryColor::RED,
+                                       IDS_PAGE_INFO_SUSPICIOUS_SITE_SUMMARY,
+                                       IDS_PAGE_INFO_SUSPICIOUS_SITE_DETAILS,
                                        SecurityDescriptionType::SAFE_BROWSING);
   }
 
@@ -734,7 +734,7 @@ std::u16string PageInfoUI::PermissionAutoBlockedToUIString(
   // to contain all needed information regarding Automatically Blocked flag.
   auto* info = PermissionSettingsRegistry::GetInstance()->Get(permission.type);
   CHECK(info);
-  if (permission.setting && !info->delegate().IsBlocked(*permission.setting) &&
+  if (permission.setting &&
       permissions::PermissionDecisionAutoBlocker::IsEnabledForContentSetting(
           permission.type)) {
     content::PermissionResult permission_result(

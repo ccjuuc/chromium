@@ -21,12 +21,13 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
-#include "absl/strings/string_view.h"
 #include "common.h"
 #include "normalizer.h"
 #include "sentencepiece_model.pb.h"
 #include "sentencepiece_processor.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "third_party/darts_clone/darts.h"
 #include "util.h"
 
@@ -34,12 +35,11 @@ namespace sentencepiece {
 
 // "_this_is_a_pen" => ["_this", "_is", "_a", "_pen"]
 std::vector<absl::string_view> SplitIntoWords(
-    absl::string_view text,
-    bool treat_ws_as_suffix = false,
+    absl::string_view text, bool treat_ws_as_suffix = false,
     bool allow_ws_only_pieces = false);
 
 // Converts byte (0-255) to piece (e.g., 58 -> "<0x3A>").
-std::string ByteToPiece(unsigned char c);
+const std::string& ByteToPiece(unsigned char c);
 
 // Converts piece to byte (e.g., "<0x3A>" -> 58). Returns -1 if `piece` is not
 // a valid byte piece.
@@ -55,44 +55,47 @@ class ModelProto;
 class ModelInterface {
  public:
   using PieceToIdMap = absl::flat_hash_map<absl::string_view, int>;
-  //                                           string_util::string_view_hash>;
 
-  absl::string_view unk_piece() const;
-  absl::string_view bos_piece() const;
-  absl::string_view eos_piece() const;
-  absl::string_view pad_piece() const;
+  [[nodiscard]] absl::string_view unk_piece() const;
+  [[nodiscard]] absl::string_view bos_piece() const;
+  [[nodiscard]] absl::string_view eos_piece() const;
+  [[nodiscard]] absl::string_view pad_piece() const;
 
   // `model_proto` should not be deleted until ModelInterface is destroyed.
-  explicit ModelInterface(const ModelProto &model_proto);
-  ModelInterface() {}
+  explicit ModelInterface(const ModelProto& model_proto);
+  ModelInterface() = default;
 
   virtual ~ModelInterface();
 
   // Returns Status.
   // Encode/Decode functions are valid only when status is OK.
-  virtual util::Status status() const { return status_; }
+  virtual absl::Status status() const { return status_; }
 
-  virtual const ModelProto &model_proto() const { return *model_proto_; }
+  [[nodiscard]] virtual const ModelProto& model_proto() const {
+    return *model_proto_;
+  }
 
-  virtual const normalizer::PrefixMatcher *prefix_matcher() const {
+  [[nodiscard]] virtual const normalizer::PrefixMatcher* prefix_matcher()
+      const {
     return matcher_.get();
   }
 
   // Given a normalized string, returns a sequence of sentence pieces with ids.
   // The concatenation of pieces must be the same as `normalized`.
-  virtual EncodeResult Encode(absl::string_view normalized) const = 0;
+  [[nodiscard]] virtual EncodeResult Encode(
+      absl::string_view normalized) const = 0;
 
   // The same as above, but returns nbest result with score.
-  virtual NBestEncodeResult NBestEncode(absl::string_view normalized,
-                                        int nbest_size) const {
-    LOG(ERROR) << "Not implemented.";
-    return NBestEncodeResult();
+  [[nodiscard]] virtual NBestEncodeResult NBestEncode(
+      absl::string_view normalized, int nbest_size) const {
+    ABSL_LOG(ERROR) << "Not implemented.";
+    return {};
   }
 
-  virtual EncodeResult SampleEncode(absl::string_view normalized,
-                                    float alpha) const {
-    LOG(ERROR) << "Not implemented.";
-    return EncodeResult();
+  [[nodiscard]] virtual EncodeResult SampleEncode(absl::string_view normalized,
+                                                  float alpha) const {
+    ABSL_LOG(ERROR) << "Not implemented.";
+    return {};
   }
 
   // Sample `samples` many tokenisations from the segmentation lattice
@@ -102,49 +105,58 @@ class ModelInterface {
   // sample elements
   // If `include_best` is true, the best tokenisation is always included in the
   // sample, and the remaining elements are sampled excluding the best.
-  virtual NBestEncodeResult SampleEncodeAndScore(absl::string_view normalized,
-                                                 float alpha,
-                                                 int samples,
-                                                 bool wor,
-                                                 bool include_best) const {
-    LOG(ERROR) << "Not implemented.";
+  [[nodiscard]] virtual NBestEncodeResult SampleEncodeAndScore(
+      absl::string_view normalized, float alpha, int samples, bool wor,
+      bool include_best) const {
+    ABSL_LOG(ERROR) << "Not implemented.";
     return {{EncodeResult(), 0.0}};
   }
 
   // Calculates the entropy of the segmentation lattice with inverse temperature
   // `alpha`. Uses a novel dynamic program to calculate the entropy.
-  virtual float CalculateEntropy(absl::string_view normalized,
-                                 float alpha) const {
-    LOG(ERROR) << "Not implemented.";
+  [[nodiscard]] virtual float CalculateEntropy(absl::string_view normalized,
+                                               float alpha) const {
+    ABSL_LOG(ERROR) << "Not implemented.";
     return 0.0;
   }
 
   // Return true if SampleEncode returns a valid result.
-  virtual bool IsSampleEncodeAvailable() const { return false; }
+  [[nodiscard]] virtual bool IsSampleEncodeAvailable() const { return false; }
 
   // Return true if NBestEncode returns a valid result.
-  virtual bool IsNBestEncodeAvailable() const { return false; }
+  [[nodiscard]] virtual bool IsNBestEncodeAvailable() const { return false; }
 
   // Return true if SampleEncodeAndScore returns a valid result.
-  virtual bool IsSampleEncodeAndScoreAvailable() const { return false; }
+  [[nodiscard]] virtual bool IsSampleEncodeAndScoreAvailable() const {
+    return false;
+  }
 
   // Return true if CalculateEntropy returns a valid result.
-  virtual bool IsCalculateEntropyAvailable() const { return false; }
+  [[nodiscard]] virtual bool IsCalculateEntropyAvailable() const {
+    return false;
+  }
 
   // Returns the vocab id of `piece`.
   // Returns UNK(0) if `piece` is unknown
-  virtual int PieceToId(absl::string_view piece) const;
+  [[nodiscard]] virtual int PieceToId(absl::string_view piece) const;
+
+  // Returns the vocab id of `piece`.
+  // Returns UNK(0) if `piece` is unknown
+  // It does not use reserved_id_map_ for the optimization sake
+  [[nodiscard]] int PieceToIdNoReserved(absl::string_view piece) const;
 
   // Returns the string representation of vocab with `id`.
   // id must be 0 <= id < GetPieceSize().
-  virtual const std::string &IdToPiece(int id) const {
+  [[nodiscard]] virtual const std::string& IdToPiece(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return model_proto_->pieces(id).piece();
   }
 
   // Returns the size of sentence pieces, which is the same
   // as the size of vocabulary for NMT.
-  virtual int GetPieceSize() const {
-    if (!model_proto_) {
+  [[nodiscard]] virtual int GetPieceSize() const {
+    if (model_proto_ == nullptr) {
       return 0;
     }
     return model_proto_->pieces_size();
@@ -153,41 +165,54 @@ class ModelInterface {
   // Returns the score of `id`.
   // Score represents a log probability of the piece.
   // We can roughly estimate the unigram frequency of the piece.
-  virtual float GetScore(int id) const {
+  [[nodiscard]] virtual float GetScore(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return model_proto_->pieces(id).score();
   }
 
   // Returns true if `id` is unknown symbol.
-  virtual bool IsUnknown(int id) const {
+  [[nodiscard]] virtual bool IsUnknown(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::UNKNOWN);
   }
 
   // Returns true if `id` is control symbol.
-  virtual bool IsControl(int id) const {
+  [[nodiscard]] virtual bool IsControl(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::CONTROL);
   }
 
   // Returns true if `id` is unused symbol.
-  virtual bool IsUnused(int id) const {
+  [[nodiscard]] virtual bool IsUnused(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::UNUSED);
   }
 
   // Returns true if `id` is user defined symbol.
-  virtual bool IsUserDefined(int id) const {
+  [[nodiscard]] virtual bool IsUserDefined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::USER_DEFINED);
   }
 
   // Returns true if `id` is byte symbol.
-  virtual bool IsByte(int id) const {
+  [[nodiscard]] virtual bool IsByte(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() == ModelProto::SentencePiece::BYTE);
   }
 
-  virtual bool ByteFallbackEnabled() const {
-    return model_proto_ && model_proto_->trainer_spec().byte_fallback();
+  [[nodiscard]] virtual bool ByteFallbackEnabled() const {
+    return (model_proto_ != nullptr) &&
+           model_proto_->trainer_spec().byte_fallback();
   }
 
   // Verifies if the `expected` and `actual` outputs are equivalent. `expected`
@@ -195,44 +220,56 @@ class ModelInterface {
   // that the two strings are identical. In some model, due to float rounding
   // errors, the strings may not be identical, but they may be still equivalent
   // provided their scores are close enough (by some espilon).
-  virtual bool VerifyOutputsEquivalent(absl::string_view expected,
-                                       absl::string_view actual) const {
+  [[nodiscard]] virtual bool VerifyOutputsEquivalent(
+      absl::string_view expected, absl::string_view actual) const {
     return expected == actual;
   }
 
  protected:
-  void InitializePieces();
+  void InitializePieces(bool use_reserved_id_map = true);
 
   // Non-virtual (inlined) implementation for faster execution.
-  inline float GetScoreInlined(int id) const {
+  [[nodiscard]] float GetScoreInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return model_proto_->pieces(id).score();
   }
 
-  inline bool IsUnknownInlined(int id) const {
+  [[nodiscard]] bool IsUnknownInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::UNKNOWN);
   }
 
-  inline bool IsControlInlined(int id) const {
+  [[nodiscard]] bool IsControlInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::CONTROL);
   }
 
-  inline bool IsUnusedInlined(int id) const {
+  [[nodiscard]] bool IsUnusedInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::UNUSED);
   }
 
-  inline bool IsUserDefinedInlined(int id) const {
+  [[nodiscard]] bool IsUserDefinedInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() ==
             ModelProto::SentencePiece::USER_DEFINED);
   }
 
-  inline bool IsByteInlined(int id) const {
+  [[nodiscard]] bool IsByteInlined(int id) const {
+    ABSL_DCHECK_GE(id, 0);
+    ABSL_DCHECK_LT(id, model_proto_->pieces_size());
     return (model_proto_->pieces(id).type() == ModelProto::SentencePiece::BYTE);
   }
 
-  const ModelProto *model_proto_ = nullptr;
+  const ModelProto* model_proto_ = nullptr;
 
   // PrefixMatcher for user defined symbols.
   std::unique_ptr<normalizer::PrefixMatcher> matcher_;
@@ -247,7 +284,7 @@ class ModelInterface {
   int unk_id_ = 0;
 
   // status.
-  util::Status status_;
+  absl::Status status_;
 };
 }  // namespace sentencepiece
 #endif  // MODEL_INTERFACE_H_
